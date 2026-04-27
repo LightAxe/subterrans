@@ -53,6 +53,7 @@ function addColony(world: WorldState, colonyId: ColonyId, queenEntityId: number)
   colony.entrances = [];
   colony.rallyPoint = null;
   colony.digFlowFieldDirty = false;
+  colony.foodFlowFieldDirty = false;
   world.colonies[colonyId] = colony;
   return colony;
 }

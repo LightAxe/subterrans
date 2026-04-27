@@ -446,6 +446,12 @@ export function hasSave(): boolean {
 
 export function loadSave(): SaveFile | null {
   try {
+    // Issue #15 follow-up: opportunistically purge the v1 key on load so
+    // existing players don't carry the rejected pre-#15 envelope around in
+    // localStorage indefinitely. v2 fully supersedes v1; pre-bump saves are
+    // intentionally rejected (parseSaveFile throws SaveVersionMismatchError),
+    // so there is no recovery path that needs the old data.
+    try { localStorage.removeItem('subterrans:save:v1'); } catch { /* quota / private mode */ }
     const raw = localStorage.getItem(SAVE_KEY);
     if (raw === null) return null;
     return parseSaveFile(raw);

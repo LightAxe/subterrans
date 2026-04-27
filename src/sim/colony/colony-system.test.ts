@@ -16,6 +16,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   withdrawFood,
+  colonyFoodTotal,
   colonyFoodCapacity,
   tickFoodConsumption,
   tickStarvationCheck,
@@ -162,6 +163,59 @@ describe('withdrawFood', () => {
     const result = withdrawFood(colony, 50);
     expect(result).toBe(true);
     expect(colony.foodStored).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// colonyFoodTotal — issue #15 regression guard
+//
+// colonyFoodTotal is the canonical "total stored food" reader post-#15.
+// HUD displays, AI thresholds, and forager-economy code all read it. A
+// regression that drops the chamber-summing branch (e.g. reverting it to
+// `return colony.foodStored` alone) would silently break every consumer.
+// These tests guard against that by exercising both contributions.
+// ---------------------------------------------------------------------------
+
+describe('colonyFoodTotal — issue #15', () => {
+  it('sums entrance pool only when no chambers exist', () => {
+    const { colony } = setupWorldWithQueen(123);
+    expect(colonyFoodTotal(colony)).toBe(123);
+  });
+
+  it('includes FoodStorage chamber food in the total', () => {
+    const { colony } = setupWorldWithQueen(0);
+    colony.chambers.push({
+      chamberId: 1, chamberType: ChamberType.FoodStorage, foodStored: 200,
+      posX: 0, posY: 0, width: 1, height: 1,
+    });
+    colony.chambers.push({
+      chamberId: 2, chamberType: ChamberType.FoodStorage, foodStored: 50,
+      posX: 0, posY: 0, width: 1, height: 1,
+    });
+    expect(colonyFoodTotal(colony)).toBe(250);
+  });
+
+  it('sums entrance pool + every FoodStorage chamber', () => {
+    const { colony } = setupWorldWithQueen(100);
+    colony.chambers.push({
+      chamberId: 1, chamberType: ChamberType.FoodStorage, foodStored: 200,
+      posX: 0, posY: 0, width: 1, height: 1,
+    });
+    expect(colonyFoodTotal(colony)).toBe(300);
+  });
+
+  it('excludes non-FoodStorage chamber types from the total', () => {
+    const { colony } = setupWorldWithQueen(100);
+    // A non-FoodStorage chamber's foodStored is meaningless — must not contribute.
+    colony.chambers.push({
+      chamberId: 1, chamberType: ChamberType.Queen, foodStored: 999,
+      posX: 0, posY: 0, width: 1, height: 1,
+    });
+    colony.chambers.push({
+      chamberId: 2, chamberType: ChamberType.Nursery, foodStored: 999,
+      posX: 0, posY: 0, width: 1, height: 1,
+    });
+    expect(colonyFoodTotal(colony)).toBe(100);
   });
 });
 
