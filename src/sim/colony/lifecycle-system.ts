@@ -39,7 +39,9 @@ import {
 //
 // Gating order (PRD §4b line 980 + 09 reproduction-gate memo):
 //   1. Tick-modulo gate:  world.tick % QUEEN_EGG_INTERVAL_TICKS !== 0 → return
-//   2. Food threshold:    colony.foodStored < QUEEN_EGG_FOOD_THRESHOLD → return
+//   2. Food threshold:    colonyFoodTotal(colony) < QUEEN_EGG_FOOD_THRESHOLD → return
+//                         (issue #15 — total stash = entrance pool + every
+//                         FoodStorage chamber, NOT colony.foodStored alone)
 //   3. Queen alive:       world.ants.alive[colony.queenEntityId] !== 1 → return
 //   4. Queen chamber:     colony has at least one COMPLETED Queen chamber (09 memo)
 //   5. Nursery chamber:   colony has at least one COMPLETED Nursery chamber (09 memo)

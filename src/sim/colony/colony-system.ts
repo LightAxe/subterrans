@@ -110,7 +110,6 @@ export function withdrawFood(colony: ColonyRecord, amount: number): boolean {
   }
   if (remaining > 0) {
     colony.foodStored -= remaining;
-    remaining = 0;
   }
   return true;
 }
@@ -118,15 +117,21 @@ export function withdrawFood(colony: ColonyRecord, amount: number): boolean {
 // ---------------------------------------------------------------------------
 // colonyFoodCapacity — 09 backlog memo: BASE + N × FOOD_CHAMBER_CAPACITY
 //
-// Returns the authoritative capacity for colony.foodStored. N counts only
-// COMPLETED FoodStorage chambers (entries in colony.chambers). Pending
-// FoodStorage chambers do NOT contribute — capacity grows only when the
-// chamber is fully excavated and promoted by checkPendingChambers.
+// Returns the colony's TOTAL food-storage capacity (entrance pool + every
+// FoodStorage chamber). Compare against `colonyFoodTotal(colony)`, not
+// `colony.foodStored` alone — post-#15, `colony.foodStored` caps at BASE
+// (the entrance pool only) while each FoodStorage chamber caps at
+// FOOD_CHAMBER_CAPACITY. N counts only COMPLETED FoodStorage chambers
+// (entries in colony.chambers). Pending FoodStorage chambers do NOT
+// contribute — capacity grows only when the chamber is fully excavated
+// and promoted by checkPendingChambers.
 // ---------------------------------------------------------------------------
 
 /**
  * Total colony food-storage capacity (fp): BASE + N × FOOD_CHAMBER_CAPACITY,
  * where N is the number of completed FoodStorage chambers in colony.chambers.
+ * Post-#15 this is the cap for `colonyFoodTotal(colony)` (pool + chambers),
+ * not for `colony.foodStored` (which caps at BASE alone).
  *
  * Pending FoodStorage chambers (world.pendingChambers) do NOT contribute —
  * promotion happens in checkPendingChambers once excavation completes.
@@ -315,6 +320,10 @@ export function tickDeathCleanup(world: WorldState, colony: ColonyRecord): void 
  * The recount pass (PRD §2) filters alive===1 entities in each bucket and
  * corrects eggCount, larvaeCount, workerCount. Doubles as a cleanup pass —
  * dead slots found during recount are swap-removed from the bucket.
+ * Issue #15: also clamps `colony.foodStored` to [0, BASE_FOOD_STORAGE_CAPACITY]
+ * and each FoodStorage chamber's `foodStored` to [0, FOOD_CHAMBER_CAPACITY] —
+ * defensive only; the deposit/withdraw paths cap at their own sources.
+ * NEVER redistributes food across chambers (that was the pre-#15 magic-fill bug).
  * Resets reconcileCountdown to RECONCILE_INTERVAL_TICKS after recount.
  *
  * CLNY-07: cached fields are guaranteed accurate at most RECONCILE_INTERVAL_TICKS

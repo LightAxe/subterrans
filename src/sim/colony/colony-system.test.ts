@@ -164,6 +164,61 @@ describe('withdrawFood', () => {
     expect(result).toBe(true);
     expect(colony.foodStored).toBe(0);
   });
+
+  // Issue #15 — drain-order contract: chambers in array order first, then the
+  // entrance pool. Other downstream code (HUD, AI gates) relies on chambers
+  // emptying before the pool so the dirty-flag / re-seed cadence is stable.
+  // A future refactor that flips the order would silently regress.
+  it('drains chambers before the entrance pool (issue #15)', () => {
+    const { colony } = setupWorldWithQueen(100);
+    colony.chambers.push({
+      chamberId: 1, chamberType: ChamberType.FoodStorage, foodStored: 200,
+      posX: 0, posY: 0, width: 1, height: 1,
+    });
+    const result = withdrawFood(colony, 50);
+    expect(result).toBe(true);
+    expect(colony.chambers[0]!.foodStored).toBe(150); // chamber drained
+    expect(colony.foodStored).toBe(100);              // pool untouched
+  });
+
+  it('drains the entrance pool only after every chamber is empty (issue #15)', () => {
+    const { colony } = setupWorldWithQueen(100);
+    colony.chambers.push({
+      chamberId: 1, chamberType: ChamberType.FoodStorage, foodStored: 30,
+      posX: 0, posY: 0, width: 1, height: 1,
+    });
+    const result = withdrawFood(colony, 50);
+    expect(result).toBe(true);
+    expect(colony.chambers[0]!.foodStored).toBe(0);   // chamber drained first
+    expect(colony.foodStored).toBe(80);               // remaining 20 from pool
+  });
+
+  it('sets foodFlowFieldDirty only on chamber full→not-full transitions (issue #15)', () => {
+    const { colony } = setupWorldWithQueen(0);
+    colony.chambers.push({
+      chamberId: 1, chamberType: ChamberType.FoodStorage, foodStored: FOOD_CHAMBER_CAPACITY,
+      posX: 0, posY: 0, width: 1, height: 1,
+    });
+    colony.chambers.push({
+      chamberId: 2, chamberType: ChamberType.FoodStorage, foodStored: 100,
+      posX: 0, posY: 0, width: 1, height: 1,
+    });
+    colony.foodFlowFieldDirty = false;
+
+    // Drain chamber 0 (full) — must fire dirty.
+    withdrawFood(colony, 1);
+    expect(colony.foodFlowFieldDirty).toBe(true);
+
+    // Reset and drain again from chamber 0 (now not-full) — must NOT fire.
+    colony.foodFlowFieldDirty = false;
+    withdrawFood(colony, 1);
+    expect(colony.foodFlowFieldDirty).toBe(false);
+
+    // Drain chamber 1 (not-full from setup) — must NOT fire.
+    colony.foodFlowFieldDirty = false;
+    withdrawFood(colony, 50);
+    expect(colony.foodFlowFieldDirty).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
