@@ -77,7 +77,7 @@ import type { ChamberFlowFields } from './chamber-flow.js';
 import { ugGet, ugSet, UndergroundTileState } from './terrain.js';
 import { CHAMBER_DIMENSIONS } from './colony/chamber.js';
 import type { PendingChamber } from './colony/chamber.js';
-import type { ColonyId } from './colony/colony-store.js';
+import type { ColonyId, ChamberRecord } from './colony/colony-store.js';
 import type { FoodPileId } from './food.js';
 
 // ---------------------------------------------------------------------------
@@ -98,11 +98,13 @@ const entranceFlowFields: EntranceFlowFields = createEntranceFlowFields();
 const chamberFlowFields: ChamberFlowFields = createChamberFlowFields();
 
 // Issue #15 — module-level predicate hoisted out of the per-tick step-9 loop
-// so we don't allocate a closure on every colony × tick (hot path; the same
-// predicate is used by every colony every recompute). Skips chambers at
-// capacity from the food flow-field BFS seeds so carriers redirect to the
-// next non-full chamber instead of stalling on a full-chamber tile.
-const isChamberNotFull = (chamber: { foodStored: number }): boolean =>
+// so we don't allocate a fresh closure on every colony recompute (gated by
+// digFlowFieldDirty / foodFlowFieldDirty / first-compute, but still a hot
+// path). Skips chambers at capacity from the food flow-field BFS seeds so
+// carriers redirect to the next non-full chamber instead of stalling on a
+// full-chamber tile. Typed against ChamberRecord so a future field rename
+// fails fast at the predicate site.
+const isChamberNotFull = (chamber: ChamberRecord): boolean =>
   chamber.foodStored < FOOD_CHAMBER_CAPACITY;
 
 /**
