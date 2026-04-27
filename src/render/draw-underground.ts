@@ -44,6 +44,7 @@ import {
   COLOR_ENEMY_COLONY,
   COLOR_QUEEN_OUTLINE,
 } from './sprites.js';
+import { drawGrassTexture, drawUndergroundOpenTexture, drawUndergroundSolidTexture } from './terrain-texture.js';
 import type { CameraState } from './camera.js';
 
 // ---------------------------------------------------------------------------
@@ -91,8 +92,9 @@ export function projectFoodStorageFill(colony: ColonyRecord, chamberId: number):
  * Ceiling strip (ty=0): drawn with COLOR_UNDERGROUND_CEILING_STRIP everywhere,
  * except at entrance surfaceTileX positions where COLOR_UNDERGROUND_OPEN is used.
  *
- * Interior (ty≥1): Solid → solid color; Open → open color; Marked → open + overlay;
- * BeingDug → open + overlay (PRD §7e, UNDR-09).
+ * Interior (ty≥1): Solid → solid color + texture; Open → open color + texture;
+ * Marked → open + texture + overlay; BeingDug → open + texture + overlay
+ * (PRD §7e, UNDR-09).
  *
  * Returns immediately if the viewed colony's underground grid is undefined
  * (safety for early game states — T-08-06 mitigate, and before createScenario
@@ -137,6 +139,11 @@ export function drawUndergroundTerrain(
         const color = entranceXSet.has(tx) ? COLOR_UNDERGROUND_OPEN : COLOR_UNDERGROUND_CEILING_STRIP;
         gfx.fillStyle(color, 1);
         gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
+        if (!entranceXSet.has(tx)) {
+          // The ceiling strip is the visible underside of the surface grass,
+          // so it deliberately reuses the grass texture pattern.
+          drawGrassTexture(gfx, screenX, screenY, tx, ty);
+        }
         // Phase 8.5 usability (PRD §7c.1): highlight entrance-column ceiling
         // gaps with a translucent gold tint so the "way in" reads at a glance
         // even when the grid is almost entirely Solid (first-visit state).
@@ -149,15 +156,18 @@ export function drawUndergroundTerrain(
         if (state === UndergroundTileState.Solid) {
           gfx.fillStyle(COLOR_UNDERGROUND_SOLID, 1);
           gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
+          drawUndergroundSolidTexture(gfx, screenX, screenY, tx, ty);
         } else if (state === UndergroundTileState.Open) {
           gfx.fillStyle(COLOR_UNDERGROUND_OPEN, 1);
           gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
+          drawUndergroundOpenTexture(gfx, screenX, screenY, tx, ty);
         } else if (state === UndergroundTileState.Marked) {
           // Draw open base then overlay
           // Phase 8.5 readability: overlay alpha 0.4→0.55 so Marked tiles read
           // distinctly from Open floor without washing out the blue tint.
           gfx.fillStyle(COLOR_UNDERGROUND_OPEN, 1);
           gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
+          drawUndergroundOpenTexture(gfx, screenX, screenY, tx, ty);
           gfx.fillStyle(COLOR_MARKED_TILE_OVERLAY, 0.55);
           gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
         } else if (state === UndergroundTileState.BeingDug) {
@@ -166,6 +176,7 @@ export function drawUndergroundTerrain(
           // read as actively worked, not just "vaguely tinted".
           gfx.fillStyle(COLOR_UNDERGROUND_OPEN, 1);
           gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
+          drawUndergroundOpenTexture(gfx, screenX, screenY, tx, ty);
           gfx.fillStyle(COLOR_BEING_DUG_OVERLAY, 0.65);
           gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
         }

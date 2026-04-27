@@ -30,7 +30,10 @@ import { AntFacingCache } from './ant-facing-cache.js';
 import {
   TILE_SIZE_PX,
   COLOR_SURFACE_GRASS_PRIMARY,
+  COLOR_SURFACE_GRASS_DARK,
   COLOR_SURFACE_DIRT,
+  COLOR_SURFACE_DIRT_DARK,
+  COLOR_SURFACE_DIRT_LIGHT,
   COLOR_FOOD_PILE_NORMAL,
   COLOR_FOOD_PILE_MARKED,
   COLOR_PLAYER_COLONY,
@@ -47,6 +50,8 @@ interface GfxCall {
   method: string;
   args: unknown[];
 }
+
+type Rect = { x: number; y: number; w: number; h: number };
 
 class MockGfx implements GfxLike {
   calls: GfxCall[] = [];
@@ -117,6 +122,30 @@ function makeWorld4x4(): WorldState {
   return w;
 }
 
+function textureRectsInsideTile(gfx: MockGfx, screenX: number, screenY: number): Rect[] {
+  const rects: Rect[] = [];
+  let currentStyle: unknown = null;
+  for (const call of gfx.calls) {
+    if (call.method === 'fillStyle') {
+      currentStyle = call.args[0];
+      continue;
+    }
+    if (call.method !== 'fillRect') continue;
+    if (
+      currentStyle !== COLOR_SURFACE_GRASS_DARK &&
+      currentStyle !== COLOR_SURFACE_DIRT_DARK &&
+      currentStyle !== COLOR_SURFACE_DIRT_LIGHT
+    ) continue;
+    const [x, y, w, h] = call.args as [number, number, number, number];
+    // This helper compares in-tile offsets only; terrain-texture.test.ts owns
+    // the stronger invariant that texture rects cannot escape their tile.
+    if (x >= screenX && y >= screenY && x + w <= screenX + TILE_SIZE_PX && y + h <= screenY + TILE_SIZE_PX) {
+      rects.push({ x: x - screenX, y: y - screenY, w, h });
+    }
+  }
+  return rects;
+}
+
 // ---------------------------------------------------------------------------
 // Tests: drawSurfaceTerrain
 // ---------------------------------------------------------------------------
@@ -126,12 +155,12 @@ describe('drawSurfaceTerrain', () => {
 
   beforeEach(() => { gfx = new MockGfx(); });
 
-  it('produces exactly vpW×vpH fillRect calls for a fully-visible window', () => {
+  it('produces the expected base and texture fillRects for a fully-visible window', () => {
     const world = makeWorld4x4();
     const cam = makeCamera(1.5, 1.5, 3, 3);
     drawSurfaceTerrain(gfx, world, cam);
     const rects = gfx.callsOf('fillRect');
-    expect(rects.length).toBe(16);
+    expect(rects.length).toBe(52);
   });
 
   it('assigns COLOR_SURFACE_GRASS_PRIMARY to Grass tiles', () => {
@@ -150,6 +179,37 @@ describe('drawSurfaceTerrain', () => {
     expect(dirtStyles.length).toBe(4);
   });
 
+  it('adds deterministic pixel texture colors to grass and dirt tiles', () => {
+    const world = makeWorld4x4();
+    const cam = makeCamera(1.5, 1.5, 3, 3);
+    drawSurfaceTerrain(gfx, world, cam);
+    const styles = gfx.callsOf('fillStyle').map(c => c.args[0]);
+    expect(styles).toContain(COLOR_SURFACE_GRASS_DARK);
+    expect(styles).toContain(COLOR_SURFACE_DIRT_DARK);
+    expect(styles).toContain(COLOR_SURFACE_DIRT_LIGHT);
+  });
+
+  it('keeps texture placement stable for the same world tile as the camera pans', () => {
+    const world = createWorldState(1);
+    const tileX = 20;
+    const tileY = 20;
+
+    const camA = makeCamera(20, 20, 20, 20);
+    drawSurfaceTerrain(gfx, world, camA);
+    const leftA = Math.floor(camA.x - camA.viewportWidth / 2);
+    const topA = Math.floor(camA.y - camA.viewportHeight / 2);
+    const rectsA = textureRectsInsideTile(gfx, (tileX - leftA) * TILE_SIZE_PX, (tileY - topA) * TILE_SIZE_PX);
+
+    gfx.reset();
+    const camB = makeCamera(21, 20, 20, 20);
+    drawSurfaceTerrain(gfx, world, camB);
+    const leftB = Math.floor(camB.x - camB.viewportWidth / 2);
+    const topB = Math.floor(camB.y - camB.viewportHeight / 2);
+    const rectsB = textureRectsInsideTile(gfx, (tileX - leftB) * TILE_SIZE_PX, (tileY - topB) * TILE_SIZE_PX);
+
+    expect(rectsA).toEqual(rectsB);
+  });
+
   it('clips viewport to grid bounds — no fillRect with negative tx or ty offset', () => {
     const world = createWorldState(1);
     const cam = makeCamera(0, 64, 50, 37);
@@ -163,10 +223,18 @@ describe('drawSurfaceTerrain', () => {
 
   it('clamps right/bottom to grid bounds on large viewport', () => {
     const world = createWorldState(1);
+    for (let y = 0; y < world.surface.height; y++) {
+      for (let x = 0; x < world.surface.width; x++) {
+        sgSet(world.surface, x, y, SurfaceTileState.Dirt);
+      }
+    }
     const cam = makeCamera(0, 0, 200, 200);
     drawSurfaceTerrain(gfx, world, cam);
-    const rects = gfx.callsOf('fillRect');
-    expect(rects.length).toBeLessThanOrEqual(128 * 128);
+    const baseStyles = gfx.callsOf('fillStyle').filter(c =>
+      c.args[0] === COLOR_SURFACE_GRASS_PRIMARY || c.args[0] === COLOR_SURFACE_DIRT,
+    );
+    expect(baseStyles.length).toBeLessThanOrEqual(128 * 128);
+    expect(gfx.callsOf('fillRect').length).toBeLessThanOrEqual(128 * 128 * 4);
   });
 });
 

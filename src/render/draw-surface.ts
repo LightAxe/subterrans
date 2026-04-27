@@ -32,6 +32,7 @@ import {
   COLOR_QUEEN_OUTLINE,
   COLOR_RALLY_POINT,
 } from './sprites.js';
+import { drawGrassTexture, drawSurfaceDirtTexture } from './terrain-texture.js';
 export type { AntSpriteLayer } from './ant-sprite-layer.js';
 import type { CameraState } from './camera.js';
 
@@ -76,8 +77,9 @@ function visibleRange(
 /**
  * Draw the surface terrain tiles visible through the camera.
  *
- * Each tile is a single fillRect: Grass → COLOR_SURFACE_GRASS_PRIMARY,
- * Dirt → COLOR_SURFACE_DIRT. Clips to [0, grid bounds). (SURF-06)
+ * Each tile draws a solid base fill plus deterministic pixel texture detail.
+ * Grass → COLOR_SURFACE_GRASS_PRIMARY, Dirt → COLOR_SURFACE_DIRT. Clips to
+ * [0, grid bounds). (SURF-06)
  */
 export function drawSurfaceTerrain(gfx: GfxLike, world: WorldState, cam: CameraState): void {
   const { left, top, right, bottom } = visibleRange(cam, world.surface.width, world.surface.height);
@@ -89,12 +91,14 @@ export function drawSurfaceTerrain(gfx: GfxLike, world: WorldState, cam: CameraS
         ? COLOR_SURFACE_DIRT
         : COLOR_SURFACE_GRASS_PRIMARY;
       gfx.fillStyle(color, 1);
-      gfx.fillRect(
-        (tx - left) * TILE_SIZE_PX,
-        (ty - top)  * TILE_SIZE_PX,
-        TILE_SIZE_PX,
-        TILE_SIZE_PX,
-      );
+      const screenX = (tx - left) * TILE_SIZE_PX;
+      const screenY = (ty - top)  * TILE_SIZE_PX;
+      gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
+      if (state === SurfaceTileState.Dirt) {
+        drawSurfaceDirtTexture(gfx, screenX, screenY, tx, ty);
+      } else {
+        drawGrassTexture(gfx, screenX, screenY, tx, ty);
+      }
     }
   }
 }

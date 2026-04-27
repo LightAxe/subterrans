@@ -27,8 +27,17 @@ export const CANVAS_H = 592;
 /** PRD §7g — Primary surface grass tile color. */
 export const COLOR_SURFACE_GRASS_PRIMARY = 0x4a7c40;
 
+/** Darker grass pixels for render-only terrain texture detail. */
+export const COLOR_SURFACE_GRASS_DARK = 0x355f30;
+
 /** PRD §7g — Surface dirt tile color. */
 export const COLOR_SURFACE_DIRT = 0x8b6914;
+
+/** Darker dirt pixels for render-only terrain texture detail. */
+export const COLOR_SURFACE_DIRT_DARK = 0x64470d;
+
+/** Lighter dirt pixels for render-only terrain texture detail. */
+export const COLOR_SURFACE_DIRT_LIGHT = 0xa77f25;
 
 /** PRD §7g — Food pile (unmarked) color. */
 export const COLOR_FOOD_PILE_NORMAL = 0x22bb44;
@@ -45,8 +54,14 @@ export const COLOR_RALLY_POINT = 0xffffff;
 /** PRD §7g — Underground solid (unexcavated) tile color. */
 export const COLOR_UNDERGROUND_SOLID = 0x2d1a0a;
 
+/** Rock flecks for render-only solid underground texture detail. */
+export const COLOR_UNDERGROUND_SOLID_ROCK = 0x49301a;
+
 /** PRD §7g — Underground open (excavated) tile color. */
 export const COLOR_UNDERGROUND_OPEN = 0x0d0805;
+
+/** Subtle floor pixels for render-only open underground texture detail. */
+export const COLOR_UNDERGROUND_OPEN_DUST = 0x25170f;
 
 /** PRD §7g — Dig-marked tile overlay color (blue tint). */
 export const COLOR_MARKED_TILE_OVERLAY = 0x4a8fff;
