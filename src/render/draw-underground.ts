@@ -239,10 +239,11 @@ export function drawUndergroundEntities(
       gfx.fillRect(screenX + w - 2, screenY,         2, h);     // right
     }
     // FoodStorage fill visualization — per-tile amber food-cache sprites
-    // stacked from the chamber floor upward. Fill count is driven by the
-    // *projected* per-chamber share of colony.foodStored (NOT the lagging
-    // ChamberRecord.foodStored), so deposits show the instant the forager
-    // returns instead of snapping into place at the next reconcile tick.
+    // stacked from the chamber floor upward. Issue #15: ChamberRecord.foodStored
+    // IS the authoritative source — `projectFoodStorageFill` returns it directly,
+    // not a lagging projection of colony.foodStored as before the chamber-
+    // authoritative refactor. Deposits show the moment antDepositFood writes
+    // the chamber, no reconcile lag.
     //
     // Each tile in the chamber footprint can hold one food-cache SVG; the
     // ratio `projected / FOOD_CHAMBER_CAPACITY` maps to the number of filled

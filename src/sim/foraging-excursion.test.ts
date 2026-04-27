@@ -20,6 +20,7 @@ import { createScenario } from './scenario.js';
 import { tick } from './tick.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from './constants.js';
 import { isAlive } from './ant/ant-store.js';
+import { colonyFoodTotal } from './colony/colony-system.js';
 
 interface SeedStats {
   playerQueenAlive: boolean;
@@ -34,15 +35,23 @@ function runSeed(seed: number, maxTicks: number): SeedStats {
   const world = createScenario(seed);
   let playerFirstDepositTick: number | null = null;
   let enemyFirstDepositTick: number | null = null;
-  let prevPlayerFood = world.colonies[PLAYER_COLONY_ID]!.foodStored;
-  let prevEnemyFood  = world.colonies[ENEMY_COLONY_ID]!.foodStored;
+  // Issue #15: deposits land in chamber.foodStored, not colony.foodStored
+  // alone. Track the colony total (entrance pool + every chamber) so the
+  // first-deposit detector remains accurate after the chamber-authoritative
+  // refactor. Pre-#15 a pool-only read worked because reconcile projected
+  // chamber slices from the pool — a single source of truth — and any
+  // deposit grew the pool. Post-#15 only chamberless-fallback deposits
+  // grow the pool, so a pool-only detector goes silent the moment the
+  // first ant reaches a chamber.
+  let prevPlayerFood = colonyFoodTotal(world.colonies[PLAYER_COLONY_ID]!);
+  let prevEnemyFood  = colonyFoodTotal(world.colonies[ENEMY_COLONY_ID]!);
 
   for (let t = 0; t < maxTicks; t++) {
     const cmds = world.commandQueue.splice(0);
     tick(world, cmds);
 
-    const playerFood = world.colonies[PLAYER_COLONY_ID]!.foodStored;
-    const enemyFood  = world.colonies[ENEMY_COLONY_ID]!.foodStored;
+    const playerFood = colonyFoodTotal(world.colonies[PLAYER_COLONY_ID]!);
+    const enemyFood  = colonyFoodTotal(world.colonies[ENEMY_COLONY_ID]!);
 
     if (playerFirstDepositTick === null && playerFood > prevPlayerFood) {
       playerFirstDepositTick = t;
@@ -60,8 +69,8 @@ function runSeed(seed: number, maxTicks: number): SeedStats {
   return {
     playerQueenAlive: isAlive(world.ants, playerColony.queenEntityId),
     enemyQueenAlive:  isAlive(world.ants, enemyColony.queenEntityId),
-    playerFoodStored: playerColony.foodStored,
-    enemyFoodStored:  enemyColony.foodStored,
+    playerFoodStored: colonyFoodTotal(playerColony),
+    enemyFoodStored:  colonyFoodTotal(enemyColony),
     playerFirstDepositTick,
     enemyFirstDepositTick,
   };

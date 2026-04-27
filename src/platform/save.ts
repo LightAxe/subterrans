@@ -28,8 +28,22 @@ import { createPheromoneGrid } from '../sim/pheromone/pheromone-store.js';
 import type { FoodPile, FoodPileId } from '../sim/food.js';
 import { MAX_ENTITIES } from '../sim/constants.js';
 
-export const SAVE_FORMAT_VERSION = 1 as const;
-export const SAVE_KEY = 'subterrans:save:v1' as const;
+// SAVE_FORMAT_VERSION is bumped on any breaking change to the on-disk shape
+// or to invariants that survivors must respect. Pre-bump saves are rejected
+// by parseSaveFile (SaveVersionMismatchError) — the loadSave/hasSave path
+// returns null, so the caller boots a fresh scenario instead of corrupting
+// state. Per the original save.ts header note, version bumps "intentionally
+// invalidate old saves (intentional for beta)".
+//
+// History:
+//   v1 — Phase 9 / SCEN-04 baseline.
+//   v2 — Issue #15: chamber-authoritative food storage. Pre-v2 saves stored
+//        the entire stockpile in `colony.foodStored` (chambers held projected
+//        slices, recomputed each reconcile). Loading those into v2 would
+//        either double-count (slices + pool) or silently truncate to BASE on
+//        the next reconcile. Reject them — fresh scenarios are cheap in beta.
+export const SAVE_FORMAT_VERSION = 2 as const;
+export const SAVE_KEY = 'subterrans:save:v2' as const;
 export const AUTOSAVE_INTERVAL_MS = 30_000 as const;
 
 export class SaveVersionMismatchError extends Error {
@@ -315,8 +329,12 @@ function deserializeAnts(saved: SerializedAnts, capacity: number): AntComponents
 
 function deserializeColony(s: SerializedColony): ColonyRecord {
   const c = createColonyRecord(s.colonyId, s.queenEntityId);
-  // createColonyRecord does NOT set the 3 Phase 3 extension fields — caller-side contract
-  // (colony-store.ts comment). Set them explicitly alongside scalar fields.
+  // createColonyRecord does NOT set the Phase 3 extension fields nor the
+  // issue-#15 `foodFlowFieldDirty` field — caller-side contract (see the
+  // colony-store.ts factory docblock). Set them explicitly alongside scalar
+  // fields. `foodFlowFieldDirty` is `?? false` defensively even though v2
+  // saves should always include it; pre-v2 saves are rejected upstream by
+  // parseSaveFile (SaveVersionMismatchError).
   c.queenStarvationTimer = s.queenStarvationTimer;
   c.foodStored           = s.foodStored;
   c.workerCount          = s.workerCount;

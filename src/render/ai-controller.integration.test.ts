@@ -29,6 +29,7 @@ import { FP_SHIFT } from '../sim/fixed.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 import type { WorldState } from '../sim/types.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
+import { colonyFoodTotal } from '../sim/colony/colony-system.js';
 
 // -----------------------------------------------------------------------------
 // Scenario constants
@@ -57,7 +58,10 @@ function snapshotColony(world: WorldState, colony: ColonyRecord): Snapshot {
   return {
     tick: world.tick,
     workerCount: colony.workerCount,
-    foodStored: colony.foodStored,
+    // Issue #15: deposits now land in chamber.foodStored, not the pool. The
+    // diagnostic snapshot reads colonyFoodTotal so the value reflects the
+    // colony's actual stockpile rather than just the entrance-shaft fallback.
+    foodStored: colonyFoodTotal(colony),
     eggCount: colony.eggCount,
     larvaeCount: colony.larvaeCount,
     chamberTypes: colony.chambers.map((c) => c.chamberType),
@@ -157,11 +161,16 @@ describe('AI-only scenario 3000 ticks', () => {
       `Nursery chamber missing. ${ctx}`,
     ).toBeDefined();
 
-    // 6. Food stored > 0
-    expect(
-      aiColony!.foodStored,
-      `AI colony foodStored is not > 0 (found ${aiColony!.foodStored}). ${ctx}`,
-    ).toBeGreaterThan(0);
+    // 6. Food stored > 0 (issue #15: read total stash — entrance pool plus
+    // every FoodStorage chamber. Post-#15 deposits land in chambers, not the
+    // pool, so reading colony.foodStored alone would silently regress to
+    // "did the entrance-shaft fallback fire at least once" — not what this
+    // assertion is testing.)
+    {
+      const total = colonyFoodTotal(aiColony!);
+      expect(total, `AI colony food total is not > 0 (found ${total}). ${ctx}`)
+        .toBeGreaterThan(0);
+    }
 
     // 7. Chamber uniqueness: exactly 1 Queen, exactly 1 Nursery, ≥1 FoodStorage
     expect(

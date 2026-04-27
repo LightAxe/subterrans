@@ -283,6 +283,20 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       }));
       expect(hasSave()).toBe(false);
     });
+    it('rejects v1 saves (issue #15 — chamber-authoritative food storage)', () => {
+      // Pre-#15 saves stored the entire stockpile in `colony.foodStored`
+      // and projected slices into `chamber.foodStored` on each reconcile.
+      // Loading them under v2 would either double-count (slices + pool) or
+      // silently truncate to BASE on the next reconcile. The version bump
+      // forces the loader to reject the save and boot a fresh scenario,
+      // which is the documented behaviour for breaking format changes.
+      const w = createScenario(42);
+      localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: 1, seed: 42, inputLog: [], snapshot: serializeWorldState(w),
+      }));
+      expect(hasSave()).toBe(false);
+      expect(loadSave()).toBeNull();
+    });
     it('loadSave returns a SaveFile with seed + inputLog + snapshot fields', () => {
       const w = createScenario(42);
       const inputLog: SimCommand[] = [
