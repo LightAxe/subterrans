@@ -57,35 +57,26 @@ const CHAMBER_COLORS: Record<number, number> = {
 };
 
 // ---------------------------------------------------------------------------
-// projectFoodStorageFill — responsive per-chamber fill (09 render polish)
+// projectFoodStorageFill — per-chamber fill readout
 //
-// colony.foodStored is the authoritative pooled total (PRD §2 reconcile
-// contract). ChamberRecord.foodStored is *derived* state refreshed only on
-// tickReconcile (every RECONCILE_INTERVAL_TICKS), so reading it for the
-// per-chamber visual lags real deposits by up to one reconcile interval.
-//
-// This projection mirrors tickReconcile's distribution logic exactly: walk
-// completed FoodStorage chambers in colony.chambers order and hand each one
-// up to FOOD_CHAMBER_CAPACITY units from the pool. Pure — never mutates
-// colony, chamber, or any sim state. Render-only view.
+// Issue #15: ChamberRecord.foodStored is now the authoritative per-chamber
+// stockpile (it grows when an ant deposits inside the chamber footprint, drains
+// when the queen withdraws). Render reads it directly — there is nothing to
+// "project" anymore, but the function name is preserved so callers don't
+// need to know the model changed.
 // ---------------------------------------------------------------------------
 
 /**
- * Projected fill (0..FOOD_CHAMBER_CAPACITY) for the named FoodStorage chamber,
- * derived live from colony.foodStored rather than the lagging
- * ChamberRecord.foodStored field. Returns 0 if chamberId isn't a FoodStorage
- * chamber in this colony.
+ * Fill (0..FOOD_CHAMBER_CAPACITY) for the named FoodStorage chamber. Returns 0
+ * if chamberId isn't a FoodStorage chamber in this colony.
  */
 export function projectFoodStorageFill(colony: ColonyRecord, chamberId: number): number {
-  let distributed = 0;
   for (const ch of colony.chambers) {
     if (ch.chamberType !== ChamberType.FoodStorage) continue;
-    const available = colony.foodStored - distributed;
-    const fill = available <= 0
-      ? 0
-      : available < FOOD_CHAMBER_CAPACITY ? available : FOOD_CHAMBER_CAPACITY;
-    if (ch.chamberId === chamberId) return fill;
-    distributed += fill;
+    if (ch.chamberId !== chamberId) continue;
+    const fill = ch.foodStored;
+    if (fill <= 0) return 0;
+    return fill < FOOD_CHAMBER_CAPACITY ? fill : FOOD_CHAMBER_CAPACITY;
   }
   return 0;
 }

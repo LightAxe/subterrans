@@ -188,7 +188,7 @@ const stubColonies: WorldState['colonies'] = {
     eggCount: 0, larvaeCount: 0, nurseCount: 0,
     eggs: [], larvae: [], workers: [], chambers: [],
     defeated: false, reconcileCountdown: 0,
-    rallyPoint: null, digFlowFieldDirty: false,
+    rallyPoint: null, digFlowFieldDirty: false, foodFlowFieldDirty: false,
     killCount: 0,
     priorityFoodPileId: null,
   } as WorldState['colonies'][number],

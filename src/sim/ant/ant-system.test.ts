@@ -267,50 +267,50 @@ describe('antDepositFood', () => {
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood);
   });
 
-  it('5c. capacity grows with completed FoodStorage chambers — ant deposits fully into authoritative pool', () => {
-    const { world, colony, antId } = setupForagerWorld();
+  it('5c. ant standing inside FoodStorage footprint → deposit goes to chamber.foodStored, pool untouched', () => {
+    // Ant placed at (1,1) — inside the chamber at (0,0) width=3 height=3.
+    const { world, colony, antId } = setupForagerWorld(1 << FP_SHIFT, 1 << FP_SHIFT);
     world.ants.foodCarrying[antId] = 512;
     world.ants.task[antId] = AntTask.Foraging;
     world.ants.subTask[antId] = ForagingSubState.CarryingFood;
-    // One completed FoodStorage chamber → capacity = BASE + FOOD_CHAMBER_CAPACITY.
-    // Pool is at BASE; the extra FOOD_CHAMBER_CAPACITY of headroom comes from the chamber.
     colony.chambers.push({
       chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: 0,
       posX: 0, posY: 0, width: 3, height: 3,
     });
+    // Pool is already at BASE; further pool deposits would be impossible. The
+    // chamber-authoritative path lets the ant deposit anyway because the
+    // chamber has its own bucket.
     colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
 
     antDepositFood(world, colony, antId);
 
-    // Authoritative pool is the only writer — deposit adds 512 directly to
-    // colony.foodStored. Chamber.foodStored is derived state and is NOT
-    // written by antDepositFood (tickReconcile projects it from the pool).
-    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY + 512);
-    expect(colony.chambers[0]!.foodStored).toBe(0); // untouched by deposit
+    // Issue #15: chamber gets the deposit; entrance pool is untouched.
+    expect(colony.chambers[0]!.foodStored).toBe(512);
+    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
     expect(world.ants.foodCarrying[antId]).toBe(0);
-    // Full deposit → idle-checkpoint.
     expect(world.ants.task[antId]).toBe(AntTask.Idle);
     expect(world.ants.subTask[antId]).toBe(0);
   });
 
-  it('5d. pool at capacity with FoodStorage chamber → no deposit, leftover stays on ant', () => {
-    const { world, colony, antId } = setupForagerWorld();
+  it('5d. ant inside FULL FoodStorage chamber → no deposit, leftover stays on ant', () => {
+    const { world, colony, antId } = setupForagerWorld(1 << FP_SHIFT, 1 << FP_SHIFT);
     world.ants.foodCarrying[antId] = 512;
     world.ants.task[antId] = AntTask.Foraging;
     world.ants.subTask[antId] = ForagingSubState.CarryingFood;
-    // Chamber's derived foodStored is irrelevant to the capacity check —
-    // capacity only counts the chamber's presence, not its current value.
+    // Chamber at cap — antDepositFood must skip it (issue #15: full chambers
+    // are not deposit targets).
     colony.chambers.push({
-      chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: 0,
+      chamberId: 100, chamberType: ChamberType.FoodStorage,
+      foodStored: FOOD_CHAMBER_CAPACITY,
       posX: 0, posY: 0, width: 3, height: 3,
     });
-    // Pool at BASE + FOOD_CHAMBER_CAPACITY → cap with one chamber
-    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY + FOOD_CHAMBER_CAPACITY;
+    // Pool also at cap → no fallback room either.
+    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
 
     antDepositFood(world, colony, antId);
 
-    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY + FOOD_CHAMBER_CAPACITY);
-    expect(colony.chambers[0]!.foodStored).toBe(0); // derived state, untouched
+    expect(colony.chambers[0]!.foodStored).toBe(FOOD_CHAMBER_CAPACITY);
+    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
     expect(world.ants.foodCarrying[antId]).toBe(512);
     expect(world.ants.task[antId]).toBe(AntTask.Foraging);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood);
@@ -1780,32 +1780,39 @@ describe('tickAntMovement — underground passability guard', () => {
 });
 
 // ---------------------------------------------------------------------------
-// antDepositFood — authoritative-pool deposit model (09 backlog memo)
+// antDepositFood — chamber-authoritative deposit model (issue #15)
 //
-// colony.foodStored is the single source of truth; chamber.foodStored is a
-// derived projection recomputed by tickReconcile from the pool. Deposits only
-// write colony.foodStored (capped at colonyFoodCapacity); chamber.foodStored
-// is never written here.
+// chamber.foodStored is authoritative per FoodStorage chamber. An ant standing
+// inside a non-full chamber footprint deposits THERE. An ant outside any
+// FoodStorage footprint (or with no chambers existing) falls back to the
+// entrance-shaft pool `colony.foodStored`. There is no magical pool→chamber
+// redistribution — fill requires an actual ant visit.
 // ---------------------------------------------------------------------------
 
-describe('antDepositFood — authoritative-pool deposit (09 backlog memo)', () => {
-  function makeFoodStorageChamber(id: number, stored = 0): ColonyRecord['chambers'][number] {
+describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
+  function makeFoodStorageChamber(
+    id: number,
+    stored: number,
+    posTileX: number,
+    posTileY: number,
+  ): ColonyRecord['chambers'][number] {
     return {
       chamberId: id,
       chamberType: ChamberType.FoodStorage,
       foodStored: stored,
-      posX: 0,
-      posY: 0,
+      posX: posTileX << FP_SHIFT,
+      posY: posTileY << FP_SHIFT,
       width: 4,
       height: 3,
     };
   }
 
-  it('14. colony has food storage chamber → deposit writes only to colony.foodStored; chamber.foodStored untouched', () => {
+  it('14. ant inside FoodStorage footprint → deposit writes ONLY chamber.foodStored; entrance pool untouched', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
-    colony.chambers.push(makeFoodStorageChamber(1, 0));
+    colony.entrances = []; colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false; colony.foodFlowFieldDirty = false;
+    colony.chambers.push(makeFoodStorageChamber(1, 0, 0, 0));
     colony.foodStored = 0;
     world.colonies[COLONY_ID] = colony;
 
@@ -1820,20 +1827,21 @@ describe('antDepositFood — authoritative-pool deposit (09 backlog memo)', () =
 
     antDepositFood(world, colony, antId);
 
-    // Authoritative pool receives all 500; chamber.foodStored is derived
-    // state and stays at its pre-deposit value (reconcile will later
-    // project from colony.foodStored).
-    expect(colony.foodStored).toBe(500);
-    expect(colony.chambers[0]!.foodStored).toBe(0);
+    // Chamber receives all 500; entrance pool untouched.
+    expect(colony.chambers[0]!.foodStored).toBe(500);
+    expect(colony.foodStored).toBe(0);
     expect(world.ants.foodCarrying[antId]).toBe(0);
     expect(world.ants.task[antId]).toBe(AntTask.Idle);
+    // Chamber not yet full → no flow-field re-seed signal needed.
+    expect(colony.foodFlowFieldDirty).toBe(false);
   });
 
-  it('15. colony has no food storage chamber → deposit writes colony.foodStored up to BASE capacity', () => {
+  it('15. colony has no food storage chamber → deposit writes entrance pool up to BASE capacity', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
-    // No chambers → capacity = BASE_FOOD_STORAGE_CAPACITY.
+    colony.entrances = []; colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false; colony.foodFlowFieldDirty = false;
+    // No chambers → capacity = BASE_FOOD_STORAGE_CAPACITY (entrance pool only).
     colony.foodStored = 0;
     world.colonies[COLONY_ID] = colony;
 
@@ -1853,18 +1861,16 @@ describe('antDepositFood — authoritative-pool deposit (09 backlog memo)', () =
     expect(world.ants.task[antId]).toBe(AntTask.Idle);
   });
 
-  it('16. deposit with N chambers adds to colony.foodStored up to BASE + N × FOOD_CHAMBER_CAPACITY', () => {
+  it('16. ant in chamber 0 fills it to cap → chamber.foodStored hits FOOD_CHAMBER_CAPACITY and foodFlowFieldDirty fires', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
-    // Two chambers → capacity = BASE + 2 × FOOD_CHAMBER_CAPACITY.
-    // chamber.foodStored values in the fixtures below are irrelevant to the
-    // capacity arithmetic (only chamber count matters) and should not be
-    // mutated by the deposit.
-    colony.chambers.push(makeFoodStorageChamber(1, 1234));
-    colony.chambers.push(makeFoodStorageChamber(2,  567));
-    // Pool already holds BASE + 1×CHAMBER so only 1×CHAMBER of headroom remains.
-    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY + FOOD_CHAMBER_CAPACITY;
+    colony.entrances = []; colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false; colony.foodFlowFieldDirty = false;
+    // Two chambers in different parts of the grid. Ant only stands in chamber[0].
+    // chamber[0] starts with 1234 stored, so headroom = 5120-1234 = 3886.
+    colony.chambers.push(makeFoodStorageChamber(1, 1234, 0,  0));
+    colony.chambers.push(makeFoodStorageChamber(2,    0, 8,  8));
+    colony.foodStored = 0;
     world.colonies[COLONY_ID] = colony;
 
     const antId = allocateEntityId(world);
@@ -1874,18 +1880,50 @@ describe('antDepositFood — authoritative-pool deposit (09 backlog memo)', () =
       task: AntTask.Foraging,
       subTask: ForagingSubState.CarryingFood,
     });
-    // Deposit exactly the remaining 1×CHAMBER of headroom.
-    world.ants.foodCarrying[antId] = FOOD_CHAMBER_CAPACITY;
+    // Deposit exactly the headroom of chamber[0] (will fill it to cap).
+    world.ants.foodCarrying[antId] = FOOD_CHAMBER_CAPACITY - 1234;
 
     antDepositFood(world, colony, antId);
 
-    // All CHAMBER goes into the pool, bringing it to the cap.
-    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY + 2 * FOOD_CHAMBER_CAPACITY);
-    // Chamber-foodStored fixtures are untouched (derived state).
-    expect(colony.chambers[0]!.foodStored).toBe(1234);
-    expect(colony.chambers[1]!.foodStored).toBe(567);
+    // chamber[0] reaches FOOD_CHAMBER_CAPACITY; chamber[1] is untouched (no ant
+    // visit). Issue #15: the OLD bug was redistributing the pool across
+    // chambers without a visit — this test guards against regression.
+    expect(colony.chambers[0]!.foodStored).toBe(FOOD_CHAMBER_CAPACITY);
+    expect(colony.chambers[1]!.foodStored).toBe(0);
+    expect(colony.foodStored).toBe(0);
     expect(world.ants.foodCarrying[antId]).toBe(0);
     expect(world.ants.task[antId]).toBe(AntTask.Idle);
+    // Full↔not-full boundary crossed → flow-field must re-seed next tick.
+    expect(colony.foodFlowFieldDirty).toBe(true);
+  });
+
+  it('17. issue #15 regression — ant outside FoodStorage footprint does NOT cause distant chambers to fill', () => {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    const colony = createColonyRecord(COLONY_ID, 0);
+    colony.entrances = []; colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false; colony.foodFlowFieldDirty = false;
+    // Two chambers, both far from the ant's tile.
+    colony.chambers.push(makeFoodStorageChamber(1, 0,  8, 8));
+    colony.chambers.push(makeFoodStorageChamber(2, 0, 16, 8));
+    colony.foodStored = 0;
+    world.colonies[COLONY_ID] = colony;
+
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId: COLONY_ID,
+      posX: 0, posY: 0, // outside both chamber footprints
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+    });
+    world.ants.foodCarrying[antId] = 1000;
+
+    antDepositFood(world, colony, antId);
+
+    // Distant chambers must NOT receive any food — that's the bug we fixed.
+    expect(colony.chambers[0]!.foodStored).toBe(0);
+    expect(colony.chambers[1]!.foodStored).toBe(0);
+    // Fallback pool gets the deposit.
+    expect(colony.foodStored).toBe(1000);
   });
 });
 
@@ -2089,10 +2127,11 @@ describe('tickForagerActions', () => {
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
   });
 
-  it('underground CarryingFood ant on a FoodStorage chamber tile → deposits to authoritative pool and flips to Idle', () => {
+  it('underground CarryingFood ant on a FoodStorage chamber tile → deposits to chamber.foodStored and flips to Idle', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = []; colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false; colony.foodFlowFieldDirty = false;
     colony.chambers.push({
       chamberId: 1,
       chamberType: ChamberType.FoodStorage,
@@ -2115,10 +2154,9 @@ describe('tickForagerActions', () => {
 
     tickForagerActions(world);
 
-    // Deposit writes the authoritative pool; chamber.foodStored is derived
-    // state and reconcile projects it on the next 100-tick boundary.
-    expect(colony.foodStored).toBe(500);
-    expect(colony.chambers[0]!.foodStored).toBe(0);
+    // Issue #15: deposit lands in chamber.foodStored, NOT the entrance pool.
+    expect(colony.chambers[0]!.foodStored).toBe(500);
+    expect(colony.foodStored).toBe(0);
     expect(world.ants.foodCarrying[antId]).toBe(0);
     expect(world.ants.task[antId]).toBe(AntTask.Idle);
   });

@@ -139,6 +139,7 @@ function initColony(
   colony.entrances         = [];
   colony.rallyPoint        = null;
   colony.digFlowFieldDirty = false;
+  colony.foodFlowFieldDirty = false;
   colony.foodStored        = STARTING_FOOD;
 
   // Phase 9 playability: seed each colony with one pre-excavated open entrance

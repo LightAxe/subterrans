@@ -16,6 +16,7 @@ import { ChamberType } from '../sim/enums.js';
 import { UndergroundTileState, ugGet } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
+import { colonyFoodTotal } from '../sim/colony/colony-system.js';
 
 export const AI_DIG_INTERVAL = 40 as const;       // every 2 seconds @ 20Hz
 export const AI_DIG_MARK_BUDGET = 5 as const;
@@ -202,9 +203,12 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
       world.commandQueue.push(cmd);
     }
   }
-  // Food storage — if food stockpile crossed threshold and no FoodStorage yet
+  // Food storage — if food stockpile crossed threshold and no FoodStorage yet.
+  // Issue #15: read total stash (entrance pool + every chamber.foodStored), not
+  // the chamberless fallback bucket — colony.foodStored alone is now only the
+  // entrance pool, so the AI gate would never fire once the first chamber filled.
   if (
-    colony.foodStored >= AI_FOOD_STORAGE_THRESHOLD
+    colonyFoodTotal(colony) >= AI_FOOD_STORAGE_THRESHOLD
     && !colony.chambers.some((c) => c.chamberType === ChamberType.FoodStorage)
   ) {
     const placement = findOpenChamberSpot(world, colony, 5, ChamberType.FoodStorage);  // near-surface storage

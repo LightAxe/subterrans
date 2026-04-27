@@ -83,9 +83,9 @@ export function ensureChamberFlowFields(
 
 /**
  * Multi-source BFS from every Open tile inside any chamber whose type is
- * present in `chamberTypes`. Expands through Open and BeingDug tiles. Marked
- * and Solid are walls (same contract as entrance-flow.ts — a non-digger
- * can't traverse Marked).
+ * present in `chamberTypes` AND (optionally) passes `chamberFilter`.
+ * Expands through Open and BeingDug tiles. Marked and Solid are walls
+ * (same contract as entrance-flow.ts — a non-digger can't traverse Marked).
  *
  * Output at each reachable tile is the direction an ant should step to head
  * one tile closer to the nearest seeded chamber tile. Reachable chamber
@@ -94,11 +94,15 @@ export function ensureChamberFlowFields(
  * Deterministic: seed order is chamber array order × row-major footprint
  * iteration; BFS expansion order is N/E/S/W.
  *
- * @param underground   Colony underground grid (read-only).
- * @param chambers      Colony chambers array (completed chambers only).
- * @param chamberTypes  Types to seed from (e.g. [FoodStorage] or [Queen, Nursery]).
- * @param out           Pre-allocated Int32Array of length W*H. Filled in-place.
- * @param queue         Pre-allocated Int32Array of length W*H for BFS queue.
+ * @param underground    Colony underground grid (read-only).
+ * @param chambers       Colony chambers array (completed chambers only).
+ * @param chamberTypes   Types to seed from (e.g. [FoodStorage] or [Queen, Nursery]).
+ * @param out            Pre-allocated Int32Array of length W*H. Filled in-place.
+ * @param queue          Pre-allocated Int32Array of length W*H for BFS queue.
+ * @param chamberFilter  Optional per-chamber predicate (issue #15) — only
+ *                       chambers returning true are seeded. Used by the food
+ *                       field to exclude FoodStorage chambers at capacity so
+ *                       carriers redirect to non-full chambers.
  */
 export function computeChamberFlowField(
   underground: UndergroundGrid,
@@ -106,6 +110,7 @@ export function computeChamberFlowField(
   chamberTypes: ReadonlyArray<ChamberType>,
   out: Int32Array,
   queue: Int32Array,
+  chamberFilter?: (chamber: ChamberRecord) => boolean,
 ): void {
   const { data, width, height } = underground;
 
@@ -122,6 +127,7 @@ export function computeChamberFlowField(
       if (chamber.chamberType === chamberTypes[t]!) { matches = true; break; }
     }
     if (!matches) continue;
+    if (chamberFilter !== undefined && !chamberFilter(chamber)) continue;
 
     const baseX = chamber.posX >> FP_SHIFT;
     const baseY = chamber.posY >> FP_SHIFT;

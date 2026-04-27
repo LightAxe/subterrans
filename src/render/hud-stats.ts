@@ -36,7 +36,7 @@ import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { isAlive } from '../sim/ant/ant-store.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { STARVATION_GRACE_TICKS } from '../sim/constants.js';
-import { colonyFoodCapacity } from '../sim/colony/colony-system.js';
+import { colonyFoodCapacity, colonyFoodTotal } from '../sim/colony/colony-system.js';
 
 export interface HudStats {
   antCount:       number;
@@ -91,7 +91,10 @@ export function computeHudStats(world: WorldState, colony: ColonyRecord): HudSta
   // larvae are excluded because they cannot execute any task; folding them in
   // produced a "total headcount" the player read as "usable headcount".
   const antCount     = colony.workerCount + queenBit;
-  const foodDisplay  = colony.foodStored >> FP_SHIFT;
+  // Issue #15: foodTotal sums the entrance pool (colony.foodStored) plus every
+  // FoodStorage chamber's per-chamber foodStored — the HUD must show the
+  // player the whole stash, not just the chamberless fallback bucket.
+  const foodDisplay  = colonyFoodTotal(colony) >> FP_SHIFT;
   const foodCapacity = colonyFoodCapacity(colony) >> FP_SHIFT;
 
   let queenHealthPct = 0;

@@ -2415,4 +2415,90 @@ describe('resetFlowFieldCaches — cross-world isolation', () => {
 
     resetFlowFieldCaches();
   });
+
+  // -------------------------------------------------------------------------
+  // Issue #15 regression: full FoodStorage chambers must drop out of the food
+  // flow-field. A second chamber further away should pick up the routing once
+  // the nearer chamber fills, instead of letting carriers stall at the cap.
+  // -------------------------------------------------------------------------
+  it('issue #15 — full FoodStorage chamber stops seeding the food flow-field; carriers redirect to non-full chamber', async () => {
+    const { createUndergroundGrid, UndergroundTileState, ugSet, Zone } = await import('./terrain.js');
+    const { FP_ONE } = await import('./fixed.js');
+    const { initAnt: _initAnt } = await import('./ant/ant-store.js');
+    const { FOOD_CHAMBER_CAPACITY: CAP } = await import('./constants.js');
+
+    resetFlowFieldCaches();
+
+    const world = createWorldState(42);
+    const colonyId = 1 as ColonyId;
+    const queenId = allocateEntityId(world);
+    _initAnt(world.ants, queenId, {
+      colonyId,
+      posX: 1024, posY: 1024,
+      task: AntTask.Idle, subTask: 0,
+      speed: 0, lifespan: WORKER_LIFESPAN_TICKS,
+    });
+    const colony = createColonyRecord(colonyId, queenId);
+    colony.foodStored = 0;
+    colony.digFlowFieldDirty = true; // first compute on tick 0
+    colony.foodFlowFieldDirty = false;
+    colony.rallyPoint = null;
+    colony.entrances = [{ entranceId: 1, surfaceTileX: 8, surfaceTileY: 5, isOpen: true }];
+    // Two chambers on opposite ends of the open row. Chamber A (west, at col 2)
+    // is FULL — it must NOT seed the food field. Chamber B (east, at col 14)
+    // has room and should be the only seed.
+    //
+    // Chamber B is pushed FIRST so tickFoodConsumption (step 3) drains it for
+    // the queen's 2fp/tick stipend BEFORE chamber A — leaving chamber A at
+    // exactly capacity when the food flow-field recomputes at step 9. Without
+    // this ordering, withdrawFood would dip chamber A below the cap and the
+    // BFS would re-seed from the now-not-full chamber, defeating the test.
+    colony.chambers.push({
+      chamberId: 101, chamberType: ChamberType.FoodStorage, foodStored: 100,
+      posX: 14 << FP_SHIFT, posY: 3 << FP_SHIFT, width: 1, height: 1,
+    });
+    colony.chambers.push({
+      chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: CAP,
+      posX: 2 << FP_SHIFT, posY: 3 << FP_SHIFT, width: 1, height: 1,
+    });
+    world.colonies[colonyId] = colony;
+
+    const ug = createUndergroundGrid(16, 16);
+    for (let x = 0; x < 16; x++) {
+      ugSet(ug, x, 0, UndergroundTileState.Open);
+      ugSet(ug, x, 1, UndergroundTileState.Open);
+      ugSet(ug, x, 2, UndergroundTileState.Open);
+      ugSet(ug, x, 3, UndergroundTileState.Open);
+    }
+    world.undergroundGrids[colonyId] = ug;
+
+    // Carrier ant in the middle of row 3, holding food and routing home.
+    const antId = allocateEntityId(world);
+    _initAnt(world.ants, antId, {
+      colonyId,
+      posX: 8 << FP_SHIFT,
+      posY: 3 << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+      speed: FP_ONE,
+      lifespan: WORKER_LIFESPAN_TICKS,
+    });
+    world.ants.zone[antId] = Zone.Underground;
+    world.ants.foodCarrying[antId] = 100;
+    colony.workers.push(antId);
+    colony.workerCount = 1;
+
+    const beforeX = world.ants.posX[antId]! >> FP_SHIFT;
+    tick(world, []);
+    const afterX = world.ants.posX[antId]! >> FP_SHIFT;
+
+    // The full chamber is to the WEST (col 2); the open chamber is to the
+    // EAST (col 14). Pre-#15 the BFS would have seeded both and the carrier
+    // would have stepped west toward the closer (full) chamber, only to stall
+    // on a full-cap deposit. Post-#15 the food field excludes the full chamber
+    // and routes the carrier east toward the open one.
+    expect(afterX).toBeGreaterThan(beforeX);
+
+    resetFlowFieldCaches();
+  });
 });

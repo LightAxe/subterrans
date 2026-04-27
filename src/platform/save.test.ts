@@ -11,6 +11,7 @@ import { tick } from '../sim/tick.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 import type { SimCommand } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
+import { ChamberType } from '../sim/enums.js';
 
 describe('save.ts (SCEN-04 + SCEN-06)', () => {
   // Use window.localStorage to ensure jsdom's implementation (not Node 25 native localStorage)
@@ -87,6 +88,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const s = serializeWorldState(w);
       expect(s.colonies[String(PLAYER_COLONY_ID)]!.priorityFoodPileId).toBeNull();
     });
+    it('preserves ColonyRecord.foodFlowFieldDirty (issue #15)', () => {
+      const w = createScenario(42);
+      w.colonies[PLAYER_COLONY_ID]!.foodFlowFieldDirty = true;
+      const s = serializeWorldState(w);
+      expect(s.colonies[String(PLAYER_COLONY_ID)]!.foodFlowFieldDirty).toBe(true);
+    });
   });
 
   describe('deserializeWorldState — round-trip', () => {
@@ -130,6 +137,45 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       w.colonies[PLAYER_COLONY_ID]!.priorityFoodPileId = null;
       const w2 = deserializeWorldState(serializeWorldState(w));
       expect(w2.colonies[PLAYER_COLONY_ID]!.priorityFoodPileId).toBeNull();
+    });
+    it('round-trips ColonyRecord.foodFlowFieldDirty through serialize → deserialize (issue #15)', () => {
+      const w = createScenario(42);
+      w.colonies[PLAYER_COLONY_ID]!.foodFlowFieldDirty = true;
+      const w2 = deserializeWorldState(serializeWorldState(w));
+      expect(w2.colonies[PLAYER_COLONY_ID]!.foodFlowFieldDirty).toBe(true);
+    });
+    it('pre-#15 saves (foodFlowFieldDirty absent) deserialize to false', () => {
+      // Backwards compat: a save written before issue #15 lacked the field.
+      // Loader must default it to false rather than throw.
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      const colonyKey = String(PLAYER_COLONY_ID);
+      delete (s.colonies[colonyKey] as { foodFlowFieldDirty?: boolean }).foodFlowFieldDirty;
+      const w2 = deserializeWorldState(s);
+      expect(w2.colonies[PLAYER_COLONY_ID]!.foodFlowFieldDirty).toBe(false);
+    });
+    it('round-trips per-chamber chamber.foodStored independently (issue #15)', () => {
+      // Issue #15 regression: under the old pool-only model, save + reload
+      // would re-derive chamber.foodStored from colony.foodStored at the next
+      // reconcile, hiding any per-chamber drift. Post-#15, chamber.foodStored
+      // is authoritative — the save MUST faithfully preserve each chamber's
+      // contents, including disparate values across chambers.
+      const w = createScenario(42);
+      const colony = w.colonies[PLAYER_COLONY_ID]!;
+      colony.chambers.push({
+        chamberId: 999, chamberType: ChamberType.FoodStorage, foodStored: 1234,
+        posX: 10 << 8, posY: 5 << 8, width: 3, height: 3,
+      });
+      colony.chambers.push({
+        chamberId: 998, chamberType: ChamberType.FoodStorage, foodStored: 4321,
+        posX: 14 << 8, posY: 5 << 8, width: 3, height: 3,
+      });
+      const w2 = deserializeWorldState(serializeWorldState(w));
+      const c2 = w2.colonies[PLAYER_COLONY_ID]!;
+      const ch1 = c2.chambers.find(c => c.chamberId === 999)!;
+      const ch2 = c2.chambers.find(c => c.chamberId === 998)!;
+      expect(ch1.foodStored).toBe(1234);
+      expect(ch2.foodStored).toBe(4321);
     });
     it('round-trips non-zero ants.searchWave through serialize → deserialize (Phase 9 / 09 digger-reassignment memo)', () => {
       // Regression guard: if searchWave is dropped, Continue/autosave silently

@@ -134,17 +134,18 @@ function buildWorld(seed: number): { world: WorldState; queenId: number; colonyI
     lifespan:  WORKER_LIFESPAN_TICKS,
   });
   world.colonies[1] = createColonyRecord(1, queenId);
-  world.colonies[1]!.foodStored = 100000;
-  // 09 backlog: seed enough FoodStorage chambers so colonyFoodCapacity accommodates
-  // the synthetic 100000fp head-start (tickReconcile now clamps foodStored to
-  // capacity, so a chamberless colony would lose all but BASE_FOOD_STORAGE_CAPACITY
-  // at tick 100 and starve the queen before Test 6's pipeline completes).
-  // 20 chambers ⇒ cap = 2048 + 20×5120 = 104448fp, comfortably above 100000.
+  // Issue #15: chamber.foodStored is now per-chamber authoritative. The
+  // synthetic 100000fp head-start has to live in chambers, not the entrance
+  // pool — reconcile clamps colony.foodStored to BASE alone so dumping 100000
+  // into the pool would collapse to 2048 on the first reconcile and starve
+  // the queen well before Test 6's pipeline completes. Spread the head-start
+  // across 20 chambers (5000fp each, all under FOOD_CHAMBER_CAPACITY=5120).
+  world.colonies[1]!.foodStored = 0;
   for (let i = 0; i < 20; i++) {
     world.colonies[1]!.chambers.push({
       chamberId:   1000 + i,
       chamberType: ChamberType.FoodStorage,
-      foodStored:  0,
+      foodStored:  5000,
       posX:        0,
       posY:        0,
       width:       3,
@@ -175,9 +176,10 @@ function buildWorld(seed: number): { world: WorldState; queenId: number; colonyI
   });
   world.ants.zone[queenId] = 1; // Zone.Underground — Gate 6 precondition
   // Phase 3 PRD §2a caller-side extension fields (factory does not set these):
-  world.colonies[1]!.entrances         = [];
-  world.colonies[1]!.rallyPoint        = null;
-  world.colonies[1]!.digFlowFieldDirty = false;
+  world.colonies[1]!.entrances          = [];
+  world.colonies[1]!.rallyPoint         = null;
+  world.colonies[1]!.digFlowFieldDirty  = false;
+  world.colonies[1]!.foodFlowFieldDirty = false;
   world.pheromoneGrids[pheromoneGridKey(1, PheromoneType.FoodTrail, 'surface')] =
     createPheromoneGrid(64, 64);
   return { world, queenId, colonyId: 1 as ColonyId };

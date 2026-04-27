@@ -31,8 +31,8 @@
 
 import type { WorldState } from '../types.js';
 import type { AntComponents } from './ant-store.js';
-import type { ColonyRecord } from '../colony/colony-store.js';
-import { colonyFoodCapacity, hasCompletedChamber } from '../colony/colony-system.js';
+import type { ColonyRecord, ChamberRecord } from '../colony/colony-store.js';
+import { hasCompletedChamber } from '../colony/colony-system.js';
 import { AntTask, ForagingSubState, DiggingSubState, NursingSubState, ChamberType, PheromoneType } from '../enums.js';
 import {
   WORKER_CARRY_CAPACITY,
@@ -50,6 +50,8 @@ import {
   EXCURSION_WOBBLE_PERCENT,
   ENTRANCE_DEPOSIT_SUPPRESS_RADIUS,
   QUEEN_EGG_INTERVAL_TICKS,
+  FOOD_CHAMBER_CAPACITY,
+  BASE_FOOD_STORAGE_CAPACITY,
 } from '../constants.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { Rng } from '../rng.js';
@@ -158,8 +160,8 @@ export function antPickupFood(
 //
 // Transfers ants.foodCarrying[antId] into the colony food pool.
 // On full deposit: zeros foodCarrying and writes task=Idle, subTask=0
-// (Errata E-01 idle-checkpoint transition). On partial deposit (pool
-// at capacity): leaves leftover on the ant and preserves
+// (Errata E-01 idle-checkpoint transition). On partial deposit (chamber +
+// fallback pool at capacity): leaves leftover on the ant and preserves
 // Foraging+CarryingFood for a next-tick retry.
 //
 // Errata E-01 (2026-04-16) is authoritative for the completion-write contract:
@@ -167,56 +169,100 @@ export function antPickupFood(
 //   Plan 10 step 9 next tick reassigns — back to Foraging+SearchingFood if allocation
 //   still demands forage, or to a different task if the triangle shifted.
 //
-// 09 backlog memo — food source-of-truth model:
-//   colony.foodStored is the authoritative pooled total (fp). Deposits go
-//   directly to the pool, clamped at colonyFoodCapacity(colony) =
-//   BASE_FOOD_STORAGE_CAPACITY + N × FOOD_CHAMBER_CAPACITY where N is the
-//   count of COMPLETED FoodStorage chambers.
+// Issue #15 (2026-04-26) — food source-of-truth model:
+//   chamber.foodStored is the authoritative store for each FoodStorage
+//   chamber, capped at FOOD_CHAMBER_CAPACITY. colony.foodStored is the
+//   entrance-shaft / chamberless-fallback pool, capped at
+//   BASE_FOOD_STORAGE_CAPACITY. Total capacity is unchanged:
+//   BASE + N × FOOD_CHAMBER_CAPACITY.
 //
-//   ChamberRecord.foodStored is DERIVED visualization state, recomputed by
-//   tickReconcile from the authoritative pool (each chamber filled up to
-//   FOOD_CHAMBER_CAPACITY in array order). antDepositFood MUST NOT write
-//   chamber.foodStored — doing so would be silently erased by the next
-//   reconcile AND would hide the food from queen/larvae consumption, which
-//   reads only colony.foodStored.
+//   Deposit selection: an ant standing inside a non-full FoodStorage
+//   chamber footprint deposits THERE (only). An ant at the chamberless
+//   fallback site (entrance shaft top, when no FoodStorage chamber exists
+//   or the field routed it home that way) deposits into colony.foodStored.
+//   Pre-#15 the colony pool received every deposit and tickReconcile
+//   "magically" redistributed across all chambers; that redistribution is
+//   gone — chamber fill now requires an actual ant visit.
 //
 // Early-return if foodCarrying <= 0 (defensive guard per PRD §4c — deposit is only
 // called when an ant arrives carrying food; the guard pins exact no-op behavior).
 // ---------------------------------------------------------------------------
 
 /**
- * Deposit all food an ant is carrying into the authoritative colony pool.
+ * Deposit food the ant is carrying into the FoodStorage chamber it stands
+ * in (preferred), or the entrance-shaft pool (fallback).
  *
- * The pool (colony.foodStored) is the single source of truth for stored food;
- * per-chamber ChamberRecord.foodStored values are projected by tickReconcile
- * and MUST NOT be written here (they would be overwritten and would mask the
- * food from consumption, which reads colony.foodStored directly).
+ * Chamber path: if the ant's tile lies inside a non-full FoodStorage
+ * chamber footprint, deposit up to that chamber's remaining capacity
+ * (FOOD_CHAMBER_CAPACITY - chamber.foodStored). If the chamber transitions
+ * full as a result, mark colony.foodFlowFieldDirty so step 9 re-seeds the
+ * food flow-field excluding the now-full chamber on the next tick.
  *
- * Deposit is clamped to colonyFoodCapacity(colony) = BASE + N × CHAMBER.
+ * Fallback path: if no FoodStorage chamber footprint matches, deposit into
+ * colony.foodStored up to BASE_FOOD_STORAGE_CAPACITY. This is the chamberless
+ * early-game path AND the entrance-shaft top deposit site
+ * `tickForagerActions` (b) routes to when chambers are full or absent.
+ *
  * Leftover that does not fit stays on ants.foodCarrying; the ant keeps
  * task=Foraging, subTask=CarryingFood so step 16b retries next tick once
- * consumption opens space. On FULL deposit (foodCarrying reaches 0),
- * Errata E-01 idle-checkpoint fires: task=Idle, subTask=0, step 10a
- * reassigns next tick.
+ * consumption opens space (or the flow-field redirects to another chamber).
+ *
+ * On FULL deposit (foodCarrying reaches 0), Errata E-01 idle-checkpoint
+ * fires: task=Idle, subTask=0, step 10a reassigns next tick.
  *
  * Early-returns if foodCarrying === 0 (no-op; no task transition occurs).
  *
  * @param world    WorldState (reads ants, writes ants.foodCarrying, task, subTask).
- * @param colony   ColonyRecord (writes colony.foodStored; never writes chambers).
+ * @param colony   ColonyRecord (writes chamber.foodStored OR colony.foodStored;
+ *                 may set colony.foodFlowFieldDirty when a chamber fills).
  * @param antId    Entity ID of the depositing forager.
  */
 export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: number): void {
   const amount = world.ants.foodCarrying[antId]!;
   if (amount <= 0) return;
 
-  // 09 backlog memo — pool is authoritative. Deposit directly to
-  // colony.foodStored clamped at colonyFoodCapacity. Chambers are derived
-  // state and are left untouched here; tickReconcile projects them.
-  const capacity = colonyFoodCapacity(colony);
-  const space = capacity - colony.foodStored;
-  const toPool = amount < space ? amount : (space > 0 ? space : 0);
-  colony.foodStored += toPool;
-  const remaining = amount - toPool;
+  const tileX = world.ants.posX[antId]! >> FP_SHIFT;
+  const tileY = world.ants.posY[antId]! >> FP_SHIFT;
+
+  // Chamber path — pick the FoodStorage chamber whose footprint contains the
+  // ant's tile. Iterates colony.chambers in storage order; the first match
+  // wins (chambers don't overlap by construction). A full chamber is NOT a
+  // match — the ant deposits nothing here and the leftover keeps it routing
+  // until the food flow-field steers it to a non-full chamber.
+  let chamber: ChamberRecord | null = null;
+  for (let c = 0; c < colony.chambers.length; c++) {
+    const ch = colony.chambers[c]!;
+    if (ch.chamberType !== ChamberType.FoodStorage) continue;
+    if (ch.foodStored >= FOOD_CHAMBER_CAPACITY) continue;
+    const baseX = ch.posX >> FP_SHIFT;
+    const baseY = ch.posY >> FP_SHIFT;
+    if (
+      tileX >= baseX && tileX < baseX + ch.width &&
+      tileY >= baseY && tileY < baseY + ch.height
+    ) {
+      chamber = ch;
+      break;
+    }
+  }
+
+  let remaining = amount;
+  if (chamber !== null) {
+    const space = FOOD_CHAMBER_CAPACITY - chamber.foodStored;
+    const toChamber = remaining < space ? remaining : space;
+    chamber.foodStored += toChamber;
+    remaining -= toChamber;
+    if (chamber.foodStored >= FOOD_CHAMBER_CAPACITY) {
+      // Full↔not-full boundary crossed — re-seed the food flow-field next
+      // tick so other carriers redirect to a remaining non-full chamber.
+      colony.foodFlowFieldDirty = true;
+    }
+  } else {
+    // Fallback — entrance-shaft / chamberless pool. Cap at BASE.
+    const space = BASE_FOOD_STORAGE_CAPACITY - colony.foodStored;
+    const toPool = remaining < space ? remaining : (space > 0 ? space : 0);
+    colony.foodStored += toPool;
+    remaining -= toPool;
+  }
 
   world.ants.foodCarrying[antId] = remaining;
 
@@ -225,10 +271,10 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
   // Plan 10 step 9 next tick reassigns (back to Foraging+SearchingFood if allocation
   // still demands forage, or to a different task if the triangle shifted).
   //
-  // 09 backlog memo — near-full deposit: if leftover remains on the ant (colony /
-  // chambers were at capacity), preserve the Foraging + CarryingFood state and the
-  // active outbound heading so routeForagerPriority can re-route the ant back to
-  // the chamber next tick without a round-trip through Idle.
+  // Near-full deposit: if leftover remains on the ant (chamber + fallback pool both
+  // at capacity), preserve the Foraging + CarryingFood state and the active outbound
+  // heading so routeForagerPriority can re-route the ant back to a chamber next tick
+  // without a round-trip through Idle.
   if (remaining === 0) {
     world.ants.task[antId] = AntTask.Idle;
     world.ants.subTask[antId] = 0;
@@ -329,11 +375,16 @@ export function tickForagerActions(world: WorldState): void {
       const tileX = ants.posX[id]! >> FP_SHIFT;
       const tileY = ants.posY[id]! >> FP_SHIFT;
 
-      // (a) FoodStorage chamber Open tile.
+      // (a) FoodStorage chamber Open tile — only NON-FULL chambers count
+      // (issue #15). A worker standing on a full chamber tile is a no-op
+      // here; the food flow-field excludes full chambers (see chamber-flow.ts
+      // + tick.ts step 9), so on the next tick movement steers them to a
+      // non-full chamber if one exists, or to the entrance fallback (b) below.
       let depositSite = false;
       for (let c = 0; c < colony.chambers.length; c++) {
         const chamber = colony.chambers[c]!;
         if (chamber.chamberType !== ChamberType.FoodStorage) continue;
+        if (chamber.foodStored >= FOOD_CHAMBER_CAPACITY) continue;
         const baseX = chamber.posX >> FP_SHIFT;
         const baseY = chamber.posY >> FP_SHIFT;
         if (
@@ -2331,6 +2382,12 @@ export function tickAntMovement(
         for (let c = 0; c < colony.chambers.length; c++) {
           const chamber = colony.chambers[c]!;
           if (chamber.chamberType !== ChamberType.FoodStorage) continue;
+          // Issue #15 — skip full chambers in fallback target selection too,
+          // mirroring the food flow-field's seed exclusion. The flow-field
+          // is the primary path; this Manhattan fallback only fires when the
+          // chamberFlowFields cache is absent (test harnesses) — both paths
+          // must agree on which chambers are valid deposit targets.
+          if (chamber.foodStored >= FOOD_CHAMBER_CAPACITY) continue;
           const baseX = chamber.posX >> FP_SHIFT;
           const baseY = chamber.posY >> FP_SHIFT;
           for (let ty = 0; ty < chamber.height; ty++) {

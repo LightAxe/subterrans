@@ -138,6 +138,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
       fresh.entrances         = [];
       fresh.rallyPoint        = null;
       fresh.digFlowFieldDirty = false;
+      fresh.foodFlowFieldDirty = false;
       fresh.killCount         = 0;
       fresh.priorityFoodPileId = null;
     }
@@ -226,6 +227,8 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
 
     // digFlowFieldDirty — boolean assignment
     d.digFlowFieldDirty = s.digFlowFieldDirty;
+    // foodFlowFieldDirty (issue #15) — boolean assignment
+    d.foodFlowFieldDirty = s.foodFlowFieldDirty;
   }
 
   // --- pheromoneGrids: delete stale dst keys; upsert each src grid ---

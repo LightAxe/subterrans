@@ -526,17 +526,18 @@ describe('tickReconcile', () => {
     expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
   });
 
-  it('20b. reconcile clamps foodStored to BASE + N × FOOD_CHAMBER_CAPACITY when FoodStorage chambers exist', () => {
+  it('20b. reconcile clamps the entrance pool to BASE and each chamber.foodStored to FOOD_CHAMBER_CAPACITY independently (issue #15)', () => {
     const { world, colony } = setupWorldWithQueen();
+    // Issue #15: chamber.foodStored is per-chamber authoritative; the entrance
+    // pool (`colony.foodStored`) caps at BASE alone — chambers are NOT a
+    // capacity extension of the pool. Reconcile defensively clamps each side.
     colony.chambers.push(
-      { chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: 0, posX: 0, posY: 0, width: 3, height: 3 },
+      { chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: FOOD_CHAMBER_CAPACITY + 200, posX: 0, posY: 0, width: 3, height: 3 },
     );
-    const cap = BASE_FOOD_STORAGE_CAPACITY + FOOD_CHAMBER_CAPACITY;
-    colony.foodStored = cap + 1000; // overshoot
+    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY + 1000; // pool overshoot
     colony.reconcileCountdown = 1;
     tickReconcile(world, colony);
-    expect(colony.foodStored).toBe(cap);
-    // Chamber distribution still caps at FOOD_CHAMBER_CAPACITY — no inflation
+    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
     expect(colony.chambers[0]!.foodStored).toBe(FOOD_CHAMBER_CAPACITY);
   });
 
@@ -557,9 +558,12 @@ describe('tickReconcile', () => {
     expect(colony.foodStored).toBe(1000 - QUEEN_FOOD_PER_TICK);
   });
 
-  it('22. reconcile derives FoodStorage chamber contents from authoritative foodStored', () => {
+  it('22. reconcile NEVER redistributes the entrance pool across chambers (issue #15 regression)', () => {
+    // Pre-#15 the pool projected over N chambers, magically filling any chamber
+    // an ant had never visited. The post-#15 contract: chamber.foodStored is
+    // independent — it grows only when an ant deposits inside that chamber's
+    // footprint. Reconcile is forbidden from moving food across boundaries.
     const { world, colony } = setupWorldWithQueen(8000);
-    // Add two FoodStorage chambers and one Nursery (non-food)
     colony.chambers.push(
       { chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: 0, posX: 0, posY: 0, width: 3, height: 3 },
       { chamberId: 101, chamberType: ChamberType.Nursery,     foodStored: 0, posX: 4, posY: 0, width: 3, height: 3 },
@@ -569,32 +573,29 @@ describe('tickReconcile', () => {
     colony.reconcileCountdown = 1;
     tickReconcile(world, colony);
 
-    // Two FoodStorage chambers × FOOD_CHAMBER_CAPACITY = 10240; we have 8000, so:
-    // Chamber 0 gets min(8000, 5120) = 5120; distributed 5120
-    // Chamber 2 gets min(8000-5120, 5120) = 2880
-    // Nursery untouched
-    // colony.foodStored stays 8000 (authoritative — never overwritten)
-    expect(colony.chambers[0]!.foodStored).toBe(FOOD_CHAMBER_CAPACITY);
-    expect(colony.chambers[1]!.foodStored).toBe(0); // Nursery — untouched
-    expect(colony.chambers[2]!.foodStored).toBe(8000 - FOOD_CHAMBER_CAPACITY);
-    expect(colony.foodStored).toBe(8000);
+    // No ant deposits happened → all FoodStorage chambers stay at 0.
+    expect(colony.chambers[0]!.foodStored).toBe(0);
+    expect(colony.chambers[1]!.foodStored).toBe(0);
+    expect(colony.chambers[2]!.foodStored).toBe(0);
+    // Entrance pool clamps to BASE (8000 > BASE = 2048).
+    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
   });
 
-  it('23. reconcile overshoot clamped — colony.foodStored is pulled down to colonyFoodCapacity (09 backlog memo)', () => {
-    // Pre-memo behaviour was "colony.foodStored stays authoritative unchanged".
-    // Post-memo: reconcile defensively clamps to BASE + N × FOOD_CHAMBER_CAPACITY
-    // so an overshoot introduced by any non-deposit write path is corrected.
-    const { world, colony } = setupWorldWithQueen(15000);
+  it('23. reconcile defensively clamps a per-chamber overshoot down to FOOD_CHAMBER_CAPACITY (issue #15)', () => {
+    // The deposit + withdraw paths cap at source, but reconcile is the safety
+    // net for any drift. Direct chamber overshoot is clamped here.
+    const { world, colony } = setupWorldWithQueen(0);
     colony.chambers.push(
-      { chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: 0, posX: 0, posY: 0, width: 3, height: 3 },
+      { chamberId: 100, chamberType: ChamberType.FoodStorage,
+        foodStored: FOOD_CHAMBER_CAPACITY + 12345, // simulated drift
+        posX: 0, posY: 0, width: 3, height: 3 },
     );
 
     colony.reconcileCountdown = 1;
     tickReconcile(world, colony);
 
-    const cap = BASE_FOOD_STORAGE_CAPACITY + FOOD_CHAMBER_CAPACITY; // 7168
     expect(colony.chambers[0]!.foodStored).toBe(FOOD_CHAMBER_CAPACITY);
-    expect(colony.foodStored).toBe(cap);
+    expect(colony.foodStored).toBe(0);
   });
 });
 

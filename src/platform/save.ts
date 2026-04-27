@@ -92,6 +92,7 @@ interface SerializedColony {
   entrances: NestEntrance[];
   rallyPoint: { tileX: number; tileY: number } | null;
   digFlowFieldDirty: boolean;
+  foodFlowFieldDirty?: boolean;  // Issue #15 — defaults false on old saves
   killCount: number;   // Plan 09-01
   priorityFoodPileId: FoodPileId | null;  // Phase 9 / PRD §3d — per-colony priority food target
 }
@@ -184,6 +185,7 @@ function serializeColony(c: ColonyRecord): SerializedColony {
     entrances:            c.entrances.map((e) => ({ ...e })),
     rallyPoint:           c.rallyPoint === null ? null : { ...c.rallyPoint },
     digFlowFieldDirty:    c.digFlowFieldDirty,
+    foodFlowFieldDirty:   c.foodFlowFieldDirty,
     killCount:            c.killCount,
     priorityFoodPileId:   c.priorityFoodPileId,
   };
@@ -333,6 +335,7 @@ function deserializeColony(s: SerializedColony): ColonyRecord {
   c.entrances            = s.entrances.map((e) => ({ ...e }));
   c.rallyPoint           = s.rallyPoint === null ? null : { ...s.rallyPoint };
   c.digFlowFieldDirty    = s.digFlowFieldDirty;
+  c.foodFlowFieldDirty   = s.foodFlowFieldDirty ?? false;
   c.killCount            = s.killCount;
   c.priorityFoodPileId   = s.priorityFoodPileId ?? null;
   return c;

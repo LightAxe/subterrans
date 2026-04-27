@@ -128,6 +128,13 @@ export interface ColonyRecord {
   /** Phase 3 PRD §2 — set true when any tile passability in this colony's underground changes (per research Pitfall 3). Cleared by tick.ts step 9 after flow-field recomputation. Assigned caller-side per PRD §2a extension contract. */
   digFlowFieldDirty: boolean;
 
+  /** Issue #15 — set true when a FoodStorage chamber crosses the full↔not-full
+   *  boundary, so step 9 re-seeds the food chamber flow-field excluding any
+   *  newly-full chambers. Independent from `digFlowFieldDirty` because food
+   *  fill changes don't affect tile topology — only the food field's seed set.
+   *  Cleared by tick.ts step 9 after recompute. Initialized to false. */
+  foodFlowFieldDirty: boolean;
+
   /** Phase 9 / CMBT-06/07 / PRD §1a — cumulative count of enemies killed by this colony's ants.
    *  Incremented inside combat.killAnt (Plan 02) when ants from this colony win a combat round.
    *  Initialized to 0 in createColonyRecord. Round-trips through copyWorldState + save. */

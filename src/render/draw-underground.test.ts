@@ -414,11 +414,11 @@ describe('drawUndergroundEntities', () => {
   it('FoodStorage half-full → proportional count of food-cache sprites', () => {
     const foodDims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage];
     const totalTiles = foodDims.width * foodDims.height;
-    world.colonies[PLAYER_COLONY_ID]!.foodStored = Math.floor(FOOD_CHAMBER_CAPACITY / 2);
+    // Issue #15: chamber.foodStored is the authoritative per-chamber stockpile.
     world.colonies[PLAYER_COLONY_ID]!.chambers = [{
       chamberId:   10,
       chamberType: ChamberType.FoodStorage,
-      foodStored:  0, // stale — should be ignored; colony.foodStored is truth
+      foodStored:  Math.floor(FOOD_CHAMBER_CAPACITY / 2),
       posX:        5 << FP_SHIFT,
       posY:        5 << FP_SHIFT,
       width:       foodDims.width,
@@ -438,11 +438,10 @@ describe('drawUndergroundEntities', () => {
 
   it('FoodStorage full → food-cache sprite per tile, bottom row included', () => {
     const foodDims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage];
-    world.colonies[PLAYER_COLONY_ID]!.foodStored = FOOD_CHAMBER_CAPACITY;
     world.colonies[PLAYER_COLONY_ID]!.chambers = [{
       chamberId:   11,
       chamberType: ChamberType.FoodStorage,
-      foodStored:  0, // stale; projection uses colony.foodStored
+      foodStored:  FOOD_CHAMBER_CAPACITY,
       posX:        5 << FP_SHIFT,
       posY:        5 << FP_SHIFT,
       width:       foodDims.width,
@@ -473,19 +472,19 @@ describe('drawUndergroundEntities', () => {
       .toBeGreaterThanOrEqual(1);
   });
 
-  it('FoodStorage fill responds to colony.foodStored even when chamber.foodStored is stale', () => {
-    // Regression: ChamberRecord.foodStored is refreshed only on tickReconcile
-    // (every RECONCILE_INTERVAL_TICKS). Between reconciles a forager can top
-    // up colony.foodStored by a large amount and the old chamber-field read
-    // would still show an empty chamber. The projection must mirror
-    // tickReconcile's distribution from colony.foodStored directly.
+  it('FoodStorage fill reads chamber.foodStored directly (issue #15 chamber-authoritative)', () => {
+    // Issue #15 changed the model: chamber.foodStored is the authoritative
+    // per-chamber stockpile, written by ant deposits inside the footprint and
+    // read directly by render. There's no projection from colony.foodStored.
     const foodDims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage];
     const totalTiles = foodDims.width * foodDims.height;
-    world.colonies[PLAYER_COLONY_ID]!.foodStored = FOOD_CHAMBER_CAPACITY; // pool is full
+    // Set the entrance pool full just to confirm it does NOT bleed into the
+    // chamber visual — the bug we fixed.
+    world.colonies[PLAYER_COLONY_ID]!.foodStored = 9999;
     world.colonies[PLAYER_COLONY_ID]!.chambers = [{
       chamberId:   12,
       chamberType: ChamberType.FoodStorage,
-      foodStored:  0, // STALE — reconcile hasn't run yet after the deposit
+      foodStored:  FOOD_CHAMBER_CAPACITY, // full per chamber.foodStored
       posX:        5 << FP_SHIFT,
       posY:        5 << FP_SHIFT,
       width:       foodDims.width,
@@ -495,26 +494,25 @@ describe('drawUndergroundEntities', () => {
     const cam = makeCamera(5, 5, 20, 20);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
-    // Even though chamber.foodStored=0, the chamber visual must read as full.
     expect(sprites.staticOfKind('food-cache').length).toBe(totalTiles);
   });
 
-  it('projectFoodStorageFill distributes pool across multiple chambers in order', () => {
-    // Mirror tickReconcile: first chamber fills to capacity, second gets the
-    // remainder, etc. Independent of ChamberRecord.foodStored values.
+  it('projectFoodStorageFill returns each chamber.foodStored independently (issue #15)', () => {
+    // Per-chamber authoritative model: each chamber stands on its own. Reading
+    // one does NOT consume from the others.
     const foodDims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage];
     const capa = FOOD_CHAMBER_CAPACITY;
     const colony = createColonyRecord(PLAYER_COLONY_ID, 999);
     colony.chambers = [
-      { chamberId: 1, chamberType: ChamberType.FoodStorage, foodStored: 0,
+      { chamberId: 1, chamberType: ChamberType.FoodStorage, foodStored: capa,
         posX: 0, posY: 0, width: foodDims.width, height: foodDims.height },
-      { chamberId: 2, chamberType: ChamberType.FoodStorage, foodStored: 0,
+      { chamberId: 2, chamberType: ChamberType.FoodStorage, foodStored: Math.floor(capa / 2),
         posX: 0, posY: 0, width: foodDims.width, height: foodDims.height },
       { chamberId: 3, chamberType: ChamberType.FoodStorage, foodStored: 0,
         posX: 0, posY: 0, width: foodDims.width, height: foodDims.height },
     ];
-    // Pool holds exactly 1.5 chambers worth of food.
-    colony.foodStored = capa + Math.floor(capa / 2);
+    // Entrance pool is irrelevant to the per-chamber readout.
+    colony.foodStored = 12345;
 
     expect(projectFoodStorageFill(colony, 1)).toBe(capa);
     expect(projectFoodStorageFill(colony, 2)).toBe(Math.floor(capa / 2));
