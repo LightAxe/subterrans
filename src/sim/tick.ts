@@ -97,6 +97,14 @@ const entranceFlowFields: EntranceFlowFields = createEntranceFlowFields();
 // tunnels (see chamber-flow.ts).
 const chamberFlowFields: ChamberFlowFields = createChamberFlowFields();
 
+// Issue #15 — module-level predicate hoisted out of the per-tick step-9 loop
+// so we don't allocate a closure on every colony × tick (hot path; the same
+// predicate is used by every colony every recompute). Skips chambers at
+// capacity from the food flow-field BFS seeds so carriers redirect to the
+// next non-full chamber instead of stalling on a full-chamber tile.
+const isChamberNotFull = (chamber: { foodStored: number }): boolean =>
+  chamber.foodStored < FOOD_CHAMBER_CAPACITY;
+
 /**
  * Clear every module-level flow-field cache keyed by colonyId.
  *
@@ -545,7 +553,9 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       chamberBufs.queue,
       // Issue #15: full chambers must not seed the BFS — otherwise carriers
       // route into a dead-end and stall on a tile whose chamber is at cap.
-      (ch) => ch.foodStored < FOOD_CHAMBER_CAPACITY,
+      // Predicate is hoisted to module scope (`isChamberNotFull`) to avoid
+      // per-tick closure allocation.
+      isChamberNotFull,
     );
     computeChamberFlowField(
       underground,
