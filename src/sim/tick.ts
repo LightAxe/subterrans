@@ -23,7 +23,6 @@ import {
   UNDERGROUND_GRID_HEIGHT,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
-  FOOD_CHAMBER_CAPACITY,
 } from './constants.js';
 import { FP_SHIFT } from './fixed.js';
 import { allocateWorkers } from './behavior/allocation-system.js';
@@ -36,6 +35,7 @@ import {
   checkPendingChambers,
   checkEntranceCompletion,
   hasCompletedChamber,
+  isFoodChamberDepositable,
 } from './colony/colony-system.js';
 import {
   tickQueenEggProduction,
@@ -77,7 +77,7 @@ import type { ChamberFlowFields } from './chamber-flow.js';
 import { ugGet, ugSet, UndergroundTileState } from './terrain.js';
 import { CHAMBER_DIMENSIONS } from './colony/chamber.js';
 import type { PendingChamber } from './colony/chamber.js';
-import type { ColonyId, ChamberRecord } from './colony/colony-store.js';
+import type { ColonyId } from './colony/colony-store.js';
 import type { FoodPileId } from './food.js';
 
 // ---------------------------------------------------------------------------
@@ -96,16 +96,6 @@ const entranceFlowFields: EntranceFlowFields = createEntranceFlowFields();
 // ants). Prevents straight-line chamber steering into Solid dirt on bent
 // tunnels (see chamber-flow.ts).
 const chamberFlowFields: ChamberFlowFields = createChamberFlowFields();
-
-// Issue #15 — module-level predicate hoisted out of the per-tick step-9 loop
-// so we don't allocate a fresh closure on every colony recompute (gated by
-// digFlowFieldDirty / foodFlowFieldDirty / first-compute, but still a hot
-// path). Skips chambers at capacity from the food flow-field BFS seeds so
-// carriers redirect to the next non-full chamber instead of stalling on a
-// full-chamber tile. Typed against ChamberRecord so a future field rename
-// fails fast at the predicate site.
-const isChamberNotFull = (chamber: ChamberRecord): boolean =>
-  chamber.foodStored < FOOD_CHAMBER_CAPACITY;
 
 /**
  * Clear every module-level flow-field cache keyed by colonyId.
@@ -553,11 +543,13 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       FOOD_CHAMBER_TYPES,
       chamberBufs.food,
       chamberBufs.queue,
-      // Issue #15: full chambers must not seed the BFS — otherwise carriers
-      // route into a dead-end and stall on a tile whose chamber is at cap.
-      // Predicate is hoisted to module scope (`isChamberNotFull`) to avoid
-      // per-tick closure allocation.
-      isChamberNotFull,
+      // Issue #15 follow-up: saturated chambers (free space <
+      // FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP) must not seed the BFS — otherwise
+      // a carrier mid-traversal across a near-full chamber gets pinned by
+      // the queen-drain-then-redeposit oscillation. Shared with the deposit
+      // path in ant-system.ts via `isFoodChamberDepositable`, so seed
+      // exclusion and deposit refusal stay in lockstep.
+      isFoodChamberDepositable,
     );
     computeChamberFlowField(
       underground,

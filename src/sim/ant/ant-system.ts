@@ -32,7 +32,7 @@
 import type { WorldState } from '../types.js';
 import type { AntComponents } from './ant-store.js';
 import type { ColonyRecord, ChamberRecord } from '../colony/colony-store.js';
-import { hasCompletedChamber } from '../colony/colony-system.js';
+import { hasCompletedChamber, isFoodChamberDepositable } from '../colony/colony-system.js';
 import { AntTask, ForagingSubState, DiggingSubState, NursingSubState, ChamberType, PheromoneType } from '../enums.js';
 import {
   WORKER_CARRY_CAPACITY,
@@ -226,14 +226,17 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
 
   // Chamber path — pick the FoodStorage chamber whose footprint contains the
   // ant's tile. Iterates colony.chambers in storage order; the first match
-  // wins (chambers don't overlap by construction). A full chamber is NOT a
-  // match — the ant deposits nothing here and the leftover keeps it routing
-  // until the food flow-field steers it to a non-full chamber.
+  // wins (chambers don't overlap by construction). A "saturated" chamber
+  // (free space < FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP) is NOT a match — the
+  // hysteresis predicate `isFoodChamberDepositable` matches the BFS seed
+  // filter in tick.ts step 9, so an ant routing past a saturated chamber
+  // toward a truly-empty one cannot dribble its load into the saturated
+  // chamber 2 fp at a time. See FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP rationale
+  // in constants.ts (issue #15 follow-up — stuck-ant repro).
   let chamber: ChamberRecord | null = null;
   for (let c = 0; c < colony.chambers.length; c++) {
     const ch = colony.chambers[c]!;
-    if (ch.chamberType !== ChamberType.FoodStorage) continue;
-    if (ch.foodStored >= FOOD_CHAMBER_CAPACITY) continue;
+    if (!isFoodChamberDepositable(ch)) continue;
     const baseX = ch.posX >> FP_SHIFT;
     const baseY = ch.posY >> FP_SHIFT;
     if (
@@ -247,13 +250,17 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
 
   let remaining = amount;
   if (chamber !== null) {
+    // We entered this branch via isFoodChamberDepositable, so pre-deposit
+    // the chamber was depositable. If this deposit pushes it across into
+    // saturated territory (free space < FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP),
+    // re-seed the food flow-field next tick so other carriers redirect to
+    // a remaining depositable chamber. This boundary check matches the
+    // BFS seed filter in tick.ts step 9, keeping the routing invariant.
     const space = FOOD_CHAMBER_CAPACITY - chamber.foodStored;
     const toChamber = remaining < space ? remaining : space;
     chamber.foodStored += toChamber;
     remaining -= toChamber;
-    if (chamber.foodStored >= FOOD_CHAMBER_CAPACITY) {
-      // Full↔not-full boundary crossed — re-seed the food flow-field next
-      // tick so other carriers redirect to a remaining non-full chamber.
+    if (!isFoodChamberDepositable(chamber)) {
       colony.foodFlowFieldDirty = true;
     }
   } else {
@@ -375,16 +382,18 @@ export function tickForagerActions(world: WorldState): void {
       const tileX = ants.posX[id]! >> FP_SHIFT;
       const tileY = ants.posY[id]! >> FP_SHIFT;
 
-      // (a) FoodStorage chamber Open tile — only NON-FULL chambers count
-      // (issue #15). A worker standing on a full chamber tile is a no-op
-      // here; the food flow-field excludes full chambers (see chamber-flow.ts
-      // + tick.ts step 9), so on the next tick movement steers them to a
-      // non-full chamber if one exists, or to the entrance fallback (b) below.
+      // (a) FoodStorage chamber Open tile — only DEPOSITABLE chambers count
+      // (issue #15 follow-up). A worker standing on a saturated chamber tile
+      // (free space < FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP) is a no-op here;
+      // the food flow-field excludes saturated chambers from BFS seeding (see
+      // tick.ts step 9), so on the next tick movement steers them to a
+      // depositable chamber if one exists, or to the entrance fallback (b)
+      // below. The shared `isFoodChamberDepositable` predicate keeps the
+      // movement, deposit, and BFS seed paths in lockstep.
       let depositSite = false;
       for (let c = 0; c < colony.chambers.length; c++) {
         const chamber = colony.chambers[c]!;
-        if (chamber.chamberType !== ChamberType.FoodStorage) continue;
-        if (chamber.foodStored >= FOOD_CHAMBER_CAPACITY) continue;
+        if (!isFoodChamberDepositable(chamber)) continue;
         const baseX = chamber.posX >> FP_SHIFT;
         const baseY = chamber.posY >> FP_SHIFT;
         if (
@@ -2381,13 +2390,14 @@ export function tickAntMovement(
         let bestDist = -1;
         for (let c = 0; c < colony.chambers.length; c++) {
           const chamber = colony.chambers[c]!;
-          if (chamber.chamberType !== ChamberType.FoodStorage) continue;
-          // Issue #15 — skip full chambers in fallback target selection too,
-          // mirroring the food flow-field's seed exclusion. The flow-field
-          // is the primary path; this Manhattan fallback only fires when the
-          // chamberFlowFields cache is absent (test harnesses) — both paths
-          // must agree on which chambers are valid deposit targets.
-          if (chamber.foodStored >= FOOD_CHAMBER_CAPACITY) continue;
+          // Issue #15 follow-up — skip saturated chambers in fallback target
+          // selection too, mirroring the food flow-field's seed exclusion in
+          // tick.ts step 9. The flow-field is the primary path; this Manhattan
+          // fallback only fires when the chamberFlowFields cache is absent
+          // (test harnesses) — both paths must agree on which chambers are
+          // valid deposit targets, otherwise the fallback would route a
+          // carrier into a saturated chamber it would refuse to deposit into.
+          if (!isFoodChamberDepositable(chamber)) continue;
           const baseX = chamber.posX >> FP_SHIFT;
           const baseY = chamber.posY >> FP_SHIFT;
           for (let ty = 0; ty < chamber.height; ty++) {

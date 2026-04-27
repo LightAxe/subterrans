@@ -69,6 +69,30 @@ export const FOOD_PICKUP_AMOUNT = 512; // 2 × FP_ONE
 export const FOOD_CHAMBER_CAPACITY = 5120; // 20 × FP_ONE
 
 /**
+ * Issue #15 follow-up — minimum free space (fp) a FoodStorage chamber must have
+ * to be considered an active deposit destination. Chambers with less free space
+ * than this are treated as "saturated" — excluded from BFS food-flow seeds AND
+ * rejected by the deposit-site test in tickForagerActions / antDepositFood.
+ *
+ * Why hysteresis: without it, a single QUEEN_FOOD_PER_TICK=2 drain immediately
+ * marks the chamber non-full again. The flow-field re-seeds from it, the BFS
+ * marks every tile inside the chamber footprint as -1 (source), and any
+ * carrier ant standing on one of those tiles (e.g. mid-traversal toward
+ * another, truly-empty chamber) gets pinned: movement reads -1 → hold; step
+ * 16b deposits 2 fp → chamber full again; queen drains 2 next tick; repeat.
+ * Carriers leak their entire load 2 fp at a time into the wrong chamber. See
+ * /tmp/stuck-dump.json — seed 1294596103 tick 1876, ants 17/19/22/23.
+ *
+ * Sized to FOOD_PICKUP_AMOUNT (one pickup-quantum) so a forager arriving with
+ * a fresh load is always either fully accepted by the targeted chamber or
+ * routed past it. With QUEEN_FOOD_PER_TICK=2 the chamber must be queen-drained
+ * for ~256 ticks (~13 s at 20 Hz) after the saturation point before it
+ * reappears as a BFS seed — long enough to suppress the per-tick oscillation,
+ * short enough that real consumption restores routing without UX-visible lag.
+ */
+export const FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP = FOOD_PICKUP_AMOUNT; // 512 fp = 2 × FP_ONE
+
+/**
  * 09 backlog memo — BASE colony storage capacity (fp) before any FoodStorage
  * chamber is built. Small enough that a player must build storage to grow
  * beyond the early colony: sized to roughly cover STARTING_FOOD plus a little

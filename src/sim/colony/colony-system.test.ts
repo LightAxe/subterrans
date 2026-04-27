@@ -36,6 +36,7 @@ import {
   QUEEN_FOOD_PER_TICK,
   LARVA_FOOD_PER_TICK,
   FOOD_CHAMBER_CAPACITY,
+  FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP,
   BASE_FOOD_STORAGE_CAPACITY,
 } from '../constants.js';
 import { createUndergroundGrid, ugSet, UndergroundTileState } from '../terrain.js';
@@ -193,31 +194,59 @@ describe('withdrawFood', () => {
     expect(colony.foodStored).toBe(80);               // remaining 20 from pool
   });
 
-  it('sets foodFlowFieldDirty only on chamber full→not-full transitions (issue #15)', () => {
+  it('sets foodFlowFieldDirty only on saturated→depositable transitions (issue #15 follow-up)', () => {
+    // Hysteresis: a chamber is "saturated" while free space <
+    // FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP. The flow-field re-seed must fire
+    // ONLY when withdraw pushes a chamber across the saturation boundary —
+    // not on every cap → cap-N drain. A naive full→not-full trigger fires on
+    // a single QUEEN_FOOD_PER_TICK=2 drain and pins carriers mid-traversal
+    // (see /tmp/stuck-dump.json — seed 1294596103 tick 1876).
+    const HYST = FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP;
     const { colony } = setupWorldWithQueen(0);
+    // Chamber 0: full → still saturated after small drains until we reach
+    // the depositable threshold (free space >= HYST).
     colony.chambers.push({
       chamberId: 1, chamberType: ChamberType.FoodStorage, foodStored: FOOD_CHAMBER_CAPACITY,
       posX: 0, posY: 0, width: 1, height: 1,
     });
+    // Chamber 1: starts depositable (free space > HYST) — drains within the
+    // depositable band must NOT fire dirty.
     colony.chambers.push({
       chamberId: 2, chamberType: ChamberType.FoodStorage, foodStored: 100,
       posX: 0, posY: 0, width: 1, height: 1,
     });
     colony.foodFlowFieldDirty = false;
 
-    // Drain chamber 0 (full) — must fire dirty.
+    // Tiny drain from chamber 0 — saturated → still saturated (free space < HYST).
+    // Must NOT fire dirty (this is the queen-drain oscillation case).
     withdrawFood(colony, 1);
+    expect(colony.foodFlowFieldDirty).toBe(false);
+
+    // Drain enough to cross the saturation boundary — saturated → depositable.
+    // Chamber 0 now has free space == HYST. Must fire dirty.
+    withdrawFood(colony, HYST - 1);
     expect(colony.foodFlowFieldDirty).toBe(true);
 
-    // Reset and drain again from chamber 0 (now not-full) — must NOT fire.
+    // Reset. Further drain in the depositable band — must NOT re-fire.
     colony.foodFlowFieldDirty = false;
     withdrawFood(colony, 1);
     expect(colony.foodFlowFieldDirty).toBe(false);
 
-    // Drain chamber 1 (not-full from setup) — must NOT fire.
+    // Drain across both chambers within the depositable band — must NOT fire.
+    // Withdraw drains chamber 0 (lower index) before chamber 1. Total chamber
+    // food at this point is 4607 + 100 = 4707; withdraw exactly 4707 to fully
+    // drain both. Chamber 0: depositable (free 513) → empty (free CAP) — both
+    // depositable. Chamber 1: depositable (free 5020) → empty — both
+    // depositable. No saturated→depositable transition occurs, so dirty
+    // must stay false. (Withdrawing `FOOD_CHAMBER_CAPACITY` here would
+    // exceed colonyFoodTotal=4707 and trigger withdrawFood's all-or-nothing
+    // early-return — assertion would pass vacuously without exercising the
+    // drain loop.)
     colony.foodFlowFieldDirty = false;
-    withdrawFood(colony, 50);
+    expect(withdrawFood(colony, 4707)).toBe(true);
     expect(colony.foodFlowFieldDirty).toBe(false);
+    expect(colony.chambers[0]!.foodStored).toBe(0);
+    expect(colony.chambers[1]!.foodStored).toBe(0);
   });
 });
 

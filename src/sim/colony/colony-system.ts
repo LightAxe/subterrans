@@ -27,7 +27,7 @@
 
 import type { WorldState } from '../types.js';
 import { allocateEntityId } from '../types.js';
-import type { ColonyRecord } from './colony-store.js';
+import type { ChamberRecord, ColonyRecord } from './colony-store.js';
 import type { ColonyId } from './colony-store.js';
 import {
   QUEEN_FOOD_PER_TICK,
@@ -35,6 +35,7 @@ import {
   STARVATION_GRACE_TICKS,
   RECONCILE_INTERVAL_TICKS,
   FOOD_CHAMBER_CAPACITY,
+  FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP,
   BASE_FOOD_STORAGE_CAPACITY,
 } from '../constants.js';
 import { ChamberType } from '../enums.js';
@@ -82,15 +83,43 @@ export function colonyFoodTotal(colony: ColonyRecord): number {
 }
 
 /**
+ * Issue #15 follow-up — single-source-of-truth predicate for "is this chamber
+ * an active deposit destination?" Used by:
+ *   - chamber-flow-field BFS seeding (tick.ts step 9)
+ *   - tickForagerActions step 16b deposit-site test
+ *   - antDepositFood chamber match
+ *   - tickAntMovement Manhattan fallback chamberTargetX selection
+ *
+ * Saturated (free space < FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP) chambers are
+ * EXCLUDED from all four sites in lockstep. This is what prevents the
+ * queen-drain-then-redeposit oscillation that pinned carriers on full-chamber
+ * tiles in seed-1294596103 tick-1876 (see the constant docs).
+ *
+ * Non-FoodStorage chambers always return false — the loops upstream already
+ * filter on chamberType, but this keeps the predicate self-contained so a
+ * single misuse can't accidentally treat a Queen/Nursery chamber as a food
+ * deposit target.
+ */
+export function isFoodChamberDepositable(chamber: ChamberRecord): boolean {
+  if (chamber.chamberType !== ChamberType.FoodStorage) return false;
+  return FOOD_CHAMBER_CAPACITY - chamber.foodStored >= FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP;
+}
+
+/**
  * Attempt to withdraw `amount` food. All-or-nothing: returns false (no
  * partial withdrawal) if the colony's combined stored food is below `amount`.
  *
  * Drain order is deterministic — FoodStorage chambers in colony.chambers
  * array order, then the entrance-shaft pool (`colony.foodStored`). Each
- * source contributes up to its current contents. If a chamber transitions
- * from full to non-full as a result, the food flow-field is marked dirty so
- * step 9 can re-seed routing on the next tick (foragers can now target the
- * newly-non-full chamber).
+ * source contributes up to its current contents.
+ *
+ * Issue #15 follow-up — flow-field dirty: fires only when a chamber crosses
+ * the saturation→depositable boundary (per isFoodChamberDepositable), not
+ * on every cap → cap-N drain. A QUEEN_FOOD_PER_TICK=2 nibble of a full
+ * chamber must NOT mark the field dirty — otherwise step 9 re-seeds the
+ * still-saturated chamber every tick and carriers on its footprint pin in
+ * the oscillation cycle described in the FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP
+ * constant docs.
  */
 export function withdrawFood(colony: ColonyRecord, amount: number): boolean {
   if (colonyFoodTotal(colony) < amount) return false;
@@ -100,11 +129,11 @@ export function withdrawFood(colony: ColonyRecord, amount: number): boolean {
     const ch = colony.chambers[i]!;
     if (ch.chamberType !== ChamberType.FoodStorage) continue;
     if (ch.foodStored <= 0) continue;
-    const wasFull = ch.foodStored >= FOOD_CHAMBER_CAPACITY;
+    const wasDepositable = isFoodChamberDepositable(ch);
     const take = ch.foodStored < remaining ? ch.foodStored : remaining;
     ch.foodStored -= take;
     remaining -= take;
-    if (wasFull && ch.foodStored < FOOD_CHAMBER_CAPACITY) {
+    if (!wasDepositable && isFoodChamberDepositable(ch)) {
       colony.foodFlowFieldDirty = true;
     }
   }

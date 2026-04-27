@@ -2526,7 +2526,7 @@ describe('resetFlowFieldCaches — cross-world isolation', () => {
     const { createUndergroundGrid, UndergroundTileState, ugSet, Zone } = await import('./terrain.js');
     const { FP_ONE } = await import('./fixed.js');
     const { initAnt: _initAnt } = await import('./ant/ant-store.js');
-    const { FOOD_CHAMBER_CAPACITY: CAP } = await import('./constants.js');
+    const { FOOD_CHAMBER_CAPACITY: CAP, FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP: HYST } = await import('./constants.js');
 
     resetFlowFieldCaches();
 
@@ -2554,8 +2554,15 @@ describe('resetFlowFieldCaches — cross-world isolation', () => {
     // Chamber A near (col 5) with `space` units of room. Chamber B far
     // (col 14) is empty. The carrier holds `loadFp` such that the deposit
     // into A fills A exactly to cap and leaves `loadFp - space` on the ant.
-    const space = 50;
-    const loadFp = space + 200;            // 250fp leaves 200 on the ant after A fills
+    //
+    // Issue #15 follow-up: under the deposit hysteresis, A must start
+    // DEPOSITABLE (free space >= HYST) so the deposit fires this tick. With
+    // free space < HYST the carrier would refuse to deposit at A entirely
+    // and route straight to B with full load — a different (also correct)
+    // path covered by the dedicated stuck-ant repro test below. Here we
+    // exercise the cross-tick redirect after a partial fill.
+    const space = HYST + 100;              // 612fp — depositable pre, saturated post
+    const loadFp = space + 200;            // 812fp leaves 200 on the ant after A fills
     const chamberA_initial = CAP - space;
     colony.chambers.push({
       chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: chamberA_initial,
@@ -2614,6 +2621,119 @@ describe('resetFlowFieldCaches — cross-world isolation', () => {
     // Queen is dead, no consumption — the leftover deposits cleanly into B.
     expect(chamberB.foodStored).toBe(loadFp - space);
     expect(world.ants.foodCarrying[antId]).toBe(0);
+
+    resetFlowFieldCaches();
+  });
+
+  // -------------------------------------------------------------------------
+  // Issue #15 follow-up — queen-drain oscillation stuck-ant regression.
+  //
+  // Repro from /tmp/stuck-dump.json (seed 1294596103 tick 1876):
+  //   - Chamber A is full (foodStored = CAP) and the queen consumes
+  //     QUEEN_FOOD_PER_TICK=2fp from it each tick.
+  //   - A carrier ant stands on chamber A's footprint en route to chamber B
+  //     (depositable, far away).
+  //
+  // Pre-fix (full→not-full re-seed): the queen's 2fp drain marks A non-full,
+  // step 9 re-seeds the BFS with A as a source, the carrier's tile reads
+  // direction = -1 (source), movement holds. Step 16b then deposits 2fp into
+  // A (matches what the queen just took), A is full again, queen drains 2,
+  // repeat. The carrier dribbles its entire load 2fp/tick into A and never
+  // reaches B.
+  //
+  // Post-fix (saturated→depositable hysteresis): A stays saturated (free
+  // space < HYST = 512fp) for ~256 ticks of queen drain before re-seeding.
+  // The carrier walks past A to B in well under that window. This test asserts
+  // the carrier's load arrives at B, not A.
+  // -------------------------------------------------------------------------
+  it('issue #15 follow-up — queen-drain oscillation does NOT pin a carrier on a near-full chamber', async () => {
+    const { createUndergroundGrid, UndergroundTileState, ugSet, Zone } = await import('./terrain.js');
+    const { FP_ONE } = await import('./fixed.js');
+    const { initAnt: _initAnt } = await import('./ant/ant-store.js');
+    const { FOOD_CHAMBER_CAPACITY: CAP } = await import('./constants.js');
+
+    resetFlowFieldCaches();
+
+    const world = createWorldState(1294596103);
+    const colonyId = 1 as ColonyId;
+    const queenId = allocateEntityId(world);
+    // Queen position is decorative — withdrawFood drains chambers in array
+    // order regardless of queen tile, so chamber 0 (A) is drained first
+    // because it's pushed first below. Queen sits inside A's footprint
+    // purely to keep the test's mental model close to the dump scenario.
+    _initAnt(world.ants, queenId, {
+      colonyId,
+      posX: 5 << FP_SHIFT, posY: 3 << FP_SHIFT,
+      task: AntTask.Idle, subTask: 0,
+      speed: 0, lifespan: WORKER_LIFESPAN_TICKS,
+    });
+    const colony = createColonyRecord(colonyId, queenId);
+    colony.foodStored = 0;
+    colony.digFlowFieldDirty = true; // first compute on tick 0
+    colony.foodFlowFieldDirty = false;
+    colony.rallyPoint = null;
+    colony.entrances = [{ entranceId: 1, surfaceTileX: 8, surfaceTileY: 5, isOpen: true }];
+
+    // Chamber A near (col 5) full. Chamber B far (col 14) empty/depositable.
+    colony.chambers.push({
+      chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: CAP,
+      posX: 5 << FP_SHIFT, posY: 3 << FP_SHIFT, width: 1, height: 1,
+    });
+    colony.chambers.push({
+      chamberId: 101, chamberType: ChamberType.FoodStorage, foodStored: 0,
+      posX: 14 << FP_SHIFT, posY: 3 << FP_SHIFT, width: 1, height: 1,
+    });
+    world.colonies[colonyId] = colony;
+
+    const ug = createUndergroundGrid(16, 16);
+    for (let x = 0; x < 16; x++) {
+      ugSet(ug, x, 0, UndergroundTileState.Open);
+      ugSet(ug, x, 1, UndergroundTileState.Open);
+      ugSet(ug, x, 2, UndergroundTileState.Open);
+      ugSet(ug, x, 3, UndergroundTileState.Open);
+    }
+    world.undergroundGrids[colonyId] = ug;
+
+    // Carrier ant starts ON chamber A's tile holding a full pickup load.
+    // Pre-fix this is the pinned state (deposits 2/tick, queen drains 2/tick,
+    // never moves). Post-fix the carrier walks east to B.
+    const antId = allocateEntityId(world);
+    const carriedFp = 1024;
+    _initAnt(world.ants, antId, {
+      colonyId,
+      posX: 5 << FP_SHIFT,
+      posY: 3 << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+      speed: FP_ONE,
+      lifespan: WORKER_LIFESPAN_TICKS,
+    });
+    world.ants.zone[antId] = Zone.Underground;
+    world.ants.foodCarrying[antId] = carriedFp;
+    colony.workers.push(antId);
+    colony.workerCount = 1;
+
+    const chamberA = colony.chambers[0]!;
+    const chamberB = colony.chambers[1]!;
+    const aBefore = chamberA.foodStored;
+
+    // Drive 60 ticks — the carrier walks 9 tiles at 1 tile/tick to chamber B
+    // and deposits its full load. Generous margin for movement quirks.
+    let landedInB = false;
+    for (let t = 0; t < 60; t++) {
+      tick(world, []);
+      if (chamberB.foodStored > 0) { landedInB = true; break; }
+    }
+
+    expect(landedInB).toBe(true);
+    expect(chamberB.foodStored).toBe(carriedFp);
+    expect(world.ants.foodCarrying[antId]).toBe(0);
+    // Pre-fix the carrier would have leaked all 1024fp INTO A (matching the
+    // queen's drain), driving chamberA.foodStored above aBefore. Post-fix A
+    // never grows — the assertion is `<=` rather than `<` because the loop
+    // breaks on the tick the carrier deposits at B, which can be early enough
+    // that no queen tick has consumed yet (aBefore == aAfter is legitimate).
+    expect(chamberA.foodStored).toBeLessThanOrEqual(aBefore);
 
     resetFlowFieldCaches();
   });
