@@ -207,6 +207,7 @@ describe('drawSurfaceTerrain', () => {
     const topB = Math.floor(camB.y - camB.viewportHeight / 2);
     const rectsB = textureRectsInsideTile(gfx, (tileX - leftB) * TILE_SIZE_PX, (tileY - topB) * TILE_SIZE_PX);
 
+    expect(rectsA.length).toBeGreaterThan(0);
     expect(rectsA).toEqual(rectsB);
   });
 

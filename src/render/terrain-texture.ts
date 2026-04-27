@@ -20,6 +20,7 @@ const SALT_SURFACE_DIRT_LIGHT = 12;
 const SALT_UNDERGROUND_SOLID_ROCK = 21;
 const SALT_UNDERGROUND_SOLID_STRATA = 22;
 const SALT_UNDERGROUND_OPEN_DUST = 31;
+const SALT_UNDERGROUND_OPEN_DUST_BONUS = 32;
 
 /**
  * Deterministic coordinate hash for render texture placement: no PRNG, no
@@ -86,10 +87,11 @@ export function drawUndergroundSolidTexture(gfx: GfxLike, screenX: number, scree
 /** Draw sparse dust pixels over excavated/open underground floor tiles. */
 export function drawUndergroundOpenTexture(gfx: GfxLike, screenX: number, screenY: number, tileX: number, tileY: number): void {
   const h0 = terrainHash(tileX, tileY, SALT_UNDERGROUND_OPEN_DUST);
+  const h1 = terrainHash(tileX, tileY, SALT_UNDERGROUND_OPEN_DUST_BONUS);
 
   gfx.fillStyle(COLOR_UNDERGROUND_OPEN_DUST, 0.45);
   gfx.fillRect(screenX + detailCoord(h0, 0), screenY + detailCoord(h0, 4), 1, 1);
-  if ((h0 & 1) === 0) {
-    gfx.fillRect(screenX + detailCoordWithWidth(h0, 8, 2), screenY + detailCoord(h0, 12), 2, 1);
+  if ((h1 & 1) === 0) {
+    gfx.fillRect(screenX + detailCoordWithWidth(h1, 8, 2), screenY + detailCoord(h1, 12), 2, 1);
   }
 }

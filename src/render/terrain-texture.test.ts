@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { GfxLike } from './draw-surface.js';
-import { TILE_SIZE_PX } from './sprites.js';
+import { COLOR_UNDERGROUND_OPEN_DUST, TILE_SIZE_PX } from './sprites.js';
 import {
   drawGrassTexture,
   drawSurfaceDirtTexture,
@@ -74,5 +74,45 @@ describe('terrain texture helpers', () => {
         }
       }
     }
+  });
+
+  it('does not gate open-dust bonus pixels on primary pixel x parity', () => {
+    const counts = {
+      bonusEven: 0,
+      bonusOdd: 0,
+      noBonusEven: 0,
+      noBonusOdd: 0,
+    };
+
+    for (let tileY = 0; tileY < 32; tileY++) {
+      for (let tileX = 0; tileX < 32; tileX++) {
+        const gfx = new MockGfx();
+        drawUndergroundOpenTexture(gfx, 0, 0, tileX, tileY);
+
+        let currentStyle: unknown = null;
+        const dustRects: GfxCall[] = [];
+        for (const call of gfx.calls) {
+          if (call.method === 'fillStyle') {
+            currentStyle = call.args[0];
+            continue;
+          }
+          if (call.method === 'fillRect' && currentStyle === COLOR_UNDERGROUND_OPEN_DUST) {
+            dustRects.push(call);
+          }
+        }
+
+        const primaryX = dustRects[0]!.args[0] as number;
+        const hasBonus = dustRects.length > 1;
+        if (hasBonus && primaryX % 2 === 0) counts.bonusEven++;
+        if (hasBonus && primaryX % 2 === 1) counts.bonusOdd++;
+        if (!hasBonus && primaryX % 2 === 0) counts.noBonusEven++;
+        if (!hasBonus && primaryX % 2 === 1) counts.noBonusOdd++;
+      }
+    }
+
+    expect(counts.bonusEven).toBeGreaterThan(150);
+    expect(counts.bonusOdd).toBeGreaterThan(150);
+    expect(counts.noBonusEven).toBeGreaterThan(150);
+    expect(counts.noBonusOdd).toBeGreaterThan(150);
   });
 });
