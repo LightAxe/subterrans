@@ -1,126 +1,137 @@
-// triangle-widget.ts — Phase 8 behavior triangle widget pure math + Graphics draw.
+// triangle-widget.ts — Phase 10 / D-01 1-D Forage↔Fight slider widget.
 //
-// Provides: vertex geometry, barycentric coordinate math, screen/ratio conversion,
-// drag state, and a draw function. UI wiring lives in UIScene.
+// File-name note: this file used to host the 3-vertex behavior triangle
+// and is kept under the same name to minimize the diff against ui-scene.ts.
+// The exported symbols are slider-prefixed (`screenToSliderRatio`, etc.).
+// A future cleanup phase may rename the file to slider-widget.ts; until then,
+// the file name is a known misnomer documented here.
+//
+// Provides: track geometry, screen/ratio conversion, drag state, hit-test, draw.
+// All functions pure (no side effects). HUD-05: Graphics + Text only.
 //
 // This file has no Phaser imports — only GfxLike from draw-surface.ts.
-// All functions are pure (no side effects on external state).
 
 import { HUD, COLOR_PLAYER_COLONY } from './sprites.js';
 import type { GfxLike } from './draw-surface.js';
 
 // ---------------------------------------------------------------------------
-// Triangle vertex geometry (equilateral-ish inside HUD.TRIANGLE 120x120 at 8,456)
+// Slider track geometry inside HUD.TRIANGLE zone (x:[8,128), y:[456,576))
 //
-// Forage at top-center, Dig at bottom-left, Fight at bottom-right.
-// Margins keep vertices away from zone edges for readability.
+// Track centerline at the vertical midpoint of the zone. Track length spans
+// from a 16px inset on the left to a 16px inset on the right of the zone,
+// giving an 88-pixel-wide horizontal track. 4-pixel-thick rendered track.
 // ---------------------------------------------------------------------------
 
-const CX = HUD.TRIANGLE.x + HUD.TRIANGLE.w / 2; // 68 (horizontal center)
-const CY = HUD.TRIANGLE.y + 12;                  // 468 (top vertex, 12px from top)
-const BY = HUD.TRIANGLE.y + HUD.TRIANGLE.h - 8;  // 568 (bottom edge, 8px from bottom)
+const TRACK_LEFT  = HUD.TRIANGLE.x + 16;                  // 24
+const TRACK_RIGHT = HUD.TRIANGLE.x + HUD.TRIANGLE.w - 16; // 112
+const TRACK_Y     = HUD.TRIANGLE.y + HUD.TRIANGLE.h / 2;  // 516
+const TRACK_LEN   = TRACK_RIGHT - TRACK_LEFT;             // 88
 
-export const TRIANGLE_VERTICES = {
-  forage: { x: CX,                              y: CY },
-  dig:    { x: HUD.TRIANGLE.x + 8,              y: BY },
-  fight:  { x: HUD.TRIANGLE.x + HUD.TRIANGLE.w - 8, y: BY },
+export const SLIDER_GEOMETRY = {
+  trackLeft:  TRACK_LEFT,
+  trackRight: TRACK_RIGHT,
+  trackY:     TRACK_Y,
+  trackLen:   TRACK_LEN,
 } as const;
 
 // ---------------------------------------------------------------------------
-// TriangleDragState — mutable drag tracking (owned by UIScene)
+// SliderDragState — mutable drag tracking (owned by UIScene)
 // ---------------------------------------------------------------------------
 
-export interface TriangleDragState {
-  isDragging: boolean;
-  targetRatio: { forage: number; dig: number; fight: number };
+export interface SliderDragState {
+  isDragging:  boolean;
+  targetRatio: { forage: number; fight: number };
 }
 
-export function createTriangleDragState(): TriangleDragState {
-  return { isDragging: false, targetRatio: { forage: 100, dig: 0, fight: 0 } };
+export function createSliderDragState(): SliderDragState {
+  return { isDragging: false, targetRatio: { forage: 10, fight: 0 } };
 }
 
 // ---------------------------------------------------------------------------
-// screenToBarycentric — pixel coords to {forage, dig, fight} integer percentages
+// screenToSliderRatio — pixel x → integer 0–10 ratio
 //
-// Uses standard 2D signed-area barycentric formula.
-// Each weight is clamped to [0, 1] to project out-of-triangle points onto the
-// nearest edge (satisfies T-08-10 clamp mitigation).
-// fight = 100 - forage - dig guarantees sum === 100 exactly.
+// Position 0 (left) = full forage. Position 1 (right) = full fight.
+// Out-of-track px clamps to the nearest extreme. Output is always integer
+// 0–10 with `forage + fight === 10` exactly (snaps to 11 discrete steps).
+// y is intentionally ignored — slider is 1-D.
 // ---------------------------------------------------------------------------
 
-export function screenToBarycentric(px: number, py: number): { forage: number; dig: number; fight: number } {
-  const v0 = TRIANGLE_VERTICES.forage;
-  const v1 = TRIANGLE_VERTICES.dig;
-  const v2 = TRIANGLE_VERTICES.fight;
-  const denom = (v1.y - v2.y) * (v0.x - v2.x) + (v2.x - v1.x) * (v0.y - v2.y);
-  const w0 = ((v1.y - v2.y) * (px - v2.x) + (v2.x - v1.x) * (py - v2.y)) / denom;
-  const w1 = ((v2.y - v0.y) * (px - v2.x) + (v0.x - v2.x) * (py - v2.y)) / denom;
-  const w2 = 1 - w0 - w1;
-  // Clamp each weight to [0,1] so out-of-triangle drags project to nearest edge.
-  const f  = Math.max(0, Math.min(1, w0));
-  const d  = Math.max(0, Math.min(1, w1));
-  const fi = Math.max(0, Math.min(1, w2));
-  const sum = f + d + fi || 1; // guard against all-zero degenerate case
-  const forage = Math.round((f  / sum) * 100);
-  const dig    = Math.round((d  / sum) * 100);
-  const fight  = Math.max(0, 100 - forage - dig); // guarantee sum === 100
-  return { forage, dig, fight };
+export function screenToSliderRatio(px: number): { forage: number; fight: number } {
+  const t = (px - TRACK_LEFT) / TRACK_LEN;       // float in [0,1] (clamped below)
+  const tc = Math.max(0, Math.min(1, t));
+  // 11 discrete steps: 0,1,...,10. fight gets `Math.round(tc * 10)`; forage = 10 - fight.
+  const fight  = Math.round(tc * 10);
+  const forage = 10 - fight;
+  return { forage, fight };
 }
 
 // ---------------------------------------------------------------------------
-// ratioToScreenPos — inverse of screenToBarycentric: ratio -> pixel position
+// ratioToSliderPos — inverse of screenToSliderRatio: ratio → pixel position
 //
-// Weighted centroid of the three vertices.
+// Returns the centerline pixel position for a given ratio. If both fields
+// are zero (degenerate save-migration edge case), pins to the track center.
 // ---------------------------------------------------------------------------
 
-export function ratioToScreenPos(ratio: { forage: number; dig: number; fight: number }): { x: number; y: number } {
-  const total = ratio.forage + ratio.dig + ratio.fight || 1;
-  const wF  = ratio.forage / total;
-  const wD  = ratio.dig    / total;
-  const wFt = ratio.fight  / total;
-  return {
-    x: wF * TRIANGLE_VERTICES.forage.x + wD * TRIANGLE_VERTICES.dig.x + wFt * TRIANGLE_VERTICES.fight.x,
-    y: wF * TRIANGLE_VERTICES.forage.y + wD * TRIANGLE_VERTICES.dig.y + wFt * TRIANGLE_VERTICES.fight.y,
-  };
+export function ratioToSliderPos(ratio: { forage: number; fight: number }): { x: number; y: number } {
+  const total = ratio.forage + ratio.fight;
+  // Degenerate: pin to center if both are 0.
+  const t = total === 0 ? 0.5 : ratio.fight / total;
+  return { x: TRACK_LEFT + t * TRACK_LEN, y: TRACK_Y };
 }
 
 // ---------------------------------------------------------------------------
-// isInsideTriangle — point-in-triangle test via barycentric sign
-// ---------------------------------------------------------------------------
-
-export function isInsideTriangle(px: number, py: number): boolean {
-  const v0 = TRIANGLE_VERTICES.forage;
-  const v1 = TRIANGLE_VERTICES.dig;
-  const v2 = TRIANGLE_VERTICES.fight;
-  const denom = (v1.y - v2.y) * (v0.x - v2.x) + (v2.x - v1.x) * (v0.y - v2.y);
-  const w0 = ((v1.y - v2.y) * (px - v2.x) + (v2.x - v1.x) * (py - v2.y)) / denom;
-  const w1 = ((v2.y - v0.y) * (px - v2.x) + (v0.x - v2.x) * (py - v2.y)) / denom;
-  const w2 = 1 - w0 - w1;
-  return w0 >= 0 && w1 >= 0 && w2 >= 0;
-}
-
-// ---------------------------------------------------------------------------
-// drawTriangle — render the triangle widget onto a GfxLike (called per frame)
+// isInsideSlider — hit-test against the full HUD.TRIANGLE zone
 //
-// Draws: filled triangle background, current-ratio filled circle,
-// target-ratio outline circle. Labels are Phaser Text in UIScene.
+// Uses the full HUD slot (not just the visible track) so vertical slop on
+// click/drag still registers as a slider gesture. Matches the prior triangle
+// widget's hit zone for input continuity.
 // ---------------------------------------------------------------------------
 
-export function drawTriangle(
-  gfx: GfxLike,
-  currentRatio: { forage: number; dig: number; fight: number },
-  targetRatio:  { forage: number; dig: number; fight: number },
+export function isInsideSlider(px: number, py: number): boolean {
+  return (
+    px >= HUD.TRIANGLE.x &&
+    px < HUD.TRIANGLE.x + HUD.TRIANGLE.w &&
+    py >= HUD.TRIANGLE.y &&
+    py < HUD.TRIANGLE.y + HUD.TRIANGLE.h
+  );
+}
+
+// ---------------------------------------------------------------------------
+// drawSlider — render the slider widget onto a GfxLike (called per frame)
+//
+// Draws (in order): zone background, track line, forage icon (left, green
+// programmer-art square), fight icon (right, red programmer-art square),
+// current marker (filled circle in player-colony color), target marker
+// (white outline circle). Text labels ("Forage" / "Fight") live in UIScene.
+//
+// HUD-05 compliant: only fillRect / fillCircle / strokeCircle / fillStyle /
+// lineStyle calls. Zero asset loading; programmer-art icons.
+// ---------------------------------------------------------------------------
+
+export function drawSlider(
+  gfx:          GfxLike,
+  currentRatio: { forage: number; fight: number },
+  targetRatio:  { forage: number; fight: number },
 ): void {
-  const v = TRIANGLE_VERTICES;
-  // Filled triangle background
-  gfx.fillStyle(0x222222, 0.8);
-  gfx.fillTriangle(v.forage.x, v.forage.y, v.dig.x, v.dig.y, v.fight.x, v.fight.y);
-  // Current ratio marker (filled circle — actual task census)
-  const curr = ratioToScreenPos(currentRatio);
+  // Zone background — semi-transparent dark fill behind the slider so labels
+  // and markers stay readable against the surface beneath.
+  gfx.fillStyle(0x222222, 0.9);
+  gfx.fillRect(HUD.TRIANGLE.x, HUD.TRIANGLE.y, HUD.TRIANGLE.w, HUD.TRIANGLE.h);
+  // Track line (4px thick, mid-gray).
+  gfx.fillStyle(0x666666, 1);
+  gfx.fillRect(TRACK_LEFT, TRACK_Y - 2, TRACK_LEN, 4);
+  // Forage icon (left extreme): 12x12 green programmer-art square.
+  gfx.fillStyle(0x66cc66, 1);
+  gfx.fillRect(HUD.TRIANGLE.x + 4, TRACK_Y - 6, 12, 12);
+  // Fight icon (right extreme): 12x12 red programmer-art square.
+  gfx.fillStyle(0xcc6666, 1);
+  gfx.fillRect(HUD.TRIANGLE.x + HUD.TRIANGLE.w - 16, TRACK_Y - 6, 12, 12);
+  // Current marker (filled circle — current task census).
+  const cur = ratioToSliderPos(currentRatio);
   gfx.fillStyle(COLOR_PLAYER_COLONY, 1);
-  gfx.fillCircle(curr.x, curr.y, 6);
-  // Target ratio marker (outline circle — player-set allocation or drag preview)
-  const tgt = ratioToScreenPos(targetRatio);
+  gfx.fillCircle(cur.x, cur.y, 6);
+  // Target marker (outline circle — player-set target / drag preview).
+  const tgt = ratioToSliderPos(targetRatio);
   gfx.lineStyle(2, 0xffffff, 1);
   gfx.strokeCircle(tgt.x, tgt.y, 6);
 }
