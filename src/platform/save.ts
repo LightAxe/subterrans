@@ -286,18 +286,20 @@ export function migrateBehaviorRatio(
   // tick.ts step 5 (any negative weight → reject command).
   const rawForage = legacy.forage;
   const rawFight  = legacy.fight;
-  const forage = typeof rawForage === 'number' && Number.isFinite(rawForage) && rawForage >= 0
-    ? rawForage
-    : 0;
-  const fight  = typeof rawFight  === 'number' && Number.isFinite(rawFight)  && rawFight  >= 0
-    ? rawFight
-    : 0;
-  // All-zero edge case: snap to { forage: 10, fight: 0 } per D-04.
-  // This covers the pre-Phase-10 pure-dig allocation { forage: 0, dig: N, fight: 0 }
-  // as well as defensively handling fresh saves with all-zero values or saves
-  // missing these fields entirely. NaN / negative inputs are coerced to 0 above
-  // and therefore also land in this branch.
-  if (forage === 0 && fight === 0) {
+  const isForageValid = typeof rawForage === 'number' && Number.isFinite(rawForage) && rawForage >= 0;
+  const isFightValid  = typeof rawFight  === 'number' && Number.isFinite(rawFight)  && rawFight  >= 0;
+  const forage = isForageValid ? rawForage : 0;
+  const fight  = isFightValid  ? rawFight  : 0;
+  // All-zero edge case: snap to { forage: 10, fight: 0 } per D-04 — but ONLY
+  // when the input is legacy (has the `dig` key) or malformed (missing/NaN/
+  // negative fields). A post-Phase-10 caller that intentionally writes
+  // { forage: 0, fight: 0 } (idle slider, AI controller exotic state, debug
+  // command replay) is preserved verbatim — otherwise migrateBehaviorRatio
+  // would silently mutate valid two-field zeros and break snapshot-vs-replay
+  // determinism for tools that compare them (WR-10).
+  const isLegacy = 'dig' in legacy;
+  const isMalformed = !isForageValid || !isFightValid;
+  if (forage === 0 && fight === 0 && (isLegacy || isMalformed)) {
     return { forage: 10, fight: 0 };
   }
   return { forage, fight };

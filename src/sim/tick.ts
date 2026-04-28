@@ -211,7 +211,11 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
             nextFight  = 0;
           }
         }
-        // Validate ratio fields: any negative weight rejects the command.
+        // Validate ratio fields: reject NaN, +/-Infinity, and negatives.
+        // `NaN < 0` is false, so the negative-only check would let NaN poison
+        // colony.targetRatio and contaminate every downstream allocateWorkers
+        // call (mirrors the NaN guard in migrateBehaviorRatio per WR-01).
+        if (!Number.isFinite(nextForage) || !Number.isFinite(nextFight)) break;
         if (nextForage < 0 || nextFight < 0) break;
         // Field-by-field copy to preserve object identity for copyWorldState determinism.
         colony.targetRatio.forage = nextForage;

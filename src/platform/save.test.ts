@@ -456,17 +456,23 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const twice = migrateBehaviorRatio(once);
       expect(twice).toEqual({ forage: 7, fight: 3 });
     });
-    it('(already-migrated, all-zero defensive) { forage: 0, fight: 0 } → { forage: 10, fight: 0 }', () => {
-      // A fresh post-Phase-10 save with all-zero values also triggers the snap.
-      // Defensive: prevents loading a save into a degenerate "no work assigned"
-      // state regardless of how it got there.
+    it('(already-migrated, intentional zeros) { forage: 0, fight: 0 } passes through unchanged (WR-10)', () => {
+      // Post-Phase-10 callers can legitimately set both fields to 0 (idle
+      // slider, AI exotic state, replay tooling). The snap is restricted to
+      // legacy or malformed inputs so snapshot-vs-replay determinism is
+      // preserved for valid two-field zeros.
       const result = migrateBehaviorRatio({ forage: 0, fight: 0 });
-      expect(result).toEqual({ forage: 10, fight: 0 });
+      expect(result).toEqual({ forage: 0, fight: 0 });
     });
     it('(missing fields defensive) {} → { forage: 10, fight: 0 }', () => {
       // Missing/non-numeric forage and fight default to 0, which then triggers
-      // the all-zero snap. Garbage in → safe default out.
+      // the malformed-input branch of the snap. Garbage in → safe default out.
       const result = migrateBehaviorRatio({});
+      expect(result).toEqual({ forage: 10, fight: 0 });
+    });
+    it('(NaN field defensive) { forage: NaN, fight: 0 } → { forage: 10, fight: 0 }', () => {
+      // NaN counts as malformed — the snap fires defensively.
+      const result = migrateBehaviorRatio({ forage: NaN, fight: 0 });
       expect(result).toEqual({ forage: 10, fight: 0 });
     });
   });
