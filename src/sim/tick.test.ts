@@ -3124,17 +3124,16 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     expect(world.ants.subTask[wid]).toBe(NursingSubState.MovingToBrood); // freshly assigned, not just inherited
   });
 
-  it('Test 7 (WR-06): slider-to-fight (forage:0, no brood) → auto-dig waits, ratio respected', () => {
-    // Symmetric regression: when the player slams the 1-D slider all the way to
-    // Fight ({forage:0, fight:10}) with no brood, allocation = {nurse:0, forage:0,
-    // dig:0, fight:N}. Per D-02 LOCKED ("carve from forage"), the WR-06 gate
-    // treats this as a scarcity-wait — Marks sit until the player widens the
-    // forage band. This pins the gate's blast radius beyond the codex P1 case.
+  it('Test 7 (WR-08): slider-to-fight (forage:0, no brood) → dig carves from fight, issue #13 honored', () => {
+    // When the player slams the 1-D slider all the way to Fight ({forage:0,
+    // fight:10}) with no brood, allocation = {nurse:0, forage:0, dig:0,
+    // fight:N}. Issue #13's promise ("auto-assign one digger when a Mark
+    // exists and an ant is Idle") still holds because the WR-08 carve falls
+    // back to fight when forage is empty. nurse is still never carved.
     const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
     const colony = world.colonies[colonyId]!;
     const underground = world.undergroundGrids[colonyId]!;
 
-    // 3 Idle workers, no brood, no Nursery → nurse=0, forage=0, fight=3.
     colony.workerCount = 3;
     const widList: number[] = [];
     for (let i = 0; i < 3; i++) {
@@ -3151,7 +3150,6 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     colony.targetRatio.forage = 0;
     colony.targetRatio.fight  = 10;
 
-    // t=0 preconditions
     let initialIdle = 0;
     for (const id of widList) if (world.ants.task[id] === AntTask.Idle) initialIdle += 1;
     expect(initialIdle).toBe(3);
@@ -3160,19 +3158,107 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     const cmd: SimCommand = { type: 'MarkDigTile', colonyId, tileX: 25, tileY: 1, issuedAtTick: 0 };
     tick(world, [cmd]);
 
-    // t=N outcomes — Mark waits, all 3 workers go to Fighting (player ratio respected).
+    // t=N outcomes — Mark dug, 1 worker Digging, 2 Fighting (carve from fight).
     expect(ugGet(underground, 25, 1)).toBe(UndergroundTileState.Marked);
     expect(colony.computedAllocation.forage).toBe(0);
-    expect(colony.computedAllocation.fight).toBe(3);
-    expect(colony.computedAllocation.dig).toBe(0); // suppressed under D-02 carve-from-forage
+    expect(colony.computedAllocation.fight).toBe(3); // canonical post-allocation; carve is local
+    expect(colony.computedAllocation.dig).toBe(1);
     let diggingCount = 0;
     let fightingCount = 0;
     for (const id of widList) {
       if (world.ants.task[id] === AntTask.Digging) diggingCount += 1;
       if (world.ants.task[id] === AntTask.Fighting) fightingCount += 1;
     }
-    expect(diggingCount).toBe(0);
-    expect(fightingCount).toBe(3);
+    expect(diggingCount).toBe(1);
+    expect(fightingCount).toBe(2);
+  });
+
+  it('Test 9 (WR-08): all-nurse colony (forage=fight=0) → auto-dig genuinely waits', () => {
+    // Counterpoint to Test 7 — and a future-regression guard against any
+    // attempt to carve from nurse when both ratio-driven roles are empty.
+    // When forage AND fight are both 0 (e.g., 1-worker brood-heavy colony
+    // where the nurse cap pinned the only worker to nurse), there is no
+    // ratio-driven slot to carve from. nurse is never carved (CLNY-09),
+    // so dig waits — same scarcity-wait philosophy as no-Idle-ant case.
+    // This case passes under both the old `forage > 0` gate and the new
+    // forage→fight rule; its job is to lock in the "never carve from nurse"
+    // floor so a future contributor doesn't extend the fallback chain.
+    const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
+    const colony = world.colonies[colonyId]!;
+    const underground = world.undergroundGrids[colonyId]!;
+
+    // 1 worker, brood-heavy + Nursery so nurse cap (ceil(1/4)=1) pins everything.
+    colony.workerCount = 1;
+    const wid = allocateEntityId(world);
+    initAnt(world.ants, wid, {
+      colonyId, posX: 24 << FP_SHIFT, posY: 1 << FP_SHIFT,
+      task: AntTask.Idle, subTask: 0,
+    });
+    world.ants.zone[wid] = 1;
+    colony.workers.push(wid);
+
+    for (let e = 0; e < 30; e++) {
+      const lid = allocateEntityId(world);
+      initAnt(world.ants, lid, { colonyId, posX: 100, posY: 100, task: AntTask.Idle, subTask: 0, speed: 0 });
+      colony.larvae.push(lid);
+      colony.larvaeCount += 1;
+    }
+    colony.chambers.push({
+      chamberId: 9300, chamberType: ChamberType.Nursery,
+      foodStored: 0, posX: 0, posY: 0, width: 2, height: 2,
+    });
+
+    // Slider-to-fight; combined with the nurse cap this leaves zero ratio
+    // budget for any carve — the all-nurse case.
+    colony.targetRatio.forage = 0;
+    colony.targetRatio.fight  = 10;
+
+    const cmd: SimCommand = { type: 'MarkDigTile', colonyId, tileX: 25, tileY: 1, issuedAtTick: 0 };
+    tick(world, [cmd]);
+
+    expect(ugGet(underground, 25, 1)).toBe(UndergroundTileState.Marked); // Mark waits
+    expect(colony.computedAllocation.nurse).toBe(1);
+    expect(colony.computedAllocation.forage).toBe(0);
+    expect(colony.computedAllocation.fight).toBe(0); // nurse cap ate available
+    expect(colony.computedAllocation.dig).toBe(0); // no ratio-driven slot to carve
+    expect(world.ants.task[wid]).toBe(AntTask.Nursing);
+  });
+
+  it('Test 10 (WR-09): legacy SetBehaviorRatio with `dig` field migrates on replay', () => {
+    // Pre-Phase-10 v2 inputLogs (issue #15 bumped SAVE_FORMAT_VERSION 1→2;
+    // Phase 10 narrowed BehaviorRatio without bumping again per D-04). When
+    // a debug-snapshot replay tool re-executes such a log under post-Phase-10
+    // code, `SetBehaviorRatio { forage:0, dig:5, fight:0 }` (pure dig) must
+    // not silently become `{forage:0, fight:0}` (idle). The handler detects
+    // the legacy `dig` field and snaps the all-zero remainder to the
+    // DEFAULT_BEHAVIOR_RATIO {forage:10, fight:0}, mirroring
+    // migrateBehaviorRatio in platform/save.ts.
+    const { world, colonyId } = makeWorldWithColony(42);
+
+    // Legacy command with the `dig` field — cast through unknown so the
+    // typed handler accepts it for the runtime replay.
+    const legacy: SimCommand = {
+      type: 'SetBehaviorRatio',
+      colonyId,
+      ratio: { forage: 0, dig: 5, fight: 0 } as unknown as { forage: number; fight: number },
+      issuedAtTick: 0,
+    };
+    tick(world, [legacy]);
+    const colony = world.colonies[colonyId]!;
+    expect(colony.targetRatio.forage).toBe(10); // snapped from {0, _, 0}
+    expect(colony.targetRatio.fight).toBe(0);
+
+    // Counterpoint: a post-Phase-10 command with no `dig` field passes through
+    // unchanged, even when both fields are 0 (legitimate idle-slider command).
+    const modern: SimCommand = {
+      type: 'SetBehaviorRatio',
+      colonyId,
+      ratio: { forage: 0, fight: 0 },
+      issuedAtTick: 1,
+    };
+    tick(world, [modern]);
+    expect(colony.targetRatio.forage).toBe(0); // post-Phase-10 idle: no snap
+    expect(colony.targetRatio.fight).toBe(0);
   });
 
   it('Test 8 (WR-07): dig slot reserved while digger is active → nurse not preempted by forage', () => {
