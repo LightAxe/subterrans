@@ -185,17 +185,37 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         // Colony lookup; silently skip if colony does not exist (PRD §5 T-01-02).
         const colony = world.colonies[cmd.colonyId];
         if (colony === undefined) break;
-        // Validate ratio fields: any negative weight rejects the command.
         // Phase 10 (CTRL-01'): two-role widget — only forage / fight; digging is
-        // auto-assigned per CTRL-06 in step 10a (Plan 02). Legacy pre-Phase-10
-        // inputLog entries with a `dig` field are migrated at the save boundary
-        // (parseSaveFile applies migrateInputLogCommand to every entry on load),
-        // so this handler trusts the typed two-field shape — no runtime
-        // migration needed.
-        if (cmd.ratio.forage < 0 || cmd.ratio.fight < 0) break;
+        // auto-assigned per CTRL-06 in step 10a (Plan 02).
+        //
+        // WR-09 — defense in depth. The canonical migration site for pre-
+        // Phase-10 `{forage, dig, fight}` shapes is `parseSaveFile` in
+        // platform/save.ts (it walks inputLog on load so SCEN-06 replay
+        // reproduces the migrated snapshot). This handler also runs the
+        // same migration inline as a belt-and-suspenders guard for any
+        // call path that reaches the dispatcher without going through
+        // loadSave (debug-snapshot replay tools, ad-hoc tests, future
+        // remote-command surfaces). Inline to avoid a sim → platform
+        // dependency. Idempotent on already-migrated commands: the
+        // `'dig' in ratioRaw` guard short-circuits when the legacy key
+        // is absent, so post-Phase-10 commands (including a legitimate
+        // {forage:0, fight:0} idle slider) pass through unchanged.
+        const ratioRaw = cmd.ratio as unknown as { forage?: number; dig?: number; fight?: number };
+        let nextForage = cmd.ratio.forage;
+        let nextFight  = cmd.ratio.fight;
+        if ('dig' in ratioRaw) {
+          // Mirrors migrateBehaviorRatio in platform/save.ts: drop dig,
+          // snap all-zero remainder to DEFAULT_BEHAVIOR_RATIO {10, 0}.
+          if (nextForage === 0 && nextFight === 0) {
+            nextForage = 10;
+            nextFight  = 0;
+          }
+        }
+        // Validate ratio fields: any negative weight rejects the command.
+        if (nextForage < 0 || nextFight < 0) break;
         // Field-by-field copy to preserve object identity for copyWorldState determinism.
-        colony.targetRatio.forage = cmd.ratio.forage;
-        colony.targetRatio.fight  = cmd.ratio.fight;
+        colony.targetRatio.forage = nextForage;
+        colony.targetRatio.fight  = nextFight;
         // CTRL-04: run allocateWorkers immediately in the same tick the command is issued.
         // alloc0.dig is 0 here under the two-role contract — auto-dig (Plan 02 step 10a)
         // overwrites colony.computedAllocation.dig later in this same tick when need.dig > 0.
