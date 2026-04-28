@@ -654,11 +654,32 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     //
     // Both cases follow the same rule: auto-dig consumes from forage's slack;
     // when forage has no slack, auto-dig waits.
+    //
+    // WR-07 (codex P1 v2): the dig slot must stay reserved while a digger is
+    // actively excavating, not only on the activation tick. `computeDigDemand`
+    // returns 0 as soon as any ant is Digging (the strict 1-cap), so without
+    // an extra hold on `actualDig > 0` the carve disappears mid-dig and the
+    // forage→…→nurse iteration overbooks the remaining workforce — starving
+    // nurse for the duration of every multi-tick dig. Holding `digDemand=1`
+    // while a digger is active makes `need.dig = 1 - actualDig = 0` (no new
+    // assignment) but keeps the forage budget = N − 1, so a freshly-Idle
+    // worker reaches the nurse branch instead of being stolen by forage.
+    //
+    // Wind-down semantics: `actualDig > 0` also fires for the single tick
+    // between excavation completion (step 10b flips the tile Open and the
+    // ant's subTask back to MovingToTile) and the dormant-digger release
+    // (step 10b next tick flips Digging → Idle when no Marked source
+    // remains). For that one tick `computedAllocation.dig = 1` even though
+    // no useful dig work is happening; the next tick the count drops to
+    // 0 and allocation self-corrects. Accepted: a stricter gate would
+    // need to introspect Mark/BeingDug grid state, and the drift is one
+    // tick / one slot per dig job.
     const undergroundGrid10a = world.undergroundGrids[colony.colonyId];
     const rawDigDemand = undergroundGrid10a !== undefined
       ? computeDigDemand(colony, undergroundGrid10a, world.ants)
       : 0;
-    const digDemand = (rawDigDemand > 0 && colony.computedAllocation.forage > 0) ? 1 : 0;
+    const wantDigSlot = rawDigDemand > 0 || actualDig > 0;
+    const digDemand = (wantDigSlot && colony.computedAllocation.forage > 0) ? 1 : 0;
     colony.computedAllocation.dig = digDemand;
     // WR-02: carve a forage slot LOCALLY so need.forage budgets one fewer
     // forager when a digger is needed, but DO NOT mutate

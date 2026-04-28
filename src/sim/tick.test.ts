@@ -2892,7 +2892,11 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     let digT2 = 0;
     for (const wid of colony.workers) if (world.ants.task[wid] === AntTask.Digging) digT2 += 1;
     expect(digT2).toBe(1);
-    expect(colony.computedAllocation.dig).toBe(0); // a digger is active → demand satisfied
+    // WR-07: slot stays reserved (dig=1) while a digger is active so the
+    // forage carve persists across ticks; without the reservation, the
+    // canonical iteration would over-book forage/fight and starve nurse
+    // for the duration of every dig job (codex P1 v2).
+    expect(colony.computedAllocation.dig).toBe(1);
   });
 
   it('Test 3: scarcity wait — Marked tile + 0 Idle ants → 0 Digging; foragers not preempted', () => {
@@ -3169,5 +3173,75 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     }
     expect(diggingCount).toBe(0);
     expect(fightingCount).toBe(3);
+  });
+
+  it('Test 8 (WR-07): dig slot reserved while digger is active → nurse not preempted by forage', () => {
+    // Regression for codex P1 v2: in a 2-worker / brood-heavy / forage-only
+    // colony with one ant actively excavating, the second (Idle) ant must
+    // become a nurse, not a forager. allocateWorkers gives {nurse:1, forage:1,
+    // fight:0}; without WR-07 the carve disappears mid-dig (rawDigDemand=0
+    // under the 1-cap) and the forage→…→nurse iteration assigns the Idle
+    // ant to Foraging — starving nurse for the entire dig duration. WR-07
+    // holds digDemand=1 while actualDig>0, preserving the carve.
+    const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
+    const colony = world.colonies[colonyId]!;
+    const underground = world.undergroundGrids[colonyId]!;
+
+    // Worker A: actively excavating with a long countdown so the dig persists
+    // across the tick under test.
+    colony.workerCount = 2;
+    const widDigger = allocateEntityId(world);
+    initAnt(world.ants, widDigger, {
+      colonyId, posX: 25 << FP_SHIFT, posY: 1 << FP_SHIFT,
+      task: AntTask.Digging, subTask: DiggingSubState.Excavating,
+    });
+    world.ants.zone[widDigger] = 1;
+    world.ants.digTileX[widDigger] = 25;
+    world.ants.digTileY[widDigger] = 1;
+    world.ants.digTicksRemaining[widDigger] = 10;
+    underground.data[1 * UNDERGROUND_GRID_WIDTH + 25] = UndergroundTileState.BeingDug;
+    colony.workers.push(widDigger);
+    colony.digFlowFieldDirty = true;
+
+    // Worker B: Idle, the candidate for nurse vs forage.
+    const widIdle = allocateEntityId(world);
+    initAnt(world.ants, widIdle, {
+      colonyId, posX: 24 << FP_SHIFT, posY: 1 << FP_SHIFT,
+      task: AntTask.Idle, subTask: 0,
+    });
+    world.ants.zone[widIdle] = 1;
+    colony.workers.push(widIdle);
+
+    // Brood + Nursery so nurse=1, available=1, allocation={nurse:1, forage:1}.
+    for (let e = 0; e < 30; e++) {
+      const lid = allocateEntityId(world);
+      initAnt(world.ants, lid, { colonyId, posX: 100, posY: 100, task: AntTask.Idle, subTask: 0, speed: 0 });
+      colony.larvae.push(lid);
+      colony.larvaeCount += 1;
+    }
+    colony.chambers.push({
+      chamberId: 9200, chamberType: ChamberType.Nursery,
+      foodStored: 0, posX: 0, posY: 0, width: 2, height: 2,
+    });
+
+    colony.targetRatio.forage = 10;
+    colony.targetRatio.fight  = 0;
+
+    // t=0 preconditions
+    expect(world.ants.task[widDigger]).toBe(AntTask.Digging);
+    expect(world.ants.task[widIdle]).toBe(AntTask.Idle);
+    expect(ugGet(underground, 25, 1)).toBe(UndergroundTileState.BeingDug);
+    expect(world.ants.digTicksRemaining[widDigger]).toBe(10);
+
+    tick(world, []);
+
+    // t=N outcomes — digger persists, idle ant goes to Nursing (not Foraging).
+    expect(world.ants.task[widDigger]).toBe(AntTask.Digging);
+    expect(world.ants.digTicksRemaining[widDigger]).toBe(9); // step 10b decremented
+    expect(colony.computedAllocation.nurse).toBe(1);
+    expect(colony.computedAllocation.forage).toBe(1); // canonical post-allocation; carve is local
+    expect(colony.computedAllocation.dig).toBe(1); // slot reserved while digger active
+    expect(world.ants.task[widIdle]).toBe(AntTask.Nursing);
+    expect(world.ants.subTask[widIdle]).toBe(NursingSubState.MovingToBrood);
   });
 });
