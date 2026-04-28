@@ -189,8 +189,9 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     }
 
     // Nested plain-object fields — field-by-field copy (NOT spread — preserves object identity)
+    // Phase 10 (CTRL-01'): targetRatio is two-field {forage, fight}. WorkerAllocation
+    // (computedAllocation, taskCensus) keeps its `dig` slot per D-03 — auto-dig writes it.
     d.targetRatio.forage           = s.targetRatio.forage;
-    d.targetRatio.dig              = s.targetRatio.dig;
     d.targetRatio.fight            = s.targetRatio.fight;
 
     d.computedAllocation.nurse     = s.computedAllocation.nurse;

@@ -186,12 +186,15 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         const colony = world.colonies[cmd.colonyId];
         if (colony === undefined) break;
         // Validate ratio fields: any negative weight rejects the command.
-        if (cmd.ratio.forage < 0 || cmd.ratio.dig < 0 || cmd.ratio.fight < 0) break;
+        // Phase 10 (CTRL-01'): two-role widget — only forage / fight; digging is
+        // auto-assigned per CTRL-06 in step 10a (Plan 02).
+        if (cmd.ratio.forage < 0 || cmd.ratio.fight < 0) break;
         // Field-by-field copy to preserve object identity for copyWorldState determinism.
         colony.targetRatio.forage = cmd.ratio.forage;
-        colony.targetRatio.dig    = cmd.ratio.dig;
         colony.targetRatio.fight  = cmd.ratio.fight;
         // CTRL-04: run allocateWorkers immediately in the same tick the command is issued.
+        // alloc0.dig is 0 here under the two-role contract — auto-dig (Plan 02 step 10a)
+        // overwrites colony.computedAllocation.dig later in this same tick when need.dig > 0.
         const brood0 = colony.eggCount + colony.larvaeCount;
         const hasNursery0 = hasCompletedChamber(colony, ChamberType.Nursery);
         const alloc0 = allocateWorkers(colony.workerCount, brood0, colony.targetRatio, hasNursery0);
