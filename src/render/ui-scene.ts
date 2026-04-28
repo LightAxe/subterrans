@@ -89,12 +89,12 @@ export const SAVE_PROMPT_NEW_GAME_RECT = { x: 300, y: 320, w: 120, h: 32 } as co
 /** Canvas-local rect for the GameOver "Restart" button. */
 export const GAME_OVER_RESTART_RECT    = { x: 300, y: 320, w: 120, h: 32 } as const;
 import {
-  createTriangleDragState,
-  drawTriangle,
-  screenToBarycentric,
-  isInsideTriangle,
-  TRIANGLE_VERTICES,
-  type TriangleDragState,
+  createSliderDragState,
+  drawSlider,
+  screenToSliderRatio,
+  isInsideSlider,
+  SLIDER_GEOMETRY,
+  type SliderDragState,
 } from './triangle-widget.js';
 import { drawMinimap, applyMinimapClick } from './minimap.js';
 import {
@@ -180,7 +180,7 @@ export class UIScene extends Phaser.Scene {
   // Updated at the end of each update() when the menu is visible.
   private contextMenuVisibleItems: readonly ContextMenuItem[] = CONTEXT_MENU_ITEMS;
   private antActivityText!: Phaser.GameObjects.Text;
-  private dragState!: TriangleDragState;
+  private dragState!: SliderDragState;
 
   // Phase 9 Plan 06 — overlay groups (null = overlay not currently shown)
   private gameOverGroup: Phaser.GameObjects.GameObject[] = [];
@@ -195,7 +195,7 @@ export class UIScene extends Phaser.Scene {
 
   create() {
     this.gfx = this.add.graphics();
-    this.dragState = createTriangleDragState();
+    this.dragState = createSliderDragState();
 
     // HUD-02 stats row — three Texts confined to the 200x24 HUD.STATS rect,
     // two-row layout. Row 1: antsText (white, left) + foodText (green, right-
@@ -229,27 +229,24 @@ export class UIScene extends Phaser.Scene {
     );
     this.queenLabelText.setScrollFactor(0);
 
-    // Triangle vertex labels — static text, created once.
-    // Phase 8.5 HUD cleanup: offsets tightened so every label renders INSIDE
-    // HUD.TRIANGLE (x: [8,128), y: [456,576)). The old offsets placed text
-    // above/beside the zone (e.g. Forage at y=452, Dig at x=-4) which let
-    // pointer clicks on the visible text fall through to world input.
+    // Slider extreme labels — static text, created once. Phase 10 / D-01:
+    // 2 labels (Forage / Fight) replace the prior 3 triangle vertex labels.
+    // Field name `triangleLabels` retained to minimize diff churn — a future
+    // cleanup may rename to `sliderLabels` alongside the file rename.
+    //
+    // Phase 8.5 invariant preserved: labels render INSIDE HUD.TRIANGLE zone
+    // (x: [8,128), y: [456,576)) so pointer clicks on the visible text don't
+    // fall through to world input. trackY=516 - 22 = 494, well inside the zone.
     this.triangleLabels = [
       this.add.text(
-        TRIANGLE_VERTICES.forage.x - 18,
-        TRIANGLE_VERTICES.forage.y - 12,
+        HUD.TRIANGLE.x + 4,
+        SLIDER_GEOMETRY.trackY - 22,
         'Forage',
         { color: '#ffffff', fontSize: '10px' },
       ),
       this.add.text(
-        TRIANGLE_VERTICES.dig.x - 6,
-        TRIANGLE_VERTICES.dig.y - 12,
-        'Dig',
-        { color: '#ffffff', fontSize: '10px' },
-      ),
-      this.add.text(
-        TRIANGLE_VERTICES.fight.x - 28,
-        TRIANGLE_VERTICES.fight.y - 12,
+        HUD.TRIANGLE.x + HUD.TRIANGLE.w - 28,
+        SLIDER_GEOMETRY.trackY - 22,
         'Fight',
         { color: '#ffffff', fontSize: '10px' },
       ),
@@ -412,10 +409,10 @@ export class UIScene extends Phaser.Scene {
       }
       // Minimap click
       if (applyMinimapClick(this.viewState, pointer.x, pointer.y)) return;
-      // Behavior triangle drag start
-      if (isInsideTriangle(pointer.x, pointer.y)) {
+      // Behavior slider drag start (Phase 10 / D-01 — 1-D Forage↔Fight axis)
+      if (isInsideSlider(pointer.x, pointer.y)) {
         this.dragState.isDragging = true;
-        this.dragState.targetRatio = screenToBarycentric(pointer.x, pointer.y);
+        this.dragState.targetRatio = screenToSliderRatio(pointer.x);
         return;
       }
     });
@@ -423,7 +420,8 @@ export class UIScene extends Phaser.Scene {
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
       if (!this.dragState.isDragging) return;
       if (!pointer.isDown) return;
-      this.dragState.targetRatio = screenToBarycentric(pointer.x, pointer.y);
+      // 1-D slider: only x is consulted; pointer y is ignored within drag.
+      this.dragState.targetRatio = screenToSliderRatio(pointer.x);
     });
 
     // Belt-and-suspenders: clear overlay window state on scene shutdown to
@@ -513,23 +511,25 @@ export class UIScene extends Phaser.Scene {
       }
     }
 
-    // Behavior triangle widget
+    // Behavior slider widget (Phase 10 / D-01 — 1-D Forage↔Fight axis).
+    // currentRatio denominator is forage + fight only — auto-dig (CTRL-06)
+    // and auto-nurse (CLNY-09) are demand-driven roles outside the player
+    // ratio and are visualized elsewhere (status indicators / future BACKLOG
+    // HUD). The slider's domain is the player-controlled axis; dual markers
+    // track player input (target) vs catch-up task census (current) on that
+    // axis only.
     if (colony) {
-      const total = colony.taskCensus.nurse
-                  + colony.taskCensus.forage
-                  + colony.taskCensus.dig
-                  + colony.taskCensus.fight;
-      const currentRatio = total > 0
+      const ff = colony.taskCensus.forage + colony.taskCensus.fight;
+      const currentRatio = ff > 0
         ? {
-            forage: Math.round(colony.taskCensus.forage * 100 / total),
-            dig:    Math.round(colony.taskCensus.dig    * 100 / total),
-            fight:  Math.round(colony.taskCensus.fight  * 100 / total),
+            forage: Math.round(colony.taskCensus.forage * 100 / ff),
+            fight:  Math.round(colony.taskCensus.fight  * 100 / ff),
           }
-        : { forage: 100, dig: 0, fight: 0 };
+        : { forage: 100, fight: 0 };
       const targetRatio = this.dragState.isDragging
         ? this.dragState.targetRatio
         : colony.targetRatio;
-      drawTriangle(this.gfx as unknown as import('./draw-surface.js').GfxLike, currentRatio, targetRatio);
+      drawSlider(this.gfx as unknown as import('./draw-surface.js').GfxLike, currentRatio, targetRatio);
     }
 
     // Minimap
