@@ -635,10 +635,30 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // is Idle, the eligibles loop simply has nothing to assign — Marked tiles wait
     // until an ant naturally goes Idle. Foragers/fighters mid-cycle are NOT preempted.
     // The forage carve is bookkeeping only when no Idle ants are present.
+    //
+    // WR-06: dig is only honored when a forage slot exists to carve from. D-02
+    // LOCKED ties the carve specifically to `computedAllocation.forage`, so when
+    // forage is 0 we treat the situation as a scarcity-wait. Two reachable
+    // examples, both equally suppressed by the same gate:
+    //
+    //   (a) brood-heavy nurse cap (codex P1): {forage:0, fight:0, nurse:1, 1
+    //       worker}. Without the gate, the forage→dig→fight→nurse iteration
+    //       would steal the only Idle ant from nurse and break the CLNY-09
+    //       nurse carveout invariant.
+    //   (b) slider-to-fight (no brood): player sets {forage:0, fight:10},
+    //       allocation becomes {nurse:0, forage:0, dig:0, fight:N}. Without
+    //       the gate, dig would steal from the player's fight ratio. Per
+    //       D-02 ("carve from forage"), the Mark waits until the player
+    //       widens the forage band — symmetric with the no-Idle-ant case
+    //       described above.
+    //
+    // Both cases follow the same rule: auto-dig consumes from forage's slack;
+    // when forage has no slack, auto-dig waits.
     const undergroundGrid10a = world.undergroundGrids[colony.colonyId];
-    const digDemand = undergroundGrid10a !== undefined
+    const rawDigDemand = undergroundGrid10a !== undefined
       ? computeDigDemand(colony, undergroundGrid10a, world.ants)
       : 0;
+    const digDemand = (rawDigDemand > 0 && colony.computedAllocation.forage > 0) ? 1 : 0;
     colony.computedAllocation.dig = digDemand;
     // WR-02: carve a forage slot LOCALLY so need.forage budgets one fewer
     // forager when a digger is needed, but DO NOT mutate
@@ -650,7 +670,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // identical to the prior `computedAllocation.forage - actualForage`
     // because the in-place decrement was an algebraic equivalent of this
     // local subtraction.
-    const carvedForage = (digDemand > 0 && colony.computedAllocation.forage > 0)
+    const carvedForage = digDemand > 0
       ? colony.computedAllocation.forage - 1
       : colony.computedAllocation.forage;
 
