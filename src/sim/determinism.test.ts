@@ -240,7 +240,7 @@ describe('SCEN-06: Determinism proof', () => {
     const ratioCmd: SimCommand = {
       type: 'SetBehaviorRatio',
       colonyId: 1 as ColonyId,
-      ratio: { forage: 7, dig: 2, fight: 1 },
+      ratio: { forage: 7, fight: 1 },
       issuedAtTick: 50,
     };
     const digCmd: SimCommand = {
@@ -262,10 +262,12 @@ describe('SCEN-06: Determinism proof', () => {
   // Test 5: Same seed, different commands, different state
   it('Test 5: same seed + different commands at tick 50 produce different state', () => {
     const cmdsA: SimCommand[][] = [];
-    cmdsA[50] = [{ type: 'SetBehaviorRatio', colonyId: 1 as ColonyId, ratio: { forage: 10, dig: 0, fight: 0 }, issuedAtTick: 50 }];
+    cmdsA[50] = [{ type: 'SetBehaviorRatio', colonyId: 1 as ColonyId, ratio: { forage: 10, fight: 0 }, issuedAtTick: 50 }];
 
     const cmdsB: SimCommand[][] = [];
-    cmdsB[50] = [{ type: 'SetBehaviorRatio', colonyId: 1 as ColonyId, ratio: { forage: 0, dig: 10, fight: 0 }, issuedAtTick: 50 }];
+    // Phase 10 (CTRL-01'): pivot is forage↔fight, not forage↔dig (dig is auto-assigned per CTRL-06).
+    // Both runs still produce non-equal serialized state since the ratio drives a different forage/fight split.
+    cmdsB[50] = [{ type: 'SetBehaviorRatio', colonyId: 1 as ColonyId, ratio: { forage: 0, fight: 10 }, issuedAtTick: 50 }];
 
     const r1 = runSimulation(42, 100, cmdsA);
     const r2 = runSimulation(42, 100, cmdsB);
@@ -404,7 +406,6 @@ describe('Phase 6 SC 4: CTRL-04 one-tick immediate allocation', () => {
 
     // Set initial targetRatio → forage:10 (all 10 workers allocated to forage)
     world.colonies[1]!.targetRatio.forage = 10;
-    world.colonies[1]!.targetRatio.dig    = 0;
     world.colonies[1]!.targetRatio.fight  = 0;
 
     // Tick 0 (no commands): allocation reflects forage:10 ratio
@@ -412,11 +413,11 @@ describe('Phase 6 SC 4: CTRL-04 one-tick immediate allocation', () => {
     expect(world.colonies[1]!.computedAllocation.forage).toBe(10);
     expect(world.colonies[1]!.computedAllocation.dig).toBe(0);
 
-    // Tick 1: issue SetBehaviorRatio switching to all-dig
+    // Tick 1: issue SetBehaviorRatio pivoting forage↔fight (Phase 10 CTRL-01': dig is auto-assigned per CTRL-06)
     const cmd: SimCommand = {
       type: 'SetBehaviorRatio',
       colonyId: 1 as ColonyId,
-      ratio: { forage: 0, dig: 10, fight: 0 },
+      ratio: { forage: 0, fight: 10 },
       issuedAtTick: 1,
     };
     tick(world, [cmd]);
@@ -424,8 +425,8 @@ describe('Phase 6 SC 4: CTRL-04 one-tick immediate allocation', () => {
     // The new ratio takes effect in the SAME tick the command is issued (CTRL-04).
     // NOT in the "next tick after this one".
     expect(world.colonies[1]!.computedAllocation.forage).toBe(0);
-    expect(world.colonies[1]!.computedAllocation.dig).toBe(10);
-    expect(world.colonies[1]!.computedAllocation.fight).toBe(0);
+    expect(world.colonies[1]!.computedAllocation.dig).toBe(0);
+    expect(world.colonies[1]!.computedAllocation.fight).toBe(10);
   });
 });
 
@@ -450,7 +451,8 @@ describe('Phase 7: createScenario determinism with MarkDigTile commands', () => 
     cmds[30] = [{ type: 'CancelDigMark', colonyId, tileX: 10, tileY: 5, issuedAtTick: 30 }];
     cmds[50] = [{
       type: 'SetBehaviorRatio', colonyId,
-      ratio: { forage: 0, dig: 10, fight: 0 },
+      // Phase 10 (CTRL-01'): pivot forage↔fight (dig is auto-assigned per CTRL-06).
+      ratio: { forage: 0, fight: 10 },
       issuedAtTick: 50,
     }];
 
