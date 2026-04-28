@@ -47,16 +47,17 @@ export interface WorkerAllocation {
 }
 
 // ---------------------------------------------------------------------------
-// BehaviorRatio — player-controlled task distribution triangle (PRD §2)
+// BehaviorRatio — player-controlled task distribution control (PRD §2 + Phase 10 amendment per CTRL-01')
 //
-// Three fields: forage, dig, fight. Values are percentages on an internal
-// scale of 0–10 (10 = 100%). The nurse task is computed from workerCount
-// and is not directly player-controlled.
+// Two roles: forage and fight. Digging is auto-assigned per CLNY-09-style
+// demand — see CTRL-06 and `tick.ts` step 10a (auto-dig path landed in
+// Plan 02). Values are integer percentages on a 0–10 scale (10 = 100%).
+// The nurse task is computed from workerCount and is not directly
+// player-controlled.
 // ---------------------------------------------------------------------------
 
 export interface BehaviorRatio {
   forage: number;
-  dig:    number;
   fight:  number;
 }
 

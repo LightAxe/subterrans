@@ -168,12 +168,12 @@ export const UNDERGROUND_GRID_HEIGHT = 64;
 // ---------------------------------------------------------------------------
 
 /**
- * PRD §7 §2 — Default task distribution triangle: forage 100%, dig 0%, fight 0%.
- * Values are percentages summing to 10 (internal scale: 10 = 100%).
+ * PRD §7 §2 + Phase 10 amendment (CTRL-01') — Default task distribution: forage 100%, fight 0%.
+ * Two roles only (digging is auto-assigned per CTRL-06 — see allocation-system.ts and
+ * tick.ts step 10a). Values are integer percentages on a 0–10 scale (10 = 100%).
  */
 export const DEFAULT_BEHAVIOR_RATIO = {
   forage: 10,
-  dig:    0,
   fight:  0,
 } as const;
 
