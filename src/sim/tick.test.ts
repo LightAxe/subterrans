@@ -159,10 +159,15 @@ describe('Step 1: command processing', () => {
       issuedAtTick: 1,
     };
     tick(world, [cmd2]);
-    // Same tick as issuance — new ratio takes effect
+    // Same tick as issuance — new ratio takes effect (CTRL-04 immediate-takeup).
+    // Phase 10 / CTRL-06: dig is auto-assigned per Marked-tile presence, NOT per ratio.
+    // With no Marked tiles in this colony's underground grid, computeDigDemand returns 0
+    // and the entire 10-worker pool flows to fight. Pre-Plan-02 this asserted dig:10
+    // (the old fallback when the triangle had a `dig` vertex); the rewire here pins
+    // CTRL-04 against the two-role widget contract.
     expect(world.colonies[colonyId]!.computedAllocation.forage).toBe(0);
-    expect(world.colonies[colonyId]!.computedAllocation.dig).toBe(10);
-    expect(world.colonies[colonyId]!.computedAllocation.fight).toBe(0);
+    expect(world.colonies[colonyId]!.computedAllocation.dig).toBe(0);
+    expect(world.colonies[colonyId]!.computedAllocation.fight).toBe(10);
   });
 
   // Test 4: SetBehaviorRatio rejects negative weights
@@ -551,8 +556,11 @@ describe('Step ordering observable proofs', () => {
     colony.computedAllocation.fight  = 0;
     colony.targetRatio.forage = 0;
     colony.targetRatio.fight  = 0;
-    // Phase 10 (CTRL-06): dig is auto-assigned via need.dig, not via targetRatio.
-    // Plan 02 will rewrite this test to drive digging via Marked tile presence.
+    // Phase 10 (CTRL-06): dig is auto-assigned via need.dig from Marked tiles, not
+    // via targetRatio. Step 10a's auto-dig override will set computedAllocation.dig=0
+    // here (no Marked tiles, no active digger). The pre-set dig=1 above is noise but
+    // harmless: the assertion below — "mid-carry forager NOT preempted by Idle-eligibility"
+    // — depends only on the eligibility predicate, not on which task has demand.
 
     tick(world, []);
 
@@ -658,13 +666,14 @@ describe('Step ordering observable proofs', () => {
       w.ants.foodCarrying[carryWid] = 256;
       colony.workers.push(carryWid);
 
-      // Allocation: forage:2, dig:2, fight:1, nurse:1 (sum=6=workerCount)
-      // Step 9(a) counts: actualForage=1 (mid-carry), actualIdle=5
-      // need: forage=1, dig=2, fight=1, nurse=1 (total=5 = eligibles)
+      // Pre-seed computedAllocation; step 8 will overwrite via allocateWorkers under
+      // the actual ratio. Phase 10 (CTRL-06): dig is auto-assigned per Marked-tile
+      // presence (none in this fixture → dig=0). The test's load-bearing assertion is
+      // the non-negative invariant + sum=workerCount + mid-carry-not-preempted, all
+      // of which hold for any valid allocation that step 10a produces.
       colony.computedAllocation = { nurse: 1, forage: 2, dig: 2, fight: 1 };
       colony.targetRatio.forage = 10;
       colony.targetRatio.fight  = 3;
-      // Phase 10 (CTRL-06): dig is auto-assigned; plan 02 will rewire this test.
 
       tick(w, []);
 
@@ -754,8 +763,9 @@ describe('09 reproduction-gate memo — starvation-shape regression', () => {
 
     colony.targetRatio.forage = 3;
     colony.targetRatio.fight  = 0;
-    // Phase 10 (CTRL-06): dig is auto-assigned per Marked tile presence;
-    // plan 02 will rewire this test if it relies on dig allocation outcome.
+    // Phase 10 (CTRL-06): dig is auto-assigned via Marked-tile presence; this fixture
+    // has no Marked tiles so computedAllocation.dig stays 0 and the assertions below
+    // (nurse=0 under no-Nursery memo gate; brood inert; sum=workerCount) hold.
 
     tick(w, []);
 
@@ -1523,8 +1533,10 @@ describe('Phase 7: Integration tests', () => {
     const colony = world.colonies[colonyId]!;
 
     // Phase 10 (CTRL-06): dig is auto-assigned via need.dig from Marked tiles.
-    // Setting targetRatio is no longer the lever; the Marked tile below drives auto-dig.
-    // Plan 02 will rewrite this test against the new contract.
+    // The MarkDigTile below is now the load-bearing lever (not targetRatio). Setting
+    // forage:0/fight:0 means the eligibles loop has no forage/fight pull, so the
+    // auto-dig override (which reduces forage by 1 only when forage>0) leaves dig as
+    // the only positive-need slot — exactly one Idle ant becomes Digging per the cap.
     colony.targetRatio.forage = 0;
     colony.targetRatio.fight  = 0;
 
@@ -2976,9 +2988,14 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     tick(world, []);
     expect(ugGet(underground, 25, 1)).toBe(UndergroundTileState.Open);
 
-    // Tick 2: with no Marked tiles, tickDigExecution releases ant to Idle, step 10a reassigns.
-    // Under the auto-dig contract, computedAllocation.dig returns to 0 (no Marked) and
-    // need.forage drives the assignment (ratio is forage:10).
+    // Tick 2: step 10a sees the ant still as Digging (release hasn't fired yet —
+    // tickDigExecution runs at step 10b, AFTER step 10a). Then at step 10b the dormant-
+    // digger release path flips Digging → Idle since no Marked source remains.
+    tick(world, []);
+    expect(world.ants.task[wid]).toBe(AntTask.Idle);
+
+    // Tick 3: step 10a sees the now-Idle ant; with no Marked tiles, computeDigDemand
+    // returns 0 and the canonical iteration assigns to Foraging per the {forage:10, fight:0} ratio.
     tick(world, []);
 
     // t=N outcomes

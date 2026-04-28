@@ -12,7 +12,11 @@
 // Remainder distribution: forage gets +1 if available > forage + fight (max remainder is 1
 // when both slots are positive). Fight never receives remainder.
 
-import type { BehaviorRatio, WorkerAllocation } from '../colony/colony-store.js';
+import type { BehaviorRatio, ColonyRecord, WorkerAllocation } from '../colony/colony-store.js';
+import type { AntComponents } from '../ant/ant-store.js';
+import type { UndergroundGrid } from '../terrain.js';
+import { UndergroundTileState } from '../terrain.js';
+import { AntTask } from '../enums.js';
 import { NURSE_RATIO } from '../constants.js';
 
 /**
@@ -110,4 +114,55 @@ export function allocateWorkers(
     dig:    0,
     fight:  fight,
   };
+}
+
+/**
+ * Phase 10 / CTRL-06 — auto-dig demand check (D-02 LOCKED).
+ *
+ * Returns 1 if (a) at least one Marked tile exists in the colony's underground
+ * grid AND (b) no ant in `colony.workers` currently has `task === AntTask.Digging`.
+ * Returns 0 otherwise.
+ *
+ * Strict 1-digger cap (per CONTEXT.md D-02): if ANY ant of the colony is already
+ * Digging, no new digger is auto-assigned this tick. This solves the tunnel-jam
+ * problem from issue #13.
+ *
+ * Scarcity policy is handled at the call site (tick.ts step 10a): if no ant is
+ * Idle, the demand goes unfulfilled this tick and Marked tiles wait. No
+ * preemption of foragers / fighters.
+ *
+ * Pure function. Reads only `colony.workers`, `ants.alive`, `ants.task`, and the
+ * underground grid `data` array — all deterministic state. No PRNG, no allocation,
+ * no float math. Same inputs → same output by construction (SCEN-06).
+ *
+ * Boolean-style 0/1 form chosen over a count: concurrency is locked at 1 by
+ * D-02; if a future phase lifts the cap, a count value would naturally generalize
+ * (`0..N`), but coding it as a count today would invite a future contributor to
+ * bump it to 2 without realizing the assertion is locked elsewhere.
+ *
+ * @param colony           - Colony record; iterated to detect any active digger.
+ * @param undergroundGrid  - Colony's underground grid; scanned for Marked tiles.
+ * @param ants             - Ant component store (alive + task arrays).
+ * @returns 1 if Marked tiles exist and no ant is Digging in this colony, else 0.
+ */
+export function computeDigDemand(
+  colony: ColonyRecord,
+  undergroundGrid: UndergroundGrid,
+  ants: AntComponents,
+): number {
+  // (b) Strict 1-digger cap — early exit on the cheaper check.
+  for (let i = 0; i < colony.workers.length; i++) {
+    const id = colony.workers[i]!;
+    if (ants.alive[id] !== 1) continue;
+    if (ants.task[id] === AntTask.Digging) return 0;
+  }
+  // (a) Marked tile presence — single linear scan over the grid's Uint8Array.
+  // Direct data[] access (matches the Phase 07-04 decision for computeDigFlowField:
+  // direct array access, not ugGet, in inner BFS loop for performance). Same fixed
+  // iteration order as BFS (linear i from 0).
+  const data = undergroundGrid.data;
+  for (let i = 0; i < data.length; i++) {
+    if (data[i] === UndergroundTileState.Marked) return 1;
+  }
+  return 0;
 }

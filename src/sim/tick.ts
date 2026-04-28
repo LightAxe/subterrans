@@ -25,7 +25,7 @@ import {
   SURFACE_GRID_HEIGHT,
 } from './constants.js';
 import { FP_SHIFT } from './fixed.js';
-import { allocateWorkers } from './behavior/allocation-system.js';
+import { allocateWorkers, computeDigDemand } from './behavior/allocation-system.js';
 import {
   tickReconcile,
   tickFoodConsumption,
@@ -616,6 +616,32 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       else if (t === AntTask.Fighting) actualFight  += 1;
       else if (t === AntTask.Nursing)  actualNurse  += 1;
       else                             actualIdle   += 1;
+    }
+
+    // Phase 10 / CTRL-06 (D-02 LOCKED) — auto-dig demand override.
+    // need.dig = (Marked tile present in colony grid) AND (no ant currently Digging) ? 1 : 0.
+    // Mirrors auto-nurse (CLNY-09): demand-driven role outside the player ratio.
+    //
+    // Per D-02 ("third demand-driven check, BEFORE the forage/fight split"), the
+    // override carves a slot out of `computedAllocation.forage` so the canonical
+    // forage→dig→fight→nurse iteration below assigns one Idle ant to Digging
+    // instead of letting forage absorb the whole Idle pool. (Without the carve,
+    // `need.forage = computedAllocation.forage - actualForage` would saturate the
+    // eligibles loop and `need.dig > 0` would never fire even with 1 free worker.)
+    // Strict 1-digger cap falls out for free: computeDigDemand returns 0 when any
+    // ant of the colony is already Digging, so we don't double-carve.
+    //
+    // Scarcity policy (D-02 — wait, no preemption): if dig demand exists but no ant
+    // is Idle, the eligibles loop simply has nothing to assign — Marked tiles wait
+    // until an ant naturally goes Idle. Foragers/fighters mid-cycle are NOT preempted.
+    // The forage carve is bookkeeping only when no Idle ants are present.
+    const undergroundGrid10a = world.undergroundGrids[colony.colonyId];
+    const digDemand = undergroundGrid10a !== undefined
+      ? computeDigDemand(colony, undergroundGrid10a, world.ants)
+      : 0;
+    colony.computedAllocation.dig = digDemand;
+    if (digDemand > 0 && colony.computedAllocation.forage > 0) {
+      colony.computedAllocation.forage -= 1;
     }
 
     // (b) Collect ants at PRD §7c idle checkpoints, sorted ascending by EntityId (SCEN-06 determinism).
