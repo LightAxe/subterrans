@@ -161,21 +161,17 @@ describe('PRD §9c grid dimension constants', () => {
   });
 });
 
-describe('PRD §7 §2 DEFAULT_BEHAVIOR_RATIO', () => {
+describe('PRD §7 §2 + Phase 10 amendment (CTRL-01\') DEFAULT_BEHAVIOR_RATIO', () => {
   it('forage === 10', () => {
     expect(DEFAULT_BEHAVIOR_RATIO.forage).toBe(10);
-  });
-
-  it('dig === 0', () => {
-    expect(DEFAULT_BEHAVIOR_RATIO.dig).toBe(0);
   });
 
   it('fight === 0', () => {
     expect(DEFAULT_BEHAVIOR_RATIO.fight).toBe(0);
   });
 
-  it('has exactly forage, dig, fight keys', () => {
-    expect(Object.keys(DEFAULT_BEHAVIOR_RATIO).sort()).toStrictEqual(['dig', 'fight', 'forage']);
+  it('has exactly forage, fight keys (Phase 10: dig dropped — auto-assigned per CTRL-06)', () => {
+    expect(Object.keys(DEFAULT_BEHAVIOR_RATIO).sort()).toStrictEqual(['fight', 'forage']);
   });
 });
 

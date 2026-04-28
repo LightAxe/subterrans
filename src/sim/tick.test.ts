@@ -117,13 +117,12 @@ describe('Step 1: command processing', () => {
     const cmd: SimCommand = {
       type: 'SetBehaviorRatio',
       colonyId: colonyId,
-      ratio: { forage: 5, dig: 3, fight: 2 },
+      ratio: { forage: 5, fight: 2 },
       issuedAtTick: 0,
     };
     tick(world, [cmd]);
     const colony = world.colonies[colonyId]!;
     expect(colony.targetRatio.forage).toBe(5);
-    expect(colony.targetRatio.dig).toBe(3);
     expect(colony.targetRatio.fight).toBe(2);
   });
 
@@ -143,7 +142,7 @@ describe('Step 1: command processing', () => {
     const cmd1: SimCommand = {
       type: 'SetBehaviorRatio',
       colonyId,
-      ratio: { forage: 10, dig: 0, fight: 0 },
+      ratio: { forage: 10, fight: 0 },
       issuedAtTick: 0,
     };
     tick(world, [cmd1]);
@@ -156,7 +155,7 @@ describe('Step 1: command processing', () => {
     const cmd2: SimCommand = {
       type: 'SetBehaviorRatio',
       colonyId,
-      ratio: { forage: 0, dig: 10, fight: 0 },
+      ratio: { forage: 0, fight: 10 },
       issuedAtTick: 1,
     };
     tick(world, [cmd2]);
@@ -173,7 +172,7 @@ describe('Step 1: command processing', () => {
     const cmd: SimCommand = {
       type: 'SetBehaviorRatio',
       colonyId,
-      ratio: { forage: -1, dig: 5, fight: 5 },
+      ratio: { forage: -1, fight: 5 },
       issuedAtTick: 0,
     };
     tick(world, [cmd]);
@@ -185,7 +184,7 @@ describe('Step 1: command processing', () => {
     const cmd: SimCommand = {
       type: 'SetBehaviorRatio',
       colonyId: 999 as ColonyId,
-      ratio: { forage: 5, dig: 5, fight: 0 },
+      ratio: { forage: 5, fight: 0 },
       issuedAtTick: 0,
     };
     expect(() => tick(world, [cmd])).not.toThrow();
@@ -232,7 +231,7 @@ describe('Step 1: command processing', () => {
       cmds.push({
         type: 'SetBehaviorRatio',
         colonyId,
-        ratio: { forage: r, dig: 0, fight: 0 },
+        ratio: { forage: r, fight: 0 },
         issuedAtTick: 0,
       });
     }
@@ -277,7 +276,7 @@ describe('Step ordering observable proofs', () => {
     const cmd: SimCommand = {
       type: 'SetBehaviorRatio',
       colonyId,
-      ratio: { forage: 0, dig: 0, fight: 0 },
+      ratio: { forage: 0, fight: 0 },
       issuedAtTick: 0,
     };
     tick(world, [cmd]);
@@ -420,7 +419,6 @@ describe('Step ordering observable proofs', () => {
     colony.computedAllocation.fight  = 0;
     colony.computedAllocation.nurse  = 0;
     colony.targetRatio.forage = 10;
-    colony.targetRatio.dig    = 0;
     colony.targetRatio.fight  = 0;
 
     // Tick 1: step 10a sees Digging (not Idle) → skipped. Step 10b tickDigExecution
@@ -477,7 +475,6 @@ describe('Step ordering observable proofs', () => {
     colony.computedAllocation.fight  = 1;
     colony.taskCensus.forage = 1;
     colony.targetRatio.forage = 0;
-    colony.targetRatio.dig    = 0;
     colony.targetRatio.fight  = 10;
 
     tick(world, []);
@@ -553,8 +550,9 @@ describe('Step ordering observable proofs', () => {
     colony.computedAllocation.dig    = 1;
     colony.computedAllocation.fight  = 0;
     colony.targetRatio.forage = 0;
-    colony.targetRatio.dig    = 10;
     colony.targetRatio.fight  = 0;
+    // Phase 10 (CTRL-06): dig is auto-assigned via need.dig, not via targetRatio.
+    // Plan 02 will rewrite this test to drive digging via Marked tile presence.
 
     tick(world, []);
 
@@ -612,7 +610,6 @@ describe('Step ordering observable proofs', () => {
 
       // targetRatio that produces {nurse:3, forage:4, dig:0, fight:3} via allocateWorkers(10, 9, ratio).
       colony.targetRatio.forage = 4;
-      colony.targetRatio.dig    = 0;
       colony.targetRatio.fight  = 3;
 
       tick(w, []);
@@ -666,8 +663,8 @@ describe('Step ordering observable proofs', () => {
       // need: forage=1, dig=2, fight=1, nurse=1 (total=5 = eligibles)
       colony.computedAllocation = { nurse: 1, forage: 2, dig: 2, fight: 1 };
       colony.targetRatio.forage = 10;
-      colony.targetRatio.dig    = 5;
       colony.targetRatio.fight  = 3;
+      // Phase 10 (CTRL-06): dig is auto-assigned; plan 02 will rewire this test.
 
       tick(w, []);
 
@@ -719,7 +716,6 @@ describe('09 reproduction-gate memo — starvation-shape regression', () => {
     // Forage-favored triangle; no chambers at all (intentional — this is the
     // pre-excavation colony state from the memo).
     colony.targetRatio.forage = 10;
-    colony.targetRatio.dig    = 0;
     colony.targetRatio.fight  = 0;
 
     tick(w, []);
@@ -757,8 +753,9 @@ describe('09 reproduction-gate memo — starvation-shape regression', () => {
     }
 
     colony.targetRatio.forage = 3;
-    colony.targetRatio.dig    = 2;
     colony.targetRatio.fight  = 0;
+    // Phase 10 (CTRL-06): dig is auto-assigned per Marked tile presence;
+    // plan 02 will rewire this test if it relies on dig allocation outcome.
 
     tick(w, []);
 
@@ -801,7 +798,6 @@ describe('09 reproduction-gate memo — starvation-shape regression', () => {
     });
 
     colony.targetRatio.forage = 10;
-    colony.targetRatio.dig    = 0;
     colony.targetRatio.fight  = 0;
 
     tick(w, []);
@@ -1526,9 +1522,10 @@ describe('Phase 7: Integration tests', () => {
     const colonyId = PLAYER_COLONY_ID as ColonyId;
     const colony = world.colonies[colonyId]!;
 
-    // Set high dig ratio so workers reassign to Digging
+    // Phase 10 (CTRL-06): dig is auto-assigned via need.dig from Marked tiles.
+    // Setting targetRatio is no longer the lever; the Marked tile below drives auto-dig.
+    // Plan 02 will rewrite this test against the new contract.
     colony.targetRatio.forage = 0;
-    colony.targetRatio.dig    = 10;
     colony.targetRatio.fight  = 0;
 
     // Mark a tile adjacent to the pre-excavated player shaft (entrance column=24,

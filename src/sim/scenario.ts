@@ -147,11 +147,13 @@ function initColony(
   // Without this, STARTING_WORKERS foragers can pick up food on the surface
   // but have no route underground to deposit — colony.foodStored never grows,
   // the queen starves in a few hundred ticks, and the player cannot recover
-  // until they manually designate + excavate a shaft (which also requires
-  // manually shifting the behavior triangle to allocate diggers, since default
-  // is forage:10 / dig:0 / fight:0). The starting entrance is the minimum
-  // thing that makes the prototype playable out of the box. Aligns with the
-  // Phase 8 Stabilization Memo item #4 ("expose a more legible initial
+  // until they manually designate + excavate a shaft. (Phase 10 CTRL-06:
+  // digging is now auto-assigned whenever Marked tiles exist and an ant is
+  // Idle — the player only needs to mark the shaft tiles; the default
+  // behavior ratio `{ forage: 10, fight: 0 }` no longer needs adjustment to
+  // make digging happen.) The starting entrance is the minimum thing that
+  // makes the prototype playable out of the box. Aligns with the Phase 8
+  // Stabilization Memo item #4 ("expose a more legible initial
   // entrance/opening state").
   const underground = world.undergroundGrids[colonyId];
   if (underground) {

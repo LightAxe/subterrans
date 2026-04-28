@@ -627,9 +627,10 @@ describe('tickReconcile', () => {
     addLarva(world, colony);
     addLarva(world, colony);
 
+    // Phase 10 (CTRL-01'): targetRatio is two-role. Use a non-trivial split so
+    // reconcile actually has work to do; dig is auto-assigned in Plan 02 step 10a.
     colony.targetRatio.forage = 8;
-    colony.targetRatio.dig = 2;
-    colony.targetRatio.fight = 0;
+    colony.targetRatio.fight = 2;
 
     // Zero out allocation to prove reconcile recomputes it
     colony.computedAllocation.nurse = 0;

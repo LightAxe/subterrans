@@ -78,11 +78,12 @@ describe('createColonyRecord', () => {
     expect(b.taskCensus.forage).toBe(0);
   });
 
-  it('(5) DEFAULT_BEHAVIOR_RATIO shape: forage=10, dig=0, fight=0', () => {
+  it('(5) DEFAULT_BEHAVIOR_RATIO shape: forage=10, fight=0 (Phase 10 amendment, CTRL-01\')', () => {
     const r = createColonyRecord(1, 0);
     expect(r.targetRatio.forage).toBe(10);
-    expect(r.targetRatio.dig).toBe(0);
     expect(r.targetRatio.fight).toBe(0);
+    // dig field intentionally absent on BehaviorRatio post-Phase-10 (CTRL-06 owns dig).
+    expect(Object.keys(r.targetRatio).sort()).toEqual(['fight', 'forage']);
   });
 
   it('(9) taskCensus has exactly the 4 WorkerAllocation fields from PRD §2 (nurse, forage, dig, fight)', () => {
