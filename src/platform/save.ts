@@ -383,7 +383,10 @@ function deserializeColony(s: SerializedColony): ColonyRecord {
   c.larvae               = [...s.larvae];
   c.workers              = [...s.workers];
   c.chambers             = s.chambers.map((ch) => ({ ...ch }));
-  c.targetRatio          = { ...s.targetRatio };
+  // Phase 10 / D-04 silent migration: legacy saves carry `targetRatio.dig`;
+  // migrateBehaviorRatio drops it, snaps all-zero to DEFAULT_BEHAVIOR_RATIO,
+  // and is idempotent on post-Phase-10 saves. See migrateBehaviorRatio docblock.
+  c.targetRatio          = migrateBehaviorRatio(s.targetRatio);
   c.computedAllocation   = { ...s.computedAllocation };
   c.taskCensus           = { ...s.taskCensus };
   c.defeated             = s.defeated;
