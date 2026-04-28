@@ -279,12 +279,24 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
 export function migrateBehaviorRatio(
   legacy: { forage?: number; dig?: number; fight?: number },
 ): BehaviorRatio {
-  const forage = typeof legacy.forage === 'number' ? legacy.forage : 0;
-  const fight  = typeof legacy.fight  === 'number' ? legacy.fight  : 0;
+  // Defensive: reject NaN, +/-Infinity, and negatives. typeof NaN === 'number',
+  // so the typeof guard alone allows NaN to propagate into colony.targetRatio
+  // and contaminate every downstream allocateWorkers call (WR-01). A negative
+  // weight is also rejected to mirror the SetBehaviorRatio command handler in
+  // tick.ts step 5 (any negative weight → reject command).
+  const rawForage = legacy.forage;
+  const rawFight  = legacy.fight;
+  const forage = typeof rawForage === 'number' && Number.isFinite(rawForage) && rawForage >= 0
+    ? rawForage
+    : 0;
+  const fight  = typeof rawFight  === 'number' && Number.isFinite(rawFight)  && rawFight  >= 0
+    ? rawFight
+    : 0;
   // All-zero edge case: snap to { forage: 10, fight: 0 } per D-04.
   // This covers the pre-Phase-10 pure-dig allocation { forage: 0, dig: N, fight: 0 }
   // as well as defensively handling fresh saves with all-zero values or saves
-  // missing these fields entirely.
+  // missing these fields entirely. NaN / negative inputs are coerced to 0 above
+  // and therefore also land in this branch.
   if (forage === 0 && fight === 0) {
     return { forage: 10, fight: 0 };
   }
