@@ -520,12 +520,19 @@ export class UIScene extends Phaser.Scene {
     // axis only.
     if (colony) {
       const ff = colony.taskCensus.forage + colony.taskCensus.fight;
+      // WR-03: when no worker is currently Foraging or Fighting (e.g. transient
+      // pure-nurse / pure-dig states in small colonies during a brood spike or
+      // a 1-worker colony with auto-dig active), the prior `{forage:100,fight:0}`
+      // fallback pinned the current marker to the forage extreme — visually
+      // contradicting the actual (zero-on-axis) state. Fall back to the player's
+      // intent (`targetRatio`) so the current marker overlays the target marker
+      // rather than fabricating an extreme position.
       const currentRatio = ff > 0
         ? {
             forage: Math.round(colony.taskCensus.forage * 100 / ff),
             fight:  Math.round(colony.taskCensus.fight  * 100 / ff),
           }
-        : { forage: 100, fight: 0 };
+        : { forage: colony.targetRatio.forage, fight: colony.targetRatio.fight };
       const targetRatio = this.dragState.isDragging
         ? this.dragState.targetRatio
         : colony.targetRatio;
