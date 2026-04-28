@@ -57,6 +57,14 @@ export function createSliderDragState(): SliderDragState {
 // ---------------------------------------------------------------------------
 
 export function screenToSliderRatio(px: number): { forage: number; fight: number } {
+  // WR-05: defensive guard against degenerate track geometry (TRACK_LEN <= 0).
+  // The test suite asserts `SLIDER_GEOMETRY.trackLen > 0` so this branch is
+  // currently unreachable in production, but a future HUD constants change
+  // could silently zero the denominator — `(px - TRACK_LEFT) / 0` is +/-Inf
+  // or NaN, `Math.max(0, Math.min(1, NaN)) === NaN`, and the function would
+  // return `{forage: NaN, fight: NaN}`, corrupting colony.targetRatio. Fall
+  // back to the safe default rather than poisoning state.
+  if (TRACK_LEN <= 0) return { forage: 10, fight: 0 };
   const t = (px - TRACK_LEFT) / TRACK_LEN;       // float in [0,1] (clamped below)
   const tc = Math.max(0, Math.min(1, t));
   // 11 discrete steps: 0,1,...,10. fight gets `Math.round(tc * 10)`; forage = 10 - fight.
