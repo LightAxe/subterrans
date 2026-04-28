@@ -475,6 +475,36 @@ function buildSaveFile(seed: number, inputLog: readonly SimCommand[], world: Wor
   };
 }
 
+/**
+ * Phase 10 / WR-09 — migrate a single inputLog entry on load.
+ *
+ * Pre-Phase-10 v2 saves (issue #15 bumped 1→2; Phase 10 narrowed without
+ * bumping per D-04) can carry `SetBehaviorRatio` commands shaped as
+ * `{ forage, dig, fight }`. The `dig` field is gone in the Phase 10 sim;
+ * replaying such a command verbatim would either silently drop the dig
+ * weight (turning legitimate dig-heavy commands into idle ones) or trip
+ * post-Phase-10 invariants. SCEN-06 replay truth requires the in-memory
+ * inputLog to match what the current sim accepts, so we migrate here
+ * rather than in the per-tick command handler.
+ *
+ * Migration semantics mirror `migrateBehaviorRatio` for the snapshot's
+ * persisted `targetRatio`:
+ *   - drop `dig` (no rescale)
+ *   - all-zero `{forage:0, fight:0}` snaps to DEFAULT_BEHAVIOR_RATIO
+ *     `{forage:10, fight:0}` (covers the pre-Phase-10 pure-dig case)
+ *
+ * Pure function, idempotent on already-migrated commands. Non-
+ * `SetBehaviorRatio` entries pass through untouched.
+ */
+function migrateInputLogCommand(cmd: SimCommand): SimCommand {
+  if (cmd.type !== 'SetBehaviorRatio') return cmd;
+  const ratioRaw = cmd.ratio as unknown as { forage?: number; dig?: number; fight?: number };
+  // Already in the two-field form (no `dig` key) — pass through.
+  if (!('dig' in ratioRaw)) return cmd;
+  const migrated = migrateBehaviorRatio(ratioRaw);
+  return { ...cmd, ratio: migrated };
+}
+
 function parseSaveFile(raw: string): SaveFile {
   const parsed = JSON.parse(raw) as { version?: unknown };
   if (typeof parsed.version !== 'number') {
@@ -483,7 +513,16 @@ function parseSaveFile(raw: string): SaveFile {
   if (parsed.version !== SAVE_FORMAT_VERSION) {
     throw new SaveVersionMismatchError(SAVE_FORMAT_VERSION, parsed.version);
   }
-  return parsed as SaveFile;
+  const file = parsed as SaveFile;
+  // WR-09: walk inputLog and migrate any legacy SetBehaviorRatio entries so
+  // SCEN-06 replay (`createScenario(seed) + tick(cmds[t])`) reproduces the
+  // migrated snapshot. Other command types pass through.
+  if (Array.isArray(file.inputLog)) {
+    for (let i = 0; i < file.inputLog.length; i++) {
+      file.inputLog[i] = migrateInputLogCommand(file.inputLog[i]!);
+    }
+  }
+  return file;
 }
 
 /**

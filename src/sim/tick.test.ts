@@ -3224,42 +3224,6 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     expect(world.ants.task[wid]).toBe(AntTask.Nursing);
   });
 
-  it('Test 10 (WR-09): legacy SetBehaviorRatio with `dig` field migrates on replay', () => {
-    // Pre-Phase-10 v2 inputLogs (issue #15 bumped SAVE_FORMAT_VERSION 1→2;
-    // Phase 10 narrowed BehaviorRatio without bumping again per D-04). When
-    // a debug-snapshot replay tool re-executes such a log under post-Phase-10
-    // code, `SetBehaviorRatio { forage:0, dig:5, fight:0 }` (pure dig) must
-    // not silently become `{forage:0, fight:0}` (idle). The handler detects
-    // the legacy `dig` field and snaps the all-zero remainder to the
-    // DEFAULT_BEHAVIOR_RATIO {forage:10, fight:0}, mirroring
-    // migrateBehaviorRatio in platform/save.ts.
-    const { world, colonyId } = makeWorldWithColony(42);
-
-    // Legacy command with the `dig` field — cast through unknown so the
-    // typed handler accepts it for the runtime replay.
-    const legacy: SimCommand = {
-      type: 'SetBehaviorRatio',
-      colonyId,
-      ratio: { forage: 0, dig: 5, fight: 0 } as unknown as { forage: number; fight: number },
-      issuedAtTick: 0,
-    };
-    tick(world, [legacy]);
-    const colony = world.colonies[colonyId]!;
-    expect(colony.targetRatio.forage).toBe(10); // snapped from {0, _, 0}
-    expect(colony.targetRatio.fight).toBe(0);
-
-    // Counterpoint: a post-Phase-10 command with no `dig` field passes through
-    // unchanged, even when both fields are 0 (legitimate idle-slider command).
-    const modern: SimCommand = {
-      type: 'SetBehaviorRatio',
-      colonyId,
-      ratio: { forage: 0, fight: 0 },
-      issuedAtTick: 1,
-    };
-    tick(world, [modern]);
-    expect(colony.targetRatio.forage).toBe(0); // post-Phase-10 idle: no snap
-    expect(colony.targetRatio.fight).toBe(0);
-  });
 
   it('Test 8 (WR-07): dig slot reserved while digger is active → nurse not preempted by forage', () => {
     // Regression for codex P1 v2: in a 2-worker / brood-heavy / forage-only

@@ -187,31 +187,15 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         if (colony === undefined) break;
         // Validate ratio fields: any negative weight rejects the command.
         // Phase 10 (CTRL-01'): two-role widget — only forage / fight; digging is
-        // auto-assigned per CTRL-06 in step 10a (Plan 02).
+        // auto-assigned per CTRL-06 in step 10a (Plan 02). Legacy pre-Phase-10
+        // inputLog entries with a `dig` field are migrated at the save boundary
+        // (parseSaveFile applies migrateInputLogCommand to every entry on load),
+        // so this handler trusts the typed two-field shape — no runtime
+        // migration needed.
         if (cmd.ratio.forage < 0 || cmd.ratio.fight < 0) break;
-        // WR-09: defend against pre-Phase-10 inputLog replays. Legacy v2 saves
-        // (issue #15 → Phase 10 transition) carry SetBehaviorRatio commands
-        // shaped as {forage, dig, fight}; replay tools (debug-snapshot,
-        // replay-truth tests) re-execute the inputLog verbatim, so reading
-        // only forage/fight here would silently turn `{forage:0, dig:N,
-        // fight:0}` into a no-dig idle command. Mirror the platform/save.ts
-        // migrateBehaviorRatio semantic inline (sim/ cannot import platform/):
-        // when the legacy `dig` field is present and the remaining ratio is
-        // all-zero, snap to DEFAULT_BEHAVIOR_RATIO {forage:10, fight:0}.
-        // Post-Phase-10 commands have no `dig` and pass through unchanged
-        // (idempotent), preserving a legitimate {forage:0, fight:0} idle
-        // command if any caller emits one.
-        const ratioRaw = cmd.ratio as { forage: number; dig?: unknown; fight: number };
-        const isLegacy = 'dig' in ratioRaw;
-        let nextForage = cmd.ratio.forage;
-        let nextFight  = cmd.ratio.fight;
-        if (isLegacy && nextForage === 0 && nextFight === 0) {
-          nextForage = 10;
-          nextFight  = 0;
-        }
         // Field-by-field copy to preserve object identity for copyWorldState determinism.
-        colony.targetRatio.forage = nextForage;
-        colony.targetRatio.fight  = nextFight;
+        colony.targetRatio.forage = cmd.ratio.forage;
+        colony.targetRatio.fight  = cmd.ratio.fight;
         // CTRL-04: run allocateWorkers immediately in the same tick the command is issued.
         // alloc0.dig is 0 here under the two-role contract — auto-dig (Plan 02 step 10a)
         // overwrites colony.computedAllocation.dig later in this same tick when need.dig > 0.
