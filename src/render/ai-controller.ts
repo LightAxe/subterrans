@@ -25,10 +25,23 @@ export const AI_FOOD_STORAGE_THRESHOLD = 8 as const;
 export const AI_NURSERY_THRESHOLD = 12 as const;
 
 /**
- * Fixed AI behavior ratio per RESEARCH.md (0–10 scale).
- * AI is forage-leaning with meaningful dig + fight allocation.
+ * Phase 10 / D-05 — fixed AI BehaviorRatio (CMBT-02, two-role schema).
+ *
+ * Two roles only: forage and fight. Digging is auto-assigned per CTRL-06
+ * (handled in tick.ts step 10a; mirrors auto-nurse / CLNY-09). The AI keeps
+ * issuing MarkDigTileCommand at AI_DIG_INTERVAL cadence; those Marked tiles
+ * drive the auto-dig path uniformly for both colonies (CLNY-08 colony parity).
+ *
+ * Tuning rationale (Candidate A — Plan 10-04 SUMMARY):
+ *   Original ratio was {forage:5, dig:3, fight:2} — 5:2 ≈ 2.5:1 forage:fight
+ *   emphasis. With dig auto-assigned (off the ratio entirely), Candidate A
+ *   {forage:7, fight:3} preserves that emphasis (7:3 ≈ 2.33:1) on the 0-10
+ *   integer scale. Minimal-surprise game-feel relative to the pre-Phase-10
+ *   baseline; alternative candidates {6,4} more aggressive and {8,2} more
+ *   passive were considered and rejected — see Plan 10-04 SUMMARY for the
+ *   full candidate matrix.
  */
-export const AI_BEHAVIOR_RATIO = { forage: 5, dig: 3, fight: 2 } as const;
+export const AI_BEHAVIOR_RATIO = { forage: 7, fight: 3 } as const;
 
 /** Entry point — called by GameScene per-tick (via GameLoopOpts.onBeforeTick). */
 export function runAIController(world: WorldState, aiColonyId: ColonyId): void {

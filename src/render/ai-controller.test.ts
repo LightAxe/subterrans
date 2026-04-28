@@ -725,8 +725,13 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
     it('AI_QUEEN_CHAMBER_DEPTH is 10', () => expect(AI_QUEEN_CHAMBER_DEPTH).toBe(10));
     it('AI_FOOD_STORAGE_THRESHOLD is 8', () => expect(AI_FOOD_STORAGE_THRESHOLD).toBe(8));
     it('AI_NURSERY_THRESHOLD is 12', () => expect(AI_NURSERY_THRESHOLD).toBe(12));
-    it('AI_BEHAVIOR_RATIO has forage + dig + fight', () => {
-      expect(AI_BEHAVIOR_RATIO).toMatchObject({ forage: 5, dig: 3, fight: 2 });
+    it('AI_BEHAVIOR_RATIO has two-field shape (Phase 10 / D-05)', () => {
+      // Phase 10 / D-05 (LOCKED): BehaviorRatio is {forage, fight} only;
+      // dig is auto-assigned via CTRL-06 (tick.ts step 10a).
+      // Candidate A tuning: {forage:7, fight:3} preserves the original 5:2
+      // forage:fight emphasis on the two-role schema. See plan 10-04 SUMMARY.
+      expect(AI_BEHAVIOR_RATIO).toMatchObject({ forage: 7, fight: 3 });
+      expect(AI_BEHAVIOR_RATIO).not.toHaveProperty('dig');
     });
 
   });
