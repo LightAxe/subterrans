@@ -97,15 +97,27 @@ export function allocateWorkers(
   const nurseCount = computeNurseCount(broodCount, workerCount, hasNursery);
   const available = workerCount - nurseCount;
 
-  const total = ratio.forage + ratio.fight;
+  // WR-04: defensive clamp on ratio inputs. The BehaviorRatio interface declares
+  // `number` without enforcing non-negativity or integer-ness. The SetBehaviorRatio
+  // command handler in tick.ts step 5 rejects negatives, but direct mutations (tests,
+  // future render-layer code) and corrupted saves can still feed negative or
+  // fractional weights here. `| 0` truncates fractions to integers; `Math.max(0, …)`
+  // floors negatives to 0 so `(available * ratio.forage / total) | 0` cannot
+  // produce a negative integer (which would yield a nonsense allocation).
+  // eslint-disable-next-line no-restricted-syntax -- PRD §7b integer guard, not float math
+  const forageWeight = Math.max(0, ratio.forage | 0);
+  // eslint-disable-next-line no-restricted-syntax -- PRD §7b integer guard, not float math
+  const fightWeight  = Math.max(0, ratio.fight  | 0);
+
+  const total = forageWeight + fightWeight;
   if (total === 0 || available === 0) {
     return { nurse: nurseCount, forage: 0, dig: 0, fight: 0 };
   }
 
   // eslint-disable-next-line no-restricted-syntax -- PRD §7b integer ratio, not float math
-  const forage = ((available * ratio.forage) / total) | 0;
+  const forage = ((available * forageWeight) / total) | 0;
   // eslint-disable-next-line no-restricted-syntax -- PRD §7b integer ratio, not float math
-  const fight  = ((available * ratio.fight)  / total) | 0;
+  const fight  = ((available * fightWeight)  / total) | 0;
   const remainder = available - forage - fight;
 
   return {
