@@ -640,9 +640,19 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       ? computeDigDemand(colony, undergroundGrid10a, world.ants)
       : 0;
     colony.computedAllocation.dig = digDemand;
-    if (digDemand > 0 && colony.computedAllocation.forage > 0) {
-      colony.computedAllocation.forage -= 1;
-    }
+    // WR-02: carve a forage slot LOCALLY so need.forage budgets one fewer
+    // forager when a digger is needed, but DO NOT mutate
+    // `colony.computedAllocation.forage`. The persisted field is the
+    // step-8 / SetBehaviorRatio result (= targetRatio × workerCount); any
+    // mid-tick consumer (renderer, debug HUD, autosave snapshot) that reads
+    // it between tick boundaries sees the canonical allocation, not a
+    // post-carve value. Determinism is preserved: `need.forage` below is
+    // identical to the prior `computedAllocation.forage - actualForage`
+    // because the in-place decrement was an algebraic equivalent of this
+    // local subtraction.
+    const carvedForage = (digDemand > 0 && colony.computedAllocation.forage > 0)
+      ? colony.computedAllocation.forage - 1
+      : colony.computedAllocation.forage;
 
     // (b) Collect ants at PRD §7c idle checkpoints, sorted ascending by EntityId (SCEN-06 determinism).
     //     The eligibility predicate is `task === AntTask.Idle` — the single, uniform rule per §7c
@@ -663,7 +673,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     //     Canonical target iteration order: forage → dig → fight → nurse (matches PRD §7a result shape).
     //     This deterministic if/else chain is the ONLY selection strategy.
     const need = {
-      forage: colony.computedAllocation.forage - actualForage,
+      forage: carvedForage                     - actualForage,
       dig:    colony.computedAllocation.dig    - actualDig,
       fight:  colony.computedAllocation.fight  - actualFight,
       nurse:  colony.computedAllocation.nurse  - actualNurse,
