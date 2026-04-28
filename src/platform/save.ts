@@ -99,7 +99,12 @@ interface SerializedColony {
   foodStored: number; workerCount: number; eggCount: number; larvaeCount: number; nurseCount: number;
   eggs: EntityId[]; larvae: EntityId[]; workers: EntityId[];
   chambers: ChamberRecord[];
-  targetRatio: BehaviorRatio;
+  // Phase 10 / D-04 silent-migration: serialized shape is the runtime BehaviorRatio
+  // (post-migration `{ forage, fight }`), but the legacy `dig` field is allowed for
+  // backward compatibility with pre-Phase-10 saves. Migration via migrateBehaviorRatio
+  // at load time (deserializeColony) silently drops the `dig` field — no schema
+  // version bump per D-04 (pre-1.0, save compat is not a public contract).
+  targetRatio: { forage: number; fight: number; dig?: number };
   computedAllocation: WorkerAllocation;
   taskCensus: WorkerAllocation;
   defeated: boolean; reconcileCountdown: number;
@@ -252,6 +257,39 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
 // ---------------------------------------------------------------------------
 // Deserialize helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Phase 10 / D-04 — silent BehaviorRatio migration on load.
+ *
+ * Pre-Phase-10 saves serialize targetRatio as `{ forage, dig, fight }` (3 fields).
+ * Phase 10 narrows BehaviorRatio to `{ forage, fight }`. This helper:
+ *   - drops the `dig` field (no proportional rescale)
+ *   - snaps all-zero `{ forage: 0, fight: 0 }` to `{ forage: 10, fight: 0 }`
+ *     (the player had pure dig under the old contract; default to 100% forage,
+ *     matching DEFAULT_BEHAVIOR_RATIO from Plan 01)
+ *   - leaves already-migrated saves untouched (idempotent)
+ *   - defensively defaults missing/non-numeric `forage` and `fight` to 0
+ *     (which then triggers the all-zero snap → `{ forage: 10, fight: 0 }`)
+ *
+ * No schema version bump — pre-1.0, save compat is not a public contract per D-04.
+ *
+ * Pure function: no PRNG, no clock, no side effects. Idempotent: applying twice
+ * produces the same output as applying once.
+ */
+export function migrateBehaviorRatio(
+  legacy: { forage?: number; dig?: number; fight?: number },
+): BehaviorRatio {
+  const forage = typeof legacy.forage === 'number' ? legacy.forage : 0;
+  const fight  = typeof legacy.fight  === 'number' ? legacy.fight  : 0;
+  // All-zero edge case: snap to { forage: 10, fight: 0 } per D-04.
+  // This covers the pre-Phase-10 pure-dig allocation { forage: 0, dig: N, fight: 0 }
+  // as well as defensively handling fresh saves with all-zero values or saves
+  // missing these fields entirely.
+  if (forage === 0 && fight === 0) {
+    return { forage: 10, fight: 0 };
+  }
+  return { forage, fight };
+}
 
 function copyIntoInt32(dst: Int32Array, src: readonly number[]): void {
   const n = src.length < dst.length ? src.length : dst.length;

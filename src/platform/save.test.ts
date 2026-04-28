@@ -4,6 +4,7 @@ import {
   SAVE_FORMAT_VERSION, SAVE_KEY, AUTOSAVE_INTERVAL_MS,
   serializeWorldState, deserializeWorldState,
   hasSave, loadSave, deleteSave, tickAutosave,
+  migrateBehaviorRatio,
   type SaveFile,
 } from './save.js';
 import { createScenario } from '../sim/scenario.js';
@@ -420,6 +421,53 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
 
       expect(JSON.stringify(serializeWorldState(replay)))
         .toBe(JSON.stringify(serializeWorldState(original)));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 10 / D-04 — silent BehaviorRatio migration on load
+  //
+  // Pre-Phase-10 saves serialize targetRatio as { forage, dig, fight } (3 fields).
+  // Phase 10 narrows BehaviorRatio to { forage, fight }. The migrateBehaviorRatio
+  // helper drops the dig field, snaps all-zero { forage:0, fight:0 } to the
+  // default { forage:10, fight:0 }, and is idempotent on already-migrated saves.
+  // No schema version bump per D-04 (pre-1.0, save compat is not a public contract).
+  // ---------------------------------------------------------------------------
+  describe('Phase 10 / D-04 — migrateBehaviorRatio', () => {
+    it('(typical) drops dig field: { forage: 5, dig: 3, fight: 2 } → { forage: 5, fight: 2 }', () => {
+      // The dig field is silently dropped — no proportional rescale.
+      const result = migrateBehaviorRatio({ forage: 5, dig: 3, fight: 2 });
+      expect(result).toEqual({ forage: 5, fight: 2 });
+      // Sanity: the `dig` key is GONE, not zeroed.
+      expect('dig' in result).toBe(false);
+    });
+    it('(all-zero edge / pre-Phase-10 pure-dig) snaps to { forage: 10, fight: 0 }', () => {
+      // Pre-Phase-10 player who set pure dig: { forage: 0, dig: 10, fight: 0 }.
+      // Under the two-role contract this would be all-zero; D-04 snaps to the
+      // DEFAULT_BEHAVIOR_RATIO { forage: 10, fight: 0 }.
+      const result = migrateBehaviorRatio({ forage: 0, dig: 10, fight: 0 });
+      expect(result).toEqual({ forage: 10, fight: 0 });
+    });
+    it('(already-migrated, idempotent) { forage: 7, fight: 3 } → { forage: 7, fight: 3 }', () => {
+      // No-op pass-through for post-Phase-10 saves (no dig field).
+      // Applying the helper twice produces the same result as applying once.
+      const once = migrateBehaviorRatio({ forage: 7, fight: 3 });
+      expect(once).toEqual({ forage: 7, fight: 3 });
+      const twice = migrateBehaviorRatio(once);
+      expect(twice).toEqual({ forage: 7, fight: 3 });
+    });
+    it('(already-migrated, all-zero defensive) { forage: 0, fight: 0 } → { forage: 10, fight: 0 }', () => {
+      // A fresh post-Phase-10 save with all-zero values also triggers the snap.
+      // Defensive: prevents loading a save into a degenerate "no work assigned"
+      // state regardless of how it got there.
+      const result = migrateBehaviorRatio({ forage: 0, fight: 0 });
+      expect(result).toEqual({ forage: 10, fight: 0 });
+    });
+    it('(missing fields defensive) {} → { forage: 10, fight: 0 }', () => {
+      // Missing/non-numeric forage and fight default to 0, which then triggers
+      // the all-zero snap. Garbage in → safe default out.
+      const result = migrateBehaviorRatio({});
+      expect(result).toEqual({ forage: 10, fight: 0 });
     });
   });
 });
