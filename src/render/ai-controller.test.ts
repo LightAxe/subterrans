@@ -5,6 +5,10 @@
 // No Phaser imported — ai-controller.ts is pure TS and testable in Node.
 
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
 import {
   runAIController,
   aiInitialSetup,
@@ -24,9 +28,12 @@ import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { ColonyRecord, ChamberRecord } from '../sim/colony/colony-store.js';
 import { createUndergroundGrid, ugSet, UndergroundTileState } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
-import { ChamberType } from '../sim/enums.js';
+import { AntTask, ChamberType } from '../sim/enums.js';
 import type { WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
+import { createScenario } from '../sim/scenario.js';
+import { tick } from '../sim/tick.js';
+import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
 
 // ---------------------------------------------------------------------------
 // World builder helpers
@@ -732,6 +739,77 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       // forage:fight emphasis on the two-role schema. See plan 10-04 SUMMARY.
       expect(AI_BEHAVIOR_RATIO).toMatchObject({ forage: 7, fight: 3 });
       expect(AI_BEHAVIOR_RATIO).not.toHaveProperty('dig');
+    });
+
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 10 / D-05 — AI auto-dig parity
+  //
+  // D-05 (LOCKED): the AI uses the SAME auto-dig path as the player.
+  // The AI keeps issuing MarkDigTileCommand at AI_DIG_INTERVAL cadence; the
+  // sim-tier auto-dig override (tick.ts step 10a, Plan 10-02) drives Idle
+  // ants into AntTask.Digging uniformly for both colonies (CLNY-08 invariant).
+  //
+  // These tests pin the end-to-end pipeline: runAIController + tick() →
+  // AI ant in Digging via auto-dig. Distinct from tick.test.ts Phase 10
+  // describe block (which exercises step 10a directly via MarkDigTile commands)
+  // — these prove the AI's natural cadence flows through the same wire.
+  // -------------------------------------------------------------------------
+  describe('Phase 10 / D-05 — AI auto-dig parity', () => {
+
+    it('AI ant reaches AntTask.Digging via auto-dig path within reasonable tick budget', () => {
+      // Build a real 2-colony scenario; AI drives ENEMY_COLONY_ID only — same
+      // pattern as ai-controller.integration.test.ts.
+      const world = createScenario(42);
+      const aiColony = world.colonies[ENEMY_COLONY_ID]!;
+      expect(aiColony, 'AI colony should exist at ENEMY_COLONY_ID').toBeDefined();
+
+      const countAntsByTask = (taskValue: number): number => {
+        let n = 0;
+        for (const wid of aiColony.workers) {
+          if (world.ants.alive[wid] === 1 && world.ants.task[wid] === taskValue) n += 1;
+        }
+        return n;
+      };
+
+      // t=0 preconditions: zero Digging ants in the AI colony.
+      expect(countAntsByTask(AntTask.Digging)).toBe(0);
+
+      // Run the controller per-tick like GameScene.onBeforeTick does.
+      // Generous upper bound: 200 ticks. AI_DIG_INTERVAL=40 so the AI marks
+      // tiles within the first 80 ticks; auto-dig + ant movement to the
+      // Marked tile usually completes within another 30-60 ticks.
+      const MAX_TICKS = 200;
+      let firstDiggerTick = -1;
+      for (let t = 0; t < MAX_TICKS; t++) {
+        runAIController(world, ENEMY_COLONY_ID);
+        const cmds = world.commandQueue.splice(0);
+        tick(world, cmds);
+        if (countAntsByTask(AntTask.Digging) >= 1) {
+          firstDiggerTick = t;
+          break;
+        }
+      }
+
+      // t=N outcomes: AI got a digger via the auto-dig path within budget.
+      expect(
+        firstDiggerTick,
+        `AI did not reach AntTask.Digging within ${MAX_TICKS} ticks via auto-dig`,
+      ).toBeGreaterThanOrEqual(0);
+      // CTRL-06 strict 1-cap: at most one ant in the AI colony is Digging.
+      expect(countAntsByTask(AntTask.Digging)).toBe(1);
+    }, 30_000);
+
+    it('CLNY-08 invariant: ai-controller.ts has no PLAYER_COLONY_ID branching', () => {
+      // Source-text scan via fs.readFileSync. Conservative regexes — match any
+      // branch on PLAYER_COLONY_ID (===) or `if (... isPlayer ...)` patterns.
+      // STATE.md Phase 08-03 decision confirms this pattern is supported
+      // (HUD-05 source-scan self-checks; @types/node installed as devDep).
+      const __dirname = dirname(fileURLToPath(import.meta.url));
+      const src = readFileSync(join(__dirname, 'ai-controller.ts'), 'utf8');
+      expect(src).not.toMatch(/PLAYER_COLONY_ID\s*===/);
+      expect(src).not.toMatch(/if\s*\([^)]*\bisPlayer\b/);
     });
 
   });
