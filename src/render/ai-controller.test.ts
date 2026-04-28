@@ -33,7 +33,7 @@ import type { WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { createScenario } from '../sim/scenario.js';
 import { tick } from '../sim/tick.js';
-import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
+import { ENEMY_COLONY_ID } from '../sim/constants.js';
 
 // ---------------------------------------------------------------------------
 // World builder helpers

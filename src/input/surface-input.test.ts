@@ -115,7 +115,12 @@ function makeColony(overrides: {
     larvae: [],
     workers: [],
     chambers: [],
-    targetRatio: { forage: 33, dig: 33, fight: 34 },
+    // Phase 10 / CTRL-01' (LOCKED): targetRatio is two-field {forage, fight};
+    // dig is auto-assigned via CTRL-06. Original 33/33/34 was the percentage
+    // convention; rebalanced here to 50/50 (preserves the original "balanced"
+    // semantic intent — dig:33 dropped, residual forage/fight evened).
+    // computedAllocation + taskCensus remain 4-field (WorkerAllocation per D-03).
+    targetRatio: { forage: 50, fight: 50 },
     computedAllocation: { nurse: 0, forage: 0, dig: 0, fight: 0 },
     taskCensus: { nurse: 0, forage: 0, dig: 0, fight: 0 },
     defeated: false,

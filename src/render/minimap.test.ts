@@ -183,7 +183,12 @@ const stubColonies: WorldState['colonies'] = {
     foodStored: 0,
     queenStarvationTimer: 100,
     taskCensus: { nurse: 0, forage: 0, dig: 0, fight: 0 },
-    targetRatio: { forage: 100, dig: 0, fight: 0 },
+    // Phase 10 / CTRL-01' (LOCKED): targetRatio is two-field {forage, fight};
+    // dig is auto-assigned via CTRL-06. Original 100/0/0 was the percentage
+    // convention; preserved here as forage:100/fight:0 (matches D-04 default
+    // "100% forage" semantic). taskCensus + computedAllocation remain 4-field
+    // (WorkerAllocation per D-03).
+    targetRatio: { forage: 100, fight: 0 },
     computedAllocation: { nurse: 0, forage: 0, dig: 0, fight: 0 },
     eggCount: 0, larvaeCount: 0, nurseCount: 0,
     eggs: [], larvae: [], workers: [], chambers: [],
