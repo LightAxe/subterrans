@@ -2735,3 +2735,315 @@ describe('resetFlowFieldCaches — cross-world isolation', () => {
     resetFlowFieldCaches();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 10 / CTRL-06 — auto-dig demand-driven role (D-02 LOCKED)
+// ---------------------------------------------------------------------------
+//
+// These tests pin the contract added in Plan 10-02 (and locked by CONTEXT.md D-02):
+//
+//   - need.dig = (Marked tile count > 0 && no ant currently Digging) ? 1 : 0
+//   - When need.dig > 0 and at least one ant is Idle, step 10a auto-assigns
+//     exactly ONE Idle ant to AntTask.Digging (strict 1-digger cap).
+//   - When dig work exists but no ant is Idle, the simulation WAITS — no
+//     preemption of foragers/fighters.
+//   - When a Digging ant finishes (tile clears or it dies), it transitions to
+//     Idle; step 10a next tick reassigns it (auto-dig if more Marked tiles,
+//     else forage/fight per ratio).
+//   - The AI colony uses the SAME path — there is no isPlayer / colonyId
+//     branching in the auto-dig logic (CLNY-08 invariant).
+//
+// Discipline (per Plan 09.1-03 conventions): every test asserts BOTH t=0
+// preconditions (so a fixture-drift pass doesn't masquerade as a green) AND
+// t=N outcomes (the specific behavioral claim). Diagnostic for "feature missing
+// vs. feature broken" is encoded into the precondition asserts.
+// ---------------------------------------------------------------------------
+
+describe('Phase 10 / CTRL-06 auto-dig', () => {
+  /**
+   * Build a single-colony world with an underground grid pre-shaped so that
+   * (24, 1) is Open (mirrors the entrance shaft created by createScenario but
+   * runs against makeWorldWithColony for fast setup). The tile (25, 1) starts
+   * Solid; tests can MarkDigTile to flip it to Marked.
+   */
+  function makeWorldWithUndergroundForAutoDig(seed = 42): {
+    world: WorldState;
+    colonyId: ColonyId;
+    queenId: number;
+  } {
+    const { world, colonyId, queenId } = makeWorldWithColony(seed);
+    const colony = world.colonies[colonyId]!;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    const ug = createUndergroundGrid(UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT);
+    // Open the entrance shaft so a Marked tile at (25, y) has a reachable Open
+    // neighbor for the BFS flow field; matches the shape used by SC 1.
+    ug.data[0 * UNDERGROUND_GRID_WIDTH + 24] = UndergroundTileState.Open;
+    ug.data[1 * UNDERGROUND_GRID_WIDTH + 24] = UndergroundTileState.Open;
+    world.undergroundGrids[colonyId] = ug;
+    return { world, colonyId, queenId };
+  }
+
+  it('Test 1: demand activation — Marked tile + Idle ant → ant becomes Digging within 1 tick', () => {
+    const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
+    const colony = world.colonies[colonyId]!;
+    const underground = world.undergroundGrids[colonyId]!;
+
+    // Add 3 Idle workers (one will be picked; the strict cap holds the others).
+    colony.workerCount = 3;
+    for (let i = 0; i < 3; i++) {
+      const wid = allocateEntityId(world);
+      initAnt(world.ants, wid, { colonyId, posX: 24 << FP_SHIFT, posY: 1 << FP_SHIFT, task: AntTask.Idle, subTask: 0 });
+      world.ants.zone[wid] = 1; // Underground; matches the Open shaft cell
+      colony.workers.push(wid);
+    }
+
+    // Forage-only ratio so non-dig demand is 0; auto-dig is the only signal.
+    colony.targetRatio.forage = 10;
+    colony.targetRatio.fight  = 0;
+
+    // t=0 preconditions
+    expect(colony.workers.length).toBe(3);
+    let initialIdle = 0;
+    for (const wid of colony.workers) if (world.ants.task[wid] === AntTask.Idle) initialIdle += 1;
+    expect(initialIdle).toBe(3);
+    expect(ugGet(underground, 25, 1)).toBe(UndergroundTileState.Solid);
+    let initialDigging = 0;
+    for (const wid of colony.workers) if (world.ants.task[wid] === AntTask.Digging) initialDigging += 1;
+    expect(initialDigging).toBe(0);
+    expect(colony.computedAllocation.dig).toBe(0);
+
+    // Mark a tile adjacent to the Open shaft.
+    const cmd: SimCommand = { type: 'MarkDigTile', colonyId, tileX: 25, tileY: 1, issuedAtTick: 0 };
+    tick(world, [cmd]);
+
+    // t=N outcomes
+    expect(ugGet(underground, 25, 1)).toBe(UndergroundTileState.Marked);
+    expect(colony.computedAllocation.dig).toBe(1);
+    let diggingCount = 0;
+    for (const wid of colony.workers) if (world.ants.task[wid] === AntTask.Digging) diggingCount += 1;
+    expect(diggingCount).toBeGreaterThanOrEqual(1);
+    // Strict cap holds even on the activation tick.
+    expect(diggingCount).toBe(1);
+  });
+
+  it('Test 2: 1-digger cap — 5 Marked tiles + 5 Idle ants → exactly 1 Digging at t=1 and t=2', () => {
+    const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
+    const colony = world.colonies[colonyId]!;
+    const underground = world.undergroundGrids[colonyId]!;
+
+    colony.workerCount = 5;
+    for (let i = 0; i < 5; i++) {
+      const wid = allocateEntityId(world);
+      initAnt(world.ants, wid, { colonyId, posX: 24 << FP_SHIFT, posY: 1 << FP_SHIFT, task: AntTask.Idle, subTask: 0 });
+      world.ants.zone[wid] = 1;
+      colony.workers.push(wid);
+    }
+    colony.targetRatio.forage = 10;
+    colony.targetRatio.fight  = 0;
+
+    // Mark 5 tiles in a column adjacent to the Open shaft.
+    const markCmds: SimCommand[] = [];
+    for (let dy = 1; dy <= 5; dy++) {
+      markCmds.push({ type: 'MarkDigTile', colonyId, tileX: 25, tileY: dy, issuedAtTick: 0 });
+    }
+
+    // t=0 preconditions
+    expect(colony.workers.length).toBe(5);
+    for (let dy = 1; dy <= 5; dy++) {
+      expect(ugGet(underground, 25, dy)).toBe(UndergroundTileState.Solid);
+    }
+    let initialDigging = 0;
+    for (const wid of colony.workers) if (world.ants.task[wid] === AntTask.Digging) initialDigging += 1;
+    expect(initialDigging).toBe(0);
+
+    tick(world, markCmds);
+
+    // t=1: cap holds — exactly 1 ant Digging despite 5 Marked tiles + 5 Idle.
+    let markedCount = 0;
+    for (let dy = 1; dy <= 5; dy++) {
+      if (ugGet(underground, 25, dy) === UndergroundTileState.Marked) markedCount += 1;
+    }
+    expect(markedCount).toBe(5);
+    expect(colony.computedAllocation.dig).toBe(1);
+    let digT1 = 0;
+    for (const wid of colony.workers) if (world.ants.task[wid] === AntTask.Digging) digT1 += 1;
+    expect(digT1).toBe(1);
+
+    tick(world, []);
+
+    // t=2: still exactly 1 — cap holds across ticks while a digger is active.
+    let digT2 = 0;
+    for (const wid of colony.workers) if (world.ants.task[wid] === AntTask.Digging) digT2 += 1;
+    expect(digT2).toBe(1);
+    expect(colony.computedAllocation.dig).toBe(0); // a digger is active → demand satisfied
+  });
+
+  it('Test 3: scarcity wait — Marked tile + 0 Idle ants → 0 Digging; foragers not preempted', () => {
+    const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
+    const colony = world.colonies[colonyId]!;
+    const underground = world.undergroundGrids[colonyId]!;
+
+    // 3 mid-cycle foragers carrying food (not Idle, not eligible for reassignment).
+    colony.workerCount = 3;
+    const foragerIds: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const wid = allocateEntityId(world);
+      initAnt(world.ants, wid, {
+        colonyId,
+        posX: 24 << FP_SHIFT,
+        posY: 1 << FP_SHIFT,
+        task: AntTask.Foraging,
+        subTask: ForagingSubState.CarryingFood,
+      });
+      world.ants.zone[wid] = 1;
+      world.ants.foodCarrying[wid] = 256; // mid-cycle; PRD §7c — not idle-checkpoint eligible
+      colony.workers.push(wid);
+      foragerIds.push(wid);
+    }
+    colony.targetRatio.forage = 10;
+    colony.targetRatio.fight  = 0;
+    // Pre-populate computedAllocation so step 10a doesn't try to reassign these.
+    colony.computedAllocation = { nurse: 0, forage: 3, dig: 0, fight: 0 };
+
+    // t=0 preconditions
+    let initialIdle = 0;
+    for (const wid of colony.workers) if (world.ants.task[wid] === AntTask.Idle) initialIdle += 1;
+    expect(initialIdle).toBe(0);
+    let initialDigging = 0;
+    for (const wid of colony.workers) if (world.ants.task[wid] === AntTask.Digging) initialDigging += 1;
+    expect(initialDigging).toBe(0);
+    // Snapshot foragers' tasks at t=0 — they must NOT be preempted at t=N.
+    const t0Tasks: Record<number, number> = {};
+    for (const wid of foragerIds) t0Tasks[wid] = world.ants.task[wid]!;
+
+    const cmd: SimCommand = { type: 'MarkDigTile', colonyId, tileX: 25, tileY: 1, issuedAtTick: 0 };
+    tick(world, [cmd]);
+
+    // Run 4 more ticks — wait policy: dig demand persists, no auto-assignment.
+    for (let i = 0; i < 4; i++) tick(world, []);
+
+    // t=N=5 outcomes
+    expect(ugGet(underground, 25, 1)).toBe(UndergroundTileState.Marked); // tile still Marked (nobody reached it)
+    let diggingCount = 0;
+    for (const wid of colony.workers) if (world.ants.task[wid] === AntTask.Digging) diggingCount += 1;
+    expect(diggingCount).toBe(0);
+    // No forager was preempted to dig.
+    for (const wid of foragerIds) {
+      expect(world.ants.task[wid]).toBe(t0Tasks[wid]);
+    }
+    // Demand check fired every tick — colony.computedAllocation.dig is 1 (Marked tile present, no ant Digging).
+    expect(colony.computedAllocation.dig).toBe(1);
+  });
+
+  it('Test 4: return-to-Idle reassign — Digging ant finishes → next tick goes Foraging (no more Marked)', () => {
+    const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
+    const colony = world.colonies[colonyId]!;
+    const underground = world.undergroundGrids[colonyId]!;
+
+    // Place a worker already in Digging+Excavating ON a BeingDug tile with digTicksRemaining=1.
+    // After 1 tick, tickDigExecution opens the tile and flips back to MovingToTile.
+    // With no remaining Marked tiles, the next tick releases ant to Idle, and step 10a
+    // reassigns to Foraging per the {forage:10, fight:0} ratio.
+    colony.workerCount = 1;
+    const wid = allocateEntityId(world);
+    initAnt(world.ants, wid, {
+      colonyId,
+      posX: 25 << FP_SHIFT,
+      posY: 1 << FP_SHIFT,
+      task: AntTask.Digging,
+      subTask: DiggingSubState.Excavating,
+    });
+    world.ants.zone[wid] = 1;
+    world.ants.digTileX[wid] = 25;
+    world.ants.digTileY[wid] = 1;
+    world.ants.digTicksRemaining[wid] = 1;
+    underground.data[1 * UNDERGROUND_GRID_WIDTH + 25] = UndergroundTileState.BeingDug;
+    colony.workers.push(wid);
+    colony.digFlowFieldDirty = true;
+
+    colony.targetRatio.forage = 10;
+    colony.targetRatio.fight  = 0;
+
+    // t=0 preconditions
+    expect(world.ants.task[wid]).toBe(AntTask.Digging);
+    expect(world.ants.subTask[wid]).toBe(DiggingSubState.Excavating);
+    expect(ugGet(underground, 25, 1)).toBe(UndergroundTileState.BeingDug);
+    expect(world.ants.digTicksRemaining[wid]).toBe(1);
+
+    // Tick 1: excavation completes (digTicksRemaining 1→0), tile becomes Open, ant → MovingToTile.
+    tick(world, []);
+    expect(ugGet(underground, 25, 1)).toBe(UndergroundTileState.Open);
+
+    // Tick 2: with no Marked tiles, tickDigExecution releases ant to Idle, step 10a reassigns.
+    // Under the auto-dig contract, computedAllocation.dig returns to 0 (no Marked) and
+    // need.forage drives the assignment (ratio is forage:10).
+    tick(world, []);
+
+    // t=N outcomes
+    expect(world.ants.task[wid]).toBe(AntTask.Foraging);
+    expect(colony.computedAllocation.dig).toBe(0);
+  });
+
+  it('Test 5: AI parity — Marked tile + Idle ant in AI colony → AI ant becomes Digging via the same path', () => {
+    // CLNY-08 self-check: the auto-dig path is colony-symmetric. A MarkDigTileCommand with
+    // colonyId === ENEMY_COLONY_ID drives an AI ant into Digging through the SAME step 10a
+    // wire that the player uses. No isPlayer / colonyId branching.
+    const world = createScenario(42);
+    const aiColonyId = ENEMY_COLONY_ID as ColonyId;
+    const playerColonyId = PLAYER_COLONY_ID as ColonyId;
+    const aiColony = world.colonies[aiColonyId]!;
+    const aiUg = world.undergroundGrids[aiColonyId]!;
+
+    // Use a Marked tile adjacent to the AI's pre-excavated entrance shaft. createScenario
+    // opens the entrance shaft for both colonies the same way (see scenario.ts:167-168).
+    // We pick a tile reachable from the AI's Open region. ENEMY_START_X is the shaft column.
+    // Any tile (col±1, row 1) where col is the AI shaft is reachable; we use a fixed
+    // offset that sits next to the shaft and flip Solid→Marked via MarkDigTile.
+    let aiShaftCol = -1;
+    for (let x = 0; x < UNDERGROUND_GRID_WIDTH; x++) {
+      if (aiUg.data[1 * UNDERGROUND_GRID_WIDTH + x] === UndergroundTileState.Open) {
+        aiShaftCol = x;
+        break;
+      }
+    }
+    expect(aiShaftCol).toBeGreaterThanOrEqual(0); // sanity: scenario.ts opened a shaft
+    const markX = aiShaftCol + 1;
+    const markY = 1;
+    expect(ugGet(aiUg, markX, markY)).toBe(UndergroundTileState.Solid);
+
+    // Force AI workers to be Idle and underground at the shaft so they can pick up dig work.
+    // STARTING_WORKERS spawn surface-side; for this test we just relocate one.
+    expect(aiColony.workers.length).toBeGreaterThan(0);
+    const aiWorkerId = aiColony.workers[0]!;
+    world.ants.task[aiWorkerId] = AntTask.Idle;
+    world.ants.subTask[aiWorkerId] = 0;
+    world.ants.posX[aiWorkerId] = aiShaftCol << FP_SHIFT;
+    world.ants.posY[aiWorkerId] = 1 << FP_SHIFT;
+    world.ants.zone[aiWorkerId] = 1; // Underground — needed for tickDigExecution claim path
+
+    // t=0 preconditions
+    let aiDiggingT0 = 0;
+    for (const wid of aiColony.workers) if (world.ants.task[wid] === AntTask.Digging) aiDiggingT0 += 1;
+    expect(aiDiggingT0).toBe(0);
+    expect(world.ants.task[aiWorkerId]).toBe(AntTask.Idle);
+
+    // Issue MarkDigTile on the AI colony — same command surface as the player.
+    const cmd: SimCommand = { type: 'MarkDigTile', colonyId: aiColonyId, tileX: markX, tileY: markY, issuedAtTick: 0 };
+    tick(world, [cmd]);
+
+    // t=N outcomes — AI colony has exactly 1 Digging ant via the auto-dig path.
+    expect(ugGet(aiUg, markX, markY)).toBe(UndergroundTileState.Marked);
+    expect(aiColony.computedAllocation.dig).toBe(1);
+    let aiDiggingT1 = 0;
+    for (const wid of aiColony.workers) if (world.ants.task[wid] === AntTask.Digging) aiDiggingT1 += 1;
+    expect(aiDiggingT1).toBe(1);
+
+    // Player colony got NO Digging ants (no Mark in player colony) — proves the path is colony-scoped.
+    const playerColony = world.colonies[playerColonyId]!;
+    let playerDiggingT1 = 0;
+    for (const wid of playerColony.workers) if (world.ants.task[wid] === AntTask.Digging) playerDiggingT1 += 1;
+    expect(playerDiggingT1).toBe(0);
+  });
+});
