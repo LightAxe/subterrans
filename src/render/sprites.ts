@@ -128,8 +128,22 @@ export const COLOR_PHEROMONE_DANGER_STRONG = 0xff4000;
 export const HUD = {
   /** Colony stats bar: ant count, food stored, queen health. */
   STATS:       { x: 8,   y: 8,   w: 200, h: 24  },
-  /** Behavior allocation triangle widget. */
-  TRIANGLE:    { x: 8,   y: 456, w: 120, h: 120 },
+  /**
+   * Behavior allocation slider widget. Field name retained from the Phase 8
+   * 3-vertex triangle to minimize diff churn; Phase 10 / D-01 collapsed the
+   * widget to a 1-D Forage↔Fight slider, so the box no longer needs to be a
+   * 120×120 square. Issue #13 follow-up: shrunk to 120×44 to hug the slider
+   * track + extreme-icon labels and avoid the unsightly empty square that
+   * the original triangle bounding box left behind.
+   *
+   * Geometry is sized to keep `trackY = y + h/2` valid given the 22px label
+   * gap (`trackY - 22 == y` ⇒ labels render flush with the box top edge).
+   * h must stay ≥ 44 for that invariant to hold without re-deriving the
+   * track formula. Bottom edge (y + h = 576) is unchanged from the prior
+   * 120×120 layout so HUD-anchor pixel positions of neighboring zones are
+   * not disturbed.
+   */
+  TRIANGLE:    { x: 8,   y: 532, w: 120, h: 44 },
   /**
    * Speed controls zone.
    * Phase 9 layout reservation — Phase 8 draws nothing here.

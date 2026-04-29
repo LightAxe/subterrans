@@ -99,7 +99,11 @@ describe('HUD zone layout', () => {
 
   it('HUD zone exact coordinates match PRD §6b', () => {
     expect(HUD.STATS).toMatchObject({ x: 8, y: 8, w: 200, h: 24 });
-    expect(HUD.TRIANGLE).toMatchObject({ x: 8, y: 456, w: 120, h: 120 });
+    // Phase 10 / issue #13 follow-up: TRIANGLE shrunk from 120×120 to 120×44
+    // when the widget collapsed from a 3-vertex triangle to a 1-D slider.
+    // Bottom edge (y + h = 576) is unchanged so neighbouring HUD zones'
+    // pixel anchors are undisturbed.
+    expect(HUD.TRIANGLE).toMatchObject({ x: 8, y: 532, w: 120, h: 44 });
     expect(HUD.MINIMAP).toMatchObject({ x: 632, y: 424, w: 160, h: 160 });
     expect(HUD.VIEW_TOGGLE).toMatchObject({ x: 632, y: 396, w: 80, h: 24 });
     expect(HUD.SPEED).toMatchObject({ x: 320, y: 552, w: 160, h: 32 });
