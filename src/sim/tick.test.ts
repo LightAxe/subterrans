@@ -3173,6 +3173,57 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     expect(fightingCount).toBe(2);
   });
 
+  it('Test 10 (WR-11): zero-ratio {forage:0, fight:0} with Idle ants → dig fires (CTRL-06 honored without a carve source)', () => {
+    // codex P2 follow-up to PR #26: WR-10 leaves {forage:0, fight:0} as a
+    // valid post-Phase-10 targetRatio (snap-to-default only fires for
+    // legacy/malformed inputs). With both ratio-driven roles at 0 there is
+    // nothing to carve from, but the unallocated remainder
+    // (workerCount - nurseCount) sits Idle. Without WR-11 the CTRL-06
+    // promise — "assign one digger when a Mark exists and an ant is Idle" —
+    // silently breaks. WR-11 fires digDemand directly when Idle ants exist
+    // (workerCount > nurseCount), keeping CLNY-09 nurse intact.
+    const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
+    const colony = world.colonies[colonyId]!;
+    const underground = world.undergroundGrids[colonyId]!;
+
+    // 3 workers, no brood — auto-nurse stays at 0 so all 3 are Idle.
+    colony.workerCount = 3;
+    const widList: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const wid = allocateEntityId(world);
+      initAnt(world.ants, wid, {
+        colonyId, posX: 24 << FP_SHIFT, posY: 1 << FP_SHIFT,
+        task: AntTask.Idle, subTask: 0,
+      });
+      world.ants.zone[wid] = 1;
+      colony.workers.push(wid);
+      widList.push(wid);
+    }
+
+    // Valid post-Phase-10 zero-ratio. WR-10 keeps this as-is (the snap only
+    // catches legacy {forage:0, dig:N, fight:0} inputs).
+    colony.targetRatio.forage = 0;
+    colony.targetRatio.fight  = 0;
+
+    const cmd: SimCommand = { type: 'MarkDigTile', colonyId, tileX: 25, tileY: 1, issuedAtTick: 0 };
+    tick(world, [cmd]);
+
+    // CTRL-06 honored — exactly one ant Digging despite zero ratio budget.
+    expect(ugGet(underground, 25, 1)).toBe(UndergroundTileState.Marked);
+    expect(colony.computedAllocation.nurse).toBe(0);
+    expect(colony.computedAllocation.forage).toBe(0);
+    expect(colony.computedAllocation.fight).toBe(0);
+    expect(colony.computedAllocation.dig).toBe(1);
+    let diggingCount = 0;
+    let idleCount    = 0;
+    for (const id of widList) {
+      if (world.ants.task[id] === AntTask.Digging) diggingCount += 1;
+      if (world.ants.task[id] === AntTask.Idle)    idleCount    += 1;
+    }
+    expect(diggingCount).toBe(1);
+    expect(idleCount).toBe(2); // remaining Idle ants stay Idle (no other role demands)
+  });
+
   it('Test 9 (WR-08): all-nurse colony (forage=fight=0) → auto-dig genuinely waits', () => {
     // Counterpoint to Test 7 — and a future-regression guard against any
     // attempt to carve from nurse when both ratio-driven roles are empty.

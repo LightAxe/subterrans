@@ -713,10 +713,36 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       } else if (colony.computedAllocation.fight > 0) {
         digDemand = 1;
         carvedFight = colony.computedAllocation.fight - 1;
+      } else if (colony.workerCount > colony.nurseCount) {
+        // WR-11 (codex P2 follow-up): zero-ratio case. WR-10 leaves
+        // {forage:0, fight:0} as a valid post-Phase-10 targetRatio (the
+        // snap-to-default only fires for legacy/malformed inputs). With
+        // both ratio-driven roles at 0, allocateWorkers returns 0 for
+        // forage and fight; the unallocated remainder
+        // (workerCount - nurseCount) sits Idle. Without this branch the
+        // CTRL-06 promise — "assign one digger when a Mark exists and an
+        // ant is Idle" — silently breaks for {0,0} ratios. Skip the carve
+        // (nothing to carve) and set demand directly; the eligibles loop
+        // pulls one Idle ant per CTRL-06.
+        //
+        // CLNY-09 nurse invariant preserved: this branch is gated on
+        // workerCount > nurseCount, so the all-nurse colony (1-worker
+        // brood-heavy where nurseCap pins everyone) still falls through
+        // to the dig-waits path.
+        //
+        // Wind-down drift (accepted): if the player flips to {0,0} while
+        // non-nurse workers are still mid-Forage/Fight from a prior tick,
+        // computedAllocation.dig stays at 1 for one or more ticks while
+        // taskCensus.dig remains 0 (no Idle ant to assign). Same one-tick
+        // self-correcting drift WR-07 already accepts on the wind-down
+        // edge — gating here on actual Idle presence would require a
+        // pre-scan of the workforce before the carve, which costs more
+        // than the cosmetic invariant is worth.
+        digDemand = 1;
       }
-      // else: ratio-driven budget is fully pinned by nurse (or workerCount
-      // is 0). Dig waits — same wait-no-preemption philosophy as the
-      // no-Idle-ant scarcity case.
+      // else: every worker is pinned to nurse (1-worker brood-heavy) —
+      // dig waits. Same wait-no-preemption philosophy as the no-Idle-ant
+      // scarcity case.
     }
     colony.computedAllocation.dig = digDemand;
     // WR-02: the carve is LOCAL to the eligibles loop. We do NOT mutate
