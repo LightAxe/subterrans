@@ -12,6 +12,7 @@
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
 import type { WorldState, EntityId } from '../sim/types.js';
+import { LEGACY_SIM_VERSION } from '../sim/types.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
 import { createAntComponents } from '../sim/ant/ant-store.js';
 import type {
@@ -92,6 +93,14 @@ interface SerializedAnts {
   // establishes for fresh ants. A naive zero-fill would silently point every
   // enemy ant's grid lookup at the player's underground grid.
   currentGridColonyId?: number[];
+  /**
+   * Issue #27 — carrier wait flag. Optional for backward compatibility with
+   * pre-#27 saves; absent → all-zero (no ants waiting), which matches the
+   * legacy behavior of always-routing carriers regardless of saturation.
+   * Pre-#27 saves load at simVersion=LEGACY anyway, so the wait-state code
+   * paths stay dormant.
+   */
+  waitingDeposit?: number[];
 }
 
 interface SerializedColony {
@@ -117,6 +126,13 @@ export interface SerializedWorldState {
   tick: number;
   rngState: number;
   nextEntityId: number;
+  /**
+   * Issue #27 — sim-behavior version (independent of SAVE_FORMAT_VERSION).
+   * Optional for backward compatibility: saves written before issue #27 omit
+   * the field; deserializeWorldState defaults absent → LEGACY_SIM_VERSION (2),
+   * sticky on load to preserve SCEN-06 replay determinism.
+   */
+  simVersion?: number;
   commandQueue: SimCommand[];  // plain-object spread is sufficient (ADR-0006)
   ants: SerializedAnts;
   colonies: Record<string, SerializedColony>;       // keys are ColonyId.toString()
@@ -174,6 +190,8 @@ function serializeAnts(a: AntComponents): SerializedAnts {
     // Int32Array and Uint8Array, so the shape is identical to the other
     // per-ant fields (number[]).
     currentGridColonyId: Array.from(a.currentGridColonyId),
+    // Issue #27 — carrier wait flag (Uint8Array; serialized as number[]).
+    waitingDeposit: Array.from(a.waitingDeposit),
   };
 }
 
@@ -238,6 +256,7 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
     tick: world.tick,
     rngState: world.rngState,
     nextEntityId: world.nextEntityId,
+    simVersion: world.simVersion,
     commandQueue: world.commandQueue.map((c) => ({ ...c })),  // Pitfall 7 — preserve
     ants: serializeAnts(world.ants),
     colonies: coloniesOut,
@@ -324,6 +343,13 @@ function deserializeAnts(saved: SerializedAnts, capacity: number): AntComponents
   } else {
     copyIntoUint8(a.currentGridColonyId, saved.colonyId);
   }
+  // Issue #27 — carrier wait flag. Pre-#27 saves omit; createAntComponents
+  // already zero-init'd the field (no ants waiting), which is the correct
+  // default. Pre-#27 saves also load at simVersion=LEGACY, so the wait-state
+  // code paths remain dormant for them regardless.
+  if (saved.waitingDeposit !== undefined) {
+    copyIntoUint8(a.waitingDeposit, saved.waitingDeposit);
+  }
   return a;
 }
 
@@ -398,6 +424,17 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     tick: s.tick,
     rngState: s.rngState,
     nextEntityId: s.nextEntityId,
+    // Issue #27 — sticky-on-load: pre-#27 saves omit `simVersion` and replay
+    // at LEGACY (2). Post-#27 saves carry the recorded version through.
+    // Type-validate at the boundary: `??` only guards null/undefined, so a
+    // hand-edited or corrupted save passing `"3"` / NaN / null / object
+    // would otherwise reach `world.simVersion >= 3` comparisons which
+    // coerce inconsistently (`"3" >= 3 === true`, `"latest" >= 3 === false`)
+    // and silently land replays on the wrong drain order. Reject anything
+    // that isn't an integer.
+    simVersion: typeof s.simVersion === 'number' && Number.isInteger(s.simVersion)
+      ? s.simVersion
+      : LEGACY_SIM_VERSION,
     commandQueue: s.commandQueue.map((c) => ({ ...c })),  // preserve unprocessed commands
     ants: deserializeAnts(s.ants, capacity),
     colonies,

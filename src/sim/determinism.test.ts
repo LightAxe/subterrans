@@ -38,6 +38,7 @@ function serializeWorldState(w: WorldState): string {
     tick: w.tick,
     rngState: w.rngState,
     nextEntityId: w.nextEntityId,
+    simVersion: w.simVersion,
     commandQueue: w.commandQueue.map(c => ({ ...c })),
     ants: {
       posX:            Array.from(w.ants.posX),
@@ -70,6 +71,10 @@ function serializeWorldState(w: WorldState): string {
       searchHeadingTicks: Array.from(w.ants.searchHeadingTicks),
       searchPrevTileX:    Array.from(w.ants.searchPrevTileX),
       searchPrevTileY:    Array.from(w.ants.searchPrevTileY),
+      // Issue #27 — carrier wait flag (new SoA field). Must round-trip in
+      // determinism asserts so a divergence in wait-state would break the
+      // byte-identical compare.
+      waitingDeposit:     Array.from(w.ants.waitingDeposit),
     },
     colonies: Object.keys(w.colonies).sort().reduce((acc, k) => {
       const c = w.colonies[Number(k) as ColonyId]!;
@@ -270,6 +275,93 @@ describe('SCEN-06: Determinism proof', () => {
     const r1 = runSimulation(42, 100, cmdsA);
     const r2 = runSimulation(42, 100, cmdsB);
     expect(r1).not.toBe(r2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #27 — simVersion plumbing
+//
+// Coverage:
+//   - createWorldState defaults to LATEST_SIM_VERSION
+//   - copyWorldState round-trips simVersion (double-buffer preserves the value)
+//   - Two LATEST runs from the same seed produce byte-identical state
+//   - Different simVersion produces different state (different drain order)
+//   - waitingDeposit field round-trips through copyWorldState
+// ---------------------------------------------------------------------------
+
+describe('issue #27: simVersion plumbing', () => {
+  it('createWorldState defaults to LATEST_SIM_VERSION', async () => {
+    const { LATEST_SIM_VERSION } = await import('./types.js');
+    const w = createWorldState(42);
+    expect(w.simVersion).toBe(LATEST_SIM_VERSION);
+  });
+
+  it('copyWorldState round-trips simVersion and waitingDeposit', async () => {
+    const { copyWorldState } = await import('./types.js');
+    const src = createWorldState(42);
+    const dst = createWorldState(99);
+
+    src.simVersion = 7; // arbitrary marker
+    src.ants.waitingDeposit[3] = 1;
+    src.ants.waitingDeposit[10] = 1;
+
+    copyWorldState(src, dst);
+
+    expect(dst.simVersion).toBe(7);
+    expect(dst.ants.waitingDeposit[3]).toBe(1);
+    expect(dst.ants.waitingDeposit[10]).toBe(1);
+    expect(dst.ants.waitingDeposit[5]).toBe(0); // untouched slots stay zero
+  });
+
+  it('two LATEST runs at the same seed produce byte-identical state (drain-fullest determinism)', () => {
+    // Direct duplicate of base SCEN-06 Test 1 but with extra runtime to push
+    // colonies into chamber-saturation territory where v3's drain-fullest
+    // diverges from v2's array-order. A non-deterministic chamber pick (bug
+    // in tie-breaking) would surface as a state divergence here.
+    const r1 = runSimulation(42, 800);
+    const r2 = runSimulation(42, 800);
+    expect(r1).toBe(r2);
+  });
+
+  it('LEGACY vs LATEST simVersion produce different state at the same seed when chambers diverge', async () => {
+    // No tools to flip simVersion mid-run — but we can construct a colony
+    // with two chambers of unequal fill and compare the two drain orders
+    // directly. The integration-level test above proves determinism within
+    // a version; this test proves the algorithms genuinely differ.
+    const { withdrawFood } = await import('./colony/colony-system.js');
+    const { createColonyRecord } = await import('./colony/colony-store.js');
+    const { ChamberType } = await import('./enums.js');
+    const { LEGACY_SIM_VERSION, LATEST_SIM_VERSION } = await import('./types.js');
+
+    function buildColony() {
+      const c = createColonyRecord(1, 0);
+      c.entrances = [];
+      c.rallyPoint = null;
+      c.digFlowFieldDirty = false;
+      c.foodFlowFieldDirty = false;
+      c.foodStored = 0;
+      c.chambers.push({
+        chamberId: 1, chamberType: ChamberType.FoodStorage, foodStored: 100,
+        posX: 0, posY: 0, width: 1, height: 1,
+      });
+      c.chambers.push({
+        chamberId: 2, chamberType: ChamberType.FoodStorage, foodStored: 200,
+        posX: 0, posY: 0, width: 1, height: 1,
+      });
+      return c;
+    }
+
+    const cLegacy = buildColony();
+    withdrawFood(cLegacy, 50, LEGACY_SIM_VERSION);
+    // v2: array-order — chambers[0] (100) drains first → 50, chambers[1] untouched.
+    expect(cLegacy.chambers[0]!.foodStored).toBe(50);
+    expect(cLegacy.chambers[1]!.foodStored).toBe(200);
+
+    const cLatest = buildColony();
+    withdrawFood(cLatest, 50, LATEST_SIM_VERSION);
+    // v3: fullest-first — chambers[1] (200) drains first → 150, chambers[0] untouched.
+    expect(cLatest.chambers[0]!.foodStored).toBe(100);
+    expect(cLatest.chambers[1]!.foodStored).toBe(150);
   });
 });
 

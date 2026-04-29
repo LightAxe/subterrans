@@ -237,6 +237,58 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.ants.currentGridColonyId[enemyQueen]).toBe(ENEMY_COLONY_ID);
       expect(w2.ants.currentGridColonyId[playerInvader]).toBe(ENEMY_COLONY_ID);
     });
+    it('round-trips world.simVersion and ants.waitingDeposit (issue #27)', () => {
+      const w = createScenario(42);
+      // Simulate a few ants in wait state at distinct ant ids.
+      const playerWorker = w.colonies[PLAYER_COLONY_ID]!.workers[0]!;
+      const enemyWorker  = w.colonies[ENEMY_COLONY_ID]!.workers[0]!;
+      w.ants.waitingDeposit[playerWorker] = 1;
+      w.ants.waitingDeposit[enemyWorker]  = 1;
+      // Pin a specific simVersion to verify the field actually survives.
+      w.simVersion = 3;
+
+      const s = serializeWorldState(w);
+      const w2 = deserializeWorldState(JSON.parse(JSON.stringify(s)));
+
+      expect(w2.simVersion).toBe(3);
+      expect(w2.ants.waitingDeposit[playerWorker]).toBe(1);
+      expect(w2.ants.waitingDeposit[enemyWorker]).toBe(1);
+    });
+    it('pre-issue-#27 saves (simVersion absent) deserialize with simVersion=LEGACY (sticky-on-load)', async () => {
+      const { LEGACY_SIM_VERSION } = await import('../sim/types.js');
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      // Simulate an older save that lacked the simVersion field.
+      delete (s as { simVersion?: number }).simVersion;
+      const w2 = deserializeWorldState(s);
+      expect(w2.simVersion).toBe(LEGACY_SIM_VERSION);
+      // And waitingDeposit is absent → all-zero (no ants in wait, the
+      // correct default for legacy saves which never used the wait state).
+      delete (s.ants as { waitingDeposit?: number[] }).waitingDeposit;
+      const w3 = deserializeWorldState(s);
+      // Spot-check: a worker entity is not in wait state by default.
+      const someWorker = w.colonies[PLAYER_COLONY_ID]!.workers[0]!;
+      expect(w3.ants.waitingDeposit[someWorker]).toBe(0);
+    });
+    it('rejects non-integer simVersion (string, NaN, null, object) → falls back to LEGACY (issue #27 P2)', async () => {
+      const { LEGACY_SIM_VERSION } = await import('../sim/types.js');
+      const w = createScenario(42);
+      const baseSnapshot = serializeWorldState(w);
+      // Corrupt the simVersion field with each non-integer shape and verify
+      // the deserializer always lands on LEGACY rather than coercing into
+      // the wrong drain order. `??` alone would let `"3"` / NaN / `null` /
+      // object pass through and surface as nondeterministic comparisons
+      // downstream (string >= number coerces; object >= number is NaN-y).
+      const cases: unknown[] = ['3', '', 'latest', null, NaN, {}, [], 3.5, true];
+      for (const bad of cases) {
+        const s = JSON.parse(JSON.stringify(baseSnapshot)) as Record<string, unknown>;
+        s.simVersion = bad;
+        const w2 = deserializeWorldState(
+          s as unknown as Parameters<typeof deserializeWorldState>[0],
+        );
+        expect(w2.simVersion).toBe(LEGACY_SIM_VERSION);
+      }
+    });
     it('pre-Phase-09.1 saves (currentGridColonyId absent) deserialize with currentGridColonyId === colonyId (initAnt invariant)', () => {
       // Backward compatibility: a save written before Phase 09.1 Chunk 0
       // landed lacks the currentGridColonyId field. Every ant in such a save

@@ -28,7 +28,7 @@ import {
   chooseExcursionDirection,
   tickExcursionBoundary,
 } from './ant-system.js';
-import { createWorldState, allocateEntityId } from '../types.js';
+import { createWorldState, allocateEntityId, LEGACY_SIM_VERSION } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt } from './ant-store.js';
 import { AntTask, ForagingSubState, DiggingSubState, NursingSubState, ChamberType, PheromoneType } from '../enums.js';
@@ -2234,6 +2234,183 @@ describe('tickForagerActions', () => {
 
     expect(colony.foodStored).toBe(0);
     expect(world.ants.foodCarrying[antId]).toBe(300);
+    expect(world.ants.task[antId]).toBe(AntTask.Foraging);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #27 — carrier WaitingToDeposit state.
+//
+// Coverage:
+//   - antDepositFood enters wait when entrance fallback finds the pool full
+//     and there's leftover, gated on simVersion >= 3
+//   - LEGACY simVersion does NOT enter wait (replay determinism)
+//   - tickForagerActions wakes a waiting carrier when any chamber becomes
+//     depositable OR the entrance pool drops below cap
+//   - tickForagerActions keeps carrier waiting when nothing changed
+//   - tickAntMovement skips waiting carriers (zero displacement)
+//   - antDepositFood clears wait flag on full deposit
+// ---------------------------------------------------------------------------
+
+describe('issue #27 — carrier WaitingToDeposit', () => {
+  // Helper: build a world with a single colony, one open entrance, and a single
+  // FoodStorage chamber. Caller positions the ant and seeds chamber/pool fills.
+  function setupSaturatedColony(): {
+    world: WorldState;
+    colony: ColonyRecord;
+    antId: number;
+  } {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    const colony = createColonyRecord(COLONY_ID, 0);
+    colony.entrances = [
+      { entranceId: 1, surfaceTileX: 7, surfaceTileY: 5, isOpen: true },
+    ];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    colony.foodFlowFieldDirty = false;
+    colony.chambers.push({
+      chamberId: 1,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: FOOD_CHAMBER_CAPACITY, // saturated
+      posX: 0, posY: 0, width: 3, height: 3,
+    });
+    world.colonies[COLONY_ID] = colony;
+
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId: COLONY_ID,
+      posX: 7 << FP_SHIFT, // entrance column
+      posY: 0,             // top of shaft underground
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+    });
+    world.ants.zone[antId] = Zone.Underground;
+    world.ants.foodCarrying[antId] = 512;
+
+    // Pool also at cap → fallback also has no headroom.
+    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
+    return { world, colony, antId };
+  }
+
+  it('1. wait entry — entrance fallback with pool at cap sets waitingDeposit=1', () => {
+    const { world, colony, antId } = setupSaturatedColony();
+    expect(world.ants.waitingDeposit[antId]).toBe(0);
+
+    antDepositFood(world, colony, antId);
+
+    expect(world.ants.waitingDeposit[antId]).toBe(1);
+    expect(world.ants.foodCarrying[antId]).toBe(512);     // unchanged
+    expect(world.ants.task[antId]).toBe(AntTask.Foraging); // not Idle
+    expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood);
+    // searchHeading cleared on entry so a future wake doesn't continue stale routing
+    expect(world.ants.searchHeadingX[antId]).toBe(0);
+    expect(world.ants.searchHeadingY[antId]).toBe(0);
+    expect(world.ants.searchHeadingTicks[antId]).toBe(0);
+  });
+
+  it('2. wait hold — saturated colony, no state change → still waiting after tickForagerActions', () => {
+    const { world, antId } = setupSaturatedColony();
+    world.ants.waitingDeposit[antId] = 1; // pre-existing wait
+
+    tickForagerActions(world);
+
+    expect(world.ants.waitingDeposit[antId]).toBe(1);
+  });
+
+  it('3. wake on chamber depositable — drain a chamber below saturation, tickForagerActions wakes', () => {
+    const { world, colony, antId } = setupSaturatedColony();
+    world.ants.waitingDeposit[antId] = 1;
+
+    // Drain the chamber across the saturation threshold so it becomes depositable.
+    // CAPACITY=5120, HYST=512, so depositable ⇔ stored ≤ 4608.
+    colony.chambers[0]!.foodStored = 4000;
+
+    tickForagerActions(world);
+
+    expect(world.ants.waitingDeposit[antId]).toBe(0);
+  });
+
+  it('4. wake on pool headroom — entrance pool drops below cap, tickForagerActions wakes', () => {
+    const { world, colony, antId } = setupSaturatedColony();
+    world.ants.waitingDeposit[antId] = 1;
+
+    // Chamber stays saturated; only the entrance pool drains.
+    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY - 100;
+
+    tickForagerActions(world);
+
+    // Wake fires; antDepositFood at the entrance fallback fits 100 fp.
+    expect(world.ants.waitingDeposit[antId]).toBe(0);
+    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
+    expect(world.ants.foodCarrying[antId]).toBe(412);
+  });
+
+  it('5. movement skip — tickAntMovement does NOT change posX/posY for a waiting ant', () => {
+    const { world, antId } = setupSaturatedColony();
+    world.ants.waitingDeposit[antId] = 1;
+    const startX = world.ants.posX[antId]!;
+    const startY = world.ants.posY[antId]!;
+
+    const rng = new Rng(0);
+    const digFlowFields = createDigFlowFields();
+    const entranceFlowFields = createEntranceFlowFields();
+    const chamberFlowFields = createChamberFlowFields();
+    tickAntMovement(world, rng, digFlowFields, entranceFlowFields, chamberFlowFields);
+
+    expect(world.ants.posX[antId]).toBe(startX);
+    expect(world.ants.posY[antId]).toBe(startY);
+  });
+
+  it('6. full deposit clears wait flag (defense in depth — wait should never coexist with Idle)', () => {
+    const { world, colony, antId } = setupSaturatedColony();
+    // Pre-seed wait (synthetic — antDepositFood won't both enter and exit
+    // wait in the same call, but if a slot is reused the flag must zero).
+    world.ants.waitingDeposit[antId] = 1;
+    // Make the chamber depositable so antDepositFood succeeds.
+    colony.chambers[0]!.foodStored = 0;
+    // Move ant into chamber footprint so chamber path is taken.
+    world.ants.posX[antId] = 1 << FP_SHIFT;
+    world.ants.posY[antId] = 1 << FP_SHIFT;
+
+    antDepositFood(world, colony, antId);
+
+    expect(world.ants.foodCarrying[antId]).toBe(0);
+    expect(world.ants.task[antId]).toBe(AntTask.Idle);
+    expect(world.ants.waitingDeposit[antId]).toBe(0);
+  });
+
+  it('7a. stale-flag self-clear — tickAntMovement clears waitingDeposit when ant is no longer Foraging+CarryingFood underground (defense in depth)', () => {
+    const { world, antId } = setupSaturatedColony();
+    world.ants.waitingDeposit[antId] = 1;
+    // Mutate the ant out of the wait-eligible state without going through
+    // antDepositFood. Simulates a future code path that flips task/subTask
+    // on a CarryingFood ant; the wake-check inside tickForagerActions
+    // would never fire because the carrier branch is gated on subTask.
+    world.ants.task[antId] = AntTask.Idle;
+    world.ants.subTask[antId] = 0;
+
+    const rng = new Rng(0);
+    const digFlowFields = createDigFlowFields();
+    const entranceFlowFields = createEntranceFlowFields();
+    const chamberFlowFields = createChamberFlowFields();
+    tickAntMovement(world, rng, digFlowFields, entranceFlowFields, chamberFlowFields);
+
+    // Stale flag detected and zeroed; the ant is free to move per its
+    // current state on subsequent ticks.
+    expect(world.ants.waitingDeposit[antId]).toBe(0);
+  });
+
+  it('8. simVersion gate — LEGACY (2) does NOT set wait flag (replay determinism)', () => {
+    const { world, colony, antId } = setupSaturatedColony();
+    world.simVersion = LEGACY_SIM_VERSION;
+
+    antDepositFood(world, colony, antId);
+
+    // Same surface behavior — leftover stays on ant, no Idle flip — but
+    // crucially, no wait flag was set so the ant resumes oscillating exactly
+    // as it did pre-#27.
+    expect(world.ants.waitingDeposit[antId]).toBe(0);
+    expect(world.ants.foodCarrying[antId]).toBe(512);
     expect(world.ants.task[antId]).toBe(AntTask.Foraging);
   });
 });

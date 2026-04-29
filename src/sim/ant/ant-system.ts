@@ -269,6 +269,37 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
     const toPool = remaining < space ? remaining : (space > 0 ? space : 0);
     colony.foodStored += toPool;
     remaining -= toPool;
+
+    // Issue #27 — carrier wait state. Enter wait only when there is genuinely
+    // nowhere in the colony to deposit:
+    //   (i)   the entrance fallback made zero progress (pool already at cap)
+    //   (ii)  the ant still has carry leftover (remaining > 0)
+    //   (iii) NO FoodStorage chamber is depositable (otherwise the ant should
+    //         be routed to that chamber by next tick's movement, not parked
+    //         at the entrance)
+    //   (iv)  simVersion >= 3 (replay determinism — pre-#27 saves stay on
+    //         the legacy oscillation path)
+    // Without check (iii), a carrier at the entrance would re-enter wait the
+    // same tick its wake-check fires for "chamber became depositable", since
+    // antDepositFood is called immediately after the wake clear and trips on
+    // the still-full entrance pool.
+    if (toPool === 0 && remaining > 0 && world.simVersion >= 3) {
+      let anyChamberDepositable = false;
+      for (let c = 0; c < colony.chambers.length; c++) {
+        if (isFoodChamberDepositable(colony.chambers[c]!)) {
+          anyChamberDepositable = true;
+          break;
+        }
+      }
+      if (!anyChamberDepositable) {
+        world.ants.waitingDeposit[antId] = 1;
+        // Clear the outward heading so a future wake-up rebuilds routing fresh
+        // rather than continuing a stale return-to-entrance bearing.
+        world.ants.searchHeadingX[antId]    = 0;
+        world.ants.searchHeadingY[antId]    = 0;
+        world.ants.searchHeadingTicks[antId]= 0;
+      }
+    }
   }
 
   world.ants.foodCarrying[antId] = remaining;
@@ -295,6 +326,10 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
     world.ants.searchHeadingTicks[antId] = 0;
     world.ants.searchPrevTileX[antId] = -1;
     world.ants.searchPrevTileY[antId] = -1;
+    // Issue #27 — full deposit always clears any wait state. The ant is
+    // about to be reassigned by step 10a; whatever state it returns from
+    // (foraging, idle pool, etc.) starts with a clean waitingDeposit flag.
+    world.ants.waitingDeposit[antId] = 0;
   }
 }
 
@@ -377,7 +412,48 @@ export function tickForagerActions(world: WorldState): void {
       // Deposit path — arrival at FoodStorage chamber (preferred) OR entrance shaft (fallback).
       const colonyId = ants.colonyId[id]!;
       const colony = world.colonies[colonyId];
-      if (!colony) continue;
+      if (!colony) {
+        // Issue #27 — orphaned ant (colony deleted/defeated mid-tick). Clear
+        // any wait flag defensively so the ant can resume movement next tick
+        // if its alive bit somehow survives the colony's destruction. In
+        // practice colony loss currently zeros every member's `alive`, but
+        // this defends against future colony-merge or defection paths.
+        ants.waitingDeposit[id] = 0;
+        continue;
+      }
+
+      // Issue #27 — carrier wait gate. A waiting carrier (set by antDepositFood
+      // when the entrance fallback found the pool at cap) holds in place until
+      // SOMEWHERE in the colony can take a deposit. Wake conditions:
+      //   - any FoodStorage chamber is depositable, OR
+      //   - the entrance pool has headroom.
+      // The `colony.foodFlowFieldDirty` flag is unsuitable as a wake signal
+      // here: step 9 consumes and clears it BEFORE step 16b runs, so by the
+      // time tickForagerActions sees the colony, dirty is always false. The
+      // chamber-iteration check is stateless and immune to the dirty cycle.
+      // Iteration cost: O(chambers) only for ants currently in wait — the
+      // common case (no carriers in wait) skips this block entirely.
+      if (ants.waitingDeposit[id] === 1) {
+        let canDepositSomewhere = colony.foodStored < BASE_FOOD_STORAGE_CAPACITY;
+        if (!canDepositSomewhere) {
+          for (let c = 0; c < colony.chambers.length; c++) {
+            if (isFoodChamberDepositable(colony.chambers[c]!)) {
+              canDepositSomewhere = true;
+              break;
+            }
+          }
+        }
+        if (canDepositSomewhere) {
+          ants.waitingDeposit[id] = 0;
+          // Fall through to normal deposit handling. The ant didn't move this
+          // tick (tickAntMovement skipped it), so it's at the same entrance
+          // tile where it entered wait. The entrance fallback may now succeed
+          // (pool drained); if not, the deposit branch is a no-op and next
+          // tick's tickAntMovement re-routes via the recomputed flow field.
+        } else {
+          continue; // still nowhere to deposit; remain in wait
+        }
+      }
 
       const tileX = ants.posX[id]! >> FP_SHIFT;
       const tileY = ants.posY[id]! >> FP_SHIFT;
@@ -2358,6 +2434,29 @@ export function tickAntMovement(
     const task = ants.task[id]!;
     const zone = ants.zone[id]!;
     const foodCarrying = ants.foodCarrying[id]!;
+
+    // Issue #27 — carrier wait state holds the ant in place until the wake
+    // check in tickForagerActions clears the flag (a chamber became
+    // depositable or the entrance pool drained). Gate on the same predicate
+    // that admits entry (Underground + Foraging + CarryingFood) so that a
+    // future code path which mutates task/subTask on a waiting ant can't
+    // leave it pinned indefinitely — a flag mismatched with the ant's
+    // current task is treated as stale and cleared. The
+    // `tickForagerActions` block, by contrast, runs only inside the
+    // matching subTask branch, so its check is naturally gated.
+    if (ants.waitingDeposit[id] === 1) {
+      if (
+        zone === Zone.Underground &&
+        task === AntTask.Foraging &&
+        ants.subTask[id] === ForagingSubState.CarryingFood
+      ) {
+        continue; // skip movement, stay parked
+      }
+      // Stale flag — task/subTask/zone changed underneath us. Clear and
+      // fall through so this ant moves normally per its current state.
+      ants.waitingDeposit[id] = 0;
+    }
+
     let dx = 0;
     let dy = 0;
 

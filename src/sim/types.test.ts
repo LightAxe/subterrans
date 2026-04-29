@@ -27,14 +27,15 @@ describe('WorldState', () => {
       expect(world.rngState).toBe(4294967295);
     });
 
-    it('has exactly eleven fields (4 Phase 5 + 3 Phase 6 + 4 Phase 7)', () => {
+    it('has exactly twelve fields (4 Phase 5 + 3 Phase 6 + 4 Phase 7 + 1 issue #27)', () => {
       const world = createWorldState(0);
       const keys = Object.keys(world);
-      expect(keys).toHaveLength(11);
+      expect(keys).toHaveLength(12);
       expect(keys).toContain('tick');
       expect(keys).toContain('rngState');
       expect(keys).toContain('nextEntityId');
       expect(keys).toContain('commandQueue');
+      expect(keys).toContain('simVersion');
       expect(keys).toContain('ants');
       expect(keys).toContain('colonies');
       expect(keys).toContain('pheromoneGrids');

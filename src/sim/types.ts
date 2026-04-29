@@ -20,11 +20,48 @@ import { MAX_ENTITIES, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constan
 
 export type EntityId = number; // incrementing counter from 0, no recycling per PRD §1/§3
 
+/**
+ * Sim-behavior version. Independent of SAVE_FORMAT_VERSION (which gates the
+ * on-disk envelope shape). simVersion gates determinism-affecting algorithm
+ * changes that DON'T change the snapshot shape — old saves still load fine,
+ * but replay using the algorithm they were recorded under.
+ *
+ * LEGACY_SIM_VERSION (2) — issue #15 baseline. withdrawFood drains
+ * FoodStorage chambers in colony.chambers array order; no carrier
+ * WaitingToDeposit state.
+ *
+ * LATEST_SIM_VERSION (3) — issue #27 fix. withdrawFood drains the fullest
+ * FoodStorage chamber first (array-index tie-break); carriers enter
+ * WaitingToDeposit when storage is fully saturated.
+ *
+ * Saves missing the `simVersion` field load with LEGACY_SIM_VERSION (sticky).
+ * New worlds (createWorldState) start at LATEST_SIM_VERSION. Sticky on load
+ * preserves SCEN-06 replay determinism — a save recorded before this fix
+ * keeps producing identical ticks across reload, just under the old drain
+ * order and without the wait-state.
+ */
+export const LEGACY_SIM_VERSION = 2 as const;
+export const LATEST_SIM_VERSION = 3 as const;
+
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick
   rngState: number;         // Mulberry32 state (uint32); initialized from seed
   nextEntityId: EntityId;   // starts at 0 (PRD §3); allocateEntityId returns current and post-increments
   commandQueue: SimCommand[]; // staging seam — drained by platform accumulator between ticks
+
+  /**
+   * Sim behavior version — gates determinism-affecting algorithm changes that
+   * post-date issue #27 (carrier-oscillation fix). Sticky on load: a save
+   * recorded at version N replays at version N regardless of the current
+   * latest. New worlds use the latest version (LATEST_SIM_VERSION).
+   *
+   * Versions:
+   *   2 = pre-fix array-order withdrawFood drain (issue #15 baseline).
+   *   3 = drain-fullest-first withdrawFood + carrier WaitingToDeposit state.
+   *
+   * Round-trips through copyWorldState and save/load.
+   */
+  simVersion: number;
 
   // Phase 6 additions (PRD §3):
   ants: AntComponents;                          // SoA ant component storage — 17 parallel Int32Arrays
@@ -50,6 +87,7 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
     rngState: seed >>> 0, // coerce to uint32
     nextEntityId: 0,      // PRD §3 line 130: starts at 0, no recycling
     commandQueue: [],
+    simVersion: LATEST_SIM_VERSION,
     ants: createAntComponents(maxEntities),
     colonies: {},
     pheromoneGrids: {},
@@ -79,6 +117,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   dst.tick = src.tick;
   dst.rngState = src.rngState;
   dst.nextEntityId = src.nextEntityId;
+  dst.simVersion = src.simVersion;
   dst.commandQueue = src.commandQueue.slice(); // small in practice (user-input rate) — PRD §3 accepts this as the only Phase 1 allocation
 
   // --- AntComponents: 19 TypedArray.set calls (zero allocation) ---
@@ -117,6 +156,10 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   // double-buffer so every prev-frame grid lookup sees the same value as the
   // current frame. See 09.1-00-PLAN.md Task 2.
   dst.ants.currentGridColonyId.set(src.ants.currentGridColonyId);
+  // Issue #27 — carrier wait flag. Round-trips so render's interpolated frame
+  // sees the same wait state as the current frame, and so SCEN-06 replay
+  // determinism is preserved across save/reload boundaries.
+  dst.ants.waitingDeposit.set(src.ants.waitingDeposit);
 
   // --- colonies: delete stale dst keys; upsert each src colony ---
   // Remove dst colonies that no longer exist in src

@@ -123,6 +123,29 @@ export interface AntComponents {
    * per-ant SoA footprint to +1 byte instead of +4.
    */
   readonly currentGridColonyId: Uint8Array;
+  /**
+   * Issue #27 — carrier wait flag. 1 = ant is in WaitingToDeposit state
+   * (Foraging + CarryingFood + nowhere to deposit), 0 = normal. While set,
+   * tickAntMovement skips the ant and tickForagerActions checks two wake
+   * conditions: any FoodStorage chamber becomes depositable, OR the
+   * entrance pool drops below BASE_FOOD_STORAGE_CAPACITY.
+   *
+   * Uint8Array: a single bit-state field, +1 byte per entity.
+   *
+   * Reset to 0 in initAnt. NOT cleared by killAnt (which only zeros
+   * `alive`); the stale flag is never observed because every per-ant loop
+   * gates on `alive[id] === 1` before reading task/subTask/waitingDeposit.
+   * Entity IDs are monotonic (PRD §3 — no recycling), so the only paths
+   * that reach this slot's storage again are inert reads guarded by the
+   * alive check.
+   *
+   * Round-trips through copyWorldState and save/load. simVersion < 3 saves
+   * load with the field absent → all-zero default (no ants in wait). The
+   * wait-set code paths (antDepositFood enter, tickForagerActions wake) are
+   * additionally gated on `world.simVersion >= 3`, so legacy replays never
+   * mutate this field at runtime.
+   */
+  readonly waitingDeposit: Uint8Array;
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +209,8 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
     // correct: PLAYER_COLONY_ID is conventionally 0; initAnt overwrites with
     // spec.colonyId at spawn.
     currentGridColonyId: new Uint8Array(maxEntities),
+    // Issue #27 — carrier wait flag. Zero-init = "not waiting" (correct default).
+    waitingDeposit: new Uint8Array(maxEntities),
   };
 }
 
@@ -256,6 +281,9 @@ export function initAnt(ants: AntComponents, id: EntityId, spec: InitAntSpec): v
   ants.searchHeadingTicks[id]= 0;
   ants.searchPrevTileX[id]   = -1;
   ants.searchPrevTileY[id]   = -1;
+  // Issue #27 — fresh ant is never in wait state (must traverse a failed
+  // deposit cycle to enter it).
+  ants.waitingDeposit[id]    = 0;
 }
 
 /**
