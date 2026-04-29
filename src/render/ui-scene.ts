@@ -235,8 +235,10 @@ export class UIScene extends Phaser.Scene {
     // cleanup may rename to `sliderLabels` alongside the file rename.
     //
     // Phase 8.5 invariant preserved: labels render INSIDE HUD.TRIANGLE zone
-    // (x: [8,128), y: [456,576)) so pointer clicks on the visible text don't
-    // fall through to world input. trackY=516 - 22 = 494, well inside the zone.
+    // (x: [8,128), y: [532,576)) so pointer clicks on the visible text don't
+    // fall through to world input. After issue #13's slider-zone shrink the
+    // label sits flush at the top edge — trackY=554 - 22 = 532 = HUD.TRIANGLE.y,
+    // and the 10px label text occupies y:[532,542], inside the zone.
     this.triangleLabels = [
       this.add.text(
         HUD.TRIANGLE.x + 4,

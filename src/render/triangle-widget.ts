@@ -15,7 +15,7 @@ import { HUD, COLOR_PLAYER_COLONY } from './sprites.js';
 import type { GfxLike } from './draw-surface.js';
 
 // ---------------------------------------------------------------------------
-// Slider track geometry inside HUD.TRIANGLE zone (x:[8,128), y:[456,576))
+// Slider track geometry inside HUD.TRIANGLE zone (x:[8,128), y:[532,576))
 //
 // Track centerline at the vertical midpoint of the zone. Track length spans
 // from a 16px inset on the left to a 16px inset on the right of the zone,
@@ -24,7 +24,7 @@ import type { GfxLike } from './draw-surface.js';
 
 const TRACK_LEFT  = HUD.TRIANGLE.x + 16;                  // 24
 const TRACK_RIGHT = HUD.TRIANGLE.x + HUD.TRIANGLE.w - 16; // 112
-const TRACK_Y     = HUD.TRIANGLE.y + HUD.TRIANGLE.h / 2;  // 516
+const TRACK_Y     = HUD.TRIANGLE.y + HUD.TRIANGLE.h / 2;  // 554
 const TRACK_LEN   = TRACK_RIGHT - TRACK_LEFT;             // 88
 
 export const SLIDER_GEOMETRY = {
