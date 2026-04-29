@@ -106,6 +106,8 @@ describe('HUD zone layout', () => {
     expect(HUD.TRIANGLE).toMatchObject({ x: 8, y: 532, w: 120, h: 44 });
     expect(HUD.MINIMAP).toMatchObject({ x: 632, y: 424, w: 160, h: 160 });
     expect(HUD.VIEW_TOGGLE).toMatchObject({ x: 632, y: 396, w: 80, h: 24 });
+    // Issue #14: colony-toggle button stacked just above VIEW_TOGGLE.
+    expect(HUD.UNDERGROUND_COLONY_TOGGLE).toMatchObject({ x: 632, y: 372, w: 112, h: 22 });
     expect(HUD.SPEED).toMatchObject({ x: 320, y: 552, w: 160, h: 32 });
     expect(HUD.SAVE_ICON).toMatchObject({ x: 772, y: 8, w: 20, h: 20 });
   });
@@ -118,6 +120,12 @@ describe('HUD zone layout', () => {
   it('VIEW_TOGGLE is directly above MINIMAP', () => {
     expect(HUD.VIEW_TOGGLE.x).toBe(HUD.MINIMAP.x);
     expect(HUD.VIEW_TOGGLE.y + HUD.VIEW_TOGGLE.h).toBeLessThanOrEqual(HUD.MINIMAP.y);
+  });
+
+  it('UNDERGROUND_COLONY_TOGGLE sits directly above VIEW_TOGGLE without overlap (issue #14)', () => {
+    expect(HUD.UNDERGROUND_COLONY_TOGGLE.x).toBe(HUD.VIEW_TOGGLE.x);
+    expect(HUD.UNDERGROUND_COLONY_TOGGLE.y + HUD.UNDERGROUND_COLONY_TOGGLE.h)
+      .toBeLessThanOrEqual(HUD.VIEW_TOGGLE.y);
   });
 });
 

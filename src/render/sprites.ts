@@ -155,6 +155,19 @@ export const HUD = {
   /** View toggle button: switches between surface and underground views. */
   VIEW_TOGGLE: { x: 632, y: 396, w: 80,  h: 24  },
   /**
+   * Issue #14 — colony toggle button (underground view only). Flips the
+   * underground render between PLAYER and ENEMY grids; equivalent to the
+   * X keybind. Visible only while activeView === 'underground'. Sits just
+   * above VIEW_TOGGLE so the underground HUD chrome stacks vertically.
+   *
+   * Width 112 fits "Enemy Colony (X)" at fontSize 12 with breathing room
+   * (~6 px/char × 16 chars + 8 px padding ≈ 104 px). 100 px was the
+   * original sizing and clipped right against the rightmost glyph; 112
+   * gives a comfortable margin without crowding the canvas-right edge
+   * (canvas width 800; toggle right edge 744 leaves 56 px for SAVE_ICON).
+   */
+  UNDERGROUND_COLONY_TOGGLE: { x: 632, y: 372, w: 112, h: 22 },
+  /**
    * Save icon zone.
    * Phase 9 layout reservation — Phase 8 draws nothing here.
    * Phase 9 wires autosave indicator rendering.

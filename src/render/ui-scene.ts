@@ -21,7 +21,7 @@
 
 import * as Phaser from 'phaser';
 import type { ViewState } from './camera.js';
-import { toggleView } from './camera.js';
+import { toggleView, toggleUndergroundColony } from './camera.js';
 import type { WorldState } from '../sim/types.js';
 import { HUD } from './sprites.js';
 import { GameOutcome } from '../sim/game-over.js';
@@ -267,18 +267,23 @@ export class UIScene extends Phaser.Scene {
     this.viewToggleText.setPadding(4);
     this.viewToggleText.setScrollFactor(0);
 
-    // Phase 09.1 Chunk 2 — underground colony label. Placed above the
-    // view-toggle button (HUD.VIEW_TOGGLE at y=396) so both pieces of
-    // underground chrome live in the same corner. Visibility is bound to
-    // activeView === 'underground' in update(); text follows
-    // activeUndergroundColonyId (binary toggle via X keybind).
+    // Phase 09.1 Chunk 2 + issue #14 — underground colony toggle button.
+    // Sits above VIEW_TOGGLE (HUD.UNDERGROUND_COLONY_TOGGLE) so the two
+    // underground-only HUD elements stack vertically. Visibility is bound
+    // to activeView === 'underground' in update(); text follows
+    // activeUndergroundColonyId (binary toggle).
+    //
+    // Issue #14 made this a CLICKABLE button (was a passive label) — the
+    // X keybind alone left invasion undiscoverable. Click + key both
+    // dispatch toggleUndergroundColony. The "(X)" hint surfaces the key
+    // for keyboard players. Background matches VIEW_TOGGLE styling so the
+    // two read as a stacked pair of toggle buttons.
     this.undergroundLabelText = this.add.text(
-      HUD.VIEW_TOGGLE.x,
-      HUD.VIEW_TOGGLE.y - 18,
-      'Your Colony',
-      { color: '#ffffff', fontSize: '12px', backgroundColor: '#000000' },
+      HUD.UNDERGROUND_COLONY_TOGGLE.x + 4,
+      HUD.UNDERGROUND_COLONY_TOGGLE.y + 4,
+      'Your Colony (X)',
+      { color: '#ffffff', fontSize: '12px' },
     );
-    this.undergroundLabelText.setPadding(4);
     this.undergroundLabelText.setScrollFactor(0);
     this.undergroundLabelText.setVisible(false);
 
@@ -389,7 +394,12 @@ export class UIScene extends Phaser.Scene {
         const overHud =
              this.isInsideRect(pointer.x, pointer.y, HUD.TRIANGLE)
           || this.isInsideRect(pointer.x, pointer.y, HUD.MINIMAP)
-          || this.isInsideRect(pointer.x, pointer.y, HUD.VIEW_TOGGLE);
+          || this.isInsideRect(pointer.x, pointer.y, HUD.VIEW_TOGGLE)
+          // Issue #14 — colony-toggle button. Without this entry, a click
+          // on the new toggle while the ant-activity panel is up would
+          // be classified as "world click", dismissing the panel and
+          // dropping the toggle dispatch.
+          || this.isInsideRect(pointer.x, pointer.y, HUD.UNDERGROUND_COLONY_TOGGLE);
         if (!overHud) {
           // Click on the world — dismiss and consume. `return` prevents
           // any further UIScene handling; the deferred hide prevents the
@@ -407,6 +417,17 @@ export class UIScene extends Phaser.Scene {
       // View toggle button
       if (this.isInsideRect(pointer.x, pointer.y, HUD.VIEW_TOGGLE)) {
         toggleView(this.viewState);
+        return;
+      }
+      // Issue #14 — underground colony toggle button. Mirrors the X
+      // keybind in game-scene.ts. Gated on activeView === 'underground'
+      // so a stray click on the surface view (where the button is
+      // invisible) doesn't flip the underground colony invisibly.
+      if (
+        this.viewState.activeView === 'underground' &&
+        this.isInsideRect(pointer.x, pointer.y, HUD.UNDERGROUND_COLONY_TOGGLE)
+      ) {
+        toggleUndergroundColony(this.viewState);
         return;
       }
       // Minimap click
@@ -551,18 +572,30 @@ export class UIScene extends Phaser.Scene {
       this.viewState.activeView === 'surface' ? 'Underground >' : '< Surface',
     );
 
-    // Phase 09.1 Chunk 2 — underground colony label. Only visible in the
-    // underground view; driven by the binary toggle reducer in camera.ts.
-    // Published to window.__phase9_ui.activeUndergroundLabel every frame the
-    // label is visible so Playwright can poll it without OCR.
+    // Phase 09.1 Chunk 2 + issue #14 — underground colony toggle button.
+    // Only visible in the underground view; driven by the binary toggle
+    // reducer in camera.ts. The Playwright label feed
+    // (window.__phase9_ui.activeUndergroundLabel) keeps the bare data
+    // string ('Your Colony' / 'Enemy Colony') so existing tests don't have
+    // to know about the (X) hint affordance the button now renders.
     const undergroundLabel: ActiveUndergroundLabel =
       this.viewState.activeUndergroundColonyId === ENEMY_COLONY_ID
         ? 'Enemy Colony'
         : 'Your Colony';
-    this.undergroundLabelText.setText(undergroundLabel);
-    this.undergroundLabelText.setVisible(
-      this.viewState.activeView === 'underground',
-    );
+    const undergroundShowing = this.viewState.activeView === 'underground';
+    if (undergroundShowing) {
+      // Draw the toggle background as a Graphics fill (matches VIEW_TOGGLE
+      // pattern below) so the click zone reads as a button.
+      this.gfx.fillStyle(0x333333, 1);
+      this.gfx.fillRect(
+        HUD.UNDERGROUND_COLONY_TOGGLE.x,
+        HUD.UNDERGROUND_COLONY_TOGGLE.y,
+        HUD.UNDERGROUND_COLONY_TOGGLE.w,
+        HUD.UNDERGROUND_COLONY_TOGGLE.h,
+      );
+    }
+    this.undergroundLabelText.setText(`${undergroundLabel} (X)`);
+    this.undergroundLabelText.setVisible(undergroundShowing);
     // Expose regardless of visibility so tests can assert the underlying
     // toggle state even if the surface view is active. Cheap string write.
     setActiveUndergroundLabel(undergroundLabel);

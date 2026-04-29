@@ -34,7 +34,7 @@ import type { WorldState } from '../sim/types.js';
 import type { ViewState } from '../render/camera.js';
 import { VIEWPORT_WIDTH_TILES, VIEWPORT_HEIGHT_TILES } from '../render/camera.js';
 import { HUD, TILE_SIZE_PX } from '../render/sprites.js';
-import { PLAYER_COLONY_ID } from '../sim/constants.js';
+import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 import type { SimCommand } from '../sim/commands.js';
 
 // ---------------------------------------------------------------------------
@@ -936,5 +936,74 @@ describe('resetUndergroundInputState', () => {
     expect(state.isDragging).toBe(true);
     expect(state.lastMarkedTileX).toBe(5);
     expect(state.lastMarkedTileY).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #14 — read-only when viewing enemy underground
+// ---------------------------------------------------------------------------
+
+describe('underground-input read-only when activeUndergroundColonyId !== PLAYER_COLONY_ID', () => {
+  // Helper: viewport pointing at the enemy underground.
+  function makeEnemyView(): ViewState {
+    return {
+      activeView: 'underground',
+      surfaceCamera: { x: 64, y: 32, viewportWidth: VIEWPORT_WIDTH_TILES, viewportHeight: VIEWPORT_HEIGHT_TILES },
+      undergroundCamera: { x: 64, y: 32, viewportWidth: VIEWPORT_WIDTH_TILES, viewportHeight: VIEWPORT_HEIGHT_TILES },
+      undergroundVisited: true,
+      activeUndergroundColonyId: ENEMY_COLONY_ID,
+    };
+  }
+
+  it('handleUndergroundLeftClick is a no-op while viewing the enemy hive', () => {
+    const world = makeWorld();
+    const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
+    ugSet(grid, 5, 5, UndergroundTileState.Solid);
+    const vs = makeEnemyView();
+    const state = makeState();
+    const { x, y } = tileToScreen(5, 5, 64, 32);
+    handleUndergroundLeftClick(world, vs, x, y, state);
+    // No command emitted, no drag armed. The click was rejected silently —
+    // dispatching a MarkDigTile against PLAYER_COLONY_ID at the same coords
+    // would silently scribble on the player's grid the player can't see.
+    expect(world.commandQueue).toHaveLength(0);
+    expect(state.isDragging).toBe(false);
+  });
+
+  it('handleUndergroundLeftClick on the enemy view clears any lingering isDragging flag', () => {
+    // Defensive: a prior gesture that didn't see a clean mouseup (e.g.,
+    // focus-loss) could leave isDragging=true. The enemy-view guard must
+    // also reset it so a subsequent flip back to the player view doesn't
+    // resume the stale stroke from a stale lastMarkedTile.
+    const world = makeWorld();
+    ugSet(world.undergroundGrids[PLAYER_COLONY_ID]!, 5, 5, UndergroundTileState.Solid);
+    const vs = makeEnemyView();
+    const state = makeState(/*isDragging*/ true, 4, 4);
+    const { x, y } = tileToScreen(5, 5, 64, 32);
+    handleUndergroundLeftClick(world, vs, x, y, state);
+    expect(state.isDragging).toBe(false);
+    expect(world.commandQueue).toHaveLength(0);
+  });
+
+  it('handleUndergroundDrag aborts and clears isDragging when activeUndergroundColonyId flips to enemy mid-drag', () => {
+    const world = makeWorld();
+    const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
+    ugSet(grid, 5, 5, UndergroundTileState.Solid);
+    const vs = makeEnemyView();
+    const state = makeState(/*isDragging*/ true, 4, 5);
+    const { x, y } = tileToScreen(5, 5, 64, 32);
+    handleUndergroundDrag(world, vs, x, y, state);
+    expect(world.commandQueue).toHaveLength(0);
+    expect(state.isDragging).toBe(false);
+  });
+
+  it('handleUndergroundRightClick is a no-op while viewing the enemy hive', () => {
+    const world = makeWorld();
+    const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
+    ugSet(grid, 5, 5, UndergroundTileState.Marked);
+    const vs = makeEnemyView();
+    const { x, y } = tileToScreen(5, 5, 64, 32);
+    handleUndergroundRightClick(world, vs, x, y);
+    expect(world.commandQueue).toHaveLength(0);
   });
 });

@@ -163,8 +163,15 @@ export function drawSurfaceEntities(
   // Phase 8.5 readability: render a 2-px dirt rim around the dark hole interior
   // so the entrance reads as a dug-out hole with a piled-dirt mound, not an
   // arbitrary black square.
+  //
+  // Issue #14 cue: enemy entrances also get a 1-px enemy-colony perimeter
+  // overlaid on the dirt rim so the player reads them as "rally here to
+  // invade" targets rather than just neutral terrain features. Player
+  // entrances are unchanged — the existing brown-mound style still reads
+  // as "my entrance."
   for (const colony of Object.values(curr.colonies)) {
     if (!colony.entrances) continue;
+    const isEnemy = colony.colonyId !== PLAYER_COLONY_ID;
     for (const entrance of colony.entrances) {
       const sx = (entrance.surfaceTileX - left) * TILE_SIZE_PX;
       const sy = (entrance.surfaceTileY - top)  * TILE_SIZE_PX;
@@ -173,6 +180,16 @@ export function drawSurfaceEntities(
       gfx.fillRect(sx, sy, TILE_SIZE_PX, TILE_SIZE_PX);
       gfx.fillStyle(COLOR_SURFACE_ENTRANCE_HOLE, 1);
       gfx.fillRect(sx + 2, sy + 2, TILE_SIZE_PX - 4, TILE_SIZE_PX - 4);
+      if (isEnemy) {
+        // 1-px enemy-colony border. Four thin fillRects draw a perimeter
+        // ring inside the tile's outermost pixel (no GfxLike.strokeRect
+        // available; the four-rect pattern is the established alternative).
+        gfx.fillStyle(COLOR_ENEMY_COLONY, 1);
+        gfx.fillRect(sx,                  sy,                  TILE_SIZE_PX, 1); // top
+        gfx.fillRect(sx,                  sy + TILE_SIZE_PX-1, TILE_SIZE_PX, 1); // bottom
+        gfx.fillRect(sx,                  sy + 1,              1, TILE_SIZE_PX - 2); // left
+        gfx.fillRect(sx + TILE_SIZE_PX-1, sy + 1,              1, TILE_SIZE_PX - 2); // right
+      }
     }
   }
 

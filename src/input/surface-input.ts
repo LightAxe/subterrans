@@ -94,6 +94,50 @@ export function isEmptySurfaceTile(world: WorldState, tileX: number, tileY: numb
 }
 
 // ---------------------------------------------------------------------------
+// isForeignColonyEntrance — issue #14 invasion enabler
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true when (tileX, tileY) is the surface tile of an entrance owned
+ * by a colony OTHER than `ownColonyId`. Bounds and food-pile checks are not
+ * required here — handleSurfaceLeftClick has already evaluated those.
+ *
+ * Issue #14: enables the player to left-click an enemy entrance to rally
+ * Fighting ants there. The Phase 09.1 cross-grid descent + combat path is
+ * already wired (REQ-C3a, REQ-C4a); the rally input was the missing seam.
+ *
+ * Closed enemy entrances are intentionally still eligible — the rally-tile
+ * carve-out in updateFightAntTargets walks fighters onto the exact tile,
+ * but the descent-intent gate in tickAntMovement requires `isOpen` before
+ * crossing into the enemy grid. So a rally on a closed enemy entrance
+ * piles fighters at the door, ready to invade the moment the enemy AI
+ * opens it. That's the right read of "I want to attack here" — no need
+ * for the input layer to second-guess open/closed.
+ *
+ * ADR-0006: world.colonies is a PLAIN OBJECT. Uses Object.keys (per the
+ * existing isEmptySurfaceTile pattern).
+ */
+export function isForeignColonyEntrance(
+  world: WorldState,
+  tileX: number,
+  tileY: number,
+  ownColonyId: ColonyId,
+): boolean {
+  if (tileX < 0 || tileY < 0) return false;
+  if (tileX >= world.surface.width || tileY >= world.surface.height) return false;
+  for (const key of Object.keys(world.colonies)) {
+    const cid = Number(key) as ColonyId;
+    if (cid === ownColonyId) continue;
+    const colony = world.colonies[cid];
+    if (colony === undefined) continue;
+    for (const entrance of colony.entrances) {
+      if (entrance.surfaceTileX === tileX && entrance.surfaceTileY === tileY) return true;
+    }
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // findFoodPileAt — O(n) scan over world.foodPiles
 // ---------------------------------------------------------------------------
 
@@ -138,7 +182,7 @@ export function handleSurfaceLeftClick(
   state: SurfaceInputState,
 ): void {
   if (viewState.activeView !== 'surface') return;
-  if (isPointerOverHUD(screenX, screenY)) return;
+  if (isPointerOverHUD(screenX, screenY, viewState)) return;
   // Pan-mode guard: while Space is held or a pan gesture is already in flight,
   // the left-click is the pan trigger — not a world action.
   if (panInputState.spaceHeld || panInputState.isPanning) return;
@@ -180,7 +224,30 @@ export function handleSurfaceLeftClick(
     return;
   }
 
-  // Empty-tile fallthrough (priority 3): set rally point for player colony (SURF-04).
+  // Foreign-colony entrance rally (priority 3 — issue #14): left-click on an
+  // enemy colony's open entrance tile sets the player's rally point there.
+  // This is the input piece that unlocks Phase 09.1's invasion mechanic —
+  // Fighting ants rally to the tile, the rally-on-entrance carve-out in
+  // updateFightAntTargets keeps them walking onto it, and the descent-intent
+  // gate in tickAntMovement crosses them into the enemy underground grid.
+  // Own-colony entrance left-click stays a no-op so the right-click → left-
+  // click entrance designation flow is undisturbed.
+  //
+  // Ordering note: food-pile mark (priority 2) wins over foreign-entrance
+  // rally if a food pile and an enemy entrance somehow share a tile. The
+  // scenario seeder (createScenario) places enemy entrances at the colony
+  // start tile and food piles at distinct tiles, so this collision can't
+  // arise in practice today. If a future feature lets food piles spawn
+  // anywhere, prefer the food-mark — the player can always rally on an
+  // adjacent tile (the rally-on-entrance carve-out only requires the EXACT
+  // entrance tile, but a one-tile-off rally still routes fighters to the
+  // entrance via the existing path-to-rally walk).
+  if (isForeignColonyEntrance(world, tileX, tileY, PLAYER_COLONY_ID)) {
+    handleSetRallyPoint(world, tileX, tileY, PLAYER_COLONY_ID);
+    return;
+  }
+
+  // Empty-tile fallthrough (priority 4): set rally point for player colony (SURF-04).
   if (isEmptySurfaceTile(world, tileX, tileY)) {
     handleSetRallyPoint(world, tileX, tileY, PLAYER_COLONY_ID);
   }
@@ -239,7 +306,7 @@ export function handleSurfaceRightClick(
   playerColonyId: ColonyId = PLAYER_COLONY_ID,
 ): void {
   if (viewState.activeView !== 'surface') return;
-  if (isPointerOverHUD(screenX, screenY)) return;
+  if (isPointerOverHUD(screenX, screenY, viewState)) return;
   const { tileX, tileY } = screenToTile(screenX, screenY, viewState.surfaceCamera);
   if (tileX < 0 || tileY < 0) return;
 

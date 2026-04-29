@@ -134,7 +134,25 @@ export function handleUndergroundLeftClick(
   state: UndergroundInputState,
 ): void {
   if (viewState.activeView !== 'underground') return;
-  if (isPointerOverHUD(screenX, screenY)) return;
+  // Issue #14: when the player flips to view the enemy underground (X
+  // keybind), all underground commands target the PLAYER's grid (every
+  // dispatch below uses PLAYER_COLONY_ID as the colonyId). A click on the
+  // enemy view at screen coords (sx, sy) would silently mark a dig tile in
+  // the player's grid at the same world coords — the player can't see it,
+  // and replay would diverge from the visual state on screen. Treat the
+  // enemy view as read-only.
+  //
+  // Defensive: clear any lingering `isDragging` flag from a prior gesture
+  // that didn't get a clean mouseup (e.g., focus-loss). Without the
+  // explicit reset, a stale `isDragging=true` paired with a stale
+  // lastMarkedTile from the player view could resume scribbling dig
+  // marks if the player flips back via X. Symmetric with the abort path
+  // in handleUndergroundDrag.
+  if (viewState.activeUndergroundColonyId !== PLAYER_COLONY_ID) {
+    state.isDragging = false;
+    return;
+  }
+  if (isPointerOverHUD(screenX, screenY, viewState)) return;
   // Pan-mode guard: while Space is held or a pan gesture is already in flight,
   // the left-click/drag is the pan trigger — not a dig-mark.
   if (panInputState.spaceHeld || panInputState.isPanning) return;
@@ -200,7 +218,14 @@ export function handleUndergroundDrag(
 ): void {
   if (!state.isDragging) return;
   if (viewState.activeView !== 'underground') { state.isDragging = false; return; }
-  if (isPointerOverHUD(screenX, screenY)) return;
+  // Issue #14: same read-only guard as handleUndergroundLeftClick. If the
+  // player flipped to the enemy view mid-drag (X keybind), abort the stroke
+  // so it can't write through to the player's grid silently.
+  if (viewState.activeUndergroundColonyId !== PLAYER_COLONY_ID) {
+    state.isDragging = false;
+    return;
+  }
+  if (isPointerOverHUD(screenX, screenY, viewState)) return;
   // Pan-mode guard: if the player pressed Space mid-drag, treat it as a
   // clean cancel of the excavation drag so further pointer movement goes
   // through the pan handler exclusively.
@@ -331,7 +356,12 @@ export function handleUndergroundRightClick(
   screenY: number,
 ): void {
   if (viewState.activeView !== 'underground') return;
-  if (isPointerOverHUD(screenX, screenY)) return;
+  // Issue #14: read-only guard for the enemy underground view (X-toggle).
+  // Mirrors handleUndergroundLeftClick — every dispatch below targets
+  // PLAYER_COLONY_ID, so a right-click on the enemy view would silently
+  // hit the player's grid at the matching coords.
+  if (viewState.activeUndergroundColonyId !== PLAYER_COLONY_ID) return;
+  if (isPointerOverHUD(screenX, screenY, viewState)) return;
   const { tileX, tileY } = screenToTile(screenX, screenY, viewState.undergroundCamera);
   const grid = world.undergroundGrids[PLAYER_COLONY_ID];
   if (!grid) return;

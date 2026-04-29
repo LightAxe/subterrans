@@ -884,6 +884,91 @@ describe('drawSurfaceEntities — rally-point marker', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Issue #14 — enemy entrance border cue
+// ---------------------------------------------------------------------------
+
+describe('drawSurfaceEntities — enemy entrance border (issue #14)', () => {
+  function makeWorldWithEnemyEntrance(tileX = 10, tileY = 0): WorldState {
+    const w = createWorldState(1);
+    const player = createColonyRecord(PLAYER_COLONY_ID, 99);
+    player.entrances = [{ entranceId: 1, surfaceTileX: 0, surfaceTileY: 0, isOpen: true }];
+    player.rallyPoint = null;
+    player.digFlowFieldDirty = false;
+    player.priorityFoodPileId = null;
+    const enemyId = PLAYER_COLONY_ID + 1;
+    const enemy = createColonyRecord(enemyId, 88);
+    enemy.entrances = [{ entranceId: 2, surfaceTileX: tileX, surfaceTileY: tileY, isOpen: true }];
+    enemy.rallyPoint = null;
+    enemy.digFlowFieldDirty = false;
+    enemy.priorityFoodPileId = null;
+    w.colonies[PLAYER_COLONY_ID] = player;
+    w.colonies[enemyId]         = enemy;
+    return w;
+  }
+
+  it('emits 4 thin COLOR_ENEMY_COLONY fillRects forming a perimeter ring around the enemy entrance tile', () => {
+    const gfx = new MockGfx();
+    const sprites = new MockAntSprites();
+    const tileX = 10;
+    const tileY = 0;
+    const world = makeWorldWithEnemyEntrance(tileX, tileY);
+    const cam = makeCamera(tileX, tileY, 10, 4);
+    drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
+
+    // Find every fillRect emitted under COLOR_ENEMY_COLONY style — the
+    // perimeter ring is exactly 4 strokes (top/bottom/left/right).
+    const enemyRects: Array<[number, number, number, number]> = [];
+    let style: number | undefined;
+    for (const c of gfx.calls) {
+      if (c.method === 'fillStyle') style = c.args[0] as number;
+      else if (c.method === 'fillRect' && style === COLOR_ENEMY_COLONY) {
+        enemyRects.push(c.args as [number, number, number, number]);
+      }
+    }
+    expect(enemyRects.length).toBe(4);
+
+    // Compute expected screen-space tile origin and assert a 1-pixel ring.
+    const left = Math.floor(cam.x - cam.viewportWidth  / 2);
+    const top  = Math.floor(cam.y - cam.viewportHeight / 2);
+    const sx = (tileX - left) * TILE_SIZE_PX;
+    const sy = (tileY - top)  * TILE_SIZE_PX;
+    const expected = new Set([
+      [sx,                  sy,                  TILE_SIZE_PX, 1].join(','),                 // top
+      [sx,                  sy + TILE_SIZE_PX-1, TILE_SIZE_PX, 1].join(','),                 // bottom
+      [sx,                  sy + 1,              1, TILE_SIZE_PX - 2].join(','),             // left
+      [sx + TILE_SIZE_PX-1, sy + 1,              1, TILE_SIZE_PX - 2].join(','),             // right
+    ]);
+    for (const r of enemyRects) {
+      expect(expected.has(r.join(','))).toBe(true);
+    }
+  });
+
+  it('player entrance does NOT receive the enemy-color border', () => {
+    const gfx = new MockGfx();
+    const sprites = new MockAntSprites();
+    // Setup: only the player colony, no enemy.
+    const w = createWorldState(1);
+    const player = createColonyRecord(PLAYER_COLONY_ID, 99);
+    player.entrances = [{ entranceId: 1, surfaceTileX: 0, surfaceTileY: 0, isOpen: true }];
+    player.rallyPoint = null;
+    player.digFlowFieldDirty = false;
+    player.priorityFoodPileId = null;
+    w.colonies[PLAYER_COLONY_ID] = player;
+    const cam = makeCamera(0, 0, 10, 4);
+    drawSurfaceEntities(gfx, sprites, w, w, 0, cam);
+
+    // No enemy-colored fillRects anywhere.
+    let style: number | undefined;
+    let enemyRectCount = 0;
+    for (const c of gfx.calls) {
+      if (c.method === 'fillStyle') style = c.args[0] as number;
+      else if (c.method === 'fillRect' && style === COLOR_ENEMY_COLONY) enemyRectCount += 1;
+    }
+    expect(enemyRectCount).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests: drawSurface orchestrator
 // ---------------------------------------------------------------------------
 

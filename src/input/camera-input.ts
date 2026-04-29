@@ -116,7 +116,7 @@ export function resetDragState(dragState: DragState): void {
  *
  * Inclusion rule: x in [rect.x, rect.x + rect.w) and y in [rect.y, rect.y + rect.h).
  */
-export function isPointerOverHUD(px: number, py: number): boolean {
+export function isPointerOverHUD(px: number, py: number, viewState?: ViewState): boolean {
   // Ant-activity popup full-canvas mask — while the panel is visible OR
   // already dismissing (pendingHide), treat every screen pixel as HUD.
   //
@@ -153,6 +153,17 @@ export function isPointerOverHUD(px: number, py: number): boolean {
     HUD.MINIMAP,
     HUD.VIEW_TOGGLE,
   ];
+  // Issue #14 — colony toggle is rendered ONLY on the underground view
+  // (ui-scene.ts gates `setVisible` on activeView === 'underground'). Mask
+  // the click zone only when it's actually visible — otherwise a 100×22
+  // pixel patch above the minimap on the surface view becomes a silent
+  // dead zone that swallows rally / food-mark / entrance-designation
+  // clicks. Callers that don't have a ViewState handy (legacy or test
+  // contexts) pass undefined and the toggle stays unmasked, which is
+  // strictly safer than the always-masked alternative.
+  if (viewState !== undefined && viewState.activeView === 'underground') {
+    zones.push(HUD.UNDERGROUND_COLONY_TOGGLE);
+  }
   for (const zone of zones) {
     if (
       px >= zone.x &&
@@ -341,7 +352,7 @@ export function registerDragPan(scene: Phaser.Scene, viewState: ViewState): Drag
 
   scene.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
     if (!isPanTriggerDown(pointer)) return;
-    if (isPointerOverHUD(pointer.x, pointer.y)) return;
+    if (isPointerOverHUD(pointer.x, pointer.y, viewState)) return;
     dragState.active = true;
     dragState.lastX = pointer.x;
     dragState.lastY = pointer.y;
@@ -353,7 +364,7 @@ export function registerDragPan(scene: Phaser.Scene, viewState: ViewState): Drag
     if (!dragState.active) return;
     // Continue pan only while the originating trigger is still held.
     if (!isPanTriggerDown(pointer)) return;
-    if (isPointerOverHUD(pointer.x, pointer.y)) return;
+    if (isPointerOverHUD(pointer.x, pointer.y, viewState)) return;
 
     const dx = (pointer.x - dragState.lastX) / TILE_SIZE_PX;
     const dy = (pointer.y - dragState.lastY) / TILE_SIZE_PX;

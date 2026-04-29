@@ -16,6 +16,7 @@ import {
   handleSurfaceLeftClick,
   handleSurfaceRightClick,
   isEmptySurfaceTile,
+  isForeignColonyEntrance,
   handleSetRallyPoint,
   resetSurfaceInputState,
   type SurfaceInputState,
@@ -29,7 +30,7 @@ import type { WorldState } from '../sim/types.js';
 import type { ViewState } from '../render/camera.js';
 import { VIEWPORT_WIDTH_TILES, VIEWPORT_HEIGHT_TILES } from '../render/camera.js';
 import { HUD, TILE_SIZE_PX } from '../render/sprites.js';
-import { PLAYER_COLONY_ID } from '../sim/constants.js';
+import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 import type { SimCommand } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 
@@ -99,11 +100,12 @@ function makeWorld(overrides: {
 
 /** Build a minimal colony record stub with an optional rally point and entrances. */
 function makeColony(overrides: {
+  colonyId?: ColonyId;
   rallyPoint?: { tileX: number; tileY: number } | null;
   entrances?: Array<{ surfaceTileX: number; surfaceTileY: number }>;
 } = {}) {
   return {
-    colonyId: PLAYER_COLONY_ID as ColonyId,
+    colonyId: overrides.colonyId ?? (PLAYER_COLONY_ID as ColonyId),
     queenEntityId: 0,
     queenStarvationTimer: 0,
     foodStored: 0,
@@ -776,6 +778,96 @@ describe('surface-input rally-point fall-through (SURF-04)', () => {
     expect(cmd.tileX).toBe(7);
     expect(cmd.tileY).toBe(2);
     expect(cmd.issuedAtTick).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #14 — invade enemy hive: rally on enemy entrance
+// ---------------------------------------------------------------------------
+
+describe('isForeignColonyEntrance', () => {
+  it('returns true for an enemy entrance tile', () => {
+    const enemy = makeColony({
+      colonyId: ENEMY_COLONY_ID as ColonyId,
+      entrances: [{ surfaceTileX: 100, surfaceTileY: 0 }],
+    });
+    const world = makeWorld({
+      surfaceWidth: 128, surfaceHeight: 4,
+      colonies: { [ENEMY_COLONY_ID]: enemy } as unknown as WorldState['colonies'],
+    });
+    expect(isForeignColonyEntrance(world, 100, 0, PLAYER_COLONY_ID as ColonyId)).toBe(true);
+  });
+
+  it('returns false for the own-colony entrance tile (preserves designation flow)', () => {
+    const own = makeColony({ entrances: [{ surfaceTileX: 20, surfaceTileY: 0 }] });
+    const world = makeWorld({
+      surfaceWidth: 128, surfaceHeight: 4,
+      colonies: { [PLAYER_COLONY_ID]: own } as unknown as WorldState['colonies'],
+    });
+    expect(isForeignColonyEntrance(world, 20, 0, PLAYER_COLONY_ID as ColonyId)).toBe(false);
+  });
+
+  it('returns false for a tile with no entrance on it', () => {
+    const enemy = makeColony({
+      colonyId: ENEMY_COLONY_ID as ColonyId,
+      entrances: [{ surfaceTileX: 100, surfaceTileY: 0 }],
+    });
+    const world = makeWorld({
+      surfaceWidth: 128, surfaceHeight: 4,
+      colonies: { [ENEMY_COLONY_ID]: enemy } as unknown as WorldState['colonies'],
+    });
+    expect(isForeignColonyEntrance(world, 50, 1, PLAYER_COLONY_ID as ColonyId)).toBe(false);
+  });
+
+  it('returns false for out-of-bounds tile', () => {
+    const enemy = makeColony({
+      colonyId: ENEMY_COLONY_ID as ColonyId,
+      entrances: [{ surfaceTileX: 100, surfaceTileY: 0 }],
+    });
+    const world = makeWorld({
+      surfaceWidth: 128, surfaceHeight: 4,
+      colonies: { [ENEMY_COLONY_ID]: enemy } as unknown as WorldState['colonies'],
+    });
+    expect(isForeignColonyEntrance(world, -1, 0, PLAYER_COLONY_ID as ColonyId)).toBe(false);
+    expect(isForeignColonyEntrance(world, 200, 0, PLAYER_COLONY_ID as ColonyId)).toBe(false);
+  });
+});
+
+describe('handleSurfaceLeftClick — rally on enemy entrance (issue #14)', () => {
+  it('left-click on enemy entrance pushes SetRallyPointCommand for the player colony', () => {
+    const enemy = makeColony({
+      colonyId: ENEMY_COLONY_ID as ColonyId,
+      entrances: [{ surfaceTileX: 100, surfaceTileY: 0 }],
+    });
+    const world = makeWorld({
+      tick: 7,
+      surfaceWidth: 128, surfaceHeight: 4,
+      colonies: { [ENEMY_COLONY_ID]: enemy } as unknown as WorldState['colonies'],
+    });
+    const vs = makeViewState('surface', 64, 2);
+    const state = makeState();
+    const { x, y } = tileToScreen(100, 0, 64, 2);
+    handleSurfaceLeftClick(world, vs, x, y, state);
+    expect(world.commandQueue).toHaveLength(1);
+    const cmd = world.commandQueue[0] as { type: string; colonyId: number; tileX: number; tileY: number; issuedAtTick: number };
+    expect(cmd.type).toBe('SetRallyPoint');
+    expect(cmd.colonyId).toBe(PLAYER_COLONY_ID); // rally is the PLAYER's, not the enemy's
+    expect(cmd.tileX).toBe(100);
+    expect(cmd.tileY).toBe(0);
+    expect(cmd.issuedAtTick).toBe(7);
+  });
+
+  it('left-click on own entrance is still a no-op (entrance designation right-click flow undisturbed)', () => {
+    const own = makeColony({ entrances: [{ surfaceTileX: 20, surfaceTileY: 0 }] });
+    const world = makeWorld({
+      surfaceWidth: 128, surfaceHeight: 4,
+      colonies: { [PLAYER_COLONY_ID]: own } as unknown as WorldState['colonies'],
+    });
+    const vs = makeViewState('surface', 64, 2);
+    const state = makeState();
+    const { x, y } = tileToScreen(20, 0, 64, 2);
+    handleSurfaceLeftClick(world, vs, x, y, state);
+    expect(world.commandQueue).toHaveLength(0);
   });
 });
 

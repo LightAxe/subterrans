@@ -175,6 +175,38 @@ describe('isPointerOverHUD', () => {
     });
   });
 
+  describe('UNDERGROUND_COLONY_TOGGLE zone (issue #14)', () => {
+    // Helper: a minimal viewState fixture for the conditional-mask path.
+    function vs(activeView: 'surface' | 'underground'): import('../render/camera.js').ViewState {
+      return {
+        activeView,
+        surfaceCamera: { x: 0, y: 0, viewportWidth: 1, viewportHeight: 1 },
+        undergroundCamera: { x: 0, y: 0, viewportWidth: 1, viewportHeight: 1 },
+        undergroundVisited: true,
+        activeUndergroundColonyId: 1,
+      };
+    }
+
+    it('masks the colony-toggle zone ONLY when activeView === underground', () => {
+      const inside = [HUD.UNDERGROUND_COLONY_TOGGLE.x + 5, HUD.UNDERGROUND_COLONY_TOGGLE.y + 5] as const;
+      // Underground view → the toggle is rendered → click zone is masked.
+      expect(isPointerOverHUD(inside[0], inside[1], vs('underground'))).toBe(true);
+      // Surface view → the toggle is invisible → masking it would create a
+      // dead zone above the minimap. Click zone must NOT be masked.
+      expect(isPointerOverHUD(inside[0], inside[1], vs('surface'))).toBe(false);
+      // Legacy / no-viewState path stays unmasked too (safe default).
+      expect(isPointerOverHUD(inside[0], inside[1])).toBe(false);
+    });
+
+    it('returns false for a point above the colony-toggle button', () => {
+      expect(isPointerOverHUD(
+        HUD.UNDERGROUND_COLONY_TOGGLE.x + 5,
+        HUD.UNDERGROUND_COLONY_TOGGLE.y - 1,
+        vs('underground'),
+      )).toBe(false);
+    });
+  });
+
   describe('Phase 9 reservation zones (intentionally unmasked in Phase 8)', () => {
     it('does NOT mask SAVE_ICON — Phase 8 renders nothing there, so masking creates an invisible dead zone', () => {
       expect(isPointerOverHUD(HUD.SAVE_ICON.x + 5, HUD.SAVE_ICON.y + 5)).toBe(false);
