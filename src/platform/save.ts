@@ -101,6 +101,17 @@ interface SerializedAnts {
    * paths stay dormant.
    */
   waitingDeposit?: number[];
+  /**
+   * Issue #34 — per-ant Bresenham error accumulator. Optional; absent →
+   * zero-init, which matches the pre-#34 "fresh start" semantics of the
+   * cardinal-pick algorithm.
+   */
+  pathErr?: number[];
+  /**
+   * Issue #35 — per-ant pause-while-searching counter. Optional; absent →
+   * zero-init (no ants paused at load time).
+   */
+  searchPauseTicks?: number[];
 }
 
 interface SerializedColony {
@@ -197,6 +208,8 @@ function serializeAnts(a: AntComponents): SerializedAnts {
     currentGridColonyId: Array.from(a.currentGridColonyId),
     // Issue #27 — carrier wait flag (Uint8Array; serialized as number[]).
     waitingDeposit: Array.from(a.waitingDeposit),
+    pathErr: Array.from(a.pathErr),
+    searchPauseTicks: Array.from(a.searchPauseTicks),
   };
 }
 
@@ -401,6 +414,15 @@ function deserializeAnts(saved: SerializedAnts, capacity: number): AntComponents
   // code paths remain dormant for them regardless.
   if (saved.waitingDeposit !== undefined) {
     copyIntoUint8(a.waitingDeposit, saved.waitingDeposit);
+  }
+  // Issue #34 / #35 — Bresenham error accumulator and pause-while-searching
+  // counter. Pre-feature saves omit; the fields zero-init in
+  // createAntComponents which is the correct "fresh start" default.
+  if (saved.pathErr !== undefined) {
+    copyIntoInt32(a.pathErr, saved.pathErr);
+  }
+  if (saved.searchPauseTicks !== undefined) {
+    copyIntoInt32(a.searchPauseTicks, saved.searchPauseTicks);
   }
   return a;
 }

@@ -174,6 +174,23 @@ export const UNDERGROUND_GRID_HEIGHT = 64;
  */
 export const UNDERGROUND_CEILING_ROW_Y = 0;
 
+/**
+ * Issue #35 — pause-while-searching cadence.
+ *
+ * Each tick a SearchingFood ant is walking, we sample the world RNG. If
+ * `(rngU32 % SEARCH_PAUSE_TRIGGER_INV_PROB) === 0` the ant pauses for
+ * `SEARCH_PAUSE_BASE_TICKS + (rngU32 % SEARCH_PAUSE_JITTER_TICKS)` ticks
+ * (mimics the scurry-stop-scurry pattern of real ants).
+ *
+ * Tuning produces ~12% of total search time paused with these values:
+ * trigger probability 1/50 = 2%/tick; pause duration 5-9 ticks (avg 7);
+ * time paused ≈ 7 / (50 + 7) ≈ 12%. Inside the ±15% throughput band the
+ * feature is gated to.
+ */
+export const SEARCH_PAUSE_TRIGGER_INV_PROB = 50 as const;
+export const SEARCH_PAUSE_BASE_TICKS = 5 as const;
+export const SEARCH_PAUSE_JITTER_TICKS = 5 as const;
+
 // ---------------------------------------------------------------------------
 // Default behavior ratio (PRD §7, §2)
 // ---------------------------------------------------------------------------

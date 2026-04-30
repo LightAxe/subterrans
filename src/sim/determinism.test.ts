@@ -75,6 +75,11 @@ function serializeWorldState(w: WorldState): string {
       // determinism asserts so a divergence in wait-state would break the
       // byte-identical compare.
       waitingDeposit:     Array.from(w.ants.waitingDeposit),
+      // Issue #34 / #35 — Bresenham accumulator + pause counter. Same
+      // round-trip rationale: divergence in either field changes future
+      // tick output, so determinism compare must include them.
+      pathErr:            Array.from(w.ants.pathErr),
+      searchPauseTicks:   Array.from(w.ants.searchPauseTicks),
     },
     colonies: Object.keys(w.colonies).sort().reduce((acc, k) => {
       const c = w.colonies[Number(k) as ColonyId]!;

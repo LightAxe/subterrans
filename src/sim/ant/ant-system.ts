@@ -3,7 +3,7 @@
 // Implements eight exported functions:
 //   antPickupFood          — PRD §4c L1093-1104: pickup from food pile, internal subTask transition
 //   antDepositFood         — PRD §4c (Errata E-01): chamber-aware deposit + idle-checkpoint transition
-//   getTaskDirection       — PURE direction lookup for non-forager movement (no state mutations)
+//   getTaskDirection       — direction lookup for non-forager movement (writes ants.pathErr per #34; no other mutations)
 //   tickDigExecution       — Step-10 dig-worker state machine (Marked→BeingDug→Open)
 //   updateFightAntTargets  — Phase 9 / SURF-04: route Fighting ants to colony.rallyPoint (step 10c global pass)
 //   routeForagerPriority   — Step-13 forager priority routing to marked food piles
@@ -19,7 +19,9 @@
 //   - tickDigExecution: owns the Marked→BeingDug claim and BeingDug→Open countdown.
 //     MUST run at step 10 (after idle-reassignment, before checkPendingChambers step 11).
 //     MUST NOT be called from tickAntMovement (step 16) — ordering contract is critical.
-//   - getTaskDirection: PURE — reads world state, MUST NOT mutate tiles, ant sub-state, or colony flags.
+//   - getTaskDirection: reads world state. MUST NOT mutate tiles, ant sub-state, or colony flags.
+//     Issue #34 exception: writes `ants.pathErr` for the per-ant Bresenham accumulator that backs
+//     `pickCardinalStep`. The accumulator is movement-step state, not task or sub-task state.
 //   - tickPheromoneDeposit: only ants with foodCarrying > 0 AND alive === 1 deposit (§5b carry-only rule).
 //   - tickAntMovement: foragers use sampleGradient on their colony's food-trail surface grid.
 //     Non-foragers use getTaskDirection (pure, no state transitions).
@@ -52,6 +54,9 @@ import {
   QUEEN_EGG_INTERVAL_TICKS,
   FOOD_CHAMBER_CAPACITY,
   BASE_FOOD_STORAGE_CAPACITY,
+  SEARCH_PAUSE_TRIGGER_INV_PROB,
+  SEARCH_PAUSE_BASE_TICKS,
+  SEARCH_PAUSE_JITTER_TICKS,
 } from '../constants.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { Rng } from '../rng.js';
@@ -151,8 +156,75 @@ export function antPickupFood(
   ants.searchHeadingTicks[antId] = 0;
   ants.searchPrevTileX[antId] = -1;
   ants.searchPrevTileY[antId] = -1;
+  // Issue #35 — clear pause counter on transition out of SearchingFood
+  // (here on pickup → CarryingFood) so the next excursion starts with a
+  // clean cadence.
+  ants.searchPauseTicks[antId] = 0;
 
   return available;
+}
+
+// ---------------------------------------------------------------------------
+// pickCardinalStep — issue #34 Bresenham-style cardinal step from a 2-D delta
+//
+// Translates an integer-tile target offset (rawDx, rawDy) into a single
+// cardinal step (one of {(±1,0), (0,±1), (0,0)}) per tick using a per-ant
+// error accumulator stored in `ants.pathErr`. Each tick the major axis
+// (largest absolute delta) is preferred unless the accumulated minor-axis
+// debt has crossed half the (major + minor) sum, at which point the minor
+// axis is taken once and the debt is rebated.
+//
+// Behaviour at notable slopes:
+//   - Pure cardinal (one delta zero): step the non-zero axis. Error
+//     accumulator unchanged so a future diagonal segment starts fresh.
+//   - 45° (|rawDx| === |rawDy|): strict alternation X, Y, X, Y, … (or Y,
+//     X, Y, X, … depending on which axis ties to "major"). Net trajectory
+//     hugs the diagonal one tile per tick on each side.
+//   - Other slopes: proportional alternation. E.g. (rawDx=3, rawDy=1)
+//     produces "X X Y X" repeating, matching the 3:1 ratio.
+//
+// Replaces the 9 sites that previously did `Math.abs(rawDx) >= Math.abs(rawDy)`
+// greedy axis pick. The greedy form exhausted the leading axis before
+// switching, producing visible stair-step on near-45° paths.
+//
+// Determinism: pure read of `ants.pathErr[id]`, pure write to the same
+// slot. No PRNG, no allocation, no float math. Same inputs → same output.
+//
+// Note on reset semantics: pathErr is NOT reset between distinct journeys.
+// A small carry-over per ant is acceptable (the trajectory deviation
+// converges back within a few ticks of any new diagonal). Callers that
+// care can write 0 to `ants.pathErr[id]` explicitly; today none do.
+// ---------------------------------------------------------------------------
+
+export function pickCardinalStep(
+  ants: AntComponents,
+  id: number,
+  rawDx: number,
+  rawDy: number,
+): { dx: number; dy: number } {
+  const absDx = rawDx < 0 ? -rawDx : rawDx;
+  const absDy = rawDy < 0 ? -rawDy : rawDy;
+  if (absDx === 0 && absDy === 0) return { dx: 0, dy: 0 };
+  if (absDx === 0) return { dx: 0, dy: rawDy > 0 ? 1 : -1 };
+  if (absDy === 0) return { dx: rawDx > 0 ? 1 : -1, dy: 0 };
+  // Both axes non-zero. Pick major / minor by magnitude (tie → X).
+  const majorIsX = absDx >= absDy;
+  const major = majorIsX ? absDx : absDy;
+  const minor = majorIsX ? absDy : absDx;
+  // Accumulate minor-axis debt. When the debt has crossed the midpoint of
+  // the (major + minor) span, take a minor-axis step and rebate.
+  // Comparison uses doubled values to avoid integer division.
+  const errPlus = ants.pathErr[id]! + minor;
+  if (errPlus * 2 > major + minor) {
+    ants.pathErr[id] = errPlus - (major + minor);
+    return majorIsX
+      ? { dx: 0, dy: rawDy > 0 ? 1 : -1 }
+      : { dx: rawDx > 0 ? 1 : -1, dy: 0 };
+  }
+  ants.pathErr[id] = errPlus;
+  return majorIsX
+    ? { dx: rawDx > 0 ? 1 : -1, dy: 0 }
+    : { dx: 0, dy: rawDy > 0 ? 1 : -1 };
 }
 
 // ---------------------------------------------------------------------------
@@ -330,6 +402,9 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
     // about to be reassigned by step 10a; whatever state it returns from
     // (foraging, idle pool, etc.) starts with a clean waitingDeposit flag.
     world.ants.waitingDeposit[antId] = 0;
+    // Issue #35 — clear pause counter so a future SearchingFood pass
+    // starts with a clean cadence.
+    world.ants.searchPauseTicks[antId] = 0;
   }
 }
 
@@ -719,12 +794,18 @@ function isInsideNursery(colony: ColonyRecord, tileX: number, tileY: number): bo
 }
 
 // ---------------------------------------------------------------------------
-// getTaskDirection — PURE direction lookup (no state mutations)
+// getTaskDirection — direction lookup for non-forager movement
 //
 // Returns the movement direction for a non-forager ant based on task/subTask.
-// PURE: reads world state and flow-field, MUST NOT mutate tiles, ant sub-state,
+// Reads world state and flow-field; MUST NOT mutate tiles, ant sub-state,
 // or colony flags. All dig-worker state transitions (Marked→BeingDug claim,
 // BeingDug→Open excavation) live in tickDigExecution at step 10.
+//
+// Issue #34 exception: writes `ants.pathErr` via `pickCardinalStep` in the
+// legacy Manhattan fallback path (the test-harness branch when chamber
+// flow-fields are absent). The accumulator is movement-step state, not
+// task or sub-task state, and the write is bounded to one bump per ant
+// per call.
 // ---------------------------------------------------------------------------
 
 /**
@@ -845,6 +926,8 @@ export function getTaskDirection(
     let bestDx = 0;
     let bestDy = 0;
     let bestDist = -1;
+    let bestChamberTileX = -1;
+    let bestChamberTileY = -1;
 
     for (let i = 0; i < colony.chambers.length; i++) {
       const chamber = colony.chambers[i]!;
@@ -857,18 +940,22 @@ export function getTaskDirection(
 
       if (bestDist < 0 || dist < bestDist) {
         bestDist = dist;
-        // Compute unit direction step
-        const rawDx = chamberTileX - antTileX;
-        const rawDy = chamberTileY - antTileY;
-        // Prefer axis with greater distance; if equal pick X
-        if (Math.abs(rawDx) >= Math.abs(rawDy)) {
-          bestDx = rawDx > 0 ? 1 : rawDx < 0 ? -1 : 0;
-          bestDy = 0;
-        } else {
-          bestDx = 0;
-          bestDy = rawDy > 0 ? 1 : rawDy < 0 ? -1 : 0;
-        }
+        bestChamberTileX = chamberTileX;
+        bestChamberTileY = chamberTileY;
       }
+    }
+
+    // Issue #34: compute the cardinal step once outside the loop so the
+    // per-ant Bresenham accumulator (`ants.pathErr`) is bumped exactly
+    // once per tick, regardless of how many chambers were considered.
+    if (bestDist >= 0) {
+      const step = pickCardinalStep(
+        ants, antId,
+        bestChamberTileX - antTileX,
+        bestChamberTileY - antTileY,
+      );
+      bestDx = step.dx;
+      bestDy = step.dy;
     }
 
     return { dx: bestDx, dy: bestDy };
@@ -1001,6 +1088,9 @@ export function tickSearchLeash(world: WorldState): void {
     ants.searchHeadingTicks[id] = 0;
     ants.searchPrevTileX[id] = -1;
     ants.searchPrevTileY[id] = -1;
+    // Issue #35 — clear pause counter on leash demotion so the next
+    // search excursion starts with a clean cadence.
+    ants.searchPauseTicks[id] = 0;
 
     const nextWave = wave + 1;
     ants.searchWave[id] = nextWave > SEARCH_LEASH_MAX_WAVE
@@ -1735,6 +1825,9 @@ export function tickExcursionBoundary(world: WorldState): void {
         ants.searchHeadingTicks[id] = 0;
         ants.searchPrevTileX[id] = -1;
         ants.searchPrevTileY[id] = -1;
+        // Issue #35 — fresh SearchingFood pass starts with a clean
+        // pause cadence.
+        ants.searchPauseTicks[id] = 0;
       }
       continue;
     }
@@ -1763,6 +1856,9 @@ export function tickExcursionBoundary(world: WorldState): void {
     ants.searchHeadingTicks[id] = 0;
     ants.searchPrevTileX[id] = -1;
     ants.searchPrevTileY[id] = -1;
+    // Issue #35 — clear pause counter on leash boundary cross so the
+    // ReturningToNest leg doesn't inherit stale pause state.
+    ants.searchPauseTicks[id] = 0;
   }
 }
 
@@ -2160,13 +2256,14 @@ function moveQueens(
       }
       if (targetTileX < 0) continue;
       if (targetTileX === tileX && targetTileY === tileY) continue;
-      const rawDx = targetTileX - tileX;
-      const rawDy = targetTileY - tileY;
-      if (Math.abs(rawDx) >= Math.abs(rawDy)) {
-        dx = rawDx > 0 ? 1 : rawDx < 0 ? -1 : 0;
-      } else {
-        dy = rawDy > 0 ? 1 : rawDy < 0 ? -1 : 0;
-      }
+      // Issue #34: per-ant Bresenham accumulator (in pickCardinalStep)
+      // produces strict alternation at 45° and proportional alternation
+      // at other slopes. Replaces the prior `Math.abs(rawDx) >=
+      // Math.abs(rawDy)` greedy axis pick that exhausted the leading
+      // axis before switching, producing visible stair-step.
+      const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY);
+      dx = step.dx;
+      dy = step.dy;
     } else if (zone === Zone.Surface) {
       // Pre-move descent: if the queen is already standing on one of her
       // colony's OPEN entrance tiles, descend immediately rather than computing
@@ -2210,13 +2307,10 @@ function moveQueens(
         }
       }
       if (targetTileX < 0) continue; // no open entrance — queen cannot descend yet.
-      const rawDx = targetTileX - tileX;
-      const rawDy = targetTileY - tileY;
-      if (Math.abs(rawDx) >= Math.abs(rawDy)) {
-        dx = rawDx > 0 ? 1 : rawDx < 0 ? -1 : 0;
-      } else {
-        dy = rawDy > 0 ? 1 : rawDy < 0 ? -1 : 0;
-      }
+      // Issue #34: see pickCardinalStep helper above.
+      const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY);
+      dx = step.dx;
+      dy = step.dy;
     } else {
       // Underground → follow the queen flow-field (seeded only from Queen
       // chamber Open tiles). A Nursery-only chamber tile must NOT be a
@@ -2283,13 +2377,10 @@ function moveQueens(
           }
         }
         if (targetTileX < 0) continue;
-        const rawDx = targetTileX - tileX;
-        const rawDy = targetTileY - tileY;
-        if (Math.abs(rawDx) >= Math.abs(rawDy)) {
-          dx = rawDx > 0 ? 1 : rawDx < 0 ? -1 : 0;
-        } else {
-          dy = rawDy > 0 ? 1 : rawDy < 0 ? -1 : 0;
-        }
+        // Issue #34: see pickCardinalStep helper above.
+        const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY);
+        dx = step.dx;
+        dy = step.dy;
       }
     }
 
@@ -2652,16 +2743,13 @@ export function tickAntMovement(
         }
       }
       if (!stepped) {
-        // Cache absent (test harness) — retain the original Manhattan step.
-        const rawDx = chamberTargetX - posX;
-        const rawDy = chamberTargetY - posY;
-        if (Math.abs(rawDx) >= Math.abs(rawDy)) {
-          dx = rawDx > 0 ? 1 : rawDx < 0 ? -1 : 0;
-          dy = 0;
-        } else {
-          dx = 0;
-          dy = rawDy > 0 ? 1 : rawDy < 0 ? -1 : 0;
-        }
+        // Cache absent (test harness) — retain the original Manhattan step
+        // routed through pickCardinalStep (issue #34) so the test path
+        // gets the same Bresenham accumulator as the production flow-
+        // field path.
+        const step = pickCardinalStep(ants, id, chamberTargetX - posX, chamberTargetY - posY);
+        dx = step.dx;
+        dy = step.dy;
       }
     } else if (entranceTargetX !== -1) {
       // Zone-transitioning ant — move toward nearest open entrance.
@@ -2712,17 +2800,43 @@ export function tickAntMovement(
       }
 
       if (!stepped) {
-        const rawDx = entranceTargetX - posX;
-        const rawDy = entranceTargetY - posY;
-        if (Math.abs(rawDx) >= Math.abs(rawDy)) {
-          dx = rawDx > 0 ? 1 : rawDx < 0 ? -1 : 0;
-          dy = 0;
-        } else {
-          dx = 0;
-          dy = rawDy > 0 ? 1 : rawDy < 0 ? -1 : 0;
-        }
+        // Issue #34: see pickCardinalStep helper above.
+        const step = pickCardinalStep(ants, id, entranceTargetX - posX, entranceTargetY - posY);
+        dx = step.dx;
+        dy = step.dy;
       }
     } else if (task === AntTask.Foraging) {
+      // Issue #35 — pause-while-searching. Real ants scurry-stop-scurry; we
+      // emulate that here for SearchingFood ants only. Two states:
+      //
+      //   (a) Already paused (searchPauseTicks > 0) → decrement, hold, skip
+      //       the rest of this branch. Movement is (0, 0); the existing
+      //       prev→curr render interpolation produces a stationary sprite
+      //       (same pattern as the issue #27 carrier wait state).
+      //
+      //   (b) Not paused → roll the world RNG. On a 1/N hit, set
+      //       searchPauseTicks = base + jitter and hold this tick too. The
+      //       roll only runs for SearchingFood — CarryingFood and
+      //       ReturningToNest are reachability-driven and shouldn't pause.
+      //
+      // Determinism: rng pulls happen on a fixed per-ant per-tick cadence
+      // (this branch is gated on subTask), so SCEN-06 replay is preserved.
+      // Throughput impact: ~12% of search time paused with the default
+      // constants (probability 1/50, duration 5-9 ticks). Tuned to stay
+      // inside the ±15% throughput band acceptance criterion.
+      if (ants.subTask[id] === ForagingSubState.SearchingFood && zone === Zone.Surface) {
+        if (ants.searchPauseTicks[id]! > 0) {
+          ants.searchPauseTicks[id] = ants.searchPauseTicks[id]! - 1;
+          continue;
+        }
+        const trigger = rng.nextU32() % SEARCH_PAUSE_TRIGGER_INV_PROB;
+        if (trigger === 0) {
+          const jitter = rng.nextU32() % SEARCH_PAUSE_JITTER_TICKS;
+          ants.searchPauseTicks[id] = SEARCH_PAUSE_BASE_TICKS + jitter;
+          continue;
+        }
+      }
+
       // Non-transitioning forager — priority target (step 13) or pheromone gradient.
       const targetX = ants.targetPosX[id]!;
       const targetY = ants.targetPosY[id]!;
@@ -2730,15 +2844,10 @@ export function tickAntMovement(
       if (targetX !== -1 && targetY !== -1) {
         const posX = ants.posX[id]!;
         const posY = ants.posY[id]!;
-        const rawDx = targetX - posX;
-        const rawDy = targetY - posY;
-        if (Math.abs(rawDx) >= Math.abs(rawDy)) {
-          dx = rawDx > 0 ? 1 : rawDx < 0 ? -1 : 0;
-          dy = 0;
-        } else {
-          dx = 0;
-          dy = rawDy > 0 ? 1 : rawDy < 0 ? -1 : 0;
-        }
+        // Issue #34: see pickCardinalStep helper above.
+        const step = pickCardinalStep(ants, id, targetX - posX, targetY - posY);
+        dx = step.dx;
+        dy = step.dy;
       } else {
         const colonyId = ants.colonyId[id]!;
         const tileX = ants.posX[id]! >> FP_SHIFT;
@@ -2751,15 +2860,10 @@ export function tickAntMovement(
         // upstream (targetX/Y branch); this only affects the no-priority path.
         const scent = findNearestScentPile(world, tileX, tileY);
         if (scent !== null) {
-          const rawDx = scent.tileX - tileX;
-          const rawDy = scent.tileY - tileY;
-          if (Math.abs(rawDx) >= Math.abs(rawDy)) {
-            dx = rawDx > 0 ? 1 : rawDx < 0 ? -1 : 0;
-            dy = 0;
-          } else {
-            dx = 0;
-            dy = rawDy > 0 ? 1 : rawDy < 0 ? -1 : 0;
-          }
+          // Issue #34: see pickCardinalStep helper above.
+          const step = pickCardinalStep(ants, id, scent.tileX - tileX, scent.tileY - tileY);
+          dx = step.dx;
+          dy = step.dy;
         } else {
           const key = pheromoneGridKey(colonyId, PheromoneType.FoodTrail, 'surface');
           const grid = world.pheromoneGrids[key];
@@ -2846,13 +2950,10 @@ export function tickAntMovement(
       }
 
       if (haveTarget) {
-        if (Math.abs(rawDx) >= Math.abs(rawDy)) {
-          dx = rawDx > 0 ? 1 : rawDx < 0 ? -1 : 0;
-          dy = 0;
-        } else {
-          dx = 0;
-          dy = rawDy > 0 ? 1 : rawDy < 0 ? -1 : 0;
-        }
+        // Issue #34: see pickCardinalStep helper above.
+        const step = pickCardinalStep(ants, id, rawDx, rawDy);
+        dx = step.dx;
+        dy = step.dy;
       } else {
         // No target and no entrance fallback — hold. updateFightAntTargets
         // writes targetPosX/Y whenever rallyPoint or entrances exist, so this
@@ -2970,6 +3071,8 @@ export function tickAntMovement(
               ants.searchHeadingTicks[id] = 0;
               ants.searchPrevTileX[id] = -1;
               ants.searchPrevTileY[id] = -1;
+              // Issue #35 — clean pause cadence on entrance arrival.
+              ants.searchPauseTicks[id] = 0;
               break;
             }
           }

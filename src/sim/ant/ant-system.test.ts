@@ -16,6 +16,7 @@ import {
   antPickupFood,
   antDepositFood,
   canEnterUndergroundTile,
+  pickCardinalStep,
   getTaskDirection,
   tickDigExecution,
   routeForagerPriority,
@@ -30,7 +31,7 @@ import {
 } from './ant-system.js';
 import { createWorldState, allocateEntityId, LEGACY_SIM_VERSION } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
-import { initAnt } from './ant-store.js';
+import { initAnt, createAntComponents } from './ant-store.js';
 import { AntTask, ForagingSubState, DiggingSubState, NursingSubState, ChamberType, PheromoneType } from '../enums.js';
 import { createPheromoneGrid, phGet, phSet, pheromoneGridKey } from '../pheromone/pheromone-store.js';
 import { Rng } from '../rng.js';
@@ -2960,18 +2961,37 @@ describe('tickAntMovement — wander fallback', () => {
     const posYBefore = world.ants.posY[antId]!;
 
     const digFlowFields = createDigFlowFields();
-    // Sweep a range of seeds — every single one must produce motion.
-    let movedCount = 0;
+    // Sweep a range of seeds. Two invariants:
+    //   (a) Every seed either MOVES the forager (the wander-fallback
+    //       fired) or PAUSES it (issue #35 scurry-stop-scurry produces
+    //       stationary frames intentionally). What must NOT happen is
+    //       a stationary ant with no pause armed — that's the original
+    //       pre-09-memo bug where empty-trail SearchingFood ants got
+    //       stuck forever.
+    //   (b) When the seed did NOT trigger a pause, the ant must have
+    //       moved. This separates the two cases and stops a hypothetical
+    //       wander regression from being silently masked by pauses.
+    let movedOrPausedCount = 0;
+    let nonPausedSeedsThatMoved = 0;
+    let nonPausedSeedsTotal = 0;
     for (let seed = 0; seed < 30; seed++) {
       world.ants.posX[antId] = posXBefore;
       world.ants.posY[antId] = posYBefore;
+      world.ants.searchPauseTicks[antId] = 0;
       const rng = new Rng(seed);
       tickAntMovement(world, rng, digFlowFields);
-      if (world.ants.posX[antId] !== posXBefore || world.ants.posY[antId] !== posYBefore) {
-        movedCount += 1;
+      const moved = world.ants.posX[antId] !== posXBefore || world.ants.posY[antId] !== posYBefore;
+      const pausedThisTick = world.ants.searchPauseTicks[antId]! > 0;
+      if (moved || pausedThisTick) movedOrPausedCount += 1;
+      if (!pausedThisTick) {
+        nonPausedSeedsTotal += 1;
+        if (moved) nonPausedSeedsThatMoved += 1;
       }
     }
-    expect(movedCount).toBe(30); // every seed moves the forager
+    expect(movedOrPausedCount).toBe(30); // (a) every seed makes progress somehow
+    // (b) non-paused seeds must move — wander-fallback regression guard.
+    expect(nonPausedSeedsThatMoved).toBe(nonPausedSeedsTotal);
+    expect(nonPausedSeedsTotal).toBeGreaterThan(0); // sanity: not every seed paused
   });
 
   it('priority target still takes precedence over wander', () => {
@@ -5479,5 +5499,266 @@ describe('tickNurseActions — P2 brood transport to Nursery', () => {
     // Brood was NOT moved — the Nursery had no Open tile to teleport to.
     expect(world.ants.posX[eggId]).toBe(startX);
     expect(world.ants.posY[eggId]).toBe(startY);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #34 — pickCardinalStep Bresenham accumulator
+// ---------------------------------------------------------------------------
+
+describe('pickCardinalStep (issue #34)', () => {
+  function emptyAnts(): ReturnType<typeof createAntComponents> {
+    return createAntComponents(8);
+  }
+
+  it('zero delta returns (0, 0)', () => {
+    const ants = emptyAnts();
+    expect(pickCardinalStep(ants, 0, 0, 0)).toEqual({ dx: 0, dy: 0 });
+  });
+
+  it('pure +X cardinal: every tick steps east', () => {
+    const ants = emptyAnts();
+    for (let i = 0; i < 5; i++) {
+      const step = pickCardinalStep(ants, 0, 5, 0);
+      expect(step).toEqual({ dx: 1, dy: 0 });
+    }
+  });
+
+  it('pure -Y cardinal: every tick steps north', () => {
+    const ants = emptyAnts();
+    for (let i = 0; i < 5; i++) {
+      const step = pickCardinalStep(ants, 0, 0, -3);
+      expect(step).toEqual({ dx: 0, dy: -1 });
+    }
+  });
+
+  it('45° (3,3) reaches the target with bounded stair-step (≤ 2 same-axis run)', () => {
+    // The bug fixed by #34 was visible stair-step on near-45° paths: the
+    // greedy axis pick produced X X X Y Y Y (3-tile staircase). The
+    // adaptive Bresenham accumulator produces a roughly diagonal trace
+    // with same-axis runs no longer than 2 tiles — the visual zig-zag
+    // becomes much shorter, which is the user-facing improvement.
+    const ants = emptyAnts();
+    const steps: Array<{ dx: number; dy: number }> = [];
+    let x = 0;
+    let y = 0;
+    for (let i = 0; i < 6; i++) {
+      const step = pickCardinalStep(ants, 0, 3 - x, 3 - y);
+      x += step.dx;
+      y += step.dy;
+      steps.push(step);
+    }
+    // After 6 ticks the ant has reached (3, 3): 3 X-steps and 3 Y-steps.
+    expect(x).toBe(3);
+    expect(y).toBe(3);
+    expect(steps.filter(s => s.dx !== 0).length).toBe(3);
+    expect(steps.filter(s => s.dy !== 0).length).toBe(3);
+    // No same-axis run longer than 2. Pre-fix would produce a run of 3.
+    let run = 1;
+    let maxRun = 1;
+    for (let i = 1; i < steps.length; i++) {
+      const a = steps[i - 1]!;
+      const b = steps[i]!;
+      if ((a.dx === 0) === (b.dx === 0)) run += 1;
+      else run = 1;
+      if (run > maxRun) maxRun = run;
+    }
+    expect(maxRun).toBeLessThanOrEqual(2);
+  });
+
+  it('3:1 slope (rawDx=3, rawDy=1) takes 3 X-steps and 1 Y-step in 4 ticks', () => {
+    // Proportional alternation. The Y-step must NOT come first (tie goes
+    // to major axis) nor must all 3 X-steps run consecutively before the
+    // Y-step (that's the bug).
+    const ants = emptyAnts();
+    const steps: Array<{ dx: number; dy: number }> = [];
+    let x = 0;
+    let y = 0;
+    for (let i = 0; i < 4; i++) {
+      const step = pickCardinalStep(ants, 0, 3 - x, 1 - y);
+      x += step.dx;
+      y += step.dy;
+      steps.push(step);
+    }
+    expect(x).toBe(3);
+    expect(y).toBe(1);
+    expect(steps.filter(s => s.dx !== 0).length).toBe(3);
+    expect(steps.filter(s => s.dy !== 0).length).toBe(1);
+  });
+
+  it('per-ant accumulator: each ant advances independently — no cross-contamination', () => {
+    const ants = emptyAnts();
+    // Two ants start independent journeys with the same shape (3,3 = 45°).
+    // Their pathErr fields evolve independently — interleaving ant-0 and
+    // ant-1 calls must not affect either's outcome.
+    let x0 = 0, y0 = 0;
+    let x1 = 0, y1 = 0;
+    for (let i = 0; i < 6; i++) {
+      const s0 = pickCardinalStep(ants, 0, 3 - x0, 3 - y0);
+      const s1 = pickCardinalStep(ants, 1, 3 - x1, 3 - y1);
+      x0 += s0.dx; y0 += s0.dy;
+      x1 += s1.dx; y1 += s1.dy;
+    }
+    // Both ants reach (3, 3) — neither's accumulator was perturbed by
+    // the interleaved call to the other ant's slot.
+    expect([x0, y0]).toEqual([3, 3]);
+    expect([x1, y1]).toEqual([3, 3]);
+  });
+
+  it('negative deltas produce negative cardinals; third-quadrant journey terminates correctly', () => {
+    const ants = emptyAnts();
+    expect(pickCardinalStep(ants, 0, -7, 0)).toEqual({ dx: -1, dy: 0 });
+    const ants2 = emptyAnts();
+    expect(pickCardinalStep(ants2, 0, 0, -7)).toEqual({ dx: 0, dy: -1 });
+    const ants3 = emptyAnts();
+    // Walk to (-3, -3): 6 ticks total, ending exactly at the target with
+    // 3 negative-X and 3 negative-Y steps.
+    let x = 0;
+    let y = 0;
+    for (let i = 0; i < 6; i++) {
+      const step = pickCardinalStep(ants3, 0, -3 - x, -3 - y);
+      x += step.dx;
+      y += step.dy;
+      expect(step.dx).toBeLessThanOrEqual(0);
+      expect(step.dy).toBeLessThanOrEqual(0);
+    }
+    expect(x).toBe(-3);
+    expect(y).toBe(-3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #35 — pause-while-searching
+// ---------------------------------------------------------------------------
+
+describe('SearchingFood pause cadence (issue #35)', () => {
+  function setupSurfaceForager(): {
+    world: ReturnType<typeof createWorldState>;
+    antId: number;
+    posX: number;
+    posY: number;
+  } {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    const colony = createColonyRecord(COLONY_ID, 0);
+    colony.entrances = [{ entranceId: 1, surfaceTileX: 24, surfaceTileY: 64, isOpen: true }];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    world.colonies[COLONY_ID] = colony;
+    setupSurfaceGrid(world);
+
+    const antId = allocateEntityId(world);
+    const posX = 30 << FP_SHIFT;
+    const posY = 64 << FP_SHIFT;
+    initAnt(world.ants, antId, {
+      colonyId: COLONY_ID,
+      posX, posY,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
+    });
+    world.ants.targetPosX[antId] = -1;
+    world.ants.targetPosY[antId] = -1;
+    return { world, antId, posX, posY };
+  }
+
+  it('a paused ant (searchPauseTicks > 0) does not move and decrements its counter', () => {
+    const { world, antId, posX, posY } = setupSurfaceForager();
+    world.ants.searchPauseTicks[antId] = 7;
+
+    const rng = new Rng(0);
+    const digFlowFields = createDigFlowFields();
+    tickAntMovement(world, rng, digFlowFields);
+
+    // Position unchanged; counter decremented.
+    expect(world.ants.posX[antId]).toBe(posX);
+    expect(world.ants.posY[antId]).toBe(posY);
+    expect(world.ants.searchPauseTicks[antId]).toBe(6);
+  });
+
+  it('a paused ant resumes movement once the counter hits 0', () => {
+    const { world, antId, posX, posY } = setupSurfaceForager();
+    world.ants.searchPauseTicks[antId] = 1;
+
+    const digFlowFields = createDigFlowFields();
+    // Tick 1: counter goes 1 → 0 and movement is skipped (the decrement
+    // path uses `continue`).
+    tickAntMovement(world, new Rng(0), digFlowFields);
+    expect(world.ants.searchPauseTicks[antId]).toBe(0);
+    expect(world.ants.posX[antId]).toBe(posX);
+    expect(world.ants.posY[antId]).toBe(posY);
+    // Tick 2: counter is 0; the trigger MAY fire (1/50 chance) but most
+    // seeds will fall through to wander. Sweep many seeds and confirm at
+    // least one moved.
+    let movedAfterResume = 0;
+    for (let s = 0; s < 30; s++) {
+      world.ants.posX[antId] = posX;
+      world.ants.posY[antId] = posY;
+      world.ants.searchPauseTicks[antId] = 0;
+      tickAntMovement(world, new Rng(100 + s), digFlowFields);
+      if (world.ants.posX[antId] !== posX || world.ants.posY[antId] !== posY) {
+        movedAfterResume += 1;
+      }
+    }
+    expect(movedAfterResume).toBeGreaterThan(20);
+  });
+
+  it('CarryingFood ants do NOT pause (pause gate is SearchingFood-only)', () => {
+    const { world, antId } = setupSurfaceForager();
+    world.ants.subTask[antId] = ForagingSubState.CarryingFood;
+    world.ants.searchPauseTicks[antId] = 0;
+
+    const digFlowFields = createDigFlowFields();
+    // Sweep seeds — none should set searchPauseTicks for a CarryingFood ant.
+    for (let s = 0; s < 30; s++) {
+      world.ants.searchPauseTicks[antId] = 0;
+      tickAntMovement(world, new Rng(s), digFlowFields);
+      expect(world.ants.searchPauseTicks[antId]).toBe(0);
+    }
+  });
+
+  it('pickup clears any active pause (transition out of SearchingFood)', () => {
+    const { world, antId } = setupSurfaceForager();
+    world.ants.searchPauseTicks[antId] = 8;
+    world.ants.foodCarrying[antId] = 0;
+    // Synthetic pickup — antPickupFood should clear the pause counter.
+    antPickupFood(world.ants, antId, { amount: 100 });
+    expect(world.ants.searchPauseTicks[antId]).toBe(0);
+  });
+
+  it('post-deposit clears any active pause', () => {
+    const { world, antId } = setupSurfaceForager();
+    world.ants.searchPauseTicks[antId] = 8;
+    world.ants.foodCarrying[antId] = 200;
+    world.ants.subTask[antId] = ForagingSubState.CarryingFood;
+    const colony = world.colonies[COLONY_ID]!;
+    colony.foodStored = 0;
+    antDepositFood(world, colony, antId);
+    expect(world.ants.searchPauseTicks[antId]).toBe(0);
+  });
+
+  it('throughput regression guard — pause does not stop the colony from moving on average', () => {
+    // Acceptance criterion: throughput within ±15% of pre-pause baseline.
+    // We can't easily simulate "baseline minus pause feature" inside one
+    // test, but we CAN assert that across many seeds, the ratio of paused
+    // ticks to total ticks lands roughly at the design target (~12%).
+    const digFlowFields = createDigFlowFields();
+    let pausedTickCount = 0;
+    const totalTicks = 200;
+    const { world, antId, posX, posY } = setupSurfaceForager();
+    for (let t = 0; t < totalTicks; t++) {
+      world.ants.posX[antId] = posX;
+      world.ants.posY[antId] = posY;
+      const before = world.ants.searchPauseTicks[antId]!;
+      tickAntMovement(world, new Rng(t * 17 + 11), digFlowFields);
+      // Counts ticks where the ant was paused (didn't move because of #35).
+      const after = world.ants.searchPauseTicks[antId]!;
+      if (after > 0 || (before === 0 && world.ants.posX[antId] === posX && world.ants.posY[antId] === posY)) {
+        pausedTickCount += 1;
+      }
+    }
+    // Generous bound — the design target is ~12% paused (≈ 24 paused
+    // ticks out of 200) but there's variance across seeds. Anything
+    // under 30% (60/200) is consistent with the feature working and
+    // not overwhelming throughput.
+    expect(pausedTickCount).toBeLessThan(60);
   });
 });

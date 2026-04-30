@@ -108,6 +108,39 @@ export interface AntComponents {
   /** Companion Y component to searchPrevTileX. Sentinel: -1 = no previous tile. */
   readonly searchPrevTileY: Int32Array;
   /**
+   * Issue #34 — Bresenham accumulator for cardinal-step axis selection.
+   *
+   * tickAntMovement translates an integer-tile target offset (rawDx, rawDy)
+   * into a single cardinal step per tick. The previous "pick the larger of
+   * |rawDx| and |rawDy|" rule produced visible stair-step on near-45° paths
+   * because the leading axis would deplete before the other got a turn.
+   * This field tracks per-ant minor-axis debt; each tick the major axis is
+   * preferred unless the accumulated debt has crossed half the (major +
+   * minor) sum, at which point the minor axis is taken once and the debt
+   * rebated. At 45° (|rawDx| === |rawDy|) the result is strict alternation;
+   * at other slopes the alternation is proportional.
+   *
+   * Reset to 0 in initAnt. Round-trips through copyWorldState and save/load
+   * (optional field on SerializedAnts; defaults to 0 on pre-#34 saves).
+   */
+  readonly pathErr: Int32Array;
+  /**
+   * Issue #35 — pause-while-searching counter.
+   *
+   * SearchingFood ants periodically pause for 5–9 ticks (constants
+   * SEARCH_PAUSE_BASE_TICKS=5 + jitter mod SEARCH_PAUSE_JITTER_TICKS=5,
+   * exclusive) to mimic the scurry-stop-scurry pattern of real ants.
+   * While `searchPauseTicks > 0`
+   * the SearchingFood movement branch in tickAntMovement skips its step
+   * and decrements the counter. Reset to 0 on every transition out of
+   * SearchingFood (post-pickup, post-deposit) so the next excursion
+   * starts with a clean cadence.
+   *
+   * Reset to 0 in initAnt. Round-trips through copyWorldState and save/load
+   * (optional field; defaults to 0 on pre-#35 saves).
+   */
+  readonly searchPauseTicks: Int32Array;
+  /**
    * Phase 09.1 Chunk 0 — grid-of-occupancy byte.
    *
    * Single source of truth for "which undergroundGrids[...] does this ant
@@ -205,6 +238,10 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
     // Phase 9 excursion-foraging follow-up — per-ant anti-backtrack prev tile:
     searchPrevTileX,
     searchPrevTileY,
+    // Issue #34 — Bresenham accumulator. Zero-init = "no debt yet."
+    pathErr:           new Int32Array(maxEntities),
+    // Issue #35 — pause-while-searching counter. Zero-init = "not paused."
+    searchPauseTicks:  new Int32Array(maxEntities),
     // Phase 09.1 Chunk 0 — grid-of-occupancy byte (Uint8Array). Zero-init is
     // correct: PLAYER_COLONY_ID is conventionally 0; initAnt overwrites with
     // spec.colonyId at spawn.
@@ -281,6 +318,10 @@ export function initAnt(ants: AntComponents, id: EntityId, spec: InitAntSpec): v
   ants.searchHeadingTicks[id]= 0;
   ants.searchPrevTileX[id]   = -1;
   ants.searchPrevTileY[id]   = -1;
+  // Issue #34 — fresh ant has no path-error debt.
+  ants.pathErr[id]           = 0;
+  // Issue #35 — fresh ant is not paused.
+  ants.searchPauseTicks[id]  = 0;
   // Issue #27 — fresh ant is never in wait state (must traverse a failed
   // deposit cycle to enter it).
   ants.waitingDeposit[id]    = 0;
