@@ -5598,12 +5598,21 @@ describe('pickCardinalStep (issue #34)', () => {
     // Two ants start independent journeys with the same shape (3,3 = 45°).
     // Their pathErr fields evolve independently — interleaving ant-0 and
     // ant-1 calls must not affect either's outcome.
+    //
+    // Scratch-aliasing guard (codex P2): pickCardinalStep returns a
+    // shared module-level scratch object. Holding both `s0` and `s1`
+    // references through ant-1's call would have ant-1's result
+    // overwrite ant-0's, so the assertion would silently pass even on
+    // a broken accumulator. Snapshot dx/dy into primitives BEFORE the
+    // next call to genuinely exercise per-ant independence.
     let x0 = 0, y0 = 0;
     let x1 = 0, y1 = 0;
     for (let i = 0; i < 6; i++) {
       const s0 = pickCardinalStep(ants, 0, 3 - x0, 3 - y0);
+      const s0dx = s0.dx;
+      const s0dy = s0.dy;
       const s1 = pickCardinalStep(ants, 1, 3 - x1, 3 - y1);
-      x0 += s0.dx; y0 += s0.dy;
+      x0 += s0dx; y0 += s0dy;
       x1 += s1.dx; y1 += s1.dy;
     }
     // Both ants reach (3, 3) — neither's accumulator was perturbed by
