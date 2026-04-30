@@ -52,6 +52,8 @@ import {
   ENTRANCE_DEPOSIT_SUPPRESS_RADIUS,
   WORKER_BASE_SPEED,
   QUEEN_EGG_INTERVAL_TICKS,
+  SEARCH_PAUSE_BASE_TICKS,
+  SEARCH_PAUSE_JITTER_TICKS,
 } from '../constants.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { Zone, UndergroundTileState, ugGet, ugSet, createUndergroundGrid } from '../terrain.js';
@@ -5539,27 +5541,29 @@ describe('pickCardinalStep (issue #34)', () => {
     // with same-axis runs no longer than 2 tiles — the visual zig-zag
     // becomes much shorter, which is the user-facing improvement.
     const ants = emptyAnts();
-    const steps: Array<{ dx: number; dy: number }> = [];
+    // pickCardinalStep returns a shared scratch object (no per-tick
+    // allocation per codex P1 follow-up); copy dx/dy primitives at capture.
+    const dxs: number[] = [];
+    const dys: number[] = [];
     let x = 0;
     let y = 0;
     for (let i = 0; i < 6; i++) {
       const step = pickCardinalStep(ants, 0, 3 - x, 3 - y);
+      dxs.push(step.dx);
+      dys.push(step.dy);
       x += step.dx;
       y += step.dy;
-      steps.push(step);
     }
     // After 6 ticks the ant has reached (3, 3): 3 X-steps and 3 Y-steps.
     expect(x).toBe(3);
     expect(y).toBe(3);
-    expect(steps.filter(s => s.dx !== 0).length).toBe(3);
-    expect(steps.filter(s => s.dy !== 0).length).toBe(3);
+    expect(dxs.filter(d => d !== 0).length).toBe(3);
+    expect(dys.filter(d => d !== 0).length).toBe(3);
     // No same-axis run longer than 2. Pre-fix would produce a run of 3.
     let run = 1;
     let maxRun = 1;
-    for (let i = 1; i < steps.length; i++) {
-      const a = steps[i - 1]!;
-      const b = steps[i]!;
-      if ((a.dx === 0) === (b.dx === 0)) run += 1;
+    for (let i = 1; i < dxs.length; i++) {
+      if ((dxs[i - 1] === 0) === (dxs[i] === 0)) run += 1;
       else run = 1;
       if (run > maxRun) maxRun = run;
     }
@@ -5569,21 +5573,24 @@ describe('pickCardinalStep (issue #34)', () => {
   it('3:1 slope (rawDx=3, rawDy=1) takes 3 X-steps and 1 Y-step in 4 ticks', () => {
     // Proportional alternation. The Y-step must NOT come first (tie goes
     // to major axis) nor must all 3 X-steps run consecutively before the
-    // Y-step (that's the bug).
+    // Y-step (that's the bug). Capture dx/dy primitives — see 45° test
+    // for why the shared-scratch return forces this pattern.
     const ants = emptyAnts();
-    const steps: Array<{ dx: number; dy: number }> = [];
+    const dxs: number[] = [];
+    const dys: number[] = [];
     let x = 0;
     let y = 0;
     for (let i = 0; i < 4; i++) {
       const step = pickCardinalStep(ants, 0, 3 - x, 1 - y);
+      dxs.push(step.dx);
+      dys.push(step.dy);
       x += step.dx;
       y += step.dy;
-      steps.push(step);
     }
     expect(x).toBe(3);
     expect(y).toBe(1);
-    expect(steps.filter(s => s.dx !== 0).length).toBe(3);
-    expect(steps.filter(s => s.dy !== 0).length).toBe(1);
+    expect(dxs.filter(d => d !== 0).length).toBe(3);
+    expect(dys.filter(d => d !== 0).length).toBe(1);
   });
 
   it('per-ant accumulator: each ant advances independently — no cross-contamination', () => {
@@ -5733,6 +5740,36 @@ describe('SearchingFood pause cadence (issue #35)', () => {
     colony.foodStored = 0;
     antDepositFood(world, colony, antId);
     expect(world.ants.searchPauseTicks[antId]).toBe(0);
+  });
+
+  it('pause length matches documented 5-9 tick range (codex P2 — no off-by-one)', () => {
+    // Pre-fix: arming `searchPauseTicks = base + jitter` and continuing
+    // immediately made the trigger tick count as paused too, inflating the
+    // total to base + jitter + 1 (6-10 ticks instead of 5-9). The fix
+    // arms at base + jitter - 1 so the trigger tick + N decrements sum
+    // to exactly base + jitter total stationary ticks.
+    //
+    // Direct inspection: when the trigger fires (before = 0, after > 0),
+    // total paused-tick count for that cycle equals after + 1 (this
+    // trigger tick is already stationary). Sweep seeds until at least
+    // one trigger fires, capture the after-trigger value, assert the
+    // implied total is in [5, 9].
+    const digFlowFields = createDigFlowFields();
+    const observedTotalPauses = new Set<number>();
+    for (let seed = 0; seed < 500; seed++) {
+      const { world, antId } = setupSurfaceForager();
+      const before = world.ants.searchPauseTicks[antId]!;
+      tickAntMovement(world, new Rng(seed), digFlowFields);
+      const after = world.ants.searchPauseTicks[antId]!;
+      if (before === 0 && after > 0) {
+        observedTotalPauses.add(after + 1);
+      }
+    }
+    expect(observedTotalPauses.size).toBeGreaterThan(0);
+    for (const totalPause of observedTotalPauses) {
+      expect(totalPause).toBeGreaterThanOrEqual(SEARCH_PAUSE_BASE_TICKS);
+      expect(totalPause).toBeLessThanOrEqual(SEARCH_PAUSE_BASE_TICKS + SEARCH_PAUSE_JITTER_TICKS - 1);
+    }
   });
 
   it('throughput regression guard — pause does not stop the colony from moving on average', () => {

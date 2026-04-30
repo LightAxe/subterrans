@@ -177,11 +177,10 @@ export function antPickupFood(
 // Behaviour at notable slopes:
 //   - Pure cardinal (one delta zero): step the non-zero axis. Error
 //     accumulator unchanged so a future diagonal segment starts fresh.
-//   - 45° (|rawDx| === |rawDy|): strict alternation X, Y, X, Y, … (or Y,
-//     X, Y, X, … depending on which axis ties to "major"). Net trajectory
-//     hugs the diagonal one tile per tick on each side.
+//   - 45° (|rawDx| === |rawDy|): bounded same-axis runs (≤ 2 tiles)
+//     instead of the prior N-tile staircase.
 //   - Other slopes: proportional alternation. E.g. (rawDx=3, rawDy=1)
-//     produces "X X Y X" repeating, matching the 3:1 ratio.
+//     produces "X Y X X" repeating, matching the 3:1 ratio.
 //
 // Replaces the 9 sites that previously did `Math.abs(rawDx) >= Math.abs(rawDy)`
 // greedy axis pick. The greedy form exhausted the leading axis before
@@ -190,23 +189,48 @@ export function antPickupFood(
 // Determinism: pure read of `ants.pathErr[id]`, pure write to the same
 // slot. No PRNG, no allocation, no float math. Same inputs → same output.
 //
+// Allocation discipline (codex P1 follow-up): the result is written into
+// a module-level scratch object reused on every call rather than a fresh
+// `{dx, dy}` literal. tickAntMovement / moveQueens call this in the
+// per-ant hot loop; per-tick `{dx, dy}` literal allocation showed up as
+// continuous GC pressure as colony size grew. The scratch is read-then-
+// consumed by the call site before the next call overwrites it, so the
+// shared-mutable pattern is safe — caller never holds a reference past
+// its own next pickCardinalStep call.
+//
 // Note on reset semantics: pathErr is NOT reset between distinct journeys.
 // A small carry-over per ant is acceptable (the trajectory deviation
 // converges back within a few ticks of any new diagonal). Callers that
 // care can write 0 to `ants.pathErr[id]` explicitly; today none do.
 // ---------------------------------------------------------------------------
 
+interface CardinalStep { dx: number; dy: number }
+
+const cardinalStepScratch: CardinalStep = { dx: 0, dy: 0 };
+
 export function pickCardinalStep(
   ants: AntComponents,
   id: number,
   rawDx: number,
   rawDy: number,
-): { dx: number; dy: number } {
+): CardinalStep {
   const absDx = rawDx < 0 ? -rawDx : rawDx;
   const absDy = rawDy < 0 ? -rawDy : rawDy;
-  if (absDx === 0 && absDy === 0) return { dx: 0, dy: 0 };
-  if (absDx === 0) return { dx: 0, dy: rawDy > 0 ? 1 : -1 };
-  if (absDy === 0) return { dx: rawDx > 0 ? 1 : -1, dy: 0 };
+  if (absDx === 0 && absDy === 0) {
+    cardinalStepScratch.dx = 0;
+    cardinalStepScratch.dy = 0;
+    return cardinalStepScratch;
+  }
+  if (absDx === 0) {
+    cardinalStepScratch.dx = 0;
+    cardinalStepScratch.dy = rawDy > 0 ? 1 : -1;
+    return cardinalStepScratch;
+  }
+  if (absDy === 0) {
+    cardinalStepScratch.dx = rawDx > 0 ? 1 : -1;
+    cardinalStepScratch.dy = 0;
+    return cardinalStepScratch;
+  }
   // Both axes non-zero. Pick major / minor by magnitude (tie → X).
   const majorIsX = absDx >= absDy;
   const major = majorIsX ? absDx : absDy;
@@ -217,14 +241,24 @@ export function pickCardinalStep(
   const errPlus = ants.pathErr[id]! + minor;
   if (errPlus * 2 > major + minor) {
     ants.pathErr[id] = errPlus - (major + minor);
-    return majorIsX
-      ? { dx: 0, dy: rawDy > 0 ? 1 : -1 }
-      : { dx: rawDx > 0 ? 1 : -1, dy: 0 };
+    if (majorIsX) {
+      cardinalStepScratch.dx = 0;
+      cardinalStepScratch.dy = rawDy > 0 ? 1 : -1;
+    } else {
+      cardinalStepScratch.dx = rawDx > 0 ? 1 : -1;
+      cardinalStepScratch.dy = 0;
+    }
+    return cardinalStepScratch;
   }
   ants.pathErr[id] = errPlus;
-  return majorIsX
-    ? { dx: rawDx > 0 ? 1 : -1, dy: 0 }
-    : { dx: 0, dy: rawDy > 0 ? 1 : -1 };
+  if (majorIsX) {
+    cardinalStepScratch.dx = rawDx > 0 ? 1 : -1;
+    cardinalStepScratch.dy = 0;
+  } else {
+    cardinalStepScratch.dx = 0;
+    cardinalStepScratch.dy = rawDy > 0 ? 1 : -1;
+  }
+  return cardinalStepScratch;
 }
 
 // ---------------------------------------------------------------------------
@@ -2831,8 +2865,14 @@ export function tickAntMovement(
         }
         const trigger = rng.nextU32() % SEARCH_PAUSE_TRIGGER_INV_PROB;
         if (trigger === 0) {
+          // Codex P2: the trigger tick is itself stationary (we `continue`
+          // below). Setting the counter to `base + jitter` here would make
+          // total paused-ticks count = base + jitter + 1, contradicting the
+          // documented 5-9 cadence and inflating throughput impact. Subtract
+          // 1 so total paused ticks (this trigger tick + next N decrements)
+          // equals the (base + jitter) value the constants advertise.
           const jitter = rng.nextU32() % SEARCH_PAUSE_JITTER_TICKS;
-          ants.searchPauseTicks[id] = SEARCH_PAUSE_BASE_TICKS + jitter;
+          ants.searchPauseTicks[id] = (SEARCH_PAUSE_BASE_TICKS + jitter) - 1;
           continue;
         }
       }
