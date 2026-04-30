@@ -23,7 +23,7 @@ import type { ViewState } from '../render/camera.js';
 import { screenToTile } from '../render/camera.js';
 import { ugGet, UndergroundTileState } from '../sim/terrain.js';
 import type { MarkDigTileCommand, CancelDigMarkCommand } from '../sim/commands.js';
-import { PLAYER_COLONY_ID } from '../sim/constants.js';
+import { PLAYER_COLONY_ID, UNDERGROUND_CEILING_ROW_Y } from '../sim/constants.js';
 import { isPointerOverHUD, panInputState } from './camera-input.js';
 import { contextMenuState, requestShowContextMenu } from '../render/context-menu-state.js';
 
@@ -165,6 +165,15 @@ export function handleUndergroundLeftClick(
   const grid = world.undergroundGrids[PLAYER_COLONY_ID];
   if (!grid) return;
   if (tileX < 0 || tileY < 0 || tileX >= grid.width || tileY >= grid.height) return;
+  // Issue #30: skip the ceiling-strip row. The renderer paints `tileY === 0`
+  // with the grass texture as a "this is the surface boundary" cue (see
+  // `ty === 0` branch in draw-underground.ts:137-153). Without this gate a
+  // click on the visible grass silently dispatches MarkDigTile against the
+  // tile beneath, which the renderer keeps painting as grass — the player
+  // gets no visual feedback the click did anything. Drag is also armed to
+  // false here so a click-and-drag down from the ceiling strip cannot mark
+  // adjacent tiles via the Bresenham interpolation in handleUndergroundDrag.
+  if (tileY === UNDERGROUND_CEILING_ROW_Y) return;
   // Arm drag state up front (before the tile-state branch) so a stroke that
   // begins on a Marked/BeingDug tile still marks subsequent Solid tiles. The
   // debounce cursor is seeded to the clicked tile so the first Bresenham
@@ -249,6 +258,13 @@ export function handleUndergroundDrag(
 
   if (x0 === -1 && y0 === -1) {
     if (x1 < 0 || y1 < 0 || x1 >= grid.width || y1 >= grid.height) return;
+    if (y1 === UNDERGROUND_CEILING_ROW_Y) {
+      // Issue #30: drag-into-ceiling-strip silently rebases the cursor without
+      // emitting a mark. The stroke can continue from here onto regular rows.
+      state.lastMarkedTileX = x1;
+      state.lastMarkedTileY = y1;
+      return;
+    }
     const tileStateSingle = ugGet(grid, x1, y1);
     if (tileStateSingle === UndergroundTileState.Solid || tileStateSingle === UndergroundTileState.Open) {
       const cmd: MarkDigTileCommand = {
@@ -281,6 +297,12 @@ export function handleUndergroundDrag(
     finalX = tx;
     finalY = ty;
     if (tx < 0 || ty < 0 || tx >= grid.width || ty >= grid.height) return;
+    // Issue #30: skip the ceiling-strip row inside the stroke — same gate as
+    // handleUndergroundLeftClick. The stroke cursor still advances (finalX/Y
+    // already updated above) so a drag that starts on a regular row, crosses
+    // the ceiling, and continues on the other side keeps interpolating; only
+    // the row-0 tiles themselves are skipped.
+    if (ty === UNDERGROUND_CEILING_ROW_Y) return;
     const ts = ugGet(grid, tx, ty);
     if (ts !== UndergroundTileState.Solid && ts !== UndergroundTileState.Open) return;
     const cmd: MarkDigTileCommand = {

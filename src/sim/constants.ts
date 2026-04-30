@@ -163,6 +163,17 @@ export const UNDERGROUND_GRID_WIDTH = 128;
 /** PRD §9c — Height of the underground pheromone grid in tiles. */
 export const UNDERGROUND_GRID_HEIGHT = 64;
 
+/**
+ * Issue #30 — y-coordinate of the underground "ceiling strip." Row 0 of the
+ * underground grid renders as the underside of the surface grass (see the
+ * `ty === 0` branch in `src/render/draw-underground.ts`); it's a visual cue
+ * communicating "this is the surface boundary, not a diggable wall." Both
+ * `handleUndergroundLeftClick` and `handleUndergroundDrag` reject clicks on
+ * this row so the input gate stays in lockstep with the renderer's
+ * ceiling-strip painting.
+ */
+export const UNDERGROUND_CEILING_ROW_Y = 0;
+
 // ---------------------------------------------------------------------------
 // Default behavior ratio (PRD §7, §2)
 // ---------------------------------------------------------------------------

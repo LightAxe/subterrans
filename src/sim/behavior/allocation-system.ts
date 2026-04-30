@@ -131,9 +131,19 @@ export function allocateWorkers(
 /**
  * Phase 10 / CTRL-06 — auto-dig demand check (D-02 LOCKED).
  *
- * Returns 1 if (a) at least one Marked tile exists in the colony's underground
- * grid AND (b) no ant in `colony.workers` currently has `task === AntTask.Digging`.
- * Returns 0 otherwise.
+ * Returns 1 if (a) at least one REACHABLE Marked tile exists in the colony's
+ * underground grid AND (b) no ant in `colony.workers` currently has
+ * `task === AntTask.Digging`. Returns 0 otherwise.
+ *
+ * "Reachable" (issue #31) — a Marked tile must have at least one 4-connected
+ * Open neighbor. Without this, isolated Marked islands (e.g., the player
+ * marked a column of tiles surrounded by Solid) generate dig demand the
+ * Digger can never satisfy: step 10a carves a forage slot for the digger
+ * each tick, the digger picks the unreachable Marked tile via a -2
+ * dig-flow-field reading, gets released back to Idle, and the cycle
+ * repeats — locking one worker out of forage/nurse work indefinitely. The
+ * adjacency check is one extra branch per Marked tile in the same single
+ * scan, deterministic, no allocation.
  *
  * Strict 1-digger cap (per CONTEXT.md D-02): if ANY ant of the colony is already
  * Digging, no new digger is auto-assigned this tick. This solves the tunnel-jam
@@ -155,7 +165,7 @@ export function allocateWorkers(
  * @param colony           - Colony record; iterated to detect any active digger.
  * @param undergroundGrid  - Colony's underground grid; scanned for Marked tiles.
  * @param ants             - Ant component store (alive + task arrays).
- * @returns 1 if Marked tiles exist and no ant is Digging in this colony, else 0.
+ * @returns 1 if a reachable Marked tile exists and no ant is Digging in this colony, else 0.
  */
 export function computeDigDemand(
   colony: ColonyRecord,
@@ -168,13 +178,37 @@ export function computeDigDemand(
     if (ants.alive[id] !== 1) continue;
     if (ants.task[id] === AntTask.Digging) return 0;
   }
-  // (a) Marked tile presence — single linear scan over the grid's Uint8Array.
-  // Direct data[] access (matches the Phase 07-04 decision for computeDigFlowField:
-  // direct array access, not ugGet, in inner BFS loop for performance). Same fixed
-  // iteration order as BFS (linear i from 0).
+  // (a) Reachable Marked tile presence — single linear scan over the grid's
+  // Uint8Array, plus a 4-neighbor Open adjacency check per Marked candidate.
+  // A digger excavates from an Open tile adjacent to the Marked target, so
+  // reachability ≡ "Marked tile has at least one Open 4-neighbor." This is
+  // the dig-flow-field's BFS-seed criterion in compact form (issue #31).
+  // Direct data[] access (matches the Phase 07-04 decision for
+  // computeDigFlowField: direct array access, not ugGet, in inner BFS loop
+  // for performance). Same fixed iteration order as BFS (linear i from 0).
   const data = undergroundGrid.data;
+  const w = undergroundGrid.width;
+  const h = undergroundGrid.height;
   for (let i = 0; i < data.length; i++) {
-    if (data[i] === UndergroundTileState.Marked) return 1;
+    if (data[i] !== UndergroundTileState.Marked) continue;
+    // Decode (x, y) from the linear index. Inline because ugGet adds a
+    // bounds check and a function-call frame per neighbor; the scan body
+    // is hot enough that the inlined math is the established pattern (see
+    // computeDigFlowField BFS in dig-system.ts).
+    // eslint-disable-next-line no-restricted-syntax -- integer division via `| 0` truncation; index-to-row conversion, not fixed-point math
+    const y = (i / w) | 0;
+    const x = i - y * w;
+    // 4-connected reachability: a neighbor counts as reachable if it's
+    // either Open OR BeingDug. Mirrors `computeDigFlowField`'s BFS in
+    // dig-system.ts which expands through both states. Without the
+    // BeingDug branch a Marked tile whose only Open path is currently
+    // mid-excavation would falsely report unreachable for one tick of
+    // the dig cycle, briefly suppressing demand and causing the
+    // forage-carve to wobble.
+    if (x > 0     && (data[i - 1] === UndergroundTileState.Open || data[i - 1] === UndergroundTileState.BeingDug)) return 1;
+    if (x < w - 1 && (data[i + 1] === UndergroundTileState.Open || data[i + 1] === UndergroundTileState.BeingDug)) return 1;
+    if (y > 0     && (data[i - w] === UndergroundTileState.Open || data[i - w] === UndergroundTileState.BeingDug)) return 1;
+    if (y < h - 1 && (data[i + w] === UndergroundTileState.Open || data[i + w] === UndergroundTileState.BeingDug)) return 1;
   }
   return 0;
 }

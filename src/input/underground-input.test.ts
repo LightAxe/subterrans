@@ -1007,3 +1007,112 @@ describe('underground-input read-only when activeUndergroundColonyId !== PLAYER_
     expect(world.commandQueue).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #30 — ceiling-strip click rejection
+// ---------------------------------------------------------------------------
+
+describe('underground-input — ceiling-strip row gate (issue #30)', () => {
+  it('handleUndergroundLeftClick on tileY=0 is a no-op (no MarkDigTile, no drag arm)', () => {
+    // The renderer paints the topmost underground row with the grass texture
+    // as a "this is the surface boundary, not a diggable wall" cue. Without
+    // this gate, a click on the visible grass dispatched MarkDigTile against
+    // the tile beneath, the renderer kept painting grass on top, and the
+    // mark was effectively invisible to the player. See draw-underground.ts
+    // (`ty === 0` branch) for the matching renderer logic.
+    const world = makeWorld();
+    const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
+    ugSet(grid, 10, 0, UndergroundTileState.Solid);
+    const vs = makeViewState('underground', 64, 32);
+    const state = makeState();
+    const { x, y } = tileToScreen(10, 0, 64, 32);
+    handleUndergroundLeftClick(world, vs, x, y, state);
+    expect(world.commandQueue).toHaveLength(0);
+    expect(state.isDragging).toBe(false);
+  });
+
+  it('handleUndergroundLeftClick on tileY=1 still emits MarkDigTile (sanity — only y=0 is gated)', () => {
+    const world = makeWorld();
+    const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
+    ugSet(grid, 10, 1, UndergroundTileState.Solid);
+    const vs = makeViewState('underground', 64, 32);
+    const state = makeState();
+    const { x, y } = tileToScreen(10, 1, 64, 32);
+    handleUndergroundLeftClick(world, vs, x, y, state);
+    expect(world.commandQueue).toHaveLength(1);
+    const cmd = world.commandQueue[0] as { type: string; tileY: number };
+    expect(cmd.type).toBe('MarkDigTile');
+    expect(cmd.tileY).toBe(1);
+  });
+
+  it('handleUndergroundDrag stroke that crosses tileY=0 skips the row-0 tiles but continues on row 1+', () => {
+    // Drag stroke from (10, 1) → (20, 0) → (20, 1) (synthesized via two
+    // emit calls). The row-0 tile must NOT emit a MarkDigTile; the row-1
+    // tiles bracketing it MUST emit. Bresenham continues across the gap.
+    const world = makeWorld();
+    const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
+    // Solid corridor along the path so each tile would otherwise be markable.
+    for (let x = 10; x <= 20; x++) {
+      ugSet(grid, x, 0, UndergroundTileState.Solid);
+      ugSet(grid, x, 1, UndergroundTileState.Solid);
+    }
+    const vs = makeViewState('underground', 64, 32);
+    // Seed drag at (10, 1) with isDragging=true (sentinel-free path).
+    const state = makeState(/*isDragging*/ true, 10, 1);
+    // Drag to (20, 0) — Bresenham stroke runs along row 0 and row 1.
+    const { x, y } = tileToScreen(20, 0, 64, 32);
+    handleUndergroundDrag(world, vs, x, y, state);
+    // Every emitted command must have tileY > 0 — no ceiling-row marks.
+    const tileYsEmitted = world.commandQueue.map((c) => (c as { tileY: number }).tileY);
+    expect(tileYsEmitted.length).toBeGreaterThan(0); // sanity — some marks fired
+    expect(tileYsEmitted.every((ty) => ty > 0)).toBe(true);
+  });
+
+  it('handleUndergroundDrag stroke that grazes ty=0 mid-stroke still emits row-1+ tiles past the crossing', () => {
+    // Strengthens the prior "crosses ceiling" test by ending the stroke on
+    // a regular row, not on row 0. The Bresenham loop must keep emitting
+    // for tiles past the row-0 crossing — the row-0 gate must be a
+    // per-tile skip inside emitTile, not a stroke-level early return.
+    const world = makeWorld();
+    const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
+    for (let x = 5; x <= 15; x++) {
+      for (let y = 0; y <= 2; y++) {
+        ugSet(grid, x, y, UndergroundTileState.Solid);
+      }
+    }
+    const vs = makeViewState('underground', 64, 32);
+    const state = makeState(/*isDragging*/ true, 5, 2);
+    // Drag end at (15, 2) — Bresenham line passes through tiles at multiple
+    // rows including y=0 if the stepper takes a diagonal turn through it.
+    // For our straight-row stroke (5,2)→(15,2), no row-0 tiles are touched,
+    // but we explicitly synthesize a stroke that does cross y=0 by routing
+    // through (10, 0).
+    let { x: x1, y: y1 } = tileToScreen(10, 0, 64, 32);
+    handleUndergroundDrag(world, vs, x1, y1, state); // first leg dips through row 0
+    ({ x: x1, y: y1 } = tileToScreen(15, 2, 64, 32));
+    handleUndergroundDrag(world, vs, x1, y1, state); // second leg returns to row 2
+    const tileYsEmitted = world.commandQueue.map((c) => (c as { tileY: number }).tileY);
+    expect(tileYsEmitted.length).toBeGreaterThan(0);
+    expect(tileYsEmitted.every((ty) => ty > 0)).toBe(true);
+    // Specifically: (15, 2) reached and emitted past the ceiling crossing.
+    expect(tileYsEmitted).toContain(2);
+  });
+
+  it('handleUndergroundDrag from sentinel (-1,-1) into tileY=0 is a no-op but rebases the cursor', () => {
+    // First-tick drag fall-back: when lastMarkedTile is the (-1,-1) sentinel
+    // and the pointer lands on the ceiling strip, we don't mark anything
+    // but we DO rebase the cursor so a subsequent drag onto a regular row
+    // can interpolate from a valid origin.
+    const world = makeWorld();
+    const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
+    ugSet(grid, 10, 0, UndergroundTileState.Solid);
+    const vs = makeViewState('underground', 64, 32);
+    const state = makeState(/*isDragging*/ true, -1, -1);
+    const { x, y } = tileToScreen(10, 0, 64, 32);
+    handleUndergroundDrag(world, vs, x, y, state);
+    expect(world.commandQueue).toHaveLength(0);
+    expect(state.lastMarkedTileX).toBe(10);
+    expect(state.lastMarkedTileY).toBe(0);
+    expect(state.isDragging).toBe(true);
+  });
+});
