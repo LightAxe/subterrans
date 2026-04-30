@@ -2781,7 +2781,17 @@ export function tickAntMovement(
         // routed through pickCardinalStep (issue #34) so the test path
         // gets the same Bresenham accumulator as the production flow-
         // field path.
-        const step = pickCardinalStep(ants, id, chamberTargetX - posX, chamberTargetY - posY);
+        //
+        // Codex coord-scale fix: deltas converted to tile-space so the
+        // shared per-ant `pathErr` accumulator stays in a single unit
+        // across all 9 call sites. Mixing FP and tile inputs leaves
+        // FP-era debt that dwarfs tile-era comparisons, producing long
+        // one-axis stair-steps when an ant transitions between tasks.
+        const step = pickCardinalStep(
+          ants, id,
+          (chamberTargetX >> FP_SHIFT) - (posX >> FP_SHIFT),
+          (chamberTargetY >> FP_SHIFT) - (posY >> FP_SHIFT),
+        );
         dx = step.dx;
         dy = step.dy;
       }
@@ -2834,8 +2844,13 @@ export function tickAntMovement(
       }
 
       if (!stepped) {
-        // Issue #34: see pickCardinalStep helper above.
-        const step = pickCardinalStep(ants, id, entranceTargetX - posX, entranceTargetY - posY);
+        // Issue #34 + codex coord-scale fix: tile-space deltas (see the
+        // chamber-target site above for rationale).
+        const step = pickCardinalStep(
+          ants, id,
+          (entranceTargetX >> FP_SHIFT) - (posX >> FP_SHIFT),
+          (entranceTargetY >> FP_SHIFT) - (posY >> FP_SHIFT),
+        );
         dx = step.dx;
         dy = step.dy;
       }
@@ -2884,8 +2899,12 @@ export function tickAntMovement(
       if (targetX !== -1 && targetY !== -1) {
         const posX = ants.posX[id]!;
         const posY = ants.posY[id]!;
-        // Issue #34: see pickCardinalStep helper above.
-        const step = pickCardinalStep(ants, id, targetX - posX, targetY - posY);
+        // Issue #34 + codex coord-scale fix: tile-space deltas.
+        const step = pickCardinalStep(
+          ants, id,
+          (targetX >> FP_SHIFT) - (posX >> FP_SHIFT),
+          (targetY >> FP_SHIFT) - (posY >> FP_SHIFT),
+        );
         dx = step.dx;
         dy = step.dy;
       } else {
@@ -2990,8 +3009,16 @@ export function tickAntMovement(
       }
 
       if (haveTarget) {
-        // Issue #34: see pickCardinalStep helper above.
-        const step = pickCardinalStep(ants, id, rawDx, rawDy);
+        // Issue #34 + codex coord-scale fix: rawDx/rawDy were FP-space
+        // (target − pos, both fp). Recompute as tile-space so the shared
+        // per-ant accumulator stays consistent with the queen and scent
+        // paths. The original target value is recoverable as
+        // `rawDx + posX` (== absolute fp target X).
+        const targetTileX = (rawDx + posX) >> FP_SHIFT;
+        const targetTileY = (rawDy + posY) >> FP_SHIFT;
+        const tileX = posX >> FP_SHIFT;
+        const tileY = posY >> FP_SHIFT;
+        const step = pickCardinalStep(ants, id, targetTileX - tileX, targetTileY - tileY);
         dx = step.dx;
         dy = step.dy;
       } else {
