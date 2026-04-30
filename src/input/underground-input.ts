@@ -170,10 +170,18 @@ export function handleUndergroundLeftClick(
   // `ty === 0` branch in draw-underground.ts:137-153). Without this gate a
   // click on the visible grass silently dispatches MarkDigTile against the
   // tile beneath, which the renderer keeps painting as grass — the player
-  // gets no visual feedback the click did anything. Drag is also armed to
-  // false here so a click-and-drag down from the ceiling strip cannot mark
-  // adjacent tiles via the Bresenham interpolation in handleUndergroundDrag.
-  if (tileY === UNDERGROUND_CEILING_ROW_Y) return;
+  // gets no visual feedback the click did anything.
+  //
+  // Codex P2 follow-up: also clear any stale drag state on this guard
+  // path. If a prior gesture left `isDragging=true` (focus-loss / missed
+  // pointerup), simply returning here without the reset would let the
+  // next pointermove resume the stale stroke from the old cursor — the
+  // exact "hidden marking" behavior this fix is supposed to eliminate.
+  // Symmetric with the enemy-view guard's defensive reset.
+  if (tileY === UNDERGROUND_CEILING_ROW_Y) {
+    state.isDragging = false;
+    return;
+  }
   // Arm drag state up front (before the tile-state branch) so a stroke that
   // begins on a Marked/BeingDug tile still marks subsequent Solid tiles. The
   // debounce cursor is seeded to the clicked tile so the first Bresenham

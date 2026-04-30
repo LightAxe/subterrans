@@ -1031,6 +1031,22 @@ describe('underground-input — ceiling-strip row gate (issue #30)', () => {
     expect(state.isDragging).toBe(false);
   });
 
+  it('handleUndergroundLeftClick on the ceiling strip clears any stale isDragging flag (codex P2)', () => {
+    // Defensive: a prior gesture that didn't see a clean pointerup (focus-
+    // loss) could leave isDragging=true. The ceiling-row guard must also
+    // reset it so a subsequent pointermove doesn't resume the stale stroke
+    // from a stale lastMarkedTile and emit hidden marks — the exact
+    // pre-fix behavior this PR is supposed to eliminate.
+    const world = makeWorld();
+    ugSet(world.undergroundGrids[PLAYER_COLONY_ID]!, 10, 0, UndergroundTileState.Solid);
+    const vs = makeViewState('underground', 64, 32);
+    const state = makeState(/*isDragging*/ true, 4, 4);
+    const { x, y } = tileToScreen(10, 0, 64, 32);
+    handleUndergroundLeftClick(world, vs, x, y, state);
+    expect(world.commandQueue).toHaveLength(0);
+    expect(state.isDragging).toBe(false);
+  });
+
   it('handleUndergroundLeftClick on tileY=1 still emits MarkDigTile (sanity — only y=0 is gated)', () => {
     const world = makeWorld();
     const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
