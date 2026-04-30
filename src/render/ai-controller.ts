@@ -141,13 +141,21 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
   // (typically a shallow FoodStorage when the food gate fires before the
   // Queen depth gate would accept) terminated bootstrap permanently. The
   // Queen ended up unable to find a deep enough anchor and the colony was
-  // stuck at a single near-surface chamber. Gating on "no Queen
-  // chamber/pending" instead keeps the AI digging downward until the
-  // Queen actually has somewhere to land at the intended depth band.
-  const queenInFlight = hasChamberOrPending(world, colony, ChamberType.Queen);
+  // stuck at a single near-surface chamber.
+  //
+  // The replacement gate keys off COMPLETED Queen chamber existence, not
+  // pending (codex P1 follow-up). Gating on pending too would deadlock if
+  // the Queen anchor sits behind unreachable Solid tiles: bootstrap halts
+  // on the pending → no further dig marks are issued → workers can't
+  // reach the anchor → Queen never completes. Continuing bootstrap while
+  // the Queen is merely pending costs at most a few extra dig marks
+  // around the deepest Open tile (the Queen anchor's vicinity, the same
+  // tiles bootstrap was already targeting), and guarantees workers can
+  // always reach the anchor by punching dirt as needed.
+  const queenCompleted = colony.chambers.some((c) => c.chamberType === ChamberType.Queen);
 
   // Bootstrap branch — no Queen yet. Dig downward from the deepest Open tile.
-  if (!queenInFlight) {
+  if (!queenCompleted) {
     const grid = world.undergroundGrids[colony.colonyId];
     if (grid !== undefined) {
       // Scan for the deepest Open tile (highest tileY). Deterministic tiebreak:
@@ -272,8 +280,12 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
 }
 
 export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): void {
-  // Queen chamber — if missing, try to place near AI_QUEEN_CHAMBER_DEPTH
-  if (!colony.chambers.some((c) => c.chamberType === ChamberType.Queen)) {
+  // Queen chamber — if missing, try to place near AI_QUEEN_CHAMBER_DEPTH.
+  // Includes pending Queen so we don't spam duplicate PlaceChamber commands
+  // into the queue between PlaceChamber issuance and Queen completion (the
+  // sim layer would reject them, but no point queuing them in the first
+  // place). Matches the FS / Nursery uniqueness pattern.
+  if (!hasChamberOrPending(world, colony, ChamberType.Queen)) {
     const placement = findOpenChamberSpot(world, colony, AI_QUEEN_CHAMBER_DEPTH, ChamberType.Queen);
     if (placement !== null) {
       const cmd: PlaceChamberCommand = {
@@ -694,22 +706,33 @@ function findOpenChamberSpot(
 
   if (candidates.length === 0) return null;
 
-  // Issue #33 — depth gate. Refuse to place when no candidate is within
-  // AI_PLACEMENT_DEPTH_TOLERANCE rows of preferredDepth. Without this gate
-  // the AI happily anchors the Queen at the entrance shaft floor (Y≈1) on
-  // tick 0 because the bootstrap dig hasn't yet excavated anything deeper.
-  // The chamber then becomes a dig anchor that prevents the bootstrap
-  // path from running again, so the colony never gets deeper than the
-  // first chamber's Y. With this gate the AI keeps deferring placement
-  // until the bootstrap has dug deep enough; the chamber lands in the
-  // intended depth band and steady-state perimeter dig extends from
-  // there.
-  let bestDepthDelta = Number.POSITIVE_INFINITY;
-  for (const c of candidates) {
-    const d = Math.abs(c.tileY - preferredDepth);
-    if (d < bestDepthDelta) bestDepthDelta = d;
+  // Issue #33 — depth gate, QUEEN PLACEMENT ONLY. Refuse to place the Queen
+  // until at least one candidate is within AI_PLACEMENT_DEPTH_TOLERANCE
+  // rows of preferredDepth. Without this gate the AI happily anchors the
+  // Queen at the entrance shaft floor (Y≈1) on tick 0 because the
+  // bootstrap dig hasn't yet excavated anything deeper. The chamber then
+  // becomes a dig anchor that prevents the bootstrap path from running
+  // again, so the colony never gets deeper than the first chamber's Y.
+  // With this gate the AI defers Queen placement until the bootstrap has
+  // dug deep enough; the chamber lands in the intended depth band and
+  // steady-state perimeter dig extends from there.
+  //
+  // Codex P2 follow-up: restrict the gate to Queen. FoodStorage and
+  // Nursery use shallower preferredDepth (5 / 7) and don't suffer from
+  // the early-shallow-anchor problem (Queen-first ordering already
+  // ensures the deep dig happens before they're considered). Applying
+  // the gate to FS/Nursery introduces a hard-fail mode: if valid anchors
+  // exist only outside ±tolerance (e.g. the dig has gone deeper than
+  // preferredDepth before the gate fires), the chamber would be silently
+  // never placed and the colony would stall.
+  if (chamberType === ChamberType.Queen) {
+    let bestDepthDelta = Number.POSITIVE_INFINITY;
+    for (const c of candidates) {
+      const d = Math.abs(c.tileY - preferredDepth);
+      if (d < bestDepthDelta) bestDepthDelta = d;
+    }
+    if (bestDepthDelta > AI_PLACEMENT_DEPTH_TOLERANCE) return null;
   }
-  if (bestDepthDelta > AI_PLACEMENT_DEPTH_TOLERANCE) return null;
 
   // Issue #33 — spatial-diversity scoring. The original sort picked the
   // first reachable anchor at the right depth and broke ties on
@@ -719,11 +742,13 @@ function findOpenChamberSpot(
   // shaft (the F9 snapshot in issue #33).
   //
   // Three-key sort:
-  //   1. Depth match — minimize |tileY - preferredDepth| strictly. The
-  //      depth gate above guarantees the best candidate is within
-  //      AI_PLACEMENT_DEPTH_TOLERANCE rows of preferredDepth, so this key
-  //      lands the chamber as close to its intended depth as the dug
-  //      area allows.
+  //   1. Depth match — minimize |tileY - preferredDepth| strictly. For
+  //      Queen, the depth gate above already guaranteed the best candidate
+  //      is within AI_PLACEMENT_DEPTH_TOLERANCE rows of preferredDepth.
+  //      For FS / Nursery, the gate is bypassed (codex P2): the sort still
+  //      picks the closest available row, but there's no upper bound — if
+  //      the dug area only contains rows far from preferredDepth, the
+  //      chamber lands at the closest reachable Y.
   //   2. Spread score — among same-depth candidates, prefer anchors with
   //      the LARGEST Manhattan distance to the nearest existing chamber.
   //      Wins horizontal spread when the dug area has expanded laterally.
