@@ -674,6 +674,115 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
 
   });
 
+  // ---------------------------------------------------------------------------
+  // Issue #33 — anti-cluster spatial diversity
+  // ---------------------------------------------------------------------------
+
+  describe('issue #33 — depth gate + spread bias', () => {
+    it('depth gate: Queen does NOT place when only shallow Y candidates exist (Δy > tolerance)', () => {
+      const world = makeWorld(0);
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      setQueenPos(world, 0, 10, 10);
+      const grid = world.undergroundGrids[2 as ColonyId]!;
+      // Only shallow tile available (Y=2). |2 - 18| = 16, way outside tolerance=4.
+      // Pre-issue-#33 the AI placed Queen at the entrance shaft floor; with
+      // the gate it must defer until the bootstrap dig has progressed.
+      ugSet(grid, 10, 2, UndergroundTileState.Open);
+      aiChamberPlacement(world, colony);
+      const queenCmd = world.commandQueue.find(
+        (c) => c.type === 'PlaceChamber' && (c as { chamberType: number }).chamberType === ChamberType.Queen,
+      );
+      expect(queenCmd).toBeUndefined();
+    });
+
+    it('depth gate: Queen DOES place when a candidate exists within ±tolerance of preferredDepth', () => {
+      const world = makeWorld(0);
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      setQueenPos(world, 0, 10, 10);
+      const grid = world.undergroundGrids[2 as ColonyId]!;
+      // Y=14 is within tolerance 4 of preferredDepth 18 (delta = 4).
+      ugSet(grid, 10, 14, UndergroundTileState.Open);
+      aiChamberPlacement(world, colony);
+      const queenCmd = world.commandQueue.find(
+        (c) => c.type === 'PlaceChamber' && (c as { chamberType: number }).chamberType === ChamberType.Queen,
+      ) as { anchorTileY: number } | undefined;
+      expect(queenCmd).toBeDefined();
+      expect(queenCmd!.anchorTileY).toBe(14);
+    });
+
+    it('spread bias: among same-depth candidates, anchor farthest from existing chambers wins', () => {
+      const world = makeWorld(0);
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      setQueenPos(world, 0, 10, 10);
+      const grid = world.undergroundGrids[2 as ColonyId]!;
+      // Two candidates at Nursery preferredDepth=7: anchor X=14 (close to
+      // existing Queen+FS at X≈10) and X=40 (far). Both have valid 4x3
+      // footprints that don't overlap any existing chamber. Spread bias
+      // should pick X=40.
+      colony.chambers.push(makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      colony.chambers.push(makeChamber(ChamberType.FoodStorage, 10, 5));
+      colony.eggCount = 6;
+      colony.larvaeCount = 6; // Triggers Nursery via brood threshold.
+      ugSet(grid, 14, 7, UndergroundTileState.Open);
+      ugSet(grid, 40, 7, UndergroundTileState.Open);
+      aiChamberPlacement(world, colony);
+      const nurseryCmd = world.commandQueue.find(
+        (c) => c.type === 'PlaceChamber' && (c as { chamberType: number }).chamberType === ChamberType.Nursery,
+      ) as { anchorTileX: number; anchorTileY: number } | undefined;
+      expect(nurseryCmd).toBeDefined();
+      // Nursery lands at X=40 — farther from the existing chambers at X=10.
+      expect(nurseryCmd!.anchorTileX).toBe(40);
+      expect(nurseryCmd!.anchorTileY).toBe(7);
+    });
+
+    it('Queen-first ordering: FoodStorage does NOT place before Queen exists, even with food >= threshold', () => {
+      const world = makeWorld(0);
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      setQueenPos(world, 0, 10, 10);
+      colony.foodStored = AI_FOOD_STORAGE_THRESHOLD * 100; // Far above threshold.
+      const grid = world.undergroundGrids[2 as ColonyId]!;
+      // Open tile at FS preferredDepth (5). Pre-fix the FS gate fired here
+      // immediately; the FS chamber landed and blocked the bootstrap dig
+      // before the Queen could find a deep enough spot.
+      ugSet(grid, 10, 5, UndergroundTileState.Open);
+      aiChamberPlacement(world, colony);
+      const fsCmd = world.commandQueue.find(
+        (c) => c.type === 'PlaceChamber' && (c as { chamberType: number }).chamberType === ChamberType.FoodStorage,
+      );
+      expect(fsCmd).toBeUndefined();
+    });
+
+    it('Queen-pending counts as Queen for FS gate (no double-pending)', () => {
+      const world = makeWorld(0);
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      setQueenPos(world, 0, 10, 10);
+      colony.foodStored = AI_FOOD_STORAGE_THRESHOLD * 100;
+      const grid = world.undergroundGrids[2 as ColonyId]!;
+      // Pending Queen blocks the bootstrap-dig gate AND counts as "queen
+      // exists" for the FS gate, so FS can place even before the Queen
+      // chamber transitions from pending to ChamberRecord.
+      world.pendingChambers['2:10:18'] = {
+        colonyId: 2 as ColonyId,
+        chamberType: ChamberType.Queen,
+        anchorTileX: 10,
+        anchorTileY: 18,
+        width: 5,
+        height: 3,
+      };
+      ugSet(grid, 10, 5, UndergroundTileState.Open);
+      aiChamberPlacement(world, colony);
+      const fsCmd = world.commandQueue.find(
+        (c) => c.type === 'PlaceChamber' && (c as { chamberType: number }).chamberType === ChamberType.FoodStorage,
+      );
+      expect(fsCmd).toBeDefined();
+    });
+  });
+
   // -------------------------------------------------------------------------
   describe('CLNY-08 compliance', () => {
 
@@ -751,7 +860,8 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
 
     it('AI_DIG_INTERVAL is 40', () => expect(AI_DIG_INTERVAL).toBe(40));
     it('AI_DIG_MARK_BUDGET is 5', () => expect(AI_DIG_MARK_BUDGET).toBe(5));
-    it('AI_QUEEN_CHAMBER_DEPTH is 10', () => expect(AI_QUEEN_CHAMBER_DEPTH).toBe(10));
+    it('AI_QUEEN_CHAMBER_DEPTH is 18 (issue #33 — deeper to satisfy maxDepth>15 acceptance criterion)', () =>
+      expect(AI_QUEEN_CHAMBER_DEPTH).toBe(18));
     it('AI_FOOD_STORAGE_THRESHOLD is 8', () => expect(AI_FOOD_STORAGE_THRESHOLD).toBe(8));
     it('AI_NURSERY_THRESHOLD is 12', () => expect(AI_NURSERY_THRESHOLD).toBe(12));
     it('AI_BEHAVIOR_RATIO has two-field shape (Phase 10 / D-05)', () => {

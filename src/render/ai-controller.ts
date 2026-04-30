@@ -21,9 +21,40 @@ import { colonyFoodTotal } from '../sim/colony/colony-system.js';
 
 export const AI_DIG_INTERVAL = 40 as const;       // every 2 seconds @ 20Hz
 export const AI_DIG_MARK_BUDGET = 5 as const;
-export const AI_QUEEN_CHAMBER_DEPTH = 10 as const;
+export const AI_QUEEN_CHAMBER_DEPTH = 18 as const;
 export const AI_FOOD_STORAGE_THRESHOLD = 8 as const;
 export const AI_NURSERY_THRESHOLD = 12 as const;
+
+/**
+ * Issue #33 — chamber placement depth tolerance (tiles). The findOpenChamberSpot
+ * depth gate refuses to issue a placement until at least one candidate is
+ * within ±TOLERANCE rows of preferredDepth. Without this gate the AI happily
+ * anchored shallow chambers at the entrance shaft floor on tick 0, locking
+ * in a near-surface layout before the bootstrap dig could reach the
+ * intended depth band.
+ *
+ * Tuning rationale: 4 tiles is wide enough that bootstrap can hit the gate
+ * within reasonable tick budget at the v2 scenario's underground grid
+ * dimensions, while still putting the Queen near AI_QUEEN_CHAMBER_DEPTH
+ * (footprint extends 3 rows below the anchor, so a Queen at delta=4
+ * lands its bottom row at preferredDepth + 1 — well within the
+ * acceptance criterion of "max chamber Y > 15").
+ */
+export const AI_PLACEMENT_DEPTH_TOLERANCE = 4 as const;
+
+/**
+ * Issue #33 — outward-extension dig budget (tiles per AI_DIG_INTERVAL).
+ * Once the colony has more than one chamber, the dig heuristic reserves a
+ * portion of AI_DIG_MARK_BUDGET for "frontier extension" tiles — perimeter
+ * tiles whose 4-neighborhood touches at most ONE chamber footprint. This
+ * keeps the dirt-clearing pattern from collapsing into a tight cluster
+ * around the colony centroid (which is what the F9 snapshot showed).
+ *
+ * 3 of 5 budget tiles per cycle go to outward extension; the remaining 2
+ * stay on the legacy full-perimeter pass (so chambers along internal
+ * borders still get reliably connected to their neighbors).
+ */
+export const AI_DIG_OUTWARD_BUDGET = 3 as const;
 
 /**
  * Phase 10 / D-05 — fixed AI BehaviorRatio (CMBT-02, two-role schema).
@@ -105,8 +136,18 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
   //     neighbors N,E,S,W.
   let budget = AI_DIG_MARK_BUDGET;
 
-  // Bootstrap branch — no chambers yet. Dig downward from the deepest Open tile.
-  if (colony.chambers.length === 0) {
+  // Issue #33 — bootstrap-while-no-Queen. Pre-fix the bootstrap was gated
+  // on `chambers.length === 0`, which meant the first chamber to LAND
+  // (typically a shallow FoodStorage when the food gate fires before the
+  // Queen depth gate would accept) terminated bootstrap permanently. The
+  // Queen ended up unable to find a deep enough anchor and the colony was
+  // stuck at a single near-surface chamber. Gating on "no Queen
+  // chamber/pending" instead keeps the AI digging downward until the
+  // Queen actually has somewhere to land at the intended depth band.
+  const queenInFlight = hasChamberOrPending(world, colony, ChamberType.Queen);
+
+  // Bootstrap branch — no Queen yet. Dig downward from the deepest Open tile.
+  if (!queenInFlight) {
     const grid = world.undergroundGrids[colony.colonyId];
     if (grid !== undefined) {
       // Scan for the deepest Open tile (highest tileY). Deterministic tiebreak:
@@ -154,19 +195,48 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
     if (ay !== by) return ay - by;
     return (a.posX >> FP_SHIFT) - (b.posX >> FP_SHIFT);
   });
-  // Steady-state: dig the full perimeter of every chamber. The original
-  // implementation only marked the 4 cardinal neighbors of the anchor tile
-  // (top-left corner), which for a 5×3 Queen chamber exposed only one
-  // diggable tile (the cell directly left of the anchor) once the chamber
-  // interior was excavated — effectively stalling the AI after the first
-  // two chambers landed. Documented per plan 09.1-01 Task 2. Iterate the
-  // full border: each tile outside the footprint but 4-adjacent to some
-  // interior tile is a candidate.
+
+  // Issue #33 — frontier-extension pass. Before the legacy full-perimeter
+  // pass, spend up to AI_DIG_OUTWARD_BUDGET tiles on perimeter tiles whose
+  // 4-neighborhood touches AT MOST one chamber footprint — i.e. tiles
+  // pointing AWAY from any cluster, not wedged BETWEEN chambers. Without
+  // this the legacy heuristic re-marks tiles between chambers every cycle
+  // and never punches outward, so the colony footprint collapses into a
+  // tight blob next to the entrance shaft (the F9 snapshot in issue #33).
+  //
+  // Gated on `chambers.length > 1`: with a single chamber every perimeter
+  // tile is "outward" already and the legacy pass extends uniformly.
+  // Total mark budget is unchanged (AI_DIG_MARK_BUDGET); the frontier pass
+  // just gets first dibs on AI_DIG_OUTWARD_BUDGET of those marks.
+  if (colony.chambers.length > 1) {
+    const frontier = collectFrontierTiles(world, colony, chambersSorted);
+    const limit = Math.min(AI_DIG_OUTWARD_BUDGET, budget);
+    for (let i = 0; i < frontier.length && budget > AI_DIG_MARK_BUDGET - limit; i++) {
+      const cand = frontier[i]!;
+      world.commandQueue.push({
+        type: 'MarkDigTile',
+        colonyId: colony.colonyId,
+        tileX: cand.tileX,
+        tileY: cand.tileY,
+        issuedAtTick: world.tick,
+      });
+      budget -= 1;
+    }
+  }
+
+  // Steady-state: dig the full perimeter of every chamber (legacy pass).
+  // Each tile outside the footprint but 4-adjacent to some interior tile
+  // is a candidate. (Earlier-history note: the original implementation
+  // only marked the 4 cardinal neighbors of the anchor's top-left corner,
+  // which for a 5×3 Queen chamber exposed only one diggable tile once the
+  // interior was excavated — effectively stalling the AI after two
+  // chambers landed. Per plan 09.1-01 Task 2 the loop now walks the full
+  // border.)
   for (const ch of chambersSorted) {
     if (budget <= 0) break;
     const chTileX = ch.posX >> FP_SHIFT;
     const chTileY = ch.posY >> FP_SHIFT;
-    // Top border: y = chTileY - 1, x = chTileX..chTileX+ch.width-1
+    // Top border
     for (let ox = 0; ox < ch.width && budget > 0; ox++) {
       const tx = chTileX + ox;
       const ty = chTileY - 1;
@@ -174,7 +244,7 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
       world.commandQueue.push({ type: 'MarkDigTile', colonyId: colony.colonyId, tileX: tx, tileY: ty, issuedAtTick: world.tick });
       budget -= 1;
     }
-    // Bottom border: y = chTileY + ch.height, x = chTileX..chTileX+ch.width-1
+    // Bottom border
     for (let ox = 0; ox < ch.width && budget > 0; ox++) {
       const tx = chTileX + ox;
       const ty = chTileY + ch.height;
@@ -182,7 +252,7 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
       world.commandQueue.push({ type: 'MarkDigTile', colonyId: colony.colonyId, tileX: tx, tileY: ty, issuedAtTick: world.tick });
       budget -= 1;
     }
-    // Left border: x = chTileX - 1, y = chTileY..chTileY+ch.height-1
+    // Left border
     for (let oy = 0; oy < ch.height && budget > 0; oy++) {
       const tx = chTileX - 1;
       const ty = chTileY + oy;
@@ -190,7 +260,7 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
       world.commandQueue.push({ type: 'MarkDigTile', colonyId: colony.colonyId, tileX: tx, tileY: ty, issuedAtTick: world.tick });
       budget -= 1;
     }
-    // Right border: x = chTileX + ch.width, y = chTileY..chTileY+ch.height-1
+    // Right border
     for (let oy = 0; oy < ch.height && budget > 0; oy++) {
       const tx = chTileX + ch.width;
       const ty = chTileY + oy;
@@ -221,9 +291,31 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
   // Issue #15: read total stash (entrance pool + every chamber.foodStored), not
   // the chamberless fallback bucket — colony.foodStored alone is now only the
   // entrance pool, so the AI gate would never fire once the first chamber filled.
+  //
+  // Issue #33 — also gate on Queen-completed-or-pending. Pre-fix the FS
+  // gate fired on tick 0 (starting foodStored=1280 ≫ threshold=8) and the
+  // FS chamber landed at the entrance shaft floor (Y≈1). That single
+  // shallow chamber preempted the bootstrap dig (which only ran while
+  // chambers.length === 0) and the Queen never found a deep enough
+  // anchor. The Queen-first ordering mirrors a human player's natural
+  // build sequence and lets the bootstrap finish digging the entrance
+  // shaft before the FS lands on it.
+  // FS uniqueness check: a duplicate-issuance window opens once Queen-pending
+  // exists (the FS gate above is now satisfied) and persists until the
+  // first FS PendingChamber transitions to a ChamberRecord. tick.ts dedupes
+  // by exact (anchorTileX, anchorTileY) so a second FS at the SAME spot is
+  // rejected, but if the BFS picks a DIFFERENT valid anchor on a later
+  // tick (e.g. when more Open tiles arrive and shift the spread-score
+  // winner) a second FS PendingChamber would slip through. The previous
+  // gate `!colony.chambers.some(...)` checked only completed chambers, so
+  // this widened-window race already existed; widening hasChamberOrPending
+  // here closes it. Net behavior: the AI places exactly one FoodStorage
+  // chamber per colony — same as before this PR; the sim layer would
+  // accept additional FS but the AI does not issue them.
   if (
-    colonyFoodTotal(colony) >= AI_FOOD_STORAGE_THRESHOLD
-    && !colony.chambers.some((c) => c.chamberType === ChamberType.FoodStorage)
+    hasChamberOrPending(world, colony, ChamberType.Queen)
+    && colonyFoodTotal(colony) >= AI_FOOD_STORAGE_THRESHOLD
+    && !hasChamberOrPending(world, colony, ChamberType.FoodStorage)
   ) {
     const placement = findOpenChamberSpot(world, colony, 5, ChamberType.FoodStorage);  // near-surface storage
     if (placement !== null) {
@@ -253,20 +345,11 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
   // grows brood past 12 (via some future mechanic) without a Nursery, this
   // still fires. The two conditions are OR-combined.
   {
-    let hasNursery = colony.chambers.some((c) => c.chamberType === ChamberType.Nursery);
-    // Also treat PENDING Nursery as "has Nursery" to prevent piling up duplicate
-    // PlaceChamber commands while excavation is in-flight. Nursery is intentionally
-    // unique (09-BACKLOG memo item 2: one Queen, one Nursery, multiple FoodStorage).
-    if (!hasNursery) {
-      for (const pcKey in world.pendingChambers) {
-        if (!Object.hasOwn(world.pendingChambers, pcKey)) continue;
-        const pc = world.pendingChambers[pcKey]!;
-        if (pc.colonyId === colony.colonyId && pc.chamberType === ChamberType.Nursery) {
-          hasNursery = true;
-          break;
-        }
-      }
-    }
+    // PENDING Nursery counts as "has Nursery" so duplicate PlaceChamber
+    // commands don't pile up while excavation is in-flight. Nursery is
+    // intentionally unique per colony (09-BACKLOG memo item 2: one Queen,
+    // one Nursery, multiple FoodStorage).
+    const hasNursery = hasChamberOrPending(world, colony, ChamberType.Nursery);
     const hasQueen = colony.chambers.some((c) => c.chamberType === ChamberType.Queen);
     const broodPressure = (colony.eggCount + colony.larvaeCount) >= AI_NURSERY_THRESHOLD;
     if (!hasNursery && (hasQueen || broodPressure)) {
@@ -308,6 +391,142 @@ export function aiEntranceDesignation(world: WorldState, colony: ColonyRecord): 
 }
 
 // --- Helpers ---
+
+/**
+ * True when the colony has a chamber of `chamberType`, or a PendingChamber
+ * of that type. Used to gate AI placement decisions that need to wait for
+ * a specific chamber to be in flight (e.g. issue #33 — FoodStorage waits
+ * for Queen so the bootstrap dig can finish reaching the deeper Queen
+ * preferredDepth before a shallow FS lands and stalls the dig).
+ */
+function hasChamberOrPending(
+  world: WorldState,
+  colony: ColonyRecord,
+  chamberType: ChamberType,
+): boolean {
+  if (colony.chambers.some((c) => c.chamberType === chamberType)) return true;
+  for (const pcKey in world.pendingChambers) {
+    if (!Object.hasOwn(world.pendingChambers, pcKey)) continue;
+    const pc = world.pendingChambers[pcKey]!;
+    if (pc.colonyId === colony.colonyId && pc.chamberType === chamberType) return true;
+  }
+  return false;
+}
+
+/**
+ * Issue #33 — collect "frontier" perimeter tiles ordered for outward dig
+ * extension.
+ *
+ * A frontier tile is a Solid (diggable) tile that:
+ *   1. is 4-adjacent to exactly ONE chamber's footprint, AND
+ *   2. lies on the outward side of that chamber relative to the colony
+ *      centroid (so we extend AWAY from the cluster, not back into it).
+ *
+ * Ordering is deterministic: outermost chambers first (max Manhattan
+ * distance from centroid), then by (tileY, tileX) ascending. The
+ * deterministic ordering preserves SCEN-06 byte-identical replay; no PRNG
+ * is involved.
+ *
+ * @returns frontier tile coordinates in dig-priority order (highest
+ *          priority first).
+ */
+function collectFrontierTiles(
+  world: WorldState,
+  colony: ColonyRecord,
+  chambersSorted: ColonyRecord['chambers'],
+): Array<{ tileX: number; tileY: number }> {
+  const grid = world.undergroundGrids[colony.colonyId];
+  if (grid === undefined || chambersSorted.length === 0) return [];
+
+  // Centroid of the chamber cluster — used to score "outward" direction.
+  let cx = 0;
+  let cy = 0;
+  for (const ch of chambersSorted) {
+    cx += (ch.posX >> FP_SHIFT) + (ch.width  >> 1);
+    cy += (ch.posY >> FP_SHIFT) + (ch.height >> 1);
+  }
+  cx = (cx / chambersSorted.length) | 0;
+  cy = (cy / chambersSorted.length) | 0;
+
+  // "Footprint membership" lookup: tile-key set keyed by ty * width + tx.
+  const footprint = new Set<number>();
+  for (const ch of chambersSorted) {
+    const ax = ch.posX >> FP_SHIFT;
+    const ay = ch.posY >> FP_SHIFT;
+    for (let oy = 0; oy < ch.height; oy++) {
+      for (let ox = 0; ox < ch.width; ox++) {
+        footprint.add((ay + oy) * grid.width + (ax + ox));
+      }
+    }
+  }
+  const isFootprint = (tx: number, ty: number): boolean =>
+    footprint.has(ty * grid.width + tx);
+
+  const candidates: Array<{
+    tileX: number;
+    tileY: number;
+    chamberDistFromCentroid: number;
+    outwardScore: number;
+  }> = [];
+
+  // For each chamber, walk its 4-border and emit any Solid tile whose
+  // 4-neighborhood touches no OTHER chamber's footprint. Outward score is
+  // |tx-cx| + |ty-cy| (higher = farther from centroid, meaning the tile
+  // points OUT of the cluster).
+  for (const ch of chambersSorted) {
+    const chTileX = ch.posX >> FP_SHIFT;
+    const chTileY = ch.posY >> FP_SHIFT;
+    const chCenterX = chTileX + (ch.width  >> 1);
+    const chCenterY = chTileY + (ch.height >> 1);
+    const chDist = Math.abs(chCenterX - cx) + Math.abs(chCenterY - cy);
+
+    const consider = (tx: number, ty: number): void => {
+      if (!isDirtTileUnderground(world, colony.colonyId, tx, ty)) return;
+      // Reject tiles 4-adjacent to ANOTHER chamber's footprint (those are
+      // "between" tiles; the legacy pass picks them up later if budget
+      // remains).
+      if (isFootprint(tx - 1, ty) && !(tx - 1 >= chTileX && tx - 1 < chTileX + ch.width  && ty >= chTileY && ty < chTileY + ch.height)) return;
+      if (isFootprint(tx + 1, ty) && !(tx + 1 >= chTileX && tx + 1 < chTileX + ch.width  && ty >= chTileY && ty < chTileY + ch.height)) return;
+      if (isFootprint(tx, ty - 1) && !(tx >= chTileX && tx < chTileX + ch.width  && ty - 1 >= chTileY && ty - 1 < chTileY + ch.height)) return;
+      if (isFootprint(tx, ty + 1) && !(tx >= chTileX && tx < chTileX + ch.width  && ty + 1 >= chTileY && ty + 1 < chTileY + ch.height)) return;
+      const outward = Math.abs(tx - cx) + Math.abs(ty - cy);
+      candidates.push({ tileX: tx, tileY: ty, chamberDistFromCentroid: chDist, outwardScore: outward });
+    };
+
+    // Walk the four borders.
+    for (let ox = 0; ox < ch.width; ox++) {
+      consider(chTileX + ox, chTileY - 1);
+      consider(chTileX + ox, chTileY + ch.height);
+    }
+    for (let oy = 0; oy < ch.height; oy++) {
+      consider(chTileX - 1,           chTileY + oy);
+      consider(chTileX + ch.width,    chTileY + oy);
+    }
+  }
+
+  // De-dupe (a tile can appear once per neighboring chamber).
+  const seen = new Set<number>();
+  const unique = candidates.filter((c) => {
+    const k = c.tileY * grid.width + c.tileX;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+
+  unique.sort((a, b) => {
+    // 1. Outermost chamber first (its frontier has the most empty space
+    //    on the other side to colonize).
+    if (a.chamberDistFromCentroid !== b.chamberDistFromCentroid) {
+      return b.chamberDistFromCentroid - a.chamberDistFromCentroid;
+    }
+    // 2. Highest outward score next (tile farthest from centroid).
+    if (a.outwardScore !== b.outwardScore) return b.outwardScore - a.outwardScore;
+    // 3. Deterministic tiebreak (tileY, tileX) ascending.
+    if (a.tileY !== b.tileY) return a.tileY - b.tileY;
+    return a.tileX - b.tileX;
+  });
+  return unique.map((c) => ({ tileX: c.tileX, tileY: c.tileY }));
+}
 
 /**
  * True when (tx, ty) is within the AI's underground grid AND the tile is Solid (diggable dirt).
@@ -463,10 +682,66 @@ function findOpenChamberSpot(
   }
 
   if (candidates.length === 0) return null;
+
+  // Issue #33 — depth gate. Refuse to place when no candidate is within
+  // AI_PLACEMENT_DEPTH_TOLERANCE rows of preferredDepth. Without this gate
+  // the AI happily anchors the Queen at the entrance shaft floor (Y≈1) on
+  // tick 0 because the bootstrap dig hasn't yet excavated anything deeper.
+  // The chamber then becomes a dig anchor that prevents the bootstrap
+  // path from running again, so the colony never gets deeper than the
+  // first chamber's Y. With this gate the AI keeps deferring placement
+  // until the bootstrap has dug deep enough; the chamber lands in the
+  // intended depth band and steady-state perimeter dig extends from
+  // there.
+  let bestDepthDelta = Number.POSITIVE_INFINITY;
+  for (const c of candidates) {
+    const d = Math.abs(c.tileY - preferredDepth);
+    if (d < bestDepthDelta) bestDepthDelta = d;
+  }
+  if (bestDepthDelta > AI_PLACEMENT_DEPTH_TOLERANCE) return null;
+
+  // Issue #33 — spatial-diversity scoring. The original sort picked the
+  // first reachable anchor at the right depth and broke ties on
+  // (tileY, tileX) ascending; with a centred queen and a uniform dig
+  // pattern, every chamber landed adjacent to the previous one. The enemy
+  // colony ended up wedged into ~12 tiles right next to its entrance
+  // shaft (the F9 snapshot in issue #33).
+  //
+  // Three-key sort:
+  //   1. Depth match — minimize |tileY - preferredDepth| strictly. The
+  //      depth gate above guarantees the best candidate is within
+  //      AI_PLACEMENT_DEPTH_TOLERANCE rows of preferredDepth, so this key
+  //      lands the chamber as close to its intended depth as the dug
+  //      area allows.
+  //   2. Spread score — among same-depth candidates, prefer anchors with
+  //      the LARGEST Manhattan distance to the nearest existing chamber.
+  //      Wins horizontal spread when the dug area has expanded laterally.
+  //      With zero existing chambers (Queen placement), every candidate
+  //      ties at spread = 0; falls through to (3).
+  //   3. Deterministic tiebreak: (tileY, tileX) ascending. No PRNG —
+  //      same seed → same layout per the issue's acceptance criteria.
+  //
+  // Determinism: all three keys are pure integer arithmetic over inputs
+  // already deterministic by construction. SCEN-06 byte-identical replay
+  // is preserved.
+  const minChamberDist = (ax: number, ay: number): number => {
+    if (colony.chambers.length === 0) return 0;
+    let best = Number.POSITIVE_INFINITY;
+    for (const ch of colony.chambers) {
+      const cx = ch.posX >> FP_SHIFT;
+      const cy = ch.posY >> FP_SHIFT;
+      const d = Math.abs(ax - cx) + Math.abs(ay - cy);
+      if (d < best) best = d;
+    }
+    return best === Number.POSITIVE_INFINITY ? 0 : best;
+  };
   candidates.sort((a, b) => {
     const da = Math.abs(a.tileY - preferredDepth);
     const db = Math.abs(b.tileY - preferredDepth);
     if (da !== db) return da - db;
+    const sa = minChamberDist(a.tileX, a.tileY);
+    const sb = minChamberDist(b.tileX, b.tileY);
+    if (sa !== sb) return sb - sa; // farther from existing chambers wins.
     if (a.tileY !== b.tileY) return a.tileY - b.tileY;
     return a.tileX - b.tileX;
   });

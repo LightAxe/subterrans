@@ -1,5 +1,5 @@
 // src/render/ai-controller.integration.test.ts
-// Phase 09.1 Plan 01 (REQ-C1) — AI-only 3000-tick integration test.
+// Phase 09.1 Plan 01 (REQ-C1) — AI-only 6000-tick integration test.
 //
 // Validates that the rule-based AI controller from plan 09-05 drives a cold
 // scenario to a functional nest (Queen + FoodStorage + Nursery chambers on
@@ -36,8 +36,15 @@ import { colonyFoodTotal } from '../sim/colony/colony-system.js';
 // -----------------------------------------------------------------------------
 
 const SEED = 42;
-const TOTAL_TICKS = 3000;
-const TRAJECTORY_WINDOW_START = 2500;   // track workerCount from tick 2500..3000
+// Issue #33 — extended from 3000 to 6000 ticks. The deeper Queen target
+// (AI_QUEEN_CHAMBER_DEPTH = 18, was 10) lengthens bootstrap dig time before
+// the Queen chamber can land at its acceptable depth band; the OLD shallow
+// target placed the Queen at Y≈1 by tick 100. The new depth gate is the
+// whole point of issue #33 (chambers spread vertically, max chamber Y > 15
+// per the acceptance criteria), so the slower bootstrap is the intended
+// trade-off.
+const TOTAL_TICKS = 6000;
+const TRAJECTORY_WINDOW_START = 5500;   // track workerCount from tick 5500..6000
 const DIAGNOSTIC_INTERVAL = 500;         // log snapshot every 500 ticks (pre-audit)
 
 // -----------------------------------------------------------------------------
@@ -81,7 +88,7 @@ function findChamber(colony: ColonyRecord, type: ChamberType) {
 // Test
 // -----------------------------------------------------------------------------
 
-describe('AI-only scenario 3000 ticks', () => {
+describe('AI-only scenario 6000 ticks', () => {
   it('AI colony autonomously builds Queen + FoodStorage + Nursery and sustains itself (REQ-C1)', () => {
     // --- Setup: real scenario world; AI drives ENEMY colony only ---
     const world = createScenario(SEED);
@@ -125,7 +132,7 @@ describe('AI-only scenario 3000 ticks', () => {
     // --- End-state snapshot (for failure diagnostics) ---
     const finalState = snapshotColony(world, aiColony!);
     const ctx = `Final state: ${JSON.stringify(finalState)}. ` +
-      `Trajectory[2500..3000] workerCount (${workerCountTrajectory.length} samples): ` +
+      `Trajectory[${TRAJECTORY_WINDOW_START}..${TOTAL_TICKS}] workerCount (${workerCountTrajectory.length} samples): ` +
       `first=${workerCountTrajectory[0]} last=${workerCountTrajectory[workerCountTrajectory.length - 1]}. ` +
       `Diagnostics: ${JSON.stringify(diagnostics)}`;
 
@@ -195,5 +202,69 @@ describe('AI-only scenario 3000 ticks', () => {
       `workerCount declined across ticks ${TRAJECTORY_WINDOW_START}..${TOTAL_TICKS}: ` +
       `started=${startWC} ended=${endWC}. ${ctx}`,
     ).toBeGreaterThanOrEqual(startWC);
-  }, 60_000); // 3000 ticks + assertions may take >5s default; allow 60s budget.
+  }, 60_000); // 6000 ticks + assertions may take >5s default; allow 60s budget.
+});
+
+// -----------------------------------------------------------------------------
+// Issue #33 — spatial-diversity acceptance test.
+// Per the issue's acceptance criteria: after ~15 minutes of sim time
+// (18000 ticks at 20Hz) with the default scenario, the enemy colony
+// footprint should span at least 30% of the underground grid width OR have
+// at least one chamber at depth y > 15. The current fix achieves the depth
+// criterion via a deeper Queen target (AI_QUEEN_CHAMBER_DEPTH = 18) plus a
+// depth gate on findOpenChamberSpot.
+// -----------------------------------------------------------------------------
+
+describe('AI-only scenario 18000 ticks (issue #33)', () => {
+  it('enemy colony max chamber Y > 15 OR footprint spans >= 30% of grid width', () => {
+    const world = createScenario(SEED);
+    const aiColony = world.colonies[ENEMY_COLONY_ID]!;
+
+    for (let t = 0; t < 18000; t++) {
+      runAIController(world, ENEMY_COLONY_ID);
+      const cmds = world.commandQueue.splice(0);
+      tick(world, cmds);
+    }
+
+    const grid = world.undergroundGrids[ENEMY_COLONY_ID]!;
+    let minX = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const ch of aiColony.chambers) {
+      const x = ch.posX >> FP_SHIFT;
+      const y = ch.posY >> FP_SHIFT;
+      if (x < minX) minX = x;
+      if (x + ch.width > maxX) maxX = x + ch.width;
+      if (y + ch.height > maxY) maxY = y + ch.height;
+    }
+    const widthSpan = aiColony.chambers.length > 0 ? maxX - minX : 0;
+    const widthRatio = widthSpan / grid.width;
+    const ctx =
+      `chambers=${aiColony.chambers.length}, ` +
+      `widthSpan=${widthSpan} (${(widthRatio * 100).toFixed(1)}%), ` +
+      `maxChamberY=${maxY}`;
+    expect(
+      widthRatio >= 0.30 || maxY > 15,
+      `Issue #33 acceptance: span >= 30% width OR max chamber Y > 15. Got ${ctx}.`,
+    ).toBe(true);
+  }, 120_000);
+
+  it('layout is deterministic — two seeded runs produce identical chamber positions', () => {
+    function run(): Array<{ type: number; x: number; y: number }> {
+      const world = createScenario(SEED);
+      // Smaller tick budget for the determinism check — Queen + FS + Nursery
+      // are all in place by tick 6000 (verified by REQ-C1 above), and
+      // determinism failures show up immediately, not asymptotically.
+      for (let t = 0; t < 6000; t++) {
+        runAIController(world, ENEMY_COLONY_ID);
+        const cmds = world.commandQueue.splice(0);
+        tick(world, cmds);
+      }
+      const colony = world.colonies[ENEMY_COLONY_ID]!;
+      return colony.chambers.map((ch) => ({
+        type: ch.chamberType,
+        x: ch.posX >> FP_SHIFT,
+        y: ch.posY >> FP_SHIFT,
+      }));
+    }
+    expect(run()).toEqual(run());
+  }, 60_000);
 });
