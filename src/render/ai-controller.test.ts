@@ -282,6 +282,28 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(world.commandQueue).toHaveLength(0);
     });
 
+    it('Issue #30: chamber at chTileY=1 → AI must NOT mark row 0 (top border skips ceiling)', () => {
+      // The visible bug from PR #32 UAT: every chamber the AI placed at
+      // chTileY=1 had its top-border perimeter loop hit ty=0, marking the
+      // ceiling-strip tiles for digging. Once excavated, the chamber-edge
+      // network straddled the grass band. isDirtTileUnderground now
+      // rejects ty=0 so the AI never proposes those marks (the sim's
+      // MarkDigTile gate would reject them anyway, but pre-filtering
+      // saves AI_DIG_MARK_BUDGET on dead-on-arrival commands).
+      const world = makeWorld(AI_DIG_INTERVAL);
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      // Single-tile chamber at (10, 1) — top border lands on ty=0 = ceiling.
+      colony.chambers.push(makeChamber(ChamberType.Queen, 10, 1, 1, 1));
+      aiDigHeuristic(world, colony);
+      const digCmds = world.commandQueue.filter((c) => c.type === 'MarkDigTile');
+      // Some marks fired (E/W/S neighbors are valid), but NONE on the ceiling row.
+      expect(digCmds.length).toBeGreaterThan(0);
+      for (const cmd of digCmds as Array<{ tileY: number }>) {
+        expect(cmd.tileY).not.toBe(0);
+      }
+    });
+
     it('every MarkDigTile command has issuedAtTick: world.tick and no zone field', () => {
       const world = makeWorld(AI_DIG_INTERVAL);
       const colony = addColony(world, 2 as ColonyId, 0);

@@ -16,6 +16,7 @@ import { ChamberType } from '../sim/enums.js';
 import { UndergroundTileState, ugGet } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
+import { UNDERGROUND_CEILING_ROW_Y } from '../sim/constants.js';
 import { colonyFoodTotal } from '../sim/colony/colony-system.js';
 
 export const AI_DIG_INTERVAL = 40 as const;       // every 2 seconds @ 20Hz
@@ -321,6 +322,14 @@ function isDirtTileUnderground(
   const grid = world.undergroundGrids[colonyId];
   if (grid === undefined) return false;
   if (tx < 0 || ty < 0 || tx >= grid.width || ty >= grid.height) return false;
+  // Issue #30: the AI must never propose marks in the ceiling row. The
+  // sim-layer MarkDigTile gate would reject them anyway, but having the AI
+  // pre-filter avoids spamming AI_DIG_MARK_BUDGET on dead-on-arrival
+  // commands every AI_DIG_INTERVAL ticks. The screenshot from PR #32 UAT
+  // showed enemy chambers built straddling the grass strip because every
+  // chamber at chTileY=1 (the typical near-surface case) had its top-
+  // border perimeter loop hit ty=0 and excavate the ceiling.
+  if (ty === UNDERGROUND_CEILING_ROW_Y) return false;
   return ugGet(grid, tx, ty) === UndergroundTileState.Solid;
 }
 

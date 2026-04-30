@@ -1110,6 +1110,36 @@ describe('Phase 7: MarkDigTile command processing', () => {
     expect(ugGet(underground, 10, 10)).toBe(UndergroundTileState.Open);
   });
 
+  // Issue #30 (sim-side): ceiling-row reject regardless of dispatch source.
+  it('Issue #30: MarkDigTile on tileY=0 (ceiling row) → silent drop, tile stays Solid', () => {
+    const { world, colonyId } = makeWorldWithUnderground();
+    const cmd: SimCommand = { type: 'MarkDigTile', colonyId, tileX: 30, tileY: 0, issuedAtTick: 0 };
+    tick(world, [cmd]);
+    const underground = world.undergroundGrids[colonyId]!;
+    // Tile stays Solid — the ceiling-row gate fires before the Marked write.
+    expect(ugGet(underground, 30, 0)).toBe(UndergroundTileState.Solid);
+  });
+
+  // Issue #30 (carve-out): DesignateEntrance must still mark row 0 at the
+  // entrance column. Entrance columns are exempt by design — the renderer
+  // paints them as the gold-tinted "way in" hole, not as the grass ceiling.
+  // The MarkDigTile gate above is scoped to the MarkDigTile dispatch path
+  // only; DesignateEntrance writes via direct ugSet to preserve this
+  // legitimate exemption. Regression guard so a future overreach of the
+  // ceiling-row rule doesn't break entrance shaft excavation.
+  it('Issue #30: DesignateEntrance still marks the row-0 shaft tile at the entrance column', () => {
+    const { world, colonyId } = makeWorldWithUnderground();
+    const cmd: SimCommand = {
+      type: 'DesignateEntrance', colonyId,
+      surfaceTileX: 40, surfaceTileY: 64, issuedAtTick: 0,
+    };
+    tick(world, [cmd]);
+    const underground = world.undergroundGrids[colonyId]!;
+    // Row-0 tile at the designated column is Marked — entrance columns
+    // are exempt from the ceiling-row prohibition.
+    expect(ugGet(underground, 40, 0)).toBe(UndergroundTileState.Marked);
+  });
+
   // Test P7-3: MarkDigTile out of bounds → silent drop
   it('Test P7-3: MarkDigTile out of bounds → silent drop, no throw', () => {
     const { world, colonyId } = makeWorldWithUnderground();
@@ -1239,6 +1269,21 @@ describe('Phase 7: MarkDigTile command processing', () => {
     tick(world, [cmd2]);
     // Overlapping chamber should NOT have been created
     expect(world.pendingChambers[`${colonyId}:12:10`]).toBeUndefined();
+  });
+
+  // Issue #30 (sim-side): PlaceChamber footprint must not include the
+  // ceiling row. Symmetric with the MarkDigTile gate.
+  it('Issue #30: PlaceChamber rejected when anchorTileY=0 (footprint overlaps ceiling)', () => {
+    const { world, colonyId } = makeWorldWithUnderground();
+    const underground = world.undergroundGrids[colonyId]!;
+    underground.data[0 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
+    const cmd: SimCommand = {
+      type: 'PlaceChamber', colonyId,
+      chamberType: ChamberType.Queen,
+      anchorTileX: 10, anchorTileY: 0, issuedAtTick: 0,
+    };
+    tick(world, [cmd]);
+    expect(world.pendingChambers[`${colonyId}:10:0`]).toBeUndefined();
   });
 
   // Test P7-9: PlaceChamber rejected if out of bounds

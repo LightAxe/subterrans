@@ -21,6 +21,7 @@ import {
   ENTRANCE_SHAFT_DEPTH,
   UNDERGROUND_GRID_WIDTH,
   UNDERGROUND_GRID_HEIGHT,
+  UNDERGROUND_CEILING_ROW_Y,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
 } from './constants.js';
@@ -239,6 +240,22 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         if (!underground) break;
         // T-07-10: bounds check (mitigate tamper — reject out-of-range silently)
         if (cmd.tileX < 0 || cmd.tileX >= UNDERGROUND_GRID_WIDTH || cmd.tileY < 0 || cmd.tileY >= UNDERGROUND_GRID_HEIGHT) break;
+        // Issue #30 (sim-side): reject ceiling-strip dispatches at the
+        // MarkDigTile boundary. The renderer paints `tileY === 0` as grass
+        // for non-entrance columns (entrance columns get the gold-tinted
+        // Open hole), so a Marked tile underneath would be invisible.
+        // Player clicks are also gated at the input layer; the AI
+        // controller pushes MarkDigTileCommand directly to the queue
+        // (every chamber's top-border perimeter mark hits ty=0 when
+        // chTileY=1). The sim-layer gate covers any current or future
+        // path that ends here — CLNY-08-compliant, no isPlayer branching.
+        //
+        // Out of scope for this gate: the DesignateEntrance handler
+        // writes Marked tiles in the entrance column from sy=0 down via
+        // direct `ugSet` and intentionally bypasses MarkDigTile. That's
+        // correct — entrance columns are exempt by design (the renderer
+        // paints them as the gold-tinted "way in" hole, not grass).
+        if (cmd.tileY === UNDERGROUND_CEILING_ROW_Y) break;
         if (ugGet(underground, cmd.tileX, cmd.tileY) !== UndergroundTileState.Solid) break;
         ugSet(underground, cmd.tileX, cmd.tileY, UndergroundTileState.Marked);
         const colony1 = world.colonies[cmd.colonyId];
@@ -286,6 +303,15 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         // (a)(b) Bounds check (T-07-11 first guard)
         if (cmd.anchorTileX < 0 || cmd.anchorTileX + dims.width > UNDERGROUND_GRID_WIDTH) break;
         if (cmd.anchorTileY < 0 || cmd.anchorTileY + dims.height > UNDERGROUND_GRID_HEIGHT) break;
+        // Issue #30 (sim-side): reject any chamber whose footprint overlaps
+        // the ceiling row. CHAMBER_DIMENSIONS extend DOWN from the anchor,
+        // so anchorTileY === UNDERGROUND_CEILING_ROW_Y is exactly the
+        // "footprint includes the ceiling row" case — no need to inspect
+        // the footprint range, the equality check is sufficient as long
+        // as the ceiling stays a single row. Mirrors the MarkDigTile
+        // gate above; same CLNY-08 rationale (player + AI use the same
+        // sim handler, so no isPlayer branching).
+        if (cmd.anchorTileY === UNDERGROUND_CEILING_ROW_Y) break;
         const colony3 = world.colonies[cmd.colonyId];
         if (!colony3) break;
         // Queen-uniqueness (09 backlog memo): reject if colony already has a
