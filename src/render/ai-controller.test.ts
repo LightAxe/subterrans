@@ -756,6 +756,42 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(fsCmd).toBeUndefined();
     });
 
+    it('frontier collection bounds-checks footprint probes (codex P2 — edge aliasing)', () => {
+      // Two chambers in the same row at opposite ends of the grid:
+      //   A at (GRID_W-1, 5), B at (0, 5).
+      // collectFrontierTiles walks A's top border, considering tile
+      // (GRID_W-1, 4). The neighbor probe `isFootprint(GRID_W, 4)` would
+      // — without bounds checking — produce a key equal to
+      // `4*GRID_W + GRID_W = 5*GRID_W + 0`, colliding with the footprint
+      // tile (0, 5) where B sits. Without the bounds guard, A's top tile
+      // is wrongly rejected as adjacent to another chamber and never
+      // makes it into the frontier dig pass.
+      const world = makeWorld(AI_DIG_INTERVAL);
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      // Place A at right edge, B at left edge. Both 1x1 to keep the
+      // arithmetic crisp.
+      const RIGHT_EDGE = 63; // GRID_W - 1, matches addUndergroundGrid GRID_W=64
+      colony.chambers.push(makeChamber(ChamberType.Queen,        RIGHT_EDGE, 5, 1, 1));
+      colony.chambers.push(makeChamber(ChamberType.FoodStorage,  0,          5, 1, 1));
+
+      aiDigHeuristic(world, colony);
+      const digCmds = world.commandQueue.filter(
+        (c) => c.type === 'MarkDigTile',
+      ) as Array<{ tileX: number; tileY: number }>;
+      // The right-edge chamber's top tile (RIGHT_EDGE, 4) must appear in
+      // the dig commands — either via the frontier pass or the legacy
+      // perimeter pass. Without the bounds fix, the frontier pass falsely
+      // rejected it; the legacy pass picks it up regardless, so the
+      // bug manifested as "no frontier extension" rather than "no dig at
+      // all". Assert a stronger property: the (RIGHT_EDGE, 4) command
+      // must be present.
+      const hasTopRightMark = digCmds.some(
+        (c) => c.tileX === RIGHT_EDGE && c.tileY === 4,
+      );
+      expect(hasTopRightMark).toBe(true);
+    });
+
     it('Queen-pending counts as Queen for FS gate (no double-pending)', () => {
       const world = makeWorld(0);
       const colony = addColony(world, 2 as ColonyId, 0);

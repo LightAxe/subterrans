@@ -459,8 +459,19 @@ function collectFrontierTiles(
       }
     }
   }
-  const isFootprint = (tx: number, ty: number): boolean =>
-    footprint.has(ty * grid.width + tx);
+  // Bounds-checked footprint membership. Without the bounds check (codex
+  // P2 review), a candidate at the grid's right edge (tx === width-1)
+  // probing `isFootprint(tx + 1, ty)` would produce the key
+  // `ty*width + width === (ty+1)*width + 0`, which collides with
+  // `(0, ty+1)` — i.e. a chamber footprint hugging the LEFT edge one row
+  // below would falsely "block" right-edge frontier tiles. Same hazard
+  // applies to (-1, ty) wrapping into (width-1, ty-1). The bounds guard
+  // matches `canEnterUndergroundTile`'s out-of-bounds rejection (treats
+  // off-grid cells as never inside any footprint).
+  const isFootprint = (tx: number, ty: number): boolean => {
+    if (tx < 0 || ty < 0 || tx >= grid.width || ty >= grid.height) return false;
+    return footprint.has(ty * grid.width + tx);
+  };
 
   const candidates: Array<{
     tileX: number;
