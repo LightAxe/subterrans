@@ -20,8 +20,9 @@
 //     MUST run at step 10 (after idle-reassignment, before checkPendingChambers step 11).
 //     MUST NOT be called from tickAntMovement (step 16) — ordering contract is critical.
 //   - getTaskDirection: reads world state. MUST NOT mutate tiles, ant sub-state, or colony flags.
-//     Issue #34 exception: writes `ants.pathErr` for the per-ant Bresenham accumulator that backs
-//     `pickCardinalStep`. The accumulator is movement-step state, not task or sub-task state.
+//     Pure read — pickCardinalStep no longer writes ants.pathErr (issue #34 v4
+//     follow-up: the Bresenham accumulator was retired in favor of true 8-connected
+//     diagonal motion; pathErr remains as save-format inert state for back-compat).
 //   - tickPheromoneDeposit: only ants with foodCarrying > 0 AND alive === 1 deposit (§5b carry-only rule).
 //   - tickAntMovement: foragers use sampleGradient on their colony's food-trail surface grid.
 //     Non-foragers use getTaskDirection (pure, no state transitions).
@@ -31,7 +32,7 @@
 // No per-iteration allocations beyond sampleGradient's return object (accepted in Phase 6).
 // world.nextEntityId is the upper bound for entity iteration; alive=0 slots are skipped.
 
-import type { WorldState } from '../types.js';
+import { SIM_VERSION_V4_DIAGONAL_MOTION, type WorldState } from '../types.js';
 import type { AntComponents } from './ant-store.js';
 import type { ColonyRecord, ChamberRecord } from '../colony/colony-store.js';
 import { hasCompletedChamber, isFoodChamberDepositable } from '../colony/colony-system.js';
@@ -165,43 +166,54 @@ export function antPickupFood(
 }
 
 // ---------------------------------------------------------------------------
-// pickCardinalStep — issue #34 Bresenham-style cardinal step from a 2-D delta
+// pickCardinalStep — issue #34 step picker (legacy 4-connected pre-v4,
+// 8-connected v4+).
 //
-// Translates an integer-tile target offset (rawDx, rawDy) into a single
-// cardinal step (one of {(±1,0), (0,±1), (0,0)}) per tick using a per-ant
-// error accumulator stored in `ants.pathErr`. Each tick the major axis
-// (largest absolute delta) is preferred unless the accumulated minor-axis
-// debt has crossed half the (major + minor) sum, at which point the minor
-// axis is taken once and the debt is rebated.
+// Translates an integer-tile target offset (rawDx, rawDy) into a per-tick
+// step. Behavior is gated by simVersion so saves recorded under any prior
+// algorithm replay byte-identically (sticky simVersion on load — see
+// types.ts).
 //
-// Behaviour at notable slopes:
-//   - Pure cardinal (one delta zero): step the non-zero axis. Error
-//     accumulator unchanged so a future diagonal segment starts fresh.
-//   - 45° (|rawDx| === |rawDy|): bounded same-axis runs (≤ 2 tiles)
-//     instead of the prior N-tile staircase.
-//   - Other slopes: proportional alternation. E.g. (rawDx=3, rawDy=1)
-//     produces "X Y X X" repeating, matching the 3:1 ratio.
+// simVersion < SIM_VERSION_V4_DIAGONAL_MOTION (legacy v2/v3):
+//   Greedy major-axis pick — exactly the pre-issue-#34 behavior. The axis
+//   with the larger absolute delta is taken first; ties go to X. Returns
+//   one of {(±1, 0), (0, ±1), (0, 0)}. Produces a visible stair-step on
+//   near-45° paths (the bug issue #34 set out to fix), preserved here so
+//   pre-v4 replays are bit-exact.
 //
-// Replaces the 9 sites that previously did `Math.abs(rawDx) >= Math.abs(rawDy)`
-// greedy axis pick. The greedy form exhausted the leading axis before
-// switching, producing visible stair-step on near-45° paths.
+// simVersion >= SIM_VERSION_V4_DIAGONAL_MOTION (issue #34 fix):
+//   When BOTH axes have non-zero raw delta, return a diagonal step
+//   (sign(rawDx), sign(rawDy)) directly — true 8-connected motion. Pure
+//   single-axis cases behave identically to the legacy path. Diagonal moves
+//   traverse √2× cardinal Manhattan distance per tick (standard 8-connected
+//   speed semantics).
 //
-// Determinism: pure read of `ants.pathErr[id]`, pure write to the same
-// slot. No PRNG, no allocation, no float math. Same inputs → same output.
+// pathErr (per-ant Int32 accumulator on AntComponents) is now inert state.
+// An earlier iteration of #34 used it for a Bresenham accumulator on an
+// intermediate "v3.5" cardinal-with-bounded-staircase algorithm; the v4
+// 8-connected path made that obsolete (no staircase to compensate for).
+// The field is preserved on AntComponents and in saves so existing v3-era
+// branches and saves carrying mid-flight pathErr values still load.
+// pickCardinalStep neither reads nor writes pathErr on either path.
 //
-// Allocation discipline (codex P1 follow-up): the result is written into
-// a module-level scratch object reused on every call rather than a fresh
-// `{dx, dy}` literal. tickAntMovement / moveQueens call this in the
-// per-ant hot loop; per-tick `{dx, dy}` literal allocation showed up as
-// continuous GC pressure as colony size grew. The scratch is read-then-
-// consumed by the call site before the next call overwrites it, so the
-// shared-mutable pattern is safe — caller never holds a reference past
-// its own next pickCardinalStep call.
+// Caller responsibilities:
+//   - Pass `world.simVersion` for sticky-replay correctness.
+//   - Underground callers must apply corner-cut prevention to v4 diagonal
+//     steps via the post-step passability guard in tickAntMovement /
+//     moveQueens. pickCardinalStep is grid-agnostic and does not vet the
+//     destination tile.
 //
-// Note on reset semantics: pathErr is NOT reset between distinct journeys.
-// A small carry-over per ant is acceptable (the trajectory deviation
-// converges back within a few ticks of any new diagonal). Callers that
-// care can write 0 to `ants.pathErr[id]` explicitly; today none do.
+// Determinism: pure reads of (ants, id, rawDx, rawDy, simVersion). No PRNG,
+// no allocation, no float math, no mutation. Same inputs → same output.
+//
+// Allocation discipline (codex P1 follow-up to the original PR): the result
+// is written into a module-level scratch object reused on every call rather
+// than a fresh `{dx, dy}` literal. tickAntMovement / moveQueens call this
+// in per-ant hot loops; per-tick `{dx, dy}` literal allocation showed up as
+// GC pressure as colony size grew. The scratch is read-then-consumed by the
+// call site before the next call overwrites it, so the shared-mutable
+// pattern is safe — caller never holds a reference past its own next
+// pickCardinalStep call.
 // ---------------------------------------------------------------------------
 
 interface CardinalStep { dx: number; dy: number }
@@ -213,7 +225,9 @@ export function pickCardinalStep(
   id: number,
   rawDx: number,
   rawDy: number,
+  simVersion: number,
 ): CardinalStep {
+  void ants; void id; // pathErr is inert under v4-and-later; not read here.
   const absDx = rawDx < 0 ? -rawDx : rawDx;
   const absDy = rawDy < 0 ? -rawDy : rawDy;
   if (absDx === 0 && absDy === 0) {
@@ -231,27 +245,20 @@ export function pickCardinalStep(
     cardinalStepScratch.dy = 0;
     return cardinalStepScratch;
   }
-  // Both axes non-zero. Pick major / minor by magnitude (tie → X).
-  const majorIsX = absDx >= absDy;
-  const major = majorIsX ? absDx : absDy;
-  const minor = majorIsX ? absDy : absDx;
-  // Accumulate minor-axis debt. When the debt has crossed the midpoint of
-  // the (major + minor) span, take a minor-axis step and rebate.
-  // Comparison uses doubled values to avoid integer division.
-  const errPlus = ants.pathErr[id]! + minor;
-  if (errPlus * 2 > major + minor) {
-    ants.pathErr[id] = errPlus - (major + minor);
-    if (majorIsX) {
-      cardinalStepScratch.dx = 0;
-      cardinalStepScratch.dy = rawDy > 0 ? 1 : -1;
-    } else {
-      cardinalStepScratch.dx = rawDx > 0 ? 1 : -1;
-      cardinalStepScratch.dy = 0;
-    }
+
+  // Both axes non-zero.
+  if (simVersion >= SIM_VERSION_V4_DIAGONAL_MOTION) {
+    // v4 — 8-connected diagonal step.
+    cardinalStepScratch.dx = rawDx > 0 ? 1 : -1;
+    cardinalStepScratch.dy = rawDy > 0 ? 1 : -1;
     return cardinalStepScratch;
   }
-  ants.pathErr[id] = errPlus;
-  if (majorIsX) {
+
+  // v2 / v3 — legacy greedy major-axis pick (pre-issue-#34). Exhausts the
+  // larger-magnitude axis before switching, producing the stair-step that
+  // v4 fixes. Preserved verbatim so pre-v4 save replays are bit-exact.
+  // Tie (|rawDx| === |rawDy|) goes to X axis.
+  if (absDx >= absDy) {
     cardinalStepScratch.dx = rawDx > 0 ? 1 : -1;
     cardinalStepScratch.dy = 0;
   } else {
@@ -259,6 +266,67 @@ export function pickCardinalStep(
     cardinalStepScratch.dy = rawDy > 0 ? 1 : -1;
   }
   return cardinalStepScratch;
+}
+
+// ---------------------------------------------------------------------------
+// diagonalizeFlowStep — issue #34 follow-up
+//
+// Lifts an underground flow-field cardinal step into an 8-connected step
+// when the next tile's flow direction is perpendicular to the current
+// tile's. e.g. current="East", next-tile="North" → combine into NorthEast.
+// Falls back to the original cardinal when:
+//   - simVersion < V4 (legacy 4-connected behavior)
+//   - the next tile is out of bounds
+//   - the next-tile flow is non-cardinal (-1 source, -2 unreachable, or
+//     parallel/anti-parallel to the current)
+//   - the diagonal would corner-cut: the destination tile is impassable, OR
+//     BOTH intermediate cardinal tiles are impassable (no real path)
+//
+// The "at least one intermediate passable" rule is the textbook 8-connected
+// corner-cut prevention: it disallows the ant from squeezing diagonally
+// through two solid corner tiles, which would visually appear as cutting a
+// wall. Allowing the move when only ONE intermediate is open lets the ant
+// hug a single wall — the natural visual everyone expects.
+//
+// Determinism: read-only over the underground grid. No PRNG, no allocation
+// (writes into `out`), no float math.
+// ---------------------------------------------------------------------------
+
+function diagonalizeFlowStep(
+  underground: UndergroundGrid,
+  flowField: Int32Array,
+  tileX: number,
+  tileY: number,
+  cardDx: number,
+  cardDy: number,
+  task: AntTask,
+  simVersion: number,
+  out: CardinalStep,
+): void {
+  out.dx = cardDx;
+  out.dy = cardDy;
+  if (simVersion < SIM_VERSION_V4_DIAGONAL_MOTION) return;
+  const nextX = tileX + cardDx;
+  const nextY = tileY + cardDy;
+  if (nextX < 0 || nextX >= underground.width || nextY < 0 || nextY >= underground.height) return;
+  const dirB = flowField[nextY * underground.width + nextX]!;
+  if (dirB < 0 || dirB >= 4) return;
+  const cardB_dx = DIR_DX[dirB]!;
+  const cardB_dy = DIR_DY[dirB]!;
+  // Perpendicular-only: one of (current, next) must vary X and the other Y.
+  // Same-axis (parallel or anti-parallel) means no diagonal staircase to
+  // collapse.
+  if ((cardDx === 0) === (cardB_dx === 0)) return;
+  const diagDx = cardDx + cardB_dx;
+  const diagDy = cardDy + cardB_dy;
+  // Destination tile passable.
+  if (!canEnterUndergroundTile(underground, tileX + diagDx, tileY + diagDy, task)) return;
+  // Corner-cut prevention: at least one intermediate tile must be passable.
+  const passXOnly = canEnterUndergroundTile(underground, tileX + diagDx, tileY, task);
+  const passYOnly = canEnterUndergroundTile(underground, tileX, tileY + diagDy, task);
+  if (!passXOnly && !passYOnly) return;
+  out.dx = diagDx;
+  out.dy = diagDy;
 }
 
 // ---------------------------------------------------------------------------
@@ -835,11 +903,11 @@ function isInsideNursery(colony: ColonyRecord, tileX: number, tileY: number): bo
 // or colony flags. All dig-worker state transitions (Marked→BeingDug claim,
 // BeingDug→Open excavation) live in tickDigExecution at step 10.
 //
-// Issue #34 exception: writes `ants.pathErr` via `pickCardinalStep` in the
-// legacy Manhattan fallback path (the test-harness branch when chamber
-// flow-fields are absent). The accumulator is movement-step state, not
-// task or sub-task state, and the write is bounded to one bump per ant
-// per call.
+// Issue #34 v4 follow-up: getTaskDirection is fully pure now —
+// pickCardinalStep no longer writes ants.pathErr on either the v3 (legacy
+// greedy) or v4 (8-connected diagonal) path. The pathErr field remains on
+// AntComponents and in saves for back-compat with mid-flight values from
+// earlier #34 iterations; nothing in production code reads or mutates it.
 // ---------------------------------------------------------------------------
 
 /**
@@ -987,6 +1055,7 @@ export function getTaskDirection(
         ants, antId,
         bestChamberTileX - antTileX,
         bestChamberTileY - antTileY,
+        world.simVersion,
       );
       bestDx = step.dx;
       bestDy = step.dy;
@@ -2295,7 +2364,7 @@ function moveQueens(
       // at other slopes. Replaces the prior `Math.abs(rawDx) >=
       // Math.abs(rawDy)` greedy axis pick that exhausted the leading
       // axis before switching, producing visible stair-step.
-      const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY);
+      const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY, world.simVersion);
       dx = step.dx;
       dy = step.dy;
     } else if (zone === Zone.Surface) {
@@ -2342,7 +2411,7 @@ function moveQueens(
       }
       if (targetTileX < 0) continue; // no open entrance — queen cannot descend yet.
       // Issue #34: see pickCardinalStep helper above.
-      const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY);
+      const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY, world.simVersion);
       dx = step.dx;
       dy = step.dy;
     } else {
@@ -2378,8 +2447,17 @@ function moveQueens(
             continue;
           }
           if (dir >= 0 && dir < 4) {
-            dx = DIR_DX[dir]!;
-            dy = DIR_DY[dir]!;
+            // Issue #34 v4 follow-up: lift the cardinal step into a diagonal
+            // when the next tile's flow-field direction is perpendicular and
+            // the corner-cut check passes. Queens use AntTask.Idle for
+            // passability rules — no Marked-tile traversal.
+            diagonalizeFlowStep(
+              underground, flowField, tileX, tileY,
+              DIR_DX[dir]!, DIR_DY[dir]!,
+              AntTask.Idle, world.simVersion, cardinalStepScratch,
+            );
+            dx = cardinalStepScratch.dx;
+            dy = cardinalStepScratch.dy;
             stepped = true;
           }
         }
@@ -2412,7 +2490,7 @@ function moveQueens(
         }
         if (targetTileX < 0) continue;
         // Issue #34: see pickCardinalStep helper above.
-        const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY);
+        const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY, world.simVersion);
         dx = step.dx;
         dy = step.dy;
       }
@@ -2436,9 +2514,29 @@ function moveQueens(
       if (underground) {
         const newTileX = posX >> FP_SHIFT;
         const newTileY = posY >> FP_SHIFT;
-        if (newTileX !== tileX || newTileY !== tileY) {
-          if (!canEnterUndergroundTile(underground, newTileX, newTileY, AntTask.Idle)) {
+        const xCrossed = newTileX !== tileX;
+        const yCrossed = newTileY !== tileY;
+        if (xCrossed && yCrossed) {
+          // Diagonal tile crossing (issue #34 v4) — corner-cut prevention.
+          const destPassable = canEnterUndergroundTile(underground, newTileX, newTileY, AntTask.Idle);
+          const passXOnly = canEnterUndergroundTile(underground, newTileX, tileY, AntTask.Idle);
+          const passYOnly = canEnterUndergroundTile(underground, tileX, newTileY, AntTask.Idle);
+          if (destPassable && (passXOnly || passYOnly)) {
+            // Diagonal allowed.
+          } else if (passXOnly) {
+            posY = prevPosY;
+          } else if (passYOnly) {
             posX = prevPosX;
+          } else {
+            posX = prevPosX;
+            posY = prevPosY;
+          }
+        } else if (xCrossed) {
+          if (!canEnterUndergroundTile(underground, newTileX, tileY, AntTask.Idle)) {
+            posX = prevPosX;
+          }
+        } else if (yCrossed) {
+          if (!canEnterUndergroundTile(underground, tileX, newTileY, AntTask.Idle)) {
             posY = prevPosY;
           }
         }
@@ -2768,8 +2866,17 @@ export function tickAntMovement(
             dy = 0;
             stepped = true;
           } else if (dir >= 0 && dir < 4) {
-            dx = DIR_DX[dir]!;
-            dy = DIR_DY[dir]!;
+            // Issue #34 v4 follow-up: lift the cardinal step into a diagonal
+            // when the next tile's flow direction is perpendicular and the
+            // corner-cut check passes. Foragers use their actual task for
+            // passability (AntTask.Foraging blocks Marked tiles).
+            diagonalizeFlowStep(
+              underground, flowField, tileX, tileY,
+              DIR_DX[dir]!, DIR_DY[dir]!,
+              task as AntTask, world.simVersion, cardinalStepScratch,
+            );
+            dx = cardinalStepScratch.dx;
+            dy = cardinalStepScratch.dy;
             stepped = true;
           }
           // dir === -2 is unreachable here — chamberFoodUnreachable was set
@@ -2791,6 +2898,7 @@ export function tickAntMovement(
           ants, id,
           (chamberTargetX >> FP_SHIFT) - (posX >> FP_SHIFT),
           (chamberTargetY >> FP_SHIFT) - (posY >> FP_SHIFT),
+          world.simVersion,
         );
         dx = step.dx;
         dy = step.dy;
@@ -2827,8 +2935,16 @@ export function tickAntMovement(
             dy = 0;
             stepped = true;
           } else if (dir >= 0 && dir < 4) {
-            dx = DIR_DX[dir]!;
-            dy = DIR_DY[dir]!;
+            // Issue #34 v4 follow-up: lift cardinal → diagonal when the next
+            // tile's flow direction is perpendicular and the corner-cut
+            // check passes. Uses the ant's actual task for passability.
+            diagonalizeFlowStep(
+              underground, flowField, tileX, tileY,
+              DIR_DX[dir]!, DIR_DY[dir]!,
+              task as AntTask, world.simVersion, cardinalStepScratch,
+            );
+            dx = cardinalStepScratch.dx;
+            dy = cardinalStepScratch.dy;
             stepped = true;
           } else {
             // dir === -2 (unreachable). Deterministic failsafe: hold position
@@ -2850,6 +2966,7 @@ export function tickAntMovement(
           ants, id,
           (entranceTargetX >> FP_SHIFT) - (posX >> FP_SHIFT),
           (entranceTargetY >> FP_SHIFT) - (posY >> FP_SHIFT),
+          world.simVersion,
         );
         dx = step.dx;
         dy = step.dy;
@@ -2868,12 +2985,21 @@ export function tickAntMovement(
       //       roll only runs for SearchingFood — CarryingFood and
       //       ReturningToNest are reachability-driven and shouldn't pause.
       //
-      // Determinism: rng pulls happen on a fixed per-ant per-tick cadence
-      // (this branch is gated on subTask), so SCEN-06 replay is preserved.
-      // Throughput impact: ~12% of search time paused with the default
-      // constants (probability 1/50, duration 5-9 ticks). Tuned to stay
-      // inside the ±15% throughput band acceptance criterion.
-      if (ants.subTask[id] === ForagingSubState.SearchingFood && zone === Zone.Surface) {
+      // Determinism gating (codex follow-up): the entire pause block is
+      // gated on simVersion >= V4 because the RNG pulls below didn't exist
+      // pre-v4. A pre-v4 save replaying through this path must NOT consume
+      // those rolls or its rng.state diverges from the original record.
+      // Sticky simVersion on load (types.ts) keeps v3 saves on the no-pause
+      // path forever; new worlds (LATEST_SIM_VERSION = v4) get the feature.
+      //
+      // Throughput impact (v4 only): ~12% of search time paused with the
+      // default constants (probability 1/50, duration 5-9 ticks). Tuned to
+      // stay inside the ±15% throughput band acceptance criterion.
+      if (
+        world.simVersion >= SIM_VERSION_V4_DIAGONAL_MOTION &&
+        ants.subTask[id] === ForagingSubState.SearchingFood &&
+        zone === Zone.Surface
+      ) {
         if (ants.searchPauseTicks[id]! > 0) {
           ants.searchPauseTicks[id] = ants.searchPauseTicks[id]! - 1;
           continue;
@@ -2904,6 +3030,7 @@ export function tickAntMovement(
           ants, id,
           (targetX >> FP_SHIFT) - (posX >> FP_SHIFT),
           (targetY >> FP_SHIFT) - (posY >> FP_SHIFT),
+          world.simVersion,
         );
         dx = step.dx;
         dy = step.dy;
@@ -2920,7 +3047,7 @@ export function tickAntMovement(
         const scent = findNearestScentPile(world, tileX, tileY);
         if (scent !== null) {
           // Issue #34: see pickCardinalStep helper above.
-          const step = pickCardinalStep(ants, id, scent.tileX - tileX, scent.tileY - tileY);
+          const step = pickCardinalStep(ants, id, scent.tileX - tileX, scent.tileY - tileY, world.simVersion);
           dx = step.dx;
           dy = step.dy;
         } else {
@@ -3018,7 +3145,7 @@ export function tickAntMovement(
         const targetTileY = (rawDy + posY) >> FP_SHIFT;
         const tileX = posX >> FP_SHIFT;
         const tileY = posY >> FP_SHIFT;
-        const step = pickCardinalStep(ants, id, targetTileX - tileX, targetTileY - tileY);
+        const step = pickCardinalStep(ants, id, targetTileX - tileX, targetTileY - tileY, world.simVersion);
         dx = step.dx;
         dy = step.dy;
       } else {
@@ -3060,9 +3187,40 @@ export function tickAntMovement(
         const prevTileY = prevPosY >> FP_SHIFT;
         const newTileX = posX >> FP_SHIFT;
         const newTileY = posY >> FP_SHIFT;
-        if (newTileX !== prevTileX || newTileY !== prevTileY) {
-          if (!canEnterUndergroundTile(underground, newTileX, newTileY, task as AntTask)) {
+        const taskAsAntTask = task as AntTask;
+        const xCrossed = newTileX !== prevTileX;
+        const yCrossed = newTileY !== prevTileY;
+        if (xCrossed && yCrossed) {
+          // Diagonal tile crossing (issue #34 v4) — corner-cut prevention.
+          // Reject the diagonal when the destination tile is impassable OR
+          // BOTH intermediate cardinal tiles are blocked (squeezing through
+          // a wall corner). When only one intermediate is open, drop the
+          // other axis so the ant hugs that side.
+          const destPassable = canEnterUndergroundTile(underground, newTileX, newTileY, taskAsAntTask);
+          const passXOnly = canEnterUndergroundTile(underground, newTileX, prevTileY, taskAsAntTask);
+          const passYOnly = canEnterUndergroundTile(underground, prevTileX, newTileY, taskAsAntTask);
+          if (destPassable && (passXOnly || passYOnly)) {
+            // Diagonal allowed — keep both axis updates.
+          } else if (passXOnly) {
+            posY = prevPosY;
+          } else if (passYOnly) {
             posX = prevPosX;
+          } else {
+            posX = prevPosX;
+            posY = prevPosY;
+          }
+        } else if (xCrossed) {
+          // Cardinal-tile X crossing only (Y move stayed inside prevTileY).
+          // Check the actually-entered tile (newTileX, prevTileY); if blocked
+          // revert ONLY posX so any sub-tile Y progress survives. v3 cardinal
+          // steps put dy=0 here so the posY revert was a no-op; the per-axis
+          // form preserves v4 sub-tile diagonals where Y didn't cross a tile.
+          if (!canEnterUndergroundTile(underground, newTileX, prevTileY, taskAsAntTask)) {
+            posX = prevPosX;
+          }
+        } else if (yCrossed) {
+          // Cardinal-tile Y crossing only — symmetric to the X case.
+          if (!canEnterUndergroundTile(underground, prevTileX, newTileY, taskAsAntTask)) {
             posY = prevPosY;
           }
         }

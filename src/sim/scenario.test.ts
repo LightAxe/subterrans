@@ -536,10 +536,21 @@ describe('createScenario', () => {
       // Route reuse means searchers cluster near the trail significantly more
       // often than a uniform-over-map baseline (few percent of tiles have
       // trail at any moment). Assert a substantial share.
-      // Threshold: nearTrailTicks > 25% of searcherTicks, written as integer
-      // comparison (nearTrailTicks * 4 > searcherTicks) to satisfy the
-      // sim/ no-float-literal rule.
-      expect(nearTrailTicks * 4).toBeGreaterThan(searcherTicks);
+      //
+      // Threshold: nearTrailTicks > 10% of searcherTicks, written as integer
+      // comparison (nearTrailTicks * 10 > searcherTicks) to satisfy the
+      // sim/ no-float-literal rule. Uniform baseline is a few %, so 10% is
+      // still strong clustering evidence.
+      //
+      // v4 follow-up (issue #34): with 8-connected carrier motion, the
+      // food-trail tile coverage is roughly halved — a diagonal carrier
+      // visits one cell per tick along the diagonal instead of two cells
+      // along a cardinal staircase. The reacquisition fan is unchanged
+      // (REACQUIRE_RADIUS Manhattan) but the per-cell pheromone density is
+      // lower, so searchers cluster less tightly than under v3. Threshold
+      // tuned from the original 25% (`* 4`) to 10% (`* 10`) to track v4
+      // observed ratios in the 12-15% range.
+      expect(nearTrailTicks * 10).toBeGreaterThan(searcherTicks);
     });
 
     it('both colonies collect food — queens or chambers hold food after 1500 ticks', () => {

@@ -26,22 +26,32 @@ export type EntityId = number; // incrementing counter from 0, no recycling per 
  * changes that DON'T change the snapshot shape — old saves still load fine,
  * but replay using the algorithm they were recorded under.
  *
- * LEGACY_SIM_VERSION (2) — issue #15 baseline. withdrawFood drains
+ * v2 (LEGACY_SIM_VERSION) — issue #15 baseline. withdrawFood drains
  * FoodStorage chambers in colony.chambers array order; no carrier
- * WaitingToDeposit state.
+ * WaitingToDeposit state. 4-connected ant movement (cardinal-only steps).
  *
- * LATEST_SIM_VERSION (3) — issue #27 fix. withdrawFood drains the fullest
- * FoodStorage chamber first (array-index tie-break); carriers enter
- * WaitingToDeposit when storage is fully saturated.
+ * v3 — issue #27 fix. withdrawFood drains the fullest FoodStorage chamber
+ * first (array-index tie-break); carriers enter WaitingToDeposit when
+ * storage is fully saturated. Movement remains 4-connected.
+ *
+ * v4 (LATEST_SIM_VERSION) — issue #34 follow-up. 8-connected ant movement:
+ * pickStep can return diagonal cardinals when both axes have remaining
+ * work, with corner-cut prevention requiring at least one of the two
+ * intermediate cardinal tiles to be passable. Underground flow-field
+ * consumers also peek at the next tile's direction and combine into a
+ * diagonal step when the next-tile flow is perpendicular. Diagonal moves
+ * traverse √2× cardinal Manhattan distance per tick — standard 8-connected
+ * speed semantics.
  *
  * Saves missing the `simVersion` field load with LEGACY_SIM_VERSION (sticky).
  * New worlds (createWorldState) start at LATEST_SIM_VERSION. Sticky on load
- * preserves SCEN-06 replay determinism — a save recorded before this fix
- * keeps producing identical ticks across reload, just under the old drain
- * order and without the wait-state.
+ * preserves SCEN-06 replay determinism — a save recorded before a given
+ * fix keeps producing identical ticks across reload under the old algorithm.
  */
 export const LEGACY_SIM_VERSION = 2 as const;
-export const LATEST_SIM_VERSION = 3 as const;
+export const SIM_VERSION_V3 = 3 as const;
+export const SIM_VERSION_V4_DIAGONAL_MOTION = 4 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V4_DIAGONAL_MOTION;
 
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick
@@ -56,8 +66,14 @@ export interface WorldState {
    * latest. New worlds use the latest version (LATEST_SIM_VERSION).
    *
    * Versions:
-   *   2 = pre-fix array-order withdrawFood drain (issue #15 baseline).
-   *   3 = drain-fullest-first withdrawFood + carrier WaitingToDeposit state.
+   *   2 = pre-fix array-order withdrawFood drain (issue #15 baseline);
+   *       legacy greedy major-axis cardinal step movement.
+   *   3 = drain-fullest-first withdrawFood + carrier WaitingToDeposit state;
+   *       still legacy greedy 4-connected cardinal movement.
+   *   4 = 8-connected diagonal ant movement (issue #34) + scurry-stop-scurry
+   *       SearchingFood pause cadence (issue #35). The pause block consumes
+   *       additional RNG pulls per tick, so v3 saves stay on the no-pause
+   *       path forever to keep replay byte-identical.
    *
    * Round-trips through copyWorldState and save/load.
    */

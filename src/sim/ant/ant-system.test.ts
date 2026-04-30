@@ -29,7 +29,13 @@ import {
   chooseExcursionDirection,
   tickExcursionBoundary,
 } from './ant-system.js';
-import { createWorldState, allocateEntityId, LEGACY_SIM_VERSION } from '../types.js';
+import {
+  createWorldState,
+  allocateEntityId,
+  LEGACY_SIM_VERSION,
+  SIM_VERSION_V3,
+  SIM_VERSION_V4_DIAGONAL_MOTION,
+} from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt, createAntComponents } from './ant-store.js';
 import { AntTask, ForagingSubState, DiggingSubState, NursingSubState, ChamberType, PheromoneType } from '../enums.js';
@@ -4200,6 +4206,229 @@ describe('tickAntMovement — underground chamber routing (tunnel-aware)', () =>
 });
 
 // ---------------------------------------------------------------------------
+// Issue #34 v4 — 8-connected motion: flow-field diagonal lift + corner-cut
+// prevention.
+//
+// L-shape tunnel from (10,10) up to (10,5) and west to (5,5). FoodStorage
+// chamber at (5,5). The food flow-field is N along the column and W along
+// the row; at the corner tile (10,5) it switches from N to W. A v4 forager
+// at (10,6) reads N (toward (10,5)), peeks (10,5) and sees W — perpendicular
+// → lift to NW diagonal → step (10,6) → (9,5) in one tick. Pre-v4 took
+// (10,6) → (10,5) (one tick) then (10,5) → (9,5) (next tick).
+// ---------------------------------------------------------------------------
+
+describe('tickAntMovement — v4 diagonal flow-field lift (issue #34)', () => {
+  function buildLTunnel(): {
+    world: WorldState;
+    colony: ColonyRecord;
+    underground: ReturnType<typeof createUndergroundGrid>;
+    colonyId: number;
+  } {
+    const { world, colony, underground, colonyId } = setupWorldWithUnderground(16, 16);
+    // Vertical column x=10 from y=5 to y=10.
+    for (let y = 5; y <= 10; y++) ugSet(underground, 10, y, UndergroundTileState.Open);
+    // Horizontal row y=5 from x=5 to x=10 (overlaps at (10,5)).
+    for (let x = 5; x <= 10; x++) ugSet(underground, x, 5, UndergroundTileState.Open);
+    // FoodStorage chamber at (5,5), 1×1 footprint.
+    colony.chambers.push({
+      chamberId: 100,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 0,
+      posX: 5 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      width: 1,
+      height: 1,
+    });
+    colony.entrances.push({
+      entranceId: 1,
+      surfaceTileX: 12,
+      surfaceTileY: 5,
+      isOpen: true,
+    });
+    return { world, colony, underground, colonyId };
+  }
+
+  function buildChamberCache(
+    underground: ReturnType<typeof createUndergroundGrid>,
+    colony: ColonyRecord,
+    colonyId: number,
+  ): ReturnType<typeof createChamberFlowFields> {
+    const cache = createChamberFlowFields();
+    const gridSize = underground.width * underground.height;
+    const bufs = ensureChamberFlowFields(cache, colonyId, gridSize);
+    computeChamberFlowField(underground, colony.chambers, FOOD_CHAMBER_TYPES, bufs.food, bufs.queue);
+    computeChamberFlowField(underground, colony.chambers, NURSING_CHAMBER_TYPES, bufs.nursing, bufs.queue);
+    return cache;
+  }
+
+  function placeForagerAt(
+    world: WorldState,
+    colonyId: number,
+    tileX: number,
+    tileY: number,
+  ): number {
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId,
+      posX: (tileX << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (tileY << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+      zone: Zone.Underground,
+    });
+    world.ants.foodCarrying[antId] = 300;
+    world.ants.speed[antId] = FP_ONE;
+    return antId;
+  }
+
+  it('D-1. v4 forager at perpendicular-flow corner takes diagonal step', () => {
+    const { world, colony, underground, colonyId } = buildLTunnel();
+    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V4_DIAGONAL_MOTION);
+    const antId = placeForagerAt(world, colonyId, 10, 6);
+    const chamberCache = buildChamberCache(underground, colony, colonyId);
+    const digFlowFields = createDigFlowFields();
+    const rng = new Rng(42);
+
+    // Single tick: at (10,6) flow says N → (10,5). At (10,5) flow says W → (9,5).
+    // Perpendicular pair → diagonal lift to NW. Destination (9,5) is Open (on
+    // the row). xOnly intermediate (9,6) is Solid (not on the L), yOnly (10,5)
+    // is Open → corner-cut allows the diagonal.
+    tickAntMovement(world, rng, digFlowFields, undefined, chamberCache);
+
+    expect(world.ants.posX[antId]! >> FP_SHIFT).toBe(9);
+    expect(world.ants.posY[antId]! >> FP_SHIFT).toBe(5);
+  });
+
+  it('D-2. v3 forager at the same corner takes the cardinal step (no lift)', () => {
+    // Sticky simVersion replay determinism — a v3 save running through this
+    // corner must still take cardinal-only steps. Same setup as D-1 but
+    // simVersion forced back to v3.
+    const { world, colony, underground, colonyId } = buildLTunnel();
+    world.simVersion = SIM_VERSION_V3;
+    const antId = placeForagerAt(world, colonyId, 10, 6);
+    const chamberCache = buildChamberCache(underground, colony, colonyId);
+    const digFlowFields = createDigFlowFields();
+    const rng = new Rng(42);
+
+    tickAntMovement(world, rng, digFlowFields, undefined, chamberCache);
+
+    // Cardinal: north only.
+    expect(world.ants.posX[antId]! >> FP_SHIFT).toBe(10);
+    expect(world.ants.posY[antId]! >> FP_SHIFT).toBe(5);
+  });
+
+  it('D-3. v4 forager on parallel-flow segment takes cardinal (no lift)', () => {
+    // Mid-column at (10,8): flow N (toward 10,7). Next tile (10,7) flow N too
+    // — parallel, not perpendicular → no diagonal.
+    const { world, colony, underground, colonyId } = buildLTunnel();
+    const antId = placeForagerAt(world, colonyId, 10, 8);
+    const chamberCache = buildChamberCache(underground, colony, colonyId);
+    const digFlowFields = createDigFlowFields();
+    const rng = new Rng(42);
+
+    tickAntMovement(world, rng, digFlowFields, undefined, chamberCache);
+
+    // Pure cardinal north.
+    expect(world.ants.posX[antId]! >> FP_SHIFT).toBe(10);
+    expect(world.ants.posY[antId]! >> FP_SHIFT).toBe(7);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #34 v4 — corner-cut prevention on target-based motion (Manhattan
+// fallback). Set up a queen Manhattan-fallback path where the diagonal target
+// tile is Solid and only one intermediate is Open. The post-step passability
+// guard must drop the impassable axis (hug the wall) instead of reverting
+// both axes.
+// ---------------------------------------------------------------------------
+
+describe('tickAntMovement — v4 corner-cut prevention on target motion', () => {
+  it('D-4. forager target diagonal blocked at dest → falls back to single-axis cardinal', () => {
+    // Underground forager at (5, 5) with target (3, 3) — diagonal NW (-1,-1).
+    // Path setup: (5,5) Open, (4,5) Open, (5,4) Solid, (4,4) Solid (the
+    // diagonal target). v4 should detect destPassable=false, passXOnly=true
+    // (4,5 open), passYOnly=false (5,4 solid) → drop Y axis, keep X step.
+    // Result: ant moves W to (4, 5) instead of NW to (4, 4) or stuck at (5,5).
+    const { world, colony, underground, colonyId } = setupWorldWithUnderground(16, 16);
+    // Open tiles: (5,5) and (4,5) only — surrounding solid.
+    ugSet(underground, 5, 5, UndergroundTileState.Open);
+    ugSet(underground, 4, 5, UndergroundTileState.Open);
+    // Chamber at (3, 3) — but (4, 4) and (5, 4) are Solid, blocking direct paths.
+    // The chamber is unreachable via cardinal flow → ant uses Manhattan fallback.
+    colony.entrances.push({
+      entranceId: 1,
+      surfaceTileX: 0,
+      surfaceTileY: 0,
+      isOpen: true,
+    });
+
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId,
+      posX: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+      zone: Zone.Underground,
+    });
+    world.ants.foodCarrying[antId] = 300;
+    world.ants.speed[antId] = FP_ONE;
+    // Set explicit target to (3, 3) so the priority-target branch fires.
+    world.ants.targetPosX[antId] = (3 << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.targetPosY[antId] = (3 << FP_SHIFT) + (FP_ONE >> 1);
+
+    const digFlowFields = createDigFlowFields();
+    const rng = new Rng(42);
+
+    tickAntMovement(world, rng, digFlowFields);
+
+    // Diagonal NW dest (4,4) is Solid. xOnly (4,5) is Open, yOnly (5,4) is
+    // Solid. Drop Y axis → ant moves W to (4, 5).
+    expect(world.ants.posX[antId]! >> FP_SHIFT).toBe(4);
+    expect(world.ants.posY[antId]! >> FP_SHIFT).toBe(5);
+  });
+
+  it('D-5. forager target diagonal with both intermediates blocked → reverts (no cut)', () => {
+    // Same idea but BOTH cardinal intermediates AND destination are Solid.
+    // Ant must hold position rather than squeeze through a wall corner.
+    const { world, colony, underground, colonyId } = setupWorldWithUnderground(16, 16);
+    // Only (5,5) is Open — surrounded by Solid in all 4 cardinals + diagonal.
+    ugSet(underground, 5, 5, UndergroundTileState.Open);
+    colony.entrances.push({
+      entranceId: 1,
+      surfaceTileX: 0,
+      surfaceTileY: 0,
+      isOpen: true,
+    });
+
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId,
+      posX: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+      zone: Zone.Underground,
+    });
+    world.ants.foodCarrying[antId] = 300;
+    world.ants.speed[antId] = FP_ONE;
+    world.ants.targetPosX[antId] = (3 << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.targetPosY[antId] = (3 << FP_SHIFT) + (FP_ONE >> 1);
+
+    const beforeX = world.ants.posX[antId]!;
+    const beforeY = world.ants.posY[antId]!;
+
+    const digFlowFields = createDigFlowFields();
+    const rng = new Rng(42);
+
+    tickAntMovement(world, rng, digFlowFields);
+
+    expect(world.ants.posX[antId]).toBe(beforeX);
+    expect(world.ants.posY[antId]).toBe(beforeY);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Regression: Fighting-ant rally movement (seed-923593824 bug).
 // Before this fix, updateFightAntTargets wrote targetPosX/Y correctly, but
 // tickAntMovement fell through to getTaskDirection → {0,0} for Fighting on
@@ -4209,7 +4438,8 @@ describe('tickAntMovement — underground chamber routing (tunnel-aware)', () =>
 describe('tickAntMovement — Fighting rally movement', () => {
   /** Surface fighter at (24,64), rally at (101,62) — target east/slightly-north.
    *  One call to updateFightAntTargets + one tick should step the ant toward
-   *  the rally (Manhattan: |dx|=77 > |dy|=2 → dx=+1). */
+   *  the rally. Under v4 8-connected motion (issue #34 follow-up) any
+   *  multi-axis target produces a diagonal step: (+1, -1). */
   it('F-1. surface fighter moves toward rally after updateFightAntTargets + tickAntMovement', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
@@ -4236,9 +4466,9 @@ describe('tickAntMovement — Fighting rally movement', () => {
     const chamberCache = createChamberFlowFields();
     tickAntMovement(world, rng, digFlowFields, entranceCache, chamberCache);
 
-    // Moved east by one tile (24→25).
+    // v4 diagonal: rawDx=+77, rawDy=-2, both non-zero → step (+1, -1).
     expect(world.ants.posX[antId]! >> FP_SHIFT).toBe(25);
-    expect(world.ants.posY[antId]! >> FP_SHIFT).toBe(64);
+    expect(world.ants.posY[antId]! >> FP_SHIFT).toBe(63);
   });
 
   /** Snapshot-shape reproduction: seven fighters at the entrance tile, rally
@@ -5007,9 +5237,18 @@ describe('tickAntMovement — P1 queen relocation', () => {
   });
 
   it('Q-4. queen cannot cut through Solid dirt — blocked boundary holds position', () => {
-    // Queen at (5,5). Queen chamber at (2,2)-(3,3). Solidify every tile at
-    // column 4 so the queen's westward step into (4,5) is blocked — with no
-    // open path she must hold.
+    // Queen at (5,5). Queen chamber at (2,2)-(3,3). Solidify column 4 (full
+    // height) AND row 4 (x ≥ 4) so EVERY NW move from (5,5) is blocked: west
+    // (4,5) and north (5,4) are solid; the v4 diagonal target (4,4) is also
+    // solid; both diagonal intermediates (4,5) and (5,4) are solid. With no
+    // safe step toward (2,2) the queen must hold position.
+    //
+    // Pre-v4 (cardinal): the row-4 wall is redundant — column 4 alone is
+    // enough since Bresenham picks west or north, both blocked. v4 adds the
+    // NW diagonal escape via the row-4 wall: without it the queen would
+    // legitimately move N along column 5 (corner-cut helper drops X axis
+    // when only Y intermediate is open). The expanded wall closes that
+    // escape so the test still asserts "cannot cut through dirt".
     const { world, queenId } = setupQueenWorld({
       queenTileX: 5, queenTileY: 5,
       addQueenChamber: true,
@@ -5021,14 +5260,14 @@ describe('tickAntMovement — P1 queen relocation', () => {
     for (let y = 0; y < underground.height; y++) {
       ugSet(underground, 4, y, UndergroundTileState.Solid);
     }
+    for (let x = 4; x < underground.width; x++) {
+      ugSet(underground, x, 4, UndergroundTileState.Solid);
+    }
     const beforeX = world.ants.posX[queenId]!;
     const beforeY = world.ants.posY[queenId]!;
 
     const digFlowFields = createDigFlowFields();
     const rng = new Rng(42);
-    // No chamber flow-field → Manhattan fallback. With column 4 solid the
-    // Manhattan step toward (2,2) picks westward (to 4,5), which is Solid →
-    // canEnterUndergroundTile blocks the move → queen stays put.
     tickAntMovement(world, rng, digFlowFields);
 
     expect(world.ants.posX[queenId]).toBe(beforeX);
@@ -5505,83 +5744,69 @@ describe('tickNurseActions — P2 brood transport to Nursery', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Issue #34 — pickCardinalStep Bresenham accumulator
+// Issue #34 — pickCardinalStep
+//
+// Two simVersion modes:
+//   v2/v3 (LEGACY_SIM_VERSION / SIM_VERSION_V3) — legacy greedy major-axis
+//                                                 cardinal pick. Pre-issue-#34
+//                                                 behavior preserved verbatim
+//                                                 for replay determinism.
+//   v4 (SIM_VERSION_V4_DIAGONAL_MOTION) — 8-connected diagonal step when both
+//                                         axes have non-zero delta.
 // ---------------------------------------------------------------------------
 
-describe('pickCardinalStep (issue #34)', () => {
+describe('pickCardinalStep (issue #34) — v2/v3 legacy greedy cardinal', () => {
   function emptyAnts(): ReturnType<typeof createAntComponents> {
     return createAntComponents(8);
   }
 
-  it('zero delta returns (0, 0)', () => {
+  it('zero delta returns (0, 0) under v3', () => {
     const ants = emptyAnts();
-    expect(pickCardinalStep(ants, 0, 0, 0)).toEqual({ dx: 0, dy: 0 });
+    expect(pickCardinalStep(ants, 0, 0, 0, SIM_VERSION_V3)).toEqual({ dx: 0, dy: 0 });
   });
 
-  it('pure +X cardinal: every tick steps east', () => {
+  it('pure +X / -Y cardinals are unchanged under v3', () => {
     const ants = emptyAnts();
-    for (let i = 0; i < 5; i++) {
-      const step = pickCardinalStep(ants, 0, 5, 0);
-      expect(step).toEqual({ dx: 1, dy: 0 });
-    }
+    expect(pickCardinalStep(ants, 0, 5, 0, SIM_VERSION_V3)).toEqual({ dx: 1, dy: 0 });
+    expect(pickCardinalStep(ants, 0, 0, -3, SIM_VERSION_V3)).toEqual({ dx: 0, dy: -1 });
   });
 
-  it('pure -Y cardinal: every tick steps north', () => {
+  it('v3 greedy at 45° alternates per tick — the visible zig-zag issue #34 v4 ultimately fixes', () => {
+    // Greedy major-axis at (3,3): tick 0 ties → X (delta now (2,3)); tick 1
+    // Y major → Y (delta (2,2)); tick 2 tie → X; etc. Result is X Y X Y X Y
+    // — exactly one tile per tick on alternating axes. Visually a tight
+    // diagonal but with the stair-step gait that prompted the user UAT
+    // report. v4 collapses these six ticks into three true diagonal steps
+    // (see the v4 describe block below).
     const ants = emptyAnts();
-    for (let i = 0; i < 5; i++) {
-      const step = pickCardinalStep(ants, 0, 0, -3);
-      expect(step).toEqual({ dx: 0, dy: -1 });
-    }
-  });
-
-  it('45° (3,3) reaches the target with bounded stair-step (≤ 2 same-axis run)', () => {
-    // The bug fixed by #34 was visible stair-step on near-45° paths: the
-    // greedy axis pick produced X X X Y Y Y (3-tile staircase). The
-    // adaptive Bresenham accumulator produces a roughly diagonal trace
-    // with same-axis runs no longer than 2 tiles — the visual zig-zag
-    // becomes much shorter, which is the user-facing improvement.
-    const ants = emptyAnts();
-    // pickCardinalStep returns a shared scratch object (no per-tick
-    // allocation per codex P1 follow-up); copy dx/dy primitives at capture.
     const dxs: number[] = [];
     const dys: number[] = [];
     let x = 0;
     let y = 0;
     for (let i = 0; i < 6; i++) {
-      const step = pickCardinalStep(ants, 0, 3 - x, 3 - y);
+      const step = pickCardinalStep(ants, 0, 3 - x, 3 - y, SIM_VERSION_V3);
       dxs.push(step.dx);
       dys.push(step.dy);
       x += step.dx;
       y += step.dy;
     }
-    // After 6 ticks the ant has reached (3, 3): 3 X-steps and 3 Y-steps.
     expect(x).toBe(3);
     expect(y).toBe(3);
-    expect(dxs.filter(d => d !== 0).length).toBe(3);
-    expect(dys.filter(d => d !== 0).length).toBe(3);
-    // No same-axis run longer than 2. Pre-fix would produce a run of 3.
-    let run = 1;
-    let maxRun = 1;
-    for (let i = 1; i < dxs.length; i++) {
-      if ((dxs[i - 1] === 0) === (dxs[i] === 0)) run += 1;
-      else run = 1;
-      if (run > maxRun) maxRun = run;
-    }
-    expect(maxRun).toBeLessThanOrEqual(2);
+    expect(dxs).toEqual([1, 0, 1, 0, 1, 0]);
+    expect(dys).toEqual([0, 1, 0, 1, 0, 1]);
   });
 
-  it('3:1 slope (rawDx=3, rawDy=1) takes 3 X-steps and 1 Y-step in 4 ticks', () => {
-    // Proportional alternation. The Y-step must NOT come first (tie goes
-    // to major axis) nor must all 3 X-steps run consecutively before the
-    // Y-step (that's the bug). Capture dx/dy primitives — see 45° test
-    // for why the shared-scratch return forces this pattern.
+  it('v3 3:1 slope: takes 3 X-steps before the single Y-step', () => {
+    // Greedy: while |rawDx| > |rawDy| take X. When they equal (after 2 X
+    // steps consumed: rawDx=1, rawDy=1), tie → X again. Final tick rawDx=0,
+    // take Y.
     const ants = emptyAnts();
     const dxs: number[] = [];
     const dys: number[] = [];
     let x = 0;
     let y = 0;
     for (let i = 0; i < 4; i++) {
-      const step = pickCardinalStep(ants, 0, 3 - x, 1 - y);
+      const step = pickCardinalStep(ants, 0, 3 - x, 1 - y, SIM_VERSION_V3);
       dxs.push(step.dx);
       dys.push(step.dy);
       x += step.dx;
@@ -5589,57 +5814,116 @@ describe('pickCardinalStep (issue #34)', () => {
     }
     expect(x).toBe(3);
     expect(y).toBe(1);
-    expect(dxs.filter(d => d !== 0).length).toBe(3);
-    expect(dys.filter(d => d !== 0).length).toBe(1);
+    expect(dxs).toEqual([1, 1, 1, 0]);
+    expect(dys).toEqual([0, 0, 0, 1]);
   });
 
-  it('per-ant accumulator: each ant advances independently — no cross-contamination', () => {
+  it('v3 leaves pathErr untouched (the accumulator is dead state on every path)', () => {
+    // pathErr is preserved on the SoA / save-format only for forward-compat;
+    // pickCardinalStep neither reads nor writes it under v3 or v4.
     const ants = emptyAnts();
-    // Two ants start independent journeys with the same shape (3,3 = 45°).
-    // Their pathErr fields evolve independently — interleaving ant-0 and
-    // ant-1 calls must not affect either's outcome.
-    //
-    // Scratch-aliasing guard (codex P2): pickCardinalStep returns a
-    // shared module-level scratch object. Holding both `s0` and `s1`
-    // references through ant-1's call would have ant-1's result
-    // overwrite ant-0's, so the assertion would silently pass even on
-    // a broken accumulator. Snapshot dx/dy into primitives BEFORE the
-    // next call to genuinely exercise per-ant independence.
-    let x0 = 0, y0 = 0;
-    let x1 = 0, y1 = 0;
-    for (let i = 0; i < 6; i++) {
-      const s0 = pickCardinalStep(ants, 0, 3 - x0, 3 - y0);
-      const s0dx = s0.dx;
-      const s0dy = s0.dy;
-      const s1 = pickCardinalStep(ants, 1, 3 - x1, 3 - y1);
-      x0 += s0dx; y0 += s0dy;
-      x1 += s1.dx; y1 += s1.dy;
-    }
-    // Both ants reach (3, 3) — neither's accumulator was perturbed by
-    // the interleaved call to the other ant's slot.
-    expect([x0, y0]).toEqual([3, 3]);
-    expect([x1, y1]).toEqual([3, 3]);
+    ants.pathErr[0] = 99;
+    pickCardinalStep(ants, 0, 5, 5, SIM_VERSION_V3);
+    expect(ants.pathErr[0]).toBe(99);
   });
 
-  it('negative deltas produce negative cardinals; third-quadrant journey terminates correctly', () => {
+  it('LEGACY_SIM_VERSION (v2) uses the same legacy greedy path as v3', () => {
+    // v2 was the issue-#15 baseline; v2 → v3 only shifted withdrawFood
+    // ordering (issue #27), never the movement algorithm. Both replay
+    // identically through pickCardinalStep.
+    const a2 = emptyAnts();
+    const a3 = emptyAnts();
+    expect(pickCardinalStep(a2, 0, 3, 3, LEGACY_SIM_VERSION)).toEqual(
+      pickCardinalStep(a3, 0, 3, 3, SIM_VERSION_V3),
+    );
+  });
+});
+
+describe('pickCardinalStep (issue #34) — v4 8-connected diagonal', () => {
+  function emptyAnts(): ReturnType<typeof createAntComponents> {
+    return createAntComponents(8);
+  }
+
+  it('pure cardinals are unchanged in v4 (single-axis targets behave identically)', () => {
     const ants = emptyAnts();
-    expect(pickCardinalStep(ants, 0, -7, 0)).toEqual({ dx: -1, dy: 0 });
-    const ants2 = emptyAnts();
-    expect(pickCardinalStep(ants2, 0, 0, -7)).toEqual({ dx: 0, dy: -1 });
-    const ants3 = emptyAnts();
-    // Walk to (-3, -3): 6 ticks total, ending exactly at the target with
-    // 3 negative-X and 3 negative-Y steps.
+    expect(pickCardinalStep(ants, 0, 5, 0, SIM_VERSION_V4_DIAGONAL_MOTION)).toEqual({ dx: 1, dy: 0 });
+    expect(pickCardinalStep(ants, 0, 0, -3, SIM_VERSION_V4_DIAGONAL_MOTION)).toEqual({ dx: 0, dy: -1 });
+    expect(pickCardinalStep(ants, 0, 0, 0, SIM_VERSION_V4_DIAGONAL_MOTION)).toEqual({ dx: 0, dy: 0 });
+  });
+
+  it('45° target (3,3) reaches the target in 3 diagonal steps — no zig-zag', () => {
+    const ants = emptyAnts();
     let x = 0;
     let y = 0;
-    for (let i = 0; i < 6; i++) {
-      const step = pickCardinalStep(ants3, 0, -3 - x, -3 - y);
+    const dxs: number[] = [];
+    const dys: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const step = pickCardinalStep(ants, 0, 3 - x, 3 - y, SIM_VERSION_V4_DIAGONAL_MOTION);
+      dxs.push(step.dx);
+      dys.push(step.dy);
       x += step.dx;
       y += step.dy;
-      expect(step.dx).toBeLessThanOrEqual(0);
-      expect(step.dy).toBeLessThanOrEqual(0);
+    }
+    expect(x).toBe(3);
+    expect(y).toBe(3);
+    // Every step was diagonal (both axes moved).
+    for (let i = 0; i < 3; i++) {
+      expect(dxs[i]).toBe(1);
+      expect(dys[i]).toBe(1);
+    }
+  });
+
+  it('3:1 slope (rawDx=3, rawDy=1) — diagonal until Y is satisfied, then pure +X', () => {
+    // v4 always takes diagonal when both axes have work. Once Y is satisfied
+    // (after 1 step), the remaining 2 X-steps are pure cardinal.
+    const ants = emptyAnts();
+    let x = 0;
+    let y = 0;
+    const trace: Array<[number, number]> = [];
+    for (let i = 0; i < 3; i++) {
+      const step = pickCardinalStep(ants, 0, 3 - x, 1 - y, SIM_VERSION_V4_DIAGONAL_MOTION);
+      trace.push([step.dx, step.dy]);
+      x += step.dx;
+      y += step.dy;
+    }
+    expect(x).toBe(3);
+    expect(y).toBe(1);
+    // Step 0: diagonal (both axes had work). Steps 1+2: pure +X (Y done).
+    expect(trace[0]).toEqual([1, 1]);
+    expect(trace[1]).toEqual([1, 0]);
+    expect(trace[2]).toEqual([1, 0]);
+  });
+
+  it('negative diagonal: (-3,-3) target → 3 ticks of (-1,-1)', () => {
+    const ants = emptyAnts();
+    let x = 0;
+    let y = 0;
+    for (let i = 0; i < 3; i++) {
+      const step = pickCardinalStep(ants, 0, -3 - x, -3 - y, SIM_VERSION_V4_DIAGONAL_MOTION);
+      expect(step.dx).toBe(-1);
+      expect(step.dy).toBe(-1);
+      x += step.dx;
+      y += step.dy;
     }
     expect(x).toBe(-3);
     expect(y).toBe(-3);
+  });
+
+  it('mixed-quadrant diagonals: (rawDx=2, rawDy=-2) → (1, -1)', () => {
+    // sign(rawDx) = +1, sign(rawDy) = -1 → SE-quadrant diagonal.
+    const ants = emptyAnts();
+    const step = pickCardinalStep(ants, 0, 2, -2, SIM_VERSION_V4_DIAGONAL_MOTION);
+    expect(step).toEqual({ dx: 1, dy: -1 });
+  });
+
+  it('v4 leaves pathErr untouched when stepping diagonally', () => {
+    // The accumulator is unused on the v4 path. A pre-existing non-zero
+    // value must survive the call so a legacy save mid-replay (resuming
+    // under v2 sticky version) keeps its accumulator state.
+    const ants = emptyAnts();
+    ants.pathErr[0] = 7;
+    pickCardinalStep(ants, 0, 5, 5, SIM_VERSION_V4_DIAGONAL_MOTION);
+    expect(ants.pathErr[0]).toBe(7);
   });
 });
 
