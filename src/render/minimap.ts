@@ -14,11 +14,14 @@ import {
   COLOR_PLAYER_COLONY,
   COLOR_ENEMY_COLONY,
   COLOR_FOOD_PILE_NORMAL,
-  COLOR_SURFACE_GRASS_PRIMARY,
-  COLOR_SURFACE_DIRT,
 } from './sprites.js';
+import {
+  COLOR_BARREN_EARTH,
+  COLOR_BARREN_EARTH_DARK,
+} from './terrain-atlas.js';
 import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT, PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
-import { SurfaceTileState, sgGet } from '../sim/terrain.js';
+import { sgGet } from '../sim/terrain.js';
+import { spatialHash } from './terrain-noise.js';
 import type { WorldState } from '../sim/types.js';
 import type { ViewState } from './camera.js';
 import { clampCamera } from './camera.js';
@@ -28,20 +31,37 @@ export const MINIMAP_SCALE_X = HUD.MINIMAP.w / SURFACE_GRID_WIDTH;   // 160 / 12
 export const MINIMAP_SCALE_Y = HUD.MINIMAP.h / SURFACE_GRID_HEIGHT;  // 1.25
 
 export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewState): void {
-  // Surface terrain: grass base, then dirt tiles overlaid (PRD §7a — minimap
-  // is a surface overview, not a debug panel). Tile cells are ~1.25×1.25 px;
-  // we draw them at ceil(scale)+1 so neighbors abut without seams.
-  gfx.fillStyle(COLOR_SURFACE_GRASS_PRIMARY, 1);
+  // Surface terrain (issue #40 reframe — barren-earth-default). Base layer
+  // is the warm tan barren-earth color used by the surface render; a sparse
+  // darker-earth dapple gives the minimap a textured "ant scale" feel
+  // rather than a flat brown rectangle.
+  //
+  // The minimap stays a surface overview per PRD §7a — single colour layer
+  // with a hash-driven dapple, NO multi-tile features (would be too small
+  // to read at 1.25 px/tile) and NO single-tile motifs (same problem).
+  // The intent is "you are looking at a faraway ground", not "every blade
+  // of grass and pebble visible".
+  gfx.fillStyle(COLOR_BARREN_EARTH, 1);
   gfx.fillRect(HUD.MINIMAP.x, HUD.MINIMAP.y, HUD.MINIMAP.w, HUD.MINIMAP.h);
 
   const surface = world.surface;
   if (surface !== undefined) {
-    gfx.fillStyle(COLOR_SURFACE_DIRT, 1);
+    // Sparse darker-earth dapple — ~12% of tiles, deterministic per (tx, ty).
+    // Uses the same `spatialHash` salt domain as the surface terrain so the
+    // minimap stays in sync with the rendered world (the player can
+    // recognize patches they've seen up close).
+    gfx.fillStyle(COLOR_BARREN_EARTH_DARK, 0.7);
     const cellW = Math.ceil(MINIMAP_SCALE_X) + 1;
     const cellH = Math.ceil(MINIMAP_SCALE_Y) + 1;
+    const SALT_MINIMAP_DAPPLE = 901;
     for (let ty = 0; ty < surface.height; ty++) {
       for (let tx = 0; tx < surface.width; tx++) {
-        if (sgGet(surface, tx, ty) !== SurfaceTileState.Dirt) continue;
+        // Read the surface tile so a future SurfaceTileState extension can
+        // bias dapple density per tile type without needing a renderer
+        // rewrite.
+        void sgGet(surface, tx, ty);
+        const h = spatialHash(tx, ty, SALT_MINIMAP_DAPPLE);
+        if ((h & 0xff) >= 32) continue; // ~12% coverage
         const px = HUD.MINIMAP.x + tx * MINIMAP_SCALE_X;
         const py = HUD.MINIMAP.y + ty * MINIMAP_SCALE_Y;
         gfx.fillRect(px, py, cellW, cellH);

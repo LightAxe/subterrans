@@ -37,8 +37,11 @@ import {
   STRATA_LINE_SPRITE,
   FLOOR_DUST_SPRITE,
   LARGE_BOULDER_SPRITE,
+  LARGE_BOULDER_SPRITE_FLAT,
   LARGE_BUSH_SPRITE,
+  LARGE_BUSH_SPRITE_TALL,
   LARGE_GRASS_CLUMP_SPRITE,
+  LARGE_GRASS_CLUMP_SPRITE_SPARSE,
 } from './terrain-motifs.js';
 
 // ---------------------------------------------------------------------------
@@ -102,17 +105,52 @@ export const COLOR_FLOOR_BASE_DARK = 0x080403;
 // ---------------------------------------------------------------------------
 
 interface FeatureRegistryEntry {
-  sprite: LargeFeatureSprite;
+  /** Per-feature-type variants. Picked deterministically per (anchorX,
+   *  anchorY) hash so each landed feature looks like one of N forms,
+   *  not the same sprite cloned across the map. */
+  variants: ReadonlyArray<LargeFeatureSprite>;
   salt: number;
   /** 0..255 anchor probability per tile. ~5 = ~2% of tiles host an anchor. */
   probability: number;
 }
 
 const LARGE_FEATURES: ReadonlyArray<FeatureRegistryEntry> = [
-  { sprite: LARGE_BOULDER_SPRITE,     salt: SALT_LARGE_BOULDER, probability: 6 },
-  { sprite: LARGE_BUSH_SPRITE,        salt: SALT_LARGE_BUSH,    probability: 8 },
-  { sprite: LARGE_GRASS_CLUMP_SPRITE, salt: SALT_LARGE_GRASS,   probability: 10 },
+  {
+    variants: [LARGE_BOULDER_SPRITE, LARGE_BOULDER_SPRITE_FLAT],
+    salt: SALT_LARGE_BOULDER,
+    probability: 6,
+  },
+  {
+    variants: [LARGE_BUSH_SPRITE, LARGE_BUSH_SPRITE_TALL],
+    salt: SALT_LARGE_BUSH,
+    probability: 8,
+  },
+  {
+    variants: [LARGE_GRASS_CLUMP_SPRITE, LARGE_GRASS_CLUMP_SPRITE_SPARSE],
+    salt: SALT_LARGE_GRASS,
+    probability: 10,
+  },
 ];
+
+// Boot-time integrity check: every variant in a feature entry must share
+// the same `tilesWide × tilesTall` dimensions. The slice scan in
+// `drawLargeFeatureSliceIfAny` uses `variants[0]`'s dimensions for the
+// anchor window — if a future contributor adds a variant of a different
+// size, slices outside the variant[0] window would be silently skipped.
+// Throwing at module load surfaces the bug at the earliest possible point.
+for (const entry of LARGE_FEATURES) {
+  const W = entry.variants[0]!.tilesWide;
+  const H = entry.variants[0]!.tilesTall;
+  for (let i = 1; i < entry.variants.length; i++) {
+    const v = entry.variants[i]!;
+    if (v.tilesWide !== W || v.tilesTall !== H) {
+      throw new Error(
+        `LARGE_FEATURES variant size mismatch: salt=${entry.salt}, ` +
+        `variant[0]=${W}×${H}, variant[${i}]=${v.tilesWide}×${v.tilesTall}`,
+      );
+    }
+  }
+}
 
 /**
  * If any registered multi-tile feature anchors at a position whose footprint
@@ -135,16 +173,23 @@ function drawLargeFeatureSliceIfAny(
   tileY: number,
 ): boolean {
   for (const entry of LARGE_FEATURES) {
-    const W = entry.sprite.tilesWide;
-    const H = entry.sprite.tilesTall;
+    // All variants of a given feature type share W × H so they can
+    // round-trip through the same anchor scan. Picking variant[0]'s
+    // dimensions is fine.
+    const W = entry.variants[0]!.tilesWide;
+    const H = entry.variants[0]!.tilesTall;
     for (let dy = 0; dy < H; dy++) {
       for (let dx = 0; dx < W; dx++) {
         const ax = tileX - dx;
         const ay = tileY - dy;
         const h = spatialHash(ax, ay, entry.salt);
         if ((h & 0xff) >= entry.probability) continue;
-        // Anchor exists at (ax, ay). Render this tile's slice (dx, dy).
-        drawLargeFeatureSlice(gfx, entry.sprite, screenX, screenY, dx, dy);
+        // Anchor exists at (ax, ay). Pick a variant deterministically per
+        // anchor — same (ax, ay) always picks the same variant, but
+        // adjacent anchors get different variants so two boulders side by
+        // side don't look like the same boulder copy-pasted.
+        const variant = entry.variants[(h >>> 8) % entry.variants.length]!;
+        drawLargeFeatureSlice(gfx, variant, screenX, screenY, dx, dy);
         return true;
       }
     }
@@ -259,14 +304,21 @@ function drawDitheredSubstrate(
 // motifs (grass tufts, pebbles, twigs, dead leaves) sprinkled per tile hash.
 // ---------------------------------------------------------------------------
 
-export function drawBarrenEarthTile(
+/**
+ * Substrate-only barren earth — dithered base + sand specks, no motifs and
+ * no multi-tile feature scattering. Used by the underground ceiling row so
+ * that boulders/bushes/grass-tufts can't intermittently poke into the
+ * "plain ceiling" strip the player expects to be a consistent texture.
+ * `drawBarrenEarthTile` calls into this for its substrate pass too, so the
+ * surface and ceiling share their underlying tonal pattern.
+ */
+export function drawBarrenEarthSubstrate(
   gfx: GfxLike,
   screenX: number,
   screenY: number,
   tileX: number,
   tileY: number,
 ): void {
-  // Base substrate: barren earth with dark-earth dither cells.
   drawDitheredSubstrate(
     gfx,
     COLOR_BARREN_EARTH,
@@ -274,18 +326,25 @@ export function drawBarrenEarthTile(
     screenX, screenY, tileX, tileY, SALT_BARREN_DITHER,
     /* ditherCoverage */ 50,
   );
+  // Lighter sand specks — sparse hash-sampled positions, ~3-4 per tile.
+  gfx.fillStyle(COLOR_BARREN_EARTH_LIGHT, 1);
+  drawSparseSpecks(gfx, screenX, screenY, tileX, tileY, SALT_BARREN_BASE, 4);
+}
+
+export function drawBarrenEarthTile(
+  gfx: GfxLike,
+  screenX: number,
+  screenY: number,
+  tileX: number,
+  tileY: number,
+): void {
+  drawBarrenEarthSubstrate(gfx, screenX, screenY, tileX, tileY);
 
   // Multi-tile features (boulders, bushes, large grass clumps) override the
   // single-tile motif scattering when they cover this tile. Pebbles and
   // grass tufts inside a boulder's footprint would clash visually, so we
   // bail before the per-tile motif passes.
   if (drawLargeFeatureSliceIfAny(gfx, screenX, screenY, tileX, tileY)) return;
-
-  // Lighter sand specks — sparse hash-sampled positions, ~3-4 per tile.
-  // No full-pixel scan; we just pull 4 deterministic hash slots and check
-  // a high threshold per slot.
-  gfx.fillStyle(COLOR_BARREN_EARTH_LIGHT, 1);
-  drawSparseSpecks(gfx, screenX, screenY, tileX, tileY, SALT_BARREN_BASE, 4);
 
   // Motif overlays — each one is a small probabilistic decoration.
   // The probabilities sum to ~30% so most tiles have at most one motif and
@@ -418,7 +477,14 @@ function drawSparseSpecks(
   count: number,
 ): void {
   for (let i = 0; i < count; i++) {
-    const h = spatialHash(tileX, tileY, salt + i * 17);
+    // Step 13 instead of 17 (codex review followup): with SALT_BARREN_BASE
+    // = 101 and count = 4, step 17 produced derived salt 152 on the last
+    // iteration — the same integer as `SALT_LARGE_BUSH`. Two unrelated
+    // decisions sharing a hash channel correlates the speck position with
+    // the bush variant pick. Step 13 yields {101, 114, 127, 140} for the
+    // BARREN sweep and {201, 214, 227} for the SOLID sweep — neither
+    // intersects any salt in the 151..153, 201..204, 301..303 ranges.
+    const h = spatialHash(tileX, tileY, salt + i * 13);
     // ~50% emit probability per slot — tunable, but biases toward "always
     // a speck or two but never overwhelming".
     if ((h & 0xff) < 128) {

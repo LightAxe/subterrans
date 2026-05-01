@@ -4,7 +4,8 @@
 // Runs under Node with no Phaser.
 
 import { describe, it, expect } from 'vitest';
-import { HUD, COLOR_SURFACE_GRASS_PRIMARY, COLOR_SURFACE_DIRT } from './sprites.js';
+import { HUD } from './sprites.js';
+import { COLOR_BARREN_EARTH, COLOR_BARREN_EARTH_DARK } from './terrain-atlas.js';
 import { createViewState } from './camera.js';
 import {
   minimapClickToTile,
@@ -242,15 +243,18 @@ describe('drawMinimap smoke test', () => {
     drawMinimap(gfx, world, vs);
 
     const styles = gfx.callsOf('fillStyle');
-    // No black background anywhere
+    // No black background anywhere.
     const hasBlack = styles.some(c => c.args[0] === 0x000000);
     expect(hasBlack).toBe(false);
-    // A grass-color fillStyle is used for the base
-    const hasGrass = styles.some(c => c.args[0] === COLOR_SURFACE_GRASS_PRIMARY);
-    expect(hasGrass).toBe(true);
-    // A dirt-color fillStyle is issued because the surface has dirt tiles
-    const hasDirt = styles.some(c => c.args[0] === COLOR_SURFACE_DIRT);
-    expect(hasDirt).toBe(true);
+    // Issue #40 reframe: minimap base is barren-earth, not grass-green. The
+    // surface terrain at large now reads as ant-scale ground, and the
+    // minimap must mirror that so the player's mental model matches.
+    const hasEarth = styles.some(c => c.args[0] === COLOR_BARREN_EARTH);
+    expect(hasEarth).toBe(true);
+    // A darker dapple is sprinkled deterministically per tile — gives the
+    // minimap a textured feel rather than a flat brown rectangle.
+    const hasDapple = styles.some(c => c.args[0] === COLOR_BARREN_EARTH_DARK);
+    expect(hasDapple).toBe(true);
 
     // Cleanup so other tests see a clean surface
     sgSet(stubSurface, 10, 10, SurfaceTileState.Grass);

@@ -43,7 +43,7 @@ import {
   COLOR_QUEEN_OUTLINE,
 } from './sprites.js';
 import {
-  drawBarrenEarthTile,
+  drawBarrenEarthSubstrate,
   drawSolidRockTile,
   drawOpenFloorTile,
   drawTunnelCornerOverlay,
@@ -166,9 +166,11 @@ export function drawUndergroundTerrain(
           gfx.fillStyle(COLOR_QUEEN_OUTLINE, 0.28);
           gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
         } else {
-          // Plain ceiling — surface-style barren earth so the two views
-          // share a visual vocabulary.
-          drawBarrenEarthTile(gfx, screenX, screenY, tx, ty);
+          // Plain ceiling — surface-style barren-earth SUBSTRATE only
+          // (codex P2 follow-up: drawBarrenEarthTile would intermittently
+          // paint multi-tile boulders / bushes into the ceiling strip,
+          // which is supposed to be a consistent texture row).
+          drawBarrenEarthSubstrate(gfx, screenX, screenY, tx, ty);
           // Subtle ceiling-strip tint to differentiate from a real surface
           // tile. Half-transparent so the underlying texture still shows.
           gfx.fillStyle(COLOR_UNDERGROUND_CEILING_STRIP, 0.35);
