@@ -234,12 +234,13 @@ describe('drawUndergroundTerrain', () => {
     expect(earthStyles.length).toBeGreaterThan(0);
   });
 
-  it('keeps terrain draw calls bounded — at most ~30 fillRects per tile worst-case', () => {
+  it('keeps terrain draw calls bounded — at most ~80 fillRects per tile worst-case', () => {
     // Issue #40: the procedural pixel-art system emits more fillRects per tile
     // than the previous flat-fill path (substrate dithering + corner overlays
-    // + occasional motifs). Set a generous-but-bounded budget so we catch any
-    // future regression that would explode this further (per-pixel iteration
-    // creep, accidentally-removed sparseness gates, etc).
+    // + occasional motifs). The fully-enclosed Open-tile worst case is 68
+    // corner-overlay ops + ~15 substrate ops ≈ 83 per tile; budget set to
+    // 80/tile to catch a regression that would explode this further (per-
+    // pixel iteration creep, accidentally-removed sparseness gates, etc).
     const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
     for (let y = 1; y < grid.height; y++) {
       for (let x = 0; x < grid.width; x++) {
@@ -248,7 +249,7 @@ describe('drawUndergroundTerrain', () => {
     }
     const cam = makeCamera(0, 0, 200, 200);
     drawUndergroundTerrain(gfx, world, cam);
-    expect(gfx.callsOf('fillRect').length).toBeLessThanOrEqual(grid.width * grid.height * 30);
+    expect(gfx.callsOf('fillRect').length).toBeLessThanOrEqual(grid.width * grid.height * 80);
   });
 
   it('produces deterministic terrain renders for the same seed (issue #40 — replay-stable visuals)', () => {

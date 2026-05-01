@@ -186,23 +186,25 @@ describe('drawTunnelCornerOverlay', () => {
     expect(gfx.callsOf('fillRect')).toHaveLength(2);
   });
 
-  it('emits the corner-stair pattern where two adjacent walls meet (NW corner)', () => {
+  it('emits the corner quarter-arc where two adjacent walls meet (NW corner)', () => {
     const gfx = new MockGfx();
     drawTunnelCornerOverlay(gfx, 0, 0, true, false, false, true);
-    // 2 edge bands × 2 walls = 4 fillRects. Plus a 3+3-pixel L-shape corner
-    // stair (3 heavy darkening pixels + 3 light darkening pixels) = 6 ops.
-    // Total 10. (Issue #40 — three-pixel diagonal staircase replaces the
-    // single-pixel bevel from the previous iteration.)
-    expect(gfx.callsOf('fillRect')).toHaveLength(10);
+    // 2 edge bands × 2 walls = 4 fillRects. Plus a 5-layer triangular
+    // wedge at the NW inside corner (1+2+3+4+5 = 15 pixels) so a
+    // stair-step path of inside corners reads as a continuous diagonal
+    // instead of distinct steps. Total 19.
+    expect(gfx.callsOf('fillRect')).toHaveLength(19);
   });
 
-  it('emits all 4 edge bands + 4 corner stairs when fully surrounded by walls', () => {
+  it('emits all 4 edges + 4 corner quarter-arcs when fully surrounded by walls', () => {
     const gfx = new MockGfx();
     drawTunnelCornerOverlay(gfx, 0, 0, true, true, true, true);
-    // 4 walls × 2 bands = 8 edge ops, plus 4 corners × 6 pixels each = 24.
-    // Total 32. Inside-corner stair gives the rounded-tunnel feel even
-    // when the open tile is fully enclosed (mid-chamber visual).
-    expect(gfx.callsOf('fillRect')).toHaveLength(32);
+    // 4 walls × 2 bands = 8 edge ops; 4 corners × 15-pixel wedge = 60.
+    // Total 68. The fully-enclosed case is uncommon in real gameplay
+    // (tunnels and chamber edges have at least one Open neighbor) but
+    // the test pins the worst-case rendering count for perf budget
+    // tracking.
+    expect(gfx.callsOf('fillRect')).toHaveLength(68);
   });
 
   it('emits deterministic ops for the same neighbor configuration', () => {

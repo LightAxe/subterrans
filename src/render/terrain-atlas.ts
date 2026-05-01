@@ -575,72 +575,40 @@ export function drawTunnelCornerOverlay(
   if (solidW) gfx.fillRect(screenX + 1,              screenY,                  1, TILE_SIZE_PX);
   if (solidE) gfx.fillRect(screenX + TILE_SIZE_PX-2, screenY,                  1, TILE_SIZE_PX);
 
-  // Inside-corner stair (issue #40 follow-up — the user reported the
-  // previous single-pixel corner bevel still read as a hard 90° angle).
-  // For each inside corner where two walls meet, paint a 3-pixel diagonal
-  // staircase that fades the corner from rock into open floor, simulating
-  // a curved transition without sub-pixel rendering.
+  // Inside-corner quarter-arc (issue #40 user UAT — earlier 3-pixel bevel
+  // was still reading as a 90° corner). Render a 5-pixel triangular wedge
+  // at each inside corner, filled with rock-color at high alpha. The
+  // wedge takes up most of the corner quadrant so that:
+  //   (a) a lone inside corner reads as a fully-rounded interior bend,
+  //   (b) two adjacent inside-corner tiles forming a stair-step (e.g. a
+  //       SW corner on tile A immediately followed by a NE corner on
+  //       tile A's east neighbor) merge visually into one long diagonal,
+  //       since the wedges from adjacent tiles meet at the shared edge.
   //
-  // SNES-era pixel-art convention: a rounded corner is 3 darker pixels in
-  // an L-shape, with progressively-lighter alpha as you step inward.
-  //
-  //   NW corner pattern (at screenX, screenY):
-  //     ##.       <- (0,0) heavy, (1,0) heavy
-  //     #..       <- (0,1) heavy
-  //     X..       <- (0,2) light, (2,0) light, ...
-  //     ...
-  // Other corners are 90°-rotations of this pattern.
-  gfx.fillStyle(COLOR_ROCK_BASE, 0.85);
-  // Heavy darkening: the L-shape closest to the corner.
-  if (solidN && solidW) {
-    gfx.fillRect(screenX + 0, screenY + 0, 1, 1);
-    gfx.fillRect(screenX + 1, screenY + 0, 1, 1);
-    gfx.fillRect(screenX + 0, screenY + 1, 1, 1);
-  }
-  if (solidN && solidE) {
-    const x = screenX + TILE_SIZE_PX - 1;
-    gfx.fillRect(x,     screenY + 0, 1, 1);
-    gfx.fillRect(x - 1, screenY + 0, 1, 1);
-    gfx.fillRect(x,     screenY + 1, 1, 1);
-  }
-  if (solidS && solidW) {
-    const y = screenY + TILE_SIZE_PX - 1;
-    gfx.fillRect(screenX + 0, y,     1, 1);
-    gfx.fillRect(screenX + 1, y,     1, 1);
-    gfx.fillRect(screenX + 0, y - 1, 1, 1);
-  }
-  if (solidS && solidE) {
-    const x = screenX + TILE_SIZE_PX - 1;
-    const y = screenY + TILE_SIZE_PX - 1;
-    gfx.fillRect(x,     y,     1, 1);
-    gfx.fillRect(x - 1, y,     1, 1);
-    gfx.fillRect(x,     y - 1, 1, 1);
-  }
-  // Light darkening — extends the curve one more pixel out so the eye
-  // reads the L as smoothly fading rather than abruptly stopping at 2px.
-  gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
-  if (solidN && solidW) {
-    gfx.fillRect(screenX + 2, screenY + 0, 1, 1);
-    gfx.fillRect(screenX + 0, screenY + 2, 1, 1);
-    gfx.fillRect(screenX + 1, screenY + 1, 1, 1);
-  }
-  if (solidN && solidE) {
-    const x = screenX + TILE_SIZE_PX - 1;
-    gfx.fillRect(x - 2, screenY + 0, 1, 1);
-    gfx.fillRect(x,     screenY + 2, 1, 1);
-    gfx.fillRect(x - 1, screenY + 1, 1, 1);
-  }
-  if (solidS && solidW) {
-    const y = screenY + TILE_SIZE_PX - 1;
-    gfx.fillRect(screenX + 2, y,     1, 1);
-    gfx.fillRect(screenX + 0, y - 2, 1, 1);
-    gfx.fillRect(screenX + 1, y - 1, 1, 1);
-  }
-  if (solidS && solidE) {
-    const x = screenX + TILE_SIZE_PX - 1;
-    const y = screenY + TILE_SIZE_PX - 1;
-    gfx.fillRect(x - 2, y,     1, 1);
-    gfx.fillRect(x,     y - 2, 1, 1);
-    gfx.fillRect(x - 1, y - 1, 1, 1);
+  // Wedge shape (NW example, anchored at screenX+0, screenY+0):
+  //   #####          (5 wide × 1)
+  //   ####.          (4 wide × 1, one short of the right edge)
+  //   ###..
+  //   ##...
+  //   #....
+  // Total: 5+4+3+2+1 = 15 pixels per corner. The first row + first column
+  // are the heavy-alpha "wall continues into the tile" band; deeper
+  // diagonals fade with progressively lower alpha so the curve looks
+  // smooth.
+  const N = TILE_SIZE_PX - 1; // index of last column/row in tile
+  const ALPHAS: ReadonlyArray<number> = [0.95, 0.78, 0.6, 0.4, 0.22];
+  // Layer i covers cells where (col + row) === i in the corner-local
+  // (0..4, 0..4) grid. Layer 0 = the corner pixel; layer 4 = the
+  // diagonal opposite.
+  for (let i = 0; i < ALPHAS.length; i++) {
+    gfx.fillStyle(COLOR_ROCK_BASE, ALPHAS[i]!);
+    for (let r = 0; r <= i; r++) {
+      const c = i - r;
+      // c, r index the corner-local grid (small values = closer to corner).
+      if (solidN && solidW) gfx.fillRect(screenX + c,         screenY + r,         1, 1);
+      if (solidN && solidE) gfx.fillRect(screenX + N - c,     screenY + r,         1, 1);
+      if (solidS && solidW) gfx.fillRect(screenX + c,         screenY + N - r,     1, 1);
+      if (solidS && solidE) gfx.fillRect(screenX + N - c,     screenY + N - r,     1, 1);
+    }
   }
 }
