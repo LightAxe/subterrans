@@ -184,19 +184,19 @@ function drawLargeFeatureSliceIfAny(
   tileX: number,
   tileY: number,
 ): boolean {
-  // Codex review followup: when two anchors that overlap this tile both
-  // pass their gate (e.g. boulder at (5,5) and bush at (6,5)), the
-  // previous "first match wins" logic could pick anchor (5,5) for tile
-  // (5,5) but anchor (6,5) for tile (6,5) — even though both anchors
-  // claim tile (6,5). Result: half-feature seams where adjacent tiles
-  // render slices of different features.
+  // Codex review followup #2: previous "upper-leftmost-per-tile" selection
+  // still left half-feature seams when two anchors had partially-
+  // overlapping footprints. Two 2×2 anchors at (5,5) and (6,5): tiles
+  // (5..6, 5..6) all chose (5,5), but tile (7,5) — outside (5,5)'s
+  // footprint, inside (6,5)'s — still chose (6,5). Result: anchor
+  // (6,5)'s LEFT half rendered nowhere (occluded by (5,5)) while its
+  // RIGHT half rendered at (7,5)/(7,6).
   //
-  // Fix: scan every candidate (ax, ay) in this tile's MAX_W × MAX_H
-  // window, collect every active anchor that claims this tile, and pick
-  // the upper-leftmost (smallest (ay, ax)). This guarantees that every
-  // tile in an active anchor's footprint agrees on which anchor wins —
-  // either the same upper-leftmost anchor, or a more upper-left
-  // competitor that occludes both.
+  // Stronger fix: also reject any anchor that is itself OCCLUDED by an
+  // upper-left anchor's footprint. Anchor (6,5) checks the (W-1)×(H-1)
+  // window above-left for any active upper-left anchor; (5,5) is one;
+  // (6,5) is therefore suppressed. Tile (7,5) sees no active anchor in
+  // its scan window and renders normal substrate.
   let bestAx = 0;
   let bestAy = 0;
   let bestSprite: LargeFeatureSprite | null = null;
@@ -207,17 +207,12 @@ function drawLargeFeatureSliceIfAny(
       for (const entry of LARGE_FEATURES) {
         const W = entry.variants[0]!.tilesWide;
         const H = entry.variants[0]!.tilesTall;
-        // Anchor's footprint must cover this tile. (Without this guard a
-        // smaller-than-MAX feature could be considered for a tile outside
-        // its actual span.)
         if (dx >= W || dy >= H) continue;
         const h = spatialHash(ax, ay, entry.salt);
         if ((h & 0xff) >= entry.probability) continue;
-        // (ax, ay) is an active anchor of this entry. Take this entry's
-        // hit and skip remaining entries — registry order is the
-        // priority tie-breaker among feature TYPES at the same anchor
-        // position, but we still need to compare across DIFFERENT
-        // anchor positions for upper-leftmost selection.
+        if (isAnchorSuppressed(ax, ay)) {
+          break;
+        }
         if (
           bestSprite === null ||
           ay < bestAy ||
@@ -234,6 +229,32 @@ function drawLargeFeatureSliceIfAny(
   if (bestSprite !== null) {
     drawLargeFeatureSlice(gfx, bestSprite, screenX, screenY, tileX - bestAx, tileY - bestAy);
     return true;
+  }
+  return false;
+}
+
+/**
+ * True if any earlier anchor's footprint already covers (ax, ay) — i.e.
+ * (ax, ay) is OCCLUDED by an upper-left active anchor of any feature
+ * type and should not itself anchor.
+ *
+ * Cost: per (ax, ay) we check (W×H − 1) candidates per feature type. For
+ * 2×2 features × 3 feature types = 9 hash lookups. Bounded; linear in
+ * the registry size.
+ */
+function isAnchorSuppressed(ax: number, ay: number): boolean {
+  for (const entry of LARGE_FEATURES) {
+    const W = entry.variants[0]!.tilesWide;
+    const H = entry.variants[0]!.tilesTall;
+    for (let dy = 0; dy < H; dy++) {
+      for (let dx = 0; dx < W; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const px = ax - dx;
+        const py = ay - dy;
+        const ph = spatialHash(px, py, entry.salt);
+        if ((ph & 0xff) < entry.probability) return true;
+      }
+    }
   }
   return false;
 }
