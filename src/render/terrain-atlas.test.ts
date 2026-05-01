@@ -178,24 +178,31 @@ describe('drawTunnelCornerOverlay', () => {
     expect(gfx.callsOf('fillRect')).toHaveLength(0);
   });
 
-  it('emits exactly one edge-band fillRect per wall neighbor', () => {
+  it('emits two edge-band fillRects per wall neighbor (issue #40 — two-band fade)', () => {
     const gfx = new MockGfx();
     drawTunnelCornerOverlay(gfx, 0, 0, true, false, false, false);
-    // 1 edge band (north) + 0 corner pixels (no two adjacent walls).
-    expect(gfx.callsOf('fillRect')).toHaveLength(1);
+    // 2 edge-band fillRects (heavy + light) for the north edge. No
+    // corner-stair ops because no two adjacent walls.
+    expect(gfx.callsOf('fillRect')).toHaveLength(2);
   });
 
-  it('emits a corner pixel where two adjacent walls meet (NW corner)', () => {
+  it('emits the corner-stair pattern where two adjacent walls meet (NW corner)', () => {
     const gfx = new MockGfx();
     drawTunnelCornerOverlay(gfx, 0, 0, true, false, false, true);
-    // 2 edge bands (N + W) + 1 NW corner pixel.
-    expect(gfx.callsOf('fillRect')).toHaveLength(3);
+    // 2 edge bands × 2 walls = 4 fillRects. Plus a 3+3-pixel L-shape corner
+    // stair (3 heavy darkening pixels + 3 light darkening pixels) = 6 ops.
+    // Total 10. (Issue #40 — three-pixel diagonal staircase replaces the
+    // single-pixel bevel from the previous iteration.)
+    expect(gfx.callsOf('fillRect')).toHaveLength(10);
   });
 
-  it('emits all 4 edges + 4 corners when fully surrounded by walls (open tile in solid)', () => {
+  it('emits all 4 edge bands + 4 corner stairs when fully surrounded by walls', () => {
     const gfx = new MockGfx();
     drawTunnelCornerOverlay(gfx, 0, 0, true, true, true, true);
-    expect(gfx.callsOf('fillRect')).toHaveLength(8);
+    // 4 walls × 2 bands = 8 edge ops, plus 4 corners × 6 pixels each = 24.
+    // Total 32. Inside-corner stair gives the rounded-tunnel feel even
+    // when the open tile is fully enclosed (mid-chamber visual).
+    expect(gfx.callsOf('fillRect')).toHaveLength(32);
   });
 
   it('emits deterministic ops for the same neighbor configuration', () => {

@@ -138,9 +138,19 @@ const LARGE_FEATURES: ReadonlyArray<FeatureRegistryEntry> = [
 // anchor window — if a future contributor adds a variant of a different
 // size, slices outside the variant[0] window would be silently skipped.
 // Throwing at module load surfaces the bug at the earliest possible point.
+//
+// At the same time, compute MAX_FEATURE_TILES_WIDE / MAX_FEATURE_TILES_TALL
+// — the cross-entry maximum span. drawLargeFeatureSliceIfAny scans this
+// window per tile so every potential anchor that could claim the tile is
+// considered (including features bigger than the smallest one — relevant
+// once a 3×3 boulder ships).
+let _maxW = 0;
+let _maxH = 0;
 for (const entry of LARGE_FEATURES) {
   const W = entry.variants[0]!.tilesWide;
   const H = entry.variants[0]!.tilesTall;
+  if (W > _maxW) _maxW = W;
+  if (H > _maxH) _maxH = H;
   for (let i = 1; i < entry.variants.length; i++) {
     const v = entry.variants[i]!;
     if (v.tilesWide !== W || v.tilesTall !== H) {
@@ -151,6 +161,8 @@ for (const entry of LARGE_FEATURES) {
     }
   }
 }
+const MAX_FEATURE_TILES_WIDE = _maxW;
+const MAX_FEATURE_TILES_TALL = _maxH;
 
 /**
  * If any registered multi-tile feature anchors at a position whose footprint
@@ -172,27 +184,56 @@ function drawLargeFeatureSliceIfAny(
   tileX: number,
   tileY: number,
 ): boolean {
-  for (const entry of LARGE_FEATURES) {
-    // All variants of a given feature type share W × H so they can
-    // round-trip through the same anchor scan. Picking variant[0]'s
-    // dimensions is fine.
-    const W = entry.variants[0]!.tilesWide;
-    const H = entry.variants[0]!.tilesTall;
-    for (let dy = 0; dy < H; dy++) {
-      for (let dx = 0; dx < W; dx++) {
-        const ax = tileX - dx;
-        const ay = tileY - dy;
+  // Codex review followup: when two anchors that overlap this tile both
+  // pass their gate (e.g. boulder at (5,5) and bush at (6,5)), the
+  // previous "first match wins" logic could pick anchor (5,5) for tile
+  // (5,5) but anchor (6,5) for tile (6,5) — even though both anchors
+  // claim tile (6,5). Result: half-feature seams where adjacent tiles
+  // render slices of different features.
+  //
+  // Fix: scan every candidate (ax, ay) in this tile's MAX_W × MAX_H
+  // window, collect every active anchor that claims this tile, and pick
+  // the upper-leftmost (smallest (ay, ax)). This guarantees that every
+  // tile in an active anchor's footprint agrees on which anchor wins —
+  // either the same upper-leftmost anchor, or a more upper-left
+  // competitor that occludes both.
+  let bestAx = 0;
+  let bestAy = 0;
+  let bestSprite: LargeFeatureSprite | null = null;
+  for (let dy = 0; dy < MAX_FEATURE_TILES_TALL; dy++) {
+    for (let dx = 0; dx < MAX_FEATURE_TILES_WIDE; dx++) {
+      const ax = tileX - dx;
+      const ay = tileY - dy;
+      for (const entry of LARGE_FEATURES) {
+        const W = entry.variants[0]!.tilesWide;
+        const H = entry.variants[0]!.tilesTall;
+        // Anchor's footprint must cover this tile. (Without this guard a
+        // smaller-than-MAX feature could be considered for a tile outside
+        // its actual span.)
+        if (dx >= W || dy >= H) continue;
         const h = spatialHash(ax, ay, entry.salt);
         if ((h & 0xff) >= entry.probability) continue;
-        // Anchor exists at (ax, ay). Pick a variant deterministically per
-        // anchor — same (ax, ay) always picks the same variant, but
-        // adjacent anchors get different variants so two boulders side by
-        // side don't look like the same boulder copy-pasted.
-        const variant = entry.variants[(h >>> 8) % entry.variants.length]!;
-        drawLargeFeatureSlice(gfx, variant, screenX, screenY, dx, dy);
-        return true;
+        // (ax, ay) is an active anchor of this entry. Take this entry's
+        // hit and skip remaining entries — registry order is the
+        // priority tie-breaker among feature TYPES at the same anchor
+        // position, but we still need to compare across DIFFERENT
+        // anchor positions for upper-leftmost selection.
+        if (
+          bestSprite === null ||
+          ay < bestAy ||
+          (ay === bestAy && ax < bestAx)
+        ) {
+          bestAx = ax;
+          bestAy = ay;
+          bestSprite = entry.variants[(h >>> 8) % entry.variants.length]!;
+        }
+        break;
       }
     }
+  }
+  if (bestSprite !== null) {
+    drawLargeFeatureSlice(gfx, bestSprite, screenX, screenY, tileX - bestAx, tileY - bestAy);
+    return true;
   }
   return false;
 }
@@ -519,22 +560,87 @@ export function drawTunnelCornerOverlay(
   solidS: boolean,
   solidW: boolean,
 ): void {
-  // Soft fade-to-rock alpha 0.5 along the edge facing the Solid neighbor.
-  // The dither pattern from drawOpenFloorTile already adds tonal noise; this
-  // overlay just shadows the edge band, producing a beveled-in feel.
-  gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.5);
-  if (solidN) gfx.fillRect(screenX,                  screenY,                  TILE_SIZE_PX, 2);
-  if (solidS) gfx.fillRect(screenX,                  screenY + TILE_SIZE_PX-2, TILE_SIZE_PX, 2);
-  if (solidW) gfx.fillRect(screenX,                  screenY,                  2, TILE_SIZE_PX);
-  if (solidE) gfx.fillRect(screenX + TILE_SIZE_PX-2, screenY,                  2, TILE_SIZE_PX);
+  // Edge fade: rock-tone band along each wall side, alpha-stacked so the
+  // 2 outermost pixels read darkest and inner pixel reads as a transition.
+  // Two-band fade (instead of the previous flat 2-pixel band) gives the
+  // "soft pack" feel of dirt against open air.
+  gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
+  if (solidN) gfx.fillRect(screenX,                  screenY,                  TILE_SIZE_PX, 1);
+  if (solidS) gfx.fillRect(screenX,                  screenY + TILE_SIZE_PX-1, TILE_SIZE_PX, 1);
+  if (solidW) gfx.fillRect(screenX,                  screenY,                  1, TILE_SIZE_PX);
+  if (solidE) gfx.fillRect(screenX + TILE_SIZE_PX-1, screenY,                  1, TILE_SIZE_PX);
+  gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.3);
+  if (solidN) gfx.fillRect(screenX,                  screenY + 1,              TILE_SIZE_PX, 1);
+  if (solidS) gfx.fillRect(screenX,                  screenY + TILE_SIZE_PX-2, TILE_SIZE_PX, 1);
+  if (solidW) gfx.fillRect(screenX + 1,              screenY,                  1, TILE_SIZE_PX);
+  if (solidE) gfx.fillRect(screenX + TILE_SIZE_PX-2, screenY,                  1, TILE_SIZE_PX);
 
-  // Inside-corner dither: where two adjacent edges are Solid, paint the
-  // 2×2 corner block with a single darker pixel that visually softens the
-  // 90° join. Combined with the edge fade above, the corner reads as
-  // rounded-in rather than square.
-  gfx.fillStyle(COLOR_ROCK_BASE, 0.7);
-  if (solidN && solidW) gfx.fillRect(screenX + 0,                screenY + 0,                1, 1);
-  if (solidN && solidE) gfx.fillRect(screenX + TILE_SIZE_PX-1,   screenY + 0,                1, 1);
-  if (solidS && solidW) gfx.fillRect(screenX + 0,                screenY + TILE_SIZE_PX-1,   1, 1);
-  if (solidS && solidE) gfx.fillRect(screenX + TILE_SIZE_PX-1,   screenY + TILE_SIZE_PX-1,   1, 1);
+  // Inside-corner stair (issue #40 follow-up — the user reported the
+  // previous single-pixel corner bevel still read as a hard 90° angle).
+  // For each inside corner where two walls meet, paint a 3-pixel diagonal
+  // staircase that fades the corner from rock into open floor, simulating
+  // a curved transition without sub-pixel rendering.
+  //
+  // SNES-era pixel-art convention: a rounded corner is 3 darker pixels in
+  // an L-shape, with progressively-lighter alpha as you step inward.
+  //
+  //   NW corner pattern (at screenX, screenY):
+  //     ##.       <- (0,0) heavy, (1,0) heavy
+  //     #..       <- (0,1) heavy
+  //     X..       <- (0,2) light, (2,0) light, ...
+  //     ...
+  // Other corners are 90°-rotations of this pattern.
+  gfx.fillStyle(COLOR_ROCK_BASE, 0.85);
+  // Heavy darkening: the L-shape closest to the corner.
+  if (solidN && solidW) {
+    gfx.fillRect(screenX + 0, screenY + 0, 1, 1);
+    gfx.fillRect(screenX + 1, screenY + 0, 1, 1);
+    gfx.fillRect(screenX + 0, screenY + 1, 1, 1);
+  }
+  if (solidN && solidE) {
+    const x = screenX + TILE_SIZE_PX - 1;
+    gfx.fillRect(x,     screenY + 0, 1, 1);
+    gfx.fillRect(x - 1, screenY + 0, 1, 1);
+    gfx.fillRect(x,     screenY + 1, 1, 1);
+  }
+  if (solidS && solidW) {
+    const y = screenY + TILE_SIZE_PX - 1;
+    gfx.fillRect(screenX + 0, y,     1, 1);
+    gfx.fillRect(screenX + 1, y,     1, 1);
+    gfx.fillRect(screenX + 0, y - 1, 1, 1);
+  }
+  if (solidS && solidE) {
+    const x = screenX + TILE_SIZE_PX - 1;
+    const y = screenY + TILE_SIZE_PX - 1;
+    gfx.fillRect(x,     y,     1, 1);
+    gfx.fillRect(x - 1, y,     1, 1);
+    gfx.fillRect(x,     y - 1, 1, 1);
+  }
+  // Light darkening — extends the curve one more pixel out so the eye
+  // reads the L as smoothly fading rather than abruptly stopping at 2px.
+  gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
+  if (solidN && solidW) {
+    gfx.fillRect(screenX + 2, screenY + 0, 1, 1);
+    gfx.fillRect(screenX + 0, screenY + 2, 1, 1);
+    gfx.fillRect(screenX + 1, screenY + 1, 1, 1);
+  }
+  if (solidN && solidE) {
+    const x = screenX + TILE_SIZE_PX - 1;
+    gfx.fillRect(x - 2, screenY + 0, 1, 1);
+    gfx.fillRect(x,     screenY + 2, 1, 1);
+    gfx.fillRect(x - 1, screenY + 1, 1, 1);
+  }
+  if (solidS && solidW) {
+    const y = screenY + TILE_SIZE_PX - 1;
+    gfx.fillRect(screenX + 2, y,     1, 1);
+    gfx.fillRect(screenX + 0, y - 2, 1, 1);
+    gfx.fillRect(screenX + 1, y - 1, 1, 1);
+  }
+  if (solidS && solidE) {
+    const x = screenX + TILE_SIZE_PX - 1;
+    const y = screenY + TILE_SIZE_PX - 1;
+    gfx.fillRect(x - 2, y,     1, 1);
+    gfx.fillRect(x,     y - 2, 1, 1);
+    gfx.fillRect(x - 1, y - 1, 1, 1);
+  }
 }
