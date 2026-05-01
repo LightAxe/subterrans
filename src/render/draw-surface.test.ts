@@ -29,17 +29,16 @@ import { createColonyRecord } from '../sim/colony/colony-store.js';
 import { AntFacingCache } from './ant-facing-cache.js';
 import {
   TILE_SIZE_PX,
-  COLOR_SURFACE_GRASS_PRIMARY,
-  COLOR_SURFACE_GRASS_DARK,
-  COLOR_SURFACE_DIRT,
-  COLOR_SURFACE_DIRT_DARK,
-  COLOR_SURFACE_DIRT_LIGHT,
+  // Issue #40: legacy palette names — kept here only for the small number
+  // of remaining surface-entity tests that may still reference them. Surface
+  // terrain now uses the procedural-art palette from terrain-atlas.ts.
   COLOR_FOOD_PILE_NORMAL,
   COLOR_FOOD_PILE_MARKED,
   COLOR_PLAYER_COLONY,
   COLOR_ENEMY_COLONY,
   COLOR_RALLY_POINT,
 } from './sprites.js';
+import { COLOR_BARREN_EARTH } from './terrain-atlas.js';
 import type { CameraState } from './camera.js';
 
 // ---------------------------------------------------------------------------
@@ -122,23 +121,14 @@ function makeWorld4x4(): WorldState {
   return w;
 }
 
+/** Collect every fillRect that falls within a single tile's screen window.
+ *  Used by the panning-stability test below — proves the same tile produces
+ *  the same draws regardless of where the camera centers it on screen. */
 function textureRectsInsideTile(gfx: MockGfx, screenX: number, screenY: number): Rect[] {
   const rects: Rect[] = [];
-  let currentStyle: unknown = null;
   for (const call of gfx.calls) {
-    if (call.method === 'fillStyle') {
-      currentStyle = call.args[0];
-      continue;
-    }
     if (call.method !== 'fillRect') continue;
-    if (
-      currentStyle !== COLOR_SURFACE_GRASS_DARK &&
-      currentStyle !== COLOR_SURFACE_DIRT_DARK &&
-      currentStyle !== COLOR_SURFACE_DIRT_LIGHT
-    ) continue;
     const [x, y, w, h] = call.args as [number, number, number, number];
-    // This helper compares in-tile offsets only; terrain-texture.test.ts owns
-    // the stronger invariant that texture rects cannot escape their tile.
     if (x >= screenX && y >= screenY && x + w <= screenX + TILE_SIZE_PX && y + h <= screenY + TILE_SIZE_PX) {
       rects.push({ x: x - screenX, y: y - screenY, w, h });
     }
@@ -155,38 +145,16 @@ describe('drawSurfaceTerrain', () => {
 
   beforeEach(() => { gfx = new MockGfx(); });
 
-  it('produces the expected base and texture fillRects for a fully-visible window', () => {
+  it('renders every visible tile with the barren-earth substrate (issue #40)', () => {
+    // Issue #40: surface is universally barren-earth substrate (with motifs
+    // scattered on top per tile hash). Every visible tile should produce at
+    // least one barren-earth fillStyle.
     const world = makeWorld4x4();
     const cam = makeCamera(1.5, 1.5, 3, 3);
     drawSurfaceTerrain(gfx, world, cam);
-    const rects = gfx.callsOf('fillRect');
-    expect(rects.length).toBe(52);
-  });
-
-  it('assigns COLOR_SURFACE_GRASS_PRIMARY to Grass tiles', () => {
-    const world = createWorldState(1);
-    const cam = makeCamera(1.5, 1.5, 3, 3);
-    drawSurfaceTerrain(gfx, world, cam);
-    const grassStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_SURFACE_GRASS_PRIMARY);
-    expect(grassStyles.length).toBe(16);
-  });
-
-  it('assigns COLOR_SURFACE_DIRT to Dirt tiles', () => {
-    const world = makeWorld4x4();
-    const cam = makeCamera(1.5, 1.5, 3, 3);
-    drawSurfaceTerrain(gfx, world, cam);
-    const dirtStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_SURFACE_DIRT);
-    expect(dirtStyles.length).toBe(4);
-  });
-
-  it('adds deterministic pixel texture colors to grass and dirt tiles', () => {
-    const world = makeWorld4x4();
-    const cam = makeCamera(1.5, 1.5, 3, 3);
-    drawSurfaceTerrain(gfx, world, cam);
-    const styles = gfx.callsOf('fillStyle').map(c => c.args[0]);
-    expect(styles).toContain(COLOR_SURFACE_GRASS_DARK);
-    expect(styles).toContain(COLOR_SURFACE_DIRT_DARK);
-    expect(styles).toContain(COLOR_SURFACE_DIRT_LIGHT);
+    const earthStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_BARREN_EARTH);
+    // 4×4 visible tiles = 16; each tile applies the barren-earth fill once.
+    expect(earthStyles.length).toBe(16);
   });
 
   it('keeps texture placement stable for the same world tile as the camera pans', () => {
@@ -222,7 +190,7 @@ describe('drawSurfaceTerrain', () => {
     }
   });
 
-  it('clamps right/bottom to grid bounds on large viewport', () => {
+  it('clamps right/bottom to grid bounds on large viewport (perf budget — issue #40)', () => {
     const world = createWorldState(1);
     for (let y = 0; y < world.surface.height; y++) {
       for (let x = 0; x < world.surface.width; x++) {
@@ -231,11 +199,21 @@ describe('drawSurfaceTerrain', () => {
     }
     const cam = makeCamera(0, 0, 200, 200);
     drawSurfaceTerrain(gfx, world, cam);
-    const baseStyles = gfx.callsOf('fillStyle').filter(c =>
-      c.args[0] === COLOR_SURFACE_GRASS_PRIMARY || c.args[0] === COLOR_SURFACE_DIRT,
-    );
-    expect(baseStyles.length).toBeLessThanOrEqual(128 * 128);
-    expect(gfx.callsOf('fillRect').length).toBeLessThanOrEqual(128 * 128 * 4);
+    // Issue #40: per-tile budget bumped from 4 → 30 fillRects to accommodate
+    // the procedural-art system (substrate dithering + sparse specks +
+    // motif overlays). Beyond that suggests a regression — uncapped per-pixel
+    // iteration creep, accidentally-removed sparseness gates, or a motif
+    // probability blown out.
+    expect(gfx.callsOf('fillRect').length).toBeLessThanOrEqual(128 * 128 * 30);
+  });
+
+  it('produces deterministic terrain renders for the same seed (issue #40 — replay-stable visuals)', () => {
+    const world = makeWorld4x4();
+    const a = new MockGfx();
+    const b = new MockGfx();
+    drawSurfaceTerrain(a, world, makeCamera(1.5, 1.5, 3, 3));
+    drawSurfaceTerrain(b, world, makeCamera(1.5, 1.5, 3, 3));
+    expect(a.calls).toEqual(b.calls);
   });
 });
 

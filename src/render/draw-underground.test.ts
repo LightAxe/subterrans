@@ -33,11 +33,6 @@ import type { ChamberRecord } from '../sim/colony/colony-store.js';
 import {
   TILE_SIZE_PX,
   COLOR_UNDERGROUND_CEILING_STRIP,
-  COLOR_UNDERGROUND_OPEN,
-  COLOR_UNDERGROUND_SOLID,
-  COLOR_SURFACE_GRASS_DARK,
-  COLOR_UNDERGROUND_SOLID_ROCK,
-  COLOR_UNDERGROUND_OPEN_DUST,
   COLOR_MARKED_TILE_OVERLAY,
   COLOR_BEING_DUG_OVERLAY,
   COLOR_CHAMBER_QUEEN,
@@ -45,6 +40,11 @@ import {
   COLOR_CHAMBER_FOOD_STORAGE_FILL,
   COLOR_PLAYER_COLONY,
 } from './sprites.js';
+import {
+  COLOR_ROCK_BASE,
+  COLOR_FLOOR_BASE,
+  COLOR_BARREN_EARTH,
+} from './terrain-atlas.js';
 import { FOOD_CHAMBER_CAPACITY } from '../sim/constants.js';
 import type { CameraState } from './camera.js';
 import { AntFacingCache } from './ant-facing-cache.js';
@@ -150,134 +150,113 @@ describe('drawUndergroundTerrain', () => {
     expect(gfx.calls.length).toBe(0);
   });
 
-  it('draws ceiling row with COLOR_UNDERGROUND_CEILING_STRIP for non-entrance columns', () => {
+  it('applies the ceiling-strip tint over non-entrance ceiling tiles (issue #40 — barren-earth ceiling)', () => {
+    // Issue #40: the ceiling under non-entrance columns is now barren-earth
+    // (matching the surface view's substrate so the two views share a visual
+    // vocabulary) with a ceiling-strip tint overlay. The tint color survives
+    // as evidence that ceiling tiles are visually distinct from interior
+    // floor tiles.
     const cam = makeCamera(5, 0.5, 10, 1);
     drawUndergroundTerrain(gfx, world, cam);
-    const ceilingStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_CEILING_STRIP);
-    expect(ceilingStyles.length).toBeGreaterThan(0);
+    const ceilingTintStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_CEILING_STRIP);
+    expect(ceilingTintStyles.length).toBeGreaterThan(0);
   });
 
-  it('draws COLOR_UNDERGROUND_OPEN at entrance column in ceiling row', () => {
+  it('opens the ceiling at entrance columns (no ceiling tint applied at the entrance gap)', () => {
     world.colonies[PLAYER_COLONY_ID]!.entrances = [
       { entranceId: 1, surfaceTileX: 3, surfaceTileY: 64, isOpen: true },
     ];
     const cam = makeCamera(5, 0.5, 10, 1);
     drawUndergroundTerrain(gfx, world, cam);
 
-    const openStyles    = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_OPEN);
-    const ceilingStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_CEILING_STRIP);
-    expect(openStyles.length).toBe(1);
-    expect(ceilingStyles.length).toBe(9);
+    const ceilingTintStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_CEILING_STRIP);
+    // 9 non-entrance columns each apply the ceiling tint exactly once.
+    expect(ceilingTintStyles.length).toBe(9);
   });
 
-  it('draws Solid tiles with COLOR_UNDERGROUND_SOLID', () => {
+  it('renders Solid tiles with the rock substrate (issue #40 — procedural rock palette)', () => {
     const cam = makeCamera(5, 5, 4, 4);
     drawUndergroundTerrain(gfx, world, cam);
-    const solidStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_SOLID);
-    expect(solidStyles.length).toBeGreaterThan(0);
+    const rockBaseStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_ROCK_BASE);
+    expect(rockBaseStyles.length).toBeGreaterThan(0);
   });
 
-  it('adds deterministic rock texture to Solid tiles', () => {
-    const cam = makeCamera(5, 5, 4, 4);
-    drawUndergroundTerrain(gfx, world, cam);
-    const rockStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_SOLID_ROCK);
-    expect(rockStyles.length).toBeGreaterThan(0);
-  });
-
-  it('draws Open tiles with COLOR_UNDERGROUND_OPEN', () => {
+  it('renders Open tiles with the floor substrate', () => {
     ugSet(world.undergroundGrids[PLAYER_COLONY_ID]!, 5, 5, UndergroundTileState.Open);
     const cam = makeCamera(5, 5, 2, 2);
     drawUndergroundTerrain(gfx, world, cam);
-    const openStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_OPEN);
-    expect(openStyles.length).toBeGreaterThan(0);
+    const floorStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_FLOOR_BASE);
+    expect(floorStyles.length).toBeGreaterThan(0);
   });
 
-  it('adds deterministic dust texture to Open tiles', () => {
-    ugSet(world.undergroundGrids[PLAYER_COLONY_ID]!, 5, 5, UndergroundTileState.Open);
-    const cam = makeCamera(5, 5, 2, 2);
-    drawUndergroundTerrain(gfx, world, cam);
-    const dustStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_OPEN_DUST);
-    expect(dustStyles.length).toBeGreaterThan(0);
-  });
-
-  it('draws Marked tiles: open base + overlay with COLOR_MARKED_TILE_OVERLAY', () => {
+  it('renders Marked tiles: open floor base + COLOR_MARKED_TILE_OVERLAY tint', () => {
     ugSet(world.undergroundGrids[PLAYER_COLONY_ID]!, 5, 5, UndergroundTileState.Marked);
     const cam = makeCamera(5.5, 5.5, 2, 2);
     drawUndergroundTerrain(gfx, world, cam);
-    const openStyles   = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_OPEN);
-    const dustStyles   = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_OPEN_DUST);
+    const floorStyles  = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_FLOOR_BASE);
     const markedStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_MARKED_TILE_OVERLAY);
-    expect(openStyles.length).toBeGreaterThan(0);
-    expect(dustStyles.length).toBeGreaterThan(0);
+    expect(floorStyles.length).toBeGreaterThan(0);
     expect(markedStyles.length).toBeGreaterThan(0);
   });
 
-  it('draws BeingDug tiles: open base + overlay with COLOR_BEING_DUG_OVERLAY', () => {
+  it('renders BeingDug tiles: open floor base + COLOR_BEING_DUG_OVERLAY tint', () => {
     ugSet(world.undergroundGrids[PLAYER_COLONY_ID]!, 5, 5, UndergroundTileState.BeingDug);
     const cam = makeCamera(5.5, 5.5, 2, 2);
     drawUndergroundTerrain(gfx, world, cam);
-    const dustStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_OPEN_DUST);
+    const floorStyles    = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_FLOOR_BASE);
     const beingDugStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_BEING_DUG_OVERLAY);
-    expect(dustStyles.length).toBeGreaterThan(0);
+    expect(floorStyles.length).toBeGreaterThan(0);
     expect(beingDugStyles.length).toBeGreaterThan(0);
   });
 
-  it('places ceiling gap at exactly the entrance tileX, leaves other columns as ceiling', () => {
+  it('opens ceiling gaps at every entrance column and tints all other ceiling cols', () => {
     world.colonies[PLAYER_COLONY_ID]!.entrances = [
       { entranceId: 1, surfaceTileX: 2, surfaceTileY: 64, isOpen: true },
       { entranceId: 2, surfaceTileX: 7, surfaceTileY: 64, isOpen: true },
     ];
     const cam = makeCamera(5, 0.5, 10, 1);
     drawUndergroundTerrain(gfx, world, cam);
-    const openStyles    = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_OPEN);
-    const ceilingStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_CEILING_STRIP);
-    expect(openStyles.length).toBe(2);
-    expect(ceilingStyles.length).toBe(8);
+    const ceilingTintStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_CEILING_STRIP);
+    // 10 columns - 2 entrances = 8 tinted ceiling tiles.
+    expect(ceilingTintStyles.length).toBe(8);
   });
 
-  it('textures non-entrance ceiling tiles like grass without tinting entrance gaps', () => {
+  it('non-entrance ceiling tiles use the surface barren-earth substrate (visual continuity)', () => {
+    // Issue #40: ceiling = surface earth + ceiling tint. The barren-earth
+    // base color must appear at non-entrance ceiling positions so the
+    // underground ceiling visually matches the surface view above it.
     world.colonies[PLAYER_COLONY_ID]!.entrances = [
       { entranceId: 1, surfaceTileX: 3, surfaceTileY: 64, isOpen: true },
     ];
     const cam = makeCamera(5, 0.5, 10, 1);
     drawUndergroundTerrain(gfx, world, cam);
-
-    const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const entranceScreenX = (3 - left) * TILE_SIZE_PX;
-    let currentStyle: unknown = null;
-    let nonEntranceGrassRects = 0;
-    let entranceGrassRects = 0;
-    for (const call of gfx.calls) {
-      if (call.method === 'fillStyle') {
-        currentStyle = call.args[0];
-        continue;
-      }
-      if (call.method !== 'fillRect') continue;
-      if (currentStyle !== COLOR_SURFACE_GRASS_DARK) continue;
-      const x = call.args[0] as number;
-      if (x >= entranceScreenX && x < entranceScreenX + TILE_SIZE_PX) {
-        entranceGrassRects++;
-      } else {
-        nonEntranceGrassRects++;
-      }
-    }
-
-    expect(nonEntranceGrassRects).toBeGreaterThan(0);
-    expect(entranceGrassRects).toBe(0);
+    const earthStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_BARREN_EARTH);
+    expect(earthStyles.length).toBeGreaterThan(0);
   });
 
-  it('bounds terrain draw calls on a worst-case marked underground grid', () => {
+  it('keeps terrain draw calls bounded — at most ~30 fillRects per tile worst-case', () => {
+    // Issue #40: the procedural pixel-art system emits more fillRects per tile
+    // than the previous flat-fill path (substrate dithering + corner overlays
+    // + occasional motifs). Set a generous-but-bounded budget so we catch any
+    // future regression that would explode this further (per-pixel iteration
+    // creep, accidentally-removed sparseness gates, etc).
     const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
     for (let y = 1; y < grid.height; y++) {
       for (let x = 0; x < grid.width; x++) {
         ugSet(grid, x, y, UndergroundTileState.Marked);
       }
     }
-
     const cam = makeCamera(0, 0, 200, 200);
     drawUndergroundTerrain(gfx, world, cam);
+    expect(gfx.callsOf('fillRect').length).toBeLessThanOrEqual(grid.width * grid.height * 30);
+  });
 
-    expect(gfx.callsOf('fillRect').length).toBeLessThanOrEqual(grid.width * grid.height * 4);
+  it('produces deterministic terrain renders for the same seed (issue #40 — replay-stable visuals)', () => {
+    const a = new MockGfx();
+    const b = new MockGfx();
+    drawUndergroundTerrain(a, world, makeCamera(5, 5, 4, 4));
+    drawUndergroundTerrain(b, world, makeCamera(5, 5, 4, 4));
+    expect(a.calls).toEqual(b.calls);
   });
 });
 

@@ -31,8 +31,6 @@ import type { WorldState } from '../sim/types.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import {
   TILE_SIZE_PX,
-  COLOR_UNDERGROUND_SOLID,
-  COLOR_UNDERGROUND_OPEN,
   COLOR_MARKED_TILE_OVERLAY,
   COLOR_BEING_DUG_OVERLAY,
   COLOR_UNDERGROUND_CEILING_STRIP,
@@ -44,7 +42,12 @@ import {
   COLOR_ENEMY_COLONY,
   COLOR_QUEEN_OUTLINE,
 } from './sprites.js';
-import { drawGrassTexture, drawUndergroundOpenTexture, drawUndergroundSolidTexture } from './terrain-texture.js';
+import {
+  drawBarrenEarthTile,
+  drawSolidRockTile,
+  drawOpenFloorTile,
+  drawTunnelCornerOverlay,
+} from './terrain-atlas.js';
 import type { CameraState } from './camera.js';
 
 // ---------------------------------------------------------------------------
@@ -129,54 +132,86 @@ export function drawUndergroundTerrain(
     }
   }
 
+  // Wall-edge predicate for tunnel corner rounding (issue #40). Strictly
+  // checks for Solid because Marked and BeingDug are visually rendered as
+  // open-floor-with-tint — they read as "tunnel becoming a tunnel", not
+  // wall. Drawing a wall shadow facing a Marked neighbor would falsely
+  // suggest a hard boundary that the player has explicitly queued for
+  // demolition. Out-of-bounds tiles count as walls (the grid edge is the
+  // edge of the world). The ceiling row (ty=0) is wall except at entrance
+  // columns, mirroring the visual rule used a few lines below for the
+  // ceiling-strip rendering.
+  const isWallNeighbor = (nx: number, ny: number): boolean => {
+    if (nx < 0 || ny < 0 || nx >= grid.width || ny >= grid.height) return true;
+    if (ny === 0) return !entranceXSet.has(nx);
+    return ugGet(grid, nx, ny) === UndergroundTileState.Solid;
+  };
+
   for (let ty = Math.max(top, 0); ty < bottom; ty++) {
     for (let tx = Math.max(left, 0); tx < right; tx++) {
       const screenX = (tx - left) * TILE_SIZE_PX;
       const screenY = (ty - top)  * TILE_SIZE_PX;
 
       if (ty === 0) {
-        // Ceiling strip: open gap at entrance columns, ceiling color elsewhere
-        const color = entranceXSet.has(tx) ? COLOR_UNDERGROUND_OPEN : COLOR_UNDERGROUND_CEILING_STRIP;
-        gfx.fillStyle(color, 1);
-        gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
-        if (!entranceXSet.has(tx)) {
-          // The ceiling strip is the visible underside of the surface grass,
-          // so it deliberately reuses the grass texture pattern.
-          drawGrassTexture(gfx, screenX, screenY, tx, ty);
-        }
-        // Phase 8.5 usability (PRD §7c.1): highlight entrance-column ceiling
-        // gaps with a translucent gold tint so the "way in" reads at a glance
-        // even when the grid is almost entirely Solid (first-visit state).
+        // Ceiling strip: open gap at entrance columns, surface earth elsewhere.
+        // The ceiling reads as the underside of the surface — same barren
+        // earth substrate the player sees on the surface view (issue #40
+        // reframe), so the two views feel like the same continuous world.
         if (entranceXSet.has(tx)) {
+          // Open shaft top — render as Open floor + gold tint highlight.
+          drawOpenFloorTile(gfx, screenX, screenY, tx, ty);
+          // Phase 8.5 usability (PRD §7c.1): translucent gold tint marks
+          // the "way in" so the entrance reads even on a near-full Solid
+          // grid (first-visit state).
           gfx.fillStyle(COLOR_QUEEN_OUTLINE, 0.28);
+          gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
+        } else {
+          // Plain ceiling — surface-style barren earth so the two views
+          // share a visual vocabulary.
+          drawBarrenEarthTile(gfx, screenX, screenY, tx, ty);
+          // Subtle ceiling-strip tint to differentiate from a real surface
+          // tile. Half-transparent so the underlying texture still shows.
+          gfx.fillStyle(COLOR_UNDERGROUND_CEILING_STRIP, 0.35);
           gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
         }
       } else {
         const state = ugGet(grid, tx, ty);
         if (state === UndergroundTileState.Solid) {
-          gfx.fillStyle(COLOR_UNDERGROUND_SOLID, 1);
-          gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
-          drawUndergroundSolidTexture(gfx, screenX, screenY, tx, ty);
+          drawSolidRockTile(gfx, screenX, screenY, tx, ty);
         } else if (state === UndergroundTileState.Open) {
-          gfx.fillStyle(COLOR_UNDERGROUND_OPEN, 1);
-          gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
-          drawUndergroundOpenTexture(gfx, screenX, screenY, tx, ty);
+          drawOpenFloorTile(gfx, screenX, screenY, tx, ty);
+          // Issue #40 — round inside corners by darkening the edge bands
+          // facing wall neighbors. No-op if the tile is wholly inside an
+          // open chamber (no wall neighbors).
+          drawTunnelCornerOverlay(
+            gfx, screenX, screenY,
+            isWallNeighbor(tx,     ty - 1),
+            isWallNeighbor(tx + 1, ty),
+            isWallNeighbor(tx,     ty + 1),
+            isWallNeighbor(tx - 1, ty),
+          );
         } else if (state === UndergroundTileState.Marked) {
-          // Draw open base then overlay
-          // Phase 8.5 readability: overlay alpha 0.4→0.55 so Marked tiles read
-          // distinctly from Open floor without washing out the blue tint.
-          gfx.fillStyle(COLOR_UNDERGROUND_OPEN, 1);
-          gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
-          drawUndergroundOpenTexture(gfx, screenX, screenY, tx, ty);
+          // Open floor base + corner rounding (looks like a tunnel-in-progress)
+          // + blue Marked tint so the player sees what they queued.
+          drawOpenFloorTile(gfx, screenX, screenY, tx, ty);
+          drawTunnelCornerOverlay(
+            gfx, screenX, screenY,
+            isWallNeighbor(tx,     ty - 1),
+            isWallNeighbor(tx + 1, ty),
+            isWallNeighbor(tx,     ty + 1),
+            isWallNeighbor(tx - 1, ty),
+          );
           gfx.fillStyle(COLOR_MARKED_TILE_OVERLAY, 0.55);
           gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
         } else if (state === UndergroundTileState.BeingDug) {
-          // Draw open base then overlay
-          // Phase 8.5 readability: overlay alpha 0.5→0.65 so BeingDug tiles
-          // read as actively worked, not just "vaguely tinted".
-          gfx.fillStyle(COLOR_UNDERGROUND_OPEN, 1);
-          gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
-          drawUndergroundOpenTexture(gfx, screenX, screenY, tx, ty);
+          drawOpenFloorTile(gfx, screenX, screenY, tx, ty);
+          drawTunnelCornerOverlay(
+            gfx, screenX, screenY,
+            isWallNeighbor(tx,     ty - 1),
+            isWallNeighbor(tx + 1, ty),
+            isWallNeighbor(tx,     ty + 1),
+            isWallNeighbor(tx - 1, ty),
+          );
           gfx.fillStyle(COLOR_BEING_DUG_OVERLAY, 0.65);
           gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
         }

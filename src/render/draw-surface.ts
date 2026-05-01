@@ -13,7 +13,7 @@
 // Pheromone overlay is NOT called from here — GameScene calls drawPheromoneOverlay
 // between terrain and entities per RESEARCH §Architecture draw-order diagram.
 
-import { sgGet, SurfaceTileState } from '../sim/terrain.js';
+import { sgGet } from '../sim/terrain.js';
 import { isAlive } from '../sim/ant/ant-store.js';
 import { FP_ONE } from '../sim/fixed.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
@@ -22,8 +22,6 @@ import type { AntSpriteLayer } from './ant-sprite-layer.js';
 import { computeAntRotation, type AntFacingCache } from './ant-facing-cache.js';
 import {
   TILE_SIZE_PX,
-  COLOR_SURFACE_GRASS_PRIMARY,
-  COLOR_SURFACE_DIRT,
   COLOR_FOOD_PILE_NORMAL,
   COLOR_FOOD_PILE_MARKED,
   COLOR_SURFACE_ENTRANCE_HOLE,
@@ -32,7 +30,7 @@ import {
   COLOR_QUEEN_OUTLINE,
   COLOR_RALLY_POINT,
 } from './sprites.js';
-import { drawGrassTexture, drawSurfaceDirtTexture } from './terrain-texture.js';
+import { drawBarrenEarthTile, COLOR_BARREN_EARTH_DAMP } from './terrain-atlas.js';
 export type { AntSpriteLayer } from './ant-sprite-layer.js';
 import type { CameraState } from './camera.js';
 
@@ -77,28 +75,27 @@ function visibleRange(
 /**
  * Draw the surface terrain tiles visible through the camera.
  *
- * Each tile draws a solid base fill plus deterministic pixel texture detail.
- * Grass → COLOR_SURFACE_GRASS_PRIMARY, Dirt → COLOR_SURFACE_DIRT. Clips to
- * [0, grid bounds). (SURF-06)
+ * Issue #40 reframe: surface is barren-earth-default with grass tufts /
+ * pebbles / twigs / dead leaves / stones scattered as deterministic
+ * decoration. The sim-layer SurfaceTileState (Dirt vs. Grass) no longer maps
+ * to dramatically different colors — we render the same earthy substrate
+ * everywhere and let the per-tile motif scattering create variety. Grass
+ * tiles still bias slightly toward live-grass tufts (vs. dry-grass on dirt
+ * tiles), but the dominant readout is "ant-scale ground", not "lawn vs.
+ * dirt patch". This puts the visual focus on the ants where it belongs.
  */
 export function drawSurfaceTerrain(gfx: GfxLike, world: WorldState, cam: CameraState): void {
   const { left, top, right, bottom } = visibleRange(cam, world.surface.width, world.surface.height);
 
   for (let ty = Math.max(top, 0); ty < bottom; ty++) {
     for (let tx = Math.max(left, 0); tx < right; tx++) {
-      const state = sgGet(world.surface, tx, ty);
-      const color = state === SurfaceTileState.Dirt
-        ? COLOR_SURFACE_DIRT
-        : COLOR_SURFACE_GRASS_PRIMARY;
-      gfx.fillStyle(color, 1);
+      // sgGet is read for future SurfaceTileState-aware decoration biasing
+      // (live-grass density on grass tiles, etc.). Right now barren-earth is
+      // the universal substrate.
+      void sgGet(world.surface, tx, ty);
       const screenX = (tx - left) * TILE_SIZE_PX;
       const screenY = (ty - top)  * TILE_SIZE_PX;
-      gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
-      if (state === SurfaceTileState.Dirt) {
-        drawSurfaceDirtTexture(gfx, screenX, screenY, tx, ty);
-      } else {
-        drawGrassTexture(gfx, screenX, screenY, tx, ty);
-      }
+      drawBarrenEarthTile(gfx, screenX, screenY, tx, ty);
     }
   }
 }
@@ -176,7 +173,9 @@ export function drawSurfaceEntities(
       const sx = (entrance.surfaceTileX - left) * TILE_SIZE_PX;
       const sy = (entrance.surfaceTileY - top)  * TILE_SIZE_PX;
       if (sx < -TILE_SIZE_PX || sx > canvasW || sy < -TILE_SIZE_PX || sy > canvasH) continue;
-      gfx.fillStyle(COLOR_SURFACE_DIRT, 1);
+      // Entrance backplate — dampened earth so the dark hole reads against
+      // the lighter barren-earth surrounding.
+      gfx.fillStyle(COLOR_BARREN_EARTH_DAMP, 1);
       gfx.fillRect(sx, sy, TILE_SIZE_PX, TILE_SIZE_PX);
       gfx.fillStyle(COLOR_SURFACE_ENTRANCE_HOLE, 1);
       gfx.fillRect(sx + 2, sy + 2, TILE_SIZE_PX - 4, TILE_SIZE_PX - 4);
