@@ -14,6 +14,7 @@ import {
   drawSolidRockTile,
   drawOpenFloorTile,
   drawTunnelCornerOverlay,
+  drawSolidConvexCornerOverlay,
 } from './terrain-atlas.js';
 import type { GfxLike } from './draw-surface.js';
 import { TILE_SIZE_PX } from './sprites.js';
@@ -248,6 +249,56 @@ describe('drawTunnelCornerOverlay', () => {
     const b = new MockGfx();
     drawTunnelCornerOverlay(a, 32, 48, true, false, true, false);
     drawTunnelCornerOverlay(b, 32, 48, true, false, true, false);
+    expect(a.calls).toEqual(b.calls);
+  });
+});
+
+describe('drawSolidConvexCornerOverlay', () => {
+  it('emits no ops when no convex corner is detected (all neighbors wall)', () => {
+    const gfx = new MockGfx();
+    drawSolidConvexCornerOverlay(gfx, 0, 0, false, false, false, false, false, false, false, false);
+    expect(gfx.callsOf('fillRect')).toHaveLength(0);
+  });
+
+  it('emits a 5-layer wedge at NE convex when N+E+NE all open', () => {
+    const gfx = new MockGfx();
+    drawSolidConvexCornerOverlay(
+      gfx, 0, 0,
+      /*N*/ true, /*NE*/ true, /*E*/ true, /*SE*/ false,
+      /*S*/ false, /*SW*/ false, /*W*/ false, /*NW*/ false,
+    );
+    // 1+2+3+4+5 = 15 floor-color pixels carving the NE corner of the
+    // Solid tile so it visually recedes from the open neighbor.
+    expect(gfx.callsOf('fillRect')).toHaveLength(15);
+  });
+
+  it('does NOT emit a wedge when one of the three needed neighbors is wall (saddle/peninsula)', () => {
+    // N=open, E=open, but NE=wall — that's a "rock peninsula" not a
+    // convex corner. Drawing a wedge here would carve a curve into a
+    // tile-sized rock that doesn't actually face wide-open space.
+    const gfx = new MockGfx();
+    drawSolidConvexCornerOverlay(
+      gfx, 0, 0,
+      /*N*/ true, /*NE*/ false, /*E*/ true, /*SE*/ false,
+      /*S*/ false, /*SW*/ false, /*W*/ false, /*NW*/ false,
+    );
+    expect(gfx.callsOf('fillRect')).toHaveLength(0);
+  });
+
+  it('emits all 4 wedges when fully surrounded by open (Solid island in open)', () => {
+    const gfx = new MockGfx();
+    drawSolidConvexCornerOverlay(
+      gfx, 0, 0, true, true, true, true, true, true, true, true,
+    );
+    // 4 corners × 15 pixels = 60.
+    expect(gfx.callsOf('fillRect')).toHaveLength(60);
+  });
+
+  it('produces deterministic ops for the same neighbor configuration', () => {
+    const a = new MockGfx();
+    const b = new MockGfx();
+    drawSolidConvexCornerOverlay(a, 32, 48, true, true, true, false, false, false, false, false);
+    drawSolidConvexCornerOverlay(b, 32, 48, true, true, true, false, false, false, false, false);
     expect(a.calls).toEqual(b.calls);
   });
 });

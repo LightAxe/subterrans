@@ -608,6 +608,62 @@ function drawSparseSpecks(
 // and don't get a wall shadow facing them.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// drawSolidConvexCornerOverlay — round off Solid tiles' corners where they
+// poke into open space.
+//
+// Issue #40 user UAT (continued): the inside-corner darkening on OPEN tiles
+// alone wasn't enough to make stair-step tunnel paths read as diagonal.
+// The other half of the trick is to ALSO round the SOLID tiles' corners
+// where two adjacent neighbors are open. A 2-tile-wide diagonal corridor
+// is bordered by stair-stepped Solid tiles; each Solid tile that pokes
+// into the corridor has at least one convex corner (perpendicular pair of
+// open neighbors). Rendering a floor-colored quarter-arc at that corner
+// makes the wall RECEDE from the corner, mirror-imaging the open tile's
+// inside-corner darkening on the other side of the boundary.
+//
+// The two effects compose: the corridor wall on each side is rounded off
+// at every stair-step junction, and the rounded curves on adjacent tiles
+// connect into a continuous smooth diagonal.
+//
+// Convex corner detection: a Solid tile's NE corner is "convex into open"
+// when its N AND E AND NE neighbors are all Open. The 3-of-3 check rules
+// out saddle points (N=Open, E=Open, NE=Solid — a rock peninsula) which
+// would render incorrectly as if the corner faced wide-open space.
+// ---------------------------------------------------------------------------
+
+export function drawSolidConvexCornerOverlay(
+  gfx: GfxLike,
+  screenX: number,
+  screenY: number,
+  openN: boolean,
+  openNE: boolean,
+  openE: boolean,
+  openSE: boolean,
+  openS: boolean,
+  openSW: boolean,
+  openW: boolean,
+  openNW: boolean,
+): void {
+  const N = TILE_SIZE_PX - 1;
+  // Same 5-layer wedge as drawTunnelCornerOverlay's inside corner — but
+  // painted with COLOR_FLOOR_BASE (the Open underground floor color) so
+  // the rock at the convex corner LOOKS like it's been carved away to
+  // reveal the open floor underneath. Layer alphas tuned so the corner
+  // pixel is fully open and outer pixels fade gradually back into rock.
+  const ALPHAS: ReadonlyArray<number> = [0.95, 0.78, 0.6, 0.4, 0.22];
+  for (let i = 0; i < ALPHAS.length; i++) {
+    gfx.fillStyle(COLOR_FLOOR_BASE, ALPHAS[i]!);
+    for (let r = 0; r <= i; r++) {
+      const c = i - r;
+      if (openN && openE && openNE)  gfx.fillRect(screenX + N - c, screenY + r,         1, 1);
+      if (openN && openW && openNW)  gfx.fillRect(screenX + c,     screenY + r,         1, 1);
+      if (openS && openE && openSE)  gfx.fillRect(screenX + N - c, screenY + N - r,     1, 1);
+      if (openS && openW && openSW)  gfx.fillRect(screenX + c,     screenY + N - r,     1, 1);
+    }
+  }
+}
+
 export function drawTunnelCornerOverlay(
   gfx: GfxLike,
   screenX: number,

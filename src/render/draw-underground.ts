@@ -47,6 +47,7 @@ import {
   drawSolidRockTile,
   drawOpenFloorTile,
   drawTunnelCornerOverlay,
+  drawSolidConvexCornerOverlay,
 } from './terrain-atlas.js';
 import type { CameraState } from './camera.js';
 
@@ -146,6 +147,7 @@ export function drawUndergroundTerrain(
     if (ny === 0) return !entranceXSet.has(nx);
     return ugGet(grid, nx, ny) === UndergroundTileState.Solid;
   };
+  const isOpenNeighbor = (nx: number, ny: number): boolean => !isWallNeighbor(nx, ny);
 
   for (let ty = Math.max(top, 0); ty < bottom; ty++) {
     for (let tx = Math.max(left, 0); tx < right; tx++) {
@@ -180,6 +182,21 @@ export function drawUndergroundTerrain(
         const state = ugGet(grid, tx, ty);
         if (state === UndergroundTileState.Solid) {
           drawSolidRockTile(gfx, screenX, screenY, tx, ty);
+          // Issue #40 user UAT: round off Solid tile corners that poke
+          // into open space. Combined with the inside-corner darkening
+          // on Open tiles, the diagonal-corridor stair-step pattern
+          // visually resolves into a smooth diagonal wall.
+          drawSolidConvexCornerOverlay(
+            gfx, screenX, screenY,
+            isOpenNeighbor(tx,     ty - 1),
+            isOpenNeighbor(tx + 1, ty - 1),
+            isOpenNeighbor(tx + 1, ty),
+            isOpenNeighbor(tx + 1, ty + 1),
+            isOpenNeighbor(tx,     ty + 1),
+            isOpenNeighbor(tx - 1, ty + 1),
+            isOpenNeighbor(tx - 1, ty),
+            isOpenNeighbor(tx - 1, ty - 1),
+          );
         } else if (state === UndergroundTileState.Open) {
           drawOpenFloorTile(gfx, screenX, screenY, tx, ty);
           // Issue #40 — round inside corners by darkening the edge bands
