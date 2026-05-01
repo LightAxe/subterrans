@@ -204,13 +204,14 @@ function drawLargeFeatureSliceIfAny(
     for (let dx = 0; dx < MAX_FEATURE_TILES_WIDE; dx++) {
       const ax = tileX - dx;
       const ay = tileY - dy;
-      for (const entry of LARGE_FEATURES) {
+      for (let ei = 0; ei < LARGE_FEATURES.length; ei++) {
+        const entry = LARGE_FEATURES[ei]!;
         const W = entry.variants[0]!.tilesWide;
         const H = entry.variants[0]!.tilesTall;
         if (dx >= W || dy >= H) continue;
         const h = spatialHash(ax, ay, entry.salt);
         if ((h & 0xff) >= entry.probability) continue;
-        if (isAnchorSuppressed(ax, ay)) {
+        if (isAnchorSuppressed(ax, ay, ei)) {
           break;
         }
         if (
@@ -234,26 +235,61 @@ function drawLargeFeatureSliceIfAny(
 }
 
 /**
- * True if any earlier anchor's footprint already covers (ax, ay) — i.e.
- * (ax, ay) is OCCLUDED by an upper-left active anchor of any feature
- * type and should not itself anchor.
+ * True if anchor (ax, ay) of feature `LARGE_FEATURES[ownEntryIndex]` is
+ * suppressed and should not render. Two suppression rules:
  *
- * Cost: per (ax, ay) we check (W×H − 1) candidates per feature type. For
- * 2×2 features × 3 feature types = 9 hash lookups. Bounded; linear in
- * the registry size.
+ * 1. CROSS-TYPE: any HIGHER-PRIORITY feature (earlier registry entry)
+ *    whose footprint OVERLAPS this anchor's footprint suppresses this
+ *    anchor entirely. The boulder/bush/grass priority is the registry
+ *    contract — boulders win over bushes, bushes win over grass clumps,
+ *    regardless of anchor lex position. Without this rule a grass-clump
+ *    anchor at (76, 2) would survive even when a higher-priority
+ *    boulder anchor at (77, 2) overlaps its footprint, leaving the
+ *    grass clump partially visible while the boulder occluded its
+ *    other half (codex review #3).
+ *
+ * 2. SAME-TYPE: any earlier (lex-smaller) anchor of THIS feature type
+ *    that covers this tile suppresses this anchor. Implements the
+ *    "upper-leftmost wins" rule for own-type overlaps so two boulders
+ *    can't render on top of each other.
+ *
+ * Lower-priority features (later registry entries) do NOT suppress
+ * higher-priority anchors — the contract is one-directional. Costs scale
+ * with `ownEntryIndex`: boulder pays 3 hash lookups, bush pays ~12,
+ * grass-clump pays ~21. All well-bounded.
  */
-function isAnchorSuppressed(ax: number, ay: number): boolean {
-  for (const entry of LARGE_FEATURES) {
+function isAnchorSuppressed(
+  ax: number,
+  ay: number,
+  ownEntryIndex: number,
+): boolean {
+  const own = LARGE_FEATURES[ownEntryIndex]!;
+  const ownW = own.variants[0]!.tilesWide;
+  const ownH = own.variants[0]!.tilesTall;
+
+  // Cross-type: higher-priority features whose footprints overlap.
+  for (let ei = 0; ei < ownEntryIndex; ei++) {
+    const entry = LARGE_FEATURES[ei]!;
     const W = entry.variants[0]!.tilesWide;
     const H = entry.variants[0]!.tilesTall;
-    for (let dy = 0; dy < H; dy++) {
-      for (let dx = 0; dx < W; dx++) {
-        if (dx === 0 && dy === 0) continue;
-        const px = ax - dx;
-        const py = ay - dy;
+    // (px, py) candidates where G's footprint at (px, py) overlaps own
+    // footprint at (ax, ay): px in [ax-W+1, ax+ownW-1] and similarly y.
+    for (let py = ay - H + 1; py <= ay + ownH - 1; py++) {
+      for (let px = ax - W + 1; px <= ax + ownW - 1; px++) {
         const ph = spatialHash(px, py, entry.salt);
         if ((ph & 0xff) < entry.probability) return true;
       }
+    }
+  }
+
+  // Same-type: above-left anchors that cover (ax, ay).
+  for (let dy = 0; dy < ownH; dy++) {
+    for (let dx = 0; dx < ownW; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const px = ax - dx;
+      const py = ay - dy;
+      const ph = spatialHash(px, py, own.salt);
+      if ((ph & 0xff) < own.probability) return true;
     }
   }
   return false;
