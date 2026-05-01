@@ -47,12 +47,13 @@ export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewStat
   const surface = world.surface;
   if (surface !== undefined) {
     // Sparse darker-earth dapple — ~12% of tiles, deterministic per (tx, ty).
-    // Uses the same `spatialHash` salt domain as the surface terrain so the
-    // minimap stays in sync with the rendered world (the player can
-    // recognize patches they've seen up close).
+    // Codex P2 fix from PR #41 review (which got squash-merged before this
+    // commit landed): each dapple is a 1×1 pixel dot, NOT a `ceil(scale)+1`
+    // sized cell. With MINIMAP_SCALE_X = 1.25, drawing 3×3 cells caused
+    // each dapple to overlap ~2 neighboring cells, so 12% of tiles ended
+    // up covering ~50% of the minimap area — darkening the whole map and
+    // making colony / food markers harder to read.
     gfx.fillStyle(COLOR_BARREN_EARTH_DARK, 0.7);
-    const cellW = Math.ceil(MINIMAP_SCALE_X) + 1;
-    const cellH = Math.ceil(MINIMAP_SCALE_Y) + 1;
     const SALT_MINIMAP_DAPPLE = 901;
     for (let ty = 0; ty < surface.height; ty++) {
       for (let tx = 0; tx < surface.width; tx++) {
@@ -62,9 +63,11 @@ export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewStat
         void sgGet(surface, tx, ty);
         const h = spatialHash(tx, ty, SALT_MINIMAP_DAPPLE);
         if ((h & 0xff) >= 32) continue; // ~12% coverage
-        const px = HUD.MINIMAP.x + tx * MINIMAP_SCALE_X;
-        const py = HUD.MINIMAP.y + ty * MINIMAP_SCALE_Y;
-        gfx.fillRect(px, py, cellW, cellH);
+        // Floor to integer pixel for crisp rendering — avoids sub-pixel
+        // sampling artifacts on Phaser's WebGL pipeline.
+        const px = (HUD.MINIMAP.x + tx * MINIMAP_SCALE_X) | 0;
+        const py = (HUD.MINIMAP.y + ty * MINIMAP_SCALE_Y) | 0;
+        gfx.fillRect(px, py, 1, 1);
       }
     }
   }

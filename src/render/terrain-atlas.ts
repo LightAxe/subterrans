@@ -272,12 +272,18 @@ function isAnchorSuppressed(
     const entry = LARGE_FEATURES[ei]!;
     const W = entry.variants[0]!.tilesWide;
     const H = entry.variants[0]!.tilesTall;
-    // (px, py) candidates where G's footprint at (px, py) overlaps own
-    // footprint at (ax, ay): px in [ax-W+1, ax+ownW-1] and similarly y.
     for (let py = ay - H + 1; py <= ay + ownH - 1; py++) {
       for (let px = ax - W + 1; px <= ax + ownW - 1; px++) {
         const ph = spatialHash(px, py, entry.salt);
-        if ((ph & 0xff) < entry.probability) return true;
+        if ((ph & 0xff) >= entry.probability) continue;
+        // Codex P3 fix from PR #41 review (which got squash-merged before
+        // this commit landed): only count (px, py) as a real suppressor if
+        // IT itself actually renders. A higher-priority anchor that's
+        // suppressed by an even-higher-priority one doesn't draw, so
+        // shouldn't block lower-priority anchors. Recursion terminates
+        // because every call strictly reduces either ownEntryIndex or
+        // (ay, ax) lex order.
+        if (!isAnchorSuppressed(px, py, ei)) return true;
       }
     }
   }
@@ -289,7 +295,10 @@ function isAnchorSuppressed(
       const px = ax - dx;
       const py = ay - dy;
       const ph = spatialHash(px, py, own.salt);
-      if ((ph & 0xff) < own.probability) return true;
+      if ((ph & 0xff) >= own.probability) continue;
+      // Same recursion-into-real-renders rule for own type. Termination:
+      // depth bounded by chain length.
+      if (!isAnchorSuppressed(px, py, ownEntryIndex)) return true;
     }
   }
   return false;
