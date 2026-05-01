@@ -7,8 +7,11 @@
 // Architecture:
 //   - drawBarrenEarthTile / drawSolidRockTile / drawOpenFloorTile build the
 //     visible tile from substrate dithering + motif overlays.
-//   - drawTunnelCornerOverlay rounds inside corners on Open underground tiles
-//     by darkening pixels that face a Solid 4-neighbor.
+//   - The underground autotiler (underground-autotile.ts) drives shape via
+//     quarter-tile masks composed on top of these substrates. The earlier
+//     drawTunnelCornerOverlay / drawSolidConvexCornerOverlay path was
+//     replaced by issue #43 — adjacent stair-step tiles now read as a
+//     smooth diagonal silhouette via the autotile's chamfer hypotenuses.
 //   - All decisions key off `(tileX, tileY, salt)` integer hashes — no PRNG,
 //     no time, no Math.random. Same seed → same render forever (SCEN-06).
 //
@@ -602,135 +605,3 @@ function drawSparseSpecks(
   }
 }
 
-// ---------------------------------------------------------------------------
-// drawTunnelCornerOverlay — round inside corners on Open underground tiles.
-//
-// Issue #40 — tunnel edges should not read as a hard 90° boundary. For each
-// Open tile, look at the 4 cardinal neighbors. Where a neighbor is Solid, the
-// 2-pixel-wide row/column on that side gets a subtle darker fade so the
-// transition reads as soil packed against open floor rather than two flat
-// blocks meeting at a sharp edge.
-//
-// `solidN/E/S/W` are booleans — the caller decides what counts as "wall"
-// for each edge. Per the call sites in draw-underground.ts, only true Solid
-// tiles count as walls; Marked / BeingDug render as open-floor-with-tint
-// and don't get a wall shadow facing them.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// drawSolidConvexCornerOverlay — round off Solid tiles' corners where they
-// poke into open space.
-//
-// Issue #40 user UAT (continued): the inside-corner darkening on OPEN tiles
-// alone wasn't enough to make stair-step tunnel paths read as diagonal.
-// The other half of the trick is to ALSO round the SOLID tiles' corners
-// where two adjacent neighbors are open. A 2-tile-wide diagonal corridor
-// is bordered by stair-stepped Solid tiles; each Solid tile that pokes
-// into the corridor has at least one convex corner (perpendicular pair of
-// open neighbors). Rendering a floor-colored quarter-arc at that corner
-// makes the wall RECEDE from the corner, mirror-imaging the open tile's
-// inside-corner darkening on the other side of the boundary.
-//
-// The two effects compose: the corridor wall on each side is rounded off
-// at every stair-step junction, and the rounded curves on adjacent tiles
-// connect into a continuous smooth diagonal.
-//
-// Convex corner detection: a Solid tile's NE corner is "convex into open"
-// when its N AND E AND NE neighbors are all Open. The 3-of-3 check rules
-// out saddle points (N=Open, E=Open, NE=Solid — a rock peninsula) which
-// would render incorrectly as if the corner faced wide-open space.
-// ---------------------------------------------------------------------------
-
-export function drawSolidConvexCornerOverlay(
-  gfx: GfxLike,
-  screenX: number,
-  screenY: number,
-  openN: boolean,
-  openNE: boolean,
-  openE: boolean,
-  openSE: boolean,
-  openS: boolean,
-  openSW: boolean,
-  openW: boolean,
-  openNW: boolean,
-): void {
-  const N = TILE_SIZE_PX - 1;
-  // Same 5-layer wedge as drawTunnelCornerOverlay's inside corner — but
-  // painted with COLOR_FLOOR_BASE (the Open underground floor color) so
-  // the rock at the convex corner LOOKS like it's been carved away to
-  // reveal the open floor underneath. Layer alphas tuned so the corner
-  // pixel is fully open and outer pixels fade gradually back into rock.
-  const ALPHAS: ReadonlyArray<number> = [0.95, 0.78, 0.6, 0.4, 0.22];
-  for (let i = 0; i < ALPHAS.length; i++) {
-    gfx.fillStyle(COLOR_FLOOR_BASE, ALPHAS[i]!);
-    for (let r = 0; r <= i; r++) {
-      const c = i - r;
-      if (openN && openE && openNE)  gfx.fillRect(screenX + N - c, screenY + r,         1, 1);
-      if (openN && openW && openNW)  gfx.fillRect(screenX + c,     screenY + r,         1, 1);
-      if (openS && openE && openSE)  gfx.fillRect(screenX + N - c, screenY + N - r,     1, 1);
-      if (openS && openW && openSW)  gfx.fillRect(screenX + c,     screenY + N - r,     1, 1);
-    }
-  }
-}
-
-export function drawTunnelCornerOverlay(
-  gfx: GfxLike,
-  screenX: number,
-  screenY: number,
-  solidN: boolean,
-  solidE: boolean,
-  solidS: boolean,
-  solidW: boolean,
-): void {
-  // Edge fade: rock-tone band along each wall side, alpha-stacked so the
-  // 2 outermost pixels read darkest and inner pixel reads as a transition.
-  // Two-band fade (instead of the previous flat 2-pixel band) gives the
-  // "soft pack" feel of dirt against open air.
-  gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
-  if (solidN) gfx.fillRect(screenX,                  screenY,                  TILE_SIZE_PX, 1);
-  if (solidS) gfx.fillRect(screenX,                  screenY + TILE_SIZE_PX-1, TILE_SIZE_PX, 1);
-  if (solidW) gfx.fillRect(screenX,                  screenY,                  1, TILE_SIZE_PX);
-  if (solidE) gfx.fillRect(screenX + TILE_SIZE_PX-1, screenY,                  1, TILE_SIZE_PX);
-  gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.3);
-  if (solidN) gfx.fillRect(screenX,                  screenY + 1,              TILE_SIZE_PX, 1);
-  if (solidS) gfx.fillRect(screenX,                  screenY + TILE_SIZE_PX-2, TILE_SIZE_PX, 1);
-  if (solidW) gfx.fillRect(screenX + 1,              screenY,                  1, TILE_SIZE_PX);
-  if (solidE) gfx.fillRect(screenX + TILE_SIZE_PX-2, screenY,                  1, TILE_SIZE_PX);
-
-  // Inside-corner quarter-arc (issue #40 user UAT — earlier 3-pixel bevel
-  // was still reading as a 90° corner). Render a 5-pixel triangular wedge
-  // at each inside corner, filled with rock-color at high alpha. The
-  // wedge takes up most of the corner quadrant so that:
-  //   (a) a lone inside corner reads as a fully-rounded interior bend,
-  //   (b) two adjacent inside-corner tiles forming a stair-step (e.g. a
-  //       SW corner on tile A immediately followed by a NE corner on
-  //       tile A's east neighbor) merge visually into one long diagonal,
-  //       since the wedges from adjacent tiles meet at the shared edge.
-  //
-  // Wedge shape (NW example, anchored at screenX+0, screenY+0):
-  //   #####          (5 wide × 1)
-  //   ####.          (4 wide × 1, one short of the right edge)
-  //   ###..
-  //   ##...
-  //   #....
-  // Total: 5+4+3+2+1 = 15 pixels per corner. The first row + first column
-  // are the heavy-alpha "wall continues into the tile" band; deeper
-  // diagonals fade with progressively lower alpha so the curve looks
-  // smooth.
-  const N = TILE_SIZE_PX - 1; // index of last column/row in tile
-  const ALPHAS: ReadonlyArray<number> = [0.95, 0.78, 0.6, 0.4, 0.22];
-  // Layer i covers cells where (col + row) === i in the corner-local
-  // (0..4, 0..4) grid. Layer 0 = the corner pixel; layer 4 = the
-  // diagonal opposite.
-  for (let i = 0; i < ALPHAS.length; i++) {
-    gfx.fillStyle(COLOR_ROCK_BASE, ALPHAS[i]!);
-    for (let r = 0; r <= i; r++) {
-      const c = i - r;
-      // c, r index the corner-local grid (small values = closer to corner).
-      if (solidN && solidW) gfx.fillRect(screenX + c,         screenY + r,         1, 1);
-      if (solidN && solidE) gfx.fillRect(screenX + N - c,     screenY + r,         1, 1);
-      if (solidS && solidW) gfx.fillRect(screenX + c,         screenY + N - r,     1, 1);
-      if (solidS && solidE) gfx.fillRect(screenX + N - c,     screenY + N - r,     1, 1);
-    }
-  }
-}
