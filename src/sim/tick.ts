@@ -1,6 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId } from './types.js';
+import { allocateEntityId, SIM_VERSION_V5_CHAMBER_ON_MARKED } from './types.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath } from './game-over.js';
 import { detectAndResolveCombat } from './combat.js';
@@ -78,7 +78,7 @@ import type { ChamberFlowFields } from './chamber-flow.js';
 import { ugGet, ugSet, UndergroundTileState } from './terrain.js';
 import { CHAMBER_DIMENSIONS } from './colony/chamber.js';
 import type { PendingChamber } from './colony/chamber.js';
-import type { ColonyId } from './colony/colony-store.js';
+import type { ColonyId, ColonyRecord } from './colony/colony-store.js';
 import type { FoodPileId } from './food.js';
 
 // ---------------------------------------------------------------------------
@@ -334,10 +334,15 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
           }
           if (hasQueen) break;
         }
-        // (c) Anchor tile must be Open (tunnel-end check, UNDR-04)
-        if (ugGet(underground, cmd.anchorTileX, cmd.anchorTileY) !== UndergroundTileState.Open) break;
-        // (d) At least one 4-connected neighbor of the anchor must be Solid (tunnel-end check)
-        {
+        // (c) Anchor tile state.
+        //   pre-v5: must be Open (the legacy tunnel-end gate).
+        //   v5+: Open OR Solid OR Marked. BeingDug remains rejected by gate
+        //        (e) below so an in-flight excavation can't be re-anchored.
+        // (d) Solid 4-neighbor "tunnel-end" check (pre-v5 only). v5 drops it
+        //     because chambers can now be planned in untouched dirt; the
+        //     v5 reachability BFS below subsumes the connectivity intent.
+        if (world.simVersion < SIM_VERSION_V5_CHAMBER_ON_MARKED) {
+          if (ugGet(underground, cmd.anchorTileX, cmd.anchorTileY) !== UndergroundTileState.Open) break;
           let hasAdjacentSolid = false;
           const ax = cmd.anchorTileX;
           const ay = cmd.anchorTileY;
@@ -347,6 +352,12 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
           if (!hasAdjacentSolid && ay + 1 < UNDERGROUND_GRID_HEIGHT && ugGet(underground, ax,     ay + 1) === UndergroundTileState.Solid) hasAdjacentSolid = true;
           if (!hasAdjacentSolid) break;
         }
+        // v5: gates (c)+(d) are dropped entirely. Solid / Marked / Open
+        // anchors are all accepted; BeingDug is rejected by the
+        // footprint scan in gate (e) below (anchor is at offset (0,0),
+        // so it's covered). Auto-mark at the end of the handler
+        // converts any Solid footprint tile to Marked. Reachability
+        // is enforced by gate (i) below.
         // (e) No footprint tile may be BeingDug (conflict with active excavation)
         {
           let conflictsBeingDug = false;
@@ -385,6 +396,27 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
           }
         }
         if (overlaps) break;
+        // (i) v5+ reachability gate (issue #38). Once the strict
+        // tunnel-end gate is gone, a player could in principle drop a
+        // chamber in completely untouched dirt with no path to it. The
+        // BFS below verifies that — assuming every currently-Marked /
+        // BeingDug tile gets dug to Open AND the new footprint's Solid
+        // tiles get auto-Marked-and-dug — at least one footprint tile
+        // would be reachable from at least one of the colony's
+        // entrances. Not run pre-v5 because pre-v5 saves' inputLogs
+        // never include unreachable placements (the old gates (c)+(d)
+        // required anchor=Open + adjacent Solid, which is naturally
+        // tunnel-network-adjacent for any entrance-rooted dig). Strictly
+        // speaking the old gates didn't PROVE reachability — a
+        // disconnected pre-existing Open cavern could pass them — but
+        // those edge cases are unchanged by this PR (pre-v5 replays use
+        // the legacy gates verbatim).
+        if (world.simVersion >= SIM_VERSION_V5_CHAMBER_ON_MARKED) {
+          if (!isFootprintReachableAfterDigs(
+                world, colony3, cmd.anchorTileX, cmd.anchorTileY,
+                dims.width, dims.height,
+              )) break;
+        }
         // All checks passed — mark footprint Solid tiles and create PendingChamber
         for (let dy = 0; dy < dims.height; dy++) {
           for (let dx = 0; dx < dims.width; dx++) {
@@ -934,4 +966,114 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   world.tick += 1;
 
   return outcome;
+}
+
+// ---------------------------------------------------------------------------
+// isFootprintReachableAfterDigs — issue #38 (v5+) PlaceChamber gate.
+//
+// Verifies that a proposed chamber footprint will be connected to at least
+// one of the colony's entrances after every currently-Marked / BeingDug
+// tile is dug to Open AND the new footprint's Solid tiles are auto-Marked
+// and dug.
+//
+// The BFS treats as traversable:
+//   - Open tiles (already excavated; chamber footprints land here today)
+//   - Marked tiles (queued for excavation)
+//   - BeingDug tiles (excavation in progress)
+//   - Tiles inside the proposed new footprint (will be Marked by this same
+//     handler if the placement is accepted)
+//
+// Non-traversable: Solid tiles outside the new footprint. Out-of-bounds
+// tiles are also rejected by the bounds check.
+//
+// BFS sources are each entrance's underground entry tile (surfaceTileX, 0).
+// DesignateEntrance auto-marks the shaft column down to ENTRANCE_SHAFT_DEPTH,
+// so the source tile is at least Marked even before the entrance dig
+// completes — the BFS still reaches outward through the shaft regardless.
+//
+// Determinism: pure read-only over the underground grid + entrances. No
+// PRNG, no float math, no allocation beyond a single fixed-size visited
+// `Uint8Array` and a Number[] queue (PlaceChamber commands are rare —
+// once per click — so per-call allocation is acceptable).
+//
+// Performance: O(grid.width × grid.height) worst case = 8192 ops at
+// default scenario dimensions. PlaceChamber is a low-frequency command
+// (player click cadence + AI bursts every AI_DIG_INTERVAL=40 ticks), so
+// the cost is amortized to near-zero.
+// ---------------------------------------------------------------------------
+
+function isFootprintReachableAfterDigs(
+  world: WorldState,
+  colony: ColonyRecord,
+  anchorTileX: number,
+  anchorTileY: number,
+  width: number,
+  height: number,
+): boolean {
+  const underground = world.undergroundGrids[colony.colonyId];
+  if (!underground) return false;
+  // No entrance → no path can exist. Trivially reject the placement so a
+  // pre-entrance chamber drop doesn't silently sit in PendingChamber
+  // forever.
+  if (colony.entrances.length === 0) return false;
+
+  const w = underground.width;
+  const h = underground.height;
+
+  const inFootprint = (x: number, y: number): boolean =>
+    x >= anchorTileX && x < anchorTileX + width &&
+    y >= anchorTileY && y < anchorTileY + height;
+
+  const isTraversable = (x: number, y: number): boolean => {
+    if (x < 0 || y < 0 || x >= w || y >= h) return false;
+    const state = ugGet(underground, x, y);
+    if (state !== UndergroundTileState.Solid) return true; // Open / Marked / BeingDug
+    return inFootprint(x, y);
+  };
+
+  // Visited bitmap. Uint8Array per call — PlaceChamber is rare (player
+  // click cadence + AI bursts), so per-command allocation is fine and
+  // avoids any cross-tick state.
+  const visited = new Uint8Array(w * h);
+  // Index-based queue (Number[]) avoids the O(n) shift cost a JS array
+  // queue would otherwise pay. Tile keys are interleaved as (x, y) pairs.
+  const queue: number[] = [];
+
+  for (let e = 0; e < colony.entrances.length; e++) {
+    const ent = colony.entrances[e]!;
+    const sx = ent.surfaceTileX;
+    const sy = 0; // underground row 0 is the entrance's underground side
+    if (sx < 0 || sx >= w) continue;
+    if (!isTraversable(sx, sy)) continue;
+    const k = sy * w + sx;
+    if (visited[k]) continue;
+    visited[k] = 1;
+    queue.push(sx, sy);
+  }
+
+  let head = 0;
+  while (head < queue.length) {
+    const x = queue[head]!;
+    const y = queue[head + 1]!;
+    head += 2;
+    if (inFootprint(x, y)) return true;
+    // 4-cardinal expansion. Order is N/E/S/W for determinism (same
+    // ordering used by aiDigHeuristic and the dig flow-field).
+    const neighbors: ReadonlyArray<readonly [number, number]> = [
+      [x, y - 1],
+      [x + 1, y],
+      [x, y + 1],
+      [x - 1, y],
+    ];
+    for (let i = 0; i < neighbors.length; i++) {
+      const [nx, ny] = neighbors[i]!;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      const nk = ny * w + nx;
+      if (visited[nk]) continue;
+      if (!isTraversable(nx, ny)) continue;
+      visited[nk] = 1;
+      queue.push(nx, ny);
+    }
+  }
+  return false;
 }

@@ -19,6 +19,7 @@
 
 import * as Phaser from 'phaser';
 import type { WorldState } from '../sim/types.js';
+import { SIM_VERSION_V5_CHAMBER_ON_MARKED } from '../sim/types.js';
 import type { ViewState } from '../render/camera.js';
 import { screenToTile } from '../render/camera.js';
 import { ugGet, UndergroundTileState } from '../sim/terrain.js';
@@ -372,10 +373,23 @@ export function handleUndergroundDrag(
 /**
  * Handles a right-click on the underground view.
  *
- * Dispatch:
- *   - Marked tile → push CancelDigMarkCommand (CTRL-04: BeingDug is NOT cancellable).
- *   - Open tile that is a tunnel end → open context menu (UNDR-04).
- *   - All other tiles (Solid, BeingDug, non-tunnel-end Open) → no-op.
+ * Dispatch (v4 / pre-v5):
+ *   - Marked tile → push CancelDigMarkCommand.
+ *   - Open tunnel-end tile → open chamber-placement context menu.
+ *   - Solid / BeingDug / non-tunnel-end Open → no-op.
+ *
+ * Dispatch (v5+, issue #38):
+ *   - Marked tile → push CancelDigMarkCommand (unchanged — preserves the
+ *     existing "right-click cancels a queued dig" muscle memory).
+ *   - Solid OR Open tile → open chamber-placement context menu. The sim
+ *     layer's reachability gate decides whether the placement actually
+ *     lands; the UI just needs to surface the option. Tunnel-end check
+ *     dropped because v5 chambers can be planned in untouched dirt.
+ *   - BeingDug → no-op (active excavation conflict; sim would reject).
+ *
+ * The pre-v5 strict path is preserved so legacy saves keep their UX
+ * contract (right-click on Solid does nothing). simVersion is sticky on
+ * load, so a player who loads a v3/v4 save sees the legacy gate.
  *
  * No-ops if: activeView !== 'underground', pointer over HUD, or out of bounds.
  */
@@ -396,7 +410,12 @@ export function handleUndergroundRightClick(
   const grid = world.undergroundGrids[PLAYER_COLONY_ID];
   if (!grid) return;
   if (tileX < 0 || tileY < 0 || tileX >= grid.width || tileY >= grid.height) return;
+  // Reject ceiling-row right-clicks symmetric with the sim's ceiling guard
+  // (issue #30): the chamber-placement command would always be rejected
+  // anyway, so don't open a menu the player can't act on.
+  if (tileY === UNDERGROUND_CEILING_ROW_Y) return;
   const tileState = ugGet(grid, tileX, tileY);
+  const v5OrLater = world.simVersion >= SIM_VERSION_V5_CHAMBER_ON_MARKED;
 
   if (tileState === UndergroundTileState.Marked) {
     // CancelDigMark — only on Marked tiles (CTRL-04: BeingDug finish-then-switch).
@@ -411,8 +430,21 @@ export function handleUndergroundRightClick(
     return;
   }
 
+  // BeingDug: no-op on either path (sim would reject the placement
+  // anyway via gate (e); avoid surfacing a doomed menu).
+  if (tileState === UndergroundTileState.BeingDug) return;
+
+  if (v5OrLater) {
+    // Issue #38 — Solid OR Open. The sim handles reachability rejection
+    // post-selection. Pre-flight check: bounds were already validated above,
+    // ceiling row excluded above. Defer the actual show by a frame to keep
+    // the UIScene pointerdown SHOW-race defense (see below).
+    requestShowContextMenu(screenX, screenY, tileX, tileY);
+    return;
+  }
+
+  // Pre-v5 legacy path — Open tunnel end only.
   if (tileState === UndergroundTileState.Open && isTunnelEnd(world, tileX, tileY, PLAYER_COLONY_ID)) {
-    // Open tunnel end → request context menu for next frame (UNDR-04).
     // Deferred show: UIScene's pointerdown handler runs in the same dispatch as
     // this one and would otherwise see visible=true and mis-interpret this same
     // right-click as a menu-item selection (the menu is anchored at the click).
@@ -422,7 +454,7 @@ export function handleUndergroundRightClick(
     // already defends against.
     requestShowContextMenu(screenX, screenY, tileX, tileY);
   }
-  // Solid / BeingDug / non-tunnel-end Open → no-op (including no context menu).
+  // Solid / non-tunnel-end Open → no-op (legacy behavior).
 }
 
 // ---------------------------------------------------------------------------

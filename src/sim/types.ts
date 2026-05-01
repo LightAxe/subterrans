@@ -34,7 +34,7 @@ export type EntityId = number; // incrementing counter from 0, no recycling per 
  * first (array-index tie-break); carriers enter WaitingToDeposit when
  * storage is fully saturated. Movement remains 4-connected.
  *
- * v4 (LATEST_SIM_VERSION) — issue #34 follow-up. 8-connected ant movement:
+ * v4 — issue #34 follow-up. 8-connected ant movement:
  * pickStep can return diagonal cardinals when both axes have remaining
  * work, with corner-cut prevention requiring at least one of the two
  * intermediate cardinal tiles to be passable. Underground flow-field
@@ -42,6 +42,15 @@ export type EntityId = number; // incrementing counter from 0, no recycling per 
  * diagonal step when the next-tile flow is perpendicular. Diagonal moves
  * traverse √2× cardinal Manhattan distance per tick — standard 8-connected
  * speed semantics.
+ *
+ * v5 (LATEST_SIM_VERSION) — issue #38. PlaceChamber accepts anchors on
+ * Solid or Marked tiles in addition to Open. The handler auto-marks any
+ * Solid tile in the chamber footprint and runs a reachability BFS from
+ * the colony's entrances through Open + Marked + BeingDug + the new
+ * footprint; placements that wouldn't be reachable after all current
+ * digs complete are rejected. Pre-v5 saves keep the strict-Open anchor
+ * + Solid-4-neighbor-required gates so SCEN-06 replays of recorded
+ * commands stay byte-identical.
  *
  * Saves missing the `simVersion` field load with LEGACY_SIM_VERSION (sticky).
  * New worlds (createWorldState) start at LATEST_SIM_VERSION. Sticky on load
@@ -51,7 +60,8 @@ export type EntityId = number; // incrementing counter from 0, no recycling per 
 export const LEGACY_SIM_VERSION = 2 as const;
 export const SIM_VERSION_V3 = 3 as const;
 export const SIM_VERSION_V4_DIAGONAL_MOTION = 4 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V4_DIAGONAL_MOTION;
+export const SIM_VERSION_V5_CHAMBER_ON_MARKED = 5 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V5_CHAMBER_ON_MARKED;
 
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick
@@ -74,6 +84,10 @@ export interface WorldState {
    *       SearchingFood pause cadence (issue #35). The pause block consumes
    *       additional RNG pulls per tick, so v3 saves stay on the no-pause
    *       path forever to keep replay byte-identical.
+   *   5 = PlaceChamber accepts Solid/Marked anchors with reachability check
+   *       and auto-marks Solid footprint tiles (issue #38). Pre-v5 saves keep
+   *       the strict-Open-anchor + Solid-4-neighbor gates so any v5-only
+   *       commands that may sit in their inputLog stay rejected on replay.
    *
    * Round-trips through copyWorldState and save/load.
    */

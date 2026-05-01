@@ -6,7 +6,12 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { tick, resetFlowFieldCaches } from './tick.js';
-import { createWorldState, allocateEntityId } from './types.js';
+import {
+  createWorldState,
+  allocateEntityId,
+  LEGACY_SIM_VERSION,
+  SIM_VERSION_V5_CHAMBER_ON_MARKED,
+} from './types.js';
 import { GameOutcome } from './game-over.js';
 import type { SimCommand } from './commands.js';
 import { initAnt } from './ant/ant-store.js';
@@ -1217,6 +1222,11 @@ describe('Phase 7: MarkDigTile command processing', () => {
   it('Test P7-7: PlaceChamber creates PendingChamber with correct dims; tiles marked', () => {
     const { world, colonyId } = makeWorldWithUnderground();
     // PRD §3c tunnel-end: anchor tile must be Open; surrounding Solid tiles give adjacency.
+    // Issue #38: this test exercises the LEGACY pre-v5 gate — pin simVersion
+    // so the v5 reachability BFS doesn't reject the placement (the test
+    // colony has no entrance, which is fine for the legacy gate but
+    // trivially fails the new reachability check).
+    world.simVersion = LEGACY_SIM_VERSION;
     const underground = world.undergroundGrids[colonyId]!;
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
     const cmd: SimCommand = {
@@ -1249,6 +1259,8 @@ describe('Phase 7: MarkDigTile command processing', () => {
   // Test P7-8: PlaceChamber rejected if overlapping existing pendingChamber
   it('Test P7-8: PlaceChamber rejected if overlapping existing pendingChamber', () => {
     const { world, colonyId } = makeWorldWithUnderground();
+    // Issue #38: legacy gate (no entrance set up — fails v5 reachability).
+    world.simVersion = LEGACY_SIM_VERSION;
     // PRD §3c tunnel-end: open the anchor tile for each placement attempt.
     const underground = world.undergroundGrids[colonyId]!;
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
@@ -1648,6 +1660,11 @@ describe('Phase 7: Integration tests', () => {
   // SC 6: PlaceChamber + manually open footprint → ChamberRecord created; overlap rejected
   it('SC 6: PlaceChamber + open footprint → ChamberRecord; overlapping chamber rejected', () => {
     const world = createScenario(42);
+    // Issue #38: this test directly mutates underground state to set up a
+    // chamber-anchor scenario without digging an entrance shaft to it. Pin
+    // simVersion to LEGACY so the v5 reachability BFS doesn't reject the
+    // synthetic placement.
+    world.simVersion = LEGACY_SIM_VERSION;
     const colonyId = PLAYER_COLONY_ID as ColonyId;
     const colony = world.colonies[colonyId]!;
 
@@ -1792,6 +1809,12 @@ describe('Regression: reviewer P1 fixes', () => {
   // --- PlaceChamber tunnel-end validation (PRD §3c) ---
   it('PlaceChamber rejected: anchor tile is Solid (not a tunnel end)', () => {
     const { world, colonyId } = makeWorldWithUnderground();
+    // Issue #38: this test verifies the LEGACY pre-v5 anchor-must-be-Open
+    // gate. Under v5 the gate disappears (Solid anchors are accepted with
+    // reachability), so pin simVersion explicitly. Without the pin, the
+    // test would still pass under v5 — but for the wrong reason (no
+    // entrance → reachability rejects every placement).
+    world.simVersion = LEGACY_SIM_VERSION;
     // Everything is Solid by default — anchor (10,10) is Solid
     const cmd: SimCommand = {
       type: 'PlaceChamber', colonyId,
@@ -1803,6 +1826,9 @@ describe('Regression: reviewer P1 fixes', () => {
 
   it('PlaceChamber rejected: no adjacent Solid (anchor in wide-open cavern)', () => {
     const { world, colonyId } = makeWorldWithUnderground();
+    // Issue #38: legacy gate (the v5 path drops the Solid-4-neighbor
+    // requirement entirely). See note on the previous test.
+    world.simVersion = LEGACY_SIM_VERSION;
     const underground = world.undergroundGrids[colonyId]!;
     // Open a 3×3 region around (10,10) — no adjacent Solid
     for (let dy = -1; dy <= 1; dy++) {
@@ -1833,6 +1859,8 @@ describe('Regression: reviewer P1 fixes', () => {
 
   it('PlaceChamber rejected: pendingChambers key already exists at anchor', () => {
     const { world, colonyId } = makeWorldWithUnderground();
+    // Issue #38: legacy gate (no entrance — fails v5 reachability).
+    world.simVersion = LEGACY_SIM_VERSION;
     const underground = world.undergroundGrids[colonyId]!;
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
     const cmd: SimCommand = {
@@ -1850,6 +1878,8 @@ describe('Regression: reviewer P1 fixes', () => {
   // --- 09 backlog memo — Queen uniqueness + FoodStorage multiplicity ---
   it('PlaceChamber rejected: second Queen attempt while a Queen pending', () => {
     const { world, colonyId } = makeWorldWithUnderground();
+    // Issue #38: legacy gate (no entrance — fails v5 reachability).
+    world.simVersion = LEGACY_SIM_VERSION;
     const underground = world.undergroundGrids[colonyId]!;
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
     underground.data[20 * UNDERGROUND_GRID_WIDTH + 30] = UndergroundTileState.Open;
@@ -1888,6 +1918,8 @@ describe('Regression: reviewer P1 fixes', () => {
 
   it('PlaceChamber allows multiple FoodStorage placements on the same colony', () => {
     const { world, colonyId } = makeWorldWithUnderground();
+    // Issue #38: legacy gate (no entrance — fails v5 reachability).
+    world.simVersion = LEGACY_SIM_VERSION;
     const underground = world.undergroundGrids[colonyId]!;
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
     underground.data[20 * UNDERGROUND_GRID_WIDTH + 30] = UndergroundTileState.Open;
@@ -2056,6 +2088,194 @@ describe('Regression: reviewer P1 fixes', () => {
     };
     tick(world, [cmd]);
     expect(world.colonies[colonyId]!.entrances.length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #38 — PlaceChamber on Solid/Marked tiles with reachability gate (v5+).
+// ---------------------------------------------------------------------------
+
+describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
+  /** Build a world with one entrance at column ENTRANCE_X and the entrance
+   *  shaft auto-Marked rows 0..ENTRANCE_SHAFT_DEPTH-1. Mirrors what a real
+   *  DesignateEntrance command would produce (without going through the
+   *  command path so the test can directly inspect the gate behavior).
+   *  simVersion is left at LATEST (= V5+) so the new gate is exercised. */
+  function makeWorldWithEntrance(seed = 42, entranceX = 10) {
+    const world = createWorldState(seed);
+    const queenId = allocateEntityId(world);
+    initAnt(world.ants, queenId, { colonyId: 1, posX: 1024, posY: 1024, task: AntTask.Idle, subTask: 0 });
+    world.colonies[1] = createColonyRecord(1, queenId);
+    world.colonies[1]!.foodStored = 10000;
+    world.colonies[1]!.entrances = [{
+      entranceId: 999, surfaceTileX: entranceX, surfaceTileY: 0, isOpen: true,
+    }];
+    world.colonies[1]!.rallyPoint = null;
+    world.colonies[1]!.digFlowFieldDirty = false;
+    const ug = createUndergroundGrid(UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT);
+    world.undergroundGrids[1] = ug;
+    return { world, colonyId: 1 as ColonyId, ug, entranceX };
+  }
+
+  it('accepts anchor on Solid when reachable via Marked tunnel from entrance', () => {
+    const { world, colonyId, ug, entranceX } = makeWorldWithEntrance();
+    // Mark a column from row 0 to row 9 — this becomes the "tunnel" the
+    // chamber will sit at the bottom of.
+    for (let y = 0; y < 10; y++) {
+      ug.data[y * UNDERGROUND_GRID_WIDTH + entranceX] = UndergroundTileState.Marked;
+    }
+    // Anchor on a SOLID tile two columns over from the marked tunnel,
+    // adjacent to the marked column. Reachable via the marked column +
+    // own footprint expansion.
+    const cmd: SimCommand = {
+      type: 'PlaceChamber', colonyId,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: entranceX, anchorTileY: 10, issuedAtTick: 0,
+    };
+    tick(world, [cmd]);
+    const pcKey = `${colonyId}:${entranceX}:10`;
+    expect(world.pendingChambers[pcKey]).toBeDefined();
+  });
+
+  it('rejects anchor on Solid in unreachable dirt (no Marked path)', () => {
+    const { world, colonyId, ug, entranceX } = makeWorldWithEntrance();
+    // The helper does NOT auto-mark the entrance shaft (DesignateEntrance
+    // does that in production but we bypass the command path here for
+    // test isolation). So the entrance source tile (entranceX, 0) is
+    // Solid, not in the new footprint, and NOT traversable — BFS
+    // terminates with an empty visited set and the placement is rejected.
+    // That's the test we want: a far-away Solid anchor with no path
+    // through Marked tiles to it must be refused.
+    void ug;
+    void entranceX;
+    const cmd: SimCommand = {
+      type: 'PlaceChamber', colonyId,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: 50, anchorTileY: 30, issuedAtTick: 0,
+    };
+    tick(world, [cmd]);
+    expect(world.pendingChambers[`${colonyId}:50:30`]).toBeUndefined();
+  });
+
+  it('rejects when colony has no entrance (BFS source set is empty)', () => {
+    const { world, colonyId } = makeWorldWithEntrance();
+    // Drop the entrance.
+    world.colonies[colonyId]!.entrances = [];
+    const cmd: SimCommand = {
+      type: 'PlaceChamber', colonyId,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: 5, anchorTileY: 5, issuedAtTick: 0,
+    };
+    tick(world, [cmd]);
+    expect(world.pendingChambers[`${colonyId}:5:5`]).toBeUndefined();
+  });
+
+  it('auto-marks Solid footprint tiles after acceptance', () => {
+    const { world, colonyId, ug, entranceX } = makeWorldWithEntrance();
+    for (let y = 0; y < 10; y++) {
+      ug.data[y * UNDERGROUND_GRID_WIDTH + entranceX] = UndergroundTileState.Marked;
+    }
+    // Place 4×3 FoodStorage at (entranceX, 10). All footprint tiles start Solid.
+    const cmd: SimCommand = {
+      type: 'PlaceChamber', colonyId,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: entranceX, anchorTileY: 10, issuedAtTick: 0,
+    };
+    tick(world, [cmd]);
+    // Every Solid footprint tile should be Marked now.
+    const dims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage]!;
+    for (let dy = 0; dy < dims.height; dy++) {
+      for (let dx = 0; dx < dims.width; dx++) {
+        const state = ugGet(ug, entranceX + dx, 10 + dy);
+        expect(state).toBe(UndergroundTileState.Marked);
+      }
+    }
+  });
+
+  it('accepts anchor on a Marked tile (chamber along an in-progress tunnel)', () => {
+    const { world, colonyId, ug, entranceX } = makeWorldWithEntrance();
+    // Mark column entranceX rows 0..15 — long tunnel being dug.
+    for (let y = 0; y < 16; y++) {
+      ug.data[y * UNDERGROUND_GRID_WIDTH + entranceX] = UndergroundTileState.Marked;
+    }
+    // Anchor on a Marked tile at row 10 (mid-tunnel).
+    const cmd: SimCommand = {
+      type: 'PlaceChamber', colonyId,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: entranceX, anchorTileY: 10, issuedAtTick: 0,
+    };
+    tick(world, [cmd]);
+    expect(world.pendingChambers[`${colonyId}:${entranceX}:10`]).toBeDefined();
+  });
+
+  it('rejects anchor on a BeingDug tile (active excavation conflict)', () => {
+    const { world, colonyId, ug, entranceX } = makeWorldWithEntrance();
+    for (let y = 0; y < 10; y++) {
+      ug.data[y * UNDERGROUND_GRID_WIDTH + entranceX] = UndergroundTileState.Marked;
+    }
+    // Set the proposed anchor tile to BeingDug.
+    ug.data[10 * UNDERGROUND_GRID_WIDTH + entranceX] = UndergroundTileState.BeingDug;
+    const cmd: SimCommand = {
+      type: 'PlaceChamber', colonyId,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: entranceX, anchorTileY: 10, issuedAtTick: 0,
+    };
+    tick(world, [cmd]);
+    expect(world.pendingChambers[`${colonyId}:${entranceX}:10`]).toBeUndefined();
+  });
+
+  it('promotes a v5-placed chamber once all footprint tiles are dug Open', () => {
+    const { world, colonyId, ug, entranceX } = makeWorldWithEntrance();
+    for (let y = 0; y < 10; y++) {
+      ug.data[y * UNDERGROUND_GRID_WIDTH + entranceX] = UndergroundTileState.Marked;
+    }
+    // Place chamber on Solid; should enter PendingChamber state.
+    const cmd: SimCommand = {
+      type: 'PlaceChamber', colonyId,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: entranceX, anchorTileY: 10, issuedAtTick: 0,
+    };
+    tick(world, [cmd]);
+    expect(world.pendingChambers[`${colonyId}:${entranceX}:10`]).toBeDefined();
+    // Manually open the footprint (simulating excavation complete) and tick.
+    const dims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage]!;
+    for (let dy = 0; dy < dims.height; dy++) {
+      for (let dx = 0; dx < dims.width; dx++) {
+        ug.data[(10 + dy) * UNDERGROUND_GRID_WIDTH + (entranceX + dx)] = UndergroundTileState.Open;
+      }
+    }
+    tick(world, []);
+    // ChamberRecord should exist; PendingChamber is gone.
+    const colony = world.colonies[colonyId]!;
+    const chamber = colony.chambers.find(
+      (ch) => (ch.posX >> FP_SHIFT) === entranceX && (ch.posY >> FP_SHIFT) === 10,
+    );
+    expect(chamber).toBeDefined();
+    expect(world.pendingChambers[`${colonyId}:${entranceX}:10`]).toBeUndefined();
+  });
+
+  it('legacy v4 still rejects Solid-anchor placements (replay determinism)', () => {
+    const { world, colonyId, ug, entranceX } = makeWorldWithEntrance();
+    // Roll back to a pre-v5 version. Pre-v5 saves with Solid-anchor commands
+    // in their inputLog must keep getting rejected so replay stays
+    // byte-identical.
+    world.simVersion = LEGACY_SIM_VERSION;
+    for (let y = 0; y < 10; y++) {
+      ug.data[y * UNDERGROUND_GRID_WIDTH + entranceX] = UndergroundTileState.Marked;
+    }
+    const cmd: SimCommand = {
+      type: 'PlaceChamber', colonyId,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: entranceX, anchorTileY: 10, issuedAtTick: 0,
+    };
+    tick(world, [cmd]);
+    expect(world.pendingChambers[`${colonyId}:${entranceX}:10`]).toBeUndefined();
+  });
+
+  it('SIM_VERSION_V5_CHAMBER_ON_MARKED is the LATEST_SIM_VERSION', () => {
+    // Sanity: new worlds run on v5 by default.
+    const world = createWorldState(42);
+    expect(world.simVersion).toBe(SIM_VERSION_V5_CHAMBER_ON_MARKED);
   });
 });
 

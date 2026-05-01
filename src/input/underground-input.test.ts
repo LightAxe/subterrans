@@ -31,6 +31,10 @@ import {
 import { panInputState, resetPanInputStateForTests } from './camera-input.js';
 import { UndergroundTileState, ugSet, createUndergroundGrid } from '../sim/terrain.js';
 import type { WorldState } from '../sim/types.js';
+import {
+  LEGACY_SIM_VERSION,
+  SIM_VERSION_V5_CHAMBER_ON_MARKED,
+} from '../sim/types.js';
 import type { ViewState } from '../render/camera.js';
 import { VIEWPORT_WIDTH_TILES, VIEWPORT_HEIGHT_TILES } from '../render/camera.js';
 import { HUD, TILE_SIZE_PX } from '../render/sprites.js';
@@ -83,6 +87,9 @@ function makeWorld(overrides: {
   const grid = createUndergroundGrid(w, h);
   return {
     tick: overrides.tick ?? 0,
+    // Default to LEGACY so existing right-click-on-Solid is-a-no-op tests
+    // pass. Issue #38 v5+ tests set simVersion explicitly.
+    simVersion: LEGACY_SIM_VERSION,
     rngState: 0,
     nextEntityId: 0,
     commandQueue: [] as SimCommand[],
@@ -875,6 +882,88 @@ describe('handleUndergroundRightClick', () => {
     ugSet(grid, 5, 5, UndergroundTileState.Marked);
     const vs = makeViewState('underground', 64, 32);
     handleUndergroundRightClick(world, vs, HUD.STATS.x + 5, HUD.STATS.y + 5);
+    expect(world.commandQueue).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Issue #38 — v5+ right-click on Solid OR Open opens the chamber menu.
+  // -------------------------------------------------------------------------
+
+  it('v5+: right-click on a Solid tile opens the chamber-placement menu (issue #38)', () => {
+    const world = makeWorld();
+    world.simVersion = SIM_VERSION_V5_CHAMBER_ON_MARKED;
+    // (5,5) stays Solid by default. Pre-v5 this was a no-op; v5 should
+    // surface the menu so the player can plan a chamber in untouched dirt.
+    const vs = makeViewState('underground', 64, 32);
+    const { x, y } = tileToScreen(5, 5, 64, 32);
+    handleUndergroundRightClick(world, vs, x, y);
+    expect(contextMenuState.pendingShow).toBe(true);
+    expect(contextMenuState.anchorTileX).toBe(5);
+    expect(contextMenuState.anchorTileY).toBe(5);
+  });
+
+  it('v5+: right-click on an Open tile that is NOT a tunnel end opens the menu (issue #38)', () => {
+    const world = makeWorld();
+    world.simVersion = SIM_VERSION_V5_CHAMBER_ON_MARKED;
+    const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
+    // 3×3 Open region — interior tile (5,5) has no Solid 4-neighbor, so
+    // pre-v5 isTunnelEnd would reject. v5 should still open the menu.
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        ugSet(grid, 5 + dx, 5 + dy, UndergroundTileState.Open);
+      }
+    }
+    const vs = makeViewState('underground', 64, 32);
+    const { x, y } = tileToScreen(5, 5, 64, 32);
+    handleUndergroundRightClick(world, vs, x, y);
+    expect(contextMenuState.pendingShow).toBe(true);
+  });
+
+  it('v5+: right-click on a Marked tile still pushes CancelDigMark (existing UX preserved)', () => {
+    const world = makeWorld();
+    world.simVersion = SIM_VERSION_V5_CHAMBER_ON_MARKED;
+    const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
+    ugSet(grid, 5, 5, UndergroundTileState.Marked);
+    const vs = makeViewState('underground', 64, 32);
+    const { x, y } = tileToScreen(5, 5, 64, 32);
+    handleUndergroundRightClick(world, vs, x, y);
+    // CancelDigMark wins over chamber-placement menu on Marked tiles —
+    // the existing right-click muscle memory is preserved.
+    const cancelCmd = world.commandQueue.find((c) => c.type === 'CancelDigMark');
+    expect(cancelCmd).toBeDefined();
+    expect(contextMenuState.pendingShow).toBe(false);
+  });
+
+  it('v5+: right-click on a BeingDug tile is still a no-op (sim would reject)', () => {
+    const world = makeWorld();
+    world.simVersion = SIM_VERSION_V5_CHAMBER_ON_MARKED;
+    const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
+    ugSet(grid, 5, 5, UndergroundTileState.BeingDug);
+    const vs = makeViewState('underground', 64, 32);
+    const { x, y } = tileToScreen(5, 5, 64, 32);
+    handleUndergroundRightClick(world, vs, x, y);
+    expect(contextMenuState.pendingShow).toBe(false);
+    expect(world.commandQueue).toHaveLength(0);
+  });
+
+  it('v5+: right-click on the ceiling row is a no-op (sim ceiling guard mirrored)', () => {
+    const world = makeWorld();
+    world.simVersion = SIM_VERSION_V5_CHAMBER_ON_MARKED;
+    const vs = makeViewState('underground', 64, 32);
+    const { x, y } = tileToScreen(5, 0, 64, 32);
+    handleUndergroundRightClick(world, vs, x, y);
+    expect(contextMenuState.pendingShow).toBe(false);
+    expect(world.commandQueue).toHaveLength(0);
+  });
+
+  it('legacy (pre-v5): right-click on Solid is a no-op (replay determinism)', () => {
+    const world = makeWorld();
+    world.simVersion = LEGACY_SIM_VERSION;
+    // (5,5) stays Solid by default.
+    const vs = makeViewState('underground', 64, 32);
+    const { x, y } = tileToScreen(5, 5, 64, 32);
+    handleUndergroundRightClick(world, vs, x, y);
+    expect(contextMenuState.pendingShow).toBe(false);
     expect(world.commandQueue).toHaveLength(0);
   });
 });
