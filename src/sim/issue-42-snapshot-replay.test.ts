@@ -14,28 +14,26 @@
 // observe the v6 fix on the captured world we explicitly bump simVersion
 // to LATEST after deserialization. New worlds (no save) start at v6 by
 // default via createWorldState.
+//
+// Fixture lives in `src/sim/__fixtures__/issue-42-debug-tick214.json`
+// (committed to the repo) so CI and fresh clones run the replay too.
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { deserializeWorldState } from '../platform/save.js';
 import { tick } from './tick.js';
 import { FP_SHIFT } from './fixed.js';
 import { LATEST_SIM_VERSION } from './types.js';
 
 const SNAPSHOT_PATH = resolve(
-  process.env.HOME ?? '/Users/rob',
-  'Downloads/subterrans-debug-seed1701241663-tick214.json',
+  dirname(fileURLToPath(import.meta.url)),
+  '__fixtures__/issue-42-debug-tick214.json',
 );
 
 describe('issue #42 — debug-snapshot replay', () => {
-  // The snapshot lives outside the repo (in the user's Downloads). Skip
-  // gracefully on machines where it's not present so CI / fresh clones
-  // don't fail on a missing artifact.
-  const haveSnapshot = existsSync(SNAPSHOT_PATH);
-  const itIfHaveSnapshot = haveSnapshot ? it : it.skip;
-
-  itIfHaveSnapshot('forager 18 escapes the 4-tile eddy within 50 ticks at v6', () => {
+  it('forager 18 escapes the 4-tile eddy within 50 ticks at v6', () => {
     const debug = JSON.parse(readFileSync(SNAPSHOT_PATH, 'utf-8'));
     const world = deserializeWorldState(debug.snapshot);
     // Snapshot was captured at v5; bump to v6 to exercise the fix.
@@ -67,7 +65,7 @@ describe('issue #42 — debug-snapshot replay', () => {
     expect(escaped).toBe(true);
   });
 
-  itIfHaveSnapshot('all stuck carriers either deposit, enter wait, or otherwise progress within 50 ticks at v6', () => {
+  it('all stuck carriers either deposit, enter wait, or otherwise progress within 50 ticks at v6', () => {
     const debug = JSON.parse(readFileSync(SNAPSHOT_PATH, 'utf-8'));
     const world = deserializeWorldState(debug.snapshot);
     world.simVersion = LATEST_SIM_VERSION;
