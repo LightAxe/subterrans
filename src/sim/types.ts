@@ -61,7 +61,8 @@ export const LEGACY_SIM_VERSION = 2 as const;
 export const SIM_VERSION_V3 = 3 as const;
 export const SIM_VERSION_V4_DIAGONAL_MOTION = 4 as const;
 export const SIM_VERSION_V5_CHAMBER_ON_MARKED = 5 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V5_CHAMBER_ON_MARKED;
+export const SIM_VERSION_V6_FORAGER_NO_REVISIT = 6 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V6_FORAGER_NO_REVISIT;
 
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick
@@ -88,6 +89,11 @@ export interface WorldState {
    *       and auto-marks Solid footprint tiles (issue #38). Pre-v5 saves keep
    *       the strict-Open-anchor + Solid-4-neighbor gates so any v5-only
    *       commands that may sit in their inputLog stay rejected on replay.
+   *   6 = Three early-game-pool fixes (issue #42): partial-deposit wait gate
+   *       sets waitingDeposit=1 on leftover food; SearchingFood foragers
+   *       demote to Idle when colony has nowhere to deposit; surface
+   *       SearchingFood foragers refuse to step onto a tile from their
+   *       last 4 moves (eddy escape). Pre-v6 saves keep the legacy paths.
    *
    * Round-trips through copyWorldState and save/load.
    */
@@ -195,6 +201,11 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   // step pattern + pause schedule).
   dst.ants.pathErr.set(src.ants.pathErr);
   dst.ants.searchPauseTicks.set(src.ants.searchPauseTicks);
+  // Issue #42 — recent-tiles ring buffer. The buffer is read by the v6
+  // forager step-picker, so it must round-trip for replay determinism.
+  dst.ants.recentTilesX.set(src.ants.recentTilesX);
+  dst.ants.recentTilesY.set(src.ants.recentTilesY);
+  dst.ants.recentTilesHead.set(src.ants.recentTilesHead);
 
   // --- colonies: delete stale dst keys; upsert each src colony ---
   // Remove dst colonies that no longer exist in src

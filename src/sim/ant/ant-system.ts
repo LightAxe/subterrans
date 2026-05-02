@@ -34,6 +34,7 @@
 
 import { SIM_VERSION_V4_DIAGONAL_MOTION, type WorldState } from '../types.js';
 import type { AntComponents } from './ant-store.js';
+import { isRecentTile, pushRecentTile, clearRecentTiles } from './ant-store.js';
 import type { ColonyRecord, ChamberRecord } from '../colony/colony-store.js';
 import { hasCompletedChamber, isFoodChamberDepositable } from '../colony/colony-system.js';
 import { AntTask, ForagingSubState, DiggingSubState, NursingSubState, ChamberType, PheromoneType } from '../enums.js';
@@ -74,6 +75,14 @@ import { Zone, UndergroundTileState, ugGet, ugSet, type UndergroundGrid } from '
 // ---------------------------------------------------------------------------
 const DIR_DX = [0, 1, 0, -1] as const;  // N, E, S, W
 const DIR_DY = [-1, 0, 1, 0] as const;  // N, E, S, W
+
+// Issue #42 fix #3 — 8-connected alternate-step ordering (clockwise from N).
+// Used by the surface SearchingFood no-revisit filter when the proposed step
+// is in the recent-tiles buffer; iterating these in order picks a
+// deterministic alternate. Same NW-clockwise sweep as the queen overlap
+// resolver, so step picks across the codebase share a mental model.
+const ALT_DX = [0, 1, 1, 1, 0, -1, -1, -1] as const; // N, NE, E, SE, S, SW, W, NW
+const ALT_DY = [-1, -1, 0, 1, 1, 1, 0, -1] as const;
 
 // ---------------------------------------------------------------------------
 // Fighting ant rally hold radius (Manhattan tiles).
@@ -161,6 +170,11 @@ export function antPickupFood(
   // (here on pickup → CarryingFood) so the next excursion starts with a
   // clean cadence.
   ants.searchPauseTicks[antId] = 0;
+  // Issue #42 fix #3 — pickup is a state change. The next time this ant
+  // returns to SearchingFood (after deposit), the recent-tiles buffer
+  // should start empty so the new excursion isn't biased by stale memory
+  // from the previous trip.
+  clearRecentTiles(ants, antId);
 
   return available;
 }
@@ -444,20 +458,31 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
     colony.foodStored += toPool;
     remaining -= toPool;
 
-    // Issue #27 — carrier wait state. Enter wait only when there is genuinely
-    // nowhere in the colony to deposit:
-    //   (i)   the entrance fallback made zero progress (pool already at cap)
-    //   (ii)  the ant still has carry leftover (remaining > 0)
-    //   (iii) NO FoodStorage chamber is depositable (otherwise the ant should
-    //         be routed to that chamber by next tick's movement, not parked
-    //         at the entrance)
-    //   (iv)  simVersion >= 3 (replay determinism — pre-#27 saves stay on
-    //         the legacy oscillation path)
-    // Without check (iii), a carrier at the entrance would re-enter wait the
-    // same tick its wake-check fires for "chamber became depositable", since
-    // antDepositFood is called immediately after the wake clear and trips on
-    // the still-full entrance pool.
-    if (toPool === 0 && remaining > 0 && world.simVersion >= 3) {
+    // Issue #27 — carrier wait state. Enter wait when there is no chamber-
+    // depositable target AND the ant still has leftover food after the
+    // entrance-pool deposit attempt. Two sub-cases trigger this:
+    //   (a) zero-progress: pool already at cap → toPool === 0 (issue #27 path)
+    //   (b) partial-progress: pool had headroom but couldn't absorb the full
+    //       carry → toPool > 0 AND remaining > 0 (issue #42 fix). Pre-v6,
+    //       the partial-fill case left waitingDeposit=0 for one tick because
+    //       toPool > 0 short-circuited the gate; the carrier would re-enter
+    //       wait the NEXT tick's antDepositFood call (via the now-zero space),
+    //       producing the "5 carriers stacked at entrance, 2 not waiting"
+    //       state seen in the issue #42 snapshot. With the partial path, the
+    //       carrier enters wait on the same tick the partial deposit happens.
+    //   - Common conditions:
+    //       remaining > 0 (still carrying leftover)
+    //       no chamber depositable (otherwise next tick's movement re-routes
+    //       to the chamber rather than parking at the entrance)
+    //       simVersion >= 3 (issue #27 gate; legacy replays stay on the
+    //       always-oscillate path)
+    // The simVersion >= 6 gate on the partial-fill branch keeps pre-v6
+    // replays byte-identical to v5 (same toPool === 0 behavior only).
+    const enterWait =
+      world.simVersion >= 3 &&
+      remaining > 0 &&
+      (toPool === 0 || (world.simVersion >= 6 && toPool > 0));
+    if (enterWait) {
       let anyChamberDepositable = false;
       for (let c = 0; c < colony.chambers.length; c++) {
         if (isFoodChamberDepositable(colony.chambers[c]!)) {
@@ -507,6 +532,10 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
     // Issue #35 — clear pause counter so a future SearchingFood pass
     // starts with a clean cadence.
     world.ants.searchPauseTicks[antId] = 0;
+    // Issue #42 fix #3 — full-deposit transitions Foraging→Idle. The next
+    // re-promotion to SearchingFood starts a fresh excursion that should
+    // not be biased by the just-completed return route's tile history.
+    clearRecentTiles(world.ants, antId);
   }
 }
 
@@ -1132,6 +1161,15 @@ export function tickSearchLeash(world: WorldState): void {
   // searchers would be demoted before they ever reached food piles beyond
   // the wave-3 radius (40 tiles).
   const rebalanceNeeded: Record<number, boolean> = {};
+  // Issue #42 fix #2 — "no deposit target" demotion. When the colony's
+  // entrance pool is at cap AND no FoodStorage chamber is depositable, any
+  // food a forager finds has nowhere to land — demoting these searchers
+  // (regardless of wave-radius) avoids the eddy at the entrance that
+  // forms when waves of would-be carriers can't unload. Step 10a will
+  // re-promote them to Foraging once a deposit target opens (chamber built
+  // or queen consumes pool down). v6+ only — pre-v6 saves replay byte-
+  // identical, only the demote-on-cap behavior is new.
+  const noDepositTarget: Record<number, boolean> = {};
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
     const colony = world.colonies[key as unknown as number]!;
@@ -1140,6 +1178,22 @@ export function tickSearchLeash(world: WorldState): void {
     const nonForageDemand =
       colony.computedAllocation.dig > 0 || colony.computedAllocation.fight > 0;
     rebalanceNeeded[colony.colonyId] = overForage && nonForageDemand;
+
+    if (world.simVersion >= 6) {
+      const poolAtCap = colony.foodStored >= BASE_FOOD_STORAGE_CAPACITY;
+      let anyChamberDepositable = false;
+      if (poolAtCap) {
+        for (let c = 0; c < colony.chambers.length; c++) {
+          if (isFoodChamberDepositable(colony.chambers[c]!)) {
+            anyChamberDepositable = true;
+            break;
+          }
+        }
+      }
+      noDepositTarget[colony.colonyId] = poolAtCap && !anyChamberDepositable;
+    } else {
+      noDepositTarget[colony.colonyId] = false;
+    }
   }
 
   for (let id = 0; id < world.nextEntityId; id++) {
@@ -1149,7 +1203,9 @@ export function tickSearchLeash(world: WorldState): void {
     if (ants.zone[id] !== Zone.Surface) continue;
 
     const colonyId = ants.colonyId[id]!;
-    if (rebalanceNeeded[colonyId] !== true) continue;
+    const noDeposit = noDepositTarget[colonyId] === true;
+    const rebalance = rebalanceNeeded[colonyId] === true;
+    if (!noDeposit && !rebalance) continue;
 
     const colony = world.colonies[colonyId];
     if (!colony || !colony.entrances || colony.entrances.length === 0) continue;
@@ -1157,22 +1213,31 @@ export function tickSearchLeash(world: WorldState): void {
     const tileX = ants.posX[id]! >> FP_SHIFT;
     const tileY = ants.posY[id]! >> FP_SHIFT;
 
-    // Nearest-entrance Manhattan distance. Any entrance counts (open or closed
-    // — the leash is about drift from the nest, not about reachability).
-    let bestDist = -1;
-    for (let e = 0; e < colony.entrances.length; e++) {
-      const ent = colony.entrances[e]!;
-      const d = Math.abs(tileX - ent.surfaceTileX) + Math.abs(tileY - ent.surfaceTileY);
-      if (bestDist < 0 || d < bestDist) bestDist = d;
-    }
-    if (bestDist < 0) continue;
-
     let wave = ants.searchWave[id]!;
     if (wave < 0) wave = 0;
     if (wave > SEARCH_LEASH_MAX_WAVE) wave = SEARCH_LEASH_MAX_WAVE;
-    const radius = SEARCH_LEASH_RADII[wave]!;
 
-    if (bestDist <= radius) continue;
+    // Two independent reasons to demote (issue #42 fix #2 introduces the
+    // second). The radius gate produces a wave bump (we've searched out
+    // to this distance and reset to consider re-promotion at a wider
+    // radius); the no-deposit gate does not (the issue isn't search
+    // distance, it's that there's nowhere to bring food back to).
+    let overLeashed = false;
+    if (rebalance) {
+      // Nearest-entrance Manhattan distance. Any entrance counts (open or closed
+      // — the leash is about drift from the nest, not about reachability).
+      let bestDist = -1;
+      for (let e = 0; e < colony.entrances.length; e++) {
+        const ent = colony.entrances[e]!;
+        const d = Math.abs(tileX - ent.surfaceTileX) + Math.abs(tileY - ent.surfaceTileY);
+        if (bestDist < 0 || d < bestDist) bestDist = d;
+      }
+      if (bestDist >= 0) {
+        const radius = SEARCH_LEASH_RADII[wave]!;
+        overLeashed = bestDist > radius;
+      }
+    }
+    if (!overLeashed && !noDeposit) continue;
 
     // Demote → Idle (step 10a re-entry). Clear priority target so the ant
     // doesn't carry a stale override into its next promotion.
@@ -1194,11 +1259,20 @@ export function tickSearchLeash(world: WorldState): void {
     // Issue #35 — clear pause counter on leash demotion so the next
     // search excursion starts with a clean cadence.
     ants.searchPauseTicks[id] = 0;
+    // Issue #42 fix #3 — clear recent-tiles buffer on demotion so a
+    // re-promoted forager doesn't carry stale revisit-history from the
+    // leashed route into its fresh excursion.
+    clearRecentTiles(ants, id);
 
-    const nextWave = wave + 1;
-    ants.searchWave[id] = nextWave > SEARCH_LEASH_MAX_WAVE
-      ? SEARCH_LEASH_MAX_WAVE
-      : nextWave;
+    // Wave bump applies only when the radius-leash gate fired. A pure
+    // no-deposit demotion preserves the wave so the ant resumes searching
+    // at the same radius once a deposit target opens up.
+    if (overLeashed) {
+      const nextWave = wave + 1;
+      ants.searchWave[id] = nextWave > SEARCH_LEASH_MAX_WAVE
+        ? SEARCH_LEASH_MAX_WAVE
+        : nextWave;
+    }
   }
 }
 
@@ -1931,6 +2005,10 @@ export function tickExcursionBoundary(world: WorldState): void {
         // Issue #35 — fresh SearchingFood pass starts with a clean
         // pause cadence.
         ants.searchPauseTicks[id] = 0;
+        // Issue #42 fix #3 — flipping ReturningToNest→SearchingFood mid-
+        // route starts a new excursion. The buffer should reset so the
+        // search isn't biased by stale tiles from before the return leg.
+        clearRecentTiles(ants, id);
       }
       continue;
     }
@@ -1962,6 +2040,12 @@ export function tickExcursionBoundary(world: WorldState): void {
     // Issue #35 — clear pause counter on leash boundary cross so the
     // ReturningToNest leg doesn't inherit stale pause state.
     ants.searchPauseTicks[id] = 0;
+    // Issue #42 fix #3 — sub-state flip is a state change. The buffer
+    // belongs to the SearchingFood excursion that just ended; the
+    // ReturningToNest leg navigates by entrance distance, not by
+    // anti-revisit memory, and the next SearchingFood pass should
+    // start with a clean buffer.
+    clearRecentTiles(ants, id);
   }
 }
 
@@ -3163,6 +3247,46 @@ export function tickAntMovement(
       dy = dir.dy;
     }
 
+    // Issue #42 fix #3 — surface SearchingFood no-revisit filter. v6+ only.
+    // If the proposed step lands on a tile in the ant's recent-tiles ring
+    // buffer, scan the 8-connected alternates in a fixed order and pick the
+    // first one NOT in the buffer. If every neighbor is in the buffer (rare
+    // — would require the ant to cycle through all 8 in 4 steps, geometrically
+    // impossible), pause for a tick (dx=dy=0). The buffer push happens later
+    // (alongside the searchPrevTile write), only when the tile actually
+    // crosses, so pause ticks don't pollute the history.
+    if (
+      world.simVersion >= 6 &&
+      zone === Zone.Surface &&
+      task === AntTask.Foraging &&
+      ants.subTask[id] === ForagingSubState.SearchingFood &&
+      (dx !== 0 || dy !== 0)
+    ) {
+      const tileX = ants.posX[id]! >> FP_SHIFT;
+      const tileY = ants.posY[id]! >> FP_SHIFT;
+      if (isRecentTile(ants, id, tileX + dx, tileY + dy)) {
+        // Try 8 cardinals/diagonals in a fixed order — the same NW-clockwise
+        // ordering used by the queen overlap resolver and zone-flip code, so
+        // the alternate-pick is deterministic and easy to reason about. The
+        // first neighbor whose tile is NOT in the buffer wins.
+        let found = false;
+        for (let i = 0; i < ALT_DX.length; i++) {
+          const ax = ALT_DX[i]!;
+          const ay = ALT_DY[i]!;
+          if (ax === dx && ay === dy) continue; // already-rejected proposal
+          if (isRecentTile(ants, id, tileX + ax, tileY + ay)) continue;
+          dx = ax;
+          dy = ay;
+          found = true;
+          break;
+        }
+        if (!found) {
+          dx = 0;
+          dy = 0;
+        }
+      }
+    }
+
     const speed = ants.speed[id]!;
     const prevPosX = ants.posX[id]!;
     const prevPosY = ants.posY[id]!;
@@ -3262,6 +3386,15 @@ export function tickAntMovement(
       if (newTileX !== preTileX || newTileY !== preTileY) {
         ants.searchPrevTileX[id] = preTileX;
         ants.searchPrevTileY[id] = preTileY;
+        // Issue #42 fix #3 — also push the JUST-VACATED tile onto the
+        // recent-tiles ring buffer. The buffer is consulted next tick by
+        // the no-revisit filter, so pushing the vacated tile makes "step
+        // back to where I just was" the first thing filtered. Pause ticks
+        // (no tile crossing) intentionally do NOT push, so the buffer
+        // tracks distinct moves rather than ticks. v6+ only.
+        if (world.simVersion >= 6) {
+          pushRecentTile(ants, id, preTileX, preTileY);
+        }
       }
     }
 
@@ -3298,6 +3431,11 @@ export function tickAntMovement(
               ants.searchPrevTileY[id] = -1;
               // Issue #35 — clean pause cadence on entrance arrival.
               ants.searchPauseTicks[id] = 0;
+              // Issue #42 fix #3 — entrance arrival flips ReturningToNest
+              // back to SearchingFood; the new excursion should start with
+              // a clean recent-tiles buffer (no carry-over from the route
+              // that just ended).
+              clearRecentTiles(ants, id);
               break;
             }
           }

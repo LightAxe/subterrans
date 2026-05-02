@@ -179,7 +179,39 @@ export interface AntComponents {
    * mutate this field at runtime.
    */
   readonly waitingDeposit: Uint8Array;
+  /**
+   * Issue #42 — surface forager anti-eddy ring buffer. Records the last
+   * RECENT_TILES_LEN tiles a surface SearchingFood ant moved INTO. The
+   * step-picker filters candidates against this buffer so foragers cannot
+   * loop in a small region near a saturated entrance pool.
+   *
+   * Active only when `world.simVersion >= 6 && zone === Surface && task ===
+   * Foraging && subTask === SearchingFood`. Cleared on state change (subTask
+   * flip, food pickup, zone flip). Pushed on every actual step (not on
+   * pause ticks). If filtering eliminates every candidate, the ant pauses
+   * for one tick and the buffer stays as-is.
+   *
+   * Layout: index = id * RECENT_TILES_LEN + slot. Each slot stores tx (or
+   * SENTINEL_NO_TILE = -1 if unused). recentTilesY mirrors recentTilesX.
+   * recentTilesHead[id] is the next-write slot (0..RECENT_TILES_LEN-1).
+   *
+   * Round-trips through copyWorldState and save/load (optional fields on
+   * SerializedAnts; defaults to all-empty on pre-v6 saves).
+   */
+  readonly recentTilesX: Int32Array;
+  readonly recentTilesY: Int32Array;
+  readonly recentTilesHead: Uint8Array;
 }
+
+/**
+ * Length of the per-ant recent-tiles ring buffer (issue #42). Four entries
+ * is enough to break 2/3/4-cycle eddies but small enough that the per-ant
+ * SoA cost stays at 4×Int32 + 4×Int32 + 1×byte = 33 bytes per ant.
+ */
+export const RECENT_TILES_LEN = 4 as const;
+
+/** Sentinel for an unused slot in the recent-tiles ring buffer. */
+export const RECENT_TILES_SENTINEL = -1 as const;
 
 // ---------------------------------------------------------------------------
 // Factory — allocates all 22 arrays once; zero per-tick allocation guaranteed
@@ -209,6 +241,13 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
   searchPrevTileX.fill(-1);
   const searchPrevTileY = new Int32Array(maxEntities);
   searchPrevTileY.fill(-1);
+  // Issue #42 — recent-tiles ring buffer (RECENT_TILES_LEN entries per ant).
+  // Initialize to RECENT_TILES_SENTINEL (-1) so freshly-spawned ants don't
+  // inherit a phantom history of tile (0, 0).
+  const recentTilesX = new Int32Array(maxEntities * RECENT_TILES_LEN);
+  recentTilesX.fill(RECENT_TILES_SENTINEL);
+  const recentTilesY = new Int32Array(maxEntities * RECENT_TILES_LEN);
+  recentTilesY.fill(RECENT_TILES_SENTINEL);
 
   return {
     posX:            new Int32Array(maxEntities),
@@ -248,6 +287,10 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
     currentGridColonyId: new Uint8Array(maxEntities),
     // Issue #27 — carrier wait flag. Zero-init = "not waiting" (correct default).
     waitingDeposit: new Uint8Array(maxEntities),
+    // Issue #42 — recent-tiles ring buffer. SENTINEL-filled = "no history."
+    recentTilesX,
+    recentTilesY,
+    recentTilesHead: new Uint8Array(maxEntities),
   };
 }
 
@@ -325,6 +368,64 @@ export function initAnt(ants: AntComponents, id: EntityId, spec: InitAntSpec): v
   // Issue #27 — fresh ant is never in wait state (must traverse a failed
   // deposit cycle to enter it).
   ants.waitingDeposit[id]    = 0;
+  // Issue #42 — fresh ant has no recent-tile history.
+  const base = id * RECENT_TILES_LEN;
+  for (let s = 0; s < RECENT_TILES_LEN; s++) {
+    ants.recentTilesX[base + s] = RECENT_TILES_SENTINEL;
+    ants.recentTilesY[base + s] = RECENT_TILES_SENTINEL;
+  }
+  ants.recentTilesHead[id]   = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Recent-tiles ring buffer helpers (issue #42)
+// ---------------------------------------------------------------------------
+
+/**
+ * Push a tile onto ant `id`'s recent-tiles ring buffer. Slot at
+ * `recentTilesHead[id]` is overwritten; head advances mod RECENT_TILES_LEN.
+ *
+ * Caller is responsible for gating: only call on actual movement (not on
+ * pause ticks) and only when world.simVersion >= 6 + Surface SearchingFood.
+ */
+export function pushRecentTile(
+  ants: AntComponents,
+  id: EntityId,
+  tx: number,
+  ty: number,
+): void {
+  const slot = ants.recentTilesHead[id]!;
+  const idx  = id * RECENT_TILES_LEN + slot;
+  ants.recentTilesX[idx] = tx;
+  ants.recentTilesY[idx] = ty;
+  ants.recentTilesHead[id] = (slot + 1) % RECENT_TILES_LEN;
+}
+
+/**
+ * True iff (tx, ty) appears anywhere in ant `id`'s recent-tiles ring buffer.
+ * Cheap linear scan — RECENT_TILES_LEN is 4.
+ */
+export function isRecentTile(
+  ants: AntComponents,
+  id: EntityId,
+  tx: number,
+  ty: number,
+): boolean {
+  const base = id * RECENT_TILES_LEN;
+  for (let s = 0; s < RECENT_TILES_LEN; s++) {
+    if (ants.recentTilesX[base + s] === tx && ants.recentTilesY[base + s] === ty) return true;
+  }
+  return false;
+}
+
+/** Reset ant `id`'s recent-tiles ring buffer to sentinels. */
+export function clearRecentTiles(ants: AntComponents, id: EntityId): void {
+  const base = id * RECENT_TILES_LEN;
+  for (let s = 0; s < RECENT_TILES_LEN; s++) {
+    ants.recentTilesX[base + s] = RECENT_TILES_SENTINEL;
+    ants.recentTilesY[base + s] = RECENT_TILES_SENTINEL;
+  }
+  ants.recentTilesHead[id] = 0;
 }
 
 /**

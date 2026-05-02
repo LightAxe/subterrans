@@ -37,7 +37,7 @@ import {
   SIM_VERSION_V4_DIAGONAL_MOTION,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
-import { initAnt, createAntComponents } from './ant-store.js';
+import { initAnt, createAntComponents, RECENT_TILES_LEN } from './ant-store.js';
 import { AntTask, ForagingSubState, DiggingSubState, NursingSubState, ChamberType, PheromoneType } from '../enums.js';
 import { createPheromoneGrid, phGet, phSet, pheromoneGridKey } from '../pheromone/pheromone-store.js';
 import { Rng } from '../rng.js';
@@ -2349,9 +2349,18 @@ describe('issue #27 — carrier WaitingToDeposit', () => {
     tickForagerActions(world);
 
     // Wake fires; antDepositFood at the entrance fallback fits 100 fp.
-    expect(world.ants.waitingDeposit[antId]).toBe(0);
+    // Issue #42 fix: at v6 the partial-deposit branch re-enters wait
+    // because the chamber is still saturated and there's leftover carry
+    // (412 fp) — so on v6 the ant ends the tick BACK in wait. On v5 the
+    // ant ends the tick out-of-wait. The pool drain + carry-down assertions
+    // hold under both versions.
     expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
     expect(world.ants.foodCarrying[antId]).toBe(412);
+    if (world.simVersion >= 6) {
+      expect(world.ants.waitingDeposit[antId]).toBe(1); // re-enters wait on partial fill
+    } else {
+      expect(world.ants.waitingDeposit[antId]).toBe(0);
+    }
   });
 
   it('5. movement skip — tickAntMovement does NOT change posX/posY for a waiting ant', () => {
@@ -6090,5 +6099,311 @@ describe('SearchingFood pause cadence (issue #35)', () => {
     // under 30% (60/200) is consistent with the feature working and
     // not overwhelming throughput.
     expect(pausedTickCount).toBeLessThan(60);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #42 — early-game-pool fixes (v6)
+//
+// Three sub-fixes share a single repro shape: an early colony with no
+// FoodStorage chamber whose entrance pool is at cap, where carriers can't
+// fully deposit and surface foragers form a small attractor cycle near the
+// entrance. Tests below cover each fix in isolation; the full snapshot
+// replay lives in src/sim/issue-42-snapshot-replay.test.ts.
+// ---------------------------------------------------------------------------
+
+describe('issue #42 — partial-deposit wait gate (v6)', () => {
+  it('partial deposit at the entrance pool sets waitingDeposit=1 (v6)', () => {
+    // Setup: colony at the cap minus 100 fp pool headroom, no chambers,
+    // ant at the entrance underground tile carrying 500 fp. The deposit
+    // absorbs 100 (to reach cap) and leaves 400 on the carry. Pre-v6 the
+    // wait gate only fired on toPool === 0; v6 also fires on partial fill
+    // when no chamber is depositable.
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    const colony = createColonyRecord(COLONY_ID, 0);
+    colony.entrances = [{ entranceId: 1, surfaceTileX: 7, surfaceTileY: 5, isOpen: true }];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    colony.foodFlowFieldDirty = false;
+    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY - 100; // 100 fp headroom
+    world.colonies[COLONY_ID] = colony;
+
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId: COLONY_ID,
+      posX: 7 << FP_SHIFT,
+      posY: 0,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+    });
+    world.ants.zone[antId] = Zone.Underground;
+    world.ants.foodCarrying[antId] = 500;
+
+    antDepositFood(world, colony, antId);
+
+    // Pool at cap, 400 leftover, ant entered wait.
+    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
+    expect(world.ants.foodCarrying[antId]).toBe(400);
+    expect(world.ants.waitingDeposit[antId]).toBe(1);
+  });
+
+  it('partial deposit on a v5 world does NOT set waitingDeposit (replay-determinism gate)', () => {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = 5;
+    const colony = createColonyRecord(COLONY_ID, 0);
+    colony.entrances = [{ entranceId: 1, surfaceTileX: 7, surfaceTileY: 5, isOpen: true }];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    colony.foodFlowFieldDirty = false;
+    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY - 100;
+    world.colonies[COLONY_ID] = colony;
+
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId: COLONY_ID,
+      posX: 7 << FP_SHIFT,
+      posY: 0,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+    });
+    world.ants.zone[antId] = Zone.Underground;
+    world.ants.foodCarrying[antId] = 500;
+
+    antDepositFood(world, colony, antId);
+
+    // Same deposit math (pool at cap, 400 leftover) but ant is NOT in
+    // wait under v5. This pins the legacy behavior so v5 saves replay
+    // byte-identical.
+    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
+    expect(world.ants.foodCarrying[antId]).toBe(400);
+    expect(world.ants.waitingDeposit[antId]).toBe(0);
+  });
+});
+
+describe('issue #42 — demote SearchingFood when no deposit target (v6)', () => {
+  it('forager inside the wave radius is demoted when colony has nowhere to deposit', () => {
+    // Colony with pool at cap and no chambers — anything a forager finds
+    // has nowhere to land. Demote unconditionally regardless of distance
+    // to entrance. Wave does NOT bump (the demote isn't about radius).
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    const colony = createColonyRecord(COLONY_ID, 0);
+    colony.entrances = [{ entranceId: 1, surfaceTileX: 0, surfaceTileY: 0, isOpen: true }];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
+    world.colonies[COLONY_ID] = colony;
+
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId: COLONY_ID,
+      posX: 5 << FP_SHIFT,           // 5 tiles from entrance — well within wave 0 radius (25)
+      posY: 0,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
+    });
+    world.ants.zone[antId] = Zone.Surface;
+
+    tickSearchLeash(world);
+
+    expect(world.ants.task[antId]).toBe(AntTask.Idle);
+    expect(world.ants.subTask[antId]).toBe(0);
+    // Wave preserved (no penalty for noDeposit demotion).
+    expect(world.ants.searchWave[antId]).toBe(0);
+  });
+
+  it('does not fire on a v5 world (replay-determinism gate)', () => {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = 5;
+    const colony = createColonyRecord(COLONY_ID, 0);
+    colony.entrances = [{ entranceId: 1, surfaceTileX: 0, surfaceTileY: 0, isOpen: true }];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
+    world.colonies[COLONY_ID] = colony;
+
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId: COLONY_ID,
+      posX: 5 << FP_SHIFT,
+      posY: 0,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
+    });
+    world.ants.zone[antId] = Zone.Surface;
+
+    tickSearchLeash(world);
+
+    // No demote on v5 — the noDeposit gate only fires at v6+.
+    expect(world.ants.task[antId]).toBe(AntTask.Foraging);
+    expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
+  });
+
+  it('a depositable chamber prevents the noDeposit demote (gate is on cap AND no chambers)', () => {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    const colony = createColonyRecord(COLONY_ID, 0);
+    colony.entrances = [{ entranceId: 1, surfaceTileX: 0, surfaceTileY: 0, isOpen: true }];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
+    // A FoodStorage chamber with headroom — gives the forager a deposit
+    // target, so the noDeposit gate must NOT fire.
+    colony.chambers.push({
+      chamberId: 1,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 0,
+      posX: 0, posY: 0, width: 3, height: 3,
+    });
+    world.colonies[COLONY_ID] = colony;
+
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId: COLONY_ID,
+      posX: 5 << FP_SHIFT,
+      posY: 0,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
+    });
+    world.ants.zone[antId] = Zone.Surface;
+
+    tickSearchLeash(world);
+
+    // Still searching — chamber headroom preserves the foraging role.
+    expect(world.ants.task[antId]).toBe(AntTask.Foraging);
+    expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
+  });
+});
+
+describe('issue #42 — surface SearchingFood no-revisit rule (v6)', () => {
+  function setupForagerInOpenSurface(): {
+    world: WorldState;
+    antId: number;
+  } {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    const colony = createColonyRecord(COLONY_ID, 0);
+    colony.entrances = [{ entranceId: 1, surfaceTileX: 0, surfaceTileY: 0, isOpen: true }];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    // Below cap so the v6 noDeposit demote doesn't fire and pre-empt the
+    // movement filter under test.
+    colony.foodStored = 0;
+    world.colonies[COLONY_ID] = colony;
+    // Surface grid + empty pheromone state are correct defaults from
+    // createWorldState; nothing else to seed for a no-pheromone wander.
+
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId: COLONY_ID,
+      posX: 50 << FP_SHIFT,
+      posY: 50 << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
+    });
+    world.ants.zone[antId] = Zone.Surface;
+    return { world, antId };
+  }
+
+  it('proposed step onto a tile in the recent-tiles buffer redirects to a non-recent neighbor', () => {
+    const { world, antId } = setupForagerInOpenSurface();
+    // Pre-load the buffer so (51, 50) and (50, 51) are "recent" — the most
+    // common biased candidates from the wander/pheromone samplers.
+    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 0] = 51;
+    world.ants.recentTilesY[antId * RECENT_TILES_LEN + 0] = 50;
+    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 1] = 50;
+    world.ants.recentTilesY[antId * RECENT_TILES_LEN + 1] = 51;
+    world.ants.recentTilesHead[antId] = 2;
+
+    const rng = new Rng(123);
+    const digFlowFields = createDigFlowFields();
+    tickAntMovement(world, rng, digFlowFields);
+
+    const newTileX = world.ants.posX[antId]! >> FP_SHIFT;
+    const newTileY = world.ants.posY[antId]! >> FP_SHIFT;
+    // The ant must NOT have stepped onto either pre-loaded recent tile.
+    expect(`${newTileX},${newTileY}`).not.toBe('51,50');
+    expect(`${newTileX},${newTileY}`).not.toBe('50,51');
+  });
+
+  it('a successful tile-crossing pushes the vacated tile onto the recent-tiles buffer', () => {
+    const { world, antId } = setupForagerInOpenSurface();
+    const startTileX = 50;
+    const startTileY = 50;
+
+    const rng = new Rng(7);
+    const digFlowFields = createDigFlowFields();
+    tickAntMovement(world, rng, digFlowFields);
+
+    const newTileX = world.ants.posX[antId]! >> FP_SHIFT;
+    const newTileY = world.ants.posY[antId]! >> FP_SHIFT;
+    if (newTileX !== startTileX || newTileY !== startTileY) {
+      // The starting tile (the one we just left) is now in the buffer.
+      let found = false;
+      for (let s = 0; s < RECENT_TILES_LEN; s++) {
+        if (
+          world.ants.recentTilesX[antId * RECENT_TILES_LEN + s] === startTileX &&
+          world.ants.recentTilesY[antId * RECENT_TILES_LEN + s] === startTileY
+        ) {
+          found = true;
+          break;
+        }
+      }
+      expect(found).toBe(true);
+    }
+  });
+
+  it('pickup clears the recent-tiles buffer', () => {
+    const { world, antId } = setupForagerInOpenSurface();
+    // Pre-populate the buffer so we can tell a clear happened.
+    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 0] = 49;
+    world.ants.recentTilesY[antId * RECENT_TILES_LEN + 0] = 50;
+    world.ants.recentTilesHead[antId] = 1;
+
+    // Trigger pickup directly with a synthetic pile object — antPickupFood
+    // is the state-mutation API that flips subTask and clears search state.
+    antPickupFood(world.ants, antId, { amount: 256 });
+
+    // Every slot back to the SENTINEL value (-1).
+    for (let s = 0; s < RECENT_TILES_LEN; s++) {
+      expect(world.ants.recentTilesX[antId * RECENT_TILES_LEN + s]).toBe(-1);
+      expect(world.ants.recentTilesY[antId * RECENT_TILES_LEN + s]).toBe(-1);
+    }
+    expect(world.ants.recentTilesHead[antId]).toBe(0);
+  });
+
+  it('does NOT push to the recent-tiles buffer on a v5 world (replay-determinism gate)', () => {
+    // Pre-v6 saves must continue to replay byte-identically — that means
+    // the recent-tiles buffer must remain SENTINEL-filled even after
+    // movement that would have pushed under v6. This test pins that
+    // invariant directly: take a v5 world, run a tick that crosses a
+    // tile boundary, and assert the buffer is still all sentinels.
+    const { world, antId } = setupForagerInOpenSurface();
+    world.simVersion = 5;
+
+    // Force a guaranteed tile crossing with a synthetic outbound heading
+    // so we don't rely on RNG to land us across a tile boundary.
+    world.ants.searchHeadingX[antId] = 1 << FP_SHIFT;
+    world.ants.searchHeadingY[antId] = 0;
+    world.ants.searchHeadingTicks[antId] = 50;
+
+    const startTileX = world.ants.posX[antId]! >> FP_SHIFT;
+    const startTileY = world.ants.posY[antId]! >> FP_SHIFT;
+
+    const rng = new Rng(0);
+    const digFlowFields = createDigFlowFields();
+    // Run several ticks so tile crossings definitely occur on v5.
+    for (let t = 0; t < 8; t++) {
+      tickAntMovement(world, rng, digFlowFields);
+    }
+    const endTileX = world.ants.posX[antId]! >> FP_SHIFT;
+    const endTileY = world.ants.posY[antId]! >> FP_SHIFT;
+
+    // Sanity: the ant moved (otherwise the test proves nothing).
+    expect(endTileX !== startTileX || endTileY !== startTileY).toBe(true);
+
+    // Buffer must still be entirely sentinels — no v5 push.
+    for (let s = 0; s < RECENT_TILES_LEN; s++) {
+      expect(world.ants.recentTilesX[antId * RECENT_TILES_LEN + s]).toBe(-1);
+      expect(world.ants.recentTilesY[antId * RECENT_TILES_LEN + s]).toBe(-1);
+    }
+    expect(world.ants.recentTilesHead[antId]).toBe(0);
   });
 });

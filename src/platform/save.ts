@@ -112,6 +112,16 @@ interface SerializedAnts {
    * zero-init (no ants paused at load time).
    */
   searchPauseTicks?: number[];
+  /**
+   * Issue #42 — recent-tiles ring buffer. Three flat arrays:
+   *   recentTilesX / recentTilesY: length = maxEntities * RECENT_TILES_LEN
+   *   recentTilesHead: length = maxEntities, value 0..RECENT_TILES_LEN-1
+   * Optional; absent → SENTINEL-filled (no history), which is the correct
+   * v6 default. Pre-v6 saves never read these fields (gated on simVersion).
+   */
+  recentTilesX?: number[];
+  recentTilesY?: number[];
+  recentTilesHead?: number[];
 }
 
 interface SerializedColony {
@@ -210,6 +220,12 @@ function serializeAnts(a: AntComponents): SerializedAnts {
     waitingDeposit: Array.from(a.waitingDeposit),
     pathErr: Array.from(a.pathErr),
     searchPauseTicks: Array.from(a.searchPauseTicks),
+    // Issue #42 — recent-tiles ring buffer. The X/Y arrays are flat
+    // (length = maxEntities * RECENT_TILES_LEN); the head array indexes
+    // into them. All three round-trip for v6 SCEN-06 replay determinism.
+    recentTilesX:    Array.from(a.recentTilesX),
+    recentTilesY:    Array.from(a.recentTilesY),
+    recentTilesHead: Array.from(a.recentTilesHead),
   };
 }
 
@@ -423,6 +439,17 @@ function deserializeAnts(saved: SerializedAnts, capacity: number): AntComponents
   }
   if (saved.searchPauseTicks !== undefined) {
     copyIntoInt32(a.searchPauseTicks, saved.searchPauseTicks);
+  }
+  // Issue #42 — recent-tiles ring buffer. Pre-v6 saves omit; the SENTINEL-
+  // filled defaults from createAntComponents are correct (no history).
+  if (saved.recentTilesX !== undefined) {
+    copyIntoInt32(a.recentTilesX, saved.recentTilesX);
+  }
+  if (saved.recentTilesY !== undefined) {
+    copyIntoInt32(a.recentTilesY, saved.recentTilesY);
+  }
+  if (saved.recentTilesHead !== undefined) {
+    copyIntoUint8(a.recentTilesHead, saved.recentTilesHead);
   }
   return a;
 }
