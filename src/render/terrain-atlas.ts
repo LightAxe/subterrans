@@ -19,6 +19,8 @@
 // these helpers don't need a simVersion gate.
 
 import type { GfxLike } from './draw-surface.js';
+import type { WorldState } from '../sim/types.js';
+import { surfaceFeatureAt } from '../sim/surface-features.js';
 import { TILE_SIZE_PX } from './sprites.js';
 import {
   spatialHash,
@@ -39,12 +41,7 @@ import {
   ROCK_FLECK_SPRITE,
   STRATA_LINE_SPRITE,
   FLOOR_DUST_SPRITE,
-  LARGE_BOULDER_SPRITE,
-  LARGE_BOULDER_SPRITE_FLAT,
-  LARGE_BUSH_SPRITE,
-  LARGE_BUSH_SPRITE_TALL,
-  LARGE_GRASS_CLUMP_SPRITE,
-  LARGE_GRASS_CLUMP_SPRITE_SPARSE,
+  SURFACE_FEATURE_SPRITES,
 } from './terrain-motifs.js';
 
 // ---------------------------------------------------------------------------
@@ -60,10 +57,12 @@ const SALT_BARREN_TWIG     = 105;
 const SALT_BARREN_LEAF     = 106;
 const SALT_BARREN_STONE    = 107;
 const SALT_BARREN_SEED     = 108;
-// Large multi-tile feature anchor salts.
-const SALT_LARGE_BOULDER   = 151;
-const SALT_LARGE_BUSH      = 152;
-const SALT_LARGE_GRASS     = 153;
+
+// Large multi-tile feature anchor salts and registry now live in
+// `src/sim/surface-features.ts` (issue #44 step 1) — render queries the
+// sim selector via `surfaceFeatureAt(world, tileX, tileY)` and renders
+// the slice it returns. Salts 151..153 are reserved for boulder/bush/
+// grass-clump anchor channels in the sim registry.
 
 const SALT_SOLID_BASE      = 201;
 const SALT_SOLID_DITHER    = 202;
@@ -97,213 +96,39 @@ export const COLOR_FLOOR_BASE      = 0x110a06;
 export const COLOR_FLOOR_BASE_DARK = 0x080403;
 
 // ---------------------------------------------------------------------------
-// Multi-tile features — registry consumed by drawLargeFeatureSliceIfAny.
-//
-// Each entry has a sprite, a salt (independent anchor distribution), and a
-// per-anchor probability. Iteration order is fixed so the "first match wins"
-// resolution is deterministic across all rendering paths. Higher-priority
-// features (large boulders) come first so they override grass clumps when
-// their footprints would overlap.
+// drawLargeFeatureSliceIfAny — query the sim-side surface-feature selector
+// (`src/sim/surface-features.ts`) and render the slice covering this tile.
+// Returns true if a feature was rendered, false otherwise. The selector
+// owns layout decisions (anchor positions, variant pick, suppression);
+// render only owns the pixel art (via SURFACE_FEATURE_SPRITES).
 // ---------------------------------------------------------------------------
 
-interface FeatureRegistryEntry {
-  /** Per-feature-type variants. Picked deterministically per (anchorX,
-   *  anchorY) hash so each landed feature looks like one of N forms,
-   *  not the same sprite cloned across the map. */
-  variants: ReadonlyArray<LargeFeatureSprite>;
-  salt: number;
-  /** 0..255 anchor probability per tile. ~5 = ~2% of tiles host an anchor. */
-  probability: number;
-}
-
-const LARGE_FEATURES: ReadonlyArray<FeatureRegistryEntry> = [
-  {
-    variants: [LARGE_BOULDER_SPRITE, LARGE_BOULDER_SPRITE_FLAT],
-    salt: SALT_LARGE_BOULDER,
-    probability: 6,
-  },
-  {
-    variants: [LARGE_BUSH_SPRITE, LARGE_BUSH_SPRITE_TALL],
-    salt: SALT_LARGE_BUSH,
-    probability: 8,
-  },
-  {
-    variants: [LARGE_GRASS_CLUMP_SPRITE, LARGE_GRASS_CLUMP_SPRITE_SPARSE],
-    salt: SALT_LARGE_GRASS,
-    probability: 10,
-  },
-];
-
-// Boot-time integrity check: every variant in a feature entry must share
-// the same `tilesWide × tilesTall` dimensions. The slice scan in
-// `drawLargeFeatureSliceIfAny` uses `variants[0]`'s dimensions for the
-// anchor window — if a future contributor adds a variant of a different
-// size, slices outside the variant[0] window would be silently skipped.
-// Throwing at module load surfaces the bug at the earliest possible point.
-//
-// At the same time, compute MAX_FEATURE_TILES_WIDE / MAX_FEATURE_TILES_TALL
-// — the cross-entry maximum span. drawLargeFeatureSliceIfAny scans this
-// window per tile so every potential anchor that could claim the tile is
-// considered (including features bigger than the smallest one — relevant
-// once a 3×3 boulder ships).
-let _maxW = 0;
-let _maxH = 0;
-for (const entry of LARGE_FEATURES) {
-  const W = entry.variants[0]!.tilesWide;
-  const H = entry.variants[0]!.tilesTall;
-  if (W > _maxW) _maxW = W;
-  if (H > _maxH) _maxH = H;
-  for (let i = 1; i < entry.variants.length; i++) {
-    const v = entry.variants[i]!;
-    if (v.tilesWide !== W || v.tilesTall !== H) {
-      throw new Error(
-        `LARGE_FEATURES variant size mismatch: salt=${entry.salt}, ` +
-        `variant[0]=${W}×${H}, variant[${i}]=${v.tilesWide}×${v.tilesTall}`,
-      );
-    }
-  }
-}
-const MAX_FEATURE_TILES_WIDE = _maxW;
-const MAX_FEATURE_TILES_TALL = _maxH;
-
-/**
- * If any registered multi-tile feature anchors at a position whose footprint
- * covers (tileX, tileY), paint that feature's slice for this tile and return
- * true. The first match wins — features earlier in `LARGE_FEATURES` take
- * priority. Returns false if no feature covers this tile.
- *
- * The scan walks every (anchorX, anchorY) candidate in the W×H window
- * above-left of (tileX, tileY) — so the rendering of any tile that's part
- * of a feature is fully self-contained. No cross-tile state, no anchor-
- * must-be-onscreen gotcha; if the camera shows tile (5, 5) and a 2×2
- * boulder anchored at (4, 4) covers it, the boulder's bottom-right
- * sub-region renders cleanly even when (4, 4) is offscreen.
- */
 function drawLargeFeatureSliceIfAny(
   gfx: GfxLike,
+  world: WorldState,
   screenX: number,
   screenY: number,
   tileX: number,
   tileY: number,
 ): boolean {
-  // Codex review followup #2: previous "upper-leftmost-per-tile" selection
-  // still left half-feature seams when two anchors had partially-
-  // overlapping footprints. Two 2×2 anchors at (5,5) and (6,5): tiles
-  // (5..6, 5..6) all chose (5,5), but tile (7,5) — outside (5,5)'s
-  // footprint, inside (6,5)'s — still chose (6,5). Result: anchor
-  // (6,5)'s LEFT half rendered nowhere (occluded by (5,5)) while its
-  // RIGHT half rendered at (7,5)/(7,6).
-  //
-  // Stronger fix: also reject any anchor that is itself OCCLUDED by an
-  // upper-left anchor's footprint. Anchor (6,5) checks the (W-1)×(H-1)
-  // window above-left for any active upper-left anchor; (5,5) is one;
-  // (6,5) is therefore suppressed. Tile (7,5) sees no active anchor in
-  // its scan window and renders normal substrate.
-  let bestAx = 0;
-  let bestAy = 0;
-  let bestSprite: LargeFeatureSprite | null = null;
-  for (let dy = 0; dy < MAX_FEATURE_TILES_TALL; dy++) {
-    for (let dx = 0; dx < MAX_FEATURE_TILES_WIDE; dx++) {
-      const ax = tileX - dx;
-      const ay = tileY - dy;
-      for (let ei = 0; ei < LARGE_FEATURES.length; ei++) {
-        const entry = LARGE_FEATURES[ei]!;
-        const W = entry.variants[0]!.tilesWide;
-        const H = entry.variants[0]!.tilesTall;
-        if (dx >= W || dy >= H) continue;
-        const h = spatialHash(ax, ay, entry.salt);
-        if ((h & 0xff) >= entry.probability) continue;
-        if (isAnchorSuppressed(ax, ay, ei)) {
-          break;
-        }
-        if (
-          bestSprite === null ||
-          ay < bestAy ||
-          (ay === bestAy && ax < bestAx)
-        ) {
-          bestAx = ax;
-          bestAy = ay;
-          bestSprite = entry.variants[(h >>> 8) % entry.variants.length]!;
-        }
-        break;
-      }
-    }
-  }
-  if (bestSprite !== null) {
-    drawLargeFeatureSlice(gfx, bestSprite, screenX, screenY, tileX - bestAx, tileY - bestAy);
-    return true;
-  }
-  return false;
-}
-
-/**
- * True if anchor (ax, ay) of feature `LARGE_FEATURES[ownEntryIndex]` is
- * suppressed and should not render. Two suppression rules:
- *
- * 1. CROSS-TYPE: any HIGHER-PRIORITY feature (earlier registry entry)
- *    whose footprint OVERLAPS this anchor's footprint suppresses this
- *    anchor entirely. The boulder/bush/grass priority is the registry
- *    contract — boulders win over bushes, bushes win over grass clumps,
- *    regardless of anchor lex position. Without this rule a grass-clump
- *    anchor at (76, 2) would survive even when a higher-priority
- *    boulder anchor at (77, 2) overlaps its footprint, leaving the
- *    grass clump partially visible while the boulder occluded its
- *    other half (codex review #3).
- *
- * 2. SAME-TYPE: any earlier (lex-smaller) anchor of THIS feature type
- *    that covers this tile suppresses this anchor. Implements the
- *    "upper-leftmost wins" rule for own-type overlaps so two boulders
- *    can't render on top of each other.
- *
- * Lower-priority features (later registry entries) do NOT suppress
- * higher-priority anchors — the contract is one-directional. Costs scale
- * with `ownEntryIndex`: boulder pays 3 hash lookups, bush pays ~12,
- * grass-clump pays ~21. All well-bounded.
- */
-function isAnchorSuppressed(
-  ax: number,
-  ay: number,
-  ownEntryIndex: number,
-): boolean {
-  const own = LARGE_FEATURES[ownEntryIndex]!;
-  const ownW = own.variants[0]!.tilesWide;
-  const ownH = own.variants[0]!.tilesTall;
-
-  // Cross-type: higher-priority features whose footprints overlap.
-  for (let ei = 0; ei < ownEntryIndex; ei++) {
-    const entry = LARGE_FEATURES[ei]!;
-    const W = entry.variants[0]!.tilesWide;
-    const H = entry.variants[0]!.tilesTall;
-    for (let py = ay - H + 1; py <= ay + ownH - 1; py++) {
-      for (let px = ax - W + 1; px <= ax + ownW - 1; px++) {
-        const ph = spatialHash(px, py, entry.salt);
-        if ((ph & 0xff) >= entry.probability) continue;
-        // Codex P3 fix from PR #41 review (which got squash-merged before
-        // this commit landed): only count (px, py) as a real suppressor if
-        // IT itself actually renders. A higher-priority anchor that's
-        // suppressed by an even-higher-priority one doesn't draw, so
-        // shouldn't block lower-priority anchors. Recursion terminates
-        // because every call strictly reduces either ownEntryIndex or
-        // (ay, ax) lex order.
-        if (!isAnchorSuppressed(px, py, ei)) return true;
-      }
-    }
-  }
-
-  // Same-type: above-left anchors that cover (ax, ay).
-  for (let dy = 0; dy < ownH; dy++) {
-    for (let dx = 0; dx < ownW; dx++) {
-      if (dx === 0 && dy === 0) continue;
-      const px = ax - dx;
-      const py = ay - dy;
-      const ph = spatialHash(px, py, own.salt);
-      if ((ph & 0xff) >= own.probability) continue;
-      // Same recursion-into-real-renders rule for own type. Termination:
-      // depth bounded by chain length.
-      if (!isAnchorSuppressed(px, py, ownEntryIndex)) return true;
-    }
-  }
-  return false;
+  const slice = surfaceFeatureAt(world, tileX, tileY);
+  if (slice === null) return false;
+  const sprites = SURFACE_FEATURE_SPRITES[slice.kind];
+  // Defensive: an unmapped kind would mean sim and render have drifted.
+  // The boot-time check in terrain-motifs.ts validates the map, so this
+  // branch should never hit at runtime — but bail safely rather than
+  // throwing inside the per-tile render hot path.
+  if (sprites === undefined || sprites.length === 0) return false;
+  const sprite = sprites[slice.variantIndex] ?? sprites[0]!;
+  drawLargeFeatureSlice(
+    gfx,
+    sprite,
+    screenX,
+    screenY,
+    tileX - slice.anchorX,
+    tileY - slice.anchorY,
+  );
+  return true;
 }
 
 /** Paint the (sliceX, sliceY)-th 16×16 cell of a multi-tile feature into the
@@ -442,6 +267,7 @@ export function drawBarrenEarthSubstrate(
 
 export function drawBarrenEarthTile(
   gfx: GfxLike,
+  world: WorldState,
   screenX: number,
   screenY: number,
   tileX: number,
@@ -452,8 +278,9 @@ export function drawBarrenEarthTile(
   // Multi-tile features (boulders, bushes, large grass clumps) override the
   // single-tile motif scattering when they cover this tile. Pebbles and
   // grass tufts inside a boulder's footprint would clash visually, so we
-  // bail before the per-tile motif passes.
-  if (drawLargeFeatureSliceIfAny(gfx, screenX, screenY, tileX, tileY)) return;
+  // bail before the per-tile motif passes. Selector is sim-owned (issue
+  // #44 step 1) — render only translates kind→sprite and paints the slice.
+  if (drawLargeFeatureSliceIfAny(gfx, world, screenX, screenY, tileX, tileY)) return;
 
   // Motif overlays — each one is a small probabilistic decoration.
   // The probabilities sum to ~30% so most tiles have at most one motif and

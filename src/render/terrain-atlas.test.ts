@@ -17,6 +17,17 @@ import {
 } from './terrain-atlas.js';
 import type { GfxLike } from './draw-surface.js';
 import { TILE_SIZE_PX } from './sprites.js';
+import { createWorldState } from '../sim/types.js';
+import { createColonyRecord } from '../sim/colony/colony-store.js';
+
+// Issue #44 step 2: drawBarrenEarthTile now consults the sim-side surface-
+// feature selector, which mixes WorldState.terrainSeed into the hash.
+// Tests use createWorldState(0) so terrainSeed === 0 (Math.imul(0, k) === 0)
+// — under that condition the salt XOR is a no-op and the rendered layout
+// is byte-identical to the pre-#44 render-side layout. This keeps the
+// snapshot-style assertions below ("no half-features", "feature tiles
+// > 0", etc.) meaningful as a regression check.
+const TEST_WORLD = createWorldState(0);
 
 interface GfxCall {
   method: string;
@@ -67,7 +78,7 @@ describe('drawBarrenEarthTile', () => {
     for (let ty = 0; ty < 16; ty++) {
       for (let tx = 0; tx < 16; tx++) {
         const gfx = new MockGfx();
-        drawBarrenEarthTile(gfx, 32, 48, tx, ty);
+        drawBarrenEarthTile(gfx, TEST_WORLD, 32, 48, tx, ty);
         expect(rectsInsideTile(gfx, 32, 48)).toBe(true);
       }
     }
@@ -76,16 +87,16 @@ describe('drawBarrenEarthTile', () => {
   it('produces deterministic draw calls for the same (tileX, tileY)', () => {
     const a = new MockGfx();
     const b = new MockGfx();
-    drawBarrenEarthTile(a, 0, 0, 5, 7);
-    drawBarrenEarthTile(b, 0, 0, 5, 7);
+    drawBarrenEarthTile(a, TEST_WORLD, 0, 0, 5, 7);
+    drawBarrenEarthTile(b, TEST_WORLD, 0, 0, 5, 7);
     expect(a.calls).toEqual(b.calls);
   });
 
   it('produces different draw calls for different tile coordinates', () => {
     const a = new MockGfx();
     const b = new MockGfx();
-    drawBarrenEarthTile(a, 0, 0, 5, 7);
-    drawBarrenEarthTile(b, 0, 0, 5, 8);
+    drawBarrenEarthTile(a, TEST_WORLD, 0, 0, 5, 7);
+    drawBarrenEarthTile(b, TEST_WORLD, 0, 0, 5, 8);
     expect(a.calls).not.toEqual(b.calls);
   });
 
@@ -107,7 +118,7 @@ describe('drawBarrenEarthTile', () => {
     for (let ty = 0; ty < 64; ty++) {
       for (let tx = 0; tx < 64; tx++) {
         const gfx = new MockGfx();
-        drawBarrenEarthTile(gfx, 0, 0, tx, ty);
+        drawBarrenEarthTile(gfx, TEST_WORLD, 0, 0, tx, ty);
         if (gfx.callsOf('fillRect').length > 80) {
           featureTiles.add(ty * 64 + tx);
         }
@@ -136,7 +147,7 @@ describe('drawBarrenEarthTile', () => {
     for (let ty = 0; ty < 32; ty++) {
       for (let tx = 0; tx < 32; tx++) {
         const gfx = new MockGfx();
-        drawBarrenEarthTile(gfx, 0, 0, tx, ty);
+        drawBarrenEarthTile(gfx, TEST_WORLD, 0, 0, tx, ty);
         if (gfx.callsOf('fillRect').length > 0) coveredTiles++;
       }
     }
@@ -154,7 +165,7 @@ describe('drawBarrenEarthTile', () => {
     for (let ty = 0; ty < 32; ty++) {
       for (let tx = 0; tx < 32; tx++) {
         const gfx = new MockGfx();
-        drawBarrenEarthTile(gfx, 0, 0, tx, ty);
+        drawBarrenEarthTile(gfx, TEST_WORLD, 0, 0, tx, ty);
         // Motif pixels appear AFTER the substrate fillStyle/fillRect calls.
         // Substrate floor is 1 base + N dither + N specks (substrate ≤ 60
         // ops in worst case). If the total exceeds ~80 we know at least
@@ -163,6 +174,78 @@ describe('drawBarrenEarthTile', () => {
       }
     }
     expect(motifCount).toBeGreaterThan(0);
+  });
+});
+
+describe('drawBarrenEarthTile + sim selector integration (issue #44 step 2)', () => {
+  it('different terrainSeeds produce different feature placements', () => {
+    // The whole point of step 1's terrainSeed: pre-#44 every world looked
+    // identical because anchor placement was coordinate-only. After the
+    // refactor render queries the sim selector, which mixes terrainSeed
+    // into the hash. Two worlds with different seeds, walked over the
+    // same tiles, must produce visibly different draw outputs at SOME
+    // tile in a meaningful sweep — otherwise the sim selector isn't
+    // actually plumbed through.
+    const w1 = createWorldState(1);
+    const w2 = createWorldState(99999);
+    let differingTiles = 0;
+    for (let ty = 0; ty < 32; ty++) {
+      for (let tx = 0; tx < 32; tx++) {
+        const a = new MockGfx();
+        const b = new MockGfx();
+        drawBarrenEarthTile(a, w1, 0, 0, tx, ty);
+        drawBarrenEarthTile(b, w2, 0, 0, tx, ty);
+        if (a.calls.length !== b.calls.length) {
+          differingTiles++;
+        }
+      }
+    }
+    // Substrate dithering is identical across seeds (it doesn't go through
+    // the sim selector — substrate stays render-side because it's not
+    // movement-affecting). Feature presence is what varies. A meaningful
+    // sweep should produce dozens of differing tiles.
+    expect(differingTiles).toBeGreaterThan(20);
+  });
+
+  it('respects entrance suppression — a feature tile becomes substrate-only when an entrance is placed there', () => {
+    // Build a world; find a tile where the renderer paints a feature
+    // (call cost > substrate-only baseline). Install an entrance at that
+    // tile in a fresh world. The same tile should now render with no
+    // feature — the sim selector returns null and drawBarrenEarthTile
+    // proceeds to per-tile motif scattering only.
+    const baseline = createWorldState(42);
+    let featureTile: { x: number; y: number; baselineCalls: number } | null = null;
+    for (let ty = 0; ty < 60 && featureTile === null; ty++) {
+      for (let tx = 0; tx < 60; tx++) {
+        const gfx = new MockGfx();
+        drawBarrenEarthTile(gfx, baseline, 0, 0, tx, ty);
+        if (gfx.callsOf('fillRect').length > 80) {
+          featureTile = { x: tx, y: ty, baselineCalls: gfx.callsOf('fillRect').length };
+          break;
+        }
+      }
+    }
+    expect(featureTile).not.toBeNull();
+
+    const suppressed = createWorldState(42);
+    // Install a colony with an entrance at the feature tile. surface-features
+    // suppresses any anchor whose footprint enters the entrance radius (3).
+    const colony = createColonyRecord(1, 0);
+    colony.entrances = [{
+      entranceId: 0,
+      surfaceTileX: featureTile!.x,
+      surfaceTileY: featureTile!.y,
+      isOpen: true,
+    }];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    suppressed.colonies[1] = colony;
+
+    const gfx = new MockGfx();
+    drawBarrenEarthTile(gfx, suppressed, 0, 0, featureTile!.x, featureTile!.y);
+    // Feature gone → fewer fillRects than the baseline. (Substrate base ~50,
+    // a feature slice adds 50–250 more depending on sprite density.)
+    expect(gfx.callsOf('fillRect').length).toBeLessThan(featureTile!.baselineCalls);
   });
 });
 

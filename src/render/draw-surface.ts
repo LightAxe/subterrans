@@ -95,7 +95,7 @@ export function drawSurfaceTerrain(gfx: GfxLike, world: WorldState, cam: CameraS
       void sgGet(world.surface, tx, ty);
       const screenX = (tx - left) * TILE_SIZE_PX;
       const screenY = (ty - top)  * TILE_SIZE_PX;
-      drawBarrenEarthTile(gfx, screenX, screenY, tx, ty);
+      drawBarrenEarthTile(gfx, world, screenX, screenY, tx, ty);
     }
   }
 }

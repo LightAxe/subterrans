@@ -425,3 +425,61 @@ export const LARGE_GRASS_CLUMP_SPRITE_SPARSE: LargeFeatureSprite = {
     _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,
   ],
 };
+
+// ---------------------------------------------------------------------------
+// SURFACE_FEATURE_SPRITES — kind→sprite[] map consumed by terrain-atlas.ts
+// when rendering the slice the sim-side surface-feature selector returned.
+//
+// Issue #44 step 2: render no longer owns the layout decision (which anchor
+// goes where). The sim selector
+// (`src/sim/surface-features.ts → surfaceFeatureAt`) returns
+// `{ kind, variantIndex }` and render translates that pair into the
+// pixel-art sprite to draw via this map.
+//
+// Invariant (enforced at module load below):
+//   For every entry, `sprites[i].tilesWide === footprintTilesWide` and
+//   `sprites[i].tilesTall === footprintTilesTall` from the registry, AND
+//   `sprites.length === variantCount`. A mismatch means the sim and render
+//   sides have drifted and the rendered slice will misalign.
+// ---------------------------------------------------------------------------
+
+import {
+  SurfaceFeatureKind,
+  getSurfaceFeatureRegistryEntry,
+  type SurfaceFeatureKind as SurfaceFeatureKindType,
+} from '../sim/surface-features.js';
+
+export const SURFACE_FEATURE_SPRITES: Readonly<Record<SurfaceFeatureKindType, ReadonlyArray<LargeFeatureSprite>>> = {
+  [SurfaceFeatureKind.Boulder]:    [LARGE_BOULDER_SPRITE,    LARGE_BOULDER_SPRITE_FLAT],
+  [SurfaceFeatureKind.Bush]:       [LARGE_BUSH_SPRITE,       LARGE_BUSH_SPRITE_TALL],
+  [SurfaceFeatureKind.GrassClump]: [LARGE_GRASS_CLUMP_SPRITE, LARGE_GRASS_CLUMP_SPRITE_SPARSE],
+};
+
+// Boot-time integrity check: each sprite array's length and footprint
+// dimensions must agree with the sim-side registry. Catches drift that
+// would otherwise silently misrender slices when a future contributor
+// adds a variant on one side and forgets the other.
+for (const kindStr of Object.keys(SURFACE_FEATURE_SPRITES)) {
+  const kind = Number(kindStr) as SurfaceFeatureKindType;
+  const entry = getSurfaceFeatureRegistryEntry(kind);
+  if (entry === null) {
+    throw new Error(`SURFACE_FEATURE_SPRITES has unknown kind=${kind}`);
+  }
+  const sprites = SURFACE_FEATURE_SPRITES[kind];
+  if (sprites.length !== entry.variantCount) {
+    throw new Error(
+      `SURFACE_FEATURE_SPRITES[kind=${kind}]: ${sprites.length} sprites but ` +
+      `registry variantCount=${entry.variantCount}`,
+    );
+  }
+  for (let i = 0; i < sprites.length; i++) {
+    const s = sprites[i]!;
+    if (s.tilesWide !== entry.footprintTilesWide || s.tilesTall !== entry.footprintTilesTall) {
+      throw new Error(
+        `SURFACE_FEATURE_SPRITES[kind=${kind}] variant[${i}]: ` +
+        `${s.tilesWide}×${s.tilesTall} but registry footprint=` +
+        `${entry.footprintTilesWide}×${entry.footprintTilesTall}`,
+      );
+    }
+  }
+}
