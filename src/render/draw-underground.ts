@@ -173,7 +173,7 @@ export function drawUndergroundTerrain(
         // wall boundary. The shape is correct without it but the corridor
         // reads as flat black; the rim is what gives it the "carved out
         // of packed earth" feel.
-        drawUndergroundRim(gfx, screenX, screenY, neighbors.c, neighbors);
+        drawUndergroundRim(gfx, screenX, screenY, tx, ty, neighbors.c, neighbors);
 
         // Marked / BeingDug tint overlay — applied AFTER autotile so the
         // tint reads through the dug silhouette. Ensures the player sees

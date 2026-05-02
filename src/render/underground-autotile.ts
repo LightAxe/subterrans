@@ -38,7 +38,17 @@ import {
   COLOR_ROCK_BASE_DARK,
   COLOR_FLOOR_BASE,
 } from './terrain-atlas.js';
+import { spatialHash } from './terrain-noise.js';
 import type { Neighbors3x3, NeighborKind } from './underground-neighbors.js';
+
+// Per-quadrant salt namespaces for chamfer chip placement. Distinct so
+// adjacent quadrants on the same tile pick independent chip positions.
+const SALT_CHIP_NW = 401;
+const SALT_CHIP_NE = 402;
+const SALT_CHIP_SE = 403;
+const SALT_CHIP_SW = 404;
+// Rim chip salt (one channel — band-position derived from quadrant).
+const SALT_RIM_CHIP = 411;
 
 const HALF = TILE_SIZE_PX / 2; // 8
 
@@ -74,25 +84,26 @@ export function drawAutotiledUndergroundTile(
   //    the quadrant region the autotile says belongs to the other kind. Solid
   //    color (no dither) — the chamfer/bite reads as a clean "carved" region
   //    against the dithered substrate behind it, which is the right contrast
-  //    for a hard-pixel-art look.
-  const oppositeColor = centerKind === 'wall' ? COLOR_FLOOR_BASE : COLOR_ROCK_BASE;
-  gfx.fillStyle(oppositeColor, 1);
-
+  //    for a hard-pixel-art look. Each helper sets its own fillStyle so the
+  //    chip / inner-corner / chamfer paints don't bleed into one another.
+  //
   // For each quadrant, the (h, v, d) classification picks a shape. h is the
   // cardinal-horizontal neighbor (W for NW/SW, E for NE/SE); v is the
   // cardinal-vertical neighbor (N for NW/NE, S for SW/SE); d is the diagonal.
-  drawQuadrantMask(gfx, screenX, screenY, 'NW', centerKind, neighbors.w, neighbors.n, neighbors.nw);
-  drawQuadrantMask(gfx, screenX, screenY, 'NE', centerKind, neighbors.e, neighbors.n, neighbors.ne);
-  drawQuadrantMask(gfx, screenX, screenY, 'SE', centerKind, neighbors.e, neighbors.s, neighbors.se);
-  drawQuadrantMask(gfx, screenX, screenY, 'SW', centerKind, neighbors.w, neighbors.s, neighbors.sw);
+  drawQuadrantMask(gfx, screenX, screenY, tileX, tileY, centerKind, 'NW', neighbors.w, neighbors.n, neighbors.nw);
+  drawQuadrantMask(gfx, screenX, screenY, tileX, tileY, centerKind, 'NE', neighbors.e, neighbors.n, neighbors.ne);
+  drawQuadrantMask(gfx, screenX, screenY, tileX, tileY, centerKind, 'SE', neighbors.e, neighbors.s, neighbors.se);
+  drawQuadrantMask(gfx, screenX, screenY, tileX, tileY, centerKind, 'SW', neighbors.w, neighbors.s, neighbors.sw);
 }
 
 function drawQuadrantMask(
   gfx: GfxLike,
   screenX: number,
   screenY: number,
-  quadrant: Quadrant,
+  tileX: number,
+  tileY: number,
   centerKind: NeighborKind,
+  quadrant: Quadrant,
   horizKind: NeighborKind,
   vertKind:  NeighborKind,
   diagKind:  NeighborKind,
@@ -101,13 +112,21 @@ function drawQuadrantMask(
   const sameV = vertKind  === centerKind;
   const sameD = diagKind  === centerKind;
 
+  const oppositeColor = centerKind === 'wall' ? COLOR_FLOOR_BASE : COLOR_ROCK_BASE;
   if (!sameH && !sameV) {
     // chamfer — the quadrant has two opposite-kind cardinals. Paint a
     // hypotenuse-anchored triangle of OPPOSITE kind into the outer corner.
+    gfx.fillStyle(oppositeColor, 1);
     fillChamferTriangle(gfx, screenX, screenY, quadrant);
+    // Per-tile chip variant — 1 deterministic pixel of CENTER-kind paint
+    // inside the chamfer interior, simulating a chip / crack / mineral
+    // inclusion. Strictly avoids the sacred edges (row 0 / col 0) and the
+    // hypotenuse boundary, so anchor and join contracts hold regardless.
+    maybeAddChamferChip(gfx, screenX, screenY, tileX, tileY, quadrant, centerKind);
   } else if (sameH && sameV && !sameD) {
     // inner-corner — only the diagonal differs. The opposite kind pokes in
     // at the far corner of the quadrant. Paint a small bite there.
+    gfx.fillStyle(oppositeColor, 1);
     fillInnerCornerBite(gfx, screenX, screenY, quadrant);
   }
   // else: full / h-edge / v-edge — substrate is correct, nothing to paint.
@@ -172,6 +191,62 @@ function fillInnerCornerBite(
   }
 }
 
+/**
+ * Place a 1-pixel "chip" of CENTER-kind paint inside a chamfer interior.
+ *
+ * Visual purpose: long stair-step diagonals look stamped if every chamfer
+ * is pixel-identical. A single deterministic 1-pixel chip per chamfer
+ * breaks the repetition without altering the silhouette.
+ *
+ * Sacred-edge protection: the chip's local (lx, ly) lives in [1..5] × [1..5]
+ * with the additional constraint lx + ly ≤ 6 (strictly inside the canonical
+ * chamfer hypotenuse, lx + ly < 8). So:
+ *   - lx ≥ 1 → never on col 0 (sacred join with adjacent quadrant)
+ *   - ly ≥ 1 → never on row 0 (same)
+ *   - lx + ly ≤ 6 → never on or past the canonical hypotenuse pixels
+ *
+ * Approximate chip rate ~60% (h & 0xff < 154), so most chamfers carry one
+ * but uniform stair-steps occasionally show a "boring" canonical mask too.
+ */
+function maybeAddChamferChip(
+  gfx: GfxLike,
+  screenX: number,
+  screenY: number,
+  tileX: number,
+  tileY: number,
+  quadrant: Quadrant,
+  centerKind: NeighborKind,
+): void {
+  const salt = quadrant === 'NW' ? SALT_CHIP_NW
+             : quadrant === 'NE' ? SALT_CHIP_NE
+             : quadrant === 'SE' ? SALT_CHIP_SE
+             :                     SALT_CHIP_SW;
+  const h = spatialHash(tileX, tileY, salt);
+  if ((h & 0xff) >= 154) return; // ~60% emission rate
+
+  // Sample (lx, ly) inside the safe region. lx ∈ [1..5]; ly ∈ [1..(6 - lx)].
+  // The constraint lx + ly ≤ 6 keeps the chip strictly interior.
+  const lx = 1 + ((h >>> 8) & 0xf) % 5;
+  const ly = 1 + ((h >>> 12) & 0xf) % (6 - lx);
+
+  // Map quadrant-local (lx, ly) to tile-relative pixel.
+  let px = 0, py = 0;
+  switch (quadrant) {
+    case 'NW': px = lx;                          py = ly;                          break;
+    case 'NE': px = TILE_SIZE_PX - 1 - lx;       py = ly;                          break;
+    case 'SE': px = TILE_SIZE_PX - 1 - lx;       py = TILE_SIZE_PX - 1 - ly;       break;
+    case 'SW': px = lx;                          py = TILE_SIZE_PX - 1 - ly;       break;
+  }
+
+  // Chip color is the CENTER kind — i.e., a 1-pixel "cut" through the
+  // opposite-kind chamfer fill, revealing the substrate beneath. For an
+  // open tile this is a tiny floor-color crack in the rock chamfer; for
+  // a wall tile it's a tiny rock-color bump in the floor chamfer.
+  const chipColor = centerKind === 'wall' ? COLOR_ROCK_BASE : COLOR_FLOOR_BASE;
+  gfx.fillStyle(chipColor, 1);
+  gfx.fillRect(screenX + px, screenY + py, 1, 1);
+}
+
 // ---------------------------------------------------------------------------
 // drawUndergroundRim — Checkpoint 4 rim/lighting pass.
 //
@@ -196,6 +271,8 @@ export function drawUndergroundRim(
   gfx: GfxLike,
   screenX: number,
   screenY: number,
+  tileX: number,
+  tileY: number,
   centerKind: NeighborKind,
   neighbors: Neighbors3x3,
 ): void {
@@ -222,4 +299,27 @@ export function drawUndergroundRim(
   if (wallS) gfx.fillRect(screenX,            screenY + last - 1, TILE_SIZE_PX, 1);
   if (wallW) gfx.fillRect(screenX + 1,        screenY,            1, TILE_SIZE_PX);
   if (wallE) gfx.fillRect(screenX + last - 1, screenY,            1, TILE_SIZE_PX);
+
+  // Per-tile rim chips — 1-pixel deterministic dark specks inside each
+  // active rim band, breaking the rim's flat appearance. Same alpha as
+  // the heavy band so chips read as small "packed soil" grains rather
+  // than sub-rim noise. Position is hash-driven within the band.
+  const h = spatialHash(tileX, tileY, SALT_RIM_CHIP);
+  gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
+  if (wallN) {
+    const x = (h >>> 0) & 0xf;        // 0..15
+    gfx.fillRect(screenX + x, screenY + 1, 1, 1);
+  }
+  if (wallS) {
+    const x = (h >>> 4) & 0xf;
+    gfx.fillRect(screenX + x, screenY + last - 1, 1, 1);
+  }
+  if (wallW) {
+    const y = (h >>> 8) & 0xf;
+    gfx.fillRect(screenX + 1, screenY + y, 1, 1);
+  }
+  if (wallE) {
+    const y = (h >>> 12) & 0xf;
+    gfx.fillRect(screenX + last - 1, screenY + y, 1, 1);
+  }
 }

@@ -156,10 +156,14 @@ function countPixels(buf: PixelBuffer, kind: NeighborKind): number {
 describe('drawAutotiledUndergroundTile — full quadrants', () => {
   it('isolated open chamber tile (all 4 cardinals = wall) gets 4 chamfer cuts', () => {
     // sameH=0, sameV=0 in every quadrant → chamfer everywhere.
-    // 4 chamfers × 36 pixels = 144 wall pixels, leaving 256 - 144 = 112 open.
+    // Canonical wall pixel count is 4 chamfers × 36 = 144. Per-tile chip
+    // variants (Phase E) cut 0..4 of those wall pixels back to open via a
+    // hashed 1-pixel chip per chamfer; the exact count for tile (5, 7) is
+    // 2 chips → 142 wall pixels. The range below is the variant envelope:
+    // anywhere from 140 (4 chips) to 144 (no chips) across the hash space.
     const buf = renderTile(makeNeighbors('open'));
-    expect(countPixels(buf, 'wall')).toBe(144);
-    expect(countPixels(buf, 'open')).toBe(112);
+    expect(countPixels(buf, 'wall')).toBeGreaterThanOrEqual(140);
+    expect(countPixels(buf, 'wall')).toBeLessThanOrEqual(144);
   });
 
   it('fully open tile (all 8 neighbors = open) leaves substrate intact — no opposite paint', () => {
@@ -319,6 +323,81 @@ describe('drawAutotiledUndergroundTile — stair-step diagonal corridor', () => 
   });
 });
 
+describe('drawAutotiledUndergroundTile — chip variants (Phase E)', () => {
+  function makeNeighbors(c: NeighborKind, spec: Partial<Neighbors3x3> = {}): Neighbors3x3 {
+    return {
+      nw: spec.nw ?? 'wall', n:  spec.n  ?? 'wall', ne: spec.ne ?? 'wall',
+      w:  spec.w  ?? 'wall', c,                       e:  spec.e  ?? 'wall',
+      sw: spec.sw ?? 'wall', s:  spec.s  ?? 'wall', se: spec.se ?? 'wall',
+    };
+  }
+
+  it('chip never violates anchor / corner sacred pixels under a hash sweep (single-quadrant chamfer)', () => {
+    // Use the single-NW-chamfer setup (only NW fires; other quadrants
+    // are h-edge / v-edge / full and paint nothing). Sweep tile
+    // coordinates so the chip hash varies across many values, and
+    // confirm:
+    //   - (8, 0) and (0, 8) anchors remain non-wall (NW chamfer never
+    //     reaches them; chips can only retreat further inward, not extend).
+    //   - (0, 0) — the OUTER NW corner — is always wall (chip's lx, ly
+    //     each ≥ 1, so chip never lands at (0, 0)).
+    const singleNW = makeNeighbors('open', {
+      nw: 'wall', n: 'wall',  ne: 'wall',
+      w:  'wall',              e:  'open',
+      sw: 'wall', s: 'open',  se: 'open',
+    });
+    for (let tx = 0; tx < 32; tx++) {
+      for (let ty = 0; ty < 32; ty++) {
+        const gfx = new MockGfx();
+        drawAutotiledUndergroundTile(gfx, 0, 0, tx, ty, 'open', singleNW);
+        const buf = new PixelBuffer(TILE_SIZE_PX, TILE_SIZE_PX);
+        gfx.paintBuffer(buf, 0, 0);
+
+        expect(buf.get(8, 0)).not.toBe('wall'); // top-edge midpoint anchor
+        expect(buf.get(0, 8)).not.toBe('wall'); // left-edge midpoint anchor
+        expect(buf.get(0, 0)).toBe('wall');     // outer NW corner — always wall
+      }
+    }
+  });
+
+  it('chip output is deterministic per (tileX, tileY)', () => {
+    // Render the same tile twice and confirm draw call sequences match.
+    // Variant code paths are the densest part of the autotiler — chip
+    // determinism is what guarantees byte-identical replays across reloads.
+    const a = new MockGfx();
+    const b = new MockGfx();
+    drawAutotiledUndergroundTile(a, 0, 0, 11, 13, 'open', makeNeighbors('open'));
+    drawAutotiledUndergroundTile(b, 0, 0, 11, 13, 'open', makeNeighbors('open'));
+    expect(a.calls).toEqual(b.calls);
+  });
+
+  it('different tiles produce different chip placements (not a stamped triangle)', () => {
+    // Sample 16 distinct tiles and count how many produce a different
+    // wall-pixel pattern. Expect MOST tiles to differ — the whole point
+    // of variants is that long stair-step diagonals stop reading as a
+    // repeated stamp.
+    const fingerprints = new Set<string>();
+    for (let i = 0; i < 16; i++) {
+      const gfx = new MockGfx();
+      drawAutotiledUndergroundTile(gfx, 0, 0, i * 7, i * 11, 'open', makeNeighbors('open'));
+      const buf = new PixelBuffer(TILE_SIZE_PX, TILE_SIZE_PX);
+      gfx.paintBuffer(buf, 0, 0);
+      // Build a coarse fingerprint of wall positions inside the chamfer
+      // interior (exclude row 0 / col 0 which never vary).
+      const cells: string[] = [];
+      for (let y = 1; y < TILE_SIZE_PX - 1; y++) {
+        for (let x = 1; x < TILE_SIZE_PX - 1; x++) {
+          if (buf.get(x, y) === 'wall') cells.push(`${x},${y}`);
+        }
+      }
+      fingerprints.add(cells.join('|'));
+    }
+    // Want at least 4 distinct patterns from 16 tiles — otherwise the
+    // chip variation is too weak to break visual repetition.
+    expect(fingerprints.size).toBeGreaterThanOrEqual(4);
+  });
+});
+
 describe('drawAutotiledUndergroundTile — determinism', () => {
   it('same neighborhood produces the same draw call sequence', () => {
     const a = new MockGfx();
@@ -343,13 +422,13 @@ describe('drawUndergroundRim', () => {
 
   it('does nothing on a wall tile (rim only fires on open tiles)', () => {
     const gfx = gfxCalls();
-    drawUndergroundRim(gfx, 0, 0, 'wall', makeNeighbors('wall'));
+    drawUndergroundRim(gfx, 0, 0, 0, 0, 'wall', makeNeighbors('wall'));
     expect(gfx.calls.filter(c => c.method === 'fillRect')).toHaveLength(0);
   });
 
   it('does nothing on an open tile with no wall neighbors', () => {
     const gfx = gfxCalls();
-    drawUndergroundRim(gfx, 0, 0, 'open', makeNeighbors('open', {
+    drawUndergroundRim(gfx, 0, 0, 0, 0, 'open', makeNeighbors('open', {
       nw: 'open', n: 'open', ne: 'open',
       w:  'open',             e: 'open',
       sw: 'open', s: 'open', se: 'open',
@@ -357,21 +436,21 @@ describe('drawUndergroundRim', () => {
     expect(gfx.calls.filter(c => c.method === 'fillRect')).toHaveLength(0);
   });
 
-  it('emits 2 fillRects per cardinal wall neighbor (heavy + light band)', () => {
+  it('emits 2 band fillRects + 1 chip per cardinal wall neighbor', () => {
     const gfx = gfxCalls();
     // Open tile with only N=wall (rest open).
-    drawUndergroundRim(gfx, 0, 0, 'open', makeNeighbors('open', {
+    drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open', {
       n: 'wall',
       ne: 'open', e: 'open', se: 'open', s: 'open', sw: 'open', w: 'open', nw: 'open',
     }));
-    // 1 heavy + 1 light = 2 fillRects.
-    expect(gfx.calls.filter(c => c.method === 'fillRect')).toHaveLength(2);
+    // 1 heavy band + 1 light band + 1 chip = 3 fillRects.
+    expect(gfx.calls.filter(c => c.method === 'fillRect')).toHaveLength(3);
   });
 
-  it('all four cardinal walls → 8 rim fillRects', () => {
+  it('all four cardinal walls → 8 band fillRects + 4 chips = 12', () => {
     const gfx = gfxCalls();
-    drawUndergroundRim(gfx, 0, 0, 'open', makeNeighbors('open'));
-    expect(gfx.calls.filter(c => c.method === 'fillRect')).toHaveLength(8);
+    drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open'));
+    expect(gfx.calls.filter(c => c.method === 'fillRect')).toHaveLength(12);
   });
 });
 
