@@ -199,12 +199,22 @@ describe('drawSurfaceTerrain', () => {
     }
     const cam = makeCamera(0, 0, 200, 200);
     drawSurfaceTerrain(gfx, world, cam);
-    // Issue #40: per-tile budget bumped from 4 → 30 fillRects to accommodate
-    // the procedural-art system (substrate dithering + sparse specks +
-    // motif overlays). Beyond that suggests a regression — uncapped per-pixel
-    // iteration creep, accidentally-removed sparseness gates, or a motif
-    // probability blown out.
-    expect(gfx.callsOf('fillRect').length).toBeLessThanOrEqual(128 * 128 * 30);
+    // Per-tile fillRect budget — explicit ceiling, bumped intentionally as
+    // each kind of large feature has scaled up:
+    //   - Issue #40 (PR #41) set the budget at 30 per tile to cover the
+    //     procedural-art system (substrate dithering + sparse specks +
+    //     small motifs).
+    //   - Issue #44 step 3 raises it to 50 per tile. The 3×3 / 4×2 / 3×4
+    //     large features added in this step cover up to 12 tiles each
+    //     with denser pixel art (boulders ~150 px, big leaves with vein
+    //     lines ~200 px) than the old 2×2 sprites; observed worst-case
+    //     all-Dirt 200×200 viewport now lands ~640k fillRects (~39/tile).
+    //     50/tile leaves headroom without blessing uncapped growth.
+    //
+    // Beyond 50/tile suggests a regression — uncapped per-pixel iteration
+    // creep, accidentally-removed sparseness gates, or a motif probability
+    // blown out.
+    expect(gfx.callsOf('fillRect').length).toBeLessThanOrEqual(128 * 128 * 50);
   });
 
   it('produces deterministic terrain renders for the same seed (issue #40 — replay-stable visuals)', () => {

@@ -28,15 +28,22 @@ import type { WorldState } from './types.js';
 // ---------------------------------------------------------------------------
 
 /**
- * Categories of multi-tile surface feature. Step 1 of issue #44 keeps the
- * three kinds the render registry already had (Boulder/Bush/GrassClump);
- * step 3 will add ant-scale variants (twig-as-log, leaf-as-ship). New kinds
- * land here, with sprite art keyed off `(kind, variantIndex)` in render.
+ * Categories of multi-tile surface feature. Step 3 of issue #44 added the
+ * ant-scale variants (Twig/Leaf/BigLeaf) on top of the original three
+ * (Boulder/Bush/GrassClump). New kinds land here, with sprite art keyed
+ * off `(kind, variantIndex)` in render's SURFACE_FEATURE_SPRITES map.
+ *
+ * Numeric values are stable — they're stored on `SurfaceFeatureSlice` and
+ * could theoretically appear in saved snapshots if a future step caches
+ * selector output. Don't reorder.
  */
 export const SurfaceFeatureKind = {
   Boulder:    0,
   Bush:       1,
   GrassClump: 2,
+  Twig:       3,  // 4×2 fallen-twig log — HardBlock
+  Leaf:       4,  // 3×3 dead leaf — HardBlock
+  BigLeaf:    5,  // 3×4 large dead leaf "ship" — HardBlock
 } as const;
 export type SurfaceFeatureKind = typeof SurfaceFeatureKind[keyof typeof SurfaceFeatureKind];
 
@@ -103,34 +110,72 @@ interface SurfaceFeatureRegistryEntry {
 
 // Registry order doubles as cross-type priority. Earlier entries suppress
 // later entries when their footprints overlap (mirrors PR #41 contract).
+//
+// Issue #44 step 3:
+//   - All previously-existing kinds bumped to 3×3 footprints with 3 variants
+//     each so they read as imposing at ant scale. Probabilities lowered
+//     accordingly so total feature density stays roughly the same as before
+//     (more tile coverage per anchor → fewer anchors).
+//   - New kinds Twig (4×2), Leaf (3×3), BigLeaf (3×4) added. All HardBlock.
+//   - Salts 151..156 reserved for surface feature anchor channels.
+//   - Priority: HardBlock kinds win over SoftCost. Among HardBlocks: Boulder
+//     > Twig > Leaf > BigLeaf (rarer/larger features yield to more common
+//     smaller ones to avoid one BigLeaf wiping out a region's variety).
 const SURFACE_FEATURES: ReadonlyArray<SurfaceFeatureRegistryEntry> = [
   {
     kind: SurfaceFeatureKind.Boulder,
     salt: 151,
-    probability: 6,
-    footprintTilesWide: 2,
-    footprintTilesTall: 2,
-    variantCount: 2,
+    probability: 5,                    // ~2.0% — substantial, sparse
+    footprintTilesWide: 3,
+    footprintTilesTall: 3,
+    variantCount: 3,                    // round / flat / lichen
+    movement: SurfaceMovementEffect.HardBlock,
+  },
+  {
+    kind: SurfaceFeatureKind.Twig,
+    salt: 154,
+    probability: 3,                    // ~1.2% — rarer than boulders
+    footprintTilesWide: 4,
+    footprintTilesTall: 2,             // long horizontal fallen-twig silhouette
+    variantCount: 2,                    // smooth / bark
+    movement: SurfaceMovementEffect.HardBlock,
+  },
+  {
+    kind: SurfaceFeatureKind.Leaf,
+    salt: 155,
+    probability: 4,                    // ~1.6% — slightly more common than twigs
+    footprintTilesWide: 3,
+    footprintTilesTall: 3,
+    variantCount: 3,                    // broad / curled / torn
+    movement: SurfaceMovementEffect.HardBlock,
+  },
+  {
+    kind: SurfaceFeatureKind.BigLeaf,
+    salt: 156,
+    probability: 2,                    // ~0.8% — the rare ship-canopy anchor
+    footprintTilesWide: 3,
+    footprintTilesTall: 4,             // vertical orientation
+    variantCount: 2,                    // broad / torn
     movement: SurfaceMovementEffect.HardBlock,
   },
   {
     kind: SurfaceFeatureKind.Bush,
     salt: 152,
-    probability: 8,
-    footprintTilesWide: 2,
-    footprintTilesTall: 2,
-    variantCount: 2,
+    probability: 6,                    // ~2.3% — wildflower/clover clump
+    footprintTilesWide: 3,
+    footprintTilesTall: 3,
+    variantCount: 3,                    // clover / flower / dense
     // A bush at ant scale reads as dense vegetation an ant pushes through,
-    // not a solid wall. Treated as SoftCost; step 5 wires the actual cost.
+    // not a solid wall. SoftCost; step 5 wires the actual cost.
     movement: SurfaceMovementEffect.SoftCost,
   },
   {
     kind: SurfaceFeatureKind.GrassClump,
     salt: 153,
-    probability: 10,
-    footprintTilesWide: 2,
-    footprintTilesTall: 1,
-    variantCount: 2,
+    probability: 10,                   // ~3.9% — most common, vertical-bias spikes
+    footprintTilesWide: 3,
+    footprintTilesTall: 3,
+    variantCount: 3,                    // dense / sparse / tilted
     movement: SurfaceMovementEffect.SoftCost,
   },
 ];
