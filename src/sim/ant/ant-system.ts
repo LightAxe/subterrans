@@ -2721,7 +2721,7 @@ function moveQueens(
     // to direct compute when called from a test harness without a cache.
     let speed = baseSpeed;
     if (
-      world.simVersion >= SIM_VERSION_V6_SURFACE_PASSABILITY &&
+      world.simVersion >= SIM_VERSION_V7_SURFACE_PASSABILITY &&
       zone === Zone.Surface
     ) {
       const movement = surfaceMoveCache !== undefined
@@ -3506,7 +3506,7 @@ export function tickAntMovement(
     // memoises the lookup so repeated same-tile queries are O(1).
     let speed = baseSpeed;
     if (
-      world.simVersion >= SIM_VERSION_V6_SURFACE_PASSABILITY &&
+      world.simVersion >= SIM_VERSION_V7_SURFACE_PASSABILITY &&
       zone === Zone.Surface
     ) {
       const tileX = prevPosX >> FP_SHIFT;

@@ -225,7 +225,7 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     // a normal tile gives one full tile of motion per tick; SoftCost
     // halves that, leaving the ant one tile-edge short.
     const world = createWorldState(42);
-    expect(world.simVersion).toBe(SIM_VERSION_V6_SURFACE_PASSABILITY);
+    expect(world.simVersion).toBe(SIM_VERSION_V7_SURFACE_PASSABILITY);
     let pair: { soft: { x: number; y: number }; openEast: { x: number; y: number } } | null = null;
     for (let y = 4; y < 80 && pair === null; y++) {
       for (let x = 4; x < 80; x++) {
@@ -373,7 +373,7 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     // colony ants both targeting T. The resolver should bump the higher-id
     // to East/South/West, NOT North.
     const world = createWorldState(42);
-    expect(world.simVersion).toBe(SIM_VERSION_V6_SURFACE_PASSABILITY);
+    expect(world.simVersion).toBe(SIM_VERSION_V7_SURFACE_PASSABILITY);
 
     let pickedT: { x: number; y: number } | null = null;
     for (let y = 5; y < 80 && pickedT === null; y++) {
@@ -430,12 +430,15 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     expect(bX === pickedT!.x && bY === pickedT!.y - 1).toBe(false);
   });
 
-  it('v5 vs v6: same seed, same scenario produces different ant motion (deterministic divergence)', () => {
+  it('pre-v7 vs v7: same seed, same scenario produces different ant motion (deterministic divergence)', () => {
     // Final check that the simVersion gate is doing its job: same world
     // setup, two simVersions, must produce different motion for at least
     // ONE ant after a few ticks. If the gate were broken we'd see
-    // identical positions.
-    function runScenario(simVersionPin: 5 | 6): { posX: number; posY: number } {
+    // identical positions. Compares v5 (pre-#42, pre-#44) against v7
+    // (#44 surface passability + soft cost). v6 sits between them and
+    // adds the #42 forager-no-revisit filter, which is also surface-
+    // movement-affecting, so v5↔v7 is the cleanest #44-isolating test.
+    function runScenario(simVersionPin: 5 | 7): { posX: number; posY: number } {
       const world = createWorldState(42);
       world.simVersion = simVersionPin;
 
@@ -478,10 +481,10 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     }
 
     const v5 = runScenario(5);
-    const v6 = runScenario(6);
-    // v6 should detour around the obstacle while v5 walks through it →
+    const v7 = runScenario(7);
+    // v7 should detour around the obstacle while v5 walks through it →
     // positions differ.
-    expect(v6.posX !== v5.posX || v6.posY !== v5.posY).toBe(true);
+    expect(v7.posX !== v5.posX || v7.posY !== v5.posY).toBe(true);
   });
 
   it('SoftCost slowdown clamps to min 1 (speed=1 stays at 1, doesn\'t go to 0)', () => {

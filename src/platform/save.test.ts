@@ -239,14 +239,14 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.ants.currentGridColonyId[playerInvader]).toBe(ENEMY_COLONY_ID);
     });
     it('round-trips simVersion = v6 (issue #44 step 6)', async () => {
-      const { SIM_VERSION_V6_SURFACE_PASSABILITY } = await import('../sim/types.js');
+      const { SIM_VERSION_V7_SURFACE_PASSABILITY } = await import('../sim/types.js');
       // New worlds default to v6. Save/load must preserve it so a v6 replay
       // continues to apply surface passability + soft cost on resume.
       const w = createScenario(42);
-      expect(w.simVersion).toBe(SIM_VERSION_V6_SURFACE_PASSABILITY);
+      expect(w.simVersion).toBe(SIM_VERSION_V7_SURFACE_PASSABILITY);
       const s = serializeWorldState(w);
       const w2 = deserializeWorldState(JSON.parse(JSON.stringify(s)));
-      expect(w2.simVersion).toBe(SIM_VERSION_V6_SURFACE_PASSABILITY);
+      expect(w2.simVersion).toBe(SIM_VERSION_V7_SURFACE_PASSABILITY);
     });
     it('round-trips world.simVersion and ants.waitingDeposit (issue #27)', () => {
       const w = createScenario(42);
