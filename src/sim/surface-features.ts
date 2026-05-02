@@ -111,15 +111,15 @@ interface SurfaceFeatureRegistryEntry {
 // Registry order doubles as cross-type priority. Earlier entries suppress
 // later entries when their footprints overlap (mirrors PR #41 contract).
 //
-// Issue #44 step 3 + step 4:
-//   - All previously-existing kinds bumped to 3×3 footprints with 3 variants
-//     each so they read as imposing at ant scale. Probabilities tuned twice:
-//     once for the larger footprints (more tile coverage per anchor → fewer
-//     anchors), then again in step 4 once movement actually started honoring
-//     HardBlock — sparse hard-block coverage (~3–5% of tiles after
-//     suppression) keeps forager throughput acceptable while still feeling
-//     substantial visually.
-//   - New kinds Twig (4×2), Leaf (3×3), BigLeaf (3×4) added. All HardBlock.
+// Issue #44 step 3 + step 4 + UAT round 1:
+//   - All kinds use 4×4 (or larger) footprints — bumped from 3×3 after UAT
+//     feedback that the 3×3 sprites read too small for "Honey I Shrunk the
+//     Kids" scale.
+//   - Probabilities cut roughly 50% from step 4 — the visual change is
+//     "fewer, bigger" obstacles. At new ratios the post-suppression
+//     coverage is ~3% HardBlock + ~10% SoftCost, sparse enough that
+//     foragers can navigate without choking but visible enough that a
+//     boulder is a landmark.
 //   - Salts 151..156 reserved for surface feature anchor channels.
 //   - Priority: HardBlock kinds win over SoftCost. Among HardBlocks: Boulder
 //     > Twig > Leaf > BigLeaf (rarer/larger features yield to more common
@@ -128,45 +128,45 @@ const SURFACE_FEATURES: ReadonlyArray<SurfaceFeatureRegistryEntry> = [
   {
     kind: SurfaceFeatureKind.Boulder,
     salt: 151,
-    probability: 2,                    // ~0.8% — substantial, sparse
-    footprintTilesWide: 3,
-    footprintTilesTall: 3,
+    probability: 1,                     // ~0.4% per tile (~16 anchors / 1000 tiles × 16-tile fp ≈ 6% pre-supp)
+    footprintTilesWide: 4,
+    footprintTilesTall: 4,              // 64×64 px — substantial ant-scale boulder
     variantCount: 3,                    // round / flat / lichen
     movement: SurfaceMovementEffect.HardBlock,
   },
   {
     kind: SurfaceFeatureKind.Twig,
     salt: 154,
-    probability: 1,                    // ~0.4% — fallen twig (4×2 = 8 tiles)
-    footprintTilesWide: 4,
-    footprintTilesTall: 2,             // long horizontal fallen-twig silhouette
+    probability: 1,                     // ~0.4% — fallen twig (6×3 = 18 tiles)
+    footprintTilesWide: 6,
+    footprintTilesTall: 3,              // 96×48 px — long horizontal log
     variantCount: 2,                    // smooth / bark
     movement: SurfaceMovementEffect.HardBlock,
   },
   {
     kind: SurfaceFeatureKind.Leaf,
     salt: 155,
-    probability: 1,                    // ~0.4%
-    footprintTilesWide: 3,
-    footprintTilesTall: 3,
+    probability: 1,                     // ~0.4%
+    footprintTilesWide: 4,
+    footprintTilesTall: 4,              // 64×64 px
     variantCount: 3,                    // broad / curled / torn
     movement: SurfaceMovementEffect.HardBlock,
   },
   {
     kind: SurfaceFeatureKind.BigLeaf,
     salt: 156,
-    probability: 1,                    // ~0.4% — the rare ship-canopy anchor
-    footprintTilesWide: 3,
-    footprintTilesTall: 4,             // vertical orientation
+    probability: 1,                     // ~0.4% — the rare ship-canopy anchor
+    footprintTilesWide: 5,
+    footprintTilesTall: 6,              // 80×96 px — ant-scale "ship"
     variantCount: 2,                    // broad / torn
     movement: SurfaceMovementEffect.HardBlock,
   },
   {
     kind: SurfaceFeatureKind.Bush,
     salt: 152,
-    probability: 6,                    // ~2.3% — wildflower/clover clump
-    footprintTilesWide: 3,
-    footprintTilesTall: 3,
+    probability: 3,                     // ~1.2% — wildflower/clover clump
+    footprintTilesWide: 4,
+    footprintTilesTall: 4,              // 64×64 px
     variantCount: 3,                    // clover / flower / dense
     // A bush at ant scale reads as dense vegetation an ant pushes through,
     // not a solid wall. SoftCost; step 5 wires the actual cost.
@@ -175,9 +175,9 @@ const SURFACE_FEATURES: ReadonlyArray<SurfaceFeatureRegistryEntry> = [
   {
     kind: SurfaceFeatureKind.GrassClump,
     salt: 153,
-    probability: 10,                   // ~3.9% — most common, vertical-bias spikes
-    footprintTilesWide: 3,
-    footprintTilesTall: 3,
+    probability: 5,                     // ~2.0% — most common, vertical-bias spikes
+    footprintTilesWide: 4,
+    footprintTilesTall: 4,              // 64×64 px
     variantCount: 3,                    // dense / sparse / tilted
     movement: SurfaceMovementEffect.SoftCost,
   },
