@@ -22,6 +22,11 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// snapshot-replay test intentionally crosses the sim/platform boundary
+// to round-trip the debug-snapshot JSON fixture through the save
+// deserializer (the sim has no other path to inflate a captured
+// WorldState). See `boundary` ESLint rule + AGENTS.md.
+// eslint-disable-next-line no-restricted-imports
 import { deserializeWorldState } from '../platform/save.js';
 import { tick } from './tick.js';
 import { FP_SHIFT } from './fixed.js';
