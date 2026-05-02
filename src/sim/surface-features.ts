@@ -372,12 +372,35 @@ function isAnchorSuppressedByOverlap(
     }
   }
 
-  // Same-type: any upper-left anchor of THIS type that covers (ax, ay) suppresses.
-  for (let dy = 0; dy < ownH; dy++) {
-    for (let dx = 0; dx < ownW; dx++) {
-      if (dx === 0 && dy === 0) continue;
-      const px = ax - dx;
-      const py = ay - dy;
+  // Same-type: any same-type anchor whose footprint OVERLAPS this anchor's
+  // footprint suppresses, where lex-smaller `(anchorY, anchorX)` wins.
+  //
+  // Issue #44 UAT round 1 fix: the previous "upper-left only" check
+  // (window restricted to dx, dy ∈ [0, ownW) × [0, ownH)) missed diagonal
+  // overlaps where neither anchor is strictly above-left of the other.
+  // For 2×2 footprints (the original PR #41 contract) two overlapping
+  // anchors are always within ±1 tile on each axis, so one MUST be
+  // above-left. For 4×4+ footprints (steps 3 + UAT-1) two anchors can
+  // be diagonally placed (e.g. (42, 14) and (45, 11) — both 4×4 — cover
+  // tile (45, 14) but neither anchor is above-left of the other), so
+  // both pass the old same-type check and "two boulders overlap" was
+  // visible at UAT.
+  //
+  // Fix: walk the full overlap window (same axis range as the cross-type
+  // check above) and use a lex-order tie-break instead of "above-left
+  // window membership". `(anchorY, anchorX)` is the deterministic
+  // ordering — the upper-leftmost anchor in the FOOTPRINT-OVERLAP set
+  // wins, regardless of whether other overlapping anchors are strictly
+  // above-left of it.
+  for (let py = ay - ownH + 1; py <= ay + ownH - 1; py++) {
+    for (let px = ax - ownW + 1; px <= ax + ownW - 1; px++) {
+      if (px === ax && py === ay) continue;
+      // Lex tie-break: only suppress if (py, px) is lex-smaller than
+      // (ay, ax). Otherwise THIS anchor wins the tie and isn't suppressed
+      // by (px, py). (The opposite test fires recursively when the
+      // selector evaluates (px, py).)
+      if (py > ay) continue;
+      if (py === ay && px >= ax) continue;
       const ph = tileHash(px, py, own.salt, terrainSeed);
       if ((ph & 0xff) >= own.probability) continue;
       if (!isAnchorSuppressedByOverlap(px, py, ownEntryIndex, terrainSeed)) return true;

@@ -287,6 +287,71 @@ describe('surfaceMovementAt', () => {
   });
 });
 
+describe('overlap-suppression invariant — UAT "two overlapping rocks" guard', () => {
+  it('no tile is ever covered by two distinct same-kind anchors (across many seeds)', () => {
+    // UAT round 1 reported "two rocks overlapping each other". The same-
+    // type overlap suppression in `isAnchorSuppressedByOverlap` should
+    // make this impossible — but that logic was originally written for
+    // the smaller 2×2 footprints, and the post-step-3 4×4 (and 5×6
+    // BigLeaf, 6×3 Twig) footprints exercise a wider scan window. This
+    // test sweeps multiple seeds + a 64×64 region per seed and asserts
+    // that no tile resolves to a feature anchored at one position
+    // while a different anchor of the SAME kind would also "naturally"
+    // anchor at a position whose footprint covers the same tile.
+    //
+    // If the suppression is broken we'd find two boulder anchors (or
+    // two bush anchors, etc.) whose footprints both cover (x, y) but
+    // surfaceFeatureAt only returns one — meaning the renderer would
+    // see ONE on its own scan and the OTHER on the same-tile re-query
+    // depending on which fires first. The right invariant is "for any
+    // tile T, walking all anchors that geometrically cover T finds at
+    // most one that isn't suppressed".
+    for (let seed = 1; seed < 20; seed++) {
+      const world = createWorldState(seed);
+      // For each tile, find the anchor surfaceFeatureAt picked, then
+      // independently scan ALL geometrically-covering anchor candidates
+      // and verify none other than the picked one is "alive" (passes
+      // probability + overlap suppression + gameplay suppression).
+      for (let y = 0; y < 64; y++) {
+        for (let x = 0; x < 64; x++) {
+          const slice = surfaceFeatureAt(world, x, y);
+          if (slice === null) continue;
+          // Walk every position whose footprint could cover (x, y).
+          // Window size = MAX footprint = 6×6 (BigLeaf is 5×6, Twig
+          // 6×3 — max 6 in either axis).
+          let candidatesActive = 0;
+          for (let dy = 0; dy < 6; dy++) {
+            for (let dx = 0; dx < 6; dx++) {
+              const ax = x - dx;
+              const ay = y - dy;
+              const candSlice = surfaceFeatureAt(world, ax, ay);
+              if (candSlice === null) continue;
+              // Only count if THIS anchor's own footprint actually
+              // includes (x, y). The selector at (ax, ay) might
+              // resolve to an anchor at some OTHER position
+              // (because (ax, ay) itself is covered by an
+              // even-higher-priority anchor); that re-resolution is
+              // fine — we only count the direct "anchor-covers-tile"
+              // relationship.
+              if (
+                candSlice.anchorX === ax && candSlice.anchorY === ay &&
+                x >= ax && x < ax + candSlice.footprintTilesWide &&
+                y >= ay && y < ay + candSlice.footprintTilesTall
+              ) {
+                candidatesActive++;
+              }
+            }
+          }
+          // At most ONE active anchor should claim this tile. More than
+          // one means same-type or cross-type overlap suppression failed
+          // and two boulders (or whatever kinds) would render on top.
+          expect(candidatesActive).toBeLessThanOrEqual(1);
+        }
+      }
+    }
+  });
+});
+
 describe('SURFACE_FEATURES registry contract', () => {
   it('movement effects: Boulder is HardBlock, Bush and GrassClump are SoftCost', () => {
     // The selector's movement field is sourced from the registry. Walking
