@@ -98,6 +98,13 @@ function setupForagerWorld(
   subTask: number = ForagingSubState.SearchingFood,
 ): { world: WorldState; colony: ColonyRecord; antId: number } {
   const world = createWorldState(42, MAX_TEST_ENTITIES);
+  // Pin to pre-v6: these tests assert specific pheromone-gradient
+  // movement deltas (posY = posYBefore ± speed). With v7 surface
+  // SoftCost slowdown, if seed-42's terrainSeed places a bush/grass
+  // clump on the test tile (5, 4), speed gets halved and the assertion
+  // fails. The tests are about pheromone exploit/explore, not surface
+  // features.
+  world.simVersion = SIM_VERSION_V5_CHAMBER_ON_MARKED;
   const colony = createColonyRecord(COLONY_ID, 0);
   world.colonies[COLONY_ID] = colony;
 

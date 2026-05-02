@@ -111,15 +111,17 @@ interface SurfaceFeatureRegistryEntry {
 // Registry order doubles as cross-type priority. Earlier entries suppress
 // later entries when their footprints overlap (mirrors PR #41 contract).
 //
-// Issue #44 step 3 + step 4 + UAT round 1:
-//   - All kinds use 4×4 (or larger) footprints — bumped from 3×3 after UAT
-//     feedback that the 3×3 sprites read too small for "Honey I Shrunk the
-//     Kids" scale.
-//   - Probabilities cut roughly 50% from step 4 — the visual change is
-//     "fewer, bigger" obstacles. At new ratios the post-suppression
-//     coverage is ~3% HardBlock + ~10% SoftCost, sparse enough that
-//     foragers can navigate without choking but visible enough that a
-//     boulder is a landmark.
+// Issue #44 step 3 + step 4 + UAT rounds 1 + 2:
+//   - All kinds use 4×4 (or larger) footprints — bumped from 3×3 in UAT
+//     round 1 after feedback that 3×3 sprites read too small for
+//     "Honey I Shrunk the Kids" scale.
+//   - UAT round 2: cut overall density ~50% by widening the per-tile
+//     probability bucket from 256 to 512. The anchor hash check uses
+//     `(hash & 0x1ff) < probability` so each unit of `probability` now
+//     means `1/512` per-tile chance instead of `1/256`. Same per-kind
+//     `probability` integers, half the spawn rate.
+//   - Net post-suppression coverage at the new bucket: ~1.5% HardBlock
+//     + ~5% SoftCost — substantial visually without choking foragers.
 //   - Salts 151..156 reserved for surface feature anchor channels.
 //   - Priority: HardBlock kinds win over SoftCost. Among HardBlocks: Boulder
 //     > Twig > Leaf > BigLeaf (rarer/larger features yield to more common
@@ -361,7 +363,7 @@ function isAnchorSuppressedByOverlap(
     for (let py = ay - H + 1; py <= ay + ownH - 1; py++) {
       for (let px = ax - W + 1; px <= ax + ownW - 1; px++) {
         const ph = tileHash(px, py, entry.salt, terrainSeed);
-        if ((ph & 0xff) >= entry.probability) continue;
+        if ((ph & 0x1ff) >= entry.probability) continue;
         // Only count (px, py) as a real suppressor if it itself renders.
         // A higher-priority anchor that's suppressed by an even-higher-
         // priority one shouldn't block lower-priority anchors. Recursion
@@ -402,7 +404,7 @@ function isAnchorSuppressedByOverlap(
       if (py > ay) continue;
       if (py === ay && px >= ax) continue;
       const ph = tileHash(px, py, own.salt, terrainSeed);
-      if ((ph & 0xff) >= own.probability) continue;
+      if ((ph & 0x1ff) >= own.probability) continue;
       if (!isAnchorSuppressedByOverlap(px, py, ownEntryIndex, terrainSeed)) return true;
     }
   }
@@ -453,7 +455,7 @@ export function surfaceFeatureAt(
         const entry = SURFACE_FEATURES[ei]!;
         if (dx >= entry.footprintTilesWide || dy >= entry.footprintTilesTall) continue;
         const h = tileHash(ax, ay, entry.salt, terrainSeed);
-        if ((h & 0xff) >= entry.probability) continue;
+        if ((h & 0x1ff) >= entry.probability) continue;
         if (isAnchorSuppressedByOverlap(ax, ay, ei, terrainSeed)) {
           break;
         }

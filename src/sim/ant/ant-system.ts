@@ -2301,6 +2301,22 @@ export function pickSurfaceDetour(
   prevTileY: number,
   intendedDx: number,
   intendedDy: number,
+  /**
+   * Optional ant id. When provided (>= 0), the detour SKIPS any candidate
+   * tile that's in this ant's recent-tiles ring buffer (`isRecentTile`).
+   * Fixes the two-tile oscillation pattern observed in the 2026-05-02T15:10
+   * stuck-ant UAT report: ant tries N (blocked by 4×4 boulder); per-axis
+   * revert in the surface guard takes the W-only step → ant moves to the
+   * tile west; next tick tries N again (still blocked), detour picks E
+   * back to the original tile because E and W tied on Manhattan to the
+   * blocked tile and compass tie-break favored E. With recent-tiles
+   * consult, the candidate that would step back to the just-vacated tile
+   * is filtered, breaking the cycle.
+   *
+   * Pass `-1` (or omit) to disable the recent-tiles filter — useful for
+   * unit tests that don't have an ant-id context.
+   */
+  antId: number = -1,
 ): { dx: number; dy: number } {
   // Intended destination tile (where the ant wanted to be).
   const targetX = prevTileX + intendedDx;
@@ -2332,6 +2348,12 @@ export function pickSurfaceDetour(
     const cx = prevTileX + pdx;
     const cy = prevTileY + pdy;
     if (!canEnterSurfaceTile(world, cx, cy)) continue;
+    // Recent-tiles filter — skip candidates the ant just came from.
+    // Without this, a Foraging ant whose direct path is blocked
+    // oscillates between the blocked tile and a sideways alternate
+    // every other tick. See the docstring for the antId param above
+    // and the recent-tiles ring buffer in `pushRecentTile`.
+    if (antId >= 0 && isRecentTile(world.ants, antId, cx, cy)) continue;
     // Diagonal corner-cut prevention. For diagonal candidates, require
     // at least one of the two intermediate cardinal tiles to be walkable.
     // Otherwise the ant would squeeze through a HardBlock corner between
@@ -2823,9 +2845,22 @@ function moveQueens(
         blocked = true;
       }
       if (blocked) {
-        const detour = pickSurfaceDetour(world, tileX, tileY, dx, dy);
-        posX = prevPosX + detour.dx * speed;
-        posY = prevPosY + detour.dy * speed;
+        // Queens don't carry a recent-tiles ring buffer (the buffer is
+        // only populated for surface Foraging ants), so passing qId is
+        // harmless — `isRecentTile` returns false for the unpopulated
+        // sentinel-filled buffer. See pickSurfaceDetour docstring.
+        const detour = pickSurfaceDetour(world, tileX, tileY, dx, dy, qId);
+        if (detour.dx !== 0 || detour.dy !== 0) {
+          // Snap to the detour tile (mirrors the tickAntMovement guard);
+          // queens at half speed would otherwise nudge sub-tile and the
+          // next tick's steering would nudge them back.
+          posX = ((tileX + detour.dx) << FP_SHIFT) + (FP_ONE >> 1);
+          posY = ((tileY + detour.dy) << FP_SHIFT) + (FP_ONE >> 1);
+        } else {
+          // No walkable detour candidate — hold in place.
+          posX = prevPosX;
+          posY = prevPosY;
+        }
       }
     }
 
@@ -3610,9 +3645,18 @@ export function tickAntMovement(
       const yCrossed = newTileY !== prevTileY;
       let blocked = false;
       if (xCrossed && yCrossed) {
+        // Diagonal step. Three checks: destination tile passable, both
+        // intermediate cardinals passable. Recent-tiles consult on the
+        // intermediates (per-axis revert) prevents the ant from being
+        // pushed sideways onto a tile it just came from — without that
+        // check the ant ping-pongs west↔east through the same two tiles
+        // when wedged against an obstacle (UAT round 2 stuck-ant repro,
+        // ant 17 in seed 1790811502).
         const destPassable = canEnterSurfaceTile(world, newTileX, newTileY);
-        const passXOnly    = canEnterSurfaceTile(world, newTileX, prevTileY);
-        const passYOnly    = canEnterSurfaceTile(world, prevTileX, newTileY);
+        const passXOnly    = canEnterSurfaceTile(world, newTileX, prevTileY) &&
+                             !isRecentTile(ants, id, newTileX, prevTileY);
+        const passYOnly    = canEnterSurfaceTile(world, prevTileX, newTileY) &&
+                             !isRecentTile(ants, id, prevTileX, newTileY);
         if (destPassable && (passXOnly || passYOnly)) {
           // Diagonal allowed.
         } else if (passXOnly) {
@@ -3628,9 +3672,29 @@ export function tickAntMovement(
         blocked = true;
       }
       if (blocked) {
-        const detour = pickSurfaceDetour(world, prevTileX, prevTileY, dx, dy);
-        posX = prevPosX + detour.dx * speed;
-        posY = prevPosY + detour.dy * speed;
+        const detour = pickSurfaceDetour(world, prevTileX, prevTileY, dx, dy, id);
+        if (detour.dx !== 0 || detour.dy !== 0) {
+          // Snap-to-tile-boundary instead of `prev + detour * speed`.
+          // Ants at half-speed (e.g. base WORKER_BASE_SPEED = 128 = ½ tile/
+          // tick) would otherwise NOT cross the tile boundary on a single
+          // detour step — they'd nudge sub-tile and the next tick's
+          // steering would nudge them back, producing two-tick sub-tile
+          // oscillation inside the same tile. The snap commits the
+          // detour decision visibly (one-tile jump in the chosen
+          // direction) and pushes the just-vacated tile onto the
+          // recent-tiles ring buffer so subsequent detours skip it.
+          // Visual: a wedged ant takes a slightly larger step on the
+          // tick it detours; only fires when blocked, so rare in
+          // normal play.
+          posX = ((prevTileX + detour.dx) << FP_SHIFT) + (FP_ONE >> 1);
+          posY = ((prevTileY + detour.dy) << FP_SHIFT) + (FP_ONE >> 1);
+        } else {
+          // No walkable detour candidate — hold in place. Next tick the
+          // steering recomputes; if the situation persists, the ant
+          // continues to hold (preferable to oscillation).
+          posX = prevPosX;
+          posY = prevPosY;
+        }
       }
     }
 
@@ -3659,23 +3723,37 @@ export function tickAntMovement(
     // navigate by scent/target/entrance, not by scalar gradient.
     if (
       zone === Zone.Surface &&
-      task === AntTask.Foraging &&
-      ants.subTask[id] === ForagingSubState.SearchingFood
+      task === AntTask.Foraging
     ) {
+      // Issue #44 UAT round 2 fix: extended from SearchingFood-only to
+      // ALL surface Foraging ants (CarryingFood, ReturningToNest too).
+      // The recent-tiles ring buffer is now consulted by
+      // `pickSurfaceDetour` to skip "step back to where I just came
+      // from" candidates, which fixes the v7-detour two-tile oscillation
+      // observed in the 2026-05-02T15:10 stuck-ant snapshot (ant 17 at
+      // (24/25, 75) bouncing east-west south of a 4×4 boulder). The
+      // SearchingFood-only no-revisit filter (gated below in pickStep
+      // assembly) is unchanged — broadening it would risk pinning
+      // CarryingFood/ReturningToNest ants when their entrance route is
+      // fully encircled by a recent-tiles ring; the detour-only consult
+      // is safer.
+      const isSearching = ants.subTask[id] === ForagingSubState.SearchingFood;
       const preTileX = prevPosX >> FP_SHIFT;
       const preTileY = prevPosY >> FP_SHIFT;
       const newTileX = posX >> FP_SHIFT;
       const newTileY = posY >> FP_SHIFT;
       if (newTileX !== preTileX || newTileY !== preTileY) {
-        ants.searchPrevTileX[id] = preTileX;
-        ants.searchPrevTileY[id] = preTileY;
-        // Issue #42 fix #3 — also push the JUST-VACATED tile onto the
-        // recent-tiles ring buffer. The buffer is consulted next tick by
-        // the no-revisit filter, so pushing the vacated tile makes "step
-        // back to where I just was" the first thing filtered. Pause ticks
-        // (no tile crossing) intentionally do NOT push, so the buffer
-        // tracks distinct moves rather than ticks. v6+ only.
-        if (world.simVersion >= 6) {
+        if (isSearching) {
+          // searchPrevTileX/Y is the SearchingFood anti-backtrack memo;
+          // leave its semantics unchanged.
+          ants.searchPrevTileX[id] = preTileX;
+          ants.searchPrevTileY[id] = preTileY;
+        }
+        // Push the just-vacated tile onto the recent-tiles ring buffer
+        // for ANY surface Foraging ant (v6+). Pause ticks (no tile
+        // crossing) intentionally do NOT push, so the buffer tracks
+        // distinct moves rather than ticks.
+        if (world.simVersion >= SIM_VERSION_V6_FORAGER_NO_REVISIT) {
           pushRecentTile(ants, id, preTileX, preTileY);
         }
       }
