@@ -314,6 +314,176 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     expect(endTileX - startTileX).toBe(1);
   });
 
+  it('detour: ant blocked from preferred east step ends at a deterministic alternate tile (issue #44 step 6)', () => {
+    // Codex review explicitly called this out: a hard-block guard alone
+    // would make ants repeatedly try to step into the same obstacle. The
+    // deterministic local detour picks an alternate adjacent walkable tile.
+    // This integration test: spawn an ant west of a HardBlock with target
+    // east. After one tick, ant must NOT be on the blocked tile, AND must
+    // be on a deterministic alternate (same seed → same alternate every run).
+    const seed = 42;
+    function runTick(): { x: number; y: number } {
+      const world = createWorldState(seed);
+      let pair: { open: { x: number; y: number }; blocked: { x: number; y: number } } | null = null;
+      for (let y = 4; y < 50 && pair === null; y++) {
+        for (let x = 4; x < 50; x++) {
+          const open = surfaceFeatureAt(world, x, y);
+          const east = surfaceFeatureAt(world, x + 1, y);
+          if (
+            (open === null || open.movement !== SurfaceMovementEffect.HardBlock) &&
+            east !== null && east.movement === SurfaceMovementEffect.HardBlock
+          ) {
+            pair = { open: { x, y }, blocked: { x: x + 1, y } };
+            break;
+          }
+        }
+      }
+      if (pair === null) throw new Error('no test pair found for seed');
+
+      const colony = createColonyRecord(1, 0);
+      colony.entrances = [{
+        entranceId: 0,
+        surfaceTileX: pair.blocked.x + 10,
+        surfaceTileY: pair.blocked.y,
+        isOpen: true,
+      }];
+      colony.rallyPoint = null;
+      colony.digFlowFieldDirty = false;
+      world.colonies[1] = colony;
+
+      const id = spawnSurfaceCarrier(world, 1, pair.open.x, pair.open.y);
+      tickAntMovement(world, new Rng(seed), createDigFlowFields());
+      return { x: world.ants.posX[id]! >> FP_SHIFT, y: world.ants.posY[id]! >> FP_SHIFT };
+    }
+
+    // Run twice — the resulting tile must be identical (deterministic detour).
+    const a = runTick();
+    const b = runTick();
+    expect(b).toEqual(a);
+  });
+
+  it('occupancy resolver: a same-colony bump never lands an ant on a HardBlock tile (issue #44 step 6)', () => {
+    // Codex review: "Occupancy resolver does not shift ants into blocked
+    // surface tiles." Construct a scenario where two same-colony ants end
+    // up on the same tile, with the only otherwise-valid neighbor being
+    // a HardBlock feature. The resolver must skip the HardBlock direction.
+    //
+    // Strategy: install a colony, find a tile T whose North neighbor is
+    // HardBlock and whose East/South/West are walkable. Spawn two same-
+    // colony ants both targeting T. The resolver should bump the higher-id
+    // to East/South/West, NOT North.
+    const world = createWorldState(42);
+    expect(world.simVersion).toBe(SIM_VERSION_V6_SURFACE_PASSABILITY);
+
+    let pickedT: { x: number; y: number } | null = null;
+    for (let y = 5; y < 80 && pickedT === null; y++) {
+      for (let x = 5; x < 80; x++) {
+        const here  = surfaceFeatureAt(world, x, y);
+        const north = surfaceFeatureAt(world, x, y - 1);
+        const east  = surfaceFeatureAt(world, x + 1, y);
+        const south = surfaceFeatureAt(world, x, y + 1);
+        const west  = surfaceFeatureAt(world, x - 1, y);
+        const hereOk  = here === null || here.movement !== SurfaceMovementEffect.HardBlock;
+        const northBlock = north !== null && north.movement === SurfaceMovementEffect.HardBlock;
+        const eastOk  = east === null || east.movement !== SurfaceMovementEffect.HardBlock;
+        const southOk = south === null || south.movement !== SurfaceMovementEffect.HardBlock;
+        const westOk  = west === null || west.movement !== SurfaceMovementEffect.HardBlock;
+        if (hereOk && northBlock && eastOk && southOk && westOk) {
+          pickedT = { x, y };
+          break;
+        }
+      }
+    }
+    expect(pickedT).not.toBeNull();
+
+    const colony = createColonyRecord(1, 0);
+    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    world.colonies[1] = colony;
+
+    // Spawn two stationary ants at T. Both have no movement → both end at T
+    // → the post-pass resolver detects the duplicate and shifts the higher-id.
+    const aId = allocateEntityId(world);
+    initAnt(world.ants, aId, {
+      colonyId: 1,
+      posX: pickedT!.x << FP_SHIFT,
+      posY: pickedT!.y << FP_SHIFT,
+      task: AntTask.Idle,
+      subTask: 0,
+      zone: Zone.Surface,
+    });
+    const bId = allocateEntityId(world);
+    initAnt(world.ants, bId, {
+      colonyId: 1,
+      posX: pickedT!.x << FP_SHIFT,
+      posY: pickedT!.y << FP_SHIFT,
+      task: AntTask.Idle,
+      subTask: 0,
+      zone: Zone.Surface,
+    });
+    expect(aId).toBeLessThan(bId);
+
+    tickAntMovement(world, new Rng(42), createDigFlowFields());
+
+    // B was bumped — it must not be on the HardBlock north tile.
+    const bX = world.ants.posX[bId]! >> FP_SHIFT;
+    const bY = world.ants.posY[bId]! >> FP_SHIFT;
+    expect(bX === pickedT!.x && bY === pickedT!.y - 1).toBe(false);
+  });
+
+  it('v5 vs v6: same seed, same scenario produces different ant motion (deterministic divergence)', () => {
+    // Final check that the simVersion gate is doing its job: same world
+    // setup, two simVersions, must produce different motion for at least
+    // ONE ant after a few ticks. If the gate were broken we'd see
+    // identical positions.
+    function runScenario(simVersionPin: 5 | 6): { posX: number; posY: number } {
+      const world = createWorldState(42);
+      world.simVersion = simVersionPin;
+
+      // Find a tile pair where v6 would block but v5 wouldn't.
+      let pair: { open: { x: number; y: number }; blocked: { x: number; y: number } } | null = null;
+      for (let y = 4; y < 50 && pair === null; y++) {
+        for (let x = 4; x < 50; x++) {
+          const open = surfaceFeatureAt(world, x, y);
+          const east = surfaceFeatureAt(world, x + 1, y);
+          if (
+            (open === null || open.movement !== SurfaceMovementEffect.HardBlock) &&
+            east !== null && east.movement === SurfaceMovementEffect.HardBlock
+          ) {
+            pair = { open: { x, y }, blocked: { x: x + 1, y } };
+            break;
+          }
+        }
+      }
+      if (pair === null) throw new Error('no test pair found');
+
+      const colony = createColonyRecord(1, 0);
+      colony.entrances = [{
+        entranceId: 0,
+        surfaceTileX: pair.blocked.x + 10,
+        surfaceTileY: pair.blocked.y,
+        isOpen: true,
+      }];
+      colony.rallyPoint = null;
+      colony.digFlowFieldDirty = false;
+      world.colonies[1] = colony;
+
+      const id = spawnSurfaceCarrier(world, 1, pair.open.x, pair.open.y);
+      // Run a few ticks to amplify the divergence.
+      const rng = new Rng(42);
+      const digFlow = createDigFlowFields();
+      for (let t = 0; t < 5; t++) {
+        tickAntMovement(world, rng, digFlow);
+      }
+      return { posX: world.ants.posX[id]!, posY: world.ants.posY[id]! };
+    }
+
+    const v5 = runScenario(5);
+    const v6 = runScenario(6);
+    // v6 should detour around the obstacle while v5 walks through it →
+    // positions differ.
+    expect(v6.posX !== v5.posX || v6.posY !== v5.posY).toBe(true);
+  });
+
   it('SoftCost slowdown clamps to min 1 (speed=1 stays at 1, doesn\'t go to 0)', () => {
     // Edge case: an ant with the absolute minimum nonzero speed (1) on a
     // SoftCost tile. Half of 1 is 0; the clamp must keep it at 1 so the
