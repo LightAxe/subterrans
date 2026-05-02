@@ -121,6 +121,63 @@ describe('pickSurfaceDetour', () => {
     expect(detour).toEqual({ dx: 0, dy: 0 });
   });
 
+  it('rejects diagonal candidates that would squeeze through a HardBlock corner (BLOCKER fix)', () => {
+    // Code-review BLOCKER: pre-fix, pickSurfaceDetour could return a
+    // diagonal step (e.g. (-1, 1)) without checking the two intermediate
+    // cardinal tiles, allowing a surface ant to squeeze diagonally between
+    // two adjacent HardBlock features. The underground guard at the
+    // tickAntMovement diagonal block explicitly prevents this; the surface
+    // detour now mirrors that protection.
+    //
+    // Strategy: scan many world seeds + tile positions until we find a
+    // natural occurrence of "(prev+pdx, prev+pdy) is walkable, but
+    // (prev+pdx, prev) AND (prev, prev+pdy) are both HardBlock". For each
+    // such tile, call pickSurfaceDetour with intent diagonal toward the
+    // corner; the returned step must NOT be a diagonal whose two
+    // intermediate cardinals are both blocked.
+    let foundCorner = false;
+    seedLoop:
+    for (let seed = 1; seed < 50; seed++) {
+      const world = createWorldState(seed);
+      for (let y = 5; y < 80; y++) {
+        for (let x = 5; x < 80; x++) {
+          // Try all 4 diagonal directions for the squeeze geometry.
+          for (let s = 0; s < 4; s++) {
+            const ddx = s === 0 || s === 1 ?  1 : -1;
+            const ddy = s === 0 || s === 2 ?  1 : -1;
+            const here       = canEnterSurfaceTile(world, x, y);
+            const diag       = canEnterSurfaceTile(world, x + ddx, y + ddy);
+            const interX     = canEnterSurfaceTile(world, x + ddx, y);
+            const interY     = canEnterSurfaceTile(world, x, y + ddy);
+            if (here && diag && !interX && !interY) {
+              foundCorner = true;
+              // Call the detour with intent EXACTLY toward the diagonal.
+              // Even though `diag` is walkable, the corner squeeze must
+              // be rejected and a different (non-corner-squeeze)
+              // candidate picked.
+              const det = pickSurfaceDetour(world, x, y, ddx, ddy);
+              // Returned step must NOT be the corner-squeeze diagonal.
+              expect(det.dx === ddx && det.dy === ddy).toBe(false);
+              // Whatever step it returned, it must be safe — either a
+              // cardinal, or a diagonal whose intermediates are not
+              // both blocked, or (0, 0).
+              if (det.dx !== 0 && det.dy !== 0) {
+                const safeX = canEnterSurfaceTile(world, x + det.dx, y);
+                const safeY = canEnterSurfaceTile(world, x, y + det.dy);
+                expect(safeX || safeY).toBe(true);
+              }
+              break seedLoop;
+            }
+          }
+        }
+      }
+    }
+    // We need to actually exercise the fix — bail out loudly if no
+    // corner geometry was found, so a future registry change that makes
+    // corners impossible is caught here rather than silently passing.
+    expect(foundCorner).toBe(true);
+  });
+
   it('prefers cardinal slip on intended axis as the first probe', () => {
     // Construct a synthetic test by checking the well-defined order:
     // probe 1 is (intendedDx, 0). When that candidate is walkable AND has
@@ -218,100 +275,107 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     void startTileX; void startTileY;
   });
 
-  it('under v6 — ant on a SoftCost (grass/bush) tile moves at half speed (issue #44 step 5)', () => {
-    // Find a tile that's SoftCost AND has a Cosmetic neighbor to the east
-    // (so the ant has somewhere to move). Spawn a Foraging+CarryingFood
-    // ant at the SoftCost tile with FP_ONE speed. With base speed FP_ONE,
-    // a normal tile gives one full tile of motion per tick; SoftCost
-    // halves that, leaving the ant one tile-edge short.
+  it('under v7 — ant on a SoftCost (grass/bush) tile moves exactly half its base speed (issue #44 step 5)', () => {
+    // Code-review HIGH fix: prior version of this test asserted
+    // `endTileX - startTileX <= 1`, which is true under both full speed
+    // (256 → exactly 1 tile crossed from mid-tile) and half speed (128 →
+    // 0 or 1 tile crossed depending on starting offset). The assertion
+    // would pass even if the SoftCost branch were deleted entirely.
+    //
+    // Strict assertion: compare the actual posX delta in fixed-point
+    // pixels. With base speed FP_ONE (256) and a cardinal east step
+    // (dx=1, dy=0), the position delta is `dx * effectiveSpeed`. Full
+    // speed: +256 sub-pixels. Half speed (SoftCost): +128. The
+    // difference is unambiguous and would surface a missing slowdown.
     const world = createWorldState(42);
     expect(world.simVersion).toBe(SIM_VERSION_V7_SURFACE_PASSABILITY);
-    let pair: { soft: { x: number; y: number }; openEast: { x: number; y: number } } | null = null;
-    for (let y = 4; y < 80 && pair === null; y++) {
-      for (let x = 4; x < 80; x++) {
+    // Find a SoftCost tile with a non-HardBlock neighbor to the east
+    // (the ant needs somewhere to step) and any tile to the far east
+    // for the entrance target.
+    let soft: { x: number; y: number } | null = null;
+    for (let y = 4; y < 80 && soft === null; y++) {
+      for (let x = 4; x < 60; x++) {
         const cur = surfaceFeatureAt(world, x, y);
         const east = surfaceFeatureAt(world, x + 1, y);
-        const eastEast = surfaceFeatureAt(world, x + 2, y);
         if (
           cur !== null && cur.movement === SurfaceMovementEffect.SoftCost &&
-          (east === null || east.movement !== SurfaceMovementEffect.HardBlock) &&
-          (eastEast === null || eastEast.movement !== SurfaceMovementEffect.HardBlock)
+          (east === null || east.movement !== SurfaceMovementEffect.HardBlock)
         ) {
-          pair = { soft: { x, y }, openEast: { x: x + 1, y } };
+          soft = { x, y };
           break;
         }
       }
     }
-    expect(pair).not.toBeNull();
+    expect(soft).not.toBeNull();
 
     const colony = createColonyRecord(1, 0);
     colony.entrances = [{
       entranceId: 0,
-      surfaceTileX: pair!.soft.x + 30,  // far east — drives the ant rightward
-      surfaceTileY: pair!.soft.y,
+      surfaceTileX: soft!.x + 30,
+      surfaceTileY: soft!.y,
       isOpen: true,
     }];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[1] = colony;
 
-    const id = spawnSurfaceCarrier(world, 1, pair!.soft.x, pair!.soft.y);
-    const startTileX = world.ants.posX[id]! >> FP_SHIFT;
-    const rng = new Rng(42);
-    tickAntMovement(world, rng, createDigFlowFields());
-    const endTileX = world.ants.posX[id]! >> FP_SHIFT;
+    const id = spawnSurfaceCarrier(world, 1, soft!.x, soft!.y);
+    // Spawn helper sets speed = FP_ONE; pin explicitly for clarity.
+    world.ants.speed[id] = FP_ONE;
+    const startPosX = world.ants.posX[id]!;
+    const startPosY = world.ants.posY[id]!;
+    tickAntMovement(world, new Rng(42), createDigFlowFields());
+    const deltaX = world.ants.posX[id]! - startPosX;
+    const deltaY = world.ants.posY[id]! - startPosY;
 
-    // Half-speed: ant either stays in the same tile (if half FP_ONE = 128
-    // doesn't push it past the boundary it started inside) or has crossed
-    // exactly one tile (if it started near the right edge of the SoftCost
-    // tile). Specifically it must NOT have crossed two tiles, which a
-    // full-speed FP_ONE step from a tile-aligned position would.
-    // spawnSurfaceCarrier places the ant at (tileX << FP_SHIFT) +
-    // (FP_ONE >> 1) — mid-tile — so a half-speed step (128) lands at
-    // mid-tile + 128 = tile-edge, just barely crossing into the east tile.
-    // Either outcome (still on soft tile, or one tile east) is valid; what
-    // we assert is "didn't make it two tiles".
-    expect(endTileX - startTileX).toBeLessThanOrEqual(1);
+    // Effective half-speed: cardinal step (dx=1, dy=0 OR similar single-
+    // axis) with FP_ONE/2 = 128 produces |deltaX| + |deltaY| === 128.
+    // The post-step surface-passability guard MIGHT revert the axis if
+    // the destination tile turns out to be HardBlock — but our search
+    // above filtered out HardBlock east-neighbors, so the step is
+    // accepted in full.
+    const totalDelta = Math.abs(deltaX) + Math.abs(deltaY);
+    expect(totalDelta).toBe(FP_ONE >> 1);  // exactly 128 — half speed
   });
 
-  it('under v6 — ant on a Cosmetic tile moves at full speed (sanity)', () => {
+  it('under v7 — ant on a Cosmetic tile moves exactly its base speed (sanity, complements the SoftCost test)', () => {
     const world = createWorldState(42);
-    let pair: { open: { x: number; y: number } } | null = null;
-    for (let y = 4; y < 80 && pair === null; y++) {
-      for (let x = 4; x < 80; x++) {
+    // Find a Cosmetic tile with a Cosmetic east neighbor.
+    let open: { x: number; y: number } | null = null;
+    for (let y = 4; y < 80 && open === null; y++) {
+      for (let x = 4; x < 60; x++) {
         const cur = surfaceFeatureAt(world, x, y);
         const east = surfaceFeatureAt(world, x + 1, y);
-        if (
-          cur === null &&
-          east === null  // open + open-east — guaranteed non-SoftCost / non-HardBlock
-        ) {
-          pair = { open: { x, y } };
+        if (cur === null && east === null) {
+          open = { x, y };
           break;
         }
       }
     }
-    expect(pair).not.toBeNull();
+    expect(open).not.toBeNull();
 
     const colony = createColonyRecord(1, 0);
     colony.entrances = [{
       entranceId: 0,
-      surfaceTileX: pair!.open.x + 30,
-      surfaceTileY: pair!.open.y,
+      surfaceTileX: open!.x + 30,
+      surfaceTileY: open!.y,
       isOpen: true,
     }];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[1] = colony;
 
-    const id = spawnSurfaceCarrier(world, 1, pair!.open.x, pair!.open.y);
-    const startTileX = world.ants.posX[id]! >> FP_SHIFT;
-    const rng = new Rng(42);
-    tickAntMovement(world, rng, createDigFlowFields());
-    const endTileX = world.ants.posX[id]! >> FP_SHIFT;
+    const id = spawnSurfaceCarrier(world, 1, open!.x, open!.y);
+    world.ants.speed[id] = FP_ONE;
+    const startPosX = world.ants.posX[id]!;
+    const startPosY = world.ants.posY[id]!;
+    tickAntMovement(world, new Rng(42), createDigFlowFields());
+    const deltaX = world.ants.posX[id]! - startPosX;
+    const deltaY = world.ants.posY[id]! - startPosY;
 
-    // Full-speed FP_ONE step from mid-tile lands at next-tile-mid → 1 tile
-    // crossing. Confirms the slowdown is applied only on SoftCost tiles.
-    expect(endTileX - startTileX).toBe(1);
+    // Full speed: cardinal step at FP_ONE = 256 sub-pixels.
+    const totalDelta = Math.abs(deltaX) + Math.abs(deltaY);
+    expect(totalDelta).toBe(FP_ONE);  // exactly 256 — full speed
   });
 
   it('detour: ant blocked from preferred east step ends at a deterministic alternate tile (issue #44 step 6)', () => {

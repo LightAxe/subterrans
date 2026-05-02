@@ -2282,6 +2282,12 @@ export function canEnterSurfaceTile(
 // suppression), so the amortised cost is negligible.
 // ---------------------------------------------------------------------------
 
+// Module-scratch result object for `pickSurfaceDetour` — reused across
+// every call to avoid per-call literal allocation (AGENTS.md "Hot-loop
+// performance" — invoked once per blocked-step per surface ant per tick).
+// Caller MUST consume the values immediately; the helper does NOT clone.
+const PICK_DETOUR_RESULT = { dx: 0, dy: 0 };
+
 export function pickSurfaceDetour(
   world: WorldState,
   prevTileX: number,
@@ -2293,43 +2299,46 @@ export function pickSurfaceDetour(
   const targetX = prevTileX + intendedDx;
   const targetY = prevTileY + intendedDy;
 
-  // Probe deltas in fixed order. Some entries collapse to (0, 0) when the
-  // intended direction has a zero axis (e.g. cardinal-only step had
-  // intendedDy === 0 → "perpendicular sidestep CCW" is (0, intendedDx)
-  // which is already covered, and probe 4 is (intendedDy=0, -intendedDx) =
-  // (0, -intendedDx), reverse-perpendicular). The (0, 0) probe is rejected
-  // below; redundant probes evaluated harmlessly.
-  const probeDx = [
-     intendedDx,  // 1: cardinal X slip
-     0,           // 2: cardinal Y slip
-    -intendedDy,  // 3: perpendicular CCW
-     intendedDy,  // 4: perpendicular CW
-    -intendedDx,  // 5: reverse X
-     0,           // 6: reverse Y
-    -intendedDx,  // 7: diagonal-away X-reverse
-     intendedDx,  // 8: diagonal-away Y-reverse
-  ];
-  const probeDy = [
-     0,
-     intendedDy,
-     intendedDx,
-    -intendedDx,
-     0,
-    -intendedDy,
-     intendedDy,
-    -intendedDy,
-  ];
-
   let bestDx = 0;
   let bestDy = 0;
   let bestScore = -1;
+
+  // Walk the 8 probes in fixed order. Each iteration computes the probe's
+  // (pdx, pdy) inline from the caller's intended direction — no array
+  // allocation. The (0, 0) probe (when an intended axis is zero collapses
+  // a probe slot) is rejected by the early `continue`.
   for (let p = 0; p < 8; p++) {
-    const pdx = probeDx[p]!;
-    const pdy = probeDy[p]!;
+    let pdx = 0;
+    let pdy = 0;
+    switch (p) {
+      case 0: pdx =  intendedDx; pdy =  0;          break;  // cardinal X slip
+      case 1: pdx =  0;          pdy =  intendedDy; break;  // cardinal Y slip
+      case 2: pdx = -intendedDy; pdy =  intendedDx; break;  // perpendicular CCW
+      case 3: pdx =  intendedDy; pdy = -intendedDx; break;  // perpendicular CW
+      case 4: pdx = -intendedDx; pdy =  0;          break;  // reverse X
+      case 5: pdx =  0;          pdy = -intendedDy; break;  // reverse Y
+      case 6: pdx = -intendedDx; pdy =  intendedDy; break;  // diagonal-away X-reverse
+      case 7: pdx =  intendedDx; pdy = -intendedDy; break;  // diagonal-away Y-reverse
+    }
     if (pdx === 0 && pdy === 0) continue;
     const cx = prevTileX + pdx;
     const cy = prevTileY + pdy;
     if (!canEnterSurfaceTile(world, cx, cy)) continue;
+    // Diagonal corner-cut prevention (issue #44 review BLOCKER fix). For
+    // diagonal candidates, require at least one of the two intermediate
+    // cardinal tiles to be walkable. Otherwise the ant would squeeze
+    // through a HardBlock corner between two boulders/leaves — same
+    // failure mode the underground guard explicitly prevents (see the
+    // diagonal block in tickAntMovement and moveQueens). Concrete
+    // reproducer: ant at (5,5), intent (1,1), HardBlock at (6,5) and
+    // (5,6), walkable at (4,6) → without this check the picker would
+    // pick (-1, 1) and the ant would slip diagonally between two
+    // adjacent HardBlocks.
+    if (pdx !== 0 && pdy !== 0) {
+      const passXOnly = canEnterSurfaceTile(world, prevTileX + pdx, prevTileY);
+      const passYOnly = canEnterSurfaceTile(world, prevTileX, prevTileY + pdy);
+      if (!passXOnly && !passYOnly) continue;
+    }
     const score = Math.abs(cx - targetX) + Math.abs(cy - targetY);
     if (bestScore < 0 || score < bestScore) {
       bestDx = pdx;
@@ -2337,7 +2346,9 @@ export function pickSurfaceDetour(
       bestScore = score;
     }
   }
-  return { dx: bestDx, dy: bestDy };
+  PICK_DETOUR_RESULT.dx = bestDx;
+  PICK_DETOUR_RESULT.dy = bestDy;
+  return PICK_DETOUR_RESULT;
 }
 
 // ---------------------------------------------------------------------------
