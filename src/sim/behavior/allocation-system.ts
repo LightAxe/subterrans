@@ -104,9 +104,7 @@ export function allocateWorkers(
   // fractional weights here. `| 0` truncates fractions to integers; `Math.max(0, …)`
   // floors negatives to 0 so `(available * ratio.forage / total) | 0` cannot
   // produce a negative integer (which would yield a nonsense allocation).
-  // eslint-disable-next-line no-restricted-syntax -- PRD §7b integer guard, not float math
   const forageWeight = Math.max(0, ratio.forage | 0);
-  // eslint-disable-next-line no-restricted-syntax -- PRD §7b integer guard, not float math
   const fightWeight  = Math.max(0, ratio.fight  | 0);
 
   const total = forageWeight + fightWeight;

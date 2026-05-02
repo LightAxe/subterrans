@@ -70,7 +70,6 @@ const SALT_SOLID_DITHER    = 202;
 const SALT_SOLID_FLECK     = 203;
 const SALT_SOLID_STRATA    = 204;
 
-const SALT_OPEN_BASE       = 301;
 const SALT_OPEN_DITHER     = 302;
 const SALT_OPEN_DUST       = 303;
 
