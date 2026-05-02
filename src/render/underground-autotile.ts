@@ -49,6 +49,13 @@ const SALT_CHIP_SE = 403;
 const SALT_CHIP_SW = 404;
 // Rim chip salt (one channel — band-position derived from quadrant).
 const SALT_RIM_CHIP = 411;
+// Issue #48 chamfer-edge wobble salts. Independent of chip salts so the
+// boundary-jaggedness decision and the interior-chip decision are
+// uncorrelated channels.
+const SALT_WOBBLE_NW = 421;
+const SALT_WOBBLE_NE = 422;
+const SALT_WOBBLE_SE = 423;
+const SALT_WOBBLE_SW = 424;
 
 const HALF = TILE_SIZE_PX / 2; // 8
 
@@ -117,7 +124,7 @@ function drawQuadrantMask(
     // chamfer — the quadrant has two opposite-kind cardinals. Paint a
     // hypotenuse-anchored triangle of OPPOSITE kind into the outer corner.
     gfx.fillStyle(oppositeColor, 1);
-    fillChamferTriangle(gfx, screenX, screenY, quadrant);
+    fillChamferTriangle(gfx, screenX, screenY, tileX, tileY, quadrant);
     // Per-tile chip variant — 1 deterministic pixel of CENTER-kind paint
     // inside the chamfer interior, simulating a chip / crack / mineral
     // inclusion. Strictly avoids the sacred edges (row 0 / col 0) and the
@@ -138,26 +145,60 @@ function drawQuadrantMask(
  * hypotenuse passes through the tile-edge midpoints, so adjacent tiles'
  * chamfers join cleanly on their shared edge.
  *
+ * Issue #48 — per-row hashed wobble breaks the perfect 45° staircase that
+ * read as right-triangle teeth. For interior rows (1..HALF-2) we draw a
+ * 2-bit deterministic roll from `spatialHash(tileX, tileY, salt)` and shift
+ * the row width by -1 (shrink), 0 (canonical), or +1 (extend) — preserving:
+ *   - row 0 / col 0 sacred join with the adjacent quadrant
+ *   - the always-painted column 0 (col 0 is the SW-anchor edge for NW;
+ *     analogous for the other quadrants)
+ *   - the row's contiguity (single fillRect, no gaps in the row)
+ * Two adjacent open tiles have independent hashes, so their chamfers'
+ * jaggedness combines into a less stamped-looking corner pattern.
+ *
  * 8 fillRect scanline calls per chamfer.
  */
 function fillChamferTriangle(
   gfx: GfxLike,
   screenX: number,
   screenY: number,
+  tileX: number,
+  tileY: number,
   quadrant: Quadrant,
 ): void {
+  const wobbleSalt =
+    quadrant === 'NW' ? SALT_WOBBLE_NW :
+    quadrant === 'NE' ? SALT_WOBBLE_NE :
+    quadrant === 'SE' ? SALT_WOBBLE_SE :
+                        SALT_WOBBLE_SW;
+  const h = spatialHash(tileX, tileY, wobbleSalt);
+
   // For each of the 8 scanlines, compute the row's (x, y) origin and width.
   // The triangle's "right angle" sits at the outer corner of the quadrant
   // (the corner of the full tile); the hypotenuse runs from the midpoint of
   // one tile edge to the midpoint of the adjacent tile edge.
   for (let i = 0; i < HALF; i++) {
-    const width = HALF - i;
+    let width = HALF - i;
+    // Wobble interior rows only — rows 0 (the sacred join with the
+    // adjacent quadrant's row 0) and HALF-1 (the chamfer tip / single-
+    // pixel row) stay canonical so the boundary still snaps to the
+    // documented anchors.
+    if (i >= 1 && i <= HALF - 2) {
+      const roll = (h >>> (i * 4)) & 0x3;
+      if (roll === 0) width -= 1;       // 25%: shrink by 1
+      else if (roll === 1) width += 1;  // 25%: extend by 1
+      // roll == 2 or 3: canonical
+      // Clamp: width must stay in [1, HALF] so col 0 (always painted)
+      // remains and the row never escapes the 8-pixel quadrant width.
+      if (width < 1) width = 1;
+      else if (width > HALF) width = HALF;
+    }
     let x = 0, y = 0;
     switch (quadrant) {
-      case 'NW': x = 0;                        y = i;                              break;
-      case 'NE': x = HALF + i;                 y = i;                              break;
-      case 'SE': x = HALF + i;                 y = TILE_SIZE_PX - 1 - i;           break;
-      case 'SW': x = 0;                        y = TILE_SIZE_PX - 1 - i;           break;
+      case 'NW': x = 0;                              y = i;                              break;
+      case 'NE': x = TILE_SIZE_PX - width;           y = i;                              break;
+      case 'SE': x = TILE_SIZE_PX - width;           y = TILE_SIZE_PX - 1 - i;           break;
+      case 'SW': x = 0;                              y = TILE_SIZE_PX - 1 - i;           break;
     }
     gfx.fillRect(screenX + x, screenY + y, width, 1);
   }

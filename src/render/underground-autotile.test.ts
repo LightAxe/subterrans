@@ -155,15 +155,19 @@ function countPixels(buf: PixelBuffer, kind: NeighborKind): number {
 
 describe('drawAutotiledUndergroundTile — full quadrants', () => {
   it('isolated open chamber tile (all 4 cardinals = wall) gets 4 chamfer cuts', () => {
-    // sameH=0, sameV=0 in every quadrant → chamfer everywhere.
-    // Canonical wall pixel count is 4 chamfers × 36 = 144. Per-tile chip
-    // variants (Phase E) cut 0..4 of those wall pixels back to open via a
-    // hashed 1-pixel chip per chamfer; the exact count for tile (5, 7) is
-    // 2 chips → 142 wall pixels. The range below is the variant envelope:
-    // anywhere from 140 (4 chips) to 144 (no chips) across the hash space.
+    // sameH=0, sameV=0 in every quadrant → chamfer everywhere. Canonical
+    // wall pixel count is 4 chamfers × 36 = 144. Two variant systems
+    // perturb that count:
+    //   - Phase E chip variants cut up to 4 wall pixels back to open
+    //     (interior 1-pixel chips inside each chamfer).
+    //   - Issue #48 edge wobble shifts each interior row's width by ±1
+    //     for 6 rows × 4 quadrants → up to 24 pixels in either direction.
+    // Net envelope: roughly [120, 168]. The range below is intentionally
+    // generous; the test pins "the chamfers fired" not the exact pixel
+    // count, which can't be defended against future variant tuning.
     const buf = renderTile(makeNeighbors('open'));
-    expect(countPixels(buf, 'wall')).toBeGreaterThanOrEqual(140);
-    expect(countPixels(buf, 'wall')).toBeLessThanOrEqual(144);
+    expect(countPixels(buf, 'wall')).toBeGreaterThanOrEqual(120);
+    expect(countPixels(buf, 'wall')).toBeLessThanOrEqual(168);
   });
 
   it('fully open tile (all 8 neighbors = open) leaves substrate intact — no opposite paint', () => {
@@ -220,7 +224,7 @@ describe('drawAutotiledUndergroundTile — full quadrants', () => {
 });
 
 describe('drawAutotiledUndergroundTile — chamfer anchor pixels', () => {
-  it('isolates a single NW chamfer and verifies the anchor pixels (8,0) and (0,8) are NOT painted', () => {
+  it('isolates a single NW chamfer — anchor pixels and sacred row 0 / col 0 invariants hold', () => {
     // Set up a neighborhood where ONLY the NW quadrant is chamfer:
     //   - NW chamfer needs h(W)=wall AND v(N)=wall.
     //   - NE NOT chamfer: h(E) must equal centerKind. Set E=open.
@@ -232,20 +236,27 @@ describe('drawAutotiledUndergroundTile — chamfer anchor pixels', () => {
       w:  'wall',              e:  'open',
       sw: 'wall', s: 'open',  se: 'open',  // SW: v-edge; SE: full
     }));
-    // The anchor pixels live on the BOUNDARY between quadrants. The NW
-    // chamfer mask covers (lx + ly < 8) in the NW quadrant. So:
-    //   - (8, 0) is in the NE quadrant → NOT painted by NW chamfer.
-    //   - (0, 8) is in the SW quadrant → NOT painted by NW chamfer.
-    //   - (7, 0) IS painted (last pixel of NW row 0).
-    //   - (0, 7) IS painted (last pixel of NW column 0).
-    expect(buf.get(7, 0)).toBe('wall');
-    expect(buf.get(0, 7)).toBe('wall');
-    expect(buf.get(8, 0)).not.toBe('wall'); // anchor — past NW chamfer end
+    // Sacred row 0 — must paint the FULL NW canonical width (x=[0..7]).
+    // This is the join with the NE chamfer's row 0 when both fire and is
+    // protected from issue #48 edge wobble.
+    for (let x = 0; x < 8; x++) {
+      expect(buf.get(x, 0)).toBe('wall');
+    }
+    // Sacred col 0 — every row of NW must paint at least pixel (0, y).
+    // Wobble may shrink interior rows but width is clamped to ≥ 1, so col
+    // 0 always remains wall throughout the chamfer's vertical range.
+    for (let y = 0; y < 8; y++) {
+      expect(buf.get(0, y)).toBe('wall');
+    }
+    // Anchor pixels — (8, 0) is in the NE quadrant (out of NW reach), and
+    // (0, 8) is in the SW quadrant. NW chamfer cannot reach either by
+    // construction (and edge wobble doesn't change x_start=0 or width
+    // beyond HALF), so both must remain non-wall.
+    expect(buf.get(8, 0)).not.toBe('wall');
     expect(buf.get(0, 8)).not.toBe('wall');
-    // Hypotenuse interior pixel — (4, 3): 4 + 3 = 7 < 8 → wall.
-    expect(buf.get(4, 3)).toBe('wall');
-    // Just past the hypotenuse: (4, 4): 4 + 4 = 8 → NOT wall.
-    expect(buf.get(4, 4)).not.toBe('wall');
+    // Outer NW corner — always painted by every variant (canonical row 0
+    // and canonical col 0 both include it).
+    expect(buf.get(0, 0)).toBe('wall');
   });
 
   it('axis-aligned corridor (no chamfers fire along shared open-open boundary) — interior tile column is fully open', () => {
@@ -280,25 +291,44 @@ describe('drawAutotiledUndergroundTile — stair-step diagonal corridor', () => 
       w:  'wall',             e: 'open',
       sw: 'wall', s: 'wall', se: 'open',
     }));
-    // NW quadrant: h(W)=W, v(N)=W → chamfer. Wall pixels in NW corner
-    // triangle.
-    for (let i = 0; i < 8; i++) {
-      // Row i, last wall pixel of NW chamfer is at x = 7 - i
-      // (chamfer condition: x + y < 8).
-      expect(buf.get(0, i)).toBe('wall');           // first column of chamfer
-      expect(buf.get(7 - i, i)).toBe('wall');       // hypotenuse pixel
-      // Just past the hypotenuse → NOT wall (open substrate)
-      // — except in row 0 where the NE chamfer also paints (x=8 wall).
-      if (i > 0) {
-        expect(buf.get(8 - i, i)).not.toBe('wall'); // open or untouched
+    // NW quadrant: h(W)=W, v(N)=W → chamfer fires. Issue #48 wobble means
+    // the canonical hypotenuse (last wall pixel at x=7-y) can shift ±1 on
+    // interior rows. Test invariants instead of exact pixels:
+    //   - Sacred row 0: x=[0..7] all wall (canonical, wobble protected).
+    //   - Sacred col 0: y=[0..7] all wall (col 0 always painted).
+    //   - Anchor (8, 0) and (0, 8) NEVER painted by NW chamfer.
+    //   - Wall pixels per row form a contiguous run starting at col 0.
+    for (let x = 0; x < 8; x++) expect(buf.get(x, 0)).toBe('wall');
+    for (let y = 0; y < 8; y++) expect(buf.get(0, y)).toBe('wall');
+    // (Note: (0, 8) IS painted in this neighborhood because SW also
+    // chamfers — the "anchor never painted" invariant only holds when
+    // exactly one quadrant fires. The single-quadrant test above
+    // covers that case.)
+    // Per-row wall-count bound: each NW row's wall pixels are within the
+    // canonical (HALF - i) ± 1 wobble envelope, plus possible 1-pixel
+    // chip subtraction. Lower bound: width 1 (clamped) - chip removal at
+    // col 0 (impossible since chip's lx ≥ 1) → 1 minimum. Upper bound:
+    // canonical width + 1 → HALF - i + 1. The exact run isn't asserted
+    // (chips can punch a 1-pixel hole inside the run); the count gives
+    // the right shape signal.
+    for (let y = 1; y < 7; y++) {
+      let walls = 0;
+      for (let x = 0; x < 8; x++) {
+        if (buf.get(x, y) === 'wall') walls++;
       }
+      const canonical = 8 - y;
+      // Allow [canonical - 2, canonical + 1]: -2 covers (shrink wobble)
+      // + (chip cuts a wall pixel); +1 covers (extend wobble).
+      expect(walls).toBeGreaterThanOrEqual(Math.max(1, canonical - 2));
+      expect(walls).toBeLessThanOrEqual(canonical + 1);
     }
-    // NE quadrant: h(E)=O, v(N)=W → h-edge → no paint. So the open
-    // substrate in the NE quadrant remains visible.
-    expect(buf.get(15, 7)).toBe('open');
-    // SW quadrant: h(W)=W, v(S)=W → chamfer.
+    // SW quadrant: h(W)=W, v(S)=W → chamfer (different y range, same
+    // sacred-edge invariants apply). Outer SW corner (0, 15) always wall.
     expect(buf.get(0, 15)).toBe('wall');
-    // SE quadrant: h(E)=O, v(S)=W → h-edge → no paint.
+    // NE quadrant: h(E)=O, v(N)=W → h-edge → no chamfer paint. Far NE
+    // pixel (15, 7) remains open substrate.
+    expect(buf.get(15, 7)).toBe('open');
+    // SE quadrant: h(E)=O, v(S)=W → h-edge → no paint. Far SE pixel.
     expect(buf.get(15, 15)).toBe('open');
   });
 
@@ -405,6 +435,175 @@ describe('drawAutotiledUndergroundTile — determinism', () => {
     const n = makeNeighbors('open', { ne: 'open', e: 'open', se: 'open' });
     drawAutotiledUndergroundTile(a, 32, 48, 7, 11, 'open', n);
     drawAutotiledUndergroundTile(b, 32, 48, 7, 11, 'open', n);
+    expect(a.calls).toEqual(b.calls);
+  });
+});
+
+describe('drawAutotiledUndergroundTile — issue #48 chamfer-edge wobble', () => {
+  function makeNeighbors(c: NeighborKind, spec: Partial<Neighbors3x3> = {}): Neighbors3x3 {
+    return {
+      nw: spec.nw ?? 'wall', n:  spec.n  ?? 'wall', ne: spec.ne ?? 'wall',
+      w:  spec.w  ?? 'wall', c,                       e:  spec.e  ?? 'wall',
+      sw: spec.sw ?? 'wall', s:  spec.s  ?? 'wall', se: spec.se ?? 'wall',
+    };
+  }
+
+  function renderAt(tx: number, ty: number, n: Neighbors3x3): PixelBuffer {
+    const gfx = new MockGfx();
+    drawAutotiledUndergroundTile(gfx, 0, 0, tx, ty, n.c, n);
+    const buf = new PixelBuffer(TILE_SIZE_PX, TILE_SIZE_PX);
+    gfx.paintBuffer(buf, 0, 0);
+    return buf;
+  }
+
+  it('produces multiple distinct boundary patterns across a coordinate sweep', () => {
+    // Render an isolated chamber tile at 32 distinct (tileX, tileY) and
+    // fingerprint the chamfer EDGE pixels only (cells at distance 1 from
+    // the canonical x+y=7 hypotenuse — i.e., x+y in {6, 7, 8}). Wobble
+    // should make most tiles produce different boundary patterns; this
+    // is what visually breaks the "stamped right-triangle" feel.
+    const fingerprints = new Set<string>();
+    for (let i = 0; i < 32; i++) {
+      const buf = renderAt(i * 13, i * 7 + 3, makeNeighbors('open'));
+      const cells: string[] = [];
+      // Sample boundary cells in NW quadrant (the others mirror it).
+      for (let y = 1; y < 7; y++) {
+        for (let x = 1; x < 7; x++) {
+          if (x + y < 6 || x + y > 8) continue;
+          cells.push(`${x},${y}:${buf.get(x, y)}`);
+        }
+      }
+      fingerprints.add(cells.join('|'));
+    }
+    // 32 hash inputs should produce a healthy spread of edge patterns.
+    expect(fingerprints.size).toBeGreaterThanOrEqual(8);
+  });
+
+  it('row 0 and col 0 are sacred — never wobble across a 32×32 hash sweep (single-quadrant chamfer)', () => {
+    // Single-NW-chamfer setup so we can isolate NW behavior. Sweep many
+    // tile coordinates and confirm the canonical row 0 and col 0 fills
+    // never change regardless of the wobble hash.
+    const singleNW = makeNeighbors('open', {
+      nw: 'wall', n: 'wall',  ne: 'wall',
+      w:  'wall',              e:  'open',
+      sw: 'wall', s: 'open',  se: 'open',
+    });
+    for (let tx = 0; tx < 32; tx++) {
+      for (let ty = 0; ty < 32; ty++) {
+        const buf = renderAt(tx, ty, singleNW);
+        // Row 0 fully wall x=[0..7]; col 0 fully wall y=[0..7].
+        for (let x = 0; x < 8; x++) expect(buf.get(x, 0)).toBe('wall');
+        for (let y = 0; y < 8; y++) expect(buf.get(0, y)).toBe('wall');
+        // Anchors (8, 0) and (0, 8) never painted by NW alone.
+        expect(buf.get(8, 0)).not.toBe('wall');
+        expect(buf.get(0, 8)).not.toBe('wall');
+      }
+    }
+  });
+
+  it('NE quadrant: row 0 and col 15 stay sacred under wobble (single-quadrant chamfer)', () => {
+    // Single-NE setup: NE chamfer needs h(E)=wall AND v(N)=wall. Other
+    // quadrants must NOT chamfer:
+    //   - NW: h(W) must equal centerKind to avoid chamfer. Set W=open.
+    //   - SE: v(S) must equal centerKind. Set S=open.
+    //   - SW: h(W)=open + v(S)=open → either same → NOT chamfer. ✓
+    const singleNE = makeNeighbors('open', {
+      nw: 'wall', n: 'wall', ne: 'wall',  // NE chamfer fires
+      w:  'open',             e: 'wall',
+      sw: 'open', s: 'open', se: 'wall',
+    });
+    for (let tx = 0; tx < 32; tx++) {
+      for (let ty = 0; ty < 32; ty++) {
+        const buf = renderAt(tx, ty, singleNE);
+        // Row 0 fully wall x=[8..15]; col 15 fully wall y=[0..7].
+        for (let x = 8; x < 16; x++) expect(buf.get(x, 0)).toBe('wall');
+        for (let y = 0; y < 8; y++) expect(buf.get(15, y)).toBe('wall');
+        // NE anchors (8, 0) IS painted (rightmost-of-row-0 of NE);
+        // (15, 8) is in SE quadrant → NOT painted by NE alone.
+        expect(buf.get(15, 8)).not.toBe('wall');
+      }
+    }
+  });
+
+  it('SE quadrant: row 15 and col 15 stay sacred under wobble (single-quadrant chamfer)', () => {
+    // Single-SE: SE chamfer needs h(E)=wall AND v(S)=wall. Avoid others:
+    //   - NE: v(N) must equal centerKind. Set N=open.
+    //   - SW: h(W) must equal centerKind. Set W=open.
+    //   - NW: h(W)=open + v(N)=open → NOT chamfer. ✓
+    const singleSE = makeNeighbors('open', {
+      nw: 'open', n: 'open', ne: 'wall',
+      w:  'open',             e: 'wall',
+      sw: 'wall', s: 'wall', se: 'wall',  // SE chamfer fires
+    });
+    for (let tx = 0; tx < 32; tx++) {
+      for (let ty = 0; ty < 32; ty++) {
+        const buf = renderAt(tx, ty, singleSE);
+        // Row 15 fully wall x=[8..15]; col 15 fully wall y=[8..15].
+        for (let x = 8; x < 16; x++) expect(buf.get(x, 15)).toBe('wall');
+        for (let y = 8; y < 16; y++) expect(buf.get(15, y)).toBe('wall');
+        // (8, 15) is the bottom-edge-midpoint anchor — IS painted (start
+        // of SE row 15). (15, 8) is the right-edge-midpoint anchor — IS
+        // painted (top of SE col 15). Neither is sacred-not-painted in
+        // single-SE because both lie inside SE's quadrant boundary.
+        // What's NOT painted is (8, 8) — that's deep in NE quadrant.
+        expect(buf.get(8, 8)).not.toBe('wall');
+      }
+    }
+  });
+
+  it('SW quadrant: row 15 and col 0 stay sacred under wobble (single-quadrant chamfer)', () => {
+    // Single-SW: SW chamfer needs h(W)=wall AND v(S)=wall. Avoid others:
+    //   - NW: v(N) must equal centerKind. Set N=open.
+    //   - SE: h(E) must equal centerKind. Set E=open.
+    //   - NE: h(E)=open + v(N)=open → NOT chamfer. ✓
+    const singleSW = makeNeighbors('open', {
+      nw: 'wall', n: 'open', ne: 'open',
+      w:  'wall',             e: 'open',
+      sw: 'wall', s: 'wall', se: 'open',
+    });
+    for (let tx = 0; tx < 32; tx++) {
+      for (let ty = 0; ty < 32; ty++) {
+        const buf = renderAt(tx, ty, singleSW);
+        // Row 15 fully wall x=[0..7]; col 0 fully wall y=[8..15].
+        for (let x = 0; x < 8; x++) expect(buf.get(x, 15)).toBe('wall');
+        for (let y = 8; y < 16; y++) expect(buf.get(0, y)).toBe('wall');
+        // (8, 8) deep in NE — never painted by SW alone.
+        expect(buf.get(8, 8)).not.toBe('wall');
+      }
+    }
+  });
+
+  it('wobble extends or shrinks each interior row by AT MOST 1 pixel', () => {
+    // Per-row wall count for an isolated NW chamfer must lie within
+    // ±1 of canonical (HALF - i) before chip subtraction. Allowing
+    // ±2 covers chip removal. Sweep 64 tiles to broadly exercise the
+    // hash space.
+    const singleNW = makeNeighbors('open', {
+      nw: 'wall', n: 'wall',  ne: 'wall',
+      w:  'wall',              e:  'open',
+      sw: 'wall', s: 'open',  se: 'open',
+    });
+    for (let i = 0; i < 64; i++) {
+      const buf = renderAt(i * 17, i * 23 + 5, singleNW);
+      for (let y = 1; y < 7; y++) {
+        let walls = 0;
+        for (let x = 0; x < 8; x++) {
+          if (buf.get(x, y) === 'wall') walls++;
+        }
+        const canonical = 8 - y;
+        expect(walls).toBeGreaterThanOrEqual(Math.max(1, canonical - 2));
+        expect(walls).toBeLessThanOrEqual(canonical + 1);
+      }
+    }
+  });
+
+  it('wobble call sequence is deterministic per (tileX, tileY, quadrant)', () => {
+    // Render the same chamfer twice — same (tileX, tileY) → identical
+    // draw-op stream. This is the SCEN-06 contract for the variant pass.
+    const a = new MockGfx();
+    const b = new MockGfx();
+    drawAutotiledUndergroundTile(a, 0, 0, 99, 17, 'open', makeNeighbors('open'));
+    drawAutotiledUndergroundTile(b, 0, 0, 99, 17, 'open', makeNeighbors('open'));
     expect(a.calls).toEqual(b.calls);
   });
 });
