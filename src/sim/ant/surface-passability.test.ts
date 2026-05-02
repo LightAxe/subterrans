@@ -178,6 +178,58 @@ describe('pickSurfaceDetour', () => {
     expect(foundCorner).toBe(true);
   });
 
+  it('considers diagonal escapes when the intended step is purely cardinal (Codex P2 fix)', () => {
+    // Codex P2 on PR #49: pre-fix `pickSurfaceDetour` derived its 8
+    // probes from `intendedDx/intendedDy` via signed re-combinations.
+    // When one axis was zero (cardinal-blocked move), the "diagonal-
+    // away" probes collapsed into duplicate cardinal moves and the
+    // picker never considered ANY actual diagonal escape. Result:
+    // the ant could pick a worse reverse/cardinal step even when a
+    // legal diagonal was closer to the intended destination.
+    //
+    // Repro: scan many seeds for a tile where (a) intent (1, 0) is
+    // blocked east, AND (b) at least one diagonal (NE or SE) is
+    // walkable AND closer-than-the-best-cardinal-alternate to the
+    // east-of-here target. Pre-fix the picker would never return that
+    // diagonal; post-fix it does.
+    let foundCase = false;
+    seedLoop:
+    for (let seed = 1; seed < 50; seed++) {
+      const world = createWorldState(seed);
+      for (let y = 5; y < 60; y++) {
+        for (let x = 5; x < 60; x++) {
+          const here = canEnterSurfaceTile(world, x, y);
+          if (!here) continue;
+          // Intent: east. East tile blocked, NE walkable.
+          const east  = canEnterSurfaceTile(world, x + 1, y);
+          const ne    = canEnterSurfaceTile(world, x + 1, y - 1);
+          const north = canEnterSurfaceTile(world, x, y - 1);
+          if (east) continue;            // east must be the blocker
+          if (!ne)  continue;            // NE must be a candidate
+          // For the diagonal NE corner-cut check to pass, intermediate
+          // cardinals (E or N) must include at least one walkable.
+          // E is blocked here; require N walkable so corner-cut allows.
+          if (!north) continue;
+          foundCase = true;
+          // Intent (1, 0). pickSurfaceDetour MUST return (1, -1) (NE)
+          // — it has the smallest Manhattan distance to target (x+1, y)
+          // among the walkable candidates: NE = |x+1-(x+1)| + |y-1 - y| = 1,
+          // beats N = 1 (also tied) but NE is later in compass order; let's
+          // just require the picker NOT return a worse score than NE's.
+          // Worst-acceptable score = 1 (any of N, NE, S(if walk), SE(if walk)
+          // would give score 1; W would give 2). Reject scores > 1.
+          const det = pickSurfaceDetour(world, x, y, 1, 0);
+          const detTargetX = x + 1;
+          const detTargetY = y;
+          const score = Math.abs((x + det.dx) - detTargetX) + Math.abs((y + det.dy) - detTargetY);
+          expect(score).toBeLessThanOrEqual(1);
+          break seedLoop;
+        }
+      }
+    }
+    expect(foundCase).toBe(true);
+  });
+
   it('prefers cardinal slip on intended axis as the first probe', () => {
     // Construct a synthetic test by checking the well-defined order:
     // probe 1 is (intendedDx, 0). When that candidate is walkable AND has
@@ -535,19 +587,20 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
       world.colonies[1] = colony;
 
       const id = spawnSurfaceCarrier(world, 1, pair.open.x, pair.open.y);
-      // Run a few ticks to amplify the divergence.
-      const rng = new Rng(42);
-      const digFlow = createDigFlowFields();
-      for (let t = 0; t < 5; t++) {
-        tickAntMovement(world, rng, digFlow);
-      }
+      // ONE tick is enough to see divergence — at v5 the ant commits the
+      // step into the HardBlock tile, at v7 the surface guard reverts +
+      // detours. Multi-tick runs proved deceptive: both versions can
+      // converge on the same final tile via different paths, masking the
+      // version-gate bug if it regresses.
+      tickAntMovement(world, new Rng(42), createDigFlowFields());
       return { posX: world.ants.posX[id]!, posY: world.ants.posY[id]! };
     }
 
     const v5 = runScenario(5);
     const v7 = runScenario(7);
-    // v7 should detour around the obstacle while v5 walks through it →
-    // positions differ.
+    // v7 either detoured (different posX/posY) or held in place (no
+    // walkable detour). v5 walks straight east into the HardBlock tile.
+    // Positions MUST differ on tick 1.
     expect(v7.posX !== v5.posX || v7.posY !== v5.posY).toBe(true);
   });
 

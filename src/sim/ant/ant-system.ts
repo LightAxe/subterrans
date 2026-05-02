@@ -2282,6 +2282,13 @@ export function canEnterSurfaceTile(
 // suppression), so the amortised cost is negligible.
 // ---------------------------------------------------------------------------
 
+// 8 compass directions in N-clockwise order: N, NE, E, SE, S, SW, W, NW.
+// Direction-agnostic — same set probed regardless of caller's intended
+// direction. Order doubles as the deterministic tie-break: at equal
+// Manhattan distance to target, earlier compass direction wins.
+const PROBE_COMPASS_DX = [ 0,  1,  1,  1,  0, -1, -1, -1] as const;
+const PROBE_COMPASS_DY = [-1, -1,  0,  1,  1,  1,  0, -1] as const;
+
 // Module-scratch result object for `pickSurfaceDetour` — reused across
 // every call to avoid per-call literal allocation (AGENTS.md "Hot-loop
 // performance" — invoked once per blocked-step per surface ant per tick).
@@ -2303,37 +2310,34 @@ export function pickSurfaceDetour(
   let bestDy = 0;
   let bestScore = -1;
 
-  // Walk the 8 probes in fixed order. Each iteration computes the probe's
-  // (pdx, pdy) inline from the caller's intended direction — no array
-  // allocation. The (0, 0) probe (when an intended axis is zero collapses
-  // a probe slot) is rejected by the early `continue`.
+  // Walk all 8 compass directions. Originally this used 8 probes derived
+  // from `intendedDx/intendedDy` (cardinal X slip, perpendicular sidestep,
+  // diagonal-away, etc.) which seemed natural — but Codex flagged P2 on
+  // PR #49: when intendedDx OR intendedDy is zero (cardinal blocked
+  // step), the "diagonal-away" probes collapsed into duplicate cardinal
+  // moves and the picker never considered ANY actual diagonal escape.
+  // Concrete: intent (1, 0) east-blocked → probes generated (1, 0),
+  // (0, 0), (0, 1), (0, -1), (-1, 0), (0, 0), (-1, 0), (1, 0) —
+  // 4 collapsed and the only "off-axis" candidates were the cardinal
+  // sidesteps; no NE/NW/SE/SW probe at all. Result: the ant could pick
+  // a reverse-cardinal step even when a legal diagonal escape was
+  // closer to its target → avoidable jitter/stalling around corners.
+  //
+  // Fix: probe all 8 compass directions unconditionally and score each
+  // by Manhattan distance to the intended-destination tile. The probe
+  // order N→NE→E→SE→S→SW→W→NW doubles as the deterministic tie-break.
   for (let p = 0; p < 8; p++) {
-    let pdx = 0;
-    let pdy = 0;
-    switch (p) {
-      case 0: pdx =  intendedDx; pdy =  0;          break;  // cardinal X slip
-      case 1: pdx =  0;          pdy =  intendedDy; break;  // cardinal Y slip
-      case 2: pdx = -intendedDy; pdy =  intendedDx; break;  // perpendicular CCW
-      case 3: pdx =  intendedDy; pdy = -intendedDx; break;  // perpendicular CW
-      case 4: pdx = -intendedDx; pdy =  0;          break;  // reverse X
-      case 5: pdx =  0;          pdy = -intendedDy; break;  // reverse Y
-      case 6: pdx = -intendedDx; pdy =  intendedDy; break;  // diagonal-away X-reverse
-      case 7: pdx =  intendedDx; pdy = -intendedDy; break;  // diagonal-away Y-reverse
-    }
-    if (pdx === 0 && pdy === 0) continue;
+    const pdx = PROBE_COMPASS_DX[p]!;
+    const pdy = PROBE_COMPASS_DY[p]!;
     const cx = prevTileX + pdx;
     const cy = prevTileY + pdy;
     if (!canEnterSurfaceTile(world, cx, cy)) continue;
-    // Diagonal corner-cut prevention (issue #44 review BLOCKER fix). For
-    // diagonal candidates, require at least one of the two intermediate
-    // cardinal tiles to be walkable. Otherwise the ant would squeeze
-    // through a HardBlock corner between two boulders/leaves — same
-    // failure mode the underground guard explicitly prevents (see the
-    // diagonal block in tickAntMovement and moveQueens). Concrete
-    // reproducer: ant at (5,5), intent (1,1), HardBlock at (6,5) and
-    // (5,6), walkable at (4,6) → without this check the picker would
-    // pick (-1, 1) and the ant would slip diagonally between two
-    // adjacent HardBlocks.
+    // Diagonal corner-cut prevention. For diagonal candidates, require
+    // at least one of the two intermediate cardinal tiles to be walkable.
+    // Otherwise the ant would squeeze through a HardBlock corner between
+    // two boulders/leaves — same failure mode the underground guard
+    // explicitly prevents (see the diagonal block in tickAntMovement and
+    // moveQueens).
     if (pdx !== 0 && pdy !== 0) {
       const passXOnly = canEnterSurfaceTile(world, prevTileX + pdx, prevTileY);
       const passYOnly = canEnterSurfaceTile(world, prevTileX, prevTileY + pdy);
