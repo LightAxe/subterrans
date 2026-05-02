@@ -159,6 +159,16 @@ export interface SerializedWorldState {
    * sticky on load to preserve SCEN-06 replay determinism.
    */
   simVersion?: number;
+  /**
+   * Issue #44 — terrain decoration seed (independent of `rngState` and
+   * `simVersion`). Optional for backward compatibility: pre-#44 saves omit
+   * the field; deserializeWorldState defaults absent → 0. Loading a pre-#44
+   * save will therefore produce a different decoration layout than the
+   * recorded run, but world geometry (entrances, food piles, colony
+   * positions) is unaffected. Movement-affecting feature collision (added in
+   * step 4) is gated separately via simVersion.
+   */
+  terrainSeed?: number;
   commandQueue: SimCommand[];  // plain-object spread is sufficient (ADR-0006)
   ants: SerializedAnts;
   colonies: Record<string, SerializedColony>;       // keys are ColonyId.toString()
@@ -291,6 +301,7 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
     rngState: world.rngState,
     nextEntityId: world.nextEntityId,
     simVersion: world.simVersion,
+    terrainSeed: world.terrainSeed,
     commandQueue: world.commandQueue.map((c) => ({ ...c })),  // Pitfall 7 — preserve
     ants: serializeAnts(world.ants),
     colonies: coloniesOut,
@@ -539,6 +550,15 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     simVersion: typeof s.simVersion === 'number' && Number.isInteger(s.simVersion)
       ? s.simVersion
       : LEGACY_SIM_VERSION,
+    // Issue #44 — pre-#44 saves omit `terrainSeed`; default to 0 on load.
+    // Same boundary type-validation as `simVersion`: `??` only guards null/
+    // undefined, so a hand-edited save with `"42"` / NaN / object would land
+    // at world.terrainSeed and be XOR'd into the surface hash, producing
+    // either NaN-poisoning or coercion surprises. Reject anything that isn't
+    // a uint32-coercible integer.
+    terrainSeed: typeof s.terrainSeed === 'number' && Number.isInteger(s.terrainSeed)
+      ? s.terrainSeed >>> 0
+      : 0,
     commandQueue: s.commandQueue.map((c) => ({ ...c })),  // preserve unprocessed commands
     ants: deserializeAnts(s.ants, capacity),
     colonies,

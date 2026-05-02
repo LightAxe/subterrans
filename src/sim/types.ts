@@ -99,6 +99,25 @@ export interface WorldState {
    */
   simVersion: number;
 
+  /**
+   * Issue #44 — terrain decoration seed. Independent of `rngState` so that
+   * decoration layout stays stable across the lifetime of a world: rngState
+   * advances every tick as the sim consumes random pulls, and a layout that
+   * drifted with it would shift mid-game.
+   *
+   * Folded into the surface feature selector's spatial hash
+   * (`src/sim/surface-features.ts`) so different game seeds produce
+   * different boulder/grass layouts. Pre-#44 placement was coordinate-only
+   * — every world looked identical from above.
+   *
+   * Initialized in `createWorldState(seed)` via a fixed mixer of the input
+   * seed (so it's a deterministic function of the seed but doesn't equal
+   * `rngState`). Round-trips through `copyWorldState` and save/load. Legacy
+   * saves missing the field load with `terrainSeed = 0`; this changes their
+   * decoration layout on first reload but not their world geometry.
+   */
+  terrainSeed: number;
+
   // Phase 6 additions (PRD §3):
   ants: AntComponents;                          // SoA ant component storage — 17 parallel Int32Arrays
   colonies: Record<ColonyId, ColonyRecord>;     // per-colony state keyed by integer ColonyId
@@ -118,12 +137,18 @@ export interface WorldState {
  * @param maxEntities - Ant entity slot count. Defaults to MAX_ENTITIES (8192).
  */
 export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIES): WorldState {
+  const seedU32 = seed >>> 0;
   return {
     tick: 0,
-    rngState: seed >>> 0, // coerce to uint32
+    rngState: seedU32,
     nextEntityId: 0,      // PRD §3 line 130: starts at 0, no recycling
     commandQueue: [],
     simVersion: LATEST_SIM_VERSION,
+    // Issue #44 — derive terrainSeed from the input seed via Knuth's golden-
+    // ratio multiplier so it's a deterministic function of the seed but
+    // doesn't equal rngState. Using rngState directly would couple the very-
+    // first decoration query to wherever the PRNG happens to land on tick 0.
+    terrainSeed: Math.imul(seedU32, 2654435761) >>> 0,
     ants: createAntComponents(maxEntities),
     colonies: {},
     pheromoneGrids: {},
@@ -154,6 +179,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   dst.rngState = src.rngState;
   dst.nextEntityId = src.nextEntityId;
   dst.simVersion = src.simVersion;
+  dst.terrainSeed = src.terrainSeed;
   dst.commandQueue = src.commandQueue.slice(); // small in practice (user-input rate) — PRD §3 accepts this as the only Phase 1 allocation
 
   // --- AntComponents: 19 TypedArray.set calls (zero allocation) ---

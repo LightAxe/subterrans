@@ -27,15 +27,16 @@ describe('WorldState', () => {
       expect(world.rngState).toBe(4294967295);
     });
 
-    it('has exactly twelve fields (4 Phase 5 + 3 Phase 6 + 4 Phase 7 + 1 issue #27)', () => {
+    it('has exactly thirteen fields (4 Phase 5 + 3 Phase 6 + 4 Phase 7 + 1 issue #27 + 1 issue #44)', () => {
       const world = createWorldState(0);
       const keys = Object.keys(world);
-      expect(keys).toHaveLength(12);
+      expect(keys).toHaveLength(13);
       expect(keys).toContain('tick');
       expect(keys).toContain('rngState');
       expect(keys).toContain('nextEntityId');
       expect(keys).toContain('commandQueue');
       expect(keys).toContain('simVersion');
+      expect(keys).toContain('terrainSeed');
       expect(keys).toContain('ants');
       expect(keys).toContain('colonies');
       expect(keys).toContain('pheromoneGrids');
@@ -43,6 +44,34 @@ describe('WorldState', () => {
       expect(keys).toContain('undergroundGrids');
       expect(keys).toContain('foodPiles');
       expect(keys).toContain('pendingChambers');
+    });
+
+    it('issue #44: terrainSeed is a deterministic, non-zero, non-rngState mix of the input seed', () => {
+      // Same seed → same terrainSeed (deterministic).
+      const a = createWorldState(42);
+      const b = createWorldState(42);
+      expect(a.terrainSeed).toBe(b.terrainSeed);
+
+      // Different seeds → different terrainSeeds (the whole point — pre-#44
+      // every world's surface looked identical because placement was
+      // coordinate-only).
+      const c = createWorldState(43);
+      expect(a.terrainSeed).not.toBe(c.terrainSeed);
+
+      // Non-zero so the surface hash actually mixes (a 0 terrainSeed XOR'd
+      // into salt is a no-op — we'd reproduce the legacy coordinate-only
+      // layout for seed=0, which is fine but worth documenting via a test).
+      // Knuth golden-ratio mixer of a non-zero uint32 seed is non-zero.
+      expect(a.terrainSeed).not.toBe(0);
+
+      // NOT identical to rngState — coupling them would tie the very-first
+      // decoration query to wherever the PRNG happens to land on tick 0.
+      expect(a.terrainSeed).not.toBe(a.rngState);
+    });
+
+    it('issue #44: seed=0 yields terrainSeed=0 (pre-#44 layout) per Math.imul(0, k) === 0', () => {
+      const world = createWorldState(0);
+      expect(world.terrainSeed).toBe(0);
     });
 
     it('Phase 6 init: ants has 17 Int32Arrays of length MAX_ENTITIES', () => {
@@ -132,6 +161,18 @@ describe('WorldState', () => {
       // Push to src.commandQueue AFTER the copy
       src.commandQueue.push({ type: 'NoOp', issuedAtTick: 0 });
       expect(dst.commandQueue.length).toBe(0);
+    });
+
+    it('issue #44: terrainSeed round-trips through copyWorldState', () => {
+      // dst was created with seed 2 — its terrainSeed differs from src's.
+      // After copyWorldState, dst.terrainSeed must take src's value, otherwise
+      // the prev/curr render snapshots would query different layouts each
+      // frame and the surface decorations would shimmer.
+      const src = createWorldState(42);
+      const dst = createWorldState(7);
+      expect(dst.terrainSeed).not.toBe(src.terrainSeed);
+      copyWorldState(src, dst);
+      expect(dst.terrainSeed).toBe(src.terrainSeed);
     });
 
     describe('AntComponents', () => {
