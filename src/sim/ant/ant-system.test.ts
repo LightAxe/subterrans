@@ -6369,6 +6369,52 @@ describe('issue #42 — surface SearchingFood no-revisit rule (v6)', () => {
     expect(world.ants.recentTilesHead[antId]).toBe(0);
   });
 
+  it('alternate-pick rejects out-of-bounds neighbors at the map edge (codex review fix)', () => {
+    // Pin the regression with a synthetic call into the picker logic via
+    // an end-state assertion: at y=0 with all in-bounds neighbors except
+    // W marked recent, the picker's only valid alternate is W. Without
+    // the bounds check the picker would accept N (the first ALT_DX/DY
+    // entry — out of bounds at y=0) the moment a recent-tile filter
+    // activates, then the post-step clamp would null the move and the
+    // ant would stall indefinitely (no tile-cross → buffer never pushes).
+    //
+    // The test runs 20 ticks. With the bounds fix, the ant must visit
+    // at least one tile that is NOT (50, 0) within those 20 ticks —
+    // i.e. at least one valid tile-crossing happens. Without the fix,
+    // the picker repeatedly chooses OOB directions whenever a recent-
+    // tile filter activates, the clamp eats the step, and the ant
+    // stalls at (50, 0) for the entire window.
+    const { world, antId } = setupForagerInOpenSurface();
+    world.ants.posX[antId] = 50 << FP_SHIFT;
+    world.ants.posY[antId] = 0;
+    // Mark E, SE, S, SW as recent — covers 4 of 5 in-bounds neighbors
+    // at y=0. Only W remains as a valid in-bounds alternate.
+    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 0] = 51; world.ants.recentTilesY[antId * RECENT_TILES_LEN + 0] = 0; // E
+    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 1] = 51; world.ants.recentTilesY[antId * RECENT_TILES_LEN + 1] = 1; // SE
+    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 2] = 50; world.ants.recentTilesY[antId * RECENT_TILES_LEN + 2] = 1; // S
+    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 3] = 49; world.ants.recentTilesY[antId * RECENT_TILES_LEN + 3] = 1; // SW
+    world.ants.recentTilesHead[antId] = 0;
+
+    const visitedTiles = new Set<string>();
+    const rng = new Rng(42);
+    const digFlowFields = createDigFlowFields();
+    for (let t = 0; t < 20; t++) {
+      tickAntMovement(world, rng, digFlowFields);
+      const tx = world.ants.posX[antId]! >> FP_SHIFT;
+      const ty = world.ants.posY[antId]! >> FP_SHIFT;
+      visitedTiles.add(`${tx},${ty}`);
+      // Hard requirement: never enter an OOB tile (y must never be
+      // < 0 even at sub-tile precision). Surface clamp at the call
+      // boundary should already enforce this; assert so the test
+      // catches any future passability change that lifts the clamp.
+      expect(world.ants.posY[antId]!).toBeGreaterThanOrEqual(0);
+    }
+    // The ant must have crossed at least one tile boundary in 20
+    // ticks — without the bounds check the picker would pin it at
+    // (50, 0) by repeatedly choosing OOB directions.
+    expect(visitedTiles.size).toBeGreaterThan(1);
+  });
+
   it('does NOT push to the recent-tiles buffer on a v5 world (replay-determinism gate)', () => {
     // Pre-v6 saves must continue to replay byte-identically — that means
     // the recent-tiles buffer must remain SENTINEL-filled even after

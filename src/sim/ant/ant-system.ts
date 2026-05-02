@@ -76,11 +76,10 @@ import { Zone, UndergroundTileState, ugGet, ugSet, type UndergroundGrid } from '
 const DIR_DX = [0, 1, 0, -1] as const;  // N, E, S, W
 const DIR_DY = [-1, 0, 1, 0] as const;  // N, E, S, W
 
-// Issue #42 fix #3 — 8-connected alternate-step ordering (clockwise from N).
+// Issue #42 fix #3 — 8-connected alternate-step ordering, clockwise from N.
 // Used by the surface SearchingFood no-revisit filter when the proposed step
-// is in the recent-tiles buffer; iterating these in order picks a
-// deterministic alternate. Same NW-clockwise sweep as the queen overlap
-// resolver, so step picks across the codebase share a mental model.
+// is in the recent-tiles buffer; iterating these in fixed order picks a
+// deterministic alternate.
 const ALT_DX = [0, 1, 1, 1, 0, -1, -1, -1] as const; // N, NE, E, SE, S, SW, W, NW
 const ALT_DY = [-1, -1, 0, 1, 1, 1, 0, -1] as const;
 
@@ -3250,11 +3249,14 @@ export function tickAntMovement(
     // Issue #42 fix #3 — surface SearchingFood no-revisit filter. v6+ only.
     // If the proposed step lands on a tile in the ant's recent-tiles ring
     // buffer, scan the 8-connected alternates in a fixed order and pick the
-    // first one NOT in the buffer. If every neighbor is in the buffer (rare
-    // — would require the ant to cycle through all 8 in 4 steps, geometrically
-    // impossible), pause for a tick (dx=dy=0). The buffer push happens later
-    // (alongside the searchPrevTile write), only when the tile actually
-    // crosses, so pause ticks don't pollute the history.
+    // first one that is BOTH not in the buffer AND inside the surface grid.
+    // The bounds check matters at the map edge (e.g. an ant at y=0 whose
+    // proposed step is in the buffer must not pick N — that would clamp
+    // back to the same tile, no tile-cross occurs, the buffer doesn't
+    // advance, and the ant stalls indefinitely with valid in-bounds
+    // alternates still available). If every neighbor is filtered, pause
+    // (dx=dy=0); the buffer-push gate (only on actual tile crossings) keeps
+    // pause ticks from polluting history.
     if (
       world.simVersion >= 6 &&
       zone === Zone.Surface &&
@@ -3265,16 +3267,25 @@ export function tickAntMovement(
       const tileX = ants.posX[id]! >> FP_SHIFT;
       const tileY = ants.posY[id]! >> FP_SHIFT;
       if (isRecentTile(ants, id, tileX + dx, tileY + dy)) {
-        // Try 8 cardinals/diagonals in a fixed order — the same NW-clockwise
-        // ordering used by the queen overlap resolver and zone-flip code, so
-        // the alternate-pick is deterministic and easy to reason about. The
-        // first neighbor whose tile is NOT in the buffer wins.
+        // Try 8 cardinals/diagonals in N-clockwise order (N, NE, E, SE, S,
+        // SW, W, NW) — fixed and deterministic, the same neighbor sweep the
+        // queen overlap resolver uses, so the alternate-pick is easy to
+        // reason about across the codebase.
         let found = false;
         for (let i = 0; i < ALT_DX.length; i++) {
           const ax = ALT_DX[i]!;
           const ay = ALT_DY[i]!;
           if (ax === dx && ay === dy) continue; // already-rejected proposal
-          if (isRecentTile(ants, id, tileX + ax, tileY + ay)) continue;
+          const candX = tileX + ax;
+          const candY = tileY + ay;
+          // Bounds check — out-of-grid alternates clamp to a no-op step
+          // and would stall the ant at the map edge. Reject before they
+          // can be picked.
+          if (
+            candX < 0 || candX >= SURFACE_GRID_WIDTH ||
+            candY < 0 || candY >= SURFACE_GRID_HEIGHT
+          ) continue;
+          if (isRecentTile(ants, id, candX, candY)) continue;
           dx = ax;
           dy = ay;
           found = true;
