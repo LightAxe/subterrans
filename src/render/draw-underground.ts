@@ -47,7 +47,7 @@ import {
   drawOpenFloorTile,
 } from './terrain-atlas.js';
 import { drawAutotiledUndergroundTile, drawUndergroundRim } from './underground-autotile.js';
-import { gatherUnderground3x3Neighbors } from './underground-neighbors.js';
+import { gatherUnderground3x3Neighbors, type Neighbors3x3 } from './underground-neighbors.js';
 import type { CameraState } from './camera.js';
 
 // ---------------------------------------------------------------------------
@@ -132,6 +132,16 @@ export function drawUndergroundTerrain(
     }
   }
 
+  // Reusable neighbor scratch — gatherUnderground3x3Neighbors mutates this
+  // in place so the per-frame tile loop doesn't allocate a fresh
+  // Neighbors3x3 per visible tile. Per codex P2 review: a 200-tile
+  // viewport at 60fps was spawning ~12k short-lived objects/sec.
+  const neighbors: Neighbors3x3 = {
+    nw: 'wall', n: 'wall', ne: 'wall',
+    w:  'wall', c: 'wall', e:  'wall',
+    sw: 'wall', s: 'wall', se: 'wall',
+  };
+
   for (let ty = Math.max(top, 0); ty < bottom; ty++) {
     for (let tx = Math.max(left, 0); tx < right; tx++) {
       const screenX = (tx - left) * TILE_SIZE_PX;
@@ -167,7 +177,7 @@ export function drawUndergroundTerrain(
         // BeingDug as open. The tile's substrate plus opposite-kind
         // chamfer/inner-corner masks together resolve stair-step diagonals
         // into smooth silhouettes across tile boundaries.
-        const neighbors = gatherUnderground3x3Neighbors(grid, tx, ty, entranceXSet);
+        gatherUnderground3x3Neighbors(grid, tx, ty, entranceXSet, neighbors);
         drawAutotiledUndergroundTile(gfx, screenX, screenY, tx, ty, neighbors.c, neighbors);
         // Rim pass — subtle 2-pixel darker band on the open side of each
         // wall boundary. The shape is correct without it but the corridor

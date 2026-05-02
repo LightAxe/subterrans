@@ -114,6 +114,23 @@ describe('gatherUnderground3x3Neighbors', () => {
     });
   });
 
+  it('reuses an out buffer when one is passed (no allocation per call)', () => {
+    // Performance contract: callers in the render loop pass a scratch
+    // Neighbors3x3 so the per-frame tile sweep doesn't allocate. Verify
+    // the function mutates the provided object and returns the same
+    // reference rather than building a new one.
+    const grid = createUndergroundGrid(3, 3);
+    ugSet(grid, 1, 1, UndergroundTileState.Open);
+    const scratch: ReturnType<typeof gatherUnderground3x3Neighbors> = {
+      nw: 'wall', n: 'wall', ne: 'wall',
+      w:  'wall', c: 'wall', e:  'wall',
+      sw: 'wall', s: 'wall', se: 'wall',
+    };
+    const result = gatherUnderground3x3Neighbors(grid, 1, 1, NO_ENTRANCES, scratch);
+    expect(result).toBe(scratch);          // same reference, not a copy
+    expect(scratch.c).toBe('open');        // mutated in place
+  });
+
   it('is deterministic — same inputs produce the same output every call', () => {
     const grid = createUndergroundGrid(5, 5);
     ugSet(grid, 2, 2, UndergroundTileState.Open);

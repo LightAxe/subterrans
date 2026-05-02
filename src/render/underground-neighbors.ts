@@ -56,22 +56,33 @@ export function classifyUndergroundTile(
  * Gather a 3x3 neighborhood of wall/open classifications around (tx, ty).
  * The center cell (`c`) is also classified; the autotiler uses it together
  * with the cardinal neighbors to pick quarter-tile shapes for each corner.
+ *
+ * Pass a pre-allocated `out` buffer to avoid per-tile allocations in the
+ * render hot path. `drawUndergroundTerrain` reuses one `Neighbors3x3`
+ * across every visible tile per frame so a 200-tile viewport doesn't
+ * spawn 200 short-lived objects each frame (codex P2). Callers without a
+ * perf concern can omit `out` and accept the allocation.
  */
 export function gatherUnderground3x3Neighbors(
   grid: UndergroundGrid,
   tx: number,
   ty: number,
   entranceXSet: ReadonlySet<number>,
+  out?: Neighbors3x3,
 ): Neighbors3x3 {
-  return {
-    nw: classifyUndergroundTile(grid, tx - 1, ty - 1, entranceXSet),
-    n:  classifyUndergroundTile(grid, tx,     ty - 1, entranceXSet),
-    ne: classifyUndergroundTile(grid, tx + 1, ty - 1, entranceXSet),
-    w:  classifyUndergroundTile(grid, tx - 1, ty,     entranceXSet),
-    c:  classifyUndergroundTile(grid, tx,     ty,     entranceXSet),
-    e:  classifyUndergroundTile(grid, tx + 1, ty,     entranceXSet),
-    sw: classifyUndergroundTile(grid, tx - 1, ty + 1, entranceXSet),
-    s:  classifyUndergroundTile(grid, tx,     ty + 1, entranceXSet),
-    se: classifyUndergroundTile(grid, tx + 1, ty + 1, entranceXSet),
+  const target = out ?? {
+    nw: 'wall', n: 'wall', ne: 'wall',
+    w:  'wall', c: 'wall', e:  'wall',
+    sw: 'wall', s: 'wall', se: 'wall',
   };
+  target.nw = classifyUndergroundTile(grid, tx - 1, ty - 1, entranceXSet);
+  target.n  = classifyUndergroundTile(grid, tx,     ty - 1, entranceXSet);
+  target.ne = classifyUndergroundTile(grid, tx + 1, ty - 1, entranceXSet);
+  target.w  = classifyUndergroundTile(grid, tx - 1, ty,     entranceXSet);
+  target.c  = classifyUndergroundTile(grid, tx,     ty,     entranceXSet);
+  target.e  = classifyUndergroundTile(grid, tx + 1, ty,     entranceXSet);
+  target.sw = classifyUndergroundTile(grid, tx - 1, ty + 1, entranceXSet);
+  target.s  = classifyUndergroundTile(grid, tx,     ty + 1, entranceXSet);
+  target.se = classifyUndergroundTile(grid, tx + 1, ty + 1, entranceXSet);
+  return target;
 }
