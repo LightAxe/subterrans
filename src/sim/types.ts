@@ -62,7 +62,23 @@ export const SIM_VERSION_V3 = 3 as const;
 export const SIM_VERSION_V4_DIAGONAL_MOTION = 4 as const;
 export const SIM_VERSION_V5_CHAMBER_ON_MARKED = 5 as const;
 export const SIM_VERSION_V6_FORAGER_NO_REVISIT = 6 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V6_FORAGER_NO_REVISIT;
+/**
+ * v7 (LATEST_SIM_VERSION) — issue #44 steps 4 + 5. Surface movement
+ * integration: HardBlock features (boulders, twig-as-log, dead-leaf
+ * canopies, big-leaf "ships") block surface ants and a deterministic
+ * local detour picks the best walkable adjacent tile when the preferred
+ * step is blocked; SoftCost features (bushes, grass clumps) halve
+ * effective speed for the tick the ant occupies a SoftCost tile.
+ * Pre-v7 saves replay with no surface passability and no soft cost —
+ * same coordinate-only motion they recorded — so SCEN-06 byte-identity
+ * holds.
+ *
+ * Originally landed as v6 on the #44 branch; renumbered to v7 during
+ * the rebase onto main once #42 (PR #47) had already taken v6. The
+ * meaning is unchanged from what was committed in step 4.
+ */
+export const SIM_VERSION_V7_SURFACE_PASSABILITY = 7 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V7_SURFACE_PASSABILITY;
 
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick
@@ -94,6 +110,14 @@ export interface WorldState {
    *       demote to Idle when colony has nowhere to deposit; surface
    *       SearchingFood foragers refuse to step onto a tile from their
    *       last 4 moves (eddy escape). Pre-v6 saves keep the legacy paths.
+   *   7 = Surface movement integration (issue #44 steps 4 + 5):
+   *       (a) HardBlock features (boulders, twig-as-log, dead leaves, big
+   *           leaves) block surface ants; deterministic local detour picks
+   *           an alternate adjacent tile when the preferred step is blocked.
+   *       (b) SoftCost features (bushes, grass clumps) halve the effective
+   *           speed of any surface ant occupying a SoftCost tile.
+   *       Pre-v7 saves replay with no surface passability and no soft cost
+   *       — same coordinate-only motion they recorded.
    *
    * Round-trips through copyWorldState and save/load.
    */

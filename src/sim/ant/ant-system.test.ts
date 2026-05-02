@@ -35,6 +35,7 @@ import {
   LEGACY_SIM_VERSION,
   SIM_VERSION_V3,
   SIM_VERSION_V4_DIAGONAL_MOTION,
+  SIM_VERSION_V5_CHAMBER_ON_MARKED,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt, createAntComponents, RECENT_TILES_LEN } from './ant-store.js';
@@ -4701,6 +4702,12 @@ describe('tickAntMovement — same-colony occupancy enforcement', () => {
 
   it('OCC-1. two same-colony workers target the same surface tile → lower-id keeps the tile, higher-id shifts to an adjacent tile', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
+    // Pin to pre-v6: this test asserts the specific tile (6,4) the
+    // resolver shifts B to. With v6 surface passability the seed-42
+    // terrainSeed places HardBlock features on or near (6,4) which would
+    // make the resolver pick a different shift direction. Test is about
+    // occupancy semantics, not surface features.
+    world.simVersion = SIM_VERSION_V5_CHAMBER_ON_MARKED;
     const colony = createColonyRecord(COLONY_ID, 0);
     colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
@@ -4771,6 +4778,8 @@ describe('tickAntMovement — same-colony occupancy enforcement', () => {
 
   it('OCC-3. different-colony workers target the same tile → both occupy (combat overlap preserved)', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
+    // Pin to pre-v6: see OCC-1 rationale.
+    world.simVersion = SIM_VERSION_V5_CHAMBER_ON_MARKED;
     const colonyA = createColonyRecord(1, 0);
     colonyA.entrances = []; colonyA.rallyPoint = null; colonyA.digFlowFieldDirty = false;
     const colonyB = createColonyRecord(2, 0);
@@ -4800,6 +4809,8 @@ describe('tickAntMovement — same-colony occupancy enforcement', () => {
     // nothing else has claimed yet). Then B is processed: B is at (6,5) too
     // (stationary), so B shifts to adjacent. Lower-id ALWAYS wins.
     const world = createWorldState(42, MAX_TEST_ENTITIES);
+    // Pin to pre-v6: see OCC-1 rationale.
+    world.simVersion = SIM_VERSION_V5_CHAMBER_ON_MARKED;
     const colony = createColonyRecord(COLONY_ID, 0);
     colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;

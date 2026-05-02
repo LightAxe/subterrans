@@ -32,7 +32,12 @@
 // No per-iteration allocations beyond sampleGradient's return object (accepted in Phase 6).
 // world.nextEntityId is the upper bound for entity iteration; alive=0 slots are skipped.
 
-import { SIM_VERSION_V4_DIAGONAL_MOTION, type WorldState } from '../types.js';
+import {
+  SIM_VERSION_V4_DIAGONAL_MOTION,
+  SIM_VERSION_V7_SURFACE_PASSABILITY,
+  type WorldState,
+} from '../types.js';
+import { SurfaceMovementEffect, surfaceMovementAt } from '../surface-features.js';
 import type { AntComponents } from './ant-store.js';
 import { isRecentTile, pushRecentTile, clearRecentTiles } from './ant-store.js';
 import type { ColonyRecord, ChamberRecord } from '../colony/colony-store.js';
@@ -2211,6 +2216,124 @@ export function canEnterUndergroundTile(
 }
 
 // ---------------------------------------------------------------------------
+// canEnterSurfaceTile — surface movement passability predicate (issue #44 #4)
+//
+// Surface tiles default to walkable. The selector
+// (`src/sim/surface-features.ts → surfaceMovementAt`) returns the movement
+// effect of any large multi-tile feature covering the tile:
+//   Cosmetic / no feature → walkable (most surface tiles)
+//   SoftCost              → walkable, cost applied separately in step 5
+//   HardBlock             → blocked (boulder, twig-as-log, dead leaf, big leaf)
+//
+// Out-of-bounds tiles are blocked (defensive; the per-tick bounds clamp also
+// handles this).
+//
+// Pure: never mutates `world`. Called from the surface branch of
+// tickAntMovement, moveQueens, and resolveSameColonyOccupancy.
+// ---------------------------------------------------------------------------
+
+export function canEnterSurfaceTile(
+  world: WorldState,
+  tileX: number,
+  tileY: number,
+): boolean {
+  if (tileX < 0 || tileY < 0 || tileX >= SURFACE_GRID_WIDTH || tileY >= SURFACE_GRID_HEIGHT) {
+    return false;
+  }
+  return surfaceMovementAt(world, tileX, tileY) !== SurfaceMovementEffect.HardBlock;
+}
+
+// ---------------------------------------------------------------------------
+// pickSurfaceDetour — deterministic local detour around a hard-block (#44 #4)
+//
+// Called when the preferred surface step from (prevTileX, prevTileY) toward
+// (intendedDx, intendedDy) was blocked by a HardBlock feature. Walks 8
+// adjacent tiles in a fixed probe order and returns the first walkable
+// candidate that minimises Manhattan distance to the intended-destination
+// tile (prevTileX + intendedDx, prevTileY + intendedDy). Returns (0, 0) if
+// no walkable adjacent tile exists — the ant holds for one tick and the
+// next tick's pheromone gradient / flow-field re-pick may produce a
+// different intended direction.
+//
+// Probe order (fixed, deterministic):
+//   1. Cardinal slip on the X axis  (intendedDx, 0)
+//   2. Cardinal slip on the Y axis  (0, intendedDy)
+//   3. Perpendicular sidestep CCW  (-intendedDy, intendedDx)
+//   4. Perpendicular sidestep CW   (intendedDy, -intendedDx)
+//   5. Reverse along X             (-intendedDx, 0)
+//   6. Reverse along Y             (0, -intendedDy)
+//   7. Diagonal away (X reverse)   (-intendedDx, intendedDy)
+//   8. Diagonal away (Y reverse)   (intendedDx, -intendedDy)
+//
+// Tie-break (equal scores): earlier probe wins. The probe order is
+// stable, so two ants in the same situation always pick the same detour.
+//
+// Cost: at most 8 canEnterSurfaceTile calls per blocked move. Each
+// canEnterSurfaceTile call walks the surface-feature selector
+// (~MAX_FOOTPRINT^2 anchor candidates = 16 in step 4). A blocked
+// step is rare (HardBlock features cover ~5–10% of tiles after
+// suppression), so the amortised cost is negligible.
+// ---------------------------------------------------------------------------
+
+export function pickSurfaceDetour(
+  world: WorldState,
+  prevTileX: number,
+  prevTileY: number,
+  intendedDx: number,
+  intendedDy: number,
+): { dx: number; dy: number } {
+  // Intended destination tile (where the ant wanted to be).
+  const targetX = prevTileX + intendedDx;
+  const targetY = prevTileY + intendedDy;
+
+  // Probe deltas in fixed order. Some entries collapse to (0, 0) when the
+  // intended direction has a zero axis (e.g. cardinal-only step had
+  // intendedDy === 0 → "perpendicular sidestep CCW" is (0, intendedDx)
+  // which is already covered, and probe 4 is (intendedDy=0, -intendedDx) =
+  // (0, -intendedDx), reverse-perpendicular). The (0, 0) probe is rejected
+  // below; redundant probes evaluated harmlessly.
+  const probeDx = [
+     intendedDx,  // 1: cardinal X slip
+     0,           // 2: cardinal Y slip
+    -intendedDy,  // 3: perpendicular CCW
+     intendedDy,  // 4: perpendicular CW
+    -intendedDx,  // 5: reverse X
+     0,           // 6: reverse Y
+    -intendedDx,  // 7: diagonal-away X-reverse
+     intendedDx,  // 8: diagonal-away Y-reverse
+  ];
+  const probeDy = [
+     0,
+     intendedDy,
+     intendedDx,
+    -intendedDx,
+     0,
+    -intendedDy,
+     intendedDy,
+    -intendedDy,
+  ];
+
+  let bestDx = 0;
+  let bestDy = 0;
+  let bestScore = -1;
+  for (let p = 0; p < 8; p++) {
+    const pdx = probeDx[p]!;
+    const pdy = probeDy[p]!;
+    if (pdx === 0 && pdy === 0) continue;
+    const cx = prevTileX + pdx;
+    const cy = prevTileY + pdy;
+    if (!canEnterSurfaceTile(world, cx, cy)) continue;
+    const score = Math.abs(cx - targetX) + Math.abs(cy - targetY);
+    if (bestScore < 0 || score < bestScore) {
+      bestDx = pdx;
+      bestDy = pdy;
+      bestScore = score;
+    }
+  }
+  return { dx: bestDx, dy: bestDy };
+}
+
+// ---------------------------------------------------------------------------
 // pickNearestHostileUnderground — Phase 09.1 Chunk 3 invasion routing helper
 //
 // Returns the fixed-point target position of the nearest hostile ant that is
@@ -2623,6 +2746,44 @@ function moveQueens(
             posY = prevPosY;
           }
         }
+      }
+    }
+
+    // Surface passability guard + detour (issue #44 step 4 — gated on v6).
+    // Mirrors the underground guard above. Pre-v6 queens replay with no
+    // surface passability to keep SCEN-06 byte-identity.
+    if (
+      world.simVersion >= SIM_VERSION_V7_SURFACE_PASSABILITY &&
+      zone === Zone.Surface &&
+      (dx !== 0 || dy !== 0)
+    ) {
+      const newTileX = posX >> FP_SHIFT;
+      const newTileY = posY >> FP_SHIFT;
+      const xCrossed = newTileX !== tileX;
+      const yCrossed = newTileY !== tileY;
+      let blocked = false;
+      if (xCrossed && yCrossed) {
+        const destPassable = canEnterSurfaceTile(world, newTileX, newTileY);
+        const passXOnly    = canEnterSurfaceTile(world, newTileX, tileY);
+        const passYOnly    = canEnterSurfaceTile(world, tileX, newTileY);
+        if (destPassable && (passXOnly || passYOnly)) {
+          // Diagonal allowed.
+        } else if (passXOnly) {
+          posY = prevPosY;
+        } else if (passYOnly) {
+          posX = prevPosX;
+        } else {
+          blocked = true;
+        }
+      } else if (xCrossed && !canEnterSurfaceTile(world, newTileX, tileY)) {
+        blocked = true;
+      } else if (yCrossed && !canEnterSurfaceTile(world, tileX, newTileY)) {
+        blocked = true;
+      }
+      if (blocked) {
+        const detour = pickSurfaceDetour(world, tileX, tileY, dx, dy);
+        posX = prevPosX + detour.dx * speed;
+        posY = prevPosY + detour.dy * speed;
       }
     }
 
@@ -3362,6 +3523,48 @@ export function tickAntMovement(
       }
     }
 
+    // Surface passability guard + detour (issue #44 step 4 — gated on v6).
+    // Mirrors the underground guard above. HardBlock features (boulders,
+    // twigs, leaves, big leaves) reject the step; pickSurfaceDetour finds
+    // the best walkable adjacent tile. Pre-v6 saves replay with no surface
+    // passability — same coordinate-only motion they recorded.
+    if (
+      world.simVersion >= SIM_VERSION_V7_SURFACE_PASSABILITY &&
+      zone === Zone.Surface &&
+      (dx !== 0 || dy !== 0)
+    ) {
+      const prevTileX = prevPosX >> FP_SHIFT;
+      const prevTileY = prevPosY >> FP_SHIFT;
+      const newTileX = posX >> FP_SHIFT;
+      const newTileY = posY >> FP_SHIFT;
+      const xCrossed = newTileX !== prevTileX;
+      const yCrossed = newTileY !== prevTileY;
+      let blocked = false;
+      if (xCrossed && yCrossed) {
+        const destPassable = canEnterSurfaceTile(world, newTileX, newTileY);
+        const passXOnly    = canEnterSurfaceTile(world, newTileX, prevTileY);
+        const passYOnly    = canEnterSurfaceTile(world, prevTileX, newTileY);
+        if (destPassable && (passXOnly || passYOnly)) {
+          // Diagonal allowed.
+        } else if (passXOnly) {
+          posY = prevPosY;
+        } else if (passYOnly) {
+          posX = prevPosX;
+        } else {
+          blocked = true;
+        }
+      } else if (xCrossed && !canEnterSurfaceTile(world, newTileX, prevTileY)) {
+        blocked = true;
+      } else if (yCrossed && !canEnterSurfaceTile(world, prevTileX, newTileY)) {
+        blocked = true;
+      }
+      if (blocked) {
+        const detour = pickSurfaceDetour(world, prevTileX, prevTileY, dx, dy);
+        posX = prevPosX + detour.dx * speed;
+        posY = prevPosY + detour.dy * speed;
+      }
+    }
+
     // Clamp to zone-appropriate bounds
     if (zone === Zone.Underground) {
       if (posX < 0) posX = 0;
@@ -3626,6 +3829,14 @@ function resolveSameColonyOccupancy(world: WorldState): void {
       } else {
         if (nx < 0 || nx >= SURFACE_GRID_WIDTH) continue;
         if (ny < 0 || ny >= SURFACE_GRID_HEIGHT) continue;
+        // Issue #44 step 4 — gated. Don't bump a same-colony collision
+        // into a HardBlock tile. Pre-v6 saves replay with no surface
+        // passability check (matches the pre-#44 behavior where the
+        // resolver only bounds-checked the surface candidate).
+        if (
+          world.simVersion >= SIM_VERSION_V7_SURFACE_PASSABILITY &&
+          !canEnterSurfaceTile(world, nx, ny)
+        ) continue;
       }
       // Exempt adjacent tiles are always "free" — we shift into them and do
       // not claim them (keeping them open for further stacking).

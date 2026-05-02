@@ -111,11 +111,14 @@ interface SurfaceFeatureRegistryEntry {
 // Registry order doubles as cross-type priority. Earlier entries suppress
 // later entries when their footprints overlap (mirrors PR #41 contract).
 //
-// Issue #44 step 3:
+// Issue #44 step 3 + step 4:
 //   - All previously-existing kinds bumped to 3×3 footprints with 3 variants
-//     each so they read as imposing at ant scale. Probabilities lowered
-//     accordingly so total feature density stays roughly the same as before
-//     (more tile coverage per anchor → fewer anchors).
+//     each so they read as imposing at ant scale. Probabilities tuned twice:
+//     once for the larger footprints (more tile coverage per anchor → fewer
+//     anchors), then again in step 4 once movement actually started honoring
+//     HardBlock — sparse hard-block coverage (~3–5% of tiles after
+//     suppression) keeps forager throughput acceptable while still feeling
+//     substantial visually.
 //   - New kinds Twig (4×2), Leaf (3×3), BigLeaf (3×4) added. All HardBlock.
 //   - Salts 151..156 reserved for surface feature anchor channels.
 //   - Priority: HardBlock kinds win over SoftCost. Among HardBlocks: Boulder
@@ -125,7 +128,7 @@ const SURFACE_FEATURES: ReadonlyArray<SurfaceFeatureRegistryEntry> = [
   {
     kind: SurfaceFeatureKind.Boulder,
     salt: 151,
-    probability: 5,                    // ~2.0% — substantial, sparse
+    probability: 2,                    // ~0.8% — substantial, sparse
     footprintTilesWide: 3,
     footprintTilesTall: 3,
     variantCount: 3,                    // round / flat / lichen
@@ -134,7 +137,7 @@ const SURFACE_FEATURES: ReadonlyArray<SurfaceFeatureRegistryEntry> = [
   {
     kind: SurfaceFeatureKind.Twig,
     salt: 154,
-    probability: 3,                    // ~1.2% — rarer than boulders
+    probability: 1,                    // ~0.4% — fallen twig (4×2 = 8 tiles)
     footprintTilesWide: 4,
     footprintTilesTall: 2,             // long horizontal fallen-twig silhouette
     variantCount: 2,                    // smooth / bark
@@ -143,7 +146,7 @@ const SURFACE_FEATURES: ReadonlyArray<SurfaceFeatureRegistryEntry> = [
   {
     kind: SurfaceFeatureKind.Leaf,
     salt: 155,
-    probability: 4,                    // ~1.6% — slightly more common than twigs
+    probability: 1,                    // ~0.4%
     footprintTilesWide: 3,
     footprintTilesTall: 3,
     variantCount: 3,                    // broad / curled / torn
@@ -152,7 +155,7 @@ const SURFACE_FEATURES: ReadonlyArray<SurfaceFeatureRegistryEntry> = [
   {
     kind: SurfaceFeatureKind.BigLeaf,
     salt: 156,
-    probability: 2,                    // ~0.8% — the rare ship-canopy anchor
+    probability: 1,                    // ~0.4% — the rare ship-canopy anchor
     footprintTilesWide: 3,
     footprintTilesTall: 4,             // vertical orientation
     variantCount: 2,                    // broad / torn
@@ -277,7 +280,13 @@ function isAnchorGameplaySuppressed(
   const r = SURFACE_FEATURE_ENTRANCE_RADIUS;
   for (const cidStr in world.colonies) {
     const colony = world.colonies[cidStr as unknown as number]!;
+    // The Phase 3 PRD §2a contract requires the caller to initialize
+    // `entrances` after createColonyRecord, but several pre-#44 tests
+    // create a colony without that init because their code path never
+    // reads it. Be defensive — undefined → "no entrances to suppress
+    // around" rather than a TypeError that breaks unrelated tests.
     const entrances = colony.entrances;
+    if (entrances === undefined) continue;
     for (let i = 0; i < entrances.length; i++) {
       const e = entrances[i]!;
       const ex = e.surfaceTileX;
@@ -288,11 +297,14 @@ function isAnchorGameplaySuppressed(
     }
   }
 
-  // Food piles — exact tile overlap.
+  // Food piles — Chebyshev-radius rectangle overlap (same r as entrances).
+  // Pre-#44 step 4 this was an exact-tile check; once movement honors
+  // HardBlock features, foragers need a clear approach corridor or they
+  // can't deposit pheromone trails to the pile and the colony starves.
   const piles = world.foodPiles;
   for (let i = 0; i < piles.length; i++) {
     const p = piles[i]!;
-    if (p.tileX >= fx0 && p.tileX <= fx1 && p.tileY >= fy0 && p.tileY <= fy1) {
+    if (fx1 >= p.tileX - r && fx0 <= p.tileX + r && fy1 >= p.tileY - r && fy0 <= p.tileY + r) {
       return true;
     }
   }
