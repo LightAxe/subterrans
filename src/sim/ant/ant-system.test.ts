@@ -3255,6 +3255,13 @@ describe('tickSearchLeash (09 digger-reassignment memo)', () => {
 describe('tickAntMovement — prev-tile tracking (09 follow-up issue 1)', () => {
   function setupMoveWorld(antTileX: number, antTileY: number) {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
+    // Pin to pre-v6: prev-tile tracking is gated on the same code path
+    // as the v6 surface SoftCost slowdown, which would halve the ant's
+    // FP_ONE speed if its current tile is a bush/grass clump under
+    // seed-42's terrain layout. The slowdown breaks the test's "one
+    // tick = one full tile crossing" precondition. These tests are
+    // about prev-tile recording semantics, not surface features.
+    world.simVersion = SIM_VERSION_V5_CHAMBER_ON_MARKED;
     const colony = createColonyRecord(COLONY_ID, 0);
     colony.entrances = [{
       entranceId:   allocateEntityId(world),

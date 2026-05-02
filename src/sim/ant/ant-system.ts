@@ -34,10 +34,17 @@
 
 import {
   SIM_VERSION_V4_DIAGONAL_MOTION,
+  SIM_VERSION_V6_FORAGER_NO_REVISIT,
   SIM_VERSION_V7_SURFACE_PASSABILITY,
   type WorldState,
 } from '../types.js';
-import { SurfaceMovementEffect, surfaceMovementAt } from '../surface-features.js';
+import {
+  SurfaceMovementEffect,
+  surfaceMovementAt,
+  surfaceMovementAtCached,
+  createSurfaceMovementCache,
+  type SurfaceMovementCache,
+} from '../surface-features.js';
 import type { AntComponents } from './ant-store.js';
 import { isRecentTile, pushRecentTile, clearRecentTiles } from './ant-store.js';
 import type { ColonyRecord, ChamberRecord } from '../colony/colony-store.js';
@@ -2481,6 +2488,7 @@ function moveQueens(
   queenIds: Set<number> | null,
   entranceFlowFields?: EntranceFlowFields,
   chamberFlowFields?: ChamberFlowFields,
+  surfaceMoveCache?: SurfaceMovementCache,
 ): void {
   void entranceFlowFields; // entrance steering for queens uses Manhattan — no flow-field needed on surface.
   if (queenIds === null || queenIds.size === 0) return;
@@ -2704,7 +2712,26 @@ function moveQueens(
 
     if (dx === 0 && dy === 0) continue;
 
-    const speed = ants.speed[qId]!;
+    const baseSpeed = ants.speed[qId]!;
+    // Surface SoftCost slowdown (issue #44 step 5 — gated on v6). When the
+    // queen's current tile is a SoftCost feature (bush / grass clump),
+    // halve effective speed for this tick. Integer-only; min 1 so a base
+    // speed of 1 doesn't get clamped to zero. Pre-v6 queens move at base
+    // speed regardless. Uses the per-tick cache when available; falls back
+    // to direct compute when called from a test harness without a cache.
+    let speed = baseSpeed;
+    if (
+      world.simVersion >= SIM_VERSION_V6_SURFACE_PASSABILITY &&
+      zone === Zone.Surface
+    ) {
+      const movement = surfaceMoveCache !== undefined
+        ? surfaceMovementAtCached(world, tileX, tileY, surfaceMoveCache)
+        : surfaceMovementAt(world, tileX, tileY);
+      if (movement === SurfaceMovementEffect.SoftCost) {
+        const halved = baseSpeed >> 1;
+        speed = halved < 1 ? 1 : halved;
+      }
+    }
     let posX = prevPosX + dx * speed;
     let posY = prevPosY + dy * speed;
 
@@ -2878,12 +2905,20 @@ export function tickAntMovement(
   const undergroundMaxX = (UNDERGROUND_GRID_WIDTH << FP_SHIFT) - 1;
   const undergroundMaxY = (UNDERGROUND_GRID_HEIGHT << FP_SHIFT) - 1;
 
+  // Issue #44 step 5 — per-tick surface movement cache. The SoftCost check
+  // fires for every surface ant on every tick; without memoisation each
+  // call re-walks the surface-feature selector (anchor scan + suppression).
+  // The cache flattens it to O(1) per repeated tile lookup. ~16 KB Uint8Array
+  // allocated once per tickAntMovement, discarded at end. Pre-v6 worlds
+  // never consult it (gate below skips the SoftCost block entirely).
+  const surfaceMoveCache = createSurfaceMovementCache();
+
   // P1 queen-relocation: queens have their own movement path (route to Queen
   // chamber). They must be skipped in the main loop below so the default
   // Idle-task branch (which triggers needsSurface zone-transition) does not
   // yank a relocated queen back to the surface. Collect the ID set up front.
   const queenIds = collectAliveQueenIds(world);
-  moveQueens(world, queenIds, entranceFlowFields, chamberFlowFields);
+  moveQueens(world, queenIds, entranceFlowFields, chamberFlowFields, surfaceMoveCache);
 
   // Same-colony occupancy enforcement is applied as a POST-PASS after the
   // movement loop — see resolveSameColonyOccupancy below. The in-loop
@@ -3419,7 +3454,7 @@ export function tickAntMovement(
     // (dx=dy=0); the buffer-push gate (only on actual tile crossings) keeps
     // pause ticks from polluting history.
     if (
-      world.simVersion >= 6 &&
+      world.simVersion >= SIM_VERSION_V6_FORAGER_NO_REVISIT &&
       zone === Zone.Surface &&
       task === AntTask.Foraging &&
       ants.subTask[id] === ForagingSubState.SearchingFood &&
@@ -3459,9 +3494,28 @@ export function tickAntMovement(
       }
     }
 
-    const speed = ants.speed[id]!;
+    const baseSpeed = ants.speed[id]!;
     const prevPosX = ants.posX[id]!;
     const prevPosY = ants.posY[id]!;
+
+    // Surface SoftCost slowdown (issue #44 step 5 — gated on v6). When the
+    // ant's current tile is a SoftCost feature (bush / grass clump), halve
+    // effective speed for this tick. Integer-only; min 1 so a base speed
+    // of 1 doesn't get clamped to zero. Pre-v6 ants move at base speed.
+    // Underground ants skip the check entirely (zone gate). Per-tick cache
+    // memoises the lookup so repeated same-tile queries are O(1).
+    let speed = baseSpeed;
+    if (
+      world.simVersion >= SIM_VERSION_V6_SURFACE_PASSABILITY &&
+      zone === Zone.Surface
+    ) {
+      const tileX = prevPosX >> FP_SHIFT;
+      const tileY = prevPosY >> FP_SHIFT;
+      if (surfaceMovementAtCached(world, tileX, tileY, surfaceMoveCache) === SurfaceMovementEffect.SoftCost) {
+        const halved = baseSpeed >> 1;
+        speed = halved < 1 ? 1 : halved;
+      }
+    }
     let posX = prevPosX + dx * speed;
     let posY = prevPosY + dy * speed;
 

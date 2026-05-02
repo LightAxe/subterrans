@@ -478,3 +478,65 @@ export function surfaceMovementAt(
   const slice = surfaceFeatureAt(world, tileX, tileY);
   return slice === null ? SurfaceMovementEffect.Cosmetic : slice.movement;
 }
+
+// ---------------------------------------------------------------------------
+// SurfaceMovementCache — per-tick lookup cache for surfaceMovementAt
+//
+// Step 5 introduced a per-ant per-tick SoftCost check that calls
+// `surfaceMovementAt` on every surface ant's current tile, and step 4 calls
+// `canEnterSurfaceTile` on every tile boundary crossing. Both go through
+// `surfaceFeatureAt`, which is non-trivial (anchor scan + overlap suppression
+// + gameplay suppression that walks all colonies). At hundreds of surface
+// ants × 20 ticks/sec, the call rate dominates the simulation step.
+//
+// The cache flattens the cost via a Uint8Array of size
+// `SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT` (~16 KB) initialised to a
+// sentinel value (255). Lookups check the cache first; misses compute the
+// effect via `surfaceMovementAt` and store. Same-tile re-lookups are O(1).
+//
+// Allocated once per `tickAntMovement` invocation and discarded — derived
+// purely from `WorldState`, so it's not snapshot state and never crosses
+// the save boundary.
+//
+// Pattern matches the underground side's flow-field caches (per-tick
+// allocation, derived from world state, parameter-passed through movement
+// helpers, never persisted).
+// ---------------------------------------------------------------------------
+
+import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constants.js';
+
+const SURFACE_MOVE_CACHE_SENTINEL = 255 as const;
+
+export type SurfaceMovementCache = Uint8Array;
+
+export function createSurfaceMovementCache(): SurfaceMovementCache {
+  const c = new Uint8Array(SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT);
+  c.fill(SURFACE_MOVE_CACHE_SENTINEL);
+  return c;
+}
+
+/**
+ * Cached variant of `surfaceMovementAt`. Returns the same value as the
+ * uncached form; just memoises within a tick.
+ *
+ * Out-of-bounds tiles return `Cosmetic` (matches the no-feature default,
+ * which is what surface movement code wants — the bounds check is the
+ * caller's responsibility).
+ */
+export function surfaceMovementAtCached(
+  world: WorldState,
+  tileX: number,
+  tileY: number,
+  cache: SurfaceMovementCache,
+): SurfaceMovementEffect {
+  if (tileX < 0 || tileY < 0 || tileX >= SURFACE_GRID_WIDTH || tileY >= SURFACE_GRID_HEIGHT) {
+    return SurfaceMovementEffect.Cosmetic;
+  }
+  const idx = tileY * SURFACE_GRID_WIDTH + tileX;
+  let v = cache[idx]!;
+  if (v === SURFACE_MOVE_CACHE_SENTINEL) {
+    v = surfaceMovementAt(world, tileX, tileY);
+    cache[idx] = v;
+  }
+  return v as SurfaceMovementEffect;
+}

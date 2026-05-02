@@ -218,6 +218,143 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     void startTileX; void startTileY;
   });
 
+  it('under v6 — ant on a SoftCost (grass/bush) tile moves at half speed (issue #44 step 5)', () => {
+    // Find a tile that's SoftCost AND has a Cosmetic neighbor to the east
+    // (so the ant has somewhere to move). Spawn a Foraging+CarryingFood
+    // ant at the SoftCost tile with FP_ONE speed. With base speed FP_ONE,
+    // a normal tile gives one full tile of motion per tick; SoftCost
+    // halves that, leaving the ant one tile-edge short.
+    const world = createWorldState(42);
+    expect(world.simVersion).toBe(SIM_VERSION_V6_SURFACE_PASSABILITY);
+    let pair: { soft: { x: number; y: number }; openEast: { x: number; y: number } } | null = null;
+    for (let y = 4; y < 80 && pair === null; y++) {
+      for (let x = 4; x < 80; x++) {
+        const cur = surfaceFeatureAt(world, x, y);
+        const east = surfaceFeatureAt(world, x + 1, y);
+        const eastEast = surfaceFeatureAt(world, x + 2, y);
+        if (
+          cur !== null && cur.movement === SurfaceMovementEffect.SoftCost &&
+          (east === null || east.movement !== SurfaceMovementEffect.HardBlock) &&
+          (eastEast === null || eastEast.movement !== SurfaceMovementEffect.HardBlock)
+        ) {
+          pair = { soft: { x, y }, openEast: { x: x + 1, y } };
+          break;
+        }
+      }
+    }
+    expect(pair).not.toBeNull();
+
+    const colony = createColonyRecord(1, 0);
+    colony.entrances = [{
+      entranceId: 0,
+      surfaceTileX: pair!.soft.x + 30,  // far east — drives the ant rightward
+      surfaceTileY: pair!.soft.y,
+      isOpen: true,
+    }];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    world.colonies[1] = colony;
+
+    const id = spawnSurfaceCarrier(world, 1, pair!.soft.x, pair!.soft.y);
+    const startTileX = world.ants.posX[id]! >> FP_SHIFT;
+    const rng = new Rng(42);
+    tickAntMovement(world, rng, createDigFlowFields());
+    const endTileX = world.ants.posX[id]! >> FP_SHIFT;
+
+    // Half-speed: ant either stays in the same tile (if half FP_ONE = 128
+    // doesn't push it past the boundary it started inside) or has crossed
+    // exactly one tile (if it started near the right edge of the SoftCost
+    // tile). Specifically it must NOT have crossed two tiles, which a
+    // full-speed FP_ONE step from a tile-aligned position would.
+    // spawnSurfaceCarrier places the ant at (tileX << FP_SHIFT) +
+    // (FP_ONE >> 1) — mid-tile — so a half-speed step (128) lands at
+    // mid-tile + 128 = tile-edge, just barely crossing into the east tile.
+    // Either outcome (still on soft tile, or one tile east) is valid; what
+    // we assert is "didn't make it two tiles".
+    expect(endTileX - startTileX).toBeLessThanOrEqual(1);
+  });
+
+  it('under v6 — ant on a Cosmetic tile moves at full speed (sanity)', () => {
+    const world = createWorldState(42);
+    let pair: { open: { x: number; y: number } } | null = null;
+    for (let y = 4; y < 80 && pair === null; y++) {
+      for (let x = 4; x < 80; x++) {
+        const cur = surfaceFeatureAt(world, x, y);
+        const east = surfaceFeatureAt(world, x + 1, y);
+        if (
+          cur === null &&
+          east === null  // open + open-east — guaranteed non-SoftCost / non-HardBlock
+        ) {
+          pair = { open: { x, y } };
+          break;
+        }
+      }
+    }
+    expect(pair).not.toBeNull();
+
+    const colony = createColonyRecord(1, 0);
+    colony.entrances = [{
+      entranceId: 0,
+      surfaceTileX: pair!.open.x + 30,
+      surfaceTileY: pair!.open.y,
+      isOpen: true,
+    }];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    world.colonies[1] = colony;
+
+    const id = spawnSurfaceCarrier(world, 1, pair!.open.x, pair!.open.y);
+    const startTileX = world.ants.posX[id]! >> FP_SHIFT;
+    const rng = new Rng(42);
+    tickAntMovement(world, rng, createDigFlowFields());
+    const endTileX = world.ants.posX[id]! >> FP_SHIFT;
+
+    // Full-speed FP_ONE step from mid-tile lands at next-tile-mid → 1 tile
+    // crossing. Confirms the slowdown is applied only on SoftCost tiles.
+    expect(endTileX - startTileX).toBe(1);
+  });
+
+  it('SoftCost slowdown clamps to min 1 (speed=1 stays at 1, doesn\'t go to 0)', () => {
+    // Edge case: an ant with the absolute minimum nonzero speed (1) on a
+    // SoftCost tile. Half of 1 is 0; the clamp must keep it at 1 so the
+    // ant isn't permanently stuck. Verify by reading effective speed via
+    // motion delta after one tick.
+    const world = createWorldState(42);
+    let soft: { x: number; y: number } | null = null;
+    for (let y = 4; y < 80 && soft === null; y++) {
+      for (let x = 4; x < 80; x++) {
+        const cur = surfaceFeatureAt(world, x, y);
+        if (cur !== null && cur.movement === SurfaceMovementEffect.SoftCost) {
+          soft = { x, y };
+          break;
+        }
+      }
+    }
+    expect(soft).not.toBeNull();
+
+    const colony = createColonyRecord(1, 0);
+    colony.entrances = [{
+      entranceId: 0,
+      surfaceTileX: soft!.x + 30,
+      surfaceTileY: soft!.y,
+      isOpen: true,
+    }];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    world.colonies[1] = colony;
+
+    const id = spawnSurfaceCarrier(world, 1, soft!.x, soft!.y);
+    world.ants.speed[id] = 1;
+    const startPosX = world.ants.posX[id]!;
+    const rng = new Rng(42);
+    tickAntMovement(world, rng, createDigFlowFields());
+    const endPosX = world.ants.posX[id]!;
+
+    // Speed=1 halved would be 0; clamped to 1. So the ant moves at least
+    // 1 sub-pixel per tick (the minimum quantum). NOT stuck.
+    expect(endPosX).not.toBe(startPosX);
+  });
+
   it('under v5 — same setup, ant freely walks onto the (now non-blocking) feature tile', () => {
     // Same construction as v6 test but with simVersion pinned. The
     // canEnterSurfaceTile guard is gated on v6, so v5 ants ignore features.

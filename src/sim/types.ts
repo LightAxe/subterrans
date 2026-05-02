@@ -68,14 +68,14 @@ export const SIM_VERSION_V6_FORAGER_NO_REVISIT = 6 as const;
  * canopies, big-leaf "ships") block surface ants and a deterministic
  * local detour picks the best walkable adjacent tile when the preferred
  * step is blocked; SoftCost features (bushes, grass clumps) halve
- * effective speed for the tick the ant occupies a SoftCost tile.
+ * effective speed (`speed >> 1`, min 1) for the tick the ant occupies a
+ * SoftCost tile — integer-only, no float math, no new RNG pulls.
  * Pre-v7 saves replay with no surface passability and no soft cost —
  * same coordinate-only motion they recorded — so SCEN-06 byte-identity
  * holds.
  *
  * Originally landed as v6 on the #44 branch; renumbered to v7 during
- * the rebase onto main once #42 (PR #47) had already taken v6. The
- * meaning is unchanged from what was committed in step 4.
+ * the rebase onto main once #42 (PR #47) had already taken v6.
  */
 export const SIM_VERSION_V7_SURFACE_PASSABILITY = 7 as const;
 export const LATEST_SIM_VERSION = SIM_VERSION_V7_SURFACE_PASSABILITY;
