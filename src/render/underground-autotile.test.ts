@@ -159,10 +159,11 @@ describe('drawAutotiledUndergroundTile — bidirectional smooth boundary (issue 
   // encroachment of the OPPOSITE kind into themselves — open tiles
   // get wall encroachment along their wall-side edges, AND wall tiles
   // get open encroachment along their open-side edges. Maximum
-  // displacement is BOUNDARY_AMP (5) pixels in either direction.
+  // displacement is BOUNDARY_AMP pixels in either direction (post-v4.2
+  // = 3 to remove the visible "spike" artifact UAT flagged at AMP=5).
   //
   // Tiles with NO opposite-kind cardinal neighbors stay pure substrate.
-  const BOUNDARY_AMP = 5;
+  const BOUNDARY_AMP = 3;
 
   it('an open tile with NO wall neighbors stays fully open substrate', () => {
     const buf = renderTile(makeNeighbors('open', {

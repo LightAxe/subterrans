@@ -42,14 +42,18 @@ const SALT_BOUNDARY_V = 522;
 // Maximum boundary displacement in pixels. The actual boundary between
 // wall and open materials wanders ±BOUNDARY_AMP from the nominal tile
 // grid line, so corner positions are no longer pinned to tile corners.
-// 5 chosen so a 1-wide corridor (16 px) never pinches below ~6 px.
-const BOUNDARY_AMP = 5 as const;
+// UAT feedback on AMP=5: "weird spikes pointing out of the tunnels."
+// Reduced to 3 — extreme excursions are what produce the spike artifact
+// (especially at corners where N and W encroachments overlap with
+// different magnitudes). With AMP=3 the boundary still deviates
+// noticeably from the grid but transitions feel like gentle rolling.
+const BOUNDARY_AMP = 3 as const;
 // Control-point spacing in pixels. Smaller = more frequent variation
-// (jagged); larger = smoother/wavier. 8 gives ~2 control points per
-// tile edge with cosine smoothing — slow rolling waves, like a glass
-// ant-farm wall instead of pixel-grade jaggedness. UAT feedback on
-// CP_SPACING=4: "way too jagged, walls should look more natural."
-const BOUNDARY_CP_SPACING = 8 as const;
+// (jagged); larger = smoother/wavier. 16 gives ~1 control point per
+// tile edge with cosine smoothing — very slow rolling waves over
+// multi-tile spans. UAT feedback on CP_SPACING=8: "still too jagged,
+// should look like a glass ant farm." Bumped to one wave per tile.
+const BOUNDARY_CP_SPACING = 16 as const;
 
 /**
  * Draw an underground tile: dithered substrate by `centerKind`, plus
