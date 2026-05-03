@@ -22,6 +22,7 @@
 // `surfaceMovementAt(world, tileX, tileY)` for passability + step cost.
 
 import type { WorldState } from './types.js';
+import { SIM_VERSION_V8_LEASH_HYSTERESIS } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -343,9 +344,23 @@ function tileHash(tileX: number, tileY: number, salt: number, terrainSeed: numbe
 // Anchor overlap suppression — same logic as the previous render-side
 // `isAnchorSuppressed` (cross-type by priority + same-type upper-leftmost
 // wins, recursive into is-real-render check). With terrainSeed mixing.
+//
+// Real-render check (v8+): rejects both overlap-suppressed (recursive) AND
+// gameplay-suppressed (entrance/food zone) shadowers. Pre-v8 only checked
+// overlap-suppression — a higher-priority anchor inside a suppression zone
+// would never render but would still suppress lower-priority anchors
+// outside the zone, producing unintended empty halos. v8+ closes that gap
+// (Codex P2 on PR #49 round 3); pre-v8 saves replay with the original
+// terrain layout for byte-identity (SCEN-06).
 // ---------------------------------------------------------------------------
 
+/**
+ * @param world         used to consult `isAnchorGameplaySuppressed` at v8+
+ *                      so suppressors that themselves sit in an entrance/
+ *                      food-pile zone don't shadow other anchors.
+ */
 function isAnchorSuppressedByOverlap(
+  world: WorldState,
   ax: number,
   ay: number,
   ownEntryIndex: number,
@@ -354,6 +369,7 @@ function isAnchorSuppressedByOverlap(
   const own = SURFACE_FEATURES[ownEntryIndex]!;
   const ownW = own.footprintTilesWide;
   const ownH = own.footprintTilesTall;
+  const checkGameplay = world.simVersion >= SIM_VERSION_V8_LEASH_HYSTERESIS;
 
   // Cross-type: any higher-priority feature whose footprint overlaps suppresses.
   for (let ei = 0; ei < ownEntryIndex; ei++) {
@@ -365,11 +381,14 @@ function isAnchorSuppressedByOverlap(
         const ph = tileHash(px, py, entry.salt, terrainSeed);
         if ((ph & 0x1ff) >= entry.probability) continue;
         // Only count (px, py) as a real suppressor if it itself renders.
-        // A higher-priority anchor that's suppressed by an even-higher-
-        // priority one shouldn't block lower-priority anchors. Recursion
-        // terminates because every call strictly reduces ownEntryIndex
-        // (this branch) or reduces (ay, ax) lex order (the same-type branch).
-        if (!isAnchorSuppressedByOverlap(px, py, ei, terrainSeed)) return true;
+        // Recursion terminates because every recursive call strictly
+        // reduces ownEntryIndex (this branch) or reduces (ay, ax) lex
+        // order (the same-type branch). The gameplay-suppression
+        // rejection (v8+) is iterative over colonies + food piles, no
+        // recursion.
+        if (isAnchorSuppressedByOverlap(world, px, py, ei, terrainSeed)) continue;
+        if (checkGameplay && isAnchorGameplaySuppressed(world, px, py, W, H)) continue;
+        return true;
       }
     }
   }
@@ -405,7 +424,14 @@ function isAnchorSuppressedByOverlap(
       if (py === ay && px >= ax) continue;
       const ph = tileHash(px, py, own.salt, terrainSeed);
       if ((ph & 0x1ff) >= own.probability) continue;
-      if (!isAnchorSuppressedByOverlap(px, py, ownEntryIndex, terrainSeed)) return true;
+      // Same gameplay-suppression rejection as the cross-type branch
+      // (v8+): a same-type anchor sitting inside an entrance/food
+      // suppression zone never renders, so it must not suppress
+      // sibling anchors outside the zone (Codex P2). Pre-v8 keeps the
+      // overlap-only check.
+      if (isAnchorSuppressedByOverlap(world, px, py, ownEntryIndex, terrainSeed)) continue;
+      if (checkGameplay && isAnchorGameplaySuppressed(world, px, py, ownW, ownH)) continue;
+      return true;
     }
   }
   return false;
@@ -456,7 +482,7 @@ export function surfaceFeatureAt(
         if (dx >= entry.footprintTilesWide || dy >= entry.footprintTilesTall) continue;
         const h = tileHash(ax, ay, entry.salt, terrainSeed);
         if ((h & 0x1ff) >= entry.probability) continue;
-        if (isAnchorSuppressedByOverlap(ax, ay, ei, terrainSeed)) {
+        if (isAnchorSuppressedByOverlap(world, ax, ay, ei, terrainSeed)) {
           break;
         }
         if (isAnchorGameplaySuppressed(world, ax, ay, entry.footprintTilesWide, entry.footprintTilesTall)) {

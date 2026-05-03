@@ -8,7 +8,11 @@
 //   - surfaceMovementAt convenience helper
 
 import { describe, it, expect } from 'vitest';
-import { createWorldState, type WorldState } from './types.js';
+import {
+  createWorldState,
+  SIM_VERSION_V7_SURFACE_PASSABILITY,
+  type WorldState,
+} from './types.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import {
   surfaceFeatureAt,
@@ -264,6 +268,149 @@ describe('surfaceFeatureAt — gameplay suppression', () => {
     installColonyWithEntrance(suppressed, 2, second!.x, second!.y);
     expect(surfaceFeatureAt(suppressed, first!.x, first!.y)).toBeNull();
     expect(surfaceFeatureAt(suppressed, second!.x, second!.y)).toBeNull();
+  });
+
+  it('v8+ — gameplay-suppressed shadow no longer hides outside-zone anchors (Codex P2 round-3 fix)', () => {
+    // Pre-fix bug: a higher-priority anchor sitting inside an entrance
+    // suppression zone never rendered, but `isAnchorSuppressedByOverlap`
+    // would still treat it as a real suppressor of LOWER-priority
+    // anchors whose footprints overlap its shadow OUTSIDE the zone.
+    // The result was unintended empty halos around the suppression
+    // ring. Post-fix, the recursion also rejects gameplay-suppressed
+    // candidate suppressors, so lower-priority anchors that pre-fix
+    // were unjustly hidden now surface.
+    //
+    // Property-test pattern: scan many seeds, find a tile T near (but
+    // outside) an entrance suppression zone where:
+    //   - baseline (no entrance) returns a feature at T,
+    //   - the baseline anchor at T sits INSIDE the zone of a
+    //     hypothetical entrance E,
+    // Then install entrance E and verify v8 returns SOMETHING at T
+    // (it might be a different lower-priority anchor than baseline,
+    // but it must NOT be null — that's the v8 invariant). Pre-v8
+    // would return null in the same scenario.
+    //
+    // The test counts how many tiles SHIFT from null (pre-fix) to
+    // non-null (post-fix) across a seed sweep. Even a single proven
+    // example demonstrates the fix; the count gives statistical
+    // confidence the fix matters in practice rather than only in
+    // theory.
+    const r = SURFACE_FEATURE_ENTRANCE_RADIUS;
+    let demonstrationCount = 0;
+    seedLoop:
+    for (let seed = 1; seed < 80; seed++) {
+      const baseline = createWorldState(seed);
+      // Place an entrance at a known location with room around it.
+      const ex = 30, ey = 30;
+      // Examine tiles just OUTSIDE the entrance suppression rectangle
+      // — on the perimeter where the shadow bug would manifest.
+      for (let dy = -r - 6; dy <= r + 6; dy++) {
+        for (let dx = -r - 6; dx <= r + 6; dx++) {
+          const tx = ex + dx;
+          const ty = ey + dy;
+          // Skip tiles inside the suppression rectangle — those are
+          // legitimately suppressed and not part of this bug.
+          if (Math.abs(dx) <= r && Math.abs(dy) <= r) continue;
+          const baselineSlice = surfaceFeatureAt(baseline, tx, ty);
+          if (baselineSlice === null) continue;
+          // Need the baseline anchor to be INSIDE the would-be
+          // suppression rectangle — that's the geometric setup for
+          // the shadow bug.
+          const ax = baselineSlice.anchorX;
+          const ay = baselineSlice.anchorY;
+          const anchorInsideZone =
+            ax >= ex - r && ax <= ex + r && ay >= ey - r && ay <= ey + r;
+          if (!anchorInsideZone) continue;
+          // Setup: install the entrance, re-query.
+          const withEntrance = createWorldState(seed);
+          installColonyWithEntrance(withEntrance, 1, ex, ey);
+          const v8Slice = surfaceFeatureAt(withEntrance, tx, ty);
+          // v8 invariant: the tile MAY have a different feature now
+          // (the baseline shadower is gone), but it should not
+          // collapse to null when a lower-priority anchor exists in
+          // the shadow region. The strongest v8 claim we can make
+          // without re-running the registry-walk: the v8 path returns
+          // SOMETHING for this tile, OR the v8 path correctly returns
+          // null because no lower-priority shadower exists.
+          //
+          // To make the assertion meaningful we narrow further: only
+          // record a demonstration when v8 returns a feature whose
+          // anchor is NOT inside the zone (proves the lower-priority
+          // anchor surfaced) AND whose feature kind differs from
+          // baseline (proves a different anchor took over).
+          if (v8Slice === null) continue;
+          const v8AnchorOutsideZone =
+            v8Slice.anchorX < ex - r || v8Slice.anchorX > ex + r ||
+            v8Slice.anchorY < ey - r || v8Slice.anchorY > ey + r;
+          // baselineSlice anchor is INSIDE the zone (anchorInsideZone
+          // gate above); requiring v8 anchor to be OUTSIDE the zone
+          // is sufficient to prove a different anchor surfaced — they
+          // can't match coordinates when one is inside and the other
+          // outside.
+          if (!v8AnchorOutsideZone) continue;
+          demonstrationCount++;
+          if (demonstrationCount >= 3) break seedLoop;
+        }
+      }
+    }
+    // The fix MUST surface at least one previously-hidden anchor
+    // across the 80-seed sweep. Three independent demonstrations
+    // prove the fix is working in practice, not just in a single
+    // contrived setup.
+    expect(demonstrationCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('pre-v8 — gameplay-suppressed shadow STILL hides outside-zone anchors (legacy preserved)', () => {
+    // Companion to the v8 test above — proves the simVersion gate
+    // routes correctly. The rigorous test: for each candidate tile
+    // sampled, build BOTH the v8 result and the v7 result. The gate
+    // is functioning correctly when there exists at least one tile
+    // where v7 returns null AND v8 returns a feature — that's the
+    // exact behaviour difference the gate is supposed to produce.
+    // Counting pre-v8 nulls alone would pass even if the gate were
+    // broken (some tiles legitimately return null because no lower-
+    // priority anchor exists at all), so the comparison is essential.
+    const r = SURFACE_FEATURE_ENTRANCE_RADIUS;
+    let v7NullV8FilledCount = 0;
+    let sampledCount = 0;
+    seedLoop:
+    for (let seed = 1; seed < 80; seed++) {
+      const baseline = createWorldState(seed);
+      const ex = 30, ey = 30;
+      for (let dy = -r - 6; dy <= r + 6; dy++) {
+        for (let dx = -r - 6; dx <= r + 6; dx++) {
+          const tx = ex + dx;
+          const ty = ey + dy;
+          if (Math.abs(dx) <= r && Math.abs(dy) <= r) continue;
+          const baselineSlice = surfaceFeatureAt(baseline, tx, ty);
+          if (baselineSlice === null) continue;
+          const ax = baselineSlice.anchorX;
+          const ay = baselineSlice.anchorY;
+          const anchorInsideZone =
+            ax >= ex - r && ax <= ex + r && ay >= ey - r && ay <= ey + r;
+          if (!anchorInsideZone) continue;
+          // Build both worlds at the same seed + entrance and pin
+          // sim version explicitly.
+          const w7 = createWorldState(seed);
+          w7.simVersion = SIM_VERSION_V7_SURFACE_PASSABILITY;
+          installColonyWithEntrance(w7, 1, ex, ey);
+          const w8 = createWorldState(seed);
+          // w8 keeps default LATEST_SIM_VERSION (v8+).
+          installColonyWithEntrance(w8, 1, ex, ey);
+          const v7Slice = surfaceFeatureAt(w7, tx, ty);
+          const v8Slice = surfaceFeatureAt(w8, tx, ty);
+          sampledCount++;
+          if (v7Slice === null && v8Slice !== null) {
+            v7NullV8FilledCount++;
+          }
+          if (sampledCount >= 50) break seedLoop;
+        }
+      }
+    }
+    // We sampled enough candidate geometries to expect at least one
+    // demonstration of the gate routing different paths.
+    expect(sampledCount).toBeGreaterThan(0);
+    expect(v7NullV8FilledCount).toBeGreaterThan(0);
   });
 });
 

@@ -78,17 +78,36 @@ export const SIM_VERSION_V6_FORAGER_NO_REVISIT = 6 as const;
  */
 export const SIM_VERSION_V7_SURFACE_PASSABILITY = 7 as const;
 /**
- * v8 (LATEST_SIM_VERSION) — issue #44 UAT round 3. Leash-boundary
- * hysteresis: the SearchingFood→ReturningToNest demotion still fires at
- * `dist > SEARCH_LEASH_RADII[wave]` (unchanged), but the inverse
- * ReturningToNest→SearchingFood breakout now also requires the ant to be
- * INSIDE `radius − LEASH_HYSTERESIS_TILES` before any food signal can
- * pull it back out. Without this, a forager parked just past its leash
- * radius with a steady pheromone signal nearby flip-flops every tick —
- * each flip clears `recentTilesX/Y`, so the issue-#42 no-revisit memory
- * never accumulates and the ant cycles in a 4-tile region. Pre-v8 saves
- * replay with the original symmetric breakout (signal-only, no distance
- * gate) so SCEN-06 byte-identity holds.
+ * v8 (LATEST_SIM_VERSION) — issue #44 UAT round 3. Three converging
+ * fixes for stuck/eddied surface foragers, all gated together:
+ *
+ *   (a) Leash-boundary hysteresis. The SearchingFood→ReturningToNest
+ *       demotion still fires at `dist > SEARCH_LEASH_RADII[wave]`
+ *       (unchanged), but the inverse ReturningToNest→SearchingFood
+ *       breakout now also requires `dist <= radius -
+ *       LEASH_HYSTERESIS_TILES` before any AMBIENT food signal can
+ *       pull the ant back out. Player-marked priority piles bypass
+ *       the deadband. Pre-v8 the symmetric signal-only breakout
+ *       produced per-tick flip-flops at the radius boundary that wiped
+ *       the issue-#42 recent-tiles ring buffer.
+ *
+ *   (b) Detour recent-tile fallback. `pickSurfaceDetour` now falls
+ *       back to the best RECENT tile when every walkable neighbour
+ *       has been recently visited, instead of returning (0, 0) and
+ *       deadlocking the ant. The fallback step pushes a new ring-
+ *       buffer entry, eventually rotating the original blocker out.
+ *       Pre-v8 the picker hard-rejected recent tiles, stranding ants
+ *       in one-way pockets around HardBlock features.
+ *
+ *   (c) Surface-feature shadow correctness. `isAnchorSuppressedByOverlap`
+ *       now also rejects suppressors that themselves sit inside an
+ *       entrance/food gameplay-suppression zone — pre-v8 a higher-
+ *       priority anchor that would never render still cast an empty
+ *       halo around the suppression zone, hiding lower-priority
+ *       anchors that should have surfaced.
+ *
+ * Pre-v8 saves replay all three behaviours unchanged for SCEN-06
+ * byte-identity.
  */
 export const SIM_VERSION_V8_LEASH_HYSTERESIS = 8 as const;
 export const LATEST_SIM_VERSION = SIM_VERSION_V8_LEASH_HYSTERESIS;
@@ -131,12 +150,20 @@ export interface WorldState {
    *           speed of any surface ant occupying a SoftCost tile.
    *       Pre-v7 saves replay with no surface passability and no soft cost
    *       — same coordinate-only motion they recorded.
-   *   8 = Leash-boundary hysteresis (issue #44 UAT round 3). The
-   *       ReturningToNest→SearchingFood breakout in tickExcursionBoundary
-   *       requires the ant to be inside `radius − LEASH_HYSTERESIS_TILES`
-   *       in addition to having a food signal — kills the per-tick
-   *       flip-flop that was wiping recent-tiles memory at the boundary.
-   *       Pre-v8 saves keep the original signal-only breakout.
+   *   8 = Issue #44 UAT round 3 — three converging surface-forager
+   *       fixes:
+   *       (a) Leash-boundary hysteresis. The RTN→SF breakout in
+   *           tickExcursionBoundary requires `dist <= radius -
+   *           LEASH_HYSTERESIS_TILES` for AMBIENT signals (priority
+   *           piles bypass).
+   *       (b) Detour recent-tile fallback. pickSurfaceDetour falls
+   *           back to the best recent tile when every walkable
+   *           neighbour is recent — kills permanent deadlocks in
+   *           one-way pockets around HardBlock features.
+   *       (c) Surface-feature shadow correctness. Suppressors inside
+   *           a gameplay-suppression zone no longer cast an empty
+   *           halo over lower-priority anchors outside the zone.
+   *       Pre-v8 saves keep the original behaviours for byte-identity.
    *
    * Round-trips through copyWorldState and save/load.
    */

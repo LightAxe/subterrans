@@ -2376,6 +2376,16 @@ export function pickSurfaceDetour(
   let bestDx = 0;
   let bestDy = 0;
   let bestScore = -1;
+  // Recent-tile fallback (Codex P2 on PR #49 round 3): if every walkable
+  // neighbor is in the recent-tiles buffer, returning (0, 0) holds the
+  // ant in place. The recent buffer only advances on tile crossings, so
+  // the buffer never ages out and the ant is permanently deadlocked in
+  // one-way pockets around HardBlock features. Track the best RECENT
+  // candidate separately and fall back to it when no fresh option
+  // exists — backtracking is preferable to permanent stall.
+  let bestRecentDx = 0;
+  let bestRecentDy = 0;
+  let bestRecentScore = -1;
 
   // Walk all 8 compass directions. Originally this used 8 probes derived
   // from `intendedDx/intendedDy` (cardinal X slip, perpendicular sidestep,
@@ -2399,12 +2409,6 @@ export function pickSurfaceDetour(
     const cx = prevTileX + pdx;
     const cy = prevTileY + pdy;
     if (!canEnterSurfaceTile(world, cx, cy)) continue;
-    // Recent-tiles filter — skip candidates the ant just came from.
-    // Without this, a Foraging ant whose direct path is blocked
-    // oscillates between the blocked tile and a sideways alternate
-    // every other tick. See the docstring for the antId param above
-    // and the recent-tiles ring buffer in `pushRecentTile`.
-    if (antId >= 0 && isRecentTile(world.ants, antId, cx, cy)) continue;
     // Diagonal corner-cut prevention. For diagonal candidates, require
     // at least one of the two intermediate cardinal tiles to be walkable.
     // Otherwise the ant would squeeze through a HardBlock corner between
@@ -2417,11 +2421,42 @@ export function pickSurfaceDetour(
       if (!passXOnly && !passYOnly) continue;
     }
     const score = Math.abs(cx - targetX) + Math.abs(cy - targetY);
+    // Recent-tiles preference (not a hard filter): a Foraging ant whose
+    // direct path is blocked otherwise oscillates between the blocked
+    // tile and a sideways alternate every other tick. We prefer fresh
+    // tiles, but tracking the best recent candidate ensures we always
+    // have a fallback step if no fresh option exists. See the docstring
+    // for the antId param above and the recent-tiles ring buffer in
+    // `pushRecentTile`.
+    const isRecent = antId >= 0 && isRecentTile(world.ants, antId, cx, cy);
+    if (isRecent) {
+      if (bestRecentScore < 0 || score < bestRecentScore) {
+        bestRecentDx = pdx;
+        bestRecentDy = pdy;
+        bestRecentScore = score;
+      }
+      continue;
+    }
     if (bestScore < 0 || score < bestScore) {
       bestDx = pdx;
       bestDy = pdy;
       bestScore = score;
     }
+  }
+  // Recent-tile fallback (v8+): only used when no fresh candidate was
+  // found. Backtracking through the recent buffer breaks deadlock
+  // pockets at the cost of one revisited tile — that revisit pushes a
+  // NEW entry into the ring buffer (via the caller's pushRecentTile),
+  // eventually rotating the original blocker out and re-enabling
+  // forward progress. Pre-v8 keeps the original "(0, 0) hold on
+  // exhaustion" behaviour for byte-identical replay (SCEN-06).
+  if (
+    bestScore < 0 &&
+    bestRecentScore >= 0 &&
+    world.simVersion >= SIM_VERSION_V8_LEASH_HYSTERESIS
+  ) {
+    bestDx = bestRecentDx;
+    bestDy = bestRecentDy;
   }
   PICK_DETOUR_RESULT.dx = bestDx;
   PICK_DETOUR_RESULT.dy = bestDy;

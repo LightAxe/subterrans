@@ -21,7 +21,7 @@ import {
   SIM_VERSION_V5_CHAMBER_ON_MARKED,
   SIM_VERSION_V7_SURFACE_PASSABILITY,
 } from '../types.js';
-import { initAnt } from './ant-store.js';
+import { initAnt, pushRecentTile } from './ant-store.js';
 import {
   canEnterSurfaceTile,
   pickSurfaceDetour,
@@ -228,6 +228,109 @@ describe('pickSurfaceDetour', () => {
       }
     }
     expect(foundCase).toBe(true);
+  });
+
+  it('v8+ falls back to a recent tile when every walkable neighbor is in the recent buffer (Codex P2 round-3 fix)', () => {
+    // Codex flagged that `pickSurfaceDetour` was filtering recent tiles
+    // as a HARD reject. In a one-way pocket around HardBlock features,
+    // if the only walkable neighbor is the just-vacated tile, the
+    // function would return (0, 0) and the ant would hold in place.
+    // Because the recent-tiles ring buffer only advances on tile
+    // crossings (not on holds), the buffer never aged out and the ant
+    // was permanently deadlocked. The fix turns the filter into a
+    // preference: best non-recent tile wins, but if none exists we
+    // fall back to the best recent tile so backtracking can drain
+    // the buffer.
+    //
+    // Force the deadlock geometry deterministically by spawning at the
+    // (0, 0) corner: every neighbor with a negative coordinate is
+    // out-of-bounds and `canEnterSurfaceTile` rejects it, leaving only
+    // E (1, 0), SE (1, 1), and S (0, 1) walkable when the seed leaves
+    // those three tiles HardBlock-free. Pushing ALL THREE walkable
+    // neighbors into the recent buffer exhausts the fresh-tile pool.
+    // Pre-fix the picker would return (0, 0); post-fix it falls back
+    // to one of the recent tiles.
+    let world: ReturnType<typeof createWorldState> | null = null;
+    const ANT_X = 0;
+    const ANT_Y = 0;
+    for (let seed = 1; seed < 200; seed++) {
+      const w = createWorldState(seed);
+      if (
+        canEnterSurfaceTile(w, ANT_X + 1, ANT_Y) &&
+        canEnterSurfaceTile(w, ANT_X + 1, ANT_Y + 1) &&
+        canEnterSurfaceTile(w, ANT_X,     ANT_Y + 1)
+      ) {
+        world = w;
+        break;
+      }
+    }
+    expect(world).not.toBeNull();
+
+    // suppress no-undef on the captured non-null world.
+    const w = world!;
+    const antId = allocateEntityId(w);
+    initAnt(w.ants, antId, {
+      colonyId: 1,
+      posX: ANT_X << FP_SHIFT,
+      posY: ANT_Y << FP_SHIFT,
+    });
+    // Push all THREE walkable neighbors into the recent buffer. Since
+    // RECENT_TILES_LEN is 4, the ring isn't even full — every walkable
+    // candidate is guaranteed to be recent.
+    pushRecentTile(w.ants, antId, ANT_X + 1, ANT_Y);     // E
+    pushRecentTile(w.ants, antId, ANT_X + 1, ANT_Y + 1); // SE
+    pushRecentTile(w.ants, antId, ANT_X,     ANT_Y + 1); // S
+
+    // Intent east. With all walkable neighbors recent, pre-fix returns
+    // (0, 0) and the ant deadlocks; post-fix falls back to the best
+    // recent candidate (one of E / SE / S — whichever scores lowest by
+    // Manhattan to (1, 0)).
+    const det = pickSurfaceDetour(w, ANT_X, ANT_Y, 1, 0, antId);
+    expect(det.dx !== 0 || det.dy !== 0).toBe(true);
+    // Returned step must be walkable.
+    expect(canEnterSurfaceTile(w, ANT_X + det.dx, ANT_Y + det.dy)).toBe(true);
+    // And it must be one of the three recent walkable neighbors —
+    // proves the fallback path picked from the recent set rather than
+    // some other accidental candidate.
+    const isOneOfRecent =
+      (det.dx === 1 && det.dy === 0) ||
+      (det.dx === 1 && det.dy === 1) ||
+      (det.dx === 0 && det.dy === 1);
+    expect(isOneOfRecent).toBe(true);
+  });
+
+  it('pre-v8 still returns (0, 0) when every walkable neighbour is recent (legacy deadlock preserved)', () => {
+    // Same setup as the v8 fallback test, but with simVersion bumped
+    // DOWN to v7 to verify the gate. Pre-v8 captured saves must
+    // continue to deadlock identically — that's the SCEN-06 contract.
+    let world: ReturnType<typeof createWorldState> | null = null;
+    const ANT_X = 0;
+    const ANT_Y = 0;
+    for (let seed = 1; seed < 200; seed++) {
+      const w = createWorldState(seed);
+      if (
+        canEnterSurfaceTile(w, ANT_X + 1, ANT_Y) &&
+        canEnterSurfaceTile(w, ANT_X + 1, ANT_Y + 1) &&
+        canEnterSurfaceTile(w, ANT_X,     ANT_Y + 1)
+      ) {
+        world = w;
+        break;
+      }
+    }
+    expect(world).not.toBeNull();
+    const w = world!;
+    w.simVersion = SIM_VERSION_V7_SURFACE_PASSABILITY;
+    const antId = allocateEntityId(w);
+    initAnt(w.ants, antId, {
+      colonyId: 1,
+      posX: ANT_X << FP_SHIFT,
+      posY: ANT_Y << FP_SHIFT,
+    });
+    pushRecentTile(w.ants, antId, ANT_X + 1, ANT_Y);
+    pushRecentTile(w.ants, antId, ANT_X + 1, ANT_Y + 1);
+    pushRecentTile(w.ants, antId, ANT_X,     ANT_Y + 1);
+    const det = pickSurfaceDetour(w, ANT_X, ANT_Y, 1, 0, antId);
+    expect(det).toEqual({ dx: 0, dy: 0 });
   });
 
   it('prefers cardinal slip on intended axis as the first probe', () => {
