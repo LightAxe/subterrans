@@ -6816,10 +6816,9 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     expect(world.ants.subTask[2]).toBe(NursingSubState.MovingToBrood);
   });
 
-  it('Feeding nurse with no carry slot drops back to Idle (Phase 1.3 partial-state guard)', () => {
-    // Phase 1.4 will populate Feeding=carrying; until then, a Feeding nurse
-    // with carryingBroodId === -1 should release back to Idle so a half-
-    // implemented v10 build doesn't strand nurses in Feeding forever.
+  it('Feeding nurse with no carry slot drops back to Idle (defensive guard)', () => {
+    // Reachable only via state corruption — under normal v10 flow the carry
+    // slot is always set when subTask=Feeding. Guard against it.
     const { world } = setupV10NurseAndBroodOnTile({ sameTile: false });
     // Manually force the nurse into Feeding without a carry slot.
     world.ants.subTask[2] = NursingSubState.Feeding;
@@ -6827,5 +6826,208 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     tickNurseActions(world);
     expect(world.ants.task[2]).toBe(AntTask.Idle);
     expect(world.ants.subTask[2]).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #17 Phase 1.4 — v10+ carry + deposit.
+//
+// Once a nurse claims a brood (Phase 1.3), it walks to a Nursery tile while
+// syncing the brood's position to its own each tick. On Nursery arrival the
+// brood is deposited at a Nursery Open tile (spread by broodId%openCount,
+// matching the pre-v10 teleport's distribution), the carry slot clears,
+// and the nurse returns to Idle.
+// ---------------------------------------------------------------------------
+
+describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
+  function setupV10CarryWorld(opts: {
+    nurseTileX: number; nurseTileY: number;
+    broodTileX: number; broodTileY: number;
+    nurseryTileX: number; nurseryTileY: number;
+    nurseryWidth?: number; nurseryHeight?: number;
+    omitNursery?: boolean;
+  }): { world: WorldState; nurseId: number; broodId: number; colony: ColonyRecord } {
+    const ugWidth = 16, ugHeight = 16;
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = SIM_VERSION_V10_VISIBLE_BROOD_CARRY;
+    const queenId = allocateEntityId(world);
+    initAnt(world.ants, queenId, { colonyId: COLONY_ID, posX: 0, posY: 0, speed: 0 });
+    const colony = createColonyRecord(COLONY_ID, queenId);
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    world.colonies[COLONY_ID] = colony;
+
+    // Open the entire grid so the Nursery footprint tiles are Open without
+    // any extra dig wiring.
+    const underground = createUndergroundGrid(ugWidth, ugHeight);
+    for (let y = 0; y < ugHeight; y++) {
+      for (let x = 0; x < ugWidth; x++) {
+        ugSet(underground, x, y, UndergroundTileState.Open);
+      }
+    }
+    world.undergroundGrids[COLONY_ID] = underground;
+
+    if (!opts.omitNursery) {
+      colony.chambers.push({
+        chamberId: 1, chamberType: ChamberType.Nursery, foodStored: 0,
+        posX: opts.nurseryTileX << FP_SHIFT, posY: opts.nurseryTileY << FP_SHIFT,
+        width: opts.nurseryWidth ?? 2, height: opts.nurseryHeight ?? 2,
+      });
+    }
+
+    const broodId = allocateEntityId(world);
+    initAnt(world.ants, broodId, {
+      colonyId: COLONY_ID,
+      posX:     (opts.broodTileX << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (opts.broodTileY << FP_SHIFT) + (FP_ONE >> 1),
+      task:     AntTask.Idle, speed: 0, zone: Zone.Underground,
+    });
+    colony.eggs.push(broodId);
+
+    const nurseId = allocateEntityId(world);
+    initAnt(world.ants, nurseId, {
+      colonyId: COLONY_ID,
+      posX:     (opts.nurseTileX << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (opts.nurseTileY << FP_SHIFT) + (FP_ONE >> 1),
+      task:     AntTask.Nursing,
+      subTask:  NursingSubState.MovingToBrood,
+      zone:     Zone.Underground,
+    });
+    return { world, nurseId, broodId, colony };
+  }
+
+  it('after claim, brood position syncs to carrier each tick (in-flight, NOT yet at Nursery)', () => {
+    // Carrier on brood tile (claim happens) but Nursery is far away —
+    // after the tick, brood position equals carrier position; nurse is
+    // still in Feeding (not yet at Nursery) and not back to Idle.
+    const { world, nurseId, broodId } = setupV10CarryWorld({
+      nurseTileX: 5, nurseTileY: 5,
+      broodTileX: 5, broodTileY: 5,
+      nurseryTileX: 12, nurseryTileY: 12,
+    });
+    tickNurseActions(world);
+    // Sub-state flipped to Feeding (claim succeeded), brood follows carrier.
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
+    expect(world.ants.carryingBroodId[nurseId]).toBe(broodId);
+    expect(world.ants.posX[broodId]).toBe(world.ants.posX[nurseId]);
+    expect(world.ants.posY[broodId]).toBe(world.ants.posY[nurseId]);
+    // Now move the carrier manually (simulating one tick of movement) and
+    // re-run tickNurseActions: brood follows.
+    world.ants.posX[nurseId] = (7 << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[nurseId] = (8 << FP_SHIFT) + (FP_ONE >> 1);
+    tickNurseActions(world);
+    expect(world.ants.posX[broodId]).toBe(world.ants.posX[nurseId]);
+    expect(world.ants.posY[broodId]).toBe(world.ants.posY[nurseId]);
+    // Still in Feeding (not at Nursery yet).
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
+  });
+
+  it('on Nursery-tile arrival: deposits brood, clears carry, returns to Idle', () => {
+    // Two-tick natural flow: tick 1 = claim (MovingToBrood→Feeding),
+    // tick 2 = deposit (Feeding + on Nursery → Idle). Carrier and brood
+    // start on a tile that IS a Nursery tile so the second tick deposits
+    // immediately without needing inter-tick movement.
+    const { world, nurseId, broodId } = setupV10CarryWorld({
+      nurseTileX: 12, nurseTileY: 12, // Inside the Nursery 2x2 at (12, 12).
+      broodTileX: 12, broodTileY: 12, // Same tile so claim happens.
+      nurseryTileX: 12, nurseryTileY: 12,
+    });
+    // Tick 1 — claim.
+    tickNurseActions(world);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
+    expect(world.ants.carryingBroodId[nurseId]).toBe(broodId);
+    // Tick 2 — deposit (carrier is on a Nursery tile, no movement needed).
+    tickNurseActions(world);
+    expect(world.ants.task[nurseId]).toBe(AntTask.Idle);
+    expect(world.ants.subTask[nurseId]).toBe(0);
+    expect(world.ants.carryingBroodId[nurseId]).toBe(-1);
+    expect(world.ants.carriedBy[broodId]).toBe(-1);
+    // Brood landed at a Nursery Open tile (broodId % openCount spread).
+    const bx = world.ants.posX[broodId]! >> FP_SHIFT;
+    const by = world.ants.posY[broodId]! >> FP_SHIFT;
+    expect(bx).toBeGreaterThanOrEqual(12);
+    expect(bx).toBeLessThan(14);
+    expect(by).toBeGreaterThanOrEqual(12);
+    expect(by).toBeLessThan(14);
+  });
+
+  it('multiple deposits spread across Nursery Open tiles, not stacked at one corner', () => {
+    // Two carriers each holding a different brood, both arriving at Nursery
+    // on the same tick. broodId differs → spread index differs → tiles differ.
+    const { world } = setupV10CarryWorld({
+      nurseTileX: 12, nurseTileY: 12,
+      broodTileX: 12, broodTileY: 12,
+      nurseryTileX: 12, nurseryTileY: 12,
+    });
+    // Add a second brood + nurse pair.
+    const colony = world.colonies[COLONY_ID]!;
+    const brood2 = allocateEntityId(world);
+    initAnt(world.ants, brood2, {
+      colonyId: COLONY_ID,
+      posX:     (13 << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (12 << FP_SHIFT) + (FP_ONE >> 1),
+      task:     AntTask.Idle, speed: 0, zone: Zone.Underground,
+    });
+    colony.eggs.push(brood2);
+    const nurse2 = allocateEntityId(world);
+    initAnt(world.ants, nurse2, {
+      colonyId: COLONY_ID,
+      posX:     (13 << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (12 << FP_SHIFT) + (FP_ONE >> 1),
+      task:     AntTask.Nursing,
+      subTask:  NursingSubState.MovingToBrood,
+      zone:     Zone.Underground,
+    });
+    void nurse2;
+    // Tick 1 — both nurses claim their respective brood.
+    tickNurseActions(world);
+    // Tick 2 — both deposit.
+    tickNurseActions(world);
+    const allBroodIds = colony.eggs.slice();
+    expect(allBroodIds.length).toBe(2);
+    const tilesUsed = new Set<string>();
+    for (const bid of allBroodIds) {
+      const bx = world.ants.posX[bid]! >> FP_SHIFT;
+      const by = world.ants.posY[bid]! >> FP_SHIFT;
+      tilesUsed.add(`${bx},${by}`);
+    }
+    // Two distinct deposit tiles within the 2×2 Nursery footprint.
+    expect(tilesUsed.size).toBe(2);
+  });
+
+  it('no Nursery: nurse on a Queen-chamber tile claims but never deposits (Feeding holds)', () => {
+    // Without a Nursery footprint, isInsideNursery returns false everywhere
+    // — the carrier stays in Feeding, brood follows along, no deposit.
+    // Matches Rob's Phase-1 contract: with no Nursery, no carry happens
+    // (effectively — claim still happens but never resolves).
+    const { world, nurseId, broodId } = setupV10CarryWorld({
+      nurseTileX: 5, nurseTileY: 5,
+      broodTileX: 5, broodTileY: 5,
+      nurseryTileX: 0, nurseryTileY: 0, // ignored
+      omitNursery: true,
+    });
+    tickNurseActions(world);
+    // Claimed, but no deposit → still in Feeding.
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
+    expect(world.ants.carryingBroodId[nurseId]).toBe(broodId);
+    // Run another tick: brood still attached, no deposit.
+    tickNurseActions(world);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
+    expect(world.ants.carryingBroodId[nurseId]).toBe(broodId);
+  });
+
+  it('1×1 Nursery: deposit collapses to the single Open tile (broodId % 1 === 0)', () => {
+    const { world, nurseId, broodId } = setupV10CarryWorld({
+      nurseTileX: 14, nurseTileY: 14,
+      broodTileX: 14, broodTileY: 14,
+      nurseryTileX: 14, nurseryTileY: 14,
+      nurseryWidth: 1, nurseryHeight: 1,
+    });
+    tickNurseActions(world); // claim
+    tickNurseActions(world); // deposit
+    expect(world.ants.task[nurseId]).toBe(AntTask.Idle);
+    expect(world.ants.posX[broodId]! >> FP_SHIFT).toBe(14);
+    expect(world.ants.posY[broodId]! >> FP_SHIFT).toBe(14);
   });
 });
