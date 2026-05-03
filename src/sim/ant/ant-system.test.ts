@@ -6792,11 +6792,16 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     });
     expect(nurse2).toBeGreaterThan(nurseId); // entity ids are monotonic
     tickNurseActions(world);
-    // The lower-id nurse claims; the second stays MovingToBrood.
+    // The lower-id nurse claims; the second is on a Queen-chamber source
+    // tile with no claimable brood — releases via Feeding-without-carry
+    // (pre-v10 cadence), which the next tick will flip to Idle.
     expect(world.ants.carriedBy[broodId]).toBe(nurseId);
     expect(world.ants.carryingBroodId[nurseId]).toBe(broodId);
     expect(world.ants.carryingBroodId[nurse2]).toBe(-1);
-    expect(world.ants.subTask[nurse2]).toBe(NursingSubState.MovingToBrood);
+    expect(world.ants.subTask[nurse2]).toBe(NursingSubState.Feeding);
+    // Next tick — defensive Feeding-no-carry guard fires → Idle.
+    tickNurseActions(world);
+    expect(world.ants.task[nurse2]).toBe(AntTask.Idle);
   });
 
   it('already-carried brood (carrier ALIVE) is not claimed by another nurse', () => {
@@ -6810,11 +6815,12 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     });
     world.ants.carriedBy[broodId] = otherCarrier;
     tickNurseActions(world);
-    // Original nurse is on the brood tile but the brood was already claimed
-    // by an alive carrier; nurse stays in MovingToBrood.
+    // Original nurse is on a Queen-chamber tile with no claimable brood
+    // (other carrier is alive). Per finite-nursing: release via Feeding-
+    // without-carry (next tick flips to Idle).
     expect(world.ants.carryingBroodId[nurseId]).toBe(-1);
     expect(world.ants.carriedBy[broodId]).toBe(otherCarrier);
-    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.MovingToBrood);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
   });
 
   it('dead brood is skipped — even on the same tile, no claim happens', () => {
@@ -6823,12 +6829,15 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     tickNurseActions(world);
     expect(world.ants.carryingBroodId[nurseId]).toBe(-1);
     expect(world.ants.carriedBy[broodId]).toBe(-1);
-    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.MovingToBrood);
+    // Nurse on a Queen-chamber tile with only a dead brood → finite-
+    // nursing release via Feeding-without-carry.
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
   });
 
   it('Feeding nurse with no carry slot drops back to Idle (defensive guard)', () => {
-    // Reachable only via state corruption — under normal v10 flow the carry
-    // slot is always set when subTask=Feeding. Guard against it.
+    // Reachable via the finite-nursing release path (#56 codex P1) when a
+    // nurse arrives at a source tile with no claimable brood — also via
+    // state corruption.
     const { world, nurseId } = setupV10NurseAndBroodOnTile({ sameTile: false });
     // Manually force the nurse into Feeding without a carry slot.
     world.ants.subTask[nurseId] = NursingSubState.Feeding;
@@ -6836,6 +6845,44 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     tickNurseActions(world);
     expect(world.ants.task[nurseId]).toBe(AntTask.Idle);
     expect(world.ants.subTask[nurseId]).toBe(0);
+  });
+
+  it('finite-nursing release: nurse on Queen tile with no claimable brood completes 2-tick MovingToBrood→Feeding→Idle (#56 codex P1)', () => {
+    // The release path covers two real-world cases:
+    //   (1) No brood anywhere in the colony (brood pool exhausted).
+    //   (2) Another nurse claimed the only brood this tick.
+    // Without the release, a v10 nurse would strand in MovingToBrood
+    // permanently because step 10a only re-allocates Idle workers.
+    const { world, nurseId, broodId } = setupV10NurseAndBroodOnTile({ sameTile: true });
+    // Mark the brood as already-carried by an alive carrier — the nurse
+    // can't claim, so findUncarriedBroodOnTile returns -1.
+    const otherCarrier = allocateEntityId(world);
+    initAnt(world.ants, otherCarrier, {
+      colonyId: COLONY_ID, posX: 0, posY: 0, task: AntTask.Nursing,
+    });
+    world.ants.carriedBy[broodId] = otherCarrier;
+    // Tick 1: MovingToBrood → Feeding (release-pending, no carry).
+    tickNurseActions(world);
+    expect(world.ants.task[nurseId]).toBe(AntTask.Nursing);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
+    expect(world.ants.carryingBroodId[nurseId]).toBe(-1);
+    // Tick 2: Feeding-no-carry guard → Idle.
+    tickNurseActions(world);
+    expect(world.ants.task[nurseId]).toBe(AntTask.Idle);
+    expect(world.ants.subTask[nurseId]).toBe(0);
+  });
+
+  it('finite-nursing: nurse OFF source tile (in tunnel, no brood here) stays in MovingToBrood', () => {
+    // Defensive: the release ONLY fires when the nurse is on a Queen-chamber
+    // OR Nursery footprint tile — i.e., she has actually arrived at a
+    // pickup source. A nurse mid-walk should keep walking.
+    const { world, nurseId } = setupV10NurseAndBroodOnTile({ sameTile: false });
+    // Helper sets nurse at (8, 8) — far from Queen chamber at (5, 5) and
+    // Nursery at (12, 12). Brood sits at (5, 5).
+    tickNurseActions(world);
+    // No release — nurse keeps walking next tick.
+    expect(world.ants.task[nurseId]).toBe(AntTask.Nursing);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.MovingToBrood);
   });
 
   it('pre-v10 boundary (simVersion=v9): legacy teleport still fires, no carry slot is set', () => {
@@ -7127,9 +7174,11 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     });
     tickNurseActions(world);
     // No claim — brood-inside-Nursery is excluded from pickup selection.
-    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.MovingToBrood);
+    // Nurse releases via finite-nursing (Feeding-without-carry → Idle
+    // next tick) since she's on a Nursery source tile.
     expect(world.ants.carryingBroodId[nurseId]).toBe(-1);
     expect(world.ants.carriedBy[broodId]).toBe(-1);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
   });
 
   it('integration: carrier + brood share a tile after tickAntMovement (resolveSameColonyOccupancy must not displace carried brood)', () => {

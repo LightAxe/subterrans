@@ -861,7 +861,25 @@ export function tickNurseActions(world: WorldState): void {
       // determinism (matches the pre-v10 transportBroodToNursery
       // selection order).
       const broodId = findUncarriedBroodOnTile(ants, colony, tileX, tileY);
-      if (broodId < 0) continue;
+      if (broodId < 0) {
+        // Finite-nursing release (PR #56 codex P1). A nurse that has
+        // arrived at a source tile (Queen-chamber footprint, or —
+        // defensively — a Nursery footprint) but found no claimable
+        // brood is done with this trip. Mirror the pre-v10 cadence:
+        // flip to Feeding WITHOUT setting a carry slot. Next tick the
+        // Feeding branch's defensive guard (carryingBroodId === -1)
+        // releases to Idle, matching the pre-v10
+        // MovingToBrood→Feeding→Idle two-tick path. Without this,
+        // nurses with no available brood would strand in MovingToBrood
+        // forever, permanently removed from the forage/dig/fight pool.
+        if (
+          isInsideQueenChamber(colony, tileX, tileY) ||
+          isInsideNursery(colony, tileX, tileY)
+        ) {
+          ants.subTask[id] = NursingSubState.Feeding;
+        }
+        continue;
+      }
 
       // Defensive: if the brood was carried by a now-dead carrier
       // (orphan reclaim path), null out the dead carrier's carryingBroodId

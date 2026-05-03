@@ -96,6 +96,57 @@ export function ensureChamberFlowFields(
 }
 
 /**
+ * Shared BFS expansion for chamber-style flow-fields. Caller seeds `out`
+ * with -1 at every source tile (and fills the rest with -2 first), pushes
+ * each source's flat index into `queue`, and passes the resulting tail
+ * pointer. This function expands outward through Open and BeingDug tiles,
+ * writing the step direction (0=N, 1=E, 2=S, 3=W) to `out[idx]` for each
+ * reached tile.
+ *
+ * Single-sourced so the integer-division `(idx / width) | 0` BFS row
+ * extraction lives in ONE place — extracted from the previously
+ * duplicated implementations in `computeChamberFlowField` and
+ * `computeNursingPickupField` (PR #56 codex P2).
+ */
+function bfsExpandSeededField(
+  out:        Int32Array,
+  queue:      Int32Array,
+  initialTail: number,
+  data:       Uint8Array,
+  width:      number,
+  height:     number,
+): void {
+  let head = 0;
+  let tail = initialTail;
+  while (head < tail) {
+    const idx = queue[head++]!;
+    // eslint-disable-next-line no-restricted-syntax -- integer division via `| 0`; BFS index→row conversion, not fixed-point math
+    const row = (idx / width) | 0;
+    const col = idx % width;
+
+    for (let d = 0; d < 4; d++) {
+      const nRow = row + NEIGHBOR_DR[d]!;
+      const nCol = col + NEIGHBOR_DC[d]!;
+      if (nRow < 0 || nRow >= height || nCol < 0 || nCol >= width) continue;
+
+      const nIdx = nRow * width + nCol;
+      if (out[nIdx] !== -2) continue;
+
+      const tileState = data[nIdx]!;
+      if (
+        tileState !== UndergroundTileState.Open &&
+        tileState !== UndergroundTileState.BeingDug
+      ) {
+        continue;
+      }
+
+      out[nIdx] = REVERSE[d]!;
+      queue[tail++] = nIdx;
+    }
+  }
+}
+
+/**
  * Multi-source BFS from every Open tile inside any chamber whose type is
  * present in `chamberTypes` AND (optionally) passes `chamberFilter`.
  * Expands through Open and BeingDug tiles. Marked and Solid are walls
@@ -130,7 +181,6 @@ export function computeChamberFlowField(
 
   out.fill(-2);
 
-  let head = 0;
   let tail = 0;
 
   // Seed every Open tile inside any matching chamber footprint.
@@ -159,33 +209,7 @@ export function computeChamberFlowField(
     }
   }
 
-  // BFS expansion through Open and BeingDug only.
-  while (head < tail) {
-    const idx = queue[head++]!;
-    // eslint-disable-next-line no-restricted-syntax -- integer division via `| 0`; BFS index→row conversion, not fixed-point math
-    const row = (idx / width) | 0;
-    const col = idx % width;
-
-    for (let d = 0; d < 4; d++) {
-      const nRow = row + NEIGHBOR_DR[d]!;
-      const nCol = col + NEIGHBOR_DC[d]!;
-      if (nRow < 0 || nRow >= height || nCol < 0 || nCol >= width) continue;
-
-      const nIdx = nRow * width + nCol;
-      if (out[nIdx] !== -2) continue;
-
-      const tileState = data[nIdx]!;
-      if (
-        tileState !== UndergroundTileState.Open &&
-        tileState !== UndergroundTileState.BeingDug
-      ) {
-        continue;
-      }
-
-      out[nIdx] = REVERSE[d]!;
-      queue[tail++] = nIdx;
-    }
-  }
+  bfsExpandSeededField(out, queue, tail, data, width, height);
 }
 
 /** Chamber type lists exported so callers don't hard-code the arrays. */
@@ -246,7 +270,6 @@ export function computeNursingPickupField(
 
   out.fill(-2);
 
-  let head = 0;
   let tail = 0;
 
   // Seed (1): Queen chamber Open tiles.
@@ -315,32 +338,5 @@ export function computeNursingPickupField(
     }
   }
 
-  // BFS expansion through Open and BeingDug only — same contract as
-  // computeChamberFlowField.
-  while (head < tail) {
-    const idx = queue[head++]!;
-    // eslint-disable-next-line no-restricted-syntax -- integer division via `| 0`; BFS index→row conversion, not fixed-point math
-    const row = (idx / width) | 0;
-    const col = idx % width;
-
-    for (let d = 0; d < 4; d++) {
-      const nRow = row + NEIGHBOR_DR[d]!;
-      const nCol = col + NEIGHBOR_DC[d]!;
-      if (nRow < 0 || nRow >= height || nCol < 0 || nCol >= width) continue;
-
-      const nIdx = nRow * width + nCol;
-      if (out[nIdx] !== -2) continue;
-
-      const tileState = data[nIdx]!;
-      if (
-        tileState !== UndergroundTileState.Open &&
-        tileState !== UndergroundTileState.BeingDug
-      ) {
-        continue;
-      }
-
-      out[nIdx] = REVERSE[d]!;
-      queue[tail++] = nIdx;
-    }
-  }
+  bfsExpandSeededField(out, queue, tail, data, width, height);
 }
