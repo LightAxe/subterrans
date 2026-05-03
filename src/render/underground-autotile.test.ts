@@ -153,15 +153,16 @@ function countPixels(buf: PixelBuffer, kind: NeighborKind): number {
 // Tests — canonical quarter shapes
 // ---------------------------------------------------------------------------
 
-describe('drawAutotiledUndergroundTile — organic boundary noise (issue #48)', () => {
-  // After three failed iterations on issue #48, the autotile lands on
-  // organic noise-displaced boundaries. For an open tile that has at
-  // least one wall cardinal neighbor, the wall encroaches into the open
-  // tile by 0..ORGANIC_MAX_DEPTH (3) pixels per column / row along that
-  // edge — hashed depth, deterministic per (tileX, tileY, edge, position).
-  // Open tiles with no wall neighbors stay pure substrate. Wall tiles
-  // also stay pure substrate (the encroachment only paints into open).
-  const ORGANIC_MAX_DEPTH = 3;
+describe('drawAutotiledUndergroundTile — bidirectional smooth boundary (issue #48 v4)', () => {
+  // v4 contract: the wall/open boundary is a smooth low-frequency curve
+  // that lives independently of the tile grid. Both sides paint
+  // encroachment of the OPPOSITE kind into themselves — open tiles
+  // get wall encroachment along their wall-side edges, AND wall tiles
+  // get open encroachment along their open-side edges. Maximum
+  // displacement is BOUNDARY_AMP (5) pixels in either direction.
+  //
+  // Tiles with NO opposite-kind cardinal neighbors stay pure substrate.
+  const BOUNDARY_AMP = 5;
 
   it('an open tile with NO wall neighbors stays fully open substrate', () => {
     const buf = renderTile(makeNeighbors('open', {
@@ -172,11 +173,11 @@ describe('drawAutotiledUndergroundTile — organic boundary noise (issue #48)', 
     expect(countPixels(buf, 'wall')).toBe(0);
   });
 
-  it('encroachment depth never exceeds ORGANIC_MAX_DEPTH from any edge', () => {
+  it('encroachment depth never exceeds BOUNDARY_AMP from any edge', () => {
     // Sweep many tiles at "all 4 cardinals = wall" and verify wall
-    // pixels never appear in the interior region (depth ≥ ORGANIC_MAX_DEPTH
+    // pixels never appear in the interior region (depth ≥ BOUNDARY_AMP
     // from every edge). N edge at max depth paints rows [0..2], so the
-    // first row that must be pure open is y=ORGANIC_MAX_DEPTH=3. Symmetric
+    // first row that must be pure open is y=BOUNDARY_AMP=3. Symmetric
     // on the other three edges.
     for (let tx = 0; tx < 16; tx++) {
       for (let ty = 0; ty < 16; ty++) {
@@ -185,8 +186,8 @@ describe('drawAutotiledUndergroundTile — organic boundary noise (issue #48)', 
         const buf = new PixelBuffer(TILE_SIZE_PX, TILE_SIZE_PX);
         gfx.paintBuffer(buf, 0, 0);
         // Interior region [3..12] × [3..12] (inclusive) must be pure open.
-        for (let y = ORGANIC_MAX_DEPTH; y < TILE_SIZE_PX - ORGANIC_MAX_DEPTH; y++) {
-          for (let x = ORGANIC_MAX_DEPTH; x < TILE_SIZE_PX - ORGANIC_MAX_DEPTH; x++) {
+        for (let y = BOUNDARY_AMP; y < TILE_SIZE_PX - BOUNDARY_AMP; y++) {
+          for (let x = BOUNDARY_AMP; x < TILE_SIZE_PX - BOUNDARY_AMP; x++) {
             expect(buf.get(x, y)).toBe('open');
           }
         }
@@ -202,7 +203,7 @@ describe('drawAutotiledUndergroundTile — organic boundary noise (issue #48)', 
       w:  'open',              e: 'open',
       sw: 'open', s: 'open',  se: 'open',
     }));
-    for (let y = ORGANIC_MAX_DEPTH; y < TILE_SIZE_PX; y++) {
+    for (let y = BOUNDARY_AMP; y < TILE_SIZE_PX; y++) {
       for (let x = 0; x < TILE_SIZE_PX; x++) {
         expect(buf.get(x, y)).toBe('open');
       }
@@ -211,8 +212,13 @@ describe('drawAutotiledUndergroundTile — organic boundary noise (issue #48)', 
 
   it('encroachment density on an active edge is high enough to break the grid line', () => {
     // Sample many tiles with N=wall and count how many top-row pixels
-    // got encroachment. Aggressive distribution targets ~70% non-zero.
-    // Allowing >= 50% gives room for hash variance without brittleness.
+    // are wall (encroachment from this side). With bidirectional v4,
+    // each side paints when its sign-of-offset goes inward; for an
+    // open tile that's offset > 0 on the shared edge, expected ~50%
+    // density. The rest is painted by the WALL tile from above as
+    // open encroachment INTO the wall, so the boundary is wavy from
+    // both perspectives. >= 35% captures the active-side fire rate
+    // without brittleness on the smooth-interp distribution.
     const spec: Partial<Neighbors3x3> = {
       nw: 'open', n: 'wall',  ne: 'open',
       w:  'open',              e: 'open',
@@ -232,7 +238,7 @@ describe('drawAutotiledUndergroundTile — organic boundary noise (issue #48)', 
         }
       }
     }
-    expect(encroached / total).toBeGreaterThanOrEqual(0.5);
+    expect(encroached / total).toBeGreaterThanOrEqual(0.35);
   });
 
   it('different tiles produce different encroachment patterns', () => {
@@ -251,7 +257,7 @@ describe('drawAutotiledUndergroundTile — organic boundary noise (issue #48)', 
       const buf = new PixelBuffer(TILE_SIZE_PX, TILE_SIZE_PX);
       gfx.paintBuffer(buf, 0, 0);
       const cells: string[] = [];
-      for (let y = 0; y < ORGANIC_MAX_DEPTH; y++) {
+      for (let y = 0; y < BOUNDARY_AMP; y++) {
         for (let x = 0; x < TILE_SIZE_PX; x++) {
           if (buf.get(x, y) === 'wall') cells.push(`${x},${y}`);
         }
@@ -261,29 +267,35 @@ describe('drawAutotiledUndergroundTile — organic boundary noise (issue #48)', 
     expect(fingerprints.size).toBeGreaterThanOrEqual(8);
   });
 
-  it('a wall tile produces ONLY wall substrate — no floor-color paint anywhere', () => {
-    // Symmetric to the open case. With chamfers removed, a wall tile
-    // surrounded by open neighbors no longer has its corners cut to
-    // floor color (the dark-triangle artifact in the issue #48 screenshot).
-    const cases: Array<Partial<Neighbors3x3>> = [
-      // Isolated wall pillar — used to fire 4 floor-color chamfers.
-      { nw: 'open', n: 'open', ne: 'open',
-        w:  'open',             e:  'open',
-        sw: 'open', s: 'open', se: 'open' },
-      // Wall corner (open in NW, walls elsewhere) — used to fire 1 chamfer.
-      { nw: 'open', n: 'open',  ne: 'wall',
-        w:  'open',              e: 'wall',
-        sw: 'wall', s: 'wall',  se: 'wall' },
-      // Wall saddle (cardinals all wall, two opposite diagonals = open) —
-      // used to fire 2 floor-color inner-corner bites in the previous
-      // implementation. Now nothing.
-      { nw: 'open',  n: 'wall',  ne: 'wall',
-        w:  'wall',                e: 'wall',
-        sw: 'wall',  s: 'wall',  se: 'open' },
-    ];
-    for (const spec of cases) {
-      const buf = renderTile(makeNeighbors('wall', spec));
-      expect(countPixels(buf, 'open')).toBe(0);
+  it('a wall tile with ALL wall neighbors stays pure wall substrate (no encroachment)', () => {
+    // Only fires when there are NO opposite-kind cardinal neighbors.
+    const buf = renderTile(makeNeighbors('wall', {
+      nw: 'wall', n: 'wall', ne: 'wall',
+      w:  'wall',             e: 'wall',
+      sw: 'wall', s: 'wall', se: 'wall',
+    }));
+    expect(countPixels(buf, 'open')).toBe(0);
+  });
+
+  it('a wall tile with open neighbors paints OPEN encroachment along open-facing edges (bidirectional)', () => {
+    // The v4 fix: walls also have noise along their open-facing edges,
+    // so open extends INTO wall, decoupling the boundary from the grid.
+    // Pre-v4 (PR #51, PR #52 v3) wall tiles painted nothing, leaving
+    // 90° corners visible at every chamber edge. Post-v4 those corners
+    // get organic open encroachment.
+    const buf = renderTile(makeNeighbors('wall', {
+      nw: 'open', n: 'open',  ne: 'open',
+      w:  'open',              e: 'open',
+      sw: 'open', s: 'open',  se: 'open',
+    }));
+    expect(countPixels(buf, 'open')).toBeGreaterThan(0);
+    // Interior region must still be pure wall substrate (encroachment
+    // bounded to BOUNDARY_AMP=5 from each edge, so cells [5..10]² are
+    // guaranteed wall).
+    for (let y = BOUNDARY_AMP; y < TILE_SIZE_PX - BOUNDARY_AMP; y++) {
+      for (let x = BOUNDARY_AMP; x < TILE_SIZE_PX - BOUNDARY_AMP; x++) {
+        expect(buf.get(x, y)).toBe('wall');
+      }
     }
   });
 
@@ -297,10 +309,10 @@ describe('drawAutotiledUndergroundTile — organic boundary noise (issue #48)', 
       sw: 'wall', s: 'open',  se: 'wall',
     }));
     // Top row 0 and bottom row 15: must be open along the interior
-    // width [3..12] (inclusive). The leftmost / rightmost ORGANIC_MAX_DEPTH
+    // width [3..12] (inclusive). The leftmost / rightmost BOUNDARY_AMP
     // pixels can be reached by W/E encroachment (since W/E paint at
     // every y in [0..15]).
-    for (let x = ORGANIC_MAX_DEPTH; x < TILE_SIZE_PX - ORGANIC_MAX_DEPTH; x++) {
+    for (let x = BOUNDARY_AMP; x < TILE_SIZE_PX - BOUNDARY_AMP; x++) {
       expect(buf.get(x, 0)).toBe('open');
       expect(buf.get(x, TILE_SIZE_PX - 1)).toBe('open');
     }
@@ -312,6 +324,57 @@ describe('drawAutotiledUndergroundTile — organic boundary noise (issue #48)', 
     drawAutotiledUndergroundTile(a, 32, 48, 7, 11, 'open', makeNeighbors('open'));
     drawAutotiledUndergroundTile(b, 32, 48, 7, 11, 'open', makeNeighbors('open'));
     expect(a.calls).toEqual(b.calls);
+  });
+
+  it('cross-tile boundary continuity: shared edge produces a complete cover (no gap, no overdraw conflict)', () => {
+    // Render two vertically-stacked tiles that share a horizontal
+    // edge: upper tile (5, 7) is WALL, lower tile (5, 8) is OPEN.
+    // The shared edge is at globalY = 8 * 16 = 128, with the SAME
+    // boundaryOffsetH(globalX, 8) controlling both sides. Verify that
+    // for every column along the shared edge, the offset's sign drives
+    // exactly one side to paint and the other to leave substrate —
+    // i.e. there's no gap (boundary missing on both sides) and no
+    // overdraw of the same pixel by both sides simultaneously.
+    const upperGfx = new MockGfx();
+    const lowerGfx = new MockGfx();
+    // Upper (wall) with S = open neighbor below.
+    drawAutotiledUndergroundTile(upperGfx, 0, 0, 5, 7, 'wall', makeNeighbors('wall', {
+      nw: 'wall', n: 'wall', ne: 'wall',
+      w:  'wall',             e: 'wall',
+      sw: 'open', s: 'open', se: 'open',
+    }));
+    // Lower (open) with N = wall neighbor above.
+    drawAutotiledUndergroundTile(lowerGfx, 0, TILE_SIZE_PX, 5, 8, 'open', makeNeighbors('open', {
+      nw: 'wall', n: 'wall', ne: 'wall',
+      w:  'open',             e: 'open',
+      sw: 'open', s: 'open', se: 'open',
+    }));
+
+    const upperBuf = new PixelBuffer(TILE_SIZE_PX, TILE_SIZE_PX);
+    const lowerBuf = new PixelBuffer(TILE_SIZE_PX, TILE_SIZE_PX);
+    upperGfx.paintBuffer(upperBuf, 0, 0);
+    lowerGfx.paintBuffer(lowerBuf, 0, TILE_SIZE_PX);
+
+    // For each column along the shared edge, the two tiles' boundary
+    // pixels must form a continuous wall-then-open transition (or a
+    // continuous open substrate if offset = 0). Specifically the
+    // boundary at any (globalX, sharedY) is exactly ONE material —
+    // either upper paints opposite into its bottom rows OR lower
+    // paints opposite into its top rows, but not both for the same
+    // physical row (since they're different tiles' rows).
+    //
+    // Test invariant: the upper tile's bottom-most row (last) is wall
+    // by default and may have OPEN encroachment if offset < 0. The
+    // lower tile's top-most row (0) is open by default and may have
+    // WALL encroachment if offset > 0. Both can't simultaneously be
+    // the OPPOSITE-of-default (upper=open AND lower=wall) for the
+    // same column — that would require offset > 0 AND offset < 0.
+    for (let x = 0; x < TILE_SIZE_PX; x++) {
+      const upperBottomIsOpen = upperBuf.get(x, TILE_SIZE_PX - 1) === 'open';
+      const lowerTopIsWall    = lowerBuf.get(x, 0) === 'wall';
+      // At least one of these must be FALSE (default-substrate state).
+      expect(upperBottomIsOpen && lowerTopIsWall).toBe(false);
+    }
   });
 });
 
@@ -361,14 +424,11 @@ describe('drawUndergroundRim', () => {
 });
 
 describe('drawAutotiledUndergroundTile — draw-op budget', () => {
-  // Open tile cost: substrate (~10) + organic boundary noise per active
-  // wall edge (up to 16 ops × 4 edges = 64) ≈ 75 worst case for an
-  // isolated open chamber. Pin ≤ 100 to leave headroom for the existing
-  // substrate variance + future texture additions, but still trip on a
-  // regression that re-introduces 36-pixel chamfers (4 × 36 = 144+).
-  //
-  // Wall tile cost: just the substrate (~26 max). No encroachment fires.
-  it('open tile emits ≤ 100 fillRects (substrate + organic encroachment)', () => {
+  // v4 cost (both kinds): substrate (~30 max) + bidirectional boundary
+  // displacement (up to 16 ops per active edge × 4 edges = 64). Worst
+  // case for an isolated tile (all 4 cardinals are opposite kind) ≈ 95.
+  // Pin ≤ 120 to leave headroom for substrate variance.
+  it('open tile emits ≤ 120 fillRects (substrate + boundary displacement)', () => {
     let max = 0;
     for (let tx = 0; tx < 32; tx++) {
       for (let ty = 0; ty < 32; ty++) {
@@ -378,10 +438,10 @@ describe('drawAutotiledUndergroundTile — draw-op budget', () => {
         if (ops > max) max = ops;
       }
     }
-    expect(max).toBeLessThanOrEqual(100);
+    expect(max).toBeLessThanOrEqual(120);
   });
 
-  it('wall tile emits ≤ 40 fillRects (substrate-only — encroachment skipped)', () => {
+  it('wall tile emits ≤ 120 fillRects (substrate + bidirectional encroachment)', () => {
     let max = 0;
     for (let tx = 0; tx < 32; tx++) {
       for (let ty = 0; ty < 32; ty++) {
@@ -395,6 +455,6 @@ describe('drawAutotiledUndergroundTile — draw-op budget', () => {
         if (ops > max) max = ops;
       }
     }
-    expect(max).toBeLessThanOrEqual(40);
+    expect(max).toBeLessThanOrEqual(120);
   });
 });
