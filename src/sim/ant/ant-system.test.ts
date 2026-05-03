@@ -6793,17 +6793,21 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     expect(world.ants.subTask[nurse2]).toBe(NursingSubState.MovingToBrood);
   });
 
-  it('already-carried brood is not claimed by another nurse on the same tile', () => {
-    const { world, broodId, colony } = setupV10NurseAndBroodOnTile({ sameTile: true });
-    // Mark the brood as already carried by some other nurse (not in this
-    // test's iteration loop) — simulates a race that resolved on a prior tick.
-    world.ants.carriedBy[broodId] = 99;
-    void colony;
+  it('already-carried brood (carrier ALIVE) is not claimed by another nurse', () => {
+    const { world, broodId } = setupV10NurseAndBroodOnTile({ sameTile: true });
+    // Allocate a separate ALIVE ant to be the existing carrier — the
+    // dead-carrier exception in findUncarriedBroodOnTile would let the
+    // claim through if the carrier weren't alive.
+    const otherCarrier = allocateEntityId(world);
+    initAnt(world.ants, otherCarrier, {
+      colonyId: COLONY_ID, posX: 0, posY: 0, task: AntTask.Nursing,
+    });
+    world.ants.carriedBy[broodId] = otherCarrier;
     tickNurseActions(world);
-    // Original nurse (id 2) is still on the brood tile but the brood was
-    // already claimed; nurse stays in MovingToBrood and does not steal.
+    // Original nurse (id 2) is on the brood tile but the brood was
+    // already claimed by an alive carrier; nurse stays in MovingToBrood.
     expect(world.ants.carryingBroodId[2]).toBe(-1);
-    expect(world.ants.carriedBy[broodId]).toBe(99);
+    expect(world.ants.carriedBy[broodId]).toBe(otherCarrier);
     expect(world.ants.subTask[2]).toBe(NursingSubState.MovingToBrood);
   });
 
@@ -7029,5 +7033,160 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     expect(world.ants.task[nurseId]).toBe(AntTask.Idle);
     expect(world.ants.posX[broodId]! >> FP_SHIFT).toBe(14);
     expect(world.ants.posY[broodId]! >> FP_SHIFT).toBe(14);
+  });
+
+  // ----- Issue #17 Phase 1.5 — death + maturation handling -----
+
+  it('carrier dies mid-carry: brood stays at carrier last-synced tile and is reclaimable', () => {
+    const { world, nurseId, broodId, colony } = setupV10CarryWorld({
+      nurseTileX: 5, nurseTileY: 5,
+      broodTileX: 5, broodTileY: 5,
+      nurseryTileX: 12, nurseryTileY: 12,
+    });
+    tickNurseActions(world); // claim
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
+    // Move the carrier (simulate one tick of motion) and kill it mid-carry.
+    world.ants.posX[nurseId] = (8 << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[nurseId] = (8 << FP_SHIFT) + (FP_ONE >> 1);
+    tickNurseActions(world); // sync brood pos to carrier — brood now at (8, 8)
+    expect(world.ants.posX[broodId]).toBe(world.ants.posX[nurseId]);
+    world.ants.alive[nurseId] = 0;
+    // Spawn a second nurse on the same tile (8, 8) — should be able to claim.
+    const nurse2 = allocateEntityId(world);
+    initAnt(world.ants, nurse2, {
+      colonyId: COLONY_ID,
+      posX:     (8 << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (8 << FP_SHIFT) + (FP_ONE >> 1),
+      task:     AntTask.Nursing, subTask: NursingSubState.MovingToBrood,
+      zone:     Zone.Underground,
+    });
+    void colony;
+    tickNurseActions(world);
+    // The new nurse claims the orphaned brood (dead-carrier exception).
+    expect(world.ants.carryingBroodId[nurse2]).toBe(broodId);
+    expect(world.ants.carriedBy[broodId]).toBe(nurse2);
+    expect(world.ants.subTask[nurse2]).toBe(NursingSubState.Feeding);
+  });
+
+  it('brood dies mid-carry: carrier drops the carry and returns to Idle', () => {
+    const { world, nurseId, broodId } = setupV10CarryWorld({
+      nurseTileX: 5, nurseTileY: 5,
+      broodTileX: 5, broodTileY: 5,
+      nurseryTileX: 12, nurseryTileY: 12,
+    });
+    tickNurseActions(world); // claim
+    expect(world.ants.carryingBroodId[nurseId]).toBe(broodId);
+    // Brood dies (combat, starvation, anything).
+    world.ants.alive[broodId] = 0;
+    tickNurseActions(world);
+    expect(world.ants.task[nurseId]).toBe(AntTask.Idle);
+    expect(world.ants.subTask[nurseId]).toBe(0);
+    expect(world.ants.carryingBroodId[nurseId]).toBe(-1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #17 Phase 1.5 — larva→worker maturation while carried.
+//
+// Driven by tickLifecycleTransitions, not tickNurseActions — the lifecycle
+// step promotes the larva to worker and (under v10+) drops the carry.
+// ---------------------------------------------------------------------------
+
+describe('tickLifecycleTransitions — v10 larva→worker drops carry (#17 phase 1.5)', () => {
+  it('larva matures while being carried: carrier drops, returns to Idle, new worker stays put', async () => {
+    const { tickLifecycleTransitions } = await import('../colony/lifecycle-system.js');
+    const { LARVA_MATURE_TICKS } = await import('../constants.js');
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = SIM_VERSION_V10_VISIBLE_BROOD_CARRY;
+    // Queen + Nursery so brood-aging gate is satisfied.
+    const queenId = allocateEntityId(world);
+    initAnt(world.ants, queenId, { colonyId: COLONY_ID, posX: 0, posY: 0, speed: 0 });
+    const colony = createColonyRecord(COLONY_ID, queenId);
+    world.colonies[COLONY_ID] = colony;
+    colony.chambers.push({
+      chamberId: 1, chamberType: ChamberType.Nursery, foodStored: 0,
+      posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT, width: 2, height: 2,
+    });
+
+    // Larva at age = LARVA_MATURE_TICKS - 1 so a single tick promotes it.
+    const larvaId = allocateEntityId(world);
+    initAnt(world.ants, larvaId, {
+      colonyId: COLONY_ID,
+      posX:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task:     AntTask.Idle, speed: 0, zone: Zone.Underground,
+    });
+    world.ants.age[larvaId] = LARVA_MATURE_TICKS - 1;
+    colony.larvae.push(larvaId);
+    colony.larvaeCount += 1;
+
+    // Carrier holding the larva.
+    const nurseId = allocateEntityId(world);
+    initAnt(world.ants, nurseId, {
+      colonyId: COLONY_ID,
+      posX:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task:     AntTask.Nursing, subTask: NursingSubState.Feeding,
+      zone:     Zone.Underground,
+    });
+    world.ants.carryingBroodId[nurseId] = larvaId;
+    world.ants.carriedBy[larvaId]       = nurseId;
+
+    tickLifecycleTransitions(world, colony);
+    // Larva promoted to worker; entity id preserved.
+    expect(world.colonies[COLONY_ID]!.workers).toContain(larvaId);
+    expect(world.colonies[COLONY_ID]!.larvae).not.toContain(larvaId);
+    // Carry slot dropped on both ends.
+    expect(world.ants.carryingBroodId[nurseId]).toBe(-1);
+    expect(world.ants.carriedBy[larvaId]).toBe(-1);
+    // Carrier returned to Idle.
+    expect(world.ants.task[nurseId]).toBe(AntTask.Idle);
+    expect(world.ants.subTask[nurseId]).toBe(0);
+    // New worker stays at the carrier's tile (position-sync was the
+    // last write; lifecycle promotion doesn't move the entity).
+    expect(world.ants.posX[larvaId]! >> FP_SHIFT).toBe(5);
+    expect(world.ants.posY[larvaId]! >> FP_SHIFT).toBe(5);
+  });
+
+  it('egg→larva mid-carry: carry stays attached (entity id preserved)', async () => {
+    const { tickLifecycleTransitions } = await import('../colony/lifecycle-system.js');
+    const { EGG_HATCH_TICKS } = await import('../constants.js');
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = SIM_VERSION_V10_VISIBLE_BROOD_CARRY;
+    const queenId = allocateEntityId(world);
+    initAnt(world.ants, queenId, { colonyId: COLONY_ID, posX: 0, posY: 0, speed: 0 });
+    const colony = createColonyRecord(COLONY_ID, queenId);
+    world.colonies[COLONY_ID] = colony;
+    colony.chambers.push({
+      chamberId: 1, chamberType: ChamberType.Nursery, foodStored: 0,
+      posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT, width: 2, height: 2,
+    });
+    const eggId = allocateEntityId(world);
+    initAnt(world.ants, eggId, {
+      colonyId: COLONY_ID,
+      posX:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task:     AntTask.Idle, speed: 0, zone: Zone.Underground,
+    });
+    world.ants.age[eggId] = EGG_HATCH_TICKS - 1;
+    colony.eggs.push(eggId);
+    colony.eggCount += 1;
+    const nurseId = allocateEntityId(world);
+    initAnt(world.ants, nurseId, {
+      colonyId: COLONY_ID,
+      posX:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task:     AntTask.Nursing, subTask: NursingSubState.Feeding,
+      zone:     Zone.Underground,
+    });
+    world.ants.carryingBroodId[nurseId] = eggId;
+    world.ants.carriedBy[eggId]         = nurseId;
+
+    tickLifecycleTransitions(world, colony);
+    // Promoted to larva; carry preserved.
+    expect(colony.larvae).toContain(eggId);
+    expect(world.ants.carryingBroodId[nurseId]).toBe(eggId);
+    expect(world.ants.carriedBy[eggId]).toBe(nurseId);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
   });
 });

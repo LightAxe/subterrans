@@ -810,6 +810,17 @@ export function tickNurseActions(world: WorldState): void {
           ants.subTask[id] = 0;
           continue;
         }
+        // Brood died mid-carry (combat, starvation, etc.). Drop the carry
+        // and return to Idle. The dead brood will be swap-removed from
+        // colony.eggs/larvae at step 5 (tickDeathCleanup) on the next tick.
+        if (ants.alive[broodId] !== 1) {
+          ants.carryingBroodId[id]    = -1;
+          // carriedBy[broodId] is left as-is (the brood is dead — it
+          // doesn't matter, and the entity slot may be recycled later).
+          ants.task[id]    = AntTask.Idle;
+          ants.subTask[id] = 0;
+          continue;
+        }
         // Sync brood position to carrier (every tick — the renderer reads
         // posX/posY directly).
         ants.posX[broodId] = ants.posX[id]!;
@@ -917,10 +928,14 @@ function findUncarriedBroodOnTile(
 ): number {
   const ants = world.ants;
   let pickId = -1;
+  // "Uncarried" means carriedBy === -1 OR the carrier is dead (orphan
+  // case — carrier died mid-carry and the brood needs reclaiming).
+  // Mirrors the same dead-carrier exception in computeNursingPickupField.
   for (let i = 0; i < colony.eggs.length; i++) {
     const bid = colony.eggs[i]!;
     if (ants.alive[bid] !== 1) continue;
-    if (ants.carriedBy[bid] !== -1) continue;
+    const cby = ants.carriedBy[bid]!;
+    if (cby !== -1 && ants.alive[cby] === 1) continue;
     const bx = ants.posX[bid]! >> FP_SHIFT;
     const by = ants.posY[bid]! >> FP_SHIFT;
     if (bx !== tileX || by !== tileY) continue;
@@ -929,7 +944,8 @@ function findUncarriedBroodOnTile(
   for (let i = 0; i < colony.larvae.length; i++) {
     const bid = colony.larvae[i]!;
     if (ants.alive[bid] !== 1) continue;
-    if (ants.carriedBy[bid] !== -1) continue;
+    const cby = ants.carriedBy[bid]!;
+    if (cby !== -1 && ants.alive[cby] === 1) continue;
     const bx = ants.posX[bid]! >> FP_SHIFT;
     const by = ants.posY[bid]! >> FP_SHIFT;
     if (bx !== tileX || by !== tileY) continue;

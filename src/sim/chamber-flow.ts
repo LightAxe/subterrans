@@ -270,11 +270,16 @@ export function computeNursingPickupField(
 
   // Seed (2): uncarried brood entities outside Nursery, on Open tiles.
   // Brood inside Nursery doesn't seed (already deposited); carried brood
-  // doesn't seed (a second nurse mustn't race onto it).
+  // doesn't seed (a second nurse mustn't race onto it). Dead-carrier
+  // exception: if `carriedBy[bid]` points to an ant whose `alive` is 0,
+  // the brood is effectively orphaned (carrier died mid-carry) and is
+  // reclaimable — seed it as uncarried. tickNurseActions Feeding branch
+  // also drops dead-brood carries on the carrier side.
   for (let i = 0; i < broodIds.length; i++) {
     const bid = broodIds[i]!;
     if (alive[bid] !== 1) continue;
-    if (carriedBy[bid] !== -1) continue;
+    const cby = carriedBy[bid]!;
+    if (cby !== -1 && alive[cby] === 1) continue;
     const tx = posX[bid]! >> FP_SHIFT;
     const ty = posY[bid]! >> FP_SHIFT;
     if (tx < 0 || tx >= width || ty < 0 || ty >= height) continue;
