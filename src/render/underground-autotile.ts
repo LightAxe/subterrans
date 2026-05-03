@@ -45,9 +45,11 @@ const SALT_BOUNDARY_V = 522;
 // 5 chosen so a 1-wide corridor (16 px) never pinches below ~6 px.
 const BOUNDARY_AMP = 5 as const;
 // Control-point spacing in pixels. Smaller = more frequent variation
-// (jagged); larger = smoother/wavier. 4 gives 4 control points per tile
-// edge, enough to vary visibly within a tile while staying smooth.
-const BOUNDARY_CP_SPACING = 4 as const;
+// (jagged); larger = smoother/wavier. 8 gives ~2 control points per
+// tile edge with cosine smoothing — slow rolling waves, like a glass
+// ant-farm wall instead of pixel-grade jaggedness. UAT feedback on
+// CP_SPACING=4: "way too jagged, walls should look more natural."
+const BOUNDARY_CP_SPACING = 8 as const;
 
 /**
  * Draw an underground tile: dithered substrate by `centerKind`, plus
@@ -251,40 +253,98 @@ export function drawUndergroundRim(
 
   const last = TILE_SIZE_PX - 1;
 
-  // Heavy band — outermost pixel row/column on each wall-facing edge.
-  gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
-  if (wallN) gfx.fillRect(screenX,            screenY,            TILE_SIZE_PX, 1);
-  if (wallS) gfx.fillRect(screenX,            screenY + last,     TILE_SIZE_PX, 1);
-  if (wallW) gfx.fillRect(screenX,            screenY,            1, TILE_SIZE_PX);
-  if (wallE) gfx.fillRect(screenX + last,     screenY,            1, TILE_SIZE_PX);
+  // Issue #48 v4 follow-up — the boundary curve is displaced from the
+  // tile-grid line, so the rim must follow the curve, not the grid.
+  // Per pixel along each active edge, compute the same offset the
+  // displacement pass used and place the 2-pixel rim band immediately
+  // ON THE OPEN SIDE of the boundary. Heavy band (alpha 0.55) is the
+  // first open-side pixel; light band (alpha 0.30) is the next one.
 
-  // Light band — second pixel inward, lighter alpha for the fade transition.
-  gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.30);
-  if (wallN) gfx.fillRect(screenX,            screenY + 1,        TILE_SIZE_PX, 1);
-  if (wallS) gfx.fillRect(screenX,            screenY + last - 1, TILE_SIZE_PX, 1);
-  if (wallW) gfx.fillRect(screenX + 1,        screenY,            1, TILE_SIZE_PX);
-  if (wallE) gfx.fillRect(screenX + last - 1, screenY,            1, TILE_SIZE_PX);
+  // North edge — open side begins at row max(off, 0). When off > 0,
+  // wall encroaches into rows [0..off-1]; rim sits at rows [off..off+1].
+  // When off ≤ 0, boundary is at or above row 0 (in the wall tile);
+  // rim sits at rows [0..1] of this open tile (still adjacent to the
+  // boundary's open side).
+  if (wallN) {
+    for (let lx = 0; lx < TILE_SIZE_PX; lx++) {
+      const off = boundaryOffsetH(tileX * TILE_SIZE_PX + lx, tileY);
+      const startRow = off > 0 ? off : 0;
+      gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
+      gfx.fillRect(screenX + lx, screenY + startRow, 1, 1);
+      if (startRow + 1 < TILE_SIZE_PX) {
+        gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.30);
+        gfx.fillRect(screenX + lx, screenY + startRow + 1, 1, 1);
+      }
+    }
+  }
+  // South edge — open side ends at row min(last - (-off), last) when
+  // off < 0 (boundary moved up by -off into wall above). When off ≥ 0,
+  // rim sits at rows [last-1..last] (default position).
+  if (wallS) {
+    for (let lx = 0; lx < TILE_SIZE_PX; lx++) {
+      const off = boundaryOffsetH(tileX * TILE_SIZE_PX + lx, tileY + 1);
+      const endRow = off < 0 ? last + off : last;
+      gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
+      gfx.fillRect(screenX + lx, screenY + endRow, 1, 1);
+      if (endRow - 1 >= 0) {
+        gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.30);
+        gfx.fillRect(screenX + lx, screenY + endRow - 1, 1, 1);
+      }
+    }
+  }
+  // West edge — same logic with x in place of y.
+  if (wallW) {
+    for (let ly = 0; ly < TILE_SIZE_PX; ly++) {
+      const off = boundaryOffsetV(tileY * TILE_SIZE_PX + ly, tileX);
+      const startCol = off > 0 ? off : 0;
+      gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
+      gfx.fillRect(screenX + startCol, screenY + ly, 1, 1);
+      if (startCol + 1 < TILE_SIZE_PX) {
+        gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.30);
+        gfx.fillRect(screenX + startCol + 1, screenY + ly, 1, 1);
+      }
+    }
+  }
+  // East edge.
+  if (wallE) {
+    for (let ly = 0; ly < TILE_SIZE_PX; ly++) {
+      const off = boundaryOffsetV(tileY * TILE_SIZE_PX + ly, tileX + 1);
+      const endCol = off < 0 ? last + off : last;
+      gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
+      gfx.fillRect(screenX + endCol, screenY + ly, 1, 1);
+      if (endCol - 1 >= 0) {
+        gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.30);
+        gfx.fillRect(screenX + endCol - 1, screenY + ly, 1, 1);
+      }
+    }
+  }
 
   // Per-tile rim chips — 1-pixel deterministic dark specks inside each
-  // active rim band, breaking the rim's flat appearance. Same alpha as
-  // the heavy band so chips read as small "packed soil" grains rather
-  // than sub-rim noise. Position is hash-driven within the band.
+  // active rim band, breaking the rim's flat appearance.
   const h = spatialHash(tileX, tileY, SALT_RIM_CHIP);
   gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
   if (wallN) {
-    const x = (h >>> 0) & 0xf;        // 0..15
-    gfx.fillRect(screenX + x, screenY + 1, 1, 1);
+    const x = (h >>> 0) & 0xf;
+    const off = boundaryOffsetH(tileX * TILE_SIZE_PX + x, tileY);
+    const row = off > 0 ? off : 0;
+    if (row + 1 < TILE_SIZE_PX) gfx.fillRect(screenX + x, screenY + row + 1, 1, 1);
   }
   if (wallS) {
     const x = (h >>> 4) & 0xf;
-    gfx.fillRect(screenX + x, screenY + last - 1, 1, 1);
+    const off = boundaryOffsetH(tileX * TILE_SIZE_PX + x, tileY + 1);
+    const row = off < 0 ? last + off : last;
+    if (row - 1 >= 0) gfx.fillRect(screenX + x, screenY + row - 1, 1, 1);
   }
   if (wallW) {
     const y = (h >>> 8) & 0xf;
-    gfx.fillRect(screenX + 1, screenY + y, 1, 1);
+    const off = boundaryOffsetV(tileY * TILE_SIZE_PX + y, tileX);
+    const col = off > 0 ? off : 0;
+    if (col + 1 < TILE_SIZE_PX) gfx.fillRect(screenX + col + 1, screenY + y, 1, 1);
   }
   if (wallE) {
     const y = (h >>> 12) & 0xf;
-    gfx.fillRect(screenX + last - 1, screenY + y, 1, 1);
+    const off = boundaryOffsetV(tileY * TILE_SIZE_PX + y, tileX + 1);
+    const col = off < 0 ? last + off : last;
+    if (col - 1 >= 0) gfx.fillRect(screenX + col - 1, screenY + y, 1, 1);
   }
 }

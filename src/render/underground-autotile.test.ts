@@ -405,21 +405,30 @@ describe('drawUndergroundRim', () => {
     expect(gfx.calls.filter(c => c.method === 'fillRect')).toHaveLength(0);
   });
 
-  it('emits 2 band fillRects + 1 chip per cardinal wall neighbor', () => {
+  it('emits per-pixel rim ops along each active edge (rim follows displaced boundary)', () => {
+    // v4 follow-up: rim is now per-pixel because it tracks the wavy
+    // boundary curve (not the grid line). Per active edge: up to 16
+    // heavy + up to 16 light + 1 chip = up to 33 fillRects.
     const gfx = gfxCalls();
-    // Open tile with only N=wall (rest open).
     drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open', {
       n: 'wall',
       ne: 'open', e: 'open', se: 'open', s: 'open', sw: 'open', w: 'open', nw: 'open',
     }));
-    // 1 heavy band + 1 light band + 1 chip = 3 fillRects.
-    expect(gfx.calls.filter(c => c.method === 'fillRect')).toHaveLength(3);
+    const ops = gfx.calls.filter(c => c.method === 'fillRect').length;
+    // At least 16 (heavy band only, if all light-band rows are off-tile)
+    // and at most 33 (16 heavy + 16 light + 1 chip).
+    expect(ops).toBeGreaterThanOrEqual(16);
+    expect(ops).toBeLessThanOrEqual(33);
   });
 
-  it('all four cardinal walls → 8 band fillRects + 4 chips = 12', () => {
+  it('all four cardinal walls → up to 132 rim fillRects', () => {
     const gfx = gfxCalls();
     drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open'));
-    expect(gfx.calls.filter(c => c.method === 'fillRect')).toHaveLength(12);
+    const ops = gfx.calls.filter(c => c.method === 'fillRect').length;
+    // Up to 4 × (16 heavy + 16 light + 1 chip) = 132. Lower bound is
+    // 4 × 16 = 64 (heavy only).
+    expect(ops).toBeGreaterThanOrEqual(64);
+    expect(ops).toBeLessThanOrEqual(132);
   });
 });
 
