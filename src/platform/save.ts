@@ -122,6 +122,16 @@ interface SerializedAnts {
   recentTilesX?: number[];
   recentTilesY?: number[];
   recentTilesHead?: number[];
+  /**
+   * Issue #17 Phase 1 — visible brood carry. carryingBroodId[i] = entity id
+   * of the brood ant `i` is carrying (or -1 if none); carriedBy[j] = entity
+   * id of the nurse carrying brood `j` (or -1 if uncarried). Optional;
+   * absent → all-(-1) default, which also matches a v10+ "no carries in
+   * flight" snapshot. Pre-v10 saves never read these fields (gated on
+   * simVersion).
+   */
+  carryingBroodId?: number[];
+  carriedBy?: number[];
 }
 
 interface SerializedColony {
@@ -236,6 +246,9 @@ function serializeAnts(a: AntComponents): SerializedAnts {
     recentTilesX:    Array.from(a.recentTilesX),
     recentTilesY:    Array.from(a.recentTilesY),
     recentTilesHead: Array.from(a.recentTilesHead),
+    // Issue #17 Phase 1 — visible brood carry slot + reverse pointer.
+    carryingBroodId: Array.from(a.carryingBroodId),
+    carriedBy:       Array.from(a.carriedBy),
   };
 }
 
@@ -461,6 +474,16 @@ function deserializeAnts(saved: SerializedAnts, capacity: number): AntComponents
   }
   if (saved.recentTilesHead !== undefined) {
     copyIntoUint8(a.recentTilesHead, saved.recentTilesHead);
+  }
+  // Issue #17 Phase 1 — brood carry slot + reverse pointer. Pre-v10 saves
+  // omit; createAntComponents fills both with -1 (no carries), which is
+  // correct for both pre-v10 (never read) and a fresh v10 load (no carries
+  // in flight at that snapshot).
+  if (saved.carryingBroodId !== undefined) {
+    copyIntoInt32(a.carryingBroodId, saved.carryingBroodId);
+  }
+  if (saved.carriedBy !== undefined) {
+    copyIntoInt32(a.carriedBy, saved.carriedBy);
   }
   return a;
 }

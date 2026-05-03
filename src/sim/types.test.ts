@@ -260,6 +260,27 @@ describe('WorldState', () => {
         expect(dst.ants.searchPrevTileX[0]).toBe(11);
         expect(dst.ants.searchPrevTileY[0]).toBe(22);
       });
+
+      it('Issue #17 Phase 1: carryingBroodId and carriedBy round-trip through copyWorldState', () => {
+        // The render snapshot reads brood positions through prevState; if the
+        // carry slot doesn't round-trip, the carrier sprite would track on
+        // the current frame but the brood would visually lag (or vice-versa
+        // depending on which side dropped). Both fields must round-trip.
+        src.ants.carryingBroodId[0] = 7;
+        src.ants.carriedBy[7] = 0;
+        src.ants.carryingBroodId[1] = -1; // sentinel round-trips unchanged
+        src.ants.carriedBy[1] = -1;
+        copyWorldState(src, dst);
+        expect(dst.ants.carryingBroodId[0]).toBe(7);
+        expect(dst.ants.carriedBy[7]).toBe(0);
+        expect(dst.ants.carryingBroodId[1]).toBe(-1);
+        expect(dst.ants.carriedBy[1]).toBe(-1);
+        // Independence: mutating src after copy must NOT propagate to dst.
+        src.ants.carryingBroodId[0] = 99;
+        src.ants.carriedBy[7] = 42;
+        expect(dst.ants.carryingBroodId[0]).toBe(7);
+        expect(dst.ants.carriedBy[7]).toBe(0);
+      });
     });
 
     describe('colonies', () => {

@@ -111,7 +111,8 @@ export const SIM_VERSION_V7_SURFACE_PASSABILITY = 7 as const;
  */
 export const SIM_VERSION_V8_LEASH_HYSTERESIS = 8 as const;
 export const SIM_VERSION_V9_CANCEL_DROPS_PENDING = 9 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V9_CANCEL_DROPS_PENDING;
+export const SIM_VERSION_V10_VISIBLE_BROOD_CARRY = 10 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V10_VISIBLE_BROOD_CARRY;
 
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick
@@ -175,6 +176,15 @@ export interface WorldState {
    *       PlaceChamber Queen-uniqueness rule in `tick.ts`) stayed
    *       tripped, soft-locking re-placement. Pre-v9 saves replay
    *       byte-identical with the orphan-on-cancel behaviour.
+   *  10 = Issue #17 Phase 1 — visible brood carry. Nurses pathfind to
+   *       a brood entity (egg or larva) inside a Queen chamber, pick
+   *       it up (sets `carryingBroodId` on the nurse and `carriedBy`
+   *       on the brood), walk it to a Nursery Open tile, and deposit.
+   *       Pre-v10 the `Feeding` substate ran the instant teleport in
+   *       `transportBroodToNursery`. Pre-v10 saves replay byte-
+   *       identically with the teleport behaviour. With no Nursery,
+   *       no carry happens and brood sits where laid (matches pre-v10
+   *       teleport-gate behaviour).
    *
    * Round-trips through copyWorldState and save/load.
    */
@@ -313,6 +323,10 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   dst.ants.recentTilesX.set(src.ants.recentTilesX);
   dst.ants.recentTilesY.set(src.ants.recentTilesY);
   dst.ants.recentTilesHead.set(src.ants.recentTilesHead);
+  // Issue #17 Phase 1 — brood carry slot + reverse pointer. Both round-trip
+  // because the v10 nurse state machine reads them every tick.
+  dst.ants.carryingBroodId.set(src.ants.carryingBroodId);
+  dst.ants.carriedBy.set(src.ants.carriedBy);
 
   // --- colonies: delete stale dst keys; upsert each src colony ---
   // Remove dst colonies that no longer exist in src

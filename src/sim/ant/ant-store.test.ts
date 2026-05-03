@@ -339,4 +339,39 @@ describe('ant-store', () => {
 
     expect(ants.currentGridColonyId[id]).toBe(0);
   });
+
+  // Issue #17 Phase 1 — visible brood carry slot fields.
+  it('createAntComponents fills carryingBroodId and carriedBy with -1', () => {
+    const ants = createAntComponents(16);
+    for (let i = 0; i < 16; i++) {
+      expect(ants.carryingBroodId[i]).toBe(-1);
+      expect(ants.carriedBy[i]).toBe(-1);
+    }
+  });
+
+  it('initAnt resets carryingBroodId and carriedBy to -1', () => {
+    const ants = createAntComponents(16);
+    const id = 5;
+    // Pre-pollute both slots so the reset is observable.
+    ants.carryingBroodId[id] = 7;
+    ants.carriedBy[id] = 3;
+    initAnt(ants, id, { colonyId: 1, posX: 0, posY: 0 });
+    expect(ants.carryingBroodId[id]).toBe(-1);
+    expect(ants.carriedBy[id]).toBe(-1);
+  });
+
+  it('killAnt does NOT clear carryingBroodId or carriedBy (death-drop behaviour: brood stays carried-by-id until next nurse claim)', () => {
+    const ants = createAntComponents(16);
+    const nurseId = 4;
+    const broodId = 7;
+    initAnt(ants, nurseId, { colonyId: 1, posX: 0, posY: 0 });
+    initAnt(ants, broodId, { colonyId: 1, posX: 0, posY: 0 });
+    ants.carryingBroodId[nurseId] = broodId;
+    ants.carriedBy[broodId] = nurseId;
+    killAnt(ants, nurseId);
+    // Death cleanup is up to the runtime (tickNurseActions / death sweep) —
+    // killAnt itself is O(1) and only zeroes `alive`.
+    expect(ants.carryingBroodId[nurseId]).toBe(broodId);
+    expect(ants.carriedBy[broodId]).toBe(nurseId);
+  });
 });

@@ -14,6 +14,7 @@ import {
   SIM_VERSION_V7_SURFACE_PASSABILITY,
   SIM_VERSION_V8_LEASH_HYSTERESIS,
   SIM_VERSION_V9_CANCEL_DROPS_PENDING,
+  SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
   LATEST_SIM_VERSION,
 } from './types.js';
 import { GameOutcome } from './game-over.js';
@@ -2495,16 +2496,20 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
     expect(world.pendingChambers[`${colonyId}:${entranceX}:10`]).toBeUndefined();
   });
 
-  it('new worlds run at LATEST_SIM_VERSION (== V9_CANCEL_DROPS_PENDING after #54)', () => {
+  it('new worlds run at LATEST_SIM_VERSION (== V10_VISIBLE_BROOD_CARRY after #17 phase 1)', () => {
     // Verify createWorldState uses the LATEST_SIM_VERSION constant exactly.
     // Tracks the constant rather than a hard-coded number so future bumps
     // don't have to update this assertion, while still proving the factory
     // is wired to the latest version (not stuck on a stale literal). Also
-    // pins the explicit v9 sentinel so a downgrade (e.g. accidental revert
-    // of the #54 cancel-drops-pending fix) trips here.
+    // pins the explicit v10 sentinel so a downgrade (e.g. accidental revert
+    // of the #17 visible-brood-carry phase 1) trips here.
     const world = createWorldState(42);
     expect(world.simVersion).toBe(LATEST_SIM_VERSION);
-    expect(world.simVersion).toBe(SIM_VERSION_V9_CANCEL_DROPS_PENDING);
+    expect(world.simVersion).toBe(SIM_VERSION_V10_VISIBLE_BROOD_CARRY);
+    // The v9 cancel-drops-pending floor still belongs to LATEST as well —
+    // an accidental drop below v9 would silently re-enable the #54 Queen
+    // chamber soft-lock.
+    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V9_CANCEL_DROPS_PENDING);
     // The v8 leash-hysteresis ceiling still belongs to LATEST as well — an
     // accidental drop below v8 would silently re-enable the #44 UAT round 3
     // bugs (flip-flop at leash boundary, detour deadlocks in one-way

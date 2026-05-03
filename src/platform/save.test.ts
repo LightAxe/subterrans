@@ -202,6 +202,38 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.ants.searchWave[0]).toBe(0);
       expect(w2.ants.searchWave[10]).toBe(0);
     });
+    it('Issue #17 Phase 1: round-trips ants.carryingBroodId and carriedBy through serialize → deserialize', () => {
+      // Regression guard: if either field is dropped, an autosaved snapshot
+      // mid-carry would land all carries at the carrier's last position
+      // (because the renderer position-syncs the brood to the carrier each
+      // tick) but with the carry slot cleared — the brood would teleport
+      // back to its idle position on the next tick. SCEN-06 byte-identity
+      // would also break across reload.
+      const w = createScenario(42);
+      w.ants.carryingBroodId[0] = 7;
+      w.ants.carriedBy[7] = 0;
+      w.ants.carryingBroodId[1] = -1;
+      w.ants.carriedBy[1] = -1;
+      const w2 = deserializeWorldState(serializeWorldState(w));
+      expect(w2.ants.carryingBroodId[0]).toBe(7);
+      expect(w2.ants.carriedBy[7]).toBe(0);
+      expect(w2.ants.carryingBroodId[1]).toBe(-1);
+      expect(w2.ants.carriedBy[1]).toBe(-1);
+    });
+    it('pre-#17-Phase-1 saves (carry slots absent) deserialize to all-(-1)', () => {
+      // Backward compatibility: a pre-v10 save omits carryingBroodId/carriedBy.
+      // Loading defaults the fields to all-(-1), which is the correct "no
+      // carries in flight" state for both pre-v10 (never read) and v10+.
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      delete (s.ants as { carryingBroodId?: number[] }).carryingBroodId;
+      delete (s.ants as { carriedBy?: number[] }).carriedBy;
+      const w2 = deserializeWorldState(s);
+      expect(w2.ants.carryingBroodId[0]).toBe(-1);
+      expect(w2.ants.carriedBy[0]).toBe(-1);
+      expect(w2.ants.carryingBroodId[100]).toBe(-1);
+      expect(w2.ants.carriedBy[100]).toBe(-1);
+    });
     it('round-trips ants.currentGridColonyId through serialize → deserialize (Phase 09.1 Chunk 0 grid-of-occupancy)', () => {
       // Regression guard for the phase 09.1 verification gap: if
       // currentGridColonyId is dropped from the save envelope, every loaded
@@ -238,12 +270,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.ants.currentGridColonyId[enemyQueen]).toBe(ENEMY_COLONY_ID);
       expect(w2.ants.currentGridColonyId[playerInvader]).toBe(ENEMY_COLONY_ID);
     });
-    it('round-trips simVersion (LATEST: v9 cancel-drops-pending)', async () => {
+    it('round-trips simVersion (LATEST: v10 visible brood carry)', async () => {
       const { LATEST_SIM_VERSION, SIM_VERSION_V7_SURFACE_PASSABILITY } = await import('../sim/types.js');
       // New worlds default to LATEST_SIM_VERSION. Save/load must preserve
       // it so any LATEST replay continues to apply the gated behaviour
-      // (currently surface passability, soft cost, leash hysteresis, and
-      // cancel-drops-pending) on resume.
+      // (currently surface passability, soft cost, leash hysteresis,
+      // cancel-drops-pending, and visible brood carry) on resume.
       const w = createScenario(42);
       expect(w.simVersion).toBe(LATEST_SIM_VERSION);
       // Sanity-check that LATEST is at least v7 — anything lower would

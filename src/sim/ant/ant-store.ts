@@ -201,6 +201,38 @@ export interface AntComponents {
   readonly recentTilesX: Int32Array;
   readonly recentTilesY: Int32Array;
   readonly recentTilesHead: Uint8Array;
+  /**
+   * Issue #17 Phase 1 — visible brood carry. For nurses (task=Nursing) under
+   * simVersion >= 10, the entity ID of the brood (egg or larva) currently
+   * being carried, or -1 if not carrying. The brood's posX/posY are synced
+   * to the carrier each tick while carried; on Nursery-tile arrival the
+   * carry slot clears and the brood is deposited via the same `pickId %
+   * openCount` spread that pre-v10 `transportBroodToNursery` used.
+   *
+   * Reset to -1 in initAnt. NOT cleared by killAnt — death cleanup leaves
+   * the brood at the carrier's last-synced tile so the next nurse picks it
+   * up via the v10 `nursing` flow-field (which seeds from Queen Open tiles
+   * AND any uncarried-brood tile outside Nursery).
+   *
+   * Round-trips through copyWorldState and save/load (optional field;
+   * defaults to all-(-1) on pre-v10 saves, which matches the v10+
+   * "no carries in flight" load default).
+   */
+  readonly carryingBroodId: Int32Array;
+  /**
+   * Issue #17 Phase 1 — reverse pointer for the carry. For brood entities
+   * (eggs and larvae) under simVersion >= 10, the entity ID of the nurse
+   * currently carrying this brood, or -1 if uncarried. Set on pickup,
+   * cleared on deposit OR when the carrier's `alive` flips to 0.
+   *
+   * Used by tickNurseActions to detect "brood already claimed this tick"
+   * during pickup — replay-deterministic because nurse iteration order is
+   * by ant id.
+   *
+   * Reset to -1 in initAnt. Round-trips through copyWorldState and
+   * save/load (optional; defaults to all-(-1) on pre-v10 saves).
+   */
+  readonly carriedBy: Int32Array;
 }
 
 /**
@@ -248,6 +280,11 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
   recentTilesX.fill(RECENT_TILES_SENTINEL);
   const recentTilesY = new Int32Array(maxEntities * RECENT_TILES_LEN);
   recentTilesY.fill(RECENT_TILES_SENTINEL);
+  // Issue #17 Phase 1 — visible brood carry. -1 = not carrying / not carried.
+  const carryingBroodId = new Int32Array(maxEntities);
+  carryingBroodId.fill(-1);
+  const carriedBy = new Int32Array(maxEntities);
+  carriedBy.fill(-1);
 
   return {
     posX:            new Int32Array(maxEntities),
@@ -291,6 +328,9 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
     recentTilesX,
     recentTilesY,
     recentTilesHead: new Uint8Array(maxEntities),
+    // Issue #17 Phase 1 — visible brood carry. -1 = not carrying / not carried.
+    carryingBroodId,
+    carriedBy,
   };
 }
 
@@ -375,6 +415,9 @@ export function initAnt(ants: AntComponents, id: EntityId, spec: InitAntSpec): v
     ants.recentTilesY[base + s] = RECENT_TILES_SENTINEL;
   }
   ants.recentTilesHead[id]   = 0;
+  // Issue #17 Phase 1 — fresh ant is not carrying / not carried.
+  ants.carryingBroodId[id]   = -1;
+  ants.carriedBy[id]         = -1;
 }
 
 // ---------------------------------------------------------------------------
