@@ -7055,6 +7055,39 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     expect(world.ants.subTask[nurseId]).toBe(NursingSubState.MovingToBrood);
   });
 
+  it('finite-nursing: orphan brood on BeingDug tile DOES count as claimable (#56 codex P1 r3)', () => {
+    // Codex round 3 P1: a carrier can die on a BeingDug tile, leaving
+    // its orphan brood there. The pickup field's seed-tile guard now
+    // allows BeingDug (BFS expansion already traverses it). The
+    // colonyHasClaimableBrood predicate must agree — otherwise the
+    // colony-level release would incorrectly fire even though the
+    // pickup field DOES have a source for that orphan, sending a
+    // walking nurse back to Idle prematurely.
+    const { world, nurseId, broodId } = setupV10NurseAndBroodOnTile({ sameTile: false });
+    // Set up an underground grid the predicate will read. Mark the
+    // brood's tile (5, 5) as BeingDug.
+    const ug = createUndergroundGrid(64, 64);
+    for (let y = 0; y < 64; y++) {
+      for (let x = 0; x < 64; x++) {
+        ugSet(ug, x, y, UndergroundTileState.Open);
+      }
+    }
+    ugSet(ug, 5, 5, UndergroundTileState.BeingDug);
+    world.undergroundGrids[COLONY_ID] = ug;
+    // Mark the brood as orphaned (carriedBy points at a dead nurse).
+    const deadCarrier = allocateEntityId(world);
+    initAnt(world.ants, deadCarrier, {
+      colonyId: COLONY_ID, posX: 0, posY: 0, task: AntTask.Nursing,
+    });
+    world.ants.alive[deadCarrier] = 0;
+    world.ants.carriedBy[broodId] = deadCarrier;
+    tickNurseActions(world);
+    // Nurse keeps walking — colony-level release does NOT fire because
+    // the BeingDug-tile orphan is a valid pickup source.
+    expect(world.ants.task[nurseId]).toBe(AntTask.Nursing);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.MovingToBrood);
+  });
+
   it('finite-nursing colony-level release: brood ALL inside Nursery counts as no-claim (#56 round 3 edge)', () => {
     // colonyHasClaimableBrood must mirror the pickup field's source set —
     // brood inside Nursery is excluded by the seed loop AND by

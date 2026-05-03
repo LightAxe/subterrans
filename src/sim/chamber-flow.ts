@@ -315,11 +315,21 @@ export function computeNursingPickupField(
       }
       if (insideNursery) continue;
       const idx = ty * width + tx;
-      // Brood entities should always be on Open tiles in normal play (the
-      // queen-laying code drops them on Open Queen-chamber tiles, and the
-      // carry code drops them on Open Nursery tiles). Defensive guard so a
-      // mid-transition edge case doesn't seed a non-traversable cell.
-      if (data[idx] !== UndergroundTileState.Open) continue;
+      // Allow seeds on Open OR BeingDug tiles. BeingDug is reachable per
+      // canEnterUndergroundTile, and the BFS expansion below traverses
+      // both states, so a seed on a BeingDug tile propagates correctly.
+      // PR #56 codex P1 round 3 fix: a carrier can die on a BeingDug
+      // tile (e.g. mid-combat next to an active dig), dropping its brood
+      // there. Pre-fix, the Open-only guard skipped that seed, the
+      // pickup field had no source for the orphan, and mid-tunnel nurses
+      // stranded indefinitely. The colonyHasClaimableBrood predicate in
+      // ant-system.ts applies the same Open-or-BeingDug filter so the
+      // field-seed-set and the release predicate agree exactly.
+      const tileState = data[idx]!;
+      if (
+        tileState !== UndergroundTileState.Open &&
+        tileState !== UndergroundTileState.BeingDug
+      ) continue;
       if (out[idx] !== -2) continue;
       out[idx] = -1;
       queue[tail++] = idx;

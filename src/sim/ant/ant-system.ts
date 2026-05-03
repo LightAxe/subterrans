@@ -859,7 +859,7 @@ export function tickNurseActions(world: WorldState): void {
       // be mid-tunnel and never reach a source tile, so the release
       // must fire regardless of her current tile. Covers brood
       // matured/died/all-claimed mid-walk.
-      if (!colonyHasClaimableBrood(colony, ants)) {
+      if (!colonyHasClaimableBrood(world, colony)) {
         ants.subTask[id] = NursingSubState.Feeding;
         continue;
       }
@@ -976,37 +976,62 @@ export function tickNurseActions(world: WorldState): void {
  */
 /**
  * Issue #17 Phase 1 — true iff `colony` owns at least one alive,
- * reclaimable, OUTSIDE-Nursery brood entity (egg or larva). Equivalent
- * to "the v10 nursing pickup field has at least one source." Both
- * `computeNursingPickupField` (BFS seeding) and `findUncarriedBroodOnTile`
- * (per-tile pickup match) apply the same filter: alive AND
- * (uncarried OR carrier-dead) AND outside any Nursery footprint.
+ * reclaimable, OUTSIDE-Nursery brood entity (egg or larva) on a tile
+ * that the pickup field would actually seed. Equivalent to "the v10
+ * nursing pickup field has at least one source." Filters mirror
+ * `computeNursingPickupField` exactly:
+ *   - alive AND (uncarried OR carrier-dead)            (isBroodReclaimable)
+ *   - outside any Nursery footprint                    (isInsideNursery)
+ *   - on an Open OR BeingDug tile                      (tile state)
  *
  * Used by tickNurseActions to release MovingToBrood nurses to Idle when
  * the pickup pool is empty — without this the nurse would strand mid-
  * tunnel forever (no field source → can't pathfind anywhere → never
- * reaches a source tile → finite-nursing release never fires). Brood
- * already inside the Nursery footprint is intentionally excluded
- * because it has already been delivered — no carry needed.
+ * reaches a source tile → finite-nursing release never fires).
+ *
+ * Tile-state filter parity (PR #56 codex P1 round 3): a carrier can die
+ * on a BeingDug tile, leaving the orphan brood there. The field seeds
+ * such tiles (BeingDug is reachable per canEnterUndergroundTile and the
+ * BFS expansion traverses it). Without the matching filter here, a
+ * brood on a Solid/Marked tile (theoretically impossible — defensive
+ * only) would be counted as claimable but never seeded → strand.
  */
-function colonyHasClaimableBrood(colony: ColonyRecord, ants: AntComponents): boolean {
+function colonyHasClaimableBrood(
+  world: WorldState,
+  colony: ColonyRecord,
+): boolean {
+  const ants = world.ants;
+  const underground = world.undergroundGrids[colony.colonyId];
   for (let i = 0; i < colony.eggs.length; i++) {
-    const bid = colony.eggs[i]!;
-    if (!isBroodReclaimable(ants, bid)) continue;
-    const tx = ants.posX[bid]! >> FP_SHIFT;
-    const ty = ants.posY[bid]! >> FP_SHIFT;
-    if (isInsideNursery(colony, tx, ty)) continue;
-    return true;
+    if (isReclaimableBroodSeedable(ants, colony, underground, colony.eggs[i]!)) return true;
   }
   for (let i = 0; i < colony.larvae.length; i++) {
-    const bid = colony.larvae[i]!;
-    if (!isBroodReclaimable(ants, bid)) continue;
-    const tx = ants.posX[bid]! >> FP_SHIFT;
-    const ty = ants.posY[bid]! >> FP_SHIFT;
-    if (isInsideNursery(colony, tx, ty)) continue;
-    return true;
+    if (isReclaimableBroodSeedable(ants, colony, underground, colony.larvae[i]!)) return true;
   }
   return false;
+}
+
+/** Shared predicate: brood `bid` is reclaimable AND would seed the pickup field. */
+function isReclaimableBroodSeedable(
+  ants: AntComponents,
+  colony: ColonyRecord,
+  underground: UndergroundGrid | undefined,
+  bid: number,
+): boolean {
+  if (!isBroodReclaimable(ants, bid)) return false;
+  const tx = ants.posX[bid]! >> FP_SHIFT;
+  const ty = ants.posY[bid]! >> FP_SHIFT;
+  if (isInsideNursery(colony, tx, ty)) return false;
+  // Tile-state filter — must match computeNursingPickupField. Without an
+  // underground grid (test harness), assume the brood is on an Open
+  // tile so the predicate stays inclusive (matches the legacy behaviour
+  // where the field couldn't be computed anyway).
+  if (underground !== undefined) {
+    if (tx < 0 || tx >= underground.width || ty < 0 || ty >= underground.height) return false;
+    const state = ugGet(underground, tx, ty);
+    if (state !== UndergroundTileState.Open && state !== UndergroundTileState.BeingDug) return false;
+  }
+  return true;
 }
 
 function findUncarriedBroodOnTile(
