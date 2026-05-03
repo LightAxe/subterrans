@@ -41,18 +41,17 @@ const SALT_BOUNDARY_H = 521;
 const SALT_BOUNDARY_V = 522;
 // Maximum boundary displacement in pixels. The actual boundary between
 // wall and open materials wanders ±BOUNDARY_AMP from the nominal tile
-// grid line, so corner positions are no longer pinned to tile corners.
-// UAT feedback on AMP=5: "weird spikes pointing out of the tunnels."
-// Reduced to 3 — extreme excursions are what produce the spike artifact
-// (especially at corners where N and W encroachments overlap with
-// different magnitudes). With AMP=3 the boundary still deviates
-// noticeably from the grid but transitions feel like gentle rolling.
-const BOUNDARY_AMP = 3 as const;
+// grid line. UAT v4.2 (AMP=3) still showed visible 1-2 px "spikes"
+// pointing into tunnels — these were `Math.round` quantization artifacts
+// at half-integer transitions: smooth offset values of 2.4 / 2.5 / 2.6
+// across adjacent pixels rounded to alternating 2 / 3 / 3 / 2 / 3,
+// reading as a 1-px peak at the curve's apex. Reduced to 2 so peaks
+// don't reach into half-integer territory often.
+const BOUNDARY_AMP = 2 as const;
 // Control-point spacing in pixels. Smaller = more frequent variation
 // (jagged); larger = smoother/wavier. 16 gives ~1 control point per
 // tile edge with cosine smoothing — very slow rolling waves over
-// multi-tile spans. UAT feedback on CP_SPACING=8: "still too jagged,
-// should look like a glass ant farm." Bumped to one wave per tile.
+// multi-tile spans.
 const BOUNDARY_CP_SPACING = 16 as const;
 
 /**

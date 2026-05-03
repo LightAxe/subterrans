@@ -159,11 +159,12 @@ describe('drawAutotiledUndergroundTile — bidirectional smooth boundary (issue 
   // encroachment of the OPPOSITE kind into themselves — open tiles
   // get wall encroachment along their wall-side edges, AND wall tiles
   // get open encroachment along their open-side edges. Maximum
-  // displacement is BOUNDARY_AMP pixels in either direction (post-v4.2
-  // = 3 to remove the visible "spike" artifact UAT flagged at AMP=5).
+  // displacement is BOUNDARY_AMP pixels in either direction (post-v4.3
+  // = 2; lowered from 3 to eliminate Math.round half-integer spike
+  // artifacts at curve peaks).
   //
   // Tiles with NO opposite-kind cardinal neighbors stay pure substrate.
-  const BOUNDARY_AMP = 3;
+  const BOUNDARY_AMP = 2;
 
   it('an open tile with NO wall neighbors stays fully open substrate', () => {
     const buf = renderTile(makeNeighbors('open', {
@@ -239,7 +240,9 @@ describe('drawAutotiledUndergroundTile — bidirectional smooth boundary (issue 
         }
       }
     }
-    expect(encroached / total).toBeGreaterThanOrEqual(0.35);
+    // With AMP=2 + Math.round, density runs around 35-45%. Threshold
+    // 30% with margin for hash variance.
+    expect(encroached / total).toBeGreaterThanOrEqual(0.30);
   });
 
   it('different tiles produce different encroachment patterns', () => {
@@ -265,7 +268,10 @@ describe('drawAutotiledUndergroundTile — bidirectional smooth boundary (issue 
       }
       fingerprints.add(cells.join('|'));
     }
-    expect(fingerprints.size).toBeGreaterThanOrEqual(8);
+    // With AMP=2 there are fewer distinct boundary patterns possible;
+    // 4 distinct fingerprints from 16 tiles still proves the noise is
+    // hash-driven (not a stamped shape).
+    expect(fingerprints.size).toBeGreaterThanOrEqual(4);
   });
 
   it('a wall tile with ALL wall neighbors stays pure wall substrate (no encroachment)', () => {
