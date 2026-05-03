@@ -218,17 +218,18 @@ export const NURSERY_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [ChamberType.Nu
  * (-1 = source, -2 = unreachable, 0..3 = step N/E/S/W).
  *
  * Deterministic: chamber seed order is chamber array order × row-major
- * footprint; brood seed order is `broodIds` array order. Duplicate sources
- * are idempotent (the `out[idx] !== -2` guard skips re-seeding).
+ * footprint; brood seed order is eggIds first then larvaeIds, each in
+ * array order. Duplicate sources are idempotent (the `out[idx] !== -2`
+ * guard skips re-seeding).
  *
  * @param underground Colony underground grid (read-only).
  * @param chambers    Colony chambers (used for Queen seeds and Nursery
  *                    footprints — the Nursery footprints are read to
  *                    exclude brood already deposited).
- * @param posX/posY/alive/carriedBy The same SoA arrays from `world.ants`.
- * @param broodIds    Concatenation of `colony.eggs` and `colony.larvae`
- *                    for the colony being computed. The function does NOT
- *                    care about order beyond determinism.
+ * @param ants        The world.ants AntComponents struct (reads
+ *                    posX/posY/alive/carriedBy via isBroodReclaimable).
+ * @param eggIds      colony.eggs for the colony being computed.
+ * @param larvaeIds   colony.larvae for the colony being computed.
  * @param out         Pre-allocated Int32Array of length W*H. Filled in-place.
  * @param queue       Pre-allocated Int32Array of length W*H for BFS queue.
  */

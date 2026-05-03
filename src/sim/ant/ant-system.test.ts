@@ -6993,20 +6993,24 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
   });
 
   it('on Nursery-tile arrival: deposits brood, clears carry, returns to Idle', () => {
-    // Two-tick natural flow: tick 1 = claim (MovingToBrood→Feeding),
-    // tick 2 = deposit (Feeding + on Nursery → Idle). Carrier and brood
-    // start on a tile that IS a Nursery tile so the second tick deposits
-    // immediately without needing inter-tick movement.
+    // Brood starts OUTSIDE the Nursery (Phase-1.5 W-03: brood inside a
+    // Nursery is excluded from pickup). Pickup happens at tile (5, 5);
+    // we then pre-position the carrier on a Nursery tile and run a
+    // second tick to trigger the deposit branch.
     const { world, nurseId, broodId } = setupV10CarryWorld({
-      nurseTileX: 12, nurseTileY: 12, // Inside the Nursery 2x2 at (12, 12).
-      broodTileX: 12, broodTileY: 12, // Same tile so claim happens.
+      nurseTileX: 5, nurseTileY: 5,
+      broodTileX: 5, broodTileY: 5,
       nurseryTileX: 12, nurseryTileY: 12,
     });
     // Tick 1 — claim.
     tickNurseActions(world);
     expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
     expect(world.ants.carryingBroodId[nurseId]).toBe(broodId);
-    // Tick 2 — deposit (carrier is on a Nursery tile, no movement needed).
+    // Move the carrier onto a Nursery Open tile (simulating one tick of
+    // movement). The next tickNurseActions will sync the brood and deposit.
+    world.ants.posX[nurseId] = (12 << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[nurseId] = (12 << FP_SHIFT) + (FP_ONE >> 1);
+    // Tick 2 — deposit.
     tickNurseActions(world);
     expect(world.ants.task[nurseId]).toBe(AntTask.Idle);
     expect(world.ants.subTask[nurseId]).toBe(0);
@@ -7024,37 +7028,44 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
   it('multiple deposits spread across Nursery Open tiles, not stacked at one corner', () => {
     // Two carriers each holding a different brood, both arriving at Nursery
     // on the same tick. broodId differs → spread index differs → tiles differ.
-    const { world } = setupV10CarryWorld({
-      nurseTileX: 12, nurseTileY: 12,
-      broodTileX: 12, broodTileY: 12,
+    const { world, nurseId, broodId } = setupV10CarryWorld({
+      nurseTileX: 5, nurseTileY: 5,
+      broodTileX: 5, broodTileY: 5,
       nurseryTileX: 12, nurseryTileY: 12,
     });
-    // Add a second brood + nurse pair.
+    // Add a second brood + nurse pair at a second non-Nursery tile.
     const colony = world.colonies[COLONY_ID]!;
     const brood2 = allocateEntityId(world);
     initAnt(world.ants, brood2, {
       colonyId: COLONY_ID,
-      posX:     (13 << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (12 << FP_SHIFT) + (FP_ONE >> 1),
+      posX:     (6 << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
       task:     AntTask.Idle, speed: 0, zone: Zone.Underground,
     });
     colony.eggs.push(brood2);
     const nurse2 = allocateEntityId(world);
     initAnt(world.ants, nurse2, {
       colonyId: COLONY_ID,
-      posX:     (13 << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (12 << FP_SHIFT) + (FP_ONE >> 1),
+      posX:     (6 << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
       task:     AntTask.Nursing,
       subTask:  NursingSubState.MovingToBrood,
       zone:     Zone.Underground,
     });
-    void nurse2;
     // Tick 1 — both nurses claim their respective brood.
     tickNurseActions(world);
+    // Move both carriers onto Nursery Open tiles (one per tile so deposit
+    // branches converge in the same tick).
+    world.ants.posX[nurseId] = (12 << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[nurseId] = (12 << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posX[nurse2]  = (12 << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[nurse2]  = (12 << FP_SHIFT) + (FP_ONE >> 1);
     // Tick 2 — both deposit.
     tickNurseActions(world);
     const allBroodIds = colony.eggs.slice();
     expect(allBroodIds.length).toBe(2);
+    expect(allBroodIds).toContain(broodId);
+    expect(allBroodIds).toContain(brood2);
     const tilesUsed = new Set<string>();
     for (const bid of allBroodIds) {
       const bx = world.ants.posX[bid]! >> FP_SHIFT;
@@ -7087,26 +7098,52 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
 
   it('1×1 Nursery: deposit collapses to the single Open tile (broodId % 1 === 0)', () => {
     const { world, nurseId, broodId } = setupV10CarryWorld({
-      nurseTileX: 14, nurseTileY: 14,
-      broodTileX: 14, broodTileY: 14,
+      nurseTileX: 5, nurseTileY: 5,
+      broodTileX: 5, broodTileY: 5,
       nurseryTileX: 14, nurseryTileY: 14,
       nurseryWidth: 1, nurseryHeight: 1,
     });
-    tickNurseActions(world); // claim
+    tickNurseActions(world); // claim at (5, 5)
+    // Move carrier onto the 1×1 Nursery tile.
+    world.ants.posX[nurseId] = (14 << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[nurseId] = (14 << FP_SHIFT) + (FP_ONE >> 1);
     tickNurseActions(world); // deposit
     expect(world.ants.task[nurseId]).toBe(AntTask.Idle);
     expect(world.ants.posX[broodId]! >> FP_SHIFT).toBe(14);
     expect(world.ants.posY[broodId]! >> FP_SHIFT).toBe(14);
   });
 
+  it('brood already inside Nursery is NOT re-claimed (W-03 — pre-v10 selection invariant)', () => {
+    // A nurse incidentally walks onto a Nursery tile that holds a deposited
+    // brood (e.g. immediately after Idle→Nursing re-allocation, before the
+    // chamber-flow re-routes her elsewhere). The pre-v10 transport gate
+    // skips brood-inside-Nursery in its selection; v10 must too. Without
+    // this skip, the brood would be re-picked-up and re-shuffled via
+    // broodId%openCount on the next deposit, visible as a brood teleport.
+    const { world, nurseId, broodId } = setupV10CarryWorld({
+      nurseTileX: 12, nurseTileY: 12, // Inside the Nursery 2x2 at (12,12).
+      broodTileX: 12, broodTileY: 12, // Brood already deposited there.
+      nurseryTileX: 12, nurseryTileY: 12,
+    });
+    tickNurseActions(world);
+    // No claim — brood-inside-Nursery is excluded from pickup selection.
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.MovingToBrood);
+    expect(world.ants.carryingBroodId[nurseId]).toBe(-1);
+    expect(world.ants.carriedBy[broodId]).toBe(-1);
+  });
+
   it('integration: carrier + brood share a tile after tickAntMovement (resolveSameColonyOccupancy must not displace carried brood)', () => {
     // Regression for the resolveSameColonyOccupancy interaction: under v10
     // both carrier and brood end at the same tile each tick. The occupancy
     // resolver iterates all alive entities and bumps higher-id same-tile
-    // ants to a neighbour. Without the v10 carry-aware exemption added in
-    // resolveSameColonyOccupancy, the brood (higher entity id by allocation
-    // order) would jitter off the carrier tile every tick and the next 16c
-    // sync would snap it back — visible as a 1-tile flicker.
+    // ants to a neighbour. In setupV10CarryWorld the brood is allocated
+    // BEFORE the nurse, so brood is the lower id — the resolver would
+    // claim the tile for the brood and bump the higher-id NURSE off the
+    // tile. Either way the carry-render contract breaks (brood + carrier
+    // diverge on a tile every tick of in-tunnel transit until the next
+    // 16c sync re-places the brood under the now-displaced carrier).
+    // The carry-aware exemption skips both ends of the carry pointer so
+    // the resolver never contests the shared tile.
     const { world, nurseId, broodId } = setupV10CarryWorld({
       nurseTileX: 5, nurseTileY: 5,
       broodTileX: 5, broodTileY: 5,

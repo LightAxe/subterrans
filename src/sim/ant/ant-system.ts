@@ -860,8 +860,19 @@ export function tickNurseActions(world: WorldState): void {
       // Iterate eggs first then larvae; pick the lowest entity id for
       // determinism (matches the pre-v10 transportBroodToNursery
       // selection order).
-      const broodId = findUncarriedBroodOnTile(world, colony, tileX, tileY);
+      const broodId = findUncarriedBroodOnTile(ants, colony, tileX, tileY);
       if (broodId < 0) continue;
+
+      // Defensive: if the brood was carried by a now-dead carrier
+      // (orphan reclaim path), null out the dead carrier's carryingBroodId
+      // slot so the both-ends-of-the-pointer invariant holds. killAnt
+      // intentionally leaves carry slots set so the brood stays at the
+      // death tile until reclaim; the cleanup happens here when we
+      // overwrite the brood's carriedBy below.
+      const oldCarrier = ants.carriedBy[broodId]!;
+      if (oldCarrier !== -1 && ants.alive[oldCarrier] !== 1) {
+        ants.carryingBroodId[oldCarrier] = -1;
+      }
 
       // Claim the brood. Set both ends of the carry pointer atomically.
       ants.carryingBroodId[id]    = broodId;
@@ -930,12 +941,20 @@ export function tickNurseActions(world: WorldState): void {
  * v10 transportBroodToNursery selection order).
  */
 function findUncarriedBroodOnTile(
-  world: WorldState,
+  ants: AntComponents,
   colony: ColonyRecord,
   tileX: number,
   tileY: number,
 ): number {
-  const ants = world.ants;
+  // The pickup gate already excluded the inside-Nursery case (the v10
+  // `nursing` chamber-flow field skips brood-inside-Nursery as seeds, so
+  // a nurse should never be routed here). Defensive guard mirrors the
+  // pre-v10 transportBroodToNursery selection invariant — without this,
+  // a v10 nurse who incidentally walks onto a Nursery tile holding a
+  // deposited brood (e.g. immediately after Idle→Nursing re-allocation)
+  // would re-pick-up the brood and re-shuffle it via broodId%openCount,
+  // visible as occasional brood teleports inside the Nursery.
+  if (isInsideNursery(colony, tileX, tileY)) return -1;
   let pickId = -1;
   // Reclaimable = alive AND (uncarried OR carrier is dead). Shared with
   // computeNursingPickupField via `isBroodReclaimable` so the two consumers
