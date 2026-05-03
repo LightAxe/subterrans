@@ -2,15 +2,23 @@
 //
 // Analogue of src/sim/entrance-flow.ts, but seeded from every Open tile
 // inside a chamber footprint instead of from entrance shaft tops. Maintains
-// three per-colony flow-fields:
-//   - food    : seeded from Open tiles inside FoodStorage chambers.
-//               Consumed by Underground carrying foragers routing to deposit.
-//   - nursing : seeded from Open tiles inside Queen OR Nursery chambers.
-//               Consumed by Nursing ants routing to tend brood.
-//   - queen   : seeded from Open tiles inside Queen chambers only.
-//               Consumed by the queen entity when routing from her current
-//               underground tile to the Queen chamber footprint (PRD §4b —
-//               queen relocates once a Queen chamber is completed).
+// four per-colony flow-fields:
+//   - food         : seeded from Open tiles inside FoodStorage chambers.
+//                    Consumed by Underground carrying foragers routing to deposit.
+//   - nursing      : pre-v10: seeded from Open tiles inside Queen OR Nursery
+//                    chambers. v10+: re-seeded from Queen Open tiles AND any
+//                    uncarried-brood-entity tile outside Nursery (the
+//                    "pickup" field; tickNurseActions handles the v10
+//                    re-seed via the same compute function).
+//                    Consumed by Nursing ants routing to brood pickup.
+//   - queen        : seeded from Open tiles inside Queen chambers only.
+//                    Consumed by the queen entity when routing from her current
+//                    underground tile to the Queen chamber footprint (PRD §4b —
+//                    queen relocates once a Queen chamber is completed).
+//   - nurseDeposit : seeded from Open tiles inside Nursery chambers only.
+//                    Consumed by v10+ nurses currently carrying a brood
+//                    (subTask=Feeding under simVersion >= 10) routing to
+//                    deposit. Issue #17 Phase 1.
 //
 // Why a dedicated field per target class rather than one shared field:
 // each consumer targets a different set of chamber types. Sharing a single
@@ -41,20 +49,22 @@ const NEIGHBOR_DC = [0, 1, 0, -1] as const;
 /**
  * Per-colony flow-field cache for chamber-targeted routing.
  *
- * `food`, `nursing`, and `queen` are parallel Int32Arrays of length W*H
- * indexed by tileY * width + tileX. `queues` is a single BFS scratch queue
- * per colony reused across the compute calls (BFS is sequential, never
- * concurrent).
+ * `food`, `nursing`, `queen`, and `nurseDeposit` are parallel Int32Arrays of
+ * length W*H indexed by tileY * width + tileX. `queues` is a single BFS
+ * scratch queue per colony reused across the compute calls (BFS is
+ * sequential, never concurrent).
  */
 export interface ChamberFlowFields {
   food: Record<ColonyId, Int32Array>;
   nursing: Record<ColonyId, Int32Array>;
   queen: Record<ColonyId, Int32Array>;
+  /** Issue #17 Phase 1 — Nursery-only deposit field for v10 carrying nurses. */
+  nurseDeposit: Record<ColonyId, Int32Array>;
   queues: Record<ColonyId, Int32Array>;
 }
 
 export function createChamberFlowFields(): ChamberFlowFields {
-  return { food: {}, nursing: {}, queen: {}, queues: {} };
+  return { food: {}, nursing: {}, queen: {}, nurseDeposit: {}, queues: {} };
 }
 
 /**
@@ -68,16 +78,18 @@ export function ensureChamberFlowFields(
   cache: ChamberFlowFields,
   colonyId: ColonyId,
   gridSize: number,
-): { food: Int32Array; nursing: Int32Array; queen: Int32Array; queue: Int32Array } {
-  if (!(colonyId in cache.food))    cache.food[colonyId]    = new Int32Array(gridSize);
-  if (!(colonyId in cache.nursing)) cache.nursing[colonyId] = new Int32Array(gridSize);
-  if (!(colonyId in cache.queen))   cache.queen[colonyId]   = new Int32Array(gridSize);
-  if (!(colonyId in cache.queues))  cache.queues[colonyId]  = new Int32Array(gridSize);
+): { food: Int32Array; nursing: Int32Array; queen: Int32Array; nurseDeposit: Int32Array; queue: Int32Array } {
+  if (!(colonyId in cache.food))         cache.food[colonyId]         = new Int32Array(gridSize);
+  if (!(colonyId in cache.nursing))      cache.nursing[colonyId]      = new Int32Array(gridSize);
+  if (!(colonyId in cache.queen))        cache.queen[colonyId]        = new Int32Array(gridSize);
+  if (!(colonyId in cache.nurseDeposit)) cache.nurseDeposit[colonyId] = new Int32Array(gridSize);
+  if (!(colonyId in cache.queues))       cache.queues[colonyId]       = new Int32Array(gridSize);
   return {
-    food:    cache.food[colonyId]!,
-    nursing: cache.nursing[colonyId]!,
-    queen:   cache.queen[colonyId]!,
-    queue:   cache.queues[colonyId]!,
+    food:         cache.food[colonyId]!,
+    nursing:      cache.nursing[colonyId]!,
+    queen:        cache.queen[colonyId]!,
+    nurseDeposit: cache.nurseDeposit[colonyId]!,
+    queue:        cache.queues[colonyId]!,
   };
 }
 
@@ -181,3 +193,5 @@ export const NURSING_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [
   ChamberType.Nursery,
 ];
 export const QUEEN_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [ChamberType.Queen];
+/** Issue #17 Phase 1 — Nursery-only seeds for the v10 nurseDeposit field. */
+export const NURSERY_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [ChamberType.Nursery];

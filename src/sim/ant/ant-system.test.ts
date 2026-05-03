@@ -77,6 +77,7 @@ import {
   computeChamberFlowField,
   FOOD_CHAMBER_TYPES,
   NURSING_CHAMBER_TYPES,
+  NURSERY_CHAMBER_TYPES,
 } from '../chamber-flow.js';
 import type { WorldState } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
@@ -4011,6 +4012,102 @@ describe('tickAntMovement — underground entrance routing (tunnel-aware)', () =
     // Held position — no phantom movement into dirt.
     expect(world.ants.posX[antId]).toBe(posXBefore);
     expect(world.ants.posY[antId]).toBe(posYBefore);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #17 Phase 1 — nurseDeposit chamber-flow field. Pure-additive: the
+// field is allocated alongside food/nursing/queen and seeded from Nursery
+// Open tiles only. Consumed by v10+ carrying nurses (subTask=Feeding with
+// carryingBroodId set).
+// ---------------------------------------------------------------------------
+
+describe('chamber-flow nurseDeposit field (#17 phase 1)', () => {
+  /**
+   * Build a 16x16 grid with one Nursery (2x2 Open at 6,6) and one Queen
+   * chamber (2x2 Open at 10,3), connected by a tunnel. Compute nurseDeposit
+   * with NURSERY_CHAMBER_TYPES and assert that Queen tiles do NOT carry a
+   * source/-1 marker — only Nursery tiles do.
+   */
+  it('seeds from Nursery Open tiles only — Queen Open tiles are NOT sources', () => {
+    const { underground, colony, colonyId } = setupWorldWithUnderground(16, 16);
+    // Nursery (2x2) at (6,6).
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        ugSet(underground, 6 + dx, 6 + dy, UndergroundTileState.Open);
+      }
+    }
+    colony.chambers.push({
+      chamberId: 1, chamberType: ChamberType.Nursery, foodStored: 0,
+      posX: 6 << FP_SHIFT, posY: 6 << FP_SHIFT, width: 2, height: 2,
+    });
+    // Queen chamber (2x2) at (10,3).
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        ugSet(underground, 10 + dx, 3 + dy, UndergroundTileState.Open);
+      }
+    }
+    colony.chambers.push({
+      chamberId: 2, chamberType: ChamberType.Queen, foodStored: 0,
+      posX: 10 << FP_SHIFT, posY: 3 << FP_SHIFT, width: 2, height: 2,
+    });
+    // Tunnel connecting them so BFS can reach Queen tiles.
+    for (let y = 4; y <= 6; y++) ugSet(underground, 8, y, UndergroundTileState.Open);
+    for (let x = 7; x <= 10; x++) ugSet(underground, x, 4, UndergroundTileState.Open);
+
+    const cache = createChamberFlowFields();
+    const gridSize = underground.width * underground.height;
+    const bufs = ensureChamberFlowFields(cache, colonyId, gridSize);
+    computeChamberFlowField(
+      underground, colony.chambers, NURSERY_CHAMBER_TYPES,
+      bufs.nurseDeposit, bufs.queue,
+    );
+
+    const W = underground.width;
+    // Nursery footprint tiles ARE sources (-1).
+    expect(bufs.nurseDeposit[6 * W + 6]).toBe(-1);
+    expect(bufs.nurseDeposit[6 * W + 7]).toBe(-1);
+    expect(bufs.nurseDeposit[7 * W + 6]).toBe(-1);
+    expect(bufs.nurseDeposit[7 * W + 7]).toBe(-1);
+    // Queen footprint tiles are NOT sources — they're reachable, so they
+    // carry a step direction (0..3), but never -1.
+    for (const [qx, qy] of [[10, 3], [11, 3], [10, 4], [11, 4]] as const) {
+      const v = bufs.nurseDeposit[qy * W + qx]!;
+      expect(v).not.toBe(-1);
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(3);
+    }
+  });
+
+  it('with no Nursery chamber, every reachable tile is unreachable (-2) — there is nothing to seed', () => {
+    const { underground, colony, colonyId } = setupWorldWithUnderground(16, 16);
+    // Open a small region but NO Nursery chamber.
+    for (let dy = 0; dy < 3; dy++) {
+      for (let dx = 0; dx < 3; dx++) {
+        ugSet(underground, 5 + dx, 5 + dy, UndergroundTileState.Open);
+      }
+    }
+    // Push a Queen chamber so we prove only the type filter matters.
+    colony.chambers.push({
+      chamberId: 1, chamberType: ChamberType.Queen, foodStored: 0,
+      posX: 5 << FP_SHIFT, posY: 5 << FP_SHIFT, width: 2, height: 2,
+    });
+
+    const cache = createChamberFlowFields();
+    const gridSize = underground.width * underground.height;
+    const bufs = ensureChamberFlowFields(cache, colonyId, gridSize);
+    computeChamberFlowField(
+      underground, colony.chambers, NURSERY_CHAMBER_TYPES,
+      bufs.nurseDeposit, bufs.queue,
+    );
+
+    // No seeds → every tile stays at -2.
+    const W = underground.width;
+    for (let y = 5; y < 8; y++) {
+      for (let x = 5; x < 8; x++) {
+        expect(bufs.nurseDeposit[y * W + x]).toBe(-2);
+      }
+    }
   });
 });
 

@@ -72,6 +72,7 @@ import {
   createChamberFlowFields,
   FOOD_CHAMBER_TYPES,
   NURSING_CHAMBER_TYPES,
+  NURSERY_CHAMBER_TYPES,
   QUEEN_CHAMBER_TYPES,
 } from './chamber-flow.js';
 import type { ChamberFlowFields } from './chamber-flow.js';
@@ -115,10 +116,11 @@ export function resetFlowFieldCaches(): void {
   for (const k in digFlowFields.queues)       delete digFlowFields.queues[k as unknown as ColonyId];
   for (const k in entranceFlowFields.fields)  delete entranceFlowFields.fields[k as unknown as ColonyId];
   for (const k in entranceFlowFields.queues)  delete entranceFlowFields.queues[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.food)     delete chamberFlowFields.food[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.nursing)  delete chamberFlowFields.nursing[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.queen)    delete chamberFlowFields.queen[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.queues)   delete chamberFlowFields.queues[k as unknown as ColonyId];
+  for (const k in chamberFlowFields.food)         delete chamberFlowFields.food[k as unknown as ColonyId];
+  for (const k in chamberFlowFields.nursing)      delete chamberFlowFields.nursing[k as unknown as ColonyId];
+  for (const k in chamberFlowFields.queen)        delete chamberFlowFields.queen[k as unknown as ColonyId];
+  for (const k in chamberFlowFields.nurseDeposit) delete chamberFlowFields.nurseDeposit[k as unknown as ColonyId];
+  for (const k in chamberFlowFields.queues)       delete chamberFlowFields.queues[k as unknown as ColonyId];
 }
 
 // Suppress unused-import TS error for PendingChamber (used in PlaceChamber case shape)
@@ -685,6 +687,16 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       colony.chambers,
       QUEEN_CHAMBER_TYPES,
       chamberBufs.queen,
+      chamberBufs.queue,
+    );
+    // Issue #17 Phase 1 — Nursery-only deposit field for v10+ carrying nurses.
+    // Pre-v10 the field is allocated but unread; cheap to keep it in sync so
+    // a v10 sim version flip on a loaded save lands on a populated buffer.
+    computeChamberFlowField(
+      underground,
+      colony.chambers,
+      NURSERY_CHAMBER_TYPES,
+      chamberBufs.nurseDeposit,
       chamberBufs.queue,
     );
 
