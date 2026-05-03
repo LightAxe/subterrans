@@ -6831,6 +6831,65 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     expect(world.ants.task[2]).toBe(AntTask.Idle);
     expect(world.ants.subTask[2]).toBe(0);
   });
+
+  it('pre-v10 boundary (simVersion=v9): legacy teleport still fires, no carry slot is set', () => {
+    // Boundary regression — guards against an off-by-one slip in the gate.
+    // simVersion=v9 must keep the pre-v10 MovingToBrood→Feeding-on-chamber-
+    // tile flip + transportBroodToNursery teleport. carryingBroodId must
+    // stay at the -1 default (never read pre-v10).
+    const world = createWorldState(42, 64);
+    world.simVersion = SIM_VERSION_V9_CANCEL_DROPS_PENDING;
+    const queenId = allocateEntityId(world);
+    initAnt(world.ants, queenId, { colonyId: COLONY_ID, posX: 0, posY: 0, speed: 0 });
+    const colony = createColonyRecord(COLONY_ID, queenId);
+    world.colonies[COLONY_ID] = colony;
+    // Queen + Nursery so the legacy teleport has a destination.
+    colony.chambers.push({
+      chamberId: 1, chamberType: ChamberType.Queen, foodStored: 0,
+      posX: 5 << FP_SHIFT, posY: 5 << FP_SHIFT, width: 2, height: 2,
+    });
+    colony.chambers.push({
+      chamberId: 2, chamberType: ChamberType.Nursery, foodStored: 0,
+      posX: 12 << FP_SHIFT, posY: 12 << FP_SHIFT, width: 2, height: 2,
+    });
+    // Underground grid with the Nursery footprint Open.
+    const ug = createUndergroundGrid(16, 16);
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        ugSet(ug, 12 + dx, 12 + dy, UndergroundTileState.Open);
+      }
+    }
+    world.undergroundGrids[COLONY_ID] = ug;
+    // Brood on a Queen tile.
+    const broodId = allocateEntityId(world);
+    initAnt(world.ants, broodId, {
+      colonyId: COLONY_ID,
+      posX:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task:     AntTask.Idle, speed: 0, zone: Zone.Underground,
+    });
+    colony.eggs.push(broodId);
+    // Nurse on the same Queen tile — pre-v10 path requires only "on a
+    // Queen/Nursery footprint tile" to flip Feeding and teleport ONE brood.
+    const nurseId = allocateEntityId(world);
+    initAnt(world.ants, nurseId, {
+      colonyId: COLONY_ID,
+      posX:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task:     AntTask.Nursing,
+      subTask:  NursingSubState.MovingToBrood,
+      zone:     Zone.Underground,
+    });
+    tickNurseActions(world);
+    // Pre-v10: subTask flipped to Feeding (legacy on-chamber-tile flip);
+    // brood teleported into Nursery footprint.
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
+    expect(world.ants.posX[broodId]! >> FP_SHIFT).toBeGreaterThanOrEqual(12);
+    expect(world.ants.posX[broodId]! >> FP_SHIFT).toBeLessThan(14);
+    // Carry slot stays at the -1 default — pre-v10 never touches it.
+    expect(world.ants.carryingBroodId[nurseId]).toBe(-1);
+    expect(world.ants.carriedBy[broodId]).toBe(-1);
+  });
 });
 
 // ---------------------------------------------------------------------------
