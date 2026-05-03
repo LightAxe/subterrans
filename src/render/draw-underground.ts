@@ -417,6 +417,16 @@ export function drawUndergroundEntities(
   drawBrood(sprites, curr, colony.larvae, 'larva', left, top, canvasW, canvasH);
 }
 
+/**
+ * Issue #17 Phase 1.6 — visible carry render offset. When a brood entity
+ * is being carried by an alive nurse (carriedBy !== -1 and the carrier is
+ * alive), nudge the sprite up by ~1/4 tile so it sits "in arms" above the
+ * carrier instead of perfectly stacked on the carrier's body. Under v10+
+ * only — pre-v10 saves never set carriedBy to a non-(-1) value, so this
+ * is a no-op for them by construction.
+ */
+const CARRY_RENDER_DY_PX = -Math.round(TILE_SIZE_PX / 4);
+
 /** Shared loop for rendering a list of brood entity IDs as static sprites. */
 function drawBrood(
   sprites: AntSpriteLayer,
@@ -428,17 +438,23 @@ function drawBrood(
   canvasW: number,
   canvasH: number,
 ): void {
+  const ants = curr.ants;
   for (const id of entityIds) {
-    if (!isAlive(curr.ants, id)) continue;
-    const tileX = curr.ants.posX[id]! >> FP_SHIFT;
-    const tileY = curr.ants.posY[id]! >> FP_SHIFT;
+    if (!isAlive(ants, id)) continue;
+    const tileX = ants.posX[id]! >> FP_SHIFT;
+    const tileY = ants.posY[id]! >> FP_SHIFT;
     const screenX = (tileX - left) * TILE_SIZE_PX;
     const screenY = (tileY - top)  * TILE_SIZE_PX;
     if (screenX < -TILE_SIZE_PX || screenX > canvasW || screenY < -TILE_SIZE_PX || screenY > canvasH) continue;
+    // Visible-carry offset: when this brood is on a carrier's tile and
+    // the carrier is alive, lift it ~1/4 tile so it visually sits
+    // above the carrier instead of being hidden under the ant sprite.
+    const carrierId = ants.carriedBy[id]!;
+    const carryDy = carrierId !== -1 && isAlive(ants, carrierId) ? CARRY_RENDER_DY_PX : 0;
     sprites.drawStatic({
       kind,
       x: screenX + TILE_SIZE_PX / 2,
-      y: screenY + TILE_SIZE_PX / 2,
+      y: screenY + TILE_SIZE_PX / 2 + carryDy,
     });
   }
 }

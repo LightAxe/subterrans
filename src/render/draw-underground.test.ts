@@ -415,6 +415,67 @@ describe('drawUndergroundEntities', () => {
     expect(eggCall.y).toBe((5 - top)  * TILE_SIZE_PX + TILE_SIZE_PX / 2);
   });
 
+  // Issue #17 Phase 1.6 — visible carry render offset.
+  it('carried egg renders ~1/4 tile above center (carrier alive, carriedBy set)', () => {
+    const eggId = 5;
+    const carrierId = 6;
+    world.colonies[PLAYER_COLONY_ID]!.queenEntityId = 999;
+    initAnt(world.ants, eggId, {
+      colonyId: PLAYER_COLONY_ID,
+      posX: 4 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      zone: 1,
+    });
+    initAnt(world.ants, carrierId, {
+      colonyId: PLAYER_COLONY_ID,
+      posX: 4 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      zone: 1,
+    });
+    world.ants.carriedBy[eggId] = carrierId;
+    world.colonies[PLAYER_COLONY_ID]!.eggs = [eggId];
+
+    const cam = makeCamera(5, 5, 20, 20);
+    drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
+
+    const left = Math.floor(cam.x - cam.viewportWidth  / 2);
+    const top  = Math.floor(cam.y - cam.viewportHeight / 2);
+    const eggCall = sprites.staticOfKind('egg')[0]!;
+    expect(eggCall.x).toBe((4 - left) * TILE_SIZE_PX + TILE_SIZE_PX / 2);
+    // y is shifted upward (smaller value) by ~1/4 tile vs. the un-carried baseline.
+    const baseline = (5 - top) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+    expect(eggCall.y).toBeLessThan(baseline);
+    expect(baseline - eggCall.y).toBe(Math.round(TILE_SIZE_PX / 4));
+  });
+
+  it('carried egg with DEAD carrier renders WITHOUT offset (orphaned brood is reclaimable but rendered as idle)', () => {
+    const eggId = 5;
+    const carrierId = 6;
+    world.colonies[PLAYER_COLONY_ID]!.queenEntityId = 999;
+    initAnt(world.ants, eggId, {
+      colonyId: PLAYER_COLONY_ID,
+      posX: 4 << FP_SHIFT, posY: 5 << FP_SHIFT, zone: 1,
+    });
+    initAnt(world.ants, carrierId, {
+      colonyId: PLAYER_COLONY_ID,
+      posX: 4 << FP_SHIFT, posY: 5 << FP_SHIFT, zone: 1,
+    });
+    // Dead carrier: alive flips to 0; carriedBy still points at it (this is
+    // the dead-carrier orphan state — sim treats the brood as reclaimable,
+    // and the renderer treats it as not-being-carried).
+    world.ants.alive[carrierId] = 0;
+    world.ants.carriedBy[eggId] = carrierId;
+    world.colonies[PLAYER_COLONY_ID]!.eggs = [eggId];
+
+    const cam = makeCamera(5, 5, 20, 20);
+    drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
+
+    const top = Math.floor(cam.y - cam.viewportHeight / 2);
+    const eggCall = sprites.staticOfKind('egg')[0]!;
+    // No offset — sits at tile center exactly.
+    expect(eggCall.y).toBe((5 - top) * TILE_SIZE_PX + TILE_SIZE_PX / 2);
+  });
+
   it('does NOT draw enemy-colony ants even when underground in view (PRD §7b)', () => {
     // Regression guard: prior revision rendered all zone=1 ants and just
     // colored them by colony, which leaked enemy positions into the player's
