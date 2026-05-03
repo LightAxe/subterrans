@@ -3,20 +3,19 @@
 // Quarter-tile autotiling for the underground cross-section. Replaces the
 // per-corner overlay path (drawTunnelCornerOverlay + drawSolidConvexCornerOverlay)
 // with a quadrant-based approach where each tile's four 8×8 quadrants pick a
-// canonical shape from a 5-entry catalogue and paint OPPOSITE-kind pixels into
+// canonical shape from a small catalogue and paint OPPOSITE-kind pixels into
 // the quadrant when the silhouette demands it.
 //
-// The five canonical quarter shapes (per quadrant):
+// The canonical quarter shapes (per quadrant):
 //
-//   sameH sameV sameD  shape          paints OPPOSITE kind?
-//   ─────────────────────────────────────────────────────────
-//     0     0     -    chamfer        yes — triangular fill at outer corner
-//     1     0     -    h-edge         no  — substrate is correct
-//     0     1     -    v-edge         no  — substrate is correct
-//     1     1     0    inner-corner   yes — small bite at diagonal corner
-//     1     1     1    full           no  — substrate is correct
+//   sameH sameV  shape          paints OPPOSITE kind?
+//   ───────────────────────────────────────────────────
+//     0     0    chamfer        yes — triangular fill at outer corner
+//     1     0    h-edge         no  — substrate is correct
+//     0     1    v-edge         no  — substrate is correct
+//     1     1    full           no  — substrate is correct
 //
-// where sameH/V/D mean "this neighbor matches the center kind". h-edge/v-edge
+// where sameH/V mean "this cardinal neighbor matches the center kind". h-edge/v-edge
 // represent straight cardinal walls; the rim shading that visually distinguishes
 // them from the open floor is added by a SEPARATE pass (Checkpoint 4) so the
 // shape logic stays orthogonal to the lighting/texture concerns.
@@ -60,8 +59,8 @@ type Quadrant = 'NW' | 'NE' | 'SE' | 'SW';
  * (Marked/BeingDug overlay, ceiling tint, etc.) are applied separately by
  * the caller.
  *
- * Total ops: ~30 (substrate) + up to 4 × 8 (chamfers) + up to 4 × 4
- * (inner-corner bites) ≈ 80 worst case for an isolated open pocket.
+ * Total ops: ~30 (substrate) + up to 4 × 8 (chamfers) ≈ 65 worst case for
+ * an isolated open pocket.
  */
 export function drawAutotiledUndergroundTile(
   gfx: GfxLike,
@@ -87,13 +86,14 @@ export function drawAutotiledUndergroundTile(
   //    for a hard-pixel-art look. Each helper sets its own fillStyle so the
   //    chip / inner-corner / chamfer paints don't bleed into one another.
   //
-  // For each quadrant, the (h, v, d) classification picks a shape. h is the
+  // For each quadrant, the (h, v) classification picks a shape. h is the
   // cardinal-horizontal neighbor (W for NW/SW, E for NE/SE); v is the
-  // cardinal-vertical neighbor (N for NW/NE, S for SW/SE); d is the diagonal.
-  drawQuadrantMask(gfx, screenX, screenY, tileX, tileY, centerKind, 'NW', neighbors.w, neighbors.n, neighbors.nw);
-  drawQuadrantMask(gfx, screenX, screenY, tileX, tileY, centerKind, 'NE', neighbors.e, neighbors.n, neighbors.ne);
-  drawQuadrantMask(gfx, screenX, screenY, tileX, tileY, centerKind, 'SE', neighbors.e, neighbors.s, neighbors.se);
-  drawQuadrantMask(gfx, screenX, screenY, tileX, tileY, centerKind, 'SW', neighbors.w, neighbors.s, neighbors.sw);
+  // cardinal-vertical neighbor (N for NW/NE, S for SW/SE). Diagonal-only
+  // mismatches are intentionally ignored after issue #48.
+  drawQuadrantMask(gfx, screenX, screenY, tileX, tileY, centerKind, 'NW', neighbors.w, neighbors.n);
+  drawQuadrantMask(gfx, screenX, screenY, tileX, tileY, centerKind, 'NE', neighbors.e, neighbors.n);
+  drawQuadrantMask(gfx, screenX, screenY, tileX, tileY, centerKind, 'SE', neighbors.e, neighbors.s);
+  drawQuadrantMask(gfx, screenX, screenY, tileX, tileY, centerKind, 'SW', neighbors.w, neighbors.s);
 }
 
 function drawQuadrantMask(
@@ -106,11 +106,9 @@ function drawQuadrantMask(
   quadrant: Quadrant,
   horizKind: NeighborKind,
   vertKind:  NeighborKind,
-  diagKind:  NeighborKind,
 ): void {
   const sameH = horizKind === centerKind;
   const sameV = vertKind  === centerKind;
-  const sameD = diagKind  === centerKind;
 
   const oppositeColor = centerKind === 'wall' ? COLOR_FLOOR_BASE : COLOR_ROCK_BASE;
   if (!sameH && !sameV) {
@@ -123,13 +121,10 @@ function drawQuadrantMask(
     // inclusion. Strictly avoids the sacred edges (row 0 / col 0) and the
     // hypotenuse boundary, so anchor and join contracts hold regardless.
     maybeAddChamferChip(gfx, screenX, screenY, tileX, tileY, quadrant, centerKind);
-  } else if (sameH && sameV && !sameD) {
-    // inner-corner — only the diagonal differs. The opposite kind pokes in
-    // at the far corner of the quadrant. Paint a small bite there.
-    gfx.fillStyle(oppositeColor, 1);
-    fillInnerCornerBite(gfx, screenX, screenY, quadrant);
   }
   // else: full / h-edge / v-edge — substrate is correct, nothing to paint.
+  // Diagonal-only mismatches intentionally do not paint: issue #48 showed
+  // those tiny opposite-kind bites read as stray wrong-side triangles.
 }
 
 /**
@@ -158,34 +153,6 @@ function fillChamferTriangle(
       case 'NE': x = HALF + i;                 y = i;                              break;
       case 'SE': x = HALF + i;                 y = TILE_SIZE_PX - 1 - i;           break;
       case 'SW': x = 0;                        y = TILE_SIZE_PX - 1 - i;           break;
-    }
-    gfx.fillRect(screenX + x, screenY + y, width, 1);
-  }
-}
-
-/**
- * Fill a 4×4 triangular bite at the diagonal corner of the named quadrant —
- * the opposite-kind diagonal neighbor "poking into" an otherwise same-kind
- * area. Smaller than a chamfer so it reads as a peninsula rather than a
- * full rounded corner.
- *
- * 4 fillRect scanline calls per inner-corner bite.
- */
-function fillInnerCornerBite(
-  gfx: GfxLike,
-  screenX: number,
-  screenY: number,
-  quadrant: Quadrant,
-): void {
-  const SIZE = 4;
-  for (let i = 0; i < SIZE; i++) {
-    const width = SIZE - i;
-    let x = 0, y = 0;
-    switch (quadrant) {
-      case 'NW': x = 0;                            y = i;                              break;
-      case 'NE': x = TILE_SIZE_PX - SIZE + i;      y = i;                              break;
-      case 'SE': x = TILE_SIZE_PX - SIZE + i;      y = TILE_SIZE_PX - 1 - i;           break;
-      case 'SW': x = 0;                            y = TILE_SIZE_PX - 1 - i;           break;
     }
     gfx.fillRect(screenX + x, screenY + y, width, 1);
   }
@@ -287,18 +254,20 @@ export function drawUndergroundRim(
   const last = TILE_SIZE_PX - 1;
 
   // Heavy band — outermost pixel row/column on each wall-facing edge.
+  // Clip away the half of an edge that belongs to an adjacent chamfer so the
+  // rim doesn't leave faint grid-aligned stubs through diagonal corners.
   gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
-  if (wallN) gfx.fillRect(screenX,            screenY,            TILE_SIZE_PX, 1);
-  if (wallS) gfx.fillRect(screenX,            screenY + last,     TILE_SIZE_PX, 1);
-  if (wallW) gfx.fillRect(screenX,            screenY,            1, TILE_SIZE_PX);
-  if (wallE) gfx.fillRect(screenX + last,     screenY,            1, TILE_SIZE_PX);
+  if (wallN) drawHorizontalRimBand(gfx, screenX, screenY,        wallW, wallE);
+  if (wallS) drawHorizontalRimBand(gfx, screenX, screenY + last, wallW, wallE);
+  if (wallW) drawVerticalRimBand(gfx,   screenX, screenY,        wallN, wallS);
+  if (wallE) drawVerticalRimBand(gfx,   screenX + last, screenY, wallN, wallS);
 
   // Light band — second pixel inward, lighter alpha for the fade transition.
   gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.30);
-  if (wallN) gfx.fillRect(screenX,            screenY + 1,        TILE_SIZE_PX, 1);
-  if (wallS) gfx.fillRect(screenX,            screenY + last - 1, TILE_SIZE_PX, 1);
-  if (wallW) gfx.fillRect(screenX + 1,        screenY,            1, TILE_SIZE_PX);
-  if (wallE) gfx.fillRect(screenX + last - 1, screenY,            1, TILE_SIZE_PX);
+  if (wallN) drawHorizontalRimBand(gfx, screenX, screenY + 1,        wallW, wallE);
+  if (wallS) drawHorizontalRimBand(gfx, screenX, screenY + last - 1, wallW, wallE);
+  if (wallW) drawVerticalRimBand(gfx,   screenX + 1, screenY,        wallN, wallS);
+  if (wallE) drawVerticalRimBand(gfx,   screenX + last - 1, screenY, wallN, wallS);
 
   // Per-tile rim chips — 1-pixel deterministic dark specks inside each
   // active rim band, breaking the rim's flat appearance. Same alpha as
@@ -308,18 +277,58 @@ export function drawUndergroundRim(
   gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
   if (wallN) {
     const x = (h >>> 0) & 0xf;        // 0..15
-    gfx.fillRect(screenX + x, screenY + 1, 1, 1);
+    if (rimXVisible(x, wallW, wallE)) gfx.fillRect(screenX + x, screenY + 1, 1, 1);
   }
   if (wallS) {
     const x = (h >>> 4) & 0xf;
-    gfx.fillRect(screenX + x, screenY + last - 1, 1, 1);
+    if (rimXVisible(x, wallW, wallE)) gfx.fillRect(screenX + x, screenY + last - 1, 1, 1);
   }
   if (wallW) {
     const y = (h >>> 8) & 0xf;
-    gfx.fillRect(screenX + 1, screenY + y, 1, 1);
+    if (rimYVisible(y, wallN, wallS)) gfx.fillRect(screenX + 1, screenY + y, 1, 1);
   }
   if (wallE) {
     const y = (h >>> 12) & 0xf;
-    gfx.fillRect(screenX + last - 1, screenY + y, 1, 1);
+    if (rimYVisible(y, wallN, wallS)) gfx.fillRect(screenX + last - 1, screenY + y, 1, 1);
   }
+}
+
+function drawHorizontalRimBand(
+  gfx: GfxLike,
+  screenX: number,
+  y: number,
+  clipWestHalf: boolean,
+  clipEastHalf: boolean,
+): void {
+  if (!clipWestHalf && !clipEastHalf) {
+    gfx.fillRect(screenX, y, TILE_SIZE_PX, 1);
+    return;
+  }
+  if (!clipWestHalf) gfx.fillRect(screenX,        y, HALF, 1);
+  if (!clipEastHalf) gfx.fillRect(screenX + HALF, y, HALF, 1);
+}
+
+function drawVerticalRimBand(
+  gfx: GfxLike,
+  x: number,
+  screenY: number,
+  clipNorthHalf: boolean,
+  clipSouthHalf: boolean,
+): void {
+  if (!clipNorthHalf && !clipSouthHalf) {
+    gfx.fillRect(x, screenY, 1, TILE_SIZE_PX);
+    return;
+  }
+  if (!clipNorthHalf) gfx.fillRect(x, screenY,        1, HALF);
+  if (!clipSouthHalf) gfx.fillRect(x, screenY + HALF, 1, HALF);
+}
+
+function rimXVisible(x: number, clipWestHalf: boolean, clipEastHalf: boolean): boolean {
+  if (x < HALF) return !clipWestHalf;
+  return !clipEastHalf;
+}
+
+function rimYVisible(y: number, clipNorthHalf: boolean, clipSouthHalf: boolean): boolean {
+  if (y < HALF) return !clipNorthHalf;
+  return !clipSouthHalf;
 }

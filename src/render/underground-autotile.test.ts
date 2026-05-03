@@ -149,6 +149,23 @@ function countPixels(buf: PixelBuffer, kind: NeighborKind): number {
   return n;
 }
 
+function fillRectCalls(gfx: MockGfx): Array<[number, number, number, number, number, number]> {
+  return gfx.calls
+    .filter(c => c.method === 'fillRect')
+    .map(c => c.args as [number, number, number, number, number, number]);
+}
+
+function rectOverlaps(
+  rect: [number, number, number, number, number, number],
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): boolean {
+  const [rx, ry, rw, rh] = rect;
+  return rx < x + w && rx + rw > x && ry < y + h && ry + rh > y;
+}
+
 // ---------------------------------------------------------------------------
 // Tests — canonical quarter shapes
 // ---------------------------------------------------------------------------
@@ -193,29 +210,15 @@ describe('drawAutotiledUndergroundTile — full quadrants', () => {
     expect(countPixels(buf, 'wall')).toBe(0);
   });
 
-  it('inner-corner only (all cardinals = open, NW diagonal = wall) produces a small wall bite at NW', () => {
-    // sameH=1, sameV=1 in every quadrant. Only NW has sameD=0; the others
-    // have sameD=1 → full → no paint.
+  it('diagonal-only mismatch (all cardinals = open, NW diagonal = wall) leaves substrate intact', () => {
+    // Issue #48: diagonal-only opposite-kind bites read as stray wrong-side
+    // triangles. Only cardinal boundaries are allowed to change silhouette.
     const buf = renderTile(makeNeighbors('open', {
       nw: 'wall',  n: 'open', ne: 'open',
       w:  'open',              e:  'open',
       sw: 'open',  s: 'open', se: 'open',
     }));
-    // Inner-corner bite is a 4-row triangle at the NW corner: row 0 fills
-    // x=0..3 (4 px), row 1 fills x=0..2 (3 px), row 2: 2 px, row 3: 1 px.
-    // Total 4+3+2+1 = 10 pixels.
-    expect(countPixels(buf, 'wall')).toBe(10);
-    // The wall pixels must be in the NW quadrant (0..7, 0..7), not anywhere else.
-    for (let y = 0; y < TILE_SIZE_PX; y++) {
-      for (let x = 0; x < TILE_SIZE_PX; x++) {
-        if (buf.get(x, y) === 'wall') {
-          expect(x).toBeLessThan(8);
-          expect(y).toBeLessThan(8);
-        }
-      }
-    }
-    // Specifically: pixel (0,0) must be wall (the diagonal poke anchor).
-    expect(buf.get(0, 0)).toBe('wall');
+    expect(countPixels(buf, 'wall')).toBe(0);
   });
 });
 
@@ -302,24 +305,15 @@ describe('drawAutotiledUndergroundTile — stair-step diagonal corridor', () => 
     expect(buf.get(15, 15)).toBe('open');
   });
 
-  it('saddle case (cardinals all open, two opposing diagonals = wall) paints two opposite inner-corner bites and no chamfers', () => {
-    // sameH=1, sameV=1 in every quadrant. NW and SE diagonals are wall (sameD=0
-    // → inner-corner bite). NE and SW are open (sameD=1 → full → no paint).
+  it('saddle case (cardinals all open, two opposing diagonals = wall) paints no diagonal-only bites', () => {
+    // Diagonal-only mismatches do not represent a cardinal wall boundary, so
+    // they should not paint isolated opposite-kind triangles.
     const buf = renderTile(makeNeighbors('open', {
       nw: 'wall',  n: 'open',  ne: 'open',
       w:  'open',                e: 'open',
       sw: 'open',  s: 'open',  se: 'wall',
     }));
-    // 2 inner-corner bites = 20 wall pixels total.
-    expect(countPixels(buf, 'wall')).toBe(20);
-    // NW corner bite: pixel (0,0) is wall.
-    expect(buf.get(0, 0)).toBe('wall');
-    // SE corner bite: pixel (15,15) is wall.
-    expect(buf.get(15, 15)).toBe('wall');
-    // NE corner (would be wall if NE diagonal were wall) — open here.
-    expect(buf.get(15, 0)).not.toBe('wall');
-    // SW corner — open.
-    expect(buf.get(0, 15)).not.toBe('wall');
+    expect(countPixels(buf, 'wall')).toBe(0);
   });
 });
 
@@ -423,7 +417,7 @@ describe('drawUndergroundRim', () => {
   it('does nothing on a wall tile (rim only fires on open tiles)', () => {
     const gfx = gfxCalls();
     drawUndergroundRim(gfx, 0, 0, 0, 0, 'wall', makeNeighbors('wall'));
-    expect(gfx.calls.filter(c => c.method === 'fillRect')).toHaveLength(0);
+    expect(fillRectCalls(gfx)).toHaveLength(0);
   });
 
   it('does nothing on an open tile with no wall neighbors', () => {
@@ -433,7 +427,7 @@ describe('drawUndergroundRim', () => {
       w:  'open',             e: 'open',
       sw: 'open', s: 'open', se: 'open',
     }));
-    expect(gfx.calls.filter(c => c.method === 'fillRect')).toHaveLength(0);
+    expect(fillRectCalls(gfx)).toHaveLength(0);
   });
 
   it('emits 2 band fillRects + 1 chip per cardinal wall neighbor', () => {
@@ -444,13 +438,32 @@ describe('drawUndergroundRim', () => {
       ne: 'open', e: 'open', se: 'open', s: 'open', sw: 'open', w: 'open', nw: 'open',
     }));
     // 1 heavy band + 1 light band + 1 chip = 3 fillRects.
-    expect(gfx.calls.filter(c => c.method === 'fillRect')).toHaveLength(3);
+    expect(fillRectCalls(gfx)).toHaveLength(3);
   });
 
-  it('all four cardinal walls → 8 band fillRects + 4 chips = 12', () => {
+  it('clips rim bands away from chamfered corner halves', () => {
+    const gfx = gfxCalls();
+    // Open tile with N and W walls gets an NW chamfer. The north rim must
+    // skip its west half, and the west rim must skip its north half, so
+    // no grid-aligned rim stubs remain inside the chamfered corner.
+    drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open', {
+      nw: 'wall', n: 'wall', ne: 'open',
+      w:  'wall',             e: 'open',
+      sw: 'open', s: 'open', se: 'open',
+    }));
+    const rects = fillRectCalls(gfx);
+    for (const rect of rects) {
+      expect(rectOverlaps(rect, 0, 0, 8, 2)).toBe(false); // clipped north rim half
+      expect(rectOverlaps(rect, 0, 0, 2, 8)).toBe(false); // clipped west rim half
+    }
+    expect(rects.some(rect => rectOverlaps(rect, 8, 0, 8, 2))).toBe(true);
+    expect(rects.some(rect => rectOverlaps(rect, 0, 8, 2, 8))).toBe(true);
+  });
+
+  it('all four cardinal walls clip all rim bands because every edge half is chamfered', () => {
     const gfx = gfxCalls();
     drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open'));
-    expect(gfx.calls.filter(c => c.method === 'fillRect')).toHaveLength(12);
+    expect(fillRectCalls(gfx)).toHaveLength(0);
   });
 });
 
