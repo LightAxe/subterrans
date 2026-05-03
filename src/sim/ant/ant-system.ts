@@ -845,16 +845,34 @@ export function tickNurseActions(world: WorldState): void {
       const colonyId = ants.colonyId[id]!;
       const colony = world.colonies[colonyId];
       if (!colony) continue;
-      // Symmetric with the pre-v10 P2 transport gate (the legacy path
-      // checks the same condition before calling transportBroodToNursery).
-      // Without a completed Nursery, there is no destination, so a v10
-      // pickup would strand the carrier in Feeding forever holding the
-      // brood. Skip pickup so nurses cycle Idle harmlessly until a
-      // Nursery exists.
-      if (!hasCompletedChamber(colony, ChamberType.Nursery)) continue;
 
       const tileX = ants.posX[id]! >> FP_SHIFT;
       const tileY = ants.posY[id]! >> FP_SHIFT;
+
+      // Finite-nursing release (PR #56 codex P1 + P2). Any "no claim
+      // possible" path below routes through this helper: if the nurse
+      // has arrived at a source tile (Queen-chamber footprint, or —
+      // defensively — a Nursery footprint) flip to Feeding without
+      // setting a carry slot. Next tick the Feeding branch's defensive
+      // guard (carryingBroodId === -1) releases to Idle, mirroring the
+      // pre-v10 MovingToBrood→Feeding→Idle two-tick cadence. Without
+      // this, nurses without claimable brood would strand in
+      // MovingToBrood forever — step 10a only reallocates Idle ants.
+      const onSourceTile =
+        isInsideQueenChamber(colony, tileX, tileY) ||
+        isInsideNursery(colony, tileX, tileY);
+
+      // Symmetric with the pre-v10 P2 transport gate (the legacy path
+      // checks the same condition before calling transportBroodToNursery).
+      // Without a completed Nursery there is no destination — skip pickup.
+      // Defensive: allocateWorkers gates nurseCount on hasNursery, so a
+      // Nursing ant should never exist before a completed Nursery in
+      // normal flow. The release branch fires for migrated/corrupted/
+      // scripted state where a Nursing ant appears anyway.
+      if (!hasCompletedChamber(colony, ChamberType.Nursery)) {
+        if (onSourceTile) ants.subTask[id] = NursingSubState.Feeding;
+        continue;
+      }
 
       // Find an alive uncarried brood entity standing on this tile.
       // Iterate eggs first then larvae; pick the lowest entity id for
@@ -862,22 +880,7 @@ export function tickNurseActions(world: WorldState): void {
       // selection order).
       const broodId = findUncarriedBroodOnTile(ants, colony, tileX, tileY);
       if (broodId < 0) {
-        // Finite-nursing release (PR #56 codex P1). A nurse that has
-        // arrived at a source tile (Queen-chamber footprint, or —
-        // defensively — a Nursery footprint) but found no claimable
-        // brood is done with this trip. Mirror the pre-v10 cadence:
-        // flip to Feeding WITHOUT setting a carry slot. Next tick the
-        // Feeding branch's defensive guard (carryingBroodId === -1)
-        // releases to Idle, matching the pre-v10
-        // MovingToBrood→Feeding→Idle two-tick path. Without this,
-        // nurses with no available brood would strand in MovingToBrood
-        // forever, permanently removed from the forage/dig/fight pool.
-        if (
-          isInsideQueenChamber(colony, tileX, tileY) ||
-          isInsideNursery(colony, tileX, tileY)
-        ) {
-          ants.subTask[id] = NursingSubState.Feeding;
-        }
+        if (onSourceTile) ants.subTask[id] = NursingSubState.Feeding;
         continue;
       }
 

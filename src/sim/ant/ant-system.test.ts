@@ -6984,6 +6984,16 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     }
     world.undergroundGrids[COLONY_ID] = underground;
 
+    // Queen chamber sized to cover the brood tile — eggs are laid in the
+    // queen's chamber per the design, so the test setup needs one for
+    // pickup-source tile detection (isInsideQueenChamber). 2×2 anchored at
+    // (broodTileX, broodTileY) so the brood always sits inside.
+    colony.chambers.push({
+      chamberId: 0, chamberType: ChamberType.Queen, foodStored: 0,
+      posX: opts.broodTileX << FP_SHIFT, posY: opts.broodTileY << FP_SHIFT,
+      width: 2, height: 2,
+    });
+
     if (!opts.omitNursery) {
       colony.chambers.push({
         chamberId: 1, chamberType: ChamberType.Nursery, foodStored: 0,
@@ -7123,24 +7133,47 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     expect(tilesUsed.size).toBe(2);
   });
 
-  it('no Nursery: pickup is gated, nurse stays in MovingToBrood (no claim, no carry)', () => {
-    // Phase-1 contract: with no Nursery, no carry happens. The v10 pickup
-    // path is gated on hasCompletedChamber(Nursery) — without one, the
-    // nurse remains in MovingToBrood and the brood remains uncarried.
-    // Matches the pre-v10 P2 transport gate (transportBroodToNursery is
-    // also only called when a Nursery exists). Without this gate, a
-    // pre-Nursery colony's nurses would claim brood and softlock in
-    // Feeding forever (no nurseDeposit field, no isInsideNursery match).
+  it('no Nursery: pickup is gated; nurse on a Queen tile releases via Feeding (#56 codex P2)', () => {
+    // Phase-1 contract: with no Nursery, no carry happens. The v10
+    // pickup path is gated on hasCompletedChamber(Nursery) — without one
+    // the gate fires before any claim. Defensive: if a Nursing ant
+    // somehow exists pre-Nursery (migrated/corrupted/scripted state),
+    // she still needs to release back to Idle so step 10a can reallocate.
+    // The release path mirrors the pre-v10 finite-nursing cadence
+    // (MovingToBrood→Feeding→Idle two ticks).
+    //
+    // Test setup: Queen chamber at (5,5) is created by setupV10CarryWorld
+    // unconditionally; Nursery is omitted via `omitNursery: true`. The
+    // nurse stands on the Queen tile, so onSourceTile=true → release.
     const { world, nurseId, broodId } = setupV10CarryWorld({
       nurseTileX: 5, nurseTileY: 5,
       broodTileX: 5, broodTileY: 5,
       nurseryTileX: 0, nurseryTileY: 0, // ignored
       omitNursery: true,
     });
-    tickNurseActions(world);
-    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.MovingToBrood);
+    tickNurseActions(world); // tick 1 — release-pending
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
     expect(world.ants.carryingBroodId[nurseId]).toBe(-1);
     expect(world.ants.carriedBy[broodId]).toBe(-1);
+    tickNurseActions(world); // tick 2 — Idle
+    expect(world.ants.task[nurseId]).toBe(AntTask.Idle);
+  });
+
+  it('no Nursery: pickup gated, nurse OFF source tile keeps walking (no premature release)', () => {
+    // Defensive: the release ONLY fires when the nurse is on a source
+    // tile. A nurse mid-walk to a Queen tile with no Nursery yet should
+    // continue walking — she may reach the source on a future tick and
+    // THEN release.
+    const { world, nurseId } = setupV10CarryWorld({
+      nurseTileX: 0, nurseTileY: 0, // far from any chamber
+      broodTileX: 5, broodTileY: 5,
+      nurseryTileX: 0, nurseryTileY: 0, // ignored
+      omitNursery: true,
+    });
+    tickNurseActions(world);
+    // No release — nurse keeps walking next tick.
+    expect(world.ants.task[nurseId]).toBe(AntTask.Nursing);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.MovingToBrood);
   });
 
   it('1×1 Nursery: deposit collapses to the single Open tile (broodId % 1 === 0)', () => {
