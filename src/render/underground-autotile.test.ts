@@ -441,7 +441,7 @@ describe('drawUndergroundRim', () => {
     expect(fillRectCalls(gfx)).toHaveLength(3);
   });
 
-  it('clips rim bands away from chamfered corner halves', () => {
+  it('clips rim bands away from chamfered corner halves — NW chamfer', () => {
     const gfx = gfxCalls();
     // Open tile with N and W walls gets an NW chamfer. The north rim must
     // skip its west half, and the west rim must skip its north half, so
@@ -458,6 +458,60 @@ describe('drawUndergroundRim', () => {
     }
     expect(rects.some(rect => rectOverlaps(rect, 8, 0, 8, 2))).toBe(true);
     expect(rects.some(rect => rectOverlaps(rect, 0, 8, 2, 8))).toBe(true);
+  });
+
+  it('clips rim bands away from chamfered corner halves — NE chamfer', () => {
+    const gfx = gfxCalls();
+    // Open tile with N and E walls gets an NE chamfer. The north rim must
+    // skip its EAST half, and the east rim must skip its NORTH half.
+    drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open', {
+      nw: 'open', n: 'wall', ne: 'wall',
+      w:  'open',             e: 'wall',
+      sw: 'open', s: 'open', se: 'open',
+    }));
+    const rects = fillRectCalls(gfx);
+    for (const rect of rects) {
+      expect(rectOverlaps(rect, 8, 0, 8, 2)).toBe(false);  // clipped north east half
+      expect(rectOverlaps(rect, 14, 0, 2, 8)).toBe(false); // clipped east north half
+    }
+    expect(rects.some(rect => rectOverlaps(rect, 0, 0, 8, 2))).toBe(true);  // unclipped north west half
+    expect(rects.some(rect => rectOverlaps(rect, 14, 8, 2, 8))).toBe(true); // unclipped east south half
+  });
+
+  it('clips rim bands away from chamfered corner halves — SE chamfer', () => {
+    const gfx = gfxCalls();
+    // Open tile with S and E walls gets an SE chamfer. The south rim must
+    // skip its EAST half, and the east rim must skip its SOUTH half.
+    drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open', {
+      nw: 'open', n: 'open', ne: 'open',
+      w:  'open',             e: 'wall',
+      sw: 'open', s: 'wall', se: 'wall',
+    }));
+    const rects = fillRectCalls(gfx);
+    for (const rect of rects) {
+      expect(rectOverlaps(rect, 8, 14, 8, 2)).toBe(false); // clipped south east half
+      expect(rectOverlaps(rect, 14, 8, 2, 8)).toBe(false); // clipped east south half
+    }
+    expect(rects.some(rect => rectOverlaps(rect, 0, 14, 8, 2))).toBe(true); // unclipped south west half
+    expect(rects.some(rect => rectOverlaps(rect, 14, 0, 2, 8))).toBe(true); // unclipped east north half
+  });
+
+  it('clips rim bands away from chamfered corner halves — SW chamfer', () => {
+    const gfx = gfxCalls();
+    // Open tile with S and W walls gets an SW chamfer. The south rim must
+    // skip its WEST half, and the west rim must skip its SOUTH half.
+    drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open', {
+      nw: 'open', n: 'open', ne: 'open',
+      w:  'wall',             e: 'open',
+      sw: 'wall', s: 'wall', se: 'open',
+    }));
+    const rects = fillRectCalls(gfx);
+    for (const rect of rects) {
+      expect(rectOverlaps(rect, 0, 14, 8, 2)).toBe(false); // clipped south west half
+      expect(rectOverlaps(rect, 0, 8, 2, 8)).toBe(false);  // clipped west south half
+    }
+    expect(rects.some(rect => rectOverlaps(rect, 8, 14, 8, 2))).toBe(true); // unclipped south east half
+    expect(rects.some(rect => rectOverlaps(rect, 0, 0, 2, 8))).toBe(true);  // unclipped west north half
   });
 
   it('all four cardinal walls clip all rim bands because every edge half is chamfered', () => {
