@@ -13,6 +13,7 @@ import {
   SIM_VERSION_V5_CHAMBER_ON_MARKED,
   SIM_VERSION_V7_SURFACE_PASSABILITY,
   SIM_VERSION_V8_LEASH_HYSTERESIS,
+  SIM_VERSION_V9_CANCEL_DROPS_PENDING,
   LATEST_SIM_VERSION,
 } from './types.js';
 import { GameOutcome } from './game-over.js';
@@ -1372,6 +1373,225 @@ describe('Phase 7: MarkDigTile command processing', () => {
     tick(world, [cmd]);
     expect(colony.entrances.length).toBe(1); // still 1
   });
+
+  // ---------------------------------------------------------------------------
+  // Issue #54 (v9): CancelDigMark on a Marked tile inside a pending chamber
+  // footprint drops the pending chamber AND reverts any of its remaining
+  // Marked footprint tiles back to Solid. Pre-v9, the entry stayed orphaned
+  // and unique-chamber popups (Queen) stayed gated forever, soft-locking
+  // the build UI.
+  // ---------------------------------------------------------------------------
+
+  function setupPendingQueenAt(
+    world: WorldState,
+    colonyId: ColonyId,
+    ax: number,
+    ay: number,
+  ) {
+    const dims = CHAMBER_DIMENSIONS[ChamberType.Queen]!;
+    const underground = world.undergroundGrids[colonyId]!;
+    // Mark the entire footprint, mirroring what PlaceChamber does.
+    for (let dy = 0; dy < dims.height; dy++) {
+      for (let dx = 0; dx < dims.width; dx++) {
+        underground.data[(ay + dy) * UNDERGROUND_GRID_WIDTH + (ax + dx)] = UndergroundTileState.Marked;
+      }
+    }
+    const pcKey = `${colonyId}:${ax}:${ay}`;
+    world.pendingChambers[pcKey] = {
+      colonyId,
+      chamberType: ChamberType.Queen,
+      anchorTileX: ax,
+      anchorTileY: ay,
+      width: dims.width,
+      height: dims.height,
+    };
+    return { pcKey, dims };
+  }
+
+  it('Issue #54 (v9): CancelDigMark inside pending Queen footprint drops the pending entry', () => {
+    const { world, colonyId } = makeWorldWithUnderground();
+    // simVersion already LATEST (v9+) from createWorldState.
+    const { pcKey } = setupPendingQueenAt(world, colonyId, 20, 5);
+    // Cancel a footprint tile (not the anchor, to avoid coincidental key matches).
+    const cmd: SimCommand = {
+      type: 'CancelDigMark', colonyId, tileX: 21, tileY: 5, issuedAtTick: 0,
+    };
+    tick(world, [cmd]);
+    expect(world.pendingChambers[pcKey]).toBeUndefined();
+  });
+
+  it('Issue #54 (v9): cancel reverts remaining Marked footprint tiles to Solid', () => {
+    const { world, colonyId } = makeWorldWithUnderground();
+    const { dims } = setupPendingQueenAt(world, colonyId, 20, 5);
+    const underground = world.undergroundGrids[colonyId]!;
+    // Cancel the (20,5) anchor; expect all other footprint tiles → Solid too.
+    tick(world, [{ type: 'CancelDigMark', colonyId, tileX: 20, tileY: 5, issuedAtTick: 0 }]);
+    for (let dy = 0; dy < dims.height; dy++) {
+      for (let dx = 0; dx < dims.width; dx++) {
+        expect(ugGet(underground, 20 + dx, 5 + dy)).toBe(UndergroundTileState.Solid);
+      }
+    }
+  });
+
+  it('Issue #54 (v9): cancel inside pending footprint preserves BeingDug + Open tiles', () => {
+    const { world, colonyId } = makeWorldWithUnderground();
+    const { pcKey, dims } = setupPendingQueenAt(world, colonyId, 30, 8);
+    const underground = world.undergroundGrids[colonyId]!;
+    // Mid-dig CTRL-04: a BeingDug tile inside the footprint must keep digging.
+    underground.data[8 * UNDERGROUND_GRID_WIDTH + 31] = UndergroundTileState.BeingDug;
+    // An Open tile (e.g. anchor that was tunnel-end) must stay Open.
+    underground.data[8 * UNDERGROUND_GRID_WIDTH + 30] = UndergroundTileState.Open;
+    // Cancel a Marked footprint tile that is NOT the BeingDug or Open one.
+    tick(world, [{ type: 'CancelDigMark', colonyId, tileX: 30 + (dims.width - 1), tileY: 8, issuedAtTick: 0 }]);
+    expect(world.pendingChambers[pcKey]).toBeUndefined();
+    // BeingDug and Open survive.
+    expect(ugGet(underground, 31, 8)).toBe(UndergroundTileState.BeingDug);
+    expect(ugGet(underground, 30, 8)).toBe(UndergroundTileState.Open);
+  });
+
+  it('Issue #54 (v9): cancel outside any pending footprint leaves pendingChambers untouched', () => {
+    const { world, colonyId } = makeWorldWithUnderground();
+    const { pcKey } = setupPendingQueenAt(world, colonyId, 40, 10);
+    const underground = world.undergroundGrids[colonyId]!;
+    // Mark a tile far outside the footprint and cancel it.
+    underground.data[20 * UNDERGROUND_GRID_WIDTH + 5] = UndergroundTileState.Marked;
+    tick(world, [{ type: 'CancelDigMark', colonyId, tileX: 5, tileY: 20, issuedAtTick: 0 }]);
+    // The unrelated cancel still flips that tile to Solid…
+    expect(ugGet(underground, 5, 20)).toBe(UndergroundTileState.Solid);
+    // …but the pending chamber is untouched.
+    expect(world.pendingChambers[pcKey]).toBeDefined();
+  });
+
+  it('Issue #54 (v9): cancel inside chamber A drops only A, leaves chamber B intact', () => {
+    const { world, colonyId } = makeWorldWithUnderground();
+    const { pcKey: keyA } = setupPendingQueenAt(world, colonyId, 20, 5);
+    // Place a second pending chamber far from A.
+    const dims = CHAMBER_DIMENSIONS[ChamberType.Nursery]!;
+    const bx = 60, by = 20;
+    const underground = world.undergroundGrids[colonyId]!;
+    for (let dy = 0; dy < dims.height; dy++) {
+      for (let dx = 0; dx < dims.width; dx++) {
+        underground.data[(by + dy) * UNDERGROUND_GRID_WIDTH + (bx + dx)] = UndergroundTileState.Marked;
+      }
+    }
+    const keyB = `${colonyId}:${bx}:${by}`;
+    world.pendingChambers[keyB] = {
+      colonyId, chamberType: ChamberType.Nursery,
+      anchorTileX: bx, anchorTileY: by, width: dims.width, height: dims.height,
+    };
+    // Cancel inside A's footprint.
+    tick(world, [{ type: 'CancelDigMark', colonyId, tileX: 21, tileY: 5, issuedAtTick: 0 }]);
+    expect(world.pendingChambers[keyA]).toBeUndefined();
+    expect(world.pendingChambers[keyB]).toBeDefined();
+    // B's footprint tiles must still be Marked.
+    for (let dy = 0; dy < dims.height; dy++) {
+      for (let dx = 0; dx < dims.width; dx++) {
+        expect(ugGet(underground, bx + dx, by + dy)).toBe(UndergroundTileState.Marked);
+      }
+    }
+  });
+
+  it('Issue #54 (v9): cross-colony — cancel in colony A leaves colony B pending chamber intact', () => {
+    const { world, colonyId: colonyA } = makeWorldWithUnderground();
+    // Set up a sibling colony B with its own underground grid.
+    const colonyB = (colonyA + 1) as ColonyId;
+    const queenB = allocateEntityId(world);
+    initAnt(world.ants, queenB, { colonyId: colonyB, posX: 4096, posY: 4096, task: AntTask.Idle, subTask: 0 });
+    world.colonies[colonyB] = createColonyRecord(colonyB, queenB);
+    world.colonies[colonyB]!.entrances = [];
+    world.colonies[colonyB]!.rallyPoint = null;
+    world.colonies[colonyB]!.digFlowFieldDirty = false;
+    world.undergroundGrids[colonyB] = createUndergroundGrid(UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT);
+    // Same anchor coords, but different colonies — the v9 loop must not
+    // collapse them into one match.
+    const { pcKey: keyA } = setupPendingQueenAt(world, colonyA, 20, 5);
+    const { pcKey: keyB } = setupPendingQueenAt(world, colonyB, 20, 5);
+    expect(keyA).not.toBe(keyB);
+    // Cancel in colony A only.
+    tick(world, [{ type: 'CancelDigMark', colonyId: colonyA, tileX: 20, tileY: 5, issuedAtTick: 0 }]);
+    expect(world.pendingChambers[keyA]).toBeUndefined();
+    expect(world.pendingChambers[keyB]).toBeDefined();
+  });
+
+  it('Issue #54 (pre-v9 replay): legacy worlds keep orphan-on-cancel behaviour', () => {
+    const { world, colonyId } = makeWorldWithUnderground();
+    // Pin to LEGACY (pre-v9) so saved replays remain byte-identical.
+    world.simVersion = LEGACY_SIM_VERSION;
+    const { pcKey } = setupPendingQueenAt(world, colonyId, 20, 5);
+    const underground = world.undergroundGrids[colonyId]!;
+    tick(world, [{ type: 'CancelDigMark', colonyId, tileX: 21, tileY: 5, issuedAtTick: 0 }]);
+    // Pre-v9: the cancelled tile flips Marked→Solid, but the pending chamber
+    // STAYS (orphaned — checkPendingChambers requires every footprint tile
+    // to be Open; a Solid tile blocks promotion forever).
+    expect(ugGet(underground, 21, 5)).toBe(UndergroundTileState.Solid);
+    expect(world.pendingChambers[pcKey]).toBeDefined();
+  });
+
+  it('Issue #54 (pre-v9 boundary): simVersion=v8 still keeps orphan-on-cancel behaviour', () => {
+    // Boundary test — guards against an off-by-one slip in the gate. The
+    // LEGACY test above pins simVersion=2; this one pins exactly v8 (one
+    // below the v9 cutoff) to catch a `> V8` typo in place of `>= V9`.
+    const { world, colonyId } = makeWorldWithUnderground();
+    world.simVersion = SIM_VERSION_V8_LEASH_HYSTERESIS;
+    const { pcKey } = setupPendingQueenAt(world, colonyId, 20, 5);
+    tick(world, [{ type: 'CancelDigMark', colonyId, tileX: 21, tileY: 5, issuedAtTick: 0 }]);
+    expect(world.pendingChambers[pcKey]).toBeDefined();
+  });
+
+  it('Issue #54 (v9): cancel on BeingDug footprint tile does NOT drop the pending chamber', () => {
+    // CTRL-04: BeingDug tiles can't be cancelled (finish-then-switch). The
+    // CancelDigMark handler returns at the Marked-only early gate before
+    // ever reaching the v9 block. This guards against a future refactor
+    // that moves the v9 logic above that gate.
+    const { world, colonyId } = makeWorldWithUnderground();
+    const { pcKey } = setupPendingQueenAt(world, colonyId, 20, 5);
+    const underground = world.undergroundGrids[colonyId]!;
+    underground.data[5 * UNDERGROUND_GRID_WIDTH + 21] = UndergroundTileState.BeingDug;
+    tick(world, [{ type: 'CancelDigMark', colonyId, tileX: 21, tileY: 5, issuedAtTick: 0 }]);
+    // Pending chamber survives; tile stays BeingDug.
+    expect(world.pendingChambers[pcKey]).toBeDefined();
+    expect(ugGet(underground, 21, 5)).toBe(UndergroundTileState.BeingDug);
+  });
+
+  it('Issue #54 (v9): after cancel, no Queen pending remains — menu/uniqueness gate reopens', () => {
+    // The user-facing soft-lock unblock: if a player cancels a footprint
+    // tile of a pending Queen, the iteration over `world.pendingChambers`
+    // that gates both the underground context menu AND the PlaceChamber
+    // Queen-uniqueness rule must no longer find any Queen entry.
+    const { world, colonyId } = makeWorldWithUnderground();
+    setupPendingQueenAt(world, colonyId, 20, 5);
+    tick(world, [{ type: 'CancelDigMark', colonyId, tileX: 21, tileY: 5, issuedAtTick: 0 }]);
+    let hasQueenPending = false;
+    for (const k in world.pendingChambers) {
+      if (world.pendingChambers[k]!.chamberType === ChamberType.Queen) {
+        hasQueenPending = true;
+        break;
+      }
+    }
+    expect(hasQueenPending).toBe(false);
+  });
+
+  it('Issue #54 (v9): cancelling a Marked tile in a pending Nursery footprint drops it too', () => {
+    // Sanity check that the fix is not Queen-specific — every chamber type
+    // benefits, since checkPendingChambers' all-Open promotion gate is the
+    // shared mechanism that orphans the entry.
+    const { world, colonyId } = makeWorldWithUnderground();
+    const dims = CHAMBER_DIMENSIONS[ChamberType.Nursery]!;
+    const ax = 30, ay = 8;
+    const underground = world.undergroundGrids[colonyId]!;
+    for (let dy = 0; dy < dims.height; dy++) {
+      for (let dx = 0; dx < dims.width; dx++) {
+        underground.data[(ay + dy) * UNDERGROUND_GRID_WIDTH + (ax + dx)] = UndergroundTileState.Marked;
+      }
+    }
+    const pcKey = `${colonyId}:${ax}:${ay}`;
+    world.pendingChambers[pcKey] = {
+      colonyId, chamberType: ChamberType.Nursery,
+      anchorTileX: ax, anchorTileY: ay, width: dims.width, height: dims.height,
+    };
+    tick(world, [{ type: 'CancelDigMark', colonyId, tileX: ax + 1, tileY: ay, issuedAtTick: 0 }]);
+    expect(world.pendingChambers[pcKey]).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2275,16 +2495,21 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
     expect(world.pendingChambers[`${colonyId}:${entranceX}:10`]).toBeUndefined();
   });
 
-  it('new worlds run at LATEST_SIM_VERSION (== V8_LEASH_HYSTERESIS after #44 UAT round 3)', () => {
+  it('new worlds run at LATEST_SIM_VERSION (== V9_CANCEL_DROPS_PENDING after #54)', () => {
     // Verify createWorldState uses the LATEST_SIM_VERSION constant exactly.
     // Tracks the constant rather than a hard-coded number so future bumps
     // don't have to update this assertion, while still proving the factory
     // is wired to the latest version (not stuck on a stale literal). Also
-    // pins the explicit v8 sentinel so a downgrade (e.g. accidental revert
-    // of the #44 leash-hysteresis fix) trips here.
+    // pins the explicit v9 sentinel so a downgrade (e.g. accidental revert
+    // of the #54 cancel-drops-pending fix) trips here.
     const world = createWorldState(42);
     expect(world.simVersion).toBe(LATEST_SIM_VERSION);
-    expect(world.simVersion).toBe(SIM_VERSION_V8_LEASH_HYSTERESIS);
+    expect(world.simVersion).toBe(SIM_VERSION_V9_CANCEL_DROPS_PENDING);
+    // The v8 leash-hysteresis ceiling still belongs to LATEST as well — an
+    // accidental drop below v8 would silently re-enable the #44 UAT round 3
+    // bugs (flip-flop at leash boundary, detour deadlocks in one-way
+    // pockets, empty-halo anchor suppression).
+    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V8_LEASH_HYSTERESIS);
     // The v7 surface-passability ceiling still belongs to LATEST as well —
     // an accidental drop below v7 would silently re-enable pre-#44 movement.
     expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V7_SURFACE_PASSABILITY);

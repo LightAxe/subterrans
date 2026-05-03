@@ -110,7 +110,8 @@ export const SIM_VERSION_V7_SURFACE_PASSABILITY = 7 as const;
  * byte-identity.
  */
 export const SIM_VERSION_V8_LEASH_HYSTERESIS = 8 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V8_LEASH_HYSTERESIS;
+export const SIM_VERSION_V9_CANCEL_DROPS_PENDING = 9 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V9_CANCEL_DROPS_PENDING;
 
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick
@@ -164,6 +165,16 @@ export interface WorldState {
    *           a gameplay-suppression zone no longer cast an empty
    *           halo over lower-priority anchors outside the zone.
    *       Pre-v8 saves keep the original behaviours for byte-identity.
+   *   9 = Issue #54 — CancelDigMark on a tile inside a pending chamber's
+   *       footprint drops the pending chamber entry (and reverts any
+   *       remaining Marked footprint tiles to Solid). Pre-v9, the
+   *       pending chamber stayed orphaned forever — for unique chamber
+   *       types like Queen, both gates that scan `world.pendingChambers`
+   *       (the underground context-menu Queen filter in
+   *       `context-menu-layout.ts:hasPendingChamber` and the
+   *       PlaceChamber Queen-uniqueness rule in `tick.ts`) stayed
+   *       tripped, soft-locking re-placement. Pre-v9 saves replay
+   *       byte-identical with the orphan-on-cancel behaviour.
    *
    * Round-trips through copyWorldState and save/load.
    */

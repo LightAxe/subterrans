@@ -238,12 +238,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.ants.currentGridColonyId[enemyQueen]).toBe(ENEMY_COLONY_ID);
       expect(w2.ants.currentGridColonyId[playerInvader]).toBe(ENEMY_COLONY_ID);
     });
-    it('round-trips simVersion (LATEST: v8 leash hysteresis)', async () => {
+    it('round-trips simVersion (LATEST: v9 cancel-drops-pending)', async () => {
       const { LATEST_SIM_VERSION, SIM_VERSION_V7_SURFACE_PASSABILITY } = await import('../sim/types.js');
       // New worlds default to LATEST_SIM_VERSION. Save/load must preserve
       // it so any LATEST replay continues to apply the gated behaviour
-      // (currently surface passability, soft cost, and leash hysteresis)
-      // on resume.
+      // (currently surface passability, soft cost, leash hysteresis, and
+      // cancel-drops-pending) on resume.
       const w = createScenario(42);
       expect(w.simVersion).toBe(LATEST_SIM_VERSION);
       // Sanity-check that LATEST is at least v7 — anything lower would

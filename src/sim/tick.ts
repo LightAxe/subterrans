@@ -1,6 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, SIM_VERSION_V5_CHAMBER_ON_MARKED } from './types.js';
+import { allocateEntityId, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING } from './types.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath } from './game-over.js';
 import { detectAndResolveCombat } from './combat.js';
@@ -292,6 +292,39 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         ugSet(underground, cmd.tileX, cmd.tileY, UndergroundTileState.Solid);
         const colony2 = world.colonies[cmd.colonyId];
         if (colony2) colony2.digFlowFieldDirty = true;   // typed field (Plan 03 Task 1)
+        // Issue #54 (v9+) — if the cancelled tile is inside a pending chamber's
+        // footprint, drop the pending chamber and revert any of its remaining
+        // Marked tiles back to Solid. Pre-v9 the pending chamber stayed
+        // orphaned (checkPendingChambers requires every footprint tile to be
+        // Open before promotion; the cancelled tile's Solid state blocks
+        // that forever). For unique-chamber types like Queen, this also kept
+        // the menu-side `hasPendingChamber` gate tripped, soft-locking
+        // re-placement. BeingDug tiles continue per CTRL-04 (no mid-dig
+        // interrupt); Open tiles stay Open.
+        if (world.simVersion >= SIM_VERSION_V9_CANCEL_DROPS_PENDING) {
+          for (const pcKey in world.pendingChambers) {
+            if (!Object.hasOwn(world.pendingChambers, pcKey)) continue;
+            const pc = world.pendingChambers[pcKey]!;
+            if (pc.colonyId !== cmd.colonyId) continue;
+            if (cmd.tileX < pc.anchorTileX || cmd.tileX >= pc.anchorTileX + pc.width) continue;
+            if (cmd.tileY < pc.anchorTileY || cmd.tileY >= pc.anchorTileY + pc.height) continue;
+            // Match — drop the pending chamber and revert remaining Marked
+            // footprint tiles. PlaceChamber's overlap gate (f) ensures at
+            // most one same-colony pending chamber covers any tile, so we
+            // can stop after the first match.
+            delete world.pendingChambers[pcKey];
+            for (let dy = 0; dy < pc.height; dy++) {
+              for (let dx = 0; dx < pc.width; dx++) {
+                const tx = pc.anchorTileX + dx;
+                const ty = pc.anchorTileY + dy;
+                if (ugGet(underground, tx, ty) === UndergroundTileState.Marked) {
+                  ugSet(underground, tx, ty, UndergroundTileState.Solid);
+                }
+              }
+            }
+            break;
+          }
+        }
         break;
       }
       case 'PlaceChamber': {
