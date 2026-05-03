@@ -1,6 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING } from './types.js';
+import { allocateEntityId, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY } from './types.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath } from './game-over.js';
 import { detectAndResolveCombat } from './combat.js';
@@ -68,6 +68,7 @@ import {
 import type { EntranceFlowFields } from './entrance-flow.js';
 import {
   computeChamberFlowField,
+  computeNursingPickupField,
   ensureChamberFlowFields,
   createChamberFlowFields,
   FOOD_CHAMBER_TYPES,
@@ -702,6 +703,39 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
 
     colony.digFlowFieldDirty = false;
     colony.foodFlowFieldDirty = false;
+  }
+
+  // Issue #17 Phase 1 — under v10+, the `nursing` chamber-flow field is
+  // re-seeded from Queen Open tiles AND any uncarried-brood-entity tile
+  // outside Nursery (the v10 pickup field). Brood positions move with their
+  // carriers each tick, so the field MUST recompute every tick (not just
+  // on dirty signal) to stay in sync. Overwrites the buffer that the
+  // dirty-gated block above filled with the legacy NURSING_CHAMBER_TYPES
+  // seeding — pre-v10 worlds keep the legacy seeding (Queen+Nursery).
+  if (world.simVersion >= SIM_VERSION_V10_VISIBLE_BROOD_CARRY) {
+    for (const key in world.colonies) {
+      if (!Object.hasOwn(world.colonies, key)) continue;
+      const colony = world.colonies[key as unknown as ColonyId]!;
+      const underground = world.undergroundGrids[colony.colonyId];
+      if (!underground) continue;
+      const gridSize = underground.width * underground.height;
+      const chamberBufs = ensureChamberFlowFields(chamberFlowFields, colony.colonyId, gridSize);
+      // Concatenate eggs ∪ larvae into the brood seed list. Allocation-
+      // sensitive: re-uses no scratch buffer, but eggs/larvae are tiny
+      // arrays (typically O(10)).
+      const broodIds = colony.eggs.concat(colony.larvae);
+      computeNursingPickupField(
+        underground,
+        colony.chambers,
+        world.ants.posX,
+        world.ants.posY,
+        world.ants.alive,
+        world.ants.carriedBy,
+        broodIds,
+        chamberBufs.nursing,
+        chamberBufs.queue,
+      );
+    }
   }
 
   // ---------------------------------------------------------------------------

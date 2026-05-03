@@ -37,6 +37,7 @@ import {
   SIM_VERSION_V6_FORAGER_NO_REVISIT,
   SIM_VERSION_V7_SURFACE_PASSABILITY,
   SIM_VERSION_V8_LEASH_HYSTERESIS,
+  SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
   type WorldState,
 } from '../types.js';
 import {
@@ -774,12 +775,72 @@ export function tickForagerActions(world: WorldState): void {
  */
 export function tickNurseActions(world: WorldState): void {
   const ants = world.ants;
+  const v10 = world.simVersion >= SIM_VERSION_V10_VISIBLE_BROOD_CARRY;
 
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1) continue;
     if (ants.task[id] !== AntTask.Nursing) continue;
 
     const subTask = ants.subTask[id]!;
+
+    if (v10) {
+      // -----------------------------------------------------------------
+      // Issue #17 Phase 1 (v10+): visible brood carry.
+      //
+      // Substate semantics under v10:
+      //   MovingToBrood (0) — heading toward a brood pickup tile via the
+      //     `nursing` chamber-flow field (re-seeded each tick from Queen
+      //     Open tiles AND uncarried-brood-entity tiles outside Nursery).
+      //     On arrival at a tile that holds an alive uncarried brood,
+      //     claim it: set carryingBroodId/carriedBy, flip to Feeding.
+      //   Feeding (1) — Phase 1.4 will use this state for "carrying";
+      //     this commit only handles pickup. Carry/deposit logic lands
+      //     in the next commit so this commit's diff is reviewable in
+      //     isolation. Until then, a Feeding nurse with no carry slot
+      //     drops back to Idle (matches pre-v10 Feeding→Idle release).
+      // -----------------------------------------------------------------
+      if (subTask === NursingSubState.Feeding) {
+        // No carry slot set yet (Phase 1.3 only attaches it on pickup;
+        // the deposit-arrival branch lands in Phase 1.4). For now, mirror
+        // the pre-v10 Feeding→Idle release so a half-implemented v10
+        // build doesn't strand nurses in Feeding.
+        if (ants.carryingBroodId[id] === -1) {
+          ants.task[id]    = AntTask.Idle;
+          ants.subTask[id] = 0;
+        }
+        continue;
+      }
+      if (subTask !== NursingSubState.MovingToBrood) continue;
+
+      const colonyId = ants.colonyId[id]!;
+      const colony = world.colonies[colonyId];
+      if (!colony) continue;
+
+      const tileX = ants.posX[id]! >> FP_SHIFT;
+      const tileY = ants.posY[id]! >> FP_SHIFT;
+
+      // Find an alive uncarried brood entity standing on this tile.
+      // Iterate eggs first then larvae; pick the lowest entity id for
+      // determinism (matches the pre-v10 transportBroodToNursery
+      // selection order).
+      const broodId = findUncarriedBroodOnTile(world, colony, tileX, tileY);
+      if (broodId < 0) continue;
+
+      // Claim the brood. Set both ends of the carry pointer atomically.
+      ants.carryingBroodId[id]    = broodId;
+      ants.carriedBy[broodId]     = id;
+      ants.subTask[id]            = NursingSubState.Feeding;
+      // Carried brood is no longer a pickup seed — the next per-tick
+      // recompute of the `nursing` field in tick.ts step 9 will exclude
+      // it because `carriedBy[broodId] !== -1`. No dirty flag needed.
+      continue;
+    }
+
+    // -------------------------------------------------------------------
+    // Pre-v10 path (legacy teleport). Unchanged — Feeding→Idle release,
+    // MovingToBrood→Feeding flip on Queen/Nursery tile, then the
+    // transportBroodToNursery teleport.
+    // -------------------------------------------------------------------
 
     // Feeding → Idle: the dwell tick is already spent; release the ant.
     // Step 10a on the next tick sees an Idle ant and routes per allocation.
@@ -823,6 +884,41 @@ export function tickNurseActions(world: WorldState): void {
       transportBroodToNursery(world, colony);
     }
   }
+}
+
+/**
+ * Return the entity ID of an alive uncarried brood (egg or larva) standing
+ * on tile (tileX, tileY) for `colony`, or -1 if none. Iterates eggs then
+ * larvae and picks the lowest entity id for determinism (matches the pre-
+ * v10 transportBroodToNursery selection order).
+ */
+function findUncarriedBroodOnTile(
+  world: WorldState,
+  colony: ColonyRecord,
+  tileX: number,
+  tileY: number,
+): number {
+  const ants = world.ants;
+  let pickId = -1;
+  for (let i = 0; i < colony.eggs.length; i++) {
+    const bid = colony.eggs[i]!;
+    if (ants.alive[bid] !== 1) continue;
+    if (ants.carriedBy[bid] !== -1) continue;
+    const bx = ants.posX[bid]! >> FP_SHIFT;
+    const by = ants.posY[bid]! >> FP_SHIFT;
+    if (bx !== tileX || by !== tileY) continue;
+    if (pickId < 0 || bid < pickId) pickId = bid;
+  }
+  for (let i = 0; i < colony.larvae.length; i++) {
+    const bid = colony.larvae[i]!;
+    if (ants.alive[bid] !== 1) continue;
+    if (ants.carriedBy[bid] !== -1) continue;
+    const bx = ants.posX[bid]! >> FP_SHIFT;
+    const by = ants.posY[bid]! >> FP_SHIFT;
+    if (bx !== tileX || by !== tileY) continue;
+    if (pickId < 0 || bid < pickId) pickId = bid;
+  }
+  return pickId;
 }
 
 /**

@@ -37,6 +37,8 @@ import {
   SIM_VERSION_V4_DIAGONAL_MOTION,
   SIM_VERSION_V5_CHAMBER_ON_MARKED,
   SIM_VERSION_V8_LEASH_HYSTERESIS,
+  SIM_VERSION_V9_CANCEL_DROPS_PENDING,
+  SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt, createAntComponents, RECENT_TILES_LEN } from './ant-store.js';
@@ -3701,6 +3703,13 @@ describe('tickNurseActions', () => {
     subTask?: number;
   }): { world: WorldState; antId: number; colony: ColonyRecord } {
     const world = createWorldState(42, 64);
+    // Pin to pre-v10 — these tests exercise the legacy
+    // MovingToBrood→Feeding-on-chamber-tile flip + teleport. Phase 1.3
+    // (#17) replaced that flip under v10+ with a brood-tile pickup, so
+    // tests that expect the legacy flip must explicitly run on a pre-v10
+    // sim version. v10-specific tests live in their own describe block
+    // below and bump simVersion back to LATEST.
+    world.simVersion = SIM_VERSION_V9_CANCEL_DROPS_PENDING;
     // Queen (entity 0) — required for createColonyRecord.
     const queenId = allocateEntityId(world);
     initAnt(world.ants, queenId, { colonyId: COLONY_ID, posX: 0, posY: 0, speed: 0 });
@@ -5621,6 +5630,11 @@ describe('tickNurseActions — P2 brood transport to Nursery', () => {
     const ugWidth  = params.ugWidth  ?? 16;
     const ugHeight = params.ugHeight ?? 16;
     const world = createWorldState(42, MAX_TEST_ENTITIES);
+    // Pin to pre-v10 — these tests assert the legacy teleport behaviour
+    // of `transportBroodToNursery` on the MovingToBrood→Feeding flip.
+    // Under v10+ that path is replaced by visible carry; v10 tests live
+    // in their own describe block and bump simVersion back to LATEST.
+    world.simVersion = SIM_VERSION_V9_CANCEL_DROPS_PENDING;
     const colony = createColonyRecord(COLONY_ID, 0);
     colony.entrances = [];
     colony.rallyPoint = null;
@@ -6685,5 +6699,133 @@ describe('issue #42 — surface SearchingFood no-revisit rule (v6)', () => {
       expect(world.ants.recentTilesY[antId * RECENT_TILES_LEN + s]).toBe(-1);
     }
     expect(world.ants.recentTilesHead[antId]).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #17 Phase 1.3 — v10+ tickNurseActions pickup branch.
+//
+// Under simVersion >= V10, MovingToBrood → Feeding only flips when the nurse
+// is standing on a tile with an alive uncarried brood entity. On the flip
+// we set carryingBroodId on the nurse and carriedBy on the brood (the
+// reverse pointer keeps a second nurse from racing the same brood).
+// ---------------------------------------------------------------------------
+
+describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
+  function setupV10NurseAndBroodOnTile(opts: {
+    sameTile: boolean;
+  }): { world: WorldState; nurseId: number; broodId: number; colony: ColonyRecord } {
+    const world = createWorldState(42, 64);
+    // LATEST already includes v10; pin explicitly so the test name describes
+    // what's under test even when LATEST advances.
+    world.simVersion = SIM_VERSION_V10_VISIBLE_BROOD_CARRY;
+    const queenId = allocateEntityId(world);
+    initAnt(world.ants, queenId, { colonyId: COLONY_ID, posX: 0, posY: 0, speed: 0 });
+    const colony = createColonyRecord(COLONY_ID, queenId);
+    world.colonies[COLONY_ID] = colony;
+    // Queen chamber so the brood is in a "natural" location.
+    colony.chambers.push({
+      chamberId: 1, chamberType: ChamberType.Queen, foodStored: 0,
+      posX: 5 << FP_SHIFT, posY: 5 << FP_SHIFT, width: 2, height: 2,
+    });
+    // Brood entity (egg) at tile (5, 5).
+    const broodId = allocateEntityId(world);
+    initAnt(world.ants, broodId, {
+      colonyId: COLONY_ID,
+      posX:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task:     AntTask.Idle,
+      speed:    0,
+      zone:     Zone.Underground,
+    });
+    colony.eggs.push(broodId);
+    // Nurse — same tile as brood, OR offset depending on sameTile flag.
+    const nurseTileX = opts.sameTile ? 5 : 8;
+    const nurseTileY = opts.sameTile ? 5 : 8;
+    const nurseId = allocateEntityId(world);
+    initAnt(world.ants, nurseId, {
+      colonyId: COLONY_ID,
+      posX:     (nurseTileX << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (nurseTileY << FP_SHIFT) + (FP_ONE >> 1),
+      task:     AntTask.Nursing,
+      subTask:  NursingSubState.MovingToBrood,
+      zone:     Zone.Underground,
+    });
+    return { world, nurseId, broodId, colony };
+  }
+
+  it('on brood tile: claims the brood and flips to Feeding (carry pointer set both ways)', () => {
+    const { world, nurseId, broodId } = setupV10NurseAndBroodOnTile({ sameTile: true });
+    tickNurseActions(world);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
+    expect(world.ants.carryingBroodId[nurseId]).toBe(broodId);
+    expect(world.ants.carriedBy[broodId]).toBe(nurseId);
+  });
+
+  it('off brood tile: stays in MovingToBrood, no carry claimed', () => {
+    const { world, nurseId, broodId } = setupV10NurseAndBroodOnTile({ sameTile: false });
+    tickNurseActions(world);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.MovingToBrood);
+    expect(world.ants.carryingBroodId[nurseId]).toBe(-1);
+    expect(world.ants.carriedBy[broodId]).toBe(-1);
+  });
+
+  it('two nurses on the same brood tile: only the lower-id nurse claims', () => {
+    const { world, broodId } = setupV10NurseAndBroodOnTile({ sameTile: true });
+    // Add a second nurse on the same tile (higher id than the first by
+    // construction — entity ids are monotonic).
+    const nurse2 = allocateEntityId(world);
+    initAnt(world.ants, nurse2, {
+      colonyId: COLONY_ID,
+      posX:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task:     AntTask.Nursing,
+      subTask:  NursingSubState.MovingToBrood,
+      zone:     Zone.Underground,
+    });
+    // The first nurse from setup is the queen+brood-1 = entity id 2.
+    // (queen=0, brood=1, nurse=2). nurse2 is entity id 3.
+    tickNurseActions(world);
+    // The lower-id nurse claims; the second stays MovingToBrood.
+    expect(world.ants.carriedBy[broodId]).toBe(2);
+    expect(world.ants.carryingBroodId[2]).toBe(broodId);
+    expect(world.ants.carryingBroodId[nurse2]).toBe(-1);
+    expect(world.ants.subTask[nurse2]).toBe(NursingSubState.MovingToBrood);
+  });
+
+  it('already-carried brood is not claimed by another nurse on the same tile', () => {
+    const { world, broodId, colony } = setupV10NurseAndBroodOnTile({ sameTile: true });
+    // Mark the brood as already carried by some other nurse (not in this
+    // test's iteration loop) — simulates a race that resolved on a prior tick.
+    world.ants.carriedBy[broodId] = 99;
+    void colony;
+    tickNurseActions(world);
+    // Original nurse (id 2) is still on the brood tile but the brood was
+    // already claimed; nurse stays in MovingToBrood and does not steal.
+    expect(world.ants.carryingBroodId[2]).toBe(-1);
+    expect(world.ants.carriedBy[broodId]).toBe(99);
+    expect(world.ants.subTask[2]).toBe(NursingSubState.MovingToBrood);
+  });
+
+  it('dead brood is skipped — even on the same tile, no claim happens', () => {
+    const { world, broodId } = setupV10NurseAndBroodOnTile({ sameTile: true });
+    world.ants.alive[broodId] = 0;
+    tickNurseActions(world);
+    expect(world.ants.carryingBroodId[2]).toBe(-1);
+    expect(world.ants.carriedBy[broodId]).toBe(-1);
+    expect(world.ants.subTask[2]).toBe(NursingSubState.MovingToBrood);
+  });
+
+  it('Feeding nurse with no carry slot drops back to Idle (Phase 1.3 partial-state guard)', () => {
+    // Phase 1.4 will populate Feeding=carrying; until then, a Feeding nurse
+    // with carryingBroodId === -1 should release back to Idle so a half-
+    // implemented v10 build doesn't strand nurses in Feeding forever.
+    const { world } = setupV10NurseAndBroodOnTile({ sameTile: false });
+    // Manually force the nurse into Feeding without a carry slot.
+    world.ants.subTask[2] = NursingSubState.Feeding;
+    world.ants.carryingBroodId[2] = -1;
+    tickNurseActions(world);
+    expect(world.ants.task[2]).toBe(AntTask.Idle);
+    expect(world.ants.subTask[2]).toBe(0);
   });
 });

@@ -195,3 +195,142 @@ export const NURSING_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [
 export const QUEEN_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [ChamberType.Queen];
 /** Issue #17 Phase 1 — Nursery-only seeds for the v10 nurseDeposit field. */
 export const NURSERY_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [ChamberType.Nursery];
+
+/**
+ * Issue #17 Phase 1 — multi-source BFS toward brood pickup tiles for v10+
+ * Nursing ants in the MovingToBrood substate.
+ *
+ * Seeded from:
+ *   1. Every Open tile inside any Queen chamber (where new eggs spawn).
+ *   2. Every alive uncarried brood entity (egg or larva) tile that is NOT
+ *      inside any Nursery footprint — covers brood dropped at a carrier's
+ *      death tile that needs to be re-claimed.
+ *
+ * Brood already inside a Nursery is excluded — it has reached its
+ * destination and shouldn't lure pickups. Carried brood (carriedBy >= 0)
+ * is excluded — a second nurse must not race onto an already-claimed
+ * brood (race resolution lives in tickNurseActions; this just keeps the
+ * field from advertising a stale pickup target).
+ *
+ * Output is a step-direction grid identical to computeChamberFlowField
+ * (-1 = source, -2 = unreachable, 0..3 = step N/E/S/W).
+ *
+ * Deterministic: chamber seed order is chamber array order × row-major
+ * footprint; brood seed order is `broodIds` array order. Duplicate sources
+ * are idempotent (the `out[idx] !== -2` guard skips re-seeding).
+ *
+ * @param underground Colony underground grid (read-only).
+ * @param chambers    Colony chambers (used for Queen seeds and Nursery
+ *                    footprints — the Nursery footprints are read to
+ *                    exclude brood already deposited).
+ * @param posX/posY/alive/carriedBy The same SoA arrays from `world.ants`.
+ * @param broodIds    Concatenation of `colony.eggs` and `colony.larvae`
+ *                    for the colony being computed. The function does NOT
+ *                    care about order beyond determinism.
+ * @param out         Pre-allocated Int32Array of length W*H. Filled in-place.
+ * @param queue       Pre-allocated Int32Array of length W*H for BFS queue.
+ */
+export function computeNursingPickupField(
+  underground: UndergroundGrid,
+  chambers: ReadonlyArray<ChamberRecord>,
+  posX:      Int32Array,
+  posY:      Int32Array,
+  alive:     Int32Array,
+  carriedBy: Int32Array,
+  broodIds:  ReadonlyArray<number>,
+  out:       Int32Array,
+  queue:     Int32Array,
+): void {
+  const { data, width, height } = underground;
+
+  out.fill(-2);
+
+  let head = 0;
+  let tail = 0;
+
+  // Seed (1): Queen chamber Open tiles.
+  for (let c = 0; c < chambers.length; c++) {
+    const chamber = chambers[c]!;
+    if (chamber.chamberType !== ChamberType.Queen) continue;
+    const baseX = chamber.posX >> FP_SHIFT;
+    const baseY = chamber.posY >> FP_SHIFT;
+    for (let ty = 0; ty < chamber.height; ty++) {
+      for (let tx = 0; tx < chamber.width; tx++) {
+        const cx = baseX + tx;
+        const cy = baseY + ty;
+        if (cx < 0 || cx >= width || cy < 0 || cy >= height) continue;
+        const idx = cy * width + cx;
+        if (data[idx] !== UndergroundTileState.Open) continue;
+        if (out[idx] !== -2) continue;
+        out[idx] = -1;
+        queue[tail++] = idx;
+      }
+    }
+  }
+
+  // Seed (2): uncarried brood entities outside Nursery, on Open tiles.
+  // Brood inside Nursery doesn't seed (already deposited); carried brood
+  // doesn't seed (a second nurse mustn't race onto it).
+  for (let i = 0; i < broodIds.length; i++) {
+    const bid = broodIds[i]!;
+    if (alive[bid] !== 1) continue;
+    if (carriedBy[bid] !== -1) continue;
+    const tx = posX[bid]! >> FP_SHIFT;
+    const ty = posY[bid]! >> FP_SHIFT;
+    if (tx < 0 || tx >= width || ty < 0 || ty >= height) continue;
+    // Skip brood inside any Nursery footprint.
+    let insideNursery = false;
+    for (let c = 0; c < chambers.length; c++) {
+      const chamber = chambers[c]!;
+      if (chamber.chamberType !== ChamberType.Nursery) continue;
+      const bx = chamber.posX >> FP_SHIFT;
+      const by = chamber.posY >> FP_SHIFT;
+      if (
+        tx >= bx && tx < bx + chamber.width &&
+        ty >= by && ty < by + chamber.height
+      ) {
+        insideNursery = true;
+        break;
+      }
+    }
+    if (insideNursery) continue;
+    const idx = ty * width + tx;
+    // Brood entities should always be on Open tiles in normal play (the
+    // queen-laying code drops them on Open Queen-chamber tiles, and the
+    // carry code drops them on Open Nursery tiles). Defensive guard so a
+    // mid-transition edge case doesn't seed a non-traversable cell.
+    if (data[idx] !== UndergroundTileState.Open) continue;
+    if (out[idx] !== -2) continue;
+    out[idx] = -1;
+    queue[tail++] = idx;
+  }
+
+  // BFS expansion through Open and BeingDug only — same contract as
+  // computeChamberFlowField.
+  while (head < tail) {
+    const idx = queue[head++]!;
+    // eslint-disable-next-line no-restricted-syntax -- integer division via `| 0`; BFS index→row conversion, not fixed-point math
+    const row = (idx / width) | 0;
+    const col = idx % width;
+
+    for (let d = 0; d < 4; d++) {
+      const nRow = row + NEIGHBOR_DR[d]!;
+      const nCol = col + NEIGHBOR_DC[d]!;
+      if (nRow < 0 || nRow >= height || nCol < 0 || nCol >= width) continue;
+
+      const nIdx = nRow * width + nCol;
+      if (out[nIdx] !== -2) continue;
+
+      const tileState = data[nIdx]!;
+      if (
+        tileState !== UndergroundTileState.Open &&
+        tileState !== UndergroundTileState.BeingDug
+      ) {
+        continue;
+      }
+
+      out[nIdx] = REVERSE[d]!;
+      queue[tail++] = nIdx;
+    }
+  }
+}
