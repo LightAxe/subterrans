@@ -39,6 +39,8 @@ import type { ColonyId, ChamberRecord } from './colony/colony-store.js';
 import { UndergroundTileState } from './terrain.js';
 import type { UndergroundGrid } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
+import type { AntComponents } from './ant/ant-store.js';
+import { isBroodReclaimable } from './ant/ant-store.js';
 
 // Direction constants — identical encoding to entrance-flow.ts / dig-system.ts.
 //   0=N, 1=E, 2=S, 3=W, -1=source, -2=unreachable.
@@ -233,11 +235,9 @@ export const NURSERY_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [ChamberType.Nu
 export function computeNursingPickupField(
   underground: UndergroundGrid,
   chambers: ReadonlyArray<ChamberRecord>,
-  posX:      Int32Array,
-  posY:      Int32Array,
-  alive:     Int32Array,
-  carriedBy: Int32Array,
-  broodIds:  ReadonlyArray<number>,
+  ants:      AntComponents,
+  eggIds:    ReadonlyArray<number>,
+  larvaeIds: ReadonlyArray<number>,
   out:       Int32Array,
   queue:     Int32Array,
 ): void {
@@ -275,39 +275,43 @@ export function computeNursingPickupField(
   // the brood is effectively orphaned (carrier died mid-carry) and is
   // reclaimable — seed it as uncarried. tickNurseActions Feeding branch
   // also drops dead-brood carries on the carrier side.
-  for (let i = 0; i < broodIds.length; i++) {
-    const bid = broodIds[i]!;
-    if (alive[bid] !== 1) continue;
-    const cby = carriedBy[bid]!;
-    if (cby !== -1 && alive[cby] === 1) continue;
-    const tx = posX[bid]! >> FP_SHIFT;
-    const ty = posY[bid]! >> FP_SHIFT;
-    if (tx < 0 || tx >= width || ty < 0 || ty >= height) continue;
-    // Skip brood inside any Nursery footprint.
-    let insideNursery = false;
-    for (let c = 0; c < chambers.length; c++) {
-      const chamber = chambers[c]!;
-      if (chamber.chamberType !== ChamberType.Nursery) continue;
-      const bx = chamber.posX >> FP_SHIFT;
-      const by = chamber.posY >> FP_SHIFT;
-      if (
-        tx >= bx && tx < bx + chamber.width &&
-        ty >= by && ty < by + chamber.height
-      ) {
-        insideNursery = true;
-        break;
+  //
+  // Iterate eggs then larvae as two separate arrays to avoid per-tick
+  // `concat()` allocation (this BFS runs every tick under v10+).
+  for (let pass = 0; pass < 2; pass++) {
+    const broodIds = pass === 0 ? eggIds : larvaeIds;
+    for (let i = 0; i < broodIds.length; i++) {
+      const bid = broodIds[i]!;
+      if (!isBroodReclaimable(ants, bid)) continue;
+      const tx = ants.posX[bid]! >> FP_SHIFT;
+      const ty = ants.posY[bid]! >> FP_SHIFT;
+      if (tx < 0 || tx >= width || ty < 0 || ty >= height) continue;
+      // Skip brood inside any Nursery footprint.
+      let insideNursery = false;
+      for (let c = 0; c < chambers.length; c++) {
+        const chamber = chambers[c]!;
+        if (chamber.chamberType !== ChamberType.Nursery) continue;
+        const bx = chamber.posX >> FP_SHIFT;
+        const by = chamber.posY >> FP_SHIFT;
+        if (
+          tx >= bx && tx < bx + chamber.width &&
+          ty >= by && ty < by + chamber.height
+        ) {
+          insideNursery = true;
+          break;
+        }
       }
+      if (insideNursery) continue;
+      const idx = ty * width + tx;
+      // Brood entities should always be on Open tiles in normal play (the
+      // queen-laying code drops them on Open Queen-chamber tiles, and the
+      // carry code drops them on Open Nursery tiles). Defensive guard so a
+      // mid-transition edge case doesn't seed a non-traversable cell.
+      if (data[idx] !== UndergroundTileState.Open) continue;
+      if (out[idx] !== -2) continue;
+      out[idx] = -1;
+      queue[tail++] = idx;
     }
-    if (insideNursery) continue;
-    const idx = ty * width + tx;
-    // Brood entities should always be on Open tiles in normal play (the
-    // queen-laying code drops them on Open Queen-chamber tiles, and the
-    // carry code drops them on Open Nursery tiles). Defensive guard so a
-    // mid-transition edge case doesn't seed a non-traversable cell.
-    if (data[idx] !== UndergroundTileState.Open) continue;
-    if (out[idx] !== -2) continue;
-    out[idx] = -1;
-    queue[tail++] = idx;
   }
 
   // BFS expansion through Open and BeingDug only — same contract as

@@ -6728,6 +6728,13 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
       chamberId: 1, chamberType: ChamberType.Queen, foodStored: 0,
       posX: 5 << FP_SHIFT, posY: 5 << FP_SHIFT, width: 2, height: 2,
     });
+    // Nursery chamber — required for v10 pickup gate. Empty space (no
+    // Open tiles needed for these unit tests; the gate just requires
+    // hasCompletedChamber to return true).
+    colony.chambers.push({
+      chamberId: 2, chamberType: ChamberType.Nursery, foodStored: 0,
+      posX: 12 << FP_SHIFT, posY: 12 << FP_SHIFT, width: 2, height: 2,
+    });
     // Brood entity (egg) at tile (5, 5).
     const broodId = allocateEntityId(world);
     initAnt(world.ants, broodId, {
@@ -6771,7 +6778,7 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
   });
 
   it('two nurses on the same brood tile: only the lower-id nurse claims', () => {
-    const { world, broodId } = setupV10NurseAndBroodOnTile({ sameTile: true });
+    const { world, nurseId, broodId } = setupV10NurseAndBroodOnTile({ sameTile: true });
     // Add a second nurse on the same tile (higher id than the first by
     // construction — entity ids are monotonic).
     const nurse2 = allocateEntityId(world);
@@ -6783,18 +6790,17 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
       subTask:  NursingSubState.MovingToBrood,
       zone:     Zone.Underground,
     });
-    // The first nurse from setup is the queen+brood-1 = entity id 2.
-    // (queen=0, brood=1, nurse=2). nurse2 is entity id 3.
+    expect(nurse2).toBeGreaterThan(nurseId); // entity ids are monotonic
     tickNurseActions(world);
     // The lower-id nurse claims; the second stays MovingToBrood.
-    expect(world.ants.carriedBy[broodId]).toBe(2);
-    expect(world.ants.carryingBroodId[2]).toBe(broodId);
+    expect(world.ants.carriedBy[broodId]).toBe(nurseId);
+    expect(world.ants.carryingBroodId[nurseId]).toBe(broodId);
     expect(world.ants.carryingBroodId[nurse2]).toBe(-1);
     expect(world.ants.subTask[nurse2]).toBe(NursingSubState.MovingToBrood);
   });
 
   it('already-carried brood (carrier ALIVE) is not claimed by another nurse', () => {
-    const { world, broodId } = setupV10NurseAndBroodOnTile({ sameTile: true });
+    const { world, nurseId, broodId } = setupV10NurseAndBroodOnTile({ sameTile: true });
     // Allocate a separate ALIVE ant to be the existing carrier — the
     // dead-carrier exception in findUncarriedBroodOnTile would let the
     // claim through if the carrier weren't alive.
@@ -6804,32 +6810,32 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     });
     world.ants.carriedBy[broodId] = otherCarrier;
     tickNurseActions(world);
-    // Original nurse (id 2) is on the brood tile but the brood was
-    // already claimed by an alive carrier; nurse stays in MovingToBrood.
-    expect(world.ants.carryingBroodId[2]).toBe(-1);
+    // Original nurse is on the brood tile but the brood was already claimed
+    // by an alive carrier; nurse stays in MovingToBrood.
+    expect(world.ants.carryingBroodId[nurseId]).toBe(-1);
     expect(world.ants.carriedBy[broodId]).toBe(otherCarrier);
-    expect(world.ants.subTask[2]).toBe(NursingSubState.MovingToBrood);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.MovingToBrood);
   });
 
   it('dead brood is skipped — even on the same tile, no claim happens', () => {
-    const { world, broodId } = setupV10NurseAndBroodOnTile({ sameTile: true });
+    const { world, nurseId, broodId } = setupV10NurseAndBroodOnTile({ sameTile: true });
     world.ants.alive[broodId] = 0;
     tickNurseActions(world);
-    expect(world.ants.carryingBroodId[2]).toBe(-1);
+    expect(world.ants.carryingBroodId[nurseId]).toBe(-1);
     expect(world.ants.carriedBy[broodId]).toBe(-1);
-    expect(world.ants.subTask[2]).toBe(NursingSubState.MovingToBrood);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.MovingToBrood);
   });
 
   it('Feeding nurse with no carry slot drops back to Idle (defensive guard)', () => {
     // Reachable only via state corruption — under normal v10 flow the carry
     // slot is always set when subTask=Feeding. Guard against it.
-    const { world } = setupV10NurseAndBroodOnTile({ sameTile: false });
+    const { world, nurseId } = setupV10NurseAndBroodOnTile({ sameTile: false });
     // Manually force the nurse into Feeding without a carry slot.
-    world.ants.subTask[2] = NursingSubState.Feeding;
-    world.ants.carryingBroodId[2] = -1;
+    world.ants.subTask[nurseId] = NursingSubState.Feeding;
+    world.ants.carryingBroodId[nurseId] = -1;
     tickNurseActions(world);
-    expect(world.ants.task[2]).toBe(AntTask.Idle);
-    expect(world.ants.subTask[2]).toBe(0);
+    expect(world.ants.task[nurseId]).toBe(AntTask.Idle);
+    expect(world.ants.subTask[nurseId]).toBe(0);
   });
 
   it('pre-v10 boundary (simVersion=v9): legacy teleport still fires, no carry slot is set', () => {
@@ -7059,11 +7065,14 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     expect(tilesUsed.size).toBe(2);
   });
 
-  it('no Nursery: nurse on a Queen-chamber tile claims but never deposits (Feeding holds)', () => {
-    // Without a Nursery footprint, isInsideNursery returns false everywhere
-    // — the carrier stays in Feeding, brood follows along, no deposit.
-    // Matches Rob's Phase-1 contract: with no Nursery, no carry happens
-    // (effectively — claim still happens but never resolves).
+  it('no Nursery: pickup is gated, nurse stays in MovingToBrood (no claim, no carry)', () => {
+    // Phase-1 contract: with no Nursery, no carry happens. The v10 pickup
+    // path is gated on hasCompletedChamber(Nursery) — without one, the
+    // nurse remains in MovingToBrood and the brood remains uncarried.
+    // Matches the pre-v10 P2 transport gate (transportBroodToNursery is
+    // also only called when a Nursery exists). Without this gate, a
+    // pre-Nursery colony's nurses would claim brood and softlock in
+    // Feeding forever (no nurseDeposit field, no isInsideNursery match).
     const { world, nurseId, broodId } = setupV10CarryWorld({
       nurseTileX: 5, nurseTileY: 5,
       broodTileX: 5, broodTileY: 5,
@@ -7071,13 +7080,9 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
       omitNursery: true,
     });
     tickNurseActions(world);
-    // Claimed, but no deposit → still in Feeding.
-    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
-    expect(world.ants.carryingBroodId[nurseId]).toBe(broodId);
-    // Run another tick: brood still attached, no deposit.
-    tickNurseActions(world);
-    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
-    expect(world.ants.carryingBroodId[nurseId]).toBe(broodId);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.MovingToBrood);
+    expect(world.ants.carryingBroodId[nurseId]).toBe(-1);
+    expect(world.ants.carriedBy[broodId]).toBe(-1);
   });
 
   it('1×1 Nursery: deposit collapses to the single Open tile (broodId % 1 === 0)', () => {
@@ -7092,6 +7097,35 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     expect(world.ants.task[nurseId]).toBe(AntTask.Idle);
     expect(world.ants.posX[broodId]! >> FP_SHIFT).toBe(14);
     expect(world.ants.posY[broodId]! >> FP_SHIFT).toBe(14);
+  });
+
+  it('integration: carrier + brood share a tile after tickAntMovement (resolveSameColonyOccupancy must not displace carried brood)', () => {
+    // Regression for the resolveSameColonyOccupancy interaction: under v10
+    // both carrier and brood end at the same tile each tick. The occupancy
+    // resolver iterates all alive entities and bumps higher-id same-tile
+    // ants to a neighbour. Without the v10 carry-aware exemption added in
+    // resolveSameColonyOccupancy, the brood (higher entity id by allocation
+    // order) would jitter off the carrier tile every tick and the next 16c
+    // sync would snap it back — visible as a 1-tile flicker.
+    const { world, nurseId, broodId } = setupV10CarryWorld({
+      nurseTileX: 5, nurseTileY: 5,
+      broodTileX: 5, broodTileY: 5,
+      nurseryTileX: 12, nurseryTileY: 12,
+    });
+    tickNurseActions(world); // claim — both at (5, 5), broodId carriedBy nurseId
+    expect(world.ants.carryingBroodId[nurseId]).toBe(broodId);
+    expect(broodId).toBeLessThan(nurseId); // brood allocated before nurse in helper
+    // Direct invocation of tickAntMovement runs resolveSameColonyOccupancy
+    // at its tail. The carry-aware exemption must keep the brood at the
+    // carrier's tile, not bump it sideways.
+    const rng = new Rng(0);
+    const digFlowFields = createDigFlowFields();
+    // Speed=0 carrier so movement doesn't stretch the tile distance during
+    // this tick — the only mutation we care about is the occupancy resolver.
+    world.ants.speed[nurseId] = 0;
+    tickAntMovement(world, rng, digFlowFields);
+    expect(world.ants.posX[broodId]).toBe(world.ants.posX[nurseId]);
+    expect(world.ants.posY[broodId]).toBe(world.ants.posY[nurseId]);
   });
 
   // ----- Issue #17 Phase 1.5 — death + maturation handling -----
@@ -7168,6 +7202,7 @@ describe('tickLifecycleTransitions — v10 larva→worker drops carry (#17 phase
     });
 
     // Larva at age = LARVA_MATURE_TICKS - 1 so a single tick promotes it.
+    // Spawn the larva at (5, 5) — its initial pre-carry tile.
     const larvaId = allocateEntityId(world);
     initAnt(world.ants, larvaId, {
       colonyId: COLONY_ID,
@@ -7179,17 +7214,25 @@ describe('tickLifecycleTransitions — v10 larva→worker drops carry (#17 phase
     colony.larvae.push(larvaId);
     colony.larvaeCount += 1;
 
-    // Carrier holding the larva.
+    // Carrier holding the larva — at a DIFFERENT tile (8, 7) so the test
+    // can prove the new worker stays at the carrier's tile, not the
+    // larva's pre-carry tile. (In normal v10 flow tickNurseActions
+    // step 16c keeps brood synced to carrier each tick, so by the time
+    // promotion fires both are at the carrier's tile.)
     const nurseId = allocateEntityId(world);
     initAnt(world.ants, nurseId, {
       colonyId: COLONY_ID,
-      posX:     (5 << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posX:     (8 << FP_SHIFT) + (FP_ONE >> 1),
+      posY:     (7 << FP_SHIFT) + (FP_ONE >> 1),
       task:     AntTask.Nursing, subTask: NursingSubState.Feeding,
       zone:     Zone.Underground,
     });
     world.ants.carryingBroodId[nurseId] = larvaId;
     world.ants.carriedBy[larvaId]       = nurseId;
+    // Manually pre-sync the larva's position to the carrier (mirrors what
+    // tickNurseActions Feeding branch does each tick).
+    world.ants.posX[larvaId] = world.ants.posX[nurseId]!;
+    world.ants.posY[larvaId] = world.ants.posY[nurseId]!;
 
     tickLifecycleTransitions(world, colony);
     // Larva promoted to worker; entity id preserved.
@@ -7201,10 +7244,11 @@ describe('tickLifecycleTransitions — v10 larva→worker drops carry (#17 phase
     // Carrier returned to Idle.
     expect(world.ants.task[nurseId]).toBe(AntTask.Idle);
     expect(world.ants.subTask[nurseId]).toBe(0);
-    // New worker stays at the carrier's tile (position-sync was the
-    // last write; lifecycle promotion doesn't move the entity).
-    expect(world.ants.posX[larvaId]! >> FP_SHIFT).toBe(5);
-    expect(world.ants.posY[larvaId]! >> FP_SHIFT).toBe(5);
+    // New worker stays at the carrier's tile (8, 7), NOT the larva's
+    // pre-carry tile (5, 5). This proves lifecycle promotion does not
+    // teleport the new worker.
+    expect(world.ants.posX[larvaId]! >> FP_SHIFT).toBe(8);
+    expect(world.ants.posY[larvaId]! >> FP_SHIFT).toBe(7);
   });
 
   it('egg→larva mid-carry: carry stays attached (entity id preserved)', async () => {

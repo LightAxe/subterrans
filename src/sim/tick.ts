@@ -691,8 +691,8 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       chamberBufs.queue,
     );
     // Issue #17 Phase 1 — Nursery-only deposit field for v10+ carrying nurses.
-    // Pre-v10 the field is allocated but unread; cheap to keep it in sync so
-    // a v10 sim version flip on a loaded save lands on a populated buffer.
+    // Pre-v10 the field is allocated but unread; computed alongside the other
+    // chamber fields for code symmetry — no measurable cost.
     computeChamberFlowField(
       underground,
       colony.chambers,
@@ -720,18 +720,12 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       if (!underground) continue;
       const gridSize = underground.width * underground.height;
       const chamberBufs = ensureChamberFlowFields(chamberFlowFields, colony.colonyId, gridSize);
-      // Concatenate eggs ∪ larvae into the brood seed list. Allocation-
-      // sensitive: re-uses no scratch buffer, but eggs/larvae are tiny
-      // arrays (typically O(10)).
-      const broodIds = colony.eggs.concat(colony.larvae);
       computeNursingPickupField(
         underground,
         colony.chambers,
-        world.ants.posX,
-        world.ants.posY,
-        world.ants.alive,
-        world.ants.carriedBy,
-        broodIds,
+        world.ants,
+        colony.eggs,
+        colony.larvae,
         chamberBufs.nursing,
         chamberBufs.queue,
       );

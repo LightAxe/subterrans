@@ -480,6 +480,21 @@ export function killAnt(ants: AntComponents, id: EntityId): void {
 }
 
 /**
+ * Issue #17 Phase 1 — predicate: is brood `bid` available for a v10 nurse to
+ * claim? Returns true iff the brood is alive AND either uncarried OR carried
+ * by a dead ant (orphan from a mid-carry death).
+ *
+ * Shared by `findUncarriedBroodOnTile` (per-tile pickup match) and
+ * `computeNursingPickupField` (chamber-flow seeding). Keeping the predicate
+ * single-sourced avoids drift between the two consumers.
+ */
+export function isBroodReclaimable(ants: AntComponents, bid: EntityId): boolean {
+  if (ants.alive[bid] !== 1) return false;
+  const cby = ants.carriedBy[bid]!;
+  return cby === -1 || ants.alive[cby] !== 1;
+}
+
+/**
  * Returns true if the entity at `id` is currently alive.
  * Returns false for never-initialized slots (alive[id] === 0 by default).
  */

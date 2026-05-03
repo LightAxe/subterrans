@@ -309,11 +309,18 @@ export function tickLifecycleTransitions(world: WorldState, colony: ColonyRecord
       if (world.simVersion >= SIM_VERSION_V10_VISIBLE_BROOD_CARRY) {
         const carrierId = ants.carriedBy[id]!;
         if (carrierId !== -1) {
+          // Carrier-side cleanup is gated on the carrier still being alive
+          // AND still carrying THIS entity — guards against state desync
+          // (e.g. carrier already started carrying a different brood).
           if (ants.alive[carrierId] === 1 && ants.carryingBroodId[carrierId] === id) {
             ants.carryingBroodId[carrierId] = -1;
             ants.task[carrierId]    = AntTask.Idle;
             ants.subTask[carrierId] = 0;
           }
+          // Always clear the matured worker's `carriedBy` so the new
+          // worker is not flagged as carried, regardless of carrier-side
+          // state. The new worker is now in colony.workers (no longer
+          // brood) and will not be referenced by carry-aware code.
           ants.carriedBy[id] = -1;
         }
       }
