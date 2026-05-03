@@ -846,29 +846,39 @@ export function tickNurseActions(world: WorldState): void {
       const colony = world.colonies[colonyId];
       if (!colony) continue;
 
+      // Finite-nursing release — three cases (PR #56 codex P1 + P2).
+      // Any "no claim possible" path flips subTask to Feeding without a
+      // carry slot. Next tick the Feeding branch's defensive guard
+      // (carryingBroodId === -1) releases to Idle, mirroring the
+      // pre-v10 MovingToBrood→Feeding→Idle two-tick cadence. Without
+      // these releases, nurses without claimable brood would strand in
+      // MovingToBrood forever — step 10a only reallocates Idle ants.
+      //
+      // Case 1 (colony-level): no claimable brood exists anywhere in
+      // the colony — pickup field has no sources at all. The nurse may
+      // be mid-tunnel and never reach a source tile, so the release
+      // must fire regardless of her current tile. Covers brood
+      // matured/died/all-claimed mid-walk.
+      if (!colonyHasClaimableBrood(colony, ants)) {
+        ants.subTask[id] = NursingSubState.Feeding;
+        continue;
+      }
+
       const tileX = ants.posX[id]! >> FP_SHIFT;
       const tileY = ants.posY[id]! >> FP_SHIFT;
 
-      // Finite-nursing release (PR #56 codex P1 + P2). Any "no claim
-      // possible" path below routes through this helper: if the nurse
-      // has arrived at a source tile (Queen-chamber footprint, or —
-      // defensively — a Nursery footprint) flip to Feeding without
-      // setting a carry slot. Next tick the Feeding branch's defensive
-      // guard (carryingBroodId === -1) releases to Idle, mirroring the
-      // pre-v10 MovingToBrood→Feeding→Idle two-tick cadence. Without
-      // this, nurses without claimable brood would strand in
-      // MovingToBrood forever — step 10a only reallocates Idle ants.
+      // Cases 2 + 3 (tile-level): brood exists somewhere but pickup is
+      // gated for THIS nurse on THIS tile. Release only when she's on
+      // a source tile (i.e., she has actually arrived). An in-transit
+      // off-source nurse keeps walking — she'll reach a brood tile.
       const onSourceTile =
         isInsideQueenChamber(colony, tileX, tileY) ||
         isInsideNursery(colony, tileX, tileY);
 
-      // Symmetric with the pre-v10 P2 transport gate (the legacy path
-      // checks the same condition before calling transportBroodToNursery).
-      // Without a completed Nursery there is no destination — skip pickup.
-      // Defensive: allocateWorkers gates nurseCount on hasNursery, so a
-      // Nursing ant should never exist before a completed Nursery in
-      // normal flow. The release branch fires for migrated/corrupted/
-      // scripted state where a Nursing ant appears anyway.
+      // Case 2: no completed Nursery → no destination for the carry.
+      // Symmetric with the pre-v10 transport gate. Defensive — allocator
+      // gates nurseCount on hasNursery, so a Nursing ant should never
+      // exist before a completed Nursery in normal flow.
       if (!hasCompletedChamber(colony, ChamberType.Nursery)) {
         if (onSourceTile) ants.subTask[id] = NursingSubState.Feeding;
         continue;
@@ -880,6 +890,9 @@ export function tickNurseActions(world: WorldState): void {
       // selection order).
       const broodId = findUncarriedBroodOnTile(ants, colony, tileX, tileY);
       if (broodId < 0) {
+        // Case 3: brood exists in colony but not on this tile (lower-id
+        // nurse claimed first, brood inside Nursery, or arrived at a
+        // stale source tile). Release if on-source; keep walking otherwise.
         if (onSourceTile) ants.subTask[id] = NursingSubState.Feeding;
         continue;
       }
@@ -961,6 +974,41 @@ export function tickNurseActions(world: WorldState): void {
  * larvae and picks the lowest entity id for determinism (matches the pre-
  * v10 transportBroodToNursery selection order).
  */
+/**
+ * Issue #17 Phase 1 — true iff `colony` owns at least one alive,
+ * reclaimable, OUTSIDE-Nursery brood entity (egg or larva). Equivalent
+ * to "the v10 nursing pickup field has at least one source." Both
+ * `computeNursingPickupField` (BFS seeding) and `findUncarriedBroodOnTile`
+ * (per-tile pickup match) apply the same filter: alive AND
+ * (uncarried OR carrier-dead) AND outside any Nursery footprint.
+ *
+ * Used by tickNurseActions to release MovingToBrood nurses to Idle when
+ * the pickup pool is empty — without this the nurse would strand mid-
+ * tunnel forever (no field source → can't pathfind anywhere → never
+ * reaches a source tile → finite-nursing release never fires). Brood
+ * already inside the Nursery footprint is intentionally excluded
+ * because it has already been delivered — no carry needed.
+ */
+function colonyHasClaimableBrood(colony: ColonyRecord, ants: AntComponents): boolean {
+  for (let i = 0; i < colony.eggs.length; i++) {
+    const bid = colony.eggs[i]!;
+    if (!isBroodReclaimable(ants, bid)) continue;
+    const tx = ants.posX[bid]! >> FP_SHIFT;
+    const ty = ants.posY[bid]! >> FP_SHIFT;
+    if (isInsideNursery(colony, tx, ty)) continue;
+    return true;
+  }
+  for (let i = 0; i < colony.larvae.length; i++) {
+    const bid = colony.larvae[i]!;
+    if (!isBroodReclaimable(ants, bid)) continue;
+    const tx = ants.posX[bid]! >> FP_SHIFT;
+    const ty = ants.posY[bid]! >> FP_SHIFT;
+    if (isInsideNursery(colony, tx, ty)) continue;
+    return true;
+  }
+  return false;
+}
+
 function findUncarriedBroodOnTile(
   ants: AntComponents,
   colony: ColonyRecord,

@@ -3840,7 +3840,11 @@ describe('tickNurseActions', () => {
   });
 
   it('colony with zero chambers: nursing ant unchanged', () => {
+    // Pre-v10 path — under v10 the new finite-nursing colony-level
+    // release fires when there's no claimable brood. This test exercises
+    // the legacy on-chamber-tile flip behaviour, so pin to v9.
     const world = createWorldState(42, 64);
+    world.simVersion = SIM_VERSION_V9_CANCEL_DROPS_PENDING;
     const queenId = allocateEntityId(world);
     initAnt(world.ants, queenId, { colonyId: COLONY_ID, posX: 0, posY: 0, speed: 0 });
     const colony = createColonyRecord(COLONY_ID, queenId);
@@ -7021,6 +7025,55 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     // No release — nurse keeps walking next tick.
     expect(world.ants.task[nurseId]).toBe(AntTask.Nursing);
     expect(world.ants.subTask[nurseId]).toBe(NursingSubState.MovingToBrood);
+  });
+
+  it('finite-nursing colony-level release: nurse mid-tunnel with no claimable brood releases (#56 codex P1 round 2)', () => {
+    // The pickup field has zero seeds when no claimable brood exists,
+    // so a mid-tunnel nurse can\'t pathfind anywhere. Without the colony-
+    // level release, she\'d strand in MovingToBrood forever. The release
+    // fires regardless of source-tile status because there\'s no work
+    // anywhere — no point in waiting for her to arrive somewhere.
+    const { world, nurseId, broodId } = setupV10NurseAndBroodOnTile({ sameTile: false });
+    // Kill the only brood so the colony has no claimable brood.
+    world.ants.alive[broodId] = 0;
+    // Tick 1: colony-level check fires → Feeding (release-pending).
+    tickNurseActions(world);
+    expect(world.ants.task[nurseId]).toBe(AntTask.Nursing);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
+    // Tick 2: Feeding-no-carry guard → Idle.
+    tickNurseActions(world);
+    expect(world.ants.task[nurseId]).toBe(AntTask.Idle);
+  });
+
+  it('finite-nursing colony-level release: nurse mid-tunnel WITH brood elsewhere keeps walking', () => {
+    // Defensive: if brood exists somewhere in the colony, the colony-level
+    // release does NOT fire — the nurse keeps walking toward the brood.
+    // Only the on-source-tile release applies in that case.
+    const { world, nurseId } = setupV10NurseAndBroodOnTile({ sameTile: false });
+    tickNurseActions(world);
+    expect(world.ants.task[nurseId]).toBe(AntTask.Nursing);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.MovingToBrood);
+  });
+
+  it('finite-nursing colony-level release: brood ALL inside Nursery counts as no-claim (#56 round 3 edge)', () => {
+    // colonyHasClaimableBrood must mirror the pickup field's source set —
+    // brood inside Nursery is excluded by the seed loop AND by
+    // findUncarriedBroodOnTile, so it must also be excluded here.
+    // Without the inside-Nursery filter, a queen-dead colony whose brood
+    // sits in the Nursery un-matured would still claim "has brood,"
+    // pickup field has no sources (brood is inside Nursery), and the
+    // mid-tunnel nurse strands.
+    const { world, nurseId, broodId } = setupV10NurseAndBroodOnTile({ sameTile: false });
+    // Move the brood inside the Nursery footprint (12, 12 — 2x2).
+    world.ants.posX[broodId] = (12 << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[broodId] = (12 << FP_SHIFT) + (FP_ONE >> 1);
+    // Now colonyHasClaimableBrood should return false (brood inside
+    // Nursery filtered out), so the colony-level release fires.
+    tickNurseActions(world);
+    expect(world.ants.task[nurseId]).toBe(AntTask.Nursing);
+    expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
+    tickNurseActions(world);
+    expect(world.ants.task[nurseId]).toBe(AntTask.Idle);
   });
 
   it('pre-v10 boundary (simVersion=v9): legacy teleport still fires, no carry slot is set', () => {

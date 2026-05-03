@@ -3605,7 +3605,15 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     // The load-bearing setup here is brood + Nursery + workerCount=1 (driving the
     // cap); targetRatio is irrelevant (the cap saturates first and forage_share
     // would be 0 even with forage=10).
+    //
+    // Pinned to v9 — the test's contrived brood-in-Nursery layout (30 larvae
+    // all stacked at tile (0,0) inside the Nursery footprint) hits the v10
+    // colony-level finite-nursing release and flips subTask from
+    // MovingToBrood to Feeding. The allocator behavior under test is
+    // unchanged either way, but the post-tick subTask assertion specifically
+    // checks the pre-v10 freshly-assigned MovingToBrood state.
     const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
+    world.simVersion = SIM_VERSION_V9_CANCEL_DROPS_PENDING;
     const colony = world.colonies[colonyId]!;
     const underground = world.undergroundGrids[colonyId]!;
 
@@ -3895,7 +3903,14 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     // under the 1-cap) and the forage→…→nurse iteration assigns the Idle
     // ant to Foraging — starving nurse for the entire dig duration. WR-07
     // holds digDemand=1 while actualDig>0, preserving the carve.
+    //
+    // Pinned to v9 — same reason as Test 6 above: the contrived
+    // brood-stacked-in-Nursery setup hits the v10 colony-level finite-
+    // nursing release and flips subTask to Feeding, breaking the
+    // post-tick subTask=MovingToBrood assertion. Allocator behavior
+    // under test is unaffected.
     const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
+    world.simVersion = SIM_VERSION_V9_CANCEL_DROPS_PENDING;
     const colony = world.colonies[colonyId]!;
     const underground = world.undergroundGrids[colonyId]!;
 
