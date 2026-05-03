@@ -81,10 +81,10 @@ export function drawAutotiledUndergroundTile(
 
   // 2. Quarter-tile masks. We paint the OPPOSITE substrate's base color into
   //    the quadrant region the autotile says belongs to the other kind. Solid
-  //    color (no dither) — the chamfer/bite reads as a clean "carved" region
+  //    color (no dither) — the chamfer reads as a clean "carved" region
   //    against the dithered substrate behind it, which is the right contrast
   //    for a hard-pixel-art look. Each helper sets its own fillStyle so the
-  //    chip / inner-corner / chamfer paints don't bleed into one another.
+  //    chip and chamfer paints don't bleed into one another.
   //
   // For each quadrant, the (h, v) classification picks a shape. h is the
   // cardinal-horizontal neighbor (W for NW/SW, E for NE/SE); v is the
