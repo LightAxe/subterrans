@@ -46,7 +46,7 @@ import {
   drawBarrenEarthSubstrate,
   drawOpenFloorTile,
 } from './terrain-atlas.js';
-import { drawAutotiledUndergroundTile, drawUndergroundRim } from './underground-autotile.js';
+import { drawAutotiledUndergroundTile, drawUndergroundRim, boundaryOffsetH, boundaryOffsetV } from './underground-autotile.js';
 import { gatherUnderground3x3Neighbors, type Neighbors3x3 } from './underground-neighbors.js';
 import type { CameraState } from './camera.js';
 
@@ -256,8 +256,15 @@ export function drawUndergroundEntities(
     const color = CHAMBER_COLORS[chamber.chamberType] ?? COLOR_CHAMBER_QUEEN;
     const w = dims.width  * TILE_SIZE_PX;
     const h = dims.height * TILE_SIZE_PX;
+
+    // Issue #48 v4 — soften chamber edges with the same boundary
+    // displacement used for wall/open transitions. Per-row scanline:
+    // L/R edges displaced via boundaryOffsetV, T/B edges via
+    // boundaryOffsetH. Each pixel of the chamber's nominal bbox is
+    // painted iff it falls inside ALL four displaced edges.
     gfx.fillStyle(color, 1);
-    gfx.fillRect(screenX, screenY, w, h);
+    drawSoftenedChamberFill(gfx, screenX, screenY, tileX, tileY, dims.width, dims.height);
+
     if (chamber.chamberType === ChamberType.Queen) {
       gfx.fillStyle(COLOR_QUEEN_OUTLINE, 0.7);
       gfx.fillRect(screenX,         screenY,         w, 2);     // top
@@ -469,4 +476,87 @@ export function drawUnderground(
 ): void {
   drawUndergroundTerrain(gfx, curr, cam, activeUndergroundColonyId);
   drawUndergroundEntities(gfx, sprites, prev, curr, alpha, cam, activeUndergroundColonyId, facing);
+}
+
+// ---------------------------------------------------------------------------
+// drawSoftenedChamberFill — issue #48 follow-up
+// ---------------------------------------------------------------------------
+//
+// Paint a chamber's color fill with the same boundary-displacement system
+// the wall/open transition uses. Each of the four chamber edges (top,
+// bottom, left, right) wobbles per-pixel by ±BOUNDARY_AMP via the same
+// hashed control points, so the chamber color flows around an organic
+// curve instead of a 90° rectangle.
+//
+// Caller has already set fillStyle to the chamber color. This function
+// is responsible for the geometry only.
+//
+// Per-row scanline. For each row inside the chamber's broadened bbox,
+// compute the row's left/right bounds via boundaryOffsetV, then walk
+// columns inside those bounds and paint where the column's top/bottom
+// boundaryOffsetH limits include the current row. Aggregates contiguous
+// painted columns into a single fillRect to keep the call count down.
+// ---------------------------------------------------------------------------
+function drawSoftenedChamberFill(
+  gfx: GfxLike,
+  screenX: number,
+  screenY: number,
+  tileX: number,
+  tileY: number,
+  widthTiles: number,
+  heightTiles: number,
+): void {
+  const w = widthTiles  * TILE_SIZE_PX;
+  const h = heightTiles * TILE_SIZE_PX;
+  const leftEdgeCol  = tileX;
+  const rightEdgeCol = tileX + widthTiles;
+  const topEdgeRow   = tileY;
+  const bottomEdgeRow = tileY + heightTiles;
+
+  // Pre-compute per-column top/bottom offsets — these don't depend on
+  // the row gy, so caching them avoids recomputing per-row inside the
+  // inner loop.
+  const SLACK = 6; // a few px > BOUNDARY_AMP to be safe with rounding
+  const colTop:    number[] = new Array(w + 2 * SLACK);
+  const colBottom: number[] = new Array(w + 2 * SLACK);
+  for (let lx = -SLACK; lx < w + SLACK; lx++) {
+    const gx = tileX * TILE_SIZE_PX + lx;
+    colTop[lx + SLACK]    = boundaryOffsetH(gx, topEdgeRow);
+    colBottom[lx + SLACK] = boundaryOffsetH(gx, bottomEdgeRow);
+  }
+
+  for (let ly = -SLACK; ly < h + SLACK; ly++) {
+    const gy = tileY * TILE_SIZE_PX + ly;
+    const leftDisp  = boundaryOffsetV(gy, leftEdgeCol);
+    const rightDisp = boundaryOffsetV(gy, rightEdgeCol);
+    const colStart = leftDisp;          // local x of leftmost candidate column
+    const colEnd   = w + rightDisp;     // local x exclusive
+    if (colEnd <= colStart) continue;
+
+    // Walk the row, find contiguous runs where the column's top/bottom
+    // offset bracket admits this row, paint each run as one fillRect.
+    let runStart = -1;
+    for (let lx = colStart; lx < colEnd; lx++) {
+      const idx = lx + SLACK;
+      if (idx < 0 || idx >= colTop.length) {
+        if (runStart >= 0) {
+          gfx.fillRect(screenX + runStart, screenY + ly, lx - runStart, 1);
+          runStart = -1;
+        }
+        continue;
+      }
+      const inRow =
+        ly >= colTop[idx]! &&
+        ly <  h + colBottom[idx]!;
+      if (inRow) {
+        if (runStart < 0) runStart = lx;
+      } else if (runStart >= 0) {
+        gfx.fillRect(screenX + runStart, screenY + ly, lx - runStart, 1);
+        runStart = -1;
+      }
+    }
+    if (runStart >= 0) {
+      gfx.fillRect(screenX + runStart, screenY + ly, colEnd - runStart, 1);
+    }
+  }
 }

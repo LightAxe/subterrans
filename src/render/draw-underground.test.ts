@@ -362,7 +362,7 @@ describe('drawUndergroundEntities', () => {
     expect(sprites.calls[0]!.tint).toBe(COLOR_PLAYER_COLONY);
   });
 
-  it('draws a queen chamber fillRect with COLOR_CHAMBER_QUEEN covering chamber dimensions', () => {
+  it('draws queen chamber fill with COLOR_CHAMBER_QUEEN spanning the chamber bbox (issue #48 v4 — softened edges, per-row scanlines)', () => {
     const queenDims = CHAMBER_DIMENSIONS[ChamberType.Queen];
     const chamber: ChamberRecord = {
       chamberId:   1,
@@ -378,12 +378,18 @@ describe('drawUndergroundEntities', () => {
     const cam = makeCamera(5, 10, 20, 20);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
-    const rects = gfx.callsOf('fillRect');
-    const chamberRect = rects.find(r => r.args[2] === queenDims.width * TILE_SIZE_PX && r.args[3] === queenDims.height * TILE_SIZE_PX);
-    expect(chamberRect).toBeDefined();
-
+    // Issue #48 v4 — chamber fill uses per-row scanlines softened by
+    // the boundary-displacement system, so there's no single fillRect
+    // matching the full bbox. Verify INSTEAD that the QUEEN color was
+    // selected and that there are MANY fillRects in the chamber's
+    // pixel-row range (one per row at minimum).
     const queenStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_CHAMBER_QUEEN);
     expect(queenStyles.length).toBeGreaterThanOrEqual(1);
+    // Expect at least roughly height-in-pixels fillRects — the per-row
+    // scanline produces ~h_px scanlines (each row is one or more
+    // fillRect runs depending on how the boundary cut splits the row).
+    const rects = gfx.callsOf('fillRect');
+    expect(rects.length).toBeGreaterThanOrEqual(queenDims.height * TILE_SIZE_PX / 2);
   });
 
   it('draws eggs via sprites.drawStatic (kind=egg) from brood entity position', () => {

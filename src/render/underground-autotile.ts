@@ -192,7 +192,7 @@ function drawBoundaryDisplacement(
  * tiles) compute the SAME globalX positions for shared boundary cells,
  * and use the SAME `edgeRowIdx`, so the offset agrees across tiles.
  */
-function boundaryOffsetH(globalX: number, edgeRowIdx: number): number {
+export function boundaryOffsetH(globalX: number, edgeRowIdx: number): number {
   const cpA = Math.floor(globalX / BOUNDARY_CP_SPACING) * BOUNDARY_CP_SPACING;
   const cpB = cpA + BOUNDARY_CP_SPACING;
   const t = (globalX - cpA) / BOUNDARY_CP_SPACING;
@@ -206,7 +206,7 @@ function boundaryOffsetH(globalX: number, edgeRowIdx: number): number {
 }
 
 /** Vertical-edge displacement, mirrored math. */
-function boundaryOffsetV(globalY: number, edgeColIdx: number): number {
+export function boundaryOffsetV(globalY: number, edgeColIdx: number): number {
   const cpA = Math.floor(globalY / BOUNDARY_CP_SPACING) * BOUNDARY_CP_SPACING;
   const cpB = cpA + BOUNDARY_CP_SPACING;
   const t = (globalY - cpA) / BOUNDARY_CP_SPACING;
