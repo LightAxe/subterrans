@@ -77,6 +77,7 @@ import {
   createChamberFlowFields,
   ensureChamberFlowFields,
   computeChamberFlowField,
+  computeNursingPickupField,
   FOOD_CHAMBER_TYPES,
   NURSING_CHAMBER_TYPES,
   NURSERY_CHAMBER_TYPES,
@@ -4115,6 +4116,143 @@ describe('chamber-flow nurseDeposit field (#17 phase 1)', () => {
     for (let y = 5; y < 8; y++) {
       for (let x = 5; x < 8; x++) {
         expect(bufs.nurseDeposit[y * W + x]).toBe(-2);
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #17 Phase 1 — nursing PICKUP field. Seeds from uncarried-brood
+// entity tiles outside Nursery only. The chamber-flow recompute under v10+
+// runs this every tick (brood positions move with carriers).
+// ---------------------------------------------------------------------------
+
+describe('chamber-flow nursing pickup field (#17 phase 1)', () => {
+  it('UAT regression: routes to brood tiles only, NOT to non-egg Queen tiles', () => {
+    // The original Phase 1.3 implementation seeded EVERY Queen-chamber Open
+    // tile as a source. A 5×3 Queen chamber with 2 eggs would have 15
+    // sources, not 2. The BFS routed nurses to whichever Queen tile was
+    // geographically closest, often a NON-egg tile — the nurse arrived,
+    // found no brood, and finite-nursing-released. She never reached the
+    // egg. This test pins the post-fix contract: only brood-entity tiles
+    // are sources, so the BFS routes nurses directly to eggs.
+    const { world, underground, colony, colonyId } = setupWorldWithUnderground(40, 30);
+    // Excavate a Queen chamber at (30..34, 8..10) — 5×3, matching the
+    // F9-debug case from UAT.
+    for (let dy = 0; dy < 3; dy++) {
+      for (let dx = 0; dx < 5; dx++) {
+        ugSet(underground, 30 + dx, 8 + dy, UndergroundTileState.Open);
+      }
+    }
+    colony.chambers.push({
+      chamberId: 1, chamberType: ChamberType.Queen, foodStored: 0,
+      posX: 30 << FP_SHIFT, posY: 8 << FP_SHIFT, width: 5, height: 3,
+    });
+    // Two eggs in only 2 of the 15 Queen tiles.
+    const eggA = allocateEntityId(world);
+    initAnt(world.ants, eggA, {
+      colonyId,
+      posX: (33 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (8 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle, speed: 0, zone: Zone.Underground,
+    });
+    colony.eggs.push(eggA);
+    const eggB = allocateEntityId(world);
+    initAnt(world.ants, eggB, {
+      colonyId,
+      posX: (30 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (9 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle, speed: 0, zone: Zone.Underground,
+    });
+    colony.eggs.push(eggB);
+
+    const cache = createChamberFlowFields();
+    const gridSize = underground.width * underground.height;
+    const bufs = ensureChamberFlowFields(cache, colonyId, gridSize);
+    computeNursingPickupField(
+      underground, colony.chambers, world.ants,
+      colony.eggs, colony.larvae,
+      bufs.nursing, bufs.queue,
+    );
+
+    const W = underground.width;
+    // The two egg tiles ARE sources (-1).
+    expect(bufs.nursing[8 * W + 33]).toBe(-1); // eggA
+    expect(bufs.nursing[9 * W + 30]).toBe(-1); // eggB
+    // Other Queen tiles are NOT sources — they carry a step direction
+    // (0..3) routing them toward the nearest egg, never -1.
+    const otherQueenTiles: Array<[number, number]> = [
+      [30, 8], [31, 8], [32, 8],         [34, 8], // row 8 minus eggA
+      [31, 9], [32, 9], [33, 9], [34, 9],         // row 9 minus eggB
+      [30, 10], [31, 10], [32, 10], [33, 10], [34, 10], // row 10
+    ];
+    for (const [tx, ty] of otherQueenTiles) {
+      const v = bufs.nursing[ty * W + tx]!;
+      expect(v).not.toBe(-1);
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(3);
+    }
+  });
+
+  it('orphan brood outside any chamber is also seeded (carrier-death reclaim path)', () => {
+    // Brood dropped at a tunnel tile after a carrier death must still be
+    // reachable. The seed loop's "outside Nursery" exclusion covers that.
+    const { world, underground, colony, colonyId } = setupWorldWithUnderground(20, 20);
+    // Tunnel at (5, 5).
+    ugSet(underground, 5, 5, UndergroundTileState.Open);
+    // Orphan brood at the tunnel tile.
+    const orphan = allocateEntityId(world);
+    initAnt(world.ants, orphan, {
+      colonyId,
+      posX: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle, speed: 0, zone: Zone.Underground,
+    });
+    colony.eggs.push(orphan);
+
+    const cache = createChamberFlowFields();
+    const gridSize = underground.width * underground.height;
+    const bufs = ensureChamberFlowFields(cache, colonyId, gridSize);
+    computeNursingPickupField(
+      underground, colony.chambers, world.ants,
+      colony.eggs, colony.larvae,
+      bufs.nursing, bufs.queue,
+    );
+    expect(bufs.nursing[5 * underground.width + 5]).toBe(-1);
+  });
+
+  it('no uncarried brood: field has no sources (all -2)', () => {
+    // No brood at all → no seeds → field is all-(-2). Nurses with no work
+    // get nowhere; the finite-nursing release fires when they happen to
+    // be on a Queen/Nursery tile (allocateWorkers should produce
+    // nurseCount=0 in this case, so it's only a defensive concern).
+    const { world, underground, colony, colonyId } = setupWorldWithUnderground(16, 16);
+    void world;
+    colony.chambers.push({
+      chamberId: 1, chamberType: ChamberType.Queen, foodStored: 0,
+      posX: 5 << FP_SHIFT, posY: 5 << FP_SHIFT, width: 2, height: 2,
+    });
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        ugSet(underground, 5 + dx, 5 + dy, UndergroundTileState.Open);
+      }
+    }
+
+    const cache = createChamberFlowFields();
+    const gridSize = underground.width * underground.height;
+    const bufs = ensureChamberFlowFields(cache, colonyId, gridSize);
+    computeNursingPickupField(
+      underground, colony.chambers, world.ants,
+      colony.eggs, colony.larvae,
+      bufs.nursing, bufs.queue,
+    );
+    const W = underground.width;
+    // Queen tiles previously seeded as -1 by the dropped Seed (1) are
+    // now -2 (no sources at all). This is the regression test that
+    // would have failed pre-fix.
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        expect(bufs.nursing[(5 + dy) * W + (5 + dx)]).toBe(-2);
       }
     }
   });

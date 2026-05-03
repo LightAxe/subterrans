@@ -226,30 +226,27 @@ export const NURSERY_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [ChamberType.Nu
  * Issue #17 Phase 1 — multi-source BFS toward brood pickup tiles for v10+
  * Nursing ants in the MovingToBrood substate.
  *
- * Seeded from:
- *   1. Every Open tile inside any Queen chamber (where new eggs spawn).
- *   2. Every alive uncarried brood entity (egg or larva) tile that is NOT
- *      inside any Nursery footprint — covers brood dropped at a carrier's
- *      death tile that needs to be re-claimed.
+ * Seeded from every alive uncarried brood entity (egg or larva) tile
+ * that is NOT inside any Nursery footprint. Brood inside the Queen
+ * chamber, brood orphaned at a tunnel tile after a carrier death, and
+ * any other uncarried brood outside a Nursery are all included.
  *
  * Brood already inside a Nursery is excluded — it has reached its
- * destination and shouldn't lure pickups. Carried brood (carriedBy >= 0)
- * is excluded — a second nurse must not race onto an already-claimed
- * brood (race resolution lives in tickNurseActions; this just keeps the
- * field from advertising a stale pickup target).
+ * destination and shouldn't lure pickups. Carried brood (carriedBy >= 0
+ * with an alive carrier) is excluded — a second nurse must not race onto
+ * an already-claimed brood (race resolution lives in tickNurseActions;
+ * this just keeps the field from advertising a stale pickup target).
  *
  * Output is a step-direction grid identical to computeChamberFlowField
  * (-1 = source, -2 = unreachable, 0..3 = step N/E/S/W).
  *
- * Deterministic: chamber seed order is chamber array order × row-major
- * footprint; brood seed order is eggIds first then larvaeIds, each in
- * array order. Duplicate sources are idempotent (the `out[idx] !== -2`
+ * Deterministic: brood seed order is eggIds first then larvaeIds, each
+ * in array order. Duplicate sources are idempotent (the `out[idx] !== -2`
  * guard skips re-seeding).
  *
  * @param underground Colony underground grid (read-only).
- * @param chambers    Colony chambers (used for Queen seeds and Nursery
- *                    footprints — the Nursery footprints are read to
- *                    exclude brood already deposited).
+ * @param chambers    Colony chambers (used to exclude brood already
+ *                    deposited inside a Nursery footprint).
  * @param ants        The world.ants AntComponents struct (reads
  *                    posX/posY/alive/carriedBy via isBroodReclaimable).
  * @param eggIds      colony.eggs for the colony being computed.
@@ -272,27 +269,18 @@ export function computeNursingPickupField(
 
   let tail = 0;
 
-  // Seed (1): Queen chamber Open tiles.
-  for (let c = 0; c < chambers.length; c++) {
-    const chamber = chambers[c]!;
-    if (chamber.chamberType !== ChamberType.Queen) continue;
-    const baseX = chamber.posX >> FP_SHIFT;
-    const baseY = chamber.posY >> FP_SHIFT;
-    for (let ty = 0; ty < chamber.height; ty++) {
-      for (let tx = 0; tx < chamber.width; tx++) {
-        const cx = baseX + tx;
-        const cy = baseY + ty;
-        if (cx < 0 || cx >= width || cy < 0 || cy >= height) continue;
-        const idx = cy * width + cx;
-        if (data[idx] !== UndergroundTileState.Open) continue;
-        if (out[idx] !== -2) continue;
-        out[idx] = -1;
-        queue[tail++] = idx;
-      }
-    }
-  }
-
-  // Seed (2): uncarried brood entities outside Nursery, on Open tiles.
+  // Seed: uncarried brood entities outside Nursery, on Open tiles.
+  //
+  // Earlier this function ALSO seeded every Queen-chamber Open tile
+  // (the now-removed "Seed (1)"). That over-seeded — a Queen chamber is
+  // typically 5×3 with at most a handful of eggs at any time, so most
+  // Queen tiles have no brood. The BFS routed nurses to the geographically
+  // nearest Queen tile, which often was NOT one of the egg-bearing tiles.
+  // When the nurse arrived at a non-egg Queen tile, the pickup gate found
+  // no brood there and the finite-nursing release fired — the nurse was
+  // sent back to Idle without ever reaching an egg. Brood-tile-only
+  // seeding routes nurses directly to the egg tile via BFS, so the
+  // first-arrival pickup gate succeeds.
   // Brood inside Nursery doesn't seed (already deposited); carried brood
   // doesn't seed (a second nurse mustn't race onto it). Dead-carrier
   // exception: if `carriedBy[bid]` points to an ant whose `alive` is 0,
