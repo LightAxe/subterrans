@@ -254,81 +254,132 @@ export function drawUndergroundRim(
   const last = TILE_SIZE_PX - 1;
 
   // Heavy band — outermost pixel row/column on each wall-facing edge.
-  // Clip away the half of an edge that belongs to an adjacent chamfer so the
-  // rim doesn't leave faint grid-aligned stubs through diagonal corners.
+  // Clip ONLY the chamfer-occupied portion of the half-edge (codex P2 pass —
+  // the previous "clip whole half" rule over-clipped: at row 1 of the N rim,
+  // the NW chamfer covers cols 0..6 only, so col 7 should still get rim
+  // shading. The depth-aware clip uses HALF - rowFromEdge so each band's
+  // clip width matches the chamfer's actual width at that row.
+  //
+  // rowFromEdge: distance into the tile from the band's outer edge.
+  //   - heavy band (outermost row/col): 0 → clip full HALF width (chamfer
+  //     row 0 covers 0..7).
+  //   - light band (1 inward): 1 → clip HALF-1 = 7 (chamfer row 1 covers
+  //     0..6); the edge pixel at 7 stays visible.
   gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
-  if (wallN) drawHorizontalRimBand(gfx, screenX, screenY,        wallW, wallE);
-  if (wallS) drawHorizontalRimBand(gfx, screenX, screenY + last, wallW, wallE);
-  if (wallW) drawVerticalRimBand(gfx,   screenX, screenY,        wallN, wallS);
-  if (wallE) drawVerticalRimBand(gfx,   screenX + last, screenY, wallN, wallS);
+  if (wallN) drawHorizontalRimBand(gfx, screenX, screenY,        0, wallW, wallE);
+  if (wallS) drawHorizontalRimBand(gfx, screenX, screenY + last, 0, wallW, wallE);
+  if (wallW) drawVerticalRimBand(gfx,   screenX, screenY,        0, wallN, wallS);
+  if (wallE) drawVerticalRimBand(gfx,   screenX + last, screenY, 0, wallN, wallS);
 
-  // Light band — second pixel inward, lighter alpha for the fade transition.
+  // Light band — 1 pixel inward, lighter alpha for the fade transition.
   gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.30);
-  if (wallN) drawHorizontalRimBand(gfx, screenX, screenY + 1,        wallW, wallE);
-  if (wallS) drawHorizontalRimBand(gfx, screenX, screenY + last - 1, wallW, wallE);
-  if (wallW) drawVerticalRimBand(gfx,   screenX + 1, screenY,        wallN, wallS);
-  if (wallE) drawVerticalRimBand(gfx,   screenX + last - 1, screenY, wallN, wallS);
+  if (wallN) drawHorizontalRimBand(gfx, screenX, screenY + 1,        1, wallW, wallE);
+  if (wallS) drawHorizontalRimBand(gfx, screenX, screenY + last - 1, 1, wallW, wallE);
+  if (wallW) drawVerticalRimBand(gfx,   screenX + 1, screenY,        1, wallN, wallS);
+  if (wallE) drawVerticalRimBand(gfx,   screenX + last - 1, screenY, 1, wallN, wallS);
 
   // Per-tile rim chips — 1-pixel deterministic dark specks inside each
   // active rim band, breaking the rim's flat appearance. Same alpha as
   // the heavy band so chips read as small "packed soil" grains rather
-  // than sub-rim noise. Position is hash-driven within the band.
+  // than sub-rim noise. Chip lives on the LIGHT band (rowFromEdge=1).
   const h = spatialHash(tileX, tileY, SALT_RIM_CHIP);
   gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
   if (wallN) {
     const x = (h >>> 0) & 0xf;        // 0..15
-    if (rimXVisible(x, wallW, wallE)) gfx.fillRect(screenX + x, screenY + 1, 1, 1);
+    if (rimXVisible(x, 1, wallW, wallE)) gfx.fillRect(screenX + x, screenY + 1, 1, 1);
   }
   if (wallS) {
     const x = (h >>> 4) & 0xf;
-    if (rimXVisible(x, wallW, wallE)) gfx.fillRect(screenX + x, screenY + last - 1, 1, 1);
+    if (rimXVisible(x, 1, wallW, wallE)) gfx.fillRect(screenX + x, screenY + last - 1, 1, 1);
   }
   if (wallW) {
     const y = (h >>> 8) & 0xf;
-    if (rimYVisible(y, wallN, wallS)) gfx.fillRect(screenX + 1, screenY + y, 1, 1);
+    if (rimYVisible(y, 1, wallN, wallS)) gfx.fillRect(screenX + 1, screenY + y, 1, 1);
   }
   if (wallE) {
     const y = (h >>> 12) & 0xf;
-    if (rimYVisible(y, wallN, wallS)) gfx.fillRect(screenX + last - 1, screenY + y, 1, 1);
+    if (rimYVisible(y, 1, wallN, wallS)) gfx.fillRect(screenX + last - 1, screenY + y, 1, 1);
   }
 }
 
+/**
+ * Paint a 1-pixel-tall rim band at row `y`, clipping the chamfer-occupied
+ * portion on either end. `rowFromEdge` is the band's depth into the tile
+ * from its outer edge (0 = outermost / heavy, 1 = inner / light). The
+ * clip width on each side matches the chamfer's width at that row, so
+ * pixels outside the chamfer remain visible.
+ */
 function drawHorizontalRimBand(
   gfx: GfxLike,
   screenX: number,
   y: number,
+  rowFromEdge: number,
   clipWestHalf: boolean,
   clipEastHalf: boolean,
 ): void {
-  if (!clipWestHalf && !clipEastHalf) {
+  const clipPx = HALF - rowFromEdge;
+  // Beyond the chamfer's reach — the row is fully outside any chamfer,
+  // so paint the full edge regardless of clip flags.
+  if (clipPx <= 0) {
     gfx.fillRect(screenX, y, TILE_SIZE_PX, 1);
     return;
   }
-  if (!clipWestHalf) gfx.fillRect(screenX,        y, HALF, 1);
-  if (!clipEastHalf) gfx.fillRect(screenX + HALF, y, HALF, 1);
+  const start  = clipWestHalf ? clipPx : 0;
+  const endExc = clipEastHalf ? (TILE_SIZE_PX - clipPx) : TILE_SIZE_PX;
+  if (endExc > start) {
+    gfx.fillRect(screenX + start, y, endExc - start, 1);
+  }
 }
 
+/** Vertical mirror of `drawHorizontalRimBand`. */
 function drawVerticalRimBand(
   gfx: GfxLike,
   x: number,
   screenY: number,
+  colFromEdge: number,
   clipNorthHalf: boolean,
   clipSouthHalf: boolean,
 ): void {
-  if (!clipNorthHalf && !clipSouthHalf) {
+  const clipPx = HALF - colFromEdge;
+  if (clipPx <= 0) {
     gfx.fillRect(x, screenY, 1, TILE_SIZE_PX);
     return;
   }
-  if (!clipNorthHalf) gfx.fillRect(x, screenY,        1, HALF);
-  if (!clipSouthHalf) gfx.fillRect(x, screenY + HALF, 1, HALF);
+  const start  = clipNorthHalf ? clipPx : 0;
+  const endExc = clipSouthHalf ? (TILE_SIZE_PX - clipPx) : TILE_SIZE_PX;
+  if (endExc > start) {
+    gfx.fillRect(x, screenY + start, 1, endExc - start);
+  }
 }
 
-function rimXVisible(x: number, clipWestHalf: boolean, clipEastHalf: boolean): boolean {
-  if (x < HALF) return !clipWestHalf;
-  return !clipEastHalf;
+/**
+ * True iff a chip at column `x` on a horizontal rim band at depth
+ * `rowFromEdge` is outside any chamfered area. Same depth-aware clip
+ * geometry as `drawHorizontalRimBand`.
+ */
+function rimXVisible(
+  x: number,
+  rowFromEdge: number,
+  clipWestHalf: boolean,
+  clipEastHalf: boolean,
+): boolean {
+  const clipPx = HALF - rowFromEdge;
+  if (clipPx <= 0) return true;
+  if (clipWestHalf && x < clipPx) return false;
+  if (clipEastHalf && x >= TILE_SIZE_PX - clipPx) return false;
+  return true;
 }
 
-function rimYVisible(y: number, clipNorthHalf: boolean, clipSouthHalf: boolean): boolean {
-  if (y < HALF) return !clipNorthHalf;
-  return !clipSouthHalf;
+/** Vertical mirror of `rimXVisible`. */
+function rimYVisible(
+  y: number,
+  colFromEdge: number,
+  clipNorthHalf: boolean,
+  clipSouthHalf: boolean,
+): boolean {
+  const clipPx = HALF - colFromEdge;
+  if (clipPx <= 0) return true;
+  if (clipNorthHalf && y < clipPx) return false;
+  if (clipSouthHalf && y >= TILE_SIZE_PX - clipPx) return false;
+  return true;
 }

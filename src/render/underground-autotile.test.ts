@@ -441,83 +441,124 @@ describe('drawUndergroundRim', () => {
     expect(fillRectCalls(gfx)).toHaveLength(3);
   });
 
+  // Rim-clip geometry post-codex-P2: the clip is depth-aware. The heavy
+  // band (rowFromEdge=0) clips a full half-edge (HALF=8 pixels) when an
+  // adjacent corner chamfers. The light band (rowFromEdge=1) clips only
+  // HALF-1=7 pixels because the chamfer's row 1 covers cols 0..6 (not
+  // 0..7). So row 1 col 7 keeps its rim shading even with a NW chamfer.
+
   it('clips rim bands away from chamfered corner halves — NW chamfer', () => {
     const gfx = gfxCalls();
-    // Open tile with N and W walls gets an NW chamfer. The north rim must
-    // skip its west half, and the west rim must skip its north half, so
-    // no grid-aligned rim stubs remain inside the chamfered corner.
     drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open', {
       nw: 'wall', n: 'wall', ne: 'open',
       w:  'wall',             e: 'open',
       sw: 'open', s: 'open', se: 'open',
     }));
     const rects = fillRectCalls(gfx);
+    // Heavy band (row 0): NW chamfer covers cols 0..7 → clipped.
+    // Light band (row 1): NW chamfer covers cols 0..6 → cols 0..6 clipped.
     for (const rect of rects) {
-      expect(rectOverlaps(rect, 0, 0, 8, 2)).toBe(false); // clipped north rim half
-      expect(rectOverlaps(rect, 0, 0, 2, 8)).toBe(false); // clipped west rim half
+      expect(rectOverlaps(rect, 0, 0, 8, 1)).toBe(false); // clip heavy N row 0 cols 0..7
+      expect(rectOverlaps(rect, 0, 1, 7, 1)).toBe(false); // clip light N row 1 cols 0..6
+      expect(rectOverlaps(rect, 0, 0, 1, 8)).toBe(false); // clip heavy W col 0 rows 0..7
+      expect(rectOverlaps(rect, 1, 0, 1, 7)).toBe(false); // clip light W col 1 rows 0..6
     }
-    expect(rects.some(rect => rectOverlaps(rect, 8, 0, 8, 2))).toBe(true);
-    expect(rects.some(rect => rectOverlaps(rect, 0, 8, 2, 8))).toBe(true);
+    // Unclipped portions should be painted somewhere.
+    expect(rects.some(rect => rectOverlaps(rect, 8, 0, 8, 1))).toBe(true);  // heavy N E half
+    expect(rects.some(rect => rectOverlaps(rect, 7, 1, 9, 1))).toBe(true);  // light N from col 7
+    expect(rects.some(rect => rectOverlaps(rect, 0, 8, 1, 8))).toBe(true);  // heavy W S half
+    expect(rects.some(rect => rectOverlaps(rect, 1, 7, 1, 9))).toBe(true);  // light W from row 7
   });
 
   it('clips rim bands away from chamfered corner halves — NE chamfer', () => {
     const gfx = gfxCalls();
-    // Open tile with N and E walls gets an NE chamfer. The north rim must
-    // skip its EAST half, and the east rim must skip its NORTH half.
     drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open', {
       nw: 'open', n: 'wall', ne: 'wall',
       w:  'open',             e: 'wall',
       sw: 'open', s: 'open', se: 'open',
     }));
     const rects = fillRectCalls(gfx);
+    // NE chamfer at row R covers cols (8+R)..15. So heavy (row 0): cols
+    // 8..15. Light (row 1): cols 9..15. NE on E edge col 15 row R covers
+    // similarly mirrored.
     for (const rect of rects) {
-      expect(rectOverlaps(rect, 8, 0, 8, 2)).toBe(false);  // clipped north east half
-      expect(rectOverlaps(rect, 14, 0, 2, 8)).toBe(false); // clipped east north half
+      expect(rectOverlaps(rect, 8, 0, 8, 1)).toBe(false);  // clip heavy N row 0 cols 8..15
+      expect(rectOverlaps(rect, 9, 1, 7, 1)).toBe(false);  // clip light N row 1 cols 9..15
+      expect(rectOverlaps(rect, 15, 0, 1, 8)).toBe(false); // clip heavy E col 15 rows 0..7
+      expect(rectOverlaps(rect, 14, 0, 1, 7)).toBe(false); // clip light E col 14 rows 0..6
     }
-    expect(rects.some(rect => rectOverlaps(rect, 0, 0, 8, 2))).toBe(true);  // unclipped north west half
-    expect(rects.some(rect => rectOverlaps(rect, 14, 8, 2, 8))).toBe(true); // unclipped east south half
+    expect(rects.some(rect => rectOverlaps(rect, 0, 0, 8, 1))).toBe(true);  // heavy N W half
+    expect(rects.some(rect => rectOverlaps(rect, 0, 1, 9, 1))).toBe(true);  // light N up to col 8
+    expect(rects.some(rect => rectOverlaps(rect, 15, 8, 1, 8))).toBe(true); // heavy E S half
+    expect(rects.some(rect => rectOverlaps(rect, 14, 7, 1, 9))).toBe(true); // light E from row 7
   });
 
   it('clips rim bands away from chamfered corner halves — SE chamfer', () => {
     const gfx = gfxCalls();
-    // Open tile with S and E walls gets an SE chamfer. The south rim must
-    // skip its EAST half, and the east rim must skip its SOUTH half.
     drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open', {
       nw: 'open', n: 'open', ne: 'open',
       w:  'open',             e: 'wall',
       sw: 'open', s: 'wall', se: 'wall',
     }));
     const rects = fillRectCalls(gfx);
+    // SE chamfer at row R (R measured from south edge) covers cols
+    // (8+R)..15. On the S edge: heavy (S row 15, rowFromEdge=0): cols
+    // 8..15. Light (S row 14, rowFromEdge=1): cols 9..15.
     for (const rect of rects) {
-      expect(rectOverlaps(rect, 8, 14, 8, 2)).toBe(false); // clipped south east half
-      expect(rectOverlaps(rect, 14, 8, 2, 8)).toBe(false); // clipped east south half
+      expect(rectOverlaps(rect, 8, 15, 8, 1)).toBe(false);  // clip heavy S row 15 cols 8..15
+      expect(rectOverlaps(rect, 9, 14, 7, 1)).toBe(false);  // clip light S row 14 cols 9..15
+      expect(rectOverlaps(rect, 15, 8, 1, 8)).toBe(false);  // clip heavy E col 15 rows 8..15
+      expect(rectOverlaps(rect, 14, 9, 1, 7)).toBe(false);  // clip light E col 14 rows 9..15
     }
-    expect(rects.some(rect => rectOverlaps(rect, 0, 14, 8, 2))).toBe(true); // unclipped south west half
-    expect(rects.some(rect => rectOverlaps(rect, 14, 0, 2, 8))).toBe(true); // unclipped east north half
+    expect(rects.some(rect => rectOverlaps(rect, 0, 15, 8, 1))).toBe(true);  // heavy S W half
+    expect(rects.some(rect => rectOverlaps(rect, 0, 14, 9, 1))).toBe(true);  // light S up to col 8
+    expect(rects.some(rect => rectOverlaps(rect, 15, 0, 1, 8))).toBe(true);  // heavy E N half
+    expect(rects.some(rect => rectOverlaps(rect, 14, 0, 1, 9))).toBe(true);  // light E up to row 8
   });
 
   it('clips rim bands away from chamfered corner halves — SW chamfer', () => {
     const gfx = gfxCalls();
-    // Open tile with S and W walls gets an SW chamfer. The south rim must
-    // skip its WEST half, and the west rim must skip its SOUTH half.
     drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open', {
       nw: 'open', n: 'open', ne: 'open',
       w:  'wall',             e: 'open',
       sw: 'wall', s: 'wall', se: 'open',
     }));
     const rects = fillRectCalls(gfx);
+    // SW chamfer at row R (from south edge) covers cols 0..(7-R). Heavy
+    // (S row 15): 0..7. Light (S row 14): 0..6. On the W edge, mirrored.
     for (const rect of rects) {
-      expect(rectOverlaps(rect, 0, 14, 8, 2)).toBe(false); // clipped south west half
-      expect(rectOverlaps(rect, 0, 8, 2, 8)).toBe(false);  // clipped west south half
+      expect(rectOverlaps(rect, 0, 15, 8, 1)).toBe(false); // clip heavy S row 15 cols 0..7
+      expect(rectOverlaps(rect, 0, 14, 7, 1)).toBe(false); // clip light S row 14 cols 0..6
+      expect(rectOverlaps(rect, 0, 8, 1, 8)).toBe(false);  // clip heavy W col 0 rows 8..15
+      expect(rectOverlaps(rect, 1, 9, 1, 7)).toBe(false);  // clip light W col 1 rows 9..15
     }
-    expect(rects.some(rect => rectOverlaps(rect, 8, 14, 8, 2))).toBe(true); // unclipped south east half
-    expect(rects.some(rect => rectOverlaps(rect, 0, 0, 2, 8))).toBe(true);  // unclipped west north half
+    expect(rects.some(rect => rectOverlaps(rect, 8, 15, 8, 1))).toBe(true); // heavy S E half
+    expect(rects.some(rect => rectOverlaps(rect, 7, 14, 9, 1))).toBe(true); // light S from col 7
+    expect(rects.some(rect => rectOverlaps(rect, 0, 0, 1, 8))).toBe(true);  // heavy W N half
+    expect(rects.some(rect => rectOverlaps(rect, 1, 0, 1, 9))).toBe(true);  // light W up to row 8
   });
 
-  it('all four cardinal walls clip all rim bands because every edge half is chamfered', () => {
+  it('all four cardinal walls — heavy bands fully clipped, light bands paint a 2-pixel center', () => {
+    // Heavy bands at clipPx=8 with both halves clipped → 0 paint per band.
+    // Light bands at clipPx=7 with both halves clipped → cols (or rows)
+    // 7..8 painted (center, 2 pixels). Codex P2 fix: previously the rim
+    // disappeared entirely in dense walls; now a 2-pixel rim line stays
+    // visible at each edge's center even when chamfers cover both halves.
     const gfx = gfxCalls();
     drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open'));
-    expect(fillRectCalls(gfx)).toHaveLength(0);
+    const rects = fillRectCalls(gfx);
+    // No heavy band at outermost rows/cols.
+    for (const rect of rects) {
+      expect(rectOverlaps(rect, 0, 0, 16, 1)).toBe(false);  // heavy N
+      expect(rectOverlaps(rect, 0, 15, 16, 1)).toBe(false); // heavy S
+      expect(rectOverlaps(rect, 0, 0, 1, 16)).toBe(false);  // heavy W
+      expect(rectOverlaps(rect, 15, 0, 1, 16)).toBe(false); // heavy E
+    }
+    // Light bands present in the 2-pixel center segments.
+    expect(rects.some(rect => rectOverlaps(rect, 7, 1, 2, 1))).toBe(true);  // light N center
+    expect(rects.some(rect => rectOverlaps(rect, 7, 14, 2, 1))).toBe(true); // light S center
+    expect(rects.some(rect => rectOverlaps(rect, 1, 7, 1, 2))).toBe(true);  // light W center
+    expect(rects.some(rect => rectOverlaps(rect, 14, 7, 1, 2))).toBe(true); // light E center
   });
 });
 
