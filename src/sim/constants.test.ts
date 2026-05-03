@@ -202,6 +202,8 @@ import {
   CHAMBER_NURSERY_HEIGHT,
   CHAMBER_FOOD_WIDTH,
   CHAMBER_FOOD_HEIGHT,
+  SEARCH_LEASH_RADII,
+  LEASH_HYSTERESIS_TILES,
 } from './constants';
 
 describe('Phase 7 excavation & terrain constants (PRD §2d, §3)', () => {
@@ -299,5 +301,18 @@ describe('Phase 7 chamber dimension constants (PRD §2d)', () => {
 
   it('CHAMBER_FOOD_HEIGHT === 3', () => {
     expect(CHAMBER_FOOD_HEIGHT).toBe(3);
+  });
+});
+
+describe('Issue #44 UAT round 3 — leash hysteresis invariants', () => {
+  it('LEASH_HYSTERESIS_TILES is strictly less than SEARCH_LEASH_RADII[0]', () => {
+    // The v8 deadband threshold is `radius - LEASH_HYSTERESIS_TILES`.
+    // If hysteresis ever ≥ smallest radius, the threshold goes ≤ 0 and
+    // the gate `bestDist > threshold` becomes always-true — a v8+ RTN
+    // ant could never break out, permanently stranding wave-0
+    // foragers. Pin the invariant so a future tuning change can't
+    // silently regress.
+    expect(LEASH_HYSTERESIS_TILES).toBeGreaterThan(0);
+    expect(LEASH_HYSTERESIS_TILES).toBeLessThan(SEARCH_LEASH_RADII[0]!);
   });
 });

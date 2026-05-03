@@ -63,22 +63,35 @@ export const SIM_VERSION_V4_DIAGONAL_MOTION = 4 as const;
 export const SIM_VERSION_V5_CHAMBER_ON_MARKED = 5 as const;
 export const SIM_VERSION_V6_FORAGER_NO_REVISIT = 6 as const;
 /**
- * v7 (LATEST_SIM_VERSION) — issue #44 steps 4 + 5. Surface movement
- * integration: HardBlock features (boulders, twig-as-log, dead-leaf
- * canopies, big-leaf "ships") block surface ants and a deterministic
- * local detour picks the best walkable adjacent tile when the preferred
- * step is blocked; SoftCost features (bushes, grass clumps) halve
- * effective speed (`speed >> 1`, min 1) for the tick the ant occupies a
- * SoftCost tile — integer-only, no float math, no new RNG pulls.
- * Pre-v7 saves replay with no surface passability and no soft cost —
- * same coordinate-only motion they recorded — so SCEN-06 byte-identity
- * holds.
+ * v7 — issue #44 steps 4 + 5. Surface movement integration: HardBlock
+ * features (boulders, twig-as-log, dead-leaf canopies, big-leaf "ships")
+ * block surface ants and a deterministic local detour picks the best
+ * walkable adjacent tile when the preferred step is blocked; SoftCost
+ * features (bushes, grass clumps) halve effective speed (`speed >> 1`,
+ * min 1) for the tick the ant occupies a SoftCost tile — integer-only,
+ * no float math, no new RNG pulls. Pre-v7 saves replay with no surface
+ * passability and no soft cost — same coordinate-only motion they
+ * recorded — so SCEN-06 byte-identity holds.
  *
  * Originally landed as v6 on the #44 branch; renumbered to v7 during
  * the rebase onto main once #42 (PR #47) had already taken v6.
  */
 export const SIM_VERSION_V7_SURFACE_PASSABILITY = 7 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V7_SURFACE_PASSABILITY;
+/**
+ * v8 (LATEST_SIM_VERSION) — issue #44 UAT round 3. Leash-boundary
+ * hysteresis: the SearchingFood→ReturningToNest demotion still fires at
+ * `dist > SEARCH_LEASH_RADII[wave]` (unchanged), but the inverse
+ * ReturningToNest→SearchingFood breakout now also requires the ant to be
+ * INSIDE `radius − LEASH_HYSTERESIS_TILES` before any food signal can
+ * pull it back out. Without this, a forager parked just past its leash
+ * radius with a steady pheromone signal nearby flip-flops every tick —
+ * each flip clears `recentTilesX/Y`, so the issue-#42 no-revisit memory
+ * never accumulates and the ant cycles in a 4-tile region. Pre-v8 saves
+ * replay with the original symmetric breakout (signal-only, no distance
+ * gate) so SCEN-06 byte-identity holds.
+ */
+export const SIM_VERSION_V8_LEASH_HYSTERESIS = 8 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V8_LEASH_HYSTERESIS;
 
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick
@@ -118,6 +131,12 @@ export interface WorldState {
    *           speed of any surface ant occupying a SoftCost tile.
    *       Pre-v7 saves replay with no surface passability and no soft cost
    *       — same coordinate-only motion they recorded.
+   *   8 = Leash-boundary hysteresis (issue #44 UAT round 3). The
+   *       ReturningToNest→SearchingFood breakout in tickExcursionBoundary
+   *       requires the ant to be inside `radius − LEASH_HYSTERESIS_TILES`
+   *       in addition to having a food signal — kills the per-tick
+   *       flip-flop that was wiping recent-tiles memory at the boundary.
+   *       Pre-v8 saves keep the original signal-only breakout.
    *
    * Round-trips through copyWorldState and save/load.
    */

@@ -12,6 +12,7 @@ import {
   LEGACY_SIM_VERSION,
   SIM_VERSION_V5_CHAMBER_ON_MARKED,
   SIM_VERSION_V7_SURFACE_PASSABILITY,
+  SIM_VERSION_V8_LEASH_HYSTERESIS,
   LATEST_SIM_VERSION,
 } from './types.js';
 import { GameOutcome } from './game-over.js';
@@ -2274,16 +2275,19 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
     expect(world.pendingChambers[`${colonyId}:${entranceX}:10`]).toBeUndefined();
   });
 
-  it('new worlds run at LATEST_SIM_VERSION (== V7_SURFACE_PASSABILITY after #44 step 4)', () => {
+  it('new worlds run at LATEST_SIM_VERSION (== V8_LEASH_HYSTERESIS after #44 UAT round 3)', () => {
     // Verify createWorldState uses the LATEST_SIM_VERSION constant exactly.
     // Tracks the constant rather than a hard-coded number so future bumps
     // don't have to update this assertion, while still proving the factory
     // is wired to the latest version (not stuck on a stale literal). Also
-    // pins the explicit v7 sentinel so a downgrade (e.g. accidental revert
-    // of the #44 surface-movement integration) trips here.
+    // pins the explicit v8 sentinel so a downgrade (e.g. accidental revert
+    // of the #44 leash-hysteresis fix) trips here.
     const world = createWorldState(42);
     expect(world.simVersion).toBe(LATEST_SIM_VERSION);
-    expect(world.simVersion).toBe(SIM_VERSION_V7_SURFACE_PASSABILITY);
+    expect(world.simVersion).toBe(SIM_VERSION_V8_LEASH_HYSTERESIS);
+    // The v7 surface-passability ceiling still belongs to LATEST as well —
+    // an accidental drop below v7 would silently re-enable pre-#44 movement.
+    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V7_SURFACE_PASSABILITY);
     // Plus a floor to flag accidental downgrades — the latest must always
     // be at least v5 (the issue #38 baseline).
     expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V5_CHAMBER_ON_MARKED);

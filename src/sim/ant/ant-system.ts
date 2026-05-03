@@ -36,6 +36,7 @@ import {
   SIM_VERSION_V4_DIAGONAL_MOTION,
   SIM_VERSION_V6_FORAGER_NO_REVISIT,
   SIM_VERSION_V7_SURFACE_PASSABILITY,
+  SIM_VERSION_V8_LEASH_HYSTERESIS,
   type WorldState,
 } from '../types.js';
 import {
@@ -60,6 +61,7 @@ import {
   UNDERGROUND_GRID_HEIGHT,
   SEARCH_LEASH_RADII,
   SEARCH_LEASH_MAX_WAVE,
+  LEASH_HYSTERESIS_TILES,
   EXCURSION_HEADING_MIN_TICKS,
   EXCURSION_HEADING_JITTER_TICKS,
   EXCURSION_TURN_PERCENT,
@@ -1956,6 +1958,20 @@ function colonyHasPriorityPile(world: WorldState, colonyId: number): boolean {
  * the boundary pass from overriding meaningful food signals an ant picks up
  * en route home (09 excursion-foraging follow-up, issue 1).
  *
+ * v8+ leash-boundary hysteresis (#44 UAT round 3): the breakout
+ * additionally requires `dist <= SEARCH_LEASH_RADII[wave] -
+ * LEASH_HYSTERESIS_TILES` from the nearest entrance. Without this
+ * asymmetry the signal-only breakout trips the boundary every tick for
+ * ants parked just past the radius next to a steady pheromone trail,
+ * wiping the recent-tiles buffer on each flip and keeping the ant
+ * cycling in a tiny region forever. Pre-v8 saves keep the original
+ * signal-only breakout for byte-identical replay.
+ *
+ * Player-marked priority targets (`colony.priorityFoodPileId`) bypass
+ * the v8 deadband — explicit user intent always wins over an automatic
+ * leash heuristic. The deadband only suppresses *ambient* signals
+ * (scent and pheromone), which are what drove the original flip-flop.
+ *
  * The wave counter is NOT incremented here — that happens on the return
  * side when the ant actually reaches the entrance (see tickAntMovement
  * Surface zone-transition block). An ant that picks up food en route via
@@ -2006,21 +2022,56 @@ export function tickExcursionBoundary(world: WorldState): void {
     if (sub === ForagingSubState.ReturningToNest) {
       // Breakout: a returning ant that now senses food or a trail should go
       // search/follow rather than complete the return leg.
-      if (hasSignal) {
-        ants.subTask[id] = ForagingSubState.SearchingFood;
-        ants.searchHeadingX[id] = 0;
-        ants.searchHeadingY[id] = 0;
-        ants.searchHeadingTicks[id] = 0;
-        ants.searchPrevTileX[id] = -1;
-        ants.searchPrevTileY[id] = -1;
-        // Issue #35 — fresh SearchingFood pass starts with a clean
-        // pause cadence.
-        ants.searchPauseTicks[id] = 0;
-        // Issue #42 fix #3 — flipping ReturningToNest→SearchingFood mid-
-        // route starts a new excursion. The buffer should reset so the
-        // search isn't biased by stale tiles from before the return leg.
-        clearRecentTiles(ants, id);
+      if (!hasSignal) continue;
+
+      // v8+ leash-boundary hysteresis (#44 UAT round 3). The signal-only
+      // breakout was symmetric with the outbound flip's `dist > radius`
+      // gate, which produced a per-tick flip-flop for any ant parked
+      // just past its leash radius next to a steady pheromone trail:
+      // each flip cleared the recent-tiles ring buffer below, so the
+      // issue-#42 no-revisit memory never accumulated and the ant
+      // cycled in a 4-tile region indefinitely. Requiring the ant to
+      // first walk back inside `radius - LEASH_HYSTERESIS_TILES`
+      // forces several ticks of homeward progress between flips, which
+      // both breaks the eddy and lets recent-tiles fill enough to be
+      // useful when the ant later resumes searching.
+      //
+      // Player-marked priority piles bypass the deadband (`!hasPriority`
+      // gate). priorityFoodPileId is explicit user intent — the
+      // deadband only suppresses ambient signals (scent + pheromone)
+      // that drove the original flip-flop, never an explicit "go here"
+      // command from the player.
+      if (world.simVersion >= SIM_VERSION_V8_LEASH_HYSTERESIS && !hasPriority) {
+        // colony.entrances.length >= 1 is guaranteed by the early-
+        // continue at the top of this for-loop, so bestDist is
+        // unconditionally overwritten by a non-negative Manhattan
+        // distance below.
+        let bestDist = Number.MAX_SAFE_INTEGER;
+        for (let e = 0; e < colony.entrances.length; e++) {
+          const ent = colony.entrances[e]!;
+          const d = Math.abs(tileX - ent.surfaceTileX) + Math.abs(tileY - ent.surfaceTileY);
+          if (d < bestDist) bestDist = d;
+        }
+        let wave = ants.searchWave[id]!;
+        if (wave < 0) wave = 0;
+        if (wave > SEARCH_LEASH_MAX_WAVE) wave = SEARCH_LEASH_MAX_WAVE;
+        const radius = SEARCH_LEASH_RADII[wave]!;
+        if (bestDist > radius - LEASH_HYSTERESIS_TILES) continue;
       }
+
+      ants.subTask[id] = ForagingSubState.SearchingFood;
+      ants.searchHeadingX[id] = 0;
+      ants.searchHeadingY[id] = 0;
+      ants.searchHeadingTicks[id] = 0;
+      ants.searchPrevTileX[id] = -1;
+      ants.searchPrevTileY[id] = -1;
+      // Issue #35 — fresh SearchingFood pass starts with a clean
+      // pause cadence.
+      ants.searchPauseTicks[id] = 0;
+      // Issue #42 fix #3 — flipping ReturningToNest→SearchingFood mid-
+      // route starts a new excursion. The buffer should reset so the
+      // search isn't biased by stale tiles from before the return leg.
+      clearRecentTiles(ants, id);
       continue;
     }
 

@@ -325,6 +325,43 @@ export const SEARCH_LEASH_RADII: readonly number[] = [25, 40, 55, 70];
 /** Highest valid index into SEARCH_LEASH_RADII. */
 export const SEARCH_LEASH_MAX_WAVE = SEARCH_LEASH_RADII.length - 1;
 
+/**
+ * Issue #44 UAT round 3 — leash-boundary hysteresis margin (tiles).
+ *
+ * tickExcursionBoundary's ReturningToNest→SearchingFood breakout requires
+ * the ant to be at Manhattan distance ≤ `SEARCH_LEASH_RADII[wave] −
+ * LEASH_HYSTERESIS_TILES` from its nearest entrance before a food signal
+ * (priority/scent/pheromone) can flip it back. The outbound flip
+ * (SearchingFood → ReturningToNest) keeps its existing `dist > radius`
+ * threshold — only the inbound side gets the deadband.
+ *
+ * Without this margin, an ant parked just outside its wave radius with
+ * a steady pheromone signal nearby flip-flops between the two sub-states
+ * every tick. Each flip clears the issue-#42 recent-tiles ring buffer,
+ * so the no-revisit memory never accumulates and the ant cycles in a
+ * 4-tile region indefinitely (observed in the seed=1806015051 tick=5863
+ * snapshot, ant 24 at tile (112, 43), entrance at (104, 64),
+ * Manhattan distance = 29 vs wave-0 radius 25).
+ *
+ * Five tiles is large enough to force several ticks of homeward
+ * progress between flips — long enough for the recent-tiles buffer to
+ * accumulate useful history when the ant later resumes searching —
+ * while staying well inside the smallest leash radius (25), so
+ * foragers within wave 0 still have a meaningful "deep" zone where
+ * signals can promote them.
+ *
+ * Player-marked priority targets (`colony.priorityFoodPileId`) bypass
+ * the deadband — explicit user intent always wins. The hysteresis
+ * only suppresses ambient scent/pheromone signals.
+ *
+ * Gated on `world.simVersion >= SIM_VERSION_V8_LEASH_HYSTERESIS`. Must
+ * remain strictly less than `SEARCH_LEASH_RADII[0]` (= 25) — otherwise
+ * the v8 deadband threshold (`radius - LEASH_HYSTERESIS_TILES`) would
+ * be ≤ 0, permanently suppressing the breakout for any wave-0 ant.
+ * See `constants.test.ts` for the invariant.
+ */
+export const LEASH_HYSTERESIS_TILES = 5;
+
 // ---------------------------------------------------------------------------
 // Phase 9 excursion foraging memo — correlated outward walk constants
 // ---------------------------------------------------------------------------

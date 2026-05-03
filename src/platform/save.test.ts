@@ -238,12 +238,29 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.ants.currentGridColonyId[enemyQueen]).toBe(ENEMY_COLONY_ID);
       expect(w2.ants.currentGridColonyId[playerInvader]).toBe(ENEMY_COLONY_ID);
     });
-    it('round-trips simVersion = v6 (issue #44 step 6)', async () => {
-      const { SIM_VERSION_V7_SURFACE_PASSABILITY } = await import('../sim/types.js');
-      // New worlds default to v6. Save/load must preserve it so a v6 replay
-      // continues to apply surface passability + soft cost on resume.
+    it('round-trips simVersion (LATEST: v8 leash hysteresis)', async () => {
+      const { LATEST_SIM_VERSION, SIM_VERSION_V7_SURFACE_PASSABILITY } = await import('../sim/types.js');
+      // New worlds default to LATEST_SIM_VERSION. Save/load must preserve
+      // it so any LATEST replay continues to apply the gated behaviour
+      // (currently surface passability, soft cost, and leash hysteresis)
+      // on resume.
       const w = createScenario(42);
-      expect(w.simVersion).toBe(SIM_VERSION_V7_SURFACE_PASSABILITY);
+      expect(w.simVersion).toBe(LATEST_SIM_VERSION);
+      // Sanity-check that LATEST is at least v7 — anything lower would
+      // silently regress the #44 surface-passability behaviour.
+      expect(w.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V7_SURFACE_PASSABILITY);
+      const s = serializeWorldState(w);
+      const w2 = deserializeWorldState(JSON.parse(JSON.stringify(s)));
+      expect(w2.simVersion).toBe(LATEST_SIM_VERSION);
+    });
+
+    it('preserves a captured v7 save (sticky load → v7 replay path stays available)', async () => {
+      const { SIM_VERSION_V7_SURFACE_PASSABILITY } = await import('../sim/types.js');
+      // Saves recorded under v7 must round-trip as v7 (not auto-upgrade to
+      // LATEST), so v7 replays remain byte-identical on resume even after
+      // newer sim versions land.
+      const w = createScenario(42);
+      w.simVersion = SIM_VERSION_V7_SURFACE_PASSABILITY;
       const s = serializeWorldState(w);
       const w2 = deserializeWorldState(JSON.parse(JSON.stringify(s)));
       expect(w2.simVersion).toBe(SIM_VERSION_V7_SURFACE_PASSABILITY);

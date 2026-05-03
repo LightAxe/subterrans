@@ -281,7 +281,7 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     // blocked tile. Spawn the ant on `open` with a target east of blocked
     // — its preferred step is east and should be rejected.
     const world = createWorldState(42);
-    expect(world.simVersion).toBe(SIM_VERSION_V7_SURFACE_PASSABILITY);
+    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V7_SURFACE_PASSABILITY);
     let pair: { open: { x: number; y: number }; blocked: { x: number; y: number } } | null = null;
     for (let y = 4; y < 50 && pair === null; y++) {
       for (let x = 4; x < 50; x++) {
@@ -340,7 +340,7 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     // speed: +256 sub-pixels. Half speed (SoftCost): +128. The
     // difference is unambiguous and would surface a missing slowdown.
     const world = createWorldState(42);
-    expect(world.simVersion).toBe(SIM_VERSION_V7_SURFACE_PASSABILITY);
+    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V7_SURFACE_PASSABILITY);
     // Find a SoftCost tile with a non-HardBlock neighbor to the east
     // (the ant needs somewhere to step) and any tile to the far east
     // for the entrance target.
@@ -489,7 +489,7 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     // colony ants both targeting T. The resolver should bump the higher-id
     // to East/South/West, NOT North.
     const world = createWorldState(42);
-    expect(world.simVersion).toBe(SIM_VERSION_V7_SURFACE_PASSABILITY);
+    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V7_SURFACE_PASSABILITY);
 
     let pickedT: { x: number; y: number } | null = null;
     for (let y = 5; y < 80 && pickedT === null; y++) {

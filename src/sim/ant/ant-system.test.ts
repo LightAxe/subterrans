@@ -36,6 +36,7 @@ import {
   SIM_VERSION_V3,
   SIM_VERSION_V4_DIAGONAL_MOTION,
   SIM_VERSION_V5_CHAMBER_ON_MARKED,
+  SIM_VERSION_V8_LEASH_HYSTERESIS,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt, createAntComponents, RECENT_TILES_LEN } from './ant-store.js';
@@ -2757,8 +2758,11 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
 
   it('ReturningToNest + priority food pile set → flips back to SearchingFood', () => {
     const base = SEARCH_LEASH_RADII[0]!;
-    // Ant anywhere in range — position not load-bearing for the return-breakout rule.
-    const { world, colony, antId } = baseSetup(base - 3, 0);
+    // Place the ant well inside `radius - LEASH_HYSTERESIS_TILES` so the v8
+    // breakout-deadband (issue #44 UAT round 3) doesn't suppress this flip.
+    // Distance-from-entrance is 5, which is comfortably below the wave-0
+    // hysteresis threshold (25 - 5 = 20).
+    const { world, colony, antId } = baseSetup(5, 0);
     world.ants.subTask[antId] = ForagingSubState.ReturningToNest;
     const pile = { foodPileId: 1, tileX: base + 20, tileY: 0 } as FoodPile;
     world.foodPiles.push(pile);
@@ -2793,6 +2797,114 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
     // No signals anywhere — the return leg continues.
     tickExcursionBoundary(world);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.ReturningToNest);
+  });
+
+  // -------------------------------------------------------------------------
+  // v8 leash-boundary hysteresis (#44 UAT round 3)
+  //
+  // Pre-v8 the RTN→SF breakout was symmetric with the SF→RTN flip's
+  // `dist > radius` gate, producing a per-tick flip-flop for ants parked
+  // just past the radius next to a steady pheromone trail (each flip
+  // wiped recent-tiles, so the no-revisit memory never accumulated and
+  // the ant cycled in a tiny region forever — observed in seed
+  // 1806015051 tick 5863, ant 24).
+  //
+  // v8 requires `dist <= radius - LEASH_HYSTERESIS_TILES` for the
+  // breakout in addition to a food signal; pre-v8 keeps the original
+  // signal-only behaviour for byte-identical replay.
+  // -------------------------------------------------------------------------
+  it('v8 — RTN ant just past radius with pheromone signal STAYS RTN (hysteresis suppresses flip)', () => {
+    const base = SEARCH_LEASH_RADII[0]!; // 25
+    // Distance 27 from entrance — past `radius` (25) so outside the
+    // hysteresis deadband (radius - 5 = 20). Pheromone right next door.
+    const { world, antId } = baseSetup(base + 2, 0);
+    world.ants.subTask[antId] = ForagingSubState.ReturningToNest;
+    const { grid } = setupSurfaceGrid(world);
+    phSet(grid, base + 2, 2, FOOD_TRAIL_DEPOSIT);
+    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V8_LEASH_HYSTERESIS);
+    tickExcursionBoundary(world);
+    expect(world.ants.subTask[antId]).toBe(ForagingSubState.ReturningToNest);
+  });
+
+  it('v8 — RTN ant just inside hysteresis radius with pheromone signal FLIPS to SF', () => {
+    const base = SEARCH_LEASH_RADII[0]!; // 25
+    // Distance 19 from entrance — inside `radius - 5 = 20`. Hysteresis
+    // permits the breakout once the ant has actually returned closer.
+    const { world, antId } = baseSetup(base - 6, 0);
+    world.ants.subTask[antId] = ForagingSubState.ReturningToNest;
+    const { grid } = setupSurfaceGrid(world);
+    phSet(grid, base - 6, 2, FOOD_TRAIL_DEPOSIT);
+    tickExcursionBoundary(world);
+    expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
+  });
+
+  it('pre-v8 — RTN ant just past radius with pheromone signal FLIPS to SF (legacy behaviour preserved)', () => {
+    const base = SEARCH_LEASH_RADII[0]!;
+    const { world, antId } = baseSetup(base + 2, 0);
+    world.simVersion = 7; // pre-hysteresis path — must not gain the deadband
+    world.ants.subTask[antId] = ForagingSubState.ReturningToNest;
+    const { grid } = setupSurfaceGrid(world);
+    phSet(grid, base + 2, 2, FOOD_TRAIL_DEPOSIT);
+    tickExcursionBoundary(world);
+    expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
+  });
+
+  it('v8 — RTN ant exactly at hysteresis threshold (dist == radius - hysteresis) FLIPS (boundary inclusive)', () => {
+    // Pins the strict `>` comparison: condition `bestDist > radius -
+    // LEASH_HYSTERESIS_TILES` is FALSE at exact equality, so the
+    // breakout fires. A future refactor changing `>` to `>=` would
+    // shift the deadband by one tile and trip this test.
+    const base = SEARCH_LEASH_RADII[0]!;
+    const threshold = base - 5; // 25 - 5 = 20 — wave-0 hysteresis edge
+    const { world, antId } = baseSetup(threshold, 0);
+    world.ants.subTask[antId] = ForagingSubState.ReturningToNest;
+    const { grid } = setupSurfaceGrid(world);
+    phSet(grid, threshold, 2, FOOD_TRAIL_DEPOSIT);
+    tickExcursionBoundary(world);
+    expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
+  });
+
+  it('v8 — RTN ant one tile past hysteresis threshold STAYS RTN (boundary exclusive on the past-side)', () => {
+    const base = SEARCH_LEASH_RADII[0]!;
+    const justOver = base - 5 + 1; // 21
+    const { world, antId } = baseSetup(justOver, 0);
+    world.ants.subTask[antId] = ForagingSubState.ReturningToNest;
+    const { grid } = setupSurfaceGrid(world);
+    phSet(grid, justOver, 2, FOOD_TRAIL_DEPOSIT);
+    tickExcursionBoundary(world);
+    expect(world.ants.subTask[antId]).toBe(ForagingSubState.ReturningToNest);
+  });
+
+  it('v8 — hysteresis scales with searchWave (wave 2: radius 55, deadband 50)', () => {
+    // Non-default wave coverage. Wave-2 radius is 55, so the deadband
+    // sits at 50. A RTN ant at distance 52 is outside the wave-2
+    // deadband (50) — and far outside the wave-0 deadband (20) — so
+    // the breakout must stay suppressed. Confirms the gate uses the
+    // ant's actual searchWave, not a hard-coded wave-0 threshold.
+    const wave2Radius = SEARCH_LEASH_RADII[2]!; // 55
+    const wave2Threshold = wave2Radius - 5; // 50
+    const justPast = wave2Threshold + 2; // 52
+    const { world, antId } = baseSetup(justPast, 0, /*wave=*/ 2);
+    world.ants.subTask[antId] = ForagingSubState.ReturningToNest;
+    const { grid } = setupSurfaceGrid(world);
+    phSet(grid, justPast, 2, FOOD_TRAIL_DEPOSIT);
+    tickExcursionBoundary(world);
+    expect(world.ants.subTask[antId]).toBe(ForagingSubState.ReturningToNest);
+  });
+
+  it('v8 — priority pile bypasses the deadband (player intent always wins)', () => {
+    // MEDIUM-1: explicit player commands (priorityFoodPileId) must not
+    // be suppressed by the leash deadband. An ant well past the wave-0
+    // hysteresis threshold (deadband 20, ant at 27) with a priority
+    // pile set should still flip back to SearchingFood.
+    const base = SEARCH_LEASH_RADII[0]!;
+    const { world, colony, antId } = baseSetup(base + 2, 0);
+    world.ants.subTask[antId] = ForagingSubState.ReturningToNest;
+    const pile = { foodPileId: 1, tileX: base + 20, tileY: 0 } as FoodPile;
+    world.foodPiles.push(pile);
+    colony.priorityFoodPileId = pile.foodPileId;
+    tickExcursionBoundary(world);
+    expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
   });
 });
 
