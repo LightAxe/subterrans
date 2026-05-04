@@ -5,6 +5,7 @@ import {
   serializeWorldState, deserializeWorldState,
   hasSave, loadSave, deleteSave, tickAutosave,
   migrateBehaviorRatio,
+  FutureSimVersionError,
   type SaveFile,
 } from './save.js';
 import { createScenario } from '../sim/scenario.js';
@@ -975,26 +976,33 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const out = deserializeWorldState(s);
       expect(out.simVersion).toBe(latest);
     });
-    it('rejects simVersion above LATEST (gate-bypass guard)', () => {
+    it('rejects simVersion above LATEST with FutureSimVersionError (recoverable signal)', () => {
       const snapshot = makeSavedSnapshot((s) => { s.simVersion = 99999; });
-      expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid simVersion/);
+      expect(() => deserializeWorldState(snapshot)).toThrow(FutureSimVersionError);
     });
     it('rejects negative simVersion (all-gates-off guard)', () => {
       const snapshot = makeSavedSnapshot((s) => { s.simVersion = -1; });
       expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid simVersion/);
     });
-    it('exact boundary: simVersion = LATEST + 1 is rejected', () => {
+    it('exact boundary: simVersion = LATEST + 1 throws FutureSimVersionError (recoverable)', () => {
       // LATEST_SIM_VERSION is whatever the current sim writes for a fresh
       // scenario; the value is captured here to keep the test version-agnostic.
       const w = createScenario(42);
       const latest = serializeWorldState(w).simVersion!;
       const snapshot = makeSavedSnapshot((s) => { s.simVersion = latest + 1; });
-      expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid simVersion/);
+      expect(() => deserializeWorldState(snapshot)).toThrow(FutureSimVersionError);
     });
-    it('exact boundary: simVersion = LEGACY - 1 is rejected', () => {
-      // LEGACY_SIM_VERSION is 2; 1 should be rejected as out-of-range.
+    it('exact boundary: simVersion = LEGACY - 1 throws plain Error (NOT FutureSimVersionError — it is tampering)', () => {
+      // LEGACY_SIM_VERSION is 2; 1 should be rejected as definitively corrupt
+      // (no historical save shape uses pre-LEGACY versions). Plain Error
+      // instead of FutureSimVersionError so bootFromSave deletes the save
+      // rather than preserving it indefinitely.
       const snapshot = makeSavedSnapshot((s) => { s.simVersion = 1; });
-      expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid simVersion/);
+      let caught: unknown;
+      try { deserializeWorldState(snapshot); } catch (e) { caught = e; }
+      expect(caught).toBeInstanceOf(Error);
+      expect(caught).not.toBeInstanceOf(FutureSimVersionError);
+      expect((caught as Error).message).toMatch(/Invalid simVersion/);
     });
     it('string simVersion falls back to LEGACY (non-integer types treated as missing)', () => {
       // Non-number/non-integer types (string, null, NaN, object) all hit

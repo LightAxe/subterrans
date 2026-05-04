@@ -54,6 +54,25 @@ export class SaveVersionMismatchError extends Error {
   }
 }
 
+/**
+ * Issue #66 — thrown by `deserializeWorldState` when the snapshot's
+ * `simVersion` exceeds `LATEST_SIM_VERSION`. Distinct from the plain
+ * `Error` thrown for tampered-corruption cases (negative simVersion,
+ * out-of-range ants.count, malformed snapshot shape) so callers can
+ * preserve the recoverable case and discard the tampered case.
+ *
+ * "Future-build save loaded by older build" is the canonical scenario:
+ * the envelope is intact and a newer build can load it, but THIS build
+ * doesn't know how to interpret the simVersion. Caller should boot
+ * fresh without deleting; user can recover by upgrading the build.
+ */
+export class FutureSimVersionError extends Error {
+  constructor(public got: number, public latest: number) {
+    super(`Save's simVersion (${got}) is newer than this build's LATEST (${latest})`);
+    this.name = 'FutureSimVersionError';
+  }
+}
+
 // ---------------------------------------------------------------------------
 // SerializedWorldState — JSON-safe shape of WorldState.
 // Mirrors WorldState exactly; typed arrays become number[]; plain-object
@@ -389,20 +408,31 @@ export function migrateBehaviorRatio(legacy: unknown): BehaviorRatio {
  *
  * Returns LEGACY for missing/non-integer (preserves pre-#27 legacy load).
  * Returns the value verbatim for an integer in [LEGACY, LATEST].
- * Throws for an integer outside that band. This runs at deserialize-time
- * (called from `deserializeWorldState`); the throw is caught by
- * `bootFromSave`'s try/catch in render/game-scene.ts and the caller boots
- * fresh. Note that `loadSave` does NOT catch — its swallowing try/catch
- * wraps `parseSaveFile` only, and parseSaveFile doesn't deserialize.
  *
- * Rationale: a tampered save with simVersion=99999 makes every `>= SIM_VERSION_VN`
- * gate evaluate true forever; simVersion=-1 makes them all evaluate false. Both
- * silently break the sticky-on-load determinism contract. Refusing the load is
- * the only outcome consistent with that contract.
+ * For out-of-range integers, throws one of two error types so the caller
+ * can differentiate recoverable from definitively-corrupt:
+ *   - simVersion > LATEST → `FutureSimVersionError` (recoverable: a newer
+ *     build wrote this save; older build doesn't know the gate semantics
+ *     but the bytes are intact)
+ *   - simVersion < LEGACY (e.g. 0, 1, negative) → plain `Error` (tampered
+ *     or otherwise definitively corrupt; pre-LEGACY values are not a real
+ *     historical save shape, since LEGACY itself was the original baseline)
+ *
+ * Throws happen at deserialize-time (`deserializeWorldState`) and are
+ * caught by `bootFromSave`'s try/catch in render/game-scene.ts. Note
+ * that `loadSave` does NOT catch — its swallowing try/catch wraps
+ * `parseSaveFile` only, and parseSaveFile doesn't deserialize.
+ *
+ * Rationale: a tampered save with simVersion=-1 makes every `>= SIM_VERSION_VN`
+ * gate evaluate false forever; simVersion=99999 makes them all evaluate
+ * true. Both silently break the sticky-on-load determinism contract.
  */
 function validateSimVersion(raw: unknown): number {
   if (typeof raw !== 'number' || !Number.isInteger(raw)) return LEGACY_SIM_VERSION;
-  if (raw < LEGACY_SIM_VERSION || raw > LATEST_SIM_VERSION) {
+  if (raw > LATEST_SIM_VERSION) {
+    throw new FutureSimVersionError(raw, LATEST_SIM_VERSION);
+  }
+  if (raw < LEGACY_SIM_VERSION) {
     throw new Error(`Invalid simVersion in save: ${raw} (require integer in [${LEGACY_SIM_VERSION}, ${LATEST_SIM_VERSION}])`);
   }
   return raw;

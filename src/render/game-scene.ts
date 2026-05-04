@@ -28,7 +28,7 @@ import { createScenario } from '../sim/scenario.js';
 import { copyWorldState, type WorldState } from '../sim/types.js';
 import { tick, resetFlowFieldCaches } from '../sim/tick.js';
 import { createGameLoop, type GameLoop, MS_PER_TICK } from '../platform/game-loop.js';
-import { hasSave, loadSave, deleteSave, tickAutosave } from '../platform/save.js';
+import { hasSave, loadSave, deleteSave, tickAutosave, FutureSimVersionError } from '../platform/save.js';
 import { deserializeWorldState } from '../platform/save.js';
 import { runAIController } from './ai-controller.js';
 import { buildDebugSnapshot } from '../platform/debug-snapshot.js';
@@ -382,31 +382,37 @@ export class GameScene extends Phaser.Scene {
     // instance) would concatenate with loaded.inputLog and break replay truth.
     this.resetSessionState();
     // Plan 04 SaveFile shape: { version, seed, inputLog, snapshot }
-    // Issue #65/#66 — deserializeWorldState now throws on tampered ants.count
-    // or simVersion outside the supported band. Boot fresh on throw rather
-    // than letting it escape into the host page.
+    // Issue #65/#66 — deserializeWorldState throws for two distinct cases:
     //
-    // Per codex review on PR #88: do NOT deleteSave() here, even though the
-    // null path above does. The two failure modes are asymmetric — the null
-    // path covers structurally unrecoverable envelopes (non-JSON, missing
-    // fields, version mismatch), so deletion is final and correct. A throw
-    // from deserializeWorldState, by contrast, can legitimately fire for a
-    // save written by a *newer* build (simVersion > LATEST after a rollback
-    // / cached-older-client). The envelope is fine; this build just doesn't
-    // know how to interpret the simVersion. Deleting it would be
-    // irreversible data loss for a save the user can recover by upgrading
-    // back to the newer build.
+    //   1. FutureSimVersionError — simVersion > LATEST. The save was written
+    //      by a NEWER build (rollback / cached-older-client) and is intact;
+    //      this build just doesn't know the gate semantics. Preserve the
+    //      bytes (don't deleteSave) AND suspend autosave for the session
+    //      so a fresh game's progress doesn't overwrite the preserved save.
+    //      User can recover by reloading on the newer build.
     //
-    // Suspend autosave for this session before bootFresh runs — otherwise
-    // tickAutosave in update() would overwrite the preserved save within
-    // AUTOSAVE_INTERVAL_MS. The flag is cleared on resetSessionState (which
-    // bootFresh runs first), so we set it AFTER bootFresh resets state.
+    //   2. Plain Error — definitively corrupt (tampered ants.count, malformed
+    //      snapshot/ants shape, simVersion < LEGACY). No future build can
+    //      load this — bytes are gibberish. Delete the save so subsequent
+    //      Continue prompts don't loop the user through forced fresh boots
+    //      with autosave suspended (per codex P1 on PR #88: that loop
+    //      causes silent total progress loss when the tab closes).
+    //
+    // The asymmetry mirrors the null path above (loaded === null → delete:
+    // envelope structurally broken, no recovery possible).
     let nextWorld: WorldState;
     try {
       nextWorld = deserializeWorldState(loaded.snapshot);
-    } catch {
+    } catch (err) {
+      if (err instanceof FutureSimVersionError) {
+        this.bootFresh();
+        // Set after bootFresh — resetSessionState clears the flag.
+        this.autosaveSuspended = true;
+        return;
+      }
+      // Genuine corruption: discard so we don't loop the user.
+      deleteSave();
       this.bootFresh();
-      this.autosaveSuspended = true;
       return;
     }
     this.currentSeed = loaded.seed;
