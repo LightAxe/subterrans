@@ -169,6 +169,35 @@ void (undefined as unknown as PendingChamber);
  *                   Commands beyond MAX_COMMANDS_PER_TICK are silently dropped FIFO (PRD §5).
  * @returns GameOutcome — None each tick until a win/lose condition is detected (Phase 9).
  */
+/**
+ * Issue #60 — boundary validator for command-coordinate fields.
+ *
+ * Rejects:
+ *   - Non-numbers (cast-defeated TypeScript types reaching the dispatcher)
+ *   - Non-integer numbers (a fractional camera coord landing in a queue
+ *     cmd from a future render-side bug)
+ *   - NaN (the existing `< 0 || >= max` range checks let NaN through —
+ *     `NaN < 0` and `NaN >= max` are both false)
+ *   - Out-of-range integers (matches the inline guards we already had)
+ *
+ * Pre-fix every coordinate handler had its own `< 0 || >= max` guard
+ * that caught Infinity (`Infinity >= max` is true) but NOT NaN. A NaN
+ * that reaches a typed-array index is silently dropped on write; a NaN
+ * that lands in a colony.entrances entry, colony.rallyPoint, or a
+ * pendingChambers map key persists into save state and breaks SCEN-06
+ * byte-identity (`JSON.stringify(NaN) === "null"`).
+ *
+ * Per codex review: PlaceChamber's pendingChambers key is built from
+ * `${colonyId}:${tileX}:${tileY}` — a NaN there would create a "1:NaN:NaN"
+ * key that no future PlaceChamber/CancelDigMark can address.
+ *
+ * Drop-the-command policy matches the existing OOB / unknown-variant
+ * rejection style (silent break out of the case).
+ */
+function isTileCoord(value: unknown, max: number): boolean {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < max;
+}
+
 export function tick(world: WorldState, commands: readonly SimCommand[]): GameOutcome {
   // Reconstruct Rng from saved state at tick start (PRD §4 contract).
   const rng = new Rng(world.rngState);
@@ -260,8 +289,9 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         // PRD §3a — mark a Solid tile for excavation; silently drop non-Solid or out-of-bounds.
         const underground = world.undergroundGrids[cmd.colonyId];
         if (!underground) break;
-        // T-07-10: bounds check (mitigate tamper — reject out-of-range silently)
-        if (cmd.tileX < 0 || cmd.tileX >= UNDERGROUND_GRID_WIDTH || cmd.tileY < 0 || cmd.tileY >= UNDERGROUND_GRID_HEIGHT) break;
+        // Issue #60 — integer + bounds. Pre-fix `< 0 || >= max` let NaN through.
+        if (!isTileCoord(cmd.tileX, UNDERGROUND_GRID_WIDTH)) break;
+        if (!isTileCoord(cmd.tileY, UNDERGROUND_GRID_HEIGHT)) break;
         // Issue #30 (sim-side): reject ceiling-strip dispatches at the
         // MarkDigTile boundary. The renderer paints `tileY === 0` as grass
         // for non-entrance columns (entrance columns get the gold-tinted
@@ -292,6 +322,11 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         // "redirect" semantics the player expects, not an additive flag.
         const colony = world.colonies[cmd.colonyId];
         if (!colony) break;
+        // Issue #60 — integer + bounds. NaN coords reach the pile loop and
+        // never match (every pile.tileX === NaN is false), so pre-fix this
+        // case was safe by luck; codify the boundary regardless.
+        if (!isTileCoord(cmd.tileX, SURFACE_GRID_WIDTH)) break;
+        if (!isTileCoord(cmd.tileY, SURFACE_GRID_HEIGHT)) break;
         let matched: FoodPileId | null = null;
         for (const pile of world.foodPiles) {
           if (pile.tileX === cmd.tileX && pile.tileY === cmd.tileY) {
@@ -309,7 +344,9 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         // PRD §3b — cancel a Marked tile (only Marked — NOT BeingDug; finish-then-switch rule per CTRL-04).
         const underground = world.undergroundGrids[cmd.colonyId];
         if (!underground) break;
-        if (cmd.tileX < 0 || cmd.tileX >= UNDERGROUND_GRID_WIDTH || cmd.tileY < 0 || cmd.tileY >= UNDERGROUND_GRID_HEIGHT) break;
+        // Issue #60 — integer + bounds.
+        if (!isTileCoord(cmd.tileX, UNDERGROUND_GRID_WIDTH)) break;
+        if (!isTileCoord(cmd.tileY, UNDERGROUND_GRID_HEIGHT)) break;
         if (ugGet(underground, cmd.tileX, cmd.tileY) !== UndergroundTileState.Marked) break;
         ugSet(underground, cmd.tileX, cmd.tileY, UndergroundTileState.Solid);
         const colony2 = world.colonies[cmd.colonyId];
@@ -355,9 +392,12 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         if (!underground) break;
         const dims = CHAMBER_DIMENSIONS[cmd.chamberType];
         if (!dims) break;
-        // (a)(b) Bounds check (T-07-11 first guard)
-        if (cmd.anchorTileX < 0 || cmd.anchorTileX + dims.width > UNDERGROUND_GRID_WIDTH) break;
-        if (cmd.anchorTileY < 0 || cmd.anchorTileY + dims.height > UNDERGROUND_GRID_HEIGHT) break;
+        // Issue #60 — integer + bounds. NaN here would create a malformed
+        // pendingChambers map key (`${colonyId}:NaN:NaN`) that no future
+        // PlaceChamber/CancelDigMark can address; persists into save state
+        // and breaks SCEN-06 byte-identity. Validate before any field use.
+        if (!isTileCoord(cmd.anchorTileX, UNDERGROUND_GRID_WIDTH - dims.width + 1)) break;
+        if (!isTileCoord(cmd.anchorTileY, UNDERGROUND_GRID_HEIGHT - dims.height + 1)) break;
         // Issue #30 (sim-side): reject any chamber whose footprint overlaps
         // the ceiling row. CHAMBER_DIMENSIONS extend DOWN from the anchor,
         // so anchorTileY === UNDERGROUND_CEILING_ROW_Y is exactly the
@@ -499,9 +539,12 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         if (!colony4) break;
         const underground = world.undergroundGrids[cmd.colonyId];
         if (!underground) break;
-        // Surface-coord bounds (PRD §3g silent-drop first bullet)
-        if (cmd.surfaceTileX < 0 || cmd.surfaceTileX >= SURFACE_GRID_WIDTH) break;
-        if (cmd.surfaceTileY < 0 || cmd.surfaceTileY >= SURFACE_GRID_HEIGHT) break;
+        // Issue #60 — integer + bounds. NaN here pushes an entrance with
+        // `{surfaceTileX: NaN, surfaceTileY: NaN}` into colony.entrances,
+        // which persists into save state and breaks SCEN-06 byte-identity
+        // (NaN doesn't round-trip cleanly through JSON.stringify).
+        if (!isTileCoord(cmd.surfaceTileX, SURFACE_GRID_WIDTH)) break;
+        if (!isTileCoord(cmd.surfaceTileY, SURFACE_GRID_HEIGHT)) break;
         // T-07-12: cap check (mitigate tamper — prevent unbounded entrance creation)
         if (colony4.entrances.length >= MAX_ENTRANCES_PER_COLONY) break;
         // Column uniqueness — same surfaceTileX collapses in underground view (PRD §3g)
@@ -576,8 +619,12 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       case 'SetRallyPoint': {
         const colony = world.colonies[cmd.colonyId];
         if (colony === undefined) break;
-        if (cmd.tileX < 0 || cmd.tileX >= SURFACE_GRID_WIDTH) break;
-        if (cmd.tileY < 0 || cmd.tileY >= SURFACE_GRID_HEIGHT) break;
+        // Issue #60 — integer + bounds. NaN here writes `rallyPoint =
+        // {tileX: NaN, tileY: NaN}`, which persists into colony state
+        // and round-trips through JSON.stringify as `null` — breaking
+        // SCEN-06 byte-identity for replays past the bad command.
+        if (!isTileCoord(cmd.tileX, SURFACE_GRID_WIDTH)) break;
+        if (!isTileCoord(cmd.tileY, SURFACE_GRID_HEIGHT)) break;
         colony.rallyPoint = { tileX: cmd.tileX, tileY: cmd.tileY };
         break;
       }
