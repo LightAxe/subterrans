@@ -4031,3 +4031,114 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     expect(world.ants.subTask[widIdle]).toBe(NursingSubState.MovingToBrood);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #60 — coordinate validation at command boundary.
+// Pre-fix every coord handler had a `< 0 || >= max` range check that
+// rejected Infinity but let NaN through (NaN <,>= comparisons are
+// always false). Some handlers happened to silently no-op (typed-array
+// writes at NaN index are dropped, pile.tileX === NaN is false), but
+// DesignateEntrance / SetRallyPoint / PlaceChamber persisted malformed
+// state into colony.entrances / colony.rallyPoint / pendingChambers
+// keys, breaking SCEN-06 byte-identity on save round-trip.
+// ---------------------------------------------------------------------------
+describe('Issue #60 — command coordinate validation', () => {
+  // Use the full createScenario fixture so undergroundGrids, surface,
+  // foodPiles, and colony.entrances are all initialized — the same setup
+  // the live game uses.
+  const PLAYER = 1 as ColonyId;
+  let world: WorldState;
+  beforeEach(() => {
+    world = createScenario(42);
+  });
+
+  it('MarkDigTile with NaN coords is dropped (no underground state change)', () => {
+    const cmd = { type: 'MarkDigTile', colonyId: PLAYER, tileX: NaN, tileY: 5, issuedAtTick: 0 } as unknown as SimCommand;
+    const before = JSON.stringify(Array.from(world.undergroundGrids[PLAYER]!.data));
+    expect(() => tick(world, [cmd])).not.toThrow();
+    const after = JSON.stringify(Array.from(world.undergroundGrids[PLAYER]!.data));
+    expect(after).toBe(before);
+  });
+  it('CancelDigMark with NaN coords is dropped', () => {
+    const cmd = { type: 'CancelDigMark', colonyId: PLAYER, tileX: NaN, tileY: NaN, issuedAtTick: 0 } as unknown as SimCommand;
+    expect(() => tick(world, [cmd])).not.toThrow();
+  });
+  it('MarkDigTile with non-integer coords is dropped', () => {
+    // eslint-disable-next-line no-restricted-syntax -- intentional non-integer probe to exercise the integer guard
+    const cmd = { type: 'MarkDigTile', colonyId: PLAYER, tileX: 1.5, tileY: 5, issuedAtTick: 0 } as unknown as SimCommand;
+    const before = JSON.stringify(Array.from(world.undergroundGrids[PLAYER]!.data));
+    tick(world, [cmd]);
+    const after = JSON.stringify(Array.from(world.undergroundGrids[PLAYER]!.data));
+    expect(after).toBe(before);
+  });
+  it('MarkDigTile with Infinity coords is dropped (no underground state change)', () => {
+    const cmd = { type: 'MarkDigTile', colonyId: PLAYER, tileX: Infinity, tileY: 5, issuedAtTick: 0 } as unknown as SimCommand;
+    const before = JSON.stringify(Array.from(world.undergroundGrids[PLAYER]!.data));
+    expect(() => tick(world, [cmd])).not.toThrow();
+    const after = JSON.stringify(Array.from(world.undergroundGrids[PLAYER]!.data));
+    expect(after).toBe(before);
+  });
+  it('SetRallyPoint with NaN coords is dropped — rallyPoint stays null', () => {
+    const cmd = { type: 'SetRallyPoint', colonyId: PLAYER, tileX: NaN, tileY: NaN, issuedAtTick: 0 } as unknown as SimCommand;
+    tick(world, [cmd]);
+    expect(world.colonies[PLAYER]!.rallyPoint).toBeNull();
+  });
+  it('SetRallyPoint with non-integer coords is dropped', () => {
+    // eslint-disable-next-line no-restricted-syntax -- intentional non-integer probe to exercise the integer guard
+    const cmd = { type: 'SetRallyPoint', colonyId: PLAYER, tileX: 5.5, tileY: 5, issuedAtTick: 0 } as unknown as SimCommand;
+    tick(world, [cmd]);
+    expect(world.colonies[PLAYER]!.rallyPoint).toBeNull();
+  });
+  it('SetRallyPoint with valid integer coords sets rallyPoint normally', () => {
+    const cmd: SimCommand = { type: 'SetRallyPoint', colonyId: PLAYER, tileX: 7, tileY: 8, issuedAtTick: 0 };
+    tick(world, [cmd]);
+    expect(world.colonies[PLAYER]!.rallyPoint).toEqual({ tileX: 7, tileY: 8 });
+  });
+  it('DesignateEntrance with NaN coords is dropped — no new entrance pushed', () => {
+    const before = world.colonies[PLAYER]!.entrances.length;
+    const cmd = { type: 'DesignateEntrance', colonyId: PLAYER, surfaceTileX: NaN, surfaceTileY: 0, issuedAtTick: 0 } as unknown as SimCommand;
+    tick(world, [cmd]);
+    expect(world.colonies[PLAYER]!.entrances.length).toBe(before);
+  });
+  it('DesignateEntrance with non-integer coords is dropped', () => {
+    const before = world.colonies[PLAYER]!.entrances.length;
+    // eslint-disable-next-line no-restricted-syntax -- intentional non-integer probe to exercise the integer guard
+    const cmd = { type: 'DesignateEntrance', colonyId: PLAYER, surfaceTileX: 7.5, surfaceTileY: 0, issuedAtTick: 0 } as unknown as SimCommand;
+    tick(world, [cmd]);
+    expect(world.colonies[PLAYER]!.entrances.length).toBe(before);
+  });
+  it('PlaceChamber with NaN anchor is dropped — no PendingChamber created', () => {
+    const before = Object.keys(world.pendingChambers).length;
+    const cmd = { type: 'PlaceChamber', colonyId: PLAYER, chamberType: ChamberType.FoodStorage, anchorTileX: NaN, anchorTileY: NaN, issuedAtTick: 0 } as unknown as SimCommand;
+    tick(world, [cmd]);
+    expect(Object.keys(world.pendingChambers).length).toBe(before);
+    // Critically: no malformed `${colonyId}:NaN:NaN` key should have been created.
+    expect(Object.keys(world.pendingChambers).some((k) => k.includes('NaN'))).toBe(false);
+  });
+  it('PlaceChamber with non-integer anchor is dropped', () => {
+    const before = Object.keys(world.pendingChambers).length;
+    // eslint-disable-next-line no-restricted-syntax -- intentional non-integer probe to exercise the integer guard
+    const cmd = { type: 'PlaceChamber', colonyId: PLAYER, chamberType: ChamberType.FoodStorage, anchorTileX: 5.5, anchorTileY: 5, issuedAtTick: 0 } as unknown as SimCommand;
+    tick(world, [cmd]);
+    expect(Object.keys(world.pendingChambers).length).toBe(before);
+  });
+  it('MarkFoodPile with NaN coords is dropped — priorityFoodPileId unchanged', () => {
+    const before = world.colonies[PLAYER]!.priorityFoodPileId;
+    const cmd = { type: 'MarkFoodPile', colonyId: PLAYER, tileX: NaN, tileY: NaN, issuedAtTick: 0 } as unknown as SimCommand;
+    tick(world, [cmd]);
+    expect(world.colonies[PLAYER]!.priorityFoodPileId).toBe(before);
+  });
+  it('save round-trip: a NaN-coord SetRallyPoint never lands in the snapshot', async () => {
+    // Direct demonstration of the SCEN-06 byte-identity guarantee — even
+    // if a malformed command somehow reaches the queue (cast-defeated TS,
+    // tampered inputLog), the colony state never absorbs the NaN.
+    const { serializeWorldState } = await import('../platform/save.js');
+    const cmd = { type: 'SetRallyPoint', colonyId: PLAYER, tileX: NaN, tileY: NaN, issuedAtTick: 0 } as unknown as SimCommand;
+    tick(world, [cmd]);
+    const json = JSON.stringify(serializeWorldState(world));
+    expect(json).not.toContain('NaN');
+    // rallyPoint is still null, not {tileX: null, tileY: null}.
+    const parsed = JSON.parse(json) as { colonies: Record<string, { rallyPoint: unknown }> };
+    expect(parsed.colonies[String(PLAYER)]!.rallyPoint).toBeNull();
+  });
+});
