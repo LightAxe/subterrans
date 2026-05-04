@@ -4,11 +4,13 @@ import {
   createWorldState,
   copyWorldState,
   allocateEntityId,
+  INVALID_ENTITY_ID,
 } from './types.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import { createPheromoneGrid, phGet, phSet } from './pheromone/pheromone-store.js';
 import { createUndergroundGrid } from './terrain.js';
 import { MAX_ENTITIES, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constants.js';
+import { RECENT_TILES_LEN } from './ant/ant-store.js';
 
 describe('WorldState', () => {
   describe('createWorldState', () => {
@@ -259,6 +261,85 @@ describe('WorldState', () => {
         src.ants.searchPrevTileY[0] = 99;
         expect(dst.ants.searchPrevTileX[0]).toBe(11);
         expect(dst.ants.searchPrevTileY[0]).toBe(22);
+      });
+
+      // Issue #79 — these fields are copied in copyWorldState but were
+      // previously untested. The save round-trip tests in save.test.ts
+      // catch dropped fields at the persistence boundary, but the prev/curr
+      // render double-buffer goes through copyWorldState, not save. A
+      // refactor that drops one of the .set() calls between commits would
+      // ship undetected without these tests.
+      it('Phase 9: searchHeadingX/Y/Ticks copied (excursion-foraging correlated walk)', () => {
+        src.ants.searchHeadingX[0] = 1;
+        src.ants.searchHeadingY[0] = -1;
+        src.ants.searchHeadingTicks[0] = 8;
+        copyWorldState(src, dst);
+        expect(dst.ants.searchHeadingX[0]).toBe(1);
+        expect(dst.ants.searchHeadingY[0]).toBe(-1);
+        expect(dst.ants.searchHeadingTicks[0]).toBe(8);
+        // Independence
+        src.ants.searchHeadingX[0] = 0;
+        expect(dst.ants.searchHeadingX[0]).toBe(1);
+      });
+      it('Phase 09.1: currentGridColonyId copied (Uint8Array, not Int32Array)', () => {
+        // Verifies the Uint8Array path explicitly — a refactor that changed
+        // .set() to a typed-array spread would fail silently if untyped.
+        src.ants.currentGridColonyId[0] = 1;
+        src.ants.currentGridColonyId[1] = 2;
+        copyWorldState(src, dst);
+        expect(dst.ants.currentGridColonyId[0]).toBe(1);
+        expect(dst.ants.currentGridColonyId[1]).toBe(2);
+        src.ants.currentGridColonyId[0] = 0;
+        expect(dst.ants.currentGridColonyId[0]).toBe(1);
+      });
+      it('Issue #27: waitingDeposit copied (carrier wait flag)', () => {
+        src.ants.waitingDeposit[0] = 1;
+        copyWorldState(src, dst);
+        expect(dst.ants.waitingDeposit[0]).toBe(1);
+        src.ants.waitingDeposit[0] = 0;
+        expect(dst.ants.waitingDeposit[0]).toBe(1);
+      });
+      it('Issue #34: pathErr copied (Bresenham accumulator)', () => {
+        src.ants.pathErr[0] = 42;
+        src.ants.pathErr[1] = -7;
+        copyWorldState(src, dst);
+        expect(dst.ants.pathErr[0]).toBe(42);
+        expect(dst.ants.pathErr[1]).toBe(-7);
+        src.ants.pathErr[0] = 0;
+        expect(dst.ants.pathErr[0]).toBe(42);
+      });
+      it('Issue #35: searchPauseTicks copied (pause-while-searching counter)', () => {
+        src.ants.searchPauseTicks[0] = 5;
+        copyWorldState(src, dst);
+        expect(dst.ants.searchPauseTicks[0]).toBe(5);
+        src.ants.searchPauseTicks[0] = 0;
+        expect(dst.ants.searchPauseTicks[0]).toBe(5);
+      });
+      it('Issue #42: recentTilesX/Y/Head ring buffer copied (stride-sensitive)', () => {
+        // Special attention here: recentTilesX/Y are flat arrays of length
+        // capacity * RECENT_TILES_LEN. A wrong stride (e.g. .set on the
+        // first capacity slots only) would drop history for ants past the
+        // first slot. Write to two different ant slots at non-zero ring
+        // indices to verify stride-correct copy.
+        const stride = RECENT_TILES_LEN;  // ant i's ring slots: [i*stride .. i*stride + stride - 1]
+        // Sanity: confirm flat-array length matches capacity * stride.
+        expect(src.ants.recentTilesX.length).toBe(src.ants.alive.length * stride);
+        src.ants.recentTilesX[0] = 7;             // ant 0, ring index 0
+        src.ants.recentTilesY[0] = 8;
+        src.ants.recentTilesX[stride + 1] = 11;   // ant 1, ring index 1
+        src.ants.recentTilesY[stride + 1] = 12;
+        src.ants.recentTilesHead[0] = 1;
+        src.ants.recentTilesHead[1] = 2;
+        copyWorldState(src, dst);
+        expect(dst.ants.recentTilesX[0]).toBe(7);
+        expect(dst.ants.recentTilesY[0]).toBe(8);
+        expect(dst.ants.recentTilesX[stride + 1]).toBe(11);
+        expect(dst.ants.recentTilesY[stride + 1]).toBe(12);
+        expect(dst.ants.recentTilesHead[0]).toBe(1);
+        expect(dst.ants.recentTilesHead[1]).toBe(2);
+        // Independence
+        src.ants.recentTilesX[0] = 0;
+        expect(dst.ants.recentTilesX[0]).toBe(7);
       });
 
       it('Issue #17 Phase 1: carryingBroodId and carriedBy round-trip through copyWorldState', () => {
@@ -628,6 +709,33 @@ describe('WorldState', () => {
       allocateEntityId(world);
       allocateEntityId(world);
       expect(world.nextEntityId).toBe(3);
+    });
+
+    // Issue #59 — soft-cap at MAX_ENTITIES.
+    it('returns INVALID_ENTITY_ID when nextEntityId === MAX_ENTITIES', () => {
+      const world = createWorldState(0);
+      world.nextEntityId = MAX_ENTITIES;
+      expect(allocateEntityId(world)).toBe(INVALID_ENTITY_ID);
+    });
+    it('returns INVALID_ENTITY_ID without incrementing the counter (counter freezes at cap)', () => {
+      const world = createWorldState(0);
+      world.nextEntityId = MAX_ENTITIES;
+      allocateEntityId(world);
+      // Counter must NOT advance past cap — otherwise next save round-trip
+      // would persist a value > MAX_ENTITIES and trip the boundary check.
+      expect(world.nextEntityId).toBe(MAX_ENTITIES);
+      // Subsequent calls also return the sentinel.
+      expect(allocateEntityId(world)).toBe(INVALID_ENTITY_ID);
+      expect(world.nextEntityId).toBe(MAX_ENTITIES);
+    });
+    it('last legal allocation is id = MAX_ENTITIES - 1', () => {
+      const world = createWorldState(0);
+      world.nextEntityId = MAX_ENTITIES - 1;
+      const id = allocateEntityId(world);
+      expect(id).toBe(MAX_ENTITIES - 1);
+      expect(world.nextEntityId).toBe(MAX_ENTITIES);
+      // Next call is over the cap.
+      expect(allocateEntityId(world)).toBe(INVALID_ENTITY_ID);
     });
   });
 });

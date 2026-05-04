@@ -17,7 +17,7 @@
 // array.length > 0, so array[length-1] is always defined.
 
 import type { WorldState } from '../types.js';
-import { allocateEntityId, SIM_VERSION_V10_VISIBLE_BROOD_CARRY } from '../types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V10_VISIBLE_BROOD_CARRY } from '../types.js';
 import { initAnt } from '../ant/ant-store.js';
 import type { ColonyRecord } from './colony-store.js';
 import { AntTask, ChamberType } from '../enums.js';
@@ -133,7 +133,16 @@ export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord):
   // eggId is allocated up-front so the spread index is the egg's own ID,
   // matching the brood-transport pattern (deterministic, replay-safe, and
   // independent of colony.eggCount which can be perturbed by death cleanup).
+  //
+  // Issue #59 — bail on -1 sentinel. allocateEntityId returns
+  // INVALID_ENTITY_ID when world.nextEntityId reaches MAX_ENTITIES;
+  // egg-laying is the only unbounded allocator in the sim, so this is
+  // where the soft population cap manifests. Skipping the lay leaves
+  // the queen ready to retry next tick (food / queen-home gates re-fire
+  // each tick anyway), so once the cap relaxes (entity death) laying
+  // resumes naturally.
   const eggId = allocateEntityId(world);
+  if (eggId === INVALID_ENTITY_ID) return;
 
   let eggPosX = world.ants.posX[colony.queenEntityId]!;
   let eggPosY = world.ants.posY[colony.queenEntityId]!;

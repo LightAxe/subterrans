@@ -506,8 +506,31 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   }
 }
 
-/** Allocate a fresh entity ID. No recycling (PRD §1/§3 incrementing counter). */
+/**
+ * Sentinel returned by `allocateEntityId` when `world.nextEntityId` has
+ * reached `MAX_ENTITIES`. Callers MUST check for this value before using
+ * the result as an array index — writing to `world.ants.posX[-1]` is an
+ * out-of-bounds TypedArray store (silent drop on most engines, but
+ * incorrect behavior in any case). See issue #59.
+ */
+export const INVALID_ENTITY_ID: EntityId = -1;
+
+/**
+ * Allocate a fresh entity ID. No recycling (PRD §1/§3 incrementing counter).
+ *
+ * Issue #59 — soft-caps at `MAX_ENTITIES`. Pre-fix code post-incremented
+ * unconditionally; once `world.nextEntityId` reached 8192, callers wrote
+ * to `ants.posX[8192]` etc., which is out of range on the fixed-capacity
+ * TypedArrays — silent corruption / wraparound depending on engine.
+ *
+ * Post-fix: returns `INVALID_ENTITY_ID` (-1) when at cap WITHOUT
+ * incrementing the counter. The counter freezes at MAX_ENTITIES, so
+ * subsequent calls also return -1. Callers must handle -1 by skipping
+ * the spawn/allocation. This produces a soft population cap rather than
+ * a mid-tick crash.
+ */
 export function allocateEntityId(world: WorldState): EntityId {
+  if (world.nextEntityId >= MAX_ENTITIES) return INVALID_ENTITY_ID;
   const id = world.nextEntityId;
   world.nextEntityId = id + 1;
   return id;

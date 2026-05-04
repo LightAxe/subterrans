@@ -493,13 +493,33 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(env.version).toBe(SAVE_FORMAT_VERSION);
       expect(env.seed).toBe(42);
     });
-    it('returns lastSaveMs unchanged on setItem throw (quota)', () => {
+    it('returns nowMs on setItem throw — honors cooldown to prevent retry storm (#80)', () => {
       const w = createScenario(42);
       // Spy on the actual localStorage instance (InMemoryStorage replaces Storage.prototype on Node 25)
       const spy = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('quota'); });
       try {
-        const result = tickAutosave(42, [], w, 0, AUTOSAVE_INTERVAL_MS + 1);
-        expect(result).toBe(0);
+        const now = AUTOSAVE_INTERVAL_MS + 1;
+        const result = tickAutosave(42, [], w, 0, now);
+        // Pre-#80 returned 0 (lastSaveMs unchanged) → next frame instantly
+        // satisfied the elapsed check and stormed setItem at 60 FPS.
+        // Post-fix advances to nowMs so retry waits a full interval.
+        expect(result).toBe(now);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+    it('after setItem throw, the next call within the interval is a no-op (cooldown observed)', () => {
+      const w = createScenario(42);
+      const spy = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+      try {
+        const t1 = AUTOSAVE_INTERVAL_MS + 1;
+        const lastSaveMs = tickAutosave(42, [], w, 0, t1);
+        expect(spy).toHaveBeenCalledTimes(1);
+        // Half an interval later — cooldown should suppress the retry.
+        const t2 = t1 + (AUTOSAVE_INTERVAL_MS / 2);
+        const result = tickAutosave(42, [], w, lastSaveMs, t2);
+        expect(spy).toHaveBeenCalledTimes(1);  // no second attempt
+        expect(result).toBe(lastSaveMs);
       } finally {
         spy.mockRestore();
       }
@@ -736,6 +756,56 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
   // semantics as deserializeColony's targetRatio: drop dig, snap all-zero
   // remainder to {forage:10, fight:0}, leave already-migrated entries alone.
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Issue #82 — commandQueue migration parity.
+  // parseSaveFile already migrates inputLog. Pre-fix code preserved
+  // snapshot.commandQueue verbatim, which meant code paths that read
+  // world.commandQueue directly (debug tools, tests, future remote
+  // surfaces) would see legacy {forage, dig, fight} shapes until the
+  // dispatcher consumed them. The fix runs migrateInputLogCommand on
+  // each queued command at deserialize time too.
+  // ---------------------------------------------------------------------------
+  describe('Issue #82 — commandQueue migration on deserialize', () => {
+    it('legacy SetBehaviorRatio in commandQueue is migrated to two-field shape', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      // Inject a legacy-shape command directly into the serialized queue.
+      (s.commandQueue as unknown as Array<unknown>).push({
+        type: 'SetBehaviorRatio',
+        colonyId: PLAYER_COLONY_ID,
+        ratio: { forage: 5, dig: 3, fight: 2 },
+        issuedAtTick: 0,
+      });
+      const world = deserializeWorldState(s);
+      expect(world.commandQueue.length).toBe(1);
+      const cmd = world.commandQueue[0] as { ratio: unknown };
+      expect(cmd.ratio).toEqual({ forage: 5, fight: 2 });
+      expect('dig' in (cmd.ratio as object)).toBe(false);
+    });
+    it('non-SetBehaviorRatio commandQueue entries pass through unchanged', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      (s.commandQueue as unknown as Array<unknown>).push(
+        { type: 'MarkDigTile', colonyId: PLAYER_COLONY_ID, tileX: 7, tileY: 3, issuedAtTick: 0 },
+      );
+      const world = deserializeWorldState(s);
+      expect(world.commandQueue[0]).toMatchObject({ type: 'MarkDigTile', tileX: 7, tileY: 3 });
+    });
+    it('post-Phase-10 commandQueue entry passes through unchanged (idempotent)', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      (s.commandQueue as unknown as Array<unknown>).push({
+        type: 'SetBehaviorRatio',
+        colonyId: PLAYER_COLONY_ID,
+        ratio: { forage: 7, fight: 3 },
+        issuedAtTick: 5,
+      });
+      const world = deserializeWorldState(s);
+      const cmd = world.commandQueue[0] as { ratio: unknown };
+      expect(cmd.ratio).toEqual({ forage: 7, fight: 3 });
+    });
+  });
+
   describe('Phase 10 / WR-09 — inputLog migration on load', () => {
     function writeSave(file: { version: number; seed: number; inputLog: unknown[]; snapshot: unknown }): void {
       localStorage.setItem(SAVE_KEY, JSON.stringify(file));
@@ -944,6 +1014,46 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
   // true forever) and -1 (every gate false). Both silently break the
   // sticky-on-load determinism contract for tampered saves.
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Issue #59 — boundary validation for nextEntityId.
+  // Codex follow-up on #65: saves should reject snapshots whose
+  // nextEntityId exceeds component capacity. The new allocateEntityId
+  // soft-caps at MAX_ENTITIES, so a legitimate save can have
+  // nextEntityId === MAX_ENTITIES; anything above is tampered.
+  // ---------------------------------------------------------------------------
+  describe('Issue #59 — nextEntityId boundary validation', () => {
+    // Use spread+override rather than mutation: the FNDN-07 tripwire bans
+    // direct `obj.nextEntityId = ...` assignment AST shapes even on
+    // serialized snapshots, but spread syntax assembles a fresh object
+    // and is invisible to that selector.
+    function snapshotWith(nextEntityId: number): ReturnType<typeof serializeWorldState> {
+      return { ...serializeWorldState(createScenario(42)), nextEntityId };
+    }
+
+    it('accepts nextEntityId in range', () => {
+      expect(() => deserializeWorldState(snapshotWith(100))).not.toThrow();
+    });
+    it('accepts nextEntityId = 0 (fresh-scenario boundary)', () => {
+      expect(() => deserializeWorldState(snapshotWith(0))).not.toThrow();
+    });
+    it('accepts nextEntityId = MAX_ENTITIES (saturated counter)', () => {
+      expect(() => deserializeWorldState(snapshotWith(8192))).not.toThrow();
+    });
+    it('rejects nextEntityId > MAX_ENTITIES', () => {
+      expect(() => deserializeWorldState(snapshotWith(8193))).toThrow(/Invalid nextEntityId/);
+    });
+    it('rejects negative nextEntityId', () => {
+      expect(() => deserializeWorldState(snapshotWith(-1))).toThrow(/Invalid nextEntityId/);
+    });
+    it('rejects non-integer nextEntityId', () => {
+      expect(() => deserializeWorldState(snapshotWith(1.5))).toThrow(/Invalid nextEntityId/);
+    });
+    it('rejects NaN/Infinity nextEntityId', () => {
+      expect(() => deserializeWorldState(snapshotWith(NaN))).toThrow(/Invalid nextEntityId/);
+      expect(() => deserializeWorldState(snapshotWith(Infinity))).toThrow(/Invalid nextEntityId/);
+    });
+  });
+
   describe('Issue #66 — simVersion boundary validation', () => {
     function makeSavedSnapshot(mut: (s: ReturnType<typeof serializeWorldState>) => void): ReturnType<typeof serializeWorldState> {
       const w = createScenario(42);

@@ -26,7 +26,7 @@
 // No Math.floor, no floats, no division operator.
 
 import type { WorldState } from '../types.js';
-import { allocateEntityId } from '../types.js';
+import { allocateEntityId, INVALID_ENTITY_ID } from '../types.js';
 import type { ChamberRecord, ColonyRecord } from './colony-store.js';
 import type { ColonyId } from './colony-store.js';
 import {
@@ -538,10 +538,20 @@ export function checkPendingChambers(world: WorldState): void {
       const colony = world.colonies[pc.colonyId];
       if (!colony) continue;
 
+      // Issue #59 — bail on entity-id cap. Chamber creation is bounded in
+      // practice (low chamber count per colony), so reaching this with the
+      // counter at MAX_ENTITIES means the world is structurally saturated.
+      // Leaving the PendingChamber in place lets it complete on a later
+      // tick when entity-id space frees up (same as if the dig hadn't
+      // finished). Worst case the player sees their excavated chamber not
+      // commit — degraded but consistent, not corrupted.
+      const chamberId = allocateEntityId(world);
+      if (chamberId === INVALID_ENTITY_ID) continue;
+
       // Create ChamberRecord — the ONLY place ChamberRecord is created (two-phase invariant)
       // posX/posY are FIXED-POINT per Phase 2 PRD ChamberRecord contract (FP_SHIFT=8)
       colony.chambers.push({
-        chamberId:   allocateEntityId(world),
+        chamberId,
         chamberType: pc.chamberType,
         foodStored:  0,
         posX:        pc.anchorTileX << FP_SHIFT,

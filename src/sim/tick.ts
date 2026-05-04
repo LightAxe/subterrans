@@ -1,6 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY } from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY } from './types.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath } from './game-over.js';
 import { detectAndResolveCombat } from './combat.js';
@@ -551,8 +551,15 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
           if (occupiedByOther) break;
         }
         // Create entrance (not yet open)
+        // Issue #59 — bail on cap. Entrance creation is bounded in practice
+        // (a few per colony, max), so reaching this path with the entity
+        // counter at MAX_ENTITIES would mean the world is structurally
+        // saturated. Skip the command silently — same outcome as other
+        // tick command "out of resources" gates.
+        const entranceId = allocateEntityId(world);
+        if (entranceId === INVALID_ENTITY_ID) break;
         colony4.entrances.push({
-          entranceId:   allocateEntityId(world),
+          entranceId,
           surfaceTileX: cmd.surfaceTileX,
           surfaceTileY: cmd.surfaceTileY,
           isOpen:       false,

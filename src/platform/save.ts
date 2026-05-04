@@ -662,10 +662,24 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     pendingChambers[key] = { ...pc };
   }
 
+  // Issue #59 — boundary validation for nextEntityId. Codex suggested
+  // saves should reject snapshots whose nextEntityId exceeds component
+  // capacity (otherwise the next allocateEntityId after load would
+  // happily return an OOB slot index). Now that allocateEntityId
+  // soft-caps at MAX_ENTITIES, a legitimate post-fix save can have
+  // nextEntityId === MAX_ENTITIES (saturated counter). Anything above
+  // is tampered/corrupt and indicates the cap wasn't enforced when
+  // the snapshot was written. Match the count check: integer in
+  // [0, MAX_ENTITIES] required, anything else throws.
+  const rawNext = s.nextEntityId;
+  if (typeof rawNext !== 'number' || !Number.isInteger(rawNext) || rawNext < 0 || rawNext > MAX_ENTITIES) {
+    throw new Error(`Invalid nextEntityId in save: ${String(rawNext)} (require integer in [0, ${MAX_ENTITIES}])`);
+  }
+
   return {
     tick: s.tick,
     rngState: s.rngState,
-    nextEntityId: s.nextEntityId,
+    nextEntityId: rawNext,
     // Issue #27 — sticky-on-load: pre-#27 saves omit `simVersion` and replay
     // at LEGACY (2). Post-#27 saves carry the recorded version through.
     // Type-validate at the boundary: `??` only guards null/undefined, so a
@@ -694,7 +708,16 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     terrainSeed: typeof s.terrainSeed === 'number' && Number.isInteger(s.terrainSeed)
       ? s.terrainSeed >>> 0
       : 0,
-    commandQueue: s.commandQueue.map((c) => ({ ...c })),  // preserve unprocessed commands
+    // Issue #82 — also run migrateInputLogCommand on the queued commands.
+    // Pre-fix path migrated only inputLog at parseSaveFile and relied on
+    // tick.ts's inline SetBehaviorRatio guard for queued commands. That
+    // works for the live tick loop, but anything that inspects
+    // world.commandQueue directly (debug snapshot tools, ad-hoc tests,
+    // future remote-command surfaces) would see the unmigrated legacy
+    // shape until the dispatcher actually consumed it. Centralizing the
+    // migration here makes the loaded snapshot internally consistent
+    // before any tick runs.
+    commandQueue: s.commandQueue.map((c) => migrateInputLogCommand({ ...c })),
     ants: deserializeAnts(s.ants, capacity),
     colonies,
     pheromoneGrids,
@@ -826,7 +849,15 @@ export function deleteSave(): void {
  * Autosave gate. Returns the new lastSaveMs value:
  *   - interval not elapsed → returns lastSaveMs unchanged, no write
  *   - elapsed + setItem success → returns nowMs
- *   - elapsed + setItem throw (quota) → returns lastSaveMs unchanged (retry next interval)
+ *   - elapsed + setItem throw (quota / private-mode / blocked) → returns
+ *     nowMs (retry one interval later, NOT every frame)
+ *
+ * Issue #80 — pre-fix code returned lastSaveMs on failure, so the next
+ * frame instantly satisfied `nowMs - lastSaveMs >= AUTOSAVE_INTERVAL_MS`
+ * and tried again immediately. At 60 FPS that's ~60 attempts/sec each
+ * re-stringifying the entire WorldState (megabytes). Honoring the
+ * cooldown by advancing to nowMs converts the retry storm into one
+ * attempt every AUTOSAVE_INTERVAL_MS even when storage is full/blocked.
  *
  * Caller reassigns: `lastSaveMs = tickAutosave(seed, inputLog, world, lastSaveMs, now);`
  */
@@ -843,6 +874,7 @@ export function tickAutosave(
     localStorage.setItem(SAVE_KEY, JSON.stringify(envelope));
     return nowMs;
   } catch {
-    return lastSaveMs;
+    // Honor the cooldown on failure too — see #80 above.
+    return nowMs;
   }
 }

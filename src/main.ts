@@ -33,8 +33,11 @@ export interface MountOptions {
 export interface MountedGame {
   /**
    * Tear down the underlying Phaser.Game and remove its canvas from the
-   * mount target. Idempotent at the host level, but must not be called
-   * twice on the same instance.
+   * mount target. Idempotent: subsequent calls are no-ops. The host can
+   * race teardown paths (React useEffect cleanup + window unload, manual
+   * dismount + browser navigation) without worrying about an unhandled
+   * exception from Phaser's `game.destroy(true)` on an already-destroyed
+   * instance.
    */
   destroy(): void;
 
@@ -114,8 +117,16 @@ export function mount(target: HTMLElement, options?: MountOptions): MountedGame 
   });
   game.events.once(SUBTERRANS_READY_EVENT, () => resolveReady());
 
+  // Issue #81 — guard against double-destroy. Hosts often race teardown
+  // (React useEffect cleanup + window unload, navigation + manual unmount).
+  // Phaser's `game.destroy(true)` throws on a second call (internal state
+  // is nulled on the first), so the wrapper enforces idempotence here
+  // rather than depending on Phaser's internal tolerance.
+  let destroyed = false;
   return {
     destroy() {
+      if (destroyed) return;
+      destroyed = true;
       resolveReady();
       game.destroy(true);
     },

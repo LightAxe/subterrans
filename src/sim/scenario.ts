@@ -56,6 +56,14 @@ import {
  *
  * Note: Math.abs is used for Manhattan distance — only Math.random,
  * Math.sqrt, Math.sin, Math.cos, Math.round, Math.floor are banned in src/sim/.
+ *
+ * Issue #59 — `allocateEntityId` calls in scenario.ts are not guarded against
+ * the INVALID_ENTITY_ID sentinel because createScenario runs once on a fresh
+ * world (nextEntityId starts at 0) and allocates a known-bounded count
+ * (FOOD_PILE_COUNT food piles + 2 queens + N workers per colony, all far
+ * below MAX_ENTITIES=8192). The sentinel cannot be returned from these calls
+ * by construction. Production runtime callers (egg-laying, chamber spawn,
+ * entrance creation) handle the sentinel.
  */
 function generateFoodPiles(world: WorldState, rng: Rng): void {
   const colonies = [
