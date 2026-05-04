@@ -370,14 +370,28 @@ export class GameScene extends Phaser.Scene {
     this.resetSessionState();
     // Plan 04 SaveFile shape: { version, seed, inputLog, snapshot }
     // Issue #65/#66 — deserializeWorldState now throws on tampered ants.count
-    // or simVersion outside the supported band. Treat that as corrupt-save
-    // (same outcome as loadSave returning null) instead of letting the throw
-    // escape into the host page.
+    // or simVersion outside the supported band. Boot fresh on throw rather
+    // than letting it escape into the host page.
+    //
+    // Per codex review on PR #88: do NOT deleteSave() here, even though the
+    // null path above does. The two failure modes are asymmetric — the null
+    // path covers structurally unrecoverable envelopes (non-JSON, missing
+    // fields, version mismatch), so deletion is final and correct. A throw
+    // from deserializeWorldState, by contrast, can legitimately fire for a
+    // save written by a *newer* build (simVersion > LATEST after a rollback
+    // / cached-older-client). The envelope is fine; this build just doesn't
+    // know how to interpret the simVersion. Deleting it would be
+    // irreversible data loss for a save the user can recover by upgrading
+    // back to the newer build.
+    //
+    // Caveat (separate concern, not addressed here): once bootFresh runs,
+    // autosave will overwrite the preserved save within AUTOSAVE_INTERVAL_MS
+    // (~30s). Full future-build preservation across a session requires
+    // suspending autosave when this catch fires; tracked as follow-up.
     let nextWorld: WorldState;
     try {
       nextWorld = deserializeWorldState(loaded.snapshot);
     } catch {
-      deleteSave();
       this.bootFresh();
       return;
     }

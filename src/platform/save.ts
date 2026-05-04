@@ -389,9 +389,11 @@ export function migrateBehaviorRatio(legacy: unknown): BehaviorRatio {
  *
  * Returns LEGACY for missing/non-integer (preserves pre-#27 legacy load).
  * Returns the value verbatim for an integer in [LEGACY, LATEST].
- * Throws for an integer outside that band (caught by loadSave → null →
- * caller boots fresh, which is the same fail-open path SaveVersionMismatchError
- * already uses for mid-version mismatches).
+ * Throws for an integer outside that band. This runs at deserialize-time
+ * (called from `deserializeWorldState`); the throw is caught by
+ * `bootFromSave`'s try/catch in render/game-scene.ts and the caller boots
+ * fresh. Note that `loadSave` does NOT catch — its swallowing try/catch
+ * wraps `parseSaveFile` only, and parseSaveFile doesn't deserialize.
  *
  * Rationale: a tampered save with simVersion=99999 makes every `>= SIM_VERSION_VN`
  * gate evaluate true forever; simVersion=-1 makes them all evaluate false. Both
@@ -634,9 +636,10 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     // negatives (every gate evaluates false). Boundary policy: missing/non-
     // integer falls back to LEGACY (preserves legacy save-load); present
     // integer in [LEGACY, LATEST] is used verbatim; integer outside that
-    // band throws to surface the corrupt save (caught by loadSave → null →
-    // caller boots fresh) rather than silently loading into an undefined
-    // gate-state mode.
+    // band throws (caught by bootFromSave's try/catch in render/game-scene.ts
+    // → bootFresh) rather than silently loading into an undefined gate-state
+    // mode. NB: loadSave does NOT catch this — its try/catch only wraps
+    // parseSaveFile. The simVersion check runs at deserialize-time.
     simVersion: validateSimVersion(s.simVersion),
     // Issue #44 — pre-#44 saves omit `terrainSeed`; default to 0 on load.
     // Same boundary type-validation as `simVersion`: `??` only guards null/
