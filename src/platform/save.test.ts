@@ -980,6 +980,19 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const snapshot = makeSavedSnapshot((s) => { s.simVersion = 99999; });
       expect(() => deserializeWorldState(snapshot)).toThrow(FutureSimVersionError);
     });
+    it('future simVersion takes precedence over count check (a future build can legitimately bump MAX_ENTITIES)', () => {
+      // Verifies validation ordering: a save from a hypothetical future build
+      // that both bumped simVersion AND raised MAX_ENTITIES should be
+      // classified as recoverable (FutureSimVersionError → bootFromSave
+      // preserves bytes), not as tampering (plain Error → deleteSave).
+      const snapshot = makeSavedSnapshot((s) => {
+        s.simVersion = 99999;
+        s.ants.count = 1_000_000;  // would be tampering at current LATEST, but
+                                   // simVersion=99999 means we don't know our
+                                   // own MAX_ENTITIES governs this save.
+      });
+      expect(() => deserializeWorldState(snapshot)).toThrow(FutureSimVersionError);
+    });
     it('rejects negative simVersion (all-gates-off guard)', () => {
       const snapshot = makeSavedSnapshot((s) => { s.simVersion = -1; });
       expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid simVersion/);

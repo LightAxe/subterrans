@@ -611,6 +611,14 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   if (s === null || typeof s !== 'object' || s.ants === null || typeof s.ants !== 'object') {
     throw new Error('Invalid save shape: missing or non-object snapshot/ants');
   }
+  // Validate simVersion BEFORE field-shape checks (issue #65 count guard
+  // below) so a future-build save with a legitimately-larger ants.count is
+  // recognized as recoverable (FutureSimVersionError) rather than treated
+  // as tampering. A future build that raised MAX_ENTITIES would also bump
+  // simVersion (the only way the new behavior is observable); reordering
+  // here means that save short-circuits via FutureSimVersionError before
+  // the count check has a chance to misclassify it. Per codex P1 on PR #88.
+  const validatedSimVersion = validateSimVersion(s.simVersion);
   // Issue #65 — boundary validation for s.ants.count. Pre-fix code was
   // `s.ants.count > 0 ? s.ants.count : MAX_ENTITIES`, which silently accepted
   // 1e9 / Infinity / NaN. A hand-edited or corrupted save with a huge count
@@ -624,6 +632,9 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // pre-fix MAX_ENTITIES fallback (was the "no count field" sentinel and is
   // still safe). Compare with simVersion, where missing/non-integer falls
   // back to LEGACY (pre-#27 saves omit the field entirely; that path is real).
+  // Reaches here only after validateSimVersion confirmed simVersion <= LATEST,
+  // so a count > MAX_ENTITIES at this point is genuine tampering — a future
+  // build raising MAX_ENTITIES would have bumped simVersion to flag the change.
   const rawCount = s.ants.count;
   if (typeof rawCount !== 'number' || !Number.isInteger(rawCount) || rawCount < 0 || rawCount > MAX_ENTITIES) {
     // Use String() so NaN/Infinity render as their canonical names; JSON.stringify
@@ -670,7 +681,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     // → bootFresh) rather than silently loading into an undefined gate-state
     // mode. NB: loadSave does NOT catch this — its try/catch only wraps
     // parseSaveFile. The simVersion check runs at deserialize-time.
-    simVersion: validateSimVersion(s.simVersion),
+    simVersion: validatedSimVersion,
     // Issue #44 — pre-#44 saves omit `terrainSeed`; default to 0 on load.
     // Same boundary type-validation as `simVersion`: `??` only guards null/
     // undefined, so a hand-edited save with `"42"` / NaN / object would land
