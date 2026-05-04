@@ -206,6 +206,65 @@ describe('Step 1: command processing', () => {
     expect(world.tick).toBe(1);
   });
 
+  // Issue #78 — malformed ratio resilience.
+  // Pre-fix code did `'dig' in ratioRaw` (TypeError on null/primitive) and
+  // also accessed `cmd.ratio.forage` directly (TypeError on null). A bad
+  // command in the inputLog would crash the tick during replay.
+  it('Test 5b: SetBehaviorRatio with null ratio is silently dropped (#78)', () => {
+    const colony = world.colonies[colonyId]!;
+    const forageBefore = colony.targetRatio.forage;
+    // Construct via cast — the runtime path can hit this through a
+    // tampered/corrupted save's inputLog.
+    const cmd = {
+      type: 'SetBehaviorRatio',
+      colonyId,
+      ratio: null,
+      issuedAtTick: 0,
+    } as unknown as SimCommand;
+    expect(() => tick(world, [cmd])).not.toThrow();
+    expect(world.colonies[colonyId]!.targetRatio.forage).toBe(forageBefore);
+  });
+  it('Test 5d: legacy {dig:N}-only ratio (no forage/fight) snaps to {forage:10, fight:0} (#78 parity with save.ts)', () => {
+    // Ensures the inline tick.ts migration matches migrateBehaviorRatio in
+    // platform/save.ts for the no-forage/fight legacy edge. Without this
+    // parity branch, the command would fall through to the finite-check
+    // and be silently dropped, diverging from the save.ts canonical path.
+    const cmd = {
+      type: 'SetBehaviorRatio',
+      colonyId,
+      ratio: { dig: 3 },
+      issuedAtTick: 0,
+    } as unknown as SimCommand;
+    tick(world, [cmd]);
+    expect(world.colonies[colonyId]!.targetRatio.forage).toBe(10);
+    expect(world.colonies[colonyId]!.targetRatio.fight).toBe(0);
+  });
+  it('Test 5e: legacy {forage:5, dig:3} (partial fields, non-zero forage) keeps {5, 0} — NOT snapped (#78 parity)', () => {
+    // The coerce-missing-to-0 step alone would zero out the missing fight;
+    // an over-eager snap would clobber forage=5 and produce {10,0}. The
+    // canonical save.ts migration keeps {forage:5, fight:0} because the
+    // post-coercion all-zero check fails. Tick.ts must match exactly.
+    const cmd = {
+      type: 'SetBehaviorRatio',
+      colonyId,
+      ratio: { forage: 5, dig: 3 },
+      issuedAtTick: 0,
+    } as unknown as SimCommand;
+    tick(world, [cmd]);
+    expect(world.colonies[colonyId]!.targetRatio.forage).toBe(5);
+    expect(world.colonies[colonyId]!.targetRatio.fight).toBe(0);
+  });
+  it('Test 5c: SetBehaviorRatio with primitive ratio is silently dropped (#78)', () => {
+    const colony = world.colonies[colonyId]!;
+    const forageBefore = colony.targetRatio.forage;
+    const cmds: SimCommand[] = [
+      { type: 'SetBehaviorRatio', colonyId, ratio: 5, issuedAtTick: 0 } as unknown as SimCommand,
+      { type: 'SetBehaviorRatio', colonyId, ratio: 'bogus', issuedAtTick: 0 } as unknown as SimCommand,
+    ];
+    expect(() => tick(world, cmds)).not.toThrow();
+    expect(world.colonies[colonyId]!.targetRatio.forage).toBe(forageBefore);
+  });
+
   // Test 6: MarkDigTile is silent no-op
   it('Test 6: MarkDigTile is silent no-op — no throw, no colony state change', () => {
     const colony = world.colonies[colonyId]!;

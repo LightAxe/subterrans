@@ -869,4 +869,230 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         .toBe(JSON.stringify(serializeWorldState(original)));
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Issue #65 — boundary validation for s.ants.count.
+  // Pre-fix code accepted any positive number (1e9, Infinity), which flowed
+  // into createAntComponents and allocated ~25 TypedArrays of that length —
+  // a memory-DoS vector on save load.
+  // ---------------------------------------------------------------------------
+  describe('Issue #65 — ants.count boundary validation', () => {
+    function makeSavedSnapshot(mut: (s: ReturnType<typeof serializeWorldState>) => void): ReturnType<typeof serializeWorldState> {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      mut(s);
+      return s;
+    }
+
+    it('accepts count = 0 (legacy fallback to MAX_ENTITIES)', () => {
+      const snapshot = makeSavedSnapshot((s) => { s.ants.count = 0; });
+      const w = deserializeWorldState(snapshot);
+      // Capacity falls back to MAX_ENTITIES, which is the alive array length.
+      expect(w.ants.alive.length).toBe(8192);
+    });
+    it('accepts a small positive integer count', () => {
+      const snapshot = makeSavedSnapshot((s) => { s.ants.count = 8; });
+      expect(() => deserializeWorldState(snapshot)).not.toThrow();
+    });
+    it('rejects count > MAX_ENTITIES (memory-DoS guard)', () => {
+      const snapshot = makeSavedSnapshot((s) => { s.ants.count = 1_000_000_000; });
+      expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid ants\.count/);
+    });
+    it('exact boundary: count = MAX_ENTITIES is accepted', () => {
+      const snapshot = makeSavedSnapshot((s) => { s.ants.count = 8192; });
+      const w = deserializeWorldState(snapshot);
+      expect(w.ants.alive.length).toBe(8192);
+    });
+    it('exact boundary: count = MAX_ENTITIES + 1 is rejected', () => {
+      const snapshot = makeSavedSnapshot((s) => { s.ants.count = 8193; });
+      expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid ants\.count/);
+    });
+    it('rejects negative count', () => {
+      const snapshot = makeSavedSnapshot((s) => { s.ants.count = -1; });
+      expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid ants\.count/);
+    });
+    it('rejects non-integer count', () => {
+      const snapshot = makeSavedSnapshot((s) => { s.ants.count = 1.5; });
+      expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid ants\.count/);
+    });
+    it('rejects NaN count', () => {
+      const snapshot = makeSavedSnapshot((s) => { s.ants.count = NaN; });
+      expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid ants\.count/);
+    });
+    it('rejects Infinity count', () => {
+      const snapshot = makeSavedSnapshot((s) => { s.ants.count = Infinity; });
+      expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid ants\.count/);
+    });
+    it('rejects non-number count (string)', () => {
+      const snapshot = makeSavedSnapshot((s) => {
+        (s.ants as unknown as { count: unknown }).count = '1e9';
+      });
+      expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid ants\.count/);
+    });
+    it('rejects null count (most likely tampered shape — JSON omission)', () => {
+      const snapshot = makeSavedSnapshot((s) => {
+        (s.ants as unknown as { count: unknown }).count = null;
+      });
+      expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid ants\.count/);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Issue #66 — boundary validation for s.simVersion.
+  // Pre-fix code accepted any integer, including 99999 (every gate evaluates
+  // true forever) and -1 (every gate false). Both silently break the
+  // sticky-on-load determinism contract for tampered saves.
+  // ---------------------------------------------------------------------------
+  describe('Issue #66 — simVersion boundary validation', () => {
+    function makeSavedSnapshot(mut: (s: ReturnType<typeof serializeWorldState>) => void): ReturnType<typeof serializeWorldState> {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      mut(s);
+      return s;
+    }
+
+    it('accepts missing simVersion (defaults to LEGACY — pre-#27 behavior preserved)', () => {
+      const snapshot = makeSavedSnapshot((s) => { delete s.simVersion; });
+      const w = deserializeWorldState(snapshot);
+      expect(w.simVersion).toBe(2); // LEGACY_SIM_VERSION
+    });
+    it('accepts non-integer simVersion (defaults to LEGACY)', () => {
+      const snapshot = makeSavedSnapshot((s) => { s.simVersion = 3.5; });
+      const w = deserializeWorldState(snapshot);
+      expect(w.simVersion).toBe(2);
+    });
+    it('accepts simVersion = LEGACY (= 2)', () => {
+      const snapshot = makeSavedSnapshot((s) => { s.simVersion = 2; });
+      const w = deserializeWorldState(snapshot);
+      expect(w.simVersion).toBe(2);
+    });
+    it('accepts simVersion = LATEST', () => {
+      // LATEST_SIM_VERSION is 10 today; the value is whatever serializeWorldState
+      // wrote out for a fresh scenario.
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      const latest = s.simVersion!;
+      const out = deserializeWorldState(s);
+      expect(out.simVersion).toBe(latest);
+    });
+    it('rejects simVersion above LATEST (gate-bypass guard)', () => {
+      const snapshot = makeSavedSnapshot((s) => { s.simVersion = 99999; });
+      expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid simVersion/);
+    });
+    it('rejects negative simVersion (all-gates-off guard)', () => {
+      const snapshot = makeSavedSnapshot((s) => { s.simVersion = -1; });
+      expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid simVersion/);
+    });
+    it('exact boundary: simVersion = LATEST + 1 is rejected', () => {
+      // LATEST_SIM_VERSION is whatever the current sim writes for a fresh
+      // scenario; the value is captured here to keep the test version-agnostic.
+      const w = createScenario(42);
+      const latest = serializeWorldState(w).simVersion!;
+      const snapshot = makeSavedSnapshot((s) => { s.simVersion = latest + 1; });
+      expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid simVersion/);
+    });
+    it('exact boundary: simVersion = LEGACY - 1 is rejected', () => {
+      // LEGACY_SIM_VERSION is 2; 1 should be rejected as out-of-range.
+      const snapshot = makeSavedSnapshot((s) => { s.simVersion = 1; });
+      expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid simVersion/);
+    });
+    it('string simVersion falls back to LEGACY (non-integer types treated as missing)', () => {
+      // Non-number/non-integer types (string, null, NaN, object) all hit
+      // the same fallback-to-LEGACY path — pre-#27 saves and tampered saves
+      // converge here. Only present-but-out-of-range integers throw.
+      const snapshot = makeSavedSnapshot((s) => {
+        (s as unknown as { simVersion: unknown }).simVersion = '99999';
+      });
+      const w = deserializeWorldState(snapshot);
+      expect(w.simVersion).toBe(2);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Issue #78 — migrateInputLogCommand and migrateBehaviorRatio resilience.
+  // Pre-fix code did `'dig' in ratioRaw` directly, which throws TypeError
+  // for null / undefined / primitive ratios. parseSaveFile is wrapped in
+  // a swallowing try/catch, so a single malformed command was escalating
+  // to total save loss (the whole envelope returned null → bootFresh).
+  // ---------------------------------------------------------------------------
+  describe('Issue #78 — malformed BehaviorRatio resilience on load', () => {
+    function writeSave(file: { version: number; seed: number; inputLog: unknown[]; snapshot: unknown }): void {
+      localStorage.setItem(SAVE_KEY, JSON.stringify(file));
+    }
+
+    it('null ratio in inputLog: save still loads (command preserved verbatim)', () => {
+      const w = createScenario(42);
+      writeSave({
+        version: SAVE_FORMAT_VERSION, seed: 42,
+        inputLog: [{ type: 'SetBehaviorRatio', colonyId: PLAYER_COLONY_ID, ratio: null, issuedAtTick: 0 }],
+        snapshot: serializeWorldState(w),
+      });
+      const loaded = loadSave();
+      expect(loaded).not.toBeNull();
+      expect(loaded!.inputLog.length).toBe(1);
+      expect((loaded!.inputLog[0] as { ratio: unknown }).ratio).toBeNull();
+    });
+    it('numeric ratio in inputLog: save still loads', () => {
+      const w = createScenario(42);
+      writeSave({
+        version: SAVE_FORMAT_VERSION, seed: 42,
+        inputLog: [{ type: 'SetBehaviorRatio', colonyId: PLAYER_COLONY_ID, ratio: 5, issuedAtTick: 0 }],
+        snapshot: serializeWorldState(w),
+      });
+      expect(loadSave()).not.toBeNull();
+    });
+    it('string ratio in inputLog: save still loads', () => {
+      const w = createScenario(42);
+      writeSave({
+        version: SAVE_FORMAT_VERSION, seed: 42,
+        inputLog: [{ type: 'SetBehaviorRatio', colonyId: PLAYER_COLONY_ID, ratio: 'bogus', issuedAtTick: 0 }],
+        snapshot: serializeWorldState(w),
+      });
+      expect(loadSave()).not.toBeNull();
+    });
+    it('mixed inputLog with one malformed entry: rest of log is preserved', () => {
+      const w = createScenario(42);
+      writeSave({
+        version: SAVE_FORMAT_VERSION, seed: 42,
+        inputLog: [
+          { type: 'SetBehaviorRatio', colonyId: PLAYER_COLONY_ID, ratio: null, issuedAtTick: 0 },
+          { type: 'MarkDigTile', colonyId: PLAYER_COLONY_ID, tileX: 7, tileY: 3, issuedAtTick: 5 },
+          { type: 'SetBehaviorRatio', colonyId: PLAYER_COLONY_ID, ratio: { forage: 5, dig: 3, fight: 2 }, issuedAtTick: 10 },
+        ],
+        snapshot: serializeWorldState(w),
+      });
+      const loaded = loadSave();
+      expect(loaded).not.toBeNull();
+      expect(loaded!.inputLog.length).toBe(3);
+      expect((loaded!.inputLog[0] as { ratio: unknown }).ratio).toBeNull();
+      expect(loaded!.inputLog[1]).toMatchObject({ type: 'MarkDigTile', tileX: 7, tileY: 3 });
+      expect((loaded!.inputLog[2] as { ratio: unknown }).ratio).toEqual({ forage: 5, fight: 2 });
+    });
+    it('migrateBehaviorRatio is null-safe (defaults to {forage:10, fight:0})', () => {
+      expect(migrateBehaviorRatio(null)).toEqual({ forage: 10, fight: 0 });
+    });
+    it('migrateBehaviorRatio is primitive-safe (defaults to {forage:10, fight:0})', () => {
+      expect(migrateBehaviorRatio(5)).toEqual({ forage: 10, fight: 0 });
+      expect(migrateBehaviorRatio('bogus')).toEqual({ forage: 10, fight: 0 });
+      expect(migrateBehaviorRatio(undefined)).toEqual({ forage: 10, fight: 0 });
+    });
+    it('snapshot with null targetRatio: load + deserialize survives, applies safe default', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      // Tamper: a corrupted save with null targetRatio on the player colony.
+      (s.colonies[String(PLAYER_COLONY_ID)] as unknown as { targetRatio: unknown }).targetRatio = null;
+      writeSave({
+        version: SAVE_FORMAT_VERSION, seed: 42,
+        inputLog: [],
+        snapshot: s,
+      });
+      const loaded = loadSave();
+      expect(loaded).not.toBeNull();
+      // The actual targetRatio path runs in deserializeWorldState (via
+      // deserializeColony → migrateBehaviorRatio). Exercise it to confirm
+      // the null-safe default propagates into the live ColonyRecord.
+      const world = deserializeWorldState(loaded!.snapshot);
+      expect(world.colonies[PLAYER_COLONY_ID]!.targetRatio).toEqual({ forage: 10, fight: 0 });
+    });
+  });
 });

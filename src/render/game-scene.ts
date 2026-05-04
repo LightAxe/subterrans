@@ -369,8 +369,20 @@ export class GameScene extends Phaser.Scene {
     // instance) would concatenate with loaded.inputLog and break replay truth.
     this.resetSessionState();
     // Plan 04 SaveFile shape: { version, seed, inputLog, snapshot }
+    // Issue #65/#66 — deserializeWorldState now throws on tampered ants.count
+    // or simVersion outside the supported band. Treat that as corrupt-save
+    // (same outcome as loadSave returning null) instead of letting the throw
+    // escape into the host page.
+    let nextWorld: WorldState;
+    try {
+      nextWorld = deserializeWorldState(loaded.snapshot);
+    } catch {
+      deleteSave();
+      this.bootFresh();
+      return;
+    }
     this.currentSeed = loaded.seed;
-    this.world = deserializeWorldState(loaded.snapshot);
+    this.world = nextWorld;
     // SCEN-06 replay truth: restore inputLog completely so the continued session
     // can be replayed byte-for-byte from (seed, inputLog) per Plan 04 Task 1.
     for (const c of loaded.inputLog) this.inputLog.push(c);

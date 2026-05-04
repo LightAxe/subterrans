@@ -204,12 +204,31 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         // `'dig' in ratioRaw` guard short-circuits when the legacy key
         // is absent, so post-Phase-10 commands (including a legitimate
         // {forage:0, fight:0} idle slider) pass through unchanged.
-        const ratioRaw = cmd.ratio as unknown as { forage?: number; dig?: number; fight?: number };
-        let nextForage = cmd.ratio.forage;
-        let nextFight  = cmd.ratio.fight;
-        if ('dig' in ratioRaw) {
-          // Mirrors migrateBehaviorRatio in platform/save.ts: drop dig,
-          // snap all-zero remainder to DEFAULT_BEHAVIOR_RATIO {10, 0}.
+        //
+        // Issue #78 — guard cmd.ratio against null/primitive before the
+        // `in` operator and any property access. `'dig' in null` throws
+        // TypeError, and `null.forage` likewise; either would crash the
+        // tick (uncaught in the dispatcher). Treat malformed shapes as
+        // "skip command" — same outcome as the existing finite/non-
+        // negative validators below.
+        const ratioRaw: unknown = cmd.ratio;
+        if (ratioRaw === null || typeof ratioRaw !== 'object') break;
+        // Cast to optional/unknown shape — Number.isFinite checks below
+        // do the honest narrowing on each field.
+        const ratioObj = ratioRaw as { forage?: unknown; fight?: unknown; dig?: unknown };
+        let nextForage = ratioObj.forage as number;
+        let nextFight  = ratioObj.fight  as number;
+        if ('dig' in ratioObj) {
+          // Mirror migrateBehaviorRatio in platform/save.ts byte-for-byte:
+          //   1. coerce missing/non-finite forage and fight to 0
+          //   2. if both are 0, snap to DEFAULT_BEHAVIOR_RATIO {10, 0}
+          // Coerce-then-snap order is load-bearing — legacy `{forage:5, dig:3}`
+          // (no fight) must keep `{5, 0}`, NOT snap to `{10, 0}`. Without this
+          // sequencing the inline migration would diverge from save.ts on
+          // partial-field legacy shapes, breaking SCEN-06 replay determinism
+          // for non-loadSave call paths (debug snapshot replay, ad-hoc tests).
+          if (!Number.isFinite(nextForage)) nextForage = 0;
+          if (!Number.isFinite(nextFight))  nextFight  = 0;
           if (nextForage === 0 && nextFight === 0) {
             nextForage = 10;
             nextFight  = 0;
