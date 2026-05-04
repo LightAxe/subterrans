@@ -464,10 +464,29 @@ export class GameScene extends Phaser.Scene {
   }
 
   private restartGame(): void {
-    deleteSave();
+    // Issue #66 — capture suspend state BEFORE bootFresh (which clears it
+    // via resetSessionState). Two distinct flows:
+    //
+    //   - autosaveSuspended === false (normal restart): delete the save
+    //     so the new game starts clean; autosave resumes naturally.
+    //   - autosaveSuspended === true (restart inside a future-build
+    //     preserved-save session): do NOT delete — the localStorage bytes
+    //     belong to a save the user can recover by reloading on the newer
+    //     build; restartGame must not destroy them. Re-suspend autosave
+    //     after bootFresh so the new fresh session also can't clobber the
+    //     preserved bytes via tickAutosave. Suspension stays sticky until
+    //     the page reloads (the only path back is reloading on a build
+    //     that knows the simVersion).
+    const wasSuspended = this.autosaveSuspended;
+    if (!wasSuspended) {
+      deleteSave();
+    }
     this.currentOutcome = GameOutcome.None;
     // bootFresh → finishBoot resumes the loop; this is the authoritative restart path.
     this.bootFresh();
+    if (wasSuspended) {
+      this.autosaveSuspended = true;
+    }
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     uiScene.hideGameOverOverlay();
   }
