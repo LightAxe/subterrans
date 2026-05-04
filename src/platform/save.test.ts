@@ -993,6 +993,21 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       });
       expect(() => deserializeWorldState(snapshot)).toThrow(FutureSimVersionError);
     });
+    it('future simVersion takes precedence over ants-shape guard (future build may restructure layout)', () => {
+      // A future build could split `s.ants` into per-colony arrays or
+      // otherwise restructure the layout. Older builds must classify that
+      // as recoverable (FutureSimVersionError → preserve), not as tampering
+      // (plain "Invalid save shape" → deleteSave).
+      // Build a snapshot-shaped object directly rather than mutating the
+      // serialized result (FNDN-07 tripwire forbids direct sim-state writes
+      // even on serialized snapshots — this is a hand-constructed tamper).
+      const snapshot = {
+        ...serializeWorldState(createScenario(42)),
+        simVersion: 99999,
+        ants: null as unknown as ReturnType<typeof serializeWorldState>['ants'],
+      };
+      expect(() => deserializeWorldState(snapshot)).toThrow(FutureSimVersionError);
+    });
     it('rejects negative simVersion (all-gates-off guard)', () => {
       const snapshot = makeSavedSnapshot((s) => { s.simVersion = -1; });
       expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid simVersion/);

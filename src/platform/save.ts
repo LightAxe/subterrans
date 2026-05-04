@@ -601,24 +601,27 @@ function deserializePheromoneGrid(s: SerializedGrid): PheromoneGrid {
 }
 
 export function deserializeWorldState(s: SerializedWorldState): WorldState {
-  // Issue #65 / #66 — top-of-function shape guard for the two most-handled
-  // top-level fields (`s` itself and `s.ants`). Other fields (colonies,
-  // pheromoneGrids, undergroundGrids, foodPiles, surface, pendingChambers,
-  // commandQueue) still rely on TypeError propagation if absent — the throw
-  // is caught by bootFromSave's try/catch in either case, so DoS containment
-  // is intact, but anyone debugging a malformed payload only gets a
-  // descriptive error message for the s/s.ants paths.
-  if (s === null || typeof s !== 'object' || s.ants === null || typeof s.ants !== 'object') {
-    throw new Error('Invalid save shape: missing or non-object snapshot/ants');
+  // Top-level guard — must be a non-null object to read .simVersion.
+  if (s === null || typeof s !== 'object') {
+    throw new Error('Invalid save shape: snapshot is not an object');
   }
-  // Validate simVersion BEFORE field-shape checks (issue #65 count guard
-  // below) so a future-build save with a legitimately-larger ants.count is
-  // recognized as recoverable (FutureSimVersionError) rather than treated
-  // as tampering. A future build that raised MAX_ENTITIES would also bump
-  // simVersion (the only way the new behavior is observable); reordering
-  // here means that save short-circuits via FutureSimVersionError before
-  // the count check has a chance to misclassify it. Per codex P1 on PR #88.
-  const validatedSimVersion = validateSimVersion(s.simVersion);
+  // Validate simVersion FIRST — earliest possible, before any other shape
+  // or field-value check. Per codex P1 on PR #88: a future build can
+  // legitimately restructure the snapshot layout (e.g., split `s.ants`
+  // per-colony, raise MAX_ENTITIES, add new top-level fields). Any of those
+  // would otherwise throw plain Error at a downstream guard, and bootFromSave
+  // would deleteSave() — destroying a recoverable forward-version save.
+  // Hoisting the simVersion check ensures any future-version mismatch is
+  // surfaced as FutureSimVersionError (preserved + autosave-suspended)
+  // before the shape mismatch can misclassify it as tampering.
+  const validatedSimVersion = validateSimVersion((s as { simVersion?: unknown }).simVersion);
+  // Issue #65 / #66 — shape guard for `s.ants`. Reaches here only after
+  // validateSimVersion confirmed simVersion <= LATEST, so a non-object
+  // s.ants at this point indicates real corruption (no future build
+  // restructure to worry about, since that would have bumped simVersion).
+  if (s.ants === null || typeof s.ants !== 'object') {
+    throw new Error('Invalid save shape: missing or non-object ants');
+  }
   // Issue #65 — boundary validation for s.ants.count. Pre-fix code was
   // `s.ants.count > 0 ? s.ants.count : MAX_ENTITIES`, which silently accepted
   // 1e9 / Infinity / NaN. A hand-edited or corrupted save with a huge count
