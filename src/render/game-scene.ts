@@ -152,6 +152,15 @@ export class GameScene extends Phaser.Scene {
   private aiColonyIds: ReturnType<typeof deriveAIColonyIds> = [];
   private readonly inputLog: SimCommand[] = [];
   private lastAutosaveMs: number = 0;
+  /**
+   * Issue #66 — set when bootFromSave catches a deserialize throw and falls
+   * through to bootFresh, indicating an existing localStorage save couldn't
+   * be loaded by this build. Suspends the autosave path in `update()` so
+   * the preserved bytes aren't overwritten by the fresh game state. The
+   * preserved save can be recovered on a future build / reload.
+   * Cleared on resetSessionState so an explicit restartGame re-enables it.
+   */
+  private autosaveSuspended: boolean = false;
   private currentSeed: number = 0;
   private speedMultiplier: number = 1;
 
@@ -330,6 +339,10 @@ export class GameScene extends Phaser.Scene {
     this.lastActiveView = null;
     this.currentOutcome = GameOutcome.None;
     this.speedMultiplier = 1;
+    // Re-enable autosave for the next session. The flag is set only by
+    // bootFromSave's deserialize-throw catch (see issue #66 in the field
+    // doc); a fresh start via restartGame should resume normal autosave.
+    this.autosaveSuspended = false;
     // tick.ts caches entrance/dig/chamber flow-fields at module scope keyed by
     // colonyId. bootFresh/bootFromSave replace `world` but those singletons
     // survive, so a new session with the same colony IDs would otherwise route
@@ -384,15 +397,16 @@ export class GameScene extends Phaser.Scene {
     // irreversible data loss for a save the user can recover by upgrading
     // back to the newer build.
     //
-    // Caveat (separate concern, not addressed here): once bootFresh runs,
-    // autosave will overwrite the preserved save within AUTOSAVE_INTERVAL_MS
-    // (~30s). Full future-build preservation across a session requires
-    // suspending autosave when this catch fires; tracked as follow-up.
+    // Suspend autosave for this session before bootFresh runs — otherwise
+    // tickAutosave in update() would overwrite the preserved save within
+    // AUTOSAVE_INTERVAL_MS. The flag is cleared on resetSessionState (which
+    // bootFresh runs first), so we set it AFTER bootFresh resets state.
     let nextWorld: WorldState;
     try {
       nextWorld = deserializeWorldState(loaded.snapshot);
     } catch {
       this.bootFresh();
+      this.autosaveSuspended = true;
       return;
     }
     this.currentSeed = loaded.seed;
@@ -525,8 +539,11 @@ export class GameScene extends Phaser.Scene {
     }
     this.antSprites.endFrame();
 
-    // Autosave — only while actively Playing
-    if (this.gamePhase === GamePhase.Playing) {
+    // Autosave — only while actively Playing, and not while a preserved
+    // incompatible save is sitting in localStorage waiting for recovery
+    // (issue #66: bootFromSave's deserialize-throw catch suspends autosave
+    // so the preserved bytes aren't overwritten by this fresh session).
+    if (this.gamePhase === GamePhase.Playing && !this.autosaveSuspended) {
       this.lastAutosaveMs = tickAutosave(
         this.currentSeed,
         this.inputLog,
