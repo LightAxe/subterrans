@@ -16,25 +16,9 @@ import {
   UndergroundTileState,
 } from './terrain.js';
 import type { UndergroundGrid } from './terrain.js';
-
-// ---------------------------------------------------------------------------
-// Direction constants for BFS output array
-//
-// Directions pointing TOWARD the nearest Marked tile source:
-//   0 = North (row decreases)
-//   1 = East  (col increases)
-//   2 = South (row increases)
-//   3 = West  (col decreases)
-//  -1 = source (tile is Marked)
-//  -2 = unreachable (no Marked tile reachable from this tile)
-// ---------------------------------------------------------------------------
-
-/** Reverse of each expansion direction: if we expanded North (0), neighbor points South (2) back to us. */
-const REVERSE = [2, 3, 0, 1] as const;
-
-/** Neighbor offsets [dRow, dCol] for each direction (0=N, 1=E, 2=S, 3=W). */
-const NEIGHBOR_DR = [-1, 0, 1, 0] as const;
-const NEIGHBOR_DC = [0, 1, 0, -1] as const;
+// Issue #87 — shared BFS expansion. Direction encoding:
+//   0=N (row decreases), 1=E, 2=S, 3=W; -1=source, -2=unreachable.
+import { bfsExpandSeededField } from './bfs-flow-field.js';
 
 // ---------------------------------------------------------------------------
 // DigFlowFields — per-colony flow-field cache
@@ -117,9 +101,7 @@ export function computeDigFlowField(
   out.fill(-2);
 
   // Step 2: seed BFS from all Marked tiles
-  let head = 0;
   let tail = 0;
-
   for (let idx = 0; idx < size; idx++) {
     if (data[idx] === UndergroundTileState.Marked) {
       out[idx] = -1; // source
@@ -127,44 +109,9 @@ export function computeDigFlowField(
     }
   }
 
-  // Step 3: BFS expansion
-  while (head < tail) {
-    const idx = queue[head++]!;
-    // eslint-disable-next-line no-restricted-syntax -- integer division via `| 0` truncation; BFS index-to-row conversion, not fixed-point math
-    const row = (idx / width) | 0;
-    const col = idx % width;
-
-    for (let d = 0; d < 4; d++) {
-      const nRow = row + NEIGHBOR_DR[d]!;
-      const nCol = col + NEIGHBOR_DC[d]!;
-
-      // Bounds check
-      if (nRow < 0 || nRow >= height || nCol < 0 || nCol >= width) {
-        continue;
-      }
-
-      const nIdx = nRow * width + nCol;
-
-      // Skip if already visited (not -2)
-      if (out[nIdx] !== -2) {
-        continue;
-      }
-
-      const tileState = data[nIdx]!;
-
-      // Skip Solid tiles (BFS does not expand through Solid)
-      // Skip Marked tiles — they are sources, already handled in seed phase
-      if (
-        tileState === UndergroundTileState.Solid ||
-        tileState === UndergroundTileState.Marked
-      ) {
-        continue;
-      }
-
-      // Open (3) or BeingDug (2) — passable
-      // REVERSE[d]: if we expanded in direction d, the neighbor points back via REVERSE[d]
-      out[nIdx] = REVERSE[d]!;
-      queue[tail++] = nIdx;
-    }
-  }
+  // Step 3: BFS expansion (shared helper — expands through Open + BeingDug,
+  // walls Solid + Marked. The seed-only treatment of Marked tiles above
+  // means we never re-enqueue them; the helper's "out[nIdx] !== -2" check
+  // also short-circuits any neighbor already marked as source.)
+  bfsExpandSeededField(out, queue, tail, data, width, height);
 }

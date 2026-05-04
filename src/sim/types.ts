@@ -43,7 +43,7 @@ export type EntityId = number; // incrementing counter from 0, no recycling per 
  * traverse √2× cardinal Manhattan distance per tick — standard 8-connected
  * speed semantics.
  *
- * v5 (LATEST_SIM_VERSION) — issue #38. PlaceChamber accepts anchors on
+ * v5 — issue #38. PlaceChamber accepts anchors on
  * Solid or Marked tiles in addition to Open. The handler auto-marks any
  * Solid tile in the chamber footprint and runs a reachability BFS from
  * the colony's entrances through Open + Marked + BeingDug + the new
@@ -78,7 +78,7 @@ export const SIM_VERSION_V6_FORAGER_NO_REVISIT = 6 as const;
  */
 export const SIM_VERSION_V7_SURFACE_PASSABILITY = 7 as const;
 /**
- * v8 (LATEST_SIM_VERSION) — issue #44 UAT round 3. Three converging
+ * v8 — issue #44 UAT round 3. Three converging
  * fixes for stuck/eddied surface foragers, all gated together:
  *
  *   (a) Leash-boundary hysteresis. The SearchingFood→ReturningToNest

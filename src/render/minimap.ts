@@ -20,6 +20,7 @@ import {
   COLOR_BARREN_EARTH_DARK,
 } from './terrain-atlas.js';
 import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT, PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
+import { FP_SHIFT } from '../sim/fixed.js';
 import { sgGet } from '../sim/terrain.js';
 import { spatialHash } from './terrain-noise.js';
 import type { WorldState } from '../sim/types.js';
@@ -94,10 +95,11 @@ export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewStat
       tileX = colony.entrances[0]!.surfaceTileX;
       tileY = colony.entrances[0]!.surfaceTileY;
     } else if (colony.queenEntityId >= 0) {
-      // Fall back to queen entity position (FP_SHIFT=8 for fixed-point coords)
+      // Fall back to queen entity position (fixed-point coords → tile coords).
+      // Issue #77 — use FP_SHIFT import rather than hardcoding `>> 8`.
       const queenId = colony.queenEntityId;
-      tileX = (world.ants.posX[queenId]! >> 8);
-      tileY = (world.ants.posY[queenId]! >> 8);
+      tileX = world.ants.posX[queenId]! >> FP_SHIFT;
+      tileY = world.ants.posY[queenId]! >> FP_SHIFT;
     }
 
     const px = HUD.MINIMAP.x + tileX * MINIMAP_SCALE_X;

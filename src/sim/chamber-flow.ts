@@ -41,12 +41,9 @@ import type { UndergroundGrid } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
 import type { AntComponents } from './ant/ant-store.js';
 import { isBroodReclaimable } from './ant/ant-store.js';
-
-// Direction constants — identical encoding to entrance-flow.ts / dig-system.ts.
-//   0=N, 1=E, 2=S, 3=W, -1=source, -2=unreachable.
-const REVERSE = [2, 3, 0, 1] as const;
-const NEIGHBOR_DR = [-1, 0, 1, 0] as const;
-const NEIGHBOR_DC = [0, 1, 0, -1] as const;
+// Issue #87 — shared BFS expansion (was a local helper here pre-#87;
+// dig-system.ts and entrance-flow.ts had near-identical inline copies).
+import { bfsExpandSeededField } from './bfs-flow-field.js';
 
 /**
  * Per-colony flow-field cache for chamber-targeted routing.
@@ -95,56 +92,7 @@ export function ensureChamberFlowFields(
   };
 }
 
-/**
- * Shared BFS expansion for chamber-style flow-fields. Caller seeds `out`
- * with -1 at every source tile (and fills the rest with -2 first), pushes
- * each source's flat index into `queue`, and passes the resulting tail
- * pointer. This function expands outward through Open and BeingDug tiles,
- * writing the step direction (0=N, 1=E, 2=S, 3=W) to `out[idx]` for each
- * reached tile.
- *
- * Single-sourced so the integer-division `(idx / width) | 0` BFS row
- * extraction lives in ONE place — extracted from the previously
- * duplicated implementations in `computeChamberFlowField` and
- * `computeNursingPickupField` (PR #56 codex P2).
- */
-function bfsExpandSeededField(
-  out:        Int32Array,
-  queue:      Int32Array,
-  initialTail: number,
-  data:       Uint8Array,
-  width:      number,
-  height:     number,
-): void {
-  let head = 0;
-  let tail = initialTail;
-  while (head < tail) {
-    const idx = queue[head++]!;
-    // eslint-disable-next-line no-restricted-syntax -- integer division via `| 0`; BFS index→row conversion, not fixed-point math
-    const row = (idx / width) | 0;
-    const col = idx % width;
-
-    for (let d = 0; d < 4; d++) {
-      const nRow = row + NEIGHBOR_DR[d]!;
-      const nCol = col + NEIGHBOR_DC[d]!;
-      if (nRow < 0 || nRow >= height || nCol < 0 || nCol >= width) continue;
-
-      const nIdx = nRow * width + nCol;
-      if (out[nIdx] !== -2) continue;
-
-      const tileState = data[nIdx]!;
-      if (
-        tileState !== UndergroundTileState.Open &&
-        tileState !== UndergroundTileState.BeingDug
-      ) {
-        continue;
-      }
-
-      out[nIdx] = REVERSE[d]!;
-      queue[tail++] = nIdx;
-    }
-  }
-}
+// Note: `bfsExpandSeededField` lives in `./bfs-flow-field.js` per issue #87.
 
 /**
  * Multi-source BFS from every Open tile inside any chamber whose type is
