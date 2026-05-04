@@ -568,6 +568,16 @@ export function createSurfaceMovementCache(): SurfaceMovementCache {
 }
 
 /**
+ * Issue #67 — reset a previously-allocated cache for reuse, instead of
+ * allocating a fresh 16KB Uint8Array per tick. Caller pre-allocates once at
+ * module scope (or via a tick-scratch struct) and resets each tick before
+ * the first lookup. Same observable behaviour as `createSurfaceMovementCache`.
+ */
+export function resetSurfaceMovementCache(cache: SurfaceMovementCache): void {
+  cache.fill(SURFACE_MOVE_CACHE_SENTINEL);
+}
+
+/**
  * Cached variant of `surfaceMovementAt`. Returns the same value as the
  * uncached form; just memoises within a tick.
  *

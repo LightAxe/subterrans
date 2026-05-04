@@ -17,6 +17,8 @@ import {
   antDepositFood,
   canEnterUndergroundTile,
   pickCardinalStep,
+  unpackStepDx,
+  unpackStepDy,
   getTaskDirection,
   tickDigExecution,
   routeForagerPriority,
@@ -2586,6 +2588,59 @@ describe('chooseExcursionDirection', () => {
     expect(dir.dx).toBeGreaterThanOrEqual(0);
     // After bounce, heading is a valid on-grid cardinal.
     expect(Math.abs(dir.dx) + Math.abs(dir.dy)).toBe(1);
+  });
+
+  // Issue #83 — uniform-RNG-consumption contract. The function pulls
+  // exactly 3 RNG values up-front regardless of branch, to keep the
+  // post-call rng stream identical across all branches. If a future
+  // PR adds a 4th rng.nextInt inside a conditional branch, this test
+  // (combined with the seed-determinism test above) catches the drift.
+  it('advances RNG by exactly 3 nextU32 calls regardless of branch (#83)', () => {
+    // Each nextInt call invokes nextU32 exactly once (rng.ts:27-29).
+    // We verify the post-call state matches a fresh Rng advanced 3x.
+    const expectedAfter3 = (seed: number): number => {
+      const r = new Rng(seed);
+      r.nextU32(); r.nextU32(); r.nextU32();
+      return r.getState();
+    };
+
+    // Walk the matrix of branches:
+    //   - initial-heading branch (hx===0 && hy===0)
+    //   - active-heading branch with hx,hy outward
+    //   - active-heading branch with hx,hy inward (bounce path)
+    //   - ant inside grid bounds vs. near edge
+    const seedsToProbe = [0, 1, 7, 42, 1000, 999_999];
+    const cases: Array<() => { world: WorldState; antId: number }> = [
+      // Initial-heading branch
+      () => setupWorldWithEntrance(24, 64, 30, 70),
+      // Active-outward heading
+      () => {
+        const r = setupWorldWithEntrance(24, 64, 30, 70);
+        r.world.ants.searchHeadingX[r.antId]     = 1;
+        r.world.ants.searchHeadingY[r.antId]     = 0;
+        r.world.ants.searchHeadingTicks[r.antId] = 5;
+        return r;
+      },
+      // Active-inward (bounce) heading
+      () => {
+        const r = setupWorldWithEntrance(24, 64, 30, 70);
+        r.world.ants.searchHeadingX[r.antId]     = -1;
+        r.world.ants.searchHeadingY[r.antId]     = 0;
+        r.world.ants.searchHeadingTicks[r.antId] = 10;
+        return r;
+      },
+      // Edge of grid (forces axis-clamp branches in the bounce/refresh path)
+      () => setupWorldWithEntrance(24, 64, 1, 1),
+    ];
+
+    for (const seed of seedsToProbe) {
+      for (const buildCase of cases) {
+        const { world, antId } = buildCase();
+        const rng = new Rng(seed);
+        chooseExcursionDirection(world, antId, rng);
+        expect(rng.getState()).toBe(expectedAfter3(seed));
+      }
+    }
   });
 });
 
@@ -6152,7 +6207,15 @@ describe('tickNurseActions — P2 brood transport to Nursery', () => {
 //                                                 for replay determinism.
 //   v4 (SIM_VERSION_V4_DIAGONAL_MOTION) — 8-connected diagonal step when both
 //                                         axes have non-zero delta.
+//
+// Issue #69: pickCardinalStep now returns a packed int (dx + 1) | ((dy + 1) << 2).
+// Test helper `step(p)` decodes back to {dx, dy} for assertion convenience.
 // ---------------------------------------------------------------------------
+
+/** Decode a pickCardinalStep result for test assertions. */
+function step(packed: number): { dx: number; dy: number } {
+  return { dx: unpackStepDx(packed), dy: unpackStepDy(packed) };
+}
 
 describe('pickCardinalStep (issue #34) — v2/v3 legacy greedy cardinal', () => {
   function emptyAnts(): ReturnType<typeof createAntComponents> {
@@ -6161,13 +6224,13 @@ describe('pickCardinalStep (issue #34) — v2/v3 legacy greedy cardinal', () => 
 
   it('zero delta returns (0, 0) under v3', () => {
     const ants = emptyAnts();
-    expect(pickCardinalStep(ants, 0, 0, 0, SIM_VERSION_V3)).toEqual({ dx: 0, dy: 0 });
+    expect(step(pickCardinalStep(ants, 0, 0, 0, SIM_VERSION_V3))).toEqual({ dx: 0, dy: 0 });
   });
 
   it('pure +X / -Y cardinals are unchanged under v3', () => {
     const ants = emptyAnts();
-    expect(pickCardinalStep(ants, 0, 5, 0, SIM_VERSION_V3)).toEqual({ dx: 1, dy: 0 });
-    expect(pickCardinalStep(ants, 0, 0, -3, SIM_VERSION_V3)).toEqual({ dx: 0, dy: -1 });
+    expect(step(pickCardinalStep(ants, 0, 5, 0, SIM_VERSION_V3))).toEqual({ dx: 1, dy: 0 });
+    expect(step(pickCardinalStep(ants, 0, 0, -3, SIM_VERSION_V3))).toEqual({ dx: 0, dy: -1 });
   });
 
   it('v3 greedy at 45° alternates per tick — the visible zig-zag issue #34 v4 ultimately fixes', () => {
@@ -6183,11 +6246,11 @@ describe('pickCardinalStep (issue #34) — v2/v3 legacy greedy cardinal', () => 
     let x = 0;
     let y = 0;
     for (let i = 0; i < 6; i++) {
-      const step = pickCardinalStep(ants, 0, 3 - x, 3 - y, SIM_VERSION_V3);
-      dxs.push(step.dx);
-      dys.push(step.dy);
-      x += step.dx;
-      y += step.dy;
+      const stepP = pickCardinalStep(ants, 0, 3 - x, 3 - y, SIM_VERSION_V3);
+      dxs.push(unpackStepDx(stepP));
+      dys.push(unpackStepDy(stepP));
+      x += unpackStepDx(stepP);
+      y += unpackStepDy(stepP);
     }
     expect(x).toBe(3);
     expect(y).toBe(3);
@@ -6205,11 +6268,11 @@ describe('pickCardinalStep (issue #34) — v2/v3 legacy greedy cardinal', () => 
     let x = 0;
     let y = 0;
     for (let i = 0; i < 4; i++) {
-      const step = pickCardinalStep(ants, 0, 3 - x, 1 - y, SIM_VERSION_V3);
-      dxs.push(step.dx);
-      dys.push(step.dy);
-      x += step.dx;
-      y += step.dy;
+      const stepP = pickCardinalStep(ants, 0, 3 - x, 1 - y, SIM_VERSION_V3);
+      dxs.push(unpackStepDx(stepP));
+      dys.push(unpackStepDy(stepP));
+      x += unpackStepDx(stepP);
+      y += unpackStepDy(stepP);
     }
     expect(x).toBe(3);
     expect(y).toBe(1);
@@ -6232,7 +6295,8 @@ describe('pickCardinalStep (issue #34) — v2/v3 legacy greedy cardinal', () => 
     // identically through pickCardinalStep.
     const a2 = emptyAnts();
     const a3 = emptyAnts();
-    expect(pickCardinalStep(a2, 0, 3, 3, LEGACY_SIM_VERSION)).toEqual(
+    // Two packed ints — toBe rather than toEqual since they're primitive.
+    expect(pickCardinalStep(a2, 0, 3, 3, LEGACY_SIM_VERSION)).toBe(
       pickCardinalStep(a3, 0, 3, 3, SIM_VERSION_V3),
     );
   });
@@ -6245,9 +6309,9 @@ describe('pickCardinalStep (issue #34) — v4 8-connected diagonal', () => {
 
   it('pure cardinals are unchanged in v4 (single-axis targets behave identically)', () => {
     const ants = emptyAnts();
-    expect(pickCardinalStep(ants, 0, 5, 0, SIM_VERSION_V4_DIAGONAL_MOTION)).toEqual({ dx: 1, dy: 0 });
-    expect(pickCardinalStep(ants, 0, 0, -3, SIM_VERSION_V4_DIAGONAL_MOTION)).toEqual({ dx: 0, dy: -1 });
-    expect(pickCardinalStep(ants, 0, 0, 0, SIM_VERSION_V4_DIAGONAL_MOTION)).toEqual({ dx: 0, dy: 0 });
+    expect(step(pickCardinalStep(ants, 0, 5, 0, SIM_VERSION_V4_DIAGONAL_MOTION))).toEqual({ dx: 1, dy: 0 });
+    expect(step(pickCardinalStep(ants, 0, 0, -3, SIM_VERSION_V4_DIAGONAL_MOTION))).toEqual({ dx: 0, dy: -1 });
+    expect(step(pickCardinalStep(ants, 0, 0, 0, SIM_VERSION_V4_DIAGONAL_MOTION))).toEqual({ dx: 0, dy: 0 });
   });
 
   it('45° target (3,3) reaches the target in 3 diagonal steps — no zig-zag', () => {
@@ -6257,11 +6321,11 @@ describe('pickCardinalStep (issue #34) — v4 8-connected diagonal', () => {
     const dxs: number[] = [];
     const dys: number[] = [];
     for (let i = 0; i < 3; i++) {
-      const step = pickCardinalStep(ants, 0, 3 - x, 3 - y, SIM_VERSION_V4_DIAGONAL_MOTION);
-      dxs.push(step.dx);
-      dys.push(step.dy);
-      x += step.dx;
-      y += step.dy;
+      const stepP = pickCardinalStep(ants, 0, 3 - x, 3 - y, SIM_VERSION_V4_DIAGONAL_MOTION);
+      dxs.push(unpackStepDx(stepP));
+      dys.push(unpackStepDy(stepP));
+      x += unpackStepDx(stepP);
+      y += unpackStepDy(stepP);
     }
     expect(x).toBe(3);
     expect(y).toBe(3);
@@ -6280,10 +6344,10 @@ describe('pickCardinalStep (issue #34) — v4 8-connected diagonal', () => {
     let y = 0;
     const trace: Array<[number, number]> = [];
     for (let i = 0; i < 3; i++) {
-      const step = pickCardinalStep(ants, 0, 3 - x, 1 - y, SIM_VERSION_V4_DIAGONAL_MOTION);
-      trace.push([step.dx, step.dy]);
-      x += step.dx;
-      y += step.dy;
+      const stepP = pickCardinalStep(ants, 0, 3 - x, 1 - y, SIM_VERSION_V4_DIAGONAL_MOTION);
+      trace.push([unpackStepDx(stepP), unpackStepDy(stepP)]);
+      x += unpackStepDx(stepP);
+      y += unpackStepDy(stepP);
     }
     expect(x).toBe(3);
     expect(y).toBe(1);
@@ -6298,11 +6362,11 @@ describe('pickCardinalStep (issue #34) — v4 8-connected diagonal', () => {
     let x = 0;
     let y = 0;
     for (let i = 0; i < 3; i++) {
-      const step = pickCardinalStep(ants, 0, -3 - x, -3 - y, SIM_VERSION_V4_DIAGONAL_MOTION);
-      expect(step.dx).toBe(-1);
-      expect(step.dy).toBe(-1);
-      x += step.dx;
-      y += step.dy;
+      const stepP = pickCardinalStep(ants, 0, -3 - x, -3 - y, SIM_VERSION_V4_DIAGONAL_MOTION);
+      expect(unpackStepDx(stepP)).toBe(-1);
+      expect(unpackStepDy(stepP)).toBe(-1);
+      x += unpackStepDx(stepP);
+      y += unpackStepDy(stepP);
     }
     expect(x).toBe(-3);
     expect(y).toBe(-3);
@@ -6311,8 +6375,8 @@ describe('pickCardinalStep (issue #34) — v4 8-connected diagonal', () => {
   it('mixed-quadrant diagonals: (rawDx=2, rawDy=-2) → (1, -1)', () => {
     // sign(rawDx) = +1, sign(rawDy) = -1 → SE-quadrant diagonal.
     const ants = emptyAnts();
-    const step = pickCardinalStep(ants, 0, 2, -2, SIM_VERSION_V4_DIAGONAL_MOTION);
-    expect(step).toEqual({ dx: 1, dy: -1 });
+    const stepP = pickCardinalStep(ants, 0, 2, -2, SIM_VERSION_V4_DIAGONAL_MOTION);
+    expect(step(stepP)).toEqual({ dx: 1, dy: -1 });
   });
 
   it('v4 leaves pathErr untouched when stepping diagonally', () => {

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { detectAndResolveCombat, killAnt } from './combat.js';
 import { createWorldState, allocateEntityId } from './types.js';
+import { Rng } from './rng.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask } from './enums.js';
@@ -51,7 +52,7 @@ describe('detectAndResolveCombat', () => {
     const { world, cid1, cid2 } = makeWorldWith2Colonies();
     const a = spawnAnt(world, cid1, 5, 5, Zone.Surface);
     const b = spawnAnt(world, cid2, 10, 10, Zone.Surface);
-    detectAndResolveCombat(world);
+    detectAndResolveCombat(world, new Rng(world.rngState));
     expect(world.ants.alive[a]).toBe(1);
     expect(world.ants.alive[b]).toBe(1);
     expect(world.colonies[cid1]!.killCount).toBe(0);
@@ -62,7 +63,7 @@ describe('detectAndResolveCombat', () => {
     const { world, cid1 } = makeWorldWith2Colonies();
     const a = spawnAnt(world, cid1, 7, 7, Zone.Surface);
     const b = spawnAnt(world, cid1, 7, 7, Zone.Surface);
-    detectAndResolveCombat(world);
+    detectAndResolveCombat(world, new Rng(world.rngState));
     expect(world.ants.alive[a]).toBe(1);
     expect(world.ants.alive[b]).toBe(1);
   });
@@ -71,7 +72,7 @@ describe('detectAndResolveCombat', () => {
     const { world, cid1, cid2 } = makeWorldWith2Colonies();
     const a = spawnAnt(world, cid1, 5, 7, Zone.Surface);
     const b = spawnAnt(world, cid2, 5, 7, Zone.Surface);
-    detectAndResolveCombat(world);
+    detectAndResolveCombat(world, new Rng(world.rngState));
     const aliveCount = world.ants.alive[a]! + world.ants.alive[b]!;
     expect(aliveCount).toBe(1); // exactly one died
     const totalKills = world.colonies[cid1]!.killCount + world.colonies[cid2]!.killCount;
@@ -82,7 +83,7 @@ describe('detectAndResolveCombat', () => {
     const { world, cid1, cid2 } = makeWorldWith2Colonies();
     const a = spawnAnt(world, cid1, 5, 7, Zone.Surface);
     const b = spawnAnt(world, cid2, 5, 7, Zone.Underground);
-    detectAndResolveCombat(world);
+    detectAndResolveCombat(world, new Rng(world.rngState));
     expect(world.ants.alive[a]).toBe(1);
     expect(world.ants.alive[b]).toBe(1);
     expect(world.colonies[cid1]!.killCount).toBe(0);
@@ -97,9 +98,9 @@ describe('detectAndResolveCombat', () => {
       return { ...x, a, b };
     };
     const run1 = build();
-    detectAndResolveCombat(run1.world);
+    detectAndResolveCombat(run1.world, new Rng(run1.world.rngState));
     const run2 = build();
-    detectAndResolveCombat(run2.world);
+    detectAndResolveCombat(run2.world, new Rng(run2.world.rngState));
     expect(run1.world.ants.alive[run1.a]).toBe(run2.world.ants.alive[run2.a]);
     expect(run1.world.ants.alive[run1.b]).toBe(run2.world.ants.alive[run2.b]);
   });
@@ -120,19 +121,26 @@ describe('resolveCombatOnTile', () => {
     const a = spawnAnt(world, cid1, 5, 7, Zone.Surface);
     const b = spawnAnt(world, cid2, 5, 7, Zone.Surface);
     const c = spawnAnt(world, 3 as ColonyId, 5, 7, Zone.Surface);
-    detectAndResolveCombat(world);
+    detectAndResolveCombat(world, new Rng(world.rngState));
     const alive = [world.ants.alive[a] ?? 0, world.ants.alive[b] ?? 0, world.ants.alive[c] ?? 0];
     expect(alive.reduce((s, v) => s + v, 0)).toBe(1); // exactly one survives
   });
 
-  it('advances world.rngState exactly once per round', () => {
+  it('advances the caller-passed rng exactly once per round (#58)', () => {
+    // Issue #58 — combat no longer writes back to world.rngState; tick.ts
+    // owns the single end-of-tick writeback via the shared rng_tick instance.
+    // This test pins the new contract: combat advances the rng IT was given,
+    // not world.rngState directly.
     const { world, cid1, cid2 } = makeWorldWith2Colonies();
     spawnAnt(world, cid1, 5, 7, Zone.Surface);
     spawnAnt(world, cid2, 5, 7, Zone.Surface);
-    const before = world.rngState;
-    detectAndResolveCombat(world);
+    const rng = new Rng(world.rngState);
+    const before = rng.getState();
+    detectAndResolveCombat(world, rng);
     // One round = one nextInt(2) call = one state advance. State should differ.
-    expect(world.rngState).not.toBe(before);
+    expect(rng.getState()).not.toBe(before);
+    // And world.rngState is NOT touched by combat directly anymore.
+    expect(world.rngState).toBe(before);
   });
 });
 
@@ -174,14 +182,18 @@ describe('killAnt', () => {
 
 describe('coin flip distribution (CMBT-05)', () => {
   it('over 1000 fights, A-wins is within ±3σ of 500 (approx 453..547)', () => {
-    // Share world.rngState across fights — real sequence, not 1000 fresh RNGs.
+    // Issue #58 — combat now advances the rng instance the caller passes,
+    // not world.rngState. Pass ONE shared rng across all iterations so the
+    // sequence advances naturally between fights (the prior test relied on
+    // combat's now-removed writeback to world.rngState).
     const { world, cid1, cid2 } = makeWorldWith2Colonies(42);
+    const rng = new Rng(world.rngState);
     let aWins = 0;
     for (let i = 0; i < 1000; i++) {
-      // Reset only the two combatants — keep rngState unchanged between iterations.
+      // Reset only the two combatants — keep rng unchanged between iterations.
       const a = spawnAnt(world, cid1, 5, 7, Zone.Surface);
       const b = spawnAnt(world, cid2, 5, 7, Zone.Surface);
-      detectAndResolveCombat(world);
+      detectAndResolveCombat(world, rng);
       if (world.ants.alive[a] === 1) aWins += 1;
       // Kill the survivor (whichever) so next iteration starts fresh — set both alive=0 to avoid
       // cross-iteration state. spawnAnt allocates new ids so there is no slot collision.

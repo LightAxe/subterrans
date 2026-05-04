@@ -143,17 +143,20 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(world.commandQueue.length).toBeGreaterThanOrEqual(2);
     });
 
-    it('does not push commands when colony already has entrances and no cadence match (tick=1)', () => {
+    it('does not push commands when AI post-conditions are met and no cadence match (tick=1)', () => {
       const world = makeWorld(1);
       const colony = addColony(world, 2 as ColonyId, 0);
       colony.entrances = [{ entranceId: 1, surfaceTileX: 10, surfaceTileY: 0, isOpen: true }];
+      // Issue #75 — aiInitialSetup is now post-condition-gated. Matching the
+      // AI ratio AND having an entrance means setup is complete.
+      colony.targetRatio.forage = AI_BEHAVIOR_RATIO.forage;
+      colony.targetRatio.fight  = AI_BEHAVIOR_RATIO.fight;
       setQueenPos(world, 0, 10, 5);
       addUndergroundGrid(world, 2 as ColonyId);
       runAIController(world, 2 as ColonyId);
-      // tick=1: aiInitialSetup no-ops (not tick 0), aiDigHeuristic no-ops (1%40≠0),
-      // aiChamberPlacement: no queen chamber → tries to find open spot (all Solid → null)
-      // aiEntranceDesignation: has entrances → skip
-      // So 0 commands
+      // tick=1: aiInitialSetup no-ops (post-conditions met), aiDigHeuristic
+      // no-ops (1%40≠0), aiChamberPlacement: no queen chamber → tries to find
+      // open spot (all Solid → null), aiEntranceDesignation: has entrances → skip.
       expect(world.commandQueue).toHaveLength(0);
     });
 
@@ -187,12 +190,34 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(entranceCmd!.issuedAtTick).toBe(0);
     });
 
-    it('does NOT push initial-setup commands after tick 0', () => {
+    it('does NOT push initial-setup commands when post-conditions already met (#75 idempotent)', () => {
+      // Issue #75 — pre-fix gate was `world.tick !== 0` so any tick > 0 was
+      // a no-op. Post-fix the gate is `entrances exist AND ratio matches`,
+      // which is the actual contract. A save loaded mid-game (tick > 0)
+      // with both post-conditions met short-circuits as expected.
+      const world = makeWorld(1);
+      const colony = addColony(world, 2 as ColonyId, 0);
+      colony.entrances = [{ entranceId: 1, surfaceTileX: 10, surfaceTileY: 0, isOpen: true }];
+      colony.targetRatio.forage = AI_BEHAVIOR_RATIO.forage;
+      colony.targetRatio.fight  = AI_BEHAVIOR_RATIO.fight;
+      setQueenPos(world, 0, 10, 5);
+      aiInitialSetup(world, colony);
+      expect(world.commandQueue).toHaveLength(0);
+    });
+    it('DOES push initial-setup commands after tick 0 when post-conditions unmet (#75)', () => {
+      // Pre-fix this scenario was broken: a save written before
+      // aiInitialSetup existed (or where some future code path cleared
+      // the AI's targetRatio / entrances) would never reinitialize. Post-
+      // fix the function pushes whichever commands the post-condition
+      // check determines are needed, regardless of `world.tick`.
       const world = makeWorld(1);
       const colony = addColony(world, 2 as ColonyId, 0);
       setQueenPos(world, 0, 10, 5);
       aiInitialSetup(world, colony);
-      expect(world.commandQueue).toHaveLength(0);
+      // Both ratio and entrance commands push because both post-conditions are unmet.
+      expect(world.commandQueue.length).toBeGreaterThanOrEqual(2);
+      expect(world.commandQueue.some((c) => c.type === 'SetBehaviorRatio')).toBe(true);
+      expect(world.commandQueue.some((c) => c.type === 'DesignateEntrance')).toBe(true);
     });
 
     it('every command pushed by aiInitialSetup carries issuedAtTick: world.tick', () => {

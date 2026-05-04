@@ -1,6 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY } from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE } from './types.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath } from './game-over.js';
 import { detectAndResolveCombat } from './combat.js';
@@ -1096,8 +1096,24 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
 
   // ---------------------------------------------------------------------------
   // Step 17: combat detection + resolution (Phase 9 / CMBT-04) — runs after step 16 tickAntMovement.
+  //
+  // Issue #58 — pre-v11 combat constructed its own Rng from the tick-start
+  // world.rngState (still tick-start because nobody updates it mid-tick) and
+  // wrote back to world.rngState, but tick.ts step 19 below then overwrote
+  // that writeback with rng_tick's state. The combat RNG sequence was a
+  // parallel stream that ended at the writeback — functionally byte-
+  // deterministic but with the design contract violated.
+  //
+  // v11+: combat shares the tick rng so its pulls accumulate into the next
+  //       tick's RNG state, matching the design contract.
+  // pre-v11: combat gets a fresh Rng from world.rngState — same parallel
+  //          stream as before for byte-identical replay of older saves.
   // ---------------------------------------------------------------------------
-  detectAndResolveCombat(world);
+  if (world.simVersion >= SIM_VERSION_V11_DEFENSIVE_BUNDLE) {
+    detectAndResolveCombat(world, rng);
+  } else {
+    detectAndResolveCombat(world, new Rng(world.rngState));
+  }
 
   // ---------------------------------------------------------------------------
   // Step 18: game-over detection (Phase 9 / CMBT-06/07).

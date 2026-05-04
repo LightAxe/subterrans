@@ -23,7 +23,23 @@ import { FP_SHIFT } from './fixed.js';
  * Mutates: world.ants.alive (instant-kills losers), world.colonies[*].killCount (increments
  * winners), world.rngState (advances once per round).
  */
-export function detectAndResolveCombat(world: WorldState): void {
+/**
+ * Issue #58 — caller passes the rng instance.
+ *
+ * Pre-fix this function was `(world)`-only and constructed a fresh Rng from
+ * `world.rngState` internally. That state was still the tick-start value
+ * (tickAntMovement mutates a separate rng_tick instance and only writes
+ * back at end-of-tick), so combat's RNG sequence was effectively a
+ * parallel stream that the end-of-tick writeback discarded — the
+ * `world.rngState = rng.getState()` line we used to do here was overwritten
+ * by tick.ts step 19. Functionally byte-deterministic (same seed → same
+ * outcomes) but contradicts the design intent that "rng pulls accumulate."
+ *
+ * v11+: caller passes `rng_tick` so combat shares the tick's stream.
+ * pre-v11: caller passes a fresh `Rng(world.rngState)` to preserve the
+ *          dead-writeback behaviour for byte-identical replay of older saves.
+ */
+export function detectAndResolveCombat(world: WorldState, rng: Rng): void {
   const { ants } = world;
   const count = ants.alive.length; // capacity; iterate all slots (alive/colonyId guard)
 
@@ -64,17 +80,20 @@ export function detectAndResolveCombat(world: WorldState): void {
       }
     }
     if (!multiColony) continue;
-    resolveCombatOnTile(world, key, participants);
+    resolveCombatOnTile(world, key, participants, rng);
   }
 }
 
 /**
  * Resolve combat on a single tile. Runs rounds until fewer than 2 distinct colonies remain.
- * Mutates world.rngState, world.ants.alive, world.colonies[*].killCount.
+ * Mutates world.ants.alive, world.colonies[*].killCount, and the passed rng instance.
+ *
+ * Issue #58 — caller passes rng. Previously constructed `new Rng(world.rngState)`
+ * internally and did `world.rngState = rng.getState()` at the bottom; both
+ * removed because tick.ts step 19 owns the world.rngState writeback.
  */
-export function resolveCombatOnTile(world: WorldState, _tileKey: number, participants: readonly number[]): void {
+export function resolveCombatOnTile(world: WorldState, _tileKey: number, participants: readonly number[], rng: Rng): void {
   const { ants } = world;
-  const rng = new Rng(world.rngState);
 
   // Loop until only one colony remains among alive participants.
   // Each round guarantees one death → provably terminates in ≤ participants.length - 1 rounds.
@@ -109,8 +128,9 @@ export function resolveCombatOnTile(world: WorldState, _tileKey: number, partici
       killAnt(world, antA, cidB);
     }
   }
-
-  world.rngState = rng.getState();
+  // Issue #58 — no writeback. The pre-fix `world.rngState = rng.getState()`
+  // was always overwritten by tick.ts step 19 (rng_tick.getState()) so it
+  // was dead code. Caller (tick.ts) owns the single end-of-tick writeback.
 }
 
 /**

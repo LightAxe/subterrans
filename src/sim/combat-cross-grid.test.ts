@@ -29,6 +29,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { detectAndResolveCombat } from './combat.js';
+import { Rng } from './rng.js';
 import { checkQueenDeath, GameOutcome } from './game-over.js';
 import { createWorldState, allocateEntityId } from './types.js';
 import { createColonyRecord } from './colony/colony-store.js';
@@ -165,7 +166,7 @@ describe('combat cross-grid — tile-key gridColonyId extension (REQ-C4)', () =>
     // Act --------------------------------------------------------------------
     // Pin rngState to the known-player-wins seed value immediately before combat.
     world.rngState = 3;
-    detectAndResolveCombat(world);
+    detectAndResolveCombat(world, new Rng(world.rngState));
 
     // MANDATORY t=N outcome assertions ---------------------------------------
     // Enemy queen is dead.
@@ -262,7 +263,7 @@ describe('combat cross-grid — tile-key gridColonyId extension (REQ-C4)', () =>
     expect(world.ants.colonyId[antB]).toBe(ENEMY_COLONY_ID);
 
     // Act --------------------------------------------------------------------
-    detectAndResolveCombat(world);
+    detectAndResolveCombat(world, new Rng(world.rngState));
 
     // MANDATORY t=N outcome assertions ---------------------------------------
     // Neither ant died — they never bucketed together.
