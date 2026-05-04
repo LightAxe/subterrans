@@ -62,7 +62,9 @@ import {
 import type { DigFlowFields } from './dig-system.js';
 import {
   computeEntranceFlowField,
+  computeSurfaceEntranceFlowField,
   ensureEntranceFlowField,
+  ensureSurfaceEntranceFlowField,
   createEntranceFlowFields,
 } from './entrance-flow.js';
 import type { EntranceFlowFields } from './entrance-flow.js';
@@ -726,6 +728,17 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     const entOut = ensureEntranceFlowField(entranceFlowFields, colony.colonyId, gridSize);
     const entQueue = entranceFlowFields.queues[colony.colonyId]!;
     computeEntranceFlowField(underground, colony.entrances ?? [], entOut, entQueue);
+
+    // Issue #63 (v11+) — surface entrance flow field. Recomputed on the
+    // same cadence as the underground entrance field. Tile features are
+    // static post-init, so the only inputs that change are the entrance
+    // list (open/closed). Recomputing every dirty cycle is generous but
+    // simple; future optimization could gate on entrance-changed-only.
+    if (world.simVersion >= SIM_VERSION_V11_DEFENSIVE_BUNDLE) {
+      const sfcOut = ensureSurfaceEntranceFlowField(entranceFlowFields, colony.colonyId);
+      const sfcQueue = entranceFlowFields.surfaceQueues[colony.colonyId]!;
+      computeSurfaceEntranceFlowField(world, colony.entrances ?? [], sfcOut, sfcQueue);
+    }
 
     // Recompute chamber flow-fields on the same cycle. Chamber completion
     // (which flips tile states from Marked/BeingDug to Open) is one of the

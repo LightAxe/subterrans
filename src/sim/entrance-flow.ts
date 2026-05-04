@@ -24,6 +24,9 @@ import type { ColonyId } from './colony/colony-store.js';
 import type { NestEntrance } from './colony/entrance.js';
 import { UndergroundTileState } from './terrain.js';
 import type { UndergroundGrid } from './terrain.js';
+import type { WorldState } from './types.js';
+import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constants.js';
+import { surfaceMovementAt, SurfaceMovementEffect } from './surface-features.js';
 // Issue #87 — shared BFS expansion (was inline pre-#87, near-identical to
 // dig-system.ts and chamber-flow.ts copies). Direction encoding:
 //   0=N (toward tileY=0, surface side of a shaft), 1=E, 2=S, 3=W;
@@ -35,18 +38,28 @@ import { bfsExpandSeededField } from './bfs-flow-field.js';
 // ---------------------------------------------------------------------------
 
 export interface EntranceFlowFields {
-  /** Direction array per colony. Key = colonyId. Value = Int32Array of length W*H. */
+  /** Underground direction array per colony — points toward nearest open entrance underground tile. */
   fields: Record<ColonyId, Int32Array>;
-  /** BFS scratch queue per colony. Pre-allocated to avoid per-tick allocation. */
+  /** BFS scratch queue per colony for the underground field. */
   queues: Record<ColonyId, Int32Array>;
+  /**
+   * Issue #63 — surface direction array per colony. Points toward the nearest
+   * open entrance through non-HardBlock surface tiles. Lets surface ants
+   * targeting an entrance (CarryingFood / ReturningToNest) escape pockets
+   * formed by clusters of multi-tile HardBlock features (boulders, twigs,
+   * leaves) that the 1-tile pickSurfaceDetour can't reason about.
+   */
+  surface: Record<ColonyId, Int32Array>;
+  /** BFS scratch queue per colony for the surface field. */
+  surfaceQueues: Record<ColonyId, Int32Array>;
 }
 
 /**
  * Create an EntranceFlowFields cache — call once at module init.
- * Both maps start empty; ensureEntranceFlowField allocates lazily per colony.
+ * All maps start empty; ensureEntranceFlowField allocates lazily per colony.
  */
 export function createEntranceFlowFields(): EntranceFlowFields {
-  return { fields: {}, queues: {} };
+  return { fields: {}, queues: {}, surface: {}, surfaceQueues: {} };
 }
 
 /**
@@ -67,6 +80,22 @@ export function ensureEntranceFlowField(
     cache.queues[colonyId] = new Int32Array(gridSize);
   }
   return cache.fields[colonyId]!;
+}
+
+/**
+ * Issue #63 — ensure the SURFACE flow-field buffers for a colony are allocated.
+ * Sized to the surface grid (128×128 fixed). Lazy per colony.
+ */
+export function ensureSurfaceEntranceFlowField(
+  cache: EntranceFlowFields,
+  colonyId: ColonyId,
+): Int32Array {
+  if (!(colonyId in cache.surface)) {
+    const size = SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT;
+    cache.surface[colonyId] = new Int32Array(size);
+    cache.surfaceQueues[colonyId] = new Int32Array(size);
+  }
+  return cache.surface[colonyId]!;
 }
 
 /**
@@ -117,4 +146,100 @@ export function computeEntranceFlowField(
   // Step 3: BFS expansion through Open and BeingDug (shared helper).
   // Solid and Marked are walls for a non-digger returning to the surface.
   bfsExpandSeededField(out, queue, tail, data, width, height);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #63 — surface entrance flow field.
+//
+// Multi-source BFS from each open entrance's SURFACE tile (at row 0 column
+// surfaceTileX), expanded through non-HardBlock surface tiles. Output at
+// each reachable tile is the direction an ant should step to head one tile
+// closer to the nearest open entrance.
+//
+// Why a dedicated field:
+//   - Pre-#63 surface ants targeting an entrance used straight-line
+//     pickCardinalStep + 1-tile pickSurfaceDetour. The detour can't escape
+//     pockets formed by clusters of multi-tile HardBlock features (4×4
+//     boulder, 6×3 twig, 3×4 BigLeaf), and the picker scores by Manhattan
+//     to the BLOCKED tile rather than the actual destination — so candidate
+//     scores tie and the compass tie-break can route the ant AWAY from goal.
+//   - The BFS is a true shortest-path-through-walkable-tiles solver.
+//     No tie-break ambiguity, no pocket trapping.
+//
+// Encoding mirrors the underground field at the top of this file:
+//   0=N  1=E  2=S  3=W  -1=source  -2=unreachable
+//
+// Direction at each tile is `out[ty * width + tx]`, where width =
+// SURFACE_GRID_WIDTH (128). Caller derives `tileX/tileY` from the ant's
+// posX/posY and reads `out[ty * width + tx]`.
+//
+// Cost: O(W*H) per call. With W*H = 128*128 = 16384, this is comparable to
+// the underground field. Recomputed only when surface flow goes dirty (today:
+// every tick alongside underground; future optimization could gate on
+// entrance changes since surface terrain features are static post-init).
+// ---------------------------------------------------------------------------
+
+export function computeSurfaceEntranceFlowField(
+  world: WorldState,
+  entrances: ReadonlyArray<NestEntrance>,
+  out: Int32Array,
+  queue: Int32Array,
+): void {
+  const width = SURFACE_GRID_WIDTH;
+  const height = SURFACE_GRID_HEIGHT;
+
+  // Step 1: -2 fill (unvisited sentinel).
+  out.fill(-2);
+
+  // Step 2: seed from open entrance surface tiles. The entrance's surface
+  // tile is (surfaceTileX, surfaceTileY) — typically (sx, 0) but read both
+  // for forward-compat with future entrance-elevation features.
+  let tail = 0;
+  for (let e = 0; e < entrances.length; e++) {
+    const ent = entrances[e]!;
+    if (!ent.isOpen) continue;
+    const sx = ent.surfaceTileX;
+    const sy = ent.surfaceTileY;
+    if (sx < 0 || sx >= width) continue;
+    if (sy < 0 || sy >= height) continue;
+    // Defensive: skip if the entrance tile itself is a HardBlock (shouldn't
+    // happen — DesignateEntrance handler guards against placement on a
+    // HardBlock — but the BFS would never reach it from itself anyway).
+    if (surfaceMovementAt(world, sx, sy) === SurfaceMovementEffect.HardBlock) continue;
+    const idx = sy * width + sx;
+    if (out[idx] !== -2) continue; // dedupe
+    out[idx] = -1; // source
+    queue[tail++] = idx;
+  }
+
+  // Step 3: 4-cardinal BFS expansion through non-HardBlock surface tiles.
+  // Inline rather than reusing bfsExpandSeededField because the predicate
+  // differs (surface uses SurfaceMovementEffect, not UndergroundTileState).
+  // Direction encoding matches: 0=N, 1=E, 2=S, 3=W; out[neighbor] gets
+  // REVERSE[d] = direction pointing back toward the source.
+  const REVERSE = [2, 3, 0, 1] as const;
+  const NEIGHBOR_DR = [-1, 0, 1, 0] as const;
+  const NEIGHBOR_DC = [0, 1, 0, -1] as const;
+
+  let head = 0;
+  while (head < tail) {
+    const idx = queue[head++]!;
+    // eslint-disable-next-line no-restricted-syntax -- integer division via `| 0`; BFS index→row conversion, not fixed-point math
+    const row = (idx / width) | 0;
+    const col = idx % width;
+
+    for (let d = 0; d < 4; d++) {
+      const nRow = row + NEIGHBOR_DR[d]!;
+      const nCol = col + NEIGHBOR_DC[d]!;
+      if (nRow < 0 || nRow >= height || nCol < 0 || nCol >= width) continue;
+      const nIdx = nRow * width + nCol;
+      if (out[nIdx] !== -2) continue;
+      // Predicate: any non-HardBlock surface tile is passable. Cosmetic and
+      // SoftCost both pass — the SoftCost speed penalty is applied separately
+      // by the per-step movement code, doesn't affect routing reachability.
+      if (surfaceMovementAt(world, nCol, nRow) === SurfaceMovementEffect.HardBlock) continue;
+      out[nIdx] = REVERSE[d]!;
+      queue[tail++] = nIdx;
+    }
+  }
 }

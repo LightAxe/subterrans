@@ -3808,6 +3808,42 @@ export function tickAntMovement(
         }
       }
 
+      // Issue #63 (v11+) — surface ants targeting an entrance consume the
+      // surface entrance flow-field instead of straight-line pickCardinalStep.
+      // The field is a true BFS through non-HardBlock tiles, so the ant
+      // routes around multi-tile feature pockets (4×4 boulders, 6×3 twigs,
+      // 3×4 BigLeaves) that the 1-tile pickSurfaceDetour can't escape.
+      if (!stepped
+        && zone === Zone.Surface
+        && entranceFlowFields !== undefined
+        && world.simVersion >= SIM_VERSION_V11_DEFENSIVE_BUNDLE
+      ) {
+        const colonyId = ants.colonyId[id]!;
+        const surfaceField = entranceFlowFields.surface[colonyId];
+        if (surfaceField) {
+          const tileX = posX >> FP_SHIFT;
+          const tileY = posY >> FP_SHIFT;
+          if (tileX >= 0 && tileX < SURFACE_GRID_WIDTH && tileY >= 0 && tileY < SURFACE_GRID_HEIGHT) {
+            const sIdx = tileY * SURFACE_GRID_WIDTH + tileX;
+            const sDir = surfaceField[sIdx]!;
+            if (sDir === -1) {
+              // Source tile — at the entrance. Hold so the zone-transition
+              // block below promotes to Underground.
+              dx = 0;
+              dy = 0;
+              stepped = true;
+            } else if (sDir >= 0 && sDir < 4) {
+              dx = DIR_DX[sDir]!;
+              dy = DIR_DY[sDir]!;
+              stepped = true;
+            }
+            // sDir === -2 (unreachable) → fall through to straight-line below.
+            // Shouldn't happen in practice (entrance always reachable from any
+            // walkable surface tile in a connected map), but defensive.
+          }
+        }
+      }
+
       if (!stepped) {
         // Issue #34 + codex coord-scale fix: tile-space deltas (see the
         // chamber-target site above for rationale).
