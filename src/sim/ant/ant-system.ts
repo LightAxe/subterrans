@@ -33,6 +33,7 @@
 // world.nextEntityId is the upper bound for entity iteration; alive=0 slots are skipped.
 
 import {
+  SIM_VERSION_V3,
   SIM_VERSION_V4_DIAGONAL_MOTION,
   SIM_VERSION_V6_FORAGER_NO_REVISIT,
   SIM_VERSION_V7_SURFACE_PASSABILITY,
@@ -493,9 +494,9 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
     // The simVersion >= 6 gate on the partial-fill branch keeps pre-v6
     // replays byte-identical to v5 (same toPool === 0 behavior only).
     const enterWait =
-      world.simVersion >= 3 &&
+      world.simVersion >= SIM_VERSION_V3 &&
       remaining > 0 &&
-      (toPool === 0 || (world.simVersion >= 6 && toPool > 0));
+      (toPool === 0 || (world.simVersion >= SIM_VERSION_V6_FORAGER_NO_REVISIT && toPool > 0));
     if (enterWait) {
       let anyChamberDepositable = false;
       for (let c = 0; c < colony.chambers.length; c++) {
@@ -1503,7 +1504,7 @@ export function tickSearchLeash(world: WorldState): void {
       colony.computedAllocation.dig > 0 || colony.computedAllocation.fight > 0;
     rebalanceNeeded[colony.colonyId] = overForage && nonForageDemand;
 
-    if (world.simVersion >= 6) {
+    if (world.simVersion >= SIM_VERSION_V6_FORAGER_NO_REVISIT) {
       const poolAtCap = colony.foodStored >= BASE_FOOD_STORAGE_CAPACITY;
       let anyChamberDepositable = false;
       if (poolAtCap) {
@@ -1789,12 +1790,14 @@ export function updateFightAntTargets(world: WorldState): void {
   // over microperf — clarity wins for this rarely-hit guard.
   const rallyOnEntrance: Record<number, boolean> = {};
   for (const cidKey in world.colonies) {
+    if (!Object.hasOwn(world.colonies, cidKey)) continue;
     const colony = world.colonies[cidKey as unknown as keyof typeof world.colonies];
     if (!colony) continue;
     const rp = colony.rallyPoint;
     if (rp == null) continue;
     let hit = false;
     for (const otherKey in world.colonies) {
+      if (!Object.hasOwn(world.colonies, otherKey)) continue;
       if (hit) break;
       const other = world.colonies[otherKey as unknown as keyof typeof world.colonies];
       if (!other || !other.entrances) continue;
@@ -4230,6 +4233,7 @@ export function tickAntMovement(
         // initColony(ENEMY)) and no PRNG calls occur inside the loop.
         let descended = false;
         for (const cidKey in world.colonies) {
+          if (!Object.hasOwn(world.colonies, cidKey)) continue;
           if (descended) break;
           const colony = world.colonies[cidKey as unknown as keyof typeof world.colonies];
           if (!colony || !colony.entrances) continue;

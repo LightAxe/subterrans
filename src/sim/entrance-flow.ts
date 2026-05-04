@@ -24,24 +24,11 @@ import type { ColonyId } from './colony/colony-store.js';
 import type { NestEntrance } from './colony/entrance.js';
 import { UndergroundTileState } from './terrain.js';
 import type { UndergroundGrid } from './terrain.js';
-
-// ---------------------------------------------------------------------------
-// Direction constants — identical encoding to dig-system.ts for consistency.
-//
-//   0 = North (row decreases — toward tileY=0, the surface side of a shaft)
-//   1 = East  (col increases)
-//   2 = South (row increases)
-//   3 = West  (col decreases)
-//  -1 = source tile (ant is AT an open entrance underground tile)
-//  -2 = unreachable (no route through Open/BeingDug tiles to any open entrance)
-// ---------------------------------------------------------------------------
-
-/** Reverse of each expansion direction: if we expanded North (0), neighbor points South (2) to walk back. */
-const REVERSE = [2, 3, 0, 1] as const;
-
-/** Neighbor offsets [dRow, dCol] for each direction (0=N, 1=E, 2=S, 3=W). */
-const NEIGHBOR_DR = [-1, 0, 1, 0] as const;
-const NEIGHBOR_DC = [0, 1, 0, -1] as const;
+// Issue #87 — shared BFS expansion (was inline pre-#87, near-identical to
+// dig-system.ts and chamber-flow.ts copies). Direction encoding:
+//   0=N (toward tileY=0, surface side of a shaft), 1=E, 2=S, 3=W;
+//   -1=source (open entrance underground tile), -2=unreachable.
+import { bfsExpandSeededField } from './bfs-flow-field.js';
 
 // ---------------------------------------------------------------------------
 // EntranceFlowFields — per-colony flow-field cache, transient (not saved).
@@ -113,9 +100,7 @@ export function computeEntranceFlowField(
   // them. Skip entries that are out-of-bounds or not actually passable
   // (defensive — shouldn't happen for a real open entrance, since
   // checkEntranceCompletion only flips isOpen=true once the shaft is Open).
-  let head = 0;
   let tail = 0;
-
   for (let e = 0; e < entrances.length; e++) {
     const ent = entrances[e]!;
     if (!ent.isOpen) continue;
@@ -129,36 +114,7 @@ export function computeEntranceFlowField(
     queue[tail++] = idx;
   }
 
-  // Step 3: BFS expansion through Open and BeingDug.
-  while (head < tail) {
-    const idx = queue[head++]!;
-    // eslint-disable-next-line no-restricted-syntax -- integer division via `| 0`; BFS index→row conversion, not fixed-point math
-    const row = (idx / width) | 0;
-    const col = idx % width;
-
-    for (let d = 0; d < 4; d++) {
-      const nRow = row + NEIGHBOR_DR[d]!;
-      const nCol = col + NEIGHBOR_DC[d]!;
-
-      if (nRow < 0 || nRow >= height || nCol < 0 || nCol >= width) continue;
-
-      const nIdx = nRow * width + nCol;
-
-      if (out[nIdx] !== -2) continue; // already visited
-
-      const tileState = data[nIdx]!;
-      // Expand through Open and BeingDug only.
-      // Solid and Marked are walls for a non-digger returning to the surface.
-      if (
-        tileState !== UndergroundTileState.Open &&
-        tileState !== UndergroundTileState.BeingDug
-      ) {
-        continue;
-      }
-
-      // REVERSE[d]: direction at neighbor pointing BACK toward the source.
-      out[nIdx] = REVERSE[d]!;
-      queue[tail++] = nIdx;
-    }
-  }
+  // Step 3: BFS expansion through Open and BeingDug (shared helper).
+  // Solid and Marked are walls for a non-digger returning to the surface.
+  bfsExpandSeededField(out, queue, tail, data, width, height);
 }

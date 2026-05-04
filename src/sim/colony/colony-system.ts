@@ -26,7 +26,7 @@
 // No Math.floor, no floats, no division operator.
 
 import type { WorldState } from '../types.js';
-import { allocateEntityId, INVALID_ENTITY_ID } from '../types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V3 } from '../types.js';
 import type { ChamberRecord, ColonyRecord } from './colony-store.js';
 import type { ColonyId } from './colony-store.js';
 import {
@@ -140,7 +140,7 @@ export function withdrawFood(
   if (colonyFoodTotal(colony) < amount) return false;
 
   let remaining = amount;
-  if (simVersion >= 3) {
+  if (simVersion >= SIM_VERSION_V3) {
     // LATEST: drain fullest-first, array-index tie-break. Outer `while`
     // re-scans on each iteration; in steady state both production callers
     // (queen 2 fp, larva 1 fp) terminate after iteration 1 because the

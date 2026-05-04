@@ -282,6 +282,7 @@ function isAnchorGameplaySuppressed(
   // (ex - r .. ex + r, ey - r .. ey + r) iff both axes overlap.
   const r = SURFACE_FEATURE_ENTRANCE_RADIUS;
   for (const cidStr in world.colonies) {
+    if (!Object.hasOwn(world.colonies, cidStr)) continue;
     const colony = world.colonies[cidStr as unknown as number]!;
     // The Phase 3 PRD §2a contract requires the caller to initialize
     // `entrances` after createColonyRecord, but several pre-#44 tests
