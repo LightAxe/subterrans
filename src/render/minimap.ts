@@ -19,8 +19,9 @@ import {
   COLOR_BARREN_EARTH,
   COLOR_BARREN_EARTH_DARK,
 } from './terrain-atlas.js';
-import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT, PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
+import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT, UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT, PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
+import { isAlive } from '../sim/ant/ant-store.js';
 import { sgGet } from '../sim/terrain.js';
 import { spatialHash } from './terrain-noise.js';
 import type { WorldState } from '../sim/types.js';
@@ -30,6 +31,13 @@ import type { GfxLike } from './draw-surface.js';
 
 export const MINIMAP_SCALE_X = HUD.MINIMAP.w / SURFACE_GRID_WIDTH;   // 160 / 128 = 1.25
 export const MINIMAP_SCALE_Y = HUD.MINIMAP.h / SURFACE_GRID_HEIGHT;  // 1.25
+
+// Issue #76 — memorial marker color/size for fully-dead colonies (queen
+// dead AND no live entrances). Distinct dark gray (not a darkened
+// colony-color, which could be misread as 'low-health'). Smaller (2×2)
+// than the live 4×4 marker — subtler, conveys 'remains' rather than
+// active colony.
+const COLOR_DEAD_COLONY_MEMORIAL = 0x444444 as const;
 
 export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewState): void {
   // Surface terrain (issue #40 reframe — barren-earth-default). Base layer
@@ -81,31 +89,62 @@ export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewStat
     gfx.fillRect(px - 1, py - 1, 2, 2);
   }
 
-  // Colony markers (4x4 pixels, colored by colony ID)
+  // Colony markers — live (4×4 colored) or memorial (2×2 dark gray).
+  //
+  // Issue #76 — fix the queen-status check. Pre-fix used `queenEntityId >= 0`
+  // which is true forever (allocateEntityId never recycles ids and
+  // queenEntityId is set once at colony creation). Switched to isAlive()
+  // and added a memorial-marker branch for fully-dead colonies (queen
+  // dead AND no live entrances), so wiped colonies don't confusingly
+  // persist on the minimap.
   for (const colonyIdStr of Object.keys(world.colonies)) {
     const colonyId = Number(colonyIdStr);
     const colony = world.colonies[colonyId]!;
-    const color = colonyId === PLAYER_COLONY_ID ? COLOR_PLAYER_COLONY
-                : colonyId === ENEMY_COLONY_ID  ? COLOR_ENEMY_COLONY
-                : COLOR_PLAYER_COLONY;
+    const liveColor = colonyId === PLAYER_COLONY_ID ? COLOR_PLAYER_COLONY
+                    : colonyId === ENEMY_COLONY_ID  ? COLOR_ENEMY_COLONY
+                    : COLOR_PLAYER_COLONY;
+    // Per #76 design: a 'live foothold' is an OPEN entrance (workers can
+    // actively transition zones through it). Merely-designated closed
+    // entrances are pre-excavation intent — show as live only if the
+    // queen is still alive (then it's a young colony still excavating).
+    const liveEntrances = colony.entrances ?? [];
+    const firstOpenEntrance = liveEntrances.find((e) => e.isOpen);
+    const queenAlive = isAlive(world.ants, colony.queenEntityId);
 
     let tileX = 0, tileY = 0;
-    if (colony.entrances && colony.entrances.length > 0) {
-      // Prefer the first entrance position (surface tile)
-      tileX = colony.entrances[0]!.surfaceTileX;
-      tileY = colony.entrances[0]!.surfaceTileY;
-    } else if (colony.queenEntityId >= 0) {
-      // Fall back to queen entity position (fixed-point coords → tile coords).
-      // Issue #77 — use FP_SHIFT import rather than hardcoding `>> 8`.
+    let color = liveColor;
+    let size: 2 | 4 = 4;
+    let halfOffset: 1 | 2 = 2;
+
+    if (firstOpenEntrance !== undefined) {
+      // Prefer the first OPEN entrance position. Live colored marker —
+      // an open entrance is a live foothold even if the queen is dead
+      // (workers still doing things; it's beheaded, not gone).
+      tileX = firstOpenEntrance.surfaceTileX;
+      tileY = firstOpenEntrance.surfaceTileY;
+    } else if (queenAlive) {
+      // No entrances yet but queen alive — pre-excavation colony. Live
+      // colored marker at queen's tile. Issue #77 uses FP_SHIFT import.
       const queenId = colony.queenEntityId;
       tileX = world.ants.posX[queenId]! >> FP_SHIFT;
       tileY = world.ants.posY[queenId]! >> FP_SHIFT;
+    } else {
+      // Fully-dead colony: queen dead AND no live entrances. Memorial
+      // marker at queen's last-known position. Entity slots preserve
+      // posX/posY after death, so this is the most meaningful 'where
+      // was this colony' landmark.
+      const queenId = colony.queenEntityId;
+      tileX = world.ants.posX[queenId]! >> FP_SHIFT;
+      tileY = world.ants.posY[queenId]! >> FP_SHIFT;
+      color = COLOR_DEAD_COLONY_MEMORIAL;
+      size = 2;
+      halfOffset = 1;
     }
 
     const px = HUD.MINIMAP.x + tileX * MINIMAP_SCALE_X;
     const py = HUD.MINIMAP.y + tileY * MINIMAP_SCALE_Y;
     gfx.fillStyle(color, 1);
-    gfx.fillRect(px - 2, py - 2, 4, 4);
+    gfx.fillRect(px - halfOffset, py - halfOffset, size, size);
   }
 
   // Viewport rect — always tracks surfaceCamera (minimap shows surface always per PRD §7a)
@@ -138,9 +177,15 @@ export function applyMinimapClick(viewState: ViewState, px: number, py: number):
   viewState.surfaceCamera.x = tile.tileX;
   viewState.surfaceCamera.y = tile.tileY;
   clampCamera(viewState.surfaceCamera, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
-  // X-link per PRD §7c: minimap pans surface; underground X follows surface X
+  // X-link per PRD §7c: minimap pans surface; underground X follows surface X.
+  // Issue #86 — defensive clamp the underground camera with its own dimensions
+  // after the X-link. Today SURFACE_GRID_WIDTH === UNDERGROUND_GRID_WIDTH so
+  // this is a no-op, but the constants are independent and a future width
+  // change to either side would silently let the underground camera fall
+  // outside its grid without this clamp.
   if (viewState.activeView === 'underground') {
     viewState.undergroundCamera.x = viewState.surfaceCamera.x;
+    clampCamera(viewState.undergroundCamera, UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT);
   }
   return true;
 }
