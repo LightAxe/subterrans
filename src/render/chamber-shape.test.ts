@@ -86,29 +86,51 @@ describe('chamberPerimeterPoints', () => {
     }
   });
 
-  it('keeps every point within jitter-bounds of the rectangle perimeter', () => {
-    // Outward-normal jitter is in [-amp, +amp]. Loose bounds:
-    //   x ∈ [-amp, W + amp], y ∈ [-amp, H + amp].
+  it('always covers the original rectangle (no inward dip past the rectangle edge)', () => {
+    // The substrate-bleed-through fix: the perimeter walks an inflated
+    // rectangle, so the worst inward swing of the wave reaches exactly
+    // the original rectangle edge — never crosses inside. This means
+    // every perimeter point's x lies in [-2*amp, 0] ∪ [W, W+2*amp] OR
+    // y lies in [-2*amp, 0] ∪ [H, H+2*amp] — ie. is never strictly
+    // inside the rectangle [0, W] × [0, H].
     const points = chamberPerimeterPoints(0xc0ffee, 0, 0, W, H);
+    const epsilon = 0.001;
     for (const p of points) {
-      expect(p.x).toBeGreaterThanOrEqual(-WAVE_AMPLITUDE_PX - 0.001);
-      expect(p.x).toBeLessThanOrEqual(W + WAVE_AMPLITUDE_PX + 0.001);
-      expect(p.y).toBeGreaterThanOrEqual(-WAVE_AMPLITUDE_PX - 0.001);
-      expect(p.y).toBeLessThanOrEqual(H + WAVE_AMPLITUDE_PX + 0.001);
+      const inX = p.x > epsilon && p.x < W - epsilon;
+      const inY = p.y > epsilon && p.y < H - epsilon;
+      // A point is "strictly inside" iff BOTH x and y are strictly inside.
+      // Boundary points (x=0 or x=W, etc.) are allowed — they're the worst-
+      // inward-swing case the inflation guarantees.
+      expect(inX && inY).toBe(false);
     }
   });
 
-  it('actually deviates from the rectangle perimeter (the wave is non-trivial)', () => {
-    // Regression guard: if amplitude collapsed to 0 the polygon would equal
-    // the rectangle. Verify at least one point shows non-zero displacement
-    // from the nearest rectangle edge.
+  it('keeps every point within outward-jitter bounds (2 × amplitude beyond the rectangle)', () => {
+    // Inflated walking: outward swing is up to amp beyond the inflated
+    // rectangle, which is itself amp beyond the original — total 2*amp
+    // beyond the original rectangle on each side.
+    const points = chamberPerimeterPoints(0xc0ffee, 0, 0, W, H);
+    const cap = 2 * WAVE_AMPLITUDE_PX + 0.001;
+    for (const p of points) {
+      expect(p.x).toBeGreaterThanOrEqual(-cap);
+      expect(p.x).toBeLessThanOrEqual(W + cap);
+      expect(p.y).toBeGreaterThanOrEqual(-cap);
+      expect(p.y).toBeLessThanOrEqual(H + cap);
+    }
+  });
+
+  it('actually deviates from the inflated rectangle perimeter (the wave is non-trivial)', () => {
+    // Regression guard against amp=0. Verify at least one point shows
+    // non-zero displacement from the nearest INFLATED rectangle edge.
     const points = chamberPerimeterPoints(0xfeedf00d, 0, 0, W, H);
+    const amp = WAVE_AMPLITUDE_PX;
     let maxDev = 0;
     for (const p of points) {
-      const distTop    = Math.abs(p.y);
-      const distBottom = Math.abs(p.y - H);
-      const distLeft   = Math.abs(p.x);
-      const distRight  = Math.abs(p.x - W);
+      // Distance to the inflated rectangle's edges:
+      const distTop    = Math.abs(p.y - (-amp));
+      const distBottom = Math.abs(p.y - (H + amp));
+      const distLeft   = Math.abs(p.x - (-amp));
+      const distRight  = Math.abs(p.x - (W + amp));
       const dev = Math.min(distTop, distBottom, distLeft, distRight);
       if (dev > maxDev) maxDev = dev;
     }
@@ -117,12 +139,14 @@ describe('chamberPerimeterPoints', () => {
 
   it('clamps amplitude on tiny chambers to leave at least 1 px margin', () => {
     // 4x4 chamber: halfMin = 2, cap = halfMin - 1 = 1. Amplitude → 1.
+    // Inflated rect: (-1, -1) to (5, 5). Outward swing of 1 → up to 2*1=2
+    // beyond original.
     const points = chamberPerimeterPoints(0xffffffff, 0, 0, 4, 4);
     for (const p of points) {
-      expect(p.x).toBeGreaterThanOrEqual(-1.001);
-      expect(p.x).toBeLessThanOrEqual(5.001);
-      expect(p.y).toBeGreaterThanOrEqual(-1.001);
-      expect(p.y).toBeLessThanOrEqual(5.001);
+      expect(p.x).toBeGreaterThanOrEqual(-2.001);
+      expect(p.x).toBeLessThanOrEqual(6.001);
+      expect(p.y).toBeGreaterThanOrEqual(-2.001);
+      expect(p.y).toBeLessThanOrEqual(6.001);
     }
   });
 

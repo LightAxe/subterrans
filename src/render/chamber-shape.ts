@@ -73,12 +73,22 @@ export interface PerimeterPoint {
 
 /**
  * Compute the chamber's wavy perimeter as a closed polygon: numPoints points
- * walking the bounding rectangle clockwise from top-left, each displaced
+ * walking an INFLATED rectangle clockwise from top-left, each displaced
  * along its outward normal by a deterministic smooth-wave offset in
  * [-jitterAmp, +jitterAmp]. Outward = away from the chamber center.
  *
+ * The base rectangle is inflated by the (clamped) wave amplitude on each
+ * side, so the worst inward swing of the wave reaches exactly the original
+ * rectangle's edge — never crosses INSIDE it. This guarantees the polygon
+ * always covers the rectangular CHAMBER_DIMENSIONS footprint, so the
+ * substrate underneath (open-floor color) doesn't peek through where the
+ * wave dips inward. Outward swings extend up to 2 × amplitude beyond the
+ * original rectangle into adjacent open-floor tiles, which reads as the
+ * chamber's irregular hand-carved boundary.
+ *
  * Points are placed at half-step offsets ((i + 0.5) / numPoints) so none
- * land exactly on a rectangle corner where the outward normal is ambiguous.
+ * land exactly on the inflated rectangle's corners where the outward
+ * normal is ambiguous.
  *
  * The chamber center is (topLeftX + w/2, topLeftY + h/2). The polygon is
  * suitable for fan-triangulation from that center for fill, and for
@@ -95,28 +105,37 @@ export function chamberPerimeterPoints(
 ): PerimeterPoint[] {
   const ampClamped = clampAmplitude(jitterAmpPx, w, h);
   const nodes = computeWaveNodes(seed, ampClamped);
-  const perim = 2 * (w + h);
+
+  // Inflate the base perimeter by ampClamped px on each side. The wave's
+  // inward swing (up to -ampClamped) then reaches exactly the original
+  // rectangle edge.
+  const inflW = w + 2 * ampClamped;
+  const inflH = h + 2 * ampClamped;
+  const inflTLX = topLeftX - ampClamped;
+  const inflTLY = topLeftY - ampClamped;
+  const perim = 2 * (inflW + inflH);
+
   const points: PerimeterPoint[] = new Array(numPoints);
 
   for (let i = 0; i < numPoints; i++) {
     const t = ((i + 0.5) / numPoints) * perim;
     let baseX: number, baseY: number, nx: number, ny: number;
 
-    if (t < w) {
-      baseX = topLeftX + t;
-      baseY = topLeftY;
+    if (t < inflW) {
+      baseX = inflTLX + t;
+      baseY = inflTLY;
       nx = 0; ny = -1;
-    } else if (t < w + h) {
-      baseX = topLeftX + w;
-      baseY = topLeftY + (t - w);
+    } else if (t < inflW + inflH) {
+      baseX = inflTLX + inflW;
+      baseY = inflTLY + (t - inflW);
       nx = 1; ny = 0;
-    } else if (t < 2 * w + h) {
-      baseX = topLeftX + w - (t - w - h);
-      baseY = topLeftY + h;
+    } else if (t < 2 * inflW + inflH) {
+      baseX = inflTLX + inflW - (t - inflW - inflH);
+      baseY = inflTLY + inflH;
       nx = 0; ny = 1;
     } else {
-      baseX = topLeftX;
-      baseY = topLeftY + h - (t - 2 * w - h);
+      baseX = inflTLX;
+      baseY = inflTLY + inflH - (t - 2 * inflW - inflH);
       nx = -1; ny = 0;
     }
 
