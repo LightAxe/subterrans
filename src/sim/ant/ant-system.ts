@@ -2056,10 +2056,21 @@ export function routeForagerPriority(world: WorldState): void {
     for (let p = 0; p < world.foodPiles.length; p++) {
       const pile = world.foodPiles[p]!;
       if (pile.foodPileId === colony.priorityFoodPileId) {
-        priorityTargets[colony.colonyId] = {
-          targetX: pile.tileX << FP_SHIFT,
-          targetY: pile.tileY << FP_SHIFT,
-        };
+        // Issue #70 — tile-center, not tile-corner. All target-coord
+        // writers in the sim use `(tileX << FP_SHIFT) + (FP_ONE >> 1)`
+        // for tile-center semantics (matches updateFightAntTargets,
+        // SetRallyPoint, etc.). Pre-fix used corner coords.
+        //
+        // Codex P1 follow-up: gate behind V12 even though movement is
+        // observably identical. The targetPos values themselves differ
+        // (corner=N×256, center=N×256+128) and round-trip through saves,
+        // so a v11 snapshot loaded by v12 code would write tile-center
+        // where the saved bytes had tile-corner — breaking SCEN-06
+        // byte-identity for any save with priority foragers active.
+        const useTileCenter = world.simVersion >= SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE;
+        priorityTargets[colony.colonyId] = useTileCenter
+          ? { targetX: (pile.tileX << FP_SHIFT) + (FP_ONE >> 1), targetY: (pile.tileY << FP_SHIFT) + (FP_ONE >> 1) }
+          : { targetX: pile.tileX << FP_SHIFT, targetY: pile.tileY << FP_SHIFT };
         break;
       }
     }
@@ -3665,8 +3676,18 @@ export function tickAntMovement(
               const dist = Math.abs(cx - antTileX) + Math.abs(cy - antTileY);
               if (bestDist < 0 || dist < bestDist) {
                 bestDist = dist;
-                chamberTargetX = cx << FP_SHIFT;
-                chamberTargetY = cy << FP_SHIFT;
+                // Issue #70 — tile-center, not tile-corner. Codex P1 gate
+                // behind V12: targetPos values round-trip through saves,
+                // so changing the writer breaks SCEN-06 byte-identity for
+                // pre-v12 snapshots even though the cardinal step pick is
+                // unchanged.
+                if (world.simVersion >= SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE) {
+                  chamberTargetX = (cx << FP_SHIFT) + (FP_ONE >> 1);
+                  chamberTargetY = (cy << FP_SHIFT) + (FP_ONE >> 1);
+                } else {
+                  chamberTargetX = cx << FP_SHIFT;
+                  chamberTargetY = cy << FP_SHIFT;
+                }
               }
             }
           }
