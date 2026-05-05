@@ -363,11 +363,12 @@ describe('drawUndergroundEntities', () => {
     expect(sprites.calls[0]!.tint).toBe(COLOR_PLAYER_COLONY);
   });
 
-  // Issue #97: chamber rendering switched from a single bounding-box fillRect
-  // to a rounded-rect (cross of 2 rects + 4 fillCircle corners) with per-
-  // chamber-deterministic radius. The simulation footprint stays rectangular;
-  // these assertions cover the visible shape and the queen-outline tracing.
-  it('draws a queen chamber as a rounded rect with COLOR_CHAMBER_QUEEN at the chamber position', () => {
+  // Issue #97: chamber rendering switched from axis-aligned rectangles to
+  // wavy polygons. Fill is a fan-triangulation from chamber center; the
+  // queen outline is a series of line-segment quads (each segment = 2
+  // fillTriangle calls) tracing the wavy perimeter. The simulation
+  // footprint stays rectangular — these assertions cover the visible shape.
+  it('draws a queen chamber as a wavy polygon with COLOR_CHAMBER_QUEEN', () => {
     const queenDims = CHAMBER_DIMENSIONS[ChamberType.Queen];
     const chamber: ChamberRecord = {
       chamberId:   1,
@@ -383,29 +384,34 @@ describe('drawUndergroundEntities', () => {
     const cam = makeCamera(5, 10, 20, 20);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
-    // The chamber color must be applied at least once (fillStyle) before the
-    // shape is drawn.
+    // Chamber color is applied at least once before the shape is drawn.
     const queenStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_CHAMBER_QUEEN);
     expect(queenStyles.length).toBeGreaterThanOrEqual(1);
 
-    // The rounded fill is two overlapping rects: a horizontal core of size
-    // (fullW - 2r) × fullH and a vertical core of size fullW × (fullH - 2r),
-    // where r is the deterministic per-chamber corner radius. So at least
-    // one fillRect must have width = fullW; at least one must have height = fullH.
-    const fullW = queenDims.width  * TILE_SIZE_PX;
-    const fullH = queenDims.height * TILE_SIZE_PX;
-    const rects = gfx.callsOf('fillRect');
-    const widthFullSpan  = rects.find(r => r.args[2] === fullW);
-    const heightFullSpan = rects.find(r => r.args[3] === fullH);
-    expect(widthFullSpan).toBeDefined();
-    expect(heightFullSpan).toBeDefined();
+    // Fill is a fan triangulation from chamber center: 32 perimeter points
+    // produce 32 fillTriangle calls (one per (center, P_i, P_{i+1}) pair).
+    // After the queen-outline color switch, an additional 2 × 32 = 64
+    // line-segment triangles are emitted. Verify the fill bucket has at
+    // least 32 triangles by counting fillTriangle calls between the
+    // chamber-color fillStyle and the outline-color fillStyle.
+    const allCalls = gfx.calls;
+    const chamberStyleIdx = allCalls.findIndex(
+      c => c.method === 'fillStyle' && c.args[0] === COLOR_CHAMBER_QUEEN,
+    );
+    const outlineStyleIdx = allCalls.findIndex(
+      c => c.method === 'fillStyle' && c.args[0] === COLOR_QUEEN_OUTLINE,
+    );
+    expect(chamberStyleIdx).toBeGreaterThan(-1);
+    expect(outlineStyleIdx).toBeGreaterThan(chamberStyleIdx);
 
-    // 4 fillCircle calls — one per rounded corner.
-    const circles = gfx.callsOf('fillCircle');
-    expect(circles.length).toBeGreaterThanOrEqual(4);
+    const fillTrianglesInBetween = allCalls
+      .slice(chamberStyleIdx + 1, outlineStyleIdx)
+      .filter(c => c.method === 'fillTriangle');
+    // 32 perimeter points → 32 fan triangles.
+    expect(fillTrianglesInBetween.length).toBeGreaterThanOrEqual(32);
   });
 
-  it('queen outline draws 4 axis-aligned gold strips between the rounded corners (no corner arcs — strokeCircle would bleed gold into chamber interior)', () => {
+  it('queen outline traces the wavy perimeter as line-segment triangle pairs (no axis-aligned strips)', () => {
     const queenDims = CHAMBER_DIMENSIONS[ChamberType.Queen];
     const chamber: ChamberRecord = {
       chamberId:   2,
@@ -421,44 +427,43 @@ describe('drawUndergroundEntities', () => {
     const cam = makeCamera(5, 10, 20, 20);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
-    // The outline pass switches fillStyle to COLOR_QUEEN_OUTLINE and emits
-    // exactly 4 strips. We verify the outline color was applied and no
-    // strokeCircle was emitted (the corners are visually conveyed by the
-    // rounded fillCircle FILL underneath, not by stroked rings — see
-    // draw-underground.ts comment for rationale).
+    // Outline pass switches fillStyle to COLOR_QUEEN_OUTLINE exactly once.
     const goldFillStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_QUEEN_OUTLINE);
     expect(goldFillStyles.length).toBe(1);
 
+    // 32 perimeter segments × 2 triangles per segment = 64 outline triangles.
+    // Count fillTriangle calls after the gold-outline fillStyle.
+    const allCalls = gfx.calls;
+    const outlineStyleIdx = allCalls.findIndex(
+      c => c.method === 'fillStyle' && c.args[0] === COLOR_QUEEN_OUTLINE,
+    );
+    const trianglesAfter = allCalls
+      .slice(outlineStyleIdx + 1)
+      .filter(c => c.method === 'fillTriangle');
+    expect(trianglesAfter.length).toBeGreaterThanOrEqual(64);
+
+    // No axis-aligned-strip fillRects in the outline pass — the wave produces
+    // non-axis-aligned segments, and the previous rounded-rect implementation
+    // emitted exactly 4 thin fillRects here. Regression guard.
+    const rectsAfter = allCalls
+      .slice(outlineStyleIdx + 1)
+      .filter(c => c.method === 'fillRect');
+    expect(rectsAfter.length).toBe(0);
+
+    // No strokeCircle either (a previous iteration tried using it for corner
+    // arcs but bled gold into the chamber interior).
     const strokeCircles = gfx.callsOf('strokeCircle');
     expect(strokeCircles.length).toBe(0);
 
-    // Find the index of the gold-outline fillStyle and count fillRect calls
-    // after it that are exactly 2-px-thick strips (width=2 XOR height=2).
-    // Tightening on "exactly 4 strips with thickness exactly 2 AND length
-    // matching one of {w-2r, h-2r}" rules out future fill-rect drift that
-    // happens to also be 2-px thick.
-    const allCalls = gfx.calls;
-    let outlineStyleIdx = -1;
-    allCalls.forEach((c, i) => {
-      if (c.method === 'fillStyle' && c.args[0] === COLOR_QUEEN_OUTLINE) outlineStyleIdx = i;
-    });
-    expect(outlineStyleIdx).toBeGreaterThan(-1);
-    const fullW = queenDims.width  * TILE_SIZE_PX;
-    const fullH = queenDims.height * TILE_SIZE_PX;
-    const stripsAfter = allCalls
+    // 32 round-cap fillCircles after the outline fillStyle — one per
+    // perimeter vertex, hides the joint over/under-lap between adjacent
+    // segment quads at alpha 0.7.
+    const circlesAfter = allCalls
       .slice(outlineStyleIdx + 1)
-      .filter(c => c.method === 'fillRect')
-      .filter(c => {
-        const w = Number(c.args[2]);
-        const h = Number(c.args[3]);
-        const horizThin = h === 2 && w !== 2 && w < fullW;  // top/bottom — len = fullW - 2r
-        const vertThin  = w === 2 && h !== 2 && h < fullH;  // left/right — len = fullH - 2r
-        return horizThin || vertThin;
-      });
-    expect(stripsAfter.length).toBe(4);
-    // Two horizontal strips (top + bottom) and two vertical strips (left + right).
-    expect(stripsAfter.filter(c => Number(c.args[3]) === 2).length).toBe(2);
-    expect(stripsAfter.filter(c => Number(c.args[2]) === 2).length).toBe(2);
+      .filter(c => c.method === 'fillCircle');
+    expect(circlesAfter.length).toBe(32);
+    // All round-caps are 1-px-radius (half of the 2-px outline thickness).
+    expect(circlesAfter.every(c => Number(c.args[2]) === 1)).toBe(true);
   });
 
   it('non-queen chambers do NOT receive a gold outline (only queen gets the landmark trim)', () => {
@@ -477,16 +482,12 @@ describe('drawUndergroundEntities', () => {
     const cam = makeCamera(5, 10, 20, 20);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
-    // The gold outline pass switches fillStyle to COLOR_QUEEN_OUTLINE.
-    // Non-queen chambers must NOT make this fillStyle call — without this
-    // guard, a future change that universally outlined every chamber would
-    // silently expand the gold-trim landmark. We discriminate on color, not
-    // alpha (more robust to alpha tweaks).
+    // No fillStyle call with COLOR_QUEEN_OUTLINE → no gold outline emitted.
     const goldFillStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_QUEEN_OUTLINE);
     expect(goldFillStyles.length).toBe(0);
   });
 
-  it('rounded-corner geometry is deterministic per chamber identity — same radius AND same screen positions across calls', () => {
+  it('chamber rendering is deterministic per chamber identity (same triangle vertices across calls)', () => {
     const queenDims = CHAMBER_DIMENSIONS[ChamberType.Queen];
     const chamber: ChamberRecord = {
       chamberId:   42,
@@ -502,21 +503,21 @@ describe('drawUndergroundEntities', () => {
     const cam = makeCamera(5, 10, 20, 20);
 
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
-    const cornersA = gfx.callsOf('fillCircle')
-      .map(c => `${c.args[0]},${c.args[1]},${c.args[2]}`)
+    const trianglesA = gfx.callsOf('fillTriangle')
+      .map(c => c.args.map(n => Number(n).toFixed(3)).join(','))
       .sort();
 
     gfx.reset();
     sprites.reset();
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
-    const cornersB = gfx.callsOf('fillCircle')
-      .map(c => `${c.args[0]},${c.args[1]},${c.args[2]}`)
+    const trianglesB = gfx.callsOf('fillTriangle')
+      .map(c => c.args.map(n => Number(n).toFixed(3)).join(','))
       .sort();
 
-    // Position-and-radius equality across calls catches both per-frame
-    // jitter in the radius selector AND screen-coordinate drift.
-    expect(cornersA).toEqual(cornersB);
-    expect(cornersA.length).toBe(4);
+    // Triangle-vertex equality across calls catches both per-frame wave
+    // jitter and screen-coordinate drift.
+    expect(trianglesA).toEqual(trianglesB);
+    expect(trianglesA.length).toBeGreaterThanOrEqual(32 + 64); // fan + outline
   });
 
   it('draws eggs via sprites.drawStatic (kind=egg) from brood entity position', () => {
