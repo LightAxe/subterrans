@@ -39,6 +39,7 @@ import {
   COLOR_CHAMBER_FOOD_STORAGE,
   COLOR_CHAMBER_FOOD_STORAGE_FILL,
   COLOR_PLAYER_COLONY,
+  COLOR_QUEEN_OUTLINE,
 } from './sprites.js';
 import {
   COLOR_ROCK_BASE,
@@ -362,7 +363,12 @@ describe('drawUndergroundEntities', () => {
     expect(sprites.calls[0]!.tint).toBe(COLOR_PLAYER_COLONY);
   });
 
-  it('draws a queen chamber fillRect with COLOR_CHAMBER_QUEEN covering chamber dimensions', () => {
+  // Issue #97: chamber rendering switched from axis-aligned rectangles to
+  // wavy polygons. Fill is a fan-triangulation from chamber center; the
+  // queen outline is a series of line-segment quads (each segment = 2
+  // fillTriangle calls) tracing the wavy perimeter. The simulation
+  // footprint stays rectangular — these assertions cover the visible shape.
+  it('draws a queen chamber as a wavy polygon with COLOR_CHAMBER_QUEEN', () => {
     const queenDims = CHAMBER_DIMENSIONS[ChamberType.Queen];
     const chamber: ChamberRecord = {
       chamberId:   1,
@@ -378,12 +384,141 @@ describe('drawUndergroundEntities', () => {
     const cam = makeCamera(5, 10, 20, 20);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
-    const rects = gfx.callsOf('fillRect');
-    const chamberRect = rects.find(r => r.args[2] === queenDims.width * TILE_SIZE_PX && r.args[3] === queenDims.height * TILE_SIZE_PX);
-    expect(chamberRect).toBeDefined();
-
+    // Chamber color is applied at least once before the shape is drawn.
     const queenStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_CHAMBER_QUEEN);
     expect(queenStyles.length).toBeGreaterThanOrEqual(1);
+
+    // Fill is a fan triangulation from chamber center: 32 perimeter points
+    // produce 32 fillTriangle calls (one per (center, P_i, P_{i+1}) pair).
+    // After the queen-outline color switch, an additional 2 × 32 = 64
+    // line-segment triangles are emitted. Verify the fill bucket has at
+    // least 32 triangles by counting fillTriangle calls between the
+    // chamber-color fillStyle and the outline-color fillStyle.
+    const allCalls = gfx.calls;
+    const chamberStyleIdx = allCalls.findIndex(
+      c => c.method === 'fillStyle' && c.args[0] === COLOR_CHAMBER_QUEEN,
+    );
+    const outlineStyleIdx = allCalls.findIndex(
+      c => c.method === 'fillStyle' && c.args[0] === COLOR_QUEEN_OUTLINE,
+    );
+    expect(chamberStyleIdx).toBeGreaterThan(-1);
+    expect(outlineStyleIdx).toBeGreaterThan(chamberStyleIdx);
+
+    const fillTrianglesInBetween = allCalls
+      .slice(chamberStyleIdx + 1, outlineStyleIdx)
+      .filter(c => c.method === 'fillTriangle');
+    // 32 wave-driven edge samples + 4 × 5 corner-arc samples = 52 perimeter
+    // points → 52 fan triangles.
+    expect(fillTrianglesInBetween.length).toBeGreaterThanOrEqual(52);
+  });
+
+  it('queen outline traces the wavy perimeter as line-segment triangle pairs (no axis-aligned strips)', () => {
+    const queenDims = CHAMBER_DIMENSIONS[ChamberType.Queen];
+    const chamber: ChamberRecord = {
+      chamberId:   2,
+      chamberType: ChamberType.Queen,
+      foodStored:  0,
+      posX:        5 << FP_SHIFT,
+      posY:        10 << FP_SHIFT,
+      width:       queenDims.width,
+      height:      queenDims.height,
+    };
+    world.colonies[PLAYER_COLONY_ID]!.chambers = [chamber];
+
+    const cam = makeCamera(5, 10, 20, 20);
+    drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
+
+    // Outline pass switches fillStyle to COLOR_QUEEN_OUTLINE exactly once.
+    const goldFillStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_QUEEN_OUTLINE);
+    expect(goldFillStyles.length).toBe(1);
+
+    // 52 perimeter points (32 edge + 4 × 5 corner-arc) × 2 triangles per
+    // segment = 104 outline triangles.
+    const allCalls = gfx.calls;
+    const outlineStyleIdx = allCalls.findIndex(
+      c => c.method === 'fillStyle' && c.args[0] === COLOR_QUEEN_OUTLINE,
+    );
+    const trianglesAfter = allCalls
+      .slice(outlineStyleIdx + 1)
+      .filter(c => c.method === 'fillTriangle');
+    expect(trianglesAfter.length).toBeGreaterThanOrEqual(104);
+
+    // No axis-aligned-strip fillRects in the outline pass — the wave produces
+    // non-axis-aligned segments, and the previous rounded-rect implementation
+    // emitted exactly 4 thin fillRects here. Regression guard.
+    const rectsAfter = allCalls
+      .slice(outlineStyleIdx + 1)
+      .filter(c => c.method === 'fillRect');
+    expect(rectsAfter.length).toBe(0);
+
+    // No strokeCircle either (a previous iteration tried using it for corner
+    // arcs but bled gold into the chamber interior).
+    const strokeCircles = gfx.callsOf('strokeCircle');
+    expect(strokeCircles.length).toBe(0);
+
+    // 52 round-cap fillCircles after the outline fillStyle — one per
+    // perimeter vertex (32 edge + 4 × 5 corner-arc), hides the joint
+    // over/under-lap between adjacent segment quads at alpha 0.7.
+    const circlesAfter = allCalls
+      .slice(outlineStyleIdx + 1)
+      .filter(c => c.method === 'fillCircle');
+    expect(circlesAfter.length).toBe(52);
+    // All round-caps are 1-px-radius (half of the 2-px outline thickness).
+    expect(circlesAfter.every(c => Number(c.args[2]) === 1)).toBe(true);
+  });
+
+  it('non-queen chambers do NOT receive a gold outline (only queen gets the landmark trim)', () => {
+    const dims = CHAMBER_DIMENSIONS[ChamberType.Nursery];
+    const chamber: ChamberRecord = {
+      chamberId:   3,
+      chamberType: ChamberType.Nursery,
+      foodStored:  0,
+      posX:        5 << FP_SHIFT,
+      posY:        10 << FP_SHIFT,
+      width:       dims.width,
+      height:      dims.height,
+    };
+    world.colonies[PLAYER_COLONY_ID]!.chambers = [chamber];
+
+    const cam = makeCamera(5, 10, 20, 20);
+    drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
+
+    // No fillStyle call with COLOR_QUEEN_OUTLINE → no gold outline emitted.
+    const goldFillStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_QUEEN_OUTLINE);
+    expect(goldFillStyles.length).toBe(0);
+  });
+
+  it('chamber rendering is deterministic per chamber identity (same triangle vertices across calls)', () => {
+    const queenDims = CHAMBER_DIMENSIONS[ChamberType.Queen];
+    const chamber: ChamberRecord = {
+      chamberId:   42,
+      chamberType: ChamberType.Queen,
+      foodStored:  0,
+      posX:        5 << FP_SHIFT,
+      posY:        10 << FP_SHIFT,
+      width:       queenDims.width,
+      height:      queenDims.height,
+    };
+    world.colonies[PLAYER_COLONY_ID]!.chambers = [chamber];
+
+    const cam = makeCamera(5, 10, 20, 20);
+
+    drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
+    const trianglesA = gfx.callsOf('fillTriangle')
+      .map(c => c.args.map(n => Number(n).toFixed(3)).join(','))
+      .sort();
+
+    gfx.reset();
+    sprites.reset();
+    drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
+    const trianglesB = gfx.callsOf('fillTriangle')
+      .map(c => c.args.map(n => Number(n).toFixed(3)).join(','))
+      .sort();
+
+    // Triangle-vertex equality across calls catches both per-frame wave
+    // jitter and screen-coordinate drift.
+    expect(trianglesA).toEqual(trianglesB);
+    expect(trianglesA.length).toBeGreaterThanOrEqual(52 + 104); // fan + outline
   });
 
   it('draws eggs via sprites.drawStatic (kind=egg) from brood entity position', () => {

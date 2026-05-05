@@ -48,6 +48,7 @@ import {
 } from './terrain-atlas.js';
 import { drawAutotiledUndergroundTile, drawUndergroundRim } from './underground-autotile.js';
 import { gatherUnderground3x3Neighbors, type Neighbors3x3 } from './underground-neighbors.js';
+import { chamberSeed, chamberPerimeterPoints, type PerimeterPoint } from './chamber-shape.js';
 import type { CameraState } from './camera.js';
 
 // ---------------------------------------------------------------------------
@@ -59,6 +60,38 @@ const CHAMBER_COLORS: Record<number, number> = {
   [ChamberType.Nursery]:     COLOR_CHAMBER_NURSERY,
   [ChamberType.FoodStorage]: COLOR_CHAMBER_FOOD_STORAGE,
 };
+
+// ---------------------------------------------------------------------------
+// drawOutlineSegment — draw a thick line segment between two arbitrary points
+//
+// GfxLike has fillRect, fillCircle, strokeCircle, fillTriangle — no
+// `strokeLineSegment(a, b, w)` primitive. For non-axis-aligned segments
+// (which the wavy chamber outline produces), we approximate a stroked line
+// with a thin quadrilateral built from two fillTriangle calls. Caller sets
+// fillStyle before calling; this function only emits geometry.
+//
+// Half-pixel-or-less segments are skipped (perpendicular vector would be
+// ill-defined).
+// ---------------------------------------------------------------------------
+
+function drawOutlineSegment(
+  gfx: GfxLike,
+  ax: number, ay: number,
+  bx: number, by: number,
+  thickness: number,
+): void {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len = Math.hypot(dx, dy);
+  if (len < 0.5) return;
+  // Perpendicular direction × half-thickness. (-dy, dx) is the 90° rotation.
+  const halfT = thickness * 0.5;
+  const px = (-dy / len) * halfT;
+  const py = ( dx / len) * halfT;
+  // Quad as two triangles. Vertex order: a+, b+, a-, b-, a-.
+  gfx.fillTriangle(ax + px, ay + py, bx + px, by + py, ax - px, ay - py);
+  gfx.fillTriangle(bx + px, by + py, bx - px, by - py, ax - px, ay - py);
+}
 
 // ---------------------------------------------------------------------------
 // projectFoodStorageFill — per-chamber fill readout
@@ -244,8 +277,18 @@ export function drawUndergroundEntities(
 
   // --- Chambers ---
   // Phase 8.5 usability (PRD §7c.1): after drawing the chamber fill, queen
-  // chambers get a 2-px gold outline so at least one landmark is visible on
-  // the first underground Tab, even when the rest of the grid is all-Solid.
+  // chambers get a gold outline so at least one landmark is visible on the
+  // first underground Tab, even when the rest of the grid is all-Solid.
+  //
+  // Issue #97: chambers render with WAVY walls (32 perimeter points, each
+  // displaced along its outward normal by a smooth deterministic per-chamber
+  // wave) so the shape reads as hand-carved earth rather than tile-grid
+  // rectangles. The simulation footprint is unchanged — collision, capacity,
+  // BFS, and chamber-tile checks still use the rectangular CHAMBER_DIMENSIONS
+  // bounding box. The wavy polygon is rendered as a triangle fan from the
+  // chamber center; the queen-chamber gold outline traces the SAME wavy
+  // perimeter via 2-px-thick line-segment quads (each segment is two
+  // fillTriangle calls forming a thin parallelogram).
   for (const chamber of colony.chambers) {
     const dims = CHAMBER_DIMENSIONS[chamber.chamberType];
     if (dims === undefined) continue;
@@ -256,14 +299,43 @@ export function drawUndergroundEntities(
     const color = CHAMBER_COLORS[chamber.chamberType] ?? COLOR_CHAMBER_QUEEN;
     const w = dims.width  * TILE_SIZE_PX;
     const h = dims.height * TILE_SIZE_PX;
+    const seed = chamberSeed(colony.colonyId, chamber.chamberId, chamber.chamberType);
+    const points = chamberPerimeterPoints(seed, screenX, screenY, w, h);
+    const cx = screenX + w / 2;
+    const cy = screenY + h / 2;
+
+    // Fill via fan triangulation from chamber center. The polygon is nearly
+    // convex (small jitter on a rectangle), so any "bowtie" overdraw from
+    // a non-convex dip is harmless — same fill color, additive draws are
+    // pixel-identical.
     gfx.fillStyle(color, 1);
-    gfx.fillRect(screenX, screenY, w, h);
+    for (let i = 0; i < points.length; i++) {
+      const p1 = points[i]!;
+      const p2 = points[(i + 1) % points.length]!;
+      gfx.fillTriangle(cx, cy, p1.x, p1.y, p2.x, p2.y);
+    }
+
     if (chamber.chamberType === ChamberType.Queen) {
+      // Gold outline tracing the wavy perimeter. Each segment between
+      // adjacent perimeter points is rendered as a 2-px-thick quad via
+      // two fillTriangle calls; a small fillCircle is drawn at each
+      // vertex as a round-cap, hiding the small over/under-lap artifacts
+      // that occur at the joints between non-axis-aligned segments
+      // (perpendicular vectors don't align across direction changes, so
+      // raw quad-only outlines show subtle dots at every joint under
+      // alpha 0.7).
+      //
+      // We use line-segment quads rather than axis-aligned fillRects
+      // because the wave produces non-axis-aligned segments — fillRect
+      // would mis-render diagonals.
       gfx.fillStyle(COLOR_QUEEN_OUTLINE, 0.7);
-      gfx.fillRect(screenX,         screenY,         w, 2);     // top
-      gfx.fillRect(screenX,         screenY + h - 2, w, 2);     // bottom
-      gfx.fillRect(screenX,         screenY,         2, h);     // left
-      gfx.fillRect(screenX + w - 2, screenY,         2, h);     // right
+      const halfThickness = 1; // half of the 2-px outline thickness
+      for (let i = 0; i < points.length; i++) {
+        const p1 = points[i]!;
+        const p2 = points[(i + 1) % points.length]!;
+        drawOutlineSegment(gfx, p1.x, p1.y, p2.x, p2.y, 2);
+        gfx.fillCircle(p1.x, p1.y, halfThickness);
+      }
     }
     // FoodStorage fill visualization — per-tile amber food-cache sprites
     // stacked from the chamber floor upward. Issue #15: ChamberRecord.foodStored
