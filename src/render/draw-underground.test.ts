@@ -39,6 +39,7 @@ import {
   COLOR_CHAMBER_FOOD_STORAGE,
   COLOR_CHAMBER_FOOD_STORAGE_FILL,
   COLOR_PLAYER_COLONY,
+  COLOR_QUEEN_OUTLINE,
 } from './sprites.js';
 import {
   COLOR_ROCK_BASE,
@@ -362,7 +363,11 @@ describe('drawUndergroundEntities', () => {
     expect(sprites.calls[0]!.tint).toBe(COLOR_PLAYER_COLONY);
   });
 
-  it('draws a queen chamber fillRect with COLOR_CHAMBER_QUEEN covering chamber dimensions', () => {
+  // Issue #97: chamber rendering switched from a single bounding-box fillRect
+  // to a rounded-rect (cross of 2 rects + 4 fillCircle corners) with per-
+  // chamber-deterministic radius. The simulation footprint stays rectangular;
+  // these assertions cover the visible shape and the queen-outline tracing.
+  it('draws a queen chamber as a rounded rect with COLOR_CHAMBER_QUEEN at the chamber position', () => {
     const queenDims = CHAMBER_DIMENSIONS[ChamberType.Queen];
     const chamber: ChamberRecord = {
       chamberId:   1,
@@ -378,12 +383,140 @@ describe('drawUndergroundEntities', () => {
     const cam = makeCamera(5, 10, 20, 20);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
-    const rects = gfx.callsOf('fillRect');
-    const chamberRect = rects.find(r => r.args[2] === queenDims.width * TILE_SIZE_PX && r.args[3] === queenDims.height * TILE_SIZE_PX);
-    expect(chamberRect).toBeDefined();
-
+    // The chamber color must be applied at least once (fillStyle) before the
+    // shape is drawn.
     const queenStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_CHAMBER_QUEEN);
     expect(queenStyles.length).toBeGreaterThanOrEqual(1);
+
+    // The rounded fill is two overlapping rects: a horizontal core of size
+    // (fullW - 2r) × fullH and a vertical core of size fullW × (fullH - 2r),
+    // where r is the deterministic per-chamber corner radius. So at least
+    // one fillRect must have width = fullW; at least one must have height = fullH.
+    const fullW = queenDims.width  * TILE_SIZE_PX;
+    const fullH = queenDims.height * TILE_SIZE_PX;
+    const rects = gfx.callsOf('fillRect');
+    const widthFullSpan  = rects.find(r => r.args[2] === fullW);
+    const heightFullSpan = rects.find(r => r.args[3] === fullH);
+    expect(widthFullSpan).toBeDefined();
+    expect(heightFullSpan).toBeDefined();
+
+    // 4 fillCircle calls — one per rounded corner.
+    const circles = gfx.callsOf('fillCircle');
+    expect(circles.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('queen outline draws 4 axis-aligned gold strips between the rounded corners (no corner arcs — strokeCircle would bleed gold into chamber interior)', () => {
+    const queenDims = CHAMBER_DIMENSIONS[ChamberType.Queen];
+    const chamber: ChamberRecord = {
+      chamberId:   2,
+      chamberType: ChamberType.Queen,
+      foodStored:  0,
+      posX:        5 << FP_SHIFT,
+      posY:        10 << FP_SHIFT,
+      width:       queenDims.width,
+      height:      queenDims.height,
+    };
+    world.colonies[PLAYER_COLONY_ID]!.chambers = [chamber];
+
+    const cam = makeCamera(5, 10, 20, 20);
+    drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
+
+    // The outline pass switches fillStyle to COLOR_QUEEN_OUTLINE and emits
+    // exactly 4 strips. We verify the outline color was applied and no
+    // strokeCircle was emitted (the corners are visually conveyed by the
+    // rounded fillCircle FILL underneath, not by stroked rings — see
+    // draw-underground.ts comment for rationale).
+    const goldFillStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_QUEEN_OUTLINE);
+    expect(goldFillStyles.length).toBe(1);
+
+    const strokeCircles = gfx.callsOf('strokeCircle');
+    expect(strokeCircles.length).toBe(0);
+
+    // Find the index of the gold-outline fillStyle and count fillRect calls
+    // after it that are exactly 2-px-thick strips (width=2 XOR height=2).
+    // Tightening on "exactly 4 strips with thickness exactly 2 AND length
+    // matching one of {w-2r, h-2r}" rules out future fill-rect drift that
+    // happens to also be 2-px thick.
+    const allCalls = gfx.calls;
+    let outlineStyleIdx = -1;
+    allCalls.forEach((c, i) => {
+      if (c.method === 'fillStyle' && c.args[0] === COLOR_QUEEN_OUTLINE) outlineStyleIdx = i;
+    });
+    expect(outlineStyleIdx).toBeGreaterThan(-1);
+    const fullW = queenDims.width  * TILE_SIZE_PX;
+    const fullH = queenDims.height * TILE_SIZE_PX;
+    const stripsAfter = allCalls
+      .slice(outlineStyleIdx + 1)
+      .filter(c => c.method === 'fillRect')
+      .filter(c => {
+        const w = Number(c.args[2]);
+        const h = Number(c.args[3]);
+        const horizThin = h === 2 && w !== 2 && w < fullW;  // top/bottom — len = fullW - 2r
+        const vertThin  = w === 2 && h !== 2 && h < fullH;  // left/right — len = fullH - 2r
+        return horizThin || vertThin;
+      });
+    expect(stripsAfter.length).toBe(4);
+    // Two horizontal strips (top + bottom) and two vertical strips (left + right).
+    expect(stripsAfter.filter(c => Number(c.args[3]) === 2).length).toBe(2);
+    expect(stripsAfter.filter(c => Number(c.args[2]) === 2).length).toBe(2);
+  });
+
+  it('non-queen chambers do NOT receive a gold outline (only queen gets the landmark trim)', () => {
+    const dims = CHAMBER_DIMENSIONS[ChamberType.Nursery];
+    const chamber: ChamberRecord = {
+      chamberId:   3,
+      chamberType: ChamberType.Nursery,
+      foodStored:  0,
+      posX:        5 << FP_SHIFT,
+      posY:        10 << FP_SHIFT,
+      width:       dims.width,
+      height:      dims.height,
+    };
+    world.colonies[PLAYER_COLONY_ID]!.chambers = [chamber];
+
+    const cam = makeCamera(5, 10, 20, 20);
+    drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
+
+    // The gold outline pass switches fillStyle to COLOR_QUEEN_OUTLINE.
+    // Non-queen chambers must NOT make this fillStyle call — without this
+    // guard, a future change that universally outlined every chamber would
+    // silently expand the gold-trim landmark. We discriminate on color, not
+    // alpha (more robust to alpha tweaks).
+    const goldFillStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_QUEEN_OUTLINE);
+    expect(goldFillStyles.length).toBe(0);
+  });
+
+  it('rounded-corner geometry is deterministic per chamber identity — same radius AND same screen positions across calls', () => {
+    const queenDims = CHAMBER_DIMENSIONS[ChamberType.Queen];
+    const chamber: ChamberRecord = {
+      chamberId:   42,
+      chamberType: ChamberType.Queen,
+      foodStored:  0,
+      posX:        5 << FP_SHIFT,
+      posY:        10 << FP_SHIFT,
+      width:       queenDims.width,
+      height:      queenDims.height,
+    };
+    world.colonies[PLAYER_COLONY_ID]!.chambers = [chamber];
+
+    const cam = makeCamera(5, 10, 20, 20);
+
+    drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
+    const cornersA = gfx.callsOf('fillCircle')
+      .map(c => `${c.args[0]},${c.args[1]},${c.args[2]}`)
+      .sort();
+
+    gfx.reset();
+    sprites.reset();
+    drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
+    const cornersB = gfx.callsOf('fillCircle')
+      .map(c => `${c.args[0]},${c.args[1]},${c.args[2]}`)
+      .sort();
+
+    // Position-and-radius equality across calls catches both per-frame
+    // jitter in the radius selector AND screen-coordinate drift.
+    expect(cornersA).toEqual(cornersB);
+    expect(cornersA.length).toBe(4);
   });
 
   it('draws eggs via sprites.drawStatic (kind=egg) from brood entity position', () => {

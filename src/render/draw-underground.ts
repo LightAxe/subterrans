@@ -48,6 +48,7 @@ import {
 } from './terrain-atlas.js';
 import { drawAutotiledUndergroundTile, drawUndergroundRim } from './underground-autotile.js';
 import { gatherUnderground3x3Neighbors, type Neighbors3x3 } from './underground-neighbors.js';
+import { chamberSeed, chamberCornerRadius } from './chamber-shape.js';
 import type { CameraState } from './camera.js';
 
 // ---------------------------------------------------------------------------
@@ -246,6 +247,15 @@ export function drawUndergroundEntities(
   // Phase 8.5 usability (PRD §7c.1): after drawing the chamber fill, queen
   // chambers get a 2-px gold outline so at least one landmark is visible on
   // the first underground Tab, even when the rest of the grid is all-Solid.
+  //
+  // Issue #97: chambers render with rounded corners (per-chamber-deterministic
+  // radius via chamberCornerRadius) so the shape reads as hand-carved earth
+  // rather than tile-grid rectangles. The simulation footprint is unchanged —
+  // collision, capacity, BFS, and chamber-tile checks still use the rectangular
+  // CHAMBER_DIMENSIONS bounding box. The rounded shape is rendered as an
+  // overlapping cross of two fillRects plus four fillCircle corners. The queen
+  // gold outline is 4 axis-aligned strips between the corners (no strokeCircle
+  // arcs — see the comment at the outline pass below for why).
   for (const chamber of colony.chambers) {
     const dims = CHAMBER_DIMENSIONS[chamber.chamberType];
     if (dims === undefined) continue;
@@ -256,14 +266,32 @@ export function drawUndergroundEntities(
     const color = CHAMBER_COLORS[chamber.chamberType] ?? COLOR_CHAMBER_QUEEN;
     const w = dims.width  * TILE_SIZE_PX;
     const h = dims.height * TILE_SIZE_PX;
+    const seed = chamberSeed(colony.colonyId, chamber.chamberId, chamber.chamberType);
+    const r = chamberCornerRadius(seed, w, h);
     gfx.fillStyle(color, 1);
-    gfx.fillRect(screenX, screenY, w, h);
+    // Rounded-rect fill: a horizontal core (full width minus rounded ends),
+    // a vertical core (full height minus rounded ends), and 4 quarter-disk
+    // corners filled by overlapping circles. Overlap between the two rects
+    // is harmless — same color.
+    gfx.fillRect(screenX + r,     screenY,         w - 2 * r, h);
+    gfx.fillRect(screenX,         screenY + r,     w,         h - 2 * r);
+    gfx.fillCircle(screenX + r,         screenY + r,         r);
+    gfx.fillCircle(screenX + w - r,     screenY + r,         r);
+    gfx.fillCircle(screenX + r,         screenY + h - r,     r);
+    gfx.fillCircle(screenX + w - r,     screenY + h - r,     r);
     if (chamber.chamberType === ChamberType.Queen) {
+      // Phase 8.5 usability landmark — gold trim around the queen chamber.
+      // 4 axis-aligned strips between the rounded corners. We deliberately
+      // do NOT trace the corner arcs: GfxLike has only strokeCircle (full
+      // circle), and 3 of its 4 quadrants would overlap the chamber fill
+      // and draw visible gold curls INSIDE the chamber. The rounded-corner
+      // FILL already conveys the rounded shape; the small gap at each corner
+      // of the outline reads as part of the hand-carved aesthetic.
       gfx.fillStyle(COLOR_QUEEN_OUTLINE, 0.7);
-      gfx.fillRect(screenX,         screenY,         w, 2);     // top
-      gfx.fillRect(screenX,         screenY + h - 2, w, 2);     // bottom
-      gfx.fillRect(screenX,         screenY,         2, h);     // left
-      gfx.fillRect(screenX + w - 2, screenY,         2, h);     // right
+      gfx.fillRect(screenX + r, screenY,         w - 2 * r, 2);   // top
+      gfx.fillRect(screenX + r, screenY + h - 2, w - 2 * r, 2);   // bottom
+      gfx.fillRect(screenX,         screenY + r, 2, h - 2 * r);   // left
+      gfx.fillRect(screenX + w - 2, screenY + r, 2, h - 2 * r);   // right
     }
     // FoodStorage fill visualization — per-tile amber food-cache sprites
     // stacked from the chamber floor upward. Issue #15: ChamberRecord.foodStored
