@@ -40,6 +40,7 @@ import {
   SIM_VERSION_V8_LEASH_HYSTERESIS,
   SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
   SIM_VERSION_V11_DEFENSIVE_BUNDLE,
+  SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE,
   type WorldState,
 } from '../types.js';
 import {
@@ -516,7 +517,20 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
     if (!isFoodChamberDepositable(chamber)) {
       colony.foodFlowFieldDirty = true;
     }
-  } else {
+    // Issue #68 (v12+) — fall through to the entrance-pool path for any
+    // leftover food after a partial chamber deposit. Pre-v12 the chamber
+    // path silently swallowed the leftover (ant walked away with the
+    // remainder, no Idle flip, no wait-state) and relied on next-tick
+    // flow-field re-routing — which had a 1-tick stale-routing window
+    // and could cause the ant to re-step toward the same now-saturated
+    // chamber. Now: deposit chamber slice → fall through → deposit pool
+    // slice → enter wait-state if leftover persists.
+  }
+  // Issue #68 (v12+) — pre-v12 this was an `else` branch. Now runs after
+  // the chamber path too when v12+, so leftover food can flow into the
+  // entrance pool before forcing wait-state.
+  const tryPoolFallback = (chamber === null) || world.simVersion >= SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE;
+  if (tryPoolFallback && remaining > 0) {
     // Fallback — entrance-shaft / chamberless pool. Cap at BASE.
     const space = BASE_FOOD_STORAGE_CAPACITY - colony.foodStored;
     const toPool = remaining < space ? remaining : (space > 0 ? space : 0);
@@ -1822,6 +1836,53 @@ export function tickDigExecution(
  *
  * @param world  WorldState (reads ants, colonies; writes ants.targetPosX/Y).
  */
+/**
+ * Issue #62 (v12+) — pick the entrance a fighter should route toward.
+ *
+ * Two-tier preference, matching the design decision in the issue:
+ *   1. Nearest OPEN entrance (Manhattan distance from antTileX/Y), tie-break
+ *      by `entranceId`. Same pattern as `tickAntMovement` entrance-targeting
+ *      and `moveQueens` — fighter routing is the outlier we're fixing.
+ *   2. Fallback when no open entrance exists: nearest CLOSED entrance.
+ *      Fighters stack near the soon-to-open shaft so they're in position
+ *      when `checkEntranceCompletion` flips it. The fighter will walk
+ *      toward the surface column, hit the partially-excavated shaft
+ *      (Marked/Solid tiles non-Diggers can't traverse), and idle adjacent
+ *      to it until the shaft completes — natural "waiting at the door" feel.
+ *   3. Final fallback (no entrances at all): null. Defensive only — caller
+ *      already checks `hasEntrances` before calling.
+ */
+function pickFighterTargetEntrance(
+  entrances: ReadonlyArray<{ entranceId: number; surfaceTileX: number; surfaceTileY: number; isOpen: boolean }>,
+  antTileX: number,
+  antTileY: number,
+): { entranceId: number; surfaceTileX: number; surfaceTileY: number; isOpen: boolean } | null {
+  let bestOpen: typeof entrances[number] | null = null;
+  let bestOpenDist = Infinity;
+  let bestOpenId = Infinity;
+  let bestClosed: typeof entrances[number] | null = null;
+  let bestClosedDist = Infinity;
+  let bestClosedId = Infinity;
+  for (let e = 0; e < entrances.length; e++) {
+    const ent = entrances[e]!;
+    const dist = Math.abs(ent.surfaceTileX - antTileX) + Math.abs(ent.surfaceTileY - antTileY);
+    if (ent.isOpen) {
+      if (dist < bestOpenDist || (dist === bestOpenDist && ent.entranceId < bestOpenId)) {
+        bestOpen = ent;
+        bestOpenDist = dist;
+        bestOpenId = ent.entranceId;
+      }
+    } else {
+      if (dist < bestClosedDist || (dist === bestClosedDist && ent.entranceId < bestClosedId)) {
+        bestClosed = ent;
+        bestClosedDist = dist;
+        bestClosedId = ent.entranceId;
+      }
+    }
+  }
+  return bestOpen ?? bestClosed;
+}
+
 export function updateFightAntTargets(world: WorldState): void {
   const { ants } = world;
 
@@ -1882,20 +1943,45 @@ export function updateFightAntTargets(world: WorldState): void {
     // No rally point (null or uninitialized): fall back to first entrance (idle-at-nest).
     if (rp == null) {
       if (hasEntrances) {
-        const e = entrances[0]!;
-        ants.targetPosX[id] = (e.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1);
-        ants.targetPosY[id] = (e.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1);
+        // Issue #62 (v12+) — pick nearest open entrance, fallback to nearest
+        // closed if none open (fighters stack near soon-to-open shafts).
+        // Pre-v12 always used entrances[0] regardless of isOpen.
+        const e = world.simVersion >= SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE
+          ? pickFighterTargetEntrance(entrances, ants.posX[id]! >> FP_SHIFT, ants.posY[id]! >> FP_SHIFT)
+          : entrances[0]!;
+        if (e !== null) {
+          ants.targetPosX[id] = (e.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1);
+          ants.targetPosY[id] = (e.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1);
+        } else {
+          // No entrances at all (defensive — only reachable via a future code
+          // path, can't happen with hasEntrances === true). Hold in place.
+          ants.targetPosX[id] = -1;
+          ants.targetPosY[id] = -1;
+        }
       }
       continue;
     }
 
-    // Underground fighter with surface rally: route to first entrance first.
+    // Underground fighter with surface rally: route to nearest entrance first.
     // Zone promotion happens inside tickAntMovement when the ant crosses the shaft;
     // this pass only writes the fixed-point target coord.
+    //
+    // Issue #62 (v12+) — pick nearest OPEN entrance, fall back to nearest
+    // closed (fighters stack near soon-to-open shafts). Pre-v12 always
+    // routed to entrances[0] regardless of isOpen — fighters routed to a
+    // closed entrance walked to the surface column and stopped permanently
+    // since the zone-transition only promotes when isOpen.
     if (ants.zone[id] === 1 /* Underground */ && hasEntrances) {
-      const e = entrances[0]!;
-      ants.targetPosX[id] = (e.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1);
-      ants.targetPosY[id] = (e.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1);
+      const e = world.simVersion >= SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE
+        ? pickFighterTargetEntrance(entrances, ants.posX[id]! >> FP_SHIFT, ants.posY[id]! >> FP_SHIFT)
+        : entrances[0]!;
+      if (e !== null) {
+        ants.targetPosX[id] = (e.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1);
+        ants.targetPosY[id] = (e.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1);
+      } else {
+        ants.targetPosX[id] = -1;
+        ants.targetPosY[id] = -1;
+      }
       continue;
     }
 
