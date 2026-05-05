@@ -2057,8 +2057,16 @@ export function routeForagerPriority(world: WorldState): void {
       const pile = world.foodPiles[p]!;
       if (pile.foodPileId === colony.priorityFoodPileId) {
         priorityTargets[colony.colonyId] = {
-          targetX: pile.tileX << FP_SHIFT,
-          targetY: pile.tileY << FP_SHIFT,
+          // Issue #70 — tile-center, not tile-corner. All target-coord
+          // writers in the sim use `(tileX << FP_SHIFT) + (FP_ONE >> 1)`
+          // for tile-center semantics (matches updateFightAntTargets,
+          // SetRallyPoint, etc.). Pre-fix used corner coords; observably
+          // identical today because every consumer rounds back via
+          // `>> FP_SHIFT`, but a future caller doing FP arithmetic
+          // (distance check, "have we arrived?") would see a half-tile
+          // bias differing per writer.
+          targetX: (pile.tileX << FP_SHIFT) + (FP_ONE >> 1),
+          targetY: (pile.tileY << FP_SHIFT) + (FP_ONE >> 1),
         };
         break;
       }
@@ -3665,8 +3673,13 @@ export function tickAntMovement(
               const dist = Math.abs(cx - antTileX) + Math.abs(cy - antTileY);
               if (bestDist < 0 || dist < bestDist) {
                 bestDist = dist;
-                chamberTargetX = cx << FP_SHIFT;
-                chamberTargetY = cy << FP_SHIFT;
+                // Issue #70 — tile-center, not tile-corner. Standardized with
+                // updateFightAntTargets / SetRallyPoint / etc. Observably
+                // identical today (consumer rounds back via >> FP_SHIFT)
+                // but eliminates the half-tile-bias foot-gun for future
+                // FP-arithmetic consumers.
+                chamberTargetX = (cx << FP_SHIFT) + (FP_ONE >> 1);
+                chamberTargetY = (cy << FP_SHIFT) + (FP_ONE >> 1);
               }
             }
           }

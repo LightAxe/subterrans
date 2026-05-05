@@ -1119,8 +1119,10 @@ describe('routeForagerPriority', () => {
 
     routeForagerPriority(world);
 
-    expect(world.ants.targetPosX[antId]).toBe(15 << FP_SHIFT);
-    expect(world.ants.targetPosY[antId]).toBe(20 << FP_SHIFT);
+    // Issue #70 — tile-center semantics. Pre-fix used tile-corner; now
+    // standardized with all other target writers (FP_ONE/2 offset).
+    expect(world.ants.targetPosX[antId]).toBe((15 << FP_SHIFT) + (FP_ONE >> 1));
+    expect(world.ants.targetPosY[antId]).toBe((20 << FP_SHIFT) + (FP_ONE >> 1));
   });
 
   it('6. priority target is exclusive: ant routes to the chosen pile even when a closer pile exists', () => {
@@ -1150,8 +1152,9 @@ describe('routeForagerPriority', () => {
     routeForagerPriority(world);
 
     // Targets pile 10 (player's explicit choice), not the closer pile 20.
-    expect(world.ants.targetPosX[antId]).toBe(10 << FP_SHIFT);
-    expect(world.ants.targetPosY[antId]).toBe(5 << FP_SHIFT);
+    // Issue #70 — tile-center semantics.
+    expect(world.ants.targetPosX[antId]).toBe((10 << FP_SHIFT) + (FP_ONE >> 1));
+    expect(world.ants.targetPosY[antId]).toBe((5 << FP_SHIFT) + (FP_ONE >> 1));
   });
 
   it('7. ant not in SearchingFood sub-state → targetPosX/Y unchanged', () => {
@@ -1218,8 +1221,9 @@ describe('routeForagerPriority', () => {
     routeForagerPriority(world);
 
     // A routes to the pile; B is cleared (its colony has no priority).
-    expect(world.ants.targetPosX[antA]).toBe(15 << FP_SHIFT);
-    expect(world.ants.targetPosY[antA]).toBe(20 << FP_SHIFT);
+    // Issue #70 — tile-center semantics on A's target.
+    expect(world.ants.targetPosX[antA]).toBe((15 << FP_SHIFT) + (FP_ONE >> 1));
+    expect(world.ants.targetPosY[antA]).toBe((20 << FP_SHIFT) + (FP_ONE >> 1));
     expect(world.ants.targetPosX[antB]).toBe(-1);
     expect(world.ants.targetPosY[antB]).toBe(-1);
   });
