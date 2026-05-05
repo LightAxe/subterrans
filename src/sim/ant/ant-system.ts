@@ -3808,13 +3808,30 @@ export function tickAntMovement(
         }
       }
 
-      // Issue #63 (v11+) — surface ants targeting an entrance consume the
-      // surface entrance flow-field instead of straight-line pickCardinalStep.
-      // The field is a true BFS through non-HardBlock tiles, so the ant
-      // routes around multi-tile feature pockets (4×4 boulders, 6×3 twigs,
-      // 3×4 BigLeaves) that the 1-tile pickSurfaceDetour can't escape.
+      // Issue #63 (v11+) — surface ants RETURNING to an open entrance to
+      // deposit food consume the surface entrance flow-field instead of
+      // straight-line pickCardinalStep. The field is a true BFS through
+      // non-HardBlock tiles, so the ant routes around multi-tile feature
+      // pockets (4×4 boulders, 6×3 twigs, 3×4 BigLeaves) that the 1-tile
+      // pickSurfaceDetour can't escape.
+      //
+      // Codex P1 follow-up — narrow the BFS branch to ONLY the
+      // CarryingFood/ReturningToNest cases the issue described. The
+      // surface BFS field is seeded only from OPEN entrances, so any
+      // ant with a target that ISN'T an open entrance (Diggers heading
+      // to a freshly-designated closed shaft to excavate it; Fighting
+      // invaders targeting an enemy's open entrance which isn't on the
+      // player's BFS field) would be misrouted toward the nearest open
+      // own-colony entrance. Pin the branch to Foraging + Carry/Return
+      // and let other tasks fall through to the existing straight-line.
+      const subTaskHere = ants.subTask[id]!;
+      const isHomeBoundForager =
+        task === AntTask.Foraging &&
+        (subTaskHere === ForagingSubState.CarryingFood ||
+         subTaskHere === ForagingSubState.ReturningToNest);
       if (!stepped
         && zone === Zone.Surface
+        && isHomeBoundForager
         && entranceFlowFields !== undefined
         && world.simVersion >= SIM_VERSION_V11_DEFENSIVE_BUNDLE
       ) {
