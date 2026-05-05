@@ -12,7 +12,7 @@ A modern ant colony simulation game, built for the web. A spiritual successor to
 - Queens laying eggs, larvae maturing into workers, workers foraging, digging, nursing, and dying of starvation when you mismanage them.
 - Food pheromone trails and danger trails that decay over time.
 - Per-colony underground excavation with chambers and nest entrances.
-- Surface and underground views with a toggle, camera pan, minimap, HUD, and the classic behavior-triangle allocation widget.
+- Surface and underground views with a toggle, camera pan, minimap, HUD, and a Forage↔Fight allocation slider.
 - Colony-vs-colony combat, rally points, and cross-grid invasions (rally fighters on an enemy entrance and they go underground).
 - Full save/load with deterministic replay — the same seed plus the same input log reproduces a session exactly.
 
