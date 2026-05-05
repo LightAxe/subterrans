@@ -115,15 +115,20 @@ const chamberFlowFields: ChamberFlowFields = createChamberFlowFields();
  * In-place deletion preserves the const-bound record identities held by step 9.
  */
 export function resetFlowFieldCaches(): void {
-  for (const k in digFlowFields.fields)       delete digFlowFields.fields[k as unknown as ColonyId];
-  for (const k in digFlowFields.queues)       delete digFlowFields.queues[k as unknown as ColonyId];
-  for (const k in entranceFlowFields.fields)  delete entranceFlowFields.fields[k as unknown as ColonyId];
-  for (const k in entranceFlowFields.queues)  delete entranceFlowFields.queues[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.food)         delete chamberFlowFields.food[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.nursing)      delete chamberFlowFields.nursing[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.queen)        delete chamberFlowFields.queen[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.nurseDeposit) delete chamberFlowFields.nurseDeposit[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.queues)       delete chamberFlowFields.queues[k as unknown as ColonyId];
+  for (const k in digFlowFields.fields)              delete digFlowFields.fields[k as unknown as ColonyId];
+  for (const k in digFlowFields.queues)              delete digFlowFields.queues[k as unknown as ColonyId];
+  for (const k in entranceFlowFields.fields)         delete entranceFlowFields.fields[k as unknown as ColonyId];
+  for (const k in entranceFlowFields.queues)         delete entranceFlowFields.queues[k as unknown as ColonyId];
+  // Issue #63 — surface entrance flow-field cache also needs reset, otherwise
+  // a session-restart or save-load with different colony IDs leaves stale
+  // arrays resident (codex P2 on PR #92).
+  for (const k in entranceFlowFields.surface)        delete entranceFlowFields.surface[k as unknown as ColonyId];
+  for (const k in entranceFlowFields.surfaceQueues)  delete entranceFlowFields.surfaceQueues[k as unknown as ColonyId];
+  for (const k in chamberFlowFields.food)            delete chamberFlowFields.food[k as unknown as ColonyId];
+  for (const k in chamberFlowFields.nursing)         delete chamberFlowFields.nursing[k as unknown as ColonyId];
+  for (const k in chamberFlowFields.queen)           delete chamberFlowFields.queen[k as unknown as ColonyId];
+  for (const k in chamberFlowFields.nurseDeposit)    delete chamberFlowFields.nurseDeposit[k as unknown as ColonyId];
+  for (const k in chamberFlowFields.queues)          delete chamberFlowFields.queues[k as unknown as ColonyId];
 }
 
 // Suppress unused-import TS error for PendingChamber (used in PlaceChamber case shape)

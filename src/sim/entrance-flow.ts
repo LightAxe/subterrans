@@ -27,6 +27,14 @@ import type { UndergroundGrid } from './terrain.js';
 import type { WorldState } from './types.js';
 import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constants.js';
 import { surfaceMovementAt, SurfaceMovementEffect } from './surface-features.js';
+
+// Static check: the surface BFS at the bottom of this file uses bit-shift
+// row decode (`idx >> 7`) on the assumption that SURFACE_GRID_WIDTH is a
+// power of 2. If the constant ever leaves 128, the SURFACE_WIDTH_SHIFT
+// constant inside `computeSurfaceEntranceFlowField` MUST update in
+// lockstep. This satisfies-clause fails to compile if the value drifts.
+const _SURFACE_WIDTH_IS_128: 128 = SURFACE_GRID_WIDTH;
+void _SURFACE_WIDTH_IS_128;
 // Issue #87 — shared BFS expansion (was inline pre-#87, near-identical to
 // dig-system.ts and chamber-flow.ts copies). Direction encoding:
 //   0=N (toward tileY=0, surface side of a shaft), 1=E, 2=S, 3=W;
@@ -217,6 +225,16 @@ export function computeSurfaceEntranceFlowField(
   // differs (surface uses SurfaceMovementEffect, not UndergroundTileState).
   // Direction encoding matches: 0=N, 1=E, 2=S, 3=W; out[neighbor] gets
   // REVERSE[d] = direction pointing back toward the source.
+  //
+  // Codex P1 follow-up — `(idx / width) | 0` was disabled-eslint here in
+  // the first pass; replaced with shift/mask. SURFACE_GRID_WIDTH is fixed
+  // at 128 = 2^7, so `idx >> 7` equals integer division for our range
+  // (idx in [0, 128*128)). Same for column via `idx & 127`. Integer-only,
+  // ESLint-clean, single-instruction. If SURFACE_GRID_WIDTH ever leaves
+  // power-of-2 territory, this needs a strategy change (and the
+  // SHIFT/MASK constants below need to update accordingly).
+  const SURFACE_WIDTH_SHIFT = 7;       // log2(128)
+  const SURFACE_WIDTH_MASK  = width - 1; // 127
   const REVERSE = [2, 3, 0, 1] as const;
   const NEIGHBOR_DR = [-1, 0, 1, 0] as const;
   const NEIGHBOR_DC = [0, 1, 0, -1] as const;
@@ -224,9 +242,8 @@ export function computeSurfaceEntranceFlowField(
   let head = 0;
   while (head < tail) {
     const idx = queue[head++]!;
-    // eslint-disable-next-line no-restricted-syntax -- integer division via `| 0`; BFS index→row conversion, not fixed-point math
-    const row = (idx / width) | 0;
-    const col = idx % width;
+    const row = idx >> SURFACE_WIDTH_SHIFT;
+    const col = idx & SURFACE_WIDTH_MASK;
 
     for (let d = 0; d < 4; d++) {
       const nRow = row + NEIGHBOR_DR[d]!;
