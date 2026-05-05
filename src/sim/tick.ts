@@ -1,6 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY } from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE } from './types.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath } from './game-over.js';
 import { detectAndResolveCombat } from './combat.js';
@@ -62,7 +62,9 @@ import {
 import type { DigFlowFields } from './dig-system.js';
 import {
   computeEntranceFlowField,
+  computeSurfaceEntranceFlowField,
   ensureEntranceFlowField,
+  ensureSurfaceEntranceFlowField,
   createEntranceFlowFields,
 } from './entrance-flow.js';
 import type { EntranceFlowFields } from './entrance-flow.js';
@@ -113,15 +115,20 @@ const chamberFlowFields: ChamberFlowFields = createChamberFlowFields();
  * In-place deletion preserves the const-bound record identities held by step 9.
  */
 export function resetFlowFieldCaches(): void {
-  for (const k in digFlowFields.fields)       delete digFlowFields.fields[k as unknown as ColonyId];
-  for (const k in digFlowFields.queues)       delete digFlowFields.queues[k as unknown as ColonyId];
-  for (const k in entranceFlowFields.fields)  delete entranceFlowFields.fields[k as unknown as ColonyId];
-  for (const k in entranceFlowFields.queues)  delete entranceFlowFields.queues[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.food)         delete chamberFlowFields.food[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.nursing)      delete chamberFlowFields.nursing[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.queen)        delete chamberFlowFields.queen[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.nurseDeposit) delete chamberFlowFields.nurseDeposit[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.queues)       delete chamberFlowFields.queues[k as unknown as ColonyId];
+  for (const k in digFlowFields.fields)              delete digFlowFields.fields[k as unknown as ColonyId];
+  for (const k in digFlowFields.queues)              delete digFlowFields.queues[k as unknown as ColonyId];
+  for (const k in entranceFlowFields.fields)         delete entranceFlowFields.fields[k as unknown as ColonyId];
+  for (const k in entranceFlowFields.queues)         delete entranceFlowFields.queues[k as unknown as ColonyId];
+  // Issue #63 — surface entrance flow-field cache also needs reset, otherwise
+  // a session-restart or save-load with different colony IDs leaves stale
+  // arrays resident (codex P2 on PR #92).
+  for (const k in entranceFlowFields.surface)        delete entranceFlowFields.surface[k as unknown as ColonyId];
+  for (const k in entranceFlowFields.surfaceQueues)  delete entranceFlowFields.surfaceQueues[k as unknown as ColonyId];
+  for (const k in chamberFlowFields.food)            delete chamberFlowFields.food[k as unknown as ColonyId];
+  for (const k in chamberFlowFields.nursing)         delete chamberFlowFields.nursing[k as unknown as ColonyId];
+  for (const k in chamberFlowFields.queen)           delete chamberFlowFields.queen[k as unknown as ColonyId];
+  for (const k in chamberFlowFields.nurseDeposit)    delete chamberFlowFields.nurseDeposit[k as unknown as ColonyId];
+  for (const k in chamberFlowFields.queues)          delete chamberFlowFields.queues[k as unknown as ColonyId];
 }
 
 // Suppress unused-import TS error for PendingChamber (used in PlaceChamber case shape)
@@ -727,6 +734,17 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     const entQueue = entranceFlowFields.queues[colony.colonyId]!;
     computeEntranceFlowField(underground, colony.entrances ?? [], entOut, entQueue);
 
+    // Issue #63 (v11+) — surface entrance flow field. Recomputed on the
+    // same cadence as the underground entrance field. Tile features are
+    // static post-init, so the only inputs that change are the entrance
+    // list (open/closed). Recomputing every dirty cycle is generous but
+    // simple; future optimization could gate on entrance-changed-only.
+    if (world.simVersion >= SIM_VERSION_V11_DEFENSIVE_BUNDLE) {
+      const sfcOut = ensureSurfaceEntranceFlowField(entranceFlowFields, colony.colonyId);
+      const sfcQueue = entranceFlowFields.surfaceQueues[colony.colonyId]!;
+      computeSurfaceEntranceFlowField(world, colony.entrances ?? [], sfcOut, sfcQueue);
+    }
+
     // Recompute chamber flow-fields on the same cycle. Chamber completion
     // (which flips tile states from Marked/BeingDug to Open) is one of the
     // signals that sets digFlowFieldDirty upstream, so this cadence is
@@ -1096,8 +1114,24 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
 
   // ---------------------------------------------------------------------------
   // Step 17: combat detection + resolution (Phase 9 / CMBT-04) — runs after step 16 tickAntMovement.
+  //
+  // Issue #58 — pre-v11 combat constructed its own Rng from the tick-start
+  // world.rngState (still tick-start because nobody updates it mid-tick) and
+  // wrote back to world.rngState, but tick.ts step 19 below then overwrote
+  // that writeback with rng_tick's state. The combat RNG sequence was a
+  // parallel stream that ended at the writeback — functionally byte-
+  // deterministic but with the design contract violated.
+  //
+  // v11+: combat shares the tick rng so its pulls accumulate into the next
+  //       tick's RNG state, matching the design contract.
+  // pre-v11: combat gets a fresh Rng from world.rngState — same parallel
+  //          stream as before for byte-identical replay of older saves.
   // ---------------------------------------------------------------------------
-  detectAndResolveCombat(world);
+  if (world.simVersion >= SIM_VERSION_V11_DEFENSIVE_BUNDLE) {
+    detectAndResolveCombat(world, rng);
+  } else {
+    detectAndResolveCombat(world, new Rng(world.rngState));
+  }
 
   // ---------------------------------------------------------------------------
   // Step 18: game-over detection (Phase 9 / CMBT-06/07).

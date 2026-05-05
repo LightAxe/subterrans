@@ -112,7 +112,29 @@ export const SIM_VERSION_V7_SURFACE_PASSABILITY = 7 as const;
 export const SIM_VERSION_V8_LEASH_HYSTERESIS = 8 as const;
 export const SIM_VERSION_V9_CANCEL_DROPS_PENDING = 9 as const;
 export const SIM_VERSION_V10_VISIBLE_BROOD_CARRY = 10 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V10_VISIBLE_BROOD_CARRY;
+/**
+ * v11 — defensive bundle from the codebase review pass (issues #57, #58, #63).
+ * Three simultaneous sim fixes, gated together so pre-v11 saves replay byte-
+ * identically with the bugged behaviour:
+ *
+ *   #57 — `tickPheromoneDeposit` now requires `ants.zone[id] === Zone.Surface`
+ *         before depositing on the surface FoodTrail grid. Pre-v11 underground
+ *         carriers wrote phantom trails on the surface using their underground
+ *         tile coordinates (corrupting surface forager behaviour).
+ *
+ *   #58 — `detectAndResolveCombat` now receives the same `Rng` instance that
+ *         `tickAntMovement` mutates. Pre-v11 combat read stale tick-start
+ *         rngState and its writeback was overwritten by the end-of-tick
+ *         rng_tick.getState() write, so combat's RNG advance was effectively
+ *         dead code.
+ *
+ *   #63 — Surface ants targeting an entrance now consume the entrance flow-
+ *         field on the surface side too. Pre-v11 they used straight-line
+ *         pickCardinalStep steering and could permanently stall in HardBlock
+ *         pockets formed by surface-feature clusters.
+ */
+export const SIM_VERSION_V11_DEFENSIVE_BUNDLE = 11 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V11_DEFENSIVE_BUNDLE;
 
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick

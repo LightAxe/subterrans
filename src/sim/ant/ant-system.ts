@@ -39,6 +39,7 @@ import {
   SIM_VERSION_V7_SURFACE_PASSABILITY,
   SIM_VERSION_V8_LEASH_HYSTERESIS,
   SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
+  SIM_VERSION_V11_DEFENSIVE_BUNDLE,
   type WorldState,
 } from '../types.js';
 import {
@@ -46,6 +47,7 @@ import {
   surfaceMovementAt,
   surfaceMovementAtCached,
   createSurfaceMovementCache,
+  resetSurfaceMovementCache,
   type SurfaceMovementCache,
 } from '../surface-features.js';
 import type { AntComponents } from './ant-store.js';
@@ -245,57 +247,105 @@ export function antPickupFood(
 // pickCardinalStep call.
 // ---------------------------------------------------------------------------
 
-interface CardinalStep { dx: number; dy: number }
+export interface CardinalStep { dx: number; dy: number }
 
-const cardinalStepScratch: CardinalStep = { dx: 0, dy: 0 };
-
+/**
+ * Issue #69 — return a primitive packed int instead of a shared scratch
+ * struct. Pre-fix `pickCardinalStep` wrote into a module-level singleton
+ * `cardinalStepScratch` and returned it. The shared mutable was safe for
+ * current call paths (each consumer read dx/dy immediately before any
+ * other call), but a latent footgun: a future refactor that calls
+ * pickCardinalStep twice within the same expression would silently
+ * corrupt the first caller's dx/dy.
+ *
+ * Output encoding:
+ *   bits 0..1: dx + 1 (so dx ∈ {-1, 0, 1} maps to {0, 1, 2})
+ *   bits 2..3: dy + 1
+ * Decode helpers below: `unpackStepDx(p)` / `unpackStepDy(p)`.
+ *
+ * Returning a number sidesteps the scratch-aliasing problem entirely:
+ * two consecutive calls produce two independent integer results.
+ */
 export function pickCardinalStep(
   ants: AntComponents,
   id: number,
   rawDx: number,
   rawDy: number,
   simVersion: number,
-): CardinalStep {
+): number {
   void ants; void id; // pathErr is inert under v4-and-later; not read here.
   const absDx = rawDx < 0 ? -rawDx : rawDx;
   const absDy = rawDy < 0 ? -rawDy : rawDy;
-  if (absDx === 0 && absDy === 0) {
-    cardinalStepScratch.dx = 0;
-    cardinalStepScratch.dy = 0;
-    return cardinalStepScratch;
-  }
-  if (absDx === 0) {
-    cardinalStepScratch.dx = 0;
-    cardinalStepScratch.dy = rawDy > 0 ? 1 : -1;
-    return cardinalStepScratch;
-  }
-  if (absDy === 0) {
-    cardinalStepScratch.dx = rawDx > 0 ? 1 : -1;
-    cardinalStepScratch.dy = 0;
-    return cardinalStepScratch;
-  }
+  if (absDx === 0 && absDy === 0) return packStep(0, 0);
+  if (absDx === 0)                return packStep(0, rawDy > 0 ? 1 : -1);
+  if (absDy === 0)                return packStep(rawDx > 0 ? 1 : -1, 0);
 
   // Both axes non-zero.
   if (simVersion >= SIM_VERSION_V4_DIAGONAL_MOTION) {
     // v4 — 8-connected diagonal step.
-    cardinalStepScratch.dx = rawDx > 0 ? 1 : -1;
-    cardinalStepScratch.dy = rawDy > 0 ? 1 : -1;
-    return cardinalStepScratch;
+    return packStep(rawDx > 0 ? 1 : -1, rawDy > 0 ? 1 : -1);
   }
 
   // v2 / v3 — legacy greedy major-axis pick (pre-issue-#34). Exhausts the
   // larger-magnitude axis before switching, producing the stair-step that
   // v4 fixes. Preserved verbatim so pre-v4 save replays are bit-exact.
   // Tie (|rawDx| === |rawDy|) goes to X axis.
-  if (absDx >= absDy) {
-    cardinalStepScratch.dx = rawDx > 0 ? 1 : -1;
-    cardinalStepScratch.dy = 0;
-  } else {
-    cardinalStepScratch.dx = 0;
-    cardinalStepScratch.dy = rawDy > 0 ? 1 : -1;
-  }
-  return cardinalStepScratch;
+  if (absDx >= absDy) return packStep(rawDx > 0 ? 1 : -1, 0);
+  return packStep(0, rawDy > 0 ? 1 : -1);
 }
+
+/** Encode a (dx, dy) cardinal step into a 4-bit int. dx, dy ∈ {-1, 0, 1}. */
+function packStep(dx: number, dy: number): number {
+  return ((dy + 1) << 2) | (dx + 1);
+}
+
+/** Decode dx from a packStep result. */
+export function unpackStepDx(packed: number): number {
+  return (packed & 3) - 1;
+}
+
+/** Decode dy from a packStep result. */
+export function unpackStepDy(packed: number): number {
+  return ((packed >> 2) & 3) - 1;
+}
+
+/**
+ * Module-level scratch for `diagonalizeFlowStep`'s `out` parameter.
+ *
+ * Issue #69 narrowed scope to `pickCardinalStep` (which now returns a
+ * primitive). `diagonalizeFlowStep` retains a struct out-param because
+ * it writes the cardinal as a fallback then conditionally upgrades to a
+ * diagonal — encoding both axes' independent state cleanly into a single
+ * int while preserving the in-place mutation contract is awkward.
+ *
+ * Each caller passes this single shared scratch — read dx/dy immediately
+ * before any subsequent diagonalizeFlowStep call. The shared mutable is
+ * acceptable because (a) the sim is single-threaded and (b) every current
+ * caller reads dx/dy on the next two lines.
+ */
+const cardinalStepScratch: CardinalStep = { dx: 0, dy: 0 };
+
+/**
+ * Issue #67 — module-level surface movement cache. Reset (not reallocated)
+ * each tick by `tickAntMovement`. Allocating ~16 KB of Uint8Array per tick
+ * and discarding it was a measurable GC burden in long sessions. Reset is
+ * identical to `createSurfaceMovementCache`'s post-construction fill.
+ */
+const SURFACE_MOVE_CACHE_SCRATCH = createSurfaceMovementCache();
+
+/**
+ * Issue #67 — module-level scratch for `resolveSameColonyOccupancy`. Cleared
+ * (not reallocated) each call. Map.clear() is much cheaper than `new Map()`
+ * + GC release of the prior tick's map.
+ */
+const OCCUPANCY_SCRATCH = new Map<number, number>();
+
+/**
+ * Issue #67 — module-level scratch for `collectAliveQueenIds`. Cleared and
+ * refilled each call. Reused across the per-tick lookup loops in
+ * `tickAntMovement`. Single-threaded sim — no concurrent collection risk.
+ */
+const QUEEN_IDS_SCRATCH = new Set<number>();
 
 // ---------------------------------------------------------------------------
 // diagonalizeFlowStep — issue #34 follow-up
@@ -1411,8 +1461,8 @@ export function getTaskDirection(
         bestChamberTileY - antTileY,
         world.simVersion,
       );
-      bestDx = step.dx;
-      bestDy = step.dy;
+      bestDx = unpackStepDx(step);
+      bestDy = unpackStepDy(step);
     }
 
     return { dx: bestDx, dy: bestDy };
@@ -2512,9 +2562,25 @@ function findNearestScentPile(
 export function tickPheromoneDeposit(world: WorldState): void {
   const ants = world.ants;
 
+  // Issue #57 — gate underground carriers OUT of the surface FoodTrail loop.
+  // Pre-v11 this loop iterated EVERY alive food-carrying ant and deposited
+  // at `pheromoneGridKey(colonyId, FoodTrail, 'surface')` using the ant's
+  // tile coords. Underground tiles (0..127, 0..63) all map to real surface
+  // cells — nothing was clipped — so underground carriers wrote phantom
+  // trails on the surface that surface foragers then read. The entrance-
+  // suppression check below also compared surface entrance tiles to
+  // underground coords, producing nonsense distances that effectively
+  // never fired the radius cutoff.
+  //
+  // Pre-v11 saves keep the bugged behaviour for replay determinism — the
+  // pheromone grids round-trip through saves and any phantom trails baked
+  // into a v10 snapshot must continue to influence v10-replay routing.
+  const v11OrLater = world.simVersion >= SIM_VERSION_V11_DEFENSIVE_BUNDLE;
+
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1) continue;
     if (ants.foodCarrying[id]! <= 0) continue;
+    if (v11OrLater && ants.zone[id] !== Zone.Surface) continue;
 
     const colonyId = ants.colonyId[id]!;
     const tileX = ants.posX[id]! >> FP_SHIFT;
@@ -2734,7 +2800,42 @@ export function pickSurfaceDetour(
       const passYOnly = canEnterSurfaceTile(world, prevTileX, prevTileY + pdy);
       if (!passXOnly && !passYOnly) continue;
     }
-    const score = Math.abs(cx - targetX) + Math.abs(cy - targetY);
+    let score = Math.abs(cx - targetX) + Math.abs(cy - targetY);
+    // Issue #63 (v11+) — pocket-escape penalty. Pre-v11 the score above
+    // is purely Manhattan distance to target, which deadlocks ants in
+    // pockets formed by clusters of multi-tile HardBlocks (4×4 boulders,
+    // 6×3 twigs, 3×4 BigLeaves): every candidate inside the pocket has a
+    // similar Manhattan score, the picker locks onto one, and the post-
+    // step guard's 1-tile detour can't see far enough to escape. Add a
+    // 2-tile lookahead: penalize candidates whose onward step is blocked
+    // by HardBlock features that themselves continue beyond — a real
+    // pocket is at least 2 deep in the same direction. Pre-v11 keeps the
+    // pure-Manhattan score for replay byte-identity (SCEN-06).
+    //
+    // Edge-cases handled to avoid false positives:
+    //   - OOB (world boundary) ahead is NOT a pocket — boundaries are
+    //     a normal terminus, not a HardBlock cluster. Skip the penalty.
+    //   - Single-tile dead-ends (ahead blocked, ahead2 walkable or OOB)
+    //     are not "pockets"; the post-step guard's existing handling
+    //     escapes them in one detour cycle. Don't penalize.
+    if (world.simVersion >= SIM_VERSION_V11_DEFENSIVE_BUNDLE) {
+      const aheadX = cx + pdx;
+      const aheadY = cy + pdy;
+      const aheadInBounds = aheadX >= 0 && aheadY >= 0
+        && aheadX < SURFACE_GRID_WIDTH && aheadY < SURFACE_GRID_HEIGHT;
+      // Only penalize when (ahead in-bounds AND blocked) AND (ahead2 in-bounds AND blocked).
+      // This isolates the multi-tile-feature pocket case from OOB + shallow dead-ends.
+      if (aheadInBounds && !canEnterSurfaceTile(world, aheadX, aheadY)) {
+        const ahead2X = aheadX + pdx;
+        const ahead2Y = aheadY + pdy;
+        const ahead2InBounds = ahead2X >= 0 && ahead2Y >= 0
+          && ahead2X < SURFACE_GRID_WIDTH && ahead2Y < SURFACE_GRID_HEIGHT;
+        if (ahead2InBounds && !canEnterSurfaceTile(world, ahead2X, ahead2Y)) {
+          // Real pocket: dominate Manhattan differences in this 128x128 grid.
+          score += 1000;
+        }
+      }
+    }
     // Recent-tiles preference (not a hard filter): a Foraging ant whose
     // direct path is blocked otherwise oscillates between the blocked
     // tile and a sideways alternate every other tick. We prefer fresh
@@ -2862,6 +2963,15 @@ export function pickNearestHostileUnderground(
 // Gate 6 in lifecycle-system.ts.
 // ---------------------------------------------------------------------------
 
+/**
+ * Collect alive queen entity ids. Returns the module-level
+ * `QUEEN_IDS_SCRATCH` singleton (filled in place) or `null` if no queens
+ * qualify. Caller MUST consume the returned set before any other call to
+ * `collectAliveQueenIds` — the next call clears and refills the same
+ * instance, silently invalidating prior references. Today's only caller
+ * (`tickAntMovement`) consumes inline within the same function body, so
+ * the shared mutable is safe.
+ */
 function collectAliveQueenIds(world: WorldState): Set<number> | null {
   // Only skip ants that the relocation pass actually drives. That requires a
   // completed Queen chamber AND task=Idle (the queen's canonical task). This
@@ -2870,7 +2980,12 @@ function collectAliveQueenIds(world: WorldState): Set<number> | null {
   // entity 0 as a forager and createColonyRecord(..., 0) as the queen slot).
   // Without a Queen chamber moveQueens is a no-op, so the main loop must
   // remain responsible for moving that entity.
-  let set: Set<number> | null = null;
+  //
+  // Issue #67 — clear-and-fill the module-level scratch instead of
+  // allocating a new Set per tick. Returning `null` for "no queens to skip"
+  // is preserved; callers fast-path on null without touching the set.
+  QUEEN_IDS_SCRATCH.clear();
+  let any = false;
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
     const colony = world.colonies[key as unknown as number]!;
@@ -2878,10 +2993,10 @@ function collectAliveQueenIds(world: WorldState): Set<number> | null {
     if (world.ants.alive[qId] !== 1) continue;
     if (world.ants.task[qId] !== AntTask.Idle) continue;
     if (!hasCompletedChamber(colony, ChamberType.Queen)) continue;
-    if (set === null) set = new Set<number>();
-    set.add(qId);
+    QUEEN_IDS_SCRATCH.add(qId);
+    any = true;
   }
-  return set;
+  return any ? QUEEN_IDS_SCRATCH : null;
 }
 
 /**
@@ -3016,8 +3131,8 @@ function moveQueens(
       // Math.abs(rawDy)` greedy axis pick that exhausted the leading
       // axis before switching, producing visible stair-step.
       const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY, world.simVersion);
-      dx = step.dx;
-      dy = step.dy;
+      dx = unpackStepDx(step);
+      dy = unpackStepDy(step);
     } else if (zone === Zone.Surface) {
       // Pre-move descent: if the queen is already standing on one of her
       // colony's OPEN entrance tiles, descend immediately rather than computing
@@ -3063,8 +3178,8 @@ function moveQueens(
       if (targetTileX < 0) continue; // no open entrance — queen cannot descend yet.
       // Issue #34: see pickCardinalStep helper above.
       const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY, world.simVersion);
-      dx = step.dx;
-      dy = step.dy;
+      dx = unpackStepDx(step);
+      dy = unpackStepDy(step);
     } else {
       // Underground → follow the queen flow-field (seeded only from Queen
       // chamber Open tiles). A Nursery-only chamber tile must NOT be a
@@ -3142,8 +3257,8 @@ function moveQueens(
         if (targetTileX < 0) continue;
         // Issue #34: see pickCardinalStep helper above.
         const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY, world.simVersion);
-        dx = step.dx;
-        dy = step.dy;
+        dx = unpackStepDx(step);
+        dy = unpackStepDy(step);
       }
     }
 
@@ -3358,10 +3473,15 @@ export function tickAntMovement(
   // Issue #44 step 5 — per-tick surface movement cache. The SoftCost check
   // fires for every surface ant on every tick; without memoisation each
   // call re-walks the surface-feature selector (anchor scan + suppression).
-  // The cache flattens it to O(1) per repeated tile lookup. ~16 KB Uint8Array
-  // allocated once per tickAntMovement, discarded at end. Pre-v6 worlds
+  // The cache flattens it to O(1) per repeated tile lookup. Pre-v6 worlds
   // never consult it (gate below skips the SoftCost block entirely).
-  const surfaceMoveCache = createSurfaceMovementCache();
+  //
+  // Issue #67 — module-level scratch, reset each tick instead of allocating
+  // a fresh ~16 KB Uint8Array. The reset is the same fill(255) work that
+  // createSurfaceMovementCache does after allocation, just without the
+  // allocation+GC churn.
+  resetSurfaceMovementCache(SURFACE_MOVE_CACHE_SCRATCH);
+  const surfaceMoveCache = SURFACE_MOVE_CACHE_SCRATCH;
 
   // P1 queen-relocation: queens have their own movement path (route to Queen
   // chamber). They must be skipped in the main loop below so the default
@@ -3629,8 +3749,8 @@ export function tickAntMovement(
           (chamberTargetY >> FP_SHIFT) - (posY >> FP_SHIFT),
           world.simVersion,
         );
-        dx = step.dx;
-        dy = step.dy;
+        dx = unpackStepDx(step);
+        dy = unpackStepDy(step);
       }
     } else if (entranceTargetX !== -1) {
       // Zone-transitioning ant — move toward nearest open entrance.
@@ -3688,6 +3808,59 @@ export function tickAntMovement(
         }
       }
 
+      // Issue #63 (v11+) — surface ants RETURNING to an open entrance to
+      // deposit food consume the surface entrance flow-field instead of
+      // straight-line pickCardinalStep. The field is a true BFS through
+      // non-HardBlock tiles, so the ant routes around multi-tile feature
+      // pockets (4×4 boulders, 6×3 twigs, 3×4 BigLeaves) that the 1-tile
+      // pickSurfaceDetour can't escape.
+      //
+      // Codex P1 follow-up — narrow the BFS branch to ONLY the
+      // CarryingFood/ReturningToNest cases the issue described. The
+      // surface BFS field is seeded only from OPEN entrances, so any
+      // ant with a target that ISN'T an open entrance (Diggers heading
+      // to a freshly-designated closed shaft to excavate it; Fighting
+      // invaders targeting an enemy's open entrance which isn't on the
+      // player's BFS field) would be misrouted toward the nearest open
+      // own-colony entrance. Pin the branch to Foraging + Carry/Return
+      // and let other tasks fall through to the existing straight-line.
+      const subTaskHere = ants.subTask[id]!;
+      const isHomeBoundForager =
+        task === AntTask.Foraging &&
+        (subTaskHere === ForagingSubState.CarryingFood ||
+         subTaskHere === ForagingSubState.ReturningToNest);
+      if (!stepped
+        && zone === Zone.Surface
+        && isHomeBoundForager
+        && entranceFlowFields !== undefined
+        && world.simVersion >= SIM_VERSION_V11_DEFENSIVE_BUNDLE
+      ) {
+        const colonyId = ants.colonyId[id]!;
+        const surfaceField = entranceFlowFields.surface[colonyId];
+        if (surfaceField) {
+          const tileX = posX >> FP_SHIFT;
+          const tileY = posY >> FP_SHIFT;
+          if (tileX >= 0 && tileX < SURFACE_GRID_WIDTH && tileY >= 0 && tileY < SURFACE_GRID_HEIGHT) {
+            const sIdx = tileY * SURFACE_GRID_WIDTH + tileX;
+            const sDir = surfaceField[sIdx]!;
+            if (sDir === -1) {
+              // Source tile — at the entrance. Hold so the zone-transition
+              // block below promotes to Underground.
+              dx = 0;
+              dy = 0;
+              stepped = true;
+            } else if (sDir >= 0 && sDir < 4) {
+              dx = DIR_DX[sDir]!;
+              dy = DIR_DY[sDir]!;
+              stepped = true;
+            }
+            // sDir === -2 (unreachable) → fall through to straight-line below.
+            // Shouldn't happen in practice (entrance always reachable from any
+            // walkable surface tile in a connected map), but defensive.
+          }
+        }
+      }
+
       if (!stepped) {
         // Issue #34 + codex coord-scale fix: tile-space deltas (see the
         // chamber-target site above for rationale).
@@ -3697,8 +3870,8 @@ export function tickAntMovement(
           (entranceTargetY >> FP_SHIFT) - (posY >> FP_SHIFT),
           world.simVersion,
         );
-        dx = step.dx;
-        dy = step.dy;
+        dx = unpackStepDx(step);
+        dy = unpackStepDy(step);
       }
     } else if (task === AntTask.Foraging) {
       // Issue #35 — pause-while-searching. Real ants scurry-stop-scurry; we
@@ -3761,8 +3934,8 @@ export function tickAntMovement(
           (targetY >> FP_SHIFT) - (posY >> FP_SHIFT),
           world.simVersion,
         );
-        dx = step.dx;
-        dy = step.dy;
+        dx = unpackStepDx(step);
+        dy = unpackStepDy(step);
       } else {
         const colonyId = ants.colonyId[id]!;
         const tileX = ants.posX[id]! >> FP_SHIFT;
@@ -3777,8 +3950,8 @@ export function tickAntMovement(
         if (scent !== null) {
           // Issue #34: see pickCardinalStep helper above.
           const step = pickCardinalStep(ants, id, scent.tileX - tileX, scent.tileY - tileY, world.simVersion);
-          dx = step.dx;
-          dy = step.dy;
+          dx = unpackStepDx(step);
+          dy = unpackStepDy(step);
         } else {
           const key = pheromoneGridKey(colonyId, PheromoneType.FoodTrail, 'surface');
           const grid = world.pheromoneGrids[key];
@@ -3875,8 +4048,8 @@ export function tickAntMovement(
         const tileX = posX >> FP_SHIFT;
         const tileY = posY >> FP_SHIFT;
         const step = pickCardinalStep(ants, id, targetTileX - tileX, targetTileY - tileY, world.simVersion);
-        dx = step.dx;
-        dy = step.dy;
+        dx = unpackStepDx(step);
+        dy = unpackStepDy(step);
       } else {
         // No target and no entrance fallback — hold. updateFightAntTargets
         // writes targetPosX/Y whenever rallyPoint or entrances exist, so this
@@ -4337,7 +4510,13 @@ export function tickAntMovement(
 // ---------------------------------------------------------------------------
 function resolveSameColonyOccupancy(world: WorldState): void {
   const ants = world.ants;
-  const occupancy = new Map<number, number>(); // tileKey → lowest-id claimant
+  // Issue #67 — reuse a module-level Map instead of allocating per tick.
+  // Map.clear() is O(n) where n is the size of the previous tick's map;
+  // negligible vs. the prior `new Map()` + GC churn. Same observable
+  // behavior — Map iteration order is insertion order, which we don't
+  // rely on (lookups are key-based).
+  const occupancy = OCCUPANCY_SCRATCH;
+  occupancy.clear();
 
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1) continue;
@@ -4354,12 +4533,29 @@ function resolveSameColonyOccupancy(world: WorldState): void {
 
     const colonyId = ants.colonyId[id]!;
     const zone = ants.zone[id]!;
+    // Issue #61 — include `gridColonyId` in the occupancy key so cross-grid
+    // ants (Phase 09.1 Chunk 3+4 fighter invaders with currentGridColonyId !==
+    // colonyId) never alias home-grid same-colony ants. Today gridColonyId ===
+    // colonyId for every ant by construction (initAnt establishes the
+    // invariant; only mid-attack invaders break it once 09.1 lands), so the
+    // key value differs from pre-fix but ant pairs collide at the same key —
+    // observable behavior unchanged. Shifts when invasion lands.
+    //
+    // Bit layout (preserves existing 17 low bits for zone + tile coords,
+    // adds gridColonyId in bits 17..23 — 7 bits is plenty since ColonyId is
+    // a small enum):
+    //   bits  0..6  : tileX (0..127)
+    //   bits  7..14 : tileY (0..127, fits SURFACE_GRID_HEIGHT and underground)
+    //   bit  15     : zone (0 = Surface, 1 = Underground)
+    //   bits 16..22 : colonyId (0..127)
+    //   bits 23..29 : gridColonyId (0..127)
+    const gridColonyId = ants.currentGridColonyId[id]!;
     let tileX = ants.posX[id]! >> FP_SHIFT;
     let tileY = ants.posY[id]! >> FP_SHIFT;
 
     if (isOccupancyExempt(world, colonyId, zone, tileX, tileY)) continue;
 
-    const key = (colonyId << 16) | (zone << 15) | (tileY << 7) | tileX;
+    const key = (gridColonyId << 23) | (colonyId << 16) | (zone << 15) | (tileY << 7) | tileX;
     if (!occupancy.has(key)) {
       occupancy.set(key, id);
       continue;
@@ -4373,7 +4569,6 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     // keys occupancy detection (same-colony ants compete for tiles regardless
     // of where they are). Today both keys yield the same grid.
     const task = ants.task[id]! as AntTask;
-    const gridColonyId = ants.currentGridColonyId[id]!;
     const underground =
       zone === Zone.Underground ? world.undergroundGrids[gridColonyId] : undefined;
     let shifted = false;
@@ -4406,7 +4601,8 @@ function resolveSameColonyOccupancy(world: WorldState): void {
         shifted = true;
         break;
       }
-      const adjKey = (colonyId << 16) | (zone << 15) | (ny << 7) | nx;
+      // Issue #61 — same key layout as the primary key above.
+      const adjKey = (gridColonyId << 23) | (colonyId << 16) | (zone << 15) | (ny << 7) | nx;
       if (occupancy.has(adjKey)) continue;
       tileX = nx;
       tileY = ny;

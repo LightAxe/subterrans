@@ -413,8 +413,8 @@ export function drawUndergroundEntities(
   // from the brood entity positions exactly — the sim's nurses have already
   // moved them into the nursery footprint, so rendering at the entity's
   // current tile is what places them inside the chamber visually.
-  drawBrood(sprites, curr, colony.eggs, 'egg', left, top, canvasW, canvasH);
-  drawBrood(sprites, curr, colony.larvae, 'larva', left, top, canvasW, canvasH);
+  drawBrood(sprites, curr, colony.eggs, 'egg', left, top, canvasW, canvasH, activeUndergroundColonyId);
+  drawBrood(sprites, curr, colony.larvae, 'larva', left, top, canvasW, canvasH, activeUndergroundColonyId);
 }
 
 /**
@@ -437,10 +437,17 @@ function drawBrood(
   top: number,
   canvasW: number,
   canvasH: number,
+  activeUndergroundColonyId: ColonyId,
 ): void {
   const ants = curr.ants;
   for (const id of entityIds) {
     if (!isAlive(ants, id)) continue;
+    // Issue #84 — mirror the ant-loop grid filter at line 351. Today
+    // brood-never-invades is a sim invariant (carry/lay/transition all stay
+    // in-grid), but if a future change lets brood cross grids (carrier-led
+    // evacuation, debug tools, etc.) the sprite would otherwise render at the
+    // wrong screen offset using the active grid's camera. Fail safe.
+    if (ants.currentGridColonyId[id] !== activeUndergroundColonyId) continue;
     const tileX = ants.posX[id]! >> FP_SHIFT;
     const tileY = ants.posY[id]! >> FP_SHIFT;
     const screenX = (tileX - left) * TILE_SIZE_PX;

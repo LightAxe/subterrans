@@ -87,33 +87,50 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
 }
 
 /**
- * CMBT-02: one-shot initialization on tick 0.
- * - Pushes SetBehaviorRatio with the fixed AI ratio.
- * - Pushes DesignateEntrance at the queen's surface tile (derived from queen position).
+ * CMBT-02: one-shot initialization. Idempotent — safe to call every tick.
+ * - Pushes SetBehaviorRatio with the fixed AI ratio (if not already set).
+ * - Pushes DesignateEntrance at the queen's surface tile (if no entrance yet).
+ *
+ * Issue #75 — pre-fix gated on `world.tick !== 0`, so on `bootFromSave`
+ * (where `world.tick > 0`) the function was a no-op. That worked when the
+ * saved snapshot already contained both post-conditions, but is fragile:
+ * a save written before `aiInitialSetup` existed (or where the ratio /
+ * entrance got cleared by some future feature) would never reinitialize
+ * and the AI would sit dormant. New gate: check the post-conditions
+ * directly. Idempotent post-condition gate also serves as the canonical
+ * "AI ready" check the rest of the controller can rely on.
  */
 export function aiInitialSetup(world: WorldState, colony: ColonyRecord): void {
-  if (world.tick !== 0) return;
+  // 1. Set fixed behavior ratio for AI (CMBT-02). Skip if the colony's
+  //    targetRatio already matches the AI ratio (idempotent across boots).
+  const ratioReady =
+    colony.targetRatio.forage === AI_BEHAVIOR_RATIO.forage &&
+    colony.targetRatio.fight === AI_BEHAVIOR_RATIO.fight;
+  if (!ratioReady) {
+    const setRatioCmd: SetBehaviorRatioCommand = {
+      type: 'SetBehaviorRatio',
+      colonyId: colony.colonyId,
+      ratio: { ...AI_BEHAVIOR_RATIO },
+      issuedAtTick: world.tick,
+    };
+    world.commandQueue.push(setRatioCmd);
+  }
 
-  // 1. Set fixed behavior ratio for AI (CMBT-02).
-  const setRatioCmd: SetBehaviorRatioCommand = {
-    type: 'SetBehaviorRatio',
-    colonyId: colony.colonyId,
-    ratio: { ...AI_BEHAVIOR_RATIO },
-    issuedAtTick: world.tick,
-  };
-  world.commandQueue.push(setRatioCmd);
-
-  // 2. Designate entrance at queen's surface tile.
-  const queenTileX = world.ants.posX[colony.queenEntityId]! >> FP_SHIFT;
-  // Queen Y is underground; the entrance is on the surface row directly above her column.
-  const designateCmd: DesignateEntranceCommand = {
-    type: 'DesignateEntrance',
-    colonyId: colony.colonyId,
-    surfaceTileX: queenTileX,
-    surfaceTileY: 0,   // surface row
-    issuedAtTick: world.tick,
-  };
-  world.commandQueue.push(designateCmd);
+  // 2. Designate entrance at queen's surface tile. Skip if any entrance
+  //    already exists for this colony — including ones the player/AI
+  //    designated in earlier sessions and the save preserved.
+  if (colony.entrances.length === 0) {
+    const queenTileX = world.ants.posX[colony.queenEntityId]! >> FP_SHIFT;
+    // Queen Y is underground; the entrance is on the surface row directly above her column.
+    const designateCmd: DesignateEntranceCommand = {
+      type: 'DesignateEntrance',
+      colonyId: colony.colonyId,
+      surfaceTileX: queenTileX,
+      surfaceTileY: 0,   // surface row
+      issuedAtTick: world.tick,
+    };
+    world.commandQueue.push(designateCmd);
+  }
 }
 
 export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
@@ -697,6 +714,17 @@ function findOpenChamberSpot(
     for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]] as const) {
       const nx = tx + dx;
       const ny = ty + dy;
+      // Issue #64 — bounds-check before computing the visited-set key.
+      // The same author already documented and fixed this exact alias
+      // pattern in `collectFrontierTiles` (see the comment around line
+      // 478). Without the bounds check, an OOB neighbour like (width, 0)
+      // computes key = `0 * width + width = width`, which collides with
+      // the in-bounds tile (0, 1) at key `1 * width + 0 = width`. If
+      // BFS reaches (width-1, 0) and right-expands first, the OOB add
+      // poisons the in-bounds tile's slot and (0, 1) gets silently
+      // skipped — leaving valid AI chamber anchors unfound on certain
+      // seeds.
+      if (nx < 0 || ny < 0 || nx >= grid.width || ny >= grid.height) continue;
       const nkey = ny * grid.width + nx;
       if (visited.has(nkey)) continue;
       visited.add(nkey);
