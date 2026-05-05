@@ -401,11 +401,21 @@ export function registerDragPan(scene: Phaser.Scene, viewState: ViewState): Drag
     dragState.isDragging = true;
   });
 
-  scene.input.on('pointerup', () => {
+  // Issue #85 codex P2 follow-up — register on BOTH `pointerup` and
+  // `pointerupoutside`. Phaser fires the latter when the pointer is
+  // released outside the canvas (drag started in-canvas, ended over
+  // the page chrome / dev-tools / window edge). Pre-fix only `pointerup`
+  // cleared `panInputState.isPanning`, so a drag ending outside the
+  // canvas left the flag stuck true — combined with #85's keyboard-pan
+  // suppression, that meant arrow keys would silently no-op forever
+  // until another in-canvas pointerup.
+  const releaseDrag = (): void => {
     dragState.active = false;
     dragState.isDragging = false;
     panInputState.isPanning = false;
-  });
+  };
+  scene.input.on('pointerup', releaseDrag);
+  scene.input.on('pointerupoutside', releaseDrag);
 
   return dragState;
 }
