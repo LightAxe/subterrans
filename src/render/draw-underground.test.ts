@@ -407,8 +407,9 @@ describe('drawUndergroundEntities', () => {
     const fillTrianglesInBetween = allCalls
       .slice(chamberStyleIdx + 1, outlineStyleIdx)
       .filter(c => c.method === 'fillTriangle');
-    // 32 perimeter points → 32 fan triangles.
-    expect(fillTrianglesInBetween.length).toBeGreaterThanOrEqual(32);
+    // 32 wave-driven edge samples + 4 corner samples = 36 perimeter points
+    // → 36 fan triangles.
+    expect(fillTrianglesInBetween.length).toBeGreaterThanOrEqual(36);
   });
 
   it('queen outline traces the wavy perimeter as line-segment triangle pairs (no axis-aligned strips)', () => {
@@ -431,8 +432,8 @@ describe('drawUndergroundEntities', () => {
     const goldFillStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_QUEEN_OUTLINE);
     expect(goldFillStyles.length).toBe(1);
 
-    // 32 perimeter segments × 2 triangles per segment = 64 outline triangles.
-    // Count fillTriangle calls after the gold-outline fillStyle.
+    // 36 perimeter points (32 edge + 4 corner) × 2 triangles per segment =
+    // 72 outline triangles.
     const allCalls = gfx.calls;
     const outlineStyleIdx = allCalls.findIndex(
       c => c.method === 'fillStyle' && c.args[0] === COLOR_QUEEN_OUTLINE,
@@ -440,7 +441,7 @@ describe('drawUndergroundEntities', () => {
     const trianglesAfter = allCalls
       .slice(outlineStyleIdx + 1)
       .filter(c => c.method === 'fillTriangle');
-    expect(trianglesAfter.length).toBeGreaterThanOrEqual(64);
+    expect(trianglesAfter.length).toBeGreaterThanOrEqual(72);
 
     // No axis-aligned-strip fillRects in the outline pass — the wave produces
     // non-axis-aligned segments, and the previous rounded-rect implementation
@@ -455,13 +456,13 @@ describe('drawUndergroundEntities', () => {
     const strokeCircles = gfx.callsOf('strokeCircle');
     expect(strokeCircles.length).toBe(0);
 
-    // 32 round-cap fillCircles after the outline fillStyle — one per
-    // perimeter vertex, hides the joint over/under-lap between adjacent
-    // segment quads at alpha 0.7.
+    // 36 round-cap fillCircles after the outline fillStyle — one per
+    // perimeter vertex (32 edge + 4 corner), hides the joint over/under-lap
+    // between adjacent segment quads at alpha 0.7.
     const circlesAfter = allCalls
       .slice(outlineStyleIdx + 1)
       .filter(c => c.method === 'fillCircle');
-    expect(circlesAfter.length).toBe(32);
+    expect(circlesAfter.length).toBe(36);
     // All round-caps are 1-px-radius (half of the 2-px outline thickness).
     expect(circlesAfter.every(c => Number(c.args[2]) === 1)).toBe(true);
   });
@@ -517,7 +518,7 @@ describe('drawUndergroundEntities', () => {
     // Triangle-vertex equality across calls catches both per-frame wave
     // jitter and screen-coordinate drift.
     expect(trianglesA).toEqual(trianglesB);
-    expect(trianglesA.length).toBeGreaterThanOrEqual(32 + 64); // fan + outline
+    expect(trianglesA.length).toBeGreaterThanOrEqual(36 + 72); // fan + outline
   });
 
   it('draws eggs via sprites.drawStatic (kind=egg) from brood entity position', () => {

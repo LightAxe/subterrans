@@ -4,6 +4,7 @@ import {
   chamberSeed,
   chamberPerimeterPoints,
   NUM_PERIMETER_POINTS,
+  NUM_CORNER_SAMPLES,
   NUM_WAVE_NODES,
   WAVE_AMPLITUDE_PX,
 } from './chamber-shape.js';
@@ -54,14 +55,14 @@ describe('chamberPerimeterPoints', () => {
   // Queen chamber default: 80x48 px at TILE_SIZE_PX=16, anchored at (0,0).
   const W = 80, H = 48;
 
-  it('returns NUM_PERIMETER_POINTS points by default', () => {
+  it('returns NUM_PERIMETER_POINTS edge samples + NUM_CORNER_SAMPLES corner samples by default', () => {
     const points = chamberPerimeterPoints(0xdeadbeef, 0, 0, W, H);
-    expect(points.length).toBe(NUM_PERIMETER_POINTS);
+    expect(points.length).toBe(NUM_PERIMETER_POINTS + NUM_CORNER_SAMPLES);
   });
 
-  it('respects an explicit numPoints override', () => {
+  it('respects an explicit numEdgeSamples override (still adds corner samples)', () => {
     const points = chamberPerimeterPoints(0xdeadbeef, 0, 0, W, H, 16);
-    expect(points.length).toBe(16);
+    expect(points.length).toBe(16 + NUM_CORNER_SAMPLES);
   });
 
   it('is deterministic — same seed produces identical point sequences', () => {
@@ -86,22 +87,44 @@ describe('chamberPerimeterPoints', () => {
     }
   });
 
-  it('always covers the original rectangle (no inward dip past the rectangle edge)', () => {
-    // The substrate-bleed-through fix: the perimeter walks an inflated
-    // rectangle, so the worst inward swing of the wave reaches exactly
-    // the original rectangle edge — never crosses inside. This means
-    // every perimeter point's x lies in [-2*amp, 0] ∪ [W, W+2*amp] OR
-    // y lies in [-2*amp, 0] ∪ [H, H+2*amp] — ie. is never strictly
-    // inside the rectangle [0, W] × [0, H].
+  it('always covers the original rectangle: no perimeter point is strictly inside [0, W] × [0, H]', () => {
+    // The substrate-bleed-through fix part 1: the perimeter walks an
+    // inflated rectangle, so the worst inward swing of the wave reaches
+    // exactly the original rectangle edge — never crosses inside.
     const points = chamberPerimeterPoints(0xc0ffee, 0, 0, W, H);
     const epsilon = 0.001;
     for (const p of points) {
       const inX = p.x > epsilon && p.x < W - epsilon;
       const inY = p.y > epsilon && p.y < H - epsilon;
-      // A point is "strictly inside" iff BOTH x and y are strictly inside.
-      // Boundary points (x=0 or x=W, etc.) are allowed — they're the worst-
-      // inward-swing case the inflation guarantees.
       expect(inX && inY).toBe(false);
+    }
+  });
+
+  it('always covers the original rectangle: no chord between adjacent points cuts the interior (codex P1 repro on seed=0)', () => {
+    // Bleed-through fix part 2: even if every vertex stays outside the
+    // rectangle, the chord between adjacent vertices can dip across a
+    // corner into the rectangle interior. The corner-sample insertion
+    // wraps each corner externally so adjacent chords stay outside.
+    //
+    // Specific repro from codex P1 on PR #100: seed=0, W=80, H=48 — without
+    // corner samples, a segment near (0.01, 0.79) inside bounds appears.
+    const points = chamberPerimeterPoints(0, 0, 0, W, H);
+    const epsilon = 0.001;
+    const stepsPerChord = 32;
+    for (let i = 0; i < points.length; i++) {
+      const a = points[i]!;
+      const b = points[(i + 1) % points.length]!;
+      for (let s = 1; s < stepsPerChord; s++) {
+        const tStep = s / stepsPerChord;
+        const x = a.x + (b.x - a.x) * tStep;
+        const y = a.y + (b.y - a.y) * tStep;
+        const inX = x > epsilon && x < W - epsilon;
+        const inY = y > epsilon && y < H - epsilon;
+        expect(
+          inX && inY,
+          `Chord between point ${i} and ${i + 1} crosses interior at (${x.toFixed(3)}, ${y.toFixed(3)})`,
+        ).toBe(false);
+      }
     }
   });
 

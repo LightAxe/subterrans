@@ -53,8 +53,22 @@ function nodeSeed(chamberSeedValue: number, nodeIndex: number): number {
 // Wavy perimeter
 // ---------------------------------------------------------------------------
 
-/** Number of points sampled around the chamber perimeter. */
+/**
+ * Number of wave-driven edge samples around the chamber perimeter. The
+ * total point count returned by `chamberPerimeterPoints` is
+ * NUM_PERIMETER_POINTS + NUM_CORNER_SAMPLES (=4 fixed inflated-rectangle
+ * corners). Tests should size assertions against the total.
+ */
 export const NUM_PERIMETER_POINTS = 32;
+
+/**
+ * Fixed corner samples inserted at the 4 inflated-rectangle corners.
+ * These guarantee that the chord between adjacent perimeter samples always
+ * wraps AROUND each corner externally (otherwise the chord between the last
+ * edge-sample before a corner and the first edge-sample after the corner
+ * could cut through the rectangle interior with extreme jitter).
+ */
+export const NUM_CORNER_SAMPLES = 4;
 
 /**
  * Number of "wave nodes" — integer offsets that get linearly interpolated
@@ -72,23 +86,33 @@ export interface PerimeterPoint {
 }
 
 /**
- * Compute the chamber's wavy perimeter as a closed polygon: numPoints points
- * walking an INFLATED rectangle clockwise from top-left, each displaced
- * along its outward normal by a deterministic smooth-wave offset in
- * [-jitterAmp, +jitterAmp]. Outward = away from the chamber center.
+ * Compute the chamber's wavy perimeter as a closed polygon: `numEdgeSamples`
+ * wave-driven edge samples plus 4 fixed corner samples at the inflated
+ * rectangle's corners, returned in clockwise order starting at the top-left
+ * corner. Total length: numEdgeSamples + NUM_CORNER_SAMPLES.
+ *
+ * Each edge sample walks the inflated rectangle's perimeter and is
+ * displaced along its outward normal by a deterministic smooth-wave offset
+ * in [-jitterAmp, +jitterAmp]. Outward = away from the chamber center.
  *
  * The base rectangle is inflated by the (clamped) wave amplitude on each
  * side, so the worst inward swing of the wave reaches exactly the original
- * rectangle's edge — never crosses INSIDE it. This guarantees the polygon
- * always covers the rectangular CHAMBER_DIMENSIONS footprint, so the
- * substrate underneath (open-floor color) doesn't peek through where the
- * wave dips inward. Outward swings extend up to 2 × amplitude beyond the
- * original rectangle into adjacent open-floor tiles, which reads as the
- * chamber's irregular hand-carved boundary.
+ * rectangle's edge — never crosses INSIDE it. The 4 corner samples then
+ * guarantee that the CHORD between adjacent perimeter samples also stays
+ * outside the original rectangle: without corner samples, the chord between
+ * the last edge-sample before a corner and the first edge-sample after the
+ * corner can dip across the corner area into the original rectangle interior
+ * (codex P1 on PR #100, seed=0 case).
  *
- * Points are placed at half-step offsets ((i + 0.5) / numPoints) so none
- * land exactly on the inflated rectangle's corners where the outward
- * normal is ambiguous.
+ * Together, point-position + corner-chord guarantees mean the polygon ALWAYS
+ * covers the rectangular CHAMBER_DIMENSIONS footprint. Substrate doesn't
+ * peek through. Outward swings extend up to 2 × amplitude beyond the original
+ * rectangle into adjacent open-floor tiles, which reads as the chamber's
+ * irregular hand-carved boundary.
+ *
+ * Points are placed at half-step offsets ((i + 0.5) / numEdgeSamples) so
+ * no edge sample lands exactly on the inflated rectangle's corners where
+ * the outward normal is ambiguous.
  *
  * The chamber center is (topLeftX + w/2, topLeftY + h/2). The polygon is
  * suitable for fan-triangulation from that center for fill, and for
@@ -100,7 +124,7 @@ export function chamberPerimeterPoints(
   topLeftY: number,
   w: number,
   h: number,
-  numPoints: number = NUM_PERIMETER_POINTS,
+  numEdgeSamples: number = NUM_PERIMETER_POINTS,
   jitterAmpPx: number = WAVE_AMPLITUDE_PX,
 ): PerimeterPoint[] {
   const ampClamped = clampAmplitude(jitterAmpPx, w, h);
@@ -115,10 +139,24 @@ export function chamberPerimeterPoints(
   const inflTLY = topLeftY - ampClamped;
   const perim = 2 * (inflW + inflH);
 
-  const points: PerimeterPoint[] = new Array(numPoints);
+  // Corner samples (clockwise from top-left), each at the matching `t`
+  // along the inflated perimeter. Inserted into the output stream as we
+  // pass them during the edge-sample walk.
+  const cornerXs = [inflTLX, inflTLX + inflW, inflTLX + inflW, inflTLX];
+  const cornerYs = [inflTLY, inflTLY,         inflTLY + inflH, inflTLY + inflH];
+  const cornerTs = [0,       inflW,           inflW + inflH,   2 * inflW + inflH];
 
-  for (let i = 0; i < numPoints; i++) {
-    const t = ((i + 0.5) / numPoints) * perim;
+  const points: PerimeterPoint[] = [];
+  let cornerIdx = 0;
+
+  for (let i = 0; i < numEdgeSamples; i++) {
+    const t = ((i + 0.5) / numEdgeSamples) * perim;
+
+    while (cornerIdx < 4 && cornerTs[cornerIdx]! < t) {
+      points.push({ x: cornerXs[cornerIdx]!, y: cornerYs[cornerIdx]! });
+      cornerIdx++;
+    }
+
     let baseX: number, baseY: number, nx: number, ny: number;
 
     if (t < inflW) {
@@ -139,8 +177,13 @@ export function chamberPerimeterPoints(
       nx = -1; ny = 0;
     }
 
-    const jitter = sampleWaveAt(nodes, i, numPoints);
-    points[i] = { x: baseX + nx * jitter, y: baseY + ny * jitter };
+    const jitter = sampleWaveAt(nodes, i, numEdgeSamples);
+    points.push({ x: baseX + nx * jitter, y: baseY + ny * jitter });
+  }
+
+  while (cornerIdx < 4) {
+    points.push({ x: cornerXs[cornerIdx]!, y: cornerYs[cornerIdx]! });
+    cornerIdx++;
   }
 
   return points;
