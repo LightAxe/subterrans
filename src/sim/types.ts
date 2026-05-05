@@ -134,7 +134,29 @@ export const SIM_VERSION_V10_VISIBLE_BROOD_CARRY = 10 as const;
  *         pockets formed by surface-feature clusters.
  */
 export const SIM_VERSION_V11_DEFENSIVE_BUNDLE = 11 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V11_DEFENSIVE_BUNDLE;
+/**
+ * v12 — sim correctness bundle (issues #62, #68). Two simultaneous fixes
+ * gated together so pre-v12 saves replay byte-identically with the bugged
+ * behaviour:
+ *
+ *   #62 — `updateFightAntTargets` now picks the nearest OPEN entrance for
+ *         underground fighters (with a closed-entrance fallback so fighters
+ *         stack near a soon-to-open shaft). Pre-v12 always targeted
+ *         `entrances[0]` regardless of `isOpen`, so a fighter routed to a
+ *         closed entrance walked to the surface column and stopped
+ *         permanently — the zone-transition only promotes when the entrance
+ *         is open.
+ *
+ *   #68 — `antDepositFood` chamber path now falls through to the entrance
+ *         pool with any leftover food before entering wait-state. Pre-v12
+ *         a partial chamber deposit left the ant carrying the remainder
+ *         silently — no Idle flip (gated on `remaining === 0`), no wait
+ *         state (only fired in the no-chamber branch), 1-tick stale-routing
+ *         window. New flow: deposit chamber slice → deposit pool slice →
+ *         transition Idle if all delivered, else wait-state.
+ */
+export const SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE = 12 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE;
 
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick

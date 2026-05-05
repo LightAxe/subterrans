@@ -15,6 +15,7 @@ import {
   SIM_VERSION_V8_LEASH_HYSTERESIS,
   SIM_VERSION_V9_CANCEL_DROPS_PENDING,
   SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
+  SIM_VERSION_V11_DEFENSIVE_BUNDLE,
   LATEST_SIM_VERSION,
 } from './types.js';
 import { GameOutcome } from './game-over.js';
@@ -3103,7 +3104,7 @@ describe('resetFlowFieldCaches — cross-world isolation', () => {
   // isolation; this is the integration that catches a regression in any
   // single piece misaligning with the rest.
   // -------------------------------------------------------------------------
-  it('issue #15 — partial deposit at near chamber leaves leftover on ant; carrier then routes to far chamber', async () => {
+  it('issue #15 (pre-v12) — partial deposit at near chamber leaves leftover on ant; carrier then routes to far chamber', async () => {
     const { createUndergroundGrid, UndergroundTileState, ugSet, Zone } = await import('./terrain.js');
     const { FP_ONE } = await import('./fixed.js');
     const { initAnt: _initAnt } = await import('./ant/ant-store.js');
@@ -3112,6 +3113,12 @@ describe('resetFlowFieldCaches — cross-world isolation', () => {
     resetFlowFieldCaches();
 
     const world = createWorldState(42);
+    // Issue #68 — pin to V11 so this test continues to exercise the legacy
+    // "chamber-only deposit, leftover stays on ant, re-route" path. Under
+    // V12+ the leftover now falls through to the entrance pool, so the
+    // carrier transitions Idle without re-routing to chamber B. A separate
+    // V12 test below exercises the new pool-fallback path.
+    world.simVersion = SIM_VERSION_V11_DEFENSIVE_BUNDLE as unknown as number;
     const colonyId = 1 as ColonyId;
     const queenId = allocateEntityId(world);
     _initAnt(world.ants, queenId, {
