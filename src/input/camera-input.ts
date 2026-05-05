@@ -251,6 +251,16 @@ export function processCameraInput(viewState: ViewState, inputs: PanInputs): voi
   const cam = activeCamera(viewState);
   const [worldW, worldH] = worldDimensions(viewState);
 
+  // Issue #85 — suppress keyboard pan while a drag-pan gesture is active.
+  // Pre-fix both pan systems applied on the same frame, so holding a
+  // direction key during a space-drag-pan stacked deltas (drag delta +
+  // CAMERA_SCROLL_SPEED). Drag is a 'claim the camera' gesture; keyboard
+  // resumes as soon as the drag ends.
+  if (panInputState.isPanning) {
+    clampCamera(cam, worldW, worldH);
+    return;
+  }
+
   // --- Keyboard pan ---
   if (inputs.cursors.left.isDown || inputs.wasd.A.isDown) {
     cam.x -= CAMERA_SCROLL_SPEED;
@@ -364,7 +374,17 @@ export function registerDragPan(scene: Phaser.Scene, viewState: ViewState): Drag
     if (!dragState.active) return;
     // Continue pan only while the originating trigger is still held.
     if (!isPanTriggerDown(pointer)) return;
-    if (isPointerOverHUD(pointer.x, pointer.y, viewState)) return;
+    // Issue #73 — when the pointer is over a HUD widget mid-drag, suppress
+    // the camera delta but STILL update lastX/lastY. Pre-fix the last-pos
+    // accumulator was frozen during the HUD crossing, so the next non-HUD
+    // pointermove computed a delta across the entire HUD strip — visible
+    // camera jump. Tracking the position through the HUD keeps the next
+    // valid move incremental.
+    if (isPointerOverHUD(pointer.x, pointer.y, viewState)) {
+      dragState.lastX = pointer.x;
+      dragState.lastY = pointer.y;
+      return;
+    }
 
     const dx = (pointer.x - dragState.lastX) / TILE_SIZE_PX;
     const dy = (pointer.y - dragState.lastY) / TILE_SIZE_PX;

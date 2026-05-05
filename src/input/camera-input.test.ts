@@ -504,6 +504,62 @@ describe('processCameraInput — clamp after pan', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Issue #85 — keyboard pan suppressed during drag-pan.
+// ---------------------------------------------------------------------------
+
+describe('processCameraInput — kbd pan suppressed while drag-pan active (#85)', () => {
+  beforeEach(() => {
+    panInputState.isPanning = false;
+  });
+
+  it('does not advance camera when isPanning=true and Right is held', () => {
+    const vs = makeViewState('surface', 64, 64);
+    panInputState.isPanning = true;
+    try {
+      processCameraInput(vs, makePanInputs({ rightDown: true }));
+      // No keyboard delta applied — drag-pan owns the camera.
+      expect(vs.surfaceCamera.x).toBe(64);
+      expect(vs.surfaceCamera.y).toBe(64);
+    } finally {
+      panInputState.isPanning = false;
+    }
+  });
+
+  it('does not advance camera when isPanning=true and Down is held', () => {
+    const vs = makeViewState('surface', 64, 64);
+    panInputState.isPanning = true;
+    try {
+      processCameraInput(vs, makePanInputs({ downDown: true }));
+      expect(vs.surfaceCamera.x).toBe(64);
+      expect(vs.surfaceCamera.y).toBe(64);
+    } finally {
+      panInputState.isPanning = false;
+    }
+  });
+
+  it('clamp still runs even when keyboard input is suppressed', () => {
+    // Pre-position camera outside grid; isPanning=true should still clamp it
+    // (the early-return runs clampCamera before bailing).
+    const vs = makeViewState('surface', -10, 64);
+    panInputState.isPanning = true;
+    try {
+      processCameraInput(vs, makePanInputs({ rightDown: true }));
+      // Clamped to viewport-edge minimum (viewportWidth/2 = 22).
+      expect(vs.surfaceCamera.x).toBeGreaterThanOrEqual(0);
+    } finally {
+      panInputState.isPanning = false;
+    }
+  });
+
+  it('with isPanning=false (default), kbd pan resumes normally', () => {
+    const vs = makeViewState('surface', 64, 64);
+    expect(panInputState.isPanning).toBe(false);
+    processCameraInput(vs, makePanInputs({ rightDown: true }));
+    expect(vs.surfaceCamera.x).toBeGreaterThan(64);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // processCameraInput — surface vs underground world dimensions sanity
 // ---------------------------------------------------------------------------
 
