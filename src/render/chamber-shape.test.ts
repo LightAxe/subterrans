@@ -4,9 +4,10 @@ import {
   chamberSeed,
   chamberPerimeterPoints,
   NUM_PERIMETER_POINTS,
-  NUM_CORNER_SAMPLES,
+  NUM_CORNER_ARC_SAMPLES,
   NUM_WAVE_NODES,
   WAVE_AMPLITUDE_PX,
+  CORNER_RADIUS_PX,
 } from './chamber-shape.js';
 
 describe('chamberSeed', () => {
@@ -55,14 +56,14 @@ describe('chamberPerimeterPoints', () => {
   // Queen chamber default: 80x48 px at TILE_SIZE_PX=16, anchored at (0,0).
   const W = 80, H = 48;
 
-  it('returns NUM_PERIMETER_POINTS edge samples + NUM_CORNER_SAMPLES corner samples by default', () => {
+  it('returns NUM_PERIMETER_POINTS edge samples + 4 × NUM_CORNER_ARC_SAMPLES arc samples by default', () => {
     const points = chamberPerimeterPoints(0xdeadbeef, 0, 0, W, H);
-    expect(points.length).toBe(NUM_PERIMETER_POINTS + NUM_CORNER_SAMPLES);
+    expect(points.length).toBe(NUM_PERIMETER_POINTS + 4 * NUM_CORNER_ARC_SAMPLES);
   });
 
-  it('respects an explicit numEdgeSamples override (still adds corner samples)', () => {
+  it('respects an explicit numEdgeSamples override (still adds 4 × NUM_CORNER_ARC_SAMPLES arc samples)', () => {
     const points = chamberPerimeterPoints(0xdeadbeef, 0, 0, W, H, 16);
-    expect(points.length).toBe(16 + NUM_CORNER_SAMPLES);
+    expect(points.length).toBe(16 + 4 * NUM_CORNER_ARC_SAMPLES);
   });
 
   it('is deterministic — same seed produces identical point sequences', () => {
@@ -142,35 +143,70 @@ describe('chamberPerimeterPoints', () => {
     }
   });
 
-  it('actually deviates from the inflated rectangle perimeter (the wave is non-trivial)', () => {
-    // Regression guard against amp=0. Verify at least one point shows
-    // non-zero displacement from the nearest INFLATED rectangle edge.
+  it('produces non-trivial wave variation on the straight edges (regression guard against amp=0)', () => {
+    // Regression guard: if amplitude collapsed to 0 every top-edge sample
+    // would sit at y = -amp (the inflated edge). Verify at least one
+    // top-edge point's y differs from -amp by more than a half-pixel.
     const points = chamberPerimeterPoints(0xfeedf00d, 0, 0, W, H);
     const amp = WAVE_AMPLITUDE_PX;
-    let maxDev = 0;
+    let maxYDev = 0;
     for (const p of points) {
-      // Distance to the inflated rectangle's edges:
-      const distTop    = Math.abs(p.y - (-amp));
-      const distBottom = Math.abs(p.y - (H + amp));
-      const distLeft   = Math.abs(p.x - (-amp));
-      const distRight  = Math.abs(p.x - (W + amp));
-      const dev = Math.min(distTop, distBottom, distLeft, distRight);
-      if (dev > maxDev) maxDev = dev;
+      // Top-edge samples have baseY = -amp; jittered y deviates outward
+      // (y < -amp) or inward (y > -amp). Skip points clearly not on the
+      // top edge (large |y - (-amp)| means corner arc or other edge).
+      const dy = Math.abs(p.y - (-amp));
+      // Corner arcs at TL/TR have y up to (-amp + R) ≈ 3, far from -amp.
+      // Filter to "near top edge" by capping at 2*amp = 6 px deviation.
+      if (dy <= 2 * amp + 0.001 && p.x > 0 && p.x < W) {
+        if (dy > maxYDev) maxYDev = dy;
+      }
     }
-    expect(maxDev).toBeGreaterThan(0);
+    expect(maxYDev).toBeGreaterThan(0);
   });
 
   it('clamps amplitude on tiny chambers to leave at least 1 px margin', () => {
-    // 4x4 chamber: halfMin = 2, cap = halfMin - 1 = 1. Amplitude → 1.
-    // Inflated rect: (-1, -1) to (5, 5). Outward swing of 1 → up to 2*1=2
-    // beyond original.
+    // 4x4 chamber: halfMin = 2, ampCap = halfMin - 1 = 1. Amplitude → 1.
+    // With cornerR clamped to ≤ 3*amp = 3, but also halfMin=3 of inflated
+    // (= 6/2), so cornerR ≤ 3.
     const points = chamberPerimeterPoints(0xffffffff, 0, 0, 4, 4);
     for (const p of points) {
+      expect(Number.isFinite(p.x)).toBe(true);
+      expect(Number.isFinite(p.y)).toBe(true);
+      // Outward bounds: edge wave up to 2*amp = 2 beyond rectangle.
+      // Corner arcs stay within the inflated rect (amp = 1 beyond).
+      // So overall extent is at most 2 px beyond the rectangle.
       expect(p.x).toBeGreaterThanOrEqual(-2.001);
       expect(p.x).toBeLessThanOrEqual(6.001);
       expect(p.y).toBeGreaterThanOrEqual(-2.001);
       expect(p.y).toBeLessThanOrEqual(6.001);
     }
+  });
+
+  it('inscribes corner arcs that stay outside the original rectangle', () => {
+    // Corner-arc midpoints sit at distance (R - amp) * √2 from the
+    // original rectangle's nearest corner, in the diagonal-outward
+    // direction. With R = CORNER_RADIUS_PX = 6 and amp = 3, the midpoint
+    // is at (~-1.24, ~-1.24) for the TL corner — outside the rectangle.
+    // The clampCornerRadius bound of 3 × amp keeps this guarantee.
+    const points = chamberPerimeterPoints(0xc0ffee, 0, 0, W, H);
+    expect(CORNER_RADIUS_PX).toBeLessThanOrEqual(3 * WAVE_AMPLITUDE_PX);
+    // Sanity: at least 4 × 5 = 20 points lie at distances near
+    // CORNER_RADIUS_PX from one of the four arc centers (the corner
+    // arcs themselves).
+    const arcCenters = [
+      { cx: -WAVE_AMPLITUDE_PX + CORNER_RADIUS_PX,        cy: -WAVE_AMPLITUDE_PX + CORNER_RADIUS_PX },
+      { cx:  W + WAVE_AMPLITUDE_PX - CORNER_RADIUS_PX,    cy: -WAVE_AMPLITUDE_PX + CORNER_RADIUS_PX },
+      { cx:  W + WAVE_AMPLITUDE_PX - CORNER_RADIUS_PX,    cy:  H + WAVE_AMPLITUDE_PX - CORNER_RADIUS_PX },
+      { cx: -WAVE_AMPLITUDE_PX + CORNER_RADIUS_PX,        cy:  H + WAVE_AMPLITUDE_PX - CORNER_RADIUS_PX },
+    ];
+    let arcLikePoints = 0;
+    for (const p of points) {
+      for (const c of arcCenters) {
+        const d = Math.hypot(p.x - c.cx, p.y - c.cy);
+        if (Math.abs(d - CORNER_RADIUS_PX) < 0.001) arcLikePoints++;
+      }
+    }
+    expect(arcLikePoints).toBe(4 * NUM_CORNER_ARC_SAMPLES);
   });
 
   it('handles degenerate 0-px dimensions without producing NaN', () => {

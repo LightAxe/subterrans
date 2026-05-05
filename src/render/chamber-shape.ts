@@ -54,21 +54,28 @@ function nodeSeed(chamberSeedValue: number, nodeIndex: number): number {
 // ---------------------------------------------------------------------------
 
 /**
- * Number of wave-driven edge samples around the chamber perimeter. The
- * total point count returned by `chamberPerimeterPoints` is
- * NUM_PERIMETER_POINTS + NUM_CORNER_SAMPLES (=4 fixed inflated-rectangle
- * corners). Tests should size assertions against the total.
+ * Number of wave-driven edge samples around the chamber perimeter (split
+ * across the 4 truncated straight edges). The total point count returned
+ * by `chamberPerimeterPoints` is NUM_PERIMETER_POINTS + 4 *
+ * NUM_CORNER_ARC_SAMPLES — 4 inscribed quarter-arcs, one per corner of
+ * the inflated rectangle.
  */
 export const NUM_PERIMETER_POINTS = 32;
 
 /**
- * Fixed corner samples inserted at the 4 inflated-rectangle corners.
- * These guarantee that the chord between adjacent perimeter samples always
- * wraps AROUND each corner externally (otherwise the chord between the last
- * edge-sample before a corner and the first edge-sample after the corner
- * could cut through the rectangle interior with extreme jitter).
+ * Number of samples per inscribed corner arc (4 corners total). 5 samples
+ * across a 90° quarter-arc = 4 line segments at 22.5° each, smooth enough
+ * to read as rounded rather than chamfered at typical chamber pixel sizes.
  */
-export const NUM_CORNER_SAMPLES = 4;
+export const NUM_CORNER_ARC_SAMPLES = 5;
+
+/**
+ * Default corner radius in pixels for the inscribed corner arcs. Chosen as
+ * 2 × WAVE_AMPLITUDE_PX so the corner curvature is on a similar scale to
+ * the edge wave wobble — visible but not overwhelming. Capped per chamber
+ * to stay within bounds (see chamberPerimeterPoints).
+ */
+export const CORNER_RADIUS_PX = 6;
 
 /**
  * Number of "wave nodes" — integer offsets that get linearly interpolated
@@ -87,32 +94,31 @@ export interface PerimeterPoint {
 
 /**
  * Compute the chamber's wavy perimeter as a closed polygon: `numEdgeSamples`
- * wave-driven edge samples plus 4 fixed corner samples at the inflated
- * rectangle's corners, returned in clockwise order starting at the top-left
- * corner. Total length: numEdgeSamples + NUM_CORNER_SAMPLES.
+ * wave-driven samples distributed across the 4 truncated straight edges
+ * (in clockwise order: top, right, bottom, left), interleaved with 4
+ * inscribed quarter-arc corners at NUM_CORNER_ARC_SAMPLES samples each.
+ * Total length: numEdgeSamples + 4 * NUM_CORNER_ARC_SAMPLES.
  *
- * Each edge sample walks the inflated rectangle's perimeter and is
- * displaced along its outward normal by a deterministic smooth-wave offset
- * in [-jitterAmp, +jitterAmp]. Outward = away from the chamber center.
+ * Geometry:
+ *   1. Inflate the base rectangle by the (clamped) wave amplitude on each
+ *      side. The wave's inward swing on a straight edge then reaches at
+ *      most the original rectangle's edge — never inside.
+ *   2. Truncate each straight edge by CORNER_RADIUS_PX on both ends so
+ *      they meet the inscribed corner arcs cleanly (no double-back).
+ *   3. At each inflated corner, replace the sharp 90° turn with a quarter-
+ *      circle inscribed in the corner: arc center at (corner + R inward
+ *      diagonally), radius R, sweeping 90° clockwise. The arc midpoint
+ *      stays outside the original rectangle for R ≤ ~3.4 × amplitude
+ *      (default 6 px vs amp 3 px is well within margin).
  *
- * The base rectangle is inflated by the (clamped) wave amplitude on each
- * side, so the worst inward swing of the wave reaches exactly the original
- * rectangle's edge — never crosses INSIDE it. The 4 corner samples then
- * guarantee that the CHORD between adjacent perimeter samples also stays
- * outside the original rectangle: without corner samples, the chord between
- * the last edge-sample before a corner and the first edge-sample after the
- * corner can dip across the corner area into the original rectangle interior
- * (codex P1 on PR #100, seed=0 case).
+ * Together this gives a chamber outline that's wavy on the long edges and
+ * smoothly rounded at the corners — closer to "hand-carved oval" than
+ * "rectangle with bumps."
  *
- * Together, point-position + corner-chord guarantees mean the polygon ALWAYS
- * covers the rectangular CHAMBER_DIMENSIONS footprint. Substrate doesn't
- * peek through. Outward swings extend up to 2 × amplitude beyond the original
- * rectangle into adjacent open-floor tiles, which reads as the chamber's
- * irregular hand-carved boundary.
- *
- * Points are placed at half-step offsets ((i + 0.5) / numEdgeSamples) so
- * no edge sample lands exactly on the inflated rectangle's corners where
- * the outward normal is ambiguous.
+ * Edge samples are placed at half-step offsets ((i + 0.5) / numEdgeSamples)
+ * across the truncated straight perimeter so no sample lands exactly on
+ * the truncation boundary where it would coincide with a corner-arc
+ * endpoint.
  *
  * The chamber center is (topLeftX + w/2, topLeftY + h/2). The polygon is
  * suitable for fan-triangulation from that center for fill, and for
@@ -130,50 +136,86 @@ export function chamberPerimeterPoints(
   const ampClamped = clampAmplitude(jitterAmpPx, w, h);
   const nodes = computeWaveNodes(seed, ampClamped);
 
-  // Inflate the base perimeter by ampClamped px on each side. The wave's
-  // inward swing (up to -ampClamped) then reaches exactly the original
-  // rectangle edge.
+  // Inflate the base rectangle by ampClamped px per side so the wave's
+  // inward swing on a straight edge reaches exactly the original rect edge.
   const inflW = w + 2 * ampClamped;
   const inflH = h + 2 * ampClamped;
   const inflTLX = topLeftX - ampClamped;
   const inflTLY = topLeftY - ampClamped;
-  const perim = 2 * (inflW + inflH);
 
-  // Corner samples (clockwise from top-left), each at the matching `t`
-  // along the inflated perimeter. Inserted into the output stream as we
-  // pass them during the edge-sample walk.
-  const cornerXs = [inflTLX, inflTLX + inflW, inflTLX + inflW, inflTLX];
-  const cornerYs = [inflTLY, inflTLY,         inflTLY + inflH, inflTLY + inflH];
-  const cornerTs = [0,       inflW,           inflW + inflH,   2 * inflW + inflH];
+  // Cap the corner radius so the truncated edges remain non-negative AND
+  // the inscribed arc midpoint stays outside the original rectangle. The
+  // arc midpoint is at distance (R - amp)*√2 from the original corner; we
+  // need (R - amp)*√2 ≥ R, i.e. R ≤ amp / (1 - 1/√2) ≈ 3.41 × amp. We use
+  // a defensive 3 × amp upper bound.
+  const cornerR = clampCornerRadius(CORNER_RADIUS_PX, ampClamped, inflW, inflH);
+
+  const truncW = inflW - 2 * cornerR;
+  const truncH = inflH - 2 * cornerR;
+  const straightPerim = 2 * (truncW + truncH);
+
+  // Insertion thresholds in straight-perimeter t-space. The TL arc is
+  // emitted before any edge sample (threshold 0); subsequent arcs are
+  // emitted as t crosses each truncation boundary.
+  const arcThresholds = [0, truncW, truncW + truncH, 2 * truncW + truncH];
+
+  // Arc descriptors (clockwise from top-left). startAngle is in math
+  // convention (0=east, π/2=south for screen y-down). Each arc sweeps
+  // +π/2 from startAngle, which is visually clockwise in screen space.
+  const arcs = [
+    // TL: from end-of-left-edge (west of arc center) to start-of-top-edge (north).
+    { cx: inflTLX + cornerR,           cy: inflTLY + cornerR,           startAngle: Math.PI },
+    // TR: from end-of-top (north) to start-of-right (east).
+    { cx: inflTLX + inflW - cornerR,   cy: inflTLY + cornerR,           startAngle: -Math.PI / 2 },
+    // BR: from end-of-right (east) to start-of-bottom (south).
+    { cx: inflTLX + inflW - cornerR,   cy: inflTLY + inflH - cornerR,   startAngle: 0 },
+    // BL: from end-of-bottom (south) to start-of-left (west).
+    { cx: inflTLX + cornerR,           cy: inflTLY + inflH - cornerR,   startAngle: Math.PI / 2 },
+  ];
 
   const points: PerimeterPoint[] = [];
-  let cornerIdx = 0;
+  let arcIdx = 0;
+
+  const emitArc = (idx: number): void => {
+    const arc = arcs[idx]!;
+    for (let j = 0; j < NUM_CORNER_ARC_SAMPLES; j++) {
+      const theta = arc.startAngle + (j / (NUM_CORNER_ARC_SAMPLES - 1)) * (Math.PI / 2);
+      points.push({
+        x: arc.cx + cornerR * Math.cos(theta),
+        y: arc.cy + cornerR * Math.sin(theta),
+      });
+    }
+  };
 
   for (let i = 0; i < numEdgeSamples; i++) {
-    const t = ((i + 0.5) / numEdgeSamples) * perim;
+    const t = ((i + 0.5) / numEdgeSamples) * straightPerim;
 
-    while (cornerIdx < 4 && cornerTs[cornerIdx]! < t) {
-      points.push({ x: cornerXs[cornerIdx]!, y: cornerYs[cornerIdx]! });
-      cornerIdx++;
+    while (arcIdx < 4 && arcThresholds[arcIdx]! <= t) {
+      emitArc(arcIdx);
+      arcIdx++;
     }
 
     let baseX: number, baseY: number, nx: number, ny: number;
 
-    if (t < inflW) {
-      baseX = inflTLX + t;
+    if (t < truncW) {
+      // TOP edge — between TL and TR arcs.
+      baseX = inflTLX + cornerR + t;
       baseY = inflTLY;
       nx = 0; ny = -1;
-    } else if (t < inflW + inflH) {
+    } else if (t < truncW + truncH) {
+      // RIGHT edge — between TR and BR arcs.
       baseX = inflTLX + inflW;
-      baseY = inflTLY + (t - inflW);
+      baseY = inflTLY + cornerR + (t - truncW);
       nx = 1; ny = 0;
-    } else if (t < 2 * inflW + inflH) {
-      baseX = inflTLX + inflW - (t - inflW - inflH);
+    } else if (t < 2 * truncW + truncH) {
+      // BOTTOM edge — between BR and BL arcs.
+      baseX = inflTLX + inflW - cornerR - (t - truncW - truncH);
       baseY = inflTLY + inflH;
       nx = 0; ny = 1;
     } else {
+      // LEFT edge — between BL arc and the TL arc that opens the next loop.
       baseX = inflTLX;
-      baseY = inflTLY + inflH - (t - 2 * inflW - inflH);
+      baseY = inflTLY + inflH - cornerR - (t - 2 * truncW - truncH);
       nx = -1; ny = 0;
     }
 
@@ -181,12 +223,33 @@ export function chamberPerimeterPoints(
     points.push({ x: baseX + nx * jitter, y: baseY + ny * jitter });
   }
 
-  while (cornerIdx < 4) {
-    points.push({ x: cornerXs[cornerIdx]!, y: cornerYs[cornerIdx]! });
-    cornerIdx++;
+  while (arcIdx < 4) {
+    emitArc(arcIdx);
+    arcIdx++;
   }
 
   return points;
+}
+
+/**
+ * Clamp the corner radius so:
+ *   - truncW = inflW - 2R ≥ 0 (truncated top/bottom edge non-negative)
+ *   - truncH = inflH - 2R ≥ 0 (truncated left/right edge non-negative)
+ *   - The arc midpoint stays outside the original rectangle:
+ *     R ≤ ~3 × amp (slightly conservative vs the strict 3.41 × amp bound).
+ *
+ * Lower bound of 0 is allowed: at R=0 the arcs degenerate to single points
+ * at each inflated corner — equivalent to the pre-rounding behavior.
+ */
+function clampCornerRadius(
+  requested: number,
+  amp: number,
+  inflW: number,
+  inflH: number,
+): number {
+  const halfMin = Math.min(inflW, inflH) / 2;
+  const ampCap = amp > 0 ? 3 * amp : Infinity; // R=0 fine when amp=0
+  return Math.max(0, Math.min(requested, halfMin, ampCap));
 }
 
 /**
