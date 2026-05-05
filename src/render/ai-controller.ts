@@ -20,6 +20,13 @@ import { UNDERGROUND_CEILING_ROW_Y } from '../sim/constants.js';
 import { colonyFoodTotal } from '../sim/colony/colony-system.js';
 
 export const AI_DIG_INTERVAL = 40 as const;       // every 2 seconds @ 20Hz
+/**
+ * Issue #74 — chamber placement BFS cadence. Chamber placement is a
+ * strategic decision (Queen, Nursery, FoodStorage in some order, then
+ * occasional additions) bounded by dig progress, not by decision frequency.
+ * 4× slower than the dig interval is plenty.
+ */
+export const AI_CHAMBER_INTERVAL = AI_DIG_INTERVAL * 4;
 export const AI_DIG_MARK_BUDGET = 5 as const;
 export const AI_QUEEN_CHAMBER_DEPTH = 18 as const;
 export const AI_FOOD_STORAGE_THRESHOLD = 8 as const;
@@ -221,6 +228,17 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
     return (a.posX >> FP_SHIFT) - (b.posX >> FP_SHIFT);
   });
 
+  // Issue #74 — shared seen-set across the frontier pass and the legacy
+  // perimeter pass. Pre-fix the two passes did not cross-deduplicate, so a
+  // Solid tile classified as both chamber A's frontier AND chamber B's
+  // legacy perimeter could land in commandQueue twice in one cycle —
+  // bloating inputLog and replay time. Key = `ty * grid.width + tx`,
+  // matching the frontier-pass collision protection at collectFrontierTiles.
+  const undergroundGrid = world.undergroundGrids[colony.colonyId];
+  const gridWidth = undergroundGrid?.width ?? 0;
+  const seenMarks = new Set<number>();
+  const tileKey = (tx: number, ty: number): number => ty * gridWidth + tx;
+
   // Issue #33 — frontier-extension pass. Before the legacy full-perimeter
   // pass, spend up to AI_DIG_OUTWARD_BUDGET tiles on perimeter tiles whose
   // 4-neighborhood touches AT MOST one chamber footprint — i.e. tiles
@@ -238,6 +256,9 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
     const limit = Math.min(AI_DIG_OUTWARD_BUDGET, budget);
     for (let i = 0; i < frontier.length && budget > AI_DIG_MARK_BUDGET - limit; i++) {
       const cand = frontier[i]!;
+      const k = tileKey(cand.tileX, cand.tileY);
+      if (seenMarks.has(k)) continue;
+      seenMarks.add(k);
       world.commandQueue.push({
         type: 'MarkDigTile',
         colonyId: colony.colonyId,
@@ -257,6 +278,9 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
   // interior was excavated — effectively stalling the AI after two
   // chambers landed. Per plan 09.1-01 Task 2 the loop now walks the full
   // border.)
+  //
+  // Issue #74 — share `seenMarks` with the frontier pass above so a tile
+  // already emitted there is skipped here.
   for (const ch of chambersSorted) {
     if (budget <= 0) break;
     const chTileX = ch.posX >> FP_SHIFT;
@@ -266,6 +290,9 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
       const tx = chTileX + ox;
       const ty = chTileY - 1;
       if (!isDirtTileUnderground(world, colony.colonyId, tx, ty)) continue;
+      const k = tileKey(tx, ty);
+      if (seenMarks.has(k)) continue;
+      seenMarks.add(k);
       world.commandQueue.push({ type: 'MarkDigTile', colonyId: colony.colonyId, tileX: tx, tileY: ty, issuedAtTick: world.tick });
       budget -= 1;
     }
@@ -274,6 +301,9 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
       const tx = chTileX + ox;
       const ty = chTileY + ch.height;
       if (!isDirtTileUnderground(world, colony.colonyId, tx, ty)) continue;
+      const k = tileKey(tx, ty);
+      if (seenMarks.has(k)) continue;
+      seenMarks.add(k);
       world.commandQueue.push({ type: 'MarkDigTile', colonyId: colony.colonyId, tileX: tx, tileY: ty, issuedAtTick: world.tick });
       budget -= 1;
     }
@@ -282,6 +312,9 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
       const tx = chTileX - 1;
       const ty = chTileY + oy;
       if (!isDirtTileUnderground(world, colony.colonyId, tx, ty)) continue;
+      const k = tileKey(tx, ty);
+      if (seenMarks.has(k)) continue;
+      seenMarks.add(k);
       world.commandQueue.push({ type: 'MarkDigTile', colonyId: colony.colonyId, tileX: tx, tileY: ty, issuedAtTick: world.tick });
       budget -= 1;
     }
@@ -290,6 +323,9 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
       const tx = chTileX + ch.width;
       const ty = chTileY + oy;
       if (!isDirtTileUnderground(world, colony.colonyId, tx, ty)) continue;
+      const k = tileKey(tx, ty);
+      if (seenMarks.has(k)) continue;
+      seenMarks.add(k);
       world.commandQueue.push({ type: 'MarkDigTile', colonyId: colony.colonyId, tileX: tx, tileY: ty, issuedAtTick: world.tick });
       budget -= 1;
     }
@@ -297,6 +333,12 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
 }
 
 export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): void {
+  // Issue #74 — gate cadence at AI_CHAMBER_INTERVAL. Pre-fix this ran every
+  // tick and did a fresh ~4096-visit BFS over a 32-tile radius per AI
+  // colony. Strategic chamber decisions (Queen, Nursery, FoodStorage) don't
+  // need 60Hz responsiveness; 4× slower than the dig interval is plenty.
+  if (world.tick % AI_CHAMBER_INTERVAL !== 0) return;
+
   // Queen chamber — if missing, try to place near AI_QUEEN_CHAMBER_DEPTH.
   // Includes pending Queen so we don't spam duplicate PlaceChamber commands
   // into the queue between PlaceChamber issuance and Queen completion (the
