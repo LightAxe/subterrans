@@ -41,6 +41,7 @@ import {
   SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
   SIM_VERSION_V11_DEFENSIVE_BUNDLE,
   SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE,
+  SIM_VERSION_V13_INVARIANT_FIXES,
   type WorldState,
 } from '../types.js';
 import {
@@ -4574,15 +4575,50 @@ export function tickAntMovement(
         const tileY = posY >> FP_SHIFT;
 
         if (tileY === 0) {
-          const colonyId = ants.colonyId[id]!;
-          const colony = world.colonies[colonyId];
-          if (colony && colony.entrances) {
-            for (let e = 0; e < colony.entrances.length; e++) {
-              const entrance = colony.entrances[e]!;
-              if (entrance.isOpen && entrance.surfaceTileX === tileX) {
-                ants.zone[id] = Zone.Surface;
-                ants.posY[id] = entrance.surfaceTileY << FP_SHIFT;
-                break;
+          // Issue #106 (v13+) — ascent reads the GRID the ant is currently
+          // in (`currentGridColonyId`), not the ant's owning colony. For
+          // Fighter invaders in foreign grids, `currentGridColonyId !==
+          // colonyId` by design (see descent comment above). Pre-v13 used
+          // `colonyId` and an invader could ascend through any of its
+          // OWN-colony entrances that happened to share the underground
+          // tileX it occupied inside the enemy grid — a "warp home"
+          // movement bug.
+          //
+          // The fix has two parts:
+          //   (1) Lookup uses currentGridColonyId, so ascent honors the
+          //       grid the ant occupies.
+          //   (2) Fighting invaders in foreign grids skip ascent entirely
+          //       (mirrors the descent code's `isFightingForeigner` logic).
+          //       Without (2), an invader bounces back to the surface every
+          //       other tick: descent → ascent through enemy entrance →
+          //       descent → ascent → ... pre-v13 the wrong-colony lookup
+          //       accidentally masked this by failing to find an entrance,
+          //       which is also why the warp-home bug only surfaced on
+          //       coincidental tileX alignment.
+          const useGridColony = world.simVersion >= SIM_VERSION_V13_INVARIANT_FIXES;
+          const inOwnGrid = ants.currentGridColonyId[id] === ants.colonyId[id];
+          const skipAscent = useGridColony && task === AntTask.Fighting && !inOwnGrid;
+          if (!skipAscent) {
+            const lookupColonyId = useGridColony
+              ? ants.currentGridColonyId[id]!
+              : ants.colonyId[id]!;
+            const colony = world.colonies[lookupColonyId];
+            if (colony && colony.entrances) {
+              for (let e = 0; e < colony.entrances.length; e++) {
+                const entrance = colony.entrances[e]!;
+                if (entrance.isOpen && entrance.surfaceTileX === tileX) {
+                  ants.zone[id] = Zone.Surface;
+                  ants.posY[id] = entrance.surfaceTileY << FP_SHIFT;
+                  if (useGridColony) {
+                    // Restore the surface invariant. For ants in their own
+                    // grid this is a no-op (already equal). For an invader
+                    // who eventually leaves via the enemy entrance after
+                    // being re-promoted out of Fighting (e.g. Idle), this
+                    // snaps the grid id back to their own colony.
+                    ants.currentGridColonyId[id] = ants.colonyId[id]!;
+                  }
+                  break;
+                }
               }
             }
           }
@@ -4656,13 +4692,21 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     //   bit  15     : zone (0 = Surface, 1 = Underground)
     //   bits 16..22 : colonyId (0..127)
     //   bits 23..29 : gridColonyId (0..127)
-    const gridColonyId = ants.currentGridColonyId[id]!;
+    const rawGridColonyId = ants.currentGridColonyId[id]!;
     let tileX = ants.posX[id]! >> FP_SHIFT;
     let tileY = ants.posY[id]! >> FP_SHIFT;
 
     if (isOccupancyExempt(world, colonyId, zone, tileX, tileY)) continue;
 
-    const key = (gridColonyId << 23) | (colonyId << 16) | (zone << 15) | (tileY << 7) | tileX;
+    // Issue #108 (v13+) — zero the gridColonyId portion of the key when
+    // zone === Surface. Mirrors combat tile-key encoding (tile-key.ts:56);
+    // pre-v13 this resolver keyed on the raw gridColonyId, so two same-
+    // colony surface ants with diverging `currentGridColonyId` (post-#106
+    // ascent bug) produced different keys and stacked silently.
+    const gridByte = world.simVersion >= SIM_VERSION_V13_INVARIANT_FIXES && zone !== Zone.Underground
+      ? 0
+      : rawGridColonyId;
+    const key = (gridByte << 23) | (colonyId << 16) | (zone << 15) | (tileY << 7) | tileX;
     if (!occupancy.has(key)) {
       occupancy.set(key, id);
       continue;
@@ -4677,7 +4721,7 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     // of where they are). Today both keys yield the same grid.
     const task = ants.task[id]! as AntTask;
     const underground =
-      zone === Zone.Underground ? world.undergroundGrids[gridColonyId] : undefined;
+      zone === Zone.Underground ? world.undergroundGrids[rawGridColonyId] : undefined;
     let shifted = false;
     for (let d = 0; d < 4; d++) {
       const nx = tileX + DIR_DX[d]!;
@@ -4708,8 +4752,11 @@ function resolveSameColonyOccupancy(world: WorldState): void {
         shifted = true;
         break;
       }
-      // Issue #61 — same key layout as the primary key above.
-      const adjKey = (gridColonyId << 23) | (colonyId << 16) | (zone << 15) | (ny << 7) | nx;
+      // Issue #61 — same key layout as the primary key above. Issue #108
+      // (v13+): mirror the same gridByte mask so adjacent-tile lookup keys
+      // match the primary lookup. Pre-v13 used `rawGridColonyId` here too;
+      // safe because pre-v13 occupancy resolution never crosses zones.
+      const adjKey = (gridByte << 23) | (colonyId << 16) | (zone << 15) | (ny << 7) | nx;
       if (occupancy.has(adjKey)) continue;
       tileX = nx;
       tileY = ny;

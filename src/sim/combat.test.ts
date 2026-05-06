@@ -178,6 +178,60 @@ describe('killAnt', () => {
     expect(world.colonies[cid1]!.workers).toContain(v);
     expect(world.colonies[cid1]!.workerCount).toBe(1); // unchanged by combat.killAnt
   });
+
+  // ---------------------------------------------------------------------
+  // Issue #107 — V13+ atomically clears bidirectional carry pointers.
+  // ---------------------------------------------------------------------
+  it('#107 (V13+) clears carryingBroodId and the brood\'s carriedBy when a carrier is killed', () => {
+    const { world, cid1, cid2 } = makeWorldWith2Colonies();
+    world.simVersion = 13;
+    const carrier = spawnAnt(world, cid1, 5, 7, Zone.Underground);
+    const brood = spawnAnt(world, cid1, 5, 7, Zone.Underground);
+    world.ants.carryingBroodId[carrier] = brood;
+    world.ants.carriedBy[brood] = carrier;
+    killAnt(world, carrier, cid2);
+    expect(world.ants.alive[carrier]).toBe(0);
+    expect(world.ants.carryingBroodId[carrier]).toBe(-1);
+    expect(world.ants.carriedBy[brood]).toBe(-1);
+  });
+
+  it('#107 (V13+) symmetric — when the carried entity is killed, carrier\'s carryingBroodId clears', () => {
+    const { world, cid1, cid2 } = makeWorldWith2Colonies();
+    world.simVersion = 13;
+    const carrier = spawnAnt(world, cid1, 5, 7, Zone.Underground);
+    const brood = spawnAnt(world, cid1, 5, 7, Zone.Underground);
+    world.ants.carryingBroodId[carrier] = brood;
+    world.ants.carriedBy[brood] = carrier;
+    killAnt(world, brood, cid2);
+    expect(world.ants.alive[brood]).toBe(0);
+    expect(world.ants.carryingBroodId[carrier]).toBe(-1);
+    expect(world.ants.carriedBy[brood]).toBe(-1);
+  });
+
+  it('#107 pre-V13 retains legacy stale-pointer behavior (replay byte-identity)', () => {
+    const { world, cid1, cid2 } = makeWorldWith2Colonies();
+    world.simVersion = 12; // legacy
+    const carrier = spawnAnt(world, cid1, 5, 7, Zone.Underground);
+    const brood = spawnAnt(world, cid1, 5, 7, Zone.Underground);
+    world.ants.carryingBroodId[carrier] = brood;
+    world.ants.carriedBy[brood] = carrier;
+    killAnt(world, carrier, cid2);
+    expect(world.ants.alive[carrier]).toBe(0);
+    // Legacy: pointers persist past death — the bug this V13 fix addresses.
+    expect(world.ants.carryingBroodId[carrier]).toBe(brood);
+    expect(world.ants.carriedBy[brood]).toBe(carrier);
+  });
+
+  it('#107 (V13+) is a no-op for ants without active carry slots (regression guard)', () => {
+    const { world, cid1, cid2 } = makeWorldWith2Colonies();
+    world.simVersion = 13;
+    const v = spawnAnt(world, cid1, 5, 7, Zone.Surface);
+    // Default state: carryingBroodId = -1, carriedBy = -1.
+    killAnt(world, v, cid2);
+    expect(world.ants.alive[v]).toBe(0);
+    expect(world.ants.carryingBroodId[v]).toBe(-1);
+    expect(world.ants.carriedBy[v]).toBe(-1);
+  });
 });
 
 describe('coin flip distribution (CMBT-05)', () => {

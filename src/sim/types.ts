@@ -156,7 +156,38 @@ export const SIM_VERSION_V11_DEFENSIVE_BUNDLE = 11 as const;
  *         transition Idle if all delivered, else wait-state.
  */
 export const SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE = 12 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE;
+/**
+ * v13 — invariant fixes (issues #106, #107, #108). Three independent
+ * state-invariant violations gated together so pre-v13 saves replay
+ * byte-identically with the bugged behavior:
+ *
+ *   #106 — Underground→Surface ascent now reads `currentGridColonyId`
+ *          instead of `colonyId` for the entrance lookup. Pre-v13, an
+ *          invading Fighter at tileY=0 inside an enemy grid would warp
+ *          home through any of the player's own-colony entrances that
+ *          happened to share its underground tileX, bypassing the enemy
+ *          ascent path. Post-v13 the ascent honors the grid the ant is
+ *          actually in, AND restores the "Surface ⇒ currentGridColonyId
+ *          === colonyId" invariant by snapping the grid id back on
+ *          successful ascent.
+ *
+ *   #107 — `killAnt` now atomically clears bidirectional carry pointers
+ *          (`carryingBroodId[killed]` and `carriedBy[their_carrier]`)
+ *          before zeroing alive. Pre-v13, a nurse killed mid-Feeding
+ *          left the brood orphaned with stale `carriedBy` pointing at
+ *          a dead ant; if the nurse died on a Marked or Solid tile,
+ *          the brood was unreclaimable until that tile became Open
+ *          (chamber-flow.ts pickup-field seeds Open/BeingDug only).
+ *
+ *   #108 — `resolveSameColonyOccupancy` now zero-masks the gridColonyId
+ *          portion of the per-tile key when zone === Surface, mirroring
+ *          combat's tile-key encoding. Pre-v13, two same-colony surface
+ *          ants with diverging `currentGridColonyId` (the post-#106
+ *          ascent bug, or any future divergence path) produced different
+ *          keys and stacked silently on the same tile.
+ */
+export const SIM_VERSION_V13_INVARIANT_FIXES = 13 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V13_INVARIANT_FIXES;
 
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick

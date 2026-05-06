@@ -27,7 +27,18 @@ import { createSurfaceGrid, createUndergroundGrid } from '../sim/terrain.js';
 import type { PheromoneGrid } from '../sim/pheromone/pheromone-store.js';
 import { createPheromoneGrid } from '../sim/pheromone/pheromone-store.js';
 import type { FoodPile, FoodPileId } from '../sim/food.js';
-import { MAX_ENTITIES } from '../sim/constants.js';
+import {
+  MAX_ENTITIES,
+  FOOD_PILE_COUNT,
+  FOOD_CHAMBER_CAPACITY,
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
+  UNDERGROUND_GRID_WIDTH,
+  UNDERGROUND_GRID_HEIGHT,
+} from '../sim/constants.js';
+import { FP_SHIFT } from '../sim/fixed.js';
+import { ChamberType } from '../sim/enums.js';
+import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 
 // SAVE_FORMAT_VERSION is bumped on any breaking change to the on-disk shape
 // or to invariants that survivors must respect. Pre-bump saves are rejected
@@ -70,6 +81,181 @@ export class FutureSimVersionError extends Error {
   constructor(public got: number, public latest: number) {
     super(`Save's simVersion (${got}) is newer than this build's LATEST (${latest})`);
     this.name = 'FutureSimVersionError';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Boundary validators — issues #99, #101-#105, #109, #110.
+//
+// All run at the parseSaveFile / deserializeWorldState boundary. Throws
+// route through bootFromSave's catch → bootFresh, consistent with
+// existing #59 / #65 / #66 hardening. Validators are intentionally narrow:
+// reject anything that wouldn't survive a serialize/deserialize round-trip
+// from a legitimate game (allowing only the value domains buildSaveFile
+// can produce). The render layer's `loadSave` already swallows these
+// throws; existing tests confirm the corrupt-save path triggers
+// deleteSave + bootFresh.
+// ---------------------------------------------------------------------------
+
+/** Tile-coord boundary check (mirrors src/sim/tick.ts:204 — kept private here
+ *  so save.ts doesn't import from the tick module). */
+function isTileCoord(value: unknown, max: number): boolean {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < max;
+}
+
+/** Issue #110 — envelope seed must round-trip `seed | 0` losslessly (int32). */
+function isInt32(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isFinite(value)
+    && Number.isInteger(value)
+    && value >= -0x80000000
+    && value <= 0x7fffffff;
+}
+
+/** Cap on how many entries each top-level Object map may carry on load.
+ *  Issue #99 — defense against memory-DoS via unbounded `Object.entries`
+ *  loops in deserializeWorldState. Numbers are 4-8× current scenario use,
+ *  ample headroom for future scenario tweaks; anything above is tampering. */
+const MAX_COLONIES_LOAD = 16;       // current LIVE_COLONY_COUNT = 2.
+const MAX_PHEROMONE_GRID_KEYS = 16; // current = 8 (2 colonies × 2 types × 2 zones).
+const MAX_PENDING_CHAMBERS = 256;   // few per colony in normal play.
+const MAX_FOOD_PILES = FOOD_PILE_COUNT * 4; // issue #109.
+
+/** Issue #99 — verify a serialized grid object matches the canonical
+ *  dimensions and has an array-like data field. Width/height are PRD-locked
+ *  (`src/sim/constants.ts`); a future change to grid size would correctly
+ *  require a save-format bump anyway, so a strict equality check is the
+ *  right strictness level here. */
+function validateGridShape(
+  s: unknown,
+  expectedW: number,
+  expectedH: number,
+  label: string,
+): void {
+  if (s === null || typeof s !== 'object') {
+    throw new Error(`Invalid ${label}: not an object`);
+  }
+  const g = s as { width?: unknown; height?: unknown; data?: unknown };
+  if (g.width !== expectedW || g.height !== expectedH) {
+    throw new Error(
+      `Invalid ${label} dimensions: ${String(g.width)}x${String(g.height)} ` +
+      `(expected ${expectedW}x${expectedH})`,
+    );
+  }
+  if (!Array.isArray(g.data) && !ArrayBuffer.isView(g.data)) {
+    throw new Error(`Invalid ${label}: data is not array-like`);
+  }
+}
+
+/** Issue #101 — chamber-record validator. Width/height MUST match the
+ *  canonical CHAMBER_DIMENSIONS for the chamberType — chamber footprints are
+ *  PRD-fixed, not player-set. Any deviation is tampering. The seed loop in
+ *  chamber-flow.ts:146-157 iterates `chamber.height × chamber.width`, so an
+ *  unvalidated record can hang the renderer (4× per dirty cycle). */
+function validateChamberRecord(ch: unknown, label: string): void {
+  if (ch === null || typeof ch !== 'object') {
+    throw new Error(`Invalid ${label}: not an object`);
+  }
+  const c = ch as Partial<ChamberRecord>;
+  if (typeof c.chamberId !== 'number'
+      || !Number.isInteger(c.chamberId)
+      || c.chamberId < 0
+      || c.chamberId > MAX_ENTITIES) {
+    throw new Error(`Invalid ${label}.chamberId: ${String(c.chamberId)}`);
+  }
+  if (typeof c.chamberType !== 'number'
+      || !Number.isInteger(c.chamberType)
+      || c.chamberType < 0
+      || c.chamberType > 2) {
+    throw new Error(`Invalid ${label}.chamberType: ${String(c.chamberType)}`);
+  }
+  const dims = CHAMBER_DIMENSIONS[c.chamberType as ChamberType];
+  if (c.width !== dims.width || c.height !== dims.height) {
+    throw new Error(
+      `Invalid ${label} dims for type ${c.chamberType}: ` +
+      `${String(c.width)}x${String(c.height)} (expected ${dims.width}x${dims.height})`,
+    );
+  }
+  // posX/posY are FP coords; require integer in [0, gridSize<<FP_SHIFT).
+  const ugWidthFp = UNDERGROUND_GRID_WIDTH << FP_SHIFT;
+  const ugHeightFp = UNDERGROUND_GRID_HEIGHT << FP_SHIFT;
+  if (typeof c.posX !== 'number'
+      || !Number.isInteger(c.posX)
+      || c.posX < 0
+      || c.posX >= ugWidthFp) {
+    throw new Error(`Invalid ${label}.posX: ${String(c.posX)}`);
+  }
+  if (typeof c.posY !== 'number'
+      || !Number.isInteger(c.posY)
+      || c.posY < 0
+      || c.posY >= ugHeightFp) {
+    throw new Error(`Invalid ${label}.posY: ${String(c.posY)}`);
+  }
+  if (typeof c.foodStored !== 'number'
+      || !Number.isInteger(c.foodStored)
+      || c.foodStored < 0
+      || c.foodStored > FOOD_CHAMBER_CAPACITY) {
+    throw new Error(`Invalid ${label}.foodStored: ${String(c.foodStored)}`);
+  }
+}
+
+/** Issue #102 — pendingChamber validator. Same canonical-dims rule as
+ *  #101 plus footprint-fits-grid check. The CancelDigMark revert loop at
+ *  tick.ts:382-389 has no early exit, so an unvalidated entry can hang
+ *  the renderer on a single right-click. */
+function validatePendingChamber(pc: unknown, label: string): void {
+  if (pc === null || typeof pc !== 'object') {
+    throw new Error(`Invalid ${label}: not an object`);
+  }
+  const p = pc as Partial<PendingChamber>;
+  if (typeof p.colonyId !== 'number' || !Number.isInteger(p.colonyId) || p.colonyId < 0) {
+    throw new Error(`Invalid ${label}.colonyId: ${String(p.colonyId)}`);
+  }
+  if (typeof p.chamberType !== 'number'
+      || !Number.isInteger(p.chamberType)
+      || p.chamberType < 0
+      || p.chamberType > 2) {
+    throw new Error(`Invalid ${label}.chamberType: ${String(p.chamberType)}`);
+  }
+  if (!isTileCoord(p.anchorTileX, UNDERGROUND_GRID_WIDTH)) {
+    throw new Error(`Invalid ${label}.anchorTileX: ${String(p.anchorTileX)}`);
+  }
+  if (!isTileCoord(p.anchorTileY, UNDERGROUND_GRID_HEIGHT)) {
+    throw new Error(`Invalid ${label}.anchorTileY: ${String(p.anchorTileY)}`);
+  }
+  const dims = CHAMBER_DIMENSIONS[p.chamberType as ChamberType];
+  if (p.width !== dims.width || p.height !== dims.height) {
+    throw new Error(
+      `Invalid ${label} dims for type ${p.chamberType}: ` +
+      `${String(p.width)}x${String(p.height)} (expected ${dims.width}x${dims.height})`,
+    );
+  }
+  if ((p.anchorTileX as number) + dims.width > UNDERGROUND_GRID_WIDTH
+      || (p.anchorTileY as number) + dims.height > UNDERGROUND_GRID_HEIGHT) {
+    throw new Error(
+      `${label} footprint extends past grid: anchor ` +
+      `(${p.anchorTileX}, ${p.anchorTileY}) + ${dims.width}x${dims.height}`,
+    );
+  }
+}
+
+/** Issue #109 — foodPile validator. */
+function validateFoodPile(p: unknown, label: string): void {
+  if (p === null || typeof p !== 'object') {
+    throw new Error(`Invalid ${label}: not an object`);
+  }
+  const fp = p as Partial<FoodPile>;
+  if (typeof fp.foodPileId !== 'number'
+      || !Number.isInteger(fp.foodPileId)
+      || fp.foodPileId < 0
+      || fp.foodPileId > MAX_ENTITIES) {
+    throw new Error(`Invalid ${label}.foodPileId: ${String(fp.foodPileId)}`);
+  }
+  if (!isTileCoord(fp.tileX, SURFACE_GRID_WIDTH)) {
+    throw new Error(`Invalid ${label}.tileX: ${String(fp.tileX)}`);
+  }
+  if (!isTileCoord(fp.tileY, SURFACE_GRID_HEIGHT)) {
+    throw new Error(`Invalid ${label}.tileY: ${String(fp.tileY)}`);
   }
 }
 
@@ -581,6 +767,12 @@ function deserializeColony(s: SerializedColony): ColonyRecord {
   c.foodFlowFieldDirty   = s.foodFlowFieldDirty ?? false;
   c.killCount            = s.killCount;
   c.priorityFoodPileId   = s.priorityFoodPileId ?? null;
+  // Issue #101 — validate chamber records before they reach the runtime.
+  // Done after the spread so the validator inspects the persisted shape;
+  // throw aborts deserializeWorldState's map() and propagates to bootFromSave.
+  for (let i = 0; i < c.chambers.length; i++) {
+    validateChamberRecord(c.chambers[i]!, `colony[${s.colonyId}].chambers[${i}]`);
+  }
   return c;
 }
 
@@ -645,20 +837,87 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     throw new Error(`Invalid ants.count in save: ${String(rawCount)} (require integer in [0, ${MAX_ENTITIES}])`);
   }
   const capacity = rawCount > 0 ? rawCount : MAX_ENTITIES;
+
+  // Issue #99 — top-level Object map cardinality caps. Each loop below
+  // allocates per entry, so an oversized map drives unbounded allocation
+  // even before any single entry is validated. Reject upfront.
+  if (s.colonies === null || typeof s.colonies !== 'object') {
+    throw new Error('Invalid save shape: missing or non-object colonies');
+  }
+  const colonyKeys = Object.keys(s.colonies);
+  if (colonyKeys.length > MAX_COLONIES_LOAD) {
+    throw new Error(`Too many colonies in save: ${colonyKeys.length} (cap ${MAX_COLONIES_LOAD})`);
+  }
+  if (s.undergroundGrids === null || typeof s.undergroundGrids !== 'object') {
+    throw new Error('Invalid save shape: missing or non-object undergroundGrids');
+  }
+  const ugKeys = Object.keys(s.undergroundGrids);
+  if (ugKeys.length > MAX_COLONIES_LOAD) {
+    throw new Error(`Too many undergroundGrids in save: ${ugKeys.length} (cap ${MAX_COLONIES_LOAD})`);
+  }
+  if (s.pheromoneGrids === null || typeof s.pheromoneGrids !== 'object') {
+    throw new Error('Invalid save shape: missing or non-object pheromoneGrids');
+  }
+  const pheroKeys = Object.keys(s.pheromoneGrids);
+  if (pheroKeys.length > MAX_PHEROMONE_GRID_KEYS) {
+    throw new Error(`Too many pheromoneGrids in save: ${pheroKeys.length} (cap ${MAX_PHEROMONE_GRID_KEYS})`);
+  }
+  if (s.pendingChambers === null || typeof s.pendingChambers !== 'object') {
+    throw new Error('Invalid save shape: missing or non-object pendingChambers');
+  }
+  const pcKeys = Object.keys(s.pendingChambers);
+  if (pcKeys.length > MAX_PENDING_CHAMBERS) {
+    throw new Error(`Too many pendingChambers in save: ${pcKeys.length} (cap ${MAX_PENDING_CHAMBERS})`);
+  }
+
   const colonies: Record<ColonyId, ColonyRecord> = {};
   for (const [cidStr, sc] of Object.entries(s.colonies)) {
+    // Issue #99 — colonies map keys must be decimal-integer strings; reject
+    // `__proto__` and any non-numeric key shape that would corrupt the
+    // resulting Record.
+    if (!/^-?\d+$/.test(cidStr)) {
+      throw new Error(`Invalid colonies key: ${cidStr}`);
+    }
     colonies[Number(cidStr) as ColonyId] = deserializeColony(sc);
   }
   const undergroundGrids: Record<ColonyId, UndergroundGrid> = {};
   for (const [cidStr, sg] of Object.entries(s.undergroundGrids)) {
+    if (!/^-?\d+$/.test(cidStr)) {
+      throw new Error(`Invalid undergroundGrids key: ${cidStr}`);
+    }
+    // Issue #99 — verify grid shape before allocator runs.
+    validateGridShape(sg, UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT,
+      `undergroundGrids[${cidStr}]`);
     undergroundGrids[Number(cidStr) as ColonyId] = deserializeUndergroundGrid(sg);
   }
   const pheromoneGrids: Record<string, PheromoneGrid> = {};
   for (const [key, sg] of Object.entries(s.pheromoneGrids)) {
+    // Pheromone grids exist for both surface and underground zones; the key
+    // encodes the zone. Two valid sizes; accept either by trying both
+    // (validateGridShape throws on mismatch — wrap to retry the alternate).
+    if (key.startsWith('__')) {
+      throw new Error(`Invalid pheromoneGrids key: ${key}`);
+    }
+    let validated = false;
+    try {
+      validateGridShape(sg, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT,
+        `pheromoneGrids[${key}]`);
+      validated = true;
+    } catch { /* try underground next */ }
+    if (!validated) {
+      validateGridShape(sg, UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT,
+        `pheromoneGrids[${key}]`);
+    }
     pheromoneGrids[key] = deserializePheromoneGrid(sg);
   }
   const pendingChambers: Record<string, PendingChamber> = {};
   for (const [key, pc] of Object.entries(s.pendingChambers)) {
+    if (key.startsWith('__')) {
+      throw new Error(`Invalid pendingChambers key: ${key}`);
+    }
+    // Issue #102 — validate every entry; tick.ts:382 revert loop is
+    // unbounded over pc.width × pc.height.
+    validatePendingChamber(pc, `pendingChambers[${key}]`);
     pendingChambers[key] = { ...pc };
   }
 
@@ -676,9 +935,58 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     throw new Error(`Invalid nextEntityId in save: ${String(rawNext)} (require integer in [0, ${MAX_ENTITIES}])`);
   }
 
+  // Issue #104 — boundary validation for snapshot tick. Same pattern as
+  // nextEntityId: `tick: s.tick` previously passed strings/NaN through,
+  // and `world.tick += 1` became unbounded string concatenation.
+  const rawTick = s.tick;
+  if (typeof rawTick !== 'number'
+      || !Number.isFinite(rawTick)
+      || !Number.isInteger(rawTick)
+      || rawTick < 0) {
+    throw new Error(`Invalid tick in save: ${String(rawTick)} (require non-negative integer)`);
+  }
+  // rngState — same hardening for symmetry. Rng's `state | 0` would coerce
+  // NaN/strings to 0 on first use, but boundary validation surfaces tampering
+  // explicitly instead of silently snapping.
+  const rawRng = s.rngState;
+  if (typeof rawRng !== 'number'
+      || !Number.isFinite(rawRng)
+      || !Number.isInteger(rawRng)) {
+    throw new Error(`Invalid rngState in save: ${String(rawRng)} (require integer)`);
+  }
+
+  // Issue #109 — foodPiles boundary validation. The runtime scans this array
+  // every frame (draw-surface, minimap) and every tick (command handlers,
+  // ant behavior); an unbounded count converts a load-time anomaly into a
+  // sustained per-frame DoS that survives bootFromSave.
+  if (!Array.isArray(s.foodPiles)) {
+    throw new Error('Invalid foodPiles: not an array');
+  }
+  if (s.foodPiles.length > MAX_FOOD_PILES) {
+    throw new Error(`foodPiles length ${s.foodPiles.length} exceeds cap ${MAX_FOOD_PILES}`);
+  }
+  const seenFoodIds = new Set<number>();
+  const seenFoodTiles = new Set<number>();
+  for (let i = 0; i < s.foodPiles.length; i++) {
+    const fp = s.foodPiles[i]!;
+    validateFoodPile(fp, `foodPiles[${i}]`);
+    if (seenFoodIds.has(fp.foodPileId)) {
+      throw new Error(`Duplicate foodPiles[${i}].foodPileId: ${fp.foodPileId}`);
+    }
+    seenFoodIds.add(fp.foodPileId);
+    const tileKey = (fp.tileY << 16) | fp.tileX;
+    if (seenFoodTiles.has(tileKey)) {
+      throw new Error(`Duplicate foodPiles[${i}] tile (${fp.tileX}, ${fp.tileY})`);
+    }
+    seenFoodTiles.add(tileKey);
+  }
+
+  // Issue #99 — surface grid shape (single grid, not per-colony).
+  validateGridShape(s.surface, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT, 'surface');
+
   return {
-    tick: s.tick,
-    rngState: s.rngState,
+    tick: rawTick,
+    rngState: rawRng,
     nextEntityId: rawNext,
     // Issue #27 — sticky-on-load: pre-#27 saves omit `simVersion` and replay
     // at LEGACY (2). Post-#27 saves carry the recorded version through.
@@ -717,7 +1025,15 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     // shape until the dispatcher actually consumed it. Centralizing the
     // migration here makes the loaded snapshot internally consistent
     // before any tick runs.
-    commandQueue: s.commandQueue.map((c) => migrateInputLogCommand({ ...c })),
+    //
+    // Issue #105 — also filter null/non-object entries before the spread:
+    // `{ ...null }` works (yields `{}`), but the resulting object lacks
+    // `cmd.type` and the dispatcher's exhaustive switch would silently no-op
+    // — better to drop them at the boundary so the runtime queue is always
+    // consistent with the dispatcher's expectations.
+    commandQueue: (Array.isArray(s.commandQueue) ? s.commandQueue : [])
+      .filter((c) => c !== null && typeof c === 'object')
+      .map((c) => migrateInputLogCommand({ ...c })),
     ants: deserializeAnts(s.ants, capacity),
     colonies,
     pheromoneGrids,
@@ -763,6 +1079,15 @@ function buildSaveFile(seed: number, inputLog: readonly SimCommand[], world: Wor
  * `SetBehaviorRatio` entries pass through untouched.
  */
 function migrateInputLogCommand(cmd: SimCommand): SimCommand {
+  // Issue #105 — guard at entry, before any property access. The Issue #78
+  // fix block below covers null `cmd.ratio`; this covers structurally-
+  // identical null / non-object `cmd`. Without this guard, parseSaveFile's
+  // loop throws TypeError on `null.type`, loadSave's try/catch swallows
+  // the throw and returns null, the caller treats the WHOLE save as corrupt
+  // and calls deleteSave + bootFresh — escalating one bad command into
+  // total save loss. Pass through verbatim; the dispatcher's exhaustive-
+  // default in tick.ts silently drops malformed entries.
+  if (cmd === null || typeof cmd !== 'object') return cmd;
   if (cmd.type !== 'SetBehaviorRatio') return cmd;
   // Issue #78 — guard against null/primitive ratios before using `'in'`.
   // Pre-fix code did `'dig' in ratioRaw` directly, which throws TypeError
@@ -783,21 +1108,38 @@ function migrateInputLogCommand(cmd: SimCommand): SimCommand {
 }
 
 function parseSaveFile(raw: string): SaveFile {
-  const parsed = JSON.parse(raw) as { version?: unknown };
+  const parsed = JSON.parse(raw) as { version?: unknown; seed?: unknown };
   if (typeof parsed.version !== 'number') {
     throw new SaveVersionMismatchError(SAVE_FORMAT_VERSION, NaN);
   }
   if (parsed.version !== SAVE_FORMAT_VERSION) {
     throw new SaveVersionMismatchError(SAVE_FORMAT_VERSION, parsed.version);
   }
+  // Issue #110 — envelope seed validation. buildSaveFile writes `seed | 0`
+  // (signed int32 domain). Reject anything that wouldn't survive that
+  // coercion losslessly. Without this guard, a tampered/malformed seed
+  // continues to play from the snapshot, autosave silently coerces it to 0
+  // on the next write, and the (seed, inputLog) → snapshot replay contract
+  // is permanently broken. Throw routes the corrupt save through loadSave's
+  // try/catch (returns null) → bootFresh.
+  if (!isInt32(parsed.seed)) {
+    throw new Error(`Invalid save envelope seed: ${String(parsed.seed)} (require int32)`);
+  }
   const file = parsed as SaveFile;
+  // Issue #103 — normalize non-array inputLog to []. parseSaveFile is the
+  // only boundary; downstream `for (const c of loaded.inputLog)` in
+  // game-scene.ts runs OUTSIDE the deserialize try/catch and would soft-
+  // brick Continue with TypeError on a missing/null/non-array inputLog.
+  // Replacing with `[]` lets the snapshot continue to play; the next
+  // autosave restores a proper inputLog from that point.
+  if (!Array.isArray(file.inputLog)) {
+    (file as { inputLog: SimCommand[] }).inputLog = [];
+  }
   // WR-09: walk inputLog and migrate any legacy SetBehaviorRatio entries so
   // SCEN-06 replay (`createScenario(seed) + tick(cmds[t])`) reproduces the
   // migrated snapshot. Other command types pass through.
-  if (Array.isArray(file.inputLog)) {
-    for (let i = 0; i < file.inputLog.length; i++) {
-      file.inputLog[i] = migrateInputLogCommand(file.inputLog[i]!);
-    }
+  for (let i = 0; i < file.inputLog.length; i++) {
+    file.inputLog[i] = migrateInputLogCommand(file.inputLog[i]!);
   }
   return file;
 }

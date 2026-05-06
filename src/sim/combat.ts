@@ -14,6 +14,7 @@
 import { Rng } from './rng.js';
 import { makeTileKey } from './tile-key.js';
 import type { WorldState } from './types.js';
+import { SIM_VERSION_V13_INVARIANT_FIXES } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
@@ -136,9 +137,29 @@ export function resolveCombatOnTile(world: WorldState, _tileKey: number, partici
 /**
  * Instant-kill: zero alive flag, increment killer killCount.
  * Roster cleanup is the responsibility of tickDeathCleanup at step 5 next tick.
+ *
+ * Issue #107 (v13+) — atomically clear bidirectional carry pointers BEFORE
+ * zeroing alive so the (`carryingBroodId[X] === Y` ⇔ `carriedBy[Y] === X`)
+ * invariant holds across a combat death. Pre-v13 a nurse killed mid-Feeding
+ * left the brood's `carriedBy` pointing at a dead ant; if the carrier died
+ * on a Marked or Solid tile, the brood was unreclaimable (chamber-flow.ts
+ * pickup-field seeds Open/BeingDug only).
  */
 export function killAnt(world: WorldState, antIndex: number, killerColonyId: ColonyId): void {
-  world.ants.alive[antIndex] = 0;
+  const ants = world.ants;
+  if (world.simVersion >= SIM_VERSION_V13_INVARIANT_FIXES) {
+    const carrying = ants.carryingBroodId[antIndex]!;
+    if (carrying !== -1) {
+      ants.carriedBy[carrying] = -1;
+      ants.carryingBroodId[antIndex] = -1;
+    }
+    const carrier = ants.carriedBy[antIndex]!;
+    if (carrier !== -1) {
+      ants.carryingBroodId[carrier] = -1;
+      ants.carriedBy[antIndex] = -1;
+    }
+  }
+  ants.alive[antIndex] = 0;
   if (killerColonyId !== 0) {
     const killerColony = world.colonies[killerColonyId];
     if (killerColony !== undefined) {
