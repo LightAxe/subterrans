@@ -7704,3 +7704,234 @@ describe('tickLifecycleTransitions — v10 larva→worker drops carry (#17 phase
     expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #106 — Underground→Surface ascent reads currentGridColonyId in V13+.
+//
+// Pre-V13 the ascent looked up entrances on the ant's OWNING colony, so an
+// invading Fighter at tileY=0 inside an enemy grid could ascend through ANY
+// of its OWN colony's entrances that happened to share its underground tileX.
+// V13 reads `currentGridColonyId` instead and writes back `colonyId` on
+// successful ascent so the "Surface ⇒ currentGridColonyId === colonyId"
+// invariant holds.
+// ---------------------------------------------------------------------------
+describe('Issue #106 — ascent uses currentGridColonyId (V13+)', () => {
+  it('V13+ ascent looks up GRID colony\'s entrances, not the ant\'s OWN colony', () => {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = 13;
+    // Two colonies. Player owns colony 1; enemy is colony 2.
+    const playerColonyId = 1;
+    const enemyColonyId = 2;
+    const playerColony = createColonyRecord(playerColonyId, 0);
+    playerColony.entrances = [{ entranceId: 10, surfaceTileX: 5, surfaceTileY: 5, isOpen: true }];
+    playerColony.rallyPoint = null;
+    playerColony.digFlowFieldDirty = false;
+    world.colonies[playerColonyId] = playerColony;
+    const enemyColony = createColonyRecord(enemyColonyId, 0);
+    // Enemy has no open entrance at tileX=5 (the only colony with that
+    // entrance is the player). Pre-V13: the player Fighter inside the enemy
+    // grid would warp home through the player entrance at tileX=5. V13: no
+    // matching entrance on the GRID colony (enemy), so no ascent.
+    enemyColony.entrances = [{ entranceId: 20, surfaceTileX: 99, surfaceTileY: 50, isOpen: true }];
+    enemyColony.rallyPoint = null;
+    enemyColony.digFlowFieldDirty = false;
+    world.colonies[enemyColonyId] = enemyColony;
+    const enemyGrid = createUndergroundGrid(16, 16);
+    world.undergroundGrids[enemyColonyId] = enemyGrid;
+    // Carve open tiles so passability checks don't kick in.
+    ugSet(enemyGrid, 5, 0, UndergroundTileState.Open);
+
+    // Player Fighter at tileY=0, tileX=5, currentGridColonyId=enemy (descended).
+    const fighterId = allocateEntityId(world);
+    initAnt(world.ants, fighterId, {
+      colonyId: playerColonyId,
+      posX: 5 << FP_SHIFT,
+      posY: 0,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
+      zone: Zone.Underground,
+      speed: 0,
+    });
+    world.ants.currentGridColonyId[fighterId] = enemyColonyId;
+
+    const digFlowFields = createDigFlowFields();
+    const rng = new Rng(42);
+    tickAntMovement(world, rng, digFlowFields);
+
+    // V13: no ascent — the enemy's tileX=5 has no entrance.
+    expect(world.ants.zone[fighterId]).toBe(Zone.Underground);
+  });
+
+  it('pre-V13 retains the legacy ascent (replay byte-identity)', () => {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = 12; // legacy
+    const playerColonyId = 1;
+    const enemyColonyId = 2;
+    const playerColony = createColonyRecord(playerColonyId, 0);
+    playerColony.entrances = [{ entranceId: 10, surfaceTileX: 5, surfaceTileY: 5, isOpen: true }];
+    playerColony.rallyPoint = null;
+    playerColony.digFlowFieldDirty = false;
+    world.colonies[playerColonyId] = playerColony;
+    const enemyColony = createColonyRecord(enemyColonyId, 0);
+    enemyColony.entrances = [];
+    enemyColony.rallyPoint = null;
+    enemyColony.digFlowFieldDirty = false;
+    world.colonies[enemyColonyId] = enemyColony;
+    const enemyGrid = createUndergroundGrid(16, 16);
+    world.undergroundGrids[enemyColonyId] = enemyGrid;
+
+    const fighterId = allocateEntityId(world);
+    initAnt(world.ants, fighterId, {
+      colonyId: playerColonyId,
+      posX: 5 << FP_SHIFT,
+      posY: 0,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
+      zone: Zone.Underground,
+      speed: 0,
+    });
+    world.ants.currentGridColonyId[fighterId] = enemyColonyId;
+
+    const digFlowFields = createDigFlowFields();
+    const rng = new Rng(42);
+    tickAntMovement(world, rng, digFlowFields);
+
+    // Pre-V13: ascends through PLAYER entrance at (5, 5) — the bug.
+    expect(world.ants.zone[fighterId]).toBe(Zone.Surface);
+    expect(world.ants.posY[fighterId]).toBe(5 << FP_SHIFT);
+  });
+
+  it('V13+ same-colony ascent (ant in own grid) writes back currentGridColonyId for invariant restore', () => {
+    const { world, colony } = setupWorldWithUnderground();
+    world.simVersion = 13;
+    colony.entrances.push({ entranceId: 1, surfaceTileX: 8, surfaceTileY: 5, isOpen: true });
+    setupSurfaceGrid(world);
+
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId: COLONY_ID,
+      posX: 8 << FP_SHIFT,
+      posY: 0,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
+      zone: Zone.Underground,
+      speed: 0,
+    });
+    world.ants.currentGridColonyId[antId] = COLONY_ID; // own grid
+
+    const digFlowFields = createDigFlowFields();
+    const rng = new Rng(42);
+    tickAntMovement(world, rng, digFlowFields);
+
+    // Successful ascent. Post-V13 invariant: currentGridColonyId === colonyId.
+    expect(world.ants.zone[antId]).toBe(Zone.Surface);
+    expect(world.ants.currentGridColonyId[antId]).toBe(COLONY_ID);
+  });
+
+  it('V13+ invader Fighter at tileY=0 in foreign grid AT a matching enemy entrance does NOT ascend (skipAscent guard)', () => {
+    // Direct regression test for the descent→ascent ping-pong bug uncovered
+    // mid-implementation. Without the `skipAscent` guard, a Fighting invader
+    // at tileY=0 in the enemy grid would find the enemy's entrance at the
+    // same tileX (which is exactly where it descended) and ascend through
+    // it, then descend again next tick — bouncing forever and never fighting.
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = 13;
+    const playerColonyId = 1;
+    const enemyColonyId = 2;
+    const playerColony = createColonyRecord(playerColonyId, 0);
+    playerColony.entrances = [{ entranceId: 10, surfaceTileX: 5, surfaceTileY: 5, isOpen: true }];
+    playerColony.rallyPoint = null;
+    playerColony.digFlowFieldDirty = false;
+    world.colonies[playerColonyId] = playerColony;
+    const enemyColony = createColonyRecord(enemyColonyId, 0);
+    // Enemy entrance at SAME tileX=5 as where the invader is sitting — this
+    // is the "ping-pong" repro case. With skipAscent, the Fighter stays put.
+    enemyColony.entrances = [{ entranceId: 20, surfaceTileX: 5, surfaceTileY: 50, isOpen: true }];
+    enemyColony.rallyPoint = null;
+    enemyColony.digFlowFieldDirty = false;
+    world.colonies[enemyColonyId] = enemyColony;
+    const enemyGrid = createUndergroundGrid(16, 16);
+    world.undergroundGrids[enemyColonyId] = enemyGrid;
+    ugSet(enemyGrid, 5, 0, UndergroundTileState.Open);
+
+    // Player Fighter at tileY=0, tileX=5, currentGridColonyId=enemy.
+    const fighterId = allocateEntityId(world);
+    initAnt(world.ants, fighterId, {
+      colonyId: playerColonyId,
+      posX: 5 << FP_SHIFT,
+      posY: 0,
+      task: AntTask.Fighting, // <-- KEY: Fighting, not Foraging
+      zone: Zone.Underground,
+      speed: 0,
+    });
+    world.ants.currentGridColonyId[fighterId] = enemyColonyId; // foreign grid
+
+    const digFlowFields = createDigFlowFields();
+    const rng = new Rng(42);
+    tickAntMovement(world, rng, digFlowFields);
+
+    // Fighter must NOT ascend even though enemy entrance matches its tileX.
+    // skipAscent fires: task === Fighting && currentGridColonyId !== colonyId.
+    expect(world.ants.zone[fighterId]).toBe(Zone.Underground);
+    expect(world.ants.currentGridColonyId[fighterId]).toBe(enemyColonyId);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #108 — resolveSameColonyOccupancy zone-masks gridColonyId in V13+.
+//
+// V13+ mirrors combat tile-key encoding (tile-key.ts:56) — when zone ===
+// Surface, the gridColonyId portion of the per-tile key is zero-masked so
+// two same-colony surface ants with diverging `currentGridColonyId` (e.g.
+// post-#106 ascent transient) bucket together and one gets shifted off the
+// shared tile. Pre-V13 the raw gridColonyId was used and they stacked.
+// ---------------------------------------------------------------------------
+describe('Issue #108 — occupancy zone-mask (V13+)', () => {
+  it('V13+ shifts one of two same-colony surface ants with diverging currentGridColonyId at same tile', () => {
+    const { world } = setupWorldWithUnderground();
+    world.simVersion = 13;
+    setupSurfaceGrid(world);
+
+    const a = allocateEntityId(world);
+    initAnt(world.ants, a, {
+      colonyId: COLONY_ID,
+      posX: 5 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      task: AntTask.Foraging,
+      zone: Zone.Surface,
+      speed: 0,
+    });
+    world.ants.currentGridColonyId[a] = COLONY_ID; // matches own colony
+
+    const b = allocateEntityId(world);
+    initAnt(world.ants, b, {
+      colonyId: COLONY_ID, // SAME colony
+      posX: 5 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      task: AntTask.Foraging,
+      zone: Zone.Surface,
+      speed: 0,
+    });
+    world.ants.currentGridColonyId[b] = 99; // DIVERGENT — exposes the bug
+
+    const digFlowFields = createDigFlowFields();
+    const rng = new Rng(42);
+    tickAntMovement(world, rng, digFlowFields);
+
+    // V13+: occupancy resolver zero-masks gridByte for surface, so both ants
+    // share a key and one (higher id) shifts to an adjacent tile.
+    const aTile = `${world.ants.posX[a]! >> FP_SHIFT},${world.ants.posY[a]! >> FP_SHIFT}`;
+    const bTile = `${world.ants.posX[b]! >> FP_SHIFT},${world.ants.posY[b]! >> FP_SHIFT}`;
+    expect(aTile).not.toBe(bTile);
+  });
+
+  // Pre-V13 byte-identity is enforced indirectly: the V13+ behavior change
+  // only fires on `world.simVersion >= V13`, and the rest of the
+  // ant-system test corpus pins simVersion at LEGACY_SIM_VERSION (2) for
+  // its setupWorldWithUnderground default. If V13 leaked through, the
+  // existing 263-test surface would fail. The positive V13 test above is
+  // sufficient to demonstrate the masked-key separation; reproducing the
+  // pre-V13 stack here would require exporting resolveSameColonyOccupancy
+  // for direct call (the full tickAntMovement also runs surface foraging
+  // / passability passes that can shift either ant for unrelated reasons).
+});

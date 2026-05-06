@@ -164,13 +164,15 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // contents, including disparate values across chambers.
       const w = createScenario(42);
       const colony = w.colonies[PLAYER_COLONY_ID]!;
+      // Canonical FoodStorage dims: 4×3 (CHAMBER_DIMENSIONS[FoodStorage]).
+      // Issue #101 boundary validator now enforces these.
       colony.chambers.push({
         chamberId: 999, chamberType: ChamberType.FoodStorage, foodStored: 1234,
-        posX: 10 << 8, posY: 5 << 8, width: 3, height: 3,
+        posX: 10 << 8, posY: 5 << 8, width: 4, height: 3,
       });
       colony.chambers.push({
         chamberId: 998, chamberType: ChamberType.FoodStorage, foodStored: 4321,
-        posX: 14 << 8, posY: 5 << 8, width: 3, height: 3,
+        posX: 16 << 8, posY: 5 << 8, width: 4, height: 3,
       });
       const w2 = deserializeWorldState(serializeWorldState(w));
       const c2 = w2.colonies[PLAYER_COLONY_ID]!;
@@ -1239,6 +1241,344 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // the null-safe default propagates into the live ColonyRecord.
       const world = deserializeWorldState(loaded!.snapshot);
       expect(world.colonies[PLAYER_COLONY_ID]!.targetRatio).toEqual({ forage: 10, fight: 0 });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Boundary hardening — issues #99, #101, #102, #103, #104, #105, #109, #110.
+  // Each test verifies the validator rejects a tampered shape AND that a
+  // legitimate scenario still round-trips (regression guard).
+  // -------------------------------------------------------------------------
+
+  describe('boundary hardening — issues #99 / #101 / #102 / #103 / #104 / #105 / #109 / #110', () => {
+    function writeSave(file: { version: number; seed: unknown; inputLog: unknown; snapshot: unknown }): void {
+      localStorage.setItem(SAVE_KEY, JSON.stringify(file));
+    }
+
+    // -----------------------------------------------------------------------
+    // #110 — envelope seed validation
+    // -----------------------------------------------------------------------
+    it('#110 rejects envelope seed: string', () => {
+      const w = createScenario(42);
+      writeSave({ version: SAVE_FORMAT_VERSION, seed: 'abc' as unknown as number, inputLog: [], snapshot: serializeWorldState(w) });
+      expect(loadSave()).toBeNull();
+    });
+    it('#110 rejects envelope seed: null', () => {
+      const w = createScenario(42);
+      writeSave({ version: SAVE_FORMAT_VERSION, seed: null, inputLog: [], snapshot: serializeWorldState(w) });
+      expect(loadSave()).toBeNull();
+    });
+    it('#110 rejects envelope seed: missing', () => {
+      const w = createScenario(42);
+      const file = { version: SAVE_FORMAT_VERSION, inputLog: [], snapshot: serializeWorldState(w) };
+      localStorage.setItem(SAVE_KEY, JSON.stringify(file));
+      expect(loadSave()).toBeNull();
+    });
+    it('#110 rejects envelope seed: non-integer', () => {
+      const w = createScenario(42);
+      writeSave({ version: SAVE_FORMAT_VERSION, seed: 1.5, inputLog: [], snapshot: serializeWorldState(w) });
+      expect(loadSave()).toBeNull();
+    });
+    it('#110 rejects envelope seed: out of int32 range', () => {
+      const w = createScenario(42);
+      writeSave({ version: SAVE_FORMAT_VERSION, seed: 0x80000000, inputLog: [], snapshot: serializeWorldState(w) });
+      expect(loadSave()).toBeNull();
+    });
+    it('#110 accepts envelope seed: int32 boundary values', () => {
+      const w = createScenario(42);
+      writeSave({ version: SAVE_FORMAT_VERSION, seed: 0x7fffffff, inputLog: [], snapshot: serializeWorldState(w) });
+      expect(loadSave()).not.toBeNull();
+      writeSave({ version: SAVE_FORMAT_VERSION, seed: -0x80000000, inputLog: [], snapshot: serializeWorldState(w) });
+      expect(loadSave()).not.toBeNull();
+    });
+
+    // -----------------------------------------------------------------------
+    // #103 — non-array inputLog normalization (no soft-brick)
+    // -----------------------------------------------------------------------
+    it('#103 normalizes missing inputLog to empty array', () => {
+      const w = createScenario(42);
+      const file = { version: SAVE_FORMAT_VERSION, seed: 42, snapshot: serializeWorldState(w) };
+      localStorage.setItem(SAVE_KEY, JSON.stringify(file));
+      const loaded = loadSave();
+      expect(loaded).not.toBeNull();
+      expect(loaded!.inputLog).toEqual([]);
+    });
+    it('#103 normalizes null inputLog to empty array', () => {
+      const w = createScenario(42);
+      writeSave({ version: SAVE_FORMAT_VERSION, seed: 42, inputLog: null, snapshot: serializeWorldState(w) });
+      const loaded = loadSave();
+      expect(loaded).not.toBeNull();
+      expect(loaded!.inputLog).toEqual([]);
+    });
+    it('#103 normalizes string inputLog to empty array', () => {
+      const w = createScenario(42);
+      writeSave({ version: SAVE_FORMAT_VERSION, seed: 42, inputLog: 'abc', snapshot: serializeWorldState(w) });
+      const loaded = loadSave();
+      expect(loaded).not.toBeNull();
+      expect(loaded!.inputLog).toEqual([]);
+    });
+
+    // -----------------------------------------------------------------------
+    // #105 — null inputLog entry doesn't destroy the save
+    // -----------------------------------------------------------------------
+    it('#105 null inputLog entry passes through migrateInputLogCommand without throwing', () => {
+      const w = createScenario(42);
+      writeSave({
+        version: SAVE_FORMAT_VERSION, seed: 42,
+        inputLog: [null] as unknown as SimCommand[],
+        snapshot: serializeWorldState(w),
+      });
+      // Pre-fix: this returned null (loadSave swallowed the TypeError).
+      // Post-fix: parseSaveFile completes; the null entry passes through.
+      const loaded = loadSave();
+      expect(loaded).not.toBeNull();
+      expect(loaded!.inputLog).toHaveLength(1);
+      expect(loaded!.inputLog[0]).toBeNull();
+    });
+
+    // -----------------------------------------------------------------------
+    // #104 — snapshot.tick validation
+    // -----------------------------------------------------------------------
+    it('#104 rejects snapshot.tick: string', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      (s as unknown as { tick: unknown }).tick = 'x';
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#104 rejects snapshot.tick: negative', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      (s as unknown as { tick: number }).tick = -1;
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#104 rejects snapshot.tick: non-integer', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      (s as unknown as { tick: number }).tick = 1.5;
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#104 rejects snapshot.rngState: non-integer', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      (s as unknown as { rngState: unknown }).rngState = 'abc';
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#104 accepts legitimate large tick value (regression guard for normal long sessions)', () => {
+      const w = createScenario(42);
+      w.tick = 1_000_000;
+      const s = serializeWorldState(w);
+      const w2 = deserializeWorldState(s);
+      expect(w2.tick).toBe(1_000_000);
+    });
+
+    // -----------------------------------------------------------------------
+    // #101 — chamber dimensions validation. Helper: build a scenario with a
+    // canonical chamber so we have something to mutate. createScenario(42)
+    // doesn't seed chambers, so push a valid Queen chamber first.
+    // -----------------------------------------------------------------------
+    function scenarioWithChamber() {
+      const w = createScenario(42);
+      w.colonies[PLAYER_COLONY_ID]!.chambers.push({
+        chamberId: 100, chamberType: ChamberType.Queen, foodStored: 0,
+        posX: 10 << 8, posY: 5 << 8, width: 5, height: 3,
+      });
+      return w;
+    }
+    it('#101 rejects chamber.width: oversized (DoS via chamber-flow seed loop)', () => {
+      const s = serializeWorldState(scenarioWithChamber());
+      const c0 = s.colonies[String(PLAYER_COLONY_ID)]!.chambers[0]!;
+      (c0 as { width: number }).width = 1_000_000_000;
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#101 rejects chamber.chamberType: enum out-of-range', () => {
+      const s = serializeWorldState(scenarioWithChamber());
+      const c0 = s.colonies[String(PLAYER_COLONY_ID)]!.chambers[0]!;
+      (c0 as { chamberType: number }).chamberType = 99;
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#101 rejects chamber.posX: out-of-grid', () => {
+      const s = serializeWorldState(scenarioWithChamber());
+      const c0 = s.colonies[String(PLAYER_COLONY_ID)]!.chambers[0]!;
+      (c0 as { posX: number }).posX = 1_000_000;
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#101 rejects chamber.foodStored: exceeds capacity', () => {
+      const s = serializeWorldState(scenarioWithChamber());
+      const c0 = s.colonies[String(PLAYER_COLONY_ID)]!.chambers[0]!;
+      (c0 as { foodStored: number }).foodStored = 99_999_999;
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#101 rejects chamber dims: don\'t match canonical CHAMBER_DIMENSIONS', () => {
+      const s = serializeWorldState(scenarioWithChamber());
+      const c0 = s.colonies[String(PLAYER_COLONY_ID)]!.chambers[0]!;
+      (c0 as { width: number }).width = 5;     // canonical for Queen
+      (c0 as { height: number }).height = 4;   // BAD: Queen height is 3
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+
+    // -----------------------------------------------------------------------
+    // #102 — pendingChamber validation
+    // -----------------------------------------------------------------------
+    it('#102 rejects pendingChamber.width: oversized (DoS via CancelDigMark revert)', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      (s.pendingChambers as Record<string, unknown>)['0:5:5'] = {
+        colonyId: 1, chamberType: 1,
+        anchorTileX: 0, anchorTileY: 1,
+        width: 1_000_000_000, height: 1_000_000_000,
+      };
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#102 rejects pendingChamber.anchor: out-of-grid', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      (s.pendingChambers as Record<string, unknown>)['0:5:5'] = {
+        colonyId: 1, chamberType: 1,
+        anchorTileX: 1_000_000, anchorTileY: 1,
+        width: 4, height: 3,
+      };
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#102 rejects pendingChamber: dims don\'t match canonical CHAMBER_DIMENSIONS', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      (s.pendingChambers as Record<string, unknown>)['0:5:5'] = {
+        colonyId: 1, chamberType: 0, // Queen wants 5×3
+        anchorTileX: 0, anchorTileY: 1,
+        width: 4, height: 3, // wrong dims for type 0
+      };
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+
+    // -----------------------------------------------------------------------
+    // #109 — foodPiles array validation
+    // -----------------------------------------------------------------------
+    it('#109 rejects foodPiles: not an array', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      (s as unknown as { foodPiles: unknown }).foodPiles = 'abc';
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#109 rejects foodPiles: length exceeds cap', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      const oversized = [];
+      for (let i = 0; i < 1000; i++) {
+        oversized.push({ foodPileId: i, tileX: i % 128, tileY: 0 });
+      }
+      s.foodPiles = oversized;
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#109 rejects foodPile.tileX: out-of-grid', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      s.foodPiles = [{ foodPileId: 1, tileX: 1_000_000, tileY: 0 }];
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#109 rejects foodPiles: duplicate foodPileId', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      s.foodPiles = [
+        { foodPileId: 5, tileX: 10, tileY: 10 },
+        { foodPileId: 5, tileX: 20, tileY: 20 },
+      ];
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#109 rejects foodPiles: duplicate tile', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      s.foodPiles = [
+        { foodPileId: 5, tileX: 10, tileY: 10 },
+        { foodPileId: 6, tileX: 10, tileY: 10 },
+      ];
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+
+    // -----------------------------------------------------------------------
+    // #99 — grid dims + map cardinality validation
+    // -----------------------------------------------------------------------
+    it('#99 rejects surface grid: oversized dimensions', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      (s.surface as unknown as { width: number }).width = 20_000;
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#99 rejects undergroundGrid: wrong dimensions', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      const ugKey = String(PLAYER_COLONY_ID);
+      (s.undergroundGrids[ugKey] as unknown as { height: number }).height = 1024;
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#99 rejects pheromoneGrid: wrong dimensions', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      const phKey = Object.keys(s.pheromoneGrids)[0]!;
+      (s.pheromoneGrids[phKey] as unknown as { width: number }).width = 999;
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#99 rejects colonies: cardinality cap exceeded', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      // Clone a valid colony into many keys.
+      const valid = s.colonies[String(PLAYER_COLONY_ID)]!;
+      for (let i = 100; i < 200; i++) {
+        (s.colonies as Record<string, unknown>)[String(i)] = valid;
+      }
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#99 rejects pendingChambers: cardinality cap exceeded', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      for (let i = 0; i < 300; i++) {
+        (s.pendingChambers as Record<string, unknown>)[`0:${i}:1`] = {
+          colonyId: 1, chamberType: 1, anchorTileX: i % 100, anchorTileY: 1, width: 4, height: 3,
+        };
+      }
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#99 rejects colonies key: non-decimal-integer string', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      const valid = s.colonies[String(PLAYER_COLONY_ID)]!;
+      // Use a non-numeric key. Setting `obj['__proto__'] = ...` mutates the
+      // prototype rather than creating an own property, so it never reaches
+      // Object.entries — exercise the non-numeric-key branch directly.
+      (s.colonies as Record<string, unknown>)['abc'] = valid;
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+    it('#99 rejects pendingChambers key: __-prefixed string', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      // Use Object.defineProperty to create an own __ -prefixed property; a
+      // bare assignment of '__proto__' would mutate the prototype instead.
+      Object.defineProperty(s.pendingChambers as object, '__shady', {
+        value: {
+          colonyId: 1, chamberType: 1, anchorTileX: 0, anchorTileY: 1, width: 4, height: 3,
+        },
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+      expect(() => deserializeWorldState(s)).toThrow();
+    });
+
+    // -----------------------------------------------------------------------
+    // Regression guard — legitimate scenarios still round-trip cleanly.
+    // -----------------------------------------------------------------------
+    it('all validators pass on a freshly-saved legitimate scenario', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      expect(() => deserializeWorldState(s)).not.toThrow();
+    });
+    it('post-deserialize world replays a tick byte-identically (SCEN-06 regression)', () => {
+      const w = createScenario(42);
+      tick(w, []); // advance one tick
+      const s1 = serializeWorldState(w);
+      const w2 = deserializeWorldState(s1);
+      const s2 = serializeWorldState(w2);
+      expect(s2.tick).toBe(s1.tick);
+      expect(s2.rngState).toBe(s1.rngState);
     });
   });
 });
