@@ -5,7 +5,9 @@ import {
   serializeWorldState, deserializeWorldState,
   hasSave, loadSave, deleteSave, tickAutosave,
   migrateBehaviorRatio,
+  parseSaveFile,
   FutureSimVersionError,
+  SaveVersionMismatchError,
   type SaveFile,
 } from './save.js';
 import { createScenario } from '../sim/scenario.js';
@@ -1464,7 +1466,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const s = serializeWorldState(w);
       const oversized = [];
       for (let i = 0; i < 1000; i++) {
-        oversized.push({ foodPileId: i, tileX: i % 128, tileY: 0 });
+        oversized.push({ foodPileId: i, tileX: i % 128, tileY: 0 , pickupsRemaining: 50, pickupsInitial: 50});
       }
       s.foodPiles = oversized;
       expect(() => deserializeWorldState(s)).toThrow();
@@ -1472,15 +1474,15 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     it('#109 rejects foodPile.tileX: out-of-grid', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
-      s.foodPiles = [{ foodPileId: 1, tileX: 1_000_000, tileY: 0 }];
+      s.foodPiles = [{ foodPileId: 1, tileX: 1_000_000, tileY: 0 , pickupsRemaining: 50, pickupsInitial: 50}];
       expect(() => deserializeWorldState(s)).toThrow();
     });
     it('#109 rejects foodPiles: duplicate foodPileId', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
       s.foodPiles = [
-        { foodPileId: 5, tileX: 10, tileY: 10 },
-        { foodPileId: 5, tileX: 20, tileY: 20 },
+        { foodPileId: 5, tileX: 10, tileY: 10 , pickupsRemaining: 50, pickupsInitial: 50},
+        { foodPileId: 5, tileX: 20, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50},
       ];
       expect(() => deserializeWorldState(s)).toThrow();
     });
@@ -1488,8 +1490,8 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
       s.foodPiles = [
-        { foodPileId: 5, tileX: 10, tileY: 10 },
-        { foodPileId: 6, tileX: 10, tileY: 10 },
+        { foodPileId: 5, tileX: 10, tileY: 10 , pickupsRemaining: 50, pickupsInitial: 50},
+        { foodPileId: 6, tileX: 10, tileY: 10 , pickupsRemaining: 50, pickupsInitial: 50},
       ];
       expect(() => deserializeWorldState(s)).toThrow();
     });
@@ -1579,6 +1581,130 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const s2 = serializeWorldState(w2);
       expect(s2.tick).toBe(s1.tick);
       expect(s2.rngState).toBe(s1.rngState);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Issue #112 — finite food piles + recentlyDepletedFood persistence
+  // ---------------------------------------------------------------------------
+  describe('Issue #112 — depletion / spawn save format (v3)', () => {
+    it('SAVE_FORMAT_VERSION === 3 and SAVE_KEY ends with :v3', () => {
+      expect(SAVE_FORMAT_VERSION).toBe(3);
+      expect(SAVE_KEY).toBe('subterrans:save:v3');
+    });
+
+    it('rejects v2 envelopes with SaveVersionMismatchError', () => {
+      const v2Envelope = JSON.stringify({
+        version: 2,
+        seed: 42,
+        inputLog: [],
+        snapshot: serializeWorldState(createScenario(42)),
+      });
+      // hasSave / loadSave swallow the error; assert their no-save outcome
+      // AND call parseSaveFile directly to confirm the typed throw — a
+      // future refactor that downgrades to a generic Error would slip past
+      // the swallowed-error path otherwise.
+      localStorage.setItem(SAVE_KEY, v2Envelope);
+      expect(hasSave()).toBe(false);
+      expect(loadSave()).toBeNull();
+
+      // Direct production-path assertion — calls the module-exported
+      // parseSaveFile, which is the function that actually decides to throw.
+      expect(() => parseSaveFile(v2Envelope)).toThrow(SaveVersionMismatchError);
+    });
+
+    it('purges legacy v2 keys on hasSave/loadSave', () => {
+      localStorage.setItem('subterrans:save:v2', '{"version":2}');
+      // Trigger the purge.
+      hasSave();
+      expect(localStorage.getItem('subterrans:save:v2')).toBeNull();
+    });
+
+    it('round-trips pickup-charge fields on every food pile', () => {
+      const w = createScenario(42);
+      const beforeShapes = w.foodPiles.map((p) => ({
+        foodPileId: p.foodPileId,
+        pickupsRemaining: p.pickupsRemaining,
+        pickupsInitial: p.pickupsInitial,
+      }));
+      const s = serializeWorldState(w);
+      const w2 = deserializeWorldState(s);
+      expect(w2.foodPiles.length).toBe(w.foodPiles.length);
+      for (let i = 0; i < w2.foodPiles.length; i++) {
+        const after = w2.foodPiles[i]!;
+        const before = beforeShapes[i]!;
+        expect(after.foodPileId).toBe(before.foodPileId);
+        expect(after.pickupsRemaining).toBe(before.pickupsRemaining);
+        expect(after.pickupsInitial).toBe(before.pickupsInitial);
+      }
+    });
+
+    it('round-trips recentlyDepletedFood — entries preserved field-by-field', () => {
+      const w = createScenario(42);
+      // Manually populate recentlyDepletedFood with a few synthetic entries
+      // so the round-trip exercises the new array path.
+      w.recentlyDepletedFood.push(
+        { tick: 100, tileX: 5, tileY: 7 },
+        { tick: 200, tileX: 12, tileY: 18 },
+      );
+      const s = serializeWorldState(w);
+      const w2 = deserializeWorldState(s);
+      expect(w2.recentlyDepletedFood.length).toBe(2);
+      expect(w2.recentlyDepletedFood[0]).toEqual({ tick: 100, tileX: 5, tileY: 7 });
+      expect(w2.recentlyDepletedFood[1]).toEqual({ tick: 200, tileX: 12, tileY: 18 });
+    });
+
+    it('validateFoodPile rejects pickupsRemaining=0 (live piles always have a charge)', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w) as unknown as { foodPiles: { pickupsRemaining: number }[] };
+      s.foodPiles[0]!.pickupsRemaining = 0; // tampered value
+      expect(() => deserializeWorldState(s as never)).toThrow(/pickupsRemaining/);
+    });
+
+    it('validateFoodPile rejects pickupsRemaining > pickupsInitial', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w) as unknown as {
+        foodPiles: { pickupsRemaining: number; pickupsInitial: number }[];
+      };
+      s.foodPiles[0]!.pickupsRemaining = s.foodPiles[0]!.pickupsInitial + 1;
+      expect(() => deserializeWorldState(s as never)).toThrow(/pickupsRemaining/);
+    });
+
+    it('validateFoodPile rejects pickupsInitial=0', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w) as unknown as {
+        foodPiles: { pickupsInitial: number; pickupsRemaining: number }[];
+      };
+      s.foodPiles[0]!.pickupsInitial = 0;
+      s.foodPiles[0]!.pickupsRemaining = 0;
+      expect(() => deserializeWorldState(s as never)).toThrow(/pickupsInitial/);
+    });
+
+    it('validateFoodPile rejects pickupsInitial above max constant', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w) as unknown as {
+        foodPiles: { pickupsInitial: number }[];
+      };
+      // FOOD_PILE_INITIAL_PICKUPS_MAX = 150 in constants.ts — pick one above.
+      s.foodPiles[0]!.pickupsInitial = 1000;
+      expect(() => deserializeWorldState(s as never)).toThrow(/pickupsInitial/);
+    });
+
+    it('rejects non-array recentlyDepletedFood', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w) as unknown as { recentlyDepletedFood: unknown };
+      s.recentlyDepletedFood = 'not an array';
+      expect(() => deserializeWorldState(s as never)).toThrow(/recentlyDepletedFood/);
+    });
+
+    it('rejects recentlyDepletedFood entries with invalid tile coords', () => {
+      const w = createScenario(42);
+      w.recentlyDepletedFood.push({ tick: 1, tileX: 5, tileY: 5 });
+      const s = serializeWorldState(w) as unknown as {
+        recentlyDepletedFood: { tick: number; tileX: number; tileY: number }[];
+      };
+      s.recentlyDepletedFood[0]!.tileX = -1; // out of bounds
+      expect(() => deserializeWorldState(s as never)).toThrow(/recentlyDepletedFood\[0\]\.tileX/);
     });
   });
 });

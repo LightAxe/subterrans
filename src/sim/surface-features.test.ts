@@ -241,6 +241,8 @@ describe('surfaceFeatureAt — gameplay suppression', () => {
       foodPileId: 0,
       tileX: found!.x,
       tileY: found!.y,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
     });
     expect(surfaceFeatureAt(suppressed, found!.x, found!.y)).toBeNull();
   });

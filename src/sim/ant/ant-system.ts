@@ -60,6 +60,7 @@ import { AntTask, ForagingSubState, DiggingSubState, NursingSubState, ChamberTyp
 import {
   WORKER_CARRY_CAPACITY,
   FOOD_PICKUP_AMOUNT,
+  FOOD_PILE_PICKUP_DRAIN,
   DIG_TICKS_PER_TILE,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
@@ -83,6 +84,7 @@ import {
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { Rng } from '../rng.js';
 import { depositFoodTrail, sampleForagingDirection } from '../pheromone/pheromone-system.js';
+import { recordFoodPileDepletion } from '../food-system.js';
 import { pheromoneGridKey, phGet, type PheromoneGrid } from '../pheromone/pheromone-store.js';
 import type { DigFlowFields } from '../dig-system.js';
 import type { EntranceFlowFields } from '../entrance-flow.js';
@@ -123,48 +125,76 @@ const ALT_DY = [-1, -1, 0, 1, 1, 1, 0, -1] as const;
 const RALLY_HOLD_RADIUS_TILES = 2;
 
 // ---------------------------------------------------------------------------
-// antPickupFood — PRD §4c L1093-1104
+// antPickupFood — PRD §4c L1093-1104 + issue #112 finite pickup-charges
 //
-// Transfers min(capacity, pile.amount, FOOD_PICKUP_AMOUNT) from pile to ant.
+// Transfers min(capacity, FOOD_PICKUP_AMOUNT) from a pile to an ant when the
+// pile has at least one pickup-charge remaining. Each successful pickup also
+// drains FOOD_PILE_PICKUP_DRAIN from `pile.pickupsRemaining`.
+//
 // Returns amount transferred (0 if no transfer occurred).
+//
+// Pickup-charge model (issue #112):
+//   `pickupsRemaining` is a charge counter, NOT a fixed-point food quantity.
+//   The food the ant carries away (FOOD_PICKUP_AMOUNT) is decoupled from the
+//   pile's longevity counter — each successful pickup costs exactly
+//   FOOD_PILE_PICKUP_DRAIN charges regardless of carry amount. This keeps
+//   pile longevity as a clean balance lever independent of carry tuning.
+//
+//   Player perception note: render/draw-surface.ts buckets the visible pile
+//   size by `pickupsRemaining / pickupsInitial`. Because charge drain is
+//   decoupled from food carried, a player may see a pile shrink visually to
+//   ~25% (last bucket) and then vanish on the very next pickup despite
+//   "looking like" it still had food. This is the intended design — the
+//   visual is a charge gauge, not a quantity gauge. Document any future
+//   render change that re-couples the two so this trade-off stays explicit.
 //
 // Subtask transition rule (PRD §4c L1103):
 //   On nonzero transfer → sets ants.subTask[antId] = ForagingSubState.CarryingFood.
-//   On zero transfer (capacity-full or empty-pile) → NO transition. subTask unchanged.
+//   On zero transfer (capacity-full or pile-exhausted) → NO transition. subTask unchanged.
 //
-// pile is a plain {amount: number} object — Phase 6 headless tests use synthetic piles.
-// Phase 7 (UNDR-07) adds the FoodPile entity type and the overlap-detection step in tick().
+// pile is a structural `{ pickupsRemaining: number }` — accepts the real
+// FoodPile entity (which has more fields) and synthetic test piles. Splice
+// of depleted piles is the caller's responsibility (tickForagerActions).
 // ---------------------------------------------------------------------------
 
 /**
  * Attempt to pick up food from a pile into an ant's carry inventory.
  *
- * Transfers `min(remaining_capacity, pile.amount, FOOD_PICKUP_AMOUNT)` from pile to ant.
- * On a nonzero transfer, internally transitions the ant to ForagingSubState.CarryingFood
- * per PRD §4c L1103 (caller does NOT flip subTask separately).
+ * Transfers `min(remaining_capacity, FOOD_PICKUP_AMOUNT)` from the pile to the
+ * ant when `pile.pickupsRemaining > 0`. Decrements `pile.pickupsRemaining` by
+ * `FOOD_PILE_PICKUP_DRAIN` on every successful transfer. On a nonzero transfer,
+ * internally transitions the ant to ForagingSubState.CarryingFood per PRD §4c L1103
+ * (caller does NOT flip subTask separately).
+ *
+ * Pile depletion (`pickupsRemaining` reaching 0) is signaled to the caller by
+ * inspecting the field after the call; the caller is responsible for splicing
+ * the pile out of `world.foodPiles` and recording it in `recentlyDepletedFood`.
  *
  * @param ants   Ant components SoA.
  * @param antId  Entity ID of the forager.
- * @param pile   Food source with a mutable `amount` field.
+ * @param pile   Food source with a mutable `pickupsRemaining` field.
  * @returns      Amount transferred (0 means no pickup — no transition occurred).
  */
 export function antPickupFood(
   ants: WorldState['ants'],
   antId: number,
-  pile: { amount: number },
+  pile: { pickupsRemaining: number },
 ): number {
   const carried = ants.foodCarrying[antId]!;
   const capacity = WORKER_CARRY_CAPACITY - carried;
 
   if (capacity <= 0) return 0; // already at capacity — no pickup, no transition (PRD §4c L1097)
+  if (pile.pickupsRemaining <= 0) return 0; // pile exhausted — no pickup, no transition
 
-  const requested = capacity < FOOD_PICKUP_AMOUNT ? capacity : FOOD_PICKUP_AMOUNT;
-  const available = pile.amount < requested ? pile.amount : requested;
+  const transfer = capacity < FOOD_PICKUP_AMOUNT ? capacity : FOOD_PICKUP_AMOUNT;
 
-  if (available <= 0) return 0; // pile empty — no pickup, no transition
+  ants.foodCarrying[antId] = carried + transfer;
 
-  ants.foodCarrying[antId] = carried + available;
-  pile.amount -= available;
+  // Issue #112 — drain one pickup-charge per successful pickup. Charge counter
+  // is independent of food quantity transferred; FOOD_PILE_PICKUP_DRAIN keeps
+  // the drain rate as a tunable balance lever.
+  pile.pickupsRemaining -= FOOD_PILE_PICKUP_DRAIN;
+  if (pile.pickupsRemaining < 0) pile.pickupsRemaining = 0; // clamp (defensive)
 
   // PRD §4c L1103: transition to CarryingFood (food-trail pheromone deposit rule activates)
   ants.subTask[antId] = ForagingSubState.CarryingFood;
@@ -195,7 +225,7 @@ export function antPickupFood(
   // from the previous trip.
   clearRecentTiles(ants, antId);
 
-  return available;
+  return transfer;
 }
 
 // ---------------------------------------------------------------------------
@@ -655,12 +685,6 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
 export function tickForagerActions(world: WorldState): void {
   const ants = world.ants;
 
-  // Scratch wrapper satisfying antPickupFood's `{ amount: number }` contract.
-  // Food piles are infinite per PRD SURF-02 — antPickupFood mutates this
-  // wrapper's amount which we reset per pickup; the wrapper is discarded.
-  // Pre-allocated outside the loop (no per-ant allocation, hot-path friendly).
-  const pileScratch = { amount: 0 };
-
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1) continue;
     if (ants.task[id] !== AntTask.Foraging) continue;
@@ -684,11 +708,19 @@ export function tickForagerActions(world: WorldState): void {
       for (let p = 0; p < world.foodPiles.length; p++) {
         const pile = world.foodPiles[p]!;
         if (pile.tileX !== tileX || pile.tileY !== tileY) continue;
-        // Infinite source (SURF-02): seed wrapper with FOOD_PICKUP_AMOUNT so
-        // antPickupFood's `min(capacity, pile.amount, FOOD_PICKUP_AMOUNT)` clamp
-        // resolves to capacity-or-pickup-amount, never pile-limited.
-        pileScratch.amount = FOOD_PICKUP_AMOUNT;
-        antPickupFood(ants, id, pileScratch);     // may transition subTask to CarryingFood
+        // Issue #112 — pile is now finite. antPickupFood transfers food and
+        // drains a pickup-charge; we splice the pile + record the depletion
+        // here when its charges hit zero so the spawn step (16d) can avoid
+        // re-placing on the same neighbourhood while pheromones decay.
+        antPickupFood(ants, id, pile);    // may transition subTask to CarryingFood
+        if (pile.pickupsRemaining <= 0) {
+          recordFoodPileDepletion(world, p);
+          // Splice (not swap-pop) so the tile-key uniqueness invariant on
+          // `world.foodPiles` is preserved. The unconditional `break` below
+          // exits this inner pile-scan loop immediately, so no further index
+          // bookkeeping is needed — index management is trivial here.
+          world.foodPiles.splice(p, 1);
+        }
         break;
       }
       continue;

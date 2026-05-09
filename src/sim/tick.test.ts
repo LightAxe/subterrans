@@ -1243,7 +1243,7 @@ describe('Phase 7: MarkDigTile command processing', () => {
   // Test P7-6: MarkFoodPile sets colony.priorityFoodPileId and re-clicking the same pile clears it
   it('Test P7-6: MarkFoodPile sets colony priority on first click, clears on second (toggle off)', () => {
     const { world, colonyId } = makeWorldWithUnderground();
-    const pile: FoodPile = { foodPileId: 0, tileX: 20, tileY: 30 };
+    const pile: FoodPile = { foodPileId: 0, tileX: 20, tileY: 30 , pickupsRemaining: 50, pickupsInitial: 50};
     world.foodPiles.push(pile);
     const colony = world.colonies[colonyId]!;
     expect(colony.priorityFoodPileId).toBeNull();
@@ -1258,8 +1258,8 @@ describe('Phase 7: MarkDigTile command processing', () => {
   // Phase 9: selecting a different pile is an EXCLUSIVE redirect, not an additive mark.
   it('MarkFoodPile redirect: clicking a second pile replaces the first (exclusive per colony)', () => {
     const { world, colonyId } = makeWorldWithUnderground();
-    world.foodPiles.push({ foodPileId: 0, tileX: 20, tileY: 30 });
-    world.foodPiles.push({ foodPileId: 1, tileX: 40, tileY: 50 });
+    world.foodPiles.push({ foodPileId: 0, tileX: 20, tileY: 30 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({ foodPileId: 1, tileX: 40, tileY: 50 , pickupsRemaining: 50, pickupsInitial: 50});
     const colony = world.colonies[colonyId]!;
     tick(world, [{ type: 'MarkFoodPile', colonyId, tileX: 20, tileY: 30, issuedAtTick: 0 }]);
     expect(colony.priorityFoodPileId).toBe(0);
@@ -1277,7 +1277,7 @@ describe('Phase 7: MarkDigTile command processing', () => {
       colonyId: colonyB,
       priorityFoodPileId: null,
     };
-    world.foodPiles.push({ foodPileId: 7, tileX: 10, tileY: 10 });
+    world.foodPiles.push({ foodPileId: 7, tileX: 10, tileY: 10 , pickupsRemaining: 50, pickupsInitial: 50});
     tick(world, [{ type: 'MarkFoodPile', colonyId: colonyA, tileX: 10, tileY: 10, issuedAtTick: 0 }]);
     expect(world.colonies[colonyA]!.priorityFoodPileId).toBe(7);
     expect(world.colonies[colonyB]!.priorityFoodPileId).toBeNull();
@@ -2251,7 +2251,7 @@ describe('Regression: reviewer P1 fixes', () => {
 
   it('DesignateEntrance rejected: food pile at surface tile', () => {
     const { world, colonyId } = makeWorldWithUnderground();
-    world.foodPiles.push({ foodPileId: 0, tileX: 50, tileY: 0 });
+    world.foodPiles.push({ foodPileId: 0, tileX: 50, tileY: 0 , pickupsRemaining: 50, pickupsInitial: 50});
     const cmd: SimCommand = {
       type: 'DesignateEntrance', colonyId,
       surfaceTileX: 50, surfaceTileY: 0, issuedAtTick: 0,

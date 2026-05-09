@@ -249,8 +249,8 @@ describe('drawSurfaceEntities', () => {
     playerColony.digFlowFieldDirty = false;
     playerColony.priorityFoodPileId = 1;
     world.colonies[PLAYER_COLONY_ID] = playerColony;
-    world.foodPiles.push({ foodPileId: 1, tileX: 5, tileY: 5 });
-    world.foodPiles.push({ foodPileId: 2, tileX: 6, tileY: 5 });
+    world.foodPiles.push({ foodPileId: 1, tileX: 5, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({ foodPileId: 2, tileX: 6, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50});
     const cam = makeCamera(5, 5, 20, 20);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     const circles = gfx.callsOf('fillCircle');
@@ -264,8 +264,8 @@ describe('drawSurfaceEntities', () => {
     playerColony.digFlowFieldDirty = false;
     playerColony.priorityFoodPileId = 1;
     world.colonies[PLAYER_COLONY_ID] = playerColony;
-    world.foodPiles.push({ foodPileId: 1, tileX: 5, tileY: 5 });
-    world.foodPiles.push({ foodPileId: 2, tileX: 6, tileY: 5 });
+    world.foodPiles.push({ foodPileId: 1, tileX: 5, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({ foodPileId: 2, tileX: 6, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50});
     const cam = makeCamera(5, 5, 20, 20);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     const markedStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_FOOD_PILE_MARKED);
@@ -288,7 +288,7 @@ describe('drawSurfaceEntities', () => {
     enemyColony.priorityFoodPileId = 1;
     world.colonies[PLAYER_COLONY_ID] = playerColony;
     world.colonies[enemyColonyId] = enemyColony;
-    world.foodPiles.push({ foodPileId: 1, tileX: 5, tileY: 5 });
+    world.foodPiles.push({ foodPileId: 1, tileX: 5, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50});
     const cam = makeCamera(5, 5, 20, 20);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     const markedStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_FOOD_PILE_MARKED);
@@ -965,7 +965,7 @@ describe('drawSurface', () => {
     const gfx = new MockGfx();
     const sprites = new MockAntSprites();
     const world = createWorldState(1);
-    world.foodPiles.push({ foodPileId: 1, tileX: 5, tileY: 5 });
+    world.foodPiles.push({ foodPileId: 1, tileX: 5, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50});
     const cam = makeCamera(5, 5, 10, 10);
     drawSurface(gfx, sprites, world, world, 0, cam);
     expect(gfx.callsOf('fillRect').length).toBeGreaterThan(0);

@@ -309,7 +309,7 @@ describe('buildAntTrace — movement source inference', () => {
   it('SearchingFood + food pile within scent radius → "scent"', () => {
     const { world, antId } = makeAnt(ForagingSubState.SearchingFood);
     // Pile 5 tiles away (well within DEBUG_SCENT_RADIUS = 15).
-    world.foodPiles.push({ foodPileId: 1, tileX: 25, tileY: 20 });
+    world.foodPiles.push({ foodPileId: 1, tileX: 25, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50});
     expect(buildAntTrace(world, antId).movementSource).toBe('scent');
   });
 
@@ -329,7 +329,7 @@ describe('buildAntTrace — movement source inference', () => {
     const { world, antId } = makeAnt(ForagingSubState.SearchingFood);
     world.ants.targetPosX[antId] = 30 << FP_SHIFT;
     world.ants.targetPosY[antId] = 30 << FP_SHIFT;
-    world.foodPiles.push({ foodPileId: 1, tileX: 25, tileY: 20 });
+    world.foodPiles.push({ foodPileId: 1, tileX: 25, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50});
     const key = pheromoneGridKey(COLONY_ID, PheromoneType.FoodTrail, 'surface');
     phSet(world.pheromoneGrids[key]!, 21, 20, FOOD_TRAIL_DEPOSIT);
     expect(buildAntTrace(world, antId).movementSource).toBe('priority');
@@ -337,7 +337,7 @@ describe('buildAntTrace — movement source inference', () => {
 
   it('scent overrides pheromone (decision order preserved)', () => {
     const { world, antId } = makeAnt(ForagingSubState.SearchingFood);
-    world.foodPiles.push({ foodPileId: 1, tileX: 25, tileY: 20 });
+    world.foodPiles.push({ foodPileId: 1, tileX: 25, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50});
     const key = pheromoneGridKey(COLONY_ID, PheromoneType.FoodTrail, 'surface');
     phSet(world.pheromoneGrids[key]!, 21, 20, FOOD_TRAIL_DEPOSIT);
     expect(buildAntTrace(world, antId).movementSource).toBe('scent');
@@ -349,7 +349,7 @@ describe('buildAntTrace — movement source inference', () => {
     const { world, antId } = makeAnt(ForagingSubState.SearchingFood, Zone.Underground);
     // Populate the surface grid with a nearby pile + pheromone — if the
     // classifier incorrectly ran the surface cascade, one of these would win.
-    world.foodPiles.push({ foodPileId: 1, tileX: 25, tileY: 20 });
+    world.foodPiles.push({ foodPileId: 1, tileX: 25, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50});
     const key = pheromoneGridKey(COLONY_ID, PheromoneType.FoodTrail, 'surface');
     phSet(world.pheromoneGrids[key]!, 21, 20, FOOD_TRAIL_DEPOSIT);
     expect(buildAntTrace(world, antId).movementSource).toBe('underground-exit');

@@ -26,10 +26,13 @@ import type { SurfaceGrid, UndergroundGrid } from '../sim/terrain.js';
 import { createSurfaceGrid, createUndergroundGrid } from '../sim/terrain.js';
 import type { PheromoneGrid } from '../sim/pheromone/pheromone-store.js';
 import { createPheromoneGrid } from '../sim/pheromone/pheromone-store.js';
-import type { FoodPile, FoodPileId } from '../sim/food.js';
+import type { DepletionRecord, FoodPile, FoodPileId } from '../sim/food.js';
 import {
   MAX_ENTITIES,
   FOOD_PILE_COUNT,
+  FOOD_PILE_INITIAL_PICKUPS_MIN,
+  FOOD_PILE_INITIAL_PICKUPS_MAX,
+  FOOD_PILE_SOFT_CEILING,
   FOOD_CHAMBER_CAPACITY,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
@@ -54,8 +57,15 @@ import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 //        slices, recomputed each reconcile). Loading those into v2 would
 //        either double-count (slices + pool) or silently truncate to BASE on
 //        the next reconcile. Reject them — fresh scenarios are cheap in beta.
-export const SAVE_FORMAT_VERSION = 2 as const;
-export const SAVE_KEY = 'subterrans:save:v2' as const;
+//   v3 — Issue #112: finite food piles + runtime spawn. FoodPile gains
+//        pickupsRemaining + pickupsInitial (charge counter, separate from
+//        the fixed-point food quantity transferred per pickup); WorldState
+//        gains recentlyDepletedFood (anti-teleport guard for the spawner).
+//        Pre-v3 saves lack both; loading them would route every pickup
+//        through `pile.pickupsRemaining = undefined`, which decrements to
+//        NaN and silently breaks the depletion semantic. Reject them.
+export const SAVE_FORMAT_VERSION = 3 as const;
+export const SAVE_KEY = 'subterrans:save:v3' as const;
 export const AUTOSAVE_INTERVAL_MS = 30_000 as const;
 
 export class SaveVersionMismatchError extends Error {
@@ -239,7 +249,7 @@ function validatePendingChamber(pc: unknown, label: string): void {
   }
 }
 
-/** Issue #109 — foodPile validator. */
+/** Issue #109 + #112 — foodPile validator. */
 function validateFoodPile(p: unknown, label: string): void {
   if (p === null || typeof p !== 'object') {
     throw new Error(`Invalid ${label}: not an object`);
@@ -256,6 +266,51 @@ function validateFoodPile(p: unknown, label: string): void {
   }
   if (!isTileCoord(fp.tileY, SURFACE_GRID_HEIGHT)) {
     throw new Error(`Invalid ${label}.tileY: ${String(fp.tileY)}`);
+  }
+  // Issue #112 — pickup-charge fields.
+  // pickupsInitial: integer in [FOOD_PILE_INITIAL_PICKUPS_MIN, MAX]. The
+  // runtime spawner and `pickupsForSeed` both produce values in that closed
+  // range, so any save with `pickupsInitial < MIN` represents a state the
+  // sim cannot generate (either tampered, or a back-port from a build with
+  // looser constants — neither survives the contract).
+  if (typeof fp.pickupsInitial !== 'number'
+      || !Number.isInteger(fp.pickupsInitial)
+      || fp.pickupsInitial < FOOD_PILE_INITIAL_PICKUPS_MIN
+      || fp.pickupsInitial > FOOD_PILE_INITIAL_PICKUPS_MAX) {
+    throw new Error(`Invalid ${label}.pickupsInitial: ${String(fp.pickupsInitial)}`);
+  }
+  // pickupsRemaining: integer in [1, pickupsInitial]. Live piles always have
+  // at least one charge — the runtime splices at zero so saves should never
+  // observe a 0 here. Above-initial means tampering or accidental re-creation.
+  if (typeof fp.pickupsRemaining !== 'number'
+      || !Number.isInteger(fp.pickupsRemaining)
+      || fp.pickupsRemaining <= 0
+      || fp.pickupsRemaining > fp.pickupsInitial) {
+    throw new Error(`Invalid ${label}.pickupsRemaining: ${String(fp.pickupsRemaining)}`);
+  }
+}
+
+/**
+ * Issue #112 — recentlyDepletedFood entry validator. Validates shape and
+ * non-negativity; an additional `tick > world.tick` guard lives in
+ * `tickFoodPileSpawn` (food-system.ts) because this validator runs before
+ * deserialize hands `world.tick` over. Without that runtime guard a tampered
+ * save with `tick = 4e9` would permanently sterilise its tile region against
+ * respawn (the entry would never match the prune threshold).
+ */
+function validateDepletionRecord(d: unknown, label: string): void {
+  if (d === null || typeof d !== 'object') {
+    throw new Error(`Invalid ${label}: not an object`);
+  }
+  const r = d as Partial<DepletionRecord>;
+  if (typeof r.tick !== 'number' || !Number.isInteger(r.tick) || r.tick < 0) {
+    throw new Error(`Invalid ${label}.tick: ${String(r.tick)}`);
+  }
+  if (!isTileCoord(r.tileX, SURFACE_GRID_WIDTH)) {
+    throw new Error(`Invalid ${label}.tileX: ${String(r.tileX)}`);
+  }
+  if (!isTileCoord(r.tileY, SURFACE_GRID_HEIGHT)) {
+    throw new Error(`Invalid ${label}.tileY: ${String(r.tileY)}`);
   }
 }
 
@@ -391,6 +446,13 @@ export interface SerializedWorldState {
   surface: SerializedGrid;
   undergroundGrids: Record<string, SerializedGrid>; // keys are ColonyId.toString()
   foodPiles: FoodPile[];
+  /**
+   * Issue #112 — Optional for backward-compat at the type level only; saves
+   * written by v3 always include the field. parseSaveFile rejects v2 saves
+   * outright (`SaveVersionMismatchError`), so deserialize only ever sees v3
+   * snapshots whose `recentlyDepletedFood` is present and validated.
+   */
+  recentlyDepletedFood?: DepletionRecord[];
   pendingChambers: Record<string, PendingChamber>;
 }
 
@@ -527,6 +589,7 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
     surface: serializeSurfaceGrid(world.surface),
     undergroundGrids: undergroundOut,
     foodPiles: world.foodPiles.map((p) => ({ ...p })),
+    recentlyDepletedFood: world.recentlyDepletedFood.map((r) => ({ ...r })),
     pendingChambers: pendingOut,
   };
 }
@@ -984,6 +1047,27 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // Issue #99 — surface grid shape (single grid, not per-colony).
   validateGridShape(s.surface, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT, 'surface');
 
+  // Issue #112 — recentlyDepletedFood validation. v3 snapshots always have it
+  // (serializer always emits it; v2 saves are rejected by parseSaveFile so
+  // they never reach here). Length-cap matches the spawn step's append-time
+  // cap (FOOD_PILE_SOFT_CEILING) so this is a tampering check.
+  const rawRecentlyDepleted: unknown = s.recentlyDepletedFood;
+  if (!Array.isArray(rawRecentlyDepleted)) {
+    throw new Error('Invalid recentlyDepletedFood: not an array');
+  }
+  // Length cap matches the append-time cap in `recordFoodPileDepletion`
+  // (food-system.ts): saves with exactly FOOD_PILE_SOFT_CEILING entries are
+  // valid; > that is tampering.
+  if (rawRecentlyDepleted.length > FOOD_PILE_SOFT_CEILING) {
+    throw new Error(
+      `recentlyDepletedFood length ${rawRecentlyDepleted.length} exceeds cap ${FOOD_PILE_SOFT_CEILING}`,
+    );
+  }
+  for (let i = 0; i < rawRecentlyDepleted.length; i++) {
+    validateDepletionRecord(rawRecentlyDepleted[i], `recentlyDepletedFood[${i}]`);
+  }
+  const validatedRecentlyDepleted = rawRecentlyDepleted as DepletionRecord[];
+
   return {
     tick: rawTick,
     rngState: rawRng,
@@ -1040,6 +1124,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     surface: deserializeSurfaceGrid(s.surface),
     undergroundGrids,
     foodPiles: s.foodPiles.map((p) => ({ ...p })),
+    recentlyDepletedFood: validatedRecentlyDepleted.map((r) => ({ ...r })),
     pendingChambers,
   };
 }
@@ -1107,7 +1192,10 @@ function migrateInputLogCommand(cmd: SimCommand): SimCommand {
   return { ...cmd, ratio: migrated };
 }
 
-function parseSaveFile(raw: string): SaveFile {
+// Exported for issue #112 v2-rejection test — verifies that parseSaveFile
+// throws SaveVersionMismatchError on pre-v3 envelopes. loadSave swallows the
+// throw so the contract can't be observed via the public surface.
+export function parseSaveFile(raw: string): SaveFile {
   const parsed = JSON.parse(raw) as { version?: unknown; seed?: unknown };
   if (typeof parsed.version !== 'number') {
     throw new SaveVersionMismatchError(SAVE_FORMAT_VERSION, NaN);
@@ -1145,15 +1233,18 @@ function parseSaveFile(raw: string): SaveFile {
 }
 
 /**
- * Opportunistically purge the v1 key so existing players don't carry the
- * rejected pre-#15 envelope around in localStorage indefinitely. v2 fully
- * supersedes v1; pre-bump saves are intentionally rejected (parseSaveFile
- * throws SaveVersionMismatchError), so there is no recovery path that needs
- * the old data. Called from both hasSave and loadSave so the purge fires on
- * the first save-touching operation, regardless of which one runs first.
+ * Opportunistically purge superseded keys so existing players don't carry
+ * rejected envelopes in localStorage indefinitely. Each version bump fully
+ * supersedes the prior keys; pre-bump saves are intentionally rejected
+ * (parseSaveFile throws SaveVersionMismatchError), so there is no recovery
+ * path that needs the old data. Called from both hasSave and loadSave so the
+ * purge fires on the first save-touching operation.
+ *
+ * Issue #112 — added v2 to the purge list when SAVE_KEY moved to v3.
  */
 function purgeLegacySaves(): void {
   try { localStorage.removeItem('subterrans:save:v1'); } catch { /* quota / private mode — silent: best-effort cleanup, no UX signal */ }
+  try { localStorage.removeItem('subterrans:save:v2'); } catch { /* quota / private mode — silent: best-effort cleanup, no UX signal */ }
 }
 
 export function hasSave(): boolean {

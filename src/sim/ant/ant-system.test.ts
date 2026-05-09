@@ -143,9 +143,9 @@ function setupSurfaceGrid(world: WorldState, colonyId = COLONY_ID) {
 // ---------------------------------------------------------------------------
 
 describe('antPickupFood', () => {
-  it('1. normal pickup — transfers FOOD_PICKUP_AMOUNT, transitions to CarryingFood', () => {
+  it('1. normal pickup — transfers FOOD_PICKUP_AMOUNT, drains one charge, transitions to CarryingFood', () => {
     const { world, antId } = setupForagerWorld();
-    const pile = { amount: 1000 };
+    const pile = { pickupsRemaining: 50 };
     world.ants.foodCarrying[antId] = 0;
     world.ants.subTask[antId] = ForagingSubState.SearchingFood;
 
@@ -153,36 +153,41 @@ describe('antPickupFood', () => {
 
     expect(transferred).toBe(FOOD_PICKUP_AMOUNT); // 512
     expect(world.ants.foodCarrying[antId]).toBe(FOOD_PICKUP_AMOUNT);
-    expect(pile.amount).toBe(1000 - FOOD_PICKUP_AMOUNT); // 488
+    // Issue #112 — pickup-charge counter drains by FOOD_PILE_PICKUP_DRAIN (=1)
+    // independently of the food quantity transferred.
+    expect(pile.pickupsRemaining).toBe(49);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood);
   });
 
-  it('2. capacity-limited — transfers remaining capacity, not full FOOD_PICKUP_AMOUNT', () => {
+  it('2. capacity-limited — transfers remaining capacity, still drains one charge', () => {
     const { world, antId } = setupForagerWorld();
     world.ants.foodCarrying[antId] = 600; // 424 remaining capacity (WORKER_CARRY_CAPACITY=1024)
     world.ants.subTask[antId] = ForagingSubState.SearchingFood;
-    const pile = { amount: 1000 };
+    const pile = { pickupsRemaining: 50 };
 
     const transferred = antPickupFood(world.ants, antId, pile);
 
     const expectedTransfer = WORKER_CARRY_CAPACITY - 600; // 424
     expect(transferred).toBe(expectedTransfer);
     expect(world.ants.foodCarrying[antId]).toBe(WORKER_CARRY_CAPACITY); // full
-    expect(pile.amount).toBe(1000 - expectedTransfer);
+    expect(pile.pickupsRemaining).toBe(49); // one charge drained
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood);
   });
 
-  it('3. pile-limited — transfers only what pile has when less than FOOD_PICKUP_AMOUNT', () => {
+  it('3. final-charge pickup — drains pile to zero, full FOOD_PICKUP_AMOUNT still transferred', () => {
     const { world, antId } = setupForagerWorld();
     world.ants.foodCarrying[antId] = 0;
     world.ants.subTask[antId] = ForagingSubState.SearchingFood;
-    const pile = { amount: 100 }; // less than FOOD_PICKUP_AMOUNT (512)
+    const pile = { pickupsRemaining: 1 }; // last charge
 
     const transferred = antPickupFood(world.ants, antId, pile);
 
-    expect(transferred).toBe(100);
-    expect(world.ants.foodCarrying[antId]).toBe(100);
-    expect(pile.amount).toBe(0);
+    // Issue #112: charge counter is not a quantity — full FOOD_PICKUP_AMOUNT
+    // is transferred even on the final charge. Pile drains to 0; caller is
+    // responsible for splicing it.
+    expect(transferred).toBe(FOOD_PICKUP_AMOUNT);
+    expect(world.ants.foodCarrying[antId]).toBe(FOOD_PICKUP_AMOUNT);
+    expect(pile.pickupsRemaining).toBe(0);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood);
   });
 
@@ -190,28 +195,28 @@ describe('antPickupFood', () => {
     const { world, antId } = setupForagerWorld();
     world.ants.foodCarrying[antId] = WORKER_CARRY_CAPACITY; // already full
     world.ants.subTask[antId] = ForagingSubState.SearchingFood;
-    const pile = { amount: 1000 };
+    const pile = { pickupsRemaining: 50 };
 
     const transferred = antPickupFood(world.ants, antId, pile);
 
     expect(transferred).toBe(0);
     expect(world.ants.foodCarrying[antId]).toBe(WORKER_CARRY_CAPACITY); // unchanged
-    expect(pile.amount).toBe(1000); // unchanged
+    expect(pile.pickupsRemaining).toBe(50); // no drain on zero-transfer
     // Critical: no transition — subTask must NOT be flipped on zero transfer
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
   });
 
-  it('3b. empty-pile early-return — NO subTask transition (zero-transfer regression guard)', () => {
+  it('3b. exhausted-pile early-return — NO subTask transition, NO charge drain', () => {
     const { world, antId } = setupForagerWorld();
     world.ants.foodCarrying[antId] = 0;
     world.ants.subTask[antId] = ForagingSubState.SearchingFood;
-    const pile = { amount: 0 }; // empty pile
+    const pile = { pickupsRemaining: 0 }; // already exhausted
 
     const transferred = antPickupFood(world.ants, antId, pile);
 
     expect(transferred).toBe(0);
     expect(world.ants.foodCarrying[antId]).toBe(0);
-    expect(pile.amount).toBe(0);
+    expect(pile.pickupsRemaining).toBe(0); // no underflow on exhausted pile
     // Critical: subTask must NOT flip on zero-transfer
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
   });
@@ -577,14 +582,15 @@ describe('CLNY-06 forage cycle — Phase 6 SC 6 integration', () => {
     const { grid } = setupSurfaceGrid(world);
 
     // Synthetic food pile (Phase 6 headless — no FoodPile entity needed)
-    const pile = { amount: 1000 };
+    const pile = { pickupsRemaining: 50 };
 
     // --- Tick 0: pickup ---
     const transferred = antPickupFood(world.ants, antId, pile);
 
     expect(transferred).toBe(FOOD_PICKUP_AMOUNT); // 512
     expect(world.ants.foodCarrying[antId]).toBe(FOOD_PICKUP_AMOUNT);
-    expect(pile.amount).toBe(1000 - FOOD_PICKUP_AMOUNT);
+    // Issue #112 — pickup-charge counter drains by 1 per pickup
+    expect(pile.pickupsRemaining).toBe(49);
     // antPickupFood owns the subTask transition per PRD §4c L1103
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood);
 
@@ -1070,7 +1076,7 @@ describe('tickDigExecution — state machine transitions', () => {
 
 describe('routeForagerPriority', () => {
   function makePile(id: number, tileX: number, tileY: number): FoodPile {
-    return { foodPileId: id, tileX, tileY };
+    return { foodPileId: id, tileX, tileY, pickupsRemaining: 50, pickupsInitial: 50 };
   }
 
   it('4. colony has no priorityFoodPileId → routeForagerPriority sets targetPosX/Y = -1', () => {
@@ -2105,13 +2111,13 @@ describe('updateFightAntTargets', () => {
 // ---------------------------------------------------------------------------
 
 describe('tickForagerActions', () => {
-  it('surface SearchingFood ant on a food pile tile → picks up and transitions to CarryingFood', () => {
+  it('surface SearchingFood ant on a food pile tile → picks up, drains a charge, transitions to CarryingFood', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
     colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
 
-    world.foodPiles.push({ foodPileId: 1, tileX: 12, tileY: 8 });
+    world.foodPiles.push({ foodPileId: 1, tileX: 12, tileY: 8 , pickupsRemaining: 50, pickupsInitial: 50});
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -2128,6 +2134,41 @@ describe('tickForagerActions', () => {
 
     expect(world.ants.foodCarrying[antId]).toBe(FOOD_PICKUP_AMOUNT);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood);
+    // Issue #112 — pile drained one charge.
+    expect(world.foodPiles[0]!.pickupsRemaining).toBe(49);
+  });
+
+  it('issue #112 — final-charge pickup splices pile out and records depletion', () => {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    const colony = createColonyRecord(COLONY_ID, 0);
+    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.priorityFoodPileId = 1; // mark this pile as priority
+    world.colonies[COLONY_ID] = colony;
+
+    world.foodPiles.push({ foodPileId: 1, tileX: 12, tileY: 8, pickupsRemaining: 1, pickupsInitial: 1 });
+
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId: COLONY_ID,
+      posX: 12 << FP_SHIFT,
+      posY: 8 << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
+    });
+    world.ants.zone[antId] = Zone.Surface;
+    world.ants.foodCarrying[antId] = 0;
+
+    tickForagerActions(world);
+
+    // Ant carried away one full transfer.
+    expect(world.ants.foodCarrying[antId]).toBe(FOOD_PICKUP_AMOUNT);
+    // Pile spliced out of the array.
+    expect(world.foodPiles.length).toBe(0);
+    // Recorded in recentlyDepletedFood with the right tile.
+    expect(world.recentlyDepletedFood.length).toBe(1);
+    expect(world.recentlyDepletedFood[0]).toMatchObject({ tileX: 12, tileY: 8 });
+    // Priority pointer cleared.
+    expect(colony.priorityFoodPileId).toBeNull();
   });
 
   it('surface SearchingFood ant NOT on any food pile tile → no pickup', () => {
@@ -2136,7 +2177,7 @@ describe('tickForagerActions', () => {
     colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
 
-    world.foodPiles.push({ foodPileId: 1, tileX: 12, tileY: 8 });
+    world.foodPiles.push({ foodPileId: 1, tileX: 12, tileY: 8 , pickupsRemaining: 50, pickupsInitial: 50});
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -2785,7 +2826,7 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
     const base = SEARCH_LEASH_RADII[0]!;
     const { world, colony, antId } = baseSetup(base + 2, 0);
     // Mark a priority pile; pile exists in foodPiles so colonyHasPriorityPile resolves true.
-    const pile = { foodPileId: 1, tileX: base + 20, tileY: 0 } as FoodPile;
+    const pile = { foodPileId: 1, tileX: base + 20, tileY: 0 , pickupsRemaining: 50, pickupsInitial: 50} as FoodPile;
     world.foodPiles.push(pile);
     colony.priorityFoodPileId = pile.foodPileId;
     tickExcursionBoundary(world);
@@ -2796,7 +2837,7 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
     const base = SEARCH_LEASH_RADII[0]!;
     const { world, antId } = baseSetup(base + 2, 0);
     // Pile within FOOD_SCENT_RADIUS (=15) of the ant — scent lookup returns non-null.
-    world.foodPiles.push({ foodPileId: 1, tileX: base + 5, tileY: 0 });
+    world.foodPiles.push({ foodPileId: 1, tileX: base + 5, tileY: 0 , pickupsRemaining: 50, pickupsInitial: 50});
     tickExcursionBoundary(world);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
   });
@@ -2827,7 +2868,7 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
     // hysteresis threshold (25 - 5 = 20).
     const { world, colony, antId } = baseSetup(5, 0);
     world.ants.subTask[antId] = ForagingSubState.ReturningToNest;
-    const pile = { foodPileId: 1, tileX: base + 20, tileY: 0 } as FoodPile;
+    const pile = { foodPileId: 1, tileX: base + 20, tileY: 0 , pickupsRemaining: 50, pickupsInitial: 50} as FoodPile;
     world.foodPiles.push(pile);
     colony.priorityFoodPileId = pile.foodPileId;
     tickExcursionBoundary(world);
@@ -2840,7 +2881,7 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
   it('ReturningToNest + nearby scent pile → flips back to SearchingFood', () => {
     const { world, antId } = baseSetup(10, 10);
     world.ants.subTask[antId] = ForagingSubState.ReturningToNest;
-    world.foodPiles.push({ foodPileId: 1, tileX: 12, tileY: 10 });
+    world.foodPiles.push({ foodPileId: 1, tileX: 12, tileY: 10 , pickupsRemaining: 50, pickupsInitial: 50});
     tickExcursionBoundary(world);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
   });
@@ -2963,7 +3004,7 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
     const base = SEARCH_LEASH_RADII[0]!;
     const { world, colony, antId } = baseSetup(base + 2, 0);
     world.ants.subTask[antId] = ForagingSubState.ReturningToNest;
-    const pile = { foodPileId: 1, tileX: base + 20, tileY: 0 } as FoodPile;
+    const pile = { foodPileId: 1, tileX: base + 20, tileY: 0 , pickupsRemaining: 50, pickupsInitial: 50} as FoodPile;
     world.foodPiles.push(pile);
     colony.priorityFoodPileId = pile.foodPileId;
     tickExcursionBoundary(world);
@@ -3339,7 +3380,7 @@ describe('tickSearchLeash (09 digger-reassignment memo)', () => {
   it('antPickupFood resets searchWave to 0 on a successful pickup', () => {
     const { world, antId } = setupLeashWorld(10, 0);
     world.ants.searchWave[antId] = SEARCH_LEASH_MAX_WAVE;
-    const pile = { amount: FOOD_PICKUP_AMOUNT };
+    const pile = { pickupsRemaining: 50 };
     const transferred = antPickupFood(world.ants, antId, pile);
     expect(transferred).toBeGreaterThan(0);
     expect(world.ants.searchWave[antId]).toBe(0);
@@ -3349,7 +3390,7 @@ describe('tickSearchLeash (09 digger-reassignment memo)', () => {
     const { world, antId } = setupLeashWorld(10, 0);
     world.ants.searchWave[antId] = 2;
     // Empty pile → zero transfer → no CarryingFood transition and no wave reset.
-    const transferred = antPickupFood(world.ants, antId, { amount: 0 });
+    const transferred = antPickupFood(world.ants, antId, { pickupsRemaining: 0 });
     expect(transferred).toBe(0);
     expect(world.ants.searchWave[antId]).toBe(2);
   });
@@ -6487,7 +6528,7 @@ describe('SearchingFood pause cadence (issue #35)', () => {
     world.ants.searchPauseTicks[antId] = 8;
     world.ants.foodCarrying[antId] = 0;
     // Synthetic pickup — antPickupFood should clear the pause counter.
-    antPickupFood(world.ants, antId, { amount: 100 });
+    antPickupFood(world.ants, antId, { pickupsRemaining: 50 });
     expect(world.ants.searchPauseTicks[antId]).toBe(0);
   });
 
@@ -6817,7 +6858,7 @@ describe('issue #42 — surface SearchingFood no-revisit rule (v6)', () => {
 
     // Trigger pickup directly with a synthetic pile object — antPickupFood
     // is the state-mutation API that flips subTask and clears search state.
-    antPickupFood(world.ants, antId, { amount: 256 });
+    antPickupFood(world.ants, antId, { pickupsRemaining: 50 });
 
     // Every slot back to the SENTINEL value (-1).
     for (let s = 0; s < RECENT_TILES_LEN; s++) {

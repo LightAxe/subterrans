@@ -201,7 +201,7 @@ const stubColonies: WorldState['colonies'] = {
 };
 
 const stubFoodPiles: WorldState['foodPiles'] = [
-  { foodPileId: 1, tileX: 20, tileY: 30 } as WorldState['foodPiles'][0],
+  { foodPileId: 1, tileX: 20, tileY: 30 , pickupsRemaining: 50, pickupsInitial: 50} as WorldState['foodPiles'][0],
 ];
 
 describe('drawMinimap smoke test', () => {
