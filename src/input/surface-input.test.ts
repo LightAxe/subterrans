@@ -147,17 +147,17 @@ describe('findFoodPileAt', () => {
   it('returns the pile at the exact tile coordinate', () => {
     const world = makeWorld({
       foodPiles: [
-        { foodPileId: 1, tileX: 10, tileY: 20 },
-        { foodPileId: 2, tileX: 30, tileY: 40 },
-        { foodPileId: 3, tileX: 50, tileY: 60 },
+        { foodPileId: 1, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50},
+        { foodPileId: 2, tileX: 30, tileY: 40 , pickupsRemaining: 50, pickupsInitial: 50},
+        { foodPileId: 3, tileX: 50, tileY: 60 , pickupsRemaining: 50, pickupsInitial: 50},
       ],
     });
-    expect(findFoodPileAt(world, 30, 40)).toEqual({ foodPileId: 2, tileX: 30, tileY: 40 });
+    expect(findFoodPileAt(world, 30, 40)).toEqual({ foodPileId: 2, tileX: 30, tileY: 40 , pickupsRemaining: 50, pickupsInitial: 50});
   });
 
   it('returns null when no pile is at the given tile', () => {
     const world = makeWorld({
-      foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 20 }],
+      foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}],
     });
     expect(findFoodPileAt(world, 11, 20)).toBeNull();
   });
@@ -170,8 +170,8 @@ describe('findFoodPileAt', () => {
   it('returns first match when multiple piles share coords (edge case)', () => {
     const world = makeWorld({
       foodPiles: [
-        { foodPileId: 1, tileX: 5, tileY: 5 },
-        { foodPileId: 2, tileX: 5, tileY: 5 },
+        { foodPileId: 1, tileX: 5, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50},
+        { foodPileId: 2, tileX: 5, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50},
       ],
     });
     const result = findFoodPileAt(world, 5, 5);
@@ -187,7 +187,7 @@ describe('handleSurfaceLeftClick — food pile mark', () => {
   it('pushes MarkFoodPileCommand for a pile at the clicked tile', () => {
     const world = makeWorld({
       tick: 5,
-      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 }],
+      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
@@ -203,7 +203,7 @@ describe('handleSurfaceLeftClick — food pile mark', () => {
   });
 
   it('pushes no command when no food pile exists at the clicked tile', () => {
-    const world = makeWorld({ foodPiles: [{ foodPileId: 1, tileX: 5, tileY: 5 }] });
+    const world = makeWorld({ foodPiles: [{ foodPileId: 1, tileX: 5, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50}] });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
     const { x, y } = tileToScreen(6, 5, 64, 64);
@@ -212,7 +212,7 @@ describe('handleSurfaceLeftClick — food pile mark', () => {
   });
 
   it('is a no-op when activeView is underground', () => {
-    const world = makeWorld({ foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 20 }] });
+    const world = makeWorld({ foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}] });
     const vs = makeViewState('underground', 64, 64);
     const state = makeState();
     const { x, y } = tileToScreen(10, 20, 64, 64);
@@ -221,7 +221,7 @@ describe('handleSurfaceLeftClick — food pile mark', () => {
   });
 
   it('is a no-op when pointer is over HUD TRIANGLE zone', () => {
-    const world = makeWorld({ foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 20 }] });
+    const world = makeWorld({ foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}] });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
     // HUD.TRIANGLE zone — use a point guaranteed inside it.
@@ -233,7 +233,7 @@ describe('handleSurfaceLeftClick — food pile mark', () => {
 
   it('is a no-op while panInputState.spaceHeld is true (Space+left-drag is pan, not world action)', () => {
     const world = makeWorld({
-      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 }],
+      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
@@ -245,7 +245,7 @@ describe('handleSurfaceLeftClick — food pile mark', () => {
 
   it('is a no-op while panInputState.isPanning is true (mid-pan left-click is pan continuation)', () => {
     const world = makeWorld({
-      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 }],
+      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
@@ -289,7 +289,7 @@ describe('handleSurfaceLeftClick — ant-activity popup dismissal must not fall 
       await import('../render/ant-activity-panel-state.js');
     const world = makeWorld({
       tick: 5,
-      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 }],
+      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
@@ -358,7 +358,7 @@ describe('handleSurfaceLeftClick — ant-activity popup dismissal must not fall 
       await import('../render/ant-activity-panel-state.js');
     const world = makeWorld({
       tick: 5,
-      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 }],
+      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
@@ -439,7 +439,7 @@ describe('handleSurfaceLeftClick — ant-activity popup dismissal must not fall 
       await import('../render/ant-activity-panel-state.js');
     const world = makeWorld({
       tick: 5,
-      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 }],
+      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
@@ -509,7 +509,7 @@ describe('handleSurfaceLeftClick — entrance designation confirmation', () => {
 
   it('falls through to food-pile check when tileX does not match pending', () => {
     const world = makeWorld({
-      foodPiles: [{ foodPileId: 99, tileX: 20, tileY: 30 }],
+      foodPiles: [{ foodPileId: 99, tileX: 20, tileY: 30 , pickupsRemaining: 50, pickupsInitial: 50}],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState(15, 30); // pending entrance at (15, 30)
@@ -582,7 +582,7 @@ describe('handleSurfaceRightClick', () => {
     const world = makeWorld({
       surfaceWidth: 128,
       surfaceHeight: 128,
-      foodPiles: [{ foodPileId: 1, tileX: 40, tileY: 50 }],
+      foodPiles: [{ foodPileId: 1, tileX: 40, tileY: 50 , pickupsRemaining: 50, pickupsInitial: 50}],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
@@ -611,7 +611,7 @@ describe('handleSurfaceRightClick', () => {
     const world = makeWorld({
       surfaceWidth: 128,
       surfaceHeight: 128,
-      foodPiles: [{ foodPileId: 1, tileX: 40, tileY: 50 }],
+      foodPiles: [{ foodPileId: 1, tileX: 40, tileY: 50 , pickupsRemaining: 50, pickupsInitial: 50}],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState(10, 20); // prior valid preview
@@ -636,7 +636,7 @@ describe('isEmptySurfaceTile', () => {
   it('returns false when tile has a food pile', () => {
     const world = makeWorld({
       surfaceWidth: 128, surfaceHeight: 4,
-      foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 1 }],
+      foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 1 , pickupsRemaining: 50, pickupsInitial: 50}],
     });
     expect(isEmptySurfaceTile(world, 10, 1)).toBe(false);
   });
@@ -696,7 +696,7 @@ describe('surface-input rally-point fall-through (SURF-04)', () => {
     const world = makeWorld({
       tick: 0,
       surfaceWidth: 128, surfaceHeight: 4,
-      foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 1 }],
+      foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 1 , pickupsRemaining: 50, pickupsInitial: 50}],
     });
     const vs = makeViewState('surface', 64, 2);
     const state = makeState();

@@ -138,8 +138,15 @@ export function drawSurfaceEntities(
   // FoodPile entity (which is not per-colony) onto ColonyRecord. The HUD
   // renders the PLAYER colony's perspective only — enemy priority targets
   // stay invisible so the player can't read the enemy AI's intent.
+  //
+  // Issue #112 shrink buckets: each pile renders one of 4 sizes based on
+  // `pickupsRemaining / pickupsInitial`. Bucketing against `pickupsInitial`
+  // (per-pile starting size) ensures small ephemeral piles and large strategic
+  // anchors both visibly shrink across their lifetime — a 30-pickup pile and
+  // a 150-pickup pile both go full → ¾ → ½ → ¼ as they drain.
   const playerColony = curr.colonies[PLAYER_COLONY_ID];
   const playerPriorityPileId = playerColony ? playerColony.priorityFoodPileId : null;
+  const baseRadius = TILE_SIZE_PX / 2 - 2;
   for (const pile of curr.foodPiles) {
     const sx = (pile.tileX - left) * TILE_SIZE_PX;
     const sy = (pile.tileY - top)  * TILE_SIZE_PX;
@@ -149,7 +156,21 @@ export function drawSurfaceEntities(
     const color = isPlayerMarked ? COLOR_FOOD_PILE_MARKED : COLOR_FOOD_PILE_NORMAL;
     const cx = sx + TILE_SIZE_PX / 2;
     const cy = sy + TILE_SIZE_PX / 2;
-    const r  = TILE_SIZE_PX / 2 - 2;
+    // Shrink-bucket radius: percent-remaining buckets in [>75%, >50%, >25%, >0%].
+    // pickupsInitial > 0 by validator + scenario contract, so the divide is safe.
+    // Reads as floats are fine here — render layer is float-permitted (the sim
+    // float-ban only applies to src/sim/).
+    const pct = pile.pickupsRemaining / pile.pickupsInitial;
+    let r = baseRadius;
+    if (pct <= 0.75) r = baseRadius - 2;
+    if (pct <= 0.50) r = baseRadius - 4;
+    if (pct <= 0.25) r = baseRadius - 6;
+    // Floor at 1: with TILE_SIZE_PX = 16, baseRadius = 6, so the smallest
+    // bucket would compute to r = 0 — invisible. Snap to 1px so a not-yet-
+    // vanished pile is always visible. Once the pile drains to 0 charges,
+    // the sim splices it out of foodPiles (food-system.ts) and this loop
+    // never sees it again, so there's no "ghost 1px circle" risk.
+    if (r < 1) r = 1;
     gfx.fillStyle(color, 1);
     gfx.fillCircle(cx, cy, r);
     gfx.lineStyle(1, 0x000000, 0.6);

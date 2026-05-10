@@ -14,7 +14,7 @@ import type { PheromoneGrid } from './pheromone/pheromone-store.js';
 import { createPheromoneGrid } from './pheromone/pheromone-store.js';
 import type { SurfaceGrid, UndergroundGrid } from './terrain.js';
 import { createSurfaceGrid, createUndergroundGrid } from './terrain.js';
-import type { FoodPile } from './food.js';
+import type { DepletionRecord, FoodPile } from './food.js';
 import type { PendingChamber } from './colony/chamber.js';
 import { MAX_ENTITIES, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constants.js';
 
@@ -292,7 +292,17 @@ export interface WorldState {
   // Phase 7 additions (PRD §2e):
   surface: SurfaceGrid;                                    // shared surface terrain (SURF-01)
   undergroundGrids: Record<ColonyId, UndergroundGrid>;     // per-colony underground (UNDR-08)
-  foodPiles: FoodPile[];                                   // static food sources on surface (SURF-02)
+  foodPiles: FoodPile[];                                   // surface food sources (SURF-02 + issue #112 depletion/respawn)
+
+  /**
+   * Issue #112 — Bounded record of recently-depleted food-pile tiles, used by
+   * `tickFoodPileSpawn` as an anti-teleport guard. Each entry is `{ tick, tileX,
+   * tileY }`. Capped at FOOD_PILE_SOFT_CEILING via append-time `shift()` so
+   * autosave snapshots stay bounded between spawn passes; spawn-time prune
+   * additionally drops entries older than FOOD_PILE_RECENT_DEPLETION_TICKS.
+   */
+  recentlyDepletedFood: DepletionRecord[];
+
   pendingChambers: Record<string, PendingChamber>;         // keyed by `${colonyId}:${anchorTileX}:${anchorTileY}` (PRD §2d)
 }
 
@@ -322,6 +332,7 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
     surface: createSurfaceGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT),
     undergroundGrids: {},
     foodPiles: [],
+    recentlyDepletedFood: [],   // issue #112 — empty until first depletion
     pendingChambers: {},    // empty Record; PlaceChamberCommand creates entries
   };
 }
@@ -557,12 +568,23 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   }
 
   // --- Phase 7: foodPiles — length-adjust + field-by-field copy (reuse objects in steady state) ---
+  // Issue #112: Object.assign copies the new pickupsRemaining/pickupsInitial fields automatically.
   while (dst.foodPiles.length > src.foodPiles.length) dst.foodPiles.pop();
   for (let i = 0; i < src.foodPiles.length; i++) {
     if (i < dst.foodPiles.length) {
       Object.assign(dst.foodPiles[i]!, src.foodPiles[i]!);
     } else {
       dst.foodPiles.push(Object.assign({}, src.foodPiles[i]!));
+    }
+  }
+
+  // --- Issue #112: recentlyDepletedFood — length-adjust + field-by-field copy ---
+  while (dst.recentlyDepletedFood.length > src.recentlyDepletedFood.length) dst.recentlyDepletedFood.pop();
+  for (let i = 0; i < src.recentlyDepletedFood.length; i++) {
+    if (i < dst.recentlyDepletedFood.length) {
+      Object.assign(dst.recentlyDepletedFood[i]!, src.recentlyDepletedFood[i]!);
+    } else {
+      dst.recentlyDepletedFood.push(Object.assign({}, src.recentlyDepletedFood[i]!));
     }
   }
 

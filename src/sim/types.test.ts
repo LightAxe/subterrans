@@ -29,10 +29,10 @@ describe('WorldState', () => {
       expect(world.rngState).toBe(4294967295);
     });
 
-    it('has exactly thirteen fields (4 Phase 5 + 3 Phase 6 + 4 Phase 7 + 1 issue #27 + 1 issue #44)', () => {
+    it('has exactly fourteen fields (4 Phase 5 + 3 Phase 6 + 4 Phase 7 + 1 issue #27 + 1 issue #44 + 1 issue #112)', () => {
       const world = createWorldState(0);
       const keys = Object.keys(world);
-      expect(keys).toHaveLength(13);
+      expect(keys).toHaveLength(14);
       expect(keys).toContain('tick');
       expect(keys).toContain('rngState');
       expect(keys).toContain('nextEntityId');
@@ -45,6 +45,7 @@ describe('WorldState', () => {
       expect(keys).toContain('surface');
       expect(keys).toContain('undergroundGrids');
       expect(keys).toContain('foodPiles');
+      expect(keys).toContain('recentlyDepletedFood'); // issue #112
       expect(keys).toContain('pendingChambers');
     });
 
@@ -518,7 +519,7 @@ describe('WorldState', () => {
       });
 
       it('foodPiles: add pile to src, copy, verify dst has it', () => {
-        src.foodPiles.push({ foodPileId: 1, tileX: 10, tileY: 20 });
+        src.foodPiles.push({ foodPileId: 1, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50});
         copyWorldState(src, dst);
         expect(dst.foodPiles.length).toBe(1);
         expect(dst.foodPiles[0]!.tileX).toBe(10);
@@ -526,13 +527,54 @@ describe('WorldState', () => {
       });
 
       it('foodPiles: shrink src array, copy, verify dst shrinks', () => {
-        src.foodPiles.push({ foodPileId: 1, tileX: 1, tileY: 1 });
-        src.foodPiles.push({ foodPileId: 2, tileX: 2, tileY: 2 });
+        src.foodPiles.push({ foodPileId: 1, tileX: 1, tileY: 1 , pickupsRemaining: 50, pickupsInitial: 50});
+        src.foodPiles.push({ foodPileId: 2, tileX: 2, tileY: 2 , pickupsRemaining: 50, pickupsInitial: 50});
         copyWorldState(src, dst);
         expect(dst.foodPiles.length).toBe(2);
         src.foodPiles.pop();
         copyWorldState(src, dst);
         expect(dst.foodPiles.length).toBe(1);
+      });
+
+      it('issue #112: foodPile pickup-charge fields round-trip via copyWorldState', () => {
+        src.foodPiles.push({
+          foodPileId: 1, tileX: 5, tileY: 5,
+          pickupsRemaining: 42, pickupsInitial: 99,
+        });
+        copyWorldState(src, dst);
+        expect(dst.foodPiles[0]!.pickupsRemaining).toBe(42);
+        expect(dst.foodPiles[0]!.pickupsInitial).toBe(99);
+        // Independence — mutating src after copy must not bleed into dst.
+        src.foodPiles[0]!.pickupsRemaining = 1;
+        expect(dst.foodPiles[0]!.pickupsRemaining).toBe(42);
+      });
+
+      it('issue #112: recentlyDepletedFood: add entries to src, copy, verify dst has them', () => {
+        src.recentlyDepletedFood.push({ tick: 100, tileX: 5, tileY: 7 });
+        src.recentlyDepletedFood.push({ tick: 200, tileX: 12, tileY: 18 });
+        copyWorldState(src, dst);
+        expect(dst.recentlyDepletedFood.length).toBe(2);
+        expect(dst.recentlyDepletedFood[0]).toEqual({ tick: 100, tileX: 5, tileY: 7 });
+        expect(dst.recentlyDepletedFood[1]).toEqual({ tick: 200, tileX: 12, tileY: 18 });
+      });
+
+      it('issue #112: recentlyDepletedFood: shrink src array, copy, verify dst shrinks', () => {
+        src.recentlyDepletedFood.push({ tick: 1, tileX: 0, tileY: 0 });
+        src.recentlyDepletedFood.push({ tick: 2, tileX: 1, tileY: 1 });
+        src.recentlyDepletedFood.push({ tick: 3, tileX: 2, tileY: 2 });
+        copyWorldState(src, dst);
+        expect(dst.recentlyDepletedFood.length).toBe(3);
+        src.recentlyDepletedFood.pop();
+        copyWorldState(src, dst);
+        expect(dst.recentlyDepletedFood.length).toBe(2);
+      });
+
+      it('issue #112: recentlyDepletedFood entries are independent objects (no shared reference)', () => {
+        src.recentlyDepletedFood.push({ tick: 1, tileX: 5, tileY: 7 });
+        copyWorldState(src, dst);
+        // Mutating src's entry must not bleed into dst's.
+        src.recentlyDepletedFood[0]!.tileX = 999;
+        expect(dst.recentlyDepletedFood[0]!.tileX).toBe(5);
       });
 
       it('pendingChambers: add entry by key, copy, verify dst has it', () => {

@@ -54,6 +54,7 @@ import {
   updateFightAntTargets,
 } from './ant/ant-system.js';
 import { tickPheromoneDecay } from './pheromone/pheromone-system.js';
+import { tickFoodPileSpawn } from './food-system.js';
 import {
   computeDigFlowField,
   ensureDigFlowField,
@@ -164,6 +165,7 @@ void (undefined as unknown as PendingChamber);
  * 16.  Movement (zone-aware, extended in Phase 7 with DigFlowFields for pure direction reads)
  * 16b. tickForagerActions — forager pickup (surface) + deposit (underground) (Phase 9 playability fix)
  * 16c. tickNurseActions — nurse arrival→Feeding→Idle state machine (09 reproduction-gate memo: finite nursing)
+ * 16d. tickFoodPileSpawn — runtime food-pile respawn (issue #112: time-gated spawn after depletion)
  * 17.  detectAndResolveCombat (NEW in Phase 9 / CMBT-04)
  * 18.  checkQueenDeath — game-over detection (NEW in Phase 9 / CMBT-06/07)
  * 19.  rngState writeback + world.tick increment
@@ -1111,6 +1113,16 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   //           memo's "3 nurses / 0 foragers" lock.
   // ---------------------------------------------------------------------------
   tickNurseActions(world);
+
+  // ---------------------------------------------------------------------------
+  // Step 16d: Food-pile respawn (issue #112) — time-gated runtime spawner.
+  //           Runs after pickup/deposit/nurse actions so any depletions from
+  //           this tick are already recorded in `recentlyDepletedFood` before
+  //           the spawn step's anti-teleport guard scans it. Sits before
+  //           combat so any new pile placement and the RNG pulls it consumes
+  //           land in a deterministic order before combat's own RNG draws.
+  // ---------------------------------------------------------------------------
+  tickFoodPileSpawn(world, rng);
 
   // ---------------------------------------------------------------------------
   // Step 17: combat detection + resolution (Phase 9 / CMBT-04) — runs after step 16 tickAntMovement.

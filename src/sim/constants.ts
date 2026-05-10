@@ -272,6 +272,72 @@ export const FOOD_PILE_MIN_SEPARATION = 12;
 export const FOOD_PILE_MAX_ATTEMPTS = 1000;
 
 // ---------------------------------------------------------------------------
+// Issue #112 — Food pile depletion + respawn (strategic survival mechanic)
+// ---------------------------------------------------------------------------
+
+/**
+ * Issue #112 — Lower bound for the number of pickup-charges a freshly-spawned
+ * (or scenario-seeded) food pile carries. Each successful `antPickupFood` call
+ * decrements `pickupsRemaining` by `FOOD_PILE_PICKUP_DRAIN`; pile vanishes at 0.
+ *
+ * Pickup-charges are NOT the same as fixed-point food units transferred to the
+ * ant — that quantity stays bound to FOOD_PICKUP_AMOUNT. Charges control pile
+ * longevity (a balance lever); food carry stays the existing per-ant mechanic.
+ *
+ * Initial pickups balance: a small ephemeral pile (~20 charges) drains in a
+ * dozen seconds of focused foraging; a strategic anchor (~150) lasts much
+ * longer. Default values are best-guesses pending playtest retune.
+ */
+export const FOOD_PILE_INITIAL_PICKUPS_MIN = 20;
+
+/** Issue #112 — Upper bound for initial pickup-charges on a food pile. */
+export const FOOD_PILE_INITIAL_PICKUPS_MAX = 150;
+
+/**
+ * Issue #112 — Charges drained from `pile.pickupsRemaining` per successful
+ * `antPickupFood` call. Default is 1 (one pickup = one charge consumed).
+ */
+export const FOOD_PILE_PICKUP_DRAIN = 1;
+
+/**
+ * Issue #112 — Spawn cadence: every N ticks, `tickFoodPileSpawn` attempts to
+ * place one new pile somewhere on the surface. 1800 ticks ≈ 90 seconds at
+ * 20Hz — midpoint of the 1–2 minute "respawn feel" target locked in the
+ * issue planning thread.
+ */
+export const FOOD_PILE_SPAWN_INTERVAL_TICKS = 1800;
+
+/**
+ * Issue #112 — Soft ceiling on `world.foodPiles.length`. When at-or-above
+ * this, the spawn step skips silently. Sits at FOOD_PILE_COUNT × 2 = 30,
+ * comfortably under the validator hard cap MAX_FOOD_PILES = 60 (issue #109).
+ */
+export const FOOD_PILE_SOFT_CEILING = FOOD_PILE_COUNT * 2;
+
+/**
+ * Issue #112 — Spawn-placement anti-teleport guard. Reject candidate tiles
+ * within FOOD_PILE_MIN_SEPARATION Manhattan tiles of any pile that depleted
+ * in the last N ticks. Set equal to one spawn cycle so a depletion event has
+ * a full cycle to drain pheromone trails before a replacement may appear in
+ * the same neighborhood.
+ */
+export const FOOD_PILE_RECENT_DEPLETION_TICKS = FOOD_PILE_SPAWN_INTERVAL_TICKS;
+
+/**
+ * Issue #112 — Terrain-weighted placement. Grass tiles are accepted with
+ * weight `GRASS`; non-grass passable tiles with weight `OTHER`. Implemented
+ * via a single `nextU32() % (GRASS+OTHER) < OTHER` reject-roll: grass is
+ * always accepted, non-grass is accepted with probability OTHER/(GRASS+OTHER).
+ *
+ * 4:1 default biases new piles toward vegetation ("food grows where vegetation
+ * is") without making bare tiles impossible.
+ */
+export const FOOD_PILE_TERRAIN_GRASS_WEIGHT = 4;
+
+/** Issue #112 — Non-grass placement weight (see FOOD_PILE_TERRAIN_GRASS_WEIGHT). */
+export const FOOD_PILE_TERRAIN_OTHER_WEIGHT = 1;
+
+// ---------------------------------------------------------------------------
 // Phase 7: Surface Scatter
 // ---------------------------------------------------------------------------
 

@@ -31,6 +31,8 @@ import {
   FOOD_PILE_MIN_COLONY_DISTANCE,
   FOOD_PILE_MIN_SEPARATION,
   FOOD_PILE_MAX_ATTEMPTS,
+  FOOD_PILE_INITIAL_PICKUPS_MIN,
+  FOOD_PILE_INITIAL_PICKUPS_MAX,
   DIRT_SCATTER_RATIO_FP,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
@@ -99,12 +101,47 @@ function generateFoodPiles(world: WorldState, rng: Rng): void {
     }
     if (tooCloseToExisting) continue;
 
+    // Issue #112 — Each scenario-seeded pile gets a finite pickup-charge count
+    // drawn uniformly from [FOOD_PILE_INITIAL_PICKUPS_MIN, MAX]. The draw uses
+    // a hash of (terrainSeed, allocated entity id) instead of the world RNG so
+    // adding the depletion mechanic does NOT advance world.rngState during
+    // scenario seeding — preserving byte-identical replay for every existing
+    // test that calls createScenario(seed) and asserts post-tick RNG outcomes.
+    // Runtime spawns (tickFoodPileSpawn) still use the world RNG; only the
+    // one-shot generation step is hash-derived.
+    const newId = allocateEntityId(world);
+    const pickups = pickupsForSeed(world.terrainSeed, newId);
+
     world.foodPiles.push({
-      foodPileId: allocateEntityId(world),
+      foodPileId: newId,
       tileX,
       tileY,
+      pickupsRemaining: pickups,
+      pickupsInitial: pickups,
     });
   }
+}
+
+/**
+ * Issue #112 — derive a per-pile initial pickup-charge count from a stable
+ * hash of (terrainSeed, foodPileId). Returns a uniform integer in
+ * `[FOOD_PILE_INITIAL_PICKUPS_MIN, FOOD_PILE_INITIAL_PICKUPS_MAX]`.
+ *
+ * This intentionally bypasses the world RNG so scenario seeding's RNG
+ * footprint is unchanged after the depletion mechanic landed. Same input
+ * seed → same per-pile pickup counts → same downstream behaviour for any
+ * test or replay.
+ */
+function pickupsForSeed(terrainSeed: number, foodPileId: number): number {
+  // Knuth's golden-ratio multiplier — same constant used by terrainSeed
+  // initialization in createWorldState. Mixed with foodPileId for per-pile
+  // variation that's stable across runs of the same seed.
+  let h = (terrainSeed ^ foodPileId) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
+  h ^= h >>> 16;
+  const span = FOOD_PILE_INITIAL_PICKUPS_MAX - FOOD_PILE_INITIAL_PICKUPS_MIN + 1;
+  return FOOD_PILE_INITIAL_PICKUPS_MIN + ((h >>> 0) % span);
 }
 
 // ---------------------------------------------------------------------------
