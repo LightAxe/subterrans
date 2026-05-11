@@ -240,28 +240,43 @@ export class GameScene extends Phaser.Scene {
     this.dragState = registerDragPan(this, this.viewState);
 
     // Issue #116 — Esc opens the pause menu overlay (which also pauses the
-    // sim) and toggles it closed when already visible. Replaces the prior
-    // bare P-pause binding so P is free for the pheromone overlay toggle
-    // in issue #114. Speed-multiplier keys (1/2/4) are unchanged.
-    this.input.keyboard!.on('keydown-ESC', () => {
-      if (this.gamePhase === GamePhase.SavePrompt
-       || this.gamePhase === GamePhase.GameOver) return;
-      if (this.gamePhase === GamePhase.Paused) {
-        this.closePauseMenu();
-      } else {
-        this.openPauseMenu();
-      }
+    // sim). The Esc keybinding itself lives in UIScene (which already owned
+    // Esc for the ant-activity panel hide and the dialog/menu close paths);
+    // routing all Esc through one scene avoids the dual-handler race that
+    // had GameScene open the menu and UIScene immediately close it on the
+    // same press. UIScene calls back to openPauseMenu via the onEscape
+    // callback supplied below at scene.launch.
+    // Speed-multiplier keys (1/2/4) and the P pheromone toggle (issue #114)
+    // stay on GameScene because they're game-state actions, not UI chrome.
+    // Speed-multiplier keys (1/2/4), the pheromone toggle (P), and the
+    // underground colony toggle (X) all mutate state that the player
+    // expects the menu to be the modal source of truth for while paused.
+    // Round-2 review: gating these on `gamePhase === Playing` prevents
+    // a P press while the pause menu's Settings page is up from desyncing
+    // the on-screen "ON/OFF" label from the persisted setting (the menu
+    // captures the label at render time and would no longer match), and
+    // prevents Resume from snapping the camera to the enemy nest because
+    // X was pressed while paused.
+    this.input.keyboard!.on('keydown-ONE', () => {
+      if (this.gamePhase !== GamePhase.Playing) return;
+      this.speedMultiplier = 1;
     });
-    this.input.keyboard!.on('keydown-ONE', () => { this.speedMultiplier = 1; });
-    this.input.keyboard!.on('keydown-TWO', () => { this.speedMultiplier = 2; });
-    this.input.keyboard!.on('keydown-FOUR', () => { this.speedMultiplier = 4; });
+    this.input.keyboard!.on('keydown-TWO', () => {
+      if (this.gamePhase !== GamePhase.Playing) return;
+      this.speedMultiplier = 2;
+    });
+    this.input.keyboard!.on('keydown-FOUR', () => {
+      if (this.gamePhase !== GamePhase.Playing) return;
+      this.speedMultiplier = 4;
+    });
     // Issue #114 — P toggles the player's pheromone overlay. Render-only:
     // the flag lives on ViewState (so the next frame skips drawPheromoneOverlay)
-    // AND in persisted settings (so the choice survives reloads). Inert during
-    // SavePrompt so the toggle can't accidentally fire while the boot prompt
-    // is up. The pause menu's Settings sub-screen drives the same write path.
+    // AND in persisted settings (so the choice survives reloads). The pause
+    // menu's Settings sub-screen drives the same write path; gating P on
+    // Playing means the menu is the only writer while paused (no label
+    // desync — see comment block above).
     this.input.keyboard!.on('keydown-P', () => {
-      if (this.gamePhase === GamePhase.SavePrompt) return;
+      if (this.gamePhase !== GamePhase.Playing) return;
       const next = loadSettings();
       next.pheromoneOverlay = !next.pheromoneOverlay;
       saveSettings(next);
@@ -274,13 +289,10 @@ export class GameScene extends Phaser.Scene {
     // P/F9/speed-multiplier pattern above — the keyboard-plugin event bus
     // handles edge-trigger semantics for us (one keydown event per press),
     // avoiding the key-repeat DoS that Phase 08-04 guarded against for
-    // Tab via JustDown. SavePrompt phase early-returns in update() but
-    // this listener fires from Phaser's keyboard plugin; the SavePrompt
-    // overlay is click-driven (no X binding) so a spurious X press during
-    // SavePrompt is harmless — it mutates a ViewState field the overlay
-    // does not render.
+    // Tab via JustDown. Gated on Playing so a paused player doesn't Resume
+    // into a surprise camera flip onto the enemy nest.
     this.input.keyboard!.on('keydown-X', () => {
-      if (this.gamePhase === GamePhase.SavePrompt) return;
+      if (this.gamePhase !== GamePhase.Playing) return;
       if (this.viewState.activeView !== 'underground') return;
       toggleUndergroundColony(this.viewState);
     });
@@ -303,7 +315,15 @@ export class GameScene extends Phaser.Scene {
     const getWorld = (): WorldState | undefined => this.world;
 
     // Launch HUD scene on top.
-    this.scene.launch('UIScene', { viewState: this.viewState, getWorld });
+    this.scene.launch('UIScene', {
+      viewState: this.viewState,
+      getWorld,
+      // Issue #116 — UIScene owns Esc; this callback fires on Esc when no
+      // UIScene overlay/panel is open and is the trigger to spawn the pause
+      // menu. GameScene was previously binding keydown-ESC alongside
+      // UIScene's escKey handler, which raced (open → close in one press).
+      onEscape: () => this.openPauseMenu(),
+    });
     this.scene.bringToTop('UIScene');
 
     // World input dispatchers — internally guard on viewState.activeView.
@@ -510,12 +530,19 @@ export class GameScene extends Phaser.Scene {
   // guard).
   // ---------------------------------------------------------------------------
 
-  private openPauseMenu(): void {
-    if (this.gamePhase !== GamePhase.Playing) return;
-    this.gamePhase = GamePhase.Paused;
-    this.gameLoop.pause();
-    const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
-    uiScene.showPauseMenuOverlay({
+  /**
+   * Round-2 review: the openPauseMenu callbacks were duplicated inline
+   * inside openSaveLoadDialog's onBack — silent drift waiting to happen
+   * when a future change adds an entry to one but not the other. This
+   * helper is the single source of truth for what callbacks the menu
+   * receives; both call sites pass through it.
+   */
+  private buildPauseMenuCallbacks(): {
+    onResume: () => void;
+    onDownloadDebug: () => void;
+    onOpenSaveLoad: () => void;
+  } {
+    return {
       onResume: () => this.closePauseMenu(),
       onDownloadDebug: () => {
         if (this.world === undefined) return;
@@ -523,7 +550,15 @@ export class GameScene extends Phaser.Scene {
         downloadDebugSnapshot(snap);
       },
       onOpenSaveLoad: () => this.openSaveLoadDialog(),
-    });
+    };
+  }
+
+  private openPauseMenu(): void {
+    if (this.gamePhase !== GamePhase.Playing) return;
+    this.gamePhase = GamePhase.Paused;
+    this.gameLoop.pause();
+    const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
+    uiScene.showPauseMenuOverlay(this.buildPauseMenuCallbacks());
   }
 
   private closePauseMenu(): void {
@@ -563,20 +598,19 @@ export class GameScene extends Phaser.Scene {
       },
       onSaveNow: () => {
         if (this.world === undefined) return false;
-        return manualSave(this.currentSeed, this.inputLog, this.world);
+        const ok = manualSave(this.currentSeed, this.inputLog, this.world);
+        // Round-2 review: bump the autosave cooldown so the next autosave
+        // window doesn't fire seconds later and overwrite the manual save's
+        // timestamp. The dialog's "Saved 15:32" line otherwise jumps to
+        // 15:33 the next time the player opens it, with no action of theirs.
+        if (ok) this.lastAutosaveMs = performance.now();
+        return ok;
       },
       onBack: () => {
         // Re-open the pause menu — gamePhase is still Paused, gameLoop is
-        // still paused, so this just restores the menu chrome.
-        uiScene.showPauseMenuOverlay({
-          onResume: () => this.closePauseMenu(),
-          onDownloadDebug: () => {
-            if (this.world === undefined) return;
-            const snap = buildDebugSnapshot(this.world, this.currentSeed, this.inputLog);
-            downloadDebugSnapshot(snap);
-          },
-          onOpenSaveLoad: () => this.openSaveLoadDialog(),
-        });
+        // still paused, so this just restores the menu chrome. Same callback
+        // payload as the initial openPauseMenu via the shared helper.
+        uiScene.showPauseMenuOverlay(this.buildPauseMenuCallbacks());
       },
     });
   }

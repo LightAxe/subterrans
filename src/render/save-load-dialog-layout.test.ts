@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   saveLoadDialogItems,
   formatSaveInfoLine,
+  formatSaveTime,
   dialogTitle,
   firstButtonY,
   itemAt,
@@ -113,12 +114,25 @@ describe('saveLoadDialogItems', () => {
 });
 
 describe('formatSaveInfoLine', () => {
-  it('formats a fresh save with tick + workers + food', () => {
-    const info: SaveInfo = { tick: 42, playerWorkers: 12, playerFoodStored: 1500 };
+  it('formats a fresh save with timestamp + tick + workers + food (issue #115)', () => {
+    const info: SaveInfo = {
+      tick: 42, playerWorkers: 12, playerFoodStored: 1500,
+      // 2026-01-15 09:30 local — the formatter uses local time, so we don't
+      // assert exact HH:MM strings (would be flaky across CI timezones).
+      savedAtMs: new Date(2026, 0, 15, 9, 30, 0).getTime(),
+    };
     const line = formatSaveInfoLine(info, false);
+    expect(line.toLowerCase()).toContain('saved');
     expect(line).toContain('42');
     expect(line).toContain('12');
     expect(line).toContain('1500');
+  });
+
+  it('uses the "—" placeholder when savedAtMs is 0 (pre-issue-#115 envelope)', () => {
+    const info: SaveInfo = { tick: 5, playerWorkers: 0, playerFoodStored: 0, savedAtMs: 0 };
+    const line = formatSaveInfoLine(info, false);
+    // Should still render a Saved prefix with the placeholder, not crash.
+    expect(line).toContain('—');
   });
 
   it('shows the incompatible-save warning when there is no SaveInfo and bytes are unreadable', () => {
@@ -132,9 +146,42 @@ describe('formatSaveInfoLine', () => {
   });
 
   it('prefers SaveInfo over the incompatible flag (caller should pass the right combination)', () => {
-    const info: SaveInfo = { tick: 1, playerWorkers: 0, playerFoodStored: 0 };
+    const info: SaveInfo = {
+      tick: 1, playerWorkers: 0, playerFoodStored: 0, savedAtMs: 0,
+    };
     const line = formatSaveInfoLine(info, true);
     expect(line.toLowerCase()).not.toContain('incompatible');
+  });
+});
+
+describe('formatSaveTime', () => {
+  it('returns "—" for 0 (unknown / pre-issue-#115 envelope)', () => {
+    expect(formatSaveTime(0)).toBe('—');
+  });
+
+  it('returns "—" for negative values (defensive against tampered envelopes)', () => {
+    expect(formatSaveTime(-1)).toBe('—');
+  });
+
+  it('formats a positive epoch ms as zero-padded HH:MM in local time', () => {
+    const ts = new Date(2026, 4, 11, 7, 5).getTime(); // 07:05 local
+    expect(formatSaveTime(ts)).toBe('07:05');
+  });
+
+  it('handles late-night times correctly (no AM/PM rollover surprise)', () => {
+    const ts = new Date(2026, 4, 11, 23, 59).getTime();
+    expect(formatSaveTime(ts)).toBe('23:59');
+  });
+
+  it('returns "—" for huge values that construct an Invalid Date (round-2 review: tampered envelope guard)', () => {
+    // new Date(1e100) is Invalid Date. Without the NaN guard the formatter
+    // would produce "NaN:NaN" in the dialog. Round-2 review caught this as
+    // a tampered-envelope leakage path.
+    expect(formatSaveTime(1e100)).toBe('—');
+  });
+
+  it('returns "—" for NaN (defensive against tampered finite-but-NaN values)', () => {
+    expect(formatSaveTime(Number.NaN)).toBe('—');
   });
 });
 

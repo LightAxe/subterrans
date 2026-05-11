@@ -466,6 +466,14 @@ export interface SaveFile {
   readonly seed: number;
   readonly inputLog: SimCommand[];
   readonly snapshot: SerializedWorldState;
+  /**
+   * Issue #115 — wall-clock timestamp (Date.now() epoch ms) when the
+   * envelope was written. Populated by buildSaveFile so all writers
+   * (manualSave + tickAutosave) include it consistently. Optional in the
+   * type so older envelopes without the field still load — getSaveInfo
+   * falls back to 0 ("unknown") for the dialog when the field is absent.
+   */
+  readonly savedAtMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1140,6 +1148,11 @@ function buildSaveFile(seed: number, inputLog: readonly SimCommand[], world: Wor
     seed: seed | 0,
     inputLog: inputLog.map((c) => ({ ...c })),
     snapshot: serializeWorldState(world),
+    // Issue #115 — wall-clock stamp, surfaced in the Save/Load dialog's info
+    // line. Date.now() is allowed in src/platform (not src/sim — see file
+    // header rule list). Determinism unaffected: SCEN-06 replay is keyed on
+    // (seed, inputLog) and never reads this field.
+    savedAtMs: Date.now(),
   };
 }
 
@@ -1322,10 +1335,15 @@ export function manualSave(
  *  from `hasSave === false` which can mean "no save written yet" OR "save
  *  present but unreadable" — the Save/Load dialog needs to tell the player
  *  the difference so a v2 save in localStorage doesn't silently disappear
- *  on a New Game click. */
+ *  on a New Game click.
+ *
+ *  Round-2 review: also fires the legacy-save purge so an external caller
+ *  that hits this method first (without a prior hasSave call) still cleans
+ *  up the old subterrans:save:v1/v2 keys. Symmetry with hasSave/loadSave. */
 export function hasIncompatibleSave(): boolean {
   let raw: string | null;
   try {
+    purgeLegacySaves();
     raw = localStorage.getItem(SAVE_KEY);
   } catch {
     return false;
@@ -1341,7 +1359,7 @@ export function hasIncompatibleSave(): boolean {
 
 /** Lightweight save summary surfaced in the Save/Load dialog's info line.
  *  Avoids deserializeWorldState (which allocates the full typed-array world)
- *  by reading only three primitives from the JSON envelope. */
+ *  by reading only a handful of primitives from the JSON envelope. */
 export interface SaveInfo {
   /** Sim tick at the moment the snapshot was taken. */
   tick: number;
@@ -1349,6 +1367,10 @@ export interface SaveInfo {
   playerWorkers: number;
   /** Player colony's stored-food count in HUMAN units (post `>> FP_SHIFT`). */
   playerFoodStored: number;
+  /** Wall-clock timestamp (Date.now() epoch ms) when the envelope was last
+   *  written. 0 if the field is absent from a pre-issue-#115 envelope —
+   *  callers should treat 0 as "unknown" rather than "1970-01-01." */
+  savedAtMs: number;
 }
 
 /** Issue #115 — extract the dialog's summary fields without a full
@@ -1375,10 +1397,18 @@ export function getSaveInfo(): SaveInfo | null {
   // Right-shift is safe here: foodStored is a non-negative int in the
   // serialized envelope (validated upstream).
   const foodFp = playerColony?.foodStored ?? 0;
+  // Issue #115 — savedAtMs is optional in the envelope; pre-fix saves and
+  // any tampered/malformed timestamp fall back to 0 ("unknown") so the
+  // dialog can render a sensible placeholder.
+  const stampRaw = (file as { savedAtMs?: unknown }).savedAtMs;
+  const savedAtMs = typeof stampRaw === 'number' && Number.isFinite(stampRaw) && stampRaw >= 0
+    ? stampRaw
+    : 0;
   return {
     tick: file.snapshot.tick,
     playerWorkers: playerColony?.workerCount ?? 0,
     playerFoodStored: foodFp >> FP_SHIFT,
+    savedAtMs,
   };
 }
 

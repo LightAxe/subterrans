@@ -1826,6 +1826,45 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(info!.playerFoodStored).toBe(playerColony.foodStored >> FP_SHIFT);
     });
 
+    it('returns the wall-clock savedAtMs from the envelope (issue #115)', () => {
+      const before = Date.now();
+      manualSave(42, [], createScenario(42));
+      const after = Date.now();
+      const info = getSaveInfo();
+      expect(info!.savedAtMs).toBeGreaterThanOrEqual(before);
+      expect(info!.savedAtMs).toBeLessThanOrEqual(after);
+    });
+
+    it('returns savedAtMs=0 when the envelope omits the field (pre-issue-#115 saves)', () => {
+      // Simulate an older v3 envelope written before issue #115 added savedAtMs.
+      // parseSaveFile must accept it (no version bump) and getSaveInfo falls
+      // back to 0 ("unknown") rather than NaN or a 1970 stamp.
+      const env = {
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: serializeWorldState(createScenario(1)),
+        // savedAtMs intentionally omitted
+      };
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
+      const info = getSaveInfo();
+      expect(info).not.toBeNull();
+      expect(info!.savedAtMs).toBe(0);
+    });
+
+    it('returns savedAtMs=0 when the envelope field is malformed (negative or non-finite)', () => {
+      const env = {
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: serializeWorldState(createScenario(1)),
+        savedAtMs: -1,
+      };
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
+      const info = getSaveInfo();
+      expect(info!.savedAtMs).toBe(0);
+    });
+
     it('reflects updated tick count after the world advances', () => {
       const world = createScenario(42);
       for (let i = 0; i < 5; i++) tick(world, []);

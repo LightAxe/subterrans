@@ -159,6 +159,11 @@ import {
   type SaveLoadDialogItem,
   type SaveLoadDialogItemId,
 } from './save-load-dialog-layout.js';
+
+/** Issue #115 — duration of the post-Save-Now "Saved" / "Save failed" flash
+ *  rendered above the dialog's info line. 1500 ms is long enough to be
+ *  noticed without slowing down a player who wants to chain Save → Continue. */
+const SAVE_FLASH_MS = 1500;
 import { loadSettings, saveSettings } from '../platform/settings.js';
 import {
   hasSave,
@@ -229,6 +234,11 @@ export class UIScene extends Phaser.Scene {
   // bootFresh/bootFromSave runs; direct capture in init() was a stale-reference
   // bug that froze the HUD on the pre-boot (undefined) world.
   private getWorld!: () => WorldState | undefined;
+  // Issue #116 / dual-handler-fix: GameScene supplies an Esc callback that
+  // fires only when no UIScene overlay is currently open. Optional so older
+  // call sites (none today, but kept for safety) can still launch UIScene
+  // without it; without the callback Esc on a clean canvas is a no-op.
+  private onEscape: (() => void) | null = null;
   private gfx!: Phaser.GameObjects.Graphics;
   private antsText!: Phaser.GameObjects.Text;
   private foodText!: Phaser.GameObjects.Text;
@@ -276,12 +286,25 @@ export class UIScene extends Phaser.Scene {
     delete: false,
     newGame: false,
   };
+  // Issue #115 — Save Now feedback. After a manualSave call, the dialog
+  // flashes a brief "Saved" / "Save failed" line above the regular info
+  // text for SAVE_FLASH_MS so the player sees an explicit acknowledgement
+  // instead of having to spot the (already-correct) tick increment.
+  // Cleared by a Phaser delayedCall so the dialog quietly returns to the
+  // standard info-line state.
+  private saveLoadDialogFlash: 'none' | 'saved' | 'failed' = 'none';
+  private saveLoadDialogFlashTimer: Phaser.Time.TimerEvent | null = null;
 
   constructor() { super({ key: 'UIScene' }); }
 
-  init(data: { viewState: ViewState; getWorld: () => WorldState | undefined }) {
+  init(data: {
+    viewState: ViewState;
+    getWorld: () => WorldState | undefined;
+    onEscape?: () => void;
+  }) {
     this.viewState = data.viewState;
     this.getWorld = data.getWorld;
+    this.onEscape = data.onEscape ?? null;
   }
 
   create() {
@@ -411,20 +434,16 @@ export class UIScene extends Phaser.Scene {
     this.antActivityText.setVisible(false);
     this.antActivityText.setDepth(11);
 
-    // Esc hides the panel. UIScene owns this key so GameScene's world
-    // keyboard handlers aren't forced to know about UI state.
+    // UIScene is the single owner of Esc. Precedence (close topmost UI first):
+    //   1. Save/Load dialog visible → close + onBack (returns to pause menu)
+    //   2. Pause menu visible       → close + onResume (resumes game loop)
+    //   3. Ant-activity panel open  → hide it
+    //   4. Nothing open             → call onEscape (GameScene opens menu)
     //
-    // Issue #116 — when the pause menu is visible, Esc closes the menu
-    // (via its captured onResume callback) instead of falling through to
-    // the ant-activity hide. Inside the Settings sub-screen Esc still
-    // closes the whole menu — Back is the explicit "go up one level"
-    // affordance. The pause menu is the only overlay on UIScene that has
-    // a self-resume action; SavePrompt and GameOver are click-driven.
-    //
-    // Issue #115 precedence: Save/Load dialog > pause menu > ant-activity.
-    // Esc on the dialog is "Back" (return to pause menu); Esc on the pause
-    // menu is "Resume game". This keeps Esc as a consistent "close the
-    // topmost UI" gesture across both overlays.
+    // Routing all Esc through one scene avoids the dual-handler race that
+    // existed when GameScene also bound keydown-ESC: GameScene opened the
+    // menu, then UIScene's escKey handler immediately closed it on the same
+    // press, leaving __phase9_ui.activeOverlay stuck at "none".
     const escKey = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
     if (escKey) {
       escKey.on('down', () => {
@@ -440,7 +459,12 @@ export class UIScene extends Phaser.Scene {
           cb?.onResume();
           return;
         }
-        hideAntActivityPanel();
+        if (antActivityPanelState.visible) {
+          hideAntActivityPanel();
+          return;
+        }
+        // No UIScene overlay was up — let GameScene handle it (open menu).
+        this.onEscape?.();
       });
     }
 
@@ -874,13 +898,13 @@ export class UIScene extends Phaser.Scene {
     btnLabel.setDepth(22);
 
     this.gameOverGroup = [bg, title, subtitle, btnBg, btnLabel];
-    setActiveOverlay('game-over');
+    this.recomputeActiveOverlay();
   }
 
   public hideGameOverOverlay(): void {
     for (const obj of this.gameOverGroup) obj.destroy();
     this.gameOverGroup = [];
-    setActiveOverlay('none');
+    this.recomputeActiveOverlay();
   }
 
   // ---------------------------------------------------------------------------
@@ -959,13 +983,13 @@ export class UIScene extends Phaser.Scene {
     ngLabel.setDepth(22);
 
     this.savePromptGroup = [bg, title, subtitle, contBg, contLabel, ngBg, ngLabel];
-    setActiveOverlay('save-prompt');
+    this.recomputeActiveOverlay();
   }
 
   public hideSavePromptOverlay(): void {
     for (const obj of this.savePromptGroup) obj.destroy();
     this.savePromptGroup = [];
-    setActiveOverlay('none');
+    this.recomputeActiveOverlay();
   }
 
   // ---------------------------------------------------------------------------
@@ -992,16 +1016,24 @@ export class UIScene extends Phaser.Scene {
     this.pauseMenuSaveLoadEnabled = callbacks.onOpenSaveLoad !== undefined;
     this.pauseMenuPage = 'main';
     this.renderPauseMenuPage();
-    setActiveOverlay('pause-menu');
+    this.recomputeActiveOverlay();
   }
 
+  /**
+   * Round-2 review (orphan-overlay): closing the pause menu while the
+   * Save/Load dialog is on top would have left the dialog stranded — its
+   * onBack callback would re-show a menu the caller just dismissed. Tear
+   * down the dialog first so layered state stays coherent regardless of
+   * which scene calls hidePauseMenuOverlay.
+   */
   public hidePauseMenuOverlay(): void {
+    if (this.saveLoadDialogGroup.length > 0) this.hideSaveLoadDialogOverlay();
     for (const obj of this.pauseMenuGroup) obj.destroy();
     this.pauseMenuGroup = [];
     this.pauseMenuVisibleItems = [];
     this.pauseMenuCallbacks = null;
     this.pauseMenuPage = 'main';
-    setActiveOverlay('none');
+    this.recomputeActiveOverlay();
   }
 
   public isPauseMenuVisible(): boolean {
@@ -1050,7 +1082,16 @@ export class UIScene extends Phaser.Scene {
     this.pauseMenuGroup.push(title);
 
     // Buttons — one rectangle + one text per item. Disabled rows render
-    // dimmer and don't fire callbacks (see dispatchPauseMenuItem and itemAt).
+    // dimmer and skip dispatch (itemAt returns null for them).
+    //
+    // Dispatch flows ONLY through the scene-level pointerdown handler; we
+    // intentionally do NOT bind per-button `pointerdown` callbacks. Phaser
+    // fires object-level handlers BEFORE scene-level, so binding both
+    // dispatched the same item twice on a single click — flipping the
+    // pheromone toggle off-then-on (apparent no-op) and bypassing the
+    // confirm gate on Save/Load destructive rows. setInteractive() stays
+    // so the button rectangle absorbs the pointer hit and Phaser draws
+    // the input cursor; the scene handler does the work.
     for (const item of items) {
       const r = item.rect;
       const fillColor = item.enabled ? 0x333333 : 0x202020;
@@ -1065,12 +1106,6 @@ export class UIScene extends Phaser.Scene {
       );
       btn.setInteractive();
       btn.setDepth(21);
-      // The dispatch is also reachable via the scene-level pointerdown
-      // handler's hit test, but binding here gives us a precise per-button
-      // target so disabled rows don't accidentally consume hits.
-      if (item.enabled) {
-        btn.on('pointerdown', () => this.dispatchPauseMenuItem(item.id));
-      }
       this.pauseMenuGroup.push(btn);
 
       const label = this.add.text(
@@ -1141,7 +1176,7 @@ export class UIScene extends Phaser.Scene {
     this.saveLoadDialogCallbacks = callbacks;
     this.saveLoadDialogConfirming = { delete: false, newGame: false };
     this.renderSaveLoadDialog();
-    setActiveOverlay('save-load');
+    this.recomputeActiveOverlay();
   }
 
   public hideSaveLoadDialogOverlay(): void {
@@ -1150,7 +1185,14 @@ export class UIScene extends Phaser.Scene {
     this.saveLoadDialogVisibleItems = [];
     this.saveLoadDialogCallbacks = null;
     this.saveLoadDialogConfirming = { delete: false, newGame: false };
-    setActiveOverlay('none');
+    // Cancel any in-flight Save Now flash timer so an old "Saved" message
+    // can't fire renderSaveLoadDialog after the dialog is gone.
+    if (this.saveLoadDialogFlashTimer !== null) {
+      this.saveLoadDialogFlashTimer.remove();
+      this.saveLoadDialogFlashTimer = null;
+    }
+    this.saveLoadDialogFlash = 'none';
+    this.recomputeActiveOverlay();
   }
 
   public isSaveLoadDialogVisible(): boolean {
@@ -1210,8 +1252,32 @@ export class UIScene extends Phaser.Scene {
     infoLine.setDepth(31);
     this.saveLoadDialogGroup.push(infoLine);
 
+    // Save Now flash — sits between info line and buttons. Empty when no
+    // save was just attempted; replaced by "✓ Saved" or "✗ Save failed"
+    // for SAVE_FLASH_MS after a manual save (cleared by a delayedCall).
+    if (this.saveLoadDialogFlash !== 'none') {
+      const flashColor = this.saveLoadDialogFlash === 'saved' ? '#88ee88' : '#ff7766';
+      const flashText = this.saveLoadDialogFlash === 'saved' ? 'Saved' : 'Save failed';
+      const flash = this.add.text(
+        PAUSE_MENU_CANVAS_W / 2,
+        DIALOG_INFO_Y + 18,
+        flashText,
+        { fontSize: '12px', fontFamily: 'monospace', color: flashColor },
+      );
+      flash.setOrigin(0.5);
+      flash.setDepth(31);
+      this.saveLoadDialogGroup.push(flash);
+    }
+
     // Buttons. Confirming rows render in a warning color so the second-click
     // target is unambiguous.
+    //
+    // Same single-dispatcher rule as the pause menu: NO per-button pointerdown
+    // handlers. Without that constraint Phaser fires both object-level and
+    // scene-level pointerdown on a single click, and dispatchSaveLoadDialogItem
+    // runs twice — turning the two-click Delete/New Game confirm into a
+    // one-click destructive action. The scene-level pointerdown handler above
+    // is the sole entry point.
     for (const item of items) {
       const r = item.rect;
       const fillColor = !item.enabled ? 0x202020
@@ -1230,9 +1296,6 @@ export class UIScene extends Phaser.Scene {
       );
       btn.setInteractive();
       btn.setDepth(31);
-      if (item.enabled) {
-        btn.on('pointerdown', () => this.dispatchSaveLoadDialogItem(item.id));
-      }
       this.saveLoadDialogGroup.push(btn);
 
       const label = this.add.text(
@@ -1248,7 +1311,14 @@ export class UIScene extends Phaser.Scene {
   }
 
   /** Map dialog item id to its action. Destructive actions (delete, new-game
-   *  with an existing save) require a second click on the same row to commit. */
+   *  with an existing save) require a second click on the same row to commit.
+   *
+   *  cb is captured at the top because Continue / New Game's success paths
+   *  hide the dialog (which nulls saveLoadDialogCallbacks) BEFORE invoking
+   *  the callback. Reading from `this.saveLoadDialogCallbacks` after the hide
+   *  would silently land on null. The local `cb` keeps the original
+   *  reference alive — the round-2 review flagged this as fragile if a
+   *  future case is added without also capturing locally. */
   private dispatchSaveLoadDialogItem(id: SaveLoadDialogItemId): void {
     const cb = this.saveLoadDialogCallbacks;
     // Any non-confirm-target click clears the OTHER row's pending confirm so
@@ -1267,13 +1337,30 @@ export class UIScene extends Phaser.Scene {
         return;
       case 'save-now': {
         // GameScene owns (seed, inputLog, world) — the onSaveNow callback
-        // closes over those references and calls manualSave. Re-render so
-        // the info line picks up the new saved tick. We intentionally do
-        // not surface the boolean here: a storage failure leaves the prior
-        // save intact (info line stays valid) and a transient toast UI
-        // would add complexity without changing the player's recovery
-        // path (try again or check browser storage).
-        cb?.onSaveNow();
+        // closes over those references and calls manualSave. We surface the
+        // boolean as a brief flash above the info line so the player gets
+        // an explicit acknowledgement (issue #115 asked for a confirmation
+        // toast — the flash plays the same role without a separate Phaser
+        // tween / DOM-toast layer). Failure most often means quota /
+        // private-mode; retry once or close other tabs.
+        const ok = cb?.onSaveNow() ?? false;
+        this.saveLoadDialogFlash = ok ? 'saved' : 'failed';
+        // Cancel any in-flight prior flash timer so a second Save Now in
+        // quick succession doesn't clear the new flash early.
+        if (this.saveLoadDialogFlashTimer !== null) {
+          this.saveLoadDialogFlashTimer.remove();
+        }
+        this.saveLoadDialogFlashTimer = this.time.delayedCall(
+          SAVE_FLASH_MS,
+          () => {
+            this.saveLoadDialogFlashTimer = null;
+            this.saveLoadDialogFlash = 'none';
+            // Guard: dialog may have closed between Save Now and the timer
+            // firing (e.g. player clicked Continue or Back). Re-render only
+            // if the dialog is still on screen.
+            if (this.isSaveLoadDialogVisible()) this.renderSaveLoadDialog();
+          },
+        );
         this.renderSaveLoadDialog();
         return;
       }
@@ -1297,6 +1384,11 @@ export class UIScene extends Phaser.Scene {
           this.renderSaveLoadDialog();
           return;
         }
+        // Reset before commit (matches the delete case's pattern). The
+        // hideSaveLoadDialogOverlay below also clears the flags, but doing
+        // it explicitly here documents the intent and protects against a
+        // future change that exits this branch without hiding.
+        this.saveLoadDialogConfirming.newGame = false;
         this.hideSaveLoadDialogOverlay();
         this.hidePauseMenuOverlay();
         cb?.onNewGame();
@@ -1315,5 +1407,19 @@ export class UIScene extends Phaser.Scene {
     r: { x: number; y: number; w: number; h: number },
   ): boolean {
     return px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h;
+  }
+
+  /** Round-2 review: every `hide…Overlay()` previously called
+   *  `setActiveOverlay('none')` unconditionally. With layered overlays (e.g.
+   *  Save/Load dialog over pause menu, closed via Esc → re-shows menu) that
+   *  briefly published `activeOverlay = 'none'` between the hide and the
+   *  re-show — exactly the kind of observability lie round 1 was supposed
+   *  to fix. This recompute reflects whatever overlay is still on screen. */
+  private recomputeActiveOverlay(): void {
+    if (this.saveLoadDialogGroup.length > 0) setActiveOverlay('save-load');
+    else if (this.pauseMenuGroup.length > 0) setActiveOverlay('pause-menu');
+    else if (this.gameOverGroup.length > 0) setActiveOverlay('game-over');
+    else if (this.savePromptGroup.length > 0) setActiveOverlay('save-prompt');
+    else setActiveOverlay('none');
   }
 }

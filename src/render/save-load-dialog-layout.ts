@@ -165,8 +165,11 @@ export function formatSaveInfoLine(
   hasIncompatibleSave: boolean,
 ): string {
   if (info !== null) {
-    // Fresh save line: tick count + colony summary. Keep it terse — one line.
-    return `Tick ${info.tick}  ·  Workers ${info.playerWorkers}  ·  Food ${info.playerFoodStored}`;
+    // Fresh save line: timestamp · tick · workers · food. Keep it terse — one
+    // line. The timestamp is rendered as the user's local "HH:MM" because the
+    // dialog is a "saved when?" UX, not a forensic log; "moments ago" feels
+    // wrong inside an explicit save/load surface and a full date sprawls.
+    return `Saved ${formatSaveTime(info.savedAtMs)}  ·  Tick ${info.tick}  ·  Workers ${info.playerWorkers}  ·  Food ${info.playerFoodStored}`;
   }
   if (hasIncompatibleSave) {
     // Surfaces the issue #66 case where bytes exist but this build can't read
@@ -175,6 +178,22 @@ export function formatSaveInfoLine(
     return 'Incompatible save in storage — start a new game or delete it';
   }
   return 'No save in storage';
+}
+
+/** Format an epoch-ms timestamp as "HH:MM" in the user's local time. Returns
+ *  "—" for unknown values: 0 (pre-issue-#115 envelope or a tampered field
+ *  that getSaveInfo coerced to 0), or any value that constructs an Invalid
+ *  Date (e.g. a tampered envelope with `savedAtMs: 1e100` — getSaveInfo's
+ *  isFinite guard accepts it but JS clamps `new Date(huge)` to Invalid).
+ *  Pure function. */
+export function formatSaveTime(epochMs: number): string {
+  if (epochMs <= 0) return '—';
+  const d = new Date(epochMs);
+  const hours = d.getHours();
+  if (Number.isNaN(hours)) return '—';
+  const hh = String(hours).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
 }
 
 /** Title text for the dialog. Centralized so UIScene and layout agree. */
