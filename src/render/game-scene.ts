@@ -32,6 +32,7 @@ import { tick, resetFlowFieldCaches } from '../sim/tick.js';
 import { createGameLoop, type GameLoop, MS_PER_TICK } from '../platform/game-loop.js';
 import { hasSave, loadSave, deleteSave, tickAutosave, FutureSimVersionError } from '../platform/save.js';
 import { deserializeWorldState } from '../platform/save.js';
+import { loadSettings, saveSettings } from '../platform/settings.js';
 import { runAIController } from './ai-controller.js';
 import { buildDebugSnapshot } from '../platform/debug-snapshot.js';
 import { downloadDebugSnapshot } from './debug-snapshot-download.js';
@@ -244,6 +245,18 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard!.on('keydown-ONE', () => { this.speedMultiplier = 1; });
     this.input.keyboard!.on('keydown-TWO', () => { this.speedMultiplier = 2; });
     this.input.keyboard!.on('keydown-FOUR', () => { this.speedMultiplier = 4; });
+    // Issue #114 — P toggles the player's pheromone overlay. Render-only:
+    // the flag lives on ViewState (so the next frame skips drawPheromoneOverlay)
+    // AND in persisted settings (so the choice survives reloads). Inert during
+    // SavePrompt so the toggle can't accidentally fire while the boot prompt
+    // is up. The pause menu's Settings sub-screen drives the same write path.
+    this.input.keyboard!.on('keydown-P', () => {
+      if (this.gamePhase === GamePhase.SavePrompt) return;
+      const next = loadSettings();
+      next.pheromoneOverlay = !next.pheromoneOverlay;
+      saveSettings(next);
+      this.viewState.showPheromoneOverlay = next.pheromoneOverlay;
+    });
 
     // 09.1 Chunk 2 — X toggles the active underground colony view. Only
     // flips when activeView === 'underground'; inert on the surface view
@@ -579,7 +592,13 @@ export class GameScene extends Phaser.Scene {
     const gfx = this.gfx as unknown as GfxLike;
     gfx.clear();
     this.antSprites.beginFrame();
-    drawPheromoneOverlay(gfx, this.world, cam, this.viewState.activeView);
+    // Issue #114 — pheromone overlay is gated on the viewState flag so the P
+    // key (and the pause menu's Settings sub-screen) can hide it without
+    // touching the simulation. Player colony only — enemy pheromones stay
+    // hidden regardless of toggle state (PRD §7b / T-08-05).
+    if (this.viewState.showPheromoneOverlay) {
+      drawPheromoneOverlay(gfx, this.world, cam, this.viewState.activeView);
+    }
     if (this.viewState.activeView === 'surface') {
       const pending =
         this.surfaceInputState.pendingEntranceTileX !== null &&
