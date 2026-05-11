@@ -145,12 +145,18 @@ describe('formatSaveInfoLine', () => {
     expect(line.toLowerCase()).toContain('no save');
   });
 
-  it('prefers SaveInfo over the incompatible flag (caller should pass the right combination)', () => {
+  it('round-3 (Codex P2): warning wins over SaveInfo when the save is incompatible (future-sim case)', () => {
+    // A future-sim save has a parseable envelope (so getSaveInfo returns
+    // non-null) AND fails compatibility (hasIncompatibleSave === true).
+    // The dialog disables Continue; the info line must agree by showing
+    // the warning, NOT the saved-line — otherwise the player sees
+    // "Saved 14:30..." next to a grayed-out Continue and is confused.
     const info: SaveInfo = {
-      tick: 1, playerWorkers: 0, playerFoodStored: 0, savedAtMs: 0,
+      tick: 100, playerWorkers: 5, playerFoodStored: 200, savedAtMs: Date.now(),
     };
     const line = formatSaveInfoLine(info, true);
-    expect(line.toLowerCase()).not.toContain('incompatible');
+    expect(line.toLowerCase()).toContain('incompatible');
+    expect(line).not.toContain('Saved');
   });
 });
 

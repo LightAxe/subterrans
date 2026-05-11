@@ -1799,6 +1799,63 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(hasIncompatibleSave()).toBe(true);
       expect(hasSave()).toBe(false);
     });
+
+    it('round-3 (Codex P2): returns true when snapshot.simVersion exceeds LATEST_SIM_VERSION (future-build save)', async () => {
+      // Build a parseable envelope and stamp simVersion above LATEST so
+      // bootFromSave's deserialize would throw FutureSimVersionError. The
+      // envelope itself parses fine — hasSave returns true today — but the
+      // dialog needs to know this save is unloadable so Continue stays
+      // disabled and the warning info line surfaces.
+      const { LATEST_SIM_VERSION } = await import('../sim/types.js');
+      const world = createScenario(7);
+      const snap = serializeWorldState(world);
+      snap.simVersion = LATEST_SIM_VERSION + 1;
+      const env = {
+        version: SAVE_FORMAT_VERSION,
+        seed: 7,
+        inputLog: [],
+        snapshot: snap,
+        savedAtMs: Date.now(),
+      };
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
+      expect(hasIncompatibleSave()).toBe(true);
+      // hasSave still returns true (envelope parses) — caller is expected
+      // to gate on `hasSave() && !hasIncompatibleSave()` for "loadable".
+      expect(hasSave()).toBe(true);
+    });
+
+    it('round-3: returns false when simVersion equals LATEST_SIM_VERSION (loadable)', async () => {
+      const { LATEST_SIM_VERSION } = await import('../sim/types.js');
+      const world = createScenario(7);
+      const snap = serializeWorldState(world);
+      snap.simVersion = LATEST_SIM_VERSION;
+      const env = {
+        version: SAVE_FORMAT_VERSION,
+        seed: 7,
+        inputLog: [],
+        snapshot: snap,
+        savedAtMs: Date.now(),
+      };
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
+      expect(hasIncompatibleSave()).toBe(false);
+      expect(hasSave()).toBe(true);
+    });
+
+    it('round-3: returns false when simVersion is omitted (legacy save — defaults to LEGACY on load)', async () => {
+      const world = createScenario(7);
+      const snap = serializeWorldState(world);
+      // Strip simVersion to simulate a pre-issue-#27 envelope.
+      delete (snap as { simVersion?: number }).simVersion;
+      const env = {
+        version: SAVE_FORMAT_VERSION,
+        seed: 7,
+        inputLog: [],
+        snapshot: snap,
+        savedAtMs: Date.now(),
+      };
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
+      expect(hasIncompatibleSave()).toBe(false);
+    });
   });
 
   describe('Issue #115 — getSaveInfo', () => {

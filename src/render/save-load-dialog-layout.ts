@@ -159,23 +159,31 @@ export function saveLoadDialogItems(ctx: SaveLoadDialogContext): SaveLoadDialogI
 // ---------------------------------------------------------------------------
 
 /** Compose the human-readable info line shown above the buttons. Pure text
- *  function so the dialog's only concern is rendering it. */
+ *  function so the dialog's only concern is rendering it.
+ *
+ *  Round-3 (Codex P2): the warning takes precedence over the saved-line.
+ *  Without that ordering a future-sim save (parseable envelope, but
+ *  simVersion > LATEST) would render as "Saved 14:30 · Tick 100 · …" while
+ *  Continue is disabled — visually contradicting the disabled state. The
+ *  warning wins so the disabled Continue and the info line tell the same
+ *  story. */
 export function formatSaveInfoLine(
   info: SaveInfo | null,
   hasIncompatibleSave: boolean,
 ): string {
+  if (hasIncompatibleSave) {
+    // Surfaces the issue #66 case where bytes exist but this build can't read
+    // them (envelope parse fails OR snapshot.simVersion > LATEST_SIM_VERSION).
+    // The player can Delete to clear them or click New Game to start fresh;
+    // Continue stays disabled.
+    return 'Incompatible save in storage — start a new game or delete it';
+  }
   if (info !== null) {
     // Fresh save line: timestamp · tick · workers · food. Keep it terse — one
     // line. The timestamp is rendered as the user's local "HH:MM" because the
     // dialog is a "saved when?" UX, not a forensic log; "moments ago" feels
     // wrong inside an explicit save/load surface and a full date sprawls.
     return `Saved ${formatSaveTime(info.savedAtMs)}  ·  Tick ${info.tick}  ·  Workers ${info.playerWorkers}  ·  Food ${info.playerFoodStored}`;
-  }
-  if (hasIncompatibleSave) {
-    // Surfaces the issue #66 case where bytes exist but this build can't read
-    // them. The player can Delete to clear them or click New Game to start
-    // fresh; Continue stays disabled.
-    return 'Incompatible save in storage — start a new game or delete it';
   }
   return 'No save in storage';
 }

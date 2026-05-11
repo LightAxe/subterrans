@@ -1330,16 +1330,30 @@ export function manualSave(
   }
 }
 
-/** Issue #115 — true iff bytes exist under SAVE_KEY but parseSaveFile cannot
- *  read them (wrong version, corrupt envelope, future simVersion). Distinct
- *  from `hasSave === false` which can mean "no save written yet" OR "save
- *  present but unreadable" — the Save/Load dialog needs to tell the player
- *  the difference so a v2 save in localStorage doesn't silently disappear
- *  on a New Game click.
+/** Issue #115 — true iff bytes exist under SAVE_KEY but this build cannot
+ *  load them. Three categories of incompatibility:
+ *    1. envelope parse fails (wrong save format version, malformed JSON,
+ *       tampered seed, etc. — `parseSaveFile` throws)
+ *    2. envelope parses but `snapshot.simVersion > LATEST_SIM_VERSION` —
+ *       the save was written by a NEWER build. `bootFromSave`'s
+ *       `deserializeWorldState` would throw `FutureSimVersionError` and
+ *       fall through to `bootFresh` with autosave suspended (issue #66).
+ *       Surface this at the dialog level so Continue stays disabled and
+ *       the info line warns the user instead of letting them click
+ *       Continue and silently get a fresh world.
+ *
+ *  Distinct from `hasSave === false` which can mean "no save written yet"
+ *  OR "save present but unreadable." The dialog uses
+ *  `hasSave() && !hasIncompatibleSave()` to decide whether Continue is
+ *  actionable.
  *
  *  Round-2 review: also fires the legacy-save purge so an external caller
  *  that hits this method first (without a prior hasSave call) still cleans
- *  up the old subterrans:save:v1/v2 keys. Symmetry with hasSave/loadSave. */
+ *  up the old subterrans:save:v1/v2 keys. Symmetry with hasSave/loadSave.
+ *
+ *  Round-3 (Codex P2 follow-up): the simVersion check above replaces the
+ *  prior "envelope-parse only" check that returned false for future-sim
+ *  saves and enabled a Continue click that would silently lose the save. */
 export function hasIncompatibleSave(): boolean {
   let raw: string | null;
   try {
@@ -1349,12 +1363,23 @@ export function hasIncompatibleSave(): boolean {
     return false;
   }
   if (raw === null) return false;
+  let file: SaveFile;
   try {
-    parseSaveFile(raw);
-    return false;
+    file = parseSaveFile(raw);
   } catch {
     return true;
   }
+  // Future-sim guard. Defensive type-check on simVersion: the field is
+  // optional in SerializedWorldState (legacy saves omit it; defaults to
+  // LEGACY_SIM_VERSION on load). We only flag as incompatible when the
+  // field is present AND exceeds the current LATEST. Anything else
+  // (missing, equal, lower) is loadable — `deserializeWorldState`
+  // handles legacy-default and same-version paths cleanly.
+  const simVersion = file.snapshot.simVersion;
+  if (typeof simVersion === 'number' && simVersion > LATEST_SIM_VERSION) {
+    return true;
+  }
+  return false;
 }
 
 /** Lightweight save summary surfaced in the Save/Load dialog's info line.

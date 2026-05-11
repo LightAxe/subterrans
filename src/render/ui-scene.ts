@@ -1207,7 +1207,13 @@ export class UIScene extends Phaser.Scene {
     this.saveLoadDialogGroup = [];
 
     const ctx = {
-      hasCompatibleSave: hasSave(),
+      // Round-3 (Codex P2): a future-sim save still passes parseSaveFile
+      // (so hasSave returns true) but bootFromSave would reject it via
+      // FutureSimVersionError. Treat the save as compatible only when
+      // BOTH envelope is parseable AND simVersion is loadable. The
+      // hasIncompatibleSave check covers both the parse-fails and the
+      // future-sim cases — see save.ts for the full classification.
+      hasCompatibleSave: hasSave() && !hasIncompatibleSave(),
       hasIncompatibleSave: hasIncompatibleSave(),
       confirming: { ...this.saveLoadDialogConfirming },
     };
