@@ -894,7 +894,7 @@ describe('drawSurfaceEntities — enemy entrance border (issue #14)', () => {
     return w;
   }
 
-  it('emits 4 thin COLOR_ENEMY_COLONY fillRects forming a perimeter ring around the enemy entrance tile', () => {
+  it('emits one COLOR_ENEMY_COLONY strokeCircle ringing the enemy entrance mound (issue #117)', () => {
     const gfx = new MockGfx();
     const sprites = new MockAntSprites();
     const tileX = 10;
@@ -903,35 +903,38 @@ describe('drawSurfaceEntities — enemy entrance border (issue #14)', () => {
     const cam = makeCamera(tileX, tileY, 10, 4);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
 
-    // Find every fillRect emitted under COLOR_ENEMY_COLONY style — the
-    // perimeter ring is exactly 4 strokes (top/bottom/left/right).
-    const enemyRects: Array<[number, number, number, number]> = [];
-    let style: number | undefined;
+    // Issue #117 replaced the four-rect perimeter with a single strokeCircle
+    // traced just outside the round mound. Track lineStyle COLOR_ENEMY_COLONY
+    // as the stroke-color sentinel; the next strokeCircle is the enemy ring.
+    const enemyStrokes: Array<[number, number, number]> = [];
+    let lineColor: number | undefined;
     for (const c of gfx.calls) {
-      if (c.method === 'fillStyle') style = c.args[0] as number;
-      else if (c.method === 'fillRect' && style === COLOR_ENEMY_COLONY) {
-        enemyRects.push(c.args as [number, number, number, number]);
+      if (c.method === 'lineStyle') lineColor = c.args[1] as number;
+      else if (c.method === 'strokeCircle' && lineColor === COLOR_ENEMY_COLONY) {
+        enemyStrokes.push(c.args as [number, number, number]);
       }
     }
-    expect(enemyRects.length).toBe(4);
+    expect(enemyStrokes.length).toBe(1);
 
-    // Compute expected screen-space tile origin and assert a 1-pixel ring.
+    // Center on tile center, radius = mound outer radius (TILE_SIZE_PX/2 + 2).
     const left = Math.floor(cam.x - cam.viewportWidth  / 2);
     const top  = Math.floor(cam.y - cam.viewportHeight / 2);
-    const sx = (tileX - left) * TILE_SIZE_PX;
-    const sy = (tileY - top)  * TILE_SIZE_PX;
-    const expected = new Set([
-      [sx,                  sy,                  TILE_SIZE_PX, 1].join(','),                 // top
-      [sx,                  sy + TILE_SIZE_PX-1, TILE_SIZE_PX, 1].join(','),                 // bottom
-      [sx,                  sy + 1,              1, TILE_SIZE_PX - 2].join(','),             // left
-      [sx + TILE_SIZE_PX-1, sy + 1,              1, TILE_SIZE_PX - 2].join(','),             // right
-    ]);
-    for (const r of enemyRects) {
-      expect(expected.has(r.join(','))).toBe(true);
+    const expectedCx = (tileX - left) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+    const expectedCy = (tileY - top)  * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+    const expectedR  = TILE_SIZE_PX / 2 + 2;
+    expect(enemyStrokes[0]).toEqual([expectedCx, expectedCy, expectedR]);
+
+    // No enemy-colored fillRect should remain — the four-rect rectangle is gone.
+    let fillStyle: number | undefined;
+    let enemyFillRects = 0;
+    for (const c of gfx.calls) {
+      if (c.method === 'fillStyle') fillStyle = c.args[0] as number;
+      else if (c.method === 'fillRect' && fillStyle === COLOR_ENEMY_COLONY) enemyFillRects += 1;
     }
+    expect(enemyFillRects).toBe(0);
   });
 
-  it('player entrance does NOT receive the enemy-color border', () => {
+  it('player entrance does NOT receive the enemy-color ring', () => {
     const gfx = new MockGfx();
     const sprites = new MockAntSprites();
     // Setup: only the player colony, no enemy.
@@ -945,14 +948,52 @@ describe('drawSurfaceEntities — enemy entrance border (issue #14)', () => {
     const cam = makeCamera(0, 0, 10, 4);
     drawSurfaceEntities(gfx, sprites, w, w, 0, cam);
 
-    // No enemy-colored fillRects anywhere.
-    let style: number | undefined;
-    let enemyRectCount = 0;
+    // No enemy-colored stroke should be present (lineStyle never sets COLOR_ENEMY_COLONY).
+    let lineColor: number | undefined;
+    let enemyStrokes = 0;
     for (const c of gfx.calls) {
-      if (c.method === 'fillStyle') style = c.args[0] as number;
-      else if (c.method === 'fillRect' && style === COLOR_ENEMY_COLONY) enemyRectCount += 1;
+      if (c.method === 'lineStyle') lineColor = c.args[1] as number;
+      else if (c.method === 'strokeCircle' && lineColor === COLOR_ENEMY_COLONY) enemyStrokes += 1;
     }
-    expect(enemyRectCount).toBe(0);
+    expect(enemyStrokes).toBe(0);
+  });
+
+  it('renders three concentric fillCircles per entrance: outer mound rim, mound body, and round hole (issue #117)', () => {
+    const gfx = new MockGfx();
+    const sprites = new MockAntSprites();
+    const tileX = 5;
+    const tileY = 5;
+    const world = makeWorldWithEnemyEntrance(tileX, tileY);
+    // Drop the player entrance so the only entrance under inspection is the enemy's.
+    world.colonies[PLAYER_COLONY_ID]!.entrances = [];
+    const cam = makeCamera(tileX, tileY, 10, 10);
+    drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
+
+    // Walk fillStyle/fillCircle pairs and group by color.
+    const circlesByColor = new Map<number, Array<[number, number, number]>>();
+    let fillColor: number | undefined;
+    for (const c of gfx.calls) {
+      if (c.method === 'fillStyle') fillColor = c.args[0] as number;
+      else if (c.method === 'fillCircle' && fillColor !== undefined) {
+        const arr = circlesByColor.get(fillColor) ?? [];
+        arr.push(c.args as [number, number, number]);
+        circlesByColor.set(fillColor, arr);
+      }
+    }
+
+    // Each entrance contributes exactly one circle per color: mound outer, mound body, hole.
+    expect(circlesByColor.get(0x6d563a)?.length).toBe(1); // COLOR_BARREN_EARTH_MOUND
+    expect(circlesByColor.get(0x5a4a30)?.length).toBe(1); // COLOR_BARREN_EARTH_DAMP
+    expect(circlesByColor.get(0x1a0f00)?.length).toBe(1); // COLOR_SURFACE_ENTRANCE_HOLE
+
+    // Concentric and centered on the tile center; radii match mound > body > hole.
+    const left = Math.floor(cam.x - cam.viewportWidth  / 2);
+    const top  = Math.floor(cam.y - cam.viewportHeight / 2);
+    const cx = (tileX - left) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+    const cy = (tileY - top)  * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+    expect(circlesByColor.get(0x6d563a)![0]).toEqual([cx, cy, TILE_SIZE_PX / 2 + 2]);
+    expect(circlesByColor.get(0x5a4a30)![0]).toEqual([cx, cy, TILE_SIZE_PX / 2 + 1]);
+    expect(circlesByColor.get(0x1a0f00)![0]).toEqual([cx, cy, TILE_SIZE_PX / 2 - 2]);
   });
 });
 

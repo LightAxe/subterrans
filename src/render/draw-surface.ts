@@ -30,7 +30,11 @@ import {
   COLOR_QUEEN_OUTLINE,
   COLOR_RALLY_POINT,
 } from './sprites.js';
-import { drawBarrenEarthTile, COLOR_BARREN_EARTH_DAMP } from './terrain-atlas.js';
+import {
+  drawBarrenEarthTile,
+  COLOR_BARREN_EARTH_DAMP,
+  COLOR_BARREN_EARTH_MOUND,
+} from './terrain-atlas.js';
 export type { AntSpriteLayer } from './ant-sprite-layer.js';
 import type { CameraState } from './camera.js';
 
@@ -177,38 +181,55 @@ export function drawSurfaceEntities(
     gfx.strokeCircle(cx, cy, r);
   }
 
-  // --- Entrance holes on surface ---
-  // Phase 8.5 readability: render a 2-px dirt rim around the dark hole interior
-  // so the entrance reads as a dug-out hole with a piled-dirt mound, not an
-  // arbitrary black square.
+  // --- Entrance holes on surface (issue #117) ---
+  // Round hole in a piled-dirt mound. Three concentric circles (mound rim →
+  // mound body → hole interior) plus, for enemy entrances, a thin
+  // enemy-colored ring traced just outside the mound.
   //
-  // Issue #14 cue: enemy entrances also get a 1-px enemy-colony perimeter
-  // overlaid on the dirt rim so the player reads them as "rally here to
-  // invade" targets rather than just neutral terrain features. Player
-  // entrances are unchanged — the existing brown-mound style still reads
-  // as "my entrance."
+  // Footprint spills 2 px onto each adjacent tile so the entrance reads as a
+  // 3-D bump on the surface, not a flat painted disc. The viewport cull
+  // margin below is widened from `TILE_SIZE_PX` to `TILE_SIZE_PX + MOUND_SPILL_PX + 1`
+  // so a tile whose mound spills onto a visible neighbor is still drawn even
+  // when its own center sits slightly off-screen.
+  //
+  // Diameters / radii at TILE_SIZE_PX = 16:
+  //   mound (outer)   = 10 px → spills 2 px onto each neighbor
+  //   mound (body)    = 9 px  → 1 px lighter rim around the body for shading
+  //   hole (interior) = 6 px  → matches food-pile baseRadius for visual weight
+  //
+  // Issue #14 cue: enemy entrances get a 1-px enemy-colony stroke around the
+  // mound so the player reads them as "rally here to invade" targets.
+  const MOUND_SPILL_PX = 2;
+  const MOUND_OUTER_R  = TILE_SIZE_PX / 2 + MOUND_SPILL_PX; // 10
+  const MOUND_BODY_R   = TILE_SIZE_PX / 2 + 1;              // 9 — 1px lighter rim shows around the body
+  const HOLE_R         = TILE_SIZE_PX / 2 - 2;              // 6 — matches food pile baseRadius
   for (const colony of Object.values(curr.colonies)) {
     if (!colony.entrances) continue;
     const isEnemy = colony.colonyId !== PLAYER_COLONY_ID;
     for (const entrance of colony.entrances) {
       const sx = (entrance.surfaceTileX - left) * TILE_SIZE_PX;
       const sy = (entrance.surfaceTileY - top)  * TILE_SIZE_PX;
-      if (sx < -TILE_SIZE_PX || sx > canvasW || sy < -TILE_SIZE_PX || sy > canvasH) continue;
-      // Entrance backplate — dampened earth so the dark hole reads against
-      // the lighter barren-earth surrounding.
+      const cullMargin = TILE_SIZE_PX + MOUND_SPILL_PX + 1;
+      if (sx < -cullMargin || sx > canvasW + MOUND_SPILL_PX
+        || sy < -cullMargin || sy > canvasH + MOUND_SPILL_PX) continue;
+      const cx = sx + TILE_SIZE_PX / 2;
+      const cy = sy + TILE_SIZE_PX / 2;
+      // Outer mound rim: lighter spoil tone — reads as "raised dirt edge."
+      gfx.fillStyle(COLOR_BARREN_EARTH_MOUND, 1);
+      gfx.fillCircle(cx, cy, MOUND_OUTER_R);
+      // Mound body: darker damp earth — reads as the "shadowed inside" of the mound.
       gfx.fillStyle(COLOR_BARREN_EARTH_DAMP, 1);
-      gfx.fillRect(sx, sy, TILE_SIZE_PX, TILE_SIZE_PX);
+      gfx.fillCircle(cx, cy, MOUND_BODY_R);
+      // Hole interior — round dark cavity.
       gfx.fillStyle(COLOR_SURFACE_ENTRANCE_HOLE, 1);
-      gfx.fillRect(sx + 2, sy + 2, TILE_SIZE_PX - 4, TILE_SIZE_PX - 4);
+      gfx.fillCircle(cx, cy, HOLE_R);
       if (isEnemy) {
-        // 1-px enemy-colony border. Four thin fillRects draw a perimeter
-        // ring inside the tile's outermost pixel (no GfxLike.strokeRect
-        // available; the four-rect pattern is the established alternative).
-        gfx.fillStyle(COLOR_ENEMY_COLONY, 1);
-        gfx.fillRect(sx,                  sy,                  TILE_SIZE_PX, 1); // top
-        gfx.fillRect(sx,                  sy + TILE_SIZE_PX-1, TILE_SIZE_PX, 1); // bottom
-        gfx.fillRect(sx,                  sy + 1,              1, TILE_SIZE_PX - 2); // left
-        gfx.fillRect(sx + TILE_SIZE_PX-1, sy + 1,              1, TILE_SIZE_PX - 2); // right
+        // 1-px enemy-colony ring traced just outside the mound. Replaces the
+        // four-rect rectangle with a stroke that follows the mound's circular
+        // silhouette so the cue reads as "this is an enemy entrance" without
+        // visually fighting the round shape.
+        gfx.lineStyle(1, COLOR_ENEMY_COLONY, 1);
+        gfx.strokeCircle(cx, cy, MOUND_OUTER_R);
       }
     }
   }
