@@ -347,3 +347,107 @@ test.describe('Issue #115 — Save/Load dialog reachable from pause menu', () =>
     expect(gone).toBeNull();
   });
 });
+
+test.describe('Round-5 (Codex P1) — Save Now respects autosaveSuspended', () => {
+  test('Save Now is a no-op when bootFromSave preserved a future-build save (does NOT overwrite the recoverable bytes)', async ({ page }) => {
+    // Bootstrap: populate localStorage with a future-sim save BEFORE the
+    // page loads. bootFromSave will deserialize, catch FutureSimVersionError,
+    // and set autosaveSuspended = true. We then verify Save Now refuses to
+    // write so the preserved future-build bytes survive for recovery.
+    await page.goto('/');
+    await page.locator('canvas').first().waitFor({ state: 'attached' });
+
+    // Build a serialized snapshot of a real scenario and bump simVersion
+    // past LATEST so bootFromSave throws FutureSimVersionError. We can't
+    // import save.ts inside page.evaluate (it's the test runner side), so
+    // pull the fresh envelope via a temporary boot first, then mutate.
+    await page.evaluate(() => localStorage.removeItem('subterrans:save:v3'));
+    await page.reload();
+    await page.locator('canvas').first().waitFor({ state: 'attached' });
+    await page.waitForTimeout(800); // let one autosave write a valid envelope
+    await page.evaluate(() => {
+      // After fresh-boot the autosave hasn't fired yet (30s interval). Hand-
+      // craft an envelope from a 1×1 minimal world that parseSaveFile accepts
+      // and bump simVersion. The Continue path is gated by hasIncompatibleSave
+      // → full deserialize anyway; the suspended state is the contract we
+      // care about.
+      const env = {
+        version: 3,
+        seed: 1,
+        inputLog: [],
+        snapshot: {
+          tick: 1,
+          rngState: 1,
+          nextEntityId: 0,
+          simVersion: 99999, // > LATEST → FutureSimVersionError on bootFromSave
+          commandQueue: [],
+          ants: { count: 0, posX: [], posY: [], colonyId: [], task: [], subTask: [],
+                  speed: [], foodCarrying: [], starvationTimer: [], age: [], alive: [],
+                  lifespan: [], zone: [], digTileX: [], digTileY: [], digTicksRemaining: [],
+                  targetPosX: [], targetPosY: [] },
+          colonies: {},
+          pheromoneGrids: {},
+          surface: { width: 1, height: 1, data: [0] },
+          undergroundGrids: {},
+          foodPiles: [],
+          pendingChambers: {},
+          recentlyDepletedFood: [],
+        },
+        savedAtMs: Date.now(),
+      };
+      localStorage.setItem('subterrans:save:v3', JSON.stringify(env));
+    });
+
+    // Reload — boot path now sees the future-sim save, SavePrompt shows.
+    await page.reload();
+    await page.locator('canvas').first().waitFor({ state: 'attached' });
+    await page.waitForFunction(() => {
+      const ui = (window as { __phase9_ui?: { activeOverlay: string } }).__phase9_ui;
+      return ui !== undefined && ui.activeOverlay === 'save-prompt';
+    }, { timeout: 5_000 });
+
+    // Click Continue → bootFromSave → catches FutureSimVersionError →
+    // bootFresh + autosaveSuspended = true. The preserved bytes stay in
+    // localStorage; the running game is now a fresh scenario.
+    // SAVE_PROMPT_CONTINUE_RECT = { x: 300, y: 280, w: 120, h: 32 }
+    await page.locator('canvas').first().click({ position: { x: 360, y: 296 } });
+    await page.waitForFunction(() => {
+      const ui = (window as { __phase9_ui?: { activeOverlay: string } }).__phase9_ui;
+      return ui !== undefined && ui.activeOverlay === 'none';
+    });
+
+    // Snapshot the preserved bytes BEFORE we touch the dialog.
+    const before = await page.evaluate(() => localStorage.getItem('subterrans:save:v3'));
+    expect(before).not.toBeNull();
+
+    // Open pause menu → Save/Load.
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(100);
+    const saveLoadRect = await page.evaluate(() => {
+      const CANVAS_W = 800, CANVAS_H = 592;
+      const BTN_W = 320, BTN_H = 40, GAP = 10, TITLE_H = 56;
+      const n = 4;
+      const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
+      const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
+      const x = (CANVAS_W - BTN_W) / 2;
+      const slY = top + 1 * (BTN_H + GAP);
+      return { x: x + BTN_W / 2, y: slY + BTN_H / 2 };
+    });
+    await page.locator('canvas').first().click({ position: saveLoadRect });
+    await page.waitForTimeout(150);
+    expect(await page.evaluate(() => (window as { __phase9_ui?: { activeOverlay: string } }).__phase9_ui?.activeOverlay)).toBe('save-load');
+
+    // Click Save Now (button index 1 in the dialog, BTN_W=280, BTN_H=36, GAP=8).
+    // firstY = DIALOG_INFO_Y(152) + DIALOG_INFO_TO_BUTTONS_GAP(24) = 176.
+    const saveNowY = 176 + 1 * (36 + 8) + 36 / 2;
+    const saveNowX = (800 - 280) / 2 + 280 / 2;
+    await page.locator('canvas').first().click({ position: { x: saveNowX, y: saveNowY } });
+    await page.waitForTimeout(200);
+
+    // The preserved bytes MUST be unchanged. Pre-fix this overwrote the
+    // future-build save with the fresh-session bytes, silently destroying
+    // the recoverable save.
+    const after = await page.evaluate(() => localStorage.getItem('subterrans:save:v3'));
+    expect(after).toBe(before);
+  });
+});

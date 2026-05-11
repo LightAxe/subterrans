@@ -598,6 +598,16 @@ export class GameScene extends Phaser.Scene {
       },
       onSaveNow: () => {
         if (this.world === undefined) return false;
+        // Round-5 P1 (Codex): bootFromSave sets autosaveSuspended = true when
+        // it catches a FutureSimVersionError so the preserved newer-build
+        // save bytes survive in localStorage for recovery (user reloads on
+        // a newer build that knows the simVersion). The tickAutosave path
+        // already respects this flag (see update() below). The dialog's
+        // Save Now must respect it too — without this gate a manual save
+        // from the fall-through fresh session silently destroys those
+        // preserved bytes. Surface as a failed save so the player gets a
+        // flash and can recover via Delete / a newer-build reload.
+        if (this.autosaveSuspended) return false;
         const ok = manualSave(this.currentSeed, this.inputLog, this.world);
         // Round-2 review: bump the autosave cooldown so the next autosave
         // window doesn't fire seconds later and overwrite the manual save's
