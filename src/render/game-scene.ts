@@ -30,7 +30,7 @@ import { createScenario } from '../sim/scenario.js';
 import { copyWorldState, type WorldState } from '../sim/types.js';
 import { tick, resetFlowFieldCaches } from '../sim/tick.js';
 import { createGameLoop, type GameLoop, MS_PER_TICK } from '../platform/game-loop.js';
-import { hasSave, loadSave, deleteSave, tickAutosave, FutureSimVersionError } from '../platform/save.js';
+import { hasSave, loadSave, deleteSave, tickAutosave, FutureSimVersionError, manualSave } from '../platform/save.js';
 import { deserializeWorldState } from '../platform/save.js';
 import { loadSettings, saveSettings } from '../platform/settings.js';
 import { runAIController } from './ai-controller.js';
@@ -131,6 +131,16 @@ interface UIScenePhase9 {
   }): void;
   hidePauseMenuOverlay(): void;
   isPauseMenuVisible(): boolean;
+  // Issue #115 — Save/Load dialog overlay. Shown on top of the pause menu;
+  // GameScene hides the pause menu before showing the dialog so the layered
+  // chrome stays clean, and re-shows the menu when Back is pressed.
+  showSaveLoadDialogOverlay(callbacks: {
+    onContinue: () => void;
+    onNewGame: () => void;
+    onSaveNow: () => boolean;
+    onBack: () => void;
+  }): void;
+  hideSaveLoadDialogOverlay(): void;
 }
 import type { SimCommand } from '../sim/commands.js';
 
@@ -512,8 +522,7 @@ export class GameScene extends Phaser.Scene {
         const snap = buildDebugSnapshot(this.world, this.currentSeed, this.inputLog);
         downloadDebugSnapshot(snap);
       },
-      // Issue #115 will provide onOpenSaveLoad here. Until then the menu's
-      // Save/Load row renders disabled (callbacks.onOpenSaveLoad === undefined).
+      onOpenSaveLoad: () => this.openSaveLoadDialog(),
     });
   }
 
@@ -521,8 +530,55 @@ export class GameScene extends Phaser.Scene {
     if (this.gamePhase !== GamePhase.Paused) return;
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     uiScene.hidePauseMenuOverlay();
+    uiScene.hideSaveLoadDialogOverlay();
     this.gamePhase = GamePhase.Playing;
     this.gameLoop.resume();
+  }
+
+  // Issue #115 — opens the Save/Load dialog on top of the pause menu. Hides
+  // the menu first so the dialog has the canvas to itself; Back re-shows
+  // the menu via openPauseMenu's flow path. The game stays Paused throughout
+  // — Continue / New Game are the only paths that resume the loop.
+  private openSaveLoadDialog(): void {
+    if (this.gamePhase !== GamePhase.Paused) return;
+    const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
+    // Hide the menu before showing the dialog so the menu's button rects
+    // don't bleed through hit-testing while the dialog is up.
+    uiScene.hidePauseMenuOverlay();
+    uiScene.showSaveLoadDialogOverlay({
+      onContinue: () => {
+        // bootFromSave does its own resetSessionState + finishBoot, including
+        // gameLoop.resume(). We just need to flip out of Paused phase first
+        // so finishBoot's `gamePhase = Playing` overwrite is consistent.
+        this.gamePhase = GamePhase.Playing;
+        this.bootFromSave();
+      },
+      onNewGame: () => {
+        // restartGame deletes the existing save (preserving the issue #66
+        // guard) and bootFreshes; finishBoot resumes the loop and flips to
+        // Playing. Set Playing here too so the transitional moment between
+        // dialog dismissal and finishBoot doesn't observe a dangling Paused.
+        this.gamePhase = GamePhase.Playing;
+        this.restartGame();
+      },
+      onSaveNow: () => {
+        if (this.world === undefined) return false;
+        return manualSave(this.currentSeed, this.inputLog, this.world);
+      },
+      onBack: () => {
+        // Re-open the pause menu — gamePhase is still Paused, gameLoop is
+        // still paused, so this just restores the menu chrome.
+        uiScene.showPauseMenuOverlay({
+          onResume: () => this.closePauseMenu(),
+          onDownloadDebug: () => {
+            if (this.world === undefined) return;
+            const snap = buildDebugSnapshot(this.world, this.currentSeed, this.inputLog);
+            downloadDebugSnapshot(snap);
+          },
+          onOpenSaveLoad: () => this.openSaveLoadDialog(),
+        });
+      },
+    });
   }
 
   private restartGame(): void {

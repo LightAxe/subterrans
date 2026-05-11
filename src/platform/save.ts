@@ -38,6 +38,7 @@ import {
   SURFACE_GRID_HEIGHT,
   UNDERGROUND_GRID_WIDTH,
   UNDERGROUND_GRID_HEIGHT,
+  PLAYER_COLONY_ID,
 } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { ChamberType } from '../sim/enums.js';
@@ -1276,6 +1277,109 @@ export function deleteSave(): void {
   } catch {
     // swallow — quota / private-mode errors are non-fatal for delete
   }
+}
+
+// ---------------------------------------------------------------------------
+// Issue #115 — manual save / save-info / incompatible-save detection
+//
+// The autosave path (tickAutosave) writes opportunistically every 30s. A
+// manual "Save now" button needs an explicit write that doesn't disturb the
+// autosave cooldown — so manualSave is a thin wrapper around buildSaveFile +
+// setItem that does NOT update the lastSaveMs timer. The next autosave still
+// fires on its own schedule, which is fine: a manual save followed by an
+// autosave 5 seconds later costs one extra setItem call, not "two competing
+// writers."
+//
+// hasIncompatibleSave distinguishes "no save in localStorage" from "save
+// present but unreadable by this build" so the Save/Load dialog can surface
+// a one-time recovery message instead of silently booting fresh.
+//
+// getSaveInfo extracts the cheap summary fields the dialog displays without
+// running deserializeWorldState (which allocates typed arrays and validates
+// every field). It only parses the JSON envelope and reads three primitive
+// fields, so it's safe to call on every dialog open.
+// ---------------------------------------------------------------------------
+
+/** Issue #115 — manual save. Returns true on successful write, false on
+ *  quota / private-mode / blocked-storage failure. Does NOT touch the
+ *  autosave timer; callers driving tickAutosave keep their own lastSaveMs. */
+export function manualSave(
+  seed: number,
+  inputLog: readonly SimCommand[],
+  world: WorldState,
+): boolean {
+  try {
+    const envelope = buildSaveFile(seed, inputLog, world);
+    localStorage.setItem(SAVE_KEY, JSON.stringify(envelope));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Issue #115 — true iff bytes exist under SAVE_KEY but parseSaveFile cannot
+ *  read them (wrong version, corrupt envelope, future simVersion). Distinct
+ *  from `hasSave === false` which can mean "no save written yet" OR "save
+ *  present but unreadable" — the Save/Load dialog needs to tell the player
+ *  the difference so a v2 save in localStorage doesn't silently disappear
+ *  on a New Game click. */
+export function hasIncompatibleSave(): boolean {
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(SAVE_KEY);
+  } catch {
+    return false;
+  }
+  if (raw === null) return false;
+  try {
+    parseSaveFile(raw);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/** Lightweight save summary surfaced in the Save/Load dialog's info line.
+ *  Avoids deserializeWorldState (which allocates the full typed-array world)
+ *  by reading only three primitives from the JSON envelope. */
+export interface SaveInfo {
+  /** Sim tick at the moment the snapshot was taken. */
+  tick: number;
+  /** Player colony's living worker count, or 0 when the field is missing. */
+  playerWorkers: number;
+  /** Player colony's stored-food count in HUMAN units (post `>> FP_SHIFT`). */
+  playerFoodStored: number;
+}
+
+/** Issue #115 — extract the dialog's summary fields without a full
+ *  deserialize. Returns null if no save exists or the envelope is unreadable.
+ *  Player colony key is `String(PLAYER_COLONY_ID)` per the colonies map's
+ *  stringified-int convention (ADR-0006). */
+export function getSaveInfo(): SaveInfo | null {
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(SAVE_KEY);
+  } catch {
+    return null;
+  }
+  if (raw === null) return null;
+  let file: SaveFile;
+  try {
+    file = parseSaveFile(raw);
+  } catch {
+    return null;
+  }
+  const playerKey = String(PLAYER_COLONY_ID);
+  const playerColony = file.snapshot.colonies[playerKey];
+  // foodStored is fixed-point; convert to whole-food units for display.
+  // Right-shift is safe here: foodStored is a non-negative int in the
+  // serialized envelope (validated upstream).
+  const foodFp = playerColony?.foodStored ?? 0;
+  return {
+    tick: file.snapshot.tick,
+    playerWorkers: playerColony?.workerCount ?? 0,
+    playerFoodStored: foodFp >> FP_SHIFT,
+  };
 }
 
 /**
