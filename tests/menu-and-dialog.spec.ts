@@ -116,11 +116,11 @@ test.describe('Issue #115/#116 — single click triggers single dispatch', () =>
     await page.locator('canvas').first().click({ position: settingsRect });
     await page.waitForTimeout(120);
 
-    // Settings sub-screen now has 2 buttons: pheromone-toggle and back.
+    // Settings sub-screen has 3 items: pheromone-toggle, speed-cycle, back.
     const toggleRect = await page.evaluate(() => {
       const CANVAS_W = 800, CANVAS_H = 592;
       const BTN_W = 320, BTN_H = 40, GAP = 10, TITLE_H = 56;
-      const n = 2;
+      const n = 3;
       const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
       const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
       const x = (CANVAS_W - BTN_W) / 2;
@@ -345,6 +345,114 @@ test.describe('Issue #115 — Save/Load dialog reachable from pause menu', () =>
     await page.waitForTimeout(150);
     const gone = await page.evaluate(() => localStorage.getItem('subterrans:save:v3'));
     expect(gone).toBeNull();
+  });
+});
+
+test.describe('Settings — Speed cycle row (UAT)', () => {
+  test('clicking the speed row cycles 1× → 2× → 4× → 1× (live, session-only)', async ({ page }) => {
+    await bootGame(page);
+
+    // Open menu → Settings.
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(100);
+    const settingsRect = await page.evaluate(() => {
+      const CANVAS_W = 800, CANVAS_H = 592;
+      const BTN_W = 320, BTN_H = 40, GAP = 10, TITLE_H = 56;
+      const n = 4;
+      const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
+      const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
+      const x = (CANVAS_W - BTN_W) / 2;
+      const settingsY = top + 2 * (BTN_H + GAP);
+      return { x: x + BTN_W / 2, y: settingsY + BTN_H / 2 };
+    });
+    await page.locator('canvas').first().click({ position: settingsRect });
+    await page.waitForTimeout(120);
+
+    // On Settings page: [pheromone-toggle (i=0), speed-cycle (i=1), back (i=2)].
+    // Compute rect for i=1.
+    const speedRect = await page.evaluate(() => {
+      const CANVAS_W = 800, CANVAS_H = 592;
+      const BTN_W = 320, BTN_H = 40, GAP = 10, TITLE_H = 56;
+      const n = 3;
+      const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
+      const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
+      const x = (CANVAS_W - BTN_W) / 2;
+      const speedY = top + 1 * (BTN_H + GAP);
+      return { x: x + BTN_W / 2, y: speedY + BTN_H / 2 };
+    });
+
+    // We don't have a public hook for the speedMultiplier, but the dialog
+    // label encodes it visually. Sample the canvas pixels along the label
+    // baseline — only sanity-checking that consecutive clicks change the
+    // rendered text region (any change suffices: 1×→2×→4× all differ).
+    const sampleLabel = async () => {
+      return await page.locator('canvas').first().screenshot({
+        clip: { x: speedRect.x - 60, y: speedRect.y - 8, width: 120, height: 16 },
+      });
+    };
+
+    const at1x = await sampleLabel();
+    await page.locator('canvas').first().click({ position: speedRect });
+    await page.waitForTimeout(100);
+    const at2x = await sampleLabel();
+    await page.locator('canvas').first().click({ position: speedRect });
+    await page.waitForTimeout(100);
+    const at4x = await sampleLabel();
+    await page.locator('canvas').first().click({ position: speedRect });
+    await page.waitForTimeout(100);
+    const at1xAgain = await sampleLabel();
+
+    // Each step must differ from the previous (distinct labels render).
+    expect(at1x.equals(at2x)).toBe(false);
+    expect(at2x.equals(at4x)).toBe(false);
+    expect(at4x.equals(at1xAgain)).toBe(false);
+    // Cycle closes — back at 1× matches the initial 1× label.
+    expect(at1x.equals(at1xAgain)).toBe(true);
+  });
+});
+
+test.describe('Pheromone overlay actually renders (UAT P1 — pre-existing draw-order bug)', () => {
+  // The bug: GameScene called drawPheromoneOverlay BEFORE drawSurface, but
+  // drawSurface paints opaque terrain THEN entities. Pheromones got wiped
+  // by the terrain pass — invisible since 9f5b23f. Issue #114's toggle
+  // surfaced it (ON and OFF rendered identically because ON was always
+  // overpainted). Fix: split the orchestrator into terrain → pheromone →
+  // entities so the overlay lands between layers as the docstring intended.
+  test.setTimeout(120_000);
+
+  test('after sustained foraging at 4×, ON and OFF screenshots differ', async ({ page }) => {
+    await page.goto('/');
+    await page.locator('canvas').first().waitFor({ state: 'attached' });
+    await page.evaluate(() => {
+      localStorage.removeItem('subterrans:save:v3');
+      localStorage.removeItem('subterrans:settings:v1');
+    });
+    await page.reload();
+    await page.locator('canvas').first().waitFor({ state: 'attached' });
+    await page.waitForFunction(() => {
+      const ui = (window as { __phase9_ui?: { activeOverlay: string } }).__phase9_ui;
+      return ui !== undefined && ui.activeOverlay === 'none';
+    });
+
+    // Run at 4× tick rate for 30s wall-clock = 600 sim seconds. With the
+    // pre-fix draw order any non-zero pheromone would have been wiped by
+    // the terrain pass — ON and OFF were byte-identical. Post-fix the
+    // foraged FoodTrail cells ramp through alpha 0.6 max and are clearly
+    // visible. Assertion: PNGs must differ.
+    await page.keyboard.press('4');
+    await page.waitForTimeout(30000);
+
+    const onPng = await page.locator('canvas').first().screenshot();
+    await page.keyboard.press('p');
+    await page.waitForTimeout(500);
+    const offPng = await page.locator('canvas').first().screenshot();
+
+    // Pre-fix: ON and OFF rendered byte-identical because terrain overpainted
+    // the pheromone overlay. Post-fix: any non-zero pheromone cell renders
+    // and the buffers differ. We don't assert a byte-count delta because
+    // PNG compression sometimes coincidentally produces similar sizes for
+    // visually-distinct frames — the equals check is the load-bearing one.
+    expect(onPng.equals(offPng)).toBe(false);
   });
 });
 

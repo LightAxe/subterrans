@@ -59,8 +59,8 @@ import {
   UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT,
 } from '../sim/constants.js';
 import { GameOutcome } from '../sim/game-over.js';
-import { drawSurface, type GfxLike } from './draw-surface.js';
-import { drawUnderground } from './draw-underground.js';
+import { drawSurfaceTerrain, drawSurfaceEntities, type GfxLike } from './draw-surface.js';
+import { drawUndergroundTerrain, drawUndergroundEntities } from './draw-underground.js';
 import { drawPheromoneOverlay } from './draw-pheromone.js';
 import { AntFacingCache } from './ant-facing-cache.js';
 import {
@@ -185,7 +185,11 @@ export class GameScene extends Phaser.Scene {
    */
   private autosaveSuspended: boolean = false;
   private currentSeed: number = 0;
-  private speedMultiplier: number = 1;
+  // Issue #114 UAT — Settings sub-screen has a "Speed: N×" cycle row that
+  // reads/writes this field via callbacks. The 1/2/4 keyboard shortcuts
+  // below set the same field directly. Narrowed to the cycle set so the
+  // type aligns with PauseMenuLayout's SpeedMultiplier.
+  private speedMultiplier: 1 | 2 | 4 = 1;
 
   constructor() { super({ key: 'GameScene' }); }
 
@@ -541,6 +545,8 @@ export class GameScene extends Phaser.Scene {
     onResume: () => void;
     onDownloadDebug: () => void;
     onOpenSaveLoad: () => void;
+    getSpeedMultiplier: () => 1 | 2 | 4;
+    onCycleSpeed: (next: 1 | 2 | 4) => void;
   } {
     return {
       onResume: () => this.closePauseMenu(),
@@ -550,6 +556,12 @@ export class GameScene extends Phaser.Scene {
         downloadDebugSnapshot(snap);
       },
       onOpenSaveLoad: () => this.openSaveLoadDialog(),
+      // Issue #114 UAT — read/write the live speedMultiplier so the menu's
+      // Settings sub-screen has parity with the 1/2/4 keyboard shortcuts.
+      // The shortcuts are Playing-only-gated; the menu surface gives the
+      // same control a discoverable home while paused.
+      getSpeedMultiplier: () => this.speedMultiplier,
+      onCycleSpeed: (next: 1 | 2 | 4) => { this.speedMultiplier = next; },
     };
   }
 
@@ -692,14 +704,27 @@ export class GameScene extends Phaser.Scene {
     const gfx = this.gfx as unknown as GfxLike;
     gfx.clear();
     this.antSprites.beginFrame();
-    // Issue #114 — pheromone overlay is gated on the viewState flag so the P
-    // key (and the pause menu's Settings sub-screen) can hide it without
-    // touching the simulation. Player colony only — enemy pheromones stay
-    // hidden regardless of toggle state (PRD §7b / T-08-05).
-    if (this.viewState.showPheromoneOverlay) {
-      drawPheromoneOverlay(gfx, this.world, cam, this.viewState.activeView);
-    }
+    // UAT regression fix: pheromone overlay MUST render between terrain and
+    // entities, not before the orchestrator. drawSurface / drawUnderground
+    // paint opaque terrain THEN entities; an overlay drawn before the
+    // orchestrator gets wiped by the terrain pass. The bug had been
+    // invisible since the Phase 9.06 wiring (9f5b23f) — pheromones were in
+    // the world state but never showed up on canvas. Issue #114 surfaced it
+    // when the toggle had no visible effect (both ON and OFF rendered the
+    // same — because ON was always being overpainted).
+    //
+    // Fix: call the split terrain + entities functions explicitly so the
+    // pheromone overlay lands in the middle. The orchestrator wrappers
+    // (drawSurface / drawUnderground) stay for callers that don't need
+    // the overlay slot (e.g. unit tests).
+    //
+    // Player colony only — enemy pheromones stay hidden regardless of toggle
+    // state (PRD §7b / T-08-05).
     if (this.viewState.activeView === 'surface') {
+      drawSurfaceTerrain(gfx, this.world, cam);
+      if (this.viewState.showPheromoneOverlay) {
+        drawPheromoneOverlay(gfx, this.world, cam, 'surface');
+      }
       const pending =
         this.surfaceInputState.pendingEntranceTileX !== null &&
         this.surfaceInputState.pendingEntranceTileY !== null
@@ -708,7 +733,7 @@ export class GameScene extends Phaser.Scene {
               tileY: this.surfaceInputState.pendingEntranceTileY,
             }
           : null;
-      drawSurface(
+      drawSurfaceEntities(
         gfx,
         this.antSprites,
         this.prevState,
@@ -719,7 +744,11 @@ export class GameScene extends Phaser.Scene {
         this.antFacingCache,
       );
     } else {
-      drawUnderground(
+      drawUndergroundTerrain(gfx, this.world, cam, this.viewState.activeUndergroundColonyId);
+      if (this.viewState.showPheromoneOverlay) {
+        drawPheromoneOverlay(gfx, this.world, cam, 'underground');
+      }
+      drawUndergroundEntities(
         gfx,
         this.antSprites,
         this.prevState,

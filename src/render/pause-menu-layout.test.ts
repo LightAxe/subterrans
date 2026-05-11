@@ -3,6 +3,7 @@ import {
   pauseMenuItems,
   pageTitle,
   itemAt,
+  nextSpeedMultiplier,
   CANVAS_W,
   CANVAS_H,
   PAUSE_MENU_BUTTON_W,
@@ -15,6 +16,7 @@ import { DEFAULT_SETTINGS } from '../platform/settings.js';
 const ctx: PauseMenuRenderContext = {
   saveLoadEnabled: true,
   settings: { ...DEFAULT_SETTINGS },
+  currentSpeedMultiplier: 1,
 };
 
 describe('pauseMenuItems — main page', () => {
@@ -69,9 +71,9 @@ describe('pauseMenuItems — main page', () => {
 });
 
 describe('pauseMenuItems — settings page', () => {
-  it('returns the pheromone toggle and a back button', () => {
+  it('returns the pheromone toggle, speed cycle, and a back button', () => {
     const items = pauseMenuItems('settings', ctx);
-    expect(items.map(i => i.id)).toEqual(['pheromone-toggle', 'back']);
+    expect(items.map(i => i.id)).toEqual(['pheromone-toggle', 'speed-cycle', 'back']);
   });
 
   it('pheromone toggle label reflects the current ON state', () => {
@@ -89,6 +91,19 @@ describe('pauseMenuItems — settings page', () => {
     });
     expect(items.find(i => i.id === 'pheromone-toggle')!.label).toContain('OFF');
   });
+
+  it('speed-cycle label reflects the current speed multiplier', () => {
+    expect(pauseMenuItems('settings', { ...ctx, currentSpeedMultiplier: 1 })
+      .find(i => i.id === 'speed-cycle')!.label).toContain('1×');
+    expect(pauseMenuItems('settings', { ...ctx, currentSpeedMultiplier: 2 })
+      .find(i => i.id === 'speed-cycle')!.label).toContain('2×');
+    expect(pauseMenuItems('settings', { ...ctx, currentSpeedMultiplier: 4 })
+      .find(i => i.id === 'speed-cycle')!.label).toContain('4×');
+  });
+
+  it('speed-cycle row is enabled', () => {
+    expect(pauseMenuItems('settings', ctx).find(i => i.id === 'speed-cycle')!.enabled).toBe(true);
+  });
 });
 
 describe('pageTitle', () => {
@@ -98,6 +113,12 @@ describe('pageTitle', () => {
   it('returns "Settings" for the settings page', () => {
     expect(pageTitle('settings')).toBe('Settings');
   });
+});
+
+describe('nextSpeedMultiplier — cycle 1→2→4→1', () => {
+  it('1 → 2', () => { expect(nextSpeedMultiplier(1)).toBe(2); });
+  it('2 → 4', () => { expect(nextSpeedMultiplier(2)).toBe(4); });
+  it('4 → 1', () => { expect(nextSpeedMultiplier(4)).toBe(1); });
 });
 
 describe('itemAt', () => {

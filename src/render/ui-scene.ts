@@ -143,11 +143,13 @@ import {
   pageTitle,
   itemAt as pauseMenuItemAt,
   titleCenterY as pauseMenuTitleCenterY,
+  nextSpeedMultiplier,
   CANVAS_W as PAUSE_MENU_CANVAS_W,
   CANVAS_H as PAUSE_MENU_CANVAS_H,
   type PauseMenuPage,
   type PauseMenuItem,
   type PauseMenuItemId,
+  type SpeedMultiplier,
 } from './pause-menu-layout.js';
 import {
   saveLoadDialogItems,
@@ -188,6 +190,14 @@ export interface PauseMenuCallbacks {
   /** Issue #115 — invoked when the Save/Load row is clicked. Until that issue
    *  lands, the row is rendered disabled and this is never called. */
   onOpenSaveLoad?(): void;
+  /** Read the live speedMultiplier so the Settings page can render the
+   *  current value in the "Speed: N×" cycle row. Session-only (no settings
+   *  persistence — speed resets to 1× on restart per the Phase 4 contract). */
+  getSpeedMultiplier?(): SpeedMultiplier;
+  /** Apply a new speed value when the Settings page's speed-cycle row is
+   *  clicked. The 1/2/4 keyboard shortcuts on GameScene call the same
+   *  setter under the hood; both paths converge on speedMultiplier writes. */
+  onCycleSpeed?(next: SpeedMultiplier): void;
 }
 
 /** Issue #115 — callbacks the Save/Load dialog invokes. The dialog reads
@@ -1051,6 +1061,10 @@ export class UIScene extends Phaser.Scene {
     const ctx = {
       saveLoadEnabled: this.pauseMenuSaveLoadEnabled,
       settings: loadSettings(),
+      // Settings page's "Speed: N×" row reads this each render so it
+      // reflects writes from EITHER the row click OR the live 1/2/4
+      // keyboard shortcuts on GameScene.
+      currentSpeedMultiplier: this.pauseMenuCallbacks?.getSpeedMultiplier?.() ?? 1,
     };
     const items = pauseMenuItems(page, ctx);
     this.pauseMenuVisibleItems = items;
@@ -1154,6 +1168,17 @@ export class UIScene extends Phaser.Scene {
         // Mirror to ViewState so the next render frame sees the new value
         // even if it doesn't re-read settings.
         this.viewState.showPheromoneOverlay = next.pheromoneOverlay;
+        this.renderPauseMenuPage();
+        return;
+      }
+      case 'speed-cycle': {
+        // Cycle the live speedMultiplier 1→2→4→1 via GameScene's setter.
+        // Session-only: speed is not persisted to settings (Phase 4 fresh-
+        // boot contract resets to 1× on restart). The 1/2/4 keyboard
+        // shortcuts on GameScene write to the same field, so both paths
+        // converge on a single source of truth.
+        const cur = cb?.getSpeedMultiplier?.() ?? 1;
+        cb?.onCycleSpeed?.(nextSpeedMultiplier(cur));
         this.renderPauseMenuPage();
         return;
       }

@@ -47,7 +47,12 @@ export type PauseMenuItemId =
   | 'settings'
   | 'debug-snapshot'
   | 'back'
-  | 'pheromone-toggle';
+  | 'pheromone-toggle'
+  | 'speed-cycle';
+
+/** Allowed speedMultiplier values. Cycled by the Settings sub-screen
+ *  speed-cycle row in the order 1 → 2 → 4 → 1. */
+export type SpeedMultiplier = 1 | 2 | 4;
 
 export interface MenuItemRect {
   x: number;
@@ -71,6 +76,13 @@ export interface PauseMenuRenderContext {
   saveLoadEnabled: boolean;
   /** Latest settings snapshot — Settings page reads this to render toggle state. */
   settings: Settings;
+  /** Current speedMultiplier (1 | 2 | 4). The Settings page renders this in
+   *  the "Speed: N×" cycle row. Source of truth is GameScene's live field —
+   *  the menu reads via the onSpeedMultiplier callback at render time and
+   *  writes via onCycleSpeed when the row is clicked. Session-only (no
+   *  settings persistence — matches the Phase 4 fresh-boot contract that
+   *  speed resets to 1× on restart). */
+  currentSpeedMultiplier: SpeedMultiplier;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +145,14 @@ export function pauseMenuItems(
       label: `Pheromone trails: ${ctx.settings.pheromoneOverlay ? 'ON' : 'OFF'}`,
       enabled: true,
     },
+    {
+      id: 'speed-cycle',
+      // Cycles 1→2→4→1 on click. Mirrors the 1/2/4 keyboard shortcuts that
+      // are Playing-only-gated; the menu surface gives a discoverable home
+      // for the same control while paused.
+      label: `Speed: ${ctx.currentSpeedMultiplier}×`,
+      enabled: true,
+    },
     { id: 'back', label: '<  Back', enabled: true },
   ];
   const rects = stackRects(labels.length);
@@ -165,4 +185,12 @@ export function itemAt(items: readonly PauseMenuItem[], px: number, py: number):
     if (pointInRect(px, py, it.rect)) return it;
   }
   return null;
+}
+
+/** Next speed in the 1→2→4→1 cycle. Pure function so the menu dispatch
+ *  doesn't need branching inline. */
+export function nextSpeedMultiplier(current: SpeedMultiplier): SpeedMultiplier {
+  if (current === 1) return 2;
+  if (current === 2) return 4;
+  return 1;
 }
