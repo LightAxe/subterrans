@@ -1371,25 +1371,30 @@ export function hasIncompatibleSave(): boolean {
   }
   // Codex round-3 P1: parseSaveFile only validates the envelope (version,
   // seed, inputLog). `snapshot` itself can be `null` or any non-object on
-  // a tampered/malformed envelope. Reading `file.snapshot.simVersion`
-  // would throw and crash the dialog open path. Treat any non-object
-  // snapshot as incompatible — bootFromSave's deserializeWorldState would
-  // also reject it, so the dialog's "incompatible warning + Delete enabled"
-  // recovery path is the right outcome.
+  // a tampered/malformed envelope. Reject the obviously-broken case before
+  // the deserialize attempt below so we don't waste an allocation on it.
   const snapshot = file.snapshot as unknown;
   if (snapshot === null || typeof snapshot !== 'object') return true;
 
-  // Future-sim guard. Defensive type-check on simVersion: the field is
-  // optional in SerializedWorldState (legacy saves omit it; defaults to
-  // LEGACY_SIM_VERSION on load). We only flag as incompatible when the
-  // field is present AND exceeds the current LATEST. Anything else
-  // (missing, equal, lower) is loadable — `deserializeWorldState`
-  // handles legacy-default and same-version paths cleanly.
-  const simVersion = (snapshot as { simVersion?: unknown }).simVersion;
-  if (typeof simVersion === 'number' && simVersion > LATEST_SIM_VERSION) {
+  // Round-4 (Rob's manual review of 6d840ef): the prior simVersion-only
+  // check left a UI-lie window for parseable envelopes whose snapshot is
+  // shape-valid at the top level but missing required deeper fields
+  // (e.g. `snapshot: {}`, or `simVersion: LEGACY_SIM_VERSION - 1`).
+  // Continue would look enabled; bootFromSave would then throw on
+  // deserialize and fall through to bootFresh. Align the dialog's
+  // compatibility boundary with the canonical one — attempt the full
+  // deserialize. Any throw (FutureSimVersionError, plain Error from
+  // tampered/missing-fields, etc.) means Continue would not actually
+  // load the save, so surface as incompatible.
+  //
+  // Cost: one full WorldState allocation per call. The dialog open path
+  // calls this once (cached for the render); user-initiated, infrequent.
+  try {
+    deserializeWorldState(file.snapshot);
+    return false;
+  } catch {
     return true;
   }
-  return false;
 }
 
 /** Lightweight save summary surfaced in the Save/Load dialog's info line.

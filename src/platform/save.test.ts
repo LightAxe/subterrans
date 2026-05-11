@@ -1879,6 +1879,46 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       }));
       expect(hasIncompatibleSave()).toBe(true);
     });
+
+    it('round-4 (Rob): returns true when snapshot is empty object (parseable but unloadable — Continue would lie)', async () => {
+      // Pre-fix: parseSaveFile succeeds, snapshot is non-null object,
+      // simVersion is missing (passes the prior check), Continue would
+      // appear enabled — but bootFromSave would throw on missing required
+      // fields and silently fall through to bootFresh. Now flagged via
+      // the full-deserialize boundary check.
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: {},
+      }));
+      expect(hasIncompatibleSave()).toBe(true);
+    });
+
+    it('round-4 (Rob): returns true when simVersion is below LEGACY_SIM_VERSION (tampered down)', async () => {
+      const { LEGACY_SIM_VERSION } = await import('../sim/types.js');
+      const world = createScenario(7);
+      const snap = serializeWorldState(world);
+      snap.simVersion = LEGACY_SIM_VERSION - 1;
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: SAVE_FORMAT_VERSION,
+        seed: 7,
+        inputLog: [],
+        snapshot: snap,
+        savedAtMs: Date.now(),
+      }));
+      expect(hasIncompatibleSave()).toBe(true);
+    });
+
+    it('round-4 (Rob): returns true when snapshot.colonies is missing (deserialize would throw)', () => {
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: { tick: 0, rngState: 0, nextEntityId: 0, commandQueue: [] },
+      }));
+      expect(hasIncompatibleSave()).toBe(true);
+    });
   });
 
   describe('Issue #115 — getSaveInfo', () => {

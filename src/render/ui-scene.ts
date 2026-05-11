@@ -1206,15 +1206,25 @@ export class UIScene extends Phaser.Scene {
     for (const obj of this.saveLoadDialogGroup) obj.destroy();
     this.saveLoadDialogGroup = [];
 
+    // Cache hasIncompatibleSave once per render — round-5 made it run a
+    // full deserialize, so calling it twice for the ctx fields below
+    // would deserialize the entire WorldState twice per frame.
+    const incompatible = hasIncompatibleSave();
     const ctx = {
       // Round-3 (Codex P2): a future-sim save still passes parseSaveFile
       // (so hasSave returns true) but bootFromSave would reject it via
       // FutureSimVersionError. Treat the save as compatible only when
-      // BOTH envelope is parseable AND simVersion is loadable. The
-      // hasIncompatibleSave check covers both the parse-fails and the
-      // future-sim cases — see save.ts for the full classification.
-      hasCompatibleSave: hasSave() && !hasIncompatibleSave(),
-      hasIncompatibleSave: hasIncompatibleSave(),
+      // BOTH envelope is parseable AND deserialize succeeds. The
+      // hasIncompatibleSave check covers parse-fails, future-sim, and
+      // (round-4) any other shape error that would make Continue a
+      // silent fall-through to bootFresh. See save.ts for the full
+      // classification.
+      //
+      // Round-5 (cache): hasIncompatibleSave now performs a full
+      // deserialize on the saved envelope. Local-cache the result so
+      // a single renderSaveLoadDialog() doesn't pay the cost twice.
+      hasCompatibleSave: hasSave() && !incompatible,
+      hasIncompatibleSave: incompatible,
       confirming: { ...this.saveLoadDialogConfirming },
     };
     const items = saveLoadDialogItems(ctx);
