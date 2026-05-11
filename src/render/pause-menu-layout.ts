@@ -17,7 +17,8 @@
 // The `Save/Load` row carries an `enabled` flag so it can render disabled
 // while issue #115's dialog isn't yet wired in.
 
-import type { Settings } from '../platform/settings.js';
+// (Settings type was imported here pre-round-6; removed when the
+// pheromone-toggle label moved to an in-memory ctx field per Codex P2.)
 
 // ---------------------------------------------------------------------------
 // Geometry constants (canvas-local pixels)
@@ -74,8 +75,12 @@ export interface PauseMenuRenderContext {
   /** True once issue #115's Save/Load dialog is wired in; until then the row
    *  renders disabled to signal "coming soon" without removing the affordance. */
   saveLoadEnabled: boolean;
-  /** Latest settings snapshot — Settings page reads this to render toggle state. */
-  settings: Settings;
+  /** Current pheromone overlay state. Sourced from ViewState (in-memory) by
+   *  the caller, NOT from `loadSettings()` — round-6 P2 (Codex): in degraded-
+   *  storage environments saveSettings is a no-op and loadSettings keeps
+   *  returning the default, so reading the label from persisted state makes
+   *  the toggle look broken. The in-mem flag is the authoritative truth. */
+  currentPheromoneOverlay: boolean;
   /** Current speedMultiplier (1 | 2 | 4). The Settings page renders this in
    *  the "Speed: N×" cycle row. Source of truth is GameScene's live field —
    *  the menu reads via the onSpeedMultiplier callback at render time and
@@ -142,7 +147,7 @@ export function pauseMenuItems(
   const labels: Array<{ id: PauseMenuItemId; label: string; enabled: boolean }> = [
     {
       id: 'pheromone-toggle',
-      label: `Pheromone trails: ${ctx.settings.pheromoneOverlay ? 'ON' : 'OFF'}`,
+      label: `Pheromone trails: ${ctx.currentPheromoneOverlay ? 'ON' : 'OFF'}`,
       enabled: true,
     },
     {

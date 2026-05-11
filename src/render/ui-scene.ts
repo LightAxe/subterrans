@@ -1060,7 +1060,13 @@ export class UIScene extends Phaser.Scene {
     const page = this.pauseMenuPage;
     const ctx = {
       saveLoadEnabled: this.pauseMenuSaveLoadEnabled,
-      settings: loadSettings(),
+      // Round-6 P2 (Codex): the Settings page reads the pheromone overlay
+      // state from in-memory ViewState (the authoritative source) rather
+      // than from loadSettings(). In degraded-storage environments (private
+      // mode, quota), saveSettings drops the write and loadSettings keeps
+      // returning the default, which would freeze the label and make the
+      // toggle look broken. ViewState always reflects the current value.
+      currentPheromoneOverlay: this.viewState.showPheromoneOverlay,
       // Settings page's "Speed: N×" row reads this each render so it
       // reflects writes from EITHER the row click OR the live 1/2/4
       // keyboard shortcuts on GameScene.
@@ -1158,16 +1164,18 @@ export class UIScene extends Phaser.Scene {
         cb?.onDownloadDebug();
         return;
       case 'pheromone-toggle': {
-        // Issue #114 — flip the persisted setting and re-render so the
-        // ON/OFF label reflects the new state. ViewState (and the per-frame
-        // skip in GameScene.update) reads the same persisted value via
-        // loadSettings(), so the toggle takes effect on the next frame.
-        const next = loadSettings();
-        next.pheromoneOverlay = !next.pheromoneOverlay;
-        saveSettings(next);
-        // Mirror to ViewState so the next render frame sees the new value
-        // even if it doesn't re-read settings.
-        this.viewState.showPheromoneOverlay = next.pheromoneOverlay;
+        // Round-6 P2 (Codex): flip from in-memory state, NOT from
+        // loadSettings(). In degraded-storage environments saveSettings
+        // is a no-op; loadSettings then returns DEFAULT_SETTINGS on the
+        // next press and we'd recompute `!true = false` every time —
+        // the toggle gets stuck OFF. ViewState is the authoritative
+        // in-mem source; persist is best-effort and survives reload
+        // only when storage cooperates.
+        const next = !this.viewState.showPheromoneOverlay;
+        this.viewState.showPheromoneOverlay = next;
+        const persisted = loadSettings();
+        persisted.pheromoneOverlay = next;
+        saveSettings(persisted);
         this.renderPauseMenuPage();
         return;
       }

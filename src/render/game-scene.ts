@@ -279,12 +279,20 @@ export class GameScene extends Phaser.Scene {
     // menu's Settings sub-screen drives the same write path; gating P on
     // Playing means the menu is the only writer while paused (no label
     // desync — see comment block above).
+    //
+    // Round-6 P2 (Codex): flip from in-memory state, NOT from loadSettings().
+    // If localStorage writes are blocked (quota / private-mode), saveSettings
+    // is a no-op; loadSettings then returns DEFAULT_SETTINGS on the NEXT
+    // press and we'd recompute `!true = false` every time — the toggle gets
+    // stuck OFF. ViewState is the authoritative in-mem source; persist is
+    // best-effort and survives reload only when storage cooperates.
     this.input.keyboard!.on('keydown-P', () => {
       if (this.gamePhase !== GamePhase.Playing) return;
-      const next = loadSettings();
-      next.pheromoneOverlay = !next.pheromoneOverlay;
-      saveSettings(next);
-      this.viewState.showPheromoneOverlay = next.pheromoneOverlay;
+      const next = !this.viewState.showPheromoneOverlay;
+      this.viewState.showPheromoneOverlay = next;
+      const persisted = loadSettings();
+      persisted.pheromoneOverlay = next;
+      saveSettings(persisted);
     });
 
     // 09.1 Chunk 2 — X toggles the active underground colony view. Only

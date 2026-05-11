@@ -11,11 +11,12 @@ import {
   PAUSE_MENU_BUTTON_GAP,
   type PauseMenuRenderContext,
 } from './pause-menu-layout.js';
-import { DEFAULT_SETTINGS } from '../platform/settings.js';
+// (DEFAULT_SETTINGS no longer imported — ctx now uses in-memory boolean
+// for currentPheromoneOverlay instead of a full Settings snapshot.)
 
 const ctx: PauseMenuRenderContext = {
   saveLoadEnabled: true,
-  settings: { ...DEFAULT_SETTINGS },
+  currentPheromoneOverlay: true,
   currentSpeedMultiplier: 1,
 };
 
@@ -77,18 +78,12 @@ describe('pauseMenuItems — settings page', () => {
   });
 
   it('pheromone toggle label reflects the current ON state', () => {
-    const items = pauseMenuItems('settings', {
-      ...ctx,
-      settings: { ...DEFAULT_SETTINGS, pheromoneOverlay: true },
-    });
+    const items = pauseMenuItems('settings', { ...ctx, currentPheromoneOverlay: true });
     expect(items.find(i => i.id === 'pheromone-toggle')!.label).toContain('ON');
   });
 
   it('pheromone toggle label reflects the current OFF state', () => {
-    const items = pauseMenuItems('settings', {
-      ...ctx,
-      settings: { ...DEFAULT_SETTINGS, pheromoneOverlay: false },
-    });
+    const items = pauseMenuItems('settings', { ...ctx, currentPheromoneOverlay: false });
     expect(items.find(i => i.id === 'pheromone-toggle')!.label).toContain('OFF');
   });
 

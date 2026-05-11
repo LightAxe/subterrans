@@ -348,6 +348,73 @@ test.describe('Issue #115 — Save/Load dialog reachable from pause menu', () =>
   });
 });
 
+test.describe('Round-6 (Codex P2) — pheromone toggle survives degraded storage', () => {
+  test('menu-clicked toggle keeps alternating when localStorage.setItem is blocked', async ({ page }) => {
+    await bootGame(page);
+
+    // Simulate quota-exceeded / private-mode: setItem throws. Reading is
+    // unaffected — only the write path is blocked.
+    await page.evaluate(() => {
+      window.localStorage.setItem = () => { throw new Error('QuotaExceeded (simulated)'); };
+    });
+
+    // Open pause menu → Settings sub-page. Stay there for the entire test
+    // so the underlying world doesn't tick between samples — pixel-level
+    // comparison of the toggle label is then deterministic.
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(100);
+    const settingsRect = await page.evaluate(() => {
+      const CANVAS_W = 800, CANVAS_H = 592;
+      const BTN_W = 320, BTN_H = 40, GAP = 10, TITLE_H = 56;
+      const n = 4;
+      const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
+      const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
+      const x = (CANVAS_W - BTN_W) / 2;
+      const settingsY = top + 2 * (BTN_H + GAP);
+      return { x: x + BTN_W / 2, y: settingsY + BTN_H / 2 };
+    });
+    await page.locator('canvas').first().click({ position: settingsRect });
+    await page.waitForTimeout(120);
+
+    // Pheromone toggle is index 0 on the Settings sub-page.
+    const toggleClickPos = await page.evaluate(() => {
+      const CANVAS_W = 800, CANVAS_H = 592;
+      const BTN_W = 320, BTN_H = 40, GAP = 10, TITLE_H = 56;
+      const n = 3;
+      const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
+      const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
+      const x = (CANVAS_W - BTN_W) / 2;
+      const y = top + 0 * (BTN_H + GAP);
+      return { x: x + BTN_W / 2, y: y + BTN_H / 2 };
+    });
+    const labelClip = {
+      x: toggleClickPos.x - 60,
+      y: toggleClickPos.y - 8,
+      width: 120,
+      height: 16,
+    };
+
+    // Sample 1: initial state.
+    const before = await page.locator('canvas').first().screenshot({ clip: labelClip });
+    // Click toggle → flip to OFF in-mem (saveSettings drops the write silently).
+    await page.locator('canvas').first().click({ position: toggleClickPos });
+    await page.waitForTimeout(120);
+    const afterOne = await page.locator('canvas').first().screenshot({ clip: labelClip });
+    // Click again → flip back to ON.
+    await page.locator('canvas').first().click({ position: toggleClickPos });
+    await page.waitForTimeout(120);
+    const afterTwo = await page.locator('canvas').first().screenshot({ clip: labelClip });
+
+    // Pre-fix (degraded storage + loadSettings-derived flip): every click
+    // recomputes from DEFAULT_SETTINGS = {pheromoneOverlay: true}, so the
+    // label always ends at "OFF" after the first click and never flips
+    // back. Post-fix: in-mem state alternates regardless of storage.
+    expect(before.equals(afterOne)).toBe(false);       // 1 click changed it
+    expect(afterOne.equals(afterTwo)).toBe(false);     // 2nd click changed it back
+    expect(before.equals(afterTwo)).toBe(true);        // round trip
+  });
+});
+
 test.describe('Settings — Speed cycle row (UAT)', () => {
   test('clicking the speed row cycles 1× → 2× → 4× → 1× (live, session-only)', async ({ page }) => {
     await bootGame(page);
@@ -418,7 +485,13 @@ test.describe('Pheromone overlay actually renders (UAT P1 — pre-existing draw-
   // surfaced it (ON and OFF rendered identically because ON was always
   // overpainted). Fix: split the orchestrator into terrain → pheromone →
   // entities so the overlay lands between layers as the docstring intended.
-  test.setTimeout(120_000);
+  //
+  // This test runs ants long enough that *some* FoodTrail cells reach a
+  // visible alpha, then compares ON / OFF screenshots. Foraging is
+  // RNG-seeded (Date.now()-derived per bootFresh), so the wall-clock budget
+  // must be generous enough to cover unlucky seeds. 90s @ 4× = 1800 sim
+  // seconds (~30 sim-minutes) is well above the slowest seed observed.
+  test.setTimeout(180_000);
 
   test('after sustained foraging at 4×, ON and OFF screenshots differ', async ({ page }) => {
     await page.goto('/');
@@ -434,13 +507,8 @@ test.describe('Pheromone overlay actually renders (UAT P1 — pre-existing draw-
       return ui !== undefined && ui.activeOverlay === 'none';
     });
 
-    // Run at 4× tick rate for 30s wall-clock = 600 sim seconds. With the
-    // pre-fix draw order any non-zero pheromone would have been wiped by
-    // the terrain pass — ON and OFF were byte-identical. Post-fix the
-    // foraged FoodTrail cells ramp through alpha 0.6 max and are clearly
-    // visible. Assertion: PNGs must differ.
     await page.keyboard.press('4');
-    await page.waitForTimeout(30000);
+    await page.waitForTimeout(90_000);
 
     const onPng = await page.locator('canvas').first().screenshot();
     await page.keyboard.press('p');
@@ -448,10 +516,10 @@ test.describe('Pheromone overlay actually renders (UAT P1 — pre-existing draw-
     const offPng = await page.locator('canvas').first().screenshot();
 
     // Pre-fix: ON and OFF rendered byte-identical because terrain overpainted
-    // the pheromone overlay. Post-fix: any non-zero pheromone cell renders
-    // and the buffers differ. We don't assert a byte-count delta because
-    // PNG compression sometimes coincidentally produces similar sizes for
-    // visually-distinct frames — the equals check is the load-bearing one.
+    // the pheromone overlay. Post-fix: foraged FoodTrail cells render and
+    // the buffers differ. PNG-byte-count assertion is intentionally omitted
+    // (PNG compression sometimes coincidentally produces similar sizes for
+    // visually-distinct frames) — the equals check is the load-bearing one.
     expect(onPng.equals(offPng)).toBe(false);
   });
 });
