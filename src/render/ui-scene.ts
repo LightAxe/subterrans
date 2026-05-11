@@ -35,7 +35,7 @@ export { formatOutcomeTitle, formatKillStatsSubtitle };
 // Plan 07 Playwright observability contract
 // ---------------------------------------------------------------------------
 
-export type ActiveOverlay = 'none' | 'save-prompt' | 'game-over';
+export type ActiveOverlay = 'none' | 'save-prompt' | 'game-over' | 'pause-menu';
 
 // Phase 09.1 Chunk 2 — enemy underground observability. Exposed via the same
 // __phase9_ui global so Playwright can read which colony the underground view
@@ -138,8 +138,36 @@ import {
   requestHideAntActivityPanel,
   applyPendingAntActivityPanelHide,
 } from './ant-activity-panel-state.js';
+import {
+  pauseMenuItems,
+  pageTitle,
+  itemAt as pauseMenuItemAt,
+  titleCenterY as pauseMenuTitleCenterY,
+  CANVAS_W as PAUSE_MENU_CANVAS_W,
+  CANVAS_H as PAUSE_MENU_CANVAS_H,
+  type PauseMenuPage,
+  type PauseMenuItem,
+  type PauseMenuItemId,
+} from './pause-menu-layout.js';
+import { loadSettings, saveSettings, type Settings } from '../platform/settings.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import type { SetBehaviorRatioCommand, PlaceChamberCommand } from '../sim/commands.js';
+
+// ---------------------------------------------------------------------------
+// Pause menu callbacks (issue #116)
+// ---------------------------------------------------------------------------
+
+/** Callbacks the pause menu invokes; supplied by GameScene when it opens the
+ *  menu so the menu module stays free of GameScene type knowledge. */
+export interface PauseMenuCallbacks {
+  /** Called when the player chooses Resume (or closes the menu via Esc). */
+  onResume(): void;
+  /** Called when the player picks "Download debug log". */
+  onDownloadDebug(): void;
+  /** Issue #115 — invoked when the Save/Load row is clicked. Until that issue
+   *  lands, the row is rendered disabled and this is never called. */
+  onOpenSaveLoad?(): void;
+}
 
 // HUD-02 stats row lives entirely inside the 200x24 HUD.STATS rect so
 // isPointerOverHUD() correctly masks world-input click-through. Per PRD §6c
@@ -185,6 +213,18 @@ export class UIScene extends Phaser.Scene {
   // Phase 9 Plan 06 — overlay groups (null = overlay not currently shown)
   private gameOverGroup: Phaser.GameObjects.GameObject[] = [];
   private savePromptGroup: Phaser.GameObjects.GameObject[] = [];
+  // Issue #116 — pause menu overlay state. Empty group means "not visible";
+  // page tracks which sub-screen is currently rendered. callbacks/saveLoadEnabled
+  // are captured at show time so we can re-render on page navigation without
+  // the caller re-supplying them.
+  private pauseMenuGroup: Phaser.GameObjects.GameObject[] = [];
+  private pauseMenuPage: PauseMenuPage = 'main';
+  private pauseMenuCallbacks: PauseMenuCallbacks | null = null;
+  private pauseMenuSaveLoadEnabled: boolean = false;
+  // Items snapshot used for hit-testing the click that fires after the next
+  // pointerdown — kept aligned with what was last drawn so a re-render between
+  // mouse events doesn't leave the hit-test against stale rects.
+  private pauseMenuVisibleItems: readonly PauseMenuItem[] = [];
 
   constructor() { super({ key: 'UIScene' }); }
 
@@ -322,15 +362,42 @@ export class UIScene extends Phaser.Scene {
 
     // Esc hides the panel. UIScene owns this key so GameScene's world
     // keyboard handlers aren't forced to know about UI state.
+    //
+    // Issue #116 — when the pause menu is visible, Esc closes the menu
+    // (via its captured onResume callback) instead of falling through to
+    // the ant-activity hide. Inside the Settings sub-screen Esc still
+    // closes the whole menu — Back is the explicit "go up one level"
+    // affordance. The pause menu is the only overlay on UIScene that has
+    // a self-resume action; SavePrompt and GameOver are click-driven.
     const escKey = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
     if (escKey) {
       escKey.on('down', () => {
+        if (this.isPauseMenuVisible()) {
+          const cb = this.pauseMenuCallbacks;
+          this.hidePauseMenuOverlay();
+          cb?.onResume();
+          return;
+        }
         hideAntActivityPanel();
       });
     }
 
     // Pointer events for HUD interactions.
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      // Issue #116 — pause menu absorbs every click. Buttons fire their own
+      // callbacks via Phaser interactive handlers; this guard prevents a click
+      // outside any button from falling through to HUD widgets / world input
+      // and is also a safety net against double-firing if a button click and
+      // a HUD-zone click happen to coincide.
+      if (this.isPauseMenuVisible()) {
+        const items = this.pauseMenuVisibleItems;
+        const hit = pauseMenuItemAt(items, pointer.x, pointer.y);
+        if (hit !== null) {
+          this.dispatchPauseMenuItem(hit.id);
+        }
+        return;
+      }
+
       // Context menu takes precedence when visible. A click inside selects an
       // item; a click anywhere else dismisses the menu AND falls through so
       // the underlying HUD control still receives the click — prevents the
@@ -452,6 +519,7 @@ export class UIScene extends Phaser.Scene {
     this.events.on('shutdown', () => {
       this.hideGameOverOverlay();
       this.hideSavePromptOverlay();
+      this.hidePauseMenuOverlay();
       hideAntActivityPanel();
       setActiveOverlay('none');
     });
@@ -817,6 +885,163 @@ export class UIScene extends Phaser.Scene {
     for (const obj of this.savePromptGroup) obj.destroy();
     this.savePromptGroup = [];
     setActiveOverlay('none');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #116 — Pause menu overlay
+  //
+  // Same Phaser-overlay-on-UIScene pattern as SavePrompt and GameOver: a
+  // semi-transparent input-blocking background, a centered button stack drawn
+  // from pause-menu-layout, click handlers via Phaser interactive objects, and
+  // setActiveOverlay('pause-menu') for Playwright observability.
+  //
+  // Two pages:
+  //   - main: Resume / Save+Load / Settings → / Download debug log
+  //   - settings: pheromone-toggle (issue #114) / Back
+  //
+  // Page navigation goes through `renderPauseMenuPage` which destroys the
+  // current group and rebuilds against the new page state. saveLoadEnabled
+  // reflects whether issue #115's dialog is wired in; until then the row
+  // renders disabled and is a no-op on click.
+  // ---------------------------------------------------------------------------
+
+  public showPauseMenuOverlay(callbacks: PauseMenuCallbacks): void {
+    this.hidePauseMenuOverlay(); // idempotent — clear any prior instance first
+    this.pauseMenuCallbacks = callbacks;
+    this.pauseMenuSaveLoadEnabled = callbacks.onOpenSaveLoad !== undefined;
+    this.pauseMenuPage = 'main';
+    this.renderPauseMenuPage();
+    setActiveOverlay('pause-menu');
+  }
+
+  public hidePauseMenuOverlay(): void {
+    for (const obj of this.pauseMenuGroup) obj.destroy();
+    this.pauseMenuGroup = [];
+    this.pauseMenuVisibleItems = [];
+    this.pauseMenuCallbacks = null;
+    this.pauseMenuPage = 'main';
+    setActiveOverlay('none');
+  }
+
+  public isPauseMenuVisible(): boolean {
+    return this.pauseMenuGroup.length > 0;
+  }
+
+  /** Render (or re-render) the current pause menu page in place. */
+  private renderPauseMenuPage(): void {
+    // Tear down any previously-drawn buttons/title before rebuilding so a
+    // page navigation doesn't leave the prior page's text on top of the new one.
+    for (const obj of this.pauseMenuGroup) obj.destroy();
+    this.pauseMenuGroup = [];
+
+    const page = this.pauseMenuPage;
+    const ctx = {
+      saveLoadEnabled: this.pauseMenuSaveLoadEnabled,
+      settings: loadSettings(),
+    };
+    const items = pauseMenuItems(page, ctx);
+    this.pauseMenuVisibleItems = items;
+
+    // Background scrim — input-blocking absorbs background clicks. Click-on-
+    // background does NOT dismiss the menu (see pointerdown handler above);
+    // dismissal is via Resume button or Esc key only.
+    const bg = this.add.rectangle(
+      PAUSE_MENU_CANVAS_W / 2,
+      PAUSE_MENU_CANVAS_H / 2,
+      PAUSE_MENU_CANVAS_W,
+      PAUSE_MENU_CANVAS_H,
+      0x000000,
+      0.7,
+    );
+    bg.setInteractive();
+    bg.setDepth(20);
+    this.pauseMenuGroup.push(bg);
+
+    // Title — "Paused" or "Settings" depending on page.
+    const title = this.add.text(
+      PAUSE_MENU_CANVAS_W / 2,
+      pauseMenuTitleCenterY(items.length),
+      pageTitle(page),
+      { fontSize: '32px', fontFamily: 'monospace', color: '#ffffff' },
+    );
+    title.setOrigin(0.5);
+    title.setDepth(21);
+    this.pauseMenuGroup.push(title);
+
+    // Buttons — one rectangle + one text per item. Disabled rows render
+    // dimmer and don't fire callbacks (see dispatchPauseMenuItem and itemAt).
+    for (const item of items) {
+      const r = item.rect;
+      const fillColor = item.enabled ? 0x333333 : 0x202020;
+      const labelColor = item.enabled ? '#ffffff' : '#777777';
+      const btn = this.add.rectangle(
+        r.x + r.w / 2,
+        r.y + r.h / 2,
+        r.w,
+        r.h,
+        fillColor,
+        1,
+      );
+      btn.setInteractive();
+      btn.setDepth(21);
+      // The dispatch is also reachable via the scene-level pointerdown
+      // handler's hit test, but binding here gives us a precise per-button
+      // target so disabled rows don't accidentally consume hits.
+      if (item.enabled) {
+        btn.on('pointerdown', () => this.dispatchPauseMenuItem(item.id));
+      }
+      this.pauseMenuGroup.push(btn);
+
+      const label = this.add.text(
+        r.x + r.w / 2,
+        r.y + r.h / 2,
+        item.label,
+        { fontSize: '16px', fontFamily: 'monospace', color: labelColor },
+      );
+      label.setOrigin(0.5);
+      label.setDepth(22);
+      this.pauseMenuGroup.push(label);
+    }
+  }
+
+  /** Map menu item id to its action. Lives here (not in the layout module) so
+   *  the layout stays Phaser-free — only UIScene knows about callbacks. */
+  private dispatchPauseMenuItem(id: PauseMenuItemId): void {
+    const cb = this.pauseMenuCallbacks;
+    switch (id) {
+      case 'resume':
+        this.hidePauseMenuOverlay();
+        cb?.onResume();
+        return;
+      case 'save-load':
+        cb?.onOpenSaveLoad?.();
+        return;
+      case 'settings':
+        this.pauseMenuPage = 'settings';
+        this.renderPauseMenuPage();
+        return;
+      case 'back':
+        this.pauseMenuPage = 'main';
+        this.renderPauseMenuPage();
+        return;
+      case 'debug-snapshot':
+        cb?.onDownloadDebug();
+        return;
+      case 'pheromone-toggle': {
+        // Issue #114 — flip the persisted setting and re-render so the
+        // ON/OFF label reflects the new state. ViewState (and the per-frame
+        // skip in GameScene.update) reads the same persisted value via
+        // loadSettings(), so the toggle takes effect on the next frame.
+        const next = loadSettings();
+        next.pheromoneOverlay = !next.pheromoneOverlay;
+        saveSettings(next);
+        // Mirror to ViewState so the next render frame sees the new value
+        // even if it doesn't re-read settings.
+        this.viewState.showPheromoneOverlay = next.pheromoneOverlay;
+        this.renderPauseMenuPage();
+        return;
+      }
+    }
   }
 
   private isInsideRect(

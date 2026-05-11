@@ -9,6 +9,7 @@
 import { TILE_SIZE_PX } from './sprites.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
+import { loadSettings } from '../platform/settings.js';
 
 // Suppress unused import warning — TILE_SIZE_PX is used in screenToTile below.
 void TILE_SIZE_PX;
@@ -112,6 +113,14 @@ export interface ViewState {
    * still render (Research Risk D, Chunk 0 dependency).
    */
   activeUndergroundColonyId: ColonyId;
+  /**
+   * Issue #114 — render-only flag controlling whether the player's pheromone
+   * overlay is drawn. Hydrated from persisted settings (subterrans:settings:v1)
+   * on createViewState / resetViewState; toggled by the P key and by the pause
+   * menu Settings sub-screen, both of which write back through saveSettings.
+   * Skipped at draw time in game-scene.ts; never round-trips through save.ts.
+   */
+  showPheromoneOverlay: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +160,11 @@ export function createViewState(startTileX: number, startTileY: number): ViewSta
     // 09.1 Chunk 2 — fresh boot always starts looking at the player's own
     // underground so the first Tab to underground shows "Your Colony".
     activeUndergroundColonyId: PLAYER_COLONY_ID,
+    // Issue #114 — hydrate the pheromone overlay flag from persisted settings.
+    // localStorage may be unavailable (Node test runs); loadSettings falls back
+    // to DEFAULT_SETTINGS, which keeps the overlay ON to match the prior
+    // always-visible behavior.
+    showPheromoneOverlay: loadSettings().pheromoneOverlay,
   };
 }
 
@@ -188,6 +202,10 @@ export function resetViewState(
   // player's own grid. Save files do not persist which enemy nest was being
   // inspected, so continue-from-save also defaults to "Your Colony".
   viewState.activeUndergroundColonyId = PLAYER_COLONY_ID;
+  // Issue #114 — re-read the persisted overlay preference. The setting is a
+  // cosmetic preference, not session state, so a restart should respect the
+  // current localStorage value rather than snap back to ON unconditionally.
+  viewState.showPheromoneOverlay = loadSettings().pheromoneOverlay;
 }
 
 // ---------------------------------------------------------------------------

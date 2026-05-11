@@ -21,7 +21,9 @@
 // Pitfall 3: scale.mode = NONE, fixed 800x592 — no DPR scaling.
 // Pitfall 4: NEVER use .keys()/.entries()/.get() on world.colonies — it is a PLAIN OBJECT (ADR-0006).
 // Pitfall 5: No setMsPerTick(Infinity) for pause — use gameLoop.pause()/resume() (Plan 06 Task 1).
-// Pitfall 6: Pause key is P, NOT Space — Space+left-drag is the primary map-pan gesture (Phase 8.5).
+// Pitfall 6: Pause is opened via Esc (issue #116) and routed through the UIScene pause-menu
+//            overlay — there is no bare keyboard pause anymore. The previous P-binding moved
+//            to the pheromone toggle in issue #114. Space stays reserved for the pan gesture.
 
 import * as Phaser from 'phaser';
 import { createScenario } from '../sim/scenario.js';
@@ -118,6 +120,16 @@ interface UIScenePhase9 {
   hideGameOverOverlay(): void;
   showSavePromptOverlay(callbacks: { onContinue: () => void; onNewGame: () => void }): void;
   hideSavePromptOverlay(): void;
+  // Issue #116 — pause menu overlay. The callbacks object is intentionally
+  // open-ended: onOpenSaveLoad is omitted until issue #115 wires the dialog,
+  // at which point the menu's Save/Load row activates.
+  showPauseMenuOverlay(callbacks: {
+    onResume: () => void;
+    onDownloadDebug: () => void;
+    onOpenSaveLoad?: () => void;
+  }): void;
+  hidePauseMenuOverlay(): void;
+  isPauseMenuVisible(): boolean;
 }
 import type { SimCommand } from '../sim/commands.js';
 
@@ -216,15 +228,17 @@ export class GameScene extends Phaser.Scene {
     // Drag-pan registration — returns dragState ref for processCameraInput
     this.dragState = registerDragPan(this, this.viewState);
 
-    // Phase 9 Plan 06 keyboard — P toggles pause; 1/2/4 set speed.
-    // SPACE is reserved for pan gesture (Phase 8.5 decision — see file header Pitfall 6).
-    this.input.keyboard!.on('keydown-P', () => {
-      if (this.gamePhase === GamePhase.Playing) {
-        this.gamePhase = GamePhase.Paused;
-        this.gameLoop.pause();
-      } else if (this.gamePhase === GamePhase.Paused) {
-        this.gamePhase = GamePhase.Playing;
-        this.gameLoop.resume();
+    // Issue #116 — Esc opens the pause menu overlay (which also pauses the
+    // sim) and toggles it closed when already visible. Replaces the prior
+    // bare P-pause binding so P is free for the pheromone overlay toggle
+    // in issue #114. Speed-multiplier keys (1/2/4) are unchanged.
+    this.input.keyboard!.on('keydown-ESC', () => {
+      if (this.gamePhase === GamePhase.SavePrompt
+       || this.gamePhase === GamePhase.GameOver) return;
+      if (this.gamePhase === GamePhase.Paused) {
+        this.closePauseMenu();
+      } else {
+        this.openPauseMenu();
       }
     });
     this.input.keyboard!.on('keydown-ONE', () => { this.speedMultiplier = 1; });
@@ -461,6 +475,41 @@ export class GameScene extends Phaser.Scene {
     // UIScene and world-input handlers resolve `this.world` lazily via the
     // getWorld accessor installed in create(), so the new reference is picked
     // up automatically on bootFresh, bootFromSave, and restartGame.
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #116 — pause menu open/close
+  //
+  // Opens the UIScene pause-menu overlay AND pauses the game loop in one
+  // gesture; closing reverses both. Phase transitions are gated through
+  // gamePhase so concurrent SavePrompt / GameOver phases don't get clobbered
+  // (the Esc handler also early-returns in those phases as a belt-and-braces
+  // guard).
+  // ---------------------------------------------------------------------------
+
+  private openPauseMenu(): void {
+    if (this.gamePhase !== GamePhase.Playing) return;
+    this.gamePhase = GamePhase.Paused;
+    this.gameLoop.pause();
+    const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
+    uiScene.showPauseMenuOverlay({
+      onResume: () => this.closePauseMenu(),
+      onDownloadDebug: () => {
+        if (this.world === undefined) return;
+        const snap = buildDebugSnapshot(this.world, this.currentSeed, this.inputLog);
+        downloadDebugSnapshot(snap);
+      },
+      // Issue #115 will provide onOpenSaveLoad here. Until then the menu's
+      // Save/Load row renders disabled (callbacks.onOpenSaveLoad === undefined).
+    });
+  }
+
+  private closePauseMenu(): void {
+    if (this.gamePhase !== GamePhase.Paused) return;
+    const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
+    uiScene.hidePauseMenuOverlay();
+    this.gamePhase = GamePhase.Playing;
+    this.gameLoop.resume();
   }
 
   private restartGame(): void {
