@@ -4,6 +4,7 @@ import {
   SAVE_FORMAT_VERSION, SAVE_KEY, AUTOSAVE_INTERVAL_MS,
   serializeWorldState, deserializeWorldState,
   hasSave, loadSave, deleteSave, tickAutosave,
+  manualSave, hasIncompatibleSave, getSaveInfo,
   migrateBehaviorRatio,
   parseSaveFile,
   FutureSimVersionError,
@@ -1705,6 +1706,369 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       };
       s.recentlyDepletedFood[0]!.tileX = -1; // out of bounds
       expect(() => deserializeWorldState(s as never)).toThrow(/recentlyDepletedFood\[0\]\.tileX/);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Issue #115 — manualSave + hasIncompatibleSave + getSaveInfo
+  // -------------------------------------------------------------------------
+
+  describe('Issue #115 — manualSave', () => {
+    it('writes a parseable save under SAVE_KEY and returns true on success', () => {
+      const world = createScenario(42);
+      const ok = manualSave(42, [], world);
+      expect(ok).toBe(true);
+      expect(window.localStorage.getItem(SAVE_KEY)).not.toBeNull();
+      // Round-trip via the public read path.
+      const loaded = loadSave();
+      expect(loaded).not.toBeNull();
+      expect(loaded!.seed).toBe(42);
+      expect(loaded!.snapshot.tick).toBe(0);
+    });
+
+    it('preserves the inputLog the caller supplies', () => {
+      const world = createScenario(42);
+      const log: SimCommand[] = [
+        { type: 'SetBehaviorRatio', colonyId: PLAYER_COLONY_ID, ratio: { forage: 5, fight: 5 }, issuedAtTick: 0 },
+      ];
+      manualSave(42, log, world);
+      const loaded = loadSave();
+      expect(loaded!.inputLog).toHaveLength(1);
+      expect(loaded!.inputLog[0]!.type).toBe('SetBehaviorRatio');
+    });
+
+    it('returns false (does not throw) when localStorage.setItem rejects', () => {
+      const world = createScenario(42);
+      const orig = window.localStorage.setItem;
+      window.localStorage.setItem = vi.fn(() => { throw new Error('QuotaExceededError'); });
+      try {
+        const ok = manualSave(42, [], world);
+        expect(ok).toBe(false);
+      } finally {
+        window.localStorage.setItem = orig;
+      }
+    });
+
+    it('does NOT depend on or update the autosave timer (manual save is independent)', () => {
+      // tickAutosave returns the new lastSaveMs each call. A manual save in
+      // between two autosave windows must not bump the autosave's clock —
+      // they share the SAVE_KEY but track cadence independently.
+      const world = createScenario(42);
+      // First autosave at t=0 → writes, returns 0.
+      const t0 = tickAutosave(42, [], world, -AUTOSAVE_INTERVAL_MS, 0);
+      expect(t0).toBe(0);
+      // Manual save at t=5000 — should write, but the autosave's lastSaveMs
+      // is whatever the caller passes; manualSave doesn't see it. Verify by
+      // calling tickAutosave again at t = AUTOSAVE_INTERVAL_MS-1 with the
+      // unchanged lastSaveMs → still NOT due (cooldown not elapsed).
+      manualSave(42, [], world);
+      const t1 = tickAutosave(42, [], world, t0, AUTOSAVE_INTERVAL_MS - 1);
+      expect(t1).toBe(t0); // still pre-cooldown — unchanged
+    });
+  });
+
+  describe('Issue #115 — hasIncompatibleSave', () => {
+    it('returns false when localStorage is empty', () => {
+      expect(hasIncompatibleSave()).toBe(false);
+    });
+
+    it('returns false for a freshly-written compatible save', () => {
+      manualSave(42, [], createScenario(42));
+      expect(hasIncompatibleSave()).toBe(false);
+      // hasSave is the symmetric positive case
+      expect(hasSave()).toBe(true);
+    });
+
+    it('returns true when SAVE_KEY holds a v2-shaped envelope (rejected by parseSaveFile)', () => {
+      // Stash a known-v2 envelope. parseSaveFile throws SaveVersionMismatchError
+      // → hasIncompatibleSave returns true; hasSave returns false. The pair
+      // lets the dialog distinguish "no save" from "save present, this build
+      // can't read it" instead of silently booting fresh.
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: 2,
+        seed: 1,
+        inputLog: [],
+        snapshot: {},
+      }));
+      expect(hasIncompatibleSave()).toBe(true);
+      expect(hasSave()).toBe(false);
+    });
+
+    it('returns true when SAVE_KEY holds completely malformed JSON', () => {
+      window.localStorage.setItem(SAVE_KEY, '{not-json');
+      expect(hasIncompatibleSave()).toBe(true);
+      expect(hasSave()).toBe(false);
+    });
+
+    it('round-3 (Codex P2): returns true when snapshot.simVersion exceeds LATEST_SIM_VERSION (future-build save)', async () => {
+      // Build a parseable envelope and stamp simVersion above LATEST so
+      // bootFromSave's deserialize would throw FutureSimVersionError. The
+      // envelope itself parses fine — hasSave returns true today — but the
+      // dialog needs to know this save is unloadable so Continue stays
+      // disabled and the warning info line surfaces.
+      const { LATEST_SIM_VERSION } = await import('../sim/types.js');
+      const world = createScenario(7);
+      const snap = serializeWorldState(world);
+      snap.simVersion = LATEST_SIM_VERSION + 1;
+      const env = {
+        version: SAVE_FORMAT_VERSION,
+        seed: 7,
+        inputLog: [],
+        snapshot: snap,
+        savedAtMs: Date.now(),
+      };
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
+      expect(hasIncompatibleSave()).toBe(true);
+      // hasSave still returns true (envelope parses) — caller is expected
+      // to gate on `hasSave() && !hasIncompatibleSave()` for "loadable".
+      expect(hasSave()).toBe(true);
+    });
+
+    it('round-3: returns false when simVersion equals LATEST_SIM_VERSION (loadable)', async () => {
+      const { LATEST_SIM_VERSION } = await import('../sim/types.js');
+      const world = createScenario(7);
+      const snap = serializeWorldState(world);
+      snap.simVersion = LATEST_SIM_VERSION;
+      const env = {
+        version: SAVE_FORMAT_VERSION,
+        seed: 7,
+        inputLog: [],
+        snapshot: snap,
+        savedAtMs: Date.now(),
+      };
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
+      expect(hasIncompatibleSave()).toBe(false);
+      expect(hasSave()).toBe(true);
+    });
+
+    it('round-3: returns false when simVersion is omitted (legacy save — defaults to LEGACY on load)', async () => {
+      const world = createScenario(7);
+      const snap = serializeWorldState(world);
+      // Strip simVersion to simulate a pre-issue-#27 envelope.
+      delete (snap as { simVersion?: number }).simVersion;
+      const env = {
+        version: SAVE_FORMAT_VERSION,
+        seed: 7,
+        inputLog: [],
+        snapshot: snap,
+        savedAtMs: Date.now(),
+      };
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
+      expect(hasIncompatibleSave()).toBe(false);
+    });
+
+    it('Codex round-3 P1: returns true when snapshot is null (parseable envelope, garbage payload)', () => {
+      // parseSaveFile only validates the envelope. A v3 envelope with
+      // snapshot=null parses fine but reading snapshot.simVersion would
+      // throw and crash the dialog. Treat as incompatible.
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: null,
+      }));
+      expect(hasIncompatibleSave()).toBe(true);
+    });
+
+    it('Codex round-3 P1: returns true when snapshot is a non-object (string / number)', () => {
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: 'not an object',
+      }));
+      expect(hasIncompatibleSave()).toBe(true);
+    });
+
+    it('round-4 (Rob): returns true when snapshot is empty object (parseable but unloadable — Continue would lie)', async () => {
+      // Pre-fix: parseSaveFile succeeds, snapshot is non-null object,
+      // simVersion is missing (passes the prior check), Continue would
+      // appear enabled — but bootFromSave would throw on missing required
+      // fields and silently fall through to bootFresh. Now flagged via
+      // the full-deserialize boundary check.
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: {},
+      }));
+      expect(hasIncompatibleSave()).toBe(true);
+    });
+
+    it('round-4 (Rob): returns true when simVersion is below LEGACY_SIM_VERSION (tampered down)', async () => {
+      const { LEGACY_SIM_VERSION } = await import('../sim/types.js');
+      const world = createScenario(7);
+      const snap = serializeWorldState(world);
+      snap.simVersion = LEGACY_SIM_VERSION - 1;
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: SAVE_FORMAT_VERSION,
+        seed: 7,
+        inputLog: [],
+        snapshot: snap,
+        savedAtMs: Date.now(),
+      }));
+      expect(hasIncompatibleSave()).toBe(true);
+    });
+
+    it('round-4 (Rob): returns true when snapshot.colonies is missing (deserialize would throw)', () => {
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: { tick: 0, rngState: 0, nextEntityId: 0, commandQueue: [] },
+      }));
+      expect(hasIncompatibleSave()).toBe(true);
+    });
+  });
+
+  describe('Issue #115 — getSaveInfo', () => {
+    it('returns null when no save exists', () => {
+      expect(getSaveInfo()).toBeNull();
+    });
+
+    it('returns null when the save is unreadable (would let the dialog show "incompatible save")', () => {
+      window.localStorage.setItem(SAVE_KEY, '{not-json');
+      expect(getSaveInfo()).toBeNull();
+    });
+
+    it('returns tick + player worker count + player food (human units) for a fresh save', () => {
+      const world = createScenario(42);
+      manualSave(42, [], world);
+      const info = getSaveInfo();
+      expect(info).not.toBeNull();
+      expect(info!.tick).toBe(0);
+      // Fresh scenario: queen alive; workerCount tracks living workers (no
+      // hatched workers yet at tick 0). Match against the live colony.
+      const playerColony = world.colonies[PLAYER_COLONY_ID]!;
+      expect(info!.playerWorkers).toBe(playerColony.workerCount);
+      // playerFoodStored is reported in human units (foodStored >> FP_SHIFT).
+      const FP_SHIFT = 8;
+      expect(info!.playerFoodStored).toBe(playerColony.foodStored >> FP_SHIFT);
+    });
+
+    it('returns the wall-clock savedAtMs from the envelope (issue #115)', () => {
+      const before = Date.now();
+      manualSave(42, [], createScenario(42));
+      const after = Date.now();
+      const info = getSaveInfo();
+      expect(info!.savedAtMs).toBeGreaterThanOrEqual(before);
+      expect(info!.savedAtMs).toBeLessThanOrEqual(after);
+    });
+
+    it('returns savedAtMs=0 when the envelope omits the field (pre-issue-#115 saves)', () => {
+      // Simulate an older v3 envelope written before issue #115 added savedAtMs.
+      // parseSaveFile must accept it (no version bump) and getSaveInfo falls
+      // back to 0 ("unknown") rather than NaN or a 1970 stamp.
+      const env = {
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: serializeWorldState(createScenario(1)),
+        // savedAtMs intentionally omitted
+      };
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
+      const info = getSaveInfo();
+      expect(info).not.toBeNull();
+      expect(info!.savedAtMs).toBe(0);
+    });
+
+    it('returns savedAtMs=0 when the envelope field is malformed (negative or non-finite)', () => {
+      const env = {
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: serializeWorldState(createScenario(1)),
+        savedAtMs: -1,
+      };
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
+      const info = getSaveInfo();
+      expect(info!.savedAtMs).toBe(0);
+    });
+
+    it('reflects updated tick count after the world advances', () => {
+      const world = createScenario(42);
+      for (let i = 0; i < 5; i++) tick(world, []);
+      manualSave(42, [], world);
+      const info = getSaveInfo();
+      expect(info!.tick).toBe(5);
+    });
+
+    it('Codex round-3 P1: does NOT throw when snapshot is null (parseable envelope, garbage payload)', () => {
+      // The dialog opens by calling getSaveInfo + hasIncompatibleSave. Both
+      // need to survive a parseable-but-garbage envelope so the user sees
+      // the "incompatible" warning + can use Delete/New Game to recover.
+      // Pre-fix this case threw inside getSaveInfo and crashed dialog
+      // rendering before the user could click anything.
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: null,
+      }));
+      expect(() => getSaveInfo()).not.toThrow();
+      expect(getSaveInfo()).toBeNull();
+    });
+
+    it('Codex round-3 P1: does NOT throw when snapshot.colonies is missing', () => {
+      // A snapshot with tick/rngState/etc. but no `colonies` field.
+      // Pre-fix: dereferencing colonies[playerKey] would throw TypeError.
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: { tick: 5, rngState: 1, nextEntityId: 0 },
+      }));
+      expect(() => getSaveInfo()).not.toThrow();
+      const info = getSaveInfo();
+      expect(info).not.toBeNull();
+      expect(info!.tick).toBe(5);
+      expect(info!.playerWorkers).toBe(0);
+      expect(info!.playerFoodStored).toBe(0);
+    });
+
+    it('Codex round-3 P1: returns 0 fields when snapshot.tick is missing/non-numeric', () => {
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: { colonies: {} },
+      }));
+      const info = getSaveInfo();
+      expect(info).not.toBeNull();
+      expect(info!.tick).toBe(0);
+    });
+
+    it('returns 0 worker / 0 food when the player colony key is absent (defensive)', () => {
+      // Hand-craft an envelope with a missing player colony record. This
+      // should never happen in legitimate gameplay, but the dialog must not
+      // crash if it does — surface zeros and let the player decide.
+      const env = {
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: {
+          tick: 7,
+          rngState: 1,
+          nextEntityId: 0,
+          commandQueue: [],
+          ants: { count: 0, posX: [], posY: [], colonyId: [], task: [], subTask: [],
+                  speed: [], foodCarrying: [], starvationTimer: [], age: [], alive: [],
+                  lifespan: [], zone: [], digTileX: [], digTileY: [], digTicksRemaining: [],
+                  targetPosX: [], targetPosY: [], targetSet: [] },
+          colonies: {}, // PLAYER_COLONY_ID intentionally missing
+          pheromoneGrids: {},
+          surface: { width: 1, height: 1, data: [0] },
+          undergroundGrids: {},
+          foodPiles: [],
+          pendingChambers: {},
+        },
+      };
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
+      const info = getSaveInfo();
+      expect(info).not.toBeNull();
+      expect(info!.tick).toBe(7);
+      expect(info!.playerWorkers).toBe(0);
+      expect(info!.playerFoodStored).toBe(0);
     });
   });
 });

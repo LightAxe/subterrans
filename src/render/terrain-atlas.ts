@@ -85,6 +85,9 @@ export const COLOR_BARREN_EARTH_DARK  = 0x6f5a3c;
 export const COLOR_BARREN_EARTH_LIGHT = 0xa28a63;
 /** Yet darker patch for occasional damper soil regions. */
 export const COLOR_BARREN_EARTH_DAMP  = 0x5a4a30;
+/** Piled-spoil mound around an entrance hole — between DAMP and BARREN_EARTH,
+ *  reading as "fresh excavation dirt" rather than "wet soil patch." */
+export const COLOR_BARREN_EARTH_MOUND = 0x6d563a;
 
 /** Underground solid rock palette. */
 export const COLOR_ROCK_BASE     = 0x2d1f14;

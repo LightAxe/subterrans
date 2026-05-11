@@ -57,6 +57,7 @@ function makeViewState(
     undergroundCamera: { x: camX, y: camY, viewportWidth: VIEWPORT_WIDTH_TILES, viewportHeight: VIEWPORT_HEIGHT_TILES },
     undergroundVisited: true,
     activeUndergroundColonyId: PLAYER_COLONY_ID,
+    showPheromoneOverlay: true,
   };
 }
 
@@ -1041,6 +1042,7 @@ describe('underground-input read-only when activeUndergroundColonyId !== PLAYER_
       undergroundCamera: { x: 64, y: 32, viewportWidth: VIEWPORT_WIDTH_TILES, viewportHeight: VIEWPORT_HEIGHT_TILES },
       undergroundVisited: true,
       activeUndergroundColonyId: ENEMY_COLONY_ID,
+      showPheromoneOverlay: true,
     };
   }
 

@@ -75,6 +75,24 @@ describe('createViewState', () => {
     expect(vs.undergroundCamera.viewportWidth).toBe(VIEWPORT_WIDTH_TILES);
     expect(vs.undergroundCamera.viewportHeight).toBe(VIEWPORT_HEIGHT_TILES);
   });
+
+  it('issue #114 — showPheromoneOverlay defaults to true (matches DEFAULT_SETTINGS)', () => {
+    // jsdom has localStorage available but the suite clears between tests,
+    // so loadSettings falls back to DEFAULT_SETTINGS.pheromoneOverlay = true.
+    localStorage.removeItem('subterrans:settings:v1');
+    const vs = createViewState(10, 20);
+    expect(vs.showPheromoneOverlay).toBe(true);
+  });
+
+  it('issue #114 — showPheromoneOverlay hydrates from persisted settings', () => {
+    localStorage.setItem(
+      'subterrans:settings:v1',
+      JSON.stringify({ version: 1, settings: { pheromoneOverlay: false } }),
+    );
+    const vs = createViewState(10, 20);
+    expect(vs.showPheromoneOverlay).toBe(false);
+    localStorage.removeItem('subterrans:settings:v1');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -142,6 +160,20 @@ describe('resetViewState', () => {
     expect(vs.surfaceCamera.viewportHeight).toBe(VIEWPORT_HEIGHT_TILES);
     expect(vs.undergroundCamera.viewportWidth).toBe(VIEWPORT_WIDTH_TILES);
     expect(vs.undergroundCamera.viewportHeight).toBe(VIEWPORT_HEIGHT_TILES);
+  });
+
+  it('issue #114 — re-reads pheromoneOverlay setting from localStorage on reset', () => {
+    // Settings are cosmetic preferences, not session state — a restart should
+    // honor the player's current toggle, not snap back to the boot-time value.
+    const vs = createViewState(10, 10);
+    expect(vs.showPheromoneOverlay).toBe(true);
+    localStorage.setItem(
+      'subterrans:settings:v1',
+      JSON.stringify({ version: 1, settings: { pheromoneOverlay: false } }),
+    );
+    resetViewState(vs, 24, 64);
+    expect(vs.showPheromoneOverlay).toBe(false);
+    localStorage.removeItem('subterrans:settings:v1');
   });
 
   it('restart simulation: mid-game underground pan does not leak into fresh session', () => {

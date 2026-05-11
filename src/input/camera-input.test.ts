@@ -64,6 +64,7 @@ function makeViewState(
     },
     undergroundVisited: false,
     activeUndergroundColonyId: PLAYER_COLONY_ID,
+    showPheromoneOverlay: true,
   };
 }
 
@@ -184,6 +185,7 @@ describe('isPointerOverHUD', () => {
         undergroundCamera: { x: 0, y: 0, viewportWidth: 1, viewportHeight: 1 },
         undergroundVisited: true,
         activeUndergroundColonyId: 1,
+        showPheromoneOverlay: true,
       };
     }
 

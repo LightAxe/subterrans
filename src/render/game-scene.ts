@@ -21,15 +21,18 @@
 // Pitfall 3: scale.mode = NONE, fixed 800x592 — no DPR scaling.
 // Pitfall 4: NEVER use .keys()/.entries()/.get() on world.colonies — it is a PLAIN OBJECT (ADR-0006).
 // Pitfall 5: No setMsPerTick(Infinity) for pause — use gameLoop.pause()/resume() (Plan 06 Task 1).
-// Pitfall 6: Pause key is P, NOT Space — Space+left-drag is the primary map-pan gesture (Phase 8.5).
+// Pitfall 6: Pause is opened via Esc (issue #116) and routed through the UIScene pause-menu
+//            overlay — there is no bare keyboard pause anymore. The previous P-binding moved
+//            to the pheromone toggle in issue #114. Space stays reserved for the pan gesture.
 
 import * as Phaser from 'phaser';
 import { createScenario } from '../sim/scenario.js';
 import { copyWorldState, type WorldState } from '../sim/types.js';
 import { tick, resetFlowFieldCaches } from '../sim/tick.js';
 import { createGameLoop, type GameLoop, MS_PER_TICK } from '../platform/game-loop.js';
-import { hasSave, loadSave, deleteSave, tickAutosave, FutureSimVersionError } from '../platform/save.js';
+import { hasSave, loadSave, deleteSave, tickAutosave, FutureSimVersionError, manualSave } from '../platform/save.js';
 import { deserializeWorldState } from '../platform/save.js';
+import { loadSettings, saveSettings } from '../platform/settings.js';
 import { runAIController } from './ai-controller.js';
 import { buildDebugSnapshot } from '../platform/debug-snapshot.js';
 import { downloadDebugSnapshot } from './debug-snapshot-download.js';
@@ -56,8 +59,8 @@ import {
   UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT,
 } from '../sim/constants.js';
 import { GameOutcome } from '../sim/game-over.js';
-import { drawSurface, type GfxLike } from './draw-surface.js';
-import { drawUnderground } from './draw-underground.js';
+import { drawSurfaceTerrain, drawSurfaceEntities, type GfxLike } from './draw-surface.js';
+import { drawUndergroundTerrain, drawUndergroundEntities } from './draw-underground.js';
 import { drawPheromoneOverlay } from './draw-pheromone.js';
 import { AntFacingCache } from './ant-facing-cache.js';
 import {
@@ -118,6 +121,26 @@ interface UIScenePhase9 {
   hideGameOverOverlay(): void;
   showSavePromptOverlay(callbacks: { onContinue: () => void; onNewGame: () => void }): void;
   hideSavePromptOverlay(): void;
+  // Issue #116 — pause menu overlay. The callbacks object is intentionally
+  // open-ended: onOpenSaveLoad is omitted until issue #115 wires the dialog,
+  // at which point the menu's Save/Load row activates.
+  showPauseMenuOverlay(callbacks: {
+    onResume: () => void;
+    onDownloadDebug: () => void;
+    onOpenSaveLoad?: () => void;
+  }): void;
+  hidePauseMenuOverlay(): void;
+  isPauseMenuVisible(): boolean;
+  // Issue #115 — Save/Load dialog overlay. Shown on top of the pause menu;
+  // GameScene hides the pause menu before showing the dialog so the layered
+  // chrome stays clean, and re-shows the menu when Back is pressed.
+  showSaveLoadDialogOverlay(callbacks: {
+    onContinue: () => void;
+    onNewGame: () => void;
+    onSaveNow: () => boolean;
+    onBack: () => void;
+  }): void;
+  hideSaveLoadDialogOverlay(): void;
 }
 import type { SimCommand } from '../sim/commands.js';
 
@@ -162,7 +185,11 @@ export class GameScene extends Phaser.Scene {
    */
   private autosaveSuspended: boolean = false;
   private currentSeed: number = 0;
-  private speedMultiplier: number = 1;
+  // Issue #114 UAT — Settings sub-screen has a "Speed: N×" cycle row that
+  // reads/writes this field via callbacks. The 1/2/4 keyboard shortcuts
+  // below set the same field directly. Narrowed to the cycle set so the
+  // type aligns with PauseMenuLayout's SpeedMultiplier.
+  private speedMultiplier: 1 | 2 | 4 = 1;
 
   constructor() { super({ key: 'GameScene' }); }
 
@@ -216,20 +243,57 @@ export class GameScene extends Phaser.Scene {
     // Drag-pan registration — returns dragState ref for processCameraInput
     this.dragState = registerDragPan(this, this.viewState);
 
-    // Phase 9 Plan 06 keyboard — P toggles pause; 1/2/4 set speed.
-    // SPACE is reserved for pan gesture (Phase 8.5 decision — see file header Pitfall 6).
-    this.input.keyboard!.on('keydown-P', () => {
-      if (this.gamePhase === GamePhase.Playing) {
-        this.gamePhase = GamePhase.Paused;
-        this.gameLoop.pause();
-      } else if (this.gamePhase === GamePhase.Paused) {
-        this.gamePhase = GamePhase.Playing;
-        this.gameLoop.resume();
-      }
+    // Issue #116 — Esc opens the pause menu overlay (which also pauses the
+    // sim). The Esc keybinding itself lives in UIScene (which already owned
+    // Esc for the ant-activity panel hide and the dialog/menu close paths);
+    // routing all Esc through one scene avoids the dual-handler race that
+    // had GameScene open the menu and UIScene immediately close it on the
+    // same press. UIScene calls back to openPauseMenu via the onEscape
+    // callback supplied below at scene.launch.
+    // Speed-multiplier keys (1/2/4) and the P pheromone toggle (issue #114)
+    // stay on GameScene because they're game-state actions, not UI chrome.
+    // Speed-multiplier keys (1/2/4), the pheromone toggle (P), and the
+    // underground colony toggle (X) all mutate state that the player
+    // expects the menu to be the modal source of truth for while paused.
+    // Round-2 review: gating these on `gamePhase === Playing` prevents
+    // a P press while the pause menu's Settings page is up from desyncing
+    // the on-screen "ON/OFF" label from the persisted setting (the menu
+    // captures the label at render time and would no longer match), and
+    // prevents Resume from snapping the camera to the enemy nest because
+    // X was pressed while paused.
+    this.input.keyboard!.on('keydown-ONE', () => {
+      if (this.gamePhase !== GamePhase.Playing) return;
+      this.speedMultiplier = 1;
     });
-    this.input.keyboard!.on('keydown-ONE', () => { this.speedMultiplier = 1; });
-    this.input.keyboard!.on('keydown-TWO', () => { this.speedMultiplier = 2; });
-    this.input.keyboard!.on('keydown-FOUR', () => { this.speedMultiplier = 4; });
+    this.input.keyboard!.on('keydown-TWO', () => {
+      if (this.gamePhase !== GamePhase.Playing) return;
+      this.speedMultiplier = 2;
+    });
+    this.input.keyboard!.on('keydown-FOUR', () => {
+      if (this.gamePhase !== GamePhase.Playing) return;
+      this.speedMultiplier = 4;
+    });
+    // Issue #114 — P toggles the player's pheromone overlay. Render-only:
+    // the flag lives on ViewState (so the next frame skips drawPheromoneOverlay)
+    // AND in persisted settings (so the choice survives reloads). The pause
+    // menu's Settings sub-screen drives the same write path; gating P on
+    // Playing means the menu is the only writer while paused (no label
+    // desync — see comment block above).
+    //
+    // Round-6 P2 (Codex): flip from in-memory state, NOT from loadSettings().
+    // If localStorage writes are blocked (quota / private-mode), saveSettings
+    // is a no-op; loadSettings then returns DEFAULT_SETTINGS on the NEXT
+    // press and we'd recompute `!true = false` every time — the toggle gets
+    // stuck OFF. ViewState is the authoritative in-mem source; persist is
+    // best-effort and survives reload only when storage cooperates.
+    this.input.keyboard!.on('keydown-P', () => {
+      if (this.gamePhase !== GamePhase.Playing) return;
+      const next = !this.viewState.showPheromoneOverlay;
+      this.viewState.showPheromoneOverlay = next;
+      const persisted = loadSettings();
+      persisted.pheromoneOverlay = next;
+      saveSettings(persisted);
+    });
 
     // 09.1 Chunk 2 — X toggles the active underground colony view. Only
     // flips when activeView === 'underground'; inert on the surface view
@@ -237,13 +301,10 @@ export class GameScene extends Phaser.Scene {
     // P/F9/speed-multiplier pattern above — the keyboard-plugin event bus
     // handles edge-trigger semantics for us (one keydown event per press),
     // avoiding the key-repeat DoS that Phase 08-04 guarded against for
-    // Tab via JustDown. SavePrompt phase early-returns in update() but
-    // this listener fires from Phaser's keyboard plugin; the SavePrompt
-    // overlay is click-driven (no X binding) so a spurious X press during
-    // SavePrompt is harmless — it mutates a ViewState field the overlay
-    // does not render.
+    // Tab via JustDown. Gated on Playing so a paused player doesn't Resume
+    // into a surprise camera flip onto the enemy nest.
     this.input.keyboard!.on('keydown-X', () => {
-      if (this.gamePhase === GamePhase.SavePrompt) return;
+      if (this.gamePhase !== GamePhase.Playing) return;
       if (this.viewState.activeView !== 'underground') return;
       toggleUndergroundColony(this.viewState);
     });
@@ -266,7 +327,15 @@ export class GameScene extends Phaser.Scene {
     const getWorld = (): WorldState | undefined => this.world;
 
     // Launch HUD scene on top.
-    this.scene.launch('UIScene', { viewState: this.viewState, getWorld });
+    this.scene.launch('UIScene', {
+      viewState: this.viewState,
+      getWorld,
+      // Issue #116 — UIScene owns Esc; this callback fires on Esc when no
+      // UIScene overlay/panel is open and is the trigger to spawn the pause
+      // menu. GameScene was previously binding keydown-ESC alongside
+      // UIScene's escKey handler, which raced (open → close in one press).
+      onEscape: () => this.openPauseMenu(),
+    });
     this.scene.bringToTop('UIScene');
 
     // World input dispatchers — internally guard on viewState.activeView.
@@ -463,6 +532,119 @@ export class GameScene extends Phaser.Scene {
     // up automatically on bootFresh, bootFromSave, and restartGame.
   }
 
+  // ---------------------------------------------------------------------------
+  // Issue #116 — pause menu open/close
+  //
+  // Opens the UIScene pause-menu overlay AND pauses the game loop in one
+  // gesture; closing reverses both. Phase transitions are gated through
+  // gamePhase so concurrent SavePrompt / GameOver phases don't get clobbered
+  // (the Esc handler also early-returns in those phases as a belt-and-braces
+  // guard).
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Round-2 review: the openPauseMenu callbacks were duplicated inline
+   * inside openSaveLoadDialog's onBack — silent drift waiting to happen
+   * when a future change adds an entry to one but not the other. This
+   * helper is the single source of truth for what callbacks the menu
+   * receives; both call sites pass through it.
+   */
+  private buildPauseMenuCallbacks(): {
+    onResume: () => void;
+    onDownloadDebug: () => void;
+    onOpenSaveLoad: () => void;
+    getSpeedMultiplier: () => 1 | 2 | 4;
+    onCycleSpeed: (next: 1 | 2 | 4) => void;
+  } {
+    return {
+      onResume: () => this.closePauseMenu(),
+      onDownloadDebug: () => {
+        if (this.world === undefined) return;
+        const snap = buildDebugSnapshot(this.world, this.currentSeed, this.inputLog);
+        downloadDebugSnapshot(snap);
+      },
+      onOpenSaveLoad: () => this.openSaveLoadDialog(),
+      // Issue #114 UAT — read/write the live speedMultiplier so the menu's
+      // Settings sub-screen has parity with the 1/2/4 keyboard shortcuts.
+      // The shortcuts are Playing-only-gated; the menu surface gives the
+      // same control a discoverable home while paused.
+      getSpeedMultiplier: () => this.speedMultiplier,
+      onCycleSpeed: (next: 1 | 2 | 4) => { this.speedMultiplier = next; },
+    };
+  }
+
+  private openPauseMenu(): void {
+    if (this.gamePhase !== GamePhase.Playing) return;
+    this.gamePhase = GamePhase.Paused;
+    this.gameLoop.pause();
+    const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
+    uiScene.showPauseMenuOverlay(this.buildPauseMenuCallbacks());
+  }
+
+  private closePauseMenu(): void {
+    if (this.gamePhase !== GamePhase.Paused) return;
+    const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
+    uiScene.hidePauseMenuOverlay();
+    uiScene.hideSaveLoadDialogOverlay();
+    this.gamePhase = GamePhase.Playing;
+    this.gameLoop.resume();
+  }
+
+  // Issue #115 — opens the Save/Load dialog on top of the pause menu. Hides
+  // the menu first so the dialog has the canvas to itself; Back re-shows
+  // the menu via openPauseMenu's flow path. The game stays Paused throughout
+  // — Continue / New Game are the only paths that resume the loop.
+  private openSaveLoadDialog(): void {
+    if (this.gamePhase !== GamePhase.Paused) return;
+    const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
+    // Hide the menu before showing the dialog so the menu's button rects
+    // don't bleed through hit-testing while the dialog is up.
+    uiScene.hidePauseMenuOverlay();
+    uiScene.showSaveLoadDialogOverlay({
+      onContinue: () => {
+        // bootFromSave does its own resetSessionState + finishBoot, including
+        // gameLoop.resume(). We just need to flip out of Paused phase first
+        // so finishBoot's `gamePhase = Playing` overwrite is consistent.
+        this.gamePhase = GamePhase.Playing;
+        this.bootFromSave();
+      },
+      onNewGame: () => {
+        // restartGame deletes the existing save (preserving the issue #66
+        // guard) and bootFreshes; finishBoot resumes the loop and flips to
+        // Playing. Set Playing here too so the transitional moment between
+        // dialog dismissal and finishBoot doesn't observe a dangling Paused.
+        this.gamePhase = GamePhase.Playing;
+        this.restartGame();
+      },
+      onSaveNow: () => {
+        if (this.world === undefined) return false;
+        // Round-5 P1 (Codex): bootFromSave sets autosaveSuspended = true when
+        // it catches a FutureSimVersionError so the preserved newer-build
+        // save bytes survive in localStorage for recovery (user reloads on
+        // a newer build that knows the simVersion). The tickAutosave path
+        // already respects this flag (see update() below). The dialog's
+        // Save Now must respect it too — without this gate a manual save
+        // from the fall-through fresh session silently destroys those
+        // preserved bytes. Surface as a failed save so the player gets a
+        // flash and can recover via Delete / a newer-build reload.
+        if (this.autosaveSuspended) return false;
+        const ok = manualSave(this.currentSeed, this.inputLog, this.world);
+        // Round-2 review: bump the autosave cooldown so the next autosave
+        // window doesn't fire seconds later and overwrite the manual save's
+        // timestamp. The dialog's "Saved 15:32" line otherwise jumps to
+        // 15:33 the next time the player opens it, with no action of theirs.
+        if (ok) this.lastAutosaveMs = performance.now();
+        return ok;
+      },
+      onBack: () => {
+        // Re-open the pause menu — gamePhase is still Paused, gameLoop is
+        // still paused, so this just restores the menu chrome. Same callback
+        // payload as the initial openPauseMenu via the shared helper.
+        uiScene.showPauseMenuOverlay(this.buildPauseMenuCallbacks());
+      },
+    });
+  }
+
   private restartGame(): void {
     // Issue #66 — capture suspend state BEFORE bootFresh (which clears it
     // via resetSessionState). Two distinct flows:
@@ -530,8 +712,27 @@ export class GameScene extends Phaser.Scene {
     const gfx = this.gfx as unknown as GfxLike;
     gfx.clear();
     this.antSprites.beginFrame();
-    drawPheromoneOverlay(gfx, this.world, cam, this.viewState.activeView);
+    // UAT regression fix: pheromone overlay MUST render between terrain and
+    // entities, not before the orchestrator. drawSurface / drawUnderground
+    // paint opaque terrain THEN entities; an overlay drawn before the
+    // orchestrator gets wiped by the terrain pass. The bug had been
+    // invisible since the Phase 9.06 wiring (9f5b23f) — pheromones were in
+    // the world state but never showed up on canvas. Issue #114 surfaced it
+    // when the toggle had no visible effect (both ON and OFF rendered the
+    // same — because ON was always being overpainted).
+    //
+    // Fix: call the split terrain + entities functions explicitly so the
+    // pheromone overlay lands in the middle. The orchestrator wrappers
+    // (drawSurface / drawUnderground) stay for callers that don't need
+    // the overlay slot (e.g. unit tests).
+    //
+    // Player colony only — enemy pheromones stay hidden regardless of toggle
+    // state (PRD §7b / T-08-05).
     if (this.viewState.activeView === 'surface') {
+      drawSurfaceTerrain(gfx, this.world, cam);
+      if (this.viewState.showPheromoneOverlay) {
+        drawPheromoneOverlay(gfx, this.world, cam, 'surface');
+      }
       const pending =
         this.surfaceInputState.pendingEntranceTileX !== null &&
         this.surfaceInputState.pendingEntranceTileY !== null
@@ -540,7 +741,7 @@ export class GameScene extends Phaser.Scene {
               tileY: this.surfaceInputState.pendingEntranceTileY,
             }
           : null;
-      drawSurface(
+      drawSurfaceEntities(
         gfx,
         this.antSprites,
         this.prevState,
@@ -551,7 +752,11 @@ export class GameScene extends Phaser.Scene {
         this.antFacingCache,
       );
     } else {
-      drawUnderground(
+      drawUndergroundTerrain(gfx, this.world, cam, this.viewState.activeUndergroundColonyId);
+      if (this.viewState.showPheromoneOverlay) {
+        drawPheromoneOverlay(gfx, this.world, cam, 'underground');
+      }
+      drawUndergroundEntities(
         gfx,
         this.antSprites,
         this.prevState,

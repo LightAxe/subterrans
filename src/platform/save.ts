@@ -38,6 +38,7 @@ import {
   SURFACE_GRID_HEIGHT,
   UNDERGROUND_GRID_WIDTH,
   UNDERGROUND_GRID_HEIGHT,
+  PLAYER_COLONY_ID,
 } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { ChamberType } from '../sim/enums.js';
@@ -465,6 +466,14 @@ export interface SaveFile {
   readonly seed: number;
   readonly inputLog: SimCommand[];
   readonly snapshot: SerializedWorldState;
+  /**
+   * Issue #115 — wall-clock timestamp (Date.now() epoch ms) when the
+   * envelope was written. Populated by buildSaveFile so all writers
+   * (manualSave + tickAutosave) include it consistently. Optional in the
+   * type so older envelopes without the field still load — getSaveInfo
+   * falls back to 0 ("unknown") for the dialog when the field is absent.
+   */
+  readonly savedAtMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1139,6 +1148,11 @@ function buildSaveFile(seed: number, inputLog: readonly SimCommand[], world: Wor
     seed: seed | 0,
     inputLog: inputLog.map((c) => ({ ...c })),
     snapshot: serializeWorldState(world),
+    // Issue #115 — wall-clock stamp, surfaced in the Save/Load dialog's info
+    // line. Date.now() is allowed in src/platform (not src/sim — see file
+    // header rule list). Determinism unaffected: SCEN-06 replay is keyed on
+    // (seed, inputLog) and never reads this field.
+    savedAtMs: Date.now(),
   };
 }
 
@@ -1276,6 +1290,193 @@ export function deleteSave(): void {
   } catch {
     // swallow — quota / private-mode errors are non-fatal for delete
   }
+}
+
+// ---------------------------------------------------------------------------
+// Issue #115 — manual save / save-info / incompatible-save detection
+//
+// The autosave path (tickAutosave) writes opportunistically every 30s. A
+// manual "Save now" button needs an explicit write that doesn't disturb the
+// autosave cooldown — so manualSave is a thin wrapper around buildSaveFile +
+// setItem that does NOT update the lastSaveMs timer. The next autosave still
+// fires on its own schedule, which is fine: a manual save followed by an
+// autosave 5 seconds later costs one extra setItem call, not "two competing
+// writers."
+//
+// hasIncompatibleSave distinguishes "no save in localStorage" from "save
+// present but unreadable by this build" so the Save/Load dialog can surface
+// a one-time recovery message instead of silently booting fresh.
+//
+// getSaveInfo extracts the cheap summary fields the dialog displays without
+// running deserializeWorldState (which allocates typed arrays and validates
+// every field). It only parses the JSON envelope and reads three primitive
+// fields, so it's safe to call on every dialog open.
+// ---------------------------------------------------------------------------
+
+/** Issue #115 — manual save. Returns true on successful write, false on
+ *  quota / private-mode / blocked-storage failure. Does NOT touch the
+ *  autosave timer; callers driving tickAutosave keep their own lastSaveMs. */
+export function manualSave(
+  seed: number,
+  inputLog: readonly SimCommand[],
+  world: WorldState,
+): boolean {
+  try {
+    const envelope = buildSaveFile(seed, inputLog, world);
+    localStorage.setItem(SAVE_KEY, JSON.stringify(envelope));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Issue #115 — true iff bytes exist under SAVE_KEY but this build cannot
+ *  load them. Three categories of incompatibility:
+ *    1. envelope parse fails (wrong save format version, malformed JSON,
+ *       tampered seed, etc. — `parseSaveFile` throws)
+ *    2. envelope parses but `snapshot.simVersion > LATEST_SIM_VERSION` —
+ *       the save was written by a NEWER build. `bootFromSave`'s
+ *       `deserializeWorldState` would throw `FutureSimVersionError` and
+ *       fall through to `bootFresh` with autosave suspended (issue #66).
+ *       Surface this at the dialog level so Continue stays disabled and
+ *       the info line warns the user instead of letting them click
+ *       Continue and silently get a fresh world.
+ *
+ *  Distinct from `hasSave === false` which can mean "no save written yet"
+ *  OR "save present but unreadable." The dialog uses
+ *  `hasSave() && !hasIncompatibleSave()` to decide whether Continue is
+ *  actionable.
+ *
+ *  Round-2 review: also fires the legacy-save purge so an external caller
+ *  that hits this method first (without a prior hasSave call) still cleans
+ *  up the old subterrans:save:v1/v2 keys. Symmetry with hasSave/loadSave.
+ *
+ *  Round-3 (Codex P2 follow-up): the simVersion check above replaces the
+ *  prior "envelope-parse only" check that returned false for future-sim
+ *  saves and enabled a Continue click that would silently lose the save. */
+export function hasIncompatibleSave(): boolean {
+  let raw: string | null;
+  try {
+    purgeLegacySaves();
+    raw = localStorage.getItem(SAVE_KEY);
+  } catch {
+    return false;
+  }
+  if (raw === null) return false;
+  let file: SaveFile;
+  try {
+    file = parseSaveFile(raw);
+  } catch {
+    return true;
+  }
+  // Codex round-3 P1: parseSaveFile only validates the envelope (version,
+  // seed, inputLog). `snapshot` itself can be `null` or any non-object on
+  // a tampered/malformed envelope. Reject the obviously-broken case before
+  // the deserialize attempt below so we don't waste an allocation on it.
+  const snapshot = file.snapshot as unknown;
+  if (snapshot === null || typeof snapshot !== 'object') return true;
+
+  // Round-4 (Rob's manual review of 6d840ef): the prior simVersion-only
+  // check left a UI-lie window for parseable envelopes whose snapshot is
+  // shape-valid at the top level but missing required deeper fields
+  // (e.g. `snapshot: {}`, or `simVersion: LEGACY_SIM_VERSION - 1`).
+  // Continue would look enabled; bootFromSave would then throw on
+  // deserialize and fall through to bootFresh. Align the dialog's
+  // compatibility boundary with the canonical one — attempt the full
+  // deserialize. Any throw (FutureSimVersionError, plain Error from
+  // tampered/missing-fields, etc.) means Continue would not actually
+  // load the save, so surface as incompatible.
+  //
+  // Cost: one full WorldState allocation per call. The dialog open path
+  // calls this once (cached for the render); user-initiated, infrequent.
+  try {
+    deserializeWorldState(file.snapshot);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/** Lightweight save summary surfaced in the Save/Load dialog's info line.
+ *  Avoids deserializeWorldState (which allocates the full typed-array world)
+ *  by reading only a handful of primitives from the JSON envelope. */
+export interface SaveInfo {
+  /** Sim tick at the moment the snapshot was taken. */
+  tick: number;
+  /** Player colony's living worker count, or 0 when the field is missing. */
+  playerWorkers: number;
+  /** Player colony's stored-food count in HUMAN units (post `>> FP_SHIFT`). */
+  playerFoodStored: number;
+  /** Wall-clock timestamp (Date.now() epoch ms) when the envelope was last
+   *  written. 0 if the field is absent from a pre-issue-#115 envelope —
+   *  callers should treat 0 as "unknown" rather than "1970-01-01." */
+  savedAtMs: number;
+}
+
+/** Issue #115 — extract the dialog's summary fields without a full
+ *  deserialize. Returns null if no save exists or the envelope is unreadable.
+ *  Player colony key is `String(PLAYER_COLONY_ID)` per the colonies map's
+ *  stringified-int convention (ADR-0006). */
+export function getSaveInfo(): SaveInfo | null {
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(SAVE_KEY);
+  } catch {
+    return null;
+  }
+  if (raw === null) return null;
+  let file: SaveFile;
+  try {
+    file = parseSaveFile(raw);
+  } catch {
+    return null;
+  }
+  // Codex round-3 P1: parseSaveFile validates the envelope only. A
+  // parseable-but-corrupt envelope can have `snapshot: null` or
+  // `snapshot.colonies: undefined`, both of which would throw on the
+  // dereferences below and crash the dialog open path. Return null so
+  // the dialog falls back to the "no save / incompatible" branch in
+  // formatSaveInfoLine.
+  const snapshot = file.snapshot as unknown;
+  if (snapshot === null || typeof snapshot !== 'object') return null;
+  const colonies = (snapshot as { colonies?: unknown }).colonies as
+    | Record<string, { foodStored?: unknown; workerCount?: unknown } | undefined>
+    | undefined;
+  const playerKey = String(PLAYER_COLONY_ID);
+  // colonies may be undefined / null / a non-object on a malformed envelope;
+  // probe defensively before keying into it.
+  const playerColony = colonies !== undefined && colonies !== null && typeof colonies === 'object'
+    ? colonies[playerKey]
+    : undefined;
+  // foodStored is fixed-point; convert to whole-food units for display.
+  // Right-shift on a non-number short-circuits cleanly via the ?? fallback.
+  const foodFpRaw = playerColony?.foodStored;
+  const foodFp = typeof foodFpRaw === 'number' && Number.isFinite(foodFpRaw) && foodFpRaw >= 0
+    ? foodFpRaw
+    : 0;
+  const workerCountRaw = playerColony?.workerCount;
+  const playerWorkers = typeof workerCountRaw === 'number' && Number.isFinite(workerCountRaw) && workerCountRaw >= 0
+    ? workerCountRaw
+    : 0;
+  // tick may also be missing on a malformed envelope — surface 0 rather
+  // than rendering "Tick undefined" in the dialog.
+  const tickRaw = (snapshot as { tick?: unknown }).tick;
+  const tick = typeof tickRaw === 'number' && Number.isFinite(tickRaw) && tickRaw >= 0
+    ? tickRaw
+    : 0;
+  // Issue #115 — savedAtMs is optional in the envelope; pre-fix saves and
+  // any tampered/malformed timestamp fall back to 0 ("unknown") so the
+  // dialog can render a sensible placeholder.
+  const stampRaw = (file as { savedAtMs?: unknown }).savedAtMs;
+  const savedAtMs = typeof stampRaw === 'number' && Number.isFinite(stampRaw) && stampRaw >= 0
+    ? stampRaw
+    : 0;
+  return {
+    tick,
+    playerWorkers,
+    playerFoodStored: foodFp >> FP_SHIFT,
+    savedAtMs,
+  };
 }
 
 /**
