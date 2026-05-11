@@ -1369,13 +1369,23 @@ export function hasIncompatibleSave(): boolean {
   } catch {
     return true;
   }
+  // Codex round-3 P1: parseSaveFile only validates the envelope (version,
+  // seed, inputLog). `snapshot` itself can be `null` or any non-object on
+  // a tampered/malformed envelope. Reading `file.snapshot.simVersion`
+  // would throw and crash the dialog open path. Treat any non-object
+  // snapshot as incompatible — bootFromSave's deserializeWorldState would
+  // also reject it, so the dialog's "incompatible warning + Delete enabled"
+  // recovery path is the right outcome.
+  const snapshot = file.snapshot as unknown;
+  if (snapshot === null || typeof snapshot !== 'object') return true;
+
   // Future-sim guard. Defensive type-check on simVersion: the field is
   // optional in SerializedWorldState (legacy saves omit it; defaults to
   // LEGACY_SIM_VERSION on load). We only flag as incompatible when the
   // field is present AND exceeds the current LATEST. Anything else
   // (missing, equal, lower) is loadable — `deserializeWorldState`
   // handles legacy-default and same-version paths cleanly.
-  const simVersion = file.snapshot.simVersion;
+  const simVersion = (snapshot as { simVersion?: unknown }).simVersion;
   if (typeof simVersion === 'number' && simVersion > LATEST_SIM_VERSION) {
     return true;
   }
@@ -1416,12 +1426,39 @@ export function getSaveInfo(): SaveInfo | null {
   } catch {
     return null;
   }
+  // Codex round-3 P1: parseSaveFile validates the envelope only. A
+  // parseable-but-corrupt envelope can have `snapshot: null` or
+  // `snapshot.colonies: undefined`, both of which would throw on the
+  // dereferences below and crash the dialog open path. Return null so
+  // the dialog falls back to the "no save / incompatible" branch in
+  // formatSaveInfoLine.
+  const snapshot = file.snapshot as unknown;
+  if (snapshot === null || typeof snapshot !== 'object') return null;
+  const colonies = (snapshot as { colonies?: unknown }).colonies as
+    | Record<string, { foodStored?: unknown; workerCount?: unknown } | undefined>
+    | undefined;
   const playerKey = String(PLAYER_COLONY_ID);
-  const playerColony = file.snapshot.colonies[playerKey];
+  // colonies may be undefined / null / a non-object on a malformed envelope;
+  // probe defensively before keying into it.
+  const playerColony = colonies !== undefined && colonies !== null && typeof colonies === 'object'
+    ? colonies[playerKey]
+    : undefined;
   // foodStored is fixed-point; convert to whole-food units for display.
-  // Right-shift is safe here: foodStored is a non-negative int in the
-  // serialized envelope (validated upstream).
-  const foodFp = playerColony?.foodStored ?? 0;
+  // Right-shift on a non-number short-circuits cleanly via the ?? fallback.
+  const foodFpRaw = playerColony?.foodStored;
+  const foodFp = typeof foodFpRaw === 'number' && Number.isFinite(foodFpRaw) && foodFpRaw >= 0
+    ? foodFpRaw
+    : 0;
+  const workerCountRaw = playerColony?.workerCount;
+  const playerWorkers = typeof workerCountRaw === 'number' && Number.isFinite(workerCountRaw) && workerCountRaw >= 0
+    ? workerCountRaw
+    : 0;
+  // tick may also be missing on a malformed envelope — surface 0 rather
+  // than rendering "Tick undefined" in the dialog.
+  const tickRaw = (snapshot as { tick?: unknown }).tick;
+  const tick = typeof tickRaw === 'number' && Number.isFinite(tickRaw) && tickRaw >= 0
+    ? tickRaw
+    : 0;
   // Issue #115 — savedAtMs is optional in the envelope; pre-fix saves and
   // any tampered/malformed timestamp fall back to 0 ("unknown") so the
   // dialog can render a sensible placeholder.
@@ -1430,8 +1467,8 @@ export function getSaveInfo(): SaveInfo | null {
     ? stampRaw
     : 0;
   return {
-    tick: file.snapshot.tick,
-    playerWorkers: playerColony?.workerCount ?? 0,
+    tick,
+    playerWorkers,
     playerFoodStored: foodFp >> FP_SHIFT,
     savedAtMs,
   };

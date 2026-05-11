@@ -1856,6 +1856,29 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
       expect(hasIncompatibleSave()).toBe(false);
     });
+
+    it('Codex round-3 P1: returns true when snapshot is null (parseable envelope, garbage payload)', () => {
+      // parseSaveFile only validates the envelope. A v3 envelope with
+      // snapshot=null parses fine but reading snapshot.simVersion would
+      // throw and crash the dialog. Treat as incompatible.
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: null,
+      }));
+      expect(hasIncompatibleSave()).toBe(true);
+    });
+
+    it('Codex round-3 P1: returns true when snapshot is a non-object (string / number)', () => {
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: 'not an object',
+      }));
+      expect(hasIncompatibleSave()).toBe(true);
+    });
   });
 
   describe('Issue #115 — getSaveInfo', () => {
@@ -1928,6 +1951,51 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       manualSave(42, [], world);
       const info = getSaveInfo();
       expect(info!.tick).toBe(5);
+    });
+
+    it('Codex round-3 P1: does NOT throw when snapshot is null (parseable envelope, garbage payload)', () => {
+      // The dialog opens by calling getSaveInfo + hasIncompatibleSave. Both
+      // need to survive a parseable-but-garbage envelope so the user sees
+      // the "incompatible" warning + can use Delete/New Game to recover.
+      // Pre-fix this case threw inside getSaveInfo and crashed dialog
+      // rendering before the user could click anything.
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: null,
+      }));
+      expect(() => getSaveInfo()).not.toThrow();
+      expect(getSaveInfo()).toBeNull();
+    });
+
+    it('Codex round-3 P1: does NOT throw when snapshot.colonies is missing', () => {
+      // A snapshot with tick/rngState/etc. but no `colonies` field.
+      // Pre-fix: dereferencing colonies[playerKey] would throw TypeError.
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: { tick: 5, rngState: 1, nextEntityId: 0 },
+      }));
+      expect(() => getSaveInfo()).not.toThrow();
+      const info = getSaveInfo();
+      expect(info).not.toBeNull();
+      expect(info!.tick).toBe(5);
+      expect(info!.playerWorkers).toBe(0);
+      expect(info!.playerFoodStored).toBe(0);
+    });
+
+    it('Codex round-3 P1: returns 0 fields when snapshot.tick is missing/non-numeric', () => {
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+        version: SAVE_FORMAT_VERSION,
+        seed: 1,
+        inputLog: [],
+        snapshot: { colonies: {} },
+      }));
+      const info = getSaveInfo();
+      expect(info).not.toBeNull();
+      expect(info!.tick).toBe(0);
     });
 
     it('returns 0 worker / 0 food when the player colony key is absent (defensive)', () => {
