@@ -109,9 +109,12 @@ const debug = parsed as {
   inputLog: { issuedAtTick: number }[];
   snapshot: Parameters<typeof deserializeWorldState>[0];
 };
-if (typeof debug.seed !== 'number')             bail('missing or non-numeric "seed"');
-if (typeof debug.tick !== 'number' || debug.tick < 0) bail('missing or invalid "tick"');
-if (!Array.isArray(debug.inputLog))             bail('missing or non-array "inputLog"');
+// Number.isInteger rejects NaN, ±Infinity, and fractional values — important
+// because tick=Infinity would loop forever and seed=NaN is silently coerced
+// to 0 by createScenario (via `seed >>> 0`).
+if (!Number.isInteger(debug.seed))               bail(`"seed" must be an integer (got ${String(debug.seed)})`);
+if (!Number.isInteger(debug.tick) || debug.tick < 0) bail(`"tick" must be a non-negative integer (got ${String(debug.tick)})`);
+if (!Array.isArray(debug.inputLog))              bail('missing or non-array "inputLog"');
 if (!debug.snapshot || typeof debug.snapshot !== 'object') bail('missing "snapshot"');
 
 console.log(`Snapshot: ${snapPath}`);
