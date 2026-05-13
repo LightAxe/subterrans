@@ -80,7 +80,7 @@ const OSCILLATION_MAX_UNIQUE   = 3;
 
 const argPath = process.argv[2];
 if (!argPath) {
-  console.error('Usage: node --experimental-strip-types scripts/analyze-snapshot.ts <snapshot.json>');
+  console.error('Usage: node --experimental-transform-types scripts/analyze-snapshot.ts <snapshot.json>');
   process.exit(2);
 }
 
@@ -125,9 +125,14 @@ const replayStart = Date.now();
 const replay = createScenario(debug.seed);
 
 const byTick: typeof debug.inputLog[] = [];
-for (const cmd of debug.inputLog) {
-  const t = cmd.issuedAtTick;
-  (byTick[t] ??= []).push(cmd);
+for (let i = 0; i < debug.inputLog.length; i++) {
+  const cmd = debug.inputLog[i];
+  if (!cmd || typeof cmd !== 'object') bail(`inputLog[${i}] is not an object`);
+  const t = (cmd as { issuedAtTick: unknown }).issuedAtTick;
+  if (typeof t !== 'number' || !Number.isInteger(t) || t < 0) {
+    bail(`inputLog[${i}].issuedAtTick is missing or invalid (got ${String(t)})`);
+  }
+  (byTick[t] ??= []).push(cmd as { issuedAtTick: number });
 }
 
 interface Sample {
@@ -182,7 +187,9 @@ console.log(`  replay vs captured byte-equality: ${replayMatches ? 'PASS' : 'FAI
 if (!replayMatches) {
   console.log(`  WARNING: SCEN-06 determinism regression — replayed state differs from captured.`);
   console.log(`  (or a benign serializer key-order change between snapshot capture and this build)`);
-  console.log(`  (analysis below uses the captured snapshot, not the replay)`);
+  console.log(`  Cluster / stuck-in-dirt reports below use the CAPTURED snapshot (trustworthy).`);
+  console.log(`  Motion-history reports use the REPLAYED trajectory and may not reflect the`);
+  console.log(`  captured ants' real motion when replay has diverged — treat with caution.`);
 }
 console.log('');
 
@@ -388,6 +395,12 @@ console.log(
   `window = ${ANALYSIS_WINDOW_SAMPLES} samples = ${WINDOW_TICKS} ticks; ` +
   `covers ticks ${WINDOW_START}-${debug.tick}):`,
 );
+if (!replayMatches) {
+  console.log(
+    `  (replay diverged — motion below reflects the replayed trajectory, ` +
+    `which may differ from the captured ants' real motion)`,
+  );
+}
 
 // Group stationary ants by (zone, tile, colony) so 75 ants on the same tile
 // surface as one line, not 75. Each group also tracks the majority
