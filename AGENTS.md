@@ -138,6 +138,16 @@ npm run test      # Run Vitest
 npm run test:e2e  # Run Playwright
 ```
 
+## Debugging snapshots (F9 exports)
+
+In-game, `F9` downloads a debug snapshot (`subterrans-debug-seed<seed>-tick<tick>.json` — seed, tick, full input log, world snapshot, per-ant trace). To analyze one offline:
+
+```bash
+node --experimental-transform-types scripts/analyze-snapshot.ts <snapshot.json>
+```
+
+The CLI replays the recorded inputLog from seed and byte-compares the result against the captured snapshot (a free SCEN-06 determinism check — exits 1 on regression), then reports tile-occupancy clusters, underground ants stuck on non-Open tiles, and stationary / oscillating ants from a per-ant motion history sampled during replay. Each motion group is annotated with its dominant `(task, subTask)` so a real bug stands out from expected stuck cases. See PR #121 for the design notes.
+
 ## Note
 
 This repository is the public, open-source portion of a larger project. Research, planning, and internal design documents live in a separate private repository.
