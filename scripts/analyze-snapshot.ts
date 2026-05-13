@@ -178,12 +178,28 @@ for (let t = 0; t < debug.tick; t++) {
 }
 
 const replayElapsedMs = Date.now() - replayStart;
-const replayJson  = JSON.stringify(serializeWorldState(replay));
-const capturedJson = JSON.stringify(debug.snapshot);
+
+// commandQueue is preserved in serializeWorldState output (save.ts Pitfall 7
+// — F9 / autosave can fire between ticks, capturing pending input that has
+// been queued but not yet drained). The replay path only processes commands
+// that already exist in inputLog (drained on past ticks), so replay's
+// commandQueue is always empty at the end. Exclude commandQueue from the
+// byte-equality check to avoid false-positive SCEN-06 failures when capture
+// timing happens to catch staged input.
+function stripCommandQueue(s: typeof debug.snapshot): unknown {
+  const { commandQueue: _cq, ...rest } = s as Record<string, unknown>;
+  return rest;
+}
+const replaySerialized = serializeWorldState(replay);
+const replayJson   = JSON.stringify(stripCommandQueue(replaySerialized as unknown as typeof debug.snapshot));
+const capturedJson = JSON.stringify(stripCommandQueue(debug.snapshot));
 const replayMatches = replayJson === capturedJson;
+const capturedQueuedCount = Array.isArray((debug.snapshot as unknown as { commandQueue?: unknown[] }).commandQueue)
+  ? ((debug.snapshot as unknown as { commandQueue: unknown[] }).commandQueue.length)
+  : 0;
 
 console.log(`  replayed ${debug.tick} ticks in ${(replayElapsedMs / 1000).toFixed(1)}s`);
-console.log(`  replay vs captured byte-equality: ${replayMatches ? 'PASS' : 'FAIL'}`);
+console.log(`  replay vs captured byte-equality: ${replayMatches ? 'PASS' : 'FAIL'} (commandQueue excluded; captured had ${capturedQueuedCount} pending command${capturedQueuedCount === 1 ? '' : 's'})`);
 if (!replayMatches) {
   console.log(`  WARNING: SCEN-06 determinism regression — replayed state differs from captured.`);
   console.log(`  (or a benign serializer key-order change between snapshot capture and this build)`);
