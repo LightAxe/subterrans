@@ -122,6 +122,7 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 - Any new logic under `src/sim/` must ship with Vitest unit tests in the same PR. Untested sim code is a blocker, not a follow-up.
 - Changes to tick-order, command application, save format, or PRNG usage must include or update a deterministic replay test. If the PR claims "replay still works" without a test demonstrating it, ask for one.
 - Render/input/platform changes need at least a smoke test (initialization + one happy path). Full coverage is not required at those layers.
+- **80% coverage gate.** `npm run test:coverage` runs Vitest with v8 instrumentation and enforces global thresholds of 80% on statements / branches / functions / lines (see `vitest.config.ts`). Phaser scene files and `src/main.ts` are excluded from the gate because they are exercised by Playwright E2E, not unit tests. **Run `npm run test:coverage` and confirm the gate passes before pushing.** It is not part of `verify` — coverage instrumentation slows the suite to ~6 minutes and causes some long integration tests to hit their hard-coded timeouts, so keep it as a separate pre-push step (and as a CI job) rather than wiring it into the fast local loop.
 
 ### Asset paths and build hygiene
 
@@ -134,8 +135,9 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 cd code/
 npm install
 npm run dev       # Start dev server (once scaffold is in place)
-npm run test      # Run Vitest
-npm run test:e2e  # Run Playwright
+npm run test           # Run Vitest (fast local loop)
+npm run test:coverage  # Run Vitest with v8 coverage + 80% gate (run before pushing)
+npm run test:e2e       # Run Playwright
 ```
 
 ## Debugging snapshots (F9 exports)
