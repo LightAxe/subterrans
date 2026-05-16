@@ -259,6 +259,49 @@ describe('submitPlaytrace — graceful downgrade', () => {
   });
 });
 
+describe('submitPlaytrace — timing invariant (load-bearing)', () => {
+  // game-scene.ts:onSubmit fires `void submitPlaytrace(...)` and then
+  // synchronously calls restartGame(), which mutates the live world.
+  // The wire envelope MUST be fully captured into JSON-safe primitives
+  // before that mutation can happen. This test mutates world.tick and
+  // world.simVersion immediately after `void submitPlaytrace(...)`
+  // returns, then waits for the upload to land and asserts the body
+  // reflects the pre-mutation state.
+  it('captures world.tick / simVersion before yielding control to the caller', async () => {
+    const input = makeInput();
+    input.world.tick = 9999;
+    input.world.simVersion = 7;
+
+    const bodies: Array<{ tick: number; simVersion: number }> = [];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      // Decompress the body and capture the envelope fields we care about.
+      const blob = init!.body as Blob;
+      const buf = new Uint8Array(await blob.arrayBuffer());
+      const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'));
+      const text = await new Response(stream).text();
+      const env = JSON.parse(text) as { tick: number; simVersion: number };
+      bodies.push({ tick: env.tick, simVersion: env.simVersion });
+      return new Response(JSON.stringify({ accepted: true }), { status: 202 });
+    });
+
+    try {
+      // Fire-and-forget exactly as game-scene does.
+      const pending = submitPlaytrace(input);
+      // Mutate the live world IMMEDIATELY — same synchronous tick as the
+      // caller. This simulates restartGame() running right after the void
+      // submitPlaytrace expression. If the envelope were captured lazily
+      // (after the first await), these mutations would corrupt the body.
+      input.world.tick = 0;
+      input.world.simVersion = 0;
+      await pending;
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0]).toEqual({ tick: 9999, simVersion: 7 });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
+
 describe('cancelInFlightUpload', () => {
   beforeEach(() => {
     cancelInFlightUpload();

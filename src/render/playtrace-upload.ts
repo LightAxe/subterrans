@@ -197,6 +197,10 @@ export function buildPlaytraceEnvelope(
     quitFromPauseMenu: input.quitFromPauseMenu,
     survey: {
       rating: input.survey.rating,
+      // truncateFreeText is idempotent; running it here guarantees the
+      // contract bound even if a caller passed an unsanitized survey
+      // straight to buildPlaytraceEnvelope (bypassing submitPlaytrace's
+      // hoist). The hoist still saves repeated work in the downgrade loop.
       freeText: truncateFreeText(input.survey.freeText),
       brokenFlag: input.survey.brokenFlag,
     },
@@ -234,6 +238,17 @@ export async function gzipString(s: string): Promise<Blob> {
  * `feature-off` without touching the network. Errors are normalized into
  * the {@link PlaytraceUploadResult} discriminated union so the caller
  * doesn't need to inspect raw Response objects.
+ *
+ * Timing invariant — load-bearing: the entire snapshot construction
+ * (buildDebugSnapshot → serializeWorldState) and envelope build run in
+ * this function's SYNCHRONOUS PREFIX, before the first true `await`
+ * suspension point (which is inside `gzipString`'s `new Response(...).blob()`).
+ * Callers may therefore mutate the live `world` reference immediately
+ * after `void submitPlaytrace(...)` returns — game-scene.ts depends on
+ * this so its end-of-game `restartGame()` doesn't race the in-flight
+ * payload. The downgrade rebuild path stays inside the same async tail
+ * after suspension, but by then every world read has already happened
+ * into JSON-safe primitives via serializeWorldState (see save.ts:569).
  */
 export async function submitPlaytrace(
   input: PlaytraceSubmissionInput,
@@ -251,12 +266,23 @@ export async function submitPlaytrace(
   const controller = new AbortController();
   inFlightController = controller;
 
-  try {
-    const body = input.includeSnapshot
-      ? await buildPayloadWithDowngrade(input)
-      : await buildSurveyOnlyPayload(input);
+  // Pre-truncate the free-text once. The downgrade loop rebuilds the
+  // envelope up to four times; running truncateFreeText each time would
+  // re-allocate the (possibly large) string on every rebuild for no value.
+  // Hoisting it also keeps the cleaned form stable across stages so the
+  // server sees identical bytes regardless of which downgrade landed.
+  const truncatedFreeText = truncateFreeText(input.survey.freeText);
+  const preparedInput: PlaytraceSubmissionInput = {
+    ...input,
+    survey: { ...input.survey, freeText: truncatedFreeText },
+  };
 
-    const response = await fetch(input.endpoint, {
+  try {
+    const body = preparedInput.includeSnapshot
+      ? await buildPayloadWithDowngrade(preparedInput)
+      : await buildSurveyOnlyPayload(preparedInput);
+
+    const response = await fetch(preparedInput.endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/octet-stream',

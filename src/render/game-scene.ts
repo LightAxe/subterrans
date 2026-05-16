@@ -38,7 +38,6 @@ import { buildDebugSnapshot } from '../platform/debug-snapshot.js';
 import { downloadDebugSnapshot } from './debug-snapshot-download.js';
 import {
   submitPlaytrace,
-  cancelInFlightUpload,
   type PlaytraceSurvey,
 } from './playtrace-upload.js';
 import {
@@ -453,11 +452,16 @@ export class GameScene extends Phaser.Scene {
     // would lock a freshly-spawned ant into the prior ant's direction until
     // the smoothing relaxes. Clearing here keeps boot visually clean.
     this.antFacingCache.reset();
-    // Issue #122 — cancel any upload from the prior session that may still
-    // be in flight (long network tails, slow uplink) so the new session's
-    // submission doesn't race the old one server-side, and rotate the
-    // session UUID so each (re)start gets its own telemetry row.
-    cancelInFlightUpload();
+    // Issue #122 — rotate the session UUID so each (re)start gets its own
+    // telemetry row server-side.
+    //
+    // Note: we intentionally do NOT cancel any in-flight playtrace upload
+    // here. The end-of-game survey flow is fire-and-forget: onSubmit kicks
+    // off submitPlaytrace AND then calls restartGame, which routes through
+    // this method. Cancelling the upload here would race-cancel the very
+    // request we just dispatched, dropping the survey row server-side.
+    // The single-in-flight discipline is instead enforced inside
+    // submitPlaytrace itself — each new submission cancels its predecessor.
     this.playtraceSessionId =
       typeof crypto !== 'undefined' && 'randomUUID' in crypto
         ? crypto.randomUUID()
@@ -653,9 +657,13 @@ export class GameScene extends Phaser.Scene {
         // live world reference there.
         const world = this.world;
         const seed = this.currentSeed;
-        // Defensive copy of the inputLog — the live array is owned by
-        // GameScene and will be cleared by restartGame's resetSessionState.
-        const inputLogCopy: SimCommand[] = this.inputLog.map((c) => ({ ...c }));
+        // Deep copy of the inputLog. `structuredClone` covers nested
+        // objects (e.g. SetBehaviorRatio.ratio: { forage, fight }) that a
+        // shallow `{...c}` would still share by reference with the live
+        // array. resetSessionState clears the live array shortly after;
+        // a shared nested reference would let that clear corrupt the
+        // in-flight payload.
+        const inputLogCopy: SimCommand[] = this.inputLog.map((c) => structuredClone(c));
         // The ADR contract requires outcome to be one of Victory / Defeat /
         // MutualDestruction on the wire — `None` is not a valid value. The
         // pause-menu-quit path may fire with a live queen (outcome=None), so

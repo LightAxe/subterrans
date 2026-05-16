@@ -40,6 +40,28 @@ describe('pauseMenuItems — main page', () => {
     expect(items.find(i => i.id === 'save-load')!.enabled).toBe(true);
   });
 
+  it('Quit & feedback row is hidden when quitAndSurveyEnabled=false (issue #122 default)', () => {
+    const items = pauseMenuItems('main', { ...ctx, quitAndSurveyEnabled: false });
+    expect(items.find(i => i.id === 'quit-and-survey')).toBeUndefined();
+    // The default-off path keeps the original 4-row main menu.
+    expect(items).toHaveLength(4);
+  });
+
+  it('Quit & feedback row is emitted when quitAndSurveyEnabled=true (issue #122)', () => {
+    const items = pauseMenuItems('main', { ...ctx, quitAndSurveyEnabled: true });
+    const row = items.find(i => i.id === 'quit-and-survey');
+    expect(row).toBeDefined();
+    expect(row!.enabled).toBe(true);
+    expect(items).toHaveLength(5);
+    // Layout invariant: every row including the new one keeps the
+    // documented w×h and the stack-gap (rebuilt against new item count).
+    for (let i = 1; i < items.length; i++) {
+      const prevBottom = items[i - 1]!.rect.y + items[i - 1]!.rect.h;
+      const currTop = items[i]!.rect.y;
+      expect(currTop - prevBottom).toBe(PAUSE_MENU_BUTTON_GAP);
+    }
+  });
+
   it('every button has the documented w×h dimensions', () => {
     const items = pauseMenuItems('main', ctx);
     for (const i of items) {

@@ -148,6 +148,21 @@ node --experimental-transform-types scripts/analyze-snapshot.ts <snapshot.json>
 
 The CLI replays the recorded inputLog from seed and byte-compares the result against the captured snapshot (a free SCEN-06 determinism check — exits 1 on regression), then reports tile-occupancy clusters, underground ants stuck on non-Open tiles, and stationary / oscillating ants from a per-ant motion history sampled during replay. Each motion group is annotated with its dominant `(task, subTask)` so a real bug stands out from expected stuck cases. See PR #121 for the design notes.
 
+## Playtrace upload (issue #122 / ADR 0013)
+
+End-of-game survey overlay with an opt-in debug-snapshot upload. **Disabled by default** — the survey overlay and the pause menu's "Quit & feedback" row are hidden when the `VITE_PLAYTRACE_ENDPOINT` env var is unset or empty, and `npm run build` produces a bundle with the feature off.
+
+To exercise the upload flow on localhost without standing up the website's Lambda + S3 stack:
+
+```bash
+cd code/
+cp .env.example .env.local
+# uncomment VITE_PLAYTRACE_ENDPOINT=/api/playtrace in .env.local
+npm run dev
+```
+
+The dev server has a built-in mock for `POST /api/playtrace` (see `vite.config.ts` — `playtraceMockPlugin`). Play to game-over (or use the pause menu's "Quit & feedback" entry), fill in the survey, and hit Submit. The dev-server terminal prints a one-line summary of the received envelope plus a pretty-printed JSON dump (snapshot elided). The mock returns the same `202 + { accepted, sessionId }` body the production Lambda will return.
+
 ## Note
 
 This repository is the public, open-source portion of a larger project. Research, planning, and internal design documents live in a separate private repository.

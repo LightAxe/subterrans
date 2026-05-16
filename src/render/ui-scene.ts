@@ -683,7 +683,7 @@ export class UIScene extends Phaser.Scene {
 
     // Belt-and-suspenders: clear overlay window state on scene shutdown to
     // prevent stale __phase9_ui surviving a scene restart.
-    this.events.on('shutdown', () => {
+    const teardown = () => {
       this.hideGameOverOverlay();
       this.hideSavePromptOverlay();
       this.hideSaveLoadDialogOverlay();
@@ -691,7 +691,14 @@ export class UIScene extends Phaser.Scene {
       this.hideSurveyOverlay();
       hideAntActivityPanel();
       setActiveOverlay('none');
-    });
+    };
+    this.events.on('shutdown', teardown);
+    // Defensive: Phaser fires `shutdown` before `destroy`, but a race
+    // between game.destroy(true) and a pending overlay state could leave
+    // the DOM textarea or its resize listener attached if `shutdown`
+    // didn't reach hideSurveyOverlay. Wiring `destroy` too costs nothing
+    // and guarantees the DOM leak doesn't outlive the game instance.
+    this.events.on('destroy', teardown);
 
     this.input.on('pointerup', () => {
       if (this.dragState.isDragging) {
@@ -1575,6 +1582,12 @@ export class UIScene extends Phaser.Scene {
     quitFromPauseMenu: false,
   };
   private surveyTextarea: HTMLTextAreaElement | null = null;
+  /** Bound handler kept on the instance so addEventListener / removeEventListener
+   *  observe the same function reference. Window resize while the survey is
+   *  open repositions the DOM textarea over the canvas; without this the
+   *  textarea drifts off-canvas after a layout change (sidebar collapse,
+   *  devtools open, mobile orientation flip). */
+  private surveyResizeHandler: (() => void) | null = null;
 
   public showSurveyOverlay(callbacks: SurveyOverlayCallbacks): void {
     this.hideSurveyOverlay(); // idempotent clear
@@ -1597,6 +1610,10 @@ export class UIScene extends Phaser.Scene {
     if (this.surveyTextarea !== null) {
       this.surveyTextarea.remove();
       this.surveyTextarea = null;
+    }
+    if (this.surveyResizeHandler !== null && typeof window !== 'undefined') {
+      window.removeEventListener('resize', this.surveyResizeHandler);
+      this.surveyResizeHandler = null;
     }
     this.recomputeActiveOverlay();
   }
@@ -1819,8 +1836,22 @@ export class UIScene extends Phaser.Scene {
       ta.addEventListener('input', () => {
         this.surveyState.freeText = truncateFreeText(ta.value);
       });
-      document.body.appendChild(ta);
+      // Append to the canvas's parent so embedded-in-shadow-DOM hosts
+      // (the library-mode embed on the website may eventually mount
+      // inside a custom element) keep the textarea inside the same
+      // stacking context as the canvas. Fall back to document.body only
+      // when the canvas has no parent yet (defensive — shouldn't happen
+      // after Phaser's create()).
+      const parent = canvas.parentElement ?? document.body;
+      parent.appendChild(ta);
       this.surveyTextarea = ta;
+    }
+    // Bind the resize handler once per overlay open so a window-resize
+    // mid-overlay (devtools open, sidebar toggle, mobile rotate) keeps the
+    // textarea aligned with the canvas. Removed in hideSurveyOverlay.
+    if (this.surveyResizeHandler === null && typeof window !== 'undefined') {
+      this.surveyResizeHandler = () => this.positionSurveyTextarea();
+      window.addEventListener('resize', this.surveyResizeHandler);
     }
     this.positionSurveyTextarea();
   }
@@ -1829,12 +1860,24 @@ export class UIScene extends Phaser.Scene {
     if (this.surveyTextarea === null) return;
     const canvas = this.game.canvas;
     if (canvas === null) return;
-    const r = canvas.getBoundingClientRect();
-    const scaleX = r.width / SURVEY_CANVAS_W;
-    const scaleY = r.height / SURVEY_CANVAS_H;
+    const canvasRect = canvas.getBoundingClientRect();
+    const scaleX = canvasRect.width / SURVEY_CANVAS_W;
+    const scaleY = canvasRect.height / SURVEY_CANVAS_H;
     const ta = this.surveyTextarea;
-    ta.style.left = `${r.left + SURVEY_FREE_TEXT_RECT.x * scaleX}px`;
-    ta.style.top = `${r.top + SURVEY_FREE_TEXT_RECT.y * scaleY}px`;
+    // The textarea is now appended to canvas.parentElement (when present),
+    // so positioning relative to the canvas's offset within that parent
+    // avoids drift when the parent is itself positioned, scrolled, or
+    // inside a shadow root. Fall back to viewport-relative positioning
+    // when the textarea ended up on document.body (no canvas parent).
+    if (ta.parentElement === canvas.parentElement && ta.parentElement !== null) {
+      // Parent-relative: use canvas offsetLeft/Top within the shared parent.
+      ta.style.left = `${canvas.offsetLeft + SURVEY_FREE_TEXT_RECT.x * scaleX}px`;
+      ta.style.top = `${canvas.offsetTop + SURVEY_FREE_TEXT_RECT.y * scaleY}px`;
+    } else {
+      // Viewport-relative fallback for the document.body case.
+      ta.style.left = `${canvasRect.left + SURVEY_FREE_TEXT_RECT.x * scaleX}px`;
+      ta.style.top = `${canvasRect.top + SURVEY_FREE_TEXT_RECT.y * scaleY}px`;
+    }
     ta.style.width = `${SURVEY_FREE_TEXT_RECT.w * scaleX}px`;
     ta.style.height = `${SURVEY_FREE_TEXT_RECT.h * scaleY}px`;
   }
