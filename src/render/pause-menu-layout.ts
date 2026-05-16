@@ -49,7 +49,11 @@ export type PauseMenuItemId =
   | 'debug-snapshot'
   | 'back'
   | 'pheromone-toggle'
-  | 'speed-cycle';
+  | 'speed-cycle'
+  // Issue #122 / ADR 0013 — "Quit & feedback" entry. Only emitted when the
+  // playtrace feature is enabled (caller passes ctx.quitAndSurveyEnabled);
+  // hidden otherwise so the open-source build's pause menu is unchanged.
+  | 'quit-and-survey';
 
 /** Allowed speedMultiplier values. Cycled by the Settings sub-screen
  *  speed-cycle row in the order 1 → 2 → 4 → 1. */
@@ -88,6 +92,11 @@ export interface PauseMenuRenderContext {
    *  settings persistence — matches the Phase 4 fresh-boot contract that
    *  speed resets to 1× on restart). */
   currentSpeedMultiplier: SpeedMultiplier;
+  /** Issue #122 / ADR 0013 — true when the playtrace upload feature is
+   *  active (VITE_PLAYTRACE_ENDPOINT non-empty). Adds a "Quit & feedback"
+   *  row to the main menu; hidden when the feature is off so the open-
+   *  source build's menu stays identical to pre-#122. */
+  quitAndSurveyEnabled: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +144,9 @@ export function pauseMenuItems(
       { id: 'settings',       label: 'Settings  >',        enabled: true },
       { id: 'debug-snapshot', label: 'Download debug log', enabled: true },
     ];
+    if (ctx.quitAndSurveyEnabled) {
+      labels.push({ id: 'quit-and-survey', label: 'Quit & feedback', enabled: true });
+    }
     const rects = stackRects(labels.length);
     return labels.map((l, i) => ({
       id: l.id,

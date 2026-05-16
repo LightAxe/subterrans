@@ -469,3 +469,58 @@ describe('buildDebugSnapshot — envelope + filtering', () => {
     expect(name.endsWith('.json')).toBe(true);
   });
 });
+
+describe('buildDebugSnapshot — BuildDebugSnapshotOptions (issue #122)', () => {
+  function makeWorldWithAnts() {
+    const { world } = setupWorldWithColony(COLONY_ID);
+    setupSurfaceGrid(world, COLONY_ID);
+    for (let i = 0; i < 4; i++) {
+      const id = allocateEntityId(world);
+      initAnt(world.ants, id, {
+        colonyId: COLONY_ID,
+        posX: (10 + i) << FP_SHIFT,
+        posY: (10 + i) << FP_SHIFT,
+        task: AntTask.Foraging,
+        subTask: ForagingSubState.SearchingFood,
+      });
+    }
+    return world;
+  }
+
+  it('default options include both antTrace and inputLog (F9 path is unchanged)', () => {
+    const world = makeWorldWithAnts();
+    const log = [{ type: 'SetBehaviorRatio', colonyId: COLONY_ID, ratio: { forage: 50, fight: 50 }, issuedAtTick: 0 }] as never;
+    const snap = buildDebugSnapshot(world, 1, log);
+    expect(snap.antTrace.length).toBeGreaterThan(0);
+    expect(snap.inputLog.length).toBe(1);
+  });
+
+  it('includeAntTrace=false emits an empty trace array (downgrade stage 1)', () => {
+    const world = makeWorldWithAnts();
+    const log = [{ type: 'SetBehaviorRatio', colonyId: COLONY_ID, ratio: { forage: 50, fight: 50 }, issuedAtTick: 0 }] as never;
+    const snap = buildDebugSnapshot(world, 1, log, { includeAntTrace: false });
+    expect(snap.antTrace).toEqual([]);
+    // inputLog must still be present at this stage.
+    expect(snap.inputLog.length).toBe(1);
+  });
+
+  it('includeInputLog=false drops the input log (downgrade stage 2)', () => {
+    const world = makeWorldWithAnts();
+    const log = [{ type: 'SetBehaviorRatio', colonyId: COLONY_ID, ratio: { forage: 50, fight: 50 }, issuedAtTick: 0 }] as never;
+    const snap = buildDebugSnapshot(world, 1, log, { includeAntTrace: false, includeInputLog: false });
+    expect(snap.antTrace).toEqual([]);
+    expect(snap.inputLog).toEqual([]);
+  });
+
+  it('legacy colonyFilter array signature still works', () => {
+    const world = makeWorldWithAnts();
+    const snap = buildDebugSnapshot(world, 1, [], [COLONY_ID]);
+    expect(snap.antTrace.every(r => r.colonyId === COLONY_ID)).toBe(true);
+  });
+
+  it('options.colonyFilter narrows the trace to the listed colonies', () => {
+    const world = makeWorldWithAnts();
+    const snap = buildDebugSnapshot(world, 1, [], { colonyFilter: [OTHER_COLONY_ID] });
+    expect(snap.antTrace).toEqual([]);
+  });
+});

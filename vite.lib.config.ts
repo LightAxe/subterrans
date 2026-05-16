@@ -19,9 +19,15 @@
 // type-only imports in the host project.
 
 import { defineConfig, type Plugin } from 'vite';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import ts from 'typescript';
+
+// Package version — exposed to the bundle as the __APP_VERSION__ define so
+// the playtrace upload module (issue #122) can report `gameVersion` on the
+// submission envelope. Same source-of-truth as the standalone build's
+// vite.config.ts; keeping the two configs in sync is a manual review check.
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
 
 /** Emit dist-lib/manifest.json after the bundle is written, so the website
  *  deploy can read `entry` and inject the right hashed <script src=…>.
@@ -136,6 +142,9 @@ function generateMainDts(): string {
 }
 
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   // Suppress copying public/* into dist-lib/. Sprite assets live in the
   // website's deploy at /demo/play/assets/sprites/* — the library bundle
   // doesn't need to ship duplicates.

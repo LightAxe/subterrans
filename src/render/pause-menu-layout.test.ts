@@ -18,6 +18,7 @@ const ctx: PauseMenuRenderContext = {
   saveLoadEnabled: true,
   currentPheromoneOverlay: true,
   currentSpeedMultiplier: 1,
+  quitAndSurveyEnabled: false,
 };
 
 describe('pauseMenuItems — main page', () => {

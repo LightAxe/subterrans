@@ -28,6 +28,24 @@ export interface MountOptions {
    * Default: `${import.meta.env.BASE_URL}assets/`.
    */
   assetsBase?: string;
+
+  /**
+   * Override the endpoint URL for the end-of-game playtrace upload (issue
+   * #122 / ADR 0013). When set to a non-empty string, the survey overlay
+   * appears at end-of-game (and as a "Quit & feedback" entry on the pause
+   * menu) and submissions POST to this URL.
+   *
+   * Default: the build-time `VITE_PLAYTRACE_ENDPOINT` env var, or `''` if
+   * unset. The empty-string convention is load-bearing: a missing env var
+   * (typical for local dev and the open-source build) disables the feature
+   * entirely — no overlay, no network traffic.
+   *
+   * Embedders on third-party origins can override here to point at a
+   * different deployment (currently a deferred CORS item per ADR 0013 §"Open
+   * items"; if you set this to a cross-origin URL the request will be
+   * blocked until the server adds the appropriate CORS headers).
+   */
+  playtraceEndpoint?: string;
 }
 
 export interface MountedGame {
@@ -75,6 +93,13 @@ function normalizeAssetsBase(raw: string | undefined): string {
 
 export function mount(target: HTMLElement, options?: MountOptions): MountedGame {
   const assetsBase = normalizeAssetsBase(options?.assetsBase);
+  // Playtrace endpoint resolution: explicit option wins; otherwise fall back
+  // to the build-time env var. Empty string = feature disabled, per the
+  // ADR 0013 convention — survey overlay is hidden, no network calls.
+  const playtraceEndpoint =
+    options?.playtraceEndpoint
+    ?? (import.meta.env.VITE_PLAYTRACE_ENDPOINT as string | undefined)
+    ?? '';
 
   const config: Phaser.Types.Core.GameConfig = {
     type: Phaser.AUTO,
@@ -98,6 +123,7 @@ export function mount(target: HTMLElement, options?: MountOptions): MountedGame 
       // its sprite URLs.
       preBoot: (game) => {
         game.registry.set('assetsBase', assetsBase);
+        game.registry.set('playtraceEndpoint', playtraceEndpoint);
       },
     },
   };
