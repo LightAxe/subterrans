@@ -329,51 +329,69 @@ export async function submitPlaytrace(
 
 /** ADR §"Size limits and graceful downgrade" sequence for snapshot-included
  *  submissions. Tries full → no-antTrace → no-antTrace-no-inputLog → null.
- *  Each stage rebuilds the envelope with the reduced snapshot, re-gzips,
- *  and checks size before falling through. Returns the first body that
- *  fits the cap, or the final survey-only body which always fits. */
+ *
+ *  **World capture happens exactly once, in this function's synchronous
+ *  prefix.** Both the wire envelope's top-level fields (`tick`, `simVersion`,
+ *  ...) AND the nested snapshot field are read off `input.world` here, then
+ *  the downgrade stages emit derivatives of the captured envelope via plain
+ *  object manipulation — no further world reads. Codex P1 finding: the
+ *  caller's pattern is `void submitPlaytrace(...)` followed by an immediate
+ *  synchronous `restartGame()`, which mutates the live world. The first
+ *  `await` here yields control to that restart, so any later
+ *  `buildPlaytraceEnvelope(input, ...)` or `buildDebugSnapshot(input.world, ...)`
+ *  would race a post-restart world and produce a payload with mixed
+ *  sessions on the very oversized path this loop exists to handle. */
 async function buildPayloadWithDowngrade(
   input: PlaytraceSubmissionInput,
 ): Promise<Blob> {
-  // Stage 1 — full snapshot.
-  let snapshot = buildDebugSnapshot(input.world, input.seed, input.inputLog);
-  let body = await encodeEnvelope(input, snapshot);
+  // Capture the world ONCE, synchronously, into a JSON-safe full envelope.
+  // serializeWorldState (see save.ts:569) materializes every TypedArray and
+  // grid into plain primitives/arrays; buildPlaytraceEnvelope copies the
+  // remaining world-dependent primitives (tick, simVersion). After this
+  // returns, the envelope has no live references back into `input.world`.
+  const fullSnap = buildDebugSnapshot(input.world, input.seed, input.inputLog);
+  const fullEnvelope = buildPlaytraceEnvelope(input, fullSnap);
+
+  // Stage 1 — full envelope.
+  let body = await gzipEnvelope(fullEnvelope);
   if (body.size <= PLAYTRACE_MAX_GZIPPED_BYTES) return body;
 
   // Stage 2 — drop antTrace (typically dominant size contribution).
-  snapshot = buildDebugSnapshot(input.world, input.seed, input.inputLog, {
-    includeAntTrace: false,
-  });
-  body = await encodeEnvelope(input, snapshot);
+  const stage2: PlaytraceEnvelope = {
+    ...fullEnvelope,
+    snapshot: { ...fullSnap, antTrace: [] },
+  };
+  body = await gzipEnvelope(stage2);
   if (body.size <= PLAYTRACE_MAX_GZIPPED_BYTES) return body;
 
   // Stage 3 — also drop inputLog. Replay value is now gone.
-  snapshot = buildDebugSnapshot(input.world, input.seed, input.inputLog, {
-    includeAntTrace: false,
-    includeInputLog: false,
-  });
-  body = await encodeEnvelope(input, snapshot);
+  const stage3: PlaytraceEnvelope = {
+    ...fullEnvelope,
+    snapshot: { ...fullSnap, antTrace: [], inputLog: [] },
+  };
+  body = await gzipEnvelope(stage3);
   if (body.size <= PLAYTRACE_MAX_GZIPPED_BYTES) return body;
 
   // Stage 4 — survey-only. Always fits (envelope is a handful of fields).
-  return encodeEnvelope(input, null);
+  const stage4: PlaytraceEnvelope = { ...fullEnvelope, snapshot: null };
+  return gzipEnvelope(stage4);
 }
 
 /** Build a survey-only payload directly, skipping the snapshot construction.
- *  Used when the player did not opt in to upload. */
+ *  Used when the player did not opt in to upload. Same world-capture
+ *  property as the downgrade path: the envelope is built in this function's
+ *  synchronous prefix before the first await. */
 async function buildSurveyOnlyPayload(
   input: PlaytraceSubmissionInput,
 ): Promise<Blob> {
-  return encodeEnvelope(input, null);
+  const envelope = buildPlaytraceEnvelope(input, null);
+  return gzipEnvelope(envelope);
 }
 
-/** Stringify the envelope and gzip it. Shared helper across all four
- *  downgrade stages so the wire framing stays identical between them. */
-async function encodeEnvelope(
-  input: PlaytraceSubmissionInput,
-  snapshot: DebugSnapshot | null,
-): Promise<Blob> {
-  const envelope = buildPlaytraceEnvelope(input, snapshot);
+/** Stringify a fully-built envelope and gzip it. The envelope is already
+ *  decoupled from the live world at this point — this function does no
+ *  further world reads. */
+async function gzipEnvelope(envelope: PlaytraceEnvelope): Promise<Blob> {
   return gzipString(JSON.stringify(envelope));
 }
 

@@ -267,7 +267,7 @@ describe('submitPlaytrace — timing invariant (load-bearing)', () => {
   // world.simVersion immediately after `void submitPlaytrace(...)`
   // returns, then waits for the upload to land and asserts the body
   // reflects the pre-mutation state.
-  it('captures world.tick / simVersion before yielding control to the caller', async () => {
+  it('captures world.tick / simVersion before yielding control to the caller (stage-1 fit)', async () => {
     const input = makeInput();
     input.world.tick = 9999;
     input.world.simVersion = 7;
@@ -298,6 +298,70 @@ describe('submitPlaytrace — timing invariant (load-bearing)', () => {
       expect(bodies[0]).toEqual({ tick: 9999, simVersion: 7 });
     } finally {
       fetchSpy.mockRestore();
+    }
+  });
+
+  // Codex P1 regression: the downgrade loop's stages 2/3 used to
+  // re-call buildDebugSnapshot(input.world, ...) AFTER suspending on
+  // stage 1's gzip — by that point restartGame() had mutated the world.
+  // This test forces the downgrade loop to walk all the way to stage 4
+  // by stubbing CompressionStream to identity-encode, then mutates the
+  // world between submit and final resolution and asserts the body
+  // reflects pre-mutation state at every wire-visible field.
+  it('downgrade stages derive from the stage-1 envelope, not the live world (codex P1)', async () => {
+    const origCS = globalThis.CompressionStream;
+    // Identity CompressionStream — passes input bytes through unchanged
+    // so the downgrade loop is forced to walk all stages by JSON-encoded
+    // body size, not by real gzip ratio.
+    const IdentityCS = function (this: unknown, _format: string) {
+      return new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) { controller.enqueue(chunk); },
+      });
+    };
+    (globalThis as unknown as { CompressionStream: unknown }).CompressionStream = IdentityCS;
+
+    // Inflate the inputLog so stages 1 and 2 exceed the 5 MB cap and the
+    // downgrade walks past them. Stage 3 (no antTrace, no inputLog)
+    // shrinks below 5 MB and lands at fetch.
+    const fat = 'a'.repeat(2 * 1024 * 1024);
+    const input = makeInput({
+      inputLog: Array.from({ length: 3 }, () => ({
+        type: 'SetBehaviorRatio',
+        colonyId: 1,
+        ratio: { forage: 50, fight: 50 },
+        issuedAtTick: 0,
+        _padding: fat,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any)),
+    });
+    input.world.tick = 5555;
+    input.world.simVersion = 9;
+
+    const bodies: Array<{ tick: number; simVersion: number }> = [];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      // Identity-encoded body: bytes ARE the JSON. Skip DecompressionStream
+      // (it would reject non-gzip input).
+      const blob = init!.body as Blob;
+      const text = await blob.text();
+      const env = JSON.parse(text) as { tick: number; simVersion: number };
+      bodies.push({ tick: env.tick, simVersion: env.simVersion });
+      return new Response(JSON.stringify({ accepted: true }), { status: 202 });
+    });
+
+    try {
+      const pending = submitPlaytrace(input);
+      // Same synchronous-tick mutation as the stage-1 test. This must NOT
+      // leak into the final body even though the downgrade loop awaits
+      // multiple times before sending.
+      input.world.tick = 0;
+      input.world.simVersion = 0;
+      const result = await pending;
+      expect(result.status, JSON.stringify(result)).toBe('ok');
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0]).toEqual({ tick: 5555, simVersion: 9 });
+    } finally {
+      fetchSpy.mockRestore();
+      (globalThis as unknown as { CompressionStream: unknown }).CompressionStream = origCS;
     }
   });
 });
