@@ -258,7 +258,10 @@ export class GameScene extends Phaser.Scene {
     // off" so a programming error in main.ts doesn't accidentally turn the
     // overlay on with an undefined endpoint and 404 the submission.
     const endpointRaw = this.registry.get('playtraceEndpoint');
-    this.playtraceEndpoint = typeof endpointRaw === 'string' ? endpointRaw : '';
+    // Trim whitespace so a templated env var that resolved to spaces
+    // is treated as feature-off here too. main.ts normalizes at the
+    // boundary; this is defense-in-depth for the registry value.
+    this.playtraceEndpoint = typeof endpointRaw === 'string' ? endpointRaw.trim() : '';
 
     // Input registration — keyboard is GameScene-only (Pitfall 2).
     this.cursors = this.input.keyboard!.createCursorKeys();

@@ -253,7 +253,13 @@ export async function gzipString(s: string): Promise<Blob> {
 export async function submitPlaytrace(
   input: PlaytraceSubmissionInput,
 ): Promise<PlaytraceUploadResult> {
-  if (input.endpoint === '') {
+  // Trim before checking so a whitespace-only endpoint (e.g. an embedder
+  // passing `playtraceEndpoint: '   '`, or a templated env var that
+  // resolved blank) is treated as feature-off rather than firing a fetch
+  // against an invalid URL. main.ts also normalizes at the boundary; this
+  // is defense-in-depth for direct submitPlaytrace callers.
+  const endpoint = input.endpoint.trim();
+  if (endpoint === '') {
     // Feature flag is off — silent skip. The overlay should already be
     // gated on the same check; this guard is defense-in-depth.
     return { status: 'feature-off' };
@@ -274,6 +280,7 @@ export async function submitPlaytrace(
   const truncatedFreeText = truncateFreeText(input.survey.freeText);
   const preparedInput: PlaytraceSubmissionInput = {
     ...input,
+    endpoint,
     survey: { ...input.survey, freeText: truncatedFreeText },
   };
 

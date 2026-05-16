@@ -94,12 +94,17 @@ function normalizeAssetsBase(raw: string | undefined): string {
 export function mount(target: HTMLElement, options?: MountOptions): MountedGame {
   const assetsBase = normalizeAssetsBase(options?.assetsBase);
   // Playtrace endpoint resolution: explicit option wins; otherwise fall back
-  // to the build-time env var. Empty string = feature disabled, per the
-  // ADR 0013 convention — survey overlay is hidden, no network calls.
-  const playtraceEndpoint =
+  // to the build-time env var. Trim whitespace before deciding feature on/off
+  // — a value like `'   '` (templated env var that resolved blank) would
+  // otherwise pass the `=== ''` check inside submitPlaytrace, fire a fetch
+  // against an invalid URL, and fail silently. The trim mirrors the
+  // assetsBase normalization so both env-var-derived options share the same
+  // empty-string convention.
+  const playtraceEndpointRaw =
     options?.playtraceEndpoint
     ?? (import.meta.env.VITE_PLAYTRACE_ENDPOINT as string | undefined)
     ?? '';
+  const playtraceEndpoint = playtraceEndpointRaw.trim();
 
   const config: Phaser.Types.Core.GameConfig = {
     type: Phaser.AUTO,

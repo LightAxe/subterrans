@@ -107,6 +107,24 @@ describe('submitPlaytrace — feature flag gating', () => {
       fetchSpy.mockRestore();
     }
   });
+
+  it('treats whitespace-only endpoint as feature-off (codex P2)', async () => {
+    // A templated env var that resolved to whitespace (`'   '`,
+    // `'\t\n'`) would otherwise pass the `=== ''` check and fire fetch
+    // against an invalid URL. Trim before gating.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+      throw new Error('fetch should not be called for a whitespace-only endpoint');
+    });
+    try {
+      for (const endpoint of ['   ', '\t', '\n', ' \t\n  ']) {
+        const result = await submitPlaytrace(makeInput({ endpoint }));
+        expect(result).toEqual({ status: 'feature-off' });
+      }
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
 });
 
 describe('submitPlaytrace — wire framing', () => {
