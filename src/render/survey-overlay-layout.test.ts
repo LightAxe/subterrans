@@ -54,6 +54,18 @@ describe('surveyHitTest — disjoint targets', () => {
     )).toEqual({ kind: 'upload-checkbox' });
   });
 
+  it('checkbox-row clicks register over the label area too (codex P3)', () => {
+    // The visible checkbox square is only 20×20, but the row also renders
+    // a long label to the right. A click on the label must toggle the
+    // checkbox — otherwise users (especially on touch) aim at the obvious
+    // target and nothing happens.
+    const labelX = SURVEY_BROKEN_CHECKBOX_RECT.x + SURVEY_BROKEN_CHECKBOX_RECT.w + 50;
+    expect(surveyHitTest(labelX, SURVEY_BROKEN_CHECKBOX_RECT.y + 5))
+      .toEqual({ kind: 'broken-checkbox' });
+    expect(surveyHitTest(labelX, SURVEY_UPLOAD_CHECKBOX_RECT.y + 5))
+      .toEqual({ kind: 'upload-checkbox' });
+  });
+
   it('returns submit / skip hits on the respective buttons', () => {
     expect(surveyHitTest(
       SURVEY_SUBMIT_BUTTON_RECT.x + 5,

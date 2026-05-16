@@ -62,6 +62,8 @@ export const SURVEY_UPLOAD_CHECKBOX_Y =
 export const SURVEY_CONSENT_TEXT_Y =
   SURVEY_UPLOAD_CHECKBOX_Y + SURVEY_CHECKBOX_SIZE + 6;
 
+/** Visible checkbox square rendered by UIScene. The clickable row hit
+ *  zone is wider — see {@link SURVEY_BROKEN_ROW_HIT_RECT}. */
 export const SURVEY_BROKEN_CHECKBOX_RECT = {
   x: PANEL_INSET_X,
   y: SURVEY_BROKEN_CHECKBOX_Y,
@@ -69,10 +71,35 @@ export const SURVEY_BROKEN_CHECKBOX_RECT = {
   h: SURVEY_CHECKBOX_SIZE,
 } as const;
 
+/** Visible checkbox square rendered by UIScene. The clickable row hit
+ *  zone is wider — see {@link SURVEY_UPLOAD_ROW_HIT_RECT}. */
 export const SURVEY_UPLOAD_CHECKBOX_RECT = {
   x: PANEL_INSET_X,
   y: SURVEY_UPLOAD_CHECKBOX_Y,
   w: SURVEY_CHECKBOX_SIZE,
+  h: SURVEY_CHECKBOX_SIZE,
+} as const;
+
+/** Codex P3: the visible checkbox square is only 20×20 but the row also
+ *  renders a long label to the right ("Report this as a bug", "Upload
+ *  diagnostic snapshot to help us debug…"). The label IS the affordance
+ *  most users will aim for — especially on touch devices. These row hit
+ *  rects cover the full row width so clicks on the label register as
+ *  checkbox toggles. The visible square is drawn off the narrower
+ *  ..._CHECKBOX_RECT constants above. */
+const ROW_HIT_W = SURVEY_CANVAS_W - 2 * PANEL_INSET_X;
+
+export const SURVEY_BROKEN_ROW_HIT_RECT = {
+  x: PANEL_INSET_X,
+  y: SURVEY_BROKEN_CHECKBOX_Y,
+  w: ROW_HIT_W,
+  h: SURVEY_CHECKBOX_SIZE,
+} as const;
+
+export const SURVEY_UPLOAD_ROW_HIT_RECT = {
+  x: PANEL_INSET_X,
+  y: SURVEY_UPLOAD_CHECKBOX_Y,
+  w: ROW_HIT_W,
   h: SURVEY_CHECKBOX_SIZE,
 } as const;
 
@@ -158,12 +185,14 @@ export type SurveyHitTarget =
   | { kind: 'free-text' }
   | null;
 
-/** Topmost interactive element under the pointer, or null on background. */
+/** Topmost interactive element under the pointer, or null on background.
+ *  Note: checkbox rows hit-test against the wider ROW_HIT rects so clicks
+ *  on the label text register the same as clicks on the visible square. */
 export function surveyHitTest(px: number, py: number): SurveyHitTarget {
   if (pointInRect(px, py, SURVEY_SUBMIT_BUTTON_RECT)) return { kind: 'submit' };
   if (pointInRect(px, py, SURVEY_SKIP_BUTTON_RECT))   return { kind: 'skip' };
-  if (pointInRect(px, py, SURVEY_BROKEN_CHECKBOX_RECT)) return { kind: 'broken-checkbox' };
-  if (pointInRect(px, py, SURVEY_UPLOAD_CHECKBOX_RECT)) return { kind: 'upload-checkbox' };
+  if (pointInRect(px, py, SURVEY_BROKEN_ROW_HIT_RECT)) return { kind: 'broken-checkbox' };
+  if (pointInRect(px, py, SURVEY_UPLOAD_ROW_HIT_RECT)) return { kind: 'upload-checkbox' };
   if (pointInRect(px, py, SURVEY_FREE_TEXT_RECT))     return { kind: 'free-text' };
   for (const btn of surveyRatingButtons()) {
     if (pointInRect(px, py, btn.rect)) {

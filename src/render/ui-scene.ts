@@ -1864,20 +1864,46 @@ export class UIScene extends Phaser.Scene {
     const scaleX = canvasRect.width / SURVEY_CANVAS_W;
     const scaleY = canvasRect.height / SURVEY_CANVAS_H;
     const ta = this.surveyTextarea;
-    // The textarea is now appended to canvas.parentElement (when present),
-    // so positioning relative to the canvas's offset within that parent
-    // avoids drift when the parent is itself positioned, scrolled, or
-    // inside a shadow root. Fall back to viewport-relative positioning
-    // when the textarea ended up on document.body (no canvas parent).
-    if (ta.parentElement === canvas.parentElement && ta.parentElement !== null) {
-      // Parent-relative: use canvas offsetLeft/Top within the shared parent.
-      ta.style.left = `${canvas.offsetLeft + SURVEY_FREE_TEXT_RECT.x * scaleX}px`;
-      ta.style.top = `${canvas.offsetTop + SURVEY_FREE_TEXT_RECT.y * scaleY}px`;
+    // The textarea is absolutely-positioned and sits in `document.body` or
+    // in `canvas.parentElement` (see ensureSurveyTextarea). For an
+    // absolutely-positioned element, the `left`/`top` values are measured
+    // against the nearest positioned ancestor (i.e. the same offsetParent
+    // resolution the browser uses). We compute the canvas's position in
+    // that same coordinate space by taking the bounding-rect delta against
+    // the textarea's own offsetParent — which is guaranteed to be the
+    // coordinate space `left`/`top` are interpreted in. This survives a
+    // scrolled page, an embedder whose canvas-parent isn't positioned, and
+    // shadow-DOM hosts. Codex P1 (round 3) — earlier `canvas.offsetLeft`
+    // approach landed in the wrong coordinate space when canvas.parentElement
+    // wasn't a positioned ancestor; the textarea drifted off-canvas.
+    const offsetParent = ta.offsetParent as HTMLElement | null;
+    let originX = 0;
+    let originY = 0;
+    if (offsetParent !== null) {
+      const opRect = offsetParent.getBoundingClientRect();
+      // Bounding-client-rect deltas use viewport coordinates; add the
+      // offsetParent's scrollLeft/Top so a scrolled overflow container
+      // (rare for the game canvas, but defensible) is handled too.
+      //
+      // Subtract clientLeft/Top — these equal the offsetParent's
+      // left/top border width. getBoundingClientRect() returns the
+      // border-box rect, but absolutely-positioned children's left/top
+      // are measured from the parent's PADDING-box (i.e. inside the
+      // border). Without this, an embedder whose canvas wrapper has a
+      // non-zero CSS border would see the textarea shift by the border
+      // width. (Codex round-3 review follow-up.)
+      originX = canvasRect.left - opRect.left - offsetParent.clientLeft + offsetParent.scrollLeft;
+      originY = canvasRect.top - opRect.top - offsetParent.clientTop + offsetParent.scrollTop;
     } else {
-      // Viewport-relative fallback for the document.body case.
-      ta.style.left = `${canvasRect.left + SURVEY_FREE_TEXT_RECT.x * scaleX}px`;
-      ta.style.top = `${canvasRect.top + SURVEY_FREE_TEXT_RECT.y * scaleY}px`;
+      // Textarea is positioned relative to the viewport (e.g. when its
+      // offsetParent is the initial containing block / document.body
+      // with no positioned ancestor in between). Fall back to viewport
+      // coordinates from canvasRect directly.
+      originX = canvasRect.left;
+      originY = canvasRect.top;
     }
+    ta.style.left = `${originX + SURVEY_FREE_TEXT_RECT.x * scaleX}px`;
+    ta.style.top = `${originY + SURVEY_FREE_TEXT_RECT.y * scaleY}px`;
     ta.style.width = `${SURVEY_FREE_TEXT_RECT.w * scaleX}px`;
     ta.style.height = `${SURVEY_FREE_TEXT_RECT.h * scaleY}px`;
   }
