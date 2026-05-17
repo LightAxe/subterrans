@@ -372,8 +372,8 @@ export function registerDragPan(scene: Phaser.Scene, viewState: ViewState, isBlo
   });
 
   scene.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
-    if (!dragState.active) return;
     if (isBlocked?.()) { releaseDrag(); return; }
+    if (!dragState.active) return;
     // Continue pan only while the originating trigger is still held.
     if (!isPanTriggerDown(pointer)) return;
     // Issue #73 — when the pointer is over a HUD widget mid-drag, suppress
