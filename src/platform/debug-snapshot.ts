@@ -306,6 +306,32 @@ export function buildAntTrace(world: WorldState, antId: number): AntTraceRow {
 }
 
 /**
+ * Optional shape parameters for {@link buildDebugSnapshot}. All fields are
+ * additive — omitting the argument (or passing `{}`) reproduces the original
+ * "include everything" payload that the F9 export path depends on.
+ *
+ * The `includeAntTrace` / `includeInputLog` flags exist for the playtrace
+ * upload's graceful-downgrade fallback (ADR 0013): when the gzipped body
+ * would exceed the 5 MB API Gateway cap, the uploader rebuilds the snapshot
+ * with antTrace omitted, then with inputLog omitted, before falling back to
+ * a survey-only submission with `snapshot: null`.
+ */
+export interface BuildDebugSnapshotOptions {
+  /** Restrict the trace to ants belonging to the listed colonies. Defaults
+   *  to all live ants. Useful to scope exports to the player colony. */
+  colonyFilter?: readonly number[];
+  /** When false, `antTrace` is emitted as an empty array. The world snapshot
+   *  still carries the raw per-ant component state; only the derived per-ant
+   *  trace rows are dropped. Defaults to true. */
+  includeAntTrace?: boolean;
+  /** When false, `inputLog` is emitted as an empty array. The receiver loses
+   *  replay value (the input sequence is what reproduces the recorded run)
+   *  but the snapshot itself is still a valid point-in-time observation.
+   *  Defaults to true. */
+  includeInputLog?: boolean;
+}
+
+/**
  * Build a full debug snapshot for export. Captures every LIVE ant (alive === 1)
  * in the trace. Dead slots are skipped — the world snapshot preserves their
  * raw array state already, so duplicating them in the trace is noise.
@@ -315,36 +341,46 @@ export function buildAntTrace(world: WorldState, antId: number): AntTraceRow {
  * @param inputLog  The session's accumulated command log (shared reference —
  *                  caller-side is responsible for NOT mutating after the call;
  *                  each command is shallow-copied into the payload).
- * @param colonyFilter  Optional: when provided, only ants in the listed
- *                  colonies appear in the trace. Defaults to all live ants.
- *                  Useful to scope exports to the player colony.
+ * @param options   Optional payload-shape controls. See {@link BuildDebugSnapshotOptions}.
+ *                  Back-compat: a bare `readonly number[]` is accepted in this
+ *                  slot for legacy callers that previously passed `colonyFilter`
+ *                  directly. New code should pass an options object.
  */
 export function buildDebugSnapshot(
   world: WorldState,
   seed: number,
   inputLog: readonly SimCommand[],
-  colonyFilter?: readonly number[],
+  options?: BuildDebugSnapshotOptions | readonly number[],
 ): DebugSnapshot {
+  // Back-compat: a bare array argument was the legacy colonyFilter signature.
+  const opts: BuildDebugSnapshotOptions = Array.isArray(options)
+    ? { colonyFilter: options as readonly number[] }
+    : ((options as BuildDebugSnapshotOptions | undefined) ?? {});
+  const includeAntTrace = opts.includeAntTrace ?? true;
+  const includeInputLog = opts.includeInputLog ?? true;
+
   const trace: AntTraceRow[] = [];
-  const filter = colonyFilter ? new Set(colonyFilter) : null;
-  // Queens are stored as AntTask.Idle with a queenEntityId reference on the
-  // colony record — collect those entity IDs up front so the trace can skip
-  // them (a queen's posX/posY never moves, so its trace row is noise).
-  const queenIds = new Set<number>();
-  for (const [, colony] of Object.entries(world.colonies)) {
-    if (colony.queenEntityId >= 0) queenIds.add(colony.queenEntityId);
-  }
-  for (let id = 0; id < world.nextEntityId; id++) {
-    if (world.ants.alive[id] !== 1) continue;
-    if (queenIds.has(id)) continue;
-    if (filter !== null && !filter.has(world.ants.colonyId[id]!)) continue;
-    trace.push(buildAntTrace(world, id));
+  if (includeAntTrace) {
+    const filter = opts.colonyFilter ? new Set(opts.colonyFilter) : null;
+    // Queens are stored as AntTask.Idle with a queenEntityId reference on the
+    // colony record — collect those entity IDs up front so the trace can skip
+    // them (a queen's posX/posY never moves, so its trace row is noise).
+    const queenIds = new Set<number>();
+    for (const [, colony] of Object.entries(world.colonies)) {
+      if (colony.queenEntityId >= 0) queenIds.add(colony.queenEntityId);
+    }
+    for (let id = 0; id < world.nextEntityId; id++) {
+      if (world.ants.alive[id] !== 1) continue;
+      if (queenIds.has(id)) continue;
+      if (filter !== null && !filter.has(world.ants.colonyId[id]!)) continue;
+      trace.push(buildAntTrace(world, id));
+    }
   }
   return {
     version: DEBUG_SNAPSHOT_VERSION,
     seed,
     tick: world.tick,
-    inputLog: inputLog.map((c) => ({ ...c })),
+    inputLog: includeInputLog ? inputLog.map((c) => ({ ...c })) : [],
     snapshot: serializeWorldState(world),
     antTrace: trace,
   };

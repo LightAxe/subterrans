@@ -37,6 +37,10 @@ import { runAIController } from './ai-controller.js';
 import { buildDebugSnapshot } from '../platform/debug-snapshot.js';
 import { downloadDebugSnapshot } from './debug-snapshot-download.js';
 import {
+  submitPlaytrace,
+  type PlaytraceSurvey,
+} from './playtrace-upload.js';
+import {
   GamePhase,
   deriveAIColonyIds,
   appendInputLog,
@@ -128,6 +132,7 @@ interface UIScenePhase9 {
     onResume: () => void;
     onDownloadDebug: () => void;
     onOpenSaveLoad?: () => void;
+    onQuitAndSurvey?: () => void;
   }): void;
   hidePauseMenuOverlay(): void;
   isPauseMenuVisible(): boolean;
@@ -141,6 +146,14 @@ interface UIScenePhase9 {
     onBack: () => void;
   }): void;
   hideSaveLoadDialogOverlay(): void;
+  // Issue #122 / ADR 0013 — survey overlay. Shown at end-of-game (after a
+  // terminal outcome) or via the pause menu's "Quit & feedback" entry.
+  showSurveyOverlay(callbacks: {
+    quitFromPauseMenu: boolean;
+    onSubmit(survey: PlaytraceSurvey & { includeSnapshot: boolean }): void;
+    onSkip(): void;
+  }): void;
+  hideSurveyOverlay(): void;
 }
 import type { SimCommand } from '../sim/commands.js';
 
@@ -191,6 +204,14 @@ export class GameScene extends Phaser.Scene {
   // type aligns with PauseMenuLayout's SpeedMultiplier.
   private speedMultiplier: 1 | 2 | 4 = 1;
 
+  // Issue #122 / ADR 0013 — playtrace upload state. The endpoint string is
+  // sourced from the registry (set by main.ts from VITE_PLAYTRACE_ENDPOINT
+  // or MountOptions.playtraceEndpoint); empty string = feature off. The
+  // sessionId is a per-session UUID generated render-side via crypto;
+  // regenerated on restart so each session has its own row server-side.
+  private playtraceEndpoint: string = '';
+  private playtraceSessionId: string = '';
+
   constructor() { super({ key: 'GameScene' }); }
 
   preload() {
@@ -231,6 +252,16 @@ export class GameScene extends Phaser.Scene {
     this.viewState = createViewState(PLAYER_START_X, PLAYER_START_Y);
     this.gfx = this.add.graphics();
     this.antSprites = new AntSpritePool(this);
+
+    // Issue #122 — pull the playtrace endpoint out of the registry (set by
+    // main.ts in callbacks.preBoot). Treat any non-string value as "feature
+    // off" so a programming error in main.ts doesn't accidentally turn the
+    // overlay on with an undefined endpoint and 404 the submission.
+    const endpointRaw = this.registry.get('playtraceEndpoint');
+    // Trim whitespace so a templated env var that resolved to spaces
+    // is treated as feature-off here too. main.ts normalizes at the
+    // boundary; this is defense-in-depth for the registry value.
+    this.playtraceEndpoint = typeof endpointRaw === 'string' ? endpointRaw.trim() : '';
 
     // Input registration — keyboard is GameScene-only (Pitfall 2).
     this.cursors = this.input.keyboard!.createCursorKeys();
@@ -424,6 +455,20 @@ export class GameScene extends Phaser.Scene {
     // would lock a freshly-spawned ant into the prior ant's direction until
     // the smoothing relaxes. Clearing here keeps boot visually clean.
     this.antFacingCache.reset();
+    // Issue #122 — rotate the session UUID so each (re)start gets its own
+    // telemetry row server-side.
+    //
+    // Note: we intentionally do NOT cancel any in-flight playtrace upload
+    // here. The end-of-game survey flow is fire-and-forget: onSubmit kicks
+    // off submitPlaytrace AND then calls restartGame, which routes through
+    // this method. Cancelling the upload here would race-cancel the very
+    // request we just dispatched, dropping the survey row server-side.
+    // The single-in-flight discipline is instead enforced inside
+    // submitPlaytrace itself — each new submission cancels its predecessor.
+    this.playtraceSessionId =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : '';
   }
 
   private bootFresh(): void {
@@ -519,7 +564,16 @@ export class GameScene extends Phaser.Scene {
         // W2: first-class pause via Plan 06 Task 1 API — no setMsPerTick(Infinity)
         this.gameLoop.pause();
         const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
-        uiScene.showGameOverOverlay(outcome, () => this.restartGame());
+        // Issue #122 — when the playtrace feature is enabled, the survey
+        // overlay replaces the bare game-over panel at end-of-game. Skip
+        // from the survey transitions to restart, matching the prior UX.
+        // When the feature is off, fall back to the original game-over
+        // overlay so the open-source build's behavior is unchanged.
+        if (this.playtraceEndpoint !== '') {
+          this.openSurveyOverlay(false /* quitFromPauseMenu */);
+        } else {
+          uiScene.showGameOverOverlay(outcome, () => this.restartGame());
+        }
       },
       getMsPerTick: () => MS_PER_TICK / this.speedMultiplier,
     });
@@ -555,8 +609,9 @@ export class GameScene extends Phaser.Scene {
     onOpenSaveLoad: () => void;
     getSpeedMultiplier: () => 1 | 2 | 4;
     onCycleSpeed: (next: 1 | 2 | 4) => void;
+    onQuitAndSurvey?: () => void;
   } {
-    return {
+    const cb: ReturnType<GameScene['buildPauseMenuCallbacks']> = {
       onResume: () => this.closePauseMenu(),
       onDownloadDebug: () => {
         if (this.world === undefined) return;
@@ -571,6 +626,82 @@ export class GameScene extends Phaser.Scene {
       getSpeedMultiplier: () => this.speedMultiplier,
       onCycleSpeed: (next: 1 | 2 | 4) => { this.speedMultiplier = next; },
     };
+    // Issue #122 — only attach onQuitAndSurvey when the feature flag is on.
+    // The pause menu treats `undefined` as "hide the row" so an open-source
+    // build with no endpoint set never even sees the affordance.
+    if (this.playtraceEndpoint !== '') {
+      cb.onQuitAndSurvey = () => this.openSurveyOverlay(true /* quitFromPauseMenu */);
+    }
+    return cb;
+  }
+
+  /** Issue #122 — open the survey overlay. Called at end-of-game (when
+   *  the feature flag is on; falls back to game-over overlay otherwise)
+   *  and from the pause menu's "Quit & feedback" entry. The survey
+   *  collects rating / free-text / brokenFlag / upload opt-in, then on
+   *  submit dispatches to submitPlaytrace and transitions to restart.
+   *  Skip / Esc transition straight to restart without uploading. */
+  private openSurveyOverlay(quitFromPauseMenu: boolean): void {
+    if (this.world === undefined) return; // pre-boot guard
+    const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
+    // Capture the values the survey needs BEFORE handing control away.
+    // The submission flow is async; meanwhile the player will start the
+    // next session (restart-on-skip / restart-on-submit) and the live
+    // references would otherwise change beneath us. World can't be safely
+    // captured by reference because resetSessionState swaps it; but we
+    // build the snapshot synchronously at submit time, before restart.
+    const outcome = this.currentOutcome;
+    uiScene.showSurveyOverlay({
+      quitFromPauseMenu,
+      onSubmit: (survey) => {
+        // Capture the live world / seed / inputLog right now, before the
+        // restart path overwrites them. The snapshot is built lazily
+        // inside submitPlaytrace's downgrade loop, so we still need the
+        // live world reference there.
+        const world = this.world;
+        const seed = this.currentSeed;
+        // Deep copy of the inputLog. `structuredClone` covers nested
+        // objects (e.g. SetBehaviorRatio.ratio: { forage, fight }) that a
+        // shallow `{...c}` would still share by reference with the live
+        // array. resetSessionState clears the live array shortly after;
+        // a shared nested reference would let that clear corrupt the
+        // in-flight payload.
+        const inputLogCopy: SimCommand[] = this.inputLog.map((c) => structuredClone(c));
+        // The ADR contract requires outcome to be one of Victory / Defeat /
+        // MutualDestruction on the wire — `None` is not a valid value. The
+        // pause-menu-quit path may fire with a live queen (outcome=None), so
+        // treat that as a concession and map to Defeat. quitFromPauseMenu
+        // remains true on the envelope so the receiver can distinguish a
+        // "player abandoned" run from an actual queen-death defeat.
+        const wireOutcome: GameOutcome =
+          outcome === GameOutcome.None ? GameOutcome.Defeat : outcome;
+        if (world !== undefined) {
+          // Fire-and-forget. The user has already seen the overlay close;
+          // restart proceeds in parallel with the upload. cancelInFlight
+          // in resetSessionState handles the abort if restart fires before
+          // the request completes.
+          void submitPlaytrace({
+            endpoint: this.playtraceEndpoint,
+            sessionId: this.playtraceSessionId,
+            outcome: wireOutcome,
+            quitFromPauseMenu,
+            includeSnapshot: survey.includeSnapshot,
+            world,
+            seed,
+            inputLog: inputLogCopy,
+            survey: {
+              rating: survey.rating,
+              freeText: survey.freeText,
+              brokenFlag: survey.brokenFlag,
+            },
+          });
+        }
+        this.restartGame();
+      },
+      onSkip: () => {
+        this.restartGame();
+      },
+    });
   }
 
   private openPauseMenu(): void {

@@ -35,7 +35,17 @@ export { formatOutcomeTitle, formatKillStatsSubtitle };
 // Plan 07 Playwright observability contract
 // ---------------------------------------------------------------------------
 
-export type ActiveOverlay = 'none' | 'save-prompt' | 'game-over' | 'pause-menu' | 'save-load';
+export type ActiveOverlay =
+  | 'none'
+  | 'save-prompt'
+  | 'game-over'
+  | 'pause-menu'
+  | 'save-load'
+  // Issue #122 / ADR 0013 — end-of-game survey overlay. Shown either after
+  // a terminal outcome (taking precedence over the bare game-over panel
+  // when the feature flag is on) or via the pause menu's "Quit & feedback"
+  // action. See showSurveyOverlay / hideSurveyOverlay for the lifecycle.
+  | 'survey';
 
 // Phase 09.1 Chunk 2 — enemy underground observability. Exposed via the same
 // __phase9_ui global so Playwright can read which colony the underground view
@@ -161,6 +171,26 @@ import {
   type SaveLoadDialogItem,
   type SaveLoadDialogItemId,
 } from './save-load-dialog-layout.js';
+import {
+  SURVEY_CANVAS_W,
+  SURVEY_CANVAS_H,
+  SURVEY_TITLE_Y,
+  SURVEY_FREE_TEXT_RECT,
+  SURVEY_BROKEN_CHECKBOX_RECT,
+  SURVEY_UPLOAD_CHECKBOX_RECT,
+  SURVEY_CONSENT_TEXT_Y,
+  SURVEY_CONSENT_DISCLOSURE,
+  SURVEY_SUBMIT_BUTTON_RECT,
+  SURVEY_SKIP_BUTTON_RECT,
+  SURVEY_CHECKBOX_LABEL_GAP,
+  surveyRatingButtons,
+  surveyHitTest,
+} from './survey-overlay-layout.js';
+import {
+  PLAYTRACE_FREE_TEXT_MAX,
+  truncateFreeText,
+  type PlaytraceSurvey,
+} from './playtrace-upload.js';
 
 /** Issue #115 — duration of the post-Save-Now "Saved" / "Save failed" flash
  *  rendered above the dialog's info line. 1500 ms is long enough to be
@@ -198,6 +228,11 @@ export interface PauseMenuCallbacks {
    *  clicked. The 1/2/4 keyboard shortcuts on GameScene call the same
    *  setter under the hood; both paths converge on speedMultiplier writes. */
   onCycleSpeed?(next: SpeedMultiplier): void;
+  /** Issue #122 / ADR 0013 — invoked when the player picks the "Quit &
+   *  feedback" entry, taking them to the survey overlay before they
+   *  abandon the session. Only present when the feature flag is enabled
+   *  (empty VITE_PLAYTRACE_ENDPOINT → undefined → row hidden). */
+  onQuitAndSurvey?(): void;
 }
 
 /** Issue #115 — callbacks the Save/Load dialog invokes. The dialog reads
@@ -457,6 +492,16 @@ export class UIScene extends Phaser.Scene {
     const escKey = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
     if (escKey) {
       escKey.on('down', () => {
+        // Issue #122 — Esc on the survey overlay is equivalent to Skip.
+        // The overlay is end-of-game; the player should always have a
+        // keyboard escape hatch even if the buttons are unreachable
+        // (e.g. window resized smaller than the modal panel).
+        if (this.isSurveyVisible()) {
+          const cb = this.surveyCallbacks;
+          this.hideSurveyOverlay();
+          cb?.onSkip();
+          return;
+        }
         if (this.isSaveLoadDialogVisible()) {
           const cb = this.saveLoadDialogCallbacks;
           this.hideSaveLoadDialogOverlay();
@@ -480,6 +525,14 @@ export class UIScene extends Phaser.Scene {
 
     // Pointer events for HUD interactions.
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      // Issue #122 — survey overlay takes top priority. Once it's open the
+      // game is over (or about to be — quit-from-pause path) and no HUD
+      // interaction should leak through.
+      if (this.isSurveyVisible()) {
+        this.dispatchSurveyClick(pointer.x, pointer.y);
+        return;
+      }
+
       // Issue #115 — Save/Load dialog absorbs every click while visible.
       // Same guard rationale as the pause menu below; precedence here is
       // strict (dialog > pause menu > HUD) so a click on a dialog button
@@ -630,14 +683,22 @@ export class UIScene extends Phaser.Scene {
 
     // Belt-and-suspenders: clear overlay window state on scene shutdown to
     // prevent stale __phase9_ui surviving a scene restart.
-    this.events.on('shutdown', () => {
+    const teardown = () => {
       this.hideGameOverOverlay();
       this.hideSavePromptOverlay();
       this.hideSaveLoadDialogOverlay();
       this.hidePauseMenuOverlay();
+      this.hideSurveyOverlay();
       hideAntActivityPanel();
       setActiveOverlay('none');
-    });
+    };
+    this.events.on('shutdown', teardown);
+    // Defensive: Phaser fires `shutdown` before `destroy`, but a race
+    // between game.destroy(true) and a pending overlay state could leave
+    // the DOM textarea or its resize listener attached if `shutdown`
+    // didn't reach hideSurveyOverlay. Wiring `destroy` too costs nothing
+    // and guarantees the DOM leak doesn't outlive the game instance.
+    this.events.on('destroy', teardown);
 
     this.input.on('pointerup', () => {
       if (this.dragState.isDragging) {
@@ -1071,6 +1132,10 @@ export class UIScene extends Phaser.Scene {
       // reflects writes from EITHER the row click OR the live 1/2/4
       // keyboard shortcuts on GameScene.
       currentSpeedMultiplier: this.pauseMenuCallbacks?.getSpeedMultiplier?.() ?? 1,
+      // Issue #122 — only show the Quit & feedback row when GameScene
+      // supplied the callback. Empty VITE_PLAYTRACE_ENDPOINT → undefined
+      // callback → row hidden.
+      quitAndSurveyEnabled: this.pauseMenuCallbacks?.onQuitAndSurvey !== undefined,
     };
     const items = pauseMenuItems(page, ctx);
     this.pauseMenuVisibleItems = items;
@@ -1190,6 +1255,14 @@ export class UIScene extends Phaser.Scene {
         this.renderPauseMenuPage();
         return;
       }
+      case 'quit-and-survey':
+        // Issue #122 — close the menu and hand control to GameScene's
+        // callback, which opens the survey overlay. The menu was already
+        // gated on `onQuitAndSurvey !== undefined` to even render this
+        // row, so the `?` here is defensive against state desync.
+        this.hidePauseMenuOverlay();
+        cb?.onQuitAndSurvey?.();
+        return;
     }
   }
 
@@ -1465,10 +1538,436 @@ export class UIScene extends Phaser.Scene {
    *  re-show — exactly the kind of observability lie round 1 was supposed
    *  to fix. This recompute reflects whatever overlay is still on screen. */
   private recomputeActiveOverlay(): void {
-    if (this.saveLoadDialogGroup.length > 0) setActiveOverlay('save-load');
+    // Survey takes precedence over the bare game-over overlay so the
+    // end-of-game flow lands on the highest-value screen for diagnostics.
+    if (this.surveyGroup.length > 0) setActiveOverlay('survey');
+    else if (this.saveLoadDialogGroup.length > 0) setActiveOverlay('save-load');
     else if (this.pauseMenuGroup.length > 0) setActiveOverlay('pause-menu');
     else if (this.gameOverGroup.length > 0) setActiveOverlay('game-over');
     else if (this.savePromptGroup.length > 0) setActiveOverlay('save-prompt');
     else setActiveOverlay('none');
   }
+
+  // ---------------------------------------------------------------------------
+  // Issue #122 / ADR 0013 — survey overlay
+  //
+  // End-of-game survey overlay with optional debug-snapshot upload. Same
+  // Phaser-overlay-on-UIScene pattern as the other panels: a semi-transparent
+  // input-blocking background, rating buttons, a DOM <textarea> overlaid at
+  // SURVEY_FREE_TEXT_RECT for native text entry, two checkbox rows
+  // ("Report as broken", "Upload diagnostic snapshot" + consent disclosure),
+  // and Submit / Skip buttons.
+  //
+  // The DOM textarea is added because Phaser does not ship a text input
+  // primitive; rolling one over the canvas via keyboard events would
+  // require us to reimplement caret, selection, IME composition, paste, and
+  // accessibility. Anchoring a real `<textarea>` over the canvas defers all
+  // of that to the browser. The textarea is removed in hideSurveyOverlay
+  // (cleanup is also wired into the scene shutdown handler).
+  // ---------------------------------------------------------------------------
+
+  private surveyGroup: Phaser.GameObjects.GameObject[] = [];
+  private surveyCallbacks: SurveyOverlayCallbacks | null = null;
+  private surveyState: {
+    rating: 0 | 1 | 2 | 3 | 4 | 5;
+    freeText: string;
+    brokenFlag: boolean;
+    includeSnapshot: boolean;
+    quitFromPauseMenu: boolean;
+  } = {
+    rating: 0,
+    freeText: '',
+    brokenFlag: false,
+    includeSnapshot: false,
+    quitFromPauseMenu: false,
+  };
+  private surveyTextarea: HTMLTextAreaElement | null = null;
+  /** Bound handler kept on the instance so addEventListener / removeEventListener
+   *  observe the same function reference. Window resize while the survey is
+   *  open repositions the DOM textarea over the canvas; without this the
+   *  textarea drifts off-canvas after a layout change (sidebar collapse,
+   *  devtools open, mobile orientation flip). */
+  private surveyResizeHandler: (() => void) | null = null;
+
+  public showSurveyOverlay(callbacks: SurveyOverlayCallbacks): void {
+    this.hideSurveyOverlay(); // idempotent clear
+    this.surveyCallbacks = callbacks;
+    this.surveyState = {
+      rating: 0,
+      freeText: '',
+      brokenFlag: false,
+      includeSnapshot: false,
+      quitFromPauseMenu: callbacks.quitFromPauseMenu,
+    };
+    this.renderSurveyOverlay();
+    this.recomputeActiveOverlay();
+  }
+
+  public hideSurveyOverlay(): void {
+    for (const obj of this.surveyGroup) obj.destroy();
+    this.surveyGroup = [];
+    this.surveyCallbacks = null;
+    if (this.surveyTextarea !== null) {
+      this.surveyTextarea.remove();
+      this.surveyTextarea = null;
+    }
+    if (this.surveyResizeHandler !== null && typeof window !== 'undefined') {
+      window.removeEventListener('resize', this.surveyResizeHandler);
+      this.surveyResizeHandler = null;
+    }
+    this.recomputeActiveOverlay();
+  }
+
+  public isSurveyVisible(): boolean {
+    return this.surveyGroup.length > 0;
+  }
+
+  /** Render (or re-render) the survey overlay in place. Called on show and
+   *  after every state mutation (rating click, checkbox toggle) so the
+   *  selected-state highlight reflects the latest input. */
+  private renderSurveyOverlay(): void {
+    for (const obj of this.surveyGroup) obj.destroy();
+    this.surveyGroup = [];
+
+    // Background scrim — opaque-ish so the game beneath reads as paused.
+    const bg = this.add.rectangle(
+      SURVEY_CANVAS_W / 2,
+      SURVEY_CANVAS_H / 2,
+      SURVEY_CANVAS_W,
+      SURVEY_CANVAS_H,
+      0x000000,
+      0.85,
+    );
+    bg.setInteractive();
+    bg.setDepth(40);
+    this.surveyGroup.push(bg);
+
+    // Title — wording differs slightly based on which path opened the
+    // overlay so the player can tell "game ended, share thoughts" apart
+    // from "you chose to quit and give feedback".
+    const titleText = this.surveyState.quitFromPauseMenu
+      ? 'Quitting — tell us what you think'
+      : 'Thanks for playing — tell us what you think';
+    const title = this.add.text(
+      SURVEY_CANVAS_W / 2,
+      SURVEY_TITLE_Y,
+      titleText,
+      { fontSize: '22px', fontFamily: 'monospace', color: '#ffffff' },
+    );
+    title.setOrigin(0.5, 0);
+    title.setDepth(41);
+    this.surveyGroup.push(title);
+
+    // Rating row — five buttons. Selected button renders with a green
+    // fill so the choice is visible at a glance.
+    const ratings = surveyRatingButtons();
+    for (const btn of ratings) {
+      const selected = this.surveyState.rating === btn.rating;
+      const fillColor = selected ? 0x22aa22 : 0x333333;
+      const r = btn.rect;
+      const rect = this.add.rectangle(
+        r.x + r.w / 2,
+        r.y + r.h / 2,
+        r.w,
+        r.h,
+        fillColor,
+        1,
+      );
+      rect.setInteractive();
+      rect.setDepth(41);
+      this.surveyGroup.push(rect);
+      const label = this.add.text(
+        r.x + r.w / 2,
+        r.y + r.h / 2,
+        String(btn.rating),
+        { fontSize: '20px', fontFamily: 'monospace', color: '#ffffff' },
+      );
+      label.setOrigin(0.5);
+      label.setDepth(42);
+      this.surveyGroup.push(label);
+    }
+
+    // Free-text rect background (the actual editable surface is a DOM
+    // textarea positioned over the canvas below — see ensureSurveyTextarea).
+    const ft = SURVEY_FREE_TEXT_RECT;
+    const ftBg = this.add.rectangle(
+      ft.x + ft.w / 2,
+      ft.y + ft.h / 2,
+      ft.w,
+      ft.h,
+      0x222222,
+      1,
+    );
+    ftBg.setDepth(41);
+    this.surveyGroup.push(ftBg);
+    this.ensureSurveyTextarea();
+
+    // Checkbox rows. Each row is a small square + label; the row's full
+    // horizontal span is treated as the click target via surveyHitTest.
+    this.drawCheckboxRow(
+      SURVEY_BROKEN_CHECKBOX_RECT,
+      this.surveyState.brokenFlag,
+      'Report this as a bug',
+    );
+    this.drawCheckboxRow(
+      SURVEY_UPLOAD_CHECKBOX_RECT,
+      this.surveyState.includeSnapshot,
+      'Upload diagnostic snapshot to help us debug',
+    );
+
+    // Consent disclosure — only meaningful when the upload checkbox is
+    // ticked, but always rendered so the player sees the privacy
+    // implication BEFORE deciding to tick. ADR 0013 §"Privacy" requires
+    // the overlay to disclose IP + UA leakage at the edge.
+    const consent = this.add.text(
+      SURVEY_BROKEN_CHECKBOX_RECT.x + SURVEY_BROKEN_CHECKBOX_RECT.w + SURVEY_CHECKBOX_LABEL_GAP,
+      SURVEY_CONSENT_TEXT_Y,
+      SURVEY_CONSENT_DISCLOSURE,
+      {
+        fontSize: '11px',
+        fontFamily: 'monospace',
+        color: '#aaaaaa',
+        wordWrap: { width: SURVEY_CANVAS_W - 2 * SURVEY_BROKEN_CHECKBOX_RECT.x },
+      },
+    );
+    consent.setDepth(42);
+    this.surveyGroup.push(consent);
+
+    // Submit + Skip buttons. Submit is disabled until a rating is picked
+    // so the survey row always carries a 1-5 value; Skip is always live.
+    const submitEnabled = this.surveyState.rating !== 0;
+    this.drawSurveyButton(SURVEY_SUBMIT_BUTTON_RECT, 'Submit', submitEnabled);
+    this.drawSurveyButton(SURVEY_SKIP_BUTTON_RECT, 'Skip', true);
+  }
+
+  /** Helper — draw a checkbox square + label for the survey overlay. */
+  private drawCheckboxRow(
+    rect: { x: number; y: number; w: number; h: number },
+    checked: boolean,
+    label: string,
+  ): void {
+    const box = this.add.rectangle(
+      rect.x + rect.w / 2,
+      rect.y + rect.h / 2,
+      rect.w,
+      rect.h,
+      checked ? 0x22aa22 : 0x333333,
+      1,
+    );
+    box.setInteractive();
+    box.setDepth(41);
+    this.surveyGroup.push(box);
+    if (checked) {
+      // Simple check mark — a Phaser-Text "✓" reads more cleanly than
+      // drawing line segments at this resolution.
+      const tick = this.add.text(
+        rect.x + rect.w / 2,
+        rect.y + rect.h / 2,
+        '✓',
+        { fontSize: '16px', fontFamily: 'monospace', color: '#ffffff' },
+      );
+      tick.setOrigin(0.5);
+      tick.setDepth(42);
+      this.surveyGroup.push(tick);
+    }
+    const text = this.add.text(
+      rect.x + rect.w + SURVEY_CHECKBOX_LABEL_GAP,
+      rect.y + rect.h / 2,
+      label,
+      { fontSize: '14px', fontFamily: 'monospace', color: '#ffffff' },
+    );
+    text.setOrigin(0, 0.5);
+    text.setDepth(42);
+    this.surveyGroup.push(text);
+  }
+
+  /** Helper — draw a Submit/Skip button. Disabled buttons render dimmer
+   *  and do not register clicks (caller checks via surveyHitTest + state). */
+  private drawSurveyButton(
+    rect: { x: number; y: number; w: number; h: number },
+    label: string,
+    enabled: boolean,
+  ): void {
+    const fillColor = enabled ? 0x335577 : 0x202020;
+    const labelColor = enabled ? '#ffffff' : '#777777';
+    const btn = this.add.rectangle(
+      rect.x + rect.w / 2,
+      rect.y + rect.h / 2,
+      rect.w,
+      rect.h,
+      fillColor,
+      1,
+    );
+    btn.setInteractive();
+    btn.setDepth(41);
+    this.surveyGroup.push(btn);
+    const text = this.add.text(
+      rect.x + rect.w / 2,
+      rect.y + rect.h / 2,
+      label,
+      { fontSize: '16px', fontFamily: 'monospace', color: labelColor },
+    );
+    text.setOrigin(0.5);
+    text.setDepth(42);
+    this.surveyGroup.push(text);
+  }
+
+  /** Mount a <textarea> over the canvas at SURVEY_FREE_TEXT_RECT for free-
+   *  text input. Created once per overlay open and torn down in
+   *  hideSurveyOverlay. Position is recomputed each render so a canvas
+   *  resize between renders is handled correctly. */
+  private ensureSurveyTextarea(): void {
+    if (typeof document === 'undefined') return; // headless Vitest path
+    const canvas = this.game.canvas;
+    if (canvas === null) return;
+    if (this.surveyTextarea === null) {
+      const ta = document.createElement('textarea');
+      ta.placeholder = 'What stood out? (optional)';
+      ta.maxLength = PLAYTRACE_FREE_TEXT_MAX;
+      ta.style.position = 'absolute';
+      ta.style.zIndex = '1000';
+      ta.style.background = '#222222';
+      ta.style.color = '#ffffff';
+      ta.style.border = '1px solid #444444';
+      ta.style.fontFamily = 'monospace';
+      ta.style.fontSize = '13px';
+      ta.style.padding = '6px';
+      ta.style.resize = 'none';
+      ta.addEventListener('input', () => {
+        this.surveyState.freeText = truncateFreeText(ta.value);
+      });
+      // Append to the canvas's parent so embedded-in-shadow-DOM hosts
+      // (the library-mode embed on the website may eventually mount
+      // inside a custom element) keep the textarea inside the same
+      // stacking context as the canvas. Fall back to document.body only
+      // when the canvas has no parent yet (defensive — shouldn't happen
+      // after Phaser's create()).
+      const parent = canvas.parentElement ?? document.body;
+      parent.appendChild(ta);
+      this.surveyTextarea = ta;
+    }
+    // Bind the resize handler once per overlay open so a window-resize
+    // mid-overlay (devtools open, sidebar toggle, mobile rotate) keeps the
+    // textarea aligned with the canvas. Removed in hideSurveyOverlay.
+    if (this.surveyResizeHandler === null && typeof window !== 'undefined') {
+      this.surveyResizeHandler = () => this.positionSurveyTextarea();
+      window.addEventListener('resize', this.surveyResizeHandler);
+    }
+    this.positionSurveyTextarea();
+  }
+
+  private positionSurveyTextarea(): void {
+    if (this.surveyTextarea === null) return;
+    const canvas = this.game.canvas;
+    if (canvas === null) return;
+    const canvasRect = canvas.getBoundingClientRect();
+    const scaleX = canvasRect.width / SURVEY_CANVAS_W;
+    const scaleY = canvasRect.height / SURVEY_CANVAS_H;
+    const ta = this.surveyTextarea;
+    // The textarea is absolutely-positioned and sits in `document.body` or
+    // in `canvas.parentElement` (see ensureSurveyTextarea). For an
+    // absolutely-positioned element, the `left`/`top` values are measured
+    // against the nearest positioned ancestor (i.e. the same offsetParent
+    // resolution the browser uses). We compute the canvas's position in
+    // that same coordinate space by taking the bounding-rect delta against
+    // the textarea's own offsetParent — which is guaranteed to be the
+    // coordinate space `left`/`top` are interpreted in. This survives a
+    // scrolled page, an embedder whose canvas-parent isn't positioned, and
+    // shadow-DOM hosts. Codex P1 (round 3) — earlier `canvas.offsetLeft`
+    // approach landed in the wrong coordinate space when canvas.parentElement
+    // wasn't a positioned ancestor; the textarea drifted off-canvas.
+    const offsetParent = ta.offsetParent as HTMLElement | null;
+    let originX = 0;
+    let originY = 0;
+    if (offsetParent !== null) {
+      const opRect = offsetParent.getBoundingClientRect();
+      // Bounding-client-rect deltas use viewport coordinates; add the
+      // offsetParent's scrollLeft/Top so a scrolled overflow container
+      // (rare for the game canvas, but defensible) is handled too.
+      //
+      // Subtract clientLeft/Top — these equal the offsetParent's
+      // left/top border width. getBoundingClientRect() returns the
+      // border-box rect, but absolutely-positioned children's left/top
+      // are measured from the parent's PADDING-box (i.e. inside the
+      // border). Without this, an embedder whose canvas wrapper has a
+      // non-zero CSS border would see the textarea shift by the border
+      // width. (Codex round-3 review follow-up.)
+      originX = canvasRect.left - opRect.left - offsetParent.clientLeft + offsetParent.scrollLeft;
+      originY = canvasRect.top - opRect.top - offsetParent.clientTop + offsetParent.scrollTop;
+    } else {
+      // Textarea is positioned relative to the viewport (e.g. when its
+      // offsetParent is the initial containing block / document.body
+      // with no positioned ancestor in between). Fall back to viewport
+      // coordinates from canvasRect directly.
+      originX = canvasRect.left;
+      originY = canvasRect.top;
+    }
+    ta.style.left = `${originX + SURVEY_FREE_TEXT_RECT.x * scaleX}px`;
+    ta.style.top = `${originY + SURVEY_FREE_TEXT_RECT.y * scaleY}px`;
+    ta.style.width = `${SURVEY_FREE_TEXT_RECT.w * scaleX}px`;
+    ta.style.height = `${SURVEY_FREE_TEXT_RECT.h * scaleY}px`;
+  }
+
+  /** Dispatch a click on the survey overlay. Called from the pointerdown
+   *  handler in create() when the overlay is visible. */
+  private dispatchSurveyClick(px: number, py: number): void {
+    const hit = surveyHitTest(px, py);
+    if (hit === null) return;
+    switch (hit.kind) {
+      case 'rating':
+        this.surveyState.rating = hit.rating;
+        this.renderSurveyOverlay();
+        return;
+      case 'broken-checkbox':
+        this.surveyState.brokenFlag = !this.surveyState.brokenFlag;
+        this.renderSurveyOverlay();
+        return;
+      case 'upload-checkbox':
+        this.surveyState.includeSnapshot = !this.surveyState.includeSnapshot;
+        this.renderSurveyOverlay();
+        return;
+      case 'free-text':
+        // Focus the underlying DOM textarea so the player can start typing
+        // immediately without a second click.
+        this.surveyTextarea?.focus();
+        return;
+      case 'submit': {
+        if (this.surveyState.rating === 0) return; // disabled — defensive
+        const cb = this.surveyCallbacks;
+        const result: PlaytraceSurvey & { includeSnapshot: boolean } = {
+          rating: this.surveyState.rating,
+          freeText: this.surveyState.freeText,
+          brokenFlag: this.surveyState.brokenFlag,
+          includeSnapshot: this.surveyState.includeSnapshot,
+        };
+        this.hideSurveyOverlay();
+        cb?.onSubmit(result);
+        return;
+      }
+      case 'skip': {
+        const cb = this.surveyCallbacks;
+        this.hideSurveyOverlay();
+        cb?.onSkip();
+        return;
+      }
+    }
+  }
+}
+
+/** Issue #122 — callbacks the survey overlay invokes. The overlay collects
+ *  rating / free-text / brokenFlag / upload-opt-in and hands them back via
+ *  onSubmit; onSkip closes the overlay without producing a payload. */
+export interface SurveyOverlayCallbacks {
+  /** True when this overlay was opened from the pause menu's "Quit &
+   *  feedback" action rather than after a natural game-over. The overlay
+   *  uses it to pick a slightly different title; the game-scene passes it
+   *  through to the upload as the wire envelope's quitFromPauseMenu flag. */
+  quitFromPauseMenu: boolean;
+  /** Player chose to submit. The callback owns the upload — UIScene only
+   *  hands over the collected fields and closes the overlay. */
+  onSubmit(survey: PlaytraceSurvey & { includeSnapshot: boolean }): void;
+  /** Player chose to skip. The overlay is already closed by the time this
+   *  fires; the callback typically transitions GameScene to a restart or
+   *  reload path. */
+  onSkip(): void;
 }
