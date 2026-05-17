@@ -185,6 +185,7 @@ import {
   SURVEY_CHECKBOX_LABEL_GAP,
   surveyRatingButtons,
   surveyHitTest,
+  surveyConfirmationHitTest,
 } from './survey-overlay-layout.js';
 import {
   PLAYTRACE_FREE_TEXT_MAX,
@@ -492,14 +493,19 @@ export class UIScene extends Phaser.Scene {
     const escKey = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
     if (escKey) {
       escKey.on('down', () => {
-        // Issue #122 — Esc on the survey overlay is equivalent to Skip.
-        // The overlay is end-of-game; the player should always have a
-        // keyboard escape hatch even if the buttons are unreachable
-        // (e.g. window resized smaller than the modal panel).
+        // Issue #131 — Esc on the survey form is equivalent to Skip (transitions
+        // to the New Game/Retry confirmation). Esc on the confirmation screen
+        // defaults to New Game so the player always has a keyboard escape hatch.
         if (this.isSurveyVisible()) {
-          const cb = this.surveyCallbacks;
-          this.hideSurveyOverlay();
-          cb?.onSkip();
+          if (this.surveyState.showConfirmation) {
+            const cb = this.surveyCallbacks;
+            this.hideSurveyOverlay();
+            cb?.onNewGame();
+          } else {
+            this.surveyState.showConfirmation = true;
+            this.surveyState.confirmedSubmit = false;
+            this.renderSurveyOverlay();
+          }
           return;
         }
         if (this.isSaveLoadDialogVisible()) {
@@ -1574,12 +1580,16 @@ export class UIScene extends Phaser.Scene {
     brokenFlag: boolean;
     includeSnapshot: boolean;
     quitFromPauseMenu: boolean;
+    showConfirmation: boolean;
+    confirmedSubmit: boolean;
   } = {
     rating: 0,
     freeText: '',
     brokenFlag: false,
     includeSnapshot: false,
     quitFromPauseMenu: false,
+    showConfirmation: false,
+    confirmedSubmit: false,
   };
   private surveyTextarea: HTMLTextAreaElement | null = null;
   /** Bound handler kept on the instance so addEventListener / removeEventListener
@@ -1598,6 +1608,8 @@ export class UIScene extends Phaser.Scene {
       brokenFlag: false,
       includeSnapshot: false,
       quitFromPauseMenu: callbacks.quitFromPauseMenu,
+      showConfirmation: false,
+      confirmedSubmit: false,
     };
     this.renderSurveyOverlay();
     this.recomputeActiveOverlay();
@@ -1624,10 +1636,16 @@ export class UIScene extends Phaser.Scene {
 
   /** Render (or re-render) the survey overlay in place. Called on show and
    *  after every state mutation (rating click, checkbox toggle) so the
-   *  selected-state highlight reflects the latest input. */
+   *  selected-state highlight reflects the latest input. When showConfirmation
+   *  is true, renders the post-submit/skip confirmation screen instead. */
   private renderSurveyOverlay(): void {
     for (const obj of this.surveyGroup) obj.destroy();
     this.surveyGroup = [];
+
+    if (this.surveyState.showConfirmation) {
+      this.renderSurveyConfirmation();
+      return;
+    }
 
     // Background scrim — opaque-ish so the game beneath reads as paused.
     const bg = this.add.rectangle(
@@ -1738,6 +1756,39 @@ export class UIScene extends Phaser.Scene {
     const submitEnabled = this.surveyState.rating !== 0;
     this.drawSurveyButton(SURVEY_SUBMIT_BUTTON_RECT, 'Submit', submitEnabled);
     this.drawSurveyButton(SURVEY_SKIP_BUTTON_RECT, 'Skip', true);
+  }
+
+  /** Issue #131 — render the post-submit/skip confirmation screen. Shows a
+   *  result message and two buttons: New Game (fresh seed) and Retry (same
+   *  seed). The buttons reuse the Submit/Skip positions from the form phase. */
+  private renderSurveyConfirmation(): void {
+    const bg = this.add.rectangle(
+      SURVEY_CANVAS_W / 2,
+      SURVEY_CANVAS_H / 2,
+      SURVEY_CANVAS_W,
+      SURVEY_CANVAS_H,
+      0x000000,
+      0.85,
+    );
+    bg.setInteractive();
+    bg.setDepth(40);
+    this.surveyGroup.push(bg);
+
+    const resultText = this.surveyState.confirmedSubmit
+      ? 'Survey submitted — thanks for playing!'
+      : 'Thanks for playing!';
+    const title = this.add.text(
+      SURVEY_CANVAS_W / 2,
+      SURVEY_CANVAS_H / 2 - 40,
+      resultText,
+      { fontSize: '22px', fontFamily: 'monospace', color: '#ffffff' },
+    );
+    title.setOrigin(0.5);
+    title.setDepth(41);
+    this.surveyGroup.push(title);
+
+    this.drawSurveyButton(SURVEY_SUBMIT_BUTTON_RECT, 'New Game', true);
+    this.drawSurveyButton(SURVEY_SKIP_BUTTON_RECT, 'Retry', true);
   }
 
   /** Helper — draw a checkbox square + label for the survey overlay. */
@@ -1909,8 +1960,21 @@ export class UIScene extends Phaser.Scene {
   }
 
   /** Dispatch a click on the survey overlay. Called from the pointerdown
-   *  handler in create() when the overlay is visible. */
+   *  handler in create() when the overlay is visible. Routes to the
+   *  confirmation hit-test when showConfirmation is true. */
   private dispatchSurveyClick(px: number, py: number): void {
+    // Issue #131 — when the confirmation screen is showing, use the
+    // confirmation hit-test (New Game / Retry) instead of the form hit-test.
+    if (this.surveyState.showConfirmation) {
+      const hit = surveyConfirmationHitTest(px, py);
+      if (hit === null) return;
+      const cb = this.surveyCallbacks;
+      this.hideSurveyOverlay();
+      if (hit.kind === 'new-game') cb?.onNewGame();
+      else                        cb?.onRetry();
+      return;
+    }
+
     const hit = surveyHitTest(px, py);
     if (hit === null) return;
     switch (hit.kind) {
@@ -1940,34 +2004,49 @@ export class UIScene extends Phaser.Scene {
           brokenFlag: this.surveyState.brokenFlag,
           includeSnapshot: this.surveyState.includeSnapshot,
         };
-        this.hideSurveyOverlay();
+        // Issue #131 — fire the upload callback immediately, then transition
+        // to the confirmation screen instead of closing the overlay. The
+        // player chooses New Game or Retry from the confirmation screen.
         cb?.onSubmit(result);
+        this.surveyState.showConfirmation = true;
+        this.surveyState.confirmedSubmit = true;
+        this.renderSurveyOverlay();
         return;
       }
       case 'skip': {
-        const cb = this.surveyCallbacks;
-        this.hideSurveyOverlay();
-        cb?.onSkip();
+        // Issue #131 — skip transitions to the New Game/Retry choice without
+        // a submission confirmation message.
+        this.surveyState.showConfirmation = true;
+        this.surveyState.confirmedSubmit = false;
+        this.renderSurveyOverlay();
         return;
       }
+      // 'new-game' and 'retry' are confirmation-screen targets; unreachable
+      // here since the confirmation branch above returns early.
+      case 'new-game':
+      case 'retry':
+        return;
     }
   }
 }
 
-/** Issue #122 — callbacks the survey overlay invokes. The overlay collects
- *  rating / free-text / brokenFlag / upload-opt-in and hands them back via
- *  onSubmit; onSkip closes the overlay without producing a payload. */
+/** Issue #131 — callbacks the survey overlay invokes. After submit or skip,
+ *  the overlay shows a confirmation screen with New Game / Retry buttons;
+ *  onNewGame and onRetry fire when the player makes that choice. */
 export interface SurveyOverlayCallbacks {
   /** True when this overlay was opened from the pause menu's "Quit &
    *  feedback" action rather than after a natural game-over. The overlay
    *  uses it to pick a slightly different title; the game-scene passes it
    *  through to the upload as the wire envelope's quitFromPauseMenu flag. */
   quitFromPauseMenu: boolean;
-  /** Player chose to submit. The callback owns the upload — UIScene only
-   *  hands over the collected fields and closes the overlay. */
+  /** Player submitted. The callback fires the upload (fire-and-forget) then
+   *  the overlay transitions to the confirmation screen — do NOT call
+   *  restartGame here; wait for onNewGame / onRetry. */
   onSubmit(survey: PlaytraceSurvey & { includeSnapshot: boolean }): void;
-  /** Player chose to skip. The overlay is already closed by the time this
-   *  fires; the callback typically transitions GameScene to a restart or
-   *  reload path. */
-  onSkip(): void;
+  /** Player chose New Game from the confirmation screen (fresh seed). The
+   *  overlay is already closed by the time this fires. */
+  onNewGame(): void;
+  /** Player chose Retry from the confirmation screen (same seed). The
+   *  overlay is already closed by the time this fires. */
+  onRetry(): void;
 }

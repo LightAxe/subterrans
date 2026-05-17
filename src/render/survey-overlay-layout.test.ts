@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import {
   surveyRatingButtons,
   surveyHitTest,
+  surveyConfirmationHitTest,
   SURVEY_CANVAS_W,
   SURVEY_SUBMIT_BUTTON_RECT,
   SURVEY_SKIP_BUTTON_RECT,
@@ -99,5 +100,28 @@ describe('consent disclosure', () => {
     // the PR until the copy is fixed.
     expect(SURVEY_CONSENT_DISCLOSURE.toLowerCase()).toMatch(/ip/);
     expect(SURVEY_CONSENT_DISCLOSURE.toLowerCase()).toMatch(/browser|user[- ]agent|ua/);
+  });
+});
+
+describe('surveyConfirmationHitTest — issue #131', () => {
+  it('returns new-game when pointer is over the Submit button position', () => {
+    expect(surveyConfirmationHitTest(
+      SURVEY_SUBMIT_BUTTON_RECT.x + 5,
+      SURVEY_SUBMIT_BUTTON_RECT.y + 5,
+    )).toEqual({ kind: 'new-game' });
+  });
+
+  it('returns retry when pointer is over the Skip button position', () => {
+    expect(surveyConfirmationHitTest(
+      SURVEY_SKIP_BUTTON_RECT.x + 5,
+      SURVEY_SKIP_BUTTON_RECT.y + 5,
+    )).toEqual({ kind: 'retry' });
+  });
+
+  it('returns null on background (outside both button rects)', () => {
+    expect(surveyConfirmationHitTest(
+      SURVEY_SUBMIT_BUTTON_RECT.x - 10,
+      SURVEY_SUBMIT_BUTTON_RECT.y - 10,
+    )).toBeNull();
   });
 });

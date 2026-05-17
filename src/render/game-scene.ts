@@ -146,12 +146,14 @@ interface UIScenePhase9 {
     onBack: () => void;
   }): void;
   hideSaveLoadDialogOverlay(): void;
-  // Issue #122 / ADR 0013 — survey overlay. Shown at end-of-game (after a
-  // terminal outcome) or via the pause menu's "Quit & feedback" entry.
+  // Issue #131 — survey overlay. After submit or skip, the overlay shows a
+  // confirmation screen with New Game / Retry. onNewGame restarts with a new
+  // seed; onRetry restarts with the same seed. onSkip was removed.
   showSurveyOverlay(callbacks: {
     quitFromPauseMenu: boolean;
     onSubmit(survey: PlaytraceSurvey & { includeSnapshot: boolean }): void;
-    onSkip(): void;
+    onNewGame(): void;
+    onRetry(): void;
   }): void;
   hideSurveyOverlay(): void;
 }
@@ -638,19 +640,18 @@ export class GameScene extends Phaser.Scene {
   /** Issue #122 — open the survey overlay. Called at end-of-game (when
    *  the feature flag is on; falls back to game-over overlay otherwise)
    *  and from the pause menu's "Quit & feedback" entry. The survey
-   *  collects rating / free-text / brokenFlag / upload opt-in, then on
-   *  submit dispatches to submitPlaytrace and transitions to restart.
-   *  Skip / Esc transition straight to restart without uploading. */
+   *  collects rating / free-text / brokenFlag / upload opt-in, then dispatches
+   *  the upload and transitions to a confirmation screen with New Game / Retry.
+   *  Issue #131: onSkip replaced by onNewGame + onRetry from the confirmation. */
   private openSurveyOverlay(quitFromPauseMenu: boolean): void {
     if (this.world === undefined) return; // pre-boot guard
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     // Capture the values the survey needs BEFORE handing control away.
     // The submission flow is async; meanwhile the player will start the
-    // next session (restart-on-skip / restart-on-submit) and the live
-    // references would otherwise change beneath us. World can't be safely
-    // captured by reference because resetSessionState swaps it; but we
-    // build the snapshot synchronously at submit time, before restart.
+    // next session and the live references would otherwise change beneath us.
     const outcome = this.currentOutcome;
+    // Capture seed now — retryGame() needs it but resetSessionState runs first.
+    const retrySeed = this.currentSeed;
     uiScene.showSurveyOverlay({
       quitFromPauseMenu,
       onSubmit: (survey) => {
@@ -676,10 +677,10 @@ export class GameScene extends Phaser.Scene {
         const wireOutcome: GameOutcome =
           outcome === GameOutcome.None ? GameOutcome.Defeat : outcome;
         if (world !== undefined) {
-          // Fire-and-forget. The user has already seen the overlay close;
-          // restart proceeds in parallel with the upload. cancelInFlight
-          // in resetSessionState handles the abort if restart fires before
-          // the request completes.
+          // Issue #131: Fire-and-forget. The overlay now stays open showing the
+          // confirmation screen; onNewGame / onRetry handle the actual restart.
+          // cancelInFlight in resetSessionState handles abort if restart fires
+          // before the request completes.
           void submitPlaytrace({
             endpoint: this.playtraceEndpoint,
             sessionId: this.playtraceSessionId,
@@ -696,12 +697,36 @@ export class GameScene extends Phaser.Scene {
             },
           });
         }
+        // Do NOT call restartGame here — overlay transitions to confirmation
+        // screen; the player clicks New Game or Retry from there.
+      },
+      onNewGame: () => {
         this.restartGame();
       },
-      onSkip: () => {
-        this.restartGame();
+      onRetry: () => {
+        this.retryGame(retrySeed);
       },
     });
+  }
+
+  /** Issue #131 — restart the game with the same seed the player just lost on.
+   *  Mirrors restartGame() but skips generateFreshSeed, using the captured
+   *  seed instead so the player gets the exact same map to retry. */
+  private retryGame(seed: number): void {
+    const wasSuspended = this.autosaveSuspended;
+    if (!wasSuspended) {
+      deleteSave();
+    }
+    this.currentOutcome = GameOutcome.None;
+    this.resetSessionState();
+    this.currentSeed = seed;
+    this.world = createScenario(seed);
+    this.finishBoot();
+    if (wasSuspended) {
+      this.autosaveSuspended = true;
+    }
+    const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
+    uiScene.hideGameOverOverlay();
   }
 
   private openPauseMenu(): void {
