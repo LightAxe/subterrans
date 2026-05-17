@@ -41,10 +41,11 @@ import {
   SIM_VERSION_V8_LEASH_HYSTERESIS,
   SIM_VERSION_V9_CANCEL_DROPS_PENDING,
   SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
+  SIM_VERSION_V13_INVARIANT_FIXES,
   SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
-import { initAnt, createAntComponents, RECENT_TILES_LEN } from './ant-store.js';
+import { initAnt, createAntComponents, RECENT_TILES_LEN, isRecentTile } from './ant-store.js';
 import { AntTask, ForagingSubState, DiggingSubState, NursingSubState, ChamberType, PheromoneType } from '../enums.js';
 import { createPheromoneGrid, phGet, phSet, pheromoneGridKey } from '../pheromone/pheromone-store.js';
 import { Rng } from '../rng.js';
@@ -8139,5 +8140,70 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     // Ant must have moved East (into the recent tile) rather than deadlocking.
     expect(world.ants.posX[antId]).toBeGreaterThan(posXBefore);
     expect(world.ants.posY[antId]).toBe(posYBefore);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Descent clear gate tests: verifies clearRecentTiles is V14-gated at descent.
+  // A V13 world must NOT have its ring buffer cleared on descent (replay invariant).
+  // ---------------------------------------------------------------------------
+
+  it('V14: clears ring buffer on Surface→Underground descent', () => {
+    const { world, colony } = setupWorldWithUnderground(16, 16);
+    world.simVersion = SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX;
+    colony.entrances = [{ entranceId: 1, surfaceTileX: 5, surfaceTileY: 5, isOpen: true }];
+
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId: COLONY_ID,
+      posX: 5 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+      zone: Zone.Surface,
+      speed: 0,
+    });
+    world.ants.foodCarrying[antId] = 500;
+    // Poison two ring-buffer slots with stale surface coords
+    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 0] = 3;
+    world.ants.recentTilesY[antId * RECENT_TILES_LEN + 0] = 3;
+    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 1] = 4;
+    world.ants.recentTilesY[antId * RECENT_TILES_LEN + 1] = 4;
+
+    const rng = new Rng(42);
+    tickAntMovement(world, rng, createDigFlowFields(), undefined, createChamberFlowFields());
+
+    expect(world.ants.zone[antId]).toBe(Zone.Underground);
+    // Stale surface coords must no longer appear as recent after the V14 clear
+    expect(isRecentTile(world.ants, antId, 3, 3)).toBe(false);
+    expect(isRecentTile(world.ants, antId, 4, 4)).toBe(false);
+  });
+
+  it('V13: preserves ring buffer across Surface→Underground descent (no clearRecentTiles)', () => {
+    const { world, colony } = setupWorldWithUnderground(16, 16);
+    world.simVersion = SIM_VERSION_V13_INVARIANT_FIXES;
+    colony.entrances = [{ entranceId: 1, surfaceTileX: 5, surfaceTileY: 5, isOpen: true }];
+
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId: COLONY_ID,
+      posX: 5 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+      zone: Zone.Surface,
+      speed: 0,
+    });
+    world.ants.foodCarrying[antId] = 500;
+    // Poison ring buffer with surface coords
+    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 0] = 3;
+    world.ants.recentTilesY[antId * RECENT_TILES_LEN + 0] = 3;
+
+    const rng = new Rng(42);
+    tickAntMovement(world, rng, createDigFlowFields(), undefined, createChamberFlowFields());
+
+    expect(world.ants.zone[antId]).toBe(Zone.Underground);
+    // Ring buffer must NOT have been cleared — V13 replay contract
+    expect(world.ants.recentTilesX[antId * RECENT_TILES_LEN + 0]).toBe(3);
+    expect(world.ants.recentTilesY[antId * RECENT_TILES_LEN + 0]).toBe(3);
   });
 });

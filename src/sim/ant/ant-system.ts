@@ -4663,7 +4663,11 @@ export function tickAntMovement(
             // V14: clear the recent-tiles ring buffer on descent so stale
             // surface coordinates don't produce false-positive no-revisit
             // deflections in the underground CarryingFood guard.
-            clearRecentTiles(ants, id);
+            // Gated on V14 to preserve byte-identical replay for V13 saves
+            // (the ring buffer was serialized and used by the V6+ surface guard).
+            if (world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX) {
+              clearRecentTiles(ants, id);
+            }
             descended = true;
             break;
           }
