@@ -30,7 +30,7 @@ import {
   QUEEN_FOOD_PER_TICK,
   STARVATION_GRACE_TICKS,
   WORKER_LIFESPAN_TICKS,
-  FOOD_TRAIL_DEPOSIT,
+  FOOD_TRAIL_DEPOSIT_V14,
   PHEROMONE_CAP,
 } from './constants.js';
 import { FP_SHIFT } from './fixed.js';
@@ -922,11 +922,11 @@ describe('Pheromone step ordering', () => {
 
     tick(world, []);
 
-    // Deposit ran first (added FOOD_TRAIL_DEPOSIT), then decay reduced it.
-    // Result must be > 0 (not zero) and <= FOOD_TRAIL_DEPOSIT.
+    // Deposit ran first (added FOOD_TRAIL_DEPOSIT_V14), then decay reduced it.
+    // Result must be > 0 (not zero) and <= FOOD_TRAIL_DEPOSIT_V14.
     const val = phGet(world.pheromoneGrids[gridKey]!, 3, 3);
     expect(val).toBeGreaterThan(0);
-    expect(val).toBeLessThanOrEqual(FOOD_TRAIL_DEPOSIT);
+    expect(val).toBeLessThanOrEqual(FOOD_TRAIL_DEPOSIT_V14);
   });
 
   // Test 16: Step 12 (movement) uses post-decay grid

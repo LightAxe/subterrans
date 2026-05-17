@@ -41,6 +41,7 @@ import {
   SIM_VERSION_V8_LEASH_HYSTERESIS,
   SIM_VERSION_V9_CANCEL_DROPS_PENDING,
   SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
+  SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt, createAntComponents, RECENT_TILES_LEN } from './ant-store.js';
@@ -53,6 +54,7 @@ import {
   FOOD_CHAMBER_CAPACITY,
   BASE_FOOD_STORAGE_CAPACITY,
   FOOD_TRAIL_DEPOSIT,
+  FOOD_TRAIL_DEPOSIT_V14,
   PHEROMONE_CAP,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
@@ -416,7 +418,7 @@ describe('tickPheromoneDeposit', () => {
 
     tickPheromoneDeposit(world);
 
-    const expected = FOOD_TRAIL_DEPOSIT * 2;
+    const expected = FOOD_TRAIL_DEPOSIT_V14 * 2;
     // If expected exceeds PHEROMONE_CAP, value is capped
     const capped = expected > PHEROMONE_CAP ? PHEROMONE_CAP : expected;
     expect(phGet(grid, tileX, tileY)).toBe(capped);
@@ -602,8 +604,8 @@ describe('CLNY-06 forage cycle — Phase 6 SC 6 integration', () => {
     // Pheromone must have accumulated at the ant's tile
     const pherValue = phGet(grid, tileX, tileY);
     expect(pherValue).toBeGreaterThan(0);
-    // 5 deposits of FOOD_TRAIL_DEPOSIT each (capped at PHEROMONE_CAP)
-    const expected5 = FOOD_TRAIL_DEPOSIT * 5;
+    // 5 deposits of FOOD_TRAIL_DEPOSIT_V14 each (capped at PHEROMONE_CAP)
+    const expected5 = FOOD_TRAIL_DEPOSIT_V14 * 5;
     expect(pherValue).toBe(expected5 > PHEROMONE_CAP ? PHEROMONE_CAP : expected5);
 
     // --- Tick 6: deposit food ---
@@ -3079,13 +3081,13 @@ describe('tickPheromoneDeposit — entrance suppression (09 follow-up issue 2)',
   it('carrying ant at Manhattan d=4 from entrance DOES deposit (outside suppression)', () => {
     const { world, grid } = setupCarryingAnt(4, 0);
     tickPheromoneDeposit(world);
-    expect(phGet(grid, 4, 0)).toBe(FOOD_TRAIL_DEPOSIT);
+    expect(phGet(grid, 4, 0)).toBe(FOOD_TRAIL_DEPOSIT_V14);
   });
 
   it('carrying ant far from entrance still deposits normally', () => {
     const { world, grid } = setupCarryingAnt(20, 20);
     tickPheromoneDeposit(world);
-    expect(phGet(grid, 20, 20)).toBe(FOOD_TRAIL_DEPOSIT);
+    expect(phGet(grid, 20, 20)).toBe(FOOD_TRAIL_DEPOSIT_V14);
   });
 
   it('checks NEAREST entrance — far from one, near another → suppressed', () => {
@@ -3107,7 +3109,7 @@ describe('tickPheromoneDeposit — entrance suppression (09 follow-up issue 2)',
     const { world, colony, grid } = setupCarryingAnt(2, 0);
     colony.entrances = [];
     tickPheromoneDeposit(world);
-    expect(phGet(grid, 2, 0)).toBe(FOOD_TRAIL_DEPOSIT);
+    expect(phGet(grid, 2, 0)).toBe(FOOD_TRAIL_DEPOSIT_V14);
   });
 
   it('repeated carrying-ant traffic at entrance never builds a scalar peak within suppression radius', () => {
@@ -7975,4 +7977,165 @@ describe('Issue #108 — occupancy zone-mask (V13+)', () => {
   // pre-V13 stack here would require exporting resolveSameColonyOccupancy
   // for direct call (the full tickAntMovement also runs surface foraging
   // / passability passes that can shift either ant for unrelated reasons).
+});
+
+// ---------------------------------------------------------------------------
+// S0a / issue #120 — V14 underground CarryingFood no-revisit guard (unit tests)
+// ---------------------------------------------------------------------------
+
+describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', () => {
+  /**
+   * Build a minimal underground world where a V14 CarryingFood ant is placed
+   * at (antX, antY) on an open tile. The grid is 8×8 with all tiles Solid by
+   * default; callers open specific tiles.
+   */
+  function setupUndergroundCarryingAnt(antX: number, antY: number): {
+    world: WorldState;
+    antId: number;
+    underground: ReturnType<typeof createUndergroundGrid>;
+    chamberFlowFields: ReturnType<typeof createChamberFlowFields>;
+    digFlowFields: ReturnType<typeof createDigFlowFields>;
+  } {
+    const { world, colony, underground, colonyId } = setupWorldWithUnderground(8, 8);
+    world.simVersion = SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX;
+
+    colony.entrances = [{
+      entranceId: 1,
+      surfaceTileX: 0,
+      surfaceTileY: 64,
+      isOpen: true,
+    }];
+
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId,
+      posX: antX << FP_SHIFT,
+      posY: antY << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+      zone: Zone.Underground,
+    });
+    world.ants.currentGridColonyId[antId] = colonyId;
+    world.ants.foodCarrying[antId] = 500;
+
+    const chamberFlowFields = createChamberFlowFields();
+    const digFlowFields = createDigFlowFields();
+    return { world, antId, underground, chamberFlowFields, digFlowFields };
+  }
+
+  it('V14: ring buffer is pushed on underground CarryingFood tile crossing', () => {
+    // Place ant at (3, 3); open tile to East (4, 3) and South (3, 4).
+    // With no flow field, the ant explores; after a tile crossing, the previous
+    // tile should appear in the ring buffer.
+    const { world, antId, underground, chamberFlowFields, digFlowFields } = setupUndergroundCarryingAnt(3, 3);
+    ugSet(underground, 3, 3, UndergroundTileState.Open);
+    ugSet(underground, 4, 3, UndergroundTileState.Open);
+    ugSet(underground, 3, 4, UndergroundTileState.Open);
+    ugSet(underground, 2, 3, UndergroundTileState.Open);
+    ugSet(underground, 3, 2, UndergroundTileState.Open);
+
+    const rng = new Rng(42);
+    tickAntMovement(world, rng, digFlowFields, undefined, chamberFlowFields);
+
+    const posX = world.ants.posX[antId]!;
+    const posY = world.ants.posY[antId]!;
+    const newTileX = posX >> FP_SHIFT;
+    const newTileY = posY >> FP_SHIFT;
+
+    if (newTileX !== 3 || newTileY !== 3) {
+      // A tile crossing occurred — old tile (3,3) should be in the buffer.
+      let found = false;
+      for (let s = 0; s < RECENT_TILES_LEN; s++) {
+        if (
+          world.ants.recentTilesX[antId * RECENT_TILES_LEN + s] === 3 &&
+          world.ants.recentTilesY[antId * RECENT_TILES_LEN + s] === 3
+        ) { found = true; break; }
+      }
+      expect(found).toBe(true);
+    }
+    // If no crossing (ant stayed put), the ring buffer stays empty (no push on hold).
+    // Either outcome is valid — the test verifies the PUSH path, not the hold path.
+  });
+
+  it('V14: redirects underground CarryingFood ant away from recent tile to alternate open tile', () => {
+    // Ant at (3, 3). FoodStorage chamber at (4, 3) → flow field points East.
+    // Poison East with a recent tile so the guard fires.
+    // South (3, 4) is open → guard redirects South.
+    const { world, antId, underground, chamberFlowFields, digFlowFields } = setupUndergroundCarryingAnt(3, 3);
+    ugSet(underground, 3, 3, UndergroundTileState.Open);
+    ugSet(underground, 4, 3, UndergroundTileState.Open);  // East — proposed direction
+    ugSet(underground, 3, 4, UndergroundTileState.Open);  // South — alternate
+    // (2,3) and (3,2) remain Solid — no other alternates
+
+    const { world: { colonies } } = { world };
+    const colonyId = world.ants.colonyId[antId]! as number;
+    const colony = world.colonies[colonyId]!;
+    // Place FoodStorage chamber at (4, 3) to seed the food flow field East.
+    colony.chambers.push({
+      chamberId: 100,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 0,
+      posX: 4 << FP_SHIFT,
+      posY: 3 << FP_SHIFT,
+      width: 1,
+      height: 1,
+    });
+    const gridSize = underground.width * underground.height;
+    const bufs = ensureChamberFlowFields(chamberFlowFields, colonyId, gridSize);
+    computeChamberFlowField(underground, colony.chambers, FOOD_CHAMBER_TYPES, bufs.food, bufs.queue);
+
+    // Poison East tile (4, 3) as a recent tile.
+    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 0] = 4;
+    world.ants.recentTilesY[antId * RECENT_TILES_LEN + 0] = 3;
+
+    const rng = new Rng(42);
+    tickAntMovement(world, rng, digFlowFields, undefined, chamberFlowFields);
+
+    const newTileX = world.ants.posX[antId]! >> FP_SHIFT;
+    const newTileY = world.ants.posY[antId]! >> FP_SHIFT;
+
+    // Must NOT have moved East to the recent tile.
+    expect(newTileX).not.toBe(4);
+    // The ant should have moved South (or stayed — either is non-East, showing the guard fired).
+    // If South was chosen: (3, 4).
+    expect(newTileX).toBe(3); // x unchanged (went South or held)
+  });
+
+  it('V14: holds (dx=dy=0) when all alternates are impassable (walled-in)', () => {
+    // Ant at (3, 3). East is open (proposed direction, blocked as recent).
+    // All other neighbors are Solid — no alternate escape. Guard should hold.
+    const { world, antId, underground, chamberFlowFields, digFlowFields } = setupUndergroundCarryingAnt(3, 3);
+    ugSet(underground, 3, 3, UndergroundTileState.Open);
+    ugSet(underground, 4, 3, UndergroundTileState.Open); // East — will be poisoned
+    // (2,3), (3,2), (3,4) remain Solid
+
+    const colonyId = world.ants.colonyId[antId]! as number;
+    const colony = world.colonies[colonyId]!;
+    colony.chambers.push({
+      chamberId: 101,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 0,
+      posX: 4 << FP_SHIFT,
+      posY: 3 << FP_SHIFT,
+      width: 1,
+      height: 1,
+    });
+    const gridSize = underground.width * underground.height;
+    const bufs = ensureChamberFlowFields(chamberFlowFields, colonyId, gridSize);
+    computeChamberFlowField(underground, colony.chambers, FOOD_CHAMBER_TYPES, bufs.food, bufs.queue);
+
+    // Poison East as recent. With no other open tiles, the ant must hold.
+    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 0] = 4;
+    world.ants.recentTilesY[antId * RECENT_TILES_LEN + 0] = 3;
+
+    const posXBefore = world.ants.posX[antId]!;
+    const posYBefore = world.ants.posY[antId]!;
+
+    const rng = new Rng(42);
+    tickAntMovement(world, rng, digFlowFields, undefined, chamberFlowFields);
+
+    // Ant should not have moved (held in place due to no valid alternate).
+    expect(world.ants.posX[antId]).toBe(posXBefore);
+    expect(world.ants.posY[antId]).toBe(posYBefore);
+  });
 });

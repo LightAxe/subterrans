@@ -42,6 +42,7 @@ import {
   SIM_VERSION_V11_DEFENSIVE_BUNDLE,
   SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE,
   SIM_VERSION_V13_INVARIANT_FIXES,
+  SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX,
   type WorldState,
 } from '../types.js';
 import {
@@ -80,6 +81,8 @@ import {
   SEARCH_PAUSE_TRIGGER_INV_PROB,
   SEARCH_PAUSE_BASE_TICKS,
   SEARCH_PAUSE_JITTER_TICKS,
+  FOOD_TRAIL_DEPOSIT,
+  FOOD_TRAIL_DEPOSIT_V14,
 } from '../constants.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { Rng } from '../rng.js';
@@ -2707,6 +2710,11 @@ export function tickPheromoneDeposit(world: WorldState): void {
   // into a v10 snapshot must continue to influence v10-replay routing.
   const v11OrLater = world.simVersion >= SIM_VERSION_V11_DEFENSIVE_BUNDLE;
 
+  // S0a / issue #119 — V14+ uses a stronger deposit per step.
+  const depositAmount = world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX
+    ? FOOD_TRAIL_DEPOSIT_V14
+    : FOOD_TRAIL_DEPOSIT;
+
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1) continue;
     if (ants.foodCarrying[id]! <= 0) continue;
@@ -2737,7 +2745,7 @@ export function tickPheromoneDeposit(world: WorldState): void {
     const grid = world.pheromoneGrids[key];
     if (!grid) continue; // grid missing — silently skip (scenario-dependent presence)
 
-    depositFoodTrail(grid, tileX, tileY);
+    depositFoodTrail(grid, tileX, tileY, depositAmount);
   }
 }
 
@@ -4257,6 +4265,51 @@ export function tickAntMovement(
       }
     }
 
+    // S0a / issue #120 — V14+ underground CarryingFood no-revisit filter.
+    // Mirrors the surface SearchingFood guard above (V6+), extended to
+    // underground Foraging+CarryingFood ants so they cannot oscillate on
+    // the FoodStorage chamber landing tile. Uses 4-connected cardinal
+    // alternates (not 8-connected) to avoid underground corner-cut issues;
+    // each candidate is checked for underground passability before selection.
+    if (
+      world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX &&
+      zone === Zone.Underground &&
+      task === AntTask.Foraging &&
+      ants.subTask[id] === ForagingSubState.CarryingFood &&
+      (dx !== 0 || dy !== 0)
+    ) {
+      const tileX = ants.posX[id]! >> FP_SHIFT;
+      const tileY = ants.posY[id]! >> FP_SHIFT;
+      if (isRecentTile(ants, id, tileX + dx, tileY + dy)) {
+        const gridColonyId = ants.currentGridColonyId[id]!;
+        const underground = world.undergroundGrids[gridColonyId];
+        let found = false;
+        if (underground) {
+          for (let i = 0; i < DIR_DX.length; i++) {
+            const ax = DIR_DX[i]!;
+            const ay = DIR_DY[i]!;
+            if (ax === dx && ay === dy) continue;
+            const candX = tileX + ax;
+            const candY = tileY + ay;
+            if (
+              candX < 0 || candX >= UNDERGROUND_GRID_WIDTH ||
+              candY < 0 || candY >= UNDERGROUND_GRID_HEIGHT
+            ) continue;
+            if (!canEnterUndergroundTile(underground, candX, candY, task as AntTask)) continue;
+            if (isRecentTile(ants, id, candX, candY)) continue;
+            dx = ax;
+            dy = ay;
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          dx = 0;
+          dy = 0;
+        }
+      }
+    }
+
     const baseSpeed = ants.speed[id]!;
     const prevPosX = ants.posX[id]!;
     const prevPosY = ants.posY[id]!;
@@ -4472,6 +4525,26 @@ export function tickAntMovement(
       }
     }
 
+    // S0a / issue #120 — V14+ underground CarryingFood ring-buffer push.
+    // Tracks the just-vacated tile so the no-revisit filter above can prevent
+    // oscillation on FoodStorage chamber landing tiles. Push only on actual
+    // tile crossings (same as the surface path); pause ticks don't advance
+    // the buffer. Cleared on full deposit (antDepositFood clearRecentTiles).
+    if (
+      world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX &&
+      zone === Zone.Underground &&
+      task === AntTask.Foraging &&
+      ants.subTask[id] === ForagingSubState.CarryingFood
+    ) {
+      const preTileXU = prevPosX >> FP_SHIFT;
+      const preTileYU = prevPosY >> FP_SHIFT;
+      const newTileXU = posX >> FP_SHIFT;
+      const newTileYU = posY >> FP_SHIFT;
+      if (newTileXU !== preTileXU || newTileYU !== preTileYU) {
+        pushRecentTile(ants, id, preTileXU, preTileYU);
+      }
+    }
+
     // --- Zone transitions (PRD §5d — applied AFTER position update) ---
     // Surface → Underground: ant on surface at an open entrance, task requires underground
     if (zone === Zone.Surface) {
@@ -4588,6 +4661,10 @@ export function tickAntMovement(
             ants.zone[id] = Zone.Underground;
             ants.currentGridColonyId[id] = colony.colonyId;
             ants.posY[id] = 0; // enter at top of underground grid
+            // V14: clear the recent-tiles ring buffer on descent so stale
+            // surface coordinates don't produce false-positive no-revisit
+            // deflections in the underground CarryingFood guard.
+            clearRecentTiles(ants, id);
             descended = true;
             break;
           }

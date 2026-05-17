@@ -1,6 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE } from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE, SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX } from './types.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath } from './game-over.js';
 import { detectAndResolveCombat } from './combat.js';
@@ -16,6 +16,8 @@ import {
 } from './enums.js';
 import {
   PHEROMONE_DECAY_FP,
+  PHEROMONE_DECAY_FP_V14,
+  PHEROMONE_FLOOR_V14,
   DANGER_DECAY_FP,
   MAX_ENTRANCES_PER_COLONY,
   ENTRANCE_SHAFT_DEPTH,
@@ -1085,10 +1087,21 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // PheromoneType: 0 = FoodTrail, 1 = DangerTrail (per enums.ts)
     const parts = gridKey.split(':');
     const pheromoneType = (parts[1] as unknown as number) | 0;
-    const decayRate = pheromoneType === PheromoneType.DangerTrail
-      ? DANGER_DECAY_FP
-      : PHEROMONE_DECAY_FP;
-    tickPheromoneDecay(grid, decayRate);
+    // V14+: slower food-trail decay (PHEROMONE_DECAY_FP_V14=2 vs legacy 5).
+    // DangerTrail stays at DANGER_DECAY_FP until S3.
+    // V14+ floor is raised to 128 to match the decayFp=2 arithmetic stall
+    // point (decayFp=2 gives 0 decay for values < 128); prevents zombie trails.
+    let decayRate: number;
+    let decayFloor: number | undefined;
+    if (pheromoneType === PheromoneType.DangerTrail) {
+      decayRate = DANGER_DECAY_FP;
+    } else if (world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX) {
+      decayRate = PHEROMONE_DECAY_FP_V14;
+      decayFloor = PHEROMONE_FLOOR_V14;
+    } else {
+      decayRate = PHEROMONE_DECAY_FP;
+    }
+    tickPheromoneDecay(grid, decayRate, decayFloor);
   }
 
   // ---------------------------------------------------------------------------
