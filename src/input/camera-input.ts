@@ -325,7 +325,7 @@ export interface DragState {
  * HUD-zone pointerdown and HUD-zone pointermove are ignored so a drag
  * starting inside a HUD widget never pans the camera.
  */
-export function registerDragPan(scene: Phaser.Scene, viewState: ViewState): DragState {
+export function registerDragPan(scene: Phaser.Scene, viewState: ViewState, isBlocked?: () => boolean): DragState {
   const dragState: DragState = {
     isDragging: false,
     lastX: 0,
@@ -361,6 +361,7 @@ export function registerDragPan(scene: Phaser.Scene, viewState: ViewState): Drag
   };
 
   scene.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+    if (isBlocked?.()) return;
     if (!isPanTriggerDown(pointer)) return;
     if (isPointerOverHUD(pointer.x, pointer.y, viewState)) return;
     dragState.active = true;
@@ -372,6 +373,7 @@ export function registerDragPan(scene: Phaser.Scene, viewState: ViewState): Drag
 
   scene.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
     if (!dragState.active) return;
+    if (isBlocked?.()) { releaseDrag(); return; }
     // Continue pan only while the originating trigger is still held.
     if (!isPanTriggerDown(pointer)) return;
     // Issue #73 — when the pointer is over a HUD widget mid-drag, suppress

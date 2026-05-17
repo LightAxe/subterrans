@@ -272,7 +272,7 @@ export class GameScene extends Phaser.Scene {
     this.input.mouse!.disableContextMenu();
 
     // Drag-pan registration — returns dragState ref for processCameraInput
-    this.dragState = registerDragPan(this, this.viewState);
+    this.dragState = registerDragPan(this, this.viewState, () => this.gamePhase === GamePhase.GameOver);
 
     // Issue #116 — Esc opens the pause menu overlay (which also pauses the
     // sim). The Esc keybinding itself lives in UIScene (which already owned
@@ -563,6 +563,11 @@ export class GameScene extends Phaser.Scene {
         this.gamePhase = GamePhase.GameOver;
         // W2: first-class pause via Plan 06 Task 1 API — no setMsPerTick(Infinity)
         this.gameLoop.pause();
+        // Issue #129 — clear any in-flight pan/drag so spaceHeld and dragState.active
+        // don't leak into the GameOver overlay state (drag-pan event handlers are
+        // independent of processCameraInput and otherwise fire unguarded).
+        resetPanInputState();
+        resetDragState(this.dragState);
         const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
         // Issue #122 — when the playtrace feature is enabled, the survey
         // overlay replaces the bare game-over panel at end-of-game. Skip
