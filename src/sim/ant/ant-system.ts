@@ -4271,6 +4271,11 @@ export function tickAntMovement(
     // the FoodStorage chamber landing tile. Uses 4-connected cardinal
     // alternates (not 8-connected) to avoid underground corner-cut issues;
     // each candidate is checked for underground passability before selection.
+    //
+    // When no non-recent passable alternate exists (narrow tunnel), the guard
+    // is skipped and the ant proceeds with its original direction. Holding
+    // (dx=dy=0) would deadlock the ant permanently because the ring buffer
+    // only advances on tile crossings and never ages out while stationary.
     if (
       world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX &&
       zone === Zone.Underground &&
@@ -4283,7 +4288,6 @@ export function tickAntMovement(
       if (isRecentTile(ants, id, tileX + dx, tileY + dy)) {
         const gridColonyId = ants.currentGridColonyId[id]!;
         const underground = world.undergroundGrids[gridColonyId];
-        let found = false;
         if (underground) {
           for (let i = 0; i < DIR_DX.length; i++) {
             const ax = DIR_DX[i]!;
@@ -4299,13 +4303,8 @@ export function tickAntMovement(
             if (isRecentTile(ants, id, candX, candY)) continue;
             dx = ax;
             dy = ay;
-            found = true;
             break;
           }
-        }
-        if (!found) {
-          dx = 0;
-          dy = 0;
         }
       }
     }

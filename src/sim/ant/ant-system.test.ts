@@ -8101,9 +8101,11 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     expect(newTileX).toBe(3); // x unchanged (went South or held)
   });
 
-  it('V14: holds (dx=dy=0) when all alternates are impassable (walled-in)', () => {
+  it('V14: allows original direction when all alternates are impassable (no deadlock)', () => {
     // Ant at (3, 3). East is open (proposed direction, blocked as recent).
-    // All other neighbors are Solid — no alternate escape. Guard should hold.
+    // All other neighbors are Solid — no alternate escape. Guard must NOT hold
+    // (holding deadlocks permanently since ring buffer only advances on crossings).
+    // The ant should proceed East into the recent tile.
     const { world, antId, underground, chamberFlowFields, digFlowFields } = setupUndergroundCarryingAnt(3, 3);
     ugSet(underground, 3, 3, UndergroundTileState.Open);
     ugSet(underground, 4, 3, UndergroundTileState.Open); // East — will be poisoned
@@ -8124,7 +8126,7 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     const bufs = ensureChamberFlowFields(chamberFlowFields, colonyId, gridSize);
     computeChamberFlowField(underground, colony.chambers, FOOD_CHAMBER_TYPES, bufs.food, bufs.queue);
 
-    // Poison East as recent. With no other open tiles, the ant must hold.
+    // Poison East as recent. No other open tiles exist — no valid alternate.
     world.ants.recentTilesX[antId * RECENT_TILES_LEN + 0] = 4;
     world.ants.recentTilesY[antId * RECENT_TILES_LEN + 0] = 3;
 
@@ -8134,8 +8136,8 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     const rng = new Rng(42);
     tickAntMovement(world, rng, digFlowFields, undefined, chamberFlowFields);
 
-    // Ant should not have moved (held in place due to no valid alternate).
-    expect(world.ants.posX[antId]).toBe(posXBefore);
+    // Ant must have moved East (into the recent tile) rather than deadlocking.
+    expect(world.ants.posX[antId]).toBeGreaterThan(posXBefore);
     expect(world.ants.posY[antId]).toBe(posYBefore);
   });
 });
