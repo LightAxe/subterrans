@@ -36,8 +36,12 @@ import type { CameraState } from './camera.js';
 /**
  * Maximum pheromone intensity value used for visual normalization.
  * Values above this clamp to full strength. (PRD §7f)
+ *
+ * S0a / issue #119: lowered 2048 → 512 so the steady-state foraging cohort
+ * produces a visible trail (≥0.5 alpha) under the V14 deposit constants.
+ * Renderer-only; no sim-version gate needed (renderer is always at latest).
  */
-export const PHEROMONE_VISUAL_MAX = 2048;
+export const PHEROMONE_VISUAL_MAX = 512;
 
 /**
  * Maximum alpha (opacity) for a fully-saturated pheromone tile overlay.

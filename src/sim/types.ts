@@ -187,7 +187,30 @@ export const SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE = 12 as const;
  *          keys and stacked silently on the same tile.
  */
 export const SIM_VERSION_V13_INVARIANT_FIXES = 13 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V13_INVARIANT_FIXES;
+/**
+ * v14 — S0a bug-fix bundle (issues #119, #120). Two simultaneous sim fixes
+ * gated together so pre-v14 saves replay byte-identically with the original
+ * behaviour:
+ *
+ *   #119 — Pheromone trail tuning. `PHEROMONE_DECAY_FP` drops 5→2 (trails
+ *          persist ~2.5× longer). `FOOD_TRAIL_DEPOSIT` doubles 512→1024 (each
+ *          carrier step lays a stronger trail). Together they fix the
+ *          "pheromone highways disappear seconds after foragers reach food"
+ *          symptom. `PHEROMONE_VISUAL_MAX` drops 2048→512 (renderer-only,
+ *          not gated — always at the new value).
+ *
+ *   #120 — Underground CarryingFood forager oscillation / FoodStorage
+ *          chamber pile-up. Extends the surface SearchingFood recent-tiles
+ *          ring buffer guard (introduced in v6) to underground
+ *          Foraging+CarryingFood ants. When a proposed step lands on a tile
+ *          in the ant's ring buffer, the picker scans 4-connected cardinal
+ *          alternates for a non-recent passable tile; if none exists, the
+ *          ant pauses for one tick. The ring buffer is pushed on every
+ *          actual tile crossing (not on pause ticks) and cleared on full
+ *          deposit (same as the surface path).
+ */
+export const SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX = 14 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX;
 
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick

@@ -139,14 +139,15 @@ describe('drawPheromoneOverlay — FoodTrail grid', () => {
 
   beforeEach(() => {
     gfx = new MockGfx();
-    // 4×1 row: values [0, 512, 1024, 2048]
+    // 4×1 row: values at [0, ¼, ½, full] of PHEROMONE_VISUAL_MAX so the
+    // ramp test sees strictly increasing alpha regardless of what VISUAL_MAX is.
     world = makeWorldWithFoodGrid(4, 1);
     const key = pheromoneGridKey(PLAYER_COLONY_ID, PheromoneType.FoodTrail, 'surface');
     const grid = world.pheromoneGrids[key]!;
-    phSet(grid, 0, 0, 0);    // skip
-    phSet(grid, 1, 0, 512);
-    phSet(grid, 2, 0, 1024);
-    phSet(grid, 3, 0, 2048);
+    phSet(grid, 0, 0, 0);
+    phSet(grid, 1, 0, PHEROMONE_VISUAL_MAX >> 2);   // ¼ → normalized 0.25
+    phSet(grid, 2, 0, PHEROMONE_VISUAL_MAX >> 1);   // ½ → normalized 0.5
+    phSet(grid, 3, 0, PHEROMONE_VISUAL_MAX);         // full → normalized 1.0
   });
 
   it('produces exactly 3 fillRect calls (skips the zero tile)', () => {
@@ -168,11 +169,11 @@ describe('drawPheromoneOverlay — FoodTrail grid', () => {
     expect(alphas[1]).toBeLessThan(alphas[2]!);
   });
 
-  it('color at value=512 is between faint and strong (not equal to either endpoint)', () => {
+  it('color at ¼-scale value (PHEROMONE_VISUAL_MAX >> 2) is between faint and strong (not equal to either endpoint)', () => {
     const cam = makeCamera(2, 0.5, 4, 1);
     drawPheromoneOverlay(gfx, world, cam, 'surface');
     const styles = gfx.callsOf('fillStyle');
-    // First non-zero tile (tx=1, value=512) → normalized=0.25
+    // First non-zero tile (tx=1, value = PHEROMONE_VISUAL_MAX >> 2 = 128) → normalized=0.25
     const color = styles[0]!.args[0] as number;
     expect(color).not.toBe(COLOR_PHEROMONE_FOOD_FAINT);
     expect(color).not.toBe(COLOR_PHEROMONE_FOOD_STRONG);

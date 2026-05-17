@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
-import { createWorldState, allocateEntityId } from './types.js';
+import { createWorldState, allocateEntityId, SIM_VERSION_V13_INVARIANT_FIXES } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import { createPheromoneGrid, phGet, pheromoneGridKey } from './pheromone/pheromone-store.js';
@@ -800,4 +800,28 @@ describe('Phase 09.1 Chunk 4 — cross-grid combat parity (REQ-C4c)', () => {
     }
     expect(serializeWorldState(worldA)).toBe(serializeWorldState(worldB));
   }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// S0a: V13 replay determinism under V14 code (Q5 — Format A.2)
+//
+// Regression guard: V14 sim-version gates must not perturb worlds that carry
+// simVersion=SIM_VERSION_V13_INVARIANT_FIXES. Two independent V13 worlds run
+// from the same seed must produce byte-identical state at tick 100.
+// ---------------------------------------------------------------------------
+
+describe('SCEN-06: V13 replay determinism under V14 code', () => {
+  it('V13 world replays byte-identical across two independent 100-tick runs', () => {
+    const TICKS = 100;
+
+    const worldA = createScenario(42);
+    worldA.simVersion = SIM_VERSION_V13_INVARIANT_FIXES;
+    for (let t = 0; t < TICKS; t++) tick(worldA, []);
+
+    const worldB = createScenario(42);
+    worldB.simVersion = SIM_VERSION_V13_INVARIANT_FIXES;
+    for (let t = 0; t < TICKS; t++) tick(worldB, []);
+
+    expect(serializeWorldState(worldA)).toBe(serializeWorldState(worldB));
+  });
 });

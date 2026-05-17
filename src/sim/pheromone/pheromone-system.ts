@@ -20,6 +20,8 @@ import {
   PHEROMONE_FLOOR,
   EXPLORE_RATE_PERCENT,
 } from '../constants.js';
+// PHEROMONE_FLOOR is the default floor used in tickPheromoneDecay's signature.
+// Callers may pass PHEROMONE_FLOOR_V14 for V14+ food-trail grids.
 
 // ---------------------------------------------------------------------------
 // Direction table — fixed order: up, down, left, right (PRD §5d)
@@ -45,10 +47,19 @@ const DIRS = [
  *
  * Coordinates are already tile integers (posX >> FP_SHIFT at the call site).
  * Out-of-bounds coordinates are silently ignored (phSet is a no-op out of bounds).
+ *
+ * @param depositAmount  Amount to add per call. Defaults to FOOD_TRAIL_DEPOSIT
+ *   (legacy / V13 value = 512). Pass FOOD_TRAIL_DEPOSIT_V14 (1024) for V14+
+ *   worlds — the caller (tickPheromoneDeposit) applies the version gate.
  */
-export function depositFoodTrail(grid: PheromoneGrid, tileX: number, tileY: number): void {
+export function depositFoodTrail(
+  grid: PheromoneGrid,
+  tileX: number,
+  tileY: number,
+  depositAmount: number = FOOD_TRAIL_DEPOSIT,
+): void {
   const current = phGet(grid, tileX, tileY);
-  const sum = current + FOOD_TRAIL_DEPOSIT;
+  const sum = current + depositAmount;
   phSet(grid, tileX, tileY, sum > PHEROMONE_CAP ? PHEROMONE_CAP : sum);
 }
 
@@ -78,7 +89,7 @@ export function depositDanger(grid: PheromoneGrid, tileX: number, tileY: number)
  *
  * Per-cell operation (PRD §5c):
  *   decayed = s - ((s * decayFp) >> FP_SHIFT)
- *   if decayed < PHEROMONE_FLOOR → snap to 0 (prevents zombie trails; PRD §5c normative)
+ *   if decayed < floor → snap to 0 (prevents zombie trails; PRD §5c normative)
  *
  * PHER-07 invariant: cost is O(grid.data.length) — independent of ant count.
  * The early continue on s === 0 is a mandatory fast path (PRD §5c).
@@ -90,15 +101,23 @@ export function depositDanger(grid: PheromoneGrid, tileX: number, tileY: number)
  * @param grid     The pheromone grid to decay in-place.
  * @param decayFp  Fixed-point decay rate (e.g., PHEROMONE_DECAY_FP = 5 means
  *                 ~1.95% decay per tick: 5/256 ≈ 0.0195).
+ * @param floor    Minimum value before snap-to-zero. Defaults to
+ *                 PHEROMONE_FLOOR (64). Pass PHEROMONE_FLOOR_V14 (128) for
+ *                 V14+ food-trail grids to prevent the integer-arithmetic
+ *                 stall that occurs when decayFp=2 and s < 128.
  */
-export function tickPheromoneDecay(grid: PheromoneGrid, decayFp: number): void {
+export function tickPheromoneDecay(
+  grid: PheromoneGrid,
+  decayFp: number,
+  floor: number = PHEROMONE_FLOOR,
+): void {
   const data = grid.data;
   const len = data.length;
   for (let i = 0; i < len; i++) {
     const s = data[i]!;
     if (s === 0) continue;
     const decayed = s - ((s * decayFp) >> FP_SHIFT);
-    data[i] = decayed < PHEROMONE_FLOOR ? 0 : decayed;
+    data[i] = decayed < floor ? 0 : decayed;
   }
 }
 
@@ -206,10 +225,14 @@ export function sampleGradient(
 
 /**
  * Pheromone strength at which a single 4-neighbor cell counts as a "strong"
- * trail worth following without random-explore interference. FOOD_TRAIL_DEPOSIT
- * is 512 and decay is ~2%/tick; 128 (FP_ONE/2) corresponds to a trail cell
- * that's been decaying for ~70 ticks since its last deposit. Below this, the
- * trail is fading and exploration resumes its 10% share.
+ * trail worth following without random-explore interference. Under V13 constants
+ * (FOOD_TRAIL_DEPOSIT=512, decayFp=5), 128 corresponds to ~70 ticks of decay.
+ * Under V14 constants (FOOD_TRAIL_DEPOSIT_V14=1024, PHEROMONE_DECAY_FP_V14=2),
+ * a single 1024-unit deposit decays to 128 in ~260 ticks — the strong-trail
+ * window is ~3.7× longer, suppressing random exploration for more ticks before
+ * a route fades. This is intentional under V14: active routes stay exploited
+ * while any carrier is walking them. Below this threshold, the trail is fading
+ * and exploration resumes its 10% share.
  */
 const TRAIL_STRONG_THRESHOLD = 128;
 

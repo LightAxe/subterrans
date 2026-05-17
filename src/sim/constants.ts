@@ -115,8 +115,18 @@ export const WORKER_BASE_SPEED = 128; // 0.5 × FP_ONE
 // Pheromone parameters (PRD §9c / §5)
 // ---------------------------------------------------------------------------
 
-/** PRD §9c — Fixed-point decay rate applied to food-trail pheromone per tick. */
+/**
+ * PRD §9c — Fixed-point decay rate applied to food-trail pheromone per tick.
+ * Legacy value (v13 and earlier). 5 / 256 ≈ 1.95% per tick; half-life ~35 ticks.
+ */
 export const PHEROMONE_DECAY_FP = 5;
+
+/**
+ * S0a / issue #119 — V14 food-trail decay rate. 2 / 256 ≈ 0.78% per tick;
+ * mathematical half-life ≈ 88 ticks. Trails persist ~2.5× longer than legacy.
+ * Used when world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX.
+ */
+export const PHEROMONE_DECAY_FP_V14 = 2;
 
 /** PRD §9c — Fixed-point decay rate applied to danger-trail pheromone per tick. */
 export const DANGER_DECAY_FP = 10;
@@ -124,11 +134,32 @@ export const DANGER_DECAY_FP = 10;
 /** PRD §9c — Minimum pheromone value before cell resets to 0 (floor). */
 export const PHEROMONE_FLOOR = 64;
 
+/**
+ * S0a / issue #119 — V14 pheromone floor. Raised to 128 to match the integer-
+ * arithmetic stall point of PHEROMONE_DECAY_FP_V14=2: for s < 128,
+ * `(s * 2) >> 8 = 0`, so decay rounds to zero. Without this floor bump the
+ * trail would stall at ~127 forever under V14 constants, creating zombie
+ * trails. With floor=128, any value that has decayed below 128 snaps to 0
+ * immediately on the next decay tick (since `decayed < 128 → snap`).
+ * Used when world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX.
+ */
+export const PHEROMONE_FLOOR_V14 = 128;
+
 /** PRD §9c — Maximum pheromone value a cell can hold (cap). */
 export const PHEROMONE_CAP = 65280;
 
-/** PRD §9c — Food-trail pheromone deposited per forager step. 512 = 2 × FP_ONE. */
+/**
+ * PRD §9c — Food-trail pheromone deposited per forager step. Legacy value
+ * (v13 and earlier). 512 = 2 × FP_ONE.
+ */
 export const FOOD_TRAIL_DEPOSIT = 512; // 2 × FP_ONE
+
+/**
+ * S0a / issue #119 — V14 food-trail deposit per forager step. 1024 = 4 × FP_ONE;
+ * doubles the trail strength per step vs legacy. Used when
+ * world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX.
+ */
+export const FOOD_TRAIL_DEPOSIT_V14 = 1024; // 4 × FP_ONE
 
 /** PRD §9c — Percentage of ants that choose random explore over pheromone gradient. */
 export const EXPLORE_RATE_PERCENT = 10;
