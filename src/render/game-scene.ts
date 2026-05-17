@@ -652,6 +652,12 @@ export class GameScene extends Phaser.Scene {
     const outcome = this.currentOutcome;
     // Capture seed now — retryGame() needs it but resetSessionState runs first.
     const retrySeed = this.currentSeed;
+    // Issue #131 — when opened from the pause menu's "Quit & feedback" action,
+    // dismiss the pause menu before the survey appears so it doesn't ghost
+    // beneath the survey and persist after onNewGame / onRetry restart the game.
+    if (quitFromPauseMenu) {
+      uiScene.hidePauseMenuOverlay();
+    }
     uiScene.showSurveyOverlay({
       quitFromPauseMenu,
       onSubmit: (survey) => {

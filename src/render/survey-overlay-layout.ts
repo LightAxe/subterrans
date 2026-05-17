@@ -183,8 +183,6 @@ export type SurveyHitTarget =
   | { kind: 'submit' }
   | { kind: 'skip' }
   | { kind: 'free-text' }
-  | { kind: 'new-game' }
-  | { kind: 'retry' }
   | null;
 
 /** Topmost interactive element under the pointer, or null on background.

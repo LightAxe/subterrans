@@ -2021,11 +2021,6 @@ export class UIScene extends Phaser.Scene {
         this.renderSurveyOverlay();
         return;
       }
-      // 'new-game' and 'retry' are confirmation-screen targets; unreachable
-      // here since the confirmation branch above returns early.
-      case 'new-game':
-      case 'retry':
-        return;
     }
   }
 }
