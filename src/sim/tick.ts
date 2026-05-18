@@ -1135,36 +1135,6 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     }
   }
 
-  // Step 10e: spider scatter (S3) — redirect surface non-fighters within
-  // SPIDER_SCATTER_RADIUS_TILES of scatterReticleTile away from the reticle.
-  // Uses the shadow field written by tickSpider at step 17.5 the prior tick.
-  if (world.simVersion >= SIM_VERSION_V18_SPIDER && world.scatterReticleTile !== null) {
-    const rx = world.scatterReticleTile.x;
-    const ry = world.scatterReticleTile.y;
-    const r = SPIDER_SCATTER_RADIUS_TILES;
-    const { ants } = world;
-    for (let sid = 0; sid < ants.alive.length; sid++) {
-      if (ants.alive[sid] !== 1) continue;
-      if (ants.zone[sid] !== 0) continue; // surface only
-      if (ants.task[sid] === AntTask.Fighting) continue; // fighters hold ground
-      const ax = ants.posX[sid]! >> FP_SHIFT;
-      const ay = ants.posY[sid]! >> FP_SHIFT;
-      const manhDist = (ax > rx ? ax - rx : rx - ax) + (ay > ry ? ay - ry : ry - ay);
-      if (manhDist > r) continue;
-      // Push ant away from reticle: target = ant_tile + (ant_tile - reticle_tile).
-      // Special case: ant exactly on reticle tile → push north (deterministic).
-      let tx = ax + (ax - rx);
-      // Exact on-reticle: push north if possible, south otherwise (edge guard).
-      let ty = (ay === ry && ax === rx) ? (ay > 0 ? ay - 1 : ay + 1) : ay + (ay - ry);
-      if (tx < 0) tx = 0;
-      if (tx >= SURFACE_GRID_WIDTH) tx = SURFACE_GRID_WIDTH - 1;
-      if (ty < 0) ty = 0;
-      if (ty >= SURFACE_GRID_HEIGHT) ty = SURFACE_GRID_HEIGHT - 1;
-      ants.targetPosX[sid] = (tx << FP_SHIFT) + (FP_ONE >> 1);
-      ants.targetPosY[sid] = (ty << FP_SHIFT) + (FP_ONE >> 1);
-    }
-  }
-
   // ---------------------------------------------------------------------------
   // Step 11: checkPendingChambers (NEW in Phase 7)
   //   Promote fully-excavated PendingChambers to ChamberRecords.
@@ -1184,6 +1154,37 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   //   Route SearchingFood foragers to marked food piles (priority targeting).
   // ---------------------------------------------------------------------------
   routeForagerPriority(world);
+
+  // Step 13e: spider scatter (S3) — redirect surface non-fighters within
+  // SPIDER_SCATTER_RADIUS_TILES of scatterReticleTile away from the reticle.
+  // Runs AFTER routeForagerPriority (step 13) so scatter takes precedence over
+  // food-pile priority targeting for workers on the threatened tile.
+  // Uses the shadow field written by tickSpider at step 17.5 the prior tick.
+  if (world.simVersion >= SIM_VERSION_V18_SPIDER && world.scatterReticleTile !== null) {
+    const rx = world.scatterReticleTile.x;
+    const ry = world.scatterReticleTile.y;
+    const r = SPIDER_SCATTER_RADIUS_TILES;
+    const { ants } = world;
+    for (let sid = 0; sid < ants.alive.length; sid++) {
+      if (ants.alive[sid] !== 1) continue;
+      if (ants.zone[sid] !== 0) continue; // surface only
+      if (ants.task[sid] === AntTask.Fighting) continue; // fighters hold ground
+      const ax = ants.posX[sid]! >> FP_SHIFT;
+      const ay = ants.posY[sid]! >> FP_SHIFT;
+      const manhDist = (ax > rx ? ax - rx : rx - ax) + (ay > ry ? ay - ry : ry - ay);
+      if (manhDist > r) continue;
+      // Push ant away from reticle: target = ant_tile + (ant_tile - reticle_tile).
+      let tx = ax + (ax - rx);
+      // Exact on-reticle: push north if possible, south otherwise (edge guard).
+      let ty = (ay === ry && ax === rx) ? (ay > 0 ? ay - 1 : ay + 1) : ay + (ay - ry);
+      if (tx < 0) tx = 0;
+      if (tx >= SURFACE_GRID_WIDTH) tx = SURFACE_GRID_WIDTH - 1;
+      if (ty < 0) ty = 0;
+      if (ty >= SURFACE_GRID_HEIGHT) ty = SURFACE_GRID_HEIGHT - 1;
+      ants.targetPosX[sid] = (tx << FP_SHIFT) + (FP_ONE >> 1);
+      ants.targetPosY[sid] = (ty << FP_SHIFT) + (FP_ONE >> 1);
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Step 14: Pheromone deposit (per-ant — carry-only rule enforced inside tickPheromoneDeposit)

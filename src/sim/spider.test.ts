@@ -41,6 +41,7 @@ function makeSpider(overrides: Partial<SpiderState> = {}): SpiderState {
     strikeStartTick: 0,
     feedingStartTick: 0,
     retreatStartTick: 0,
+    rampageStartTick: 0,
     huntTargetTileX: -1,
     huntTargetTileY: -1,
     killsThisStrike: 0,
