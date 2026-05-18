@@ -653,10 +653,14 @@ export class GameScene extends Phaser.Scene {
     // Capture seed now — retryGame() needs it but resetSessionState runs first.
     const retrySeed = this.currentSeed;
     // Issue #131 — when opened from the pause menu's "Quit & feedback" action,
-    // dismiss the pause menu before the survey appears so it doesn't ghost
-    // beneath the survey and persist after onNewGame / onRetry restart the game.
+    // dismiss the pause menu and transition to GameOver. GameOver is the
+    // correct semantic state: the player has quit, the loop is already paused,
+    // and the survey/confirmation overlay is functionally equivalent to a
+    // game-over overlay. This also enables the GameOver keyboard-suppression
+    // guard (issue #129) so WASD/Space don't fire under the survey here either.
     if (quitFromPauseMenu) {
       uiScene.hidePauseMenuOverlay();
+      this.gamePhase = GamePhase.GameOver;
     }
     uiScene.showSurveyOverlay({
       quitFromPauseMenu,
