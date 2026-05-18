@@ -437,9 +437,9 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   // droppedCombatKillCount / droppedStructuralCount are also telemetry-only.
   dst.droppedCombatKillCount = src.droppedCombatKillCount;
   dst.droppedStructuralCount = src.droppedStructuralCount;
-  // S1 — pendingQueenDeathContexts is transient (cleared each tick); copy
-  // so the render double-buffer does not observe stale mid-tick contexts.
-  dst.pendingQueenDeathContexts = src.pendingQueenDeathContexts.slice();
+  // pendingQueenDeathContexts: transient within-tick (cleared by checkQueenDeath every tick,
+  // always null at the tick boundary when copyWorldState runs). No render code reads it,
+  // so no copy is needed and the allocation is skipped to preserve zero-alloc steady state.
 
   // --- AntComponents: 19 TypedArray.set calls (zero allocation) ---
   dst.ants.posX.set(src.ants.posX);
