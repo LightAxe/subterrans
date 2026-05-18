@@ -1001,7 +1001,7 @@ function deserializeAIStateArray(s: SerializedWorldState, simVersion: number): A
       operationTargetTileX: typeof r.operationTargetTileX === 'number' ? r.operationTargetTileX : -1,
       operationTargetTileY: typeof r.operationTargetTileY === 'number' ? r.operationTargetTileY : -1,
       operationFighterIds: buf,
-      operationFighterCount: typeof r.operationFighterCount === 'number' ? r.operationFighterCount : 0,
+      operationFighterCount: typeof r.operationFighterCount === 'number' ? Math.min(Math.max(0, r.operationFighterCount), AI_MAX_OPERATION_FIGHTERS) : 0,
       operationStartFighterCount: typeof r.operationStartFighterCount === 'number' ? r.operationStartFighterCount : 0,
       operationAttackerDeaths: typeof r.operationAttackerDeaths === 'number' ? r.operationAttackerDeaths : 0,
       operationDefenderDeaths: typeof r.operationDefenderDeaths === 'number' ? r.operationDefenderDeaths : 0,
