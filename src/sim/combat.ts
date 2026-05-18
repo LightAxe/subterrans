@@ -187,12 +187,23 @@ function resolveCombatOnTile_v16(world: WorldState, _tileKey: number, participan
   if (aNew || bNew) {
     ants.attackCooldown[antA] = COMBAT_COOLDOWN_TICKS;
     ants.attackCooldown[antB] = COMBAT_COOLDOWN_TICKS;
-    // Always recompute homeGroundBonusHp for both ants when windup fires. This prevents
-    // stale bonus HP from prior engagements carrying into off-home fights (Codex P1).
+    // New ants get a fresh bonus based on their current position. Veteran ants
+    // (forced into re-windup because their opponent is new) keep their depleted bonus
+    // if still on home ground; it's zeroed if they've since moved off home ground.
+    // This prevents both unintended healing (bonus restored on replacement) and
+    // stale bonus (bonus persists after leaving home ground).
     const aOnHome = ants.zone[antA] === 1 && ants.currentGridColonyId[antA] === ants.colonyId[antA]!;
-    ants.homeGroundBonusHp[antA] = aOnHome ? COMBAT_HP_HOMEGROUND_BONUS : 0;
     const bOnHome = ants.zone[antB] === 1 && ants.currentGridColonyId[antB] === ants.colonyId[antB]!;
-    ants.homeGroundBonusHp[antB] = bOnHome ? COMBAT_HP_HOMEGROUND_BONUS : 0;
+    if (aNew) {
+      ants.homeGroundBonusHp[antA] = aOnHome ? COMBAT_HP_HOMEGROUND_BONUS : 0;
+    } else if (!aOnHome) {
+      ants.homeGroundBonusHp[antA] = 0;
+    }
+    if (bNew) {
+      ants.homeGroundBonusHp[antB] = bOnHome ? COMBAT_HP_HOMEGROUND_BONUS : 0;
+    } else if (!bOnHome) {
+      ants.homeGroundBonusHp[antB] = 0;
+    }
     return;
   }
 
@@ -231,10 +242,11 @@ function resolveCombatOnTile_v16(world: WorldState, _tileKey: number, participan
   if (bDies) killAnt(world, antB, cidA as ColonyId, antA, 'Ant');
   if (aDies) killAnt(world, antA, cidB as ColonyId, antB, 'Ant');
 
-  // Clear cooldowns for survivors so they wind up fresh in their next engagement.
-  // This also re-enables the home-ground HP buffer check on the next windup tick.
-  if (bDies && !aDies) ants.attackCooldown[antA] = 0;
-  if (aDies && !bDies) ants.attackCooldown[antB] = 0;
+  // After a kill, survivors retain their current cooldown (set to COMBAT_COOLDOWN_TICKS
+  // above on their strike tick). When a new opponent joins on the next tick, the
+  // "reset both when either is new" rule synchronizes their cooldowns — no separate
+  // reset needed here. Zeroing cooldown here would falsely mark the survivor as "new"
+  // on the next tick, which would reset their home-ground bonus (unintended healing).
 }
 
 // ---------------------------------------------------------------------------
