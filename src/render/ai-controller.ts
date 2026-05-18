@@ -607,7 +607,7 @@ function aiProbeTick(world: WorldState, aiColonyId: ColonyId): void {
 
 /**
  * aiInvasionTick — runs while state === Invading.
- * Q4: if entering Invading (invasionStartTick === world.tick), pick entrance and commit fighters.
+ * Q4: pick entrance and commit fighters on entry (or retry if entrance was unavailable).
  * Re-emit rally if needed.
  */
 function aiInvasionTick(world: WorldState, aiColonyId: ColonyId): void {
@@ -617,9 +617,9 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId): void {
   }
   if (aiState === null) return;
 
-  // On invasion entry tick: commit fighters and select target entrance.
-  if (aiState.invasionStartTick === world.tick && aiState.operationKind === 'None') {
-    // Select target entrance (Q4): player entrance closest to last probe target.
+  // Commit fighters and select target entrance.
+  // Retry every tick while operationKind is None — entrance may be unavailable on entry tick.
+  if (aiState.operationKind === 'None') {
     const targetEntrance = _selectInvasionEntrance(world, aiState);
     if (targetEntrance === null) return;
 

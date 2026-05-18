@@ -43,7 +43,8 @@ export type SimEvent =
         to: AIState;
         triggerValues: {
           aiFighterCount: number;
-          aiFoodStorageFrac100: number;
+          aiFoodStored: number;
+          aiFoodCap: number;
           playerWorkerCount: number;
         };
       };
