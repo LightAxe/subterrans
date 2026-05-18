@@ -1643,6 +1643,16 @@ export class UIScene extends Phaser.Scene {
     this.surveyGroup = [];
 
     if (this.surveyState.showConfirmation) {
+      // Tear down the DOM textarea before the confirmation screen replaces the
+      // form — it is not part of surveyGroup and must be removed explicitly.
+      if (this.surveyTextarea !== null) {
+        this.surveyTextarea.remove();
+        this.surveyTextarea = null;
+      }
+      if (this.surveyResizeHandler !== null && typeof window !== 'undefined') {
+        window.removeEventListener('resize', this.surveyResizeHandler);
+        this.surveyResizeHandler = null;
+      }
       this.renderSurveyConfirmation();
       return;
     }
@@ -1886,6 +1896,12 @@ export class UIScene extends Phaser.Scene {
       ta.style.resize = 'none';
       ta.addEventListener('input', () => {
         this.surveyState.freeText = truncateFreeText(ta.value);
+      });
+      ta.addEventListener('focus', () => {
+        this.input.keyboard?.removeCapture('SPACE');
+      });
+      ta.addEventListener('blur', () => {
+        this.input.keyboard?.addCapture('SPACE');
       });
       // Append to the canvas's parent so embedded-in-shadow-DOM hosts
       // (the library-mode embed on the website may eventually mount
