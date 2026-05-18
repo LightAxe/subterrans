@@ -272,7 +272,7 @@ export class GameScene extends Phaser.Scene {
     this.input.mouse!.disableContextMenu();
 
     // Drag-pan registration — returns dragState ref for processCameraInput
-    this.dragState = registerDragPan(this, this.viewState);
+    this.dragState = registerDragPan(this, this.viewState, () => this.gamePhase === GamePhase.GameOver);
 
     // Issue #116 — Esc opens the pause menu overlay (which also pauses the
     // sim). The Esc keybinding itself lives in UIScene (which already owned
@@ -563,6 +563,11 @@ export class GameScene extends Phaser.Scene {
         this.gamePhase = GamePhase.GameOver;
         // W2: first-class pause via Plan 06 Task 1 API — no setMsPerTick(Infinity)
         this.gameLoop.pause();
+        // Issue #129 — clear any in-flight pan/drag so spaceHeld and dragState.active
+        // don't leak into the GameOver overlay state (drag-pan event handlers are
+        // independent of processCameraInput and otherwise fire unguarded).
+        resetPanInputState();
+        resetDragState(this.dragState);
         const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
         // Issue #122 — when the playtrace feature is enabled, the survey
         // overlay replaces the bare game-over panel at end-of-game. Skip
@@ -812,8 +817,17 @@ export class GameScene extends Phaser.Scene {
     // SavePrompt phase: overlay handles input; no tick updates expected.
     if (this.gamePhase === GamePhase.SavePrompt) return;
 
+    // Issue #129 — suppress keyboard input while the GameOver overlay (survey or
+    // game-over panel) is visible. WASD/Space/Tab fire through to the world
+    // beneath the modal otherwise, which the player can feel even though the
+    // canvas is obscured. Tab and processCameraInput are the two per-frame
+    // keyboard consumers; both are skipped in GameOver. The Paused phase is
+    // intentionally left untouched: the pause menu is not full-screen and
+    // panning while paused is expected behaviour.
+    const keyboardActive = this.gamePhase !== GamePhase.GameOver;
+
     // Tab toggles view (JustDown handles key-press edge, not held).
-    if (Phaser.Input.Keyboard.JustDown(this.tabKey)) {
+    if (keyboardActive && Phaser.Input.Keyboard.JustDown(this.tabKey)) {
       toggleView(this.viewState);
     }
 
@@ -827,11 +841,13 @@ export class GameScene extends Phaser.Scene {
     this.gameLoop.update(delta);
 
     // Apply keyboard-pan + final clamp.
-    processCameraInput(this.viewState, {
-      cursors: this.cursors,
-      wasd: this.wasd,
-      dragState: this.dragState,
-    });
+    if (keyboardActive) {
+      processCameraInput(this.viewState, {
+        cursors: this.cursors,
+        wasd: this.wasd,
+        dragState: this.dragState,
+      });
+    }
 
     const cam = this.viewState.activeView === 'surface' ? this.viewState.surfaceCamera : this.viewState.undergroundCamera;
     const worldW = this.viewState.activeView === 'surface' ? SURFACE_GRID_WIDTH : UNDERGROUND_GRID_WIDTH;
