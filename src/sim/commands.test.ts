@@ -199,9 +199,9 @@ describe('SimCommand', () => {
   });
 
   describe('discriminated union type narrowing', () => {
-    it('9-variant exhaustive switch: all variants handled, default never arm compiles', () => {
+    it('10-variant exhaustive switch: all variants handled, default never arm compiles', () => {
       // This function's type correctness is validated by TypeScript at compile time.
-      // The runtime test verifies the discriminant values are correct for all 9 variants.
+      // The runtime test verifies the discriminant values are correct for all 10 variants.
       function handleCommand(cmd: SimCommand): string {
         switch (cmd.type) {
           case 'NoOp':
@@ -222,6 +222,8 @@ describe('SimCommand', () => {
             return `rally:${cmd.colonyId}:${cmd.tileX},${cmd.tileY}`;
           case 'ClearRallyPoint':
             return `clearrally:${cmd.colonyId}`;
+          case 'SyncAIState':
+            return `syncai:${cmd.colonyId}:${cmd.state}`;
           default: {
             // Exhaustive check — TypeScript will error here if a variant is unhandled
             const _exhaustive: never = cmd;
@@ -239,6 +241,14 @@ describe('SimCommand', () => {
       expect(handleCommand({ type: 'DesignateEntrance', colonyId: 1, surfaceTileX: 20, surfaceTileY: 64, issuedAtTick: 6 })).toBe('entrance:20,64');
       expect(handleCommand({ type: 'SetRallyPoint', colonyId: 1, tileX: 10, tileY: 20, issuedAtTick: 7 })).toBe('rally:1:10,20');
       expect(handleCommand({ type: 'ClearRallyPoint', colonyId: 1, issuedAtTick: 8 })).toBe('clearrally:1');
+      expect(handleCommand({
+        type: 'SyncAIState', colonyId: 2, issuedAtTick: 9, state: 'WarFooting',
+        enteredTick: 2400, probeCount: 0, lastProbeEndTick: 0, invasionStartTick: 0,
+        invasionRallyTileX: -1, invasionRallyTileY: -1, recoveryEndTick: 0,
+        operationKind: 'None', operationStartTick: 0, operationTargetTileX: -1,
+        operationTargetTileY: -1, operationFighterIds: [], operationFighterCount: 0,
+        operationStartFighterCount: 0, operationAttackerDeaths: 0, operationDefenderDeaths: 0,
+      })).toBe('syncai:2:WarFooting');
     });
   });
 

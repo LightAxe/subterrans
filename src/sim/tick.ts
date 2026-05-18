@@ -645,8 +645,32 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         colony.rallyPoint = null;
         break;
       }
+      case 'SyncAIState': {
+        // S2 / V17 — apply AI state snapshot so replay paths (snapshot analyzer)
+        // that skip runAIController produce bit-identical world.aiState.
+        let rec = world.aiState.find((r) => r.colonyId === cmd.colonyId);
+        if (rec === undefined) break;
+        rec.state = cmd.state;
+        rec.enteredTick = cmd.enteredTick;
+        rec.probeCount = cmd.probeCount;
+        rec.lastProbeEndTick = cmd.lastProbeEndTick;
+        rec.invasionStartTick = cmd.invasionStartTick;
+        rec.invasionRallyTileX = cmd.invasionRallyTileX;
+        rec.invasionRallyTileY = cmd.invasionRallyTileY;
+        rec.recoveryEndTick = cmd.recoveryEndTick;
+        rec.operationKind = cmd.operationKind;
+        rec.operationStartTick = cmd.operationStartTick;
+        rec.operationTargetTileX = cmd.operationTargetTileX;
+        rec.operationTargetTileY = cmd.operationTargetTileY;
+        rec.operationFighterIds.set(cmd.operationFighterIds);
+        rec.operationFighterCount = cmd.operationFighterCount;
+        rec.operationStartFighterCount = cmd.operationStartFighterCount;
+        rec.operationAttackerDeaths = cmd.operationAttackerDeaths;
+        rec.operationDefenderDeaths = cmd.operationDefenderDeaths;
+        break;
+      }
       default: {
-        // Exhaustive narrowing — SimCommand is a 9-variant union (Phase 9 adds SetRallyPoint + ClearRallyPoint).
+        // Exhaustive narrowing — SimCommand is a 10-variant union (S2 adds SyncAIState).
         // Silent-drop unknowns per PRD §5. Do NOT throw, do NOT log (wall-clock-adjacent).
         const _exhaustive: never = cmd;
         void _exhaustive;

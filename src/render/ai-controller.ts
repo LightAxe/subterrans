@@ -4,13 +4,14 @@
 // The simulation has ONE code path for all colonies; AI differentiates at the CALLER
 // (GameScene's onBeforeTick calls runAIController only for non-player colonyIds).
 
-import type { WorldState } from '../sim/types.js';
+import type { WorldState, AIStateRecord } from '../sim/types.js';
 import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
 import type {
   MarkDigTileCommand,
   PlaceChamberCommand,
   DesignateEntranceCommand,
   SetBehaviorRatioCommand,
+  SyncAIStateCommand,
 } from '../sim/commands.js';
 import { ChamberType } from '../sim/enums.js';
 import { UndergroundTileState, ugGet } from '../sim/terrain.js';
@@ -145,6 +146,10 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
     }
     // Sync behavior ratio to state.
     _syncBehaviorRatioToAIState(world, aiColonyId, colony);
+
+    // Push SyncAIState so the snapshot-analyzer replay path (which calls tick() only,
+    // never runAIController) can reproduce world.aiState bit-identically.
+    _pushSyncAIState(world, aiColonyId);
   }
 
   aiDigHeuristic(world, colony);
@@ -537,6 +542,35 @@ const AI_STATE_RATIOS: Record<string, { forage: number; fight: number }> = {
   Invading:   { forage: 2, fight: 8 },
   Recovery:   { forage: 6, fight: 4 },
 };
+
+/** Push a SyncAIState command so replay-only paths reproduce world.aiState bit-identically. */
+function _pushSyncAIState(world: WorldState, aiColonyId: ColonyId): void {
+  const rec = world.aiState.find((r) => r.colonyId === aiColonyId);
+  if (rec === undefined) return;
+  const cmd: SyncAIStateCommand = {
+    type: 'SyncAIState',
+    colonyId: aiColonyId,
+    issuedAtTick: world.tick,
+    state: rec.state,
+    enteredTick: rec.enteredTick,
+    probeCount: rec.probeCount,
+    lastProbeEndTick: rec.lastProbeEndTick,
+    invasionStartTick: rec.invasionStartTick,
+    invasionRallyTileX: rec.invasionRallyTileX,
+    invasionRallyTileY: rec.invasionRallyTileY,
+    recoveryEndTick: rec.recoveryEndTick,
+    operationKind: rec.operationKind,
+    operationStartTick: rec.operationStartTick,
+    operationTargetTileX: rec.operationTargetTileX,
+    operationTargetTileY: rec.operationTargetTileY,
+    operationFighterIds: Array.from(rec.operationFighterIds),
+    operationFighterCount: rec.operationFighterCount,
+    operationStartFighterCount: rec.operationStartFighterCount,
+    operationAttackerDeaths: rec.operationAttackerDeaths,
+    operationDefenderDeaths: rec.operationDefenderDeaths,
+  };
+  world.commandQueue.push(cmd);
+}
 
 /** Sync the AI colony behavior ratio to its current state. */
 function _syncBehaviorRatioToAIState(
