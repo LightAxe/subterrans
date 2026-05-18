@@ -523,7 +523,7 @@ export function tickSpider(world: WorldState): void {
     }
   }
 
-  // --- scatterReticleTile shadow field: written at end for next tick's step 16 ---
+  // --- scatterReticleTile shadow field: written at end for next tick's step 10e ---
   if (spider.state === 'Hunting' || spider.state === 'Striking') {
     if (world.scatterReticleTile === null) {
       world.scatterReticleTile = { x: spider.huntTargetTileX, y: spider.huntTargetTileY };

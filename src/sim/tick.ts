@@ -28,6 +28,7 @@ import {
   UNDERGROUND_CEILING_ROW_Y,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
+  SPIDER_SCATTER_RADIUS_TILES,
   PLAYER_COLONY_ID,
 } from './constants.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
@@ -1131,6 +1132,36 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       if (ants.zone[sid] !== 0) continue; // surface only; underground fighters surface first
       ants.targetPosX[sid] = (spTileX << FP_SHIFT) + (FP_ONE >> 1);
       ants.targetPosY[sid] = (spTileY << FP_SHIFT) + (FP_ONE >> 1);
+    }
+  }
+
+  // Step 10e: spider scatter (S3) — redirect surface non-fighters within
+  // SPIDER_SCATTER_RADIUS_TILES of scatterReticleTile away from the reticle.
+  // Uses the shadow field written by tickSpider at step 17.5 the prior tick.
+  if (world.simVersion >= SIM_VERSION_V18_SPIDER && world.scatterReticleTile !== null) {
+    const rx = world.scatterReticleTile.x;
+    const ry = world.scatterReticleTile.y;
+    const r = SPIDER_SCATTER_RADIUS_TILES;
+    const { ants } = world;
+    for (let sid = 0; sid < ants.alive.length; sid++) {
+      if (ants.alive[sid] !== 1) continue;
+      if (ants.zone[sid] !== 0) continue; // surface only
+      if (ants.task[sid] === AntTask.Fighting) continue; // fighters hold ground
+      const ax = ants.posX[sid]! >> FP_SHIFT;
+      const ay = ants.posY[sid]! >> FP_SHIFT;
+      const manhDist = (ax > rx ? ax - rx : rx - ax) + (ay > ry ? ay - ry : ry - ay);
+      if (manhDist > r) continue;
+      // Push ant away from reticle: target = ant_tile + (ant_tile - reticle_tile).
+      // Special case: ant exactly on reticle tile → push north (deterministic).
+      let tx = ax + (ax - rx);
+      // Exact on-reticle: push north if possible, south otherwise (edge guard).
+      let ty = (ay === ry && ax === rx) ? (ay > 0 ? ay - 1 : ay + 1) : ay + (ay - ry);
+      if (tx < 0) tx = 0;
+      if (tx >= SURFACE_GRID_WIDTH) tx = SURFACE_GRID_WIDTH - 1;
+      if (ty < 0) ty = 0;
+      if (ty >= SURFACE_GRID_HEIGHT) ty = SURFACE_GRID_HEIGHT - 1;
+      ants.targetPosX[sid] = (tx << FP_SHIFT) + (FP_ONE >> 1);
+      ants.targetPosY[sid] = (ty << FP_SHIFT) + (FP_ONE >> 1);
     }
   }
 
