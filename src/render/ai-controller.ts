@@ -570,7 +570,7 @@ function aiStateMachineTick_probeEntry(
   aiColonyId: ColonyId,
   _colony: ColonyRecord,
 ): void {
-  const target = _selectProbeTarget(world);
+  const target = _selectProbeTarget(world, aiColonyId);
   if (target === null) return; // no target → don't transition
 
   // Commit the closest 3 alive AI fighters by ascending ant index.
@@ -645,16 +645,16 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId): void {
 }
 
 /** Select probe target (Q3 spec). */
-function _selectProbeTarget(world: WorldState): { tileX: number; tileY: number } | null {
+function _selectProbeTarget(world: WorldState, aiColonyId: ColonyId): { tileX: number; tileY: number } | null {
   // Priority 1: closest player-marked food pile by ascending pile ID for ties.
   const playerColony = world.colonies[PLAYER_COLONY_ID];
   if (playerColony === undefined) return null;
 
   let bestPile: { tileX: number; tileY: number; id: number; dist: number } | null = null;
-  const enemyCol = world.colonies[2]; // ENEMY_COLONY_ID = 2
+  const aiCol = world.colonies[aiColonyId];
   // We need a reference point: AI's entrance or colony start.
-  const aiEntranceX = enemyCol !== undefined && enemyCol.entrances.length > 0
-    ? enemyCol.entrances[0]!.surfaceTileX
+  const aiEntranceX = aiCol !== undefined && aiCol.entrances.length > 0
+    ? aiCol.entrances[0]!.surfaceTileX
     : 104; // ENEMY_START_X fallback
 
   for (const pile of world.foodPiles) {
