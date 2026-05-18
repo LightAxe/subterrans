@@ -120,12 +120,13 @@ export function checkQueenDeath(world: WorldState, playerColonyId?: ColonyId): G
 
   // For GameOutcome: detect based on who JUST died.
   let gameOutcome: GameOutcome = GameOutcome.None;
-  if (playerDied && otherDied) {
+  if (playerDied && otherDied && !anyOtherAlive) {
+    // Player and last enemy queen died in same tick.
     gameOutcome = GameOutcome.MutualDestruction;
   } else if (playerDied) {
     gameOutcome = GameOutcome.Defeat;
-  } else if (otherDied && !anyOtherAlive && !playerDied) {
-    // All enemy colonies dead
+  } else if (otherDied && !anyOtherAlive) {
+    // All enemy colonies dead.
     gameOutcome = GameOutcome.Victory;
   }
 

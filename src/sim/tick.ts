@@ -216,7 +216,35 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // ---------------------------------------------------------------------------
   // Step 1: Process commands (FIFO cap — PRD §5; indexed loop, no allocation)
   //         Extended in Phase 7 with real handlers for all 7 SimCommand variants.
+  // SyncAIState pre-pass: applied before the cap so replay determinism is
+  // preserved even on high-command-count ticks (>64 commands in queue).
   // ---------------------------------------------------------------------------
+  for (let i = 0; i < commands.length; i++) {
+    if (commands[i]!.type === 'SyncAIState') {
+      const sc = commands[i] as import('./commands.js').SyncAIStateCommand;
+      const srec = world.aiState.find((r) => r.colonyId === sc.colonyId);
+      if (srec !== undefined) {
+        srec.state = sc.state;
+        srec.enteredTick = sc.enteredTick;
+        srec.probeCount = sc.probeCount;
+        srec.lastProbeEndTick = sc.lastProbeEndTick;
+        srec.invasionStartTick = sc.invasionStartTick;
+        srec.invasionRallyTileX = sc.invasionRallyTileX;
+        srec.invasionRallyTileY = sc.invasionRallyTileY;
+        srec.recoveryEndTick = sc.recoveryEndTick;
+        srec.operationKind = sc.operationKind;
+        srec.operationStartTick = sc.operationStartTick;
+        srec.operationTargetTileX = sc.operationTargetTileX;
+        srec.operationTargetTileY = sc.operationTargetTileY;
+        srec.operationFighterIds.set(sc.operationFighterIds);
+        srec.operationFighterCount = sc.operationFighterCount;
+        srec.operationStartFighterCount = sc.operationStartFighterCount;
+        srec.operationAttackerDeaths = sc.operationAttackerDeaths;
+        srec.operationDefenderDeaths = sc.operationDefenderDeaths;
+      }
+    }
+  }
+
   const limit = commands.length < MAX_COMMANDS_PER_TICK ? commands.length : MAX_COMMANDS_PER_TICK;
 
   for (let i = 0; i < limit; i++) {
