@@ -224,7 +224,6 @@ export function advanceAIState(world: WorldState, aiColonyId: ColonyId): AIState
     const fighters = aiFighterCount(world, aiColonyId);
     const foodStored = aiFoodStored(world, aiColonyId);
     const foodCap = aiFoodCapacity(world, aiColonyId);
-    const foodFrac100 = foodCap > 0 ? ((foodStored * 100) / foodCap) | 0 : 0;
     emitEvent(world, {
       tick: world.tick,
       type: 'ai_state_transition',
@@ -234,7 +233,8 @@ export function advanceAIState(world: WorldState, aiColonyId: ColonyId): AIState
         to: aiState.state,
         triggerValues: {
           aiFighterCount: fighters,
-          aiFoodStorageFrac100: foodFrac100,
+          aiFoodStored: foodStored,
+          aiFoodCap: foodCap,
           playerWorkerCount: playerWorkerCount(world),
         },
       },
@@ -458,7 +458,6 @@ export function setAIRallyOperation(
     const fighters = aiFighterCount(world, aiColonyId);
     const foodStored = aiFoodStored(world, aiColonyId);
     const foodCap = aiFoodCapacity(world, aiColonyId);
-    const foodFrac100 = foodCap > 0 ? ((foodStored * 100) / foodCap) | 0 : 0;
     emitEvent(world, {
       tick: world.tick,
       type: 'ai_state_transition',
@@ -468,7 +467,8 @@ export function setAIRallyOperation(
         to: 'Probing',
         triggerValues: {
           aiFighterCount: fighters,
-          aiFoodStorageFrac100: foodFrac100,
+          aiFoodStored: foodStored,
+          aiFoodCap: foodCap,
           playerWorkerCount: playerWorkerCount(world),
         },
       },
