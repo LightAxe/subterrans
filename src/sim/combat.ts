@@ -58,6 +58,31 @@ export function detectAndResolveCombat(world: WorldState, rng: Rng): void {
 
   // Deterministic iteration: sort tileKeys ascending.
   const keys = Array.from(bucket.keys()).sort((a, b) => a - b);
+
+  // First pass: collect all ants that are currently on multi-colony contested tiles.
+  // Any live ant NOT in this set has disengaged; its combatOpponentId is stale and
+  // must be cleared so the next encounter triggers a fresh windup (Codex P1 finding).
+  if (world.simVersion >= SIM_VERSION_V16_COMBAT_HPDPS) {
+    const contestedSet = new Set<number>();
+    for (const key of keys) {
+      const participants = bucket.get(key)!;
+      if (participants.length < 2) continue;
+      const firstCid = ants.colonyId[participants[0]!]!;
+      let multiColony = false;
+      for (let j = 1; j < participants.length; j++) {
+        if (ants.colonyId[participants[j]!]! !== firstCid) { multiColony = true; break; }
+      }
+      if (multiColony) {
+        for (const idx of participants) contestedSet.add(idx);
+      }
+    }
+    for (let i = 0; i < count; i++) {
+      if (ants.alive[i] === 1 && !contestedSet.has(i)) {
+        ants.combatOpponentId[i] = -1;
+      }
+    }
+  }
+
   for (const key of keys) {
     const participants = bucket.get(key)!;
     if (participants.length < 2) continue;
