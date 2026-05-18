@@ -31,7 +31,6 @@ import {
   COMBAT_DAMAGE_QUEEN,
   SPIDER_DAMAGE,
   SPIDER_SWARM_FIGHTER_THRESHOLD,
-  SPIDER_SWARM_MULTIPLIER,
 } from './constants.js';
 import { SIM_VERSION_V19_AI_STATE } from './types.js';
 import { getAIStateForColony, isInCohort } from './ai-state.js';
@@ -467,8 +466,8 @@ export function killAnt(
  *
  * Spider gets its own active pair with the first fighter (or any ant) on
  * its tile. Swarm bonus applies when: world.spiderPriorityColonyId !== null AND
- * >= SPIDER_SWARM_FIGHTER_THRESHOLD fighters share the tile. The bonus
- * multiplies each fighter's damage by SPIDER_SWARM_MULTIPLIER.
+ * >= SPIDER_SWARM_FIGHTER_THRESHOLD fighters share the tile. Each
+ * priority-colony fighter then acts with an independent cooldown (true N-fighter DPS).
  *
  * Per the evaluation-order rule (spec Part B): combat damage is applied
  * here; tickSpider (step 17.5) reads spider.hp and evaluates the
@@ -531,8 +530,80 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
   }
   const swarmActive = priorityColonyId !== null && fighterCount >= SPIDER_SWARM_FIGHTER_THRESHOLD;
 
-  // New-pairing detection: -2 sentinel means "fighting spider".
-  // A new pairing occurs when the ant is not already paired with the spider.
+  if (swarmActive) {
+    // --- Swarm path: each priority-colony fighter acts independently per tick. ---
+    // Spider retaliates once per tick against a priority-colony fighter.
+    // This gives true N-fighter DPS rather than 4× single-fighter approximation.
+
+    // Retaliation target must be a priority-colony fighter (not an enemy ant that
+    // happens to share the tile), so re-select within priority colony.
+    let swarmRetaliationTarget = activeAntIdx;
+    for (const idx of onTile) {
+      if (ants.task[idx] === AntTask.Fighting && ants.colonyId[idx] === priorityColonyId) {
+        swarmRetaliationTarget = idx;
+        break;
+      }
+    }
+
+    let totalAntDamage = 0;
+    let anyNewPairing = false;
+    for (const idx of onTile) {
+      if (ants.task[idx] !== AntTask.Fighting) continue;
+      if (ants.colonyId[idx] !== priorityColonyId) continue;
+      if (ants.combatOpponentId[idx] !== -2) {
+        // First contact for this fighter: pair and set windup.
+        ants.combatOpponentId[idx] = -2;
+        ants.attackCooldown[idx] = COMBAT_COOLDOWN_TICKS;
+        anyNewPairing = true;
+        continue;
+      }
+      const cd = ants.attackCooldown[idx]! - 1;
+      ants.attackCooldown[idx] = cd;
+      if (cd === 0) {
+        totalAntDamage += COMBAT_DAMAGE_BASE;
+        ants.attackCooldown[idx] = COMBAT_COOLDOWN_TICKS;
+      }
+    }
+
+    // Spider windup: reset unconditionally on any new pairing (matches non-swarm contract),
+    // and do NOT decrement on the same tick (mirrors non-swarm early-return behavior).
+    // If spider.attackCooldown was stale from a prior episode, this resets it correctly.
+    if (anyNewPairing) {
+      spider.attackCooldown = COMBAT_COOLDOWN_TICKS;
+    } else {
+      spider.attackCooldown = spider.attackCooldown > 0 ? spider.attackCooldown - 1 : 0;
+    }
+    const spiderStrikes = spider.attackCooldown === 0;
+    const spiderDamage = spiderStrikes ? SPIDER_DAMAGE : 0;
+
+    if (totalAntDamage === 0 && spiderDamage === 0) return;
+
+    // Apply simultaneously.
+    const antDies = spiderDamage > 0 && applyDamage(world, swarmRetaliationTarget, spiderDamage);
+
+    if (totalAntDamage > 0) {
+      spider.hp -= totalAntDamage;
+      if (spider.hp <= 0) {
+        // Clear all swarm fighter pairings when spider dies.
+        for (const idx of onTile) {
+          if (ants.colonyId[idx] === priorityColonyId && ants.combatOpponentId[idx] === -2) {
+            ants.combatOpponentId[idx] = -1;
+          }
+        }
+      }
+    }
+    if (spiderStrikes && spider.hp > 0) {
+      spider.attackCooldown = COMBAT_COOLDOWN_TICKS;
+    }
+    if (antDies) {
+      if (spider.state === 'Striking') spider.killsThisStrike += 1;
+      if (spider.state === 'Rampaging') spider.rampageKillsThisRampage += 1;
+      killAnt(world, swarmRetaliationTarget, null, null, 'Spider');
+    }
+    return;
+  }
+
+  // --- Non-swarm path: single activeAntIdx, unchanged S1 semantics. ---
   const antCurrentOpponent = ants.combatOpponentId[activeAntIdx]!;
   const isNewPairing = antCurrentOpponent !== -2;
 
@@ -550,49 +621,39 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
   spider.attackCooldown = spider.attackCooldown > 0 ? spider.attackCooldown - 1 : 0;
 
   const antStrikes = antCooldown === 0;
-  const spiderStrikes = spider.attackCooldown === 0;
+  const spiderStrikes2 = spider.attackCooldown === 0;
 
-  if (!antStrikes && !spiderStrikes) return;
+  if (!antStrikes && !spiderStrikes2) return;
 
-  // Ant damage (fighters only, with optional swarm multiplier).
-  // Swarm bonus only applies when the striking ant belongs to the priority colony.
+  // Ant damage: fighters only; no swarm multiplier (swarmActive is false here).
   let antDamage = 0;
   if (antStrikes && ants.task[activeAntIdx] === AntTask.Fighting) {
-    antDamage = COMBAT_DAMAGE_BASE; // spider is never "home ground" for ants
-    if (swarmActive && ants.colonyId[activeAntIdx] === priorityColonyId) {
-      antDamage *= SPIDER_SWARM_MULTIPLIER;
-    }
+    antDamage = COMBAT_DAMAGE_BASE;
   }
 
   // Spider damage.
-  const spiderDamage = spiderStrikes ? SPIDER_DAMAGE : 0;
+  const spiderDamage2 = spiderStrikes2 ? SPIDER_DAMAGE : 0;
 
-  // Apply damage simultaneously: compute both death results before acting.
-  const antDies = spiderDamage > 0 && applyDamage(world, activeAntIdx, spiderDamage);
+  // Apply damage simultaneously.
+  const antDies2 = spiderDamage2 > 0 && applyDamage(world, activeAntIdx, spiderDamage2);
 
   if (antDamage > 0) {
     spider.hp -= antDamage;
-    // Spider retreat threshold / death is evaluated by tickSpider at step 17.5.
-    // Clear ant pairing if spider just died so it can pair with ants next tick.
     if (spider.hp <= 0) {
       ants.combatOpponentId[activeAntIdx] = -1;
     }
   }
 
-  // Reset cooldowns for survivors.
-  if (antStrikes && !antDies) {
+  if (antStrikes && !antDies2) {
     ants.attackCooldown[activeAntIdx] = COMBAT_COOLDOWN_TICKS;
   }
-  if (spiderStrikes && spider.hp > 0) {
+  if (spiderStrikes2 && spider.hp > 0) {
     spider.attackCooldown = COMBAT_COOLDOWN_TICKS;
   }
 
-  if (antDies) {
-    // Track kills during Striking / Rampaging states.
+  if (antDies2) {
     if (spider.state === 'Striking') spider.killsThisStrike += 1;
     if (spider.state === 'Rampaging') spider.rampageKillsThisRampage += 1;
     killAnt(world, activeAntIdx, null, null, 'Spider');
-    // Clear opponent tracking for next pair formation.
-    // Spider's cooldown stays as-is for the next replacement pair.
   }
 }

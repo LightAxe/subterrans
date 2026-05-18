@@ -328,6 +328,7 @@ export function tickSpider(world: WorldState): void {
     } else if (spider.state === 'Rampaging') {
       emitSpiderRampageEnd(world, 'killed_in_nest', spider.rampageKillsThisRampage, false);
     }
+    clearSpiderPairingSentinels(world);
     world.spider = null;
     world.spiderPriorityColonyId = null;
     world.scatterReticleTile = null;
