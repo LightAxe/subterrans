@@ -11,8 +11,8 @@
 //      Iterate via Object.entries — NEVER Array.from(world.colonies.entries()) [there is no .entries()]
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
-import type { WorldState, EntityId, AIStateRecord } from '../sim/types.js';
-import { LEGACY_SIM_VERSION, LATEST_SIM_VERSION, SIM_VERSION_V19_AI_STATE } from '../sim/types.js';
+import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
+import { LEGACY_SIM_VERSION, LATEST_SIM_VERSION, SIM_VERSION_V19_AI_STATE, SIM_VERSION_V20_SPIDER } from '../sim/types.js';
 import { AI_MAX_OPERATION_FIGHTERS } from '../sim/constants.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
 import { createAntComponents } from '../sim/ant/ant-store.js';
@@ -431,6 +431,28 @@ interface SerializedColony {
 
 interface SerializedGrid { width: number; height: number; data: number[] }
 
+/** S3 — serialized form of SpiderState. All fields are plain numbers/strings. */
+interface SerializedSpiderState {
+  state: string;
+  posX: number;
+  posY: number;
+  lairTileX: number;
+  lairTileY: number;
+  territoryRadiusTiles: number;
+  hp: number;
+  attackCooldown: number;
+  hungerTicks: number;
+  nextHuntTick: number;
+  huntStartTick: number;
+  strikeStartTick: number;
+  feedingStartTick: number;
+  retreatStartTick: number;
+  huntTargetTileX: number;
+  huntTargetTileY: number;
+  killsThisStrike: number;
+  rampageKillsThisRampage: number;
+}
+
 /** S2 — serialized form of AIStateRecord. operationFighterIds stored as number[]. */
 interface SerializedAIStateRecord {
   colonyId: number;
@@ -495,6 +517,12 @@ export interface SerializedWorldState {
   pendingChambers: Record<string, PendingChamber>;
   /** S2 — optional for backward compat with pre-V19 saves; defaults to [] on load. */
   aiState?: SerializedAIStateRecord[];
+  /** S3 — optional for backward compat with pre-V18 saves; defaults to null on load. */
+  spider?: SerializedSpiderState | null;
+  /** S3 — optional; defaults to false on load. */
+  spiderPriority?: boolean;
+  /** S3 — transient; always reset to null on load. */
+  scatterReticleTile?: { x: number; y: number } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -648,6 +676,10 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
     // S0b: persist overflow counters; skip events (transient per design).
     droppedCombatKillCount: world.droppedCombatKillCount,
     droppedStructuralCount: world.droppedStructuralCount,
+    // S3 — spider entity.
+    spider: world.spider === null ? null : { ...world.spider },
+    spiderPriority: world.spiderPriority,
+    // scatterReticleTile is transient — not persisted; always reset to null on load.
     // S2 — AI state machine records. operationFighterIds stored as number[].
     aiState: world.aiState.map((rec) => ({
       colonyId: rec.colonyId,
@@ -1010,6 +1042,43 @@ function deserializeAIStateArray(s: SerializedWorldState, simVersion: number): A
   return result;
 }
 
+function isValidSpiderBehaviorState(v: unknown): v is import('../sim/types.js').SpiderBehaviorState {
+  return v === 'Patrolling' || v === 'Hunting' || v === 'Striking' ||
+         v === 'Feeding' || v === 'Rampaging' || v === 'Retreating';
+}
+
+/**
+ * S3 — deserialize world.spider from the save snapshot.
+ * Pre-V18 saves omit the field; return null.
+ */
+function deserializeSpider(s: SerializedWorldState, simVersion: number): SpiderState | null {
+  if (simVersion < SIM_VERSION_V20_SPIDER) return null;
+  const raw = s.spider;
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== 'object') return null;
+  const r = raw as Partial<SerializedSpiderState>;
+  return {
+    state: isValidSpiderBehaviorState(r.state) ? r.state : 'Patrolling',
+    posX: typeof r.posX === 'number' && Number.isInteger(r.posX) ? r.posX : 0,
+    posY: typeof r.posY === 'number' && Number.isInteger(r.posY) ? r.posY : 0,
+    lairTileX: typeof r.lairTileX === 'number' && Number.isInteger(r.lairTileX) ? r.lairTileX : 0,
+    lairTileY: typeof r.lairTileY === 'number' && Number.isInteger(r.lairTileY) ? r.lairTileY : 0,
+    territoryRadiusTiles: typeof r.territoryRadiusTiles === 'number' && Number.isInteger(r.territoryRadiusTiles) ? r.territoryRadiusTiles : 24,
+    hp: typeof r.hp === 'number' && Number.isInteger(r.hp) ? r.hp : 80,
+    attackCooldown: typeof r.attackCooldown === 'number' && Number.isInteger(r.attackCooldown) ? r.attackCooldown : 0,
+    hungerTicks: typeof r.hungerTicks === 'number' && Number.isInteger(r.hungerTicks) ? r.hungerTicks : 0,
+    nextHuntTick: typeof r.nextHuntTick === 'number' && Number.isInteger(r.nextHuntTick) ? r.nextHuntTick : 1200,
+    huntStartTick: typeof r.huntStartTick === 'number' && Number.isInteger(r.huntStartTick) ? r.huntStartTick : 0,
+    strikeStartTick: typeof r.strikeStartTick === 'number' && Number.isInteger(r.strikeStartTick) ? r.strikeStartTick : 0,
+    feedingStartTick: typeof r.feedingStartTick === 'number' && Number.isInteger(r.feedingStartTick) ? r.feedingStartTick : 0,
+    retreatStartTick: typeof r.retreatStartTick === 'number' && Number.isInteger(r.retreatStartTick) ? r.retreatStartTick : 0,
+    huntTargetTileX: typeof r.huntTargetTileX === 'number' && Number.isInteger(r.huntTargetTileX) ? r.huntTargetTileX : -1,
+    huntTargetTileY: typeof r.huntTargetTileY === 'number' && Number.isInteger(r.huntTargetTileY) ? r.huntTargetTileY : -1,
+    killsThisStrike: typeof r.killsThisStrike === 'number' && Number.isInteger(r.killsThisStrike) ? r.killsThisStrike : 0,
+    rampageKillsThisRampage: typeof r.rampageKillsThisRampage === 'number' && Number.isInteger(r.rampageKillsThisRampage) ? r.rampageKillsThisRampage : 0,
+  };
+}
+
 function isValidAIState(v: unknown): v is import('../sim/types.js').AIState {
   return v === 'Peacetime' || v === 'WarFooting' || v === 'Probing' || v === 'Invading' || v === 'Recovery';
 }
@@ -1296,6 +1365,11 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     pendingQueenDeathContexts: [],
     // S2 — AI state machine. Deserialize saved records, or provide defensive defaults for pre-V19 saves.
     aiState: deserializeAIStateArray(s, validatedSimVersion),
+    // S3 — spider entity; null for pre-V18 saves.
+    spider: deserializeSpider(s, validatedSimVersion),
+    spiderPriority: (validatedSimVersion >= SIM_VERSION_V20_SPIDER && s.spiderPriority === true),
+    // scatterReticleTile is transient — always reset on load.
+    scatterReticleTile: null,
     droppedCombatKillCount:
       typeof s.droppedCombatKillCount === 'number' &&
       Number.isInteger(s.droppedCombatKillCount) &&

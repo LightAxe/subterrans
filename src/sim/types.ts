@@ -254,7 +254,12 @@ export const SIM_VERSION_V18_INVADER_WALL_AWARE_STEP = 18 as const;
  * narrow sim helpers; probe/invasion mechanics; queen_death.aiStateAtTime populated.
  */
 export const SIM_VERSION_V19_AI_STATE = 19 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V19_AI_STATE;
+/**
+ * V20 (S3) — Spider: neutral predator entity with hunger state machine.
+ * Adds world.spider (SpiderState | null), world.spiderPriorityColonyId, world.scatterReticleTile.
+ */
+export const SIM_VERSION_V20_SPIDER = 20 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V20_SPIDER;
 
 
 /**
@@ -271,6 +276,37 @@ export type AIState =
  * S2 — Per-AI-colony state record. Lives in WorldState.aiState[].
  * Indexed by array position (iterate to find by colonyId — not dense by colonyId).
  */
+/** S3 — Spider behavior states. */
+export type SpiderBehaviorState =
+  | 'Patrolling'
+  | 'Hunting'
+  | 'Striking'
+  | 'Feeding'
+  | 'Rampaging'
+  | 'Retreating';
+
+/** S3 — Single neutral spider entity. Lives in WorldState.spider (null if not in scenario). */
+export interface SpiderState {
+  state: SpiderBehaviorState;
+  posX: number;                    // fixed-point (FP_SHIFT=8)
+  posY: number;
+  lairTileX: number;               // integer tile coords
+  lairTileY: number;
+  territoryRadiusTiles: number;
+  hp: number;
+  attackCooldown: number;
+  hungerTicks: number;             // accrues only while state !== 'Feeding'
+  nextHuntTick: number;
+  huntStartTick: number;
+  strikeStartTick: number;
+  feedingStartTick: number;
+  retreatStartTick: number;
+  huntTargetTileX: number;
+  huntTargetTileY: number;
+  killsThisStrike: number;
+  rampageKillsThisRampage: number;
+}
+
 export interface AIStateRecord {
   colonyId: ColonyId;
   state: AIState;
@@ -433,6 +469,25 @@ export interface WorldState {
    * Persisted in saves (V17+); pre-V17 saves get defensive defaults on load.
    */
   aiState: AIStateRecord[];
+
+  /**
+   * S3 — Single neutral spider entity; null if not present in this scenario.
+   * V18+ only; pre-V18 saves load with spider: null.
+   */
+  spider: SpiderState | null;
+
+  /**
+   * S3 — Player-set flag: fighters route toward spider when true.
+   * Cleared automatically when spider dies.
+   */
+  spiderPriority: boolean;
+
+  /**
+   * S3 — Shadow field for one-tick-lag scatter. Written at end of tickSpider
+   * (step 17.5); read by step 16 movement the following tick.
+   * null when spider is not Hunting or Striking.
+   */
+  scatterReticleTile: { x: number; y: number } | null;
 }
 
 /**
@@ -471,6 +526,10 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
     pendingQueenDeathContexts: [],
     // S2 — AI state machine. Populated by createScenario for non-player colonies.
     aiState: [],
+    // S3 — spider entity.
+    spider: null,
+    spiderPriority: false,
+    scatterReticleTile: null,
   };
 }
 
@@ -556,6 +615,45 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
         operationDefenderDeaths: s.operationDefenderDeaths,
       });
     }
+  }
+
+  // S3 — spider: copy or null
+  if (src.spider === null) {
+    dst.spider = null;
+  } else if (dst.spider === null) {
+    dst.spider = { ...src.spider };
+  } else {
+    // Reuse existing object — copy all fields
+    const ss = src.spider;
+    const ds = dst.spider;
+    ds.state = ss.state;
+    ds.posX = ss.posX;
+    ds.posY = ss.posY;
+    ds.lairTileX = ss.lairTileX;
+    ds.lairTileY = ss.lairTileY;
+    ds.territoryRadiusTiles = ss.territoryRadiusTiles;
+    ds.hp = ss.hp;
+    ds.attackCooldown = ss.attackCooldown;
+    ds.hungerTicks = ss.hungerTicks;
+    ds.nextHuntTick = ss.nextHuntTick;
+    ds.huntStartTick = ss.huntStartTick;
+    ds.strikeStartTick = ss.strikeStartTick;
+    ds.feedingStartTick = ss.feedingStartTick;
+    ds.retreatStartTick = ss.retreatStartTick;
+    ds.huntTargetTileX = ss.huntTargetTileX;
+    ds.huntTargetTileY = ss.huntTargetTileY;
+    ds.killsThisStrike = ss.killsThisStrike;
+    ds.rampageKillsThisRampage = ss.rampageKillsThisRampage;
+  }
+  dst.spiderPriority = src.spiderPriority;
+  // scatterReticleTile
+  if (src.scatterReticleTile === null) {
+    dst.scatterReticleTile = null;
+  } else if (dst.scatterReticleTile === null) {
+    dst.scatterReticleTile = { x: src.scatterReticleTile.x, y: src.scatterReticleTile.y };
+  } else {
+    dst.scatterReticleTile.x = src.scatterReticleTile.x;
+    dst.scatterReticleTile.y = src.scatterReticleTile.y;
   }
 
   // --- AntComponents: 19 TypedArray.set calls (zero allocation) ---

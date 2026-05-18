@@ -106,6 +106,12 @@ export interface SyncAIStateCommand extends SimCommandBase {
   readonly operationDefenderDeaths: number;
 }
 
+/** S3 — player marks the spider as a priority target; fighters route toward it. */
+export interface MarkSpiderPriorityCommand extends SimCommandBase {
+  readonly type: 'MarkSpiderPriority';
+  readonly isPriority: boolean;
+}
+
 /**
  * S2 / V19 — AI controller signals a probe or invasion entry by pushing this command
  * instead of mutating world.aiState directly. tick() applies it via setAIRallyOperation,
@@ -131,6 +137,7 @@ export type SimCommand =
   | SetRallyPointCommand
   | ClearRallyPointCommand
   | SyncAIStateCommand
-  | StartAIOperationCommand;
+  | StartAIOperationCommand
+  | MarkSpiderPriorityCommand;
 
 export const MAX_COMMANDS_PER_TICK = 64; // PRD §5 line 680 — FIFO silent-drop beyond cap

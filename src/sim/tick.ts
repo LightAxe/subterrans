@@ -1,6 +1,7 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE, SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX, SIM_VERSION_V19_AI_STATE } from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE, SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX, SIM_VERSION_V19_AI_STATE, SIM_VERSION_V20_SPIDER } from './types.js';
+import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath } from './game-over.js';
 import { advanceAIState, setAIRallyOperation } from './ai-state.js';
@@ -695,10 +696,16 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         setAIRallyOperation(world, cmd.colonyId, cmd.rallyTileX, cmd.rallyTileY, cmd.fighterIds, cmd.kind);
         break;
       }
+      case 'MarkSpiderPriority': {
+        world.spiderPriority = cmd.isPriority;
+        // Auto-clear when spider is dead: the UI should not dispatch this after
+        // spider death, but guard defensively.
+        if (world.spider === null) world.spiderPriority = false;
+        break;
+      }
       default: {
-        // Exhaustive narrowing — SimCommand is a 10-variant union; SyncAIState is
-        // filtered out by the `continue` guard above the switch, so the narrowed
-        // type here excludes it and the never-check still holds.
+        // Exhaustive narrowing — SimCommand is a 12-variant union (S3 adds MarkSpiderPriority).
+        // Silent-drop unknowns per PRD §5. Do NOT throw, do NOT log (wall-clock-adjacent).
         const _exhaustive: never = cmd;
         void _exhaustive;
         break;
@@ -1207,6 +1214,15 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     detectAndResolveCombat(world, rng);
   } else {
     detectAndResolveCombat(world, new Rng(world.rngState));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Step 17.5: Spider state machine (S3 / V18+).
+  // Runs after combat so spider.hp reflects this tick's damage before tickSpider
+  // evaluates the Retreating threshold.
+  // ---------------------------------------------------------------------------
+  if (world.simVersion >= SIM_VERSION_V20_SPIDER) {
+    tickSpider(world);
   }
 
   // ---------------------------------------------------------------------------
