@@ -466,7 +466,7 @@ export function killAnt(
  * Called from detectAndResolveCombat after the ant-vs-ant loop.
  *
  * Spider gets its own active pair with the first fighter (or any ant) on
- * its tile. Swarm bonus applies when: world.spiderPriority === true AND
+ * its tile. Swarm bonus applies when: world.spiderPriorityColonyId !== null AND
  * >= SPIDER_SWARM_FIGHTER_THRESHOLD fighters share the tile. The bonus
  * multiplies each fighter's damage by SPIDER_SWARM_MULTIPLIER.
  *
@@ -523,7 +523,7 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
   for (const idx of onTile) {
     if (ants.task[idx] === AntTask.Fighting) fighterCount += 1;
   }
-  const swarmActive = world.spiderPriority && fighterCount >= SPIDER_SWARM_FIGHTER_THRESHOLD;
+  const swarmActive = world.spiderPriorityColonyId !== null && fighterCount >= SPIDER_SWARM_FIGHTER_THRESHOLD;
 
   // New-pairing detection: -2 sentinel means "fighting spider".
   // A new pairing occurs when the ant is not already paired with the spider.

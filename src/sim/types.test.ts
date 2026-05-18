@@ -52,7 +52,7 @@ describe('WorldState', () => {
       expect(keys).toContain('droppedStructuralCount'); // S0b
       expect(keys).toContain('aiState'); // S2
       expect(keys).toContain('spider'); // S3
-      expect(keys).toContain('spiderPriority'); // S3
+      expect(keys).toContain('spiderPriorityColonyId'); // S3
       expect(keys).toContain('scatterReticleTile'); // S3
     });
 

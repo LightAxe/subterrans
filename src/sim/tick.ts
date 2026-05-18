@@ -28,8 +28,9 @@ import {
   UNDERGROUND_CEILING_ROW_Y,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
+  PLAYER_COLONY_ID,
 } from './constants.js';
-import { FP_SHIFT } from './fixed.js';
+import { FP_SHIFT, FP_ONE } from './fixed.js';
 import { allocateWorkers, computeDigDemand } from './behavior/allocation-system.js';
 import {
   tickReconcile,
@@ -699,8 +700,8 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       case 'MarkSpiderPriority': {
         // Validate payload — save/replay objects are not schema-checked upstream.
         if (typeof cmd.isPriority !== 'boolean') break;
-        world.spiderPriority = cmd.isPriority;
-        if (world.spider === null) world.spiderPriority = false;
+        world.spiderPriorityColonyId = cmd.isPriority ? PLAYER_COLONY_ID : null;
+        if (world.spider === null) world.spiderPriorityColonyId = null;
         break;
       }
       default: {
@@ -1109,6 +1110,29 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // Global pass (not inlined in 10a) because this is a per-ant task filter,
   // not a per-colony census mutation. Same split as Phase 7 tickDeadDiggerCleanup.
   updateFightAntTargets(world);
+
+  // Step 10d: spider priority fighter routing (S3).
+  // When any colony has spiderPriorityColonyId set, override that colony's
+  // surface fighters' targets to the spider's current tile. Runs after
+  // updateFightAntTargets so spider priority takes precedence over the rally point.
+  // Colony identity is carried in world.spiderPriorityColonyId (not a
+  // hard-coded player branch) — CLNY-08 compliant.
+  if (world.simVersion >= SIM_VERSION_V18_SPIDER &&
+      world.spiderPriorityColonyId !== null &&
+      world.spider !== null) {
+    const spiderPriorityCid = world.spiderPriorityColonyId;
+    const spTileX = world.spider.posX >> FP_SHIFT;
+    const spTileY = world.spider.posY >> FP_SHIFT;
+    const { ants } = world;
+    for (let sid = 0; sid < ants.alive.length; sid++) {
+      if (ants.alive[sid] !== 1) continue;
+      if (ants.task[sid] !== AntTask.Fighting) continue;
+      if (ants.colonyId[sid] !== spiderPriorityCid) continue;
+      if (ants.zone[sid] !== 0) continue; // surface only; underground fighters surface first
+      ants.targetPosX[sid] = (spTileX << FP_SHIFT) + (FP_ONE >> 1);
+      ants.targetPosY[sid] = (spTileY << FP_SHIFT) + (FP_ONE >> 1);
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Step 11: checkPendingChambers (NEW in Phase 7)

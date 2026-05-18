@@ -324,7 +324,7 @@ export function tickSpider(world: WorldState): void {
       emitSpiderRampageEnd(world, 'killed_in_nest', spider.rampageKillsThisRampage, false);
     }
     world.spider = null;
-    world.spiderPriority = false;
+    world.spiderPriorityColonyId = null;
     world.scatterReticleTile = null;
     return;
   }

@@ -308,12 +308,12 @@ describe('tickSpider', () => {
     it('clears world.spider when hp <= 0', () => {
       const world = makeWorld();
       world.spider = makeSpider({ hp: 0 });
-      world.spiderPriority = true;
+      world.spiderPriorityColonyId = PLAYER_COLONY_ID;
       world.scatterReticleTile = { x: 5, y: 5 };
 
       tickSpider(world);
       expect(world.spider).toBeNull();
-      expect(world.spiderPriority).toBe(false);
+      expect(world.spiderPriorityColonyId).toBeNull();
       expect(world.scatterReticleTile).toBeNull();
     });
 

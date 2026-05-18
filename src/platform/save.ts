@@ -520,7 +520,7 @@ export interface SerializedWorldState {
   /** S3 — optional for backward compat with pre-V18 saves; defaults to null on load. */
   spider?: SerializedSpiderState | null;
   /** S3 — optional; defaults to false on load. */
-  spiderPriority?: boolean;
+  spiderPriorityColonyId?: number | null;
   /** S3 — transient; always reset to null on load. */
   scatterReticleTile?: { x: number; y: number } | null;
 }
@@ -678,7 +678,7 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
     droppedStructuralCount: world.droppedStructuralCount,
     // S3 — spider entity.
     spider: world.spider === null ? null : { ...world.spider },
-    spiderPriority: world.spiderPriority,
+    spiderPriorityColonyId: world.spiderPriorityColonyId,
     // scatterReticleTile is transient — not persisted; always reset to null on load.
     // S2 — AI state machine records. operationFighterIds stored as number[].
     aiState: world.aiState.map((rec) => ({
@@ -1367,7 +1367,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     aiState: deserializeAIStateArray(s, validatedSimVersion),
     // S3 — spider entity; null for pre-V18 saves.
     spider: deserializeSpider(s, validatedSimVersion),
-    spiderPriority: (validatedSimVersion >= SIM_VERSION_V20_SPIDER && s.spiderPriority === true),
+    spiderPriorityColonyId: (validatedSimVersion >= SIM_VERSION_V20_SPIDER && typeof s.spiderPriorityColonyId === 'number') ? s.spiderPriorityColonyId : null,
     // scatterReticleTile is transient — always reset on load.
     scatterReticleTile: null,
     droppedCombatKillCount:

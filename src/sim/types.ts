@@ -480,7 +480,7 @@ export interface WorldState {
    * S3 — Player-set flag: fighters route toward spider when true.
    * Cleared automatically when spider dies.
    */
-  spiderPriority: boolean;
+  spiderPriorityColonyId: number | null;
 
   /**
    * S3 — Shadow field for one-tick-lag scatter. Written at end of tickSpider
@@ -528,7 +528,7 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
     aiState: [],
     // S3 — spider entity.
     spider: null,
-    spiderPriority: false,
+    spiderPriorityColonyId: null,
     scatterReticleTile: null,
   };
 }
@@ -645,7 +645,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     ds.killsThisStrike = ss.killsThisStrike;
     ds.rampageKillsThisRampage = ss.rampageKillsThisRampage;
   }
-  dst.spiderPriority = src.spiderPriority;
+  dst.spiderPriorityColonyId = src.spiderPriorityColonyId;
   // scatterReticleTile
   if (src.scatterReticleTile === null) {
     dst.scatterReticleTile = null;

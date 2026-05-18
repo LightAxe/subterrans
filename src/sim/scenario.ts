@@ -365,7 +365,7 @@ export function createScenario(seed: number): WorldState {
 
   // --- S3: Initialize spider at a deterministic lair tile ---
   world.spider = _placeSpider(world);
-  world.spiderPriority = false;
+  world.spiderPriorityColonyId = null;
   world.scatterReticleTile = null;
 
   // --- Step 9: Write back rngState ---
