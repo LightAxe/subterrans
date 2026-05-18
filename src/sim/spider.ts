@@ -25,6 +25,7 @@ import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
   PHEROMONE_CAP,
+  UNDERGROUND_CEILING_ROW_Y,
 } from './constants.js';
 import { FP_SHIFT } from './fixed.js';
 
@@ -231,7 +232,11 @@ function seedUndergroundDangerPheromone(world: WorldState, spider: SpiderState, 
   if (grid === undefined) return;
 
   const tileX = spider.posX >> FP_SHIFT;
-  const tileY = spider.posY >> FP_SHIFT;
+  // Underground grid row 0 is the ceiling (entrance level). The spider is on
+  // the surface, so map the deposit to the underground entrance row rather
+  // than using the surface y coordinate (which would be out of bounds for the
+  // 64-row underground grid).
+  const tileY = UNDERGROUND_CEILING_ROW_Y;
   const center = SPIDER_DANGER_DEPOSIT;
   const neighbor = SPIDER_DANGER_DEPOSIT >> 1;
   const gridWidth = grid.width;

@@ -518,12 +518,18 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
     }
   }
 
-  // Swarm bonus: priority set AND enough fighters on tile.
+  // Swarm bonus: priority set AND enough fighters from the priority colony on tile.
+  // Count only priority-colony fighters to avoid granting the bonus to enemy ants.
+  const priorityColonyId = world.spiderPriorityColonyId;
   let fighterCount = 0;
-  for (const idx of onTile) {
-    if (ants.task[idx] === AntTask.Fighting) fighterCount += 1;
+  if (priorityColonyId !== null) {
+    for (const idx of onTile) {
+      if (ants.task[idx] === AntTask.Fighting && ants.colonyId[idx] === priorityColonyId) {
+        fighterCount += 1;
+      }
+    }
   }
-  const swarmActive = world.spiderPriorityColonyId !== null && fighterCount >= SPIDER_SWARM_FIGHTER_THRESHOLD;
+  const swarmActive = priorityColonyId !== null && fighterCount >= SPIDER_SWARM_FIGHTER_THRESHOLD;
 
   // New-pairing detection: -2 sentinel means "fighting spider".
   // A new pairing occurs when the ant is not already paired with the spider.
@@ -549,10 +555,13 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
   if (!antStrikes && !spiderStrikes) return;
 
   // Ant damage (fighters only, with optional swarm multiplier).
+  // Swarm bonus only applies when the striking ant belongs to the priority colony.
   let antDamage = 0;
   if (antStrikes && ants.task[activeAntIdx] === AntTask.Fighting) {
     antDamage = COMBAT_DAMAGE_BASE; // spider is never "home ground" for ants
-    if (swarmActive) antDamage *= SPIDER_SWARM_MULTIPLIER;
+    if (swarmActive && ants.colonyId[activeAntIdx] === priorityColonyId) {
+      antDamage *= SPIDER_SWARM_MULTIPLIER;
+    }
   }
 
   // Spider damage.
