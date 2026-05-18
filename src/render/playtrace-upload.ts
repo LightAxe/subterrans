@@ -435,11 +435,19 @@ async function buildPayloadWithDowngrade(
 /** Build a survey-only payload directly, skipping the snapshot construction.
  *  Used when the player did not opt in to upload. Same world-capture
  *  property as the downgrade path: the envelope is built in this function's
- *  synchronous prefix before the first await. */
+ *  synchronous prefix before the first await.
+ *
+ *  Capture events synchronously so roundEndReason is derived from the
+ *  pre-restart event buffer (world.events may be mutated after the first
+ *  await if restartGame fires immediately). */
 async function buildSurveyOnlyPayload(
   input: PlaytraceSubmissionInput,
 ): Promise<Blob> {
-  const envelope = buildPlaytraceEnvelope(input, null);
+  const capturedEvents: SimEvent[] = input.world.events.slice();
+  // survey-only: snapshot is null, so events+summary are omitted from the
+  // envelope body (per spec). roundEndReason IS included — it's a top-level
+  // field present on all submissions.
+  const envelope = buildPlaytraceEnvelope(input, null, capturedEvents);
   return gzipEnvelope(envelope);
 }
 
