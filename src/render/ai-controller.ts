@@ -137,7 +137,10 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
     if (aiState.state === 'Invading') {
       aiInvasionTick(world, aiColonyId);
     }
-    if (aiState.state === 'Probing') {
+    // Guard: skip aiProbeTick on the entry tick — aiStateMachineTick_probeEntry
+    // already emitted SetRallyPoint; running aiProbeTick on the same tick would
+    // emit a duplicate before colony.rallyPoint is populated by queue drain.
+    if (aiState.state === 'Probing' && prevState === 'Probing') {
       aiProbeTick(world, aiColonyId);
     }
     // Sync behavior ratio to state.
