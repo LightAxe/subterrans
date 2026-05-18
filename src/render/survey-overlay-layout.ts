@@ -201,3 +201,11 @@ export function surveyHitTest(px: number, py: number): SurveyHitTarget {
   }
   return null;
 }
+
+/** Hit-test for the post-submit/skip confirmation screen. The confirmation
+ *  screen reuses the Submit/Skip button positions for New Game and Retry. */
+export function surveyConfirmationHitTest(px: number, py: number): { kind: 'new-game' } | { kind: 'retry' } | null {
+  if (pointInRect(px, py, SURVEY_SUBMIT_BUTTON_RECT)) return { kind: 'new-game' };
+  if (pointInRect(px, py, SURVEY_SKIP_BUTTON_RECT))   return { kind: 'retry' };
+  return null;
+}
