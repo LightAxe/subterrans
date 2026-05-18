@@ -93,7 +93,7 @@ function findHuntTarget(
 function findNearestEntrance(
   world: WorldState,
   spider: SpiderState,
-): { x: number; y: number } | null {
+): { x: number; y: number; colonyId: number } | null {
   const spiderTileX = spider.posX >> FP_SHIFT;
   const spiderTileY = spider.posY >> FP_SHIFT;
 
@@ -101,8 +101,10 @@ function findNearestEntrance(
   let bestKey = -1;
   let bestX = -1;
   let bestY = -1;
+  let bestColonyId = -1;
 
   for (const key in world.colonies) {
+    const cid = Number(key);
     const colony = world.colonies[key as unknown as import('./colony/colony-store.js').ColonyId];
     if (colony === undefined) continue;
     for (let e = 0; e < colony.entrances.length; e++) {
@@ -117,11 +119,12 @@ function findNearestEntrance(
         bestKey = tk;
         bestX = entrance.surfaceTileX;
         bestY = entrance.surfaceTileY;
+        bestColonyId = cid;
       }
     }
   }
   if (bestX === -1) return null;
-  return { x: bestX, y: bestY };
+  return { x: bestX, y: bestY, colonyId: bestColonyId };
 }
 
 // ---------------------------------------------------------------------------
@@ -494,13 +497,13 @@ export function tickSpider(world: WorldState): void {
     seedDangerPheromone(world, spider);
   }
 
-  // During Rampaging, also seed underground danger for all colony grids.
+  // During Rampaging, seed underground danger only for the invaded colony
+  // (the one whose entrance is nearest to the spider). Seeding all colonies
+  // would create false threat signals in colonies the spider is not attacking.
   if (spider.state === 'Rampaging') {
-    for (const colonyKey in world.colonies) {
-      const cid = Number(colonyKey);
-      if (Number.isInteger(cid)) {
-        seedUndergroundDangerPheromone(world, spider, cid);
-      }
+    const nearestForSeed = findNearestEntrance(world, spider);
+    if (nearestForSeed !== null) {
+      seedUndergroundDangerPheromone(world, spider, nearestForSeed.colonyId);
     }
   }
 

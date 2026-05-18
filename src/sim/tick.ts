@@ -697,9 +697,9 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         break;
       }
       case 'MarkSpiderPriority': {
+        // Validate payload — save/replay objects are not schema-checked upstream.
+        if (typeof cmd.isPriority !== 'boolean') break;
         world.spiderPriority = cmd.isPriority;
-        // Auto-clear when spider is dead: the UI should not dispatch this after
-        // spider death, but guard defensively.
         if (world.spider === null) world.spiderPriority = false;
         break;
       }
