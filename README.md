@@ -2,7 +2,7 @@
 
 A modern ant colony simulation game, built for the web. A spiritual successor to Maxis's *SimAnt* (1991) — same core idea (you are the colony, not an individual ant; you influence behavior through allocation and pheromones rather than direct control), with contemporary design, determinism, and moddability baked in from the start.
 
-> **Status:** early development. The simulation is working end-to-end and playable at a rough level; art, audio, and polish are ongoing. Expect things to change. See [ROADMAP.md](ROADMAP.md) for what's next.
+> **Status:** early development. The simulation is working end-to-end and playable at a rough level; art, audio, and polish are ongoing. Expect things to change. See the [roadmap](https://subterrans.com/roadmap) for the current phase structure and what's next.
 
 ---
 
@@ -16,7 +16,7 @@ A modern ant colony simulation game, built for the web. A spiritual successor to
 - Colony-vs-colony combat, rally points, and cross-grid invasions (rally fighters on an enemy entrance and they go underground).
 - Full save/load with deterministic replay — the same seed plus the same input log reproduces a session exactly.
 
-See [ROADMAP.md](ROADMAP.md) for what's next and what's explicitly out of scope.
+See the [roadmap](https://subterrans.com/roadmap) for the current phase structure and what's explicitly out of scope.
 
 ---
 
@@ -71,7 +71,7 @@ We welcome contributions, and the project is partly an experiment in AI-driven d
 Quick pointers:
 - Small fixes: open a PR.
 - Anything on the roadmap: open an issue to claim it, then PR.
-- Anything *off* the roadmap: talk to us first — see [ROADMAP.md § How to Influence the Roadmap](ROADMAP.md#how-to-influence-the-roadmap).
+- Anything *off* the roadmap: talk to us first — open an issue or discussion before starting work.
 
 Past and present contributors are listed in [CONTRIBUTORS.md](CONTRIBUTORS.md).
 
