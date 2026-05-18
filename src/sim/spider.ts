@@ -42,7 +42,7 @@ import { FP_SHIFT } from './fixed.js';
 function findHuntTarget(
   world: WorldState,
   spider: SpiderState,
-): { x: number; y: number } | null {
+): { x: number; y: number; workerCount: number } | null {
   const spiderTileX = spider.posX >> FP_SHIFT;
   const spiderTileY = spider.posY >> FP_SHIFT;
   const r = SPIDER_HUNT_SEARCH_RADIUS_TILES;
@@ -80,7 +80,7 @@ function findHuntTarget(
     }
   }
   if (bestKey === -1) return null;
-  return { x: bestX, y: bestY };
+  return { x: bestX, y: bestY, workerCount: bestCount };
 }
 
 // ---------------------------------------------------------------------------
@@ -395,7 +395,7 @@ export function tickSpider(world: WorldState): void {
             type: 'spider_hunt_start',
             payload: {
               reticleTile: { x: target.x, y: target.y, grid: 'surface' },
-              targetWorkers: 0, // approximation; actual count read above in findHuntTarget
+              targetWorkers: target.workerCount,
             },
           });
         } else {
