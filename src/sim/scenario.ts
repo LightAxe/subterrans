@@ -11,6 +11,7 @@
 
 import type { WorldState } from './types.js';
 import { createWorldState, allocateEntityId } from './types.js';
+import { createDefaultAIStateRecord } from './ai-state.js';
 import { createSurfaceGrid, createUndergroundGrid, SurfaceTileState, UndergroundTileState, ugSet } from './terrain.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
@@ -294,6 +295,10 @@ export function createScenario(seed: number): WorldState {
       world.pheromoneGrids[undergroundKey] = createPheromoneGrid(UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT);
     }
   }
+
+  // --- S2: Initialize aiState for the enemy colony ---
+  // One AIStateRecord per non-player colony with defensive defaults.
+  world.aiState = [createDefaultAIStateRecord(ENEMY_COLONY_ID)];
 
   // --- Step 9: Write back rngState ---
   world.rngState = rng.getState();

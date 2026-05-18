@@ -11,8 +11,9 @@
 //      Iterate via Object.entries — NEVER Array.from(world.colonies.entries()) [there is no .entries()]
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
-import type { WorldState, EntityId } from '../sim/types.js';
-import { LEGACY_SIM_VERSION, LATEST_SIM_VERSION } from '../sim/types.js';
+import type { WorldState, EntityId, AIStateRecord } from '../sim/types.js';
+import { LEGACY_SIM_VERSION, LATEST_SIM_VERSION, SIM_VERSION_V19_AI_STATE } from '../sim/types.js';
+import { AI_MAX_OPERATION_FIGHTERS } from '../sim/constants.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
 import { createAntComponents } from '../sim/ant/ant-store.js';
 import type {
@@ -430,6 +431,28 @@ interface SerializedColony {
 
 interface SerializedGrid { width: number; height: number; data: number[] }
 
+/** S2 — serialized form of AIStateRecord. operationFighterIds stored as number[]. */
+interface SerializedAIStateRecord {
+  colonyId: number;
+  state: string;
+  enteredTick: number;
+  probeCount: number;
+  lastProbeEndTick: number;
+  invasionStartTick: number;
+  invasionRallyTileX: number;
+  invasionRallyTileY: number;
+  recoveryEndTick: number;
+  operationKind: string;
+  operationStartTick: number;
+  operationTargetTileX: number;
+  operationTargetTileY: number;
+  operationFighterIds: number[];
+  operationFighterCount: number;
+  operationStartFighterCount: number;
+  operationAttackerDeaths: number;
+  operationDefenderDeaths: number;
+}
+
 export interface SerializedWorldState {
   tick: number;
   rngState: number;
@@ -470,6 +493,8 @@ export interface SerializedWorldState {
    */
   recentlyDepletedFood?: DepletionRecord[];
   pendingChambers: Record<string, PendingChamber>;
+  /** S2 — optional for backward compat with pre-V17 saves; defaults to [] on load. */
+  aiState?: SerializedAIStateRecord[];
 }
 
 // ---------------------------------------------------------------------------
@@ -623,6 +648,27 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
     // S0b: persist overflow counters; skip events (transient per design).
     droppedCombatKillCount: world.droppedCombatKillCount,
     droppedStructuralCount: world.droppedStructuralCount,
+    // S2 — AI state machine records. operationFighterIds stored as number[].
+    aiState: world.aiState.map((rec) => ({
+      colonyId: rec.colonyId,
+      state: rec.state,
+      enteredTick: rec.enteredTick,
+      probeCount: rec.probeCount,
+      lastProbeEndTick: rec.lastProbeEndTick,
+      invasionStartTick: rec.invasionStartTick,
+      invasionRallyTileX: rec.invasionRallyTileX,
+      invasionRallyTileY: rec.invasionRallyTileY,
+      recoveryEndTick: rec.recoveryEndTick,
+      operationKind: rec.operationKind,
+      operationStartTick: rec.operationStartTick,
+      operationTargetTileX: rec.operationTargetTileX,
+      operationTargetTileY: rec.operationTargetTileY,
+      operationFighterIds: Array.from(rec.operationFighterIds),
+      operationFighterCount: rec.operationFighterCount,
+      operationStartFighterCount: rec.operationStartFighterCount,
+      operationAttackerDeaths: rec.operationAttackerDeaths,
+      operationDefenderDeaths: rec.operationDefenderDeaths,
+    })),
   };
 }
 
@@ -917,6 +963,61 @@ function deserializePheromoneGrid(s: SerializedGrid): PheromoneGrid {
   return g;
 }
 
+/**
+ * S2 — deserialize world.aiState from the save snapshot.
+ * Pre-V17 saves omit the field; return an empty array (scenario will populate
+ * defaults at next createScenario/load; the legacy stateless AI doesn't read aiState).
+ */
+function deserializeAIStateArray(s: SerializedWorldState, simVersion: number): AIStateRecord[] {
+  // Pre-V17: return empty array. Scenario initialization will set defaults.
+  if (simVersion < SIM_VERSION_V19_AI_STATE) return [];
+  const raw = s.aiState;
+  if (!Array.isArray(raw)) return [];
+  const result: AIStateRecord[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const r = raw[i]!;
+    if (r === null || typeof r !== 'object') continue;
+    const fightIds = Array.isArray(r.operationFighterIds)
+      ? r.operationFighterIds as number[]
+      : [];
+    const buf = new Int32Array(AI_MAX_OPERATION_FIGHTERS).fill(-1);
+    const copyLen = Math.min(fightIds.length, AI_MAX_OPERATION_FIGHTERS);
+    for (let j = 0; j < copyLen; j++) {
+      const val = fightIds[j];
+      buf[j] = (typeof val === 'number' && Number.isInteger(val)) ? val : -1;
+    }
+    result.push({
+      colonyId: typeof r.colonyId === 'number' ? r.colonyId : 0,
+      state: isValidAIState(r.state) ? r.state : 'Peacetime',
+      enteredTick: typeof r.enteredTick === 'number' ? r.enteredTick : 0,
+      probeCount: typeof r.probeCount === 'number' ? r.probeCount : 0,
+      lastProbeEndTick: typeof r.lastProbeEndTick === 'number' ? r.lastProbeEndTick : 0,
+      invasionStartTick: typeof r.invasionStartTick === 'number' ? r.invasionStartTick : 0,
+      invasionRallyTileX: typeof r.invasionRallyTileX === 'number' ? r.invasionRallyTileX : -1,
+      invasionRallyTileY: typeof r.invasionRallyTileY === 'number' ? r.invasionRallyTileY : -1,
+      recoveryEndTick: typeof r.recoveryEndTick === 'number' ? r.recoveryEndTick : 0,
+      operationKind: isValidOperationKind(r.operationKind) ? r.operationKind : 'None',
+      operationStartTick: typeof r.operationStartTick === 'number' ? r.operationStartTick : 0,
+      operationTargetTileX: typeof r.operationTargetTileX === 'number' ? r.operationTargetTileX : -1,
+      operationTargetTileY: typeof r.operationTargetTileY === 'number' ? r.operationTargetTileY : -1,
+      operationFighterIds: buf,
+      operationFighterCount: typeof r.operationFighterCount === 'number' ? r.operationFighterCount : 0,
+      operationStartFighterCount: typeof r.operationStartFighterCount === 'number' ? r.operationStartFighterCount : 0,
+      operationAttackerDeaths: typeof r.operationAttackerDeaths === 'number' ? r.operationAttackerDeaths : 0,
+      operationDefenderDeaths: typeof r.operationDefenderDeaths === 'number' ? r.operationDefenderDeaths : 0,
+    });
+  }
+  return result;
+}
+
+function isValidAIState(v: unknown): v is import('../sim/types.js').AIState {
+  return v === 'Peacetime' || v === 'WarFooting' || v === 'Probing' || v === 'Invading' || v === 'Recovery';
+}
+
+function isValidOperationKind(v: unknown): v is 'None' | 'Probe' | 'Invasion' {
+  return v === 'None' || v === 'Probe' || v === 'Invasion';
+}
+
 export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // Top-level guard — must be a non-null object to read .simVersion.
   if (s === null || typeof s !== 'object') {
@@ -1193,6 +1294,8 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     events: [],
     // S1 — transient; always fresh on load (cleared between ticks).
     pendingQueenDeathContexts: [],
+    // S2 — AI state machine. Deserialize saved records, or provide defensive defaults for pre-V17 saves.
+    aiState: deserializeAIStateArray(s, validatedSimVersion),
     droppedCombatKillCount:
       typeof s.droppedCombatKillCount === 'number' &&
       Number.isInteger(s.droppedCombatKillCount) &&

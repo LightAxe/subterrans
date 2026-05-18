@@ -16,8 +16,23 @@ import { ChamberType } from '../sim/enums.js';
 import { UndergroundTileState, ugGet } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
-import { UNDERGROUND_CEILING_ROW_Y } from '../sim/constants.js';
+import {
+  UNDERGROUND_CEILING_ROW_Y,
+  PLAYER_COLONY_ID,
+  AI_PROBE_INTERVAL_TICKS,
+  AI_PROBE_FIGHTER_COUNT,
+  AI_PROBE_FALLBACK_RADIUS_TILES,
+  AI_MAX_OPERATION_FIGHTERS,
+} from '../sim/constants.js';
 import { colonyFoodTotal } from '../sim/colony/colony-system.js';
+import { SIM_VERSION_V19_AI_STATE } from '../sim/types.js';
+import {
+  advanceAIState,
+  setAIRallyOperation,
+  aiFighterCount,
+} from '../sim/ai-state.js';
+
+import { AntTask } from '../sim/enums.js';
 
 export const AI_DIG_INTERVAL = 40 as const;       // every 2 seconds @ 20Hz
 /**
@@ -88,6 +103,47 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
   if (colony === undefined || colony.defeated) return;
 
   aiInitialSetup(world, colony);
+
+  // S2: state machine tick (gated on V17).
+  if (world.simVersion >= SIM_VERSION_V19_AI_STATE) {
+    // Record state before advancing so we can detect operation exits below.
+    const prevAIRecord = world.aiState.find((r) => r.colonyId === aiColonyId);
+    const prevState = prevAIRecord?.state ?? 'Peacetime';
+    const hadRally = prevAIRecord !== undefined && prevAIRecord.invasionRallyTileX !== -1;
+
+    const aiState = advanceAIState(world, aiColonyId);
+
+    // Spec Part B §4 / Part C §5: on Probing or Invading exit, emit ClearRallyPoint
+    // so world.rallyPoint is cleared and Recovery-phase fighters re-route home.
+    const wasActive = prevState === 'Probing' || prevState === 'Invading';
+    const nowInactive = aiState.state !== 'Probing' && aiState.state !== 'Invading';
+    if (wasActive && nowInactive && hadRally) {
+      world.commandQueue.push({
+        type: 'ClearRallyPoint',
+        colonyId: aiColonyId,
+        issuedAtTick: world.tick,
+      });
+    }
+
+    // After advanceAIState, check if we should transition WarFooting→Probing
+    // (target selection is a guard — render side picks the target).
+    if (aiState.state === 'WarFooting') {
+      const ticksSinceLast = world.tick - aiState.lastProbeEndTick;
+      if (ticksSinceLast >= AI_PROBE_INTERVAL_TICKS
+          && aiFighterCount(world, aiColonyId) >= AI_PROBE_FIGHTER_COUNT) {
+        aiStateMachineTick_probeEntry(world, aiColonyId, colony);
+      }
+    }
+    if (aiState.state === 'Invading') {
+      aiInvasionTick(world, aiColonyId);
+    }
+    if (aiState.state === 'Probing') {
+      aiProbeTick(world, aiColonyId);
+    }
+    // Sync behavior ratio to state.
+    _syncBehaviorRatioToAIState(world, aiColonyId, colony);
+  }
+
   aiDigHeuristic(world, colony);
   aiChamberPlacement(world, colony);
   aiEntranceDesignation(world, colony);
@@ -459,6 +515,241 @@ export function aiEntranceDesignation(world: WorldState, colony: ColonyRecord): 
       return;
     }
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// S2: AI state machine subroutines
+// ---------------------------------------------------------------------------
+
+/** Behavior ratios per AI state (forage:fight on 0-10 scale). */
+const AI_STATE_RATIOS: Record<string, { forage: number; fight: number }> = {
+  Peacetime:  { forage: 7, fight: 3 },
+  WarFooting: { forage: 3, fight: 7 },
+  Probing:    { forage: 3, fight: 7 },
+  Invading:   { forage: 2, fight: 8 },
+  Recovery:   { forage: 6, fight: 4 },
+};
+
+/** Sync the AI colony behavior ratio to its current state. */
+function _syncBehaviorRatioToAIState(
+  world: WorldState,
+  aiColonyId: ColonyId,
+  colony: ColonyRecord,
+): void {
+  // Get current aiState
+  let currentState = 'Peacetime';
+  for (let i = 0; i < world.aiState.length; i++) {
+    if (world.aiState[i]!.colonyId === aiColonyId) {
+      currentState = world.aiState[i]!.state;
+      break;
+    }
+  }
+  const targetRatio = AI_STATE_RATIOS[currentState] ?? AI_BEHAVIOR_RATIO;
+  if (colony.targetRatio.forage !== targetRatio.forage
+      || colony.targetRatio.fight !== targetRatio.fight) {
+    const setRatioCmd: SetBehaviorRatioCommand = {
+      type: 'SetBehaviorRatio',
+      colonyId: aiColonyId,
+      ratio: { ...targetRatio },
+      issuedAtTick: world.tick,
+    };
+    world.commandQueue.push(setRatioCmd);
+  }
+}
+
+/**
+ * Attempt WarFooting→Probing transition with target selection.
+ * Target selection is the guard: if no target, transition does NOT fire.
+ * Q3 spec: pick closest player-marked food pile by ascending pile ID.
+ * Fallback: closest unmarked surface pile within AI_PROBE_FALLBACK_RADIUS_TILES
+ * of any open player entrance.
+ */
+function aiStateMachineTick_probeEntry(
+  world: WorldState,
+  aiColonyId: ColonyId,
+  _colony: ColonyRecord,
+): void {
+  const target = _selectProbeTarget(world);
+  if (target === null) return; // no target → don't transition
+
+  // Commit the closest 3 alive AI fighters by ascending ant index.
+  const fighters = _selectProbeFighters(world, aiColonyId);
+  if (fighters.length < AI_PROBE_FIGHTER_COUNT) return; // not enough fighters
+
+  setAIRallyOperation(world, aiColonyId, target.tileX, target.tileY, fighters, 'Probe');
+
+  // Emit SetRallyPoint SimCommand so world.rallyPoint is set for fighters.
+  _emitSetRallyPoint(world, aiColonyId, target.tileX, target.tileY);
+}
+
+/**
+ * aiProbeTick — runs while state === Probing.
+ * Re-emit SetRallyPoint only when colony.rallyPoint is null (e.g. first post-load tick
+ * if the saved rallyPoint was somehow cleared). Per spec NTH-5: colony.rallyPoint is
+ * the derived consequence; aiState.invasionRallyTileX/Y is the sim-state-of-record.
+ * The probe end conditions are handled by advanceAIState → _checkProbingToWarFooting.
+ */
+function aiProbeTick(world: WorldState, aiColonyId: ColonyId): void {
+  let aiState: import('../sim/types.js').AIStateRecord | null = null;
+  for (let i = 0; i < world.aiState.length; i++) {
+    if (world.aiState[i]!.colonyId === aiColonyId) { aiState = world.aiState[i]!; break; }
+  }
+  if (aiState === null) return;
+  // Re-emit rally only if rally is active in sim-state but colony.rallyPoint is null.
+  if (aiState.invasionRallyTileX !== -1) {
+    const colony = world.colonies[aiColonyId];
+    if (colony !== undefined && colony.rallyPoint === null) {
+      _emitSetRallyPoint(world, aiColonyId, aiState.invasionRallyTileX, aiState.invasionRallyTileY);
+    }
+  }
+}
+
+/**
+ * aiInvasionTick — runs while state === Invading.
+ * Q4: if entering Invading (invasionStartTick === world.tick), pick entrance and commit fighters.
+ * Re-emit rally if needed.
+ */
+function aiInvasionTick(world: WorldState, aiColonyId: ColonyId): void {
+  let aiState: import('../sim/types.js').AIStateRecord | null = null;
+  for (let i = 0; i < world.aiState.length; i++) {
+    if (world.aiState[i]!.colonyId === aiColonyId) { aiState = world.aiState[i]!; break; }
+  }
+  if (aiState === null) return;
+
+  // On invasion entry tick: commit fighters and select target entrance.
+  if (aiState.invasionStartTick === world.tick && aiState.operationKind === 'None') {
+    // Select target entrance (Q4): player entrance closest to last probe target.
+    const targetEntrance = _selectInvasionEntrance(world, aiState);
+    if (targetEntrance === null) return;
+
+    // Commit ALL alive AI fighters up to AI_MAX_OPERATION_FIGHTERS (lowest indices first).
+    const fighters = _selectAllFighters(world, aiColonyId);
+
+    setAIRallyOperation(world, aiColonyId, targetEntrance.surfaceTileX, targetEntrance.surfaceTileY, fighters, 'Invasion');
+    _emitSetRallyPoint(world, aiColonyId, targetEntrance.surfaceTileX, targetEntrance.surfaceTileY);
+    return;
+  }
+
+  // Re-emit rally only if rally is active in sim-state but colony.rallyPoint is null
+  // (handles first post-load tick when world.rallyPoint was somehow cleared).
+  if (aiState.invasionRallyTileX !== -1) {
+    const colony = world.colonies[aiColonyId];
+    if (colony !== undefined && colony.rallyPoint === null) {
+      _emitSetRallyPoint(world, aiColonyId, aiState.invasionRallyTileX, aiState.invasionRallyTileY);
+    }
+  }
+
+  // When invasion ends (advanceAIState → _endInvasion resets invasionRallyTileX/Y to -1),
+  // runAIController emits ClearRallyPoint in the wasActive && nowInactive block above.
+}
+
+/** Select probe target (Q3 spec). */
+function _selectProbeTarget(world: WorldState): { tileX: number; tileY: number } | null {
+  // Priority 1: closest player-marked food pile by ascending pile ID for ties.
+  const playerColony = world.colonies[PLAYER_COLONY_ID];
+  if (playerColony === undefined) return null;
+
+  let bestPile: { tileX: number; tileY: number; id: number; dist: number } | null = null;
+  const enemyCol = world.colonies[2]; // ENEMY_COLONY_ID = 2
+  // We need a reference point: AI's entrance or colony start.
+  const aiEntranceX = enemyCol !== undefined && enemyCol.entrances.length > 0
+    ? enemyCol.entrances[0]!.surfaceTileX
+    : 104; // ENEMY_START_X fallback
+
+  for (const pile of world.foodPiles) {
+    const isMarked = playerColony.priorityFoodPileId === pile.foodPileId;
+    if (!isMarked) continue;
+    const dist = Math.abs(pile.tileX - aiEntranceX) + Math.abs(pile.tileY - 64);
+    if (bestPile === null || dist < bestPile.dist || (dist === bestPile.dist && pile.foodPileId < bestPile.id)) {
+      bestPile = { tileX: pile.tileX, tileY: pile.tileY, id: pile.foodPileId, dist };
+    }
+  }
+  if (bestPile !== null) return { tileX: bestPile.tileX, tileY: bestPile.tileY };
+
+  // Priority 2: closest unmarked surface pile within AI_PROBE_FALLBACK_RADIUS_TILES
+  // of any open player entrance.
+  for (const pile of world.foodPiles) {
+    // Check if within radius of any open player entrance.
+    let withinRadius = false;
+    for (const entrance of playerColony.entrances) {
+      if (!entrance.isOpen) continue;
+      const dist = Math.abs(pile.tileX - entrance.surfaceTileX) + Math.abs(pile.tileY - entrance.surfaceTileY);
+      if (dist <= AI_PROBE_FALLBACK_RADIUS_TILES) { withinRadius = true; break; }
+    }
+    if (!withinRadius) continue;
+    // Pick closest to AI entrance by ascending pile ID for ties.
+    const dist = Math.abs(pile.tileX - aiEntranceX) + Math.abs(pile.tileY - 64);
+    if (bestPile === null || dist < bestPile.dist || (dist === bestPile.dist && pile.foodPileId < bestPile.id)) {
+      bestPile = { tileX: pile.tileX, tileY: pile.tileY, id: pile.foodPileId, dist };
+    }
+  }
+  return bestPile !== null ? { tileX: bestPile.tileX, tileY: bestPile.tileY } : null;
+}
+
+/** Select the 3 alive AI fighters with the lowest ant index (ascending). */
+function _selectProbeFighters(world: WorldState, aiColonyId: ColonyId): number[] {
+  const { ants } = world;
+  const fighters: number[] = [];
+  for (let i = 0; i < ants.alive.length && fighters.length < AI_PROBE_FIGHTER_COUNT; i++) {
+    if (ants.alive[i] !== 1) continue;
+    if (ants.colonyId[i] !== aiColonyId) continue;
+    if (ants.task[i] !== AntTask.Fighting) continue;
+    fighters.push(i);
+  }
+  return fighters;
+}
+
+/** Select ALL alive AI fighters (lowest indices first, up to AI_MAX_OPERATION_FIGHTERS). */
+function _selectAllFighters(world: WorldState, aiColonyId: ColonyId): number[] {
+  const { ants } = world;
+  const fighters: number[] = [];
+  const maxFighters = AI_MAX_OPERATION_FIGHTERS;
+  for (let i = 0; i < ants.alive.length && fighters.length < maxFighters; i++) {
+    if (ants.alive[i] !== 1) continue;
+    if (ants.colonyId[i] !== aiColonyId) continue;
+    if (ants.task[i] !== AntTask.Fighting) continue;
+    fighters.push(i);
+  }
+  return fighters;
+}
+
+/** Select invasion entrance (Q4): player entrance closest to AI's last probe target. Falls back to first open. */
+function _selectInvasionEntrance(
+  world: WorldState,
+  aiState: import('../sim/types.js').AIStateRecord,
+): import('../sim/colony/entrance.js').NestEntrance | null {
+  const playerColony = world.colonies[PLAYER_COLONY_ID];
+  if (playerColony === undefined) return null;
+  const openEntrances = playerColony.entrances.filter((e) => e.isOpen);
+  if (openEntrances.length === 0) return null;
+  if (openEntrances.length === 1) return openEntrances[0]!;
+
+  // Use last probe target as reference (invasionRallyTileX/Y from a prior probe).
+  const refX = aiState.invasionRallyTileX !== -1 ? aiState.invasionRallyTileX : aiState.operationTargetTileX;
+  const refY = aiState.invasionRallyTileY !== -1 ? aiState.invasionRallyTileY : aiState.operationTargetTileY;
+  if (refX === -1) return openEntrances[0]!;
+
+  let best = openEntrances[0]!;
+  let bestDist = Math.abs(best.surfaceTileX - refX) + Math.abs(best.surfaceTileY - refY);
+  for (let i = 1; i < openEntrances.length; i++) {
+    const e = openEntrances[i]!;
+    const dist = Math.abs(e.surfaceTileX - refX) + Math.abs(e.surfaceTileY - refY);
+    if (dist < bestDist) { best = e; bestDist = dist; }
+  }
+  return best;
+}
+
+/** Emit SetRallyPoint command for the AI colony. */
+function _emitSetRallyPoint(world: WorldState, aiColonyId: ColonyId, tileX: number, tileY: number): void {
+  const cmd = {
+    type: 'SetRallyPoint' as const,
+    colonyId: aiColonyId,
+    tileX,
+    tileY,
+    issuedAtTick: world.tick,
+  };
+  world.commandQueue.push(cmd);
 }
 
 // --- Helpers ---
