@@ -1897,12 +1897,11 @@ export class UIScene extends Phaser.Scene {
       ta.addEventListener('input', () => {
         this.surveyState.freeText = truncateFreeText(ta.value);
       });
-      ta.addEventListener('focus', () => {
-        this.input.keyboard?.removeCapture('SPACE');
-      });
-      ta.addEventListener('blur', () => {
-        this.input.keyboard?.addCapture('SPACE');
-      });
+      // Phaser's KeyboardManager listens on window (bubble phase) and calls
+      // preventDefault() for any key in its captures list — which includes
+      // WASD and Space by default. stopPropagation prevents the keydown from
+      // reaching Phaser so the textarea receives every character normally.
+      ta.addEventListener('keydown', (e) => { e.stopPropagation(); });
       // Append to the canvas's parent so embedded-in-shadow-DOM hosts
       // (the library-mode embed on the website may eventually mount
       // inside a custom element) keep the textarea inside the same
