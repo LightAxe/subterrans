@@ -29,6 +29,8 @@ import {
   COMBAT_DAMAGE_HOMEGROUND,
   COMBAT_COOLDOWN_TICKS,
 } from './constants.js';
+import { SIM_VERSION_V17_AI_STATE } from './types.js';
+import { getAIStateForColony, isInCohort } from './ai-state.js';
 
 /**
  * Sweep all live ants, bucket by tile, and resolve combat on tiles shared by 2+ colonies.
@@ -346,6 +348,33 @@ export function killAnt(
   // Reset combat state so replacement ants wind up fresh.
   ants.attackCooldown[antIndex] = 0;
   ants.combatOpponentId[antIndex] = -1;
+
+  // S2 — increment operation death counters if an active operation is running.
+  // QC Pass 4 AR-P1-001: precise predicates using committed-cohort lookup.
+  // Gate on V17 so pre-V17 saves skip this (world.aiState may be empty).
+  // CLNY-08: no direct PLAYER_COLONY_ID / ENEMY_COLONY_ID equality branching.
+  // Instead, iterate world.aiState to find any active operation that involves this kill.
+  if (world.simVersion >= SIM_VERSION_V17_AI_STATE) {
+    for (let _ai = 0; _ai < world.aiState.length; _ai++) {
+      const enemyAI = world.aiState[_ai]!;
+      if (enemyAI.operationKind === 'None') continue;
+      const aiColId = enemyAI.colonyId;
+      const victimColId = ants.colonyId[antIndex]! as ColonyId;
+      // operationAttackerDeaths: victim is a committed-cohort AI fighter.
+      if (victimColId === aiColId
+          && isInCohort(antIndex, enemyAI.operationFighterIds, enemyAI.operationFighterCount)) {
+        enemyAI.operationAttackerDeaths += 1;
+      }
+      // operationDefenderDeaths: victim is a non-AI ant (defender) killed by a committed-cohort AI fighter.
+      if (victimColId !== aiColId
+          && killerKind === 'Ant'
+          && killerColonyId === aiColId
+          && killerId !== null
+          && isInCohort(killerId, enemyAI.operationFighterIds, enemyAI.operationFighterCount)) {
+        enemyAI.operationDefenderDeaths += 1;
+      }
+    }
+  }
 
   if (killerColonyId !== null && killerColonyId !== 0) {
     const killerColony = world.colonies[killerColonyId];
