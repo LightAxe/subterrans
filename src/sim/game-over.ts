@@ -1,4 +1,6 @@
 // Phase 5 scope: outcome enum only. checkQueenDeath is Phase 9 scope — see Phase 4 PRD §5a.
+// S0b: emits queen_death SimEvent on first detection (cause: null — S1/S2 will fill cause
+// from kill-site context when those stages land, per RC-P1-003).
 
 export const GameOutcome = {
   None: 0,
@@ -10,6 +12,7 @@ export type GameOutcome = typeof GameOutcome[keyof typeof GameOutcome];
 
 import type { WorldState } from './types.js';
 import type { ColonyId, ColonyRecord } from './colony/colony-store.js';
+import { emitEvent } from './telemetry.js';
 
 /**
  * Returns true if the colony's queen is alive per world.ants.
@@ -19,7 +22,25 @@ function isQueenAlive(world: WorldState, colony: ColonyRecord): boolean {
   const qid = colony.queenEntityId;
   const alive = world.ants.alive[qid] === 1;
   if (!alive) {
-    colony.defeated = true;
+    if (!colony.defeated) {
+      // Set before emitting (defensive guard against hypothetical re-entrancy).
+      colony.defeated = true;
+      emitEvent(world, {
+        tick: world.tick,
+        type: 'queen_death',
+        payload: {
+          cause: null,
+          location: {
+            x: world.ants.posX[qid] ?? 0,
+            y: world.ants.posY[qid] ?? 0,
+            grid: 'underground',
+          },
+          aiStateAtTime: null,
+        },
+      });
+    } else {
+      colony.defeated = true;
+    }
     return false;
   }
   return true;

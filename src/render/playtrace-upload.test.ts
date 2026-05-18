@@ -43,6 +43,7 @@ function makeInput(overrides: Partial<PlaytraceSubmissionInput> = {}): Playtrace
     seed: 123,
     inputLog: [],
     survey: { rating: 5, freeText: '', brokenFlag: false },
+    resumedFromSave: false,
     ...overrides,
   };
 }
@@ -140,7 +141,7 @@ describe('submitPlaytrace — wire framing', () => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
       expect(headers['Content-Type']).toBe('application/octet-stream');
       expect(headers['Content-Encoding']).toBe('gzip');
-      expect(headers['X-Schema-Version']).toBe('1');
+      expect(headers['X-Schema-Version']).toBe('2');
       // Body should be a Blob of non-zero size — the gzipped envelope.
       const body = init?.body as Blob;
       expect(body).toBeInstanceOf(Blob);
