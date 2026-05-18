@@ -57,6 +57,8 @@ export type EntityId = number; // incrementing counter from 0, no recycling per 
  * preserves SCEN-06 replay determinism — a save recorded before a given
  * fix keeps producing identical ticks across reload under the old algorithm.
  */
+import type { SimEvent } from './telemetry.js';
+
 export const LEGACY_SIM_VERSION = 2 as const;
 export const SIM_VERSION_V3 = 3 as const;
 export const SIM_VERSION_V4_DIAGONAL_MOTION = 4 as const;
@@ -210,7 +212,14 @@ export const SIM_VERSION_V13_INVARIANT_FIXES = 13 as const;
  *          deposit (same as the surface path).
  */
 export const SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX = 14 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX;
+/**
+ * V15 (S0b) — adds WorldState.events (SimEvent[]) + overflow counters for the
+ * playtrace telemetry pipeline. Sticky-on-load: pre-V15 saves replay with
+ * events=[] and counters=0, which is correct (no events to re-emit from a
+ * pre-telemetry save).
+ */
+export const SIM_VERSION_V15_TELEMETRY = 15 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V15_TELEMETRY;
 
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick
@@ -327,6 +336,15 @@ export interface WorldState {
   recentlyDepletedFood: DepletionRecord[];
 
   pendingChambers: Record<string, PendingChamber>;         // keyed by `${colonyId}:${anchorTileX}:${anchorTileY}` (PRD §2d)
+
+  // S0b — playtrace telemetry (ADR-0013 v2 / D-31 / D-34).
+  // events: accumulated this session; NOT serialized to saves (transient —
+  // reset to [] on load; deterministic replay re-generates from inputLog).
+  // Counters ARE persisted so a resumed-from-save upload produces a truthful
+  // eventOverflow block reflecting drops that happened before the save.
+  events: SimEvent[];
+  droppedCombatKillCount: number;
+  droppedStructuralCount: number;
 }
 
 /**
@@ -357,6 +375,10 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
     foodPiles: [],
     recentlyDepletedFood: [],   // issue #112 — empty until first depletion
     pendingChambers: {},    // empty Record; PlaceChamberCommand creates entries
+    // S0b — telemetry fields.
+    events: [],
+    droppedCombatKillCount: 0,
+    droppedStructuralCount: 0,
   };
 }
 
@@ -381,6 +403,14 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   dst.simVersion = src.simVersion;
   dst.terrainSeed = src.terrainSeed;
   dst.commandQueue = src.commandQueue.slice(); // small in practice (user-input rate) — PRD §3 accepts this as the only Phase 1 allocation
+  // events: intentionally not copied into the render double-buffer (prevState).
+  // prevState.events is never read for interpolation; the only consumers of
+  // events (buildPaytraceSummary, buildPayloadWithDowngrade) read the live
+  // world directly. Skipping the copy avoids a per-tick O(n) allocation that
+  // could grow to ~2,000 entries.
+  // droppedCombatKillCount / droppedStructuralCount are also telemetry-only.
+  dst.droppedCombatKillCount = src.droppedCombatKillCount;
+  dst.droppedStructuralCount = src.droppedStructuralCount;
 
   // --- AntComponents: 19 TypedArray.set calls (zero allocation) ---
   dst.ants.posX.set(src.ants.posX);

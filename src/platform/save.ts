@@ -430,6 +430,10 @@ export interface SerializedWorldState {
    * sticky on load to preserve SCEN-06 replay determinism.
    */
   simVersion?: number;
+  /** S0b — overflow counters (persisted; events are NOT). Pre-V15 saves omit
+   *  these fields; deserializeWorldState defaults both to 0. */
+  droppedCombatKillCount?: number;
+  droppedStructuralCount?: number;
   /**
    * Issue #44 — terrain decoration seed (independent of `rngState` and
    * `simVersion`). Optional for backward compatibility: pre-#44 saves omit
@@ -600,6 +604,9 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
     foodPiles: world.foodPiles.map((p) => ({ ...p })),
     recentlyDepletedFood: world.recentlyDepletedFood.map((r) => ({ ...r })),
     pendingChambers: pendingOut,
+    // S0b: persist overflow counters; skip events (transient per design).
+    droppedCombatKillCount: world.droppedCombatKillCount,
+    droppedStructuralCount: world.droppedStructuralCount,
   };
 }
 
@@ -1135,6 +1142,21 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     foodPiles: s.foodPiles.map((p) => ({ ...p })),
     recentlyDepletedFood: validatedRecentlyDepleted.map((r) => ({ ...r })),
     pendingChambers,
+    // S0b — telemetry fields. events is always fresh (transient); counters
+    // load from save with 0 default for pre-V15 saves.
+    events: [],
+    droppedCombatKillCount:
+      typeof s.droppedCombatKillCount === 'number' &&
+      Number.isInteger(s.droppedCombatKillCount) &&
+      s.droppedCombatKillCount >= 0
+        ? s.droppedCombatKillCount
+        : 0,
+    droppedStructuralCount:
+      typeof s.droppedStructuralCount === 'number' &&
+      Number.isInteger(s.droppedStructuralCount) &&
+      s.droppedStructuralCount >= 0
+        ? s.droppedStructuralCount
+        : 0,
   };
 }
 

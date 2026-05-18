@@ -29,8 +29,10 @@
 
 import type { WorldState } from '../sim/types.js';
 import type { SimCommand } from '../sim/commands.js';
+import type { SimEvent } from '../sim/telemetry.js';
 import { buildDebugSnapshot, type DebugSnapshot } from '../platform/debug-snapshot.js';
 import { GameOutcome } from '../sim/game-over.js';
+import { buildPlaytraceSummary, type PlaytraceSummary } from './summary-builder.js';
 
 // Build-time-injected by vite.config.ts / vite.lib.config.ts `define`. The
 // ambient declaration keeps the playtrace module self-contained — no
@@ -40,7 +42,7 @@ declare const __APP_VERSION__: string;
 /** Wire-level schema version. Bumped on any breaking change to the envelope
  *  shape. Mirrored in the `X-Schema-Version` header so the server can reject
  *  unknown versions without paying the cost of decompressing the body. */
-export const PLAYTRACE_SCHEMA_VERSION = 1 as const;
+export const PLAYTRACE_SCHEMA_VERSION = 2 as const;
 
 /** Hard ceiling on the gzipped body. Defense-in-depth — the server also
  *  enforces this and returns 413. Picked to fit comfortably inside the
@@ -94,6 +96,10 @@ export interface PlaytraceSubmissionInput {
   inputLog: readonly SimCommand[];
   /** Survey contents from the overlay. */
   survey: PlaytraceSurvey;
+  /** True when the session was booted from a saved file rather than a fresh
+   *  game. Causes summary.eventsCoverage to be 'since_load' instead of
+   *  'full_round', flagging that events before the save tick are missing. */
+  resumedFromSave: boolean;
 }
 
 /** Result of a submission attempt. The caller surfaces a toast based on
@@ -111,8 +117,21 @@ export type PlaytraceUploadResult =
    *  Treated the same as `feature-off` by the UI — silent skip. */
   | { status: 'server-disabled' };
 
+/** Round end reason — orthogonal to outcome; lets telemetry join outcome ×
+ *  end-reason for D-30 distribution. 'QueenDeath' is the only reason in
+ *  S0b-S4; TimeoutTiebreak and StalemateTiebreak land in S5. */
+export type RoundEndReason =
+  | 'QueenDeath'
+  | 'TimeoutTiebreak'
+  | 'StalemateTiebreak';
+
 /** Envelope as it goes over the wire (pre-gzip). Exported so tests can
- *  reconstruct expectations against the same shape. */
+ *  reconstruct expectations against the same shape.
+ *
+ *  v2 additions: events, summary, roundEndReason.
+ *  - events + summary are omitted on survey-only submissions (snapshot: null).
+ *  - roundEndReason is always present but may be null (quit from pause menu,
+ *    or a game-over without a detectable queen-death event). */
 export interface PlaytraceEnvelope {
   sessionId: string;
   schemaVersion: typeof PLAYTRACE_SCHEMA_VERSION;
@@ -121,9 +140,13 @@ export interface PlaytraceEnvelope {
   seed: number;
   tick: number;
   outcome: 'Victory' | 'Defeat' | 'MutualDestruction';
+  roundEndReason: RoundEndReason | null;
   quitFromPauseMenu: boolean;
   survey: PlaytraceSurvey;
   snapshot: DebugSnapshot | null;
+  // Present only when snapshot is non-null (survey-only uploads omit both).
+  events?: SimEvent[];
+  summary?: PlaytraceSummary;
 }
 
 // ---------------------------------------------------------------------------
@@ -177,35 +200,53 @@ export function truncateFreeText(s: string): string {
 /** Build a fully-typed envelope from the submission input + a pre-built
  *  snapshot (or null for survey-only). Pure — no fetch, no compression.
  *  Exported for the downgrade-fallback unit test. */
+/** Derive the RoundEndReason from the event buffer. Returns null when no
+ *  queen_death event was emitted (quit from pause menu, or pre-S1 round). */
+function deriveRoundEndReason(events: SimEvent[]): RoundEndReason | null {
+  for (const ev of events) {
+    if (ev.type === 'queen_death') return 'QueenDeath';
+  }
+  return null;
+}
+
 export function buildPlaytraceEnvelope(
   input: PlaytraceSubmissionInput,
   snapshot: DebugSnapshot | null,
+  // v2: pre-captured events and summary (must be provided in synchronous
+  // prefix to avoid racing a post-restart world mutation).
+  capturedEvents?: SimEvent[],
+  capturedSummary?: PlaytraceSummary,
 ): PlaytraceEnvelope {
-  return {
+  const roundEndReason = capturedEvents
+    ? deriveRoundEndReason(capturedEvents)
+    : null;
+
+  const envelope: PlaytraceEnvelope = {
     sessionId: input.sessionId,
     schemaVersion: PLAYTRACE_SCHEMA_VERSION,
     gameVersion: __APP_VERSION__,
-    // Sourced from the LIVE snapshot's own simVersion (per ADR §"Schema
-    // versioning"). For loaded older saves, that field reflects what the
-    // save was written as — accurate even though the running build is
-    // newer. The current world.simVersion is the right field to read; we
-    // do not import LATEST_SIM_VERSION at build time.
     simVersion: input.world.simVersion,
     seed: input.seed,
     tick: input.world.tick,
     outcome: outcomeToWire(input.outcome),
+    roundEndReason,
     quitFromPauseMenu: input.quitFromPauseMenu,
     survey: {
       rating: input.survey.rating,
-      // truncateFreeText is idempotent; running it here guarantees the
-      // contract bound even if a caller passed an unsanitized survey
-      // straight to buildPlaytraceEnvelope (bypassing submitPlaytrace's
-      // hoist). The hoist still saves repeated work in the downgrade loop.
       freeText: truncateFreeText(input.survey.freeText),
       brokenFlag: input.survey.brokenFlag,
     },
     snapshot,
   };
+
+  // Attach events + summary only when a snapshot is present (spec: survey-only
+  // uploads omit both fields entirely).
+  if (snapshot !== null && capturedEvents !== undefined && capturedSummary !== undefined) {
+    envelope.events = capturedEvents;
+    envelope.summary = capturedSummary;
+  }
+
+  return envelope;
 }
 
 /** Gzip a UTF-8 string using the native CompressionStream API. Returns the
@@ -351,13 +392,16 @@ export async function submitPlaytrace(
 async function buildPayloadWithDowngrade(
   input: PlaytraceSubmissionInput,
 ): Promise<Blob> {
-  // Capture the world ONCE, synchronously, into a JSON-safe full envelope.
-  // serializeWorldState (see save.ts:569) materializes every TypedArray and
-  // grid into plain primitives/arrays; buildPlaytraceEnvelope copies the
-  // remaining world-dependent primitives (tick, simVersion). After this
-  // returns, the envelope has no live references back into `input.world`.
+  // Capture the world ONCE, synchronously, into JSON-safe primitives.
+  // world.events.slice() and buildPlaytraceSummary must happen here (in
+  // the sync prefix) before the first await yields control back to the
+  // caller — game-scene.ts fires restartGame() immediately after
+  // void-casting submitPlaytrace, so the live world is mutated during the
+  // async tail of this function.
+  const capturedEvents: SimEvent[] = input.world.events.slice();
+  const capturedSummary = buildPlaytraceSummary(input.world, input.resumedFromSave);
   const fullSnap = buildDebugSnapshot(input.world, input.seed, input.inputLog);
-  const fullEnvelope = buildPlaytraceEnvelope(input, fullSnap);
+  const fullEnvelope = buildPlaytraceEnvelope(input, fullSnap, capturedEvents, capturedSummary);
 
   // Stage 1 — full envelope.
   let body = await gzipEnvelope(fullEnvelope);
@@ -379,19 +423,31 @@ async function buildPayloadWithDowngrade(
   body = await gzipEnvelope(stage3);
   if (body.size <= PLAYTRACE_MAX_GZIPPED_BYTES) return body;
 
-  // Stage 4 — survey-only. Always fits (envelope is a handful of fields).
-  const stage4: PlaytraceEnvelope = { ...fullEnvelope, snapshot: null };
+  // Stage 4 — survey-only. Derive from the pre-captured fullEnvelope
+  // (not from input.world directly) to avoid reading mutated world state
+  // after the awaits above — restartGame() may have fired. Events and
+  // summary are excluded per spec (survey-only uploads omit both).
+  const { events: _ev, summary: _sm, ...stage4Base } = fullEnvelope;
+  const stage4: PlaytraceEnvelope = { ...stage4Base, snapshot: null };
   return gzipEnvelope(stage4);
 }
 
 /** Build a survey-only payload directly, skipping the snapshot construction.
  *  Used when the player did not opt in to upload. Same world-capture
  *  property as the downgrade path: the envelope is built in this function's
- *  synchronous prefix before the first await. */
+ *  synchronous prefix before the first await.
+ *
+ *  Capture events synchronously so roundEndReason is derived from the
+ *  pre-restart event buffer (world.events may be mutated after the first
+ *  await if restartGame fires immediately). */
 async function buildSurveyOnlyPayload(
   input: PlaytraceSubmissionInput,
 ): Promise<Blob> {
-  const envelope = buildPlaytraceEnvelope(input, null);
+  const capturedEvents: SimEvent[] = input.world.events.slice();
+  // survey-only: snapshot is null, so events+summary are omitted from the
+  // envelope body (per spec). roundEndReason IS included — it's a top-level
+  // field present on all submissions.
+  const envelope = buildPlaytraceEnvelope(input, null, capturedEvents);
   return gzipEnvelope(envelope);
 }
 

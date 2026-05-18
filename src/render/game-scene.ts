@@ -199,6 +199,7 @@ export class GameScene extends Phaser.Scene {
    * Cleared on resetSessionState so an explicit restartGame re-enables it.
    */
   private autosaveSuspended: boolean = false;
+  private resumedFromSave: boolean = false;
   private currentSeed: number = 0;
   // Issue #114 UAT — Settings sub-screen has a "Speed: N×" cycle row that
   // reads/writes this field via callbacks. The 1/2/4 keyboard shortcuts
@@ -445,6 +446,7 @@ export class GameScene extends Phaser.Scene {
     // bootFromSave's deserialize-throw catch (see issue #66 in the field
     // doc); a fresh start via restartGame should resume normal autosave.
     this.autosaveSuspended = false;
+    this.resumedFromSave = false;
     // tick.ts caches entrance/dig/chamber flow-fields at module scope keyed by
     // colonyId. bootFresh/bootFromSave replace `world` but those singletons
     // survive, so a new session with the same colony IDs would otherwise route
@@ -533,6 +535,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.currentSeed = loaded.seed;
     this.world = nextWorld;
+    this.resumedFromSave = true;
     // SCEN-06 replay truth: restore inputLog completely so the continued session
     // can be replayed byte-for-byte from (seed, inputLog) per Plan 04 Task 1.
     for (const c of loaded.inputLog) this.inputLog.push(c);
@@ -705,6 +708,7 @@ export class GameScene extends Phaser.Scene {
             world,
             seed,
             inputLog: inputLogCopy,
+            resumedFromSave: this.resumedFromSave,
             survey: {
               rating: survey.rating,
               freeText: survey.freeText,
