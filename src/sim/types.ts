@@ -403,7 +403,12 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   dst.simVersion = src.simVersion;
   dst.terrainSeed = src.terrainSeed;
   dst.commandQueue = src.commandQueue.slice(); // small in practice (user-input rate) — PRD §3 accepts this as the only Phase 1 allocation
-  dst.events = src.events.slice();
+  // events: intentionally not copied into the render double-buffer (prevState).
+  // prevState.events is never read for interpolation; the only consumers of
+  // events (buildPaytraceSummary, buildPayloadWithDowngrade) read the live
+  // world directly. Skipping the copy avoids a per-tick O(n) allocation that
+  // could grow to ~2,000 entries.
+  // droppedCombatKillCount / droppedStructuralCount are also telemetry-only.
   dst.droppedCombatKillCount = src.droppedCombatKillCount;
   dst.droppedStructuralCount = src.droppedStructuralCount;
 

@@ -423,9 +423,12 @@ async function buildPayloadWithDowngrade(
   body = await gzipEnvelope(stage3);
   if (body.size <= PLAYTRACE_MAX_GZIPPED_BYTES) return body;
 
-  // Stage 4 — survey-only. Events and summary are omitted when snapshot is
-  // null (spec: survey-only uploads omit both v2 fields entirely).
-  const stage4: PlaytraceEnvelope = buildPlaytraceEnvelope(input, null);
+  // Stage 4 — survey-only. Derive from the pre-captured fullEnvelope
+  // (not from input.world directly) to avoid reading mutated world state
+  // after the awaits above — restartGame() may have fired. Events and
+  // summary are excluded per spec (survey-only uploads omit both).
+  const { events: _ev, summary: _sm, ...stage4Base } = fullEnvelope;
+  const stage4: PlaytraceEnvelope = { ...stage4Base, snapshot: null };
   return gzipEnvelope(stage4);
 }
 
