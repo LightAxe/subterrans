@@ -63,6 +63,7 @@ export class AntSpritePool implements AntSpriteLayer {
     sprite.setPosition(opts.x, opts.y);
     sprite.setTint(opts.tint);
     sprite.setRotation(opts.rotation ?? 0);
+    sprite.setScale(opts.scale ?? 1);
     sprite.setDepth(ANT_SPRITE_DEPTH);
     sprite.setVisible(true);
   }

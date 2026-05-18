@@ -26,6 +26,9 @@ export interface AntSpriteDrawOptions {
    * rather than jittering frame-to-frame.
    */
   rotation?: number;
+  /** S1 — uniform scale multiplier. 1.0 = natural size; >1 = larger sprite.
+   *  Used to render fighter ants slightly larger than workers. */
+  scale?: number;
 }
 
 /** Static (non-moving) entities drawn through the same sprite pool. */

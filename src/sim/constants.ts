@@ -520,3 +520,23 @@ export const EXCURSION_WOBBLE_PERCENT = 20;
  * meaningful outbound trail (4+ tiles out, along the path toward food) intact.
  */
 export const ENTRANCE_DEPOSIT_SUPPRESS_RADIUS = 3;
+
+// ---------------------------------------------------------------------------
+// S1 — Combat math (HP / damage / cooldown)
+// ---------------------------------------------------------------------------
+
+/** S1 / D-32 — Base HP for any ant. Home-ground HP = HP_BASE + HP_HOMEGROUND_BONUS = 20. */
+export const COMBAT_HP_BASE = 16 as const;
+
+/** S1 / D-32 — Extra HP buffer for ants fighting on their own colony's grid.
+ *  Depletes before the base HP pool (takes damage first). */
+export const COMBAT_HP_HOMEGROUND_BONUS = 4 as const;
+
+/** S1 / D-32 — Damage dealt per strike by an ant fighting on away ground. */
+export const COMBAT_DAMAGE_BASE = 4 as const;
+
+/** S1 / D-32 — Damage dealt per strike by an ant fighting on home ground (+25%, integer-clean). */
+export const COMBAT_DAMAGE_HOMEGROUND = 5 as const;
+
+/** S1 / D-32 — Ticks between strikes; also the windup length (first contested tick). */
+export const COMBAT_COOLDOWN_TICKS = 5 as const;

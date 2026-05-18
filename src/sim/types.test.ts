@@ -29,10 +29,10 @@ describe('WorldState', () => {
       expect(world.rngState).toBe(4294967295);
     });
 
-    it('has exactly seventeen fields (4 Phase 5 + 3 Phase 6 + 4 Phase 7 + 1 issue #27 + 1 issue #44 + 1 issue #112 + 3 S0b telemetry)', () => {
+    it('has exactly eighteen fields (4 Phase 5 + 3 Phase 6 + 4 Phase 7 + 1 issue #27 + 1 issue #44 + 1 issue #112 + 3 S0b telemetry + 1 S1 pendingQueenDeathContexts)', () => {
       const world = createWorldState(0);
       const keys = Object.keys(world);
-      expect(keys).toHaveLength(17);
+      expect(keys).toHaveLength(18);
       expect(keys).toContain('tick');
       expect(keys).toContain('rngState');
       expect(keys).toContain('nextEntityId');

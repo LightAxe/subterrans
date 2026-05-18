@@ -165,7 +165,9 @@ describe('combat cross-grid — tile-key gridColonyId extension (REQ-C4)', () =>
 
     // Act --------------------------------------------------------------------
     // Pin rngState to the known-player-wins seed value immediately before combat.
+    // Use V15 resolver: this test verifies cross-grid tile-key bucketing, not V16 HP math.
     world.rngState = 3;
+    world.simVersion = 15;
     detectAndResolveCombat(world, new Rng(world.rngState));
 
     // MANDATORY t=N outcome assertions ---------------------------------------

@@ -59,6 +59,18 @@ export type EntityId = number; // incrementing counter from 0, no recycling per 
  */
 import type { SimEvent } from './telemetry.js';
 
+/** S1 — Who killed an ant. 'Environment' reserved for future hazards (S5+). */
+export type KillerKind = 'Ant' | 'Spider' | 'Environment';
+
+/** S1 — Context written by killAnt when a queen dies; read+cleared by checkQueenDeath same tick. */
+export interface QueenDeathContext {
+  tile: { x: number; y: number };
+  currentGridColonyId: ColonyId;
+  killerColonyId: ColonyId | null;
+  killerId: number | null;
+  killerKind: KillerKind;
+}
+
 export const LEGACY_SIM_VERSION = 2 as const;
 export const SIM_VERSION_V3 = 3 as const;
 export const SIM_VERSION_V4_DIAGONAL_MOTION = 4 as const;
@@ -219,7 +231,12 @@ export const SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX = 14 as const;
  * pre-telemetry save).
  */
 export const SIM_VERSION_V15_TELEMETRY = 15 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V15_TELEMETRY;
+/**
+ * V16 (S1) — Combat math: HP/damage/cooldown replaces coin-flip resolver.
+ * QueenDeathContext written by killAnt so checkQueenDeath can emit cause.
+ */
+export const SIM_VERSION_V16_COMBAT_HPDPS = 16 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V16_COMBAT_HPDPS;
 
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick
@@ -345,6 +362,13 @@ export interface WorldState {
   events: SimEvent[];
   droppedCombatKillCount: number;
   droppedStructuralCount: number;
+
+  /**
+   * S1 — transient per-colony queen-kill context. Written by combat.killAnt when
+   * a queen dies; read and cleared by checkQueenDeath later the same tick.
+   * Index by victim colonyId. Empty array between ticks.
+   */
+  pendingQueenDeathContexts: (QueenDeathContext | null)[];
 }
 
 /**
@@ -379,6 +403,8 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
     events: [],
     droppedCombatKillCount: 0,
     droppedStructuralCount: 0,
+    // S1 — transient; cleared between ticks by combat resolver.
+    pendingQueenDeathContexts: [],
   };
 }
 
@@ -411,6 +437,9 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   // droppedCombatKillCount / droppedStructuralCount are also telemetry-only.
   dst.droppedCombatKillCount = src.droppedCombatKillCount;
   dst.droppedStructuralCount = src.droppedStructuralCount;
+  // S1 — pendingQueenDeathContexts is transient (cleared each tick); copy
+  // so the render double-buffer does not observe stale mid-tick contexts.
+  dst.pendingQueenDeathContexts = src.pendingQueenDeathContexts.slice();
 
   // --- AntComponents: 19 TypedArray.set calls (zero allocation) ---
   dst.ants.posX.set(src.ants.posX);
@@ -466,6 +495,12 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   // because the v10 nurse state machine reads them every tick.
   dst.ants.carryingBroodId.set(src.ants.carryingBroodId);
   dst.ants.carriedBy.set(src.ants.carriedBy);
+  // S1 — combat HP/damage/cooldown fields. Must round-trip: the V16 resolver
+  // reads these every combat tick; the render interpolation reads them for
+  // fighter-size visual. Not copying would cause one-frame stale combat state.
+  dst.ants.hp.set(src.ants.hp);
+  dst.ants.homeGroundBonusHp.set(src.ants.homeGroundBonusHp);
+  dst.ants.attackCooldown.set(src.ants.attackCooldown);
 
   // --- colonies: delete stale dst keys; upsert each src colony ---
   // Remove dst colonies that no longer exist in src
