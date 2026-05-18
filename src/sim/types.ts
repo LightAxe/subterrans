@@ -501,6 +501,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   dst.ants.hp.set(src.ants.hp);
   dst.ants.homeGroundBonusHp.set(src.ants.homeGroundBonusHp);
   dst.ants.attackCooldown.set(src.ants.attackCooldown);
+  dst.ants.combatOpponentId.set(src.ants.combatOpponentId);
 
   // --- colonies: delete stale dst keys; upsert each src colony ---
   // Remove dst colonies that no longer exist in src

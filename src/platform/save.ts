@@ -402,6 +402,8 @@ interface SerializedAnts {
   hp?: number[];
   homeGroundBonusHp?: number[];
   attackCooldown?: number[];
+  /** S1 / D-32 — combatOpponentId (-1 = not paired). Absent on pre-S1 saves; defaults to all-(-1). */
+  combatOpponentId?: number[];
 }
 
 interface SerializedColony {
@@ -542,6 +544,7 @@ function serializeAnts(a: AntComponents): SerializedAnts {
     hp:               Array.from(a.hp),
     homeGroundBonusHp:Array.from(a.homeGroundBonusHp),
     attackCooldown:   Array.from(a.attackCooldown),
+    combatOpponentId: Array.from(a.combatOpponentId),
   };
 }
 
@@ -850,6 +853,10 @@ function deserializeAnts(saved: SerializedAnts, capacity: number): AntComponents
     copyIntoInt32(a.attackCooldown, saved.attackCooldown);
   }
   // attackCooldown defaults to 0 (not in combat) via createAntComponents zero-init.
+  if (saved.combatOpponentId !== undefined) {
+    copyIntoInt32(a.combatOpponentId, saved.combatOpponentId);
+  }
+  // combatOpponentId defaults to -1 (not paired) via createAntComponents -1 fill.
   return a;
 }
 

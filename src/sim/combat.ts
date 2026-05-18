@@ -178,28 +178,37 @@ function resolveCombatOnTile_v16(world: WorldState, _tileKey: number, participan
   const antA = groupA[0]!;
   const antB = groupB[0]!;
 
-  // Windup: if either ant is not yet in combat (cooldown=0), both wind up together.
-  // Resetting the veteran's cooldown prevents a cooldown phase lock when a replacement
-  // opponent joins mid-cycle (otherwise the two cooldowns could cycle out of phase forever).
-  const aNew = ants.attackCooldown[antA] === 0;
-  const bNew = ants.attackCooldown[antB] === 0;
+  // New-pairing detection: compare current opponent to the stored one.
+  // This correctly handles veteran-veteran first contacts (both have non-zero
+  // cooldowns from prior fights but combatOpponentId differs from the new match).
+  const aNew = ants.combatOpponentId[antA] !== antB;
+  const bNew = ants.combatOpponentId[antB] !== antA;
+
+  // aFresh/bFresh: ant has never entered V16 combat (cooldown still 0 from initAnt
+  // or save migration). Used to decide whether to grant a fresh home-ground bonus.
+  // Distinct from aNew (new pairing) — a post-kill survivor has aNew=true (new
+  // opponent) but aFresh=false (cooldown was COMBAT_COOLDOWN_TICKS, not 0).
+  const aFresh = ants.attackCooldown[antA] === 0;
+  const bFresh = ants.attackCooldown[antB] === 0;
 
   if (aNew || bNew) {
     ants.attackCooldown[antA] = COMBAT_COOLDOWN_TICKS;
     ants.attackCooldown[antB] = COMBAT_COOLDOWN_TICKS;
-    // New ants get a fresh bonus based on their current position. Veteran ants
-    // (forced into re-windup because their opponent is new) keep their depleted bonus
-    // if still on home ground; it's zeroed if they've since moved off home ground.
-    // This prevents both unintended healing (bonus restored on replacement) and
-    // stale bonus (bonus persists after leaving home ground).
+    ants.combatOpponentId[antA] = antB;
+    ants.combatOpponentId[antB] = antA;
+    // Fresh ants get a full bonus based on current location.
+    // Veteran ants (new pairing, but were already in combat) keep their depleted
+    // bonus if still on home ground; it's zeroed if they've moved off home ground.
+    // This prevents unintended healing (bonus restored on replacement) while
+    // also clearing stale bonus after a position change.
     const aOnHome = ants.zone[antA] === 1 && ants.currentGridColonyId[antA] === ants.colonyId[antA]!;
     const bOnHome = ants.zone[antB] === 1 && ants.currentGridColonyId[antB] === ants.colonyId[antB]!;
-    if (aNew) {
+    if (aFresh) {
       ants.homeGroundBonusHp[antA] = aOnHome ? COMBAT_HP_HOMEGROUND_BONUS : 0;
     } else if (!aOnHome) {
       ants.homeGroundBonusHp[antA] = 0;
     }
-    if (bNew) {
+    if (bFresh) {
       ants.homeGroundBonusHp[antB] = bOnHome ? COMBAT_HP_HOMEGROUND_BONUS : 0;
     } else if (!bOnHome) {
       ants.homeGroundBonusHp[antB] = 0;
@@ -242,11 +251,13 @@ function resolveCombatOnTile_v16(world: WorldState, _tileKey: number, participan
   if (bDies) killAnt(world, antB, cidA as ColonyId, antA, 'Ant');
   if (aDies) killAnt(world, antA, cidB as ColonyId, antB, 'Ant');
 
-  // After a kill, survivors retain their current cooldown (set to COMBAT_COOLDOWN_TICKS
-  // above on their strike tick). When a new opponent joins on the next tick, the
-  // "reset both when either is new" rule synchronizes their cooldowns — no separate
-  // reset needed here. Zeroing cooldown here would falsely mark the survivor as "new"
-  // on the next tick, which would reset their home-ground bonus (unintended healing).
+  // After a kill, clear the survivor's opponent tracking so the next encounter
+  // is detected as a new pairing (triggering proper windup and home-ground bonus
+  // normalization). The survivor's cooldown stays at COMBAT_COOLDOWN_TICKS (set
+  // at the strike tick above), so aFresh=false on the next windup — the depleted
+  // bonus is preserved for home-ground survivors and zeroed for off-home ones.
+  if (bDies && !aDies) ants.combatOpponentId[antA] = -1;
+  if (aDies && !bDies) ants.combatOpponentId[antB] = -1;
 }
 
 // ---------------------------------------------------------------------------
@@ -334,6 +345,7 @@ export function killAnt(
   ants.alive[antIndex] = 0;
   // Reset combat state so replacement ants wind up fresh.
   ants.attackCooldown[antIndex] = 0;
+  ants.combatOpponentId[antIndex] = -1;
 
   if (killerColonyId !== null && killerColonyId !== 0) {
     const killerColony = world.colonies[killerColonyId];

@@ -241,6 +241,14 @@ export interface AntComponents {
   readonly homeGroundBonusHp: Int32Array;
   /** S1 / D-32 — Ticks until next strike (0 = not in active combat). Windup on first engagement. */
   readonly attackCooldown: Int32Array;
+  /**
+   * S1 / D-32 — Entity index of the ant's current combat opponent (-1 = not paired).
+   * Used by resolveCombatOnTile_v16 to detect new pairings: a pairing is new when
+   * combatOpponentId[antA] !== antB, which correctly handles veteran-veteran first
+   * contacts (both have non-zero cooldowns from prior fights but are new to each other).
+   * Set to the opponent's index on windup; reset to -1 on kill or death.
+   */
+  readonly combatOpponentId: Int32Array;
 }
 
 /**
@@ -344,6 +352,8 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
     hp:               new Int32Array(maxEntities),
     homeGroundBonusHp:new Int32Array(maxEntities),
     attackCooldown:   new Int32Array(maxEntities),
+    // S1 — combat opponent tracking. -1 = not paired.
+    combatOpponentId: (() => { const a = new Int32Array(maxEntities); a.fill(-1); return a; })(),
   };
 }
 
@@ -436,6 +446,7 @@ export function initAnt(ants: AntComponents, id: EntityId, spec: InitAntSpec): v
   ants.hp[id]               = COMBAT_HP_BASE;
   ants.homeGroundBonusHp[id]= 0;
   ants.attackCooldown[id]   = 0;
+  ants.combatOpponentId[id] = -1;
 }
 
 // ---------------------------------------------------------------------------
