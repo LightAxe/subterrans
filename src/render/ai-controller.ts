@@ -166,17 +166,21 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
 export function aiInitialSetup(world: WorldState, colony: ColonyRecord): void {
   // 1. Set fixed behavior ratio for AI (CMBT-02). Skip if the colony's
   //    targetRatio already matches the AI ratio (idempotent across boots).
-  const ratioReady =
-    colony.targetRatio.forage === AI_BEHAVIOR_RATIO.forage &&
-    colony.targetRatio.fight === AI_BEHAVIOR_RATIO.fight;
-  if (!ratioReady) {
-    const setRatioCmd: SetBehaviorRatioCommand = {
-      type: 'SetBehaviorRatio',
-      colonyId: colony.colonyId,
-      ratio: { ...AI_BEHAVIOR_RATIO },
-      issuedAtTick: world.tick,
-    };
-    world.commandQueue.push(setRatioCmd);
+  //    V17+: _syncBehaviorRatioToAIState owns the ratio; skip here to avoid
+  //    alternating commands that thrash the ratio every tick in non-Peacetime states.
+  if (world.simVersion < SIM_VERSION_V17_AI_STATE) {
+    const ratioReady =
+      colony.targetRatio.forage === AI_BEHAVIOR_RATIO.forage &&
+      colony.targetRatio.fight === AI_BEHAVIOR_RATIO.fight;
+    if (!ratioReady) {
+      const setRatioCmd: SetBehaviorRatioCommand = {
+        type: 'SetBehaviorRatio',
+        colonyId: colony.colonyId,
+        ratio: { ...AI_BEHAVIOR_RATIO },
+        issuedAtTick: world.tick,
+      };
+      world.commandQueue.push(setRatioCmd);
+    }
   }
 
   // 2. Designate entrance at queen's surface tile. Skip if any entrance

@@ -23,7 +23,7 @@ import {
   AI_BEHAVIOR_RATIO,
 } from './ai-controller.js';
 
-import { createWorldState } from '../sim/types.js';
+import { createWorldState, SIM_VERSION_V16_COMBAT_HPDPS } from '../sim/types.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { ColonyRecord, ChamberRecord } from '../sim/colony/colony-store.js';
 import { createUndergroundGrid, ugSet, UndergroundTileState } from '../sim/terrain.js';
@@ -165,8 +165,10 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
   // -------------------------------------------------------------------------
   describe('aiInitialSetup (CMBT-02 tick-0 setup)', () => {
 
-    it('on tick 0, pushes SetBehaviorRatio with AI_BEHAVIOR_RATIO', () => {
+    it('on tick 0, pushes SetBehaviorRatio with AI_BEHAVIOR_RATIO (pre-V17)', () => {
+      // V17+ worlds skip ratio push in aiInitialSetup; _syncBehaviorRatioToAIState owns it.
       const world = makeWorld(0);
+      world.simVersion = SIM_VERSION_V16_COMBAT_HPDPS;
       const colony = addColony(world, 2 as ColonyId, 0);
       setQueenPos(world, 0, 10, 5);
       aiInitialSetup(world, colony);
@@ -174,6 +176,16 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(ratioCmd).toBeDefined();
       expect((ratioCmd as { ratio: typeof AI_BEHAVIOR_RATIO }).ratio).toEqual(AI_BEHAVIOR_RATIO);
       expect(ratioCmd!.issuedAtTick).toBe(0);
+    });
+
+    it('in V17+, does NOT push SetBehaviorRatio (owned by _syncBehaviorRatioToAIState)', () => {
+      const world = makeWorld(0);
+      // world.simVersion is already V17 (LATEST_SIM_VERSION via createWorldState)
+      const colony = addColony(world, 2 as ColonyId, 0);
+      setQueenPos(world, 0, 10, 5);
+      aiInitialSetup(world, colony);
+      const ratioCmd = world.commandQueue.find((c) => c.type === 'SetBehaviorRatio');
+      expect(ratioCmd).toBeUndefined();
     });
 
     it('on tick 0, pushes DesignateEntrance for the AI queen\'s surface tile', () => {
@@ -204,13 +216,15 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       aiInitialSetup(world, colony);
       expect(world.commandQueue).toHaveLength(0);
     });
-    it('DOES push initial-setup commands after tick 0 when post-conditions unmet (#75)', () => {
+    it('DOES push initial-setup commands after tick 0 when post-conditions unmet (#75, pre-V17)', () => {
       // Pre-fix this scenario was broken: a save written before
       // aiInitialSetup existed (or where some future code path cleared
       // the AI's targetRatio / entrances) would never reinitialize. Post-
       // fix the function pushes whichever commands the post-condition
       // check determines are needed, regardless of `world.tick`.
+      // V17+: ratio push is handled by _syncBehaviorRatioToAIState, so only entrance pushed here.
       const world = makeWorld(1);
+      world.simVersion = SIM_VERSION_V16_COMBAT_HPDPS;
       const colony = addColony(world, 2 as ColonyId, 0);
       setQueenPos(world, 0, 10, 5);
       aiInitialSetup(world, colony);
@@ -230,8 +244,9 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       }
     });
 
-    it('SetBehaviorRatio uses the AI colonyId (not a hardcoded value)', () => {
+    it('SetBehaviorRatio uses the AI colonyId (not a hardcoded value, pre-V17)', () => {
       const world = makeWorld(0);
+      world.simVersion = SIM_VERSION_V16_COMBAT_HPDPS;
       const colony = addColony(world, 42 as ColonyId, 0);
       colony.colonyId = 42 as ColonyId;
       setQueenPos(world, 0, 10, 5);
