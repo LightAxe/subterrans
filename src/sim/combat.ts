@@ -14,6 +14,7 @@
 // checkQueenDeath (game-over.ts) reads and clears pendingQueenDeathContexts each tick.
 
 import { Rng } from './rng.js';
+import { AntTask } from './enums.js';
 import { makeTileKey } from './tile-key.js';
 import type { WorldState, KillerKind, QueenDeathContext } from './types.js';
 import { SIM_VERSION_V13_INVARIANT_FIXES, SIM_VERSION_V16_COMBAT_HPDPS } from './types.js';
@@ -204,13 +205,14 @@ function resolveCombatOnTile_v16(world: WorldState, _tileKey: number, participan
 
   if (!aStrikes && !bStrikes) return;
 
-  // Compute damage dealt by each striker (home-ground bonus on own underground grid).
-  const aDamage = aStrikes
+  // Compute damage dealt by each striker. Only AntTask.Fighting ants deal damage;
+  // workers, nurses, and queens caught in combat do not strike back (spec Part A §3).
+  const aDamage = aStrikes && ants.task[antA] === AntTask.Fighting
     ? ((ants.zone[antA] === 1 && ants.currentGridColonyId[antA] === ants.colonyId[antA]!)
         ? COMBAT_DAMAGE_HOMEGROUND
         : COMBAT_DAMAGE_BASE)
     : 0;
-  const bDamage = bStrikes
+  const bDamage = bStrikes && ants.task[antB] === AntTask.Fighting
     ? ((ants.zone[antB] === 1 && ants.currentGridColonyId[antB] === ants.colonyId[antB]!)
         ? COMBAT_DAMAGE_HOMEGROUND
         : COMBAT_DAMAGE_BASE)
@@ -278,6 +280,9 @@ export function killAnt(
 
   // Emit combat_kill event and write queen death context (S1 telemetry, V16+ only).
   if (world.simVersion >= SIM_VERSION_V16_COMBAT_HPDPS) {
+    const victimColony = world.colonies[victimColonyId];
+    const isQueenVictim = victimColony !== undefined && antIndex === victimColony.queenEntityId;
+
     // combat_kill is only emitted for Ant/Spider kills; Environment is reserved (no event).
     if (killerKind !== 'Environment') {
       emitEvent(world, {
@@ -286,7 +291,8 @@ export function killAnt(
         payload: {
           killer: { kind: killerKind, id: killerId, colonyId: killerColonyId },
           victim: {
-            kind: 'Ant',
+            // Queen victims use kind 'Queen' so analytics can filter without re-deriving role.
+            kind: isQueenVictim ? 'Queen' : 'Ant',
             id: antIndex,
             colonyId: victimColonyId,
           },
@@ -301,8 +307,7 @@ export function killAnt(
 
     // Write queen death context regardless of killerKind so checkQueenDeath can
     // fill in the cause field for queen_death events from any kill source.
-    const victimColony = world.colonies[victimColonyId];
-    if (victimColony !== undefined && antIndex === victimColony.queenEntityId) {
+    if (isQueenVictim) {
       const ctx: QueenDeathContext = {
         tile: { x: tileX, y: tileY },
         currentGridColonyId,

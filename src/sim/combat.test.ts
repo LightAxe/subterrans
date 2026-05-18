@@ -47,6 +47,13 @@ function spawnAnt(world: WorldState, colonyId: ColonyId, tileX: number, tileY: n
   return id;
 }
 
+// Helper: spawn a fighting ant (AntTask.Fighting) for V16 combat tests.
+function spawnFighter(world: WorldState, colonyId: ColonyId, tileX: number, tileY: number, zone: Zone): number {
+  const id = spawnAnt(world, colonyId, tileX, tileY, zone);
+  world.ants.task[id] = AntTask.Fighting;
+  return id;
+}
+
 describe('detectAndResolveCombat (V15 coin-flip path)', () => {
   it('does nothing when no two ants share a tile', () => {
     const { world, cid1, cid2 } = makeWorldWith2Colonies();
@@ -292,8 +299,8 @@ function runCombatTicks(world: WorldState, n: number): void {
 describe('V16 combat resolver', () => {
   it('windup: no ant dies on first contested tick', () => {
     const { world, cid1, cid2 } = makeV16World();
-    const a = spawnAnt(world, cid1, 5, 7, Zone.Surface);
-    const b = spawnAnt(world, cid2, 5, 7, Zone.Surface);
+    const a = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+    const b = spawnFighter(world, cid2, 5, 7, Zone.Surface);
     runCombatTicks(world, 1);
     // Windup tick — no strike, both alive
     expect(world.ants.alive[a]).toBe(1);
@@ -305,8 +312,8 @@ describe('V16 combat resolver', () => {
 
   it('no strike until cooldown decrements to 0 (first strike at T=6)', () => {
     const { world, cid1, cid2 } = makeV16World();
-    const a = spawnAnt(world, cid1, 5, 7, Zone.Surface);
-    const b = spawnAnt(world, cid2, 5, 7, Zone.Surface);
+    const a = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+    const b = spawnFighter(world, cid2, 5, 7, Zone.Surface);
     runCombatTicks(world, 4); // windup + 3 decrements → cooldown = 2
     expect(world.ants.alive[a]).toBe(1);
     expect(world.ants.alive[b]).toBe(1);
@@ -319,8 +326,8 @@ describe('V16 combat resolver', () => {
     // 4 strikes kill (4×4=16). Strikes at T=6,11,16,21 (windup T=1, decrement 5 ticks).
     // Both deal same damage → both reach hp=0 simultaneously on strike 4 (mutual kill).
     const { world, cid1, cid2 } = makeV16World();
-    const a = spawnAnt(world, cid1, 5, 7, Zone.Surface);
-    const b = spawnAnt(world, cid2, 5, 7, Zone.Surface);
+    const a = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+    const b = spawnFighter(world, cid2, 5, 7, Zone.Surface);
     runCombatTicks(world, 21);
     // Symmetric fight = mutual kill: both dead
     expect(world.ants.alive[a]).toBe(0);
@@ -336,10 +343,10 @@ describe('V16 combat resolver', () => {
     // T=20: strike 4. Defender hp=8-4=4. Attacker hp=1-5=-4 → DEAD.
     const { world, cid1, cid2 } = makeV16World();
     // Defender (cid1) on their own grid (currentGridColonyId=cid1, zone=Underground)
-    const defender = spawnAnt(world, cid1, 5, 7, Zone.Underground);
+    const defender = spawnFighter(world, cid1, 5, 7, Zone.Underground);
     world.ants.currentGridColonyId[defender] = Number(cid1) as unknown as typeof world.ants.currentGridColonyId[0];
     // Attacker (cid2) on cid1's grid (invasion)
-    const attacker = spawnAnt(world, cid2, 5, 7, Zone.Underground);
+    const attacker = spawnFighter(world, cid2, 5, 7, Zone.Underground);
     world.ants.currentGridColonyId[attacker] = Number(cid1) as unknown as typeof world.ants.currentGridColonyId[0];
 
     // Run exactly COMBAT_COOLDOWN_TICKS+1 = 6 ticks per round, 4 rounds = 24 ticks total
@@ -360,8 +367,8 @@ describe('V16 combat resolver', () => {
   it('simultaneous kills: both ants die on same tick when both hp<=0', () => {
     // Force both ants to have hp=4 (one strike kills) and no homeground bonus.
     const { world, cid1, cid2 } = makeV16World();
-    const a = spawnAnt(world, cid1, 5, 7, Zone.Surface);
-    const b = spawnAnt(world, cid2, 5, 7, Zone.Surface);
+    const a = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+    const b = spawnFighter(world, cid2, 5, 7, Zone.Surface);
     // Wind up both (1 tick), then set hp to low value
     runCombatTicks(world, 1); // windup tick
     world.ants.hp[a] = 4; // will die on next strike
@@ -377,9 +384,9 @@ describe('V16 combat resolver', () => {
 
   it('2v1: only one attacker is active; replacement winds up fresh after first dies', () => {
     const { world, cid1, cid2 } = makeV16World();
-    const a1 = spawnAnt(world, cid1, 5, 7, Zone.Surface);
-    const a2 = spawnAnt(world, cid1, 5, 7, Zone.Surface); // backup
-    const b  = spawnAnt(world, cid2, 5, 7, Zone.Surface);
+    const a1 = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+    const a2 = spawnFighter(world, cid1, 5, 7, Zone.Surface); // backup
+    const b  = spawnFighter(world, cid2, 5, 7, Zone.Surface);
     // After windup, a1 and b are in combat; a2 should NOT have cooldown set
     runCombatTicks(world, 1);
     expect(world.ants.attackCooldown[a1]).toBe(COMBAT_COOLDOWN_TICKS); // active
@@ -390,9 +397,9 @@ describe('V16 combat resolver', () => {
   it('replacement ant winds up fresh after first ally dies', () => {
     // a1 and b fight. b kills a1. a2 (backup) should wind up against b on the next tick.
     const { world, cid1, cid2 } = makeV16World();
-    const a1 = spawnAnt(world, cid1, 5, 7, Zone.Surface);
-    const a2 = spawnAnt(world, cid1, 5, 7, Zone.Surface); // backup (higher slot)
-    const b  = spawnAnt(world, cid2, 5, 7, Zone.Surface);
+    const a1 = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+    const a2 = spawnFighter(world, cid1, 5, 7, Zone.Surface); // backup (higher slot)
+    const b  = spawnFighter(world, cid2, 5, 7, Zone.Surface);
     // Force a1 to die quickly: set hp=4 so one strike kills.
     runCombatTicks(world, 1); // windup tick (a1 vs b paired, a2 unpaired)
     world.ants.hp[a1] = 4;
@@ -409,9 +416,9 @@ describe('V16 combat resolver', () => {
 
   it('home-ground bonus HP depletes first before base HP', () => {
     const { world, cid1, cid2 } = makeV16World();
-    const defender = spawnAnt(world, cid1, 5, 7, Zone.Underground);
+    const defender = spawnFighter(world, cid1, 5, 7, Zone.Underground);
     world.ants.currentGridColonyId[defender] = Number(cid1) as unknown as typeof world.ants.currentGridColonyId[0];
-    const attacker = spawnAnt(world, cid2, 5, 7, Zone.Underground);
+    const attacker = spawnFighter(world, cid2, 5, 7, Zone.Underground);
     world.ants.currentGridColonyId[attacker] = Number(cid1) as unknown as typeof world.ants.currentGridColonyId[0];
     // After windup, set defender's hp/bonus to known state
     runCombatTicks(world, 1); // windup
@@ -422,5 +429,48 @@ describe('V16 combat resolver', () => {
     // Attacker deals COMBAT_DAMAGE_BASE=4; defender bonus=4 → bonus absorbs all 4 → bonus=0, hp=16
     expect(world.ants.homeGroundBonusHp[defender]).toBe(0);
     expect(world.ants.hp[defender]).toBe(COMBAT_HP_BASE);
+  });
+});
+
+// =============================================================================
+// S1 — 2v2 two-tile chamber frontage (spec validation target)
+// =============================================================================
+
+describe('V16 2v2 two-tile chamber frontage', () => {
+  it('two adjacent tiles each resolve one independent pair; both defenders survive at hp=4', () => {
+    // Spec: "two adjacent chamber/open tiles each contain one home defender and one invader.
+    // Two active pairs resolve in parallel (one per tile). Both home defenders survive at HP 4;
+    // both invaders die at T+20."
+    const { world, cid1, cid2 } = makeV16World();
+
+    // Tile A (5,7): defender from cid1 (home-ground) vs invader from cid2
+    const defA = spawnFighter(world, cid1, 5, 7, Zone.Underground);
+    const invA = spawnFighter(world, cid2, 5, 7, Zone.Underground);
+    // Tile B (6,7): defender from cid1 (home-ground) vs invader from cid2
+    const defB = spawnFighter(world, cid1, 6, 7, Zone.Underground);
+    const invB = spawnFighter(world, cid2, 6, 7, Zone.Underground);
+
+    // Place all four on cid1's grid (defenders are on home ground).
+    const COLONY1 = 1;
+    world.ants.currentGridColonyId[defA] = COLONY1;
+    world.ants.currentGridColonyId[invA] = COLONY1;
+    world.ants.currentGridColonyId[defB] = COLONY1;
+    world.ants.currentGridColonyId[invB] = COLONY1;
+
+    // Run 21 ticks: windup at T=1, strikes at T=6, T=11, T=16, T=21.
+    runCombatTicks(world, 21);
+
+    // Both invaders dead (defender deals 5 home-ground damage × 4 strikes = 20 total).
+    expect(world.ants.alive[invA]).toBe(0);
+    expect(world.ants.alive[invB]).toBe(0);
+    // Both defenders alive (invader deals 4 damage × 4 strikes = 16; bonus absorbs first 4).
+    expect(world.ants.alive[defA]).toBe(1);
+    expect(world.ants.alive[defB]).toBe(1);
+    // Each defender ends at hp=4 (took 16 total damage: 4 absorbed by bonus, 12 from hp=16).
+    expect(world.ants.hp[defA]).toBe(4);
+    expect(world.ants.hp[defB]).toBe(4);
+    // Pairs are independent — each tile resolved its own fight.
+    expect(world.colonies[cid1]!.killCount).toBe(2);
+    expect(world.colonies[cid2]!.killCount).toBe(0);
   });
 });
