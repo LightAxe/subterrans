@@ -349,8 +349,9 @@ function _checkInvadingToRecovery(
 ): void {
   // Exit conditions (CF-P0-005 — cohort-based):
   // 1. Queen kill → game ends; AI stays Invading (Q-6: aiStateAtTime = "Invading")
-  // 2. Cohort alive < 3
-  // 3. Timeout
+  // 2. Cohort alive < 3 (only once a cohort has been committed)
+  // 3. Timeout (only once a cohort has been committed, so entrance-retry ticks don't burn the budget)
+  if (aiState.operationFighterCount === 0) return;
   const aliveCount = cohortAliveCount(world, aiState);
   const timeout = world.tick - aiState.operationStartTick >= AI_INVADING_TIMEOUT_TICKS;
   const rout = aliveCount < 3;
