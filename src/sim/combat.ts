@@ -186,16 +186,12 @@ function resolveCombatOnTile_v16(world: WorldState, _tileKey: number, participan
   if (aNew || bNew) {
     ants.attackCooldown[antA] = COMBAT_COOLDOWN_TICKS;
     ants.attackCooldown[antB] = COMBAT_COOLDOWN_TICKS;
-    // Home-ground bonus is only granted to ants that are newly entering combat
-    // (not to veterans whose opponent was replaced — they keep whatever bonus remains).
-    if (aNew) {
-      const aOnHome = ants.zone[antA] === 1 && ants.currentGridColonyId[antA] === ants.colonyId[antA]!;
-      if (aOnHome) ants.homeGroundBonusHp[antA] = COMBAT_HP_HOMEGROUND_BONUS;
-    }
-    if (bNew) {
-      const bOnHome = ants.zone[antB] === 1 && ants.currentGridColonyId[antB] === ants.colonyId[antB]!;
-      if (bOnHome) ants.homeGroundBonusHp[antB] = COMBAT_HP_HOMEGROUND_BONUS;
-    }
+    // Always recompute homeGroundBonusHp for both ants when windup fires. This prevents
+    // stale bonus HP from prior engagements carrying into off-home fights (Codex P1).
+    const aOnHome = ants.zone[antA] === 1 && ants.currentGridColonyId[antA] === ants.colonyId[antA]!;
+    ants.homeGroundBonusHp[antA] = aOnHome ? COMBAT_HP_HOMEGROUND_BONUS : 0;
+    const bOnHome = ants.zone[antB] === 1 && ants.currentGridColonyId[antB] === ants.colonyId[antB]!;
+    ants.homeGroundBonusHp[antB] = bOnHome ? COMBAT_HP_HOMEGROUND_BONUS : 0;
     return;
   }
 

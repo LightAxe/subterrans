@@ -33,11 +33,11 @@ function isQueenAlive(world: WorldState, colony: ColonyRecord): boolean {
         ? (world.pendingQueenDeathContexts[colony.colonyId] ?? null)
         : null;
 
-      // Determine cause: InvasionKill when the killer is from a different colony
-      // than the grid the queen was in when killed (RC-P1-003).
+      // Determine cause: InvasionKill when the killer is from outside the grid where
+      // the queen died — i.e. the killer was the invader in that grid (RC-P1-003).
       let cause: 'InvasionKill' | 'SpiderRampage' | 'Starvation' | 'MutualDestruction' | null = null;
       if (ctx !== null) {
-        if (ctx.killerColonyId !== null && ctx.killerColonyId !== colony.colonyId) {
+        if (ctx.killerColonyId !== null && ctx.killerColonyId !== ctx.currentGridColonyId) {
           cause = 'InvasionKill';
         }
         // SpiderRampage, Starvation, MutualDestruction: S2/S5/S6 will extend this.
