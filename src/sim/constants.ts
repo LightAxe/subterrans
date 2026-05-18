@@ -715,11 +715,6 @@ export const SPIDER_SWARM_MULTIPLIER = 4 as const;
 /** S3 — Manhattan tile radius within which spider hunts for worker density. */
 export const SPIDER_HUNT_SEARCH_RADIUS_TILES = 12 as const;
 
-/**
- * S3 — Minimum ticks workers must dwell on a tile before spider locks onto it
- * as a hunt target. Prevents locking onto transient worker crossings.
- */
-export const SPIDER_HUNT_DWELL_TICKS = 40 as const;
 
 /** S3 — Minimum workers on a tile to qualify as a hunt target. */
 export const SPIDER_HUNT_MIN_TARGET_WORKERS = 2 as const;
@@ -732,6 +727,7 @@ export const SPIDER_TERRITORY_RADIUS_TILES = 24 as const;
 
 /** S3 — Brood kills in a single rampage before spider exits to Feeding. */
 export const SPIDER_RAMPAGE_KILL_QUOTA = 5 as const;
+export const SPIDER_RAMPAGE_MAX_TICKS = 1200 as const;  // timeout if no kills after ~20s
 
 /** S3 — HP threshold below which spider retreats. */
 export const SPIDER_RAMPAGE_RETREAT_HP = 20 as const;

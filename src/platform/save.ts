@@ -447,6 +447,7 @@ interface SerializedSpiderState {
   strikeStartTick: number;
   feedingStartTick: number;
   retreatStartTick: number;
+  rampageStartTick: number;
   huntTargetTileX: number;
   huntTargetTileY: number;
   killsThisStrike: number;
@@ -1072,6 +1073,7 @@ function deserializeSpider(s: SerializedWorldState, simVersion: number): SpiderS
     strikeStartTick: typeof r.strikeStartTick === 'number' && Number.isInteger(r.strikeStartTick) ? r.strikeStartTick : 0,
     feedingStartTick: typeof r.feedingStartTick === 'number' && Number.isInteger(r.feedingStartTick) ? r.feedingStartTick : 0,
     retreatStartTick: typeof r.retreatStartTick === 'number' && Number.isInteger(r.retreatStartTick) ? r.retreatStartTick : 0,
+    rampageStartTick: typeof r.rampageStartTick === 'number' && Number.isInteger(r.rampageStartTick) ? r.rampageStartTick : 0,
     huntTargetTileX: typeof r.huntTargetTileX === 'number' && Number.isInteger(r.huntTargetTileX) ? r.huntTargetTileX : -1,
     huntTargetTileY: typeof r.huntTargetTileY === 'number' && Number.isInteger(r.huntTargetTileY) ? r.huntTargetTileY : -1,
     killsThisStrike: typeof r.killsThisStrike === 'number' && Number.isInteger(r.killsThisStrike) ? r.killsThisStrike : 0,

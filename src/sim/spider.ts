@@ -18,6 +18,7 @@ import {
   SPIDER_RAMPAGE_RETREAT_HP,
   SPIDER_RETREAT_MIN_TICKS,
   SPIDER_RAMPAGE_KILL_QUOTA,
+  SPIDER_RAMPAGE_MAX_TICKS,
   SPIDER_HUNT_SEARCH_RADIUS_TILES,
   SPIDER_HUNT_MIN_TARGET_WORKERS,
   SPIDER_SPEED,
@@ -372,6 +373,7 @@ export function tickSpider(world: WorldState): void {
       // Hunger check first: rampaging wins over hunting on same tick.
       if (spider.hungerTicks >= SPIDER_HUNGER_MAX_TICKS[NORMAL_TIER_INDEX]) {
         spider.state = 'Rampaging';
+        spider.rampageStartTick = world.tick;
         spider.rampageKillsThisRampage = 0;
         emitEvent(world, {
           tick: world.tick,
@@ -453,6 +455,14 @@ export function tickSpider(world: WorldState): void {
         spider.state = 'Feeding';
         spider.feedingStartTick = world.tick;
         spider.hungerTicks = 0;
+      } else if (world.tick - spider.rampageStartTick >= SPIDER_RAMPAGE_MAX_TICKS) {
+        // Timeout: no ants surfaced at entrance — treat as failed rampage and retreat.
+        emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
+        clearSpiderPairingSentinels(world);
+        spider.state = 'Retreating';
+        spider.retreatStartTick = world.tick;
+        spider.huntTargetTileX = -1;
+        spider.huntTargetTileY = -1;
       }
       break;
     }

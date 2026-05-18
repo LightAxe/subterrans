@@ -301,6 +301,7 @@ export interface SpiderState {
   strikeStartTick: number;
   feedingStartTick: number;
   retreatStartTick: number;
+  rampageStartTick: number;          // tick at which current Rampaging episode began
   huntTargetTileX: number;
   huntTargetTileY: number;
   killsThisStrike: number;
@@ -640,6 +641,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     ds.strikeStartTick = ss.strikeStartTick;
     ds.feedingStartTick = ss.feedingStartTick;
     ds.retreatStartTick = ss.retreatStartTick;
+    ds.rampageStartTick = ss.rampageStartTick;
     ds.huntTargetTileX = ss.huntTargetTileX;
     ds.huntTargetTileY = ss.huntTargetTileY;
     ds.killsThisStrike = ss.killsThisStrike;
