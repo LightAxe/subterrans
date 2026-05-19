@@ -680,7 +680,7 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
     // S3 — spider entity.
     spider: world.spider === null ? null : { ...world.spider },
     spiderPriorityColonyId: world.spiderPriorityColonyId,
-    // scatterReticleTile is transient — not persisted; always reset to null on load.
+    scatterReticleTile: world.scatterReticleTile,
     // S2 — AI state machine records. operationFighterIds stored as number[].
     aiState: world.aiState.map((rec) => ({
       colonyId: rec.colonyId,
@@ -1370,8 +1370,15 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     // S3 — spider entity; null for pre-V18 saves.
     spider: deserializeSpider(s, validatedSimVersion),
     spiderPriorityColonyId: (validatedSimVersion >= SIM_VERSION_V20_SPIDER && typeof s.spiderPriorityColonyId === 'number') ? s.spiderPriorityColonyId : null,
-    // scatterReticleTile is transient — always reset on load.
-    scatterReticleTile: null,
+    scatterReticleTile: (() => {
+      if (validatedSimVersion < SIM_VERSION_V20_SPIDER) return null;
+      const r = s.scatterReticleTile;
+      if (r === null || r === undefined) return null;
+      if (typeof r !== 'object') return null;
+      if (typeof r.x !== 'number' || typeof r.y !== 'number') return null;
+      if (!Number.isInteger(r.x) || !Number.isInteger(r.y)) return null;
+      return { x: r.x, y: r.y };
+    })(),
     droppedCombatKillCount:
       typeof s.droppedCombatKillCount === 'number' &&
       Number.isInteger(s.droppedCombatKillCount) &&

@@ -460,6 +460,10 @@ export function killAnt(
 // S3 — Spider combat resolver
 // ---------------------------------------------------------------------------
 
+// Module-level scratch buffer: reused each call to resolveSpiderCombatOnTile to
+// avoid per-tick allocation in the combat hot path (AGENTS.md no-alloc rule).
+const SPIDER_TILE_SCRATCH: number[] = [];
+
 /**
  * Resolve one combat tick between the spider and ants on its tile.
  * Called from detectAndResolveCombat after the ant-vs-ant loop.
@@ -483,7 +487,8 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
   // Collect non-queen ants on the spider's surface tile.
   // Queens are excluded: they are either underground or at a colony start — spider
   // combat targets workers and fighters, not colony queens.
-  const onTile: number[] = [];
+  const onTile = SPIDER_TILE_SCRATCH;
+  onTile.length = 0;
   const count = ants.alive.length;
   for (let i = 0; i < count; i++) {
     if (ants.alive[i] !== 1) continue;
