@@ -700,8 +700,13 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       case 'MarkSpiderPriority': {
         // Validate payload — save/replay objects are not schema-checked upstream.
         if (typeof cmd.isPriority !== 'boolean') break;
-        world.spiderPriorityColonyId = cmd.isPriority ? cmd.colonyId : null;
-        if (world.spider === null) world.spiderPriorityColonyId = null;
+        if (!cmd.isPriority) {
+          // Clear path never needs a valid colonyId.
+          world.spiderPriorityColonyId = null;
+          break;
+        }
+        if (!Number.isInteger(cmd.colonyId) || cmd.colonyId < 0) break;
+        world.spiderPriorityColonyId = world.spider !== null ? cmd.colonyId : null;
         break;
       }
       default: {

@@ -13,7 +13,7 @@
 
 import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
 import { LEGACY_SIM_VERSION, LATEST_SIM_VERSION, SIM_VERSION_V19_AI_STATE, SIM_VERSION_V20_SPIDER } from '../sim/types.js';
-import { AI_MAX_OPERATION_FIGHTERS } from '../sim/constants.js';
+import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/constants.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
 import { createAntComponents } from '../sim/ant/ant-store.js';
 import type {
@@ -520,9 +520,9 @@ export interface SerializedWorldState {
   aiState?: SerializedAIStateRecord[];
   /** S3 — optional for backward compat with pre-V18 saves; defaults to null on load. */
   spider?: SerializedSpiderState | null;
-  /** S3 — optional; defaults to false on load. */
+  /** S3 — optional; defaults to null on load. */
   spiderPriorityColonyId?: number | null;
-  /** S3 — transient; always reset to null on load. */
+  /** S3 — preserved through save/reload; null for pre-V18 saves. */
   scatterReticleTile?: { x: number; y: number } | null;
 }
 
@@ -680,7 +680,7 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
     // S3 — spider entity.
     spider: world.spider === null ? null : { ...world.spider },
     spiderPriorityColonyId: world.spiderPriorityColonyId,
-    scatterReticleTile: world.scatterReticleTile,
+    scatterReticleTile: world.scatterReticleTile === null ? null : { ...world.scatterReticleTile },
     // S2 — AI state machine records. operationFighterIds stored as number[].
     aiState: world.aiState.map((rec) => ({
       colonyId: rec.colonyId,
@@ -1068,7 +1068,7 @@ function deserializeSpider(s: SerializedWorldState, simVersion: number): SpiderS
     hp: typeof r.hp === 'number' && Number.isInteger(r.hp) ? r.hp : 80,
     attackCooldown: typeof r.attackCooldown === 'number' && Number.isInteger(r.attackCooldown) ? r.attackCooldown : 0,
     hungerTicks: typeof r.hungerTicks === 'number' && Number.isInteger(r.hungerTicks) ? r.hungerTicks : 0,
-    nextHuntTick: typeof r.nextHuntTick === 'number' && Number.isInteger(r.nextHuntTick) ? r.nextHuntTick : 1200,
+    nextHuntTick: typeof r.nextHuntTick === 'number' && Number.isInteger(r.nextHuntTick) ? r.nextHuntTick : SPIDER_HUNT_INTERVAL_TICKS,
     huntStartTick: typeof r.huntStartTick === 'number' && Number.isInteger(r.huntStartTick) ? r.huntStartTick : 0,
     strikeStartTick: typeof r.strikeStartTick === 'number' && Number.isInteger(r.strikeStartTick) ? r.strikeStartTick : 0,
     feedingStartTick: typeof r.feedingStartTick === 'number' && Number.isInteger(r.feedingStartTick) ? r.feedingStartTick : 0,
@@ -1301,6 +1301,9 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     validateDepletionRecord(rawRecentlyDepleted[i], `recentlyDepletedFood[${i}]`);
   }
   const validatedRecentlyDepleted = rawRecentlyDepleted as DepletionRecord[];
+  // Hoist spider deserialization so spiderPriorityColonyId and scatterReticleTile
+  // can be forced null when spider is null (B11 fix: ghost-scatter prevention).
+  const _deserializedSpider = deserializeSpider(s, validatedSimVersion);
 
   return {
     tick: rawTick,
@@ -1368,10 +1371,10 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     // S2 — AI state machine. Deserialize saved records, or provide defensive defaults for pre-V19 saves.
     aiState: deserializeAIStateArray(s, validatedSimVersion),
     // S3 — spider entity; null for pre-V18 saves.
-    spider: deserializeSpider(s, validatedSimVersion),
-    spiderPriorityColonyId: (validatedSimVersion >= SIM_VERSION_V20_SPIDER && typeof s.spiderPriorityColonyId === 'number') ? s.spiderPriorityColonyId : null,
+    spider: _deserializedSpider,
+    spiderPriorityColonyId: (_deserializedSpider !== null && typeof s.spiderPriorityColonyId === 'number' && Number.isInteger(s.spiderPriorityColonyId) && s.spiderPriorityColonyId >= 0) ? s.spiderPriorityColonyId : null,
     scatterReticleTile: (() => {
-      if (validatedSimVersion < SIM_VERSION_V20_SPIDER) return null;
+      if (_deserializedSpider === null) return null;
       const r = s.scatterReticleTile;
       if (r === null || r === undefined) return null;
       if (typeof r !== 'object') return null;

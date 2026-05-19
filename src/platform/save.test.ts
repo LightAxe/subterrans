@@ -356,6 +356,85 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const w2 = deserializeWorldState(s);
       expect(w2.terrainSeed).toBe(0);
     });
+    it('V18: round-trips world.spider, spiderPriorityColonyId, and scatterReticleTile through serialize → deserialize', async () => {
+      const { SIM_VERSION_V18_SPIDER } = await import('../sim/types.js');
+      const w = createScenario(42);
+      expect(w.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V18_SPIDER);
+      const spider = w.spider!;
+      spider.state = 'Hunting';
+      spider.huntTargetTileX = 55;
+      spider.huntTargetTileY = 33;
+      spider.hungerTicks = 300;
+      spider.killsThisStrike = 2;
+      w.spiderPriorityColonyId = PLAYER_COLONY_ID;
+      w.scatterReticleTile = { x: 10, y: 20 };
+
+      const w2 = deserializeWorldState(serializeWorldState(w));
+
+      expect(w2.spider).not.toBeNull();
+      expect(w2.spider!.state).toBe('Hunting');
+      expect(w2.spider!.huntTargetTileX).toBe(55);
+      expect(w2.spider!.huntTargetTileY).toBe(33);
+      expect(w2.spider!.hungerTicks).toBe(300);
+      expect(w2.spider!.killsThisStrike).toBe(2);
+      expect(w2.spiderPriorityColonyId).toBe(PLAYER_COLONY_ID);
+      expect(w2.scatterReticleTile).toEqual({ x: 10, y: 20 });
+    });
+
+    it('V18: pre-V18 save (spider field absent) deserializes to spider: null, spiderPriorityColonyId: null', async () => {
+      const { SIM_VERSION_V17_AI_STATE } = await import('../sim/types.js');
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      // Downgrade simVersion to pre-V18; strip the spider fields.
+      (s as { simVersion: number }).simVersion = SIM_VERSION_V17_AI_STATE;
+      delete (s as { spider?: unknown }).spider;
+      delete (s as { spiderPriorityColonyId?: unknown }).spiderPriorityColonyId;
+      delete (s as { scatterReticleTile?: unknown }).scatterReticleTile;
+      const w2 = deserializeWorldState(s);
+      expect(w2.spider).toBeNull();
+      expect(w2.spiderPriorityColonyId).toBeNull();
+      expect(w2.scatterReticleTile).toBeNull();
+    });
+
+    it('V18: null spider (spider killed mid-game) round-trips through serialize → deserialize', () => {
+      const w = createScenario(42);
+      w.spider = null; // simulate spider having been killed
+      w.spiderPriorityColonyId = null;
+      w.scatterReticleTile = null;
+      const w2 = deserializeWorldState(serializeWorldState(w));
+      expect(w2.spider).toBeNull();
+      expect(w2.spiderPriorityColonyId).toBeNull();
+      expect(w2.scatterReticleTile).toBeNull();
+    });
+
+    it('V18: spider: null in a V18 save deserializes to null with priority and reticle also null (B11 coupling)', async () => {
+      const { SIM_VERSION_V18_SPIDER } = await import('../sim/types.js');
+      const w = createScenario(42);
+      expect(w.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V18_SPIDER);
+      const s = serializeWorldState(w);
+      // Force spider null but leave priority/reticle non-null in the raw snapshot.
+      (s as { spider: null }).spider = null;
+      (s as { spiderPriorityColonyId: number }).spiderPriorityColonyId = PLAYER_COLONY_ID;
+      (s as { scatterReticleTile: { x: number; y: number } }).scatterReticleTile = { x: 5, y: 5 };
+      const w2 = deserializeWorldState(s);
+      // B11: when spider is null, priority and reticle must also be null regardless of save data.
+      expect(w2.spider).toBeNull();
+      expect(w2.spiderPriorityColonyId).toBeNull();
+      expect(w2.scatterReticleTile).toBeNull();
+    });
+
+    it('V18: spiderPriorityColonyId of Infinity, NaN, or float deserializes to null (B1 integer guard)', async () => {
+      const { SIM_VERSION_V18_SPIDER } = await import('../sim/types.js');
+      const w = createScenario(42);
+      expect(w.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V18_SPIDER);
+      const s = serializeWorldState(w);
+      for (const bad of [Infinity, -Infinity, NaN, 1.5, -0.1]) {
+        (s as { spiderPriorityColonyId: number }).spiderPriorityColonyId = bad;
+        const w2 = deserializeWorldState(s);
+        expect(w2.spiderPriorityColonyId).toBeNull();
+      }
+    });
+
     it('rejects non-integer terrainSeed (string, NaN, null, object) → falls back to 0 (issue #44 P2)', () => {
       const w = createScenario(42);
       const baseSnapshot = serializeWorldState(w);

@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
-import { createWorldState, allocateEntityId, SIM_VERSION_V13_INVARIANT_FIXES } from './types.js';
+import { createWorldState, allocateEntityId, SIM_VERSION_V13_INVARIANT_FIXES, SIM_VERSION_V18_SPIDER } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import { createPheromoneGrid, phGet, pheromoneGridKey } from './pheromone/pheromone-store.js';
@@ -21,6 +21,8 @@ import {
   ENEMY_COLONY_ID,
   ENEMY_START_X,
   ENEMY_START_Y,
+  SPIDER_TELEGRAPH_TICKS,
+  SPIDER_HUNGER_MAX_TICKS,
 } from './constants.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
 import { Zone, UndergroundTileState, ugSet } from './terrain.js';
@@ -80,6 +82,17 @@ function serializeWorldState(w: WorldState): string {
       // tick output, so determinism compare must include them.
       pathErr:            Array.from(w.ants.pathErr),
       searchPauseTicks:   Array.from(w.ants.searchPauseTicks),
+      // Phase 9 / S3 combat fields — spider writes these every tick; omitting
+      // them would silently pass even if resolveSpiderCombatOnTile diverges.
+      hp:                 Array.from(w.ants.hp),
+      homeGroundBonusHp:  Array.from(w.ants.homeGroundBonusHp),
+      attackCooldown:     Array.from(w.ants.attackCooldown),
+      combatOpponentId:   Array.from(w.ants.combatOpponentId),
+      carryingBroodId:    Array.from(w.ants.carryingBroodId),
+      carriedBy:          Array.from(w.ants.carriedBy),
+      recentTilesX:       Array.from(w.ants.recentTilesX),
+      recentTilesY:       Array.from(w.ants.recentTilesY),
+      recentTilesHead:    Array.from(w.ants.recentTilesHead),
     },
     colonies: Object.keys(w.colonies).sort().reduce((acc, k) => {
       const c = w.colonies[Number(k) as ColonyId]!;
@@ -124,6 +137,10 @@ function serializeWorldState(w: WorldState): string {
       acc[k] = { ...w.pendingChambers[k]! };
       return acc;
     }, {} as Record<string, unknown>),
+    // S3 V18 — spider entity and priority/scatter shadow fields
+    spider: w.spider === null ? null : { ...w.spider },
+    spiderPriorityColonyId: w.spiderPriorityColonyId,
+    scatterReticleTile: w.scatterReticleTile === null ? null : { ...w.scatterReticleTile },
   });
 }
 
@@ -829,3 +846,83 @@ describe('SCEN-06: V13 replay determinism under V14 code', () => {
     expect(serializeWorldState(worldA)).toBe(serializeWorldState(worldB));
   });
 });
+// ---------------------------------------------------------------------------
+// S3 V18 — spider replay determinism (Hunting / Striking / Rampaging)
+//
+// The serializer now includes world.spider, spiderPriorityColonyId, and
+// scatterReticleTile, so any RNG use or non-deterministic branch in tickSpider
+// or resolveSpiderCombatOnTile surfaces as a divergence between the two
+// independent runs. The divergence guard ensures the spider actually reached
+// at least one non-Patrolling state during the 400-tick budget.
+// ---------------------------------------------------------------------------
+
+describe('S3 V18: spider replay determinism (Hunting → Striking → Rampaging)', () => {
+  // Stage the spider already in Hunting state with an expired timer so tick 1
+  // immediately transitions to Striking, and pre-saturate hunger so that after
+  // Striking exits to Patrolling the spider immediately rampages. This drives
+  // Hunting → Striking → Patrolling → Rampaging within the first ~90 ticks
+  // without requiring workers on a specific tile, covering all three states
+  // called out in the Codex P1 finding.
+  it('two V18 worlds from seed 7777 run byte-identical over 400 ticks through Hunting/Striking/Rampaging', () => {
+    const SEED = 7777;
+    const TICKS = 400;
+
+    function buildSpiderWorld(): WorldState {
+      const world = createScenario(SEED);
+      // Fast-fail: world must be V18 so world.spider is non-null. If createScenario
+      // regresses to a sub-V18 LATEST, this assert fires before the spider!-dereference
+      // below would throw a TypeError — clearer than an opaque null-deref.
+      expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V18_SPIDER);
+      const spider = world.spider!;
+      // Lock the lair coordinates for seed 7777. If _placeSpider changes behaviour
+      // (scan order, grid dimensions, etc.), this fails loudly rather than silently
+      // breaking the distance safety bound used in the comment below.
+      expect(spider.lairTileX).toBe(115);
+      expect(spider.lairTileY).toBe(27);
+      // Pin position to lair tile so moveTowardTile during Striking cannot drift the
+      // spider relative to the workers' starting distance.
+      spider.posX = spider.lairTileX << FP_SHIFT;
+      spider.posY = spider.lairTileY << FP_SHIFT;
+      // Pre-stage Hunting with an expired hunt timer so Striking fires on first tick.
+      spider.state = 'Hunting';
+      spider.huntTargetTileX = spider.lairTileX;
+      spider.huntTargetTileY = spider.lairTileY;
+      // huntStartTick = 0 so Hunting persists for SPIDER_TELEGRAPH_TICKS ticks before
+      // transitioning to Striking, allowing statesVisited to observe 'Hunting'.
+      // (On first call world.tick=0; 0-0=0<120 → stays Hunting; at call 121 world.tick=120 → Striking.)
+      spider.huntStartTick = 0;
+      // NORMAL_TIER_INDEX=1 → threshold 1800. After Striking exits to Patrolling
+      // hunger will be ≥1800, triggering an immediate Rampaging transition.
+      // Safety: createScenario places STARTING_WORKERS=3 at PLAYER_START_X/Y (24,64) and
+      // ENEMY_START_X/Y (104,64). The lair is at (115,27); nearest colony workers start
+      // at Manhattan distance ≥48 tiles. The combined Hunting+Striking window is 200 ticks
+      // (120+80); at WORKER_BASE_SPEED=0.5 tile/tick the theoretical straight-line coverage
+      // is 100 tiles — exceeding the 48-tile gap. However, Foraging ants follow pheromones
+      // and search randomly, not toward the spider lair; in practice they cannot reach
+      // (115,27) from (104,64) in 200 ticks of pheromone-guided wandering. The lair coord
+      // assertion on lines above will catch a future _placeSpider regression that places
+      // the lair near a colony start before the margin narrows.
+      spider.hungerTicks = SPIDER_HUNGER_MAX_TICKS[1];
+      return world;
+    }
+
+    const worldA = buildSpiderWorld();
+    const worldB = buildSpiderWorld();
+    const statesVisited = new Set<string>();
+    for (let t = 0; t < TICKS; t++) {
+      tick(worldA, []);
+      if (worldA.spider !== null) statesVisited.add(worldA.spider.state);
+    }
+    for (let t = 0; t < TICKS; t++) tick(worldB, []);
+
+    // Guard: all three required states must have been reached. worldB divergence surfaces
+    // via the parity assert below (any divergence in spider fields produces different JSON).
+    expect(statesVisited.has('Hunting')).toBe(true);
+    expect(statesVisited.has('Striking')).toBe(true);
+    expect(statesVisited.has('Rampaging')).toBe(true);
+
+    // Byte-identical parity including V18 fields.
+    expect(serializeWorldState(worldA)).toBe(serializeWorldState(worldB));
+  }, 30_000);
+});
+
