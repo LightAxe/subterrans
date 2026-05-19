@@ -106,9 +106,10 @@ export interface SyncAIStateCommand extends SimCommandBase {
   readonly operationDefenderDeaths: number;
 }
 
-/** S3 — player marks the spider as a priority target; fighters route toward it. */
+/** S3 — a colony marks the spider as a priority target; fighters route toward it. */
 export interface MarkSpiderPriorityCommand extends SimCommandBase {
   readonly type: 'MarkSpiderPriority';
+  readonly colonyId: number;
   readonly isPriority: boolean;
 }
 

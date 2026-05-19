@@ -29,7 +29,6 @@ import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
   SPIDER_SCATTER_RADIUS_TILES,
-  PLAYER_COLONY_ID,
 } from './constants.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
 import { allocateWorkers, computeDigDemand } from './behavior/allocation-system.js';
@@ -701,7 +700,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       case 'MarkSpiderPriority': {
         // Validate payload — save/replay objects are not schema-checked upstream.
         if (typeof cmd.isPriority !== 'boolean') break;
-        world.spiderPriorityColonyId = cmd.isPriority ? PLAYER_COLONY_ID : null;
+        world.spiderPriorityColonyId = cmd.isPriority ? cmd.colonyId : null;
         if (world.spider === null) world.spiderPriorityColonyId = null;
         break;
       }

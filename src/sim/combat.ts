@@ -487,6 +487,19 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
   // Collect non-queen ants on the spider's surface tile.
   // Queens are excluded: they are either underground or at a colony start — spider
   // combat targets workers and fighters, not colony queens.
+
+  // Pre-scan colony queen IDs to avoid O(ants × colonies) nested loop per tick.
+  // Two local vars cover the current max of 2 active colonies (player + AI).
+  let queenId0 = -1;
+  let queenId1 = -1;
+  for (const ckey in world.colonies) {
+    if (!Object.hasOwn(world.colonies, ckey)) continue;
+    const col = world.colonies[ckey as unknown as import('./colony/colony-store.js').ColonyId];
+    if (col === undefined) continue;
+    if (queenId0 < 0) queenId0 = col.queenEntityId;
+    else queenId1 = col.queenEntityId;
+  }
+
   const onTile = SPIDER_TILE_SCRATCH;
   onTile.length = 0;
   const count = ants.alive.length;
@@ -496,13 +509,7 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
     const ax = ants.posX[i]! >> FP_SHIFT;
     const ay = ants.posY[i]! >> FP_SHIFT;
     if (ax !== spiderTileX || ay !== spiderTileY) continue;
-    // Skip queens — check all colony queen entity ids.
-    let isQueen = false;
-    for (const ckey in world.colonies) {
-      const col = world.colonies[ckey as unknown as import('./colony/colony-store.js').ColonyId];
-      if (col !== undefined && col.queenEntityId === i) { isQueen = true; break; }
-    }
-    if (isQueen) continue;
+    if (i === queenId0 || i === queenId1) continue; // skip queens
     onTile.push(i);
   }
   if (onTile.length === 0) {
@@ -540,15 +547,20 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
     // Spider retaliates once per tick against a priority-colony fighter.
     // This gives true N-fighter DPS rather than 4× single-fighter approximation.
 
-    // Retaliation target must be a priority-colony fighter (not an enemy ant that
-    // happens to share the tile), so re-select within priority colony.
-    let swarmRetaliationTarget = activeAntIdx;
+    // Retaliation target = first priority-colony fighter on tile (lowest slot index).
+    // anyVeteranPaired = true if at least one fighter is already paired this episode.
+    // Used below to avoid resetting spider windup on late-joiner arrivals.
+    // Use -1 sentinel (not activeAntIdx) so the first match is unconditionally accepted.
+    let swarmRetaliationTarget = -1;
+    let anyVeteranPaired = false;
     for (const idx of onTile) {
-      if (ants.task[idx] === AntTask.Fighting && ants.colonyId[idx] === priorityColonyId) {
-        swarmRetaliationTarget = idx;
-        break;
-      }
+      if (ants.task[idx] !== AntTask.Fighting || ants.colonyId[idx] !== priorityColonyId) continue;
+      if (swarmRetaliationTarget === -1) swarmRetaliationTarget = idx;
+      if (ants.combatOpponentId[idx] === -2) anyVeteranPaired = true;
     }
+    // swarmActive guarantees fighterCount >= SPIDER_SWARM_FIGHTER_THRESHOLD >= 1,
+    // so the loop above always finds at least one priority fighter.
+    if (swarmRetaliationTarget === -1) swarmRetaliationTarget = activeAntIdx;
 
     let totalAntDamage = 0;
     let anyNewPairing = false;
@@ -570,10 +582,11 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
       }
     }
 
-    // Spider windup: reset unconditionally on any new pairing (matches non-swarm contract),
-    // and do NOT decrement on the same tick (mirrors non-swarm early-return behavior).
-    // If spider.attackCooldown was stale from a prior episode, this resets it correctly.
-    if (anyNewPairing) {
+    // Spider windup: reset only on the first tick of engagement (no veterans yet paired).
+    // A late-joining fighter should not pause the spider's attack cycle while veterans
+    // are already dealing damage — that would be exploitable stagger.
+    // Mirror non-swarm early-return: no decrement on the same tick as a first-ever engagement.
+    if (anyNewPairing && !anyVeteranPaired) {
       spider.attackCooldown = COMBAT_COOLDOWN_TICKS;
     } else {
       spider.attackCooldown = spider.attackCooldown > 0 ? spider.attackCooldown - 1 : 0;

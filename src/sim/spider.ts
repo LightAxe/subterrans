@@ -31,6 +31,13 @@ import {
 import { FP_SHIFT } from './fixed.js';
 
 // ---------------------------------------------------------------------------
+// Module-level scratch for findHuntTarget — avoids per-call Map allocation.
+// SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT = 128 * 128 = 16384 tiles.
+// Cleared between calls via HUNT_DIRTY list. Same precedent as tick.ts flow-field buffers.
+const HUNT_TILE_COUNTS = new Uint16Array(SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT);
+const HUNT_DIRTY: number[] = [];
+
+// ---------------------------------------------------------------------------
 // Hunt target selection — deterministic (no rng draws)
 // ---------------------------------------------------------------------------
 
@@ -47,36 +54,39 @@ function findHuntTarget(
   const spiderTileY = spider.posY >> FP_SHIFT;
   const r = SPIDER_HUNT_SEARCH_RADIUS_TILES;
 
-  // Count workers per tile within radius
-  const counts = new Map<number, number>();
+  // Clear dirty tiles from previous call (reuse scratch buffer, avoid Map alloc).
+  for (let d = 0; d < HUNT_DIRTY.length; d++) HUNT_TILE_COUNTS[HUNT_DIRTY[d]!] = 0;
+  HUNT_DIRTY.length = 0;
+
+  // Count workers per tile within radius.
   const { ants } = world;
-  const count = ants.alive.length;
-  for (let i = 0; i < count; i++) {
+  const antCount = ants.alive.length;
+  for (let i = 0; i < antCount; i++) {
     if (ants.alive[i] !== 1) continue;
-    // Only surface ants
-    if (ants.zone[i] !== 0) continue;
-    // Skip fighters — spider hunts workers (prey), not combatants
-    if (ants.task[i] === AntTask.Fighting) continue;
+    if (ants.zone[i] !== 0) continue; // surface only
+    if (ants.task[i] === AntTask.Fighting) continue; // spider hunts workers, not fighters
     const ax = ants.posX[i]! >> FP_SHIFT;
     const ay = ants.posY[i]! >> FP_SHIFT;
     const dist = (ax > spiderTileX ? ax - spiderTileX : spiderTileX - ax) +
                  (ay > spiderTileY ? ay - spiderTileY : spiderTileY - ay);
     if (dist > r) continue;
-    const key = ay * SURFACE_GRID_WIDTH + ax;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
+    const key = (ay << 7) + ax; // ay * SURFACE_GRID_WIDTH(128) + ax; 128 = 2^7
+    if (HUNT_TILE_COUNTS[key] === 0) HUNT_DIRTY.push(key);
+    HUNT_TILE_COUNTS[key] = HUNT_TILE_COUNTS[key]! + 1;
   }
 
   let bestKey = -1;
   let bestCount = SPIDER_HUNT_MIN_TARGET_WORKERS - 1; // must exceed to qualify
   let bestX = -1;
   let bestY = -1;
-  for (const [k, c] of counts) {
-    if (c > bestCount || (c === bestCount && (bestKey === -1 || k < bestKey))) {
+  for (let d = 0; d < HUNT_DIRTY.length; d++) {
+    const k = HUNT_DIRTY[d]!;
+    const c = HUNT_TILE_COUNTS[k]!;
+    if (c > bestCount || (c === bestCount && bestKey !== -1 && k < bestKey)) {
       bestCount = c;
       bestKey = k;
-      const kx = k % SURFACE_GRID_WIDTH;
-      bestX = kx;
-      bestY = (k - kx) >> 7; // SURFACE_GRID_WIDTH=128=2^7; integer divide via right-shift
+      bestX = k & 127; // k % SURFACE_GRID_WIDTH(128)
+      bestY = k >> 7;  // k / SURFACE_GRID_WIDTH(128)
     }
   }
   if (bestKey === -1) return null;
@@ -106,6 +116,7 @@ function findNearestEntrance(
   let bestColonyId = -1;
 
   for (const key in world.colonies) {
+    if (!Object.hasOwn(world.colonies, key)) continue;
     const cid = Number(key);
     const colony = world.colonies[key as unknown as import('./colony/colony-store.js').ColonyId];
     if (colony === undefined) continue;
@@ -197,27 +208,26 @@ function seedDangerPheromone(world: WorldState, spider: SpiderState): void {
   const tileX = spider.posX >> FP_SHIFT;
   const tileY = spider.posY >> FP_SHIFT;
   const center = SPIDER_DANGER_DEPOSIT;
-  const neighbor = SPIDER_DANGER_DEPOSIT >> 1;
+  const nb = SPIDER_DANGER_DEPOSIT >> 1;
+  const w = SURFACE_GRID_WIDTH;
+  const h = SURFACE_GRID_HEIGHT;
 
-  const offsets: [number, number, number][] = [
-    [tileX,     tileY,     center],
-    [tileX,     tileY - 1, neighbor],
-    [tileX,     tileY + 1, neighbor],
-    [tileX - 1, tileY,     neighbor],
-    [tileX + 1, tileY,     neighbor],
-  ];
-
-  // Deposit in both colonies' surface DangerTrail grids
+  // Deposit in both colonies' surface DangerTrail grids.
+  // Unrolled 5-cell cross to avoid per-tick array allocation (AGENTS.md hot-loop rule).
   for (const colonyKey in world.pheromoneGrids) {
-    // Filter to DangerTrail surface grids (format: "${colonyId}:1:surface")
+    if (!Object.hasOwn(world.pheromoneGrids, colonyKey)) continue;
     if (!colonyKey.endsWith(':1:surface')) continue;
     const grid = world.pheromoneGrids[colonyKey]!;
-    for (const [ox, oy, amt] of offsets) {
-      if (ox < 0 || ox >= SURFACE_GRID_WIDTH || oy < 0 || oy >= SURFACE_GRID_HEIGHT) continue;
-      const current = phGet(grid, ox, oy);
-      const sum = current + amt;
-      phSet(grid, ox, oy, sum > PHEROMONE_CAP ? PHEROMONE_CAP : sum);
-    }
+    // center (spider is always within surface bounds)
+    { const v = phGet(grid, tileX, tileY) + center; phSet(grid, tileX, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
+    // north
+    if (tileY > 0) { const v = phGet(grid, tileX, tileY - 1) + nb; phSet(grid, tileX, tileY - 1, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
+    // south
+    if (tileY < h - 1) { const v = phGet(grid, tileX, tileY + 1) + nb; phSet(grid, tileX, tileY + 1, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
+    // west
+    if (tileX > 0) { const v = phGet(grid, tileX - 1, tileY) + nb; phSet(grid, tileX - 1, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
+    // east
+    if (tileX < w - 1) { const v = phGet(grid, tileX + 1, tileY) + nb; phSet(grid, tileX + 1, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
   }
 }
 
@@ -239,23 +249,16 @@ function seedUndergroundDangerPheromone(world: WorldState, spider: SpiderState, 
   // 64-row underground grid).
   const tileY = UNDERGROUND_CEILING_ROW_Y;
   const center = SPIDER_DANGER_DEPOSIT;
-  const neighbor = SPIDER_DANGER_DEPOSIT >> 1;
-  const gridWidth = grid.width;
-  const gridHeight = grid.height;
+  const nb = SPIDER_DANGER_DEPOSIT >> 1;
+  const gw = grid.width;
+  const gh = grid.height;
 
-  const offsets: [number, number, number][] = [
-    [tileX,     tileY,     center],
-    [tileX,     tileY - 1, neighbor],
-    [tileX,     tileY + 1, neighbor],
-    [tileX - 1, tileY,     neighbor],
-    [tileX + 1, tileY,     neighbor],
-  ];
-  for (const [ox, oy, amt] of offsets) {
-    if (ox < 0 || ox >= gridWidth || oy < 0 || oy >= gridHeight) continue;
-    const current = phGet(grid, ox, oy);
-    const sum = current + amt;
-    phSet(grid, ox, oy, sum > PHEROMONE_CAP ? PHEROMONE_CAP : sum);
-  }
+  // Unrolled 5-cell cross to avoid per-tick array allocation (AGENTS.md hot-loop rule).
+  if (tileX >= 0 && tileX < gw && tileY >= 0 && tileY < gh) { const v = phGet(grid, tileX, tileY) + center; phSet(grid, tileX, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
+  if (tileX >= 0 && tileX < gw && tileY - 1 >= 0) { const v = phGet(grid, tileX, tileY - 1) + nb; phSet(grid, tileX, tileY - 1, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
+  if (tileX >= 0 && tileX < gw && tileY + 1 < gh) { const v = phGet(grid, tileX, tileY + 1) + nb; phSet(grid, tileX, tileY + 1, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
+  if (tileX - 1 >= 0 && tileY >= 0 && tileY < gh) { const v = phGet(grid, tileX - 1, tileY) + nb; phSet(grid, tileX - 1, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
+  if (tileX + 1 < gw && tileY >= 0 && tileY < gh) { const v = phGet(grid, tileX + 1, tileY) + nb; phSet(grid, tileX + 1, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
 }
 
 // ---------------------------------------------------------------------------
@@ -478,6 +481,8 @@ export function tickSpider(world: WorldState): void {
   }
 
   // --- Movement ---
+  // Cache nearest entrance for Rampaging once per tick (used by both movement and pheromone seeding).
+  const rampageNearest = spider.state === 'Rampaging' ? findNearestEntrance(world, spider) : null;
   switch (spider.state) {
     case 'Patrolling': {
       tickPatrolMovement(world, spider);
@@ -498,9 +503,8 @@ export function tickSpider(world: WorldState): void {
       break;
     }
     case 'Rampaging': {
-      const nearest = findNearestEntrance(world, spider);
-      if (nearest !== null) {
-        moveTowardTile(spider, nearest.x, nearest.y);
+      if (rampageNearest !== null) {
+        moveTowardTile(spider, rampageNearest.x, rampageNearest.y);
       }
       break;
     }
@@ -516,11 +520,8 @@ export function tickSpider(world: WorldState): void {
   // During Rampaging, seed underground danger only for the invaded colony
   // (the one whose entrance is nearest to the spider). Seeding all colonies
   // would create false threat signals in colonies the spider is not attacking.
-  if (spider.state === 'Rampaging') {
-    const nearestForSeed = findNearestEntrance(world, spider);
-    if (nearestForSeed !== null) {
-      seedUndergroundDangerPheromone(world, spider, nearestForSeed.colonyId);
-    }
+  if (spider.state === 'Rampaging' && rampageNearest !== null) {
+    seedUndergroundDangerPheromone(world, spider, rampageNearest.colonyId);
   }
 
   // --- scatterReticleTile shadow field: written at end for next tick's step 13e ---
