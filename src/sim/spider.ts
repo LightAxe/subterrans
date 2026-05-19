@@ -58,6 +58,19 @@ function findHuntTarget(
   for (let d = 0; d < HUNT_DIRTY.length; d++) HUNT_TILE_COUNTS[HUNT_DIRTY[d]!] = 0;
   HUNT_DIRTY.length = 0;
 
+  // Pre-scan queen IDs so they are excluded from worker density. Queens are identified
+  // by colony.queenEntityId (not by task — queen task may vary) to avoid counting them
+  // as prey and triggering hunts on depleted colonies. Assumes ≤2 active colonies (Phase 1).
+  let huntQueenId0 = -1;
+  let huntQueenId1 = -1;
+  for (const ckey in world.colonies) {
+    if (!Object.hasOwn(world.colonies, ckey)) continue;
+    const col = world.colonies[ckey as unknown as import('./colony/colony-store.js').ColonyId];
+    if (col === undefined) continue;
+    if (huntQueenId0 < 0) huntQueenId0 = col.queenEntityId;
+    else huntQueenId1 = col.queenEntityId;
+  }
+
   // Count workers per tile within radius.
   const { ants } = world;
   const antCount = ants.alive.length;
@@ -65,6 +78,7 @@ function findHuntTarget(
     if (ants.alive[i] !== 1) continue;
     if (ants.zone[i] !== 0) continue; // surface only
     if (ants.task[i] === AntTask.Fighting) continue; // spider hunts workers, not fighters
+    if (i === huntQueenId0 || i === huntQueenId1) continue; // queens are not prey
     const ax = ants.posX[i]! >> FP_SHIFT;
     const ay = ants.posY[i]! >> FP_SHIFT;
     const dist = (ax > spiderTileX ? ax - spiderTileX : spiderTileX - ax) +
