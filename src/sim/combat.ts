@@ -517,8 +517,9 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
     return;
   }
 
-  // Sort ascending by ant index for determinism.
-  onTile.sort((a, b) => a - b);
+  // onTile was built by ascending-index scan — already in order; no sort needed.
+  // INVARIANT: contents must remain ascending; downstream tiebreaks (activeAntIdx,
+  // swarmRetaliationTarget) rely on lowest-slot-index winning.
 
   // Prefer AntTask.Fighting ants for the active pair; fall back to any ant.
   let activeAntIdx = onTile[0]!;
