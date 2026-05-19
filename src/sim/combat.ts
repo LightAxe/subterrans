@@ -571,6 +571,7 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
         // First contact for this fighter: pair and set windup.
         ants.combatOpponentId[idx] = -2;
         ants.attackCooldown[idx] = COMBAT_COOLDOWN_TICKS;
+        ants.homeGroundBonusHp[idx] = 0; // spider is surface-only; underground bonus does not apply
         anyNewPairing = true;
         continue;
       }
@@ -629,6 +630,7 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
     // Fresh pair: set windup (no strike this tick).
     ants.attackCooldown[activeAntIdx] = COMBAT_COOLDOWN_TICKS;
     ants.combatOpponentId[activeAntIdx] = -2; // sentinel: paired with spider
+    ants.homeGroundBonusHp[activeAntIdx] = 0; // spider is surface-only; underground bonus does not apply
     spider.attackCooldown = COMBAT_COOLDOWN_TICKS;
     return;
   }
