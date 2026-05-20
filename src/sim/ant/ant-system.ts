@@ -83,6 +83,7 @@ import {
   SEARCH_PAUSE_JITTER_TICKS,
   FOOD_TRAIL_DEPOSIT,
   FOOD_TRAIL_DEPOSIT_V14,
+  FIGHT_AGGRO_RADIUS,
 } from '../constants.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { Rng } from '../rng.js';
@@ -2036,7 +2037,33 @@ export function updateFightAntTargets(world: WorldState): void {
       continue;
     }
 
-    // Surface fighter (or underground with no entrances yet): target rally tile center.
+    // Proximity aggression: scan for nearest enemy ant within FIGHT_AGGRO_RADIUS tiles
+    // in the same zone. Any alive enemy (any task) is a valid target. If found, route
+    // directly toward it — overrides rally and hold-radius. Phase 4 PRD §3d.
+    const aggroZone = ants.zone[id];
+    const aggroTileX = ants.posX[id]! >> FP_SHIFT;
+    const aggroTileY = ants.posY[id]! >> FP_SHIFT;
+    let nearestEnemy = -1;
+    let nearestEnemyDist = FIGHT_AGGRO_RADIUS + 1;
+    for (let eid = 0; eid < ants.alive.length; eid++) {
+      if (ants.alive[eid] !== 1) continue;
+      if (ants.colonyId[eid] === colonyId) continue;
+      if (ants.zone[eid] !== aggroZone) continue;
+      const eTileX = ants.posX[eid]! >> FP_SHIFT;
+      const eTileY = ants.posY[eid]! >> FP_SHIFT;
+      const dist = Math.abs(eTileX - aggroTileX) + Math.abs(eTileY - aggroTileY);
+      if (dist <= FIGHT_AGGRO_RADIUS && dist < nearestEnemyDist) {
+        nearestEnemyDist = dist;
+        nearestEnemy = eid;
+      }
+    }
+    if (nearestEnemy >= 0) {
+      ants.targetPosX[id] = ants.posX[nearestEnemy]!;
+      ants.targetPosY[id] = ants.posY[nearestEnemy]!;
+      continue;
+    }
+
+    // No enemy in range: fall back to rally routing.
     //
     // Anti-oscillation: if the ant is already within RALLY_HOLD_RADIUS_TILES
     // Manhattan of the rally tile, clear the target to -1 so the Fighting

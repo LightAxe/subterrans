@@ -40,6 +40,7 @@ import {
   WORKER_BASE_SPEED,
   WORKER_LIFESPAN_TICKS,
   COMBAT_HP_BASE,
+  COMBAT_HP_QUEEN,
 } from '../constants.js';
 
 // ---------------------------------------------------------------------------
@@ -382,6 +383,8 @@ export interface InitAntSpec {
    * Corresponds to Zone.Surface and Zone.Underground in terrain.ts.
    */
   zone?: number;
+  /** Override initial HP. Defaults to COMBAT_HP_BASE. Use COMBAT_HP_QUEEN for the queen. */
+  hp?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -443,7 +446,7 @@ export function initAnt(ants: AntComponents, id: EntityId, spec: InitAntSpec): v
   ants.carriedBy[id]         = -1;
   // S1 — fresh ant starts at full base HP; home-ground bonus is set by
   // the combat resolver on first engagement on home ground.
-  ants.hp[id]               = COMBAT_HP_BASE;
+  ants.hp[id]               = spec.hp ?? COMBAT_HP_BASE;
   ants.homeGroundBonusHp[id]= 0;
   ants.attackCooldown[id]   = 0;
   ants.combatOpponentId[id] = -1;

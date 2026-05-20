@@ -28,6 +28,8 @@ import {
   COMBAT_DAMAGE_BASE,
   COMBAT_DAMAGE_HOMEGROUND,
   COMBAT_COOLDOWN_TICKS,
+  COMBAT_DAMAGE_WORKER,
+  COMBAT_DAMAGE_QUEEN,
 } from './constants.js';
 
 /**
@@ -175,6 +177,24 @@ function applyDamage(world: WorldState, antIdx: number, damage: number): boolean
 }
 
 /**
+ * Damage dealt by `antId` when it strikes. Fighters use home-ground damage or base;
+ * queen uses COMBAT_DAMAGE_QUEEN; all other non-fighters use COMBAT_DAMAGE_WORKER.
+ * Returns 0 if the ant does not strike (strikes=false).
+ */
+function strikeDamage(world: WorldState, antId: number, strikes: boolean): number {
+  if (!strikes) return 0;
+  const { ants } = world;
+  if (ants.task[antId] === AntTask.Fighting) {
+    return (ants.zone[antId] === 1 && ants.currentGridColonyId[antId] === ants.colonyId[antId]!)
+      ? COMBAT_DAMAGE_HOMEGROUND
+      : COMBAT_DAMAGE_BASE;
+  }
+  const cid = ants.colonyId[antId]! as ColonyId;
+  const colony = world.colonies[cid];
+  return colony != null && colony.queenEntityId === antId ? COMBAT_DAMAGE_QUEEN : COMBAT_DAMAGE_WORKER;
+}
+
+/**
  * Resolve combat on a single tile using the V16 HP/damage/cooldown model.
  * One active pair per tick (lowest slot from each colony). Strikes are simultaneous.
  */
@@ -217,8 +237,6 @@ function resolveCombatOnTile_v16(world: WorldState, _tileKey: number, participan
   const bFresh = ants.attackCooldown[antB] === 0;
 
   if (aNew || bNew) {
-    ants.attackCooldown[antA] = COMBAT_COOLDOWN_TICKS;
-    ants.attackCooldown[antB] = COMBAT_COOLDOWN_TICKS;
     ants.combatOpponentId[antA] = antB;
     ants.combatOpponentId[antB] = antA;
     // Fresh ants get a full bonus based on current location.
@@ -238,7 +256,19 @@ function resolveCombatOnTile_v16(world: WorldState, _tileKey: number, participan
     } else if (!bOnHome) {
       ants.homeGroundBonusHp[antB] = 0;
     }
-    return;
+    // Fighters skip windup (always ready to strike); non-fighters wind up.
+    // Only reset cooldown for the newly-paired side — the other side keeps its
+    // accumulated progress to avoid penalizing an ongoing combatant on a re-entry.
+    const aIsFighter = ants.task[antA] === AntTask.Fighting;
+    const bIsFighter = ants.task[antB] === AntTask.Fighting;
+    if (aNew) ants.attackCooldown[antA] = aIsFighter ? 1 : COMBAT_COOLDOWN_TICKS;
+    if (bNew) ants.attackCooldown[antB] = bIsFighter ? 1 : COMBAT_COOLDOWN_TICKS;
+    // Return early only if no strike will fire this tick:
+    //   newly-paired fighters (cooldown just set to 1 → will decrement to 0), OR
+    //   non-new sides already at cooldown=1 (their pending strike must not be skipped).
+    if (!(aNew && aIsFighter) && !(bNew && bIsFighter) &&
+        ants.attackCooldown[antA] !== 1 && ants.attackCooldown[antB] !== 1) return;
+    // At least one ant will strike this tick: fall through to decrement + strike resolution
   }
 
   // Decrement cooldowns. Strike when either reaches 0.
@@ -250,18 +280,11 @@ function resolveCombatOnTile_v16(world: WorldState, _tileKey: number, participan
 
   if (!aStrikes && !bStrikes) return;
 
-  // Compute damage dealt by each striker. Only AntTask.Fighting ants deal damage;
-  // workers, nurses, and queens caught in combat do not strike back (spec Part A §3).
-  const aDamage = aStrikes && ants.task[antA] === AntTask.Fighting
-    ? ((ants.zone[antA] === 1 && ants.currentGridColonyId[antA] === ants.colonyId[antA]!)
-        ? COMBAT_DAMAGE_HOMEGROUND
-        : COMBAT_DAMAGE_BASE)
-    : 0;
-  const bDamage = bStrikes && ants.task[antB] === AntTask.Fighting
-    ? ((ants.zone[antB] === 1 && ants.currentGridColonyId[antB] === ants.colonyId[antB]!)
-        ? COMBAT_DAMAGE_HOMEGROUND
-        : COMBAT_DAMAGE_BASE)
-    : 0;
+  // Damage by task: fighters deal full damage (with home-ground bonus); non-fighters
+  // fight back weakly. Queen uses COMBAT_DAMAGE_QUEEN (identified via colony.queenEntityId);
+  // all other non-fighters use COMBAT_DAMAGE_WORKER. Queen damage flagged TBD for S6-Tune.
+  const aDamage = strikeDamage(world, antA, aStrikes);
+  const bDamage = strikeDamage(world, antB, bStrikes);
 
   // Simultaneous damage: compute both death results before killing either.
   const aDies = bDamage > 0 && applyDamage(world, antA, bDamage);

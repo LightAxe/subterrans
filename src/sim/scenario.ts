@@ -40,6 +40,7 @@ import {
   UNDERGROUND_GRID_HEIGHT,
   WORKER_LIFESPAN_TICKS,
   ENTRANCE_SHAFT_DEPTH,
+  COMBAT_HP_QUEEN,
 } from './constants.js';
 
 // ---------------------------------------------------------------------------
@@ -175,6 +176,7 @@ function initColony(
     posY:     startY << FP_SHIFT,
     task:     AntTask.Idle,
     lifespan: WORKER_LIFESPAN_TICKS,
+    hp:       COMBAT_HP_QUEEN,
   });
 
   const colony = createColonyRecord(colonyId, queenId);
