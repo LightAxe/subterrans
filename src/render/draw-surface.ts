@@ -14,6 +14,7 @@
 // between terrain and entities per RESEARCH §Architecture draw-order diagram.
 
 import { sgGet } from '../sim/terrain.js';
+import { AntTask } from '../sim/enums.js';
 import { isAlive } from '../sim/ant/ant-store.js';
 import { FP_ONE } from '../sim/fixed.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
@@ -29,6 +30,9 @@ import {
   COLOR_ENEMY_COLONY,
   COLOR_QUEEN_OUTLINE,
   COLOR_RALLY_POINT,
+  COLOR_FIGHTER_TINT,
+  COLOR_CONTESTED_TILE,
+  lerpColor,
 } from './sprites.js';
 import {
   drawBarrenEarthTile,
@@ -234,6 +238,35 @@ export function drawSurfaceEntities(
     }
   }
 
+  // --- Contested tile glow (S1) ---
+  // Draw a faint orange tint under ants on tiles where 2+ colonies meet.
+  // Two-pass: first collect contested surface tiles, then draw glows before ants.
+  {
+    const tileColony = new Map<number, number>(); // tileKey → first colonyId
+    const contested  = new Set<number>();
+    const n = curr.ants.alive.length;
+    for (let id = 0; id < n; id++) {
+      if (!isAlive(curr.ants, id)) continue;
+      if (curr.ants.zone[id] !== 0) continue;
+      const tx = curr.ants.posX[id]! >> 8;
+      const ty = curr.ants.posY[id]! >> 8;
+      const key = (ty << 16) | tx;
+      const cid = curr.ants.colonyId[id]!;
+      const existing = tileColony.get(key);
+      if (existing === undefined) tileColony.set(key, cid);
+      else if (existing !== cid) contested.add(key);
+    }
+    for (const key of contested) {
+      const tx = key & 0xffff;
+      const ty = (key >> 16) & 0xffff;
+      const sx = (tx - left) * TILE_SIZE_PX;
+      const sy = (ty - top)  * TILE_SIZE_PX;
+      if (sx < -TILE_SIZE_PX || sx > canvasW || sy < -TILE_SIZE_PX || sy > canvasH) continue;
+      gfx.fillStyle(COLOR_CONTESTED_TILE, 0.25);
+      gfx.fillRect(sx, sy, TILE_SIZE_PX, TILE_SIZE_PX);
+    }
+  }
+
   // --- Ants on surface (zone === 0) ---
   // Wrong-plane flicker guard (09 render polish): when an ant's zone flipped
   // between prev and curr (e.g. queen descending through an entrance), OR when
@@ -285,12 +318,16 @@ export function drawSurfaceEntities(
     const dy = currPxY - prevPxY;
     const rotation = computeAntRotation(facing, id, curr.ants.zone[id]!, dx, dy, useInterp);
 
+    const isFighter = curr.ants.task[id] === AntTask.Fighting;
     sprites.drawAnt({
       kind: isQueen ? 'queen' : 'worker',
       x: screenX,
       y: screenY,
-      tint: color,
+      // S1: fighters get a red tint blended over their colony color.
+      tint: isFighter && !isQueen ? lerpColor(color, COLOR_FIGHTER_TINT, 0.45) : color,
       rotation,
+      // S1: fighters render slightly larger (+1px equivalent at TILE_SIZE_PX=16).
+      scale: isFighter && !isQueen ? 1.25 : 1.0,
     });
   }
 

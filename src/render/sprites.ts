@@ -51,6 +51,12 @@ export const COLOR_SURFACE_ENTRANCE_HOLE = 0x1a0f00;
 /** PRD §7g — Rally point marker color. */
 export const COLOR_RALLY_POINT = 0xffffff;
 
+/** S1 — Red tint overlay applied to fighter-caste ants (tinted on top of colony color). */
+export const COLOR_FIGHTER_TINT = 0xff4444;
+
+/** S1 — Faint tile tint drawn under ants on contested tiles (alpha < 0.3). */
+export const COLOR_CONTESTED_TILE = 0xff6600;
+
 /** PRD §7g — Underground solid (unexcavated) tile color. */
 export const COLOR_UNDERGROUND_SOLID = 0x2d1a0a;
 

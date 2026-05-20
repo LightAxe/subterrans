@@ -393,6 +393,17 @@ interface SerializedAnts {
    */
   carryingBroodId?: number[];
   carriedBy?: number[];
+  /**
+   * S1 / D-32 — per-ant combat HP fields. Optional for backward-compat with
+   * pre-S1 saves; deserializer defaults hp=COMBAT_HP_BASE, homeGroundBonusHp
+   * from isHomeGround check, attackCooldown=0. Pre-V16 saves replay on the
+   * V15 coin-flip path so these fields are never read in-tick.
+   */
+  hp?: number[];
+  homeGroundBonusHp?: number[];
+  attackCooldown?: number[];
+  /** S1 / D-32 — combatOpponentId (-1 = not paired). Absent on pre-S1 saves; defaults to all-(-1). */
+  combatOpponentId?: number[];
 }
 
 interface SerializedColony {
@@ -529,6 +540,11 @@ function serializeAnts(a: AntComponents): SerializedAnts {
     // Issue #17 Phase 1 — visible brood carry slot + reverse pointer.
     carryingBroodId: Array.from(a.carryingBroodId),
     carriedBy:       Array.from(a.carriedBy),
+    // S1 — combat HP/damage/cooldown fields.
+    hp:               Array.from(a.hp),
+    homeGroundBonusHp:Array.from(a.homeGroundBonusHp),
+    attackCooldown:   Array.from(a.attackCooldown),
+    combatOpponentId: Array.from(a.combatOpponentId),
   };
 }
 
@@ -811,6 +827,36 @@ function deserializeAnts(saved: SerializedAnts, capacity: number): AntComponents
   if (saved.carriedBy !== undefined) {
     copyIntoInt32(a.carriedBy, saved.carriedBy);
   }
+  // S1 — combat HP fields. Pre-S1 saves omit; migrate from world state
+  // (hp=COMBAT_HP_BASE, homeGroundBonusHp based on current grid occupancy,
+  // attackCooldown=0). Since save.ts cannot import sim constants without
+  // a circular dep, we inline the literal values here (COMBAT_HP_BASE=16,
+  // COMBAT_HP_HOMEGROUND_BONUS=4) — these are load-time migration defaults
+  // and do NOT affect simulation determinism (pre-V16 saves stay on V15 path).
+  if (saved.hp !== undefined) {
+    copyIntoInt32(a.hp, saved.hp);
+  } else {
+    a.hp.fill(16); // COMBAT_HP_BASE — migrated ants start at full health
+  }
+  if (saved.homeGroundBonusHp !== undefined) {
+    copyIntoInt32(a.homeGroundBonusHp, saved.homeGroundBonusHp);
+  } else {
+    // Migration: set bonus for ants on their own colony grid.
+    // currentGridColonyId is already populated at this point.
+    for (let i = 0; i < a.alive.length; i++) {
+      if (a.alive[i] === 1 && a.currentGridColonyId[i] === a.colonyId[i]) {
+        a.homeGroundBonusHp[i] = 4; // COMBAT_HP_HOMEGROUND_BONUS
+      }
+    }
+  }
+  if (saved.attackCooldown !== undefined) {
+    copyIntoInt32(a.attackCooldown, saved.attackCooldown);
+  }
+  // attackCooldown defaults to 0 (not in combat) via createAntComponents zero-init.
+  if (saved.combatOpponentId !== undefined) {
+    copyIntoInt32(a.combatOpponentId, saved.combatOpponentId);
+  }
+  // combatOpponentId defaults to -1 (not paired) via createAntComponents -1 fill.
   return a;
 }
 
@@ -1145,6 +1191,8 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     // S0b — telemetry fields. events is always fresh (transient); counters
     // load from save with 0 default for pre-V15 saves.
     events: [],
+    // S1 — transient; always fresh on load (cleared between ticks).
+    pendingQueenDeathContexts: [],
     droppedCombatKillCount:
       typeof s.droppedCombatKillCount === 'number' &&
       Number.isInteger(s.droppedCombatKillCount) &&

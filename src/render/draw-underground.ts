@@ -29,6 +29,7 @@ import { ChamberType } from '../sim/enums.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import type { WorldState } from '../sim/types.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
+import { AntTask } from '../sim/enums.js';
 import {
   TILE_SIZE_PX,
   COLOR_MARKED_TILE_OVERLAY,
@@ -41,6 +42,8 @@ import {
   COLOR_PLAYER_COLONY,
   COLOR_ENEMY_COLONY,
   COLOR_QUEEN_OUTLINE,
+  COLOR_FIGHTER_TINT,
+  COLOR_CONTESTED_TILE,
 } from './sprites.js';
 import {
   drawBarrenEarthSubstrate,
@@ -471,12 +474,14 @@ export function drawUndergroundEntities(
     // distinction — grid-of-occupancy vs colony identity).
     const owningColonyId = curr.ants.colonyId[id];
     const tint = owningColonyId === PLAYER_COLONY_ID ? COLOR_PLAYER_COLONY : COLOR_ENEMY_COLONY;
+    const isFighter2 = curr.ants.task[id] === AntTask.Fighting;
     sprites.drawAnt({
       kind: isQueen ? 'queen' : 'worker',
       x: screenX,
       y: screenY,
-      tint,
+      tint: isFighter2 && !isQueen ? COLOR_FIGHTER_TINT : tint,
       rotation,
+      scale: isFighter2 && !isQueen ? 1.25 : 1.0,
     });
   }
 

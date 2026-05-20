@@ -1,6 +1,6 @@
 // Phase 5 scope: outcome enum only. checkQueenDeath is Phase 9 scope — see Phase 4 PRD §5a.
-// S0b: emits queen_death SimEvent on first detection (cause: null — S1/S2 will fill cause
-// from kill-site context when those stages land, per RC-P1-003).
+// S0b: emits queen_death SimEvent on first detection (cause: null for pre-V16 saves).
+// S1: reads pendingQueenDeathContexts (written by killAnt) to fill in cause=InvasionKill.
 
 export const GameOutcome = {
   None: 0,
@@ -13,10 +13,12 @@ export type GameOutcome = typeof GameOutcome[keyof typeof GameOutcome];
 import type { WorldState } from './types.js';
 import type { ColonyId, ColonyRecord } from './colony/colony-store.js';
 import { emitEvent } from './telemetry.js';
+import { SIM_VERSION_V16_COMBAT_HPDPS } from './types.js';
 
 /**
  * Returns true if the colony's queen is alive per world.ants.
  * Side effect (idempotent): sets colony.defeated = true when queen is dead.
+ * S1: reads world.pendingQueenDeathContexts to fill in queen_death cause.
  */
 function isQueenAlive(world: WorldState, colony: ColonyRecord): boolean {
   const qid = colony.queenEntityId;
@@ -25,19 +27,41 @@ function isQueenAlive(world: WorldState, colony: ColonyRecord): boolean {
     if (!colony.defeated) {
       // Set before emitting (defensive guard against hypothetical re-entrancy).
       colony.defeated = true;
+
+      // S1: read kill-site context written by combat.killAnt this same tick.
+      const ctx = world.simVersion >= SIM_VERSION_V16_COMBAT_HPDPS
+        ? (world.pendingQueenDeathContexts[colony.colonyId] ?? null)
+        : null;
+
+      // Determine cause: InvasionKill when the killer is from outside the grid where
+      // the queen died — i.e. the killer was the invader in that grid (RC-P1-003).
+      let cause: 'InvasionKill' | 'SpiderRampage' | 'Starvation' | 'MutualDestruction' | null = null;
+      if (ctx !== null) {
+        if (ctx.killerColonyId !== null && ctx.killerColonyId !== ctx.currentGridColonyId) {
+          cause = 'InvasionKill';
+        }
+        // SpiderRampage, Starvation, MutualDestruction: S2/S5/S6 will extend this.
+      }
+
+      // Location from kill-site context when available; fall back to queen's current tile.
+      const locX = ctx ? ctx.tile.x : (world.ants.posX[qid] ?? 0) >> 8;
+      const locY = ctx ? ctx.tile.y : (world.ants.posY[qid] ?? 0) >> 8;
+      const grid: 'surface' | 'underground' = (world.ants.zone[qid] ?? 1) === 0 ? 'surface' : 'underground';
+
       emitEvent(world, {
         tick: world.tick,
         type: 'queen_death',
         payload: {
-          cause: null,
-          location: {
-            x: world.ants.posX[qid] ?? 0,
-            y: world.ants.posY[qid] ?? 0,
-            grid: 'underground',
-          },
-          aiStateAtTime: null,
+          cause,
+          location: { x: locX, y: locY, grid },
+          aiStateAtTime: null, // S2 fills this
         },
       });
+
+      // Clear the context so it's not re-read if isQueenAlive is called again.
+      if (ctx !== null) {
+        world.pendingQueenDeathContexts[colony.colonyId] = null;
+      }
     } else {
       colony.defeated = true;
     }

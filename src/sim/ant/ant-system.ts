@@ -1976,6 +1976,21 @@ export function updateFightAntTargets(world: WorldState): void {
     const entrances = colony.entrances;
     const hasEntrances = entrances != null && entrances.length > 0;
 
+    // Invader in enemy underground: recall or active-fight — both handled by tickAntMovement.
+    // Recall (fight===0 or rp==null): isForeignGridUnderground routes toward the enemy
+    //   entrance exit; skipAscent is cleared so the ant can ascend at tileY=0.
+    // Active: isForeignGridUnderground routes via pickNearestHostileUnderground.
+    // This block must run before the rp==null and zone===Underground blocks so invaders
+    // don't get routed to their own colony's entrance inside a foreign grid.
+    const currentGridColonyId = ants.currentGridColonyId[id]!;
+    if (world.simVersion >= SIM_VERSION_V13_INVARIANT_FIXES
+        && ants.zone[id] === 1 /* Underground */ && currentGridColonyId !== colonyId) {
+      // Always clear stale targets — tickAntMovement computes the correct direction.
+      ants.targetPosX[id] = -1;
+      ants.targetPosY[id] = -1;
+      continue;
+    }
+
     // No rally point (null or uninitialized): fall back to first entrance (idle-at-nest).
     if (rp == null) {
       if (hasEntrances) {
@@ -4167,14 +4182,45 @@ export function tickAntMovement(
       let haveTarget = false;
 
       if (isForeignGridUnderground) {
-        const hostile = pickNearestHostileUnderground(ants, id, gridColonyId);
-        if (hostile !== null) {
-          rawDx = hostile.targetX - posX;
-          rawDy = hostile.targetY - posY;
-          haveTarget = true;
+        const ownColony = world.colonies[ownColonyId];
+        // null colony is treated as NOT recalled (matches isRecallingFromForeign guard
+        // in skipAscent) — missing colony record is a defensive fallback, not a recall.
+        const isRecalling = ownColony != null
+          && (ownColony.targetRatio.fight === 0 || ownColony.rallyPoint == null);
+
+        if (isRecalling) {
+          // Recalled invader: navigate toward the nearest foreign entrance exit
+          // (underground tileY=0 at the shaft column) so skipAscent=false allows ascent.
+          const foreignColony = world.colonies[gridColonyId];
+          const fEnts = foreignColony?.entrances;
+          if (fEnts != null && fEnts.length > 0) {
+            // Pick nearest open entrance; fall back to nearest any entrance.
+            const antTileX = posX >> FP_SHIFT;
+            const antTileY = posY >> FP_SHIFT;
+            let bestEnt = fEnts[0]!;
+            let bestDist = Math.abs(bestEnt.surfaceTileX - antTileX) + antTileY;
+            let bestIsOpen = bestEnt.isOpen;
+            for (let ei = 1; ei < fEnts.length; ei++) {
+              const candidate = fEnts[ei]!;
+              const dist = Math.abs(candidate.surfaceTileX - antTileX) + antTileY;
+              const improves = candidate.isOpen && !bestIsOpen
+                || (candidate.isOpen === bestIsOpen && dist < bestDist);
+              if (improves) { bestEnt = candidate; bestDist = dist; bestIsOpen = candidate.isOpen; }
+            }
+            rawDx = (bestEnt.surfaceTileX << FP_SHIFT) - posX;
+            rawDy = -posY; // target underground Y=0 (entrance row)
+            haveTarget = true;
+          }
+          // else: no enemy entrance → hold (dx=dy=0 fallback)
+        } else {
+          const hostile = pickNearestHostileUnderground(ants, id, gridColonyId);
+          if (hostile !== null) {
+            rawDx = hostile.targetX - posX;
+            rawDy = hostile.targetY - posY;
+            haveTarget = true;
+          }
+          // hostile === null → idle fallback: dx=dy=0 (haveTarget stays false)
         }
-        // hostile === null → idle fallback: dx=dy=0 (haveTarget stays false,
-        // axis-step block below leaves dx/dy at their defaults of 0).
       } else {
         const targetX = ants.targetPosX[id]!;
         const targetY = ants.targetPosY[id]!;
@@ -4709,7 +4755,13 @@ export function tickAntMovement(
           //       coincidental tileX alignment.
           const useGridColony = world.simVersion >= SIM_VERSION_V13_INVARIANT_FIXES;
           const inOwnGrid = ants.currentGridColonyId[id] === ants.colonyId[id];
-          const skipAscent = useGridColony && task === AntTask.Fighting && !inOwnGrid;
+          // Recalled invaders (fight ratio zeroed or rally cleared) must be able to
+          // exit the enemy underground, so skipAscent is cleared for them.
+          const ownColonyForAscent = useGridColony ? world.colonies[ants.colonyId[id]!] : undefined;
+          const isRecallingFromForeign = useGridColony && !inOwnGrid
+            && ownColonyForAscent != null
+            && (ownColonyForAscent.targetRatio.fight === 0 || ownColonyForAscent.rallyPoint == null);
+          const skipAscent = useGridColony && task === AntTask.Fighting && !inOwnGrid && !isRecallingFromForeign;
           if (!skipAscent) {
             const lookupColonyId = useGridColony
               ? ants.currentGridColonyId[id]!

@@ -39,6 +39,7 @@ import {
   MAX_ENTITIES,
   WORKER_BASE_SPEED,
   WORKER_LIFESPAN_TICKS,
+  COMBAT_HP_BASE,
 } from '../constants.js';
 
 // ---------------------------------------------------------------------------
@@ -233,6 +234,21 @@ export interface AntComponents {
    * save/load (optional; defaults to all-(-1) on pre-v10 saves).
    */
   readonly carriedBy: Int32Array;
+  // S1 — combat HP/damage/cooldown fields.
+  /** S1 / D-32 — Current base HP. Death when hp <= 0 (after homeGroundBonusHp depleted). */
+  readonly hp: Int32Array;
+  /** S1 / D-32 — Home-ground HP buffer; depletes first before hp. 0 when on away ground. */
+  readonly homeGroundBonusHp: Int32Array;
+  /** S1 / D-32 — Ticks until next strike (0 = not in active combat). Windup on first engagement. */
+  readonly attackCooldown: Int32Array;
+  /**
+   * S1 / D-32 — Entity index of the ant's current combat opponent (-1 = not paired).
+   * Used by resolveCombatOnTile_v16 to detect new pairings: a pairing is new when
+   * combatOpponentId[antA] !== antB, which correctly handles veteran-veteran first
+   * contacts (both have non-zero cooldowns from prior fights but are new to each other).
+   * Set to the opponent's index on windup; reset to -1 on kill or death.
+   */
+  readonly combatOpponentId: Int32Array;
 }
 
 /**
@@ -331,6 +347,13 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
     // Issue #17 Phase 1 — visible brood carry. -1 = not carrying / not carried.
     carryingBroodId,
     carriedBy,
+    // S1 — combat fields. hp zero-init would be wrong (dead ants have hp=0);
+    // initAnt sets hp=COMBAT_HP_BASE on spawn.
+    hp:               new Int32Array(maxEntities),
+    homeGroundBonusHp:new Int32Array(maxEntities),
+    attackCooldown:   new Int32Array(maxEntities),
+    // S1 — combat opponent tracking. -1 = not paired.
+    combatOpponentId: (() => { const a = new Int32Array(maxEntities); a.fill(-1); return a; })(),
   };
 }
 
@@ -418,6 +441,12 @@ export function initAnt(ants: AntComponents, id: EntityId, spec: InitAntSpec): v
   // Issue #17 Phase 1 — fresh ant is not carrying / not carried.
   ants.carryingBroodId[id]   = -1;
   ants.carriedBy[id]         = -1;
+  // S1 — fresh ant starts at full base HP; home-ground bonus is set by
+  // the combat resolver on first engagement on home ground.
+  ants.hp[id]               = COMBAT_HP_BASE;
+  ants.homeGroundBonusHp[id]= 0;
+  ants.attackCooldown[id]   = 0;
+  ants.combatOpponentId[id] = -1;
 }
 
 // ---------------------------------------------------------------------------

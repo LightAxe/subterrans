@@ -63,6 +63,7 @@ export class AntSpritePool implements AntSpriteLayer {
     sprite.setPosition(opts.x, opts.y);
     sprite.setTint(opts.tint);
     sprite.setRotation(opts.rotation ?? 0);
+    sprite.setScale(opts.scale ?? 1);
     sprite.setDepth(ANT_SPRITE_DEPTH);
     sprite.setVisible(true);
   }
@@ -71,9 +72,11 @@ export class AntSpritePool implements AntSpriteLayer {
     const sprite = this.acquire();
     sprite.setTexture(STATIC_TEXTURES[opts.kind]);
     sprite.setPosition(opts.x, opts.y);
-    // Clear any tint / rotation inherited from a recycled ant slot.
+    // Clear any tint / rotation / scale inherited from a recycled ant slot (e.g. a
+    // fighter at 1.25× reused as an egg/food-cache would remain oversized).
     sprite.setTint(opts.tint ?? 0xffffff);
     sprite.setRotation(0);
+    sprite.setScale(1);
     sprite.setDepth(STATIC_SPRITE_DEPTH);
     sprite.setVisible(true);
   }
