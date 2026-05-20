@@ -288,6 +288,12 @@ function makeV16World(seed = 42): { world: WorldState; cid1: ColonyId; cid2: Col
   return r;
 }
 
+function makeV17World(seed = 42): { world: WorldState; cid1: ColonyId; cid2: ColonyId } {
+  const r = makeWorldWith2Colonies(seed);
+  r.world.simVersion = 17;
+  return r;
+}
+
 /** Run N ticks of combat on a world where ants are already on a contested tile. */
 function runCombatTicks(world: WorldState, n: number): void {
   const rng = new Rng(world.rngState);
@@ -420,12 +426,12 @@ describe('V16 combat resolver', () => {
     world.ants.currentGridColonyId[defender] = Number(cid1) as unknown as typeof world.ants.currentGridColonyId[0];
     const attacker = spawnFighter(world, cid2, 5, 7, Zone.Underground);
     world.ants.currentGridColonyId[attacker] = Number(cid1) as unknown as typeof world.ants.currentGridColonyId[0];
-    // Fighters skip windup: first strike fires on tick 1.
+    // V16: fighters wind up on tick 1, first strike fires at tick 6.
     // Attacker deals COMBAT_DAMAGE_BASE=4; defender bonus=4 absorbs all → bonus=0, base HP intact.
-    runCombatTicks(world, 1);
+    runCombatTicks(world, 6); // windup T=1, first strike T=6
     expect(world.ants.homeGroundBonusHp[defender]).toBe(0);   // bonus fully depleted by first strike
     expect(world.ants.hp[defender]).toBe(COMBAT_HP_BASE);     // base HP untouched
-    // Second strike fires at tick 1 + COMBAT_COOLDOWN_TICKS = 6. Bonus=0 → base HP takes damage.
+    // Second strike fires at tick 6 + COMBAT_COOLDOWN_TICKS = 11. Bonus=0 → base HP takes damage.
     runCombatTicks(world, COMBAT_COOLDOWN_TICKS);
     expect(world.ants.homeGroundBonusHp[defender]).toBe(0);
     expect(world.ants.hp[defender]).toBe(COMBAT_HP_BASE - COMBAT_DAMAGE_BASE);
@@ -480,9 +486,9 @@ describe('V16 2v2 two-tile chamber frontage', () => {
 // Non-fighter and queen combat stats (S1 follow-up)
 // =============================================================================
 
-describe('non-fighter and queen combat stats (V16)', () => {
+describe('non-fighter and queen combat stats (V17)', () => {
   it('fighter strikes on tick 1 against non-fighter; non-fighter winds up 5 ticks', () => {
-    const { world, cid1, cid2 } = makeV16World();
+    const { world, cid1, cid2 } = makeV17World();
     const fighter = spawnFighter(world, cid1, 5, 7, Zone.Surface);
     const worker  = spawnAnt(world, cid2, 5, 7, Zone.Surface);   // AntTask.Idle = non-fighter
     // Tick 1: fighter strikes immediately (no windup); worker starts winding up.
@@ -497,17 +503,17 @@ describe('non-fighter and queen combat stats (V16)', () => {
   });
 
   it('non-fighter deals COMBAT_DAMAGE_WORKER damage per strike (not 0)', () => {
-    const { world, cid1, cid2 } = makeV16World();
+    const { world, cid1, cid2 } = makeV17World();
     const fighter = spawnFighter(world, cid1, 5, 7, Zone.Surface);
     const worker  = spawnAnt(world, cid2, 5, 7, Zone.Surface);
-    // Run 1+5 = 6 ticks: worker winds up on tick 1, strikes on tick 6.
+    // V17: fighter skips windup (strikes tick 1); worker winds up 5 ticks, strikes tick 6.
     runCombatTicks(world, 6);
     // Worker should have dealt COMBAT_DAMAGE_WORKER=1 damage (not 0).
     expect(world.ants.hp[fighter]).toBe(COMBAT_HP_BASE - COMBAT_DAMAGE_WORKER);
   });
 
   it('queen deals COMBAT_DAMAGE_QUEEN damage per strike', () => {
-    const { world, cid1, cid2 } = makeV16World();
+    const { world, cid1, cid2 } = makeV17World();
     // Spawn a queen ant with full queen HP; designate it as cid2 queen.
     const queenAnt = allocateEntityId(world);
     initAnt(world.ants, queenAnt, {

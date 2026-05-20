@@ -43,6 +43,7 @@ import {
   SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
   SIM_VERSION_V13_INVARIANT_FIXES,
   SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX,
+  SIM_VERSION_V17_COMBAT_AGGRO,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt, createAntComponents, RECENT_TILES_LEN, isRecentTile } from './ant-store.js';
@@ -67,6 +68,7 @@ import {
   ENTRANCE_DEPOSIT_SUPPRESS_RADIUS,
   WORKER_BASE_SPEED,
   QUEEN_EGG_INTERVAL_TICKS,
+  FIGHT_AGGRO_RADIUS,
   SEARCH_PAUSE_BASE_TICKS,
   SEARCH_PAUSE_JITTER_TICKS,
 } from '../constants.js';
@@ -2106,6 +2108,88 @@ describe('updateFightAntTargets', () => {
     // Unknown colony ant: target unchanged
     expect(world.ants.targetPosX[unknownColonyAntId]).toBe(-1);
     expect(world.ants.targetPosY[unknownColonyAntId]).toBe(-1);
+  });
+
+  it('V16: proximity aggro scan is suppressed (enemy nearby does NOT override rally)', () => {
+    // Gate test: pre-V17 worlds must NOT apply the aggro scan.
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = SIM_VERSION_V17_COMBAT_AGGRO - 1; // V16
+
+    const COLONY_A = 1 as const;
+    const COLONY_B = 2 as const;
+    const colA = createColonyRecord(COLONY_A, 0);
+    colA.entrances = [{ entranceId: 1, surfaceTileX: 50, surfaceTileY: 5, isOpen: true }];
+    colA.rallyPoint = { tileX: 50, tileY: 5 };
+    colA.digFlowFieldDirty = false;
+    world.colonies[COLONY_A] = colA;
+
+    const fighter = allocateEntityId(world);
+    initAnt(world.ants, fighter, {
+      colonyId: COLONY_A,
+      posX: 10 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Fighting,
+      subTask: 0,
+    });
+    world.ants.zone[fighter] = 0; // Zone.Surface
+
+    // Enemy ant placed 1 tile away (within FIGHT_AGGRO_RADIUS)
+    const enemy = allocateEntityId(world);
+    initAnt(world.ants, enemy, {
+      colonyId: COLONY_B,
+      posX: (10 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Idle,
+      subTask: 0,
+    });
+    world.ants.zone[enemy] = 0; // same zone
+
+    updateFightAntTargets(world);
+
+    // In V16, enemy is present but aggro scan is off → target follows rally, NOT the enemy.
+    const rallyFP = (50 << FP_SHIFT) + (FP_ONE >> 1);
+    expect(world.ants.targetPosX[fighter]).toBe(rallyFP);
+  });
+
+  it('V17: proximity aggro scan routes fighter toward nearby enemy (overrides rally)', () => {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = SIM_VERSION_V17_COMBAT_AGGRO; // V17
+
+    const COLONY_A = 1 as const;
+    const COLONY_B = 2 as const;
+    const colA = createColonyRecord(COLONY_A, 0);
+    colA.entrances = [{ entranceId: 1, surfaceTileX: 50, surfaceTileY: 5, isOpen: true }];
+    colA.rallyPoint = { tileX: 50, tileY: 5 };
+    colA.digFlowFieldDirty = false;
+    world.colonies[COLONY_A] = colA;
+
+    const fighter = allocateEntityId(world);
+    initAnt(world.ants, fighter, {
+      colonyId: COLONY_A,
+      posX: 10 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Fighting,
+      subTask: 0,
+    });
+    world.ants.zone[fighter] = 0; // Zone.Surface
+
+    // Enemy ant placed within FIGHT_AGGRO_RADIUS
+    const enemyTileX = 10 + Math.floor(FIGHT_AGGRO_RADIUS / 2);
+    const enemy = allocateEntityId(world);
+    initAnt(world.ants, enemy, {
+      colonyId: COLONY_B,
+      posX: (enemyTileX << FP_SHIFT) + (FP_ONE >> 1),
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Idle,
+      subTask: 0,
+    });
+    world.ants.zone[enemy] = 0; // same zone
+
+    updateFightAntTargets(world);
+
+    // In V17, enemy within radius → target is the enemy's position (not the rally).
+    expect(world.ants.targetPosX[fighter]).toBe((enemyTileX << FP_SHIFT) + (FP_ONE >> 1));
+    expect(world.ants.targetPosX[fighter]).not.toBe((50 << FP_SHIFT) + (FP_ONE >> 1));
   });
 });
 
