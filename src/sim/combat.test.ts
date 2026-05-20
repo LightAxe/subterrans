@@ -280,7 +280,7 @@ describe('coin flip distribution (CMBT-05, V15 path)', () => {
 // S1 — V16 HP/damage/cooldown combat tests
 // =============================================================================
 
-import { COMBAT_HP_BASE, COMBAT_HP_HOMEGROUND_BONUS, COMBAT_COOLDOWN_TICKS } from './constants.js';
+import { COMBAT_HP_BASE, COMBAT_HP_HOMEGROUND_BONUS, COMBAT_COOLDOWN_TICKS, COMBAT_DAMAGE_BASE, COMBAT_DAMAGE_WORKER, COMBAT_DAMAGE_QUEEN, COMBAT_HP_QUEEN } from './constants.js';
 
 function makeV16World(seed = 42): { world: WorldState; cid1: ColonyId; cid2: ColonyId } {
   const r = makeWorldWith2Colonies(seed);
@@ -420,15 +420,15 @@ describe('V16 combat resolver', () => {
     world.ants.currentGridColonyId[defender] = Number(cid1) as unknown as typeof world.ants.currentGridColonyId[0];
     const attacker = spawnFighter(world, cid2, 5, 7, Zone.Underground);
     world.ants.currentGridColonyId[attacker] = Number(cid1) as unknown as typeof world.ants.currentGridColonyId[0];
-    // After windup, set defender's hp/bonus to known state
-    runCombatTicks(world, 1); // windup
-    expect(world.ants.homeGroundBonusHp[defender]).toBe(COMBAT_HP_HOMEGROUND_BONUS);
-    expect(world.ants.hp[defender]).toBe(COMBAT_HP_BASE);
-    // Run one more round (5 ticks) to trigger first strike
-    runCombatTicks(world, 5);
-    // Attacker deals COMBAT_DAMAGE_BASE=4; defender bonus=4 → bonus absorbs all 4 → bonus=0, hp=16
+    // Fighters skip windup: first strike fires on tick 1.
+    // Attacker deals COMBAT_DAMAGE_BASE=4; defender bonus=4 absorbs all → bonus=0, base HP intact.
+    runCombatTicks(world, 1);
+    expect(world.ants.homeGroundBonusHp[defender]).toBe(0);   // bonus fully depleted by first strike
+    expect(world.ants.hp[defender]).toBe(COMBAT_HP_BASE);     // base HP untouched
+    // Second strike fires at tick 1 + COMBAT_COOLDOWN_TICKS = 6. Bonus=0 → base HP takes damage.
+    runCombatTicks(world, COMBAT_COOLDOWN_TICKS);
     expect(world.ants.homeGroundBonusHp[defender]).toBe(0);
-    expect(world.ants.hp[defender]).toBe(COMBAT_HP_BASE);
+    expect(world.ants.hp[defender]).toBe(COMBAT_HP_BASE - COMBAT_DAMAGE_BASE);
   });
 });
 
@@ -472,5 +472,74 @@ describe('V16 2v2 two-tile chamber frontage', () => {
     // Pairs are independent — each tile resolved its own fight.
     expect(world.colonies[cid1]!.killCount).toBe(2);
     expect(world.colonies[cid2]!.killCount).toBe(0);
+  });
+});
+
+
+// =============================================================================
+// Non-fighter and queen combat stats (S1 follow-up)
+// =============================================================================
+
+describe('non-fighter and queen combat stats (V16)', () => {
+  it('fighter strikes on tick 1 against non-fighter; non-fighter winds up 5 ticks', () => {
+    const { world, cid1, cid2 } = makeV16World();
+    const fighter = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+    const worker  = spawnAnt(world, cid2, 5, 7, Zone.Surface);   // AntTask.Idle = non-fighter
+    // Tick 1: fighter strikes immediately (no windup); worker starts winding up.
+    runCombatTicks(world, 1);
+    expect(world.ants.hp[worker]).toBe(COMBAT_HP_BASE - COMBAT_DAMAGE_BASE); // fighter dealt 4
+    expect(world.ants.hp[fighter]).toBe(COMBAT_HP_BASE);                      // worker hasn't struck yet
+    expect(world.ants.attackCooldown[worker]).toBe(COMBAT_COOLDOWN_TICKS - 1); // 5→4
+    // Worker strikes at tick 1 + COMBAT_COOLDOWN_TICKS = 6.
+    runCombatTicks(world, COMBAT_COOLDOWN_TICKS - 1); // ticks 2-5: worker cooldown → 0
+    runCombatTicks(world, 1);                          // tick 6: worker strikes for COMBAT_DAMAGE_WORKER=1
+    expect(world.ants.hp[fighter]).toBe(COMBAT_HP_BASE - COMBAT_DAMAGE_WORKER);
+  });
+
+  it('non-fighter deals COMBAT_DAMAGE_WORKER damage per strike (not 0)', () => {
+    const { world, cid1, cid2 } = makeV16World();
+    const fighter = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+    const worker  = spawnAnt(world, cid2, 5, 7, Zone.Surface);
+    // Run 1+5 = 6 ticks: worker winds up on tick 1, strikes on tick 6.
+    runCombatTicks(world, 6);
+    // Worker should have dealt COMBAT_DAMAGE_WORKER=1 damage (not 0).
+    expect(world.ants.hp[fighter]).toBe(COMBAT_HP_BASE - COMBAT_DAMAGE_WORKER);
+  });
+
+  it('queen deals COMBAT_DAMAGE_QUEEN damage per strike', () => {
+    const { world, cid1, cid2 } = makeV16World();
+    // Spawn a queen ant with full queen HP; designate it as cid2 queen.
+    const queenAnt = allocateEntityId(world);
+    initAnt(world.ants, queenAnt, {
+      colonyId: Number(cid2),
+      posX: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (7 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle,
+      hp: COMBAT_HP_QUEEN,
+    });
+    world.colonies[cid2]!.workers.push(queenAnt);
+    world.colonies[cid2]!.workerCount += 1;
+    world.colonies[cid2]!.queenEntityId = queenAnt;
+    const fighter = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+    // T=1: fighter strikes queen for COMBAT_DAMAGE_BASE=4 (no windup). Queen starts winding up.
+    runCombatTicks(world, 1);
+    expect(world.ants.hp[queenAnt]).toBe(COMBAT_HP_QUEEN - COMBAT_DAMAGE_BASE);
+    expect(world.ants.hp[fighter]).toBe(COMBAT_HP_BASE); // queen hasn't struck yet
+    // T=6: queen strikes for COMBAT_DAMAGE_QUEEN=6. Fighter also strikes (second hit).
+    runCombatTicks(world, COMBAT_COOLDOWN_TICKS);
+    expect(world.ants.hp[fighter]).toBe(COMBAT_HP_BASE - COMBAT_DAMAGE_QUEEN);
+  });
+
+  it('queen starts with COMBAT_HP_QUEEN HP when spawned via scenario', () => {
+    // Verify that initAnt with hp:COMBAT_HP_QUEEN correctly initialises the queen's HP.
+    // (Tested here via direct initAnt call to keep test fast and scenario-independent.)
+    const { world, cid1 } = makeV16World();
+    const queenSlot = allocateEntityId(world);
+    const { FP_SHIFT: _shift } = { FP_SHIFT: 8 };
+    initAnt(world.ants, queenSlot, {
+      colonyId: Number(cid1), posX: 10 << 8, posY: 10 << 8,
+      task: AntTask.Idle, hp: COMBAT_HP_QUEEN,
+    });
+    expect(world.ants.hp[queenSlot]).toBe(COMBAT_HP_QUEEN);
   });
 });

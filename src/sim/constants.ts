@@ -540,3 +540,24 @@ export const COMBAT_DAMAGE_HOMEGROUND = 5 as const;
 
 /** S1 / D-32 — Ticks between strikes; also the windup length (first contested tick). */
 export const COMBAT_COOLDOWN_TICKS = 5 as const;
+
+// ---------------------------------------------------------------------------
+// S1 follow-up — Fighter aggression radius + non-fighter combat stats
+// ---------------------------------------------------------------------------
+
+/** Manhattan tile radius within which a surface fighter scans for enemy ants before
+ *  falling back to rally-point routing. Phase 4 PRD §3d. */
+export const FIGHT_AGGRO_RADIUS = 4 as const;
+
+/** Damage dealt per strike by a non-fighter ant (worker / forager / nurse) defending itself.
+ *  25% of COMBAT_DAMAGE_BASE — non-fighters can fight back but weakly. */
+export const COMBAT_DAMAGE_WORKER = 1 as const;
+
+/** Damage dealt per strike by the queen ant. High value makes the queen dangerous to
+ *  engage directly — it takes multiple fighters to bring her down.
+ *  Flagged TBD: queen damage/HP may be tuned in S6-Tune once playtrace data exists. */
+export const COMBAT_DAMAGE_QUEEN = 6 as const;
+
+/** Base HP for the queen. Higher than workers so it takes a coordinated group of fighters
+ *  to kill her. Flagged TBD for S6-Tune. */
+export const COMBAT_HP_QUEEN = 30 as const;
