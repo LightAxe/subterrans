@@ -2134,6 +2134,10 @@ describe('updateFightAntTargets', () => {
     world.ants.zone[fighter] = 0; // Zone.Surface
 
     // Enemy ant placed 1 tile away (within FIGHT_AGGRO_RADIUS)
+    const colB_v16 = createColonyRecord(COLONY_B, 0);
+    colB_v16.entrances = [];
+    colB_v16.digFlowFieldDirty = false;
+    world.colonies[COLONY_B] = colB_v16;
     const enemy = allocateEntityId(world);
     initAnt(world.ants, enemy, {
       colonyId: COLONY_B,
@@ -2143,6 +2147,8 @@ describe('updateFightAntTargets', () => {
       subTask: 0,
     });
     world.ants.zone[enemy] = 0; // same zone
+    colB_v16.workers.push(enemy);
+    colB_v16.workerCount += 1;
 
     updateFightAntTargets(world);
 
@@ -2158,8 +2164,9 @@ describe('updateFightAntTargets', () => {
     const COLONY_A = 1 as const;
     const COLONY_B = 2 as const;
     const colA = createColonyRecord(COLONY_A, 0);
+    // Rally NOT on any entrance — ensures aggro scan is not suppressed.
     colA.entrances = [{ entranceId: 1, surfaceTileX: 50, surfaceTileY: 5, isOpen: true }];
-    colA.rallyPoint = { tileX: 50, tileY: 5 };
+    colA.rallyPoint = { tileX: 10, tileY: 10 }; // rally on fighter's own tile, not entrance
     colA.digFlowFieldDirty = false;
     world.colonies[COLONY_A] = colA;
 
@@ -2174,6 +2181,10 @@ describe('updateFightAntTargets', () => {
     world.ants.zone[fighter] = 0; // Zone.Surface
 
     // Enemy ant placed within FIGHT_AGGRO_RADIUS
+    const colB_v17 = createColonyRecord(COLONY_B, 0);
+    colB_v17.entrances = [];
+    colB_v17.digFlowFieldDirty = false;
+    world.colonies[COLONY_B] = colB_v17;
     const enemyTileX = 10 + Math.floor(FIGHT_AGGRO_RADIUS / 2);
     const enemy = allocateEntityId(world);
     initAnt(world.ants, enemy, {
@@ -2184,6 +2195,8 @@ describe('updateFightAntTargets', () => {
       subTask: 0,
     });
     world.ants.zone[enemy] = 0; // same zone
+    colB_v17.workers.push(enemy);
+    colB_v17.workerCount += 1;
 
     updateFightAntTargets(world);
 

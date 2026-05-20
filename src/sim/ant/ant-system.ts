@@ -2041,23 +2041,28 @@ export function updateFightAntTargets(world: WorldState): void {
     // Proximity aggression: scan for nearest enemy ant within FIGHT_AGGRO_RADIUS tiles
     // in the same zone. Any alive enemy (any task) is a valid target. If found, route
     // directly toward it — overrides rally and hold-radius. Phase 4 PRD §3d.
-    // V17+ only — pre-V17 saves replay without this pass.
-    if (world.simVersion >= SIM_VERSION_V17_COMBAT_AGGRO) {
+    // V17+ only; also suppressed when the rally is an open enemy entrance — invasion
+    // fighters must march to the entrance tile uninterrupted; surface aggro would
+    // deflect them before they reach the descent point.
+    if (world.simVersion >= SIM_VERSION_V17_COMBAT_AGGRO && !rallyOnEntrance[colony.colonyId]) {
       const aggroZone = ants.zone[id];
       const aggroTileX = ants.posX[id]! >> FP_SHIFT;
       const aggroTileY = ants.posY[id]! >> FP_SHIFT;
       let nearestEnemy = -1;
       let nearestEnemyDist = FIGHT_AGGRO_RADIUS + 1;
-      for (let eid = 0; eid < ants.alive.length; eid++) {
-        if (ants.alive[eid] !== 1) continue;
-        if (ants.colonyId[eid] === colonyId) continue;
-        if (ants.zone[eid] !== aggroZone) continue;
-        const eTileX = ants.posX[eid]! >> FP_SHIFT;
-        const eTileY = ants.posY[eid]! >> FP_SHIFT;
-        const dist = Math.abs(eTileX - aggroTileX) + Math.abs(eTileY - aggroTileY);
-        if (dist <= FIGHT_AGGRO_RADIUS && dist < nearestEnemyDist) {
-          nearestEnemyDist = dist;
-          nearestEnemy = eid;
+      // Iterate enemy-colony workers lists instead of full entity array (O(active ants)).
+      for (const [cid, enemyColony] of Object.entries(world.colonies)) {
+        if (Number(cid) === colonyId) continue;
+        for (const eid of enemyColony.workers) {
+          if (ants.alive[eid] !== 1) continue;
+          if (ants.zone[eid] !== aggroZone) continue;
+          const eTileX = ants.posX[eid]! >> FP_SHIFT;
+          const eTileY = ants.posY[eid]! >> FP_SHIFT;
+          const dist = Math.abs(eTileX - aggroTileX) + Math.abs(eTileY - aggroTileY);
+          if (dist <= FIGHT_AGGRO_RADIUS && dist < nearestEnemyDist) {
+            nearestEnemyDist = dist;
+            nearestEnemy = eid;
+          }
         }
       }
       if (nearestEnemy >= 0) {

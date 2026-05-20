@@ -189,6 +189,8 @@ function strikeDamage(world: WorldState, antId: number, strikes: boolean): numbe
       ? COMBAT_DAMAGE_HOMEGROUND
       : COMBAT_DAMAGE_BASE;
   }
+  // V17+: non-fighters retaliate with reduced damage. Pre-V17: 0 (replay-safe for V16 saves).
+  if (world.simVersion < SIM_VERSION_V17_COMBAT_AGGRO) return 0;
   const cid = ants.colonyId[antId]! as ColonyId;
   const colony = world.colonies[cid];
   return colony != null && colony.queenEntityId === antId ? COMBAT_DAMAGE_QUEEN : COMBAT_DAMAGE_WORKER;
