@@ -7878,13 +7878,17 @@ describe('Issue #106 — ascent uses currentGridColonyId (V13+)', () => {
     // at tileY=0 in the enemy grid would find the enemy's entrance at the
     // same tileX (which is exactly where it descended) and ascend through
     // it, then descend again next tick — bouncing forever and never fighting.
+    // Note: skipAscent only fires for ACTIVE invaders (fight ratio > 0 AND rally
+    // set). Recalled invaders (fight=0 or rally cleared) intentionally ascend.
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     world.simVersion = 13;
     const playerColonyId = 1;
     const enemyColonyId = 2;
     const playerColony = createColonyRecord(playerColonyId, 0);
     playerColony.entrances = [{ entranceId: 10, surfaceTileX: 5, surfaceTileY: 5, isOpen: true }];
-    playerColony.rallyPoint = null;
+    // Active invader: rally set + fight ratio > 0 (not a recall situation).
+    playerColony.rallyPoint = { tileX: 5, tileY: 50 };
+    playerColony.targetRatio.fight = 5;
     playerColony.digFlowFieldDirty = false;
     world.colonies[playerColonyId] = playerColony;
     const enemyColony = createColonyRecord(enemyColonyId, 0);

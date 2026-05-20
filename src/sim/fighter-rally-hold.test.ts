@@ -395,6 +395,10 @@ function buildInvasionRallyWorld(
     fighterIds.push(id);
   }
 
+  // Model real game state: fight ratio > 0 so recall logic doesn't fire
+  // immediately after descent (recall triggers when targetRatio.fight===0).
+  world.colonies[PLAYER_COLONY_ID]!.targetRatio.fight = Math.max(5, fighterIds.length);
+
   return { world, fighterIds, rallyTileX, rallyTileY };
 }
 

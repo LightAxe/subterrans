@@ -89,6 +89,10 @@ function buildInvasionWorld(seed = 42): InvasionWorld {
   });
   world.colonies[PLAYER_COLONY_ID]!.workers.push(playerAntId);
   world.colonies[PLAYER_COLONY_ID]!.workerCount += 1;
+  // Model real game state: player rallied fighters to enemy entrance with fight ratio > 0.
+  // Without these, recall logic fires immediately after descent (targetRatio.fight=0, rp=null).
+  world.colonies[PLAYER_COLONY_ID]!.rallyPoint = { tileX: enemyEntTileX, tileY: enemyEntTileY };
+  world.colonies[PLAYER_COLONY_ID]!.targetRatio.fight = 5;
 
   return { world, playerAntId, enemyEntTileX, enemyEntTileY };
 }

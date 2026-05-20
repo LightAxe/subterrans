@@ -707,6 +707,10 @@ function buildCrossGridCombatWorld(seed: number): WorldState {
   });
   world.colonies[PLAYER_COLONY_ID]!.workers.push(playerAntId);
   world.colonies[PLAYER_COLONY_ID]!.workerCount += 1;
+  // Model real game state: rally + fight ratio > 0 so recall logic doesn't
+  // fire immediately after descent (which would break the divergence guard).
+  world.colonies[PLAYER_COLONY_ID]!.rallyPoint = { tileX: ENEMY_START_X, tileY: ENEMY_START_Y };
+  world.colonies[PLAYER_COLONY_ID]!.targetRatio.fight = 5;
 
   // Pin an enemy hostile a few tiles east + below the entrance shaft.
   const hostileTileX = ENEMY_START_X + 3;

@@ -32,6 +32,7 @@ import {
   COLOR_RALLY_POINT,
   COLOR_FIGHTER_TINT,
   COLOR_CONTESTED_TILE,
+  lerpColor,
 } from './sprites.js';
 import {
   drawBarrenEarthTile,
@@ -323,7 +324,7 @@ export function drawSurfaceEntities(
       x: screenX,
       y: screenY,
       // S1: fighters get a red tint blended over their colony color.
-      tint: isFighter && !isQueen ? COLOR_FIGHTER_TINT : color,
+      tint: isFighter && !isQueen ? lerpColor(color, COLOR_FIGHTER_TINT, 0.45) : color,
       rotation,
       // S1: fighters render slightly larger (+1px equivalent at TILE_SIZE_PX=16).
       scale: isFighter && !isQueen ? 1.25 : 1.0,
