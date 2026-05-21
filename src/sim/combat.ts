@@ -263,19 +263,21 @@ function resolveCombatOnTile_v16(world: WorldState, _tileKey: number, participan
     // accumulated progress to avoid penalizing an ongoing combatant on a re-entry.
     const aIsFighter = ants.task[antA] === AntTask.Fighting;
     const bIsFighter = ants.task[antB] === AntTask.Fighting;
-    // V17+: fighters skip windup on first pair (cooldown=1 → strike this tick).
-    // Pre-V17: all new pairings return early (full windup), replay-safe.
     const skipWindup = world.simVersion >= SIM_VERSION_V17_COMBAT_AGGRO;
-    // Compute first so cooldown assignments can compensate (see below).
     const fighterStrikesNow = skipWindup && ((aNew && aIsFighter) || (bNew && bIsFighter));
-    // When a fighter strikes on the pairing tick the decrement below runs immediately.
-    // Newly-paired non-fighters start at COMBAT_COOLDOWN_TICKS+1 so they land at
-    // COMBAT_COOLDOWN_TICKS after that decrement — full windup window preserved.
-    if (aNew) ants.attackCooldown[antA] = (aIsFighter && skipWindup) ? 1 : COMBAT_COOLDOWN_TICKS + (fighterStrikesNow && !aIsFighter ? 1 : 0);
-    if (bNew) ants.attackCooldown[antB] = (bIsFighter && skipWindup) ? 1 : COMBAT_COOLDOWN_TICKS + (fighterStrikesNow && !bIsFighter ? 1 : 0);
+    if (skipWindup) {
+      // V17+: only reset the newly-paired side — veterans keep accumulated progress.
+      // Non-fighters start at COMBAT_COOLDOWN_TICKS+1 when fighterStrikesNow so the
+      // immediate decrement below leaves them at exactly COMBAT_COOLDOWN_TICKS.
+      if (aNew) ants.attackCooldown[antA] = aIsFighter ? 1 : COMBAT_COOLDOWN_TICKS + (fighterStrikesNow ? 1 : 0);
+      if (bNew) ants.attackCooldown[antB] = bIsFighter ? 1 : COMBAT_COOLDOWN_TICKS + (fighterStrikesNow ? 1 : 0);
+    } else {
+      // Pre-V17: reset both sides unconditionally — preserves V16 replay semantics.
+      ants.attackCooldown[antA] = COMBAT_COOLDOWN_TICKS;
+      ants.attackCooldown[antB] = COMBAT_COOLDOWN_TICKS;
+    }
     // Return early unless a newly-paired V17 fighter is about to strike (cooldown=1).
-    // Preserves the original V16 invariant: no strike fires on a pairing tick, even
-    // if the non-new side has cooldown=1 (that strike is deferred to the next tick).
+    // In pre-V17, fighterStrikesNow is always false, so this always returns.
     if (!fighterStrikesNow) return;
   }
 
