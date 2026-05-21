@@ -2068,13 +2068,16 @@ export function updateFightAntTargets(world: WorldState): void {
         for (const eid of ec.workers) {
           if (ants.alive[eid] !== 1) continue;
           if (ants.zone[eid] !== aggroZone) continue;
+          // Underground grids are disjoint spaces — reject candidates in a different grid.
+          if (aggroZone === Zone.Underground && ants.currentGridColonyId[eid] !== currentGridColonyId) continue;
           const eTileX = ants.posX[eid]! >> FP_SHIFT;
           const eTileY = ants.posY[eid]! >> FP_SHIFT;
           const dist = Math.abs(eTileX - aggroTileX) + Math.abs(eTileY - aggroTileY);
           if (dist <= FIGHT_AGGRO_RADIUS && dist < nearestEnemyDist) { nearestEnemyDist = dist; nearestEnemy = eid; }
         }
         const qid = ec.queenEntityId;
-        if (qid >= 0 && ants.alive[qid] === 1 && ants.zone[qid] === aggroZone) {
+        if (qid >= 0 && ants.alive[qid] === 1 && ants.zone[qid] === aggroZone
+            && (aggroZone !== Zone.Underground || ants.currentGridColonyId[qid] === currentGridColonyId)) {
           const qTileX = ants.posX[qid]! >> FP_SHIFT;
           const qTileY = ants.posY[qid]! >> FP_SHIFT;
           const dist = Math.abs(qTileX - aggroTileX) + Math.abs(qTileY - aggroTileY);

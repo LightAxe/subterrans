@@ -266,12 +266,16 @@ function resolveCombatOnTile_v16(world: WorldState, _tileKey: number, participan
     // V17+: fighters skip windup on first pair (cooldown=1 → strike this tick).
     // Pre-V17: all new pairings return early (full windup), replay-safe.
     const skipWindup = world.simVersion >= SIM_VERSION_V17_COMBAT_AGGRO;
-    if (aNew) ants.attackCooldown[antA] = (aIsFighter && skipWindup) ? 1 : COMBAT_COOLDOWN_TICKS;
-    if (bNew) ants.attackCooldown[antB] = (bIsFighter && skipWindup) ? 1 : COMBAT_COOLDOWN_TICKS;
+    // Compute first so cooldown assignments can compensate (see below).
+    const fighterStrikesNow = skipWindup && ((aNew && aIsFighter) || (bNew && bIsFighter));
+    // When a fighter strikes on the pairing tick the decrement below runs immediately.
+    // Newly-paired non-fighters start at COMBAT_COOLDOWN_TICKS+1 so they land at
+    // COMBAT_COOLDOWN_TICKS after that decrement — full windup window preserved.
+    if (aNew) ants.attackCooldown[antA] = (aIsFighter && skipWindup) ? 1 : COMBAT_COOLDOWN_TICKS + (fighterStrikesNow && !aIsFighter ? 1 : 0);
+    if (bNew) ants.attackCooldown[antB] = (bIsFighter && skipWindup) ? 1 : COMBAT_COOLDOWN_TICKS + (fighterStrikesNow && !bIsFighter ? 1 : 0);
     // Return early unless a newly-paired V17 fighter is about to strike (cooldown=1).
     // Preserves the original V16 invariant: no strike fires on a pairing tick, even
     // if the non-new side has cooldown=1 (that strike is deferred to the next tick).
-    const fighterStrikesNow = skipWindup && ((aNew && aIsFighter) || (bNew && bIsFighter));
     if (!fighterStrikesNow) return;
   }
 

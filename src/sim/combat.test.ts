@@ -495,10 +495,10 @@ describe('non-fighter and queen combat stats (V17)', () => {
     runCombatTicks(world, 1);
     expect(world.ants.hp[worker]).toBe(COMBAT_HP_BASE - COMBAT_DAMAGE_BASE); // fighter dealt 4
     expect(world.ants.hp[fighter]).toBe(COMBAT_HP_BASE);                      // worker hasn't struck yet
-    expect(world.ants.attackCooldown[worker]).toBe(COMBAT_COOLDOWN_TICKS - 1); // 5→4
+    expect(world.ants.attackCooldown[worker]).toBe(COMBAT_COOLDOWN_TICKS); // 6→5
     // Worker strikes at tick 1 + COMBAT_COOLDOWN_TICKS = 6.
-    runCombatTicks(world, COMBAT_COOLDOWN_TICKS - 1); // ticks 2-5: worker cooldown → 0
-    runCombatTicks(world, 1);                          // tick 6: worker strikes for COMBAT_DAMAGE_WORKER=1
+    runCombatTicks(world, COMBAT_COOLDOWN_TICKS - 1); // ticks 2-5: worker cooldown → 1
+    runCombatTicks(world, 1);                          // tick 6: worker cooldown → 0, strikes
     expect(world.ants.hp[fighter]).toBe(COMBAT_HP_BASE - COMBAT_DAMAGE_WORKER);
   });
 
