@@ -44,6 +44,7 @@ import {
   SIM_VERSION_V13_INVARIANT_FIXES,
   SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX,
   SIM_VERSION_V17_COMBAT_AGGRO,
+  SIM_VERSION_V18_INVADER_WALL_AWARE_STEP,
   type WorldState,
 } from '../types.js';
 import {
@@ -3163,6 +3164,63 @@ export function pickNearestHostileUnderground(
 }
 
 // ---------------------------------------------------------------------------
+// pickInvaderUndergroundStep — wall-aware greedy step for invader fighters.
+//
+// Replaces the previous rawDx/rawDy+pickCardinalStep path that froze fighters
+// against solid walls (the cardinal step was rejected by the passability guard
+// every tick, so the ant never moved). Scans the 4 cardinal neighbours of the
+// current tile; returns the passable step that minimises Manhattan distance to
+// the target tile. Falls back to (0,0) when no passable neighbour gets closer
+// (narrow dead-end or already adjacent to hostile). The downstream passability
+// guard remains as a safety net but will never reject a step produced here.
+//
+// Uses DIR_DX/DIR_DY (N, E, S, W) — diagonals are skipped to avoid corner-cut
+// complications underground (the passability guard handles diagonals separately
+// for other movement paths).
+// ---------------------------------------------------------------------------
+
+/**
+ * @param underground  The grid the invader currently occupies.
+ * @param tileX        Invader's current tile X.
+ * @param tileY        Invader's current tile Y.
+ * @param targetTileX  Target hostile's tile X.
+ * @param targetTileY  Target hostile's tile Y.
+ * @returns            Cardinal step (dx,dy) \u2208 {-1,0,1}\u00b2 moving closer to the
+ *                     target through passable terrain, or (0,0) if stuck.
+ */
+export function pickInvaderUndergroundStep(
+  underground: UndergroundGrid,
+  tileX: number,
+  tileY: number,
+  targetTileX: number,
+  targetTileY: number,
+): number {
+  const currentDist = Math.abs(targetTileX - tileX) + Math.abs(targetTileY - tileY);
+  if (currentDist === 0) return packStep(0, 0);
+
+  let bestDx = 0;
+  let bestDy = 0;
+  let bestDist = currentDist;
+
+  for (let i = 0; i < DIR_DX.length; i++) {
+    const ax = DIR_DX[i]!;
+    const ay = DIR_DY[i]!;
+    const nx = tileX + ax;
+    const ny = tileY + ay;
+    if (nx < 0 || nx >= underground.width || ny < 0 || ny >= underground.height) continue;
+    if (!canEnterUndergroundTile(underground, nx, ny, AntTask.Fighting)) continue;
+    const dist = Math.abs(targetTileX - nx) + Math.abs(targetTileY - ny);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestDx = ax;
+      bestDy = ay;
+    }
+  }
+
+  return packStep(bestDx, bestDy);
+}
+
+// ---------------------------------------------------------------------------
 // P1 queen relocation — Phase 3 chamber behavior.
 //
 // Once a completed Queen chamber exists, the queen routes from her current
@@ -4275,8 +4333,26 @@ export function tickAntMovement(
         } else {
           const hostile = pickNearestHostileUnderground(ants, id, gridColonyId);
           if (hostile !== null) {
-            rawDx = hostile.targetX - posX;
-            rawDy = hostile.targetY - posY;
+            const invUnderground = world.undergroundGrids[gridColonyId];
+            if (invUnderground
+                && world.simVersion >= SIM_VERSION_V18_INVADER_WALL_AWARE_STEP) {
+              // V17+: wall-aware greedy step — avoids freezing against solid
+              // walls that blocked the direct cardinal path. See
+              // pickInvaderUndergroundStep. Routes through rawDx/rawDy so the
+              // shared pickCardinalStep block does the FP→step conversion.
+              const tileX = posX >> FP_SHIFT;
+              const tileY = posY >> FP_SHIFT;
+              const tTileX = hostile.targetX >> FP_SHIFT;
+              const tTileY = hostile.targetY >> FP_SHIFT;
+              const step = pickInvaderUndergroundStep(invUnderground, tileX, tileY, tTileX, tTileY);
+              rawDx = unpackStepDx(step) * FP_ONE;
+              rawDy = unpackStepDy(step) * FP_ONE;
+            } else {
+              // Pre-V17 (or missing grid): raw direction — may freeze on walls
+              // but preserves replay byte-identity for older saves.
+              rawDx = hostile.targetX - posX;
+              rawDy = hostile.targetY - posY;
+            }
             haveTarget = true;
           }
           // hostile === null → idle fallback: dx=dy=0 (haveTarget stays false)

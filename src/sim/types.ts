@@ -241,7 +241,14 @@ export const SIM_VERSION_V16_COMBAT_HPDPS = 16 as const;
  * fighter strikes on new pair (attackCooldown=1 vs COMBAT_COOLDOWN_TICKS).
  */
 export const SIM_VERSION_V17_COMBAT_AGGRO = 17 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V17_COMBAT_AGGRO;
+/**
+ * V18 — Wall-aware greedy step for underground invader fighters.
+ * pickInvaderUndergroundStep replaces the raw-direction path that froze
+ * fighters against Solid walls in enemy grids. Pre-V18 saves replay with
+ * the old direct-hostile-position rawDx/rawDy path (byte-stable).
+ */
+export const SIM_VERSION_V18_INVADER_WALL_AWARE_STEP = 18 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V18_INVADER_WALL_AWARE_STEP;
 
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick

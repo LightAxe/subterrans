@@ -30,6 +30,7 @@ import {
   updateFightAntTargets,
   chooseExcursionDirection,
   tickExcursionBoundary,
+  pickInvaderUndergroundStep,
 } from './ant-system.js';
 import {
   createWorldState,
@@ -8308,5 +8309,56 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     // Ring buffer must NOT have been cleared — V13 replay contract
     expect(world.ants.recentTilesX[antId * RECENT_TILES_LEN + 0]).toBe(3);
     expect(world.ants.recentTilesY[antId * RECENT_TILES_LEN + 0]).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pickInvaderUndergroundStep — wall-aware greedy step (UAT: fighters freeze bug)
+// ---------------------------------------------------------------------------
+
+describe('pickInvaderUndergroundStep — wall-aware greedy invader step', () => {
+  it('returns direct cardinal step when path is clear', () => {
+    // 5x5 grid. Fighter at (1,1), target at (1,4) due south.
+    // Grid defaults to Solid; set the south tile (1,2) Open so it can be entered.
+    // DIR_DX order: N(1,0) Solid, E(2,1) Solid, S(1,2) Open dist=2<3, W(0,1) Solid.
+    // South (0,+1) is the closest passable step.
+    const { underground } = setupWorldWithUnderground(5, 5);
+    ugSet(underground, 1, 2, UndergroundTileState.Open);
+    const step = pickInvaderUndergroundStep(underground, 1, 1, 1, 4);
+    expect(unpackStepDx(step)).toBe(0);
+    expect(unpackStepDy(step)).toBe(1);
+  });
+
+  it('avoids a wall blocking the direct cardinal path and picks a passable detour', () => {
+    // 5x5 grid. Fighter at (2,1), hostile at (4,3). Current dist=4.
+    // Solid wall at (2,2) blocks the south cardinal step (would give dist=3).
+    // Set east tile (3,1) Open — it also gives dist=3<4 and is the only passable step.
+    // DIR_DX order: N(2,0) Solid, E(3,1) Open dist=3<4, S(2,2) Solid, W(1,1) Solid.
+    // East (1,0) wins.
+    const { underground } = setupWorldWithUnderground(5, 5);
+    ugSet(underground, 3, 1, UndergroundTileState.Open);
+    const step = pickInvaderUndergroundStep(underground, 2, 1, 4, 3);
+    expect(unpackStepDx(step)).toBe(1);
+    expect(unpackStepDy(step)).toBe(0);
+  });
+
+  it('returns (0,0) when already on target tile', () => {
+    const { underground } = setupWorldWithUnderground(5, 5);
+    const step = pickInvaderUndergroundStep(underground, 3, 3, 3, 3);
+    expect(unpackStepDx(step)).toBe(0);
+    expect(unpackStepDy(step)).toBe(0);
+  });
+
+  it('returns (0,0) when all passable neighbours are farther (dead-end hold, no infinite wall-bounce)', () => {
+    // 3x3 grid. Fighter at (1,0). Target at (1,2) but row 1 is all Solid.
+    // North is out of bounds. East/West are (0,0) dist=3 and (2,0) dist=3 — farther
+    // than current dist=2. Expect hold (0,0) rather than an infinite wall-bounce.
+    const { underground } = setupWorldWithUnderground(3, 3);
+    ugSet(underground, 0, 1, UndergroundTileState.Solid);
+    ugSet(underground, 1, 1, UndergroundTileState.Solid);
+    ugSet(underground, 2, 1, UndergroundTileState.Solid);
+    const step = pickInvaderUndergroundStep(underground, 1, 0, 1, 2);
+    expect(unpackStepDx(step)).toBe(0);
+    expect(unpackStepDy(step)).toBe(0);
   });
 });
