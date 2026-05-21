@@ -176,7 +176,7 @@ export function aiInitialSetup(world: WorldState, colony: ColonyRecord): void {
   //    targetRatio already matches the AI ratio (idempotent across boots).
   //    V17+: _syncBehaviorRatioToAIState owns the ratio; skip here to avoid
   //    alternating commands that thrash the ratio every tick in non-Peacetime states.
-  if (world.simVersion < SIM_VERSION_V17_AI_STATE) {
+  if (world.simVersion < SIM_VERSION_V19_AI_STATE) {
     const ratioReady =
       colony.targetRatio.forage === AI_BEHAVIOR_RATIO.forage &&
       colony.targetRatio.fight === AI_BEHAVIOR_RATIO.fight;
