@@ -2053,9 +2053,10 @@ export function updateFightAntTargets(world: WorldState): void {
     // Proximity aggression: scan for nearest enemy ant within FIGHT_AGGRO_RADIUS tiles
     // in the same zone. Any alive enemy (any task) is a valid target. If found, route
     // directly toward it — overrides rally and hold-radius. Phase 4 PRD §3d.
-    // V17+ only; also suppressed when the rally is an open enemy entrance — invasion
-    // fighters must march to the entrance tile uninterrupted; surface aggro would
-    // deflect them before they reach the descent point.
+    // V17+ only; also suppressed when the rally is on any open entrance (own OR
+    // enemy) — rallyOnEntrance is colony-agnostic (see precompute above): fighters
+    // must walk to the exact tile so the descent trigger fires, whether it's an
+    // invasion into an enemy grid or a defensive descent into their own grid.
     if (world.simVersion >= SIM_VERSION_V17_COMBAT_AGGRO && !rallyOnEntrance[colony.colonyId]) {
       const aggroZone = ants.zone[id];
       const aggroTileX = ants.posX[id]! >> FP_SHIFT;
