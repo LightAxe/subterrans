@@ -493,7 +493,7 @@ export interface SerializedWorldState {
    */
   recentlyDepletedFood?: DepletionRecord[];
   pendingChambers: Record<string, PendingChamber>;
-  /** S2 — optional for backward compat with pre-V17 saves; defaults to [] on load. */
+  /** S2 — optional for backward compat with pre-V19 saves; defaults to [] on load. */
   aiState?: SerializedAIStateRecord[];
 }
 
@@ -1294,7 +1294,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     events: [],
     // S1 — transient; always fresh on load (cleared between ticks).
     pendingQueenDeathContexts: [],
-    // S2 — AI state machine. Deserialize saved records, or provide defensive defaults for pre-V17 saves.
+    // S2 — AI state machine. Deserialize saved records, or provide defensive defaults for pre-V19 saves.
     aiState: deserializeAIStateArray(s, validatedSimVersion),
     droppedCombatKillCount:
       typeof s.droppedCombatKillCount === 'number' &&

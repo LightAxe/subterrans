@@ -1,8 +1,9 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE, SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX } from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE, SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX, SIM_VERSION_V19_AI_STATE } from './types.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath } from './game-over.js';
+import { advanceAIState } from './ai-state.js';
 import { detectAndResolveCombat } from './combat.js';
 import { Rng } from './rng.js';
 import {
@@ -239,7 +240,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         srec.operationTargetTileY = sc.operationTargetTileY;
         srec.operationFighterIds.set(sc.operationFighterIds);
         srec.operationFighterIds.fill(-1, sc.operationFighterIds.length);
-        srec.operationFighterCount = sc.operationFighterCount;
+        srec.operationFighterCount = Math.min(sc.operationFighterCount, sc.operationFighterIds.length);
         srec.operationStartFighterCount = sc.operationStartFighterCount;
         srec.operationAttackerDeaths = sc.operationAttackerDeaths;
         srec.operationDefenderDeaths = sc.operationDefenderDeaths;
@@ -688,6 +689,17 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         void _exhaustive;
         break;
       }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Step 1b: Advance AI state machines (timeout/death transitions).
+  // Gated on V19; moved from render-side to preserve the sim/render boundary
+  // (ADR-0007: only tick.ts mutates WorldState).
+  // ---------------------------------------------------------------------------
+  if (world.simVersion >= SIM_VERSION_V19_AI_STATE) {
+    for (let i = 0; i < world.aiState.length; i++) {
+      advanceAIState(world, world.aiState[i]!.colonyId);
     }
   }
 

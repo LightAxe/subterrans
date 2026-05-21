@@ -9,6 +9,7 @@
 
 import type { WorldState, AIState, AIStateRecord } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
+import type { ClearRallyPointCommand } from './commands.js';
 import { emitEvent } from './telemetry.js';
 import { AntTask, ChamberType } from './enums.js';
 import { Zone } from './terrain.js';
@@ -333,10 +334,17 @@ function _checkProbingToWarFooting(
   const allDone = !allDead && allProbeFightersDone(world, aiState);
 
   if (allDead || allDone || timeout) {
+    // Emit ClearRallyPoint before clearing rally tile so fighters re-route home.
+    if (aiState.invasionRallyTileX !== -1) {
+      const clearCmd: ClearRallyPointCommand = { type: 'ClearRallyPoint', colonyId: aiColonyId, issuedAtTick: world.tick };
+      world.commandQueue.push(clearCmd);
+    }
     aiState.state = 'WarFooting';
     aiState.enteredTick = world.tick;
     aiState.lastProbeEndTick = world.tick;
     aiState.probeCount += 1;
+    aiState.invasionRallyTileX = -1;
+    aiState.invasionRallyTileY = -1;
     // Reset operation fields
     _clearOperationFields(aiState);
   }
@@ -393,6 +401,9 @@ function _endInvasion(
     },
   });
 
+  // Emit ClearRallyPoint so fighters stop routing to the invasion target and go home.
+  const clearCmd: ClearRallyPointCommand = { type: 'ClearRallyPoint', colonyId: aiColonyId, issuedAtTick: world.tick };
+  world.commandQueue.push(clearCmd);
   aiState.state = 'Recovery';
   aiState.enteredTick = world.tick;
   aiState.recoveryEndTick = world.tick + AI_RECOVERY_DURATION_TICKS[NORMAL_TIER_INDEX];

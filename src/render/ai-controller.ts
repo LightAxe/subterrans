@@ -28,7 +28,6 @@ import {
 import { colonyFoodTotal } from '../sim/colony/colony-system.js';
 import { SIM_VERSION_V19_AI_STATE } from '../sim/types.js';
 import {
-  advanceAIState,
   setAIRallyOperation,
   aiFighterCount,
 } from '../sim/ai-state.js';
@@ -105,44 +104,27 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
 
   aiInitialSetup(world, colony);
 
-  // S2: state machine tick (gated on V17).
+  // S2: state machine policy (gated on V19).
+  // advanceAIState (state transitions) now runs inside tick.ts to preserve the
+  // sim/render boundary — render reads world.aiState from the previous tick and
+  // emits operational commands (probe entry, invasion tick, behavior ratio sync).
   if (world.simVersion >= SIM_VERSION_V19_AI_STATE) {
-    // Record state before advancing so we can detect operation exits below.
-    const prevAIRecord = world.aiState.find((r) => r.colonyId === aiColonyId);
-    const prevState = prevAIRecord?.state ?? 'Peacetime';
-    const hadRally = prevAIRecord !== undefined && prevAIRecord.invasionRallyTileX !== -1;
-
-    const aiState = advanceAIState(world, aiColonyId);
-
-    // Spec Part B §4 / Part C §5: on Probing or Invading exit, emit ClearRallyPoint
-    // so world.rallyPoint is cleared and Recovery-phase fighters re-route home.
-    const wasActive = prevState === 'Probing' || prevState === 'Invading';
-    const nowInactive = aiState.state !== 'Probing' && aiState.state !== 'Invading';
-    if (wasActive && nowInactive && hadRally) {
-      world.commandQueue.push({
-        type: 'ClearRallyPoint',
-        colonyId: aiColonyId,
-        issuedAtTick: world.tick,
-      });
-    }
-
-    // After advanceAIState, check if we should transition WarFooting→Probing
-    // (target selection is a guard — render side picks the target).
-    if (aiState.state === 'WarFooting') {
-      const ticksSinceLast = world.tick - aiState.lastProbeEndTick;
-      if (ticksSinceLast >= AI_PROBE_INTERVAL_TICKS
-          && aiFighterCount(world, aiColonyId) >= AI_PROBE_FIGHTER_COUNT) {
-        aiStateMachineTick_probeEntry(world, aiColonyId, colony);
+    const aiStateRecord = world.aiState.find((r) => r.colonyId === aiColonyId);
+    if (aiStateRecord !== undefined) {
+      const curState = aiStateRecord.state;
+      if (curState === 'WarFooting') {
+        const ticksSinceLast = world.tick - aiStateRecord.lastProbeEndTick;
+        if (ticksSinceLast >= AI_PROBE_INTERVAL_TICKS
+            && aiFighterCount(world, aiColonyId) >= AI_PROBE_FIGHTER_COUNT) {
+          aiStateMachineTick_probeEntry(world, aiColonyId, colony);
+        }
       }
-    }
-    if (aiState.state === 'Invading') {
-      aiInvasionTick(world, aiColonyId);
-    }
-    // Guard: skip aiProbeTick on the entry tick — aiStateMachineTick_probeEntry
-    // already emitted SetRallyPoint; running aiProbeTick on the same tick would
-    // emit a duplicate before colony.rallyPoint is populated by queue drain.
-    if (aiState.state === 'Probing' && prevState === 'Probing') {
-      aiProbeTick(world, aiColonyId);
+      if (curState === 'Invading') {
+        aiInvasionTick(world, aiColonyId);
+      }
+      if (curState === 'Probing') {
+        aiProbeTick(world, aiColonyId);
+      }
     }
     // Sync behavior ratio to state.
     _syncBehaviorRatioToAIState(world, aiColonyId, colony);
