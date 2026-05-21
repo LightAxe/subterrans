@@ -106,6 +106,20 @@ export interface SyncAIStateCommand extends SimCommandBase {
   readonly operationDefenderDeaths: number;
 }
 
+/**
+ * S2 / V19 — AI controller signals a probe or invasion entry by pushing this command
+ * instead of mutating world.aiState directly. tick() applies it via setAIRallyOperation,
+ * keeping all world.aiState writes inside the sim layer (ADR-0007).
+ */
+export interface StartAIOperationCommand extends SimCommandBase {
+  readonly type: 'StartAIOperation';
+  readonly colonyId: ColonyId;
+  readonly kind: 'Probe' | 'Invasion';
+  readonly rallyTileX: number;
+  readonly rallyTileY: number;
+  readonly fighterIds: readonly number[];
+}
+
 export type SimCommand =
   | NoOpCommand
   | SetBehaviorRatioCommand
@@ -116,6 +130,7 @@ export type SimCommand =
   | DesignateEntranceCommand
   | SetRallyPointCommand
   | ClearRallyPointCommand
-  | SyncAIStateCommand;
+  | SyncAIStateCommand
+  | StartAIOperationCommand;
 
 export const MAX_COMMANDS_PER_TICK = 64; // PRD §5 line 680 — FIFO silent-drop beyond cap

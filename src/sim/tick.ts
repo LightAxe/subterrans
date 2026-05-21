@@ -3,7 +3,7 @@ import type { WorldState } from './types.js';
 import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE, SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX, SIM_VERSION_V19_AI_STATE } from './types.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath } from './game-over.js';
-import { advanceAIState } from './ai-state.js';
+import { advanceAIState, setAIRallyOperation } from './ai-state.js';
 import { detectAndResolveCombat } from './combat.js';
 import { Rng } from './rng.js';
 import {
@@ -679,6 +679,13 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         const colony = world.colonies[cmd.colonyId];
         if (colony === undefined) break;
         colony.rallyPoint = null;
+        break;
+      }
+      case 'StartAIOperation': {
+        if (world.simVersion < SIM_VERSION_V19_AI_STATE) break;
+        if (!isTileCoord(cmd.rallyTileX, SURFACE_GRID_WIDTH)) break;
+        if (!isTileCoord(cmd.rallyTileY, SURFACE_GRID_HEIGHT)) break;
+        setAIRallyOperation(world, cmd.colonyId, cmd.rallyTileX, cmd.rallyTileY, cmd.fighterIds, cmd.kind);
         break;
       }
       default: {

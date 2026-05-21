@@ -28,7 +28,6 @@ import {
 import { colonyFoodTotal } from '../sim/colony/colony-system.js';
 import { SIM_VERSION_V19_AI_STATE } from '../sim/types.js';
 import {
-  setAIRallyOperation,
   aiFighterCount,
 } from '../sim/ai-state.js';
 
@@ -600,7 +599,16 @@ function aiStateMachineTick_probeEntry(
   const fighters = _selectProbeFighters(world, aiColonyId);
   if (fighters.length < AI_PROBE_FIGHTER_COUNT) return; // not enough fighters
 
-  setAIRallyOperation(world, aiColonyId, target.tileX, target.tileY, fighters, 'Probe');
+  // Push StartAIOperation so tick.ts applies setAIRallyOperation sim-side (ADR-0007).
+  world.commandQueue.push({
+    type: 'StartAIOperation',
+    colonyId: aiColonyId,
+    kind: 'Probe',
+    rallyTileX: target.tileX,
+    rallyTileY: target.tileY,
+    fighterIds: fighters,
+    issuedAtTick: world.tick,
+  });
 
   // Emit SetRallyPoint SimCommand so world.rallyPoint is set for fighters.
   _emitSetRallyPoint(world, aiColonyId, target.tileX, target.tileY);
@@ -649,7 +657,16 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId): void {
     // Commit ALL alive AI fighters up to AI_MAX_OPERATION_FIGHTERS (lowest indices first).
     const fighters = _selectAllFighters(world, aiColonyId);
 
-    setAIRallyOperation(world, aiColonyId, targetEntrance.surfaceTileX, targetEntrance.surfaceTileY, fighters, 'Invasion');
+    // Push StartAIOperation so tick.ts applies setAIRallyOperation sim-side (ADR-0007).
+    world.commandQueue.push({
+      type: 'StartAIOperation',
+      colonyId: aiColonyId,
+      kind: 'Invasion',
+      rallyTileX: targetEntrance.surfaceTileX,
+      rallyTileY: targetEntrance.surfaceTileY,
+      fighterIds: fighters,
+      issuedAtTick: world.tick,
+    });
     _emitSetRallyPoint(world, aiColonyId, targetEntrance.surfaceTileX, targetEntrance.surfaceTileY);
     return;
   }

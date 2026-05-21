@@ -224,6 +224,8 @@ describe('SimCommand', () => {
             return `clearrally:${cmd.colonyId}`;
           case 'SyncAIState':
             return `syncai:${cmd.colonyId}:${cmd.state}`;
+          case 'StartAIOperation':
+            return `startop:${cmd.colonyId}:${cmd.kind}`;
           default: {
             // Exhaustive check — TypeScript will error here if a variant is unhandled
             const _exhaustive: never = cmd;
