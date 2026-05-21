@@ -1963,17 +1963,15 @@ export function updateFightAntTargets(world: WorldState): void {
     rallyOnEntrance[colony.colonyId] = hit;
   }
 
-  // Precompute per-colony target lists (workers + queen) for the V17 aggro scan.
-  // Done once per tick so the inner scan is O(active ants) with no per-fighter allocs.
-  const aggroTargetsByColony = new Map<number, readonly number[]>();
+  // Precompute enemy colony refs for V17 aggro scan — iterate workers+queen directly
+  // (no array copies; queen checked separately to avoid spreading the workers list).
+  type AggroColony = { cid: number; workers: readonly number[]; queenEntityId: number };
+  const aggroEnemyColonies: AggroColony[] = [];
   if (world.simVersion >= SIM_VERSION_V17_COMBAT_AGGRO) {
     for (const cidKey in world.colonies) {
       if (!Object.hasOwn(world.colonies, cidKey)) continue;
       const col = world.colonies[cidKey as unknown as keyof typeof world.colonies];
-      if (!col) continue;
-      const qid = col.queenEntityId;
-      const targets: number[] = qid >= 0 ? [...col.workers, qid] : [...col.workers];
-      aggroTargetsByColony.set(Number(cidKey), targets);
+      if (col) aggroEnemyColonies.push({ cid: Number(cidKey), workers: col.workers, queenEntityId: col.queenEntityId });
     }
   }
 
@@ -2064,19 +2062,23 @@ export function updateFightAntTargets(world: WorldState): void {
       const aggroTileY = ants.posY[id]! >> FP_SHIFT;
       let nearestEnemy = -1;
       let nearestEnemyDist = FIGHT_AGGRO_RADIUS + 1;
-      // Scan precomputed targets per enemy colony (no per-fighter allocs).
-      for (const [enemyCid, targets] of aggroTargetsByColony) {
-        if (enemyCid === colonyId) continue;
-        for (const eid of targets) {
+      // Scan enemy colony workers + queen directly (no array copies, no per-fighter allocs).
+      for (const ec of aggroEnemyColonies) {
+        if (ec.cid === colonyId) continue;
+        for (const eid of ec.workers) {
           if (ants.alive[eid] !== 1) continue;
           if (ants.zone[eid] !== aggroZone) continue;
           const eTileX = ants.posX[eid]! >> FP_SHIFT;
           const eTileY = ants.posY[eid]! >> FP_SHIFT;
           const dist = Math.abs(eTileX - aggroTileX) + Math.abs(eTileY - aggroTileY);
-          if (dist <= FIGHT_AGGRO_RADIUS && dist < nearestEnemyDist) {
-            nearestEnemyDist = dist;
-            nearestEnemy = eid;
-          }
+          if (dist <= FIGHT_AGGRO_RADIUS && dist < nearestEnemyDist) { nearestEnemyDist = dist; nearestEnemy = eid; }
+        }
+        const qid = ec.queenEntityId;
+        if (qid >= 0 && ants.alive[qid] === 1 && ants.zone[qid] === aggroZone) {
+          const qTileX = ants.posX[qid]! >> FP_SHIFT;
+          const qTileY = ants.posY[qid]! >> FP_SHIFT;
+          const dist = Math.abs(qTileX - aggroTileX) + Math.abs(qTileY - aggroTileY);
+          if (dist <= FIGHT_AGGRO_RADIUS && dist < nearestEnemyDist) { nearestEnemyDist = dist; nearestEnemy = qid; }
         }
       }
       if (nearestEnemy >= 0) {
