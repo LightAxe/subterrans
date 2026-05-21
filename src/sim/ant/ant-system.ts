@@ -2051,7 +2051,8 @@ export function updateFightAntTargets(world: WorldState): void {
     }
 
     // Proximity aggression: scan for nearest enemy ant within FIGHT_AGGRO_RADIUS tiles
-    // in the same zone. Any alive enemy (any task) is a valid target. If found, route
+    // in the same zone. Workers and queen are scanned; brood is underground-only so
+    // it is never reachable from a surface scan. If an enemy is found, route
     // directly toward it — overrides rally and hold-radius. Phase 4 PRD §3d.
     // V17+ only; surface only (underground fighters use pickNearestHostileUnderground
     // for combat routing); suppressed when the rally is on any open entrance (own OR
