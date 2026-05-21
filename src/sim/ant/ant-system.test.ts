@@ -8325,8 +8325,8 @@ describe('pickInvaderUndergroundStep — wall-aware greedy invader step', () => 
     const { underground } = setupWorldWithUnderground(5, 5);
     ugSet(underground, 1, 2, UndergroundTileState.Open);
     const step = pickInvaderUndergroundStep(underground, 1, 1, 1, 4);
-    expect(step.dx).toBe(0);
-    expect(step.dy).toBe(1);
+    expect(unpackStepDx(step)).toBe(0);
+    expect(unpackStepDy(step)).toBe(1);
   });
 
   it('avoids a wall blocking the direct cardinal path and picks a passable detour', () => {
@@ -8338,15 +8338,15 @@ describe('pickInvaderUndergroundStep — wall-aware greedy invader step', () => 
     const { underground } = setupWorldWithUnderground(5, 5);
     ugSet(underground, 3, 1, UndergroundTileState.Open);
     const step = pickInvaderUndergroundStep(underground, 2, 1, 4, 3);
-    expect(step.dx).toBe(1);
-    expect(step.dy).toBe(0);
+    expect(unpackStepDx(step)).toBe(1);
+    expect(unpackStepDy(step)).toBe(0);
   });
 
   it('returns (0,0) when already on target tile', () => {
     const { underground } = setupWorldWithUnderground(5, 5);
     const step = pickInvaderUndergroundStep(underground, 3, 3, 3, 3);
-    expect(step.dx).toBe(0);
-    expect(step.dy).toBe(0);
+    expect(unpackStepDx(step)).toBe(0);
+    expect(unpackStepDy(step)).toBe(0);
   });
 
   it('returns (0,0) when all passable neighbours are farther (dead-end hold, no infinite wall-bounce)', () => {
@@ -8358,7 +8358,7 @@ describe('pickInvaderUndergroundStep — wall-aware greedy invader step', () => 
     ugSet(underground, 1, 1, UndergroundTileState.Solid);
     ugSet(underground, 2, 1, UndergroundTileState.Solid);
     const step = pickInvaderUndergroundStep(underground, 1, 0, 1, 2);
-    expect(step.dx).toBe(0);
-    expect(step.dy).toBe(0);
+    expect(unpackStepDx(step)).toBe(0);
+    expect(unpackStepDy(step)).toBe(0);
   });
 });

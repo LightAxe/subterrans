@@ -3194,9 +3194,9 @@ export function pickInvaderUndergroundStep(
   tileY: number,
   targetTileX: number,
   targetTileY: number,
-): { dx: number; dy: number } {
+): number {
   const currentDist = Math.abs(targetTileX - tileX) + Math.abs(targetTileY - tileY);
-  if (currentDist === 0) return { dx: 0, dy: 0 };
+  if (currentDist === 0) return packStep(0, 0);
 
   let bestDx = 0;
   let bestDy = 0;
@@ -3217,7 +3217,7 @@ export function pickInvaderUndergroundStep(
     }
   }
 
-  return { dx: bestDx, dy: bestDy };
+  return packStep(bestDx, bestDy);
 }
 
 // ---------------------------------------------------------------------------
@@ -4345,8 +4345,8 @@ export function tickAntMovement(
               const tTileX = hostile.targetX >> FP_SHIFT;
               const tTileY = hostile.targetY >> FP_SHIFT;
               const step = pickInvaderUndergroundStep(invUnderground, tileX, tileY, tTileX, tTileY);
-              rawDx = step.dx * FP_ONE;
-              rawDy = step.dy * FP_ONE;
+              rawDx = unpackStepDx(step) * FP_ONE;
+              rawDy = unpackStepDy(step) * FP_ONE;
             } else {
               // Pre-V17 (or missing grid): raw direction — may freeze on walls
               // but preserves replay byte-identity for older saves.
