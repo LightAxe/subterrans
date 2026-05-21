@@ -146,6 +146,7 @@ void (undefined as unknown as PendingChamber);
  *       Extended in Phase 7: real MarkDigTile, MarkFoodPile handlers;
  *       new CancelDigMark, PlaceChamber, DesignateEntrance handlers.
  *       Extended in Phase 9: SetRallyPoint, ClearRallyPoint handlers (9-variant exhaustive switch).
+ * 1b.  (removed — advanceAIState moved to step 18b, after checkQueenDeath)
  *  2.  Reconcile colony stats
  *  3.  Food consumption
  *  4.  Starvation check
@@ -703,17 +704,6 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   }
 
   // ---------------------------------------------------------------------------
-  // Step 1b: Advance AI state machines (timeout/death transitions).
-  // Gated on V19; moved from render-side to preserve the sim/render boundary
-  // (ADR-0007: only tick.ts mutates WorldState).
-  // ---------------------------------------------------------------------------
-  if (world.simVersion >= SIM_VERSION_V19_AI_STATE) {
-    for (let i = 0; i < world.aiState.length; i++) {
-      advanceAIState(world, world.aiState[i]!.colonyId);
-    }
-  }
-
-  // ---------------------------------------------------------------------------
   // Steps 2-8: Per-colony loop
   // ---------------------------------------------------------------------------
   for (const colonyId in world.colonies) {
@@ -1220,6 +1210,19 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // Step 18: game-over detection (Phase 9 / CMBT-06/07).
   // ---------------------------------------------------------------------------
   const outcome = checkQueenDeath(world);
+
+  // ---------------------------------------------------------------------------
+  // Step 18b: Advance AI state machines (timeout/death transitions).
+  // Placed AFTER checkQueenDeath so aiStateAtTime in queen_death events reflects
+  // the AI state at kill time, not a same-tick post-transition state (e.g. the
+  // invading AI routing to Recovery on the same tick it kills the queen).
+  // Gated on V19; moved from render-side to preserve ADR-0007 sim/render boundary.
+  // ---------------------------------------------------------------------------
+  if (world.simVersion >= SIM_VERSION_V19_AI_STATE) {
+    for (let i = 0; i < world.aiState.length; i++) {
+      advanceAIState(world, world.aiState[i]!.colonyId);
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Step 19: rngState writeback (BEFORE tick increment per PRD §4 serialization contract)
