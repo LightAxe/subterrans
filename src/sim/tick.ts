@@ -223,7 +223,8 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     if (commands[i]!.type === 'SyncAIState') {
       const sc = commands[i] as import('./commands.js').SyncAIStateCommand;
       const srec = world.aiState.find((r) => r.colonyId === sc.colonyId);
-      if (srec !== undefined) {
+      // P1: validate buffer length before set() to prevent RangeError on malformed payloads.
+      if (srec !== undefined && sc.operationFighterIds.length <= srec.operationFighterIds.length) {
         srec.state = sc.state;
         srec.enteredTick = sc.enteredTick;
         srec.probeCount = sc.probeCount;
@@ -237,6 +238,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         srec.operationTargetTileX = sc.operationTargetTileX;
         srec.operationTargetTileY = sc.operationTargetTileY;
         srec.operationFighterIds.set(sc.operationFighterIds);
+        srec.operationFighterIds.fill(-1, sc.operationFighterIds.length);
         srec.operationFighterCount = sc.operationFighterCount;
         srec.operationStartFighterCount = sc.operationStartFighterCount;
         srec.operationAttackerDeaths = sc.operationAttackerDeaths;
@@ -245,10 +247,15 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     }
   }
 
-  const limit = commands.length < MAX_COMMANDS_PER_TICK ? commands.length : MAX_COMMANDS_PER_TICK;
-
-  for (let i = 0; i < limit; i++) {
+  // SyncAIState is excluded from the cap: it was already applied in the uncapped
+  // pre-pass above, so counting it against MAX_COMMANDS_PER_TICK would silently
+  // drop one real gameplay command per AI tick under high-command-count loads.
+  let nonSyncCmdCount = 0;
+  for (let i = 0; i < commands.length; i++) {
     const cmd = commands[i]!;
+    if (cmd.type === 'SyncAIState') continue;
+    if (nonSyncCmdCount >= MAX_COMMANDS_PER_TICK) break;
+    nonSyncCmdCount++;
     switch (cmd.type) {
       case 'NoOp':
         // No state change — by definition a no-op.
@@ -673,33 +680,10 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         colony.rallyPoint = null;
         break;
       }
-      case 'SyncAIState': {
-        // S2 / V17 — apply AI state snapshot so replay paths (snapshot analyzer)
-        // that skip runAIController produce bit-identical world.aiState.
-        let rec = world.aiState.find((r) => r.colonyId === cmd.colonyId);
-        if (rec === undefined) break;
-        rec.state = cmd.state;
-        rec.enteredTick = cmd.enteredTick;
-        rec.probeCount = cmd.probeCount;
-        rec.lastProbeEndTick = cmd.lastProbeEndTick;
-        rec.invasionStartTick = cmd.invasionStartTick;
-        rec.invasionRallyTileX = cmd.invasionRallyTileX;
-        rec.invasionRallyTileY = cmd.invasionRallyTileY;
-        rec.recoveryEndTick = cmd.recoveryEndTick;
-        rec.operationKind = cmd.operationKind;
-        rec.operationStartTick = cmd.operationStartTick;
-        rec.operationTargetTileX = cmd.operationTargetTileX;
-        rec.operationTargetTileY = cmd.operationTargetTileY;
-        rec.operationFighterIds.set(cmd.operationFighterIds);
-        rec.operationFighterCount = cmd.operationFighterCount;
-        rec.operationStartFighterCount = cmd.operationStartFighterCount;
-        rec.operationAttackerDeaths = cmd.operationAttackerDeaths;
-        rec.operationDefenderDeaths = cmd.operationDefenderDeaths;
-        break;
-      }
       default: {
-        // Exhaustive narrowing — SimCommand is a 10-variant union (S2 adds SyncAIState).
-        // Silent-drop unknowns per PRD §5. Do NOT throw, do NOT log (wall-clock-adjacent).
+        // Exhaustive narrowing — SimCommand is a 10-variant union; SyncAIState is
+        // filtered out by the `continue` guard above the switch, so the narrowed
+        // type here excludes it and the never-check still holds.
         const _exhaustive: never = cmd;
         void _exhaustive;
         break;
