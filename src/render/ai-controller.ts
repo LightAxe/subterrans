@@ -656,6 +656,7 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId): void {
 
     // Commit ALL alive AI fighters up to AI_MAX_OPERATION_FIGHTERS (lowest indices first).
     const fighters = _selectAllFighters(world, aiColonyId);
+    if (fighters.length === 0) return; // no fighters — retry next tick when fighters are available
 
     // Push StartAIOperation so tick.ts applies setAIRallyOperation sim-side (ADR-0007).
     world.commandQueue.push({
