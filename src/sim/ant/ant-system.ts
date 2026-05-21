@@ -1963,6 +1963,20 @@ export function updateFightAntTargets(world: WorldState): void {
     rallyOnEntrance[colony.colonyId] = hit;
   }
 
+  // Precompute per-colony target lists (workers + queen) for the V17 aggro scan.
+  // Done once per tick so the inner scan is O(active ants) with no per-fighter allocs.
+  const aggroTargetsByColony = new Map<number, readonly number[]>();
+  if (world.simVersion >= SIM_VERSION_V17_COMBAT_AGGRO) {
+    for (const cidKey in world.colonies) {
+      if (!Object.hasOwn(world.colonies, cidKey)) continue;
+      const col = world.colonies[cidKey as unknown as keyof typeof world.colonies];
+      if (!col) continue;
+      const qid = col.queenEntityId;
+      const targets: number[] = qid >= 0 ? [...col.workers, qid] : [...col.workers];
+      aggroTargetsByColony.set(Number(cidKey), targets);
+    }
+  }
+
   for (let id = 0; id < ants.alive.length; id++) {
     if (ants.alive[id] !== 1) continue;
     if (ants.task[id] !== AntTask.Fighting) continue;
@@ -2050,10 +2064,10 @@ export function updateFightAntTargets(world: WorldState): void {
       const aggroTileY = ants.posY[id]! >> FP_SHIFT;
       let nearestEnemy = -1;
       let nearestEnemyDist = FIGHT_AGGRO_RADIUS + 1;
-      // Iterate enemy-colony workers lists instead of full entity array (O(active ants)).
-      for (const [cid, enemyColony] of Object.entries(world.colonies)) {
-        if (Number(cid) === colonyId) continue;
-        for (const eid of enemyColony.workers) {
+      // Scan precomputed targets per enemy colony (no per-fighter allocs).
+      for (const [enemyCid, targets] of aggroTargetsByColony) {
+        if (enemyCid === colonyId) continue;
+        for (const eid of targets) {
           if (ants.alive[eid] !== 1) continue;
           if (ants.zone[eid] !== aggroZone) continue;
           const eTileX = ants.posX[eid]! >> FP_SHIFT;

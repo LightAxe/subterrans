@@ -2135,6 +2135,7 @@ describe('updateFightAntTargets', () => {
 
     // Enemy ant placed 1 tile away (within FIGHT_AGGRO_RADIUS)
     const colB_v16 = createColonyRecord(COLONY_B, 0);
+    colB_v16.queenEntityId = -1; // no queen in this test colony
     colB_v16.entrances = [];
     colB_v16.digFlowFieldDirty = false;
     world.colonies[COLONY_B] = colB_v16;
@@ -2182,6 +2183,7 @@ describe('updateFightAntTargets', () => {
 
     // Enemy ant placed within FIGHT_AGGRO_RADIUS
     const colB_v17 = createColonyRecord(COLONY_B, 0);
+    colB_v17.queenEntityId = -1; // no queen in this test colony
     colB_v17.entrances = [];
     colB_v17.digFlowFieldDirty = false;
     world.colonies[COLONY_B] = colB_v17;
