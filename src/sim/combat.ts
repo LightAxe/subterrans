@@ -193,7 +193,11 @@ function strikeDamage(world: WorldState, antId: number, strikes: boolean): numbe
   if (world.simVersion < SIM_VERSION_V17_COMBAT_AGGRO) return 0;
   const cid = ants.colonyId[antId]! as ColonyId;
   const colony = world.colonies[cid];
-  return colony != null && colony.queenEntityId === antId ? COMBAT_DAMAGE_QUEEN : COMBAT_DAMAGE_WORKER;
+  if (colony == null) return 0;
+  if (colony.queenEntityId === antId) return COMBAT_DAMAGE_QUEEN;
+  // Brood (eggs/larvae share AntTask.Idle with adult workers) cannot retaliate.
+  if (colony.eggs.includes(antId) || colony.larvae.includes(antId)) return 0;
+  return COMBAT_DAMAGE_WORKER;
 }
 
 /**
