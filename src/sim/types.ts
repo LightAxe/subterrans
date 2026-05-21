@@ -236,7 +236,12 @@ export const SIM_VERSION_V15_TELEMETRY = 15 as const;
  * QueenDeathContext written by killAnt so checkQueenDeath can emit cause.
  */
 export const SIM_VERSION_V16_COMBAT_HPDPS = 16 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V16_COMBAT_HPDPS;
+/**
+ * V17 — Combat aggro: fighter sight-aggression (proximity scan) + immediate
+ * fighter strikes on new pair (attackCooldown=1 vs COMBAT_COOLDOWN_TICKS).
+ */
+export const SIM_VERSION_V17_COMBAT_AGGRO = 17 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V17_COMBAT_AGGRO;
 
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick

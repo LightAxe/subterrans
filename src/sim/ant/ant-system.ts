@@ -43,6 +43,7 @@ import {
   SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE,
   SIM_VERSION_V13_INVARIANT_FIXES,
   SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX,
+  SIM_VERSION_V17_COMBAT_AGGRO,
   type WorldState,
 } from '../types.js';
 import {
@@ -83,6 +84,7 @@ import {
   SEARCH_PAUSE_JITTER_TICKS,
   FOOD_TRAIL_DEPOSIT,
   FOOD_TRAIL_DEPOSIT_V14,
+  FIGHT_AGGRO_RADIUS,
 } from '../constants.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { Rng } from '../rng.js';
@@ -1961,6 +1963,18 @@ export function updateFightAntTargets(world: WorldState): void {
     rallyOnEntrance[colony.colonyId] = hit;
   }
 
+  // Precompute enemy colony refs for V17 aggro scan — iterate workers+queen directly
+  // (no array copies; queen checked separately to avoid spreading the workers list).
+  type AggroColony = { cid: number; workers: readonly number[]; queenEntityId: number };
+  const aggroEnemyColonies: AggroColony[] = [];
+  if (world.simVersion >= SIM_VERSION_V17_COMBAT_AGGRO) {
+    for (const cidKey in world.colonies) {
+      if (!Object.hasOwn(world.colonies, cidKey)) continue;
+      const col = world.colonies[cidKey as unknown as keyof typeof world.colonies];
+      if (col) aggroEnemyColonies.push({ cid: Number(cidKey), workers: col.workers, queenEntityId: col.queenEntityId });
+    }
+  }
+
   for (let id = 0; id < ants.alive.length; id++) {
     if (ants.alive[id] !== 1) continue;
     if (ants.task[id] !== AntTask.Fighting) continue;
@@ -2036,7 +2050,53 @@ export function updateFightAntTargets(world: WorldState): void {
       continue;
     }
 
-    // Surface fighter (or underground with no entrances yet): target rally tile center.
+    // Proximity aggression: scan for nearest enemy ant within FIGHT_AGGRO_RADIUS tiles
+    // in the same zone. Workers and queen are scanned; brood is underground-only so
+    // it is never reachable from a surface scan. If an enemy is found, route
+    // directly toward it — overrides rally and hold-radius. Phase 4 PRD §3d.
+    // V17+ only; surface only (underground fighters use pickNearestHostileUnderground
+    // for combat routing); suppressed when the rally is on any open entrance (own OR
+    // enemy) — rallyOnEntrance is colony-agnostic (see precompute above): fighters
+    // must walk to the exact tile so the descent trigger fires, whether it's an
+    // invasion into an enemy grid or a defensive descent into their own grid.
+    if (world.simVersion >= SIM_VERSION_V17_COMBAT_AGGRO
+        && ants.zone[id] === Zone.Surface
+        && !rallyOnEntrance[colony.colonyId]) {
+      const aggroZone = ants.zone[id];
+      const aggroTileX = ants.posX[id]! >> FP_SHIFT;
+      const aggroTileY = ants.posY[id]! >> FP_SHIFT;
+      let nearestEnemy = -1;
+      let nearestEnemyDist = FIGHT_AGGRO_RADIUS + 1;
+      // Scan enemy colony workers + queen directly (no array copies, no per-fighter allocs).
+      for (const ec of aggroEnemyColonies) {
+        if (ec.cid === colonyId) continue;
+        for (const eid of ec.workers) {
+          if (ants.alive[eid] !== 1) continue;
+          if (ants.zone[eid] !== aggroZone) continue;
+          // Underground grids are disjoint spaces — reject candidates in a different grid.
+          if (aggroZone === Zone.Underground && ants.currentGridColonyId[eid] !== currentGridColonyId) continue;
+          const eTileX = ants.posX[eid]! >> FP_SHIFT;
+          const eTileY = ants.posY[eid]! >> FP_SHIFT;
+          const dist = Math.abs(eTileX - aggroTileX) + Math.abs(eTileY - aggroTileY);
+          if (dist <= FIGHT_AGGRO_RADIUS && dist < nearestEnemyDist) { nearestEnemyDist = dist; nearestEnemy = eid; }
+        }
+        const qid = ec.queenEntityId;
+        if (qid >= 0 && ants.alive[qid] === 1 && ants.zone[qid] === aggroZone
+            && (aggroZone !== Zone.Underground || ants.currentGridColonyId[qid] === currentGridColonyId)) {
+          const qTileX = ants.posX[qid]! >> FP_SHIFT;
+          const qTileY = ants.posY[qid]! >> FP_SHIFT;
+          const dist = Math.abs(qTileX - aggroTileX) + Math.abs(qTileY - aggroTileY);
+          if (dist <= FIGHT_AGGRO_RADIUS && dist < nearestEnemyDist) { nearestEnemyDist = dist; nearestEnemy = qid; }
+        }
+      }
+      if (nearestEnemy >= 0) {
+        ants.targetPosX[id] = ants.posX[nearestEnemy]!;
+        ants.targetPosY[id] = ants.posY[nearestEnemy]!;
+        continue;
+      }
+    }
+
+    // No enemy in range: fall back to rally routing.
     //
     // Anti-oscillation: if the ant is already within RALLY_HOLD_RADIUS_TILES
     // Manhattan of the rally tile, clear the target to -1 so the Fighting

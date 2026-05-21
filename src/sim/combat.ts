@@ -17,7 +17,7 @@ import { Rng } from './rng.js';
 import { AntTask } from './enums.js';
 import { makeTileKey } from './tile-key.js';
 import type { WorldState, KillerKind, QueenDeathContext } from './types.js';
-import { SIM_VERSION_V13_INVARIANT_FIXES, SIM_VERSION_V16_COMBAT_HPDPS } from './types.js';
+import { SIM_VERSION_V13_INVARIANT_FIXES, SIM_VERSION_V16_COMBAT_HPDPS, SIM_VERSION_V17_COMBAT_AGGRO } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
@@ -28,6 +28,8 @@ import {
   COMBAT_DAMAGE_BASE,
   COMBAT_DAMAGE_HOMEGROUND,
   COMBAT_COOLDOWN_TICKS,
+  COMBAT_DAMAGE_WORKER,
+  COMBAT_DAMAGE_QUEEN,
 } from './constants.js';
 
 /**
@@ -175,6 +177,30 @@ function applyDamage(world: WorldState, antIdx: number, damage: number): boolean
 }
 
 /**
+ * Damage dealt by `antId` when it strikes. Fighters use home-ground damage or base;
+ * queen uses COMBAT_DAMAGE_QUEEN; all other non-fighters use COMBAT_DAMAGE_WORKER.
+ * Returns 0 if the ant does not strike (strikes=false).
+ */
+function strikeDamage(world: WorldState, antId: number, strikes: boolean): number {
+  if (!strikes) return 0;
+  const { ants } = world;
+  if (ants.task[antId] === AntTask.Fighting) {
+    return (ants.zone[antId] === 1 && ants.currentGridColonyId[antId] === ants.colonyId[antId]!)
+      ? COMBAT_DAMAGE_HOMEGROUND
+      : COMBAT_DAMAGE_BASE;
+  }
+  // V17+: non-fighters retaliate with reduced damage. Pre-V17: 0 (replay-safe for V16 saves).
+  if (world.simVersion < SIM_VERSION_V17_COMBAT_AGGRO) return 0;
+  const cid = ants.colonyId[antId]! as ColonyId;
+  const colony = world.colonies[cid];
+  if (colony == null) return 0;
+  if (colony.queenEntityId === antId) return COMBAT_DAMAGE_QUEEN;
+  // Brood (eggs/larvae share AntTask.Idle with adult workers) cannot retaliate.
+  if (colony.eggs.includes(antId) || colony.larvae.includes(antId)) return 0;
+  return COMBAT_DAMAGE_WORKER;
+}
+
+/**
  * Resolve combat on a single tile using the V16 HP/damage/cooldown model.
  * One active pair per tick (lowest slot from each colony). Strikes are simultaneous.
  */
@@ -217,8 +243,6 @@ function resolveCombatOnTile_v16(world: WorldState, _tileKey: number, participan
   const bFresh = ants.attackCooldown[antB] === 0;
 
   if (aNew || bNew) {
-    ants.attackCooldown[antA] = COMBAT_COOLDOWN_TICKS;
-    ants.attackCooldown[antB] = COMBAT_COOLDOWN_TICKS;
     ants.combatOpponentId[antA] = antB;
     ants.combatOpponentId[antB] = antA;
     // Fresh ants get a full bonus based on current location.
@@ -238,7 +262,27 @@ function resolveCombatOnTile_v16(world: WorldState, _tileKey: number, participan
     } else if (!bOnHome) {
       ants.homeGroundBonusHp[antB] = 0;
     }
-    return;
+    // Fighters skip windup (always ready to strike); non-fighters wind up.
+    // Only reset cooldown for the newly-paired side — the other side keeps its
+    // accumulated progress to avoid penalizing an ongoing combatant on a re-entry.
+    const aIsFighter = ants.task[antA] === AntTask.Fighting;
+    const bIsFighter = ants.task[antB] === AntTask.Fighting;
+    const skipWindup = world.simVersion >= SIM_VERSION_V17_COMBAT_AGGRO;
+    const fighterStrikesNow = skipWindup && ((aNew && aIsFighter) || (bNew && bIsFighter));
+    if (skipWindup) {
+      // V17+: only reset the newly-paired side — veterans keep accumulated progress.
+      // Non-fighters start at COMBAT_COOLDOWN_TICKS+1 when fighterStrikesNow so the
+      // immediate decrement below leaves them at exactly COMBAT_COOLDOWN_TICKS.
+      if (aNew) ants.attackCooldown[antA] = aIsFighter ? 1 : COMBAT_COOLDOWN_TICKS + (fighterStrikesNow ? 1 : 0);
+      if (bNew) ants.attackCooldown[antB] = bIsFighter ? 1 : COMBAT_COOLDOWN_TICKS + (fighterStrikesNow ? 1 : 0);
+    } else {
+      // Pre-V17: reset both sides unconditionally — preserves V16 replay semantics.
+      ants.attackCooldown[antA] = COMBAT_COOLDOWN_TICKS;
+      ants.attackCooldown[antB] = COMBAT_COOLDOWN_TICKS;
+    }
+    // Return early unless a newly-paired V17 fighter is about to strike (cooldown=1).
+    // In pre-V17, fighterStrikesNow is always false, so this always returns.
+    if (!fighterStrikesNow) return;
   }
 
   // Decrement cooldowns. Strike when either reaches 0.
@@ -250,18 +294,11 @@ function resolveCombatOnTile_v16(world: WorldState, _tileKey: number, participan
 
   if (!aStrikes && !bStrikes) return;
 
-  // Compute damage dealt by each striker. Only AntTask.Fighting ants deal damage;
-  // workers, nurses, and queens caught in combat do not strike back (spec Part A §3).
-  const aDamage = aStrikes && ants.task[antA] === AntTask.Fighting
-    ? ((ants.zone[antA] === 1 && ants.currentGridColonyId[antA] === ants.colonyId[antA]!)
-        ? COMBAT_DAMAGE_HOMEGROUND
-        : COMBAT_DAMAGE_BASE)
-    : 0;
-  const bDamage = bStrikes && ants.task[antB] === AntTask.Fighting
-    ? ((ants.zone[antB] === 1 && ants.currentGridColonyId[antB] === ants.colonyId[antB]!)
-        ? COMBAT_DAMAGE_HOMEGROUND
-        : COMBAT_DAMAGE_BASE)
-    : 0;
+  // Damage by task: fighters deal full damage (with home-ground bonus); non-fighters
+  // fight back weakly. Queen uses COMBAT_DAMAGE_QUEEN (identified via colony.queenEntityId);
+  // all other non-fighters use COMBAT_DAMAGE_WORKER. Queen damage flagged TBD for S6-Tune.
+  const aDamage = strikeDamage(world, antA, aStrikes);
+  const bDamage = strikeDamage(world, antB, bStrikes);
 
   // Simultaneous damage: compute both death results before killing either.
   const aDies = bDamage > 0 && applyDamage(world, antA, bDamage);
