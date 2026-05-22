@@ -306,6 +306,7 @@ export interface SpiderState {
   huntTargetTileY: number;
   killsThisStrike: number;
   rampageKillsThisRampage: number;
+  rampageTargetColonyId: number;  // colony targeted for current rampage; -1 when not rampaging
 }
 
 export interface AIStateRecord {
@@ -646,6 +647,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     ds.huntTargetTileY = ss.huntTargetTileY;
     ds.killsThisStrike = ss.killsThisStrike;
     ds.rampageKillsThisRampage = ss.rampageKillsThisRampage;
+    ds.rampageTargetColonyId = ss.rampageTargetColonyId;
   }
   dst.spiderPriorityColonyId = src.spiderPriorityColonyId;
   // scatterReticleTile

@@ -452,6 +452,7 @@ interface SerializedSpiderState {
   huntTargetTileY: number;
   killsThisStrike: number;
   rampageKillsThisRampage: number;
+  rampageTargetColonyId: number;
 }
 
 /** S2 — serialized form of AIStateRecord. operationFighterIds stored as number[]. */
@@ -1088,6 +1089,7 @@ function deserializeSpider(s: SerializedWorldState, simVersion: number): SpiderS
     huntTargetTileY: huntTargetValid ? rawHuntY : -1,
     killsThisStrike: typeof r.killsThisStrike === 'number' && Number.isInteger(r.killsThisStrike) ? r.killsThisStrike : 0,
     rampageKillsThisRampage: typeof r.rampageKillsThisRampage === 'number' && Number.isInteger(r.rampageKillsThisRampage) ? r.rampageKillsThisRampage : 0,
+    rampageTargetColonyId: safeState === 'Rampaging' && typeof r.rampageTargetColonyId === 'number' && r.rampageTargetColonyId > 0 ? r.rampageTargetColonyId : -1,
   };
 }
 

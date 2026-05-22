@@ -126,6 +126,7 @@ function findHuntTarget(
 function findNearestEntrance(
   world: WorldState,
   spider: SpiderState,
+  targetColonyId: number = -1,
 ): { x: number; y: number; colonyId: number } | null {
   const spiderTileX = spider.posX >> FP_SHIFT;
   const spiderTileY = spider.posY >> FP_SHIFT;
@@ -141,6 +142,7 @@ function findNearestEntrance(
     const cid = Number(key);
     const colony = world.colonies[key as unknown as import('./colony/colony-store.js').ColonyId];
     if (colony === undefined) continue;
+    if (targetColonyId >= 0 && cid !== targetColonyId) continue;
     for (let e = 0; e < colony.entrances.length; e++) {
       const entrance = colony.entrances[e]!;
       if (!entrance.isOpen) continue;
@@ -162,6 +164,41 @@ function findNearestEntrance(
   NEAREST_ENTRANCE_SCRATCH.y = bestY;
   NEAREST_ENTRANCE_SCRATCH.colonyId = bestColonyId;
   return NEAREST_ENTRANCE_SCRATCH;
+}
+
+
+// ---------------------------------------------------------------------------
+// Rampage target colony selection — 60/40 weighted toward richer colony
+// ---------------------------------------------------------------------------
+
+/**
+ * Pick which colony the spider rampages on this cycle.
+ * Score = foodStored + workerCount * 10. The richer colony is favored 60/40
+ * using a deterministic hash of (terrainSeed ^ rampageStartTick) so the
+ * result looks organic but is fully replay-safe. No world.rngState draws.
+ */
+function pickRampageTarget(world: WorldState, spider: SpiderState): number {
+  const candidates: Array<{ colonyId: number; score: number }> = [];
+  for (const key in world.colonies) {
+    if (!Object.hasOwn(world.colonies, key)) continue;
+    const cid = Number(key);
+    if (cid <= 0) continue; // skip NEUTRAL_COLONY_ID
+    const col = world.colonies[key as unknown as import('./colony/colony-store.js').ColonyId];
+    if (col === undefined) continue;
+    candidates.push({ colonyId: cid, score: col.foodStored + col.workerCount * 10 });
+  }
+  if (candidates.length === 0) return -1;
+  if (candidates.length === 1) return candidates[0]!.colonyId;
+  // Richest first; ascending colonyId tiebreak for determinism.
+  candidates.sort((a, b) => b.score - a.score || a.colonyId - b.colonyId);
+  // Murmur3 finalizer seeded by terrainSeed ^ rampageStartTick — good avalanche,
+  // deterministic, no rngState draw.
+  let h = Math.imul(world.terrainSeed ^ spider.rampageStartTick, 2654435761) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
+  h ^= h >>> 16;
+  // 60% → richer colony (index 0), 40% → poorer (index 1).
+  return (h % 100) < 60 ? candidates[0]!.colonyId : candidates[1]!.colonyId;
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +429,7 @@ export function tickSpider(world: WorldState): void {
     spider.huntTargetTileX = -1;
     spider.huntTargetTileY = -1;
     spider.hungerTicks = 0; // prevent immediate re-rampaging on return to Patrolling
+    spider.rampageTargetColonyId = -1;
     world.spiderPriorityColonyId = null;
     // Fall through to movement + pheromone below.
   }
@@ -404,6 +442,7 @@ export function tickSpider(world: WorldState): void {
         spider.state = 'Rampaging';
         spider.rampageStartTick = world.tick;
         spider.rampageKillsThisRampage = 0;
+        spider.rampageTargetColonyId = pickRampageTarget(world, spider);
         emitEvent(world, {
           tick: world.tick,
           type: 'spider_rampage_start',
@@ -488,6 +527,7 @@ export function tickSpider(world: WorldState): void {
         spider.state = 'Feeding';
         spider.feedingStartTick = world.tick;
         spider.hungerTicks = 0;
+        spider.rampageTargetColonyId = -1;
         world.spiderPriorityColonyId = null;
       } else if (world.tick - spider.rampageStartTick >= SPIDER_RAMPAGE_MAX_TICKS) {
         // Timeout: no ants surfaced at entrance — treat as failed rampage and retreat.
@@ -498,6 +538,7 @@ export function tickSpider(world: WorldState): void {
         spider.huntTargetTileX = -1;
         spider.huntTargetTileY = -1;
         spider.hungerTicks = 0; // prevent immediate re-rampaging on return to Patrolling
+        spider.rampageTargetColonyId = -1;
         world.spiderPriorityColonyId = null;
       }
       break;
@@ -515,7 +556,12 @@ export function tickSpider(world: WorldState): void {
 
   // --- Movement ---
   // Cache nearest entrance for Rampaging once per tick (used by both movement and pheromone seeding).
-  const rampageNearest = spider.state === 'Rampaging' ? findNearestEntrance(world, spider) : null;
+  // Self-heal: a Rampaging spider loaded from a save predating rampageTargetColonyId derives
+  // its target here so behavior is consistent with a spider that never reloaded.
+  if (spider.state === 'Rampaging' && spider.rampageTargetColonyId < 0) {
+    spider.rampageTargetColonyId = pickRampageTarget(world, spider);
+  }
+  const rampageNearest = spider.state === 'Rampaging' ? findNearestEntrance(world, spider, spider.rampageTargetColonyId) : null;
   switch (spider.state) {
     case 'Patrolling': {
       tickPatrolMovement(world, spider);

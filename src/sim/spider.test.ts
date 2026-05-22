@@ -7,6 +7,7 @@ import { tickSpider } from './spider.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask, PheromoneType } from './enums.js';
 import { createPheromoneGrid, pheromoneGridKey } from './pheromone/pheromone-store.js';
+import { createColonyRecord } from './colony/colony-store.js';
 import {
   SPIDER_HP_FULL,
   SPIDER_TELEGRAPH_TICKS,
@@ -46,6 +47,7 @@ function makeSpider(overrides: Partial<SpiderState> = {}): SpiderState {
     huntTargetTileY: -1,
     killsThisStrike: 0,
     rampageKillsThisRampage: 0,
+    rampageTargetColonyId: -1,
     ...overrides,
   };
 }
@@ -298,6 +300,74 @@ describe('tickSpider', () => {
       // After increment: hungerTicks = SPIDER_HUNGER_MAX_TICKS[1]; triggers rampaging.
       expect(world.spider!.state).toBe('Rampaging');
       expect(world.spider!.rampageKillsThisRampage).toBe(0);
+    });
+  });
+
+
+  describe('rampageTargetColonyId — weighted colony selection', () => {
+    it('sets rampageTargetColonyId on Rampaging entry and clears it on exit', () => {
+      const world = makeWorld();
+      world.colonies[PLAYER_COLONY_ID as unknown as any] = createColonyRecord(PLAYER_COLONY_ID, 0);
+      world.colonies[PLAYER_COLONY_ID as unknown as any]!.entrances = [];
+      world.colonies[ENEMY_COLONY_ID as unknown as any] = createColonyRecord(ENEMY_COLONY_ID, 1);
+      world.colonies[ENEMY_COLONY_ID as unknown as any]!.entrances = [];
+      world.spider = makeSpider({
+        state: 'Patrolling',
+        hungerTicks: SPIDER_HUNGER_MAX_TICKS[1] - 1,
+      });
+      world.tick = 0;
+
+      tickSpider(world);
+      expect(world.spider!.state).toBe('Rampaging');
+      expect(world.spider!.rampageTargetColonyId === PLAYER_COLONY_ID ||
+             world.spider!.rampageTargetColonyId === ENEMY_COLONY_ID).toBe(true);
+
+      // Transition to Feeding via kill quota — target should be cleared.
+      world.spider!.rampageKillsThisRampage = SPIDER_RAMPAGE_KILL_QUOTA;
+      tickSpider(world);
+      expect(world.spider!.state).toBe('Feeding');
+      expect(world.spider!.rampageTargetColonyId).toBe(-1);
+    });
+
+    it('always targets a valid colony (not -1) when both colonies exist', () => {
+      // Run 20 rampages across varying seeds and ticks; none should produce -1.
+      for (let seed = 1; seed <= 20; seed++) {
+        const world = makeWorld(seed * 1000);
+        world.colonies[PLAYER_COLONY_ID as unknown as any] = createColonyRecord(PLAYER_COLONY_ID, 0);
+      world.colonies[PLAYER_COLONY_ID as unknown as any]!.entrances = [];
+        world.colonies[ENEMY_COLONY_ID as unknown as any] = createColonyRecord(ENEMY_COLONY_ID, 1);
+      world.colonies[ENEMY_COLONY_ID as unknown as any]!.entrances = [];
+        world.spider = makeSpider({
+          state: 'Patrolling',
+          hungerTicks: SPIDER_HUNGER_MAX_TICKS[1] - 1,
+        });
+        world.tick = seed * 100;
+        tickSpider(world);
+        expect(world.spider!.rampageTargetColonyId).toBeGreaterThan(0);
+      }
+    });
+
+    it('distributes targets across both colonies over many rampages (not always same colony)', () => {
+      // Over 50 rampages with varying ticks, both colonies should be chosen at least once.
+      const chosen = new Set<number>();
+      const world = makeWorld(42);
+      world.colonies[PLAYER_COLONY_ID as unknown as any] = createColonyRecord(PLAYER_COLONY_ID, 0);
+      world.colonies[PLAYER_COLONY_ID as unknown as any]!.entrances = [];
+      world.colonies[ENEMY_COLONY_ID as unknown as any] = createColonyRecord(ENEMY_COLONY_ID, 1);
+      world.colonies[ENEMY_COLONY_ID as unknown as any]!.entrances = [];
+      for (let tick = 0; tick < 50; tick++) {
+        world.spider = makeSpider({
+          state: 'Patrolling',
+          hungerTicks: SPIDER_HUNGER_MAX_TICKS[1] - 1,
+          rampageStartTick: 0,
+        });
+        world.tick = tick * 37; // vary tick to get different hash values
+        tickSpider(world);
+        chosen.add(world.spider!.rampageTargetColonyId);
+      }
+      // Both colonies should appear at least once across 50 rampages.
+      expect(chosen.has(PLAYER_COLONY_ID)).toBe(true);
+      expect(chosen.has(ENEMY_COLONY_ID)).toBe(true);
     });
   });
 

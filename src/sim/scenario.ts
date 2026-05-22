@@ -294,6 +294,7 @@ function _placeSpider(world: WorldState): SpiderState {
     huntTargetTileY: -1,
     killsThisStrike: 0,
     rampageKillsThisRampage: 0,
+    rampageTargetColonyId: -1,
   };
 }
 
