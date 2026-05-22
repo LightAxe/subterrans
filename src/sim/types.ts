@@ -248,7 +248,51 @@ export const SIM_VERSION_V17_COMBAT_AGGRO = 17 as const;
  * the old direct-hostile-position rawDx/rawDy path (byte-stable).
  */
 export const SIM_VERSION_V18_INVADER_WALL_AWARE_STEP = 18 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V18_INVADER_WALL_AWARE_STEP;
+/**
+ * V19 (S2) — AI state machine: adds WorldState.aiState (AIStateRecord[]) with
+ * full operation-cohort tracking; advanceAIState/setAIRallyOperation/endAIRallyOperation
+ * narrow sim helpers; probe/invasion mechanics; queen_death.aiStateAtTime populated.
+ */
+export const SIM_VERSION_V19_AI_STATE = 19 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V19_AI_STATE;
+
+
+/**
+ * S2 — AI colony state machine states.
+ */
+export type AIState =
+  | 'Peacetime'
+  | 'WarFooting'
+  | 'Probing'
+  | 'Invading'
+  | 'Recovery';
+
+/**
+ * S2 — Per-AI-colony state record. Lives in WorldState.aiState[].
+ * Indexed by array position (iterate to find by colonyId — not dense by colonyId).
+ */
+export interface AIStateRecord {
+  colonyId: ColonyId;
+  state: AIState;
+  enteredTick: number;             // tick at which the current state was entered
+  probeCount: number;              // probes fired since last Peacetime
+  lastProbeEndTick: number;        // for spacing between probes
+  invasionStartTick: number;       // 0 if not Invading
+  invasionRallyTileX: number;      // -1 if no active rally; integer tile coords
+  invasionRallyTileY: number;
+  recoveryEndTick: number;         // 0 if not in Recovery
+
+  // Committed-force operation tracking (CF-P0-005)
+  operationKind: 'None' | 'Probe' | 'Invasion';
+  operationStartTick: number;
+  operationTargetTileX: number;
+  operationTargetTileY: number;
+  operationFighterIds: Int32Array; // committed cohort, fixed-length buffer (AI_MAX_OPERATION_FIGHTERS=32), padded with -1
+  operationFighterCount: number;   // active length of operationFighterIds
+  operationStartFighterCount: number;
+  operationAttackerDeaths: number;
+  operationDefenderDeaths: number;
+}
 
 export interface WorldState {
   tick: number;             // 0 at creation; incremented once per tick
@@ -381,6 +425,14 @@ export interface WorldState {
    * Index by victim colonyId. Empty array between ticks.
    */
   pendingQueenDeathContexts: (QueenDeathContext | null)[];
+
+  /**
+   * S2 — per-AI-colony state machine record. One entry per non-player colony.
+   * Indexed by array position (iterate to find by colonyId — NOT dense by colonyId
+   * since colonyId values may not be contiguous starting from 0).
+   * Persisted in saves (V17+); pre-V17 saves get defensive defaults on load.
+   */
+  aiState: AIStateRecord[];
 }
 
 /**
@@ -417,6 +469,8 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
     droppedStructuralCount: 0,
     // S1 — transient; cleared between ticks by combat resolver.
     pendingQueenDeathContexts: [],
+    // S2 — AI state machine. Populated by createScenario for non-player colonies.
+    aiState: [],
   };
 }
 
@@ -452,6 +506,57 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   // pendingQueenDeathContexts: transient within-tick (cleared by checkQueenDeath every tick,
   // always null at the tick boundary when copyWorldState runs). No render code reads it,
   // so no copy is needed and the allocation is skipped to preserve zero-alloc steady state.
+
+  // S2 — aiState: deep-copy the array and each record's Int32Array buffer.
+  // Length-adjust: grow or shrink dst.aiState to match src.aiState.
+  while (dst.aiState.length > src.aiState.length) dst.aiState.pop();
+  for (let i = 0; i < src.aiState.length; i++) {
+    const s = src.aiState[i]!;
+    if (i < dst.aiState.length) {
+      // Reuse existing record — copy scalars, then copy Int32Array buffer.
+      const d = dst.aiState[i]!;
+      d.colonyId = s.colonyId;
+      d.state = s.state;
+      d.enteredTick = s.enteredTick;
+      d.probeCount = s.probeCount;
+      d.lastProbeEndTick = s.lastProbeEndTick;
+      d.invasionStartTick = s.invasionStartTick;
+      d.invasionRallyTileX = s.invasionRallyTileX;
+      d.invasionRallyTileY = s.invasionRallyTileY;
+      d.recoveryEndTick = s.recoveryEndTick;
+      d.operationKind = s.operationKind;
+      d.operationStartTick = s.operationStartTick;
+      d.operationTargetTileX = s.operationTargetTileX;
+      d.operationTargetTileY = s.operationTargetTileY;
+      d.operationFighterIds.set(s.operationFighterIds);
+      d.operationFighterCount = s.operationFighterCount;
+      d.operationStartFighterCount = s.operationStartFighterCount;
+      d.operationAttackerDeaths = s.operationAttackerDeaths;
+      d.operationDefenderDeaths = s.operationDefenderDeaths;
+    } else {
+      // Grow: push a new deep copy.
+      dst.aiState.push({
+        colonyId: s.colonyId,
+        state: s.state,
+        enteredTick: s.enteredTick,
+        probeCount: s.probeCount,
+        lastProbeEndTick: s.lastProbeEndTick,
+        invasionStartTick: s.invasionStartTick,
+        invasionRallyTileX: s.invasionRallyTileX,
+        invasionRallyTileY: s.invasionRallyTileY,
+        recoveryEndTick: s.recoveryEndTick,
+        operationKind: s.operationKind,
+        operationStartTick: s.operationStartTick,
+        operationTargetTileX: s.operationTargetTileX,
+        operationTargetTileY: s.operationTargetTileY,
+        operationFighterIds: Int32Array.from(s.operationFighterIds),
+        operationFighterCount: s.operationFighterCount,
+        operationStartFighterCount: s.operationStartFighterCount,
+        operationAttackerDeaths: s.operationAttackerDeaths,
+        operationDefenderDeaths: s.operationDefenderDeaths,
+      });
+    }
+  }
 
   // --- AntComponents: 19 TypedArray.set calls (zero allocation) ---
   dst.ants.posX.set(src.ants.posX);

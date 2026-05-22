@@ -4,6 +4,7 @@
 // Phase 7 adds 3 variants: CancelDigMark, PlaceChamber, DesignateEntrance.
 
 import type { ColonyId, BehaviorRatio } from './colony/colony-store.js';
+import type { AIState } from './types.js';
 import type { ChamberType } from './enums.js';
 
 export interface SimCommandBase {
@@ -76,6 +77,49 @@ export interface ClearRallyPointCommand extends SimCommandBase {
   readonly colonyId: ColonyId;
 }
 
+/**
+ * S2 / V17 — snapshot of one AIStateRecord pushed to commandQueue by runAIController
+ * every tick in the V17 path. tick() applies it so the snapshot analyzer's replay-only
+ * path (which never calls runAIController) produces bit-identical world.aiState.
+ * operationFighterIds is serialized as number[] (JSON-safe; reconstructed as Int32Array
+ * in the handler).
+ */
+export interface SyncAIStateCommand extends SimCommandBase {
+  readonly type: 'SyncAIState';
+  readonly colonyId: ColonyId;
+  readonly state: AIState;
+  readonly enteredTick: number;
+  readonly probeCount: number;
+  readonly lastProbeEndTick: number;
+  readonly invasionStartTick: number;
+  readonly invasionRallyTileX: number;
+  readonly invasionRallyTileY: number;
+  readonly recoveryEndTick: number;
+  readonly operationKind: 'None' | 'Probe' | 'Invasion';
+  readonly operationStartTick: number;
+  readonly operationTargetTileX: number;
+  readonly operationTargetTileY: number;
+  readonly operationFighterIds: readonly number[];
+  readonly operationFighterCount: number;
+  readonly operationStartFighterCount: number;
+  readonly operationAttackerDeaths: number;
+  readonly operationDefenderDeaths: number;
+}
+
+/**
+ * S2 / V19 — AI controller signals a probe or invasion entry by pushing this command
+ * instead of mutating world.aiState directly. tick() applies it via setAIRallyOperation,
+ * keeping all world.aiState writes inside the sim layer (ADR-0007).
+ */
+export interface StartAIOperationCommand extends SimCommandBase {
+  readonly type: 'StartAIOperation';
+  readonly colonyId: ColonyId;
+  readonly kind: 'Probe' | 'Invasion';
+  readonly rallyTileX: number;
+  readonly rallyTileY: number;
+  readonly fighterIds: readonly number[];
+}
+
 export type SimCommand =
   | NoOpCommand
   | SetBehaviorRatioCommand
@@ -85,6 +129,8 @@ export type SimCommand =
   | PlaceChamberCommand
   | DesignateEntranceCommand
   | SetRallyPointCommand
-  | ClearRallyPointCommand;
+  | ClearRallyPointCommand
+  | SyncAIStateCommand
+  | StartAIOperationCommand;
 
 export const MAX_COMMANDS_PER_TICK = 64; // PRD §5 line 680 — FIFO silent-drop beyond cap

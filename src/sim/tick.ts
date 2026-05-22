@@ -1,8 +1,9 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE, SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX } from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE, SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX, SIM_VERSION_V19_AI_STATE } from './types.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath } from './game-over.js';
+import { advanceAIState, setAIRallyOperation } from './ai-state.js';
 import { detectAndResolveCombat } from './combat.js';
 import { Rng } from './rng.js';
 import {
@@ -145,6 +146,7 @@ void (undefined as unknown as PendingChamber);
  *       Extended in Phase 7: real MarkDigTile, MarkFoodPile handlers;
  *       new CancelDigMark, PlaceChamber, DesignateEntrance handlers.
  *       Extended in Phase 9: SetRallyPoint, ClearRallyPoint handlers (9-variant exhaustive switch).
+ * 1b.  (removed — advanceAIState moved to step 18b, after checkQueenDeath)
  *  2.  Reconcile colony stats
  *  3.  Food consumption
  *  4.  Starvation check
@@ -216,11 +218,46 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // ---------------------------------------------------------------------------
   // Step 1: Process commands (FIFO cap — PRD §5; indexed loop, no allocation)
   //         Extended in Phase 7 with real handlers for all 7 SimCommand variants.
+  // SyncAIState pre-pass: applied before the cap so replay determinism is
+  // preserved even on high-command-count ticks (>64 commands in queue).
   // ---------------------------------------------------------------------------
-  const limit = commands.length < MAX_COMMANDS_PER_TICK ? commands.length : MAX_COMMANDS_PER_TICK;
+  if (world.simVersion >= SIM_VERSION_V19_AI_STATE) for (let i = 0; i < commands.length; i++) {
+    if (commands[i]!.type === 'SyncAIState') {
+      const sc = commands[i] as import('./commands.js').SyncAIStateCommand;
+      const srec = world.aiState.find((r) => r.colonyId === sc.colonyId);
+      // P1: validate buffer length before set() to prevent RangeError on malformed payloads.
+      if (srec !== undefined && sc.operationFighterIds.length <= srec.operationFighterIds.length) {
+        srec.state = sc.state;
+        srec.enteredTick = sc.enteredTick;
+        srec.probeCount = sc.probeCount;
+        srec.lastProbeEndTick = sc.lastProbeEndTick;
+        srec.invasionStartTick = sc.invasionStartTick;
+        srec.invasionRallyTileX = sc.invasionRallyTileX;
+        srec.invasionRallyTileY = sc.invasionRallyTileY;
+        srec.recoveryEndTick = sc.recoveryEndTick;
+        srec.operationKind = sc.operationKind;
+        srec.operationStartTick = sc.operationStartTick;
+        srec.operationTargetTileX = sc.operationTargetTileX;
+        srec.operationTargetTileY = sc.operationTargetTileY;
+        srec.operationFighterIds.set(sc.operationFighterIds);
+        srec.operationFighterIds.fill(-1, sc.operationFighterIds.length);
+        srec.operationFighterCount = Math.min(sc.operationFighterCount, sc.operationFighterIds.length);
+        srec.operationStartFighterCount = sc.operationStartFighterCount;
+        srec.operationAttackerDeaths = sc.operationAttackerDeaths;
+        srec.operationDefenderDeaths = sc.operationDefenderDeaths;
+      }
+    }
+  }
 
-  for (let i = 0; i < limit; i++) {
+  // SyncAIState is excluded from the cap: it was already applied in the uncapped
+  // pre-pass above, so counting it against MAX_COMMANDS_PER_TICK would silently
+  // drop one real gameplay command per AI tick under high-command-count loads.
+  let nonSyncCmdCount = 0;
+  for (let i = 0; i < commands.length; i++) {
     const cmd = commands[i]!;
+    if (cmd.type === 'SyncAIState') continue;
+    if (nonSyncCmdCount >= MAX_COMMANDS_PER_TICK) break;
+    nonSyncCmdCount++;
     switch (cmd.type) {
       case 'NoOp':
         // No state change — by definition a no-op.
@@ -645,9 +682,23 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         colony.rallyPoint = null;
         break;
       }
+      case 'StartAIOperation': {
+        if (world.simVersion < SIM_VERSION_V19_AI_STATE) break;
+        if (!isTileCoord(cmd.rallyTileX, SURFACE_GRID_WIDTH)) break;
+        if (!isTileCoord(cmd.rallyTileY, SURFACE_GRID_HEIGHT)) break;
+        // Validate fighterIds: non-array or empty array from a malformed save/replay entry
+        // would cause setAIRallyOperation to set operationFighterCount=0, leaving the AI
+        // stuck in Invading indefinitely (aiInvasionTick won't retry once operationKind !== 'None').
+        if (!Array.isArray(cmd.fighterIds) || cmd.fighterIds.length === 0) break;
+        // Invasion cohorts < 3 fighters trigger immediate rout on first tick; reject them.
+        if (cmd.kind === 'Invasion' && cmd.fighterIds.length < 3) break;
+        setAIRallyOperation(world, cmd.colonyId, cmd.rallyTileX, cmd.rallyTileY, cmd.fighterIds, cmd.kind);
+        break;
+      }
       default: {
-        // Exhaustive narrowing — SimCommand is a 9-variant union (Phase 9 adds SetRallyPoint + ClearRallyPoint).
-        // Silent-drop unknowns per PRD §5. Do NOT throw, do NOT log (wall-clock-adjacent).
+        // Exhaustive narrowing — SimCommand is a 10-variant union; SyncAIState is
+        // filtered out by the `continue` guard above the switch, so the narrowed
+        // type here excludes it and the never-check still holds.
         const _exhaustive: never = cmd;
         void _exhaustive;
         break;
@@ -1162,6 +1213,19 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // Step 18: game-over detection (Phase 9 / CMBT-06/07).
   // ---------------------------------------------------------------------------
   const outcome = checkQueenDeath(world);
+
+  // ---------------------------------------------------------------------------
+  // Step 18b: Advance AI state machines (timeout/death transitions).
+  // Placed AFTER checkQueenDeath so aiStateAtTime in queen_death events reflects
+  // the AI state at kill time, not a same-tick post-transition state (e.g. the
+  // invading AI routing to Recovery on the same tick it kills the queen).
+  // Gated on V19; moved from render-side to preserve ADR-0007 sim/render boundary.
+  // ---------------------------------------------------------------------------
+  if (world.simVersion >= SIM_VERSION_V19_AI_STATE) {
+    for (let i = 0; i < world.aiState.length; i++) {
+      advanceAIState(world, world.aiState[i]!.colonyId);
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Step 19: rngState writeback (BEFORE tick increment per PRD §4 serialization contract)

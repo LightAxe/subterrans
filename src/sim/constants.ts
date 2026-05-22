@@ -521,6 +521,7 @@ export const EXCURSION_WOBBLE_PERCENT = 20;
  */
 export const ENTRANCE_DEPOSIT_SUPPRESS_RADIUS = 3;
 
+
 // ---------------------------------------------------------------------------
 // S1 — Combat math (HP / damage / cooldown)
 // ---------------------------------------------------------------------------
@@ -561,3 +562,101 @@ export const COMBAT_DAMAGE_QUEEN = 6 as const;
 /** Base HP for the queen. Higher than workers so it takes a coordinated group of fighters
  *  to kill her. Flagged TBD for S6-Tune. */
 export const COMBAT_HP_QUEEN = 30 as const;
+
+// ---------------------------------------------------------------------------
+// S2 — AI State Machine (D-20 / D-27 / D-29 / D-34)
+// ---------------------------------------------------------------------------
+
+/**
+ * S2 / D-34 — Minimum round age (ticks) before AI can enter WarFooting on age alone.
+ * 2400 ticks = 120s at 20Hz. The AI also has a frontage trigger (see
+ * AI_FRONTAGE_PLAYER_WORKERS_ABS) that can fire before this tick.
+ */
+export const AI_WARFOOTING_MIN_TICK = 2400 as const;
+
+/**
+ * S2 / D-27 — Ticks between probe attempts while in WarFooting state.
+ * 1800 ticks = 90s at 20Hz. Second probe ~4:30 given first at ~3:30.
+ */
+export const AI_PROBE_INTERVAL_TICKS = 1800 as const;
+
+/**
+ * S2 / D-27 — Number of fighters committed to a probe cohort.
+ * Closest 3 alive AI fighters by ascending ant index.
+ */
+export const AI_PROBE_FIGHTER_COUNT = 3 as const;
+
+/**
+ * S2 / D-27 — Timeout after which a probe automatically ends if the cohort
+ * hasn't completed normally. 600 ticks = 30s at 20Hz.
+ */
+export const AI_PROBE_TIMEOUT_TICKS = 600 as const;
+
+/**
+ * S2 / D-34 / QC Pass 4 AI1 — Minimum round age for full invasion.
+ * 6600 ticks = 330s = 5:30 at 20Hz. Locks first Invading to the 5:30–6:30 arc.
+ */
+export const AI_INVADING_MIN_TICK = 6600 as const;
+
+/**
+ * S2 — Invasion timeout: max ticks an invasion can run before auto-ending.
+ * 1800 ticks = 90s at 20Hz.
+ */
+export const AI_INVADING_TIMEOUT_TICKS = 1800 as const;
+
+/**
+ * S2 — Recovery duration after an invasion ends, indexed [Easy, Normal, Hard].
+ * S2 reads only index NORMAL_TIER_INDEX=1. S5 wires the tier selector at V20.
+ * 1200 ticks = 60s at 20Hz.
+ */
+export const AI_RECOVERY_DURATION_TICKS = [1200, 1200, 1200] as const;
+
+/**
+ * S2 / D-29 / CF-P1-010 — Fighter count threshold for WarFooting entry,
+ * indexed [Easy, Normal, Hard]. S2 reads only NORMAL_TIER_INDEX=1.
+ */
+export const AI_WARFOOTING_FIGHTER_THRESHOLD = [10, 8, 6] as const;
+
+/**
+ * S2 — Fighter count threshold for Invading entry, indexed [Easy, Normal, Hard].
+ * S2 reads only NORMAL_TIER_INDEX=1.
+ */
+export const AI_INVADING_FIGHTER_THRESHOLD = [18, 15, 12] as const;
+
+/**
+ * S2 / CF-P1-010 — Food storage minimum for WarFooting entry (integer percent, ×100 safe).
+ * Usage: `aiFoodStored * 100 >= aiFoodCapacity * AI_WARFOOTING_FOOD_FRAC_PCT`
+ */
+export const AI_WARFOOTING_FOOD_FRAC_PCT = 50 as const;
+
+/**
+ * S2 — Food storage minimum for Invading entry (integer percent, ×100 safe).
+ * Usage: `aiFoodStored * 100 >= aiFoodCapacity * AI_INVADING_FOOD_FRAC_PCT`
+ */
+export const AI_INVADING_FOOD_FRAC_PCT = 70 as const;
+
+/**
+ * S2 / D-29 — Absolute floor for the hybrid frontage trigger: player workers >= 24
+ * AND player workers >= 1.3× AI workers triggers WarFooting regardless of age.
+ */
+export const AI_FRONTAGE_PLAYER_WORKERS_ABS = 24 as const;
+
+/**
+ * S2 / D-29 — Ratio multiplier (×100) for the hybrid frontage trigger.
+ * Usage: `playerWorkers * 100 >= AI_FRONTAGE_PLAYER_WORKERS_RATIO_X100 * aiWorkers`
+ * Integer-safe; avoids float division. 130 → 1.3× threshold.
+ */
+export const AI_FRONTAGE_PLAYER_WORKERS_RATIO_X100 = 130 as const;
+
+/**
+ * S2 / CF-P0-005 — Fixed-length buffer size for committed fighter cohort.
+ * `AIStateRecord.operationFighterIds` is always this length; unused slots are -1.
+ */
+export const AI_MAX_OPERATION_FIGHTERS = 32 as const;
+
+/**
+ * S2 — Fallback radius (tiles) for probe target selection when no marked food pile
+ * exists. Picks closest unmarked surface pile within this distance of any open
+ * player entrance.
+ */
+export const AI_PROBE_FALLBACK_RADIUS_TILES = 40 as const;
