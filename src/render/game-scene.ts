@@ -583,12 +583,18 @@ export class GameScene extends Phaser.Scene {
         resetPanInputState();
         resetDragState(this.dragState);
 
-        // Extract death cause from the last queen_death event emitted this tick.
+        // Extract death cause from the first queen_death event emitted this tick.
+        // Forward scan: player is added to diedThisTick first, so the player's event
+        // comes before enemy events — Defeat gives the player's cause, Victory gives
+        // the enemy's. Tick filter prevents stale events from earlier ticks matching
+        // when checkQueenDeath returns a terminal outcome without emitting a new event
+        // (e.g. save-load where the queen is already marked defeated).
+        const currentTick = this.world?.tick ?? -1;
         const evts = this.world?.events ?? [];
         let cause: import('./ui-scene-logic.js').QueenDeathCause = null;
-        for (let i = evts.length - 1; i >= 0; i--) {
+        for (let i = 0; i < evts.length; i++) {
           const ev = evts[i];
-          if (ev && ev.type === 'queen_death') { cause = ev.payload.cause; break; }
+          if (ev && ev.type === 'queen_death' && ev.tick === currentTick) { cause = ev.payload.cause; break; }
         }
         this.currentCause = cause;
 
