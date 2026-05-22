@@ -121,7 +121,7 @@ import { hideContextMenu } from './context-menu-state.js';
 // UIScenePhase9 — subset of UIScene public API added in Plan 06 Task 3.
 // Typed here to avoid circular imports; UIScene implements these methods.
 interface UIScenePhase9 {
-  showGameOverOverlay(outcome: GameOutcome, onRestart: () => void): void;
+  showGameOverOverlay(outcome: GameOutcome, cause: import('./ui-scene-logic.js').QueenDeathCause, onRestart: () => void): void;
   hideGameOverOverlay(): void;
   showSavePromptOverlay(callbacks: { onContinue: () => void; onNewGame: () => void }): void;
   hideSavePromptOverlay(): void;
@@ -151,6 +151,8 @@ interface UIScenePhase9 {
   // seed; onRetry restarts with the same seed. onSkip was removed.
   showSurveyOverlay(callbacks: {
     quitFromPauseMenu: boolean;
+    outcome?: import('../sim/game-over.js').GameOutcome;
+    cause?: import('./ui-scene-logic.js').QueenDeathCause;
     onSubmit(survey: PlaytraceSurvey & { includeSnapshot: boolean }): void;
     onNewGame(): void;
     onRetry(): void;
@@ -187,6 +189,7 @@ export class GameScene extends Phaser.Scene {
   // Phase 9 — GamePhase FSM + session fields
   private gamePhase: GamePhase = GamePhase.Playing;
   private currentOutcome: GameOutcome = GameOutcome.None;
+  private currentCause: import('./ui-scene-logic.js').QueenDeathCause = null;
   private aiColonyIds: ReturnType<typeof deriveAIColonyIds> = [];
   private readonly inputLog: SimCommand[] = [];
   private lastAutosaveMs: number = 0;
@@ -441,6 +444,7 @@ export class GameScene extends Phaser.Scene {
     hideContextMenu();
     this.lastActiveView = null;
     this.currentOutcome = GameOutcome.None;
+    this.currentCause = null;
     this.speedMultiplier = 1;
     // Re-enable autosave for the next session. The flag is set only by
     // bootFromSave's deserialize-throw catch (see issue #66 in the field
@@ -578,6 +582,22 @@ export class GameScene extends Phaser.Scene {
         // independent of processCameraInput and otherwise fire unguarded).
         resetPanInputState();
         resetDragState(this.dragState);
+
+        // Extract death cause from the first queen_death event emitted this tick.
+        // Forward scan: player is added to diedThisTick first, so the player's event
+        // comes before enemy events — Defeat gives the player's cause, Victory gives
+        // the enemy's. Tick filter prevents stale events from earlier ticks matching.
+        // world.tick was incremented at step 19 (tick.ts) after checkQueenDeath (step 18),
+        // so the queen_death event carries world.tick - 1.
+        const deathTick = (this.world?.tick ?? 1) - 1;
+        const evts = this.world?.events ?? [];
+        let cause: import('./ui-scene-logic.js').QueenDeathCause = null;
+        for (let i = 0; i < evts.length; i++) {
+          const ev = evts[i];
+          if (ev && ev.type === 'queen_death' && ev.tick === deathTick) { cause = ev.payload.cause; break; }
+        }
+        this.currentCause = cause;
+
         const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
         // Issue #122 — when the playtrace feature is enabled, the survey
         // overlay replaces the bare game-over panel at end-of-game. Skip
@@ -587,7 +607,7 @@ export class GameScene extends Phaser.Scene {
         if (this.playtraceEndpoint !== '') {
           this.openSurveyOverlay(false /* quitFromPauseMenu */);
         } else {
-          uiScene.showGameOverOverlay(outcome, () => this.restartGame());
+          uiScene.showGameOverOverlay(outcome, cause, () => this.restartGame());
         }
       },
       getMsPerTick: () => MS_PER_TICK / this.speedMultiplier,
@@ -677,6 +697,8 @@ export class GameScene extends Phaser.Scene {
     }
     uiScene.showSurveyOverlay({
       quitFromPauseMenu,
+      outcome: quitFromPauseMenu ? undefined : outcome,
+      cause: quitFromPauseMenu ? undefined : this.currentCause,
       onSubmit: (survey) => {
         // Capture the live world / seed / inputLog right now, before the
         // restart path overwrites them. The snapshot is built lazily
@@ -742,6 +764,7 @@ export class GameScene extends Phaser.Scene {
       deleteSave();
     }
     this.currentOutcome = GameOutcome.None;
+    this.currentCause = null;
     this.resetSessionState();
     this.currentSeed = seed;
     this.world = createScenario(seed);
@@ -844,6 +867,7 @@ export class GameScene extends Phaser.Scene {
       deleteSave();
     }
     this.currentOutcome = GameOutcome.None;
+    this.currentCause = null;
     // bootFresh → finishBoot resumes the loop; this is the authoritative restart path.
     this.bootFresh();
     if (wasSuspended) {

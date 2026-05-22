@@ -34,7 +34,7 @@ const PANEL_BOTTOM_Y = SURVEY_CANVAS_H - 60;
 export const SURVEY_TITLE_Y = PANEL_TOP_Y + 30;
 
 /** Vertical anchor for the rating row — five buttons across, centered. */
-export const SURVEY_RATING_ROW_Y = PANEL_TOP_Y + 80;
+export const SURVEY_RATING_ROW_Y = PANEL_TOP_Y + 115;
 export const SURVEY_RATING_BUTTON_W = 56;
 export const SURVEY_RATING_BUTTON_H = 56;
 export const SURVEY_RATING_BUTTON_GAP = 12;

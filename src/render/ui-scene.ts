@@ -25,11 +25,11 @@ import { toggleView, toggleUndergroundColony } from './camera.js';
 import type { WorldState } from '../sim/types.js';
 import { HUD } from './sprites.js';
 import { GameOutcome } from '../sim/game-over.js';
-import { formatOutcomeTitle, formatKillStatsSubtitle } from './ui-scene-logic.js';
+import { formatOutcomeTitle, formatKillStatsSubtitle, formatCauseSubtitle, type QueenDeathCause } from './ui-scene-logic.js';
 import { PLAYER_COLONY_ID as _PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 
 // Re-export pure helpers for Plan 07 and external consumers
-export { formatOutcomeTitle, formatKillStatsSubtitle };
+export { formatOutcomeTitle, formatKillStatsSubtitle, formatCauseSubtitle, type QueenDeathCause };
 
 // ---------------------------------------------------------------------------
 // Plan 07 Playwright observability contract
@@ -97,7 +97,7 @@ export const SAVE_PROMPT_CONTINUE_RECT = { x: 300, y: 280, w: 120, h: 32 } as co
 /** Canvas-local rect for the SavePrompt "New Game" button. */
 export const SAVE_PROMPT_NEW_GAME_RECT = { x: 300, y: 320, w: 120, h: 32 } as const;
 /** Canvas-local rect for the GameOver "Restart" button. */
-export const GAME_OVER_RESTART_RECT    = { x: 300, y: 320, w: 120, h: 32 } as const;
+export const GAME_OVER_RESTART_RECT    = { x: 300, y: 345, w: 120, h: 32 } as const;
 import {
   createSliderDragState,
   drawSlider,
@@ -175,6 +175,7 @@ import {
   SURVEY_CANVAS_W,
   SURVEY_CANVAS_H,
   SURVEY_TITLE_Y,
+  SURVEY_RATING_ROW_Y,
   SURVEY_FREE_TEXT_RECT,
   SURVEY_BROKEN_CHECKBOX_RECT,
   SURVEY_UPLOAD_CHECKBOX_RECT,
@@ -919,7 +920,7 @@ export class UIScene extends Phaser.Scene {
   // Phase 9 Plan 06 — GameOver overlay
   // ---------------------------------------------------------------------------
 
-  public showGameOverOverlay(outcome: GameOutcome, onRestart: () => void): void {
+  public showGameOverOverlay(outcome: GameOutcome, cause: QueenDeathCause, onRestart: () => void): void {
     this.hideGameOverOverlay(); // clear any prior instance first
 
     const W = 800;
@@ -931,7 +932,7 @@ export class UIScene extends Phaser.Scene {
     bg.setDepth(20);
 
     const { text: titleText, color: titleColor } = formatOutcomeTitle(outcome);
-    const title = this.add.text(W / 2, H / 2 - 60, titleText, {
+    const title = this.add.text(W / 2, H / 2 - 70, titleText, {
       fontSize: '40px',
       fontFamily: 'monospace',
       color: '#' + titleColor.toString(16).padStart(6, '0'),
@@ -939,13 +940,23 @@ export class UIScene extends Phaser.Scene {
     title.setOrigin(0.5);
     title.setDepth(21);
 
+    // Cause line — why the relevant queen died.
+    const causeText = formatCauseSubtitle(outcome, cause);
+    const causeLabel = this.add.text(W / 2, H / 2 - 25, causeText, {
+      fontSize: '20px',
+      fontFamily: 'monospace',
+      color: '#ffffff',
+    });
+    causeLabel.setOrigin(0.5);
+    causeLabel.setDepth(21);
+
     // Kill stats subtitle — read via plain-object bracket access (ADR-0006).
     // GameScene only triggers this overlay after a tick produces an outcome,
     // so getWorld() must be defined; optional-chain the colony read regardless.
     const world = this.getWorld();
     const playerColony = world?.colonies[_PLAYER_COLONY_ID];
     const killCount = playerColony?.killCount ?? 0;
-    const subtitle = this.add.text(W / 2, H / 2 - 10, formatKillStatsSubtitle(killCount), {
+    const subtitle = this.add.text(W / 2, H / 2 + 10, formatKillStatsSubtitle(killCount), {
       fontSize: '18px',
       fontFamily: 'monospace',
       color: '#cccccc',
@@ -974,7 +985,7 @@ export class UIScene extends Phaser.Scene {
     btnLabel.setOrigin(0.5);
     btnLabel.setDepth(22);
 
-    this.gameOverGroup = [bg, title, subtitle, btnBg, btnLabel];
+    this.gameOverGroup = [bg, title, causeLabel, subtitle, btnBg, btnLabel];
     this.recomputeActiveOverlay();
   }
 
@@ -1582,6 +1593,8 @@ export class UIScene extends Phaser.Scene {
     quitFromPauseMenu: boolean;
     showConfirmation: boolean;
     confirmedSubmit: boolean;
+    outcome: GameOutcome;
+    cause: QueenDeathCause;
   } = {
     rating: 0,
     freeText: '',
@@ -1590,6 +1603,8 @@ export class UIScene extends Phaser.Scene {
     quitFromPauseMenu: false,
     showConfirmation: false,
     confirmedSubmit: false,
+    outcome: 0, // GameOutcome.None
+    cause: null,
   };
   private surveyTextarea: HTMLTextAreaElement | null = null;
   /** Bound handler kept on the instance so addEventListener / removeEventListener
@@ -1610,6 +1625,8 @@ export class UIScene extends Phaser.Scene {
       quitFromPauseMenu: callbacks.quitFromPauseMenu,
       showConfirmation: false,
       confirmedSubmit: false,
+      outcome: callbacks.outcome ?? 0,
+      cause: callbacks.cause ?? null,
     };
     this.renderSurveyOverlay();
     this.recomputeActiveOverlay();
@@ -1670,21 +1687,50 @@ export class UIScene extends Phaser.Scene {
     bg.setDepth(40);
     this.surveyGroup.push(bg);
 
-    // Title — wording differs slightly based on which path opened the
-    // overlay so the player can tell "game ended, share thoughts" apart
-    // from "you chose to quit and give feedback".
-    const titleText = this.surveyState.quitFromPauseMenu
-      ? 'Quitting — tell us what you think'
-      : 'Thanks for playing — tell us what you think';
-    const title = this.add.text(
+    // Title row: for natural game-over, show VICTORY/DEFEAT + cause.
+    // For pause-menu-quit, show a generic "Quitting" heading.
+    if (this.surveyState.quitFromPauseMenu) {
+      const title = this.add.text(
+        SURVEY_CANVAS_W / 2, SURVEY_TITLE_Y,
+        'Quitting — tell us what you think',
+        { fontSize: '22px', fontFamily: 'monospace', color: '#ffffff' },
+      );
+      title.setOrigin(0.5, 0);
+      title.setDepth(41);
+      this.surveyGroup.push(title);
+    } else {
+      const { text: outcomeText, color: outcomeColor } = formatOutcomeTitle(this.surveyState.outcome);
+      const outcomeLabel = this.add.text(
+        SURVEY_CANVAS_W / 2, SURVEY_TITLE_Y - 5,
+        outcomeText,
+        { fontSize: '28px', fontFamily: 'monospace', color: '#' + outcomeColor.toString(16).padStart(6, '0') },
+      );
+      outcomeLabel.setOrigin(0.5, 0);
+      outcomeLabel.setDepth(41);
+      this.surveyGroup.push(outcomeLabel);
+
+      const causeText = formatCauseSubtitle(this.surveyState.outcome, this.surveyState.cause);
+      const secondLine = causeText !== '' ? causeText : 'Tell us what you think:';
+      const causeLabel = this.add.text(
+        SURVEY_CANVAS_W / 2, SURVEY_TITLE_Y + 33,
+        secondLine,
+        { fontSize: '16px', fontFamily: 'monospace', color: '#cccccc' },
+      );
+      causeLabel.setOrigin(0.5, 0);
+      causeLabel.setDepth(41);
+      this.surveyGroup.push(causeLabel);
+    }
+
+    // Rating label — clarifies what 1–5 means.
+    const ratingLabel = this.add.text(
       SURVEY_CANVAS_W / 2,
-      SURVEY_TITLE_Y,
-      titleText,
-      { fontSize: '22px', fontFamily: 'monospace', color: '#ffffff' },
+      SURVEY_RATING_ROW_Y - 26,
+      'Rate your experience (1 = poor, 5 = great)',
+      { fontSize: '13px', fontFamily: 'monospace', color: '#aaaaaa' },
     );
-    title.setOrigin(0.5, 0);
-    title.setDepth(41);
-    this.surveyGroup.push(title);
+    ratingLabel.setOrigin(0.5, 0);
+    ratingLabel.setDepth(41);
+    this.surveyGroup.push(ratingLabel);
 
     // Rating row — five buttons. Selected button renders with a green
     // fill so the choice is visible at a glance.
@@ -2049,6 +2095,12 @@ export interface SurveyOverlayCallbacks {
    *  uses it to pick a slightly different title; the game-scene passes it
    *  through to the upload as the wire envelope's quitFromPauseMenu flag. */
   quitFromPauseMenu: boolean;
+  /** Terminal outcome to display at the top of the survey (Victory/Defeat/etc).
+   *  Omitted on pause-menu-quit path (no queen died). */
+  outcome?: GameOutcome;
+  /** Why the relevant queen died — passed to formatCauseSubtitle. Omitted on
+   *  pause-menu-quit or when cause is unknown (pre-V16 saves). */
+  cause?: QueenDeathCause;
   /** Player submitted. The callback fires the upload (fire-and-forget) then
    *  the overlay transitions to the confirmation screen — do NOT call
    *  restartGame here; wait for onNewGame / onRetry. */
