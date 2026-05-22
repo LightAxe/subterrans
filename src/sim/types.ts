@@ -473,7 +473,7 @@ export interface WorldState {
 
   /**
    * S3 — Single neutral spider entity; null if not present in this scenario.
-   * V18+ only; pre-V18 saves load with spider: null.
+   * V20+ only; pre-V20 saves load with spider: null.
    */
   spider: SpiderState | null;
 
@@ -485,7 +485,7 @@ export interface WorldState {
 
   /**
    * S3 — Shadow field for one-tick-lag scatter. Written at end of tickSpider
-   * (step 17.5); read by step 16 movement the following tick.
+   * (step 17.5); read by step 13e movement the following tick.
    * null when spider is not Hunting or Striking.
    */
   scatterReticleTile: { x: number; y: number } | null;

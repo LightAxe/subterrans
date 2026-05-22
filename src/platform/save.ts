@@ -518,11 +518,11 @@ export interface SerializedWorldState {
   pendingChambers: Record<string, PendingChamber>;
   /** S2 — optional for backward compat with pre-V19 saves; defaults to [] on load. */
   aiState?: SerializedAIStateRecord[];
-  /** S3 — optional for backward compat with pre-V18 saves; defaults to null on load. */
+  /** S3 — optional for backward compat with pre-V20 saves; defaults to null on load. */
   spider?: SerializedSpiderState | null;
   /** S3 — optional; defaults to null on load. */
   spiderPriorityColonyId?: number | null;
-  /** S3 — preserved through save/reload; null for pre-V18 saves. */
+  /** S3 — preserved through save/reload; null for pre-V20 saves. */
   scatterReticleTile?: { x: number; y: number } | null;
 }
 
@@ -1050,7 +1050,7 @@ function isValidSpiderBehaviorState(v: unknown): v is import('../sim/types.js').
 
 /**
  * S3 — deserialize world.spider from the save snapshot.
- * Pre-V18 saves omit the field; return null.
+ * Pre-V20 saves omit the field; return null.
  */
 function deserializeSpider(s: SerializedWorldState, simVersion: number): SpiderState | null {
   if (simVersion < SIM_VERSION_V20_SPIDER) return null;
@@ -1058,8 +1058,18 @@ function deserializeSpider(s: SerializedWorldState, simVersion: number): SpiderS
   if (raw === null || raw === undefined) return null;
   if (typeof raw !== 'object') return null;
   const r = raw as Partial<SerializedSpiderState>;
+  const rawState = isValidSpiderBehaviorState(r.state) ? r.state : 'Patrolling';
+  const rawHuntX = typeof r.huntTargetTileX === 'number' && Number.isInteger(r.huntTargetTileX) ? r.huntTargetTileX : -1;
+  const rawHuntY = typeof r.huntTargetTileY === 'number' && Number.isInteger(r.huntTargetTileY) ? r.huntTargetTileY : -1;
+  // Guard: Hunting/Striking require a valid (non-sentinel) hunt target. A save with
+  // state=Hunting but target=-1 (corrupt or truncated) would route the spider to (0,0)
+  // for the full telegraph duration. Fall back to Patrolling in that case.
+  const huntTargetValid = rawHuntX >= 0 && rawHuntY >= 0;
+  const safeState = (rawState === 'Hunting' || rawState === 'Striking') && !huntTargetValid
+    ? 'Patrolling'
+    : rawState;
   return {
-    state: isValidSpiderBehaviorState(r.state) ? r.state : 'Patrolling',
+    state: safeState,
     posX: typeof r.posX === 'number' && Number.isInteger(r.posX) ? r.posX : 0,
     posY: typeof r.posY === 'number' && Number.isInteger(r.posY) ? r.posY : 0,
     lairTileX: typeof r.lairTileX === 'number' && Number.isInteger(r.lairTileX) ? r.lairTileX : 0,
@@ -1074,8 +1084,8 @@ function deserializeSpider(s: SerializedWorldState, simVersion: number): SpiderS
     feedingStartTick: typeof r.feedingStartTick === 'number' && Number.isInteger(r.feedingStartTick) ? r.feedingStartTick : 0,
     retreatStartTick: typeof r.retreatStartTick === 'number' && Number.isInteger(r.retreatStartTick) ? r.retreatStartTick : 0,
     rampageStartTick: typeof r.rampageStartTick === 'number' && Number.isInteger(r.rampageStartTick) ? r.rampageStartTick : 0,
-    huntTargetTileX: typeof r.huntTargetTileX === 'number' && Number.isInteger(r.huntTargetTileX) ? r.huntTargetTileX : -1,
-    huntTargetTileY: typeof r.huntTargetTileY === 'number' && Number.isInteger(r.huntTargetTileY) ? r.huntTargetTileY : -1,
+    huntTargetTileX: huntTargetValid ? rawHuntX : -1,
+    huntTargetTileY: huntTargetValid ? rawHuntY : -1,
     killsThisStrike: typeof r.killsThisStrike === 'number' && Number.isInteger(r.killsThisStrike) ? r.killsThisStrike : 0,
     rampageKillsThisRampage: typeof r.rampageKillsThisRampage === 'number' && Number.isInteger(r.rampageKillsThisRampage) ? r.rampageKillsThisRampage : 0,
   };
@@ -1370,9 +1380,9 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     pendingQueenDeathContexts: [],
     // S2 — AI state machine. Deserialize saved records, or provide defensive defaults for pre-V19 saves.
     aiState: deserializeAIStateArray(s, validatedSimVersion),
-    // S3 — spider entity; null for pre-V18 saves.
+    // S3 — spider entity; null for pre-V20 saves.
     spider: _deserializedSpider,
-    spiderPriorityColonyId: (_deserializedSpider !== null && typeof s.spiderPriorityColonyId === 'number' && Number.isInteger(s.spiderPriorityColonyId) && s.spiderPriorityColonyId >= 0) ? s.spiderPriorityColonyId : null,
+    spiderPriorityColonyId: (_deserializedSpider !== null && typeof s.spiderPriorityColonyId === 'number' && Number.isInteger(s.spiderPriorityColonyId) && s.spiderPriorityColonyId > 0) ? s.spiderPriorityColonyId : null,
     scatterReticleTile: (() => {
       if (_deserializedSpider === null) return null;
       const r = s.scatterReticleTile;

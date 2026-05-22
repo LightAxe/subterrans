@@ -698,6 +698,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         break;
       }
       case 'MarkSpiderPriority': {
+        if (world.simVersion < SIM_VERSION_V20_SPIDER) break;
         // Validate payload — save/replay objects are not schema-checked upstream.
         if (typeof cmd.isPriority !== 'boolean') break;
         if (!cmd.isPriority) {
@@ -705,7 +706,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
           world.spiderPriorityColonyId = null;
           break;
         }
-        if (!Number.isInteger(cmd.colonyId) || cmd.colonyId < 0) break;
+        if (!Number.isInteger(cmd.colonyId) || cmd.colonyId <= 0) break;
         world.spiderPriorityColonyId = world.spider !== null ? cmd.colonyId : null;
         break;
       }
@@ -1122,7 +1123,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // updateFightAntTargets so spider priority takes precedence over the rally point.
   // Colony identity is carried in world.spiderPriorityColonyId (not a
   // hard-coded player branch) — CLNY-08 compliant.
-  if (world.simVersion >= SIM_VERSION_V18_SPIDER &&
+  if (world.simVersion >= SIM_VERSION_V20_SPIDER &&
       world.spiderPriorityColonyId !== null &&
       world.spider !== null) {
     const spiderPriorityCid = world.spiderPriorityColonyId;
@@ -1164,7 +1165,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // Runs AFTER routeForagerPriority (step 13) so scatter takes precedence over
   // food-pile priority targeting for workers on the threatened tile.
   // Uses the shadow field written by tickSpider at step 17.5 the prior tick.
-  if (world.simVersion >= SIM_VERSION_V18_SPIDER && world.scatterReticleTile !== null) {
+  if (world.simVersion >= SIM_VERSION_V20_SPIDER && world.scatterReticleTile !== null) {
     const rx = world.scatterReticleTile.x;
     const ry = world.scatterReticleTile.y;
     const r = SPIDER_SCATTER_RADIUS_TILES;
@@ -1277,7 +1278,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   }
 
   // ---------------------------------------------------------------------------
-  // Step 17.5: Spider state machine (S3 / V18+).
+  // Step 17.5: Spider state machine (S3 / V20+).
   // Runs after combat so spider.hp reflects this tick's damage before tickSpider
   // evaluates the Retreating threshold.
   // ---------------------------------------------------------------------------

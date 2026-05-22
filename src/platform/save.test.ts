@@ -356,10 +356,10 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const w2 = deserializeWorldState(s);
       expect(w2.terrainSeed).toBe(0);
     });
-    it('V18: round-trips world.spider, spiderPriorityColonyId, and scatterReticleTile through serialize → deserialize', async () => {
-      const { SIM_VERSION_V18_SPIDER } = await import('../sim/types.js');
+    it('V20: round-trips world.spider, spiderPriorityColonyId, and scatterReticleTile through serialize → deserialize', async () => {
+      const { SIM_VERSION_V20_SPIDER } = await import('../sim/types.js');
       const w = createScenario(42);
-      expect(w.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V18_SPIDER);
+      expect(w.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V20_SPIDER);
       const spider = w.spider!;
       spider.state = 'Hunting';
       spider.huntTargetTileX = 55;
@@ -381,12 +381,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.scatterReticleTile).toEqual({ x: 10, y: 20 });
     });
 
-    it('V18: pre-V18 save (spider field absent) deserializes to spider: null, spiderPriorityColonyId: null', async () => {
-      const { SIM_VERSION_V17_AI_STATE } = await import('../sim/types.js');
+    it('V20: pre-V20 save (spider field absent) deserializes to spider: null, spiderPriorityColonyId: null', async () => {
+      const { SIM_VERSION_V19_AI_STATE } = await import('../sim/types.js');
       const w = createScenario(42);
       const s = serializeWorldState(w);
-      // Downgrade simVersion to pre-V18; strip the spider fields.
-      (s as { simVersion: number }).simVersion = SIM_VERSION_V17_AI_STATE;
+      // Downgrade simVersion to pre-V20; strip the spider fields.
+      (s as { simVersion: number }).simVersion = SIM_VERSION_V19_AI_STATE;
       delete (s as { spider?: unknown }).spider;
       delete (s as { spiderPriorityColonyId?: unknown }).spiderPriorityColonyId;
       delete (s as { scatterReticleTile?: unknown }).scatterReticleTile;
@@ -396,7 +396,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.scatterReticleTile).toBeNull();
     });
 
-    it('V18: null spider (spider killed mid-game) round-trips through serialize → deserialize', () => {
+    it('V20: null spider (spider killed mid-game) round-trips through serialize → deserialize', () => {
       const w = createScenario(42);
       w.spider = null; // simulate spider having been killed
       w.spiderPriorityColonyId = null;
@@ -407,10 +407,10 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.scatterReticleTile).toBeNull();
     });
 
-    it('V18: spider: null in a V18 save deserializes to null with priority and reticle also null (B11 coupling)', async () => {
-      const { SIM_VERSION_V18_SPIDER } = await import('../sim/types.js');
+    it('V20: spider: null in a V20 save deserializes to null with priority and reticle also null (B11 coupling)', async () => {
+      const { SIM_VERSION_V20_SPIDER } = await import('../sim/types.js');
       const w = createScenario(42);
-      expect(w.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V18_SPIDER);
+      expect(w.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V20_SPIDER);
       const s = serializeWorldState(w);
       // Force spider null but leave priority/reticle non-null in the raw snapshot.
       (s as { spider: null }).spider = null;
@@ -423,10 +423,10 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.scatterReticleTile).toBeNull();
     });
 
-    it('V18: spiderPriorityColonyId of Infinity, NaN, or float deserializes to null (B1 integer guard)', async () => {
-      const { SIM_VERSION_V18_SPIDER } = await import('../sim/types.js');
+    it('V20: spiderPriorityColonyId of Infinity, NaN, or float deserializes to null (B1 integer guard)', async () => {
+      const { SIM_VERSION_V20_SPIDER } = await import('../sim/types.js');
       const w = createScenario(42);
-      expect(w.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V18_SPIDER);
+      expect(w.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V20_SPIDER);
       const s = serializeWorldState(w);
       for (const bad of [Infinity, -Infinity, NaN, 1.5, -0.1]) {
         (s as { spiderPriorityColonyId: number }).spiderPriorityColonyId = bad;

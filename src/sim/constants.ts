@@ -709,9 +709,6 @@ export const SPIDER_HUNGER_MAX_TICKS = [2700, 1800, 1350] as const;
 /** S3 — Minimum fighters on spider's tile + priority required to activate swarm bonus. */
 export const SPIDER_SWARM_FIGHTER_THRESHOLD = 6 as const;
 
-/** S3 — Damage multiplier per strike when swarm bonus is active. */
-export const SPIDER_SWARM_MULTIPLIER = 4 as const;
-
 /** S3 — Manhattan tile radius within which spider hunts for worker density. */
 export const SPIDER_HUNT_SEARCH_RADIUS_TILES = 12 as const;
 

@@ -37,6 +37,13 @@ import { FP_SHIFT } from './fixed.js';
 const HUNT_TILE_COUNTS = new Uint16Array(SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT);
 const HUNT_DIRTY: number[] = [];
 
+// Precomputed suffix for surface DangerTrail pheromone grid key lookup.
+// Avoids per-tick string allocation while remaining enum-safe.
+const SURFACE_DANGER_SUFFIX = `:${PheromoneType.DangerTrail}:surface`;
+
+// Module-level scratch for findNearestEntrance return value — avoids per-Rampaging-tick allocation.
+const NEAREST_ENTRANCE_SCRATCH: { x: number; y: number; colonyId: number } = { x: -1, y: -1, colonyId: -1 };
+
 // ---------------------------------------------------------------------------
 // Hunt target selection — deterministic (no rng draws)
 // ---------------------------------------------------------------------------
@@ -151,7 +158,10 @@ function findNearestEntrance(
     }
   }
   if (bestX === -1) return null;
-  return { x: bestX, y: bestY, colonyId: bestColonyId };
+  NEAREST_ENTRANCE_SCRATCH.x = bestX;
+  NEAREST_ENTRANCE_SCRATCH.y = bestY;
+  NEAREST_ENTRANCE_SCRATCH.colonyId = bestColonyId;
+  return NEAREST_ENTRANCE_SCRATCH;
 }
 
 // ---------------------------------------------------------------------------
@@ -230,7 +240,7 @@ function seedDangerPheromone(world: WorldState, spider: SpiderState): void {
   // Unrolled 5-cell cross to avoid per-tick array allocation (AGENTS.md hot-loop rule).
   for (const colonyKey in world.pheromoneGrids) {
     if (!Object.hasOwn(world.pheromoneGrids, colonyKey)) continue;
-    if (!colonyKey.endsWith(':1:surface')) continue;
+    if (!colonyKey.endsWith(SURFACE_DANGER_SUFFIX)) continue;
     const grid = world.pheromoneGrids[colonyKey]!;
     // center (spider is always within surface bounds)
     { const v = phGet(grid, tileX, tileY) + center; phSet(grid, tileX, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
@@ -381,6 +391,8 @@ export function tickSpider(world: WorldState): void {
     spider.retreatStartTick = world.tick;
     spider.huntTargetTileX = -1;
     spider.huntTargetTileY = -1;
+    spider.hungerTicks = 0; // prevent immediate re-rampaging on return to Patrolling
+    world.spiderPriorityColonyId = null;
     // Fall through to movement + pheromone below.
   }
 
@@ -442,6 +454,9 @@ export function tickSpider(world: WorldState): void {
           spider.state = 'Feeding';
           spider.feedingStartTick = world.tick;
           spider.hungerTicks = 0; // CF-P0-006: reset on Feeding entry
+          spider.huntTargetTileX = -1;
+          spider.huntTargetTileY = -1;
+          world.spiderPriorityColonyId = null;
         } else {
           emitSpiderHuntEnd(world, 'scatter', 0);
           clearSpiderPairingSentinels(world);
@@ -449,6 +464,7 @@ export function tickSpider(world: WorldState): void {
           spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
           spider.huntTargetTileX = -1;
           spider.huntTargetTileY = -1;
+          world.spiderPriorityColonyId = null;
         }
       }
       break;
@@ -472,6 +488,7 @@ export function tickSpider(world: WorldState): void {
         spider.state = 'Feeding';
         spider.feedingStartTick = world.tick;
         spider.hungerTicks = 0;
+        world.spiderPriorityColonyId = null;
       } else if (world.tick - spider.rampageStartTick >= SPIDER_RAMPAGE_MAX_TICKS) {
         // Timeout: no ants surfaced at entrance — treat as failed rampage and retreat.
         emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
@@ -480,6 +497,8 @@ export function tickSpider(world: WorldState): void {
         spider.retreatStartTick = world.tick;
         spider.huntTargetTileX = -1;
         spider.huntTargetTileY = -1;
+        spider.hungerTicks = 0; // prevent immediate re-rampaging on return to Patrolling
+        world.spiderPriorityColonyId = null;
       }
       break;
     }

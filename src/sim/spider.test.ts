@@ -392,13 +392,13 @@ describe('tickSpider', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // V17 replay determinism: spider null for pre-V18 worlds
+  // V19 replay determinism: spider null for pre-V20 worlds
   // ---------------------------------------------------------------------------
 
-  describe('V17 replay determinism', () => {
-    it('world.spider is null when simVersion < V18 (createWorldState default before S3)', () => {
+  describe('V19 replay determinism', () => {
+    it('world.spider is null when simVersion < V20 (createWorldState default before S3)', () => {
       const world = createWorldState(42);
-      world.simVersion = SIM_VERSION_V19_AI_STATE; // pre-V18
+      world.simVersion = SIM_VERSION_V19_AI_STATE; // pre-V20
       // Spider starts null in createWorldState
       expect(world.spider).toBeNull();
     });

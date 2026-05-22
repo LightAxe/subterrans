@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
-import { createWorldState, allocateEntityId, SIM_VERSION_V13_INVARIANT_FIXES, SIM_VERSION_V18_SPIDER } from './types.js';
+import { createWorldState, allocateEntityId, SIM_VERSION_V13_INVARIANT_FIXES, SIM_VERSION_V20_SPIDER } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import { createPheromoneGrid, phGet, pheromoneGridKey } from './pheromone/pheromone-store.js';
@@ -137,7 +137,7 @@ function serializeWorldState(w: WorldState): string {
       acc[k] = { ...w.pendingChambers[k]! };
       return acc;
     }, {} as Record<string, unknown>),
-    // S3 V18 — spider entity and priority/scatter shadow fields
+    // S3 V20 — spider entity and priority/scatter shadow fields
     spider: w.spider === null ? null : { ...w.spider },
     spiderPriorityColonyId: w.spiderPriorityColonyId,
     scatterReticleTile: w.scatterReticleTile === null ? null : { ...w.scatterReticleTile },
@@ -847,7 +847,7 @@ describe('SCEN-06: V13 replay determinism under V14 code', () => {
   });
 });
 // ---------------------------------------------------------------------------
-// S3 V18 — spider replay determinism (Hunting / Striking / Rampaging)
+// S3 V20 — spider replay determinism (Hunting / Striking / Rampaging)
 //
 // The serializer now includes world.spider, spiderPriorityColonyId, and
 // scatterReticleTile, so any RNG use or non-deterministic branch in tickSpider
@@ -856,23 +856,23 @@ describe('SCEN-06: V13 replay determinism under V14 code', () => {
 // at least one non-Patrolling state during the 400-tick budget.
 // ---------------------------------------------------------------------------
 
-describe('S3 V18: spider replay determinism (Hunting → Striking → Rampaging)', () => {
+describe('S3 V20: spider replay determinism (Hunting → Striking → Rampaging)', () => {
   // Stage the spider already in Hunting state with an expired timer so tick 1
   // immediately transitions to Striking, and pre-saturate hunger so that after
   // Striking exits to Patrolling the spider immediately rampages. This drives
   // Hunting → Striking → Patrolling → Rampaging within the first ~90 ticks
   // without requiring workers on a specific tile, covering all three states
   // called out in the Codex P1 finding.
-  it('two V18 worlds from seed 7777 run byte-identical over 400 ticks through Hunting/Striking/Rampaging', () => {
+  it('two V20 worlds from seed 7777 run byte-identical over 400 ticks through Hunting/Striking/Rampaging', () => {
     const SEED = 7777;
     const TICKS = 400;
 
     function buildSpiderWorld(): WorldState {
       const world = createScenario(SEED);
-      // Fast-fail: world must be V18 so world.spider is non-null. If createScenario
-      // regresses to a sub-V18 LATEST, this assert fires before the spider!-dereference
+      // Fast-fail: world must be V20 so world.spider is non-null. 
+      // regresses to a sub-V20 LATEST, this assert fires before the spider!-dereference
       // below would throw a TypeError — clearer than an opaque null-deref.
-      expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V18_SPIDER);
+      expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V20_SPIDER);
       const spider = world.spider!;
       // Lock the lair coordinates for seed 7777. If _placeSpider changes behaviour
       // (scan order, grid dimensions, etc.), this fails loudly rather than silently
@@ -921,7 +921,7 @@ describe('S3 V18: spider replay determinism (Hunting → Striking → Rampaging)
     expect(statesVisited.has('Striking')).toBe(true);
     expect(statesVisited.has('Rampaging')).toBe(true);
 
-    // Byte-identical parity including V18 fields.
+    // Byte-identical parity including V20 fields.
     expect(serializeWorldState(worldA)).toBe(serializeWorldState(worldB));
   }, 30_000);
 });

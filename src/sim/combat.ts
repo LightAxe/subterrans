@@ -82,7 +82,9 @@ export function detectAndResolveCombat(world: WorldState, rng: Rng): void {
       }
     }
     for (let i = 0; i < count; i++) {
-      if (ants.alive[i] === 1 && !contestedSet.has(i)) {
+      // -2 is the spider-pairing sentinel; skip it here so resolveSpiderCombatOnTile
+      // can preserve windup state. The sentinel is cleared by clearSpiderPairingSentinels.
+      if (ants.alive[i] === 1 && !contestedSet.has(i) && ants.combatOpponentId[i] !== -2) {
         ants.combatOpponentId[i] = -1;
       }
     }
@@ -555,9 +557,11 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
     let swarmRetaliationTarget = -1;
     let anyVeteranPaired = false;
     for (const idx of onTile) {
+      // Veteran check is tile-wide: any -2 (including non-priority colony fighters)
+      // counts as an ongoing engagement that should not reset the spider's windup.
+      if (ants.combatOpponentId[idx] === -2) anyVeteranPaired = true;
       if (ants.task[idx] !== AntTask.Fighting || ants.colonyId[idx] !== priorityColonyId) continue;
       if (swarmRetaliationTarget === -1) swarmRetaliationTarget = idx;
-      if (ants.combatOpponentId[idx] === -2) anyVeteranPaired = true;
     }
     // swarmActive guarantees fighterCount >= SPIDER_SWARM_FIGHTER_THRESHOLD >= 1,
     // so the loop above always finds at least one priority fighter.
@@ -604,7 +608,8 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
     if (totalAntDamage > 0) {
       spider.hp -= totalAntDamage;
       if (spider.hp <= 0) {
-        // Clear all swarm fighter pairings when spider dies.
+        // Clear on-tile swarm fighter pairings immediately; off-tile sentinels
+        // are cleared by clearSpiderPairingSentinels in tickSpider the same tick.
         for (const idx of onTile) {
           if (ants.colonyId[idx] === priorityColonyId && ants.combatOpponentId[idx] === -2) {
             ants.combatOpponentId[idx] = -1;
