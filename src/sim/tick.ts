@@ -686,9 +686,10 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         if (world.simVersion < SIM_VERSION_V19_AI_STATE) break;
         if (!isTileCoord(cmd.rallyTileX, SURFACE_GRID_WIDTH)) break;
         if (!isTileCoord(cmd.rallyTileY, SURFACE_GRID_HEIGHT)) break;
-        // Validate fighterIds: a non-array (from a malformed save/replay entry) would cause
-        // setAIRallyOperation to throw TypeError on .length access. Drop the command silently.
-        if (!Array.isArray(cmd.fighterIds)) break;
+        // Validate fighterIds: non-array or empty array from a malformed save/replay entry
+        // would cause setAIRallyOperation to set operationFighterCount=0, leaving the AI
+        // stuck in Invading indefinitely (aiInvasionTick won't retry once operationKind !== 'None').
+        if (!Array.isArray(cmd.fighterIds) || cmd.fighterIds.length === 0) break;
         setAIRallyOperation(world, cmd.colonyId, cmd.rallyTileX, cmd.rallyTileY, cmd.fighterIds, cmd.kind);
         break;
       }
