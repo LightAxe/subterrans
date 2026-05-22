@@ -326,7 +326,7 @@ function _checkProbingToWarFooting(
   aiState: AIStateRecord,
 ): void {
   // Exit conditions (evaluated against committed cohort per CF-P0-005):
-  // 1. All committed fighters dead
+  // 1. All committed fighters dead (zero-cohort case → allDead=true, recovers immediately)
   // 2. All committed fighters "done" (returned home non-fighting)
   // 3. Timeout
   const allDead = cohortAliveCount(world, aiState) === 0;
@@ -360,10 +360,21 @@ function _checkInvadingToRecovery(
   // 1. Queen kill → game ends; AI stays Invading (Q-6: aiStateAtTime = "Invading")
   // 2. Cohort alive < 3 (only once a cohort has been committed)
   // 3. Timeout (only once a cohort has been committed, so entrance-retry ticks don't burn the budget)
-  if (aiState.operationFighterCount === 0) return;
+  if (aiState.operationFighterCount === 0) {
+    // No cohort committed yet (entrance-retry window). Use invasionStartTick so
+    // entrance unavailability can't lock the AI in Invading indefinitely.
+    if (world.tick - aiState.invasionStartTick >= AI_INVADING_TIMEOUT_TICKS) {
+      _endInvasion(world, aiColonyId, aiState, 'timeout');
+    }
+    return;
+  }
   const aliveCount = cohortAliveCount(world, aiState);
-  const timeout = world.tick - aiState.operationStartTick >= AI_INVADING_TIMEOUT_TICKS;
-  const rout = aliveCount < 3;
+  // Use invasionStartTick (invasion entry) not operationStartTick (cohort commit) so the
+  // entrance-retry window and the cohort fight share one budget, not two.
+  const timeout = world.tick - aiState.invasionStartTick >= AI_INVADING_TIMEOUT_TICKS;
+  // P0-2: clamp rout threshold to cohort size so a 1-2 fighter cohort doesn't
+  // immediately rout (shouldn't happen in practice; tick.ts rejects < 3 for Invasion).
+  const rout = aliveCount < Math.min(3, aiState.operationStartFighterCount);
 
   if (rout || timeout) {
     const outcome: 'fighter_rout' | 'timeout' = rout ? 'fighter_rout' : 'timeout';
@@ -376,6 +387,7 @@ function _checkRecoveryToPeacetime(
   aiColonyId: ColonyId,
   aiState: AIStateRecord,
 ): void {
+  if (aiState.recoveryEndTick === 0) return;
   if (world.tick >= aiState.recoveryEndTick) {
     aiState.state = 'Peacetime';
     aiState.enteredTick = world.tick;
@@ -492,7 +504,10 @@ export function setAIRallyOperation(
     aiState.invasionRallyTileY = rallyTileY;
     aiState.state = 'Invading';
     aiState.enteredTick = world.tick;
-    aiState.invasionStartTick = world.tick;
+    // Preserve invasionStartTick set by _checkWarFootingToInvading (tick T) so that both
+    // the pre-cohort and cohort timeout paths share a single budget from invasion entry.
+    // Only overwrite if it was somehow not set (e.g., SyncAIState-restored state).
+    if (aiState.invasionStartTick === 0) aiState.invasionStartTick = world.tick;
 
     emitEvent(world, {
       tick: world.tick,

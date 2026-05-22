@@ -20,15 +20,23 @@ import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import {
   UNDERGROUND_CEILING_ROW_Y,
   PLAYER_COLONY_ID,
+  ENEMY_START_X,
+  ENEMY_START_Y,
   AI_PROBE_INTERVAL_TICKS,
   AI_PROBE_FIGHTER_COUNT,
   AI_PROBE_FALLBACK_RADIUS_TILES,
   AI_MAX_OPERATION_FIGHTERS,
+  AI_INVADING_FIGHTER_THRESHOLD,
+  AI_INVADING_FOOD_FRAC_PCT,
+  AI_INVADING_MIN_TICK,
 } from '../sim/constants.js';
 import { colonyFoodTotal } from '../sim/colony/colony-system.js';
 import { SIM_VERSION_V19_AI_STATE } from '../sim/types.js';
 import {
   aiFighterCount,
+  aiFoodStored,
+  aiFoodCapacity,
+  NORMAL_TIER_INDEX,
 } from '../sim/ai-state.js';
 
 import { AntTask } from '../sim/enums.js';
@@ -112,10 +120,16 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
     if (aiStateRecord !== undefined) {
       const curState = aiStateRecord.state;
       if (curState === 'WarFooting') {
-        const ticksSinceLast = world.tick - aiStateRecord.lastProbeEndTick;
-        if (ticksSinceLast >= AI_PROBE_INTERVAL_TICKS
-            && aiFighterCount(world, aiColonyId) >= AI_PROBE_FIGHTER_COUNT) {
-          aiStateMachineTick_probeEntry(world, aiColonyId, colony);
+        const invasionReady =
+          world.tick >= AI_INVADING_MIN_TICK &&
+          aiFighterCount(world, aiColonyId) >= AI_INVADING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX] &&
+          aiFoodStored(world, aiColonyId) * 100 >= aiFoodCapacity(world, aiColonyId) * AI_INVADING_FOOD_FRAC_PCT;
+        if (!invasionReady) {
+          const ticksSinceLast = world.tick - aiStateRecord.lastProbeEndTick;
+          if (ticksSinceLast >= AI_PROBE_INTERVAL_TICKS
+              && aiFighterCount(world, aiColonyId) >= AI_PROBE_FIGHTER_COUNT) {
+            aiStateMachineTick_probeEntry(world, aiColonyId, colony);
+          }
         }
       }
       if (curState === 'Invading') {
@@ -524,10 +538,58 @@ const AI_STATE_RATIOS: Record<string, { forage: number; fight: number }> = {
   Recovery:   { forage: 6, fight: 4 },
 };
 
-/** Push a SyncAIState command so replay-only paths reproduce world.aiState bit-identically. */
+interface _SyncSnapshot {
+  state: string; enteredTick: number; probeCount: number; lastProbeEndTick: number;
+  invasionStartTick: number; invasionRallyTileX: number; invasionRallyTileY: number;
+  recoveryEndTick: number; operationKind: string; operationStartTick: number;
+  operationTargetTileX: number; operationTargetTileY: number;
+  operationFighterCount: number; operationStartFighterCount: number;
+  operationAttackerDeaths: number; operationDefenderDeaths: number;
+}
+const _syncCache = new Map<ColonyId, _SyncSnapshot>();
+
+export function resetAIControllerCache(): void {
+  _syncCache.clear();
+}
+
+/** Push a SyncAIState command so replay-only paths reproduce world.aiState bit-identically.
+ *  Only emits when at least one scalar field changed since the last emission. */
 function _pushSyncAIState(world: WorldState, aiColonyId: ColonyId): void {
   const rec = world.aiState.find((r) => r.colonyId === aiColonyId);
   if (rec === undefined) return;
+
+  const cached = _syncCache.get(aiColonyId);
+  const changed = cached === undefined
+    || cached.state !== rec.state
+    || cached.enteredTick !== rec.enteredTick
+    || cached.probeCount !== rec.probeCount
+    || cached.lastProbeEndTick !== rec.lastProbeEndTick
+    || cached.invasionStartTick !== rec.invasionStartTick
+    || cached.invasionRallyTileX !== rec.invasionRallyTileX
+    || cached.invasionRallyTileY !== rec.invasionRallyTileY
+    || cached.recoveryEndTick !== rec.recoveryEndTick
+    || cached.operationKind !== rec.operationKind
+    || cached.operationStartTick !== rec.operationStartTick
+    || cached.operationTargetTileX !== rec.operationTargetTileX
+    || cached.operationTargetTileY !== rec.operationTargetTileY
+    || cached.operationFighterCount !== rec.operationFighterCount
+    || cached.operationStartFighterCount !== rec.operationStartFighterCount
+    || cached.operationAttackerDeaths !== rec.operationAttackerDeaths
+    || cached.operationDefenderDeaths !== rec.operationDefenderDeaths;
+
+  if (!changed) return;
+
+  _syncCache.set(aiColonyId, {
+    state: rec.state, enteredTick: rec.enteredTick, probeCount: rec.probeCount,
+    lastProbeEndTick: rec.lastProbeEndTick, invasionStartTick: rec.invasionStartTick,
+    invasionRallyTileX: rec.invasionRallyTileX, invasionRallyTileY: rec.invasionRallyTileY,
+    recoveryEndTick: rec.recoveryEndTick, operationKind: rec.operationKind,
+    operationStartTick: rec.operationStartTick, operationTargetTileX: rec.operationTargetTileX,
+    operationTargetTileY: rec.operationTargetTileY, operationFighterCount: rec.operationFighterCount,
+    operationStartFighterCount: rec.operationStartFighterCount,
+    operationAttackerDeaths: rec.operationAttackerDeaths, operationDefenderDeaths: rec.operationDefenderDeaths,
+  });
+
   const cmd: SyncAIStateCommand = {
     type: 'SyncAIState',
     colonyId: aiColonyId,
@@ -696,12 +758,12 @@ function _selectProbeTarget(world: WorldState, aiColonyId: ColonyId): { tileX: n
   // We need a reference point: AI's entrance or colony start.
   const aiEntranceX = aiCol !== undefined && aiCol.entrances.length > 0
     ? aiCol.entrances[0]!.surfaceTileX
-    : 104; // ENEMY_START_X fallback
+    : ENEMY_START_X;
 
   for (const pile of world.foodPiles) {
     const isMarked = playerColony.priorityFoodPileId === pile.foodPileId;
     if (!isMarked) continue;
-    const dist = Math.abs(pile.tileX - aiEntranceX) + Math.abs(pile.tileY - 64);
+    const dist = Math.abs(pile.tileX - aiEntranceX) + Math.abs(pile.tileY - ENEMY_START_Y);
     if (bestPile === null || dist < bestPile.dist || (dist === bestPile.dist && pile.foodPileId < bestPile.id)) {
       bestPile = { tileX: pile.tileX, tileY: pile.tileY, id: pile.foodPileId, dist };
     }
@@ -720,7 +782,7 @@ function _selectProbeTarget(world: WorldState, aiColonyId: ColonyId): { tileX: n
     }
     if (!withinRadius) continue;
     // Pick closest to AI entrance by ascending pile ID for ties.
-    const dist = Math.abs(pile.tileX - aiEntranceX) + Math.abs(pile.tileY - 64);
+    const dist = Math.abs(pile.tileX - aiEntranceX) + Math.abs(pile.tileY - ENEMY_START_Y);
     if (bestPile === null || dist < bestPile.dist || (dist === bestPile.dist && pile.foodPileId < bestPile.id)) {
       bestPile = { tileX: pile.tileX, tileY: pile.tileY, id: pile.foodPileId, dist };
     }

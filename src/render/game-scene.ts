@@ -33,7 +33,7 @@ import { createGameLoop, type GameLoop, MS_PER_TICK } from '../platform/game-loo
 import { hasSave, loadSave, deleteSave, tickAutosave, FutureSimVersionError, manualSave } from '../platform/save.js';
 import { deserializeWorldState } from '../platform/save.js';
 import { loadSettings, saveSettings } from '../platform/settings.js';
-import { runAIController } from './ai-controller.js';
+import { runAIController, resetAIControllerCache } from './ai-controller.js';
 import { buildDebugSnapshot } from '../platform/debug-snapshot.js';
 import { downloadDebugSnapshot } from './debug-snapshot-download.js';
 import {
@@ -453,6 +453,11 @@ export class GameScene extends Phaser.Scene {
     // ants against the previous world's topology. Clear them here, before the
     // new world first ticks.
     resetFlowFieldCaches();
+    // SyncAIState change-detection cache: must be cleared alongside flow-field caches so an
+    // in-session bootFromSave whose loaded aiState matches the stale prior-session cache
+    // doesn't suppress the first-tick SyncAIState, which would cause inputLog to diverge
+    // from a fresh-page replay of the same save.
+    resetAIControllerCache();
     // Render-only ant-facing smoothing: same rationale as the flow-field
     // caches. The AntFacingCache is keyed by ant id, and the new session
     // reuses ids 0..N from scratch — a stale heading from the prior session

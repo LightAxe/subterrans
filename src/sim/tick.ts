@@ -221,7 +221,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // SyncAIState pre-pass: applied before the cap so replay determinism is
   // preserved even on high-command-count ticks (>64 commands in queue).
   // ---------------------------------------------------------------------------
-  for (let i = 0; i < commands.length; i++) {
+  if (world.simVersion >= SIM_VERSION_V19_AI_STATE) for (let i = 0; i < commands.length; i++) {
     if (commands[i]!.type === 'SyncAIState') {
       const sc = commands[i] as import('./commands.js').SyncAIStateCommand;
       const srec = world.aiState.find((r) => r.colonyId === sc.colonyId);
@@ -690,6 +690,8 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         // would cause setAIRallyOperation to set operationFighterCount=0, leaving the AI
         // stuck in Invading indefinitely (aiInvasionTick won't retry once operationKind !== 'None').
         if (!Array.isArray(cmd.fighterIds) || cmd.fighterIds.length === 0) break;
+        // Invasion cohorts < 3 fighters trigger immediate rout on first tick; reject them.
+        if (cmd.kind === 'Invasion' && cmd.fighterIds.length < 3) break;
         setAIRallyOperation(world, cmd.colonyId, cmd.rallyTileX, cmd.rallyTileY, cmd.fighterIds, cmd.kind);
         break;
       }
