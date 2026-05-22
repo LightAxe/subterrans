@@ -363,8 +363,21 @@ function _checkInvadingToRecovery(
   if (aiState.operationFighterCount === 0) {
     // No cohort committed yet (entrance-retry window). Use invasionStartTick so
     // entrance unavailability can't lock the AI in Invading indefinitely.
+    // Guard against save-restored state with invasionStartTick=0 (mirrors the guard in
+    // setAIRallyOperation at the cohort-committed path).
+    if (aiState.invasionStartTick === 0) aiState.invasionStartTick = world.tick;
     if (world.tick - aiState.invasionStartTick >= AI_INVADING_TIMEOUT_TICKS) {
-      _endInvasion(world, aiColonyId, aiState, 'timeout');
+      // setAIRallyOperation was never called (no entrance found), so no invasion_start
+      // was emitted and no rally point is set. Transition directly to Recovery without
+      // _endInvasion to avoid emitting an orphaned invasion_end event or a spurious
+      // ClearRallyPoint. advanceAIState still emits ai_state_transition after this returns.
+      aiState.state = 'Recovery';
+      aiState.enteredTick = world.tick;
+      aiState.recoveryEndTick = world.tick + AI_RECOVERY_DURATION_TICKS[NORMAL_TIER_INDEX];
+      aiState.invasionStartTick = 0;
+      aiState.invasionRallyTileX = -1;
+      aiState.invasionRallyTileY = -1;
+      _clearOperationFields(aiState);
     }
     return;
   }

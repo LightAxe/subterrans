@@ -21,22 +21,15 @@ import {
   UNDERGROUND_CEILING_ROW_Y,
   PLAYER_COLONY_ID,
   ENEMY_START_X,
-  ENEMY_START_Y,
   AI_PROBE_INTERVAL_TICKS,
   AI_PROBE_FIGHTER_COUNT,
   AI_PROBE_FALLBACK_RADIUS_TILES,
   AI_MAX_OPERATION_FIGHTERS,
-  AI_INVADING_FIGHTER_THRESHOLD,
-  AI_INVADING_FOOD_FRAC_PCT,
-  AI_INVADING_MIN_TICK,
 } from '../sim/constants.js';
 import { colonyFoodTotal } from '../sim/colony/colony-system.js';
 import { SIM_VERSION_V19_AI_STATE } from '../sim/types.js';
 import {
   aiFighterCount,
-  aiFoodStored,
-  aiFoodCapacity,
-  NORMAL_TIER_INDEX,
 } from '../sim/ai-state.js';
 
 import { AntTask } from '../sim/enums.js';
@@ -120,16 +113,10 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
     if (aiStateRecord !== undefined) {
       const curState = aiStateRecord.state;
       if (curState === 'WarFooting') {
-        const invasionReady =
-          world.tick >= AI_INVADING_MIN_TICK &&
-          aiFighterCount(world, aiColonyId) >= AI_INVADING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX] &&
-          aiFoodStored(world, aiColonyId) * 100 >= aiFoodCapacity(world, aiColonyId) * AI_INVADING_FOOD_FRAC_PCT;
-        if (!invasionReady) {
-          const ticksSinceLast = world.tick - aiStateRecord.lastProbeEndTick;
-          if (ticksSinceLast >= AI_PROBE_INTERVAL_TICKS
-              && aiFighterCount(world, aiColonyId) >= AI_PROBE_FIGHTER_COUNT) {
-            aiStateMachineTick_probeEntry(world, aiColonyId, colony);
-          }
+        const ticksSinceLast = world.tick - aiStateRecord.lastProbeEndTick;
+        if (ticksSinceLast >= AI_PROBE_INTERVAL_TICKS
+            && aiFighterCount(world, aiColonyId) >= AI_PROBE_FIGHTER_COUNT) {
+          aiStateMachineTick_probeEntry(world, aiColonyId, colony);
         }
       }
       if (curState === 'Invading') {
@@ -718,7 +705,9 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId): void {
 
     // Commit ALL alive AI fighters up to AI_MAX_OPERATION_FIGHTERS (lowest indices first).
     const fighters = _selectAllFighters(world, aiColonyId);
-    if (fighters.length === 0) return; // no fighters — retry next tick when fighters are available
+    // tick.ts rejects Invasion StartAIOperation with fighterIds.length < 3; skip early and
+    // avoid pushing a SetRallyPoint that routes uncohorted fighters toward the enemy entrance.
+    if (fighters.length < 3) return;
 
     // Push StartAIOperation so tick.ts applies setAIRallyOperation sim-side (ADR-0007).
     world.commandQueue.push({
@@ -743,8 +732,8 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId): void {
     }
   }
 
-  // When invasion ends (advanceAIState → _endInvasion resets invasionRallyTileX/Y to -1),
-  // runAIController emits ClearRallyPoint in the wasActive && nowInactive block above.
+  // When invasion ends, advanceAIState → _endInvasion emits ClearRallyPoint and resets
+  // invasionRallyTileX/Y to -1. The re-emit block above is harmless (invasionRallyTileX === -1).
 }
 
 /** Select probe target (Q3 spec). */
@@ -759,11 +748,14 @@ function _selectProbeTarget(world: WorldState, aiColonyId: ColonyId): { tileX: n
   const aiEntranceX = aiCol !== undefined && aiCol.entrances.length > 0
     ? aiCol.entrances[0]!.surfaceTileX
     : ENEMY_START_X;
+  const aiEntranceY = aiCol !== undefined && aiCol.entrances.length > 0
+    ? aiCol.entrances[0]!.surfaceTileY
+    : 0; // surface row — all current entrances have surfaceTileY=0
 
   for (const pile of world.foodPiles) {
     const isMarked = playerColony.priorityFoodPileId === pile.foodPileId;
     if (!isMarked) continue;
-    const dist = Math.abs(pile.tileX - aiEntranceX) + Math.abs(pile.tileY - ENEMY_START_Y);
+    const dist = Math.abs(pile.tileX - aiEntranceX) + Math.abs(pile.tileY - aiEntranceY);
     if (bestPile === null || dist < bestPile.dist || (dist === bestPile.dist && pile.foodPileId < bestPile.id)) {
       bestPile = { tileX: pile.tileX, tileY: pile.tileY, id: pile.foodPileId, dist };
     }
@@ -782,7 +774,7 @@ function _selectProbeTarget(world: WorldState, aiColonyId: ColonyId): { tileX: n
     }
     if (!withinRadius) continue;
     // Pick closest to AI entrance by ascending pile ID for ties.
-    const dist = Math.abs(pile.tileX - aiEntranceX) + Math.abs(pile.tileY - ENEMY_START_Y);
+    const dist = Math.abs(pile.tileX - aiEntranceX) + Math.abs(pile.tileY - aiEntranceY);
     if (bestPile === null || dist < bestPile.dist || (dist === bestPile.dist && pile.foodPileId < bestPile.id)) {
       bestPile = { tileX: pile.tileX, tileY: pile.tileY, id: pile.foodPileId, dist };
     }
