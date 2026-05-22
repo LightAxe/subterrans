@@ -34,7 +34,8 @@ function inferCause(
     // Same-grid combat (rare but possible)
     return 'InvasionKill';
   }
-  return null;
+  if (ctx.killerKind === 'Environment') return 'Starvation';
+  return null; // Ant kill with null colonyId — unattributed; show no subtitle
 }
 
 /**
