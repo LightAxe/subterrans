@@ -175,6 +175,7 @@ import {
   SURVEY_CANVAS_W,
   SURVEY_CANVAS_H,
   SURVEY_TITLE_Y,
+  SURVEY_RATING_ROW_Y,
   SURVEY_FREE_TEXT_RECT,
   SURVEY_BROKEN_CHECKBOX_RECT,
   SURVEY_UPLOAD_CHECKBOX_RECT,
@@ -1719,6 +1720,17 @@ export class UIScene extends Phaser.Scene {
       causeLabel.setDepth(41);
       this.surveyGroup.push(causeLabel);
     }
+
+    // Rating label — clarifies what 1–5 means.
+    const ratingLabel = this.add.text(
+      SURVEY_CANVAS_W / 2,
+      SURVEY_RATING_ROW_Y - 26,
+      'Rate your experience (1 = poor, 5 = great)',
+      { fontSize: '13px', fontFamily: 'monospace', color: '#aaaaaa' },
+    );
+    ratingLabel.setOrigin(0.5, 0);
+    ratingLabel.setDepth(41);
+    this.surveyGroup.push(ratingLabel);
 
     // Rating row — five buttons. Selected button renders with a green
     // fill so the choice is visible at a glance.
