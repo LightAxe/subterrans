@@ -343,9 +343,10 @@ function _checkProbingToWarFooting(
     aiState.enteredTick = world.tick;
     aiState.lastProbeEndTick = world.tick;
     aiState.probeCount += 1;
-    aiState.invasionRallyTileX = -1;
-    aiState.invasionRallyTileY = -1;
-    // Reset operation fields
+    // Intentionally preserve invasionRallyTileX/Y as the "last probe target" so that
+    // _selectInvasionEntrance can use it for proximity-based entrance selection when
+    // Invading starts later. The live colony.rallyPoint is cleared above via ClearRallyPoint.
+    // These fields will be overwritten when the next probe or invasion begins.
     _clearOperationFields(aiState);
   }
 }
