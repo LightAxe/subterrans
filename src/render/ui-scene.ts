@@ -1592,6 +1592,8 @@ export class UIScene extends Phaser.Scene {
     quitFromPauseMenu: boolean;
     showConfirmation: boolean;
     confirmedSubmit: boolean;
+    outcome: GameOutcome;
+    cause: QueenDeathCause;
   } = {
     rating: 0,
     freeText: '',
@@ -1600,6 +1602,8 @@ export class UIScene extends Phaser.Scene {
     quitFromPauseMenu: false,
     showConfirmation: false,
     confirmedSubmit: false,
+    outcome: 0, // GameOutcome.None
+    cause: null,
   };
   private surveyTextarea: HTMLTextAreaElement | null = null;
   /** Bound handler kept on the instance so addEventListener / removeEventListener
@@ -1620,6 +1624,8 @@ export class UIScene extends Phaser.Scene {
       quitFromPauseMenu: callbacks.quitFromPauseMenu,
       showConfirmation: false,
       confirmedSubmit: false,
+      outcome: callbacks.outcome ?? 0,
+      cause: callbacks.cause ?? null,
     };
     this.renderSurveyOverlay();
     this.recomputeActiveOverlay();
@@ -1680,21 +1686,39 @@ export class UIScene extends Phaser.Scene {
     bg.setDepth(40);
     this.surveyGroup.push(bg);
 
-    // Title — wording differs slightly based on which path opened the
-    // overlay so the player can tell "game ended, share thoughts" apart
-    // from "you chose to quit and give feedback".
-    const titleText = this.surveyState.quitFromPauseMenu
-      ? 'Quitting — tell us what you think'
-      : 'Thanks for playing — tell us what you think';
-    const title = this.add.text(
-      SURVEY_CANVAS_W / 2,
-      SURVEY_TITLE_Y,
-      titleText,
-      { fontSize: '22px', fontFamily: 'monospace', color: '#ffffff' },
-    );
-    title.setOrigin(0.5, 0);
-    title.setDepth(41);
-    this.surveyGroup.push(title);
+    // Title row: for natural game-over, show VICTORY/DEFEAT + cause.
+    // For pause-menu-quit, show a generic "Quitting" heading.
+    if (this.surveyState.quitFromPauseMenu) {
+      const title = this.add.text(
+        SURVEY_CANVAS_W / 2, SURVEY_TITLE_Y,
+        'Quitting — tell us what you think',
+        { fontSize: '22px', fontFamily: 'monospace', color: '#ffffff' },
+      );
+      title.setOrigin(0.5, 0);
+      title.setDepth(41);
+      this.surveyGroup.push(title);
+    } else {
+      const { text: outcomeText, color: outcomeColor } = formatOutcomeTitle(this.surveyState.outcome);
+      const outcomeLabel = this.add.text(
+        SURVEY_CANVAS_W / 2, SURVEY_TITLE_Y - 5,
+        outcomeText,
+        { fontSize: '28px', fontFamily: 'monospace', color: '#' + outcomeColor.toString(16).padStart(6, '0') },
+      );
+      outcomeLabel.setOrigin(0.5, 0);
+      outcomeLabel.setDepth(41);
+      this.surveyGroup.push(outcomeLabel);
+
+      const causeText = formatCauseSubtitle(this.surveyState.outcome, this.surveyState.cause);
+      const secondLine = causeText !== '' ? causeText : 'Tell us what you think:';
+      const causeLabel = this.add.text(
+        SURVEY_CANVAS_W / 2, SURVEY_TITLE_Y + 33,
+        secondLine,
+        { fontSize: '16px', fontFamily: 'monospace', color: '#cccccc' },
+      );
+      causeLabel.setOrigin(0.5, 0);
+      causeLabel.setDepth(41);
+      this.surveyGroup.push(causeLabel);
+    }
 
     // Rating row — five buttons. Selected button renders with a green
     // fill so the choice is visible at a glance.
@@ -2059,6 +2083,12 @@ export interface SurveyOverlayCallbacks {
    *  uses it to pick a slightly different title; the game-scene passes it
    *  through to the upload as the wire envelope's quitFromPauseMenu flag. */
   quitFromPauseMenu: boolean;
+  /** Terminal outcome to display at the top of the survey (Victory/Defeat/etc).
+   *  Omitted on pause-menu-quit path (no queen died). */
+  outcome?: GameOutcome;
+  /** Why the relevant queen died — passed to formatCauseSubtitle. Omitted on
+   *  pause-menu-quit or when cause is unknown (pre-V16 saves). */
+  cause?: QueenDeathCause;
   /** Player submitted. The callback fires the upload (fire-and-forget) then
    *  the overlay transitions to the confirmation screen — do NOT call
    *  restartGame here; wait for onNewGame / onRetry. */

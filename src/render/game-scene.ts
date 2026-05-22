@@ -151,6 +151,8 @@ interface UIScenePhase9 {
   // seed; onRetry restarts with the same seed. onSkip was removed.
   showSurveyOverlay(callbacks: {
     quitFromPauseMenu: boolean;
+    outcome?: import('../sim/game-over.js').GameOutcome;
+    cause?: import('./ui-scene-logic.js').QueenDeathCause;
     onSubmit(survey: PlaytraceSurvey & { includeSnapshot: boolean }): void;
     onNewGame(): void;
     onRetry(): void;
@@ -187,6 +189,7 @@ export class GameScene extends Phaser.Scene {
   // Phase 9 — GamePhase FSM + session fields
   private gamePhase: GamePhase = GamePhase.Playing;
   private currentOutcome: GameOutcome = GameOutcome.None;
+  private currentCause: import('./ui-scene-logic.js').QueenDeathCause = null;
   private aiColonyIds: ReturnType<typeof deriveAIColonyIds> = [];
   private readonly inputLog: SimCommand[] = [];
   private lastAutosaveMs: number = 0;
@@ -441,6 +444,7 @@ export class GameScene extends Phaser.Scene {
     hideContextMenu();
     this.lastActiveView = null;
     this.currentOutcome = GameOutcome.None;
+    this.currentCause = null;
     this.speedMultiplier = 1;
     // Re-enable autosave for the next session. The flag is set only by
     // bootFromSave's deserialize-throw catch (see issue #66 in the field
@@ -586,6 +590,7 @@ export class GameScene extends Phaser.Scene {
           const ev = evts[i];
           if (ev && ev.type === 'queen_death') { cause = ev.payload.cause; break; }
         }
+        this.currentCause = cause;
 
         const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
         // Issue #122 — when the playtrace feature is enabled, the survey
@@ -686,6 +691,8 @@ export class GameScene extends Phaser.Scene {
     }
     uiScene.showSurveyOverlay({
       quitFromPauseMenu,
+      outcome: quitFromPauseMenu ? undefined : outcome,
+      cause: quitFromPauseMenu ? undefined : this.currentCause,
       onSubmit: (survey) => {
         // Capture the live world / seed / inputLog right now, before the
         // restart path overwrites them. The snapshot is built lazily
@@ -751,6 +758,7 @@ export class GameScene extends Phaser.Scene {
       deleteSave();
     }
     this.currentOutcome = GameOutcome.None;
+    this.currentCause = null;
     this.resetSessionState();
     this.currentSeed = seed;
     this.world = createScenario(seed);
@@ -853,6 +861,7 @@ export class GameScene extends Phaser.Scene {
       deleteSave();
     }
     this.currentOutcome = GameOutcome.None;
+    this.currentCause = null;
     // bootFresh → finishBoot resumes the loop; this is the authoritative restart path.
     this.bootFresh();
     if (wasSuspended) {
