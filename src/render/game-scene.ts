@@ -121,7 +121,7 @@ import { hideContextMenu } from './context-menu-state.js';
 // UIScenePhase9 — subset of UIScene public API added in Plan 06 Task 3.
 // Typed here to avoid circular imports; UIScene implements these methods.
 interface UIScenePhase9 {
-  showGameOverOverlay(outcome: GameOutcome, onRestart: () => void): void;
+  showGameOverOverlay(outcome: GameOutcome, cause: import('./ui-scene-logic.js').QueenDeathCause, onRestart: () => void): void;
   hideGameOverOverlay(): void;
   showSavePromptOverlay(callbacks: { onContinue: () => void; onNewGame: () => void }): void;
   hideSavePromptOverlay(): void;
@@ -578,6 +578,15 @@ export class GameScene extends Phaser.Scene {
         // independent of processCameraInput and otherwise fire unguarded).
         resetPanInputState();
         resetDragState(this.dragState);
+
+        // Extract death cause from the last queen_death event emitted this tick.
+        const evts = this.world?.events ?? [];
+        let cause: import('./ui-scene-logic.js').QueenDeathCause = null;
+        for (let i = evts.length - 1; i >= 0; i--) {
+          const ev = evts[i];
+          if (ev && ev.type === 'queen_death') { cause = ev.payload.cause; break; }
+        }
+
         const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
         // Issue #122 — when the playtrace feature is enabled, the survey
         // overlay replaces the bare game-over panel at end-of-game. Skip
@@ -587,7 +596,7 @@ export class GameScene extends Phaser.Scene {
         if (this.playtraceEndpoint !== '') {
           this.openSurveyOverlay(false /* quitFromPauseMenu */);
         } else {
-          uiScene.showGameOverOverlay(outcome, () => this.restartGame());
+          uiScene.showGameOverOverlay(outcome, cause, () => this.restartGame());
         }
       },
       getMsPerTick: () => MS_PER_TICK / this.speedMultiplier,

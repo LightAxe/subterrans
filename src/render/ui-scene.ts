@@ -25,11 +25,11 @@ import { toggleView, toggleUndergroundColony } from './camera.js';
 import type { WorldState } from '../sim/types.js';
 import { HUD } from './sprites.js';
 import { GameOutcome } from '../sim/game-over.js';
-import { formatOutcomeTitle, formatKillStatsSubtitle } from './ui-scene-logic.js';
+import { formatOutcomeTitle, formatKillStatsSubtitle, formatCauseSubtitle, type QueenDeathCause } from './ui-scene-logic.js';
 import { PLAYER_COLONY_ID as _PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 
 // Re-export pure helpers for Plan 07 and external consumers
-export { formatOutcomeTitle, formatKillStatsSubtitle };
+export { formatOutcomeTitle, formatKillStatsSubtitle, formatCauseSubtitle, type QueenDeathCause };
 
 // ---------------------------------------------------------------------------
 // Plan 07 Playwright observability contract
@@ -97,7 +97,7 @@ export const SAVE_PROMPT_CONTINUE_RECT = { x: 300, y: 280, w: 120, h: 32 } as co
 /** Canvas-local rect for the SavePrompt "New Game" button. */
 export const SAVE_PROMPT_NEW_GAME_RECT = { x: 300, y: 320, w: 120, h: 32 } as const;
 /** Canvas-local rect for the GameOver "Restart" button. */
-export const GAME_OVER_RESTART_RECT    = { x: 300, y: 320, w: 120, h: 32 } as const;
+export const GAME_OVER_RESTART_RECT    = { x: 300, y: 345, w: 120, h: 32 } as const;
 import {
   createSliderDragState,
   drawSlider,
@@ -919,7 +919,7 @@ export class UIScene extends Phaser.Scene {
   // Phase 9 Plan 06 — GameOver overlay
   // ---------------------------------------------------------------------------
 
-  public showGameOverOverlay(outcome: GameOutcome, onRestart: () => void): void {
+  public showGameOverOverlay(outcome: GameOutcome, cause: QueenDeathCause, onRestart: () => void): void {
     this.hideGameOverOverlay(); // clear any prior instance first
 
     const W = 800;
@@ -931,7 +931,7 @@ export class UIScene extends Phaser.Scene {
     bg.setDepth(20);
 
     const { text: titleText, color: titleColor } = formatOutcomeTitle(outcome);
-    const title = this.add.text(W / 2, H / 2 - 60, titleText, {
+    const title = this.add.text(W / 2, H / 2 - 70, titleText, {
       fontSize: '40px',
       fontFamily: 'monospace',
       color: '#' + titleColor.toString(16).padStart(6, '0'),
@@ -939,13 +939,23 @@ export class UIScene extends Phaser.Scene {
     title.setOrigin(0.5);
     title.setDepth(21);
 
+    // Cause line — why the relevant queen died.
+    const causeText = formatCauseSubtitle(outcome, cause);
+    const causeLabel = this.add.text(W / 2, H / 2 - 25, causeText, {
+      fontSize: '20px',
+      fontFamily: 'monospace',
+      color: '#ffffff',
+    });
+    causeLabel.setOrigin(0.5);
+    causeLabel.setDepth(21);
+
     // Kill stats subtitle — read via plain-object bracket access (ADR-0006).
     // GameScene only triggers this overlay after a tick produces an outcome,
     // so getWorld() must be defined; optional-chain the colony read regardless.
     const world = this.getWorld();
     const playerColony = world?.colonies[_PLAYER_COLONY_ID];
     const killCount = playerColony?.killCount ?? 0;
-    const subtitle = this.add.text(W / 2, H / 2 - 10, formatKillStatsSubtitle(killCount), {
+    const subtitle = this.add.text(W / 2, H / 2 + 10, formatKillStatsSubtitle(killCount), {
       fontSize: '18px',
       fontFamily: 'monospace',
       color: '#cccccc',
@@ -974,7 +984,7 @@ export class UIScene extends Phaser.Scene {
     btnLabel.setOrigin(0.5);
     btnLabel.setDepth(22);
 
-    this.gameOverGroup = [bg, title, subtitle, btnBg, btnLabel];
+    this.gameOverGroup = [bg, title, causeLabel, subtitle, btnBg, btnLabel];
     this.recomputeActiveOverlay();
   }
 

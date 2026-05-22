@@ -5,6 +5,15 @@
 
 import { GameOutcome } from '../sim/game-over.js';
 
+// queen_death cause values from sim/telemetry.ts — duplicated here to avoid a
+// Phaser-free module importing from the sim telemetry bundle.
+export type QueenDeathCause =
+  | 'InvasionKill'
+  | 'SpiderRampage'
+  | 'Starvation'
+  | 'MutualDestruction'
+  | null;
+
 // ---------------------------------------------------------------------------
 // formatOutcomeTitle — maps GameOutcome to display text + color
 // ---------------------------------------------------------------------------
@@ -34,4 +43,35 @@ export function formatOutcomeTitle(outcome: GameOutcome): { text: string; color:
 export function formatKillStatsSubtitle(killCount: number): string {
   const noun = killCount === 1 ? 'enemy' : 'enemies';
   return `Your colony killed ${killCount} ${noun}`;
+}
+
+// ---------------------------------------------------------------------------
+// formatCauseSubtitle — why the relevant queen died
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns a one-line explanation of why the game ended (the losing/winning queen's
+ * death cause). Returns '' when no cause is available (pre-V16 saves or unknown).
+ */
+export function formatCauseSubtitle(outcome: GameOutcome, cause: QueenDeathCause): string {
+  switch (outcome) {
+    case GameOutcome.Victory:
+      switch (cause) {
+        case 'InvasionKill':  return 'Your fighters killed their queen';
+        case 'Starvation':    return 'Their queen starved';
+        case 'SpiderRampage': return 'Their queen was killed by a spider';
+        default:              return '';
+      }
+    case GameOutcome.Defeat:
+      switch (cause) {
+        case 'InvasionKill':  return 'Your queen was killed by the enemy';
+        case 'Starvation':    return 'Your queen starved';
+        case 'SpiderRampage': return 'Your queen was killed by a spider';
+        default:              return '';
+      }
+    case GameOutcome.MutualDestruction:
+      return 'Both queens died at the same time';
+    default:
+      return '';
+  }
 }
