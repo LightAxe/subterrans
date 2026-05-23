@@ -81,6 +81,9 @@ import {
   LARVA_TEXTURE,
   QUEEN_SPRITE_HEIGHT,
   QUEEN_SPRITE_WIDTH,
+  SPIDER_SPRITE_HEIGHT,
+  SPIDER_SPRITE_WIDTH,
+  SPIDER_TEXTURE,
   WORKER_SPRITE_HEIGHT,
   WORKER_SPRITE_WIDTH,
 } from './ant-sprite-layer.js';
@@ -251,6 +254,9 @@ export class GameScene extends Phaser.Scene {
     });
     this.load.svg(FOOD_CACHE_TEXTURE, `${spriteBase}food-cache.svg`, {
       width: FOOD_CACHE_SPRITE_WIDTH, height: FOOD_CACHE_SPRITE_HEIGHT,
+    });
+    this.load.svg(SPIDER_TEXTURE, `${spriteBase}spider.svg`, {
+      width: SPIDER_SPRITE_WIDTH, height: SPIDER_SPRITE_HEIGHT,
     });
   }
 

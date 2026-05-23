@@ -18,6 +18,7 @@ import type { GfxLike } from './draw-surface.js';
 import type {
   AntSpriteDrawOptions,
   AntSpriteLayer,
+  SpiderSpriteDrawOptions,
   StaticSpriteDrawOptions,
 } from './ant-sprite-layer.js';
 import type { WorldState } from '../sim/types.js';
@@ -101,6 +102,7 @@ class MockAntSprites implements AntSpriteLayer {
   beginFrame(): void { this.beginFrames++; }
   drawAnt(opts: AntSpriteDrawOptions): void { this.calls.push({ ...opts }); }
   drawStatic(opts: StaticSpriteDrawOptions): void { this.staticCalls.push({ ...opts }); }
+  drawSpider(_opts: SpiderSpriteDrawOptions): void { /* no-op in tests */ }
   endFrame(): void { this.endFrames++; }
   staticOfKind(kind: StaticSpriteDrawOptions['kind']): StaticSpriteDrawOptions[] {
     return this.staticCalls.filter(c => c.kind === kind);

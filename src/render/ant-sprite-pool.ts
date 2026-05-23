@@ -20,8 +20,11 @@ import {
   EGG_TEXTURE,
   FOOD_CACHE_TEXTURE,
   LARVA_TEXTURE,
+  SPIDER_SPRITE_DEPTH,
+  SPIDER_TEXTURE,
   type AntSpriteDrawOptions,
   type AntSpriteLayer,
+  type SpiderSpriteDrawOptions,
   type StaticSpriteDrawOptions,
   type StaticSpriteKind,
 } from './ant-sprite-layer.js';
@@ -85,6 +88,17 @@ export class AntSpritePool implements AntSpriteLayer {
     for (let i = this.nextIdx; i < this.pool.length; i++) {
       this.pool[i]!.setVisible(false);
     }
+  }
+
+  drawSpider(opts: SpiderSpriteDrawOptions): void {
+    const sprite = this.acquire();
+    sprite.setTexture(SPIDER_TEXTURE);
+    sprite.setPosition(opts.x, opts.y);
+    sprite.setTint(opts.tint);
+    sprite.setRotation(0);
+    sprite.setScale(1);
+    sprite.setDepth(SPIDER_SPRITE_DEPTH);
+    sprite.setVisible(true);
   }
 
   /** Test hook: current pool size (live + hidden). */

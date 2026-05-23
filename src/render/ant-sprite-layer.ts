@@ -48,12 +48,24 @@ export interface StaticSpriteDrawOptions {
   tint?: number;
 }
 
+/** S3 — Spider entity draw options. */
+export interface SpiderSpriteDrawOptions {
+  /** Screen-space pixel X of the sprite center. */
+  x: number;
+  /** Screen-space pixel Y of the sprite center. */
+  y: number;
+  /** Hunger-derived multiplicative tint: 0xCCCCCC (idle) → 0xFF3300 (rampage). */
+  tint: number;
+}
+
 export interface AntSpriteLayer {
   /** Reset the per-frame draw cursor. Hidden sprites are reused in draw order. */
   beginFrame(): void;
   drawAnt(opts: AntSpriteDrawOptions): void;
   /** Draw a static (non-rotating) entity — egg, larva, or food cache. */
   drawStatic(opts: StaticSpriteDrawOptions): void;
+  /** S3 — Draw the spider entity. */
+  drawSpider(opts: SpiderSpriteDrawOptions): void;
   /** Hide any pooled sprites not touched this frame. */
   endFrame(): void;
 }
@@ -64,6 +76,12 @@ export const ANT_TEXTURE_QUEEN  = 'ant-queen';
 export const EGG_TEXTURE        = 'egg';
 export const LARVA_TEXTURE      = 'larva';
 export const FOOD_CACHE_TEXTURE = 'food-cache';
+
+// S3 spider
+export const SPIDER_TEXTURE       = 'spider';
+export const SPIDER_SPRITE_WIDTH  = 48;
+export const SPIDER_SPRITE_HEIGHT = 48;
+export const SPIDER_SPRITE_DEPTH  = 52; // above ants (depth 50)
 
 // Rasterization sizes — keep in sync with the SVG viewBox values in
 // code/public/assets/sprites/{worker,queen}-ant.svg. Phaser's load.svg
