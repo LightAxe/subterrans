@@ -1,6 +1,7 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE, SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX, SIM_VERSION_V19_AI_STATE } from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE, SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX, SIM_VERSION_V19_AI_STATE, SIM_VERSION_V20_SPIDER } from './types.js';
+import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath } from './game-over.js';
 import { advanceAIState, setAIRallyOperation } from './ai-state.js';
@@ -27,8 +28,9 @@ import {
   UNDERGROUND_CEILING_ROW_Y,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
+  SPIDER_SCATTER_RADIUS_TILES,
 } from './constants.js';
-import { FP_SHIFT } from './fixed.js';
+import { FP_SHIFT, FP_ONE } from './fixed.js';
 import { allocateWorkers, computeDigDemand } from './behavior/allocation-system.js';
 import {
   tickReconcile,
@@ -695,10 +697,22 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         setAIRallyOperation(world, cmd.colonyId, cmd.rallyTileX, cmd.rallyTileY, cmd.fighterIds, cmd.kind);
         break;
       }
+      case 'MarkSpiderPriority': {
+        if (world.simVersion < SIM_VERSION_V20_SPIDER) break;
+        // Validate payload — save/replay objects are not schema-checked upstream.
+        if (typeof cmd.isPriority !== 'boolean') break;
+        if (!cmd.isPriority) {
+          // Clear path never needs a valid colonyId.
+          world.spiderPriorityColonyId = null;
+          break;
+        }
+        if (!Number.isInteger(cmd.colonyId) || cmd.colonyId <= 0) break;
+        world.spiderPriorityColonyId = world.spider !== null ? cmd.colonyId : null;
+        break;
+      }
       default: {
-        // Exhaustive narrowing — SimCommand is a 10-variant union; SyncAIState is
-        // filtered out by the `continue` guard above the switch, so the narrowed
-        // type here excludes it and the never-check still holds.
+        // Exhaustive narrowing — SimCommand is a 12-variant union (S3 adds MarkSpiderPriority).
+        // Silent-drop unknowns per PRD §5. Do NOT throw, do NOT log (wall-clock-adjacent).
         const _exhaustive: never = cmd;
         void _exhaustive;
         break;
@@ -1103,6 +1117,29 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // not a per-colony census mutation. Same split as Phase 7 tickDeadDiggerCleanup.
   updateFightAntTargets(world);
 
+  // Step 10d: spider priority fighter routing (S3).
+  // When any colony has spiderPriorityColonyId set, override that colony's
+  // surface fighters' targets to the spider's current tile. Runs after
+  // updateFightAntTargets so spider priority takes precedence over the rally point.
+  // Colony identity is carried in world.spiderPriorityColonyId (not a
+  // hard-coded player branch) — CLNY-08 compliant.
+  if (world.simVersion >= SIM_VERSION_V20_SPIDER &&
+      world.spiderPriorityColonyId !== null &&
+      world.spider !== null) {
+    const spiderPriorityCid = world.spiderPriorityColonyId;
+    const spTileX = world.spider.posX >> FP_SHIFT;
+    const spTileY = world.spider.posY >> FP_SHIFT;
+    const { ants } = world;
+    for (let sid = 0; sid < ants.alive.length; sid++) {
+      if (ants.alive[sid] !== 1) continue;
+      if (ants.task[sid] !== AntTask.Fighting) continue;
+      if (ants.colonyId[sid] !== spiderPriorityCid) continue;
+      if (ants.zone[sid] !== 0) continue; // surface only; underground fighters surface first
+      ants.targetPosX[sid] = (spTileX << FP_SHIFT) + (FP_ONE >> 1);
+      ants.targetPosY[sid] = (spTileY << FP_SHIFT) + (FP_ONE >> 1);
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Step 11: checkPendingChambers (NEW in Phase 7)
   //   Promote fully-excavated PendingChambers to ChamberRecords.
@@ -1122,6 +1159,37 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   //   Route SearchingFood foragers to marked food piles (priority targeting).
   // ---------------------------------------------------------------------------
   routeForagerPriority(world);
+
+  // Step 13e: spider scatter (S3) — redirect surface non-fighters within
+  // SPIDER_SCATTER_RADIUS_TILES of scatterReticleTile away from the reticle.
+  // Runs AFTER routeForagerPriority (step 13) so scatter takes precedence over
+  // food-pile priority targeting for workers on the threatened tile.
+  // Uses the shadow field written by tickSpider at step 17.5 the prior tick.
+  if (world.simVersion >= SIM_VERSION_V20_SPIDER && world.scatterReticleTile !== null) {
+    const rx = world.scatterReticleTile.x;
+    const ry = world.scatterReticleTile.y;
+    const r = SPIDER_SCATTER_RADIUS_TILES;
+    const { ants } = world;
+    for (let sid = 0; sid < ants.alive.length; sid++) {
+      if (ants.alive[sid] !== 1) continue;
+      if (ants.zone[sid] !== 0) continue; // surface only
+      if (ants.task[sid] === AntTask.Fighting) continue; // fighters hold ground
+      const ax = ants.posX[sid]! >> FP_SHIFT;
+      const ay = ants.posY[sid]! >> FP_SHIFT;
+      const manhDist = (ax > rx ? ax - rx : rx - ax) + (ay > ry ? ay - ry : ry - ay);
+      if (manhDist > r) continue;
+      // Push ant away from reticle: target = ant_tile + (ant_tile - reticle_tile).
+      let tx = ax + (ax - rx);
+      // Exact on-reticle: push north if possible, south otherwise (edge guard).
+      let ty = (ay === ry && ax === rx) ? (ay > 0 ? ay - 1 : ay + 1) : ay + (ay - ry);
+      if (tx < 0) tx = 0;
+      if (tx >= SURFACE_GRID_WIDTH) tx = SURFACE_GRID_WIDTH - 1;
+      if (ty < 0) ty = 0;
+      if (ty >= SURFACE_GRID_HEIGHT) ty = SURFACE_GRID_HEIGHT - 1;
+      ants.targetPosX[sid] = (tx << FP_SHIFT) + (FP_ONE >> 1);
+      ants.targetPosY[sid] = (ty << FP_SHIFT) + (FP_ONE >> 1);
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Step 14: Pheromone deposit (per-ant — carry-only rule enforced inside tickPheromoneDeposit)
@@ -1207,6 +1275,15 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     detectAndResolveCombat(world, rng);
   } else {
     detectAndResolveCombat(world, new Rng(world.rngState));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Step 17.5: Spider state machine (S3 / V20+).
+  // Runs after combat so spider.hp reflects this tick's damage before tickSpider
+  // evaluates the Retreating threshold.
+  // ---------------------------------------------------------------------------
+  if (world.simVersion >= SIM_VERSION_V20_SPIDER) {
+    tickSpider(world);
   }
 
   // ---------------------------------------------------------------------------

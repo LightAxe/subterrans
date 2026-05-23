@@ -237,10 +237,14 @@ function _isQueenAliveAndEmitLegacy(world: WorldState, colony: ColonyRecord): bo
         : null;
 
       let cause: 'InvasionKill' | 'SpiderRampage' | 'Starvation' | 'MutualDestruction' | null = null;
-      if (ctx !== null) {
-        if (ctx.killerColonyId !== null && ctx.killerColonyId !== ctx.currentGridColonyId) {
-          cause = 'InvasionKill';
-        }
+      if (ctx === null) {
+        cause = 'Starvation'; // no kill context = queen starved
+      } else if (ctx.killerKind === 'Spider') {
+        cause = 'SpiderRampage';
+      } else if (ctx.killerKind === 'Ant' && ctx.killerColonyId !== null) {
+        cause = 'InvasionKill';
+      } else if (ctx.killerKind === 'Environment') {
+        cause = 'Starvation';
       }
 
       const locX = ctx ? ctx.tile.x : (world.ants.posX[qid] ?? 0) >> FP_SHIFT;

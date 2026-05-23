@@ -9,7 +9,7 @@
 // No Math.random() — all randomness flows through the seeded Mulberry32 PRNG.
 // No floats — all positions use fixed-point (FP_SHIFT=8).
 
-import type { WorldState } from './types.js';
+import type { WorldState, SpiderState } from './types.js';
 import { createWorldState, allocateEntityId } from './types.js';
 import { createDefaultAIStateRecord } from './ai-state.js';
 import { createSurfaceGrid, createUndergroundGrid, SurfaceTileState, UndergroundTileState, ugSet } from './terrain.js';
@@ -42,6 +42,9 @@ import {
   WORKER_LIFESPAN_TICKS,
   ENTRANCE_SHAFT_DEPTH,
   COMBAT_HP_QUEEN,
+  SPIDER_HP_FULL,
+  SPIDER_TERRITORY_RADIUS_TILES,
+  SPIDER_HUNT_INTERVAL_TICKS,
 } from './constants.js';
 
 // ---------------------------------------------------------------------------
@@ -234,6 +237,68 @@ function initColony(
 }
 
 // ---------------------------------------------------------------------------
+// S3 — Spider lair placement (deterministic, no world.rngState draws)
+// ---------------------------------------------------------------------------
+
+/**
+ * S3 — Place spider at a deterministic lair tile derived from terrainSeed.
+ * Lair placement: surface tile not within SPIDER_TERRITORY_RADIUS_TILES of
+ * either colony start, using rejection sampling from a terrainSeed-derived hash.
+ * No rng draws from world.rngState — uses a separate hash from terrainSeed
+ * to preserve SCEN-06 replay determinism.
+ */
+function _placeSpider(world: WorldState): SpiderState {
+  const minDist = SPIDER_TERRITORY_RADIUS_TILES;
+  let h = Math.imul(world.terrainSeed, 2654435761) >>> 0;
+
+  let lairTileX = SURFACE_GRID_WIDTH >> 1;
+  let lairTileY = SURFACE_GRID_HEIGHT >> 1;
+
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
+    h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
+    h ^= h >>> 16;
+    const tx = (h >>> 0) % SURFACE_GRID_WIDTH;
+    const h2 = Math.imul(h, 0x9e3779b9) >>> 0;
+    const ty = (h2 >>> 0) % SURFACE_GRID_HEIGHT;
+
+    // Check Manhattan distance from both colony starts
+    const d1 = (tx > PLAYER_START_X ? tx - PLAYER_START_X : PLAYER_START_X - tx) +
+               (ty > PLAYER_START_Y ? ty - PLAYER_START_Y : PLAYER_START_Y - ty);
+    const d2 = (tx > ENEMY_START_X  ? tx - ENEMY_START_X  : ENEMY_START_X  - tx) +
+               (ty > ENEMY_START_Y  ? ty - ENEMY_START_Y  : ENEMY_START_Y  - ty);
+    if (d1 >= minDist && d2 >= minDist && Math.abs(d1 - d2) <= 20) {
+      lairTileX = tx;
+      lairTileY = ty;
+      break;
+    }
+  }
+
+  return {
+    state: 'Patrolling',
+    posX: lairTileX << FP_SHIFT,
+    posY: lairTileY << FP_SHIFT,
+    lairTileX,
+    lairTileY,
+    territoryRadiusTiles: SPIDER_TERRITORY_RADIUS_TILES,
+    hp: SPIDER_HP_FULL,
+    attackCooldown: 0,
+    hungerTicks: 0,
+    nextHuntTick: SPIDER_HUNT_INTERVAL_TICKS, // first hunt at tick 1200
+    huntStartTick: 0,
+    strikeStartTick: 0,
+    feedingStartTick: 0,
+    retreatStartTick: 0,
+    rampageStartTick: 0,
+    huntTargetTileX: -1,
+    huntTargetTileY: -1,
+    killsThisStrike: 0,
+    rampageKillsThisRampage: 0,
+    rampageTargetColonyId: -1,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // createScenario — one-shot world generation entry point (PRD §6a)
 // ---------------------------------------------------------------------------
 
@@ -299,6 +364,11 @@ export function createScenario(seed: number): WorldState {
   // --- S2: Initialize aiState for the enemy colony ---
   // One AIStateRecord per non-player colony with defensive defaults.
   world.aiState = [createDefaultAIStateRecord(ENEMY_COLONY_ID)];
+
+  // --- S3: Initialize spider at a deterministic lair tile ---
+  world.spider = _placeSpider(world);
+  world.spiderPriorityColonyId = null;
+  world.scatterReticleTile = null;
 
   // --- Step 9: Write back rngState ---
   world.rngState = rng.getState();

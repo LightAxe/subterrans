@@ -226,6 +226,8 @@ describe('SimCommand', () => {
             return `syncai:${cmd.colonyId}:${cmd.state}`;
           case 'StartAIOperation':
             return `startop:${cmd.colonyId}:${cmd.kind}`;
+          case 'MarkSpiderPriority':
+            return `spiderpriority:${cmd.colonyId}:${cmd.isPriority}`;
           default: {
             // Exhaustive check — TypeScript will error here if a variant is unhandled
             const _exhaustive: never = cmd;
@@ -251,6 +253,7 @@ describe('SimCommand', () => {
         operationTargetTileY: -1, operationFighterIds: [], operationFighterCount: 0,
         operationStartFighterCount: 0, operationAttackerDeaths: 0, operationDefenderDeaths: 0,
       })).toBe('syncai:2:WarFooting');
+      expect(handleCommand({ type: 'MarkSpiderPriority', colonyId: 1, isPriority: true, issuedAtTick: 10 })).toBe('spiderpriority:1:true');
     });
   });
 

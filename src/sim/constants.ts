@@ -660,3 +660,92 @@ export const AI_MAX_OPERATION_FIGHTERS = 32 as const;
  * player entrance.
  */
 export const AI_PROBE_FALLBACK_RADIUS_TILES = 40 as const;
+
+
+// ---------------------------------------------------------------------------
+// S3 — Neutral entity sentinel
+// ---------------------------------------------------------------------------
+
+/** S3 — ColonyId sentinel for neutral entities (spider). Not a real colony. */
+export const NEUTRAL_COLONY_ID = 0 as const;
+
+// ---------------------------------------------------------------------------
+// S3 — Spider tuning constants (D-32 / M3 / D-33 / D-05)
+// ---------------------------------------------------------------------------
+
+/** S3 — Spider full / max HP. */
+export const SPIDER_HP_FULL = 80 as const;
+
+/** S3 — Damage per spider strike against an ant. */
+export const SPIDER_DAMAGE = 8 as const;
+
+/**
+ * S3 — Ticks for the hunt telegraph (reticle visible) before Striking begins.
+ * 120 ticks = 6 sim-seconds at 20 Hz (flat, not tier-scaled — per Q-10).
+ */
+export const SPIDER_TELEGRAPH_TICKS = 120 as const;
+
+/** S3 — Duration of the Striking state. 80 ticks = 4 sim-seconds. */
+export const SPIDER_STRIKE_TICKS = 80 as const;
+
+/** S3 — Duration of the Feeding state. 600 ticks = 30 sim-seconds. */
+export const SPIDER_FEEDING_TICKS = 600 as const;
+
+/**
+ * S3 — Ticks between hunt cycles (Patrolling → Hunting gate).
+ * 1200 ticks = 60 sim-seconds. NOT tier-scaled (RC-P0-006 — axis B scales
+ * only SPIDER_HUNGER_MAX_TICKS; hunt cadence stays constant across difficulties).
+ */
+export const SPIDER_HUNT_INTERVAL_TICKS = 1200 as const;
+
+/**
+ * S3 — Maximum hunger ticks before Patrolling → Rampaging transition.
+ * Tier triplet [Easy, Normal, Hard]: 2700 / 1800 / 1350 ticks.
+ * Only SPIDER_HUNGER_MAX_TICKS is tier-scaled (per D-33 / M6 Axis B World Pressure).
+ * Constant-ordering invariant: each element must exceed SPIDER_HUNT_INTERVAL_TICKS (1200).
+ */
+export const SPIDER_HUNGER_MAX_TICKS = [2700, 1800, 1350] as const;
+
+/** S3 — Minimum fighters on spider's tile + priority required to activate swarm bonus. */
+export const SPIDER_SWARM_FIGHTER_THRESHOLD = 6 as const;
+
+/** S3 — Manhattan tile radius within which spider hunts for worker density. */
+export const SPIDER_HUNT_SEARCH_RADIUS_TILES = 12 as const;
+
+
+/** S3 — Minimum workers on a tile to qualify as a hunt target. */
+export const SPIDER_HUNT_MIN_TARGET_WORKERS = 2 as const;
+
+/** S3 — Manhattan scatter radius around hunt target tile. Workers within this scatter. */
+export const SPIDER_SCATTER_RADIUS_TILES = 1 as const;
+
+/** S3 — Patrolling territory radius (tiles) around lair. */
+export const SPIDER_TERRITORY_RADIUS_TILES = 24 as const;
+
+/** S3 — Brood kills in a single rampage before spider exits to Feeding. */
+export const SPIDER_RAMPAGE_KILL_QUOTA = 2 as const;
+export const SPIDER_RAMPAGE_MAX_TICKS = 1200 as const;  // timeout if no kills after ~20s
+
+/** S3 — HP threshold below which spider retreats. */
+export const SPIDER_RAMPAGE_RETREAT_HP = 20 as const;
+
+/** S3 — HP regenerated per 20 ticks during Retreating or Feeding. */
+export const SPIDER_HP_REGEN_PER_20_TICKS = 1 as const;
+
+/** S3 — Minimum ticks in Retreating before spider can return to Patrolling. */
+export const SPIDER_RETREAT_MIN_TICKS = 200 as const;
+
+/**
+ * S3 — Spider movement speed (fixed-point per tick, same FP_SHIFT=8 as ants).
+ * 256 = 1.0 tiles/tick at 20 Hz.
+ */
+export const SPIDER_SPEED = 256 as const;
+
+/**
+ * S3 — Danger pheromone deposit per tick at spider's center tile.
+ * Calibrated for DANGER_DECAY_FP = 10: equilibrium = 1280 × 256/10 ≈ 32768
+ * (half of PHEROMONE_CAP=65280). Neighbor tiles get intDiv(1280,2)=640.
+ * Option B per spec: keeps existing DANGER_DECAY_FP=10, re-derives deposit.
+ */
+export const SPIDER_DANGER_DEPOSIT = 1280 as const;
+

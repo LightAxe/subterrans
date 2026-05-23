@@ -11,9 +11,9 @@
 //      Iterate via Object.entries — NEVER Array.from(world.colonies.entries()) [there is no .entries()]
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
-import type { WorldState, EntityId, AIStateRecord } from '../sim/types.js';
-import { LEGACY_SIM_VERSION, LATEST_SIM_VERSION, SIM_VERSION_V19_AI_STATE } from '../sim/types.js';
-import { AI_MAX_OPERATION_FIGHTERS } from '../sim/constants.js';
+import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
+import { LEGACY_SIM_VERSION, LATEST_SIM_VERSION, SIM_VERSION_V19_AI_STATE, SIM_VERSION_V20_SPIDER } from '../sim/types.js';
+import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/constants.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
 import { createAntComponents } from '../sim/ant/ant-store.js';
 import type {
@@ -431,6 +431,30 @@ interface SerializedColony {
 
 interface SerializedGrid { width: number; height: number; data: number[] }
 
+/** S3 — serialized form of SpiderState. All fields are plain numbers/strings. */
+interface SerializedSpiderState {
+  state: string;
+  posX: number;
+  posY: number;
+  lairTileX: number;
+  lairTileY: number;
+  territoryRadiusTiles: number;
+  hp: number;
+  attackCooldown: number;
+  hungerTicks: number;
+  nextHuntTick: number;
+  huntStartTick: number;
+  strikeStartTick: number;
+  feedingStartTick: number;
+  retreatStartTick: number;
+  rampageStartTick: number;
+  huntTargetTileX: number;
+  huntTargetTileY: number;
+  killsThisStrike: number;
+  rampageKillsThisRampage: number;
+  rampageTargetColonyId: number;
+}
+
 /** S2 — serialized form of AIStateRecord. operationFighterIds stored as number[]. */
 interface SerializedAIStateRecord {
   colonyId: number;
@@ -495,6 +519,12 @@ export interface SerializedWorldState {
   pendingChambers: Record<string, PendingChamber>;
   /** S2 — optional for backward compat with pre-V19 saves; defaults to [] on load. */
   aiState?: SerializedAIStateRecord[];
+  /** S3 — optional for backward compat with pre-V20 saves; defaults to null on load. */
+  spider?: SerializedSpiderState | null;
+  /** S3 — optional; defaults to null on load. */
+  spiderPriorityColonyId?: number | null;
+  /** S3 — preserved through save/reload; null for pre-V20 saves. */
+  scatterReticleTile?: { x: number; y: number } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -648,6 +678,10 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
     // S0b: persist overflow counters; skip events (transient per design).
     droppedCombatKillCount: world.droppedCombatKillCount,
     droppedStructuralCount: world.droppedStructuralCount,
+    // S3 — spider entity.
+    spider: world.spider === null ? null : { ...world.spider },
+    spiderPriorityColonyId: world.spiderPriorityColonyId,
+    scatterReticleTile: world.scatterReticleTile === null ? null : { ...world.scatterReticleTile },
     // S2 — AI state machine records. operationFighterIds stored as number[].
     aiState: world.aiState.map((rec) => ({
       colonyId: rec.colonyId,
@@ -1010,6 +1044,55 @@ function deserializeAIStateArray(s: SerializedWorldState, simVersion: number): A
   return result;
 }
 
+function isValidSpiderBehaviorState(v: unknown): v is import('../sim/types.js').SpiderBehaviorState {
+  return v === 'Patrolling' || v === 'Hunting' || v === 'Striking' ||
+         v === 'Feeding' || v === 'Rampaging' || v === 'Retreating';
+}
+
+/**
+ * S3 — deserialize world.spider from the save snapshot.
+ * Pre-V20 saves omit the field; return null.
+ */
+function deserializeSpider(s: SerializedWorldState, simVersion: number): SpiderState | null {
+  if (simVersion < SIM_VERSION_V20_SPIDER) return null;
+  const raw = s.spider;
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== 'object') return null;
+  const r = raw as Partial<SerializedSpiderState>;
+  const rawState = isValidSpiderBehaviorState(r.state) ? r.state : 'Patrolling';
+  const rawHuntX = typeof r.huntTargetTileX === 'number' && Number.isInteger(r.huntTargetTileX) ? r.huntTargetTileX : -1;
+  const rawHuntY = typeof r.huntTargetTileY === 'number' && Number.isInteger(r.huntTargetTileY) ? r.huntTargetTileY : -1;
+  // Guard: Hunting/Striking require a valid (non-sentinel) hunt target. A save with
+  // state=Hunting but target=-1 (corrupt or truncated) would route the spider to (0,0)
+  // for the full telegraph duration. Fall back to Patrolling in that case.
+  const huntTargetValid = rawHuntX >= 0 && rawHuntY >= 0;
+  const safeState = (rawState === 'Hunting' || rawState === 'Striking') && !huntTargetValid
+    ? 'Patrolling'
+    : rawState;
+  return {
+    state: safeState,
+    posX: typeof r.posX === 'number' && Number.isInteger(r.posX) ? r.posX : 0,
+    posY: typeof r.posY === 'number' && Number.isInteger(r.posY) ? r.posY : 0,
+    lairTileX: typeof r.lairTileX === 'number' && Number.isInteger(r.lairTileX) ? r.lairTileX : 0,
+    lairTileY: typeof r.lairTileY === 'number' && Number.isInteger(r.lairTileY) ? r.lairTileY : 0,
+    territoryRadiusTiles: typeof r.territoryRadiusTiles === 'number' && Number.isInteger(r.territoryRadiusTiles) ? r.territoryRadiusTiles : 24,
+    hp: typeof r.hp === 'number' && Number.isInteger(r.hp) ? r.hp : 80,
+    attackCooldown: typeof r.attackCooldown === 'number' && Number.isInteger(r.attackCooldown) ? r.attackCooldown : 0,
+    hungerTicks: typeof r.hungerTicks === 'number' && Number.isInteger(r.hungerTicks) ? r.hungerTicks : 0,
+    nextHuntTick: typeof r.nextHuntTick === 'number' && Number.isInteger(r.nextHuntTick) ? r.nextHuntTick : SPIDER_HUNT_INTERVAL_TICKS,
+    huntStartTick: typeof r.huntStartTick === 'number' && Number.isInteger(r.huntStartTick) ? r.huntStartTick : 0,
+    strikeStartTick: typeof r.strikeStartTick === 'number' && Number.isInteger(r.strikeStartTick) ? r.strikeStartTick : 0,
+    feedingStartTick: typeof r.feedingStartTick === 'number' && Number.isInteger(r.feedingStartTick) ? r.feedingStartTick : 0,
+    retreatStartTick: typeof r.retreatStartTick === 'number' && Number.isInteger(r.retreatStartTick) ? r.retreatStartTick : 0,
+    rampageStartTick: typeof r.rampageStartTick === 'number' && Number.isInteger(r.rampageStartTick) ? r.rampageStartTick : 0,
+    huntTargetTileX: huntTargetValid ? rawHuntX : -1,
+    huntTargetTileY: huntTargetValid ? rawHuntY : -1,
+    killsThisStrike: typeof r.killsThisStrike === 'number' && Number.isInteger(r.killsThisStrike) ? r.killsThisStrike : 0,
+    rampageKillsThisRampage: typeof r.rampageKillsThisRampage === 'number' && Number.isInteger(r.rampageKillsThisRampage) ? r.rampageKillsThisRampage : 0,
+    rampageTargetColonyId: safeState === 'Rampaging' && typeof r.rampageTargetColonyId === 'number' && r.rampageTargetColonyId > 0 ? r.rampageTargetColonyId : -1,
+  };
+}
+
 function isValidAIState(v: unknown): v is import('../sim/types.js').AIState {
   return v === 'Peacetime' || v === 'WarFooting' || v === 'Probing' || v === 'Invading' || v === 'Recovery';
 }
@@ -1230,6 +1313,9 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     validateDepletionRecord(rawRecentlyDepleted[i], `recentlyDepletedFood[${i}]`);
   }
   const validatedRecentlyDepleted = rawRecentlyDepleted as DepletionRecord[];
+  // Hoist spider deserialization so spiderPriorityColonyId and scatterReticleTile
+  // can be forced null when spider is null (B11 fix: ghost-scatter prevention).
+  const _deserializedSpider = deserializeSpider(s, validatedSimVersion);
 
   return {
     tick: rawTick,
@@ -1296,6 +1382,18 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     pendingQueenDeathContexts: [],
     // S2 — AI state machine. Deserialize saved records, or provide defensive defaults for pre-V19 saves.
     aiState: deserializeAIStateArray(s, validatedSimVersion),
+    // S3 — spider entity; null for pre-V20 saves.
+    spider: _deserializedSpider,
+    spiderPriorityColonyId: (_deserializedSpider !== null && typeof s.spiderPriorityColonyId === 'number' && Number.isInteger(s.spiderPriorityColonyId) && s.spiderPriorityColonyId > 0) ? s.spiderPriorityColonyId : null,
+    scatterReticleTile: (() => {
+      if (_deserializedSpider === null) return null;
+      const r = s.scatterReticleTile;
+      if (r === null || r === undefined) return null;
+      if (typeof r !== 'object') return null;
+      if (typeof r.x !== 'number' || typeof r.y !== 'number') return null;
+      if (!Number.isInteger(r.x) || !Number.isInteger(r.y)) return null;
+      return { x: r.x, y: r.y };
+    })(),
     droppedCombatKillCount:
       typeof s.droppedCombatKillCount === 'number' &&
       Number.isInteger(s.droppedCombatKillCount) &&

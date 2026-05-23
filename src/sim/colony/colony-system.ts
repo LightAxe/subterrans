@@ -351,7 +351,6 @@ export function tickStarvationCheck(_world: WorldState, _colony: ColonyRecord): 
 // Backwards iteration ensures swap-remove does not skip indices when multiple
 // consecutive dead entities are encountered (PRD §4b line 388 pattern).
 // Updates cached eggCount, larvaeCount, workerCount after removal.
-// Sets colony.defeated = true when queen is dead (CLNY-08, CMBT-06 read-through).
 // ---------------------------------------------------------------------------
 
 /**
@@ -359,7 +358,9 @@ export function tickStarvationCheck(_world: WorldState, _colony: ColonyRecord): 
  *
  * Backwards iteration prevents index-skip on consecutive dead entities.
  * Updates cached count fields (eggCount, larvaeCount, workerCount) after each removal.
- * Sets colony.defeated = true if queen entity has alive === 0 (CLNY-08).
+ * colony.defeated is set by checkQueenDeath (step 18) — NOT here — so the queen_death
+ * event is emitted before the flag is set. (Starvation kills the queen at step 3;
+ * setting defeated at step 5 caused checkQueenDeath to skip event emission.)
  */
 export function tickDeathCleanup(world: WorldState, colony: ColonyRecord): void {
   const ants = world.ants;
@@ -389,11 +390,6 @@ export function tickDeathCleanup(world: WorldState, colony: ColonyRecord): void 
       colony.workers.pop();
       colony.workerCount -= 1;
     }
-  }
-
-  // Defeated flag — set when queen is dead (CLNY-08, CMBT-06 read-through)
-  if (ants.alive[colony.queenEntityId] === 0) {
-    colony.defeated = true;
   }
 }
 
