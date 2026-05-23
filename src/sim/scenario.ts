@@ -267,7 +267,7 @@ function _placeSpider(world: WorldState): SpiderState {
                (ty > PLAYER_START_Y ? ty - PLAYER_START_Y : PLAYER_START_Y - ty);
     const d2 = (tx > ENEMY_START_X  ? tx - ENEMY_START_X  : ENEMY_START_X  - tx) +
                (ty > ENEMY_START_Y  ? ty - ENEMY_START_Y  : ENEMY_START_Y  - ty);
-    if (d1 >= minDist && d2 >= minDist) {
+    if (d1 >= minDist && d2 >= minDist && Math.abs(d1 - d2) <= 20) {
       lairTileX = tx;
       lairTileY = ty;
       break;

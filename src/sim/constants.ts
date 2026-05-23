@@ -723,7 +723,7 @@ export const SPIDER_SCATTER_RADIUS_TILES = 1 as const;
 export const SPIDER_TERRITORY_RADIUS_TILES = 24 as const;
 
 /** S3 — Brood kills in a single rampage before spider exits to Feeding. */
-export const SPIDER_RAMPAGE_KILL_QUOTA = 5 as const;
+export const SPIDER_RAMPAGE_KILL_QUOTA = 2 as const;
 export const SPIDER_RAMPAGE_MAX_TICKS = 1200 as const;  // timeout if no kills after ~20s
 
 /** S3 — HP threshold below which spider retreats. */

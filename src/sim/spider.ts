@@ -26,7 +26,6 @@ import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
   PHEROMONE_CAP,
-  UNDERGROUND_CEILING_ROW_Y,
 } from './constants.js';
 import { FP_SHIFT } from './fixed.js';
 
@@ -290,36 +289,6 @@ function seedDangerPheromone(world: WorldState, spider: SpiderState): void {
     // east
     if (tileX < w - 1) { const v = phGet(grid, tileX + 1, tileY) + nb; phSet(grid, tileX + 1, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
   }
-}
-
-// ---------------------------------------------------------------------------
-// Rampaging underground danger deposit
-// ---------------------------------------------------------------------------
-
-/** During Rampaging, seed DangerTrail on the underground grid of the colony being invaded. */
-function seedUndergroundDangerPheromone(world: WorldState, spider: SpiderState, colonyId: number): void {
-  // Find the underground danger grid for this colony
-  const key = pheromoneGridKey(colonyId, PheromoneType.DangerTrail, 'underground');
-  const grid = world.pheromoneGrids[key];
-  if (grid === undefined) return;
-
-  const tileX = spider.posX >> FP_SHIFT;
-  // Underground grid row 0 is the ceiling (entrance level). The spider is on
-  // the surface, so map the deposit to the underground entrance row rather
-  // than using the surface y coordinate (which would be out of bounds for the
-  // 64-row underground grid).
-  const tileY = UNDERGROUND_CEILING_ROW_Y;
-  const center = SPIDER_DANGER_DEPOSIT;
-  const nb = SPIDER_DANGER_DEPOSIT >> 1;
-  const gw = grid.width;
-  const gh = grid.height;
-
-  // Unrolled 5-cell cross to avoid per-tick array allocation (AGENTS.md hot-loop rule).
-  if (tileX >= 0 && tileX < gw && tileY >= 0 && tileY < gh) { const v = phGet(grid, tileX, tileY) + center; phSet(grid, tileX, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
-  if (tileX >= 0 && tileX < gw && tileY - 1 >= 0) { const v = phGet(grid, tileX, tileY - 1) + nb; phSet(grid, tileX, tileY - 1, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
-  if (tileX >= 0 && tileX < gw && tileY + 1 < gh) { const v = phGet(grid, tileX, tileY + 1) + nb; phSet(grid, tileX, tileY + 1, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
-  if (tileX - 1 >= 0 && tileY >= 0 && tileY < gh) { const v = phGet(grid, tileX - 1, tileY) + nb; phSet(grid, tileX - 1, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
-  if (tileX + 1 < gw && tileY >= 0 && tileY < gh) { const v = phGet(grid, tileX + 1, tileY) + nb; phSet(grid, tileX + 1, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
 }
 
 // ---------------------------------------------------------------------------
@@ -596,12 +565,6 @@ export function tickSpider(world: WorldState): void {
     seedDangerPheromone(world, spider);
   }
 
-  // During Rampaging, seed underground danger only for the invaded colony
-  // (the one whose entrance is nearest to the spider). Seeding all colonies
-  // would create false threat signals in colonies the spider is not attacking.
-  if (spider.state === 'Rampaging' && rampageNearest !== null) {
-    seedUndergroundDangerPheromone(world, spider, rampageNearest.colonyId);
-  }
 
   // --- scatterReticleTile shadow field: written at end for next tick's step 13e ---
   if (spider.state === 'Hunting' || spider.state === 'Striking') {

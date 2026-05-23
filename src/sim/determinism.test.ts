@@ -877,8 +877,8 @@ describe('S3 V20: spider replay determinism (Hunting → Striking → Rampaging)
       // Lock the lair coordinates for seed 7777. If _placeSpider changes behaviour
       // (scan order, grid dimensions, etc.), this fails loudly rather than silently
       // breaking the distance safety bound used in the comment below.
-      expect(spider.lairTileX).toBe(115);
-      expect(spider.lairTileY).toBe(27);
+      expect(spider.lairTileX).toBe(57);
+      expect(spider.lairTileY).toBe(49);
       // Pin position to lair tile so moveTowardTile during Striking cannot drift the
       // spider relative to the workers' starting distance.
       spider.posX = spider.lairTileX << FP_SHIFT;
@@ -894,12 +894,12 @@ describe('S3 V20: spider replay determinism (Hunting → Striking → Rampaging)
       // NORMAL_TIER_INDEX=1 → threshold 1800. After Striking exits to Patrolling
       // hunger will be ≥1800, triggering an immediate Rampaging transition.
       // Safety: createScenario places STARTING_WORKERS=3 at PLAYER_START_X/Y (24,64) and
-      // ENEMY_START_X/Y (104,64). The lair is at (115,27); nearest colony workers start
+      // ENEMY_START_X/Y (104,64). The lair is at (57,49); nearest colony workers start
       // at Manhattan distance ≥48 tiles. The combined Hunting+Striking window is 200 ticks
       // (120+80); at WORKER_BASE_SPEED=0.5 tile/tick the theoretical straight-line coverage
       // is 100 tiles — exceeding the 48-tile gap. However, Foraging ants follow pheromones
       // and search randomly, not toward the spider lair; in practice they cannot reach
-      // (115,27) from (104,64) in 200 ticks of pheromone-guided wandering. The lair coord
+      // (57,49) from (24,64) in 200 ticks of pheromone-guided wandering. The lair coord
       // assertion on lines above will catch a future _placeSpider regression that places
       // the lair near a colony start before the margin narrows.
       spider.hungerTicks = SPIDER_HUNGER_MAX_TICKS[1];
