@@ -361,8 +361,6 @@ export function drawSurfaceEntities(
     const prevPxX = spiderPrev !== null ? (spiderPrev.posX * TILE_SIZE_PX) / FP_ONE : currPxX;
     const prevPxY = spiderPrev !== null ? (spiderPrev.posY * TILE_SIZE_PX) / FP_ONE : currPxY;
     // Spider has no zone field (surface-only) and never teleports between ticks,
-    // so a null-check on prev.spider suffices — no zone-match guard needed.
-    // Spider has no zone field (surface-only) and never teleports between ticks,
     // so a null-check on prev.spider suffices as the interp guard.
     const useSpiderInterp = spiderPrev !== null;
     const baseSX = useSpiderInterp ? prevPxX + (currPxX - prevPxX) * alpha : currPxX;
