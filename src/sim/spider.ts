@@ -195,7 +195,7 @@ function pickRampageTarget(world: WorldState, spider: SpiderState): number {
   let h = Math.imul(world.terrainSeed ^ spider.rampageStartTick, 2654435761) >>> 0;
   h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
   h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
-  h ^= h >>> 16;
+  h = (h ^ (h >>> 16)) >>> 0;
   // 60% → richer colony (index 0), 40% → poorer (index 1).
   return (h % 100) < 60 ? candidates[0]!.colonyId : candidates[1]!.colonyId;
 }
@@ -552,7 +552,10 @@ export function tickSpider(world: WorldState): void {
     }
     case 'Rampaging': {
       if (rampageNearest !== null) {
-        moveTowardTile(spider, rampageNearest.x, rampageNearest.y);
+        // Park one tile above the entrance so workers in zone=Surface are caught
+        // before the entrance-tile zone transition flips them to Underground.
+        const blockadeY = rampageNearest.y > 0 ? rampageNearest.y - 1 : rampageNearest.y;
+        moveTowardTile(spider, rampageNearest.x, blockadeY);
       }
       break;
     }
