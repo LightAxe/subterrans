@@ -1,6 +1,6 @@
 import { test, expect, type ConsoleMessage } from '@playwright/test';
 
-test('spider renders on surface — visual verification', async ({ page }) => {
+test('spider boot smoke — no JS errors, canvas live after 6s of sim', async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on('console', (msg: ConsoleMessage) => {
     if (msg.type() === 'error') consoleErrors.push(msg.text());

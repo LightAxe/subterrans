@@ -81,7 +81,7 @@ export const FOOD_CACHE_TEXTURE = 'food-cache';
 export const SPIDER_TEXTURE       = 'spider';
 export const SPIDER_SPRITE_WIDTH  = 48;
 export const SPIDER_SPRITE_HEIGHT = 48;
-export const SPIDER_SPRITE_DEPTH  = 52; // above ants (depth 50)
+export const SPIDER_SPRITE_DEPTH  = 52; // above ants (depth 50); exported unlike ant/static depths which are pool-internal
 
 // Rasterization sizes — keep in sync with the SVG viewBox values in
 // code/public/assets/sprites/{worker,queen}-ant.svg. Phaser's load.svg

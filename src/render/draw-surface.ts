@@ -360,16 +360,20 @@ export function drawSurfaceEntities(
     const currPxY = (curr.spider.posY * TILE_SIZE_PX) / FP_ONE;
     const prevPxX = spiderPrev !== null ? (spiderPrev.posX * TILE_SIZE_PX) / FP_ONE : currPxX;
     const prevPxY = spiderPrev !== null ? (spiderPrev.posY * TILE_SIZE_PX) / FP_ONE : currPxY;
+    // Spider has no zone field (surface-only) and never teleports between ticks,
+    // so a null-check on prev.spider suffices — no zone-match guard needed.
+    // Spider has no zone field (surface-only) and never teleports between ticks,
+    // so a null-check on prev.spider suffices as the interp guard.
     const useSpiderInterp = spiderPrev !== null;
     const baseSX = useSpiderInterp ? prevPxX + (currPxX - prevPxX) * alpha : currPxX;
     const baseSY = useSpiderInterp ? prevPxY + (currPxY - prevPxY) * alpha : currPxY;
     const spiderScreenX = baseSX - left * TILE_SIZE_PX;
     const spiderScreenY = baseSY - top  * TILE_SIZE_PX;
 
-    const spiderCullMargin = SPIDER_SPRITE_WIDTH;
-    if (spiderScreenX > -spiderCullMargin && spiderScreenX < canvasW + spiderCullMargin
-      && spiderScreenY > -spiderCullMargin && spiderScreenY < canvasH + spiderCullMargin) {
+    if (spiderScreenX > -SPIDER_SPRITE_WIDTH  && spiderScreenX < canvasW + SPIDER_SPRITE_WIDTH
+      && spiderScreenY > -SPIDER_SPRITE_HEIGHT && spiderScreenY < canvasH + SPIDER_SPRITE_HEIGHT) {
 
+      // S5 will replace NORMAL_TIER_INDEX with tierIndex(world.difficulty).
       const hungerFraction = Math.min(
         curr.spider.hungerTicks / SPIDER_HUNGER_MAX_TICKS[NORMAL_TIER_INDEX],
         1,
