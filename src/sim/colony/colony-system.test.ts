@@ -484,13 +484,15 @@ describe('tickDeathCleanup', () => {
     expect(colony.workerCount).toBe(2);
   });
 
-  it('14. queen death sets colony.defeated = true', () => {
+  it('14. queen death does NOT set colony.defeated (checkQueenDeath step 18 owns that)', () => {
     const { world, colony } = setupWorldWithQueen();
     world.ants.alive[colony.queenEntityId] = 0; // kill queen
 
     tickDeathCleanup(world, colony);
 
-    expect(colony.defeated).toBe(true);
+    // defeated is set by checkQueenDeath (step 18), not by tickDeathCleanup (step 5),
+    // so that the queen_death event is emitted before the flag is set.
+    expect(colony.defeated).toBe(false);
   });
 
   it('15. all-bucket cleanup — dead eggs/larvae/workers removed in one pass', () => {
