@@ -59,7 +59,7 @@ import {
 import type { AntComponents } from './ant-store.js';
 import { isRecentTile, pushRecentTile, clearRecentTiles, isBroodReclaimable } from './ant-store.js';
 import type { ColonyRecord, ChamberRecord } from '../colony/colony-store.js';
-import { hasCompletedChamber, isFoodChamberDepositable } from '../colony/colony-system.js';
+import { hasCompletedChamber, isFoodChamberDepositable, colonyFoodTotal } from '../colony/colony-system.js';
 import { AntTask, ForagingSubState, DiggingSubState, NursingSubState, ChamberType, PheromoneType } from '../enums.js';
 import {
   WORKER_CARRY_CAPACITY,
@@ -950,9 +950,18 @@ export function tickNurseActions(world: WorldState): void {
       // deposit. searchPauseTicks is repurposed as the dwell counter — it is
       // not used by nursing-task ants (search-pause logic only runs for
       // Foraging ants). When the dwell expires, nurse returns to Idle.
+      //
+      // Emergency exit: colony food zero → nurse must forage to prevent
+      // starvation lock. Pairs with the step-8 allocation override in
+      // tick.ts. Brood-transport priority is enforced at deposit time
+      // (depositCarriedBrood skips Attending when claimable brood remains),
+      // so no per-tick brood check is needed here.
       if (world.simVersion >= SIM_VERSION_V21_REPRODUCTION && subTask === NursingSubState.Attending) {
+        const colonyId = ants.colonyId[id]!;
+        const colony   = world.colonies[colonyId];
+        const starving = colony !== undefined && colonyFoodTotal(colony) === 0;
         ants.searchPauseTicks[id] = ants.searchPauseTicks[id]! + 1;
-        if (ants.searchPauseTicks[id]! >= NURSE_ATTEND_DWELL_TICKS) {
+        if (starving || ants.searchPauseTicks[id]! >= NURSE_ATTEND_DWELL_TICKS) {
           ants.task[id]             = AntTask.Idle;
           ants.subTask[id]          = 0;
           ants.searchPauseTicks[id] = 0;
@@ -1281,10 +1290,24 @@ function depositCarriedBrood(
   // S4 V21+: nurse enters Attending substate and dwells at the Nursery tile
   // for NURSE_ATTEND_DWELL_TICKS, accelerating adjacent larvae. Pre-V21:
   // carrier returns to Idle immediately; step 10a re-allocates next tick.
+  //
+  // Brood-transport priority (UAT fix): if uncarried brood still exists
+  // outside the Nursery (e.g., the queen laid new eggs while this nurse was
+  // carrying the previous batch), skip Attending and return to Idle immediately
+  // so step 10a re-assigns this nurse to pick up the next brood. Attending
+  // only starts when the pickup pool is empty — brood in the Queen chamber
+  // receives zero maturation benefit, so transport must come first.
+  // This check runs once per deposit (not per tick), keeping it cheap.
   if (world.simVersion >= SIM_VERSION_V21_REPRODUCTION) {
-    ants.subTask[nurseId]          = NursingSubState.Attending;
-    ants.searchPauseTicks[nurseId] = 0;
-    // task remains AntTask.Nursing — Attending is a Nursing substate
+    if (colonyHasClaimableBrood(world, colony)) {
+      ants.task[nurseId]             = AntTask.Idle;
+      ants.subTask[nurseId]          = 0;
+      ants.searchPauseTicks[nurseId] = 0;
+    } else {
+      ants.subTask[nurseId]          = NursingSubState.Attending;
+      ants.searchPauseTicks[nurseId] = 0;
+      // task remains AntTask.Nursing — Attending is a Nursing substate
+    }
   } else {
     ants.task[nurseId]    = AntTask.Idle;
     ants.subTask[nurseId] = 0;

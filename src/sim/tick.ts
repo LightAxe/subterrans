@@ -1,6 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE, SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX, SIM_VERSION_V19_AI_STATE, SIM_VERSION_V20_SPIDER } from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE, SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX, SIM_VERSION_V19_AI_STATE, SIM_VERSION_V20_SPIDER, SIM_VERSION_V21_REPRODUCTION } from './types.js';
 import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath } from './game-over.js';
@@ -42,6 +42,7 @@ import {
   checkEntranceCompletion,
   hasCompletedChamber,
   isFoodChamberDepositable,
+  colonyFoodTotal,
 } from './colony/colony-system.js';
 import {
   tickQueenEggProduction,
@@ -757,6 +758,18 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     colony.computedAllocation.dig    = alloc8.dig;
     colony.computedAllocation.fight  = alloc8.fight;
     colony.nurseCount = alloc8.nurse;
+    // S4 V21+ starvation escape hatch: when the colony has no food AND every
+    // worker is allocated as a nurse (forage===0), demote one nurse to forager
+    // so the colony isn't starvation-locked. This covers the small-colony case
+    // where computeNurseCount's ceil(workers/4) cap assigns the only worker as
+    // a nurse, leaving zero foragers regardless of food level.
+    if (world.simVersion >= SIM_VERSION_V21_REPRODUCTION &&
+        alloc8.forage === 0 && alloc8.nurse > 0 &&
+        colonyFoodTotal(colony) === 0) {
+      colony.computedAllocation.nurse  -= 1;
+      colony.computedAllocation.forage  = 1;
+      colony.nurseCount -= 1;
+    }
   }
 
   // Step 5 extension: dead-digger tile reversion (global pass, after per-colony death cleanup)
