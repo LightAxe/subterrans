@@ -98,8 +98,8 @@ function eggIntervalForColony(colony: ColonyRecord): number {
   const mouthsRaw = colony.workerCount + colony.larvaeCount + colony.eggCount + 1; // +1 queen
   const mouths    = Math.max(mouthsRaw, COLONY_SIZE_FLOOR);
   const denom     = mouths * FOOD_PER_ANT_BASELINE;
-  // eslint-disable-next-line no-restricted-syntax -- integer ×10 ratio; Math.trunc truncates to integer
-  const sX10      = Math.trunc(foodTotal * 10 / denom);
+  // eslint-disable-next-line no-restricted-syntax -- PRD §7b integer ratio; | 0 truncates to 32-bit int
+  const sX10      = (foodTotal * 10 / denom) | 0;
   if (sX10 >= 100) return QUEEN_EGG_INTERVAL_FLOOR_TICKS;
   if (sX10 >= 50)  return QUEEN_EGG_INTERVAL_FAST_TICKS;
   if (sX10 >= 30)  return QUEEN_EGG_INTERVAL_MEDIUM_TICKS;

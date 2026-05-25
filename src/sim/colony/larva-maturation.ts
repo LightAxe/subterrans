@@ -98,6 +98,10 @@ export function tickLarvaMaturation(world: WorldState, colony: ColonyRecord): vo
 
     const larvaId = colony.larvae[i]!;
     if (ants.alive[larvaId] !== 1) continue; // dead larvae cleaned up at step 5
+    // Newly hatched larvae (from this tick's tickLifecycleTransitions Loop 1) have
+    // age=0 — Loop 2 did not process them (snapLen excluded them). Skip them to
+    // preserve the "one lifecycle phase per tick" invariant.
+    if (ants.age[larvaId] === 0) continue;
 
     const larvaTileX = ants.posX[larvaId]! >> FP_SHIFT;
     const larvaTileY = ants.posY[larvaId]! >> FP_SHIFT;
