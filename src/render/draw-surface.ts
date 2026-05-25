@@ -41,6 +41,12 @@ import {
 } from './terrain-atlas.js';
 export type { AntSpriteLayer } from './ant-sprite-layer.js';
 import type { CameraState } from './camera.js';
+import {
+  SPIDER_SPRITE_HEIGHT,
+  SPIDER_SPRITE_WIDTH,
+} from './ant-sprite-layer.js';
+import { SPIDER_HUNGER_MAX_TICKS } from '../sim/constants.js';
+import { NORMAL_TIER_INDEX } from '../sim/ai-state.js';
 
 // ---------------------------------------------------------------------------
 // GfxLike — minimal Graphics interface (Phaser.GameObjects.Graphics satisfies this)
@@ -267,6 +273,20 @@ export function drawSurfaceEntities(
     }
   }
 
+  // --- Hunt reticle (S3) ---
+  // Draw a red tile overlay at the spider's locked target during Hunting/Striking.
+  // Drawn before ants so workers on the target tile are visible over the reticle.
+  // world.scatterReticleTile is the one-tick-lag shadow field written by tickSpider.
+  if (curr.scatterReticleTile !== null) {
+    const { x: rtx, y: rty } = curr.scatterReticleTile;
+    const rsx = (rtx - left) * TILE_SIZE_PX;
+    const rsy = (rty - top)  * TILE_SIZE_PX;
+    if (rsx > -TILE_SIZE_PX && rsx < canvasW && rsy > -TILE_SIZE_PX && rsy < canvasH) {
+      gfx.fillStyle(0xFF2200, 0.45);
+      gfx.fillRect(rsx, rsy, TILE_SIZE_PX, TILE_SIZE_PX);
+    }
+  }
+
   // --- Ants on surface (zone === 0) ---
   // Wrong-plane flicker guard (09 render polish): when an ant's zone flipped
   // between prev and curr (e.g. queen descending through an entrance), OR when
@@ -329,6 +349,51 @@ export function drawSurfaceEntities(
       // S1: fighters render slightly larger (+1px equivalent at TILE_SIZE_PX=16).
       scale: isFighter && !isQueen ? 1.25 : 1.0,
     });
+  }
+
+  // --- Spider sprite + hunger ring (S3) ---
+  // Drawn above ants (SPIDER_SPRITE_DEPTH = 52 > ANT_SPRITE_DEPTH = 50).
+  // Spider is always on the surface regardless of behavior state.
+  if (curr.spider !== null) {
+    const spiderPrev = prev.spider;
+    const currPxX = (curr.spider.posX * TILE_SIZE_PX) / FP_ONE;
+    const currPxY = (curr.spider.posY * TILE_SIZE_PX) / FP_ONE;
+    const prevPxX = spiderPrev !== null ? (spiderPrev.posX * TILE_SIZE_PX) / FP_ONE : currPxX;
+    const prevPxY = spiderPrev !== null ? (spiderPrev.posY * TILE_SIZE_PX) / FP_ONE : currPxY;
+    // Spider has no zone field (surface-only) and never teleports between ticks,
+    // so a null-check on prev.spider suffices as the interp guard.
+    const useSpiderInterp = spiderPrev !== null;
+    const baseSX = useSpiderInterp ? prevPxX + (currPxX - prevPxX) * alpha : currPxX;
+    const baseSY = useSpiderInterp ? prevPxY + (currPxY - prevPxY) * alpha : currPxY;
+    const spiderScreenX = baseSX - left * TILE_SIZE_PX;
+    const spiderScreenY = baseSY - top  * TILE_SIZE_PX;
+
+    if (spiderScreenX > -SPIDER_SPRITE_WIDTH  && spiderScreenX < canvasW + SPIDER_SPRITE_WIDTH
+      && spiderScreenY > -SPIDER_SPRITE_HEIGHT && spiderScreenY < canvasH + SPIDER_SPRITE_HEIGHT) {
+
+      // S5 will replace NORMAL_TIER_INDEX with tierIndex(world.difficulty).
+      const hungerFraction = Math.min(
+        curr.spider.hungerTicks / SPIDER_HUNGER_MAX_TICKS[NORMAL_TIER_INDEX],
+        1,
+      );
+      const tint = lerpColor(0xCCCCCC, 0xFF3300, hungerFraction);
+
+      sprites.drawSpider({ x: spiderScreenX, y: spiderScreenY, tint });
+
+      // Hunger ring: appears at 70% hunger, fades in to full alpha at 100%.
+      if (hungerFraction > 0.7) {
+        const ringAlpha = ((hungerFraction - 0.7) / 0.3) * 0.85;
+        const rl = Math.round(spiderScreenX - SPIDER_SPRITE_WIDTH  / 2);
+        const rt = Math.round(spiderScreenY - SPIDER_SPRITE_HEIGHT / 2);
+        const rw = SPIDER_SPRITE_WIDTH;
+        const rh = SPIDER_SPRITE_HEIGHT;
+        gfx.fillStyle(0xFF4400, ringAlpha);
+        gfx.fillRect(rl,          rt,          rw, 2);
+        gfx.fillRect(rl,          rt + rh - 2, rw, 2);
+        gfx.fillRect(rl,          rt + 2,      2,  rh - 4);
+        gfx.fillRect(rl + rw - 2, rt + 2,      2,  rh - 4);
+      }
+    }
   }
 
   // --- Rally-point marker (Phase 9 usability fix) ---

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" shape-rendering="crispEdges">
+  <g fill="#ffffff">
+    <!-- Legs drawn first; body ellipses overlap the inner joints naturally -->
+    <!-- Top-side legs L1-L4, front to back -->
+    <rect x="10" y="13" width="2" height="5"/>
+    <rect x="3"  y="11" width="9" height="2"/>
+    <rect x="16" y="10" width="2" height="7"/>
+    <rect x="5"  y="8"  width="11" height="2"/>
+    <rect x="27" y="10" width="2" height="7"/>
+    <rect x="29" y="8"  width="11" height="2"/>
+    <rect x="35" y="13" width="2" height="5"/>
+    <rect x="36" y="11" width="9" height="2"/>
+    <!-- Bottom-side legs L5-L8, front to back (mirror of top) -->
+    <rect x="10" y="30" width="2" height="5"/>
+    <rect x="3"  y="35" width="9" height="2"/>
+    <rect x="16" y="31" width="2" height="7"/>
+    <rect x="5"  y="38" width="11" height="2"/>
+    <rect x="27" y="31" width="2" height="7"/>
+    <rect x="29" y="38" width="11" height="2"/>
+    <rect x="35" y="30" width="2" height="5"/>
+    <rect x="36" y="35" width="9" height="2"/>
+    <!-- Chelicerae (forward fangs) -->
+    <rect x="5" y="20" width="4" height="2"/>
+    <rect x="5" y="26" width="4" height="2"/>
+    <!-- Body segments -->
+    <ellipse cx="17" cy="24" rx="9"  ry="8"/>
+    <ellipse cx="35" cy="24" rx="11" ry="10"/>
+  </g>
+  <!-- Eyes (black - stay dark regardless of hunger tint) -->
+  <circle cx="11" cy="20" r="1.5" fill="#000000"/>
+  <circle cx="11" cy="28" r="1.5" fill="#000000"/>
+</svg>
