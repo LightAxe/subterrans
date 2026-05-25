@@ -47,6 +47,7 @@ import {
   tickQueenEggProduction,
   tickLifecycleTransitions,
 } from './colony/lifecycle-system.js';
+import { tickLarvaMaturation } from './colony/larva-maturation.js';
 import {
   tickPheromoneDeposit,
   tickAntMovement,
@@ -744,6 +745,8 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
 
     // Step 7: Lifecycle transitions (egg→larva→worker aging + promotion)
     tickLifecycleTransitions(world, colony);
+    // S4 V21+: nurse-acceleration pass (no-op pre-V21; see larva-maturation.ts)
+    tickLarvaMaturation(world, colony);
 
     // Step 8: Behavior allocation (re-run after lifecycle; handles new matures + deaths from step 7)
     const brood8 = colony.eggCount + colony.larvaeCount;

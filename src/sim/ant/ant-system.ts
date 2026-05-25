@@ -45,6 +45,7 @@ import {
   SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX,
   SIM_VERSION_V17_COMBAT_AGGRO,
   SIM_VERSION_V18_INVADER_WALL_AWARE_STEP,
+  SIM_VERSION_V21_REPRODUCTION,
   type WorldState,
 } from '../types.js';
 import {
@@ -86,6 +87,7 @@ import {
   FOOD_TRAIL_DEPOSIT,
   FOOD_TRAIL_DEPOSIT_V14,
   FIGHT_AGGRO_RADIUS,
+  NURSE_ATTEND_DWELL_TICKS,
 } from '../constants.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { Rng } from '../rng.js';
@@ -944,6 +946,20 @@ export function tickNurseActions(world: WorldState): void {
         }
         continue;
       }
+      // S4 V21+ Attending handler: nurse dwells at the Nursery tile after
+      // deposit. searchPauseTicks is repurposed as the dwell counter — it is
+      // not used by nursing-task ants (search-pause logic only runs for
+      // Foraging ants). When the dwell expires, nurse returns to Idle.
+      if (world.simVersion >= SIM_VERSION_V21_REPRODUCTION && subTask === NursingSubState.Attending) {
+        ants.searchPauseTicks[id] = ants.searchPauseTicks[id]! + 1;
+        if (ants.searchPauseTicks[id]! >= NURSE_ATTEND_DWELL_TICKS) {
+          ants.task[id]             = AntTask.Idle;
+          ants.subTask[id]          = 0;
+          ants.searchPauseTicks[id] = 0;
+        }
+        continue;
+      }
+
       if (subTask !== NursingSubState.MovingToBrood) continue;
 
       const colonyId = ants.colonyId[id]!;
@@ -1262,9 +1278,17 @@ function depositCarriedBrood(
   // Clear both ends of the carry pointer.
   ants.carryingBroodId[nurseId] = -1;
   ants.carriedBy[broodId]       = -1;
-  // Carrier returns to Idle; step 10a next tick re-allocates per ratio.
-  ants.task[nurseId]    = AntTask.Idle;
-  ants.subTask[nurseId] = 0;
+  // S4 V21+: nurse enters Attending substate and dwells at the Nursery tile
+  // for NURSE_ATTEND_DWELL_TICKS, accelerating adjacent larvae. Pre-V21:
+  // carrier returns to Idle immediately; step 10a re-allocates next tick.
+  if (world.simVersion >= SIM_VERSION_V21_REPRODUCTION) {
+    ants.subTask[nurseId]          = NursingSubState.Attending;
+    ants.searchPauseTicks[nurseId] = 0;
+    // task remains AntTask.Nursing — Attending is a Nursing substate
+  } else {
+    ants.task[nurseId]    = AntTask.Idle;
+    ants.subTask[nurseId] = 0;
+  }
 }
 
 /**
@@ -1426,6 +1450,8 @@ export function getTaskDirection(
   }
 
   if (task === AntTask.Nursing) {
+    // S4 V21+ Attending nurses are stationary at their Nursery tile.
+    if (ants.subTask[antId] === NursingSubState.Attending) return { dx: 0, dy: 0 };
     // colonyId keys the nursing chamber flow-field (indexed by the nurse's
     // OWN colony — nurses never cross grids); gridColonyId keys the
     // underground grid the ant currently occupies (Phase 09.1 Chunk 0).

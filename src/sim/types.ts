@@ -259,7 +259,13 @@ export const SIM_VERSION_V19_AI_STATE = 19 as const;
  * Adds world.spider (SpiderState | null), world.spiderPriorityColonyId, world.scatterReticleTile.
  */
 export const SIM_VERSION_V20_SPIDER = 20 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V20_SPIDER;
+/**
+ * V21 (S4) — Reproduction lever: surplus-scaled egg interval, nurse Attending
+ * substate with maturation acceleration, nursery throughput cap.
+ * No new WorldState fields; all state derived from existing food/colony/nurse data.
+ */
+export const SIM_VERSION_V21_REPRODUCTION = 21 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V21_REPRODUCTION;
 
 
 /**

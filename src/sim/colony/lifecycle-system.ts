@@ -27,12 +27,20 @@ import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import {
   QUEEN_EGG_INTERVAL_TICKS,
   QUEEN_EGG_FOOD_THRESHOLD,
+  QUEEN_EGG_INTERVAL_DISABLED,
+  QUEEN_EGG_INTERVAL_BASE_TICKS,
+  QUEEN_EGG_INTERVAL_MEDIUM_TICKS,
+  QUEEN_EGG_INTERVAL_FAST_TICKS,
+  QUEEN_EGG_INTERVAL_FLOOR_TICKS,
+  COLONY_SIZE_FLOOR,
+  FOOD_PER_ANT_BASELINE,
   EGG_HATCH_TICKS,
   LARVA_MATURE_TICKS,
   WORKER_BASE_SPEED,
   WORKER_LIFESPAN_TICKS,
   STARVATION_GRACE_TICKS,
 } from '../constants.js';
+import { SIM_VERSION_V21_REPRODUCTION } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // tickQueenEggProduction — CLNY-01
@@ -74,9 +82,36 @@ import {
 // No RNG parameter — egg production is fully deterministic.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// eggIntervalForColony — S4 V21+ surplus-scaled egg interval
+//
+// Returns QUEEN_EGG_INTERVAL_DISABLED (-1) when food is below the gate
+// threshold (Gate 2 absorbs this; returning -1 keeps Gate 1 clean).
+// Returns one of four interval constants based on surplus ratio (×10
+// integer arithmetic — no floats, no intDiv, positive operands safe for
+// Math.trunc).
+// ---------------------------------------------------------------------------
+
+function eggIntervalForColony(colony: ColonyRecord): number {
+  const foodTotal = colonyFoodTotal(colony);
+  if (foodTotal < QUEEN_EGG_FOOD_THRESHOLD) return QUEEN_EGG_INTERVAL_DISABLED;
+  const mouthsRaw = colony.workerCount + colony.larvaeCount + colony.eggCount + 1; // +1 queen
+  const mouths    = Math.max(mouthsRaw, COLONY_SIZE_FLOOR);
+  const denom     = mouths * FOOD_PER_ANT_BASELINE;
+  // eslint-disable-next-line no-restricted-syntax -- integer ×10 ratio; Math.trunc truncates to integer
+  const sX10      = Math.trunc(foodTotal * 10 / denom);
+  if (sX10 >= 100) return QUEEN_EGG_INTERVAL_FLOOR_TICKS;
+  if (sX10 >= 50)  return QUEEN_EGG_INTERVAL_FAST_TICKS;
+  if (sX10 >= 30)  return QUEEN_EGG_INTERVAL_MEDIUM_TICKS;
+  return QUEEN_EGG_INTERVAL_BASE_TICKS;
+}
+
 export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord): void {
-  // Gate 1: tick-modulo interval
-  if ((world.tick % QUEEN_EGG_INTERVAL_TICKS) !== 0) return;
+  // Gate 1: tick-modulo interval (S4 V21+: surplus-scaled; pre-V21: static)
+  const eggInterval = world.simVersion >= SIM_VERSION_V21_REPRODUCTION
+    ? eggIntervalForColony(colony) : QUEEN_EGG_INTERVAL_TICKS;
+  if (eggInterval < 0) return; // QUEEN_EGG_INTERVAL_DISABLED sentinel
+  if ((world.tick % eggInterval) !== 0) return;
 
   // Gate 2: food threshold — issue #15: read TOTAL stockpile (entrance pool +
   // every FoodStorage chamber.foodStored). Pre-#15 this read colony.foodStored
