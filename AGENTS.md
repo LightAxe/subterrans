@@ -62,6 +62,15 @@ Branch names: `feat/<short-description>`, `fix/<short-description>`, `chore/<sho
 
 This applies to AI agents working in this repo as well as human contributors. The size of the change is not the criterion.
 
+**AI agents must use the `/ship` workflow before pushing any branch.** The workflow is:
+1. Implement the work.
+2. Run an internal code review loop: spawn a fresh review subagent (no prior session context) with only the current `git diff`, have it identify bugs and edge cases, address any findings, and repeat until the agent reports zero new issues.
+3. Commit and push, then open a PR.
+4. Post `@codex review` on the PR.
+5. Wait for the external review loop: poll for a `THUMBS_UP` reaction from `chatgpt-codex-connector[bot]`; if findings are posted, address them, re-run the internal review loop, push, and re-trigger `@codex review`.
+
+**Never push without completing step 2 (internal review agent pass).** The agent must be spawned fresh with no prior session context and must see the actual diff — reviewing from memory does not count.
+
 ## PR Review Process
 
 Every PR is reviewed by at least two independent AI code reviewers:
