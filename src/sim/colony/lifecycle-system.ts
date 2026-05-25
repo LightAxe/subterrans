@@ -87,9 +87,11 @@ import { SIM_VERSION_V21_REPRODUCTION } from '../types.js';
 //
 // Returns QUEEN_EGG_INTERVAL_DISABLED (-1) when food is below the gate
 // threshold (Gate 2 absorbs this; returning -1 keeps Gate 1 clean).
-// Returns one of four interval constants based on surplus ratio (×10
-// integer arithmetic — no floats, no intDiv, positive operands safe for
-// Math.trunc).
+// Returns one of four interval constants based on surplus ratio. Uses pure
+// integer multiplication comparisons to avoid division and bitwise truncation:
+//   food10 >= K * denom  ↔  surplus ratio ≥ K/10
+// JS numbers are 64-bit floats; integers up to 2^53 are exact, so even
+// extreme stockpiles cannot overflow or round incorrectly.
 // ---------------------------------------------------------------------------
 
 function eggIntervalForColony(colony: ColonyRecord): number {
@@ -98,11 +100,10 @@ function eggIntervalForColony(colony: ColonyRecord): number {
   const mouthsRaw = colony.workerCount + colony.larvaeCount + colony.eggCount + 1; // +1 queen
   const mouths    = Math.max(mouthsRaw, COLONY_SIZE_FLOOR);
   const denom     = mouths * FOOD_PER_ANT_BASELINE;
-  // eslint-disable-next-line no-restricted-syntax -- PRD §7b integer ratio; | 0 truncates to 32-bit int
-  const sX10      = (foodTotal * 10 / denom) | 0;
-  if (sX10 >= 100) return QUEEN_EGG_INTERVAL_FLOOR_TICKS;
-  if (sX10 >= 50)  return QUEEN_EGG_INTERVAL_FAST_TICKS;
-  if (sX10 >= 30)  return QUEEN_EGG_INTERVAL_MEDIUM_TICKS;
+  const food10    = foodTotal * 10; // multiply once; no division, no | 0 truncation
+  if (food10 >= 100 * denom) return QUEEN_EGG_INTERVAL_FLOOR_TICKS;
+  if (food10 >=  50 * denom) return QUEEN_EGG_INTERVAL_FAST_TICKS;
+  if (food10 >=  30 * denom) return QUEEN_EGG_INTERVAL_MEDIUM_TICKS;
   return QUEEN_EGG_INTERVAL_BASE_TICKS;
 }
 
