@@ -112,7 +112,15 @@ export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord):
   const eggInterval = world.simVersion >= SIM_VERSION_V21_REPRODUCTION
     ? eggIntervalForColony(colony) : QUEEN_EGG_INTERVAL_TICKS;
   if (eggInterval < 0) return; // QUEEN_EGG_INTERVAL_DISABLED sentinel
-  if ((world.tick % eggInterval) !== 0) return;
+  // V21+: elapsed-since-last-lay prevents spurious double-lays when the surplus
+  // tier changes mid-cycle (e.g., interval drops from 300→200 at tick 301 after
+  // a lay at tick 300; modulo would fire again at tick 400, only 100 ticks later).
+  // Pre-V21: static interval — modulo is safe and backward-compatible.
+  if (world.simVersion >= SIM_VERSION_V21_REPRODUCTION) {
+    if (world.tick - colony.queenLastEggTick < eggInterval) return;
+  } else {
+    if ((world.tick % eggInterval) !== 0) return;
+  }
 
   // Gate 2: food threshold — issue #15: read TOTAL stockpile (entrance pool +
   // every FoodStorage chamber.foodStored). Pre-#15 this read colony.foodStored
@@ -240,6 +248,7 @@ export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord):
 
   colony.eggs.push(eggId);
   colony.eggCount += 1;
+  colony.queenLastEggTick = world.tick; // update after lay so next interval is measured from here
 }
 
 // ---------------------------------------------------------------------------

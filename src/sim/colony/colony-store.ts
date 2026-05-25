@@ -17,6 +17,7 @@ import {
   DEFAULT_BEHAVIOR_RATIO,
   STARVATION_GRACE_TICKS,
   RECONCILE_INTERVAL_TICKS,
+  QUEEN_EGG_INTERVAL_BASE_TICKS,
 } from '../constants.js';
 
 // ---------------------------------------------------------------------------
@@ -149,6 +150,14 @@ export interface ColonyRecord {
    *  Read by routeForagerPriority; mutated by the MarkFoodPile command handler.
    *  Initialized to null in createColonyRecord. Round-trips through copyWorldState + save. */
   priorityFoodPileId: FoodPileId | null;
+
+  /** S4 V21+ — world tick at which the queen most recently laid an egg.
+   *  Used by tickQueenEggProduction to enforce the selected interval as elapsed
+   *  ticks since the last lay, not a global modulo (which misfires when the
+   *  surplus tier changes mid-cycle). Initialized to -QUEEN_EGG_INTERVAL_BASE_TICKS
+   *  so the queen can lay on tick 0 (0 - (-300) = 300 ≥ 300). Round-trips
+   *  through copyWorldState + save. */
+  queenLastEggTick: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +216,7 @@ export function createColonyRecord(colonyId: ColonyId, queenEntityId: EntityId):
     reconcileCountdown:    RECONCILE_INTERVAL_TICKS,
     killCount:             0,
     priorityFoodPileId:    null,
+    queenLastEggTick:      -QUEEN_EGG_INTERVAL_BASE_TICKS,
   }) as unknown as ColonyRecord;
 }
 

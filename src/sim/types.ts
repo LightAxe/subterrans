@@ -767,6 +767,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     d.reconcileCountdown   = s.reconcileCountdown;
     d.killCount            = s.killCount;
     d.priorityFoodPileId   = s.priorityFoodPileId;
+    d.queenLastEggTick     = s.queenLastEggTick;
 
     // Bucket arrays — reuse via length truncation + index copy (no new array)
     d.eggs.length = s.eggs.length;

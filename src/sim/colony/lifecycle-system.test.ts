@@ -131,9 +131,12 @@ describe('tickQueenEggProduction — CLNY-01', () => {
     expect(colony.eggCount).toBe(0);
   });
 
-  it('4. does NOT produce an egg when tick is off-cycle (tick=1)', () => {
+  it('4. does NOT produce an egg when fewer ticks have elapsed than the interval', () => {
+    // S4 V21+: gate is elapsed-since-last-lay, not global modulo.
+    // Simulate a queen who laid 1 tick ago — interval hasn't elapsed yet.
     const { world, colony } = setupWorldWithQueen();
-    world.tick = 1; // 1 % 300 !== 0
+    world.tick = 1;
+    colony.queenLastEggTick = 0; // laid 1 tick ago; 1 < 300 → no lay
 
     tickQueenEggProduction(world, colony);
 

@@ -438,6 +438,12 @@ describe('D-29 WarFooting — reproduction speed advantage', () => {
       const { world: worldA, colony: colonyA } = makeD29World(LEAN_FOOD);
       const { world: worldB, colony: colonyB } = makeD29World(RICH_FOOD_10X);
 
+      // Reset queenLastEggTick so neither world lays at t=1 (default=-300 would
+      // give elapsed=301>=300, firing both worlds at the same tick and masking the
+      // interval difference). Setting to 0 means lean lays at t=300, rich at t=150.
+      colonyA.queenLastEggTick = 0;
+      colonyB.queenLastEggTick = 0;
+
       let reachTickA = -1;
       let reachTickB = -1;
 
