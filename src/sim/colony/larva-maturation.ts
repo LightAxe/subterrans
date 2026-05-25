@@ -118,7 +118,7 @@ export function tickLarvaMaturation(world: WorldState, colony: ColonyRecord): vo
     const larvaTileX = ants.posX[larvaId]! >> FP_SHIFT;
     const larvaTileY = ants.posY[larvaId]! >> FP_SHIFT;
 
-    const nurseId = findAdjacentAttendingOrFeedingNurse(
+    const nurseId = findAdjacentAttendingNurse(
       ants,
       world.nextEntityId,
       colony.colonyId,
@@ -172,13 +172,20 @@ export function tickLarvaMaturation(world: WorldState, colony: ColonyRecord): vo
 // ---------------------------------------------------------------------------
 
 /**
- * Find the lowest-entity-ID nurse in NursingSubState.Attending or Feeding that
- * is within Manhattan distance 1 of (larvaTileX, larvaTileY) and has not yet
- * been used this tick (stamp check).
+ * Find the lowest-entity-ID nurse in NursingSubState.Attending that is within
+ * Manhattan distance 1 of (larvaTileX, larvaTileY) and has not yet been used
+ * this tick (stamp check).
+ *
+ * Only Attending nurses qualify — they have already deposited their brood in
+ * the Nursery and are dwelling there to accelerate development. Feeding nurses
+ * (carrying brood in transit) are excluded: they may be anywhere along the
+ * Queen-chamber → Nursery route, so counting them would grant acceleration
+ * credit before brood is in the Nursery, and potentially to larvae that are
+ * not yet in the Nursery environment.
  *
  * Returns -1 if no eligible nurse is found.
  */
-function findAdjacentAttendingOrFeedingNurse(
+function findAdjacentAttendingNurse(
   ants:         AntComponents,
   entityCount:  number,
   colonyId:     number,
@@ -192,8 +199,7 @@ function findAdjacentAttendingOrFeedingNurse(
     if (ants.alive[j] !== 1) continue;
     if (ants.colonyId[j] !== colonyId) continue;
     if (ants.task[j] !== AntTask.Nursing) continue;
-    const st = ants.subTask[j]!;
-    if (st !== NursingSubState.Attending && st !== NursingSubState.Feeding) continue;
+    if (ants.subTask[j] !== NursingSubState.Attending) continue;
     if (usedStamp[j] === stamp) continue;
     const nx = ants.posX[j]! >> FP_SHIFT;
     const ny = ants.posY[j]! >> FP_SHIFT;
