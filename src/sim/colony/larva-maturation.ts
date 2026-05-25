@@ -51,6 +51,18 @@ import { MAX_ENTITIES } from '../constants.js';
 
 // ---------------------------------------------------------------------------
 // Module-level scratch — allocated once, not serialized, not per-tick.
+//
+// Save/load safety: this scratch holds NO inter-tick state. Its only role is
+// to track which nurses have already been claimed as accelerators within the
+// current tick's backward loop. Once tickLarvaMaturation returns, all nurse
+// claims are already reflected in WorldState (ants.age, ants.task, etc.) and
+// the stamp values are stale. On reload from a snapshot, currentStamp resets
+// to 0 and usedStamp is all-zeros; the first post-load tick increments stamp
+// to 1 and correctly sees no nurses pre-claimed — identical to a fresh start.
+//
+// This is the same pattern used throughout ant-system.ts (Issues #67, #69) for
+// hot-path scratch objects: one allocation at module load, stamp-or-fill per tick,
+// never serialized, deterministic within any contiguous run or replay.
 // ---------------------------------------------------------------------------
 
 const nurseScratch = {
