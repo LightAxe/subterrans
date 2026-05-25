@@ -1202,13 +1202,53 @@ function findUncarriedBroodOnTile(
 }
 
 /**
+ * Compute a deposit position within a single Nursery `chamber`, spread
+ * across its Open tiles by `broodId % openCount` in row-major order.
+ * Returns `null` if no underground grid or no Open tile exists in that chamber.
+ *
+ * Used by `depositCarriedBrood` (v10+) to keep brood in the specific chamber
+ * the nurse physically arrived at, preventing cross-chamber teleportation.
+ */
+function computeDepositPositionInChamber(
+  world: WorldState,
+  colony: ColonyRecord,
+  broodId: number,
+  chamber: ChamberRecord,
+): { x: number; y: number } | null {
+  const underground = world.undergroundGrids[colony.colonyId];
+  if (!underground) return null;
+  const bx = chamber.posX >> FP_SHIFT;
+  const by = chamber.posY >> FP_SHIFT;
+  let openCount = 0;
+  for (let ty = 0; ty < chamber.height; ty++) {
+    for (let tx = 0; tx < chamber.width; tx++) {
+      if (ugGet(underground, bx + tx, by + ty) === UndergroundTileState.Open) openCount++;
+    }
+  }
+  if (openCount === 0) return null;
+  const targetIndex = broodId % openCount;
+  let cursor = 0;
+  for (let ty = 0; ty < chamber.height; ty++) {
+    for (let tx = 0; tx < chamber.width; tx++) {
+      const cx = bx + tx;
+      const cy = by + ty;
+      if (ugGet(underground, cx, cy) !== UndergroundTileState.Open) continue;
+      if (cursor === targetIndex) {
+        return { x: (cx << FP_SHIFT) + (FP_ONE >> 1), y: (cy << FP_SHIFT) + (FP_ONE >> 1) };
+      }
+      cursor++;
+    }
+  }
+  return null;
+}
+
+/**
  * Issue #17 Phase 1 — compute the fixed-point Nursery deposit position for
  * brood `broodId`, spread across all Open tiles in the colony's Nursery
  * chambers via `broodId % openCount` in row-major order. Returns `null` if
- * no underground grid OR no Open Nursery tile exists. Shared by the v10
- * `depositCarriedBrood` (visible-carry deposit) and the pre-v10
- * `transportBroodToNursery` (legacy teleport) so both produce byte-
- * identical deposit positions for the same inputs.
+ * no underground grid OR no Open Nursery tile exists. Used by the pre-v10
+ * `transportBroodToNursery` (legacy teleport) and as a fallback from
+ * `depositCarriedBrood` when the nurse's chamber cannot be identified.
  */
 function computeNurseryDepositPosition(
   world: WorldState,
@@ -1262,9 +1302,13 @@ function computeNurseryDepositPosition(
 /**
  * Issue #17 Phase 1 — v10 deposit. The carrier (`nurseId`) has just arrived
  * at a tile inside a Nursery footprint while carrying brood `broodId`.
- * Place the brood at a Nursery Open tile (spread by `broodId % openCount`,
- * matching the pre-v10 `transportBroodToNursery` distribution), then clear
- * the carry slot on both ends and return the carrier to Idle.
+ * Place the brood inside the specific Nursery chamber the nurse is standing
+ * in (spread by `broodId % openCount` within that chamber's Open tiles).
+ * Falls back to the all-chambers pool only if the nurse's chamber cannot be
+ * identified (pathological state — should never occur in production).
+ *
+ * Restricting to the nurse's current chamber prevents brood from teleporting
+ * to a distant Nursery chamber that the nurse has not physically reached.
  *
  * No allocations, no RNG.
  */
@@ -1275,7 +1319,26 @@ function depositCarriedBrood(
   broodId: number,
 ): void {
   const ants = world.ants;
-  const pos = computeNurseryDepositPosition(world, colony, broodId);
+  // Identify which Nursery chamber the nurse is standing in so the deposit
+  // stays within that chamber. Using the nurse's tile position (which the
+  // v10 flow guarantees is inside a Nursery footprint at this call site).
+  const nurseTileX = ants.posX[nurseId]! >> FP_SHIFT;
+  const nurseTileY = ants.posY[nurseId]! >> FP_SHIFT;
+  let nurseChamber: ChamberRecord | null = null;
+  for (let c = 0; c < colony.chambers.length; c++) {
+    const ch = colony.chambers[c]!;
+    if (ch.chamberType !== ChamberType.Nursery) continue;
+    const bx = ch.posX >> FP_SHIFT;
+    const by = ch.posY >> FP_SHIFT;
+    if (nurseTileX >= bx && nurseTileX < bx + ch.width &&
+        nurseTileY >= by && nurseTileY < by + ch.height) {
+      nurseChamber = ch;
+      break;
+    }
+  }
+  const pos = nurseChamber !== null
+    ? computeDepositPositionInChamber(world, colony, broodId, nurseChamber)
+    : computeNurseryDepositPosition(world, colony, broodId); // fallback (pathological)
   // Fallback: if the helper returns null (no grid, no Open Nursery tile —
   // test-harness or pathological state), keep the brood at the carrier's
   // current tile. Never reachable in production because the v10 path only
