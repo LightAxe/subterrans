@@ -92,8 +92,10 @@ export function tickLarvaMaturation(world: WorldState, colony: ColonyRecord): vo
   const cap = largestNurseryTileCount(colony);
   if (cap <= 0) return;
 
-  // Advance the stamp (Uint32 wraps naturally).
-  nurseScratch.currentStamp = (nurseScratch.currentStamp + 1) >>> 0;
+  // Advance the stamp. Skip 0: usedStamp[] is zero-initialized, so stamp===0
+  // would falsely treat every nurse as "used this tick" after a full Uint32
+  // wrap (~4 billion ticks). `|| 1` bumps the one collision tick to 1.
+  nurseScratch.currentStamp = ((nurseScratch.currentStamp + 1) >>> 0) || 1;
   const stamp = nurseScratch.currentStamp;
 
   let slotsRemaining = cap;
