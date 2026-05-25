@@ -62,14 +62,14 @@ Branch names: `feat/<short-description>`, `fix/<short-description>`, `chore/<sho
 
 This applies to AI agents working in this repo as well as human contributors. The size of the change is not the criterion.
 
-**AI agents must use the `/ship` workflow before pushing any branch.** The workflow is:
-1. Implement the work.
-2. Run an internal code review loop: spawn a fresh review subagent (no prior session context) with only the current `git diff`, have it identify bugs and edge cases, address any findings, and repeat until the agent reports zero new issues.
-3. Commit and push, then open a PR.
-4. Post `@codex review` on the PR.
-5. Wait for the external review loop: poll for a `THUMBS_UP` reaction from `chatgpt-codex-connector[bot]`; if findings are posted, address them, re-run the internal review loop, push, and re-trigger `@codex review`.
+**AI agents must invoke the `/ship` skill before pushing any branch.** `/ship` is a Claude Code project skill (invoked via the Skill tool with `skill: "ship"`) that enforces the full PR cycle:
 
-**Never push without completing step 2 (internal review agent pass).** The agent must be spawned fresh with no prior session context and must see the actual diff — reviewing from memory does not count.
+1. **Internal review loop** — spawn a fresh Agent (no prior session context) passing only the current `git diff` and ask it to identify bugs, logic errors, and edge cases. Address each finding, then repeat until a pass returns no new issues. Cap at five iterations; if issues remain, flag for human review rather than pushing.
+2. **Commit, push, and open a PR** — stage, commit with a Conventional Commits message, push the branch, and open a PR with summary and test plan.
+3. **Trigger Codex review** — post the PR comment `@codex review`. This invokes an automated bot reviewer on the PR; the comment is required because the bot does not auto-trigger on owner-authored pushes.
+4. **External review loop** — poll the PR's GitHub reactions API for a `THUMBS_UP` from `chatgpt-codex-connector[bot]` (the bot's explicit "clean" signal). If the bot posts findings instead, address them, re-run the internal loop, push, and re-trigger `@codex review`. If no signal arrives after ~30 minutes, report "reviewer did not respond" and stop.
+
+**The internal review pass (step 1) is mandatory before every push.** "Fresh Agent" means a new subagent invocation with no conversation history — reviewing from memory or using an agent that has seen the implementation session does not satisfy this requirement.
 
 ## PR Review Process
 
