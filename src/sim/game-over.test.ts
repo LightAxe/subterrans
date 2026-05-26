@@ -137,6 +137,9 @@ function makeV22WorldWith2Colonies(playerColonyId = 1, aiColonyId = 2): {
   const addWorker = (colonyId: number): number => {
     const id = allocateEntityId(world);
     initAnt(world.ants, id, { colonyId: colonyId as ColonyId, posX: 1, posY: 1, task: AntTask.Idle, subTask: 0, speed: 0 });
+    // Must push into colony.workers so livingWorkerCount (which iterates colony.workers) sees this ant.
+    world.colonies[colonyId]!.workers.push(id);
+    world.colonies[colonyId]!.workerCount += 1;
     return id;
   };
 

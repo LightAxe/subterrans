@@ -302,18 +302,16 @@ function colonyFoodWithCarried(world: WorldState, colony: ColonyRecord): number 
 }
 
 /**
- * Count living non-queen ants for a given colony (workers only).
- * Iterates the full ants store — acceptable at end-of-game only (called once).
+ * Count living workers for a given colony (excludes queen, eggs, and larvae).
+ * Uses colony.workers bucket — eggs/larvae have alive===1 in world.ants but are
+ * not workers, so iterating world.ants directly would overcount.
  */
 function livingWorkerCount(world: WorldState, colonyId: ColonyId): number {
   const colony = world.colonies[colonyId];
   if (colony === undefined) return 0;
-  const queenId = colony.queenEntityId;
   let count = 0;
-  for (let id = 0; id < world.ants.alive.length; id++) {
-    if (world.ants.alive[id] === 1 && world.ants.colonyId[id] === colonyId && id !== queenId) {
-      count += 1;
-    }
+  for (const id of colony.workers) {
+    if (world.ants.alive[id] === 1) count += 1;
   }
   return count;
 }
