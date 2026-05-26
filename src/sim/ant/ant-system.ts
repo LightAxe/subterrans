@@ -1302,13 +1302,14 @@ function computeNurseryDepositPosition(
 /**
  * Issue #17 Phase 1 — v10 deposit. The carrier (`nurseId`) has just arrived
  * at a tile inside a Nursery footprint while carrying brood `broodId`.
- * Place the brood inside the specific Nursery chamber the nurse is standing
- * in (spread by `broodId % openCount` within that chamber's Open tiles).
- * Falls back to the all-chambers pool only if the nurse's chamber cannot be
- * identified (pathological state — should never occur in production).
  *
- * Restricting to the nurse's current chamber prevents brood from teleporting
- * to a distant Nursery chamber that the nurse has not physically reached.
+ * V21+: places brood inside the specific Nursery chamber the nurse is standing
+ * in (spread by `broodId % openCount` within that chamber's Open tiles),
+ * preventing teleportation to a distant chamber. Falls back to the all-chambers
+ * pool only if the nurse's chamber cannot be identified (pathological).
+ *
+ * Pre-V21: uses the original all-chambers spread via `computeNurseryDepositPosition`
+ * to preserve byte-identical replay of pre-V21 saves.
  *
  * No allocations, no RNG.
  */
@@ -1319,26 +1320,32 @@ function depositCarriedBrood(
   broodId: number,
 ): void {
   const ants = world.ants;
-  // Identify which Nursery chamber the nurse is standing in so the deposit
-  // stays within that chamber. Using the nurse's tile position (which the
-  // v10 flow guarantees is inside a Nursery footprint at this call site).
-  const nurseTileX = ants.posX[nurseId]! >> FP_SHIFT;
-  const nurseTileY = ants.posY[nurseId]! >> FP_SHIFT;
-  let nurseChamber: ChamberRecord | null = null;
-  for (let c = 0; c < colony.chambers.length; c++) {
-    const ch = colony.chambers[c]!;
-    if (ch.chamberType !== ChamberType.Nursery) continue;
-    const bx = ch.posX >> FP_SHIFT;
-    const by = ch.posY >> FP_SHIFT;
-    if (nurseTileX >= bx && nurseTileX < bx + ch.width &&
-        nurseTileY >= by && nurseTileY < by + ch.height) {
-      nurseChamber = ch;
-      break;
+  // S4 V21+: restrict deposit to the nurse's current Nursery chamber so brood
+  // never teleports to a distant chamber the nurse hasn't physically reached.
+  // Pre-V21 worlds use the original all-chambers distribution to preserve
+  // byte-identical replay of pre-V21 saves.
+  let pos: { x: number; y: number } | null = null;
+  if (world.simVersion >= SIM_VERSION_V21_REPRODUCTION) {
+    const nurseTileX = ants.posX[nurseId]! >> FP_SHIFT;
+    const nurseTileY = ants.posY[nurseId]! >> FP_SHIFT;
+    let nurseChamber: ChamberRecord | null = null;
+    for (let c = 0; c < colony.chambers.length; c++) {
+      const ch = colony.chambers[c]!;
+      if (ch.chamberType !== ChamberType.Nursery) continue;
+      const bx = ch.posX >> FP_SHIFT;
+      const by = ch.posY >> FP_SHIFT;
+      if (nurseTileX >= bx && nurseTileX < bx + ch.width &&
+          nurseTileY >= by && nurseTileY < by + ch.height) {
+        nurseChamber = ch;
+        break;
+      }
     }
+    pos = nurseChamber !== null
+      ? computeDepositPositionInChamber(world, colony, broodId, nurseChamber)
+      : computeNurseryDepositPosition(world, colony, broodId); // fallback (pathological)
+  } else {
+    pos = computeNurseryDepositPosition(world, colony, broodId);
   }
-  const pos = nurseChamber !== null
-    ? computeDepositPositionInChamber(world, colony, broodId, nurseChamber)
-    : computeNurseryDepositPosition(world, colony, broodId); // fallback (pathological)
   // Fallback: if the helper returns null (no grid, no Open Nursery tile —
   // test-harness or pathological state), keep the brood at the carrier's
   // current tile. Never reachable in production because the v10 path only
