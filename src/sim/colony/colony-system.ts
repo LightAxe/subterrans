@@ -255,6 +255,25 @@ export function hasCompletedChamber(
   return false;
 }
 
+/**
+ * S4 — Returns the tile count of the largest completed Nursery chamber in the
+ * colony. This is the throughput cap for nurse-acceleration per tick: at most
+ * N larvae can receive nurse acceleration per tick, where N = this value.
+ *
+ * Returns 0 if no completed Nursery chamber exists (broodFrozen should gate
+ * the caller before this case is reached in normal play).
+ */
+export function largestNurseryTileCount(colony: ColonyRecord): number {
+  let max = 0;
+  for (let c = 0; c < colony.chambers.length; c++) {
+    const ch = colony.chambers[c]!;
+    if (ch.chamberType !== ChamberType.Nursery) continue;
+    const tiles = ch.width * ch.height;
+    if (tiles > max) max = tiles;
+  }
+  return max;
+}
+
 // ---------------------------------------------------------------------------
 // tickFoodConsumption — PRD §8a steps 3 AND 4 combined (CLNY-04, CLNY-05)
 //

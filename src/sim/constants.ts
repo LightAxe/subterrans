@@ -20,11 +20,55 @@ export const LARVA_MATURE_TICKS = 2400;
 /** PRD §9c — Worker lifespan: effectively immortal (INT32_MAX ticks). */
 export const WORKER_LIFESPAN_TICKS = 0x7FFFFFFF;
 
-/** PRD §9c — Ticks between queen egg-laying events. */
+/** PRD §9c — Ticks between queen egg-laying events (pre-V21 static value). */
 export const QUEEN_EGG_INTERVAL_TICKS = 300;
 
 /** PRD §9c — Minimum food units (fp) the colony must hold for queen to lay. */
 export const QUEEN_EGG_FOOD_THRESHOLD = 768; // 3 × FP_ONE
+
+// ---------------------------------------------------------------------------
+// S4 (V21) — Reproduction lever: surplus-scaled egg interval
+// ---------------------------------------------------------------------------
+
+/** S4 — Sentinel returned by eggIntervalForColony when food is below the surplus gate. */
+export const QUEEN_EGG_INTERVAL_DISABLED = -1;
+/** S4 — Egg interval at < 3× surplus (matches pre-V21 static value). */
+export const QUEEN_EGG_INTERVAL_BASE_TICKS = 300;
+/** S4 — Egg interval at ≥ 3× surplus. */
+export const QUEEN_EGG_INTERVAL_MEDIUM_TICKS = 250;
+/** S4 — Egg interval at ≥ 5× surplus. */
+export const QUEEN_EGG_INTERVAL_FAST_TICKS = 200;
+/** S4 — Surplus-curve floor at ≥ 10× surplus (pre-tier floor; S5 MIN_EGG_INTERVAL_TICKS = 100 clamps post-tier). */
+export const QUEEN_EGG_INTERVAL_FLOOR_TICKS = 150;
+/**
+ * S4 — Absolute post-tier egg-interval floor. S5's brood-production modifier can push
+ * the effective interval below QUEEN_EGG_INTERVAL_FLOOR_TICKS = 150; this is the hard clamp.
+ * Cross-stage dependency: S5 stage doc references this constant — it must be defined here.
+ */
+export const MIN_EGG_INTERVAL_TICKS = 100;
+/**
+ * S4 — Minimum mouths-to-feed divisor in the surplus formula.
+ * Prevents MEDIUM tier firing on a 4-entity starter colony at the 768-FP gate.
+ */
+export const COLONY_SIZE_FLOOR = 8;
+/**
+ * S4 — Food-per-entity denominator for the surplus ratio.
+ * surplusX10 = Math.trunc(colonyFoodTotal * 10 / (mouths × FOOD_PER_ANT_BASELINE)).
+ * TELEMETRY_GATED: refine from Phase 4 playtest data.
+ */
+export const FOOD_PER_ANT_BASELINE = 60;
+
+// ---------------------------------------------------------------------------
+// S4 (V21) — Nurse Attending substate: maturation acceleration
+// ---------------------------------------------------------------------------
+
+/** S4 — Extra maturation ticks per tick while a nurse is Attending adjacent to a larva. */
+export const LARVA_MATURE_NURSE_ACCELERATION = 1;
+/**
+ * S4 — Ticks a nurse dwells at the Nursery tile after depositing brood (Attending substate).
+ * 30 sim-seconds. TELEMETRY_GATED: refine from Phase 4 playtest data.
+ */
+export const NURSE_ATTEND_DWELL_TICKS = 600;
 
 /**
  * PRD §9c — Ticks an ant can survive with no food before dying.

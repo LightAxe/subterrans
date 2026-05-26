@@ -43,8 +43,13 @@ const SEED = 42;
 // whole point of issue #33 (chambers spread vertically, max chamber Y > 15
 // per the acceptance criteria), so the slower bootstrap is the intended
 // trade-off.
-const TOTAL_TICKS = 6000;
-const TRAJECTORY_WINDOW_START = 5500;   // track workerCount from tick 5500..6000
+const TOTAL_TICKS = 8000;
+const TRAJECTORY_WINDOW_START = 7000;   // track workerCount from tick 7000..8000
+// S4 change: queen now lays on first eligible tick (elapsed-since-last-lay gate), not at modulo
+// boundaries. In the AI scenario, chambers complete ~tick 4000; first egg lays immediately,
+// creating ~6 larvae by tick 6000. First new worker matures at ~tick 7600 (4000+3600).
+// Window extended from 5500..6000 → 7000..8000 so the monitoring window contains the
+// stable post-first-worker-maturation state.
 const DIAGNOSTIC_INTERVAL = 500;         // log snapshot every 500 ticks (pre-audit)
 
 // -----------------------------------------------------------------------------
@@ -202,7 +207,7 @@ describe('AI-only scenario 6000 ticks', () => {
       `workerCount declined across ticks ${TRAJECTORY_WINDOW_START}..${TOTAL_TICKS}: ` +
       `started=${startWC} ended=${endWC}. ${ctx}`,
     ).toBeGreaterThanOrEqual(startWC);
-  }, 60_000); // 6000 ticks + assertions may take >5s default; allow 60s budget.
+  }, 120_000); // 8000 ticks at ~8ms/tick; allow 120s budget (S4 extended window).
 });
 
 // -----------------------------------------------------------------------------

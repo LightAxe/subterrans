@@ -412,6 +412,8 @@ interface SerializedColony {
   foodStored: number; workerCount: number; eggCount: number; larvaeCount: number; nurseCount: number;
   eggs: EntityId[]; larvae: EntityId[]; workers: EntityId[];
   chambers: ChamberRecord[];
+  /** S4 V21+ — tick at which queen last laid. Optional for backward compat; defaults to -QUEEN_EGG_INTERVAL_BASE_TICKS on old saves. */
+  queenLastEggTick?: number;
   // Phase 10 / D-04 silent-migration: serialized shape is the runtime BehaviorRatio
   // (post-migration `{ forage, fight }`), but the legacy `dig` field is allowed for
   // backward compatibility with pre-Phase-10 saves. Migration via migrateBehaviorRatio
@@ -622,6 +624,7 @@ function serializeColony(c: ColonyRecord): SerializedColony {
     taskCensus:           { ...c.taskCensus },
     defeated:             c.defeated,
     reconcileCountdown:   c.reconcileCountdown,
+    queenLastEggTick:     c.queenLastEggTick,
     entrances:            c.entrances.map((e) => ({ ...e })),
     rallyPoint:           c.rallyPoint === null ? null : { ...c.rallyPoint },
     digFlowFieldDirty:    c.digFlowFieldDirty,
@@ -972,6 +975,7 @@ function deserializeColony(s: SerializedColony): ColonyRecord {
   c.foodFlowFieldDirty   = s.foodFlowFieldDirty ?? false;
   c.killCount            = s.killCount;
   c.priorityFoodPileId   = s.priorityFoodPileId ?? null;
+  c.queenLastEggTick     = s.queenLastEggTick ?? -300; // old saves: default to -QUEEN_EGG_INTERVAL_BASE_TICKS so queen can lay on first eligible tick
   // Issue #101 — validate chamber records before they reach the runtime.
   // Done after the spread so the validator inspects the persisted shape;
   // throw aborts deserializeWorldState's map() and propagates to bootFromSave.

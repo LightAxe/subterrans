@@ -102,8 +102,12 @@ describe('NursingSubState discriminants (PRD §1)', () => {
     expect(NursingSubState.Feeding).toBe(1);
   });
 
-  it('NursingSubState has exactly 2 members (regression guard)', () => {
-    expect(Object.keys(NursingSubState).length).toBe(2);
+  it('NursingSubState.Attending === 2 (S4 V21+ dwell substate)', () => {
+    expect(NursingSubState.Attending).toBe(2);
+  });
+
+  it('NursingSubState has exactly 3 members (regression guard — updated S4)', () => {
+    expect(Object.keys(NursingSubState).length).toBe(3);
   });
 });
 

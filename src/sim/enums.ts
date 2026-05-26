@@ -53,6 +53,7 @@ export type DiggingSubState = typeof DiggingSubState[keyof typeof DiggingSubStat
 export const NursingSubState = {
   MovingToBrood: 0,
   Feeding:       1, // PRD §1 line 84 — member is `Feeding`, NOT `FeedingBrood`
+  Attending:     2, // S4 V21+ — nurse dwells at Nursery after deposit; accelerates adjacent larvae
 } as const;
 export type NursingSubState = typeof NursingSubState[keyof typeof NursingSubState];
 

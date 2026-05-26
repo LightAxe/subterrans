@@ -45,6 +45,7 @@ import {
   SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX,
   SIM_VERSION_V17_COMBAT_AGGRO,
   SIM_VERSION_V18_INVADER_WALL_AWARE_STEP,
+  SIM_VERSION_V21_REPRODUCTION,
   type WorldState,
 } from '../types.js';
 import {
@@ -58,7 +59,7 @@ import {
 import type { AntComponents } from './ant-store.js';
 import { isRecentTile, pushRecentTile, clearRecentTiles, isBroodReclaimable } from './ant-store.js';
 import type { ColonyRecord, ChamberRecord } from '../colony/colony-store.js';
-import { hasCompletedChamber, isFoodChamberDepositable } from '../colony/colony-system.js';
+import { hasCompletedChamber, isFoodChamberDepositable, colonyFoodTotal } from '../colony/colony-system.js';
 import { AntTask, ForagingSubState, DiggingSubState, NursingSubState, ChamberType, PheromoneType } from '../enums.js';
 import {
   WORKER_CARRY_CAPACITY,
@@ -86,6 +87,7 @@ import {
   FOOD_TRAIL_DEPOSIT,
   FOOD_TRAIL_DEPOSIT_V14,
   FIGHT_AGGRO_RADIUS,
+  NURSE_ATTEND_DWELL_TICKS,
 } from '../constants.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { Rng } from '../rng.js';
@@ -944,6 +946,29 @@ export function tickNurseActions(world: WorldState): void {
         }
         continue;
       }
+      // S4 V21+ Attending handler: nurse dwells at the Nursery tile after
+      // deposit. searchPauseTicks is repurposed as the dwell counter — it is
+      // not used by nursing-task ants (search-pause logic only runs for
+      // Foraging ants). When the dwell expires, nurse returns to Idle.
+      //
+      // Emergency exit: colony food zero → nurse must forage to prevent
+      // starvation lock. Pairs with the step-8 allocation override in
+      // tick.ts. Brood-transport priority is enforced at deposit time
+      // (depositCarriedBrood skips Attending when claimable brood remains),
+      // so no per-tick brood check is needed here.
+      if (world.simVersion >= SIM_VERSION_V21_REPRODUCTION && subTask === NursingSubState.Attending) {
+        const colonyId = ants.colonyId[id]!;
+        const colony   = world.colonies[colonyId];
+        const starving = colony !== undefined && colonyFoodTotal(colony) === 0;
+        ants.searchPauseTicks[id] = ants.searchPauseTicks[id]! + 1;
+        if (starving || ants.searchPauseTicks[id]! >= NURSE_ATTEND_DWELL_TICKS) {
+          ants.task[id]             = AntTask.Idle;
+          ants.subTask[id]          = 0;
+          ants.searchPauseTicks[id] = 0;
+        }
+        continue;
+      }
+
       if (subTask !== NursingSubState.MovingToBrood) continue;
 
       const colonyId = ants.colonyId[id]!;
@@ -1177,13 +1202,53 @@ function findUncarriedBroodOnTile(
 }
 
 /**
+ * Compute a deposit position within a single Nursery `chamber`, spread
+ * across its Open tiles by `broodId % openCount` in row-major order.
+ * Returns `null` if no underground grid or no Open tile exists in that chamber.
+ *
+ * Used by `depositCarriedBrood` (v10+) to keep brood in the specific chamber
+ * the nurse physically arrived at, preventing cross-chamber teleportation.
+ */
+function computeDepositPositionInChamber(
+  world: WorldState,
+  colony: ColonyRecord,
+  broodId: number,
+  chamber: ChamberRecord,
+): { x: number; y: number } | null {
+  const underground = world.undergroundGrids[colony.colonyId];
+  if (!underground) return null;
+  const bx = chamber.posX >> FP_SHIFT;
+  const by = chamber.posY >> FP_SHIFT;
+  let openCount = 0;
+  for (let ty = 0; ty < chamber.height; ty++) {
+    for (let tx = 0; tx < chamber.width; tx++) {
+      if (ugGet(underground, bx + tx, by + ty) === UndergroundTileState.Open) openCount++;
+    }
+  }
+  if (openCount === 0) return null;
+  const targetIndex = broodId % openCount;
+  let cursor = 0;
+  for (let ty = 0; ty < chamber.height; ty++) {
+    for (let tx = 0; tx < chamber.width; tx++) {
+      const cx = bx + tx;
+      const cy = by + ty;
+      if (ugGet(underground, cx, cy) !== UndergroundTileState.Open) continue;
+      if (cursor === targetIndex) {
+        return { x: (cx << FP_SHIFT) + (FP_ONE >> 1), y: (cy << FP_SHIFT) + (FP_ONE >> 1) };
+      }
+      cursor++;
+    }
+  }
+  return null;
+}
+
+/**
  * Issue #17 Phase 1 — compute the fixed-point Nursery deposit position for
  * brood `broodId`, spread across all Open tiles in the colony's Nursery
  * chambers via `broodId % openCount` in row-major order. Returns `null` if
- * no underground grid OR no Open Nursery tile exists. Shared by the v10
- * `depositCarriedBrood` (visible-carry deposit) and the pre-v10
- * `transportBroodToNursery` (legacy teleport) so both produce byte-
- * identical deposit positions for the same inputs.
+ * no underground grid OR no Open Nursery tile exists. Used by the pre-v10
+ * `transportBroodToNursery` (legacy teleport) and as a fallback from
+ * `depositCarriedBrood` when the nurse's chamber cannot be identified.
  */
 function computeNurseryDepositPosition(
   world: WorldState,
@@ -1237,9 +1302,14 @@ function computeNurseryDepositPosition(
 /**
  * Issue #17 Phase 1 — v10 deposit. The carrier (`nurseId`) has just arrived
  * at a tile inside a Nursery footprint while carrying brood `broodId`.
- * Place the brood at a Nursery Open tile (spread by `broodId % openCount`,
- * matching the pre-v10 `transportBroodToNursery` distribution), then clear
- * the carry slot on both ends and return the carrier to Idle.
+ *
+ * V21+: places brood inside the specific Nursery chamber the nurse is standing
+ * in (spread by `broodId % openCount` within that chamber's Open tiles),
+ * preventing teleportation to a distant chamber. Falls back to the all-chambers
+ * pool only if the nurse's chamber cannot be identified (pathological).
+ *
+ * Pre-V21: uses the original all-chambers spread via `computeNurseryDepositPosition`
+ * to preserve byte-identical replay of pre-V21 saves.
  *
  * No allocations, no RNG.
  */
@@ -1250,7 +1320,32 @@ function depositCarriedBrood(
   broodId: number,
 ): void {
   const ants = world.ants;
-  const pos = computeNurseryDepositPosition(world, colony, broodId);
+  // S4 V21+: restrict deposit to the nurse's current Nursery chamber so brood
+  // never teleports to a distant chamber the nurse hasn't physically reached.
+  // Pre-V21 worlds use the original all-chambers distribution to preserve
+  // byte-identical replay of pre-V21 saves.
+  let pos: { x: number; y: number } | null = null;
+  if (world.simVersion >= SIM_VERSION_V21_REPRODUCTION) {
+    const nurseTileX = ants.posX[nurseId]! >> FP_SHIFT;
+    const nurseTileY = ants.posY[nurseId]! >> FP_SHIFT;
+    let nurseChamber: ChamberRecord | null = null;
+    for (let c = 0; c < colony.chambers.length; c++) {
+      const ch = colony.chambers[c]!;
+      if (ch.chamberType !== ChamberType.Nursery) continue;
+      const bx = ch.posX >> FP_SHIFT;
+      const by = ch.posY >> FP_SHIFT;
+      if (nurseTileX >= bx && nurseTileX < bx + ch.width &&
+          nurseTileY >= by && nurseTileY < by + ch.height) {
+        nurseChamber = ch;
+        break;
+      }
+    }
+    pos = nurseChamber !== null
+      ? computeDepositPositionInChamber(world, colony, broodId, nurseChamber)
+      : computeNurseryDepositPosition(world, colony, broodId); // fallback (pathological)
+  } else {
+    pos = computeNurseryDepositPosition(world, colony, broodId);
+  }
   // Fallback: if the helper returns null (no grid, no Open Nursery tile —
   // test-harness or pathological state), keep the brood at the carrier's
   // current tile. Never reachable in production because the v10 path only
@@ -1262,9 +1357,31 @@ function depositCarriedBrood(
   // Clear both ends of the carry pointer.
   ants.carryingBroodId[nurseId] = -1;
   ants.carriedBy[broodId]       = -1;
-  // Carrier returns to Idle; step 10a next tick re-allocates per ratio.
-  ants.task[nurseId]    = AntTask.Idle;
-  ants.subTask[nurseId] = 0;
+  // S4 V21+: nurse enters Attending substate and dwells at the Nursery tile
+  // for NURSE_ATTEND_DWELL_TICKS, accelerating adjacent larvae. Pre-V21:
+  // carrier returns to Idle immediately; step 10a re-allocates next tick.
+  //
+  // Brood-transport priority (UAT fix): if uncarried brood still exists
+  // outside the Nursery (e.g., the queen laid new eggs while this nurse was
+  // carrying the previous batch), skip Attending and return to Idle immediately
+  // so step 10a re-assigns this nurse to pick up the next brood. Attending
+  // only starts when the pickup pool is empty — brood in the Queen chamber
+  // receives zero maturation benefit, so transport must come first.
+  // This check runs once per deposit (not per tick), keeping it cheap.
+  if (world.simVersion >= SIM_VERSION_V21_REPRODUCTION) {
+    if (colonyHasClaimableBrood(world, colony)) {
+      ants.task[nurseId]             = AntTask.Idle;
+      ants.subTask[nurseId]          = 0;
+      ants.searchPauseTicks[nurseId] = 0;
+    } else {
+      ants.subTask[nurseId]          = NursingSubState.Attending;
+      ants.searchPauseTicks[nurseId] = 0;
+      // task remains AntTask.Nursing — Attending is a Nursing substate
+    }
+  } else {
+    ants.task[nurseId]    = AntTask.Idle;
+    ants.subTask[nurseId] = 0;
+  }
 }
 
 /**
@@ -1426,6 +1543,8 @@ export function getTaskDirection(
   }
 
   if (task === AntTask.Nursing) {
+    // S4 V21+ Attending nurses are stationary at their Nursery tile.
+    if (ants.subTask[antId] === NursingSubState.Attending) return { dx: 0, dy: 0 };
     // colonyId keys the nursing chamber flow-field (indexed by the nurse's
     // OWN colony — nurses never cross grids); gridColonyId keys the
     // underground grid the ant currently occupies (Phase 09.1 Chunk 0).
