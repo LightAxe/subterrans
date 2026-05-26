@@ -4,10 +4,11 @@
 // Render-side ai-controller.ts calls these helpers; it never writes world.aiState.* directly.
 // Per CF-P0-004 / ADR-0007: sim owns mutation and event emission; render owns policy.
 //
-// QC Pass 4 AR-P0-001: S2 V17 ships Normal-only tier reads. S5 V20 refactors to
-// tierIndex(world.difficulty) at every NORMAL_TIER_INDEX lookup site.
+// QC Pass 4 AR-P0-001: S2 V17 ships Normal-only tier reads. S5 V22 gates all
+// NORMAL_TIER_INDEX lookup sites on SIM_VERSION_V22_DIFFICULTY and uses tierIndex(world.difficulty).
 
 import type { WorldState, AIState, AIStateRecord } from './types.js';
+import { SIM_VERSION_V22_DIFFICULTY } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { ClearRallyPointCommand } from './commands.js';
 import { emitEvent } from './telemetry.js';
@@ -36,8 +37,19 @@ import {
 } from './constants.js';
 
 
-// QC Pass 4 AR-P0-001: Normal-only tier index. S5 V20 replaces this with tierIndex(world.difficulty).
+// QC Pass 4 AR-P0-001: Normal-only tier index. Used for pre-V22 saves; V22+ uses tierIndex(world.difficulty).
 export const NORMAL_TIER_INDEX = 1 as const;
+
+/**
+ * S5 (V22) — Map player-selected difficulty to a 0-based tier index for
+ * per-difficulty constant arrays (e.g. AI_WARFOOTING_FIGHTER_THRESHOLD).
+ * Easy=0, Normal=1, Hard=2.
+ */
+export function tierIndex(difficulty: WorldState['difficulty']): 0 | 1 | 2 {
+  if (difficulty === 'Easy') return 0;
+  if (difficulty === 'Hard') return 2;
+  return 1;
+}
 
 // ---------------------------------------------------------------------------
 // Helper: create a fresh AIStateRecord at defensive defaults (pre-V17 migration)
@@ -260,7 +272,7 @@ function _tryTransitionPeacetimeToWarFooting(
 
   // CF-P1-010: aiReady AND (ageReady OR frontageReady)
   const aiReady =
-    fighters >= AI_WARFOOTING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX] &&
+    fighters >= AI_WARFOOTING_FIGHTER_THRESHOLD[world.simVersion >= SIM_VERSION_V22_DIFFICULTY ? tierIndex(world.difficulty) : NORMAL_TIER_INDEX] &&
     foodStored * 100 >= foodCap * AI_WARFOOTING_FOOD_FRAC_PCT;
 
   const ageReady = world.tick >= AI_WARFOOTING_MIN_TICK;
@@ -288,7 +300,7 @@ function _checkWarFootingToInvading(
   const foodCap = aiFoodCapacity(world, aiColonyId);
 
   if (
-    fighters >= AI_INVADING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX] &&
+    fighters >= AI_INVADING_FIGHTER_THRESHOLD[world.simVersion >= SIM_VERSION_V22_DIFFICULTY ? tierIndex(world.difficulty) : NORMAL_TIER_INDEX] &&
     foodStored * 100 >= foodCap * AI_INVADING_FOOD_FRAC_PCT &&
     world.tick >= AI_INVADING_MIN_TICK
   ) {
@@ -373,7 +385,7 @@ function _checkInvadingToRecovery(
       // ClearRallyPoint. advanceAIState still emits ai_state_transition after this returns.
       aiState.state = 'Recovery';
       aiState.enteredTick = world.tick;
-      aiState.recoveryEndTick = world.tick + AI_RECOVERY_DURATION_TICKS[NORMAL_TIER_INDEX];
+      aiState.recoveryEndTick = world.tick + AI_RECOVERY_DURATION_TICKS[world.simVersion >= SIM_VERSION_V22_DIFFICULTY ? tierIndex(world.difficulty) : NORMAL_TIER_INDEX];
       aiState.invasionStartTick = 0;
       aiState.invasionRallyTileX = -1;
       aiState.invasionRallyTileY = -1;
@@ -432,7 +444,7 @@ function _endInvasion(
   world.commandQueue.push(clearCmd);
   aiState.state = 'Recovery';
   aiState.enteredTick = world.tick;
-  aiState.recoveryEndTick = world.tick + AI_RECOVERY_DURATION_TICKS[NORMAL_TIER_INDEX];
+  aiState.recoveryEndTick = world.tick + AI_RECOVERY_DURATION_TICKS[world.simVersion >= SIM_VERSION_V22_DIFFICULTY ? tierIndex(world.difficulty) : NORMAL_TIER_INDEX];
   aiState.invasionStartTick = 0;
   aiState.invasionRallyTileX = -1;
   aiState.invasionRallyTileY = -1;

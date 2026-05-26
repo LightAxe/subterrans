@@ -161,6 +161,9 @@ interface UIScenePhase9 {
     onRetry(): void;
   }): void;
   hideSurveyOverlay(): void;
+  // S5 — difficulty select overlay. Shown before every new game.
+  showDifficultySelectOverlay(callbacks: { onSelect: (d: 'Easy' | 'Normal' | 'Hard') => void }): void;
+  hideDifficultySelectOverlay(): void;
 }
 import type { SimCommand } from '../sim/commands.js';
 
@@ -193,6 +196,8 @@ export class GameScene extends Phaser.Scene {
   private gamePhase: GamePhase = GamePhase.Playing;
   private currentOutcome: GameOutcome = GameOutcome.None;
   private currentCause: import('./ui-scene-logic.js').QueenDeathCause = null;
+  // S5 — difficulty chosen by the player before each new game; preserved for retry.
+  private currentDifficulty: 'Easy' | 'Normal' | 'Hard' = 'Normal';
   private aiColonyIds: ReturnType<typeof deriveAIColonyIds> = [];
   private readonly inputLog: SimCommand[] = [];
   private lastAutosaveMs: number = 0;
@@ -398,11 +403,11 @@ export class GameScene extends Phaser.Scene {
         onContinue: () => this.bootFromSave(),
         onNewGame: () => {
           deleteSave();
-          this.bootFresh();
+          this.showDifficultySelectThenBoot();
         },
       });
     } else {
-      this.bootFresh();
+      this.showDifficultySelectThenBoot();
     }
 
     // Lifecycle signal — preload assets are loaded (we're in create()), the
@@ -490,15 +495,27 @@ export class GameScene extends Phaser.Scene {
         : '';
   }
 
-  private bootFresh(): void {
+  private bootFresh(difficulty: 'Easy' | 'Normal' | 'Hard' = 'Normal'): void {
     this.resetSessionState();
+    this.currentDifficulty = difficulty;
     // W1: seed formula — Date.now() is ~1.7e12, exceeds int32. Bitmask-clamp to positive int32.
     // Bitwise ops truncate to int32; 0x7fffffff mask ensures sign bit is clear.
     const seed = generateFreshSeed(Date.now());
     this.currentSeed = seed;
     // createScenario creates BOTH colonies (PLAYER_COLONY_ID + ENEMY_COLONY_ID) unconditionally.
-    this.world = createScenario(seed);
+    this.world = createScenario(seed, difficulty);
     this.finishBoot();
+  }
+
+  // S5 — show difficulty selector then boot. Used for every new-game path.
+  // Sets gamePhase to SavePrompt so update() returns early (line ~913 guard)
+  // before this.gameLoop is initialized by bootFresh → finishBoot.
+  private showDifficultySelectThenBoot(): void {
+    this.gamePhase = GamePhase.SavePrompt;
+    const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
+    uiScene.showDifficultySelectOverlay({
+      onSelect: (d) => this.bootFresh(d),
+    });
   }
 
   private bootFromSave(): void {
@@ -550,6 +567,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.currentSeed = loaded.seed;
     this.world = nextWorld;
+    this.currentDifficulty = nextWorld.difficulty; // S5 — restore difficulty from save
     this.resumedFromSave = true;
     // SCEN-06 replay truth: restore inputLog completely so the continued session
     // can be replayed byte-for-byte from (seed, inputLog) per Plan 04 Task 1.
@@ -558,7 +576,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private finishBoot(): void {
-    this.prevState = createScenario(this.currentSeed);
+    this.prevState = createScenario(this.currentSeed, this.currentDifficulty);
     copyWorldState(this.world, this.prevState);
 
     // B1: world.colonies is a PLAIN OBJECT per ADR-0006.
@@ -773,7 +791,8 @@ export class GameScene extends Phaser.Scene {
     this.currentCause = null;
     this.resetSessionState();
     this.currentSeed = seed;
-    this.world = createScenario(seed);
+    // S5: retry preserves the previous game's difficulty (same seed + same difficulty).
+    this.world = createScenario(seed, this.currentDifficulty);
     this.finishBoot();
     if (wasSuspended) {
       this.autosaveSuspended = true;
@@ -874,13 +893,19 @@ export class GameScene extends Phaser.Scene {
     }
     this.currentOutcome = GameOutcome.None;
     this.currentCause = null;
-    // bootFresh → finishBoot resumes the loop; this is the authoritative restart path.
-    this.bootFresh();
-    if (wasSuspended) {
-      this.autosaveSuspended = true;
-    }
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     uiScene.hideGameOverOverlay();
+    // S5: show difficulty selector before creating the new world.
+    // bootFresh is invoked inside the callback so wasSuspended is captured.
+    this.gamePhase = GamePhase.SavePrompt; // prevent update() from ticking the old world during overlay
+    uiScene.showDifficultySelectOverlay({
+      onSelect: (d) => {
+        this.bootFresh(d);
+        if (wasSuspended) {
+          this.autosaveSuspended = true;
+        }
+      },
+    });
   }
 
   // ---------------------------------------------------------------------------

@@ -39,8 +39,9 @@ import {
   WORKER_BASE_SPEED,
   WORKER_LIFESPAN_TICKS,
   STARVATION_GRACE_TICKS,
+  MIN_EGG_INTERVAL_TICKS,
 } from '../constants.js';
-import { SIM_VERSION_V21_REPRODUCTION } from '../types.js';
+import { SIM_VERSION_V21_REPRODUCTION, SIM_VERSION_V22_DIFFICULTY } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // tickQueenEggProduction — CLNY-01
@@ -109,9 +110,15 @@ function eggIntervalForColony(colony: ColonyRecord): number {
 
 export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord): void {
   // Gate 1: tick-modulo interval (S4 V21+: surplus-scaled; pre-V21: static)
-  const eggInterval = world.simVersion >= SIM_VERSION_V21_REPRODUCTION
+  let eggInterval = world.simVersion >= SIM_VERSION_V21_REPRODUCTION
     ? eggIntervalForColony(colony) : QUEEN_EGG_INTERVAL_TICKS;
   if (eggInterval < 0) return; // QUEEN_EGG_INTERVAL_DISABLED sentinel
+  // S5 (V22): apply per-colony brood-interval numerator (set in createScenario from difficulty tier).
+  // Integer-only: (interval * numerator) >> 2; numerator=4 is identity. Hard floor: MIN_EGG_INTERVAL_TICKS.
+  if (world.simVersion >= SIM_VERSION_V22_DIFFICULTY) {
+    eggInterval = (eggInterval * colony.eggIntervalNumerator) >> 2;
+    if (eggInterval < MIN_EGG_INTERVAL_TICKS) eggInterval = MIN_EGG_INTERVAL_TICKS;
+  }
   // V21+: elapsed-since-last-lay prevents spurious double-lays when the surplus
   // tier changes mid-cycle (e.g., interval drops from 300→200 at tick 301 after
   // a lay at tick 300; modulo would fire again at tick 400, only 100 ticks later).

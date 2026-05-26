@@ -2,6 +2,8 @@
 // S0b: emits queen_death SimEvent on first detection (cause: null for pre-V16 saves).
 // S1: reads pendingQueenDeathContexts (written by killAnt) to fill in cause=InvasionKill.
 // S2: two-pass loop for MutualDestruction; reads aiState for aiStateAtTime; full inferCause.
+// S5 (V22): checkTiebreaks — Timeout (both queens survive to MATCH_TIMEOUT_TICKS) and
+//           Stalemate (all surface food gone + both colonies below STALEMATE_FOOD_THRESHOLD_FP).
 
 export const GameOutcome = {
   None: 0,
@@ -14,8 +16,14 @@ export type GameOutcome = typeof GameOutcome[keyof typeof GameOutcome];
 import type { WorldState, AIState } from './types.js';
 import type { ColonyId, ColonyRecord } from './colony/colony-store.js';
 import { emitEvent } from './telemetry.js';
-import { SIM_VERSION_V16_COMBAT_HPDPS, SIM_VERSION_V19_AI_STATE } from './types.js';
+import { SIM_VERSION_V16_COMBAT_HPDPS, SIM_VERSION_V19_AI_STATE, SIM_VERSION_V22_DIFFICULTY } from './types.js';
 import { FP_SHIFT } from './fixed.js';
+import { colonyFoodTotal } from './colony/colony-system.js';
+import {
+  PLAYER_COLONY_ID,
+  MATCH_TIMEOUT_TICKS,
+  STALEMATE_FOOD_THRESHOLD_FP,
+} from './constants.js';
 
 /**
  * S2 — infer queen_death cause from the kill context and game outcome.
@@ -270,4 +278,106 @@ function _isQueenAliveAndEmitLegacy(world: WorldState, colony: ColonyRecord): bo
     return false;
   }
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// S5 (V22) — Tiebreak detection: Timeout and Stalemate
+// ---------------------------------------------------------------------------
+
+/**
+ * Colony food total including food currently carried by living ants.
+ * `colonyFoodTotal` (colony-system) covers stored+chamber food but not in-transit food,
+ * which must be counted to avoid triggering a false stalemate on the tick the last
+ * pile is collected (foragers may carry enough food for the colony to recover).
+ */
+function colonyFoodWithCarried(world: WorldState, colony: ColonyRecord): number {
+  let total = colonyFoodTotal(colony);
+  const cid = colony.colonyId;
+  for (let id = 0; id < world.ants.alive.length; id++) {
+    if (world.ants.alive[id] === 1 && world.ants.colonyId[id] === cid) {
+      total += world.ants.foodCarrying[id] as number;
+    }
+  }
+  return total;
+}
+
+/**
+ * Count living workers for a given colony (excludes queen, eggs, and larvae).
+ * Uses colony.workers bucket — eggs/larvae have alive===1 in world.ants but are
+ * not workers, so iterating world.ants directly would overcount.
+ */
+function livingWorkerCount(world: WorldState, colonyId: ColonyId): number {
+  const colony = world.colonies[colonyId];
+  if (colony === undefined) return 0;
+  let count = 0;
+  for (const id of colony.workers) {
+    if (world.ants.alive[id] === 1) count += 1;
+  }
+  return count;
+}
+
+/**
+ * S5 (V22) — Check tiebreak conditions when both queens are still alive.
+ * Must be called from tick.ts step 18 after checkQueenDeath returns None.
+ *
+ * Timeout: both queens survive to MATCH_TIMEOUT_TICKS; winner by living worker count.
+ * Stalemate: all surface food piles depleted AND both colonies below STALEMATE_FOOD_THRESHOLD_FP.
+ *
+ * Returns GameOutcome.None if no tiebreak condition is met, or if world.simVersion < V22.
+ * Emits a 'round_end' SimEvent for playtrace roundEndReason attribution.
+ */
+export function checkTiebreaks(world: WorldState, playerColonyId: ColonyId): GameOutcome {
+  if (world.simVersion < SIM_VERSION_V22_DIFFICULTY) return GameOutcome.None;
+
+  // Only fires when both queens are alive (checkQueenDeath already handled queen deaths).
+  const playerColony = world.colonies[playerColonyId];
+  if (playerColony === undefined) return GameOutcome.None;
+  if (world.ants.alive[playerColony.queenEntityId] !== 1) return GameOutcome.None;
+
+  // Find AI colony (first non-player colony).
+  let aiColonyId: ColonyId | null = null;
+  let aiColony: ColonyRecord | null = null;
+  for (const key in world.colonies) {
+    if (!Object.hasOwn(world.colonies, key)) continue;
+    const cid = Number(key) as ColonyId;
+    if (cid === playerColonyId) continue;
+    const col = world.colonies[cid]!;
+    if (world.ants.alive[col.queenEntityId] !== 1) return GameOutcome.None; // AI queen dead → not a tiebreak
+    aiColonyId = cid;
+    aiColony = col;
+    break;
+  }
+  if (aiColonyId === null || aiColony === null) return GameOutcome.None;
+
+  // --- Timeout: both queens alive at the match time cap ---
+  if (world.tick >= MATCH_TIMEOUT_TICKS) {
+    const playerWorkers = livingWorkerCount(world, playerColonyId);
+    const aiWorkers = livingWorkerCount(world, aiColonyId);
+    emitEvent(world, {
+      tick: world.tick,
+      type: 'round_end',
+      payload: { reason: 'TimeoutTiebreak', playerWorkerCount: playerWorkers, aiWorkerCount: aiWorkers },
+    });
+    if (playerWorkers > aiWorkers) return GameOutcome.Victory;
+    if (aiWorkers > playerWorkers) return GameOutcome.Defeat;
+    return GameOutcome.MutualDestruction;
+  }
+
+  // --- Stalemate: no food on the map AND both colonies starving (including carried food) ---
+  if (
+    world.foodPiles.length === 0 &&
+    colonyFoodWithCarried(world, playerColony) < STALEMATE_FOOD_THRESHOLD_FP &&
+    colonyFoodWithCarried(world, aiColony) < STALEMATE_FOOD_THRESHOLD_FP
+  ) {
+    const playerWorkers = livingWorkerCount(world, playerColonyId);
+    const aiWorkers = livingWorkerCount(world, aiColonyId);
+    emitEvent(world, {
+      tick: world.tick,
+      type: 'round_end',
+      payload: { reason: 'StalemateTiebreak', playerWorkerCount: playerWorkers, aiWorkerCount: aiWorkers },
+    });
+    return GameOutcome.MutualDestruction;
+  }
+
+  return GameOutcome.None;
 }

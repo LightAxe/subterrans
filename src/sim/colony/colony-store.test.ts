@@ -96,10 +96,10 @@ describe('createColonyRecord', () => {
     expect('idleCount' in r).toBe(false);
   });
 
-  it('(11) ColonyRecord Phase 2 factory returns 20 fields (17 Phase 2 + killCount + priorityFoodPileId + queenLastEggTick; Phase 3 extensions are undefined until caller assigns)', () => {
+  it('(11) ColonyRecord Phase 2 factory returns 21 fields (17 Phase 2 + killCount + priorityFoodPileId + queenLastEggTick + eggIntervalNumerator; Phase 3 extensions are undefined until caller assigns)', () => {
     const r = createColonyRecord(1, 0);
-    // Factory returns exactly 20 fields (17 Phase 2 + Phase 9 killCount + Phase 9 priorityFoodPileId + S4 queenLastEggTick)
-    expect(Object.keys(r).length).toBe(20);
+    // 17 Phase 2 + Phase 9 killCount + Phase 9 priorityFoodPileId + S4 queenLastEggTick + S5 eggIntervalNumerator
+    expect(Object.keys(r).length).toBe(21);
   });
 
   it('createColonyRecord initializes killCount to 0', () => {

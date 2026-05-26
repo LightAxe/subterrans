@@ -20,6 +20,7 @@ import {
   playerWorkerCount,
   createDefaultAIStateRecord,
   NORMAL_TIER_INDEX,
+  tierIndex,
 } from './ai-state.js';
 import { killAnt } from './combat.js';
 import { initAnt } from './ant/ant-store.js';
@@ -417,5 +418,24 @@ describe('createDefaultAIStateRecord', () => {
     expect(rec.operationFighterIds[0]).toBe(-1);
     expect(rec.invasionRallyTileX).toBe(-1);
     expect(rec.invasionRallyTileY).toBe(-1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S5 (V22) — tierIndex
+// ---------------------------------------------------------------------------
+
+describe('tierIndex', () => {
+  it('maps Easy to 0', () => {
+    expect(tierIndex('Easy')).toBe(0);
+  });
+
+  it('maps Normal to 1 (same as NORMAL_TIER_INDEX)', () => {
+    expect(tierIndex('Normal')).toBe(1);
+    expect(tierIndex('Normal')).toBe(NORMAL_TIER_INDEX);
+  });
+
+  it('maps Hard to 2', () => {
+    expect(tierIndex('Hard')).toBe(2);
   });
 });

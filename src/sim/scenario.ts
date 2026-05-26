@@ -11,7 +11,7 @@
 
 import type { WorldState, SpiderState } from './types.js';
 import { createWorldState, allocateEntityId } from './types.js';
-import { createDefaultAIStateRecord } from './ai-state.js';
+import { createDefaultAIStateRecord, tierIndex } from './ai-state.js';
 import { createSurfaceGrid, createUndergroundGrid, SurfaceTileState, UndergroundTileState, ugSet } from './terrain.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
@@ -45,6 +45,7 @@ import {
   SPIDER_HP_FULL,
   SPIDER_TERRITORY_RADIUS_TILES,
   SPIDER_HUNT_INTERVAL_TICKS,
+  QUEEN_EGG_INTERVAL_DIFFICULTY_NUMERATOR,
 } from './constants.js';
 
 // ---------------------------------------------------------------------------
@@ -316,11 +317,14 @@ function _placeSpider(world: WorldState): SpiderState {
  *   8. Create pheromone grids for each colony (FoodTrail + DangerTrail, both zones)
  *   9. Write back rngState
  *
- * @param seed - Mulberry32 seed for deterministic generation.
+ * @param seed       - Mulberry32 seed for deterministic generation.
+ * @param difficulty - S5 player-selected difficulty tier. Stored on world.difficulty.
+ *                     Defaults to 'Normal' for backward-compatible call sites.
  */
-export function createScenario(seed: number): WorldState {
+export function createScenario(seed: number, difficulty: 'Easy' | 'Normal' | 'Hard' = 'Normal'): WorldState {
   // --- Step 1: Create base WorldState ---
   const world = createWorldState(seed);
+  world.difficulty = difficulty;
 
   // Reconstruct PRNG from seed-derived rngState (PRD §4 integration contract)
   const rng = new Rng(world.rngState);
@@ -349,6 +353,11 @@ export function createScenario(seed: number): WorldState {
   // --- Steps 5-6: Colony initialization (player + enemy) ---
   initColony(world, PLAYER_COLONY_ID, PLAYER_START_X, PLAYER_START_Y, rng);
   initColony(world, ENEMY_COLONY_ID,  ENEMY_START_X,  ENEMY_START_Y,  rng);
+  // S5 (V22): encode difficulty scaling into the AI colony record so lifecycle-system
+  // can apply the numerator without branching on PLAYER_COLONY_ID at runtime.
+  world.colonies[ENEMY_COLONY_ID]!.eggIntervalNumerator =
+    QUEEN_EGG_INTERVAL_DIFFICULTY_NUMERATOR[tierIndex(difficulty)];
+  // Player colony keeps default eggIntervalNumerator=4 (identity).
 
   // --- Step 8: Pheromone grids — all 8 (2 colonies × 2 types × 2 zones) ---
   // All 8 must exist so tick-step lookups never hit a missing key.

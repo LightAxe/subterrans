@@ -98,6 +98,10 @@ export const SAVE_PROMPT_CONTINUE_RECT = { x: 300, y: 280, w: 120, h: 32 } as co
 export const SAVE_PROMPT_NEW_GAME_RECT = { x: 300, y: 320, w: 120, h: 32 } as const;
 /** Canvas-local rect for the GameOver "Restart" button. */
 export const GAME_OVER_RESTART_RECT    = { x: 300, y: 345, w: 120, h: 32 } as const;
+/** Canvas-local rects for the DifficultySelect buttons (Easy / Normal / Hard). */
+export const DIFFICULTY_EASY_RECT   = { x: 180, y: 260, w: 140, h: 40 } as const;
+export const DIFFICULTY_NORMAL_RECT = { x: 330, y: 260, w: 140, h: 40 } as const;
+export const DIFFICULTY_HARD_RECT   = { x: 480, y: 260, w: 140, h: 40 } as const;
 import {
   createSliderDragState,
   drawSlider,
@@ -307,6 +311,7 @@ export class UIScene extends Phaser.Scene {
   // Phase 9 Plan 06 — overlay groups (null = overlay not currently shown)
   private gameOverGroup: Phaser.GameObjects.GameObject[] = [];
   private savePromptGroup: Phaser.GameObjects.GameObject[] = [];
+  private difficultySelectGroup: Phaser.GameObjects.GameObject[] = [];
   // Issue #116 — pause menu overlay state. Empty group means "not visible";
   // page tracks which sub-screen is currently rendered. callbacks/saveLoadEnabled
   // are captured at show time so we can re-render on page navigation without
@@ -1081,6 +1086,88 @@ export class UIScene extends Phaser.Scene {
   }
 
   // ---------------------------------------------------------------------------
+  // S5 — Difficulty select overlay
+  //
+  // Shown before every new game. Player chooses Easy / Normal / Hard; the
+  // choice is passed to createScenario via the onSelect callback. No cancel
+  // button — the player must choose before the world is created.
+  // ---------------------------------------------------------------------------
+
+  public showDifficultySelectOverlay(callbacks: { onSelect: (d: 'Easy' | 'Normal' | 'Hard') => void }): void {
+    this.hideDifficultySelectOverlay();
+
+    const W = 800;
+    const H = 592;
+
+    const bg = this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.75);
+    bg.setInteractive();
+    bg.setDepth(20);
+
+    const title = this.add.text(W / 2, H / 2 - 100, 'Choose Difficulty', {
+      fontSize: '28px', fontFamily: 'monospace', color: '#ffffff',
+    });
+    title.setOrigin(0.5);
+    title.setDepth(21);
+
+    const subtitle = this.add.text(W / 2, H / 2 - 60, 'Affects the enemy colony\'s aggression and reproduction rate.', {
+      fontSize: '13px', fontFamily: 'monospace', color: '#aaaaaa',
+    });
+    subtitle.setOrigin(0.5);
+    subtitle.setDepth(21);
+
+    const makeButton = (
+      label: string,
+      desc: string,
+      rect: { x: number; y: number; w: number; h: number },
+      color: number,
+      difficulty: 'Easy' | 'Normal' | 'Hard',
+    ): Phaser.GameObjects.GameObject[] => {
+      const btnBg = this.add.rectangle(
+        rect.x + rect.w / 2, rect.y + rect.h / 2,
+        rect.w, rect.h, color, 1,
+      );
+      btnBg.setInteractive();
+      btnBg.setDepth(21);
+      btnBg.on('pointerdown', () => {
+        this.hideDifficultySelectOverlay();
+        callbacks.onSelect(difficulty);
+      });
+
+      const btnLabel = this.add.text(rect.x + rect.w / 2, rect.y + 12, label, {
+        fontSize: '15px', fontFamily: 'monospace', color: '#ffffff',
+      });
+      btnLabel.setOrigin(0.5, 0);
+      btnLabel.setDepth(22);
+
+      const btnDesc = this.add.text(rect.x + rect.w / 2, rect.y + 28, desc, {
+        fontSize: '10px', fontFamily: 'monospace', color: '#cccccc',
+        wordWrap: { width: rect.w - 8 },
+      });
+      btnDesc.setOrigin(0.5, 0);
+      btnDesc.setDepth(22);
+
+      return [btnBg, btnLabel, btnDesc];
+    };
+
+    const easyR = DIFFICULTY_EASY_RECT;
+    const normR = DIFFICULTY_NORMAL_RECT;
+    const hardR = DIFFICULTY_HARD_RECT;
+
+    const easyObjs  = makeButton('Easy',   'Slower AI', easyR, 0x226622, 'Easy');
+    const normObjs  = makeButton('Normal', 'Balanced',  normR, 0x224466, 'Normal');
+    const hardObjs  = makeButton('Hard',   'Faster AI', hardR, 0x662222, 'Hard');
+
+    this.difficultySelectGroup = [bg, title, subtitle, ...easyObjs, ...normObjs, ...hardObjs];
+    this.recomputeActiveOverlay();
+  }
+
+  public hideDifficultySelectOverlay(): void {
+    for (const obj of this.difficultySelectGroup) obj.destroy();
+    this.difficultySelectGroup = [];
+    this.recomputeActiveOverlay();
+  }
+
+  // ---------------------------------------------------------------------------
   // Issue #116 — Pause menu overlay
   //
   // Same Phaser-overlay-on-UIScene pattern as SavePrompt and GameOver: a
@@ -1562,6 +1649,7 @@ export class UIScene extends Phaser.Scene {
     else if (this.pauseMenuGroup.length > 0) setActiveOverlay('pause-menu');
     else if (this.gameOverGroup.length > 0) setActiveOverlay('game-over');
     else if (this.savePromptGroup.length > 0) setActiveOverlay('save-prompt');
+    else if (this.difficultySelectGroup.length > 0) setActiveOverlay('save-prompt'); // reuse 'save-prompt' HUD state
     else setActiveOverlay('none');
   }
 

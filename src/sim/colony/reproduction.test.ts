@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import { tickQueenEggProduction, tickLifecycleTransitions } from './lifecycle-system.js';
 import { tickLarvaMaturation } from './larva-maturation.js';
-import { createWorldState, SIM_VERSION_V20_SPIDER, SIM_VERSION_V21_REPRODUCTION } from '../types.js';
+import { createWorldState, SIM_VERSION_V20_SPIDER, SIM_VERSION_V21_REPRODUCTION, SIM_VERSION_V22_DIFFICULTY } from '../types.js';
 import { createColonyRecord } from './colony-store.js';
 import { initAnt } from '../ant/ant-store.js';
 import { AntTask, ChamberType, NursingSubState } from '../enums.js';
@@ -28,9 +28,10 @@ import {
   FOOD_PER_ANT_BASELINE,
   LARVA_MATURE_TICKS,
   LARVA_MATURE_NURSE_ACCELERATION,
+  MIN_EGG_INTERVAL_TICKS,
 } from '../constants.js';
 import type { WorldState } from '../types.js';
-import type { ColonyRecord } from './colony-store.js';
+import type { ColonyRecord, ColonyId } from './colony-store.js';
 
 
 // ---------------------------------------------------------------------------
@@ -482,4 +483,103 @@ describe('D-29 WarFooting — reproduction speed advantage', () => {
       ).toBeGreaterThanOrEqual(MIN_TICK_DELTA);
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// 7. V22 difficulty brood modifier — AI egg interval scaling
+// ---------------------------------------------------------------------------
+
+describe('V22 difficulty brood modifier — AI egg interval', () => {
+  const AI_COLONY_ID = 2;
+
+  function setupAIColony(world: WorldState, foodStored = foodForSX10(100)): ColonyRecord {
+    const queenId = world.nextEntityId++;
+    const posX = (QUEEN_TILE_X << FP_SHIFT) + (FP_ONE >> 1);
+    const posY = (QUEEN_TILE_Y << FP_SHIFT) + (FP_ONE >> 1);
+    initAnt(world.ants, queenId, { colonyId: AI_COLONY_ID, posX, posY, task: AntTask.Idle, speed: 0 });
+    world.ants.zone[queenId] = Zone.Underground;
+
+    const colony = createColonyRecord(AI_COLONY_ID as ColonyId, queenId);
+    colony.foodStored = foodStored;
+    colony.queenLastEggTick = 0; // prevent default -300 from firing early
+    colony.chambers.push({
+      chamberId: 200,
+      chamberType: ChamberType.Queen,
+      foodStored: 0,
+      posX: QUEEN_TILE_X << FP_SHIFT,
+      posY: QUEEN_TILE_Y << FP_SHIFT,
+      width: 2, height: 2,
+    });
+    colony.chambers.push({
+      chamberId: 201,
+      chamberType: ChamberType.Nursery,
+      foodStored: 0,
+      posX: 0, posY: 0,
+      width: 4, height: 3,
+    });
+    const grid = createUndergroundGrid(20, 20);
+    ugSet(grid, QUEEN_TILE_X, QUEEN_TILE_Y, UndergroundTileState.Open);
+    ugSet(grid, 0, 0, UndergroundTileState.Open);
+    world.undergroundGrids[AI_COLONY_ID] = grid;
+    world.colonies[AI_COLONY_ID] = colony;
+    return colony;
+  }
+
+  it('eggIntervalNumerator=3 (Hard): lays at tick 112 (150*3>>2=112), not at 111', () => {
+    const world = makeWorld(SIM_VERSION_V22_DIFFICULTY);
+    const colony = setupAIColony(world);
+    colony.eggIntervalNumerator = 3; // Hard
+
+    world.tick = 111;
+    tickQueenEggProduction(world, colony);
+    expect(colony.eggCount).toBe(0);
+
+    world.tick = 112;
+    tickQueenEggProduction(world, colony);
+    expect(colony.eggCount).toBe(1);
+  });
+
+  it('eggIntervalNumerator=4 (Normal): interval unchanged — lays at 150, not at 149', () => {
+    const world = makeWorld(SIM_VERSION_V22_DIFFICULTY);
+    const colony = setupAIColony(world);
+    // default eggIntervalNumerator=4 (identity: 150*4>>2=150)
+
+    world.tick = 149;
+    tickQueenEggProduction(world, colony);
+    expect(colony.eggCount).toBe(0);
+
+    world.tick = 150;
+    tickQueenEggProduction(world, colony);
+    expect(colony.eggCount).toBe(1);
+  });
+
+  it('eggIntervalNumerator=5 (Easy): lays at tick 187 (150*5>>2=187), not at 150', () => {
+    const world = makeWorld(SIM_VERSION_V22_DIFFICULTY);
+    const colony = setupAIColony(world);
+    colony.eggIntervalNumerator = 5; // Easy
+
+    world.tick = 150; // would fire at Normal (numerator=4) but not Easy
+    tickQueenEggProduction(world, colony);
+    expect(colony.eggCount).toBe(0);
+
+    world.tick = 187;
+    tickQueenEggProduction(world, colony);
+    expect(colony.eggCount).toBe(1);
+  });
+
+  it('pre-V22 (V21): eggIntervalNumerator=3 is ignored — interval unchanged at 150 ticks', () => {
+    const world = makeWorld(SIM_VERSION_V21_REPRODUCTION);
+    const colony = setupAIColony(world);
+    colony.eggIntervalNumerator = 3; // Hard, but V22 gate not active
+
+    world.tick = 150;
+    tickQueenEggProduction(world, colony);
+    expect(colony.eggCount).toBe(1); // no V22 modifier → fires at 150
+  });
+
+  it('Hard modifier (numerator=3) keeps interval above MIN_EGG_INTERVAL_TICKS (100)', () => {
+    // floor interval=150, Hard: 150*3>>2=112 > 100 — clamp does not fire in standard play.
+    expect((QUEEN_EGG_INTERVAL_FLOOR_TICKS * 3) >> 2).toBeGreaterThanOrEqual(MIN_EGG_INTERVAL_TICKS);
+    expect(MIN_EGG_INTERVAL_TICKS).toBe(100);
+  });
 });

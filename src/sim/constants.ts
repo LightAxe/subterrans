@@ -59,6 +59,35 @@ export const COLONY_SIZE_FLOOR = 8;
 export const FOOD_PER_ANT_BASELINE = 60;
 
 // ---------------------------------------------------------------------------
+// S5 (V22) — Difficulty tier: brood modifier and tiebreak thresholds
+// ---------------------------------------------------------------------------
+
+/**
+ * S5 — Per-difficulty scale for AI colony egg interval. Indexed [Easy, Normal, Hard].
+ * Applied as `(interval * numerator) >> 2` (integer-only multiply+shift, no division operator).
+ * Easy=5/4=1.25× (slower), Normal=4/4=1.0× (unchanged), Hard=3/4=0.75× (faster).
+ * At Hard and ≥10× surplus: 150 * 3 >> 2 = 112 ticks — below QUEEN_EGG_INTERVAL_FLOOR_TICKS
+ * (150) but above MIN_EGG_INTERVAL_TICKS (100). Applied to AI colony only; player always
+ * uses the unmodified surplus-curve result.
+ */
+export const QUEEN_EGG_INTERVAL_DIFFICULTY_NUMERATOR = [5, 4, 3] as const;
+
+/**
+ * S5 — Match time cap in ticks. Both queens surviving to this tick triggers
+ * TimeoutTiebreak; winner determined by living worker count.
+ * 24 000 ticks = 20 minutes at 20 Hz.
+ */
+export const MATCH_TIMEOUT_TICKS = 24_000;
+
+/**
+ * S5 — Colony food-store threshold (fixed-point) below which a colony is
+ * considered "too starved to recover" for Stalemate detection.
+ * Both colonies must be below this threshold AND all food piles must be gone.
+ * 512 fp = 2 × FP_ONE = 2 food units.
+ */
+export const STALEMATE_FOOD_THRESHOLD_FP = 512;
+
+// ---------------------------------------------------------------------------
 // S4 (V21) — Nurse Attending substate: maturation acceleration
 // ---------------------------------------------------------------------------
 
