@@ -62,23 +62,15 @@ Branch names: `feat/<short-description>`, `fix/<short-description>`, `chore/<sho
 
 This applies to AI agents working in this repo as well as human contributors. The size of the change is not the criterion.
 
-**AI agents must invoke the `/ship` skill before pushing any branch.** `/ship` is a Claude Code project skill (invoked via the Skill tool with `skill: "ship"`) that enforces the full PR cycle:
+**AI agents must complete an internal review pass before pushing.** Spawn a fresh agent with no prior session context, pass it only the current diff, and ask it to identify bugs, logic errors, and missed edge cases. Address each finding, then repeat until a pass returns no new issues. Do not push code that has not passed a clean internal review.
 
-1. **Internal review loop** — spawn a fresh Agent (no prior session context) passing only the current `git diff` and ask it to identify bugs, logic errors, and edge cases. Address each finding, then repeat until a pass returns no new issues. Cap at five iterations; if issues remain, flag for human review rather than pushing.
-2. **Commit, push, and open a PR** — stage, commit with a Conventional Commits message, push the branch, and open a PR with summary and test plan.
-3. **Trigger Codex review** — post the PR comment `@codex review`. This invokes an automated bot reviewer on the PR; the comment is required because the bot does not auto-trigger on owner-authored pushes.
-4. **External review loop** — poll the PR's GitHub reactions API for a `THUMBS_UP` from `chatgpt-codex-connector[bot]` (the bot's explicit "clean" signal). If the bot posts findings instead, address them, re-run the internal loop, push, and re-trigger `@codex review`. If no signal arrives after ~30 minutes, report "reviewer did not respond" and stop.
-
-**The internal review pass (step 1) is mandatory before every push.** "Fresh Agent" means a new subagent invocation with no conversation history — reviewing from memory or using an agent that has seen the implementation session does not satisfy this requirement.
+**Do not merge without explicit owner instruction.** Opening a PR, receiving a passing review, and seeing all checks green does not authorize merge. Merge requires a separate, explicit instruction from the repository owner.
 
 ## PR Review Process
 
-Every PR is reviewed by at least two independent AI code reviewers:
+Every PR requires at least two independent reviews before merge — one focused on architectural compliance (sim/render boundary, determinism, ECS conventions) and one providing an independent perspective on correctness and edge cases. Either reviewer can block.
 
-1. **Architectural review** — Uses the `subterrans-pr-review` skill (architectural compliance, principle violations, code quality).
-2. **Independent review** — A second agent providing an independent perspective.
-
-Either reviewer can block; both must approve for merge (or owner override). The review checklist includes:
+The review checklist:
 
 - [ ] No imports crossing the `src/sim/` boundary
 - [ ] No `Math.random()`, `Date`, `performance.now()` in `src/sim/`
@@ -90,7 +82,7 @@ Either reviewer can block; both must approve for merge (or owner override). The 
 
 ## Review guidelines
 
-These rules are addressed to AI code reviewers inspecting pull requests.
+These rules are addressed to code reviewers inspecting pull requests.
 
 **Be adversarial.** Push back hard on anything that differs from the requirements below or from established best practice. Do not soften criticism, do not assume the author had a good reason, and do not skip a finding because the diff is small or the author is the project owner. A useful review surfaces problems the author missed; a polite review that approves a violation is worse than no review at all. If a rule below is violated, say so plainly and block the PR — do not bury the finding in a list of nits.
 
