@@ -231,7 +231,7 @@ export class GameScene extends Phaser.Scene {
   private speedMultiplier: 1 | 2 | 4 = 1;
 
   // S6 — render-side scratch (per-session, reset in resetSessionState).
-  private nextEventIndex = 0;           // event cursor for consumeEventsForRender
+  private lastProcessedEventTick = -1;  // tick-based cursor for consumeEventsForRender
   private prevQueenCombinedHp: number | null = null; // queen HP tracking for damage pulse
   private queenStarvationTriggered = false;           // starvation onset caption/pulse guard
   private renderFrame = 0;              // frame counter for glow fade maps
@@ -500,7 +500,7 @@ export class GameScene extends Phaser.Scene {
     // the smoothing relaxes. Clearing here keeps boot visually clean.
     this.antFacingCache.reset();
     // S6 — reset per-session render-side scratch.
-    this.nextEventIndex = 0;
+    this.lastProcessedEventTick = -1;
     this.prevQueenCombinedHp = null;
     this.queenStarvationTriggered = false;
     this.contestedGlowFrames.clear();
@@ -534,13 +534,27 @@ export class GameScene extends Phaser.Scene {
   private consumeEventsForRender(): void {
     if (!this.world) return;
     const events = this.world.events;
-    // Defensive: clamp if events shrank (replay reset).
-    if (this.nextEventIndex > events.length) this.nextEventIndex = events.length;
+    if (events.length === 0) return;
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9 | null;
 
-    for (let i = this.nextEventIndex; i < events.length; i++) {
+    // Use tick-based filtering rather than an array-index cursor. The event
+    // buffer evicts old combat_kills via splice when it reaches capacity, which
+    // shifts array indices and makes a length-based cursor stale. Tick-based
+    // filtering is invariant to splice position because structural events
+    // (invasion_start, spider_rampage_start, etc.) are never evicted.
+    //
+    // Safety of `ev.tick <= lastProcessedEventTick` (strict skip on boundary tick):
+    // All sim ticks for a render frame complete synchronously before this method
+    // runs. A tick N emits all its events in one call; there is no mechanism for
+    // a tick-N event to arrive in a later render frame. Same-tick events are
+    // therefore always fully present when we first scan that tick, and
+    // `lastProcessedEventTick` only advances after all of them are processed.
+    // `resetSessionState()` is the only path that resets this field to -1.
+    let maxTickSeen = this.lastProcessedEventTick;
+    for (let i = 0; i < events.length; i++) {
       const ev = events[i];
-      if (!ev) continue;
+      if (!ev || ev.tick <= this.lastProcessedEventTick) continue;
+      if (ev.tick > maxTickSeen) maxTickSeen = ev.tick;
 
       if (ev.type === 'invasion_start') {
         // Screen-edge flash in the direction of the invasion entrance.
@@ -584,7 +598,7 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    this.nextEventIndex = events.length;
+    this.lastProcessedEventTick = maxTickSeen;
   }
 
   /**
@@ -757,7 +771,12 @@ export class GameScene extends Phaser.Scene {
             const text = checkAndTrigger('dig');
             if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80);
           } else if (cmd.type === 'PlaceChamber') {
-            const chamberTypeName = String(cmd.chamberType) as string;
+            const chamberTypeLabel: Record<number, string> = {
+              [ChamberType.Queen]: 'Queen',
+              [ChamberType.Nursery]: 'Nursery',
+              [ChamberType.FoodStorage]: 'Food Storage',
+            };
+            const chamberTypeName = chamberTypeLabel[cmd.chamberType] ?? `chamber type ${cmd.chamberType}`;
             const text = checkAndTrigger('chamber', chamberTypeName);
             if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80);
           } else if (cmd.type === 'MarkFoodPile') {
