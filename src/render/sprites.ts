@@ -57,6 +57,11 @@ export const COLOR_FIGHTER_TINT = 0xff4444;
 /** S1 — Faint tile tint drawn under ants on contested tiles (alpha < 0.3). */
 export const COLOR_CONTESTED_TILE = 0xff6600;
 
+/** S6 — Home-ground glow colors for per-grid combat tile highlight. */
+export const COLOR_PLAYER_HOME_GLOW        = 0x3060a0; // blue — player underground tiles
+export const COLOR_ENEMY_HOME_GLOW         = 0xa06030; // orange — enemy underground tiles
+export const COLOR_NEUTRAL_CONTESTED_GLOW  = 0xa0a030; // yellow — surface contested tiles
+
 /** PRD §7g — Underground solid (unexcavated) tile color. */
 export const COLOR_UNDERGROUND_SOLID = 0x2d1a0a;
 

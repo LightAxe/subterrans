@@ -121,10 +121,20 @@ import {
   type UndergroundInputState,
 } from '../input/underground-input.js';
 import { hideContextMenu } from './context-menu-state.js';
+import { buildPlaytraceSummary, type GameOutcomeLabel } from './summary-builder.js';
+import { checkAndTrigger, resetCaptions } from './onboarding-captions.js';
+import {
+  triggerScreenEdgeFlash,
+  triggerQueenDamagePulse,
+  inferFlashDirection,
+  QUEEN_DAMAGE_SUPPRESS_TICKS,
+} from './screen-effects.js';
+import { ChamberType } from '../sim/enums.js';
+import { CANVAS_W, CANVAS_H } from './sprites.js';
 // UIScenePhase9 — subset of UIScene public API added in Plan 06 Task 3.
 // Typed here to avoid circular imports; UIScene implements these methods.
 interface UIScenePhase9 {
-  showGameOverOverlay(outcome: GameOutcome, cause: import('./ui-scene-logic.js').QueenDeathCause, onRestart: () => void): void;
+  showGameOverOverlay(outcome: GameOutcome, cause: import('./ui-scene-logic.js').QueenDeathCause, onRestart: () => void, narrativeSeed?: string | null): void;
   hideGameOverOverlay(): void;
   showSavePromptOverlay(callbacks: { onContinue: () => void; onNewGame: () => void }): void;
   hideSavePromptOverlay(): void;
@@ -164,6 +174,8 @@ interface UIScenePhase9 {
   // S5 — difficulty select overlay. Shown before every new game.
   showDifficultySelectOverlay(callbacks: { onSelect: (d: 'Easy' | 'Normal' | 'Hard') => void }): void;
   hideDifficultySelectOverlay(): void;
+  // S6 — first-occurrence caption overlay (light onboarding).
+  showCaption(text: string, screenX: number, screenY: number): void;
 }
 import type { SimCommand } from '../sim/commands.js';
 
@@ -217,6 +229,14 @@ export class GameScene extends Phaser.Scene {
   // below set the same field directly. Narrowed to the cycle set so the
   // type aligns with PauseMenuLayout's SpeedMultiplier.
   private speedMultiplier: 1 | 2 | 4 = 1;
+
+  // S6 — render-side scratch (per-session, reset in resetSessionState).
+  private nextEventIndex = 0;           // event cursor for consumeEventsForRender
+  private prevQueenCombinedHp: number | null = null; // queen HP tracking for damage pulse
+  private queenStarvationTriggered = false;           // starvation onset caption/pulse guard
+  private renderFrame = 0;              // frame counter for glow fade maps
+  private readonly contestedGlowFrames: Map<number, number> = new Map();  // surface glow fade
+  private readonly undergroundGlowFrames: Map<number, number> = new Map(); // underground glow fade
 
   // Issue #122 / ADR 0013 — playtrace upload state. The endpoint string is
   // sourced from the registry (set by main.ts from VITE_PLAYTRACE_ENDPOINT
@@ -479,6 +499,13 @@ export class GameScene extends Phaser.Scene {
     // would lock a freshly-spawned ant into the prior ant's direction until
     // the smoothing relaxes. Clearing here keeps boot visually clean.
     this.antFacingCache.reset();
+    // S6 — reset per-session render-side scratch.
+    this.nextEventIndex = 0;
+    this.prevQueenCombinedHp = null;
+    this.queenStarvationTriggered = false;
+    this.contestedGlowFrames.clear();
+    this.undergroundGlowFrames.clear();
+    resetCaptions();
     // Issue #122 — rotate the session UUID so each (re)start gets its own
     // telemetry row server-side.
     //
@@ -493,6 +520,127 @@ export class GameScene extends Phaser.Scene {
       typeof crypto !== 'undefined' && 'randomUUID' in crypto
         ? crypto.randomUUID()
         : '';
+  }
+
+  // ---------------------------------------------------------------------------
+  // S6 — render-side event cursor and queen status checks
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Drain world.events from the last-seen index, dispatching each new event
+   * to render-side effects (screen flash, camera nudge, captions).
+   * Called once per render frame while Playing.
+   */
+  private consumeEventsForRender(): void {
+    if (!this.world) return;
+    const events = this.world.events;
+    // Defensive: clamp if events shrank (replay reset).
+    if (this.nextEventIndex > events.length) this.nextEventIndex = events.length;
+    const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9 | null;
+
+    for (let i = this.nextEventIndex; i < events.length; i++) {
+      const ev = events[i];
+      if (!ev) continue;
+
+      if (ev.type === 'invasion_start') {
+        // Screen-edge flash in the direction of the invasion entrance.
+        const playerColony = this.world.colonies[PLAYER_COLONY_ID];
+        const queenChamber = playerColony?.chambers.find(ch => ch.chamberType === ChamberType.Queen);
+        if (queenChamber) {
+          const queenTileX = queenChamber.posX >> 8;
+          const queenTileY = queenChamber.posY >> 8;
+          const direction = inferFlashDirection(
+            queenTileX, queenTileY,
+            ev.payload.rallyTile?.x ?? queenTileX,
+            ev.payload.rallyTile?.y ?? queenTileY,
+          );
+          triggerScreenEdgeFlash(this, direction, CANVAS_W, CANVAS_H);
+        } else {
+          triggerScreenEdgeFlash(this, 'right', CANVAS_W, CANVAS_H);
+        }
+        // Caption #7: first AI invasion.
+        const captionText = checkAndTrigger('aiInvading');
+        if (captionText && uiScene) {
+          uiScene.showCaption(captionText, CANVAS_W / 2, 60);
+        }
+      }
+
+      if (ev.type === 'spider_rampage_start') {
+        // Caption #8: first spider rampage.
+        const captionText = checkAndTrigger('spiderRampage');
+        if (captionText && uiScene) {
+          uiScene.showCaption(captionText, CANVAS_W / 2, 60);
+        }
+      }
+
+      if (ev.type === 'ai_state_transition' && ev.payload.to === 'Invading') {
+        // Belt-and-suspenders: invasion_start is the primary trigger above;
+        // this handles any Invading transition not paired with invasion_start.
+        checkAndTrigger('aiInvading'); // idempotent — no-op if already triggered
+      }
+    }
+
+    this.nextEventIndex = events.length;
+  }
+
+  /**
+   * Check per-frame world state for queen damage pulse and starvation onset.
+   * Also fires world-state-based captions (spider visible, spiderPriority, etc.).
+   * Called once per render frame while Playing.
+   */
+  private checkQueenStatusForEffects(): void {
+    if (!this.world) return;
+    const playerColony = this.world.colonies[PLAYER_COLONY_ID];
+    if (!playerColony) return;
+    const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9 | null;
+
+    // Queen damage pulse.
+    const queenId = playerColony.queenEntityId;
+    const hp = this.world.ants.hp[queenId] ?? 0;
+    const bonusHp = this.world.ants.homeGroundBonusHp[queenId] ?? 0;
+    const combinedHp = hp + bonusHp;
+    if (
+      this.prevQueenCombinedHp !== null &&
+      combinedHp < this.prevQueenCombinedHp &&
+      this.world.tick > QUEEN_DAMAGE_SUPPRESS_TICKS
+    ) {
+      triggerQueenDamagePulse(this.cameras.main);
+      // Caption #9: first queen damage.
+      const captionText = checkAndTrigger('queenDamage');
+      if (captionText && uiScene) {
+        uiScene.showCaption(captionText, CANVAS_W / 2, CANVAS_H / 2 - 40);
+      }
+    }
+    this.prevQueenCombinedHp = combinedHp;
+
+    // Starvation onset.
+    if (
+      !this.queenStarvationTriggered &&
+      playerColony.queenStarvationTimer > 0 &&
+      this.world.tick > QUEEN_DAMAGE_SUPPRESS_TICKS
+    ) {
+      this.queenStarvationTriggered = true;
+      triggerQueenDamagePulse(this.cameras.main);
+      // Caption #10: queen starvation onset.
+      const captionText = checkAndTrigger('queenStarvation');
+      if (captionText && uiScene) {
+        uiScene.showCaption(captionText, CANVAS_W / 2, CANVAS_H / 2 - 40);
+      }
+    }
+
+    // World-state-based captions.
+    if (this.world.spider !== null) {
+      const captionText = checkAndTrigger('spider');
+      if (captionText && uiScene) {
+        uiScene.showCaption(captionText, CANVAS_W / 2, 60);
+      }
+    }
+    if (this.world.spiderPriorityColonyId !== null) {
+      const captionText = checkAndTrigger('spiderPriority');
+      if (captionText && uiScene) {
+        uiScene.showCaption(captionText, CANVAS_W / 2, 60);
+      }
+    }
   }
 
   private bootFresh(difficulty: 'Easy' | 'Normal' | 'Hard' = 'Normal'): void {
@@ -595,6 +743,24 @@ export class GameScene extends Phaser.Scene {
       onAfterDrain: (cmds) => {
         // SCEN-06 replay truth: never truncate — appendInputLog handles all commands
         appendInputLog(this.inputLog, cmds);
+        // S6: fire first-occurrence captions for player command types.
+        const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9 | null;
+        for (const cmd of cmds) {
+          if (cmd.type === 'MarkDigTile') {
+            const text = checkAndTrigger('dig');
+            if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80);
+          } else if (cmd.type === 'PlaceChamber') {
+            const chamberTypeName = String(cmd.chamberType) as string;
+            const text = checkAndTrigger('chamber', chamberTypeName);
+            if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80);
+          } else if (cmd.type === 'MarkFoodPile') {
+            const text = checkAndTrigger('foodMark');
+            if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80);
+          } else if (cmd.type === 'SetRallyPoint') {
+            const text = checkAndTrigger('rally');
+            if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80);
+          }
+        }
       },
       onTickOutcome: (outcome) => {
         this.currentOutcome = outcome;
@@ -622,6 +788,15 @@ export class GameScene extends Phaser.Scene {
         }
         this.currentCause = cause;
 
+        // S6: build narrative for the loss screen.
+        const outcomeLabel: GameOutcomeLabel | undefined =
+          outcome === GameOutcome.Victory          ? 'Victory'
+          : outcome === GameOutcome.Defeat         ? 'Defeat'
+          : outcome === GameOutcome.MutualDestruction ? 'MutualDestruction'
+          : undefined;
+        const summary = buildPlaytraceSummary(this.world, this.resumedFromSave, outcomeLabel);
+        const narrativeSeed = summary.outcomeAttribution.narrativeSeed;
+
         const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
         // Issue #122 — when the playtrace feature is enabled, the survey
         // overlay replaces the bare game-over panel at end-of-game. Skip
@@ -631,7 +806,7 @@ export class GameScene extends Phaser.Scene {
         if (this.playtraceEndpoint !== '') {
           this.openSurveyOverlay(false /* quitFromPauseMenu */);
         } else {
-          uiScene.showGameOverOverlay(outcome, cause, () => this.restartGame());
+          uiScene.showGameOverOverlay(outcome, cause, () => this.restartGame(), narrativeSeed);
         }
       },
       getMsPerTick: () => MS_PER_TICK / this.speedMultiplier,
@@ -953,6 +1128,13 @@ export class GameScene extends Phaser.Scene {
     const worldH = this.viewState.activeView === 'surface' ? SURFACE_GRID_HEIGHT : UNDERGROUND_GRID_HEIGHT;
     clampCamera(cam, worldW, worldH);
 
+    // S6: advance render frame counter and drain events for render effects.
+    this.renderFrame++;
+    if (this.gamePhase === GamePhase.Playing) {
+      this.consumeEventsForRender();
+      this.checkQueenStatusForEffects();
+    }
+
     // Draw world.
     const alpha = this.gameLoop.accumulatorMs / MS_PER_TICK;
     const gfx = this.gfx as unknown as GfxLike;
@@ -996,6 +1178,9 @@ export class GameScene extends Phaser.Scene {
         cam,
         pending,
         this.antFacingCache,
+        this.time.now,          // S6: frameTimeMs for reticle/hunger pulse
+        this.contestedGlowFrames, // S6: surface glow fade map
+        this.renderFrame,       // S6: current render frame
       );
     } else {
       drawUndergroundTerrain(gfx, this.world, cam, this.viewState.activeUndergroundColonyId);
@@ -1011,6 +1196,8 @@ export class GameScene extends Phaser.Scene {
         cam,
         this.viewState.activeUndergroundColonyId,
         this.antFacingCache,
+        this.undergroundGlowFrames, // S6: underground glow fade map
+        this.renderFrame,           // S6: current render frame
       );
     }
     this.antSprites.endFrame();

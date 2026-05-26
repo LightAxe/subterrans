@@ -44,6 +44,8 @@ import {
   COLOR_QUEEN_OUTLINE,
   COLOR_FIGHTER_TINT,
   COLOR_CONTESTED_TILE,
+  COLOR_PLAYER_HOME_GLOW,
+  COLOR_ENEMY_HOME_GLOW,
 } from './sprites.js';
 import {
   drawBarrenEarthSubstrate,
@@ -268,6 +270,8 @@ export function drawUndergroundEntities(
   cam: CameraState,
   activeUndergroundColonyId: ColonyId = PLAYER_COLONY_ID,
   facing?: AntFacingCache,
+  undergoundGlowFrames?: Map<number, number>,
+  currentFrame: number = 0,
 ): void {
   const colony = curr.colonies[activeUndergroundColonyId];
   if (colony === undefined) return;
@@ -413,6 +417,72 @@ export function drawUndergroundEntities(
   // Note the asymmetry with the per-active-colony `isQueen` check below: the
   // queen check stays single-colony because queens never cross grids and
   // entity IDs are world-globally unique (no collision risk).
+  // --- Underground home-ground combat tile glow (S6) ---
+  // Per-grid color: blue for player grid, orange for enemy grid.
+  // Fade-out over 5 frames once combat ants leave a tile.
+  {
+    const glowColor = activeUndergroundColonyId === PLAYER_COLONY_ID
+      ? COLOR_PLAYER_HOME_GLOW
+      : COLOR_ENEMY_HOME_GLOW;
+    const BASE_ALPHA = 0.2;
+    const GLOW_FADE_FRAMES = 5;
+
+    // Collect tiles that have ants from 2+ colonies.
+    const tileColony = new Map<number, number>(); // tileKey → first colonyId
+    const contested = new Set<number>();
+    const n = curr.ants.alive.length;
+    for (let id = 0; id < n; id++) {
+      if (!isAlive(curr.ants, id)) continue;
+      if (curr.ants.zone[id] !== 1) continue;
+      if (curr.ants.currentGridColonyId[id] !== activeUndergroundColonyId) continue;
+      const tx = curr.ants.posX[id]! >> 8;
+      const ty = curr.ants.posY[id]! >> 8;
+      const key = (ty << 16) | tx;
+      const cid = curr.ants.colonyId[id]!;
+      const existing = tileColony.get(key);
+      if (existing === undefined) tileColony.set(key, cid);
+      else if (existing !== cid) contested.add(key);
+    }
+    // Stamp active tiles with current frame.
+    if (undergoundGlowFrames) {
+      for (const key of contested) {
+        undergoundGlowFrames.set(key, currentFrame);
+      }
+    }
+    // Draw glows for all contested or recently-contested tiles.
+    const drawKeys = undergoundGlowFrames
+      ? Array.from(undergoundGlowFrames.entries())
+          .filter(([, frame]) => currentFrame - frame < GLOW_FADE_FRAMES)
+          .map(([key]) => key)
+      : Array.from(contested);
+    for (const key of drawKeys) {
+      const tx = key & 0xffff;
+      const ty = (key >> 16) & 0xffff;
+      const sx = (tx - left) * TILE_SIZE_PX;
+      const sy = (ty - top)  * TILE_SIZE_PX;
+      if (sx < -TILE_SIZE_PX || sx > canvasW || sy < -TILE_SIZE_PX || sy > canvasH) continue;
+      const framesAgo = undergoundGlowFrames
+        ? (currentFrame - (undergoundGlowFrames.get(key) ?? currentFrame))
+        : 0;
+      const alpha_g = BASE_ALPHA * (1 - framesAgo / GLOW_FADE_FRAMES);
+      if (alpha_g <= 0) continue;
+      // Soft edge.
+      gfx.fillStyle(glowColor, alpha_g);
+      gfx.fillRect(sx + 2, sy + 2, TILE_SIZE_PX - 4, TILE_SIZE_PX - 4);
+      gfx.fillStyle(glowColor, alpha_g * 0.5);
+      gfx.fillRect(sx,      sy,      TILE_SIZE_PX, 2);
+      gfx.fillRect(sx,      sy + TILE_SIZE_PX - 2, TILE_SIZE_PX, 2);
+      gfx.fillRect(sx,      sy + 2,  2, TILE_SIZE_PX - 4);
+      gfx.fillRect(sx + TILE_SIZE_PX - 2, sy + 2, 2, TILE_SIZE_PX - 4);
+    }
+    // Prune stale entries.
+    if (undergoundGlowFrames) {
+      for (const [key, frame] of undergoundGlowFrames) {
+        if (currentFrame - frame >= GLOW_FADE_FRAMES) undergoundGlowFrames.delete(key);
+      }
+    }
+  }
+
   const broodIds = new Set<number>();
   for (const c of Object.values(curr.colonies)) {
     if (c === undefined) continue;
