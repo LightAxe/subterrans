@@ -130,6 +130,15 @@ const snapshotDifficulty = (debug.snapshot as { difficulty?: unknown }).difficul
 const replayDifficulty: 'Easy' | 'Normal' | 'Hard' =
   snapshotDifficulty === 'Easy' || snapshotDifficulty === 'Hard' ? snapshotDifficulty : 'Normal';
 const replay = createScenario(debug.seed, replayDifficulty);
+// Restore simVersion from snapshot so version-gated paths (tiebreaks, brood modifier, etc.)
+// match the original session. createScenario always starts at LATEST_SIM_VERSION; without this
+// a pre-V22 snapshot replayed on V22 code would have V22 paths active, causing divergence.
+const snapshotSimVersion = (debug.snapshot as { simVersion?: unknown }).simVersion;
+if (typeof snapshotSimVersion === 'number' && Number.isInteger(snapshotSimVersion) && snapshotSimVersion > 0) {
+  replay.simVersion = snapshotSimVersion;
+} else {
+  console.warn(`[analyze-snapshot] Could not restore simVersion from snapshot (got ${String(snapshotSimVersion)}); replay runs at LATEST_SIM_VERSION — byte-equality may fail for pre-V22 captures.`);
+}
 
 const byTick: typeof debug.inputLog[] = [];
 for (let i = 0; i < debug.inputLog.length; i++) {
