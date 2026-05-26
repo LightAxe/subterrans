@@ -71,6 +71,8 @@ This applies to AI agents working in this repo as well as human contributors. Th
 
 **The internal review pass (step 1) is mandatory before every push.** "Fresh Agent" means a new subagent invocation with no conversation history — reviewing from memory or using an agent that has seen the implementation session does not satisfy this requirement.
 
+**Delete the remote branch immediately after merge.** Once Rob confirms merge, run `git push origin --delete <branch>` to remove the remote branch. Never leave merged branches on the remote — stale branches accumulate quickly and obscure what's actively in flight.
+
 ## PR Review Process
 
 Every PR is reviewed by at least two independent AI code reviewers:
