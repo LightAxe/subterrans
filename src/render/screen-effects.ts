@@ -31,6 +31,7 @@ export function triggerScreenEdgeFlash(
 ): void {
   const THICKNESS = 20;
   const gfx = scene.add.graphics();
+  gfx.setScrollFactor(0); // pin to viewport — graphics default to world coords
   gfx.setDepth(50);
   gfx.fillStyle(0xff0000, 0.25);
 

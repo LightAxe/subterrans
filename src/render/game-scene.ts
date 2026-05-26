@@ -575,8 +575,12 @@ export class GameScene extends Phaser.Scene {
 
       if (ev.type === 'ai_state_transition' && ev.payload.to === 'Invading') {
         // Belt-and-suspenders: invasion_start is the primary trigger above;
-        // this handles any Invading transition not paired with invasion_start.
-        checkAndTrigger('aiInvading'); // idempotent — no-op if already triggered
+        // this handles any Invading transition not paired with invasion_start
+        // and also surfaces the caption on this fallback path.
+        const captionText = checkAndTrigger('aiInvading');
+        if (captionText && uiScene) {
+          uiScene.showCaption(captionText, CANVAS_W / 2, 60);
+        }
       }
     }
 
@@ -746,6 +750,9 @@ export class GameScene extends Phaser.Scene {
         // S6: fire first-occurrence captions for player command types.
         const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9 | null;
         for (const cmd of cmds) {
+          // Only fire onboarding captions for player-issued commands; AI colonies
+          // enqueue commands in the same drain pass and would consume captions early.
+          if ('colonyId' in cmd && cmd.colonyId !== PLAYER_COLONY_ID) continue;
           if (cmd.type === 'MarkDigTile') {
             const text = checkAndTrigger('dig');
             if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80);
