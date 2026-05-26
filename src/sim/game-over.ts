@@ -285,6 +285,23 @@ function _isQueenAliveAndEmitLegacy(world: WorldState, colony: ColonyRecord): bo
 // ---------------------------------------------------------------------------
 
 /**
+ * Colony food total including food currently carried by living ants.
+ * `colonyFoodTotal` (colony-system) covers stored+chamber food but not in-transit food,
+ * which must be counted to avoid triggering a false stalemate on the tick the last
+ * pile is collected (foragers may carry enough food for the colony to recover).
+ */
+function colonyFoodWithCarried(world: WorldState, colony: ColonyRecord): number {
+  let total = colonyFoodTotal(colony);
+  const cid = colony.colonyId;
+  for (let id = 0; id < world.ants.alive.length; id++) {
+    if (world.ants.alive[id] === 1 && world.ants.colonyId[id] === cid) {
+      total += world.ants.foodCarrying[id] as number;
+    }
+  }
+  return total;
+}
+
+/**
  * Count living non-queen ants for a given colony (workers only).
  * Iterates the full ants store — acceptable at end-of-game only (called once).
  */
@@ -349,11 +366,11 @@ export function checkTiebreaks(world: WorldState, playerColonyId: ColonyId): Gam
     return GameOutcome.MutualDestruction;
   }
 
-  // --- Stalemate: no food on the map AND both colonies starving ---
+  // --- Stalemate: no food on the map AND both colonies starving (including carried food) ---
   if (
     world.foodPiles.length === 0 &&
-    colonyFoodTotal(playerColony) < STALEMATE_FOOD_THRESHOLD_FP &&
-    colonyFoodTotal(aiColony) < STALEMATE_FOOD_THRESHOLD_FP
+    colonyFoodWithCarried(world, playerColony) < STALEMATE_FOOD_THRESHOLD_FP &&
+    colonyFoodWithCarried(world, aiColony) < STALEMATE_FOOD_THRESHOLD_FP
   ) {
     emitEvent(world, {
       tick: world.tick,

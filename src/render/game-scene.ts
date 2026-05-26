@@ -508,7 +508,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   // S5 — show difficulty selector then boot. Used for every new-game path.
+  // Sets gamePhase to SavePrompt so update() returns early (line ~913 guard)
+  // before this.gameLoop is initialized by bootFresh → finishBoot.
   private showDifficultySelectThenBoot(): void {
+    this.gamePhase = GamePhase.SavePrompt;
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     uiScene.showDifficultySelectOverlay({
       onSelect: (d) => this.bootFresh(d),
