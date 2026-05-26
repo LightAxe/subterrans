@@ -576,7 +576,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private finishBoot(): void {
-    this.prevState = createScenario(this.currentSeed);
+    this.prevState = createScenario(this.currentSeed, this.currentDifficulty);
     copyWorldState(this.world, this.prevState);
 
     // B1: world.colonies is a PLAIN OBJECT per ADR-0006.
@@ -897,6 +897,7 @@ export class GameScene extends Phaser.Scene {
     uiScene.hideGameOverOverlay();
     // S5: show difficulty selector before creating the new world.
     // bootFresh is invoked inside the callback so wasSuspended is captured.
+    this.gamePhase = GamePhase.SavePrompt; // prevent update() from ticking the old world during overlay
     uiScene.showDifficultySelectOverlay({
       onSelect: (d) => {
         this.bootFresh(d);

@@ -351,11 +351,10 @@ export function checkTiebreaks(world: WorldState, playerColonyId: ColonyId): Gam
   }
   if (aiColonyId === null || aiColony === null) return GameOutcome.None;
 
-  const playerWorkers = livingWorkerCount(world, playerColonyId);
-  const aiWorkers = livingWorkerCount(world, aiColonyId);
-
   // --- Timeout: both queens alive at the match time cap ---
   if (world.tick >= MATCH_TIMEOUT_TICKS) {
+    const playerWorkers = livingWorkerCount(world, playerColonyId);
+    const aiWorkers = livingWorkerCount(world, aiColonyId);
     emitEvent(world, {
       tick: world.tick,
       type: 'round_end',
@@ -372,6 +371,8 @@ export function checkTiebreaks(world: WorldState, playerColonyId: ColonyId): Gam
     colonyFoodWithCarried(world, playerColony) < STALEMATE_FOOD_THRESHOLD_FP &&
     colonyFoodWithCarried(world, aiColony) < STALEMATE_FOOD_THRESHOLD_FP
   ) {
+    const playerWorkers = livingWorkerCount(world, playerColonyId);
+    const aiWorkers = livingWorkerCount(world, aiColonyId);
     emitEvent(world, {
       tick: world.tick,
       type: 'round_end',
