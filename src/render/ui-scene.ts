@@ -99,9 +99,9 @@ export const SAVE_PROMPT_NEW_GAME_RECT = { x: 300, y: 320, w: 120, h: 32 } as co
 /** Canvas-local rect for the GameOver "Restart" button. */
 export const GAME_OVER_RESTART_RECT    = { x: 300, y: 345, w: 120, h: 32 } as const;
 /** Canvas-local rects for the DifficultySelect buttons (Easy / Normal / Hard). */
-export const DIFFICULTY_EASY_RECT   = { x: 220, y: 260, w: 140, h: 40 } as const;
+export const DIFFICULTY_EASY_RECT   = { x: 180, y: 260, w: 140, h: 40 } as const;
 export const DIFFICULTY_NORMAL_RECT = { x: 330, y: 260, w: 140, h: 40 } as const;
-export const DIFFICULTY_HARD_RECT   = { x: 440, y: 260, w: 140, h: 40 } as const;
+export const DIFFICULTY_HARD_RECT   = { x: 480, y: 260, w: 140, h: 40 } as const;
 import {
   createSliderDragState,
   drawSlider,
