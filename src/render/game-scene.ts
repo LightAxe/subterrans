@@ -375,6 +375,10 @@ export class GameScene extends Phaser.Scene {
       if (this.gamePhase !== GamePhase.Playing) return;
       if (this.viewState.activeView !== 'underground') return;
       toggleUndergroundColony(this.viewState);
+      // Clear stale glow entries from the previous colony grid — tile keys are
+      // not scoped to a colony, so entries from one grid must not bleed into
+      // the other when the view switches.
+      this.undergroundGlowFrames.clear();
     });
 
     // 09 excursion-foraging follow-up — F9 exports a debug snapshot JSON

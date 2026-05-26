@@ -429,7 +429,7 @@ export function drawSurfaceEntities(
         1,
       );
       // S6: linear tint gradient pale (#ffeecc) → deep red (#cc2020) by hungerFraction.
-      const tint = lerpColor(0xffeecccc, 0xcc2020, hungerFraction);
+      const tint = lerpColor(0xffeecc, 0xcc2020, hungerFraction);
 
       sprites.drawSpider({ x: spiderScreenX, y: spiderScreenY, tint });
 
