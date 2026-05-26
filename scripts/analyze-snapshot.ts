@@ -125,7 +125,11 @@ console.log('');
 
 console.log(`Replaying from seed for ${debug.tick} ticks...`);
 const replayStart = Date.now();
-const replay = createScenario(debug.seed);
+// S5: pass difficulty from snapshot so non-Normal replays don't diverge (SCEN-06).
+const snapshotDifficulty = (debug.snapshot as { difficulty?: unknown }).difficulty;
+const replayDifficulty: 'Easy' | 'Normal' | 'Hard' =
+  snapshotDifficulty === 'Easy' || snapshotDifficulty === 'Hard' ? snapshotDifficulty : 'Normal';
+const replay = createScenario(debug.seed, replayDifficulty);
 
 const byTick: typeof debug.inputLog[] = [];
 for (let i = 0; i < debug.inputLog.length; i++) {
