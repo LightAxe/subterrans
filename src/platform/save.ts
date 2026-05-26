@@ -429,6 +429,8 @@ interface SerializedColony {
   foodFlowFieldDirty?: boolean;  // Issue #15 — defaults false on old saves
   killCount: number;   // Plan 09-01
   priorityFoodPileId: FoodPileId | null;  // Phase 9 / PRD §3d — per-colony priority food target
+  /** S5 V22 — brood-interval numerator. Optional; defaults to 4 (Normal = identity) on old saves. */
+  eggIntervalNumerator?: number;
 }
 
 interface SerializedGrid { width: number; height: number; data: number[] }
@@ -527,6 +529,8 @@ export interface SerializedWorldState {
   spiderPriorityColonyId?: number | null;
   /** S3 — preserved through save/reload; null for pre-V20 saves. */
   scatterReticleTile?: { x: number; y: number } | null;
+  /** S5 — optional for backward compat with pre-V22 saves; defaults to 'Normal' on load. */
+  difficulty?: 'Easy' | 'Normal' | 'Hard';
 }
 
 // ---------------------------------------------------------------------------
@@ -631,6 +635,7 @@ function serializeColony(c: ColonyRecord): SerializedColony {
     foodFlowFieldDirty:   c.foodFlowFieldDirty,
     killCount:            c.killCount,
     priorityFoodPileId:   c.priorityFoodPileId,
+    eggIntervalNumerator: c.eggIntervalNumerator,
   };
 }
 
@@ -685,6 +690,8 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
     spider: world.spider === null ? null : { ...world.spider },
     spiderPriorityColonyId: world.spiderPriorityColonyId,
     scatterReticleTile: world.scatterReticleTile === null ? null : { ...world.scatterReticleTile },
+    // S5 — difficulty tier.
+    difficulty: world.difficulty,
     // S2 — AI state machine records. operationFighterIds stored as number[].
     aiState: world.aiState.map((rec) => ({
       colonyId: rec.colonyId,
@@ -976,6 +983,9 @@ function deserializeColony(s: SerializedColony): ColonyRecord {
   c.killCount            = s.killCount;
   c.priorityFoodPileId   = s.priorityFoodPileId ?? null;
   c.queenLastEggTick     = s.queenLastEggTick ?? -300; // old saves: default to -QUEEN_EGG_INTERVAL_BASE_TICKS so queen can lay on first eligible tick
+  // Valid difficulty numerators are 3, 4, 5. Reject any out-of-range value (tampered save or future compat).
+  c.eggIntervalNumerator = (s.eggIntervalNumerator === 3 || s.eggIntervalNumerator === 4 || s.eggIntervalNumerator === 5)
+    ? s.eggIntervalNumerator : 4;
   // Issue #101 — validate chamber records before they reach the runtime.
   // Done after the spread so the validator inspects the persisted shape;
   // throw aborts deserializeWorldState's map() and propagates to bootFromSave.
@@ -1410,6 +1420,8 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
       s.droppedStructuralCount >= 0
         ? s.droppedStructuralCount
         : 0,
+    // S5 — difficulty tier; default 'Normal' for pre-V22 saves that omit the field.
+    difficulty: (s.difficulty === 'Easy' || s.difficulty === 'Hard') ? s.difficulty : 'Normal',
   };
 }
 

@@ -136,6 +136,20 @@ export type SimEvent =
         };
         location: { x: number; y: number; grid: 'surface' | 'underground' };
       };
+    }
+  | {
+      // S5 (V22) — tiebreak condition reached (timeout or stalemate).
+      // Emitted by checkTiebreaks() in game-over.ts when both queens survive
+      // to MATCH_TIMEOUT_TICKS or all food is exhausted below the stalemate
+      // threshold. deriveRoundEndReason() reads this to populate the playtrace
+      // roundEndReason field.
+      tick: number;
+      type: 'round_end';
+      payload: {
+        reason: 'TimeoutTiebreak' | 'StalemateTiebreak';
+        playerWorkerCount: number;
+        aiWorkerCount: number;
+      };
     };
 
 // ---------------------------------------------------------------------------

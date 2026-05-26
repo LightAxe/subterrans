@@ -1,9 +1,9 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE, SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX, SIM_VERSION_V19_AI_STATE, SIM_VERSION_V20_SPIDER, SIM_VERSION_V21_REPRODUCTION } from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE, SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX, SIM_VERSION_V19_AI_STATE, SIM_VERSION_V20_SPIDER, SIM_VERSION_V21_REPRODUCTION, SIM_VERSION_V22_DIFFICULTY } from './types.js';
 import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
-import { GameOutcome, checkQueenDeath } from './game-over.js';
+import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
 import { advanceAIState, setAIRallyOperation } from './ai-state.js';
 import { detectAndResolveCombat } from './combat.js';
 import { Rng } from './rng.js';
@@ -29,6 +29,7 @@ import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
   SPIDER_SCATTER_RADIUS_TILES,
+  PLAYER_COLONY_ID,
 } from './constants.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
 import { allocateWorkers, computeDigDemand } from './behavior/allocation-system.js';
@@ -1305,7 +1306,10 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // ---------------------------------------------------------------------------
   // Step 18: game-over detection (Phase 9 / CMBT-06/07).
   // ---------------------------------------------------------------------------
-  const outcome = checkQueenDeath(world);
+  let outcome = checkQueenDeath(world);
+  if (outcome === GameOutcome.None && world.simVersion >= SIM_VERSION_V22_DIFFICULTY) {
+    outcome = checkTiebreaks(world, PLAYER_COLONY_ID);
+  }
 
   // ---------------------------------------------------------------------------
   // Step 18b: Advance AI state machines (timeout/death transitions).

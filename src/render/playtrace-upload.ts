@@ -201,8 +201,12 @@ export function truncateFreeText(s: string): string {
  *  snapshot (or null for survey-only). Pure — no fetch, no compression.
  *  Exported for the downgrade-fallback unit test. */
 /** Derive the RoundEndReason from the event buffer. Returns null when no
- *  queen_death event was emitted (quit from pause menu, or pre-S1 round). */
+ *  terminal event was emitted (quit from pause menu, or pre-S1 round).
+ *  S5: round_end tiebreak events take priority; checked before queen_death. */
 function deriveRoundEndReason(events: SimEvent[]): RoundEndReason | null {
+  for (const ev of events) {
+    if (ev.type === 'round_end') return ev.payload.reason;
+  }
   for (const ev of events) {
     if (ev.type === 'queen_death') return 'QueenDeath';
   }

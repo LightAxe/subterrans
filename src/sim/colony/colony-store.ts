@@ -158,6 +158,13 @@ export interface ColonyRecord {
    *  so the queen can lay on tick 0 (0 - (-300) = 300 ≥ 300). Round-trips
    *  through copyWorldState + save. */
   queenLastEggTick: number;
+
+  /** S5 V22 — brood-interval difficulty multiplier numerator (denominator is always 4).
+   *  Applied as `(eggInterval * eggIntervalNumerator) >> 2` in tickQueenEggProduction.
+   *  Player colony always uses 4 (identity). AI colony numerator set from
+   *  QUEEN_EGG_INTERVAL_DIFFICULTY_NUMERATOR[tier] in createScenario: Easy=5(+25%),
+   *  Normal=4(×1), Hard=3(−25%). Defaults to 4 so pre-V22 saves are unaffected. */
+  eggIntervalNumerator: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +224,7 @@ export function createColonyRecord(colonyId: ColonyId, queenEntityId: EntityId):
     killCount:             0,
     priorityFoodPileId:    null,
     queenLastEggTick:      -QUEEN_EGG_INTERVAL_BASE_TICKS,
+    eggIntervalNumerator:  4, // Normal = identity (set per-colony in createScenario for difficulty tiers)
   }) as unknown as ColonyRecord;
 }
 

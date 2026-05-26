@@ -29,10 +29,10 @@ describe('WorldState', () => {
       expect(world.rngState).toBe(4294967295);
     });
 
-    it('has exactly twenty-two fields (4 Phase 5 + 3 Phase 6 + 4 Phase 7 + 1 issue #27 + 1 issue #44 + 1 issue #112 + 3 S0b telemetry + 1 S1 pendingQueenDeathContexts + 1 S2 aiState + 3 S3 spider)', () => {
+    it('has exactly twenty-three fields (4 Phase 5 + 3 Phase 6 + 4 Phase 7 + 1 issue #27 + 1 issue #44 + 1 issue #112 + 3 S0b telemetry + 1 S1 pendingQueenDeathContexts + 1 S2 aiState + 3 S3 spider + 1 S5 difficulty)', () => {
       const world = createWorldState(0);
       const keys = Object.keys(world);
-      expect(keys).toHaveLength(22);
+      expect(keys).toHaveLength(23);
       expect(keys).toContain('tick');
       expect(keys).toContain('rngState');
       expect(keys).toContain('nextEntityId');
@@ -54,6 +54,7 @@ describe('WorldState', () => {
       expect(keys).toContain('spider'); // S3
       expect(keys).toContain('spiderPriorityColonyId'); // S3
       expect(keys).toContain('scatterReticleTile'); // S3
+      expect(keys).toContain('difficulty'); // S5
     });
 
     it('issue #44: terrainSeed is a deterministic, non-zero, non-rngState mix of the input seed', () => {

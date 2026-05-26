@@ -198,6 +198,7 @@ const stubColonies: WorldState['colonies'] = {
     killCount: 0,
     priorityFoodPileId: null,
     queenLastEggTick: -300,
+    eggIntervalNumerator: 4,
   } as WorldState['colonies'][number],
 };
 

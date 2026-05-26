@@ -46,7 +46,8 @@ import {
   SPIDER_SPRITE_WIDTH,
 } from './ant-sprite-layer.js';
 import { SPIDER_HUNGER_MAX_TICKS } from '../sim/constants.js';
-import { NORMAL_TIER_INDEX } from '../sim/ai-state.js';
+import { NORMAL_TIER_INDEX, tierIndex } from '../sim/ai-state.js';
+import { SIM_VERSION_V22_DIFFICULTY } from '../sim/types.js';
 
 // ---------------------------------------------------------------------------
 // GfxLike — minimal Graphics interface (Phaser.GameObjects.Graphics satisfies this)
@@ -371,9 +372,8 @@ export function drawSurfaceEntities(
     if (spiderScreenX > -SPIDER_SPRITE_WIDTH  && spiderScreenX < canvasW + SPIDER_SPRITE_WIDTH
       && spiderScreenY > -SPIDER_SPRITE_HEIGHT && spiderScreenY < canvasH + SPIDER_SPRITE_HEIGHT) {
 
-      // S5 will replace NORMAL_TIER_INDEX with tierIndex(world.difficulty).
       const hungerFraction = Math.min(
-        curr.spider.hungerTicks / SPIDER_HUNGER_MAX_TICKS[NORMAL_TIER_INDEX],
+        curr.spider.hungerTicks / SPIDER_HUNGER_MAX_TICKS[curr.simVersion >= SIM_VERSION_V22_DIFFICULTY ? tierIndex(curr.difficulty) : NORMAL_TIER_INDEX],
         1,
       );
       const tint = lerpColor(0xCCCCCC, 0xFF3300, hungerFraction);

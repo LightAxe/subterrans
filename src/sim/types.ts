@@ -265,7 +265,17 @@ export const SIM_VERSION_V20_SPIDER = 20 as const;
  * No new WorldState fields; all state derived from existing food/colony/nurse data.
  */
 export const SIM_VERSION_V21_REPRODUCTION = 21 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V21_REPRODUCTION;
+/**
+ * V22 (S5) — Difficulty tier system. Adds WorldState.difficulty ('Easy' | 'Normal' | 'Hard').
+ * Wires difficulty into four AI constants previously hardcoded to Normal-tier index.
+ * Applies a per-difficulty brood modifier to AI colony egg interval (below the V21 150-tick
+ * surplus floor, hard-clamped at MIN_EGG_INTERVAL_TICKS=100).
+ * Adds Timeout and Stalemate tiebreak conditions (checkTiebreaks in game-over.ts).
+ * Pre-V22 saves load with difficulty='Normal'; all V22-gated paths fall back to Normal-tier
+ * behaviour for byte-identical replay of pre-V22 recordings.
+ */
+export const SIM_VERSION_V22_DIFFICULTY = 22 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V22_DIFFICULTY;
 
 
 /**
@@ -410,9 +420,20 @@ export interface WorldState {
    *       no carry happens and brood sits where laid (matches pre-v10
    *       teleport-gate behaviour).
    *
+   *  22 = S5 difficulty tier system. Adds `difficulty` field. Wires difficulty
+   *       into AI constants (tierIndex vs NORMAL_TIER_INDEX), applies a brood-
+   *       production modifier to AI colony egg intervals, and enables Timeout
+   *       and Stalemate tiebreak conditions. Pre-V22 saves load with
+   *       difficulty='Normal' and replay byte-identically.
+   *
    * Round-trips through copyWorldState and save/load.
    */
   simVersion: number;
+
+  /** S5 (V22) — player-selected difficulty. Wired into AI tier arrays and AI brood
+   *  modifier. Pre-V22 saves load as 'Normal'. Round-trips through copyWorldState
+   *  and save/load. */
+  difficulty: 'Easy' | 'Normal' | 'Hard';
 
   /**
    * Issue #44 — terrain decoration seed. Independent of `rngState` so that
@@ -512,6 +533,7 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
     nextEntityId: 0,      // PRD §3 line 130: starts at 0, no recycling
     commandQueue: [],
     simVersion: LATEST_SIM_VERSION,
+    difficulty: 'Normal',
     // Issue #44 — derive terrainSeed from the input seed via Knuth's golden-
     // ratio multiplier so it's a deterministic function of the seed but
     // doesn't equal rngState. Using rngState directly would couple the very-
@@ -560,6 +582,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   dst.rngState = src.rngState;
   dst.nextEntityId = src.nextEntityId;
   dst.simVersion = src.simVersion;
+  dst.difficulty = src.difficulty;
   dst.terrainSeed = src.terrainSeed;
   dst.commandQueue = src.commandQueue.slice(); // small in practice (user-input rate) — PRD §3 accepts this as the only Phase 1 allocation
   // events: intentionally not copied into the render double-buffer (prevState).
@@ -768,6 +791,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     d.killCount            = s.killCount;
     d.priorityFoodPileId   = s.priorityFoodPileId;
     d.queenLastEggTick     = s.queenLastEggTick;
+    d.eggIntervalNumerator = s.eggIntervalNumerator;
 
     // Bucket arrays — reuse via length truncation + index copy (no new array)
     d.eggs.length = s.eggs.length;

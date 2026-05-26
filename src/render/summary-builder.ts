@@ -230,7 +230,7 @@ export function buildPlaytraceSummary(
       droppedCombatKill,
       droppedStructural,
     },
-    difficulty: null, // difficulty tiers land in S5
+    difficulty: world.difficulty,
     eventsCoverage: resumedFromSave
       ? 'since_load'
       : totalEmitted > 0
