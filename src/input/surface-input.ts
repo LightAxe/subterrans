@@ -321,19 +321,24 @@ export function handleSurfaceRightClick(
   const { tileX, tileY } = screenToTile(screenX, screenY, viewState.surfaceCamera);
   if (tileX < 0 || tileY < 0) return;
 
-  // Spider priority toggle (S7/D1): right-click within the rendered sprite bounds.
-  // Pixel-space check matches drawSurfaceEntities exactly: 48×48px sprite centered at
-  // (posX >> FP_SHIFT) * TILE_SIZE_PX in map space, offset by the camera's left/top tile.
+  // Spider priority toggle (S7/D1): right-click within the spider sprite bounds.
+  // The hit box is expanded by TILE_SIZE_PX on each side beyond the 48×48px sprite.
+  // The renderer interpolates the spider between prev and curr positions; since the
+  // spider moves 1 tile/tick, its visual center can differ from the sim anchor by up
+  // to one tile in any direction. The symmetric expansion keeps the hit box aligned
+  // with what the player sees regardless of movement direction.
   if (world.spider !== null) {
     const camLeft = Math.floor(viewState.surfaceCamera.x - viewState.surfaceCamera.viewportWidth  / 2);
     const camTop  = Math.floor(viewState.surfaceCamera.y - viewState.surfaceCamera.viewportHeight / 2);
     const spiderScrX = (world.spider.posX >> FP_SHIFT) * TILE_SIZE_PX - camLeft * TILE_SIZE_PX;
     const spiderScrY = (world.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop  * TILE_SIZE_PX;
+    const hitHalfW = SPIDER_SPRITE_WIDTH  / 2 + TILE_SIZE_PX; // 24 + 16 = 40
+    const hitHalfH = SPIDER_SPRITE_HEIGHT / 2 + TILE_SIZE_PX; // 24 + 16 = 40
     if (
-      screenX >= spiderScrX - SPIDER_SPRITE_WIDTH  / 2 &&
-      screenX <  spiderScrX + SPIDER_SPRITE_WIDTH  / 2 &&
-      screenY >= spiderScrY - SPIDER_SPRITE_HEIGHT / 2 &&
-      screenY <  spiderScrY + SPIDER_SPRITE_HEIGHT / 2
+      screenX >= spiderScrX - hitHalfW &&
+      screenX <  spiderScrX + hitHalfW &&
+      screenY >= spiderScrY - hitHalfH &&
+      screenY <  spiderScrY + hitHalfH
     ) {
       state.pendingEntranceTileX = null;
       state.pendingEntranceTileY = null;
