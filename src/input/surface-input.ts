@@ -295,7 +295,7 @@ export function handleSetRallyPoint(
  * Handles a right-click on the surface view.
  *
  * Priority order:
- *   1. Spider priority toggle (S7/D1): right-click within the spider's 3×3 tile footprint
+ *   1. Spider priority toggle (S7/D1): right-click within the spider's rendered sprite bounds
  *      dispatches MarkSpiderPriority and suppresses all other right-click actions.
  *   2. If the clicked tile matches the current rally-point tile, push ClearRallyPointCommand.
  *   3. Otherwise, if the tile is a valid entrance target, set pendingEntranceTileX/Y
@@ -307,6 +307,10 @@ export function handleSetRallyPoint(
  * No-ops if: activeView !== 'surface', pointer over HUD, or tile out of bounds.
  *
  * ADR-0006: world.colonies accessed via plain-object bracket notation.
+ *
+ * @param prevWorld  Previous-tick world state, used to widen the spider hit box to cover the
+ *                   full interpolated path between ticks. Pass null when unavailable (tests,
+ *                   stationary spider).
  */
 export function handleSurfaceRightClick(
   world: WorldState,
@@ -315,6 +319,7 @@ export function handleSurfaceRightClick(
   screenY: number,
   state: SurfaceInputState,
   playerColonyId: ColonyId = PLAYER_COLONY_ID,
+  prevWorld: WorldState | null = null,
 ): void {
   if (viewState.activeView !== 'surface') return;
   if (isPointerOverHUD(screenX, screenY, viewState)) return;
@@ -322,23 +327,28 @@ export function handleSurfaceRightClick(
   if (tileX < 0 || tileY < 0) return;
 
   // Spider priority toggle (S7/D1): right-click within the spider sprite bounds.
-  // The hit box is expanded by TILE_SIZE_PX on each side beyond the 48×48px sprite.
-  // The renderer interpolates the spider between prev and curr positions; since the
-  // spider moves 1 tile/tick, its visual center can differ from the sim anchor by up
-  // to one tile in any direction. The symmetric expansion keeps the hit box aligned
-  // with what the player sees regardless of movement direction.
+  // Hit box is the union of the current-tick and previous-tick bounding boxes, so the
+  // trailing visual edge (which lags behind the sim position during interpolation) always
+  // registers. When prevWorld is null (stationary or unavailable) the box is exactly the
+  // 48×48px sprite; when the spider moved it expands by one tile in the movement direction.
   if (world.spider !== null) {
     const camLeft = Math.floor(viewState.surfaceCamera.x - viewState.surfaceCamera.viewportWidth  / 2);
     const camTop  = Math.floor(viewState.surfaceCamera.y - viewState.surfaceCamera.viewportHeight / 2);
-    const spiderScrX = (world.spider.posX >> FP_SHIFT) * TILE_SIZE_PX - camLeft * TILE_SIZE_PX;
-    const spiderScrY = (world.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop  * TILE_SIZE_PX;
-    const hitHalfW = SPIDER_SPRITE_WIDTH  / 2 + TILE_SIZE_PX; // 24 + 16 = 40
-    const hitHalfH = SPIDER_SPRITE_HEIGHT / 2 + TILE_SIZE_PX; // 24 + 16 = 40
+    const currScrX = (world.spider.posX >> FP_SHIFT) * TILE_SIZE_PX - camLeft * TILE_SIZE_PX;
+    const currScrY = (world.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop  * TILE_SIZE_PX;
+    const prevScrX = (prevWorld?.spider != null)
+      ? (prevWorld.spider.posX >> FP_SHIFT) * TILE_SIZE_PX - camLeft * TILE_SIZE_PX
+      : currScrX;
+    const prevScrY = (prevWorld?.spider != null)
+      ? (prevWorld.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop  * TILE_SIZE_PX
+      : currScrY;
+    const halfW = SPIDER_SPRITE_WIDTH  / 2;
+    const halfH = SPIDER_SPRITE_HEIGHT / 2;
     if (
-      screenX >= spiderScrX - hitHalfW &&
-      screenX <  spiderScrX + hitHalfW &&
-      screenY >= spiderScrY - hitHalfH &&
-      screenY <  spiderScrY + hitHalfH
+      screenX >= Math.min(currScrX, prevScrX) - halfW &&
+      screenX <  Math.max(currScrX, prevScrX) + halfW &&
+      screenY >= Math.min(currScrY, prevScrY) - halfH &&
+      screenY <  Math.max(currScrY, prevScrY) + halfH
     ) {
       state.pendingEntranceTileX = null;
       state.pendingEntranceTileY = null;
@@ -403,6 +413,7 @@ export function registerSurfaceInput(
   scene: Phaser.Scene,
   getWorld: () => WorldState | undefined,
   viewState: ViewState,
+  getPrevWorld?: () => WorldState | null,
 ): SurfaceInputState {
   const state: SurfaceInputState = {
     pendingEntranceTileX: null,
@@ -414,7 +425,8 @@ export function registerSurfaceInput(
     if (pointer.leftButtonDown()) {
       handleSurfaceLeftClick(world, viewState, pointer.x, pointer.y, state);
     } else if (pointer.rightButtonDown()) {
-      handleSurfaceRightClick(world, viewState, pointer.x, pointer.y, state);
+      const prevWorld = getPrevWorld?.() ?? null;
+      handleSurfaceRightClick(world, viewState, pointer.x, pointer.y, state, PLAYER_COLONY_ID, prevWorld);
     }
   });
   return state;

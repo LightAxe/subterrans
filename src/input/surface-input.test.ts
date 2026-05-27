@@ -922,8 +922,9 @@ describe('resetSurfaceInputState', () => {
 // Spider at tile (10, 10). FP_ONE=256, so posX=2560, posY=2560.
 // camLeft = floor(64 - 25) = 39, camTop = floor(32 - 18.5) = 13
 // spiderScrX = (10 - 39) * 16 = -464, spiderScrY = (10 - 13) * 16 = -48
-// Hit box = sprite half (24) + TILE_SIZE_PX (16) = 40 on each side.
-// Inclusive left edge: spiderScrX - 40 = -504; exclusive right: spiderScrX + 40 = -424
+// Stationary hit box (prevWorld=null): sprite half = 24 on each side.
+// Inclusive left edge: spiderScrX - 24 = -488; exclusive right: spiderScrX + 24 = -440
+// Moving hit box (prevWorld with spider 1 tile to the left): union expands left by 16px.
 
 describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
   const CAM_X = 64;
@@ -935,9 +936,9 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
   const CAMERA_TOP  = Math.floor(CAM_Y - VIEWPORT_HEIGHT_TILES / 2); // 13
   const SPIDER_SCR_X = (SPIDER_TILE_X - CAMERA_LEFT) * TILE_SIZE_PX; // -464
   const SPIDER_SCR_Y = (SPIDER_TILE_Y - CAMERA_TOP)  * TILE_SIZE_PX; // -48
-  // Hit half = sprite half (24) + TILE_SIZE_PX (16) to cover render-interpolation lag.
-  const HIT_HALF_W = SPIDER_SPRITE_WIDTH  / 2 + TILE_SIZE_PX; // 40
-  const HIT_HALF_H = SPIDER_SPRITE_HEIGHT / 2 + TILE_SIZE_PX; // 40
+  // Sprite half: hit box for stationary spider (prevWorld=null)
+  const HIT_HALF_W = SPIDER_SPRITE_WIDTH  / 2; // 24
+  const HIT_HALF_H = SPIDER_SPRITE_HEIGHT / 2; // 24
 
   function makeSpider() {
     return {
@@ -974,7 +975,7 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
     expect(world.commandQueue[0]).toMatchObject({ type: 'MarkSpiderPriority', isPriority: false });
   });
 
-  it('click at inclusive left hit-box edge (spiderScrX - HIT_HALF_W) dispatches spider priority', () => {
+  it('click at inclusive left sprite edge (spiderScrX - HIT_HALF_W) dispatches spider priority', () => {
     const world = makeWorld({
       surfaceWidth: 128,
       surfaceHeight: 64,
@@ -988,7 +989,7 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
     expect(world.commandQueue[0]).toMatchObject({ type: 'MarkSpiderPriority' });
   });
 
-  it('click one pixel outside left hit-box edge (spiderScrX - HIT_HALF_W - 1) falls through to entrance preview', () => {
+  it('click one pixel outside left sprite edge (spiderScrX - HIT_HALF_W - 1) falls through to entrance preview', () => {
     const world = makeWorld({
       surfaceWidth: 128,
       surfaceHeight: 64,
@@ -997,13 +998,13 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
     });
     const vs = makeViewState('surface', CAM_X, CAM_Y);
     const state = makeState();
-    // screenX = -505 → tileX = floor(-505/16) + 39 = -32 + 39 = 7; tileY = 10
+    // screenX = -489 → tileX = floor(-489/16) + 39 = -31 + 39 = 8; tileY = 10
     handleSurfaceRightClick(world, vs, SPIDER_SCR_X - HIT_HALF_W - 1, SPIDER_SCR_Y, state);
     expect(world.commandQueue).toHaveLength(0);
-    expect(state.pendingEntranceTileX).toBe(7);
+    expect(state.pendingEntranceTileX).toBe(8);
   });
 
-  it('click at last pixel inside right hit-box edge (spiderScrX + HIT_HALF_W - 1) dispatches spider priority', () => {
+  it('click at last pixel inside right sprite edge (spiderScrX + HIT_HALF_W - 1) dispatches spider priority', () => {
     const world = makeWorld({
       surfaceWidth: 128,
       surfaceHeight: 64,
@@ -1017,7 +1018,7 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
     expect(world.commandQueue[0]).toMatchObject({ type: 'MarkSpiderPriority' });
   });
 
-  it('click at exclusive right hit-box edge (spiderScrX + HIT_HALF_W) falls through to entrance preview', () => {
+  it('click at exclusive right sprite edge (spiderScrX + HIT_HALF_W) falls through to entrance preview', () => {
     const world = makeWorld({
       surfaceWidth: 128,
       surfaceHeight: 64,
@@ -1026,13 +1027,13 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
     });
     const vs = makeViewState('surface', CAM_X, CAM_Y);
     const state = makeState();
-    // screenX = -424 → tileX = floor(-424/16) + 39 = -27 + 39 = 12; tileY = 10
+    // screenX = -440 → tileX = floor(-440/16) + 39 = -28 + 39 = 11; tileY = 10
     handleSurfaceRightClick(world, vs, SPIDER_SCR_X + HIT_HALF_W, SPIDER_SCR_Y, state);
     expect(world.commandQueue).toHaveLength(0);
-    expect(state.pendingEntranceTileX).toBe(12);
+    expect(state.pendingEntranceTileX).toBe(11);
   });
 
-  it('click at inclusive top hit-box edge (spiderScrY - HIT_HALF_H) dispatches spider priority', () => {
+  it('click at inclusive top sprite edge (spiderScrY - HIT_HALF_H) dispatches spider priority', () => {
     const world = makeWorld({
       surfaceWidth: 128,
       surfaceHeight: 64,
@@ -1046,7 +1047,7 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
     expect(world.commandQueue[0]).toMatchObject({ type: 'MarkSpiderPriority' });
   });
 
-  it('click one pixel outside top hit-box edge (spiderScrY - HIT_HALF_H - 1) falls through to entrance preview', () => {
+  it('click one pixel outside top sprite edge (spiderScrY - HIT_HALF_H - 1) falls through to entrance preview', () => {
     const world = makeWorld({
       surfaceWidth: 128,
       surfaceHeight: 64,
@@ -1055,13 +1056,13 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
     });
     const vs = makeViewState('surface', CAM_X, CAM_Y);
     const state = makeState();
-    // screenY = -89 → tileY = floor(-89/16) + 13 = -6 + 13 = 7; tileX = 10
+    // screenY = -73 → tileY = floor(-73/16) + 13 = -5 + 13 = 8; tileX = 10
     handleSurfaceRightClick(world, vs, SPIDER_SCR_X, SPIDER_SCR_Y - HIT_HALF_H - 1, state);
     expect(world.commandQueue).toHaveLength(0);
-    expect(state.pendingEntranceTileY).toBe(7);
+    expect(state.pendingEntranceTileY).toBe(8);
   });
 
-  it('click at exclusive bottom hit-box edge (spiderScrY + HIT_HALF_H) falls through to entrance preview', () => {
+  it('click at exclusive bottom sprite edge (spiderScrY + HIT_HALF_H) falls through to entrance preview', () => {
     const world = makeWorld({
       surfaceWidth: 128,
       surfaceHeight: 64,
@@ -1070,10 +1071,53 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
     });
     const vs = makeViewState('surface', CAM_X, CAM_Y);
     const state = makeState();
-    // screenY = -8 → tileY = floor(-8/16) + 13 = -1 + 13 = 12; tileX = 10
+    // screenY = -24 → tileY = floor(-24/16) + 13 = -2 + 13 = 11; tileX = 10
     handleSurfaceRightClick(world, vs, SPIDER_SCR_X, SPIDER_SCR_Y + HIT_HALF_H, state);
     expect(world.commandQueue).toHaveLength(0);
-    expect(state.pendingEntranceTileY).toBe(12);
+    expect(state.pendingEntranceTileY).toBe(11);
+  });
+
+  it('union hit box: trailing edge covered when spider moved right by 1 tile', () => {
+    // Spider moved from tile 9 to tile 10. prevScrX = (9-39)*16 = -480.
+    // Union left = min(-480, -464) - 24 = -504 (inclusive).
+    // Without prevWorld the left boundary is -488 — so [-504, -488) is only in the union box.
+    const world = makeWorld({
+      surfaceWidth: 128,
+      surfaceHeight: 64,
+      spider: makeSpider(),
+      spiderPriorityColonyId: null,
+    });
+    const prevWorld = makeWorld({
+      surfaceWidth: 128,
+      surfaceHeight: 64,
+      spider: { posX: (SPIDER_TILE_X - 1) * FP_ONE_VAL, posY: SPIDER_TILE_Y * FP_ONE_VAL } as WorldState['spider'],
+    });
+    const vs = makeViewState('surface', CAM_X, CAM_Y);
+    const state = makeState();
+    // Click at screenX = -504 (inclusive union left edge) → should dispatch
+    handleSurfaceRightClick(world, vs, -504, SPIDER_SCR_Y, state, PLAYER_COLONY_ID, prevWorld);
+    expect(world.commandQueue).toHaveLength(1);
+    expect(world.commandQueue[0]).toMatchObject({ type: 'MarkSpiderPriority' });
+  });
+
+  it('union hit box: one pixel outside trailing edge (-505) still falls through', () => {
+    const world = makeWorld({
+      surfaceWidth: 128,
+      surfaceHeight: 64,
+      spider: makeSpider(),
+      spiderPriorityColonyId: null,
+    });
+    const prevWorld = makeWorld({
+      surfaceWidth: 128,
+      surfaceHeight: 64,
+      spider: { posX: (SPIDER_TILE_X - 1) * FP_ONE_VAL, posY: SPIDER_TILE_Y * FP_ONE_VAL } as WorldState['spider'],
+    });
+    const vs = makeViewState('surface', CAM_X, CAM_Y);
+    const state = makeState();
+    // screenX = -505 → tileX = floor(-505/16) + 39 = -32 + 39 = 7; tileY = 10
+    handleSurfaceRightClick(world, vs, -505, SPIDER_SCR_Y, state, PLAYER_COLONY_ID, prevWorld);
+    expect(world.commandQueue).toHaveLength(0);
+    expect(state.pendingEntranceTileX).toBe(7);
   });
 
   it('center click does NOT set pendingEntrance or push ClearRallyPoint', () => {
