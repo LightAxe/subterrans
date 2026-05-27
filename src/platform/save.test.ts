@@ -5,9 +5,9 @@ import {
   serializeWorldState, deserializeWorldState,
   hasSave, loadSave, deleteSave, tickAutosave,
   manualSave, hasIncompatibleSave, getSaveInfo,
-  migrateBehaviorRatio,
   parseSaveFile,
   FutureSimVersionError,
+  OldSimVersionError,
   SaveVersionMismatchError,
   type SaveFile,
 } from './save.js';
@@ -149,16 +149,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const w2 = deserializeWorldState(serializeWorldState(w));
       expect(w2.colonies[PLAYER_COLONY_ID]!.foodFlowFieldDirty).toBe(true);
     });
-    it('pre-#15 saves (foodFlowFieldDirty absent) deserialize to false', () => {
-      // Backwards compat: a save written before issue #15 lacked the field.
-      // Loader must default it to false rather than throw.
-      const w = createScenario(42);
-      const s = serializeWorldState(w);
-      const colonyKey = String(PLAYER_COLONY_ID);
-      delete (s.colonies[colonyKey] as { foodFlowFieldDirty?: boolean }).foodFlowFieldDirty;
-      const w2 = deserializeWorldState(s);
-      expect(w2.colonies[PLAYER_COLONY_ID]!.foodFlowFieldDirty).toBe(false);
-    });
+
     it('round-trips per-chamber chamber.foodStored independently (issue #15)', () => {
       // Issue #15 regression: under the old pool-only model, save + reload
       // would re-derive chamber.foodStored from colony.foodStored at the next
@@ -197,17 +188,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.ants.searchWave[1]).toBe(1);
       expect(w2.ants.searchWave[2]).toBe(2);
     });
-    it('pre-Phase-9 saves (searchWave absent) deserialize to zero-init wave', () => {
-      // Backward compatibility: a save written before searchWave was added
-      // should not throw on load and should zero-init the field.
-      const w = createScenario(42);
-      const s = serializeWorldState(w);
-      // Simulate an older save that lacked the field.
-      delete (s.ants as { searchWave?: number[] }).searchWave;
-      const w2 = deserializeWorldState(s);
-      expect(w2.ants.searchWave[0]).toBe(0);
-      expect(w2.ants.searchWave[10]).toBe(0);
-    });
+
     it('Issue #17 Phase 1: round-trips ants.carryingBroodId and carriedBy through serialize → deserialize', () => {
       // Regression guard: if either field is dropped, an autosaved snapshot
       // mid-carry would land all carries at the carrier's last position
@@ -226,20 +207,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.ants.carryingBroodId[1]).toBe(-1);
       expect(w2.ants.carriedBy[1]).toBe(-1);
     });
-    it('pre-#17-Phase-1 saves (carry slots absent) deserialize to all-(-1)', () => {
-      // Backward compatibility: a pre-v10 save omits carryingBroodId/carriedBy.
-      // Loading defaults the fields to all-(-1), which is the correct "no
-      // carries in flight" state for both pre-v10 (never read) and v10+.
-      const w = createScenario(42);
-      const s = serializeWorldState(w);
-      delete (s.ants as { carryingBroodId?: number[] }).carryingBroodId;
-      delete (s.ants as { carriedBy?: number[] }).carriedBy;
-      const w2 = deserializeWorldState(s);
-      expect(w2.ants.carryingBroodId[0]).toBe(-1);
-      expect(w2.ants.carriedBy[0]).toBe(-1);
-      expect(w2.ants.carryingBroodId[100]).toBe(-1);
-      expect(w2.ants.carriedBy[100]).toBe(-1);
-    });
+
     it('round-trips ants.currentGridColonyId through serialize → deserialize (Phase 09.1 Chunk 0 grid-of-occupancy)', () => {
       // Regression guard for the phase 09.1 verification gap: if
       // currentGridColonyId is dropped from the save envelope, every loaded
@@ -292,50 +260,9 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.simVersion).toBe(LATEST_SIM_VERSION);
     });
 
-    it('preserves a captured v7 save (sticky load → v7 replay path stays available)', async () => {
-      const { SIM_VERSION_V7_SURFACE_PASSABILITY } = await import('../sim/types.js');
-      // Saves recorded under v7 must round-trip as v7 (not auto-upgrade to
-      // LATEST), so v7 replays remain byte-identical on resume even after
-      // newer sim versions land.
-      const w = createScenario(42);
-      w.simVersion = SIM_VERSION_V7_SURFACE_PASSABILITY;
-      const s = serializeWorldState(w);
-      const w2 = deserializeWorldState(JSON.parse(JSON.stringify(s)));
-      expect(w2.simVersion).toBe(SIM_VERSION_V7_SURFACE_PASSABILITY);
-    });
-    it('round-trips world.simVersion and ants.waitingDeposit (issue #27)', () => {
-      const w = createScenario(42);
-      // Simulate a few ants in wait state at distinct ant ids.
-      const playerWorker = w.colonies[PLAYER_COLONY_ID]!.workers[0]!;
-      const enemyWorker  = w.colonies[ENEMY_COLONY_ID]!.workers[0]!;
-      w.ants.waitingDeposit[playerWorker] = 1;
-      w.ants.waitingDeposit[enemyWorker]  = 1;
-      // Pin a specific simVersion to verify the field actually survives.
-      w.simVersion = 3;
 
-      const s = serializeWorldState(w);
-      const w2 = deserializeWorldState(JSON.parse(JSON.stringify(s)));
 
-      expect(w2.simVersion).toBe(3);
-      expect(w2.ants.waitingDeposit[playerWorker]).toBe(1);
-      expect(w2.ants.waitingDeposit[enemyWorker]).toBe(1);
-    });
-    it('pre-issue-#27 saves (simVersion absent) deserialize with simVersion=LEGACY (sticky-on-load)', async () => {
-      const { LEGACY_SIM_VERSION } = await import('../sim/types.js');
-      const w = createScenario(42);
-      const s = serializeWorldState(w);
-      // Simulate an older save that lacked the simVersion field.
-      delete (s as { simVersion?: number }).simVersion;
-      const w2 = deserializeWorldState(s);
-      expect(w2.simVersion).toBe(LEGACY_SIM_VERSION);
-      // And waitingDeposit is absent → all-zero (no ants in wait, the
-      // correct default for legacy saves which never used the wait state).
-      delete (s.ants as { waitingDeposit?: number[] }).waitingDeposit;
-      const w3 = deserializeWorldState(s);
-      // Spot-check: a worker entity is not in wait state by default.
-      const someWorker = w.colonies[PLAYER_COLONY_ID]!.workers[0]!;
-      expect(w3.ants.waitingDeposit[someWorker]).toBe(0);
-    });
+
     it('round-trips world.terrainSeed (issue #44)', () => {
       const w = createScenario(42);
       // createWorldState set this from the seed; pin a specific value to
@@ -381,20 +308,6 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.scatterReticleTile).toEqual({ x: 10, y: 20 });
     });
 
-    it('V20: pre-V20 save (spider field absent) deserializes to spider: null, spiderPriorityColonyId: null', async () => {
-      const { SIM_VERSION_V19_AI_STATE } = await import('../sim/types.js');
-      const w = createScenario(42);
-      const s = serializeWorldState(w);
-      // Downgrade simVersion to pre-V20; strip the spider fields.
-      (s as { simVersion: number }).simVersion = SIM_VERSION_V19_AI_STATE;
-      delete (s as { spider?: unknown }).spider;
-      delete (s as { spiderPriorityColonyId?: unknown }).spiderPriorityColonyId;
-      delete (s as { scatterReticleTile?: unknown }).scatterReticleTile;
-      const w2 = deserializeWorldState(s);
-      expect(w2.spider).toBeNull();
-      expect(w2.spiderPriorityColonyId).toBeNull();
-      expect(w2.scatterReticleTile).toBeNull();
-    });
 
     it('V20: null spider (spider killed mid-game) round-trips through serialize → deserialize', () => {
       const w = createScenario(42);
@@ -453,47 +366,8 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         expect(w2.terrainSeed).toBe(0);
       }
     });
-    it('rejects non-integer simVersion (string, NaN, null, object) → falls back to LEGACY (issue #27 P2)', async () => {
-      const { LEGACY_SIM_VERSION } = await import('../sim/types.js');
-      const w = createScenario(42);
-      const baseSnapshot = serializeWorldState(w);
-      // Corrupt the simVersion field with each non-integer shape and verify
-      // the deserializer always lands on LEGACY rather than coercing into
-      // the wrong drain order. `??` alone would let `"3"` / NaN / `null` /
-      // object pass through and surface as nondeterministic comparisons
-      // downstream (string >= number coerces; object >= number is NaN-y).
-      const cases: unknown[] = ['3', '', 'latest', null, NaN, {}, [], 3.5, true];
-      for (const bad of cases) {
-        const s = JSON.parse(JSON.stringify(baseSnapshot)) as Record<string, unknown>;
-        s.simVersion = bad;
-        const w2 = deserializeWorldState(
-          s as unknown as Parameters<typeof deserializeWorldState>[0],
-        );
-        expect(w2.simVersion).toBe(LEGACY_SIM_VERSION);
-      }
-    });
-    it('pre-Phase-09.1 saves (currentGridColonyId absent) deserialize with currentGridColonyId === colonyId (initAnt invariant)', () => {
-      // Backward compatibility: a save written before Phase 09.1 Chunk 0
-      // landed lacks the currentGridColonyId field. Every ant in such a save
-      // must load with currentGridColonyId === colonyId — exactly the
-      // invariant initAnt establishes for fresh ants (no Fighter invaders
-      // existed before Chunks 3+4). A naive zero-fill would silently route
-      // every enemy ant's grid lookup at the player's underground grid.
-      const w = createScenario(42);
-      const s = serializeWorldState(w);
-      // Simulate an older save that lacked the field.
-      delete (s.ants as { currentGridColonyId?: number[] }).currentGridColonyId;
-      const w2 = deserializeWorldState(s);
-      const playerQueen = w.colonies[PLAYER_COLONY_ID]!.queenEntityId;
-      const enemyQueen  = w.colonies[ENEMY_COLONY_ID]!.queenEntityId;
-      expect(w2.ants.currentGridColonyId[playerQueen]).toBe(PLAYER_COLONY_ID);
-      expect(w2.ants.currentGridColonyId[enemyQueen]).toBe(ENEMY_COLONY_ID);
-      // Spot-check a worker in each colony too.
-      const playerWorker = w.colonies[PLAYER_COLONY_ID]!.workers[0]!;
-      const enemyWorker  = w.colonies[ENEMY_COLONY_ID]!.workers[0]!;
-      expect(w2.ants.currentGridColonyId[playerWorker]).toBe(PLAYER_COLONY_ID);
-      expect(w2.ants.currentGridColonyId[enemyWorker]).toBe(ENEMY_COLONY_ID);
-    });
+
+
   });
 
   describe('SaveFile envelope (PRD §8a: version + seed + inputLog + snapshot)', () => {
@@ -678,155 +552,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     });
   });
 
-  // ---------------------------------------------------------------------------
-  // Phase 10 / D-04 — silent BehaviorRatio migration on load
-  //
-  // Pre-Phase-10 saves serialize targetRatio as { forage, dig, fight } (3 fields).
-  // Phase 10 narrows BehaviorRatio to { forage, fight }. The migrateBehaviorRatio
-  // helper drops the dig field, snaps all-zero { forage:0, fight:0 } to the
-  // default { forage:10, fight:0 }, and is idempotent on already-migrated saves.
-  // No schema version bump per D-04 (pre-1.0, save compat is not a public contract).
-  // ---------------------------------------------------------------------------
-  describe('Phase 10 / D-04 — migrateBehaviorRatio', () => {
-    it('(typical) drops dig field: { forage: 5, dig: 3, fight: 2 } → { forage: 5, fight: 2 }', () => {
-      // The dig field is silently dropped — no proportional rescale.
-      const result = migrateBehaviorRatio({ forage: 5, dig: 3, fight: 2 });
-      expect(result).toEqual({ forage: 5, fight: 2 });
-      // Sanity: the `dig` key is GONE, not zeroed.
-      expect('dig' in result).toBe(false);
-    });
-    it('(all-zero edge / pre-Phase-10 pure-dig) snaps to { forage: 10, fight: 0 }', () => {
-      // Pre-Phase-10 player who set pure dig: { forage: 0, dig: 10, fight: 0 }.
-      // Under the two-role contract this would be all-zero; D-04 snaps to the
-      // DEFAULT_BEHAVIOR_RATIO { forage: 10, fight: 0 }.
-      const result = migrateBehaviorRatio({ forage: 0, dig: 10, fight: 0 });
-      expect(result).toEqual({ forage: 10, fight: 0 });
-    });
-    it('(already-migrated, idempotent) { forage: 7, fight: 3 } → { forage: 7, fight: 3 }', () => {
-      // No-op pass-through for post-Phase-10 saves (no dig field).
-      // Applying the helper twice produces the same result as applying once.
-      const once = migrateBehaviorRatio({ forage: 7, fight: 3 });
-      expect(once).toEqual({ forage: 7, fight: 3 });
-      const twice = migrateBehaviorRatio(once);
-      expect(twice).toEqual({ forage: 7, fight: 3 });
-    });
-    it('(already-migrated, intentional zeros) { forage: 0, fight: 0 } passes through unchanged (WR-10)', () => {
-      // Post-Phase-10 callers can legitimately set both fields to 0 (idle
-      // slider, AI exotic state, replay tooling). The snap is restricted to
-      // legacy or malformed inputs so snapshot-vs-replay determinism is
-      // preserved for valid two-field zeros.
-      const result = migrateBehaviorRatio({ forage: 0, fight: 0 });
-      expect(result).toEqual({ forage: 0, fight: 0 });
-    });
-    it('(missing fields defensive) {} → { forage: 10, fight: 0 }', () => {
-      // Missing/non-numeric forage and fight default to 0, which then triggers
-      // the malformed-input branch of the snap. Garbage in → safe default out.
-      const result = migrateBehaviorRatio({});
-      expect(result).toEqual({ forage: 10, fight: 0 });
-    });
-    it('(NaN field defensive) { forage: NaN, fight: 0 } → { forage: 10, fight: 0 }', () => {
-      // NaN counts as malformed — the snap fires defensively.
-      const result = migrateBehaviorRatio({ forage: NaN, fight: 0 });
-      expect(result).toEqual({ forage: 10, fight: 0 });
-    });
-  });
 
-  // ---------------------------------------------------------------------------
-  // Phase 10 / D-04 — full save round-trip migration
-  //
-  // deserializeColony must invoke migrateBehaviorRatio so that loading a save
-  // with a pre-Phase-10 3-field targetRatio produces a runtime ColonyRecord
-  // with the post-Phase-10 2-field shape. Round-trip determinism: load legacy
-  // → save → reload yields a stable two-field-only serialized targetRatio.
-  // ---------------------------------------------------------------------------
-  describe('Phase 10 / D-04 — save round-trip migration', () => {
-    // Build a SerializedWorldState from createScenario, then mutate the player
-    // colony's targetRatio to the desired legacy/post shape. Using the live
-    // serializer keeps every other field of the envelope correct, so tests
-    // assert ONLY the migration behavior — not the rest of the envelope.
-    function legacySaveWithRatio(
-      legacy: { forage: number; dig?: number; fight: number },
-    ) {
-      const w = createScenario(42);
-      const s = serializeWorldState(w);
-      const colonyKey = String(PLAYER_COLONY_ID);
-      // Cast through unknown to inject the legacy 3-field shape (which the
-      // SerializedColony type now accepts via `dig?: number`).
-      (s.colonies[colonyKey] as { targetRatio: typeof legacy }).targetRatio = legacy;
-      return s;
-    }
-
-    it('typical legacy save: { forage: 5, dig: 3, fight: 2 } loads with dig dropped', () => {
-      // After deserialize, the runtime ColonyRecord has the post-Phase-10
-      // two-field shape. The `dig` key is GONE, not zeroed (verifies the
-      // migration is structural, not just numeric).
-      const s = legacySaveWithRatio({ forage: 5, dig: 3, fight: 2 });
-      const w2 = deserializeWorldState(s);
-      const ratio = w2.colonies[PLAYER_COLONY_ID]!.targetRatio;
-      expect(ratio).toEqual({ forage: 5, fight: 2 });
-      expect('dig' in ratio).toBe(false);
-    });
-    it('pure-dig legacy save: { forage: 0, dig: 10, fight: 0 } snaps to default { forage: 10, fight: 0 }', () => {
-      // The all-zero edge case: a pre-Phase-10 player who set pure dig had
-      // forage===0 AND fight===0 under the new contract. D-04 snaps to the
-      // DEFAULT_BEHAVIOR_RATIO { forage: 10, fight: 0 }.
-      const s = legacySaveWithRatio({ forage: 0, dig: 10, fight: 0 });
-      const w2 = deserializeWorldState(s);
-      const ratio = w2.colonies[PLAYER_COLONY_ID]!.targetRatio;
-      expect(ratio).toEqual({ forage: 10, fight: 0 });
-      expect('dig' in ratio).toBe(false);
-    });
-    it('already-migrated save: { forage: 7, fight: 3 } loads unchanged (no-op pass-through)', () => {
-      // Post-Phase-10 saves load idempotently — no re-snap, no field drift.
-      const s = legacySaveWithRatio({ forage: 7, fight: 3 });
-      const w2 = deserializeWorldState(s);
-      expect(w2.colonies[PLAYER_COLONY_ID]!.targetRatio).toEqual({ forage: 7, fight: 3 });
-    });
-    it('two-colony round-trip: each colony migrates independently', () => {
-      // Sanity: per-colony migration is independent. Player gets a typical
-      // legacy ratio (dig dropped); enemy gets the pure-dig edge case (snap).
-      const w = createScenario(42);
-      const s = serializeWorldState(w);
-      (s.colonies[String(PLAYER_COLONY_ID)] as { targetRatio: { forage: number; dig: number; fight: number } })
-        .targetRatio = { forage: 5, dig: 3, fight: 2 };
-      (s.colonies[String(ENEMY_COLONY_ID)] as { targetRatio: { forage: number; dig: number; fight: number } })
-        .targetRatio = { forage: 0, dig: 10, fight: 0 };
-      const w2 = deserializeWorldState(s);
-      expect(w2.colonies[PLAYER_COLONY_ID]!.targetRatio).toEqual({ forage: 5, fight: 2 });
-      expect(w2.colonies[ENEMY_COLONY_ID]!.targetRatio).toEqual({ forage: 10, fight: 0 });
-    });
-    it('round-trip determinism: load legacy → save → re-load produces byte-stable two-field targetRatio', () => {
-      // Critical SCEN-06 contract: after migration, a re-saved snapshot
-      // serializes a CLEAN two-field targetRatio, and a second load is the
-      // idempotent no-op case in migrateBehaviorRatio. The second-save JSON
-      // must contain no `dig` field.
-      const s1 = legacySaveWithRatio({ forage: 5, dig: 3, fight: 2 });
-      const w2 = deserializeWorldState(s1);
-      const s2 = serializeWorldState(w2);
-      const reSerializedRatio = s2.colonies[String(PLAYER_COLONY_ID)]!.targetRatio;
-      expect(reSerializedRatio).toEqual({ forage: 5, fight: 2 });
-      expect('dig' in reSerializedRatio).toBe(false);
-      // Load a third time; the second-save JSON has no dig field, so this is
-      // the post-migration idempotent pass-through path.
-      const w3 = deserializeWorldState(s2);
-      expect(w3.colonies[PLAYER_COLONY_ID]!.targetRatio).toEqual({ forage: 5, fight: 2 });
-    });
-    it('round-trip determinism: post-load tick sequence is deterministic', () => {
-      // Two worlds loaded from the SAME legacy save and ticked the same
-      // number of ticks must produce byte-identical serialized state.
-      // This guards against migration introducing any non-determinism
-      // (e.g. iteration order, PRNG drift) in the load path.
-      const legacy = legacySaveWithRatio({ forage: 5, dig: 3, fight: 2 });
-      const a = deserializeWorldState(legacy);
-      const b = deserializeWorldState(legacy);
-      for (let t = 0; t < 30; t++) {
-        tick(a, []);
-        tick(b, []);
-      }
-      expect(JSON.stringify(serializeWorldState(a)))
-        .toBe(JSON.stringify(serializeWorldState(b)));
-    });
-  });
 
   // ---------------------------------------------------------------------------
   // Phase 10 / WR-09 — inputLog SetBehaviorRatio migration on load
@@ -850,22 +576,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
   // each queued command at deserialize time too.
   // ---------------------------------------------------------------------------
   describe('Issue #82 — commandQueue migration on deserialize', () => {
-    it('legacy SetBehaviorRatio in commandQueue is migrated to two-field shape', () => {
-      const w = createScenario(42);
-      const s = serializeWorldState(w);
-      // Inject a legacy-shape command directly into the serialized queue.
-      (s.commandQueue as unknown as Array<unknown>).push({
-        type: 'SetBehaviorRatio',
-        colonyId: PLAYER_COLONY_ID,
-        ratio: { forage: 5, dig: 3, fight: 2 },
-        issuedAtTick: 0,
-      });
-      const world = deserializeWorldState(s);
-      expect(world.commandQueue.length).toBe(1);
-      const cmd = world.commandQueue[0] as { ratio: unknown };
-      expect(cmd.ratio).toEqual({ forage: 5, fight: 2 });
-      expect('dig' in (cmd.ratio as object)).toBe(false);
-    });
+
     it('non-SetBehaviorRatio commandQueue entries pass through unchanged', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
@@ -895,43 +606,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       localStorage.setItem(SAVE_KEY, JSON.stringify(file));
     }
 
-    it('typical legacy entry: SetBehaviorRatio { forage:5, dig:3, fight:2 } loads with dig dropped', () => {
-      const w = createScenario(42);
-      const legacyEntry = {
-        type: 'SetBehaviorRatio',
-        colonyId: PLAYER_COLONY_ID,
-        ratio: { forage: 5, dig: 3, fight: 2 },
-        issuedAtTick: 0,
-      };
-      writeSave({
-        version: SAVE_FORMAT_VERSION, seed: 42,
-        inputLog: [legacyEntry],
-        snapshot: serializeWorldState(w),
-      });
-      const loaded = loadSave()!;
-      expect(loaded.inputLog.length).toBe(1);
-      const ratio = (loaded.inputLog[0] as { ratio: unknown }).ratio;
-      expect(ratio).toEqual({ forage: 5, fight: 2 });
-      expect('dig' in (ratio as object)).toBe(false);
-    });
 
-    it('pure-dig legacy entry: { forage:0, dig:10, fight:0 } snaps to default { forage:10, fight:0 }', () => {
-      const w = createScenario(42);
-      const legacyEntry = {
-        type: 'SetBehaviorRatio',
-        colonyId: PLAYER_COLONY_ID,
-        ratio: { forage: 0, dig: 10, fight: 0 },
-        issuedAtTick: 0,
-      };
-      writeSave({
-        version: SAVE_FORMAT_VERSION, seed: 42,
-        inputLog: [legacyEntry],
-        snapshot: serializeWorldState(w),
-      });
-      const loaded = loadSave()!;
-      const ratio = (loaded.inputLog[0] as { ratio: unknown }).ratio;
-      expect(ratio).toEqual({ forage: 10, fight: 0 });
-    });
 
     it('post-Phase-10 entry without dig field passes through unchanged (including idle {0,0})', () => {
       const w = createScenario(42);
@@ -950,79 +625,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect((loaded.inputLog[0] as { ratio: unknown }).ratio).toEqual({ forage: 0, fight: 0 });
     });
 
-    it('mixed inputLog: only SetBehaviorRatio entries are touched; other commands pass through', () => {
-      const w = createScenario(42);
-      writeSave({
-        version: SAVE_FORMAT_VERSION, seed: 42,
-        inputLog: [
-          { type: 'SetBehaviorRatio', colonyId: PLAYER_COLONY_ID, ratio: { forage: 5, dig: 3, fight: 2 }, issuedAtTick: 0 },
-          { type: 'MarkDigTile', colonyId: PLAYER_COLONY_ID, tileX: 7, tileY: 3, issuedAtTick: 5 },
-          { type: 'NoOp', issuedAtTick: 10 },
-        ],
-        snapshot: serializeWorldState(w),
-      });
-      const loaded = loadSave()!;
-      expect((loaded.inputLog[0] as { ratio: unknown }).ratio).toEqual({ forage: 5, fight: 2 });
-      expect(loaded.inputLog[1]).toMatchObject({ type: 'MarkDigTile', tileX: 7, tileY: 3 });
-      expect(loaded.inputLog[2]).toMatchObject({ type: 'NoOp' });
-    });
 
-    it('replay round-trip: pure-dig legacy inputLog → load → replay reproduces the migrated snapshot', () => {
-      // The full SCEN-06 contract: migrated inputLog applied to a fresh
-      // scenario reproduces the migrated snapshot byte-for-byte.
-      //
-      // Discriminating case: pure-dig legacy {forage:0, dig:5, fight:0} is
-      // the only shape where migrated and verbatim playback produce
-      // DIFFERENT results: migrated snaps to {forage:10, fight:0}, while
-      // verbatim replay through the post-Phase-10 handler reads {forage:0,
-      // fight:0} (idle, no allocation). Mid-dig and mid-forage cases like
-      // {forage:5, dig:3, fight:2} → {forage:5, fight:2} cannot
-      // discriminate — both paths give the same answer because the handler
-      // ignores the `dig` field regardless.
-      const seed = 42;
-      const original = createScenario(seed);
-      // Build the original world by applying the POST-MIGRATION shape:
-      // {forage:10, fight:0} at tick 5. This is the state the migrated
-      // legacy command should reproduce on replay.
-      const postMigrationCmd: SimCommand = {
-        type: 'SetBehaviorRatio',
-        colonyId: PLAYER_COLONY_ID as ColonyId,
-        ratio: { forage: 10, fight: 0 },
-        issuedAtTick: 5,
-      };
-      for (let t = 0; t < 50; t++) {
-        const cmds: SimCommand[] = (t === 5) ? [postMigrationCmd] : [];
-        tick(original, cmds);
-      }
-
-      // Persist with a LEGACY pure-dig entry in the inputLog.
-      const legacyEntry = {
-        type: 'SetBehaviorRatio',
-        colonyId: PLAYER_COLONY_ID,
-        ratio: { forage: 0, dig: 5, fight: 0 },
-        issuedAtTick: 5,
-      };
-      writeSave({
-        version: SAVE_FORMAT_VERSION, seed,
-        inputLog: [legacyEntry],
-        snapshot: serializeWorldState(original),
-      });
-
-      const loaded = loadSave()!;
-      // Sanity: the legacy entry got snapped to {forage:10, fight:0}.
-      expect((loaded.inputLog[0] as { ratio: unknown }).ratio).toEqual({ forage: 10, fight: 0 });
-
-      const replay = createScenario(loaded.seed);
-      const byTick: SimCommand[][] = [];
-      for (const c of loaded.inputLog) {
-        const t = c.issuedAtTick;
-        (byTick[t] ??= []).push(c);
-      }
-      for (let t = 0; t < 50; t++) tick(replay, byTick[t] ?? []);
-
-      expect(JSON.stringify(serializeWorldState(replay)))
-        .toBe(JSON.stringify(serializeWorldState(original)));
-    });
   });
 
   // ---------------------------------------------------------------------------
@@ -1146,21 +749,9 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       return s;
     }
 
-    it('accepts missing simVersion (defaults to LEGACY — pre-#27 behavior preserved)', () => {
-      const snapshot = makeSavedSnapshot((s) => { delete s.simVersion; });
-      const w = deserializeWorldState(snapshot);
-      expect(w.simVersion).toBe(2); // LEGACY_SIM_VERSION
-    });
-    it('accepts non-integer simVersion (defaults to LEGACY)', () => {
-      const snapshot = makeSavedSnapshot((s) => { s.simVersion = 3.5; });
-      const w = deserializeWorldState(snapshot);
-      expect(w.simVersion).toBe(2);
-    });
-    it('accepts simVersion = LEGACY (= 2)', () => {
-      const snapshot = makeSavedSnapshot((s) => { s.simVersion = 2; });
-      const w = deserializeWorldState(snapshot);
-      expect(w.simVersion).toBe(2);
-    });
+
+
+
     it('accepts simVersion = LATEST', () => {
       // LATEST_SIM_VERSION is 10 today; the value is whatever serializeWorldState
       // wrote out for a fresh scenario.
@@ -1204,7 +795,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     });
     it('rejects negative simVersion (all-gates-off guard)', () => {
       const snapshot = makeSavedSnapshot((s) => { s.simVersion = -1; });
-      expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid simVersion/);
+      expect(() => deserializeWorldState(snapshot)).toThrow(OldSimVersionError);
     });
     it('exact boundary: simVersion = LATEST + 1 throws FutureSimVersionError (recoverable)', () => {
       // LATEST_SIM_VERSION is whatever the current sim writes for a fresh
@@ -1214,28 +805,13 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const snapshot = makeSavedSnapshot((s) => { s.simVersion = latest + 1; });
       expect(() => deserializeWorldState(snapshot)).toThrow(FutureSimVersionError);
     });
-    it('exact boundary: simVersion = LEGACY - 1 throws plain Error (NOT FutureSimVersionError — it is tampering)', () => {
-      // LEGACY_SIM_VERSION is 2; 1 should be rejected as definitively corrupt
-      // (no historical save shape uses pre-LEGACY versions). Plain Error
-      // instead of FutureSimVersionError so bootFromSave deletes the save
-      // rather than preserving it indefinitely.
+    it('exact boundary: simVersion = MIN_ACCEPTED - 1 throws OldSimVersionError', () => {
+      // Any simVersion below MIN_ACCEPTED_SIM_VERSION (22) is rejected with
+      // OldSimVersionError so bootFromSave can handle it appropriately.
       const snapshot = makeSavedSnapshot((s) => { s.simVersion = 1; });
-      let caught: unknown;
-      try { deserializeWorldState(snapshot); } catch (e) { caught = e; }
-      expect(caught).toBeInstanceOf(Error);
-      expect(caught).not.toBeInstanceOf(FutureSimVersionError);
-      expect((caught as Error).message).toMatch(/Invalid simVersion/);
+      expect(() => deserializeWorldState(snapshot)).toThrow(OldSimVersionError);
     });
-    it('string simVersion falls back to LEGACY (non-integer types treated as missing)', () => {
-      // Non-number/non-integer types (string, null, NaN, object) all hit
-      // the same fallback-to-LEGACY path — pre-#27 saves and tampered saves
-      // converge here. Only present-but-out-of-range integers throw.
-      const snapshot = makeSavedSnapshot((s) => {
-        (s as unknown as { simVersion: unknown }).simVersion = '99999';
-      });
-      const w = deserializeWorldState(snapshot);
-      expect(w.simVersion).toBe(2);
-    });
+
   });
 
   // ---------------------------------------------------------------------------
@@ -1280,50 +856,10 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       });
       expect(loadSave()).not.toBeNull();
     });
-    it('mixed inputLog with one malformed entry: rest of log is preserved', () => {
-      const w = createScenario(42);
-      writeSave({
-        version: SAVE_FORMAT_VERSION, seed: 42,
-        inputLog: [
-          { type: 'SetBehaviorRatio', colonyId: PLAYER_COLONY_ID, ratio: null, issuedAtTick: 0 },
-          { type: 'MarkDigTile', colonyId: PLAYER_COLONY_ID, tileX: 7, tileY: 3, issuedAtTick: 5 },
-          { type: 'SetBehaviorRatio', colonyId: PLAYER_COLONY_ID, ratio: { forage: 5, dig: 3, fight: 2 }, issuedAtTick: 10 },
-        ],
-        snapshot: serializeWorldState(w),
-      });
-      const loaded = loadSave();
-      expect(loaded).not.toBeNull();
-      expect(loaded!.inputLog.length).toBe(3);
-      expect((loaded!.inputLog[0] as { ratio: unknown }).ratio).toBeNull();
-      expect(loaded!.inputLog[1]).toMatchObject({ type: 'MarkDigTile', tileX: 7, tileY: 3 });
-      expect((loaded!.inputLog[2] as { ratio: unknown }).ratio).toEqual({ forage: 5, fight: 2 });
-    });
-    it('migrateBehaviorRatio is null-safe (defaults to {forage:10, fight:0})', () => {
-      expect(migrateBehaviorRatio(null)).toEqual({ forage: 10, fight: 0 });
-    });
-    it('migrateBehaviorRatio is primitive-safe (defaults to {forage:10, fight:0})', () => {
-      expect(migrateBehaviorRatio(5)).toEqual({ forage: 10, fight: 0 });
-      expect(migrateBehaviorRatio('bogus')).toEqual({ forage: 10, fight: 0 });
-      expect(migrateBehaviorRatio(undefined)).toEqual({ forage: 10, fight: 0 });
-    });
-    it('snapshot with null targetRatio: load + deserialize survives, applies safe default', () => {
-      const w = createScenario(42);
-      const s = serializeWorldState(w);
-      // Tamper: a corrupted save with null targetRatio on the player colony.
-      (s.colonies[String(PLAYER_COLONY_ID)] as unknown as { targetRatio: unknown }).targetRatio = null;
-      writeSave({
-        version: SAVE_FORMAT_VERSION, seed: 42,
-        inputLog: [],
-        snapshot: s,
-      });
-      const loaded = loadSave();
-      expect(loaded).not.toBeNull();
-      // The actual targetRatio path runs in deserializeWorldState (via
-      // deserializeColony → migrateBehaviorRatio). Exercise it to confirm
-      // the null-safe default propagates into the live ColonyRecord.
-      const world = deserializeWorldState(loaded!.snapshot);
-      expect(world.colonies[PLAYER_COLONY_ID]!.targetRatio).toEqual({ forage: 10, fight: 0 });
-    });
+
+
+
+
   });
 
   // -------------------------------------------------------------------------
@@ -1920,7 +1456,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(hasSave()).toBe(true);
     });
 
-    it('round-3: returns false when simVersion is omitted (legacy save — defaults to LEGACY on load)', async () => {
+    it('round-3: returns true when simVersion is omitted (old save below MIN_ACCEPTED — not loadable)', async () => {
       const world = createScenario(7);
       const snap = serializeWorldState(world);
       // Strip simVersion to simulate a pre-issue-#27 envelope.
@@ -1933,7 +1469,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         savedAtMs: Date.now(),
       };
       window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
-      expect(hasIncompatibleSave()).toBe(false);
+      expect(hasIncompatibleSave()).toBe(true);
     });
 
     it('Codex round-3 P1: returns true when snapshot is null (parseable envelope, garbage payload)', () => {

@@ -147,13 +147,6 @@ function makeV22WorldWith2Colonies(playerColonyId = 1, aiColonyId = 2): {
 }
 
 describe('checkTiebreaks (S5 V22)', () => {
-  it('returns None for pre-V22 worlds', () => {
-    const { world } = makeV22WorldWith2Colonies();
-    world.simVersion = SIM_VERSION_V21_REPRODUCTION;
-    world.tick = MATCH_TIMEOUT_TICKS;
-    expect(checkTiebreaks(world, 1 as ColonyId)).toBe(GameOutcome.None);
-  });
-
   it('returns None when tick is below timeout cap', () => {
     const { world } = makeV22WorldWith2Colonies();
     world.tick = MATCH_TIMEOUT_TICKS - 1;

@@ -30,7 +30,7 @@ import { createScenario } from '../sim/scenario.js';
 import { copyWorldState, type WorldState } from '../sim/types.js';
 import { tick, resetFlowFieldCaches } from '../sim/tick.js';
 import { createGameLoop, type GameLoop, MS_PER_TICK } from '../platform/game-loop.js';
-import { hasSave, loadSave, deleteSave, tickAutosave, FutureSimVersionError, manualSave } from '../platform/save.js';
+import { hasSave, loadSave, deleteSave, tickAutosave, FutureSimVersionError, OldSimVersionError, manualSave } from '../platform/save.js';
 import { deserializeWorldState } from '../platform/save.js';
 import { loadSettings, saveSettings } from '../platform/settings.js';
 import { runAIController, resetAIControllerCache } from './ai-controller.js';
@@ -738,6 +738,13 @@ export class GameScene extends Phaser.Scene {
         this.bootFresh();
         // Set after bootFresh — resetSessionState clears the flag.
         this.autosaveSuspended = true;
+        return;
+      }
+      if (err instanceof OldSimVersionError) {
+        // Pre-V22 save — no migration path; discard and start fresh.
+        console.error(err.message);
+        deleteSave();
+        this.bootFresh();
         return;
       }
       // Genuine corruption: discard so we don't loop the user.

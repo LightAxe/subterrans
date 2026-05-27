@@ -47,8 +47,7 @@ import {
   SPIDER_SPRITE_WIDTH,
 } from './ant-sprite-layer.js';
 import { SPIDER_HUNGER_MAX_TICKS } from '../sim/constants.js';
-import { NORMAL_TIER_INDEX, tierIndex } from '../sim/ai-state.js';
-import { SIM_VERSION_V22_DIFFICULTY } from '../sim/types.js';
+import { tierIndex } from '../sim/ai-state.js';
 
 // ---------------------------------------------------------------------------
 // GfxLike — minimal Graphics interface (Phaser.GameObjects.Graphics satisfies this)
@@ -425,7 +424,7 @@ export function drawSurfaceEntities(
       && spiderScreenY > -SPIDER_SPRITE_HEIGHT && spiderScreenY < canvasH + SPIDER_SPRITE_HEIGHT) {
 
       const hungerFraction = Math.min(
-        curr.spider.hungerTicks / SPIDER_HUNGER_MAX_TICKS[curr.simVersion >= SIM_VERSION_V22_DIFFICULTY ? tierIndex(curr.difficulty) : NORMAL_TIER_INDEX],
+        curr.spider.hungerTicks / SPIDER_HUNGER_MAX_TICKS[tierIndex(curr.difficulty)],
         1,
       );
       // S6: linear tint gradient pale (#ffeecc) → deep red (#cc2020) by hungerFraction.

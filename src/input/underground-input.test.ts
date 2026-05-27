@@ -957,16 +957,6 @@ describe('handleUndergroundRightClick', () => {
     expect(world.commandQueue).toHaveLength(0);
   });
 
-  it('legacy (pre-v5): right-click on Solid is a no-op (replay determinism)', () => {
-    const world = makeWorld();
-    world.simVersion = LEGACY_SIM_VERSION;
-    // (5,5) stays Solid by default.
-    const vs = makeViewState('underground', 64, 32);
-    const { x, y } = tileToScreen(5, 5, 64, 32);
-    handleUndergroundRightClick(world, vs, x, y);
-    expect(contextMenuState.pendingShow).toBe(false);
-    expect(world.commandQueue).toHaveLength(0);
-  });
 });
 
 // ---------------------------------------------------------------------------

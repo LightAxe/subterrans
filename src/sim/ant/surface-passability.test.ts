@@ -18,7 +18,6 @@ import { describe, it, expect } from 'vitest';
 import {
   createWorldState,
   allocateEntityId,
-  SIM_VERSION_V5_CHAMBER_ON_MARKED,
   SIM_VERSION_V7_SURFACE_PASSABILITY,
 } from '../types.js';
 import { initAnt, pushRecentTile } from './ant-store.js';
@@ -299,39 +298,6 @@ describe('pickSurfaceDetour', () => {
     expect(isOneOfRecent).toBe(true);
   });
 
-  it('pre-v8 still returns (0, 0) when every walkable neighbour is recent (legacy deadlock preserved)', () => {
-    // Same setup as the v8 fallback test, but with simVersion bumped
-    // DOWN to v7 to verify the gate. Pre-v8 captured saves must
-    // continue to deadlock identically — that's the SCEN-06 contract.
-    let world: ReturnType<typeof createWorldState> | null = null;
-    const ANT_X = 0;
-    const ANT_Y = 0;
-    for (let seed = 1; seed < 200; seed++) {
-      const w = createWorldState(seed);
-      if (
-        canEnterSurfaceTile(w, ANT_X + 1, ANT_Y) &&
-        canEnterSurfaceTile(w, ANT_X + 1, ANT_Y + 1) &&
-        canEnterSurfaceTile(w, ANT_X,     ANT_Y + 1)
-      ) {
-        world = w;
-        break;
-      }
-    }
-    expect(world).not.toBeNull();
-    const w = world!;
-    w.simVersion = SIM_VERSION_V7_SURFACE_PASSABILITY;
-    const antId = allocateEntityId(w);
-    initAnt(w.ants, antId, {
-      colonyId: 1,
-      posX: ANT_X << FP_SHIFT,
-      posY: ANT_Y << FP_SHIFT,
-    });
-    pushRecentTile(w.ants, antId, ANT_X + 1, ANT_Y);
-    pushRecentTile(w.ants, antId, ANT_X + 1, ANT_Y + 1);
-    pushRecentTile(w.ants, antId, ANT_X,     ANT_Y + 1);
-    const det = pickSurfaceDetour(w, ANT_X, ANT_Y, 1, 0, antId);
-    expect(det).toEqual({ dx: 0, dy: 0 });
-  });
 
   it('prefers cardinal slip on intended axis as the first probe', () => {
     // Construct a synthetic test by checking the well-defined order:
@@ -649,63 +615,6 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     expect(bX === pickedT!.x && bY === pickedT!.y - 1).toBe(false);
   });
 
-  it('pre-v7 vs v7: same seed, same scenario produces different ant motion (deterministic divergence)', () => {
-    // Final check that the simVersion gate is doing its job: same world
-    // setup, two simVersions, must produce different motion for at least
-    // ONE ant after a few ticks. If the gate were broken we'd see
-    // identical positions. Compares v5 (pre-#42, pre-#44) against v7
-    // (#44 surface passability + soft cost). v6 sits between them and
-    // adds the #42 forager-no-revisit filter, which is also surface-
-    // movement-affecting, so v5↔v7 is the cleanest #44-isolating test.
-    function runScenario(simVersionPin: 5 | 7): { posX: number; posY: number } {
-      const world = createWorldState(42);
-      world.simVersion = simVersionPin;
-
-      // Find a tile pair where v6 would block but v5 wouldn't.
-      let pair: { open: { x: number; y: number }; blocked: { x: number; y: number } } | null = null;
-      for (let y = 4; y < 50 && pair === null; y++) {
-        for (let x = 4; x < 50; x++) {
-          const open = surfaceFeatureAt(world, x, y);
-          const east = surfaceFeatureAt(world, x + 1, y);
-          if (
-            (open === null || open.movement !== SurfaceMovementEffect.HardBlock) &&
-            east !== null && east.movement === SurfaceMovementEffect.HardBlock
-          ) {
-            pair = { open: { x, y }, blocked: { x: x + 1, y } };
-            break;
-          }
-        }
-      }
-      if (pair === null) throw new Error('no test pair found');
-
-      const colony = createColonyRecord(1, 0);
-      colony.entrances = [{
-        entranceId: 0,
-        surfaceTileX: pair.blocked.x + 10,
-        surfaceTileY: pair.blocked.y,
-        isOpen: true,
-      }];
-      colony.rallyPoint = null;
-      colony.digFlowFieldDirty = false;
-      world.colonies[1] = colony;
-
-      const id = spawnSurfaceCarrier(world, 1, pair.open.x, pair.open.y);
-      // ONE tick is enough to see divergence — at v5 the ant commits the
-      // step into the HardBlock tile, at v7 the surface guard reverts +
-      // detours. Multi-tick runs proved deceptive: both versions can
-      // converge on the same final tile via different paths, masking the
-      // version-gate bug if it regresses.
-      tickAntMovement(world, new Rng(42), createDigFlowFields());
-      return { posX: world.ants.posX[id]!, posY: world.ants.posY[id]! };
-    }
-
-    const v5 = runScenario(5);
-    const v7 = runScenario(7);
-    // v7 either detoured (different posX/posY) or held in place (no
-    // walkable detour). v5 walks straight east into the HardBlock tile.
-    // Positions MUST differ on tick 1.
-    expect(v7.posX !== v5.posX || v7.posY !== v5.posY).toBe(true);
-  });
 
   it('SoftCost slowdown clamps to min 1 (speed=1 stays at 1, doesn\'t go to 0)', () => {
     // Edge case: an ant with the absolute minimum nonzero speed (1) on a
@@ -748,46 +657,4 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     expect(endPosX).not.toBe(startPosX);
   });
 
-  it('under v5 — same setup, ant freely walks onto the (now non-blocking) feature tile', () => {
-    // Same construction as v6 test but with simVersion pinned. The
-    // canEnterSurfaceTile guard is gated on v6, so v5 ants ignore features.
-    const world = createWorldState(42);
-    world.simVersion = SIM_VERSION_V5_CHAMBER_ON_MARKED;
-
-    let pair: { open: { x: number; y: number }; blocked: { x: number; y: number } } | null = null;
-    for (let y = 4; y < 50 && pair === null; y++) {
-      for (let x = 4; x < 50; x++) {
-        const open = surfaceFeatureAt(world, x, y);
-        const east = surfaceFeatureAt(world, x + 1, y);
-        if (
-          (open === null || open.movement !== SurfaceMovementEffect.HardBlock) &&
-          east !== null && east.movement === SurfaceMovementEffect.HardBlock
-        ) {
-          pair = { open: { x, y }, blocked: { x: x + 1, y } };
-          break;
-        }
-      }
-    }
-    expect(pair).not.toBeNull();
-
-    const colony = createColonyRecord(1, 0);
-    colony.entrances = [{
-      entranceId: 0,
-      surfaceTileX: pair!.blocked.x + 10,
-      surfaceTileY: pair!.blocked.y,
-      isOpen: true,
-    }];
-    colony.rallyPoint = null;
-    colony.digFlowFieldDirty = false;
-    world.colonies[1] = colony;
-
-    const id = spawnSurfaceCarrier(world, 1, pair!.open.x, pair!.open.y);
-    const rng = new Rng(42);
-    tickAntMovement(world, rng, createDigFlowFields());
-
-    // Under v5 the ant moves freely; expected position is one tile east
-    // (toward entrance) — i.e. ON the blocked tile.
-    const endTileX = world.ants.posX[id]! >> FP_SHIFT;
-    expect(endTileX).toBe(pair!.blocked.x);
-  });
 });

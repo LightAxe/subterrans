@@ -17,7 +17,7 @@
 // array.length > 0, so array[length-1] is always defined.
 
 import type { WorldState } from '../types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V10_VISIBLE_BROOD_CARRY } from '../types.js';
+import { allocateEntityId, INVALID_ENTITY_ID } from '../types.js';
 import { initAnt } from '../ant/ant-store.js';
 import type { ColonyRecord } from './colony-store.js';
 import { AntTask, ChamberType } from '../enums.js';
@@ -25,7 +25,6 @@ import { hasCompletedChamber, colonyFoodTotal } from './colony-system.js';
 import { Zone, ugGet, UndergroundTileState } from '../terrain.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import {
-  QUEEN_EGG_INTERVAL_TICKS,
   QUEEN_EGG_FOOD_THRESHOLD,
   QUEEN_EGG_INTERVAL_DISABLED,
   QUEEN_EGG_INTERVAL_BASE_TICKS,
@@ -41,7 +40,6 @@ import {
   STARVATION_GRACE_TICKS,
   MIN_EGG_INTERVAL_TICKS,
 } from '../constants.js';
-import { SIM_VERSION_V21_REPRODUCTION, SIM_VERSION_V22_DIFFICULTY } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // tickQueenEggProduction — CLNY-01
@@ -109,25 +107,16 @@ function eggIntervalForColony(colony: ColonyRecord): number {
 }
 
 export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord): void {
-  // Gate 1: tick-modulo interval (S4 V21+: surplus-scaled; pre-V21: static)
-  let eggInterval = world.simVersion >= SIM_VERSION_V21_REPRODUCTION
-    ? eggIntervalForColony(colony) : QUEEN_EGG_INTERVAL_TICKS;
+  // Gate 1: tick-modulo interval (surplus-scaled).
+  let eggInterval = eggIntervalForColony(colony);
   if (eggInterval < 0) return; // QUEEN_EGG_INTERVAL_DISABLED sentinel
-  // S5 (V22): apply per-colony brood-interval numerator (set in createScenario from difficulty tier).
+  // Apply per-colony brood-interval numerator (set in createScenario from difficulty tier).
   // Integer-only: (interval * numerator) >> 2; numerator=4 is identity. Hard floor: MIN_EGG_INTERVAL_TICKS.
-  if (world.simVersion >= SIM_VERSION_V22_DIFFICULTY) {
-    eggInterval = (eggInterval * colony.eggIntervalNumerator) >> 2;
-    if (eggInterval < MIN_EGG_INTERVAL_TICKS) eggInterval = MIN_EGG_INTERVAL_TICKS;
-  }
-  // V21+: elapsed-since-last-lay prevents spurious double-lays when the surplus
-  // tier changes mid-cycle (e.g., interval drops from 300→200 at tick 301 after
-  // a lay at tick 300; modulo would fire again at tick 400, only 100 ticks later).
-  // Pre-V21: static interval — modulo is safe and backward-compatible.
-  if (world.simVersion >= SIM_VERSION_V21_REPRODUCTION) {
-    if (world.tick - colony.queenLastEggTick < eggInterval) return;
-  } else {
-    if ((world.tick % eggInterval) !== 0) return;
-  }
+  eggInterval = (eggInterval * colony.eggIntervalNumerator) >> 2;
+  if (eggInterval < MIN_EGG_INTERVAL_TICKS) eggInterval = MIN_EGG_INTERVAL_TICKS;
+  // Elapsed-since-last-lay prevents spurious double-lays when the surplus
+  // tier changes mid-cycle.
+  if (world.tick - colony.queenLastEggTick < eggInterval) return;
 
   // Gate 2: food threshold — issue #15: read TOTAL stockpile (entrance pool +
   // every FoodStorage chamber.foodStored). Pre-#15 this read colony.foodStored
@@ -363,11 +352,11 @@ export function tickLifecycleTransitions(world: WorldState, colony: ColonyRecord
       ants.speed[id] = WORKER_BASE_SPEED;
       colony.workers.push(id);
       colony.workerCount += 1;
-      // Issue #17 Phase 1 — if a v10+ nurse was carrying this larva when
+      // Issue #17 Phase 1 — if a nurse was carrying this larva when
       // it matured, drop the carry. The new worker stays at the carrier's
       // current tile (posX/posY were synced last tick); the carrier
       // returns to Idle so step 10a re-allocates per ratio.
-      if (world.simVersion >= SIM_VERSION_V10_VISIBLE_BROOD_CARRY) {
+      {
         const carrierId = ants.carriedBy[id]!;
         if (carrierId !== -1) {
           // Carrier-side cleanup is gated on the carrier still being alive

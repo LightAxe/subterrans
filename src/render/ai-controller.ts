@@ -27,7 +27,6 @@ import {
   AI_MAX_OPERATION_FIGHTERS,
 } from '../sim/constants.js';
 import { colonyFoodTotal } from '../sim/colony/colony-system.js';
-import { SIM_VERSION_V19_AI_STATE } from '../sim/types.js';
 import {
   aiFighterCount,
 } from '../sim/ai-state.js';
@@ -104,35 +103,33 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
 
   aiInitialSetup(world, colony);
 
-  // S2: state machine policy (gated on V19).
+  // S2: state machine policy.
   // advanceAIState (state transitions) now runs inside tick.ts to preserve the
   // sim/render boundary — render reads world.aiState from the previous tick and
   // emits operational commands (probe entry, invasion tick, behavior ratio sync).
-  if (world.simVersion >= SIM_VERSION_V19_AI_STATE) {
-    const aiStateRecord = world.aiState.find((r) => r.colonyId === aiColonyId);
-    if (aiStateRecord !== undefined) {
-      const curState = aiStateRecord.state;
-      if (curState === 'WarFooting') {
-        const ticksSinceLast = world.tick - aiStateRecord.lastProbeEndTick;
-        if (ticksSinceLast >= AI_PROBE_INTERVAL_TICKS
-            && aiFighterCount(world, aiColonyId) >= AI_PROBE_FIGHTER_COUNT) {
-          aiStateMachineTick_probeEntry(world, aiColonyId, colony);
-        }
-      }
-      if (curState === 'Invading') {
-        aiInvasionTick(world, aiColonyId);
-      }
-      if (curState === 'Probing') {
-        aiProbeTick(world, aiColonyId);
+  const aiStateRecord = world.aiState.find((r) => r.colonyId === aiColonyId);
+  if (aiStateRecord !== undefined) {
+    const curState = aiStateRecord.state;
+    if (curState === 'WarFooting') {
+      const ticksSinceLast = world.tick - aiStateRecord.lastProbeEndTick;
+      if (ticksSinceLast >= AI_PROBE_INTERVAL_TICKS
+          && aiFighterCount(world, aiColonyId) >= AI_PROBE_FIGHTER_COUNT) {
+        aiStateMachineTick_probeEntry(world, aiColonyId, colony);
       }
     }
-    // Sync behavior ratio to state.
-    _syncBehaviorRatioToAIState(world, aiColonyId, colony);
-
-    // Push SyncAIState so the snapshot-analyzer replay path (which calls tick() only,
-    // never runAIController) can reproduce world.aiState bit-identically.
-    _pushSyncAIState(world, aiColonyId);
+    if (curState === 'Invading') {
+      aiInvasionTick(world, aiColonyId);
+    }
+    if (curState === 'Probing') {
+      aiProbeTick(world, aiColonyId);
+    }
   }
+  // Sync behavior ratio to state.
+  _syncBehaviorRatioToAIState(world, aiColonyId, colony);
+
+  // Push SyncAIState so the snapshot-analyzer replay path (which calls tick() only,
+  // never runAIController) can reproduce world.aiState bit-identically.
+  _pushSyncAIState(world, aiColonyId);
 
   aiDigHeuristic(world, colony);
   aiChamberPlacement(world, colony);
@@ -154,24 +151,7 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
  * "AI ready" check the rest of the controller can rely on.
  */
 export function aiInitialSetup(world: WorldState, colony: ColonyRecord): void {
-  // 1. Set fixed behavior ratio for AI (CMBT-02). Skip if the colony's
-  //    targetRatio already matches the AI ratio (idempotent across boots).
-  //    V17+: _syncBehaviorRatioToAIState owns the ratio; skip here to avoid
-  //    alternating commands that thrash the ratio every tick in non-Peacetime states.
-  if (world.simVersion < SIM_VERSION_V19_AI_STATE) {
-    const ratioReady =
-      colony.targetRatio.forage === AI_BEHAVIOR_RATIO.forage &&
-      colony.targetRatio.fight === AI_BEHAVIOR_RATIO.fight;
-    if (!ratioReady) {
-      const setRatioCmd: SetBehaviorRatioCommand = {
-        type: 'SetBehaviorRatio',
-        colonyId: colony.colonyId,
-        ratio: { ...AI_BEHAVIOR_RATIO },
-        issuedAtTick: world.tick,
-      };
-      world.commandQueue.push(setRatioCmd);
-    }
-  }
+  // 1. _syncBehaviorRatioToAIState owns the behavior ratio; no static set needed here.
 
   // 2. Designate entrance at queen's surface tile. Skip if any entrance
   //    already exists for this colony — including ones the player/AI

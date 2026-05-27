@@ -17,7 +17,6 @@ import { Rng } from './rng.js';
 import { AntTask } from './enums.js';
 import { makeTileKey } from './tile-key.js';
 import type { WorldState, KillerKind, QueenDeathContext } from './types.js';
-import { SIM_VERSION_V13_INVARIANT_FIXES, SIM_VERSION_V16_COMBAT_HPDPS, SIM_VERSION_V17_COMBAT_AGGRO, SIM_VERSION_V20_SPIDER } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
@@ -32,14 +31,13 @@ import {
   SPIDER_DAMAGE,
   SPIDER_SWARM_FIGHTER_THRESHOLD,
 } from './constants.js';
-import { SIM_VERSION_V19_AI_STATE } from './types.js';
 import { getAIStateForColony, isInCohort } from './ai-state.js';
 
 /**
  * Sweep all live ants, bucket by tile, and resolve combat on tiles shared by 2+ colonies.
  * Dispatches to V15 (coin-flip) or V16 (HP/damage/cooldown) based on world.simVersion.
  */
-export function detectAndResolveCombat(world: WorldState, rng: Rng): void {
+export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
   const { ants } = world;
   const count = ants.alive.length;
 
@@ -67,26 +65,24 @@ export function detectAndResolveCombat(world: WorldState, rng: Rng): void {
   // First pass: collect all ants that are currently on multi-colony contested tiles.
   // Any live ant NOT in this set has disengaged; its combatOpponentId is stale and
   // must be cleared so the next encounter triggers a fresh windup (Codex P1 finding).
-  if (world.simVersion >= SIM_VERSION_V16_COMBAT_HPDPS) {
-    const contestedSet = new Set<number>();
-    for (const key of keys) {
-      const participants = bucket.get(key)!;
-      if (participants.length < 2) continue;
-      const firstCid = ants.colonyId[participants[0]!]!;
-      let multiColony = false;
-      for (let j = 1; j < participants.length; j++) {
-        if (ants.colonyId[participants[j]!]! !== firstCid) { multiColony = true; break; }
-      }
-      if (multiColony) {
-        for (const idx of participants) contestedSet.add(idx);
-      }
+  const contestedSet = new Set<number>();
+  for (const key of keys) {
+    const participants = bucket.get(key)!;
+    if (participants.length < 2) continue;
+    const firstCid = ants.colonyId[participants[0]!]!;
+    let multiColony = false;
+    for (let j = 1; j < participants.length; j++) {
+      if (ants.colonyId[participants[j]!]! !== firstCid) { multiColony = true; break; }
     }
-    for (let i = 0; i < count; i++) {
-      // -2 is the spider-pairing sentinel; skip it here so resolveSpiderCombatOnTile
-      // can preserve windup state. The sentinel is cleared by clearSpiderPairingSentinels.
-      if (ants.alive[i] === 1 && !contestedSet.has(i) && ants.combatOpponentId[i] !== -2) {
-        ants.combatOpponentId[i] = -1;
-      }
+    if (multiColony) {
+      for (const idx of participants) contestedSet.add(idx);
+    }
+  }
+  for (let i = 0; i < count; i++) {
+    // -2 is the spider-pairing sentinel; skip it here so resolveSpiderCombatOnTile
+    // can preserve windup state. The sentinel is cleared by clearSpiderPairingSentinels.
+    if (ants.alive[i] === 1 && !contestedSet.has(i) && ants.combatOpponentId[i] !== -2) {
+      ants.combatOpponentId[i] = -1;
     }
   }
 
@@ -102,18 +98,13 @@ export function detectAndResolveCombat(world: WorldState, rng: Rng): void {
       }
     }
     if (!multiColony) continue;
-    if (world.simVersion >= SIM_VERSION_V16_COMBAT_HPDPS) {
-      resolveCombatOnTile_v16(world, key, participants);
-    } else {
-      resolveCombatOnTile_v15(world, key, participants, rng);
-    }
+    resolveCombatOnTile_v16(world, key, participants);
   }
 
   // S3 — spider combat: resolve spider vs ants on the spider's tile.
   // Only during combat-active states (Striking, Rampaging). Spider in Patrolling,
   // Hunting, Feeding, or Retreating does not engage in direct HP combat.
-  if (world.simVersion >= SIM_VERSION_V20_SPIDER &&
-      world.spider !== null &&
+  if (world.spider !== null &&
       (world.spider.state === 'Striking' || world.spider.state === 'Rampaging')) {
     resolveSpiderCombatOnTile(world);
   }
@@ -123,47 +114,6 @@ export function detectAndResolveCombat(world: WorldState, rng: Rng): void {
   // valid contexts the same tick. Reset transient array for next tick.
   // NOTE: actual clearing happens in checkQueenDeath per-colony; we leave the array
   // intact here so checkQueenDeath can read it after combat resolves.
-}
-
-// ---------------------------------------------------------------------------
-// V15 legacy resolver — coin-flip instant-kill (frozen, byte-identical replay)
-// ---------------------------------------------------------------------------
-
-/**
- * Resolve combat on a single tile using the pre-V16 coin-flip model.
- * Called only when world.simVersion < SIM_VERSION_V16_COMBAT_HPDPS.
- */
-export function resolveCombatOnTile_v15(world: WorldState, _tileKey: number, participants: readonly number[], rng: Rng): void {
-  const { ants } = world;
-
-  for (let iter = 0; iter < participants.length; iter++) {
-    const byColony = new Map<ColonyId, number[]>();
-    for (const idx of participants) {
-      if (ants.alive[idx] !== 1) continue;
-      const cid = ants.colonyId[idx]! as ColonyId;
-      const list = byColony.get(cid);
-      if (list === undefined) byColony.set(cid, [idx]);
-      else list.push(idx);
-    }
-    if (byColony.size < 2) break;
-
-    const cids = Array.from(byColony.keys()).sort((a, b) => a - b);
-    const cidA = cids[0]!;
-    const cidB = cids[1]!;
-    const groupA = byColony.get(cidA)!;
-    const groupB = byColony.get(cidB)!;
-    groupA.sort((a, b) => a - b);
-    groupB.sort((a, b) => a - b);
-    const antA = groupA[0]!;
-    const antB = groupB[0]!;
-
-    const flip = rng.nextInt(2);
-    if (flip === 0) {
-      killAnt(world, antB, cidA, antA, 'Ant');
-    } else {
-      killAnt(world, antA, cidB, antB, 'Ant');
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -203,8 +153,7 @@ function strikeDamage(world: WorldState, antId: number, strikes: boolean): numbe
       ? COMBAT_DAMAGE_HOMEGROUND
       : COMBAT_DAMAGE_BASE;
   }
-  // V17+: non-fighters retaliate with reduced damage. Pre-V17: 0 (replay-safe for V16 saves).
-  if (world.simVersion < SIM_VERSION_V17_COMBAT_AGGRO) return 0;
+  // Non-fighters retaliate with reduced damage.
   const cid = ants.colonyId[antId]! as ColonyId;
   const colony = world.colonies[cid];
   if (colony == null) return 0;
@@ -281,21 +230,13 @@ function resolveCombatOnTile_v16(world: WorldState, _tileKey: number, participan
     // accumulated progress to avoid penalizing an ongoing combatant on a re-entry.
     const aIsFighter = ants.task[antA] === AntTask.Fighting;
     const bIsFighter = ants.task[antB] === AntTask.Fighting;
-    const skipWindup = world.simVersion >= SIM_VERSION_V17_COMBAT_AGGRO;
-    const fighterStrikesNow = skipWindup && ((aNew && aIsFighter) || (bNew && bIsFighter));
-    if (skipWindup) {
-      // V17+: only reset the newly-paired side — veterans keep accumulated progress.
-      // Non-fighters start at COMBAT_COOLDOWN_TICKS+1 when fighterStrikesNow so the
-      // immediate decrement below leaves them at exactly COMBAT_COOLDOWN_TICKS.
-      if (aNew) ants.attackCooldown[antA] = aIsFighter ? 1 : COMBAT_COOLDOWN_TICKS + (fighterStrikesNow ? 1 : 0);
-      if (bNew) ants.attackCooldown[antB] = bIsFighter ? 1 : COMBAT_COOLDOWN_TICKS + (fighterStrikesNow ? 1 : 0);
-    } else {
-      // Pre-V17: reset both sides unconditionally — preserves V16 replay semantics.
-      ants.attackCooldown[antA] = COMBAT_COOLDOWN_TICKS;
-      ants.attackCooldown[antB] = COMBAT_COOLDOWN_TICKS;
-    }
-    // Return early unless a newly-paired V17 fighter is about to strike (cooldown=1).
-    // In pre-V17, fighterStrikesNow is always false, so this always returns.
+    const fighterStrikesNow = (aNew && aIsFighter) || (bNew && bIsFighter);
+    // Only reset the newly-paired side — veterans keep accumulated progress.
+    // Non-fighters start at COMBAT_COOLDOWN_TICKS+1 when fighterStrikesNow so the
+    // immediate decrement below leaves them at exactly COMBAT_COOLDOWN_TICKS.
+    if (aNew) ants.attackCooldown[antA] = aIsFighter ? 1 : COMBAT_COOLDOWN_TICKS + (fighterStrikesNow ? 1 : 0);
+    if (bNew) ants.attackCooldown[antB] = bIsFighter ? 1 : COMBAT_COOLDOWN_TICKS + (fighterStrikesNow ? 1 : 0);
+    // Return early unless a newly-paired fighter is about to strike (cooldown=1).
     if (!fighterStrikesNow) return;
   }
 
@@ -359,17 +300,15 @@ export function killAnt(
   killerKind: KillerKind,
 ): void {
   const ants = world.ants;
-  if (world.simVersion >= SIM_VERSION_V13_INVARIANT_FIXES) {
-    const carrying = ants.carryingBroodId[antIndex]!;
-    if (carrying !== -1) {
-      ants.carriedBy[carrying] = -1;
-      ants.carryingBroodId[antIndex] = -1;
-    }
-    const carrier = ants.carriedBy[antIndex]!;
-    if (carrier !== -1) {
-      ants.carryingBroodId[carrier] = -1;
-      ants.carriedBy[antIndex] = -1;
-    }
+  const carrying = ants.carryingBroodId[antIndex]!;
+  if (carrying !== -1) {
+    ants.carriedBy[carrying] = -1;
+    ants.carryingBroodId[antIndex] = -1;
+  }
+  const carrier = ants.carriedBy[antIndex]!;
+  if (carrier !== -1) {
+    ants.carryingBroodId[carrier] = -1;
+    ants.carriedBy[antIndex] = -1;
   }
 
   const victimColonyId = ants.colonyId[antIndex]! as ColonyId;
@@ -377,45 +316,43 @@ export function killAnt(
   const tileY = ants.posY[antIndex]! >> FP_SHIFT;
   const currentGridColonyId = ants.currentGridColonyId[antIndex]! as ColonyId;
 
-  // Emit combat_kill event and write queen death context (S1 telemetry, V16+ only).
-  if (world.simVersion >= SIM_VERSION_V16_COMBAT_HPDPS) {
-    const victimColony = world.colonies[victimColonyId];
-    const isQueenVictim = victimColony !== undefined && antIndex === victimColony.queenEntityId;
+  // Emit combat_kill event and write queen death context.
+  const victimColony = world.colonies[victimColonyId];
+  const isQueenVictim = victimColony !== undefined && antIndex === victimColony.queenEntityId;
 
-    // combat_kill is only emitted for Ant/Spider kills; Environment is reserved (no event).
-    if (killerKind !== 'Environment') {
-      emitEvent(world, {
-        tick: world.tick,
-        type: 'combat_kill',
-        payload: {
-          killer: { kind: killerKind, id: killerId, colonyId: killerColonyId },
-          victim: {
-            // Queen victims use kind 'Queen' so analytics can filter without re-deriving role.
-            kind: isQueenVictim ? 'Queen' : 'Ant',
-            id: antIndex,
-            colonyId: victimColonyId,
-          },
-          location: {
-            x: tileX,
-            y: tileY,
-            grid: ants.zone[antIndex] === 0 ? 'surface' : 'underground',
-          },
+  // combat_kill is only emitted for Ant/Spider kills; Environment is reserved (no event).
+  if (killerKind !== 'Environment') {
+    emitEvent(world, {
+      tick: world.tick,
+      type: 'combat_kill',
+      payload: {
+        killer: { kind: killerKind, id: killerId, colonyId: killerColonyId },
+        victim: {
+          // Queen victims use kind 'Queen' so analytics can filter without re-deriving role.
+          kind: isQueenVictim ? 'Queen' : 'Ant',
+          id: antIndex,
+          colonyId: victimColonyId,
         },
-      });
-    }
+        location: {
+          x: tileX,
+          y: tileY,
+          grid: ants.zone[antIndex] === 0 ? 'surface' : 'underground',
+        },
+      },
+    });
+  }
 
-    // Write queen death context regardless of killerKind so checkQueenDeath can
-    // fill in the cause field for queen_death events from any kill source.
-    if (isQueenVictim) {
-      const ctx: QueenDeathContext = {
-        tile: { x: tileX, y: tileY },
-        currentGridColonyId,
-        killerColonyId,
-        killerId,
-        killerKind,
-      };
-      world.pendingQueenDeathContexts[victimColonyId] = ctx;
-    }
+  // Write queen death context regardless of killerKind so checkQueenDeath can
+  // fill in the cause field for queen_death events from any kill source.
+  if (isQueenVictim) {
+    const ctx: QueenDeathContext = {
+      tile: { x: tileX, y: tileY },
+      currentGridColonyId,
+      killerColonyId,
+      killerId,
+      killerKind,
+    };
+    world.pendingQueenDeathContexts[victimColonyId] = ctx;
   }
 
   ants.alive[antIndex] = 0;
@@ -425,28 +362,25 @@ export function killAnt(
 
   // S2 — increment operation death counters if an active operation is running.
   // QC Pass 4 AR-P1-001: precise predicates using committed-cohort lookup.
-  // Gate on V17 so pre-V17 saves skip this (world.aiState may be empty).
   // CLNY-08: no direct PLAYER_COLONY_ID / ENEMY_COLONY_ID equality branching.
   // Instead, iterate world.aiState to find any active operation that involves this kill.
-  if (world.simVersion >= SIM_VERSION_V19_AI_STATE) {
-    for (let _ai = 0; _ai < world.aiState.length; _ai++) {
-      const enemyAI = world.aiState[_ai]!;
-      if (enemyAI.operationKind === 'None') continue;
-      const aiColId = enemyAI.colonyId;
-      const victimColId = ants.colonyId[antIndex]! as ColonyId;
-      // operationAttackerDeaths: victim is a committed-cohort AI fighter.
-      if (victimColId === aiColId
-          && isInCohort(antIndex, enemyAI.operationFighterIds, enemyAI.operationFighterCount)) {
-        enemyAI.operationAttackerDeaths += 1;
-      }
-      // operationDefenderDeaths: victim is a non-AI ant (defender) killed by a committed-cohort AI fighter.
-      if (victimColId !== aiColId
-          && killerKind === 'Ant'
-          && killerColonyId === aiColId
-          && killerId !== null
-          && isInCohort(killerId, enemyAI.operationFighterIds, enemyAI.operationFighterCount)) {
-        enemyAI.operationDefenderDeaths += 1;
-      }
+  for (let _ai = 0; _ai < world.aiState.length; _ai++) {
+    const enemyAI = world.aiState[_ai]!;
+    if (enemyAI.operationKind === 'None') continue;
+    const aiColId = enemyAI.colonyId;
+    const victimColId = ants.colonyId[antIndex]! as ColonyId;
+    // operationAttackerDeaths: victim is a committed-cohort AI fighter.
+    if (victimColId === aiColId
+        && isInCohort(antIndex, enemyAI.operationFighterIds, enemyAI.operationFighterCount)) {
+      enemyAI.operationAttackerDeaths += 1;
+    }
+    // operationDefenderDeaths: victim is a non-AI ant (defender) killed by a committed-cohort AI fighter.
+    if (victimColId !== aiColId
+        && killerKind === 'Ant'
+        && killerColonyId === aiColId
+        && killerId !== null
+        && isInCohort(killerId, enemyAI.operationFighterIds, enemyAI.operationFighterCount)) {
+      enemyAI.operationDefenderDeaths += 1;
     }
   }
 

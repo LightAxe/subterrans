@@ -15,7 +15,6 @@ import {
   SIM_VERSION_V8_LEASH_HYSTERESIS,
   SIM_VERSION_V9_CANCEL_DROPS_PENDING,
   SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
-  SIM_VERSION_V11_DEFENSIVE_BUNDLE,
   LATEST_SIM_VERSION,
 } from './types.js';
 import { GameOutcome } from './game-over.js';
@@ -1287,12 +1286,13 @@ describe('Phase 7: MarkDigTile command processing', () => {
   it('Test P7-7: PlaceChamber creates PendingChamber with correct dims; tiles marked', () => {
     const { world, colonyId } = makeWorldWithUnderground();
     // PRD §3c tunnel-end: anchor tile must be Open; surrounding Solid tiles give adjacency.
-    // Issue #38: this test exercises the LEGACY pre-v5 gate — pin simVersion
-    // so the v5 reachability BFS doesn't reject the placement (the test
-    // colony has no entrance, which is fine for the legacy gate but
-    // trivially fails the new reachability check).
-    world.simVersion = LEGACY_SIM_VERSION;
+    // Add entrance + open shaft so the v5 reachability BFS can reach the anchor at (10,10).
+    const colony7 = world.colonies[colonyId]!;
+    colony7.entrances = [{ entranceId: 1, surfaceTileX: 10, surfaceTileY: 0, isOpen: true }];
     const underground = world.undergroundGrids[colonyId]!;
+    for (let y = 0; y < 10; y++) {
+      underground.data[y * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
+    }
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
     const cmd: SimCommand = {
       type: 'PlaceChamber',
@@ -1324,10 +1324,14 @@ describe('Phase 7: MarkDigTile command processing', () => {
   // Test P7-8: PlaceChamber rejected if overlapping existing pendingChamber
   it('Test P7-8: PlaceChamber rejected if overlapping existing pendingChamber', () => {
     const { world, colonyId } = makeWorldWithUnderground();
-    // Issue #38: legacy gate (no entrance set up — fails v5 reachability).
-    world.simVersion = LEGACY_SIM_VERSION;
     // PRD §3c tunnel-end: open the anchor tile for each placement attempt.
+    // Add entrance + open shaft so the v5 reachability BFS can reach the anchors.
+    const colony8 = world.colonies[colonyId]!;
+    colony8.entrances = [{ entranceId: 1, surfaceTileX: 10, surfaceTileY: 0, isOpen: true }];
     const underground = world.undergroundGrids[colonyId]!;
+    for (let y = 0; y < 10; y++) {
+      underground.data[y * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
+    }
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
     // Place first chamber
     const cmd1: SimCommand = {
@@ -1572,31 +1576,6 @@ describe('Phase 7: MarkDigTile command processing', () => {
     tick(world, [{ type: 'CancelDigMark', colonyId: colonyA, tileX: 20, tileY: 5, issuedAtTick: 0 }]);
     expect(world.pendingChambers[keyA]).toBeUndefined();
     expect(world.pendingChambers[keyB]).toBeDefined();
-  });
-
-  it('Issue #54 (pre-v9 replay): legacy worlds keep orphan-on-cancel behaviour', () => {
-    const { world, colonyId } = makeWorldWithUnderground();
-    // Pin to LEGACY (pre-v9) so saved replays remain byte-identical.
-    world.simVersion = LEGACY_SIM_VERSION;
-    const { pcKey } = setupPendingQueenAt(world, colonyId, 20, 5);
-    const underground = world.undergroundGrids[colonyId]!;
-    tick(world, [{ type: 'CancelDigMark', colonyId, tileX: 21, tileY: 5, issuedAtTick: 0 }]);
-    // Pre-v9: the cancelled tile flips Marked→Solid, but the pending chamber
-    // STAYS (orphaned — checkPendingChambers requires every footprint tile
-    // to be Open; a Solid tile blocks promotion forever).
-    expect(ugGet(underground, 21, 5)).toBe(UndergroundTileState.Solid);
-    expect(world.pendingChambers[pcKey]).toBeDefined();
-  });
-
-  it('Issue #54 (pre-v9 boundary): simVersion=v8 still keeps orphan-on-cancel behaviour', () => {
-    // Boundary test — guards against an off-by-one slip in the gate. The
-    // LEGACY test above pins simVersion=2; this one pins exactly v8 (one
-    // below the v9 cutoff) to catch a `> V8` typo in place of `>= V9`.
-    const { world, colonyId } = makeWorldWithUnderground();
-    world.simVersion = SIM_VERSION_V8_LEASH_HYSTERESIS;
-    const { pcKey } = setupPendingQueenAt(world, colonyId, 20, 5);
-    tick(world, [{ type: 'CancelDigMark', colonyId, tileX: 21, tileY: 5, issuedAtTick: 0 }]);
-    expect(world.pendingChambers[pcKey]).toBeDefined();
   });
 
   it('Issue #54 (v9): cancel on BeingDug footprint tile does NOT drop the pending chamber', () => {
@@ -1944,11 +1923,6 @@ describe('Phase 7: Integration tests', () => {
   // SC 6: PlaceChamber + manually open footprint → ChamberRecord created; overlap rejected
   it('SC 6: PlaceChamber + open footprint → ChamberRecord; overlapping chamber rejected', () => {
     const world = createScenario(42);
-    // Issue #38: this test directly mutates underground state to set up a
-    // chamber-anchor scenario without digging an entrance shaft to it. Pin
-    // simVersion to LEGACY so the v5 reachability BFS doesn't reject the
-    // synthetic placement.
-    world.simVersion = LEGACY_SIM_VERSION;
     const colonyId = PLAYER_COLONY_ID as ColonyId;
     const colony = world.colonies[colonyId]!;
 
@@ -1957,7 +1931,12 @@ describe('Phase 7: Integration tests', () => {
     const ax = 30, ay = 10;
 
     // PRD §3c tunnel-end: open anchors for both placements; surrounding Solid gives adjacency.
+    // Add entrance + open shaft at ax so the v5 reachability BFS can reach the anchor.
     const undergroundSc6 = world.undergroundGrids[colonyId]!;
+    colony.entrances.push({ entranceId: 9999, surfaceTileX: ax, surfaceTileY: 0, isOpen: true });
+    for (let y = 0; y < ay; y++) {
+      undergroundSc6.data[y * UNDERGROUND_GRID_WIDTH + ax] = UndergroundTileState.Open;
+    }
     undergroundSc6.data[ay * UNDERGROUND_GRID_WIDTH + ax] = UndergroundTileState.Open;
     undergroundSc6.data[ay * UNDERGROUND_GRID_WIDTH + (ax + 1)] = UndergroundTileState.Open;
 
@@ -2143,9 +2122,12 @@ describe('Regression: reviewer P1 fixes', () => {
 
   it('PlaceChamber rejected: pendingChambers key already exists at anchor', () => {
     const { world, colonyId } = makeWorldWithUnderground();
-    // Issue #38: legacy gate (no entrance — fails v5 reachability).
-    world.simVersion = LEGACY_SIM_VERSION;
+    // Add entrance + open shaft so the v5 reachability BFS can reach the anchor at (10,10).
+    world.colonies[colonyId]!.entrances = [{ entranceId: 1, surfaceTileX: 10, surfaceTileY: 0, isOpen: true }];
     const underground = world.undergroundGrids[colonyId]!;
+    for (let y = 0; y < 10; y++) {
+      underground.data[y * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
+    }
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
     const cmd: SimCommand = {
       type: 'PlaceChamber', colonyId,
@@ -2162,9 +2144,14 @@ describe('Regression: reviewer P1 fixes', () => {
   // --- 09 backlog memo — Queen uniqueness + FoodStorage multiplicity ---
   it('PlaceChamber rejected: second Queen attempt while a Queen pending', () => {
     const { world, colonyId } = makeWorldWithUnderground();
-    // Issue #38: legacy gate (no entrance — fails v5 reachability).
-    world.simVersion = LEGACY_SIM_VERSION;
+    // Add two entrances + shafts so BFS reaches both anchors; Queen uniqueness rejects the 2nd.
     const underground = world.undergroundGrids[colonyId]!;
+    world.colonies[colonyId]!.entrances = [
+      { entranceId: 1, surfaceTileX: 10, surfaceTileY: 0, isOpen: true },
+      { entranceId: 2, surfaceTileX: 30, surfaceTileY: 0, isOpen: true },
+    ];
+    for (let y = 0; y < 10; y++) underground.data[y * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
+    for (let y = 0; y < 20; y++) underground.data[y * UNDERGROUND_GRID_WIDTH + 30] = UndergroundTileState.Open;
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
     underground.data[20 * UNDERGROUND_GRID_WIDTH + 30] = UndergroundTileState.Open;
     const c1: SimCommand = {
@@ -2202,9 +2189,14 @@ describe('Regression: reviewer P1 fixes', () => {
 
   it('PlaceChamber allows multiple FoodStorage placements on the same colony', () => {
     const { world, colonyId } = makeWorldWithUnderground();
-    // Issue #38: legacy gate (no entrance — fails v5 reachability).
-    world.simVersion = LEGACY_SIM_VERSION;
+    // Add two entrances + shafts so BFS reaches both anchors at (10,10) and (30,20).
     const underground = world.undergroundGrids[colonyId]!;
+    world.colonies[colonyId]!.entrances = [
+      { entranceId: 1, surfaceTileX: 10, surfaceTileY: 0, isOpen: true },
+      { entranceId: 2, surfaceTileX: 30, surfaceTileY: 0, isOpen: true },
+    ];
+    for (let y = 0; y < 10; y++) underground.data[y * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
+    for (let y = 0; y < 20; y++) underground.data[y * UNDERGROUND_GRID_WIDTH + 30] = UndergroundTileState.Open;
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
     underground.data[20 * UNDERGROUND_GRID_WIDTH + 30] = UndergroundTileState.Open;
     const c1: SimCommand = {
@@ -2535,24 +2527,6 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
       (ch) => (ch.posX >> FP_SHIFT) === entranceX && (ch.posY >> FP_SHIFT) === 10,
     );
     expect(chamber).toBeDefined();
-    expect(world.pendingChambers[`${colonyId}:${entranceX}:10`]).toBeUndefined();
-  });
-
-  it('legacy v4 still rejects Solid-anchor placements (replay determinism)', () => {
-    const { world, colonyId, ug, entranceX } = makeWorldWithEntrance();
-    // Roll back to a pre-v5 version. Pre-v5 saves with Solid-anchor commands
-    // in their inputLog must keep getting rejected so replay stays
-    // byte-identical.
-    world.simVersion = LEGACY_SIM_VERSION;
-    for (let y = 0; y < 10; y++) {
-      ug.data[y * UNDERGROUND_GRID_WIDTH + entranceX] = UndergroundTileState.Marked;
-    }
-    const cmd: SimCommand = {
-      type: 'PlaceChamber', colonyId,
-      chamberType: ChamberType.FoodStorage,
-      anchorTileX: entranceX, anchorTileY: 10, issuedAtTick: 0,
-    };
-    tick(world, [cmd]);
     expect(world.pendingChambers[`${colonyId}:${entranceX}:10`]).toBeUndefined();
   });
 
@@ -3085,135 +3059,6 @@ describe('resetFlowFieldCaches — cross-world isolation', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Issue #15 — cross-tick partial-deposit redirection.
-  //
-  // End-to-end check that exercises the full chamber-fill/redirect loop:
-  //
-  //  1. Carrier arrives at near chamber A, which has space for only part of
-  //     its load. antDepositFood writes the chamber up to cap, leaves the
-  //     leftover on the ant, and sets foodFlowFieldDirty.
-  //  2. On the next tick, step 9 re-seeds the food flow-field excluding A
-  //     (now full). The carrier — still holding the leftover — gets a
-  //     direction value pointing toward the only remaining seed (chamber B).
-  //  3. Carrier walks to B, deposits the leftover, flips Foraging→Idle.
-  //
-  // This wires together: dirty-flag cycle (deposit→step 9 next tick),
-  // chamberFilter integration in computeChamberFlowField, deposit-site
-  // selection in tickForagerActions, antDepositFood leftover semantics, and
-  // the Foraging→Idle transition. Round-1 unit tests cover each piece in
-  // isolation; this is the integration that catches a regression in any
-  // single piece misaligning with the rest.
-  // -------------------------------------------------------------------------
-  it('issue #15 (pre-v12) — partial deposit at near chamber leaves leftover on ant; carrier then routes to far chamber', async () => {
-    const { createUndergroundGrid, UndergroundTileState, ugSet, Zone } = await import('./terrain.js');
-    const { FP_ONE } = await import('./fixed.js');
-    const { initAnt: _initAnt } = await import('./ant/ant-store.js');
-    const { FOOD_CHAMBER_CAPACITY: CAP, FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP: HYST } = await import('./constants.js');
-
-    resetFlowFieldCaches();
-
-    const world = createWorldState(42);
-    // Issue #68 — pin to V11 so this test continues to exercise the legacy
-    // "chamber-only deposit, leftover stays on ant, re-route" path. Under
-    // V12+ the leftover now falls through to the entrance pool, so the
-    // carrier transitions Idle without re-routing to chamber B. A separate
-    // V12 test below exercises the new pool-fallback path.
-    world.simVersion = SIM_VERSION_V11_DEFENSIVE_BUNDLE as unknown as number;
-    const colonyId = 1 as ColonyId;
-    const queenId = allocateEntityId(world);
-    _initAnt(world.ants, queenId, {
-      colonyId,
-      posX: 1024, posY: 1024,
-      task: AntTask.Idle, subTask: 0,
-      speed: 0, lifespan: WORKER_LIFESPAN_TICKS,
-    });
-    // Kill the queen so tickFoodConsumption (step 3) doesn't drain chamber A
-    // mid-tick. This test is about the chamber-fill / food-flow-field-redirect
-    // path; queen consumption would steal 2fp/tick from A and reopen capacity,
-    // preventing the redirect from triggering. Killing the queen is fine for
-    // the few-tick window — `defeated` is checked on its own cadence.
-    world.ants.alive[queenId] = 0;
-    const colony = createColonyRecord(colonyId, queenId);
-    colony.foodStored = 0;
-    colony.digFlowFieldDirty = true; // first compute on tick 0
-    colony.foodFlowFieldDirty = false;
-    colony.rallyPoint = null;
-    colony.entrances = [{ entranceId: 1, surfaceTileX: 8, surfaceTileY: 5, isOpen: true }];
-    // Chamber A near (col 5) with `space` units of room. Chamber B far
-    // (col 14) is empty. The carrier holds `loadFp` such that the deposit
-    // into A fills A exactly to cap and leaves `loadFp - space` on the ant.
-    //
-    // Issue #15 follow-up: under the deposit hysteresis, A must start
-    // DEPOSITABLE (free space >= HYST) so the deposit fires this tick. With
-    // free space < HYST the carrier would refuse to deposit at A entirely
-    // and route straight to B with full load — a different (also correct)
-    // path covered by the dedicated stuck-ant repro test below. Here we
-    // exercise the cross-tick redirect after a partial fill.
-    const space = HYST + 100;              // 612fp — depositable pre, saturated post
-    const loadFp = space + 200;            // 812fp leaves 200 on the ant after A fills
-    const chamberA_initial = CAP - space;
-    colony.chambers.push({
-      chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: chamberA_initial,
-      posX: 5 << FP_SHIFT, posY: 3 << FP_SHIFT, width: 1, height: 1,
-    });
-    colony.chambers.push({
-      chamberId: 101, chamberType: ChamberType.FoodStorage, foodStored: 0,
-      posX: 14 << FP_SHIFT, posY: 3 << FP_SHIFT, width: 1, height: 1,
-    });
-    world.colonies[colonyId] = colony;
-
-    const ug = createUndergroundGrid(16, 16);
-    for (let x = 0; x < 16; x++) {
-      ugSet(ug, x, 0, UndergroundTileState.Open);
-      ugSet(ug, x, 1, UndergroundTileState.Open);
-      ugSet(ug, x, 2, UndergroundTileState.Open);
-      ugSet(ug, x, 3, UndergroundTileState.Open);
-    }
-    world.undergroundGrids[colonyId] = ug;
-
-    // Carrier ant starts ON chamber A's tile so antDepositFood fires this
-    // tick — keeps the test compact (≤30 ticks even with the redirect).
-    const antId = allocateEntityId(world);
-    _initAnt(world.ants, antId, {
-      colonyId,
-      posX: 5 << FP_SHIFT,
-      posY: 3 << FP_SHIFT,
-      task: AntTask.Foraging,
-      subTask: ForagingSubState.CarryingFood,
-      speed: FP_ONE,
-      lifespan: WORKER_LIFESPAN_TICKS,
-    });
-    world.ants.zone[antId] = Zone.Underground;
-    world.ants.foodCarrying[antId] = loadFp;
-    colony.workers.push(antId);
-    colony.workerCount = 1;
-
-    const chamberA = colony.chambers[0]!;
-    const chamberB = colony.chambers[1]!;
-
-    // Tick 0 — deposit fires, A fills to cap, leftover stays on ant, dirty
-    // flag set so step 9 next tick re-seeds the food field excluding A.
-    tick(world, []);
-    expect(chamberA.foodStored).toBe(CAP);
-    expect(world.ants.foodCarrying[antId]).toBe(loadFp - space);
-
-    // Drive the sim until B has the leftover. Bound by 30 ticks — the
-    // carrier walks from col 5 → col 14 = 9 tiles at 1 tile/tick, plus a
-    // small margin for the deposit + idle-flip handshake.
-    let landedInB = false;
-    for (let t = 0; t < 30; t++) {
-      tick(world, []);
-      if (chamberB.foodStored > 0) { landedInB = true; break; }
-    }
-    expect(landedInB).toBe(true);
-    // Queen is dead, no consumption — the leftover deposits cleanly into B.
-    expect(chamberB.foodStored).toBe(loadFp - space);
-    expect(world.ants.foodCarrying[antId]).toBe(0);
-
-    resetFlowFieldCaches();
-  });
-
-  // -------------------------------------------------------------------------
   // Issue #15 follow-up — queen-drain oscillation stuck-ant regression.
   //
   // Repro from /tmp/stuck-dump.json (seed 1294596103 tick 1876):
@@ -3672,14 +3517,10 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     // cap); targetRatio is irrelevant (the cap saturates first and forage_share
     // would be 0 even with forage=10).
     //
-    // Pinned to v9 — the test's contrived brood-in-Nursery layout (30 larvae
-    // all stacked at tile (0,0) inside the Nursery footprint) hits the v10
-    // colony-level finite-nursing release and flips subTask from
-    // MovingToBrood to Feeding. The allocator behavior under test is
-    // unchanged either way, but the post-tick subTask assertion specifically
-    // checks the pre-v10 freshly-assigned MovingToBrood state.
+    // All 30 larvae sit at tile (0,0) inside the Nursery footprint — brood
+    // is already in the Nursery, so colonyHasClaimableBrood=false and the
+    // nurse transitions to Feeding (V10+ always-on behavior).
     const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
-    world.simVersion = SIM_VERSION_V9_CANCEL_DROPS_PENDING;
     const colony = world.colonies[colonyId]!;
     const underground = world.undergroundGrids[colonyId]!;
 
@@ -3719,7 +3560,7 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     expect(colony.computedAllocation.forage).toBe(0); // <- nurse cap, not targetRatio, drove this
     expect(colony.computedAllocation.dig).toBe(0); // suppressed (no forage slot to carve)
     expect(world.ants.task[wid]).toBe(AntTask.Nursing); // nurse won, not dig
-    expect(world.ants.subTask[wid]).toBe(NursingSubState.MovingToBrood); // freshly assigned, not just inherited
+    expect(world.ants.subTask[wid]).toBe(NursingSubState.Feeding); // brood in Nursery → no claimable brood → Feeding
   });
 
   it('Test 7 (WR-08): slider-to-fight (forage:0, no brood) → dig carves from fight, issue #13 honored', () => {
@@ -3970,13 +3811,9 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     // ant to Foraging — starving nurse for the entire dig duration. WR-07
     // holds digDemand=1 while actualDig>0, preserving the carve.
     //
-    // Pinned to v9 — same reason as Test 6 above: the contrived
-    // brood-stacked-in-Nursery setup hits the v10 colony-level finite-
-    // nursing release and flips subTask to Feeding, breaking the
-    // post-tick subTask=MovingToBrood assertion. Allocator behavior
-    // under test is unaffected.
+    // All 30 larvae sit at tile (0,0) inside the Nursery footprint — brood
+    // already in Nursery, so colonyHasClaimableBrood=false → nurse goes to Feeding.
     const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
-    world.simVersion = SIM_VERSION_V9_CANCEL_DROPS_PENDING;
     const colony = world.colonies[colonyId]!;
     const underground = world.undergroundGrids[colonyId]!;
 
@@ -4035,7 +3872,7 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     expect(colony.computedAllocation.forage).toBe(1); // canonical post-allocation; carve is local
     expect(colony.computedAllocation.dig).toBe(1); // slot reserved while digger active
     expect(world.ants.task[widIdle]).toBe(AntTask.Nursing);
-    expect(world.ants.subTask[widIdle]).toBe(NursingSubState.MovingToBrood);
+    expect(world.ants.subTask[widIdle]).toBe(NursingSubState.Feeding); // brood in Nursery → Feeding
   });
 });
 
