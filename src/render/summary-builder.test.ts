@@ -103,29 +103,59 @@ describe('buildOutcomeAttribution — round_end before queen_death', () => {
 // queen_death narrative strings (updated in S6)
 // ---------------------------------------------------------------------------
 
-describe('buildOutcomeAttribution — queen_death narratives', () => {
-  it('InvasionKill → invasion narrative', () => {
-    const result = buildOutcomeAttribution([queenDeathEvent('InvasionKill')]);
+describe('buildOutcomeAttribution — queen_death narratives (Defeat perspective)', () => {
+  it('InvasionKill → player-loss invasion narrative', () => {
+    const result = buildOutcomeAttribution([queenDeathEvent('InvasionKill')], 'Defeat');
     expect(result.primaryCause).toBe('InvasionKill');
     expect(result.narrativeSeed).toBe(
       'Enemy fighters broke through a tunnel entrance and reached your queen.',
     );
   });
 
-  it('SpiderRampage → spider narrative', () => {
-    const result = buildOutcomeAttribution([queenDeathEvent('SpiderRampage')]);
+  it('SpiderRampage → player-loss spider narrative', () => {
+    const result = buildOutcomeAttribution([queenDeathEvent('SpiderRampage')], 'Defeat');
     expect(result.primaryCause).toBe('SpiderRampage');
     expect(result.narrativeSeed).toBe('The spider reached your nursery and killed the queen.');
   });
 
-  it('Starvation → starvation narrative', () => {
-    const result = buildOutcomeAttribution([queenDeathEvent('Starvation')]);
+  it('Starvation → player-loss starvation narrative', () => {
+    const result = buildOutcomeAttribution([queenDeathEvent('Starvation')], 'Defeat');
     expect(result.primaryCause).toBe('Starvation');
     expect(result.narrativeSeed).toBe('Your queen starved after the colony ran out of food.');
   });
 
-  it('MutualDestruction → mutual destruction narrative', () => {
-    const result = buildOutcomeAttribution([queenDeathEvent('MutualDestruction')]);
+  it('MutualDestruction → symmetric narrative (same for both outcomes)', () => {
+    const result = buildOutcomeAttribution([queenDeathEvent('MutualDestruction')], 'Defeat');
+    expect(result.primaryCause).toBe('MutualDestruction');
+    expect(result.narrativeSeed).toBe('Both queens died in the same final fight.');
+  });
+});
+
+describe('buildOutcomeAttribution — queen_death narratives (Victory perspective)', () => {
+  it('InvasionKill Victory → enemy-queen narrative', () => {
+    const result = buildOutcomeAttribution([queenDeathEvent('InvasionKill')], 'Victory');
+    expect(result.primaryCause).toBe('InvasionKill');
+    expect(result.narrativeSeed).toBe('Your fighters broke through to the enemy queen.');
+  });
+
+  it('SpiderRampage Victory → enemy spider narrative', () => {
+    const result = buildOutcomeAttribution([queenDeathEvent('SpiderRampage')], 'Victory');
+    expect(result.primaryCause).toBe('SpiderRampage');
+    expect(result.narrativeSeed).toBe(
+      'The spider reached the enemy nursery and killed their queen.',
+    );
+  });
+
+  it('Starvation Victory → enemy starvation narrative', () => {
+    const result = buildOutcomeAttribution([queenDeathEvent('Starvation')], 'Victory');
+    expect(result.primaryCause).toBe('Starvation');
+    expect(result.narrativeSeed).toBe(
+      'The enemy queen starved after their colony ran out of food.',
+    );
+  });
+
+  it('MutualDestruction Victory → same symmetric narrative', () => {
+    const result = buildOutcomeAttribution([queenDeathEvent('MutualDestruction')], 'Victory');
     expect(result.primaryCause).toBe('MutualDestruction');
     expect(result.narrativeSeed).toBe('Both queens died in the same final fight.');
   });

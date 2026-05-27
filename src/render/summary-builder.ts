@@ -179,12 +179,20 @@ export function buildOutcomeAttribution(
         }
         return { primaryCause: null, narrativeSeed: narrative };
       }
-      const narratives: Record<string, string> = {
+      // queen_death can describe either queen; use gameOutcome to pick perspective.
+      const victoryNarratives: Record<string, string> = {
+        InvasionKill:      'Your fighters broke through to the enemy queen.',
+        SpiderRampage:     'The spider reached the enemy nursery and killed their queen.',
+        Starvation:        'The enemy queen starved after their colony ran out of food.',
+        MutualDestruction: 'Both queens died in the same final fight.',
+      };
+      const defeatNarratives: Record<string, string> = {
         InvasionKill:      'Enemy fighters broke through a tunnel entrance and reached your queen.',
         SpiderRampage:     'The spider reached your nursery and killed the queen.',
         Starvation:        'Your queen starved after the colony ran out of food.',
         MutualDestruction: 'Both queens died in the same final fight.',
       };
+      const narratives = gameOutcome === 'Victory' ? victoryNarratives : defeatNarratives;
       return {
         primaryCause: cause,
         narrativeSeed: narratives[cause] ?? null,
