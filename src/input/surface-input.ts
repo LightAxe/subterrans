@@ -1,12 +1,17 @@
 // surface-input.ts — Phase 9 surface-click dispatcher.
 //
 // Handles left-click (food-pile mark + entrance designation confirmation + rally point set)
-// and right-click (entrance preview + rally point clear) on the surface view.
+// and right-click (entrance preview + rally point clear + spider priority toggle) on the surface view.
 //
 // Priority order for left-click:
 //   1. Entrance designation confirmation (if pendingEntrance matches both X+Y)
 //   2. Food-pile mark (if tile has a food pile)
 //   3. (empty) fall-through: SetRallyPoint (SURF-04)
+//
+// Priority order for right-click:
+//   1. Spider priority toggle (if tile is within spider's 3×3 bounding box) — S7/D1
+//   2. Rally-point clear (if tile matches current rally point)
+//   3. Entrance preview (if tile is a valid entrance target)
 //
 // Guards:
 //   - viewState.activeView must be 'surface' before dispatching any command.
@@ -24,9 +29,13 @@ import type {
   DesignateEntranceCommand,
   SetRallyPointCommand,
   ClearRallyPointCommand,
+  MarkSpiderPriorityCommand,
 } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
+import { FP_SHIFT } from '../sim/fixed.js';
+import { TILE_SIZE_PX } from '../render/sprites.js';
+import { SPIDER_SPRITE_WIDTH, SPIDER_SPRITE_HEIGHT } from '../render/ant-sprite-layer.js';
 import { isPointerOverHUD, panInputState } from './camera-input.js';
 
 // ---------------------------------------------------------------------------
@@ -286,16 +295,22 @@ export function handleSetRallyPoint(
  * Handles a right-click on the surface view.
  *
  * Priority order:
- *   1. If the clicked tile matches the current rally-point tile, push ClearRallyPointCommand.
- *   2. Otherwise, if the tile is a valid entrance target, set pendingEntranceTileX/Y
+ *   1. Spider priority toggle (S7/D1): right-click within the spider's rendered sprite bounds
+ *      dispatches MarkSpiderPriority and suppresses all other right-click actions.
+ *   2. If the clicked tile matches the current rally-point tile, push ClearRallyPointCommand.
+ *   3. Otherwise, if the tile is a valid entrance target, set pendingEntranceTileX/Y
  *      for entrance designation preview. A subsequent left-click on the same tile
  *      confirms and pushes DesignateEntranceCommand.
- *   3. Invalid entrance tiles (food piles, existing colony entrances, out-of-bounds) do nothing —
+ *   4. Invalid entrance tiles (food piles, existing colony entrances, out-of-bounds) do nothing —
  *      the preview is suppressed so the UI never advertises a target the sim would reject.
  *
  * No-ops if: activeView !== 'surface', pointer over HUD, or tile out of bounds.
  *
  * ADR-0006: world.colonies accessed via plain-object bracket notation.
+ *
+ * @param prevWorld  Previous-tick world state, used to widen the spider hit box to cover the
+ *                   full interpolated path between ticks. Pass null when unavailable (tests,
+ *                   stationary spider).
  */
 export function handleSurfaceRightClick(
   world: WorldState,
@@ -304,11 +319,49 @@ export function handleSurfaceRightClick(
   screenY: number,
   state: SurfaceInputState,
   playerColonyId: ColonyId = PLAYER_COLONY_ID,
+  prevWorld: WorldState | null = null,
 ): void {
   if (viewState.activeView !== 'surface') return;
   if (isPointerOverHUD(screenX, screenY, viewState)) return;
   const { tileX, tileY } = screenToTile(screenX, screenY, viewState.surfaceCamera);
   if (tileX < 0 || tileY < 0) return;
+
+  // Spider priority toggle (S7/D1): right-click within the spider sprite bounds.
+  // Hit box is the union of the current-tick and previous-tick bounding boxes, so the
+  // trailing visual edge (which lags behind the sim position during interpolation) always
+  // registers. When prevWorld is null (stationary or unavailable) the box is exactly the
+  // 48×48px sprite; when the spider moved it expands by one tile in the movement direction.
+  if (world.spider !== null) {
+    const camLeft = Math.floor(viewState.surfaceCamera.x - viewState.surfaceCamera.viewportWidth  / 2);
+    const camTop  = Math.floor(viewState.surfaceCamera.y - viewState.surfaceCamera.viewportHeight / 2);
+    const currScrX = (world.spider.posX >> FP_SHIFT) * TILE_SIZE_PX - camLeft * TILE_SIZE_PX;
+    const currScrY = (world.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop  * TILE_SIZE_PX;
+    const prevScrX = (prevWorld?.spider != null)
+      ? (prevWorld.spider.posX >> FP_SHIFT) * TILE_SIZE_PX - camLeft * TILE_SIZE_PX
+      : currScrX;
+    const prevScrY = (prevWorld?.spider != null)
+      ? (prevWorld.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop  * TILE_SIZE_PX
+      : currScrY;
+    const halfW = SPIDER_SPRITE_WIDTH  / 2;
+    const halfH = SPIDER_SPRITE_HEIGHT / 2;
+    if (
+      screenX >= Math.min(currScrX, prevScrX) - halfW &&
+      screenX <  Math.max(currScrX, prevScrX) + halfW &&
+      screenY >= Math.min(currScrY, prevScrY) - halfH &&
+      screenY <  Math.max(currScrY, prevScrY) + halfH
+    ) {
+      state.pendingEntranceTileX = null;
+      state.pendingEntranceTileY = null;
+      const cmd: MarkSpiderPriorityCommand = {
+        type: 'MarkSpiderPriority',
+        colonyId: playerColonyId,
+        isPriority: world.spiderPriorityColonyId !== playerColonyId,
+        issuedAtTick: world.tick,
+      };
+      world.commandQueue.push(cmd);
+      return;
+    }
+  }
 
   // Rally-point clear: right-click on the current rally point tile (SURF-04)
   const playerColony = world.colonies[playerColonyId];  // plain-object bracket access (ADR-0006)
@@ -360,6 +413,7 @@ export function registerSurfaceInput(
   scene: Phaser.Scene,
   getWorld: () => WorldState | undefined,
   viewState: ViewState,
+  getPrevWorld?: () => WorldState | null,
 ): SurfaceInputState {
   const state: SurfaceInputState = {
     pendingEntranceTileX: null,
@@ -371,7 +425,8 @@ export function registerSurfaceInput(
     if (pointer.leftButtonDown()) {
       handleSurfaceLeftClick(world, viewState, pointer.x, pointer.y, state);
     } else if (pointer.rightButtonDown()) {
-      handleSurfaceRightClick(world, viewState, pointer.x, pointer.y, state);
+      const prevWorld = getPrevWorld?.() ?? null;
+      handleSurfaceRightClick(world, viewState, pointer.x, pointer.y, state, PLAYER_COLONY_ID, prevWorld);
     }
   });
   return state;

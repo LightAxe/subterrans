@@ -398,6 +398,7 @@ export class GameScene extends Phaser.Scene {
     // restart. Capturing the current (undefined) reference here would freeze
     // the HUD + world input against a pre-boot world (see Phase 9 stabilization).
     const getWorld = (): WorldState | undefined => this.world;
+    const getPrevWorld = (): WorldState | null => this.world ? this.prevState : null;
 
     // Launch HUD scene on top.
     this.scene.launch('UIScene', {
@@ -415,7 +416,7 @@ export class GameScene extends Phaser.Scene {
     // Both return the per-registration state object so restartGame / boot
     // helpers can reset them in place without invalidating the closures that
     // Phaser now holds on pointerdown/pointermove/pointerup.
-    this.surfaceInputState = registerSurfaceInput(this, getWorld, this.viewState);
+    this.surfaceInputState = registerSurfaceInput(this, getWorld, this.viewState, getPrevWorld);
     this.undergroundInputState = registerUndergroundInput(this, getWorld, this.viewState);
 
     // Phase 9 boot: check for existing save. If found, show SavePrompt overlay.
