@@ -651,7 +651,10 @@ export class GameScene extends Phaser.Scene {
     }
 
     // World-state-based captions.
-    if (this.world.spider !== null) {
+    // Gate spider caption on Hunting/Striking — spider exists from tick 0 while
+    // Patrolling, so triggering on mere existence fires before any visible threat.
+    const spiderState = this.world.spider?.state;
+    if (spiderState === 'Hunting' || spiderState === 'Striking') {
       const captionText = checkAndTrigger('spider');
       if (captionText && uiScene) {
         uiScene.showCaption(captionText, CANVAS_W / 2, 60);

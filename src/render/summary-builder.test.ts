@@ -130,10 +130,22 @@ describe('buildOutcomeAttribution — queen_death narratives', () => {
     expect(result.narrativeSeed).toBe('Both queens died in the same final fight.');
   });
 
-  it('cause === null → primaryCause null, narrativeSeed "Your colony has fallen."', () => {
+  it('cause === null with no gameOutcome → defeat fallback narrative', () => {
     const result = buildOutcomeAttribution([queenDeathEvent(null)]);
     expect(result.primaryCause).toBeNull();
     expect(result.narrativeSeed).toBe('Your colony has fallen.');
+  });
+
+  it('cause === null with Victory gameOutcome → enemy-fell narrative', () => {
+    const result = buildOutcomeAttribution([queenDeathEvent(null)], 'Victory');
+    expect(result.primaryCause).toBeNull();
+    expect(result.narrativeSeed).toBe('The enemy colony has fallen.');
+  });
+
+  it('cause === null with MutualDestruction gameOutcome → both-fell narrative', () => {
+    const result = buildOutcomeAttribution([queenDeathEvent(null)], 'MutualDestruction');
+    expect(result.primaryCause).toBeNull();
+    expect(result.narrativeSeed).toBe('Both queens fell in the final battle.');
   });
 });
 

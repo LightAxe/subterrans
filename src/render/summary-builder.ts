@@ -167,7 +167,17 @@ export function buildOutcomeAttribution(
     if (ev.type === 'queen_death') {
       const cause = ev.payload.cause;
       if (cause === null) {
-        return { primaryCause: null, narrativeSeed: 'Your colony has fallen.' };
+        // Legacy traces (simVersion < V16) omit cause; derive direction from gameOutcome
+        // so a Victory doesn't display a defeat line.
+        let narrative: string;
+        if (gameOutcome === 'Victory') {
+          narrative = 'The enemy colony has fallen.';
+        } else if (gameOutcome === 'MutualDestruction') {
+          narrative = 'Both queens fell in the final battle.';
+        } else {
+          narrative = 'Your colony has fallen.';
+        }
+        return { primaryCause: null, narrativeSeed: narrative };
       }
       const narratives: Record<string, string> = {
         InvasionKill:      'Enemy fighters broke through a tunnel entrance and reached your queen.',
