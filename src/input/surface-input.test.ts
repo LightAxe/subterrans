@@ -81,6 +81,8 @@ function makeWorld(overrides: {
   colonies?: WorldState['colonies'];
   surfaceWidth?: number;
   surfaceHeight?: number;
+  spider?: WorldState['spider'];
+  spiderPriorityColonyId?: WorldState['spiderPriorityColonyId'];
 } = {}): WorldState {
   const sw = overrides.surfaceWidth ?? 128;
   const sh = overrides.surfaceHeight ?? 4;
@@ -96,6 +98,8 @@ function makeWorld(overrides: {
     undergroundGrids: {},
     foodPiles: overrides.foodPiles ?? [],
     pendingChambers: {},
+    spider: overrides.spider ?? null,
+    spiderPriorityColonyId: overrides.spiderPriorityColonyId ?? null,
   } as unknown as WorldState;
 }
 
@@ -908,5 +912,128 @@ describe('resetSurfaceInputState', () => {
     handleSurfaceRightClick(world, vs, tile.x, tile.y, state);
     expect(state.pendingEntranceTileX).toBe(20);
     expect(state.pendingEntranceTileY).toBe(10);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleSurfaceRightClick — spider priority (S7/D1)
+// ---------------------------------------------------------------------------
+// Spider at tile (10, 10). FP_ONE=256, so posX=2560, posY=2560.
+// 3×3 box covers tiles (9–11, 9–11).
+// Surface is large enough (128×64) that those tiles are in bounds and empty.
+
+describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
+  const CAM_X = 64;
+  const CAM_Y = 32;
+  const FP_ONE_VAL = 256;
+  const SPIDER_TILE_X = 10;
+  const SPIDER_TILE_Y = 10;
+
+  function makeSpider() {
+    return {
+      posX: SPIDER_TILE_X * FP_ONE_VAL,
+      posY: SPIDER_TILE_Y * FP_ONE_VAL,
+    } as WorldState['spider'];
+  }
+
+  it('right-click on spider tile dispatches MarkSpiderPriority { isPriority: true } when not yet prioritized', () => {
+    const world = makeWorld({
+      surfaceWidth: 128,
+      surfaceHeight: 64,
+      spider: makeSpider(),
+      spiderPriorityColonyId: null,
+    });
+    const vs = makeViewState('surface', CAM_X, CAM_Y);
+    const state = makeState();
+    const { x, y } = tileToScreen(SPIDER_TILE_X, SPIDER_TILE_Y, CAM_X, CAM_Y);
+    handleSurfaceRightClick(world, vs, x, y, state);
+    expect(world.commandQueue).toHaveLength(1);
+    expect(world.commandQueue[0]).toMatchObject({ type: 'MarkSpiderPriority', isPriority: true });
+  });
+
+  it('right-click on spider tile dispatches MarkSpiderPriority { isPriority: false } when already prioritized', () => {
+    const world = makeWorld({
+      surfaceWidth: 128,
+      surfaceHeight: 64,
+      spider: makeSpider(),
+      spiderPriorityColonyId: PLAYER_COLONY_ID,
+    });
+    const vs = makeViewState('surface', CAM_X, CAM_Y);
+    const state = makeState();
+    const { x, y } = tileToScreen(SPIDER_TILE_X, SPIDER_TILE_Y, CAM_X, CAM_Y);
+    handleSurfaceRightClick(world, vs, x, y, state);
+    expect(world.commandQueue).toHaveLength(1);
+    expect(world.commandQueue[0]).toMatchObject({ type: 'MarkSpiderPriority', isPriority: false });
+  });
+
+  it('right-click on corner of spider 3×3 box also dispatches spider priority', () => {
+    const world = makeWorld({
+      surfaceWidth: 128,
+      surfaceHeight: 64,
+      spider: makeSpider(),
+      spiderPriorityColonyId: null,
+    });
+    const vs = makeViewState('surface', CAM_X, CAM_Y);
+    const state = makeState();
+    // Click top-left corner of 3×3 box: (SPIDER_TILE_X-1, SPIDER_TILE_Y-1)
+    const { x, y } = tileToScreen(SPIDER_TILE_X - 1, SPIDER_TILE_Y - 1, CAM_X, CAM_Y);
+    handleSurfaceRightClick(world, vs, x, y, state);
+    expect(world.commandQueue).toHaveLength(1);
+    expect(world.commandQueue[0]).toMatchObject({ type: 'MarkSpiderPriority' });
+  });
+
+  it('right-click on spider tile does NOT set pendingEntrance or push ClearRallyPoint', () => {
+    const world = makeWorld({
+      surfaceWidth: 128,
+      surfaceHeight: 64,
+      spider: makeSpider(),
+      spiderPriorityColonyId: null,
+      colonies: {
+        [PLAYER_COLONY_ID]: makeColony({ rallyPoint: { tileX: SPIDER_TILE_X, tileY: SPIDER_TILE_Y } }),
+      } as unknown as WorldState['colonies'],
+    });
+    const vs = makeViewState('surface', CAM_X, CAM_Y);
+    const state = makeState();
+    const { x, y } = tileToScreen(SPIDER_TILE_X, SPIDER_TILE_Y, CAM_X, CAM_Y);
+    handleSurfaceRightClick(world, vs, x, y, state);
+    // Only MarkSpiderPriority, no ClearRallyPoint
+    expect(world.commandQueue).toHaveLength(1);
+    expect(world.commandQueue[0]!.type).toBe('MarkSpiderPriority');
+    // No entrance preview
+    expect(state.pendingEntranceTileX).toBeNull();
+    expect(state.pendingEntranceTileY).toBeNull();
+  });
+
+  it('right-click outside spider 3×3 box still sets entrance preview on empty tile', () => {
+    const world = makeWorld({
+      surfaceWidth: 128,
+      surfaceHeight: 64,
+      spider: makeSpider(),
+      spiderPriorityColonyId: null,
+    });
+    const vs = makeViewState('surface', CAM_X, CAM_Y);
+    const state = makeState();
+    // Tile (20, 20) is well outside the spider's 3×3 box at (10, 10)
+    const { x, y } = tileToScreen(20, 20, CAM_X, CAM_Y);
+    handleSurfaceRightClick(world, vs, x, y, state);
+    expect(world.commandQueue).toHaveLength(0);
+    expect(state.pendingEntranceTileX).toBe(20);
+    expect(state.pendingEntranceTileY).toBe(20);
+  });
+
+  it('right-click on spider-tile area with no spider falls through to entrance preview', () => {
+    const world = makeWorld({
+      surfaceWidth: 128,
+      surfaceHeight: 64,
+      spider: null,
+      spiderPriorityColonyId: null,
+    });
+    const vs = makeViewState('surface', CAM_X, CAM_Y);
+    const state = makeState();
+    const { x, y } = tileToScreen(SPIDER_TILE_X, SPIDER_TILE_Y, CAM_X, CAM_Y);
+    handleSurfaceRightClick(world, vs, x, y, state);
+    expect(world.commandQueue).toHaveLength(0);
+    expect(state.pendingEntranceTileX).toBe(SPIDER_TILE_X);
+    expect(state.pendingEntranceTileY).toBe(SPIDER_TILE_Y);
   });
 });

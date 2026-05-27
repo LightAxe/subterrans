@@ -455,6 +455,19 @@ export function drawSurfaceEntities(
         gfx.fillRect(rl,          rt + 2,      2,  rh - 4);
         gfx.fillRect(rl + rw - 2, rt + 2,      2,  rh - 4);
       }
+
+      // S7/D1: spider priority indicator — white border when player has set priority.
+      if (curr.spiderPriorityColonyId === PLAYER_COLONY_ID) {
+        const pl = Math.round(spiderScreenX - SPIDER_SPRITE_WIDTH  / 2);
+        const pt = Math.round(spiderScreenY - SPIDER_SPRITE_HEIGHT / 2);
+        const pw = SPIDER_SPRITE_WIDTH;
+        const ph = SPIDER_SPRITE_HEIGHT;
+        gfx.fillStyle(0xffffff, 1);
+        gfx.fillRect(pl,          pt,          pw, 2);
+        gfx.fillRect(pl,          pt + ph - 2, pw, 2);
+        gfx.fillRect(pl,          pt + 2,      2,  ph - 4);
+        gfx.fillRect(pl + pw - 2, pt + 2,      2,  ph - 4);
+      }
     }
   }
 

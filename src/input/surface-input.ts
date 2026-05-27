@@ -1,12 +1,17 @@
 // surface-input.ts — Phase 9 surface-click dispatcher.
 //
 // Handles left-click (food-pile mark + entrance designation confirmation + rally point set)
-// and right-click (entrance preview + rally point clear) on the surface view.
+// and right-click (entrance preview + rally point clear + spider priority toggle) on the surface view.
 //
 // Priority order for left-click:
 //   1. Entrance designation confirmation (if pendingEntrance matches both X+Y)
 //   2. Food-pile mark (if tile has a food pile)
 //   3. (empty) fall-through: SetRallyPoint (SURF-04)
+//
+// Priority order for right-click:
+//   1. Spider priority toggle (if tile is within spider's 3×3 bounding box) — S7/D1
+//   2. Rally-point clear (if tile matches current rally point)
+//   3. Entrance preview (if tile is a valid entrance target)
 //
 // Guards:
 //   - viewState.activeView must be 'surface' before dispatching any command.
@@ -24,9 +29,11 @@ import type {
   DesignateEntranceCommand,
   SetRallyPointCommand,
   ClearRallyPointCommand,
+  MarkSpiderPriorityCommand,
 } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
+import { FP_ONE } from '../sim/fixed.js';
 import { isPointerOverHUD, panInputState } from './camera-input.js';
 
 // ---------------------------------------------------------------------------
@@ -286,11 +293,13 @@ export function handleSetRallyPoint(
  * Handles a right-click on the surface view.
  *
  * Priority order:
- *   1. If the clicked tile matches the current rally-point tile, push ClearRallyPointCommand.
- *   2. Otherwise, if the tile is a valid entrance target, set pendingEntranceTileX/Y
+ *   1. Spider priority toggle (S7/D1): right-click within the spider's 3×3 tile footprint
+ *      dispatches MarkSpiderPriority and suppresses all other right-click actions.
+ *   2. If the clicked tile matches the current rally-point tile, push ClearRallyPointCommand.
+ *   3. Otherwise, if the tile is a valid entrance target, set pendingEntranceTileX/Y
  *      for entrance designation preview. A subsequent left-click on the same tile
  *      confirms and pushes DesignateEntranceCommand.
- *   3. Invalid entrance tiles (food piles, existing colony entrances, out-of-bounds) do nothing —
+ *   4. Invalid entrance tiles (food piles, existing colony entrances, out-of-bounds) do nothing —
  *      the preview is suppressed so the UI never advertises a target the sim would reject.
  *
  * No-ops if: activeView !== 'surface', pointer over HUD, or tile out of bounds.
@@ -309,6 +318,27 @@ export function handleSurfaceRightClick(
   if (isPointerOverHUD(screenX, screenY, viewState)) return;
   const { tileX, tileY } = screenToTile(screenX, screenY, viewState.surfaceCamera);
   if (tileX < 0 || tileY < 0) return;
+
+  // Spider priority toggle (S7/D1): right-click within the spider's 3×3 tile footprint.
+  // Spider occupies a 3×3-tile footprint centered on its tile; any click in that box
+  // toggles MarkSpiderPriority and suppresses the context menu entirely.
+  if (world.spider !== null) {
+    const spiderTileX = Math.floor(world.spider.posX / FP_ONE);
+    const spiderTileY = Math.floor(world.spider.posY / FP_ONE);
+    if (
+      tileX >= spiderTileX - 1 && tileX <= spiderTileX + 1 &&
+      tileY >= spiderTileY - 1 && tileY <= spiderTileY + 1
+    ) {
+      const cmd: MarkSpiderPriorityCommand = {
+        type: 'MarkSpiderPriority',
+        colonyId: playerColonyId,
+        isPriority: world.spiderPriorityColonyId !== playerColonyId,
+        issuedAtTick: world.tick,
+      };
+      world.commandQueue.push(cmd);
+      return;
+    }
+  }
 
   // Rally-point clear: right-click on the current rally point tile (SURF-04)
   const playerColony = world.colonies[playerColonyId];  // plain-object bracket access (ADR-0006)
