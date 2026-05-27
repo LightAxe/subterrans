@@ -22,7 +22,6 @@
 // `surfaceMovementAt(world, tileX, tileY)` for passability + step cost.
 
 import type { WorldState } from './types.js';
-import { SIM_VERSION_V8_LEASH_HYSTERESIS } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -370,8 +369,6 @@ function isAnchorSuppressedByOverlap(
   const own = SURFACE_FEATURES[ownEntryIndex]!;
   const ownW = own.footprintTilesWide;
   const ownH = own.footprintTilesTall;
-  const checkGameplay = world.simVersion >= SIM_VERSION_V8_LEASH_HYSTERESIS;
-
   // Cross-type: any higher-priority feature whose footprint overlaps suppresses.
   for (let ei = 0; ei < ownEntryIndex; ei++) {
     const entry = SURFACE_FEATURES[ei]!;
@@ -384,11 +381,9 @@ function isAnchorSuppressedByOverlap(
         // Only count (px, py) as a real suppressor if it itself renders.
         // Recursion terminates because every recursive call strictly
         // reduces ownEntryIndex (this branch) or reduces (ay, ax) lex
-        // order (the same-type branch). The gameplay-suppression
-        // rejection (v8+) is iterative over colonies + food piles, no
-        // recursion.
+        // order (the same-type branch).
         if (isAnchorSuppressedByOverlap(world, px, py, ei, terrainSeed)) continue;
-        if (checkGameplay && isAnchorGameplaySuppressed(world, px, py, W, H)) continue;
+        if (isAnchorGameplaySuppressed(world, px, py, W, H)) continue;
         return true;
       }
     }
@@ -425,13 +420,12 @@ function isAnchorSuppressedByOverlap(
       if (py === ay && px >= ax) continue;
       const ph = tileHash(px, py, own.salt, terrainSeed);
       if ((ph & 0x1ff) >= own.probability) continue;
-      // Same gameplay-suppression rejection as the cross-type branch
-      // (v8+): a same-type anchor sitting inside an entrance/food
-      // suppression zone never renders, so it must not suppress
-      // sibling anchors outside the zone (Codex P2). Pre-v8 keeps the
-      // overlap-only check.
+      // Same gameplay-suppression rejection as the cross-type branch:
+      // a same-type anchor sitting inside an entrance/food suppression
+      // zone never renders, so it must not suppress sibling anchors
+      // outside the zone.
       if (isAnchorSuppressedByOverlap(world, px, py, ownEntryIndex, terrainSeed)) continue;
-      if (checkGameplay && isAnchorGameplaySuppressed(world, px, py, ownW, ownH)) continue;
+      if (isAnchorGameplaySuppressed(world, px, py, ownW, ownH)) continue;
       return true;
     }
   }

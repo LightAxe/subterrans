@@ -10,7 +10,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   createWorldState,
-  SIM_VERSION_V7_SURFACE_PASSABILITY,
   type WorldState,
 } from './types.js';
 import { createColonyRecord } from './colony/colony-store.js';
@@ -362,58 +361,6 @@ describe('surfaceFeatureAt — gameplay suppression', () => {
     expect(demonstrationCount).toBeGreaterThanOrEqual(1);
   });
 
-  it('pre-v8 — gameplay-suppressed shadow STILL hides outside-zone anchors (legacy preserved)', () => {
-    // Companion to the v8 test above — proves the simVersion gate
-    // routes correctly. The rigorous test: for each candidate tile
-    // sampled, build BOTH the v8 result and the v7 result. The gate
-    // is functioning correctly when there exists at least one tile
-    // where v7 returns null AND v8 returns a feature — that's the
-    // exact behaviour difference the gate is supposed to produce.
-    // Counting pre-v8 nulls alone would pass even if the gate were
-    // broken (some tiles legitimately return null because no lower-
-    // priority anchor exists at all), so the comparison is essential.
-    const r = SURFACE_FEATURE_ENTRANCE_RADIUS;
-    let v7NullV8FilledCount = 0;
-    let sampledCount = 0;
-    seedLoop:
-    for (let seed = 1; seed < 80; seed++) {
-      const baseline = createWorldState(seed);
-      const ex = 30, ey = 30;
-      for (let dy = -r - 6; dy <= r + 6; dy++) {
-        for (let dx = -r - 6; dx <= r + 6; dx++) {
-          const tx = ex + dx;
-          const ty = ey + dy;
-          if (Math.abs(dx) <= r && Math.abs(dy) <= r) continue;
-          const baselineSlice = surfaceFeatureAt(baseline, tx, ty);
-          if (baselineSlice === null) continue;
-          const ax = baselineSlice.anchorX;
-          const ay = baselineSlice.anchorY;
-          const anchorInsideZone =
-            ax >= ex - r && ax <= ex + r && ay >= ey - r && ay <= ey + r;
-          if (!anchorInsideZone) continue;
-          // Build both worlds at the same seed + entrance and pin
-          // sim version explicitly.
-          const w7 = createWorldState(seed);
-          w7.simVersion = SIM_VERSION_V7_SURFACE_PASSABILITY;
-          installColonyWithEntrance(w7, 1, ex, ey);
-          const w8 = createWorldState(seed);
-          // w8 keeps default LATEST_SIM_VERSION (v8+).
-          installColonyWithEntrance(w8, 1, ex, ey);
-          const v7Slice = surfaceFeatureAt(w7, tx, ty);
-          const v8Slice = surfaceFeatureAt(w8, tx, ty);
-          sampledCount++;
-          if (v7Slice === null && v8Slice !== null) {
-            v7NullV8FilledCount++;
-          }
-          if (sampledCount >= 50) break seedLoop;
-        }
-      }
-    }
-    // We sampled enough candidate geometries to expect at least one
-    // demonstration of the gate routing different paths.
-    expect(sampledCount).toBeGreaterThan(0);
-    expect(v7NullV8FilledCount).toBeGreaterThan(0);
-  });
 });
 
 describe('surfaceMovementAt', () => {

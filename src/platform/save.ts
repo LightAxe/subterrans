@@ -12,7 +12,7 @@
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
 import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
-import { LEGACY_SIM_VERSION, LATEST_SIM_VERSION, SIM_VERSION_V19_AI_STATE, SIM_VERSION_V20_SPIDER } from '../sim/types.js';
+import { LATEST_SIM_VERSION, SIM_VERSION_V22_DIFFICULTY } from '../sim/types.js';
 import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/constants.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
 import { createAntComponents } from '../sim/ant/ant-store.js';
@@ -93,6 +93,16 @@ export class FutureSimVersionError extends Error {
   constructor(public got: number, public latest: number) {
     super(`Save's simVersion (${got}) is newer than this build's LATEST (${latest})`);
     this.name = 'FutureSimVersionError';
+  }
+}
+
+export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V22_DIFFICULTY;
+
+export class OldSimVersionError extends Error {
+  constructor(public got: number | null) {
+    const gotStr = got !== null ? String(got) : 'unknown';
+    super(`Save is from an older version (simVersion=${gotStr}); minimum accepted is ${MIN_ACCEPTED_SIM_VERSION}. Please start a new game.`);
+    this.name = 'OldSimVersionError';
   }
 }
 
@@ -332,79 +342,25 @@ interface SerializedAnts {
   zone: number[];
   digTileX: number[]; digTileY: number[]; digTicksRemaining: number[];
   targetPosX: number[]; targetPosY: number[];
-  // Phase 9 / 09 digger-reassignment memo — per-ant SearchingFood leash wave.
-  // Optional for backward compatibility with pre-Phase-9 saves; deserializer
-  // treats absent as zero-init (base wave).
-  searchWave?: number[];
-  // Phase 9 / 09 excursion-foraging memo — correlated outward walk heading
-  // (per-ant, no colony-memory). Optional for backward compatibility — a save
-  // written before the excursion pass simply re-rolls the heading next tick.
-  searchHeadingX?: number[];
-  searchHeadingY?: number[];
-  searchHeadingTicks?: number[];
-  // Phase 9 / 09 excursion-foraging follow-up — per-ant anti-backtrack prev
-  // tile. Optional for backward compatibility; absent means "no previous tile",
-  // so an ant one tick post-load cannot be anti-backtracked on its first move.
-  searchPrevTileX?: number[];
-  searchPrevTileY?: number[];
-  // Phase 09.1 Chunk 0 — grid-of-occupancy byte (Uint8Array on AntComponents,
-  // serialized as number[]). Optional for backward compatibility with saves
-  // written before Phase 09.1 landed: deserializer falls back to copying
-  // `colonyId` into `currentGridColonyId`, reproducing the pre-Chunk-0
-  // invariant (every ant's grid byte equals its colony byte) that initAnt
-  // establishes for fresh ants. A naive zero-fill would silently point every
-  // enemy ant's grid lookup at the player's underground grid.
-  currentGridColonyId?: number[];
-  /**
-   * Issue #27 — carrier wait flag. Optional for backward compatibility with
-   * pre-#27 saves; absent → all-zero (no ants waiting), which matches the
-   * legacy behavior of always-routing carriers regardless of saturation.
-   * Pre-#27 saves load at simVersion=LEGACY anyway, so the wait-state code
-   * paths stay dormant.
-   */
-  waitingDeposit?: number[];
-  /**
-   * Issue #34 — per-ant Bresenham error accumulator. Optional; absent →
-   * zero-init, which matches the pre-#34 "fresh start" semantics of the
-   * cardinal-pick algorithm.
-   */
-  pathErr?: number[];
-  /**
-   * Issue #35 — per-ant pause-while-searching counter. Optional; absent →
-   * zero-init (no ants paused at load time).
-   */
-  searchPauseTicks?: number[];
-  /**
-   * Issue #42 — recent-tiles ring buffer. Three flat arrays:
-   *   recentTilesX / recentTilesY: length = maxEntities * RECENT_TILES_LEN
-   *   recentTilesHead: length = maxEntities, value 0..RECENT_TILES_LEN-1
-   * Optional; absent → SENTINEL-filled (no history), which is the correct
-   * v6 default. Pre-v6 saves never read these fields (gated on simVersion).
-   */
-  recentTilesX?: number[];
-  recentTilesY?: number[];
-  recentTilesHead?: number[];
-  /**
-   * Issue #17 Phase 1 — visible brood carry. carryingBroodId[i] = entity id
-   * of the brood ant `i` is carrying (or -1 if none); carriedBy[j] = entity
-   * id of the nurse carrying brood `j` (or -1 if uncarried). Optional;
-   * absent → all-(-1) default, which also matches a v10+ "no carries in
-   * flight" snapshot. Pre-v10 saves never read these fields (gated on
-   * simVersion).
-   */
-  carryingBroodId?: number[];
-  carriedBy?: number[];
-  /**
-   * S1 / D-32 — per-ant combat HP fields. Optional for backward-compat with
-   * pre-S1 saves; deserializer defaults hp=COMBAT_HP_BASE, homeGroundBonusHp
-   * from isHomeGround check, attackCooldown=0. Pre-V16 saves replay on the
-   * V15 coin-flip path so these fields are never read in-tick.
-   */
-  hp?: number[];
-  homeGroundBonusHp?: number[];
-  attackCooldown?: number[];
-  /** S1 / D-32 — combatOpponentId (-1 = not paired). Absent on pre-S1 saves; defaults to all-(-1). */
-  combatOpponentId?: number[];
+  searchWave: number[];
+  searchHeadingX: number[];
+  searchHeadingY: number[];
+  searchHeadingTicks: number[];
+  searchPrevTileX: number[];
+  searchPrevTileY: number[];
+  currentGridColonyId: number[];
+  waitingDeposit: number[];
+  pathErr: number[];
+  searchPauseTicks: number[];
+  recentTilesX: number[];
+  recentTilesY: number[];
+  recentTilesHead: number[];
+  carryingBroodId: number[];
+  carriedBy: number[];
+  hp: number[];
+  homeGroundBonusHp: number[];
+  attackCooldown: number[];
+  combatOpponentId: number[];
 }
 
 interface SerializedColony {
@@ -412,25 +368,18 @@ interface SerializedColony {
   foodStored: number; workerCount: number; eggCount: number; larvaeCount: number; nurseCount: number;
   eggs: EntityId[]; larvae: EntityId[]; workers: EntityId[];
   chambers: ChamberRecord[];
-  /** S4 V21+ — tick at which queen last laid. Optional for backward compat; defaults to -QUEEN_EGG_INTERVAL_BASE_TICKS on old saves. */
-  queenLastEggTick?: number;
-  // Phase 10 / D-04 silent-migration: serialized shape is the runtime BehaviorRatio
-  // (post-migration `{ forage, fight }`), but the legacy `dig` field is allowed for
-  // backward compatibility with pre-Phase-10 saves. Migration via migrateBehaviorRatio
-  // at load time (deserializeColony) silently drops the `dig` field — no schema
-  // version bump per D-04 (pre-1.0, save compat is not a public contract).
-  targetRatio: { forage: number; fight: number; dig?: number };
+  queenLastEggTick: number;
+  targetRatio: { forage: number; fight: number };
   computedAllocation: WorkerAllocation;
   taskCensus: WorkerAllocation;
   defeated: boolean; reconcileCountdown: number;
   entrances: NestEntrance[];
   rallyPoint: { tileX: number; tileY: number } | null;
   digFlowFieldDirty: boolean;
-  foodFlowFieldDirty?: boolean;  // Issue #15 — defaults false on old saves
-  killCount: number;   // Plan 09-01
-  priorityFoodPileId: FoodPileId | null;  // Phase 9 / PRD §3d — per-colony priority food target
-  /** S5 V22 — brood-interval numerator. Optional; defaults to 4 (Normal = identity) on old saves. */
-  eggIntervalNumerator?: number;
+  foodFlowFieldDirty: boolean;
+  killCount: number;
+  priorityFoodPileId: FoodPileId | null;
+  eggIntervalNumerator: number;
 }
 
 interface SerializedGrid { width: number; height: number; data: number[] }
@@ -485,52 +434,24 @@ export interface SerializedWorldState {
   tick: number;
   rngState: number;
   nextEntityId: number;
-  /**
-   * Issue #27 — sim-behavior version (independent of SAVE_FORMAT_VERSION).
-   * Optional for backward compatibility: saves written before issue #27 omit
-   * the field; deserializeWorldState defaults absent → LEGACY_SIM_VERSION (2),
-   * sticky on load to preserve SCEN-06 replay determinism.
-   */
-  simVersion?: number;
-  /** S0b — overflow counters (persisted; events are NOT). Pre-V15 saves omit
-   *  these fields; deserializeWorldState defaults both to 0. */
-  droppedCombatKillCount?: number;
-  droppedStructuralCount?: number;
-  /**
-   * Issue #44 — terrain decoration seed (independent of `rngState` and
-   * `simVersion`). Optional for backward compatibility: pre-#44 saves omit
-   * the field; deserializeWorldState defaults absent → 0. Loading a pre-#44
-   * save will therefore produce a different decoration layout than the
-   * recorded run, but world geometry (entrances, food piles, colony
-   * positions) is unaffected. Movement-affecting feature collision (added in
-   * step 4) is gated separately via simVersion.
-   */
-  terrainSeed?: number;
-  commandQueue: SimCommand[];  // plain-object spread is sufficient (ADR-0006)
+  simVersion: number;
+  droppedCombatKillCount: number;
+  droppedStructuralCount: number;
+  terrainSeed: number;
+  commandQueue: SimCommand[];
   ants: SerializedAnts;
-  colonies: Record<string, SerializedColony>;       // keys are ColonyId.toString()
+  colonies: Record<string, SerializedColony>;
   pheromoneGrids: Record<string, SerializedGrid>;
   surface: SerializedGrid;
-  undergroundGrids: Record<string, SerializedGrid>; // keys are ColonyId.toString()
+  undergroundGrids: Record<string, SerializedGrid>;
   foodPiles: FoodPile[];
-  /**
-   * Issue #112 — Optional for backward-compat at the type level only; saves
-   * written by v3 always include the field. parseSaveFile rejects v2 saves
-   * outright (`SaveVersionMismatchError`), so deserialize only ever sees v3
-   * snapshots whose `recentlyDepletedFood` is present and validated.
-   */
-  recentlyDepletedFood?: DepletionRecord[];
+  recentlyDepletedFood: DepletionRecord[];
   pendingChambers: Record<string, PendingChamber>;
-  /** S2 — optional for backward compat with pre-V19 saves; defaults to [] on load. */
-  aiState?: SerializedAIStateRecord[];
-  /** S3 — optional for backward compat with pre-V20 saves; defaults to null on load. */
-  spider?: SerializedSpiderState | null;
-  /** S3 — optional; defaults to null on load. */
-  spiderPriorityColonyId?: number | null;
-  /** S3 — preserved through save/reload; null for pre-V20 saves. */
-  scatterReticleTile?: { x: number; y: number } | null;
-  /** S5 — optional for backward compat with pre-V22 saves; defaults to 'Normal' on load. */
-  difficulty?: 'Easy' | 'Normal' | 'Hard';
+  aiState: SerializedAIStateRecord[];
+  spider: SerializedSpiderState | null;
+  spiderPriorityColonyId: number | null;
+  scatterReticleTile: { x: number; y: number } | null;
+  difficulty: 'Easy' | 'Normal' | 'Hard';
 }
 
 // ---------------------------------------------------------------------------
@@ -720,91 +641,29 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
 // Deserialize helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Phase 10 / D-04 — silent BehaviorRatio migration on load.
- *
- * Pre-Phase-10 saves serialize targetRatio as `{ forage, dig, fight }` (3 fields).
- * Phase 10 narrows BehaviorRatio to `{ forage, fight }`. This helper:
- *   - drops the `dig` field (no proportional rescale)
- *   - snaps all-zero `{ forage: 0, fight: 0 }` to `{ forage: 10, fight: 0 }`
- *     (the player had pure dig under the old contract; default to 100% forage,
- *     matching DEFAULT_BEHAVIOR_RATIO from Plan 01)
- *   - leaves already-migrated saves untouched (idempotent)
- *   - defensively defaults missing/non-numeric `forage` and `fight` to 0
- *     (which then triggers the all-zero snap → `{ forage: 10, fight: 0 }`)
- *
- * No schema version bump — pre-1.0, save compat is not a public contract per D-04.
- *
- * Pure function: no PRNG, no clock, no side effects. Idempotent: applying twice
- * produces the same output as applying once.
- */
-export function migrateBehaviorRatio(legacy: unknown): BehaviorRatio {
-  // Issue #78 — accept `unknown` at runtime: a corrupted snapshot can pass
-  // null / number / string / array here from deserializeColony(s.targetRatio).
-  // Direct property access or `'dig' in legacy` would otherwise throw
-  // TypeError for non-object inputs and propagate out of loadSave as a
-  // swallowed error → total save loss. Treat any non-object input as "no
-  // usable fields" → defaults to DEFAULT_BEHAVIOR_RATIO via the all-zero
-  // malformed snap below.
-  const isObject = legacy !== null && typeof legacy === 'object';
-  const obj = (isObject ? legacy : {}) as { forage?: unknown; fight?: unknown; dig?: unknown };
-  // Defensive: reject NaN, +/-Infinity, and negatives. typeof NaN === 'number',
-  // so the typeof guard alone allows NaN to propagate into colony.targetRatio
-  // and contaminate every downstream allocateWorkers call (WR-01). A negative
-  // weight is also rejected to mirror the SetBehaviorRatio command handler in
-  // tick.ts step 5 (any negative weight → reject command).
-  const rawForage = obj.forage;
-  const rawFight  = obj.fight;
-  const isForageValid = typeof rawForage === 'number' && Number.isFinite(rawForage) && rawForage >= 0;
-  const isFightValid  = typeof rawFight  === 'number' && Number.isFinite(rawFight)  && rawFight  >= 0;
-  const forage = isForageValid ? rawForage : 0;
-  const fight  = isFightValid  ? rawFight  : 0;
-  // All-zero edge case: snap to { forage: 10, fight: 0 } per D-04 — but ONLY
-  // when the input is legacy (has the `dig` key) or malformed (missing/NaN/
-  // negative fields). A post-Phase-10 caller that intentionally writes
-  // { forage: 0, fight: 0 } (idle slider, AI controller exotic state, debug
-  // command replay) is preserved verbatim — otherwise migrateBehaviorRatio
-  // would silently mutate valid two-field zeros and break snapshot-vs-replay
-  // determinism for tools that compare them (WR-10).
-  const isLegacy = isObject && 'dig' in obj;
-  const isMalformed = !isObject || !isForageValid || !isFightValid;
-  if (forage === 0 && fight === 0 && (isLegacy || isMalformed)) {
-    return { forage: 10, fight: 0 };
-  }
-  return { forage, fight };
-}
 
 /**
- * Issue #66 — validate `simVersion` at the save boundary.
+ * Validate `simVersion` at the save boundary.
  *
- * Returns LEGACY for missing/non-integer (preserves pre-#27 legacy load).
- * Returns the value verbatim for an integer in [LEGACY, LATEST].
- *
- * For out-of-range integers, throws one of two error types so the caller
- * can differentiate recoverable from definitively-corrupt:
+ * Throws one of two typed errors so the caller can differentiate recoverable
+ * from definitively-obsolete:
+ *   - simVersion missing / non-integer / < MIN_ACCEPTED → `OldSimVersionError`
+ *     (obsolete save; user must start a new game)
  *   - simVersion > LATEST → `FutureSimVersionError` (recoverable: a newer
- *     build wrote this save; older build doesn't know the gate semantics
- *     but the bytes are intact)
- *   - simVersion < LEGACY (e.g. 0, 1, negative) → plain `Error` (tampered
- *     or otherwise definitively corrupt; pre-LEGACY values are not a real
- *     historical save shape, since LEGACY itself was the original baseline)
+ *     build wrote this save; older build can't load it but bytes are intact)
  *
  * Throws happen at deserialize-time (`deserializeWorldState`) and are
- * caught by `bootFromSave`'s try/catch in render/game-scene.ts. Note
- * that `loadSave` does NOT catch — its swallowing try/catch wraps
- * `parseSaveFile` only, and parseSaveFile doesn't deserialize.
- *
- * Rationale: a tampered save with simVersion=-1 makes every `>= SIM_VERSION_VN`
- * gate evaluate false forever; simVersion=99999 makes them all evaluate
- * true. Both silently break the sticky-on-load determinism contract.
+ * caught by `bootFromSave`'s try/catch in render/game-scene.ts.
  */
 function validateSimVersion(raw: unknown): number {
-  if (typeof raw !== 'number' || !Number.isInteger(raw)) return LEGACY_SIM_VERSION;
+  if (typeof raw !== 'number' || !Number.isInteger(raw)) {
+    throw new OldSimVersionError(null);
+  }
   if (raw > LATEST_SIM_VERSION) {
     throw new FutureSimVersionError(raw, LATEST_SIM_VERSION);
   }
-  if (raw < LEGACY_SIM_VERSION) {
-    throw new Error(`Invalid simVersion in save: ${raw} (require integer in [${LEGACY_SIM_VERSION}, ${LATEST_SIM_VERSION}])`);
+  if (raw < MIN_ACCEPTED_SIM_VERSION) {
+    throw new OldSimVersionError(raw);
   }
   return raw;
 }
@@ -842,122 +701,30 @@ function deserializeAnts(saved: SerializedAnts, capacity: number): AntComponents
   copyIntoInt32(a.digTicksRemaining, saved.digTicksRemaining);
   copyIntoInt32(a.targetPosX, saved.targetPosX);
   copyIntoInt32(a.targetPosY, saved.targetPosY);
-  // Phase 9: pre-Phase-9 saves omit searchWave — createAntComponents already
-  // zero-initialized the field (base wave), so skip the copy when absent.
-  if (saved.searchWave !== undefined) {
-    copyIntoInt32(a.searchWave, saved.searchWave);
-  }
-  // Phase 9 excursion-foraging — heading fields are optional for forward
-  // compatibility with older saves written before the excursion pass landed.
-  if (saved.searchHeadingX !== undefined) {
-    copyIntoInt32(a.searchHeadingX, saved.searchHeadingX);
-  }
-  if (saved.searchHeadingY !== undefined) {
-    copyIntoInt32(a.searchHeadingY, saved.searchHeadingY);
-  }
-  if (saved.searchHeadingTicks !== undefined) {
-    copyIntoInt32(a.searchHeadingTicks, saved.searchHeadingTicks);
-  }
-  // 09 excursion-foraging follow-up — prev-tile fields. Pre-follow-up saves
-  // omit these; createAntComponents already -1-filled them, so a loaded ant
-  // starts with "no previous tile" exactly as if it had just been promoted.
-  if (saved.searchPrevTileX !== undefined) {
-    copyIntoInt32(a.searchPrevTileX, saved.searchPrevTileX);
-  }
-  if (saved.searchPrevTileY !== undefined) {
-    copyIntoInt32(a.searchPrevTileY, saved.searchPrevTileY);
-  }
-  // Phase 09.1 Chunk 0 — grid-of-occupancy byte. Pre-Chunk-0 saves omit this
-  // field; fall back to copying colonyId into currentGridColonyId, which
-  // reproduces the invariant initAnt establishes for fresh ants
-  // (currentGridColonyId[id] === colonyId[id]). A naive zero-fill would
-  // silently route every enemy ant's grid lookup at the player's underground
-  // grid. Chunks 3+4 of 09.1 are the only code path that breaks this
-  // invariant at runtime (Fighter invaders mid-attack); until a save from
-  // after Chunks 3+4 exists, "absent field" and "identity copy" are equivalent.
-  if (saved.currentGridColonyId !== undefined) {
-    copyIntoUint8(a.currentGridColonyId, saved.currentGridColonyId);
-  } else {
-    copyIntoUint8(a.currentGridColonyId, saved.colonyId);
-  }
-  // Issue #27 — carrier wait flag. Pre-#27 saves omit; createAntComponents
-  // already zero-init'd the field (no ants waiting), which is the correct
-  // default. Pre-#27 saves also load at simVersion=LEGACY, so the wait-state
-  // code paths remain dormant for them regardless.
-  if (saved.waitingDeposit !== undefined) {
-    copyIntoUint8(a.waitingDeposit, saved.waitingDeposit);
-  }
-  // Issue #34 / #35 — Bresenham error accumulator and pause-while-searching
-  // counter. Pre-feature saves omit; the fields zero-init in
-  // createAntComponents which is the correct "fresh start" default.
-  if (saved.pathErr !== undefined) {
-    copyIntoInt32(a.pathErr, saved.pathErr);
-  }
-  if (saved.searchPauseTicks !== undefined) {
-    copyIntoInt32(a.searchPauseTicks, saved.searchPauseTicks);
-  }
-  // Issue #42 — recent-tiles ring buffer. Pre-v6 saves omit; the SENTINEL-
-  // filled defaults from createAntComponents are correct (no history).
-  if (saved.recentTilesX !== undefined) {
-    copyIntoInt32(a.recentTilesX, saved.recentTilesX);
-  }
-  if (saved.recentTilesY !== undefined) {
-    copyIntoInt32(a.recentTilesY, saved.recentTilesY);
-  }
-  if (saved.recentTilesHead !== undefined) {
-    copyIntoUint8(a.recentTilesHead, saved.recentTilesHead);
-  }
-  // Issue #17 Phase 1 — brood carry slot + reverse pointer. Pre-v10 saves
-  // omit; createAntComponents fills both with -1 (no carries), which is
-  // correct for both pre-v10 (never read) and a fresh v10 load (no carries
-  // in flight at that snapshot).
-  if (saved.carryingBroodId !== undefined) {
-    copyIntoInt32(a.carryingBroodId, saved.carryingBroodId);
-  }
-  if (saved.carriedBy !== undefined) {
-    copyIntoInt32(a.carriedBy, saved.carriedBy);
-  }
-  // S1 — combat HP fields. Pre-S1 saves omit; migrate from world state
-  // (hp=COMBAT_HP_BASE, homeGroundBonusHp based on current grid occupancy,
-  // attackCooldown=0). Since save.ts cannot import sim constants without
-  // a circular dep, we inline the literal values here (COMBAT_HP_BASE=16,
-  // COMBAT_HP_HOMEGROUND_BONUS=4) — these are load-time migration defaults
-  // and do NOT affect simulation determinism (pre-V16 saves stay on V15 path).
-  if (saved.hp !== undefined) {
-    copyIntoInt32(a.hp, saved.hp);
-  } else {
-    a.hp.fill(16); // COMBAT_HP_BASE — migrated ants start at full health
-  }
-  if (saved.homeGroundBonusHp !== undefined) {
-    copyIntoInt32(a.homeGroundBonusHp, saved.homeGroundBonusHp);
-  } else {
-    // Migration: set bonus for ants on their own colony grid.
-    // currentGridColonyId is already populated at this point.
-    for (let i = 0; i < a.alive.length; i++) {
-      if (a.alive[i] === 1 && a.currentGridColonyId[i] === a.colonyId[i]) {
-        a.homeGroundBonusHp[i] = 4; // COMBAT_HP_HOMEGROUND_BONUS
-      }
-    }
-  }
-  if (saved.attackCooldown !== undefined) {
-    copyIntoInt32(a.attackCooldown, saved.attackCooldown);
-  }
-  // attackCooldown defaults to 0 (not in combat) via createAntComponents zero-init.
-  if (saved.combatOpponentId !== undefined) {
-    copyIntoInt32(a.combatOpponentId, saved.combatOpponentId);
-  }
-  // combatOpponentId defaults to -1 (not paired) via createAntComponents -1 fill.
+  copyIntoInt32(a.searchWave, saved.searchWave);
+  copyIntoInt32(a.searchHeadingX, saved.searchHeadingX);
+  copyIntoInt32(a.searchHeadingY, saved.searchHeadingY);
+  copyIntoInt32(a.searchHeadingTicks, saved.searchHeadingTicks);
+  copyIntoInt32(a.searchPrevTileX, saved.searchPrevTileX);
+  copyIntoInt32(a.searchPrevTileY, saved.searchPrevTileY);
+  copyIntoUint8(a.currentGridColonyId, saved.currentGridColonyId);
+  copyIntoUint8(a.waitingDeposit, saved.waitingDeposit);
+  copyIntoInt32(a.pathErr, saved.pathErr);
+  copyIntoInt32(a.searchPauseTicks, saved.searchPauseTicks);
+  copyIntoInt32(a.recentTilesX, saved.recentTilesX);
+  copyIntoInt32(a.recentTilesY, saved.recentTilesY);
+  copyIntoUint8(a.recentTilesHead, saved.recentTilesHead);
+  copyIntoInt32(a.carryingBroodId, saved.carryingBroodId);
+  copyIntoInt32(a.carriedBy, saved.carriedBy);
+  copyIntoInt32(a.hp, saved.hp);
+  copyIntoInt32(a.homeGroundBonusHp, saved.homeGroundBonusHp);
+  copyIntoInt32(a.attackCooldown, saved.attackCooldown);
+  copyIntoInt32(a.combatOpponentId, saved.combatOpponentId);
   return a;
 }
 
 function deserializeColony(s: SerializedColony): ColonyRecord {
   const c = createColonyRecord(s.colonyId, s.queenEntityId);
-  // createColonyRecord does NOT set the Phase 3 extension fields nor the
-  // issue-#15 `foodFlowFieldDirty` field — caller-side contract (see the
-  // colony-store.ts factory docblock). Set them explicitly alongside scalar
-  // fields. `foodFlowFieldDirty` is `?? false` defensively even though v2
-  // saves should always include it; pre-v2 saves are rejected upstream by
-  // parseSaveFile (SaveVersionMismatchError).
   c.queenStarvationTimer = s.queenStarvationTimer;
   c.foodStored           = s.foodStored;
   c.workerCount          = s.workerCount;
@@ -968,10 +735,7 @@ function deserializeColony(s: SerializedColony): ColonyRecord {
   c.larvae               = [...s.larvae];
   c.workers              = [...s.workers];
   c.chambers             = s.chambers.map((ch) => ({ ...ch }));
-  // Phase 10 / D-04 silent migration: legacy saves carry `targetRatio.dig`;
-  // migrateBehaviorRatio drops it, snaps all-zero to DEFAULT_BEHAVIOR_RATIO,
-  // and is idempotent on post-Phase-10 saves. See migrateBehaviorRatio docblock.
-  c.targetRatio          = migrateBehaviorRatio(s.targetRatio);
+  c.targetRatio          = { ...s.targetRatio };
   c.computedAllocation   = { ...s.computedAllocation };
   c.taskCensus           = { ...s.taskCensus };
   c.defeated             = s.defeated;
@@ -979,10 +743,10 @@ function deserializeColony(s: SerializedColony): ColonyRecord {
   c.entrances            = s.entrances.map((e) => ({ ...e }));
   c.rallyPoint           = s.rallyPoint === null ? null : { ...s.rallyPoint };
   c.digFlowFieldDirty    = s.digFlowFieldDirty;
-  c.foodFlowFieldDirty   = s.foodFlowFieldDirty ?? false;
+  c.foodFlowFieldDirty   = s.foodFlowFieldDirty;
   c.killCount            = s.killCount;
-  c.priorityFoodPileId   = s.priorityFoodPileId ?? null;
-  c.queenLastEggTick     = s.queenLastEggTick ?? -300; // old saves: default to -QUEEN_EGG_INTERVAL_BASE_TICKS so queen can lay on first eligible tick
+  c.priorityFoodPileId   = s.priorityFoodPileId;
+  c.queenLastEggTick     = s.queenLastEggTick;
   // Valid difficulty numerators are 3, 4, 5. Reject any out-of-range value (tampered save or future compat).
   c.eggIntervalNumerator = (s.eggIntervalNumerator === 3 || s.eggIntervalNumerator === 4 || s.eggIntervalNumerator === 5)
     ? s.eggIntervalNumerator : 4;
@@ -1011,14 +775,7 @@ function deserializePheromoneGrid(s: SerializedGrid): PheromoneGrid {
   return g;
 }
 
-/**
- * S2 — deserialize world.aiState from the save snapshot.
- * Pre-V17 saves omit the field; return an empty array (scenario will populate
- * defaults at next createScenario/load; the legacy stateless AI doesn't read aiState).
- */
-function deserializeAIStateArray(s: SerializedWorldState, simVersion: number): AIStateRecord[] {
-  // Pre-V17: return empty array. Scenario initialization will set defaults.
-  if (simVersion < SIM_VERSION_V19_AI_STATE) return [];
+function deserializeAIStateArray(s: SerializedWorldState): AIStateRecord[] {
   const raw = s.aiState;
   if (!Array.isArray(raw)) return [];
   const result: AIStateRecord[] = [];
@@ -1063,12 +820,7 @@ function isValidSpiderBehaviorState(v: unknown): v is import('../sim/types.js').
          v === 'Feeding' || v === 'Rampaging' || v === 'Retreating';
 }
 
-/**
- * S3 — deserialize world.spider from the save snapshot.
- * Pre-V20 saves omit the field; return null.
- */
-function deserializeSpider(s: SerializedWorldState, simVersion: number): SpiderState | null {
-  if (simVersion < SIM_VERSION_V20_SPIDER) return null;
+function deserializeSpider(s: SerializedWorldState): SpiderState | null {
   const raw = s.spider;
   if (raw === null || raw === undefined) return null;
   if (typeof raw !== 'object') return null;
@@ -1120,15 +872,9 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   if (s === null || typeof s !== 'object') {
     throw new Error('Invalid save shape: snapshot is not an object');
   }
-  // Validate simVersion FIRST — earliest possible, before any other shape
-  // or field-value check. Per codex P1 on PR #88: a future build can
-  // legitimately restructure the snapshot layout (e.g., split `s.ants`
-  // per-colony, raise MAX_ENTITIES, add new top-level fields). Any of those
-  // would otherwise throw plain Error at a downstream guard, and bootFromSave
-  // would deleteSave() — destroying a recoverable forward-version save.
-  // Hoisting the simVersion check ensures any future-version mismatch is
-  // surfaced as FutureSimVersionError (preserved + autosave-suspended)
-  // before the shape mismatch can misclassify it as tampering.
+  // Validate simVersion FIRST so a future-build save gets FutureSimVersionError
+  // (preserved + autosave-suspended) before any shape mismatch can misclassify
+  // it as corruption.
   const validatedSimVersion = validateSimVersion((s as { simVersion?: unknown }).simVersion);
   // Issue #65 / #66 — shape guard for `s.ants`. Reaches here only after
   // validateSimVersion confirmed simVersion <= LATEST, so a non-object
@@ -1329,58 +1075,22 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   const validatedRecentlyDepleted = rawRecentlyDepleted as DepletionRecord[];
   // Hoist spider deserialization so spiderPriorityColonyId and scatterReticleTile
   // can be forced null when spider is null (B11 fix: ghost-scatter prevention).
-  const _deserializedSpider = deserializeSpider(s, validatedSimVersion);
+  const _deserializedSpider = deserializeSpider(s);
 
   return {
     tick: rawTick,
     rngState: rawRng,
     nextEntityId: rawNext,
-    // Issue #27 — sticky-on-load: pre-#27 saves omit `simVersion` and replay
-    // at LEGACY (2). Post-#27 saves carry the recorded version through.
-    // Type-validate at the boundary: `??` only guards null/undefined, so a
-    // hand-edited or corrupted save passing `"3"` / NaN / null / object
-    // would otherwise reach `world.simVersion >= 3` comparisons which
-    // coerce inconsistently (`"3" >= 3 === true`, `"latest" >= 3 === false`)
-    // and silently land replays on the wrong drain order.
-    //
-    // Issue #66 — also reject present-but-out-of-range integers. Pre-fix
-    // code accepted any integer, including 99999 (every gate evaluates true
-    // forever, breaking the sticky-on-load contract for tampered saves) and
-    // negatives (every gate evaluates false). Boundary policy: missing/non-
-    // integer falls back to LEGACY (preserves legacy save-load); present
-    // integer in [LEGACY, LATEST] is used verbatim; integer outside that
-    // band throws (caught by bootFromSave's try/catch in render/game-scene.ts
-    // → bootFresh) rather than silently loading into an undefined gate-state
-    // mode. NB: loadSave does NOT catch this — its try/catch only wraps
-    // parseSaveFile. The simVersion check runs at deserialize-time.
     simVersion: validatedSimVersion,
-    // Issue #44 — pre-#44 saves omit `terrainSeed`; default to 0 on load.
-    // Same boundary type-validation as `simVersion`: `??` only guards null/
-    // undefined, so a hand-edited save with `"42"` / NaN / object would land
-    // at world.terrainSeed and be XOR'd into the surface hash, producing
-    // either NaN-poisoning or coercion surprises. Reject anything that isn't
-    // a uint32-coercible integer.
+    // terrainSeed: uint32-coerce to guard against NaN/string/negative tampered values.
     terrainSeed: typeof s.terrainSeed === 'number' && Number.isInteger(s.terrainSeed)
       ? s.terrainSeed >>> 0
       : 0,
-    // Issue #82 — also run migrateInputLogCommand on the queued commands.
-    // Pre-fix path migrated only inputLog at parseSaveFile and relied on
-    // tick.ts's inline SetBehaviorRatio guard for queued commands. That
-    // works for the live tick loop, but anything that inspects
-    // world.commandQueue directly (debug snapshot tools, ad-hoc tests,
-    // future remote-command surfaces) would see the unmigrated legacy
-    // shape until the dispatcher actually consumed it. Centralizing the
-    // migration here makes the loaded snapshot internally consistent
-    // before any tick runs.
-    //
-    // Issue #105 — also filter null/non-object entries before the spread:
-    // `{ ...null }` works (yields `{}`), but the resulting object lacks
-    // `cmd.type` and the dispatcher's exhaustive switch would silently no-op
-    // — better to drop them at the boundary so the runtime queue is always
-    // consistent with the dispatcher's expectations.
+    // Issue #105 — filter null/non-object entries before the spread so the
+    // runtime queue is always consistent with the dispatcher's expectations.
     commandQueue: (Array.isArray(s.commandQueue) ? s.commandQueue : [])
       .filter((c) => c !== null && typeof c === 'object')
-      .map((c) => migrateInputLogCommand({ ...c })),
+      .map((c) => ({ ...c } as SimCommand)),
     ants: deserializeAnts(s.ants, capacity),
     colonies,
     pheromoneGrids,
@@ -1389,14 +1099,9 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     foodPiles: s.foodPiles.map((p) => ({ ...p })),
     recentlyDepletedFood: validatedRecentlyDepleted.map((r) => ({ ...r })),
     pendingChambers,
-    // S0b — telemetry fields. events is always fresh (transient); counters
-    // load from save with 0 default for pre-V15 saves.
     events: [],
-    // S1 — transient; always fresh on load (cleared between ticks).
     pendingQueenDeathContexts: [],
-    // S2 — AI state machine. Deserialize saved records, or provide defensive defaults for pre-V19 saves.
-    aiState: deserializeAIStateArray(s, validatedSimVersion),
-    // S3 — spider entity; null for pre-V20 saves.
+    aiState: deserializeAIStateArray(s),
     spider: _deserializedSpider,
     spiderPriorityColonyId: (_deserializedSpider !== null && typeof s.spiderPriorityColonyId === 'number' && Number.isInteger(s.spiderPriorityColonyId) && s.spiderPriorityColonyId > 0) ? s.spiderPriorityColonyId : null,
     scatterReticleTile: (() => {
@@ -1420,7 +1125,6 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
       s.droppedStructuralCount >= 0
         ? s.droppedStructuralCount
         : 0,
-    // S5 — difficulty tier; default 'Normal' for pre-V22 saves that omit the field.
     difficulty: (s.difficulty === 'Easy' || s.difficulty === 'Hard') ? s.difficulty : 'Normal',
   };
 }
@@ -1443,55 +1147,6 @@ function buildSaveFile(seed: number, inputLog: readonly SimCommand[], world: Wor
   };
 }
 
-/**
- * Phase 10 / WR-09 — migrate a single inputLog entry on load.
- *
- * Pre-Phase-10 v2 saves (issue #15 bumped 1→2; Phase 10 narrowed without
- * bumping per D-04) can carry `SetBehaviorRatio` commands shaped as
- * `{ forage, dig, fight }`. The `dig` field is gone in the Phase 10 sim;
- * replaying such a command verbatim would either silently drop the dig
- * weight (turning legitimate dig-heavy commands into idle ones) or trip
- * post-Phase-10 invariants. SCEN-06 replay truth requires the in-memory
- * inputLog to match what the current sim accepts, so we migrate here
- * rather than in the per-tick command handler.
- *
- * Migration semantics mirror `migrateBehaviorRatio` for the snapshot's
- * persisted `targetRatio`:
- *   - drop `dig` (no rescale)
- *   - all-zero `{forage:0, fight:0}` snaps to DEFAULT_BEHAVIOR_RATIO
- *     `{forage:10, fight:0}` (covers the pre-Phase-10 pure-dig case)
- *
- * Pure function, idempotent on already-migrated commands. Non-
- * `SetBehaviorRatio` entries pass through untouched.
- */
-function migrateInputLogCommand(cmd: SimCommand): SimCommand {
-  // Issue #105 — guard at entry, before any property access. The Issue #78
-  // fix block below covers null `cmd.ratio`; this covers structurally-
-  // identical null / non-object `cmd`. Without this guard, parseSaveFile's
-  // loop throws TypeError on `null.type`, loadSave's try/catch swallows
-  // the throw and returns null, the caller treats the WHOLE save as corrupt
-  // and calls deleteSave + bootFresh — escalating one bad command into
-  // total save loss. Pass through verbatim; the dispatcher's exhaustive-
-  // default in tick.ts silently drops malformed entries.
-  if (cmd === null || typeof cmd !== 'object') return cmd;
-  if (cmd.type !== 'SetBehaviorRatio') return cmd;
-  // Issue #78 — guard against null/primitive ratios before using `'in'`.
-  // Pre-fix code did `'dig' in ratioRaw` directly, which throws TypeError
-  // for null / undefined / number / string / boolean. parseSaveFile is
-  // called from loadSave inside a try/catch that swallows the throw and
-  // returns null; the caller then treats the entire save as corrupt and
-  // calls deleteSave + bootFresh, escalating a recoverable single-command
-  // corruption into total save loss. Defensive shape-check keeps the rest
-  // of the inputLog intact (the malformed command passes through verbatim
-  // — the SetBehaviorRatio handler in tick.ts has its own type guard so
-  // replay drops it cleanly).
-  const ratioRaw: unknown = cmd.ratio;
-  if (ratioRaw === null || typeof ratioRaw !== 'object') return cmd;
-  // Already in the two-field form (no `dig` key) — pass through.
-  if (!('dig' in ratioRaw)) return cmd;
-  const migrated = migrateBehaviorRatio(ratioRaw);
-  return { ...cmd, ratio: migrated };
-}
 
 // Exported for issue #112 v2-rejection test — verifies that parseSaveFile
 // throws SaveVersionMismatchError on pre-v3 envelopes. loadSave swallows the
@@ -1523,12 +1178,6 @@ export function parseSaveFile(raw: string): SaveFile {
   // autosave restores a proper inputLog from that point.
   if (!Array.isArray(file.inputLog)) {
     (file as { inputLog: SimCommand[] }).inputLog = [];
-  }
-  // WR-09: walk inputLog and migrate any legacy SetBehaviorRatio entries so
-  // SCEN-06 replay (`createScenario(seed) + tick(cmds[t])`) reproduces the
-  // migrated snapshot. Other command types pass through.
-  for (let i = 0; i < file.inputLog.length; i++) {
-    file.inputLog[i] = migrateInputLogCommand(file.inputLog[i]!);
   }
   return file;
 }

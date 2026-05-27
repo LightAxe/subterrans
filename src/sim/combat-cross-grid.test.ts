@@ -164,10 +164,13 @@ describe('combat cross-grid — tile-key gridColonyId extension (REQ-C4)', () =>
     expect(world.ants.colonyId[enemyQueenId]).toBe(ENEMY_COLONY_ID);
 
     // Act --------------------------------------------------------------------
-    // Pin rngState to the known-player-wins seed value immediately before combat.
-    // Use V15 resolver: this test verifies cross-grid tile-key bucketing, not V16 HP math.
-    world.rngState = 3;
-    world.simVersion = 15;
+    // Set enemy queen to 1 HP so the player fighter kills it in the first strike.
+    // V16 fighters skip windup and strike immediately; 1 HP < COMBAT_DAMAGE_BASE → queen dies.
+    // This tests cross-grid tile-key bucketing: ants sharing the same (tileX,tileY,grid) engage.
+    world.ants.hp[enemyQueenId] = 1;
+    world.ants.homeGroundBonusHp[enemyQueenId] = 0;
+    // Mark queen as not-fresh so combat init does not overwrite homeGroundBonusHp=0.
+    world.ants.attackCooldown[enemyQueenId] = 1;
     detectAndResolveCombat(world, new Rng(world.rngState));
 
     // MANDATORY t=N outcome assertions ---------------------------------------

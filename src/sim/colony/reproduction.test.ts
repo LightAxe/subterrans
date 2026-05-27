@@ -357,28 +357,6 @@ describe('tickLarvaMaturation — throughput cap (cap binds)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 5. V20 replay: pre-V21 tickLarvaMaturation is a no-op
-// ---------------------------------------------------------------------------
-
-describe('tickLarvaMaturation — V20 no-op (replay safety)', () => {
-  it('does not accelerate larvae in a V20 world', () => {
-    const world = makeWorld(SIM_VERSION_V20_SPIDER);
-    const { colony } = setupColony(world);
-
-    const larvaId = addLarva(world, colony, 1, 1);
-    addAttendingNurse(world, colony, 1, 1);
-
-    tickLifecycleTransitions(world, colony);
-    const ageAfterBaseline = world.ants.age[larvaId]!;
-
-    // tickLarvaMaturation under V20 must be a no-op.
-    tickLarvaMaturation(world, colony);
-
-    expect(world.ants.age[larvaId]).toBe(ageAfterBaseline);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // 6. D-29: 10× surplus colony reaches workerCount=10 ≥120 ticks earlier
 //
 // Demonstrates that faster egg interval (150 vs 300 ticks) from the

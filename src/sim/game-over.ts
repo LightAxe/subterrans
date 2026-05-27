@@ -16,7 +16,6 @@ export type GameOutcome = typeof GameOutcome[keyof typeof GameOutcome];
 import type { WorldState, AIState } from './types.js';
 import type { ColonyId, ColonyRecord } from './colony/colony-store.js';
 import { emitEvent } from './telemetry.js';
-import { SIM_VERSION_V16_COMBAT_HPDPS, SIM_VERSION_V19_AI_STATE, SIM_VERSION_V22_DIFFICULTY } from './types.js';
 import { FP_SHIFT } from './fixed.js';
 import { colonyFoodTotal } from './colony/colony-system.js';
 import {
@@ -85,11 +84,6 @@ export function checkQueenDeath(world: WorldState, playerColonyId?: ColonyId): G
   const playerColony = world.colonies[playerCid];
   if (playerColony === undefined) return GameOutcome.None;
 
-  // For pre-V17 saves: use legacy single-pass path (S1 behavior).
-  if (world.simVersion < SIM_VERSION_V19_AI_STATE) {
-    return _checkQueenDeathLegacy(world, playerCid, playerColony);
-  }
-
   // --- S2 two-pass loop ---
 
   // Pass 1 (detection): find which queens died this tick; set colony.defeated.
@@ -146,13 +140,11 @@ export function checkQueenDeath(world: WorldState, playerColonyId?: ColonyId): G
       colony.defeated = true;
     }
 
-    const ctx = world.simVersion >= SIM_VERSION_V16_COMBAT_HPDPS
-      ? (world.pendingQueenDeathContexts[cid] ?? null)
-      : null;
+    const ctx = world.pendingQueenDeathContexts[cid] ?? null;
 
     // S2: look up aiStateAtTime from world.aiState for the killer colony.
     let aiStateAtTime: AIState | null = null;
-    if (ctx !== null && world.simVersion >= SIM_VERSION_V19_AI_STATE) {
+    if (ctx !== null) {
       for (let i = 0; i < world.aiState.length; i++) {
         // Check if the AI colony was the killer
         if (world.aiState[i]!.colonyId === ctx.killerColonyId) {
@@ -162,9 +154,7 @@ export function checkQueenDeath(world: WorldState, playerColonyId?: ColonyId): G
       }
     }
 
-    const cause = world.simVersion >= SIM_VERSION_V16_COMBAT_HPDPS
-      ? inferCause(ctx, gameOutcome)
-      : null;
+    const cause = inferCause(ctx, gameOutcome);
 
     // Location from kill-site context when available; fall back to queen's current tile.
     const qid = colony.queenEntityId;
@@ -196,88 +186,6 @@ export function checkQueenDeath(world: WorldState, playerColonyId?: ColonyId): G
   if (!playerCurrentlyAlive && anyOtherAlive) return GameOutcome.Defeat;
   if (!playerCurrentlyAlive && !anyOtherAlive) return GameOutcome.MutualDestruction;
   return GameOutcome.None;
-}
-
-/**
- * Legacy single-pass path for pre-V17 saves (S1 behavior, byte-identical replay).
- */
-function _checkQueenDeathLegacy(
-  world: WorldState,
-  playerCid: ColonyId,
-  playerColony: ColonyRecord,
-): GameOutcome {
-  const playerAlive = _isQueenAliveAndEmitLegacy(world, playerColony);
-
-  let anyOtherAlive = false;
-  let otherColonyCount = 0;
-  for (const key in world.colonies) {
-    if (!Object.hasOwn(world.colonies, key)) continue;
-    const cid = Number(key) as ColonyId;
-    if (cid === playerCid) continue;
-    otherColonyCount += 1;
-    const colony = world.colonies[cid]!;
-    if (_isQueenAliveAndEmitLegacy(world, colony)) anyOtherAlive = true;
-  }
-
-  if (otherColonyCount === 0) {
-    return playerAlive ? GameOutcome.None : GameOutcome.Defeat;
-  }
-
-  if (playerAlive && !anyOtherAlive) return GameOutcome.Victory;
-  if (!playerAlive && anyOtherAlive) return GameOutcome.Defeat;
-  if (!playerAlive && !anyOtherAlive) return GameOutcome.MutualDestruction;
-  return GameOutcome.None;
-}
-
-/**
- * S1-compatible single-queen death detection and event emission (pre-V17 path).
- * Returns true if the colony's queen is alive.
- */
-function _isQueenAliveAndEmitLegacy(world: WorldState, colony: ColonyRecord): boolean {
-  const qid = colony.queenEntityId;
-  const alive = world.ants.alive[qid] === 1;
-  if (!alive) {
-    if (!colony.defeated) {
-      colony.defeated = true;
-
-      const ctx = world.simVersion >= SIM_VERSION_V16_COMBAT_HPDPS
-        ? (world.pendingQueenDeathContexts[colony.colonyId] ?? null)
-        : null;
-
-      let cause: 'InvasionKill' | 'SpiderRampage' | 'Starvation' | 'MutualDestruction' | null = null;
-      if (ctx === null) {
-        cause = 'Starvation'; // no kill context = queen starved
-      } else if (ctx.killerKind === 'Spider') {
-        cause = 'SpiderRampage';
-      } else if (ctx.killerKind === 'Ant' && ctx.killerColonyId !== null) {
-        cause = 'InvasionKill';
-      } else if (ctx.killerKind === 'Environment') {
-        cause = 'Starvation';
-      }
-
-      const locX = ctx ? ctx.tile.x : (world.ants.posX[qid] ?? 0) >> FP_SHIFT;
-      const locY = ctx ? ctx.tile.y : (world.ants.posY[qid] ?? 0) >> FP_SHIFT;
-      const grid: 'surface' | 'underground' = (world.ants.zone[qid] ?? 1) === 0 ? 'surface' : 'underground';
-
-      emitEvent(world, {
-        tick: world.tick,
-        type: 'queen_death',
-        payload: {
-          cause,
-          location: { x: locX, y: locY, grid },
-          aiStateAtTime: null,
-        },
-      });
-
-      if (ctx !== null) {
-        world.pendingQueenDeathContexts[colony.colonyId] = null;
-      }
-    } else {
-      colony.defeated = true;
-    }
-    return false;
-  }
-  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -327,8 +235,6 @@ function livingWorkerCount(world: WorldState, colonyId: ColonyId): number {
  * Emits a 'round_end' SimEvent for playtrace roundEndReason attribution.
  */
 export function checkTiebreaks(world: WorldState, playerColonyId: ColonyId): GameOutcome {
-  if (world.simVersion < SIM_VERSION_V22_DIFFICULTY) return GameOutcome.None;
-
   // Only fires when both queens are alive (checkQueenDeath already handled queen deaths).
   const playerColony = world.colonies[playerColonyId];
   if (playerColony === undefined) return GameOutcome.None;

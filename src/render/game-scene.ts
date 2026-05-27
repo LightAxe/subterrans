@@ -30,7 +30,7 @@ import { createScenario } from '../sim/scenario.js';
 import { copyWorldState, type WorldState } from '../sim/types.js';
 import { tick, resetFlowFieldCaches } from '../sim/tick.js';
 import { createGameLoop, type GameLoop, MS_PER_TICK } from '../platform/game-loop.js';
-import { hasSave, loadSave, deleteSave, tickAutosave, FutureSimVersionError, manualSave } from '../platform/save.js';
+import { hasSave, hasIncompatibleSave, loadSave, deleteSave, tickAutosave, FutureSimVersionError, OldSimVersionError, manualSave } from '../platform/save.js';
 import { deserializeWorldState } from '../platform/save.js';
 import { loadSettings, saveSettings } from '../platform/settings.js';
 import { runAIController, resetAIControllerCache } from './ai-controller.js';
@@ -419,9 +419,10 @@ export class GameScene extends Phaser.Scene {
     this.surfaceInputState = registerSurfaceInput(this, getWorld, this.viewState, getPrevWorld);
     this.undergroundInputState = registerUndergroundInput(this, getWorld, this.viewState);
 
-    // Phase 9 boot: check for existing save. If found, show SavePrompt overlay.
-    // Otherwise boot a fresh scenario directly.
-    const bootMode = decideBootMode(hasSave);
+    // Phase 9 boot: check for existing save. If found and loadable, show
+    // SavePrompt overlay. Otherwise boot fresh (incompatible saves are
+    // silently skipped here; the new game's first autosave will overwrite them).
+    const bootMode = decideBootMode(() => hasSave() && !hasIncompatibleSave());
     if (bootMode === 'prompt') {
       this.gamePhase = GamePhase.SavePrompt;
       const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
@@ -738,6 +739,13 @@ export class GameScene extends Phaser.Scene {
         this.bootFresh();
         // Set after bootFresh — resetSessionState clears the flag.
         this.autosaveSuspended = true;
+        return;
+      }
+      if (err instanceof OldSimVersionError) {
+        // Pre-V22 save — no migration path; discard and start fresh.
+        console.error(err.message);
+        deleteSave();
+        this.bootFresh();
         return;
       }
       // Genuine corruption: discard so we don't loop the user.

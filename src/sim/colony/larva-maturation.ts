@@ -35,7 +35,6 @@
 // growth lever.
 
 import type { WorldState } from '../types.js';
-import { SIM_VERSION_V21_REPRODUCTION } from '../types.js';
 import type { ColonyRecord } from './colony-store.js';
 import { hasCompletedChamber, largestNurseryTileCount } from './colony-system.js';
 import { AntTask, ChamberType, NursingSubState } from '../enums.js';
@@ -83,7 +82,6 @@ const nurseScratch = {
  * No-op under pre-V21 sim versions.
  */
 export function tickLarvaMaturation(world: WorldState, colony: ColonyRecord): void {
-  if (world.simVersion < SIM_VERSION_V21_REPRODUCTION) return;
 
   // Brood frozen = no completed Nursery. Nurses can't exist without a Nursery
   // (behavior allocator gates on hasNursery), so there's nothing to accelerate.

@@ -6,8 +6,7 @@ import type { WorldState, SpiderState } from './types.js';
 import { emitEvent } from './telemetry.js';
 import { pheromoneGridKey, phGet, phSet } from './pheromone/pheromone-store.js';
 import { AntTask, PheromoneType } from './enums.js';
-import { NORMAL_TIER_INDEX, tierIndex } from './ai-state.js';
-import { SIM_VERSION_V22_DIFFICULTY } from './types.js';
+import { tierIndex } from './ai-state.js';
 import {
   SPIDER_HP_FULL,
   SPIDER_HUNT_INTERVAL_TICKS,
@@ -408,7 +407,7 @@ export function tickSpider(world: WorldState): void {
   switch (spider.state) {
     case 'Patrolling': {
       // Hunger check first: rampaging wins over hunting on same tick.
-      if (spider.hungerTicks >= SPIDER_HUNGER_MAX_TICKS[world.simVersion >= SIM_VERSION_V22_DIFFICULTY ? tierIndex(world.difficulty) : NORMAL_TIER_INDEX]) {
+      if (spider.hungerTicks >= SPIDER_HUNGER_MAX_TICKS[tierIndex(world.difficulty)]) {
         spider.state = 'Rampaging';
         spider.rampageStartTick = world.tick;
         spider.rampageKillsThisRampage = 0;

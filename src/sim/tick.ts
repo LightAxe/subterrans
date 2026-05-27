@@ -1,6 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V5_CHAMBER_ON_MARKED, SIM_VERSION_V9_CANCEL_DROPS_PENDING, SIM_VERSION_V10_VISIBLE_BROOD_CARRY, SIM_VERSION_V11_DEFENSIVE_BUNDLE, SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX, SIM_VERSION_V19_AI_STATE, SIM_VERSION_V20_SPIDER, SIM_VERSION_V21_REPRODUCTION, SIM_VERSION_V22_DIFFICULTY } from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID } from './types.js';
 import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
@@ -17,7 +17,6 @@ import {
   ChamberType,
 } from './enums.js';
 import {
-  PHEROMONE_DECAY_FP,
   PHEROMONE_DECAY_FP_V14,
   PHEROMONE_FLOOR_V14,
   DANGER_DECAY_FP,
@@ -226,7 +225,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // SyncAIState pre-pass: applied before the cap so replay determinism is
   // preserved even on high-command-count ticks (>64 commands in queue).
   // ---------------------------------------------------------------------------
-  if (world.simVersion >= SIM_VERSION_V19_AI_STATE) for (let i = 0; i < commands.length; i++) {
+  for (let i = 0; i < commands.length; i++) {
     if (commands[i]!.type === 'SyncAIState') {
       const sc = commands[i] as import('./commands.js').SyncAIStateCommand;
       const srec = world.aiState.find((r) => r.colonyId === sc.colonyId);
@@ -413,29 +412,27 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         // the menu-side `hasPendingChamber` gate tripped, soft-locking
         // re-placement. BeingDug tiles continue per CTRL-04 (no mid-dig
         // interrupt); Open tiles stay Open.
-        if (world.simVersion >= SIM_VERSION_V9_CANCEL_DROPS_PENDING) {
-          for (const pcKey in world.pendingChambers) {
-            if (!Object.hasOwn(world.pendingChambers, pcKey)) continue;
-            const pc = world.pendingChambers[pcKey]!;
-            if (pc.colonyId !== cmd.colonyId) continue;
-            if (cmd.tileX < pc.anchorTileX || cmd.tileX >= pc.anchorTileX + pc.width) continue;
-            if (cmd.tileY < pc.anchorTileY || cmd.tileY >= pc.anchorTileY + pc.height) continue;
-            // Match — drop the pending chamber and revert remaining Marked
-            // footprint tiles. PlaceChamber's overlap gate (f) ensures at
-            // most one same-colony pending chamber covers any tile, so we
-            // can stop after the first match.
-            delete world.pendingChambers[pcKey];
-            for (let dy = 0; dy < pc.height; dy++) {
-              for (let dx = 0; dx < pc.width; dx++) {
-                const tx = pc.anchorTileX + dx;
-                const ty = pc.anchorTileY + dy;
-                if (ugGet(underground, tx, ty) === UndergroundTileState.Marked) {
-                  ugSet(underground, tx, ty, UndergroundTileState.Solid);
-                }
+        for (const pcKey in world.pendingChambers) {
+          if (!Object.hasOwn(world.pendingChambers, pcKey)) continue;
+          const pc = world.pendingChambers[pcKey]!;
+          if (pc.colonyId !== cmd.colonyId) continue;
+          if (cmd.tileX < pc.anchorTileX || cmd.tileX >= pc.anchorTileX + pc.width) continue;
+          if (cmd.tileY < pc.anchorTileY || cmd.tileY >= pc.anchorTileY + pc.height) continue;
+          // Match — drop the pending chamber and revert remaining Marked
+          // footprint tiles. PlaceChamber's overlap gate (f) ensures at
+          // most one same-colony pending chamber covers any tile, so we
+          // can stop after the first match.
+          delete world.pendingChambers[pcKey];
+          for (let dy = 0; dy < pc.height; dy++) {
+            for (let dx = 0; dx < pc.width; dx++) {
+              const tx = pc.anchorTileX + dx;
+              const ty = pc.anchorTileY + dy;
+              if (ugGet(underground, tx, ty) === UndergroundTileState.Marked) {
+                ugSet(underground, tx, ty, UndergroundTileState.Solid);
               }
             }
-            break;
           }
+          break;
         }
         break;
       }
@@ -489,19 +486,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         // (d) Solid 4-neighbor "tunnel-end" check (pre-v5 only). v5 drops it
         //     because chambers can now be planned in untouched dirt; the
         //     v5 reachability BFS below subsumes the connectivity intent.
-        if (world.simVersion < SIM_VERSION_V5_CHAMBER_ON_MARKED) {
-          if (ugGet(underground, cmd.anchorTileX, cmd.anchorTileY) !== UndergroundTileState.Open) break;
-          let hasAdjacentSolid = false;
-          const ax = cmd.anchorTileX;
-          const ay = cmd.anchorTileY;
-          if (ax - 1 >= 0                        && ugGet(underground, ax - 1, ay) === UndergroundTileState.Solid) hasAdjacentSolid = true;
-          if (!hasAdjacentSolid && ax + 1 < UNDERGROUND_GRID_WIDTH  && ugGet(underground, ax + 1, ay) === UndergroundTileState.Solid) hasAdjacentSolid = true;
-          if (!hasAdjacentSolid && ay - 1 >= 0                      && ugGet(underground, ax,     ay - 1) === UndergroundTileState.Solid) hasAdjacentSolid = true;
-          if (!hasAdjacentSolid && ay + 1 < UNDERGROUND_GRID_HEIGHT && ugGet(underground, ax,     ay + 1) === UndergroundTileState.Solid) hasAdjacentSolid = true;
-          if (!hasAdjacentSolid) break;
-        }
-        // v5: gates (c)+(d) are dropped entirely. Solid / Marked / Open
-        // anchors are all accepted; BeingDug is rejected by the
+        // Solid / Marked / Open anchors are all accepted; BeingDug is rejected by the
         // footprint scan in gate (e) below (anchor is at offset (0,0),
         // so it's covered). Auto-mark at the end of the handler
         // converts any Solid footprint tile to Marked. Reachability
@@ -559,12 +544,10 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         // disconnected pre-existing Open cavern could pass them — but
         // those edge cases are unchanged by this PR (pre-v5 replays use
         // the legacy gates verbatim).
-        if (world.simVersion >= SIM_VERSION_V5_CHAMBER_ON_MARKED) {
-          if (!isFootprintReachableAfterDigs(
-                world, colony3, cmd.anchorTileX, cmd.anchorTileY,
-                dims.width, dims.height,
-              )) break;
-        }
+        if (!isFootprintReachableAfterDigs(
+              world, colony3, cmd.anchorTileX, cmd.anchorTileY,
+              dims.width, dims.height,
+            )) break;
         // All checks passed — mark footprint Solid tiles and create PendingChamber
         for (let dy = 0; dy < dims.height; dy++) {
           for (let dx = 0; dx < dims.width; dx++) {
@@ -688,7 +671,6 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         break;
       }
       case 'StartAIOperation': {
-        if (world.simVersion < SIM_VERSION_V19_AI_STATE) break;
         if (!isTileCoord(cmd.rallyTileX, SURFACE_GRID_WIDTH)) break;
         if (!isTileCoord(cmd.rallyTileY, SURFACE_GRID_HEIGHT)) break;
         // Validate fighterIds: non-array or empty array from a malformed save/replay entry
@@ -701,7 +683,6 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         break;
       }
       case 'MarkSpiderPriority': {
-        if (world.simVersion < SIM_VERSION_V20_SPIDER) break;
         // Validate payload — save/replay objects are not schema-checked upstream.
         if (typeof cmd.isPriority !== 'boolean') break;
         if (!cmd.isPriority) {
@@ -764,8 +745,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // so the colony isn't starvation-locked. This covers the small-colony case
     // where computeNurseCount's ceil(workers/4) cap assigns the only worker as
     // a nurse, leaving zero foragers regardless of food level.
-    if (world.simVersion >= SIM_VERSION_V21_REPRODUCTION &&
-        alloc8.forage === 0 && alloc8.nurse > 0 &&
+    if (alloc8.forage === 0 && alloc8.nurse > 0 &&
         colonyFoodTotal(colony) === 0) {
       colony.computedAllocation.nurse  -= 1;
       colony.computedAllocation.forage  = 1;
@@ -825,11 +805,9 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // static post-init, so the only inputs that change are the entrance
     // list (open/closed). Recomputing every dirty cycle is generous but
     // simple; future optimization could gate on entrance-changed-only.
-    if (world.simVersion >= SIM_VERSION_V11_DEFENSIVE_BUNDLE) {
-      const sfcOut = ensureSurfaceEntranceFlowField(entranceFlowFields, colony.colonyId);
-      const sfcQueue = entranceFlowFields.surfaceQueues[colony.colonyId]!;
-      computeSurfaceEntranceFlowField(world, colony.entrances ?? [], sfcOut, sfcQueue);
-    }
+    const sfcOut = ensureSurfaceEntranceFlowField(entranceFlowFields, colony.colonyId);
+    const sfcQueue = entranceFlowFields.surfaceQueues[colony.colonyId]!;
+    computeSurfaceEntranceFlowField(world, colony.entrances ?? [], sfcOut, sfcQueue);
 
     // Recompute chamber flow-fields on the same cycle. Chamber completion
     // (which flips tile states from Marked/BeingDug to Open) is one of the
@@ -889,24 +867,22 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // on dirty signal) to stay in sync. Overwrites the buffer that the
   // dirty-gated block above filled with the legacy NURSING_CHAMBER_TYPES
   // seeding — pre-v10 worlds keep the legacy seeding (Queen+Nursery).
-  if (world.simVersion >= SIM_VERSION_V10_VISIBLE_BROOD_CARRY) {
-    for (const key in world.colonies) {
-      if (!Object.hasOwn(world.colonies, key)) continue;
-      const colony = world.colonies[key as unknown as ColonyId]!;
-      const underground = world.undergroundGrids[colony.colonyId];
-      if (!underground) continue;
-      const gridSize = underground.width * underground.height;
-      const chamberBufs = ensureChamberFlowFields(chamberFlowFields, colony.colonyId, gridSize);
-      computeNursingPickupField(
-        underground,
-        colony.chambers,
-        world.ants,
-        colony.eggs,
-        colony.larvae,
-        chamberBufs.nursing,
-        chamberBufs.queue,
-      );
-    }
+  for (const key in world.colonies) {
+    if (!Object.hasOwn(world.colonies, key)) continue;
+    const colony = world.colonies[key as unknown as ColonyId]!;
+    const underground = world.undergroundGrids[colony.colonyId];
+    if (!underground) continue;
+    const gridSize = underground.width * underground.height;
+    const chamberBufs = ensureChamberFlowFields(chamberFlowFields, colony.colonyId, gridSize);
+    computeNursingPickupField(
+      underground,
+      colony.chambers,
+      world.ants,
+      colony.eggs,
+      colony.larvae,
+      chamberBufs.nursing,
+      chamberBufs.queue,
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -1140,8 +1116,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // updateFightAntTargets so spider priority takes precedence over the rally point.
   // Colony identity is carried in world.spiderPriorityColonyId (not a
   // hard-coded player branch) — CLNY-08 compliant.
-  if (world.simVersion >= SIM_VERSION_V20_SPIDER &&
-      world.spiderPriorityColonyId !== null &&
+  if (world.spiderPriorityColonyId !== null &&
       world.spider !== null) {
     const spiderPriorityCid = world.spiderPriorityColonyId;
     const spTileX = world.spider.posX >> FP_SHIFT;
@@ -1182,7 +1157,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // Runs AFTER routeForagerPriority (step 13) so scatter takes precedence over
   // food-pile priority targeting for workers on the threatened tile.
   // Uses the shadow field written by tickSpider at step 17.5 the prior tick.
-  if (world.simVersion >= SIM_VERSION_V20_SPIDER && world.scatterReticleTile !== null) {
+  if (world.scatterReticleTile !== null) {
     const rx = world.scatterReticleTile.x;
     const ry = world.scatterReticleTile.y;
     const r = SPIDER_SCATTER_RADIUS_TILES;
@@ -1231,11 +1206,9 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     let decayFloor: number | undefined;
     if (pheromoneType === PheromoneType.DangerTrail) {
       decayRate = DANGER_DECAY_FP;
-    } else if (world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX) {
+    } else {
       decayRate = PHEROMONE_DECAY_FP_V14;
       decayFloor = PHEROMONE_FLOOR_V14;
-    } else {
-      decayRate = PHEROMONE_DECAY_FP;
     }
     tickPheromoneDecay(grid, decayRate, decayFloor);
   }
@@ -1283,31 +1256,22 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // parallel stream that ended at the writeback — functionally byte-
   // deterministic but with the design contract violated.
   //
-  // v11+: combat shares the tick rng so its pulls accumulate into the next
-  //       tick's RNG state, matching the design contract.
-  // pre-v11: combat gets a fresh Rng from world.rngState — same parallel
-  //          stream as before for byte-identical replay of older saves.
+  // Combat shares the tick rng so its pulls accumulate into the next tick's RNG state.
   // ---------------------------------------------------------------------------
-  if (world.simVersion >= SIM_VERSION_V11_DEFENSIVE_BUNDLE) {
-    detectAndResolveCombat(world, rng);
-  } else {
-    detectAndResolveCombat(world, new Rng(world.rngState));
-  }
+  detectAndResolveCombat(world, rng);
 
   // ---------------------------------------------------------------------------
   // Step 17.5: Spider state machine (S3 / V20+).
   // Runs after combat so spider.hp reflects this tick's damage before tickSpider
   // evaluates the Retreating threshold.
   // ---------------------------------------------------------------------------
-  if (world.simVersion >= SIM_VERSION_V20_SPIDER) {
-    tickSpider(world);
-  }
+  tickSpider(world);
 
   // ---------------------------------------------------------------------------
   // Step 18: game-over detection (Phase 9 / CMBT-06/07).
   // ---------------------------------------------------------------------------
   let outcome = checkQueenDeath(world);
-  if (outcome === GameOutcome.None && world.simVersion >= SIM_VERSION_V22_DIFFICULTY) {
+  if (outcome === GameOutcome.None) {
     outcome = checkTiebreaks(world, PLAYER_COLONY_ID);
   }
 
@@ -1318,10 +1282,8 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // invading AI routing to Recovery on the same tick it kills the queen).
   // Gated on V19; moved from render-side to preserve ADR-0007 sim/render boundary.
   // ---------------------------------------------------------------------------
-  if (world.simVersion >= SIM_VERSION_V19_AI_STATE) {
-    for (let i = 0; i < world.aiState.length; i++) {
-      advanceAIState(world, world.aiState[i]!.colonyId);
-    }
+  for (let i = 0; i < world.aiState.length; i++) {
+    advanceAIState(world, world.aiState[i]!.colonyId);
   }
 
   // ---------------------------------------------------------------------------

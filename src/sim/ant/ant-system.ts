@@ -33,19 +33,6 @@
 // world.nextEntityId is the upper bound for entity iteration; alive=0 slots are skipped.
 
 import {
-  SIM_VERSION_V3,
-  SIM_VERSION_V4_DIAGONAL_MOTION,
-  SIM_VERSION_V6_FORAGER_NO_REVISIT,
-  SIM_VERSION_V7_SURFACE_PASSABILITY,
-  SIM_VERSION_V8_LEASH_HYSTERESIS,
-  SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
-  SIM_VERSION_V11_DEFENSIVE_BUNDLE,
-  SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE,
-  SIM_VERSION_V13_INVARIANT_FIXES,
-  SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX,
-  SIM_VERSION_V17_COMBAT_AGGRO,
-  SIM_VERSION_V18_INVADER_WALL_AWARE_STEP,
-  SIM_VERSION_V21_REPRODUCTION,
   type WorldState,
 } from '../types.js';
 import {
@@ -311,27 +298,17 @@ export function pickCardinalStep(
   id: number,
   rawDx: number,
   rawDy: number,
-  simVersion: number,
+  _simVersion?: number,
 ): number {
-  void ants; void id; // pathErr is inert under v4-and-later; not read here.
+  void ants; void id; void _simVersion;
   const absDx = rawDx < 0 ? -rawDx : rawDx;
   const absDy = rawDy < 0 ? -rawDy : rawDy;
   if (absDx === 0 && absDy === 0) return packStep(0, 0);
   if (absDx === 0)                return packStep(0, rawDy > 0 ? 1 : -1);
   if (absDy === 0)                return packStep(rawDx > 0 ? 1 : -1, 0);
 
-  // Both axes non-zero.
-  if (simVersion >= SIM_VERSION_V4_DIAGONAL_MOTION) {
-    // v4 — 8-connected diagonal step.
-    return packStep(rawDx > 0 ? 1 : -1, rawDy > 0 ? 1 : -1);
-  }
-
-  // v2 / v3 — legacy greedy major-axis pick (pre-issue-#34). Exhausts the
-  // larger-magnitude axis before switching, producing the stair-step that
-  // v4 fixes. Preserved verbatim so pre-v4 save replays are bit-exact.
-  // Tie (|rawDx| === |rawDy|) goes to X axis.
-  if (absDx >= absDy) return packStep(rawDx > 0 ? 1 : -1, 0);
-  return packStep(0, rawDy > 0 ? 1 : -1);
+  // Both axes non-zero — 8-connected diagonal step.
+  return packStep(rawDx > 0 ? 1 : -1, rawDy > 0 ? 1 : -1);
 }
 
 /** Encode a (dx, dy) cardinal step into a 4-bit int. dx, dy ∈ {-1, 0, 1}. */
@@ -419,12 +396,12 @@ function diagonalizeFlowStep(
   cardDx: number,
   cardDy: number,
   task: AntTask,
-  simVersion: number,
+  _simVersion: number,
   out: CardinalStep,
 ): void {
+  void _simVersion;
   out.dx = cardDx;
   out.dy = cardDy;
-  if (simVersion < SIM_VERSION_V4_DIAGONAL_MOTION) return;
   const nextX = tileX + cardDx;
   const nextY = tileY + cardDy;
   if (nextX < 0 || nextX >= underground.width || nextY < 0 || nextY >= underground.height) return;
@@ -568,7 +545,7 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
   // Issue #68 (v12+) — pre-v12 this was an `else` branch. Now runs after
   // the chamber path too when v12+, so leftover food can flow into the
   // entrance pool before forcing wait-state.
-  const tryPoolFallback = (chamber === null) || world.simVersion >= SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE;
+  const tryPoolFallback = true;
   if (tryPoolFallback && remaining > 0) {
     // Fallback — entrance-shaft / chamberless pool. Cap at BASE.
     const space = BASE_FOOD_STORAGE_CAPACITY - colony.foodStored;
@@ -596,10 +573,7 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
     //       always-oscillate path)
     // The simVersion >= 6 gate on the partial-fill branch keeps pre-v6
     // replays byte-identical to v5 (same toPool === 0 behavior only).
-    const enterWait =
-      world.simVersion >= SIM_VERSION_V3 &&
-      remaining > 0 &&
-      (toPool === 0 || (world.simVersion >= SIM_VERSION_V6_FORAGER_NO_REVISIT && toPool > 0));
+    const enterWait = remaining > 0;
     if (enterWait) {
       let anyChamberDepositable = false;
       for (let c = 0; c < colony.chambers.length; c++) {
@@ -881,7 +855,7 @@ export function tickForagerActions(world: WorldState): void {
  */
 export function tickNurseActions(world: WorldState): void {
   const ants = world.ants;
-  const v10 = world.simVersion >= SIM_VERSION_V10_VISIBLE_BROOD_CARRY;
+  const v10 = true;
 
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1) continue;
@@ -956,7 +930,7 @@ export function tickNurseActions(world: WorldState): void {
       // tick.ts. Brood-transport priority is enforced at deposit time
       // (depositCarriedBrood skips Attending when claimable brood remains),
       // so no per-tick brood check is needed here.
-      if (world.simVersion >= SIM_VERSION_V21_REPRODUCTION && subTask === NursingSubState.Attending) {
+      if (subTask === NursingSubState.Attending) {
         const colonyId = ants.colonyId[id]!;
         const colony   = world.colonies[colonyId];
         const starving = colony !== undefined && colonyFoodTotal(colony) === 0;
@@ -1325,27 +1299,23 @@ function depositCarriedBrood(
   // Pre-V21 worlds use the original all-chambers distribution to preserve
   // byte-identical replay of pre-V21 saves.
   let pos: { x: number; y: number } | null = null;
-  if (world.simVersion >= SIM_VERSION_V21_REPRODUCTION) {
-    const nurseTileX = ants.posX[nurseId]! >> FP_SHIFT;
-    const nurseTileY = ants.posY[nurseId]! >> FP_SHIFT;
-    let nurseChamber: ChamberRecord | null = null;
-    for (let c = 0; c < colony.chambers.length; c++) {
-      const ch = colony.chambers[c]!;
-      if (ch.chamberType !== ChamberType.Nursery) continue;
-      const bx = ch.posX >> FP_SHIFT;
-      const by = ch.posY >> FP_SHIFT;
-      if (nurseTileX >= bx && nurseTileX < bx + ch.width &&
-          nurseTileY >= by && nurseTileY < by + ch.height) {
-        nurseChamber = ch;
-        break;
-      }
+  const nurseTileX = ants.posX[nurseId]! >> FP_SHIFT;
+  const nurseTileY = ants.posY[nurseId]! >> FP_SHIFT;
+  let nurseChamber: ChamberRecord | null = null;
+  for (let c = 0; c < colony.chambers.length; c++) {
+    const ch = colony.chambers[c]!;
+    if (ch.chamberType !== ChamberType.Nursery) continue;
+    const bx = ch.posX >> FP_SHIFT;
+    const by = ch.posY >> FP_SHIFT;
+    if (nurseTileX >= bx && nurseTileX < bx + ch.width &&
+        nurseTileY >= by && nurseTileY < by + ch.height) {
+      nurseChamber = ch;
+      break;
     }
-    pos = nurseChamber !== null
-      ? computeDepositPositionInChamber(world, colony, broodId, nurseChamber)
-      : computeNurseryDepositPosition(world, colony, broodId); // fallback (pathological)
-  } else {
-    pos = computeNurseryDepositPosition(world, colony, broodId);
   }
+  pos = nurseChamber !== null
+    ? computeDepositPositionInChamber(world, colony, broodId, nurseChamber)
+    : computeNurseryDepositPosition(world, colony, broodId); // fallback (pathological)
   // Fallback: if the helper returns null (no grid, no Open Nursery tile —
   // test-harness or pathological state), keep the brood at the carrier's
   // current tile. Never reachable in production because the v10 path only
@@ -1368,19 +1338,14 @@ function depositCarriedBrood(
   // only starts when the pickup pool is empty — brood in the Queen chamber
   // receives zero maturation benefit, so transport must come first.
   // This check runs once per deposit (not per tick), keeping it cheap.
-  if (world.simVersion >= SIM_VERSION_V21_REPRODUCTION) {
-    if (colonyHasClaimableBrood(world, colony)) {
-      ants.task[nurseId]             = AntTask.Idle;
-      ants.subTask[nurseId]          = 0;
-      ants.searchPauseTicks[nurseId] = 0;
-    } else {
-      ants.subTask[nurseId]          = NursingSubState.Attending;
-      ants.searchPauseTicks[nurseId] = 0;
-      // task remains AntTask.Nursing — Attending is a Nursing substate
-    }
+  if (colonyHasClaimableBrood(world, colony)) {
+    ants.task[nurseId]             = AntTask.Idle;
+    ants.subTask[nurseId]          = 0;
+    ants.searchPauseTicks[nurseId] = 0;
   } else {
-    ants.task[nurseId]    = AntTask.Idle;
-    ants.subTask[nurseId] = 0;
+    ants.subTask[nurseId]          = NursingSubState.Attending;
+    ants.searchPauseTicks[nurseId] = 0;
+    // task remains AntTask.Nursing — Attending is a Nursing substate
   }
 }
 
@@ -1565,7 +1530,6 @@ export function getTaskDirection(
     // re-seeds to Queen tiles + uncarried-brood tiles outside Nursery.
     if (chamberFlowFields !== undefined) {
       const v10Carrying =
-        world.simVersion >= SIM_VERSION_V10_VISIBLE_BROOD_CARRY &&
         ants.subTask[antId] === NursingSubState.Feeding &&
         ants.carryingBroodId[antId] !== -1;
       const flowField = v10Carrying
@@ -1631,7 +1595,6 @@ export function getTaskDirection(
         ants, antId,
         bestChamberTileX - antTileX,
         bestChamberTileY - antTileY,
-        world.simVersion,
       );
       bestDx = unpackStepDx(step);
       bestDy = unpackStepDy(step);
@@ -1726,21 +1689,17 @@ export function tickSearchLeash(world: WorldState): void {
       colony.computedAllocation.dig > 0 || colony.computedAllocation.fight > 0;
     rebalanceNeeded[colony.colonyId] = overForage && nonForageDemand;
 
-    if (world.simVersion >= SIM_VERSION_V6_FORAGER_NO_REVISIT) {
-      const poolAtCap = colony.foodStored >= BASE_FOOD_STORAGE_CAPACITY;
-      let anyChamberDepositable = false;
-      if (poolAtCap) {
-        for (let c = 0; c < colony.chambers.length; c++) {
-          if (isFoodChamberDepositable(colony.chambers[c]!)) {
-            anyChamberDepositable = true;
-            break;
-          }
+    const poolAtCap = colony.foodStored >= BASE_FOOD_STORAGE_CAPACITY;
+    let anyChamberDepositable = false;
+    if (poolAtCap) {
+      for (let c = 0; c < colony.chambers.length; c++) {
+        if (isFoodChamberDepositable(colony.chambers[c]!)) {
+          anyChamberDepositable = true;
+          break;
         }
       }
-      noDepositTarget[colony.colonyId] = poolAtCap && !anyChamberDepositable;
-    } else {
-      noDepositTarget[colony.colonyId] = false;
     }
+    noDepositTarget[colony.colonyId] = poolAtCap && !anyChamberDepositable;
   }
 
   for (let id = 0; id < world.nextEntityId; id++) {
@@ -2087,12 +2046,10 @@ export function updateFightAntTargets(world: WorldState): void {
   // (no array copies; queen checked separately to avoid spreading the workers list).
   type AggroColony = { cid: number; workers: readonly number[]; queenEntityId: number };
   const aggroEnemyColonies: AggroColony[] = [];
-  if (world.simVersion >= SIM_VERSION_V17_COMBAT_AGGRO) {
-    for (const cidKey in world.colonies) {
-      if (!Object.hasOwn(world.colonies, cidKey)) continue;
-      const col = world.colonies[cidKey as unknown as keyof typeof world.colonies];
-      if (col) aggroEnemyColonies.push({ cid: Number(cidKey), workers: col.workers, queenEntityId: col.queenEntityId });
-    }
+  for (const cidKey in world.colonies) {
+    if (!Object.hasOwn(world.colonies, cidKey)) continue;
+    const col = world.colonies[cidKey as unknown as keyof typeof world.colonies];
+    if (col) aggroEnemyColonies.push({ cid: Number(cidKey), workers: col.workers, queenEntityId: col.queenEntityId });
   }
 
   for (let id = 0; id < ants.alive.length; id++) {
@@ -2117,8 +2074,7 @@ export function updateFightAntTargets(world: WorldState): void {
     // This block must run before the rp==null and zone===Underground blocks so invaders
     // don't get routed to their own colony's entrance inside a foreign grid.
     const currentGridColonyId = ants.currentGridColonyId[id]!;
-    if (world.simVersion >= SIM_VERSION_V13_INVARIANT_FIXES
-        && ants.zone[id] === 1 /* Underground */ && currentGridColonyId !== colonyId) {
+    if (ants.zone[id] === 1 /* Underground */ && currentGridColonyId !== colonyId) {
       // Always clear stale targets — tickAntMovement computes the correct direction.
       ants.targetPosX[id] = -1;
       ants.targetPosY[id] = -1;
@@ -2131,9 +2087,7 @@ export function updateFightAntTargets(world: WorldState): void {
         // Issue #62 (v12+) — pick nearest open entrance, fallback to nearest
         // closed if none open (fighters stack near soon-to-open shafts).
         // Pre-v12 always used entrances[0] regardless of isOpen.
-        const e = world.simVersion >= SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE
-          ? pickFighterTargetEntrance(entrances, ants.posX[id]! >> FP_SHIFT, ants.posY[id]! >> FP_SHIFT)
-          : entrances[0]!;
+        const e = pickFighterTargetEntrance(entrances, ants.posX[id]! >> FP_SHIFT, ants.posY[id]! >> FP_SHIFT);
         if (e !== null) {
           ants.targetPosX[id] = (e.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1);
           ants.targetPosY[id] = (e.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1);
@@ -2150,16 +2104,8 @@ export function updateFightAntTargets(world: WorldState): void {
     // Underground fighter with surface rally: route to nearest entrance first.
     // Zone promotion happens inside tickAntMovement when the ant crosses the shaft;
     // this pass only writes the fixed-point target coord.
-    //
-    // Issue #62 (v12+) — pick nearest OPEN entrance, fall back to nearest
-    // closed (fighters stack near soon-to-open shafts). Pre-v12 always
-    // routed to entrances[0] regardless of isOpen — fighters routed to a
-    // closed entrance walked to the surface column and stopped permanently
-    // since the zone-transition only promotes when isOpen.
     if (ants.zone[id] === 1 /* Underground */ && hasEntrances) {
-      const e = world.simVersion >= SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE
-        ? pickFighterTargetEntrance(entrances, ants.posX[id]! >> FP_SHIFT, ants.posY[id]! >> FP_SHIFT)
-        : entrances[0]!;
+      const e = pickFighterTargetEntrance(entrances, ants.posX[id]! >> FP_SHIFT, ants.posY[id]! >> FP_SHIFT);
       if (e !== null) {
         ants.targetPosX[id] = (e.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1);
         ants.targetPosY[id] = (e.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1);
@@ -2179,8 +2125,7 @@ export function updateFightAntTargets(world: WorldState): void {
     // enemy) — rallyOnEntrance is colony-agnostic (see precompute above): fighters
     // must walk to the exact tile so the descent trigger fires, whether it's an
     // invasion into an enemy grid or a defensive descent into their own grid.
-    if (world.simVersion >= SIM_VERSION_V17_COMBAT_AGGRO
-        && ants.zone[id] === Zone.Surface
+    if (ants.zone[id] === Zone.Surface
         && !rallyOnEntrance[colony.colonyId]) {
       const aggroZone = ants.zone[id];
       const aggroTileX = ants.posX[id]! >> FP_SHIFT;
@@ -2298,10 +2243,7 @@ export function routeForagerPriority(world: WorldState): void {
         // so a v11 snapshot loaded by v12 code would write tile-center
         // where the saved bytes had tile-corner — breaking SCEN-06
         // byte-identity for any save with priority foragers active.
-        const useTileCenter = world.simVersion >= SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE;
-        priorityTargets[colony.colonyId] = useTileCenter
-          ? { targetX: (pile.tileX << FP_SHIFT) + (FP_ONE >> 1), targetY: (pile.tileY << FP_SHIFT) + (FP_ONE >> 1) }
-          : { targetX: pile.tileX << FP_SHIFT, targetY: pile.tileY << FP_SHIFT };
+        priorityTargets[colony.colonyId] = { targetX: (pile.tileX << FP_SHIFT) + (FP_ONE >> 1), targetY: (pile.tileY << FP_SHIFT) + (FP_ONE >> 1) };
         break;
       }
     }
@@ -2733,7 +2675,7 @@ export function tickExcursionBoundary(world: WorldState): void {
       // deadband only suppresses ambient signals (scent + pheromone)
       // that drove the original flip-flop, never an explicit "go here"
       // command from the player.
-      if (world.simVersion >= SIM_VERSION_V8_LEASH_HYSTERESIS && !hasPriority) {
+      if (!hasPriority) {
         // colony.entrances.length >= 1 is guaranteed by the early-
         // continue at the top of this for-loop, so bestDist is
         // unconditionally overwritten by a non-negative Manhattan
@@ -2903,17 +2845,13 @@ export function tickPheromoneDeposit(world: WorldState): void {
   // Pre-v11 saves keep the bugged behaviour for replay determinism — the
   // pheromone grids round-trip through saves and any phantom trails baked
   // into a v10 snapshot must continue to influence v10-replay routing.
-  const v11OrLater = world.simVersion >= SIM_VERSION_V11_DEFENSIVE_BUNDLE;
-
   // S0a / issue #119 — V14+ uses a stronger deposit per step.
-  const depositAmount = world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX
-    ? FOOD_TRAIL_DEPOSIT_V14
-    : FOOD_TRAIL_DEPOSIT;
+  const depositAmount = FOOD_TRAIL_DEPOSIT_V14;
 
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1) continue;
     if (ants.foodCarrying[id]! <= 0) continue;
-    if (v11OrLater && ants.zone[id] !== Zone.Surface) continue;
+    if (ants.zone[id] !== Zone.Surface) continue;
 
     const colonyId = ants.colonyId[id]!;
     const tileX = ants.posX[id]! >> FP_SHIFT;
@@ -3151,22 +3089,20 @@ export function pickSurfaceDetour(
     //   - Single-tile dead-ends (ahead blocked, ahead2 walkable or OOB)
     //     are not "pockets"; the post-step guard's existing handling
     //     escapes them in one detour cycle. Don't penalize.
-    if (world.simVersion >= SIM_VERSION_V11_DEFENSIVE_BUNDLE) {
-      const aheadX = cx + pdx;
-      const aheadY = cy + pdy;
-      const aheadInBounds = aheadX >= 0 && aheadY >= 0
-        && aheadX < SURFACE_GRID_WIDTH && aheadY < SURFACE_GRID_HEIGHT;
-      // Only penalize when (ahead in-bounds AND blocked) AND (ahead2 in-bounds AND blocked).
-      // This isolates the multi-tile-feature pocket case from OOB + shallow dead-ends.
-      if (aheadInBounds && !canEnterSurfaceTile(world, aheadX, aheadY)) {
-        const ahead2X = aheadX + pdx;
-        const ahead2Y = aheadY + pdy;
-        const ahead2InBounds = ahead2X >= 0 && ahead2Y >= 0
-          && ahead2X < SURFACE_GRID_WIDTH && ahead2Y < SURFACE_GRID_HEIGHT;
-        if (ahead2InBounds && !canEnterSurfaceTile(world, ahead2X, ahead2Y)) {
-          // Real pocket: dominate Manhattan differences in this 128x128 grid.
-          score += 1000;
-        }
+    const aheadX = cx + pdx;
+    const aheadY = cy + pdy;
+    const aheadInBounds = aheadX >= 0 && aheadY >= 0
+      && aheadX < SURFACE_GRID_WIDTH && aheadY < SURFACE_GRID_HEIGHT;
+    // Only penalize when (ahead in-bounds AND blocked) AND (ahead2 in-bounds AND blocked).
+    // This isolates the multi-tile-feature pocket case from OOB + shallow dead-ends.
+    if (aheadInBounds && !canEnterSurfaceTile(world, aheadX, aheadY)) {
+      const ahead2X = aheadX + pdx;
+      const ahead2Y = aheadY + pdy;
+      const ahead2InBounds = ahead2X >= 0 && ahead2Y >= 0
+        && ahead2X < SURFACE_GRID_WIDTH && ahead2Y < SURFACE_GRID_HEIGHT;
+      if (ahead2InBounds && !canEnterSurfaceTile(world, ahead2X, ahead2Y)) {
+        // Real pocket: dominate Manhattan differences in this 128x128 grid.
+        score += 1000;
       }
     }
     // Recent-tiles preference (not a hard filter): a Foraging ant whose
@@ -3200,8 +3136,7 @@ export function pickSurfaceDetour(
   // exhaustion" behaviour for byte-identical replay (SCEN-06).
   if (
     bestScore < 0 &&
-    bestRecentScore >= 0 &&
-    world.simVersion >= SIM_VERSION_V8_LEASH_HYSTERESIS
+    bestRecentScore >= 0
   ) {
     bestDx = bestRecentDx;
     bestDy = bestRecentDy;
@@ -3520,7 +3455,7 @@ function moveQueens(
       // at other slopes. Replaces the prior `Math.abs(rawDx) >=
       // Math.abs(rawDy)` greedy axis pick that exhausted the leading
       // axis before switching, producing visible stair-step.
-      const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY, world.simVersion);
+      const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY);
       dx = unpackStepDx(step);
       dy = unpackStepDy(step);
     } else if (zone === Zone.Surface) {
@@ -3567,7 +3502,7 @@ function moveQueens(
       }
       if (targetTileX < 0) continue; // no open entrance — queen cannot descend yet.
       // Issue #34: see pickCardinalStep helper above.
-      const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY, world.simVersion);
+      const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY);
       dx = unpackStepDx(step);
       dy = unpackStepDy(step);
     } else {
@@ -3646,7 +3581,7 @@ function moveQueens(
         }
         if (targetTileX < 0) continue;
         // Issue #34: see pickCardinalStep helper above.
-        const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY, world.simVersion);
+        const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY);
         dx = unpackStepDx(step);
         dy = unpackStepDy(step);
       }
@@ -3662,10 +3597,7 @@ function moveQueens(
     // speed regardless. Uses the per-tick cache when available; falls back
     // to direct compute when called from a test harness without a cache.
     let speed = baseSpeed;
-    if (
-      world.simVersion >= SIM_VERSION_V7_SURFACE_PASSABILITY &&
-      zone === Zone.Surface
-    ) {
+    if (zone === Zone.Surface) {
       const movement = surfaceMoveCache !== undefined
         ? surfaceMovementAtCached(world, tileX, tileY, surfaceMoveCache)
         : surfaceMovementAt(world, tileX, tileY);
@@ -3718,11 +3650,8 @@ function moveQueens(
       }
     }
 
-    // Surface passability guard + detour (issue #44 step 4 — gated on v6).
-    // Mirrors the underground guard above. Pre-v6 queens replay with no
-    // surface passability to keep SCEN-06 byte-identity.
+    // Surface passability guard + detour.
     if (
-      world.simVersion >= SIM_VERSION_V7_SURFACE_PASSABILITY &&
       zone === Zone.Surface &&
       (dx !== 0 || dy !== 0)
     ) {
@@ -3969,18 +3898,9 @@ export function tickAntMovement(
               const dist = Math.abs(cx - antTileX) + Math.abs(cy - antTileY);
               if (bestDist < 0 || dist < bestDist) {
                 bestDist = dist;
-                // Issue #70 — tile-center, not tile-corner. Codex P1 gate
-                // behind V12: targetPos values round-trip through saves,
-                // so changing the writer breaks SCEN-06 byte-identity for
-                // pre-v12 snapshots even though the cardinal step pick is
-                // unchanged.
-                if (world.simVersion >= SIM_VERSION_V12_SIM_CORRECTNESS_BUNDLE) {
-                  chamberTargetX = (cx << FP_SHIFT) + (FP_ONE >> 1);
-                  chamberTargetY = (cy << FP_SHIFT) + (FP_ONE >> 1);
-                } else {
-                  chamberTargetX = cx << FP_SHIFT;
-                  chamberTargetY = cy << FP_SHIFT;
-                }
+                // Issue #70 — tile-center, not tile-corner.
+                chamberTargetX = (cx << FP_SHIFT) + (FP_ONE >> 1);
+                chamberTargetY = (cy << FP_SHIFT) + (FP_ONE >> 1);
               }
             }
           }
@@ -4147,7 +4067,6 @@ export function tickAntMovement(
           ants, id,
           (chamberTargetX >> FP_SHIFT) - (posX >> FP_SHIFT),
           (chamberTargetY >> FP_SHIFT) - (posY >> FP_SHIFT),
-          world.simVersion,
         );
         dx = unpackStepDx(step);
         dy = unpackStepDy(step);
@@ -4233,7 +4152,6 @@ export function tickAntMovement(
         && zone === Zone.Surface
         && isHomeBoundForager
         && entranceFlowFields !== undefined
-        && world.simVersion >= SIM_VERSION_V11_DEFENSIVE_BUNDLE
       ) {
         const colonyId = ants.colonyId[id]!;
         const surfaceField = entranceFlowFields.surface[colonyId];
@@ -4268,7 +4186,6 @@ export function tickAntMovement(
           ants, id,
           (entranceTargetX >> FP_SHIFT) - (posX >> FP_SHIFT),
           (entranceTargetY >> FP_SHIFT) - (posY >> FP_SHIFT),
-          world.simVersion,
         );
         dx = unpackStepDx(step);
         dy = unpackStepDy(step);
@@ -4298,7 +4215,6 @@ export function tickAntMovement(
       // default constants (probability 1/50, duration 5-9 ticks). Tuned to
       // stay inside the ±15% throughput band acceptance criterion.
       if (
-        world.simVersion >= SIM_VERSION_V4_DIAGONAL_MOTION &&
         ants.subTask[id] === ForagingSubState.SearchingFood &&
         zone === Zone.Surface
       ) {
@@ -4332,7 +4248,6 @@ export function tickAntMovement(
           ants, id,
           (targetX >> FP_SHIFT) - (posX >> FP_SHIFT),
           (targetY >> FP_SHIFT) - (posY >> FP_SHIFT),
-          world.simVersion,
         );
         dx = unpackStepDx(step);
         dy = unpackStepDy(step);
@@ -4349,7 +4264,7 @@ export function tickAntMovement(
         const scent = findNearestScentPile(world, tileX, tileY);
         if (scent !== null) {
           // Issue #34: see pickCardinalStep helper above.
-          const step = pickCardinalStep(ants, id, scent.tileX - tileX, scent.tileY - tileY, world.simVersion);
+          const step = pickCardinalStep(ants, id, scent.tileX - tileX, scent.tileY - tileY);
           dx = unpackStepDx(step);
           dy = unpackStepDy(step);
         } else {
@@ -4453,9 +4368,8 @@ export function tickAntMovement(
           const hostile = pickNearestHostileUnderground(ants, id, gridColonyId);
           if (hostile !== null) {
             const invUnderground = world.undergroundGrids[gridColonyId];
-            if (invUnderground
-                && world.simVersion >= SIM_VERSION_V18_INVADER_WALL_AWARE_STEP) {
-              // V17+: wall-aware greedy step — avoids freezing against solid
+            if (invUnderground) {
+              // Wall-aware greedy step — avoids freezing against solid
               // walls that blocked the direct cardinal path. See
               // pickInvaderUndergroundStep. Routes through rawDx/rawDy so the
               // shared pickCardinalStep block does the FP→step conversion.
@@ -4467,8 +4381,6 @@ export function tickAntMovement(
               rawDx = unpackStepDx(step) * FP_ONE;
               rawDy = unpackStepDy(step) * FP_ONE;
             } else {
-              // Pre-V17 (or missing grid): raw direction — may freeze on walls
-              // but preserves replay byte-identity for older saves.
               rawDx = hostile.targetX - posX;
               rawDy = hostile.targetY - posY;
             }
@@ -4496,7 +4408,7 @@ export function tickAntMovement(
         const targetTileY = (rawDy + posY) >> FP_SHIFT;
         const tileX = posX >> FP_SHIFT;
         const tileY = posY >> FP_SHIFT;
-        const step = pickCardinalStep(ants, id, targetTileX - tileX, targetTileY - tileY, world.simVersion);
+        const step = pickCardinalStep(ants, id, targetTileX - tileX, targetTileY - tileY);
         dx = unpackStepDx(step);
         dy = unpackStepDy(step);
       } else {
@@ -4526,7 +4438,6 @@ export function tickAntMovement(
     // (dx=dy=0); the buffer-push gate (only on actual tile crossings) keeps
     // pause ticks from polluting history.
     if (
-      world.simVersion >= SIM_VERSION_V6_FORAGER_NO_REVISIT &&
       zone === Zone.Surface &&
       task === AntTask.Foraging &&
       ants.subTask[id] === ForagingSubState.SearchingFood &&
@@ -4578,7 +4489,6 @@ export function tickAntMovement(
     // (dx=dy=0) would deadlock the ant permanently because the ring buffer
     // only advances on tile crossings and never ages out while stationary.
     if (
-      world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX &&
       zone === Zone.Underground &&
       task === AntTask.Foraging &&
       ants.subTask[id] === ForagingSubState.CarryingFood &&
@@ -4621,10 +4531,7 @@ export function tickAntMovement(
     // Underground ants skip the check entirely (zone gate). Per-tick cache
     // memoises the lookup so repeated same-tile queries are O(1).
     let speed = baseSpeed;
-    if (
-      world.simVersion >= SIM_VERSION_V7_SURFACE_PASSABILITY &&
-      zone === Zone.Surface
-    ) {
+    if (zone === Zone.Surface) {
       const tileX = prevPosX >> FP_SHIFT;
       const tileY = prevPosY >> FP_SHIFT;
       if (surfaceMovementAtCached(world, tileX, tileY, surfaceMoveCache) === SurfaceMovementEffect.SoftCost) {
@@ -4699,7 +4606,6 @@ export function tickAntMovement(
     // the best walkable adjacent tile. Pre-v6 saves replay with no surface
     // passability — same coordinate-only motion they recorded.
     if (
-      world.simVersion >= SIM_VERSION_V7_SURFACE_PASSABILITY &&
       zone === Zone.Surface &&
       (dx !== 0 || dy !== 0)
     ) {
@@ -4816,12 +4722,10 @@ export function tickAntMovement(
           ants.searchPrevTileY[id] = preTileY;
         }
         // Push the just-vacated tile onto the recent-tiles ring buffer
-        // for ANY surface Foraging ant (v6+). Pause ticks (no tile
+        // for ANY surface Foraging ant. Pause ticks (no tile
         // crossing) intentionally do NOT push, so the buffer tracks
         // distinct moves rather than ticks.
-        if (world.simVersion >= SIM_VERSION_V6_FORAGER_NO_REVISIT) {
-          pushRecentTile(ants, id, preTileX, preTileY);
-        }
+        pushRecentTile(ants, id, preTileX, preTileY);
       }
     }
 
@@ -4831,7 +4735,6 @@ export function tickAntMovement(
     // tile crossings (same as the surface path); pause ticks don't advance
     // the buffer. Cleared on full deposit (antDepositFood clearRecentTiles).
     if (
-      world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX &&
       zone === Zone.Underground &&
       task === AntTask.Foraging &&
       ants.subTask[id] === ForagingSubState.CarryingFood
@@ -4964,11 +4867,7 @@ export function tickAntMovement(
             // V14: clear the recent-tiles ring buffer on descent so stale
             // surface coordinates don't produce false-positive no-revisit
             // deflections in the underground CarryingFood guard.
-            // Gated on V14 to preserve byte-identical replay for V13 saves
-            // (the ring buffer was serialized and used by the V6+ surface guard).
-            if (world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX) {
-              clearRecentTiles(ants, id);
-            }
+            clearRecentTiles(ants, id);
             descended = true;
             break;
           }
@@ -5008,19 +4907,16 @@ export function tickAntMovement(
           //       accidentally masked this by failing to find an entrance,
           //       which is also why the warp-home bug only surfaced on
           //       coincidental tileX alignment.
-          const useGridColony = world.simVersion >= SIM_VERSION_V13_INVARIANT_FIXES;
           const inOwnGrid = ants.currentGridColonyId[id] === ants.colonyId[id];
           // Recalled invaders (fight ratio zeroed or rally cleared) must be able to
           // exit the enemy underground, so skipAscent is cleared for them.
-          const ownColonyForAscent = useGridColony ? world.colonies[ants.colonyId[id]!] : undefined;
-          const isRecallingFromForeign = useGridColony && !inOwnGrid
+          const ownColonyForAscent = world.colonies[ants.colonyId[id]!];
+          const isRecallingFromForeign = !inOwnGrid
             && ownColonyForAscent != null
             && (ownColonyForAscent.targetRatio.fight === 0 || ownColonyForAscent.rallyPoint == null);
-          const skipAscent = useGridColony && task === AntTask.Fighting && !inOwnGrid && !isRecallingFromForeign;
+          const skipAscent = task === AntTask.Fighting && !inOwnGrid && !isRecallingFromForeign;
           if (!skipAscent) {
-            const lookupColonyId = useGridColony
-              ? ants.currentGridColonyId[id]!
-              : ants.colonyId[id]!;
+            const lookupColonyId = ants.currentGridColonyId[id]!;
             const colony = world.colonies[lookupColonyId];
             if (colony && colony.entrances) {
               for (let e = 0; e < colony.entrances.length; e++) {
@@ -5028,14 +4924,12 @@ export function tickAntMovement(
                 if (entrance.isOpen && entrance.surfaceTileX === tileX) {
                   ants.zone[id] = Zone.Surface;
                   ants.posY[id] = entrance.surfaceTileY << FP_SHIFT;
-                  if (useGridColony) {
-                    // Restore the surface invariant. For ants in their own
-                    // grid this is a no-op (already equal). For an invader
-                    // who eventually leaves via the enemy entrance after
-                    // being re-promoted out of Fighting (e.g. Idle), this
-                    // snaps the grid id back to their own colony.
-                    ants.currentGridColonyId[id] = ants.colonyId[id]!;
-                  }
+                  // Restore the surface invariant. For ants in their own
+                  // grid this is a no-op (already equal). For an invader
+                  // who eventually leaves via the enemy entrance after
+                  // being re-promoted out of Fighting (e.g. Idle), this
+                  // snaps the grid id back to their own colony.
+                  ants.currentGridColonyId[id] = ants.colonyId[id]!;
                   break;
                 }
               }
@@ -5122,9 +5016,7 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     // pre-v13 this resolver keyed on the raw gridColonyId, so two same-
     // colony surface ants with diverging `currentGridColonyId` (post-#106
     // ascent bug) produced different keys and stacked silently.
-    const gridByte = world.simVersion >= SIM_VERSION_V13_INVARIANT_FIXES && zone !== Zone.Underground
-      ? 0
-      : rawGridColonyId;
+    const gridByte = zone !== Zone.Underground ? 0 : rawGridColonyId;
     const key = (gridByte << 23) | (colonyId << 16) | (zone << 15) | (tileY << 7) | tileX;
     if (!occupancy.has(key)) {
       occupancy.set(key, id);
@@ -5152,14 +5044,8 @@ function resolveSameColonyOccupancy(world: WorldState): void {
       } else {
         if (nx < 0 || nx >= SURFACE_GRID_WIDTH) continue;
         if (ny < 0 || ny >= SURFACE_GRID_HEIGHT) continue;
-        // Issue #44 step 4 — gated. Don't bump a same-colony collision
-        // into a HardBlock tile. Pre-v6 saves replay with no surface
-        // passability check (matches the pre-#44 behavior where the
-        // resolver only bounds-checked the surface candidate).
-        if (
-          world.simVersion >= SIM_VERSION_V7_SURFACE_PASSABILITY &&
-          !canEnterSurfaceTile(world, nx, ny)
-        ) continue;
+        // Don't bump a same-colony collision into a HardBlock tile.
+        if (!canEnterSurfaceTile(world, nx, ny)) continue;
       }
       // Exempt adjacent tiles are always "free" — we shift into them and do
       // not claim them (keeping them open for further stacking).

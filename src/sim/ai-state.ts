@@ -8,7 +8,6 @@
 // NORMAL_TIER_INDEX lookup sites on SIM_VERSION_V22_DIFFICULTY and uses tierIndex(world.difficulty).
 
 import type { WorldState, AIState, AIStateRecord } from './types.js';
-import { SIM_VERSION_V22_DIFFICULTY } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { ClearRallyPointCommand } from './commands.js';
 import { emitEvent } from './telemetry.js';
@@ -272,7 +271,7 @@ function _tryTransitionPeacetimeToWarFooting(
 
   // CF-P1-010: aiReady AND (ageReady OR frontageReady)
   const aiReady =
-    fighters >= AI_WARFOOTING_FIGHTER_THRESHOLD[world.simVersion >= SIM_VERSION_V22_DIFFICULTY ? tierIndex(world.difficulty) : NORMAL_TIER_INDEX] &&
+    fighters >= AI_WARFOOTING_FIGHTER_THRESHOLD[tierIndex(world.difficulty)] &&
     foodStored * 100 >= foodCap * AI_WARFOOTING_FOOD_FRAC_PCT;
 
   const ageReady = world.tick >= AI_WARFOOTING_MIN_TICK;
@@ -300,7 +299,7 @@ function _checkWarFootingToInvading(
   const foodCap = aiFoodCapacity(world, aiColonyId);
 
   if (
-    fighters >= AI_INVADING_FIGHTER_THRESHOLD[world.simVersion >= SIM_VERSION_V22_DIFFICULTY ? tierIndex(world.difficulty) : NORMAL_TIER_INDEX] &&
+    fighters >= AI_INVADING_FIGHTER_THRESHOLD[tierIndex(world.difficulty)] &&
     foodStored * 100 >= foodCap * AI_INVADING_FOOD_FRAC_PCT &&
     world.tick >= AI_INVADING_MIN_TICK
   ) {
@@ -385,7 +384,7 @@ function _checkInvadingToRecovery(
       // ClearRallyPoint. advanceAIState still emits ai_state_transition after this returns.
       aiState.state = 'Recovery';
       aiState.enteredTick = world.tick;
-      aiState.recoveryEndTick = world.tick + AI_RECOVERY_DURATION_TICKS[world.simVersion >= SIM_VERSION_V22_DIFFICULTY ? tierIndex(world.difficulty) : NORMAL_TIER_INDEX];
+      aiState.recoveryEndTick = world.tick + AI_RECOVERY_DURATION_TICKS[tierIndex(world.difficulty)];
       aiState.invasionStartTick = 0;
       aiState.invasionRallyTileX = -1;
       aiState.invasionRallyTileY = -1;
@@ -444,7 +443,7 @@ function _endInvasion(
   world.commandQueue.push(clearCmd);
   aiState.state = 'Recovery';
   aiState.enteredTick = world.tick;
-  aiState.recoveryEndTick = world.tick + AI_RECOVERY_DURATION_TICKS[world.simVersion >= SIM_VERSION_V22_DIFFICULTY ? tierIndex(world.difficulty) : NORMAL_TIER_INDEX];
+  aiState.recoveryEndTick = world.tick + AI_RECOVERY_DURATION_TICKS[tierIndex(world.difficulty)];
   aiState.invasionStartTick = 0;
   aiState.invasionRallyTileX = -1;
   aiState.invasionRallyTileY = -1;

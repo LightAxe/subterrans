@@ -19,7 +19,6 @@
 
 import * as Phaser from 'phaser';
 import type { WorldState } from '../sim/types.js';
-import { SIM_VERSION_V5_CHAMBER_ON_MARKED } from '../sim/types.js';
 import type { ViewState } from '../render/camera.js';
 import { screenToTile } from '../render/camera.js';
 import { ugGet, UndergroundTileState } from '../sim/terrain.js';
@@ -415,8 +414,6 @@ export function handleUndergroundRightClick(
   // anyway, so don't open a menu the player can't act on.
   if (tileY === UNDERGROUND_CEILING_ROW_Y) return;
   const tileState = ugGet(grid, tileX, tileY);
-  const v5OrLater = world.simVersion >= SIM_VERSION_V5_CHAMBER_ON_MARKED;
-
   if (tileState === UndergroundTileState.Marked) {
     // CancelDigMark — only on Marked tiles (CTRL-04: BeingDug finish-then-switch).
     const cmd: CancelDigMarkCommand = {
@@ -434,27 +431,11 @@ export function handleUndergroundRightClick(
   // anyway via gate (e); avoid surfacing a doomed menu).
   if (tileState === UndergroundTileState.BeingDug) return;
 
-  if (v5OrLater) {
-    // Issue #38 — Solid OR Open. The sim handles reachability rejection
-    // post-selection. Pre-flight check: bounds were already validated above,
-    // ceiling row excluded above. Defer the actual show by a frame to keep
-    // the UIScene pointerdown SHOW-race defense (see below).
-    requestShowContextMenu(screenX, screenY, tileX, tileY);
-    return;
-  }
-
-  // Pre-v5 legacy path — Open tunnel end only.
-  if (tileState === UndergroundTileState.Open && isTunnelEnd(world, tileX, tileY, PLAYER_COLONY_ID)) {
-    // Deferred show: UIScene's pointerdown handler runs in the same dispatch as
-    // this one and would otherwise see visible=true and mis-interpret this same
-    // right-click as a menu-item selection (the menu is anchored at the click).
-    // requestShowContextMenu stores the anchor but defers the visible flip to
-    // the next UIScene.update frame. See context-menu-state.ts for the full
-    // rationale — the SHOW race is symmetric with the HIDE race that module
-    // already defends against.
-    requestShowContextMenu(screenX, screenY, tileX, tileY);
-  }
-  // Solid / non-tunnel-end Open → no-op (legacy behavior).
+  // Issue #38 — Solid OR Open. The sim handles reachability rejection
+  // post-selection. Pre-flight check: bounds were already validated above,
+  // ceiling row excluded above. Defer the actual show by a frame to keep
+  // the UIScene pointerdown SHOW-race defense (see below).
+  requestShowContextMenu(screenX, screenY, tileX, tileY);
 }
 
 // ---------------------------------------------------------------------------
