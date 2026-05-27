@@ -966,24 +966,8 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
     expect(world.commandQueue[0]).toMatchObject({ type: 'MarkSpiderPriority', isPriority: false });
   });
 
-  it('right-click at trailing-edge tile (t-3) dispatches spider priority (movement-lag coverage)', () => {
-    // Hit box is [t-3, t+2]: the extra tile accounts for SPIDER_SPEED=1 tile/tick movement lag
-    // where the rendered sprite can trail 1 tile behind the sim position.
-    const world = makeWorld({
-      surfaceWidth: 128,
-      surfaceHeight: 64,
-      spider: makeSpider(),
-      spiderPriorityColonyId: null,
-    });
-    const vs = makeViewState('surface', CAM_X, CAM_Y);
-    const state = makeState();
-    const { x, y } = tileToScreen(SPIDER_TILE_X - 3, SPIDER_TILE_Y - 3, CAM_X, CAM_Y);
-    handleSurfaceRightClick(world, vs, x, y, state);
-    expect(world.commandQueue).toHaveLength(1);
-    expect(world.commandQueue[0]).toMatchObject({ type: 'MarkSpiderPriority' });
-  });
-
-  it('right-click at t-2 (static sprite left edge) also dispatches spider priority', () => {
+  it('right-click at t-2 (static sprite left edge) dispatches spider priority', () => {
+    // Hit box is [t-2, t+1]: covers the full 48px sprite centered at the tile left-edge pixel.
     const world = makeWorld({
       surfaceWidth: 128,
       surfaceHeight: 64,
@@ -996,6 +980,23 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
     handleSurfaceRightClick(world, vs, x, y, state);
     expect(world.commandQueue).toHaveLength(1);
     expect(world.commandQueue[0]).toMatchObject({ type: 'MarkSpiderPriority' });
+  });
+
+  it('right-click at t-3 (outside sprite bounds) falls through to entrance preview', () => {
+    // t-3 is outside the [t-2, t+1] hit box — an empty tile there should still preview an entrance.
+    const world = makeWorld({
+      surfaceWidth: 128,
+      surfaceHeight: 64,
+      spider: makeSpider(),
+      spiderPriorityColonyId: null,
+    });
+    const vs = makeViewState('surface', CAM_X, CAM_Y);
+    const state = makeState();
+    const { x, y } = tileToScreen(SPIDER_TILE_X - 3, SPIDER_TILE_Y - 3, CAM_X, CAM_Y);
+    handleSurfaceRightClick(world, vs, x, y, state);
+    expect(world.commandQueue).toHaveLength(0);
+    expect(state.pendingEntranceTileX).toBe(SPIDER_TILE_X - 3);
+    expect(state.pendingEntranceTileY).toBe(SPIDER_TILE_Y - 3);
   });
 
   it('right-click on spider tile does NOT set pendingEntrance or push ClearRallyPoint', () => {

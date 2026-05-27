@@ -320,19 +320,18 @@ export function handleSurfaceRightClick(
   if (tileX < 0 || tileY < 0) return;
 
   // Spider priority toggle (S7/D1): right-click within the spider's visible sprite area.
-  // Hit-test uses [t-3, t+2] in each axis for two reasons:
-  //   1. The 48px sprite is centered at the tile's left-edge pixel (posX * TILE_SIZE_PX / FP_ONE),
-  //      so the static sprite covers tiles [t-2, t+1] rather than the symmetric [t-1, t+1].
-  //   2. SPIDER_SPEED = FP_ONE (1 tile/tick): during the first half of any movement tick the
-  //      visual interpolation puts the rendered sprite 1 tile behind the sim position, so the
-  //      trailing edge reaches tile t-3 (or t+2 when moving the other way). Expanding by one
-  //      extra tile covers all visible pixels regardless of movement direction.
+  // The 48px sprite is centered at the tile's left-edge pixel (posX * TILE_SIZE_PX / FP_ONE),
+  // so the static sprite covers tiles [t-2, t+1] in each axis. The symmetric [t-1, t+1] would
+  // miss the leftmost 8px of the sprite.
+  // Known limitation: during the first half of a movement tick the renderer shows the sprite
+  // ~1 tile behind the sim position (SPIDER_SPEED = FP_ONE). Expanding the box further to cover
+  // this would intercept empty-tile clicks on the spider's leading side (Codex P2 feedback).
   if (world.spider !== null) {
     const spiderTileX = world.spider.posX >> FP_SHIFT;
     const spiderTileY = world.spider.posY >> FP_SHIFT;
     if (
-      tileX >= spiderTileX - 3 && tileX <= spiderTileX + 2 &&
-      tileY >= spiderTileY - 3 && tileY <= spiderTileY + 2
+      tileX >= spiderTileX - 2 && tileX <= spiderTileX + 1 &&
+      tileY >= spiderTileY - 2 && tileY <= spiderTileY + 1
     ) {
       state.pendingEntranceTileX = null;
       state.pendingEntranceTileY = null;
