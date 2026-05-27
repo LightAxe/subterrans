@@ -124,19 +124,75 @@ function buildStrategySignals(world: WorldState): StrategySignals {
   };
 }
 
-function buildOutcomeAttribution(events: SimEvent[]): OutcomeAttribution {
+// S6: game outcome label passed in from game-scene when available,
+// used to pick the tiebreak narrative for StalemateTiebreak.
+export type GameOutcomeLabel = 'Victory' | 'Defeat' | 'MutualDestruction';
+
+export function buildOutcomeAttribution(
+  events: SimEvent[],
+  gameOutcome?: GameOutcomeLabel,
+): OutcomeAttribution {
+  // S6: check for S5 tiebreak events first (round_end fires before queen_death in tick order).
+  for (const ev of events) {
+    if (ev.type === 'round_end') {
+      const { reason } = ev.payload;
+      if (reason === 'TimeoutTiebreak') {
+        const { playerWorkerCount, aiWorkerCount } = ev.payload;
+        let narrative: string;
+        if (playerWorkerCount > aiWorkerCount) {
+          narrative = 'The round timed out; your colony outlasted the enemy.';
+        } else if (aiWorkerCount > playerWorkerCount) {
+          narrative = 'The round timed out; the enemy colony outlasted yours.';
+        } else {
+          narrative = 'Both colonies were evenly matched when time ran out.';
+        }
+        return { primaryCause: 'TimeoutTiebreak', narrativeSeed: narrative };
+      } else {
+        // StalemateTiebreak: S5 always returns MutualDestruction; distinguish
+        // by gameOutcome if provided, otherwise use a neutral fallback.
+        let narrative: string;
+        if (gameOutcome === 'Victory') {
+          narrative = 'Both colonies ran out of food; the enemy starved first.';
+        } else if (gameOutcome === 'Defeat') {
+          narrative = 'Both colonies ran out of food; your queen starved first.';
+        } else {
+          narrative = 'Both colonies ran out of food and the round ended in a draw.';
+        }
+        return { primaryCause: 'StalemateTiebreak', narrativeSeed: narrative };
+      }
+    }
+  }
+  // S6: updated queen_death narrative strings (more descriptive than S0b's).
   for (const ev of events) {
     if (ev.type === 'queen_death') {
       const cause = ev.payload.cause;
       if (cause === null) {
-        return { primaryCause: null, narrativeSeed: null };
+        // Legacy traces (simVersion < V16) omit cause; derive direction from gameOutcome
+        // so a Victory doesn't display a defeat line.
+        let narrative: string;
+        if (gameOutcome === 'Victory') {
+          narrative = 'The enemy colony has fallen.';
+        } else if (gameOutcome === 'MutualDestruction') {
+          narrative = 'Both queens fell in the final battle.';
+        } else {
+          narrative = 'Your colony has fallen.';
+        }
+        return { primaryCause: null, narrativeSeed: narrative };
       }
-      const narratives: Record<string, string> = {
-        InvasionKill: 'The enemy colony overran your nest',
-        SpiderRampage: 'A spider rampage reached your queen',
-        Starvation: 'Your colony starved',
-        MutualDestruction: 'Both queens fell at the same time',
+      // queen_death can describe either queen; use gameOutcome to pick perspective.
+      const victoryNarratives: Record<string, string> = {
+        InvasionKill:      'Your fighters broke through to the enemy queen.',
+        SpiderRampage:     'The spider reached the enemy nursery and killed their queen.',
+        Starvation:        'The enemy queen starved after their colony ran out of food.',
+        MutualDestruction: 'Both queens died in the same final fight.',
       };
+      const defeatNarratives: Record<string, string> = {
+        InvasionKill:      'Enemy fighters broke through a tunnel entrance and reached your queen.',
+        SpiderRampage:     'The spider reached your nursery and killed the queen.',
+        Starvation:        'Your queen starved after the colony ran out of food.',
+        MutualDestruction: 'Both queens died in the same final fight.',
+      };
+      const narratives = gameOutcome === 'Victory' ? victoryNarratives : defeatNarratives;
       return {
         primaryCause: cause,
         narrativeSeed: narratives[cause] ?? null,
@@ -207,10 +263,12 @@ function buildTunableObserved(events: SimEvent[]): TunableObserved {
  * @param world          - The terminal WorldState (post-outcome).
  * @param resumedFromSave - True if the session was loaded from a save; causes
  *                         eventsCoverage to be 'since_load'.
+ * @param gameOutcome    - S6: optional outcome label for tiebreak narrative selection.
  */
 export function buildPlaytraceSummary(
   world: WorldState,
   resumedFromSave: boolean,
+  gameOutcome?: GameOutcomeLabel,
 ): PlaytraceSummary {
   const events = world.events;
 
@@ -221,7 +279,7 @@ export function buildPlaytraceSummary(
 
   return {
     strategySignals: buildStrategySignals(world),
-    outcomeAttribution: buildOutcomeAttribution(events),
+    outcomeAttribution: buildOutcomeAttribution(events, gameOutcome),
     combatAggregate: buildCombatAggregate(events),
     tunableObserved: buildTunableObserved(events),
     eventOverflow: {

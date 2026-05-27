@@ -925,7 +925,12 @@ export class UIScene extends Phaser.Scene {
   // Phase 9 Plan 06 — GameOver overlay
   // ---------------------------------------------------------------------------
 
-  public showGameOverOverlay(outcome: GameOutcome, cause: QueenDeathCause, onRestart: () => void): void {
+  public showGameOverOverlay(
+    outcome: GameOutcome,
+    cause: QueenDeathCause,
+    onRestart: () => void,
+    narrativeSeed?: string | null,
+  ): void {
     this.hideGameOverOverlay(); // clear any prior instance first
 
     const W = 800;
@@ -945,12 +950,17 @@ export class UIScene extends Phaser.Scene {
     title.setOrigin(0.5);
     title.setDepth(21);
 
-    // Cause line — why the relevant queen died.
-    const causeText = formatCauseSubtitle(outcome, cause);
+    // S6: prefer narrativeSeed from summary-builder; fall back to formatCauseSubtitle
+    // for pre-V22 saves or cases where buildPlaytraceSummary returns null.
+    const causeText = (narrativeSeed != null && narrativeSeed !== '')
+      ? narrativeSeed
+      : formatCauseSubtitle(outcome, cause);
     const causeLabel = this.add.text(W / 2, H / 2 - 25, causeText, {
-      fontSize: '20px',
+      fontSize: '18px',
       fontFamily: 'monospace',
       color: '#ffffff',
+      wordWrap: { width: 680 },
+      align: 'center',
     });
     causeLabel.setOrigin(0.5);
     causeLabel.setDepth(21);
@@ -961,8 +971,8 @@ export class UIScene extends Phaser.Scene {
     const world = this.getWorld();
     const playerColony = world?.colonies[_PLAYER_COLONY_ID];
     const killCount = playerColony?.killCount ?? 0;
-    const subtitle = this.add.text(W / 2, H / 2 + 10, formatKillStatsSubtitle(killCount), {
-      fontSize: '18px',
+    const subtitle = this.add.text(W / 2, H / 2 + 20, formatKillStatsSubtitle(killCount), {
+      fontSize: '16px',
       fontFamily: 'monospace',
       color: '#cccccc',
     });
@@ -992,6 +1002,40 @@ export class UIScene extends Phaser.Scene {
 
     this.gameOverGroup = [bg, title, causeLabel, subtitle, btnBg, btnLabel];
     this.recomputeActiveOverlay();
+  }
+
+  // S6 — first-occurrence caption overlay (light onboarding).
+  public showCaption(text: string, screenX: number, screenY: number): void {
+    const captionText = this.add.text(screenX, screenY, text, {
+      fontSize: '14px',
+      fontFamily: 'monospace',
+      color: '#ffffcc',
+      backgroundColor: '#00000088',
+      padding: { x: 8, y: 4 },
+      align: 'center',
+      wordWrap: { width: 500 },
+    });
+    captionText.setOrigin(0.5, 0.5);
+    captionText.setDepth(30);
+    captionText.setAlpha(0);
+
+    // Fade in, hold, fade out over 1500ms total.
+    this.tweens.add({
+      targets: captionText,
+      alpha: { from: 0, to: 1 },
+      duration: 300,
+      ease: 'Linear',
+      onComplete: () => {
+        this.tweens.add({
+          targets: captionText,
+          alpha: { from: 1, to: 0 },
+          duration: 400,
+          delay: 800,
+          ease: 'Linear',
+          onComplete: () => { captionText.destroy(); },
+        });
+      },
+    });
   }
 
   public hideGameOverOverlay(): void {

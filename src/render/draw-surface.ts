@@ -32,6 +32,7 @@ import {
   COLOR_RALLY_POINT,
   COLOR_FIGHTER_TINT,
   COLOR_CONTESTED_TILE,
+  COLOR_NEUTRAL_CONTESTED_GLOW,
   lerpColor,
 } from './sprites.js';
 import {
@@ -138,6 +139,9 @@ export function drawSurfaceEntities(
   cam: CameraState,
   pendingEntrance: { tileX: number; tileY: number } | null = null,
   facing?: AntFacingCache,
+  frameTimeMs: number = 0,
+  contestedGlowFrames?: Map<number, number>,
+  currentFrame: number = 0,
 ): void {
   const left = Math.floor(cam.x - cam.viewportWidth  / 2);
   const top  = Math.floor(cam.y - cam.viewportHeight / 2);
@@ -245,9 +249,9 @@ export function drawSurfaceEntities(
     }
   }
 
-  // --- Contested tile glow (S1) ---
-  // Draw a faint orange tint under ants on tiles where 2+ colonies meet.
-  // Two-pass: first collect contested surface tiles, then draw glows before ants.
+  // --- Surface contested tile glow (S1 → S6 polished) ---
+  // S6: surface combat uses COLOR_NEUTRAL_CONTESTED_GLOW (yellow) instead of
+  // the raw orange. A 5-frame fade-out is tracked via contestedGlowFrames.
   {
     const tileColony = new Map<number, number>(); // tileKey → first colonyId
     const contested  = new Set<number>();
@@ -263,28 +267,76 @@ export function drawSurfaceEntities(
       if (existing === undefined) tileColony.set(key, cid);
       else if (existing !== cid) contested.add(key);
     }
-    for (const key of contested) {
+    // Stamp active contested tiles with the current frame number.
+    if (contestedGlowFrames) {
+      for (const key of contested) {
+        contestedGlowFrames.set(key, currentFrame);
+      }
+    }
+    // Draw glows for all tiles that were contested within the last 5 frames.
+    const GLOW_FADE_FRAMES = 5;
+    const tilesToDraw = contestedGlowFrames ? contestedGlowFrames : null;
+    const drawKeys = tilesToDraw
+      ? Array.from(tilesToDraw.entries())
+          .filter(([, frame]) => currentFrame - frame < GLOW_FADE_FRAMES)
+          .map(([key]) => key)
+      : Array.from(contested);
+    for (const key of drawKeys) {
       const tx = key & 0xffff;
       const ty = (key >> 16) & 0xffff;
       const sx = (tx - left) * TILE_SIZE_PX;
       const sy = (ty - top)  * TILE_SIZE_PX;
       if (sx < -TILE_SIZE_PX || sx > canvasW || sy < -TILE_SIZE_PX || sy > canvasH) continue;
-      gfx.fillStyle(COLOR_CONTESTED_TILE, 0.25);
-      gfx.fillRect(sx, sy, TILE_SIZE_PX, TILE_SIZE_PX);
+      // Fade alpha based on frames since last seen.
+      const framesAgo = tilesToDraw ? (currentFrame - (tilesToDraw.get(key) ?? currentFrame)) : 0;
+      const alpha_g = 0.15 * (1 - framesAgo / GLOW_FADE_FRAMES);
+      if (alpha_g <= 0) continue;
+      // Soft edge: draw the center tile at full alpha, then draw 1px-thin
+      // border rects at half alpha to create a soft halo effect.
+      gfx.fillStyle(COLOR_NEUTRAL_CONTESTED_GLOW, alpha_g);
+      gfx.fillRect(sx + 2, sy + 2, TILE_SIZE_PX - 4, TILE_SIZE_PX - 4);
+      gfx.fillStyle(COLOR_NEUTRAL_CONTESTED_GLOW, alpha_g * 0.5);
+      gfx.fillRect(sx,      sy,      TILE_SIZE_PX, 2);
+      gfx.fillRect(sx,      sy + TILE_SIZE_PX - 2, TILE_SIZE_PX, 2);
+      gfx.fillRect(sx,      sy + 2,  2, TILE_SIZE_PX - 4);
+      gfx.fillRect(sx + TILE_SIZE_PX - 2, sy + 2, 2, TILE_SIZE_PX - 4);
+    }
+    // Prune stale entries so the map doesn't grow without bound.
+    if (tilesToDraw) {
+      for (const [key, frame] of tilesToDraw) {
+        if (currentFrame - frame >= GLOW_FADE_FRAMES) tilesToDraw.delete(key);
+      }
     }
   }
 
-  // --- Hunt reticle (S3) ---
-  // Draw a red tile overlay at the spider's locked target during Hunting/Striking.
-  // Drawn before ants so workers on the target tile are visible over the reticle.
-  // world.scatterReticleTile is the one-tick-lag shadow field written by tickSpider.
+  // --- Hunt reticle (S3 → S6 polished) ---
+  // S6: deep red border with animated alpha pulse; subtle fill at 0.3 alpha.
   if (curr.scatterReticleTile !== null) {
     const { x: rtx, y: rty } = curr.scatterReticleTile;
     const rsx = (rtx - left) * TILE_SIZE_PX;
     const rsy = (rty - top)  * TILE_SIZE_PX;
     if (rsx > -TILE_SIZE_PX && rsx < canvasW && rsy > -TILE_SIZE_PX && rsy < canvasH) {
-      gfx.fillStyle(0xFF2200, 0.45);
-      gfx.fillRect(rsx, rsy, TILE_SIZE_PX, TILE_SIZE_PX);
+      // Pulse: alpha oscillates between 0.4 and 0.7 at 1 Hz.
+      const pulse = 0.55 + 0.15 * Math.sin((2 * Math.PI * frameTimeMs) / 1000);
+      // Scale: 1.0–1.05× on pulse (shift origin to tile center).
+      const scalePulse = 1.0 + 0.025 * Math.sin((2 * Math.PI * frameTimeMs) / 1000);
+      const sizeOffset = (TILE_SIZE_PX * (scalePulse - 1)) / 2;
+      // Tile fill at 0.3 alpha.
+      gfx.fillStyle(0xcc1010, 0.3);
+      gfx.fillRect(
+        rsx - sizeOffset, rsy - sizeOffset,
+        TILE_SIZE_PX * scalePulse, TILE_SIZE_PX * scalePulse,
+      );
+      // Border at pulsed alpha: draw as 2-px edge strips.
+      const bw = TILE_SIZE_PX * scalePulse;
+      const bh = TILE_SIZE_PX * scalePulse;
+      const bx = rsx - sizeOffset;
+      const by = rsy - sizeOffset;
+      gfx.fillStyle(0xcc1010, pulse);
+      gfx.fillRect(bx,          by,          bw, 2);
+      gfx.fillRect(bx,          by + bh - 2, bw, 2);
+      gfx.fillRect(bx,          by + 2,      2,  bh - 4);
+      gfx.fillRect(bx + bw - 2, by + 2,      2,  bh - 4);
     }
   }
 
@@ -376,18 +428,28 @@ export function drawSurfaceEntities(
         curr.spider.hungerTicks / SPIDER_HUNGER_MAX_TICKS[curr.simVersion >= SIM_VERSION_V22_DIFFICULTY ? tierIndex(curr.difficulty) : NORMAL_TIER_INDEX],
         1,
       );
-      const tint = lerpColor(0xCCCCCC, 0xFF3300, hungerFraction);
+      // S6: linear tint gradient pale (#ffeecc) → deep red (#cc2020) by hungerFraction.
+      const tint = lerpColor(0xffeecc, 0xcc2020, hungerFraction);
 
       sprites.drawSpider({ x: spiderScreenX, y: spiderScreenY, tint });
 
-      // Hunger ring: appears at 70% hunger, fades in to full alpha at 100%.
+      // Hunger ring (S3 → S6 polished):
+      // Appears at 70% hunger, fades in to full alpha at 100%.
+      // At ≥80%, an additional faster pulse (0.5 Hz) signals rampage warning.
       if (hungerFraction > 0.7) {
-        const ringAlpha = ((hungerFraction - 0.7) / 0.3) * 0.85;
+        const baseRingAlpha = ((hungerFraction - 0.7) / 0.3) * 0.85;
+        // S6: rampage warning pulse at ≥80% hunger.
+        const rampagePulse = hungerFraction >= 0.8
+          ? 0.1 * Math.sin((2 * Math.PI * frameTimeMs) / 2000)
+          : 0;
+        const ringAlpha = Math.min(1, baseRingAlpha + rampagePulse);
         const rl = Math.round(spiderScreenX - SPIDER_SPRITE_WIDTH  / 2);
         const rt = Math.round(spiderScreenY - SPIDER_SPRITE_HEIGHT / 2);
         const rw = SPIDER_SPRITE_WIDTH;
         const rh = SPIDER_SPRITE_HEIGHT;
-        gfx.fillStyle(0xFF4400, ringAlpha);
+        // S6: smooth gradient by color-lerping the ring toward deep red.
+        const ringColor = lerpColor(0xffeecc, 0xcc2020, hungerFraction);
+        gfx.fillStyle(ringColor, ringAlpha);
         gfx.fillRect(rl,          rt,          rw, 2);
         gfx.fillRect(rl,          rt + rh - 2, rw, 2);
         gfx.fillRect(rl,          rt + 2,      2,  rh - 4);
