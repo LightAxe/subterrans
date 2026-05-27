@@ -1004,6 +1004,23 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
     expect(state.pendingEntranceTileY).toBeNull();
   });
 
+  it('right-click on spider tile clears a pre-existing entrance preview', () => {
+    const world = makeWorld({
+      surfaceWidth: 128,
+      surfaceHeight: 64,
+      spider: makeSpider(),
+      spiderPriorityColonyId: null,
+    });
+    const vs = makeViewState('surface', CAM_X, CAM_Y);
+    // Pre-existing entrance preview from a prior right-click elsewhere
+    const state = makeState(30, 30);
+    const { x, y } = tileToScreen(SPIDER_TILE_X, SPIDER_TILE_Y, CAM_X, CAM_Y);
+    handleSurfaceRightClick(world, vs, x, y, state);
+    expect(world.commandQueue[0]!.type).toBe('MarkSpiderPriority');
+    expect(state.pendingEntranceTileX).toBeNull();
+    expect(state.pendingEntranceTileY).toBeNull();
+  });
+
   it('right-click outside spider 3×3 box still sets entrance preview on empty tile', () => {
     const world = makeWorld({
       surfaceWidth: 128,

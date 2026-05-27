@@ -33,7 +33,7 @@ import type {
 } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
-import { FP_ONE } from '../sim/fixed.js';
+import { FP_SHIFT } from '../sim/fixed.js';
 import { isPointerOverHUD, panInputState } from './camera-input.js';
 
 // ---------------------------------------------------------------------------
@@ -323,12 +323,14 @@ export function handleSurfaceRightClick(
   // Spider occupies a 3×3-tile footprint centered on its tile; any click in that box
   // toggles MarkSpiderPriority and suppresses the context menu entirely.
   if (world.spider !== null) {
-    const spiderTileX = Math.floor(world.spider.posX / FP_ONE);
-    const spiderTileY = Math.floor(world.spider.posY / FP_ONE);
+    const spiderTileX = world.spider.posX >> FP_SHIFT;
+    const spiderTileY = world.spider.posY >> FP_SHIFT;
     if (
       tileX >= spiderTileX - 1 && tileX <= spiderTileX + 1 &&
       tileY >= spiderTileY - 1 && tileY <= spiderTileY + 1
     ) {
+      state.pendingEntranceTileX = null;
+      state.pendingEntranceTileY = null;
       const cmd: MarkSpiderPriorityCommand = {
         type: 'MarkSpiderPriority',
         colonyId: playerColonyId,
