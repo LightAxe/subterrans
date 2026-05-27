@@ -319,15 +319,16 @@ export function handleSurfaceRightClick(
   const { tileX, tileY } = screenToTile(screenX, screenY, viewState.surfaceCamera);
   if (tileX < 0 || tileY < 0) return;
 
-  // Spider priority toggle (S7/D1): right-click within the spider's 3×3 tile footprint.
-  // Spider occupies a 3×3-tile footprint centered on its tile; any click in that box
-  // toggles MarkSpiderPriority and suppresses the context menu entirely.
+  // Spider priority toggle (S7/D1): right-click within the spider's visible sprite area.
+  // The 48px sprite is centered at (posX * TILE_SIZE_PX / FP_ONE, posY * ...) — the tile's
+  // left-edge pixel. That puts the sprite 24px (1.5 tiles) left of the tile and 23px right,
+  // covering tiles [t-2, t+1] in each axis. Using [t-1, t+1] would miss the leftmost 8px.
   if (world.spider !== null) {
     const spiderTileX = world.spider.posX >> FP_SHIFT;
     const spiderTileY = world.spider.posY >> FP_SHIFT;
     if (
-      tileX >= spiderTileX - 1 && tileX <= spiderTileX + 1 &&
-      tileY >= spiderTileY - 1 && tileY <= spiderTileY + 1
+      tileX >= spiderTileX - 2 && tileX <= spiderTileX + 1 &&
+      tileY >= spiderTileY - 2 && tileY <= spiderTileY + 1
     ) {
       state.pendingEntranceTileX = null;
       state.pendingEntranceTileY = null;

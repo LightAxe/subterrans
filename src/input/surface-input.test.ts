@@ -966,7 +966,9 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
     expect(world.commandQueue[0]).toMatchObject({ type: 'MarkSpiderPriority', isPriority: false });
   });
 
-  it('right-click on corner of spider 3×3 box also dispatches spider priority', () => {
+  it('right-click on top-left corner of sprite hit area (t-2, t-2) dispatches spider priority', () => {
+    // The 48px sprite is centered at the tile left-edge pixel, so it extends 24px (1.5 tiles) left
+    // and 23px right — covering tiles [t-2, t+1]. The old 3×3 box (t-1 to t+1) missed tile t-2.
     const world = makeWorld({
       surfaceWidth: 128,
       surfaceHeight: 64,
@@ -975,7 +977,21 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
     });
     const vs = makeViewState('surface', CAM_X, CAM_Y);
     const state = makeState();
-    // Click top-left corner of 3×3 box: (SPIDER_TILE_X-1, SPIDER_TILE_Y-1)
+    const { x, y } = tileToScreen(SPIDER_TILE_X - 2, SPIDER_TILE_Y - 2, CAM_X, CAM_Y);
+    handleSurfaceRightClick(world, vs, x, y, state);
+    expect(world.commandQueue).toHaveLength(1);
+    expect(world.commandQueue[0]).toMatchObject({ type: 'MarkSpiderPriority' });
+  });
+
+  it('right-click at t-1 (previously covered corner) still dispatches spider priority', () => {
+    const world = makeWorld({
+      surfaceWidth: 128,
+      surfaceHeight: 64,
+      spider: makeSpider(),
+      spiderPriorityColonyId: null,
+    });
+    const vs = makeViewState('surface', CAM_X, CAM_Y);
+    const state = makeState();
     const { x, y } = tileToScreen(SPIDER_TILE_X - 1, SPIDER_TILE_Y - 1, CAM_X, CAM_Y);
     handleSurfaceRightClick(world, vs, x, y, state);
     expect(world.commandQueue).toHaveLength(1);
