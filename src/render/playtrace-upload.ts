@@ -403,7 +403,7 @@ async function buildPayloadWithDowngrade(
   // void-casting submitPlaytrace, so the live world is mutated during the
   // async tail of this function.
   const capturedEvents: SimEvent[] = input.world.events.slice();
-  const capturedSummary = buildPlaytraceSummary(input.world, input.resumedFromSave);
+  const capturedSummary = buildPlaytraceSummary(input.world, input.resumedFromSave, outcomeToWire(input.outcome));
   const fullSnap = buildDebugSnapshot(input.world, input.seed, input.inputLog);
   const fullEnvelope = buildPlaytraceEnvelope(input, fullSnap, capturedEvents, capturedSummary);
 
