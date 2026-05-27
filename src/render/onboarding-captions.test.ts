@@ -32,7 +32,7 @@ describe('checkAndTrigger — first occurrence', () => {
   });
 
   it('returns the expected text for "spider"', () => {
-    expect(checkAndTrigger('spider')).toBe('A spider is hunting. Right-click it to mark as priority.');
+    expect(checkAndTrigger('spider')).toBe('A spider is hunting your ants. Use fighters to protect your queen.');
   });
 
   it('returns the expected text for "queenDamage"', () => {

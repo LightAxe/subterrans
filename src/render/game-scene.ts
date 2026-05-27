@@ -61,6 +61,7 @@ import {
   PLAYER_START_X, PLAYER_START_Y,
   SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT,
   UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT,
+  STARVATION_GRACE_TICKS,
 } from '../sim/constants.js';
 import { GameOutcome } from '../sim/game-over.js';
 import { drawSurfaceTerrain, drawSurfaceEntities, type GfxLike } from './draw-surface.js';
@@ -592,12 +593,15 @@ export class GameScene extends Phaser.Scene {
       }
 
       if (ev.type === 'ai_state_transition' && ev.payload.to === 'Invading') {
-        // Belt-and-suspenders: invasion_start is the primary trigger above;
-        // this handles any Invading transition not paired with invasion_start
-        // and also surfaces the caption on this fallback path.
+        // Belt-and-suspenders: invasion_start is the primary trigger above.
+        // This handles any Invading transition not paired with invasion_start.
+        // Gate flash + caption on checkAndTrigger so they fire exactly once:
+        // when invasion_start already fired the caption this pass, captionText
+        // is null and neither flash nor caption fires again here.
         const captionText = checkAndTrigger('aiInvading');
-        if (captionText && uiScene) {
-          uiScene.showCaption(captionText, CANVAS_W / 2, 60);
+        if (captionText) {
+          triggerScreenEdgeFlash(this, 'right', CANVAS_W, CANVAS_H);
+          if (uiScene) uiScene.showCaption(captionText, CANVAS_W / 2, 60);
         }
       }
     }
@@ -635,10 +639,12 @@ export class GameScene extends Phaser.Scene {
     }
     this.prevQueenCombinedHp = combinedHp;
 
-    // Starvation onset.
+    // Starvation onset. The timer starts at STARVATION_GRACE_TICKS (300) and
+    // decrements only when the queen fails to eat; < STARVATION_GRACE_TICKS means
+    // at least one feeding failed (starvation has actually started).
     if (
       !this.queenStarvationTriggered &&
-      playerColony.queenStarvationTimer > 0 &&
+      playerColony.queenStarvationTimer < STARVATION_GRACE_TICKS &&
       this.world.tick > QUEEN_DAMAGE_SUPPRESS_TICKS
     ) {
       this.queenStarvationTriggered = true;
@@ -742,6 +748,23 @@ export class GameScene extends Phaser.Scene {
     this.world = nextWorld;
     this.currentDifficulty = nextWorld.difficulty; // S5 — restore difficulty from save
     this.resumedFromSave = true;
+    // Seed the render event cursor from the saved world so the first render
+    // frame after resume doesn't replay historical events as new and re-fire
+    // screen flashes / captions for invasions that already happened.
+    if (nextWorld.events.length > 0) {
+      this.lastProcessedEventTick = nextWorld.events.reduce(
+        (m, e) => (e.tick > m ? e.tick : m), -1,
+      );
+    }
+    // If the queen's starvation timer was already running at save time, mark the
+    // starvation caption as triggered so the first render frame after resume does
+    // not fire a spurious flash + onboarding caption for a condition that already
+    // started before the save.
+    const playerColonyOnLoad = nextWorld.colonies[PLAYER_COLONY_ID];
+    if (playerColonyOnLoad &&
+        playerColonyOnLoad.queenStarvationTimer < STARVATION_GRACE_TICKS) {
+      this.queenStarvationTriggered = true;
+    }
     // SCEN-06 replay truth: restore inputLog completely so the continued session
     // can be replayed byte-for-byte from (seed, inputLog) per Plan 04 Task 1.
     for (const c of loaded.inputLog) this.inputLog.push(c);

@@ -437,7 +437,9 @@ export function drawUndergroundEntities(
       if (curr.ants.currentGridColonyId[id] !== activeUndergroundColonyId) continue;
       const tx = curr.ants.posX[id]! >> 8;
       const ty = curr.ants.posY[id]! >> 8;
-      const key = (ty << 16) | tx;
+      // Include activeUndergroundColonyId in the high byte so entries for
+      // different colony views don't collide when the player switches grids.
+      const key = (activeUndergroundColonyId << 24) | (ty << 16) | tx;
       const cid = curr.ants.colonyId[id]!;
       const existing = tileColony.get(key);
       if (existing === undefined) tileColony.set(key, cid);
@@ -452,12 +454,14 @@ export function drawUndergroundEntities(
     // Draw glows for all contested or recently-contested tiles.
     const drawKeys = undergoundGlowFrames
       ? Array.from(undergoundGlowFrames.entries())
-          .filter(([, frame]) => currentFrame - frame < GLOW_FADE_FRAMES)
+          .filter(([key, frame]) =>
+            (key >>> 24) === activeUndergroundColonyId &&
+            currentFrame - frame < GLOW_FADE_FRAMES)
           .map(([key]) => key)
       : Array.from(contested);
     for (const key of drawKeys) {
-      const tx = key & 0xffff;
-      const ty = (key >> 16) & 0xffff;
+      const tx = key & 0xff;         // bits 0-7; tx max = 127
+      const ty = (key >> 16) & 0xff; // bits 16-23; top byte (24+) holds colony ID
       const sx = (tx - left) * TILE_SIZE_PX;
       const sy = (ty - top)  * TILE_SIZE_PX;
       if (sx < -TILE_SIZE_PX || sx > canvasW || sy < -TILE_SIZE_PX || sy > canvasH) continue;
