@@ -34,6 +34,8 @@ import type {
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
+import { TILE_SIZE_PX } from '../render/sprites.js';
+import { SPIDER_SPRITE_WIDTH, SPIDER_SPRITE_HEIGHT } from '../render/ant-sprite-layer.js';
 import { isPointerOverHUD, panInputState } from './camera-input.js';
 
 // ---------------------------------------------------------------------------
@@ -319,19 +321,19 @@ export function handleSurfaceRightClick(
   const { tileX, tileY } = screenToTile(screenX, screenY, viewState.surfaceCamera);
   if (tileX < 0 || tileY < 0) return;
 
-  // Spider priority toggle (S7/D1): right-click within the spider's visible sprite area.
-  // The 48px sprite is centered at the tile's left-edge pixel (posX * TILE_SIZE_PX / FP_ONE),
-  // so the static sprite covers tiles [t-2, t+1] in each axis. The symmetric [t-1, t+1] would
-  // miss the leftmost 8px of the sprite.
-  // Known limitation: during the first half of a movement tick the renderer shows the sprite
-  // ~1 tile behind the sim position (SPIDER_SPEED = FP_ONE). Expanding the box further to cover
-  // this would intercept empty-tile clicks on the spider's leading side (Codex P2 feedback).
+  // Spider priority toggle (S7/D1): right-click within the rendered sprite bounds.
+  // Pixel-space check matches drawSurfaceEntities exactly: 48×48px sprite centered at
+  // (posX >> FP_SHIFT) * TILE_SIZE_PX in map space, offset by the camera's left/top tile.
   if (world.spider !== null) {
-    const spiderTileX = world.spider.posX >> FP_SHIFT;
-    const spiderTileY = world.spider.posY >> FP_SHIFT;
+    const camLeft = Math.floor(viewState.surfaceCamera.x - viewState.surfaceCamera.viewportWidth  / 2);
+    const camTop  = Math.floor(viewState.surfaceCamera.y - viewState.surfaceCamera.viewportHeight / 2);
+    const spiderScrX = (world.spider.posX >> FP_SHIFT) * TILE_SIZE_PX - camLeft * TILE_SIZE_PX;
+    const spiderScrY = (world.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop  * TILE_SIZE_PX;
     if (
-      tileX >= spiderTileX - 2 && tileX <= spiderTileX + 1 &&
-      tileY >= spiderTileY - 2 && tileY <= spiderTileY + 1
+      screenX >= spiderScrX - SPIDER_SPRITE_WIDTH  / 2 &&
+      screenX <  spiderScrX + SPIDER_SPRITE_WIDTH  / 2 &&
+      screenY >= spiderScrY - SPIDER_SPRITE_HEIGHT / 2 &&
+      screenY <  spiderScrY + SPIDER_SPRITE_HEIGHT / 2
     ) {
       state.pendingEntranceTileX = null;
       state.pendingEntranceTileY = null;
