@@ -40,7 +40,6 @@ import {
   WORKER_BASE_SPEED,
   WORKER_LIFESPAN_TICKS,
   COMBAT_HP_BASE,
-  COMBAT_HP_QUEEN,
 } from '../constants.js';
 
 // ---------------------------------------------------------------------------

@@ -19,7 +19,6 @@ import { emitEvent } from './telemetry.js';
 import { FP_SHIFT } from './fixed.js';
 import { colonyFoodTotal } from './colony/colony-system.js';
 import {
-  PLAYER_COLONY_ID,
   MATCH_TIMEOUT_TICKS,
   STALEMATE_FOOD_THRESHOLD_FP,
 } from './constants.js';
@@ -231,7 +230,7 @@ function livingWorkerCount(world: WorldState, colonyId: ColonyId): number {
  * Timeout: both queens survive to MATCH_TIMEOUT_TICKS; winner by living worker count.
  * Stalemate: all surface food piles depleted AND both colonies below STALEMATE_FOOD_THRESHOLD_FP.
  *
- * Returns GameOutcome.None if no tiebreak condition is met, or if world.simVersion < V22.
+ * Returns GameOutcome.None if no tiebreak condition is met.
  * Emits a 'round_end' SimEvent for playtrace roundEndReason attribution.
  */
 export function checkTiebreaks(world: WorldState, playerColonyId: ColonyId): GameOutcome {

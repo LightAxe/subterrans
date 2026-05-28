@@ -358,7 +358,6 @@ export function tickFoodConsumption(world: WorldState, colony: ColonyRecord): vo
  *
  * Phase 7+ may introduce non-food starvation sources here (environmental hazards).
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function tickStarvationCheck(_world: WorldState, _colony: ColonyRecord): void {
   // Intentionally empty in Phase 6. tickFoodConsumption IS the concrete implementation
   // of PRD §8a steps 3 AND 4, evaluated inline per entity (see PRD §4c, lines 1052-1085).

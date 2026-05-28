@@ -7,16 +7,14 @@
 // QC Pass 4 AR-P0-001: S2 V17 ships Normal-only tier reads. S5 V22 gates all
 // NORMAL_TIER_INDEX lookup sites on SIM_VERSION_V22_DIFFICULTY and uses tierIndex(world.difficulty).
 
-import type { WorldState, AIState, AIStateRecord } from './types.js';
+import type { WorldState, AIStateRecord } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { ClearRallyPointCommand } from './commands.js';
 import { emitEvent } from './telemetry.js';
 import { AntTask, ChamberType } from './enums.js';
 import { Zone } from './terrain.js';
-import { FP_SHIFT } from './fixed.js';
 import {
   PLAYER_COLONY_ID,
-  ENEMY_COLONY_ID,
   AI_WARFOOTING_MIN_TICK,
   AI_WARFOOTING_FIGHTER_THRESHOLD,
   AI_WARFOOTING_FOOD_FRAC_PCT,

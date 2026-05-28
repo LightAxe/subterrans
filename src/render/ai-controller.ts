@@ -4,7 +4,7 @@
 // The simulation has ONE code path for all colonies; AI differentiates at the CALLER
 // (GameScene's onBeforeTick calls runAIController only for non-player colonyIds).
 
-import type { WorldState, AIStateRecord } from '../sim/types.js';
+import type { WorldState } from '../sim/types.js';
 import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
 import type {
   MarkDigTileCommand,

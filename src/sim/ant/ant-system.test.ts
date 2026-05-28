@@ -475,6 +475,7 @@ describe('tickAntMovement', () => {
     // Also: posY should equal posYBefore + speed (moved toward strong pheromone)
     // Only true if exploit branch taken. Accept either posYBefore+speed OR any other valid movement.
     // With V7+ SoftCost, the ant may move at speed/2=64 instead of speed=128.
+    // eslint-disable-next-line no-restricted-syntax
     expect([posYBefore + speed, posYBefore + speed/2, posYBefore, posYBefore - speed/2, posYBefore - speed]).toContain(posYAfter);
   });
 
@@ -2181,6 +2182,7 @@ describe('updateFightAntTargets', () => {
     colB_v17.entrances = [];
     colB_v17.digFlowFieldDirty = false;
     world.colonies[COLONY_B] = colB_v17;
+    // eslint-disable-next-line no-restricted-syntax
     const enemyTileX = 10 + Math.floor(FIGHT_AGGRO_RADIUS / 2);
     const enemy = allocateEntityId(world);
     initAnt(world.ants, enemy, {
@@ -7429,7 +7431,6 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     ugSet(underground, 3, 4, UndergroundTileState.Open);  // South — alternate
     // (2,3) and (3,2) remain Solid — no other alternates
 
-    const { world: { colonies } } = { world };
     const colonyId = world.ants.colonyId[antId]! as number;
     const colony = world.colonies[colonyId]!;
     // Place FoodStorage chamber at (4, 3) to seed the food flow field East.
@@ -7454,7 +7455,6 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     tickAntMovement(world, rng, digFlowFields, undefined, chamberFlowFields);
 
     const newTileX = world.ants.posX[antId]! >> FP_SHIFT;
-    const newTileY = world.ants.posY[antId]! >> FP_SHIFT;
 
     // Must NOT have moved East to the recent tile.
     expect(newTileX).not.toBe(4);

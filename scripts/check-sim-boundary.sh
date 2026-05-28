@@ -47,7 +47,7 @@ PREFIX_PATTERN='(\+\+|--)(world|worldState|w)(\.[a-zA-Z_][a-zA-Z0-9_]*(\[[^]]*\]
 HITS=$( { \
   grep -rnE "$PATTERN"        src/render src/input src/platform --include='*.ts' --exclude='*.test.ts' || true; \
   grep -rnE "$PREFIX_PATTERN" src/render src/input src/platform --include='*.ts' --exclude='*.test.ts' || true; \
-  } | grep -v '\.commandQueue' | sort -u || true)
+  } | grep -v '\.commandQueue' | grep -vE ':[[:space:]]*//' | sort -u || true)
 
 if [[ -n "$HITS" ]]; then
   echo "FNDN-07 violation candidates (review each):"

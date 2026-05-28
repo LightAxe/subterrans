@@ -4,7 +4,7 @@
 
 import type { WorldState, SpiderState } from './types.js';
 import { emitEvent } from './telemetry.js';
-import { pheromoneGridKey, phGet, phSet } from './pheromone/pheromone-store.js';
+import { phGet, phSet } from './pheromone/pheromone-store.js';
 import { AntTask, PheromoneType } from './enums.js';
 import { tierIndex } from './ai-state.js';
 import {
@@ -28,6 +28,11 @@ import {
   PHEROMONE_CAP,
 } from './constants.js';
 import { FP_SHIFT } from './fixed.js';
+
+// HUNT_KEY_SHIFT: number of bits to shift Y to form a tile key (Y << SHIFT + X).
+// Requires SURFACE_GRID_WIDTH === 2^HUNT_KEY_SHIFT. Compile-time assertion below.
+const HUNT_KEY_SHIFT = 7; // SURFACE_GRID_WIDTH = 128 = 2^7
+const _huntKeyShiftCheck: 128 = SURFACE_GRID_WIDTH; // fails to compile if SURFACE_GRID_WIDTH !== 128
 
 // ---------------------------------------------------------------------------
 // Module-level scratch for findHuntTarget — avoids per-call Map allocation.
@@ -90,7 +95,7 @@ function findHuntTarget(
     const dist = (ax > spiderTileX ? ax - spiderTileX : spiderTileX - ax) +
                  (ay > spiderTileY ? ay - spiderTileY : spiderTileY - ay);
     if (dist > r) continue;
-    const key = (ay << 7) + ax; // ay * SURFACE_GRID_WIDTH(128) + ax; 128 = 2^7
+    const key = (ay << HUNT_KEY_SHIFT) + ax;
     if (HUNT_TILE_COUNTS[key] === 0) HUNT_DIRTY.push(key);
     HUNT_TILE_COUNTS[key] = HUNT_TILE_COUNTS[key]! + 1;
   }
@@ -105,8 +110,8 @@ function findHuntTarget(
     if (c > bestCount || (c === bestCount && bestKey !== -1 && k < bestKey)) {
       bestCount = c;
       bestKey = k;
-      bestX = k & 127; // k % SURFACE_GRID_WIDTH(128)
-      bestY = k >> 7;  // k / SURFACE_GRID_WIDTH(128)
+      bestX = k & (SURFACE_GRID_WIDTH - 1);
+      bestY = k >> HUNT_KEY_SHIFT;
     }
   }
   if (bestKey === -1) return null;

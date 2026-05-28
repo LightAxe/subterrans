@@ -960,29 +960,34 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     it('#104 rejects snapshot.tick: string', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
+      // eslint-disable-next-line no-restricted-syntax
       (s as unknown as { tick: unknown }).tick = 'x';
       expect(() => deserializeWorldState(s)).toThrow();
     });
     it('#104 rejects snapshot.tick: negative', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
+      // eslint-disable-next-line no-restricted-syntax
       (s as unknown as { tick: number }).tick = -1;
       expect(() => deserializeWorldState(s)).toThrow();
     });
     it('#104 rejects snapshot.tick: non-integer', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
+      // eslint-disable-next-line no-restricted-syntax
       (s as unknown as { tick: number }).tick = 1.5;
       expect(() => deserializeWorldState(s)).toThrow();
     });
     it('#104 rejects snapshot.rngState: non-integer', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
+      // eslint-disable-next-line no-restricted-syntax
       (s as unknown as { rngState: unknown }).rngState = 'abc';
       expect(() => deserializeWorldState(s)).toThrow();
     });
     it('#104 accepts legitimate large tick value (regression guard for normal long sessions)', () => {
       const w = createScenario(42);
+      // eslint-disable-next-line no-restricted-syntax
       w.tick = 1_000_000;
       const s = serializeWorldState(w);
       const w2 = deserializeWorldState(s);

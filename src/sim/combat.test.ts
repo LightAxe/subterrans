@@ -189,7 +189,7 @@ describe('killAnt', () => {
 // S1 — V16 HP/damage/cooldown combat tests
 // =============================================================================
 
-import { COMBAT_HP_BASE, COMBAT_HP_HOMEGROUND_BONUS, COMBAT_COOLDOWN_TICKS, COMBAT_DAMAGE_BASE, COMBAT_DAMAGE_WORKER, COMBAT_DAMAGE_QUEEN, COMBAT_HP_QUEEN } from './constants.js';
+import { COMBAT_HP_BASE, COMBAT_COOLDOWN_TICKS, COMBAT_DAMAGE_BASE, COMBAT_DAMAGE_WORKER, COMBAT_DAMAGE_QUEEN, COMBAT_HP_QUEEN } from './constants.js';
 
 function makeV16World(seed = 42): { world: WorldState; cid1: ColonyId; cid2: ColonyId } {
   const r = makeWorldWith2Colonies(seed);
@@ -414,7 +414,7 @@ describe('non-fighter and queen combat stats (V17)', () => {
   it('non-fighter deals COMBAT_DAMAGE_WORKER damage per strike (not 0)', () => {
     const { world, cid1, cid2 } = makeV17World();
     const fighter = spawnFighter(world, cid1, 5, 7, Zone.Surface);
-    const worker  = spawnAnt(world, cid2, 5, 7, Zone.Surface);
+    spawnAnt(world, cid2, 5, 7, Zone.Surface);
     // V17: fighter skips windup (strikes tick 1); worker winds up 5 ticks, strikes tick 6.
     runCombatTicks(world, 6);
     // Worker should have dealt COMBAT_DAMAGE_WORKER=1 damage (not 0).
@@ -450,7 +450,6 @@ describe('non-fighter and queen combat stats (V17)', () => {
     // (Tested here via direct initAnt call to keep test fast and scenario-independent.)
     const { world, cid1 } = makeV16World();
     const queenSlot = allocateEntityId(world);
-    const { FP_SHIFT: _shift } = { FP_SHIFT: 8 };
     initAnt(world.ants, queenSlot, {
       colonyId: Number(cid1), posX: 10 << 8, posY: 10 << 8,
       task: AntTask.Idle, hp: COMBAT_HP_QUEEN,

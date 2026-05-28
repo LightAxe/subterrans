@@ -79,6 +79,37 @@ describe('multiple seeds diverge', () => {
   });
 });
 
+describe('uint32 state canonicality (#161)', () => {
+  it('state stays within uint32 bounds after many advances (>>> 0 wrap)', () => {
+    // Without `>>> 0` on state advance, state grows as a JS float after ~2^32 wraps.
+    // Start near wrap-around to exercise the boundary quickly.
+    const rng = new Rng(0x7fffffff);
+    for (let i = 0; i < 10_000; i++) {
+      rng.nextU32();
+      const s = rng.getState();
+      expect(s >>> 0).toBe(s); // canonical uint32: no bits lost by >>> 0
+      expect(s).toBeGreaterThanOrEqual(0);
+      expect(s).toBeLessThanOrEqual(0xffffffff);
+      expect(Number.isInteger(s)).toBe(true);
+    }
+  });
+
+  it('setState restores uint32 values > 2^31 without sign-extending', () => {
+    const rng1 = new Rng(1);
+    // Advance until state is in the high uint32 range.
+    // Seed 1 produces state 0x6d2b79f6 after first advance = 1831565814 (< 2^31).
+    // Use a direct setState with high-bit set to test >>> 0 path.
+    rng1.setState(0x80000001); // would become -2147483647 with `| 0`
+    expect(rng1.getState()).toBe(0x80000001);
+
+    const rng2 = new Rng(1);
+    rng2.setState(0x80000001);
+    const out1 = rng1.nextU32();
+    const out2 = rng2.nextU32();
+    expect(out1).toBe(out2); // same state → same output
+  });
+});
+
 describe('no nextFloat method', () => {
   it('nextFloat is undefined (floats are banned in src/sim/)', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

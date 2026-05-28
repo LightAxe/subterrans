@@ -728,7 +728,6 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
 
     // Step 7: Lifecycle transitions (egg→larva→worker aging + promotion)
     tickLifecycleTransitions(world, colony);
-    // S4 V21+: nurse-acceleration pass (no-op pre-V21; see larva-maturation.ts)
     tickLarvaMaturation(world, colony);
 
     // Step 8: Behavior allocation (re-run after lifecycle; handles new matures + deaths from step 7)
@@ -740,11 +739,11 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     colony.computedAllocation.dig    = alloc8.dig;
     colony.computedAllocation.fight  = alloc8.fight;
     colony.nurseCount = alloc8.nurse;
-    // S4 V21+ starvation escape hatch: when the colony has no food AND every
-    // worker is allocated as a nurse (forage===0), demote one nurse to forager
-    // so the colony isn't starvation-locked. This covers the small-colony case
-    // where computeNurseCount's ceil(workers/4) cap assigns the only worker as
-    // a nurse, leaving zero foragers regardless of food level.
+    // Starvation escape hatch: when the colony has no food AND every worker is
+    // allocated as a nurse (forage===0), demote one nurse to forager so the
+    // colony isn't starvation-locked. This covers the small-colony case where
+    // computeNurseCount's ceil(workers/4) cap assigns the only worker as a
+    // nurse, leaving zero foragers regardless of food level.
     if (alloc8.forage === 0 && alloc8.nurse > 0 &&
         colonyFoodTotal(colony) === 0) {
       colony.computedAllocation.nurse  -= 1;

@@ -17,7 +17,7 @@ import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/co
 import type { AntComponents } from '../sim/ant/ant-store.js';
 import { createAntComponents } from '../sim/ant/ant-store.js';
 import type {
-  ColonyId, ColonyRecord, WorkerAllocation, BehaviorRatio, ChamberRecord,
+  ColonyId, ColonyRecord, WorkerAllocation, ChamberRecord,
 } from '../sim/colony/colony-store.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { NestEntrance } from '../sim/colony/entrance.js';
@@ -66,6 +66,11 @@ import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 //        Pre-v3 saves lack both; loading them would route every pickup
 //        through `pile.pickupsRemaining = undefined`, which decrements to
 //        NaN and silently breaks the depletion semantic. Reject them.
+//
+// NOTE (Issue #161): the Mulberry32 `>>> 0` state fix in rng.ts does NOT
+// require a format bump. `>>> 0` and the prior `| 0` coercion preserve the
+// same 32 bits, so a v3 save's `rngState` reloads to an identical PRNG output
+// sequence either way — there is no on-disk incompatibility to reject.
 export const SAVE_FORMAT_VERSION = 3 as const;
 export const SAVE_KEY = 'subterrans:save:v3' as const;
 export const AUTOSAVE_INTERVAL_MS = 30_000 as const;

@@ -215,6 +215,7 @@ function buildCombatAggregate(events: SimEvent[]): CombatAggregate {
     }
     const loc = ev.payload.location;
     if (loc.grid === 'surface') {
+      // eslint-disable-next-line no-restricted-syntax -- false positive: `surface` is a local bucket key, not a WorldState field
       buckets.surface += 1;
     } else if (killerCid === PLAYER_COLONY_ID || ev.payload.victim.colonyId !== PLAYER_COLONY_ID) {
       buckets.enemyUnderground += 1;
