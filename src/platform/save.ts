@@ -66,15 +66,13 @@ import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 //        Pre-v3 saves lack both; loading them would route every pickup
 //        through `pile.pickupsRemaining = undefined`, which decrements to
 //        NaN and silently breaks the depletion semantic. Reject them.
-//   v4 — Issue #161: Mulberry32 PRNG state is now clamped to uint32 on every
-//        advance (`>>> 0` in nextU32) and on setState/constructor. Pre-v4
-//        saves stored `rngState` as an unbounded JS float; loading them into
-//        the fixed code would truncate the state differently than the old
-//        code did, producing a silently diverged PRNG sequence from tick 1.
-//        Old saves were already determinism-broken (the running state grew
-//        beyond uint32 mid-game), so a clean rejection is preferable.
-export const SAVE_FORMAT_VERSION = 4 as const;
-export const SAVE_KEY = 'subterrans:save:v4' as const;
+//
+// NOTE (Issue #161): the Mulberry32 `>>> 0` state fix in rng.ts does NOT
+// require a format bump. `>>> 0` and the prior `| 0` coercion preserve the
+// same 32 bits, so a v3 save's `rngState` reloads to an identical PRNG output
+// sequence either way — there is no on-disk incompatibility to reject.
+export const SAVE_FORMAT_VERSION = 3 as const;
+export const SAVE_KEY = 'subterrans:save:v3' as const;
 export const AUTOSAVE_INTERVAL_MS = 30_000 as const;
 
 export class SaveVersionMismatchError extends Error {
@@ -1198,12 +1196,10 @@ export function parseSaveFile(raw: string): SaveFile {
  * purge fires on the first save-touching operation.
  *
  * Issue #112 — added v2 to the purge list when SAVE_KEY moved to v3.
- * Issue #161 — added v3 to the purge list when SAVE_KEY moved to v4.
  */
 function purgeLegacySaves(): void {
   try { localStorage.removeItem('subterrans:save:v1'); } catch { /* quota / private mode — silent: best-effort cleanup, no UX signal */ }
   try { localStorage.removeItem('subterrans:save:v2'); } catch { /* quota / private mode — silent: best-effort cleanup, no UX signal */ }
-  try { localStorage.removeItem('subterrans:save:v3'); } catch { /* quota / private mode — silent: best-effort cleanup, no UX signal */ }
 }
 
 export function hasSave(): boolean {

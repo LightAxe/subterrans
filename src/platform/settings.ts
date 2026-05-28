@@ -2,7 +2,7 @@
 // Issue #116 — UI/render preferences persisted across sessions.
 //
 // Distinct from save.ts:
-//   - save.ts stores the simulation snapshot + replay log (subterrans:save:v4).
+//   - save.ts stores the simulation snapshot + replay log (subterrans:save:v3).
 //     Subject to format-version bumps that intentionally invalidate old saves.
 //   - settings.ts stores cosmetic preferences (subterrans:settings:v1). Survives
 //     deleteSave(); never round-trips through replay.

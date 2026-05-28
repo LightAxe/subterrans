@@ -1208,10 +1208,10 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
   // ---------------------------------------------------------------------------
   // Issue #112 — finite food piles + recentlyDepletedFood persistence
   // ---------------------------------------------------------------------------
-  describe('Issue #112 — depletion / spawn save format (v3); bumped to v4 in #161', () => {
-    it('SAVE_FORMAT_VERSION === 4 and SAVE_KEY ends with :v4', () => {
-      expect(SAVE_FORMAT_VERSION).toBe(4);
-      expect(SAVE_KEY).toBe('subterrans:save:v4');
+  describe('Issue #112 — depletion / spawn save format (v3)', () => {
+    it('SAVE_FORMAT_VERSION === 3 and SAVE_KEY ends with :v3', () => {
+      expect(SAVE_FORMAT_VERSION).toBe(3);
+      expect(SAVE_KEY).toBe('subterrans:save:v3');
     });
 
     it('rejects v2 envelopes with SaveVersionMismatchError', () => {
@@ -1239,25 +1239,6 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // Trigger the purge.
       hasSave();
       expect(localStorage.getItem('subterrans:save:v2')).toBeNull();
-    });
-
-    it('rejects v3 envelopes with SaveVersionMismatchError', () => {
-      const v3Envelope = JSON.stringify({
-        version: 3,
-        seed: 42,
-        inputLog: [],
-        snapshot: serializeWorldState(createScenario(42)),
-      });
-      localStorage.setItem(SAVE_KEY, v3Envelope);
-      expect(hasSave()).toBe(false);
-      expect(loadSave()).toBeNull();
-      expect(() => parseSaveFile(v3Envelope)).toThrow(SaveVersionMismatchError);
-    });
-
-    it('purges legacy v3 keys on hasSave/loadSave', () => {
-      localStorage.setItem('subterrans:save:v3', '{"version":3}');
-      hasSave();
-      expect(localStorage.getItem('subterrans:save:v3')).toBeNull();
     });
 
     it('round-trips pickup-charge fields on every food pile', () => {
