@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
-import { createWorldState, allocateEntityId, SIM_VERSION_V22_DIFFICULTY, SIM_VERSION_V21_REPRODUCTION } from './types.js';
+import { createWorldState, allocateEntityId, SIM_VERSION_V22_DIFFICULTY } from './types.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask } from './enums.js';

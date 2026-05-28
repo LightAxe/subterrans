@@ -43,7 +43,6 @@ import {
   COLOR_ENEMY_COLONY,
   COLOR_QUEEN_OUTLINE,
   COLOR_FIGHTER_TINT,
-  COLOR_CONTESTED_TILE,
   COLOR_PLAYER_HOME_GLOW,
   COLOR_ENEMY_HOME_GLOW,
 } from './sprites.js';
@@ -53,7 +52,7 @@ import {
 } from './terrain-atlas.js';
 import { drawAutotiledUndergroundTile, drawUndergroundRim } from './underground-autotile.js';
 import { gatherUnderground3x3Neighbors, type Neighbors3x3 } from './underground-neighbors.js';
-import { chamberSeed, chamberPerimeterPoints, type PerimeterPoint } from './chamber-shape.js';
+import { chamberSeed, chamberPerimeterPoints } from './chamber-shape.js';
 import type { CameraState } from './camera.js';
 
 // ---------------------------------------------------------------------------

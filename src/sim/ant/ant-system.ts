@@ -71,7 +71,6 @@ import {
   SEARCH_PAUSE_TRIGGER_INV_PROB,
   SEARCH_PAUSE_BASE_TICKS,
   SEARCH_PAUSE_JITTER_TICKS,
-  FOOD_TRAIL_DEPOSIT,
   FOOD_TRAIL_DEPOSIT_V14,
   FIGHT_AGGRO_RADIUS,
   NURSE_ATTEND_DWELL_TICKS,
@@ -545,8 +544,7 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
   // Issue #68 (v12+) — pre-v12 this was an `else` branch. Now runs after
   // the chamber path too when v12+, so leftover food can flow into the
   // entrance pool before forcing wait-state.
-  const tryPoolFallback = true;
-  if (tryPoolFallback && remaining > 0) {
+  if (remaining > 0) {
     // Fallback — entrance-shaft / chamberless pool. Cap at BASE.
     const space = BASE_FOOD_STORAGE_CAPACITY - colony.foodStored;
     const toPool = remaining < space ? remaining : (space > 0 ? space : 0);
@@ -855,219 +853,167 @@ export function tickForagerActions(world: WorldState): void {
  */
 export function tickNurseActions(world: WorldState): void {
   const ants = world.ants;
-  const v10 = true;
-
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1) continue;
     if (ants.task[id] !== AntTask.Nursing) continue;
 
     const subTask = ants.subTask[id]!;
 
-    if (v10) {
-      // -----------------------------------------------------------------
-      // Issue #17 Phase 1 (v10+): visible brood carry.
-      //
-      // Substate semantics under v10:
-      //   MovingToBrood (0) — heading toward a brood pickup tile via the
-      //     `nursing` chamber-flow field (re-seeded each tick from Queen
-      //     Open tiles AND uncarried-brood-entity tiles outside Nursery).
-      //     On arrival at a tile that holds an alive uncarried brood,
-      //     claim it: set carryingBroodId/carriedBy, flip to Feeding.
-      //   Feeding (1) — "carrying brood." The carrier syncs the brood's
-      //     position to its own each tick (so the renderer just draws the
-      //     brood at its own posX/posY). Movement step routes via
-      //     `nurseDeposit` (Nursery-only flow-field). On arrival at a
-      //     Nursery Open tile, deposit the brood and return to Idle.
-      // -----------------------------------------------------------------
-      if (subTask === NursingSubState.Feeding) {
-        const broodId = ants.carryingBroodId[id]!;
-        if (broodId === -1) {
-          // Defensive guard — Feeding without a carry slot is unreachable
-          // under normal v10 flow (pickup always sets the slot). If we
-          // hit it (state corruption, manual mutation), release back to
-          // Idle so the nurse doesn't strand.
-          ants.task[id]    = AntTask.Idle;
-          ants.subTask[id] = 0;
-          continue;
-        }
-        // Brood died mid-carry (combat, starvation, etc.). Drop the carry
-        // and return to Idle. The dead brood will be swap-removed from
-        // colony.eggs/larvae at step 5 (tickDeathCleanup) on the next tick.
-        if (ants.alive[broodId] !== 1) {
-          ants.carryingBroodId[id]    = -1;
-          // carriedBy[broodId] is left as-is — the brood is dead and will
-          // be swap-removed from colony.eggs/larvae at the next step 5
-          // tickDeathCleanup. Entity ids are not recycled (PRD §3), so
-          // the stale carriedBy is harmless.
-          ants.task[id]    = AntTask.Idle;
-          ants.subTask[id] = 0;
-          continue;
-        }
-        // Sync brood position to carrier (every tick — the renderer reads
-        // posX/posY directly).
-        ants.posX[broodId] = ants.posX[id]!;
-        ants.posY[broodId] = ants.posY[id]!;
-        ants.zone[broodId] = ants.zone[id]!;
-        ants.currentGridColonyId[broodId] = ants.currentGridColonyId[id]!;
-        // Check for Nursery-tile arrival → deposit.
-        const colonyId = ants.colonyId[id]!;
-        const colony = world.colonies[colonyId];
-        if (!colony) continue;
-        const tileX = ants.posX[id]! >> FP_SHIFT;
-        const tileY = ants.posY[id]! >> FP_SHIFT;
-        if (isInsideNursery(colony, tileX, tileY)) {
-          depositCarriedBrood(world, colony, id, broodId);
-        }
+    // -----------------------------------------------------------------
+    // Issue #17 Phase 1 (v10+): visible brood carry.
+    //
+    // Substate semantics under v10:
+    //   MovingToBrood (0) — heading toward a brood pickup tile via the
+    //     `nursing` chamber-flow field (re-seeded each tick from Queen
+    //     Open tiles AND uncarried-brood-entity tiles outside Nursery).
+    //     On arrival at a tile that holds an alive uncarried brood,
+    //     claim it: set carryingBroodId/carriedBy, flip to Feeding.
+    //   Feeding (1) — "carrying brood." The carrier syncs the brood's
+    //     position to its own each tick (so the renderer just draws the
+    //     brood at its own posX/posY). Movement step routes via
+    //     `nurseDeposit` (Nursery-only flow-field). On arrival at a
+    //     Nursery Open tile, deposit the brood and return to Idle.
+    // -----------------------------------------------------------------
+    if (subTask === NursingSubState.Feeding) {
+      const broodId = ants.carryingBroodId[id]!;
+      if (broodId === -1) {
+        // Defensive guard — Feeding without a carry slot is unreachable
+        // under normal v10 flow (pickup always sets the slot). If we
+        // hit it (state corruption, manual mutation), release back to
+        // Idle so the nurse doesn't strand.
+        ants.task[id]    = AntTask.Idle;
+        ants.subTask[id] = 0;
         continue;
       }
-      // S4 V21+ Attending handler: nurse dwells at the Nursery tile after
-      // deposit. searchPauseTicks is repurposed as the dwell counter — it is
-      // not used by nursing-task ants (search-pause logic only runs for
-      // Foraging ants). When the dwell expires, nurse returns to Idle.
-      //
-      // Emergency exit: colony food zero → nurse must forage to prevent
-      // starvation lock. Pairs with the step-8 allocation override in
-      // tick.ts. Brood-transport priority is enforced at deposit time
-      // (depositCarriedBrood skips Attending when claimable brood remains),
-      // so no per-tick brood check is needed here.
-      if (subTask === NursingSubState.Attending) {
-        const colonyId = ants.colonyId[id]!;
-        const colony   = world.colonies[colonyId];
-        const starving = colony !== undefined && colonyFoodTotal(colony) === 0;
-        ants.searchPauseTicks[id] = ants.searchPauseTicks[id]! + 1;
-        if (starving || ants.searchPauseTicks[id]! >= NURSE_ATTEND_DWELL_TICKS) {
-          ants.task[id]             = AntTask.Idle;
-          ants.subTask[id]          = 0;
-          ants.searchPauseTicks[id] = 0;
-        }
+      // Brood died mid-carry (combat, starvation, etc.). Drop the carry
+      // and return to Idle. The dead brood will be swap-removed from
+      // colony.eggs/larvae at step 5 (tickDeathCleanup) on the next tick.
+      if (ants.alive[broodId] !== 1) {
+        ants.carryingBroodId[id]    = -1;
+        // carriedBy[broodId] is left as-is — the brood is dead and will
+        // be swap-removed from colony.eggs/larvae at the next step 5
+        // tickDeathCleanup. Entity ids are not recycled (PRD §3), so
+        // the stale carriedBy is harmless.
+        ants.task[id]    = AntTask.Idle;
+        ants.subTask[id] = 0;
         continue;
       }
-
-      if (subTask !== NursingSubState.MovingToBrood) continue;
-
+      // Sync brood position to carrier (every tick — the renderer reads
+      // posX/posY directly).
+      ants.posX[broodId] = ants.posX[id]!;
+      ants.posY[broodId] = ants.posY[id]!;
+      ants.zone[broodId] = ants.zone[id]!;
+      ants.currentGridColonyId[broodId] = ants.currentGridColonyId[id]!;
+      // Check for Nursery-tile arrival → deposit.
       const colonyId = ants.colonyId[id]!;
       const colony = world.colonies[colonyId];
       if (!colony) continue;
-
-      // Finite-nursing release — three cases (PR #56 codex P1 + P2).
-      // Any "no claim possible" path flips subTask to Feeding without a
-      // carry slot. Next tick the Feeding branch's defensive guard
-      // (carryingBroodId === -1) releases to Idle, mirroring the
-      // pre-v10 MovingToBrood→Feeding→Idle two-tick cadence. Without
-      // these releases, nurses without claimable brood would strand in
-      // MovingToBrood forever — step 10a only reallocates Idle ants.
-      //
-      // Case 1 (colony-level): no claimable brood exists anywhere in
-      // the colony — pickup field has no sources at all. The nurse may
-      // be mid-tunnel and never reach a source tile, so the release
-      // must fire regardless of her current tile. Covers brood
-      // matured/died/all-claimed mid-walk.
-      if (!colonyHasClaimableBrood(world, colony)) {
-        ants.subTask[id] = NursingSubState.Feeding;
-        continue;
-      }
-
       const tileX = ants.posX[id]! >> FP_SHIFT;
       const tileY = ants.posY[id]! >> FP_SHIFT;
-
-      // Cases 2 + 3 (tile-level): brood exists somewhere but pickup is
-      // gated for THIS nurse on THIS tile. Release only when she's on
-      // a source tile (i.e., she has actually arrived). An in-transit
-      // off-source nurse keeps walking — she'll reach a brood tile.
-      const onSourceTile =
-        isInsideQueenChamber(colony, tileX, tileY) ||
-        isInsideNursery(colony, tileX, tileY);
-
-      // Case 2: no completed Nursery → no destination for the carry.
-      // Symmetric with the pre-v10 transport gate. Defensive — allocator
-      // gates nurseCount on hasNursery, so a Nursing ant should never
-      // exist before a completed Nursery in normal flow.
-      if (!hasCompletedChamber(colony, ChamberType.Nursery)) {
-        if (onSourceTile) ants.subTask[id] = NursingSubState.Feeding;
-        continue;
+      if (isInsideNursery(colony, tileX, tileY)) {
+        depositCarriedBrood(world, colony, id, broodId);
       }
-
-      // Find an alive uncarried brood entity standing on this tile.
-      // Iterate eggs first then larvae; pick the lowest entity id for
-      // determinism (matches the pre-v10 transportBroodToNursery
-      // selection order).
-      const broodId = findUncarriedBroodOnTile(ants, colony, tileX, tileY);
-      if (broodId < 0) {
-        // Case 3: brood exists in colony but not on this tile (lower-id
-        // nurse claimed first, brood inside Nursery, or arrived at a
-        // stale source tile). Release if on-source; keep walking otherwise.
-        if (onSourceTile) ants.subTask[id] = NursingSubState.Feeding;
-        continue;
+      continue;
+    }
+    // S4 V21+ Attending handler: nurse dwells at the Nursery tile after
+    // deposit. searchPauseTicks is repurposed as the dwell counter — it is
+    // not used by nursing-task ants (search-pause logic only runs for
+    // Foraging ants). When the dwell expires, nurse returns to Idle.
+    //
+    // Emergency exit: colony food zero → nurse must forage to prevent
+    // starvation lock. Pairs with the step-8 allocation override in
+    // tick.ts. Brood-transport priority is enforced at deposit time
+    // (depositCarriedBrood skips Attending when claimable brood remains),
+    // so no per-tick brood check is needed here.
+    if (subTask === NursingSubState.Attending) {
+      const colonyId = ants.colonyId[id]!;
+      const colony   = world.colonies[colonyId];
+      const starving = colony !== undefined && colonyFoodTotal(colony) === 0;
+      ants.searchPauseTicks[id] = ants.searchPauseTicks[id]! + 1;
+      if (starving || ants.searchPauseTicks[id]! >= NURSE_ATTEND_DWELL_TICKS) {
+        ants.task[id]             = AntTask.Idle;
+        ants.subTask[id]          = 0;
+        ants.searchPauseTicks[id] = 0;
       }
-
-      // Defensive: if the brood was carried by a now-dead carrier
-      // (orphan reclaim path), null out the dead carrier's carryingBroodId
-      // slot so the both-ends-of-the-pointer invariant holds. killAnt
-      // intentionally leaves carry slots set so the brood stays at the
-      // death tile until reclaim; the cleanup happens here when we
-      // overwrite the brood's carriedBy below.
-      const oldCarrier = ants.carriedBy[broodId]!;
-      if (oldCarrier !== -1 && ants.alive[oldCarrier] !== 1) {
-        ants.carryingBroodId[oldCarrier] = -1;
-      }
-
-      // Claim the brood. Set both ends of the carry pointer atomically.
-      ants.carryingBroodId[id]    = broodId;
-      ants.carriedBy[broodId]     = id;
-      ants.subTask[id]            = NursingSubState.Feeding;
-      // Carried brood is no longer a pickup seed — the next per-tick
-      // recompute of the `nursing` field in tick.ts step 9 will exclude
-      // it because `carriedBy[broodId] !== -1`. No dirty flag needed.
       continue;
     }
 
-    // -------------------------------------------------------------------
-    // Pre-v10 path (legacy teleport). Unchanged — Feeding→Idle release,
-    // MovingToBrood→Feeding flip on Queen/Nursery tile, then the
-    // transportBroodToNursery teleport.
-    // -------------------------------------------------------------------
-
-    // Feeding → Idle: the dwell tick is already spent; release the ant.
-    // Step 10a on the next tick sees an Idle ant and routes per allocation.
-    if (subTask === NursingSubState.Feeding) {
-      ants.task[id]    = AntTask.Idle;
-      ants.subTask[id] = 0;
-      continue;
-    }
-
-    // MovingToBrood → Feeding iff ant is inside a Queen or Nursery footprint.
     if (subTask !== NursingSubState.MovingToBrood) continue;
 
     const colonyId = ants.colonyId[id]!;
     const colony = world.colonies[colonyId];
-    if (!colony || colony.chambers.length === 0) continue;
+    if (!colony) continue;
+
+    // Finite-nursing release — three cases (PR #56 codex P1 + P2).
+    // Any "no claim possible" path flips subTask to Feeding without a
+    // carry slot. Next tick the Feeding branch's defensive guard
+    // (carryingBroodId === -1) releases to Idle, mirroring the
+    // pre-v10 MovingToBrood→Feeding→Idle two-tick cadence. Without
+    // these releases, nurses without claimable brood would strand in
+    // MovingToBrood forever — step 10a only reallocates Idle ants.
+    //
+    // Case 1 (colony-level): no claimable brood exists anywhere in
+    // the colony — pickup field has no sources at all. The nurse may
+    // be mid-tunnel and never reach a source tile, so the release
+    // must fire regardless of her current tile. Covers brood
+    // matured/died/all-claimed mid-walk.
+    if (!colonyHasClaimableBrood(world, colony)) {
+      ants.subTask[id] = NursingSubState.Feeding;
+      continue;
+    }
 
     const tileX = ants.posX[id]! >> FP_SHIFT;
     const tileY = ants.posY[id]! >> FP_SHIFT;
 
-    let onServiceTile = false;
-    for (let c = 0; c < colony.chambers.length; c++) {
-      const chamber = colony.chambers[c]!;
-      const ct = chamber.chamberType;
-      if (ct !== ChamberType.Queen && ct !== ChamberType.Nursery) continue;
-      const baseX = chamber.posX >> FP_SHIFT;
-      const baseY = chamber.posY >> FP_SHIFT;
-      if (
-        tileX >= baseX && tileX < baseX + chamber.width &&
-        tileY >= baseY && tileY < baseY + chamber.height
-      ) {
-        ants.subTask[id] = NursingSubState.Feeding;
-        onServiceTile = true;
-        break;
-      }
+    // Cases 2 + 3 (tile-level): brood exists somewhere but pickup is
+    // gated for THIS nurse on THIS tile. Release only when she's on
+    // a source tile (i.e., she has actually arrived). An in-transit
+    // off-source nurse keeps walking — she'll reach a brood tile.
+    const onSourceTile =
+      isInsideQueenChamber(colony, tileX, tileY) ||
+      isInsideNursery(colony, tileX, tileY);
+
+    // Case 2: no completed Nursery → no destination for the carry.
+    // Symmetric with the pre-v10 transport gate. Defensive — allocator
+    // gates nurseCount on hasNursery, so a Nursing ant should never
+    // exist before a completed Nursery in normal flow.
+    if (!hasCompletedChamber(colony, ChamberType.Nursery)) {
+      if (onSourceTile) ants.subTask[id] = NursingSubState.Feeding;
+      continue;
     }
 
-    // P2 brood transport: on the MovingToBrood→Feeding flip, relocate one
-    // brood entity into the Nursery. Gated on a completed Nursery — without
-    // one there is no target tile to deposit brood on.
-    if (onServiceTile && hasCompletedChamber(colony, ChamberType.Nursery)) {
-      transportBroodToNursery(world, colony);
+    // Find an alive uncarried brood entity standing on this tile.
+    // Iterate eggs first then larvae; pick the lowest entity id for
+    // determinism (matches the pre-v10 transportBroodToNursery
+    // selection order).
+    const broodId = findUncarriedBroodOnTile(ants, colony, tileX, tileY);
+    if (broodId < 0) {
+      // Case 3: brood exists in colony but not on this tile (lower-id
+      // nurse claimed first, brood inside Nursery, or arrived at a
+      // stale source tile). Release if on-source; keep walking otherwise.
+      if (onSourceTile) ants.subTask[id] = NursingSubState.Feeding;
+      continue;
     }
+
+    // Defensive: if the brood was carried by a now-dead carrier
+    // (orphan reclaim path), null out the dead carrier's carryingBroodId
+    // slot so the both-ends-of-the-pointer invariant holds. killAnt
+    // intentionally leaves carry slots set so the brood stays at the
+    // death tile until reclaim; the cleanup happens here when we
+    // overwrite the brood's carriedBy below.
+    const oldCarrier = ants.carriedBy[broodId]!;
+    if (oldCarrier !== -1 && ants.alive[oldCarrier] !== 1) {
+      ants.carryingBroodId[oldCarrier] = -1;
+    }
+
+    // Claim the brood. Set both ends of the carry pointer atomically.
+    ants.carryingBroodId[id]    = broodId;
+    ants.carriedBy[broodId]     = id;
+    ants.subTask[id]            = NursingSubState.Feeding;
+    // Carried brood is no longer a pickup seed — the next per-tick
+    // recompute of the `nursing` field in tick.ts step 9 will exclude
+    // it because `carriedBy[broodId] !== -1`. No dirty flag needed.
+    continue;
   }
 }
 
@@ -1143,14 +1089,12 @@ function findUncarriedBroodOnTile(
   tileX: number,
   tileY: number,
 ): number {
-  // The pickup gate already excluded the inside-Nursery case (the v10
-  // `nursing` chamber-flow field skips brood-inside-Nursery as seeds, so
-  // a nurse should never be routed here). Defensive guard mirrors the
-  // pre-v10 transportBroodToNursery selection invariant — without this,
-  // a v10 nurse who incidentally walks onto a Nursery tile holding a
-  // deposited brood (e.g. immediately after Idle→Nursing re-allocation)
-  // would re-pick-up the brood and re-shuffle it via broodId%openCount,
-  // visible as occasional brood teleports inside the Nursery.
+  // The pickup gate already excluded the inside-Nursery case (the nursing
+  // flow field skips brood-inside-Nursery as seeds, so a nurse should never
+  // be routed here). Defensive guard: without this, a nurse who walks onto
+  // a Nursery tile while a brood is deposited there would re-pick-up the
+  // brood and re-shuffle it via broodId%openCount, visible as occasional
+  // brood teleports inside the Nursery.
   if (isInsideNursery(colony, tileX, tileY)) return -1;
   let pickId = -1;
   // Reclaimable = alive AND (uncarried OR carrier is dead). Shared with
@@ -1196,7 +1140,7 @@ function computeDepositPositionInChamber(
   let openCount = 0;
   for (let ty = 0; ty < chamber.height; ty++) {
     for (let tx = 0; tx < chamber.width; tx++) {
-      if (ugGet(underground, bx + tx, by + ty) === UndergroundTileState.Open) openCount++;
+    if (ugGet(underground, bx + tx, by + ty) === UndergroundTileState.Open) openCount++;
     }
   }
   if (openCount === 0) return null;
@@ -1204,13 +1148,13 @@ function computeDepositPositionInChamber(
   let cursor = 0;
   for (let ty = 0; ty < chamber.height; ty++) {
     for (let tx = 0; tx < chamber.width; tx++) {
-      const cx = bx + tx;
-      const cy = by + ty;
-      if (ugGet(underground, cx, cy) !== UndergroundTileState.Open) continue;
-      if (cursor === targetIndex) {
+    const cx = bx + tx;
+    const cy = by + ty;
+    if (ugGet(underground, cx, cy) !== UndergroundTileState.Open) continue;
+    if (cursor === targetIndex) {
         return { x: (cx << FP_SHIFT) + (FP_ONE >> 1), y: (cy << FP_SHIFT) + (FP_ONE >> 1) };
-      }
-      cursor++;
+    }
+    cursor++;
     }
   }
   return null;
@@ -1220,9 +1164,8 @@ function computeDepositPositionInChamber(
  * Issue #17 Phase 1 — compute the fixed-point Nursery deposit position for
  * brood `broodId`, spread across all Open tiles in the colony's Nursery
  * chambers via `broodId % openCount` in row-major order. Returns `null` if
- * no underground grid OR no Open Nursery tile exists. Used by the pre-v10
- * `transportBroodToNursery` (legacy teleport) and as a fallback from
- * `depositCarriedBrood` when the nurse's chamber cannot be identified.
+ * no underground grid OR no Open Nursery tile exists. Used as a fallback
+ * from `depositCarriedBrood` when the nurse's chamber cannot be identified.
  */
 function computeNurseryDepositPosition(
   world: WorldState,
@@ -1239,9 +1182,9 @@ function computeNurseryDepositPosition(
     const bx = ch.posX >> FP_SHIFT;
     const by = ch.posY >> FP_SHIFT;
     for (let ty = 0; ty < ch.height; ty++) {
-      for (let tx = 0; tx < ch.width; tx++) {
+    for (let tx = 0; tx < ch.width; tx++) {
         if (ugGet(underground, bx + tx, by + ty) === UndergroundTileState.Open) openCount++;
-      }
+    }
     }
   }
   if (openCount === 0) return null;
@@ -1256,7 +1199,7 @@ function computeNurseryDepositPosition(
     const bx = ch.posX >> FP_SHIFT;
     const by = ch.posY >> FP_SHIFT;
     for (let ty = 0; ty < ch.height; ty++) {
-      for (let tx = 0; tx < ch.width; tx++) {
+    for (let tx = 0; tx < ch.width; tx++) {
         const cx = bx + tx;
         const cy = by + ty;
         if (ugGet(underground, cx, cy) !== UndergroundTileState.Open) continue;
@@ -1267,7 +1210,7 @@ function computeNurseryDepositPosition(
           };
         }
         cursor++;
-      }
+    }
     }
   }
   return null;
@@ -1309,8 +1252,8 @@ function depositCarriedBrood(
     const by = ch.posY >> FP_SHIFT;
     if (nurseTileX >= bx && nurseTileX < bx + ch.width &&
         nurseTileY >= by && nurseTileY < by + ch.height) {
-      nurseChamber = ch;
-      break;
+    nurseChamber = ch;
+    break;
     }
   }
   pos = nurseChamber !== null
@@ -1349,67 +1292,6 @@ function depositCarriedBrood(
   }
 }
 
-/**
- * Move a single brood entity (egg or larva) into the colony's Nursery.
- *
- * Selection: deterministic min-entity-id across colony.eggs ∪ colony.larvae,
- * restricted to alive entities whose tile is NOT already inside any Nursery
- * footprint. If every brood is already in a Nursery, does nothing.
- *
- * Destination: spread across every Open tile in every Nursery chamber the
- * colony owns. The candidate tiles are enumerated row-major across all
- * Nursery chambers in colony.chambers order; the chosen tile is index
- * `pickId % openCount` (issue #21 fix — pre-fix this always wrote to the
- * first Open tile, stacking every brood at one corner). Writes posX/posY
- * in fixed-point (tile-center) and zone=Underground. With a single Open
- * tile (e.g., a 1×1 Nursery, or a Nursery whose other tiles are still
- * Solid) the modulo collapses to 0 and brood necessarily land on that
- * one tile — there is no other valid Open tile to spread to.
- *
- * No allocations, no RNG, no wall-clock.
- */
-function transportBroodToNursery(world: WorldState, colony: ColonyRecord): void {
-  const ants = world.ants;
-
-  // 1. Select the minimum-id brood entity that is alive and not already in a
-  //    Nursery footprint.
-  let pickId = -1;
-  for (let i = 0; i < colony.eggs.length; i++) {
-    const bid = colony.eggs[i]!;
-    if (ants.alive[bid] !== 1) continue;
-    if (isInsideNursery(colony, ants.posX[bid]! >> FP_SHIFT, ants.posY[bid]! >> FP_SHIFT)) continue;
-    if (pickId < 0 || bid < pickId) pickId = bid;
-  }
-  for (let i = 0; i < colony.larvae.length; i++) {
-    const bid = colony.larvae[i]!;
-    if (ants.alive[bid] !== 1) continue;
-    if (isInsideNursery(colony, ants.posX[bid]! >> FP_SHIFT, ants.posY[bid]! >> FP_SHIFT)) continue;
-    if (pickId < 0 || bid < pickId) pickId = bid;
-  }
-  if (pickId < 0) return;
-
-  // 2. Compute the deposit position via the shared helper — issue #21
-  //    spread across all Nursery Open tiles by `pickId % openCount` in
-  //    row-major order. Same source as the v10 `depositCarriedBrood` so
-  //    legacy teleport and visible carry produce byte-identical deposit
-  //    positions for the same inputs.
-  //
-  // Phase 09.1 Chunk 0 disposition: own-colony chamber membership — brood
-  // is transported into its own colony's Nursery chamber, never into an
-  // enemy grid. Keeping colony.colonyId here is safe-by-construction (brood
-  // never invades). Parallel to colony-system.ts:376/431 dispositions.
-  const pos = computeNurseryDepositPosition(world, colony, pickId);
-  if (pos === null) return; // no grid OR no Open Nursery tile — skip teleport
-  // Fixed-point tile-center position.
-  ants.posX[pickId] = pos.x;
-  ants.posY[pickId] = pos.y;
-  ants.zone[pickId] = Zone.Underground;
-  // Phase 09.1 Chunk 0 — descent invariant. Brood teleported into nursery
-  // now occupies that colony's grid. Today brood is in its OWN colony so
-  // colony.colonyId === ants.colonyId[pickId] and this is a byte-identical
-  // no-op.
-  ants.currentGridColonyId[pickId] = colony.colonyId;
-}
 
 function isInsideNursery(colony: ColonyRecord, tileX: number, tileY: number): boolean {
   for (let c = 0; c < colony.chambers.length; c++) {

@@ -5,8 +5,10 @@
 import { describe, it, expect } from 'vitest';
 import { emitEvent, PLAYTRACE_EVENT_CAP_PER_ROUND, type SimEvent } from './telemetry.js';
 import { createScenario } from './scenario.js';
+// eslint-disable-next-line no-restricted-imports -- test exercises serialize/deserialize round-trip; must import from platform layer
 import { serializeWorldState, deserializeWorldState } from '../platform/save.js';
 import { SIM_VERSION_V15_TELEMETRY } from './types.js';
+import type { ColonyId } from './colony/colony-store.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -17,8 +19,8 @@ function makeCombatKill(tick: number): SimEvent {
     tick,
     type: 'combat_kill',
     payload: {
-      killer: { kind: 'Ant', id: 1, colonyId: 2 as any },
-      victim: { kind: 'Ant', id: 2, colonyId: 1 as any },
+      killer: { kind: 'Ant', id: 1, colonyId: 2 as unknown as ColonyId },
+      victim: { kind: 'Ant', id: 2, colonyId: 1 as unknown as ColonyId },
       location: { x: 0, y: 0, grid: 'surface' },
     },
   };
@@ -113,9 +115,11 @@ describe('emitEvent — structural drop when no combat_kill available', () => {
   it('evicts combat_kills before falling back to structural drop', () => {
     const world = createScenario(1);
     // Half structural, half combat_kill
+    // eslint-disable-next-line no-restricted-syntax
     for (let i = 0; i < PLAYTRACE_EVENT_CAP_PER_ROUND / 2; i++) {
       world.events.push(makeQueenDeath(i));
     }
+    // eslint-disable-next-line no-restricted-syntax
     for (let i = 0; i < PLAYTRACE_EVENT_CAP_PER_ROUND / 2; i++) {
       world.events.push(makeCombatKill(i + 1000));
     }

@@ -31,7 +31,7 @@ import {
   SPIDER_DAMAGE,
   SPIDER_SWARM_FIGHTER_THRESHOLD,
 } from './constants.js';
-import { getAIStateForColony, isInCohort } from './ai-state.js';
+import { isInCohort } from './ai-state.js';
 
 /**
  * Sweep all live ants, bucket by tile, and resolve combat on tiles shared by 2+ colonies.

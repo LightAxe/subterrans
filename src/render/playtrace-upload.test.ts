@@ -288,6 +288,7 @@ describe('submitPlaytrace — timing invariant (load-bearing)', () => {
   // reflects the pre-mutation state.
   it('captures world.tick / simVersion before yielding control to the caller (stage-1 fit)', async () => {
     const input = makeInput();
+    // eslint-disable-next-line no-restricted-syntax
     input.world.tick = 9999;
     input.world.simVersion = 7;
 
@@ -310,6 +311,7 @@ describe('submitPlaytrace — timing invariant (load-bearing)', () => {
       // caller. This simulates restartGame() running right after the void
       // submitPlaytrace expression. If the envelope were captured lazily
       // (after the first await), these mutations would corrupt the body.
+      // eslint-disable-next-line no-restricted-syntax
       input.world.tick = 0;
       input.world.simVersion = 0;
       await pending;
@@ -353,6 +355,7 @@ describe('submitPlaytrace — timing invariant (load-bearing)', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any)),
     });
+    // eslint-disable-next-line no-restricted-syntax
     input.world.tick = 5555;
     input.world.simVersion = 9;
 
@@ -372,6 +375,7 @@ describe('submitPlaytrace — timing invariant (load-bearing)', () => {
       // Same synchronous-tick mutation as the stage-1 test. This must NOT
       // leak into the final body even though the downgrade loop awaits
       // multiple times before sending.
+      // eslint-disable-next-line no-restricted-syntax
       input.world.tick = 0;
       input.world.simVersion = 0;
       const result = await pending;

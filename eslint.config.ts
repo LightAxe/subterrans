@@ -27,6 +27,12 @@ const baseConfig = {
   rules: {
     // Baseline TS rules (non-type-checked — no project overhead)
     ...tseslint.configs.recommended.rules,
+    // Allow _-prefixed identifiers to signal intentionally unused args/vars.
+    "@typescript-eslint/no-unused-vars": ["error", {
+      argsIgnorePattern: "^_",
+      varsIgnorePattern: "^_",
+      caughtErrorsIgnorePattern: "^_",
+    }],
   },
 };
 

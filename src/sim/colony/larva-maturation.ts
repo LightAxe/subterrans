@@ -1,10 +1,10 @@
-// larva-maturation.ts — S4 V21+ nurse-acceleration pass for larva maturation.
+// larva-maturation.ts — nurse-acceleration pass for larva maturation.
 //
 // Runs as a second sub-step inside tick step 7, AFTER tickLifecycleTransitions
 // has applied the baseline +1 age increment to every larva.
 //
 // Per-tick contract:
-//   1. Gate on world.simVersion >= SIM_VERSION_V21_REPRODUCTION; no-op otherwise.
+//   1. Gate on a completed Nursery chamber; no-op if absent.
 //   2. Compute nursery throughput cap = tile count of the largest completed
 //      Nursery chamber (from largestNurseryTileCount in colony-system.ts).
 //   3. Iterate colony.larvae (existing larvae after baseline tick).
@@ -76,10 +76,10 @@ const nurseScratch = {
 // ---------------------------------------------------------------------------
 
 /**
- * S4 V21+ — Nurse acceleration pass for larva maturation.
+ * Nurse acceleration pass for larva maturation.
  *
  * Call from tick step 7, after tickLifecycleTransitions(world, colony).
- * No-op under pre-V21 sim versions.
+ * No-op if the colony has no completed Nursery chamber.
  */
 export function tickLarvaMaturation(world: WorldState, colony: ColonyRecord): void {
 

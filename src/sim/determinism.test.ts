@@ -21,7 +21,6 @@ import {
   ENEMY_COLONY_ID,
   ENEMY_START_X,
   ENEMY_START_Y,
-  SPIDER_TELEGRAPH_TICKS,
   SPIDER_HUNGER_MAX_TICKS,
 } from './constants.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';

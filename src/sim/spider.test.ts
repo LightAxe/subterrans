@@ -8,6 +8,7 @@ import { initAnt } from './ant/ant-store.js';
 import { AntTask, PheromoneType } from './enums.js';
 import { createPheromoneGrid, pheromoneGridKey } from './pheromone/pheromone-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
+import type { ColonyId } from './colony/colony-store.js';
 import {
   SPIDER_HP_FULL,
   SPIDER_TELEGRAPH_TICKS,
@@ -307,10 +308,10 @@ describe('tickSpider', () => {
   describe('rampageTargetColonyId — weighted colony selection', () => {
     it('sets rampageTargetColonyId on Rampaging entry and clears it on exit', () => {
       const world = makeWorld();
-      world.colonies[PLAYER_COLONY_ID as unknown as any] = createColonyRecord(PLAYER_COLONY_ID, 0);
-      world.colonies[PLAYER_COLONY_ID as unknown as any]!.entrances = [];
-      world.colonies[ENEMY_COLONY_ID as unknown as any] = createColonyRecord(ENEMY_COLONY_ID, 1);
-      world.colonies[ENEMY_COLONY_ID as unknown as any]!.entrances = [];
+      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId] = createColonyRecord(PLAYER_COLONY_ID, 0);
+      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!.entrances = [];
+      world.colonies[ENEMY_COLONY_ID as unknown as ColonyId] = createColonyRecord(ENEMY_COLONY_ID, 1);
+      world.colonies[ENEMY_COLONY_ID as unknown as ColonyId]!.entrances = [];
       world.spider = makeSpider({
         state: 'Patrolling',
         hungerTicks: SPIDER_HUNGER_MAX_TICKS[1] - 1,
@@ -333,10 +334,10 @@ describe('tickSpider', () => {
       // Run 20 rampages across varying seeds and ticks; none should produce -1.
       for (let seed = 1; seed <= 20; seed++) {
         const world = makeWorld(seed * 1000);
-        world.colonies[PLAYER_COLONY_ID as unknown as any] = createColonyRecord(PLAYER_COLONY_ID, 0);
-      world.colonies[PLAYER_COLONY_ID as unknown as any]!.entrances = [];
-        world.colonies[ENEMY_COLONY_ID as unknown as any] = createColonyRecord(ENEMY_COLONY_ID, 1);
-      world.colonies[ENEMY_COLONY_ID as unknown as any]!.entrances = [];
+        world.colonies[PLAYER_COLONY_ID as unknown as ColonyId] = createColonyRecord(PLAYER_COLONY_ID, 0);
+      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!.entrances = [];
+        world.colonies[ENEMY_COLONY_ID as unknown as ColonyId] = createColonyRecord(ENEMY_COLONY_ID, 1);
+      world.colonies[ENEMY_COLONY_ID as unknown as ColonyId]!.entrances = [];
         world.spider = makeSpider({
           state: 'Patrolling',
           hungerTicks: SPIDER_HUNGER_MAX_TICKS[1] - 1,
@@ -351,10 +352,10 @@ describe('tickSpider', () => {
       // Over 50 rampages with varying ticks, both colonies should be chosen at least once.
       const chosen = new Set<number>();
       const world = makeWorld(42);
-      world.colonies[PLAYER_COLONY_ID as unknown as any] = createColonyRecord(PLAYER_COLONY_ID, 0);
-      world.colonies[PLAYER_COLONY_ID as unknown as any]!.entrances = [];
-      world.colonies[ENEMY_COLONY_ID as unknown as any] = createColonyRecord(ENEMY_COLONY_ID, 1);
-      world.colonies[ENEMY_COLONY_ID as unknown as any]!.entrances = [];
+      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId] = createColonyRecord(PLAYER_COLONY_ID, 0);
+      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!.entrances = [];
+      world.colonies[ENEMY_COLONY_ID as unknown as ColonyId] = createColonyRecord(ENEMY_COLONY_ID, 1);
+      world.colonies[ENEMY_COLONY_ID as unknown as ColonyId]!.entrances = [];
       for (let tick = 0; tick < 50; tick++) {
         world.spider = makeSpider({
           state: 'Patrolling',

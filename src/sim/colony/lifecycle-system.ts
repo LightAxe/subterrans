@@ -82,7 +82,7 @@ import {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// eggIntervalForColony — S4 V21+ surplus-scaled egg interval
+// eggIntervalForColony — surplus-scaled egg interval
 //
 // Returns QUEEN_EGG_INTERVAL_DISABLED (-1) when food is below the gate
 // threshold (Gate 2 absorbs this; returning -1 keeps Gate 1 clean).
