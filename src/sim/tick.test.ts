@@ -2762,12 +2762,13 @@ describe('Phase 9 tick integration', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Regression: flow-field caches must not leak across worlds/sessions.
-// Module-level entrance/dig/chamber caches keyed by colonyId would otherwise
-// let a second world with the same colonyId inherit the first world's tunnel
-// topology when digFlowFieldDirty=false on the loaded snapshot.
+// Regression: flow-field caches must not leak across worlds/sessions (#160).
+// Caches are now owned per-world (a WeakMap keyed by WorldState in tick.ts), so
+// a second world reusing the same colonyId starts with empty caches instead of
+// inheriting the first world's tunnel topology — even when digFlowFieldDirty is
+// false on the loaded snapshot and without any explicit reset between worlds.
 // ---------------------------------------------------------------------------
-describe('resetFlowFieldCaches — cross-world isolation', () => {
+describe('cross-world flow-field cache isolation', () => {
   // Build a minimal underground-only world where a foraging ant with
   // foodCarrying=0 routes to the nearest open entrance via the entrance
   // flow-field. Different entrance locations in world A vs world B make the
@@ -2866,27 +2867,27 @@ describe('resetFlowFieldCaches — cross-world isolation', () => {
     expect(afterB).toBeGreaterThan(beforeB);  // stepped east toward col 14 in world B
   });
 
-  it('without resetFlowFieldCaches() between worlds, world B would inherit world A topology (negative control)', async () => {
-    // Ensure cache is clean at the start.
+  it('#160 — world B routes per its own topology WITHOUT an explicit reset (per-world caches)', async () => {
+    // Ensure caches are clean at the start.
     resetFlowFieldCaches();
-    // World A: entrance at col 2 — populates caches under colonyId=1.
+    // World A: entrance at col 2 — populates world A's own caches under colonyId=1.
     const { world: worldA } = await makeUndergroundWorldWithFighter(2, 2);
     tick(worldA, []);
 
-    // Intentionally skip resetFlowFieldCaches(). World B has same colonyId=1
-    // but entrance at col 14 and digFlowFieldDirty=false — the firstDigCompute
-    // latch is false (cache has key) so the recompute would be skipped UNLESS
-    // the colony dirties the field. With the latch check on both dig and
-    // entrance caches, a lingering cache is reused — confirming why the reset
-    // call is load-bearing in bootFresh / bootFromSave.
+    // Intentionally skip resetFlowFieldCaches(). World B is a distinct
+    // WorldState object that reuses colonyId=1 with entrance at col 14 and
+    // digFlowFieldDirty=false. Before #160 the flow-field caches were shared
+    // module singletons keyed only by colonyId: the firstDigCompute latch was
+    // false (the cache still held world A's key), so world B inherited world A's
+    // topology and the fighter stepped west toward col 2. Now each world owns
+    // its caches (WeakMap keyed by world object), so world B starts with empty
+    // caches and routes per its own entrance.
     const { world: worldB, antId: antB } = await makeUndergroundWorldWithFighter(14, 14);
     const beforeB = worldB.ants.posX[antB]! >> FP_SHIFT;
     tick(worldB, []);
     const afterB = worldB.ants.posX[antB]! >> FP_SHIFT;
-    // The fighter steps west (toward world A's entrance col 2), NOT east
-    // toward world B's own entrance col 14 — the exact bug fixed by the
-    // reset hook.
-    expect(afterB).toBeLessThan(beforeB);
+    // Steps east toward world B's own entrance col 14 — no stale inheritance.
+    expect(afterB).toBeGreaterThan(beforeB);
 
     // Leave clean state for the next test.
     resetFlowFieldCaches();
