@@ -489,11 +489,11 @@ export class GameScene extends Phaser.Scene {
     // doc); a fresh start via restartGame should resume normal autosave.
     this.autosaveSuspended = false;
     this.resumedFromSave = false;
-    // tick.ts caches entrance/dig/chamber flow-fields at module scope keyed by
-    // colonyId. bootFresh/bootFromSave replace `world` but those singletons
-    // survive, so a new session with the same colony IDs would otherwise route
-    // ants against the previous world's topology. Clear them here, before the
-    // new world first ticks.
+    // tick.ts owns entrance/dig/chamber flow-field scratch per-world (issue
+    // #160): each WorldState gets its own caches, so bootFresh/bootFromSave
+    // already start the new world with empty caches and this call is no longer
+    // required for cross-world correctness. Kept as an explicit teardown that
+    // drops the retired session's cache eagerly rather than waiting for GC.
     resetFlowFieldCaches();
     // SyncAIState change-detection cache: must be cleared alongside flow-field caches so an
     // in-session bootFromSave whose loaded aiState matches the stale prior-session cache

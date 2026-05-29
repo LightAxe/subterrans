@@ -94,49 +94,62 @@ import type { ColonyId, ColonyRecord } from './colony/colony-store.js';
 import type { FoodPileId } from './food.js';
 
 // ---------------------------------------------------------------------------
-// Module-level scratch state — persists across ticks, not part of WorldState.
-// Created once at module load. Per Open Question 1 in RESEARCH.md.
-// Plan 08 replaces the Phase 06 _stubDigFlowFields with this properly-populated instance.
+// Per-world flow-field scratch (issue #160) — persists across a world's ticks,
+// not part of WorldState (never serialized). Each WorldState owns its own dig/
+// entrance/chamber BFS caches, keyed by world-object identity in the WeakMap
+// below.
+//
+// Previously these were module-level singletons keyed only by colonyId, shared
+// across every world the process ever ticked. A new or deserialized world that
+// reused a prior world's colony ids would inherit the prior topology for any
+// colony whose dirty flags were clear on its first tick — unless every boot/
+// debug/test entry point remembered to call resetFlowFieldCaches() between
+// worlds. Per-world storage makes the simulation self-contained: a fresh or
+// loaded world starts with empty caches and recomputes from its own topology on
+// the first tick, with no dependence on global resets. A WeakMap lets a world's
+// caches be garbage-collected once the world is no longer referenced.
+//
+//   - dig:      seeded from dig-marked tiles; drives dig-worker routing.
+//   - entrance: seeded from open entrance underground tiles; used by empty
+//               foragers to find a tunnel path back to the surface instead of
+//               steering straight-line into dirt.
+//   - chamber:  per-colony food / nursing / queen / nurse-deposit fields; keeps
+//               chamber steering off Solid dirt on bent tunnels (chamber-flow.ts).
 // ---------------------------------------------------------------------------
-const digFlowFields: DigFlowFields = createDigFlowFields();
-// Shared entrance-return flow-field cache. Seeded from open entrance
-// underground tiles; used by underground empty foragers to find a tunnel
-// path back to the surface instead of steering straight-line into dirt.
-const entranceFlowFields: EntranceFlowFields = createEntranceFlowFields();
-// Shared chamber flow-field cache. Two fields per colony: `food` (seeded from
-// FoodStorage chamber Open tiles, read by underground carrying foragers) and
-// `nursing` (seeded from Queen+Nursery chamber Open tiles, read by Nursing
-// ants). Prevents straight-line chamber steering into Solid dirt on bent
-// tunnels (see chamber-flow.ts).
-const chamberFlowFields: ChamberFlowFields = createChamberFlowFields();
+interface FlowFieldCaches {
+  dig: DigFlowFields;
+  entrance: EntranceFlowFields;
+  chamber: ChamberFlowFields;
+}
+
+let cachesByWorld = new WeakMap<WorldState, FlowFieldCaches>();
+
+/** Get (or lazily create) the flow-field scratch owned by `world`. */
+function getFlowFieldCaches(world: WorldState): FlowFieldCaches {
+  let caches = cachesByWorld.get(world);
+  if (caches === undefined) {
+    caches = {
+      dig: createDigFlowFields(),
+      entrance: createEntranceFlowFields(),
+      chamber: createChamberFlowFields(),
+    };
+    cachesByWorld.set(world, caches);
+  }
+  return caches;
+}
 
 /**
- * Clear every module-level flow-field cache keyed by colonyId.
+ * Drop all per-world flow-field scratch.
  *
- * MUST be called between distinct sessions/worlds that may share colony IDs —
- * bootFresh() and bootFromSave() both replace `world` but the singletons above
- * survive across those transitions. Without this reset, a colony in the new
- * world whose `digFlowFieldDirty` is false on the first tick would keep the
- * previous session's entrance/chamber topology in its cache and route ants
- * against the old tunnel layout.
- *
- * In-place deletion preserves the const-bound record identities held by step 9.
+ * As of issue #160 this is no longer required for cross-world correctness —
+ * each world owns its caches via the WeakMap above, so a fresh or loaded world
+ * can never inherit another world's topology. Retained as an explicit teardown
+ * hook (the render layer calls it on boot) and for test isolation. Replacing
+ * the map drops every world's entry at once; abandoned entries would also be
+ * collected on their own once their world is unreferenced.
  */
 export function resetFlowFieldCaches(): void {
-  for (const k in digFlowFields.fields)              delete digFlowFields.fields[k as unknown as ColonyId];
-  for (const k in digFlowFields.queues)              delete digFlowFields.queues[k as unknown as ColonyId];
-  for (const k in entranceFlowFields.fields)         delete entranceFlowFields.fields[k as unknown as ColonyId];
-  for (const k in entranceFlowFields.queues)         delete entranceFlowFields.queues[k as unknown as ColonyId];
-  // Issue #63 — surface entrance flow-field cache also needs reset, otherwise
-  // a session-restart or save-load with different colony IDs leaves stale
-  // arrays resident (codex P2 on PR #92).
-  for (const k in entranceFlowFields.surface)        delete entranceFlowFields.surface[k as unknown as ColonyId];
-  for (const k in entranceFlowFields.surfaceQueues)  delete entranceFlowFields.surfaceQueues[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.food)            delete chamberFlowFields.food[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.nursing)         delete chamberFlowFields.nursing[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.queen)           delete chamberFlowFields.queen[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.nurseDeposit)    delete chamberFlowFields.nurseDeposit[k as unknown as ColonyId];
-  for (const k in chamberFlowFields.queues)          delete chamberFlowFields.queues[k as unknown as ColonyId];
+  cachesByWorld = new WeakMap();
 }
 
 // Suppress unused-import TS error for PendingChamber (used in PlaceChamber case shape)
@@ -216,6 +229,15 @@ function isTileCoord(value: unknown, max: number): boolean {
 }
 
 export function tick(world: WorldState, commands: readonly SimCommand[]): GameOutcome {
+  // Issue #160 — flow-field BFS scratch owned by this world. Lazily created on
+  // the world's first tick and reused across its subsequent ticks; a different
+  // world (fresh boot, save load, or a test world) gets its own caches, so a
+  // reused colony id can never resolve to another world's topology.
+  const caches = getFlowFieldCaches(world);
+  const digFlowFields = caches.dig;
+  const entranceFlowFields = caches.entrance;
+  const chamberFlowFields = caches.chamber;
+
   // Reconstruct Rng from saved state at tick start (PRD §4 contract).
   const rng = new Rng(world.rngState);
 
@@ -773,9 +795,10 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // the field would remain all-zeros and empty foragers would "route" north
     // forever. The chamber flow-fields piggy-back on the same gate — they
     // share the underlying topology, so any signal that dirties dig/entrance
-    // fields dirties them too. `firstDigCompute` also fires after a cross-
-    // session reset via resetFlowFieldCaches(), guaranteeing a fresh/loaded
-    // world never reuses another world's cached topology.
+    // fields dirties them too. Because the caches are owned per-world (issue
+    // #160), `firstDigCompute` is always true on a fresh or loaded world's
+    // first tick, guaranteeing it computes from its own topology rather than
+    // reusing another world's.
     const firstEntranceCompute = !(colony.colonyId in entranceFlowFields.fields);
     const firstDigCompute = !(colony.colonyId in digFlowFields.fields);
 
