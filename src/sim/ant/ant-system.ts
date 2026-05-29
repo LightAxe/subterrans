@@ -3118,8 +3118,11 @@ export function pickNearestHostileUnderground(
 // index. No PRNG, no wall-clock, integer math only.
 //
 // Per-tick no-alloc (AGENTS.md hot-loop rule): the BFS scratch below is reused
-// across calls, grown on demand, and fully reset/consumed within one call. It
-// is transient — it holds no cross-tick or cross-world state.
+// across calls and grown on demand. The dist buffer holds an all-`-1`
+// invariant between calls; each call writes only the cells it visits and then
+// clears exactly those (never a full-grid wipe), so cost scales with the BFS
+// frontier, not the grid size. It is transient — it holds no cross-tick or
+// cross-world state.
 // ---------------------------------------------------------------------------
 
 // Path distance from the target tile to each cell (flat y*width+x index), or
@@ -3162,16 +3165,19 @@ export function pickInvaderUndergroundStep(
     return packStep(0, 0);
   }
 
-  // Grow scratch on demand (one-time as grids first appear / enlarge).
+  // Grow scratch on demand (one-time as grids first appear / enlarge). A fresh
+  // dist buffer is filled with -1 so the "every cell is -1 between calls"
+  // invariant holds from the start; each call below restores it by clearing
+  // only the cells it touched (never a full-grid wipe).
   if (INV_BFS_DIST.length < cells) {
     INV_BFS_DIST = new Int32Array(cells);
+    INV_BFS_DIST.fill(-1);
     INV_BFS_QX = new Int32Array(cells);
     INV_BFS_QY = new Int32Array(cells);
   }
   const dist = INV_BFS_DIST;
   const qx = INV_BFS_QX;
   const qy = INV_BFS_QY;
-  dist.fill(-1, 0, cells);
 
   // BFS rooted at the target, expanding through passable tiles only in fixed
   // N/E/S/W order. Stop as soon as the invader's own tile is dequeued: at that
@@ -3204,29 +3210,39 @@ export function pickInvaderUndergroundStep(
     }
   }
 
-  // Target unreachable through passable terrain — hold (no wall oscillation).
-  if (!reached) return packStep(0, 0);
-
-  // Step to the passable cardinal neighbour with the smallest path distance to
-  // the target (== selfDist - 1 along a shortest path). DIR order + strict `<`
-  // break ties toward the lowest direction index (N before E before S before W).
-  const selfDist = dist[tileY * width + tileX]!;
+  // Pick the step while `dist` is still populated. When the target was
+  // unreachable, `reached` is false and we fall through holding (0,0) — no wall
+  // oscillation. Otherwise step to the passable cardinal neighbour with the
+  // smallest path distance to the target (== selfDist - 1 along a shortest
+  // path). DIR order + strict `<` break ties toward the lowest direction index
+  // (N before E before S before W).
   let bestDx = 0;
   let bestDy = 0;
-  let bestDist = selfDist;
-  for (let i = 0; i < DIR_DX.length; i++) {
-    const ax = DIR_DX[i]!;
-    const ay = DIR_DY[i]!;
-    const nx = tileX + ax;
-    const ny = tileY + ay;
-    if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-    const nd = dist[ny * width + nx]!;
-    if (nd < 0) continue; // unreached this call
-    if (nd < bestDist) {
-      bestDist = nd;
-      bestDx = ax;
-      bestDy = ay;
+  if (reached) {
+    let bestDist = dist[tileY * width + tileX]!;
+    for (let i = 0; i < DIR_DX.length; i++) {
+      const ax = DIR_DX[i]!;
+      const ay = DIR_DY[i]!;
+      const nx = tileX + ax;
+      const ny = tileY + ay;
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+      const nd = dist[ny * width + nx]!;
+      if (nd < 0) continue; // unreached this call
+      if (nd < bestDist) {
+        bestDist = nd;
+        bestDx = ax;
+        bestDy = ay;
+      }
     }
+  }
+
+  // Restore the all-`-1` invariant by clearing only the cells this BFS wrote.
+  // Every cell that received a distance was enqueued, so qx/qy[0..tail)
+  // enumerates exactly the touched cells — the reset cost is proportional to
+  // the work done, not the full grid, so dozens of invaders per tick no longer
+  // each pay an O(cells) wipe.
+  for (let i = 0; i < tail; i++) {
+    dist[qy[i]! * width + qx[i]!] = -1;
   }
 
   return packStep(bestDx, bestDy);
