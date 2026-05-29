@@ -3100,20 +3100,38 @@ export function pickNearestHostileUnderground(
 }
 
 // ---------------------------------------------------------------------------
-// pickInvaderUndergroundStep — wall-aware greedy step for invader fighters.
+// pickInvaderUndergroundStep — wall-aware BFS step for invader fighters.
 //
-// Replaces the previous rawDx/rawDy+pickCardinalStep path that froze fighters
-// against solid walls (the cardinal step was rejected by the passability guard
-// every tick, so the ant never moved). Scans the 4 cardinal neighbours of the
-// current tile; returns the passable step that minimises Manhattan distance to
-// the target tile. Falls back to (0,0) when no passable neighbour gets closer
-// (narrow dead-end or already adjacent to hostile). The downstream passability
-// guard remains as a safety net but will never reject a step produced here.
+// The earlier greedy version only accepted a neighbour that strictly decreased
+// Manhattan distance to the target, so it froze at any bent-tunnel elbow whose
+// first legal step temporarily increases distance (issue #163). This routes
+// with a breadth-first search instead: it floods path distances out from the
+// target through passable tiles, then steps to the neighbour that lies one step
+// closer along a shortest path — taking the necessary detour through L/bent
+// corridors. Returns (0,0) when the target is unreachable through passable
+// terrain (holds deterministically rather than oscillating against a wall).
 //
 // Uses DIR_DX/DIR_DY (N, E, S, W) — diagonals are skipped to avoid corner-cut
 // complications underground (the passability guard handles diagonals separately
-// for other movement paths).
+// for other movement paths). Deterministic: fixed N/E/S/W expansion order and
+// strict-`<` neighbour selection break every tie toward the lowest direction
+// index. No PRNG, no wall-clock, integer math only.
+//
+// Per-tick no-alloc (AGENTS.md hot-loop rule): the BFS scratch below is reused
+// across calls and grown on demand. The dist buffer holds an all-`-1`
+// invariant between calls; each call writes only the cells it visits and then
+// clears exactly those (never a full-grid wipe), so cost scales with the BFS
+// frontier, not the grid size. It is transient — it holds no cross-tick or
+// cross-world state.
 // ---------------------------------------------------------------------------
+
+// Path distance from the target tile to each cell (flat y*width+x index), or
+// -1 when unreached on the current call.
+let INV_BFS_DIST = new Int32Array(0);
+// FIFO of cell coordinates to expand. Parallel x/y arrays avoid decoding a flat
+// index (which would need division/modulo, banned in sim index arithmetic).
+let INV_BFS_QX = new Int32Array(0);
+let INV_BFS_QY = new Int32Array(0);
 
 /**
  * @param underground  The grid the invader currently occupies.
@@ -3131,26 +3149,100 @@ export function pickInvaderUndergroundStep(
   targetTileX: number,
   targetTileY: number,
 ): number {
-  const currentDist = Math.abs(targetTileX - tileX) + Math.abs(targetTileY - tileY);
-  if (currentDist === 0) return packStep(0, 0);
+  // Already on the target tile — nothing to do.
+  if (tileX === targetTileX && tileY === targetTileY) return packStep(0, 0);
 
+  const width = underground.width;
+  const height = underground.height;
+  const cells = width * height;
+
+  // A target or self outside the grid can never be connected — hold. (Callers
+  // pass in-bounds tiles; the self guard is defensive.)
+  if (targetTileX < 0 || targetTileX >= width || targetTileY < 0 || targetTileY >= height) {
+    return packStep(0, 0);
+  }
+  if (tileX < 0 || tileX >= width || tileY < 0 || tileY >= height) {
+    return packStep(0, 0);
+  }
+
+  // Grow scratch on demand (one-time as grids first appear / enlarge). A fresh
+  // dist buffer is filled with -1 so the "every cell is -1 between calls"
+  // invariant holds from the start; each call below restores it by clearing
+  // only the cells it touched (never a full-grid wipe).
+  if (INV_BFS_DIST.length < cells) {
+    INV_BFS_DIST = new Int32Array(cells);
+    INV_BFS_DIST.fill(-1);
+    INV_BFS_QX = new Int32Array(cells);
+    INV_BFS_QY = new Int32Array(cells);
+  }
+  const dist = INV_BFS_DIST;
+  const qx = INV_BFS_QX;
+  const qy = INV_BFS_QY;
+
+  // BFS rooted at the target, expanding through passable tiles only in fixed
+  // N/E/S/W order. Stop as soon as the invader's own tile is dequeued: at that
+  // point every cell with a strictly smaller path distance — including the
+  // neighbour the invader must step to — has its final distance.
+  dist[targetTileY * width + targetTileX] = 0;
+  let head = 0;
+  let tail = 0;
+  qx[tail] = targetTileX;
+  qy[tail] = targetTileY;
+  tail++;
+  let reached = false;
+  while (head < tail) {
+    const cx = qx[head]!;
+    const cy = qy[head]!;
+    head++;
+    if (cx === tileX && cy === tileY) { reached = true; break; }
+    const nextDist = dist[cy * width + cx]! + 1;
+    for (let i = 0; i < DIR_DX.length; i++) {
+      const nx = cx + DIR_DX[i]!;
+      const ny = cy + DIR_DY[i]!;
+      // canEnterUndergroundTile bounds-checks and rejects Solid/Marked terrain.
+      if (!canEnterUndergroundTile(underground, nx, ny, AntTask.Fighting)) continue;
+      const ncell = ny * width + nx;
+      if (dist[ncell] !== -1) continue;
+      dist[ncell] = nextDist;
+      qx[tail] = nx;
+      qy[tail] = ny;
+      tail++;
+    }
+  }
+
+  // Pick the step while `dist` is still populated. When the target was
+  // unreachable, `reached` is false and we fall through holding (0,0) — no wall
+  // oscillation. Otherwise step to the passable cardinal neighbour with the
+  // smallest path distance to the target (== selfDist - 1 along a shortest
+  // path). DIR order + strict `<` break ties toward the lowest direction index
+  // (N before E before S before W).
   let bestDx = 0;
   let bestDy = 0;
-  let bestDist = currentDist;
-
-  for (let i = 0; i < DIR_DX.length; i++) {
-    const ax = DIR_DX[i]!;
-    const ay = DIR_DY[i]!;
-    const nx = tileX + ax;
-    const ny = tileY + ay;
-    if (nx < 0 || nx >= underground.width || ny < 0 || ny >= underground.height) continue;
-    if (!canEnterUndergroundTile(underground, nx, ny, AntTask.Fighting)) continue;
-    const dist = Math.abs(targetTileX - nx) + Math.abs(targetTileY - ny);
-    if (dist < bestDist) {
-      bestDist = dist;
-      bestDx = ax;
-      bestDy = ay;
+  if (reached) {
+    let bestDist = dist[tileY * width + tileX]!;
+    for (let i = 0; i < DIR_DX.length; i++) {
+      const ax = DIR_DX[i]!;
+      const ay = DIR_DY[i]!;
+      const nx = tileX + ax;
+      const ny = tileY + ay;
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+      const nd = dist[ny * width + nx]!;
+      if (nd < 0) continue; // unreached this call
+      if (nd < bestDist) {
+        bestDist = nd;
+        bestDx = ax;
+        bestDy = ay;
+      }
     }
+  }
+
+  // Restore the all-`-1` invariant by clearing only the cells this BFS wrote.
+  // Every cell that received a distance was enqueued, so qx/qy[0..tail)
+  // enumerates exactly the touched cells — the reset cost is proportional to
+  // the work done, not the full grid, so dozens of invaders per tick no longer
+  // each pay an O(cells) wipe.
+  for (let i = 0; i < tail; i++) {
+    dist[qy[i]! * width + qx[i]!] = -1;
   }
 
   return packStep(bestDx, bestDy);

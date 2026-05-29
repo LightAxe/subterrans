@@ -7542,30 +7542,40 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
 });
 
 // ---------------------------------------------------------------------------
-// pickInvaderUndergroundStep — wall-aware greedy step (UAT: fighters freeze bug)
+// pickInvaderUndergroundStep — wall-aware BFS step (UAT: fighters freeze bug;
+// issue #163: route through bent tunnels)
+//
+// BFS routing requires a fully connected passable path from the invader's tile
+// to the target — including the invader's OWN tile — so each scenario carves
+// the complete corridor (the old greedy stepper only looked one tile ahead).
 // ---------------------------------------------------------------------------
 
-describe('pickInvaderUndergroundStep — wall-aware greedy invader step', () => {
-  it('returns direct cardinal step when path is clear', () => {
-    // 5x5 grid. Fighter at (1,1), target at (1,4) due south.
-    // Grid defaults to Solid; set the south tile (1,2) Open so it can be entered.
-    // DIR_DX order: N(1,0) Solid, E(2,1) Solid, S(1,2) Open dist=2<3, W(0,1) Solid.
-    // South (0,+1) is the closest passable step.
+describe('pickInvaderUndergroundStep — wall-aware BFS invader step', () => {
+  it('returns direct cardinal step when a straight open path exists', () => {
+    // 5x5 grid. Fighter at (1,1), target at (1,4) due south. Carve the full
+    // column (1,1)..(1,4) Open. BFS distances south are 3,2,1,0; the invader's
+    // lowest-distance neighbour is S (1,2)=2 < self 3, so it steps south.
     const { underground } = setupWorldWithUnderground(5, 5);
+    ugSet(underground, 1, 1, UndergroundTileState.Open);
     ugSet(underground, 1, 2, UndergroundTileState.Open);
+    ugSet(underground, 1, 3, UndergroundTileState.Open);
+    ugSet(underground, 1, 4, UndergroundTileState.Open);
     const step = pickInvaderUndergroundStep(underground, 1, 1, 1, 4);
     expect(unpackStepDx(step)).toBe(0);
     expect(unpackStepDy(step)).toBe(1);
   });
 
-  it('avoids a wall blocking the direct cardinal path and picks a passable detour', () => {
-    // 5x5 grid. Fighter at (2,1), hostile at (4,3). Current dist=4.
-    // Solid wall at (2,2) blocks the south cardinal step (would give dist=3).
-    // Set east tile (3,1) Open — it also gives dist=3<4 and is the only passable step.
-    // DIR_DX order: N(2,0) Solid, E(3,1) Open dist=3<4, S(2,2) Solid, W(1,1) Solid.
-    // East (1,0) wins.
+  it('routes around a wall blocking the direct cardinal path', () => {
+    // 5x5 grid. Fighter at (2,1), hostile at (4,3). A Solid wall at (2,2)
+    // blocks the direct south step. Carve the L path (2,1)->(3,1)->(4,1)->
+    // (4,2)->(4,3) Open. BFS routes the invader east first (toward (3,1)=3 <
+    // self 4); the blocked south neighbour is never chosen.
     const { underground } = setupWorldWithUnderground(5, 5);
+    ugSet(underground, 2, 1, UndergroundTileState.Open);
     ugSet(underground, 3, 1, UndergroundTileState.Open);
+    ugSet(underground, 4, 1, UndergroundTileState.Open);
+    ugSet(underground, 4, 2, UndergroundTileState.Open);
+    ugSet(underground, 4, 3, UndergroundTileState.Open);
     const step = pickInvaderUndergroundStep(underground, 2, 1, 4, 3);
     expect(unpackStepDx(step)).toBe(1);
     expect(unpackStepDy(step)).toBe(0);
@@ -7578,16 +7588,53 @@ describe('pickInvaderUndergroundStep — wall-aware greedy invader step', () => 
     expect(unpackStepDy(step)).toBe(0);
   });
 
-  it('returns (0,0) when all passable neighbours are farther (dead-end hold, no infinite wall-bounce)', () => {
-    // 3x3 grid. Fighter at (1,0). Target at (1,2) but row 1 is all Solid.
-    // North is out of bounds. East/West are (0,0) dist=3 and (2,0) dist=3 — farther
-    // than current dist=2. Expect hold (0,0) rather than an infinite wall-bounce.
+  it('returns (0,0) when the target is walled off (unreachable hold, no wall-bounce)', () => {
+    // 3x3 grid. Fighter at (1,0) on an Open tile; target (1,2) is isolated
+    // (row 1 all Solid, so the target tile has no passable neighbour). With no
+    // connected path the BFS never reaches the invader → it holds rather than
+    // oscillating against the wall.
     const { underground } = setupWorldWithUnderground(3, 3);
-    ugSet(underground, 0, 1, UndergroundTileState.Solid);
-    ugSet(underground, 1, 1, UndergroundTileState.Solid);
-    ugSet(underground, 2, 1, UndergroundTileState.Solid);
+    ugSet(underground, 1, 0, UndergroundTileState.Open);
     const step = pickInvaderUndergroundStep(underground, 1, 0, 1, 2);
     expect(unpackStepDx(step)).toBe(0);
     expect(unpackStepDy(step)).toBe(0);
+  });
+
+  it('routes through a one-tile-wide bent L-corridor whose first legal step increases Manhattan distance (issue #163)', () => {
+    // 5x5 grid, everything Solid except the bent corridor
+    //   (0,1) -> (0,2) -> (1,2) -> (2,2) -> (2,1)
+    // Invader at (0,1), hostile at (2,1). Straight-line Manhattan distance is 2,
+    // but the ONLY legal first step is south to (0,2), which RAISES Manhattan
+    // distance to 3. The old greedy stepper rejected any non-improving step and
+    // froze at this elbow forever; the BFS stepper takes the detour.
+    const { underground } = setupWorldWithUnderground(5, 5);
+    ugSet(underground, 0, 1, UndergroundTileState.Open);
+    ugSet(underground, 0, 2, UndergroundTileState.Open);
+    ugSet(underground, 1, 2, UndergroundTileState.Open);
+    ugSet(underground, 2, 2, UndergroundTileState.Open);
+    ugSet(underground, 2, 1, UndergroundTileState.Open);
+
+    // First step is the distance-increasing detour (south), not a hold.
+    const first = pickInvaderUndergroundStep(underground, 0, 1, 2, 1);
+    expect(unpackStepDx(first)).toBe(0);
+    expect(unpackStepDy(first)).toBe(1);
+
+    // Walking the returned steps reaches the hostile tile along the 4-step
+    // path without ever stalling.
+    let x = 0;
+    let y = 1;
+    let steps = 0;
+    while (!(x === 2 && y === 1) && steps < 16) {
+      const s = pickInvaderUndergroundStep(underground, x, y, 2, 1);
+      const sdx = unpackStepDx(s);
+      const sdy = unpackStepDy(s);
+      expect(sdx !== 0 || sdy !== 0).toBe(true); // never stalls on a connected path
+      x += sdx;
+      y += sdy;
+      steps++;
+    }
+    expect(x).toBe(2);
+    expect(y).toBe(1);
+    expect(steps).toBe(4);
   });
 });

@@ -173,7 +173,7 @@ describe('invasion-routing — Fighting ant descent-intent gate (REQ-C3)', () =>
     expect(world.ants.currentGridColonyId[playerAntId]).toBe(ENEMY_COLONY_ID);
   });
 
-  it('REQ-C3a extension: Fighting ant inside foreign grid steps TOWARD nearest hostile (Manhattan)', () => {
+  it('REQ-C3a extension: Fighting ant inside foreign grid steps TOWARD nearest hostile (BFS routing)', () => {
     // Strengthened positive test (Task 3): after descent, a Fighter inside
     // the enemy underground grid should consume pickNearestHostileUnderground
     // for target selection and its Manhattan distance to the target should
@@ -201,13 +201,12 @@ describe('invasion-routing — Fighting ant descent-intent gate (REQ-C3)', () =>
     world.ants.currentGridColonyId[hostileId] = ENEMY_COLONY_ID;
     world.colonies[ENEMY_COLONY_ID]!.workers.push(hostileId);
     world.colonies[ENEMY_COLONY_ID]!.workerCount += 1;
-    // Carve an OPEN rectangle (shaft..hostileX, 0..hostileTileY) so the
-    // invader's greedy-Manhattan stepper can reach the hostile regardless of
-    // axis-selection ties. A thin L-corridor would leave the invader stuck at
-    // the elbow when |rawDx|===|rawDy| flips preference to the blocked axis
-    // (canEnterUndergroundTile reverts the step on Solid tiles, which
-    // effectively pins the ant). A rectangular carve guarantees at least one
-    // of {east, south} is always Open for every intermediate tile.
+    // Carve an OPEN rectangle (shaft..hostileX, 0..hostileTileY) as a simple
+    // connected region for the invader to approach through. (Historically this
+    // had to be a rectangle rather than a thin L-corridor because the greedy
+    // Manhattan stepper froze at any elbow; issue #163 replaced that with BFS
+    // routing, which handles bent corridors — see the dedicated bent-L-corridor
+    // regression in ant-system.test.ts.)
     const enemyGrid = world.undergroundGrids[ENEMY_COLONY_ID]!;
     for (let y = 0; y <= hostileTileY; y++) {
       for (let x = ENEMY_START_X; x <= hostileTileX; x++) {
