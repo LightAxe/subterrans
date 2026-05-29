@@ -357,6 +357,15 @@ function buildInvasionRallyWorld(
   const rallyTileX = ENEMY_START_X;
   const rallyTileY = ENEMY_START_Y;
 
+  // #164 pre-descent gate: createScenario spawns the enemy queen ON her start
+  // tile, which is also the enemy entrance. A foreign Fighter must now engage a
+  // surface queen on an entrance rather than descend past her. These tests
+  // assert rally-then-descend on a developed colony, so relocate the enemy
+  // queen off the entrance tile (she holds position — no completed Queen
+  // chamber) to keep the descent path clear.
+  const enemyQueenId = world.colonies[ENEMY_COLONY_ID]!.queenEntityId;
+  world.ants.posX[enemyQueenId] = (ENEMY_START_X + 6) << FP_SHIFT;
+
   // Rally the PLAYER colony onto the enemy entrance tile.
   world.colonies[PLAYER_COLONY_ID]!.rallyPoint = {
     tileX: rallyTileX,

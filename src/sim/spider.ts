@@ -557,10 +557,13 @@ export function tickSpider(world: WorldState): void {
     }
     case 'Rampaging': {
       if (rampageNearest !== null) {
-        // Park one tile above the entrance so workers in zone=Surface are caught
-        // before the entrance-tile zone transition flips them to Underground.
-        const blockadeY = rampageNearest.y > 0 ? rampageNearest.y - 1 : rampageNearest.y;
-        moveTowardTile(spider, rampageNearest.x, blockadeY);
+        // Park ON the entrance tile. The pre-descent gate (#165, ant-system.ts)
+        // holds surface ants here instead of letting them descend before combat,
+        // and spider combat scans the spider's own tile — so blockading the
+        // entrance tile itself is what actually catches entrance traffic,
+        // regardless of which direction the ant approached from. (Parking one
+        // tile above only caught ants approaching from that side.)
+        moveTowardTile(spider, rampageNearest.x, rampageNearest.y);
       }
       break;
     }
