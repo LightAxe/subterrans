@@ -152,6 +152,12 @@ export function resetFlowFieldCaches(): void {
   cachesByWorld = new WeakMap();
 }
 
+// Transient per-tick scratch for the step-10a idle-reassignment pass. Reused
+// across colonies and ticks: reset (length=0) and fully consumed within each
+// colony iteration, so it holds no cross-tick or cross-world state. Avoids the
+// per-colony `eligible` array allocation in this hot path (AGENTS.md no-alloc).
+const IDLE_ELIGIBLE_SCRATCH: number[] = [];
+
 // Suppress unused-import TS error for PendingChamber (used in PlaceChamber case shape)
 void (undefined as unknown as PendingChamber);
 
@@ -1065,7 +1071,8 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     //     post-excavation for Digging, post-feed for Nursing) describe the action-system transitions
     //     that PUT an ant into AntTask.Idle — NOT sub-state predicates against the current task.
     //     AntTask.Fighting not eligible in Phase 6 — no combat resolution yet (Phase 9 scope).
-    const eligible: number[] = [];
+    const eligible = IDLE_ELIGIBLE_SCRATCH;
+    eligible.length = 0;
     for (let i = 0; i < colony.workers.length; i++) {
       const id = colony.workers[i]!;
       if (world.ants.alive[id] !== 1) continue;
@@ -1077,22 +1084,20 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // (c) Walk the sorted eligibles and reassign into under-represented targets.
     //     Canonical target iteration order: forage → dig → fight → nurse (matches PRD §7a result shape).
     //     This deterministic if/else chain is the ONLY selection strategy.
-    const need = {
-      forage: carvedForage                     - actualForage,
-      dig:    colony.computedAllocation.dig    - actualDig,
-      fight:  carvedFight                      - actualFight,
-      nurse:  colony.computedAllocation.nurse  - actualNurse,
-    };
+    let needForage = carvedForage                    - actualForage;
+    let needDig    = colony.computedAllocation.dig    - actualDig;
+    let needFight  = carvedFight                      - actualFight;
+    let needNurse  = colony.computedAllocation.nurse  - actualNurse;
 
     for (let i = 0; i < eligible.length; i++) {
       const id = eligible[i]!;
       let newTask = -1;
       let newSubTask = 0;
 
-      if      (need.forage > 0) { newTask = AntTask.Foraging; newSubTask = ForagingSubState.SearchingFood; need.forage -= 1; }
-      else if (need.dig    > 0) { newTask = AntTask.Digging;  newSubTask = DiggingSubState.MovingToTile;   need.dig    -= 1; }
-      else if (need.fight  > 0) { newTask = AntTask.Fighting; newSubTask = FightingSubState.MovingToRally; need.fight  -= 1; }
-      else if (need.nurse  > 0) { newTask = AntTask.Nursing;  newSubTask = NursingSubState.MovingToBrood;  need.nurse  -= 1; }
+      if      (needForage > 0) { newTask = AntTask.Foraging; newSubTask = ForagingSubState.SearchingFood; needForage -= 1; }
+      else if (needDig    > 0) { newTask = AntTask.Digging;  newSubTask = DiggingSubState.MovingToTile;   needDig    -= 1; }
+      else if (needFight  > 0) { newTask = AntTask.Fighting; newSubTask = FightingSubState.MovingToRally; needFight  -= 1; }
+      else if (needNurse  > 0) { newTask = AntTask.Nursing;  newSubTask = NursingSubState.MovingToBrood;  needNurse  -= 1; }
       else break; // no remaining under-represented targets; leave rest of eligibles in their current state
 
       // Decrement actual for the OLD task (so counts stay consistent), increment for new.
@@ -1218,8 +1223,14 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     const grid = world.pheromoneGrids[gridKey]!;
     // Key format: "${colonyId}:${pheromoneType}:${zone}"
     // PheromoneType: 0 = FoodTrail, 1 = DangerTrail (per enums.ts)
-    const parts = gridKey.split(':');
-    const pheromoneType = (parts[1] as unknown as number) | 0;
+    // Parse the middle (type) token without allocating a split array (hot path,
+    // runs per grid every tick — AGENTS.md no-alloc rule).
+    const firstColon = gridKey.indexOf(':');
+    const secondColon = gridKey.indexOf(':', firstColon + 1);
+    let pheromoneType = 0;
+    for (let c = firstColon + 1; c < secondColon; c++) {
+      pheromoneType = pheromoneType * 10 + (gridKey.charCodeAt(c) - 48);
+    }
     // V14+: slower food-trail decay (PHEROMONE_DECAY_FP_V14=2 vs legacy 5).
     // DangerTrail stays at DANGER_DECAY_FP until S3.
     // V14+ floor is raised to 128 to match the decayFp=2 arithmetic stall

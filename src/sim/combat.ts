@@ -33,72 +33,105 @@ import {
 } from './constants.js';
 import { isInCohort } from './ai-state.js';
 
+// ---------------------------------------------------------------------------
+// Per-tick combat-sweep scratch (no-alloc rule, AGENTS.md hot-loop section).
+//
+// These module-level buffers are TRANSIENT scratch: reset at the top of
+// detectAndResolveCombat and fully consumed within that single synchronous
+// call. They hold no cross-tick or cross-world state — a tick runs to
+// completion before any other world ticks — so, like SPIDER_TILE_SCRATCH
+// below, sharing one module instance across worlds cannot bleed state (this
+// is unlike the persistent flow-field caches, which are correctly scoped
+// per-world). They replace the per-tick Map/Set/Array.from/sort allocations
+// the bucketing sweep used to make on every tick, including no-combat ticks.
+//
+//   COMBAT_LIVE_IDX   — live, colony-affiliated ant slots, sorted by
+//                       (tileKey, slot) ascending.
+//   COMBAT_KEY_BY_SLOT — tileKey indexed by ant slot (written for live slots
+//                       only; read by the sort comparator and run-walk).
+//   COMBAT_CONTESTED  — 1 for ants on a multi-colony tile this tick, else 0.
+const COMBAT_LIVE_IDX: number[] = [];
+let COMBAT_KEY_BY_SLOT = new Int32Array(0);
+let COMBAT_CONTESTED = new Uint8Array(0);
+
+/** Sort comparator: tileKey ascending, then ant slot ascending (deterministic). */
+function compareBySweepKey(a: number, b: number): number {
+  const ka = COMBAT_KEY_BY_SLOT[a]!;
+  const kb = COMBAT_KEY_BY_SLOT[b]!;
+  return ka !== kb ? ka - kb : a - b;
+}
+
 /**
- * Sweep all live ants, bucket by tile, and resolve combat on tiles shared by 2+ colonies.
- * Dispatches to V15 (coin-flip) or V16 (HP/damage/cooldown) based on world.simVersion.
+ * Sweep all live ants, group by tile, and resolve combat on tiles shared by 2+
+ * colonies. Uses reusable scratch buffers instead of per-tick allocation: live
+ * ants are sorted by (tileKey, slot) and processed in equal-tileKey runs.
  */
 export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
   const { ants } = world;
   const count = ants.alive.length;
 
-  // Bucket live ants by tileKey.
-  const bucket = new Map<number, number[]>();
+  if (COMBAT_KEY_BY_SLOT.length < count) COMBAT_KEY_BY_SLOT = new Int32Array(count);
+  if (COMBAT_CONTESTED.length < count) COMBAT_CONTESTED = new Uint8Array(count);
+  COMBAT_CONTESTED.fill(0, 0, count);
+
+  // Collect live, colony-affiliated ants and their tileKeys (ascending by slot).
+  const liveIdx = COMBAT_LIVE_IDX;
+  liveIdx.length = 0;
   for (let i = 0; i < count; i++) {
     if (ants.alive[i] !== 1) continue;
     if (ants.colonyId[i] === 0) continue;
     const tileX = ants.posX[i]! >> FP_SHIFT;
     const tileY = ants.posY[i]! >> FP_SHIFT;
-    const key = makeTileKey(
+    COMBAT_KEY_BY_SLOT[i] = makeTileKey(
       ants.zone[i] as unknown as Zone,
       tileX,
       tileY,
       ants.currentGridColonyId[i] as ColonyId,
     );
-    const slot = bucket.get(key);
-    if (slot === undefined) bucket.set(key, [i]);
-    else slot.push(i);
+    liveIdx.push(i);
   }
 
-  // Deterministic iteration: sort tileKeys ascending.
-  const keys = Array.from(bucket.keys()).sort((a, b) => a - b);
+  // Deterministic iteration: ants ordered by tileKey ascending, slot ascending.
+  // Equal-tileKey runs are contiguous; within a run, slots ascend (so the first
+  // ant of each colony in a run is that colony's lowest slot).
+  liveIdx.sort(compareBySweepKey);
+  const m = liveIdx.length;
 
-  // First pass: collect all ants that are currently on multi-colony contested tiles.
-  // Any live ant NOT in this set has disengaged; its combatOpponentId is stale and
-  // must be cleared so the next encounter triggers a fresh windup (Codex P1 finding).
-  const contestedSet = new Set<number>();
-  for (const key of keys) {
-    const participants = bucket.get(key)!;
-    if (participants.length < 2) continue;
-    const firstCid = ants.colonyId[participants[0]!]!;
+  // First pass: flag every ant on a multi-colony contested tile. Any live ant
+  // NOT flagged has disengaged; its combatOpponentId is stale and must be
+  // cleared so the next encounter triggers a fresh windup (Codex P1 finding).
+  for (let p = 0; p < m; ) {
+    const runStart = p;
+    const key = COMBAT_KEY_BY_SLOT[liveIdx[p]!]!;
+    p++;
+    while (p < m && COMBAT_KEY_BY_SLOT[liveIdx[p]!]! === key) p++;
+    if (p - runStart < 2) continue;
+    const firstCid = ants.colonyId[liveIdx[runStart]!]!;
     let multiColony = false;
-    for (let j = 1; j < participants.length; j++) {
-      if (ants.colonyId[participants[j]!]! !== firstCid) { multiColony = true; break; }
+    for (let q = runStart + 1; q < p; q++) {
+      if (ants.colonyId[liveIdx[q]!]! !== firstCid) { multiColony = true; break; }
     }
     if (multiColony) {
-      for (const idx of participants) contestedSet.add(idx);
+      for (let q = runStart; q < p; q++) COMBAT_CONTESTED[liveIdx[q]!] = 1;
     }
   }
   for (let i = 0; i < count; i++) {
     // -2 is the spider-pairing sentinel; skip it here so resolveSpiderCombatOnTile
     // can preserve windup state. The sentinel is cleared by clearSpiderPairingSentinels.
-    if (ants.alive[i] === 1 && !contestedSet.has(i) && ants.combatOpponentId[i] !== -2) {
+    if (ants.alive[i] === 1 && COMBAT_CONTESTED[i] === 0 && ants.combatOpponentId[i] !== -2) {
       ants.combatOpponentId[i] = -1;
     }
   }
 
-  for (const key of keys) {
-    const participants = bucket.get(key)!;
-    if (participants.length < 2) continue;
-    const firstCid = ants.colonyId[participants[0]!]!;
-    let multiColony = false;
-    for (let j = 1; j < participants.length; j++) {
-      if (ants.colonyId[participants[j]!]! !== firstCid) {
-        multiColony = true;
-        break;
-      }
-    }
-    if (!multiColony) continue;
-    resolveCombatOnTile_v16(world, key, participants);
+  // Second pass: resolve each multi-colony run. The resolver re-checks the
+  // colony split internally and returns early for single-colony runs.
+  for (let p = 0; p < m; ) {
+    const runStart = p;
+    const key = COMBAT_KEY_BY_SLOT[liveIdx[p]!]!;
+    p++;
+    while (p < m && COMBAT_KEY_BY_SLOT[liveIdx[p]!]! === key) p++;
+    if (p - runStart < 2) continue;
+    resolveCombatOnTile_v16(world, liveIdx, runStart, p);
   }
 
   // S3 — spider combat: resolve spider vs ants on the spider's tile.
@@ -166,31 +199,38 @@ function strikeDamage(world: WorldState, antId: number, strikes: boolean): numbe
 /**
  * Resolve combat on a single tile using the V16 HP/damage/cooldown model.
  * One active pair per tick (lowest slot from each colony). Strikes are simultaneous.
+ *
+ * Participants are `liveIdx[lo..hi)` — alive, colony-affiliated ant slots sharing
+ * one tileKey, ascending by slot. The active pair is the lowest slot from each of
+ * the two lowest colony ids; a single pass finds them without allocating.
  */
-function resolveCombatOnTile_v16(world: WorldState, _tileKey: number, participants: readonly number[]): void {
+function resolveCombatOnTile_v16(
+  world: WorldState,
+  liveIdx: readonly number[],
+  lo: number,
+  hi: number,
+): void {
   const { ants } = world;
 
-  // Group alive participants by colony; sort colony ids ascending for determinism.
-  const byColony = new Map<ColonyId, number[]>();
-  for (const idx of participants) {
+  // Single pass: track the two lowest colony ids (cidA < cidB) and, for each,
+  // its lowest-slot ant. Because participants ascend by slot, the first ant seen
+  // for a colony is that colony's lowest slot. Colonies above the two lowest are
+  // ignored — only the active pair matters this tick.
+  let cidA = -1, antA = -1, cidB = -1, antB = -1;
+  for (let p = lo; p < hi; p++) {
+    const idx = liveIdx[p]!;
     if (ants.alive[idx] !== 1) continue;
-    const cid = ants.colonyId[idx]! as ColonyId;
-    const list = byColony.get(cid);
-    if (list === undefined) byColony.set(cid, [idx]);
-    else list.push(idx);
+    const cid = ants.colonyId[idx]!;
+    if (cid === cidA || cid === cidB) continue; // lowest slot already captured
+    if (cidA === -1 || cid < cidA) {
+      cidB = cidA; antB = antA; // demote current minimum
+      cidA = cid; antA = idx;
+    } else if (cidB === -1 || cid < cidB) {
+      cidB = cid; antB = idx;
+    }
+    // else: cid is larger than both tracked colonies — not part of the active pair.
   }
-  if (byColony.size < 2) return;
-
-  const cids = Array.from(byColony.keys()).sort((a, b) => a - b);
-  const cidA = cids[0]!;
-  const cidB = cids[1]!;
-  const groupA = byColony.get(cidA)!;
-  const groupB = byColony.get(cidB)!;
-  groupA.sort((a, b) => a - b);
-  groupB.sort((a, b) => a - b);
-  // Active pair: lowest slot from each colony.
-  const antA = groupA[0]!;
-  const antB = groupB[0]!;
+  if (cidB === -1) return; // fewer than two distinct colonies present
 
   // New-pairing detection: compare current opponent to the stored one.
   // This correctly handles veteran-veteran first contacts (both have non-zero
