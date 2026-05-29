@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
-import { createWorldState, allocateEntityId, SIM_VERSION_V13_INVARIANT_FIXES, SIM_VERSION_V20_SPIDER } from './types.js';
+import { createWorldState, allocateEntityId, SIM_VERSION_V13_INVARIANT_FIXES, SIM_VERSION_V20_SPIDER, SIM_VERSION_V23_SPIDER_AGGRO } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import { createPheromoneGrid, phGet, pheromoneGridKey } from './pheromone/pheromone-store.js';
@@ -22,6 +22,7 @@ import {
   ENEMY_START_X,
   ENEMY_START_Y,
   SPIDER_HUNGER_MAX_TICKS,
+  SPIDER_HP_FULL,
 } from './constants.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
 import { Zone, UndergroundTileState, ugSet } from './terrain.js';
@@ -930,6 +931,74 @@ describe('S3 V20: spider replay determinism (Hunting → Striking → Rampaging)
     expect(statesVisited.has('Rampaging')).toBe(true);
 
     // Byte-identical parity including V20 fields.
+    expect(serializeWorldState(worldA)).toBe(serializeWorldState(worldB));
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// S3 V23 — spider chase (#146) + fighter auto-aggro (#147) replay determinism
+//
+// Exercises the V23-gated paths: findChaseTarget / Chasing transitions+movement
+// (spider.ts), the widened spider-combat gate (combat.ts), and the spider
+// candidate in the fighter proximity scan (ant-system.ts). The serializer spreads
+// the whole spider object, so the new chaseTargetAntId/chaseStartTick fields are
+// covered — any RNG or non-deterministic branch surfaces as a JSON divergence.
+// ---------------------------------------------------------------------------
+
+describe('S3 V23: spider chase + fighter aggro replay determinism', () => {
+  it('two V23 worlds from seed 7777 run byte-identical over 200 ticks through Chasing', () => {
+    const SEED = 7777;
+    const TICKS = 200;
+
+    function buildChaseWorld(): WorldState {
+      const world = createScenario(SEED);
+      // V23 behavior must be active for chase + fighter aggro to fire.
+      expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V23_SPIDER_AGGRO);
+      const spider = world.spider!;
+      const player = world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!;
+      expect(player.workers.length).toBeGreaterThanOrEqual(2);
+
+      // Anchor on the first starting worker's surface tile.
+      const prey = player.workers[0]!;
+      const wx = world.ants.posX[prey]! >> FP_SHIFT;
+      const wy = world.ants.posY[prey]! >> FP_SHIFT;
+
+      // Park the spider 2 tiles from the worker cluster so findChaseTarget fires
+      // on the first tick (within SPIDER_CHASE_TRIGGER_RADIUS=4). No hunger → no rampage.
+      spider.state = 'Patrolling';
+      spider.posX = (wx + 2) << FP_SHIFT;
+      spider.posY = wy << FP_SHIFT;
+      spider.lairTileX = wx + 2;
+      spider.lairTileY = wy;
+      spider.hungerTicks = 0;
+      spider.hp = SPIDER_HP_FULL;
+      spider.chaseTargetAntId = -1;
+      spider.chaseStartTick = 0;
+
+      // Convert a second worker into a fighter adjacent to the spider and rally it
+      // on its own (non-entrance) tile so the proximity-aggro scan runs and folds
+      // the spider in as a candidate.
+      const fighter = player.workers[1]!;
+      world.ants.task[fighter] = AntTask.Fighting;
+      world.ants.posX[fighter] = ((wx + 1) << FP_SHIFT) + (FP_ONE >> 1);
+      world.ants.posY[fighter] = (wy << FP_SHIFT) + (FP_ONE >> 1);
+      player.rallyPoint = { tileX: wx + 1, tileY: wy };
+      return world;
+    }
+
+    const worldA = buildChaseWorld();
+    const worldB = buildChaseWorld();
+    const statesVisited = new Set<string>();
+    for (let t = 0; t < TICKS; t++) {
+      tick(worldA, []);
+      if (worldA.spider !== null) statesVisited.add(worldA.spider.state);
+    }
+    for (let t = 0; t < TICKS; t++) tick(worldB, []);
+
+    // Guard: the chase path must actually have been exercised.
+    expect(statesVisited.has('Chasing')).toBe(true);
+
+    // Byte-identical parity including the new V23 spider fields.
     expect(serializeWorldState(worldA)).toBe(serializeWorldState(worldB));
   }, 30_000);
 });

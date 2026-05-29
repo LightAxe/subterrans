@@ -275,7 +275,21 @@ export const SIM_VERSION_V21_REPRODUCTION = 21 as const;
  * behaviour for byte-identical replay of pre-V22 recordings.
  */
 export const SIM_VERSION_V22_DIFFICULTY = 22 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V22_DIFFICULTY;
+/**
+ * V23 (S3 follow-up) — Spider surface-aggro loop (#146, #147).
+ * - Spider gains an opportunistic Chasing state: while Patrolling it darts at the nearest
+ *   live surface ant within SPIDER_CHASE_TRIGGER_RADIUS, engaging via the normal combat
+ *   resolver, then returns to Patrolling on catch/escape/leash-timeout.
+ * - Fighter ants autonomously target the spider when it is the nearest hostile within
+ *   FIGHT_AGGRO_RADIUS (folded into the existing proximity-aggression scan).
+ * - resolveSpiderCombatOnTile now runs in all surface states (not only Striking/Rampaging)
+ *   so fighters can damage a Patrolling/Hunting/Chasing spider.
+ * Adds SpiderState.chaseTargetAntId and SpiderState.chaseStartTick.
+ * Pre-V23 saves load with chaseTargetAntId=-1, chaseStartTick=0 and replay with none of the
+ * above behaviour (all three paths gate on simVersion >= V23) for byte-identical replay.
+ */
+export const SIM_VERSION_V23_SPIDER_AGGRO = 23 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V23_SPIDER_AGGRO;
 
 
 /**
@@ -296,6 +310,7 @@ export type AIState =
 export type SpiderBehaviorState =
   | 'Patrolling'
   | 'Hunting'
+  | 'Chasing'
   | 'Striking'
   | 'Feeding'
   | 'Rampaging'
@@ -323,6 +338,8 @@ export interface SpiderState {
   killsThisStrike: number;
   rampageKillsThisRampage: number;
   rampageTargetColonyId: number;  // colony targeted for current rampage; -1 when not rampaging
+  chaseTargetAntId: number;       // V23: ant id being chased; -1 when not Chasing
+  chaseStartTick: number;         // V23: tick the current chase began (leash-timeout reference)
 }
 
 export interface AIStateRecord {
@@ -677,6 +694,8 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     ds.killsThisStrike = ss.killsThisStrike;
     ds.rampageKillsThisRampage = ss.rampageKillsThisRampage;
     ds.rampageTargetColonyId = ss.rampageTargetColonyId;
+    ds.chaseTargetAntId = ss.chaseTargetAntId;
+    ds.chaseStartTick = ss.chaseStartTick;
   }
   dst.spiderPriorityColonyId = src.spiderPriorityColonyId;
   // scatterReticleTile

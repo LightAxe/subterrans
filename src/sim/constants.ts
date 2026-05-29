@@ -792,6 +792,20 @@ export const SPIDER_HUNT_MIN_TARGET_WORKERS = 2 as const;
 /** S3 — Manhattan scatter radius around hunt target tile. Workers within this scatter. */
 export const SPIDER_SCATTER_RADIUS_TILES = 1 as const;
 
+/**
+ * V23 (#146) — Manhattan tile radius within which a Patrolling spider opportunistically
+ * chases the nearest live surface ant. Mirrors FIGHT_AGGRO_RADIUS so prey and predator
+ * react at the same range.
+ */
+export const SPIDER_CHASE_TRIGGER_RADIUS = 4 as const;
+
+/**
+ * V23 (#146) — Safety leash: maximum ticks the spider will pursue a single chase target
+ * before abandoning and returning to Patrolling. Prevents a "relentless" chase from
+ * stranding the spider far from its lair indefinitely. 300 ticks = 15 sim-seconds.
+ */
+export const SPIDER_CHASE_MAX_TICKS = 300 as const;
+
 /** S3 — Patrolling territory radius (tiles) around lair. */
 export const SPIDER_TERRITORY_RADIUS_TILES = 24 as const;
 

@@ -67,6 +67,8 @@ function rampagingSpiderAt(tileX: number, tileY: number, targetColonyId: number)
     killsThisStrike: 0,
     rampageKillsThisRampage: 0,
     rampageTargetColonyId: targetColonyId,
+    chaseTargetAntId: -1,
+    chaseStartTick: 0,
   };
 }
 

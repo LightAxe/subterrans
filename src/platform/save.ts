@@ -411,6 +411,8 @@ interface SerializedSpiderState {
   killsThisStrike: number;
   rampageKillsThisRampage: number;
   rampageTargetColonyId: number;
+  chaseTargetAntId: number;
+  chaseStartTick: number;
 }
 
 /** S2 — serialized form of AIStateRecord. operationFighterIds stored as number[]. */
@@ -821,7 +823,7 @@ function deserializeAIStateArray(s: SerializedWorldState): AIStateRecord[] {
 }
 
 function isValidSpiderBehaviorState(v: unknown): v is import('../sim/types.js').SpiderBehaviorState {
-  return v === 'Patrolling' || v === 'Hunting' || v === 'Striking' ||
+  return v === 'Patrolling' || v === 'Hunting' || v === 'Chasing' || v === 'Striking' ||
          v === 'Feeding' || v === 'Rampaging' || v === 'Retreating';
 }
 
@@ -837,9 +839,13 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
   // state=Hunting but target=-1 (corrupt or truncated) would route the spider to (0,0)
   // for the full telegraph duration. Fall back to Patrolling in that case.
   const huntTargetValid = rawHuntX >= 0 && rawHuntY >= 0;
-  const safeState = (rawState === 'Hunting' || rawState === 'Striking') && !huntTargetValid
+  // V23: Chasing requires a valid (non-sentinel) ant id; fall back to Patrolling otherwise.
+  const rawChaseId = typeof r.chaseTargetAntId === 'number' && Number.isInteger(r.chaseTargetAntId) ? r.chaseTargetAntId : -1;
+  const chaseTargetValid = rawChaseId >= 0;
+  let safeState = (rawState === 'Hunting' || rawState === 'Striking') && !huntTargetValid
     ? 'Patrolling'
     : rawState;
+  if (safeState === 'Chasing' && !chaseTargetValid) safeState = 'Patrolling';
   return {
     state: safeState,
     posX: typeof r.posX === 'number' && Number.isInteger(r.posX) ? r.posX : 0,
@@ -861,6 +867,8 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
     killsThisStrike: typeof r.killsThisStrike === 'number' && Number.isInteger(r.killsThisStrike) ? r.killsThisStrike : 0,
     rampageKillsThisRampage: typeof r.rampageKillsThisRampage === 'number' && Number.isInteger(r.rampageKillsThisRampage) ? r.rampageKillsThisRampage : 0,
     rampageTargetColonyId: safeState === 'Rampaging' && typeof r.rampageTargetColonyId === 'number' && r.rampageTargetColonyId > 0 ? r.rampageTargetColonyId : -1,
+    chaseTargetAntId: safeState === 'Chasing' ? rawChaseId : -1,
+    chaseStartTick: typeof r.chaseStartTick === 'number' && Number.isInteger(r.chaseStartTick) ? r.chaseStartTick : 0,
   };
 }
 

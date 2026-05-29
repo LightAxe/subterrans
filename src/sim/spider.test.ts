@@ -2,7 +2,13 @@
 
 import { describe, it, expect } from 'vitest';
 import type { WorldState, SpiderState } from './types.js';
-import { createWorldState, SIM_VERSION_V19_AI_STATE, SIM_VERSION_V20_SPIDER } from './types.js';
+import {
+  createWorldState,
+  SIM_VERSION_V19_AI_STATE,
+  SIM_VERSION_V20_SPIDER,
+  SIM_VERSION_V22_DIFFICULTY,
+  SIM_VERSION_V23_SPIDER_AGGRO,
+} from './types.js';
 import { tickSpider } from './spider.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask, PheromoneType } from './enums.js';
@@ -17,11 +23,16 @@ import {
   SPIDER_HUNT_INTERVAL_TICKS,
   SPIDER_HUNGER_MAX_TICKS,
   SPIDER_RAMPAGE_KILL_QUOTA,
+  SPIDER_CHASE_TRIGGER_RADIUS,
+  SPIDER_CHASE_MAX_TICKS,
+  SPIDER_RAMPAGE_RETREAT_HP,
+  SPIDER_SPEED,
   SURFACE_GRID_WIDTH,
   PLAYER_COLONY_ID,
   ENEMY_COLONY_ID,
 } from './constants.js';
 import { FP_SHIFT } from './fixed.js';
+import { Zone } from './terrain.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -49,6 +60,8 @@ function makeSpider(overrides: Partial<SpiderState> = {}): SpiderState {
     killsThisStrike: 0,
     rampageKillsThisRampage: 0,
     rampageTargetColonyId: -1,
+    chaseTargetAntId: -1,
+    chaseStartTick: 0,
     ...overrides,
   };
 }
@@ -523,6 +536,235 @@ describe('tickSpider', () => {
       tickSpider(world);
       expect(world.spider!.state).toBe('Feeding');
       expect(world.spider!.hungerTicks).toBe(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // V23 (#146): Chasing — opportunistic chase of a nearby ant
+  // ---------------------------------------------------------------------------
+
+  describe('Patrolling → Chasing trigger (V23 #146)', () => {
+    it('enters Chasing for the nearest surface ant within trigger radius', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT });
+      world.spider.nextHuntTick = 9999; // scheduled hunt must not fire — chase takes precedence
+      const antId = placeWorker(world, sx + SPIDER_CHASE_TRIGGER_RADIUS, sy);
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Chasing');
+      expect(world.spider!.chaseTargetAntId).toBe(antId);
+      expect(world.spider!.chaseStartTick).toBe(world.tick);
+      const evt = world.events.find((e) => e.type === 'spider_chase_start');
+      expect(evt).toBeDefined();
+    });
+
+    it('picks the nearest ant (lower id wins on tie)', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT });
+      world.spider.nextHuntTick = 9999;
+      const near = placeWorker(world, sx + 1, sy); // dist 1
+      placeWorker(world, sx + 3, sy);              // dist 3 (farther)
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Chasing');
+      expect(world.spider!.chaseTargetAntId).toBe(near);
+    });
+
+    it('does NOT chase an ant just outside the trigger radius', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT });
+      world.spider.nextHuntTick = 9999;
+      placeWorker(world, sx + SPIDER_CHASE_TRIGGER_RADIUS + 1, sy); // out of range
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Patrolling');
+      expect(world.spider!.chaseTargetAntId).toBe(-1);
+    });
+
+    it('does NOT chase under a pre-V23 (V22) world — old-replay guard', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V22_DIFFICULTY;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT });
+      world.spider.nextHuntTick = 9999;
+      placeWorker(world, sx + 1, sy);
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Patrolling');
+      expect(world.spider!.chaseTargetAntId).toBe(-1);
+    });
+
+    it('rampage preempts chase when hunger is maxed', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        hungerTicks: SPIDER_HUNGER_MAX_TICKS[1] - 1, // +1 this tick reaches max
+      });
+      placeWorker(world, sx + 1, sy); // a chaseable ant is present, but hunger wins
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Rampaging');
+    });
+
+    it('excludes the queen from chase targets', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT });
+      world.spider.nextHuntTick = 9999;
+      const queenId = placeWorker(world, sx + 1, sy);
+      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId] = createColonyRecord(PLAYER_COLONY_ID, 0);
+      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!.queenEntityId = queenId;
+
+      tickSpider(world);
+
+      // Only the queen is in range and queens are excluded → no chase.
+      expect(world.spider!.state).toBe('Patrolling');
+      expect(world.spider!.chaseTargetAntId).toBe(-1);
+    });
+  });
+
+  describe('Chasing movement + transitions (V23 #146)', () => {
+    it('moves one step toward the target ant while chasing', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      const antId = placeWorker(world, sx + 4, sy);
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        state: 'Chasing',
+        chaseTargetAntId: antId,
+        chaseStartTick: 0,
+      });
+      world.tick = 1;
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Chasing');
+      expect(world.spider!.posX).toBe((sx << FP_SHIFT) + SPIDER_SPEED); // moved +X toward target
+    });
+
+    it('successful catch (target dead) resets hunger and returns to Patrolling', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const antId = placeWorker(world, 66, 32);
+      world.ants.alive[antId] = 0; // combat killed it this tick
+      world.spider = makeSpider({
+        state: 'Chasing',
+        chaseTargetAntId: antId,
+        chaseStartTick: 0,
+        hungerTicks: 500,
+      });
+      world.tick = 50;
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Patrolling');
+      expect(world.spider!.chaseTargetAntId).toBe(-1);
+      expect(world.spider!.hungerTicks).toBe(0);
+      expect(world.spider!.nextHuntTick).toBe(50 + SPIDER_HUNT_INTERVAL_TICKS);
+      const evt = world.events.find((e) => e.type === 'spider_chase_end');
+      expect(evt).toBeDefined();
+      if (evt?.type === 'spider_chase_end') expect(evt.payload.outcome).toBe('kill');
+    });
+
+    it('abandons the chase when the target reaches safety underground', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const antId = placeWorker(world, 66, 32);
+      world.ants.zone[antId] = Zone.Underground;
+      world.spider = makeSpider({
+        state: 'Chasing',
+        chaseTargetAntId: antId,
+        chaseStartTick: 0,
+      });
+      world.tick = 50;
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Patrolling');
+      expect(world.spider!.chaseTargetAntId).toBe(-1);
+      const evt = world.events.find((e) => e.type === 'spider_chase_end');
+      if (evt?.type === 'spider_chase_end') expect(evt.payload.outcome).toBe('escape');
+    });
+
+    it('abandons the chase when the safety leash expires', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const antId = placeWorker(world, 66, 32);
+      world.spider = makeSpider({
+        state: 'Chasing',
+        chaseTargetAntId: antId,
+        chaseStartTick: 0,
+      });
+      world.tick = SPIDER_CHASE_MAX_TICKS; // leash window elapsed
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Patrolling');
+      expect(world.spider!.chaseTargetAntId).toBe(-1);
+      const evt = world.events.find((e) => e.type === 'spider_chase_end');
+      if (evt?.type === 'spider_chase_end') expect(evt.payload.outcome).toBe('leash');
+    });
+
+    it('retreats (and emits retreat) when damaged below threshold mid-chase', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const antId = placeWorker(world, 66, 32);
+      world.spider = makeSpider({
+        state: 'Chasing',
+        chaseTargetAntId: antId,
+        chaseStartTick: 0,
+        hp: SPIDER_RAMPAGE_RETREAT_HP - 1,
+      });
+      world.tick = 10;
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Retreating');
+      expect(world.spider!.chaseTargetAntId).toBe(-1);
+      const evt = world.events.find((e) => e.type === 'spider_chase_end');
+      if (evt?.type === 'spider_chase_end') expect(evt.payload.outcome).toBe('retreat');
+    });
+
+    it('emits spider_chase_end(killed) when the spider dies mid-chase', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const antId = placeWorker(world, 66, 32);
+      world.spider = makeSpider({
+        state: 'Chasing',
+        chaseTargetAntId: antId,
+        hp: 0, // combat killed the spider this tick
+      });
+
+      tickSpider(world);
+
+      expect(world.spider).toBeNull();
+      const evt = world.events.find((e) => e.type === 'spider_chase_end');
+      expect(evt).toBeDefined();
+      if (evt?.type === 'spider_chase_end') expect(evt.payload.outcome).toBe('killed');
     });
   });
 });

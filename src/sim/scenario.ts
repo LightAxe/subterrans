@@ -296,6 +296,8 @@ function _placeSpider(world: WorldState): SpiderState {
     killsThisStrike: 0,
     rampageKillsThisRampage: 0,
     rampageTargetColonyId: -1,
+    chaseTargetAntId: -1,
+    chaseStartTick: 0,
   };
 }
 

@@ -23,10 +23,13 @@ import {
   SPIDER_HUNT_MIN_TARGET_WORKERS,
   SPIDER_SPEED,
   SPIDER_DANGER_DEPOSIT,
+  SPIDER_CHASE_TRIGGER_RADIUS,
+  SPIDER_CHASE_MAX_TICKS,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
   PHEROMONE_CAP,
 } from './constants.js';
+import { SIM_VERSION_V23_SPIDER_AGGRO } from './types.js';
 import { FP_SHIFT } from './fixed.js';
 
 // HUNT_KEY_SHIFT: number of bits to shift Y to form a tile key (Y << SHIFT + X).
@@ -116,6 +119,50 @@ function findHuntTarget(
   }
   if (bestKey === -1) return null;
   return { x: bestX, y: bestY, workerCount: bestCount };
+}
+
+// ---------------------------------------------------------------------------
+// Chase target selection (V23 / #146) — deterministic (no rng draws)
+// ---------------------------------------------------------------------------
+
+/**
+ * Find the nearest live surface ant (any caste; queens excluded) within
+ * SPIDER_CHASE_TRIGGER_RADIUS of the spider. Returns the ant entity id, or -1 if
+ * none qualify. Manhattan distance; ties broken by ascending ant id (lower id wins),
+ * matching the deterministic SoA iteration order. No allocation.
+ */
+function findChaseTarget(world: WorldState, spider: SpiderState): number {
+  const spiderTileX = spider.posX >> FP_SHIFT;
+  const spiderTileY = spider.posY >> FP_SHIFT;
+  const r = SPIDER_CHASE_TRIGGER_RADIUS;
+
+  // Exclude queens (identified by colony.queenEntityId) — they are not chase prey.
+  let chaseQueenId0 = -1;
+  let chaseQueenId1 = -1;
+  for (const ckey in world.colonies) {
+    if (!Object.hasOwn(world.colonies, ckey)) continue;
+    const col = world.colonies[ckey as unknown as import('./colony/colony-store.js').ColonyId];
+    if (col === undefined) continue;
+    if (chaseQueenId0 < 0) chaseQueenId0 = col.queenEntityId;
+    else chaseQueenId1 = col.queenEntityId;
+  }
+
+  const { ants } = world;
+  const antCount = ants.alive.length;
+  let bestId = -1;
+  let bestDist = r + 1; // must be <= r to qualify
+  for (let i = 0; i < antCount; i++) {
+    if (ants.alive[i] !== 1) continue;
+    if (ants.zone[i] !== 0) continue; // surface only
+    if (i === chaseQueenId0 || i === chaseQueenId1) continue; // queens are not prey
+    const ax = ants.posX[i]! >> FP_SHIFT;
+    const ay = ants.posY[i]! >> FP_SHIFT;
+    const dist = (ax > spiderTileX ? ax - spiderTileX : spiderTileX - ax) +
+                 (ay > spiderTileY ? ay - spiderTileY : spiderTileY - ay);
+    if (dist > r) continue;
+    if (dist < bestDist) { bestDist = dist; bestId = i; } // strict < ⇒ lower id wins on tie
+  }
+  return bestId;
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +372,17 @@ function emitSpiderRampageEnd(
   });
 }
 
+function emitSpiderChaseEnd(
+  world: WorldState,
+  outcome: 'kill' | 'escape' | 'leash' | 'retreat' | 'killed',
+): void {
+  emitEvent(world, {
+    tick: world.tick,
+    type: 'spider_chase_end',
+    payload: { outcome },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Utility: clear stale spider-pairing sentinels from live ants
 // ---------------------------------------------------------------------------
@@ -364,6 +422,8 @@ export function tickSpider(world: WorldState): void {
     // Spider died from combat this tick. Emit end events, then clear.
     if (spider.state === 'Striking') {
       emitSpiderHuntEnd(world, 'swarm_retreat', spider.killsThisStrike);
+    } else if (spider.state === 'Chasing') {
+      emitSpiderChaseEnd(world, 'killed');
     } else if (spider.state === 'Rampaging') {
       emitSpiderRampageEnd(world, 'killed_in_nest', spider.rampageKillsThisRampage, false);
     }
@@ -387,13 +447,15 @@ export function tickSpider(world: WorldState): void {
     spider.hungerTicks += 1;
   }
 
-  // --- Priority retreating-threshold check (applies to Striking and Rampaging) ---
+  // --- Priority retreating-threshold check (applies to Striking, Chasing, Rampaging) ---
   // This runs before state-specific logic so a combat-damaged spider retreats
   // immediately, even on the same tick its duration would have expired.
-  if ((spider.state === 'Striking' || spider.state === 'Rampaging') &&
+  if ((spider.state === 'Striking' || spider.state === 'Chasing' || spider.state === 'Rampaging') &&
       spider.hp < SPIDER_RAMPAGE_RETREAT_HP) {
     if (spider.state === 'Striking') {
       emitSpiderHuntEnd(world, 'swarm_retreat', spider.killsThisStrike);
+    } else if (spider.state === 'Chasing') {
+      emitSpiderChaseEnd(world, 'retreat');
     } else {
       emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
     }
@@ -402,6 +464,7 @@ export function tickSpider(world: WorldState): void {
     spider.retreatStartTick = world.tick;
     spider.huntTargetTileX = -1;
     spider.huntTargetTileY = -1;
+    spider.chaseTargetAntId = -1;
     spider.hungerTicks = 0; // prevent immediate re-rampaging on return to Patrolling
     spider.rampageTargetColonyId = -1;
     world.spiderPriorityColonyId = null;
@@ -425,25 +488,47 @@ export function tickSpider(world: WorldState): void {
             hungerTicks: spider.hungerTicks,
           },
         });
-      } else if (world.tick >= spider.nextHuntTick) {
-        const target = findHuntTarget(world, spider);
-        if (target !== null) {
-          spider.state = 'Hunting';
-          spider.huntTargetTileX = target.x;
-          spider.huntTargetTileY = target.y;
-          spider.huntStartTick = world.tick;
+      } else {
+        // V23 (#146): opportunistic chase — a lone ant within trigger radius takes
+        // precedence over the scheduled tile-density hunt (but not over rampaging).
+        const chaseId = world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO
+          ? findChaseTarget(world, spider)
+          : -1;
+        if (chaseId >= 0) {
+          spider.state = 'Chasing';
+          spider.chaseTargetAntId = chaseId;
+          spider.chaseStartTick = world.tick;
           emitEvent(world, {
             tick: world.tick,
-            type: 'spider_hunt_start',
+            type: 'spider_chase_start',
             payload: {
-              reticleTile: { x: target.x, y: target.y, grid: 'surface' },
-              targetWorkers: target.workerCount,
+              targetAntId: chaseId,
+              targetTile: {
+                x: world.ants.posX[chaseId]! >> FP_SHIFT,
+                y: world.ants.posY[chaseId]! >> FP_SHIFT,
+              },
             },
           });
-        } else {
-          // No qualifying workers in range — postpone hunt by one interval to preserve
-          // the 1200-tick cadence rather than re-scanning every tick.
-          spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
+        } else if (world.tick >= spider.nextHuntTick) {
+          const target = findHuntTarget(world, spider);
+          if (target !== null) {
+            spider.state = 'Hunting';
+            spider.huntTargetTileX = target.x;
+            spider.huntTargetTileY = target.y;
+            spider.huntStartTick = world.tick;
+            emitEvent(world, {
+              tick: world.tick,
+              type: 'spider_hunt_start',
+              payload: {
+                reticleTile: { x: target.x, y: target.y, grid: 'surface' },
+                targetWorkers: target.workerCount,
+              },
+            });
+          } else {
+            // No qualifying workers in range — postpone hunt by one interval to preserve
+            // the 1200-tick cadence rather than re-scanning every tick.
+            spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
+          }
         }
       }
       break;
@@ -454,6 +539,38 @@ export function tickSpider(world: WorldState): void {
         spider.state = 'Striking';
         spider.strikeStartTick = world.tick;
         spider.killsThisStrike = 0;
+      }
+      break;
+    }
+
+    case 'Chasing': {
+      // Combat ran at step 17 (this tick) before tickSpider, so a catch shows up as a
+      // dead target here. Exit on catch / escape underground / leash-timeout; otherwise
+      // keep pursuing (movement happens in the movement switch below).
+      const tid = spider.chaseTargetAntId;
+      const targetAlive = tid >= 0 && world.ants.alive[tid] === 1;
+      if (!targetAlive) {
+        // Target died — treat as a successful catch (hunger satisfied).
+        emitSpiderChaseEnd(world, 'kill');
+        clearSpiderPairingSentinels(world);
+        spider.state = 'Patrolling';
+        spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
+        spider.chaseTargetAntId = -1;
+        spider.hungerTicks = 0;
+      } else if (world.ants.zone[tid] !== 0) {
+        // Target reached safety underground — abandon.
+        emitSpiderChaseEnd(world, 'escape');
+        clearSpiderPairingSentinels(world);
+        spider.state = 'Patrolling';
+        spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
+        spider.chaseTargetAntId = -1;
+      } else if (world.tick - spider.chaseStartTick >= SPIDER_CHASE_MAX_TICKS) {
+        // Safety leash expired — give up and return to patrol.
+        emitSpiderChaseEnd(world, 'leash');
+        clearSpiderPairingSentinels(world);
+        spider.state = 'Patrolling';
+        spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
+        spider.chaseTargetAntId = -1;
       }
       break;
     }
@@ -550,6 +667,15 @@ export function tickSpider(world: WorldState): void {
       moveTowardTile(spider, spider.huntTargetTileX, spider.huntTargetTileY);
       break;
     }
+    case 'Chasing': {
+      // Pursue the target ant's current tile each tick (transition logic above already
+      // handled dead/underground/leash-expired targets, so the id is live here).
+      const tid = spider.chaseTargetAntId;
+      if (tid >= 0 && world.ants.alive[tid] === 1) {
+        moveTowardTile(spider, world.ants.posX[tid]! >> FP_SHIFT, world.ants.posY[tid]! >> FP_SHIFT);
+      }
+      break;
+    }
     case 'Feeding':
     case 'Retreating': {
       moveTowardTile(spider, spider.lairTileX, spider.lairTileY);
@@ -570,7 +696,7 @@ export function tickSpider(world: WorldState): void {
   }
 
   // --- Danger pheromone seeding ---
-  // Surface states: Patrolling, Hunting, Striking, Rampaging (while on surface)
+  // Surface states: Patrolling, Hunting, Chasing, Striking, Rampaging (while on surface)
   const isOnSurface = spider.state !== 'Feeding' && spider.state !== 'Retreating';
   if (isOnSurface) {
     seedDangerPheromone(world, spider);
@@ -578,12 +704,26 @@ export function tickSpider(world: WorldState): void {
 
 
   // --- scatterReticleTile shadow field: written at end for next tick's step 13e ---
+  // Hunting/Striking scatter around the hunt target tile; Chasing (V23) scatters around
+  // the pursued ant's current tile so nearby non-fighters flee the chase.
+  const chaseTid = spider.chaseTargetAntId;
+  const chaseReticleValid =
+    spider.state === 'Chasing' && chaseTid >= 0 && world.ants.alive[chaseTid] === 1;
   if (spider.state === 'Hunting' || spider.state === 'Striking') {
     if (world.scatterReticleTile === null) {
       world.scatterReticleTile = { x: spider.huntTargetTileX, y: spider.huntTargetTileY };
     } else {
       world.scatterReticleTile.x = spider.huntTargetTileX;
       world.scatterReticleTile.y = spider.huntTargetTileY;
+    }
+  } else if (chaseReticleValid) {
+    const rx = world.ants.posX[chaseTid]! >> FP_SHIFT;
+    const ry = world.ants.posY[chaseTid]! >> FP_SHIFT;
+    if (world.scatterReticleTile === null) {
+      world.scatterReticleTile = { x: rx, y: ry };
+    } else {
+      world.scatterReticleTile.x = rx;
+      world.scatterReticleTile.y = ry;
     }
   } else {
     world.scatterReticleTile = null;

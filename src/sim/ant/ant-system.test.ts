@@ -44,6 +44,8 @@ import {
   SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
   SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX,
   SIM_VERSION_V17_COMBAT_AGGRO,
+  SIM_VERSION_V22_DIFFICULTY,
+  SIM_VERSION_V23_SPIDER_AGGRO,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt, createAntComponents, RECENT_TILES_LEN, isRecentTile } from './ant-store.js';
@@ -71,6 +73,8 @@ import {
   FIGHT_AGGRO_RADIUS,
   SEARCH_PAUSE_BASE_TICKS,
   SEARCH_PAUSE_JITTER_TICKS,
+  SPIDER_HP_FULL,
+  SPIDER_HUNT_INTERVAL_TICKS,
 } from '../constants.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { Zone, UndergroundTileState, ugGet, ugSet, createUndergroundGrid } from '../terrain.js';
@@ -89,7 +93,7 @@ import {
   NURSING_CHAMBER_TYPES,
   NURSERY_CHAMBER_TYPES,
 } from '../chamber-flow.js';
-import type { WorldState } from '../types.js';
+import type { WorldState, SpiderState } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
 import type { FoodPile } from '../food.js';
 
@@ -2201,6 +2205,161 @@ describe('updateFightAntTargets', () => {
     // In V17, enemy within radius → target is the enemy's position (not the rally).
     expect(world.ants.targetPosX[fighter]).toBe((enemyTileX << FP_SHIFT) + (FP_ONE >> 1));
     expect(world.ants.targetPosX[fighter]).not.toBe((50 << FP_SHIFT) + (FP_ONE >> 1));
+  });
+
+  // -------------------------------------------------------------------------
+  // V23 (#147): the spider is one more candidate in the proximity aggro scan.
+  // -------------------------------------------------------------------------
+
+  /** Build a Patrolling spider parked on tile (tileX, tileY). */
+  function placeAggroSpider(world: WorldState, tileX: number, tileY: number): SpiderState {
+    const spider: SpiderState = {
+      state: 'Patrolling',
+      posX: tileX << FP_SHIFT,
+      posY: tileY << FP_SHIFT,
+      lairTileX: tileX,
+      lairTileY: tileY,
+      territoryRadiusTiles: 24,
+      hp: SPIDER_HP_FULL,
+      attackCooldown: 0,
+      hungerTicks: 0,
+      nextHuntTick: SPIDER_HUNT_INTERVAL_TICKS,
+      huntStartTick: 0,
+      strikeStartTick: 0,
+      feedingStartTick: 0,
+      retreatStartTick: 0,
+      rampageStartTick: 0,
+      huntTargetTileX: -1,
+      huntTargetTileY: -1,
+      killsThisStrike: 0,
+      rampageKillsThisRampage: 0,
+      rampageTargetColonyId: -1,
+      chaseTargetAntId: -1,
+      chaseStartTick: 0,
+    };
+    world.spider = spider;
+    return spider;
+  }
+
+  it('V23: fighter within FIGHT_AGGRO_RADIUS of the spider retargets onto it', () => {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    const colA = createColonyRecord(COLONY_ID, 0);
+    colA.entrances = []; // rally not on any entrance → aggro scan active
+    colA.rallyPoint = { tileX: 50, tileY: 5 };
+    colA.digFlowFieldDirty = false;
+    world.colonies[COLONY_ID] = colA;
+
+    const fighter = allocateEntityId(world);
+    initAnt(world.ants, fighter, {
+      colonyId: COLONY_ID, posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT,
+      task: AntTask.Fighting, subTask: 0,
+    });
+    world.ants.zone[fighter] = Zone.Surface;
+
+    const spider = placeAggroSpider(world, 10 + 2, 10); // dist 2, within radius
+
+    updateFightAntTargets(world);
+
+    // Routed onto the spider's exact position, not the rally.
+    expect(world.ants.targetPosX[fighter]).toBe(spider.posX);
+    expect(world.ants.targetPosY[fighter]).toBe(spider.posY);
+    expect(world.ants.targetPosX[fighter]).not.toBe((50 << FP_SHIFT) + (FP_ONE >> 1));
+  });
+
+  it('V23: a closer enemy ant wins over the spider (just another candidate)', () => {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    const COLONY_B = 2 as const;
+    const colA = createColonyRecord(COLONY_ID, 0);
+    colA.entrances = [];
+    colA.rallyPoint = { tileX: 50, tileY: 5 };
+    colA.digFlowFieldDirty = false;
+    world.colonies[COLONY_ID] = colA;
+
+    const fighter = allocateEntityId(world);
+    initAnt(world.ants, fighter, {
+      colonyId: COLONY_ID, posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT,
+      task: AntTask.Fighting, subTask: 0,
+    });
+    world.ants.zone[fighter] = Zone.Surface;
+
+    // Enemy ant at dist 1 (closer than the spider at dist 3).
+    const colB = createColonyRecord(COLONY_B, 0);
+    colB.queenEntityId = -1;
+    colB.entrances = [];
+    colB.digFlowFieldDirty = false;
+    world.colonies[COLONY_B] = colB;
+    const enemyTileX = 11;
+    const enemy = allocateEntityId(world);
+    initAnt(world.ants, enemy, {
+      colonyId: COLONY_B, posX: (enemyTileX << FP_SHIFT) + (FP_ONE >> 1), posY: 10 << FP_SHIFT,
+      task: AntTask.Idle, subTask: 0,
+    });
+    world.ants.zone[enemy] = Zone.Surface;
+    colB.workers.push(enemy);
+    colB.workerCount += 1;
+
+    const spider = placeAggroSpider(world, 13, 10); // dist 3, farther than the enemy
+
+    updateFightAntTargets(world);
+
+    // The nearer enemy ant wins; the spider is not chosen.
+    expect(world.ants.targetPosX[fighter]).toBe((enemyTileX << FP_SHIFT) + (FP_ONE >> 1));
+    expect(world.ants.targetPosX[fighter]).not.toBe(spider.posX);
+  });
+
+  it('V23: fighter rallied on an OPEN entrance is NOT diverted to a nearby spider', () => {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    const colA = createColonyRecord(COLONY_ID, 0);
+    // Rally sits on this colony's own OPEN entrance → aggro scan suppressed so the
+    // fighter walks the exact entrance tile (descent trigger carve-out).
+    colA.entrances = [{ entranceId: 1, surfaceTileX: 20, surfaceTileY: 8, isOpen: true }];
+    colA.rallyPoint = { tileX: 20, tileY: 8 };
+    colA.digFlowFieldDirty = false;
+    world.colonies[COLONY_ID] = colA;
+
+    const fighter = allocateEntityId(world);
+    initAnt(world.ants, fighter, {
+      colonyId: COLONY_ID, posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT,
+      task: AntTask.Fighting, subTask: 0,
+    });
+    world.ants.zone[fighter] = Zone.Surface;
+
+    const spider = placeAggroSpider(world, 11, 10); // dist 1 — would aggro if not suppressed
+
+    updateFightAntTargets(world);
+
+    // Held to the entrance rally, not diverted to the spider.
+    expect(world.ants.targetPosX[fighter]).toBe((20 << FP_SHIFT) + (FP_ONE >> 1));
+    expect(world.ants.targetPosY[fighter]).toBe((8 << FP_SHIFT) + (FP_ONE >> 1));
+    expect(world.ants.targetPosX[fighter]).not.toBe(spider.posX);
+  });
+
+  it('V23 gate: a pre-V23 (V22) world shows no spider auto-aggro', () => {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = SIM_VERSION_V22_DIFFICULTY;
+    const colA = createColonyRecord(COLONY_ID, 0);
+    colA.entrances = [];
+    colA.rallyPoint = { tileX: 50, tileY: 5 };
+    colA.digFlowFieldDirty = false;
+    world.colonies[COLONY_ID] = colA;
+
+    const fighter = allocateEntityId(world);
+    initAnt(world.ants, fighter, {
+      colonyId: COLONY_ID, posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT,
+      task: AntTask.Fighting, subTask: 0,
+    });
+    world.ants.zone[fighter] = Zone.Surface;
+
+    const spider = placeAggroSpider(world, 11, 10); // dist 1, but gate is closed pre-V23
+
+    updateFightAntTargets(world);
+
+    // No auto-aggro: fighter follows the rally, not the spider.
+    expect(world.ants.targetPosX[fighter]).toBe((50 << FP_SHIFT) + (FP_ONE >> 1));
+    expect(world.ants.targetPosX[fighter]).not.toBe(spider.posX);
   });
 });
 

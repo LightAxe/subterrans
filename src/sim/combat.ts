@@ -17,6 +17,7 @@ import { Rng } from './rng.js';
 import { AntTask } from './enums.js';
 import { makeTileKey } from './tile-key.js';
 import type { WorldState, KillerKind, QueenDeathContext } from './types.js';
+import { SIM_VERSION_V23_SPIDER_AGGRO } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
@@ -135,11 +136,19 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
   }
 
   // S3 — spider combat: resolve spider vs ants on the spider's tile.
-  // Only during combat-active states (Striking, Rampaging). Spider in Patrolling,
-  // Hunting, Feeding, or Retreating does not engage in direct HP combat.
-  if (world.spider !== null &&
-      (world.spider.state === 'Striking' || world.spider.state === 'Rampaging')) {
-    resolveSpiderCombatOnTile(world);
+  // Pre-V23: only the combat-active states (Striking, Rampaging) engage.
+  // V23 (#146/#147): all *surface* states engage (Patrolling, Hunting, Chasing too) so
+  // fighters that auto-aggro onto a patrolling/chasing spider can actually damage it, and
+  // the spider defends itself. Feeding/Retreating are off-surface (at lair) and never engage.
+  if (world.spider !== null) {
+    const ss = world.spider.state;
+    const spiderCombatActive =
+      ss === 'Striking' || ss === 'Rampaging' ||
+      (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO &&
+        (ss === 'Patrolling' || ss === 'Hunting' || ss === 'Chasing'));
+    if (spiderCombatActive) {
+      resolveSpiderCombatOnTile(world);
+    }
   }
 
   // Clear pendingQueenDeathContexts for ants that survived (i.e., where the queen kill

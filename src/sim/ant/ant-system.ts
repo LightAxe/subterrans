@@ -34,6 +34,7 @@
 
 import {
   type WorldState,
+  SIM_VERSION_V23_SPIDER_AGGRO,
 } from '../types.js';
 import {
   SurfaceMovementEffect,
@@ -2035,6 +2036,22 @@ export function updateFightAntTargets(world: WorldState): void {
           const dist = Math.abs(qTileX - aggroTileX) + Math.abs(qTileY - aggroTileY);
           if (dist <= FIGHT_AGGRO_RADIUS && dist < nearestEnemyDist) { nearestEnemyDist = dist; nearestEnemy = qid; }
         }
+      }
+      // V23 (#147): the spider is one more candidate in the same nearest-hostile scan
+      // (surface-only — this block is already gated to Zone.Surface). A closer enemy ant
+      // wins (strict <); a closer spider wins over a farther ant. Routing the fighter onto
+      // the spider's tile is enough — the widened spider-combat gate resolves the damage.
+      let nearestIsSpider = false;
+      if (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO && world.spider !== null) {
+        const spTileX = world.spider.posX >> FP_SHIFT;
+        const spTileY = world.spider.posY >> FP_SHIFT;
+        const dist = Math.abs(spTileX - aggroTileX) + Math.abs(spTileY - aggroTileY);
+        if (dist <= FIGHT_AGGRO_RADIUS && dist < nearestEnemyDist) { nearestEnemyDist = dist; nearestIsSpider = true; }
+      }
+      if (nearestIsSpider) {
+        ants.targetPosX[id] = world.spider!.posX;
+        ants.targetPosY[id] = world.spider!.posY;
+        continue;
       }
       if (nearestEnemy >= 0) {
         ants.targetPosX[id] = ants.posX[nearestEnemy]!;
