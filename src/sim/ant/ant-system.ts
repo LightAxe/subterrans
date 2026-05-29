@@ -2041,8 +2041,12 @@ export function updateFightAntTargets(world: WorldState): void {
       // (surface-only — this block is already gated to Zone.Surface). A closer enemy ant
       // wins (strict <); a closer spider wins over a farther ant. Routing the fighter onto
       // the spider's tile is enough — the widened spider-combat gate resolves the damage.
+      // Only consider the spider in states the combat gate actually resolves (see combat.ts):
+      // Feeding/Retreating are untargetable, so excluding them keeps fighters from abandoning
+      // their rally/enemy to path onto a spider they cannot damage.
       let nearestIsSpider = false;
-      if (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO && world.spider !== null) {
+      if (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO && world.spider !== null
+          && world.spider.state !== 'Feeding' && world.spider.state !== 'Retreating') {
         const spTileX = world.spider.posX >> FP_SHIFT;
         const spTileY = world.spider.posY >> FP_SHIFT;
         const dist = Math.abs(spTileX - aggroTileX) + Math.abs(spTileY - aggroTileY);

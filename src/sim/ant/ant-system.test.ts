@@ -2337,6 +2337,35 @@ describe('updateFightAntTargets', () => {
     expect(world.ants.targetPosX[fighter]).not.toBe(spider.posX);
   });
 
+  it('V23: a Feeding or Retreating spider is NOT a valid aggro target (untargetable by combat gate)', () => {
+    for (const offState of ['Feeding', 'Retreating'] as const) {
+      const world = createWorldState(42, MAX_TEST_ENTITIES);
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const colA = createColonyRecord(COLONY_ID, 0);
+      colA.entrances = [];
+      colA.rallyPoint = { tileX: 50, tileY: 5 };
+      colA.digFlowFieldDirty = false;
+      world.colonies[COLONY_ID] = colA;
+
+      const fighter = allocateEntityId(world);
+      initAnt(world.ants, fighter, {
+        colonyId: COLONY_ID, posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT,
+        task: AntTask.Fighting, subTask: 0,
+      });
+      world.ants.zone[fighter] = Zone.Surface;
+
+      const spider = placeAggroSpider(world, 11, 10); // dist 1 — close, but state is non-combat
+      spider.state = offState;
+
+      updateFightAntTargets(world);
+
+      // The combat gate does not resolve spider combat in Feeding/Retreating, so the
+      // fighter must not abandon its rally to path onto an untargetable spider.
+      expect(world.ants.targetPosX[fighter]).toBe((50 << FP_SHIFT) + (FP_ONE >> 1));
+      expect(world.ants.targetPosX[fighter]).not.toBe(spider.posX);
+    }
+  });
+
   it('V23 gate: a pre-V23 (V22) world shows no spider auto-aggro', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     world.simVersion = SIM_VERSION_V22_DIFFICULTY;
