@@ -709,6 +709,15 @@ describe('Phase 9 determinism (SC 5) — two-colony parity', () => {
 function buildCrossGridCombatWorld(seed: number): WorldState {
   const world = createScenario(seed);
 
+  // #164 pre-descent gate: createScenario spawns the enemy queen ON her start
+  // tile, which is also the enemy entrance. A foreign Fighter must now engage a
+  // surface queen on an entrance rather than descend past her — which would
+  // block this scenario's underground cross-grid combat. Relocate the enemy
+  // queen off the entrance tile (she holds position — no completed Queen
+  // chamber) so the invader's descent still fires.
+  const enemyQueenId = world.colonies[ENEMY_COLONY_ID]!.queenEntityId;
+  world.ants.posX[enemyQueenId] = (ENEMY_START_X + 6) << FP_SHIFT;
+
   // Spawn 1 player Fighter on the enemy entrance tile (Surface).
   const playerAntId = allocateEntityId(world);
   initAnt(world.ants, playerAntId, {

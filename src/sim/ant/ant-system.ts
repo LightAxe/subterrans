@@ -3631,6 +3631,61 @@ function moveQueens(
 // No Math.floor, no floats, no division. Clamp uses if/else for zero alloc.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Pre-descent gate (#164, #165)
+//
+// Descent (Surface → Underground) is a zone transition performed during step-16
+// movement, which runs BEFORE step-17 combat and step-17.5 spider. Without a
+// gate, an ant standing on an entrance slips underground in the same tick a
+// surface blocker should have stopped or fought it — combat never sees the
+// encounter. This holds the ant on the entrance's surface tile so the relevant
+// combat pass resolves it this tick. Reads only existing WorldState; no RNG,
+// no serialized scratch.
+// ---------------------------------------------------------------------------
+function isDescentBlocked(
+  world: WorldState,
+  task: AntTask,
+  isOwnEntrance: boolean,
+  entranceColony: ColonyRecord,
+  entranceTileX: number,
+  entranceTileY: number,
+): boolean {
+  const ants = world.ants;
+
+  // #165 — rampaging spider blockade. A spider parked on the entrance tile is
+  // the blockade footprint; hold every descender on the surface so step-17.5
+  // spider combat (which only scans the spider's own tile) catches it instead
+  // of letting carriers slip through the zone transition. Applies to any ant.
+  const spider = world.spider;
+  if (spider !== null && spider.state === 'Rampaging') {
+    const sx = spider.posX >> FP_SHIFT;
+    const sy = spider.posY >> FP_SHIFT;
+    if (sx === entranceTileX && sy === entranceTileY) {
+      return true;
+    }
+  }
+
+  // #164 — foreign fighter vs. a surface queen on the entrance tile. In the
+  // pre-Queen-chamber opening state the queen sits on her colony's start tile,
+  // which is also the starting entrance. An invading Fighter must engage her on
+  // the surface (step-17 ant combat buckets both on the shared surface tile)
+  // rather than descend past her unharmed.
+  if (!isOwnEntrance && task === AntTask.Fighting) {
+    const queenId = entranceColony.queenEntityId;
+    if (
+      queenId >= 0 &&
+      ants.alive[queenId] === 1 &&
+      ants.zone[queenId] === Zone.Surface &&
+      (ants.posX[queenId]! >> FP_SHIFT) === entranceTileX &&
+      (ants.posY[queenId]! >> FP_SHIFT) === entranceTileY
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /**
  * Move every alive ant one step based on its current task and zone.
  *
@@ -4735,6 +4790,15 @@ export function tickAntMovement(
               // Foreign entrance but not a Fighting invader — descent-intent
               // gate rejects (REQ-C3c). Non-Fighting foreign ants stay on
               // the surface.
+              continue;
+            }
+
+            // Pre-descent gate (#164, #165): hold the ant on the surface when
+            // a blocker on the entrance tile should resolve this tick (rampaging
+            // spider blockade, or a surface queen a foreign Fighter must engage).
+            // `continue` skips descent through this entrance; with no other
+            // matching entrance the ant stays on the surface for combat.
+            if (isDescentBlocked(world, task, isOwnEntrance, colony, tileX, tileY)) {
               continue;
             }
 
