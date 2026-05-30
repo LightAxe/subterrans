@@ -891,14 +891,23 @@ function computeFeedAwayTile(world: WorldState, spider: SpiderState): void {
     if (ax >= ay) signX = dx > 0 ? 1 : -1;
     else signY = dy > 0 ? 1 : -1;
   }
-  let fx = kx + signX * SPIDER_FEED_RETREAT_TILES;
-  let fy = ky + signY * SPIDER_FEED_RETREAT_TILES;
-  if (fx < 0) fx = 0;
-  if (fx > SURFACE_GRID_WIDTH - 1) fx = SURFACE_GRID_WIDTH - 1;
-  if (fy < 0) fy = 0;
-  if (fy > SURFACE_GRID_HEIGHT - 1) fy = SURFACE_GRID_HEIGHT - 1;
-  spider.feedAwayTileX = fx;
-  spider.feedAwayTileY = fy;
+  spider.feedAwayTileX = feedRetreatCoord(kx, signX, SURFACE_GRID_WIDTH);
+  spider.feedAwayTileY = feedRetreatCoord(ky, signY, SURFACE_GRID_HEIGHT);
+}
+
+// Retreat `SPIDER_FEED_RETREAT_TILES` from the kill coordinate along one axis.
+// If the preferred direction would exit the grid, reflect inward instead of
+// clamping to the edge — otherwise an edge kill collapses the endpoint onto (or
+// near) the kill tile, so the spider enters Feeding without actually moving away
+// and the post-kill chain-kill avoidance silently fails. The surface grid
+// (128) is far larger than 2× the retreat (20), so at least one direction is
+// always in-bounds; the trailing clamp only guards a hypothetically tiny grid.
+function feedRetreatCoord(k: number, sign: number, size: number): number {
+  let end = k + sign * SPIDER_FEED_RETREAT_TILES;
+  if (end < 0 || end > size - 1) end = k - sign * SPIDER_FEED_RETREAT_TILES;
+  if (end < 0) end = 0;
+  if (end > size - 1) end = size - 1;
+  return end;
 }
 
 // ---------------------------------------------------------------------------
