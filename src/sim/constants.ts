@@ -866,3 +866,12 @@ export const SPIDER_FEED_TICKS = 300 as const;
 /** V23 — While feeding at the feed tile, regen +1 HP every N ticks (~30 HP over SPIDER_FEED_TICKS). */
 export const SPIDER_FEED_HEAL_INTERVAL_TICKS = 10 as const;
 
+/**
+ * V23 (#146/#147) — Manhattan tile radius within which a Fighting ant attacking the
+ * spider triggers active self-defense: the spider stops meandering/camping and Chases
+ * the nearest attacker so it actually engages instead of drifting away. Slightly wider
+ * than SPIDER_CHASE_TRIGGER_RADIUS so the spider reacts to an approaching swarm before
+ * it is surrounded. The spider moves at 2× ant speed, so a Chase reliably closes.
+ */
+export const SPIDER_DEFENSE_TRIGGER_RADIUS = 6 as const;
+

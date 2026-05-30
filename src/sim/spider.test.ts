@@ -24,6 +24,7 @@ import {
   SPIDER_HUNGER_MAX_TICKS,
   SPIDER_RAMPAGE_KILL_QUOTA,
   SPIDER_CHASE_TRIGGER_RADIUS,
+  SPIDER_DEFENSE_TRIGGER_RADIUS,
   SPIDER_CHASE_MAX_TICKS,
   SPIDER_RAMPAGE_RETREAT_HP,
   SPIDER_RAMPAGE_MAX_TICKS,
@@ -684,6 +685,212 @@ describe('tickSpider', () => {
       // Only the queen is in range and queens are excluded → no chase.
       expect(world.spider!.state).not.toBe('Chasing');
       expect(world.spider!.chaseTargetAntId).toBe(-1);
+    });
+  });
+
+  describe('active self-defense (V23 #147)', () => {
+    it('a sated Patrolling spider Chases the nearest attacking fighter within defense radius', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: 0 });
+      world.spider.nextHuntTick = 9999;
+      // Distance 5: inside defense radius (6), outside chase radius (4) — only the
+      // self-defense path can pick this up, proving sated bite-back works.
+      expect(SPIDER_DEFENSE_TRIGGER_RADIUS).toBeGreaterThan(SPIDER_CHASE_TRIGGER_RADIUS);
+      const fighterId = placeFighter(world, sx + SPIDER_CHASE_TRIGGER_RADIUS + 1, sy);
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Chasing');
+      expect(world.spider!.chaseTargetAntId).toBe(fighterId);
+      expect(world.spider!.chaseStartTick).toBe(world.tick);
+    });
+
+    it('picks the nearest attacking fighter when several are in range', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: 0 });
+      world.spider.nextHuntTick = 9999;
+      placeFighter(world, sx + 6, sy);            // dist 6 (farther)
+      const near = placeFighter(world, sx, sy + 5); // dist 5 (nearer)
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Chasing');
+      expect(world.spider!.chaseTargetAntId).toBe(near);
+    });
+
+    it('ignores a non-fighter worker within defense radius (only bites back attackers)', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: 0 });
+      world.spider.nextHuntTick = 9999;
+      placeWorker(world, sx + SPIDER_CHASE_TRIGGER_RADIUS + 1, sy); // dist 5, but Foraging
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Patrolling');
+      expect(world.spider!.chaseTargetAntId).toBe(-1);
+    });
+
+    it('does NOT self-defend an attacker outside the defense radius', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: 0 });
+      world.spider.nextHuntTick = 9999;
+      placeFighter(world, sx + SPIDER_DEFENSE_TRIGGER_RADIUS + 1, sy); // out of defense range
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Patrolling');
+      expect(world.spider!.chaseTargetAntId).toBe(-1);
+    });
+
+    it('does NOT self-defend under a pre-V23 (V22) world — old-replay guard', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V22_DIFFICULTY;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT });
+      world.spider.nextHuntTick = 9999;
+      placeFighter(world, sx + SPIDER_CHASE_TRIGGER_RADIUS + 1, sy);
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Patrolling');
+      expect(world.spider!.chaseTargetAntId).toBe(-1);
+    });
+
+    it('a Rampaging spider under attack abandons the camp and Chases the attacker', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        hungerTicks: HUNGRY_TICKS,
+        state: 'Rampaging',
+        rampageTargetColonyId: PLAYER_COLONY_ID,
+        rampageStartTick: 0,
+      });
+      world.spider.nextHuntTick = 9999;
+      const fighterId = placeFighter(world, sx + SPIDER_CHASE_TRIGGER_RADIUS + 1, sy);
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Chasing');
+      expect(world.spider!.chaseTargetAntId).toBe(fighterId);
+      expect(world.spider!.rampageTargetColonyId).toBe(-1);
+      const evt = world.events.find((e) => e.type === 'spider_rampage_end');
+      expect(evt).toBeDefined();
+      if (evt?.type === 'spider_rampage_end') {
+        expect(evt.payload.outcome).toBe('retreated');
+      }
+    });
+
+    it('a Rampaging spider pinning a descender on its entrance HOLDS even under attack (#165)', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        hungerTicks: HUNGRY_TICKS,
+        state: 'Rampaging',
+        rampageTargetColonyId: PLAYER_COLONY_ID,
+        rampageStartTick: 0,
+      });
+      world.spider.nextHuntTick = 9999;
+      const col = createColonyRecord(PLAYER_COLONY_ID, -1);
+      col.entrances = [{ entranceId: 1, surfaceTileX: sx, surfaceTileY: sy, isOpen: true }];
+      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId] = col;
+      placeWorker(world, sx, sy);                              // descender pinned on the entrance
+      placeFighter(world, sx + SPIDER_CHASE_TRIGGER_RADIUS + 1, sy); // attacker within defense radius
+
+      tickSpider(world);
+
+      // Holds the gate: combat catches the pinned descender this tick; the spider does
+      // not chase the attacker off the entrance (which would let the descender escape).
+      expect(world.spider!.state).toBe('Rampaging');
+      expect(world.spider!.rampageTargetColonyId).toBe(PLAYER_COLONY_ID);
+    });
+  });
+
+  describe('Rampaging straggler chase-divert (V23 #146)', () => {
+    function campingSpider(world: WorldState, sx: number, sy: number): void {
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        hungerTicks: HUNGRY_TICKS,
+        state: 'Rampaging',
+        rampageTargetColonyId: PLAYER_COLONY_ID,
+        rampageStartTick: world.tick,
+      });
+      world.spider.nextHuntTick = 9999;
+      // queenEntityId = -1 so the first placed ant (id 0) is not mistaken for the queen.
+      const col = createColonyRecord(PLAYER_COLONY_ID, -1);
+      col.entrances = [{ entranceId: 1, surfaceTileX: sx, surfaceTileY: sy, isOpen: true }];
+      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId] = col;
+    }
+
+    it('diverts to Chasing a straggler that emerges within chase radius', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      campingSpider(world, sx, sy);
+      const strag = placeWorker(world, sx + 1, sy);
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Chasing');
+      expect(world.spider!.chaseTargetAntId).toBe(strag);
+      expect(world.spider!.rampageTargetColonyId).toBe(-1);
+      const evt = world.events.find((e) => e.type === 'spider_rampage_end');
+      expect(evt).toBeDefined();
+      if (evt?.type === 'spider_rampage_end') {
+        expect(evt.payload.outcome).toBe('retreated');
+      }
+    });
+
+    it('keeps camping (stays Rampaging) when no ant is within chase radius', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      campingSpider(world, sx, sy);
+      placeWorker(world, sx + SPIDER_CHASE_TRIGGER_RADIUS + 1, sy); // out of chase range
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Rampaging');
+      expect(world.spider!.rampageTargetColonyId).toBe(PLAYER_COLONY_ID);
+    });
+
+    it('does NOT divert off an ant sitting ON the camped entrance tile (#165 blockade hold)', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      campingSpider(world, sx, sy); // entrance at (sx, sy)
+      placeWorker(world, sx, sy);   // descender sitting ON the entrance → must be held, not chased
+
+      tickSpider(world);
+
+      // The spider holds the gate so tile-coincident combat can catch the descender,
+      // rather than chasing it off the entrance (which would let it slip underground).
+      expect(world.spider!.state).toBe('Rampaging');
+      expect(world.spider!.rampageTargetColonyId).toBe(PLAYER_COLONY_ID);
     });
   });
 

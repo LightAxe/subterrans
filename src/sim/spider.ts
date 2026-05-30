@@ -24,6 +24,7 @@ import {
   SPIDER_SPEED,
   SPIDER_DANGER_DEPOSIT,
   SPIDER_CHASE_TRIGGER_RADIUS,
+  SPIDER_DEFENSE_TRIGGER_RADIUS,
   SPIDER_CHASE_MAX_TICKS,
   SPIDER_HUNGER_THRESHOLD_TICKS,
   SPIDER_MEANDER_TICK_DIVISOR,
@@ -168,6 +169,54 @@ function findChaseTarget(world: WorldState, spider: SpiderState): number {
     if (ants.alive[i] !== 1) continue;
     if (ants.zone[i] !== 0) continue; // surface only
     if (i === chaseQueenId0 || i === chaseQueenId1) continue; // queens are not prey
+    const ax = ants.posX[i]! >> FP_SHIFT;
+    const ay = ants.posY[i]! >> FP_SHIFT;
+    const dist = (ax > spiderTileX ? ax - spiderTileX : spiderTileX - ax) +
+                 (ay > spiderTileY ? ay - spiderTileY : spiderTileY - ay);
+    if (dist > r) continue;
+    if (dist < bestDist) { bestDist = dist; bestId = i; } // strict < ⇒ lower id wins on tie
+  }
+  return bestId;
+}
+
+/**
+ * True if any live surface ant occupies tile (tileX, tileY). Used by the Rampaging
+ * straggler-divert to honor the #165 entrance blockade: while a descender sits on the
+ * camped entrance tile, the tile-coincident spider bite (the gate holds the ant there)
+ * resolves it this tick, so the spider must NOT divert off the gate to chase. No alloc.
+ */
+function isSurfaceAntOnTile(world: WorldState, tileX: number, tileY: number): boolean {
+  const { ants } = world;
+  const antCount = ants.alive.length;
+  for (let i = 0; i < antCount; i++) {
+    if (ants.alive[i] !== 1) continue;
+    if (ants.zone[i] !== 0) continue; // surface only
+    if ((ants.posX[i]! >> FP_SHIFT) === tileX && (ants.posY[i]! >> FP_SHIFT) === tileY) return true;
+  }
+  return false;
+}
+
+/**
+ * V23 self-defense (#147): nearest live surface AntTask.Fighting ant within
+ * SPIDER_DEFENSE_TRIGGER_RADIUS of the spider. Returns the ant entity id, or -1.
+ * Used to make an attacked spider stop meandering/camping and actively engage its
+ * attackers (a Chasing spider moves at 2× ant speed, so it reliably closes). Same
+ * deterministic Manhattan + ascending-id-tiebreak contract as findChaseTarget; no
+ * allocation. Queens are never AntTask.Fighting, so no queen exclusion is needed.
+ */
+function findNearestAttackingFighter(world: WorldState, spider: SpiderState): number {
+  const spiderTileX = spider.posX >> FP_SHIFT;
+  const spiderTileY = spider.posY >> FP_SHIFT;
+  const r = SPIDER_DEFENSE_TRIGGER_RADIUS;
+
+  const { ants } = world;
+  const antCount = ants.alive.length;
+  let bestId = -1;
+  let bestDist = r + 1;
+  for (let i = 0; i < antCount; i++) {
+    if (ants.alive[i] !== 1) continue;
+    if (ants.zone[i] !== 0) continue; // surface only
+    if (ants.task[i] !== AntTask.Fighting) continue;
     const ax = ants.posX[i]! >> FP_SHIFT;
     const ay = ants.posY[i]! >> FP_SHIFT;
     const dist = (ax > spiderTileX ? ax - spiderTileX : spiderTileX - ax) +
@@ -402,6 +451,28 @@ function emitSpiderChaseEnd(
     tick: world.tick,
     type: 'spider_chase_end',
     payload: { outcome },
+  });
+}
+
+/**
+ * Enter the Chasing state targeting ant `targetId` and emit spider_chase_start.
+ * Shared by the three V23 entry points: opportunistic Patrolling chase, active
+ * self-defense (engage an attacker), and the Rampaging straggler chase-divert.
+ */
+function enterChasing(world: WorldState, spider: SpiderState, targetId: number): void {
+  spider.state = 'Chasing';
+  spider.chaseTargetAntId = targetId;
+  spider.chaseStartTick = world.tick;
+  emitEvent(world, {
+    tick: world.tick,
+    type: 'spider_chase_start',
+    payload: {
+      targetAntId: targetId,
+      targetTile: {
+        x: world.ants.posX[targetId]! >> FP_SHIFT,
+        y: world.ants.posY[targetId]! >> FP_SHIFT,
+      },
+    },
   });
 }
 
@@ -886,6 +957,49 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
   }
 
   // 4. State machine transitions.
+  //
+  // 4a. Active self-defense (#147): if a Fighting ant is attacking from within
+  //     SPIDER_DEFENSE_TRIGGER_RADIUS, abandon the current non-committed activity
+  //     (sated meander / hunt telegraph / entrance camp) and Chase the nearest
+  //     attacker. Without this the spider just meanders away from its attackers —
+  //     the meander (1 tile / 3 ticks ≈ 0.33/tick) is slower than a fighter
+  //     (0.5/tick), so a pursuing swarm surrounds and kills it while it never
+  //     engages. A Chasing spider moves at 1 tile/tick and reliably closes. Striking
+  //     is a committed one-shot; Chasing already engages; Feeding interrupts on
+  //     adjacency in its own case — so those three states are excluded here.
+  //     EXCEPTION (#165): a Rampaging spider pinning a descender on its camped
+  //     entrance must HOLD even under attack — vacating the gate to chase an attacker
+  //     would let the pinned ant slip underground next tick (movement reads the
+  //     spider's state before the spider ticks). Holding is not passive: the spider
+  //     still bites back any ant that steps onto its tile via tile-coincident combat.
+  if (
+    spider.state === 'Patrolling' ||
+    spider.state === 'Hunting' ||
+    spider.state === 'Rampaging'
+  ) {
+    let holdGate = false;
+    if (spider.state === 'Rampaging' && spider.rampageTargetColonyId >= 0) {
+      const camped = findNearestEntrance(world, spider, spider.rampageTargetColonyId);
+      holdGate = camped !== null && isSurfaceAntOnTile(world, camped.x, camped.y);
+    }
+    const attackerId = holdGate ? -1 : findNearestAttackingFighter(world, spider);
+    if (attackerId >= 0) {
+      if (spider.state === 'Hunting') {
+        emitSpiderHuntEnd(world, 'scatter', spider.killsThisStrike);
+        spider.huntTargetTileX = -1;
+        spider.huntTargetTileY = -1;
+        spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
+        world.spiderPriorityColonyId = null;
+      } else if (spider.state === 'Rampaging') {
+        emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
+        spider.rampageTargetColonyId = -1;
+        world.spiderPriorityColonyId = null;
+      }
+      clearSpiderPairingSentinels(world);
+      enterChasing(world, spider, attackerId);
+    }
+  }
+
   switch (spider.state) {
     case 'Patrolling': {
       const hungry = spider.hungerTicks >= SPIDER_HUNGER_THRESHOLD_TICKS[tier]!;
@@ -895,20 +1009,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
         // colony entrance via the balance-tuned rampage target picker.
         const chaseId = findChaseTarget(world, spider);
         if (chaseId >= 0) {
-          spider.state = 'Chasing';
-          spider.chaseTargetAntId = chaseId;
-          spider.chaseStartTick = world.tick;
-          emitEvent(world, {
-            tick: world.tick,
-            type: 'spider_chase_start',
-            payload: {
-              targetAntId: chaseId,
-              targetTile: {
-                x: world.ants.posX[chaseId]! >> FP_SHIFT,
-                y: world.ants.posY[chaseId]! >> FP_SHIFT,
-              },
-            },
-          });
+          enterChasing(world, spider, chaseId);
         } else {
           let entered = false;
           if (world.tick >= spider.nextHuntTick) {
@@ -1013,8 +1114,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
 
     case 'Rampaging': {
       // Camp the entrance and eat the first ant there. No quota — a kill routes
-      // through step 3 (→ Feeding). Do NOT chase-divert: a camping spider must
-      // hold its entrance (the #165 blockade) rather than chase a passing ant.
+      // through step 3 (→ Feeding).
       if (world.tick - spider.rampageStartTick >= SPIDER_RAMPAGE_MAX_TICKS) {
         // Leash: no ant surfaced at the entrance in time.
         emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
@@ -1023,16 +1123,40 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
         spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
         spider.rampageTargetColonyId = -1;
         world.spiderPriorityColonyId = null;
-      } else {
+      } else if (spider.rampageTargetColonyId < 0 ||
+                 findNearestEntrance(world, spider, spider.rampageTargetColonyId) === null) {
+        // No target yet, or the camped colony sealed its only open entrance.
+        // (Re-pick first; if still no open entrance, resume patrolling.)
         if (spider.rampageTargetColonyId < 0) spider.rampageTargetColonyId = pickRampageTarget(world, spider);
         if (findNearestEntrance(world, spider, spider.rampageTargetColonyId) === null) {
-          // Sealed colony — no open entrance to camp. Resume patrolling.
           emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
           clearSpiderPairingSentinels(world);
           spider.state = 'Patrolling';
           spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
           spider.rampageTargetColonyId = -1;
           world.spiderPriorityColonyId = null;
+        }
+      } else {
+        // Camping-straggler lunge (#146): an ant emerging from the entrance moves off
+        // the spider's tile before the combat step samples it (movement runs before
+        // combat), so a stationary camper rarely lands the tile-coincident bite. If a
+        // live ant is within SPIDER_CHASE_TRIGGER_RADIUS, divert to Chasing it — the
+        // spider is 2× ant speed so it closes and eats, then Feeds or resumes camping.
+        //
+        // BUT honor the #165 blockade first: while an ant occupies the camped entrance
+        // tile, hold — the gate pins that descender on the entrance and the tile-coincident
+        // spider bite resolves it THIS tick. Diverting would vacate the gate and let the
+        // pinned ant slip underground. Only chase once the entrance tile is clear.
+        // Attacking fighters were already handled by the step-4a self-defense check.
+        const camped = findNearestEntrance(world, spider, spider.rampageTargetColonyId);
+        const holdGate = camped !== null && isSurfaceAntOnTile(world, camped.x, camped.y);
+        const stragglerId = holdGate ? -1 : findChaseTarget(world, spider);
+        if (stragglerId >= 0) {
+          emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
+          clearSpiderPairingSentinels(world);
+          spider.rampageTargetColonyId = -1;
+          world.spiderPriorityColonyId = null;
+          enterChasing(world, spider, stragglerId);
         }
       }
       break;
