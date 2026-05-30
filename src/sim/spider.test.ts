@@ -756,6 +756,42 @@ describe('tickSpider', () => {
       expect(world.spider!.state).toBe('Patrolling');
       expect(world.spider!.chaseTargetAntId).toBe(-1);
       expect(world.spider!.hungerTicks).toBe(501); // accrued +1, not reset
+      // Target died from another source (no killedThisTick) → 'lost', not 'kill',
+      // so chase-success telemetry isn't credited a phantom spider kill.
+      const evt = world.events.find((e) => e.type === 'spider_chase_end');
+      expect(evt).toBeDefined();
+      if (evt?.type === 'spider_chase_end') expect(evt.payload.outcome).toBe('lost');
+    });
+
+    it('reports a chase kill (killed signal) when caught with a fighter adjacent', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 66;
+      const sy = 32;
+      const target = placeWorker(world, sx, sy);
+      world.ants.alive[target] = 0; // spider killed it this tick
+      // A fighter sharing the tile keeps the spider out of Feeding (still Chasing).
+      placeFighter(world, sx, sy);
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        state: 'Chasing',
+        chaseTargetAntId: target,
+        chaseStartTick: 0,
+        hungerTicks: 500,
+        killedThisTick: 1,
+        lastKillTileX: sx,
+        lastKillTileY: sy,
+      });
+      world.tick = 50;
+
+      tickSpider(world);
+
+      // Out of Feeding (fighter adjacent) but a real spider kill → 'kill'.
+      expect(world.spider!.state).toBe('Patrolling');
+      const evt = world.events.find((e) => e.type === 'spider_chase_end');
+      expect(evt).toBeDefined();
+      if (evt?.type === 'spider_chase_end') expect(evt.payload.outcome).toBe('kill');
     });
 
     it('abandons the chase when the target reaches safety underground', () => {

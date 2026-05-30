@@ -396,7 +396,7 @@ function emitSpiderRampageEnd(
 
 function emitSpiderChaseEnd(
   world: WorldState,
-  outcome: 'kill' | 'escape' | 'leash' | 'retreat' | 'killed',
+  outcome: 'kill' | 'escape' | 'leash' | 'retreat' | 'killed' | 'lost',
 ): void {
   emitEvent(world, {
     tick: world.tick,
@@ -969,7 +969,13 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
       const tid = spider.chaseTargetAntId;
       const targetAlive = tid >= 0 && world.ants.alive[tid] === 1;
       if (!targetAlive) {
-        emitSpiderChaseEnd(world, 'kill');
+        // Target is gone. Report a spider 'kill' only when the spider actually
+        // killed this tick (combat resolver set killedThisTick); a genuine catch
+        // with a fighter adjacent stays Chasing and lands here. Otherwise the
+        // target died from another source (e.g. ant-vs-ant combat earlier this
+        // tick) — emit 'lost', not 'kill', so chase-success telemetry isn't
+        // credited a spider kill with no matching combat_kill. (Codex P2.)
+        emitSpiderChaseEnd(world, spider.killedThisTick === 1 ? 'kill' : 'lost');
         clearSpiderPairingSentinels(world);
         spider.state = 'Patrolling';
         spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;

@@ -90,7 +90,7 @@ export type SimEvent =
   | {
       tick: number;
       type: 'spider_chase_end';
-      payload: { outcome: 'kill' | 'escape' | 'leash' | 'retreat' | 'killed' };
+      payload: { outcome: 'kill' | 'escape' | 'leash' | 'retreat' | 'killed' | 'lost' };
     }
   | {
       tick: number;
