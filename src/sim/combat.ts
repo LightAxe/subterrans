@@ -116,10 +116,34 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
       for (let q = runStart; q < p; q++) COMBAT_CONTESTED[liveIdx[q]!] = 1;
     }
   }
+  // Spider-pairing sentinel (-2) handling differs by version:
+  //   Pre-V23: the spider only engages combat in the bounded Striking/Rampaging
+  //     episodes, which always end by calling clearSpiderPairingSentinels — so a
+  //     -2 ant is guaranteed cleared on disengage. Skip -2 here to preserve windup.
+  //   V23: the gate widened to the unbounded surface states (Patrolling/Hunting/
+  //     Chasing), where no state transition is guaranteed. An ant that brushes a
+  //     patrolling spider and walks off would otherwise keep -2 forever (skipping
+  //     the next encounter's windup and bypassing this stale cleanup). So clear -2
+  //     for any ant NOT on the spider's tile this tick (= disengaged), while
+  //     preserving it for ants still on the tile so resolveSpiderCombatOnTile can
+  //     continue their windup. (Codex P1.)
+  const spider = world.spider;
+  const v23Spider = spider !== null && world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO;
+  const spiderTileX = v23Spider ? spider!.posX >> FP_SHIFT : -1;
+  const spiderTileY = v23Spider ? spider!.posY >> FP_SHIFT : -1;
   for (let i = 0; i < count; i++) {
-    // -2 is the spider-pairing sentinel; skip it here so resolveSpiderCombatOnTile
-    // can preserve windup state. The sentinel is cleared by clearSpiderPairingSentinels.
-    if (ants.alive[i] === 1 && COMBAT_CONTESTED[i] === 0 && ants.combatOpponentId[i] !== -2) {
+    if (ants.alive[i] !== 1) continue;
+    if (ants.combatOpponentId[i] === -2) {
+      if (v23Spider) {
+        const onSpiderTile =
+          ants.zone[i] === 0 &&
+          (ants.posX[i]! >> FP_SHIFT) === spiderTileX &&
+          (ants.posY[i]! >> FP_SHIFT) === spiderTileY;
+        if (!onSpiderTile) ants.combatOpponentId[i] = -1;
+      }
+      continue;
+    }
+    if (COMBAT_CONTESTED[i] === 0) {
       ants.combatOpponentId[i] = -1;
     }
   }

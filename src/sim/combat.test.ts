@@ -567,3 +567,71 @@ describe('spider combat gate (V23 #146/#147)', () => {
     expect(spider.hp).toBe(SPIDER_HP_FULL - COMBAT_DAMAGE_BASE);
   });
 });
+
+// ---------------------------------------------------------------------------
+// V23 (Codex P1): off-tile spider-pairing sentinel cleanup.
+// Under V23 the gate engages in unbounded surface states (Patrolling/Hunting/
+// Chasing), where no state transition is guaranteed — so an ant that brushed the
+// spider (combatOpponentId === -2) and then walked off its tile must have the
+// sentinel cleared every tick by detectAndResolveCombat, not just by a spider
+// state-exit. Otherwise the stale -2 would skip the next encounter's windup and
+// bypass normal stale-opponent cleanup.
+// ---------------------------------------------------------------------------
+
+describe('spider-pairing sentinel cleanup (V23 Codex P1)', () => {
+  it('clears -2 on an ant that disengaged from a Patrolling spider (off-tile)', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    placeSpider(world, 5, 7, 'Patrolling');
+    // Ant was paired last tick (-2) and has since moved off the spider's tile.
+    const ant = spawnFighter(world, cid1, 9, 9, Zone.Surface);
+    world.ants.combatOpponentId[ant] = -2;
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    expect(world.ants.combatOpponentId[ant]).toBe(-1);
+  });
+
+  it('preserves -2 on an ant still on the spider tile (ongoing windup)', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    placeSpider(world, 5, 7, 'Patrolling');
+    const ant = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+    world.ants.combatOpponentId[ant] = -2;
+    world.ants.attackCooldown[ant] = 5; // mid-windup
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    // Still engaged on the tile → sentinel kept so resolveSpiderCombatOnTile
+    // continues the cooldown rather than restarting the windup.
+    expect(world.ants.combatOpponentId[ant]).toBe(-2);
+  });
+
+  it('clears -2 when the ant descends underground (off the surface tile)', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    placeSpider(world, 5, 7, 'Patrolling');
+    // Same tile coords but underground — the spider is surface-only, so this is
+    // a disengage.
+    const ant = spawnFighter(world, cid1, 5, 7, Zone.Underground);
+    world.ants.combatOpponentId[ant] = -2;
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    expect(world.ants.combatOpponentId[ant]).toBe(-1);
+  });
+
+  it('does NOT clear off-tile -2 under a pre-V23 (V22) world — old-replay guard', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V22_DIFFICULTY;
+    placeSpider(world, 5, 7, 'Striking');
+    const ant = spawnFighter(world, cid1, 9, 9, Zone.Surface);
+    world.ants.combatOpponentId[ant] = -2;
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    // V22 clears -2 only via clearSpiderPairingSentinels on episode exit, never
+    // in this pass — byte-identical guard.
+    expect(world.ants.combatOpponentId[ant]).toBe(-2);
+  });
+});
