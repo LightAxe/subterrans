@@ -736,6 +736,10 @@ describe('tickSpider', () => {
       expect(world.spider!.hungerTicks).toBe(0);
       const evt = world.events.find((e) => e.type === 'spider_feed_start');
       expect(evt).toBeDefined();
+      // The chase episode is closed before Feeding so start/end pairs aren't dangling.
+      const chaseEnd = world.events.find((e) => e.type === 'spider_chase_end');
+      expect(chaseEnd).toBeDefined();
+      if (chaseEnd?.type === 'spider_chase_end') expect(chaseEnd.payload.outcome).toBe('kill');
     });
 
     it('a stale dead target (no kill signal) returns to Patrolling without resetting hunger', () => {
@@ -974,6 +978,40 @@ describe('tickSpider', () => {
       const fy = world.spider!.feedAwayTileY;
       const dist = Math.abs(fx - sx) + Math.abs(fy - sy);
       expect(dist).toBe(SPIDER_FEED_RETREAT_TILES);
+      // The hunt/strike episode is closed before Feeding (no dangling start/end pair).
+      const huntEnd = world.events.find((e) => e.type === 'spider_hunt_end');
+      expect(huntEnd).toBeDefined();
+      if (huntEnd?.type === 'spider_hunt_end') expect(huntEnd.payload.outcome).toBe('kill');
+    });
+
+    it('a Rampaging kill with no fighter adjacent → Feeding emits spider_rampage_end(quota_met)', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        state: 'Rampaging',
+        rampageStartTick: 0,
+        rampageTargetColonyId: PLAYER_COLONY_ID,
+        hungerTicks: 800,
+        killedThisTick: 1,
+        lastKillTileX: sx,
+        lastKillTileY: sy,
+        rampageKillsThisRampage: 1,
+      });
+      world.tick = 10;
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Feeding');
+      const rampageEnd = world.events.find((e) => e.type === 'spider_rampage_end');
+      expect(rampageEnd).toBeDefined();
+      if (rampageEnd?.type === 'spider_rampage_end') {
+        expect(rampageEnd.payload.outcome).toBe('quota_met');
+        expect(rampageEnd.payload.broodKilled).toBe(1);
+      }
     });
 
     it('heals ~+1 HP per interval while parked at the feed tile, then resumes Patrolling', () => {

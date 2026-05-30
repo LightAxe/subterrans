@@ -851,6 +851,21 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
   if (spider.killedThisTick === 1) {
     spider.hungerTicks = 0;
     if (!isFighterAdjacent(world, spider) && spider.state !== 'Feeding') {
+      // Close the open encounter episode before switching to Feeding so telemetry
+      // consumers that pair spider_*_start with spider_*_end don't see a dangling
+      // encounter on the common no-fighter kill path. A self-defense kill while
+      // Patrolling has no open episode, so it emits no end event. (Codex P2.)
+      const priorState = spider.state;
+      if (priorState === 'Chasing') {
+        emitSpiderChaseEnd(world, 'kill');
+      } else if (priorState === 'Hunting' || priorState === 'Striking') {
+        // killsThisStrike is only incremented during Striking; a self-defense kill
+        // in the Hunting telegraph phase leaves it 0, so floor deaths at 1 to avoid
+        // reporting outcome:'kill' with deaths:0. (Codex P3.)
+        emitSpiderHuntEnd(world, 'kill', spider.killsThisStrike > 0 ? spider.killsThisStrike : 1);
+      } else if (priorState === 'Rampaging') {
+        emitSpiderRampageEnd(world, 'quota_met', spider.rampageKillsThisRampage, false);
+      }
       // Out of danger: retreat ~10 tiles from the kill, then eat there to heal.
       computeFeedAwayTile(world, spider);
       spider.feedArrivedTick = -1;
