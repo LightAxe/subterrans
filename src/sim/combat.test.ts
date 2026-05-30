@@ -635,3 +635,64 @@ describe('spider-pairing sentinel cleanup (V23 Codex P1)', () => {
     expect(world.ants.combatOpponentId[ant]).toBe(-2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// V23 (Codex P2): sated meander = self-defense only.
+// The widened gate engages spider combat in Patrolling, but the hunger-gated
+// design says a sated (Patrolling) spider ignores workers and only bites ants
+// attacking it. Predation happens in Chasing/Hunting/Striking/Rampaging, never
+// during a plain meander — so a Patrolling spider must NOT initiate a bite on a
+// worker merely sharing its tile, while predatory states still eat any ant.
+// ---------------------------------------------------------------------------
+
+describe('sated meander self-defense (V23 Codex P2)', () => {
+  it('Patrolling spider ignores a lone worker on its tile (no pairing)', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    const spider = placeSpider(world, 5, 7, 'Patrolling');
+    const worker = spawnAnt(world, cid1, 5, 7, Zone.Surface); // AntTask.Idle
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    // Sated spider does not engage a worker: no pairing, no windup, no damage.
+    expect(world.ants.combatOpponentId[worker]).toBe(-1);
+    expect(world.ants.alive[worker]).toBe(1);
+    expect(spider.attackCooldown).toBe(0);
+  });
+
+  it('Patrolling spider still bites back a fighter sharing its tile (self-defense)', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    const spider = placeSpider(world, 5, 7, 'Patrolling');
+    const fighter = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    // First contact: fighter is paired (-2) and the spider arms its windup.
+    expect(world.ants.combatOpponentId[fighter]).toBe(-2);
+    expect(spider.attackCooldown).toBe(COMBAT_COOLDOWN_TICKS);
+  });
+
+  it('Hunting spider DOES engage a lone worker on its tile (predatory)', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    placeSpider(world, 5, 7, 'Hunting');
+    const worker = spawnAnt(world, cid1, 5, 7, Zone.Surface); // AntTask.Idle
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    // Predatory state pairs even a worker (it will be eaten over the next ticks).
+    expect(world.ants.combatOpponentId[worker]).toBe(-2);
+  });
+
+  it('Rampaging spider DOES engage a lone worker on its tile (predatory)', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    placeSpider(world, 5, 7, 'Rampaging');
+    const worker = spawnAnt(world, cid1, 5, 7, Zone.Surface); // AntTask.Idle
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    expect(world.ants.combatOpponentId[worker]).toBe(-2);
+  });
+});

@@ -533,11 +533,29 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
 
   // Prefer AntTask.Fighting ants for the active pair; fall back to any ant.
   let activeAntIdx = onTile[0]!;
+  let hasFighter = false;
   for (const idx of onTile) {
     if (ants.task[idx] === AntTask.Fighting) {
       activeAntIdx = idx;
+      hasFighter = true;
       break;
     }
+  }
+
+  // Sated meander = self-defense only (Codex P2). Under V23 the combat gate opens
+  // for every non-Feeding surface state, including a sated `Patrolling` spider. But
+  // the hunger-gated design says a sated spider ignores workers and only bites ants
+  // attacking it — predation happens in the Chasing/Hunting/Striking/Rampaging
+  // episodes, never during a plain meander. So a Patrolling spider engages only when
+  // a Fighting ant is on its tile (self-defense); it never initiates a bite on a
+  // worker merely sharing the tile. Pre-V23 never reaches here in Patrolling (gate is
+  // Striking/Rampaging only), so this is V23-only by construction.
+  if (
+    world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO &&
+    spider.state === 'Patrolling' &&
+    !hasFighter
+  ) {
+    return;
   }
 
   // Swarm bonus: priority set AND enough fighters from the priority colony on tile.
