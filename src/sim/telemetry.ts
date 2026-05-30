@@ -84,6 +84,16 @@ export type SimEvent =
     }
   | {
       tick: number;
+      type: 'spider_chase_start';
+      payload: { targetAntId: number; targetTile: { x: number; y: number } };
+    }
+  | {
+      tick: number;
+      type: 'spider_chase_end';
+      payload: { outcome: 'kill' | 'escape' | 'leash' | 'retreat' | 'killed' | 'lost' };
+    }
+  | {
+      tick: number;
       type: 'spider_rampage_start';
       payload: { lairTile: { x: number; y: number }; hungerTicks: number };
     }
@@ -100,6 +110,16 @@ export type SimEvent =
         broodKilled: number;
         queenKilled: boolean;
       };
+    }
+  | {
+      tick: number;
+      type: 'spider_feed_start';
+      payload: { killTile: { x: number; y: number } };
+    }
+  | {
+      tick: number;
+      type: 'spider_feed_end';
+      payload: { outcome: 'healed' | 'interrupted' };
     }
   | {
       tick: number;

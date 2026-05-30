@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
-import { createWorldState, allocateEntityId, SIM_VERSION_V13_INVARIANT_FIXES, SIM_VERSION_V20_SPIDER } from './types.js';
+import { createWorldState, allocateEntityId, SIM_VERSION_V13_INVARIANT_FIXES, SIM_VERSION_V20_SPIDER, SIM_VERSION_V23_SPIDER_AGGRO } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import { createPheromoneGrid, phGet, pheromoneGridKey } from './pheromone/pheromone-store.js';
@@ -22,6 +22,8 @@ import {
   ENEMY_START_X,
   ENEMY_START_Y,
   SPIDER_HUNGER_MAX_TICKS,
+  SPIDER_HUNGER_THRESHOLD_TICKS,
+  SPIDER_HP_FULL,
 } from './constants.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
 import { Zone, UndergroundTileState, ugSet } from './terrain.js';
@@ -932,5 +934,166 @@ describe('S3 V20: spider replay determinism (Hunting → Striking → Rampaging)
     // Byte-identical parity including V20 fields.
     expect(serializeWorldState(worldA)).toBe(serializeWorldState(worldB));
   }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// S3 V23 — spider chase (#146) + fighter auto-aggro (#147) replay determinism
+//
+// Exercises the V23-gated paths: findChaseTarget / Chasing transitions+movement
+// (spider.ts), the widened spider-combat gate (combat.ts), and the spider
+// candidate in the fighter proximity scan (ant-system.ts). The serializer spreads
+// the whole spider object, so the new chaseTargetAntId/chaseStartTick fields are
+// covered — any RNG or non-deterministic branch surfaces as a JSON divergence.
+// ---------------------------------------------------------------------------
+
+describe('S3 V23: spider chase + fighter aggro replay determinism', () => {
+  it('two V23 worlds from seed 7777 run byte-identical over 200 ticks through Chasing', () => {
+    const SEED = 7777;
+    const TICKS = 200;
+
+    function buildChaseWorld(): WorldState {
+      const world = createScenario(SEED);
+      // V23 behavior must be active for chase + fighter aggro to fire.
+      expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V23_SPIDER_AGGRO);
+      const spider = world.spider!;
+      const player = world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!;
+      expect(player.workers.length).toBeGreaterThanOrEqual(2);
+
+      // Anchor on the first starting worker's surface tile.
+      const prey = player.workers[0]!;
+      const wx = world.ants.posX[prey]! >> FP_SHIFT;
+      const wy = world.ants.posY[prey]! >> FP_SHIFT;
+
+      // Park the spider 2 tiles from the worker cluster so findChaseTarget fires
+      // on the first tick (within SPIDER_CHASE_TRIGGER_RADIUS=4). Under the V23
+      // redesign a sated spider ignores workers, so saturate hunger past the
+      // threshold — a hungry spider opportunistically Chases a lone ant in radius.
+      spider.state = 'Patrolling';
+      spider.posX = (wx + 2) << FP_SHIFT;
+      spider.posY = wy << FP_SHIFT;
+      spider.lairTileX = wx + 2;
+      spider.lairTileY = wy;
+      spider.hungerTicks = SPIDER_HUNGER_THRESHOLD_TICKS[1]!;
+      spider.hp = SPIDER_HP_FULL;
+      spider.chaseTargetAntId = -1;
+      spider.chaseStartTick = 0;
+
+      // Convert a second worker into a fighter adjacent to the spider and rally it
+      // on its own (non-entrance) tile so the proximity-aggro scan runs and folds
+      // the spider in as a candidate.
+      const fighter = player.workers[1]!;
+      world.ants.task[fighter] = AntTask.Fighting;
+      world.ants.posX[fighter] = ((wx + 1) << FP_SHIFT) + (FP_ONE >> 1);
+      world.ants.posY[fighter] = (wy << FP_SHIFT) + (FP_ONE >> 1);
+      player.rallyPoint = { tileX: wx + 1, tileY: wy };
+      return world;
+    }
+
+    const worldA = buildChaseWorld();
+    const worldB = buildChaseWorld();
+    const statesVisited = new Set<string>();
+    for (let t = 0; t < TICKS; t++) {
+      tick(worldA, []);
+      if (worldA.spider !== null) statesVisited.add(worldA.spider.state);
+    }
+    for (let t = 0; t < TICKS; t++) tick(worldB, []);
+
+    // Guard: the chase path must actually have been exercised.
+    expect(statesVisited.has('Chasing')).toBe(true);
+
+    // Byte-identical parity including the new V23 spider fields.
+    expect(serializeWorldState(worldA)).toBe(serializeWorldState(worldB));
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// S3 V23 redesign — hunger-gated meander + feed-after-kill replay determinism
+//
+// Exercises the redesign-specific deterministic surfaces that the chase test
+// above does not reach:
+//   - the meander hash (Patrolling wander target derived from terrainSeed ^ tick)
+//   - the feed-after-kill path: killedThisTick → hunger reset → computeFeedAwayTile
+//     (feed-direction hash) → Feeding heal window
+//   - the rampage pick (pickRampageTarget) when no chase/hunt target is available
+// None of these draw world.rngState, so two independent runs must serialize
+// byte-identically AND leave rngState in lockstep.
+// ---------------------------------------------------------------------------
+
+describe('S3 V23 redesign: meander + feed-after-kill replay determinism', () => {
+  // Build a hungry spider sitting on top of a lone player worker with no
+  // fighters anywhere, so the predation→kill→feed loop fires: combat resolves
+  // on the shared tile (kill), the spider resets hunger and — finding no
+  // adjacent fighter — retreats ~10 tiles and Feeds. Running long enough also
+  // lets hunger re-accrue past the threshold and drive a second predation beat.
+  function buildFeedWorld(): WorldState {
+    const world = createScenario(7777);
+    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V23_SPIDER_AGGRO);
+    const spider = world.spider!;
+    const player = world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!;
+    expect(player.workers.length).toBeGreaterThanOrEqual(1);
+
+    // Anchor the spider directly on the first worker's surface tile so the
+    // first combat pass already has a victim on the tile.
+    const prey = player.workers[0]!;
+    const wx = world.ants.posX[prey]! >> FP_SHIFT;
+    const wy = world.ants.posY[prey]! >> FP_SHIFT;
+    spider.state = 'Patrolling';
+    spider.posX = wx << FP_SHIFT;
+    spider.posY = wy << FP_SHIFT;
+    spider.lairTileX = wx;
+    spider.lairTileY = wy;
+    spider.hp = SPIDER_HP_FULL - 25; // leave headroom so Feeding heal is observable
+    spider.hungerTicks = SPIDER_HUNGER_THRESHOLD_TICKS[1]!; // hungry → predates
+    return world;
+  }
+
+  it('two redesign worlds from seed 7777 run byte-identical over 400 ticks through Feeding', () => {
+    const TICKS = 400;
+    const worldA = buildFeedWorld();
+    const worldB = buildFeedWorld();
+    const statesVisited = new Set<string>();
+    for (let t = 0; t < TICKS; t++) {
+      tick(worldA, []);
+      if (worldA.spider !== null) statesVisited.add(worldA.spider.state);
+    }
+    for (let t = 0; t < TICKS; t++) tick(worldB, []);
+
+    // Guard: the feed-after-kill path must actually have been exercised.
+    expect(statesVisited.has('Feeding')).toBe(true);
+
+    // Byte-identical parity AND rngState lockstep (spider logic draws no RNG).
+    expect(serializeWorldState(worldA)).toBe(serializeWorldState(worldB));
+    expect(worldA.rngState).toBe(worldB.rngState);
+  }, 30_000);
+
+  it('save round-trip mid-Feeding deep-equals the spider, with killedThisTick forced to 0 on load', async () => {
+    const { serializeWorldState: saveWorld, deserializeWorldState: loadWorld } =
+      await import('../platform/save.js');
+
+    const world = buildFeedWorld();
+    // Advance until the spider is mid-Feeding (kill → feed transition).
+    let reachedFeeding = false;
+    for (let t = 0; t < 400; t++) {
+      tick(world, []);
+      if (world.spider !== null && world.spider.state === 'Feeding') {
+        reachedFeeding = true;
+        break;
+      }
+    }
+    expect(reachedFeeding).toBe(true);
+
+    // killedThisTick is a transient combat→spider flag; force it set so we can
+    // prove deserialize hard-defaults it back to 0 (it must never persist as 1).
+    world.spider!.killedThisTick = 1;
+    const before = { ...world.spider! };
+
+    const restored = loadWorld(saveWorld(world));
+    expect(restored.spider).not.toBeNull();
+    const after = restored.spider!;
+
+    // Every field round-trips except killedThisTick, which is hard-defaulted 0.
+    expect(after.killedThisTick).toBe(0);
+    expect({ ...after, killedThisTick: before.killedThisTick }).toEqual(before);
+  });
 });
 

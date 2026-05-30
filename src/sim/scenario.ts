@@ -296,6 +296,14 @@ function _placeSpider(world: WorldState): SpiderState {
     killsThisStrike: 0,
     rampageKillsThisRampage: 0,
     rampageTargetColonyId: -1,
+    chaseTargetAntId: -1,
+    chaseStartTick: 0,
+    killedThisTick: 0,
+    lastKillTileX: -1,
+    lastKillTileY: -1,
+    feedAwayTileX: -1,
+    feedAwayTileY: -1,
+    feedArrivedTick: -1,
   };
 }
 

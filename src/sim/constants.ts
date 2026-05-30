@@ -792,6 +792,20 @@ export const SPIDER_HUNT_MIN_TARGET_WORKERS = 2 as const;
 /** S3 — Manhattan scatter radius around hunt target tile. Workers within this scatter. */
 export const SPIDER_SCATTER_RADIUS_TILES = 1 as const;
 
+/**
+ * V23 (#146) — Manhattan tile radius within which a Patrolling spider opportunistically
+ * chases the nearest live surface ant. Mirrors FIGHT_AGGRO_RADIUS so prey and predator
+ * react at the same range.
+ */
+export const SPIDER_CHASE_TRIGGER_RADIUS = 4 as const;
+
+/**
+ * V23 (#146) — Safety leash: maximum ticks the spider will pursue a single chase target
+ * before abandoning and returning to Patrolling. Prevents a "relentless" chase from
+ * stranding the spider far from its lair indefinitely. 300 ticks = 15 sim-seconds.
+ */
+export const SPIDER_CHASE_MAX_TICKS = 300 as const;
+
 /** S3 — Patrolling territory radius (tiles) around lair. */
 export const SPIDER_TERRITORY_RADIUS_TILES = 24 as const;
 
@@ -821,4 +835,43 @@ export const SPIDER_SPEED = 256 as const;
  * Option B per spec: keeps existing DANGER_DECAY_FP=10, re-derives deposit.
  */
 export const SPIDER_DANGER_DEPOSIT = 1280 as const;
+
+// ---------------------------------------------------------------------------
+// V23 — Hunger-gated meandering predator redesign (gated on simVersion >= V23)
+// ---------------------------------------------------------------------------
+
+/**
+ * V23 — Ticks since the last meal before the spider becomes "Hungry" and starts
+ * actively seeking prey. Tier triplet [Easy, Normal, Hard]; Normal = 1200 (the
+ * former hunt cadence). Preserves the D-33 Axis-B difficulty-pressure knob.
+ * Read via tierIndex(world.difficulty). Resets to 0 (hungerTicks) on any kill.
+ */
+export const SPIDER_HUNGER_THRESHOLD_TICKS = [1800, 1200, 900] as const;
+
+/** V23 — Sated meander moves only when world.tick % divisor === 0 (1 tile / 3 ticks). */
+export const SPIDER_MEANDER_TICK_DIVISOR = 3 as const;
+
+/** V23 — Re-roll the deterministic wander target every N ticks. */
+export const SPIDER_MEANDER_RETARGET_TICKS = 128 as const;
+
+/** V23 — Tiles the spider steps away from a kill before feeding (avoid chain-killing). */
+export const SPIDER_FEED_RETREAT_TILES = 10 as const;
+
+/** V23 — Manhattan radius at which a Fighting ant counts as "adjacent" (blocks/interrupts feed). */
+export const SPIDER_FEED_DANGER_RADIUS = 1 as const;
+
+/** V23 — Feed/heal window, measured from arrival at the feed tile. 300 ticks = 15 sim-seconds. */
+export const SPIDER_FEED_TICKS = 300 as const;
+
+/** V23 — While feeding at the feed tile, regen +1 HP every N ticks (~30 HP over SPIDER_FEED_TICKS). */
+export const SPIDER_FEED_HEAL_INTERVAL_TICKS = 10 as const;
+
+/**
+ * V23 (#146/#147) — Manhattan tile radius within which a Fighting ant attacking the
+ * spider triggers active self-defense: the spider stops meandering/camping and Chases
+ * the nearest attacker so it actually engages instead of drifting away. Slightly wider
+ * than SPIDER_CHASE_TRIGGER_RADIUS so the spider reacts to an approaching swarm before
+ * it is surrounded. The spider moves at 2× ant speed, so a Chase reliably closes.
+ */
+export const SPIDER_DEFENSE_TRIGGER_RADIUS = 6 as const;
 

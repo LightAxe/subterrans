@@ -17,6 +17,7 @@ import { Rng } from './rng.js';
 import { AntTask } from './enums.js';
 import { makeTileKey } from './tile-key.js';
 import type { WorldState, KillerKind, QueenDeathContext } from './types.js';
+import { SIM_VERSION_V23_SPIDER_AGGRO } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
@@ -115,10 +116,34 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
       for (let q = runStart; q < p; q++) COMBAT_CONTESTED[liveIdx[q]!] = 1;
     }
   }
+  // Spider-pairing sentinel (-2) handling differs by version:
+  //   Pre-V23: the spider only engages combat in the bounded Striking/Rampaging
+  //     episodes, which always end by calling clearSpiderPairingSentinels — so a
+  //     -2 ant is guaranteed cleared on disengage. Skip -2 here to preserve windup.
+  //   V23: the gate widened to the unbounded surface states (Patrolling/Hunting/
+  //     Chasing), where no state transition is guaranteed. An ant that brushes a
+  //     patrolling spider and walks off would otherwise keep -2 forever (skipping
+  //     the next encounter's windup and bypassing this stale cleanup). So clear -2
+  //     for any ant NOT on the spider's tile this tick (= disengaged), while
+  //     preserving it for ants still on the tile so resolveSpiderCombatOnTile can
+  //     continue their windup. (Codex P1.)
+  const spider = world.spider;
+  const v23Spider = spider !== null && world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO;
+  const spiderTileX = v23Spider ? spider!.posX >> FP_SHIFT : -1;
+  const spiderTileY = v23Spider ? spider!.posY >> FP_SHIFT : -1;
   for (let i = 0; i < count; i++) {
-    // -2 is the spider-pairing sentinel; skip it here so resolveSpiderCombatOnTile
-    // can preserve windup state. The sentinel is cleared by clearSpiderPairingSentinels.
-    if (ants.alive[i] === 1 && COMBAT_CONTESTED[i] === 0 && ants.combatOpponentId[i] !== -2) {
+    if (ants.alive[i] !== 1) continue;
+    if (ants.combatOpponentId[i] === -2) {
+      if (v23Spider) {
+        const onSpiderTile =
+          ants.zone[i] === 0 &&
+          (ants.posX[i]! >> FP_SHIFT) === spiderTileX &&
+          (ants.posY[i]! >> FP_SHIFT) === spiderTileY;
+        if (!onSpiderTile) ants.combatOpponentId[i] = -1;
+      }
+      continue;
+    }
+    if (COMBAT_CONTESTED[i] === 0) {
       ants.combatOpponentId[i] = -1;
     }
   }
@@ -135,11 +160,20 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
   }
 
   // S3 — spider combat: resolve spider vs ants on the spider's tile.
-  // Only during combat-active states (Striking, Rampaging). Spider in Patrolling,
-  // Hunting, Feeding, or Retreating does not engage in direct HP combat.
-  if (world.spider !== null &&
-      (world.spider.state === 'Striking' || world.spider.state === 'Rampaging')) {
-    resolveSpiderCombatOnTile(world);
+  // Pre-V23: only the combat-active states (Striking, Rampaging) engage.
+  // V23 (#146/#147): every surface state engages so the spider always bites back
+  // any ant attacking it (always-on self-defense). Only Feeding sits off the gate
+  // — interruption is handled in tickSpiderV23 the tick a fighter reaches it.
+  // Retreating is unused in V23 (normalized to Patrolling on the first tick).
+  if (world.spider !== null) {
+    const ss = world.spider.state;
+    const spiderCombatActive =
+      ss === 'Striking' || ss === 'Rampaging' ||
+      (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO &&
+        ss !== 'Feeding' && ss !== 'Retreating');
+    if (spiderCombatActive) {
+      resolveSpiderCombatOnTile(world);
+    }
   }
 
   // Clear pendingQueenDeathContexts for ants that survived (i.e., where the queen kill
@@ -499,11 +533,29 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
 
   // Prefer AntTask.Fighting ants for the active pair; fall back to any ant.
   let activeAntIdx = onTile[0]!;
+  let hasFighter = false;
   for (const idx of onTile) {
     if (ants.task[idx] === AntTask.Fighting) {
       activeAntIdx = idx;
+      hasFighter = true;
       break;
     }
+  }
+
+  // Sated meander = self-defense only (Codex P2). Under V23 the combat gate opens
+  // for every non-Feeding surface state, including a sated `Patrolling` spider. But
+  // the hunger-gated design says a sated spider ignores workers and only bites ants
+  // attacking it — predation happens in the Chasing/Hunting/Striking/Rampaging
+  // episodes, never during a plain meander. So a Patrolling spider engages only when
+  // a Fighting ant is on its tile (self-defense); it never initiates a bite on a
+  // worker merely sharing the tile. Pre-V23 never reaches here in Patrolling (gate is
+  // Striking/Rampaging only), so this is V23-only by construction.
+  if (
+    world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO &&
+    spider.state === 'Patrolling' &&
+    !hasFighter
+  ) {
+    return;
   }
 
   // Swarm bonus: priority set AND enough fighters from the priority colony on tile.
@@ -597,6 +649,11 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
     if (antDies) {
       if (spider.state === 'Striking') spider.killsThisStrike += 1;
       if (spider.state === 'Rampaging') spider.rampageKillsThisRampage += 1;
+      if (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO) {
+        spider.killedThisTick = 1;
+        spider.lastKillTileX = spiderTileX;
+        spider.lastKillTileY = spiderTileY;
+      }
       killAnt(world, swarmRetaliationTarget, null, null, 'Spider');
     }
     return;
@@ -654,6 +711,11 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
   if (antDies2) {
     if (spider.state === 'Striking') spider.killsThisStrike += 1;
     if (spider.state === 'Rampaging') spider.rampageKillsThisRampage += 1;
+    if (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO) {
+      spider.killedThisTick = 1;
+      spider.lastKillTileX = spiderTileX;
+      spider.lastKillTileY = spiderTileY;
+    }
     killAnt(world, activeAntIdx, null, null, 'Spider');
   }
 }

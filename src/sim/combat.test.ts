@@ -1,14 +1,24 @@
 import { describe, it, expect } from 'vitest';
 import { detectAndResolveCombat, killAnt } from './combat.js';
-import { createWorldState, allocateEntityId } from './types.js';
+import {
+  createWorldState,
+  allocateEntityId,
+  SIM_VERSION_V22_DIFFICULTY,
+  SIM_VERSION_V23_SPIDER_AGGRO,
+} from './types.js';
 import { Rng } from './rng.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask } from './enums.js';
 import { Zone } from './terrain.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
-import { WORKER_BASE_SPEED, WORKER_LIFESPAN_TICKS } from './constants.js';
-import type { WorldState } from './types.js';
+import {
+  WORKER_BASE_SPEED,
+  WORKER_LIFESPAN_TICKS,
+  SPIDER_HP_FULL,
+  SPIDER_HUNT_INTERVAL_TICKS,
+} from './constants.js';
+import type { WorldState, SpiderState, SpiderBehaviorState } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 
 // Helper: build a minimal 2-colony world with seeded rngState.
@@ -52,6 +62,42 @@ function spawnFighter(world: WorldState, colonyId: ColonyId, tileX: number, tile
   const id = spawnAnt(world, colonyId, tileX, tileY, zone);
   world.ants.task[id] = AntTask.Fighting;
   return id;
+}
+
+// Helper: place a spider on tile (tileX, tileY) in the given behavior state.
+function placeSpider(world: WorldState, tileX: number, tileY: number, state: SpiderBehaviorState): SpiderState {
+  const spider: SpiderState = {
+    state,
+    posX: tileX << FP_SHIFT,
+    posY: tileY << FP_SHIFT,
+    lairTileX: tileX,
+    lairTileY: tileY,
+    territoryRadiusTiles: 24,
+    hp: SPIDER_HP_FULL,
+    attackCooldown: 0,
+    hungerTicks: 0,
+    nextHuntTick: SPIDER_HUNT_INTERVAL_TICKS,
+    huntStartTick: 0,
+    strikeStartTick: 0,
+    feedingStartTick: 0,
+    retreatStartTick: 0,
+    rampageStartTick: 0,
+    huntTargetTileX: -1,
+    huntTargetTileY: -1,
+    killsThisStrike: 0,
+    rampageKillsThisRampage: 0,
+    rampageTargetColonyId: -1,
+    chaseTargetAntId: -1,
+    chaseStartTick: 0,
+    killedThisTick: 0,
+    lastKillTileX: -1,
+    lastKillTileY: -1,
+    feedAwayTileX: -1,
+    feedAwayTileY: -1,
+    feedArrivedTick: -1,
+  };
+  world.spider = spider;
+  return spider;
 }
 
 describe('detectAndResolveCombat (V15 coin-flip path)', () => {
@@ -455,5 +501,198 @@ describe('non-fighter and queen combat stats (V17)', () => {
       task: AntTask.Idle, hp: COMBAT_HP_QUEEN,
     });
     expect(world.ants.hp[queenSlot]).toBe(COMBAT_HP_QUEEN);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V23 (#146/#147): widened spider-combat gate.
+// Pre-V23 the spider only engages in Striking/Rampaging; V23 also engages in the
+// other surface states (Patrolling/Hunting/Chasing) so auto-aggro fighters can
+// damage it and the spider defends itself.
+// ---------------------------------------------------------------------------
+
+describe('spider combat gate (V23 #146/#147)', () => {
+  // Pair a fighter with the spider and arm it to strike on the next resolve tick.
+  function armFighterAgainstSpider(world: WorldState, fighterId: number): void {
+    world.ants.combatOpponentId[fighterId] = -2; // already paired (skip windup)
+    world.ants.attackCooldown[fighterId] = 1;     // decrements to 0 → strikes this tick
+  }
+
+  it('Patrolling spider takes fighter damage under V23', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    const fighter = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+    const spider = placeSpider(world, 5, 7, 'Patrolling');
+    armFighterAgainstSpider(world, fighter);
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    expect(spider.hp).toBe(SPIDER_HP_FULL - COMBAT_DAMAGE_BASE);
+  });
+
+  it('Chasing spider takes fighter damage under V23', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    const fighter = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+    const spider = placeSpider(world, 5, 7, 'Chasing');
+    spider.chaseTargetAntId = fighter;
+    armFighterAgainstSpider(world, fighter);
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    expect(spider.hp).toBe(SPIDER_HP_FULL - COMBAT_DAMAGE_BASE);
+  });
+
+  it('Patrolling spider takes NO damage under a pre-V23 (V22) world — old-replay guard', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V22_DIFFICULTY;
+    const fighter = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+    const spider = placeSpider(world, 5, 7, 'Patrolling');
+    armFighterAgainstSpider(world, fighter);
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    expect(spider.hp).toBe(SPIDER_HP_FULL); // gate closed pre-V23
+  });
+
+  it('Striking spider still engages even under a pre-V23 world (unchanged behavior)', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V22_DIFFICULTY;
+    const fighter = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+    const spider = placeSpider(world, 5, 7, 'Striking');
+    armFighterAgainstSpider(world, fighter);
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    expect(spider.hp).toBe(SPIDER_HP_FULL - COMBAT_DAMAGE_BASE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V23 (Codex P1): off-tile spider-pairing sentinel cleanup.
+// Under V23 the gate engages in unbounded surface states (Patrolling/Hunting/
+// Chasing), where no state transition is guaranteed — so an ant that brushed the
+// spider (combatOpponentId === -2) and then walked off its tile must have the
+// sentinel cleared every tick by detectAndResolveCombat, not just by a spider
+// state-exit. Otherwise the stale -2 would skip the next encounter's windup and
+// bypass normal stale-opponent cleanup.
+// ---------------------------------------------------------------------------
+
+describe('spider-pairing sentinel cleanup (V23 Codex P1)', () => {
+  it('clears -2 on an ant that disengaged from a Patrolling spider (off-tile)', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    placeSpider(world, 5, 7, 'Patrolling');
+    // Ant was paired last tick (-2) and has since moved off the spider's tile.
+    const ant = spawnFighter(world, cid1, 9, 9, Zone.Surface);
+    world.ants.combatOpponentId[ant] = -2;
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    expect(world.ants.combatOpponentId[ant]).toBe(-1);
+  });
+
+  it('preserves -2 on an ant still on the spider tile (ongoing windup)', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    placeSpider(world, 5, 7, 'Patrolling');
+    const ant = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+    world.ants.combatOpponentId[ant] = -2;
+    world.ants.attackCooldown[ant] = 5; // mid-windup
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    // Still engaged on the tile → sentinel kept so resolveSpiderCombatOnTile
+    // continues the cooldown rather than restarting the windup.
+    expect(world.ants.combatOpponentId[ant]).toBe(-2);
+  });
+
+  it('clears -2 when the ant descends underground (off the surface tile)', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    placeSpider(world, 5, 7, 'Patrolling');
+    // Same tile coords but underground — the spider is surface-only, so this is
+    // a disengage.
+    const ant = spawnFighter(world, cid1, 5, 7, Zone.Underground);
+    world.ants.combatOpponentId[ant] = -2;
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    expect(world.ants.combatOpponentId[ant]).toBe(-1);
+  });
+
+  it('does NOT clear off-tile -2 under a pre-V23 (V22) world — old-replay guard', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V22_DIFFICULTY;
+    placeSpider(world, 5, 7, 'Striking');
+    const ant = spawnFighter(world, cid1, 9, 9, Zone.Surface);
+    world.ants.combatOpponentId[ant] = -2;
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    // V22 clears -2 only via clearSpiderPairingSentinels on episode exit, never
+    // in this pass — byte-identical guard.
+    expect(world.ants.combatOpponentId[ant]).toBe(-2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V23 (Codex P2): sated meander = self-defense only.
+// The widened gate engages spider combat in Patrolling, but the hunger-gated
+// design says a sated (Patrolling) spider ignores workers and only bites ants
+// attacking it. Predation happens in Chasing/Hunting/Striking/Rampaging, never
+// during a plain meander — so a Patrolling spider must NOT initiate a bite on a
+// worker merely sharing its tile, while predatory states still eat any ant.
+// ---------------------------------------------------------------------------
+
+describe('sated meander self-defense (V23 Codex P2)', () => {
+  it('Patrolling spider ignores a lone worker on its tile (no pairing)', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    const spider = placeSpider(world, 5, 7, 'Patrolling');
+    const worker = spawnAnt(world, cid1, 5, 7, Zone.Surface); // AntTask.Idle
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    // Sated spider does not engage a worker: no pairing, no windup, no damage.
+    expect(world.ants.combatOpponentId[worker]).toBe(-1);
+    expect(world.ants.alive[worker]).toBe(1);
+    expect(spider.attackCooldown).toBe(0);
+  });
+
+  it('Patrolling spider still bites back a fighter sharing its tile (self-defense)', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    const spider = placeSpider(world, 5, 7, 'Patrolling');
+    const fighter = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    // First contact: fighter is paired (-2) and the spider arms its windup.
+    expect(world.ants.combatOpponentId[fighter]).toBe(-2);
+    expect(spider.attackCooldown).toBe(COMBAT_COOLDOWN_TICKS);
+  });
+
+  it('Hunting spider DOES engage a lone worker on its tile (predatory)', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    placeSpider(world, 5, 7, 'Hunting');
+    const worker = spawnAnt(world, cid1, 5, 7, Zone.Surface); // AntTask.Idle
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    // Predatory state pairs even a worker (it will be eaten over the next ticks).
+    expect(world.ants.combatOpponentId[worker]).toBe(-2);
+  });
+
+  it('Rampaging spider DOES engage a lone worker on its tile (predatory)', () => {
+    const { world, cid1 } = makeWorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    placeSpider(world, 5, 7, 'Rampaging');
+    const worker = spawnAnt(world, cid1, 5, 7, Zone.Surface); // AntTask.Idle
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    expect(world.ants.combatOpponentId[worker]).toBe(-2);
   });
 });
