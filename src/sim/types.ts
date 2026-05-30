@@ -340,6 +340,12 @@ export interface SpiderState {
   rampageTargetColonyId: number;  // colony targeted for current rampage; -1 when not rampaging
   chaseTargetAntId: number;       // V23: ant id being chased; -1 when not Chasing
   chaseStartTick: number;         // V23: tick the current chase began (leash-timeout reference)
+  killedThisTick: number;         // V23: 0/1 flag set by combat (step 17), consumed by tickSpider (17.5); never persists as 1
+  lastKillTileX: number;          // V23: tile of the most recent kill (= spider tile); -1 default
+  lastKillTileY: number;
+  feedAwayTileX: number;          // V23: ~10-tile feed destination after a kill; -1 default
+  feedAwayTileY: number;
+  feedArrivedTick: number;        // V23: tick the spider reached feedAwayTile (heal-window clock); -1 while traveling
 }
 
 export interface AIStateRecord {
@@ -696,6 +702,12 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     ds.rampageTargetColonyId = ss.rampageTargetColonyId;
     ds.chaseTargetAntId = ss.chaseTargetAntId;
     ds.chaseStartTick = ss.chaseStartTick;
+    ds.killedThisTick = ss.killedThisTick;
+    ds.lastKillTileX = ss.lastKillTileX;
+    ds.lastKillTileY = ss.lastKillTileY;
+    ds.feedAwayTileX = ss.feedAwayTileX;
+    ds.feedAwayTileY = ss.feedAwayTileY;
+    ds.feedArrivedTick = ss.feedArrivedTick;
   }
   dst.spiderPriorityColonyId = src.spiderPriorityColonyId;
   // scatterReticleTile

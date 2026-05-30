@@ -413,6 +413,12 @@ interface SerializedSpiderState {
   rampageTargetColonyId: number;
   chaseTargetAntId: number;
   chaseStartTick: number;
+  killedThisTick: number;
+  lastKillTileX: number;
+  lastKillTileY: number;
+  feedAwayTileX: number;
+  feedAwayTileY: number;
+  feedArrivedTick: number;
 }
 
 /** S2 — serialized form of AIStateRecord. operationFighterIds stored as number[]. */
@@ -869,6 +875,12 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
     rampageTargetColonyId: safeState === 'Rampaging' && typeof r.rampageTargetColonyId === 'number' && r.rampageTargetColonyId > 0 ? r.rampageTargetColonyId : -1,
     chaseTargetAntId: safeState === 'Chasing' ? rawChaseId : -1,
     chaseStartTick: typeof r.chaseStartTick === 'number' && Number.isInteger(r.chaseStartTick) ? r.chaseStartTick : 0,
+    killedThisTick: 0,
+    lastKillTileX: typeof r.lastKillTileX === 'number' && Number.isInteger(r.lastKillTileX) ? r.lastKillTileX : -1,
+    lastKillTileY: typeof r.lastKillTileY === 'number' && Number.isInteger(r.lastKillTileY) ? r.lastKillTileY : -1,
+    feedAwayTileX: typeof r.feedAwayTileX === 'number' && Number.isInteger(r.feedAwayTileX) ? r.feedAwayTileX : -1,
+    feedAwayTileY: typeof r.feedAwayTileY === 'number' && Number.isInteger(r.feedAwayTileY) ? r.feedAwayTileY : -1,
+    feedArrivedTick: typeof r.feedArrivedTick === 'number' && Number.isInteger(r.feedArrivedTick) ? r.feedArrivedTick : -1,
   };
 }
 

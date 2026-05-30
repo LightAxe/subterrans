@@ -2041,12 +2041,10 @@ export function updateFightAntTargets(world: WorldState): void {
       // (surface-only — this block is already gated to Zone.Surface). A closer enemy ant
       // wins (strict <); a closer spider wins over a farther ant. Routing the fighter onto
       // the spider's tile is enough — the widened spider-combat gate resolves the damage.
-      // Only consider the spider in states the combat gate actually resolves (see combat.ts):
-      // Feeding/Retreating are untargetable, so excluding them keeps fighters from abandoning
-      // their rally/enemy to path onto a spider they cannot damage.
+      // The spider is targetable in ANY state: fighters may pursue a Feeding spider to
+      // interrupt its heal (tickSpiderV23 forfeits the heal once a fighter is adjacent).
       let nearestIsSpider = false;
-      if (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO && world.spider !== null
-          && world.spider.state !== 'Feeding' && world.spider.state !== 'Retreating') {
+      if (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO && world.spider !== null) {
         const spTileX = world.spider.posX >> FP_SHIFT;
         const spTileY = world.spider.posY >> FP_SHIFT;
         const dist = Math.abs(spTileX - aggroTileX) + Math.abs(spTileY - aggroTileY);
@@ -3765,10 +3763,12 @@ function isDescentBlocked(
 ): boolean {
   const ants = world.ants;
 
-  // #165 — rampaging spider blockade. A spider parked on the entrance tile is
-  // the blockade footprint; hold every descender on the surface so step-17.5
-  // spider combat (which only scans the spider's own tile) catches it instead
-  // of letting carriers slip through the zone transition. Applies to any ant.
+  // #165 — spider blockade. A Rampaging spider parked on the entrance tile is the
+  // blockade footprint; hold every descender on the surface so step-17.5 spider
+  // combat (which only scans the spider's own tile) catches it instead of letting
+  // carriers slip through the zone transition. Applies to any ant. Only Rampaging
+  // camps an entrance (both V22 and V23); a sated V23 spider meandering over an
+  // entrance must NOT trap descenders, so the narrow state check is intentional.
   const spider = world.spider;
   if (spider !== null && spider.state === 'Rampaging') {
     const sx = spider.posX >> FP_SHIFT;

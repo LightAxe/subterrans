@@ -137,15 +137,16 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
 
   // S3 — spider combat: resolve spider vs ants on the spider's tile.
   // Pre-V23: only the combat-active states (Striking, Rampaging) engage.
-  // V23 (#146/#147): all *surface* states engage (Patrolling, Hunting, Chasing too) so
-  // fighters that auto-aggro onto a patrolling/chasing spider can actually damage it, and
-  // the spider defends itself. Feeding/Retreating are off-surface (at lair) and never engage.
+  // V23 (#146/#147): every surface state engages so the spider always bites back
+  // any ant attacking it (always-on self-defense). Only Feeding sits off the gate
+  // — interruption is handled in tickSpiderV23 the tick a fighter reaches it.
+  // Retreating is unused in V23 (normalized to Patrolling on the first tick).
   if (world.spider !== null) {
     const ss = world.spider.state;
     const spiderCombatActive =
       ss === 'Striking' || ss === 'Rampaging' ||
       (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO &&
-        (ss === 'Patrolling' || ss === 'Hunting' || ss === 'Chasing'));
+        ss !== 'Feeding' && ss !== 'Retreating');
     if (spiderCombatActive) {
       resolveSpiderCombatOnTile(world);
     }
@@ -606,6 +607,11 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
     if (antDies) {
       if (spider.state === 'Striking') spider.killsThisStrike += 1;
       if (spider.state === 'Rampaging') spider.rampageKillsThisRampage += 1;
+      if (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO) {
+        spider.killedThisTick = 1;
+        spider.lastKillTileX = spiderTileX;
+        spider.lastKillTileY = spiderTileY;
+      }
       killAnt(world, swarmRetaliationTarget, null, null, 'Spider');
     }
     return;
@@ -663,6 +669,11 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
   if (antDies2) {
     if (spider.state === 'Striking') spider.killsThisStrike += 1;
     if (spider.state === 'Rampaging') spider.rampageKillsThisRampage += 1;
+    if (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO) {
+      spider.killedThisTick = 1;
+      spider.lastKillTileX = spiderTileX;
+      spider.lastKillTileY = spiderTileY;
+    }
     killAnt(world, activeAntIdx, null, null, 'Spider');
   }
 }

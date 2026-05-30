@@ -25,6 +25,13 @@ import {
   SPIDER_DANGER_DEPOSIT,
   SPIDER_CHASE_TRIGGER_RADIUS,
   SPIDER_CHASE_MAX_TICKS,
+  SPIDER_HUNGER_THRESHOLD_TICKS,
+  SPIDER_MEANDER_TICK_DIVISOR,
+  SPIDER_MEANDER_RETARGET_TICKS,
+  SPIDER_FEED_RETREAT_TILES,
+  SPIDER_FEED_DANGER_RADIUS,
+  SPIDER_FEED_TICKS,
+  SPIDER_FEED_HEAL_INTERVAL_TICKS,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
   PHEROMONE_CAP,
@@ -36,6 +43,12 @@ import { FP_SHIFT } from './fixed.js';
 // Requires SURFACE_GRID_WIDTH === 2^HUNT_KEY_SHIFT. Compile-time assertion below.
 const HUNT_KEY_SHIFT = 7; // SURFACE_GRID_WIDTH = 128 = 2^7
 const _huntKeyShiftCheck: 128 = SURFACE_GRID_WIDTH; // fails to compile if SURFACE_GRID_WIDTH !== 128
+
+// Meander tick-bucket: `tick >> SHIFT` is integer division by the retarget
+// window (avoids the float-division lint). Requires the window to stay a power
+// of two; the compile-time assertion below fails if the constant drifts.
+const SPIDER_MEANDER_RETARGET_SHIFT = 7; // SPIDER_MEANDER_RETARGET_TICKS = 128 = 2^7
+const _meanderRetargetCheck: 128 = SPIDER_MEANDER_RETARGET_TICKS; // fails to compile if != 128
 
 // ---------------------------------------------------------------------------
 // Module-level scratch for findHuntTarget — avoids per-call Map allocation.
@@ -228,6 +241,18 @@ function findNearestEntrance(
  * using a deterministic hash of (terrainSeed ^ rampageStartTick) so the
  * result looks organic but is fully replay-safe. No world.rngState draws.
  */
+/**
+ * Murmur3 32-bit finalizer over a single integer seed. Good avalanche,
+ * deterministic, no rngState draw. Shared by pickRampageTarget, the V23 meander
+ * target, and the V23 feed-away direction. Returns an unsigned 32-bit int.
+ */
+function hash32(x: number): number {
+  let h = Math.imul(x | 0, 2654435761) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
 function pickRampageTarget(world: WorldState, spider: SpiderState): number {
   const candidates: Array<{ colonyId: number; score: number }> = [];
   for (const key in world.colonies) {
@@ -244,10 +269,7 @@ function pickRampageTarget(world: WorldState, spider: SpiderState): number {
   candidates.sort((a, b) => b.score - a.score || a.colonyId - b.colonyId);
   // Murmur3 finalizer seeded by terrainSeed ^ rampageStartTick — good avalanche,
   // deterministic, no rngState draw.
-  let h = Math.imul(world.terrainSeed ^ spider.rampageStartTick, 2654435761) >>> 0;
-  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
-  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
-  h = (h ^ (h >>> 16)) >>> 0;
+  const h = hash32(world.terrainSeed ^ spider.rampageStartTick);
   // 60% → richer colony (index 0), 40% → poorer (index 1).
   return (h % 100) < 60 ? candidates[0]!.colonyId : candidates[1]!.colonyId;
 }
@@ -434,6 +456,21 @@ export function tickSpider(world: WorldState): void {
     return;
   }
 
+  // Version dispatch: V23+ uses the hunger-gated meandering predator; V22 and
+  // earlier use the frozen lair-orbit/scheduled-rampage behavior (byte-identical).
+  if (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO) {
+    tickSpiderV23(world, spider);
+    return;
+  }
+  tickSpiderV22(world, spider);
+}
+
+// ---------------------------------------------------------------------------
+// tickSpiderV22 — frozen pre-V23 behavior (lair orbit + scheduled rampage).
+// Verbatim move of the original tickSpider body. Do NOT modify: V22-and-earlier
+// replays must stay byte-identical.
+// ---------------------------------------------------------------------------
+function tickSpiderV22(world: WorldState, spider: SpiderState): void {
   // HP regeneration: 1 HP per 20 ticks while Retreating or Feeding.
   if ((spider.state === 'Retreating' || spider.state === 'Feeding') &&
       (world.tick % 20 === 0) &&
@@ -728,4 +765,374 @@ export function tickSpider(world: WorldState): void {
   } else {
     world.scatterReticleTile = null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// V23 helpers — fighter adjacency + feed-away destination
+// ---------------------------------------------------------------------------
+
+/**
+ * V23: true if any live surface Fighting ant is within SPIDER_FEED_DANGER_RADIUS
+ * (Manhattan) of the spider's tile. Boolean scan, no allocation.
+ */
+function isFighterAdjacent(world: WorldState, spider: SpiderState): boolean {
+  const sx = spider.posX >> FP_SHIFT;
+  const sy = spider.posY >> FP_SHIFT;
+  const r = SPIDER_FEED_DANGER_RADIUS;
+  const { ants } = world;
+  const len = ants.alive.length;
+  for (let i = 0; i < len; i++) {
+    if (ants.alive[i] !== 1) continue;
+    if (ants.zone[i] !== 0) continue; // surface only
+    if (ants.task[i] !== AntTask.Fighting) continue;
+    const ax = ants.posX[i]! >> FP_SHIFT;
+    const ay = ants.posY[i]! >> FP_SHIFT;
+    const dist = (ax > sx ? ax - sx : sx - ax) + (ay > sy ? ay - sy : sy - ay);
+    if (dist <= r) return true;
+  }
+  return false;
+}
+
+/**
+ * V23: compute the ~10-tile feed destination away from the kill tile and store
+ * it in feedAwayTile{X,Y}. The spider is normally on the kill tile (dx=dy=0); in
+ * that case a deterministic hash picks one of ±X/±Y. Otherwise step along the
+ * dominant away-axis (no diagonals). Clamped to grid bounds. No allocation.
+ */
+function computeFeedAwayTile(world: WorldState, spider: SpiderState): void {
+  const sx = spider.posX >> FP_SHIFT;
+  const sy = spider.posY >> FP_SHIFT;
+  const kx = spider.lastKillTileX >= 0 ? spider.lastKillTileX : sx;
+  const ky = spider.lastKillTileY >= 0 ? spider.lastKillTileY : sy;
+  let signX = 0;
+  let signY = 0;
+  const dx = sx - kx;
+  const dy = sy - ky;
+  if (dx === 0 && dy === 0) {
+    const h = hash32(world.tick ^ world.terrainSeed) & 3;
+    if (h === 0) signX = 1;
+    else if (h === 1) signX = -1;
+    else if (h === 2) signY = 1;
+    else signY = -1;
+  } else {
+    const ax = dx < 0 ? -dx : dx;
+    const ay = dy < 0 ? -dy : dy;
+    if (ax >= ay) signX = dx > 0 ? 1 : -1;
+    else signY = dy > 0 ? 1 : -1;
+  }
+  let fx = kx + signX * SPIDER_FEED_RETREAT_TILES;
+  let fy = ky + signY * SPIDER_FEED_RETREAT_TILES;
+  if (fx < 0) fx = 0;
+  if (fx > SURFACE_GRID_WIDTH - 1) fx = SURFACE_GRID_WIDTH - 1;
+  if (fy < 0) fy = 0;
+  if (fy > SURFACE_GRID_HEIGHT - 1) fy = SURFACE_GRID_HEIGHT - 1;
+  spider.feedAwayTileX = fx;
+  spider.feedAwayTileY = fy;
+}
+
+// ---------------------------------------------------------------------------
+// tickSpiderV23 — hunger-gated meandering surface predator (#146/#147 redesign).
+// No lair orbit; slow meander while sated, fast lunge while hunting/chasing.
+// Always bites back any ant attacking it; fights to the death (no retreat/flee).
+// A kill resets hunger; if out of danger it retreats ~10 tiles and heals while
+// feeding (interruptible). Deterministic: no world.rngState draws.
+// ---------------------------------------------------------------------------
+function tickSpiderV23(world: WorldState, spider: SpiderState): void {
+  // 1. Normalize: 'Retreating' is unused in V23 (may load from an earlier #172 build).
+  if (spider.state === 'Retreating') spider.state = 'Patrolling';
+
+  // 2. Hunger accrual: only while not Feeding.
+  if (spider.state !== 'Feeding') spider.hungerTicks += 1;
+
+  const tier = tierIndex(world.difficulty);
+
+  // 3. Post-kill feed signal (highest priority). Combat (step 17) set this flag
+  //    earlier this tick. Any meal — predation OR self-defense — resets hunger.
+  if (spider.killedThisTick === 1) {
+    spider.hungerTicks = 0;
+    if (!isFighterAdjacent(world, spider) && spider.state !== 'Feeding') {
+      // Out of danger: retreat ~10 tiles from the kill, then eat there to heal.
+      computeFeedAwayTile(world, spider);
+      spider.feedArrivedTick = -1;
+      clearSpiderPairingSentinels(world);
+      spider.state = 'Feeding';
+      spider.huntTargetTileX = -1;
+      spider.huntTargetTileY = -1;
+      spider.chaseTargetAntId = -1;
+      spider.rampageTargetColonyId = -1;
+      world.spiderPriorityColonyId = null;
+      emitEvent(world, {
+        tick: world.tick,
+        type: 'spider_feed_start',
+        payload: { killTile: { x: spider.lastKillTileX, y: spider.lastKillTileY } },
+      });
+    }
+    // Fighter adjacent: hunger reset only — stay in current state and keep fighting.
+  }
+
+  // 4. State machine transitions.
+  switch (spider.state) {
+    case 'Patrolling': {
+      const hungry = spider.hungerTicks >= SPIDER_HUNGER_THRESHOLD_TICKS[tier]!;
+      if (hungry) {
+        // Precedence: (a) opportunistic chase of a lone ant; (b) telegraphed
+        // density hunt (when off cooldown and a dense tile exists); (c) camp a
+        // colony entrance via the balance-tuned rampage target picker.
+        const chaseId = findChaseTarget(world, spider);
+        if (chaseId >= 0) {
+          spider.state = 'Chasing';
+          spider.chaseTargetAntId = chaseId;
+          spider.chaseStartTick = world.tick;
+          emitEvent(world, {
+            tick: world.tick,
+            type: 'spider_chase_start',
+            payload: {
+              targetAntId: chaseId,
+              targetTile: {
+                x: world.ants.posX[chaseId]! >> FP_SHIFT,
+                y: world.ants.posY[chaseId]! >> FP_SHIFT,
+              },
+            },
+          });
+        } else {
+          let entered = false;
+          if (world.tick >= spider.nextHuntTick) {
+            const target = findHuntTarget(world, spider);
+            if (target !== null) {
+              spider.state = 'Hunting';
+              spider.huntTargetTileX = target.x;
+              spider.huntTargetTileY = target.y;
+              spider.huntStartTick = world.tick;
+              entered = true;
+              emitEvent(world, {
+                tick: world.tick,
+                type: 'spider_hunt_start',
+                payload: {
+                  reticleTile: { x: target.x, y: target.y, grid: 'surface' },
+                  targetWorkers: target.workerCount,
+                },
+              });
+            } else {
+              // No dense tile — postpone the hunt scan by one interval.
+              spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
+            }
+          }
+          if (!entered) {
+            // Camp a colony entrance and eat the first ant there.
+            spider.state = 'Rampaging';
+            spider.rampageStartTick = world.tick;
+            spider.rampageKillsThisRampage = 0;
+            spider.rampageTargetColonyId = pickRampageTarget(world, spider);
+            emitEvent(world, {
+              tick: world.tick,
+              type: 'spider_rampage_start',
+              payload: {
+                lairTile: { x: spider.lairTileX, y: spider.lairTileY },
+                hungerTicks: spider.hungerTicks,
+              },
+            });
+          }
+        }
+      }
+      // Sated: no predation — slow meander handled in the movement switch.
+      break;
+    }
+
+    case 'Hunting': {
+      if (world.tick - spider.huntStartTick >= SPIDER_TELEGRAPH_TICKS) {
+        spider.state = 'Striking';
+        spider.strikeStartTick = world.tick;
+        spider.killsThisStrike = 0;
+      }
+      break;
+    }
+
+    case 'Striking': {
+      if (world.tick - spider.strikeStartTick >= SPIDER_STRIKE_TICKS) {
+        // Kills route through step 3 (killedThisTick → Feeding). Reaching here
+        // means no feed this strike (no kill, or a fighter-adjacent kill); scatter.
+        emitSpiderHuntEnd(world, spider.killsThisStrike > 0 ? 'kill' : 'scatter', spider.killsThisStrike);
+        clearSpiderPairingSentinels(world);
+        spider.state = 'Patrolling';
+        spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
+        spider.huntTargetTileX = -1;
+        spider.huntTargetTileY = -1;
+        world.spiderPriorityColonyId = null;
+      }
+      break;
+    }
+
+    case 'Chasing': {
+      // A catch routes through step 3 (→ Feeding when out of danger). Reaching
+      // here means the target is alive, escaped underground, leashed out, or the
+      // catch happened with a fighter adjacent (dead target, no feed).
+      const tid = spider.chaseTargetAntId;
+      const targetAlive = tid >= 0 && world.ants.alive[tid] === 1;
+      if (!targetAlive) {
+        emitSpiderChaseEnd(world, 'kill');
+        clearSpiderPairingSentinels(world);
+        spider.state = 'Patrolling';
+        spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
+        spider.chaseTargetAntId = -1;
+      } else if (world.ants.zone[tid] !== 0) {
+        emitSpiderChaseEnd(world, 'escape');
+        clearSpiderPairingSentinels(world);
+        spider.state = 'Patrolling';
+        spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
+        spider.chaseTargetAntId = -1;
+      } else if (world.tick - spider.chaseStartTick >= SPIDER_CHASE_MAX_TICKS) {
+        emitSpiderChaseEnd(world, 'leash');
+        clearSpiderPairingSentinels(world);
+        spider.state = 'Patrolling';
+        spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
+        spider.chaseTargetAntId = -1;
+      }
+      break;
+    }
+
+    case 'Rampaging': {
+      // Camp the entrance and eat the first ant there. No quota — a kill routes
+      // through step 3 (→ Feeding). Do NOT chase-divert: a camping spider must
+      // hold its entrance (the #165 blockade) rather than chase a passing ant.
+      if (world.tick - spider.rampageStartTick >= SPIDER_RAMPAGE_MAX_TICKS) {
+        // Leash: no ant surfaced at the entrance in time.
+        emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
+        clearSpiderPairingSentinels(world);
+        spider.state = 'Patrolling';
+        spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
+        spider.rampageTargetColonyId = -1;
+        world.spiderPriorityColonyId = null;
+      } else {
+        if (spider.rampageTargetColonyId < 0) spider.rampageTargetColonyId = pickRampageTarget(world, spider);
+        if (findNearestEntrance(world, spider, spider.rampageTargetColonyId) === null) {
+          // Sealed colony — no open entrance to camp. Resume patrolling.
+          emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
+          clearSpiderPairingSentinels(world);
+          spider.state = 'Patrolling';
+          spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
+          spider.rampageTargetColonyId = -1;
+          world.spiderPriorityColonyId = null;
+        }
+      }
+      break;
+    }
+
+    case 'Feeding': {
+      if (isFighterAdjacent(world, spider)) {
+        // Interrupted: forfeit the remaining heal and resume defending.
+        emitEvent(world, {
+          tick: world.tick,
+          type: 'spider_feed_end',
+          payload: { outcome: 'interrupted' },
+        });
+        spider.state = 'Patrolling';
+        spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
+        spider.feedArrivedTick = -1;
+      } else {
+        const sx = spider.posX >> FP_SHIFT;
+        const sy = spider.posY >> FP_SHIFT;
+        if (spider.feedArrivedTick < 0 && sx === spider.feedAwayTileX && sy === spider.feedAwayTileY) {
+          spider.feedArrivedTick = world.tick;
+        }
+        if (spider.feedArrivedTick >= 0) {
+          if ((world.tick - spider.feedArrivedTick) % SPIDER_FEED_HEAL_INTERVAL_TICKS === 0 &&
+              spider.hp < SPIDER_HP_FULL) {
+            spider.hp += 1;
+            if (spider.hp > SPIDER_HP_FULL) spider.hp = SPIDER_HP_FULL;
+          }
+          if (world.tick - spider.feedArrivedTick >= SPIDER_FEED_TICKS) {
+            emitEvent(world, {
+              tick: world.tick,
+              type: 'spider_feed_end',
+              payload: { outcome: 'healed' },
+            });
+            spider.state = 'Patrolling';
+            spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
+            spider.feedArrivedTick = -1;
+          }
+        }
+      }
+      break;
+    }
+  }
+
+  // 6. Movement.
+  const rampageNearest = spider.state === 'Rampaging'
+    ? findNearestEntrance(world, spider, spider.rampageTargetColonyId)
+    : null;
+  switch (spider.state) {
+    case 'Patrolling': {
+      // Slow meander across the whole map: step only every Nth tick toward a
+      // wander target re-rolled every SPIDER_MEANDER_RETARGET_TICKS ticks. The
+      // target derives from a hash of (tick-bucket ^ terrainSeed) — no lair orbit,
+      // no rng draw.
+      if (world.tick % SPIDER_MEANDER_TICK_DIVISOR === 0) {
+        // SPIDER_MEANDER_RETARGET_TICKS is 128 = 2^7, so `tick >> 7` is the
+        // integer tick-bucket (same idiom as entrance-flow's row decode); avoids
+        // the float-division lint and keeps the bucket deterministic.
+        const bucket = world.tick >> SPIDER_MEANDER_RETARGET_SHIFT;
+        const seed = bucket ^ world.terrainSeed;
+        const tx = hash32(seed) % SURFACE_GRID_WIDTH;
+        const ty = hash32(seed ^ 0x9e3779b9) % SURFACE_GRID_HEIGHT;
+        moveTowardTile(spider, tx, ty);
+      }
+      break;
+    }
+    case 'Hunting':
+    case 'Striking': {
+      moveTowardTile(spider, spider.huntTargetTileX, spider.huntTargetTileY);
+      break;
+    }
+    case 'Chasing': {
+      const tid = spider.chaseTargetAntId;
+      if (tid >= 0 && world.ants.alive[tid] === 1) {
+        moveTowardTile(spider, world.ants.posX[tid]! >> FP_SHIFT, world.ants.posY[tid]! >> FP_SHIFT);
+      }
+      break;
+    }
+    case 'Feeding': {
+      // Travel to the feed tile, then idle there while healing.
+      moveTowardTile(spider, spider.feedAwayTileX, spider.feedAwayTileY);
+      break;
+    }
+    case 'Rampaging': {
+      if (rampageNearest !== null) {
+        moveTowardTile(spider, rampageNearest.x, rampageNearest.y);
+      }
+      break;
+    }
+  }
+
+  // 7. Danger pheromone — all surface states (everything except Feeding).
+  if (spider.state !== 'Feeding') {
+    seedDangerPheromone(world, spider);
+  }
+
+  // scatterReticleTile shadow field: Hunting/Striking scatter around the hunt
+  // tile; Chasing scatters around the pursued ant; everything else clears it.
+  const chaseTid = spider.chaseTargetAntId;
+  const chaseReticleValid =
+    spider.state === 'Chasing' && chaseTid >= 0 && world.ants.alive[chaseTid] === 1;
+  if (spider.state === 'Hunting' || spider.state === 'Striking') {
+    if (world.scatterReticleTile === null) {
+      world.scatterReticleTile = { x: spider.huntTargetTileX, y: spider.huntTargetTileY };
+    } else {
+      world.scatterReticleTile.x = spider.huntTargetTileX;
+      world.scatterReticleTile.y = spider.huntTargetTileY;
+    }
+  } else if (chaseReticleValid) {
+    const rx = world.ants.posX[chaseTid]! >> FP_SHIFT;
+    const ry = world.ants.posY[chaseTid]! >> FP_SHIFT;
+    if (world.scatterReticleTile === null) {
+      world.scatterReticleTile = { x: rx, y: ry };
+    } else {
+      world.scatterReticleTile.x = rx;
+      world.scatterReticleTile.y = ry;
+    }
+  } else {
+    world.scatterReticleTile = null;
+  }
+
+  // 8. Clear the per-tick kill flag — must never leak into the next tick.
+  spider.killedThisTick = 0;
 }

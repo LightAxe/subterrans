@@ -26,7 +26,13 @@ import {
   SPIDER_CHASE_TRIGGER_RADIUS,
   SPIDER_CHASE_MAX_TICKS,
   SPIDER_RAMPAGE_RETREAT_HP,
+  SPIDER_RAMPAGE_MAX_TICKS,
   SPIDER_SPEED,
+  SPIDER_HUNGER_THRESHOLD_TICKS,
+  SPIDER_MEANDER_TICK_DIVISOR,
+  SPIDER_FEED_TICKS,
+  SPIDER_FEED_RETREAT_TILES,
+  SPIDER_FEED_HEAL_INTERVAL_TICKS,
   SURFACE_GRID_WIDTH,
   PLAYER_COLONY_ID,
   ENEMY_COLONY_ID,
@@ -62,6 +68,12 @@ function makeSpider(overrides: Partial<SpiderState> = {}): SpiderState {
     rampageTargetColonyId: -1,
     chaseTargetAntId: -1,
     chaseStartTick: 0,
+    killedThisTick: 0,
+    lastKillTileX: -1,
+    lastKillTileY: -1,
+    feedAwayTileX: -1,
+    feedAwayTileY: -1,
+    feedArrivedTick: -1,
     ...overrides,
   };
 }
@@ -88,6 +100,20 @@ function placeWorker(world: WorldState, tx: number, ty: number, colonyId = PLAYE
   });
   return id;
 }
+
+function placeFighter(world: WorldState, tx: number, ty: number, colonyId = PLAYER_COLONY_ID): number {
+  const id = world.nextEntityId++;
+  initAnt(world.ants, id, {
+    colonyId,
+    posX: tx << FP_SHIFT,
+    posY: ty << FP_SHIFT,
+    task: AntTask.Fighting,
+  });
+  return id;
+}
+
+// Hunger value (Normal tier) that puts a V23 spider over the hungry threshold.
+const HUNGRY_TICKS = SPIDER_HUNGER_THRESHOLD_TICKS[1]!;
 
 // ---------------------------------------------------------------------------
 // State transition tests
@@ -543,14 +569,29 @@ describe('tickSpider', () => {
   // V23 (#146): Chasing — opportunistic chase of a nearby ant
   // ---------------------------------------------------------------------------
 
-  describe('Patrolling → Chasing trigger (V23 #146)', () => {
-    it('enters Chasing for the nearest surface ant within trigger radius', () => {
+  describe('hunger gate (V23 redesign #146/#147)', () => {
+    it('a sated spider does NOT chase a lone ant in radius', () => {
       const world = makeWorld();
       world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
       const sx = 64;
       const sy = 32;
-      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT });
-      world.spider.nextHuntTick = 9999; // scheduled hunt must not fire — chase takes precedence
+      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: 0 });
+      world.spider.nextHuntTick = 9999;
+      placeWorker(world, sx + 1, sy);
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Patrolling');
+      expect(world.spider!.chaseTargetAntId).toBe(-1);
+    });
+
+    it('a hungry spider enters Chasing for the nearest surface ant within trigger radius', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: HUNGRY_TICKS });
+      world.spider.nextHuntTick = 9999;
       const antId = placeWorker(world, sx + SPIDER_CHASE_TRIGGER_RADIUS, sy);
 
       tickSpider(world);
@@ -562,12 +603,12 @@ describe('tickSpider', () => {
       expect(evt).toBeDefined();
     });
 
-    it('picks the nearest ant (lower id wins on tie)', () => {
+    it('picks the nearest ant (lower id wins on tie) when hungry', () => {
       const world = makeWorld();
       world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
       const sx = 64;
       const sy = 32;
-      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT });
+      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: HUNGRY_TICKS });
       world.spider.nextHuntTick = 9999;
       const near = placeWorker(world, sx + 1, sy); // dist 1
       placeWorker(world, sx + 3, sy);              // dist 3 (farther)
@@ -578,18 +619,18 @@ describe('tickSpider', () => {
       expect(world.spider!.chaseTargetAntId).toBe(near);
     });
 
-    it('does NOT chase an ant just outside the trigger radius', () => {
+    it('does NOT chase an ant just outside the trigger radius (camps an entrance instead)', () => {
       const world = makeWorld();
       world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
       const sx = 64;
       const sy = 32;
-      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT });
+      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: HUNGRY_TICKS });
       world.spider.nextHuntTick = 9999;
       placeWorker(world, sx + SPIDER_CHASE_TRIGGER_RADIUS + 1, sy); // out of range
 
       tickSpider(world);
 
-      expect(world.spider!.state).toBe('Patrolling');
+      expect(world.spider!.state).not.toBe('Chasing');
       expect(world.spider!.chaseTargetAntId).toBe(-1);
     });
 
@@ -608,7 +649,7 @@ describe('tickSpider', () => {
       expect(world.spider!.chaseTargetAntId).toBe(-1);
     });
 
-    it('rampage preempts chase when hunger is maxed', () => {
+    it('chase takes precedence over entrance-camping when hungry', () => {
       const world = makeWorld();
       world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
       const sx = 64;
@@ -616,13 +657,13 @@ describe('tickSpider', () => {
       world.spider = makeSpider({
         posX: sx << FP_SHIFT,
         posY: sy << FP_SHIFT,
-        hungerTicks: SPIDER_HUNGER_MAX_TICKS[1] - 1, // +1 this tick reaches max
+        hungerTicks: HUNGRY_TICKS,
       });
-      placeWorker(world, sx + 1, sy); // a chaseable ant is present, but hunger wins
+      placeWorker(world, sx + 1, sy); // a chaseable ant is present → chase wins over rampage
 
       tickSpider(world);
 
-      expect(world.spider!.state).toBe('Rampaging');
+      expect(world.spider!.state).toBe('Chasing');
     });
 
     it('excludes the queen from chase targets', () => {
@@ -630,16 +671,18 @@ describe('tickSpider', () => {
       world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
       const sx = 64;
       const sy = 32;
-      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT });
+      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: HUNGRY_TICKS });
       world.spider.nextHuntTick = 9999;
       const queenId = placeWorker(world, sx + 1, sy);
-      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId] = createColonyRecord(PLAYER_COLONY_ID, 0);
+      const col = createColonyRecord(PLAYER_COLONY_ID, 0);
+      col.entrances = []; // caller-init contract; no open entrance → sealed
+      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId] = col;
       world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!.queenEntityId = queenId;
 
       tickSpider(world);
 
       // Only the queen is in range and queens are excluded → no chase.
-      expect(world.spider!.state).toBe('Patrolling');
+      expect(world.spider!.state).not.toBe('Chasing');
       expect(world.spider!.chaseTargetAntId).toBe(-1);
     });
   });
@@ -666,11 +709,40 @@ describe('tickSpider', () => {
       expect(world.spider!.posX).toBe((sx << FP_SHIFT) + SPIDER_SPEED); // moved +X toward target
     });
 
-    it('successful catch (target dead) resets hunger and returns to Patrolling', () => {
+    it('a chase catch (killedThisTick) with no fighter adjacent → Feeding, hunger reset', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 66;
+      const sy = 32;
+      const antId = placeWorker(world, sx, sy);
+      world.ants.alive[antId] = 0; // combat killed it this tick
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        state: 'Chasing',
+        chaseTargetAntId: antId,
+        chaseStartTick: 0,
+        hungerTicks: 500,
+        killedThisTick: 1,
+        lastKillTileX: sx,
+        lastKillTileY: sy,
+      });
+      world.tick = 50;
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Feeding');
+      expect(world.spider!.chaseTargetAntId).toBe(-1);
+      expect(world.spider!.hungerTicks).toBe(0);
+      const evt = world.events.find((e) => e.type === 'spider_feed_start');
+      expect(evt).toBeDefined();
+    });
+
+    it('a stale dead target (no kill signal) returns to Patrolling without resetting hunger', () => {
       const world = makeWorld();
       world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
       const antId = placeWorker(world, 66, 32);
-      world.ants.alive[antId] = 0; // combat killed it this tick
+      world.ants.alive[antId] = 0; // died to some other cause, no killedThisTick
       world.spider = makeSpider({
         state: 'Chasing',
         chaseTargetAntId: antId,
@@ -683,11 +755,7 @@ describe('tickSpider', () => {
 
       expect(world.spider!.state).toBe('Patrolling');
       expect(world.spider!.chaseTargetAntId).toBe(-1);
-      expect(world.spider!.hungerTicks).toBe(0);
-      expect(world.spider!.nextHuntTick).toBe(50 + SPIDER_HUNT_INTERVAL_TICKS);
-      const evt = world.events.find((e) => e.type === 'spider_chase_end');
-      expect(evt).toBeDefined();
-      if (evt?.type === 'spider_chase_end') expect(evt.payload.outcome).toBe('kill');
+      expect(world.spider!.hungerTicks).toBe(501); // accrued +1, not reset
     });
 
     it('abandons the chase when the target reaches safety underground', () => {
@@ -729,7 +797,7 @@ describe('tickSpider', () => {
       if (evt?.type === 'spider_chase_end') expect(evt.payload.outcome).toBe('leash');
     });
 
-    it('retreats (and emits retreat) when damaged below threshold mid-chase', () => {
+    it('does NOT retreat when damaged below the old threshold mid-chase — fights on', () => {
       const world = makeWorld();
       world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
       const antId = placeWorker(world, 66, 32);
@@ -743,10 +811,8 @@ describe('tickSpider', () => {
 
       tickSpider(world);
 
-      expect(world.spider!.state).toBe('Retreating');
-      expect(world.spider!.chaseTargetAntId).toBe(-1);
-      const evt = world.events.find((e) => e.type === 'spider_chase_end');
-      if (evt?.type === 'spider_chase_end') expect(evt.payload.outcome).toBe('retreat');
+      expect(world.spider!.state).not.toBe('Retreating');
+      expect(world.spider!.state).toBe('Chasing'); // still pursuing its live target
     });
 
     it('emits spider_chase_end(killed) when the spider dies mid-chase', () => {
@@ -765,6 +831,214 @@ describe('tickSpider', () => {
       const evt = world.events.find((e) => e.type === 'spider_chase_end');
       expect(evt).toBeDefined();
       if (evt?.type === 'spider_chase_end') expect(evt.payload.outcome).toBe('killed');
+    });
+  });
+
+  describe('meander (V23 redesign)', () => {
+    it('a sated spider moves only on tick % SPIDER_MEANDER_TICK_DIVISOR === 0', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      world.spider = makeSpider({ posX: 64 << FP_SHIFT, posY: 32 << FP_SHIFT, hungerTicks: 0 });
+
+      // Pick a tick that is NOT divisible by the divisor → no movement.
+      // divisor+1 is never ≡ 0 (mod divisor) for divisor > 1.
+      world.tick = SPIDER_MEANDER_TICK_DIVISOR + 1;
+      const beforeX = world.spider.posX;
+      const beforeY = world.spider.posY;
+      tickSpider(world);
+      expect(world.spider!.posX).toBe(beforeX);
+      expect(world.spider!.posY).toBe(beforeY);
+      expect(world.spider!.state).toBe('Patrolling');
+    });
+
+    it('writes no scatter reticle while meandering', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      world.spider = makeSpider({ posX: 64 << FP_SHIFT, posY: 32 << FP_SHIFT, hungerTicks: 0 });
+      world.tick = 3;
+      tickSpider(world);
+      expect(world.scatterReticleTile).toBeNull();
+    });
+
+    it('does NOT orbit a fixed lair point (meanders away over time)', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const lairX = 64;
+      const lairY = 32;
+      world.spider = makeSpider({
+        posX: lairX << FP_SHIFT,
+        posY: lairY << FP_SHIFT,
+        lairTileX: lairX,
+        lairTileY: lairY,
+        territoryRadiusTiles: 24,
+        hungerTicks: 0,
+      });
+      let maxDist = 0;
+      for (let t = 0; t < 2000; t++) {
+        world.tick = t;
+        tickSpider(world);
+        const tx = world.spider!.posX >> FP_SHIFT;
+        const ty = world.spider!.posY >> FP_SHIFT;
+        const d = Math.abs(tx - lairX) + Math.abs(ty - lairY);
+        if (d > maxDist) maxDist = d;
+      }
+      // Old lair orbit was bounded by territoryRadiusTiles (24); the meander should
+      // wander well beyond half-radius and is not pinned to the lair.
+      expect(maxDist).toBeGreaterThan(24);
+    });
+  });
+
+  describe('feed-after-kill + heal (V23 redesign)', () => {
+    it('kill with adjacent fighter resets hunger but does NOT feed', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        state: 'Striking',
+        hungerTicks: 800,
+        killedThisTick: 1,
+        lastKillTileX: sx,
+        lastKillTileY: sy,
+        killsThisStrike: 1,
+      });
+      placeFighter(world, sx, sy); // fighter on the spider's tile (adjacent)
+      world.tick = 10;
+
+      tickSpider(world);
+
+      expect(world.spider!.hungerTicks).toBe(0);
+      expect(world.spider!.state).not.toBe('Feeding');
+    });
+
+    it('kill with no fighter adjacent → Feeding, feedAwayTile ~10 tiles from kill, hunger reset', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        state: 'Striking',
+        hungerTicks: 800,
+        killedThisTick: 1,
+        lastKillTileX: sx,
+        lastKillTileY: sy,
+        killsThisStrike: 1,
+      });
+      world.tick = 10;
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Feeding');
+      expect(world.spider!.hungerTicks).toBe(0);
+      const fx = world.spider!.feedAwayTileX;
+      const fy = world.spider!.feedAwayTileY;
+      const dist = Math.abs(fx - sx) + Math.abs(fy - sy);
+      expect(dist).toBe(SPIDER_FEED_RETREAT_TILES);
+    });
+
+    it('heals ~+1 HP per interval while parked at the feed tile, then resumes Patrolling', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const fx = 70;
+      const fy = 32;
+      const arrived = 100;
+      world.spider = makeSpider({
+        posX: fx << FP_SHIFT,
+        posY: fy << FP_SHIFT,
+        state: 'Feeding',
+        feedAwayTileX: fx,
+        feedAwayTileY: fy,
+        feedArrivedTick: arrived,
+        hp: 40,
+      });
+
+      // Advance through the heal window. No fighters anywhere → never interrupted.
+      const startHp = world.spider.hp;
+      for (let t = arrived + 1; t <= arrived + SPIDER_FEED_TICKS; t++) {
+        world.tick = t;
+        tickSpider(world);
+        if (world.spider === null || world.spider.state !== 'Feeding') break;
+      }
+      // Healed by roughly SPIDER_FEED_TICKS / interval HP (within 2 of target).
+      // eslint-disable-next-line no-restricted-syntax -- test-only expected-count math; both operands are constants, result is floored
+      const expectedHeal = Math.floor(SPIDER_FEED_TICKS / SPIDER_FEED_HEAL_INTERVAL_TICKS);
+      expect(world.spider!.hp).toBeGreaterThanOrEqual(startHp + expectedHeal - 2);
+      expect(world.spider!.state).toBe('Patrolling');
+    });
+
+    it('a fighter reaching the feeding spider interrupts the heal → Patrolling', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const fx = 70;
+      const fy = 32;
+      world.spider = makeSpider({
+        posX: fx << FP_SHIFT,
+        posY: fy << FP_SHIFT,
+        state: 'Feeding',
+        feedAwayTileX: fx,
+        feedAwayTileY: fy,
+        feedArrivedTick: 100,
+        hp: 40,
+      });
+      placeFighter(world, fx, fy); // fighter adjacent → interrupt
+      world.tick = 150;
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Patrolling');
+      const evt = world.events.find((e) => e.type === 'spider_feed_end');
+      if (evt?.type === 'spider_feed_end') expect(evt.payload.outcome).toBe('interrupted');
+    });
+  });
+
+  describe('rampage no-quota + retreating normalization (V23 redesign)', () => {
+    it('a sealed colony (no open entrance) leashes Rampaging back to Patrolling', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      // No colonies with open entrances exist in makeWorld → findNearestEntrance null.
+      world.spider = makeSpider({
+        state: 'Rampaging',
+        rampageStartTick: 0,
+        rampageTargetColonyId: PLAYER_COLONY_ID,
+        hungerTicks: HUNGRY_TICKS,
+      });
+      world.tick = 10;
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Patrolling');
+      expect(world.spider!.rampageTargetColonyId).toBe(-1);
+    });
+
+    it('Rampaging leashes back to Patrolling after SPIDER_RAMPAGE_MAX_TICKS', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      world.spider = makeSpider({
+        state: 'Rampaging',
+        rampageStartTick: 0,
+        rampageTargetColonyId: PLAYER_COLONY_ID,
+        hungerTicks: HUNGRY_TICKS,
+      });
+      world.tick = SPIDER_RAMPAGE_MAX_TICKS;
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Patrolling');
+    });
+
+    it('normalizes a loaded Retreating state to Patrolling on the first V23 tick', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      world.spider = makeSpider({ state: 'Retreating', retreatStartTick: 0, hungerTicks: 0 });
+      world.tick = 5;
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Patrolling');
     });
   });
 });

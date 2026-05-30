@@ -2236,6 +2236,12 @@ describe('updateFightAntTargets', () => {
       rampageTargetColonyId: -1,
       chaseTargetAntId: -1,
       chaseStartTick: 0,
+      killedThisTick: 0,
+      lastKillTileX: -1,
+      lastKillTileY: -1,
+      feedAwayTileX: -1,
+      feedAwayTileY: -1,
+      feedArrivedTick: -1,
     };
     world.spider = spider;
     return spider;
@@ -2337,33 +2343,31 @@ describe('updateFightAntTargets', () => {
     expect(world.ants.targetPosX[fighter]).not.toBe(spider.posX);
   });
 
-  it('V23: a Feeding or Retreating spider is NOT a valid aggro target (untargetable by combat gate)', () => {
-    for (const offState of ['Feeding', 'Retreating'] as const) {
-      const world = createWorldState(42, MAX_TEST_ENTITIES);
-      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
-      const colA = createColonyRecord(COLONY_ID, 0);
-      colA.entrances = [];
-      colA.rallyPoint = { tileX: 50, tileY: 5 };
-      colA.digFlowFieldDirty = false;
-      world.colonies[COLONY_ID] = colA;
+  it('V23 redesign: a Feeding spider IS a valid aggro target (fighters pursue to interrupt)', () => {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+    const colA = createColonyRecord(COLONY_ID, 0);
+    colA.entrances = [];
+    colA.rallyPoint = { tileX: 50, tileY: 5 };
+    colA.digFlowFieldDirty = false;
+    world.colonies[COLONY_ID] = colA;
 
-      const fighter = allocateEntityId(world);
-      initAnt(world.ants, fighter, {
-        colonyId: COLONY_ID, posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT,
-        task: AntTask.Fighting, subTask: 0,
-      });
-      world.ants.zone[fighter] = Zone.Surface;
+    const fighter = allocateEntityId(world);
+    initAnt(world.ants, fighter, {
+      colonyId: COLONY_ID, posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT,
+      task: AntTask.Fighting, subTask: 0,
+    });
+    world.ants.zone[fighter] = Zone.Surface;
 
-      const spider = placeAggroSpider(world, 11, 10); // dist 1 — close, but state is non-combat
-      spider.state = offState;
+    const spider = placeAggroSpider(world, 11, 10); // dist 1 — close
+    spider.state = 'Feeding';
 
-      updateFightAntTargets(world);
+    updateFightAntTargets(world);
 
-      // The combat gate does not resolve spider combat in Feeding/Retreating, so the
-      // fighter must not abandon its rally to path onto an untargetable spider.
-      expect(world.ants.targetPosX[fighter]).toBe((50 << FP_SHIFT) + (FP_ONE >> 1));
-      expect(world.ants.targetPosX[fighter]).not.toBe(spider.posX);
-    }
+    // Under the redesign fighters may pursue a feeding spider to interrupt its
+    // heal, so the fighter retargets onto it rather than holding the rally.
+    expect(world.ants.targetPosX[fighter]).toBe(spider.posX);
+    expect(world.ants.targetPosY[fighter]).toBe(spider.posY);
   });
 
   it('V23 gate: a pre-V23 (V22) world shows no spider auto-aggro', () => {

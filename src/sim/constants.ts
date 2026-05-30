@@ -836,3 +836,33 @@ export const SPIDER_SPEED = 256 as const;
  */
 export const SPIDER_DANGER_DEPOSIT = 1280 as const;
 
+// ---------------------------------------------------------------------------
+// V23 — Hunger-gated meandering predator redesign (gated on simVersion >= V23)
+// ---------------------------------------------------------------------------
+
+/**
+ * V23 — Ticks since the last meal before the spider becomes "Hungry" and starts
+ * actively seeking prey. Tier triplet [Easy, Normal, Hard]; Normal = 1200 (the
+ * former hunt cadence). Preserves the D-33 Axis-B difficulty-pressure knob.
+ * Read via tierIndex(world.difficulty). Resets to 0 (hungerTicks) on any kill.
+ */
+export const SPIDER_HUNGER_THRESHOLD_TICKS = [1800, 1200, 900] as const;
+
+/** V23 — Sated meander moves only when world.tick % divisor === 0 (1 tile / 3 ticks). */
+export const SPIDER_MEANDER_TICK_DIVISOR = 3 as const;
+
+/** V23 — Re-roll the deterministic wander target every N ticks. */
+export const SPIDER_MEANDER_RETARGET_TICKS = 128 as const;
+
+/** V23 — Tiles the spider steps away from a kill before feeding (avoid chain-killing). */
+export const SPIDER_FEED_RETREAT_TILES = 10 as const;
+
+/** V23 — Manhattan radius at which a Fighting ant counts as "adjacent" (blocks/interrupts feed). */
+export const SPIDER_FEED_DANGER_RADIUS = 1 as const;
+
+/** V23 — Feed/heal window, measured from arrival at the feed tile. 300 ticks = 15 sim-seconds. */
+export const SPIDER_FEED_TICKS = 300 as const;
+
+/** V23 — While feeding at the feed tile, regen +1 HP every N ticks (~30 HP over SPIDER_FEED_TICKS). */
+export const SPIDER_FEED_HEAL_INTERVAL_TICKS = 10 as const;
+

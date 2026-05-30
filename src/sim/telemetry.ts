@@ -113,6 +113,16 @@ export type SimEvent =
     }
   | {
       tick: number;
+      type: 'spider_feed_start';
+      payload: { killTile: { x: number; y: number } };
+    }
+  | {
+      tick: number;
+      type: 'spider_feed_end';
+      payload: { outcome: 'healed' | 'interrupted' };
+    }
+  | {
+      tick: number;
       type: 'queen_death';
       payload: {
         // cause is null in V15 traces (S0b proof-of-concept). S1/S2 will fill
