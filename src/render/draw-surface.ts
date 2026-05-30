@@ -45,7 +45,7 @@ import {
   SPIDER_SPRITE_HEIGHT,
   SPIDER_SPRITE_WIDTH,
 } from './ant-sprite-layer.js';
-import { SPIDER_HUNGER_MAX_TICKS } from '../sim/constants.js';
+import { SPIDER_HUNGER_MAX_TICKS, SPIDER_HP_FULL } from '../sim/constants.js';
 import { tierIndex } from '../sim/ai-state.js';
 
 // ---------------------------------------------------------------------------
@@ -467,6 +467,31 @@ export function drawSurfaceEntities(
         gfx.fillRect(pl,          pt + ph - 2, pw, 2);
         gfx.fillRect(pl,          pt + 2,      2,  ph - 4);
         gfx.fillRect(pl + pw - 2, pt + 2,      2,  ph - 4);
+      }
+
+      // Health bar (issue #148): render-only HP indicator floating just above
+      // the sprite. maxHp is the regen cap SPIDER_HP_FULL — SpiderState stores
+      // only hp (clamped to that constant), so no sim field is needed. Hidden
+      // at full health; appears once the spider has taken damage.
+      const hpRatio = Math.max(0, Math.min(1, curr.spider.hp / SPIDER_HP_FULL));
+      if (hpRatio < 1) {
+        const barW = 24;
+        const barH = 4;
+        const barX = Math.round(spiderScreenX - barW / 2);
+        // Sit above the sprite top edge (and clear of the priority border,
+        // which sits 2px outside the box).
+        const barY = Math.round(spiderScreenY - SPIDER_SPRITE_HEIGHT / 2 - barH - 4);
+        // green (full) → yellow (half) → red (empty).
+        const fillColor = hpRatio > 0.5
+          ? lerpColor(0xffcc00, 0x33cc33, (hpRatio - 0.5) / 0.5)
+          : lerpColor(0xcc2020, 0xffcc00, hpRatio / 0.5);
+        // Dark outline + track so a near-empty bar still reads against terrain.
+        gfx.fillStyle(0x000000, 0.7);
+        gfx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
+        gfx.fillStyle(0x333333, 0.85);
+        gfx.fillRect(barX, barY, barW, barH);
+        gfx.fillStyle(fillColor, 1);
+        gfx.fillRect(barX, barY, Math.round(barW * hpRatio), barH);
       }
     }
   }
