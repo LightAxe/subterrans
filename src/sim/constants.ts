@@ -848,6 +848,18 @@ export const SPIDER_DANGER_DEPOSIT = 1280 as const;
  */
 export const SPIDER_HUNGER_THRESHOLD_TICKS = [1800, 1200, 900] as const;
 
+/**
+ * V23 — Start-of-match grace period. The spider accrues no hunger for the first
+ * SPIDER_GRACE_TICKS ticks, so it stays dormant: it keeps Patrolling and still bites
+ * back any ant that attacks it (self-defense is NOT gated), but never *initiates* a
+ * hunt / chase / rampage until colonies have had time to raise a queen chamber. With
+ * the Normal hunger threshold (1200) the first predation then lands ~tick 2700.
+ * 1500 ticks ≈ 75 sim-seconds, measured against absolute world.tick (spider spawns at
+ * tick 0). Tuned to restore AI-colony sustainability after the queen-exclusion fix made
+ * the spider correctly aggressive; residual balance tracked in #177.
+ */
+export const SPIDER_GRACE_TICKS = 1500 as const;
+
 /** V23 — Sated meander moves only when world.tick % divisor === 0 (1 tile / 3 ticks). */
 export const SPIDER_MEANDER_TICK_DIVISOR = 3 as const;
 

@@ -30,6 +30,7 @@ import {
   SPIDER_RAMPAGE_MAX_TICKS,
   SPIDER_SPEED,
   SPIDER_HUNGER_THRESHOLD_TICKS,
+  SPIDER_GRACE_TICKS,
   SPIDER_MEANDER_TICK_DIVISOR,
   SPIDER_FEED_TICKS,
   SPIDER_FEED_RETREAT_TILES,
@@ -594,6 +595,7 @@ describe('tickSpider', () => {
       const sy = 32;
       world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: HUNGRY_TICKS });
       world.spider.nextHuntTick = 9999;
+      world.tick = SPIDER_GRACE_TICKS; // past grace so the spider is active and hungry
       const antId = placeWorker(world, sx + SPIDER_CHASE_TRIGGER_RADIUS, sy);
 
       tickSpider(world);
@@ -612,6 +614,7 @@ describe('tickSpider', () => {
       const sy = 32;
       world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: HUNGRY_TICKS });
       world.spider.nextHuntTick = 9999;
+      world.tick = SPIDER_GRACE_TICKS; // past grace so the spider is active and hungry
       const near = placeWorker(world, sx + 1, sy); // dist 1
       placeWorker(world, sx + 3, sy);              // dist 3 (farther)
 
@@ -661,6 +664,7 @@ describe('tickSpider', () => {
         posY: sy << FP_SHIFT,
         hungerTicks: HUNGRY_TICKS,
       });
+      world.tick = SPIDER_GRACE_TICKS; // past grace so the spider is active and hungry
       placeWorker(world, sx + 1, sy); // a chaseable ant is present → chase wins over rampage
 
       tickSpider(world);
@@ -675,6 +679,7 @@ describe('tickSpider', () => {
       const sy = 32;
       world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: HUNGRY_TICKS });
       world.spider.nextHuntTick = 9999;
+      world.tick = SPIDER_GRACE_TICKS; // past grace so the no-chase is queen-exclusion, not dormancy
       const queenId = placeWorker(world, sx + 1, sy);
       const col = createColonyRecord(PLAYER_COLONY_ID, 0);
       col.entrances = []; // caller-init contract; no open entrance → sealed
@@ -686,6 +691,92 @@ describe('tickSpider', () => {
       // Only the queen is in range and queens are excluded → no chase.
       expect(world.spider!.state).not.toBe('Chasing');
       expect(world.spider!.chaseTargetAntId).toBe(-1);
+    });
+  });
+
+  describe('start-of-match grace period (V23 #177)', () => {
+    it('does NOT accrue hunger during the grace window', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      world.spider = makeSpider({ state: 'Patrolling', hungerTicks: 10 });
+      world.tick = SPIDER_GRACE_TICKS - 1;
+      tickSpider(world);
+      expect(world.spider!.hungerTicks).toBe(10); // frozen during grace
+    });
+
+    it('resumes hunger accrual at the grace boundary', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      world.spider = makeSpider({ state: 'Patrolling', hungerTicks: 10 });
+      world.tick = SPIDER_GRACE_TICKS;
+      tickSpider(world);
+      expect(world.spider!.hungerTicks).toBe(11);
+    });
+
+    it('stays dormant — no chase — on the last grace tick even with prey in range', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      // One tick below the hungry threshold: only the grace gate stops it crossing.
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        hungerTicks: HUNGRY_TICKS - 1,
+      });
+      world.spider.nextHuntTick = 9999;
+      world.tick = SPIDER_GRACE_TICKS - 1;
+      placeWorker(world, sx + SPIDER_CHASE_TRIGGER_RADIUS, sy);
+
+      tickSpider(world);
+
+      expect(world.spider!.hungerTicks).toBe(HUNGRY_TICKS - 1); // no accrual → never crosses
+      expect(world.spider!.state).toBe('Patrolling');
+      expect(world.spider!.chaseTargetAntId).toBe(-1);
+    });
+
+    it('stays dormant during grace even when hunger already exceeds the threshold (e.g. a loaded save)', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      // Hunger already over the threshold but still inside grace: grace must gate the
+      // predation transition itself, not merely freeze further accrual.
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        hungerTicks: HUNGRY_TICKS + 100,
+      });
+      world.spider.nextHuntTick = 0; // hunt cooldown elapsed — only grace should hold it back
+      world.tick = SPIDER_GRACE_TICKS - 1;
+      placeWorker(world, sx + SPIDER_CHASE_TRIGGER_RADIUS, sy);
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Patrolling');
+      expect(world.spider!.chaseTargetAntId).toBe(-1);
+      expect(world.spider!.hungerTicks).toBe(HUNGRY_TICKS + 100); // frozen during grace
+    });
+
+    it('wakes and chases once the grace window ends', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        hungerTicks: HUNGRY_TICKS - 1,
+      });
+      world.spider.nextHuntTick = 9999;
+      world.tick = SPIDER_GRACE_TICKS;
+      const antId = placeWorker(world, sx + SPIDER_CHASE_TRIGGER_RADIUS, sy);
+
+      tickSpider(world);
+
+      // Accrual resumes → crosses the hungry threshold → opportunistic chase fires.
+      expect(world.spider!.state).toBe('Chasing');
+      expect(world.spider!.chaseTargetAntId).toBe(antId);
     });
   });
 
@@ -825,6 +916,37 @@ describe('tickSpider', () => {
       expect(world.spider!.state).toBe('Rampaging');
       expect(world.spider!.rampageTargetColonyId).toBe(PLAYER_COLONY_ID);
     });
+
+    it('still self-defends when only the enemy QUEEN sits on the camped entrance (queen does not hold the gate)', () => {
+      // The #165 gate-hold is only justified for a bite-able ant: resolveSpiderCombatOnTile
+      // skips queens, so a queen parked on the entrance is never caught by tile-coincident
+      // combat. Holding for her would let an attacker surround the spider unanswered.
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        hungerTicks: HUNGRY_TICKS,
+        state: 'Rampaging',
+        rampageTargetColonyId: PLAYER_COLONY_ID,
+        rampageStartTick: 0,
+      });
+      world.spider.nextHuntTick = 9999;
+      const col = createColonyRecord(PLAYER_COLONY_ID, -1);
+      col.entrances = [{ entranceId: 1, surfaceTileX: sx, surfaceTileY: sy, isOpen: true }];
+      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId] = col;
+      const queenId = placeWorker(world, sx, sy); // queen parked ON the entrance (unbiteable)
+      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!.queenEntityId = queenId;
+      const fighterId = placeFighter(world, sx + SPIDER_CHASE_TRIGGER_RADIUS + 1, sy); // within defense radius
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Chasing');
+      expect(world.spider!.chaseTargetAntId).toBe(fighterId);
+      expect(world.spider!.rampageTargetColonyId).toBe(-1);
+    });
   });
 
   describe('Rampaging straggler chase-divert (V23 #146)', () => {
@@ -893,6 +1015,44 @@ describe('tickSpider', () => {
       expect(world.spider!.state).toBe('Rampaging');
       expect(world.spider!.rampageTargetColonyId).toBe(PLAYER_COLONY_ID);
     });
+
+    it('DOES divert to a straggler when only the enemy QUEEN sits on the camped entrance (no gate-hold for an unbiteable queen)', () => {
+      // Regression (seed2082146439 dump): the enemy queen parked on the camped entrance
+      // made holdGate=true, suppressing the chase-divert, while combat refused to bite
+      // her — a ~1200-tick deadlock camp. The queen must not hold the gate; the spider
+      // should chase the nearby bite-able straggler instead.
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      campingSpider(world, sx, sy); // entrance at (sx, sy), queenEntityId = -1
+      const queenId = placeWorker(world, sx, sy); // queen parked ON the entrance (unbiteable)
+      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!.queenEntityId = queenId;
+      const strag = placeWorker(world, sx + 1, sy); // bite-able straggler within chase radius
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Chasing');
+      expect(world.spider!.chaseTargetAntId).toBe(strag);
+      expect(world.spider!.rampageTargetColonyId).toBe(-1);
+    });
+
+    it('keeps camping when only the enemy QUEEN sits on the entrance and no straggler is in range', () => {
+      // Queen excluded from both the gate-hold and the chase-target scan → no divert,
+      // no spurious transition: the spider simply continues camping (rampage times out later).
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      campingSpider(world, sx, sy);
+      const queenId = placeWorker(world, sx, sy); // queen alone on the entrance
+      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!.queenEntityId = queenId;
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Rampaging');
+      expect(world.spider!.rampageTargetColonyId).toBe(PLAYER_COLONY_ID);
+    });
   });
 
   describe('Chasing movement + transitions (V23 #146)', () => {
@@ -958,10 +1118,12 @@ describe('tickSpider', () => {
       world.spider = makeSpider({
         state: 'Chasing',
         chaseTargetAntId: antId,
-        chaseStartTick: 0,
+        chaseStartTick: SPIDER_GRACE_TICKS, // chase began just as grace ended
         hungerTicks: 500,
       });
-      world.tick = 50;
+      // Past the grace window so hunger accrues again; chase elapsed (50) is kept
+      // under the leash (300) so the leash can't preempt the dead-target exit.
+      world.tick = SPIDER_GRACE_TICKS + 50;
 
       tickSpider(world);
 
