@@ -45,7 +45,7 @@ import {
   SPIDER_SPRITE_HEIGHT,
   SPIDER_SPRITE_WIDTH,
 } from './ant-sprite-layer.js';
-import { SPIDER_HUNGER_MAX_TICKS } from '../sim/constants.js';
+import { SPIDER_HUNGER_MAX_TICKS, SPIDER_HP_FULL } from '../sim/constants.js';
 import { tierIndex } from '../sim/ai-state.js';
 
 // ---------------------------------------------------------------------------
@@ -140,6 +140,11 @@ export function drawSurfaceEntities(
   frameTimeMs: number = 0,
   contestedGlowFrames?: Map<number, number>,
   currentFrame: number = 0,
+  // Overlay layer for primitives that must render ABOVE the sprite pool
+  // (SPIDER_SPRITE_DEPTH = 52). GameScene supplies a Graphics object set to a
+  // higher depth; callers that omit it (orchestrator + tests) fall back to the
+  // base gfx, preserving the previous single-layer behaviour.
+  overlayGfx: GfxLike = gfx,
 ): void {
   const left = Math.floor(cam.x - cam.viewportWidth  / 2);
   const top  = Math.floor(cam.y - cam.viewportHeight / 2);
@@ -467,6 +472,40 @@ export function drawSurfaceEntities(
         gfx.fillRect(pl,          pt + ph - 2, pw, 2);
         gfx.fillRect(pl,          pt + 2,      2,  ph - 4);
         gfx.fillRect(pl + pw - 2, pt + 2,      2,  ph - 4);
+      }
+
+      // Health bar (issue #148): render-only HP indicator floating just above
+      // the sprite. maxHp is the regen cap SPIDER_HP_FULL — SpiderState stores
+      // only hp (clamped to that constant), so no sim field is needed. Hidden
+      // at full health; appears once the spider has taken damage. Drawn on
+      // overlayGfx so it renders above the spider sprite (SPIDER_SPRITE_DEPTH).
+      const hpRatio = Math.max(0, Math.min(1, curr.spider.hp / SPIDER_HP_FULL));
+      if (hpRatio < 1) {
+        const barW = 24;
+        const barH = 4;
+        const barX = Math.round(spiderScreenX - barW / 2);
+        // Sit above the sprite top edge (and clear of the priority border,
+        // which sits 2px outside the box).
+        const barY = Math.round(spiderScreenY - SPIDER_SPRITE_HEIGHT / 2 - barH - 4);
+        // green (full) → yellow (half) → red (empty).
+        const fillColor = hpRatio > 0.5
+          ? lerpColor(0xffcc00, 0x33cc33, (hpRatio - 0.5) / 0.5)
+          : lerpColor(0xcc2020, 0xffcc00, hpRatio / 0.5);
+        // Quantize the fill so a damaged spider never reads as full and a
+        // barely-alive one never reads as empty: any 0 < ratio < 1 paints
+        // between 1px and barW-1px. hp == 0 paints an empty track. Without
+        // this, hp=79/80 rounds to the full 24px (looks undamaged) and hp=1/80
+        // rounds to 0px (looks dead).
+        const fillW = hpRatio <= 0
+          ? 0
+          : Math.max(1, Math.min(barW - 1, Math.round(barW * hpRatio)));
+        // Dark outline + track so a near-empty bar still reads against terrain.
+        overlayGfx.fillStyle(0x000000, 0.7);
+        overlayGfx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
+        overlayGfx.fillStyle(0x333333, 0.85);
+        overlayGfx.fillRect(barX, barY, barW, barH);
+        overlayGfx.fillStyle(fillColor, 1);
+        overlayGfx.fillRect(barX, barY, fillW, barH);
       }
     }
   }

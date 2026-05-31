@@ -20,12 +20,13 @@ import type {
   SpiderSpriteDrawOptions,
   StaticSpriteDrawOptions,
 } from './ant-sprite-layer.js';
-import type { WorldState } from '../sim/types.js';
+import { SPIDER_SPRITE_HEIGHT } from './ant-sprite-layer.js';
+import type { WorldState, SpiderState } from '../sim/types.js';
 import { createWorldState } from '../sim/types.js';
 import { sgSet, SurfaceTileState } from '../sim/terrain.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { FP_SHIFT } from '../sim/fixed.js';
-import { PLAYER_COLONY_ID } from '../sim/constants.js';
+import { PLAYER_COLONY_ID, SPIDER_HP_FULL } from '../sim/constants.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import { AntFacingCache } from './ant-facing-cache.js';
 import {
@@ -870,6 +871,164 @@ describe('drawSurfaceEntities — rally-point marker', () => {
       r.args[3] === 4,
     );
     expect(accent).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #148 — spider health bar
+// ---------------------------------------------------------------------------
+
+describe('drawSurfaceEntities — spider health bar (issue #148)', () => {
+  // Spider sits at tile (5,5); camera centered there keeps it on-screen.
+  function makeWorldWithSpider(hp: number): WorldState {
+    const w = createWorldState(1);
+    const spider: SpiderState = {
+      state: 'Patrolling',
+      posX: 5 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      lairTileX: 5,
+      lairTileY: 5,
+      territoryRadiusTiles: 24,
+      hp,
+      attackCooldown: 0,
+      hungerTicks: 0,
+      nextHuntTick: 0,
+      huntStartTick: 0,
+      strikeStartTick: 0,
+      feedingStartTick: 0,
+      retreatStartTick: 0,
+      rampageStartTick: 0,
+      huntTargetTileX: -1,
+      huntTargetTileY: -1,
+      killsThisStrike: 0,
+      rampageKillsThisRampage: 0,
+      rampageTargetColonyId: -1,
+      chaseTargetAntId: -1,
+      chaseStartTick: 0,
+      killedThisTick: 0,
+      lastKillTileX: -1,
+      lastKillTileY: -1,
+      feedAwayTileX: -1,
+      feedAwayTileY: -1,
+      feedArrivedTick: -1,
+    };
+    w.spider = spider;
+    return w;
+  }
+
+  /** The bar track is the only fillStyle(0x333333) emitted; its following fill
+   *  rect is the coloured HP portion. Returns null when no bar was drawn. */
+  function findHealthBar(gfx: MockGfx): { track: Rect; fillColor: number; fill: Rect } | null {
+    let pendingColor: number | undefined;
+    let track: Rect | null = null;
+    let fillColor: number | undefined;
+    let fill: Rect | null = null;
+    for (const c of gfx.calls) {
+      if (c.method === 'fillStyle') {
+        pendingColor = c.args[0] as number;
+        if (track !== null && fill === null) fillColor = pendingColor;
+      } else if (c.method === 'fillRect') {
+        const rect = { x: c.args[0] as number, y: c.args[1] as number, w: c.args[2] as number, h: c.args[3] as number };
+        if (pendingColor === 0x333333) track = rect;
+        else if (track !== null && fill === null && pendingColor === fillColor) fill = rect;
+      }
+    }
+    if (track === null || fill === null || fillColor === undefined) return null;
+    return { track, fillColor, fill };
+  }
+
+  it('hides the bar at full health', () => {
+    const gfx = new MockGfx();
+    const world = makeWorldWithSpider(SPIDER_HP_FULL);
+    const cam = makeCamera(5, 5, 20, 20);
+    drawSurfaceEntities(gfx, new MockAntSprites(), world, world, 0, cam);
+    expect(findHealthBar(gfx)).toBeNull();
+  });
+
+  it('shows a 24×4 bar once damaged, with fill width proportional to hp ratio', () => {
+    const gfx = new MockGfx();
+    const world = makeWorldWithSpider(SPIDER_HP_FULL / 2);
+    const cam = makeCamera(5, 5, 20, 20);
+    drawSurfaceEntities(gfx, new MockAntSprites(), world, world, 0, cam);
+    const bar = findHealthBar(gfx);
+    expect(bar).not.toBeNull();
+    expect(bar!.track.w).toBe(24);
+    expect(bar!.track.h).toBe(4);
+    // Half health → 12px fill, sharing the track's top-left origin.
+    expect(bar!.fill.w).toBe(12);
+    expect(bar!.fill.x).toBe(bar!.track.x);
+    expect(bar!.fill.y).toBe(bar!.track.y);
+  });
+
+  it('floats above the sprite top edge', () => {
+    const gfx = new MockGfx();
+    const world = makeWorldWithSpider(10);
+    const cam = makeCamera(5, 5, 20, 20);
+    drawSurfaceEntities(gfx, new MockAntSprites(), world, world, 0, cam);
+    const bar = findHealthBar(gfx)!;
+    // Sprite center screen-y is tile 5 → 80px (camera left/top = -5 tiles).
+    const spriteCenterY = 80 - (-5 * TILE_SIZE_PX);
+    expect(bar.track.y).toBeLessThan(spriteCenterY - SPIDER_SPRITE_HEIGHT / 2);
+  });
+
+  it('fill colour skews green at high hp and red at low hp', () => {
+    const camY = makeCamera(5, 5, 20, 20);
+    const highGfx = new MockGfx();
+    drawSurfaceEntities(highGfx, new MockAntSprites(), makeWorldWithSpider(SPIDER_HP_FULL * 0.9), makeWorldWithSpider(SPIDER_HP_FULL * 0.9), 0, camY);
+    const lowGfx = new MockGfx();
+    drawSurfaceEntities(lowGfx, new MockAntSprites(), makeWorldWithSpider(SPIDER_HP_FULL * 0.1), makeWorldWithSpider(SPIDER_HP_FULL * 0.1), 0, camY);
+    const high = findHealthBar(highGfx)!.fillColor;
+    const low = findHealthBar(lowGfx)!.fillColor;
+    const green = (c: number) => (c >> 8) & 0xff;
+    const red = (c: number) => (c >> 16) & 0xff;
+    // High hp: green channel dominates red. Low hp: red dominates green.
+    expect(green(high)).toBeGreaterThan(red(high));
+    expect(red(low)).toBeGreaterThan(green(low));
+  });
+
+  it('clamps a negative hp ratio without drawing a negative-width fill', () => {
+    const gfx = new MockGfx();
+    const world = makeWorldWithSpider(-5);
+    const cam = makeCamera(5, 5, 20, 20);
+    drawSurfaceEntities(gfx, new MockAntSprites(), world, world, 0, cam);
+    const bar = findHealthBar(gfx)!;
+    expect(bar.fill.w).toBe(0);
+  });
+
+  it('renders the bar on the overlay layer, not the base gfx', () => {
+    // P3-1: the bar must sit above the spider sprite (SPIDER_SPRITE_DEPTH).
+    // GameScene passes a separate higher-depth Graphics object as overlayGfx;
+    // the whole bar (outline + track + fill) must land there, not on base gfx.
+    const base = new MockGfx();
+    const overlay = new MockGfx();
+    const world = makeWorldWithSpider(SPIDER_HP_FULL / 2);
+    const cam = makeCamera(5, 5, 20, 20);
+    drawSurfaceEntities(base, new MockAntSprites(), world, world, 0, cam, null, undefined, 0, undefined, 0, overlay);
+    expect(findHealthBar(overlay)).not.toBeNull();
+    expect(findHealthBar(base)).toBeNull();
+  });
+
+  it('never paints a full-width fill while damaged (hp just below max)', () => {
+    // P3-2: 79/80 rounds to the full 24px without the clamp, making a damaged
+    // spider indistinguishable from a full-health one (whose bar is hidden).
+    const gfx = new MockGfx();
+    const world = makeWorldWithSpider(SPIDER_HP_FULL - 1);
+    const cam = makeCamera(5, 5, 20, 20);
+    drawSurfaceEntities(gfx, new MockAntSprites(), world, world, 0, cam);
+    const bar = findHealthBar(gfx)!;
+    expect(bar.fill.w).toBe(23);
+    expect(bar.fill.w).toBeLessThan(bar.track.w);
+  });
+
+  it('never paints an empty fill while still alive (hp = 1)', () => {
+    // P3-2: 1/80 rounds to 0px without the clamp, making a live spider read as
+    // dead. A positive hp must always show at least 1px.
+    const gfx = new MockGfx();
+    const world = makeWorldWithSpider(1);
+    const cam = makeCamera(5, 5, 20, 20);
+    drawSurfaceEntities(gfx, new MockAntSprites(), world, world, 0, cam);
+    const bar = findHealthBar(gfx)!;
+    expect(bar.fill.w).toBeGreaterThanOrEqual(1);
   });
 });
 
