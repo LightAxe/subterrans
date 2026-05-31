@@ -27,6 +27,7 @@ import {
   SPIDER_DEFENSE_TRIGGER_RADIUS,
   SPIDER_CHASE_MAX_TICKS,
   SPIDER_HUNGER_THRESHOLD_TICKS,
+  SPIDER_GRACE_TICKS,
   SPIDER_MEANDER_TICK_DIVISOR,
   SPIDER_MEANDER_RETARGET_TICKS,
   SPIDER_FEED_RETREAT_TILES,
@@ -180,17 +181,36 @@ function findChaseTarget(world: WorldState, spider: SpiderState): number {
 }
 
 /**
- * True if any live surface ant occupies tile (tileX, tileY). Used by the Rampaging
- * straggler-divert to honor the #165 entrance blockade: while a descender sits on the
- * camped entrance tile, the tile-coincident spider bite (the gate holds the ant there)
- * resolves it this tick, so the spider must NOT divert off the gate to chase. No alloc.
+ * True if any live, bite-able surface ant occupies tile (tileX, tileY). Used by the
+ * Rampaging gate-holds to honor the #165 entrance blockade: while a descender sits on
+ * the camped entrance tile, the tile-coincident spider bite (the gate holds the ant
+ * there) resolves it this tick, so the spider must NOT divert off the gate to chase.
+ *
+ * Queens are excluded (identified by colony.queenEntityId), matching findChaseTarget
+ * and resolveSpiderCombatOnTile: the gate-hold is only justified for an ant the spider
+ * will actually bite, and combat skips queens. A queen parked on the camped entrance
+ * must NOT hold the gate — otherwise the spider deadlock-camps an unbiteable target and
+ * suppresses the chase-divert that would catch a nearby straggler. No allocation.
  */
 function isSurfaceAntOnTile(world: WorldState, tileX: number, tileY: number): boolean {
   const { ants } = world;
+
+  // Pre-scan colony queen IDs (same contract as findChaseTarget / resolveSpiderCombatOnTile).
+  let queenId0 = -1;
+  let queenId1 = -1;
+  for (const ckey in world.colonies) {
+    if (!Object.hasOwn(world.colonies, ckey)) continue;
+    const col = world.colonies[ckey as unknown as import('./colony/colony-store.js').ColonyId];
+    if (col === undefined) continue;
+    if (queenId0 < 0) queenId0 = col.queenEntityId;
+    else queenId1 = col.queenEntityId;
+  }
+
   const antCount = ants.alive.length;
   for (let i = 0; i < antCount; i++) {
     if (ants.alive[i] !== 1) continue;
     if (ants.zone[i] !== 0) continue; // surface only
+    if (i === queenId0 || i === queenId1) continue; // queens are not bite-able
     if ((ants.posX[i]! >> FP_SHIFT) === tileX && (ants.posY[i]! >> FP_SHIFT) === tileY) return true;
   }
   return false;
@@ -912,8 +932,11 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
   // 1. Normalize: 'Retreating' is unused in V23 (may load from an earlier #172 build).
   if (spider.state === 'Retreating') spider.state = 'Patrolling';
 
-  // 2. Hunger accrual: only while not Feeding.
-  if (spider.state !== 'Feeding') spider.hungerTicks += 1;
+  // 2. Hunger accrual: only while not Feeding, and only after the start-of-match grace
+  //    period (SPIDER_GRACE_TICKS). During grace the spider stays dormant — Patrolling
+  //    + self-defense (step 4a) only — so colonies can establish before it begins to
+  //    hunt. See SPIDER_GRACE_TICKS / #177.
+  if (spider.state !== 'Feeding' && world.tick >= SPIDER_GRACE_TICKS) spider.hungerTicks += 1;
 
   const tier = tierIndex(world.difficulty);
 
