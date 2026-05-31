@@ -23,6 +23,7 @@ import {
   ENEMY_START_Y,
   SPIDER_HUNGER_MAX_TICKS,
   SPIDER_HUNGER_THRESHOLD_TICKS,
+  SPIDER_GRACE_TICKS,
   SPIDER_HP_FULL,
 } from './constants.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
@@ -897,10 +898,13 @@ describe('S3 V20: spider replay determinism (Hunting → Striking → Rampaging)
       spider.state = 'Hunting';
       spider.huntTargetTileX = spider.lairTileX;
       spider.huntTargetTileY = spider.lairTileY;
-      // huntStartTick = 0 so Hunting persists for SPIDER_TELEGRAPH_TICKS ticks before
-      // transitioning to Striking, allowing statesVisited to observe 'Hunting'.
-      // (On first call world.tick=0; 0-0=0<120 → stays Hunting; at call 121 world.tick=120 → Striking.)
-      spider.huntStartTick = 0;
+      // Start past the V23 start-of-match grace window so the spider actually
+      // predates (rampages) instead of staying dormant; see SPIDER_GRACE_TICKS / #177.
+      world.tick = SPIDER_GRACE_TICKS;
+      // huntStartTick = world.tick so Hunting persists for SPIDER_TELEGRAPH_TICKS ticks
+      // before transitioning to Striking, allowing statesVisited to observe 'Hunting'.
+      // (On first call tick-huntStartTick=0<120 → stays Hunting; 120 calls later → Striking.)
+      spider.huntStartTick = SPIDER_GRACE_TICKS;
       // NORMAL_TIER_INDEX=1 → threshold 1800. After Striking exits to Patrolling
       // hunger will be ≥1800, triggering an immediate Rampaging transition.
       // Safety: createScenario places STARTING_WORKERS=3 at PLAYER_START_X/Y (24,64) and
@@ -1044,6 +1048,9 @@ describe('S3 V23 redesign: meander + feed-after-kill replay determinism', () => 
     spider.lairTileY = wy;
     spider.hp = SPIDER_HP_FULL - 25; // leave headroom so Feeding heal is observable
     spider.hungerTicks = SPIDER_HUNGER_THRESHOLD_TICKS[1]!; // hungry → predates
+    // Past the V23 start-of-match grace window so the hungry spider predates rather
+    // than staying dormant (Patrolling + self-defense only); see SPIDER_GRACE_TICKS / #177.
+    world.tick = SPIDER_GRACE_TICKS;
     return world;
   }
 

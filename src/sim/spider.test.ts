@@ -594,6 +594,7 @@ describe('tickSpider', () => {
       const sy = 32;
       world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: HUNGRY_TICKS });
       world.spider.nextHuntTick = 9999;
+      world.tick = SPIDER_GRACE_TICKS; // past grace so the spider is active and hungry
       const antId = placeWorker(world, sx + SPIDER_CHASE_TRIGGER_RADIUS, sy);
 
       tickSpider(world);
@@ -612,6 +613,7 @@ describe('tickSpider', () => {
       const sy = 32;
       world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: HUNGRY_TICKS });
       world.spider.nextHuntTick = 9999;
+      world.tick = SPIDER_GRACE_TICKS; // past grace so the spider is active and hungry
       const near = placeWorker(world, sx + 1, sy); // dist 1
       placeWorker(world, sx + 3, sy);              // dist 3 (farther)
 
@@ -661,6 +663,7 @@ describe('tickSpider', () => {
         posY: sy << FP_SHIFT,
         hungerTicks: HUNGRY_TICKS,
       });
+      world.tick = SPIDER_GRACE_TICKS; // past grace so the spider is active and hungry
       placeWorker(world, sx + 1, sy); // a chaseable ant is present → chase wins over rampage
 
       tickSpider(world);
@@ -675,6 +678,7 @@ describe('tickSpider', () => {
       const sy = 32;
       world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: HUNGRY_TICKS });
       world.spider.nextHuntTick = 9999;
+      world.tick = SPIDER_GRACE_TICKS; // past grace so the no-chase is queen-exclusion, not dormancy
       const queenId = placeWorker(world, sx + 1, sy);
       const col = createColonyRecord(PLAYER_COLONY_ID, 0);
       col.entrances = []; // caller-init contract; no open entrance → sealed
@@ -728,6 +732,29 @@ describe('tickSpider', () => {
       expect(world.spider!.hungerTicks).toBe(HUNGRY_TICKS - 1); // no accrual → never crosses
       expect(world.spider!.state).toBe('Patrolling');
       expect(world.spider!.chaseTargetAntId).toBe(-1);
+    });
+
+    it('stays dormant during grace even when hunger already exceeds the threshold (e.g. a loaded save)', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      const sx = 64;
+      const sy = 32;
+      // Hunger already over the threshold but still inside grace: grace must gate the
+      // predation transition itself, not merely freeze further accrual.
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        hungerTicks: HUNGRY_TICKS + 100,
+      });
+      world.spider.nextHuntTick = 0; // hunt cooldown elapsed — only grace should hold it back
+      world.tick = SPIDER_GRACE_TICKS - 1;
+      placeWorker(world, sx + SPIDER_CHASE_TRIGGER_RADIUS, sy);
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Patrolling');
+      expect(world.spider!.chaseTargetAntId).toBe(-1);
+      expect(world.spider!.hungerTicks).toBe(HUNGRY_TICKS + 100); // frozen during grace
     });
 
     it('wakes and chases once the grace window ends', () => {
