@@ -44,8 +44,8 @@ describe('PRD §9c lifecycle tick constants', () => {
     expect(EGG_HATCH_TICKS).toBe(1200);
   });
 
-  it('LARVA_MATURE_TICKS === 2400', () => {
-    expect(LARVA_MATURE_TICKS).toBe(2400);
+  it('LARVA_MATURE_TICKS === 1500', () => {
+    expect(LARVA_MATURE_TICKS).toBe(1500);
   });
 
   it('WORKER_LIFESPAN_TICKS === 0x7FFFFFFF (INT32_MAX)', () => {

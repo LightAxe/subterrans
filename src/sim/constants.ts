@@ -15,7 +15,7 @@
 export const EGG_HATCH_TICKS = 1200;
 
 /** PRD §9c — Ticks for a larva to mature into a worker. */
-export const LARVA_MATURE_TICKS = 2400;
+export const LARVA_MATURE_TICKS = 1500;
 
 /** PRD §9c — Worker lifespan: effectively immortal (INT32_MAX ticks). */
 export const WORKER_LIFESPAN_TICKS = 0x7FFFFFFF;
