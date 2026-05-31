@@ -368,8 +368,8 @@ describe('tickLarvaMaturation — throughput cap (cap binds)', () => {
 // the sim tick when workerCount reaches 10 (one new worker from reproduction).
 //
 // Expected timing (no nurse adjacency, so no acceleration):
-//   Lean  (interval=300): first egg at t=300, larva at t=1500, worker at t=3900
-//   Rich  (interval=150): first egg at t=150, larva at t=1350, worker at t=3750
+//   Lean  (interval=300): first egg at t=300, larva at t=1500, worker at t=3000
+//   Rich  (interval=150): first egg at t=150, larva at t=1350, worker at t=2850
 //   Delta: 150 ticks ≥ MIN_TICK_DELTA (120)
 // ---------------------------------------------------------------------------
 

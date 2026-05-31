@@ -47,7 +47,7 @@ const TOTAL_TICKS = 8000;
 const TRAJECTORY_WINDOW_START = 7000;   // track workerCount from tick 7000..8000
 // S4 change: queen now lays on first eligible tick (elapsed-since-last-lay gate), not at modulo
 // boundaries. In the AI scenario, chambers complete ~tick 4000; first egg lays immediately,
-// creating ~6 larvae by tick 6000. First new worker matures at ~tick 7600 (4000+3600).
+// creating ~6 larvae by tick 6000. First new worker matures at ~tick 6700 (4000+2700).
 // Window extended from 5500..6000 → 7000..8000 so the monitoring window contains the
 // stable post-first-worker-maturation state.
 const DIAGNOSTIC_INTERVAL = 500;         // log snapshot every 500 ticks (pre-audit)

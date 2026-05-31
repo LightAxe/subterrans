@@ -182,7 +182,7 @@ function buildWorld(seed: number): { world: WorldState; queenId: number; colonyI
   }
   // 09 reproduction-gate memo: queen egg production requires a completed
   // Queen chamber AND a completed Nursery chamber. Seed both so the lifecycle
-  // pipeline (Test 6) reaches the first worker by tick 3600.
+  // pipeline (Test 6) reaches the first worker by tick 2700.
   //
   // seed936214196-tick2401 Gate 6: tickQueenEggProduction now also requires
   // the queen to be Underground AND physically inside the Queen chamber
