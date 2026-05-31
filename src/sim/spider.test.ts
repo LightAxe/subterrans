@@ -35,6 +35,7 @@ import {
   SPIDER_FEED_RETREAT_TILES,
   SPIDER_FEED_HEAL_INTERVAL_TICKS,
   SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
   PLAYER_COLONY_ID,
   ENEMY_COLONY_ID,
 } from './constants.js';
@@ -1189,6 +1190,100 @@ describe('tickSpider', () => {
       const huntEnd = world.events.find((e) => e.type === 'spider_hunt_end');
       expect(huntEnd).toBeDefined();
       if (huntEnd?.type === 'spider_hunt_end') expect(huntEnd.payload.outcome).toBe('kill');
+    });
+
+    it('edge kill with an outward retreat direction still moves the full distance in-bounds (Codex P2)', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      // Kill near the left edge; spider sits further left (sx=0) so the
+      // deterministic direction (sx - kx < 0) points outward, off the grid.
+      const kx = 3;
+      const ky = 64;
+      world.spider = makeSpider({
+        posX: 0 << FP_SHIFT,
+        posY: ky << FP_SHIFT,
+        state: 'Striking',
+        hungerTicks: 800,
+        killedThisTick: 1,
+        lastKillTileX: kx,
+        lastKillTileY: ky,
+        killsThisStrike: 1,
+      });
+      world.tick = 10;
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Feeding');
+      const fx = world.spider!.feedAwayTileX;
+      const fy = world.spider!.feedAwayTileY;
+      // In-bounds, full retreat distance, and reflected inward (away from the
+      // edge) rather than clamped onto the kill tile.
+      expect(fx).toBeGreaterThanOrEqual(0);
+      expect(fx).toBeLessThanOrEqual(SURFACE_GRID_WIDTH - 1);
+      expect(Math.abs(fx - kx) + Math.abs(fy - ky)).toBe(SPIDER_FEED_RETREAT_TILES);
+      expect(fx).toBeGreaterThan(kx);
+    });
+
+    it('edge kill on the Y axis reflects inward the full distance in-bounds (Codex P2)', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      // Kill near the bottom edge; spider sits further down so the deterministic
+      // direction (sy - ky > 0) points outward past the grid on the Y axis. This
+      // covers the SURFACE_GRID_HEIGHT call site, not just the X one.
+      const kx = 64;
+      const ky = SURFACE_GRID_HEIGHT - 4;
+      world.spider = makeSpider({
+        posX: kx << FP_SHIFT,
+        posY: (SURFACE_GRID_HEIGHT - 1) << FP_SHIFT,
+        state: 'Striking',
+        hungerTicks: 800,
+        killedThisTick: 1,
+        lastKillTileX: kx,
+        lastKillTileY: ky,
+        killsThisStrike: 1,
+      });
+      world.tick = 10;
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Feeding');
+      const fx = world.spider!.feedAwayTileX;
+      const fy = world.spider!.feedAwayTileY;
+      expect(fy).toBeGreaterThanOrEqual(0);
+      expect(fy).toBeLessThanOrEqual(SURFACE_GRID_HEIGHT - 1);
+      expect(Math.abs(fx - kx) + Math.abs(fy - ky)).toBe(SPIDER_FEED_RETREAT_TILES);
+      expect(fy).toBeLessThan(ky); // reflected inward (up), away from the bottom edge
+    });
+
+    it('corner kill via the hash fallback still retreats the full distance in-bounds (Codex P2)', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      // Kill tile == spider tile at the (0,0) corner → dx==dy==0 takes the hash
+      // fallback. Whichever cardinal it picks, the endpoint must stay in-bounds
+      // and a full SPIDER_FEED_RETREAT_TILES from the kill (pre-fix, an outward
+      // pick collapsed to the edge at distance 0).
+      world.spider = makeSpider({
+        posX: 0 << FP_SHIFT,
+        posY: 0 << FP_SHIFT,
+        state: 'Striking',
+        hungerTicks: 800,
+        killedThisTick: 1,
+        lastKillTileX: 0,
+        lastKillTileY: 0,
+        killsThisStrike: 1,
+      });
+      world.tick = 10;
+
+      tickSpider(world);
+
+      expect(world.spider!.state).toBe('Feeding');
+      const fx = world.spider!.feedAwayTileX;
+      const fy = world.spider!.feedAwayTileY;
+      expect(fx).toBeGreaterThanOrEqual(0);
+      expect(fx).toBeLessThanOrEqual(SURFACE_GRID_WIDTH - 1);
+      expect(fy).toBeGreaterThanOrEqual(0);
+      expect(fy).toBeLessThanOrEqual(SURFACE_GRID_HEIGHT - 1);
+      expect(Math.abs(fx) + Math.abs(fy)).toBe(SPIDER_FEED_RETREAT_TILES);
     });
 
     it('a Rampaging kill with no fighter adjacent → Feeding emits spider_rampage_end(quota_met)', () => {
