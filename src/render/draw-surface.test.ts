@@ -994,6 +994,42 @@ describe('drawSurfaceEntities — spider health bar (issue #148)', () => {
     const bar = findHealthBar(gfx)!;
     expect(bar.fill.w).toBe(0);
   });
+
+  it('renders the bar on the overlay layer, not the base gfx', () => {
+    // P3-1: the bar must sit above the spider sprite (SPIDER_SPRITE_DEPTH).
+    // GameScene passes a separate higher-depth Graphics object as overlayGfx;
+    // the whole bar (outline + track + fill) must land there, not on base gfx.
+    const base = new MockGfx();
+    const overlay = new MockGfx();
+    const world = makeWorldWithSpider(SPIDER_HP_FULL / 2);
+    const cam = makeCamera(5, 5, 20, 20);
+    drawSurfaceEntities(base, new MockAntSprites(), world, world, 0, cam, null, undefined, 0, undefined, 0, overlay);
+    expect(findHealthBar(overlay)).not.toBeNull();
+    expect(findHealthBar(base)).toBeNull();
+  });
+
+  it('never paints a full-width fill while damaged (hp just below max)', () => {
+    // P3-2: 79/80 rounds to the full 24px without the clamp, making a damaged
+    // spider indistinguishable from a full-health one (whose bar is hidden).
+    const gfx = new MockGfx();
+    const world = makeWorldWithSpider(SPIDER_HP_FULL - 1);
+    const cam = makeCamera(5, 5, 20, 20);
+    drawSurfaceEntities(gfx, new MockAntSprites(), world, world, 0, cam);
+    const bar = findHealthBar(gfx)!;
+    expect(bar.fill.w).toBe(23);
+    expect(bar.fill.w).toBeLessThan(bar.track.w);
+  });
+
+  it('never paints an empty fill while still alive (hp = 1)', () => {
+    // P3-2: 1/80 rounds to 0px without the clamp, making a live spider read as
+    // dead. A positive hp must always show at least 1px.
+    const gfx = new MockGfx();
+    const world = makeWorldWithSpider(1);
+    const cam = makeCamera(5, 5, 20, 20);
+    drawSurfaceEntities(gfx, new MockAntSprites(), world, world, 0, cam);
+    const bar = findHealthBar(gfx)!;
+    expect(bar.fill.w).toBeGreaterThanOrEqual(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

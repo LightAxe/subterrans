@@ -82,6 +82,7 @@ import {
   LARVA_TEXTURE,
   QUEEN_SPRITE_HEIGHT,
   QUEEN_SPRITE_WIDTH,
+  SPIDER_SPRITE_DEPTH,
   SPIDER_SPRITE_HEIGHT,
   SPIDER_SPRITE_WIDTH,
   SPIDER_TEXTURE,
@@ -190,6 +191,10 @@ export class GameScene extends Phaser.Scene {
   private viewState!: ViewState;
   private gameLoop!: GameLoop;
   private gfx!: Phaser.GameObjects.Graphics;
+  // Overlay layer for world-space primitives that must render above the sprite
+  // pool (e.g. the spider health bar, issue #148). Depth sits just above
+  // SPIDER_SPRITE_DEPTH so it clears every in-world sprite.
+  private overlayGfx!: Phaser.GameObjects.Graphics;
   private antSprites!: AntSpritePool;
   // Render-only ant-facing smoothing (see ant-facing-cache.ts). One instance
   // per scene, threaded into drawSurface + drawUnderground each frame so
@@ -289,6 +294,8 @@ export class GameScene extends Phaser.Scene {
   create() {
     this.viewState = createViewState(PLAYER_START_X, PLAYER_START_Y);
     this.gfx = this.add.graphics();
+    this.overlayGfx = this.add.graphics();
+    this.overlayGfx.setDepth(SPIDER_SPRITE_DEPTH + 1);
     this.antSprites = new AntSpritePool(this);
 
     // Issue #122 — pull the playtrace endpoint out of the registry (set by
@@ -1203,7 +1210,9 @@ export class GameScene extends Phaser.Scene {
     // Draw world.
     const alpha = this.gameLoop.accumulatorMs / MS_PER_TICK;
     const gfx = this.gfx as unknown as GfxLike;
+    const overlayGfx = this.overlayGfx as unknown as GfxLike;
     gfx.clear();
+    overlayGfx.clear();
     this.antSprites.beginFrame();
     // UAT regression fix: pheromone overlay MUST render between terrain and
     // entities, not before the orchestrator. drawSurface / drawUnderground
@@ -1246,6 +1255,7 @@ export class GameScene extends Phaser.Scene {
         this.time.now,          // S6: frameTimeMs for reticle/hunger pulse
         this.contestedGlowFrames, // S6: surface glow fade map
         this.renderFrame,       // S6: current render frame
+        overlayGfx,             // #148: health bar renders above sprites
       );
     } else {
       drawUndergroundTerrain(gfx, this.world, cam, this.viewState.activeUndergroundColonyId);
