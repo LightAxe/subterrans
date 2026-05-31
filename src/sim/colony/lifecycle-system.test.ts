@@ -756,31 +756,26 @@ describe('tickLifecycleTransitions — brood-aging gate (09 reproduction-gate me
 // ---------------------------------------------------------------------------
 
 describe('Full pipeline integration — Phase 6 SC 1', () => {
-  it('14. queen→egg→larva→worker pipeline completes within 3700 ticks', () => {
-    // Setup: queen + abundant food
-    // EGG_HATCH_TICKS=1200 + LARVA_MATURE_TICKS=2400 = 3600 ticks for first egg to
-    // become a worker. First egg laid at tick 0, matures at tick 3600.
-    // With 3700 ticks (+100 margin), colony.workerCount >= 1.
+  it('14. queen→egg→larva→worker pipeline first worker emerges after EGG_HATCH_TICKS + LARVA_MATURE_TICKS', () => {
+    // The first egg is laid on the first production tick and becomes a worker
+    // EGG_HATCH_TICKS + LARVA_MATURE_TICKS ticks later. Run past that latency
+    // (+ margin) and assert the first worker emerged exactly on schedule, with
+    // later eggs still occupying the egg and larva stages.
     const { world, colony } = setupWorldWithQueen(10_000);
     world.tick = 0;
 
-    for (let t = 0; t < 3700; t++) {
+    const pipelineLatency = EGG_HATCH_TICKS + LARVA_MATURE_TICKS;
+    let firstWorkerTick = -1;
+    for (let t = 0; t < pipelineLatency + 200; t++) {
       tickQueenEggProduction(world, colony);
       tickLifecycleTransitions(world, colony);
       world.tick += 1;
+      if (firstWorkerTick < 0 && colony.workerCount >= 1) firstWorkerTick = world.tick;
     }
 
-    // At tick 3700:
-    //   - First egg laid at tick 0: hatches at tick 1200, matures at tick 3600 → 1 worker
-    //   - Second egg laid at tick 300: hatches at tick 1500, matures at tick 3900 → still larva
-    //   - Third egg laid at tick 600: hatches at tick 1800, matures at tick 4200 → still larva
-    //   - Eggs laid at ticks 600..3600 are still in eggs or larvae buckets
-    expect(colony.workerCount).toBeGreaterThanOrEqual(1);
+    expect(firstWorkerTick).toBe(pipelineLatency);
+    // Pipeline still flowing: later eggs occupy the larva and egg stages.
     expect(colony.larvaeCount).toBeGreaterThan(0);
     expect(colony.eggCount).toBeGreaterThan(0);
-
-    // Total eggs produced: ticks 0, 300, 600, ..., 3600 = 13 eggs (0-indexed intervals)
-    // 1 should be a worker, several larvae, several eggs
-    expect(colony.workerCount).toBe(1);
   });
 });

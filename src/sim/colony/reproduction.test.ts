@@ -2,7 +2,7 @@
 //
 // Validation targets (plan):
 //   1. Surplus thresholds: crossing 3×/5×/10× boundary changes egg interval
-//   2. Nurse acceleration: larva matures in 1200 ticks with 100% nurse coverage
+//   2. Nurse acceleration: larva matures in 750 ticks with 100% nurse coverage
 //   3. Cap — nurse-side tighter: 3 nurses, 8 larvae → 3 accelerated
 //   4. Cap — cap tighter: 10 nurses, 6 larvae, cap=4 → 4 accelerated
 //   5. V20 replay: pre-V21 simVersion leaves tickLarvaMaturation as no-op
@@ -248,7 +248,7 @@ describe('eggIntervalForColony — V21 surplus thresholds', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. Nurse acceleration: 100% coverage → matures in 1200 ticks
+// 2. Nurse acceleration: 100% coverage → matures in 750 ticks
 // ---------------------------------------------------------------------------
 
 describe('tickLarvaMaturation — nurse acceleration', () => {
@@ -261,10 +261,10 @@ describe('tickLarvaMaturation — nurse acceleration', () => {
 
     // The larva has a Nursery chamber (cap=12) in the colony already.
     // Each tick: tickLifecycleTransitions gives +1 (baseline), tickLarvaMaturation gives +1 (nurse).
-    // Total: +2 per tick → mature at LARVA_MATURE_TICKS / 2 = 1200 ticks.
+    // Total: +2 per tick → mature at LARVA_MATURE_TICKS / 2 = 750 ticks.
 
     // eslint-disable-next-line no-restricted-syntax -- test-only constant; LARVA_MATURE_TICKS is even
-    const halfMature = LARVA_MATURE_TICKS / 2; // 1200
+    const halfMature = LARVA_MATURE_TICKS / 2; // 750
 
     for (let t = 0; t < halfMature - 1; t++) {
       tickLifecycleTransitions(world, colony);
@@ -368,8 +368,8 @@ describe('tickLarvaMaturation — throughput cap (cap binds)', () => {
 // the sim tick when workerCount reaches 10 (one new worker from reproduction).
 //
 // Expected timing (no nurse adjacency, so no acceleration):
-//   Lean  (interval=300): first egg at t=300, larva at t=1500, worker at t=3900
-//   Rich  (interval=150): first egg at t=150, larva at t=1350, worker at t=3750
+//   Lean  (interval=300): first egg at t=300, larva at t=1500, worker at t=3000
+//   Rich  (interval=150): first egg at t=150, larva at t=1350, worker at t=2850
 //   Delta: 150 ticks ≥ MIN_TICK_DELTA (120)
 // ---------------------------------------------------------------------------
 
