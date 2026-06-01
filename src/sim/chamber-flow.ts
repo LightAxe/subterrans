@@ -392,20 +392,21 @@ export function hasReachableNonFullNursery(
 
   // 4-cardinal step offsets are module-scope (FLOOD_NEIGHBOR_*) — see note there.
   // `visited` is the visited map (0 = unvisited, 1 = visited); `queue` holds
-  // queued tile indices in FIFO order. The carrier's start tile is marked
-  // visited but NOT tested for non-fullness — it is the full Nursery the
-  // deposit just failed in.
+  // tiles packed as (row << 16) | col so the BFS decodes coordinates with
+  // shifts/masks — no `/` operator (AGENTS.md determinism rule); each axis is
+  // far below 2^16. Flat indices into `visited`/`data` use row * width + col
+  // (multiplication is allowed in sim code). The carrier's start tile is marked
+  // visited but NOT tested for non-fullness — it is the full Nursery the deposit
+  // just failed in.
   visited.fill(0);
-  const start = carrierTileY * width + carrierTileX;
-  visited[start] = 1;
-  queue[0] = start;
+  visited[carrierTileY * width + carrierTileX] = 1;
+  queue[0] = (carrierTileY << 16) | carrierTileX;
   let head = 0;
   let tail = 1;
   while (head < tail) {
-    const idx = queue[head++]!;
-    // eslint-disable-next-line no-restricted-syntax -- integer division via `| 0`; BFS index→row conversion, not fixed-point math
-    const row = (idx / width) | 0;
-    const col = idx % width;
+    const packed = queue[head++]!;
+    const row = packed >> 16;
+    const col = packed & 0xffff;
     for (let d = 0; d < 4; d++) {
       const nRow = row + FLOOD_NEIGHBOR_DR[d]!;
       const nCol = col + FLOOD_NEIGHBOR_DC[d]!;
@@ -424,7 +425,7 @@ export function hasReachableNonFullNursery(
       if (tileInNonFullNursery(underground, chambers, ants, eggIds, larvaeIds, nCol, nRow)) {
         return true;
       }
-      queue[tail++] = nIdx;
+      queue[tail++] = (nRow << 16) | nCol;
     }
   }
   return false;
