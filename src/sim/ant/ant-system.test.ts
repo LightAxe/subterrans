@@ -46,6 +46,7 @@ import {
   SIM_VERSION_V17_COMBAT_AGGRO,
   SIM_VERSION_V22_DIFFICULTY,
   SIM_VERSION_V23_SPIDER_AGGRO,
+  SIM_VERSION_V24_NURSERY_CAPACITY,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt, createAntComponents, RECENT_TILES_LEN, isRecentTile } from './ant-store.js';
@@ -89,12 +90,13 @@ import {
   ensureChamberFlowFields,
   computeChamberFlowField,
   computeNursingPickupField,
+  computeNurseryDepositField,
   FOOD_CHAMBER_TYPES,
   NURSING_CHAMBER_TYPES,
   NURSERY_CHAMBER_TYPES,
 } from '../chamber-flow.js';
 import type { WorldState, SpiderState } from '../types.js';
-import type { ColonyRecord } from '../colony/colony-store.js';
+import type { ColonyRecord, ChamberRecord } from '../colony/colony-store.js';
 import type { FoodPile } from '../food.js';
 
 // ---------------------------------------------------------------------------
@@ -7828,5 +7830,193 @@ describe('pickInvaderUndergroundStep — wall-aware BFS invader step', () => {
     expect(x).toBe(2);
     expect(y).toBe(1);
     expect(steps).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #173 — capacity-aware Nursery brood deposit (V24), end-to-end through
+// the REAL movement + deposit pipeline (tickAntMovement routes carriers via the
+// nurseDeposit field; tickNurseActions deposits only on a field source tile).
+//
+// Pre-V24: nearest-seed routing + `broodId % openCount` deposit funneled every
+// carrier into the nearest Nursery (overflow) while others stayed empty. V24:
+// full Nurseries drop out of the preferred deposit field so carriers route to a
+// non-full Nursery; a carrier transiting a full Nursery does NOT deposit (it is
+// on a step tile, not a source); deposit places brood one-per-tile.
+// ---------------------------------------------------------------------------
+
+describe('Nursery brood deposit — capacity-aware spread, real pipeline (#173, V24)', () => {
+  const NB_GW = UNDERGROUND_GRID_WIDTH;
+  const NB_GH = UNDERGROUND_GRID_HEIGHT;
+  const PICKUP_X = 5;
+  const PICKUP_Y = 5;
+
+  function mkWorld(simVersion: number): {
+    world: WorldState; colony: ColonyRecord;
+    underground: ReturnType<typeof createUndergroundGrid>;
+    A: ChamberRecord; B: ChamberRecord;
+  } {
+    const world = createWorldState(42, 256);
+    world.simVersion = simVersion;
+    const underground = createUndergroundGrid(NB_GW, NB_GH);
+    world.undergroundGrids[COLONY_ID] = underground;
+    const queenId = allocateEntityId(world);
+    initAnt(world.ants, queenId, { colonyId: COLONY_ID, posX: 0, posY: 0, speed: 0 });
+    const colony = createColonyRecord(COLONY_ID, queenId);
+    world.colonies[COLONY_ID] = colony;
+    // Open band y[4..6], x[5..40]: pickup + both Nursery footprints + corridor.
+    for (let y = 4; y <= 6; y++) {
+      for (let x = 5; x <= 40; x++) ugSet(underground, x, y, UndergroundTileState.Open);
+    }
+    const A: ChamberRecord = {
+      chamberId: 10, chamberType: ChamberType.Nursery, foodStored: 0,
+      posX: 10 << FP_SHIFT, posY: 4 << FP_SHIFT, width: 4, height: 3,
+    };
+    const B: ChamberRecord = {
+      chamberId: 11, chamberType: ChamberType.Nursery, foodStored: 0,
+      posX: 30 << FP_SHIFT, posY: 4 << FP_SHIFT, width: 4, height: 3,
+    };
+    colony.chambers.push(A, B);
+    return { world, colony, underground, A, B };
+  }
+
+  // Count brood physically resident (deposited, uncarried) inside a footprint.
+  function broodCountIn(world: WorldState, colony: ColonyRecord, ch: ChamberRecord): number {
+    const bx = ch.posX >> FP_SHIFT;
+    const by = ch.posY >> FP_SHIFT;
+    let n = 0;
+    for (const bid of colony.eggs) {
+      if (world.ants.alive[bid] !== 1) continue;
+      if (world.ants.carriedBy[bid]! >= 0) continue;
+      const tx = world.ants.posX[bid]! >> FP_SHIFT;
+      const ty = world.ants.posY[bid]! >> FP_SHIFT;
+      if (tx >= bx && tx < bx + ch.width && ty >= by && ty < by + ch.height) n++;
+    }
+    return n;
+  }
+
+  // Place a resident (deposited, uncarried) brood at a tile.
+  function placeResident(world: WorldState, colony: ColonyRecord, tx: number, ty: number): void {
+    const id = allocateEntityId(world);
+    initAnt(world.ants, id, {
+      colonyId: COLONY_ID, posX: (tx << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (ty << FP_SHIFT) + (FP_ONE >> 1), task: AntTask.Idle, speed: 0, zone: Zone.Underground,
+    });
+    colony.eggs.push(id);
+  }
+
+  function fillNursery(world: WorldState, colony: ColonyRecord, ch: ChamberRecord): void {
+    const bx = ch.posX >> FP_SHIFT;
+    const by = ch.posY >> FP_SHIFT;
+    for (let ty = 0; ty < ch.height; ty++) {
+      for (let tx = 0; tx < ch.width; tx++) placeResident(world, colony, bx + tx, by + ty);
+    }
+  }
+
+  // Persistent real-pipeline driver: one step = recompute field, move ants,
+  // run nurse actions. Spawns carriers sequentially so arrival timing matches
+  // real play (a fresh carrier picks up only after the previous deposited).
+  function makeDriver(world: WorldState, colony: ColonyRecord, underground: ReturnType<typeof createUndergroundGrid>) {
+    const rng = new Rng(7);
+    const dig = createDigFlowFields();
+    const ent = createEntranceFlowFields();
+    const cff = createChamberFlowFields();
+    const gs = underground.width * underground.height;
+    function step(): void {
+      const bufs = ensureChamberFlowFields(cff, COLONY_ID, gs);
+      if (world.simVersion >= SIM_VERSION_V24_NURSERY_CAPACITY) {
+        computeNurseryDepositField(underground, colony.chambers, world.ants, colony.eggs, colony.larvae, bufs.nurseDeposit, bufs.queue);
+      } else {
+        computeChamberFlowField(underground, colony.chambers, NURSERY_CHAMBER_TYPES, bufs.nurseDeposit, bufs.queue);
+      }
+      tickAntMovement(world, rng, dig, ent, cff);
+      tickNurseActions(world, cff);
+    }
+    // Spawn a carrier (nurse in Feeding carrying a fresh egg) at the pickup tile
+    // and step until it deposits (its brood becomes uncarried) or the cap hits.
+    function carryOne(maxTicks: number): number {
+      const broodId = allocateEntityId(world);
+      initAnt(world.ants, broodId, {
+        colonyId: COLONY_ID, posX: (PICKUP_X << FP_SHIFT) + (FP_ONE >> 1),
+        posY: (PICKUP_Y << FP_SHIFT) + (FP_ONE >> 1), task: AntTask.Idle, speed: 0, zone: Zone.Underground,
+      });
+      colony.eggs.push(broodId);
+      const nurseId = allocateEntityId(world);
+      initAnt(world.ants, nurseId, {
+        colonyId: COLONY_ID, posX: (PICKUP_X << FP_SHIFT) + (FP_ONE >> 1),
+        posY: (PICKUP_Y << FP_SHIFT) + (FP_ONE >> 1),
+        task: AntTask.Nursing, subTask: NursingSubState.Feeding, zone: Zone.Underground,
+      });
+      world.ants.carryingBroodId[nurseId] = broodId;
+      world.ants.carriedBy[broodId] = nurseId;
+      for (let t = 0; t < maxTicks; t++) {
+        step();
+        if (world.ants.carriedBy[broodId]! < 0) return broodId; // deposited
+      }
+      return broodId;
+    }
+    return { carryOne };
+  }
+
+  it('V24 transit: a carrier routed past a FULL Nursery does not deposit there — it continues to the empty one (no overflow)', () => {
+    const { world, colony, underground, A, B } = mkWorld(SIM_VERSION_V24_NURSERY_CAPACITY);
+    fillNursery(world, colony, A); // A at capacity (12); the carrier must pass it to reach B
+    expect(broodCountIn(world, colony, A)).toBe(12);
+
+    const driver = makeDriver(world, colony, underground);
+    const broodId = driver.carryOne(400);
+
+    // The brood deposited in the far EMPTY Nursery B, not the full A it transited.
+    expect(world.ants.carriedBy[broodId]).toBe(-1); // deposited (not stranded)
+    const tx = world.ants.posX[broodId]! >> FP_SHIFT;
+    expect(tx).toBeGreaterThanOrEqual(30); // inside B (x[30..33]), not A (x[10..13])
+    expect(broodCountIn(world, colony, A)).toBe(12); // A NOT overflowed by the transit
+    expect(broodCountIn(world, colony, B)).toBe(1);
+  });
+
+  it('V24 end-to-end: 13 carriers (capacity 12 each) spread into BOTH Nurseries; neither over capacity while another sits empty', () => {
+    const { world, colony, underground, A, B } = mkWorld(SIM_VERSION_V24_NURSERY_CAPACITY);
+    const driver = makeDriver(world, colony, underground);
+    for (let n = 0; n < 13; n++) {
+      const broodId = driver.carryOne(400);
+      expect(world.ants.carriedBy[broodId]).toBe(-1); // every carrier deposits
+    }
+    const inA = broodCountIn(world, colony, A);
+    const inB = broodCountIn(world, colony, B);
+    expect(inA + inB).toBe(13);
+    expect(inA).toBeGreaterThan(0);
+    expect(inB).toBeGreaterThan(0);      // far Nursery is no longer dead space — bug fixed
+    expect(inA).toBeLessThanOrEqual(12); // never stacked past capacity
+    expect(inB).toBeLessThanOrEqual(12);
+  });
+
+  it('V23 control: the same 13 carriers funnel into the nearest Nursery A; B stays empty (old behavior preserved)', () => {
+    const { world, colony, underground, A, B } = mkWorld(SIM_VERSION_V23_SPIDER_AGGRO);
+    const driver = makeDriver(world, colony, underground);
+    for (let n = 0; n < 13; n++) driver.carryOne(400);
+    expect(broodCountIn(world, colony, A)).toBe(13); // all funneled to nearest (stacked)
+    expect(broodCountIn(world, colony, B)).toBe(0);  // far Nursery never used
+  });
+
+  it('V24 saturation: when EVERY Nursery is full, a carrier overflow-deposits (stacks) rather than piling up forever', () => {
+    // When no Nursery has free capacity anywhere, deferring forever would pile up
+    // carriers holding brood and starve transport (and time out long-running
+    // sims). So the carrier overflow-deposits as a last resort — colony keeps
+    // functioning. (The defer-and-reroute path, exercised when ANOTHER Nursery
+    // still has room, is covered by the spread test above; see Codex #183.)
+    const { world, colony, underground, A, B } = mkWorld(SIM_VERSION_V24_NURSERY_CAPACITY);
+    fillNursery(world, colony, A); // 12 (capacity)
+    fillNursery(world, colony, B); // 12 (capacity)
+    const driver = makeDriver(world, colony, underground);
+    const broodId = driver.carryOne(400);
+
+    // Deposited (not held indefinitely), landing inside one of the full Nurseries.
+    expect(world.ants.carriedBy[broodId]).toBe(-1);
+    expect(world.ants.alive[broodId]).toBe(1);
+    const tx = world.ants.posX[broodId]! >> FP_SHIFT;
+    const ty = world.ants.posY[broodId]! >> FP_SHIFT;
+    const inA = tx >= 10 && tx < 14 && ty >= 4 && ty < 7;
+    const inB = tx >= 30 && tx < 34 && ty >= 4 && ty < 7;
+    expect(inA || inB).toBe(true);
   });
 });

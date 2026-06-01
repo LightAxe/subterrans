@@ -35,6 +35,7 @@
 import {
   type WorldState,
   SIM_VERSION_V23_SPIDER_AGGRO,
+  SIM_VERSION_V24_NURSERY_CAPACITY,
 } from '../types.js';
 import {
   SurfaceMovementEffect,
@@ -84,6 +85,7 @@ import { pheromoneGridKey, phGet, type PheromoneGrid } from '../pheromone/pherom
 import type { DigFlowFields } from '../dig-system.js';
 import type { EntranceFlowFields } from '../entrance-flow.js';
 import type { ChamberFlowFields } from '../chamber-flow.js';
+import { hasReachableNonFullNursery } from '../chamber-flow.js';
 import { Zone, UndergroundTileState, ugGet, ugSet, type UndergroundGrid } from '../terrain.js';
 
 // ---------------------------------------------------------------------------
@@ -852,7 +854,7 @@ export function tickForagerActions(world: WorldState): void {
  *
  * @param world  WorldState (reads ants, colonies; writes ants.task, ants.subTask).
  */
-export function tickNurseActions(world: WorldState): void {
+export function tickNurseActions(world: WorldState, chamberFlowFields?: ChamberFlowFields): void {
   const ants = world.ants;
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1) continue;
@@ -911,8 +913,27 @@ export function tickNurseActions(world: WorldState): void {
       if (!colony) continue;
       const tileX = ants.posX[id]! >> FP_SHIFT;
       const tileY = ants.posY[id]! >> FP_SHIFT;
-      if (isInsideNursery(colony, tileX, tileY)) {
-        depositCarriedBrood(world, colony, id, broodId);
+      // Issue #173 (V24+): deposit only when the carrier is AT REST on a
+      // deposit-field source tile (-1) — its routed Nursery target. The
+      // capacity-aware nurseDeposit field marks a Nursery's tiles as a source
+      // only when that Nursery is the carrier's actual destination (a reachable
+      // non-full Nursery, or — when none is reachable — the fallback Nursery).
+      // A carrier merely TRANSITING a full Nursery toward a non-full one sits on
+      // a step tile (0..3), so it keeps moving instead of overflowing the full
+      // Nursery. Pre-V24 — or when no field is supplied (unit tests that drive
+      // tickNurseActions directly) — keeps the original isInsideNursery deposit.
+      let shouldDeposit: boolean;
+      if (world.simVersion >= SIM_VERSION_V24_NURSERY_CAPACITY && chamberFlowFields !== undefined) {
+        const field = chamberFlowFields.nurseDeposit[colonyId];
+        const underground = world.undergroundGrids[colonyId];
+        shouldDeposit =
+          field !== undefined && underground !== undefined &&
+          field[tileY * underground.width + tileX] === -1;
+      } else {
+        shouldDeposit = isInsideNursery(colony, tileX, tileY);
+      }
+      if (shouldDeposit) {
+        depositCarriedBrood(world, colony, id, broodId, colonyId, chamberFlowFields);
       }
       continue;
     }
@@ -1145,6 +1166,31 @@ function computeDepositPositionInChamber(
     }
   }
   if (openCount === 0) return null;
+
+  // Issue #173 (V24+): place the brood on the first UNOCCUPIED Open tile
+  // (row-major) so brood spreads one-per-tile instead of stacking wherever
+  // `broodId % openCount` happens to collide. If every Open tile is already
+  // occupied — capacity overshoot from >k carriers arriving at a Nursery with k
+  // free tiles in a single tickNurseActions pass, since the deposit field is
+  // computed once at tick start and never recomputed mid-tick — return null
+  // rather than fall through to the legacy modulo slot, which performs no
+  // occupancy check and would stack a second brood on an occupied tile. The
+  // caller keeps the brood at the carrier's current tile, preserving the
+  // one-per-tile invariant (the brood is re-deposited on a later tick once a
+  // tile frees up).
+  if (world.simVersion >= SIM_VERSION_V24_NURSERY_CAPACITY) {
+    for (let ty = 0; ty < chamber.height; ty++) {
+      for (let tx = 0; tx < chamber.width; tx++) {
+        const cx = bx + tx;
+        const cy = by + ty;
+        if (ugGet(underground, cx, cy) !== UndergroundTileState.Open) continue;
+        if (tileHasResidentBrood(world, colony, broodId, cx, cy)) continue;
+        return { x: (cx << FP_SHIFT) + (FP_ONE >> 1), y: (cy << FP_SHIFT) + (FP_ONE >> 1) };
+      }
+    }
+    return null;
+  }
+
   const targetIndex = broodId % openCount;
   let cursor = 0;
   for (let ty = 0; ty < chamber.height; ty++) {
@@ -1159,6 +1205,38 @@ function computeDepositPositionInChamber(
     }
   }
   return null;
+}
+
+/**
+ * Issue #173 (V24+) — does any OTHER brood physically occupy tile (tileX,tileY)?
+ * Uses {@link isBroodReclaimable} (alive AND uncarried-or-orphaned) so deposited
+ * brood and orphans frozen at a dead carrier's tile both count, but brood in
+ * active transit (carried by a living nurse) does not. Excludes `excludeBroodId`
+ * (the brood being placed). Matches the occupancy definition used by the
+ * capacity-aware deposit field so seed exclusion and one-per-tile placement
+ * agree.
+ */
+function tileHasResidentBrood(
+  world: WorldState,
+  colony: ColonyRecord,
+  excludeBroodId: number,
+  tileX: number,
+  tileY: number,
+): boolean {
+  const ants = world.ants;
+  for (let pass = 0; pass < 2; pass++) {
+    const broodIds = pass === 0 ? colony.eggs : colony.larvae;
+    for (let i = 0; i < broodIds.length; i++) {
+      const bid = broodIds[i]!;
+      if (bid === excludeBroodId) continue;
+      if (!isBroodReclaimable(ants, bid)) continue;
+      if (
+        (ants.posX[bid]! >> FP_SHIFT) === tileX &&
+        (ants.posY[bid]! >> FP_SHIFT) === tileY
+      ) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -1236,6 +1314,8 @@ function depositCarriedBrood(
   colony: ColonyRecord,
   nurseId: number,
   broodId: number,
+  colonyId?: number,
+  chamberFlowFields?: ChamberFlowFields,
 ): void {
   const ants = world.ants;
   // S4 V21+: restrict deposit to the nurse's current Nursery chamber so brood
@@ -1260,6 +1340,55 @@ function depositCarriedBrood(
   pos = nurseChamber !== null
     ? computeDepositPositionInChamber(world, colony, broodId, nurseChamber)
     : computeNurseryDepositPosition(world, colony, broodId); // fallback (pathological)
+  // Issue #173 (V24+): computeDepositPositionInChamber returns null when the
+  // carrier's target Nursery has no unoccupied Open tile — e.g. several carriers
+  // reach the same Nursery in one tick and an earlier one consumed the last free
+  // tile (the deposit field is computed once at tick start, not mid-tick), or
+  // every Nursery is full. Decide between deferring and overflowing:
+  //   - If ANOTHER Nursery still has capacity, DEFER (Codex #183): keep carrying
+  //     (leave carryingBroodId/carriedBy and the brood's position untouched);
+  //     next tick the rebuilt field excludes this now-full Nursery and reroutes
+  //     the carrier to one with room, preserving one-brood-per-tile.
+  //   - If EVERY Nursery is full, overflow-deposit (stack) as a last resort
+  //     rather than leave the carrier holding the brood indefinitely. Under
+  //     sustained saturation (e.g. a colony with a single Nursery and continuous
+  //     egg-laying) deferring forever would pile up carriers and starve brood
+  //     transport. Falls through to the carrier-tile drop below.
+  if (pos === null && world.simVersion >= SIM_VERSION_V24_NURSERY_CAPACITY) {
+    const underground = world.undergroundGrids[colony.colonyId];
+    // Issue #173 (V24+): only DEFER if a non-full Nursery is reachable from the
+    // carrier's CURRENT tile over the walkable graph. A non-full Nursery that
+    // exists globally but sits in a disconnected pocket (e.g. after a cave-in
+    // severs a tunnel) must NOT count — a global capacity check there would
+    // defer forever, because the rebuilt deposit field is identical every tick
+    // and cannot route the carrier across the severed tunnel. The carrier-local
+    // flood lets the disconnected case fall through to overflow like the
+    // all-full case, while still deferring in the legitimate mid-tick race
+    // (a reachable non-full Nursery was filled by an earlier carrier this tick).
+    const visited = chamberFlowFields !== undefined && colonyId !== undefined
+      ? chamberFlowFields.depositReachVisited[colonyId]
+      : undefined;
+    const floodQueue = chamberFlowFields !== undefined && colonyId !== undefined
+      ? chamberFlowFields.queues[colonyId]
+      : undefined;
+    const canRerouteElsewhere =
+      underground !== undefined &&
+      visited !== undefined &&
+      floodQueue !== undefined &&
+      hasReachableNonFullNursery(
+        underground,
+        colony.chambers,
+        ants,
+        colony.eggs,
+        colony.larvae,
+        nurseTileX,
+        nurseTileY,
+        visited,
+        floodQueue,
+      );
+    if (canRerouteElsewhere) return; // defer — reroute next tick
+    // else: no reachable non-full Nursery → fall through to overflow-deposit.
+  }
   // Fallback: if the helper returns null (no grid, no Open Nursery tile —
   // test-harness or pathological state), keep the brood at the carrier's
   // current tile. Never reachable in production because the v10 path only

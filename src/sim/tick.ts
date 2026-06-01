@@ -1,6 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, INVALID_ENTITY_ID } from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V24_NURSERY_CAPACITY } from './types.js';
 import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
@@ -79,6 +79,7 @@ import type { EntranceFlowFields } from './entrance-flow.js';
 import {
   computeChamberFlowField,
   computeNursingPickupField,
+  computeNurseryDepositField,
   ensureChamberFlowFields,
   createChamberFlowFields,
   FOOD_CHAMBER_TYPES,
@@ -876,13 +877,18 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // Issue #17 Phase 1 — Nursery-only deposit field for v10+ carrying nurses.
     // Pre-v10 the field is allocated but unread; computed alongside the other
     // chamber fields for code symmetry — no measurable cost.
-    computeChamberFlowField(
-      underground,
-      colony.chambers,
-      NURSERY_CHAMBER_TYPES,
-      chamberBufs.nurseDeposit,
-      chamberBufs.queue,
-    );
+    // Issue #173 (V24+): the capacity-aware deposit field is rebuilt every tick
+    // in the loop below; here we compute only the legacy nearest-seed field for
+    // pre-V24 byte-identical replay.
+    if (world.simVersion < SIM_VERSION_V24_NURSERY_CAPACITY) {
+      computeChamberFlowField(
+        underground,
+        colony.chambers,
+        NURSERY_CHAMBER_TYPES,
+        chamberBufs.nurseDeposit,
+        chamberBufs.queue,
+      );
+    }
 
     colony.digFlowFieldDirty = false;
     colony.foodFlowFieldDirty = false;
@@ -911,6 +917,23 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       chamberBufs.nursing,
       chamberBufs.queue,
     );
+    // Issue #173 (V24+) — capacity-aware Nursery deposit field. Recomputed every
+    // tick like the pickup field above (a Nursery's fill level changes as
+    // carriers deposit). A full Nursery drops out of the preferred seed set so
+    // carriers route to a non-full one; the two-pass fallback keeps every
+    // reachable carrier routed to SOME Nursery. Pre-V24 uses the dirty-gated
+    // nearest-seed field above.
+    if (world.simVersion >= SIM_VERSION_V24_NURSERY_CAPACITY) {
+      computeNurseryDepositField(
+        underground,
+        colony.chambers,
+        world.ants,
+        colony.eggs,
+        colony.larvae,
+        chamberBufs.nurseDeposit,
+        chamberBufs.queue,
+      );
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1267,7 +1290,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   //           reassigns Idle ants), which produced the 09 reproduction-gate
   //           memo's "3 nurses / 0 foragers" lock.
   // ---------------------------------------------------------------------------
-  tickNurseActions(world);
+  tickNurseActions(world, chamberFlowFields);
 
   // ---------------------------------------------------------------------------
   // Step 16d: Food-pile respawn (issue #112) — time-gated runtime spawner.
