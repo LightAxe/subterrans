@@ -10,14 +10,19 @@ import { describe, it, expect } from 'vitest';
 import {
   buildDebugSnapshot,
   buildAntTrace,
+  buildDebugGuide,
   defaultDebugSnapshotFilename,
   DEBUG_SNAPSHOT_VERSION,
   DEBUG_TRACE_PHEROMONE_RADIUS,
+  MOVEMENT_SOURCES,
 } from './debug-snapshot.js';
 import { createWorldState, allocateEntityId } from '../sim/types.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import { initAnt } from '../sim/ant/ant-store.js';
-import { AntTask, ForagingSubState, PheromoneType } from '../sim/enums.js';
+import {
+  AntTask, ChamberType, DiggingSubState, FightingSubState,
+  ForagingSubState, NursingSubState, PheromoneType,
+} from '../sim/enums.js';
 import { Zone } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import {
@@ -364,15 +369,20 @@ describe('buildAntTrace — movement source inference', () => {
 });
 
 describe('buildDebugSnapshot — envelope + filtering', () => {
-  it('emits the stable envelope shape { version, seed, tick, inputLog, snapshot, antTrace }', () => {
+  it('emits the stable envelope shape { version, guide, seed, tick, inputLog, snapshot, antTrace }', () => {
     const { world } = setupWorldWithColony(COLONY_ID);
     const snap = buildDebugSnapshot(world, 1234, []);
     expect(snap.version).toBe(DEBUG_SNAPSHOT_VERSION);
+    expect(snap.guide).toBeDefined();
     expect(snap.seed).toBe(1234);
     expect(snap.tick).toBe(world.tick);
     expect(Array.isArray(snap.inputLog)).toBe(true);
     expect(snap.snapshot).toBeDefined();
     expect(Array.isArray(snap.antTrace)).toBe(true);
+  });
+
+  it('DEBUG_SNAPSHOT_VERSION is bumped to 2 for the self-describing guide', () => {
+    expect(DEBUG_SNAPSHOT_VERSION).toBe(2);
   });
 
   it('skips dead ants in the trace', () => {
@@ -522,5 +532,91 @@ describe('buildDebugSnapshot — BuildDebugSnapshotOptions (issue #122)', () => 
     const world = makeWorldWithAnts();
     const snap = buildDebugSnapshot(world, 1, [], { colonyFilter: [OTHER_COLONY_ID] });
     expect(snap.antTrace).toEqual([]);
+  });
+});
+
+describe('buildDebugGuide — self-describing legend (issue #179)', () => {
+  const guide = buildDebugGuide();
+
+  /** Independent inversion of an object-const enum, mirroring the production
+   *  derivation, so assertions check the guide against the LIVE enum rather
+   *  than a hand-written table that could silently drift. */
+  function invert(e: Record<string, number>): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [name, value] of Object.entries(e)) out[String(value)] = name;
+    return out;
+  }
+
+  // Each guide.enums key paired with the enum it must legend. Driven off the
+  // real enum objects so adding a member to any of them is automatically
+  // covered by the assertions below.
+  const ENUM_LEGEND_CASES: ReadonlyArray<readonly [string, Record<string, number>]> = [
+    ['task', AntTask],
+    ['subTask if task=Foraging', ForagingSubState],
+    ['subTask if task=Nursing', NursingSubState],
+    ['subTask if task=Digging', DiggingSubState],
+    ['subTask if task=Fighting', FightingSubState],
+    ['zone', Zone],
+    ['chamberType', ChamberType],
+    ['pheromoneType', PheromoneType],
+  ];
+
+  it.each(ENUM_LEGEND_CASES)(
+    'guide.enums["%s"] contains exactly the live enum members (fails if any is missing, extra, or mislabeled)',
+    (key, enumObj) => {
+      // toEqual against an inversion of the LIVE enum: if buildDebugGuide ever
+      // regressed to a hand-written / stale / wrong-enum table, or omitted a
+      // newly added member, this assertion fails.
+      expect(guide.enums[key]).toEqual(invert(enumObj));
+    },
+  );
+
+  it('guide.enums uses concrete, correct mappings (hand-written oracle — non-tautological)', () => {
+    // Values pinned by hand so the check does not merely re-derive what the
+    // production helper derives: this catches a wrong-enum or dropped-member
+    // regression independent of enumLegend's own iteration. Also pins the
+    // task-specific subTask split (a Nursing subTask=1 is Feeding, NOT the
+    // ForagingSubState CarryingFood).
+    expect(guide.enums['task']).toMatchObject({ '0': 'Idle', '1': 'Foraging', '4': 'Nursing' });
+    expect(guide.enums['subTask if task=Foraging']).toMatchObject({ '1': 'CarryingFood' });
+    expect(guide.enums['subTask if task=Nursing']).toMatchObject({ '1': 'Feeding', '2': 'Attending' });
+    expect(guide.enums['subTask if task=Digging']).toMatchObject({ '1': 'Excavating' });
+    expect(guide.enums['zone']).toMatchObject({ '0': 'Surface', '1': 'Underground' });
+    expect(guide.enums['chamberType']).toMatchObject({ '2': 'FoodStorage' });
+    expect(guide.enums['pheromoneType']).toMatchObject({ '1': 'DangerTrail' });
+  });
+
+  it('explains every movementSource value, from a single source of truth (no hand-maintained duplicate)', () => {
+    // MovementSource is `keyof typeof MOVEMENT_SOURCES` and inferMovementSource
+    // is typed to return MovementSource, so the compiler already forbids
+    // returning a value absent from MOVEMENT_SOURCES. This confirms the guide
+    // re-exports that same map and that every entry is a non-empty explanation.
+    expect(Object.keys(guide.movementSource).sort()).toEqual(Object.keys(MOVEMENT_SOURCES).sort());
+    for (const [src, text] of Object.entries(guide.movementSource)) {
+      expect(typeof text, `${src} explanation type`).toBe('string');
+      expect(text.length, `${src} explanation non-empty`).toBeGreaterThan(0);
+    }
+  });
+
+  it('documents fixed-point decoding, the -1 sentinels, and the pheromone-diamond layout', () => {
+    expect(guide.fixedPoint).toContain('FP_ONE=256');
+    expect(guide.fixedPoint).toContain('>> 8');
+    // The three -1 sentinels carry different meanings per field — all present.
+    expect(guide.sentinels['nearestEntranceDist']).toBeDefined();
+    expect(guide.sentinels['targetPosX / targetPosY']).toBeDefined();
+    expect(guide.sentinels['searchPrevTileX / searchPrevTileY']).toBeDefined();
+    // Diamond prose names the row-major index formula and the LIVE radius.
+    const side = 2 * DEBUG_TRACE_PHEROMONE_RADIUS + 1;
+    expect(guide.nearbyPheromone).toContain(`(dy+r)*${side}`);
+    expect(guide.nearbyPheromone).toContain(`r=nearbyPheromoneRadius=${DEBUG_TRACE_PHEROMONE_RADIUS}`);
+  });
+
+  it('is embedded in the full snapshot payload and survives JSON round-trip', () => {
+    const { world } = setupWorldWithColony(COLONY_ID);
+    const snap = buildDebugSnapshot(world, 7, []);
+    expect(snap.guide).toEqual(guide);
+    const roundTrip = JSON.parse(JSON.stringify(snap));
+    expect(roundTrip.guide.enums.task[String(AntTask.Foraging)]).toBe('Foraging');
+    expect(roundTrip.guide.movementSource.wander.length).toBeGreaterThan(0);
   });
 });
