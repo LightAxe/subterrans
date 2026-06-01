@@ -7998,14 +7998,21 @@ describe('Nursery brood deposit — capacity-aware spread, real pipeline (#173, 
     expect(broodCountIn(world, colony, B)).toBe(0);  // far Nursery never used
   });
 
-  it('V24 no-stranding: a carrier still deposits when ALL Nurseries are full (fallback)', () => {
+  it('V24 saturation: when EVERY Nursery is full, a carrier overflow-deposits (stacks) rather than piling up forever', () => {
+    // When no Nursery has free capacity anywhere, deferring forever would pile up
+    // carriers holding brood and starve transport (and time out long-running
+    // sims). So the carrier overflow-deposits as a last resort — colony keeps
+    // functioning. (The defer-and-reroute path, exercised when ANOTHER Nursery
+    // still has room, is covered by the spread test above; see Codex #183.)
     const { world, colony, underground, A, B } = mkWorld(SIM_VERSION_V24_NURSERY_CAPACITY);
-    fillNursery(world, colony, A);
-    fillNursery(world, colony, B);
+    fillNursery(world, colony, A); // 12 (capacity)
+    fillNursery(world, colony, B); // 12 (capacity)
     const driver = makeDriver(world, colony, underground);
     const broodId = driver.carryOne(400);
-    // Deposited into some Nursery despite all being at capacity — not stranded.
+
+    // Deposited (not held indefinitely), landing inside one of the full Nurseries.
     expect(world.ants.carriedBy[broodId]).toBe(-1);
+    expect(world.ants.alive[broodId]).toBe(1);
     const tx = world.ants.posX[broodId]! >> FP_SHIFT;
     const ty = world.ants.posY[broodId]! >> FP_SHIFT;
     const inA = tx >= 10 && tx < 14 && ty >= 4 && ty < 7;

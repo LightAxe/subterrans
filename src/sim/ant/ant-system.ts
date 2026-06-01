@@ -85,6 +85,7 @@ import { pheromoneGridKey, phGet, type PheromoneGrid } from '../pheromone/pherom
 import type { DigFlowFields } from '../dig-system.js';
 import type { EntranceFlowFields } from '../entrance-flow.js';
 import type { ChamberFlowFields } from '../chamber-flow.js';
+import { hasReachableNonFullNursery } from '../chamber-flow.js';
 import { Zone, UndergroundTileState, ugGet, ugSet, type UndergroundGrid } from '../terrain.js';
 
 // ---------------------------------------------------------------------------
@@ -932,7 +933,7 @@ export function tickNurseActions(world: WorldState, chamberFlowFields?: ChamberF
         shouldDeposit = isInsideNursery(colony, tileX, tileY);
       }
       if (shouldDeposit) {
-        depositCarriedBrood(world, colony, id, broodId);
+        depositCarriedBrood(world, colony, id, broodId, colonyId, chamberFlowFields);
       }
       continue;
     }
@@ -1313,6 +1314,8 @@ function depositCarriedBrood(
   colony: ColonyRecord,
   nurseId: number,
   broodId: number,
+  colonyId?: number,
+  chamberFlowFields?: ChamberFlowFields,
 ): void {
   const ants = world.ants;
   // S4 V21+: restrict deposit to the nurse's current Nursery chamber so brood
@@ -1337,6 +1340,55 @@ function depositCarriedBrood(
   pos = nurseChamber !== null
     ? computeDepositPositionInChamber(world, colony, broodId, nurseChamber)
     : computeNurseryDepositPosition(world, colony, broodId); // fallback (pathological)
+  // Issue #173 (V24+): computeDepositPositionInChamber returns null when the
+  // carrier's target Nursery has no unoccupied Open tile — e.g. several carriers
+  // reach the same Nursery in one tick and an earlier one consumed the last free
+  // tile (the deposit field is computed once at tick start, not mid-tick), or
+  // every Nursery is full. Decide between deferring and overflowing:
+  //   - If ANOTHER Nursery still has capacity, DEFER (Codex #183): keep carrying
+  //     (leave carryingBroodId/carriedBy and the brood's position untouched);
+  //     next tick the rebuilt field excludes this now-full Nursery and reroutes
+  //     the carrier to one with room, preserving one-brood-per-tile.
+  //   - If EVERY Nursery is full, overflow-deposit (stack) as a last resort
+  //     rather than leave the carrier holding the brood indefinitely. Under
+  //     sustained saturation (e.g. a colony with a single Nursery and continuous
+  //     egg-laying) deferring forever would pile up carriers and starve brood
+  //     transport. Falls through to the carrier-tile drop below.
+  if (pos === null && world.simVersion >= SIM_VERSION_V24_NURSERY_CAPACITY) {
+    const underground = world.undergroundGrids[colony.colonyId];
+    // Issue #173 (V24+): only DEFER if a non-full Nursery is reachable from the
+    // carrier's CURRENT tile over the walkable graph. A non-full Nursery that
+    // exists globally but sits in a disconnected pocket (e.g. after a cave-in
+    // severs a tunnel) must NOT count — a global capacity check there would
+    // defer forever, because the rebuilt deposit field is identical every tick
+    // and cannot route the carrier across the severed tunnel. The carrier-local
+    // flood lets the disconnected case fall through to overflow like the
+    // all-full case, while still deferring in the legitimate mid-tick race
+    // (a reachable non-full Nursery was filled by an earlier carrier this tick).
+    const visited = chamberFlowFields !== undefined && colonyId !== undefined
+      ? chamberFlowFields.depositReachVisited[colonyId]
+      : undefined;
+    const floodQueue = chamberFlowFields !== undefined && colonyId !== undefined
+      ? chamberFlowFields.queues[colonyId]
+      : undefined;
+    const canRerouteElsewhere =
+      underground !== undefined &&
+      visited !== undefined &&
+      floodQueue !== undefined &&
+      hasReachableNonFullNursery(
+        underground,
+        colony.chambers,
+        ants,
+        colony.eggs,
+        colony.larvae,
+        nurseTileX,
+        nurseTileY,
+        visited,
+        floodQueue,
+      );
+    if (canRerouteElsewhere) return; // defer — reroute next tick
+    // else: no reachable non-full Nursery → fall through to overflow-deposit.
+  }
   // Fallback: if the helper returns null (no grid, no Open Nursery tile —
   // test-harness or pathological state), keep the brood at the carrier's
   // current tile. Never reachable in production because the v10 path only

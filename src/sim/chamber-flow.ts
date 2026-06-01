@@ -60,10 +60,18 @@ export interface ChamberFlowFields {
   /** Issue #17 Phase 1 — Nursery-only deposit field for v10 carrying nurses. */
   nurseDeposit: Record<ColonyId, Int32Array>;
   queues: Record<ColonyId, Int32Array>;
+  /**
+   * Issue #173 (V24+) — visited map reused by {@link hasReachableNonFullNursery}'s
+   * carrier-local flood, kept separate from `queues` (which the flood reuses as
+   * its FIFO queue) so the two never collide. Lazily allocated like the other
+   * buffers (once per colony, never per tick — the flood only runs on the rare
+   * null-deposit path).
+   */
+  depositReachVisited: Record<ColonyId, Int32Array>;
 }
 
 export function createChamberFlowFields(): ChamberFlowFields {
-  return { food: {}, nursing: {}, queen: {}, nurseDeposit: {}, queues: {} };
+  return { food: {}, nursing: {}, queen: {}, nurseDeposit: {}, queues: {}, depositReachVisited: {} };
 }
 
 /**
@@ -77,18 +85,20 @@ export function ensureChamberFlowFields(
   cache: ChamberFlowFields,
   colonyId: ColonyId,
   gridSize: number,
-): { food: Int32Array; nursing: Int32Array; queen: Int32Array; nurseDeposit: Int32Array; queue: Int32Array } {
+): { food: Int32Array; nursing: Int32Array; queen: Int32Array; nurseDeposit: Int32Array; queue: Int32Array; depositReachVisited: Int32Array } {
   if (!(colonyId in cache.food))         cache.food[colonyId]         = new Int32Array(gridSize);
   if (!(colonyId in cache.nursing))      cache.nursing[colonyId]      = new Int32Array(gridSize);
   if (!(colonyId in cache.queen))        cache.queen[colonyId]        = new Int32Array(gridSize);
   if (!(colonyId in cache.nurseDeposit)) cache.nurseDeposit[colonyId] = new Int32Array(gridSize);
   if (!(colonyId in cache.queues))       cache.queues[colonyId]       = new Int32Array(gridSize);
+  if (!(colonyId in cache.depositReachVisited)) cache.depositReachVisited[colonyId] = new Int32Array(gridSize);
   return {
-    food:         cache.food[colonyId]!,
-    nursing:      cache.nursing[colonyId]!,
-    queen:        cache.queen[colonyId]!,
-    nurseDeposit: cache.nurseDeposit[colonyId]!,
-    queue:        cache.queues[colonyId]!,
+    food:                cache.food[colonyId]!,
+    nursing:             cache.nursing[colonyId]!,
+    queen:               cache.queen[colonyId]!,
+    nurseDeposit:        cache.nurseDeposit[colonyId]!,
+    queue:               cache.queues[colonyId]!,
+    depositReachVisited: cache.depositReachVisited[colonyId]!,
   };
 }
 
@@ -319,6 +329,123 @@ export function computeNurseryDepositField(
     tail = seedChamberOpenTiles(underground, chamber, out, queue, tail);
   }
   bfsExpandSeededField(out, queue, tail, data, width, height);
+}
+
+/**
+ * Issue #173 (V24+) — is a non-full Nursery reachable from the carrier's CURRENT
+ * tile over the walkable tunnel graph? Used by the deposit path to decide, when
+ * the carrier's reached (full) Nursery yields no free tile, whether to DEFER
+ * (another non-full Nursery is reachable from here → reroute next tick) or
+ * OVERFLOW (no non-full Nursery is reachable → stack as a last resort so the
+ * carrier never strands).
+ *
+ * Why reachability must be carrier-LOCAL, not a global capacity scan: in a
+ * partitioned colony (e.g. a cave-in severs a tunnel) a non-full Nursery can
+ * sit in a pocket the carrier cannot reach while the only Nursery reachable
+ * from the carrier is full. computeNurseryDepositField's Pass 2 still seeds
+ * that full Nursery's Open tiles as -1 sources for the carrier's pocket, so the
+ * carrier stands on a -1 tile, triggers a deposit attempt, and gets null. A
+ * global "does any Nursery have room?" check would see the unreachable non-full
+ * Nursery and DEFER — forever, because the rebuilt field is identical every
+ * tick and cannot route the carrier across the severed tunnel. Scoping the
+ * "can I reroute?" question to the carrier's own connected component lets the
+ * disconnected case fall through to overflow like the all-full case, while
+ * still deferring in the legitimate mid-tick race (an earlier carrier filled a
+ * reachable non-full Nursery this tick — that Nursery is in the carrier's
+ * component, so the flood still finds another non-full target if one remains).
+ *
+ * Implementation: a BFS flood from the carrier's tile over Open/BeingDug tiles
+ * (the same traversal predicate as {@link bfsExpandSeededField}), returning true
+ * as soon as it enters the footprint of a non-full Nursery. `visited` and
+ * `queue` are pre-allocated W*H Int32Arrays (the deposit-reach scratch and the
+ * shared BFS queue, both free at deposit time); `visited` is filled with 0 on
+ * entry (O(W*H), only on the rare null-deposit path). The carrier's start tile
+ * is excluded from the Nursery test on purpose — it sits inside the FULL
+ * Nursery it just failed to deposit into. Deterministic: N/E/S/W expansion,
+ * row-major chamber/footprint iteration. Shares the same occupancy predicate
+ * (nurseryIsFull) as computeNurseryDepositField so deposit and routing agree.
+ */
+export function hasReachableNonFullNursery(
+  underground: UndergroundGrid,
+  chambers: ReadonlyArray<ChamberRecord>,
+  ants: AntComponents,
+  eggIds: ReadonlyArray<number>,
+  larvaeIds: ReadonlyArray<number>,
+  carrierTileX: number,
+  carrierTileY: number,
+  visited: Int32Array,
+  queue: Int32Array,
+): boolean {
+  const { data, width, height } = underground;
+  if (
+    carrierTileX < 0 || carrierTileX >= width ||
+    carrierTileY < 0 || carrierTileY >= height
+  ) {
+    return false;
+  }
+
+  // 4-cardinal step, same N/E/S/W order as bfsExpandSeededField.
+  const NEIGHBOR_DR = [-1, 0, 1, 0] as const;
+  const NEIGHBOR_DC = [0, 1, 0, -1] as const;
+
+  // `visited` is the visited map (0 = unvisited, 1 = visited); `queue` holds
+  // queued tile indices in FIFO order. The carrier's start tile is marked
+  // visited but NOT tested for non-fullness — it is the full Nursery the
+  // deposit just failed in.
+  visited.fill(0);
+  const start = carrierTileY * width + carrierTileX;
+  visited[start] = 1;
+  queue[0] = start;
+  let head = 0;
+  let tail = 1;
+  while (head < tail) {
+    const idx = queue[head++]!;
+    // eslint-disable-next-line no-restricted-syntax -- integer division via `| 0`; BFS index→row conversion, not fixed-point math
+    const row = (idx / width) | 0;
+    const col = idx % width;
+    for (let d = 0; d < 4; d++) {
+      const nRow = row + NEIGHBOR_DR[d]!;
+      const nCol = col + NEIGHBOR_DC[d]!;
+      if (nRow < 0 || nRow >= height || nCol < 0 || nCol >= width) continue;
+      const nIdx = nRow * width + nCol;
+      if (visited[nIdx] === 1) continue;
+      const tileState = data[nIdx]!;
+      if (
+        tileState !== UndergroundTileState.Open &&
+        tileState !== UndergroundTileState.BeingDug
+      ) {
+        continue;
+      }
+      visited[nIdx] = 1;
+      // Reached a walkable tile — is it inside a non-full Nursery?
+      if (tileInNonFullNursery(underground, chambers, ants, eggIds, larvaeIds, nCol, nRow)) {
+        return true;
+      }
+      queue[tail++] = nIdx;
+    }
+  }
+  return false;
+}
+
+/** True iff (tx,ty) lies inside the footprint of a non-full Nursery. */
+function tileInNonFullNursery(
+  underground: UndergroundGrid,
+  chambers: ReadonlyArray<ChamberRecord>,
+  ants: AntComponents,
+  eggIds: ReadonlyArray<number>,
+  larvaeIds: ReadonlyArray<number>,
+  tx: number,
+  ty: number,
+): boolean {
+  for (let c = 0; c < chambers.length; c++) {
+    const chamber = chambers[c]!;
+    if (chamber.chamberType !== ChamberType.Nursery) continue;
+    const bx = chamber.posX >> FP_SHIFT;
+    const by = chamber.posY >> FP_SHIFT;
+    if (tx < bx || tx >= bx + chamber.width || ty < by || ty >= by + chamber.height) continue;
+    if (!nurseryIsFull(underground, ants, eggIds, larvaeIds, chamber)) return true;
+  }
+  return false;
 }
 
 /** Chamber type lists exported so callers don't hard-code the arrays. */
