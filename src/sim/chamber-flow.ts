@@ -45,6 +45,12 @@ import { isBroodReclaimable } from './ant/ant-store.js';
 // dig-system.ts and entrance-flow.ts had near-identical inline copies).
 import { bfsExpandSeededField } from './bfs-flow-field.js';
 
+// 4-cardinal step offsets (N/E/S/W), matching bfs-flow-field.ts' expansion
+// order. Module-scope so the carrier-local flood in hasReachableNonFullNursery
+// allocates nothing per call (AGENTS.md hot-loop rule; #173 Codex review).
+const FLOOD_NEIGHBOR_DR = [-1, 0, 1, 0] as const;
+const FLOOD_NEIGHBOR_DC = [0, 1, 0, -1] as const;
+
 /**
  * Per-colony flow-field cache for chamber-targeted routing.
  *
@@ -384,10 +390,7 @@ export function hasReachableNonFullNursery(
     return false;
   }
 
-  // 4-cardinal step, same N/E/S/W order as bfsExpandSeededField.
-  const NEIGHBOR_DR = [-1, 0, 1, 0] as const;
-  const NEIGHBOR_DC = [0, 1, 0, -1] as const;
-
+  // 4-cardinal step offsets are module-scope (FLOOD_NEIGHBOR_*) — see note there.
   // `visited` is the visited map (0 = unvisited, 1 = visited); `queue` holds
   // queued tile indices in FIFO order. The carrier's start tile is marked
   // visited but NOT tested for non-fullness — it is the full Nursery the
@@ -404,8 +407,8 @@ export function hasReachableNonFullNursery(
     const row = (idx / width) | 0;
     const col = idx % width;
     for (let d = 0; d < 4; d++) {
-      const nRow = row + NEIGHBOR_DR[d]!;
-      const nCol = col + NEIGHBOR_DC[d]!;
+      const nRow = row + FLOOD_NEIGHBOR_DR[d]!;
+      const nCol = col + FLOOD_NEIGHBOR_DC[d]!;
       if (nRow < 0 || nRow >= height || nCol < 0 || nCol >= width) continue;
       const nIdx = nRow * width + nCol;
       if (visited[nIdx] === 1) continue;
