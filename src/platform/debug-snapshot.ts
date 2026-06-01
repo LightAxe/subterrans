@@ -13,16 +13,19 @@
 
 import type { WorldState } from '../sim/types.js';
 import type { SimCommand } from '../sim/commands.js';
-import { AntTask, ChamberType, ForagingSubState, PheromoneType } from '../sim/enums.js';
+import {
+  AntTask, ChamberType, DiggingSubState, FightingSubState,
+  ForagingSubState, NursingSubState, PheromoneType,
+} from '../sim/enums.js';
 import { Zone } from '../sim/terrain.js';
-import { FP_SHIFT } from '../sim/fixed.js';
+import { FP_SHIFT, FP_ONE } from '../sim/fixed.js';
 import { pheromoneGridKey, phGet } from '../sim/pheromone/pheromone-store.js';
 import {
   serializeWorldState,
   type SerializedWorldState,
 } from './save.js';
 
-export const DEBUG_SNAPSHOT_VERSION = 1 as const;
+export const DEBUG_SNAPSHOT_VERSION = 2 as const;
 
 /** Manhattan radius of the food-trail pheromone sample captured per ant.
  *  Matches SIGNAL_PHEROMONE_RADIUS used by hasNearbyPheromoneSignal so the
@@ -35,18 +38,27 @@ export const DEBUG_TRACE_PHEROMONE_RADIUS = 3;
  *  without re-exporting an internal constant. Stays in sync by code review. */
 const DEBUG_SCENT_RADIUS = 15;
 
-export type MovementSource =
-  | 'priority'          // targetPosX/Y set → chase priority pile
-  | 'scent'             // food pile within DEBUG_SCENT_RADIUS
-  | 'pheromone'         // food-trail pheromone within DEBUG_TRACE_PHEROMONE_RADIUS
-  | 'wander'            // SearchingFood with no signal → chooseExcursionDirection
-  | 'entrance'          // CarryingFood → surface entrance (or fallback when no FoodStorage)
-  | 'food-storage'      // Underground CarryingFood → FoodStorage chamber via chamber flow-field
-  | 'underground-exit'  // Underground SearchingFood → tunnel-route back to surface via entrance flow-field
-  | 'nursing-chamber'   // Nursing ant → Queen/Nursery chamber via chamber flow-field
-  | 'rally'             // Fighting ant → colony.rallyPoint (written by updateFightAntTargets)
-  | 'task'              // non-forager fallback: dig/idle
-  | 'dead';             // slot not alive
+/** Single source of truth for the movement-decision labels: each key is a
+ *  value {@link inferMovementSource} may return, mapped to a plain-language
+ *  explanation. The {@link MovementSource} type is DERIVED from these keys, so
+ *  a new return value that lacks an entry here is a compile error — and the F9
+ *  `guide` re-exports this object verbatim, so the legend can never drift from
+ *  the code. Explanations mirror the precedence chain in inferMovementSource. */
+export const MOVEMENT_SOURCES = {
+  priority: 'Surface SearchingFood with targetPosX/Y set → chase that priority pile (beats scent/pheromone/wander).',
+  scent: `Surface SearchingFood, no priority, with a food pile within ${DEBUG_SCENT_RADIUS} tiles (Manhattan) → head toward scent.`,
+  pheromone: `Surface SearchingFood, no priority/scent, with FoodTrail pheromone within ${DEBUG_TRACE_PHEROMONE_RADIUS} tiles → follow the trail.`,
+  wander: 'Surface SearchingFood with no priority/scent/pheromone signal → chooseExcursionDirection (random walk).',
+  entrance: 'CarryingFood/ReturningToNest heading to a surface entrance (also the fallback when no FoodStorage chamber exists).',
+  'food-storage': 'Underground CarryingFood routing to a FoodStorage chamber via the chamber flow-field.',
+  'underground-exit': 'Underground SearchingFood routing back to the surface via the entrance flow-field (surface scent/pheromone probes do not apply underground).',
+  'nursing-chamber': 'Nursing ant routing to the Queen/Nursery chamber via the chamber flow-field.',
+  rally: 'Fighting ant moving to colony.rallyPoint (surface) or, underground, to an entrance as transit toward the rally.',
+  task: 'Non-forager fallback (Digging/Idle), or a Nursing ant whose colony has no Queen/Nursery chamber.',
+  dead: 'Slot is not alive (ants.alive !== 1).',
+} as const;
+
+export type MovementSource = keyof typeof MOVEMENT_SOURCES;
 
 /** One row of the per-ant debug trace. All fields are plain numbers so the
  *  payload JSON-serializes without any TypedArray handling. */
@@ -84,9 +96,34 @@ export interface AntTraceRow {
   movementSource: MovementSource;
 }
 
+/** Static, self-describing legend embedded once per dump (negligible size vs.
+ *  the playtrace 5 MB cap, ADR 0013) so an F9 snapshot can be interpreted
+ *  without opening any source file. Built by {@link buildDebugGuide}; enum maps
+ *  are derived from the live TS enums so they cannot drift from the code. */
+export interface DebugGuide {
+  /** What the top-level fields are and how the snapshot replays. */
+  readonly about: string;
+  /** How to decode the fixed-point position fields. */
+  readonly fixedPoint: string;
+  /** `-1` sentinel meaning per field (the sentinel differs by field). */
+  readonly sentinels: Readonly<Record<string, string>>;
+  /** value→member-name legend per enum. `subTask` is split by task (its meaning
+   *  depends on the ant's `task`); `chamberType`/`pheromoneType` decode fields
+   *  inside `snapshot` rather than antTrace rows. */
+  readonly enums: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  /** Shape + index formula for the flat nearbyPheromone diamond. */
+  readonly nearbyPheromone: string;
+  /** Re-export of {@link MOVEMENT_SOURCES}: every movementSource value explained. */
+  readonly movementSource: Readonly<Record<string, string>>;
+  /** Plain-language note for each non-obvious antTrace field. */
+  readonly fields: Readonly<Record<string, string>>;
+}
+
 /** Envelope mirrors SaveFile (PRD §8a) with debug extensions. */
 export interface DebugSnapshot {
   readonly version: number;
+  /** Static interpretation legend — see {@link DebugGuide}. */
+  readonly guide: DebugGuide;
   readonly seed: number;
   readonly tick: number;
   readonly inputLog: SimCommand[];
@@ -305,6 +342,81 @@ export function buildAntTrace(world: WorldState, antId: number): AntTraceRow {
   };
 }
 
+/** Invert an object-const enum (`{ Member: value }`) into the snapshot legend
+ *  shape (`{ "value": "Member" }`). Iterating the live enum means a newly added
+ *  member appears in the guide automatically — the legend cannot silently lag
+ *  the enum. */
+function enumLegend(e: Record<string, number>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(e)) {
+    out[String(value)] = name;
+  }
+  return out;
+}
+
+/** Build the static interpretation legend embedded in every F9 dump. Enum maps
+ *  are derived from the live TS enums and the diamond/scent prose from the same
+ *  radius constants the sampler uses, so the guide stays in lockstep with the
+ *  code. See {@link DebugGuide}. */
+export function buildDebugGuide(): DebugGuide {
+  const r = DEBUG_TRACE_PHEROMONE_RADIUS;
+  const side = 2 * r + 1;
+  return {
+    about:
+      'F9 debug snapshot. `snapshot` is a SerializedWorldState restorable via ' +
+      'deserializeWorldState(); replaying `inputLog` from `seed` reproduces this ' +
+      'exact state at `tick`. `antTrace` holds derived per-ant diagnostics not ' +
+      'present in the raw SoA arrays. This `guide` is a static legend emitted ' +
+      'once per dump — use its sub-keys to interpret every antTrace field ' +
+      'without opening source.',
+    fixedPoint:
+      `posX, posY, targetPosX, targetPosY are fixed-point integers: FP_ONE=${FP_ONE} ` +
+      `(FP_SHIFT=${FP_SHIFT}); tile coordinate = value >> ${FP_SHIFT}. tileX/tileY ` +
+      'are already decoded from posX/posY. (targetPosX/Y also carry a -1 sentinel — see sentinels.)',
+    sentinels: {
+      'searchPrevTileX / searchPrevTileY': '-1 = no previous tile recorded yet',
+      'targetPosX / targetPosY': '-1 = no priority target set (otherwise fixed-point coords)',
+      nearestEntranceDist: "-1 = the ant's colony has no entrance (or no colony record)",
+    },
+    enums: {
+      task: enumLegend(AntTask),
+      // subTask is a union field: its enum depends on `task`. Legend each
+      // variant from its own enum so a non-forager's subTask isn't mislabeled
+      // with ForagingSubState names (e.g. a Nursing ant's subTask=1 is Feeding,
+      // not CarryingFood).
+      'subTask if task=Foraging': enumLegend(ForagingSubState),
+      'subTask if task=Nursing': enumLegend(NursingSubState),
+      'subTask if task=Digging': enumLegend(DiggingSubState),
+      'subTask if task=Fighting': enumLegend(FightingSubState),
+      zone: enumLegend(Zone),
+      chamberType: enumLegend(ChamberType),
+      pheromoneType: enumLegend(PheromoneType),
+    },
+    nearbyPheromone:
+      `Flat row-major ${side}x${side} square ((2r+1)^2, r=nearbyPheromoneRadius=${r}) ` +
+      "covering the Manhattan diamond |dx|+|dy|<=r around the ant's tile; cells " +
+      `outside the diamond read 0. index = (dy+r)*${side} + (dx+r), so the centre ` +
+      `(the ant's own tile) is index ${r * side + r}. Values are FoodTrail strength on ` +
+      'the colony SURFACE grid only — all-zero for underground ants.',
+    movementSource: { ...MOVEMENT_SOURCES },
+    fields: {
+      antId: 'entity slot id in the SoA arrays',
+      colonyId: 'permanent owning colony id (never changes)',
+      currentGridColonyId:
+        'occupancy-grid colony byte; equals colonyId except during invasion, when a ' +
+        'Fighting ant occupies a foreign underground grid',
+      'task / subTask / zone':
+        'enum integers — see enums (subTask is split there by task, since its meaning depends on task)',
+      'tileX / tileY': 'tile coordinates already decoded from posX/posY (see fixedPoint)',
+      foodCarrying: 'units of food the ant is currently carrying',
+      'searchWave / searchHeadingX / searchHeadingY / searchHeadingTicks':
+        'excursion-search state: wave index, current heading vector, and ticks left on this heading',
+      nearbyPheromoneRadius: `Manhattan radius of the nearbyPheromone sample (echoes ${r})`,
+      movementSource: 'inferred routing decision for this tick — see movementSource',
+    },
+  };
+}
+
 /**
  * Optional shape parameters for {@link buildDebugSnapshot}. All fields are
  * additive — omitting the argument (or passing `{}`) reproduces the original
@@ -378,6 +490,7 @@ export function buildDebugSnapshot(
   }
   return {
     version: DEBUG_SNAPSHOT_VERSION,
+    guide: buildDebugGuide(),
     seed,
     tick: world.tick,
     inputLog: includeInputLog ? inputLog.map((c) => ({ ...c })) : [],
