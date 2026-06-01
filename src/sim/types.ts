@@ -289,7 +289,24 @@ export const SIM_VERSION_V22_DIFFICULTY = 22 as const;
  * above behaviour (all three paths gate on simVersion >= V23) for byte-identical replay.
  */
 export const SIM_VERSION_V23_SPIDER_AGGRO = 23 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V23_SPIDER_AGGRO;
+/**
+ * V24 (#173) — Capacity-aware Nursery brood deposit. Previously the nearest-seed
+ * `nurseDeposit` flow field routed every carrier to the Nursery nearest the Queen,
+ * and `depositCarriedBrood` stacked brood in that one chamber (`broodId % openCount`)
+ * with no occupancy check — so the nearest Nursery overflowed (multiple brood per
+ * tile) while additional Nurseries stayed empty.
+ * Under V24+: a Nursery at capacity (alive brood inside its footprint >= its Open
+ * tile count, i.e. 1 brood/tile) stops advertising in `nurseDeposit` (computed via
+ * computeNurseryDepositField every tick, mirroring the live pickup field), so carriers
+ * physically walk to the next non-full Nursery. If ALL Nurseries are full, all are
+ * seeded as a fallback so carriers are never stranded. Within the reached chamber,
+ * deposit now prefers the first unoccupied Open tile (row-major) before falling back
+ * to the legacy `broodId % openCount` slot.
+ * No new WorldState fields. Pre-V24 saves keep the nearest-seed routing and modulo
+ * deposit (gated on simVersion >= V24) for byte-identical replay.
+ */
+export const SIM_VERSION_V24_NURSERY_CAPACITY = 24 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V24_NURSERY_CAPACITY;
 
 
 /**

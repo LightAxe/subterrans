@@ -160,6 +160,167 @@ export function computeChamberFlowField(
   bfsExpandSeededField(out, queue, tail, data, width, height);
 }
 
+/**
+ * Count Open tiles inside a chamber footprint — the chamber's brood capacity
+ * under the V24 one-brood-per-tile model (#173).
+ */
+function countOpenTiles(underground: UndergroundGrid, chamber: ChamberRecord): number {
+  const { data, width, height } = underground;
+  const bx = chamber.posX >> FP_SHIFT;
+  const by = chamber.posY >> FP_SHIFT;
+  let openCount = 0;
+  for (let ty = 0; ty < chamber.height; ty++) {
+    for (let tx = 0; tx < chamber.width; tx++) {
+      const cx = bx + tx;
+      const cy = by + ty;
+      if (cx < 0 || cx >= width || cy < 0 || cy >= height) continue;
+      if (data[cy * width + cx] === UndergroundTileState.Open) openCount++;
+    }
+  }
+  return openCount;
+}
+
+/**
+ * Count brood that physically OCCUPY a tile inside a chamber footprint — the
+ * chamber's current occupancy under V24 (#173). Uses {@link isBroodReclaimable}
+ * (alive AND uncarried-or-orphaned) so it counts deposited brood and orphans
+ * frozen at a dead carrier's tile, but NOT brood in active transit (carried by
+ * a living nurse). Sharing isBroodReclaimable keeps this in lockstep with the
+ * pickup-field seed set, so a Nursery's fill level reflects exactly the brood a
+ * deposit could collide with.
+ */
+function residentBroodInChamber(
+  ants: AntComponents,
+  eggIds: ReadonlyArray<number>,
+  larvaeIds: ReadonlyArray<number>,
+  chamber: ChamberRecord,
+): number {
+  const bx = chamber.posX >> FP_SHIFT;
+  const by = chamber.posY >> FP_SHIFT;
+  let count = 0;
+  for (let pass = 0; pass < 2; pass++) {
+    const broodIds = pass === 0 ? eggIds : larvaeIds;
+    for (let i = 0; i < broodIds.length; i++) {
+      const bid = broodIds[i]!;
+      if (!isBroodReclaimable(ants, bid)) continue;
+      const tx = ants.posX[bid]! >> FP_SHIFT;
+      const ty = ants.posY[bid]! >> FP_SHIFT;
+      if (
+        tx >= bx && tx < bx + chamber.width &&
+        ty >= by && ty < by + chamber.height
+      ) count++;
+    }
+  }
+  return count;
+}
+
+/** A Nursery is full when its resident brood reaches its Open-tile capacity
+ *  (1 brood/tile, #173 V24). A zero-Open-tile chamber counts as full. */
+function nurseryIsFull(
+  underground: UndergroundGrid,
+  ants: AntComponents,
+  eggIds: ReadonlyArray<number>,
+  larvaeIds: ReadonlyArray<number>,
+  chamber: ChamberRecord,
+): boolean {
+  const capacity = countOpenTiles(underground, chamber);
+  if (capacity === 0) return true;
+  return residentBroodInChamber(ants, eggIds, larvaeIds, chamber) >= capacity;
+}
+
+/** Seed every Open tile of `chamber` that is still unvisited (-2) as a source
+ *  (-1) and enqueue it. Returns the new queue tail. */
+function seedChamberOpenTiles(
+  underground: UndergroundGrid,
+  chamber: ChamberRecord,
+  out: Int32Array,
+  queue: Int32Array,
+  tail: number,
+): number {
+  const { data, width, height } = underground;
+  const baseX = chamber.posX >> FP_SHIFT;
+  const baseY = chamber.posY >> FP_SHIFT;
+  for (let ty = 0; ty < chamber.height; ty++) {
+    for (let tx = 0; tx < chamber.width; tx++) {
+      const cx = baseX + tx;
+      const cy = baseY + ty;
+      if (cx < 0 || cx >= width || cy < 0 || cy >= height) continue;
+      const idx = cy * width + cx;
+      if (data[idx] !== UndergroundTileState.Open) continue;
+      if (out[idx] !== -2) continue;
+      out[idx] = -1;
+      queue[tail++] = idx;
+    }
+  }
+  return tail;
+}
+
+/**
+ * Issue #173 (V24+) — capacity-aware Nursery deposit flow field via a two-pass
+ * seed so it prefers non-full Nurseries WITHOUT ever stranding a carrier:
+ *
+ *   Pass 1 — seed Open tiles of every NON-FULL Nursery, BFS expand. Every tile
+ *            that can reach a non-full Nursery now points to the nearest one;
+ *            full Nurseries reachable from here get step directions pointing OUT
+ *            toward the non-full target (NOT a -1 source), so a carrier merely
+ *            transiting a full Nursery keeps moving instead of depositing.
+ *   Pass 2 — seed Open tiles of ANY Nursery that are STILL unvisited (-2) — i.e.
+ *            Nurseries in a pocket from which no non-full Nursery is reachable
+ *            (a full Nursery that is the only one a carrier there can reach, or
+ *            the all-full case) — then BFS expand into the rest of that pocket.
+ *
+ * Net: a tile is a -1 source iff it belongs to a Nursery that is the carrier's
+ * actual deposit destination (a reachable non-full Nursery, or — only when no
+ * non-full Nursery is reachable — the fallback Nursery). The deposit gate keys
+ * on that (-1) so brood lands one-per-tile in non-full Nurseries and never
+ * overflows a full Nursery that is only being passed through. Any tile that can
+ * reach SOME Nursery gets a direction, so a carrier is never stranded.
+ *
+ * Recomputed every tick (like {@link computeNursingPickupField}) because brood
+ * positions — and therefore each Nursery's fill level — change as carriers
+ * deposit. Each Nursery's fullness is evaluated exactly once (pass 1); pass 2
+ * keys on the -2 tile sentinel, not a second fullness scan.
+ *
+ * Output: -1 = source, -2 = unreachable (no Nursery reachable at all), 0..3 =
+ * step N/E/S/W. Deterministic: chamber array order × row-major iteration.
+ */
+export function computeNurseryDepositField(
+  underground: UndergroundGrid,
+  chambers: ReadonlyArray<ChamberRecord>,
+  ants: AntComponents,
+  eggIds: ReadonlyArray<number>,
+  larvaeIds: ReadonlyArray<number>,
+  out: Int32Array,
+  queue: Int32Array,
+): void {
+  const { data, width, height } = underground;
+
+  out.fill(-2);
+  let tail = 0;
+
+  // Pass 1: non-full Nurseries (preferred deposit targets). Fullness computed
+  // once per Nursery here.
+  for (let c = 0; c < chambers.length; c++) {
+    const chamber = chambers[c]!;
+    if (chamber.chamberType !== ChamberType.Nursery) continue;
+    if (nurseryIsFull(underground, ants, eggIds, larvaeIds, chamber)) continue;
+    tail = seedChamberOpenTiles(underground, chamber, out, queue, tail);
+  }
+  bfsExpandSeededField(out, queue, tail, data, width, height);
+
+  // Pass 2: fallback — any Nursery whose Open tiles are still unreachable from a
+  // non-full Nursery (pocket isolation, or every Nursery full). Seeds only the
+  // still-(-2) tiles, then expands into the remaining unreached region so a
+  // carrier there is never stranded.
+  tail = 0;
+  for (let c = 0; c < chambers.length; c++) {
+    const chamber = chambers[c]!;
+    if (chamber.chamberType !== ChamberType.Nursery) continue;
+    tail = seedChamberOpenTiles(underground, chamber, out, queue, tail);
+  }
+  bfsExpandSeededField(out, queue, tail, data, width, height);
+}
+
 /** Chamber type lists exported so callers don't hard-code the arrays. */
 export const FOOD_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [ChamberType.FoodStorage];
 export const NURSING_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [

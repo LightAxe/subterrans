@@ -35,6 +35,7 @@
 import {
   type WorldState,
   SIM_VERSION_V23_SPIDER_AGGRO,
+  SIM_VERSION_V24_NURSERY_CAPACITY,
 } from '../types.js';
 import {
   SurfaceMovementEffect,
@@ -852,7 +853,7 @@ export function tickForagerActions(world: WorldState): void {
  *
  * @param world  WorldState (reads ants, colonies; writes ants.task, ants.subTask).
  */
-export function tickNurseActions(world: WorldState): void {
+export function tickNurseActions(world: WorldState, chamberFlowFields?: ChamberFlowFields): void {
   const ants = world.ants;
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1) continue;
@@ -911,7 +912,26 @@ export function tickNurseActions(world: WorldState): void {
       if (!colony) continue;
       const tileX = ants.posX[id]! >> FP_SHIFT;
       const tileY = ants.posY[id]! >> FP_SHIFT;
-      if (isInsideNursery(colony, tileX, tileY)) {
+      // Issue #173 (V24+): deposit only when the carrier is AT REST on a
+      // deposit-field source tile (-1) — its routed Nursery target. The
+      // capacity-aware nurseDeposit field marks a Nursery's tiles as a source
+      // only when that Nursery is the carrier's actual destination (a reachable
+      // non-full Nursery, or — when none is reachable — the fallback Nursery).
+      // A carrier merely TRANSITING a full Nursery toward a non-full one sits on
+      // a step tile (0..3), so it keeps moving instead of overflowing the full
+      // Nursery. Pre-V24 — or when no field is supplied (unit tests that drive
+      // tickNurseActions directly) — keeps the original isInsideNursery deposit.
+      let shouldDeposit: boolean;
+      if (world.simVersion >= SIM_VERSION_V24_NURSERY_CAPACITY && chamberFlowFields !== undefined) {
+        const field = chamberFlowFields.nurseDeposit[colonyId];
+        const underground = world.undergroundGrids[colonyId];
+        shouldDeposit =
+          field !== undefined && underground !== undefined &&
+          field[tileY * underground.width + tileX] === -1;
+      } else {
+        shouldDeposit = isInsideNursery(colony, tileX, tileY);
+      }
+      if (shouldDeposit) {
         depositCarriedBrood(world, colony, id, broodId);
       }
       continue;
@@ -1145,6 +1165,31 @@ function computeDepositPositionInChamber(
     }
   }
   if (openCount === 0) return null;
+
+  // Issue #173 (V24+): place the brood on the first UNOCCUPIED Open tile
+  // (row-major) so brood spreads one-per-tile instead of stacking wherever
+  // `broodId % openCount` happens to collide. If every Open tile is already
+  // occupied — capacity overshoot from >k carriers arriving at a Nursery with k
+  // free tiles in a single tickNurseActions pass, since the deposit field is
+  // computed once at tick start and never recomputed mid-tick — return null
+  // rather than fall through to the legacy modulo slot, which performs no
+  // occupancy check and would stack a second brood on an occupied tile. The
+  // caller keeps the brood at the carrier's current tile, preserving the
+  // one-per-tile invariant (the brood is re-deposited on a later tick once a
+  // tile frees up).
+  if (world.simVersion >= SIM_VERSION_V24_NURSERY_CAPACITY) {
+    for (let ty = 0; ty < chamber.height; ty++) {
+      for (let tx = 0; tx < chamber.width; tx++) {
+        const cx = bx + tx;
+        const cy = by + ty;
+        if (ugGet(underground, cx, cy) !== UndergroundTileState.Open) continue;
+        if (tileHasResidentBrood(world, colony, broodId, cx, cy)) continue;
+        return { x: (cx << FP_SHIFT) + (FP_ONE >> 1), y: (cy << FP_SHIFT) + (FP_ONE >> 1) };
+      }
+    }
+    return null;
+  }
+
   const targetIndex = broodId % openCount;
   let cursor = 0;
   for (let ty = 0; ty < chamber.height; ty++) {
@@ -1159,6 +1204,38 @@ function computeDepositPositionInChamber(
     }
   }
   return null;
+}
+
+/**
+ * Issue #173 (V24+) — does any OTHER brood physically occupy tile (tileX,tileY)?
+ * Uses {@link isBroodReclaimable} (alive AND uncarried-or-orphaned) so deposited
+ * brood and orphans frozen at a dead carrier's tile both count, but brood in
+ * active transit (carried by a living nurse) does not. Excludes `excludeBroodId`
+ * (the brood being placed). Matches the occupancy definition used by the
+ * capacity-aware deposit field so seed exclusion and one-per-tile placement
+ * agree.
+ */
+function tileHasResidentBrood(
+  world: WorldState,
+  colony: ColonyRecord,
+  excludeBroodId: number,
+  tileX: number,
+  tileY: number,
+): boolean {
+  const ants = world.ants;
+  for (let pass = 0; pass < 2; pass++) {
+    const broodIds = pass === 0 ? colony.eggs : colony.larvae;
+    for (let i = 0; i < broodIds.length; i++) {
+      const bid = broodIds[i]!;
+      if (bid === excludeBroodId) continue;
+      if (!isBroodReclaimable(ants, bid)) continue;
+      if (
+        (ants.posX[bid]! >> FP_SHIFT) === tileX &&
+        (ants.posY[bid]! >> FP_SHIFT) === tileY
+      ) return true;
+    }
+  }
+  return false;
 }
 
 /**
