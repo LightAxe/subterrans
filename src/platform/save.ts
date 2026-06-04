@@ -45,7 +45,6 @@ import {
   PLAYER_COLONY_ID,
 } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
-import { ChamberType } from '../sim/enums.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 
 // SAVE_FORMAT_VERSION is bumped on any breaking change to the on-disk shape
@@ -208,7 +207,7 @@ function validateChamberRecord(ch: unknown, label: string): void {
   ) {
     throw new Error(`Invalid ${label}.chamberType: ${String(c.chamberType)}`);
   }
-  const dims = CHAMBER_DIMENSIONS[c.chamberType as ChamberType];
+  const dims = CHAMBER_DIMENSIONS[c.chamberType];
   if (c.width !== dims.width || c.height !== dims.height) {
     throw new Error(
       `Invalid ${label} dims for type ${c.chamberType}: ` +
@@ -270,7 +269,7 @@ function validatePendingChamber(pc: unknown, label: string): void {
   if (!isTileCoord(p.anchorTileY, UNDERGROUND_GRID_HEIGHT)) {
     throw new Error(`Invalid ${label}.anchorTileY: ${String(p.anchorTileY)}`);
   }
-  const dims = CHAMBER_DIMENSIONS[p.chamberType as ChamberType];
+  const dims = CHAMBER_DIMENSIONS[p.chamberType];
   if (p.width !== dims.width || p.height !== dims.height) {
     throw new Error(
       `Invalid ${label} dims for type ${p.chamberType}: ` +
@@ -847,9 +846,7 @@ function deserializeAIStateArray(s: SerializedWorldState): AIStateRecord[] {
   for (let i = 0; i < raw.length; i++) {
     const r = raw[i]!;
     if (r === null || typeof r !== 'object') continue;
-    const fightIds = Array.isArray(r.operationFighterIds)
-      ? (r.operationFighterIds as number[])
-      : [];
+    const fightIds = Array.isArray(r.operationFighterIds) ? r.operationFighterIds : [];
     const buf = new Int32Array(AI_MAX_OPERATION_FIGHTERS).fill(-1);
     const copyLen = Math.min(fightIds.length, AI_MAX_OPERATION_FIGHTERS);
     for (let j = 0; j < copyLen; j++) {
@@ -1124,7 +1121,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     if (!/^-?\d+$/.test(cidStr)) {
       throw new Error(`Invalid colonies key: ${cidStr}`);
     }
-    colonies[Number(cidStr) as ColonyId] = deserializeColony(sc);
+    colonies[Number(cidStr)] = deserializeColony(sc);
   }
   const undergroundGrids: Record<ColonyId, UndergroundGrid> = {};
   for (const [cidStr, sg] of Object.entries(s.undergroundGrids)) {
@@ -1138,7 +1135,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
       UNDERGROUND_GRID_HEIGHT,
       `undergroundGrids[${cidStr}]`,
     );
-    undergroundGrids[Number(cidStr) as ColonyId] = deserializeUndergroundGrid(sg);
+    undergroundGrids[Number(cidStr)] = deserializeUndergroundGrid(sg);
   }
   const pheromoneGrids: Record<string, PheromoneGrid> = {};
   for (const [key, sg] of Object.entries(s.pheromoneGrids)) {

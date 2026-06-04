@@ -134,8 +134,8 @@ function buildCrossGridWorld(seed = 1, queenTileX = 5, queenTileY = 5): CrossGri
     zone: Zone.Underground,
   });
   world.ants.currentGridColonyId[playerAntId] = ENEMY_COLONY_ID;
-  world.colonies[PLAYER_COLONY_ID]!.workers.push(playerAntId);
-  world.colonies[PLAYER_COLONY_ID]!.workerCount += 1;
+  world.colonies[PLAYER_COLONY_ID].workers.push(playerAntId);
+  world.colonies[PLAYER_COLONY_ID].workerCount += 1;
 
   return { world, playerAntId, enemyQueenId };
 }
@@ -241,8 +241,8 @@ describe('combat cross-grid — tile-key gridColonyId extension (REQ-C4)', () =>
       zone: Zone.Underground,
     });
     world.ants.currentGridColonyId[antA] = PLAYER_COLONY_ID;
-    world.colonies[PLAYER_COLONY_ID]!.workers.push(antA);
-    world.colonies[PLAYER_COLONY_ID]!.workerCount += 1;
+    world.colonies[PLAYER_COLONY_ID].workers.push(antA);
+    world.colonies[PLAYER_COLONY_ID].workerCount += 1;
 
     // Ant B: enemy-colony ant in the ENEMY grid at (7,7) Underground.
     const antB = allocateEntityId(world);
@@ -257,8 +257,8 @@ describe('combat cross-grid — tile-key gridColonyId extension (REQ-C4)', () =>
       zone: Zone.Underground,
     });
     world.ants.currentGridColonyId[antB] = ENEMY_COLONY_ID;
-    world.colonies[ENEMY_COLONY_ID]!.workers.push(antB);
-    world.colonies[ENEMY_COLONY_ID]!.workerCount += 1;
+    world.colonies[ENEMY_COLONY_ID].workers.push(antB);
+    world.colonies[ENEMY_COLONY_ID].workerCount += 1;
 
     // MANDATORY t=0 precondition assertions -----------------------------------
     expect(world.ants.alive[antA]).toBe(1);
@@ -284,7 +284,7 @@ describe('combat cross-grid — tile-key gridColonyId extension (REQ-C4)', () =>
     expect(world.ants.alive[antA]).toBe(1);
     expect(world.ants.alive[antB]).toBe(1);
     // Neither colony scored a kill.
-    expect(world.colonies[PLAYER_COLONY_ID]!.killCount).toBe(0);
-    expect(world.colonies[ENEMY_COLONY_ID]!.killCount).toBe(0);
+    expect(world.colonies[PLAYER_COLONY_ID].killCount).toBe(0);
+    expect(world.colonies[ENEMY_COLONY_ID].killCount).toBe(0);
   });
 });

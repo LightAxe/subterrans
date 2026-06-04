@@ -70,7 +70,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       ] as const;
       for (const f of fields) {
         expect(Array.isArray(s.ants[f])).toBe(true);
-        expect(s.ants[f]!.length).toBeGreaterThan(0);
+        expect(s.ants[f].length).toBeGreaterThan(0);
       }
     });
     it('serializes every Uint8Array grid .data as number[]', () => {
@@ -893,7 +893,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // wrote out for a fresh scenario.
       const w = createScenario(42);
       const s = serializeWorldState(w);
-      const latest = s.simVersion!;
+      const latest = s.simVersion;
       const out = deserializeWorldState(s);
       expect(out.simVersion).toBe(latest);
     });
@@ -941,7 +941,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // LATEST_SIM_VERSION is whatever the current sim writes for a fresh
       // scenario; the value is captured here to keep the test version-agnostic.
       const w = createScenario(42);
-      const latest = serializeWorldState(w).simVersion!;
+      const latest = serializeWorldState(w).simVersion;
       const snapshot = makeSavedSnapshot((s) => {
         s.simVersion = latest + 1;
       });

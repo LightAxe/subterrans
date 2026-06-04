@@ -106,7 +106,7 @@ function serializeWorldState(w: WorldState): string {
       .sort()
       .reduce(
         (acc, k) => {
-          const c = w.colonies[Number(k) as ColonyId]!;
+          const c = w.colonies[Number(k)]!;
           acc[k] = {
             colonyId: c.colonyId,
             queenEntityId: c.queenEntityId,
@@ -148,7 +148,7 @@ function serializeWorldState(w: WorldState): string {
       .sort()
       .reduce(
         (acc, k) => {
-          const g = w.undergroundGrids[Number(k) as ColonyId]!;
+          const g = w.undergroundGrids[Number(k)]!;
           acc[k] = { width: g.width, height: g.height, data: Array.from(g.data) };
           return acc;
         },
@@ -195,9 +195,9 @@ function buildWorld(seed: number): { world: WorldState; queenId: number; colonyI
   // into the pool would collapse to 2048 on the first reconcile and starve
   // the queen well before Test 6's pipeline completes. Spread the head-start
   // across 20 chambers (5000fp each, all under FOOD_CHAMBER_CAPACITY=5120).
-  world.colonies[1]!.foodStored = 0;
+  world.colonies[1].foodStored = 0;
   for (let i = 0; i < 20; i++) {
-    world.colonies[1]!.chambers.push({
+    world.colonies[1].chambers.push({
       chamberId: 1000 + i,
       chamberType: ChamberType.FoodStorage,
       foodStored: 5000,
@@ -217,7 +217,7 @@ function buildWorld(seed: number): { world: WorldState; queenId: number; colonyI
   // flip her zone to Underground so the pipeline is unblocked without having
   // to simulate relocation via entrances (Test 6 has no entrances or
   // underground grid — it's a behavior-free lifecycle harness).
-  world.colonies[1]!.chambers.push({
+  world.colonies[1].chambers.push({
     chamberId: 1100,
     chamberType: ChamberType.Queen,
     foodStored: 0,
@@ -226,7 +226,7 @@ function buildWorld(seed: number): { world: WorldState; queenId: number; colonyI
     width: 2,
     height: 2,
   });
-  world.colonies[1]!.chambers.push({
+  world.colonies[1].chambers.push({
     chamberId: 1101,
     chamberType: ChamberType.Nursery,
     foodStored: 0,
@@ -237,10 +237,10 @@ function buildWorld(seed: number): { world: WorldState; queenId: number; colonyI
   });
   world.ants.zone[queenId] = 1; // Zone.Underground — Gate 6 precondition
   // Phase 3 PRD §2a caller-side extension fields (factory does not set these):
-  world.colonies[1]!.entrances = [];
-  world.colonies[1]!.rallyPoint = null;
-  world.colonies[1]!.digFlowFieldDirty = false;
-  world.colonies[1]!.foodFlowFieldDirty = false;
+  world.colonies[1].entrances = [];
+  world.colonies[1].rallyPoint = null;
+  world.colonies[1].digFlowFieldDirty = false;
+  world.colonies[1].foodFlowFieldDirty = false;
   world.pheromoneGrids[pheromoneGridKey(1, PheromoneType.FoodTrail, 'surface')] =
     createPheromoneGrid(64, 64);
   return { world, queenId, colonyId: 1 as ColonyId };
@@ -482,8 +482,8 @@ describe('Phase 6 SC 2: starvation cascade', () => {
       lifespan: WORKER_LIFESPAN_TICKS,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1]!.foodStored = 0; // no food — queen cannot eat
-    world.colonies[1]!.queenStarvationTimer = STARVATION_GRACE_TICKS; // timer at full grace
+    world.colonies[1].foodStored = 0; // no food — queen cannot eat
+    world.colonies[1].queenStarvationTimer = STARVATION_GRACE_TICKS; // timer at full grace
 
     // Run STARVATION_GRACE_TICKS + 1 ticks — timer decrements by 1 each tick until <= 0 → death
     for (let t = 0; t < STARVATION_GRACE_TICKS + 1; t++) {
@@ -491,7 +491,7 @@ describe('Phase 6 SC 2: starvation cascade', () => {
     }
 
     expect(world.ants.alive[queenId]).toBe(0);
-    expect(world.colonies[1]!.defeated).toBe(true);
+    expect(world.colonies[1].defeated).toBe(true);
   });
 });
 
@@ -514,7 +514,7 @@ describe('Phase 6 SC 3: pheromone deposit on traversed cells', () => {
       lifespan: WORKER_LIFESPAN_TICKS,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1]!.foodStored = 100000;
+    world.colonies[1].foodStored = 100000;
 
     const workerId = allocateEntityId(world);
     initAnt(world.ants, workerId, {
@@ -527,8 +527,8 @@ describe('Phase 6 SC 3: pheromone deposit on traversed cells', () => {
       lifespan: WORKER_LIFESPAN_TICKS,
     });
     world.ants.foodCarrying[workerId] = 512; // carrying food — deposit rule activates
-    world.colonies[1]!.workers.push(workerId);
-    world.colonies[1]!.workerCount = 1;
+    world.colonies[1].workers.push(workerId);
+    world.colonies[1].workerCount = 1;
 
     const gridKey = pheromoneGridKey(1, PheromoneType.FoodTrail, 'surface');
     const foodGrid = createPheromoneGrid(64, 64);
@@ -560,7 +560,7 @@ describe('Phase 6 SC 4: CTRL-04 one-tick immediate allocation', () => {
       lifespan: WORKER_LIFESPAN_TICKS,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1]!.foodStored = 100000;
+    world.colonies[1].foodStored = 100000;
 
     // Add 10 workers (all Idle — no brood)
     for (let i = 0; i < 10; i++) {
@@ -572,18 +572,18 @@ describe('Phase 6 SC 4: CTRL-04 one-tick immediate allocation', () => {
         task: AntTask.Idle,
         subTask: 0,
       });
-      world.colonies[1]!.workers.push(wid);
-      world.colonies[1]!.workerCount += 1;
+      world.colonies[1].workers.push(wid);
+      world.colonies[1].workerCount += 1;
     }
 
     // Set initial targetRatio → forage:10 (all 10 workers allocated to forage)
-    world.colonies[1]!.targetRatio.forage = 10;
-    world.colonies[1]!.targetRatio.fight = 0;
+    world.colonies[1].targetRatio.forage = 10;
+    world.colonies[1].targetRatio.fight = 0;
 
     // Tick 0 (no commands): allocation reflects forage:10 ratio
     tick(world, []);
-    expect(world.colonies[1]!.computedAllocation.forage).toBe(10);
-    expect(world.colonies[1]!.computedAllocation.dig).toBe(0);
+    expect(world.colonies[1].computedAllocation.forage).toBe(10);
+    expect(world.colonies[1].computedAllocation.dig).toBe(0);
 
     // Tick 1: issue SetBehaviorRatio pivoting forage↔fight (Phase 10 CTRL-01': dig is auto-assigned per CTRL-06)
     const cmd: SimCommand = {
@@ -596,9 +596,9 @@ describe('Phase 6 SC 4: CTRL-04 one-tick immediate allocation', () => {
 
     // The new ratio takes effect in the SAME tick the command is issued (CTRL-04).
     // NOT in the "next tick after this one".
-    expect(world.colonies[1]!.computedAllocation.forage).toBe(0);
-    expect(world.colonies[1]!.computedAllocation.dig).toBe(0);
-    expect(world.colonies[1]!.computedAllocation.fight).toBe(10);
+    expect(world.colonies[1].computedAllocation.forage).toBe(0);
+    expect(world.colonies[1].computedAllocation.dig).toBe(0);
+    expect(world.colonies[1].computedAllocation.fight).toBe(10);
   });
 });
 
@@ -660,13 +660,13 @@ describe('No-allocation invariant: object identity in steady state', () => {
       lifespan: WORKER_LIFESPAN_TICKS,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1]!.foodStored = 100000;
+    world.colonies[1].foodStored = 100000;
 
     // 10 warm-up ticks to stabilize
     for (let i = 0; i < 10; i++) tick(world, []);
 
     // Capture object references after warmup
-    const colony = world.colonies[1]!;
+    const colony = world.colonies[1];
     const targetRatioRef = colony.targetRatio;
     const computedAllocationRef = colony.computedAllocation;
     const taskCensusRef = colony.taskCensus;

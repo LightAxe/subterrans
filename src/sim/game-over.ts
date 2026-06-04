@@ -74,7 +74,7 @@ export function checkQueenDeath(world: WorldState, playerColonyId?: ColonyId): G
       const id = Number(key);
       if (id < minId) minId = id;
     }
-    playerCid = minId as ColonyId;
+    playerCid = minId;
   }
 
   const playerColony = world.colonies[playerCid];
@@ -93,7 +93,7 @@ export function checkQueenDeath(world: WorldState, playerColonyId?: ColonyId): G
   let otherColonyCount = 0;
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
-    const cid = Number(key) as ColonyId;
+    const cid = Number(key);
     if (cid === playerCid) continue;
     otherColonyCount += 1;
     const colony = world.colonies[cid]!;
@@ -109,7 +109,7 @@ export function checkQueenDeath(world: WorldState, playerColonyId?: ColonyId): G
   const anyOtherAlive = (() => {
     for (const key in world.colonies) {
       if (!Object.hasOwn(world.colonies, key)) continue;
-      const cid = Number(key) as ColonyId;
+      const cid = Number(key);
       if (cid === playerCid) continue;
       const colony = world.colonies[cid]!;
       if (isQueenAlive(world, colony)) return true;
@@ -242,7 +242,7 @@ export function checkTiebreaks(world: WorldState, playerColonyId: ColonyId): Gam
   let aiColony: ColonyRecord | null = null;
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
-    const cid = Number(key) as ColonyId;
+    const cid = Number(key);
     if (cid === playerColonyId) continue;
     const col = world.colonies[cid]!;
     if (world.ants.alive[col.queenEntityId] !== 1) return GameOutcome.None; // AI queen dead → not a tiebreak

@@ -399,10 +399,10 @@ describe('WorldState', () => {
       it('colony creation: dst gains colony with correct scalar fields after copy', () => {
         src.colonies[1] = createColonyRecord(1, 42);
         // Phase 3 PRD §2a caller-side init (required before copyWorldState reads these fields)
-        src.colonies[1]!.entrances = [];
-        src.colonies[1]!.rallyPoint = null;
-        src.colonies[1]!.digFlowFieldDirty = false;
-        src.colonies[1]!.foodStored = 500;
+        src.colonies[1].entrances = [];
+        src.colonies[1].rallyPoint = null;
+        src.colonies[1].digFlowFieldDirty = false;
+        src.colonies[1].foodStored = 500;
         copyWorldState(src, dst);
         expect(dst.colonies[1]).toBeDefined();
         expect(dst.colonies[1]!.foodStored).toBe(500);
@@ -412,9 +412,9 @@ describe('WorldState', () => {
       it('colony deletion propagation: colony removed from src is removed from dst on next copy', () => {
         src.colonies[2] = createColonyRecord(2, 50);
         // Phase 3 PRD §2a caller-side init
-        src.colonies[2]!.entrances = [];
-        src.colonies[2]!.rallyPoint = null;
-        src.colonies[2]!.digFlowFieldDirty = false;
+        src.colonies[2].entrances = [];
+        src.colonies[2].rallyPoint = null;
+        src.colonies[2].digFlowFieldDirty = false;
         copyWorldState(src, dst);
         expect(dst.colonies[2]).toBeDefined();
         delete src.colonies[2];
@@ -425,25 +425,25 @@ describe('WorldState', () => {
       it('colony bucket arrays independence: workers array values copied but not same reference', () => {
         src.colonies[1] = createColonyRecord(1, 10);
         // Phase 3 PRD §2a caller-side init
-        src.colonies[1]!.entrances = [];
-        src.colonies[1]!.rallyPoint = null;
-        src.colonies[1]!.digFlowFieldDirty = false;
-        src.colonies[1]!.workers = [10, 20, 30];
+        src.colonies[1].entrances = [];
+        src.colonies[1].rallyPoint = null;
+        src.colonies[1].digFlowFieldDirty = false;
+        src.colonies[1].workers = [10, 20, 30];
         copyWorldState(src, dst);
         expect(dst.colonies[1]!.workers).toEqual([10, 20, 30]);
-        expect(dst.colonies[1]!.workers).not.toBe(src.colonies[1]!.workers);
+        expect(dst.colonies[1]!.workers).not.toBe(src.colonies[1].workers);
       });
 
       it('nested plain-object reuse: targetRatio object identity preserved through copy (zero-alloc steady state)', () => {
         src.colonies[1] = createColonyRecord(1, 10);
         // Phase 3 PRD §2a caller-side init
-        src.colonies[1]!.entrances = [];
-        src.colonies[1]!.rallyPoint = null;
-        src.colonies[1]!.digFlowFieldDirty = false;
+        src.colonies[1].entrances = [];
+        src.colonies[1].rallyPoint = null;
+        src.colonies[1].digFlowFieldDirty = false;
         copyWorldState(src, dst);
         const beforeRatio = dst.colonies[1]!.targetRatio;
         // Mutate src ratio, then copy again
-        src.colonies[1]!.targetRatio.forage = 5;
+        src.colonies[1].targetRatio.forage = 5;
         copyWorldState(src, dst);
         // Same object reference — field-by-field copy, not spread
         expect(dst.colonies[1]!.targetRatio).toBe(beforeRatio);
@@ -454,10 +454,10 @@ describe('WorldState', () => {
       it('taskCensus shape preserved through copy: 4 fields (nurse, forage, dig, fight) — no idle', () => {
         src.colonies[1] = createColonyRecord(1, 10);
         // Phase 3 PRD §2a caller-side init
-        src.colonies[1]!.entrances = [];
-        src.colonies[1]!.rallyPoint = null;
-        src.colonies[1]!.digFlowFieldDirty = false;
-        src.colonies[1]!.taskCensus = { nurse: 2, forage: 3, dig: 1, fight: 0 };
+        src.colonies[1].entrances = [];
+        src.colonies[1].rallyPoint = null;
+        src.colonies[1].digFlowFieldDirty = false;
+        src.colonies[1].taskCensus = { nurse: 2, forage: 3, dig: 1, fight: 0 };
         copyWorldState(src, dst);
         const keys = Object.keys(dst.colonies[1]!.taskCensus).sort();
         expect(keys).toEqual(['dig', 'fight', 'forage', 'nurse']);
@@ -479,17 +479,17 @@ describe('WorldState', () => {
 
       it('pheromone grid round trip: cell value copied correctly', () => {
         src.pheromoneGrids['1:0:surface'] = createPheromoneGrid(16, 16);
-        phSet(src.pheromoneGrids['1:0:surface']!, 3, 3, 77);
+        phSet(src.pheromoneGrids['1:0:surface'], 3, 3, 77);
         copyWorldState(src, dst);
         expect(phGet(dst.pheromoneGrids['1:0:surface']!, 3, 3)).toBe(77);
       });
 
       it('pheromone grid data independence: mutating src after copy does not affect dst', () => {
         src.pheromoneGrids['1:0:surface'] = createPheromoneGrid(16, 16);
-        phSet(src.pheromoneGrids['1:0:surface']!, 3, 3, 77);
+        phSet(src.pheromoneGrids['1:0:surface'], 3, 3, 77);
         copyWorldState(src, dst);
         // Mutate src AFTER copy — dst must remain unchanged
-        phSet(src.pheromoneGrids['1:0:surface']!, 3, 3, 999);
+        phSet(src.pheromoneGrids['1:0:surface'], 3, 3, 999);
         expect(phGet(dst.pheromoneGrids['1:0:surface']!, 3, 3)).toBe(77);
       });
 
@@ -527,7 +527,7 @@ describe('WorldState', () => {
 
       it('undergroundGrids: add grid to src, copy, verify dst has it', () => {
         src.undergroundGrids[1] = createUndergroundGrid(128, 64);
-        src.undergroundGrids[1]!.data[0] = 5;
+        src.undergroundGrids[1].data[0] = 5;
         copyWorldState(src, dst);
         expect(dst.undergroundGrids[1]).toBeDefined();
         expect(dst.undergroundGrids[1]!.data[0]).toBe(5);
@@ -535,9 +535,9 @@ describe('WorldState', () => {
 
       it('undergroundGrids: mutate src grid after copy, verify dst unchanged', () => {
         src.undergroundGrids[1] = createUndergroundGrid(128, 64);
-        src.undergroundGrids[1]!.data[0] = 5;
+        src.undergroundGrids[1].data[0] = 5;
         copyWorldState(src, dst);
-        src.undergroundGrids[1]!.data[0] = 99;
+        src.undergroundGrids[1].data[0] = 99;
         expect(dst.undergroundGrids[1]!.data[0]).toBe(5);
       });
 
@@ -673,9 +673,9 @@ describe('WorldState', () => {
       it('new-colony fallback patches Phase 3 defaults: entrances=[], rallyPoint=null, digFlowFieldDirty=false before extension copy', () => {
         // src has colony 1 with default Phase 3 fields; dst has no colony 1 yet
         src.colonies[1] = createColonyRecord(1, 42);
-        src.colonies[1]!.entrances = [];
-        src.colonies[1]!.rallyPoint = null;
-        src.colonies[1]!.digFlowFieldDirty = false;
+        src.colonies[1].entrances = [];
+        src.colonies[1].rallyPoint = null;
+        src.colonies[1].digFlowFieldDirty = false;
         copyWorldState(src, dst);
         expect(dst.colonies[1]).toBeDefined();
         expect(Array.isArray(dst.colonies[1]!.entrances)).toBe(true);
@@ -685,11 +685,11 @@ describe('WorldState', () => {
 
       it('copies colony.entrances: add entrance to src colony, copy, verify', () => {
         src.colonies[1] = createColonyRecord(1, 42);
-        src.colonies[1]!.entrances = [
+        src.colonies[1].entrances = [
           { entranceId: 1, surfaceTileX: 10, surfaceTileY: 64, isOpen: true },
         ];
-        src.colonies[1]!.rallyPoint = null;
-        src.colonies[1]!.digFlowFieldDirty = false;
+        src.colonies[1].rallyPoint = null;
+        src.colonies[1].digFlowFieldDirty = false;
         copyWorldState(src, dst);
         expect(dst.colonies[1]!.entrances.length).toBe(1);
         expect(dst.colonies[1]!.entrances[0]!.surfaceTileX).toBe(10);
@@ -698,65 +698,65 @@ describe('WorldState', () => {
 
       it('copies colony.entrances: shrink src entrances array, copy, verify dst shrunk', () => {
         src.colonies[1] = createColonyRecord(1, 42);
-        src.colonies[1]!.entrances = [
+        src.colonies[1].entrances = [
           { entranceId: 1, surfaceTileX: 10, surfaceTileY: 64, isOpen: false },
           { entranceId: 2, surfaceTileX: 20, surfaceTileY: 64, isOpen: false },
         ];
-        src.colonies[1]!.rallyPoint = null;
-        src.colonies[1]!.digFlowFieldDirty = false;
+        src.colonies[1].rallyPoint = null;
+        src.colonies[1].digFlowFieldDirty = false;
         copyWorldState(src, dst);
         expect(dst.colonies[1]!.entrances.length).toBe(2);
-        src.colonies[1]!.entrances.pop();
+        src.colonies[1].entrances.pop();
         copyWorldState(src, dst);
         expect(dst.colonies[1]!.entrances.length).toBe(1);
       });
 
       it('copies colony.rallyPoint: null → object → object-update → null transitions', () => {
         src.colonies[1] = createColonyRecord(1, 42);
-        src.colonies[1]!.entrances = [];
-        src.colonies[1]!.rallyPoint = null;
-        src.colonies[1]!.digFlowFieldDirty = false;
+        src.colonies[1].entrances = [];
+        src.colonies[1].rallyPoint = null;
+        src.colonies[1].digFlowFieldDirty = false;
 
         // null → null
         copyWorldState(src, dst);
         expect(dst.colonies[1]!.rallyPoint).toBeNull();
 
         // null → object
-        src.colonies[1]!.rallyPoint = { tileX: 5, tileY: 10 };
+        src.colonies[1].rallyPoint = { tileX: 5, tileY: 10 };
         copyWorldState(src, dst);
         expect(dst.colonies[1]!.rallyPoint).toEqual({ tileX: 5, tileY: 10 });
 
         // object → object update (same reference in dst)
         const prevRef = dst.colonies[1]!.rallyPoint;
-        src.colonies[1]!.rallyPoint = { tileX: 7, tileY: 12 };
+        src.colonies[1].rallyPoint = { tileX: 7, tileY: 12 };
         copyWorldState(src, dst);
         expect(dst.colonies[1]!.rallyPoint).toEqual({ tileX: 7, tileY: 12 });
         expect(dst.colonies[1]!.rallyPoint).toBe(prevRef); // object identity preserved
 
         // object → null
-        src.colonies[1]!.rallyPoint = null;
+        src.colonies[1].rallyPoint = null;
         copyWorldState(src, dst);
         expect(dst.colonies[1]!.rallyPoint).toBeNull();
       });
 
       it('copies colony.digFlowFieldDirty: true/false transitions', () => {
         src.colonies[1] = createColonyRecord(1, 42);
-        src.colonies[1]!.entrances = [];
-        src.colonies[1]!.rallyPoint = null;
-        src.colonies[1]!.digFlowFieldDirty = true;
+        src.colonies[1].entrances = [];
+        src.colonies[1].rallyPoint = null;
+        src.colonies[1].digFlowFieldDirty = true;
         copyWorldState(src, dst);
         expect(dst.colonies[1]!.digFlowFieldDirty).toBe(true);
 
-        src.colonies[1]!.digFlowFieldDirty = false;
+        src.colonies[1].digFlowFieldDirty = false;
         copyWorldState(src, dst);
         expect(dst.colonies[1]!.digFlowFieldDirty).toBe(false);
       });
 
       it('entrances array independence: pushing to dst does not affect src', () => {
         src.colonies[1] = createColonyRecord(1, 42);
-        src.colonies[1]!.entrances = [];
-        src.colonies[1]!.rallyPoint = null;
-        src.colonies[1]!.digFlowFieldDirty = false;
+        src.colonies[1].entrances = [];
+        src.colonies[1].rallyPoint = null;
+        src.colonies[1].digFlowFieldDirty = false;
         copyWorldState(src, dst);
         dst.colonies[1]!.entrances.push({
           entranceId: 99,
@@ -764,45 +764,45 @@ describe('WorldState', () => {
           surfaceTileY: 64,
           isOpen: false,
         });
-        expect(src.colonies[1]!.entrances.length).toBe(0);
+        expect(src.colonies[1].entrances.length).toBe(0);
       });
 
       it('copyWorldState round-trips killCount', () => {
         src.colonies[1] = createColonyRecord(1, 42);
-        src.colonies[1]!.entrances = [];
-        src.colonies[1]!.rallyPoint = null;
-        src.colonies[1]!.digFlowFieldDirty = false;
-        src.colonies[1]!.killCount = 5;
+        src.colonies[1].entrances = [];
+        src.colonies[1].rallyPoint = null;
+        src.colonies[1].digFlowFieldDirty = false;
+        src.colonies[1].killCount = 5;
 
         dst.colonies[1] = createColonyRecord(1, 42);
-        dst.colonies[1]!.entrances = [];
-        dst.colonies[1]!.rallyPoint = null;
-        dst.colonies[1]!.digFlowFieldDirty = false;
-        dst.colonies[1]!.killCount = 99;
+        dst.colonies[1].entrances = [];
+        dst.colonies[1].rallyPoint = null;
+        dst.colonies[1].digFlowFieldDirty = false;
+        dst.colonies[1].killCount = 99;
 
         copyWorldState(src, dst);
-        expect(dst.colonies[1]!.killCount).toBe(5);
+        expect(dst.colonies[1].killCount).toBe(5);
       });
 
       it('copyWorldState round-trips priorityFoodPileId (both a concrete id and null)', () => {
         src.colonies[1] = createColonyRecord(1, 42);
-        src.colonies[1]!.entrances = [];
-        src.colonies[1]!.rallyPoint = null;
-        src.colonies[1]!.digFlowFieldDirty = false;
-        src.colonies[1]!.priorityFoodPileId = 7;
+        src.colonies[1].entrances = [];
+        src.colonies[1].rallyPoint = null;
+        src.colonies[1].digFlowFieldDirty = false;
+        src.colonies[1].priorityFoodPileId = 7;
 
         dst.colonies[1] = createColonyRecord(1, 42);
-        dst.colonies[1]!.entrances = [];
-        dst.colonies[1]!.rallyPoint = null;
-        dst.colonies[1]!.digFlowFieldDirty = false;
-        dst.colonies[1]!.priorityFoodPileId = 99;
+        dst.colonies[1].entrances = [];
+        dst.colonies[1].rallyPoint = null;
+        dst.colonies[1].digFlowFieldDirty = false;
+        dst.colonies[1].priorityFoodPileId = 99;
 
         copyWorldState(src, dst);
-        expect(dst.colonies[1]!.priorityFoodPileId).toBe(7);
+        expect(dst.colonies[1].priorityFoodPileId).toBe(7);
 
-        src.colonies[1]!.priorityFoodPileId = null;
+        src.colonies[1].priorityFoodPileId = null;
         copyWorldState(src, dst);
-        expect(dst.colonies[1]!.priorityFoodPileId).toBeNull();
+        expect(dst.colonies[1].priorityFoodPileId).toBeNull();
       });
     });
   }); // end describe('copyWorldState')

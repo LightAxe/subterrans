@@ -645,7 +645,7 @@ export function tickDeadDiggerCleanup(world: WorldState): void {
     // grid. IF FUTURE INVASION EXTENDS TO DIGGERS (cross-grid digging), switch
     // this read to `ants.currentGridColonyId[id]` so the stale BeingDug tile
     // is cleared in the grid where the dig was actually claimed.
-    const cid = world.ants.colonyId[id]! as ColonyId;
+    const cid = world.ants.colonyId[id]!;
     const ug = world.undergroundGrids[cid];
     if (!ug) continue;
     if (ugGet(ug, dtx, dty) === UndergroundTileState.BeingDug) {

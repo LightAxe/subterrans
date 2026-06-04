@@ -2086,7 +2086,7 @@ export function updateFightAntTargets(world: WorldState): void {
     if (ants.alive[id] !== 1) continue;
     if (ants.task[id] !== AntTask.Fighting) continue;
 
-    const colonyId = ants.colonyId[id]! as ReturnType<typeof Number>;
+    const colonyId = ants.colonyId[id]!;
     const colony = world.colonies[colonyId as unknown as keyof typeof world.colonies];
     if (colony === undefined) continue;
 
@@ -2734,8 +2734,8 @@ export function tickExcursionBoundary(world: WorldState): void {
           grid,
           tileX,
           tileY,
-          ants.searchPrevTileX[id]!,
-          ants.searchPrevTileY[id]!,
+          ants.searchPrevTileX[id],
+          ants.searchPrevTileY[id],
         );
       }
     }
@@ -4546,8 +4546,8 @@ export function tickAntMovement(
               tileX,
               tileY,
               rng,
-              ants.searchPrevTileX[id]!,
-              ants.searchPrevTileY[id]!,
+              ants.searchPrevTileX[id],
+              ants.searchPrevTileY[id],
             );
             if (dir.dx !== 0 || dir.dy !== 0) {
               dx = dir.dx;

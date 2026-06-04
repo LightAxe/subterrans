@@ -132,8 +132,8 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
   //     continue their windup. (Codex P1.)
   const spider = world.spider;
   const v23Spider = spider !== null && world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO;
-  const spiderTileX = v23Spider ? spider!.posX >> FP_SHIFT : -1;
-  const spiderTileY = v23Spider ? spider!.posY >> FP_SHIFT : -1;
+  const spiderTileX = v23Spider ? spider.posX >> FP_SHIFT : -1;
+  const spiderTileY = v23Spider ? spider.posY >> FP_SHIFT : -1;
   for (let i = 0; i < count; i++) {
     if (ants.alive[i] !== 1) continue;
     if (ants.combatOpponentId[i] === -2) {
@@ -207,7 +207,7 @@ function applyDamage(world: WorldState, antIdx: number, damage: number): boolean
     ants.homeGroundBonusHp[antIdx] = 0;
   }
   ants.hp[antIdx] = ants.hp[antIdx]! - damage;
-  return ants.hp[antIdx]! <= 0;
+  return ants.hp[antIdx] <= 0;
 }
 
 /**
@@ -224,7 +224,7 @@ function strikeDamage(world: WorldState, antId: number, strikes: boolean): numbe
       : COMBAT_DAMAGE_BASE;
   }
   // Non-fighters retaliate with reduced damage.
-  const cid = ants.colonyId[antId]! as ColonyId;
+  const cid = ants.colonyId[antId]!;
   const colony = world.colonies[cid];
   if (colony == null) return 0;
   if (colony.queenEntityId === antId) return COMBAT_DAMAGE_QUEEN;
@@ -356,8 +356,8 @@ function resolveCombatOnTile_v16(
 
   // Kill dead ants. Event ordering: combat_kill emitted first (in killAnt),
   // then queen_death (in checkQueenDeath after this resolver returns).
-  if (bDies) killAnt(world, antB, cidA as ColonyId, antA, 'Ant');
-  if (aDies) killAnt(world, antA, cidB as ColonyId, antB, 'Ant');
+  if (bDies) killAnt(world, antB, cidA, antA, 'Ant');
+  if (aDies) killAnt(world, antA, cidB, antB, 'Ant');
 
   // After a kill, clear the survivor's opponent tracking so the next encounter
   // is detected as a new pairing (triggering proper windup and home-ground bonus
@@ -402,10 +402,10 @@ export function killAnt(
     ants.carriedBy[antIndex] = -1;
   }
 
-  const victimColonyId = ants.colonyId[antIndex]! as ColonyId;
+  const victimColonyId = ants.colonyId[antIndex]!;
   const tileX = ants.posX[antIndex]! >> FP_SHIFT;
   const tileY = ants.posY[antIndex]! >> FP_SHIFT;
-  const currentGridColonyId = ants.currentGridColonyId[antIndex]! as ColonyId;
+  const currentGridColonyId = ants.currentGridColonyId[antIndex]!;
 
   // Emit combat_kill event and write queen death context.
   const victimColony = world.colonies[victimColonyId];
@@ -459,7 +459,7 @@ export function killAnt(
     const enemyAI = world.aiState[_ai]!;
     if (enemyAI.operationKind === 'None') continue;
     const aiColId = enemyAI.colonyId;
-    const victimColId = ants.colonyId[antIndex]! as ColonyId;
+    const victimColId = ants.colonyId[antIndex]!;
     // operationAttackerDeaths: victim is a committed-cohort AI fighter.
     if (
       victimColId === aiColId &&

@@ -557,7 +557,7 @@ describe('tickAntMovement', () => {
     // Ant's tile: x = (maxX - 2) >> FP_SHIFT = SURFACE_GRID_WIDTH - 1 (rightmost column)
     // Neighbor to the right is out of bounds → phGet returns 0 there
     // So instead place strong pheromone at tile below and ensure movement stays in bounds
-    const tileY = (world.ants.posY[antId]! >> FP_SHIFT) + 1;
+    const tileY = (world.ants.posY[antId] >> FP_SHIFT) + 1;
     phSet(grid, SURFACE_GRID_WIDTH - 1, tileY, 1000);
 
     // Use seed 0 — exploit branch likely, moves toward strong neighbor
@@ -3655,7 +3655,7 @@ describe('tickAntMovement — wander fallback', () => {
       const rng = new Rng(seed);
       tickAntMovement(world, rng, digFlowFields);
       const moved = world.ants.posX[antId] !== posXBefore || world.ants.posY[antId] !== posYBefore;
-      const pausedThisTick = world.ants.searchPauseTicks[antId]! > 0;
+      const pausedThisTick = world.ants.searchPauseTicks[antId] > 0;
       if (moved || pausedThisTick) movedOrPausedCount += 1;
       if (!pausedThisTick) {
         nonPausedSeedsTotal += 1;
@@ -6928,14 +6928,14 @@ describe('issue #42 — surface SearchingFood no-revisit rule (v6)', () => {
     const digFlowFields = createDigFlowFields();
     for (let t = 0; t < 20; t++) {
       tickAntMovement(world, rng, digFlowFields);
-      const tx = world.ants.posX[antId]! >> FP_SHIFT;
-      const ty = world.ants.posY[antId]! >> FP_SHIFT;
+      const tx = world.ants.posX[antId] >> FP_SHIFT;
+      const ty = world.ants.posY[antId] >> FP_SHIFT;
       visitedTiles.add(`${tx},${ty}`);
       // Hard requirement: never enter an OOB tile (y must never be
       // < 0 even at sub-tile precision). Surface clamp at the call
       // boundary should already enforce this; assert so the test
       // catches any future passability change that lifts the clamp.
-      expect(world.ants.posY[antId]!).toBeGreaterThanOrEqual(0);
+      expect(world.ants.posY[antId]).toBeGreaterThanOrEqual(0);
     }
     // The ant must have crossed at least one tile boundary in 20
     // ticks — without the bounds check the picker would pin it at
@@ -7700,8 +7700,8 @@ describe('tickLifecycleTransitions — v10 larva→worker drops carry (#17 phase
 
     tickLifecycleTransitions(world, colony);
     // Larva promoted to worker; entity id preserved.
-    expect(world.colonies[COLONY_ID]!.workers).toContain(larvaId);
-    expect(world.colonies[COLONY_ID]!.larvae).not.toContain(larvaId);
+    expect(world.colonies[COLONY_ID].workers).toContain(larvaId);
+    expect(world.colonies[COLONY_ID].larvae).not.toContain(larvaId);
     // Carry slot dropped on both ends.
     expect(world.ants.carryingBroodId[nurseId]).toBe(-1);
     expect(world.ants.carriedBy[larvaId]).toBe(-1);
@@ -7711,8 +7711,8 @@ describe('tickLifecycleTransitions — v10 larva→worker drops carry (#17 phase
     // New worker stays at the carrier's tile (8, 7), NOT the larva's
     // pre-carry tile (5, 5). This proves lifecycle promotion does not
     // teleport the new worker.
-    expect(world.ants.posX[larvaId]! >> FP_SHIFT).toBe(8);
-    expect(world.ants.posY[larvaId]! >> FP_SHIFT).toBe(7);
+    expect(world.ants.posX[larvaId] >> FP_SHIFT).toBe(8);
+    expect(world.ants.posY[larvaId] >> FP_SHIFT).toBe(7);
   });
 
   it('egg→larva mid-carry: carry stays attached (entity id preserved)', async () => {
@@ -8060,7 +8060,7 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     ugSet(underground, 3, 4, UndergroundTileState.Open); // South — alternate
     // (2,3) and (3,2) remain Solid — no other alternates
 
-    const colonyId = world.ants.colonyId[antId]! as number;
+    const colonyId = world.ants.colonyId[antId]!;
     const colony = world.colonies[colonyId]!;
     // Place FoodStorage chamber at (4, 3) to seed the food flow field East.
     colony.chambers.push({
@@ -8109,7 +8109,7 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     ugSet(underground, 4, 3, UndergroundTileState.Open); // East — will be poisoned
     // (2,3), (3,2), (3,4) remain Solid
 
-    const colonyId = world.ants.colonyId[antId]! as number;
+    const colonyId = world.ants.colonyId[antId]!;
     const colony = world.colonies[colonyId]!;
     colony.chambers.push({
       chamberId: 101,
@@ -8439,7 +8439,7 @@ describe('Nursery brood deposit — capacity-aware spread, real pipeline (#173, 
       world.ants.carriedBy[broodId] = nurseId;
       for (let t = 0; t < maxTicks; t++) {
         step();
-        if (world.ants.carriedBy[broodId]! < 0) return broodId; // deposited
+        if (world.ants.carriedBy[broodId] < 0) return broodId; // deposited
       }
       return broodId;
     }

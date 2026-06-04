@@ -421,7 +421,7 @@ describe('cancelInFlightUpload', () => {
     });
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
       return new Promise<Response>((_resolve, reject) => {
-        const signal = (init as RequestInit | undefined)?.signal;
+        const signal = init?.signal;
         if (signal !== undefined && signal !== null) {
           signal.addEventListener('abort', () => {
             reject(new DOMException('Aborted', 'AbortError'));
