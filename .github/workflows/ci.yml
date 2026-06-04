@@ -1,0 +1,59 @@
+name: CI
+
+# Automated gate for the game code. Runs on every PR targeting main and on
+# pushes to main. Two jobs, mirroring the local discipline documented in
+# AGENTS.md / CONTRIBUTING.md:
+#
+#   verify   — the fast gate: `npm run verify` (prettier --check src/, eslint,
+#              tsc --noEmit, the type-aware lint:types layer, the sim-boundary
+#              and asset-path grep guards, and the Vitest unit/integration suite).
+#              This is the same command contributors run locally before pushing.
+#   coverage — `npm run test:coverage`: the 80% v8 coverage gate. Kept separate
+#              from `verify` because instrumentation is slow (~6 min) and pushes
+#              some long integration tests toward their timeouts (AGENTS.md
+#              "Test coverage").
+#
+# E2E (`npm run test:e2e`, Playwright) is deliberately NOT gated here yet: it is
+# not currently green in a headless environment (mass canvas/WebGL timeouts), so
+# wiring it in as a required check would block every PR. Run it locally. Promote
+# it to a job once it passes reliably under headless chromium.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Least privilege — CI only reads the repo to install, lint, and test.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref (rapid pushes / PR synchronize events).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify (format, lint, types, sim/asset guards, unit tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run verify
+
+  coverage:
+    name: coverage (80% gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:coverage

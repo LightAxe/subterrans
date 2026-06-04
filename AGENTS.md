@@ -8,6 +8,7 @@ A modern ant colony simulation game — a spiritual successor to SimAnt (1991) w
 - **Rendering:** Phaser 3
 - **Testing:** Vitest (unit/integration), Playwright (browser/E2E)
 - **Build:** Vite (tentative, finalized during PRD)
+- **Formatting:** Prettier (`.prettierrc.json`) — run `npm run format`. Two ESLint configs: the fast `eslint.config.ts` (sim-safety + base rules, run by `lint`) and the type-aware `eslint.typecheck.config.ts` (`recommended-type-checked`, run by `lint:types`).
 - **Target:** Web browsers (Chrome, Firefox, Safari, Edge — latest two versions)
 
 ## Directory Layout
@@ -52,7 +53,7 @@ Phase 1 targets web only. The architecture preserves portability for native wrap
 - **`src/sim/`**: Full test coverage. Every system function, every component store operation, every edge case. These are pure functions operating on data — they are trivially testable.
 - **`src/render/`, `src/input/`, `src/platform/`**: Smoke tests. Verify initialization, basic rendering, input translation.
 - **Deterministic replay tests**: A recorded input sequence + seed must always produce the same final world state. These tests catch non-determinism bugs.
-- **All tests run in CI** on every push and PR.
+- **Vitest (unit/integration) and the coverage gate run in CI** on every push and PR (`.github/workflows/ci.yml`: `verify` + `coverage`). Playwright E2E is not yet CI-gated (see Building and Running).
 
 ## Branching & PR Workflow
 
@@ -135,11 +136,17 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 ```bash
 cd code/
 npm install
-npm run dev       # Start dev server (once scaffold is in place)
+npm run dev            # Start dev server
+npm run format         # Prettier-format the tree (format:check is the verify gate)
+npm run lint           # Fast ESLint (sim-safety + base rules)
+npm run lint:types     # Type-aware ESLint (recommended-type-checked) — slower
 npm run test           # Run Vitest (fast local loop)
+npm run verify         # Full gate: format:check + lint + typecheck + lint:types + sim/asset guards + tests
 npm run test:coverage  # Run Vitest with v8 coverage + 80% gate (run before pushing)
 npm run test:e2e       # Run Playwright
 ```
+
+CI (`.github/workflows/ci.yml`) runs `verify` and `test:coverage` on every PR to `main` and on pushes to `main`. `test:e2e` (Playwright) is **not** gated in CI yet — it currently fails under headless chromium (canvas/WebGL timeouts); run it locally until it's stabilized for CI.
 
 ## Debugging snapshots (F9 exports)
 
