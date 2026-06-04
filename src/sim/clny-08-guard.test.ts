@@ -21,7 +21,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const HERE = fileURLToPath(new URL('.', import.meta.url));  // .../code/src/sim/
+const HERE = fileURLToPath(new URL('.', import.meta.url)); // .../code/src/sim/
 
 function listSimProductionFiles(root: string): string[] {
   const out: string[] = [];
@@ -30,11 +30,7 @@ function listSimProductionFiles(root: string): string[] {
     const stat = statSync(p);
     if (stat.isDirectory()) {
       out.push(...listSimProductionFiles(p));
-    } else if (
-      entry.endsWith('.ts') &&
-      !entry.endsWith('.test.ts') &&
-      !entry.endsWith('.d.ts')
-    ) {
+    } else if (entry.endsWith('.ts') && !entry.endsWith('.test.ts') && !entry.endsWith('.d.ts')) {
       out.push(p);
     }
   }
@@ -42,32 +38,34 @@ function listSimProductionFiles(root: string): string[] {
 }
 
 function stripCommentsAndImports(source: string): string {
-  return source
-    // line comments
-    .replace(/\/\/.*$/gm, '')
-    // block comments (non-greedy, multiline)
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    // import statements (whole line) — keyed access inside imports is irrelevant
-    .replace(/^\s*import\s[^;]*;\s*$/gm, '');
+  return (
+    source
+      // line comments
+      .replace(/\/\/.*$/gm, '')
+      // block comments (non-greedy, multiline)
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      // import statements (whole line) — keyed access inside imports is irrelevant
+      .replace(/^\s*import\s[^;]*;\s*$/gm, '')
+  );
 }
 
 // Branching regexes. Each must match a branching USE, not a keyed access or call argument.
 const BRANCHING_PATTERNS: Array<{ name: string; re: RegExp }> = [
-  { name: '=== PLAYER_COLONY_ID',  re: /===\s*PLAYER_COLONY_ID\b/ },
-  { name: '!== PLAYER_COLONY_ID',  re: /!==\s*PLAYER_COLONY_ID\b/ },
-  { name: 'PLAYER_COLONY_ID ===',  re: /\bPLAYER_COLONY_ID\s*===/ },
-  { name: 'PLAYER_COLONY_ID !==',  re: /\bPLAYER_COLONY_ID\s*!==/ },
-  { name: '=== ENEMY_COLONY_ID',   re: /===\s*ENEMY_COLONY_ID\b/ },
-  { name: '!== ENEMY_COLONY_ID',   re: /!==\s*ENEMY_COLONY_ID\b/ },
-  { name: 'ENEMY_COLONY_ID ===',   re: /\bENEMY_COLONY_ID\s*===/ },
-  { name: 'ENEMY_COLONY_ID !==',   re: /\bENEMY_COLONY_ID\s*!==/ },
-  { name: 'isPlayer identifier',   re: /\bisPlayer\b/ },
-  { name: 'isEnemy identifier',    re: /\bisEnemy\b/ },
+  { name: '=== PLAYER_COLONY_ID', re: /===\s*PLAYER_COLONY_ID\b/ },
+  { name: '!== PLAYER_COLONY_ID', re: /!==\s*PLAYER_COLONY_ID\b/ },
+  { name: 'PLAYER_COLONY_ID ===', re: /\bPLAYER_COLONY_ID\s*===/ },
+  { name: 'PLAYER_COLONY_ID !==', re: /\bPLAYER_COLONY_ID\s*!==/ },
+  { name: '=== ENEMY_COLONY_ID', re: /===\s*ENEMY_COLONY_ID\b/ },
+  { name: '!== ENEMY_COLONY_ID', re: /!==\s*ENEMY_COLONY_ID\b/ },
+  { name: 'ENEMY_COLONY_ID ===', re: /\bENEMY_COLONY_ID\s*===/ },
+  { name: 'ENEMY_COLONY_ID !==', re: /\bENEMY_COLONY_ID\s*!==/ },
+  { name: 'isPlayer identifier', re: /\bisPlayer\b/ },
+  { name: 'isEnemy identifier', re: /\bisEnemy\b/ },
 ];
 
 // Carve-outs — file paths (relative to src/sim/) that are exempt from the scan.
 const CARVE_OUTS = new Set<string>([
-  'constants.ts',  // the definition site — exporting the symbols is not branching
+  'constants.ts', // the definition site — exporting the symbols is not branching
 ]);
 
 describe('CLNY-08 / SC 7 static branching guard', () => {

@@ -50,10 +50,10 @@ import type { ColonyId } from './colony/colony-store.js';
 const COLONY_ID = 1 as ColonyId;
 
 interface RallyWorld {
-  world:       WorldState;
-  fighterIds:  number[];
-  rallyTileX:  number;
-  rallyTileY:  number;
+  world: WorldState;
+  fighterIds: number[];
+  rallyTileX: number;
+  rallyTileY: number;
 }
 
 /**
@@ -75,20 +75,20 @@ function buildRallyWorld(
   const queenId = allocateEntityId(world);
   initAnt(world.ants, queenId, {
     colonyId: COLONY_ID,
-    posX:     (5 << FP_SHIFT) + (FP_ONE >> 1),
-    posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
-    task:     AntTask.Idle,
-    subTask:  0,
-    speed:    0,
+    posX: (5 << FP_SHIFT) + (FP_ONE >> 1),
+    posY: (5 << FP_SHIFT) + (FP_ONE >> 1),
+    task: AntTask.Idle,
+    subTask: 0,
+    speed: 0,
     lifespan: WORKER_LIFESPAN_TICKS,
-    zone:     Zone.Surface,
+    zone: Zone.Surface,
   });
 
   const colony = createColonyRecord(COLONY_ID, queenId);
-  colony.entrances         = [];
-  colony.rallyPoint        = { tileX: rallyTileX, tileY: rallyTileY };
+  colony.entrances = [];
+  colony.rallyPoint = { tileX: rallyTileX, tileY: rallyTileY };
   colony.digFlowFieldDirty = false;
-  colony.foodStored        = 100000; // ample — no starvation during the run
+  colony.foodStored = 100000; // ample — no starvation during the run
   world.colonies[COLONY_ID] = colony;
 
   const fighterIds: number[] = [];
@@ -96,13 +96,13 @@ function buildRallyWorld(
     const id = allocateEntityId(world);
     initAnt(world.ants, id, {
       colonyId: COLONY_ID,
-      posX:     (tx << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (ty << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Fighting,
-      subTask:  FightingSubState.MovingToRally,
-      speed:    WORKER_BASE_SPEED,
+      posX: (tx << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (ty << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Fighting,
+      subTask: FightingSubState.MovingToRally,
+      speed: WORKER_BASE_SPEED,
       lifespan: WORKER_LIFESPAN_TICKS,
-      zone:     Zone.Surface,
+      zone: Zone.Surface,
     });
     colony.workers.push(id);
     colony.workerCount += 1;
@@ -150,12 +150,12 @@ describe('fighter rally hold — anti-oscillation (snapshot-reproduction bug)', 
     // (dx=dy=0). Without the fix each fighter re-targets the rally center
     // every tick, walks toward it, collides, gets bumped — visible ABAB.
     const startTiles: Array<readonly [number, number]> = [
-      [RALLY_X,     RALLY_Y    ], // center
-      [RALLY_X,     RALLY_Y - 1], // N
-      [RALLY_X + 1, RALLY_Y    ], // E
-      [RALLY_X,     RALLY_Y + 1], // S
-      [RALLY_X - 1, RALLY_Y    ], // W
-      [RALLY_X,     RALLY_Y - 2], // N2 (radius 2)
+      [RALLY_X, RALLY_Y], // center
+      [RALLY_X, RALLY_Y - 1], // N
+      [RALLY_X + 1, RALLY_Y], // E
+      [RALLY_X, RALLY_Y + 1], // S
+      [RALLY_X - 1, RALLY_Y], // W
+      [RALLY_X, RALLY_Y - 2], // N2 (radius 2)
     ];
     const { world, fighterIds } = buildRallyWorld(RALLY_X, RALLY_Y, startTiles);
 
@@ -186,7 +186,12 @@ describe('fighter rally hold — anti-oscillation (snapshot-reproduction bug)', 
     // up visually as jitter even when tile coords look stable across
     // end-of-tick snapshots.
     const TICKS = 30;
-    interface Snap { tileX: number; tileY: number; posX: number; posY: number }
+    interface Snap {
+      tileX: number;
+      tileY: number;
+      posX: number;
+      posY: number;
+    }
     const trace: Snap[][] = [];
     for (let t = 0; t < TICKS; t++) {
       const cmds = world.commandQueue.splice(0);
@@ -196,8 +201,8 @@ describe('fighter rally hold — anti-oscillation (snapshot-reproduction bug)', 
         snap.push({
           tileX: tileXOf(world, id),
           tileY: tileYOf(world, id),
-          posX:  world.ants.posX[id]!,
-          posY:  world.ants.posY[id]!,
+          posX: world.ants.posX[id]!,
+          posY: world.ants.posY[id]!,
         });
       }
       trace.push(snap);
@@ -342,10 +347,10 @@ describe('fighter rally hold — anti-oscillation (snapshot-reproduction bug)', 
  * the rally tile coords — that's the whole point of the test).
  */
 interface InvasionRallyWorld {
-  world:        WorldState;
-  fighterIds:   number[];
-  rallyTileX:   number;
-  rallyTileY:   number;
+  world: WorldState;
+  fighterIds: number[];
+  rallyTileX: number;
+  rallyTileY: number;
 }
 
 function buildInvasionRallyWorld(
@@ -380,8 +385,10 @@ function buildInvasionRallyWorld(
   if (!enemyEntrances[0]!.isOpen) {
     throw new Error('expected enemy entrance to be open');
   }
-  if (enemyEntrances[0]!.surfaceTileX !== rallyTileX
-      || enemyEntrances[0]!.surfaceTileY !== rallyTileY) {
+  if (
+    enemyEntrances[0]!.surfaceTileX !== rallyTileX ||
+    enemyEntrances[0]!.surfaceTileY !== rallyTileY
+  ) {
     throw new Error('expected enemy entrance to be at (ENEMY_START_X, ENEMY_START_Y)');
   }
 
@@ -391,13 +398,13 @@ function buildInvasionRallyWorld(
     const id = allocateEntityId(world);
     initAnt(world.ants, id, {
       colonyId: PLAYER_COLONY_ID,
-      posX:     (tx << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (ty << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Fighting,
-      subTask:  FightingSubState.MovingToRally,
-      speed:    WORKER_BASE_SPEED,
+      posX: (tx << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (ty << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Fighting,
+      subTask: FightingSubState.MovingToRally,
+      speed: WORKER_BASE_SPEED,
       lifespan: WORKER_LIFESPAN_TICKS,
-      zone:     Zone.Surface,
+      zone: Zone.Surface,
     });
     world.colonies[PLAYER_COLONY_ID]!.workers.push(id);
     world.colonies[PLAYER_COLONY_ID]!.workerCount += 1;
@@ -432,7 +439,8 @@ describe('fighter rally hold — carve out rally-on-entrance (invasion regressio
     expect(world.ants.colonyId[id]).toBe(PLAYER_COLONY_ID);
     expect(world.ants.currentGridColonyId[id]).toBe(PLAYER_COLONY_ID);
     expect(world.colonies[PLAYER_COLONY_ID]!.rallyPoint).toEqual({
-      tileX: rallyTileX, tileY: rallyTileY,
+      tileX: rallyTileX,
+      tileY: rallyTileY,
     });
 
     // Act — tick until the fighter descends, or bail after MAX ticks.
@@ -473,8 +481,7 @@ describe('fighter rally hold — carve out rally-on-entrance (invasion regressio
     // (Manhattan≤1), then descends the next tick.
     expect(tileBeforeDescend).not.toBeNull();
     const manhattanBeforeDescend =
-      Math.abs(tileBeforeDescend![0] - rallyTileX) +
-      Math.abs(tileBeforeDescend![1] - rallyTileY);
+      Math.abs(tileBeforeDescend![0] - rallyTileX) + Math.abs(tileBeforeDescend![1] - rallyTileY);
     expect(manhattanBeforeDescend).toBeLessThanOrEqual(1);
     // Descent flipped the grid-of-occupancy to the enemy colony.
     expect(world.ants.zone[id]).toBe(Zone.Underground);
@@ -491,9 +498,9 @@ describe('fighter rally hold — carve out rally-on-entrance (invasion regressio
     // at a time (occupancy resolver enforces same-colony tile uniqueness
     // on the surface). Generous 300-tick budget covers all four.
     const startTiles: Array<readonly [number, number]> = [
-      [ENEMY_START_X - 5, ENEMY_START_Y    ],
+      [ENEMY_START_X - 5, ENEMY_START_Y],
       [ENEMY_START_X - 5, ENEMY_START_Y + 1],
-      [ENEMY_START_X - 4, ENEMY_START_Y    ],
+      [ENEMY_START_X - 4, ENEMY_START_Y],
       [ENEMY_START_X - 4, ENEMY_START_Y + 1],
     ];
     const { world, fighterIds } = buildInvasionRallyWorld(startTiles);

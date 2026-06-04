@@ -28,12 +28,18 @@ void COLOR_QUEEN_OUTLINE; // silence unused — kept as a hook for future tests
 // pixel buffer.
 // ---------------------------------------------------------------------------
 
-interface GfxCall { method: string; args: unknown[]; }
+interface GfxCall {
+  method: string;
+  args: unknown[];
+}
 
 class PixelBuffer {
   // [y][x] → 'wall' | 'open' | undefined. Undefined = nothing painted yet.
   private grid: (NeighborKind | undefined)[][] = [];
-  constructor(public readonly w: number, public readonly h: number) {
+  constructor(
+    public readonly w: number,
+    public readonly h: number,
+  ) {
     for (let y = 0; y < h; y++) {
       const row: (NeighborKind | undefined)[] = new Array(w).fill(undefined);
       this.grid.push(row);
@@ -43,7 +49,9 @@ class PixelBuffer {
     if (x < 0 || y < 0 || x >= this.w || y >= this.h) return;
     this.grid[y]![x] = kind;
   }
-  get(x: number, y: number): NeighborKind | undefined { return this.grid[y]?.[x]; }
+  get(x: number, y: number): NeighborKind | undefined {
+    return this.grid[y]?.[x];
+  }
 }
 
 class MockGfx implements GfxLike {
@@ -51,21 +59,35 @@ class MockGfx implements GfxLike {
   private currentColor: number = 0;
   private currentAlpha: number = 1;
 
-  clear(): GfxLike { this.calls.push({ method: 'clear', args: [] }); return this; }
+  clear(): GfxLike {
+    this.calls.push({ method: 'clear', args: [] });
+    return this;
+  }
   fillStyle(color: number, alpha?: number): GfxLike {
     this.currentColor = color;
     this.currentAlpha = alpha ?? 1;
     this.calls.push({ method: 'fillStyle', args: [color, alpha] });
     return this;
   }
-  lineStyle(): GfxLike { return this; }
-  fillRect(x: number, y: number, w: number, h: number): GfxLike {
-    this.calls.push({ method: 'fillRect', args: [x, y, w, h, this.currentColor, this.currentAlpha] });
+  lineStyle(): GfxLike {
     return this;
   }
-  fillCircle(): GfxLike { return this; }
-  strokeCircle(): GfxLike { return this; }
-  fillTriangle(): GfxLike { return this; }
+  fillRect(x: number, y: number, w: number, h: number): GfxLike {
+    this.calls.push({
+      method: 'fillRect',
+      args: [x, y, w, h, this.currentColor, this.currentAlpha],
+    });
+    return this;
+  }
+  fillCircle(): GfxLike {
+    return this;
+  }
+  strokeCircle(): GfxLike {
+    return this;
+  }
+  fillTriangle(): GfxLike {
+    return this;
+  }
 
   /**
    * Replay calls into a single-tile pixel buffer. Pixels last-write-wins
@@ -78,7 +100,14 @@ class MockGfx implements GfxLike {
   paintBuffer(buf: PixelBuffer, screenX: number, screenY: number): void {
     for (const call of this.calls) {
       if (call.method !== 'fillRect') continue;
-      const [x, y, w, h, color, alpha] = call.args as [number, number, number, number, number, number];
+      const [x, y, w, h, color, alpha] = call.args as [
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+      ];
       if (alpha !== 1) continue; // silhouette = opaque draws only
       const kind = classifyColor(color);
       if (kind === undefined) continue;
@@ -112,21 +141,18 @@ function classifyColor(color: number): NeighborKind | undefined {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeNeighbors(
-  c: NeighborKind,
-  spec: Partial<Neighbors3x3> = {},
-): Neighbors3x3 {
+function makeNeighbors(c: NeighborKind, spec: Partial<Neighbors3x3> = {}): Neighbors3x3 {
   // Default unspecified neighbors to 'wall' — this models a tile carved out
   // of an all-Solid grid, the most common test setup.
   return {
     nw: spec.nw ?? 'wall',
-    n:  spec.n  ?? 'wall',
+    n: spec.n ?? 'wall',
     ne: spec.ne ?? 'wall',
-    w:  spec.w  ?? 'wall',
+    w: spec.w ?? 'wall',
     c,
-    e:  spec.e  ?? 'wall',
+    e: spec.e ?? 'wall',
     sw: spec.sw ?? 'wall',
-    s:  spec.s  ?? 'wall',
+    s: spec.s ?? 'wall',
     se: spec.se ?? 'wall',
   };
 }
@@ -151,8 +177,8 @@ function countPixels(buf: PixelBuffer, kind: NeighborKind): number {
 
 function fillRectCalls(gfx: MockGfx): Array<[number, number, number, number, number, number]> {
   return gfx.calls
-    .filter(c => c.method === 'fillRect')
-    .map(c => c.args as [number, number, number, number, number, number]);
+    .filter((c) => c.method === 'fillRect')
+    .map((c) => c.args as [number, number, number, number, number, number]);
 }
 
 function rectOverlaps(
@@ -184,11 +210,18 @@ describe('drawAutotiledUndergroundTile — full quadrants', () => {
   });
 
   it('fully open tile (all 8 neighbors = open) leaves substrate intact — no opposite paint', () => {
-    const buf = renderTile(makeNeighbors('open', {
-      nw: 'open', n: 'open', ne: 'open',
-      w:  'open',             e: 'open',
-      sw: 'open', s: 'open', se: 'open',
-    }));
+    const buf = renderTile(
+      makeNeighbors('open', {
+        nw: 'open',
+        n: 'open',
+        ne: 'open',
+        w: 'open',
+        e: 'open',
+        sw: 'open',
+        s: 'open',
+        se: 'open',
+      }),
+    );
     // Substrate is all open; no opposite-kind paint should appear.
     expect(countPixels(buf, 'wall')).toBe(0);
   });
@@ -202,22 +235,36 @@ describe('drawAutotiledUndergroundTile — full quadrants', () => {
     // sameH=0, sameV=1 in NW, NE, SW, SE — every quadrant is v-edge.
     // No opposite-kind paint should appear; the substrate alone represents
     // the open floor between two vertical walls.
-    const buf = renderTile(makeNeighbors('open', {
-      nw: 'wall', n: 'open',  ne: 'wall',
-      w:  'wall',              e: 'wall',
-      sw: 'wall', s: 'open',  se: 'wall',
-    }));
+    const buf = renderTile(
+      makeNeighbors('open', {
+        nw: 'wall',
+        n: 'open',
+        ne: 'wall',
+        w: 'wall',
+        e: 'wall',
+        sw: 'wall',
+        s: 'open',
+        se: 'wall',
+      }),
+    );
     expect(countPixels(buf, 'wall')).toBe(0);
   });
 
   it('diagonal-only mismatch (all cardinals = open, NW diagonal = wall) leaves substrate intact', () => {
     // Issue #48: diagonal-only opposite-kind bites read as stray wrong-side
     // triangles. Only cardinal boundaries are allowed to change silhouette.
-    const buf = renderTile(makeNeighbors('open', {
-      nw: 'wall',  n: 'open', ne: 'open',
-      w:  'open',              e:  'open',
-      sw: 'open',  s: 'open', se: 'open',
-    }));
+    const buf = renderTile(
+      makeNeighbors('open', {
+        nw: 'wall',
+        n: 'open',
+        ne: 'open',
+        w: 'open',
+        e: 'open',
+        sw: 'open',
+        s: 'open',
+        se: 'open',
+      }),
+    );
     expect(countPixels(buf, 'wall')).toBe(0);
   });
 });
@@ -230,11 +277,18 @@ describe('drawAutotiledUndergroundTile — chamfer anchor pixels', () => {
     //   - SW NOT chamfer: h(W)=wall (sameH=0), so we need v(S)=open
     //     (sameV=1) to demote SW to v-edge.
     //   - SE NOT chamfer: h(E)=open, so SE is at most v-edge. Set S=open.
-    const buf = renderTile(makeNeighbors('open', {
-      nw: 'wall', n: 'wall',  ne: 'wall',  // NW chamfer fires; NE: h-edge
-      w:  'wall',              e:  'open',
-      sw: 'wall', s: 'open',  se: 'open',  // SW: v-edge; SE: full
-    }));
+    const buf = renderTile(
+      makeNeighbors('open', {
+        nw: 'wall',
+        n: 'wall',
+        ne: 'wall', // NW chamfer fires; NE: h-edge
+        w: 'wall',
+        e: 'open',
+        sw: 'wall',
+        s: 'open',
+        se: 'open', // SW: v-edge; SE: full
+      }),
+    );
     // The anchor pixels live on the BOUNDARY between quadrants. The NW
     // chamfer mask covers (lx + ly < 8) in the NW quadrant. So:
     //   - (8, 0) is in the NE quadrant → NOT painted by NW chamfer.
@@ -258,11 +312,18 @@ describe('drawAutotiledUndergroundTile — chamfer anchor pixels', () => {
     // and the cardinal between two open tiles is the OTHER OPEN tile).
     // So the shared boundary scanline is pure open substrate on both
     // sides — the autotile silhouette is silent there by design.
-    const interior = renderTile(makeNeighbors('open', {
-      nw: 'wall', n: 'wall',  ne: 'wall',
-      w:  'open',              e:  'open',  // both cardinals open: corridor
-      sw: 'wall', s: 'wall',  se: 'wall',
-    }));
+    const interior = renderTile(
+      makeNeighbors('open', {
+        nw: 'wall',
+        n: 'wall',
+        ne: 'wall',
+        w: 'open',
+        e: 'open', // both cardinals open: corridor
+        sw: 'wall',
+        s: 'wall',
+        se: 'wall',
+      }),
+    );
     // Left and right columns should be pure open substrate (no chamfer or
     // bite). The wall-side rim band (top / bottom, alpha < 1) does NOT
     // contribute to the silhouette buffer (paintBuffer filters alpha < 1).
@@ -278,18 +339,25 @@ describe('drawAutotiledUndergroundTile — stair-step diagonal corridor', () => 
     // Stair-step path: ..., (0,0)=O, (1,0)=O, (1,1)=O, (2,1)=O, ...
     // For tile (0,0) in this layout (relative to surrounding wall fill):
     //   N=W, S=W, E=O, W=W, NE=W, NW=W, SE=O, SW=W
-    const buf = renderTile(makeNeighbors('open', {
-      nw: 'wall', n: 'wall', ne: 'wall',
-      w:  'wall',             e: 'open',
-      sw: 'wall', s: 'wall', se: 'open',
-    }));
+    const buf = renderTile(
+      makeNeighbors('open', {
+        nw: 'wall',
+        n: 'wall',
+        ne: 'wall',
+        w: 'wall',
+        e: 'open',
+        sw: 'wall',
+        s: 'wall',
+        se: 'open',
+      }),
+    );
     // NW quadrant: h(W)=W, v(N)=W → chamfer. Wall pixels in NW corner
     // triangle.
     for (let i = 0; i < 8; i++) {
       // Row i, last wall pixel of NW chamfer is at x = 7 - i
       // (chamfer condition: x + y < 8).
-      expect(buf.get(0, i)).toBe('wall');           // first column of chamfer
-      expect(buf.get(7 - i, i)).toBe('wall');       // hypotenuse pixel
+      expect(buf.get(0, i)).toBe('wall'); // first column of chamfer
+      expect(buf.get(7 - i, i)).toBe('wall'); // hypotenuse pixel
       // Just past the hypotenuse → NOT wall (open substrate)
       // — except in row 0 where the NE chamfer also paints (x=8 wall).
       if (i > 0) {
@@ -308,11 +376,18 @@ describe('drawAutotiledUndergroundTile — stair-step diagonal corridor', () => 
   it('saddle case (cardinals all open, two opposing diagonals = wall) paints no diagonal-only bites', () => {
     // Diagonal-only mismatches do not represent a cardinal wall boundary, so
     // they should not paint isolated opposite-kind triangles.
-    const buf = renderTile(makeNeighbors('open', {
-      nw: 'wall',  n: 'open',  ne: 'open',
-      w:  'open',                e: 'open',
-      sw: 'open',  s: 'open',  se: 'wall',
-    }));
+    const buf = renderTile(
+      makeNeighbors('open', {
+        nw: 'wall',
+        n: 'open',
+        ne: 'open',
+        w: 'open',
+        e: 'open',
+        sw: 'open',
+        s: 'open',
+        se: 'wall',
+      }),
+    );
     expect(countPixels(buf, 'wall')).toBe(0);
   });
 });
@@ -320,9 +395,15 @@ describe('drawAutotiledUndergroundTile — stair-step diagonal corridor', () => 
 describe('drawAutotiledUndergroundTile — chip variants (Phase E)', () => {
   function makeNeighbors(c: NeighborKind, spec: Partial<Neighbors3x3> = {}): Neighbors3x3 {
     return {
-      nw: spec.nw ?? 'wall', n:  spec.n  ?? 'wall', ne: spec.ne ?? 'wall',
-      w:  spec.w  ?? 'wall', c,                       e:  spec.e  ?? 'wall',
-      sw: spec.sw ?? 'wall', s:  spec.s  ?? 'wall', se: spec.se ?? 'wall',
+      nw: spec.nw ?? 'wall',
+      n: spec.n ?? 'wall',
+      ne: spec.ne ?? 'wall',
+      w: spec.w ?? 'wall',
+      c,
+      e: spec.e ?? 'wall',
+      sw: spec.sw ?? 'wall',
+      s: spec.s ?? 'wall',
+      se: spec.se ?? 'wall',
     };
   }
 
@@ -336,9 +417,14 @@ describe('drawAutotiledUndergroundTile — chip variants (Phase E)', () => {
     //   - (0, 0) — the OUTER NW corner — is always wall (chip's lx, ly
     //     each ≥ 1, so chip never lands at (0, 0)).
     const singleNW = makeNeighbors('open', {
-      nw: 'wall', n: 'wall',  ne: 'wall',
-      w:  'wall',              e:  'open',
-      sw: 'wall', s: 'open',  se: 'open',
+      nw: 'wall',
+      n: 'wall',
+      ne: 'wall',
+      w: 'wall',
+      e: 'open',
+      sw: 'wall',
+      s: 'open',
+      se: 'open',
     });
     for (let tx = 0; tx < 32; tx++) {
       for (let ty = 0; ty < 32; ty++) {
@@ -349,7 +435,7 @@ describe('drawAutotiledUndergroundTile — chip variants (Phase E)', () => {
 
         expect(buf.get(8, 0)).not.toBe('wall'); // top-edge midpoint anchor
         expect(buf.get(0, 8)).not.toBe('wall'); // left-edge midpoint anchor
-        expect(buf.get(0, 0)).toBe('wall');     // outer NW corner — always wall
+        expect(buf.get(0, 0)).toBe('wall'); // outer NW corner — always wall
       }
     }
   });
@@ -406,13 +492,21 @@ describe('drawAutotiledUndergroundTile — determinism', () => {
 describe('drawUndergroundRim', () => {
   function makeNeighbors(c: NeighborKind, spec: Partial<Neighbors3x3> = {}): Neighbors3x3 {
     return {
-      nw: spec.nw ?? 'wall', n:  spec.n  ?? 'wall', ne: spec.ne ?? 'wall',
-      w:  spec.w  ?? 'wall', c,                       e:  spec.e  ?? 'wall',
-      sw: spec.sw ?? 'wall', s:  spec.s  ?? 'wall', se: spec.se ?? 'wall',
+      nw: spec.nw ?? 'wall',
+      n: spec.n ?? 'wall',
+      ne: spec.ne ?? 'wall',
+      w: spec.w ?? 'wall',
+      c,
+      e: spec.e ?? 'wall',
+      sw: spec.sw ?? 'wall',
+      s: spec.s ?? 'wall',
+      se: spec.se ?? 'wall',
     };
   }
 
-  function gfxCalls(): MockGfx { return new MockGfx(); }
+  function gfxCalls(): MockGfx {
+    return new MockGfx();
+  }
 
   it('does nothing on a wall tile (rim only fires on open tiles)', () => {
     const gfx = gfxCalls();
@@ -422,21 +516,48 @@ describe('drawUndergroundRim', () => {
 
   it('does nothing on an open tile with no wall neighbors', () => {
     const gfx = gfxCalls();
-    drawUndergroundRim(gfx, 0, 0, 0, 0, 'open', makeNeighbors('open', {
-      nw: 'open', n: 'open', ne: 'open',
-      w:  'open',             e: 'open',
-      sw: 'open', s: 'open', se: 'open',
-    }));
+    drawUndergroundRim(
+      gfx,
+      0,
+      0,
+      0,
+      0,
+      'open',
+      makeNeighbors('open', {
+        nw: 'open',
+        n: 'open',
+        ne: 'open',
+        w: 'open',
+        e: 'open',
+        sw: 'open',
+        s: 'open',
+        se: 'open',
+      }),
+    );
     expect(fillRectCalls(gfx)).toHaveLength(0);
   });
 
   it('emits 2 band fillRects + 1 chip per cardinal wall neighbor', () => {
     const gfx = gfxCalls();
     // Open tile with only N=wall (rest open).
-    drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open', {
-      n: 'wall',
-      ne: 'open', e: 'open', se: 'open', s: 'open', sw: 'open', w: 'open', nw: 'open',
-    }));
+    drawUndergroundRim(
+      gfx,
+      0,
+      0,
+      5,
+      7,
+      'open',
+      makeNeighbors('open', {
+        n: 'wall',
+        ne: 'open',
+        e: 'open',
+        se: 'open',
+        s: 'open',
+        sw: 'open',
+        w: 'open',
+        nw: 'open',
+      }),
+    );
     // 1 heavy band + 1 light band + 1 chip = 3 fillRects.
     expect(fillRectCalls(gfx)).toHaveLength(3);
   });
@@ -449,11 +570,24 @@ describe('drawUndergroundRim', () => {
 
   it('clips rim bands away from chamfered corner halves — NW chamfer', () => {
     const gfx = gfxCalls();
-    drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open', {
-      nw: 'wall', n: 'wall', ne: 'open',
-      w:  'wall',             e: 'open',
-      sw: 'open', s: 'open', se: 'open',
-    }));
+    drawUndergroundRim(
+      gfx,
+      0,
+      0,
+      5,
+      7,
+      'open',
+      makeNeighbors('open', {
+        nw: 'wall',
+        n: 'wall',
+        ne: 'open',
+        w: 'wall',
+        e: 'open',
+        sw: 'open',
+        s: 'open',
+        se: 'open',
+      }),
+    );
     const rects = fillRectCalls(gfx);
     // Heavy band (row 0): NW chamfer covers cols 0..7 → clipped.
     // Light band (row 1): NW chamfer covers cols 0..6 → cols 0..6 clipped.
@@ -464,78 +598,117 @@ describe('drawUndergroundRim', () => {
       expect(rectOverlaps(rect, 1, 0, 1, 7)).toBe(false); // clip light W col 1 rows 0..6
     }
     // Unclipped portions should be painted somewhere.
-    expect(rects.some(rect => rectOverlaps(rect, 8, 0, 8, 1))).toBe(true);  // heavy N E half
-    expect(rects.some(rect => rectOverlaps(rect, 7, 1, 9, 1))).toBe(true);  // light N from col 7
-    expect(rects.some(rect => rectOverlaps(rect, 0, 8, 1, 8))).toBe(true);  // heavy W S half
-    expect(rects.some(rect => rectOverlaps(rect, 1, 7, 1, 9))).toBe(true);  // light W from row 7
+    expect(rects.some((rect) => rectOverlaps(rect, 8, 0, 8, 1))).toBe(true); // heavy N E half
+    expect(rects.some((rect) => rectOverlaps(rect, 7, 1, 9, 1))).toBe(true); // light N from col 7
+    expect(rects.some((rect) => rectOverlaps(rect, 0, 8, 1, 8))).toBe(true); // heavy W S half
+    expect(rects.some((rect) => rectOverlaps(rect, 1, 7, 1, 9))).toBe(true); // light W from row 7
   });
 
   it('clips rim bands away from chamfered corner halves — NE chamfer', () => {
     const gfx = gfxCalls();
-    drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open', {
-      nw: 'open', n: 'wall', ne: 'wall',
-      w:  'open',             e: 'wall',
-      sw: 'open', s: 'open', se: 'open',
-    }));
+    drawUndergroundRim(
+      gfx,
+      0,
+      0,
+      5,
+      7,
+      'open',
+      makeNeighbors('open', {
+        nw: 'open',
+        n: 'wall',
+        ne: 'wall',
+        w: 'open',
+        e: 'wall',
+        sw: 'open',
+        s: 'open',
+        se: 'open',
+      }),
+    );
     const rects = fillRectCalls(gfx);
     // NE chamfer at row R covers cols (8+R)..15. So heavy (row 0): cols
     // 8..15. Light (row 1): cols 9..15. NE on E edge col 15 row R covers
     // similarly mirrored.
     for (const rect of rects) {
-      expect(rectOverlaps(rect, 8, 0, 8, 1)).toBe(false);  // clip heavy N row 0 cols 8..15
-      expect(rectOverlaps(rect, 9, 1, 7, 1)).toBe(false);  // clip light N row 1 cols 9..15
+      expect(rectOverlaps(rect, 8, 0, 8, 1)).toBe(false); // clip heavy N row 0 cols 8..15
+      expect(rectOverlaps(rect, 9, 1, 7, 1)).toBe(false); // clip light N row 1 cols 9..15
       expect(rectOverlaps(rect, 15, 0, 1, 8)).toBe(false); // clip heavy E col 15 rows 0..7
       expect(rectOverlaps(rect, 14, 0, 1, 7)).toBe(false); // clip light E col 14 rows 0..6
     }
-    expect(rects.some(rect => rectOverlaps(rect, 0, 0, 8, 1))).toBe(true);  // heavy N W half
-    expect(rects.some(rect => rectOverlaps(rect, 0, 1, 9, 1))).toBe(true);  // light N up to col 8
-    expect(rects.some(rect => rectOverlaps(rect, 15, 8, 1, 8))).toBe(true); // heavy E S half
-    expect(rects.some(rect => rectOverlaps(rect, 14, 7, 1, 9))).toBe(true); // light E from row 7
+    expect(rects.some((rect) => rectOverlaps(rect, 0, 0, 8, 1))).toBe(true); // heavy N W half
+    expect(rects.some((rect) => rectOverlaps(rect, 0, 1, 9, 1))).toBe(true); // light N up to col 8
+    expect(rects.some((rect) => rectOverlaps(rect, 15, 8, 1, 8))).toBe(true); // heavy E S half
+    expect(rects.some((rect) => rectOverlaps(rect, 14, 7, 1, 9))).toBe(true); // light E from row 7
   });
 
   it('clips rim bands away from chamfered corner halves — SE chamfer', () => {
     const gfx = gfxCalls();
-    drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open', {
-      nw: 'open', n: 'open', ne: 'open',
-      w:  'open',             e: 'wall',
-      sw: 'open', s: 'wall', se: 'wall',
-    }));
+    drawUndergroundRim(
+      gfx,
+      0,
+      0,
+      5,
+      7,
+      'open',
+      makeNeighbors('open', {
+        nw: 'open',
+        n: 'open',
+        ne: 'open',
+        w: 'open',
+        e: 'wall',
+        sw: 'open',
+        s: 'wall',
+        se: 'wall',
+      }),
+    );
     const rects = fillRectCalls(gfx);
     // SE chamfer at row R (R measured from south edge) covers cols
     // (8+R)..15. On the S edge: heavy (S row 15, rowFromEdge=0): cols
     // 8..15. Light (S row 14, rowFromEdge=1): cols 9..15.
     for (const rect of rects) {
-      expect(rectOverlaps(rect, 8, 15, 8, 1)).toBe(false);  // clip heavy S row 15 cols 8..15
-      expect(rectOverlaps(rect, 9, 14, 7, 1)).toBe(false);  // clip light S row 14 cols 9..15
-      expect(rectOverlaps(rect, 15, 8, 1, 8)).toBe(false);  // clip heavy E col 15 rows 8..15
-      expect(rectOverlaps(rect, 14, 9, 1, 7)).toBe(false);  // clip light E col 14 rows 9..15
+      expect(rectOverlaps(rect, 8, 15, 8, 1)).toBe(false); // clip heavy S row 15 cols 8..15
+      expect(rectOverlaps(rect, 9, 14, 7, 1)).toBe(false); // clip light S row 14 cols 9..15
+      expect(rectOverlaps(rect, 15, 8, 1, 8)).toBe(false); // clip heavy E col 15 rows 8..15
+      expect(rectOverlaps(rect, 14, 9, 1, 7)).toBe(false); // clip light E col 14 rows 9..15
     }
-    expect(rects.some(rect => rectOverlaps(rect, 0, 15, 8, 1))).toBe(true);  // heavy S W half
-    expect(rects.some(rect => rectOverlaps(rect, 0, 14, 9, 1))).toBe(true);  // light S up to col 8
-    expect(rects.some(rect => rectOverlaps(rect, 15, 0, 1, 8))).toBe(true);  // heavy E N half
-    expect(rects.some(rect => rectOverlaps(rect, 14, 0, 1, 9))).toBe(true);  // light E up to row 8
+    expect(rects.some((rect) => rectOverlaps(rect, 0, 15, 8, 1))).toBe(true); // heavy S W half
+    expect(rects.some((rect) => rectOverlaps(rect, 0, 14, 9, 1))).toBe(true); // light S up to col 8
+    expect(rects.some((rect) => rectOverlaps(rect, 15, 0, 1, 8))).toBe(true); // heavy E N half
+    expect(rects.some((rect) => rectOverlaps(rect, 14, 0, 1, 9))).toBe(true); // light E up to row 8
   });
 
   it('clips rim bands away from chamfered corner halves — SW chamfer', () => {
     const gfx = gfxCalls();
-    drawUndergroundRim(gfx, 0, 0, 5, 7, 'open', makeNeighbors('open', {
-      nw: 'open', n: 'open', ne: 'open',
-      w:  'wall',             e: 'open',
-      sw: 'wall', s: 'wall', se: 'open',
-    }));
+    drawUndergroundRim(
+      gfx,
+      0,
+      0,
+      5,
+      7,
+      'open',
+      makeNeighbors('open', {
+        nw: 'open',
+        n: 'open',
+        ne: 'open',
+        w: 'wall',
+        e: 'open',
+        sw: 'wall',
+        s: 'wall',
+        se: 'open',
+      }),
+    );
     const rects = fillRectCalls(gfx);
     // SW chamfer at row R (from south edge) covers cols 0..(7-R). Heavy
     // (S row 15): 0..7. Light (S row 14): 0..6. On the W edge, mirrored.
     for (const rect of rects) {
       expect(rectOverlaps(rect, 0, 15, 8, 1)).toBe(false); // clip heavy S row 15 cols 0..7
       expect(rectOverlaps(rect, 0, 14, 7, 1)).toBe(false); // clip light S row 14 cols 0..6
-      expect(rectOverlaps(rect, 0, 8, 1, 8)).toBe(false);  // clip heavy W col 0 rows 8..15
-      expect(rectOverlaps(rect, 1, 9, 1, 7)).toBe(false);  // clip light W col 1 rows 9..15
+      expect(rectOverlaps(rect, 0, 8, 1, 8)).toBe(false); // clip heavy W col 0 rows 8..15
+      expect(rectOverlaps(rect, 1, 9, 1, 7)).toBe(false); // clip light W col 1 rows 9..15
     }
-    expect(rects.some(rect => rectOverlaps(rect, 8, 15, 8, 1))).toBe(true); // heavy S E half
-    expect(rects.some(rect => rectOverlaps(rect, 7, 14, 9, 1))).toBe(true); // light S from col 7
-    expect(rects.some(rect => rectOverlaps(rect, 0, 0, 1, 8))).toBe(true);  // heavy W N half
-    expect(rects.some(rect => rectOverlaps(rect, 1, 0, 1, 9))).toBe(true);  // light W up to row 8
+    expect(rects.some((rect) => rectOverlaps(rect, 8, 15, 8, 1))).toBe(true); // heavy S E half
+    expect(rects.some((rect) => rectOverlaps(rect, 7, 14, 9, 1))).toBe(true); // light S from col 7
+    expect(rects.some((rect) => rectOverlaps(rect, 0, 0, 1, 8))).toBe(true); // heavy W N half
+    expect(rects.some((rect) => rectOverlaps(rect, 1, 0, 1, 9))).toBe(true); // light W up to row 8
   });
 
   it('all four cardinal walls — heavy bands fully clipped, light bands paint a 2-pixel center', () => {
@@ -549,16 +722,16 @@ describe('drawUndergroundRim', () => {
     const rects = fillRectCalls(gfx);
     // No heavy band at outermost rows/cols.
     for (const rect of rects) {
-      expect(rectOverlaps(rect, 0, 0, 16, 1)).toBe(false);  // heavy N
+      expect(rectOverlaps(rect, 0, 0, 16, 1)).toBe(false); // heavy N
       expect(rectOverlaps(rect, 0, 15, 16, 1)).toBe(false); // heavy S
-      expect(rectOverlaps(rect, 0, 0, 1, 16)).toBe(false);  // heavy W
+      expect(rectOverlaps(rect, 0, 0, 1, 16)).toBe(false); // heavy W
       expect(rectOverlaps(rect, 15, 0, 1, 16)).toBe(false); // heavy E
     }
     // Light bands present in the 2-pixel center segments.
-    expect(rects.some(rect => rectOverlaps(rect, 7, 1, 2, 1))).toBe(true);  // light N center
-    expect(rects.some(rect => rectOverlaps(rect, 7, 14, 2, 1))).toBe(true); // light S center
-    expect(rects.some(rect => rectOverlaps(rect, 1, 7, 1, 2))).toBe(true);  // light W center
-    expect(rects.some(rect => rectOverlaps(rect, 14, 7, 1, 2))).toBe(true); // light E center
+    expect(rects.some((rect) => rectOverlaps(rect, 7, 1, 2, 1))).toBe(true); // light N center
+    expect(rects.some((rect) => rectOverlaps(rect, 7, 14, 2, 1))).toBe(true); // light S center
+    expect(rects.some((rect) => rectOverlaps(rect, 1, 7, 1, 2))).toBe(true); // light W center
+    expect(rects.some((rect) => rectOverlaps(rect, 14, 7, 1, 2))).toBe(true); // light E center
   });
 });
 
@@ -566,16 +739,29 @@ describe('drawAutotiledUndergroundTile — draw-op budget', () => {
   it('worst-case open tile (4 chamfers) emits ≤ 80 fillRects', () => {
     const gfx = new MockGfx();
     drawAutotiledUndergroundTile(gfx, 0, 0, 0, 0, 'open', makeNeighbors('open'));
-    expect(gfx.calls.filter(c => c.method === 'fillRect').length).toBeLessThanOrEqual(80);
+    expect(gfx.calls.filter((c) => c.method === 'fillRect').length).toBeLessThanOrEqual(80);
   });
 
   it('worst-case wall tile (4 chamfers) emits ≤ 80 fillRects', () => {
     const gfx = new MockGfx();
-    drawAutotiledUndergroundTile(gfx, 0, 0, 0, 0, 'wall', makeNeighbors('wall', {
-      nw: 'open', n: 'open', ne: 'open',
-      w:  'open',             e:  'open',
-      sw: 'open', s: 'open', se: 'open',
-    }));
-    expect(gfx.calls.filter(c => c.method === 'fillRect').length).toBeLessThanOrEqual(80);
+    drawAutotiledUndergroundTile(
+      gfx,
+      0,
+      0,
+      0,
+      0,
+      'wall',
+      makeNeighbors('wall', {
+        nw: 'open',
+        n: 'open',
+        ne: 'open',
+        w: 'open',
+        e: 'open',
+        sw: 'open',
+        s: 'open',
+        se: 'open',
+      }),
+    );
+    expect(gfx.calls.filter((c) => c.method === 'fillRect').length).toBeLessThanOrEqual(80);
   });
 });

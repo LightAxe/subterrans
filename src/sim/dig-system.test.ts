@@ -4,25 +4,17 @@
 // Pre-allocate out and queue as new Int32Array(width * height).
 
 import { describe, it, expect } from 'vitest';
-import {
-  createDigFlowFields,
-  ensureDigFlowField,
-  computeDigFlowField,
-} from './dig-system.js';
-import {
-  createUndergroundGrid,
-  ugSet,
-  UndergroundTileState,
-} from './terrain.js';
+import { createDigFlowFields, ensureDigFlowField, computeDigFlowField } from './dig-system.js';
+import { createUndergroundGrid, ugSet, UndergroundTileState } from './terrain.js';
 
 // ---------------------------------------------------------------------------
 // Direction constants (match dig-system.ts internal encoding)
 // 0=North, 1=East, 2=South, 3=West, -1=source, -2=unreachable
 // ---------------------------------------------------------------------------
 const NORTH = 0;
-const EAST  = 1;
+const EAST = 1;
 const SOUTH = 2;
-const WEST  = 3;
+const WEST = 3;
 const SOURCE = -1;
 const UNREACHABLE = -2;
 
@@ -32,7 +24,7 @@ const UNREACHABLE = -2;
 function makeBuffers(width: number, height: number) {
   const size = width * height;
   return {
-    out:   new Int32Array(size),
+    out: new Int32Array(size),
     queue: new Int32Array(size),
   };
 }
@@ -41,9 +33,9 @@ function makeBuffers(width: number, height: number) {
 // Test 1: Empty grid (all Solid) — no Marked tiles → all unreachable
 // ---------------------------------------------------------------------------
 describe('computeDigFlowField', () => {
-
   it('empty grid (all Solid) produces all -2 (unreachable)', () => {
-    const width = 4, height = 4;
+    const width = 4,
+      height = 4;
     const grid = createUndergroundGrid(width, height);
     const { out, queue } = makeBuffers(width, height);
 
@@ -59,7 +51,8 @@ describe('computeDigFlowField', () => {
   // ---------------------------------------------------------------------------
   it('single Marked tile with adjacent Open tiles — neighbors point toward source', () => {
     // 8×4 grid; Marked at (3,2); Open neighbors at (2,2),(4,2),(3,1),(3,3)
-    const width = 8, height = 4;
+    const width = 8,
+      height = 4;
     const grid = createUndergroundGrid(width, height);
 
     ugSet(grid, 3, 2, UndergroundTileState.Marked);
@@ -72,19 +65,19 @@ describe('computeDigFlowField', () => {
     computeDigFlowField(grid, out, queue);
 
     // The source tile itself
-    expect(out[2 * width + 3]).toBe(SOURCE);  // (3,2)
+    expect(out[2 * width + 3]).toBe(SOURCE); // (3,2)
 
     // West of source → East points back to (3,2)
-    expect(out[2 * width + 2]).toBe(EAST);    // (2,2): go East to reach (3,2)
+    expect(out[2 * width + 2]).toBe(EAST); // (2,2): go East to reach (3,2)
 
     // East of source → West points back to (3,2)
-    expect(out[2 * width + 4]).toBe(WEST);    // (4,2): go West to reach (3,2)
+    expect(out[2 * width + 4]).toBe(WEST); // (4,2): go West to reach (3,2)
 
     // North of source (row 1) → South points back to (3,2)
-    expect(out[1 * width + 3]).toBe(SOUTH);   // (3,1): go South to reach (3,2)
+    expect(out[1 * width + 3]).toBe(SOUTH); // (3,1): go South to reach (3,2)
 
     // South of source (row 3) → North points back to (3,2)
-    expect(out[3 * width + 3]).toBe(NORTH);   // (3,3): go North to reach (3,2)
+    expect(out[3 * width + 3]).toBe(NORTH); // (3,3): go North to reach (3,2)
 
     // All Solid tiles (rest of the grid) remain -2
     const markedIdx = 2 * width + 3;
@@ -104,7 +97,8 @@ describe('computeDigFlowField', () => {
     // Tiles 1–4 should point West (toward col 0); tiles 5–8 should point East (toward col 9).
     // Tile 4 and 5 are equidistant — BFS is deterministic so the tiebreak goes to whichever
     // was enqueued first (source at col 0 is seeded first in the linear scan).
-    const width = 10, height = 1;
+    const width = 10,
+      height = 1;
     const grid = createUndergroundGrid(width, height);
 
     ugSet(grid, 0, 0, UndergroundTileState.Marked);
@@ -116,8 +110,8 @@ describe('computeDigFlowField', () => {
     const { out, queue } = makeBuffers(width, height);
     computeDigFlowField(grid, out, queue);
 
-    expect(out[0]).toBe(SOURCE);  // (0,0) Marked
-    expect(out[9]).toBe(SOURCE);  // (9,0) Marked
+    expect(out[0]).toBe(SOURCE); // (0,0) Marked
+    expect(out[9]).toBe(SOURCE); // (9,0) Marked
 
     // Tiles near left source should point West (toward col 0)
     // The BFS from source 0 expands East first; source 9 expands West.
@@ -145,7 +139,8 @@ describe('computeDigFlowField', () => {
   it('Solid wall blocks BFS — tiles on far side are unreachable', () => {
     // 6×1 grid: Marked at (0,0), Open at (1,0),(2,0), Solid at (3,0), Open at (4,0),(5,0)
     // Tiles (4,0) and (5,0) should be unreachable (-2) because (3,0) is Solid.
-    const width = 6, height = 1;
+    const width = 6,
+      height = 1;
     const grid = createUndergroundGrid(width, height);
 
     ugSet(grid, 0, 0, UndergroundTileState.Marked);
@@ -158,12 +153,12 @@ describe('computeDigFlowField', () => {
     const { out, queue } = makeBuffers(width, height);
     computeDigFlowField(grid, out, queue);
 
-    expect(out[0]).toBe(SOURCE);        // (0,0) Marked
-    expect(out[1]).toBe(WEST);          // (1,0) points West toward (0,0)
-    expect(out[2]).toBe(WEST);          // (2,0) points West
-    expect(out[3]).toBe(UNREACHABLE);   // (3,0) Solid — unreachable
-    expect(out[4]).toBe(UNREACHABLE);   // (4,0) cut off by wall
-    expect(out[5]).toBe(UNREACHABLE);   // (5,0) cut off by wall
+    expect(out[0]).toBe(SOURCE); // (0,0) Marked
+    expect(out[1]).toBe(WEST); // (1,0) points West toward (0,0)
+    expect(out[2]).toBe(WEST); // (2,0) points West
+    expect(out[3]).toBe(UNREACHABLE); // (3,0) Solid — unreachable
+    expect(out[4]).toBe(UNREACHABLE); // (4,0) cut off by wall
+    expect(out[5]).toBe(UNREACHABLE); // (5,0) cut off by wall
   });
 
   // ---------------------------------------------------------------------------
@@ -172,7 +167,8 @@ describe('computeDigFlowField', () => {
   it('BeingDug tiles are passable — flow-field routes through them', () => {
     // 3×1 grid: Marked at (0,0), BeingDug at (1,0), Open at (2,0)
     // (2,0) should get a direction toward (0,0) via (1,0).
-    const width = 3, height = 1;
+    const width = 3,
+      height = 1;
     const grid = createUndergroundGrid(width, height);
 
     ugSet(grid, 0, 0, UndergroundTileState.Marked);
@@ -182,16 +178,17 @@ describe('computeDigFlowField', () => {
     const { out, queue } = makeBuffers(width, height);
     computeDigFlowField(grid, out, queue);
 
-    expect(out[0]).toBe(SOURCE);  // (0,0) Marked
-    expect(out[1]).toBe(WEST);    // (1,0) BeingDug: points West toward (0,0)
-    expect(out[2]).toBe(WEST);    // (2,0) Open: points West through BeingDug
+    expect(out[0]).toBe(SOURCE); // (0,0) Marked
+    expect(out[1]).toBe(WEST); // (1,0) BeingDug: points West toward (0,0)
+    expect(out[2]).toBe(WEST); // (2,0) Open: points West through BeingDug
   });
 
   // ---------------------------------------------------------------------------
   // Test 6: Pre-allocated queue reuse — second call on same buffers works correctly
   // ---------------------------------------------------------------------------
   it('second call with same buffers produces correct results (queue reuse)', () => {
-    const width = 4, height = 1;
+    const width = 4,
+      height = 1;
     const grid1 = createUndergroundGrid(width, height);
     const grid2 = createUndergroundGrid(width, height);
 
@@ -221,7 +218,6 @@ describe('computeDigFlowField', () => {
     expect(out[1]).toBe(EAST);
     expect(out[0]).toBe(EAST);
   });
-
 });
 
 // ---------------------------------------------------------------------------

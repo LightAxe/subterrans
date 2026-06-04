@@ -66,7 +66,7 @@ import { MAX_ENTITIES } from '../constants.js';
 
 const nurseScratch = {
   /** Per-nurse stamp: nurseScratch.usedStamp[nurseId] === currentStamp means used this tick. */
-  usedStamp:    new Uint32Array(MAX_ENTITIES),
+  usedStamp: new Uint32Array(MAX_ENTITIES),
   /** Incremented once per tick before the acceleration pass. Uint32 wrap is safe. */
   currentStamp: 0,
 };
@@ -82,7 +82,6 @@ const nurseScratch = {
  * No-op if the colony has no completed Nursery chamber.
  */
 export function tickLarvaMaturation(world: WorldState, colony: ColonyRecord): void {
-
   // Brood frozen = no completed Nursery. Nurses can't exist without a Nursery
   // (behavior allocator gates on hasNursery), so there's nothing to accelerate.
   if (!hasCompletedChamber(colony, ChamberType.Nursery)) return;
@@ -93,7 +92,7 @@ export function tickLarvaMaturation(world: WorldState, colony: ColonyRecord): vo
   // Advance the stamp. Skip 0: usedStamp[] is zero-initialized, so stamp===0
   // would falsely treat every nurse as "used this tick" after a full Uint32
   // wrap (~4 billion ticks). `|| 1` bumps the one collision tick to 1.
-  nurseScratch.currentStamp = ((nurseScratch.currentStamp + 1) >>> 0) || 1;
+  nurseScratch.currentStamp = (nurseScratch.currentStamp + 1) >>> 0 || 1;
   const stamp = nurseScratch.currentStamp;
 
   let slotsRemaining = cap;
@@ -142,10 +141,10 @@ export function tickLarvaMaturation(world: WorldState, colony: ColonyRecord): vo
       colony.larvae[i] = colony.larvae[colony.larvae.length - 1]!;
       colony.larvae.pop();
       colony.larvaeCount -= 1;
-      ants.age[larvaId]             = 0;
+      ants.age[larvaId] = 0;
       ants.starvationTimer[larvaId] = STARVATION_GRACE_TICKS;
-      ants.task[larvaId]            = AntTask.Idle;
-      ants.speed[larvaId]           = WORKER_BASE_SPEED;
+      ants.task[larvaId] = AntTask.Idle;
+      ants.speed[larvaId] = WORKER_BASE_SPEED;
       colony.workers.push(larvaId);
       colony.workerCount += 1;
       // If a nurse was carrying this larva (Feeding state), drop the carry.
@@ -153,9 +152,9 @@ export function tickLarvaMaturation(world: WorldState, colony: ColonyRecord): vo
       const carrierId = ants.carriedBy[larvaId]!;
       if (carrierId !== -1) {
         if (ants.alive[carrierId] === 1 && ants.carryingBroodId[carrierId] === larvaId) {
-          ants.carryingBroodId[carrierId]  = -1;
-          ants.task[carrierId]             = AntTask.Idle;
-          ants.subTask[carrierId]          = 0;
+          ants.carryingBroodId[carrierId] = -1;
+          ants.task[carrierId] = AntTask.Idle;
+          ants.subTask[carrierId] = 0;
           // Clear the Attending dwell counter so the future Forager search-pause
           // logic (which decrements searchPauseTicks > 0) doesn't see a stale
           // non-zero value from the mid-dwell abort.
@@ -186,13 +185,13 @@ export function tickLarvaMaturation(world: WorldState, colony: ColonyRecord): vo
  * Returns -1 if no eligible nurse is found.
  */
 function findAdjacentAttendingNurse(
-  ants:         AntComponents,
-  entityCount:  number,
-  colonyId:     number,
-  larvaTileX:   number,
-  larvaTileY:   number,
-  usedStamp:    Uint32Array,
-  stamp:        number,
+  ants: AntComponents,
+  entityCount: number,
+  colonyId: number,
+  larvaTileX: number,
+  larvaTileY: number,
+  usedStamp: Uint32Array,
+  stamp: number,
 ): number {
   let bestId = -1;
   for (let j = 0; j < entityCount; j++) {

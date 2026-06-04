@@ -41,10 +41,10 @@ export type ColonyId = number;
 // ---------------------------------------------------------------------------
 
 export interface WorkerAllocation {
-  nurse:  number;
+  nurse: number;
   forage: number;
-  dig:    number;
-  fight:  number;
+  dig: number;
+  fight: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ export interface WorkerAllocation {
 
 export interface BehaviorRatio {
   forage: number;
-  fight:  number;
+  fight: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -70,13 +70,13 @@ export interface BehaviorRatio {
 // ---------------------------------------------------------------------------
 
 export interface ChamberRecord {
-  chamberId:   EntityId;
+  chamberId: EntityId;
   chamberType: ChamberType;
-  foodStored:  number;
-  posX:        number;
-  posY:        number;
-  width:       number;
-  height:      number;
+  foodStored: number;
+  posX: number;
+  posY: number;
+  width: number;
+  height: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -97,29 +97,29 @@ export interface ChamberRecord {
 // ---------------------------------------------------------------------------
 
 export interface ColonyRecord {
-  colonyId:              ColonyId;
-  queenEntityId:         EntityId;
-  queenStarvationTimer:  number;
-  foodStored:            number;
-  workerCount:           number;
-  eggCount:              number;
-  larvaeCount:           number;
-  nurseCount:            number;
-  eggs:                  EntityId[];
-  larvae:                EntityId[];
-  workers:               EntityId[];
-  chambers:              ChamberRecord[];
-  targetRatio:           BehaviorRatio;
-  computedAllocation:    WorkerAllocation;
+  colonyId: ColonyId;
+  queenEntityId: EntityId;
+  queenStarvationTimer: number;
+  foodStored: number;
+  workerCount: number;
+  eggCount: number;
+  larvaeCount: number;
+  nurseCount: number;
+  eggs: EntityId[];
+  larvae: EntityId[];
+  workers: EntityId[];
+  chambers: ChamberRecord[];
+  targetRatio: BehaviorRatio;
+  computedAllocation: WorkerAllocation;
   /**
    * Per-task worker counts written at the end of PRD §8a step 9 (Plan 10). Invariants:
    *   (1) Every field is non-negative: `taskCensus.{nurse,forage,dig,fight} >= 0`.
    *   (2) Sum is bounded by workerCount: `nurse + forage + dig + fight === workerCount - (ants whose task is AntTask.Idle post-step-9)`. In Phase 6 steady state step 9 reassigns every idle-checkpoint ant, so the sum equals `workerCount` once all eligible idle ants have been rehomed.
    * Step 9 writes this field after reconciling actual-per-task counters against `computedAllocation`; see Plan 10 Test 14b for the regression guard.
    */
-  taskCensus:            WorkerAllocation;
-  defeated:              boolean;
-  reconcileCountdown:    number;
+  taskCensus: WorkerAllocation;
+  defeated: boolean;
+  reconcileCountdown: number;
 
   /** Phase 3 PRD §2 — nest entrances (max MAX_ENTRANCES_PER_COLONY = 4). Assigned caller-side (PRD §2a extension contract); the Phase 2 factory body does not initialize this field. */
   entrances: NestEntrance[];
@@ -203,29 +203,29 @@ export function createColonyRecord(colonyId: ColonyId, queenEntityId: EntityId):
   // (see createScenario in Plan 07, and the new-colony fallback in copyWorldState
   // in Task 2 below). The `as unknown as ColonyRecord` assertion reflects that the
   // object is complete only after the caller assigns the Phase 3 defaults.
-  return ({
+  return {
     colonyId,
     queenEntityId,
-    queenStarvationTimer:  STARVATION_GRACE_TICKS,
-    foodStored:            0,
-    workerCount:           0,
-    eggCount:              0,
-    larvaeCount:           0,
-    nurseCount:            0,
-    eggs:                  [],
-    larvae:                [],
-    workers:               [],
-    chambers:              [],
-    targetRatio:           { ...DEFAULT_BEHAVIOR_RATIO },
-    computedAllocation:    { nurse: 0, forage: 0, dig: 0, fight: 0 },
-    taskCensus:            { nurse: 0, forage: 0, dig: 0, fight: 0 },
-    defeated:              false,
-    reconcileCountdown:    RECONCILE_INTERVAL_TICKS,
-    killCount:             0,
-    priorityFoodPileId:    null,
-    queenLastEggTick:      -QUEEN_EGG_INTERVAL_BASE_TICKS,
-    eggIntervalNumerator:  4, // Normal = identity (set per-colony in createScenario for difficulty tiers)
-  }) as unknown as ColonyRecord;
+    queenStarvationTimer: STARVATION_GRACE_TICKS,
+    foodStored: 0,
+    workerCount: 0,
+    eggCount: 0,
+    larvaeCount: 0,
+    nurseCount: 0,
+    eggs: [],
+    larvae: [],
+    workers: [],
+    chambers: [],
+    targetRatio: { ...DEFAULT_BEHAVIOR_RATIO },
+    computedAllocation: { nurse: 0, forage: 0, dig: 0, fight: 0 },
+    taskCensus: { nurse: 0, forage: 0, dig: 0, fight: 0 },
+    defeated: false,
+    reconcileCountdown: RECONCILE_INTERVAL_TICKS,
+    killCount: 0,
+    priorityFoodPileId: null,
+    queenLastEggTick: -QUEEN_EGG_INTERVAL_BASE_TICKS,
+    eggIntervalNumerator: 4, // Normal = identity (set per-colony in createScenario for difficulty tiers)
+  } as unknown as ColonyRecord;
 }
 
 // ---------------------------------------------------------------------------

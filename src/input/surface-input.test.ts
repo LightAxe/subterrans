@@ -52,8 +52,18 @@ function makeViewState(
 ): ViewState {
   return {
     activeView: view,
-    surfaceCamera: { x: camX, y: camY, viewportWidth: VIEWPORT_WIDTH_TILES, viewportHeight: VIEWPORT_HEIGHT_TILES },
-    undergroundCamera: { x: camX, y: camY, viewportWidth: VIEWPORT_WIDTH_TILES, viewportHeight: VIEWPORT_HEIGHT_TILES },
+    surfaceCamera: {
+      x: camX,
+      y: camY,
+      viewportWidth: VIEWPORT_WIDTH_TILES,
+      viewportHeight: VIEWPORT_HEIGHT_TILES,
+    },
+    undergroundCamera: {
+      x: camX,
+      y: camY,
+      viewportWidth: VIEWPORT_WIDTH_TILES,
+      viewportHeight: VIEWPORT_HEIGHT_TILES,
+    },
     undergroundVisited: false,
     activeUndergroundColonyId: PLAYER_COLONY_ID,
     showPheromoneOverlay: true,
@@ -67,7 +77,12 @@ function makeViewState(
  * fractional camera here caused a 1-tile drift whenever the half-viewport was
  * fractional (e.g. VIEWPORT_HEIGHT_TILES=37 → vh/2 = 18.5).
  */
-function tileToScreen(tileX: number, tileY: number, camX: number, camY: number): { x: number; y: number } {
+function tileToScreen(
+  tileX: number,
+  tileY: number,
+  camX: number,
+  camY: number,
+): { x: number; y: number } {
   const left = Math.floor(camX - VIEWPORT_WIDTH_TILES / 2);
   const top = Math.floor(camY - VIEWPORT_HEIGHT_TILES / 2);
   const px = (tileX - left) * TILE_SIZE_PX;
@@ -76,15 +91,17 @@ function tileToScreen(tileX: number, tileY: number, camX: number, camY: number):
 }
 
 /** Build a minimal WorldState stub with given foodPiles, colonies, and commandQueue. */
-function makeWorld(overrides: {
-  tick?: number;
-  foodPiles?: WorldState['foodPiles'];
-  colonies?: WorldState['colonies'];
-  surfaceWidth?: number;
-  surfaceHeight?: number;
-  spider?: WorldState['spider'];
-  spiderPriorityColonyId?: WorldState['spiderPriorityColonyId'];
-} = {}): WorldState {
+function makeWorld(
+  overrides: {
+    tick?: number;
+    foodPiles?: WorldState['foodPiles'];
+    colonies?: WorldState['colonies'];
+    surfaceWidth?: number;
+    surfaceHeight?: number;
+    spider?: WorldState['spider'];
+    spiderPriorityColonyId?: WorldState['spiderPriorityColonyId'];
+  } = {},
+): WorldState {
   const sw = overrides.surfaceWidth ?? 128;
   const sh = overrides.surfaceHeight ?? 4;
   return {
@@ -92,7 +109,25 @@ function makeWorld(overrides: {
     rngState: 0,
     nextEntityId: 0,
     commandQueue: [] as SimCommand[],
-    ants: { posX: new Int32Array(0), posY: new Int32Array(0), colonyId: new Int32Array(0), task: new Int32Array(0), subTask: new Int32Array(0), speed: new Int32Array(0), foodCarrying: new Int32Array(0), starvationTimer: new Int32Array(0), age: new Int32Array(0), alive: new Int32Array(0), lifespan: new Int32Array(0), zone: new Int32Array(0), digTileX: new Int32Array(0), digTileY: new Int32Array(0), digTicksRemaining: new Int32Array(0), targetPosX: new Int32Array(0), targetPosY: new Int32Array(0) },
+    ants: {
+      posX: new Int32Array(0),
+      posY: new Int32Array(0),
+      colonyId: new Int32Array(0),
+      task: new Int32Array(0),
+      subTask: new Int32Array(0),
+      speed: new Int32Array(0),
+      foodCarrying: new Int32Array(0),
+      starvationTimer: new Int32Array(0),
+      age: new Int32Array(0),
+      alive: new Int32Array(0),
+      lifespan: new Int32Array(0),
+      zone: new Int32Array(0),
+      digTileX: new Int32Array(0),
+      digTileY: new Int32Array(0),
+      digTicksRemaining: new Int32Array(0),
+      targetPosX: new Int32Array(0),
+      targetPosY: new Int32Array(0),
+    },
     colonies: overrides.colonies ?? {},
     pheromoneGrids: {},
     surface: { data: new Uint8Array(sw * sh), width: sw, height: sh },
@@ -105,11 +140,13 @@ function makeWorld(overrides: {
 }
 
 /** Build a minimal colony record stub with an optional rally point and entrances. */
-function makeColony(overrides: {
-  colonyId?: ColonyId;
-  rallyPoint?: { tileX: number; tileY: number } | null;
-  entrances?: Array<{ surfaceTileX: number; surfaceTileY: number }>;
-} = {}) {
+function makeColony(
+  overrides: {
+    colonyId?: ColonyId;
+    rallyPoint?: { tileX: number; tileY: number } | null;
+    entrances?: Array<{ surfaceTileX: number; surfaceTileY: number }>;
+  } = {},
+) {
   return {
     colonyId: overrides.colonyId ?? (PLAYER_COLONY_ID as ColonyId),
     queenEntityId: 0,
@@ -141,7 +178,10 @@ function makeColony(overrides: {
 }
 
 /** A SurfaceInputState equivalent (the exported interface in surface-input.ts). */
-function makeState(pendingEntranceTileX: number | null = null, pendingEntranceTileY: number | null = null) {
+function makeState(
+  pendingEntranceTileX: number | null = null,
+  pendingEntranceTileY: number | null = null,
+) {
   return { pendingEntranceTileX, pendingEntranceTileY };
 }
 
@@ -153,17 +193,25 @@ describe('findFoodPileAt', () => {
   it('returns the pile at the exact tile coordinate', () => {
     const world = makeWorld({
       foodPiles: [
-        { foodPileId: 1, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50},
-        { foodPileId: 2, tileX: 30, tileY: 40 , pickupsRemaining: 50, pickupsInitial: 50},
-        { foodPileId: 3, tileX: 50, tileY: 60 , pickupsRemaining: 50, pickupsInitial: 50},
+        { foodPileId: 1, tileX: 10, tileY: 20, pickupsRemaining: 50, pickupsInitial: 50 },
+        { foodPileId: 2, tileX: 30, tileY: 40, pickupsRemaining: 50, pickupsInitial: 50 },
+        { foodPileId: 3, tileX: 50, tileY: 60, pickupsRemaining: 50, pickupsInitial: 50 },
       ],
     });
-    expect(findFoodPileAt(world, 30, 40)).toEqual({ foodPileId: 2, tileX: 30, tileY: 40 , pickupsRemaining: 50, pickupsInitial: 50});
+    expect(findFoodPileAt(world, 30, 40)).toEqual({
+      foodPileId: 2,
+      tileX: 30,
+      tileY: 40,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
   });
 
   it('returns null when no pile is at the given tile', () => {
     const world = makeWorld({
-      foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}],
+      foodPiles: [
+        { foodPileId: 1, tileX: 10, tileY: 20, pickupsRemaining: 50, pickupsInitial: 50 },
+      ],
     });
     expect(findFoodPileAt(world, 11, 20)).toBeNull();
   });
@@ -176,8 +224,8 @@ describe('findFoodPileAt', () => {
   it('returns first match when multiple piles share coords (edge case)', () => {
     const world = makeWorld({
       foodPiles: [
-        { foodPileId: 1, tileX: 5, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50},
-        { foodPileId: 2, tileX: 5, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50},
+        { foodPileId: 1, tileX: 5, tileY: 5, pickupsRemaining: 50, pickupsInitial: 50 },
+        { foodPileId: 2, tileX: 5, tileY: 5, pickupsRemaining: 50, pickupsInitial: 50 },
       ],
     });
     const result = findFoodPileAt(world, 5, 5);
@@ -193,14 +241,22 @@ describe('handleSurfaceLeftClick — food pile mark', () => {
   it('pushes MarkFoodPileCommand for a pile at the clicked tile', () => {
     const world = makeWorld({
       tick: 5,
-      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}],
+      foodPiles: [
+        { foodPileId: 7, tileX: 10, tileY: 20, pickupsRemaining: 50, pickupsInitial: 50 },
+      ],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
     const { x, y } = tileToScreen(10, 20, 64, 64);
     handleSurfaceLeftClick(world, vs, x, y, state);
     expect(world.commandQueue).toHaveLength(1);
-    const cmd = world.commandQueue[0] as { type: string; colonyId: number; tileX: number; tileY: number; issuedAtTick: number };
+    const cmd = world.commandQueue[0] as {
+      type: string;
+      colonyId: number;
+      tileX: number;
+      tileY: number;
+      issuedAtTick: number;
+    };
     expect(cmd.type).toBe('MarkFoodPile');
     expect(cmd.colonyId).toBe(PLAYER_COLONY_ID);
     expect(cmd.tileX).toBe(10);
@@ -209,7 +265,9 @@ describe('handleSurfaceLeftClick — food pile mark', () => {
   });
 
   it('pushes no command when no food pile exists at the clicked tile', () => {
-    const world = makeWorld({ foodPiles: [{ foodPileId: 1, tileX: 5, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50}] });
+    const world = makeWorld({
+      foodPiles: [{ foodPileId: 1, tileX: 5, tileY: 5, pickupsRemaining: 50, pickupsInitial: 50 }],
+    });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
     const { x, y } = tileToScreen(6, 5, 64, 64);
@@ -218,7 +276,11 @@ describe('handleSurfaceLeftClick — food pile mark', () => {
   });
 
   it('is a no-op when activeView is underground', () => {
-    const world = makeWorld({ foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}] });
+    const world = makeWorld({
+      foodPiles: [
+        { foodPileId: 1, tileX: 10, tileY: 20, pickupsRemaining: 50, pickupsInitial: 50 },
+      ],
+    });
     const vs = makeViewState('underground', 64, 64);
     const state = makeState();
     const { x, y } = tileToScreen(10, 20, 64, 64);
@@ -227,7 +289,11 @@ describe('handleSurfaceLeftClick — food pile mark', () => {
   });
 
   it('is a no-op when pointer is over HUD TRIANGLE zone', () => {
-    const world = makeWorld({ foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}] });
+    const world = makeWorld({
+      foodPiles: [
+        { foodPileId: 1, tileX: 10, tileY: 20, pickupsRemaining: 50, pickupsInitial: 50 },
+      ],
+    });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
     // HUD.TRIANGLE zone — use a point guaranteed inside it.
@@ -239,7 +305,9 @@ describe('handleSurfaceLeftClick — food pile mark', () => {
 
   it('is a no-op while panInputState.spaceHeld is true (Space+left-drag is pan, not world action)', () => {
     const world = makeWorld({
-      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}],
+      foodPiles: [
+        { foodPileId: 7, tileX: 10, tileY: 20, pickupsRemaining: 50, pickupsInitial: 50 },
+      ],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
@@ -251,7 +319,9 @@ describe('handleSurfaceLeftClick — food pile mark', () => {
 
   it('is a no-op while panInputState.isPanning is true (mid-pan left-click is pan continuation)', () => {
     const world = makeWorld({
-      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}],
+      foodPiles: [
+        { foodPileId: 7, tileX: 10, tileY: 20, pickupsRemaining: 50, pickupsInitial: 50 },
+      ],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
@@ -295,7 +365,9 @@ describe('handleSurfaceLeftClick — ant-activity popup dismissal must not fall 
       await import('../render/ant-activity-panel-state.js');
     const world = makeWorld({
       tick: 5,
-      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}],
+      foodPiles: [
+        { foodPileId: 7, tileX: 10, tileY: 20, pickupsRemaining: 50, pickupsInitial: 50 },
+      ],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
@@ -364,7 +436,9 @@ describe('handleSurfaceLeftClick — ant-activity popup dismissal must not fall 
       await import('../render/ant-activity-panel-state.js');
     const world = makeWorld({
       tick: 5,
-      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}],
+      foodPiles: [
+        { foodPileId: 7, tileX: 10, tileY: 20, pickupsRemaining: 50, pickupsInitial: 50 },
+      ],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
@@ -445,7 +519,9 @@ describe('handleSurfaceLeftClick — ant-activity popup dismissal must not fall 
       await import('../render/ant-activity-panel-state.js');
     const world = makeWorld({
       tick: 5,
-      foodPiles: [{ foodPileId: 7, tileX: 10, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50}],
+      foodPiles: [
+        { foodPileId: 7, tileX: 10, tileY: 20, pickupsRemaining: 50, pickupsInitial: 50 },
+      ],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
@@ -477,7 +553,13 @@ describe('handleSurfaceLeftClick — entrance designation confirmation', () => {
     const { x, y } = tileToScreen(15, 30, 64, 64);
     handleSurfaceLeftClick(world, vs, x, y, state);
     expect(world.commandQueue).toHaveLength(1);
-    const cmd = world.commandQueue[0] as { type: string; colonyId: number; surfaceTileX: number; surfaceTileY: number; issuedAtTick: number };
+    const cmd = world.commandQueue[0] as {
+      type: string;
+      colonyId: number;
+      surfaceTileX: number;
+      surfaceTileY: number;
+      issuedAtTick: number;
+    };
     expect(cmd.type).toBe('DesignateEntrance');
     expect(cmd.colonyId).toBe(PLAYER_COLONY_ID);
     expect(cmd.surfaceTileX).toBe(15);
@@ -515,7 +597,9 @@ describe('handleSurfaceLeftClick — entrance designation confirmation', () => {
 
   it('falls through to food-pile check when tileX does not match pending', () => {
     const world = makeWorld({
-      foodPiles: [{ foodPileId: 99, tileX: 20, tileY: 30 , pickupsRemaining: 50, pickupsInitial: 50}],
+      foodPiles: [
+        { foodPileId: 99, tileX: 20, tileY: 30, pickupsRemaining: 50, pickupsInitial: 50 },
+      ],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState(15, 30); // pending entrance at (15, 30)
@@ -588,7 +672,9 @@ describe('handleSurfaceRightClick', () => {
     const world = makeWorld({
       surfaceWidth: 128,
       surfaceHeight: 128,
-      foodPiles: [{ foodPileId: 1, tileX: 40, tileY: 50 , pickupsRemaining: 50, pickupsInitial: 50}],
+      foodPiles: [
+        { foodPileId: 1, tileX: 40, tileY: 50, pickupsRemaining: 50, pickupsInitial: 50 },
+      ],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState();
@@ -617,7 +703,9 @@ describe('handleSurfaceRightClick', () => {
     const world = makeWorld({
       surfaceWidth: 128,
       surfaceHeight: 128,
-      foodPiles: [{ foodPileId: 1, tileX: 40, tileY: 50 , pickupsRemaining: 50, pickupsInitial: 50}],
+      foodPiles: [
+        { foodPileId: 1, tileX: 40, tileY: 50, pickupsRemaining: 50, pickupsInitial: 50 },
+      ],
     });
     const vs = makeViewState('surface', 64, 64);
     const state = makeState(10, 20); // prior valid preview
@@ -641,8 +729,9 @@ describe('isEmptySurfaceTile', () => {
 
   it('returns false when tile has a food pile', () => {
     const world = makeWorld({
-      surfaceWidth: 128, surfaceHeight: 4,
-      foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 1 , pickupsRemaining: 50, pickupsInitial: 50}],
+      surfaceWidth: 128,
+      surfaceHeight: 4,
+      foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 1, pickupsRemaining: 50, pickupsInitial: 50 }],
     });
     expect(isEmptySurfaceTile(world, 10, 1)).toBe(false);
   });
@@ -650,7 +739,8 @@ describe('isEmptySurfaceTile', () => {
   it('returns false when tile is a colony entrance (plain-object colonies check)', () => {
     const colony = makeColony({ entrances: [{ surfaceTileX: 20, surfaceTileY: 0 }] });
     const world = makeWorld({
-      surfaceWidth: 128, surfaceHeight: 4,
+      surfaceWidth: 128,
+      surfaceHeight: 4,
       colonies: { [PLAYER_COLONY_ID]: colony } as unknown as WorldState['colonies'],
     });
     expect(isEmptySurfaceTile(world, 20, 0)).toBe(false);
@@ -680,7 +770,13 @@ describe('surface-input rally-point fall-through (SURF-04)', () => {
     const { x, y } = tileToScreen(10, 1, 64, 2);
     handleSurfaceLeftClick(world, vs, x, y, state);
     expect(world.commandQueue).toHaveLength(1);
-    const cmd = world.commandQueue[0] as { type: string; colonyId: number; tileX: number; tileY: number; issuedAtTick: number };
+    const cmd = world.commandQueue[0] as {
+      type: string;
+      colonyId: number;
+      tileX: number;
+      tileY: number;
+      issuedAtTick: number;
+    };
     expect(cmd.type).toBe('SetRallyPoint');
     expect(cmd.colonyId).toBe(PLAYER_COLONY_ID);
     expect(cmd.tileX).toBe(10);
@@ -701,8 +797,9 @@ describe('surface-input rally-point fall-through (SURF-04)', () => {
   it('does NOT push SetRallyPoint when tile has a food pile', () => {
     const world = makeWorld({
       tick: 0,
-      surfaceWidth: 128, surfaceHeight: 4,
-      foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 1 , pickupsRemaining: 50, pickupsInitial: 50}],
+      surfaceWidth: 128,
+      surfaceHeight: 4,
+      foodPiles: [{ foodPileId: 1, tileX: 10, tileY: 1, pickupsRemaining: 50, pickupsInitial: 50 }],
     });
     const vs = makeViewState('surface', 64, 2);
     const state = makeState();
@@ -718,7 +815,8 @@ describe('surface-input rally-point fall-through (SURF-04)', () => {
     const colony = makeColony({ entrances: [{ surfaceTileX: 10, surfaceTileY: 0 }] });
     const world = makeWorld({
       tick: 0,
-      surfaceWidth: 128, surfaceHeight: 4,
+      surfaceWidth: 128,
+      surfaceHeight: 4,
       colonies: { [PLAYER_COLONY_ID]: colony } as unknown as WorldState['colonies'],
     });
     const vs = makeViewState('surface', 64, 2);
@@ -732,7 +830,8 @@ describe('surface-input rally-point fall-through (SURF-04)', () => {
     const colony = makeColony({ rallyPoint: { tileX: 15, tileY: 1 } });
     const world = makeWorld({
       tick: 7,
-      surfaceWidth: 128, surfaceHeight: 4,
+      surfaceWidth: 128,
+      surfaceHeight: 4,
       colonies: { [PLAYER_COLONY_ID]: colony } as unknown as WorldState['colonies'],
     });
     const vs = makeViewState('surface', 64, 2);
@@ -749,7 +848,8 @@ describe('surface-input rally-point fall-through (SURF-04)', () => {
   it('right-click elsewhere does NOT clear rally (sets entrance preview instead)', () => {
     const colony = makeColony({ rallyPoint: { tileX: 15, tileY: 1 } });
     const world = makeWorld({
-      surfaceWidth: 128, surfaceHeight: 4,
+      surfaceWidth: 128,
+      surfaceHeight: 4,
       colonies: { [PLAYER_COLONY_ID]: colony } as unknown as WorldState['colonies'],
     });
     const vs = makeViewState('surface', 64, 2);
@@ -778,7 +878,13 @@ describe('surface-input rally-point fall-through (SURF-04)', () => {
     const world = makeWorld({ tick: 3 });
     handleSetRallyPoint(world, 7, 2, PLAYER_COLONY_ID as ColonyId);
     expect(world.commandQueue).toHaveLength(1);
-    const cmd = world.commandQueue[0] as { type: string; colonyId: number; tileX: number; tileY: number; issuedAtTick: number };
+    const cmd = world.commandQueue[0] as {
+      type: string;
+      colonyId: number;
+      tileX: number;
+      tileY: number;
+      issuedAtTick: number;
+    };
     expect(cmd.type).toBe('SetRallyPoint');
     expect(cmd.colonyId).toBe(PLAYER_COLONY_ID);
     expect(cmd.tileX).toBe(7);
@@ -798,7 +904,8 @@ describe('isForeignColonyEntrance', () => {
       entrances: [{ surfaceTileX: 100, surfaceTileY: 0 }],
     });
     const world = makeWorld({
-      surfaceWidth: 128, surfaceHeight: 4,
+      surfaceWidth: 128,
+      surfaceHeight: 4,
       colonies: { [ENEMY_COLONY_ID]: enemy } as unknown as WorldState['colonies'],
     });
     expect(isForeignColonyEntrance(world, 100, 0, PLAYER_COLONY_ID as ColonyId)).toBe(true);
@@ -807,7 +914,8 @@ describe('isForeignColonyEntrance', () => {
   it('returns false for the own-colony entrance tile (preserves designation flow)', () => {
     const own = makeColony({ entrances: [{ surfaceTileX: 20, surfaceTileY: 0 }] });
     const world = makeWorld({
-      surfaceWidth: 128, surfaceHeight: 4,
+      surfaceWidth: 128,
+      surfaceHeight: 4,
       colonies: { [PLAYER_COLONY_ID]: own } as unknown as WorldState['colonies'],
     });
     expect(isForeignColonyEntrance(world, 20, 0, PLAYER_COLONY_ID as ColonyId)).toBe(false);
@@ -819,7 +927,8 @@ describe('isForeignColonyEntrance', () => {
       entrances: [{ surfaceTileX: 100, surfaceTileY: 0 }],
     });
     const world = makeWorld({
-      surfaceWidth: 128, surfaceHeight: 4,
+      surfaceWidth: 128,
+      surfaceHeight: 4,
       colonies: { [ENEMY_COLONY_ID]: enemy } as unknown as WorldState['colonies'],
     });
     expect(isForeignColonyEntrance(world, 50, 1, PLAYER_COLONY_ID as ColonyId)).toBe(false);
@@ -831,7 +940,8 @@ describe('isForeignColonyEntrance', () => {
       entrances: [{ surfaceTileX: 100, surfaceTileY: 0 }],
     });
     const world = makeWorld({
-      surfaceWidth: 128, surfaceHeight: 4,
+      surfaceWidth: 128,
+      surfaceHeight: 4,
       colonies: { [ENEMY_COLONY_ID]: enemy } as unknown as WorldState['colonies'],
     });
     expect(isForeignColonyEntrance(world, -1, 0, PLAYER_COLONY_ID as ColonyId)).toBe(false);
@@ -847,7 +957,8 @@ describe('handleSurfaceLeftClick — rally on enemy entrance (issue #14)', () =>
     });
     const world = makeWorld({
       tick: 7,
-      surfaceWidth: 128, surfaceHeight: 4,
+      surfaceWidth: 128,
+      surfaceHeight: 4,
       colonies: { [ENEMY_COLONY_ID]: enemy } as unknown as WorldState['colonies'],
     });
     const vs = makeViewState('surface', 64, 2);
@@ -855,7 +966,13 @@ describe('handleSurfaceLeftClick — rally on enemy entrance (issue #14)', () =>
     const { x, y } = tileToScreen(100, 0, 64, 2);
     handleSurfaceLeftClick(world, vs, x, y, state);
     expect(world.commandQueue).toHaveLength(1);
-    const cmd = world.commandQueue[0] as { type: string; colonyId: number; tileX: number; tileY: number; issuedAtTick: number };
+    const cmd = world.commandQueue[0] as {
+      type: string;
+      colonyId: number;
+      tileX: number;
+      tileY: number;
+      issuedAtTick: number;
+    };
     expect(cmd.type).toBe('SetRallyPoint');
     expect(cmd.colonyId).toBe(PLAYER_COLONY_ID); // rally is the PLAYER's, not the enemy's
     expect(cmd.tileX).toBe(100);
@@ -866,7 +983,8 @@ describe('handleSurfaceLeftClick — rally on enemy entrance (issue #14)', () =>
   it('left-click on own entrance is still a no-op (entrance designation right-click flow undisturbed)', () => {
     const own = makeColony({ entrances: [{ surfaceTileX: 20, surfaceTileY: 0 }] });
     const world = makeWorld({
-      surfaceWidth: 128, surfaceHeight: 4,
+      surfaceWidth: 128,
+      surfaceHeight: 4,
       colonies: { [PLAYER_COLONY_ID]: own } as unknown as WorldState['colonies'],
     });
     const vs = makeViewState('surface', 64, 2);
@@ -932,12 +1050,12 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
   const FP_ONE_VAL = 256;
   const SPIDER_TILE_X = 10;
   const SPIDER_TILE_Y = 10;
-  const CAMERA_LEFT = Math.floor(CAM_X - VIEWPORT_WIDTH_TILES  / 2); // 39
-  const CAMERA_TOP  = Math.floor(CAM_Y - VIEWPORT_HEIGHT_TILES / 2); // 13
+  const CAMERA_LEFT = Math.floor(CAM_X - VIEWPORT_WIDTH_TILES / 2); // 39
+  const CAMERA_TOP = Math.floor(CAM_Y - VIEWPORT_HEIGHT_TILES / 2); // 13
   const SPIDER_SCR_X = (SPIDER_TILE_X - CAMERA_LEFT) * TILE_SIZE_PX; // -464
-  const SPIDER_SCR_Y = (SPIDER_TILE_Y - CAMERA_TOP)  * TILE_SIZE_PX; // -48
+  const SPIDER_SCR_Y = (SPIDER_TILE_Y - CAMERA_TOP) * TILE_SIZE_PX; // -48
   // Sprite half: hit box for stationary spider (prevWorld=null)
-  const HIT_HALF_W = SPIDER_SPRITE_WIDTH  / 2; // 24
+  const HIT_HALF_W = SPIDER_SPRITE_WIDTH / 2; // 24
   const HIT_HALF_H = SPIDER_SPRITE_HEIGHT / 2; // 24
 
   function makeSpider() {
@@ -1090,7 +1208,10 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
     const prevWorld = makeWorld({
       surfaceWidth: 128,
       surfaceHeight: 64,
-      spider: { posX: (SPIDER_TILE_X - 1) * FP_ONE_VAL, posY: SPIDER_TILE_Y * FP_ONE_VAL } as WorldState['spider'],
+      spider: {
+        posX: (SPIDER_TILE_X - 1) * FP_ONE_VAL,
+        posY: SPIDER_TILE_Y * FP_ONE_VAL,
+      } as WorldState['spider'],
     });
     const vs = makeViewState('surface', CAM_X, CAM_Y);
     const state = makeState();
@@ -1110,7 +1231,10 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
     const prevWorld = makeWorld({
       surfaceWidth: 128,
       surfaceHeight: 64,
-      spider: { posX: (SPIDER_TILE_X - 1) * FP_ONE_VAL, posY: SPIDER_TILE_Y * FP_ONE_VAL } as WorldState['spider'],
+      spider: {
+        posX: (SPIDER_TILE_X - 1) * FP_ONE_VAL,
+        posY: SPIDER_TILE_Y * FP_ONE_VAL,
+      } as WorldState['spider'],
     });
     const vs = makeViewState('surface', CAM_X, CAM_Y);
     const state = makeState();
@@ -1127,7 +1251,9 @@ describe('handleSurfaceRightClick — spider priority toggle (S7/D1)', () => {
       spider: makeSpider(),
       spiderPriorityColonyId: null,
       colonies: {
-        [PLAYER_COLONY_ID]: makeColony({ rallyPoint: { tileX: SPIDER_TILE_X, tileY: SPIDER_TILE_Y } }),
+        [PLAYER_COLONY_ID]: makeColony({
+          rallyPoint: { tileX: SPIDER_TILE_X, tileY: SPIDER_TILE_Y },
+        }),
       } as unknown as WorldState['colonies'],
     });
     const vs = makeViewState('surface', CAM_X, CAM_Y);

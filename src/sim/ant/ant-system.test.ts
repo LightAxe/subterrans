@@ -50,8 +50,20 @@ import {
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt, createAntComponents, RECENT_TILES_LEN, isRecentTile } from './ant-store.js';
-import { AntTask, ForagingSubState, DiggingSubState, NursingSubState, ChamberType, PheromoneType } from '../enums.js';
-import { createPheromoneGrid, phGet, phSet, pheromoneGridKey } from '../pheromone/pheromone-store.js';
+import {
+  AntTask,
+  ForagingSubState,
+  DiggingSubState,
+  NursingSubState,
+  ChamberType,
+  PheromoneType,
+} from '../enums.js';
+import {
+  createPheromoneGrid,
+  phGet,
+  phSet,
+  pheromoneGridKey,
+} from '../pheromone/pheromone-store.js';
 import { Rng } from '../rng.js';
 import {
   WORKER_CARRY_CAPACITY,
@@ -259,7 +271,7 @@ describe('antDepositFood', () => {
     // Full no-op: nothing changes
     expect(colony.foodStored).toBe(100);
     expect(world.ants.foodCarrying[antId]).toBe(0);
-    expect(world.ants.task[antId]).toBe(AntTask.Foraging);   // NOT flipped to Idle
+    expect(world.ants.task[antId]).toBe(AntTask.Foraging); // NOT flipped to Idle
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood); // NOT cleared
   });
 
@@ -307,8 +319,13 @@ describe('antDepositFood', () => {
     world.ants.task[antId] = AntTask.Foraging;
     world.ants.subTask[antId] = ForagingSubState.CarryingFood;
     colony.chambers.push({
-      chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: 0,
-      posX: 0, posY: 0, width: 3, height: 3,
+      chamberId: 100,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 0,
+      posX: 0,
+      posY: 0,
+      width: 3,
+      height: 3,
     });
     // Pool is already at BASE; further pool deposits would be impossible. The
     // chamber-authoritative path lets the ant deposit anyway because the
@@ -333,9 +350,13 @@ describe('antDepositFood', () => {
     // Chamber at cap — antDepositFood must skip it (issue #15: full chambers
     // are not deposit targets).
     colony.chambers.push({
-      chamberId: 100, chamberType: ChamberType.FoodStorage,
+      chamberId: 100,
+      chamberType: ChamberType.FoodStorage,
       foodStored: FOOD_CHAMBER_CAPACITY,
-      posX: 0, posY: 0, width: 3, height: 3,
+      posX: 0,
+      posY: 0,
+      width: 3,
+      height: 3,
     });
     // Pool also at cap → no fallback room either.
     colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
@@ -476,20 +497,27 @@ describe('tickAntMovement', () => {
     // Key assertion: ant position changed from initial if exploit branch gives down direction
     // or explore branch gives any non-zero direction (which includes moving from posY=1024)
     // The speed (128) is added to position, so at least one dimension should change
-    const moved = (posYAfter !== posYBefore) || (world.ants.posX[antId]! !== (5 << FP_SHIFT));
+    const moved = posYAfter !== posYBefore || world.ants.posX[antId]! !== 5 << FP_SHIFT;
     expect(moved).toBe(true);
     // Also: posY should equal posYBefore + speed (moved toward strong pheromone)
     // Only true if exploit branch taken. Accept either posYBefore+speed OR any other valid movement.
     // With V7+ SoftCost, the ant may move at speed/2=64 instead of speed=128.
-    // eslint-disable-next-line no-restricted-syntax
-    expect([posYBefore + speed, posYBefore + speed/2, posYBefore, posYBefore - speed/2, posYBefore - speed]).toContain(posYAfter);
+    /* eslint-disable no-restricted-syntax */
+    expect([
+      posYBefore + speed,
+      posYBefore + speed / 2,
+      posYBefore,
+      posYBefore - speed / 2,
+      posYBefore - speed,
+    ]).toContain(posYAfter);
+    /* eslint-enable no-restricted-syntax */
   });
 
   it('12. non-forager stays put (getTaskDirection returns {0,0})', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances        = [];
-    colony.rallyPoint       = null;
+    colony.entrances = [];
+    colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
 
@@ -635,8 +663,8 @@ describe('getTaskDirection', () => {
   it('returns {dx:0, dy:0} for Idle and Fighting tasks (no pathfinding needed)', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances        = [];
-    colony.rallyPoint       = null;
+    colony.entrances = [];
+    colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
 
@@ -674,8 +702,8 @@ function setupWorldWithUnderground(
   const world = createWorldState(42, MAX_TEST_ENTITIES);
   const colonyId = COLONY_ID;
   const colony = createColonyRecord(colonyId, 0);
-  colony.entrances        = [];
-  colony.rallyPoint       = null;
+  colony.entrances = [];
+  colony.rallyPoint = null;
   colony.digFlowFieldDirty = false;
   world.colonies[colonyId] = colony;
 
@@ -725,8 +753,8 @@ describe('getTaskDirection — dig direction lookup (purity checks)', () => {
 
     // Purity: nothing mutated
     expect(ugGet(underground, 1, 0)).toBe(tileStateBefore); // tile unchanged
-    expect(world.ants.subTask[antId]).toBe(subTaskBefore);   // subTask unchanged
-    expect(colony.digFlowFieldDirty).toBe(dirtyBefore);      // dirty flag unchanged
+    expect(world.ants.subTask[antId]).toBe(subTaskBefore); // subTask unchanged
+    expect(colony.digFlowFieldDirty).toBe(dirtyBefore); // dirty flag unchanged
   });
 
   it('D-2. dig worker ON Marked tile (flow-field dir=-1) → returns {0,0}; tile still Marked (not claimed)', () => {
@@ -1039,8 +1067,8 @@ describe('tickDigExecution — state machine transitions', () => {
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
       colonyId: COLONY_ID,
-      posX: 0,  // posX=0 → tileX=0
-      posY: 0,  // posY=0 → tileY=0
+      posX: 0, // posX=0 → tileX=0
+      posY: 0, // posY=0 → tileY=0
       task: AntTask.Digging,
       subTask: DiggingSubState.MovingToTile,
       zone: Zone.Underground,
@@ -1088,7 +1116,9 @@ describe('routeForagerPriority', () => {
   it('4. colony has no priorityFoodPileId → routeForagerPriority sets targetPosX/Y = -1', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     colony.priorityFoodPileId = null;
     world.colonies[COLONY_ID] = colony;
 
@@ -1111,10 +1141,12 @@ describe('routeForagerPriority', () => {
     expect(world.ants.targetPosY[antId]).toBe(-1);
   });
 
-  it('5. colony.priorityFoodPileId set → targetPosX/Y set to that pile\'s tile position', () => {
+  it("5. colony.priorityFoodPileId set → targetPosX/Y set to that pile's tile position", () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     colony.priorityFoodPileId = 1;
     world.colonies[COLONY_ID] = colony;
 
@@ -1144,7 +1176,9 @@ describe('routeForagerPriority', () => {
     // applies — a single priorityFoodPileId per colony is authoritative.
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     colony.priorityFoodPileId = 10;
     world.colonies[COLONY_ID] = colony;
 
@@ -1172,7 +1206,9 @@ describe('routeForagerPriority', () => {
   it('7. ant not in SearchingFood sub-state → targetPosX/Y unchanged', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     colony.priorityFoodPileId = 1;
     world.colonies[COLONY_ID] = colony;
 
@@ -1195,7 +1231,7 @@ describe('routeForagerPriority', () => {
     expect(world.ants.targetPosY[antId]).toBe(88);
   });
 
-  it('8. cross-colony isolation: colony A\'s priority pile does NOT redirect colony B\'s foragers', () => {
+  it("8. cross-colony isolation: colony A's priority pile does NOT redirect colony B's foragers", () => {
     // Regression for the Phase 9 bug where isMarkedPriority lived on the shared
     // FoodPile entity and enemy ants read it too. With per-colony priority, a
     // forager from a colony with no priority keeps targetPosX/Y at -1 even
@@ -1206,12 +1242,16 @@ describe('routeForagerPriority', () => {
     const COLONY_B = 2;
 
     const colonyA = createColonyRecord(COLONY_A, 0);
-    colonyA.entrances = []; colonyA.rallyPoint = null; colonyA.digFlowFieldDirty = false;
+    colonyA.entrances = [];
+    colonyA.rallyPoint = null;
+    colonyA.digFlowFieldDirty = false;
     colonyA.priorityFoodPileId = 1;
     world.colonies[COLONY_A] = colonyA;
 
     const colonyB = createColonyRecord(COLONY_B, 0);
-    colonyB.entrances = []; colonyB.rallyPoint = null; colonyB.digFlowFieldDirty = false;
+    colonyB.entrances = [];
+    colonyB.rallyPoint = null;
+    colonyB.digFlowFieldDirty = false;
     colonyB.priorityFoodPileId = null;
     world.colonies[COLONY_B] = colonyB;
 
@@ -1220,14 +1260,18 @@ describe('routeForagerPriority', () => {
     const antA = allocateEntityId(world);
     initAnt(world.ants, antA, {
       colonyId: COLONY_A,
-      posX: 0, posY: 0,
-      task: AntTask.Foraging, subTask: ForagingSubState.SearchingFood,
+      posX: 0,
+      posY: 0,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
     });
     const antB = allocateEntityId(world);
     initAnt(world.ants, antB, {
       colonyId: COLONY_B,
-      posX: 0, posY: 0,
-      task: AntTask.Foraging, subTask: ForagingSubState.SearchingFood,
+      posX: 0,
+      posY: 0,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
     });
 
     routeForagerPriority(world);
@@ -1246,7 +1290,9 @@ describe('routeForagerPriority', () => {
     // through to the pheromone gradient rather than chasing a ghost target.
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     colony.priorityFoodPileId = 999; // no such pile
     world.colonies[COLONY_ID] = colony;
 
@@ -1320,7 +1366,7 @@ describe('tickAntMovement — zone transitions', () => {
     initAnt(world.ants, antId, {
       colonyId: COLONY_ID,
       posX: 8 << FP_SHIFT,
-      posY: 0,  // tileY=0 (already at top of underground)
+      posY: 0, // tileY=0 (already at top of underground)
       task: AntTask.Foraging,
       subTask: ForagingSubState.SearchingFood,
       zone: Zone.Underground,
@@ -1569,8 +1615,10 @@ describe('tickAntMovement — underground passability guard', () => {
       chamberId: 1,
       chamberType: ChamberType.Queen,
       foodStored: 0,
-      posX: 5 << FP_SHIFT, posY: 8 << FP_SHIFT,
-      width: 1, height: 1,
+      posX: 5 << FP_SHIFT,
+      posY: 8 << FP_SHIFT,
+      width: 1,
+      height: 1,
     });
 
     const nurseId = allocateEntityId(world);
@@ -1607,8 +1655,10 @@ describe('tickAntMovement — underground passability guard', () => {
       chamberId: 1,
       chamberType: ChamberType.Queen,
       foodStored: 0,
-      posX: 5 << FP_SHIFT, posY: 8 << FP_SHIFT,
-      width: 1, height: 1,
+      posX: 5 << FP_SHIFT,
+      posY: 8 << FP_SHIFT,
+      width: 1,
+      height: 1,
     });
 
     const nurseId = allocateEntityId(world);
@@ -1647,8 +1697,10 @@ describe('tickAntMovement — underground passability guard', () => {
       chamberId: 1,
       chamberType: ChamberType.FoodStorage,
       foodStored: 0,
-      posX: 8 << FP_SHIFT, posY: 4 << FP_SHIFT,
-      width: 2, height: 2,
+      posX: 8 << FP_SHIFT,
+      posY: 4 << FP_SHIFT,
+      width: 2,
+      height: 2,
     });
 
     const foragerId = allocateEntityId(world);
@@ -1727,7 +1779,8 @@ describe('tickAntMovement — underground passability guard', () => {
     const diggerId = allocateEntityId(world);
     initAnt(world.ants, diggerId, {
       colonyId: COLONY_ID,
-      posX: 0, posY: 0,
+      posX: 0,
+      posY: 0,
       task: AntTask.Digging,
       subTask: DiggingSubState.MovingToTile,
       zone: Zone.Underground,
@@ -1757,14 +1810,17 @@ describe('tickAntMovement — underground passability guard', () => {
       chamberId: 1,
       chamberType: ChamberType.Queen,
       foodStored: 0,
-      posX: 1 << FP_SHIFT, posY: 0,
-      width: 1, height: 1,
+      posX: 1 << FP_SHIFT,
+      posY: 0,
+      width: 1,
+      height: 1,
     });
 
     const nurseId = allocateEntityId(world);
     initAnt(world.ants, nurseId, {
       colonyId: COLONY_ID,
-      posX: 0, posY: 0,
+      posX: 0,
+      posY: 0,
       task: AntTask.Nursing,
       subTask: NursingSubState.MovingToBrood,
       zone: Zone.Underground,
@@ -1794,14 +1850,17 @@ describe('tickAntMovement — underground passability guard', () => {
         chamberId: 1,
         chamberType: ChamberType.Queen,
         foodStored: 0,
-        posX: 7 << FP_SHIFT, posY: 7 << FP_SHIFT,
-        width: 1, height: 1,
+        posX: 7 << FP_SHIFT,
+        posY: 7 << FP_SHIFT,
+        width: 1,
+        height: 1,
       });
 
       const id = allocateEntityId(world);
       initAnt(world.ants, id, {
         colonyId: COLONY_ID,
-        posX: 5 << FP_SHIFT, posY: 5 << FP_SHIFT,
+        posX: 5 << FP_SHIFT,
+        posY: 5 << FP_SHIFT,
         task: AntTask.Nursing,
         subTask: NursingSubState.MovingToBrood,
         zone: Zone.Underground,
@@ -1850,8 +1909,10 @@ describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
   it('14. ant inside FoodStorage footprint → deposit writes ONLY chamber.foodStored; entrance pool untouched', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null;
-    colony.digFlowFieldDirty = false; colony.foodFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    colony.foodFlowFieldDirty = false;
     colony.chambers.push(makeFoodStorageChamber(1, 0, 0, 0));
     colony.foodStored = 0;
     world.colonies[COLONY_ID] = colony;
@@ -1859,7 +1920,8 @@ describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
       colonyId: COLONY_ID,
-      posX: 0, posY: 0,
+      posX: 0,
+      posY: 0,
       task: AntTask.Foraging,
       subTask: ForagingSubState.CarryingFood,
     });
@@ -1879,8 +1941,10 @@ describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
   it('15. colony has no food storage chamber → deposit writes entrance pool up to BASE capacity', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null;
-    colony.digFlowFieldDirty = false; colony.foodFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    colony.foodFlowFieldDirty = false;
     // No chambers → capacity = BASE_FOOD_STORAGE_CAPACITY (entrance pool only).
     colony.foodStored = 0;
     world.colonies[COLONY_ID] = colony;
@@ -1888,7 +1952,8 @@ describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
       colonyId: COLONY_ID,
-      posX: 0, posY: 0,
+      posX: 0,
+      posY: 0,
       task: AntTask.Foraging,
       subTask: ForagingSubState.CarryingFood,
     });
@@ -1904,19 +1969,22 @@ describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
   it('16. ant in chamber 0 fills it to cap → chamber.foodStored hits FOOD_CHAMBER_CAPACITY and foodFlowFieldDirty fires', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null;
-    colony.digFlowFieldDirty = false; colony.foodFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    colony.foodFlowFieldDirty = false;
     // Two chambers in different parts of the grid. Ant only stands in chamber[0].
     // chamber[0] starts with 1234 stored, so headroom = 5120-1234 = 3886.
-    colony.chambers.push(makeFoodStorageChamber(1, 1234, 0,  0));
-    colony.chambers.push(makeFoodStorageChamber(2,    0, 8,  8));
+    colony.chambers.push(makeFoodStorageChamber(1, 1234, 0, 0));
+    colony.chambers.push(makeFoodStorageChamber(2, 0, 8, 8));
     colony.foodStored = 0;
     world.colonies[COLONY_ID] = colony;
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
       colonyId: COLONY_ID,
-      posX: 0, posY: 0,
+      posX: 0,
+      posY: 0,
       task: AntTask.Foraging,
       subTask: ForagingSubState.CarryingFood,
     });
@@ -1940,10 +2008,12 @@ describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
   it('17. issue #15 regression — ant outside FoodStorage footprint does NOT cause distant chambers to fill', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null;
-    colony.digFlowFieldDirty = false; colony.foodFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    colony.foodFlowFieldDirty = false;
     // Two chambers, both far from the ant's tile.
-    colony.chambers.push(makeFoodStorageChamber(1, 0,  8, 8));
+    colony.chambers.push(makeFoodStorageChamber(1, 0, 8, 8));
     colony.chambers.push(makeFoodStorageChamber(2, 0, 16, 8));
     colony.foodStored = 0;
     world.colonies[COLONY_ID] = colony;
@@ -1951,7 +2021,8 @@ describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
       colonyId: COLONY_ID,
-      posX: 0, posY: 0, // outside both chamber footprints
+      posX: 0,
+      posY: 0, // outside both chamber footprints
       task: AntTask.Foraging,
       subTask: ForagingSubState.CarryingFood,
     });
@@ -1983,7 +2054,8 @@ describe('updateFightAntTargets', () => {
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
       colonyId: COLONY_ID,
-      posX: 0, posY: 0,
+      posX: 0,
+      posY: 0,
       task: AntTask.Fighting,
       subTask: 0,
     });
@@ -2033,7 +2105,8 @@ describe('updateFightAntTargets', () => {
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
       colonyId: COLONY_ID,
-      posX: 0, posY: 0,
+      posX: 0,
+      posY: 0,
       task: AntTask.Fighting,
       subTask: 0,
     });
@@ -2056,7 +2129,8 @@ describe('updateFightAntTargets', () => {
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
       colonyId: COLONY_ID,
-      posX: 0, posY: 0,
+      posX: 0,
+      posY: 0,
       task: AntTask.Fighting,
       subTask: 0,
     });
@@ -2081,7 +2155,8 @@ describe('updateFightAntTargets', () => {
     const deadId = allocateEntityId(world);
     initAnt(world.ants, deadId, {
       colonyId: COLONY_ID,
-      posX: 0, posY: 0,
+      posX: 0,
+      posY: 0,
       task: AntTask.Fighting,
       subTask: 0,
     });
@@ -2093,7 +2168,8 @@ describe('updateFightAntTargets', () => {
     const unknownColonyAntId = allocateEntityId(world);
     initAnt(world.ants, unknownColonyAntId, {
       colonyId: 999 as typeof COLONY_ID,
-      posX: 0, posY: 0,
+      posX: 0,
+      posY: 0,
       task: AntTask.Fighting,
       subTask: 0,
     });
@@ -2260,8 +2336,11 @@ describe('updateFightAntTargets', () => {
 
     const fighter = allocateEntityId(world);
     initAnt(world.ants, fighter, {
-      colonyId: COLONY_ID, posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT,
-      task: AntTask.Fighting, subTask: 0,
+      colonyId: COLONY_ID,
+      posX: 10 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Fighting,
+      subTask: 0,
     });
     world.ants.zone[fighter] = Zone.Surface;
 
@@ -2287,8 +2366,11 @@ describe('updateFightAntTargets', () => {
 
     const fighter = allocateEntityId(world);
     initAnt(world.ants, fighter, {
-      colonyId: COLONY_ID, posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT,
-      task: AntTask.Fighting, subTask: 0,
+      colonyId: COLONY_ID,
+      posX: 10 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Fighting,
+      subTask: 0,
     });
     world.ants.zone[fighter] = Zone.Surface;
 
@@ -2301,8 +2383,11 @@ describe('updateFightAntTargets', () => {
     const enemyTileX = 11;
     const enemy = allocateEntityId(world);
     initAnt(world.ants, enemy, {
-      colonyId: COLONY_B, posX: (enemyTileX << FP_SHIFT) + (FP_ONE >> 1), posY: 10 << FP_SHIFT,
-      task: AntTask.Idle, subTask: 0,
+      colonyId: COLONY_B,
+      posX: (enemyTileX << FP_SHIFT) + (FP_ONE >> 1),
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Idle,
+      subTask: 0,
     });
     world.ants.zone[enemy] = Zone.Surface;
     colB.workers.push(enemy);
@@ -2330,8 +2415,11 @@ describe('updateFightAntTargets', () => {
 
     const fighter = allocateEntityId(world);
     initAnt(world.ants, fighter, {
-      colonyId: COLONY_ID, posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT,
-      task: AntTask.Fighting, subTask: 0,
+      colonyId: COLONY_ID,
+      posX: 10 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Fighting,
+      subTask: 0,
     });
     world.ants.zone[fighter] = Zone.Surface;
 
@@ -2356,8 +2444,11 @@ describe('updateFightAntTargets', () => {
 
     const fighter = allocateEntityId(world);
     initAnt(world.ants, fighter, {
-      colonyId: COLONY_ID, posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT,
-      task: AntTask.Fighting, subTask: 0,
+      colonyId: COLONY_ID,
+      posX: 10 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Fighting,
+      subTask: 0,
     });
     world.ants.zone[fighter] = Zone.Surface;
 
@@ -2383,8 +2474,11 @@ describe('updateFightAntTargets', () => {
 
     const fighter = allocateEntityId(world);
     initAnt(world.ants, fighter, {
-      colonyId: COLONY_ID, posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT,
-      task: AntTask.Fighting, subTask: 0,
+      colonyId: COLONY_ID,
+      posX: 10 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Fighting,
+      subTask: 0,
     });
     world.ants.zone[fighter] = Zone.Surface;
 
@@ -2406,10 +2500,18 @@ describe('tickForagerActions', () => {
   it('surface SearchingFood ant on a food pile tile → picks up, drains a charge, transitions to CarryingFood', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
 
-    world.foodPiles.push({ foodPileId: 1, tileX: 12, tileY: 8 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({
+      foodPileId: 1,
+      tileX: 12,
+      tileY: 8,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -2433,11 +2535,19 @@ describe('tickForagerActions', () => {
   it('issue #112 — final-charge pickup splices pile out and records depletion', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     colony.priorityFoodPileId = 1; // mark this pile as priority
     world.colonies[COLONY_ID] = colony;
 
-    world.foodPiles.push({ foodPileId: 1, tileX: 12, tileY: 8, pickupsRemaining: 1, pickupsInitial: 1 });
+    world.foodPiles.push({
+      foodPileId: 1,
+      tileX: 12,
+      tileY: 8,
+      pickupsRemaining: 1,
+      pickupsInitial: 1,
+    });
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -2466,10 +2576,18 @@ describe('tickForagerActions', () => {
   it('surface SearchingFood ant NOT on any food pile tile → no pickup', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
 
-    world.foodPiles.push({ foodPileId: 1, tileX: 12, tileY: 8 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({
+      foodPileId: 1,
+      tileX: 12,
+      tileY: 8,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -2491,21 +2609,25 @@ describe('tickForagerActions', () => {
   it('underground CarryingFood ant on a FoodStorage chamber tile → deposits to chamber.foodStored and flips to Idle', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null;
-    colony.digFlowFieldDirty = false; colony.foodFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    colony.foodFlowFieldDirty = false;
     colony.chambers.push({
       chamberId: 1,
       chamberType: ChamberType.FoodStorage,
       foodStored: 0,
-      posX: 0, posY: 0,
-      width: 4, height: 3,
+      posX: 0,
+      posY: 0,
+      width: 4,
+      height: 3,
     });
     world.colonies[COLONY_ID] = colony;
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
       colonyId: COLONY_ID,
-      posX: 1 << FP_SHIFT,   // inside chamber footprint
+      posX: 1 << FP_SHIFT, // inside chamber footprint
       posY: 1 << FP_SHIFT,
       task: AntTask.Foraging,
       subTask: ForagingSubState.CarryingFood,
@@ -2526,7 +2648,8 @@ describe('tickForagerActions', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
     colony.entrances = [{ entranceId: 1, surfaceTileX: 7, surfaceTileY: 5, isOpen: true }];
-    colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     // No FoodStorage chamber — fallback path.
     world.colonies[COLONY_ID] = colony;
 
@@ -2534,7 +2657,7 @@ describe('tickForagerActions', () => {
     initAnt(world.ants, antId, {
       colonyId: COLONY_ID,
       posX: 7 << FP_SHIFT,
-      posY: 0,            // underground top-of-shaft at entrance column
+      posY: 0, // underground top-of-shaft at entrance column
       task: AntTask.Foraging,
       subTask: ForagingSubState.CarryingFood,
     });
@@ -2552,7 +2675,8 @@ describe('tickForagerActions', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
     colony.entrances = [{ entranceId: 1, surfaceTileX: 7, surfaceTileY: 5, isOpen: true }];
-    colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
 
     const antId = allocateEntityId(world);
@@ -2569,7 +2693,7 @@ describe('tickForagerActions', () => {
     tickForagerActions(world);
 
     expect(colony.foodStored).toBe(0);
-    expect(world.ants.foodCarrying[antId]).toBe(300);      // still carrying
+    expect(world.ants.foodCarrying[antId]).toBe(300); // still carrying
     expect(world.ants.task[antId]).toBe(AntTask.Foraging); // not flipped
   });
 
@@ -2577,7 +2701,8 @@ describe('tickForagerActions', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
     colony.entrances = [{ entranceId: 1, surfaceTileX: 7, surfaceTileY: 5, isOpen: false }];
-    colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
 
     const antId = allocateEntityId(world);
@@ -2623,9 +2748,7 @@ describe('issue #27 — carrier WaitingToDeposit', () => {
   } {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = [
-      { entranceId: 1, surfaceTileX: 7, surfaceTileY: 5, isOpen: true },
-    ];
+    colony.entrances = [{ entranceId: 1, surfaceTileX: 7, surfaceTileY: 5, isOpen: true }];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     colony.foodFlowFieldDirty = false;
@@ -2633,7 +2756,10 @@ describe('issue #27 — carrier WaitingToDeposit', () => {
       chamberId: 1,
       chamberType: ChamberType.FoodStorage,
       foodStored: FOOD_CHAMBER_CAPACITY, // saturated
-      posX: 0, posY: 0, width: 3, height: 3,
+      posX: 0,
+      posY: 0,
+      width: 3,
+      height: 3,
     });
     world.colonies[COLONY_ID] = colony;
 
@@ -2641,7 +2767,7 @@ describe('issue #27 — carrier WaitingToDeposit', () => {
     initAnt(world.ants, antId, {
       colonyId: COLONY_ID,
       posX: 7 << FP_SHIFT, // entrance column
-      posY: 0,             // top of shaft underground
+      posY: 0, // top of shaft underground
       task: AntTask.Foraging,
       subTask: ForagingSubState.CarryingFood,
     });
@@ -2660,7 +2786,7 @@ describe('issue #27 — carrier WaitingToDeposit', () => {
     antDepositFood(world, colony, antId);
 
     expect(world.ants.waitingDeposit[antId]).toBe(1);
-    expect(world.ants.foodCarrying[antId]).toBe(512);     // unchanged
+    expect(world.ants.foodCarrying[antId]).toBe(512); // unchanged
     expect(world.ants.task[antId]).toBe(AntTask.Foraging); // not Idle
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood);
     // searchHeading cleared on entry so a future wake doesn't continue stale routing
@@ -2769,7 +2895,6 @@ describe('issue #27 — carrier WaitingToDeposit', () => {
     // current state on subsequent ticks.
     expect(world.ants.waitingDeposit[antId]).toBe(0);
   });
-
 });
 
 // ---------------------------------------------------------------------------
@@ -2785,12 +2910,14 @@ describe('chooseExcursionDirection', () => {
   ): { world: WorldState; antId: number } {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = [{
-      entranceId:   1,
-      surfaceTileX: entranceTileX,
-      surfaceTileY: entranceTileY,
-      isOpen:       true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: 1,
+        surfaceTileX: entranceTileX,
+        surfaceTileY: entranceTileY,
+        isOpen: true,
+      },
+    ];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
@@ -2811,8 +2938,8 @@ describe('chooseExcursionDirection', () => {
     const { world, antId } = setupWorldWithEntrance(24, 64, 30, 70);
     for (let seed = 0; seed < 200; seed++) {
       // Reset heading so each seed starts from scratch.
-      world.ants.searchHeadingX[antId]     = 0;
-      world.ants.searchHeadingY[antId]     = 0;
+      world.ants.searchHeadingX[antId] = 0;
+      world.ants.searchHeadingY[antId] = 0;
       world.ants.searchHeadingTicks[antId] = 0;
       const rng = new Rng(seed);
       const dir = chooseExcursionDirection(world, antId, rng);
@@ -2824,11 +2951,11 @@ describe('chooseExcursionDirection', () => {
     const { world: w1, antId: a1 } = setupWorldWithEntrance(24, 64, 30, 70);
     const { world: w2, antId: a2 } = setupWorldWithEntrance(24, 64, 30, 70);
     for (let seed = 0; seed < 50; seed++) {
-      w1.ants.searchHeadingX[a1]     = 0;
-      w1.ants.searchHeadingY[a1]     = 0;
+      w1.ants.searchHeadingX[a1] = 0;
+      w1.ants.searchHeadingY[a1] = 0;
       w1.ants.searchHeadingTicks[a1] = 0;
-      w2.ants.searchHeadingX[a2]     = 0;
-      w2.ants.searchHeadingY[a2]     = 0;
+      w2.ants.searchHeadingX[a2] = 0;
+      w2.ants.searchHeadingY[a2] = 0;
       w2.ants.searchHeadingTicks[a2] = 0;
       const d1 = chooseExcursionDirection(w1, a1, new Rng(seed));
       const d2 = chooseExcursionDirection(w2, a2, new Rng(seed));
@@ -2842,8 +2969,8 @@ describe('chooseExcursionDirection', () => {
     // direction is deterministic regardless of RNG.
     const { world, antId } = setupWorldWithEntrance(24, 64, 28, 64);
     for (let seed = 0; seed < 20; seed++) {
-      world.ants.searchHeadingX[antId]     = 0;
-      world.ants.searchHeadingY[antId]     = 0;
+      world.ants.searchHeadingX[antId] = 0;
+      world.ants.searchHeadingY[antId] = 0;
       world.ants.searchHeadingTicks[antId] = 0;
       const dir = chooseExcursionDirection(world, antId, new Rng(seed));
       expect(dir.dx).toBe(1);
@@ -2890,8 +3017,8 @@ describe('chooseExcursionDirection', () => {
       subTask: ForagingSubState.SearchingFood,
     });
     for (let seed = 0; seed < 50; seed++) {
-      world.ants.searchHeadingX[antId]     = 0;
-      world.ants.searchHeadingY[antId]     = 0;
+      world.ants.searchHeadingX[antId] = 0;
+      world.ants.searchHeadingY[antId] = 0;
       world.ants.searchHeadingTicks[antId] = 0;
       const dir = chooseExcursionDirection(world, antId, new Rng(seed));
       expect(Math.abs(dir.dx) + Math.abs(dir.dy)).toBe(1);
@@ -2905,8 +3032,8 @@ describe('chooseExcursionDirection', () => {
     const { world, antId } = setupWorldWithEntrance(24, 64, 0, 64);
     // Manually seed a westward heading with active ticks so the bounce path
     // (rather than the initial-outward path) is exercised.
-    world.ants.searchHeadingX[antId]     = -1;
-    world.ants.searchHeadingY[antId]     = 0;
+    world.ants.searchHeadingX[antId] = -1;
+    world.ants.searchHeadingY[antId] = 0;
     world.ants.searchHeadingTicks[antId] = 10;
     const dir = chooseExcursionDirection(world, antId, new Rng(1));
     expect(dir.dx).toBeGreaterThanOrEqual(0);
@@ -2924,7 +3051,9 @@ describe('chooseExcursionDirection', () => {
     // We verify the post-call state matches a fresh Rng advanced 3x.
     const expectedAfter3 = (seed: number): number => {
       const r = new Rng(seed);
-      r.nextU32(); r.nextU32(); r.nextU32();
+      r.nextU32();
+      r.nextU32();
+      r.nextU32();
       return r.getState();
     };
 
@@ -2940,16 +3069,16 @@ describe('chooseExcursionDirection', () => {
       // Active-outward heading
       () => {
         const r = setupWorldWithEntrance(24, 64, 30, 70);
-        r.world.ants.searchHeadingX[r.antId]     = 1;
-        r.world.ants.searchHeadingY[r.antId]     = 0;
+        r.world.ants.searchHeadingX[r.antId] = 1;
+        r.world.ants.searchHeadingY[r.antId] = 0;
         r.world.ants.searchHeadingTicks[r.antId] = 5;
         return r;
       },
       // Active-inward (bounce) heading
       () => {
         const r = setupWorldWithEntrance(24, 64, 30, 70);
-        r.world.ants.searchHeadingX[r.antId]     = -1;
-        r.world.ants.searchHeadingY[r.antId]     = 0;
+        r.world.ants.searchHeadingX[r.antId] = -1;
+        r.world.ants.searchHeadingY[r.antId] = 0;
         r.world.ants.searchHeadingTicks[r.antId] = 10;
         return r;
       },
@@ -2982,12 +3111,14 @@ describe('tickExcursionBoundary', () => {
   ): { world: WorldState; colony: ColonyRecord; antId: number } {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = [{
-      entranceId:   allocateEntityId(world),
-      surfaceTileX: entranceX,
-      surfaceTileY: entranceY,
-      isOpen:       true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: allocateEntityId(world),
+        surfaceTileX: entranceX,
+        surfaceTileY: entranceY,
+        isOpen: true,
+      },
+    ];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
@@ -3006,8 +3137,8 @@ describe('tickExcursionBoundary', () => {
   it('within base radius → no transition, heading preserved', () => {
     const base = SEARCH_LEASH_RADII[0]!;
     const { world, antId } = setupExcursionWorld(base, 0);
-    world.ants.searchHeadingX[antId]     = 1;
-    world.ants.searchHeadingY[antId]     = 0;
+    world.ants.searchHeadingX[antId] = 1;
+    world.ants.searchHeadingY[antId] = 0;
     world.ants.searchHeadingTicks[antId] = 5;
     tickExcursionBoundary(world);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
@@ -3018,8 +3149,8 @@ describe('tickExcursionBoundary', () => {
   it('past base radius → flips to ReturningToNest, heading cleared', () => {
     const base = SEARCH_LEASH_RADII[0]!;
     const { world, antId } = setupExcursionWorld(base + 1, 0);
-    world.ants.searchHeadingX[antId]     = 1;
-    world.ants.searchHeadingY[antId]     = 0;
+    world.ants.searchHeadingX[antId] = 1;
+    world.ants.searchHeadingY[antId] = 0;
     world.ants.searchHeadingTicks[antId] = 5;
     tickExcursionBoundary(world);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.ReturningToNest);
@@ -3080,12 +3211,14 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
   function baseSetup(antTileX: number, antTileY: number, wave = 0) {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = [{
-      entranceId: allocateEntityId(world),
-      surfaceTileX: 0,
-      surfaceTileY: 0,
-      isOpen: true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: allocateEntityId(world),
+        surfaceTileX: 0,
+        surfaceTileY: 0,
+        isOpen: true,
+      },
+    ];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
@@ -3105,7 +3238,13 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
     const base = SEARCH_LEASH_RADII[0]!;
     const { world, colony, antId } = baseSetup(base + 2, 0);
     // Mark a priority pile; pile exists in foodPiles so colonyHasPriorityPile resolves true.
-    const pile = { foodPileId: 1, tileX: base + 20, tileY: 0 , pickupsRemaining: 50, pickupsInitial: 50} as FoodPile;
+    const pile = {
+      foodPileId: 1,
+      tileX: base + 20,
+      tileY: 0,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    } as FoodPile;
     world.foodPiles.push(pile);
     colony.priorityFoodPileId = pile.foodPileId;
     tickExcursionBoundary(world);
@@ -3116,7 +3255,13 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
     const base = SEARCH_LEASH_RADII[0]!;
     const { world, antId } = baseSetup(base + 2, 0);
     // Pile within FOOD_SCENT_RADIUS (=15) of the ant — scent lookup returns non-null.
-    world.foodPiles.push({ foodPileId: 1, tileX: base + 5, tileY: 0 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({
+      foodPileId: 1,
+      tileX: base + 5,
+      tileY: 0,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
     tickExcursionBoundary(world);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
   });
@@ -3147,7 +3292,13 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
     // hysteresis threshold (25 - 5 = 20).
     const { world, colony, antId } = baseSetup(5, 0);
     world.ants.subTask[antId] = ForagingSubState.ReturningToNest;
-    const pile = { foodPileId: 1, tileX: base + 20, tileY: 0 , pickupsRemaining: 50, pickupsInitial: 50} as FoodPile;
+    const pile = {
+      foodPileId: 1,
+      tileX: base + 20,
+      tileY: 0,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    } as FoodPile;
     world.foodPiles.push(pile);
     colony.priorityFoodPileId = pile.foodPileId;
     tickExcursionBoundary(world);
@@ -3160,7 +3311,13 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
   it('ReturningToNest + nearby scent pile → flips back to SearchingFood', () => {
     const { world, antId } = baseSetup(10, 10);
     world.ants.subTask[antId] = ForagingSubState.ReturningToNest;
-    world.foodPiles.push({ foodPileId: 1, tileX: 12, tileY: 10 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({
+      foodPileId: 1,
+      tileX: 12,
+      tileY: 10,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
     tickExcursionBoundary(world);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
   });
@@ -3272,7 +3429,13 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
     const base = SEARCH_LEASH_RADII[0]!;
     const { world, colony, antId } = baseSetup(base + 2, 0);
     world.ants.subTask[antId] = ForagingSubState.ReturningToNest;
-    const pile = { foodPileId: 1, tileX: base + 20, tileY: 0 , pickupsRemaining: 50, pickupsInitial: 50} as FoodPile;
+    const pile = {
+      foodPileId: 1,
+      tileX: base + 20,
+      tileY: 0,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    } as FoodPile;
     world.foodPiles.push(pile);
     colony.priorityFoodPileId = pile.foodPileId;
     tickExcursionBoundary(world);
@@ -3292,20 +3455,17 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
 // ---------------------------------------------------------------------------
 
 describe('tickPheromoneDeposit — entrance suppression (09 follow-up issue 2)', () => {
-  function setupCarryingAnt(
-    antTileX: number,
-    antTileY: number,
-    entranceX = 0,
-    entranceY = 0,
-  ) {
+  function setupCarryingAnt(antTileX: number, antTileY: number, entranceX = 0, entranceY = 0) {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = [{
-      entranceId: allocateEntityId(world),
-      surfaceTileX: entranceX,
-      surfaceTileY: entranceY,
-      isOpen: true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: allocateEntityId(world),
+        surfaceTileX: entranceX,
+        surfaceTileY: entranceY,
+        isOpen: true,
+      },
+    ];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
@@ -3391,12 +3551,14 @@ describe('tickPheromoneDeposit — entrance suppression (09 follow-up issue 2)',
     const colony = createColonyRecord(COLONY_ID, 0);
     const entranceX = 24;
     const entranceY = 64;
-    colony.entrances = [{
-      entranceId: allocateEntityId(world),
-      surfaceTileX: entranceX,
-      surfaceTileY: entranceY,
-      isOpen: true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: allocateEntityId(world),
+        surfaceTileX: entranceX,
+        surfaceTileY: entranceY,
+        isOpen: true,
+      },
+    ];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
@@ -3407,7 +3569,10 @@ describe('tickPheromoneDeposit — entrance suppression (09 follow-up issue 2)',
     // two tiles). Pre-suppression, 50 ticks here would pin these cells at
     // PHEROMONE_CAP and create the two-tile trap.
     const carrierOffsets: Array<[number, number]> = [
-      [0, 0], [1, 0], [0, 1], [-1, 0],
+      [0, 0],
+      [1, 0],
+      [0, 1],
+      [-1, 0],
     ];
     for (const [dx, dy] of carrierOffsets) {
       const antId = allocateEntityId(world);
@@ -3555,12 +3720,14 @@ describe('tickSearchLeash (09 digger-reassignment memo)', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
     // PRD §2a extension contract: caller-side init for entrances / rallyPoint / digFlowFieldDirty.
-    colony.entrances = [{
-      entranceId:   allocateEntityId(world),
-      surfaceTileX: entranceX,
-      surfaceTileY: entranceY,
-      isOpen:       true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: allocateEntityId(world),
+        surfaceTileX: entranceX,
+        surfaceTileY: entranceY,
+        isOpen: true,
+      },
+    ];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     // Seed the gate: the leash only fires when (a) more workers are foraging
@@ -3569,7 +3736,7 @@ describe('tickSearchLeash (09 digger-reassignment memo)', () => {
     // requested allocation no longer supports that role" — i.e. the triangle
     // is asking for dig/fight but foragers are stuck out searching.
     colony.computedAllocation.forage = 0;
-    colony.computedAllocation.dig    = 1;
+    colony.computedAllocation.dig = 1;
     colony.taskCensus.forage = 1;
     world.colonies[COLONY_ID] = colony;
 
@@ -3696,11 +3863,11 @@ describe('tickSearchLeash (09 digger-reassignment memo)', () => {
     // Over-foraged (census=5 > allocation.forage=4) but the only non-forage
     // demand is nurse — no dig/fight. Gate must stay closed.
     world.colonies[COLONY_ID]!.computedAllocation.forage = 4;
-    world.colonies[COLONY_ID]!.computedAllocation.dig    = 0;
-    world.colonies[COLONY_ID]!.computedAllocation.fight  = 0;
-    world.colonies[COLONY_ID]!.computedAllocation.nurse  = 1;
+    world.colonies[COLONY_ID]!.computedAllocation.dig = 0;
+    world.colonies[COLONY_ID]!.computedAllocation.fight = 0;
+    world.colonies[COLONY_ID]!.computedAllocation.nurse = 1;
     world.colonies[COLONY_ID]!.taskCensus.forage = 5;
-    world.colonies[COLONY_ID]!.taskCensus.nurse  = 0;
+    world.colonies[COLONY_ID]!.taskCensus.nurse = 0;
     tickSearchLeash(world);
     expect(world.ants.task[antId]).toBe(AntTask.Foraging);
     expect(world.ants.searchWave[antId]).toBe(0);
@@ -3711,7 +3878,7 @@ describe('tickSearchLeash (09 digger-reassignment memo)', () => {
     // gate must arm on either.
     const base = SEARCH_LEASH_RADII[0]!;
     const { world, antId } = setupLeashWorld(base + 1, 0);
-    world.colonies[COLONY_ID]!.computedAllocation.dig   = 0;
+    world.colonies[COLONY_ID]!.computedAllocation.dig = 0;
     world.colonies[COLONY_ID]!.computedAllocation.fight = 1;
     tickSearchLeash(world);
     expect(world.ants.task[antId]).toBe(AntTask.Idle);
@@ -3722,10 +3889,10 @@ describe('tickSearchLeash (09 digger-reassignment memo)', () => {
     const { world, colony, antId } = setupLeashWorld(30, 0, 100, 0);
     // Add a closer entrance — ant at (30,0) is 30 from (100,0) but 2 from (28,0).
     colony.entrances.push({
-      entranceId:   allocateEntityId(world),
+      entranceId: allocateEntityId(world),
       surfaceTileX: 28,
       surfaceTileY: 0,
-      isOpen:       true,
+      isOpen: true,
     });
     tickSearchLeash(world);
     // Closest is 2 ≤ 25 → not demoted.
@@ -3754,12 +3921,14 @@ describe('tickAntMovement — prev-tile tracking (09 follow-up issue 1)', () => 
     // about prev-tile recording semantics, not surface features.
     world.simVersion = SIM_VERSION_V5_CHAMBER_ON_MARKED;
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = [{
-      entranceId:   allocateEntityId(world),
-      surfaceTileX: 0,
-      surfaceTileY: antTileY,
-      isOpen:       true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: allocateEntityId(world),
+        surfaceTileX: 0,
+        surfaceTileY: antTileY,
+        isOpen: true,
+      },
+    ];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
@@ -3879,12 +4048,14 @@ describe('tickExcursionBoundary — stale-trap recovery (09 follow-up issue 2)',
   function awayFromNestSetup(antTileX: number, antTileY: number) {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = [{
-      entranceId:   allocateEntityId(world),
-      surfaceTileX: 0,
-      surfaceTileY: 0,
-      isOpen:       true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: allocateEntityId(world),
+        surfaceTileX: 0,
+        surfaceTileY: 0,
+        isOpen: true,
+      },
+    ];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
@@ -3951,8 +4122,8 @@ describe('tickExcursionBoundary — stale-trap recovery (09 follow-up issue 2)',
     const { world, grid, antId } = awayFromNestSetup(antTileX, antTileY);
     world.ants.searchPrevTileX[antId] = antTileX - 1;
     world.ants.searchPrevTileY[antId] = antTileY;
-    phSet(grid, antTileX - 1, antTileY, PHEROMONE_CAP);         // prev: ignored
-    phSet(grid, antTileX, antTileY + 2, FOOD_TRAIL_DEPOSIT);    // real signal
+    phSet(grid, antTileX - 1, antTileY, PHEROMONE_CAP); // prev: ignored
+    phSet(grid, antTileX, antTileY + 2, FOOD_TRAIL_DEPOSIT); // real signal
 
     tickExcursionBoundary(world);
 
@@ -3984,7 +4155,7 @@ describe('tickExcursionBoundary — stale-trap recovery (09 follow-up issue 2)',
     // lands on prev. The sampler rejects it and returns {0,0}; the leash
     // check must rule it out too, or the ant never flips home.
     const base = SEARCH_LEASH_RADII[0]!;
-    const antTileX = base + 2;         // 27
+    const antTileX = base + 2; // 27
     const antTileY = 0;
     const { world, grid, antId } = awayFromNestSetup(antTileX, antTileY);
     world.ants.searchPrevTileX[antId] = antTileX - 1; // 26
@@ -4002,7 +4173,7 @@ describe('tickExcursionBoundary — stale-trap recovery (09 follow-up issue 2)',
     // outer edge of SIGNAL_PHEROMONE_RADIUS. Major-axis step is still -X,
     // still lands on prev (26,0). Sampler rejects → leash must fire.
     const base = SEARCH_LEASH_RADII[0]!;
-    const antTileX = base + 2;         // 27
+    const antTileX = base + 2; // 27
     const antTileY = 0;
     const { world, grid, antId } = awayFromNestSetup(antTileX, antTileY);
     world.ants.searchPrevTileX[antId] = antTileX - 1; // 26
@@ -4019,7 +4190,7 @@ describe('tickExcursionBoundary — stale-trap recovery (09 follow-up issue 2)',
     // so major-axis step is +Y → target (27,1), NOT prev. Sampler would
     // accept this candidate, so the leash check must accept it too.
     const base = SEARCH_LEASH_RADII[0]!;
-    const antTileX = base + 2;         // 27
+    const antTileX = base + 2; // 27
     const antTileY = 0;
     const { world, grid, antId } = awayFromNestSetup(antTileX, antTileY);
     world.ants.searchPrevTileX[antId] = antTileX - 1;
@@ -4036,7 +4207,7 @@ describe('tickExcursionBoundary — stale-trap recovery (09 follow-up issue 2)',
     // prev axis. All three cells (prev, dist=2, dist=3) are candidates the
     // sampler will reject; none should keep the ant on SearchingFood.
     const base = SEARCH_LEASH_RADII[0]!;
-    const antTileX = base + 2;         // 27
+    const antTileX = base + 2; // 27
     const antTileY = 0;
     const { world, grid, antId } = awayFromNestSetup(antTileX, antTileY);
     world.ants.searchPrevTileX[antId] = antTileX - 1;
@@ -4085,30 +4256,32 @@ describe('tickNurseActions', () => {
     const colony = createColonyRecord(COLONY_ID, queenId);
     world.colonies[COLONY_ID] = colony;
     colony.chambers.push({
-      chamberId:   100,
+      chamberId: 100,
       chamberType: params.chamberType ?? ChamberType.Nursery,
-      foodStored:  0,
-      posX:        params.chamberTileX << FP_SHIFT,
-      posY:        params.chamberTileY << FP_SHIFT,
-      width:       params.chamberWidth  ?? 2,
-      height:      params.chamberHeight ?? 2,
+      foodStored: 0,
+      posX: params.chamberTileX << FP_SHIFT,
+      posY: params.chamberTileY << FP_SHIFT,
+      width: params.chamberWidth ?? 2,
+      height: params.chamberHeight ?? 2,
     });
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
       colonyId: COLONY_ID,
-      posX:     params.antTileX << FP_SHIFT,
-      posY:     params.antTileY << FP_SHIFT,
-      task:     AntTask.Nursing,
-      subTask:  params.subTask ?? NursingSubState.MovingToBrood,
+      posX: params.antTileX << FP_SHIFT,
+      posY: params.antTileY << FP_SHIFT,
+      task: AntTask.Nursing,
+      subTask: params.subTask ?? NursingSubState.MovingToBrood,
     });
     return { world, antId, colony };
   }
 
   it('MovingToBrood on Nursery tile → Feeding (one-tick service begins)', () => {
     const { world, antId } = setupNursingAnt({
-      antTileX: 10, antTileY: 10,
-      chamberTileX: 10, chamberTileY: 10,
+      antTileX: 10,
+      antTileY: 10,
+      chamberTileX: 10,
+      chamberTileY: 10,
     });
 
     tickNurseActions(world);
@@ -4119,9 +4292,12 @@ describe('tickNurseActions', () => {
 
   it('MovingToBrood on Queen chamber tile → Feeding', () => {
     const { world, antId } = setupNursingAnt({
-      antTileX: 5, antTileY: 7,
-      chamberTileX: 4, chamberTileY: 6,
-      chamberWidth: 3, chamberHeight: 3,
+      antTileX: 5,
+      antTileY: 7,
+      chamberTileX: 4,
+      chamberTileY: 6,
+      chamberWidth: 3,
+      chamberHeight: 3,
       chamberType: ChamberType.Queen,
     });
 
@@ -4132,8 +4308,10 @@ describe('tickNurseActions', () => {
 
   it('Feeding → Idle (released for step 10a reassignment)', () => {
     const { world, antId } = setupNursingAnt({
-      antTileX: 10, antTileY: 10,
-      chamberTileX: 10, chamberTileY: 10,
+      antTileX: 10,
+      antTileY: 10,
+      chamberTileX: 10,
+      chamberTileY: 10,
       subTask: NursingSubState.Feeding,
     });
 
@@ -4145,8 +4323,10 @@ describe('tickNurseActions', () => {
 
   it('two-tick arc: MovingToBrood on tile → Feeding → Idle', () => {
     const { world, antId } = setupNursingAnt({
-      antTileX: 10, antTileY: 10,
-      chamberTileX: 10, chamberTileY: 10,
+      antTileX: 10,
+      antTileY: 10,
+      chamberTileX: 10,
+      chamberTileY: 10,
     });
 
     tickNurseActions(world);
@@ -4159,8 +4339,10 @@ describe('tickNurseActions', () => {
 
   it('dead ant: ignored', () => {
     const { world, antId } = setupNursingAnt({
-      antTileX: 10, antTileY: 10,
-      chamberTileX: 10, chamberTileY: 10,
+      antTileX: 10,
+      antTileY: 10,
+      chamberTileX: 10,
+      chamberTileY: 10,
     });
     world.ants.alive[antId] = 0;
 
@@ -4171,8 +4353,10 @@ describe('tickNurseActions', () => {
 
   it('non-nursing ant: ignored even on chamber tile', () => {
     const { world, antId } = setupNursingAnt({
-      antTileX: 10, antTileY: 10,
-      chamberTileX: 10, chamberTileY: 10,
+      antTileX: 10,
+      antTileY: 10,
+      chamberTileX: 10,
+      chamberTileY: 10,
     });
     world.ants.task[antId] = AntTask.Foraging;
     world.ants.subTask[antId] = ForagingSubState.SearchingFood;
@@ -4182,7 +4366,6 @@ describe('tickNurseActions', () => {
     expect(world.ants.task[antId]).toBe(AntTask.Foraging);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
   });
-
 });
 
 // ---------------------------------------------------------------------------
@@ -4373,8 +4556,13 @@ describe('chamber-flow nurseDeposit field (#17 phase 1)', () => {
       }
     }
     colony.chambers.push({
-      chamberId: 1, chamberType: ChamberType.Nursery, foodStored: 0,
-      posX: 6 << FP_SHIFT, posY: 6 << FP_SHIFT, width: 2, height: 2,
+      chamberId: 1,
+      chamberType: ChamberType.Nursery,
+      foodStored: 0,
+      posX: 6 << FP_SHIFT,
+      posY: 6 << FP_SHIFT,
+      width: 2,
+      height: 2,
     });
     // Queen chamber (2x2) at (10,3).
     for (let dy = 0; dy < 2; dy++) {
@@ -4383,8 +4571,13 @@ describe('chamber-flow nurseDeposit field (#17 phase 1)', () => {
       }
     }
     colony.chambers.push({
-      chamberId: 2, chamberType: ChamberType.Queen, foodStored: 0,
-      posX: 10 << FP_SHIFT, posY: 3 << FP_SHIFT, width: 2, height: 2,
+      chamberId: 2,
+      chamberType: ChamberType.Queen,
+      foodStored: 0,
+      posX: 10 << FP_SHIFT,
+      posY: 3 << FP_SHIFT,
+      width: 2,
+      height: 2,
     });
     // Tunnel connecting them so BFS can reach Queen tiles.
     for (let y = 4; y <= 6; y++) ugSet(underground, 8, y, UndergroundTileState.Open);
@@ -4394,8 +4587,11 @@ describe('chamber-flow nurseDeposit field (#17 phase 1)', () => {
     const gridSize = underground.width * underground.height;
     const bufs = ensureChamberFlowFields(cache, colonyId, gridSize);
     computeChamberFlowField(
-      underground, colony.chambers, NURSERY_CHAMBER_TYPES,
-      bufs.nurseDeposit, bufs.queue,
+      underground,
+      colony.chambers,
+      NURSERY_CHAMBER_TYPES,
+      bufs.nurseDeposit,
+      bufs.queue,
     );
 
     const W = underground.width;
@@ -4406,7 +4602,12 @@ describe('chamber-flow nurseDeposit field (#17 phase 1)', () => {
     expect(bufs.nurseDeposit[7 * W + 7]).toBe(-1);
     // Queen footprint tiles are NOT sources — they're reachable, so they
     // carry a step direction (0..3), but never -1.
-    for (const [qx, qy] of [[10, 3], [11, 3], [10, 4], [11, 4]] as const) {
+    for (const [qx, qy] of [
+      [10, 3],
+      [11, 3],
+      [10, 4],
+      [11, 4],
+    ] as const) {
       const v = bufs.nurseDeposit[qy * W + qx]!;
       expect(v).not.toBe(-1);
       expect(v).toBeGreaterThanOrEqual(0);
@@ -4424,16 +4625,24 @@ describe('chamber-flow nurseDeposit field (#17 phase 1)', () => {
     }
     // Push a Queen chamber so we prove only the type filter matters.
     colony.chambers.push({
-      chamberId: 1, chamberType: ChamberType.Queen, foodStored: 0,
-      posX: 5 << FP_SHIFT, posY: 5 << FP_SHIFT, width: 2, height: 2,
+      chamberId: 1,
+      chamberType: ChamberType.Queen,
+      foodStored: 0,
+      posX: 5 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      width: 2,
+      height: 2,
     });
 
     const cache = createChamberFlowFields();
     const gridSize = underground.width * underground.height;
     const bufs = ensureChamberFlowFields(cache, colonyId, gridSize);
     computeChamberFlowField(
-      underground, colony.chambers, NURSERY_CHAMBER_TYPES,
-      bufs.nurseDeposit, bufs.queue,
+      underground,
+      colony.chambers,
+      NURSERY_CHAMBER_TYPES,
+      bufs.nurseDeposit,
+      bufs.queue,
     );
 
     // No seeds → every tile stays at -2.
@@ -4470,8 +4679,13 @@ describe('chamber-flow nursing pickup field (#17 phase 1)', () => {
       }
     }
     colony.chambers.push({
-      chamberId: 1, chamberType: ChamberType.Queen, foodStored: 0,
-      posX: 30 << FP_SHIFT, posY: 8 << FP_SHIFT, width: 5, height: 3,
+      chamberId: 1,
+      chamberType: ChamberType.Queen,
+      foodStored: 0,
+      posX: 30 << FP_SHIFT,
+      posY: 8 << FP_SHIFT,
+      width: 5,
+      height: 3,
     });
     // Two eggs in only 2 of the 15 Queen tiles.
     const eggA = allocateEntityId(world);
@@ -4479,7 +4693,9 @@ describe('chamber-flow nursing pickup field (#17 phase 1)', () => {
       colonyId,
       posX: (33 << FP_SHIFT) + (FP_ONE >> 1),
       posY: (8 << FP_SHIFT) + (FP_ONE >> 1),
-      task: AntTask.Idle, speed: 0, zone: Zone.Underground,
+      task: AntTask.Idle,
+      speed: 0,
+      zone: Zone.Underground,
     });
     colony.eggs.push(eggA);
     const eggB = allocateEntityId(world);
@@ -4487,7 +4703,9 @@ describe('chamber-flow nursing pickup field (#17 phase 1)', () => {
       colonyId,
       posX: (30 << FP_SHIFT) + (FP_ONE >> 1),
       posY: (9 << FP_SHIFT) + (FP_ONE >> 1),
-      task: AntTask.Idle, speed: 0, zone: Zone.Underground,
+      task: AntTask.Idle,
+      speed: 0,
+      zone: Zone.Underground,
     });
     colony.eggs.push(eggB);
 
@@ -4495,9 +4713,13 @@ describe('chamber-flow nursing pickup field (#17 phase 1)', () => {
     const gridSize = underground.width * underground.height;
     const bufs = ensureChamberFlowFields(cache, colonyId, gridSize);
     computeNursingPickupField(
-      underground, colony.chambers, world.ants,
-      colony.eggs, colony.larvae,
-      bufs.nursing, bufs.queue,
+      underground,
+      colony.chambers,
+      world.ants,
+      colony.eggs,
+      colony.larvae,
+      bufs.nursing,
+      bufs.queue,
     );
 
     const W = underground.width;
@@ -4507,9 +4729,19 @@ describe('chamber-flow nursing pickup field (#17 phase 1)', () => {
     // Other Queen tiles are NOT sources — they carry a step direction
     // (0..3) routing them toward the nearest egg, never -1.
     const otherQueenTiles: Array<[number, number]> = [
-      [30, 8], [31, 8], [32, 8],         [34, 8], // row 8 minus eggA
-      [31, 9], [32, 9], [33, 9], [34, 9],         // row 9 minus eggB
-      [30, 10], [31, 10], [32, 10], [33, 10], [34, 10], // row 10
+      [30, 8],
+      [31, 8],
+      [32, 8],
+      [34, 8], // row 8 minus eggA
+      [31, 9],
+      [32, 9],
+      [33, 9],
+      [34, 9], // row 9 minus eggB
+      [30, 10],
+      [31, 10],
+      [32, 10],
+      [33, 10],
+      [34, 10], // row 10
     ];
     for (const [tx, ty] of otherQueenTiles) {
       const v = bufs.nursing[ty * W + tx]!;
@@ -4531,7 +4763,9 @@ describe('chamber-flow nursing pickup field (#17 phase 1)', () => {
       colonyId,
       posX: (5 << FP_SHIFT) + (FP_ONE >> 1),
       posY: (5 << FP_SHIFT) + (FP_ONE >> 1),
-      task: AntTask.Idle, speed: 0, zone: Zone.Underground,
+      task: AntTask.Idle,
+      speed: 0,
+      zone: Zone.Underground,
     });
     colony.eggs.push(orphan);
 
@@ -4539,9 +4773,13 @@ describe('chamber-flow nursing pickup field (#17 phase 1)', () => {
     const gridSize = underground.width * underground.height;
     const bufs = ensureChamberFlowFields(cache, colonyId, gridSize);
     computeNursingPickupField(
-      underground, colony.chambers, world.ants,
-      colony.eggs, colony.larvae,
-      bufs.nursing, bufs.queue,
+      underground,
+      colony.chambers,
+      world.ants,
+      colony.eggs,
+      colony.larvae,
+      bufs.nursing,
+      bufs.queue,
     );
     expect(bufs.nursing[5 * underground.width + 5]).toBe(-1);
   });
@@ -4554,8 +4792,13 @@ describe('chamber-flow nursing pickup field (#17 phase 1)', () => {
     const { world, underground, colony, colonyId } = setupWorldWithUnderground(16, 16);
     void world;
     colony.chambers.push({
-      chamberId: 1, chamberType: ChamberType.Queen, foodStored: 0,
-      posX: 5 << FP_SHIFT, posY: 5 << FP_SHIFT, width: 2, height: 2,
+      chamberId: 1,
+      chamberType: ChamberType.Queen,
+      foodStored: 0,
+      posX: 5 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      width: 2,
+      height: 2,
     });
     for (let dy = 0; dy < 2; dy++) {
       for (let dx = 0; dx < 2; dx++) {
@@ -4567,9 +4810,13 @@ describe('chamber-flow nursing pickup field (#17 phase 1)', () => {
     const gridSize = underground.width * underground.height;
     const bufs = ensureChamberFlowFields(cache, colonyId, gridSize);
     computeNursingPickupField(
-      underground, colony.chambers, world.ants,
-      colony.eggs, colony.larvae,
-      bufs.nursing, bufs.queue,
+      underground,
+      colony.chambers,
+      world.ants,
+      colony.eggs,
+      colony.larvae,
+      bufs.nursing,
+      bufs.queue,
     );
     const W = underground.width;
     // Queen tiles previously seeded as -1 by the dropped Seed (1) are
@@ -4595,7 +4842,12 @@ describe('tickAntMovement — underground chamber routing (tunnel-aware)', () =>
    *  from (10,10) westbound then northbound to (5,5). Direct-steering from
    *  (10,10) picks dx=-1 first → (9,10). Make (9,10) Solid so the old logic
    *  would freeze there. Flow-field instead routes via the tunnel. */
-  function buildChamberTunnelWorld(opts: { chamberType: 0 | 1 | 2; antTask: typeof AntTask.Foraging | typeof AntTask.Nursing; antSubTask: number; foodCarrying: number }) {
+  function buildChamberTunnelWorld(opts: {
+    chamberType: 0 | 1 | 2;
+    antTask: typeof AntTask.Foraging | typeof AntTask.Nursing;
+    antSubTask: number;
+    foodCarrying: number;
+  }) {
     const { world, colony, underground, colonyId } = setupWorldWithUnderground(16, 16);
     // Chamber tile at (5,5) — seeded tile for flow-field. 1x1 footprint.
     ugSet(underground, 5, 5, UndergroundTileState.Open);
@@ -4644,8 +4896,20 @@ describe('tickAntMovement — underground chamber routing (tunnel-aware)', () =>
     const cache = createChamberFlowFields();
     const gridSize = underground.width * underground.height;
     const bufs = ensureChamberFlowFields(cache, colonyId, gridSize);
-    computeChamberFlowField(underground, colony.chambers, FOOD_CHAMBER_TYPES, bufs.food, bufs.queue);
-    computeChamberFlowField(underground, colony.chambers, NURSING_CHAMBER_TYPES, bufs.nursing, bufs.queue);
+    computeChamberFlowField(
+      underground,
+      colony.chambers,
+      FOOD_CHAMBER_TYPES,
+      bufs.food,
+      bufs.queue,
+    );
+    computeChamberFlowField(
+      underground,
+      colony.chambers,
+      NURSING_CHAMBER_TYPES,
+      bufs.nursing,
+      bufs.queue,
+    );
     return cache;
   }
 
@@ -4961,8 +5225,20 @@ describe('tickAntMovement — v4 diagonal flow-field lift (issue #34)', () => {
     const cache = createChamberFlowFields();
     const gridSize = underground.width * underground.height;
     const bufs = ensureChamberFlowFields(cache, colonyId, gridSize);
-    computeChamberFlowField(underground, colony.chambers, FOOD_CHAMBER_TYPES, bufs.food, bufs.queue);
-    computeChamberFlowField(underground, colony.chambers, NURSING_CHAMBER_TYPES, bufs.nursing, bufs.queue);
+    computeChamberFlowField(
+      underground,
+      colony.chambers,
+      FOOD_CHAMBER_TYPES,
+      bufs.food,
+      bufs.queue,
+    );
+    computeChamberFlowField(
+      underground,
+      colony.chambers,
+      NURSING_CHAMBER_TYPES,
+      bufs.nursing,
+      bufs.queue,
+    );
     return cache;
   }
 
@@ -5222,7 +5498,7 @@ describe('tickAntMovement — Fighting rally movement', () => {
       updateFightAntTargets(world);
       tickAntMovement(world, rng, digFlowFields, entranceCache, chamberCache);
     }
-    const past = fighterIds.filter(id => (world.ants.posX[id]! >> FP_SHIFT) > 24).length;
+    const past = fighterIds.filter((id) => world.ants.posX[id]! >> FP_SHIFT > 24).length;
     expect(past).toBeGreaterThanOrEqual(2);
   });
 
@@ -5380,7 +5656,9 @@ describe('tickAntMovement — same-colony occupancy enforcement', () => {
   it('OCC-1. two same-colony workers target the same surface tile → lower-id keeps the tile, higher-id shifts to an adjacent tile', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
 
     // A at (5,5), B at (7,5). Both target (6,5). A is allocated first → lower id.
@@ -5449,9 +5727,13 @@ describe('tickAntMovement — same-colony occupancy enforcement', () => {
     // since they are from different colonies.
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colonyA = createColonyRecord(1, 0);
-    colonyA.entrances = []; colonyA.rallyPoint = null; colonyA.digFlowFieldDirty = false;
+    colonyA.entrances = [];
+    colonyA.rallyPoint = null;
+    colonyA.digFlowFieldDirty = false;
     const colonyB = createColonyRecord(2, 0);
-    colonyB.entrances = []; colonyB.rallyPoint = null; colonyB.digFlowFieldDirty = false;
+    colonyB.entrances = [];
+    colonyB.rallyPoint = null;
+    colonyB.digFlowFieldDirty = false;
     world.colonies[1] = colonyA;
     world.colonies[2] = colonyB;
 
@@ -5472,7 +5754,7 @@ describe('tickAntMovement — same-colony occupancy enforcement', () => {
     expect(world.ants.colonyId[aId]).not.toBe(world.ants.colonyId[bId]);
   });
 
-  it('OCC-4. lower-id ant moving into a higher-id stationary ant\'s tile → stationary keeps tile, mover shifts', () => {
+  it("OCC-4. lower-id ant moving into a higher-id stationary ant's tile → stationary keeps tile, mover shifts", () => {
     // Wait — spec says lower-id wins. Here A=lower, B=higher-stationary.
     // A walks into B's tile. In post-pass resolution, ants are processed in
     // entity-id order: A claims (6,5) first (it's a non-exempt tile and
@@ -5480,7 +5762,9 @@ describe('tickAntMovement — same-colony occupancy enforcement', () => {
     // (stationary), so B shifts to adjacent. Lower-id ALWAYS wins.
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
 
     // A first (lower id), will walk east.
@@ -5503,7 +5787,9 @@ describe('tickAntMovement — same-colony occupancy enforcement', () => {
     // duplicate: lower-id keeps, higher-id shifts to adjacent.
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
 
     const aId = spawnSurfaceHolding(world, COLONY_ID, 5, 5);
@@ -5596,7 +5882,9 @@ describe('tickAntMovement — same-colony occupancy enforcement', () => {
   it('OCC-8. four same-colony ants all converging on one tile end up on four distinct tiles', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
 
     const ids = [
@@ -5619,7 +5907,9 @@ describe('tickAntMovement — same-colony occupancy enforcement', () => {
     function run(): number[] {
       const world = createWorldState(42, MAX_TEST_ENTITIES);
       const colony = createColonyRecord(COLONY_ID, 0);
-      colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+      colony.entrances = [];
+      colony.rallyPoint = null;
+      colony.digFlowFieldDirty = false;
       world.colonies[COLONY_ID] = colony;
 
       const ids = [
@@ -5670,7 +5960,12 @@ describe('tickAntMovement — P1 queen relocation', () => {
     computeQueenField?: boolean;
     ugWidth?: number;
     ugHeight?: number;
-  }): { world: WorldState; colony: ColonyRecord; chamberFlowFields: ReturnType<typeof createChamberFlowFields>; queenId: number } {
+  }): {
+    world: WorldState;
+    colony: ColonyRecord;
+    chamberFlowFields: ReturnType<typeof createChamberFlowFields>;
+    queenId: number;
+  } {
     const ugWidth = params.ugWidth ?? 16;
     const ugHeight = params.ugHeight ?? 16;
     const world = createWorldState(42, MAX_TEST_ENTITIES);
@@ -5695,33 +5990,33 @@ describe('tickAntMovement — P1 queen relocation', () => {
       // Tile-aligned (no half-tile offset) so a single WORKER_BASE_SPEED step
       // (FP_ONE / 2) reliably crosses the tile boundary in tests that assert
       // tile-index deltas.
-      posX:     params.queenTileX << FP_SHIFT,
-      posY:     params.queenTileY << FP_SHIFT,
-      task:     AntTask.Idle,
-      subTask:  0,
-      speed:    WORKER_BASE_SPEED,
-      zone:     params.zone ?? Zone.Underground,
+      posX: params.queenTileX << FP_SHIFT,
+      posY: params.queenTileY << FP_SHIFT,
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: WORKER_BASE_SPEED,
+      zone: params.zone ?? Zone.Underground,
     });
     colony.queenEntityId = queenId;
 
     if (params.addQueenChamber) {
       colony.chambers.push({
-        chamberId:   500,
+        chamberId: 500,
         chamberType: ChamberType.Queen,
-        foodStored:  0,
-        posX:        (params.queenChamberTileX ?? 2) << FP_SHIFT,
-        posY:        (params.queenChamberTileY ?? 2) << FP_SHIFT,
-        width:       params.queenChamberWidth  ?? 2,
-        height:      params.queenChamberHeight ?? 2,
+        foodStored: 0,
+        posX: (params.queenChamberTileX ?? 2) << FP_SHIFT,
+        posY: (params.queenChamberTileY ?? 2) << FP_SHIFT,
+        width: params.queenChamberWidth ?? 2,
+        height: params.queenChamberHeight ?? 2,
       });
     }
 
     if (params.addEntrance) {
       colony.entrances.push({
-        entranceId:   1,
+        entranceId: 1,
         surfaceTileX: params.addEntrance.tileX,
         surfaceTileY: params.addEntrance.tileY,
-        isOpen:       params.addEntrance.isOpen,
+        isOpen: params.addEntrance.isOpen,
       });
     }
 
@@ -5742,7 +6037,8 @@ describe('tickAntMovement — P1 queen relocation', () => {
 
   it('Q-1. no Queen chamber → queen holds in place (any starting tile is home)', () => {
     const { world, queenId } = setupQueenWorld({
-      queenTileX: 5, queenTileY: 5,
+      queenTileX: 5,
+      queenTileY: 5,
       addQueenChamber: false,
     });
     const beforeX = world.ants.posX[queenId]!;
@@ -5764,10 +6060,13 @@ describe('tickAntMovement — P1 queen relocation', () => {
     // cadence; this case only asserts the bug fix's user-facing claim:
     // "she does not sit motionless on her arrival corner."
     const { world, chamberFlowFields, queenId } = setupQueenWorld({
-      queenTileX: 3, queenTileY: 3,            // inside chamber (2,2)-(3,3)
+      queenTileX: 3,
+      queenTileY: 3, // inside chamber (2,2)-(3,3)
       addQueenChamber: true,
-      queenChamberTileX: 2, queenChamberTileY: 2,
-      queenChamberWidth: 2, queenChamberHeight: 2,
+      queenChamberTileX: 2,
+      queenChamberTileY: 2,
+      queenChamberWidth: 2,
+      queenChamberHeight: 2,
       computeQueenField: true,
     });
     const beforeX = world.ants.posX[queenId]!;
@@ -5797,10 +6096,13 @@ describe('tickAntMovement — P1 queen relocation', () => {
     // (2,2), now drifts back toward (3,2). This pins the cadence contract:
     // the wander cycle is tied to the egg-laying interval.
     const { world, chamberFlowFields, queenId } = setupQueenWorld({
-      queenTileX: 2, queenTileY: 2,            // already at cycle-0 target
+      queenTileX: 2,
+      queenTileY: 2, // already at cycle-0 target
       addQueenChamber: true,
-      queenChamberTileX: 2, queenChamberTileY: 2,
-      queenChamberWidth: 2, queenChamberHeight: 2,
+      queenChamberTileX: 2,
+      queenChamberTileY: 2,
+      queenChamberWidth: 2,
+      queenChamberHeight: 2,
       computeQueenField: true,
     });
     const digFlowFields = createDigFlowFields();
@@ -5835,10 +6137,13 @@ describe('tickAntMovement — P1 queen relocation', () => {
     // openCount is computed as width*height including non-Open tiles) would
     // fail by leaving at least one tile unvisited.
     const { world, chamberFlowFields, queenId } = setupQueenWorld({
-      queenTileX: 2, queenTileY: 2,
+      queenTileX: 2,
+      queenTileY: 2,
       addQueenChamber: true,
-      queenChamberTileX: 2, queenChamberTileY: 2,
-      queenChamberWidth: 2, queenChamberHeight: 2,
+      queenChamberTileX: 2,
+      queenChamberTileY: 2,
+      queenChamberWidth: 2,
+      queenChamberHeight: 2,
       computeQueenField: true,
     });
     const digFlowFields = createDigFlowFields();
@@ -5872,10 +6177,13 @@ describe('tickAntMovement — P1 queen relocation', () => {
     // limitation (no diagonal routing) unrelated to the "count Open tiles"
     // contract under test here.
     const { world, chamberFlowFields, queenId } = setupQueenWorld({
-      queenTileX: 2, queenTileY: 2,
+      queenTileX: 2,
+      queenTileY: 2,
       addQueenChamber: true,
-      queenChamberTileX: 2, queenChamberTileY: 2,
-      queenChamberWidth: 3, queenChamberHeight: 3,
+      queenChamberTileX: 2,
+      queenChamberTileY: 2,
+      queenChamberWidth: 3,
+      queenChamberHeight: 3,
       computeQueenField: true,
     });
     const underground = world.undergroundGrids[COLONY_ID]!;
@@ -5892,17 +6200,20 @@ describe('tickAntMovement — P1 queen relocation', () => {
       visited.add(`${tx},${ty}`);
     }
     expect(visited.has('4,2')).toBe(false); // never on the Solid tile
-    const expectedOpen = ['2,2','3,2','2,3','3,3','4,3','2,4','3,4','4,4'];
+    const expectedOpen = ['2,2', '3,2', '2,3', '3,3', '4,3', '2,4', '3,4', '4,4'];
     for (const k of expectedOpen) expect(visited.has(k)).toBe(true);
     expect(visited.size).toBe(expectedOpen.length);
   });
 
   it('Q-3. underground queen routes toward Queen chamber (flow-field step)', () => {
     const { world, chamberFlowFields, queenId } = setupQueenWorld({
-      queenTileX: 5, queenTileY: 5,
+      queenTileX: 5,
+      queenTileY: 5,
       addQueenChamber: true,
-      queenChamberTileX: 2, queenChamberTileY: 2,
-      queenChamberWidth: 2, queenChamberHeight: 2,
+      queenChamberTileX: 2,
+      queenChamberTileY: 2,
+      queenChamberWidth: 2,
+      queenChamberHeight: 2,
       computeQueenField: true,
     });
     const beforeTileX = world.ants.posX[queenId]! >> FP_SHIFT;
@@ -5915,7 +6226,7 @@ describe('tickAntMovement — P1 queen relocation', () => {
     const afterTileX = world.ants.posX[queenId]! >> FP_SHIFT;
     const afterTileY = world.ants.posY[queenId]! >> FP_SHIFT;
     const beforeDist = Math.abs(beforeTileX - 2) + Math.abs(beforeTileY - 2);
-    const afterDist  = Math.abs(afterTileX  - 2) + Math.abs(afterTileY  - 2);
+    const afterDist = Math.abs(afterTileX - 2) + Math.abs(afterTileY - 2);
     expect(afterDist).toBeLessThan(beforeDist);
   });
 
@@ -5933,11 +6244,14 @@ describe('tickAntMovement — P1 queen relocation', () => {
     // when only Y intermediate is open). The expanded wall closes that
     // escape so the test still asserts "cannot cut through dirt".
     const { world, queenId } = setupQueenWorld({
-      queenTileX: 5, queenTileY: 5,
+      queenTileX: 5,
+      queenTileY: 5,
       addQueenChamber: true,
-      queenChamberTileX: 2, queenChamberTileY: 2,
-      queenChamberWidth: 2, queenChamberHeight: 2,
-      computeQueenField: false,   // force Manhattan-fallback path
+      queenChamberTileX: 2,
+      queenChamberTileY: 2,
+      queenChamberWidth: 2,
+      queenChamberHeight: 2,
+      computeQueenField: false, // force Manhattan-fallback path
     });
     const underground = world.undergroundGrids[COLONY_ID]!;
     for (let y = 0; y < underground.height; y++) {
@@ -5959,10 +6273,12 @@ describe('tickAntMovement — P1 queen relocation', () => {
 
   it('Q-5. surface queen steps toward nearest open entrance (Manhattan)', () => {
     const { world, queenId } = setupQueenWorld({
-      queenTileX: 10, queenTileY: 10,
+      queenTileX: 10,
+      queenTileY: 10,
       zone: Zone.Surface,
       addQueenChamber: true,
-      queenChamberTileX: 2, queenChamberTileY: 2,
+      queenChamberTileX: 2,
+      queenChamberTileY: 2,
       computeQueenField: true,
       addEntrance: { tileX: 5, tileY: 10, isOpen: true },
     });
@@ -5986,10 +6302,12 @@ describe('tickAntMovement — P1 queen relocation', () => {
     // Surface→Underground transition never ran — the queen sat on the
     // entrance forever with Gate 6 blocking egg production.
     const { world, chamberFlowFields, queenId } = setupQueenWorld({
-      queenTileX: 5, queenTileY: 5,
+      queenTileX: 5,
+      queenTileY: 5,
       zone: Zone.Surface,
       addQueenChamber: true,
-      queenChamberTileX: 2, queenChamberTileY: 2,
+      queenChamberTileX: 2,
+      queenChamberTileY: 2,
       computeQueenField: true,
       addEntrance: { tileX: 5, tileY: 5, isOpen: true },
     });
@@ -5999,8 +6317,8 @@ describe('tickAntMovement — P1 queen relocation', () => {
     tickAntMovement(world, rng, digFlowFields, undefined, chamberFlowFields);
 
     expect(world.ants.zone[queenId]).toBe(Zone.Underground);
-    expect(world.ants.posY[queenId]).toBe(0);                 // shaft top
-    expect(world.ants.posX[queenId]).toBe(5 << FP_SHIFT);     // column preserved
+    expect(world.ants.posY[queenId]).toBe(0); // shaft top
+    expect(world.ants.posX[queenId]).toBe(5 << FP_SHIFT); // column preserved
 
     // Second tick: queen flow-field should steer her toward the Queen
     // chamber at (2,2). Distance to (2,2) must strictly decrease.
@@ -6010,17 +6328,19 @@ describe('tickAntMovement — P1 queen relocation', () => {
     const afterTileX = world.ants.posX[queenId]! >> FP_SHIFT;
     const afterTileY = world.ants.posY[queenId]! >> FP_SHIFT;
     const beforeDist = Math.abs(beforeTileX - 2) + Math.abs(beforeTileY - 2);
-    const afterDist  = Math.abs(afterTileX  - 2) + Math.abs(afterTileY  - 2);
+    const afterDist = Math.abs(afterTileX - 2) + Math.abs(afterTileY - 2);
     expect(afterDist).toBeLessThan(beforeDist);
-    expect(world.ants.zone[queenId]).toBe(Zone.Underground);  // no surfacing back
+    expect(world.ants.zone[queenId]).toBe(Zone.Underground); // no surfacing back
   });
 
   it('Q-7. surface queen does NOT descend through a closed (designated) entrance', () => {
     const { world, queenId } = setupQueenWorld({
-      queenTileX: 5, queenTileY: 5,
+      queenTileX: 5,
+      queenTileY: 5,
       zone: Zone.Surface,
       addQueenChamber: true,
-      queenChamberTileX: 2, queenChamberTileY: 2,
+      queenChamberTileX: 2,
+      queenChamberTileY: 2,
       computeQueenField: true,
       addEntrance: { tileX: 5, tileY: 5, isOpen: false },
     });
@@ -6034,7 +6354,6 @@ describe('tickAntMovement — P1 queen relocation', () => {
     expect(world.ants.zone[queenId]).toBe(Zone.Surface);
   });
 });
-
 
 // ---------------------------------------------------------------------------
 // Issue #34 — pickCardinalStep
@@ -6101,9 +6420,18 @@ describe('pickCardinalStep (issue #34) — v4 8-connected diagonal', () => {
 
   it('pure cardinals are unchanged in v4 (single-axis targets behave identically)', () => {
     const ants = emptyAnts();
-    expect(step(pickCardinalStep(ants, 0, 5, 0, SIM_VERSION_V4_DIAGONAL_MOTION))).toEqual({ dx: 1, dy: 0 });
-    expect(step(pickCardinalStep(ants, 0, 0, -3, SIM_VERSION_V4_DIAGONAL_MOTION))).toEqual({ dx: 0, dy: -1 });
-    expect(step(pickCardinalStep(ants, 0, 0, 0, SIM_VERSION_V4_DIAGONAL_MOTION))).toEqual({ dx: 0, dy: 0 });
+    expect(step(pickCardinalStep(ants, 0, 5, 0, SIM_VERSION_V4_DIAGONAL_MOTION))).toEqual({
+      dx: 1,
+      dy: 0,
+    });
+    expect(step(pickCardinalStep(ants, 0, 0, -3, SIM_VERSION_V4_DIAGONAL_MOTION))).toEqual({
+      dx: 0,
+      dy: -1,
+    });
+    expect(step(pickCardinalStep(ants, 0, 0, 0, SIM_VERSION_V4_DIAGONAL_MOTION))).toEqual({
+      dx: 0,
+      dy: 0,
+    });
   });
 
   it('45° target (3,3) reaches the target in 3 diagonal steps — no zig-zag', () => {
@@ -6206,7 +6534,8 @@ describe('SearchingFood pause cadence (issue #35)', () => {
     const posY = 64 << FP_SHIFT;
     initAnt(world.ants, antId, {
       colonyId: COLONY_ID,
-      posX, posY,
+      posX,
+      posY,
       task: AntTask.Foraging,
       subTask: ForagingSubState.SearchingFood,
     });
@@ -6316,7 +6645,9 @@ describe('SearchingFood pause cadence (issue #35)', () => {
     expect(observedTotalPauses.size).toBeGreaterThan(0);
     for (const totalPause of observedTotalPauses) {
       expect(totalPause).toBeGreaterThanOrEqual(SEARCH_PAUSE_BASE_TICKS);
-      expect(totalPause).toBeLessThanOrEqual(SEARCH_PAUSE_BASE_TICKS + SEARCH_PAUSE_JITTER_TICKS - 1);
+      expect(totalPause).toBeLessThanOrEqual(
+        SEARCH_PAUSE_BASE_TICKS + SEARCH_PAUSE_JITTER_TICKS - 1,
+      );
     }
   });
 
@@ -6336,7 +6667,10 @@ describe('SearchingFood pause cadence (issue #35)', () => {
       tickAntMovement(world, new Rng(t * 17 + 11), digFlowFields);
       // Counts ticks where the ant was paused (didn't move because of #35).
       const after = world.ants.searchPauseTicks[antId]!;
-      if (after > 0 || (before === 0 && world.ants.posX[antId] === posX && world.ants.posY[antId] === posY)) {
+      if (
+        after > 0 ||
+        (before === 0 && world.ants.posX[antId] === posX && world.ants.posY[antId] === posY)
+      ) {
         pausedTickCount += 1;
       }
     }
@@ -6392,7 +6726,6 @@ describe('issue #42 — partial-deposit wait gate (v6)', () => {
     expect(world.ants.foodCarrying[antId]).toBe(400);
     expect(world.ants.waitingDeposit[antId]).toBe(1);
   });
-
 });
 
 describe('issue #42 — demote SearchingFood when no deposit target (v6)', () => {
@@ -6411,7 +6744,7 @@ describe('issue #42 — demote SearchingFood when no deposit target (v6)', () =>
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
       colonyId: COLONY_ID,
-      posX: 5 << FP_SHIFT,           // 5 tiles from entrance — well within wave 0 radius (25)
+      posX: 5 << FP_SHIFT, // 5 tiles from entrance — well within wave 0 radius (25)
       posY: 0,
       task: AntTask.Foraging,
       subTask: ForagingSubState.SearchingFood,
@@ -6439,7 +6772,10 @@ describe('issue #42 — demote SearchingFood when no deposit target (v6)', () =>
       chamberId: 1,
       chamberType: ChamberType.FoodStorage,
       foodStored: 0,
-      posX: 0, posY: 0, width: 3, height: 3,
+      posX: 0,
+      posY: 0,
+      width: 3,
+      height: 3,
     });
     world.colonies[COLONY_ID] = colony;
 
@@ -6577,10 +6913,14 @@ describe('issue #42 — surface SearchingFood no-revisit rule (v6)', () => {
     world.ants.posY[antId] = 0;
     // Mark E, SE, S, SW as recent — covers 4 of 5 in-bounds neighbors
     // at y=0. Only W remains as a valid in-bounds alternate.
-    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 0] = 51; world.ants.recentTilesY[antId * RECENT_TILES_LEN + 0] = 0; // E
-    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 1] = 51; world.ants.recentTilesY[antId * RECENT_TILES_LEN + 1] = 1; // SE
-    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 2] = 50; world.ants.recentTilesY[antId * RECENT_TILES_LEN + 2] = 1; // S
-    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 3] = 49; world.ants.recentTilesY[antId * RECENT_TILES_LEN + 3] = 1; // SW
+    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 0] = 51;
+    world.ants.recentTilesY[antId * RECENT_TILES_LEN + 0] = 0; // E
+    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 1] = 51;
+    world.ants.recentTilesY[antId * RECENT_TILES_LEN + 1] = 1; // SE
+    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 2] = 50;
+    world.ants.recentTilesY[antId * RECENT_TILES_LEN + 2] = 1; // S
+    world.ants.recentTilesX[antId * RECENT_TILES_LEN + 3] = 49;
+    world.ants.recentTilesY[antId * RECENT_TILES_LEN + 3] = 1; // SW
     world.ants.recentTilesHead[antId] = 0;
 
     const visitedTiles = new Set<string>();
@@ -6602,7 +6942,6 @@ describe('issue #42 — surface SearchingFood no-revisit rule (v6)', () => {
     // (50, 0) by repeatedly choosing OOB directions.
     expect(visitedTiles.size).toBeGreaterThan(1);
   });
-
 });
 
 // ---------------------------------------------------------------------------
@@ -6615,9 +6954,12 @@ describe('issue #42 — surface SearchingFood no-revisit rule (v6)', () => {
 // ---------------------------------------------------------------------------
 
 describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
-  function setupV10NurseAndBroodOnTile(opts: {
-    sameTile: boolean;
-  }): { world: WorldState; nurseId: number; broodId: number; colony: ColonyRecord } {
+  function setupV10NurseAndBroodOnTile(opts: { sameTile: boolean }): {
+    world: WorldState;
+    nurseId: number;
+    broodId: number;
+    colony: ColonyRecord;
+  } {
     const world = createWorldState(42, 64);
     // LATEST already includes v10; pin explicitly so the test name describes
     // what's under test even when LATEST advances.
@@ -6628,25 +6970,35 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     world.colonies[COLONY_ID] = colony;
     // Queen chamber so the brood is in a "natural" location.
     colony.chambers.push({
-      chamberId: 1, chamberType: ChamberType.Queen, foodStored: 0,
-      posX: 5 << FP_SHIFT, posY: 5 << FP_SHIFT, width: 2, height: 2,
+      chamberId: 1,
+      chamberType: ChamberType.Queen,
+      foodStored: 0,
+      posX: 5 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      width: 2,
+      height: 2,
     });
     // Nursery chamber — required for v10 pickup gate. Empty space (no
     // Open tiles needed for these unit tests; the gate just requires
     // hasCompletedChamber to return true).
     colony.chambers.push({
-      chamberId: 2, chamberType: ChamberType.Nursery, foodStored: 0,
-      posX: 12 << FP_SHIFT, posY: 12 << FP_SHIFT, width: 2, height: 2,
+      chamberId: 2,
+      chamberType: ChamberType.Nursery,
+      foodStored: 0,
+      posX: 12 << FP_SHIFT,
+      posY: 12 << FP_SHIFT,
+      width: 2,
+      height: 2,
     });
     // Brood entity (egg) at tile (5, 5).
     const broodId = allocateEntityId(world);
     initAnt(world.ants, broodId, {
       colonyId: COLONY_ID,
-      posX:     (5 << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Idle,
-      speed:    0,
-      zone:     Zone.Underground,
+      posX: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle,
+      speed: 0,
+      zone: Zone.Underground,
     });
     colony.eggs.push(broodId);
     // Nurse — same tile as brood, OR offset depending on sameTile flag.
@@ -6655,11 +7007,11 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     const nurseId = allocateEntityId(world);
     initAnt(world.ants, nurseId, {
       colonyId: COLONY_ID,
-      posX:     (nurseTileX << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (nurseTileY << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Nursing,
-      subTask:  NursingSubState.MovingToBrood,
-      zone:     Zone.Underground,
+      posX: (nurseTileX << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (nurseTileY << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Nursing,
+      subTask: NursingSubState.MovingToBrood,
+      zone: Zone.Underground,
     });
     return { world, nurseId, broodId, colony };
   }
@@ -6687,11 +7039,11 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     const nurse2 = allocateEntityId(world);
     initAnt(world.ants, nurse2, {
       colonyId: COLONY_ID,
-      posX:     (5 << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Nursing,
-      subTask:  NursingSubState.MovingToBrood,
-      zone:     Zone.Underground,
+      posX: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Nursing,
+      subTask: NursingSubState.MovingToBrood,
+      zone: Zone.Underground,
     });
     expect(nurse2).toBeGreaterThan(nurseId); // entity ids are monotonic
     tickNurseActions(world);
@@ -6714,7 +7066,10 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     // claim through if the carrier weren't alive.
     const otherCarrier = allocateEntityId(world);
     initAnt(world.ants, otherCarrier, {
-      colonyId: COLONY_ID, posX: 0, posY: 0, task: AntTask.Nursing,
+      colonyId: COLONY_ID,
+      posX: 0,
+      posY: 0,
+      task: AntTask.Nursing,
     });
     world.ants.carriedBy[broodId] = otherCarrier;
     tickNurseActions(world);
@@ -6761,7 +7116,10 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     // can't claim, so findUncarriedBroodOnTile returns -1.
     const otherCarrier = allocateEntityId(world);
     initAnt(world.ants, otherCarrier, {
-      colonyId: COLONY_ID, posX: 0, posY: 0, task: AntTask.Nursing,
+      colonyId: COLONY_ID,
+      posX: 0,
+      posY: 0,
+      task: AntTask.Nursing,
     });
     world.ants.carriedBy[broodId] = otherCarrier;
     // Tick 1: MovingToBrood → Feeding (release-pending, no carry).
@@ -6838,7 +7196,10 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     // Mark the brood as orphaned (carriedBy points at a dead nurse).
     const deadCarrier = allocateEntityId(world);
     initAnt(world.ants, deadCarrier, {
-      colonyId: COLONY_ID, posX: 0, posY: 0, task: AntTask.Nursing,
+      colonyId: COLONY_ID,
+      posX: 0,
+      posY: 0,
+      task: AntTask.Nursing,
     });
     world.ants.alive[deadCarrier] = 0;
     world.ants.carriedBy[broodId] = deadCarrier;
@@ -6869,7 +7230,6 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     tickNurseActions(world);
     expect(world.ants.task[nurseId]).toBe(AntTask.Idle);
   });
-
 });
 
 // ---------------------------------------------------------------------------
@@ -6884,13 +7244,18 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
 
 describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
   function setupV10CarryWorld(opts: {
-    nurseTileX: number; nurseTileY: number;
-    broodTileX: number; broodTileY: number;
-    nurseryTileX: number; nurseryTileY: number;
-    nurseryWidth?: number; nurseryHeight?: number;
+    nurseTileX: number;
+    nurseTileY: number;
+    broodTileX: number;
+    broodTileY: number;
+    nurseryTileX: number;
+    nurseryTileY: number;
+    nurseryWidth?: number;
+    nurseryHeight?: number;
     omitNursery?: boolean;
   }): { world: WorldState; nurseId: number; broodId: number; colony: ColonyRecord } {
-    const ugWidth = 16, ugHeight = 16;
+    const ugWidth = 16,
+      ugHeight = 16;
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     world.simVersion = SIM_VERSION_V10_VISIBLE_BROOD_CARRY;
     const queenId = allocateEntityId(world);
@@ -6916,36 +7281,46 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     // pickup-source tile detection (isInsideQueenChamber). 2×2 anchored at
     // (broodTileX, broodTileY) so the brood always sits inside.
     colony.chambers.push({
-      chamberId: 0, chamberType: ChamberType.Queen, foodStored: 0,
-      posX: opts.broodTileX << FP_SHIFT, posY: opts.broodTileY << FP_SHIFT,
-      width: 2, height: 2,
+      chamberId: 0,
+      chamberType: ChamberType.Queen,
+      foodStored: 0,
+      posX: opts.broodTileX << FP_SHIFT,
+      posY: opts.broodTileY << FP_SHIFT,
+      width: 2,
+      height: 2,
     });
 
     if (!opts.omitNursery) {
       colony.chambers.push({
-        chamberId: 1, chamberType: ChamberType.Nursery, foodStored: 0,
-        posX: opts.nurseryTileX << FP_SHIFT, posY: opts.nurseryTileY << FP_SHIFT,
-        width: opts.nurseryWidth ?? 2, height: opts.nurseryHeight ?? 2,
+        chamberId: 1,
+        chamberType: ChamberType.Nursery,
+        foodStored: 0,
+        posX: opts.nurseryTileX << FP_SHIFT,
+        posY: opts.nurseryTileY << FP_SHIFT,
+        width: opts.nurseryWidth ?? 2,
+        height: opts.nurseryHeight ?? 2,
       });
     }
 
     const broodId = allocateEntityId(world);
     initAnt(world.ants, broodId, {
       colonyId: COLONY_ID,
-      posX:     (opts.broodTileX << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (opts.broodTileY << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Idle, speed: 0, zone: Zone.Underground,
+      posX: (opts.broodTileX << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (opts.broodTileY << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle,
+      speed: 0,
+      zone: Zone.Underground,
     });
     colony.eggs.push(broodId);
 
     const nurseId = allocateEntityId(world);
     initAnt(world.ants, nurseId, {
       colonyId: COLONY_ID,
-      posX:     (opts.nurseTileX << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (opts.nurseTileY << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Nursing,
-      subTask:  NursingSubState.MovingToBrood,
-      zone:     Zone.Underground,
+      posX: (opts.nurseTileX << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (opts.nurseTileY << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Nursing,
+      subTask: NursingSubState.MovingToBrood,
+      zone: Zone.Underground,
     });
     return { world, nurseId, broodId, colony };
   }
@@ -6955,9 +7330,12 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     // after the tick, brood position equals carrier position; nurse is
     // still in Feeding (not yet at Nursery) and not back to Idle.
     const { world, nurseId, broodId } = setupV10CarryWorld({
-      nurseTileX: 5, nurseTileY: 5,
-      broodTileX: 5, broodTileY: 5,
-      nurseryTileX: 12, nurseryTileY: 12,
+      nurseTileX: 5,
+      nurseTileY: 5,
+      broodTileX: 5,
+      broodTileY: 5,
+      nurseryTileX: 12,
+      nurseryTileY: 12,
     });
     tickNurseActions(world);
     // Sub-state flipped to Feeding (claim succeeded), brood follows carrier.
@@ -6982,9 +7360,12 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     // we then pre-position the carrier on a Nursery tile and run a
     // second tick to trigger the deposit branch.
     const { world, nurseId, broodId } = setupV10CarryWorld({
-      nurseTileX: 5, nurseTileY: 5,
-      broodTileX: 5, broodTileY: 5,
-      nurseryTileX: 12, nurseryTileY: 12,
+      nurseTileX: 5,
+      nurseTileY: 5,
+      broodTileX: 5,
+      broodTileY: 5,
+      nurseryTileX: 12,
+      nurseryTileY: 12,
     });
     // Tick 1 — claim.
     tickNurseActions(world);
@@ -7013,28 +7394,33 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     // Two carriers each holding a different brood, both arriving at Nursery
     // on the same tick. broodId differs → spread index differs → tiles differ.
     const { world, nurseId, broodId } = setupV10CarryWorld({
-      nurseTileX: 5, nurseTileY: 5,
-      broodTileX: 5, broodTileY: 5,
-      nurseryTileX: 12, nurseryTileY: 12,
+      nurseTileX: 5,
+      nurseTileY: 5,
+      broodTileX: 5,
+      broodTileY: 5,
+      nurseryTileX: 12,
+      nurseryTileY: 12,
     });
     // Add a second brood + nurse pair at a second non-Nursery tile.
     const colony = world.colonies[COLONY_ID]!;
     const brood2 = allocateEntityId(world);
     initAnt(world.ants, brood2, {
       colonyId: COLONY_ID,
-      posX:     (6 << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Idle, speed: 0, zone: Zone.Underground,
+      posX: (6 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle,
+      speed: 0,
+      zone: Zone.Underground,
     });
     colony.eggs.push(brood2);
     const nurse2 = allocateEntityId(world);
     initAnt(world.ants, nurse2, {
       colonyId: COLONY_ID,
-      posX:     (6 << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Nursing,
-      subTask:  NursingSubState.MovingToBrood,
-      zone:     Zone.Underground,
+      posX: (6 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Nursing,
+      subTask: NursingSubState.MovingToBrood,
+      zone: Zone.Underground,
     });
     // Tick 1 — both nurses claim their respective brood.
     tickNurseActions(world);
@@ -7042,8 +7428,8 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     // branches converge in the same tick).
     world.ants.posX[nurseId] = (12 << FP_SHIFT) + (FP_ONE >> 1);
     world.ants.posY[nurseId] = (12 << FP_SHIFT) + (FP_ONE >> 1);
-    world.ants.posX[nurse2]  = (12 << FP_SHIFT) + (FP_ONE >> 1);
-    world.ants.posY[nurse2]  = (12 << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posX[nurse2] = (12 << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[nurse2] = (12 << FP_SHIFT) + (FP_ONE >> 1);
     // Tick 2 — both deposit.
     tickNurseActions(world);
     const allBroodIds = colony.eggs.slice();
@@ -7073,9 +7459,12 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     // unconditionally; Nursery is omitted via `omitNursery: true`. The
     // nurse stands on the Queen tile, so onSourceTile=true → release.
     const { world, nurseId, broodId } = setupV10CarryWorld({
-      nurseTileX: 5, nurseTileY: 5,
-      broodTileX: 5, broodTileY: 5,
-      nurseryTileX: 0, nurseryTileY: 0, // ignored
+      nurseTileX: 5,
+      nurseTileY: 5,
+      broodTileX: 5,
+      broodTileY: 5,
+      nurseryTileX: 0,
+      nurseryTileY: 0, // ignored
       omitNursery: true,
     });
     tickNurseActions(world); // tick 1 — release-pending
@@ -7092,9 +7481,12 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     // continue walking — she may reach the source on a future tick and
     // THEN release.
     const { world, nurseId } = setupV10CarryWorld({
-      nurseTileX: 0, nurseTileY: 0, // far from any chamber
-      broodTileX: 5, broodTileY: 5,
-      nurseryTileX: 0, nurseryTileY: 0, // ignored
+      nurseTileX: 0,
+      nurseTileY: 0, // far from any chamber
+      broodTileX: 5,
+      broodTileY: 5,
+      nurseryTileX: 0,
+      nurseryTileY: 0, // ignored
       omitNursery: true,
     });
     tickNurseActions(world);
@@ -7105,10 +7497,14 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
 
   it('1×1 Nursery: deposit collapses to the single Open tile (broodId % 1 === 0)', () => {
     const { world, nurseId, broodId } = setupV10CarryWorld({
-      nurseTileX: 5, nurseTileY: 5,
-      broodTileX: 5, broodTileY: 5,
-      nurseryTileX: 14, nurseryTileY: 14,
-      nurseryWidth: 1, nurseryHeight: 1,
+      nurseTileX: 5,
+      nurseTileY: 5,
+      broodTileX: 5,
+      broodTileY: 5,
+      nurseryTileX: 14,
+      nurseryTileY: 14,
+      nurseryWidth: 1,
+      nurseryHeight: 1,
     });
     tickNurseActions(world); // claim at (5, 5)
     // Move carrier onto the 1×1 Nursery tile.
@@ -7129,9 +7525,12 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     // this skip, the brood would be re-picked-up and re-shuffled via
     // broodId%openCount on the next deposit, visible as a brood teleport.
     const { world, nurseId, broodId } = setupV10CarryWorld({
-      nurseTileX: 12, nurseTileY: 12, // Inside the Nursery 2x2 at (12,12).
-      broodTileX: 12, broodTileY: 12, // Brood already deposited there.
-      nurseryTileX: 12, nurseryTileY: 12,
+      nurseTileX: 12,
+      nurseTileY: 12, // Inside the Nursery 2x2 at (12,12).
+      broodTileX: 12,
+      broodTileY: 12, // Brood already deposited there.
+      nurseryTileX: 12,
+      nurseryTileY: 12,
     });
     tickNurseActions(world);
     // No claim — brood-inside-Nursery is excluded from pickup selection.
@@ -7155,9 +7554,12 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     // The carry-aware exemption skips both ends of the carry pointer so
     // the resolver never contests the shared tile.
     const { world, nurseId, broodId } = setupV10CarryWorld({
-      nurseTileX: 5, nurseTileY: 5,
-      broodTileX: 5, broodTileY: 5,
-      nurseryTileX: 12, nurseryTileY: 12,
+      nurseTileX: 5,
+      nurseTileY: 5,
+      broodTileX: 5,
+      broodTileY: 5,
+      nurseryTileX: 12,
+      nurseryTileY: 12,
     });
     tickNurseActions(world); // claim — both at (5, 5), broodId carriedBy nurseId
     expect(world.ants.carryingBroodId[nurseId]).toBe(broodId);
@@ -7179,9 +7581,12 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
 
   it('carrier dies mid-carry: brood stays at carrier last-synced tile and is reclaimable', () => {
     const { world, nurseId, broodId, colony } = setupV10CarryWorld({
-      nurseTileX: 5, nurseTileY: 5,
-      broodTileX: 5, broodTileY: 5,
-      nurseryTileX: 12, nurseryTileY: 12,
+      nurseTileX: 5,
+      nurseTileY: 5,
+      broodTileX: 5,
+      broodTileY: 5,
+      nurseryTileX: 12,
+      nurseryTileY: 12,
     });
     tickNurseActions(world); // claim
     expect(world.ants.subTask[nurseId]).toBe(NursingSubState.Feeding);
@@ -7195,10 +7600,11 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     const nurse2 = allocateEntityId(world);
     initAnt(world.ants, nurse2, {
       colonyId: COLONY_ID,
-      posX:     (8 << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (8 << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Nursing, subTask: NursingSubState.MovingToBrood,
-      zone:     Zone.Underground,
+      posX: (8 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (8 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Nursing,
+      subTask: NursingSubState.MovingToBrood,
+      zone: Zone.Underground,
     });
     void colony;
     tickNurseActions(world);
@@ -7210,9 +7616,12 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
 
   it('brood dies mid-carry: carrier drops the carry and returns to Idle', () => {
     const { world, nurseId, broodId } = setupV10CarryWorld({
-      nurseTileX: 5, nurseTileY: 5,
-      broodTileX: 5, broodTileY: 5,
-      nurseryTileX: 12, nurseryTileY: 12,
+      nurseTileX: 5,
+      nurseTileY: 5,
+      broodTileX: 5,
+      broodTileY: 5,
+      nurseryTileX: 12,
+      nurseryTileY: 12,
     });
     tickNurseActions(world); // claim
     expect(world.ants.carryingBroodId[nurseId]).toBe(broodId);
@@ -7244,8 +7653,13 @@ describe('tickLifecycleTransitions — v10 larva→worker drops carry (#17 phase
     const colony = createColonyRecord(COLONY_ID, queenId);
     world.colonies[COLONY_ID] = colony;
     colony.chambers.push({
-      chamberId: 1, chamberType: ChamberType.Nursery, foodStored: 0,
-      posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT, width: 2, height: 2,
+      chamberId: 1,
+      chamberType: ChamberType.Nursery,
+      foodStored: 0,
+      posX: 10 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      width: 2,
+      height: 2,
     });
 
     // Larva at age = LARVA_MATURE_TICKS - 1 so a single tick promotes it.
@@ -7253,9 +7667,11 @@ describe('tickLifecycleTransitions — v10 larva→worker drops carry (#17 phase
     const larvaId = allocateEntityId(world);
     initAnt(world.ants, larvaId, {
       colonyId: COLONY_ID,
-      posX:     (5 << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Idle, speed: 0, zone: Zone.Underground,
+      posX: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle,
+      speed: 0,
+      zone: Zone.Underground,
     });
     world.ants.age[larvaId] = LARVA_MATURE_TICKS - 1;
     colony.larvae.push(larvaId);
@@ -7269,13 +7685,14 @@ describe('tickLifecycleTransitions — v10 larva→worker drops carry (#17 phase
     const nurseId = allocateEntityId(world);
     initAnt(world.ants, nurseId, {
       colonyId: COLONY_ID,
-      posX:     (8 << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (7 << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Nursing, subTask: NursingSubState.Feeding,
-      zone:     Zone.Underground,
+      posX: (8 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (7 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Nursing,
+      subTask: NursingSubState.Feeding,
+      zone: Zone.Underground,
     });
     world.ants.carryingBroodId[nurseId] = larvaId;
-    world.ants.carriedBy[larvaId]       = nurseId;
+    world.ants.carriedBy[larvaId] = nurseId;
     // Manually pre-sync the larva's position to the carrier (mirrors what
     // tickNurseActions Feeding branch does each tick).
     world.ants.posX[larvaId] = world.ants.posX[nurseId]!;
@@ -7308,15 +7725,22 @@ describe('tickLifecycleTransitions — v10 larva→worker drops carry (#17 phase
     const colony = createColonyRecord(COLONY_ID, queenId);
     world.colonies[COLONY_ID] = colony;
     colony.chambers.push({
-      chamberId: 1, chamberType: ChamberType.Nursery, foodStored: 0,
-      posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT, width: 2, height: 2,
+      chamberId: 1,
+      chamberType: ChamberType.Nursery,
+      foodStored: 0,
+      posX: 10 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      width: 2,
+      height: 2,
     });
     const eggId = allocateEntityId(world);
     initAnt(world.ants, eggId, {
       colonyId: COLONY_ID,
-      posX:     (5 << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Idle, speed: 0, zone: Zone.Underground,
+      posX: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle,
+      speed: 0,
+      zone: Zone.Underground,
     });
     world.ants.age[eggId] = EGG_HATCH_TICKS - 1;
     colony.eggs.push(eggId);
@@ -7324,13 +7748,14 @@ describe('tickLifecycleTransitions — v10 larva→worker drops carry (#17 phase
     const nurseId = allocateEntityId(world);
     initAnt(world.ants, nurseId, {
       colonyId: COLONY_ID,
-      posX:     (5 << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (5 << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Nursing, subTask: NursingSubState.Feeding,
-      zone:     Zone.Underground,
+      posX: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Nursing,
+      subTask: NursingSubState.Feeding,
+      zone: Zone.Underground,
     });
     world.ants.carryingBroodId[nurseId] = eggId;
-    world.ants.carriedBy[eggId]         = nurseId;
+    world.ants.carriedBy[eggId] = nurseId;
 
     tickLifecycleTransitions(world, colony);
     // Promoted to larva; carry preserved.
@@ -7352,7 +7777,7 @@ describe('tickLifecycleTransitions — v10 larva→worker drops carry (#17 phase
 // invariant holds.
 // ---------------------------------------------------------------------------
 describe('Issue #106 — ascent uses currentGridColonyId (V13+)', () => {
-  it('V13+ ascent looks up GRID colony\'s entrances, not the ant\'s OWN colony', () => {
+  it("V13+ ascent looks up GRID colony's entrances, not the ant's OWN colony", () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     world.simVersion = 13;
     // Two colonies. Player owns colony 1; enemy is colony 2.
@@ -7547,7 +7972,10 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
    * at (antX, antY) on an open tile. The grid is 8×8 with all tiles Solid by
    * default; callers open specific tiles.
    */
-  function setupUndergroundCarryingAnt(antX: number, antY: number): {
+  function setupUndergroundCarryingAnt(
+    antX: number,
+    antY: number,
+  ): {
     world: WorldState;
     antId: number;
     underground: ReturnType<typeof createUndergroundGrid>;
@@ -7557,12 +7985,14 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     const { world, colony, underground, colonyId } = setupWorldWithUnderground(8, 8);
     world.simVersion = SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX;
 
-    colony.entrances = [{
-      entranceId: 1,
-      surfaceTileX: 0,
-      surfaceTileY: 64,
-      isOpen: true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: 1,
+        surfaceTileX: 0,
+        surfaceTileY: 64,
+        isOpen: true,
+      },
+    ];
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -7585,7 +8015,8 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     // Place ant at (3, 3); open tile to East (4, 3) and South (3, 4).
     // With no flow field, the ant explores; after a tile crossing, the previous
     // tile should appear in the ring buffer.
-    const { world, antId, underground, chamberFlowFields, digFlowFields } = setupUndergroundCarryingAnt(3, 3);
+    const { world, antId, underground, chamberFlowFields, digFlowFields } =
+      setupUndergroundCarryingAnt(3, 3);
     ugSet(underground, 3, 3, UndergroundTileState.Open);
     ugSet(underground, 4, 3, UndergroundTileState.Open);
     ugSet(underground, 3, 4, UndergroundTileState.Open);
@@ -7607,7 +8038,10 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
         if (
           world.ants.recentTilesX[antId * RECENT_TILES_LEN + s] === 3 &&
           world.ants.recentTilesY[antId * RECENT_TILES_LEN + s] === 3
-        ) { found = true; break; }
+        ) {
+          found = true;
+          break;
+        }
       }
       expect(found).toBe(true);
     }
@@ -7619,10 +8053,11 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     // Ant at (3, 3). FoodStorage chamber at (4, 3) → flow field points East.
     // Poison East with a recent tile so the guard fires.
     // South (3, 4) is open → guard redirects South.
-    const { world, antId, underground, chamberFlowFields, digFlowFields } = setupUndergroundCarryingAnt(3, 3);
+    const { world, antId, underground, chamberFlowFields, digFlowFields } =
+      setupUndergroundCarryingAnt(3, 3);
     ugSet(underground, 3, 3, UndergroundTileState.Open);
-    ugSet(underground, 4, 3, UndergroundTileState.Open);  // East — proposed direction
-    ugSet(underground, 3, 4, UndergroundTileState.Open);  // South — alternate
+    ugSet(underground, 4, 3, UndergroundTileState.Open); // East — proposed direction
+    ugSet(underground, 3, 4, UndergroundTileState.Open); // South — alternate
     // (2,3) and (3,2) remain Solid — no other alternates
 
     const colonyId = world.ants.colonyId[antId]! as number;
@@ -7639,7 +8074,13 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     });
     const gridSize = underground.width * underground.height;
     const bufs = ensureChamberFlowFields(chamberFlowFields, colonyId, gridSize);
-    computeChamberFlowField(underground, colony.chambers, FOOD_CHAMBER_TYPES, bufs.food, bufs.queue);
+    computeChamberFlowField(
+      underground,
+      colony.chambers,
+      FOOD_CHAMBER_TYPES,
+      bufs.food,
+      bufs.queue,
+    );
 
     // Poison East tile (4, 3) as a recent tile.
     world.ants.recentTilesX[antId * RECENT_TILES_LEN + 0] = 4;
@@ -7662,7 +8103,8 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     // All other neighbors are Solid — no alternate escape. Guard must NOT hold
     // (holding deadlocks permanently since ring buffer only advances on crossings).
     // The ant should proceed East into the recent tile.
-    const { world, antId, underground, chamberFlowFields, digFlowFields } = setupUndergroundCarryingAnt(3, 3);
+    const { world, antId, underground, chamberFlowFields, digFlowFields } =
+      setupUndergroundCarryingAnt(3, 3);
     ugSet(underground, 3, 3, UndergroundTileState.Open);
     ugSet(underground, 4, 3, UndergroundTileState.Open); // East — will be poisoned
     // (2,3), (3,2), (3,4) remain Solid
@@ -7680,7 +8122,13 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     });
     const gridSize = underground.width * underground.height;
     const bufs = ensureChamberFlowFields(chamberFlowFields, colonyId, gridSize);
-    computeChamberFlowField(underground, colony.chambers, FOOD_CHAMBER_TYPES, bufs.food, bufs.queue);
+    computeChamberFlowField(
+      underground,
+      colony.chambers,
+      FOOD_CHAMBER_TYPES,
+      bufs.food,
+      bufs.queue,
+    );
 
     // Poison East as recent. No other open tiles exist — no valid alternate.
     world.ants.recentTilesX[antId * RECENT_TILES_LEN + 0] = 4;
@@ -7732,7 +8180,6 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     expect(isRecentTile(world.ants, antId, 3, 3)).toBe(false);
     expect(isRecentTile(world.ants, antId, 4, 4)).toBe(false);
   });
-
 });
 
 // ---------------------------------------------------------------------------
@@ -7852,9 +8299,11 @@ describe('Nursery brood deposit — capacity-aware spread, real pipeline (#173, 
   const PICKUP_Y = 5;
 
   function mkWorld(simVersion: number): {
-    world: WorldState; colony: ColonyRecord;
+    world: WorldState;
+    colony: ColonyRecord;
     underground: ReturnType<typeof createUndergroundGrid>;
-    A: ChamberRecord; B: ChamberRecord;
+    A: ChamberRecord;
+    B: ChamberRecord;
   } {
     const world = createWorldState(42, 256);
     world.simVersion = simVersion;
@@ -7869,12 +8318,22 @@ describe('Nursery brood deposit — capacity-aware spread, real pipeline (#173, 
       for (let x = 5; x <= 40; x++) ugSet(underground, x, y, UndergroundTileState.Open);
     }
     const A: ChamberRecord = {
-      chamberId: 10, chamberType: ChamberType.Nursery, foodStored: 0,
-      posX: 10 << FP_SHIFT, posY: 4 << FP_SHIFT, width: 4, height: 3,
+      chamberId: 10,
+      chamberType: ChamberType.Nursery,
+      foodStored: 0,
+      posX: 10 << FP_SHIFT,
+      posY: 4 << FP_SHIFT,
+      width: 4,
+      height: 3,
     };
     const B: ChamberRecord = {
-      chamberId: 11, chamberType: ChamberType.Nursery, foodStored: 0,
-      posX: 30 << FP_SHIFT, posY: 4 << FP_SHIFT, width: 4, height: 3,
+      chamberId: 11,
+      chamberType: ChamberType.Nursery,
+      foodStored: 0,
+      posX: 30 << FP_SHIFT,
+      posY: 4 << FP_SHIFT,
+      width: 4,
+      height: 3,
     };
     colony.chambers.push(A, B);
     return { world, colony, underground, A, B };
@@ -7899,8 +8358,12 @@ describe('Nursery brood deposit — capacity-aware spread, real pipeline (#173, 
   function placeResident(world: WorldState, colony: ColonyRecord, tx: number, ty: number): void {
     const id = allocateEntityId(world);
     initAnt(world.ants, id, {
-      colonyId: COLONY_ID, posX: (tx << FP_SHIFT) + (FP_ONE >> 1),
-      posY: (ty << FP_SHIFT) + (FP_ONE >> 1), task: AntTask.Idle, speed: 0, zone: Zone.Underground,
+      colonyId: COLONY_ID,
+      posX: (tx << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (ty << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle,
+      speed: 0,
+      zone: Zone.Underground,
     });
     colony.eggs.push(id);
   }
@@ -7916,7 +8379,11 @@ describe('Nursery brood deposit — capacity-aware spread, real pipeline (#173, 
   // Persistent real-pipeline driver: one step = recompute field, move ants,
   // run nurse actions. Spawns carriers sequentially so arrival timing matches
   // real play (a fresh carrier picks up only after the previous deposited).
-  function makeDriver(world: WorldState, colony: ColonyRecord, underground: ReturnType<typeof createUndergroundGrid>) {
+  function makeDriver(
+    world: WorldState,
+    colony: ColonyRecord,
+    underground: ReturnType<typeof createUndergroundGrid>,
+  ) {
     const rng = new Rng(7);
     const dig = createDigFlowFields();
     const ent = createEntranceFlowFields();
@@ -7925,9 +8392,23 @@ describe('Nursery brood deposit — capacity-aware spread, real pipeline (#173, 
     function step(): void {
       const bufs = ensureChamberFlowFields(cff, COLONY_ID, gs);
       if (world.simVersion >= SIM_VERSION_V24_NURSERY_CAPACITY) {
-        computeNurseryDepositField(underground, colony.chambers, world.ants, colony.eggs, colony.larvae, bufs.nurseDeposit, bufs.queue);
+        computeNurseryDepositField(
+          underground,
+          colony.chambers,
+          world.ants,
+          colony.eggs,
+          colony.larvae,
+          bufs.nurseDeposit,
+          bufs.queue,
+        );
       } else {
-        computeChamberFlowField(underground, colony.chambers, NURSERY_CHAMBER_TYPES, bufs.nurseDeposit, bufs.queue);
+        computeChamberFlowField(
+          underground,
+          colony.chambers,
+          NURSERY_CHAMBER_TYPES,
+          bufs.nurseDeposit,
+          bufs.queue,
+        );
       }
       tickAntMovement(world, rng, dig, ent, cff);
       tickNurseActions(world, cff);
@@ -7937,15 +8418,22 @@ describe('Nursery brood deposit — capacity-aware spread, real pipeline (#173, 
     function carryOne(maxTicks: number): number {
       const broodId = allocateEntityId(world);
       initAnt(world.ants, broodId, {
-        colonyId: COLONY_ID, posX: (PICKUP_X << FP_SHIFT) + (FP_ONE >> 1),
-        posY: (PICKUP_Y << FP_SHIFT) + (FP_ONE >> 1), task: AntTask.Idle, speed: 0, zone: Zone.Underground,
+        colonyId: COLONY_ID,
+        posX: (PICKUP_X << FP_SHIFT) + (FP_ONE >> 1),
+        posY: (PICKUP_Y << FP_SHIFT) + (FP_ONE >> 1),
+        task: AntTask.Idle,
+        speed: 0,
+        zone: Zone.Underground,
       });
       colony.eggs.push(broodId);
       const nurseId = allocateEntityId(world);
       initAnt(world.ants, nurseId, {
-        colonyId: COLONY_ID, posX: (PICKUP_X << FP_SHIFT) + (FP_ONE >> 1),
+        colonyId: COLONY_ID,
+        posX: (PICKUP_X << FP_SHIFT) + (FP_ONE >> 1),
         posY: (PICKUP_Y << FP_SHIFT) + (FP_ONE >> 1),
-        task: AntTask.Nursing, subTask: NursingSubState.Feeding, zone: Zone.Underground,
+        task: AntTask.Nursing,
+        subTask: NursingSubState.Feeding,
+        zone: Zone.Underground,
       });
       world.ants.carryingBroodId[nurseId] = broodId;
       world.ants.carriedBy[broodId] = nurseId;
@@ -7985,7 +8473,7 @@ describe('Nursery brood deposit — capacity-aware spread, real pipeline (#173, 
     const inB = broodCountIn(world, colony, B);
     expect(inA + inB).toBe(13);
     expect(inA).toBeGreaterThan(0);
-    expect(inB).toBeGreaterThan(0);      // far Nursery is no longer dead space — bug fixed
+    expect(inB).toBeGreaterThan(0); // far Nursery is no longer dead space — bug fixed
     expect(inA).toBeLessThanOrEqual(12); // never stacked past capacity
     expect(inB).toBeLessThanOrEqual(12);
   });
@@ -7995,7 +8483,7 @@ describe('Nursery brood deposit — capacity-aware spread, real pipeline (#173, 
     const driver = makeDriver(world, colony, underground);
     for (let n = 0; n < 13; n++) driver.carryOne(400);
     expect(broodCountIn(world, colony, A)).toBe(13); // all funneled to nearest (stacked)
-    expect(broodCountIn(world, colony, B)).toBe(0);  // far Nursery never used
+    expect(broodCountIn(world, colony, B)).toBe(0); // far Nursery never used
   });
 
   it('V24 saturation: when EVERY Nursery is full, a carrier overflow-deposits (stacks) rather than piling up forever', () => {

@@ -132,11 +132,7 @@ export function isFoodChamberDepositable(chamber: ChamberRecord): boolean {
  * the oscillation cycle described in the FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP
  * constant docs.
  */
-export function withdrawFood(
-  colony: ColonyRecord,
-  amount: number,
-  simVersion: number,
-): boolean {
+export function withdrawFood(colony: ColonyRecord, amount: number, simVersion: number): boolean {
   if (colonyFoodTotal(colony) < amount) return false;
 
   let remaining = amount;
@@ -245,10 +241,7 @@ export function colonyFoodCapacity(colony: ColonyRecord): number {
  * unlocks only trigger once excavation finishes and checkPendingChambers
  * promotes the pending record into colony.chambers.
  */
-export function hasCompletedChamber(
-  colony: ColonyRecord,
-  chamberType: ChamberType,
-): boolean {
+export function hasCompletedChamber(colony: ColonyRecord, chamberType: ChamberType): boolean {
   for (let i = 0; i < colony.chambers.length; i++) {
     if (colony.chambers[i]!.chamberType === chamberType) return true;
   }
@@ -499,10 +492,10 @@ export function tickReconcile(world: WorldState, colony: ColonyRecord): void {
   const brood = colony.eggCount + colony.larvaeCount;
   const hasNursery = hasCompletedChamber(colony, ChamberType.Nursery);
   const alloc = allocateWorkers(colony.workerCount, brood, colony.targetRatio, hasNursery);
-  colony.computedAllocation.nurse  = alloc.nurse;
+  colony.computedAllocation.nurse = alloc.nurse;
   colony.computedAllocation.forage = alloc.forage;
-  colony.computedAllocation.dig    = alloc.dig;
-  colony.computedAllocation.fight  = alloc.fight;
+  colony.computedAllocation.dig = alloc.dig;
+  colony.computedAllocation.fight = alloc.fight;
   colony.nurseCount = alloc.nurse;
 
   colony.reconcileCountdown = RECONCILE_INTERVAL_TICKS;
@@ -542,7 +535,9 @@ export function checkPendingChambers(world: WorldState): void {
     let allOpen = true;
     for (let dy = 0; dy < pc.height && allOpen; dy++) {
       for (let dx = 0; dx < pc.width && allOpen; dx++) {
-        if (ugGet(underground, pc.anchorTileX + dx, pc.anchorTileY + dy) !== UndergroundTileState.Open) {
+        if (
+          ugGet(underground, pc.anchorTileX + dx, pc.anchorTileY + dy) !== UndergroundTileState.Open
+        ) {
           allOpen = false;
         }
       }
@@ -567,11 +562,11 @@ export function checkPendingChambers(world: WorldState): void {
       colony.chambers.push({
         chamberId,
         chamberType: pc.chamberType,
-        foodStored:  0,
-        posX:        pc.anchorTileX << FP_SHIFT,
-        posY:        pc.anchorTileY << FP_SHIFT,
-        width:       pc.width,
-        height:      pc.height,
+        foodStored: 0,
+        posX: pc.anchorTileX << FP_SHIFT,
+        posY: pc.anchorTileY << FP_SHIFT,
+        width: pc.width,
+        height: pc.height,
       });
 
       // Remove PendingChamber by key (safe during for-in iteration — delete is allowed)
@@ -655,7 +650,7 @@ export function tickDeadDiggerCleanup(world: WorldState): void {
     if (!ug) continue;
     if (ugGet(ug, dtx, dty) === UndergroundTileState.BeingDug) {
       ugSet(ug, dtx, dty, UndergroundTileState.Marked);
-      world.colonies[cid]!.digFlowFieldDirty = true;   // typed field (Plan 03 Task 1)
+      world.colonies[cid]!.digFlowFieldDirty = true; // typed field (Plan 03 Task 1)
     }
     // Clear the dead ant's dig claim
     world.ants.digTileX[id] = -1;

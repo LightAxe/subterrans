@@ -37,12 +37,7 @@ export const GRASS_TUFT_SPRITE: MotifSprite = {
   // 1 = darker green base (root)
   // 2 = mid green (blade)
   // 3 = lighter green (tip highlight)
-  pixels: [
-    0, 0, 3, 0, 0,
-    0, 2, 2, 0, 3,
-    2, 2, 1, 2, 2,
-    0, 1, 1, 1, 0,
-  ],
+  pixels: [0, 0, 3, 0, 0, 0, 2, 2, 0, 3, 2, 2, 1, 2, 2, 0, 1, 1, 1, 0],
   colors: [0, 0x4f6b35, 0x6e8a3f, 0x9bb05a],
 };
 
@@ -50,11 +45,7 @@ export const GRASS_TUFT_SPRITE: MotifSprite = {
 export const DRY_GRASS_TUFT_SPRITE: MotifSprite = {
   width: 4,
   height: 3,
-  pixels: [
-    0, 2, 0, 2,
-    2, 1, 2, 1,
-    1, 1, 0, 1,
-  ],
+  pixels: [0, 2, 0, 2, 2, 1, 2, 1, 1, 1, 0, 1],
   colors: [0, 0x8a7838, 0xb09858],
 };
 
@@ -62,10 +53,7 @@ export const DRY_GRASS_TUFT_SPRITE: MotifSprite = {
 export const PEBBLE_SPRITE: MotifSprite = {
   width: 3,
   height: 2,
-  pixels: [
-    1, 2, 1,
-    2, 1, 2,
-  ],
+  pixels: [1, 2, 1, 2, 1, 2],
   colors: [0, 0x686058, 0x84776a],
 };
 
@@ -73,11 +61,7 @@ export const PEBBLE_SPRITE: MotifSprite = {
 export const SMALL_STONE_SPRITE: MotifSprite = {
   width: 4,
   height: 3,
-  pixels: [
-    0, 1, 1, 0,
-    1, 2, 1, 1,
-    1, 1, 1, 0,
-  ],
+  pixels: [0, 1, 1, 0, 1, 2, 1, 1, 1, 1, 1, 0],
   colors: [0, 0x4a443c, 0x6c6258],
 };
 
@@ -85,10 +69,7 @@ export const SMALL_STONE_SPRITE: MotifSprite = {
 export const TWIG_SPRITE: MotifSprite = {
   width: 5,
   height: 2,
-  pixels: [
-    1, 2, 1, 1, 1,
-    0, 0, 1, 0, 0,
-  ],
+  pixels: [1, 2, 1, 1, 1, 0, 0, 1, 0, 0],
   colors: [0, 0x4a3520, 0x6e4f30],
 };
 
@@ -96,11 +77,7 @@ export const TWIG_SPRITE: MotifSprite = {
 export const DEAD_LEAF_SPRITE: MotifSprite = {
   width: 4,
   height: 3,
-  pixels: [
-    0, 1, 2, 0,
-    1, 2, 2, 1,
-    0, 1, 2, 0,
-  ],
+  pixels: [0, 1, 2, 0, 1, 2, 2, 1, 0, 1, 2, 0],
   colors: [0, 0x6e4a25, 0x9c6a35],
 };
 
@@ -108,9 +85,7 @@ export const DEAD_LEAF_SPRITE: MotifSprite = {
 export const SEED_SPRITE: MotifSprite = {
   width: 2,
   height: 1,
-  pixels: [
-    1, 2,
-  ],
+  pixels: [1, 2],
   colors: [0, 0x3a2a18, 0x5a4028],
 };
 
@@ -122,10 +97,7 @@ export const SEED_SPRITE: MotifSprite = {
 export const ROCK_FLECK_SPRITE: MotifSprite = {
   width: 3,
   height: 2,
-  pixels: [
-    1, 0, 2,
-    0, 2, 1,
-  ],
+  pixels: [1, 0, 2, 0, 2, 1],
   colors: [0, 0x564030, 0x7a5b40],
 };
 
@@ -133,9 +105,7 @@ export const ROCK_FLECK_SPRITE: MotifSprite = {
 export const STRATA_LINE_SPRITE: MotifSprite = {
   width: 4,
   height: 1,
-  pixels: [
-    1, 2, 1, 2,
-  ],
+  pixels: [1, 2, 1, 2],
   colors: [0, 0x3e2d1d, 0x5c4530],
 };
 
@@ -143,10 +113,7 @@ export const STRATA_LINE_SPRITE: MotifSprite = {
 export const FLOOR_DUST_SPRITE: MotifSprite = {
   width: 2,
   height: 2,
-  pixels: [
-    0, 1,
-    1, 0,
-  ],
+  pixels: [0, 1, 1, 0],
   colors: [0, 0x35261c],
 };
 
@@ -215,37 +182,46 @@ const BOULDER_PALETTE = [0, 0x6b6258, 0x8b8278, 0x4a4338, 0x6e7c45] as const;
 // highlight on top-left and a wide dark crescent at the base sell weight.
 function buildBoulderRound(): ReadonlyArray<number> {
   const c = makeCanvas(64, 64);
-  paintOval(c, 64, 32, 38, 30, 24, 1);  // mid-grey body
-  paintOval(c, 64, 34, 56, 26,  7, 3);  // dark crescent at base
-  paintOval(c, 64, 28, 24, 18, 12, 2);  // light top-left highlight
+  paintOval(c, 64, 32, 38, 30, 24, 1); // mid-grey body
+  paintOval(c, 64, 34, 56, 26, 7, 3); // dark crescent at base
+  paintOval(c, 64, 28, 24, 18, 12, 2); // light top-left highlight
   return c;
 }
 
 function buildBoulderFlat(): ReadonlyArray<number> {
   const c = makeCanvas(64, 64);
-  paintOval(c, 64, 32, 44, 31, 18, 1);  // wider, lower body
-  paintOval(c, 64, 34, 58, 28,  5, 3);  // heavy bottom shadow
-  paintOval(c, 64, 30, 30, 22,  8, 2);  // long narrow top highlight
+  paintOval(c, 64, 32, 44, 31, 18, 1); // wider, lower body
+  paintOval(c, 64, 34, 58, 28, 5, 3); // heavy bottom shadow
+  paintOval(c, 64, 30, 30, 22, 8, 2); // long narrow top highlight
   return c;
 }
 
 function buildBoulderLichen(): ReadonlyArray<number> {
   const c = makeCanvas(64, 64);
   paintOval(c, 64, 32, 38, 30, 24, 1);
-  paintOval(c, 64, 34, 56, 26,  7, 3);
+  paintOval(c, 64, 34, 56, 26, 7, 3);
   paintOval(c, 64, 28, 24, 18, 12, 2);
-  paintFlecks(c, 64, 28, 12, 18, 52, 34, 4, 0x42);  // mossy green flecks across crown
+  paintFlecks(c, 64, 28, 12, 18, 52, 34, 4, 0x42); // mossy green flecks across crown
   return c;
 }
 
 export const LARGE_BOULDER_SPRITE: LargeFeatureSprite = {
-  tilesWide: 4, tilesTall: 4, colors: BOULDER_PALETTE, pixels: buildBoulderRound(),
+  tilesWide: 4,
+  tilesTall: 4,
+  colors: BOULDER_PALETTE,
+  pixels: buildBoulderRound(),
 };
 export const LARGE_BOULDER_SPRITE_FLAT: LargeFeatureSprite = {
-  tilesWide: 4, tilesTall: 4, colors: BOULDER_PALETTE, pixels: buildBoulderFlat(),
+  tilesWide: 4,
+  tilesTall: 4,
+  colors: BOULDER_PALETTE,
+  pixels: buildBoulderFlat(),
 };
 export const LARGE_BOULDER_SPRITE_LICHEN: LargeFeatureSprite = {
-  tilesWide: 4, tilesTall: 4, colors: BOULDER_PALETTE, pixels: buildBoulderLichen(),
+  tilesWide: 4,
+  tilesTall: 4,
+  colors: BOULDER_PALETTE,
+  pixels: buildBoulderLichen(),
 };
 
 // ---------------------------------------------------------------------------
@@ -256,11 +232,11 @@ export const LARGE_BOULDER_SPRITE_LICHEN: LargeFeatureSprite = {
 
 const BUSH_PALETTE = [
   0,
-  0x4a6d2e,  // 1: dark green leaf base
-  0x6f9540,  // 2: mid green leaf body
-  0x9ab85a,  // 3: light green leaf tip / fleck
-  0xe8d97a,  // 4: pale yellow flower edge
-  0xf4eb9a,  // 5: bright yellow flower center
+  0x4a6d2e, // 1: dark green leaf base
+  0x6f9540, // 2: mid green leaf body
+  0x9ab85a, // 3: light green leaf tip / fleck
+  0xe8d97a, // 4: pale yellow flower edge
+  0xf4eb9a, // 5: bright yellow flower center
 ] as const;
 
 // 4×4 = 64×64 px.
@@ -270,12 +246,12 @@ function buildBushClover(): ReadonlyArray<number> {
   paintOval(c, 64, 20, 44, 16, 14, 1);
   paintOval(c, 64, 44, 40, 18, 16, 1);
   paintOval(c, 64, 32, 32, 15, 15, 1);
-  paintOval(c, 64, 14, 30, 10,  9, 1);
+  paintOval(c, 64, 14, 30, 10, 9, 1);
   // Mid-green highlights on top of each cluster.
-  paintOval(c, 64, 20, 38, 11,  7, 2);
-  paintOval(c, 64, 44, 32, 12,  8, 2);
-  paintOval(c, 64, 32, 26, 10,  6, 2);
-  paintOval(c, 64, 14, 26,  6,  4, 2);
+  paintOval(c, 64, 20, 38, 11, 7, 2);
+  paintOval(c, 64, 44, 32, 12, 8, 2);
+  paintOval(c, 64, 32, 26, 10, 6, 2);
+  paintOval(c, 64, 14, 26, 6, 4, 2);
   // Tip flecks for surface texture.
   paintFlecks(c, 64, 18, 12, 22, 50, 40, 3, 0x77);
   return c;
@@ -289,18 +265,18 @@ function buildBushFlower(): ReadonlyArray<number> {
   paintRect(c, 64, 40, 42, 42, 56, 1);
   paintRect(c, 64, 14, 46, 16, 56, 1);
   // Flower clusters at top of each stem.
-  paintOval(c, 64, 31, 32,  8, 6, 5);
-  paintOval(c, 64, 23, 38,  6, 5, 5);
-  paintOval(c, 64, 41, 38,  6, 5, 5);
-  paintOval(c, 64, 15, 42,  5, 4, 5);
-  paintOval(c, 64, 31, 30,  4, 2, 4);
-  paintOval(c, 64, 23, 36,  3, 2, 4);
-  paintOval(c, 64, 41, 36,  3, 2, 4);
-  paintOval(c, 64, 15, 41,  2, 1, 4);
+  paintOval(c, 64, 31, 32, 8, 6, 5);
+  paintOval(c, 64, 23, 38, 6, 5, 5);
+  paintOval(c, 64, 41, 38, 6, 5, 5);
+  paintOval(c, 64, 15, 42, 5, 4, 5);
+  paintOval(c, 64, 31, 30, 4, 2, 4);
+  paintOval(c, 64, 23, 36, 3, 2, 4);
+  paintOval(c, 64, 41, 36, 3, 2, 4);
+  paintOval(c, 64, 15, 41, 2, 1, 4);
   // Leaf base.
   paintOval(c, 64, 32, 56, 20, 5, 1);
-  paintOval(c, 64, 22, 56,  5, 3, 2);
-  paintOval(c, 64, 42, 56,  5, 3, 2);
+  paintOval(c, 64, 22, 56, 5, 3, 2);
+  paintOval(c, 64, 42, 56, 5, 3, 2);
   return c;
 }
 
@@ -319,13 +295,22 @@ function buildBushDense(): ReadonlyArray<number> {
 }
 
 export const LARGE_BUSH_SPRITE: LargeFeatureSprite = {
-  tilesWide: 4, tilesTall: 4, colors: BUSH_PALETTE, pixels: buildBushClover(),
+  tilesWide: 4,
+  tilesTall: 4,
+  colors: BUSH_PALETTE,
+  pixels: buildBushClover(),
 };
 export const LARGE_BUSH_SPRITE_TALL: LargeFeatureSprite = {
-  tilesWide: 4, tilesTall: 4, colors: BUSH_PALETTE, pixels: buildBushFlower(),
+  tilesWide: 4,
+  tilesTall: 4,
+  colors: BUSH_PALETTE,
+  pixels: buildBushFlower(),
 };
 export const LARGE_BUSH_SPRITE_DENSE: LargeFeatureSprite = {
-  tilesWide: 4, tilesTall: 4, colors: BUSH_PALETTE, pixels: buildBushDense(),
+  tilesWide: 4,
+  tilesTall: 4,
+  colors: BUSH_PALETTE,
+  pixels: buildBushDense(),
 };
 
 // ---------------------------------------------------------------------------
@@ -337,10 +322,10 @@ export const LARGE_BUSH_SPRITE_DENSE: LargeFeatureSprite = {
 
 const GRASS_PALETTE = [
   0,
-  0x3f5a25,  // 1: dark green base
-  0x5d7a35,  // 2: mid green blade
-  0x8aa550,  // 3: light green tip
-  0xb3c87a,  // 4: pale tip highlight (rare)
+  0x3f5a25, // 1: dark green base
+  0x5d7a35, // 2: mid green blade
+  0x8aa550, // 3: light green tip
+  0xb3c87a, // 4: pale tip highlight (rare)
 ] as const;
 
 // 4×4 = 64×64 px. Vertical-bias blades that span most of the height.
@@ -348,11 +333,11 @@ function buildGrassDense(): ReadonlyArray<number> {
   const c = makeCanvas(64, 64);
   for (let i = 0; i < 18; i++) {
     const baseX = 4 + i * 3;
-    const tipX = baseX + (i % 3) - 1;     // slight per-blade lean
-    const tipY = 6 + ((i * 7) % 18);      // varying heights, mostly tall
+    const tipX = baseX + (i % 3) - 1; // slight per-blade lean
+    const tipY = 6 + ((i * 7) % 18); // varying heights, mostly tall
     paintGrassBlade(c, 64, baseX, 60, tipX, tipY, 1, 2, 3);
   }
-  paintFlecks(c, 64, 8, 5, 8, 56, 22, 4, 0x55);  // pale tip highlights
+  paintFlecks(c, 64, 8, 5, 8, 56, 22, 4, 0x55); // pale tip highlights
   return c;
 }
 
@@ -360,7 +345,7 @@ function buildGrassSparse(): ReadonlyArray<number> {
   const c = makeCanvas(64, 64);
   // Seven tall, well-spaced blades.
   const blades: ReadonlyArray<readonly [number, number, number]> = [
-    [10,  9, 4],
+    [10, 9, 4],
     [18, 16, 8],
     [27, 28, 3],
     [34, 33, 10],
@@ -387,13 +372,22 @@ function buildGrassTilted(): ReadonlyArray<number> {
 }
 
 export const LARGE_GRASS_CLUMP_SPRITE: LargeFeatureSprite = {
-  tilesWide: 4, tilesTall: 4, colors: GRASS_PALETTE, pixels: buildGrassDense(),
+  tilesWide: 4,
+  tilesTall: 4,
+  colors: GRASS_PALETTE,
+  pixels: buildGrassDense(),
 };
 export const LARGE_GRASS_CLUMP_SPRITE_SPARSE: LargeFeatureSprite = {
-  tilesWide: 4, tilesTall: 4, colors: GRASS_PALETTE, pixels: buildGrassSparse(),
+  tilesWide: 4,
+  tilesTall: 4,
+  colors: GRASS_PALETTE,
+  pixels: buildGrassSparse(),
 };
 export const LARGE_GRASS_CLUMP_SPRITE_TILTED: LargeFeatureSprite = {
-  tilesWide: 4, tilesTall: 4, colors: GRASS_PALETTE, pixels: buildGrassTilted(),
+  tilesWide: 4,
+  tilesTall: 4,
+  colors: GRASS_PALETTE,
+  pixels: buildGrassTilted(),
 };
 
 // ---------------------------------------------------------------------------
@@ -404,11 +398,11 @@ export const LARGE_GRASS_CLUMP_SPRITE_TILTED: LargeFeatureSprite = {
 
 const TWIG_PALETTE = [
   0,
-  0x6b4a28,  // 1: mid brown body
-  0x8c6438,  // 2: light brown highlight
-  0x4a3018,  // 3: dark brown shadow
-  0xa07b48,  // 4: pale bark grain
-  0x3d2310,  // 5: deep shadow accent
+  0x6b4a28, // 1: mid brown body
+  0x8c6438, // 2: light brown highlight
+  0x4a3018, // 3: dark brown shadow
+  0xa07b48, // 4: pale bark grain
+  0x3d2310, // 5: deep shadow accent
 ] as const;
 
 // 6×3 = 96×48 px. Long horizontal log silhouette.
@@ -416,14 +410,14 @@ function buildTwigSmooth(): ReadonlyArray<number> {
   const c = makeCanvas(96, 48);
   // Cylindrical body with rounded end caps.
   paintRect(c, 96, 8, 18, 87, 30, 1);
-  paintOval(c, 96,  6, 24, 6, 7, 1);
+  paintOval(c, 96, 6, 24, 6, 7, 1);
   paintOval(c, 96, 90, 24, 6, 7, 1);
   // Top highlight strip and bottom shadow strip.
   paintRect(c, 96, 10, 16, 85, 18, 2);
   paintRect(c, 96, 10, 30, 85, 32, 3);
   paintRect(c, 96, 12, 33, 83, 33, 5);
   // Darker end caps.
-  paintOval(c, 96,  6, 24, 5, 8, 3);
+  paintOval(c, 96, 6, 24, 5, 8, 3);
   paintOval(c, 96, 90, 24, 5, 8, 3);
   // Bark grain flecks.
   paintFlecks(c, 96, 32, 16, 22, 84, 28, 4, 0x99);
@@ -443,10 +437,16 @@ function buildTwigBark(): ReadonlyArray<number> {
 }
 
 export const LARGE_TWIG_SPRITE: LargeFeatureSprite = {
-  tilesWide: 6, tilesTall: 3, colors: TWIG_PALETTE, pixels: buildTwigSmooth(),
+  tilesWide: 6,
+  tilesTall: 3,
+  colors: TWIG_PALETTE,
+  pixels: buildTwigSmooth(),
 };
 export const LARGE_TWIG_SPRITE_BARK: LargeFeatureSprite = {
-  tilesWide: 6, tilesTall: 3, colors: TWIG_PALETTE, pixels: buildTwigBark(),
+  tilesWide: 6,
+  tilesTall: 3,
+  colors: TWIG_PALETTE,
+  pixels: buildTwigBark(),
 };
 
 // ---------------------------------------------------------------------------
@@ -456,11 +456,11 @@ export const LARGE_TWIG_SPRITE_BARK: LargeFeatureSprite = {
 
 const LEAF_PALETTE = [
   0,
-  0x8a5a28,  // 1: mid brown leaf body
-  0xb07a40,  // 2: light brown highlight
-  0xc89358,  // 3: pale tan top edge
-  0x654020,  // 4: dark brown vein/edge
-  0x9a6c30,  // 5: mid-dark brown vein
+  0x8a5a28, // 1: mid brown leaf body
+  0xb07a40, // 2: light brown highlight
+  0xc89358, // 3: pale tan top edge
+  0x654020, // 4: dark brown vein/edge
+  0x9a6c30, // 5: mid-dark brown vein
 ] as const;
 
 // 4×4 = 64×64 px.
@@ -517,13 +517,22 @@ function buildLeafTorn(): ReadonlyArray<number> {
 }
 
 export const LARGE_LEAF_SPRITE: LargeFeatureSprite = {
-  tilesWide: 4, tilesTall: 4, colors: LEAF_PALETTE, pixels: buildLeafBroad(),
+  tilesWide: 4,
+  tilesTall: 4,
+  colors: LEAF_PALETTE,
+  pixels: buildLeafBroad(),
 };
 export const LARGE_LEAF_SPRITE_CURLED: LargeFeatureSprite = {
-  tilesWide: 4, tilesTall: 4, colors: LEAF_PALETTE, pixels: buildLeafCurled(),
+  tilesWide: 4,
+  tilesTall: 4,
+  colors: LEAF_PALETTE,
+  pixels: buildLeafCurled(),
 };
 export const LARGE_LEAF_SPRITE_TORN: LargeFeatureSprite = {
-  tilesWide: 4, tilesTall: 4, colors: LEAF_PALETTE, pixels: buildLeafTorn(),
+  tilesWide: 4,
+  tilesTall: 4,
+  colors: LEAF_PALETTE,
+  pixels: buildLeafTorn(),
 };
 
 // ---------------------------------------------------------------------------
@@ -532,14 +541,7 @@ export const LARGE_LEAF_SPRITE_TORN: LargeFeatureSprite = {
 // orientation. HardBlock.
 // ---------------------------------------------------------------------------
 
-const BIG_LEAF_PALETTE = [
-  0,
-  0x7a4818,
-  0xa8722c,
-  0xc89344,
-  0x523010,
-  0x8b5828,
-] as const;
+const BIG_LEAF_PALETTE = [0, 0x7a4818, 0xa8722c, 0xc89344, 0x523010, 0x8b5828] as const;
 
 // 5×6 = 80×96 px. Ant-scale "ship" canopy.
 function buildBigLeafBroad(): ReadonlyArray<number> {
@@ -549,14 +551,14 @@ function buildBigLeafBroad(): ReadonlyArray<number> {
   paintOval(c, 80, 38, 28, 28, 16, 2);
   paintOval(c, 80, 40, 22, 14, 7, 3);
   // Central vein from tip to base.
-  paintLine(c, 80, 40,  10, 40, 86, 4);
+  paintLine(c, 80, 40, 10, 40, 86, 4);
   // Side veins (7 pairs, fanning outward).
   for (let i = 0; i < 7; i++) {
     const y = 18 + i * 10;
     paintLine(c, 80, 40, y, 12 + i * 2, y + 10, 5);
     paintLine(c, 80, 40, y, 68 - i * 2, y + 10, 5);
   }
-  paintOval(c, 80, 40, 84, 28, 7, 4);  // base shadow
+  paintOval(c, 80, 40, 84, 28, 7, 4); // base shadow
   return c;
 }
 
@@ -584,12 +586,17 @@ function buildBigLeafTorn(): ReadonlyArray<number> {
 }
 
 export const LARGE_BIG_LEAF_SPRITE: LargeFeatureSprite = {
-  tilesWide: 5, tilesTall: 6, colors: BIG_LEAF_PALETTE, pixels: buildBigLeafBroad(),
+  tilesWide: 5,
+  tilesTall: 6,
+  colors: BIG_LEAF_PALETTE,
+  pixels: buildBigLeafBroad(),
 };
 export const LARGE_BIG_LEAF_SPRITE_TORN: LargeFeatureSprite = {
-  tilesWide: 5, tilesTall: 6, colors: BIG_LEAF_PALETTE, pixels: buildBigLeafTorn(),
+  tilesWide: 5,
+  tilesTall: 6,
+  colors: BIG_LEAF_PALETTE,
+  pixels: buildBigLeafTorn(),
 };
-
 
 // ---------------------------------------------------------------------------
 // SURFACE_FEATURE_SPRITES — kind→sprite[] map consumed by terrain-atlas.ts
@@ -614,13 +621,23 @@ import {
   type SurfaceFeatureKind as SurfaceFeatureKindType,
 } from '../sim/surface-features.js';
 
-export const SURFACE_FEATURE_SPRITES: Readonly<Record<SurfaceFeatureKindType, ReadonlyArray<LargeFeatureSprite>>> = {
-  [SurfaceFeatureKind.Boulder]:    [LARGE_BOULDER_SPRITE,    LARGE_BOULDER_SPRITE_FLAT,    LARGE_BOULDER_SPRITE_LICHEN],
-  [SurfaceFeatureKind.Bush]:       [LARGE_BUSH_SPRITE,       LARGE_BUSH_SPRITE_TALL,       LARGE_BUSH_SPRITE_DENSE],
-  [SurfaceFeatureKind.GrassClump]: [LARGE_GRASS_CLUMP_SPRITE, LARGE_GRASS_CLUMP_SPRITE_SPARSE, LARGE_GRASS_CLUMP_SPRITE_TILTED],
-  [SurfaceFeatureKind.Twig]:       [LARGE_TWIG_SPRITE,       LARGE_TWIG_SPRITE_BARK],
-  [SurfaceFeatureKind.Leaf]:       [LARGE_LEAF_SPRITE,       LARGE_LEAF_SPRITE_CURLED,     LARGE_LEAF_SPRITE_TORN],
-  [SurfaceFeatureKind.BigLeaf]:    [LARGE_BIG_LEAF_SPRITE,   LARGE_BIG_LEAF_SPRITE_TORN],
+export const SURFACE_FEATURE_SPRITES: Readonly<
+  Record<SurfaceFeatureKindType, ReadonlyArray<LargeFeatureSprite>>
+> = {
+  [SurfaceFeatureKind.Boulder]: [
+    LARGE_BOULDER_SPRITE,
+    LARGE_BOULDER_SPRITE_FLAT,
+    LARGE_BOULDER_SPRITE_LICHEN,
+  ],
+  [SurfaceFeatureKind.Bush]: [LARGE_BUSH_SPRITE, LARGE_BUSH_SPRITE_TALL, LARGE_BUSH_SPRITE_DENSE],
+  [SurfaceFeatureKind.GrassClump]: [
+    LARGE_GRASS_CLUMP_SPRITE,
+    LARGE_GRASS_CLUMP_SPRITE_SPARSE,
+    LARGE_GRASS_CLUMP_SPRITE_TILTED,
+  ],
+  [SurfaceFeatureKind.Twig]: [LARGE_TWIG_SPRITE, LARGE_TWIG_SPRITE_BARK],
+  [SurfaceFeatureKind.Leaf]: [LARGE_LEAF_SPRITE, LARGE_LEAF_SPRITE_CURLED, LARGE_LEAF_SPRITE_TORN],
+  [SurfaceFeatureKind.BigLeaf]: [LARGE_BIG_LEAF_SPRITE, LARGE_BIG_LEAF_SPRITE_TORN],
 };
 
 // Boot-time integrity check: each sprite array's length and footprint
@@ -637,7 +654,7 @@ for (const kindStr of Object.keys(SURFACE_FEATURE_SPRITES)) {
   if (sprites.length !== entry.variantCount) {
     throw new Error(
       `SURFACE_FEATURE_SPRITES[kind=${kind}]: ${sprites.length} sprites but ` +
-      `registry variantCount=${entry.variantCount}`,
+        `registry variantCount=${entry.variantCount}`,
     );
   }
   for (let i = 0; i < sprites.length; i++) {
@@ -645,8 +662,8 @@ for (const kindStr of Object.keys(SURFACE_FEATURE_SPRITES)) {
     if (s.tilesWide !== entry.footprintTilesWide || s.tilesTall !== entry.footprintTilesTall) {
       throw new Error(
         `SURFACE_FEATURE_SPRITES[kind=${kind}] variant[${i}]: ` +
-        `${s.tilesWide}×${s.tilesTall} but registry footprint=` +
-        `${entry.footprintTilesWide}×${entry.footprintTilesTall}`,
+          `${s.tilesWide}×${s.tilesTall} but registry footprint=` +
+          `${entry.footprintTilesWide}×${entry.footprintTilesTall}`,
       );
     }
   }

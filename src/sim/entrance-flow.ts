@@ -147,7 +147,7 @@ export function computeEntranceFlowField(
     const state = data[idx]!;
     if (state !== UndergroundTileState.Open && state !== UndergroundTileState.BeingDug) continue;
     if (out[idx] !== -2) continue; // dedupe: multiple entrances at same column
-    out[idx] = -1;                 // source tile
+    out[idx] = -1; // source tile
     queue[tail++] = idx;
   }
 
@@ -233,8 +233,8 @@ export function computeSurfaceEntranceFlowField(
   // ESLint-clean, single-instruction. If SURFACE_GRID_WIDTH ever leaves
   // power-of-2 territory, this needs a strategy change (and the
   // SHIFT/MASK constants below need to update accordingly).
-  const SURFACE_WIDTH_SHIFT = 7;       // log2(128)
-  const SURFACE_WIDTH_MASK  = width - 1; // 127
+  const SURFACE_WIDTH_SHIFT = 7; // log2(128)
+  const SURFACE_WIDTH_MASK = width - 1; // 127
   const REVERSE = [2, 3, 0, 1] as const;
   const NEIGHBOR_DR = [-1, 0, 1, 0] as const;
   const NEIGHBOR_DC = [0, 1, 0, -1] as const;

@@ -21,11 +21,7 @@
 import { describe, it, expect } from 'vitest';
 import { ChamberType } from '../enums.js';
 import { STARVATION_GRACE_TICKS, RECONCILE_INTERVAL_TICKS } from '../constants.js';
-import {
-  createColonyRecord,
-  createColonyStore,
-  type ChamberRecord,
-} from './colony-store.js';
+import { createColonyRecord, createColonyStore, type ChamberRecord } from './colony-store.js';
 
 describe('createColonyRecord', () => {
   it('(1) initial values match PRD §2 factory defaults', () => {
@@ -78,7 +74,7 @@ describe('createColonyRecord', () => {
     expect(b.taskCensus.forage).toBe(0);
   });
 
-  it('(5) DEFAULT_BEHAVIOR_RATIO shape: forage=10, fight=0 (Phase 10 amendment, CTRL-01\')', () => {
+  it("(5) DEFAULT_BEHAVIOR_RATIO shape: forage=10, fight=0 (Phase 10 amendment, CTRL-01')", () => {
     const r = createColonyRecord(1, 0);
     expect(r.targetRatio.forage).toBe(10);
     expect(r.targetRatio.fight).toBe(0);
@@ -160,7 +156,15 @@ describe('Phase 3 PRD §2a caller-side init contract', () => {
     a.workers.push(300);
     expect(b.workers.length).toBe(0);
 
-    a.chambers.push({ chamberId: 1, chamberType: 0, foodStored: 0, posX: 0, posY: 0, width: 5, height: 3 });
+    a.chambers.push({
+      chamberId: 1,
+      chamberType: 0,
+      foodStored: 0,
+      posX: 0,
+      posY: 0,
+      width: 5,
+      height: 3,
+    });
     expect(b.chambers.length).toBe(0);
 
     // targetRatio, computedAllocation, taskCensus must be independent objects
@@ -193,13 +197,13 @@ describe('createColonyStore', () => {
 describe('ChamberRecord', () => {
   it('(8) all fields are numeric (type-check-via-runtime — shape drift guard)', () => {
     const chamber: ChamberRecord = {
-      chamberId:   1,
+      chamberId: 1,
       chamberType: ChamberType.FoodStorage,
-      foodStored:  0,
-      posX:        512,
-      posY:        256,
-      width:       3,
-      height:      3,
+      foodStored: 0,
+      posX: 512,
+      posY: 256,
+      width: 3,
+      height: 3,
     };
     expect(typeof chamber.chamberId).toBe('number');
     expect(typeof chamber.chamberType).toBe('number');

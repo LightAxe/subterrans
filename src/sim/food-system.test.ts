@@ -179,7 +179,8 @@ describe('tickFoodPileSpawn — placement constraints', () => {
     if (world.foodPiles.length === before.length + 1) {
       const placed = world.foodPiles[world.foodPiles.length - 1]!;
       for (const existing of before) {
-        const dist = Math.abs(placed.tileX - existing.tileX) + Math.abs(placed.tileY - existing.tileY);
+        const dist =
+          Math.abs(placed.tileX - existing.tileX) + Math.abs(placed.tileY - existing.tileY);
         expect(dist).toBeGreaterThanOrEqual(FOOD_PILE_MIN_SEPARATION);
       }
     }
@@ -200,12 +201,14 @@ describe('tickFoodPileSpawn — placement constraints', () => {
       // Check distance to all entrances + rally points across all colonies.
       for (const colony of Object.values(world.colonies)) {
         for (const e of colony.entrances ?? []) {
-          const dist = Math.abs(placed.tileX - e.surfaceTileX) + Math.abs(placed.tileY - e.surfaceTileY);
+          const dist =
+            Math.abs(placed.tileX - e.surfaceTileX) + Math.abs(placed.tileY - e.surfaceTileY);
           expect(dist).toBeGreaterThanOrEqual(FOOD_PILE_MIN_COLONY_DISTANCE);
         }
         if (colony.rallyPoint) {
-          const dist = Math.abs(placed.tileX - colony.rallyPoint.tileX)
-                     + Math.abs(placed.tileY - colony.rallyPoint.tileY);
+          const dist =
+            Math.abs(placed.tileX - colony.rallyPoint.tileX) +
+            Math.abs(placed.tileY - colony.rallyPoint.tileY);
           expect(dist).toBeGreaterThanOrEqual(FOOD_PILE_MIN_COLONY_DISTANCE);
         }
       }
@@ -330,7 +333,15 @@ describe('tickFoodPileSpawn — integration via tick()', () => {
     // regression that mis-implements the modulo gate.
     const world = createScenario(42);
     world.foodPiles = []; // start empty so any spawn would be a +1 we'd see
-    for (const t of [1, 100, 500, 999, 1234, FOOD_PILE_SPAWN_INTERVAL_TICKS - 1, FOOD_PILE_SPAWN_INTERVAL_TICKS + 1]) {
+    for (const t of [
+      1,
+      100,
+      500,
+      999,
+      1234,
+      FOOD_PILE_SPAWN_INTERVAL_TICKS - 1,
+      FOOD_PILE_SPAWN_INTERVAL_TICKS + 1,
+    ]) {
       world.tick = t;
       tickFoodPileSpawn(world, new Rng(world.rngState));
       expect(world.foodPiles.length).toBe(0); // strict: no growth

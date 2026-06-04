@@ -23,24 +23,22 @@ const baseCtx: SaveLoadDialogContext = {
 describe('saveLoadDialogItems', () => {
   it('returns 5 items in the documented order', () => {
     const items = saveLoadDialogItems(baseCtx);
-    expect(items.map(i => i.id)).toEqual([
-      'continue', 'save-now', 'delete', 'new-game', 'back',
-    ]);
+    expect(items.map((i) => i.id)).toEqual(['continue', 'save-now', 'delete', 'new-game', 'back']);
   });
 
   it('Continue is disabled when there is no compatible save', () => {
     const items = saveLoadDialogItems(baseCtx);
-    expect(items.find(i => i.id === 'continue')!.enabled).toBe(false);
+    expect(items.find((i) => i.id === 'continue')!.enabled).toBe(false);
   });
 
   it('Continue is enabled when a compatible save exists', () => {
     const items = saveLoadDialogItems({ ...baseCtx, hasCompatibleSave: true });
-    expect(items.find(i => i.id === 'continue')!.enabled).toBe(true);
+    expect(items.find((i) => i.id === 'continue')!.enabled).toBe(true);
   });
 
   it('Delete is disabled when nothing exists in storage', () => {
     const items = saveLoadDialogItems(baseCtx);
-    expect(items.find(i => i.id === 'delete')!.enabled).toBe(false);
+    expect(items.find((i) => i.id === 'delete')!.enabled).toBe(false);
   });
 
   it('Delete is enabled when an incompatible save needs to be cleared (issue #66 path)', () => {
@@ -49,7 +47,7 @@ describe('saveLoadDialogItems', () => {
       hasCompatibleSave: false,
       hasIncompatibleSave: true,
     });
-    expect(items.find(i => i.id === 'delete')!.enabled).toBe(true);
+    expect(items.find((i) => i.id === 'delete')!.enabled).toBe(true);
   });
 
   it('Delete row swaps to "click to confirm" when confirming.delete is set', () => {
@@ -58,7 +56,7 @@ describe('saveLoadDialogItems', () => {
       hasCompatibleSave: true,
       confirming: { delete: true, newGame: false },
     });
-    const del = items.find(i => i.id === 'delete')!;
+    const del = items.find((i) => i.id === 'delete')!;
     expect(del.label.toLowerCase()).toContain('confirm');
     expect(del.confirming).toBe(true);
   });
@@ -69,7 +67,7 @@ describe('saveLoadDialogItems', () => {
       hasCompatibleSave: false,
       confirming: { delete: false, newGame: true },
     });
-    const ng = items.find(i => i.id === 'new-game')!;
+    const ng = items.find((i) => i.id === 'new-game')!;
     expect(ng.label.toLowerCase()).not.toContain('confirm');
   });
 
@@ -79,7 +77,7 @@ describe('saveLoadDialogItems', () => {
       hasCompatibleSave: true,
       confirming: { delete: false, newGame: true },
     });
-    const ng = items.find(i => i.id === 'new-game')!;
+    const ng = items.find((i) => i.id === 'new-game')!;
     expect(ng.label.toLowerCase()).toContain('confirm');
   });
 
@@ -116,7 +114,9 @@ describe('saveLoadDialogItems', () => {
 describe('formatSaveInfoLine', () => {
   it('formats a fresh save with timestamp + tick + workers + food (issue #115)', () => {
     const info: SaveInfo = {
-      tick: 42, playerWorkers: 12, playerFoodStored: 1500,
+      tick: 42,
+      playerWorkers: 12,
+      playerFoodStored: 1500,
       // 2026-01-15 09:30 local — the formatter uses local time, so we don't
       // assert exact HH:MM strings (would be flaky across CI timezones).
       savedAtMs: new Date(2026, 0, 15, 9, 30, 0).getTime(),
@@ -152,7 +152,10 @@ describe('formatSaveInfoLine', () => {
     // the warning, NOT the saved-line — otherwise the player sees
     // "Saved 14:30..." next to a grayed-out Continue and is confused.
     const info: SaveInfo = {
-      tick: 100, playerWorkers: 5, playerFoodStored: 200, savedAtMs: Date.now(),
+      tick: 100,
+      playerWorkers: 5,
+      playerFoodStored: 200,
+      savedAtMs: Date.now(),
     };
     const line = formatSaveInfoLine(info, true);
     expect(line.toLowerCase()).toContain('incompatible');
@@ -212,7 +215,7 @@ describe('itemAt', () => {
 
   it('skips disabled items', () => {
     const items = saveLoadDialogItems(baseCtx); // Continue and Delete disabled
-    const continueItem = items.find(i => i.id === 'continue')!;
+    const continueItem = items.find((i) => i.id === 'continue')!;
     expect(itemAt(items, continueItem.rect.x + 5, continueItem.rect.y + 5)).toBeNull();
   });
 });

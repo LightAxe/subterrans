@@ -81,15 +81,20 @@ export function resetUndergroundInputState(state: UndergroundInputState): void {
  *
  * Returns false if the undergroundGrid for colonyId does not exist.
  */
-export function isTunnelEnd(world: WorldState, tileX: number, tileY: number, colonyId: number): boolean {
+export function isTunnelEnd(
+  world: WorldState,
+  tileX: number,
+  tileY: number,
+  colonyId: number,
+): boolean {
   const grid = world.undergroundGrids[colonyId];
   if (!grid) return false;
   if (ugGet(grid, tileX, tileY) !== UndergroundTileState.Open) return false;
   const neighbors: Array<[number, number]> = [
-    [tileX, tileY - 1],  // N
-    [tileX + 1, tileY],  // E
-    [tileX, tileY + 1],  // S
-    [tileX - 1, tileY],  // W
+    [tileX, tileY - 1], // N
+    [tileX + 1, tileY], // E
+    [tileX, tileY + 1], // S
+    [tileX - 1, tileY], // W
   ];
   for (const [nx, ny] of neighbors) {
     if (nx < 0 || ny < 0 || nx >= grid.width || ny >= grid.height) continue;
@@ -234,7 +239,10 @@ export function handleUndergroundDrag(
   state: UndergroundInputState,
 ): void {
   if (!state.isDragging) return;
-  if (viewState.activeView !== 'underground') { state.isDragging = false; return; }
+  if (viewState.activeView !== 'underground') {
+    state.isDragging = false;
+    return;
+  }
   // Issue #14: same read-only guard as handleUndergroundLeftClick. If the
   // player flipped to the enemy view mid-drag (X keybind), abort the stroke
   // so it can't write through to the player's grid silently.
@@ -246,7 +254,10 @@ export function handleUndergroundDrag(
   // Pan-mode guard: if the player pressed Space mid-drag, treat it as a
   // clean cancel of the excavation drag so further pointer movement goes
   // through the pan handler exclusively.
-  if (panInputState.spaceHeld || panInputState.isPanning) { state.isDragging = false; return; }
+  if (panInputState.spaceHeld || panInputState.isPanning) {
+    state.isDragging = false;
+    return;
+  }
   const { tileX, tileY } = screenToTile(screenX, screenY, viewState.undergroundCamera);
   // Debounce: same tile as last emission → no work.
   if (tileX === state.lastMarkedTileX && tileY === state.lastMarkedTileY) return;
@@ -274,7 +285,10 @@ export function handleUndergroundDrag(
       return;
     }
     const tileStateSingle = ugGet(grid, x1, y1);
-    if (tileStateSingle === UndergroundTileState.Solid || tileStateSingle === UndergroundTileState.Open) {
+    if (
+      tileStateSingle === UndergroundTileState.Solid ||
+      tileStateSingle === UndergroundTileState.Open
+    ) {
       const cmd: MarkDigTileCommand = {
         type: 'MarkDigTile',
         colonyId: PLAYER_COLONY_ID,

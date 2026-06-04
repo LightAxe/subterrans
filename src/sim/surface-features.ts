@@ -38,14 +38,14 @@ import type { WorldState } from './types.js';
  * selector output. Don't reorder.
  */
 export const SurfaceFeatureKind = {
-  Boulder:    0,
-  Bush:       1,
+  Boulder: 0,
+  Bush: 1,
   GrassClump: 2,
-  Twig:       3,  // 4×2 fallen-twig log — HardBlock
-  Leaf:       4,  // 3×3 dead leaf — HardBlock
-  BigLeaf:    5,  // 3×4 large dead leaf "ship" — HardBlock
+  Twig: 3, // 4×2 fallen-twig log — HardBlock
+  Leaf: 4, // 3×3 dead leaf — HardBlock
+  BigLeaf: 5, // 3×4 large dead leaf "ship" — HardBlock
 } as const;
-export type SurfaceFeatureKind = typeof SurfaceFeatureKind[keyof typeof SurfaceFeatureKind];
+export type SurfaceFeatureKind = (typeof SurfaceFeatureKind)[keyof typeof SurfaceFeatureKind];
 
 /**
  * How a feature affects ant movement on the tiles it covers.
@@ -60,11 +60,12 @@ export type SurfaceFeatureKind = typeof SurfaceFeatureKind[keyof typeof SurfaceF
  *     ship in step 3). Step 4 of issue #44 wires the passability guard.
  */
 export const SurfaceMovementEffect = {
-  Cosmetic:  0,
-  SoftCost:  1,
+  Cosmetic: 0,
+  SoftCost: 1,
   HardBlock: 2,
 } as const;
-export type SurfaceMovementEffect = typeof SurfaceMovementEffect[keyof typeof SurfaceMovementEffect];
+export type SurfaceMovementEffect =
+  (typeof SurfaceMovementEffect)[keyof typeof SurfaceMovementEffect];
 
 /**
  * What `surfaceFeatureAt` returns for a covered tile. Identifies which
@@ -72,13 +73,13 @@ export type SurfaceMovementEffect = typeof SurfaceMovementEffect[keyof typeof Su
  * and movement to act without recomputing.
  */
 export interface SurfaceFeatureSlice {
-  kind:               SurfaceFeatureKind;
-  variantIndex:       number;  // 0..(registry entry's variantCount - 1)
-  anchorX:            number;  // upper-left tile of the feature's footprint
-  anchorY:            number;
-  footprintTilesWide: number;  // copy of the registry value for caller convenience
+  kind: SurfaceFeatureKind;
+  variantIndex: number; // 0..(registry entry's variantCount - 1)
+  anchorX: number; // upper-left tile of the feature's footprint
+  anchorY: number;
+  footprintTilesWide: number; // copy of the registry value for caller convenience
   footprintTilesTall: number;
-  movement:           SurfaceMovementEffect;
+  movement: SurfaceMovementEffect;
 }
 
 // ---------------------------------------------------------------------------
@@ -130,46 +131,46 @@ const SURFACE_FEATURES: ReadonlyArray<SurfaceFeatureRegistryEntry> = [
   {
     kind: SurfaceFeatureKind.Boulder,
     salt: 151,
-    probability: 1,                     // ~0.4% per tile (~16 anchors / 1000 tiles × 16-tile fp ≈ 6% pre-supp)
+    probability: 1, // ~0.4% per tile (~16 anchors / 1000 tiles × 16-tile fp ≈ 6% pre-supp)
     footprintTilesWide: 4,
-    footprintTilesTall: 4,              // 64×64 px — substantial ant-scale boulder
-    variantCount: 3,                    // round / flat / lichen
+    footprintTilesTall: 4, // 64×64 px — substantial ant-scale boulder
+    variantCount: 3, // round / flat / lichen
     movement: SurfaceMovementEffect.HardBlock,
   },
   {
     kind: SurfaceFeatureKind.Twig,
     salt: 154,
-    probability: 1,                     // ~0.4% — fallen twig (6×3 = 18 tiles)
+    probability: 1, // ~0.4% — fallen twig (6×3 = 18 tiles)
     footprintTilesWide: 6,
-    footprintTilesTall: 3,              // 96×48 px — long horizontal log
-    variantCount: 2,                    // smooth / bark
+    footprintTilesTall: 3, // 96×48 px — long horizontal log
+    variantCount: 2, // smooth / bark
     movement: SurfaceMovementEffect.HardBlock,
   },
   {
     kind: SurfaceFeatureKind.Leaf,
     salt: 155,
-    probability: 1,                     // ~0.4%
+    probability: 1, // ~0.4%
     footprintTilesWide: 4,
-    footprintTilesTall: 4,              // 64×64 px
-    variantCount: 3,                    // broad / curled / torn
+    footprintTilesTall: 4, // 64×64 px
+    variantCount: 3, // broad / curled / torn
     movement: SurfaceMovementEffect.HardBlock,
   },
   {
     kind: SurfaceFeatureKind.BigLeaf,
     salt: 156,
-    probability: 1,                     // ~0.4% — the rare ship-canopy anchor
+    probability: 1, // ~0.4% — the rare ship-canopy anchor
     footprintTilesWide: 5,
-    footprintTilesTall: 6,              // 80×96 px — ant-scale "ship"
-    variantCount: 2,                    // broad / torn
+    footprintTilesTall: 6, // 80×96 px — ant-scale "ship"
+    variantCount: 2, // broad / torn
     movement: SurfaceMovementEffect.HardBlock,
   },
   {
     kind: SurfaceFeatureKind.Bush,
     salt: 152,
-    probability: 3,                     // ~1.2% — wildflower/clover clump
+    probability: 3, // ~1.2% — wildflower/clover clump
     footprintTilesWide: 4,
-    footprintTilesTall: 4,              // 64×64 px
-    variantCount: 3,                    // clover / flower / dense
+    footprintTilesTall: 4, // 64×64 px
+    variantCount: 3, // clover / flower / dense
     // A bush at ant scale reads as dense vegetation an ant pushes through,
     // not a solid wall. SoftCost; step 5 wires the actual cost.
     movement: SurfaceMovementEffect.SoftCost,
@@ -177,10 +178,10 @@ const SURFACE_FEATURES: ReadonlyArray<SurfaceFeatureRegistryEntry> = [
   {
     kind: SurfaceFeatureKind.GrassClump,
     salt: 153,
-    probability: 5,                     // ~2.0% — most common, vertical-bias spikes
+    probability: 5, // ~2.0% — most common, vertical-bias spikes
     footprintTilesWide: 4,
-    footprintTilesTall: 4,              // 64×64 px
-    variantCount: 3,                    // dense / sparse / tilted
+    footprintTilesTall: 4, // 64×64 px
+    variantCount: 3, // dense / sparse / tilted
     movement: SurfaceMovementEffect.SoftCost,
   },
 ];
@@ -330,11 +331,7 @@ function isAnchorGameplaySuppressed(
  * anchor positions.
  */
 function tileHash(tileX: number, tileY: number, salt: number, terrainSeed: number): number {
-  let h = (
-    tileX * 374761393 +
-    tileY * 668265263 +
-    (salt ^ terrainSeed) * 2246822519
-  ) | 0;
+  let h = (tileX * 374761393 + tileY * 668265263 + (salt ^ terrainSeed) * 2246822519) | 0;
   h = (h ^ (h >>> 13)) | 0;
   h = Math.imul(h, 1274126177);
   return (h ^ (h >>> 16)) >>> 0;
@@ -480,14 +477,18 @@ export function surfaceFeatureAt(
         if (isAnchorSuppressedByOverlap(world, ax, ay, ei, terrainSeed)) {
           break;
         }
-        if (isAnchorGameplaySuppressed(world, ax, ay, entry.footprintTilesWide, entry.footprintTilesTall)) {
+        if (
+          isAnchorGameplaySuppressed(
+            world,
+            ax,
+            ay,
+            entry.footprintTilesWide,
+            entry.footprintTilesTall,
+          )
+        ) {
           break;
         }
-        if (
-          bestEntryIndex < 0 ||
-          ay < bestAy ||
-          (ay === bestAy && ax < bestAx)
-        ) {
+        if (bestEntryIndex < 0 || ay < bestAy || (ay === bestAy && ax < bestAx)) {
           bestAx = ax;
           bestAy = ay;
           bestEntryIndex = ei;

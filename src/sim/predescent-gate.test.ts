@@ -83,13 +83,13 @@ function spawnInvaderOnEnemyEntrance(world: WorldState): number {
   const id = allocateEntityId(world);
   initAnt(world.ants, id, {
     colonyId: PLAYER_COLONY_ID,
-    posX:     center(ENEMY_START_X),
-    posY:     center(ENEMY_START_Y),
-    task:     AntTask.Fighting,
-    subTask:  0,
-    speed:    WORKER_BASE_SPEED,
+    posX: center(ENEMY_START_X),
+    posY: center(ENEMY_START_Y),
+    task: AntTask.Fighting,
+    subTask: 0,
+    speed: WORKER_BASE_SPEED,
     lifespan: WORKER_LIFESPAN_TICKS,
-    zone:     Zone.Surface,
+    zone: Zone.Surface,
   });
   world.colonies[PLAYER_COLONY_ID]!.workers.push(id);
   world.colonies[PLAYER_COLONY_ID]!.workerCount += 1;
@@ -105,14 +105,14 @@ function spawnCarrierOnPlayerEntrance(world: WorldState): number {
   const id = allocateEntityId(world);
   initAnt(world.ants, id, {
     colonyId: PLAYER_COLONY_ID,
-    posX:     center(PLAYER_START_X),
-    posY:     center(PLAYER_START_Y),
-    task:     AntTask.Foraging,
-    subTask:  ForagingSubState.CarryingFood,
-    speed:    WORKER_BASE_SPEED,
+    posX: center(PLAYER_START_X),
+    posY: center(PLAYER_START_Y),
+    task: AntTask.Foraging,
+    subTask: ForagingSubState.CarryingFood,
+    speed: WORKER_BASE_SPEED,
     lifespan: WORKER_LIFESPAN_TICKS,
-    hp:       COMBAT_HP_BASE,
-    zone:     Zone.Surface,
+    hp: COMBAT_HP_BASE,
+    zone: Zone.Surface,
   });
   world.ants.foodCarrying[id] = FP_ONE; // carrying food → has descent intent
   world.colonies[PLAYER_COLONY_ID]!.workers.push(id);
@@ -170,7 +170,10 @@ describe('pre-descent gate — #164 foreign Fighter vs. a surface queen on an en
     let descended = false;
     for (let i = 0; i < 5; i++) {
       tick(world, []);
-      if (world.ants.zone[invaderId] === Zone.Underground) { descended = true; break; }
+      if (world.ants.zone[invaderId] === Zone.Underground) {
+        descended = true;
+        break;
+      }
     }
 
     expect(descended).toBe(true);
@@ -223,7 +226,10 @@ describe('pre-descent gate — #165 rampaging spider blockade at an entrance', (
     let descended = false;
     for (let i = 0; i < 5; i++) {
       tick(world, []);
-      if (world.ants.zone[carrierId] === Zone.Underground) { descended = true; break; }
+      if (world.ants.zone[carrierId] === Zone.Underground) {
+        descended = true;
+        break;
+      }
     }
 
     expect(descended).toBe(true);

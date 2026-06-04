@@ -105,7 +105,7 @@ export function allocateWorkers(
   // floors negatives to 0 so `(available * ratio.forage / total) | 0` cannot
   // produce a negative integer (which would yield a nonsense allocation).
   const forageWeight = Math.max(0, ratio.forage | 0);
-  const fightWeight  = Math.max(0, ratio.fight  | 0);
+  const fightWeight = Math.max(0, ratio.fight | 0);
 
   const total = forageWeight + fightWeight;
   if (total === 0 || available === 0) {
@@ -115,14 +115,14 @@ export function allocateWorkers(
   // eslint-disable-next-line no-restricted-syntax -- PRD §7b integer ratio, not float math
   const forage = ((available * forageWeight) / total) | 0;
   // eslint-disable-next-line no-restricted-syntax -- PRD §7b integer ratio, not float math
-  const fight  = ((available * fightWeight)  / total) | 0;
+  const fight = ((available * fightWeight) / total) | 0;
   const remainder = available - forage - fight;
 
   return {
-    nurse:  nurseCount,
+    nurse: nurseCount,
     forage: forage + (remainder > 0 ? 1 : 0),
-    dig:    0,
-    fight:  fight,
+    dig: 0,
+    fight: fight,
   };
 }
 
@@ -203,10 +203,26 @@ export function computeDigDemand(
     // mid-excavation would falsely report unreachable for one tick of
     // the dig cycle, briefly suppressing demand and causing the
     // forage-carve to wobble.
-    if (x > 0     && (data[i - 1] === UndergroundTileState.Open || data[i - 1] === UndergroundTileState.BeingDug)) return 1;
-    if (x < w - 1 && (data[i + 1] === UndergroundTileState.Open || data[i + 1] === UndergroundTileState.BeingDug)) return 1;
-    if (y > 0     && (data[i - w] === UndergroundTileState.Open || data[i - w] === UndergroundTileState.BeingDug)) return 1;
-    if (y < h - 1 && (data[i + w] === UndergroundTileState.Open || data[i + w] === UndergroundTileState.BeingDug)) return 1;
+    if (
+      x > 0 &&
+      (data[i - 1] === UndergroundTileState.Open || data[i - 1] === UndergroundTileState.BeingDug)
+    )
+      return 1;
+    if (
+      x < w - 1 &&
+      (data[i + 1] === UndergroundTileState.Open || data[i + 1] === UndergroundTileState.BeingDug)
+    )
+      return 1;
+    if (
+      y > 0 &&
+      (data[i - w] === UndergroundTileState.Open || data[i - w] === UndergroundTileState.BeingDug)
+    )
+      return 1;
+    if (
+      y < h - 1 &&
+      (data[i + w] === UndergroundTileState.Open || data[i + w] === UndergroundTileState.BeingDug)
+    )
+      return 1;
   }
   return 0;
 }

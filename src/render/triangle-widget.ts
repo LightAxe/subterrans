@@ -22,16 +22,16 @@ import type { GfxLike } from './draw-surface.js';
 // giving an 88-pixel-wide horizontal track. 4-pixel-thick rendered track.
 // ---------------------------------------------------------------------------
 
-const TRACK_LEFT  = HUD.TRIANGLE.x + 16;                  // 24
+const TRACK_LEFT = HUD.TRIANGLE.x + 16; // 24
 const TRACK_RIGHT = HUD.TRIANGLE.x + HUD.TRIANGLE.w - 16; // 112
-const TRACK_Y     = HUD.TRIANGLE.y + HUD.TRIANGLE.h / 2;  // 554
-const TRACK_LEN   = TRACK_RIGHT - TRACK_LEFT;             // 88
+const TRACK_Y = HUD.TRIANGLE.y + HUD.TRIANGLE.h / 2; // 554
+const TRACK_LEN = TRACK_RIGHT - TRACK_LEFT; // 88
 
 export const SLIDER_GEOMETRY = {
-  trackLeft:  TRACK_LEFT,
+  trackLeft: TRACK_LEFT,
   trackRight: TRACK_RIGHT,
-  trackY:     TRACK_Y,
-  trackLen:   TRACK_LEN,
+  trackY: TRACK_Y,
+  trackLen: TRACK_LEN,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -39,7 +39,7 @@ export const SLIDER_GEOMETRY = {
 // ---------------------------------------------------------------------------
 
 export interface SliderDragState {
-  isDragging:  boolean;
+  isDragging: boolean;
   targetRatio: { forage: number; fight: number };
 }
 
@@ -65,10 +65,10 @@ export function screenToSliderRatio(px: number): { forage: number; fight: number
   // return `{forage: NaN, fight: NaN}`, corrupting colony.targetRatio. Fall
   // back to the safe default rather than poisoning state.
   if (TRACK_LEN <= 0) return { forage: 10, fight: 0 };
-  const t = (px - TRACK_LEFT) / TRACK_LEN;       // float in [0,1] (clamped below)
+  const t = (px - TRACK_LEFT) / TRACK_LEN; // float in [0,1] (clamped below)
   const tc = Math.max(0, Math.min(1, t));
   // 11 discrete steps: 0,1,...,10. fight gets `Math.round(tc * 10)`; forage = 10 - fight.
-  const fight  = Math.round(tc * 10);
+  const fight = Math.round(tc * 10);
   const forage = 10 - fight;
   return { forage, fight };
 }
@@ -80,7 +80,10 @@ export function screenToSliderRatio(px: number): { forage: number; fight: number
 // are zero (degenerate save-migration edge case), pins to the track center.
 // ---------------------------------------------------------------------------
 
-export function ratioToSliderPos(ratio: { forage: number; fight: number }): { x: number; y: number } {
+export function ratioToSliderPos(ratio: { forage: number; fight: number }): {
+  x: number;
+  y: number;
+} {
   const total = ratio.forage + ratio.fight;
   // Degenerate: pin to center if both are 0.
   const t = total === 0 ? 0.5 : ratio.fight / total;
@@ -117,9 +120,9 @@ export function isInsideSlider(px: number, py: number): boolean {
 // ---------------------------------------------------------------------------
 
 export function drawSlider(
-  gfx:          GfxLike,
+  gfx: GfxLike,
   currentRatio: { forage: number; fight: number },
-  targetRatio:  { forage: number; fight: number },
+  targetRatio: { forage: number; fight: number },
 ): void {
   // Zone background — semi-transparent dark fill behind the slider so labels
   // and markers stay readable against the surface beneath.

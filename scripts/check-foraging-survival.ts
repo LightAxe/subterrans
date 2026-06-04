@@ -24,7 +24,8 @@ import { register } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
 register(
-  'data:text/javascript,' + encodeURIComponent(`
+  'data:text/javascript,' +
+    encodeURIComponent(`
     export async function resolve(specifier, context, nextResolve) {
       if (specifier.endsWith('.js')) {
         const tsSpec = specifier.slice(0, -3) + '.ts';
@@ -37,9 +38,9 @@ register(
 );
 
 const { createScenario } = await import('../src/sim/scenario.js');
-const { tick }           = await import('../src/sim/tick.js');
+const { tick } = await import('../src/sim/tick.js');
 const { PLAYER_COLONY_ID, ENEMY_COLONY_ID } = await import('../src/sim/constants.js');
-const { isAlive }        = await import('../src/sim/ant/ant-store.js');
+const { isAlive } = await import('../src/sim/ant/ant-store.js');
 
 function parseArg(name: string, fallback: number): number {
   const prefix = `--${name}=`;
@@ -58,19 +59,19 @@ const TICKS = parseArg('ticks', 2000);
 interface SeedResult {
   seed: number;
   playerAlive: boolean;
-  enemyAlive:  boolean;
+  enemyAlive: boolean;
   playerFirstDeposit: number | null;
-  enemyFirstDeposit:  number | null;
+  enemyFirstDeposit: number | null;
   playerFoodStored: number;
-  enemyFoodStored:  number;
+  enemyFoodStored: number;
 }
 
 function runSeed(seed: number): SeedResult {
   const world = createScenario(seed);
   let playerFirst: number | null = null;
-  let enemyFirst:  number | null = null;
+  let enemyFirst: number | null = null;
   let prevPlayer = world.colonies[PLAYER_COLONY_ID]!.foodStored;
-  let prevEnemy  = world.colonies[ENEMY_COLONY_ID]!.foodStored;
+  let prevEnemy = world.colonies[ENEMY_COLONY_ID]!.foodStored;
 
   for (let t = 0; t < TICKS; t++) {
     const cmds = world.commandQueue.splice(0);
@@ -78,21 +79,21 @@ function runSeed(seed: number): SeedResult {
     const pf = world.colonies[PLAYER_COLONY_ID]!.foodStored;
     const ef = world.colonies[ENEMY_COLONY_ID]!.foodStored;
     if (playerFirst === null && pf > prevPlayer) playerFirst = t;
-    if (enemyFirst  === null && ef > prevEnemy ) enemyFirst  = t;
+    if (enemyFirst === null && ef > prevEnemy) enemyFirst = t;
     prevPlayer = pf;
-    prevEnemy  = ef;
+    prevEnemy = ef;
   }
 
   const playerColony = world.colonies[PLAYER_COLONY_ID]!;
-  const enemyColony  = world.colonies[ENEMY_COLONY_ID]!;
+  const enemyColony = world.colonies[ENEMY_COLONY_ID]!;
   return {
     seed,
     playerAlive: isAlive(world.ants, playerColony.queenEntityId),
-    enemyAlive:  isAlive(world.ants, enemyColony.queenEntityId),
+    enemyAlive: isAlive(world.ants, enemyColony.queenEntityId),
     playerFirstDeposit: playerFirst,
-    enemyFirstDeposit:  enemyFirst,
+    enemyFirstDeposit: enemyFirst,
     playerFoodStored: playerColony.foodStored,
-    enemyFoodStored:  enemyColony.foodStored,
+    enemyFoodStored: enemyColony.foodStored,
   };
 }
 
@@ -120,34 +121,36 @@ for (let s = 0; s < SEEDS; s++) {
 }
 const elapsed = ((Date.now() - start) / 1000).toFixed(1);
 
-const playerAlive = results.filter(r => r.playerAlive).length;
-const enemyAlive  = results.filter(r => r.enemyAlive).length;
-const playerNoDeposit = results.filter(r => r.playerFirstDeposit === null).length;
-const enemyNoDeposit  = results.filter(r => r.enemyFirstDeposit  === null).length;
+const playerAlive = results.filter((r) => r.playerAlive).length;
+const enemyAlive = results.filter((r) => r.enemyAlive).length;
+const playerNoDeposit = results.filter((r) => r.playerFirstDeposit === null).length;
+const enemyNoDeposit = results.filter((r) => r.enemyFirstDeposit === null).length;
 
 const playerFirsts = results
-  .map(r => r.playerFirstDeposit)
+  .map((r) => r.playerFirstDeposit)
   .filter((x): x is number => x !== null)
   .sort((a, b) => a - b);
 const enemyFirsts = results
-  .map(r => r.enemyFirstDeposit)
+  .map((r) => r.enemyFirstDeposit)
   .filter((x): x is number => x !== null)
   .sort((a, b) => a - b);
 
 const playerMedian = median(playerFirsts);
-const playerP90    = percentile(playerFirsts, 90);
-const playerP95    = percentile(playerFirsts, 95);
-const enemyMedian  = median(enemyFirsts);
-const enemyP90     = percentile(enemyFirsts, 90);
-const enemyP95     = percentile(enemyFirsts, 95);
+const playerP90 = percentile(playerFirsts, 90);
+const playerP95 = percentile(playerFirsts, 95);
+const enemyMedian = median(enemyFirsts);
+const enemyP90 = percentile(enemyFirsts, 90);
+const enemyP95 = percentile(enemyFirsts, 95);
 
 console.log('');
 console.log(`== 09 excursion-foraging memo QC gate ==`);
 console.log(`Seeds: ${SEEDS}  Ticks: ${TICKS}  Elapsed: ${elapsed}s`);
 console.log('');
 console.log('Queen survival @ tick ' + TICKS + ':');
-console.log(`  Player: ${playerAlive}/${SEEDS} alive (${((playerAlive / SEEDS) * 100).toFixed(1)}%)`);
-console.log(`  Enemy:  ${enemyAlive}/${SEEDS} alive (${((enemyAlive  / SEEDS) * 100).toFixed(1)}%)`);
+console.log(
+  `  Player: ${playerAlive}/${SEEDS} alive (${((playerAlive / SEEDS) * 100).toFixed(1)}%)`,
+);
+console.log(`  Enemy:  ${enemyAlive}/${SEEDS} alive (${((enemyAlive / SEEDS) * 100).toFixed(1)}%)`);
 console.log('');
 console.log('No-deposit seeds (never picked up food):');
 console.log(`  Player: ${playerNoDeposit}/${SEEDS}`);

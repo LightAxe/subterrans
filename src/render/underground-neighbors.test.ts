@@ -5,15 +5,8 @@
 // classification rules surfaces here rather than as a render-output diff.
 
 import { describe, expect, it } from 'vitest';
-import {
-  classifyUndergroundTile,
-  gatherUnderground3x3Neighbors,
-} from './underground-neighbors.js';
-import {
-  createUndergroundGrid,
-  ugSet,
-  UndergroundTileState,
-} from '../sim/terrain.js';
+import { classifyUndergroundTile, gatherUnderground3x3Neighbors } from './underground-neighbors.js';
+import { createUndergroundGrid, ugSet, UndergroundTileState } from '../sim/terrain.js';
 
 const NO_ENTRANCES: ReadonlySet<number> = new Set();
 
@@ -37,9 +30,9 @@ describe('classifyUndergroundTile', () => {
   it('classifies all out-of-bounds positions as wall', () => {
     const grid = createUndergroundGrid(4, 4);
     expect(classifyUndergroundTile(grid, -1, 0, NO_ENTRANCES)).toBe('wall');
-    expect(classifyUndergroundTile(grid,  0, -1, NO_ENTRANCES)).toBe('wall');
-    expect(classifyUndergroundTile(grid,  4, 0, NO_ENTRANCES)).toBe('wall');
-    expect(classifyUndergroundTile(grid,  0, 4, NO_ENTRANCES)).toBe('wall');
+    expect(classifyUndergroundTile(grid, 0, -1, NO_ENTRANCES)).toBe('wall');
+    expect(classifyUndergroundTile(grid, 4, 0, NO_ENTRANCES)).toBe('wall');
+    expect(classifyUndergroundTile(grid, 0, 4, NO_ENTRANCES)).toBe('wall');
     // Way out — same answer.
     expect(classifyUndergroundTile(grid, -100, -100, NO_ENTRANCES)).toBe('wall');
   });
@@ -82,9 +75,15 @@ describe('gatherUnderground3x3Neighbors', () => {
     // rule unless the entrance set says otherwise — verify both branches.
     const noEntrance = gatherUnderground3x3Neighbors(grid, 1, 1, NO_ENTRANCES);
     expect(noEntrance).toEqual({
-      nw: 'wall', n: 'wall', ne: 'wall',
-      w:  'open', c: 'open', e:  'open',
-      sw: 'wall', s: 'open', se: 'wall',
+      nw: 'wall',
+      n: 'wall',
+      ne: 'wall',
+      w: 'open',
+      c: 'open',
+      e: 'open',
+      sw: 'wall',
+      s: 'open',
+      se: 'wall',
     });
 
     const withEntrance = gatherUnderground3x3Neighbors(grid, 1, 1, new Set([1]));
@@ -108,9 +107,15 @@ describe('gatherUnderground3x3Neighbors', () => {
     // out-of-bounds or ceiling, so they're all wall.
     const n = gatherUnderground3x3Neighbors(grid, 0, 0, NO_ENTRANCES);
     expect(n).toEqual({
-      nw: 'wall', n: 'wall', ne: 'wall',
-      w:  'wall', c: 'wall', e:  'wall',
-      sw: 'wall', s: 'open', se: 'open',
+      nw: 'wall',
+      n: 'wall',
+      ne: 'wall',
+      w: 'wall',
+      c: 'wall',
+      e: 'wall',
+      sw: 'wall',
+      s: 'open',
+      se: 'open',
     });
   });
 
@@ -122,13 +127,19 @@ describe('gatherUnderground3x3Neighbors', () => {
     const grid = createUndergroundGrid(3, 3);
     ugSet(grid, 1, 1, UndergroundTileState.Open);
     const scratch: ReturnType<typeof gatherUnderground3x3Neighbors> = {
-      nw: 'wall', n: 'wall', ne: 'wall',
-      w:  'wall', c: 'wall', e:  'wall',
-      sw: 'wall', s: 'wall', se: 'wall',
+      nw: 'wall',
+      n: 'wall',
+      ne: 'wall',
+      w: 'wall',
+      c: 'wall',
+      e: 'wall',
+      sw: 'wall',
+      s: 'wall',
+      se: 'wall',
     };
     const result = gatherUnderground3x3Neighbors(grid, 1, 1, NO_ENTRANCES, scratch);
-    expect(result).toBe(scratch);          // same reference, not a copy
-    expect(scratch.c).toBe('open');        // mutated in place
+    expect(result).toBe(scratch); // same reference, not a copy
+    expect(scratch.c).toBe('open'); // mutated in place
   });
 
   it('is deterministic — same inputs produce the same output every call', () => {

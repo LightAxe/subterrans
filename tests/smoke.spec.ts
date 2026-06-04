@@ -99,7 +99,9 @@ test.describe('Phase 8 smoke — boot, toggle, pan', () => {
     });
   });
 
-  test('Space + left-drag pans the surface camera without error (Phase 8.5 primary gesture)', async ({ page }) => {
+  test('Space + left-drag pans the surface camera without error (Phase 8.5 primary gesture)', async ({
+    page,
+  }) => {
     const consoleErrors: string[] = [];
     page.on('console', (msg) => {
       if (errorFilter(msg)) consoleErrors.push(msg.text());

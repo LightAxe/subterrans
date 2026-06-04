@@ -39,25 +39,25 @@ import { STARVATION_GRACE_TICKS } from '../sim/constants.js';
 import { colonyFoodCapacity, colonyFoodTotal } from '../sim/colony/colony-system.js';
 
 export interface HudStats {
-  antCount:       number;
-  foodDisplay:    number;
-  foodCapacity:   number;
+  antCount: number;
+  foodDisplay: number;
+  foodCapacity: number;
   queenHealthPct: number;
-  queenAlive:     boolean;
+  queenAlive: boolean;
 }
 
 export type QueenHealthState = 'dead' | 'critical' | 'moderate' | 'healthy';
 
 export const HUD_STATS_COLORS = {
-  background:      0x000000,
+  background: 0x000000,
   backgroundAlpha: 0.6,
-  barTrack:        0x333333,
-  barHealthy:      0x22bb44,
-  barModerate:     0xddaa22,
-  barCritical:     0xcc3322,
-  antsTextCss:     '#ffffff',
-  foodTextCss:     '#22bb44',
-  queenLabelCss:   '#ffffff',
+  barTrack: 0x333333,
+  barHealthy: 0x22bb44,
+  barModerate: 0xddaa22,
+  barCritical: 0xcc3322,
+  antsTextCss: '#ffffff',
+  foodTextCss: '#22bb44',
+  queenLabelCss: '#ffffff',
 } as const;
 
 export const HUD_STATS_LAYOUT = {
@@ -65,42 +65,42 @@ export const HUD_STATS_LAYOUT = {
   // Ants+Food; row 2 carries the Queen label + health bar. yOffsets are
   // relative to HUD.STATS.y and chosen so the 10px Text widgets + the 6px
   // bar all sit inside the 24px rect.
-  row1YOffset: 1,  // canvas y = 9
+  row1YOffset: 1, // canvas y = 9
   row2YOffset: 13, // canvas y = 21
   leftTextInset: 4,
   queenBar: {
-    w:          48,
-    h:          6,
-    yOffset:    16, // canvas y = 24 → bar spans y=24..30 (inside rect)
+    w: 48,
+    h: 6,
+    yOffset: 16, // canvas y = 24 → bar spans y=24..30 (inside rect)
     rightInset: 6,
   },
   queenLabel: {
     // Restored to a readable "Queen" label (09 HUD clarity pass). The
     // single-char 'Q' was ambiguous enough that players couldn't tell which
     // stat the color-coded bar belonged to. Two-row layout makes space.
-    text:       'Queen',
-    w:          32, // 5 chars × ~6.4px monospace at 10px
-    yOffset:    13, // matches row 2
+    text: 'Queen',
+    w: 32, // 5 chars × ~6.4px monospace at 10px
+    yOffset: 13, // matches row 2
   },
 } as const;
 
 export function computeHudStats(world: WorldState, colony: ColonyRecord): HudStats {
-  const queenAlive  = isAlive(world.ants, colony.queenEntityId);
-  const queenBit    = queenAlive ? 1 : 0;
+  const queenAlive = isAlive(world.ants, colony.queenEntityId);
+  const queenBit = queenAlive ? 1 : 0;
   // Phase 9 fix: count capable ants only (workers + living queen). Eggs and
   // larvae are excluded because they cannot execute any task; folding them in
   // produced a "total headcount" the player read as "usable headcount".
-  const antCount     = colony.workerCount + queenBit;
+  const antCount = colony.workerCount + queenBit;
   // Issue #15: foodTotal sums the entrance pool (colony.foodStored) plus every
   // FoodStorage chamber's per-chamber foodStored — the HUD must show the
   // player the whole stash, not just the chamberless fallback bucket.
-  const foodDisplay  = colonyFoodTotal(colony) >> FP_SHIFT;
+  const foodDisplay = colonyFoodTotal(colony) >> FP_SHIFT;
   const foodCapacity = colonyFoodCapacity(colony) >> FP_SHIFT;
 
   let queenHealthPct = 0;
   if (queenAlive) {
     const raw = colony.queenStarvationTimer / STARVATION_GRACE_TICKS;
-    const t   = raw < 0 ? 0 : (raw > 1 ? 1 : raw);
+    const t = raw < 0 ? 0 : raw > 1 ? 1 : raw;
     queenHealthPct = Math.round(t * 100);
   }
 
@@ -116,32 +116,45 @@ export function formatFoodLabel(s: HudStats): string {
 }
 
 export function queenHealthState(s: HudStats): QueenHealthState {
-  if (!s.queenAlive)       return 'dead';
-  if (s.queenHealthPct > 50)  return 'healthy';
+  if (!s.queenAlive) return 'dead';
+  if (s.queenHealthPct > 50) return 'healthy';
   if (s.queenHealthPct >= 25) return 'moderate';
   return 'critical';
 }
 
 export function queenHealthBarColor(s: HudStats): number {
   switch (queenHealthState(s)) {
-    case 'healthy':  return HUD_STATS_COLORS.barHealthy;
-    case 'moderate': return HUD_STATS_COLORS.barModerate;
+    case 'healthy':
+      return HUD_STATS_COLORS.barHealthy;
+    case 'moderate':
+      return HUD_STATS_COLORS.barModerate;
     case 'dead':
-    case 'critical': return HUD_STATS_COLORS.barCritical;
+    case 'critical':
+      return HUD_STATS_COLORS.barCritical;
   }
 }
 
 export function queenHealthBarFillWidth(s: HudStats, totalW: number): number {
   if (!s.queenAlive) return 0;
   const w = Math.round((totalW * s.queenHealthPct) / 100);
-  if (w < 0)      return 0;
+  if (w < 0) return 0;
   if (w > totalW) return totalW;
   return w;
 }
 
-export interface QueenBarRect { x: number; y: number; w: number; h: number; }
+export interface QueenBarRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
-export function queenBarRect(statsRect: { x: number; y: number; w: number; h: number }): QueenBarRect {
+export function queenBarRect(statsRect: {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}): QueenBarRect {
   const { w, h, yOffset, rightInset } = HUD_STATS_LAYOUT.queenBar;
   return {
     x: statsRect.x + statsRect.w - rightInset - w,
@@ -151,7 +164,12 @@ export function queenBarRect(statsRect: { x: number; y: number; w: number; h: nu
   };
 }
 
-export interface QueenLabelRect { x: number; y: number; w: number; h: number; }
+export interface QueenLabelRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 /**
  * queenLabelRect — placement for the "Queen" label on row 2 of the HUD stats
@@ -159,7 +177,12 @@ export interface QueenLabelRect { x: number; y: number; w: number; h: number; }
  * health bar is right-anchored on the same row, so the label and bar read
  * as a horizontal unit without needing to overlap the Food total on row 1.
  */
-export function queenLabelRect(statsRect: { x: number; y: number; w: number; h: number }): QueenLabelRect {
+export function queenLabelRect(statsRect: {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}): QueenLabelRect {
   const { w, yOffset } = HUD_STATS_LAYOUT.queenLabel;
   return {
     x: statsRect.x + HUD_STATS_LAYOUT.leftTextInset,

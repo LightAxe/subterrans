@@ -308,16 +308,10 @@ export const SIM_VERSION_V23_SPIDER_AGGRO = 23 as const;
 export const SIM_VERSION_V24_NURSERY_CAPACITY = 24 as const;
 export const LATEST_SIM_VERSION = SIM_VERSION_V24_NURSERY_CAPACITY;
 
-
 /**
  * S2 — AI colony state machine states.
  */
-export type AIState =
-  | 'Peacetime'
-  | 'WarFooting'
-  | 'Probing'
-  | 'Invading'
-  | 'Recovery';
+export type AIState = 'Peacetime' | 'WarFooting' | 'Probing' | 'Invading' | 'Recovery';
 
 /**
  * S2 — Per-AI-colony state record. Lives in WorldState.aiState[].
@@ -336,45 +330,45 @@ export type SpiderBehaviorState =
 /** S3 — Single neutral spider entity. Lives in WorldState.spider (null if not in scenario). */
 export interface SpiderState {
   state: SpiderBehaviorState;
-  posX: number;                    // fixed-point (FP_SHIFT=8)
+  posX: number; // fixed-point (FP_SHIFT=8)
   posY: number;
-  lairTileX: number;               // integer tile coords
+  lairTileX: number; // integer tile coords
   lairTileY: number;
   territoryRadiusTiles: number;
   hp: number;
   attackCooldown: number;
-  hungerTicks: number;             // accrues only while state !== 'Feeding'
+  hungerTicks: number; // accrues only while state !== 'Feeding'
   nextHuntTick: number;
   huntStartTick: number;
   strikeStartTick: number;
   feedingStartTick: number;
   retreatStartTick: number;
-  rampageStartTick: number;          // tick at which current Rampaging episode began
+  rampageStartTick: number; // tick at which current Rampaging episode began
   huntTargetTileX: number;
   huntTargetTileY: number;
   killsThisStrike: number;
   rampageKillsThisRampage: number;
-  rampageTargetColonyId: number;  // colony targeted for current rampage; -1 when not rampaging
-  chaseTargetAntId: number;       // V23: ant id being chased; -1 when not Chasing
-  chaseStartTick: number;         // V23: tick the current chase began (leash-timeout reference)
-  killedThisTick: number;         // V23: 0/1 flag set by combat (step 17), consumed by tickSpider (17.5); never persists as 1
-  lastKillTileX: number;          // V23: tile of the most recent kill (= spider tile); -1 default
+  rampageTargetColonyId: number; // colony targeted for current rampage; -1 when not rampaging
+  chaseTargetAntId: number; // V23: ant id being chased; -1 when not Chasing
+  chaseStartTick: number; // V23: tick the current chase began (leash-timeout reference)
+  killedThisTick: number; // V23: 0/1 flag set by combat (step 17), consumed by tickSpider (17.5); never persists as 1
+  lastKillTileX: number; // V23: tile of the most recent kill (= spider tile); -1 default
   lastKillTileY: number;
-  feedAwayTileX: number;          // V23: ~10-tile feed destination after a kill; -1 default
+  feedAwayTileX: number; // V23: ~10-tile feed destination after a kill; -1 default
   feedAwayTileY: number;
-  feedArrivedTick: number;        // V23: tick the spider reached feedAwayTile (heal-window clock); -1 while traveling
+  feedArrivedTick: number; // V23: tick the spider reached feedAwayTile (heal-window clock); -1 while traveling
 }
 
 export interface AIStateRecord {
   colonyId: ColonyId;
   state: AIState;
-  enteredTick: number;             // tick at which the current state was entered
-  probeCount: number;              // probes fired since last Peacetime
-  lastProbeEndTick: number;        // for spacing between probes
-  invasionStartTick: number;       // 0 if not Invading
-  invasionRallyTileX: number;      // -1 if no active rally; integer tile coords
+  enteredTick: number; // tick at which the current state was entered
+  probeCount: number; // probes fired since last Peacetime
+  lastProbeEndTick: number; // for spacing between probes
+  invasionStartTick: number; // 0 if not Invading
+  invasionRallyTileX: number; // -1 if no active rally; integer tile coords
   invasionRallyTileY: number;
-  recoveryEndTick: number;         // 0 if not in Recovery
+  recoveryEndTick: number; // 0 if not in Recovery
 
   // Committed-force operation tracking (CF-P0-005)
   operationKind: 'None' | 'Probe' | 'Invasion';
@@ -382,16 +376,16 @@ export interface AIStateRecord {
   operationTargetTileX: number;
   operationTargetTileY: number;
   operationFighterIds: Int32Array; // committed cohort, fixed-length buffer (AI_MAX_OPERATION_FIGHTERS=32), padded with -1
-  operationFighterCount: number;   // active length of operationFighterIds
+  operationFighterCount: number; // active length of operationFighterIds
   operationStartFighterCount: number;
   operationAttackerDeaths: number;
   operationDefenderDeaths: number;
 }
 
 export interface WorldState {
-  tick: number;             // 0 at creation; incremented once per tick
-  rngState: number;         // Mulberry32 state (uint32); initialized from seed
-  nextEntityId: EntityId;   // starts at 0 (PRD §3); allocateEntityId returns current and post-increments
+  tick: number; // 0 at creation; incremented once per tick
+  rngState: number; // Mulberry32 state (uint32); initialized from seed
+  nextEntityId: EntityId; // starts at 0 (PRD §3); allocateEntityId returns current and post-increments
   commandQueue: SimCommand[]; // staging seam — drained by platform accumulator between ticks
 
   /**
@@ -495,14 +489,14 @@ export interface WorldState {
   terrainSeed: number;
 
   // Phase 6 additions (PRD §3):
-  ants: AntComponents;                          // SoA ant component storage — 17 parallel Int32Arrays
-  colonies: Record<ColonyId, ColonyRecord>;     // per-colony state keyed by integer ColonyId
+  ants: AntComponents; // SoA ant component storage — 17 parallel Int32Arrays
+  colonies: Record<ColonyId, ColonyRecord>; // per-colony state keyed by integer ColonyId
   pheromoneGrids: Record<string, PheromoneGrid>; // pheromone intensity grids keyed by pheromoneGridKey()
 
   // Phase 7 additions (PRD §2e):
-  surface: SurfaceGrid;                                    // shared surface terrain (SURF-01)
-  undergroundGrids: Record<ColonyId, UndergroundGrid>;     // per-colony underground (UNDR-08)
-  foodPiles: FoodPile[];                                   // surface food sources (SURF-02 + issue #112 depletion/respawn)
+  surface: SurfaceGrid; // shared surface terrain (SURF-01)
+  undergroundGrids: Record<ColonyId, UndergroundGrid>; // per-colony underground (UNDR-08)
+  foodPiles: FoodPile[]; // surface food sources (SURF-02 + issue #112 depletion/respawn)
 
   /**
    * Issue #112 — Bounded record of recently-depleted food-pile tiles, used by
@@ -513,7 +507,7 @@ export interface WorldState {
    */
   recentlyDepletedFood: DepletionRecord[];
 
-  pendingChambers: Record<string, PendingChamber>;         // keyed by `${colonyId}:${anchorTileX}:${anchorTileY}` (PRD §2d)
+  pendingChambers: Record<string, PendingChamber>; // keyed by `${colonyId}:${anchorTileX}:${anchorTileY}` (PRD §2d)
 
   // S0b — playtrace telemetry (ADR-0013 v2 / D-31 / D-34).
   // events: accumulated this session; NOT serialized to saves (transient —
@@ -570,7 +564,7 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
   return {
     tick: 0,
     rngState: seedU32,
-    nextEntityId: 0,      // PRD §3 line 130: starts at 0, no recycling
+    nextEntityId: 0, // PRD §3 line 130: starts at 0, no recycling
     commandQueue: [],
     simVersion: LATEST_SIM_VERSION,
     difficulty: 'Normal',
@@ -586,8 +580,8 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
     surface: createSurfaceGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT),
     undergroundGrids: {},
     foodPiles: [],
-    recentlyDepletedFood: [],   // issue #112 — empty until first depletion
-    pendingChambers: {},    // empty Record; PlaceChamberCommand creates entries
+    recentlyDepletedFood: [], // issue #112 — empty until first depletion
+    pendingChambers: {}, // empty Record; PlaceChamberCommand creates entries
     // S0b — telemetry fields.
     events: [],
     droppedCombatKillCount: 0,
@@ -816,29 +810,29 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
       dst.colonies[colonyId] = createColonyRecord(s.colonyId, s.queenEntityId);
       // Phase 3 PRD §2a caller-side extension defaults (factory does not set these):
       const fresh = dst.colonies[colonyId]!;
-      fresh.entrances         = [];
-      fresh.rallyPoint        = null;
+      fresh.entrances = [];
+      fresh.rallyPoint = null;
       fresh.digFlowFieldDirty = false;
       fresh.foodFlowFieldDirty = false;
-      fresh.killCount         = 0;
+      fresh.killCount = 0;
       fresh.priorityFoodPileId = null;
     }
     const d = dst.colonies[colonyId]!;
 
     // Scalar fields — direct assignment
-    d.colonyId             = s.colonyId;
-    d.queenEntityId        = s.queenEntityId;
+    d.colonyId = s.colonyId;
+    d.queenEntityId = s.queenEntityId;
     d.queenStarvationTimer = s.queenStarvationTimer;
-    d.foodStored           = s.foodStored;
-    d.workerCount          = s.workerCount;
-    d.eggCount             = s.eggCount;
-    d.larvaeCount          = s.larvaeCount;
-    d.nurseCount           = s.nurseCount;
-    d.defeated             = s.defeated;
-    d.reconcileCountdown   = s.reconcileCountdown;
-    d.killCount            = s.killCount;
-    d.priorityFoodPileId   = s.priorityFoodPileId;
-    d.queenLastEggTick     = s.queenLastEggTick;
+    d.foodStored = s.foodStored;
+    d.workerCount = s.workerCount;
+    d.eggCount = s.eggCount;
+    d.larvaeCount = s.larvaeCount;
+    d.nurseCount = s.nurseCount;
+    d.defeated = s.defeated;
+    d.reconcileCountdown = s.reconcileCountdown;
+    d.killCount = s.killCount;
+    d.priorityFoodPileId = s.priorityFoodPileId;
+    d.queenLastEggTick = s.queenLastEggTick;
     d.eggIntervalNumerator = s.eggIntervalNumerator;
 
     // Bucket arrays — reuse via length truncation + index copy (no new array)
@@ -874,18 +868,18 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     // Nested plain-object fields — field-by-field copy (NOT spread — preserves object identity)
     // Phase 10 (CTRL-01'): targetRatio is two-field {forage, fight}. WorkerAllocation
     // (computedAllocation, taskCensus) keeps its `dig` slot per D-03 — auto-dig writes it.
-    d.targetRatio.forage           = s.targetRatio.forage;
-    d.targetRatio.fight            = s.targetRatio.fight;
+    d.targetRatio.forage = s.targetRatio.forage;
+    d.targetRatio.fight = s.targetRatio.fight;
 
-    d.computedAllocation.nurse     = s.computedAllocation.nurse;
-    d.computedAllocation.forage    = s.computedAllocation.forage;
-    d.computedAllocation.dig       = s.computedAllocation.dig;
-    d.computedAllocation.fight     = s.computedAllocation.fight;
+    d.computedAllocation.nurse = s.computedAllocation.nurse;
+    d.computedAllocation.forage = s.computedAllocation.forage;
+    d.computedAllocation.dig = s.computedAllocation.dig;
+    d.computedAllocation.fight = s.computedAllocation.fight;
 
-    d.taskCensus.nurse             = s.taskCensus.nurse;
-    d.taskCensus.forage            = s.taskCensus.forage;
-    d.taskCensus.dig               = s.taskCensus.dig;
-    d.taskCensus.fight             = s.taskCensus.fight;
+    d.taskCensus.nurse = s.taskCensus.nurse;
+    d.taskCensus.forage = s.taskCensus.forage;
+    d.taskCensus.dig = s.taskCensus.dig;
+    d.taskCensus.fight = s.taskCensus.fight;
 
     // Phase 3 extension fields — typed copies (no `as any` — fields are required on interface)
 
@@ -966,7 +960,8 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   }
 
   // --- Issue #112: recentlyDepletedFood — length-adjust + field-by-field copy ---
-  while (dst.recentlyDepletedFood.length > src.recentlyDepletedFood.length) dst.recentlyDepletedFood.pop();
+  while (dst.recentlyDepletedFood.length > src.recentlyDepletedFood.length)
+    dst.recentlyDepletedFood.pop();
   for (let i = 0; i < src.recentlyDepletedFood.length; i++) {
     if (i < dst.recentlyDepletedFood.length) {
       Object.assign(dst.recentlyDepletedFood[i]!, src.recentlyDepletedFood[i]!);

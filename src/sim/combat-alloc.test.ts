@@ -30,7 +30,15 @@ import type { ColonyId } from './colony/colony-store.js';
 function makeWorldWith2Colonies(seed = 42): { world: WorldState; cid1: ColonyId; cid2: ColonyId } {
   const world = createWorldState(seed);
   const queen1 = allocateEntityId(world);
-  initAnt(world.ants, queen1, { colonyId: 1, posX: 0 << FP_SHIFT, posY: 0 << FP_SHIFT, task: AntTask.Idle, subTask: 0, speed: 0, lifespan: WORKER_LIFESPAN_TICKS });
+  initAnt(world.ants, queen1, {
+    colonyId: 1,
+    posX: 0 << FP_SHIFT,
+    posY: 0 << FP_SHIFT,
+    task: AntTask.Idle,
+    subTask: 0,
+    speed: 0,
+    lifespan: WORKER_LIFESPAN_TICKS,
+  });
   const colony1 = createColonyRecord(1 as ColonyId, queen1);
   colony1.entrances = [];
   colony1.rallyPoint = null;
@@ -38,7 +46,15 @@ function makeWorldWith2Colonies(seed = 42): { world: WorldState; cid1: ColonyId;
   world.colonies[1] = colony1;
 
   const queen2 = allocateEntityId(world);
-  initAnt(world.ants, queen2, { colonyId: 2, posX: 1 << FP_SHIFT, posY: 0 << FP_SHIFT, task: AntTask.Idle, subTask: 0, speed: 0, lifespan: WORKER_LIFESPAN_TICKS });
+  initAnt(world.ants, queen2, {
+    colonyId: 2,
+    posX: 1 << FP_SHIFT,
+    posY: 0 << FP_SHIFT,
+    task: AntTask.Idle,
+    subTask: 0,
+    speed: 0,
+    lifespan: WORKER_LIFESPAN_TICKS,
+  });
   const colony2 = createColonyRecord(2 as ColonyId, queen2);
   colony2.entrances = [];
   colony2.rallyPoint = null;
@@ -48,11 +64,22 @@ function makeWorldWith2Colonies(seed = 42): { world: WorldState; cid1: ColonyId;
   return { world, cid1: 1 as ColonyId, cid2: 2 as ColonyId };
 }
 
-function spawnAnt(world: WorldState, colonyId: ColonyId, tileX: number, tileY: number, zone: Zone): number {
+function spawnAnt(
+  world: WorldState,
+  colonyId: ColonyId,
+  tileX: number,
+  tileY: number,
+  zone: Zone,
+): number {
   const id = allocateEntityId(world);
   initAnt(world.ants, id, {
-    colonyId, posX: (tileX << FP_SHIFT) + (FP_ONE >> 1), posY: (tileY << FP_SHIFT) + (FP_ONE >> 1),
-    task: AntTask.Idle, subTask: 0, speed: WORKER_BASE_SPEED, zone,
+    colonyId,
+    posX: (tileX << FP_SHIFT) + (FP_ONE >> 1),
+    posY: (tileY << FP_SHIFT) + (FP_ONE >> 1),
+    task: AntTask.Idle,
+    subTask: 0,
+    speed: WORKER_BASE_SPEED,
+    zone,
   });
   world.colonies[colonyId]!.workers.push(id);
   world.colonies[colonyId]!.workerCount += 1;

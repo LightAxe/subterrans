@@ -29,23 +29,23 @@
 // Tests use `hideAntActivityPanel()` for immediate synchronous reset.
 
 export interface AntActivityPanelState {
-  visible:     boolean;
+  visible: boolean;
   /** Set by requestHideAntActivityPanel; cleared by applyPendingAntActivityPanelHide on the next update frame. */
   pendingHide: boolean;
 }
 
 export const antActivityPanelState: AntActivityPanelState = {
-  visible:     false,
+  visible: false,
   pendingHide: false,
 };
 
 export function toggleAntActivityPanel(): void {
-  antActivityPanelState.visible     = !antActivityPanelState.visible;
+  antActivityPanelState.visible = !antActivityPanelState.visible;
   antActivityPanelState.pendingHide = false;
 }
 
 export function showAntActivityPanel(): void {
-  antActivityPanelState.visible     = true;
+  antActivityPanelState.visible = true;
   antActivityPanelState.pendingHide = false;
 }
 
@@ -54,7 +54,7 @@ export function showAntActivityPanel(): void {
  * contexts where there is no concurrent pointer dispatch to race with.
  */
 export function hideAntActivityPanel(): void {
-  antActivityPanelState.visible     = false;
+  antActivityPanelState.visible = false;
   antActivityPanelState.pendingHide = false;
 }
 
@@ -74,7 +74,7 @@ export function requestHideAntActivityPanel(): void {
  */
 export function applyPendingAntActivityPanelHide(): void {
   if (antActivityPanelState.pendingHide) {
-    antActivityPanelState.visible     = false;
+    antActivityPanelState.visible = false;
     antActivityPanelState.pendingHide = false;
   }
 }

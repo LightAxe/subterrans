@@ -1,6 +1,6 @@
 # Subterrans
 
-A modern ant colony simulation game, built for the web. A spiritual successor to Maxis's *SimAnt* (1991) — same core idea (you are the colony, not an individual ant; you influence behavior through allocation and pheromones rather than direct control), with contemporary design, determinism, and moddability baked in from the start.
+A modern ant colony simulation game, built for the web. A spiritual successor to Maxis's _SimAnt_ (1991) — same core idea (you are the colony, not an individual ant; you influence behavior through allocation and pheromones rather than direct control), with contemporary design, determinism, and moddability baked in from the start.
 
 > **Status:** early development. The simulation is working end-to-end and playable at a rough level; art, audio, and polish are ongoing. Expect things to change. See the [roadmap](https://subterrans.com/roadmap) for the current phase structure and what's next.
 
@@ -34,20 +34,21 @@ npm run dev       # launches Vite dev server, opens in browser
 ```
 
 Requirements:
+
 - **Node.js 22 LTS or newer**
 - A Chromium-based browser for the Playwright E2E suite (`npx playwright install` on first run).
 
 Useful scripts:
 
-| Command | What it does |
-| --- | --- |
-| `npm run dev` | Vite dev server with hot reload |
-| `npm run build` | Production build |
-| `npm test` | Vitest unit/integration tests |
-| `npm run test:e2e` | Playwright browser tests |
-| `npm run typecheck` | TypeScript in `--noEmit` mode |
-| `npm run lint` | ESLint |
-| `npm run verify` | Lint + typecheck + sim-boundary check + tests (what CI runs) |
+| Command             | What it does                                                 |
+| ------------------- | ------------------------------------------------------------ |
+| `npm run dev`       | Vite dev server with hot reload                              |
+| `npm run build`     | Production build                                             |
+| `npm test`          | Vitest unit/integration tests                                |
+| `npm run test:e2e`  | Playwright browser tests                                     |
+| `npm run typecheck` | TypeScript in `--noEmit` mode                                |
+| `npm run lint`      | ESLint                                                       |
+| `npm run verify`    | Lint + typecheck + sim-boundary check + tests (what CI runs) |
 
 ---
 
@@ -69,9 +70,10 @@ Full detail in [ARCHITECTURE.md](ARCHITECTURE.md). A condensed contributor refer
 We welcome contributions, and the project is partly an experiment in AI-driven development — so contributions written with AI coding assistants are the norm, not the exception. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations.
 
 Quick pointers:
+
 - Small fixes: open a PR.
 - Anything on the roadmap: open an issue to claim it, then PR.
-- Anything *off* the roadmap: talk to us first — open an issue or discussion before starting work.
+- Anything _off_ the roadmap: talk to us first — open an issue or discussion before starting work.
 
 Past and present contributors are listed in [CONTRIBUTORS.md](CONTRIBUTORS.md).
 
@@ -87,5 +89,5 @@ In plain English: you can use, modify, and redistribute Subterrans freely, but a
 
 ## Acknowledgements
 
-- Maxis and the original *SimAnt* (1991) team, for making the game that made this one necessary.
+- Maxis and the original _SimAnt_ (1991) team, for making the game that made this one necessary.
 - The Phaser, Vite, Vitest, and Playwright communities for the tools this project stands on.

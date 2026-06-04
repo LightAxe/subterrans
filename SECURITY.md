@@ -36,11 +36,13 @@ Subterrans is a small, early-stage project — responses may be slower than a co
 ## Scope
 
 **In scope:**
+
 - Code in this repository (game client, simulation, save/load, any server components if added later).
 - Save-file parsing (e.g. crafted save files causing RCE or denial-of-service in the client).
 - Dependency vulnerabilities with a working impact path into this codebase.
 
 **Out of scope:**
+
 - The surrounding website infrastructure, marketing site, and account/login systems — those are separate projects and have their own reporting channels.
 - Vulnerabilities in upstream dependencies without a demonstrated impact on Subterrans; please report those to the upstream project first.
 - Social engineering, physical attacks, or anything requiring prior compromise of a user's device.

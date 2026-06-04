@@ -9,8 +9,8 @@ describe('pheromone decay wall-clock benchmark (PHER-07 / Phase 6 SC 10)', () =>
   it('decay time with 10000 deposits < 3x decay time with 100 deposits on identical grid size', () => {
     const WIDTH = 128;
     const HEIGHT = 128;
-    const ITERATIONS = 200;       // amortize per-run noise
-    const WARMUP_RUNS = 20;       // JIT warmup
+    const ITERATIONS = 200; // amortize per-run noise
+    const WARMUP_RUNS = 20; // JIT warmup
 
     function buildGrid(depositCount: number): ReturnType<typeof createPheromoneGrid> {
       const grid = createPheromoneGrid(WIDTH, HEIGHT);

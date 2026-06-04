@@ -48,19 +48,15 @@ export interface GameLoopOpts {
 
 type TickFn = (world: WorldState, commands: readonly SimCommand[]) => GameOutcome;
 
-export function createGameLoop(
-  tickFn: TickFn,
-  world: WorldState,
-  opts?: GameLoopOpts,
-): GameLoop {
-  const getMsPerTick  = opts?.getMsPerTick ?? (() => MS_PER_TICK);
-  const getIsPaused   = opts?.getIsPaused;
-  const onBeforeTick  = opts?.onBeforeTick;
-  const onAfterDrain  = opts?.onAfterDrain;
+export function createGameLoop(tickFn: TickFn, world: WorldState, opts?: GameLoopOpts): GameLoop {
+  const getMsPerTick = opts?.getMsPerTick ?? (() => MS_PER_TICK);
+  const getIsPaused = opts?.getIsPaused;
+  const onBeforeTick = opts?.onBeforeTick;
+  const onAfterDrain = opts?.onAfterDrain;
   const onTickOutcome = opts?.onTickOutcome;
 
   let accumulatorMs = 0;
-  let paused = false;  // Phase 9 Plan 06 — imperative pause flag
+  let paused = false; // Phase 9 Plan 06 — imperative pause flag
 
   return {
     update(dtMs: number): void {
@@ -68,15 +64,15 @@ export function createGameLoop(
       if (paused) return;
       // Backward-compat predicate gate (honor existing getIsPaused opt).
       if (getIsPaused?.() === true) return;
-      const msPerTick = getMsPerTick();                 // queried once per frame
+      const msPerTick = getMsPerTick(); // queried once per frame
       accumulatorMs += dtMs;
       // PRD §3 spiral-of-death guard: dynamic clamp honors variable speed.
       const maxAcc = msPerTick * MAX_CATCHUP_TICKS;
       if (accumulatorMs > maxAcc) accumulatorMs = maxAcc;
       while (accumulatorMs >= msPerTick) {
-        onBeforeTick?.(world);                          // Phase 8: copyWorldState seam
+        onBeforeTick?.(world); // Phase 8: copyWorldState seam
         const cmds = world.commandQueue.splice(0);
-        onAfterDrain?.(cmds);                           // Phase 9: inputLog seam
+        onAfterDrain?.(cmds); // Phase 9: inputLog seam
         const outcome = tickFn(world, cmds);
         accumulatorMs -= msPerTick;
         if (outcome !== GameOutcome.None && onTickOutcome !== undefined) {

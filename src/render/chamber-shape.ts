@@ -164,13 +164,13 @@ export function chamberPerimeterPoints(
   // +π/2 from startAngle, which is visually clockwise in screen space.
   const arcs = [
     // TL: from end-of-left-edge (west of arc center) to start-of-top-edge (north).
-    { cx: inflTLX + cornerR,           cy: inflTLY + cornerR,           startAngle: Math.PI },
+    { cx: inflTLX + cornerR, cy: inflTLY + cornerR, startAngle: Math.PI },
     // TR: from end-of-top (north) to start-of-right (east).
-    { cx: inflTLX + inflW - cornerR,   cy: inflTLY + cornerR,           startAngle: -Math.PI / 2 },
+    { cx: inflTLX + inflW - cornerR, cy: inflTLY + cornerR, startAngle: -Math.PI / 2 },
     // BR: from end-of-right (east) to start-of-bottom (south).
-    { cx: inflTLX + inflW - cornerR,   cy: inflTLY + inflH - cornerR,   startAngle: 0 },
+    { cx: inflTLX + inflW - cornerR, cy: inflTLY + inflH - cornerR, startAngle: 0 },
     // BL: from end-of-bottom (south) to start-of-left (west).
-    { cx: inflTLX + cornerR,           cy: inflTLY + inflH - cornerR,   startAngle: Math.PI / 2 },
+    { cx: inflTLX + cornerR, cy: inflTLY + inflH - cornerR, startAngle: Math.PI / 2 },
   ];
 
   const points: PerimeterPoint[] = [];
@@ -201,22 +201,26 @@ export function chamberPerimeterPoints(
       // TOP edge — between TL and TR arcs.
       baseX = inflTLX + cornerR + t;
       baseY = inflTLY;
-      nx = 0; ny = -1;
+      nx = 0;
+      ny = -1;
     } else if (t < truncW + truncH) {
       // RIGHT edge — between TR and BR arcs.
       baseX = inflTLX + inflW;
       baseY = inflTLY + cornerR + (t - truncW);
-      nx = 1; ny = 0;
+      nx = 1;
+      ny = 0;
     } else if (t < 2 * truncW + truncH) {
       // BOTTOM edge — between BR and BL arcs.
       baseX = inflTLX + inflW - cornerR - (t - truncW - truncH);
       baseY = inflTLY + inflH;
-      nx = 0; ny = 1;
+      nx = 0;
+      ny = 1;
     } else {
       // LEFT edge — between BL arc and the TL arc that opens the next loop.
       baseX = inflTLX;
       baseY = inflTLY + inflH - cornerR - (t - 2 * truncW - truncH);
-      nx = -1; ny = 0;
+      nx = -1;
+      ny = 0;
     }
 
     const jitter = sampleWaveAt(nodes, i, numEdgeSamples);
@@ -241,12 +245,7 @@ export function chamberPerimeterPoints(
  * Lower bound of 0 is allowed: at R=0 the arcs degenerate to single points
  * at each inflated corner — equivalent to the pre-rounding behavior.
  */
-function clampCornerRadius(
-  requested: number,
-  amp: number,
-  inflW: number,
-  inflH: number,
-): number {
+function clampCornerRadius(requested: number, amp: number, inflW: number, inflH: number): number {
   const halfMin = Math.min(inflW, inflH) / 2;
   const ampCap = amp > 0 ? 3 * amp : Infinity; // R=0 fine when amp=0
   return Math.max(0, Math.min(requested, halfMin, ampCap));

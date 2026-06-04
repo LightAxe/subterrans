@@ -14,10 +14,10 @@
 // ---------------------------------------------------------------------------
 
 export const Zone = {
-  Surface:     0,
+  Surface: 0,
   Underground: 1,
 } as const;
-export type Zone = typeof Zone[keyof typeof Zone];
+export type Zone = (typeof Zone)[keyof typeof Zone];
 
 // ---------------------------------------------------------------------------
 // SurfaceTileState — tile content on the surface grid (PRD §1)
@@ -25,21 +25,21 @@ export type Zone = typeof Zone[keyof typeof Zone];
 
 export const SurfaceTileState = {
   Grass: 0,
-  Dirt:  1,
+  Dirt: 1,
 } as const;
-export type SurfaceTileState = typeof SurfaceTileState[keyof typeof SurfaceTileState];
+export type SurfaceTileState = (typeof SurfaceTileState)[keyof typeof SurfaceTileState];
 
 // ---------------------------------------------------------------------------
 // UndergroundTileState — tile content in the underground grid (PRD §1)
 // ---------------------------------------------------------------------------
 
 export const UndergroundTileState = {
-  Solid:    0,
-  Marked:   1,
+  Solid: 0,
+  Marked: 1,
   BeingDug: 2,
-  Open:     3,
+  Open: 3,
 } as const;
-export type UndergroundTileState = typeof UndergroundTileState[keyof typeof UndergroundTileState];
+export type UndergroundTileState = (typeof UndergroundTileState)[keyof typeof UndergroundTileState];
 
 // ---------------------------------------------------------------------------
 // SurfaceGrid — 2D row-major Uint8Array grid for surface tiles (PRD §1)
@@ -49,8 +49,8 @@ export type UndergroundTileState = typeof UndergroundTileState[keyof typeof Unde
 // ---------------------------------------------------------------------------
 
 export interface SurfaceGrid {
-  readonly data:   Uint8Array;
-  readonly width:  number;
+  readonly data: Uint8Array;
+  readonly width: number;
   readonly height: number;
 }
 
@@ -62,8 +62,8 @@ export interface SurfaceGrid {
 // ---------------------------------------------------------------------------
 
 export interface UndergroundGrid {
-  readonly data:   Uint8Array;
-  readonly width:  number;
+  readonly data: Uint8Array;
+  readonly width: number;
   readonly height: number;
 }
 
@@ -80,7 +80,7 @@ export interface UndergroundGrid {
  */
 export function createSurfaceGrid(width: number, height: number): SurfaceGrid {
   return {
-    data:   new Uint8Array(width * height),
+    data: new Uint8Array(width * height),
     width,
     height,
   };
@@ -95,7 +95,7 @@ export function createSurfaceGrid(width: number, height: number): SurfaceGrid {
  */
 export function createUndergroundGrid(width: number, height: number): UndergroundGrid {
   return {
-    data:   new Uint8Array(width * height),
+    data: new Uint8Array(width * height),
     width,
     height,
   };
@@ -117,7 +117,12 @@ export function sgGet(grid: SurfaceGrid, tileX: number, tileY: number): SurfaceT
  * Note: `readonly data` prevents reassignment of the array reference,
  * but Uint8Array element writes are allowed.
  */
-export function sgSet(grid: SurfaceGrid, tileX: number, tileY: number, state: SurfaceTileState): void {
+export function sgSet(
+  grid: SurfaceGrid,
+  tileX: number,
+  tileY: number,
+  state: SurfaceTileState,
+): void {
   grid.data[tileY * grid.width + tileX] = state;
 }
 
@@ -131,6 +136,11 @@ export function ugGet(grid: UndergroundGrid, tileX: number, tileY: number): Unde
 /**
  * Writes a tile state to an UndergroundGrid.
  */
-export function ugSet(grid: UndergroundGrid, tileX: number, tileY: number, state: UndergroundTileState): void {
+export function ugSet(
+  grid: UndergroundGrid,
+  tileX: number,
+  tileY: number,
+  state: UndergroundTileState,
+): void {
   grid.data[tileY * grid.width + tileX] = state;
 }

@@ -36,7 +36,6 @@ import {
 } from './constants.js';
 
 describe('createScenario', () => {
-
   // -------------------------------------------------------------------------
   // SCEN-02 — Symmetric colony placement
   // -------------------------------------------------------------------------
@@ -105,7 +104,7 @@ describe('createScenario', () => {
     it('each colony queen is alive', () => {
       const world = createScenario(42);
       const playerQueenId = world.colonies[PLAYER_COLONY_ID]!.queenEntityId;
-      const enemyQueenId  = world.colonies[ENEMY_COLONY_ID]!.queenEntityId;
+      const enemyQueenId = world.colonies[ENEMY_COLONY_ID]!.queenEntityId;
       expect(isAlive(world.ants, playerQueenId)).toBe(true);
       expect(isAlive(world.ants, enemyQueenId)).toBe(true);
     });
@@ -150,9 +149,7 @@ describe('createScenario', () => {
     it('no food pile is within FOOD_PILE_MIN_COLONY_DISTANCE of player start', () => {
       const world = createScenario(42);
       for (const pile of world.foodPiles) {
-        const dist =
-          Math.abs(pile.tileX - PLAYER_START_X) +
-          Math.abs(pile.tileY - PLAYER_START_Y);
+        const dist = Math.abs(pile.tileX - PLAYER_START_X) + Math.abs(pile.tileY - PLAYER_START_Y);
         expect(dist).toBeGreaterThanOrEqual(FOOD_PILE_MIN_COLONY_DISTANCE);
       }
     });
@@ -160,9 +157,7 @@ describe('createScenario', () => {
     it('no food pile is within FOOD_PILE_MIN_COLONY_DISTANCE of enemy start', () => {
       const world = createScenario(42);
       for (const pile of world.foodPiles) {
-        const dist =
-          Math.abs(pile.tileX - ENEMY_START_X) +
-          Math.abs(pile.tileY - ENEMY_START_Y);
+        const dist = Math.abs(pile.tileX - ENEMY_START_X) + Math.abs(pile.tileY - ENEMY_START_Y);
         expect(dist).toBeGreaterThanOrEqual(FOOD_PILE_MIN_COLONY_DISTANCE);
       }
     });
@@ -345,7 +340,7 @@ describe('createScenario', () => {
     it('entrances arrays of both colonies are independent references', () => {
       const world = createScenario(42);
       const player = world.colonies[PLAYER_COLONY_ID]!;
-      const enemy  = world.colonies[ENEMY_COLONY_ID]!;
+      const enemy = world.colonies[ENEMY_COLONY_ID]!;
       const enemyStart = enemy.entrances.length;
       // Push into player entrances; enemy's array length must not change.
       player.entrances.push({ entranceId: 99, surfaceTileX: 0, surfaceTileY: 0, isOpen: false });
@@ -386,7 +381,7 @@ describe('createScenario', () => {
       const world = createScenario(42);
       for (const cid of [PLAYER_COLONY_ID, ENEMY_COLONY_ID]) {
         for (const pType of [PheromoneType.FoodTrail, PheromoneType.DangerTrail]) {
-          const surfaceKey     = pheromoneGridKey(cid, pType, 'surface');
+          const surfaceKey = pheromoneGridKey(cid, pType, 'surface');
           const undergroundKey = pheromoneGridKey(cid, pType, 'underground');
           expect(world.pheromoneGrids[surfaceKey]).toBeDefined();
           expect(world.pheromoneGrids[undergroundKey]).toBeDefined();
@@ -436,7 +431,7 @@ describe('createScenario', () => {
         tick(world, []);
       }
       const player = world.colonies[PLAYER_COLONY_ID]!;
-      const enemy  = world.colonies[ENEMY_COLONY_ID]!;
+      const enemy = world.colonies[ENEMY_COLONY_ID]!;
       expect(world.ants.alive[player.queenEntityId]).toBe(1);
       expect(world.ants.alive[enemy.queenEntityId]).toBe(1);
       expect(player.defeated).toBe(false);
@@ -458,7 +453,8 @@ describe('createScenario', () => {
       for (let t = 0; t < 1500; t++) {
         tick(world, []);
         for (const cid of [PLAYER_COLONY_ID, ENEMY_COLONY_ID]) {
-          const grid = world.pheromoneGrids[pheromoneGridKey(cid, PheromoneType.FoodTrail, 'surface')]!;
+          const grid =
+            world.pheromoneGrids[pheromoneGridKey(cid, PheromoneType.FoodTrail, 'surface')]!;
           let totalStrength = 0;
           for (let i = 0; i < grid.data.length; i++) totalStrength += grid.data[i]!;
           if (totalStrength > peak[cid]!) peak[cid] = totalStrength;
@@ -482,9 +478,7 @@ describe('createScenario', () => {
       // baseline.
       const world = createScenario(42);
       const REACQUIRE_RADIUS = 3;
-      const trailKey = pheromoneGridKey(
-        PLAYER_COLONY_ID, PheromoneType.FoodTrail, 'surface',
-      );
+      const trailKey = pheromoneGridKey(PLAYER_COLONY_ID, PheromoneType.FoodTrail, 'surface');
 
       // Phase A — tick forward until pheromone exists and stays alive for 10
       // consecutive ticks (confirms the forage loop is actively maintained,
@@ -577,5 +571,4 @@ describe('createScenario', () => {
       }
     });
   });
-
 });

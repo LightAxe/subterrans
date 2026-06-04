@@ -28,10 +28,10 @@ import type { WorldState } from '../sim/types.js';
 import type { GfxLike } from './draw-surface.js';
 
 export const CONTEXT_MENU = {
-  WIDTH:       120,
+  WIDTH: 120,
   ITEM_HEIGHT: 24,
   /** Maximum number of rows the menu can display (= CONTEXT_MENU_ITEMS.length). */
-  ITEM_COUNT:  3,
+  ITEM_COUNT: 3,
 } as const;
 
 /** Maximum possible menu height when every item is visible. */
@@ -44,7 +44,7 @@ export function contextMenuHeight(items: readonly ContextMenuItem[]): number {
 
 export interface ContextMenuItem {
   chamberType: ChamberType;
-  label:       string;
+  label: string;
   stripeColor: number;
 }
 
@@ -54,8 +54,8 @@ export interface ContextMenuItem {
  * contextMenuItemAt — do not reorder without updating callers and tests.
  */
 export const CONTEXT_MENU_ITEMS: readonly ContextMenuItem[] = [
-  { chamberType: ChamberType.Queen,       label: 'Queen',        stripeColor: 0x4a1a4a },
-  { chamberType: ChamberType.Nursery,     label: 'Nursery',      stripeColor: 0x1a4a1a },
+  { chamberType: ChamberType.Queen, label: 'Queen', stripeColor: 0x4a1a4a },
+  { chamberType: ChamberType.Nursery, label: 'Nursery', stripeColor: 0x1a4a1a },
   { chamberType: ChamberType.FoodStorage, label: 'Food Storage', stripeColor: 0x4a3a1a },
 ];
 
@@ -70,18 +70,18 @@ export const CONTEXT_MENU_ITEMS: readonly ContextMenuItem[] = [
  */
 export function visibleContextMenuItems(
   colony: ColonyRecord,
-  world:  WorldState,
+  world: WorldState,
 ): readonly ContextMenuItem[] {
   const queenBlocked =
-    hasCompletedChamber(colony, ChamberType.Queen)
-    || hasPendingChamber(colony, world, ChamberType.Queen);
+    hasCompletedChamber(colony, ChamberType.Queen) ||
+    hasPendingChamber(colony, world, ChamberType.Queen);
   if (!queenBlocked) return CONTEXT_MENU_ITEMS;
-  return CONTEXT_MENU_ITEMS.filter(it => it.chamberType !== ChamberType.Queen);
+  return CONTEXT_MENU_ITEMS.filter((it) => it.chamberType !== ChamberType.Queen);
 }
 
 function hasPendingChamber(
-  colony:      ColonyRecord,
-  world:       WorldState,
+  colony: ColonyRecord,
+  world: WorldState,
   chamberType: ChamberType,
 ): boolean {
   for (const key in world.pendingChambers) {
@@ -97,16 +97,16 @@ function hasPendingChamber(
  * `items` is the filtered list returned by visibleContextMenuItems.
  */
 export function contextMenuItemAt(
-  px:      number,
-  py:      number,
+  px: number,
+  py: number,
   anchorX: number,
   anchorY: number,
-  items:   readonly ContextMenuItem[] = CONTEXT_MENU_ITEMS,
+  items: readonly ContextMenuItem[] = CONTEXT_MENU_ITEMS,
 ): ChamberType | null {
   const relX = px - anchorX;
   const relY = py - anchorY;
-  if (relX < 0 || relX >= CONTEXT_MENU.WIDTH)             return null;
-  if (relY < 0 || relY >= contextMenuHeight(items))       return null;
+  if (relX < 0 || relX >= CONTEXT_MENU.WIDTH) return null;
+  if (relY < 0 || relY >= contextMenuHeight(items)) return null;
   const idx = Math.floor(relY / CONTEXT_MENU.ITEM_HEIGHT);
   const item = items[idx];
   return item ? item.chamberType : null;
@@ -116,15 +116,17 @@ export function contextMenuItemAt(
  * True if the screen point is inside the (filtered) menu's outer rectangle.
  */
 export function isInsideContextMenu(
-  px:      number,
-  py:      number,
+  px: number,
+  py: number,
   anchorX: number,
   anchorY: number,
-  items:   readonly ContextMenuItem[] = CONTEXT_MENU_ITEMS,
+  items: readonly ContextMenuItem[] = CONTEXT_MENU_ITEMS,
 ): boolean {
   return (
-    px >= anchorX && px < anchorX + CONTEXT_MENU.WIDTH &&
-    py >= anchorY && py < anchorY + contextMenuHeight(items)
+    px >= anchorX &&
+    px < anchorX + CONTEXT_MENU.WIDTH &&
+    py >= anchorY &&
+    py < anchorY + contextMenuHeight(items)
   );
 }
 
@@ -134,7 +136,7 @@ export function isInsideContextMenu(
  * `i` is the row offset within the FILTERED item list.
  */
 export function itemLabelPos(
-  i:       number,
+  i: number,
   anchorX: number,
   anchorY: number,
 ): { x: number; y: number } {
@@ -151,10 +153,10 @@ export function itemLabelPos(
  * has no text API.
  */
 export function drawContextMenuGeometry(
-  gfx:     GfxLike,
+  gfx: GfxLike,
   anchorX: number,
   anchorY: number,
-  items:   readonly ContextMenuItem[] = CONTEXT_MENU_ITEMS,
+  items: readonly ContextMenuItem[] = CONTEXT_MENU_ITEMS,
 ): void {
   const h = contextMenuHeight(items);
   gfx.fillStyle(0x222222, 0.95);

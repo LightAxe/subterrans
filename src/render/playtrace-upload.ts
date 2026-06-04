@@ -120,10 +120,7 @@ export type PlaytraceUploadResult =
 /** Round end reason — orthogonal to outcome; lets telemetry join outcome ×
  *  end-reason for D-30 distribution. 'QueenDeath' is the only reason in
  *  S0b-S4; TimeoutTiebreak and StalemateTiebreak land in S5. */
-export type RoundEndReason =
-  | 'QueenDeath'
-  | 'TimeoutTiebreak'
-  | 'StalemateTiebreak';
+export type RoundEndReason = 'QueenDeath' | 'TimeoutTiebreak' | 'StalemateTiebreak';
 
 /** Envelope as it goes over the wire (pre-gzip). Exported so tests can
  *  reconstruct expectations against the same shape.
@@ -173,13 +170,14 @@ export function cancelInFlightUpload(): void {
  *  string form decouples the wire from the sim's internal numbering so the
  *  enum can be renumbered without breaking on-disk telemetry. `None` is
  *  invalid input — the survey only opens on a terminal outcome. */
-export function outcomeToWire(
-  outcome: GameOutcome,
-): 'Victory' | 'Defeat' | 'MutualDestruction' {
+export function outcomeToWire(outcome: GameOutcome): 'Victory' | 'Defeat' | 'MutualDestruction' {
   switch (outcome) {
-    case GameOutcome.Victory:           return 'Victory';
-    case GameOutcome.Defeat:            return 'Defeat';
-    case GameOutcome.MutualDestruction: return 'MutualDestruction';
+    case GameOutcome.Victory:
+      return 'Victory';
+    case GameOutcome.Defeat:
+      return 'Defeat';
+    case GameOutcome.MutualDestruction:
+      return 'MutualDestruction';
     case GameOutcome.None:
       throw new Error('playtrace-upload: outcome=None should never reach the wire');
   }
@@ -221,9 +219,7 @@ export function buildPlaytraceEnvelope(
   capturedEvents?: SimEvent[],
   capturedSummary?: PlaytraceSummary,
 ): PlaytraceEnvelope {
-  const roundEndReason = capturedEvents
-    ? deriveRoundEndReason(capturedEvents)
-    : null;
+  const roundEndReason = capturedEvents ? deriveRoundEndReason(capturedEvents) : null;
 
   const envelope: PlaytraceEnvelope = {
     sessionId: input.sessionId,
@@ -393,9 +389,7 @@ export async function submitPlaytrace(
  *  `buildPlaytraceEnvelope(input, ...)` or `buildDebugSnapshot(input.world, ...)`
  *  would race a post-restart world and produce a payload with mixed
  *  sessions on the very oversized path this loop exists to handle. */
-async function buildPayloadWithDowngrade(
-  input: PlaytraceSubmissionInput,
-): Promise<Blob> {
+async function buildPayloadWithDowngrade(input: PlaytraceSubmissionInput): Promise<Blob> {
   // Capture the world ONCE, synchronously, into JSON-safe primitives.
   // world.events.slice() and buildPlaytraceSummary must happen here (in
   // the sync prefix) before the first await yields control back to the
@@ -403,7 +397,11 @@ async function buildPayloadWithDowngrade(
   // void-casting submitPlaytrace, so the live world is mutated during the
   // async tail of this function.
   const capturedEvents: SimEvent[] = input.world.events.slice();
-  const capturedSummary = buildPlaytraceSummary(input.world, input.resumedFromSave, outcomeToWire(input.outcome));
+  const capturedSummary = buildPlaytraceSummary(
+    input.world,
+    input.resumedFromSave,
+    outcomeToWire(input.outcome),
+  );
   const fullSnap = buildDebugSnapshot(input.world, input.seed, input.inputLog);
   const fullEnvelope = buildPlaytraceEnvelope(input, fullSnap, capturedEvents, capturedSummary);
 
@@ -444,9 +442,7 @@ async function buildPayloadWithDowngrade(
  *  Capture events synchronously so roundEndReason is derived from the
  *  pre-restart event buffer (world.events may be mutated after the first
  *  await if restartGame fires immediately). */
-async function buildSurveyOnlyPayload(
-  input: PlaytraceSubmissionInput,
-): Promise<Blob> {
+async function buildSurveyOnlyPayload(input: PlaytraceSubmissionInput): Promise<Blob> {
   const capturedEvents: SimEvent[] = input.world.events.slice();
   // survey-only: snapshot is null, so events+summary are omitted from the
   // envelope body (per spec). roundEndReason IS included — it's a top-level

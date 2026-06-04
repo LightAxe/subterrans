@@ -106,8 +106,8 @@ export function drawPheromoneOverlay(
   zone: 'surface' | 'underground',
 ): void {
   // Compute visible tile range
-  const left   = Math.floor(cam.x - cam.viewportWidth  / 2);
-  const top    = Math.floor(cam.y - cam.viewportHeight / 2);
+  const left = Math.floor(cam.x - cam.viewportWidth / 2);
+  const top = Math.floor(cam.y - cam.viewportHeight / 2);
 
   const pheromoneTypes = [PheromoneType.FoodTrail, PheromoneType.DangerTrail] as const;
 
@@ -117,16 +117,18 @@ export function drawPheromoneOverlay(
     if (grid === undefined) continue;
 
     // Clamp right/bottom to grid bounds
-    const right  = Math.min(left + cam.viewportWidth  + 1, grid.width);
-    const bottom = Math.min(top  + cam.viewportHeight + 1, grid.height);
+    const right = Math.min(left + cam.viewportWidth + 1, grid.width);
+    const bottom = Math.min(top + cam.viewportHeight + 1, grid.height);
 
     // Choose faint/strong palette by pheromone type
-    const faintColor  = pheromoneType === PheromoneType.FoodTrail
-      ? COLOR_PHEROMONE_FOOD_FAINT
-      : COLOR_PHEROMONE_DANGER_FAINT;
-    const strongColor = pheromoneType === PheromoneType.FoodTrail
-      ? COLOR_PHEROMONE_FOOD_STRONG
-      : COLOR_PHEROMONE_DANGER_STRONG;
+    const faintColor =
+      pheromoneType === PheromoneType.FoodTrail
+        ? COLOR_PHEROMONE_FOOD_FAINT
+        : COLOR_PHEROMONE_DANGER_FAINT;
+    const strongColor =
+      pheromoneType === PheromoneType.FoodTrail
+        ? COLOR_PHEROMONE_FOOD_STRONG
+        : COLOR_PHEROMONE_DANGER_STRONG;
 
     for (let ty = Math.max(top, 0); ty < bottom; ty++) {
       for (let tx = Math.max(left, 0); tx < right; tx++) {
@@ -137,7 +139,7 @@ export function drawPheromoneOverlay(
         gfx.fillStyle(params.color, params.alpha);
         gfx.fillRect(
           (tx - left) * TILE_SIZE_PX,
-          (ty - top)  * TILE_SIZE_PX,
+          (ty - top) * TILE_SIZE_PX,
           TILE_SIZE_PX,
           TILE_SIZE_PX,
         );

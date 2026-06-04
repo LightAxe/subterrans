@@ -27,9 +27,15 @@ export type NeighborKind = 'wall' | 'open';
  * itself, included so callers can drive shape decisions off the same struct.
  */
 export interface Neighbors3x3 {
-  nw: NeighborKind; n: NeighborKind; ne: NeighborKind;
-  w:  NeighborKind; c: NeighborKind; e:  NeighborKind;
-  sw: NeighborKind; s: NeighborKind; se: NeighborKind;
+  nw: NeighborKind;
+  n: NeighborKind;
+  ne: NeighborKind;
+  w: NeighborKind;
+  c: NeighborKind;
+  e: NeighborKind;
+  sw: NeighborKind;
+  s: NeighborKind;
+  se: NeighborKind;
 }
 
 /**
@@ -71,18 +77,24 @@ export function gatherUnderground3x3Neighbors(
   out?: Neighbors3x3,
 ): Neighbors3x3 {
   const target = out ?? {
-    nw: 'wall', n: 'wall', ne: 'wall',
-    w:  'wall', c: 'wall', e:  'wall',
-    sw: 'wall', s: 'wall', se: 'wall',
+    nw: 'wall',
+    n: 'wall',
+    ne: 'wall',
+    w: 'wall',
+    c: 'wall',
+    e: 'wall',
+    sw: 'wall',
+    s: 'wall',
+    se: 'wall',
   };
   target.nw = classifyUndergroundTile(grid, tx - 1, ty - 1, entranceXSet);
-  target.n  = classifyUndergroundTile(grid, tx,     ty - 1, entranceXSet);
+  target.n = classifyUndergroundTile(grid, tx, ty - 1, entranceXSet);
   target.ne = classifyUndergroundTile(grid, tx + 1, ty - 1, entranceXSet);
-  target.w  = classifyUndergroundTile(grid, tx - 1, ty,     entranceXSet);
-  target.c  = classifyUndergroundTile(grid, tx,     ty,     entranceXSet);
-  target.e  = classifyUndergroundTile(grid, tx + 1, ty,     entranceXSet);
+  target.w = classifyUndergroundTile(grid, tx - 1, ty, entranceXSet);
+  target.c = classifyUndergroundTile(grid, tx, ty, entranceXSet);
+  target.e = classifyUndergroundTile(grid, tx + 1, ty, entranceXSet);
   target.sw = classifyUndergroundTile(grid, tx - 1, ty + 1, entranceXSet);
-  target.s  = classifyUndergroundTile(grid, tx,     ty + 1, entranceXSet);
+  target.s = classifyUndergroundTile(grid, tx, ty + 1, entranceXSet);
   target.se = classifyUndergroundTile(grid, tx + 1, ty + 1, entranceXSet);
   return target;
 }

@@ -12,9 +12,7 @@
 // DO NOT use Math.random(), Date, performance.now(), or floating-point arithmetic.
 
 import type { ColonyId } from './colony/colony-store.js';
-import {
-  UndergroundTileState,
-} from './terrain.js';
+import { UndergroundTileState } from './terrain.js';
 import type { UndergroundGrid } from './terrain.js';
 // Issue #87 — shared BFS expansion. Direction encoding:
 //   0=N (row decreases), 1=E, 2=S, 3=W; -1=source, -2=unreachable.

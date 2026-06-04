@@ -10,11 +10,7 @@
 // tests live in underground-autotile.test.ts.)
 
 import { describe, expect, it } from 'vitest';
-import {
-  drawBarrenEarthTile,
-  drawSolidRockTile,
-  drawOpenFloorTile,
-} from './terrain-atlas.js';
+import { drawBarrenEarthTile, drawSolidRockTile, drawOpenFloorTile } from './terrain-atlas.js';
 import type { GfxLike } from './draw-surface.js';
 import { TILE_SIZE_PX } from './sprites.js';
 import { createWorldState } from '../sim/types.js';
@@ -37,28 +33,37 @@ interface GfxCall {
 class MockGfx implements GfxLike {
   calls: GfxCall[] = [];
 
-  clear(): GfxLike { this.calls.push({ method: 'clear', args: [] }); return this; }
+  clear(): GfxLike {
+    this.calls.push({ method: 'clear', args: [] });
+    return this;
+  }
   fillStyle(color: number, alpha?: number): GfxLike {
-    this.calls.push({ method: 'fillStyle', args: [color, alpha] }); return this;
+    this.calls.push({ method: 'fillStyle', args: [color, alpha] });
+    return this;
   }
   lineStyle(width: number, color: number, alpha?: number): GfxLike {
-    this.calls.push({ method: 'lineStyle', args: [width, color, alpha] }); return this;
+    this.calls.push({ method: 'lineStyle', args: [width, color, alpha] });
+    return this;
   }
   fillRect(x: number, y: number, w: number, h: number): GfxLike {
-    this.calls.push({ method: 'fillRect', args: [x, y, w, h] }); return this;
+    this.calls.push({ method: 'fillRect', args: [x, y, w, h] });
+    return this;
   }
   fillCircle(x: number, y: number, r: number): GfxLike {
-    this.calls.push({ method: 'fillCircle', args: [x, y, r] }); return this;
+    this.calls.push({ method: 'fillCircle', args: [x, y, r] });
+    return this;
   }
   strokeCircle(x: number, y: number, r: number): GfxLike {
-    this.calls.push({ method: 'strokeCircle', args: [x, y, r] }); return this;
+    this.calls.push({ method: 'strokeCircle', args: [x, y, r] });
+    return this;
   }
   fillTriangle(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number): GfxLike {
-    this.calls.push({ method: 'fillTriangle', args: [x0, y0, x1, y1, x2, y2] }); return this;
+    this.calls.push({ method: 'fillTriangle', args: [x0, y0, x1, y1, x2, y2] });
+    return this;
   }
 
   callsOf(method: string): GfxCall[] {
-    return this.calls.filter(c => c.method === method);
+    return this.calls.filter((c) => c.method === method);
   }
 }
 
@@ -231,12 +236,14 @@ describe('drawBarrenEarthTile + sim selector integration (issue #44 step 2)', ()
     // Install a colony with an entrance at the feature tile. surface-features
     // suppresses any anchor whose footprint enters the entrance radius (3).
     const colony = createColonyRecord(1, 0);
-    colony.entrances = [{
-      entranceId: 0,
-      surfaceTileX: featureTile!.x,
-      surfaceTileY: featureTile!.y,
-      isOpen: true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: 0,
+        surfaceTileX: featureTile!.x,
+        surfaceTileY: featureTile!.y,
+        isOpen: true,
+      },
+    ];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     suppressed.colonies[1] = colony;

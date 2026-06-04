@@ -54,7 +54,8 @@ describe('chamberSeed', () => {
 
 describe('chamberPerimeterPoints', () => {
   // Queen chamber default: 80x48 px at TILE_SIZE_PX=16, anchored at (0,0).
-  const W = 80, H = 48;
+  const W = 80,
+    H = 48;
 
   it('returns NUM_PERIMETER_POINTS edge samples + 4 × NUM_CORNER_ARC_SAMPLES arc samples by default', () => {
     const points = chamberPerimeterPoints(0xdeadbeef, 0, 0, W, H);
@@ -154,7 +155,7 @@ describe('chamberPerimeterPoints', () => {
       // Top-edge samples have baseY = -amp; jittered y deviates outward
       // (y < -amp) or inward (y > -amp). Skip points clearly not on the
       // top edge (large |y - (-amp)| means corner arc or other edge).
-      const dy = Math.abs(p.y - (-amp));
+      const dy = Math.abs(p.y - -amp);
       // Corner arcs at TL/TR have y up to (-amp + R) ≈ 3, far from -amp.
       // Filter to "near top edge" by capping at 2*amp = 6 px deviation.
       if (dy <= 2 * amp + 0.001 && p.x > 0 && p.x < W) {
@@ -194,10 +195,13 @@ describe('chamberPerimeterPoints', () => {
     // CORNER_RADIUS_PX from one of the four arc centers (the corner
     // arcs themselves).
     const arcCenters = [
-      { cx: -WAVE_AMPLITUDE_PX + CORNER_RADIUS_PX,        cy: -WAVE_AMPLITUDE_PX + CORNER_RADIUS_PX },
-      { cx:  W + WAVE_AMPLITUDE_PX - CORNER_RADIUS_PX,    cy: -WAVE_AMPLITUDE_PX + CORNER_RADIUS_PX },
-      { cx:  W + WAVE_AMPLITUDE_PX - CORNER_RADIUS_PX,    cy:  H + WAVE_AMPLITUDE_PX - CORNER_RADIUS_PX },
-      { cx: -WAVE_AMPLITUDE_PX + CORNER_RADIUS_PX,        cy:  H + WAVE_AMPLITUDE_PX - CORNER_RADIUS_PX },
+      { cx: -WAVE_AMPLITUDE_PX + CORNER_RADIUS_PX, cy: -WAVE_AMPLITUDE_PX + CORNER_RADIUS_PX },
+      { cx: W + WAVE_AMPLITUDE_PX - CORNER_RADIUS_PX, cy: -WAVE_AMPLITUDE_PX + CORNER_RADIUS_PX },
+      {
+        cx: W + WAVE_AMPLITUDE_PX - CORNER_RADIUS_PX,
+        cy: H + WAVE_AMPLITUDE_PX - CORNER_RADIUS_PX,
+      },
+      { cx: -WAVE_AMPLITUDE_PX + CORNER_RADIUS_PX, cy: H + WAVE_AMPLITUDE_PX - CORNER_RADIUS_PX },
     ];
     let arcLikePoints = 0;
     for (const p of points) {

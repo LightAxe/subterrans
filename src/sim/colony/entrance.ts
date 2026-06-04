@@ -20,8 +20,8 @@ export type NestEntranceId = number;
 // ---------------------------------------------------------------------------
 
 export interface NestEntrance {
-  entranceId:   NestEntranceId;
+  entranceId: NestEntranceId;
   surfaceTileX: number;
   surfaceTileY: number;
-  isOpen:       boolean;   // true once shaft tiles (y=0, y=1) are both Open
+  isOpen: boolean; // true once shaft tiles (y=0, y=1) are both Open
 }

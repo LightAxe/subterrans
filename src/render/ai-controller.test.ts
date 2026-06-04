@@ -100,10 +100,8 @@ function makeChamber(
 // ---------------------------------------------------------------------------
 
 describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
-
   // -------------------------------------------------------------------------
   describe('runAIController', () => {
-
     it('no-ops when aiColonyId does not exist (world.colonies[id] === undefined)', () => {
       const world = makeWorld(0);
       // No colony added
@@ -150,7 +148,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       // Issue #75 — aiInitialSetup is now post-condition-gated. Matching the
       // AI ratio AND having an entrance means setup is complete.
       colony.targetRatio.forage = AI_BEHAVIOR_RATIO.forage;
-      colony.targetRatio.fight  = AI_BEHAVIOR_RATIO.fight;
+      colony.targetRatio.fight = AI_BEHAVIOR_RATIO.fight;
       setQueenPos(world, 0, 10, 5);
       addUndergroundGrid(world, 2 as ColonyId);
       runAIController(world, 2 as ColonyId);
@@ -161,12 +159,10 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const nonSyncCmds = world.commandQueue.filter((c) => c.type !== 'SyncAIState');
       expect(nonSyncCmds).toHaveLength(0);
     });
-
   });
 
   // -------------------------------------------------------------------------
   describe('aiInitialSetup (CMBT-02 tick-0 setup)', () => {
-
     it('in V17+, does NOT push SetBehaviorRatio (owned by _syncBehaviorRatioToAIState)', () => {
       const world = makeWorld(0);
       // world.simVersion is already V17 (LATEST_SIM_VERSION via createWorldState)
@@ -177,7 +173,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(ratioCmd).toBeUndefined();
     });
 
-    it('on tick 0, pushes DesignateEntrance for the AI queen\'s surface tile', () => {
+    it("on tick 0, pushes DesignateEntrance for the AI queen's surface tile", () => {
       const world = makeWorld(0);
       const colony = addColony(world, 2 as ColonyId, 0);
       // Place queen at tile (15, 8) → fixed-point
@@ -187,7 +183,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(entranceCmd).toBeDefined();
       const ec = entranceCmd as { surfaceTileX: number; surfaceTileY: number };
       expect(ec.surfaceTileX).toBe(15); // derived from queen posX >> FP_SHIFT
-      expect(ec.surfaceTileY).toBe(0);  // surface row
+      expect(ec.surfaceTileY).toBe(0); // surface row
       expect(entranceCmd!.issuedAtTick).toBe(0);
     });
 
@@ -200,7 +196,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       colony.entrances = [{ entranceId: 1, surfaceTileX: 10, surfaceTileY: 0, isOpen: true }];
       colony.targetRatio.forage = AI_BEHAVIOR_RATIO.forage;
-      colony.targetRatio.fight  = AI_BEHAVIOR_RATIO.fight;
+      colony.targetRatio.fight = AI_BEHAVIOR_RATIO.fight;
       setQueenPos(world, 0, 10, 5);
       aiInitialSetup(world, colony);
       expect(world.commandQueue).toHaveLength(0);
@@ -214,12 +210,10 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
         expect(cmd.issuedAtTick).toBe(0);
       }
     });
-
   });
 
   // -------------------------------------------------------------------------
   describe('aiDigHeuristic', () => {
-
     it('does nothing when tick % AI_DIG_INTERVAL !== 0', () => {
       const world = makeWorld(1);
       const colony = addColony(world, 2 as ColonyId, 0);
@@ -273,10 +267,10 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const grid = world.undergroundGrids[2 as ColonyId]!;
       // Place chamber at (10,10); mark all neighbors Open
       colony.chambers.push(makeChamber(ChamberType.Queen, 10, 10, 1, 1));
-      ugSet(grid, 10, 9, UndergroundTileState.Open);   // N
-      ugSet(grid, 11, 10, UndergroundTileState.Open);  // E
-      ugSet(grid, 10, 11, UndergroundTileState.Open);  // S
-      ugSet(grid, 9, 10, UndergroundTileState.Open);   // W
+      ugSet(grid, 10, 9, UndergroundTileState.Open); // N
+      ugSet(grid, 11, 10, UndergroundTileState.Open); // E
+      ugSet(grid, 10, 11, UndergroundTileState.Open); // S
+      ugSet(grid, 9, 10, UndergroundTileState.Open); // W
       aiDigHeuristic(world, colony);
       // No Solid neighbors → no commands
       expect(world.commandQueue).toHaveLength(0);
@@ -333,12 +327,10 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const run2 = buildWorldAndRunDig();
       expect(run1).toEqual(run2);
     });
-
   });
 
   // -------------------------------------------------------------------------
   describe('aiChamberPlacement', () => {
-
     it('issues PlaceChamber Queen when no queen chamber exists, using anchorTileX/anchorTileY', () => {
       const world = makeWorld(0);
       const colony = addColony(world, 2 as ColonyId, 0);
@@ -391,7 +383,9 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       ugSet(grid, 10, 5, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
       const fsCmd = world.commandQueue.find(
-        (c) => c.type === 'PlaceChamber' && (c as { chamberType: number }).chamberType === ChamberType.FoodStorage,
+        (c) =>
+          c.type === 'PlaceChamber' &&
+          (c as { chamberType: number }).chamberType === ChamberType.FoodStorage,
       );
       expect(fsCmd).toBeUndefined();
     });
@@ -408,7 +402,9 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       ugSet(grid, 10, 7, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
       const nurseryCmd = world.commandQueue.find(
-        (c) => c.type === 'PlaceChamber' && (c as { chamberType: number }).chamberType === ChamberType.Nursery,
+        (c) =>
+          c.type === 'PlaceChamber' &&
+          (c as { chamberType: number }).chamberType === ChamberType.Nursery,
       );
       expect(nurseryCmd).toBeDefined();
     });
@@ -442,12 +438,10 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
         }
       }
     });
-
   });
 
   // -------------------------------------------------------------------------
   describe('aiEntranceDesignation', () => {
-
     it('issues DesignateEntrance (with surfaceTileX/surfaceTileY) when colony has zero entrances', () => {
       const world = makeWorld(10);
       const colony = addColony(world, 2 as ColonyId, 0);
@@ -491,12 +485,10 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const entranceCmds = world.commandQueue.filter((c) => c.type === 'DesignateEntrance');
       expect(entranceCmds).toHaveLength(1);
     });
-
   });
 
   // -------------------------------------------------------------------------
   describe('isDirtTileUnderground helper (via aiDigHeuristic)', () => {
-
     it('returns false (no commands) when grid does not exist for colonyId', () => {
       const world = makeWorld(AI_DIG_INTERVAL);
       const colony = addColony(world, 2 as ColonyId, 0);
@@ -578,12 +570,10 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       aiDigHeuristic(world, colony);
       expect(world.commandQueue).toHaveLength(0);
     });
-
   });
 
   // -------------------------------------------------------------------------
   describe('findOpenChamberSpot helper (via aiChamberPlacement)', () => {
-
     it('returns null (no command) when colony has no underground grid', () => {
       const world = makeWorld(0);
       const colony = addColony(world, 2 as ColonyId, 0);
@@ -617,7 +607,9 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       ugSet(grid, 10, 30, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
       const queenCmd = world.commandQueue.find(
-        (c) => c.type === 'PlaceChamber' && (c as { chamberType: number }).chamberType === ChamberType.Queen,
+        (c) =>
+          c.type === 'PlaceChamber' &&
+          (c as { chamberType: number }).chamberType === ChamberType.Queen,
       );
       expect(queenCmd).toBeDefined();
       const qc = queenCmd as { anchorTileY: number };
@@ -638,7 +630,9 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       ugSet(grid, 12, AI_QUEEN_CHAMBER_DEPTH, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
       const queenCmd = world.commandQueue.find(
-        (c) => c.type === 'PlaceChamber' && (c as { chamberType: number }).chamberType === ChamberType.Queen,
+        (c) =>
+          c.type === 'PlaceChamber' &&
+          (c as { chamberType: number }).chamberType === ChamberType.Queen,
       );
       // Should NOT place at (10, AI_QUEEN_CHAMBER_DEPTH) — that's occupied
       if (queenCmd !== undefined) {
@@ -659,7 +653,9 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
         ugSet(grid, 12, AI_QUEEN_CHAMBER_DEPTH, UndergroundTileState.Open);
         aiChamberPlacement(world, colony);
         const queenCmd = world.commandQueue.find(
-          (c) => c.type === 'PlaceChamber' && (c as { chamberType: number }).chamberType === ChamberType.Queen,
+          (c) =>
+            c.type === 'PlaceChamber' &&
+            (c as { chamberType: number }).chamberType === ChamberType.Queen,
         );
         if (queenCmd === undefined) return undefined;
         return {
@@ -671,7 +667,6 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const run2 = runAndGetQueenAnchor();
       expect(run1).toEqual(run2);
     });
-
   });
 
   // ---------------------------------------------------------------------------
@@ -691,7 +686,9 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       ugSet(grid, 10, 2, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
       const queenCmd = world.commandQueue.find(
-        (c) => c.type === 'PlaceChamber' && (c as { chamberType: number }).chamberType === ChamberType.Queen,
+        (c) =>
+          c.type === 'PlaceChamber' &&
+          (c as { chamberType: number }).chamberType === ChamberType.Queen,
       );
       expect(queenCmd).toBeUndefined();
     });
@@ -706,7 +703,9 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       ugSet(grid, 10, 14, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
       const queenCmd = world.commandQueue.find(
-        (c) => c.type === 'PlaceChamber' && (c as { chamberType: number }).chamberType === ChamberType.Queen,
+        (c) =>
+          c.type === 'PlaceChamber' &&
+          (c as { chamberType: number }).chamberType === ChamberType.Queen,
       ) as { anchorTileY: number } | undefined;
       expect(queenCmd).toBeDefined();
       expect(queenCmd!.anchorTileY).toBe(14);
@@ -730,7 +729,9 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       ugSet(grid, 40, 7, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
       const nurseryCmd = world.commandQueue.find(
-        (c) => c.type === 'PlaceChamber' && (c as { chamberType: number }).chamberType === ChamberType.Nursery,
+        (c) =>
+          c.type === 'PlaceChamber' &&
+          (c as { chamberType: number }).chamberType === ChamberType.Nursery,
       ) as { anchorTileX: number; anchorTileY: number } | undefined;
       expect(nurseryCmd).toBeDefined();
       // Nursery lands at X=40 — farther from the existing chambers at X=10.
@@ -751,7 +752,9 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       ugSet(grid, 10, 5, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
       const fsCmd = world.commandQueue.find(
-        (c) => c.type === 'PlaceChamber' && (c as { chamberType: number }).chamberType === ChamberType.FoodStorage,
+        (c) =>
+          c.type === 'PlaceChamber' &&
+          (c as { chamberType: number }).chamberType === ChamberType.FoodStorage,
       );
       expect(fsCmd).toBeUndefined();
     });
@@ -808,7 +811,9 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       ugSet(grid, 30, 20, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
       const fsCmd = world.commandQueue.find(
-        (c) => c.type === 'PlaceChamber' && (c as { chamberType: number }).chamberType === ChamberType.FoodStorage,
+        (c) =>
+          c.type === 'PlaceChamber' &&
+          (c as { chamberType: number }).chamberType === ChamberType.FoodStorage,
       ) as { anchorTileX: number; anchorTileY: number } | undefined;
       // FS should land at the only valid anchor, despite Y=20 being far
       // outside the Queen-style depth gate's ±4 tolerance.
@@ -832,13 +837,14 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       // Place A at right edge, B at left edge. Both 1x1 to keep the
       // arithmetic crisp.
       const RIGHT_EDGE = 63; // GRID_W - 1, matches addUndergroundGrid GRID_W=64
-      colony.chambers.push(makeChamber(ChamberType.Queen,        RIGHT_EDGE, 5, 1, 1));
-      colony.chambers.push(makeChamber(ChamberType.FoodStorage,  0,          5, 1, 1));
+      colony.chambers.push(makeChamber(ChamberType.Queen, RIGHT_EDGE, 5, 1, 1));
+      colony.chambers.push(makeChamber(ChamberType.FoodStorage, 0, 5, 1, 1));
 
       aiDigHeuristic(world, colony);
-      const digCmds = world.commandQueue.filter(
-        (c) => c.type === 'MarkDigTile',
-      ) as Array<{ tileX: number; tileY: number }>;
+      const digCmds = world.commandQueue.filter((c) => c.type === 'MarkDigTile') as Array<{
+        tileX: number;
+        tileY: number;
+      }>;
       // The right-edge chamber's top tile (RIGHT_EDGE, 4) must appear in
       // the dig commands — either via the frontier pass or the legacy
       // perimeter pass. Without the bounds fix, the frontier pass falsely
@@ -846,9 +852,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       // bug manifested as "no frontier extension" rather than "no dig at
       // all". Assert a stronger property: the (RIGHT_EDGE, 4) command
       // must be present.
-      const hasTopRightMark = digCmds.some(
-        (c) => c.tileX === RIGHT_EDGE && c.tileY === 4,
-      );
+      const hasTopRightMark = digCmds.some((c) => c.tileX === RIGHT_EDGE && c.tileY === 4);
       expect(hasTopRightMark).toBe(true);
     });
 
@@ -873,7 +877,9 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       ugSet(grid, 10, 5, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
       const fsCmd = world.commandQueue.find(
-        (c) => c.type === 'PlaceChamber' && (c as { chamberType: number }).chamberType === ChamberType.FoodStorage,
+        (c) =>
+          c.type === 'PlaceChamber' &&
+          (c as { chamberType: number }).chamberType === ChamberType.FoodStorage,
       );
       expect(fsCmd).toBeDefined();
     });
@@ -881,7 +887,6 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
 
   // -------------------------------------------------------------------------
   describe('CLNY-08 compliance', () => {
-
     it('all pushed commands use the AI colonyId passed in (never the player colony)', () => {
       const PLAYER_COLONY_ID = 1 as ColonyId;
       const AI_COLONY_ID = 2 as ColonyId;
@@ -948,12 +953,10 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
         }
       }
     });
-
   });
 
   // -------------------------------------------------------------------------
   describe('exported constants', () => {
-
     it('AI_DIG_INTERVAL is 40', () => expect(AI_DIG_INTERVAL).toBe(40));
     it('AI_DIG_MARK_BUDGET is 5', () => expect(AI_DIG_MARK_BUDGET).toBe(5));
     it('AI_QUEEN_CHAMBER_DEPTH is 18 (issue #33 — deeper to satisfy maxDepth>15 acceptance criterion)', () =>
@@ -968,7 +971,6 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(AI_BEHAVIOR_RATIO).toMatchObject({ forage: 7, fight: 3 });
       expect(AI_BEHAVIOR_RATIO).not.toHaveProperty('dig');
     });
-
   });
 
   // -------------------------------------------------------------------------
@@ -985,7 +987,6 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
   // — these prove the AI's natural cadence flows through the same wire.
   // -------------------------------------------------------------------------
   describe('Phase 10 / D-05 — AI auto-dig parity', () => {
-
     it('AI ant reaches AntTask.Digging via auto-dig path within reasonable tick budget', () => {
       // Build a real 2-colony scenario; AI drives ENEMY_COLONY_ID only — same
       // pattern as ai-controller.integration.test.ts.
@@ -1039,7 +1040,5 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(src).not.toMatch(/PLAYER_COLONY_ID\s*===/);
       expect(src).not.toMatch(/if\s*\([^)]*\bisPlayer\b/);
     });
-
   });
-
 });

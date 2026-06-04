@@ -26,10 +26,7 @@
 // imported with `import type` only so this file can be tested without Phaser.
 
 import type * as Phaser from 'phaser';
-import {
-  HUD,
-  TILE_SIZE_PX,
-} from '../render/sprites.js';
+import { HUD, TILE_SIZE_PX } from '../render/sprites.js';
 import { antActivityPanelState } from '../render/ant-activity-panel-state.js';
 import {
   type ViewState,
@@ -165,12 +162,7 @@ export function isPointerOverHUD(px: number, py: number, viewState?: ViewState):
     zones.push(HUD.UNDERGROUND_COLONY_TOGGLE);
   }
   for (const zone of zones) {
-    if (
-      px >= zone.x &&
-      px < zone.x + zone.w &&
-      py >= zone.y &&
-      py < zone.y + zone.h
-    ) {
+    if (px >= zone.x && px < zone.x + zone.w && py >= zone.y && py < zone.y + zone.h) {
       return true;
     }
   }
@@ -222,9 +214,7 @@ function worldDimensions(viewState: ViewState): [number, number] {
 
 /** Return the active camera for the current view. */
 function activeCamera(viewState: ViewState): CameraState {
-  return viewState.activeView === 'surface'
-    ? viewState.surfaceCamera
-    : viewState.undergroundCamera;
+  return viewState.activeView === 'surface' ? viewState.surfaceCamera : viewState.undergroundCamera;
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +315,11 @@ export interface DragState {
  * HUD-zone pointerdown and HUD-zone pointermove are ignored so a drag
  * starting inside a HUD widget never pans the camera.
  */
-export function registerDragPan(scene: Phaser.Scene, viewState: ViewState, isBlocked?: () => boolean): DragState {
+export function registerDragPan(
+  scene: Phaser.Scene,
+  viewState: ViewState,
+  isBlocked?: () => boolean,
+): DragState {
   const dragState: DragState = {
     isDragging: false,
     lastX: 0,
@@ -372,7 +366,10 @@ export function registerDragPan(scene: Phaser.Scene, viewState: ViewState, isBlo
   });
 
   scene.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
-    if (isBlocked?.()) { releaseDrag(); return; }
+    if (isBlocked?.()) {
+      releaseDrag();
+      return;
+    }
     if (!dragState.active) return;
     // Continue pan only while the originating trigger is still held.
     if (!isPanTriggerDown(pointer)) return;

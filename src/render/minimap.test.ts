@@ -23,21 +23,41 @@ import { SurfaceTileState, sgSet } from '../sim/terrain.js';
 // MockGfx — records calls, does not render anything
 // ---------------------------------------------------------------------------
 
-interface GfxCall { method: string; args: unknown[] }
+interface GfxCall {
+  method: string;
+  args: unknown[];
+}
 
 class MockGfx implements GfxLike {
   calls: GfxCall[] = [];
-  private rec(method: string, args: unknown[]): this { this.calls.push({ method, args }); return this; }
-  clear()                                                        { return this.rec('clear', []); }
-  fillStyle(c: number, a?: number)                               { return this.rec('fillStyle', [c, a]); }
-  lineStyle(w: number, c: number, a?: number)                    { return this.rec('lineStyle', [w, c, a]); }
-  fillRect(x: number, y: number, w: number, h: number)           { return this.rec('fillRect', [x, y, w, h]); }
-  fillCircle(x: number, y: number, r: number)                    { return this.rec('fillCircle', [x, y, r]); }
-  strokeCircle(x: number, y: number, r: number)                  { return this.rec('strokeCircle', [x, y, r]); }
+  private rec(method: string, args: unknown[]): this {
+    this.calls.push({ method, args });
+    return this;
+  }
+  clear() {
+    return this.rec('clear', []);
+  }
+  fillStyle(c: number, a?: number) {
+    return this.rec('fillStyle', [c, a]);
+  }
+  lineStyle(w: number, c: number, a?: number) {
+    return this.rec('lineStyle', [w, c, a]);
+  }
+  fillRect(x: number, y: number, w: number, h: number) {
+    return this.rec('fillRect', [x, y, w, h]);
+  }
+  fillCircle(x: number, y: number, r: number) {
+    return this.rec('fillCircle', [x, y, r]);
+  }
+  strokeCircle(x: number, y: number, r: number) {
+    return this.rec('strokeCircle', [x, y, r]);
+  }
   fillTriangle(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number) {
     return this.rec('fillTriangle', [x0, y0, x1, y1, x2, y2]);
   }
-  callsOf(method: string) { return this.calls.filter(c => c.method === method); }
+  callsOf(method: string) {
+    return this.calls.filter((c) => c.method === method);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -47,31 +67,33 @@ class MockGfx implements GfxLike {
 const stubAnts = {
   posX: new Int32Array(10),
   posY: new Int32Array(10),
-  alive:             new Int32Array(10),
-  task:              new Int32Array(10),
-  subTask:           new Int32Array(10),
-  colonyId:          new Int32Array(10),
-  speed:             new Int32Array(10),
-  foodCarrying:      new Int32Array(10),
-  starvationTimer:   new Int32Array(10),
-  age:               new Int32Array(10),
-  lifespan:          new Int32Array(10),
-  zone:              new Int32Array(10),
-  digTileX:          new Int32Array(10).fill(-1),
-  digTileY:          new Int32Array(10).fill(-1),
+  alive: new Int32Array(10),
+  task: new Int32Array(10),
+  subTask: new Int32Array(10),
+  colonyId: new Int32Array(10),
+  speed: new Int32Array(10),
+  foodCarrying: new Int32Array(10),
+  starvationTimer: new Int32Array(10),
+  age: new Int32Array(10),
+  lifespan: new Int32Array(10),
+  zone: new Int32Array(10),
+  digTileX: new Int32Array(10).fill(-1),
+  digTileY: new Int32Array(10).fill(-1),
   digTicksRemaining: new Int32Array(10),
-  targetPosX:        new Int32Array(10).fill(-1),
-  targetPosY:        new Int32Array(10).fill(-1),
+  targetPosX: new Int32Array(10).fill(-1),
+  targetPosY: new Int32Array(10).fill(-1),
 } as unknown as WorldState['ants'];
 
 const stubSurface = {
-  width: 128, height: 128,
+  width: 128,
+  height: 128,
   data: new Uint8Array(128 * 128),
 } as unknown as WorldState['surface'];
 
-function makeMinimalWorld(
-  overrides?: { foodPiles?: WorldState['foodPiles']; colonies?: WorldState['colonies'] },
-): WorldState {
+function makeMinimalWorld(overrides?: {
+  foodPiles?: WorldState['foodPiles'];
+  colonies?: WorldState['colonies'];
+}): WorldState {
   return {
     tick: 0,
     rngState: 0,
@@ -191,10 +213,18 @@ const stubColonies: WorldState['colonies'] = {
     // (WorkerAllocation per D-03).
     targetRatio: { forage: 100, fight: 0 },
     computedAllocation: { nurse: 0, forage: 0, dig: 0, fight: 0 },
-    eggCount: 0, larvaeCount: 0, nurseCount: 0,
-    eggs: [], larvae: [], workers: [], chambers: [],
-    defeated: false, reconcileCountdown: 0,
-    rallyPoint: null, digFlowFieldDirty: false, foodFlowFieldDirty: false,
+    eggCount: 0,
+    larvaeCount: 0,
+    nurseCount: 0,
+    eggs: [],
+    larvae: [],
+    workers: [],
+    chambers: [],
+    defeated: false,
+    reconcileCountdown: 0,
+    rallyPoint: null,
+    digFlowFieldDirty: false,
+    foodFlowFieldDirty: false,
     killCount: 0,
     priorityFoodPileId: null,
     queenLastEggTick: -300,
@@ -203,7 +233,13 @@ const stubColonies: WorldState['colonies'] = {
 };
 
 const stubFoodPiles: WorldState['foodPiles'] = [
-  { foodPileId: 1, tileX: 20, tileY: 30 , pickupsRemaining: 50, pickupsInitial: 50} as WorldState['foodPiles'][0],
+  {
+    foodPileId: 1,
+    tileX: 20,
+    tileY: 30,
+    pickupsRemaining: 50,
+    pickupsInitial: 50,
+  } as WorldState['foodPiles'][0],
 ];
 
 describe('drawMinimap smoke test', () => {
@@ -246,16 +282,16 @@ describe('drawMinimap smoke test', () => {
 
     const styles = gfx.callsOf('fillStyle');
     // No black background anywhere.
-    const hasBlack = styles.some(c => c.args[0] === 0x000000);
+    const hasBlack = styles.some((c) => c.args[0] === 0x000000);
     expect(hasBlack).toBe(false);
     // Issue #40 reframe: minimap base is barren-earth, not grass-green. The
     // surface terrain at large now reads as ant-scale ground, and the
     // minimap must mirror that so the player's mental model matches.
-    const hasEarth = styles.some(c => c.args[0] === COLOR_BARREN_EARTH);
+    const hasEarth = styles.some((c) => c.args[0] === COLOR_BARREN_EARTH);
     expect(hasEarth).toBe(true);
     // A darker dapple is sprinkled deterministically per tile — gives the
     // minimap a textured feel rather than a flat brown rectangle.
-    const hasDapple = styles.some(c => c.args[0] === COLOR_BARREN_EARTH_DARK);
+    const hasDapple = styles.some((c) => c.args[0] === COLOR_BARREN_EARTH_DARK);
     expect(hasDapple).toBe(true);
 
     // Cleanup so other tests see a clean surface

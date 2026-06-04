@@ -31,28 +31,37 @@ interface GfxCall {
 class MockGfx implements GfxLike {
   calls: GfxCall[] = [];
 
-  clear(): GfxLike { this.calls.push({ method: 'clear', args: [] }); return this; }
+  clear(): GfxLike {
+    this.calls.push({ method: 'clear', args: [] });
+    return this;
+  }
   fillStyle(color: number, alpha?: number): GfxLike {
-    this.calls.push({ method: 'fillStyle', args: [color, alpha] }); return this;
+    this.calls.push({ method: 'fillStyle', args: [color, alpha] });
+    return this;
   }
   lineStyle(width: number, color: number, alpha?: number): GfxLike {
-    this.calls.push({ method: 'lineStyle', args: [width, color, alpha] }); return this;
+    this.calls.push({ method: 'lineStyle', args: [width, color, alpha] });
+    return this;
   }
   fillRect(x: number, y: number, w: number, h: number): GfxLike {
-    this.calls.push({ method: 'fillRect', args: [x, y, w, h] }); return this;
+    this.calls.push({ method: 'fillRect', args: [x, y, w, h] });
+    return this;
   }
   fillCircle(x: number, y: number, r: number): GfxLike {
-    this.calls.push({ method: 'fillCircle', args: [x, y, r] }); return this;
+    this.calls.push({ method: 'fillCircle', args: [x, y, r] });
+    return this;
   }
   strokeCircle(x: number, y: number, r: number): GfxLike {
-    this.calls.push({ method: 'strokeCircle', args: [x, y, r] }); return this;
+    this.calls.push({ method: 'strokeCircle', args: [x, y, r] });
+    return this;
   }
   fillTriangle(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number): GfxLike {
-    this.calls.push({ method: 'fillTriangle', args: [x0, y0, x1, y1, x2, y2] }); return this;
+    this.calls.push({ method: 'fillTriangle', args: [x0, y0, x1, y1, x2, y2] });
+    return this;
   }
 
   callsOf(method: string): GfxCall[] {
-    return this.calls.filter(c => c.method === method);
+    return this.calls.filter((c) => c.method === method);
   }
 }
 
@@ -222,7 +231,11 @@ describe('drawSlider', () => {
     const gfx = new MockGfx();
     drawSlider(gfx, { forage: 10, fight: 0 }, { forage: 10, fight: 0 });
     const allowedMethods = new Set([
-      'fillStyle', 'lineStyle', 'fillRect', 'fillCircle', 'strokeCircle',
+      'fillStyle',
+      'lineStyle',
+      'fillRect',
+      'fillCircle',
+      'strokeCircle',
     ]);
     for (const c of gfx.calls) {
       expect(allowedMethods.has(c.method)).toBe(true);
@@ -250,7 +263,10 @@ describe('drawSlider', () => {
     drawSlider(gfx, { forage: 10, fight: 0 }, { forage: 10, fight: 0 });
     const firstFillRect = gfx.callsOf('fillRect')[0]!;
     expect(firstFillRect.args).toEqual([
-      HUD.TRIANGLE.x, HUD.TRIANGLE.y, HUD.TRIANGLE.w, HUD.TRIANGLE.h,
+      HUD.TRIANGLE.x,
+      HUD.TRIANGLE.y,
+      HUD.TRIANGLE.w,
+      HUD.TRIANGLE.h,
     ]);
   });
 
@@ -270,7 +286,7 @@ describe('drawSlider', () => {
     const gfx = new MockGfx();
     drawSlider(gfx, { forage: 10, fight: 0 }, { forage: 0, fight: 10 });
     // Find the fillStyle call immediately preceding the fillCircle call.
-    const fillCircleIdx = gfx.calls.findIndex(c => c.method === 'fillCircle');
+    const fillCircleIdx = gfx.calls.findIndex((c) => c.method === 'fillCircle');
     expect(fillCircleIdx).toBeGreaterThan(0);
     // Walk backwards to the most recent fillStyle.
     let lastFillStyleColor: unknown = null;

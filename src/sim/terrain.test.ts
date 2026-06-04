@@ -71,7 +71,10 @@ describe('createSurfaceGrid', () => {
     const g = createSurfaceGrid(128, 128);
     let allZero = true;
     for (let i = 0; i < g.data.length; i++) {
-      if (g.data[i] !== 0) { allZero = false; break; }
+      if (g.data[i] !== 0) {
+        allZero = false;
+        break;
+      }
     }
     expect(allZero).toBe(true);
   });
@@ -97,7 +100,10 @@ describe('createUndergroundGrid', () => {
     const g = createUndergroundGrid(128, 64);
     let allZero = true;
     for (let i = 0; i < g.data.length; i++) {
-      if (g.data[i] !== 0) { allZero = false; break; }
+      if (g.data[i] !== 0) {
+        allZero = false;
+        break;
+      }
     }
     expect(allZero).toBe(true);
   });

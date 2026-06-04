@@ -130,9 +130,9 @@ describe('submitPlaytrace — feature flag gating', () => {
 
 describe('submitPlaytrace — wire framing', () => {
   it('sends a same-origin POST with the contracted headers and gzipped body', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ accepted: true }), { status: 202 }),
-    );
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ accepted: true }), { status: 202 }));
     try {
       await submitPlaytrace(makeInput());
       expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -152,9 +152,9 @@ describe('submitPlaytrace — wire framing', () => {
   });
 
   it('reports server-side disable (HTTP 503) cleanly so the UI silently skips', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response('', { status: 503 }),
-    );
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('', { status: 503 }));
     try {
       const result = await submitPlaytrace(makeInput());
       expect(result).toEqual({ status: 'server-disabled' });
@@ -164,9 +164,9 @@ describe('submitPlaytrace — wire framing', () => {
   });
 
   it('surfaces a Retry-After header on HTTP 429', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response('', { status: 429, headers: { 'Retry-After': '30' } }),
-    );
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('', { status: 429, headers: { 'Retry-After': '30' } }));
     try {
       const result = await submitPlaytrace(makeInput());
       expect(result).toEqual({ status: 'rate-limited', retryAfterSeconds: 30 });
@@ -214,18 +214,22 @@ describe('submitPlaytrace — graceful downgrade', () => {
       // Free text capped at 2000 chars — irrelevant for body size; instead
       // we inflate the inputLog with fake commands so the envelope JSON
       // crosses 5 MB on stages 1 and 2.
-      inputLog: Array.from({ length: 3 }, () => ({
-        type: 'SetBehaviorRatio',
-        colonyId: 1,
-        ratio: { forage: 50, fight: 50 },
-        issuedAtTick: 0,
-        // The padding pushes each command's stringified form past 2 MB —
-        // three of them = 6 MB stage-1 body. Stage 2 keeps the inputLog
-        // (still 6 MB). Stage 3 drops the inputLog and survives. Stage 4
-        // is the survey-only fallback (always fits).
-        _padding: fat,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any)),
+      inputLog: Array.from(
+        { length: 3 },
+        () =>
+          ({
+            type: 'SetBehaviorRatio',
+            colonyId: 1,
+            ratio: { forage: 50, fight: 50 },
+            issuedAtTick: 0,
+            // The padding pushes each command's stringified form past 2 MB —
+            // three of them = 6 MB stage-1 body. Stage 2 keeps the inputLog
+            // (still 6 MB). Stage 3 drops the inputLog and survives. Stage 4
+            // is the survey-only fallback (always fits).
+            _padding: fat,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+      ),
     });
 
     const bodies: Array<Blob> = [];
@@ -256,16 +260,21 @@ describe('submitPlaytrace — graceful downgrade', () => {
     // the mock is registered.
     vi.resetModules();
     const buildSpy = vi.fn(() => ({
-      version: 1, seed: 0, tick: 0, inputLog: [], snapshot: {} as never, antTrace: [],
+      version: 1,
+      seed: 0,
+      tick: 0,
+      inputLog: [],
+      snapshot: {} as never,
+      antTrace: [],
     }));
     vi.doMock('../platform/debug-snapshot.js', async (importOriginal) => {
       const orig = await importOriginal<typeof debugSnapshot>();
       return { ...orig, buildDebugSnapshot: buildSpy };
     });
     const mod = await import('./playtrace-upload.js');
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ accepted: true }), { status: 202 }),
-    );
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ accepted: true }), { status: 202 }));
     try {
       await mod.submitPlaytrace(makeInput({ includeSnapshot: false }));
       expect(buildSpy).not.toHaveBeenCalled();
@@ -336,7 +345,9 @@ describe('submitPlaytrace — timing invariant (load-bearing)', () => {
     // body size, not by real gzip ratio.
     const IdentityCS = function (this: unknown, _format: string) {
       return new TransformStream<Uint8Array, Uint8Array>({
-        transform(chunk, controller) { controller.enqueue(chunk); },
+        transform(chunk, controller) {
+          controller.enqueue(chunk);
+        },
       });
     };
     (globalThis as unknown as { CompressionStream: unknown }).CompressionStream = IdentityCS;
@@ -346,14 +357,18 @@ describe('submitPlaytrace — timing invariant (load-bearing)', () => {
     // shrinks below 5 MB and lands at fetch.
     const fat = 'a'.repeat(2 * 1024 * 1024);
     const input = makeInput({
-      inputLog: Array.from({ length: 3 }, () => ({
-        type: 'SetBehaviorRatio',
-        colonyId: 1,
-        ratio: { forage: 50, fight: 50 },
-        issuedAtTick: 0,
-        _padding: fat,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any)),
+      inputLog: Array.from(
+        { length: 3 },
+        () =>
+          ({
+            type: 'SetBehaviorRatio',
+            colonyId: 1,
+            ratio: { forage: 50, fight: 50 },
+            issuedAtTick: 0,
+            _padding: fat,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+      ),
     });
     // eslint-disable-next-line no-restricted-syntax
     input.world.tick = 5555;
@@ -401,7 +416,9 @@ describe('cancelInFlightUpload', () => {
     // `await Promise.resolve()` doesn't yield long enough for the gzip
     // pipeline + fetch dispatch to complete.
     let resolveFetchStarted!: () => void;
-    const fetchStarted = new Promise<void>((resolve) => { resolveFetchStarted = resolve; });
+    const fetchStarted = new Promise<void>((resolve) => {
+      resolveFetchStarted = resolve;
+    });
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
       return new Promise<Response>((_resolve, reject) => {
         const signal = (init as RequestInit | undefined)?.signal;

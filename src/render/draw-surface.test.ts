@@ -8,11 +8,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
-import {
-  drawSurfaceTerrain,
-  drawSurfaceEntities,
-  drawSurface,
-} from './draw-surface.js';
+import { drawSurfaceTerrain, drawSurfaceEntities, drawSurface } from './draw-surface.js';
 import type { GfxLike } from './draw-surface.js';
 import type {
   AntSpriteDrawOptions,
@@ -57,32 +53,43 @@ type Rect = { x: number; y: number; w: number; h: number };
 class MockGfx implements GfxLike {
   calls: GfxCall[] = [];
 
-  clear(): GfxLike { this.calls.push({ method: 'clear', args: [] }); return this; }
+  clear(): GfxLike {
+    this.calls.push({ method: 'clear', args: [] });
+    return this;
+  }
   fillStyle(color: number, alpha?: number): GfxLike {
-    this.calls.push({ method: 'fillStyle', args: [color, alpha] }); return this;
+    this.calls.push({ method: 'fillStyle', args: [color, alpha] });
+    return this;
   }
   lineStyle(width: number, color: number, alpha?: number): GfxLike {
-    this.calls.push({ method: 'lineStyle', args: [width, color, alpha] }); return this;
+    this.calls.push({ method: 'lineStyle', args: [width, color, alpha] });
+    return this;
   }
   fillRect(x: number, y: number, w: number, h: number): GfxLike {
-    this.calls.push({ method: 'fillRect', args: [x, y, w, h] }); return this;
+    this.calls.push({ method: 'fillRect', args: [x, y, w, h] });
+    return this;
   }
   fillCircle(x: number, y: number, r: number): GfxLike {
-    this.calls.push({ method: 'fillCircle', args: [x, y, r] }); return this;
+    this.calls.push({ method: 'fillCircle', args: [x, y, r] });
+    return this;
   }
   strokeCircle(x: number, y: number, r: number): GfxLike {
-    this.calls.push({ method: 'strokeCircle', args: [x, y, r] }); return this;
+    this.calls.push({ method: 'strokeCircle', args: [x, y, r] });
+    return this;
   }
   fillTriangle(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number): GfxLike {
-    this.calls.push({ method: 'fillTriangle', args: [x0, y0, x1, y1, x2, y2] }); return this;
+    this.calls.push({ method: 'fillTriangle', args: [x0, y0, x1, y1, x2, y2] });
+    return this;
   }
 
   /** Filter calls by method name. */
   callsOf(method: string): GfxCall[] {
-    return this.calls.filter(c => c.method === method);
+    return this.calls.filter((c) => c.method === method);
   }
 
-  reset(): void { this.calls = []; }
+  reset(): void {
+    this.calls = [];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -94,14 +101,26 @@ class MockAntSprites implements AntSpriteLayer {
   staticCalls: StaticSpriteDrawOptions[] = [];
   beginFrames = 0;
   endFrames = 0;
-  beginFrame(): void { this.beginFrames++; }
-  drawAnt(opts: AntSpriteDrawOptions): void { this.calls.push({ ...opts }); }
-  drawStatic(opts: StaticSpriteDrawOptions): void { this.staticCalls.push({ ...opts }); }
-  drawSpider(_opts: SpiderSpriteDrawOptions): void { /* no-op in tests */ }
-  endFrame(): void { this.endFrames++; }
+  beginFrame(): void {
+    this.beginFrames++;
+  }
+  drawAnt(opts: AntSpriteDrawOptions): void {
+    this.calls.push({ ...opts });
+  }
+  drawStatic(opts: StaticSpriteDrawOptions): void {
+    this.staticCalls.push({ ...opts });
+  }
+  drawSpider(_opts: SpiderSpriteDrawOptions): void {
+    /* no-op in tests */
+  }
+  endFrame(): void {
+    this.endFrames++;
+  }
   reset(): void {
-    this.calls = []; this.staticCalls = [];
-    this.beginFrames = 0; this.endFrames = 0;
+    this.calls = [];
+    this.staticCalls = [];
+    this.beginFrames = 0;
+    this.endFrames = 0;
   }
 }
 
@@ -132,7 +151,12 @@ function textureRectsInsideTile(gfx: MockGfx, screenX: number, screenY: number):
   for (const call of gfx.calls) {
     if (call.method !== 'fillRect') continue;
     const [x, y, w, h] = call.args as [number, number, number, number];
-    if (x >= screenX && y >= screenY && x + w <= screenX + TILE_SIZE_PX && y + h <= screenY + TILE_SIZE_PX) {
+    if (
+      x >= screenX &&
+      y >= screenY &&
+      x + w <= screenX + TILE_SIZE_PX &&
+      y + h <= screenY + TILE_SIZE_PX
+    ) {
       rects.push({ x: x - screenX, y: y - screenY, w, h });
     }
   }
@@ -146,7 +170,9 @@ function textureRectsInsideTile(gfx: MockGfx, screenX: number, screenY: number):
 describe('drawSurfaceTerrain', () => {
   let gfx: MockGfx;
 
-  beforeEach(() => { gfx = new MockGfx(); });
+  beforeEach(() => {
+    gfx = new MockGfx();
+  });
 
   it('renders every visible tile with the barren-earth substrate (issue #40)', () => {
     // Issue #40: surface is universally barren-earth substrate (with motifs
@@ -155,7 +181,7 @@ describe('drawSurfaceTerrain', () => {
     const world = makeWorld4x4();
     const cam = makeCamera(1.5, 1.5, 3, 3);
     drawSurfaceTerrain(gfx, world, cam);
-    const earthStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_BARREN_EARTH);
+    const earthStyles = gfx.callsOf('fillStyle').filter((c) => c.args[0] === COLOR_BARREN_EARTH);
     // 4×4 visible tiles = 16; each tile applies the barren-earth fill once.
     expect(earthStyles.length).toBe(16);
   });
@@ -169,14 +195,22 @@ describe('drawSurfaceTerrain', () => {
     drawSurfaceTerrain(gfx, world, camA);
     const leftA = Math.floor(camA.x - camA.viewportWidth / 2);
     const topA = Math.floor(camA.y - camA.viewportHeight / 2);
-    const rectsA = textureRectsInsideTile(gfx, (tileX - leftA) * TILE_SIZE_PX, (tileY - topA) * TILE_SIZE_PX);
+    const rectsA = textureRectsInsideTile(
+      gfx,
+      (tileX - leftA) * TILE_SIZE_PX,
+      (tileY - topA) * TILE_SIZE_PX,
+    );
 
     gfx.reset();
     const camB = makeCamera(21, 20, 20, 20);
     drawSurfaceTerrain(gfx, world, camB);
     const leftB = Math.floor(camB.x - camB.viewportWidth / 2);
     const topB = Math.floor(camB.y - camB.viewportHeight / 2);
-    const rectsB = textureRectsInsideTile(gfx, (tileX - leftB) * TILE_SIZE_PX, (tileY - topB) * TILE_SIZE_PX);
+    const rectsB = textureRectsInsideTile(
+      gfx,
+      (tileX - leftB) * TILE_SIZE_PX,
+      (tileY - topB) * TILE_SIZE_PX,
+    );
 
     expect(rectsA.length).toBeGreaterThan(0);
     expect(rectsA).toEqual(rectsB);
@@ -252,8 +286,20 @@ describe('drawSurfaceEntities', () => {
     playerColony.digFlowFieldDirty = false;
     playerColony.priorityFoodPileId = 1;
     world.colonies[PLAYER_COLONY_ID] = playerColony;
-    world.foodPiles.push({ foodPileId: 1, tileX: 5, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50});
-    world.foodPiles.push({ foodPileId: 2, tileX: 6, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({
+      foodPileId: 1,
+      tileX: 5,
+      tileY: 5,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
+    world.foodPiles.push({
+      foodPileId: 2,
+      tileX: 6,
+      tileY: 5,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
     const cam = makeCamera(5, 5, 20, 20);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     const circles = gfx.callsOf('fillCircle');
@@ -267,12 +313,28 @@ describe('drawSurfaceEntities', () => {
     playerColony.digFlowFieldDirty = false;
     playerColony.priorityFoodPileId = 1;
     world.colonies[PLAYER_COLONY_ID] = playerColony;
-    world.foodPiles.push({ foodPileId: 1, tileX: 5, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50});
-    world.foodPiles.push({ foodPileId: 2, tileX: 6, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({
+      foodPileId: 1,
+      tileX: 5,
+      tileY: 5,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
+    world.foodPiles.push({
+      foodPileId: 2,
+      tileX: 6,
+      tileY: 5,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
     const cam = makeCamera(5, 5, 20, 20);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
-    const markedStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_FOOD_PILE_MARKED);
-    const normalStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_FOOD_PILE_NORMAL);
+    const markedStyles = gfx
+      .callsOf('fillStyle')
+      .filter((c) => c.args[0] === COLOR_FOOD_PILE_MARKED);
+    const normalStyles = gfx
+      .callsOf('fillStyle')
+      .filter((c) => c.args[0] === COLOR_FOOD_PILE_NORMAL);
     expect(markedStyles.length).toBe(1);
     expect(normalStyles.length).toBe(1);
   });
@@ -291,10 +353,18 @@ describe('drawSurfaceEntities', () => {
     enemyColony.priorityFoodPileId = 1;
     world.colonies[PLAYER_COLONY_ID] = playerColony;
     world.colonies[enemyColonyId] = enemyColony;
-    world.foodPiles.push({ foodPileId: 1, tileX: 5, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({
+      foodPileId: 1,
+      tileX: 5,
+      tileY: 5,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
     const cam = makeCamera(5, 5, 20, 20);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
-    const markedStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_FOOD_PILE_MARKED);
+    const markedStyles = gfx
+      .callsOf('fillStyle')
+      .filter((c) => c.args[0] === COLOR_FOOD_PILE_MARKED);
     expect(markedStyles.length).toBe(0);
   });
 
@@ -318,13 +388,13 @@ describe('drawSurfaceEntities', () => {
     initAnt(prev.ants, workerId, {
       colonyId,
       posX: (10 << FP_SHIFT) + HALF_FP,
-      posY: (5 << FP_SHIFT)  + HALF_FP,
+      posY: (5 << FP_SHIFT) + HALF_FP,
       zone: 0,
     });
     initAnt(curr.ants, workerId, {
       colonyId,
       posX: (10 << FP_SHIFT) + HALF_FP,
-      posY: (5 << FP_SHIFT)  + HALF_FP,
+      posY: (5 << FP_SHIFT) + HALF_FP,
       zone: 0,
     });
 
@@ -332,13 +402,14 @@ describe('drawSurfaceEntities', () => {
     drawSurfaceEntities(gfx, sprites, prev, curr, 0, cam);
 
     const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const top  = Math.floor(cam.y - cam.viewportHeight / 2);
+    const top = Math.floor(cam.y - cam.viewportHeight / 2);
     const expectedScreenX = 10.5 * TILE_SIZE_PX - left * TILE_SIZE_PX;
-    const expectedScreenY = 5.5  * TILE_SIZE_PX - top  * TILE_SIZE_PX;
-    const antCall = sprites.calls.find(c =>
-      c.kind === 'worker' &&
-      Math.abs(c.x - expectedScreenX) < 0.01 &&
-      Math.abs(c.y - expectedScreenY) < 0.01,
+    const expectedScreenY = 5.5 * TILE_SIZE_PX - top * TILE_SIZE_PX;
+    const antCall = sprites.calls.find(
+      (c) =>
+        c.kind === 'worker' &&
+        Math.abs(c.x - expectedScreenX) < 0.01 &&
+        Math.abs(c.y - expectedScreenY) < 0.01,
     );
     expect(antCall).toBeDefined();
   });
@@ -364,9 +435,9 @@ describe('drawSurfaceEntities', () => {
     drawSurfaceEntities(gfx, sprites, prev, curr, 0.5, cam);
 
     const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const expectedScreenX = (10 * 16 + (20 * 16 - 10 * 16) * 0.5) - left * TILE_SIZE_PX;
-    const antCall = sprites.calls.find(c =>
-      c.kind === 'worker' && Math.abs(c.x - expectedScreenX) < 0.5,
+    const expectedScreenX = 10 * 16 + (20 * 16 - 10 * 16) * 0.5 - left * TILE_SIZE_PX;
+    const antCall = sprites.calls.find(
+      (c) => c.kind === 'worker' && Math.abs(c.x - expectedScreenX) < 0.5,
     );
     expect(antCall).toBeDefined();
   });
@@ -410,7 +481,7 @@ describe('drawSurfaceEntities', () => {
 
   it('tints player ants with COLOR_PLAYER_COLONY and enemy ants with COLOR_ENEMY_COLONY', () => {
     const playerAntId = 0;
-    const enemyAntId  = 1;
+    const enemyAntId = 1;
     const playerColony = createColonyRecord(PLAYER_COLONY_ID, 99);
     playerColony.entrances = [];
     playerColony.rallyPoint = null;
@@ -424,14 +495,24 @@ describe('drawSurfaceEntities', () => {
     enemyColony.digFlowFieldDirty = false;
     world.colonies[ENEMY_COLONY_ID] = enemyColony;
 
-    initAnt(world.ants, playerAntId, { colonyId: PLAYER_COLONY_ID, posX: 5 << FP_SHIFT, posY: 5 << FP_SHIFT, zone: 0 });
-    initAnt(world.ants, enemyAntId,  { colonyId: ENEMY_COLONY_ID,  posX: 7 << FP_SHIFT, posY: 5 << FP_SHIFT, zone: 0 });
+    initAnt(world.ants, playerAntId, {
+      colonyId: PLAYER_COLONY_ID,
+      posX: 5 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      zone: 0,
+    });
+    initAnt(world.ants, enemyAntId, {
+      colonyId: ENEMY_COLONY_ID,
+      posX: 7 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      zone: 0,
+    });
 
     const cam = makeCamera(5, 5, 20, 20);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
 
-    const playerTints = sprites.calls.filter(c => c.tint === COLOR_PLAYER_COLONY);
-    const enemyTints  = sprites.calls.filter(c => c.tint === COLOR_ENEMY_COLONY);
+    const playerTints = sprites.calls.filter((c) => c.tint === COLOR_PLAYER_COLONY);
+    const enemyTints = sprites.calls.filter((c) => c.tint === COLOR_ENEMY_COLONY);
     expect(playerTints.length).toBe(1);
     expect(enemyTints.length).toBe(1);
   });
@@ -439,10 +520,17 @@ describe('drawSurfaceEntities', () => {
   it('does NOT draw ants with zone=1 (underground ants)', () => {
     world.colonies[PLAYER_COLONY_ID] = (() => {
       const c = createColonyRecord(PLAYER_COLONY_ID, 99);
-      c.entrances = []; c.rallyPoint = null; c.digFlowFieldDirty = false;
+      c.entrances = [];
+      c.rallyPoint = null;
+      c.digFlowFieldDirty = false;
       return c;
     })();
-    initAnt(world.ants, 0, { colonyId: PLAYER_COLONY_ID, posX: 5 << FP_SHIFT, posY: 5 << FP_SHIFT, zone: 1 });
+    initAnt(world.ants, 0, {
+      colonyId: PLAYER_COLONY_ID,
+      posX: 5 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      zone: 1,
+    });
     const cam = makeCamera(5, 5, 20, 20);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     expect(sprites.calls.length).toBe(0);
@@ -464,7 +552,9 @@ describe('drawSurfaceEntities — ant facing direction', () => {
     const world = createWorldState(1);
     const antId = 0;
     const colony = createColonyRecord(PLAYER_COLONY_ID, 999);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     world.colonies[PLAYER_COLONY_ID] = colony;
     initAnt(world.ants, antId, {
       colonyId: PLAYER_COLONY_ID,
@@ -555,7 +645,9 @@ describe('drawSurfaceEntities — facing cache smoothing', () => {
   function makeSurfaceAntWorld(posX: number, posY: number): WorldState {
     const w = createWorldState(1);
     const colony = createColonyRecord(PLAYER_COLONY_ID, 999);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     w.colonies[PLAYER_COLONY_ID] = colony;
     initAnt(w.ants, 0, {
       colonyId: PLAYER_COLONY_ID,
@@ -575,13 +667,14 @@ describe('drawSurfaceEntities — facing cache smoothing', () => {
     // Walk an 8-step southeast zig-zag: (5,5)→(6,5)→(6,6)→(7,6)→(7,7)…
     // Each adjacent pair is one frame's prev→curr. Shared cache accumulates
     // the blended heading across frames.
-    let x = 5, y = 5;
+    let x = 5,
+      y = 5;
     let lastRotation = 0;
     const path: Array<[number, number]> = [];
     for (let i = 0; i < 8; i++) {
       // Alternate axis: 0,2,4,6 move +x; 1,3,5,7 move +y.
       if (i % 2 === 0) x += 1;
-      else             y += 1;
+      else y += 1;
       path.push([x, y]);
     }
 
@@ -600,7 +693,7 @@ describe('drawSurfaceEntities — facing cache smoothing', () => {
     expect(lastRotation).toBeGreaterThan(-Math.PI);
     expect(lastRotation).toBeLessThan(-Math.PI / 2);
     // And closer to the diagonal (-3π/4) than to either axis.
-    const diag = -3 * Math.PI / 4;
+    const diag = (-3 * Math.PI) / 4;
     expect(Math.abs(lastRotation - diag)).toBeLessThan(Math.abs(lastRotation - -Math.PI));
     expect(Math.abs(lastRotation - diag)).toBeLessThan(Math.abs(lastRotation - -Math.PI / 2));
   });
@@ -613,7 +706,10 @@ describe('drawSurfaceEntities — facing cache smoothing', () => {
 
     // First ant (id=0) builds up a rightward heading over a couple frames.
     let prev = makeSurfaceAntWorld(5, 5);
-    for (const [nx, ny] of [[6, 5], [7, 5]] as Array<[number, number]>) {
+    for (const [nx, ny] of [
+      [6, 5],
+      [7, 5],
+    ] as Array<[number, number]>) {
       const curr = makeSurfaceAntWorld(nx, ny);
       drawSurfaceEntities(gfx, sprites, prev, curr, 1, cam, null, facing);
       prev = curr;
@@ -624,7 +720,9 @@ describe('drawSurfaceEntities — facing cache smoothing', () => {
     // rotation is the stable default (0), not carried over from the old ant.
     const freshPrev = createWorldState(1);
     const freshColony = createColonyRecord(PLAYER_COLONY_ID, 999);
-    freshColony.entrances = []; freshColony.rallyPoint = null; freshColony.digFlowFieldDirty = false;
+    freshColony.entrances = [];
+    freshColony.rallyPoint = null;
+    freshColony.digFlowFieldDirty = false;
     freshPrev.colonies[PLAYER_COLONY_ID] = freshColony;
     // id=0 intentionally not initialized in freshPrev — isAlive=false.
 
@@ -679,7 +777,9 @@ describe('drawSurfaceEntities — wrong-plane flicker guard', () => {
     const antId = 0;
     const colonyId = PLAYER_COLONY_ID;
     const colony = createColonyRecord(colonyId, 999);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     prev.colonies[colonyId] = colony;
     curr.colonies[colonyId] = colony;
 
@@ -704,7 +804,9 @@ describe('drawSurfaceEntities — wrong-plane flicker guard', () => {
     const antId = 0;
     const colonyId = PLAYER_COLONY_ID;
     const colony = createColonyRecord(colonyId, 999);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     prev.colonies[colonyId] = colony;
     curr.colonies[colonyId] = colony;
 
@@ -780,10 +882,10 @@ describe('drawSurfaceEntities — rally-point marker', () => {
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     const rects = rallyRects(gfx);
     expect(rects.length).toBeGreaterThan(0);
-    const left = Math.floor(cam.x - cam.viewportWidth  / 2);
-    const top  = Math.floor(cam.y - cam.viewportHeight / 2);
+    const left = Math.floor(cam.x - cam.viewportWidth / 2);
+    const top = Math.floor(cam.y - cam.viewportHeight / 2);
     const sx = (10 - left) * TILE_SIZE_PX;
-    const sy = (4  - top)  * TILE_SIZE_PX;
+    const sy = (4 - top) * TILE_SIZE_PX;
     for (const r of rects) {
       const rx = r.args[0] as number;
       const ry = r.args[1] as number;
@@ -840,35 +942,34 @@ describe('drawSurfaceEntities — rally-point marker', () => {
     expect(rects.length).toBe(3);
 
     // Derive expected pixel coords for the marker's tile.
-    const left = Math.floor(cam.x - cam.viewportWidth  / 2);
-    const top  = Math.floor(cam.y - cam.viewportHeight / 2);
+    const left = Math.floor(cam.x - cam.viewportWidth / 2);
+    const top = Math.floor(cam.y - cam.viewportHeight / 2);
     const sx = (5 - left) * TILE_SIZE_PX;
-    const sy = (5 - top)  * TILE_SIZE_PX;
+    const sy = (5 - top) * TILE_SIZE_PX;
 
     // Horizontal bar: full-tile-width minus edges, 2-px thick, centered vertically.
-    const hBar = rects.find(r =>
-      r.args[0] === sx + 1 &&
-      r.args[1] === sy + 7 &&
-      r.args[2] === TILE_SIZE_PX - 2 &&
-      r.args[3] === 2,
+    const hBar = rects.find(
+      (r) =>
+        r.args[0] === sx + 1 &&
+        r.args[1] === sy + 7 &&
+        r.args[2] === TILE_SIZE_PX - 2 &&
+        r.args[3] === 2,
     );
     expect(hBar).toBeDefined();
 
     // Vertical bar: 2-px wide, full-tile-height minus edges, centered horizontally.
-    const vBar = rects.find(r =>
-      r.args[0] === sx + 7 &&
-      r.args[1] === sy + 1 &&
-      r.args[2] === 2 &&
-      r.args[3] === TILE_SIZE_PX - 2,
+    const vBar = rects.find(
+      (r) =>
+        r.args[0] === sx + 7 &&
+        r.args[1] === sy + 1 &&
+        r.args[2] === 2 &&
+        r.args[3] === TILE_SIZE_PX - 2,
     );
     expect(vBar).toBeDefined();
 
     // Center accent: 4×4 square at tile center — required for pop against busy terrain.
-    const accent = rects.find(r =>
-      r.args[0] === sx + 6 &&
-      r.args[1] === sy + 6 &&
-      r.args[2] === 4 &&
-      r.args[3] === 4,
+    const accent = rects.find(
+      (r) => r.args[0] === sx + 6 && r.args[1] === sy + 6 && r.args[2] === 4 && r.args[3] === 4,
     );
     expect(accent).toBeDefined();
   });
@@ -928,7 +1029,12 @@ describe('drawSurfaceEntities — spider health bar (issue #148)', () => {
         pendingColor = c.args[0] as number;
         if (track !== null && fill === null) fillColor = pendingColor;
       } else if (c.method === 'fillRect') {
-        const rect = { x: c.args[0] as number, y: c.args[1] as number, w: c.args[2] as number, h: c.args[3] as number };
+        const rect = {
+          x: c.args[0] as number,
+          y: c.args[1] as number,
+          w: c.args[2] as number,
+          h: c.args[3] as number,
+        };
         if (pendingColor === 0x333333) track = rect;
         else if (track !== null && fill === null && pendingColor === fillColor) fill = rect;
       }
@@ -967,16 +1073,30 @@ describe('drawSurfaceEntities — spider health bar (issue #148)', () => {
     drawSurfaceEntities(gfx, new MockAntSprites(), world, world, 0, cam);
     const bar = findHealthBar(gfx)!;
     // Sprite center screen-y is tile 5 → 80px (camera left/top = -5 tiles).
-    const spriteCenterY = 80 - (-5 * TILE_SIZE_PX);
+    const spriteCenterY = 80 - -5 * TILE_SIZE_PX;
     expect(bar.track.y).toBeLessThan(spriteCenterY - SPIDER_SPRITE_HEIGHT / 2);
   });
 
   it('fill colour skews green at high hp and red at low hp', () => {
     const camY = makeCamera(5, 5, 20, 20);
     const highGfx = new MockGfx();
-    drawSurfaceEntities(highGfx, new MockAntSprites(), makeWorldWithSpider(SPIDER_HP_FULL * 0.9), makeWorldWithSpider(SPIDER_HP_FULL * 0.9), 0, camY);
+    drawSurfaceEntities(
+      highGfx,
+      new MockAntSprites(),
+      makeWorldWithSpider(SPIDER_HP_FULL * 0.9),
+      makeWorldWithSpider(SPIDER_HP_FULL * 0.9),
+      0,
+      camY,
+    );
     const lowGfx = new MockGfx();
-    drawSurfaceEntities(lowGfx, new MockAntSprites(), makeWorldWithSpider(SPIDER_HP_FULL * 0.1), makeWorldWithSpider(SPIDER_HP_FULL * 0.1), 0, camY);
+    drawSurfaceEntities(
+      lowGfx,
+      new MockAntSprites(),
+      makeWorldWithSpider(SPIDER_HP_FULL * 0.1),
+      makeWorldWithSpider(SPIDER_HP_FULL * 0.1),
+      0,
+      camY,
+    );
     const high = findHealthBar(highGfx)!.fillColor;
     const low = findHealthBar(lowGfx)!.fillColor;
     const green = (c: number) => (c >> 8) & 0xff;
@@ -1003,7 +1123,20 @@ describe('drawSurfaceEntities — spider health bar (issue #148)', () => {
     const overlay = new MockGfx();
     const world = makeWorldWithSpider(SPIDER_HP_FULL / 2);
     const cam = makeCamera(5, 5, 20, 20);
-    drawSurfaceEntities(base, new MockAntSprites(), world, world, 0, cam, null, undefined, 0, undefined, 0, overlay);
+    drawSurfaceEntities(
+      base,
+      new MockAntSprites(),
+      world,
+      world,
+      0,
+      cam,
+      null,
+      undefined,
+      0,
+      undefined,
+      0,
+      overlay,
+    );
     expect(findHealthBar(overlay)).not.toBeNull();
     expect(findHealthBar(base)).toBeNull();
   });
@@ -1051,7 +1184,7 @@ describe('drawSurfaceEntities — enemy entrance border (issue #14)', () => {
     enemy.digFlowFieldDirty = false;
     enemy.priorityFoodPileId = null;
     w.colonies[PLAYER_COLONY_ID] = player;
-    w.colonies[enemyId]         = enemy;
+    w.colonies[enemyId] = enemy;
     return w;
   }
 
@@ -1078,11 +1211,11 @@ describe('drawSurfaceEntities — enemy entrance border (issue #14)', () => {
     expect(enemyStrokes.length).toBe(1);
 
     // Center on tile center, radius = mound outer radius (TILE_SIZE_PX/2 + 2).
-    const left = Math.floor(cam.x - cam.viewportWidth  / 2);
-    const top  = Math.floor(cam.y - cam.viewportHeight / 2);
+    const left = Math.floor(cam.x - cam.viewportWidth / 2);
+    const top = Math.floor(cam.y - cam.viewportHeight / 2);
     const expectedCx = (tileX - left) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
-    const expectedCy = (tileY - top)  * TILE_SIZE_PX + TILE_SIZE_PX / 2;
-    const expectedR  = TILE_SIZE_PX / 2 + 2;
+    const expectedCy = (tileY - top) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+    const expectedR = TILE_SIZE_PX / 2 + 2;
     expect(enemyStrokes[0]).toEqual([expectedCx, expectedCy, expectedR]);
 
     // No enemy-colored fillRect should remain — the four-rect rectangle is gone.
@@ -1148,10 +1281,10 @@ describe('drawSurfaceEntities — enemy entrance border (issue #14)', () => {
     expect(circlesByColor.get(0x1a0f00)?.length).toBe(1); // COLOR_SURFACE_ENTRANCE_HOLE
 
     // Concentric and centered on the tile center; radii match mound > body > hole.
-    const left = Math.floor(cam.x - cam.viewportWidth  / 2);
-    const top  = Math.floor(cam.y - cam.viewportHeight / 2);
+    const left = Math.floor(cam.x - cam.viewportWidth / 2);
+    const top = Math.floor(cam.y - cam.viewportHeight / 2);
     const cx = (tileX - left) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
-    const cy = (tileY - top)  * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+    const cy = (tileY - top) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
     expect(circlesByColor.get(0x6d563a)![0]).toEqual([cx, cy, TILE_SIZE_PX / 2 + 2]);
     expect(circlesByColor.get(0x5a4a30)![0]).toEqual([cx, cy, TILE_SIZE_PX / 2 + 1]);
     expect(circlesByColor.get(0x1a0f00)![0]).toEqual([cx, cy, TILE_SIZE_PX / 2 - 2]);
@@ -1167,7 +1300,13 @@ describe('drawSurface', () => {
     const gfx = new MockGfx();
     const sprites = new MockAntSprites();
     const world = createWorldState(1);
-    world.foodPiles.push({ foodPileId: 1, tileX: 5, tileY: 5 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({
+      foodPileId: 1,
+      tileX: 5,
+      tileY: 5,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
     const cam = makeCamera(5, 5, 10, 10);
     drawSurface(gfx, sprites, world, world, 0, cam);
     expect(gfx.callsOf('fillRect').length).toBeGreaterThan(0);

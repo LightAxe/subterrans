@@ -18,7 +18,13 @@ export function makeCanvas(width: number, height: number): number[] {
 }
 
 /** Stamp a single pixel if (x, y) is in bounds. */
-export function paintPx(canvas: number[], width: number, x: number, y: number, color: number): void {
+export function paintPx(
+  canvas: number[],
+  width: number,
+  x: number,
+  y: number,
+  color: number,
+): void {
   if (x < 0 || y < 0 || x >= width) return;
   const height = canvas.length / width;
   if (y >= height) return;
@@ -105,8 +111,14 @@ export function paintLine(
     paintPx(canvas, width, x, y, color);
     if (x === x1 && y === y1) break;
     const e2 = 2 * err;
-    if (e2 > -dy) { err -= dy; x += sx; }
-    if (e2 <  dx) { err += dx; y += sy; }
+    if (e2 > -dy) {
+      err -= dy;
+      x += sx;
+    }
+    if (e2 < dx) {
+      err += dx;
+      y += sy;
+    }
   }
 }
 
@@ -128,9 +140,9 @@ export function paintGrassBlade(
   midColor: number,
   lightColor: number,
 ): void {
-  const len = Math.max(1, baseY - tipY);  // blade goes upward (baseY > tipY)
+  const len = Math.max(1, baseY - tipY); // blade goes upward (baseY > tipY)
   for (let i = 0; i <= len; i++) {
-    const t = i / len;  // 0 at base, 1 at tip
+    const t = i / len; // 0 at base, 1 at tip
     const x = Math.round(baseX + (tipX - baseX) * t);
     const y = baseY - i;
     // Color: dark for lower 25%, mid for middle 50%, light for upper 25%.
@@ -162,7 +174,7 @@ export function paintFlecks(
   seed: number,
 ): void {
   if (color === 0) return;
-  let s = (seed >>> 0) || 1;
+  let s = seed >>> 0 || 1;
   for (let i = 0; i < count; i++) {
     s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
     const x = x0 + (s % Math.max(1, x1 - x0 + 1));

@@ -24,32 +24,30 @@ const ctx: PauseMenuRenderContext = {
 describe('pauseMenuItems — main page', () => {
   it('returns 4 items in the documented order', () => {
     const items = pauseMenuItems('main', ctx);
-    expect(items.map(i => i.id)).toEqual([
-      'resume', 'save-load', 'settings', 'debug-snapshot',
-    ]);
+    expect(items.map((i) => i.id)).toEqual(['resume', 'save-load', 'settings', 'debug-snapshot']);
   });
 
   it('Save/Load row is disabled when saveLoadEnabled=false (issue #115 not yet wired)', () => {
     const items = pauseMenuItems('main', { ...ctx, saveLoadEnabled: false });
-    const saveLoad = items.find(i => i.id === 'save-load')!;
+    const saveLoad = items.find((i) => i.id === 'save-load')!;
     expect(saveLoad.enabled).toBe(false);
   });
 
   it('Save/Load row is enabled when saveLoadEnabled=true', () => {
     const items = pauseMenuItems('main', { ...ctx, saveLoadEnabled: true });
-    expect(items.find(i => i.id === 'save-load')!.enabled).toBe(true);
+    expect(items.find((i) => i.id === 'save-load')!.enabled).toBe(true);
   });
 
   it('Quit & feedback row is hidden when quitAndSurveyEnabled=false (issue #122 default)', () => {
     const items = pauseMenuItems('main', { ...ctx, quitAndSurveyEnabled: false });
-    expect(items.find(i => i.id === 'quit-and-survey')).toBeUndefined();
+    expect(items.find((i) => i.id === 'quit-and-survey')).toBeUndefined();
     // The default-off path keeps the original 4-row main menu.
     expect(items).toHaveLength(4);
   });
 
   it('Quit & feedback row is emitted when quitAndSurveyEnabled=true (issue #122)', () => {
     const items = pauseMenuItems('main', { ...ctx, quitAndSurveyEnabled: true });
-    const row = items.find(i => i.id === 'quit-and-survey');
+    const row = items.find((i) => i.id === 'quit-and-survey');
     expect(row).toBeDefined();
     expect(row!.enabled).toBe(true);
     expect(items).toHaveLength(5);
@@ -97,30 +95,39 @@ describe('pauseMenuItems — main page', () => {
 describe('pauseMenuItems — settings page', () => {
   it('returns the pheromone toggle, speed cycle, and a back button', () => {
     const items = pauseMenuItems('settings', ctx);
-    expect(items.map(i => i.id)).toEqual(['pheromone-toggle', 'speed-cycle', 'back']);
+    expect(items.map((i) => i.id)).toEqual(['pheromone-toggle', 'speed-cycle', 'back']);
   });
 
   it('pheromone toggle label reflects the current ON state', () => {
     const items = pauseMenuItems('settings', { ...ctx, currentPheromoneOverlay: true });
-    expect(items.find(i => i.id === 'pheromone-toggle')!.label).toContain('ON');
+    expect(items.find((i) => i.id === 'pheromone-toggle')!.label).toContain('ON');
   });
 
   it('pheromone toggle label reflects the current OFF state', () => {
     const items = pauseMenuItems('settings', { ...ctx, currentPheromoneOverlay: false });
-    expect(items.find(i => i.id === 'pheromone-toggle')!.label).toContain('OFF');
+    expect(items.find((i) => i.id === 'pheromone-toggle')!.label).toContain('OFF');
   });
 
   it('speed-cycle label reflects the current speed multiplier', () => {
-    expect(pauseMenuItems('settings', { ...ctx, currentSpeedMultiplier: 1 })
-      .find(i => i.id === 'speed-cycle')!.label).toContain('1×');
-    expect(pauseMenuItems('settings', { ...ctx, currentSpeedMultiplier: 2 })
-      .find(i => i.id === 'speed-cycle')!.label).toContain('2×');
-    expect(pauseMenuItems('settings', { ...ctx, currentSpeedMultiplier: 4 })
-      .find(i => i.id === 'speed-cycle')!.label).toContain('4×');
+    expect(
+      pauseMenuItems('settings', { ...ctx, currentSpeedMultiplier: 1 }).find(
+        (i) => i.id === 'speed-cycle',
+      )!.label,
+    ).toContain('1×');
+    expect(
+      pauseMenuItems('settings', { ...ctx, currentSpeedMultiplier: 2 }).find(
+        (i) => i.id === 'speed-cycle',
+      )!.label,
+    ).toContain('2×');
+    expect(
+      pauseMenuItems('settings', { ...ctx, currentSpeedMultiplier: 4 }).find(
+        (i) => i.id === 'speed-cycle',
+      )!.label,
+    ).toContain('4×');
   });
 
   it('speed-cycle row is enabled', () => {
-    expect(pauseMenuItems('settings', ctx).find(i => i.id === 'speed-cycle')!.enabled).toBe(true);
+    expect(pauseMenuItems('settings', ctx).find((i) => i.id === 'speed-cycle')!.enabled).toBe(true);
   });
 });
 
@@ -134,9 +141,15 @@ describe('pageTitle', () => {
 });
 
 describe('nextSpeedMultiplier — cycle 1→2→4→1', () => {
-  it('1 → 2', () => { expect(nextSpeedMultiplier(1)).toBe(2); });
-  it('2 → 4', () => { expect(nextSpeedMultiplier(2)).toBe(4); });
-  it('4 → 1', () => { expect(nextSpeedMultiplier(4)).toBe(1); });
+  it('1 → 2', () => {
+    expect(nextSpeedMultiplier(1)).toBe(2);
+  });
+  it('2 → 4', () => {
+    expect(nextSpeedMultiplier(2)).toBe(4);
+  });
+  it('4 → 1', () => {
+    expect(nextSpeedMultiplier(4)).toBe(1);
+  });
 });
 
 describe('itemAt', () => {
@@ -154,7 +167,7 @@ describe('itemAt', () => {
 
   it('skips disabled items even when the pointer is inside their rect', () => {
     const items = pauseMenuItems('main', { ...ctx, saveLoadEnabled: false });
-    const saveLoad = items.find(i => i.id === 'save-load')!;
+    const saveLoad = items.find((i) => i.id === 'save-load')!;
     expect(itemAt(items, saveLoad.rect.x + 5, saveLoad.rect.y + 5)).toBeNull();
   });
 });

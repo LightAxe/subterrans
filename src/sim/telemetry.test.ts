@@ -73,7 +73,9 @@ describe('emitEvent — combat_kill eviction at cap', () => {
     // The evicted event was tick=0; tick=1 is now the oldest
     expect(world.events[0]!.tick).toBe(1);
     // The new event is last
-    expect(world.events[PLAYTRACE_EVENT_CAP_PER_ROUND - 1]!.tick).toBe(PLAYTRACE_EVENT_CAP_PER_ROUND);
+    expect(world.events[PLAYTRACE_EVENT_CAP_PER_ROUND - 1]!.tick).toBe(
+      PLAYTRACE_EVENT_CAP_PER_ROUND,
+    );
   });
 
   it('evicts oldest combat_kill when a structural event pushes over cap', () => {
@@ -109,7 +111,9 @@ describe('emitEvent — structural drop when no combat_kill available', () => {
     expect(world.droppedStructuralCount).toBe(1);
     expect(world.droppedCombatKillCount).toBe(0);
     // Last event should NOT be tick=9999 (was dropped)
-    expect(world.events[PLAYTRACE_EVENT_CAP_PER_ROUND - 1]!.tick).toBe(PLAYTRACE_EVENT_CAP_PER_ROUND - 1);
+    expect(world.events[PLAYTRACE_EVENT_CAP_PER_ROUND - 1]!.tick).toBe(
+      PLAYTRACE_EVENT_CAP_PER_ROUND - 1,
+    );
   });
 
   it('evicts combat_kills before falling back to structural drop', () => {
@@ -151,7 +155,9 @@ describe('V15 migration — deserializeWorldState', () => {
     delete raw['droppedCombatKillCount'];
     delete raw['droppedStructuralCount'];
 
-    const restored = deserializeWorldState(raw as unknown as Parameters<typeof deserializeWorldState>[0]);
+    const restored = deserializeWorldState(
+      raw as unknown as Parameters<typeof deserializeWorldState>[0],
+    );
     expect(restored.events).toEqual([]);
     expect(restored.droppedCombatKillCount).toBe(0);
     expect(restored.droppedStructuralCount).toBe(0);

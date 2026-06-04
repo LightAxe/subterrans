@@ -28,10 +28,10 @@ import {
 // ---------------------------------------------------------------------------
 
 const DIRS = [
-  { dx: 0,  dy: -1 }, // up
-  { dx: 0,  dy:  1 }, // down
-  { dx: -1, dy:  0 }, // left
-  { dx:  1, dy:  0 }, // right
+  { dx: 0, dy: -1 }, // up
+  { dx: 0, dy: 1 }, // down
+  { dx: -1, dy: 0 }, // left
+  { dx: 1, dy: 0 }, // right
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -352,7 +352,7 @@ export function sampleForagingDirection(
       // non-prev cell (or a lateral cell) win the tie-break.
       if (hasPrev) {
         const stepX = absX >= absY ? (dx > 0 ? 1 : dx < 0 ? -1 : 0) : 0;
-        const stepY = absX >= absY ? 0 : (dy > 0 ? 1 : dy < 0 ? -1 : 0);
+        const stepY = absX >= absY ? 0 : dy > 0 ? 1 : dy < 0 ? -1 : 0;
         if (tileX + stepX === prevTileX && tileY + stepY === prevTileY) continue;
       }
       const s = phGet(grid, sx, sy);

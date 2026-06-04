@@ -5,13 +5,7 @@
 // readability of every tile, so a regression in either is worth catching.
 
 import { describe, expect, it } from 'vitest';
-import {
-  spatialHash,
-  pixelNoise,
-  bayer4,
-  bayer4Threshold,
-  motifOffset,
-} from './terrain-noise.js';
+import { spatialHash, pixelNoise, bayer4, bayer4Threshold, motifOffset } from './terrain-noise.js';
 import { TILE_SIZE_PX } from './sprites.js';
 
 describe('spatialHash', () => {

@@ -73,10 +73,7 @@ export function bfsExpandSeededField(
       if (out[nIdx] !== -2) continue;
 
       const tileState = data[nIdx]!;
-      if (
-        tileState !== UndergroundTileState.Open &&
-        tileState !== UndergroundTileState.BeingDug
-      ) {
+      if (tileState !== UndergroundTileState.Open && tileState !== UndergroundTileState.BeingDug) {
         continue;
       }
 

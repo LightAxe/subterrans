@@ -18,15 +18,15 @@ export type CaptionKey =
   | 'queenStarvation';
 
 const CAPTION_TEXTS: Record<CaptionKey, string> = {
-  dig:             'Your workers will excavate the marked tile.',
-  chamber:         'Chambers give workers and brood a purpose. This one is a [Chamber Type].',
-  spider:          'A spider is hunting your ants. Use fighters to protect your queen.',
-  foodMark:        'Your foragers will prioritize this pile.',
-  rally:           'Fighters will converge here.',
-  spiderPriority:  'Your fighters are engaging the spider.',
-  aiInvading:      'The enemy is attacking your hive.',
-  spiderRampage:   'The spider has gone hungry and is in the tunnels.',
-  queenDamage:     'Your queen is in danger.',
+  dig: 'Your workers will excavate the marked tile.',
+  chamber: 'Chambers give workers and brood a purpose. This one is a [Chamber Type].',
+  spider: 'A spider is hunting your ants. Use fighters to protect your queen.',
+  foodMark: 'Your foragers will prioritize this pile.',
+  rally: 'Fighters will converge here.',
+  spiderPriority: 'Your fighters are engaging the spider.',
+  aiInvading: 'The enemy is attacking your hive.',
+  spiderRampage: 'The spider has gone hungry and is in the tunnels.',
+  queenDamage: 'Your queen is in danger.',
   queenStarvation: 'Your queen is growing hungry.',
 };
 

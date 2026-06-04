@@ -8,10 +8,7 @@
 //   - surfaceMovementAt convenience helper
 
 import { describe, it, expect } from 'vitest';
-import {
-  createWorldState,
-  type WorldState,
-} from './types.js';
+import { createWorldState, type WorldState } from './types.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import {
   surfaceFeatureAt,
@@ -34,12 +31,14 @@ function installColonyWithEntrance(
   surfaceTileY: number,
 ): void {
   const colony = createColonyRecord(colonyId, /* queenEntityId */ 0);
-  colony.entrances = [{
-    entranceId: 0,
-    surfaceTileX,
-    surfaceTileY,
-    isOpen: true,
-  }];
+  colony.entrances = [
+    {
+      entranceId: 0,
+      surfaceTileX,
+      surfaceTileY,
+      isOpen: true,
+    },
+  ];
   colony.rallyPoint = null;
   colony.digFlowFieldDirty = false;
   world.colonies[colonyId] = colony;
@@ -215,8 +214,10 @@ describe('surfaceFeatureAt — gameplay suppression', () => {
     // the centre return null OR a slice anchored OUTSIDE the rectangle.
     const tiles: Array<[number, number]> = [
       [50, 50],
-      [50 - r, 50 - r], [50 + r, 50 - r],
-      [50 - r, 50 + r], [50 + r, 50 + r],
+      [50 - r, 50 - r],
+      [50 + r, 50 - r],
+      [50 - r, 50 + r],
+      [50 + r, 50 + r],
     ];
     for (const [tx, ty] of tiles) {
       const slice = surfaceFeatureAt(world, tx, ty);
@@ -259,7 +260,10 @@ describe('surfaceFeatureAt — gameplay suppression', () => {
     for (let y = 60; y < 90 && second === null; y++) {
       for (let x = 60; x < 90; x++) {
         const slice = surfaceFeatureAt(baseline, x, y);
-        if (slice !== null) { second = { x, y, slice }; break; }
+        if (slice !== null) {
+          second = { x, y, slice };
+          break;
+        }
       }
     }
     expect(second).not.toBeNull();
@@ -298,11 +302,11 @@ describe('surfaceFeatureAt — gameplay suppression', () => {
     // theory.
     const r = SURFACE_FEATURE_ENTRANCE_RADIUS;
     let demonstrationCount = 0;
-    seedLoop:
-    for (let seed = 1; seed < 80; seed++) {
+    seedLoop: for (let seed = 1; seed < 80; seed++) {
       const baseline = createWorldState(seed);
       // Place an entrance at a known location with room around it.
-      const ex = 30, ey = 30;
+      const ex = 30,
+        ey = 30;
       // Examine tiles just OUTSIDE the entrance suppression rectangle
       // — on the perimeter where the shadow bug would manifest.
       for (let dy = -r - 6; dy <= r + 6; dy++) {
@@ -319,8 +323,7 @@ describe('surfaceFeatureAt — gameplay suppression', () => {
           // the shadow bug.
           const ax = baselineSlice.anchorX;
           const ay = baselineSlice.anchorY;
-          const anchorInsideZone =
-            ax >= ex - r && ax <= ex + r && ay >= ey - r && ay <= ey + r;
+          const anchorInsideZone = ax >= ex - r && ax <= ex + r && ay >= ey - r && ay <= ey + r;
           if (!anchorInsideZone) continue;
           // Setup: install the entrance, re-query.
           const withEntrance = createWorldState(seed);
@@ -341,8 +344,10 @@ describe('surfaceFeatureAt — gameplay suppression', () => {
           // baseline (proves a different anchor took over).
           if (v8Slice === null) continue;
           const v8AnchorOutsideZone =
-            v8Slice.anchorX < ex - r || v8Slice.anchorX > ex + r ||
-            v8Slice.anchorY < ey - r || v8Slice.anchorY > ey + r;
+            v8Slice.anchorX < ex - r ||
+            v8Slice.anchorX > ex + r ||
+            v8Slice.anchorY < ey - r ||
+            v8Slice.anchorY > ey + r;
           // baselineSlice anchor is INSIDE the zone (anchorInsideZone
           // gate above); requiring v8 anchor to be OUTSIDE the zone
           // is sufficient to prove a different anchor surfaced — they
@@ -360,7 +365,6 @@ describe('surfaceFeatureAt — gameplay suppression', () => {
     // contrived setup.
     expect(demonstrationCount).toBeGreaterThanOrEqual(1);
   });
-
 });
 
 describe('surfaceMovementAt', () => {
@@ -430,9 +434,12 @@ describe('overlap-suppression invariant — UAT "two overlapping rocks" guard', 
               // fine — we only count the direct "anchor-covers-tile"
               // relationship.
               if (
-                candSlice.anchorX === ax && candSlice.anchorY === ay &&
-                x >= ax && x < ax + candSlice.footprintTilesWide &&
-                y >= ay && y < ay + candSlice.footprintTilesTall
+                candSlice.anchorX === ax &&
+                candSlice.anchorY === ay &&
+                x >= ax &&
+                x < ax + candSlice.footprintTilesWide &&
+                y >= ay &&
+                y < ay + candSlice.footprintTilesTall
               ) {
                 candidatesActive++;
               }

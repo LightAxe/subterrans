@@ -183,11 +183,7 @@ export function createViewState(startTileX: number, startTileY: number): ViewSta
  * first-visit flag. Save files do not persist camera state, so continue-from-
  * save also starts the player back at the default surface view.
  */
-export function resetViewState(
-  viewState: ViewState,
-  startTileX: number,
-  startTileY: number,
-): void {
+export function resetViewState(viewState: ViewState, startTileX: number, startTileY: number): void {
   viewState.activeView = 'surface';
   viewState.surfaceCamera.x = startTileX;
   viewState.surfaceCamera.y = startTileY;
@@ -269,9 +265,7 @@ export function toggleView(viewState: ViewState): void {
  */
 export function toggleUndergroundColony(viewState: ViewState): void {
   viewState.activeUndergroundColonyId =
-    viewState.activeUndergroundColonyId === PLAYER_COLONY_ID
-      ? ENEMY_COLONY_ID
-      : PLAYER_COLONY_ID;
+    viewState.activeUndergroundColonyId === PLAYER_COLONY_ID ? ENEMY_COLONY_ID : PLAYER_COLONY_ID;
 }
 
 // ---------------------------------------------------------------------------

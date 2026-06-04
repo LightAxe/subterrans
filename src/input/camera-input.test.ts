@@ -69,16 +69,18 @@ function makeViewState(
 }
 
 /** Build a minimal mock PanInputs with all keys up. */
-function makePanInputs(overrides: Partial<{
-  leftDown: boolean;
-  rightDown: boolean;
-  upDown: boolean;
-  downDown: boolean;
-  wasdA: boolean;
-  wasdD: boolean;
-  wasdW: boolean;
-  wasdS: boolean;
-}> = {}): PanInputs {
+function makePanInputs(
+  overrides: Partial<{
+    leftDown: boolean;
+    rightDown: boolean;
+    upDown: boolean;
+    downDown: boolean;
+    wasdA: boolean;
+    wasdD: boolean;
+    wasdW: boolean;
+    wasdS: boolean;
+  }> = {},
+): PanInputs {
   const opts = {
     leftDown: false,
     rightDown: false,
@@ -96,10 +98,10 @@ function makePanInputs(overrides: Partial<{
   }
 
   const cursors = {
-    left:  key(opts.leftDown),
+    left: key(opts.leftDown),
     right: key(opts.rightDown),
-    up:    key(opts.upDown),
-    down:  key(opts.downDown),
+    up: key(opts.upDown),
+    down: key(opts.downDown),
   } as unknown as import('phaser').Types.Input.Keyboard.CursorKeys;
 
   const wasd = {
@@ -145,10 +147,9 @@ describe('isPointerOverHUD', () => {
       expect(isPointerOverHUD(HUD.STATS.x, HUD.STATS.y + HUD.STATS.h)).toBe(false);
     });
     it('returns true for point at (right-1, bottom-1) inside STATS', () => {
-      expect(isPointerOverHUD(
-        HUD.STATS.x + HUD.STATS.w - 1,
-        HUD.STATS.y + HUD.STATS.h - 1,
-      )).toBe(true);
+      expect(isPointerOverHUD(HUD.STATS.x + HUD.STATS.w - 1, HUD.STATS.y + HUD.STATS.h - 1)).toBe(
+        true,
+      );
     });
   });
 
@@ -190,7 +191,10 @@ describe('isPointerOverHUD', () => {
     }
 
     it('masks the colony-toggle zone ONLY when activeView === underground', () => {
-      const inside = [HUD.UNDERGROUND_COLONY_TOGGLE.x + 5, HUD.UNDERGROUND_COLONY_TOGGLE.y + 5] as const;
+      const inside = [
+        HUD.UNDERGROUND_COLONY_TOGGLE.x + 5,
+        HUD.UNDERGROUND_COLONY_TOGGLE.y + 5,
+      ] as const;
       // Underground view → the toggle is rendered → click zone is masked.
       expect(isPointerOverHUD(inside[0], inside[1], vs('underground'))).toBe(true);
       // Surface view → the toggle is invisible → masking it would create a
@@ -201,11 +205,13 @@ describe('isPointerOverHUD', () => {
     });
 
     it('returns false for a point above the colony-toggle button', () => {
-      expect(isPointerOverHUD(
-        HUD.UNDERGROUND_COLONY_TOGGLE.x + 5,
-        HUD.UNDERGROUND_COLONY_TOGGLE.y - 1,
-        vs('underground'),
-      )).toBe(false);
+      expect(
+        isPointerOverHUD(
+          HUD.UNDERGROUND_COLONY_TOGGLE.x + 5,
+          HUD.UNDERGROUND_COLONY_TOGGLE.y - 1,
+          vs('underground'),
+        ),
+      ).toBe(false);
     });
   });
 
@@ -243,10 +249,7 @@ describe('isPointerOverHUD', () => {
       expect(antActivityPanelState.visible).toBe(false);
       // Panel rect is safely outside every other HUD zone, so this is a
       // clean conditional-mask test.
-      expect(isPointerOverHUD(
-        ANT_ACTIVITY_PANEL.x + 5,
-        ANT_ACTIVITY_PANEL.y + 5,
-      )).toBe(false);
+      expect(isPointerOverHUD(ANT_ACTIVITY_PANEL.x + 5, ANT_ACTIVITY_PANEL.y + 5)).toBe(false);
     });
 
     it('masks the panel rect when panel is visible', async () => {
@@ -255,10 +258,7 @@ describe('isPointerOverHUD', () => {
       const { ANT_ACTIVITY_PANEL } = await import('../render/ant-activity.js');
       showAntActivityPanel();
       try {
-        expect(isPointerOverHUD(
-          ANT_ACTIVITY_PANEL.x + 5,
-          ANT_ACTIVITY_PANEL.y + 5,
-        )).toBe(true);
+        expect(isPointerOverHUD(ANT_ACTIVITY_PANEL.x + 5, ANT_ACTIVITY_PANEL.y + 5)).toBe(true);
       } finally {
         hideAntActivityPanel();
       }
@@ -274,11 +274,8 @@ describe('isPointerOverHUD', () => {
       // produces both a world action AND a dismissal. Masking on `visible`
       // alone forces the world handler to drop the click regardless of
       // listener order.
-      const {
-        showAntActivityPanel,
-        hideAntActivityPanel,
-        antActivityPanelState,
-      } = await import('../render/ant-activity-panel-state.js');
+      const { showAntActivityPanel, hideAntActivityPanel, antActivityPanelState } =
+        await import('../render/ant-activity-panel-state.js');
       showAntActivityPanel();
       try {
         expect(antActivityPanelState.visible).toBe(true);
@@ -313,10 +310,7 @@ describe('isPointerOverHUD', () => {
         expect(antActivityPanelState.visible).toBe(true);
         expect(antActivityPanelState.pendingHide).toBe(true);
         // Panel rect itself — masked.
-        expect(isPointerOverHUD(
-          ANT_ACTIVITY_PANEL.x + 5,
-          ANT_ACTIVITY_PANEL.y + 5,
-        )).toBe(true);
+        expect(isPointerOverHUD(ANT_ACTIVITY_PANEL.x + 5, ANT_ACTIVITY_PANEL.y + 5)).toBe(true);
         // Deep middle of the world map — must ALSO be masked.
         expect(isPointerOverHUD(400, 300)).toBe(true);
         // A point near a map edge — also masked.

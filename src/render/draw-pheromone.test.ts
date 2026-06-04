@@ -19,10 +19,7 @@ import { createWorldState } from '../sim/types.js';
 import { createPheromoneGrid, phSet, pheromoneGridKey } from '../sim/pheromone/pheromone-store.js';
 import { PheromoneType } from '../sim/enums.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
-import {
-  COLOR_PHEROMONE_FOOD_FAINT,
-  COLOR_PHEROMONE_FOOD_STRONG,
-} from './sprites.js';
+import { COLOR_PHEROMONE_FOOD_FAINT, COLOR_PHEROMONE_FOOD_STRONG } from './sprites.js';
 import type { CameraState } from './camera.js';
 
 // ---------------------------------------------------------------------------
@@ -37,31 +34,42 @@ interface GfxCall {
 class MockGfx implements GfxLike {
   calls: GfxCall[] = [];
 
-  clear(): GfxLike { this.calls.push({ method: 'clear', args: [] }); return this; }
+  clear(): GfxLike {
+    this.calls.push({ method: 'clear', args: [] });
+    return this;
+  }
   fillStyle(color: number, alpha?: number): GfxLike {
-    this.calls.push({ method: 'fillStyle', args: [color, alpha] }); return this;
+    this.calls.push({ method: 'fillStyle', args: [color, alpha] });
+    return this;
   }
   lineStyle(width: number, color: number, alpha?: number): GfxLike {
-    this.calls.push({ method: 'lineStyle', args: [width, color, alpha] }); return this;
+    this.calls.push({ method: 'lineStyle', args: [width, color, alpha] });
+    return this;
   }
   fillRect(x: number, y: number, w: number, h: number): GfxLike {
-    this.calls.push({ method: 'fillRect', args: [x, y, w, h] }); return this;
+    this.calls.push({ method: 'fillRect', args: [x, y, w, h] });
+    return this;
   }
   fillCircle(x: number, y: number, r: number): GfxLike {
-    this.calls.push({ method: 'fillCircle', args: [x, y, r] }); return this;
+    this.calls.push({ method: 'fillCircle', args: [x, y, r] });
+    return this;
   }
   strokeCircle(x: number, y: number, r: number): GfxLike {
-    this.calls.push({ method: 'strokeCircle', args: [x, y, r] }); return this;
+    this.calls.push({ method: 'strokeCircle', args: [x, y, r] });
+    return this;
   }
   fillTriangle(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number): GfxLike {
-    this.calls.push({ method: 'fillTriangle', args: [x0, y0, x1, y1, x2, y2] }); return this;
+    this.calls.push({ method: 'fillTriangle', args: [x0, y0, x1, y1, x2, y2] });
+    return this;
   }
 
   callsOf(method: string): GfxCall[] {
-    return this.calls.filter(c => c.method === method);
+    return this.calls.filter((c) => c.method === method);
   }
 
-  reset(): void { this.calls = []; }
+  reset(): void {
+    this.calls = [];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -89,7 +97,11 @@ function makeWorldWithFoodGrid(width: number, height: number): WorldState {
 
 describe('pheromoneRenderParams', () => {
   it('value=0 → alpha=0, color=faintColor', () => {
-    const result = pheromoneRenderParams(0, COLOR_PHEROMONE_FOOD_FAINT, COLOR_PHEROMONE_FOOD_STRONG);
+    const result = pheromoneRenderParams(
+      0,
+      COLOR_PHEROMONE_FOOD_FAINT,
+      COLOR_PHEROMONE_FOOD_STRONG,
+    );
     expect(result.alpha).toBe(0);
     expect(result.color).toBe(COLOR_PHEROMONE_FOOD_FAINT);
   });
@@ -145,9 +157,9 @@ describe('drawPheromoneOverlay — FoodTrail grid', () => {
     const key = pheromoneGridKey(PLAYER_COLONY_ID, PheromoneType.FoodTrail, 'surface');
     const grid = world.pheromoneGrids[key]!;
     phSet(grid, 0, 0, 0);
-    phSet(grid, 1, 0, PHEROMONE_VISUAL_MAX >> 2);   // ¼ → normalized 0.25
-    phSet(grid, 2, 0, PHEROMONE_VISUAL_MAX >> 1);   // ½ → normalized 0.5
-    phSet(grid, 3, 0, PHEROMONE_VISUAL_MAX);         // full → normalized 1.0
+    phSet(grid, 1, 0, PHEROMONE_VISUAL_MAX >> 2); // ¼ → normalized 0.25
+    phSet(grid, 2, 0, PHEROMONE_VISUAL_MAX >> 1); // ½ → normalized 0.5
+    phSet(grid, 3, 0, PHEROMONE_VISUAL_MAX); // full → normalized 1.0
   });
 
   it('produces exactly 3 fillRect calls (skips the zero tile)', () => {
@@ -163,7 +175,7 @@ describe('drawPheromoneOverlay — FoodTrail grid', () => {
     const styles = gfx.callsOf('fillStyle');
     // fillStyle is called once per non-zero tile, in order tx=1,2,3
     expect(styles.length).toBe(3);
-    const alphas = styles.map(s => s.args[1] as number);
+    const alphas = styles.map((s) => s.args[1] as number);
     // alpha should be strictly increasing
     expect(alphas[0]).toBeLessThan(alphas[1]!);
     expect(alphas[1]).toBeLessThan(alphas[2]!);
@@ -241,7 +253,7 @@ describe('drawPheromoneOverlay — both pheromone types', () => {
     drawPheromoneOverlay(gfx, world, cam, 'surface');
 
     const styles = gfx.callsOf('fillStyle');
-    const colors = styles.map(s => s.args[0] as number);
+    const colors = styles.map((s) => s.args[0] as number);
 
     // At full intensity: food → FOOD_STRONG, danger → DANGER_STRONG
     expect(colors).toContain(COLOR_PHEROMONE_FOOD_STRONG);

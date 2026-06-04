@@ -11,15 +11,33 @@ import { MATCH_TIMEOUT_TICKS, STALEMATE_FOOD_THRESHOLD_FP } from './constants.js
 function makeWorldWith2Colonies(): { world: WorldState; queen1: number; queen2: number } {
   const world = createWorldState(42);
   const queen1 = allocateEntityId(world);
-  initAnt(world.ants, queen1, { colonyId: 1, posX: 0, posY: 0, task: AntTask.Idle, subTask: 0, speed: 0 });
+  initAnt(world.ants, queen1, {
+    colonyId: 1,
+    posX: 0,
+    posY: 0,
+    task: AntTask.Idle,
+    subTask: 0,
+    speed: 0,
+  });
   const c1 = createColonyRecord(1 as ColonyId, queen1);
-  c1.entrances = []; c1.rallyPoint = null; c1.digFlowFieldDirty = false;
+  c1.entrances = [];
+  c1.rallyPoint = null;
+  c1.digFlowFieldDirty = false;
   world.colonies[1] = c1;
 
   const queen2 = allocateEntityId(world);
-  initAnt(world.ants, queen2, { colonyId: 2, posX: 0, posY: 0, task: AntTask.Idle, subTask: 0, speed: 0 });
+  initAnt(world.ants, queen2, {
+    colonyId: 2,
+    posX: 0,
+    posY: 0,
+    task: AntTask.Idle,
+    subTask: 0,
+    speed: 0,
+  });
   const c2 = createColonyRecord(2 as ColonyId, queen2);
-  c2.entrances = []; c2.rallyPoint = null; c2.digFlowFieldDirty = false;
+  c2.entrances = [];
+  c2.rallyPoint = null;
+  c2.digFlowFieldDirty = false;
   world.colonies[2] = c2;
 
   return { world, queen1, queen2 };
@@ -109,7 +127,10 @@ describe('game-over detection', () => {
 // S5 (V22) — checkTiebreaks
 // ---------------------------------------------------------------------------
 
-function makeV22WorldWith2Colonies(playerColonyId = 1, aiColonyId = 2): {
+function makeV22WorldWith2Colonies(
+  playerColonyId = 1,
+  aiColonyId = 2,
+): {
   world: WorldState;
   queen1: number;
   queen2: number;
@@ -120,23 +141,50 @@ function makeV22WorldWith2Colonies(playerColonyId = 1, aiColonyId = 2): {
   world.difficulty = 'Normal';
   // Default food pile prevents spurious stalemate in tests that only check other conditions.
   // Stalemate tests explicitly set world.foodPiles = [] to override this.
-  world.foodPiles = [{ foodPileId: 1, tileX: 10, tileY: 10, pickupsRemaining: 1, pickupsInitial: 1 }];
+  world.foodPiles = [
+    { foodPileId: 1, tileX: 10, tileY: 10, pickupsRemaining: 1, pickupsInitial: 1 },
+  ];
 
   const queen1 = allocateEntityId(world);
-  initAnt(world.ants, queen1, { colonyId: playerColonyId, posX: 0, posY: 0, task: AntTask.Idle, subTask: 0, speed: 0 });
+  initAnt(world.ants, queen1, {
+    colonyId: playerColonyId,
+    posX: 0,
+    posY: 0,
+    task: AntTask.Idle,
+    subTask: 0,
+    speed: 0,
+  });
   const c1 = createColonyRecord(playerColonyId as ColonyId, queen1);
-  c1.entrances = []; c1.rallyPoint = null; c1.digFlowFieldDirty = false;
+  c1.entrances = [];
+  c1.rallyPoint = null;
+  c1.digFlowFieldDirty = false;
   world.colonies[playerColonyId] = c1;
 
   const queen2 = allocateEntityId(world);
-  initAnt(world.ants, queen2, { colonyId: aiColonyId, posX: 0, posY: 0, task: AntTask.Idle, subTask: 0, speed: 0 });
+  initAnt(world.ants, queen2, {
+    colonyId: aiColonyId,
+    posX: 0,
+    posY: 0,
+    task: AntTask.Idle,
+    subTask: 0,
+    speed: 0,
+  });
   const c2 = createColonyRecord(aiColonyId as ColonyId, queen2);
-  c2.entrances = []; c2.rallyPoint = null; c2.digFlowFieldDirty = false;
+  c2.entrances = [];
+  c2.rallyPoint = null;
+  c2.digFlowFieldDirty = false;
   world.colonies[aiColonyId] = c2;
 
   const addWorker = (colonyId: number): number => {
     const id = allocateEntityId(world);
-    initAnt(world.ants, id, { colonyId: colonyId as ColonyId, posX: 1, posY: 1, task: AntTask.Idle, subTask: 0, speed: 0 });
+    initAnt(world.ants, id, {
+      colonyId: colonyId as ColonyId,
+      posX: 1,
+      posY: 1,
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: 0,
+    });
     // Must push into colony.workers so livingWorkerCount (which iterates colony.workers) sees this ant.
     world.colonies[colonyId]!.workers.push(id);
     world.colonies[colonyId]!.workerCount += 1;
@@ -157,21 +205,26 @@ describe('checkTiebreaks (S5 V22)', () => {
     it('returns MutualDestruction when worker counts are equal', () => {
       const { world, addWorker } = makeV22WorldWith2Colonies();
       world.tick = MATCH_TIMEOUT_TICKS;
-      addWorker(1); addWorker(2); // one worker each
+      addWorker(1);
+      addWorker(2); // one worker each
       expect(checkTiebreaks(world, 1 as ColonyId)).toBe(GameOutcome.MutualDestruction);
     });
 
     it('returns Victory when player has more workers', () => {
       const { world, addWorker } = makeV22WorldWith2Colonies();
       world.tick = MATCH_TIMEOUT_TICKS;
-      addWorker(1); addWorker(1); addWorker(2); // 2 player vs 1 AI
+      addWorker(1);
+      addWorker(1);
+      addWorker(2); // 2 player vs 1 AI
       expect(checkTiebreaks(world, 1 as ColonyId)).toBe(GameOutcome.Victory);
     });
 
     it('returns Defeat when AI has more workers', () => {
       const { world, addWorker } = makeV22WorldWith2Colonies();
       world.tick = MATCH_TIMEOUT_TICKS;
-      addWorker(1); addWorker(2); addWorker(2); // 1 player vs 2 AI
+      addWorker(1);
+      addWorker(2);
+      addWorker(2); // 1 player vs 2 AI
       expect(checkTiebreaks(world, 1 as ColonyId)).toBe(GameOutcome.Defeat);
     });
 
@@ -190,7 +243,9 @@ describe('checkTiebreaks (S5 V22)', () => {
   describe('Stalemate tiebreak', () => {
     it('returns None when food piles remain on the map', () => {
       const { world } = makeV22WorldWith2Colonies();
-      world.foodPiles = [{ foodPileId: 99, tileX: 5, tileY: 5, pickupsRemaining: 1, pickupsInitial: 1 }];
+      world.foodPiles = [
+        { foodPileId: 99, tileX: 5, tileY: 5, pickupsRemaining: 1, pickupsInitial: 1 },
+      ];
       // both colonies below threshold
       expect(checkTiebreaks(world, 1 as ColonyId)).toBe(GameOutcome.None);
     });

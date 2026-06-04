@@ -55,24 +55,49 @@ function setup(): Setup {
     for (let x = 5; x <= 40; x++) ugSet(underground, x, y, UndergroundTileState.Open);
   }
   const A: ChamberRecord = {
-    chamberId: 10, chamberType: ChamberType.Nursery, foodStored: 0,
-    posX: 10 << FP_SHIFT, posY: 4 << FP_SHIFT, width: 4, height: 3,
+    chamberId: 10,
+    chamberType: ChamberType.Nursery,
+    foodStored: 0,
+    posX: 10 << FP_SHIFT,
+    posY: 4 << FP_SHIFT,
+    width: 4,
+    height: 3,
   };
   const B: ChamberRecord = {
-    chamberId: 11, chamberType: ChamberType.Nursery, foodStored: 0,
-    posX: 30 << FP_SHIFT, posY: 4 << FP_SHIFT, width: 4, height: 3,
+    chamberId: 11,
+    chamberType: ChamberType.Nursery,
+    foodStored: 0,
+    posX: 30 << FP_SHIFT,
+    posY: 4 << FP_SHIFT,
+    width: 4,
+    height: 3,
   };
   colony.chambers.push(A, B);
-  return { world, colony, underground, A, B, field: new Int32Array(W * H), queue: new Int32Array(W * H) };
+  return {
+    world,
+    colony,
+    underground,
+    A,
+    B,
+    field: new Int32Array(W * H),
+    queue: new Int32Array(W * H),
+  };
 }
 
-function addResidentBrood(world: WorldState, colony: ColonyRecord, tileX: number, tileY: number): void {
+function addResidentBrood(
+  world: WorldState,
+  colony: ColonyRecord,
+  tileX: number,
+  tileY: number,
+): void {
   const id = allocateEntityId(world);
   initAnt(world.ants, id, {
     colonyId: COLONY_ID,
     posX: (tileX << FP_SHIFT) + (FP_ONE >> 1),
     posY: (tileY << FP_SHIFT) + (FP_ONE >> 1),
-    task: AntTask.Idle, speed: 0, zone: Zone.Underground,
+    task: AntTask.Idle,
+    speed: 0,
+    zone: Zone.Underground,
   });
   colony.eggs.push(id);
 }
@@ -113,13 +138,19 @@ describe('computeNurseryDepositField — capacity-aware routing (#173, V24)', ()
     fillNursery(world, colony, A); // A at capacity (12/12); B empty
 
     computeNurseryDepositField(
-      underground, colony.chambers, world.ants, colony.eggs, colony.larvae, field, queue,
+      underground,
+      colony.chambers,
+      world.ants,
+      colony.eggs,
+      colony.larvae,
+      field,
+      queue,
     );
 
     // B advertises (its Open tiles are sources); A does NOT (excluded — its
     // tiles are reachable toward B but are not sources).
-    expect(field[4 * W + 30]).toBe(-1);      // B corner (30,4) is a source
-    expect(field[4 * W + 10]).not.toBe(-1);  // A corner (10,4) is excluded
+    expect(field[4 * W + 30]).toBe(-1); // B corner (30,4) is a source
+    expect(field[4 * W + 10]).not.toBe(-1); // A corner (10,4) is excluded
 
     // A tile just east of A routes to B, not back into the full A.
     const term = followToSource(field, 14, 5);
@@ -145,7 +176,13 @@ describe('computeNurseryDepositField — capacity-aware routing (#173, V24)', ()
     fillNursery(world, colony, B);
 
     computeNurseryDepositField(
-      underground, colony.chambers, world.ants, colony.eggs, colony.larvae, field, queue,
+      underground,
+      colony.chambers,
+      world.ants,
+      colony.eggs,
+      colony.larvae,
+      field,
+      queue,
     );
 
     // Fallback seeds all Nurseries, so the pickup tile still routes to a target

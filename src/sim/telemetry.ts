@@ -22,12 +22,7 @@ export const PLAYTRACE_EVENT_CAP_PER_ROUND = 2000;
 // AIState alias — real union defined in S2; string covers all legal values
 // until then. The names are the canonical PascalCase strings that appear in
 // the wire envelope.
-export type AIState =
-  | 'Peacetime'
-  | 'WarFooting'
-  | 'Probing'
-  | 'Invading'
-  | 'Recovery';
+export type AIState = 'Peacetime' | 'WarFooting' | 'Probing' | 'Invading' | 'Recovery';
 
 // ---------------------------------------------------------------------------
 // SimEvent discriminated union (9 types — CF-P1-005)
@@ -101,12 +96,7 @@ export type SimEvent =
       tick: number;
       type: 'spider_rampage_end';
       payload: {
-        outcome:
-          | 'killed_in_nest'
-          | 'killed_by_player'
-          | 'killed_by_ai'
-          | 'quota_met'
-          | 'retreated';
+        outcome: 'killed_in_nest' | 'killed_by_player' | 'killed_by_ai' | 'quota_met' | 'retreated';
         broodKilled: number;
         queenKilled: boolean;
       };
@@ -127,12 +117,7 @@ export type SimEvent =
       payload: {
         // cause is null in V15 traces (S0b proof-of-concept). S1/S2 will fill
         // this in from the kill-site context when those stages land (RC-P1-003).
-        cause:
-          | 'InvasionKill'
-          | 'SpiderRampage'
-          | 'Starvation'
-          | 'MutualDestruction'
-          | null;
+        cause: 'InvasionKill' | 'SpiderRampage' | 'Starvation' | 'MutualDestruction' | null;
         location: { x: number; y: number; grid: 'surface' | 'underground' };
         aiStateAtTime: AIState | null;
       };

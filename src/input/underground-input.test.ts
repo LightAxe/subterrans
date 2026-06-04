@@ -31,10 +31,7 @@ import {
 import { panInputState, resetPanInputStateForTests } from './camera-input.js';
 import { UndergroundTileState, ugSet, createUndergroundGrid } from '../sim/terrain.js';
 import type { WorldState } from '../sim/types.js';
-import {
-  LEGACY_SIM_VERSION,
-  SIM_VERSION_V5_CHAMBER_ON_MARKED,
-} from '../sim/types.js';
+import { LEGACY_SIM_VERSION, SIM_VERSION_V5_CHAMBER_ON_MARKED } from '../sim/types.js';
 import type { ViewState } from '../render/camera.js';
 import { VIEWPORT_WIDTH_TILES, VIEWPORT_HEIGHT_TILES } from '../render/camera.js';
 import { HUD, TILE_SIZE_PX } from '../render/sprites.js';
@@ -53,8 +50,18 @@ function makeViewState(
 ): ViewState {
   return {
     activeView: view,
-    surfaceCamera: { x: camX, y: camY, viewportWidth: VIEWPORT_WIDTH_TILES, viewportHeight: VIEWPORT_HEIGHT_TILES },
-    undergroundCamera: { x: camX, y: camY, viewportWidth: VIEWPORT_WIDTH_TILES, viewportHeight: VIEWPORT_HEIGHT_TILES },
+    surfaceCamera: {
+      x: camX,
+      y: camY,
+      viewportWidth: VIEWPORT_WIDTH_TILES,
+      viewportHeight: VIEWPORT_HEIGHT_TILES,
+    },
+    undergroundCamera: {
+      x: camX,
+      y: camY,
+      viewportWidth: VIEWPORT_WIDTH_TILES,
+      viewportHeight: VIEWPORT_HEIGHT_TILES,
+    },
     undergroundVisited: true,
     activeUndergroundColonyId: PLAYER_COLONY_ID,
     showPheromoneOverlay: true,
@@ -66,7 +73,12 @@ function makeViewState(
  * Mirrors the renderer's integer-tile snap so tests hit the pixel the player
  * sees the tile at.
  */
-function tileToScreen(tileX: number, tileY: number, camX: number, camY: number): { x: number; y: number } {
+function tileToScreen(
+  tileX: number,
+  tileY: number,
+  camX: number,
+  camY: number,
+): { x: number; y: number } {
   const left = Math.floor(camX - VIEWPORT_WIDTH_TILES / 2);
   const top = Math.floor(camY - VIEWPORT_HEIGHT_TILES / 2);
   const px = (tileX - left) * TILE_SIZE_PX;
@@ -78,11 +90,13 @@ function tileToScreen(tileX: number, tileY: number, camX: number, camY: number):
  * Build a WorldState stub with a single underground grid for PLAYER_COLONY_ID.
  * gridWidth/gridHeight default to 20x20 for test convenience.
  */
-function makeWorld(overrides: {
-  tick?: number;
-  gridWidth?: number;
-  gridHeight?: number;
-} = {}): WorldState {
+function makeWorld(
+  overrides: {
+    tick?: number;
+    gridWidth?: number;
+    gridHeight?: number;
+  } = {},
+): WorldState {
   const w = overrides.gridWidth ?? 20;
   const h = overrides.gridHeight ?? 20;
   const grid = createUndergroundGrid(w, h);
@@ -94,7 +108,25 @@ function makeWorld(overrides: {
     rngState: 0,
     nextEntityId: 0,
     commandQueue: [] as SimCommand[],
-    ants: { posX: new Int32Array(0), posY: new Int32Array(0), colonyId: new Int32Array(0), task: new Int32Array(0), subTask: new Int32Array(0), speed: new Int32Array(0), foodCarrying: new Int32Array(0), starvationTimer: new Int32Array(0), age: new Int32Array(0), alive: new Int32Array(0), lifespan: new Int32Array(0), zone: new Int32Array(0), digTileX: new Int32Array(0), digTileY: new Int32Array(0), digTicksRemaining: new Int32Array(0), targetPosX: new Int32Array(0), targetPosY: new Int32Array(0) },
+    ants: {
+      posX: new Int32Array(0),
+      posY: new Int32Array(0),
+      colonyId: new Int32Array(0),
+      task: new Int32Array(0),
+      subTask: new Int32Array(0),
+      speed: new Int32Array(0),
+      foodCarrying: new Int32Array(0),
+      starvationTimer: new Int32Array(0),
+      age: new Int32Array(0),
+      alive: new Int32Array(0),
+      lifespan: new Int32Array(0),
+      zone: new Int32Array(0),
+      digTileX: new Int32Array(0),
+      digTileY: new Int32Array(0),
+      digTicksRemaining: new Int32Array(0),
+      targetPosX: new Int32Array(0),
+      targetPosY: new Int32Array(0),
+    },
     colonies: {},
     pheromoneGrids: {},
     surface: { data: new Uint8Array(0), width: 0, height: 0 },
@@ -208,7 +240,13 @@ describe('handleUndergroundLeftClick', () => {
     const { x, y } = tileToScreen(5, 10, 64, 32);
     handleUndergroundLeftClick(world, vs, x, y, state);
     expect(world.commandQueue).toHaveLength(1);
-    const cmd = world.commandQueue[0] as { type: string; colonyId: number; tileX: number; tileY: number; issuedAtTick: number };
+    const cmd = world.commandQueue[0] as {
+      type: string;
+      colonyId: number;
+      tileX: number;
+      tileY: number;
+      issuedAtTick: number;
+    };
     expect(cmd.type).toBe('MarkDigTile');
     expect(cmd.colonyId).toBe(PLAYER_COLONY_ID);
     expect(cmd.tileX).toBe(5);
@@ -749,7 +787,13 @@ describe('handleUndergroundRightClick', () => {
     const { x, y } = tileToScreen(5, 10, 64, 32);
     handleUndergroundRightClick(world, vs, x, y);
     expect(world.commandQueue).toHaveLength(1);
-    const cmd = world.commandQueue[0] as { type: string; colonyId: number; tileX: number; tileY: number; issuedAtTick: number };
+    const cmd = world.commandQueue[0] as {
+      type: string;
+      colonyId: number;
+      tileX: number;
+      tileY: number;
+      issuedAtTick: number;
+    };
     expect(cmd.type).toBe('CancelDigMark');
     expect(cmd.colonyId).toBe(PLAYER_COLONY_ID);
     expect(cmd.tileX).toBe(5);
@@ -956,7 +1000,6 @@ describe('handleUndergroundRightClick', () => {
     expect(contextMenuState.pendingShow).toBe(false);
     expect(world.commandQueue).toHaveLength(0);
   });
-
 });
 
 // ---------------------------------------------------------------------------
@@ -1000,7 +1043,11 @@ describe('resetUndergroundInputState', () => {
 
   it('restart simulation: a post-reset drag does not inherit the old debounce', () => {
     // Starting state after restart — no prior drag, no prior tile mark.
-    const state: UndergroundInputState = { isDragging: true, lastMarkedTileX: 5, lastMarkedTileY: 5 };
+    const state: UndergroundInputState = {
+      isDragging: true,
+      lastMarkedTileX: 5,
+      lastMarkedTileY: 5,
+    };
     resetUndergroundInputState(state);
     // After reset: a pointerdown on tile (5,5) in the new session must mark
     // it, because lastMarkedTile was cleared. handleUndergroundLeftClick
@@ -1028,8 +1075,18 @@ describe('underground-input read-only when activeUndergroundColonyId !== PLAYER_
   function makeEnemyView(): ViewState {
     return {
       activeView: 'underground',
-      surfaceCamera: { x: 64, y: 32, viewportWidth: VIEWPORT_WIDTH_TILES, viewportHeight: VIEWPORT_HEIGHT_TILES },
-      undergroundCamera: { x: 64, y: 32, viewportWidth: VIEWPORT_WIDTH_TILES, viewportHeight: VIEWPORT_HEIGHT_TILES },
+      surfaceCamera: {
+        x: 64,
+        y: 32,
+        viewportWidth: VIEWPORT_WIDTH_TILES,
+        viewportHeight: VIEWPORT_HEIGHT_TILES,
+      },
+      undergroundCamera: {
+        x: 64,
+        y: 32,
+        viewportWidth: VIEWPORT_WIDTH_TILES,
+        viewportHeight: VIEWPORT_HEIGHT_TILES,
+      },
       undergroundVisited: true,
       activeUndergroundColonyId: ENEMY_COLONY_ID,
       showPheromoneOverlay: true,

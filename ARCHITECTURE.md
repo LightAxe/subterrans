@@ -23,11 +23,13 @@ src/
 ```
 
 **What counts as a violation:**
+
 - Any `import` in `src/sim/` that references `phaser`, `src/render`, `src/input`, `src/platform`, or any browser global
 - Any direct DOM access (`document`, `window`, `navigator`, `localStorage`)
 - Any canvas or WebGL API usage
 
 **What is allowed in `src/sim/`:**
+
 - Standard TypeScript/JavaScript built-ins (`Array`, `Map`, `Set`, `Math` floor/abs/min/max — but not `Math.random`)
 - Imports from other files within `src/sim/`
 - Typed arrays (`Int32Array`, `Uint8Array`, etc.)
@@ -63,6 +65,7 @@ function update(dtMs: number): void {
 ```
 
 **What counts as a violation:**
+
 - Passing a variable `dt` into any simulation function
 - Using `requestAnimationFrame` timing directly in simulation logic
 - Any simulation behavior that changes based on how fast the game runs
@@ -84,13 +87,13 @@ export type EntityId = number;
 
 /** Fixed-point position: 1 unit = 1/256 of a tile */
 export interface PositionStore {
-  x: Int32Array;   // indexed by EntityId
-  y: Int32Array;   // indexed by EntityId
+  x: Int32Array; // indexed by EntityId
+  y: Int32Array; // indexed by EntityId
 }
 
 export interface HungerStore {
-  current: Int32Array;  // indexed by EntityId, fixed-point
-  max: Int32Array;      // indexed by EntityId, fixed-point
+  current: Int32Array; // indexed by EntityId, fixed-point
+  max: Int32Array; // indexed by EntityId, fixed-point
 }
 
 export function createPositionStore(capacity: number): PositionStore {
@@ -118,11 +121,13 @@ export function tickHunger(
 ```
 
 **What counts as a violation:**
+
 - `class Ant { ... }` or any class representing a simulation entity
 - Inheritance hierarchies for game objects (`class Soldier extends Ant`)
 - Entity behavior encoded as methods on objects rather than systems operating on data
 
 **What is allowed:**
+
 - Classes for non-entity infrastructure (e.g., a `World` container that holds all the stores, or the PRNG)
 - TypeScript interfaces and type aliases (these are just compile-time shapes)
 - Plain objects and maps where typed arrays would be overkill (cold data, small collections)
@@ -152,7 +157,7 @@ export class Rng {
     let t = (this.state += 0x6d2b79f5);
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0);
+    return (t ^ (t >>> 14)) >>> 0;
   }
 
   /** Returns an integer in [0, max) */
@@ -168,11 +173,13 @@ export class Rng {
 ```
 
 **What counts as a violation:**
+
 - `Math.random()` anywhere in `src/sim/`
 - Creating a second `Rng` instance inside the simulation
 - Any randomness source other than the single world-level `Rng`
 
 **What is allowed:**
+
 - `Math.random()` in `src/render/` for visual-only effects (particle jitter, etc.)
 - The rendering layer does not affect simulation state, so non-deterministic visuals are fine
 
@@ -185,6 +192,7 @@ export class Rng {
 **Why:** Wall-clock time breaks determinism. If the simulation behaves differently depending on when it runs, replay and multiplayer break. The simulation must produce identical output whether it runs in real-time, fast-forward, or instant batch replay.
 
 **What counts as a violation:**
+
 - Any reference to `Date`, `performance`, `setTimeout`, or `setInterval` in `src/sim/`
 - Computing durations from anything other than tick counts
 
@@ -222,11 +230,13 @@ export function fpMul(a: number, b: number): number {
 ```
 
 **What counts as a violation:**
+
 - Any arithmetic in `src/sim/` that produces or depends on fractional `number` values
 - Division without truncation (use `Math.trunc(a / b)` or `(a / b) | 0`)
 - `Math.sqrt`, `Math.sin`, `Math.cos` in `src/sim/` (use lookup tables or integer approximations)
 
 **What is allowed:**
+
 - `toFloat()` conversions in `src/render/` for drawing positions
 - Floating-point interpolation in the rendering layer
 - Integer-safe `Math` functions: `Math.abs`, `Math.min`, `Math.max`, `Math.trunc`
@@ -246,8 +256,8 @@ interface SaveFile {
   version: number;
   seed: number;
   tickCount: number;
-  world: WorldState;       // full snapshot
-  inputLog: InputEntry[];  // every command with its tick number
+  world: WorldState; // full snapshot
+  inputLog: InputEntry[]; // every command with its tick number
 }
 
 interface InputEntry {

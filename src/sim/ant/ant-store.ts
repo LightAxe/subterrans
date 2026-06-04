@@ -47,37 +47,37 @@ import {
 // ---------------------------------------------------------------------------
 
 export interface AntComponents {
-  readonly posX:            Int32Array;
-  readonly posY:            Int32Array;
-  readonly colonyId:        Int32Array;
-  readonly task:            Int32Array;
-  readonly subTask:         Int32Array;
-  readonly speed:           Int32Array;
-  readonly foodCarrying:    Int32Array;
+  readonly posX: Int32Array;
+  readonly posY: Int32Array;
+  readonly colonyId: Int32Array;
+  readonly task: Int32Array;
+  readonly subTask: Int32Array;
+  readonly speed: Int32Array;
+  readonly foodCarrying: Int32Array;
   readonly starvationTimer: Int32Array;
-  readonly age:             Int32Array;
-  readonly alive:           Int32Array;
-  readonly lifespan:        Int32Array;
+  readonly age: Int32Array;
+  readonly alive: Int32Array;
+  readonly lifespan: Int32Array;
   // Phase 7 additions:
   /** Zone the ant is currently in: 0 = Surface, 1 = Underground. */
-  readonly zone:              Int32Array;
+  readonly zone: Int32Array;
   /** X coordinate of the dig tile claimed by this ant (-1 = none). */
-  readonly digTileX:          Int32Array;
+  readonly digTileX: Int32Array;
   /** Y coordinate of the dig tile claimed by this ant (-1 = none). */
-  readonly digTileY:          Int32Array;
+  readonly digTileY: Int32Array;
   /** Ticks remaining to finish excavating the claimed tile (0 = not digging). */
   readonly digTicksRemaining: Int32Array;
   /** Forager priority target X in fixed-point units (-1 = no target). */
-  readonly targetPosX:        Int32Array;
+  readonly targetPosX: Int32Array;
   /** Forager priority target Y in fixed-point units (-1 = no target). */
-  readonly targetPosY:        Int32Array;
+  readonly targetPosY: Int32Array;
   /**
    * 09 SearchingFood leash wave index (0..SEARCH_LEASH_MAX_WAVE). Zero = base
    * radius. Incremented when a SearchingFood ant is demoted for exceeding the
    * current wave's radius; reset to 0 on a successful pickup. Per-ant state
    * (not colony-memory) per the 09 digger-reassignment memo.
    */
-  readonly searchWave:        Int32Array;
+  readonly searchWave: Int32Array;
   /**
    * 09 excursion-foraging memo — persistent outbound heading X component for a
    * SearchingFood forager. One of {-1, 0, 1}. Zero paired with searchHeadingY=0
@@ -86,9 +86,9 @@ export interface AntComponents {
    * this heading to produce a correlated outward walk instead of per-tick
    * random cardinals. Per-ant state — no colony-memory.
    */
-  readonly searchHeadingX:    Int32Array;
+  readonly searchHeadingX: Int32Array;
   /** Companion Y component to searchHeadingX. */
-  readonly searchHeadingY:    Int32Array;
+  readonly searchHeadingY: Int32Array;
   /**
    * 09 excursion-foraging memo — ticks remaining on the current heading before
    * the next turn check. Counts down each chooseExcursionDirection call; on
@@ -303,37 +303,37 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
   carriedBy.fill(-1);
 
   return {
-    posX:            new Int32Array(maxEntities),
-    posY:            new Int32Array(maxEntities),
-    colonyId:        new Int32Array(maxEntities),
-    task:            new Int32Array(maxEntities),
-    subTask:         new Int32Array(maxEntities),
-    speed:           new Int32Array(maxEntities),
-    foodCarrying:    new Int32Array(maxEntities),
+    posX: new Int32Array(maxEntities),
+    posY: new Int32Array(maxEntities),
+    colonyId: new Int32Array(maxEntities),
+    task: new Int32Array(maxEntities),
+    subTask: new Int32Array(maxEntities),
+    speed: new Int32Array(maxEntities),
+    foodCarrying: new Int32Array(maxEntities),
     starvationTimer: new Int32Array(maxEntities),
-    age:             new Int32Array(maxEntities),
-    alive:           new Int32Array(maxEntities),
-    lifespan:        new Int32Array(maxEntities),
+    age: new Int32Array(maxEntities),
+    alive: new Int32Array(maxEntities),
+    lifespan: new Int32Array(maxEntities),
     // Phase 7 fields:
-    zone:              new Int32Array(maxEntities), // zero = Surface (correct default)
+    zone: new Int32Array(maxEntities), // zero = Surface (correct default)
     digTileX,
     digTileY,
     digTicksRemaining: new Int32Array(maxEntities), // zero = not digging (correct default)
     targetPosX,
     targetPosY,
     // Phase 9 SearchingFood leash:
-    searchWave:        new Int32Array(maxEntities), // zero = base wave (correct default)
+    searchWave: new Int32Array(maxEntities), // zero = base wave (correct default)
     // Phase 9 excursion-foraging memo — correlated outward walk heading:
-    searchHeadingX:    new Int32Array(maxEntities), // zero = no heading yet
-    searchHeadingY:    new Int32Array(maxEntities), // zero = no heading yet
-    searchHeadingTicks:new Int32Array(maxEntities), // zero = re-roll heading now
+    searchHeadingX: new Int32Array(maxEntities), // zero = no heading yet
+    searchHeadingY: new Int32Array(maxEntities), // zero = no heading yet
+    searchHeadingTicks: new Int32Array(maxEntities), // zero = re-roll heading now
     // Phase 9 excursion-foraging follow-up — per-ant anti-backtrack prev tile:
     searchPrevTileX,
     searchPrevTileY,
     // Issue #34 — Bresenham accumulator. Zero-init = "no debt yet."
-    pathErr:           new Int32Array(maxEntities),
+    pathErr: new Int32Array(maxEntities),
     // Issue #35 — pause-while-searching counter. Zero-init = "not paused."
-    searchPauseTicks:  new Int32Array(maxEntities),
+    searchPauseTicks: new Int32Array(maxEntities),
     // Phase 09.1 Chunk 0 — grid-of-occupancy byte (Uint8Array). Zero-init is
     // correct: PLAYER_COLONY_ID is conventionally 0; initAnt overwrites with
     // spec.colonyId at spawn.
@@ -349,11 +349,15 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
     carriedBy,
     // S1 — combat fields. hp zero-init would be wrong (dead ants have hp=0);
     // initAnt sets hp=COMBAT_HP_BASE on spawn.
-    hp:               new Int32Array(maxEntities),
-    homeGroundBonusHp:new Int32Array(maxEntities),
-    attackCooldown:   new Int32Array(maxEntities),
+    hp: new Int32Array(maxEntities),
+    homeGroundBonusHp: new Int32Array(maxEntities),
+    attackCooldown: new Int32Array(maxEntities),
     // S1 — combat opponent tracking. -1 = not paired.
-    combatOpponentId: (() => { const a = new Int32Array(maxEntities); a.fill(-1); return a; })(),
+    combatOpponentId: (() => {
+      const a = new Int32Array(maxEntities);
+      a.fill(-1);
+      return a;
+    })(),
   };
 }
 
@@ -367,14 +371,14 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
  */
 export interface InitAntSpec {
   colonyId: number;
-  posX:     number;
-  posY:     number;
+  posX: number;
+  posY: number;
   /** Raw task discriminant. Defaults to AntTask.Idle (0). */
-  task?:    number;
+  task?: number;
   /** Raw sub-task discriminant. Defaults to 0. */
   subTask?: number;
   /** Fixed-point speed. Defaults to WORKER_BASE_SPEED (128 = 0.5 × FP_ONE). */
-  speed?:   number;
+  speed?: number;
   /** Fixed-point lifespan ticks. Defaults to WORKER_LIFESPAN_TICKS (INT32_MAX). */
   lifespan?: number;
   /**
@@ -397,57 +401,57 @@ export interface InitAntSpec {
  * Calling twice on the same id overwrites (no accumulation).
  */
 export function initAnt(ants: AntComponents, id: EntityId, spec: InitAntSpec): void {
-  ants.colonyId[id]        = spec.colonyId;
+  ants.colonyId[id] = spec.colonyId;
   // Phase 09.1 Chunk 0 — grid-of-occupancy matches owning colony at spawn.
   // Invariant: currentGridColonyId[id] === colonyId[id] for every ant,
   // until Chunks 3+4 land Fighter cross-grid invasion. See
   // 09.1-00-PLAN.md objective block.
   ants.currentGridColonyId[id] = spec.colonyId;
-  ants.posX[id]            = spec.posX;
-  ants.posY[id]            = spec.posY;
-  ants.task[id]            = spec.task     !== undefined ? spec.task     : AntTask.Idle;
-  ants.subTask[id]         = spec.subTask  !== undefined ? spec.subTask  : 0;
-  ants.speed[id]           = spec.speed    !== undefined ? spec.speed    : WORKER_BASE_SPEED;
-  ants.lifespan[id]        = spec.lifespan !== undefined ? spec.lifespan : WORKER_LIFESPAN_TICKS;
-  ants.alive[id]           = 1;
-  ants.age[id]             = 0;
-  ants.foodCarrying[id]    = 0;
+  ants.posX[id] = spec.posX;
+  ants.posY[id] = spec.posY;
+  ants.task[id] = spec.task !== undefined ? spec.task : AntTask.Idle;
+  ants.subTask[id] = spec.subTask !== undefined ? spec.subTask : 0;
+  ants.speed[id] = spec.speed !== undefined ? spec.speed : WORKER_BASE_SPEED;
+  ants.lifespan[id] = spec.lifespan !== undefined ? spec.lifespan : WORKER_LIFESPAN_TICKS;
+  ants.alive[id] = 1;
+  ants.age[id] = 0;
+  ants.foodCarrying[id] = 0;
   ants.starvationTimer[id] = 0;
   // Phase 7 fields:
-  ants.zone[id]              = spec.zone !== undefined ? spec.zone : 0;
-  ants.digTileX[id]          = -1;
-  ants.digTileY[id]          = -1;
+  ants.zone[id] = spec.zone !== undefined ? spec.zone : 0;
+  ants.digTileX[id] = -1;
+  ants.digTileY[id] = -1;
   ants.digTicksRemaining[id] = 0;
-  ants.targetPosX[id]        = -1;
-  ants.targetPosY[id]        = -1;
-  ants.searchWave[id]        = 0;
-  ants.searchHeadingX[id]    = 0;
-  ants.searchHeadingY[id]    = 0;
-  ants.searchHeadingTicks[id]= 0;
-  ants.searchPrevTileX[id]   = -1;
-  ants.searchPrevTileY[id]   = -1;
+  ants.targetPosX[id] = -1;
+  ants.targetPosY[id] = -1;
+  ants.searchWave[id] = 0;
+  ants.searchHeadingX[id] = 0;
+  ants.searchHeadingY[id] = 0;
+  ants.searchHeadingTicks[id] = 0;
+  ants.searchPrevTileX[id] = -1;
+  ants.searchPrevTileY[id] = -1;
   // Issue #34 — fresh ant has no path-error debt.
-  ants.pathErr[id]           = 0;
+  ants.pathErr[id] = 0;
   // Issue #35 — fresh ant is not paused.
-  ants.searchPauseTicks[id]  = 0;
+  ants.searchPauseTicks[id] = 0;
   // Issue #27 — fresh ant is never in wait state (must traverse a failed
   // deposit cycle to enter it).
-  ants.waitingDeposit[id]    = 0;
+  ants.waitingDeposit[id] = 0;
   // Issue #42 — fresh ant has no recent-tile history.
   const base = id * RECENT_TILES_LEN;
   for (let s = 0; s < RECENT_TILES_LEN; s++) {
     ants.recentTilesX[base + s] = RECENT_TILES_SENTINEL;
     ants.recentTilesY[base + s] = RECENT_TILES_SENTINEL;
   }
-  ants.recentTilesHead[id]   = 0;
+  ants.recentTilesHead[id] = 0;
   // Issue #17 Phase 1 — fresh ant is not carrying / not carried.
-  ants.carryingBroodId[id]   = -1;
-  ants.carriedBy[id]         = -1;
+  ants.carryingBroodId[id] = -1;
+  ants.carriedBy[id] = -1;
   // S1 — fresh ant starts at full base HP; home-ground bonus is set by
   // the combat resolver on first engagement on home ground.
-  ants.hp[id]               = spec.hp ?? COMBAT_HP_BASE;
-  ants.homeGroundBonusHp[id]= 0;
-  ants.attackCooldown[id]   = 0;
+  ants.hp[id] = spec.hp ?? COMBAT_HP_BASE;
+  ants.homeGroundBonusHp[id] = 0;
+  ants.attackCooldown[id] = 0;
   ants.combatOpponentId[id] = -1;
 }
 
@@ -462,14 +466,9 @@ export function initAnt(ants: AntComponents, id: EntityId, spec: InitAntSpec): v
  * Caller is responsible for gating: only call on actual movement (not on
  * pause ticks) and only when world.simVersion >= 6 + Surface SearchingFood.
  */
-export function pushRecentTile(
-  ants: AntComponents,
-  id: EntityId,
-  tx: number,
-  ty: number,
-): void {
+export function pushRecentTile(ants: AntComponents, id: EntityId, tx: number, ty: number): void {
   const slot = ants.recentTilesHead[id]!;
-  const idx  = id * RECENT_TILES_LEN + slot;
+  const idx = id * RECENT_TILES_LEN + slot;
   ants.recentTilesX[idx] = tx;
   ants.recentTilesY[idx] = ty;
   ants.recentTilesHead[id] = (slot + 1) % RECENT_TILES_LEN;
@@ -479,12 +478,7 @@ export function pushRecentTile(
  * True iff (tx, ty) appears anywhere in ant `id`'s recent-tiles ring buffer.
  * Cheap linear scan — RECENT_TILES_LEN is 4.
  */
-export function isRecentTile(
-  ants: AntComponents,
-  id: EntityId,
-  tx: number,
-  ty: number,
-): boolean {
+export function isRecentTile(ants: AntComponents, id: EntityId, tx: number, ty: number): boolean {
   const base = id * RECENT_TILES_LEN;
   for (let s = 0; s < RECENT_TILES_LEN; s++) {
     if (ants.recentTilesX[base + s] === tx && ants.recentTilesY[base + s] === ty) return true;

@@ -25,8 +25,8 @@ export type Zone = 'surface' | 'underground';
  * All fields are readonly — mutate only via phSet().
  */
 export interface PheromoneGrid {
-  readonly data:   Int32Array;
-  readonly width:  number;
+  readonly data: Int32Array;
+  readonly width: number;
   readonly height: number;
 }
 
@@ -40,7 +40,7 @@ export interface PheromoneGrid {
  */
 export function createPheromoneGrid(width: number, height: number): PheromoneGrid {
   return {
-    data:   new Int32Array(width * height),
+    data: new Int32Array(width * height),
     width,
     height,
   };

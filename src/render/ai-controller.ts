@@ -27,13 +27,11 @@ import {
   AI_MAX_OPERATION_FIGHTERS,
 } from '../sim/constants.js';
 import { colonyFoodTotal } from '../sim/colony/colony-system.js';
-import {
-  aiFighterCount,
-} from '../sim/ai-state.js';
+import { aiFighterCount } from '../sim/ai-state.js';
 
 import { AntTask } from '../sim/enums.js';
 
-export const AI_DIG_INTERVAL = 40 as const;       // every 2 seconds @ 20Hz
+export const AI_DIG_INTERVAL = 40 as const; // every 2 seconds @ 20Hz
 /**
  * Issue #74 — chamber placement BFS cadence. Chamber placement is a
  * strategic decision (Queen, Nursery, FoodStorage in some order, then
@@ -112,8 +110,10 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
     const curState = aiStateRecord.state;
     if (curState === 'WarFooting') {
       const ticksSinceLast = world.tick - aiStateRecord.lastProbeEndTick;
-      if (ticksSinceLast >= AI_PROBE_INTERVAL_TICKS
-          && aiFighterCount(world, aiColonyId) >= AI_PROBE_FIGHTER_COUNT) {
+      if (
+        ticksSinceLast >= AI_PROBE_INTERVAL_TICKS &&
+        aiFighterCount(world, aiColonyId) >= AI_PROBE_FIGHTER_COUNT
+      ) {
         aiStateMachineTick_probeEntry(world, aiColonyId, colony);
       }
     }
@@ -163,7 +163,7 @@ export function aiInitialSetup(world: WorldState, colony: ColonyRecord): void {
       type: 'DesignateEntrance',
       colonyId: colony.colonyId,
       surfaceTileX: queenTileX,
-      surfaceTileY: 0,   // surface row
+      surfaceTileY: 0, // surface row
       issuedAtTick: world.tick,
     };
     world.commandQueue.push(designateCmd);
@@ -226,12 +226,17 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
             }
           }
         }
-        if (deepestY !== -1) break;  // first row with any Open = deepest
+        if (deepestY !== -1) break; // first row with any Open = deepest
       }
       if (deepestY !== -1) {
         // Mark diggable neighbors of the deepest Open tile: prefer deeper (S) first,
         // then sideways (E/W), then up (N). Deterministic ordering.
-        for (const [dx, dy] of [[0, 1], [1, 0], [-1, 0], [0, -1]] as const) {
+        for (const [dx, dy] of [
+          [0, 1],
+          [1, 0],
+          [-1, 0],
+          [0, -1],
+        ] as const) {
           if (budget <= 0) break;
           const tx = deepestX + dx;
           const ty = deepestY + dy;
@@ -323,7 +328,13 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
       const k = tileKey(tx, ty);
       if (seenMarks.has(k)) continue;
       seenMarks.add(k);
-      world.commandQueue.push({ type: 'MarkDigTile', colonyId: colony.colonyId, tileX: tx, tileY: ty, issuedAtTick: world.tick });
+      world.commandQueue.push({
+        type: 'MarkDigTile',
+        colonyId: colony.colonyId,
+        tileX: tx,
+        tileY: ty,
+        issuedAtTick: world.tick,
+      });
       budget -= 1;
     }
     // Bottom border
@@ -334,7 +345,13 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
       const k = tileKey(tx, ty);
       if (seenMarks.has(k)) continue;
       seenMarks.add(k);
-      world.commandQueue.push({ type: 'MarkDigTile', colonyId: colony.colonyId, tileX: tx, tileY: ty, issuedAtTick: world.tick });
+      world.commandQueue.push({
+        type: 'MarkDigTile',
+        colonyId: colony.colonyId,
+        tileX: tx,
+        tileY: ty,
+        issuedAtTick: world.tick,
+      });
       budget -= 1;
     }
     // Left border
@@ -345,7 +362,13 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
       const k = tileKey(tx, ty);
       if (seenMarks.has(k)) continue;
       seenMarks.add(k);
-      world.commandQueue.push({ type: 'MarkDigTile', colonyId: colony.colonyId, tileX: tx, tileY: ty, issuedAtTick: world.tick });
+      world.commandQueue.push({
+        type: 'MarkDigTile',
+        colonyId: colony.colonyId,
+        tileX: tx,
+        tileY: ty,
+        issuedAtTick: world.tick,
+      });
       budget -= 1;
     }
     // Right border
@@ -356,7 +379,13 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
       const k = tileKey(tx, ty);
       if (seenMarks.has(k)) continue;
       seenMarks.add(k);
-      world.commandQueue.push({ type: 'MarkDigTile', colonyId: colony.colonyId, tileX: tx, tileY: ty, issuedAtTick: world.tick });
+      world.commandQueue.push({
+        type: 'MarkDigTile',
+        colonyId: colony.colonyId,
+        tileX: tx,
+        tileY: ty,
+        issuedAtTick: world.tick,
+      });
       budget -= 1;
     }
   }
@@ -414,11 +443,11 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
   // chamber per colony — same as before this PR; the sim layer would
   // accept additional FS but the AI does not issue them.
   if (
-    hasChamberOrPending(world, colony, ChamberType.Queen)
-    && colonyFoodTotal(colony) >= AI_FOOD_STORAGE_THRESHOLD
-    && !hasChamberOrPending(world, colony, ChamberType.FoodStorage)
+    hasChamberOrPending(world, colony, ChamberType.Queen) &&
+    colonyFoodTotal(colony) >= AI_FOOD_STORAGE_THRESHOLD &&
+    !hasChamberOrPending(world, colony, ChamberType.FoodStorage)
   ) {
-    const placement = findOpenChamberSpot(world, colony, 5, ChamberType.FoodStorage);  // near-surface storage
+    const placement = findOpenChamberSpot(world, colony, 5, ChamberType.FoodStorage); // near-surface storage
     if (placement !== null) {
       const cmd: PlaceChamberCommand = {
         type: 'PlaceChamber',
@@ -452,7 +481,7 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
     // one Nursery, multiple FoodStorage).
     const hasNursery = hasChamberOrPending(world, colony, ChamberType.Nursery);
     const hasQueen = colony.chambers.some((c) => c.chamberType === ChamberType.Queen);
-    const broodPressure = (colony.eggCount + colony.larvaeCount) >= AI_NURSERY_THRESHOLD;
+    const broodPressure = colony.eggCount + colony.larvaeCount >= AI_NURSERY_THRESHOLD;
     if (!hasNursery && (hasQueen || broodPressure)) {
       const placement = findOpenChamberSpot(world, colony, 7, ChamberType.Nursery);
       if (placement !== null) {
@@ -491,27 +520,36 @@ export function aiEntranceDesignation(world: WorldState, colony: ColonyRecord): 
   }
 }
 
-
 // ---------------------------------------------------------------------------
 // S2: AI state machine subroutines
 // ---------------------------------------------------------------------------
 
 /** Behavior ratios per AI state (forage:fight on 0-10 scale). */
 const AI_STATE_RATIOS: Record<string, { forage: number; fight: number }> = {
-  Peacetime:  { forage: 7, fight: 3 },
+  Peacetime: { forage: 7, fight: 3 },
   WarFooting: { forage: 3, fight: 7 },
-  Probing:    { forage: 3, fight: 7 },
-  Invading:   { forage: 2, fight: 8 },
-  Recovery:   { forage: 6, fight: 4 },
+  Probing: { forage: 3, fight: 7 },
+  Invading: { forage: 2, fight: 8 },
+  Recovery: { forage: 6, fight: 4 },
 };
 
 interface _SyncSnapshot {
-  state: string; enteredTick: number; probeCount: number; lastProbeEndTick: number;
-  invasionStartTick: number; invasionRallyTileX: number; invasionRallyTileY: number;
-  recoveryEndTick: number; operationKind: string; operationStartTick: number;
-  operationTargetTileX: number; operationTargetTileY: number;
-  operationFighterCount: number; operationStartFighterCount: number;
-  operationAttackerDeaths: number; operationDefenderDeaths: number;
+  state: string;
+  enteredTick: number;
+  probeCount: number;
+  lastProbeEndTick: number;
+  invasionStartTick: number;
+  invasionRallyTileX: number;
+  invasionRallyTileY: number;
+  recoveryEndTick: number;
+  operationKind: string;
+  operationStartTick: number;
+  operationTargetTileX: number;
+  operationTargetTileY: number;
+  operationFighterCount: number;
+  operationStartFighterCount: number;
+  operationAttackerDeaths: number;
+  operationDefenderDeaths: number;
 }
 const _syncCache = new Map<ColonyId, _SyncSnapshot>();
 
@@ -526,35 +564,44 @@ function _pushSyncAIState(world: WorldState, aiColonyId: ColonyId): void {
   if (rec === undefined) return;
 
   const cached = _syncCache.get(aiColonyId);
-  const changed = cached === undefined
-    || cached.state !== rec.state
-    || cached.enteredTick !== rec.enteredTick
-    || cached.probeCount !== rec.probeCount
-    || cached.lastProbeEndTick !== rec.lastProbeEndTick
-    || cached.invasionStartTick !== rec.invasionStartTick
-    || cached.invasionRallyTileX !== rec.invasionRallyTileX
-    || cached.invasionRallyTileY !== rec.invasionRallyTileY
-    || cached.recoveryEndTick !== rec.recoveryEndTick
-    || cached.operationKind !== rec.operationKind
-    || cached.operationStartTick !== rec.operationStartTick
-    || cached.operationTargetTileX !== rec.operationTargetTileX
-    || cached.operationTargetTileY !== rec.operationTargetTileY
-    || cached.operationFighterCount !== rec.operationFighterCount
-    || cached.operationStartFighterCount !== rec.operationStartFighterCount
-    || cached.operationAttackerDeaths !== rec.operationAttackerDeaths
-    || cached.operationDefenderDeaths !== rec.operationDefenderDeaths;
+  const changed =
+    cached === undefined ||
+    cached.state !== rec.state ||
+    cached.enteredTick !== rec.enteredTick ||
+    cached.probeCount !== rec.probeCount ||
+    cached.lastProbeEndTick !== rec.lastProbeEndTick ||
+    cached.invasionStartTick !== rec.invasionStartTick ||
+    cached.invasionRallyTileX !== rec.invasionRallyTileX ||
+    cached.invasionRallyTileY !== rec.invasionRallyTileY ||
+    cached.recoveryEndTick !== rec.recoveryEndTick ||
+    cached.operationKind !== rec.operationKind ||
+    cached.operationStartTick !== rec.operationStartTick ||
+    cached.operationTargetTileX !== rec.operationTargetTileX ||
+    cached.operationTargetTileY !== rec.operationTargetTileY ||
+    cached.operationFighterCount !== rec.operationFighterCount ||
+    cached.operationStartFighterCount !== rec.operationStartFighterCount ||
+    cached.operationAttackerDeaths !== rec.operationAttackerDeaths ||
+    cached.operationDefenderDeaths !== rec.operationDefenderDeaths;
 
   if (!changed) return;
 
   _syncCache.set(aiColonyId, {
-    state: rec.state, enteredTick: rec.enteredTick, probeCount: rec.probeCount,
-    lastProbeEndTick: rec.lastProbeEndTick, invasionStartTick: rec.invasionStartTick,
-    invasionRallyTileX: rec.invasionRallyTileX, invasionRallyTileY: rec.invasionRallyTileY,
-    recoveryEndTick: rec.recoveryEndTick, operationKind: rec.operationKind,
-    operationStartTick: rec.operationStartTick, operationTargetTileX: rec.operationTargetTileX,
-    operationTargetTileY: rec.operationTargetTileY, operationFighterCount: rec.operationFighterCount,
+    state: rec.state,
+    enteredTick: rec.enteredTick,
+    probeCount: rec.probeCount,
+    lastProbeEndTick: rec.lastProbeEndTick,
+    invasionStartTick: rec.invasionStartTick,
+    invasionRallyTileX: rec.invasionRallyTileX,
+    invasionRallyTileY: rec.invasionRallyTileY,
+    recoveryEndTick: rec.recoveryEndTick,
+    operationKind: rec.operationKind,
+    operationStartTick: rec.operationStartTick,
+    operationTargetTileX: rec.operationTargetTileX,
+    operationTargetTileY: rec.operationTargetTileY,
+    operationFighterCount: rec.operationFighterCount,
     operationStartFighterCount: rec.operationStartFighterCount,
-    operationAttackerDeaths: rec.operationAttackerDeaths, operationDefenderDeaths: rec.operationDefenderDeaths,
+    operationAttackerDeaths: rec.operationAttackerDeaths,
+    operationDefenderDeaths: rec.operationDefenderDeaths,
   });
 
   const cmd: SyncAIStateCommand = {
@@ -597,8 +644,10 @@ function _syncBehaviorRatioToAIState(
     }
   }
   const targetRatio = AI_STATE_RATIOS[currentState] ?? AI_BEHAVIOR_RATIO;
-  if (colony.targetRatio.forage !== targetRatio.forage
-      || colony.targetRatio.fight !== targetRatio.fight) {
+  if (
+    colony.targetRatio.forage !== targetRatio.forage ||
+    colony.targetRatio.fight !== targetRatio.fight
+  ) {
     const setRatioCmd: SetBehaviorRatioCommand = {
       type: 'SetBehaviorRatio',
       colonyId: aiColonyId,
@@ -653,7 +702,10 @@ function aiStateMachineTick_probeEntry(
 function aiProbeTick(world: WorldState, aiColonyId: ColonyId): void {
   let aiState: import('../sim/types.js').AIStateRecord | null = null;
   for (let i = 0; i < world.aiState.length; i++) {
-    if (world.aiState[i]!.colonyId === aiColonyId) { aiState = world.aiState[i]!; break; }
+    if (world.aiState[i]!.colonyId === aiColonyId) {
+      aiState = world.aiState[i]!;
+      break;
+    }
   }
   if (aiState === null) return;
   // Re-emit rally only if rally is active in sim-state but colony.rallyPoint is null.
@@ -673,7 +725,10 @@ function aiProbeTick(world: WorldState, aiColonyId: ColonyId): void {
 function aiInvasionTick(world: WorldState, aiColonyId: ColonyId): void {
   let aiState: import('../sim/types.js').AIStateRecord | null = null;
   for (let i = 0; i < world.aiState.length; i++) {
-    if (world.aiState[i]!.colonyId === aiColonyId) { aiState = world.aiState[i]!; break; }
+    if (world.aiState[i]!.colonyId === aiColonyId) {
+      aiState = world.aiState[i]!;
+      break;
+    }
   }
   if (aiState === null) return;
 
@@ -717,7 +772,10 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId): void {
 }
 
 /** Select probe target (Q3 spec). */
-function _selectProbeTarget(world: WorldState, aiColonyId: ColonyId): { tileX: number; tileY: number } | null {
+function _selectProbeTarget(
+  world: WorldState,
+  aiColonyId: ColonyId,
+): { tileX: number; tileY: number } | null {
   // Priority 1: closest player-marked food pile by ascending pile ID for ties.
   const playerColony = world.colonies[PLAYER_COLONY_ID];
   if (playerColony === undefined) return null;
@@ -725,18 +783,22 @@ function _selectProbeTarget(world: WorldState, aiColonyId: ColonyId): { tileX: n
   let bestPile: { tileX: number; tileY: number; id: number; dist: number } | null = null;
   const aiCol = world.colonies[aiColonyId];
   // We need a reference point: AI's entrance or colony start.
-  const aiEntranceX = aiCol !== undefined && aiCol.entrances.length > 0
-    ? aiCol.entrances[0]!.surfaceTileX
-    : ENEMY_START_X;
-  const aiEntranceY = aiCol !== undefined && aiCol.entrances.length > 0
-    ? aiCol.entrances[0]!.surfaceTileY
-    : 0; // surface row — all current entrances have surfaceTileY=0
+  const aiEntranceX =
+    aiCol !== undefined && aiCol.entrances.length > 0
+      ? aiCol.entrances[0]!.surfaceTileX
+      : ENEMY_START_X;
+  const aiEntranceY =
+    aiCol !== undefined && aiCol.entrances.length > 0 ? aiCol.entrances[0]!.surfaceTileY : 0; // surface row — all current entrances have surfaceTileY=0
 
   for (const pile of world.foodPiles) {
     const isMarked = playerColony.priorityFoodPileId === pile.foodPileId;
     if (!isMarked) continue;
     const dist = Math.abs(pile.tileX - aiEntranceX) + Math.abs(pile.tileY - aiEntranceY);
-    if (bestPile === null || dist < bestPile.dist || (dist === bestPile.dist && pile.foodPileId < bestPile.id)) {
+    if (
+      bestPile === null ||
+      dist < bestPile.dist ||
+      (dist === bestPile.dist && pile.foodPileId < bestPile.id)
+    ) {
       bestPile = { tileX: pile.tileX, tileY: pile.tileY, id: pile.foodPileId, dist };
     }
   }
@@ -749,13 +811,21 @@ function _selectProbeTarget(world: WorldState, aiColonyId: ColonyId): { tileX: n
     let withinRadius = false;
     for (const entrance of playerColony.entrances) {
       if (!entrance.isOpen) continue;
-      const dist = Math.abs(pile.tileX - entrance.surfaceTileX) + Math.abs(pile.tileY - entrance.surfaceTileY);
-      if (dist <= AI_PROBE_FALLBACK_RADIUS_TILES) { withinRadius = true; break; }
+      const dist =
+        Math.abs(pile.tileX - entrance.surfaceTileX) + Math.abs(pile.tileY - entrance.surfaceTileY);
+      if (dist <= AI_PROBE_FALLBACK_RADIUS_TILES) {
+        withinRadius = true;
+        break;
+      }
     }
     if (!withinRadius) continue;
     // Pick closest to AI entrance by ascending pile ID for ties.
     const dist = Math.abs(pile.tileX - aiEntranceX) + Math.abs(pile.tileY - aiEntranceY);
-    if (bestPile === null || dist < bestPile.dist || (dist === bestPile.dist && pile.foodPileId < bestPile.id)) {
+    if (
+      bestPile === null ||
+      dist < bestPile.dist ||
+      (dist === bestPile.dist && pile.foodPileId < bestPile.id)
+    ) {
       bestPile = { tileX: pile.tileX, tileY: pile.tileY, id: pile.foodPileId, dist };
     }
   }
@@ -801,8 +871,10 @@ function _selectInvasionEntrance(
   if (openEntrances.length === 1) return openEntrances[0]!;
 
   // Use last probe target as reference (invasionRallyTileX/Y from a prior probe).
-  const refX = aiState.invasionRallyTileX !== -1 ? aiState.invasionRallyTileX : aiState.operationTargetTileX;
-  const refY = aiState.invasionRallyTileY !== -1 ? aiState.invasionRallyTileY : aiState.operationTargetTileY;
+  const refX =
+    aiState.invasionRallyTileX !== -1 ? aiState.invasionRallyTileX : aiState.operationTargetTileX;
+  const refY =
+    aiState.invasionRallyTileY !== -1 ? aiState.invasionRallyTileY : aiState.operationTargetTileY;
   if (refX === -1) return openEntrances[0]!;
 
   let best = openEntrances[0]!;
@@ -810,13 +882,21 @@ function _selectInvasionEntrance(
   for (let i = 1; i < openEntrances.length; i++) {
     const e = openEntrances[i]!;
     const dist = Math.abs(e.surfaceTileX - refX) + Math.abs(e.surfaceTileY - refY);
-    if (dist < bestDist) { best = e; bestDist = dist; }
+    if (dist < bestDist) {
+      best = e;
+      bestDist = dist;
+    }
   }
   return best;
 }
 
 /** Emit SetRallyPoint command for the AI colony. */
-function _emitSetRallyPoint(world: WorldState, aiColonyId: ColonyId, tileX: number, tileY: number): void {
+function _emitSetRallyPoint(
+  world: WorldState,
+  aiColonyId: ColonyId,
+  tileX: number,
+  tileY: number,
+): void {
   const cmd = {
     type: 'SetRallyPoint' as const,
     colonyId: aiColonyId,
@@ -879,7 +959,7 @@ function collectFrontierTiles(
   let cx = 0;
   let cy = 0;
   for (const ch of chambersSorted) {
-    cx += (ch.posX >> FP_SHIFT) + (ch.width  >> 1);
+    cx += (ch.posX >> FP_SHIFT) + (ch.width >> 1);
     cy += (ch.posY >> FP_SHIFT) + (ch.height >> 1);
   }
   cx = (cx / chambersSorted.length) | 0;
@@ -924,7 +1004,7 @@ function collectFrontierTiles(
   for (const ch of chambersSorted) {
     const chTileX = ch.posX >> FP_SHIFT;
     const chTileY = ch.posY >> FP_SHIFT;
-    const chCenterX = chTileX + (ch.width  >> 1);
+    const chCenterX = chTileX + (ch.width >> 1);
     const chCenterY = chTileY + (ch.height >> 1);
     const chDist = Math.abs(chCenterX - cx) + Math.abs(chCenterY - cy);
 
@@ -933,12 +1013,53 @@ function collectFrontierTiles(
       // Reject tiles 4-adjacent to ANOTHER chamber's footprint (those are
       // "between" tiles; the legacy pass picks them up later if budget
       // remains).
-      if (isFootprint(tx - 1, ty) && !(tx - 1 >= chTileX && tx - 1 < chTileX + ch.width  && ty >= chTileY && ty < chTileY + ch.height)) return;
-      if (isFootprint(tx + 1, ty) && !(tx + 1 >= chTileX && tx + 1 < chTileX + ch.width  && ty >= chTileY && ty < chTileY + ch.height)) return;
-      if (isFootprint(tx, ty - 1) && !(tx >= chTileX && tx < chTileX + ch.width  && ty - 1 >= chTileY && ty - 1 < chTileY + ch.height)) return;
-      if (isFootprint(tx, ty + 1) && !(tx >= chTileX && tx < chTileX + ch.width  && ty + 1 >= chTileY && ty + 1 < chTileY + ch.height)) return;
+      if (
+        isFootprint(tx - 1, ty) &&
+        !(
+          tx - 1 >= chTileX &&
+          tx - 1 < chTileX + ch.width &&
+          ty >= chTileY &&
+          ty < chTileY + ch.height
+        )
+      )
+        return;
+      if (
+        isFootprint(tx + 1, ty) &&
+        !(
+          tx + 1 >= chTileX &&
+          tx + 1 < chTileX + ch.width &&
+          ty >= chTileY &&
+          ty < chTileY + ch.height
+        )
+      )
+        return;
+      if (
+        isFootprint(tx, ty - 1) &&
+        !(
+          tx >= chTileX &&
+          tx < chTileX + ch.width &&
+          ty - 1 >= chTileY &&
+          ty - 1 < chTileY + ch.height
+        )
+      )
+        return;
+      if (
+        isFootprint(tx, ty + 1) &&
+        !(
+          tx >= chTileX &&
+          tx < chTileX + ch.width &&
+          ty + 1 >= chTileY &&
+          ty + 1 < chTileY + ch.height
+        )
+      )
+        return;
       const outward = Math.abs(tx - cx) + Math.abs(ty - cy);
-      candidates.push({ tileX: tx, tileY: ty, chamberDistFromCentroid: chDist, outwardScore: outward });
+      candidates.push({
+        tileX: tx,
+        tileY: ty,
+        chamberDistFromCentroid: chDist,
+        outwardScore: outward,
+      });
     };
 
     // Walk the four borders.
@@ -947,8 +1068,8 @@ function collectFrontierTiles(
       consider(chTileX + ox, chTileY + ch.height);
     }
     for (let oy = 0; oy < ch.height; oy++) {
-      consider(chTileX - 1,           chTileY + oy);
-      consider(chTileX + ch.width,    chTileY + oy);
+      consider(chTileX - 1, chTileY + oy);
+      consider(chTileX + ch.width, chTileY + oy);
     }
   }
 
@@ -1045,9 +1166,10 @@ function findOpenChamberSpot(
   // depth band the AI actually wants to build at. Documented per plan 09.1-01
   // Task 2 pre-audit (commit dee93e5).
   const queenTileX = Math.min(Math.max(rawQueenTileX, 0), grid.width - 1);
-  const queenTileY = rawQueenTileY >= grid.height
-    ? Math.min(Math.max(preferredDepth, 0), grid.height - 1)
-    : Math.min(Math.max(rawQueenTileY, 0), grid.height - 1);
+  const queenTileY =
+    rawQueenTileY >= grid.height
+      ? Math.min(Math.max(preferredDepth, 0), grid.height - 1)
+      : Math.min(Math.max(rawQueenTileY, 0), grid.height - 1);
 
   const RADIUS = 32;
 
@@ -1084,10 +1206,21 @@ function findOpenChamberSpot(
     if (ugGet(grid, ax, ay) !== UndergroundTileState.Open) return false;
     // At least one 4-connected neighbor of anchor is Solid
     let hasAdjSolid = false;
-    if (ax - 1 >= 0          && ugGet(grid, ax - 1, ay) === UndergroundTileState.Solid) hasAdjSolid = true;
-    if (!hasAdjSolid && ax + 1 < grid.width  && ugGet(grid, ax + 1, ay) === UndergroundTileState.Solid) hasAdjSolid = true;
-    if (!hasAdjSolid && ay - 1 >= 0          && ugGet(grid, ax,     ay - 1) === UndergroundTileState.Solid) hasAdjSolid = true;
-    if (!hasAdjSolid && ay + 1 < grid.height && ugGet(grid, ax,     ay + 1) === UndergroundTileState.Solid) hasAdjSolid = true;
+    if (ax - 1 >= 0 && ugGet(grid, ax - 1, ay) === UndergroundTileState.Solid) hasAdjSolid = true;
+    if (
+      !hasAdjSolid &&
+      ax + 1 < grid.width &&
+      ugGet(grid, ax + 1, ay) === UndergroundTileState.Solid
+    )
+      hasAdjSolid = true;
+    if (!hasAdjSolid && ay - 1 >= 0 && ugGet(grid, ax, ay - 1) === UndergroundTileState.Solid)
+      hasAdjSolid = true;
+    if (
+      !hasAdjSolid &&
+      ay + 1 < grid.height &&
+      ugGet(grid, ax, ay + 1) === UndergroundTileState.Solid
+    )
+      hasAdjSolid = true;
     if (!hasAdjSolid) return false;
     // No footprint tile may be BeingDug, and no footprint tile may overlap an
     // existing/pending chamber (precomputed `occupied` set above).
@@ -1119,7 +1252,12 @@ function findOpenChamberSpot(
     }
 
     // Expand N,E,S,W deterministically.
-    for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]] as const) {
+    for (const [dx, dy] of [
+      [0, -1],
+      [1, 0],
+      [0, 1],
+      [-1, 0],
+    ] as const) {
       const nx = tx + dx;
       const ny = ty + dy;
       // Issue #64 — bounds-check before computing the visited-set key.

@@ -20,17 +20,18 @@ import { createWorldState, allocateEntityId } from '../sim/types.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import {
-  AntTask, ChamberType, DiggingSubState, FightingSubState,
-  ForagingSubState, NursingSubState, PheromoneType,
+  AntTask,
+  ChamberType,
+  DiggingSubState,
+  FightingSubState,
+  ForagingSubState,
+  NursingSubState,
+  PheromoneType,
 } from '../sim/enums.js';
 import { Zone } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
-import {
-  createPheromoneGrid, phSet, pheromoneGridKey,
-} from '../sim/pheromone/pheromone-store.js';
-import {
-  SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT, FOOD_TRAIL_DEPOSIT,
-} from '../sim/constants.js';
+import { createPheromoneGrid, phSet, pheromoneGridKey } from '../sim/pheromone/pheromone-store.js';
+import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT, FOOD_TRAIL_DEPOSIT } from '../sim/constants.js';
 
 const COLONY_ID = 1;
 const OTHER_COLONY_ID = 2;
@@ -46,12 +47,14 @@ function setupSurfaceGrid(world: ReturnType<typeof createWorldState>, colonyId: 
 function setupWorldWithColony(colonyId: number) {
   const world = createWorldState(42, MAX_TEST_ENTITIES);
   const colony = createColonyRecord(colonyId, allocateEntityId(world));
-  colony.entrances = [{
-    entranceId: allocateEntityId(world),
-    surfaceTileX: 0,
-    surfaceTileY: 0,
-    isOpen: true,
-  }];
+  colony.entrances = [
+    {
+      entranceId: allocateEntityId(world),
+      surfaceTileX: 0,
+      surfaceTileY: 0,
+      isOpen: true,
+    },
+  ];
   colony.rallyPoint = null;
   colony.digFlowFieldDirty = false;
   world.colonies[colonyId] = colony;
@@ -87,7 +90,7 @@ describe('buildAntTrace — currentGridColonyId (Phase 09.1-05)', () => {
     // expose BOTH so a reader can see at-a-glance which ants are inside a
     // foreign grid.
     const PLAYER = 0;
-    const ENEMY  = 1;
+    const ENEMY = 1;
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     for (const cid of [PLAYER, ENEMY]) {
       const c = createColonyRecord(cid, -1);
@@ -314,7 +317,13 @@ describe('buildAntTrace — movement source inference', () => {
   it('SearchingFood + food pile within scent radius → "scent"', () => {
     const { world, antId } = makeAnt(ForagingSubState.SearchingFood);
     // Pile 5 tiles away (well within DEBUG_SCENT_RADIUS = 15).
-    world.foodPiles.push({ foodPileId: 1, tileX: 25, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({
+      foodPileId: 1,
+      tileX: 25,
+      tileY: 20,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
     expect(buildAntTrace(world, antId).movementSource).toBe('scent');
   });
 
@@ -334,7 +343,13 @@ describe('buildAntTrace — movement source inference', () => {
     const { world, antId } = makeAnt(ForagingSubState.SearchingFood);
     world.ants.targetPosX[antId] = 30 << FP_SHIFT;
     world.ants.targetPosY[antId] = 30 << FP_SHIFT;
-    world.foodPiles.push({ foodPileId: 1, tileX: 25, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({
+      foodPileId: 1,
+      tileX: 25,
+      tileY: 20,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
     const key = pheromoneGridKey(COLONY_ID, PheromoneType.FoodTrail, 'surface');
     phSet(world.pheromoneGrids[key]!, 21, 20, FOOD_TRAIL_DEPOSIT);
     expect(buildAntTrace(world, antId).movementSource).toBe('priority');
@@ -342,7 +357,13 @@ describe('buildAntTrace — movement source inference', () => {
 
   it('scent overrides pheromone (decision order preserved)', () => {
     const { world, antId } = makeAnt(ForagingSubState.SearchingFood);
-    world.foodPiles.push({ foodPileId: 1, tileX: 25, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({
+      foodPileId: 1,
+      tileX: 25,
+      tileY: 20,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
     const key = pheromoneGridKey(COLONY_ID, PheromoneType.FoodTrail, 'surface');
     phSet(world.pheromoneGrids[key]!, 21, 20, FOOD_TRAIL_DEPOSIT);
     expect(buildAntTrace(world, antId).movementSource).toBe('scent');
@@ -354,7 +375,13 @@ describe('buildAntTrace — movement source inference', () => {
     const { world, antId } = makeAnt(ForagingSubState.SearchingFood, Zone.Underground);
     // Populate the surface grid with a nearby pile + pheromone — if the
     // classifier incorrectly ran the surface cascade, one of these would win.
-    world.foodPiles.push({ foodPileId: 1, tileX: 25, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({
+      foodPileId: 1,
+      tileX: 25,
+      tileY: 20,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
     const key = pheromoneGridKey(COLONY_ID, PheromoneType.FoodTrail, 'surface');
     phSet(world.pheromoneGrids[key]!, 21, 20, FOOD_TRAIL_DEPOSIT);
     expect(buildAntTrace(world, antId).movementSource).toBe('underground-exit');
@@ -411,7 +438,12 @@ describe('buildDebugSnapshot — envelope + filtering', () => {
     setupSurfaceGrid(world, COLONY_ID);
     initAnt(world.ants, queenId, { colonyId: COLONY_ID, posX: 0, posY: 0, task: AntTask.Idle });
     const workerId = allocateEntityId(world);
-    initAnt(world.ants, workerId, { colonyId: COLONY_ID, posX: 0, posY: 0, task: AntTask.Foraging });
+    initAnt(world.ants, workerId, {
+      colonyId: COLONY_ID,
+      posX: 0,
+      posY: 0,
+      task: AntTask.Foraging,
+    });
 
     const snap = buildDebugSnapshot(world, 1, []);
     const ids = snap.antTrace.map((r) => r.antId);
@@ -430,9 +462,19 @@ describe('buildDebugSnapshot — envelope + filtering', () => {
       setupSurfaceGrid(world, cid);
     }
     const playerAnt = allocateEntityId(world);
-    initAnt(world.ants, playerAnt, { colonyId: COLONY_ID, posX: 0, posY: 0, task: AntTask.Foraging });
+    initAnt(world.ants, playerAnt, {
+      colonyId: COLONY_ID,
+      posX: 0,
+      posY: 0,
+      task: AntTask.Foraging,
+    });
     const enemyAnt = allocateEntityId(world);
-    initAnt(world.ants, enemyAnt, { colonyId: OTHER_COLONY_ID, posX: 0, posY: 0, task: AntTask.Foraging });
+    initAnt(world.ants, enemyAnt, {
+      colonyId: OTHER_COLONY_ID,
+      posX: 0,
+      posY: 0,
+      task: AntTask.Foraging,
+    });
 
     const filtered = buildDebugSnapshot(world, 1, [], [COLONY_ID]);
     const ids = filtered.antTrace.map((r) => r.antId);
@@ -499,7 +541,14 @@ describe('buildDebugSnapshot — BuildDebugSnapshotOptions (issue #122)', () => 
 
   it('default options include both antTrace and inputLog (F9 path is unchanged)', () => {
     const world = makeWorldWithAnts();
-    const log = [{ type: 'SetBehaviorRatio', colonyId: COLONY_ID, ratio: { forage: 50, fight: 50 }, issuedAtTick: 0 }] as never;
+    const log = [
+      {
+        type: 'SetBehaviorRatio',
+        colonyId: COLONY_ID,
+        ratio: { forage: 50, fight: 50 },
+        issuedAtTick: 0,
+      },
+    ] as never;
     const snap = buildDebugSnapshot(world, 1, log);
     expect(snap.antTrace.length).toBeGreaterThan(0);
     expect(snap.inputLog.length).toBe(1);
@@ -507,7 +556,14 @@ describe('buildDebugSnapshot — BuildDebugSnapshotOptions (issue #122)', () => 
 
   it('includeAntTrace=false emits an empty trace array (downgrade stage 1)', () => {
     const world = makeWorldWithAnts();
-    const log = [{ type: 'SetBehaviorRatio', colonyId: COLONY_ID, ratio: { forage: 50, fight: 50 }, issuedAtTick: 0 }] as never;
+    const log = [
+      {
+        type: 'SetBehaviorRatio',
+        colonyId: COLONY_ID,
+        ratio: { forage: 50, fight: 50 },
+        issuedAtTick: 0,
+      },
+    ] as never;
     const snap = buildDebugSnapshot(world, 1, log, { includeAntTrace: false });
     expect(snap.antTrace).toEqual([]);
     // inputLog must still be present at this stage.
@@ -516,8 +572,18 @@ describe('buildDebugSnapshot — BuildDebugSnapshotOptions (issue #122)', () => 
 
   it('includeInputLog=false drops the input log (downgrade stage 2)', () => {
     const world = makeWorldWithAnts();
-    const log = [{ type: 'SetBehaviorRatio', colonyId: COLONY_ID, ratio: { forage: 50, fight: 50 }, issuedAtTick: 0 }] as never;
-    const snap = buildDebugSnapshot(world, 1, log, { includeAntTrace: false, includeInputLog: false });
+    const log = [
+      {
+        type: 'SetBehaviorRatio',
+        colonyId: COLONY_ID,
+        ratio: { forage: 50, fight: 50 },
+        issuedAtTick: 0,
+      },
+    ] as never;
+    const snap = buildDebugSnapshot(world, 1, log, {
+      includeAntTrace: false,
+      includeInputLog: false,
+    });
     expect(snap.antTrace).toEqual([]);
     expect(snap.inputLog).toEqual([]);
   });
@@ -525,7 +591,7 @@ describe('buildDebugSnapshot — BuildDebugSnapshotOptions (issue #122)', () => 
   it('legacy colonyFilter array signature still works', () => {
     const world = makeWorldWithAnts();
     const snap = buildDebugSnapshot(world, 1, [], [COLONY_ID]);
-    expect(snap.antTrace.every(r => r.colonyId === COLONY_ID)).toBe(true);
+    expect(snap.antTrace.every((r) => r.colonyId === COLONY_ID)).toBe(true);
   });
 
   it('options.colonyFilter narrows the trace to the listed colonies', () => {
@@ -579,7 +645,10 @@ describe('buildDebugGuide — self-describing legend (issue #179)', () => {
     // ForagingSubState CarryingFood).
     expect(guide.enums['task']).toMatchObject({ '0': 'Idle', '1': 'Foraging', '4': 'Nursing' });
     expect(guide.enums['subTask if task=Foraging']).toMatchObject({ '1': 'CarryingFood' });
-    expect(guide.enums['subTask if task=Nursing']).toMatchObject({ '1': 'Feeding', '2': 'Attending' });
+    expect(guide.enums['subTask if task=Nursing']).toMatchObject({
+      '1': 'Feeding',
+      '2': 'Attending',
+    });
     expect(guide.enums['subTask if task=Digging']).toMatchObject({ '1': 'Excavating' });
     expect(guide.enums['zone']).toMatchObject({ '0': 'Surface', '1': 'Underground' });
     expect(guide.enums['chamberType']).toMatchObject({ '2': 'FoodStorage' });
@@ -608,7 +677,9 @@ describe('buildDebugGuide — self-describing legend (issue #179)', () => {
     // Diamond prose names the row-major index formula and the LIVE radius.
     const side = 2 * DEBUG_TRACE_PHEROMONE_RADIUS + 1;
     expect(guide.nearbyPheromone).toContain(`(dy+r)*${side}`);
-    expect(guide.nearbyPheromone).toContain(`r=nearbyPheromoneRadius=${DEBUG_TRACE_PHEROMONE_RADIUS}`);
+    expect(guide.nearbyPheromone).toContain(
+      `r=nearbyPheromoneRadius=${DEBUG_TRACE_PHEROMONE_RADIUS}`,
+    );
   });
 
   it('is embedded in the full snapshot payload and survives JSON round-trip', () => {

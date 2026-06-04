@@ -41,10 +41,7 @@ import {
 } from './terrain-atlas.js';
 export type { AntSpriteLayer } from './ant-sprite-layer.js';
 import type { CameraState } from './camera.js';
-import {
-  SPIDER_SPRITE_HEIGHT,
-  SPIDER_SPRITE_WIDTH,
-} from './ant-sprite-layer.js';
+import { SPIDER_SPRITE_HEIGHT, SPIDER_SPRITE_WIDTH } from './ant-sprite-layer.js';
 import { SPIDER_HUNGER_MAX_TICKS, SPIDER_HP_FULL } from '../sim/constants.js';
 import { tierIndex } from '../sim/ai-state.js';
 
@@ -75,10 +72,10 @@ function visibleRange(
   gridWidth: number,
   gridHeight: number,
 ): { left: number; top: number; right: number; bottom: number } {
-  const left   = Math.floor(cam.x - cam.viewportWidth  / 2);
-  const top    = Math.floor(cam.y - cam.viewportHeight / 2);
-  const right  = Math.min(left + cam.viewportWidth  + 1, gridWidth);
-  const bottom = Math.min(top  + cam.viewportHeight + 1, gridHeight);
+  const left = Math.floor(cam.x - cam.viewportWidth / 2);
+  const top = Math.floor(cam.y - cam.viewportHeight / 2);
+  const right = Math.min(left + cam.viewportWidth + 1, gridWidth);
+  const bottom = Math.min(top + cam.viewportHeight + 1, gridHeight);
   return { left, top, right, bottom };
 }
 
@@ -108,7 +105,7 @@ export function drawSurfaceTerrain(gfx: GfxLike, world: WorldState, cam: CameraS
       // the universal substrate.
       void sgGet(world.surface, tx, ty);
       const screenX = (tx - left) * TILE_SIZE_PX;
-      const screenY = (ty - top)  * TILE_SIZE_PX;
+      const screenY = (ty - top) * TILE_SIZE_PX;
       drawBarrenEarthTile(gfx, world, screenX, screenY, tx, ty);
     }
   }
@@ -146,10 +143,10 @@ export function drawSurfaceEntities(
   // base gfx, preserving the previous single-layer behaviour.
   overlayGfx: GfxLike = gfx,
 ): void {
-  const left = Math.floor(cam.x - cam.viewportWidth  / 2);
-  const top  = Math.floor(cam.y - cam.viewportHeight / 2);
+  const left = Math.floor(cam.x - cam.viewportWidth / 2);
+  const top = Math.floor(cam.y - cam.viewportHeight / 2);
 
-  const canvasW = cam.viewportWidth  * TILE_SIZE_PX;
+  const canvasW = cam.viewportWidth * TILE_SIZE_PX;
   const canvasH = cam.viewportHeight * TILE_SIZE_PX;
 
   // --- Food piles ---
@@ -171,10 +168,11 @@ export function drawSurfaceEntities(
   const baseRadius = TILE_SIZE_PX / 2 - 2;
   for (const pile of curr.foodPiles) {
     const sx = (pile.tileX - left) * TILE_SIZE_PX;
-    const sy = (pile.tileY - top)  * TILE_SIZE_PX;
+    const sy = (pile.tileY - top) * TILE_SIZE_PX;
     // Trivial viewport cull
     if (sx < -TILE_SIZE_PX || sx > canvasW || sy < -TILE_SIZE_PX || sy > canvasH) continue;
-    const isPlayerMarked = playerPriorityPileId !== null && pile.foodPileId === playerPriorityPileId;
+    const isPlayerMarked =
+      playerPriorityPileId !== null && pile.foodPileId === playerPriorityPileId;
     const color = isPlayerMarked ? COLOR_FOOD_PILE_MARKED : COLOR_FOOD_PILE_NORMAL;
     const cx = sx + TILE_SIZE_PX / 2;
     const cy = sy + TILE_SIZE_PX / 2;
@@ -185,7 +183,7 @@ export function drawSurfaceEntities(
     const pct = pile.pickupsRemaining / pile.pickupsInitial;
     let r = baseRadius;
     if (pct <= 0.75) r = baseRadius - 2;
-    if (pct <= 0.50) r = baseRadius - 4;
+    if (pct <= 0.5) r = baseRadius - 4;
     if (pct <= 0.25) r = baseRadius - 6;
     // Floor at 1: with TILE_SIZE_PX = 16, baseRadius = 6, so the smallest
     // bucket would compute to r = 0 — invisible. Snap to 1px so a not-yet-
@@ -218,18 +216,23 @@ export function drawSurfaceEntities(
   // Issue #14 cue: enemy entrances get a 1-px enemy-colony stroke around the
   // mound so the player reads them as "rally here to invade" targets.
   const MOUND_SPILL_PX = 2;
-  const MOUND_OUTER_R  = TILE_SIZE_PX / 2 + MOUND_SPILL_PX; // 10
-  const MOUND_BODY_R   = TILE_SIZE_PX / 2 + 1;              // 9 — 1px lighter rim shows around the body
-  const HOLE_R         = TILE_SIZE_PX / 2 - 2;              // 6 — matches food pile baseRadius
+  const MOUND_OUTER_R = TILE_SIZE_PX / 2 + MOUND_SPILL_PX; // 10
+  const MOUND_BODY_R = TILE_SIZE_PX / 2 + 1; // 9 — 1px lighter rim shows around the body
+  const HOLE_R = TILE_SIZE_PX / 2 - 2; // 6 — matches food pile baseRadius
   for (const colony of Object.values(curr.colonies)) {
     if (!colony.entrances) continue;
     const isEnemy = colony.colonyId !== PLAYER_COLONY_ID;
     for (const entrance of colony.entrances) {
       const sx = (entrance.surfaceTileX - left) * TILE_SIZE_PX;
-      const sy = (entrance.surfaceTileY - top)  * TILE_SIZE_PX;
+      const sy = (entrance.surfaceTileY - top) * TILE_SIZE_PX;
       const cullMargin = TILE_SIZE_PX + MOUND_SPILL_PX + 1;
-      if (sx < -cullMargin || sx > canvasW + MOUND_SPILL_PX
-        || sy < -cullMargin || sy > canvasH + MOUND_SPILL_PX) continue;
+      if (
+        sx < -cullMargin ||
+        sx > canvasW + MOUND_SPILL_PX ||
+        sy < -cullMargin ||
+        sy > canvasH + MOUND_SPILL_PX
+      )
+        continue;
       const cx = sx + TILE_SIZE_PX / 2;
       const cy = sy + TILE_SIZE_PX / 2;
       // Outer mound rim: lighter spoil tone — reads as "raised dirt edge."
@@ -257,7 +260,7 @@ export function drawSurfaceEntities(
   // the raw orange. A 5-frame fade-out is tracked via contestedGlowFrames.
   {
     const tileColony = new Map<number, number>(); // tileKey → first colonyId
-    const contested  = new Set<number>();
+    const contested = new Set<number>();
     const n = curr.ants.alive.length;
     for (let id = 0; id < n; id++) {
       if (!isAlive(curr.ants, id)) continue;
@@ -288,10 +291,10 @@ export function drawSurfaceEntities(
       const tx = key & 0xffff;
       const ty = (key >> 16) & 0xffff;
       const sx = (tx - left) * TILE_SIZE_PX;
-      const sy = (ty - top)  * TILE_SIZE_PX;
+      const sy = (ty - top) * TILE_SIZE_PX;
       if (sx < -TILE_SIZE_PX || sx > canvasW || sy < -TILE_SIZE_PX || sy > canvasH) continue;
       // Fade alpha based on frames since last seen.
-      const framesAgo = tilesToDraw ? (currentFrame - (tilesToDraw.get(key) ?? currentFrame)) : 0;
+      const framesAgo = tilesToDraw ? currentFrame - (tilesToDraw.get(key) ?? currentFrame) : 0;
       const alpha_g = 0.15 * (1 - framesAgo / GLOW_FADE_FRAMES);
       if (alpha_g <= 0) continue;
       // Soft edge: draw the center tile at full alpha, then draw 1px-thin
@@ -299,9 +302,9 @@ export function drawSurfaceEntities(
       gfx.fillStyle(COLOR_NEUTRAL_CONTESTED_GLOW, alpha_g);
       gfx.fillRect(sx + 2, sy + 2, TILE_SIZE_PX - 4, TILE_SIZE_PX - 4);
       gfx.fillStyle(COLOR_NEUTRAL_CONTESTED_GLOW, alpha_g * 0.5);
-      gfx.fillRect(sx,      sy,      TILE_SIZE_PX, 2);
-      gfx.fillRect(sx,      sy + TILE_SIZE_PX - 2, TILE_SIZE_PX, 2);
-      gfx.fillRect(sx,      sy + 2,  2, TILE_SIZE_PX - 4);
+      gfx.fillRect(sx, sy, TILE_SIZE_PX, 2);
+      gfx.fillRect(sx, sy + TILE_SIZE_PX - 2, TILE_SIZE_PX, 2);
+      gfx.fillRect(sx, sy + 2, 2, TILE_SIZE_PX - 4);
       gfx.fillRect(sx + TILE_SIZE_PX - 2, sy + 2, 2, TILE_SIZE_PX - 4);
     }
     // Prune stale entries so the map doesn't grow without bound.
@@ -317,7 +320,7 @@ export function drawSurfaceEntities(
   if (curr.scatterReticleTile !== null) {
     const { x: rtx, y: rty } = curr.scatterReticleTile;
     const rsx = (rtx - left) * TILE_SIZE_PX;
-    const rsy = (rty - top)  * TILE_SIZE_PX;
+    const rsy = (rty - top) * TILE_SIZE_PX;
     if (rsx > -TILE_SIZE_PX && rsx < canvasW && rsy > -TILE_SIZE_PX && rsy < canvasH) {
       // Pulse: alpha oscillates between 0.4 and 0.7 at 1 Hz.
       const pulse = 0.55 + 0.15 * Math.sin((2 * Math.PI * frameTimeMs) / 1000);
@@ -327,8 +330,10 @@ export function drawSurfaceEntities(
       // Tile fill at 0.3 alpha.
       gfx.fillStyle(0xcc1010, 0.3);
       gfx.fillRect(
-        rsx - sizeOffset, rsy - sizeOffset,
-        TILE_SIZE_PX * scalePulse, TILE_SIZE_PX * scalePulse,
+        rsx - sizeOffset,
+        rsy - sizeOffset,
+        TILE_SIZE_PX * scalePulse,
+        TILE_SIZE_PX * scalePulse,
       );
       // Border at pulsed alpha: draw as 2-px edge strips.
       const bw = TILE_SIZE_PX * scalePulse;
@@ -336,10 +341,10 @@ export function drawSurfaceEntities(
       const bx = rsx - sizeOffset;
       const by = rsy - sizeOffset;
       gfx.fillStyle(0xcc1010, pulse);
-      gfx.fillRect(bx,          by,          bw, 2);
-      gfx.fillRect(bx,          by + bh - 2, bw, 2);
-      gfx.fillRect(bx,          by + 2,      2,  bh - 4);
-      gfx.fillRect(bx + bw - 2, by + 2,      2,  bh - 4);
+      gfx.fillRect(bx, by, bw, 2);
+      gfx.fillRect(bx, by + bh - 2, bw, 2);
+      gfx.fillRect(bx, by + 2, 2, bh - 4);
+      gfx.fillRect(bx + bw - 2, by + 2, 2, bh - 4);
     }
   }
 
@@ -368,10 +373,16 @@ export function drawSurfaceEntities(
     const baseX = useInterp ? prevPxX + (currPxX - prevPxX) * alpha : currPxX;
     const baseY = useInterp ? prevPxY + (currPxY - prevPxY) * alpha : currPxY;
     const screenX = baseX - left * TILE_SIZE_PX;
-    const screenY = baseY - top  * TILE_SIZE_PX;
+    const screenY = baseY - top * TILE_SIZE_PX;
 
     // Trivial viewport cull
-    if (screenX < -TILE_SIZE_PX || screenX > canvasW || screenY < -TILE_SIZE_PX || screenY > canvasH) continue;
+    if (
+      screenX < -TILE_SIZE_PX ||
+      screenX > canvasW ||
+      screenY < -TILE_SIZE_PX ||
+      screenY > canvasH
+    )
+      continue;
 
     const colonyId = curr.ants.colonyId[id]!;
     const colony = curr.colonies[colonyId];
@@ -422,11 +433,14 @@ export function drawSurfaceEntities(
     const baseSX = useSpiderInterp ? prevPxX + (currPxX - prevPxX) * alpha : currPxX;
     const baseSY = useSpiderInterp ? prevPxY + (currPxY - prevPxY) * alpha : currPxY;
     const spiderScreenX = baseSX - left * TILE_SIZE_PX;
-    const spiderScreenY = baseSY - top  * TILE_SIZE_PX;
+    const spiderScreenY = baseSY - top * TILE_SIZE_PX;
 
-    if (spiderScreenX > -SPIDER_SPRITE_WIDTH  && spiderScreenX < canvasW + SPIDER_SPRITE_WIDTH
-      && spiderScreenY > -SPIDER_SPRITE_HEIGHT && spiderScreenY < canvasH + SPIDER_SPRITE_HEIGHT) {
-
+    if (
+      spiderScreenX > -SPIDER_SPRITE_WIDTH &&
+      spiderScreenX < canvasW + SPIDER_SPRITE_WIDTH &&
+      spiderScreenY > -SPIDER_SPRITE_HEIGHT &&
+      spiderScreenY < canvasH + SPIDER_SPRITE_HEIGHT
+    ) {
       const hungerFraction = Math.min(
         curr.spider.hungerTicks / SPIDER_HUNGER_MAX_TICKS[tierIndex(curr.difficulty)],
         1,
@@ -442,36 +456,35 @@ export function drawSurfaceEntities(
       if (hungerFraction > 0.7) {
         const baseRingAlpha = ((hungerFraction - 0.7) / 0.3) * 0.85;
         // S6: rampage warning pulse at ≥80% hunger.
-        const rampagePulse = hungerFraction >= 0.8
-          ? 0.1 * Math.sin((2 * Math.PI * frameTimeMs) / 2000)
-          : 0;
+        const rampagePulse =
+          hungerFraction >= 0.8 ? 0.1 * Math.sin((2 * Math.PI * frameTimeMs) / 2000) : 0;
         const ringAlpha = Math.min(1, baseRingAlpha + rampagePulse);
-        const rl = Math.round(spiderScreenX - SPIDER_SPRITE_WIDTH  / 2);
+        const rl = Math.round(spiderScreenX - SPIDER_SPRITE_WIDTH / 2);
         const rt = Math.round(spiderScreenY - SPIDER_SPRITE_HEIGHT / 2);
         const rw = SPIDER_SPRITE_WIDTH;
         const rh = SPIDER_SPRITE_HEIGHT;
         // S6: smooth gradient by color-lerping the ring toward deep red.
         const ringColor = lerpColor(0xffeecc, 0xcc2020, hungerFraction);
         gfx.fillStyle(ringColor, ringAlpha);
-        gfx.fillRect(rl,          rt,          rw, 2);
-        gfx.fillRect(rl,          rt + rh - 2, rw, 2);
-        gfx.fillRect(rl,          rt + 2,      2,  rh - 4);
-        gfx.fillRect(rl + rw - 2, rt + 2,      2,  rh - 4);
+        gfx.fillRect(rl, rt, rw, 2);
+        gfx.fillRect(rl, rt + rh - 2, rw, 2);
+        gfx.fillRect(rl, rt + 2, 2, rh - 4);
+        gfx.fillRect(rl + rw - 2, rt + 2, 2, rh - 4);
       }
 
       // S7/D1: spider priority indicator — white border when player has set priority.
       // Drawn 2px outside the sprite bounding box so it remains visible alongside
       // the hunger ring (which occupies the same edge pixels as the sprite boundary).
       if (curr.spiderPriorityColonyId === PLAYER_COLONY_ID) {
-        const pl = Math.round(spiderScreenX - SPIDER_SPRITE_WIDTH  / 2) - 2;
+        const pl = Math.round(spiderScreenX - SPIDER_SPRITE_WIDTH / 2) - 2;
         const pt = Math.round(spiderScreenY - SPIDER_SPRITE_HEIGHT / 2) - 2;
-        const pw = SPIDER_SPRITE_WIDTH  + 4;
+        const pw = SPIDER_SPRITE_WIDTH + 4;
         const ph = SPIDER_SPRITE_HEIGHT + 4;
         gfx.fillStyle(0xffffff, 1);
-        gfx.fillRect(pl,          pt,          pw, 2);
-        gfx.fillRect(pl,          pt + ph - 2, pw, 2);
-        gfx.fillRect(pl,          pt + 2,      2,  ph - 4);
-        gfx.fillRect(pl + pw - 2, pt + 2,      2,  ph - 4);
+        gfx.fillRect(pl, pt, pw, 2);
+        gfx.fillRect(pl, pt + ph - 2, pw, 2);
+        gfx.fillRect(pl, pt + 2, 2, ph - 4);
+        gfx.fillRect(pl + pw - 2, pt + 2, 2, ph - 4);
       }
 
       // Health bar (issue #148): render-only HP indicator floating just above
@@ -488,17 +501,17 @@ export function drawSurfaceEntities(
         // which sits 2px outside the box).
         const barY = Math.round(spiderScreenY - SPIDER_SPRITE_HEIGHT / 2 - barH - 4);
         // green (full) → yellow (half) → red (empty).
-        const fillColor = hpRatio > 0.5
-          ? lerpColor(0xffcc00, 0x33cc33, (hpRatio - 0.5) / 0.5)
-          : lerpColor(0xcc2020, 0xffcc00, hpRatio / 0.5);
+        const fillColor =
+          hpRatio > 0.5
+            ? lerpColor(0xffcc00, 0x33cc33, (hpRatio - 0.5) / 0.5)
+            : lerpColor(0xcc2020, 0xffcc00, hpRatio / 0.5);
         // Quantize the fill so a damaged spider never reads as full and a
         // barely-alive one never reads as empty: any 0 < ratio < 1 paints
         // between 1px and barW-1px. hp == 0 paints an empty track. Without
         // this, hp=79/80 rounds to the full 24px (looks undamaged) and hp=1/80
         // rounds to 0px (looks dead).
-        const fillW = hpRatio <= 0
-          ? 0
-          : Math.max(1, Math.min(barW - 1, Math.round(barW * hpRatio)));
+        const fillW =
+          hpRatio <= 0 ? 0 : Math.max(1, Math.min(barW - 1, Math.round(barW * hpRatio)));
         // Dark outline + track so a near-empty bar still reads against terrain.
         overlayGfx.fillStyle(0x000000, 0.7);
         overlayGfx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
@@ -523,7 +536,7 @@ export function drawSurfaceEntities(
   if (playerColony && playerColony.rallyPoint !== null) {
     const rp = playerColony.rallyPoint;
     const sx = (rp.tileX - left) * TILE_SIZE_PX;
-    const sy = (rp.tileY - top)  * TILE_SIZE_PX;
+    const sy = (rp.tileY - top) * TILE_SIZE_PX;
     if (sx > -TILE_SIZE_PX && sx < canvasW && sy > -TILE_SIZE_PX && sy < canvasH) {
       gfx.fillStyle(COLOR_RALLY_POINT, 1);
       // Horizontal bar across the tile (leave 1-px edges so adjacent tiles don't fuse)
@@ -541,13 +554,13 @@ export function drawSurfaceEntities(
   // automatically once the player left-clicks the same tileX to confirm.
   if (pendingEntrance !== null) {
     const sx = (pendingEntrance.tileX - left) * TILE_SIZE_PX;
-    const sy = (pendingEntrance.tileY - top)  * TILE_SIZE_PX;
+    const sy = (pendingEntrance.tileY - top) * TILE_SIZE_PX;
     if (sx > -TILE_SIZE_PX && sx < canvasW && sy > -TILE_SIZE_PX && sy < canvasH) {
       gfx.fillStyle(COLOR_QUEEN_OUTLINE, 0.7);
-      gfx.fillRect(sx,                      sy,                      TILE_SIZE_PX, 2);            // top
-      gfx.fillRect(sx,                      sy + TILE_SIZE_PX - 2,   TILE_SIZE_PX, 2);            // bottom
-      gfx.fillRect(sx,                      sy,                      2,            TILE_SIZE_PX); // left
-      gfx.fillRect(sx + TILE_SIZE_PX - 2,   sy,                      2,            TILE_SIZE_PX); // right
+      gfx.fillRect(sx, sy, TILE_SIZE_PX, 2); // top
+      gfx.fillRect(sx, sy + TILE_SIZE_PX - 2, TILE_SIZE_PX, 2); // bottom
+      gfx.fillRect(sx, sy, 2, TILE_SIZE_PX); // left
+      gfx.fillRect(sx + TILE_SIZE_PX - 2, sy, 2, TILE_SIZE_PX); // right
     }
   }
 }

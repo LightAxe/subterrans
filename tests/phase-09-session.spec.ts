@@ -43,10 +43,23 @@ const MINIMAL_SAVE_FIXTURE = {
     nextEntityId: 0,
     commandQueue: [],
     ants: {
-      posX: [], posY: [], colonyId: [], task: [], subTask: [], speed: [],
-      foodCarrying: [], starvationTimer: [], age: [], alive: [], lifespan: [],
-      zone: [], digTileX: [], digTileY: [], digTicksRemaining: [],
-      targetPosX: [], targetPosY: [],
+      posX: [],
+      posY: [],
+      colonyId: [],
+      task: [],
+      subTask: [],
+      speed: [],
+      foodCarrying: [],
+      starvationTimer: [],
+      age: [],
+      alive: [],
+      lifespan: [],
+      zone: [],
+      digTileX: [],
+      digTileY: [],
+      digTicksRemaining: [],
+      targetPosX: [],
+      targetPosY: [],
       // Phase 09.1 Chunk 0 — grid-of-occupancy byte (new SoA field). Empty
       // array matches the empty ants fixture; deserializeWorldState must
       // accept the field on round-trip.
@@ -68,10 +81,10 @@ async function clearSave(page: Page): Promise<void> {
 
 async function seedSave(page: Page, fixture: unknown): Promise<void> {
   await page.goto('/');
-  await page.evaluate(
-    ([key, json]) => window.localStorage.setItem(key as string, json as string),
-    [SAVE_KEY, JSON.stringify(fixture)] as const,
-  );
+  await page.evaluate(([key, json]) => window.localStorage.setItem(key as string, json as string), [
+    SAVE_KEY,
+    JSON.stringify(fixture),
+  ] as const);
 }
 
 test.describe('Phase 9 — SCEN-01 fresh boot', () => {
@@ -79,7 +92,9 @@ test.describe('Phase 9 — SCEN-01 fresh boot', () => {
     page,
   }) => {
     const consoleErrors: string[] = [];
-    page.on('console', (m) => { if (errorFilter(m)) consoleErrors.push(m.text()); });
+    page.on('console', (m) => {
+      if (errorFilter(m)) consoleErrors.push(m.text());
+    });
     page.on('pageerror', (e) => consoleErrors.push(e.message));
 
     await clearSave(page);
@@ -91,31 +106,24 @@ test.describe('Phase 9 — SCEN-01 fresh boot', () => {
 
     // SavePrompt overlay MUST NOT render when there is no save.
     // Canvas-drawn; observe via the __phase9_ui hook exported by Plan 09-06.
-    await expect
-      .poll(() => getActiveOverlay(page), { timeout: 5_000 })
-      .toBe('none');
+    await expect.poll(() => getActiveOverlay(page), { timeout: 5_000 }).toBe('none');
 
     // No runtime errors during fresh boot.
     expect(consoleErrors, consoleErrors.join('\n')).toHaveLength(0);
   });
 
-  test('corrupted save falls through to fresh boot (hasSave returns false)', async ({
-    page,
-  }) => {
+  test('corrupted save falls through to fresh boot (hasSave returns false)', async ({ page }) => {
     await page.goto('/');
-    await page.evaluate(
-      ([key]) => window.localStorage.setItem(key as string, 'not-valid-json'),
-      [SAVE_KEY] as const,
-    );
+    await page.evaluate(([key]) => window.localStorage.setItem(key as string, 'not-valid-json'), [
+      SAVE_KEY,
+    ] as const);
     await page.reload();
 
     const canvas = page.locator('canvas').first();
     await canvas.waitFor({ state: 'attached', timeout: 10_000 });
     await expect(canvas).toBeVisible();
     // Malformed JSON → loadSave returns null → no overlay.
-    await expect
-      .poll(() => getActiveOverlay(page), { timeout: 5_000 })
-      .toBe('none');
+    await expect.poll(() => getActiveOverlay(page), { timeout: 5_000 }).toBe('none');
   });
 });
 
@@ -128,9 +136,7 @@ test.describe('Phase 9 — SCEN-04 save-prompt flow', () => {
 
     // Overlay renders — proves hasSave() + loadSave() accepted the envelope shape.
     // Canvas-drawn; observe via the __phase9_ui hook exported by Plan 09-06.
-    await expect
-      .poll(() => getActiveOverlay(page), { timeout: 5_000 })
-      .toBe('save-prompt');
+    await expect.poll(() => getActiveOverlay(page), { timeout: 5_000 }).toBe('save-prompt');
 
     // SavePrompt buttons are Phaser.GameObjects.Text rendered to canvas — NOT DOM.
     // Playwright cannot reliably query canvas text. Click via canvas-relative
@@ -143,9 +149,7 @@ test.describe('Phase 9 — SCEN-04 save-prompt flow', () => {
     await page.mouse.click(box.x + R.x + R.w / 2, box.y + R.y + R.h / 2);
 
     // Overlay dismissed — hook flips back to 'none'.
-    await expect
-      .poll(() => getActiveOverlay(page), { timeout: 5_000 })
-      .toBe('none');
+    await expect.poll(() => getActiveOverlay(page), { timeout: 5_000 }).toBe('none');
 
     // Canvas still up (no crash-on-load — the minimal snapshot was accepted by deserializeWorldState).
     await expect(page.locator('canvas').first()).toBeVisible();
@@ -154,15 +158,11 @@ test.describe('Phase 9 — SCEN-04 save-prompt flow', () => {
     // asserting loaded-state richness would require an in-browser save helper which no plan exposes.
   });
 
-  test('seeded save → SavePrompt "New Game" clears save and boots fresh', async ({
-    page,
-  }) => {
+  test('seeded save → SavePrompt "New Game" clears save and boots fresh', async ({ page }) => {
     await seedSave(page, MINIMAL_SAVE_FIXTURE);
     await page.reload();
 
-    await expect
-      .poll(() => getActiveOverlay(page), { timeout: 5_000 })
-      .toBe('save-prompt');
+    await expect.poll(() => getActiveOverlay(page), { timeout: 5_000 }).toBe('save-prompt');
 
     const canvas2 = page.locator('canvas').first();
     const box2 = await canvas2.boundingBox();
@@ -171,9 +171,7 @@ test.describe('Phase 9 — SCEN-04 save-prompt flow', () => {
     await page.mouse.click(box2.x + R2.x + R2.w / 2, box2.y + R2.y + R2.h / 2);
 
     // Overlay dismissed; localStorage save deleted by deleteSave().
-    await expect
-      .poll(() => getActiveOverlay(page), { timeout: 5_000 })
-      .toBe('none');
+    await expect.poll(() => getActiveOverlay(page), { timeout: 5_000 }).toBe('none');
     const stored = await page.evaluate(
       (key) => window.localStorage.getItem(key as string),
       SAVE_KEY,
@@ -204,7 +202,9 @@ test.describe('Phase 09.1 Chunk 2 — enemy underground toggle', () => {
     //   X → flip back → HUD reads "Your Colony"
     // and asserts no console errors fire during the sequence.
     const consoleErrors: string[] = [];
-    page.on('console', (m) => { if (errorFilter(m)) consoleErrors.push(m.text()); });
+    page.on('console', (m) => {
+      if (errorFilter(m)) consoleErrors.push(m.text());
+    });
     page.on('pageerror', (e) => consoleErrors.push(e.message));
 
     await clearSave(page);
@@ -226,15 +226,22 @@ test.describe('Phase 09.1 Chunk 2 — enemy underground toggle', () => {
     // Phase 08-04 decision (JustDown). Poll the hook for the label going
     // truthy as a proxy for "UIScene has run at least one update frame
     // since boot", then press Tab.
-    await expect.poll(
-      async () => {
-        const v = await page.evaluate(() => (window as unknown as {
-          __phase9_ui?: { activeUndergroundLabel?: string };
-        }).__phase9_ui?.activeUndergroundLabel);
-        return v ?? 'unset';
-      },
-      { timeout: 5_000 },
-    ).toBe('Your Colony');
+    await expect
+      .poll(
+        async () => {
+          const v = await page.evaluate(
+            () =>
+              (
+                window as unknown as {
+                  __phase9_ui?: { activeUndergroundLabel?: string };
+                }
+              ).__phase9_ui?.activeUndergroundLabel,
+          );
+          return v ?? 'unset';
+        },
+        { timeout: 5_000 },
+      )
+      .toBe('Your Colony');
     await page.keyboard.press('Tab');
     await page.waitForTimeout(300);
 
