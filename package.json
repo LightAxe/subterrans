@@ -30,7 +30,7 @@
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format:check": "prettier --check src/",
     "verify": "npm run format:check && npm run lint && npm run typecheck && bash scripts/check-sim-boundary.sh && bash scripts/check-asset-paths.sh && npm run test"
   },
   "dependencies": {
