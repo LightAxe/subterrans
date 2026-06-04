@@ -28,6 +28,9 @@ coverage/
 .vscode/*
 !.vscode/settings.json
 
+# Local AI-agent harness config (Claude Code) — local-only, not project config
+.claude/
+
 # Misc
 *.tsbuildinfo
 

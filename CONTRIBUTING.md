@@ -19,7 +19,7 @@ git clone https://github.com/LightAxe/subterrans.git
 cd subterrans/code
 npm install
 npm run dev        # launches Vite dev server
-npm run verify     # lint + typecheck + sim-boundary check + tests
+npm run verify     # format:check + lint + typecheck + lint:types + sim-boundary + asset-path + tests
 ```
 
 Requirements:
@@ -33,7 +33,9 @@ Useful scripts:
 - `npm run test:watch` — Vitest in watch mode
 - `npm run test:e2e` — Playwright browser tests
 - `npm run typecheck` — TypeScript in noEmit mode
-- `npm run lint` / `npm run lint:fix` — ESLint
+- `npm run lint` / `npm run lint:fix` — fast ESLint (sim-safety + base rules)
+- `npm run lint:types` — type-aware ESLint (`recommended-type-checked`); slower, runs the TS program
+- `npm run format` / `npm run format:check` — Prettier (write / check); `format:check` is scoped to `src/` and runs inside `verify`
 
 ## Finding Something to Work On
 
@@ -84,7 +86,7 @@ Highlights:
 
    Prefixes we use: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `perf`.
 
-4. **Run `npm run verify` before pushing.** Same command CI runs.
+4. **Run `npm run verify` before pushing.** CI runs the same gate on every PR (`.github/workflows/ci.yml`). The `test:coverage` (80%) and `test:e2e` suites are local-only for now — not CI-gated (tracked in #188 and #186) — so run them locally before pushing.
 5. **Open a PR** against `main`. Fill out the PR template (summary + test plan).
 
 ## PR Review

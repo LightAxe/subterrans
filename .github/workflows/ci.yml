@@ -1,0 +1,50 @@
+name: CI
+
+# Automated gate for the game code. Runs on every PR targeting main and on
+# pushes to main.
+#
+#   verify — `npm run verify` (prettier --check src/, eslint, tsc --noEmit, the
+#            type-aware lint:types layer, the sim-boundary and asset-path grep
+#            guards, and the full Vitest unit/integration suite). Same command
+#            contributors run locally before pushing.
+#
+# Two suites are deliberately NOT gated here yet — both block every PR if wired
+# in, so they stay local-only until stabilized for CI:
+#
+#   coverage (`npm run test:coverage`) — the 80% v8 gate. The coverage % passes,
+#            but v8 instrumentation on a 2-core runner pushes the long simulation
+#            integration tests (ai-controller.integration, foraging-survival,
+#            determinism) past their hard-coded timeouts, so the job fails on
+#            runtime, not on coverage. Note: `verify` already runs the same suite
+#            UN-instrumented and passes — only the % enforcement is missing here.
+#            Tracked in issue #188.
+#   e2e (`npm run test:e2e`, Playwright) — not green headless (canvas/WebGL
+#            timeouts). Tracked in issue #186.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Least privilege — CI only reads the repo to install, lint, and test.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref (rapid pushes / PR synchronize events).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify (format, lint, types, sim/asset guards, unit tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run verify

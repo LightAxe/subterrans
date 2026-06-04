@@ -8,6 +8,7 @@ A modern ant colony simulation game — a spiritual successor to SimAnt (1991) w
 - **Rendering:** Phaser 3
 - **Testing:** Vitest (unit/integration), Playwright (browser/E2E)
 - **Build:** Vite (tentative, finalized during PRD)
+- **Formatting:** Prettier (`.prettierrc.json`) — run `npm run format`. Two ESLint configs: the fast `eslint.config.ts` (sim-safety + base rules, run by `lint`) and the type-aware `eslint.typecheck.config.ts` (`recommended-type-checked`, run by `lint:types`).
 - **Target:** Web browsers (Chrome, Firefox, Safari, Edge — latest two versions)
 
 ## Directory Layout
@@ -52,7 +53,7 @@ Phase 1 targets web only. The architecture preserves portability for native wrap
 - **`src/sim/`**: Full test coverage. Every system function, every component store operation, every edge case. These are pure functions operating on data — they are trivially testable.
 - **`src/render/`, `src/input/`, `src/platform/`**: Smoke tests. Verify initialization, basic rendering, input translation.
 - **Deterministic replay tests**: A recorded input sequence + seed must always produce the same final world state. These tests catch non-determinism bugs.
-- **All tests run in CI** on every push and PR.
+- **The full Vitest (unit/integration) suite runs in CI** on every push and PR via `verify` (`.github/workflows/ci.yml`). The coverage-% gate (`test:coverage`) and Playwright E2E are local-only for now, not CI-gated (see Building and Running; tracked in #188 and #186).
 
 ## Branching & PR Workflow
 
@@ -123,7 +124,7 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 - Any new logic under `src/sim/` must ship with Vitest unit tests in the same PR. Untested sim code is a blocker, not a follow-up.
 - Changes to tick-order, command application, save format, or PRNG usage must include or update a deterministic replay test. If the PR claims "replay still works" without a test demonstrating it, ask for one.
 - Render/input/platform changes need at least a smoke test (initialization + one happy path). Full coverage is not required at those layers.
-- **80% coverage gate.** `npm run test:coverage` runs Vitest with v8 instrumentation and enforces global thresholds of 80% on statements / branches / functions / lines (see `vitest.config.ts`). Phaser scene files and `src/main.ts` are excluded from the gate because they are exercised by Playwright E2E, not unit tests. **Run `npm run test:coverage` and confirm the gate passes before pushing.** It is not part of `verify` — coverage instrumentation slows the suite to ~6 minutes and causes some long integration tests to hit their hard-coded timeouts, so keep it as a separate pre-push step (and as a CI job) rather than wiring it into the fast local loop.
+- **80% coverage gate.** `npm run test:coverage` runs Vitest with v8 instrumentation and enforces global thresholds of 80% on statements / branches / functions / lines (see `vitest.config.ts`). Phaser scene files and `src/main.ts` are excluded from the gate because they are exercised by Playwright E2E, not unit tests. **Run `npm run test:coverage` and confirm the gate passes before pushing.** It is not part of `verify` — coverage instrumentation slows the suite to ~6 minutes and causes some long integration tests to hit their hard-coded timeouts, so keep it as a separate pre-push step rather than wiring it into the fast local loop. It is **not** CI-gated yet for that same timeout reason (the instrumented run blows those timeouts on the slower CI runner); bringing it into CI is tracked in #188.
 
 ### Asset paths and build hygiene
 
@@ -135,11 +136,17 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 ```bash
 cd code/
 npm install
-npm run dev       # Start dev server (once scaffold is in place)
+npm run dev            # Start dev server
+npm run format         # Prettier-format the tree (format:check is the verify gate)
+npm run lint           # Fast ESLint (sim-safety + base rules)
+npm run lint:types     # Type-aware ESLint (recommended-type-checked) — slower
 npm run test           # Run Vitest (fast local loop)
+npm run verify         # Full gate: format:check + lint + typecheck + lint:types + sim/asset guards + tests
 npm run test:coverage  # Run Vitest with v8 coverage + 80% gate (run before pushing)
 npm run test:e2e       # Run Playwright
 ```
+
+CI (`.github/workflows/ci.yml`) runs `verify` on every PR to `main` and on pushes to `main` — that includes the full Vitest suite (un-instrumented). Two suites are run locally only, **not** CI-gated yet: `test:coverage` (the 80% gate — v8 instrumentation pushes long integration tests past their timeouts on the CI runner, tracked in #188) and `test:e2e` (Playwright — fails headless, canvas/WebGL timeouts, tracked in #186).
 
 ## Debugging snapshots (F9 exports)
 
