@@ -154,7 +154,7 @@ function makeV22WorldWith2Colonies(
     subTask: 0,
     speed: 0,
   });
-  const c1 = createColonyRecord(playerColonyId as ColonyId, queen1);
+  const c1 = createColonyRecord(playerColonyId, queen1);
   c1.entrances = [];
   c1.rallyPoint = null;
   c1.digFlowFieldDirty = false;
@@ -169,7 +169,7 @@ function makeV22WorldWith2Colonies(
     subTask: 0,
     speed: 0,
   });
-  const c2 = createColonyRecord(aiColonyId as ColonyId, queen2);
+  const c2 = createColonyRecord(aiColonyId, queen2);
   c2.entrances = [];
   c2.rallyPoint = null;
   c2.digFlowFieldDirty = false;
@@ -178,7 +178,7 @@ function makeV22WorldWith2Colonies(
   const addWorker = (colonyId: number): number => {
     const id = allocateEntityId(world);
     initAnt(world.ants, id, {
-      colonyId: colonyId as ColonyId,
+      colonyId: colonyId,
       posX: 1,
       posY: 1,
       task: AntTask.Idle,

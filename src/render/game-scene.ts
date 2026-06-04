@@ -286,7 +286,7 @@ export class GameScene extends Phaser.Scene {
     // or non-string registry value means GameScene was instantiated outside
     // mount() (e.g. ad-hoc test harness, hand-built Phaser.Game) — fail loud
     // rather than letting `String(undefined)` produce 404s on every sprite.
-    const assetsBaseRaw = this.registry.get('assetsBase');
+    const assetsBaseRaw: unknown = this.registry.get('assetsBase');
     if (typeof assetsBaseRaw !== 'string' || assetsBaseRaw.length === 0) {
       throw new Error(
         'GameScene.preload: assetsBase registry value missing or invalid. ' +
@@ -331,7 +331,7 @@ export class GameScene extends Phaser.Scene {
     // main.ts in callbacks.preBoot). Treat any non-string value as "feature
     // off" so a programming error in main.ts doesn't accidentally turn the
     // overlay on with an undefined endpoint and 404 the submission.
-    const endpointRaw = this.registry.get('playtraceEndpoint');
+    const endpointRaw: unknown = this.registry.get('playtraceEndpoint');
     // Trim whitespace so a templated env var that resolved to spaces
     // is treated as feature-off here too. main.ts normalizes at the
     // boundary; this is defense-in-depth for the registry value.

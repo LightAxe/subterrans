@@ -42,7 +42,7 @@ export function decideBootMode(hasSaveFn: () => boolean): 'prompt' | 'fresh' {
  */
 export function deriveAIColonyIds(world: WorldState, playerColonyId: ColonyId): ColonyId[] {
   return Object.keys(world.colonies)
-    .map((key) => Number(key) as ColonyId)
+    .map((key) => Number(key))
     .filter((cid) => cid !== playerColonyId)
     .sort((a, b) => a - b);
 }

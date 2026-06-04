@@ -67,7 +67,7 @@ function makeWorldWithColony(seed: number = 42): {
     lifespan: WORKER_LIFESPAN_TICKS,
   });
   world.colonies[1] = createColonyRecord(1, queenId);
-  world.colonies[1]!.foodStored = 10000;
+  world.colonies[1].foodStored = 10000;
   return { world, colonyId: 1 as ColonyId, queenId };
 }
 
@@ -986,7 +986,7 @@ describe('Pheromone step ordering', () => {
 
     // Deposit ran first (added FOOD_TRAIL_DEPOSIT_V14), then decay reduced it.
     // Result must be > 0 (not zero) and <= FOOD_TRAIL_DEPOSIT_V14.
-    const val = phGet(world.pheromoneGrids[gridKey]!, 3, 3);
+    const val = phGet(world.pheromoneGrids[gridKey], 3, 3);
     expect(val).toBeGreaterThan(0);
     expect(val).toBeLessThanOrEqual(FOOD_TRAIL_DEPOSIT_V14);
   });
@@ -1043,7 +1043,7 @@ describe('Tick writeback and return', () => {
       speed: 0,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1]!.foodStored = 10000;
+    world.colonies[1].foodStored = 10000;
 
     // Add a forager so movement uses rng
     for (let i = 0; i < 3; i++) {
@@ -1055,8 +1055,8 @@ describe('Tick writeback and return', () => {
         task: AntTask.Foraging,
         subTask: ForagingSubState.SearchingFood,
       });
-      world.colonies[1]!.workers.push(wid);
-      world.colonies[1]!.workerCount += 1;
+      world.colonies[1].workers.push(wid);
+      world.colonies[1].workerCount += 1;
     }
     const gridKey = pheromoneGridKey(1 as ColonyId, PheromoneType.FoodTrail, 'surface');
     world.pheromoneGrids[gridKey] = createPheromoneGrid(64, 64);
@@ -1108,7 +1108,7 @@ describe('Multi-colony iteration', () => {
       speed: 0,
     });
     world.colonies[1] = createColonyRecord(1, q1);
-    world.colonies[1]!.foodStored = 5000;
+    world.colonies[1].foodStored = 5000;
 
     // Colony 2
     const q2 = allocateEntityId(world);
@@ -1121,7 +1121,7 @@ describe('Multi-colony iteration', () => {
       speed: 0,
     });
     world.colonies[2] = createColonyRecord(2, q2);
-    world.colonies[2]!.foodStored = 5000;
+    world.colonies[2].foodStored = 5000;
 
     // Add 2 workers to each colony
     for (let i = 0; i < 2; i++) {
@@ -1133,8 +1133,8 @@ describe('Multi-colony iteration', () => {
         task: AntTask.Foraging,
         subTask: ForagingSubState.SearchingFood,
       });
-      world.colonies[1]!.workers.push(w1);
-      world.colonies[1]!.workerCount += 1;
+      world.colonies[1].workers.push(w1);
+      world.colonies[1].workerCount += 1;
 
       const w2 = allocateEntityId(world);
       initAnt(world.ants, w2, {
@@ -1144,19 +1144,19 @@ describe('Multi-colony iteration', () => {
         task: AntTask.Foraging,
         subTask: ForagingSubState.SearchingFood,
       });
-      world.colonies[2]!.workers.push(w2);
-      world.colonies[2]!.workerCount += 1;
+      world.colonies[2].workers.push(w2);
+      world.colonies[2].workerCount += 1;
     }
 
     tick(world, []);
 
     // Both colonies consumed food (queen fed)
-    expect(world.colonies[1]!.foodStored).toBe(5000 - QUEEN_FOOD_PER_TICK);
-    expect(world.colonies[2]!.foodStored).toBe(5000 - QUEEN_FOOD_PER_TICK);
+    expect(world.colonies[1].foodStored).toBe(5000 - QUEEN_FOOD_PER_TICK);
+    expect(world.colonies[2].foodStored).toBe(5000 - QUEEN_FOOD_PER_TICK);
     // Both colonies have populated task census
     // (2 mid-cycle foragers each → census forage = 2)
-    expect(world.colonies[1]!.taskCensus.forage).toBe(2);
-    expect(world.colonies[2]!.taskCensus.forage).toBe(2);
+    expect(world.colonies[1].taskCensus.forage).toBe(2);
+    expect(world.colonies[2].taskCensus.forage).toBe(2);
   });
 });
 
@@ -1256,11 +1256,11 @@ describe('Phase 7: MarkDigTile command processing', () => {
       subTask: 0,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1]!.foodStored = 10000;
+    world.colonies[1].foodStored = 10000;
     // Phase 3 extension fields required by tick.ts
-    world.colonies[1]!.entrances = [];
-    world.colonies[1]!.rallyPoint = null;
-    world.colonies[1]!.digFlowFieldDirty = false;
+    world.colonies[1].entrances = [];
+    world.colonies[1].rallyPoint = null;
+    world.colonies[1].digFlowFieldDirty = false;
     world.undergroundGrids[1] = createUndergroundGrid(
       UNDERGROUND_GRID_WIDTH,
       UNDERGROUND_GRID_HEIGHT,
@@ -1455,7 +1455,7 @@ describe('Phase 7: MarkDigTile command processing', () => {
       { type: 'MarkFoodPile', colonyId: colonyA, tileX: 10, tileY: 10, issuedAtTick: 0 },
     ]);
     expect(world.colonies[colonyA]!.priorityFoodPileId).toBe(7);
-    expect(world.colonies[colonyB]!.priorityFoodPileId).toBeNull();
+    expect(world.colonies[colonyB].priorityFoodPileId).toBeNull();
   });
 
   // Test P7-7: PlaceChamber creates PendingChamber with correct dimensions; footprint tiles marked
@@ -1482,7 +1482,7 @@ describe('Phase 7: MarkDigTile command processing', () => {
     const pcKey = `${colonyId}:10:10`;
     expect(world.pendingChambers[pcKey]).toBeDefined();
     const pc = world.pendingChambers[pcKey]!;
-    const dims = CHAMBER_DIMENSIONS[ChamberType.Queen]!;
+    const dims = CHAMBER_DIMENSIONS[ChamberType.Queen];
     expect(pc.width).toBe(dims.width);
     expect(pc.height).toBe(dims.height);
     expect(pc.chamberType).toBe(ChamberType.Queen);
@@ -1556,7 +1556,7 @@ describe('Phase 7: MarkDigTile command processing', () => {
   // Test P7-9: PlaceChamber rejected if out of bounds
   it('Test P7-9: PlaceChamber rejected if out of bounds', () => {
     const { world, colonyId } = makeWorldWithUnderground();
-    const dims = CHAMBER_DIMENSIONS[ChamberType.Queen]!;
+    const dims = CHAMBER_DIMENSIONS[ChamberType.Queen];
     const cmd: SimCommand = {
       type: 'PlaceChamber',
       colonyId,
@@ -1644,7 +1644,7 @@ describe('Phase 7: MarkDigTile command processing', () => {
   // ---------------------------------------------------------------------------
 
   function setupPendingQueenAt(world: WorldState, colonyId: ColonyId, ax: number, ay: number) {
-    const dims = CHAMBER_DIMENSIONS[ChamberType.Queen]!;
+    const dims = CHAMBER_DIMENSIONS[ChamberType.Queen];
     const underground = world.undergroundGrids[colonyId]!;
     // Mark the entire footprint, mirroring what PlaceChamber does.
     for (let dy = 0; dy < dims.height; dy++) {
@@ -1729,7 +1729,7 @@ describe('Phase 7: MarkDigTile command processing', () => {
     const { world, colonyId } = makeWorldWithUnderground();
     const { pcKey: keyA } = setupPendingQueenAt(world, colonyId, 20, 5);
     // Place a second pending chamber far from A.
-    const dims = CHAMBER_DIMENSIONS[ChamberType.Nursery]!;
+    const dims = CHAMBER_DIMENSIONS[ChamberType.Nursery];
     const bx = 60,
       by = 20;
     const underground = world.undergroundGrids[colonyId]!;
@@ -1763,7 +1763,7 @@ describe('Phase 7: MarkDigTile command processing', () => {
   it('Issue #54 (v9): cross-colony — cancel in colony A leaves colony B pending chamber intact', () => {
     const { world, colonyId: colonyA } = makeWorldWithUnderground();
     // Set up a sibling colony B with its own underground grid.
-    const colonyB = (colonyA + 1) as ColonyId;
+    const colonyB = colonyA + 1;
     const queenB = allocateEntityId(world);
     initAnt(world.ants, queenB, {
       colonyId: colonyB,
@@ -1773,9 +1773,9 @@ describe('Phase 7: MarkDigTile command processing', () => {
       subTask: 0,
     });
     world.colonies[colonyB] = createColonyRecord(colonyB, queenB);
-    world.colonies[colonyB]!.entrances = [];
-    world.colonies[colonyB]!.rallyPoint = null;
-    world.colonies[colonyB]!.digFlowFieldDirty = false;
+    world.colonies[colonyB].entrances = [];
+    world.colonies[colonyB].rallyPoint = null;
+    world.colonies[colonyB].digFlowFieldDirty = false;
     world.undergroundGrids[colonyB] = createUndergroundGrid(
       UNDERGROUND_GRID_WIDTH,
       UNDERGROUND_GRID_HEIGHT,
@@ -1831,7 +1831,7 @@ describe('Phase 7: MarkDigTile command processing', () => {
     // benefits, since checkPendingChambers' all-Open promotion gate is the
     // shared mechanism that orphans the entry.
     const { world, colonyId } = makeWorldWithUnderground();
-    const dims = CHAMBER_DIMENSIONS[ChamberType.Nursery]!;
+    const dims = CHAMBER_DIMENSIONS[ChamberType.Nursery];
     const ax = 30,
       ay = 8;
     const underground = world.undergroundGrids[colonyId]!;
@@ -1871,10 +1871,10 @@ describe('Phase 7: Step ordering tests', () => {
       subTask: 0,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1]!.foodStored = 10000;
-    world.colonies[1]!.entrances = [];
-    world.colonies[1]!.rallyPoint = null;
-    world.colonies[1]!.digFlowFieldDirty = false;
+    world.colonies[1].foodStored = 10000;
+    world.colonies[1].entrances = [];
+    world.colonies[1].rallyPoint = null;
+    world.colonies[1].digFlowFieldDirty = false;
     world.undergroundGrids[1] = createUndergroundGrid(
       UNDERGROUND_GRID_WIDTH,
       UNDERGROUND_GRID_HEIGHT,
@@ -1902,7 +1902,7 @@ describe('Phase 7: Step ordering tests', () => {
   it('Test P7-14: step 11 checkPendingChambers promotes fully-open PendingChamber to ChamberRecord', () => {
     const { world, colonyId } = makeWorldWithUnderground();
     const underground = world.undergroundGrids[colonyId]!;
-    const dims = CHAMBER_DIMENSIONS[ChamberType.Nursery]!;
+    const dims = CHAMBER_DIMENSIONS[ChamberType.Nursery];
     const ax = 20,
       ay = 5;
     // Pre-open all footprint tiles
@@ -2168,7 +2168,7 @@ describe('Phase 7: Integration tests', () => {
     const colony = world.colonies[colonyId]!;
 
     const chamberType = ChamberType.FoodStorage;
-    const dims = CHAMBER_DIMENSIONS[chamberType]!;
+    const dims = CHAMBER_DIMENSIONS[chamberType];
     const ax = 30,
       ay = 10;
 
@@ -2262,10 +2262,10 @@ describe('Regression: reviewer P1 fixes', () => {
       subTask: 0,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1]!.foodStored = 10000;
-    world.colonies[1]!.entrances = [];
-    world.colonies[1]!.rallyPoint = null;
-    world.colonies[1]!.digFlowFieldDirty = false;
+    world.colonies[1].foodStored = 10000;
+    world.colonies[1].entrances = [];
+    world.colonies[1].rallyPoint = null;
+    world.colonies[1].digFlowFieldDirty = false;
     world.undergroundGrids[1] = createUndergroundGrid(
       UNDERGROUND_GRID_WIDTH,
       UNDERGROUND_GRID_HEIGHT,
@@ -2708,11 +2708,11 @@ describe('Regression: reviewer P1 fixes', () => {
     const queen2 = allocateEntityId(world);
     initAnt(world.ants, queen2, { colonyId: 2, posX: 0, posY: 0, task: AntTask.Idle, subTask: 0 });
     world.colonies[2] = createColonyRecord(2, queen2);
-    world.colonies[2]!.entrances = [
+    world.colonies[2].entrances = [
       { entranceId: 999, surfaceTileX: 50, surfaceTileY: 0, isOpen: true },
     ];
-    world.colonies[2]!.rallyPoint = null;
-    world.colonies[2]!.digFlowFieldDirty = false;
+    world.colonies[2].rallyPoint = null;
+    world.colonies[2].digFlowFieldDirty = false;
     world.undergroundGrids[2] = createUndergroundGrid(
       UNDERGROUND_GRID_WIDTH,
       UNDERGROUND_GRID_HEIGHT,
@@ -2751,8 +2751,8 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
       subTask: 0,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1]!.foodStored = 10000;
-    world.colonies[1]!.entrances = [
+    world.colonies[1].foodStored = 10000;
+    world.colonies[1].entrances = [
       {
         entranceId: 999,
         surfaceTileX: entranceX,
@@ -2760,8 +2760,8 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
         isOpen: true,
       },
     ];
-    world.colonies[1]!.rallyPoint = null;
-    world.colonies[1]!.digFlowFieldDirty = false;
+    world.colonies[1].rallyPoint = null;
+    world.colonies[1].digFlowFieldDirty = false;
     const ug = createUndergroundGrid(UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT);
     world.undergroundGrids[1] = ug;
     return { world, colonyId: 1 as ColonyId, ug, entranceX };
@@ -2845,7 +2845,7 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
     };
     tick(world, [cmd]);
     // Every Solid footprint tile should be Marked now.
-    const dims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage]!;
+    const dims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage];
     for (let dy = 0; dy < dims.height; dy++) {
       for (let dx = 0; dx < dims.width; dx++) {
         const state = ugGet(ug, entranceX + dx, 10 + dy);
@@ -2909,7 +2909,7 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
     tick(world, [cmd]);
     expect(world.pendingChambers[`${colonyId}:${entranceX}:10`]).toBeDefined();
     // Manually open the footprint (simulating excavation complete) and tick.
-    const dims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage]!;
+    const dims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage];
     for (let dy = 0; dy < dims.height; dy++) {
       for (let dx = 0; dx < dims.width; dx++) {
         ug.data[(10 + dy) * UNDERGROUND_GRID_WIDTH + (entranceX + dx)] = UndergroundTileState.Open;
@@ -2982,10 +2982,10 @@ function makeTwoColonyWorld(): {
     lifespan: WORKER_LIFESPAN_TICKS,
   });
   world.colonies[1] = createColonyRecord(1, playerQueenId);
-  world.colonies[1]!.foodStored = 100000;
-  world.colonies[1]!.entrances = [];
-  world.colonies[1]!.rallyPoint = null;
-  world.colonies[1]!.digFlowFieldDirty = false;
+  world.colonies[1].foodStored = 100000;
+  world.colonies[1].entrances = [];
+  world.colonies[1].rallyPoint = null;
+  world.colonies[1].digFlowFieldDirty = false;
 
   // Enemy colony (ID=2)
   const enemyQueenId = allocateEntityId(world);
@@ -2999,10 +2999,10 @@ function makeTwoColonyWorld(): {
     lifespan: WORKER_LIFESPAN_TICKS,
   });
   world.colonies[2] = createColonyRecord(2, enemyQueenId);
-  world.colonies[2]!.foodStored = 100000;
-  world.colonies[2]!.entrances = [];
-  world.colonies[2]!.rallyPoint = null;
-  world.colonies[2]!.digFlowFieldDirty = false;
+  world.colonies[2].foodStored = 100000;
+  world.colonies[2].entrances = [];
+  world.colonies[2].rallyPoint = null;
+  world.colonies[2].digFlowFieldDirty = false;
 
   return {
     world,

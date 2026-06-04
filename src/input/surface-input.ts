@@ -92,7 +92,7 @@ export function isEmptySurfaceTile(world: WorldState, tileX: number, tileY: numb
 
   // Check not a colony entrance — iterate colonies via Object.keys (ADR-0006)
   for (const key of Object.keys(world.colonies)) {
-    const colony = world.colonies[Number(key) as ColonyId];
+    const colony = world.colonies[Number(key)];
     if (colony === undefined) continue;
     for (const entrance of colony.entrances) {
       if (entrance.surfaceTileX === tileX && entrance.surfaceTileY === tileY) return false;
@@ -135,7 +135,7 @@ export function isForeignColonyEntrance(
   if (tileX < 0 || tileY < 0) return false;
   if (tileX >= world.surface.width || tileY >= world.surface.height) return false;
   for (const key of Object.keys(world.colonies)) {
-    const cid = Number(key) as ColonyId;
+    const cid = Number(key);
     if (cid === ownColonyId) continue;
     const colony = world.colonies[cid];
     if (colony === undefined) continue;

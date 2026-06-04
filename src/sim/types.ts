@@ -809,7 +809,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     if (!(colonyId in dst.colonies)) {
       dst.colonies[colonyId] = createColonyRecord(s.colonyId, s.queenEntityId);
       // Phase 3 PRD §2a caller-side extension defaults (factory does not set these):
-      const fresh = dst.colonies[colonyId]!;
+      const fresh = dst.colonies[colonyId];
       fresh.entrances = [];
       fresh.rallyPoint = null;
       fresh.digFlowFieldDirty = false;

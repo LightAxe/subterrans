@@ -56,7 +56,7 @@ function makeWorld(tick = 0): WorldState {
 
 /** Add a colony (with Phase 3 extension fields) to world.colonies. */
 function addColony(world: WorldState, colonyId: ColonyId, queenEntityId: number): ColonyRecord {
-  const colony = createColonyRecord(colonyId, queenEntityId) as ColonyRecord;
+  const colony = createColonyRecord(colonyId, queenEntityId);
   colony.entrances = [];
   colony.rallyPoint = null;
   colony.digFlowFieldDirty = false;

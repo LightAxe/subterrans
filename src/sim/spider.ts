@@ -1086,7 +1086,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
 
   switch (spider.state) {
     case 'Patrolling': {
-      const hungry = !inGrace && spider.hungerTicks >= SPIDER_HUNGER_THRESHOLD_TICKS[tier]!;
+      const hungry = !inGrace && spider.hungerTicks >= SPIDER_HUNGER_THRESHOLD_TICKS[tier];
       if (hungry) {
         // Precedence: (a) opportunistic chase of a lone ant; (b) telegraphed
         // density hunt (when off cooldown and a dense tile exists); (c) camp a

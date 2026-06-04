@@ -263,7 +263,7 @@ function clampAmplitude(requested: number, w: number, h: number): number {
 }
 
 function computeWaveNodes(chamberSeedValue: number, ampPx: number): number[] {
-  const nodes: number[] = new Array(NUM_WAVE_NODES);
+  const nodes: number[] = new Array<number>(NUM_WAVE_NODES);
   if (ampPx <= 0) {
     nodes.fill(0);
     return nodes;
