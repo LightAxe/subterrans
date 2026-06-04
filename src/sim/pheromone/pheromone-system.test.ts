@@ -10,7 +10,12 @@
 // bans those globals in src/sim/. Wall-clock assertions live in bench/.
 
 import { describe, it, expect } from 'vitest';
-import { depositFoodTrail, tickPheromoneDecay, sampleGradient, sampleForagingDirection } from './pheromone-system.js';
+import {
+  depositFoodTrail,
+  tickPheromoneDecay,
+  sampleGradient,
+  sampleForagingDirection,
+} from './pheromone-system.js';
 import { createPheromoneGrid, phGet, phSet } from './pheromone-store.js';
 import { Rng } from '../rng.js';
 import {
@@ -131,7 +136,7 @@ describe('tickPheromoneDecay (PHER-04)', () => {
 
     for (let i = 0; i < K; i++) {
       tickPheromoneDecay(foodGrid, PHEROMONE_DECAY_FP); // 5
-      tickPheromoneDecay(dangerGrid, DANGER_DECAY_FP);  // 10
+      tickPheromoneDecay(dangerGrid, DANGER_DECAY_FP); // 10
     }
 
     // After 10 ticks with higher decay rate, danger should have lower strength.
@@ -268,14 +273,14 @@ describe('sampleGradient (PHER-05)', () => {
     const replayRng = new Rng(exploreSeed);
     const replayRoll = replayRng.nextInt(100);
     expect(replayRoll).toBe(exploreRoll); // Sanity: same seed same roll
-    expect(replayRoll).toBeLessThan(10);  // Must be explore
+    expect(replayRoll).toBeLessThan(10); // Must be explore
 
     const expectedIdx = replayRng.nextInt(4);
     const DIRS = [
-      { dx: 0,  dy: -1 }, // up
-      { dx: 0,  dy:  1 }, // down
-      { dx: -1, dy:  0 }, // left
-      { dx:  1, dy:  0 }, // right
+      { dx: 0, dy: -1 }, // up
+      { dx: 0, dy: 1 }, // down
+      { dx: -1, dy: 0 }, // left
+      { dx: 1, dy: 0 }, // right
     ];
     const expected = DIRS[expectedIdx]!;
 
@@ -341,7 +346,7 @@ describe('sampleForagingDirection (09 pheromone-reacquisition memo)', () => {
     // share is 10% * 75% = 7.5%. 4σ of ~7.5% over 2000 = ~40.
     const nonRight = exploreCount;
     expect(nonRight).toBeGreaterThan(100); // must see some exploration
-    expect(nonRight).toBeLessThan(250);    // not dominated by it
+    expect(nonRight).toBeLessThan(250); // not dominated by it
   });
 
   it('no immediate trail, trail at Manhattan distance 2 → steps toward it', () => {
@@ -418,8 +423,9 @@ describe('sampleForagingDirection (09 pheromone-reacquisition memo)', () => {
     for (let seed = 0; seed < 50; seed++) {
       const r1 = new Rng(seed);
       const r2 = new Rng(seed);
-      expect(sampleForagingDirection(grid, 5, 5, r1))
-        .toEqual(sampleForagingDirection(grid, 5, 5, r2));
+      expect(sampleForagingDirection(grid, 5, 5, r1)).toEqual(
+        sampleForagingDirection(grid, 5, 5, r2),
+      );
     }
   });
 

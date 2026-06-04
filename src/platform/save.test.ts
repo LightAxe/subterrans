@@ -1,10 +1,18 @@
 /* @vitest-environment jsdom */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  SAVE_FORMAT_VERSION, SAVE_KEY, AUTOSAVE_INTERVAL_MS,
-  serializeWorldState, deserializeWorldState,
-  hasSave, loadSave, deleteSave, tickAutosave,
-  manualSave, hasIncompatibleSave, getSaveInfo,
+  SAVE_FORMAT_VERSION,
+  SAVE_KEY,
+  AUTOSAVE_INTERVAL_MS,
+  serializeWorldState,
+  deserializeWorldState,
+  hasSave,
+  loadSave,
+  deleteSave,
+  tickAutosave,
+  manualSave,
+  hasIncompatibleSave,
+  getSaveInfo,
   parseSaveFile,
   FutureSimVersionError,
   OldSimVersionError,
@@ -20,7 +28,9 @@ import { ChamberType } from '../sim/enums.js';
 
 describe('save.ts (SCEN-04 + SCEN-06)', () => {
   // Use window.localStorage to ensure jsdom's implementation (not Node 25 native localStorage)
-  beforeEach(() => { window.localStorage.clear(); });
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
 
   describe('serializeWorldState — envelope coverage', () => {
     it('includes every WorldState field (tick, rngState, nextEntityId, commandQueue, ants, colonies, pheromoneGrids, surface, undergroundGrids, foodPiles, pendingChambers)', () => {
@@ -38,9 +48,26 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     it('serializes all 18 Int32Array ant fields as number[] (NOT "{}")', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
-      const fields = ['posX','posY','colonyId','task','subTask','speed','foodCarrying','starvationTimer',
-                      'age','alive','lifespan','zone','digTileX','digTileY','digTicksRemaining',
-                      'targetPosX','targetPosY','searchWave'] as const;
+      const fields = [
+        'posX',
+        'posY',
+        'colonyId',
+        'task',
+        'subTask',
+        'speed',
+        'foodCarrying',
+        'starvationTimer',
+        'age',
+        'alive',
+        'lifespan',
+        'zone',
+        'digTileX',
+        'digTileY',
+        'digTicksRemaining',
+        'targetPosX',
+        'targetPosY',
+        'searchWave',
+      ] as const;
       for (const f of fields) {
         expect(Array.isArray(s.ants[f])).toBe(true);
         expect(s.ants[f]!.length).toBeGreaterThan(0);
@@ -56,7 +83,13 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     });
     it('includes commandQueue (Pitfall 7 — autosave fires on wall clock, not tick boundary)', () => {
       const w = createScenario(42);
-      w.commandQueue.push({ type: 'MarkDigTile', colonyId: PLAYER_COLONY_ID as ColonyId, tileX: 3, tileY: 4, issuedAtTick: 0 });
+      w.commandQueue.push({
+        type: 'MarkDigTile',
+        colonyId: PLAYER_COLONY_ID as ColonyId,
+        tileX: 3,
+        tileY: 4,
+        issuedAtTick: 0,
+      });
       const s = serializeWorldState(w);
       expect(s.commandQueue.length).toBe(1);
       expect(s.commandQueue[0]).toMatchObject({ type: 'MarkDigTile', tileX: 3, tileY: 4 });
@@ -104,7 +137,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
   describe('deserializeWorldState — round-trip', () => {
     it('round-trip: serialize → deserialize → re-serialize produces identical JSON (byte-for-byte)', () => {
       const w = createScenario(42);
-      for (let t = 0; t < 50; t++) tick(w, []);   // some non-trivial state
+      for (let t = 0; t < 50; t++) tick(w, []); // some non-trivial state
       const s1 = JSON.stringify(serializeWorldState(w));
       const w2 = deserializeWorldState(JSON.parse(s1));
       const s2 = JSON.stringify(serializeWorldState(w2));
@@ -121,7 +154,13 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     });
     it('preserves queued commands through serialize → deserialize', () => {
       const w = createScenario(42);
-      w.commandQueue.push({ type: 'MarkDigTile', colonyId: PLAYER_COLONY_ID as ColonyId, tileX: 1, tileY: 2, issuedAtTick: 0 });
+      w.commandQueue.push({
+        type: 'MarkDigTile',
+        colonyId: PLAYER_COLONY_ID as ColonyId,
+        tileX: 1,
+        tileY: 2,
+        issuedAtTick: 0,
+      });
       const w2 = deserializeWorldState(serializeWorldState(w));
       expect(w2.commandQueue.length).toBe(1);
       expect(w2.commandQueue[0]).toMatchObject({ type: 'MarkDigTile', tileX: 1, tileY: 2 });
@@ -161,17 +200,27 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // Canonical FoodStorage dims: 4×3 (CHAMBER_DIMENSIONS[FoodStorage]).
       // Issue #101 boundary validator now enforces these.
       colony.chambers.push({
-        chamberId: 999, chamberType: ChamberType.FoodStorage, foodStored: 1234,
-        posX: 10 << 8, posY: 5 << 8, width: 4, height: 3,
+        chamberId: 999,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: 1234,
+        posX: 10 << 8,
+        posY: 5 << 8,
+        width: 4,
+        height: 3,
       });
       colony.chambers.push({
-        chamberId: 998, chamberType: ChamberType.FoodStorage, foodStored: 4321,
-        posX: 16 << 8, posY: 5 << 8, width: 4, height: 3,
+        chamberId: 998,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: 4321,
+        posX: 16 << 8,
+        posY: 5 << 8,
+        width: 4,
+        height: 3,
       });
       const w2 = deserializeWorldState(serializeWorldState(w));
       const c2 = w2.colonies[PLAYER_COLONY_ID]!;
-      const ch1 = c2.chambers.find(c => c.chamberId === 999)!;
-      const ch2 = c2.chambers.find(c => c.chamberId === 998)!;
+      const ch1 = c2.chambers.find((c) => c.chamberId === 999)!;
+      const ch2 = c2.chambers.find((c) => c.chamberId === 998)!;
       expect(ch1.foodStored).toBe(1234);
       expect(ch2.foodStored).toBe(4321);
     });
@@ -221,7 +270,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // sets currentGridColonyId === colonyId. Confirm the precondition by
       // picking two alive ants from the scenario.
       const playerQueen = w.colonies[PLAYER_COLONY_ID]!.queenEntityId;
-      const enemyQueen  = w.colonies[ENEMY_COLONY_ID]!.queenEntityId;
+      const enemyQueen = w.colonies[ENEMY_COLONY_ID]!.queenEntityId;
       expect(w.ants.alive[playerQueen]).toBe(1);
       expect(w.ants.alive[enemyQueen]).toBe(1);
       expect(w.ants.colonyId[playerQueen]).toBe(PLAYER_COLONY_ID);
@@ -245,7 +294,8 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.ants.currentGridColonyId[playerInvader]).toBe(ENEMY_COLONY_ID);
     });
     it('round-trips simVersion (LATEST: v10 visible brood carry)', async () => {
-      const { LATEST_SIM_VERSION, SIM_VERSION_V7_SURFACE_PASSABILITY } = await import('../sim/types.js');
+      const { LATEST_SIM_VERSION, SIM_VERSION_V7_SURFACE_PASSABILITY } =
+        await import('../sim/types.js');
       // New worlds default to LATEST_SIM_VERSION. Save/load must preserve
       // it so any LATEST replay continues to apply the gated behaviour
       // (currently surface passability, soft cost, leash hysteresis,
@@ -259,9 +309,6 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const w2 = deserializeWorldState(JSON.parse(JSON.stringify(s)));
       expect(w2.simVersion).toBe(LATEST_SIM_VERSION);
     });
-
-
-
 
     it('round-trips world.terrainSeed (issue #44)', () => {
       const w = createScenario(42);
@@ -307,7 +354,6 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.spiderPriorityColonyId).toBe(PLAYER_COLONY_ID);
       expect(w2.scatterReticleTile).toEqual({ x: 10, y: 20 });
     });
-
 
     it('V20: null spider (spider killed mid-game) round-trips through serialize → deserialize', () => {
       const w = createScenario(42);
@@ -366,8 +412,6 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         expect(w2.terrainSeed).toBe(0);
       }
     });
-
-
   });
 
   describe('SaveFile envelope (PRD §8a: version + seed + inputLog + snapshot)', () => {
@@ -376,9 +420,15 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     });
     it('hasSave returns true when valid envelope present', () => {
       const w = createScenario(42);
-      localStorage.setItem(SAVE_KEY, JSON.stringify({
-        version: SAVE_FORMAT_VERSION, seed: 42, inputLog: [], snapshot: serializeWorldState(w),
-      } satisfies SaveFile));
+      localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          version: SAVE_FORMAT_VERSION,
+          seed: 42,
+          inputLog: [],
+          snapshot: serializeWorldState(w),
+        } satisfies SaveFile),
+      );
       expect(hasSave()).toBe(true);
     });
     it('hasSave returns false on malformed JSON', () => {
@@ -387,9 +437,15 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     });
     it('hasSave returns false on mismatched version', () => {
       const w = createScenario(42);
-      localStorage.setItem(SAVE_KEY, JSON.stringify({
-        version: 999, seed: 42, inputLog: [], snapshot: serializeWorldState(w),
-      }));
+      localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          version: 999,
+          seed: 42,
+          inputLog: [],
+          snapshot: serializeWorldState(w),
+        }),
+      );
       expect(hasSave()).toBe(false);
     });
     it('rejects v1 saves (issue #15 — chamber-authoritative food storage)', () => {
@@ -400,20 +456,38 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // forces the loader to reject the save and boot a fresh scenario,
       // which is the documented behaviour for breaking format changes.
       const w = createScenario(42);
-      localStorage.setItem(SAVE_KEY, JSON.stringify({
-        version: 1, seed: 42, inputLog: [], snapshot: serializeWorldState(w),
-      }));
+      localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          version: 1,
+          seed: 42,
+          inputLog: [],
+          snapshot: serializeWorldState(w),
+        }),
+      );
       expect(hasSave()).toBe(false);
       expect(loadSave()).toBeNull();
     });
     it('loadSave returns a SaveFile with seed + inputLog + snapshot fields', () => {
       const w = createScenario(42);
       const inputLog: SimCommand[] = [
-        { type: 'MarkDigTile', colonyId: PLAYER_COLONY_ID as ColonyId, tileX: 5, tileY: 5, issuedAtTick: 10 },
+        {
+          type: 'MarkDigTile',
+          colonyId: PLAYER_COLONY_ID as ColonyId,
+          tileX: 5,
+          tileY: 5,
+          issuedAtTick: 10,
+        },
       ];
-      localStorage.setItem(SAVE_KEY, JSON.stringify({
-        version: SAVE_FORMAT_VERSION, seed: 42, inputLog, snapshot: serializeWorldState(w),
-      } satisfies SaveFile));
+      localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          version: SAVE_FORMAT_VERSION,
+          seed: 42,
+          inputLog,
+          snapshot: serializeWorldState(w),
+        } satisfies SaveFile),
+      );
       const loaded = loadSave();
       expect(loaded).not.toBeNull();
       expect(loaded!.seed).toBe(42);
@@ -425,7 +499,15 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(loadSave()).toBeNull();
     });
     it('deleteSave removes the key and does not throw on missing', () => {
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ version: SAVE_FORMAT_VERSION, seed: 1, inputLog: [], snapshot: serializeWorldState(createScenario(1)) }));
+      localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          version: SAVE_FORMAT_VERSION,
+          seed: 1,
+          inputLog: [],
+          snapshot: serializeWorldState(createScenario(1)),
+        }),
+      );
       deleteSave();
       expect(localStorage.getItem(SAVE_KEY)).toBeNull();
       expect(() => deleteSave()).not.toThrow();
@@ -454,7 +536,9 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     it('returns nowMs on setItem throw — honors cooldown to prevent retry storm (#80)', () => {
       const w = createScenario(42);
       // Spy on the actual localStorage instance (InMemoryStorage replaces Storage.prototype on Node 25)
-      const spy = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+      const spy = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
+        throw new Error('quota');
+      });
       try {
         const now = AUTOSAVE_INTERVAL_MS + 1;
         const result = tickAutosave(42, [], w, 0, now);
@@ -468,15 +552,17 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     });
     it('after setItem throw, the next call within the interval is a no-op (cooldown observed)', () => {
       const w = createScenario(42);
-      const spy = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+      const spy = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
+        throw new Error('quota');
+      });
       try {
         const t1 = AUTOSAVE_INTERVAL_MS + 1;
         const lastSaveMs = tickAutosave(42, [], w, 0, t1);
         expect(spy).toHaveBeenCalledTimes(1);
         // Half an interval later — cooldown should suppress the retry.
-        const t2 = t1 + (AUTOSAVE_INTERVAL_MS / 2);
+        const t2 = t1 + AUTOSAVE_INTERVAL_MS / 2;
         const result = tickAutosave(42, [], w, lastSaveMs, t2);
-        expect(spy).toHaveBeenCalledTimes(1);  // no second attempt
+        expect(spy).toHaveBeenCalledTimes(1); // no second attempt
         expect(result).toBe(lastSaveMs);
       } finally {
         spy.mockRestore();
@@ -493,8 +579,20 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     it('(b) inputLog round-trips', () => {
       const w = createScenario(42);
       const log: SimCommand[] = [
-        { type: 'MarkDigTile', colonyId: PLAYER_COLONY_ID as ColonyId, tileX: 2, tileY: 2, issuedAtTick: 1 },
-        { type: 'MarkDigTile', colonyId: PLAYER_COLONY_ID as ColonyId, tileX: 3, tileY: 3, issuedAtTick: 5 },
+        {
+          type: 'MarkDigTile',
+          colonyId: PLAYER_COLONY_ID as ColonyId,
+          tileX: 2,
+          tileY: 2,
+          issuedAtTick: 1,
+        },
+        {
+          type: 'MarkDigTile',
+          colonyId: PLAYER_COLONY_ID as ColonyId,
+          tileX: 3,
+          tileY: 3,
+          issuedAtTick: 5,
+        },
       ];
       tickAutosave(42, log, w, 0, AUTOSAVE_INTERVAL_MS + 1);
       const loaded = loadSave()!;
@@ -503,7 +601,13 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     });
     it('(c) queued unprocessed commands round-trip via snapshot.commandQueue', () => {
       const w = createScenario(42);
-      w.commandQueue.push({ type: 'MarkDigTile', colonyId: PLAYER_COLONY_ID as ColonyId, tileX: 9, tileY: 9, issuedAtTick: 0 });
+      w.commandQueue.push({
+        type: 'MarkDigTile',
+        colonyId: PLAYER_COLONY_ID as ColonyId,
+        tileX: 9,
+        tileY: 9,
+        issuedAtTick: 0,
+      });
       tickAutosave(42, [], w, 0, AUTOSAVE_INTERVAL_MS + 1);
       const loaded = loadSave()!;
       expect(loaded.snapshot.commandQueue.length).toBe(1);
@@ -515,14 +619,23 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       tickAutosave(42, [], w, 0, AUTOSAVE_INTERVAL_MS + 1);
       const loaded = loadSave()!;
       const rebuilt = deserializeWorldState(loaded.snapshot);
-      expect(JSON.stringify(serializeWorldState(rebuilt)))
-        .toBe(JSON.stringify(serializeWorldState(w)));
+      expect(JSON.stringify(serializeWorldState(rebuilt))).toBe(
+        JSON.stringify(serializeWorldState(w)),
+      );
     });
     it('(e) inputLog replay: createScenario(seed) + tick(cmds[t]) for each tick reproduces snapshot', () => {
       // Build a reference world with a deterministic schedule
       const seed = 42;
       const schedule: SimCommand[][] = [];
-      schedule[10] = [{ type: 'MarkDigTile', colonyId: PLAYER_COLONY_ID as ColonyId, tileX: 7, tileY: 3, issuedAtTick: 10 }];
+      schedule[10] = [
+        {
+          type: 'MarkDigTile',
+          colonyId: PLAYER_COLONY_ID as ColonyId,
+          tileX: 7,
+          tileY: 3,
+          issuedAtTick: 10,
+        },
+      ];
 
       // Play 50 ticks while appending each tick's commands to inputLog (render-layer pattern)
       const original = createScenario(seed);
@@ -547,12 +660,11 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       }
       for (let t = 0; t < 50; t++) tick(replay, byTick[t] ?? []);
 
-      expect(JSON.stringify(serializeWorldState(replay)))
-        .toBe(JSON.stringify(serializeWorldState(original)));
+      expect(JSON.stringify(serializeWorldState(replay))).toBe(
+        JSON.stringify(serializeWorldState(original)),
+      );
     });
   });
-
-
 
   // ---------------------------------------------------------------------------
   // Phase 10 / WR-09 — inputLog SetBehaviorRatio migration on load
@@ -576,13 +688,16 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
   // each queued command at deserialize time too.
   // ---------------------------------------------------------------------------
   describe('Issue #82 — commandQueue migration on deserialize', () => {
-
     it('non-SetBehaviorRatio commandQueue entries pass through unchanged', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
-      (s.commandQueue as unknown as Array<unknown>).push(
-        { type: 'MarkDigTile', colonyId: PLAYER_COLONY_ID, tileX: 7, tileY: 3, issuedAtTick: 0 },
-      );
+      (s.commandQueue as unknown as Array<unknown>).push({
+        type: 'MarkDigTile',
+        colonyId: PLAYER_COLONY_ID,
+        tileX: 7,
+        tileY: 3,
+        issuedAtTick: 0,
+      });
       const world = deserializeWorldState(s);
       expect(world.commandQueue[0]).toMatchObject({ type: 'MarkDigTile', tileX: 7, tileY: 3 });
     });
@@ -602,11 +717,14 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
   });
 
   describe('Phase 10 / WR-09 — inputLog migration on load', () => {
-    function writeSave(file: { version: number; seed: number; inputLog: unknown[]; snapshot: unknown }): void {
+    function writeSave(file: {
+      version: number;
+      seed: number;
+      inputLog: unknown[];
+      snapshot: unknown;
+    }): void {
       localStorage.setItem(SAVE_KEY, JSON.stringify(file));
     }
-
-
 
     it('post-Phase-10 entry without dig field passes through unchanged (including idle {0,0})', () => {
       const w = createScenario(42);
@@ -617,15 +735,14 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         issuedAtTick: 7,
       };
       writeSave({
-        version: SAVE_FORMAT_VERSION, seed: 42,
+        version: SAVE_FORMAT_VERSION,
+        seed: 42,
         inputLog: [modernIdle],
         snapshot: serializeWorldState(w),
       });
       const loaded = loadSave()!;
       expect((loaded.inputLog[0] as { ratio: unknown }).ratio).toEqual({ forage: 0, fight: 0 });
     });
-
-
   });
 
   // ---------------------------------------------------------------------------
@@ -635,7 +752,9 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
   // a memory-DoS vector on save load.
   // ---------------------------------------------------------------------------
   describe('Issue #65 — ants.count boundary validation', () => {
-    function makeSavedSnapshot(mut: (s: ReturnType<typeof serializeWorldState>) => void): ReturnType<typeof serializeWorldState> {
+    function makeSavedSnapshot(
+      mut: (s: ReturnType<typeof serializeWorldState>) => void,
+    ): ReturnType<typeof serializeWorldState> {
       const w = createScenario(42);
       const s = serializeWorldState(w);
       mut(s);
@@ -643,42 +762,60 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     }
 
     it('accepts count = 0 (legacy fallback to MAX_ENTITIES)', () => {
-      const snapshot = makeSavedSnapshot((s) => { s.ants.count = 0; });
+      const snapshot = makeSavedSnapshot((s) => {
+        s.ants.count = 0;
+      });
       const w = deserializeWorldState(snapshot);
       // Capacity falls back to MAX_ENTITIES, which is the alive array length.
       expect(w.ants.alive.length).toBe(8192);
     });
     it('accepts a small positive integer count', () => {
-      const snapshot = makeSavedSnapshot((s) => { s.ants.count = 8; });
+      const snapshot = makeSavedSnapshot((s) => {
+        s.ants.count = 8;
+      });
       expect(() => deserializeWorldState(snapshot)).not.toThrow();
     });
     it('rejects count > MAX_ENTITIES (memory-DoS guard)', () => {
-      const snapshot = makeSavedSnapshot((s) => { s.ants.count = 1_000_000_000; });
+      const snapshot = makeSavedSnapshot((s) => {
+        s.ants.count = 1_000_000_000;
+      });
       expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid ants\.count/);
     });
     it('exact boundary: count = MAX_ENTITIES is accepted', () => {
-      const snapshot = makeSavedSnapshot((s) => { s.ants.count = 8192; });
+      const snapshot = makeSavedSnapshot((s) => {
+        s.ants.count = 8192;
+      });
       const w = deserializeWorldState(snapshot);
       expect(w.ants.alive.length).toBe(8192);
     });
     it('exact boundary: count = MAX_ENTITIES + 1 is rejected', () => {
-      const snapshot = makeSavedSnapshot((s) => { s.ants.count = 8193; });
+      const snapshot = makeSavedSnapshot((s) => {
+        s.ants.count = 8193;
+      });
       expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid ants\.count/);
     });
     it('rejects negative count', () => {
-      const snapshot = makeSavedSnapshot((s) => { s.ants.count = -1; });
+      const snapshot = makeSavedSnapshot((s) => {
+        s.ants.count = -1;
+      });
       expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid ants\.count/);
     });
     it('rejects non-integer count', () => {
-      const snapshot = makeSavedSnapshot((s) => { s.ants.count = 1.5; });
+      const snapshot = makeSavedSnapshot((s) => {
+        s.ants.count = 1.5;
+      });
       expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid ants\.count/);
     });
     it('rejects NaN count', () => {
-      const snapshot = makeSavedSnapshot((s) => { s.ants.count = NaN; });
+      const snapshot = makeSavedSnapshot((s) => {
+        s.ants.count = NaN;
+      });
       expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid ants\.count/);
     });
     it('rejects Infinity count', () => {
-      const snapshot = makeSavedSnapshot((s) => { s.ants.count = Infinity; });
+      const snapshot = makeSavedSnapshot((s) => {
+        s.ants.count = Infinity;
+      });
       expect(() => deserializeWorldState(snapshot)).toThrow(/Invalid ants\.count/);
     });
     it('rejects non-number count (string)', () => {
@@ -742,15 +879,14 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
   });
 
   describe('Issue #66 — simVersion boundary validation', () => {
-    function makeSavedSnapshot(mut: (s: ReturnType<typeof serializeWorldState>) => void): ReturnType<typeof serializeWorldState> {
+    function makeSavedSnapshot(
+      mut: (s: ReturnType<typeof serializeWorldState>) => void,
+    ): ReturnType<typeof serializeWorldState> {
       const w = createScenario(42);
       const s = serializeWorldState(w);
       mut(s);
       return s;
     }
-
-
-
 
     it('accepts simVersion = LATEST', () => {
       // LATEST_SIM_VERSION is 10 today; the value is whatever serializeWorldState
@@ -762,7 +898,9 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(out.simVersion).toBe(latest);
     });
     it('rejects simVersion above LATEST with FutureSimVersionError (recoverable signal)', () => {
-      const snapshot = makeSavedSnapshot((s) => { s.simVersion = 99999; });
+      const snapshot = makeSavedSnapshot((s) => {
+        s.simVersion = 99999;
+      });
       expect(() => deserializeWorldState(snapshot)).toThrow(FutureSimVersionError);
     });
     it('future simVersion takes precedence over count check (a future build can legitimately bump MAX_ENTITIES)', () => {
@@ -772,9 +910,9 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // preserves bytes), not as tampering (plain Error → deleteSave).
       const snapshot = makeSavedSnapshot((s) => {
         s.simVersion = 99999;
-        s.ants.count = 1_000_000;  // would be tampering at current LATEST, but
-                                   // simVersion=99999 means we don't know our
-                                   // own MAX_ENTITIES governs this save.
+        s.ants.count = 1_000_000; // would be tampering at current LATEST, but
+        // simVersion=99999 means we don't know our
+        // own MAX_ENTITIES governs this save.
       });
       expect(() => deserializeWorldState(snapshot)).toThrow(FutureSimVersionError);
     });
@@ -794,7 +932,9 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(() => deserializeWorldState(snapshot)).toThrow(FutureSimVersionError);
     });
     it('rejects negative simVersion (all-gates-off guard)', () => {
-      const snapshot = makeSavedSnapshot((s) => { s.simVersion = -1; });
+      const snapshot = makeSavedSnapshot((s) => {
+        s.simVersion = -1;
+      });
       expect(() => deserializeWorldState(snapshot)).toThrow(OldSimVersionError);
     });
     it('exact boundary: simVersion = LATEST + 1 throws FutureSimVersionError (recoverable)', () => {
@@ -802,16 +942,19 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // scenario; the value is captured here to keep the test version-agnostic.
       const w = createScenario(42);
       const latest = serializeWorldState(w).simVersion!;
-      const snapshot = makeSavedSnapshot((s) => { s.simVersion = latest + 1; });
+      const snapshot = makeSavedSnapshot((s) => {
+        s.simVersion = latest + 1;
+      });
       expect(() => deserializeWorldState(snapshot)).toThrow(FutureSimVersionError);
     });
     it('exact boundary: simVersion = MIN_ACCEPTED - 1 throws OldSimVersionError', () => {
       // Any simVersion below MIN_ACCEPTED_SIM_VERSION (22) is rejected with
       // OldSimVersionError so bootFromSave can handle it appropriately.
-      const snapshot = makeSavedSnapshot((s) => { s.simVersion = 1; });
+      const snapshot = makeSavedSnapshot((s) => {
+        s.simVersion = 1;
+      });
       expect(() => deserializeWorldState(snapshot)).toThrow(OldSimVersionError);
     });
-
   });
 
   // ---------------------------------------------------------------------------
@@ -822,15 +965,23 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
   // to total save loss (the whole envelope returned null → bootFresh).
   // ---------------------------------------------------------------------------
   describe('Issue #78 — malformed BehaviorRatio resilience on load', () => {
-    function writeSave(file: { version: number; seed: number; inputLog: unknown[]; snapshot: unknown }): void {
+    function writeSave(file: {
+      version: number;
+      seed: number;
+      inputLog: unknown[];
+      snapshot: unknown;
+    }): void {
       localStorage.setItem(SAVE_KEY, JSON.stringify(file));
     }
 
     it('null ratio in inputLog: save still loads (command preserved verbatim)', () => {
       const w = createScenario(42);
       writeSave({
-        version: SAVE_FORMAT_VERSION, seed: 42,
-        inputLog: [{ type: 'SetBehaviorRatio', colonyId: PLAYER_COLONY_ID, ratio: null, issuedAtTick: 0 }],
+        version: SAVE_FORMAT_VERSION,
+        seed: 42,
+        inputLog: [
+          { type: 'SetBehaviorRatio', colonyId: PLAYER_COLONY_ID, ratio: null, issuedAtTick: 0 },
+        ],
         snapshot: serializeWorldState(w),
       });
       const loaded = loadSave();
@@ -841,8 +992,11 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     it('numeric ratio in inputLog: save still loads', () => {
       const w = createScenario(42);
       writeSave({
-        version: SAVE_FORMAT_VERSION, seed: 42,
-        inputLog: [{ type: 'SetBehaviorRatio', colonyId: PLAYER_COLONY_ID, ratio: 5, issuedAtTick: 0 }],
+        version: SAVE_FORMAT_VERSION,
+        seed: 42,
+        inputLog: [
+          { type: 'SetBehaviorRatio', colonyId: PLAYER_COLONY_ID, ratio: 5, issuedAtTick: 0 },
+        ],
         snapshot: serializeWorldState(w),
       });
       expect(loadSave()).not.toBeNull();
@@ -850,16 +1004,15 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     it('string ratio in inputLog: save still loads', () => {
       const w = createScenario(42);
       writeSave({
-        version: SAVE_FORMAT_VERSION, seed: 42,
-        inputLog: [{ type: 'SetBehaviorRatio', colonyId: PLAYER_COLONY_ID, ratio: 'bogus', issuedAtTick: 0 }],
+        version: SAVE_FORMAT_VERSION,
+        seed: 42,
+        inputLog: [
+          { type: 'SetBehaviorRatio', colonyId: PLAYER_COLONY_ID, ratio: 'bogus', issuedAtTick: 0 },
+        ],
         snapshot: serializeWorldState(w),
       });
       expect(loadSave()).not.toBeNull();
     });
-
-
-
-
   });
 
   // -------------------------------------------------------------------------
@@ -869,7 +1022,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
   // -------------------------------------------------------------------------
 
   describe('boundary hardening — issues #99 / #101 / #102 / #103 / #104 / #105 / #109 / #110', () => {
-    function writeSave(file: { version: number; seed: unknown; inputLog: unknown; snapshot: unknown }): void {
+    function writeSave(file: {
+      version: number;
+      seed: unknown;
+      inputLog: unknown;
+      snapshot: unknown;
+    }): void {
       localStorage.setItem(SAVE_KEY, JSON.stringify(file));
     }
 
@@ -878,12 +1036,22 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     // -----------------------------------------------------------------------
     it('#110 rejects envelope seed: string', () => {
       const w = createScenario(42);
-      writeSave({ version: SAVE_FORMAT_VERSION, seed: 'abc' as unknown as number, inputLog: [], snapshot: serializeWorldState(w) });
+      writeSave({
+        version: SAVE_FORMAT_VERSION,
+        seed: 'abc' as unknown as number,
+        inputLog: [],
+        snapshot: serializeWorldState(w),
+      });
       expect(loadSave()).toBeNull();
     });
     it('#110 rejects envelope seed: null', () => {
       const w = createScenario(42);
-      writeSave({ version: SAVE_FORMAT_VERSION, seed: null, inputLog: [], snapshot: serializeWorldState(w) });
+      writeSave({
+        version: SAVE_FORMAT_VERSION,
+        seed: null,
+        inputLog: [],
+        snapshot: serializeWorldState(w),
+      });
       expect(loadSave()).toBeNull();
     });
     it('#110 rejects envelope seed: missing', () => {
@@ -894,19 +1062,39 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     });
     it('#110 rejects envelope seed: non-integer', () => {
       const w = createScenario(42);
-      writeSave({ version: SAVE_FORMAT_VERSION, seed: 1.5, inputLog: [], snapshot: serializeWorldState(w) });
+      writeSave({
+        version: SAVE_FORMAT_VERSION,
+        seed: 1.5,
+        inputLog: [],
+        snapshot: serializeWorldState(w),
+      });
       expect(loadSave()).toBeNull();
     });
     it('#110 rejects envelope seed: out of int32 range', () => {
       const w = createScenario(42);
-      writeSave({ version: SAVE_FORMAT_VERSION, seed: 0x80000000, inputLog: [], snapshot: serializeWorldState(w) });
+      writeSave({
+        version: SAVE_FORMAT_VERSION,
+        seed: 0x80000000,
+        inputLog: [],
+        snapshot: serializeWorldState(w),
+      });
       expect(loadSave()).toBeNull();
     });
     it('#110 accepts envelope seed: int32 boundary values', () => {
       const w = createScenario(42);
-      writeSave({ version: SAVE_FORMAT_VERSION, seed: 0x7fffffff, inputLog: [], snapshot: serializeWorldState(w) });
+      writeSave({
+        version: SAVE_FORMAT_VERSION,
+        seed: 0x7fffffff,
+        inputLog: [],
+        snapshot: serializeWorldState(w),
+      });
       expect(loadSave()).not.toBeNull();
-      writeSave({ version: SAVE_FORMAT_VERSION, seed: -0x80000000, inputLog: [], snapshot: serializeWorldState(w) });
+      writeSave({
+        version: SAVE_FORMAT_VERSION,
+        seed: -0x80000000,
+        inputLog: [],
+        snapshot: serializeWorldState(w),
+      });
       expect(loadSave()).not.toBeNull();
     });
 
@@ -923,14 +1111,24 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     });
     it('#103 normalizes null inputLog to empty array', () => {
       const w = createScenario(42);
-      writeSave({ version: SAVE_FORMAT_VERSION, seed: 42, inputLog: null, snapshot: serializeWorldState(w) });
+      writeSave({
+        version: SAVE_FORMAT_VERSION,
+        seed: 42,
+        inputLog: null,
+        snapshot: serializeWorldState(w),
+      });
       const loaded = loadSave();
       expect(loaded).not.toBeNull();
       expect(loaded!.inputLog).toEqual([]);
     });
     it('#103 normalizes string inputLog to empty array', () => {
       const w = createScenario(42);
-      writeSave({ version: SAVE_FORMAT_VERSION, seed: 42, inputLog: 'abc', snapshot: serializeWorldState(w) });
+      writeSave({
+        version: SAVE_FORMAT_VERSION,
+        seed: 42,
+        inputLog: 'abc',
+        snapshot: serializeWorldState(w),
+      });
       const loaded = loadSave();
       expect(loaded).not.toBeNull();
       expect(loaded!.inputLog).toEqual([]);
@@ -942,7 +1140,8 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     it('#105 null inputLog entry passes through migrateInputLogCommand without throwing', () => {
       const w = createScenario(42);
       writeSave({
-        version: SAVE_FORMAT_VERSION, seed: 42,
+        version: SAVE_FORMAT_VERSION,
+        seed: 42,
         inputLog: [null] as unknown as SimCommand[],
         snapshot: serializeWorldState(w),
       });
@@ -1002,8 +1201,13 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     function scenarioWithChamber() {
       const w = createScenario(42);
       w.colonies[PLAYER_COLONY_ID]!.chambers.push({
-        chamberId: 100, chamberType: ChamberType.Queen, foodStored: 0,
-        posX: 10 << 8, posY: 5 << 8, width: 5, height: 3,
+        chamberId: 100,
+        chamberType: ChamberType.Queen,
+        foodStored: 0,
+        posX: 10 << 8,
+        posY: 5 << 8,
+        width: 5,
+        height: 3,
       });
       return w;
     }
@@ -1031,11 +1235,11 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       (c0 as { foodStored: number }).foodStored = 99_999_999;
       expect(() => deserializeWorldState(s)).toThrow();
     });
-    it('#101 rejects chamber dims: don\'t match canonical CHAMBER_DIMENSIONS', () => {
+    it("#101 rejects chamber dims: don't match canonical CHAMBER_DIMENSIONS", () => {
       const s = serializeWorldState(scenarioWithChamber());
       const c0 = s.colonies[String(PLAYER_COLONY_ID)]!.chambers[0]!;
-      (c0 as { width: number }).width = 5;     // canonical for Queen
-      (c0 as { height: number }).height = 4;   // BAD: Queen height is 3
+      (c0 as { width: number }).width = 5; // canonical for Queen
+      (c0 as { height: number }).height = 4; // BAD: Queen height is 3
       expect(() => deserializeWorldState(s)).toThrow();
     });
 
@@ -1046,9 +1250,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
       (s.pendingChambers as Record<string, unknown>)['0:5:5'] = {
-        colonyId: 1, chamberType: 1,
-        anchorTileX: 0, anchorTileY: 1,
-        width: 1_000_000_000, height: 1_000_000_000,
+        colonyId: 1,
+        chamberType: 1,
+        anchorTileX: 0,
+        anchorTileY: 1,
+        width: 1_000_000_000,
+        height: 1_000_000_000,
       };
       expect(() => deserializeWorldState(s)).toThrow();
     });
@@ -1056,19 +1263,25 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
       (s.pendingChambers as Record<string, unknown>)['0:5:5'] = {
-        colonyId: 1, chamberType: 1,
-        anchorTileX: 1_000_000, anchorTileY: 1,
-        width: 4, height: 3,
+        colonyId: 1,
+        chamberType: 1,
+        anchorTileX: 1_000_000,
+        anchorTileY: 1,
+        width: 4,
+        height: 3,
       };
       expect(() => deserializeWorldState(s)).toThrow();
     });
-    it('#102 rejects pendingChamber: dims don\'t match canonical CHAMBER_DIMENSIONS', () => {
+    it("#102 rejects pendingChamber: dims don't match canonical CHAMBER_DIMENSIONS", () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
       (s.pendingChambers as Record<string, unknown>)['0:5:5'] = {
-        colonyId: 1, chamberType: 0, // Queen wants 5×3
-        anchorTileX: 0, anchorTileY: 1,
-        width: 4, height: 3, // wrong dims for type 0
+        colonyId: 1,
+        chamberType: 0, // Queen wants 5×3
+        anchorTileX: 0,
+        anchorTileY: 1,
+        width: 4,
+        height: 3, // wrong dims for type 0
       };
       expect(() => deserializeWorldState(s)).toThrow();
     });
@@ -1087,7 +1300,13 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const s = serializeWorldState(w);
       const oversized = [];
       for (let i = 0; i < 1000; i++) {
-        oversized.push({ foodPileId: i, tileX: i % 128, tileY: 0 , pickupsRemaining: 50, pickupsInitial: 50});
+        oversized.push({
+          foodPileId: i,
+          tileX: i % 128,
+          tileY: 0,
+          pickupsRemaining: 50,
+          pickupsInitial: 50,
+        });
       }
       s.foodPiles = oversized;
       expect(() => deserializeWorldState(s)).toThrow();
@@ -1095,15 +1314,17 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     it('#109 rejects foodPile.tileX: out-of-grid', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
-      s.foodPiles = [{ foodPileId: 1, tileX: 1_000_000, tileY: 0 , pickupsRemaining: 50, pickupsInitial: 50}];
+      s.foodPiles = [
+        { foodPileId: 1, tileX: 1_000_000, tileY: 0, pickupsRemaining: 50, pickupsInitial: 50 },
+      ];
       expect(() => deserializeWorldState(s)).toThrow();
     });
     it('#109 rejects foodPiles: duplicate foodPileId', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
       s.foodPiles = [
-        { foodPileId: 5, tileX: 10, tileY: 10 , pickupsRemaining: 50, pickupsInitial: 50},
-        { foodPileId: 5, tileX: 20, tileY: 20 , pickupsRemaining: 50, pickupsInitial: 50},
+        { foodPileId: 5, tileX: 10, tileY: 10, pickupsRemaining: 50, pickupsInitial: 50 },
+        { foodPileId: 5, tileX: 20, tileY: 20, pickupsRemaining: 50, pickupsInitial: 50 },
       ];
       expect(() => deserializeWorldState(s)).toThrow();
     });
@@ -1111,8 +1332,8 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
       s.foodPiles = [
-        { foodPileId: 5, tileX: 10, tileY: 10 , pickupsRemaining: 50, pickupsInitial: 50},
-        { foodPileId: 6, tileX: 10, tileY: 10 , pickupsRemaining: 50, pickupsInitial: 50},
+        { foodPileId: 5, tileX: 10, tileY: 10, pickupsRemaining: 50, pickupsInitial: 50 },
+        { foodPileId: 6, tileX: 10, tileY: 10, pickupsRemaining: 50, pickupsInitial: 50 },
       ];
       expect(() => deserializeWorldState(s)).toThrow();
     });
@@ -1155,7 +1376,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const s = serializeWorldState(w);
       for (let i = 0; i < 300; i++) {
         (s.pendingChambers as Record<string, unknown>)[`0:${i}:1`] = {
-          colonyId: 1, chamberType: 1, anchorTileX: i % 100, anchorTileY: 1, width: 4, height: 3,
+          colonyId: 1,
+          chamberType: 1,
+          anchorTileX: i % 100,
+          anchorTileY: 1,
+          width: 4,
+          height: 3,
         };
       }
       expect(() => deserializeWorldState(s)).toThrow();
@@ -1177,7 +1403,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // bare assignment of '__proto__' would mutate the prototype instead.
       Object.defineProperty(s.pendingChambers as object, '__shady', {
         value: {
-          colonyId: 1, chamberType: 1, anchorTileX: 0, anchorTileY: 1, width: 4, height: 3,
+          colonyId: 1,
+          chamberType: 1,
+          anchorTileX: 0,
+          anchorTileY: 1,
+          width: 4,
+          height: 3,
         },
         enumerable: true,
         configurable: true,
@@ -1349,7 +1580,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     it('preserves the inputLog the caller supplies', () => {
       const world = createScenario(42);
       const log: SimCommand[] = [
-        { type: 'SetBehaviorRatio', colonyId: PLAYER_COLONY_ID, ratio: { forage: 5, fight: 5 }, issuedAtTick: 0 },
+        {
+          type: 'SetBehaviorRatio',
+          colonyId: PLAYER_COLONY_ID,
+          ratio: { forage: 5, fight: 5 },
+          issuedAtTick: 0,
+        },
       ];
       manualSave(42, log, world);
       const loaded = loadSave();
@@ -1360,7 +1596,9 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     it('returns false (does not throw) when localStorage.setItem rejects', () => {
       const world = createScenario(42);
       const orig = window.localStorage.setItem;
-      window.localStorage.setItem = vi.fn(() => { throw new Error('QuotaExceededError'); });
+      window.localStorage.setItem = vi.fn(() => {
+        throw new Error('QuotaExceededError');
+      });
       try {
         const ok = manualSave(42, [], world);
         expect(ok).toBe(false);
@@ -1404,12 +1642,15 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // → hasIncompatibleSave returns true; hasSave returns false. The pair
       // lets the dialog distinguish "no save" from "save present, this build
       // can't read it" instead of silently booting fresh.
-      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
-        version: 2,
-        seed: 1,
-        inputLog: [],
-        snapshot: {},
-      }));
+      window.localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          version: 2,
+          seed: 1,
+          inputLog: [],
+          snapshot: {},
+        }),
+      );
       expect(hasIncompatibleSave()).toBe(true);
       expect(hasSave()).toBe(false);
     });
@@ -1481,22 +1722,28 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // parseSaveFile only validates the envelope. A v3 envelope with
       // snapshot=null parses fine but reading snapshot.simVersion would
       // throw and crash the dialog. Treat as incompatible.
-      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
-        version: SAVE_FORMAT_VERSION,
-        seed: 1,
-        inputLog: [],
-        snapshot: null,
-      }));
+      window.localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          version: SAVE_FORMAT_VERSION,
+          seed: 1,
+          inputLog: [],
+          snapshot: null,
+        }),
+      );
       expect(hasIncompatibleSave()).toBe(true);
     });
 
     it('Codex round-3 P1: returns true when snapshot is a non-object (string / number)', () => {
-      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
-        version: SAVE_FORMAT_VERSION,
-        seed: 1,
-        inputLog: [],
-        snapshot: 'not an object',
-      }));
+      window.localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          version: SAVE_FORMAT_VERSION,
+          seed: 1,
+          inputLog: [],
+          snapshot: 'not an object',
+        }),
+      );
       expect(hasIncompatibleSave()).toBe(true);
     });
 
@@ -1506,12 +1753,15 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // appear enabled — but bootFromSave would throw on missing required
       // fields and silently fall through to bootFresh. Now flagged via
       // the full-deserialize boundary check.
-      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
-        version: SAVE_FORMAT_VERSION,
-        seed: 1,
-        inputLog: [],
-        snapshot: {},
-      }));
+      window.localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          version: SAVE_FORMAT_VERSION,
+          seed: 1,
+          inputLog: [],
+          snapshot: {},
+        }),
+      );
       expect(hasIncompatibleSave()).toBe(true);
     });
 
@@ -1520,23 +1770,29 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const world = createScenario(7);
       const snap = serializeWorldState(world);
       snap.simVersion = LEGACY_SIM_VERSION - 1;
-      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
-        version: SAVE_FORMAT_VERSION,
-        seed: 7,
-        inputLog: [],
-        snapshot: snap,
-        savedAtMs: Date.now(),
-      }));
+      window.localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          version: SAVE_FORMAT_VERSION,
+          seed: 7,
+          inputLog: [],
+          snapshot: snap,
+          savedAtMs: Date.now(),
+        }),
+      );
       expect(hasIncompatibleSave()).toBe(true);
     });
 
     it('round-4 (Rob): returns true when snapshot.colonies is missing (deserialize would throw)', () => {
-      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
-        version: SAVE_FORMAT_VERSION,
-        seed: 1,
-        inputLog: [],
-        snapshot: { tick: 0, rngState: 0, nextEntityId: 0, commandQueue: [] },
-      }));
+      window.localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          version: SAVE_FORMAT_VERSION,
+          seed: 1,
+          inputLog: [],
+          snapshot: { tick: 0, rngState: 0, nextEntityId: 0, commandQueue: [] },
+        }),
+      );
       expect(hasIncompatibleSave()).toBe(true);
     });
   });
@@ -1619,12 +1875,15 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // the "incompatible" warning + can use Delete/New Game to recover.
       // Pre-fix this case threw inside getSaveInfo and crashed dialog
       // rendering before the user could click anything.
-      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
-        version: SAVE_FORMAT_VERSION,
-        seed: 1,
-        inputLog: [],
-        snapshot: null,
-      }));
+      window.localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          version: SAVE_FORMAT_VERSION,
+          seed: 1,
+          inputLog: [],
+          snapshot: null,
+        }),
+      );
       expect(() => getSaveInfo()).not.toThrow();
       expect(getSaveInfo()).toBeNull();
     });
@@ -1632,12 +1891,15 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     it('Codex round-3 P1: does NOT throw when snapshot.colonies is missing', () => {
       // A snapshot with tick/rngState/etc. but no `colonies` field.
       // Pre-fix: dereferencing colonies[playerKey] would throw TypeError.
-      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
-        version: SAVE_FORMAT_VERSION,
-        seed: 1,
-        inputLog: [],
-        snapshot: { tick: 5, rngState: 1, nextEntityId: 0 },
-      }));
+      window.localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          version: SAVE_FORMAT_VERSION,
+          seed: 1,
+          inputLog: [],
+          snapshot: { tick: 5, rngState: 1, nextEntityId: 0 },
+        }),
+      );
       expect(() => getSaveInfo()).not.toThrow();
       const info = getSaveInfo();
       expect(info).not.toBeNull();
@@ -1647,12 +1909,15 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     });
 
     it('Codex round-3 P1: returns 0 fields when snapshot.tick is missing/non-numeric', () => {
-      window.localStorage.setItem(SAVE_KEY, JSON.stringify({
-        version: SAVE_FORMAT_VERSION,
-        seed: 1,
-        inputLog: [],
-        snapshot: { colonies: {} },
-      }));
+      window.localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          version: SAVE_FORMAT_VERSION,
+          seed: 1,
+          inputLog: [],
+          snapshot: { colonies: {} },
+        }),
+      );
       const info = getSaveInfo();
       expect(info).not.toBeNull();
       expect(info!.tick).toBe(0);
@@ -1671,10 +1936,27 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           rngState: 1,
           nextEntityId: 0,
           commandQueue: [],
-          ants: { count: 0, posX: [], posY: [], colonyId: [], task: [], subTask: [],
-                  speed: [], foodCarrying: [], starvationTimer: [], age: [], alive: [],
-                  lifespan: [], zone: [], digTileX: [], digTileY: [], digTicksRemaining: [],
-                  targetPosX: [], targetPosY: [], targetSet: [] },
+          ants: {
+            count: 0,
+            posX: [],
+            posY: [],
+            colonyId: [],
+            task: [],
+            subTask: [],
+            speed: [],
+            foodCarrying: [],
+            starvationTimer: [],
+            age: [],
+            alive: [],
+            lifespan: [],
+            zone: [],
+            digTileX: [],
+            digTileY: [],
+            digTicksRemaining: [],
+            targetPosX: [],
+            targetPosY: [],
+            targetSet: [],
+          },
           colonies: {}, // PLAYER_COLONY_ID intentionally missing
           pheromoneGrids: {},
           surface: { width: 1, height: 1, data: [0] },

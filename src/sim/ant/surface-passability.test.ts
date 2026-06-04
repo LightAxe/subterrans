@@ -21,11 +21,7 @@ import {
   SIM_VERSION_V7_SURFACE_PASSABILITY,
 } from '../types.js';
 import { initAnt, pushRecentTile } from './ant-store.js';
-import {
-  canEnterSurfaceTile,
-  pickSurfaceDetour,
-  tickAntMovement,
-} from './ant-system.js';
+import { canEnterSurfaceTile, pickSurfaceDetour, tickAntMovement } from './ant-system.js';
 import { surfaceFeatureAt, SurfaceMovementEffect } from '../surface-features.js';
 import { AntTask, ForagingSubState } from '../enums.js';
 import { Zone } from '../terrain.js';
@@ -135,19 +131,18 @@ describe('pickSurfaceDetour', () => {
     // corner; the returned step must NOT be a diagonal whose two
     // intermediate cardinals are both blocked.
     let foundCorner = false;
-    seedLoop:
-    for (let seed = 1; seed < 50; seed++) {
+    seedLoop: for (let seed = 1; seed < 50; seed++) {
       const world = createWorldState(seed);
       for (let y = 5; y < 80; y++) {
         for (let x = 5; x < 80; x++) {
           // Try all 4 diagonal directions for the squeeze geometry.
           for (let s = 0; s < 4; s++) {
-            const ddx = s === 0 || s === 1 ?  1 : -1;
-            const ddy = s === 0 || s === 2 ?  1 : -1;
-            const here       = canEnterSurfaceTile(world, x, y);
-            const diag       = canEnterSurfaceTile(world, x + ddx, y + ddy);
-            const interX     = canEnterSurfaceTile(world, x + ddx, y);
-            const interY     = canEnterSurfaceTile(world, x, y + ddy);
+            const ddx = s === 0 || s === 1 ? 1 : -1;
+            const ddy = s === 0 || s === 2 ? 1 : -1;
+            const here = canEnterSurfaceTile(world, x, y);
+            const diag = canEnterSurfaceTile(world, x + ddx, y + ddy);
+            const interX = canEnterSurfaceTile(world, x + ddx, y);
+            const interY = canEnterSurfaceTile(world, x, y + ddy);
             if (here && diag && !interX && !interY) {
               foundCorner = true;
               // Call the detour with intent EXACTLY toward the diagonal.
@@ -192,19 +187,18 @@ describe('pickSurfaceDetour', () => {
     // east-of-here target. Pre-fix the picker would never return that
     // diagonal; post-fix it does.
     let foundCase = false;
-    seedLoop:
-    for (let seed = 1; seed < 50; seed++) {
+    seedLoop: for (let seed = 1; seed < 50; seed++) {
       const world = createWorldState(seed);
       for (let y = 5; y < 60; y++) {
         for (let x = 5; x < 60; x++) {
           const here = canEnterSurfaceTile(world, x, y);
           if (!here) continue;
           // Intent: east. East tile blocked, NE walkable.
-          const east  = canEnterSurfaceTile(world, x + 1, y);
-          const ne    = canEnterSurfaceTile(world, x + 1, y - 1);
+          const east = canEnterSurfaceTile(world, x + 1, y);
+          const ne = canEnterSurfaceTile(world, x + 1, y - 1);
           const north = canEnterSurfaceTile(world, x, y - 1);
-          if (east) continue;            // east must be the blocker
-          if (!ne)  continue;            // NE must be a candidate
+          if (east) continue; // east must be the blocker
+          if (!ne) continue; // NE must be a candidate
           // For the diagonal NE corner-cut check to pass, intermediate
           // cardinals (E or N) must include at least one walkable.
           // E is blocked here; require N walkable so corner-cut allows.
@@ -220,7 +214,7 @@ describe('pickSurfaceDetour', () => {
           const det = pickSurfaceDetour(world, x, y, 1, 0);
           const detTargetX = x + 1;
           const detTargetY = y;
-          const score = Math.abs((x + det.dx) - detTargetX) + Math.abs((y + det.dy) - detTargetY);
+          const score = Math.abs(x + det.dx - detTargetX) + Math.abs(y + det.dy - detTargetY);
           expect(score).toBeLessThanOrEqual(1);
           break seedLoop;
         }
@@ -257,7 +251,7 @@ describe('pickSurfaceDetour', () => {
       if (
         canEnterSurfaceTile(w, ANT_X + 1, ANT_Y) &&
         canEnterSurfaceTile(w, ANT_X + 1, ANT_Y + 1) &&
-        canEnterSurfaceTile(w, ANT_X,     ANT_Y + 1)
+        canEnterSurfaceTile(w, ANT_X, ANT_Y + 1)
       ) {
         world = w;
         break;
@@ -276,9 +270,9 @@ describe('pickSurfaceDetour', () => {
     // Push all THREE walkable neighbors into the recent buffer. Since
     // RECENT_TILES_LEN is 4, the ring isn't even full — every walkable
     // candidate is guaranteed to be recent.
-    pushRecentTile(w.ants, antId, ANT_X + 1, ANT_Y);     // E
+    pushRecentTile(w.ants, antId, ANT_X + 1, ANT_Y); // E
     pushRecentTile(w.ants, antId, ANT_X + 1, ANT_Y + 1); // SE
-    pushRecentTile(w.ants, antId, ANT_X,     ANT_Y + 1); // S
+    pushRecentTile(w.ants, antId, ANT_X, ANT_Y + 1); // S
 
     // Intent east. With all walkable neighbors recent, pre-fix returns
     // (0, 0) and the ant deadlocks; post-fix falls back to the best
@@ -297,7 +291,6 @@ describe('pickSurfaceDetour', () => {
       (det.dx === 0 && det.dy === 1);
     expect(isOneOfRecent).toBe(true);
   });
-
 
   it('prefers cardinal slip on intended axis as the first probe', () => {
     // Construct a synthetic test by checking the well-defined order:
@@ -358,7 +351,8 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
         const east = surfaceFeatureAt(world, x + 1, y);
         if (
           (open === null || open.movement !== SurfaceMovementEffect.HardBlock) &&
-          east !== null && east.movement === SurfaceMovementEffect.HardBlock
+          east !== null &&
+          east.movement === SurfaceMovementEffect.HardBlock
         ) {
           pair = { open: { x, y }, blocked: { x: x + 1, y } };
           break;
@@ -370,12 +364,14 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     // Install a colony with an entrance far east of the obstacle so the
     // ant routes that direction.
     const colony = createColonyRecord(1, 0);
-    colony.entrances = [{
-      entranceId: 0,
-      surfaceTileX: pair!.blocked.x + 10,
-      surfaceTileY: pair!.blocked.y,
-      isOpen: true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: 0,
+        surfaceTileX: pair!.blocked.x + 10,
+        surfaceTileY: pair!.blocked.y,
+        isOpen: true,
+      },
+    ];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[1] = colony;
@@ -393,7 +389,8 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     const endTileX = world.ants.posX[id]! >> FP_SHIFT;
     const endTileY = world.ants.posY[id]! >> FP_SHIFT;
     expect(endTileX === blockedTileX && endTileY === blockedTileY).toBe(false);
-    void startTileX; void startTileY;
+    void startTileX;
+    void startTileY;
   });
 
   it('under v7 — ant on a SoftCost (grass/bush) tile moves exactly half its base speed (issue #44 step 5)', () => {
@@ -419,7 +416,8 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
         const cur = surfaceFeatureAt(world, x, y);
         const east = surfaceFeatureAt(world, x + 1, y);
         if (
-          cur !== null && cur.movement === SurfaceMovementEffect.SoftCost &&
+          cur !== null &&
+          cur.movement === SurfaceMovementEffect.SoftCost &&
           (east === null || east.movement !== SurfaceMovementEffect.HardBlock)
         ) {
           soft = { x, y };
@@ -430,12 +428,14 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     expect(soft).not.toBeNull();
 
     const colony = createColonyRecord(1, 0);
-    colony.entrances = [{
-      entranceId: 0,
-      surfaceTileX: soft!.x + 30,
-      surfaceTileY: soft!.y,
-      isOpen: true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: 0,
+        surfaceTileX: soft!.x + 30,
+        surfaceTileY: soft!.y,
+        isOpen: true,
+      },
+    ];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[1] = colony;
@@ -456,7 +456,7 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     // above filtered out HardBlock east-neighbors, so the step is
     // accepted in full.
     const totalDelta = Math.abs(deltaX) + Math.abs(deltaY);
-    expect(totalDelta).toBe(FP_ONE >> 1);  // exactly 128 — half speed
+    expect(totalDelta).toBe(FP_ONE >> 1); // exactly 128 — half speed
   });
 
   it('under v7 — ant on a Cosmetic tile moves exactly its base speed (sanity, complements the SoftCost test)', () => {
@@ -476,12 +476,14 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     expect(open).not.toBeNull();
 
     const colony = createColonyRecord(1, 0);
-    colony.entrances = [{
-      entranceId: 0,
-      surfaceTileX: open!.x + 30,
-      surfaceTileY: open!.y,
-      isOpen: true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: 0,
+        surfaceTileX: open!.x + 30,
+        surfaceTileY: open!.y,
+        isOpen: true,
+      },
+    ];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[1] = colony;
@@ -496,7 +498,7 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
 
     // Full speed: cardinal step at FP_ONE = 256 sub-pixels.
     const totalDelta = Math.abs(deltaX) + Math.abs(deltaY);
-    expect(totalDelta).toBe(FP_ONE);  // exactly 256 — full speed
+    expect(totalDelta).toBe(FP_ONE); // exactly 256 — full speed
   });
 
   it('detour: ant blocked from preferred east step ends at a deterministic alternate tile (issue #44 step 6)', () => {
@@ -516,7 +518,8 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
           const east = surfaceFeatureAt(world, x + 1, y);
           if (
             (open === null || open.movement !== SurfaceMovementEffect.HardBlock) &&
-            east !== null && east.movement === SurfaceMovementEffect.HardBlock
+            east !== null &&
+            east.movement === SurfaceMovementEffect.HardBlock
           ) {
             pair = { open: { x, y }, blocked: { x: x + 1, y } };
             break;
@@ -526,12 +529,14 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
       if (pair === null) throw new Error('no test pair found for seed');
 
       const colony = createColonyRecord(1, 0);
-      colony.entrances = [{
-        entranceId: 0,
-        surfaceTileX: pair.blocked.x + 10,
-        surfaceTileY: pair.blocked.y,
-        isOpen: true,
-      }];
+      colony.entrances = [
+        {
+          entranceId: 0,
+          surfaceTileX: pair.blocked.x + 10,
+          surfaceTileY: pair.blocked.y,
+          isOpen: true,
+        },
+      ];
       colony.rallyPoint = null;
       colony.digFlowFieldDirty = false;
       world.colonies[1] = colony;
@@ -563,16 +568,16 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     let pickedT: { x: number; y: number } | null = null;
     for (let y = 5; y < 80 && pickedT === null; y++) {
       for (let x = 5; x < 80; x++) {
-        const here  = surfaceFeatureAt(world, x, y);
+        const here = surfaceFeatureAt(world, x, y);
         const north = surfaceFeatureAt(world, x, y - 1);
-        const east  = surfaceFeatureAt(world, x + 1, y);
+        const east = surfaceFeatureAt(world, x + 1, y);
         const south = surfaceFeatureAt(world, x, y + 1);
-        const west  = surfaceFeatureAt(world, x - 1, y);
-        const hereOk  = here === null || here.movement !== SurfaceMovementEffect.HardBlock;
+        const west = surfaceFeatureAt(world, x - 1, y);
+        const hereOk = here === null || here.movement !== SurfaceMovementEffect.HardBlock;
         const northBlock = north !== null && north.movement === SurfaceMovementEffect.HardBlock;
-        const eastOk  = east === null || east.movement !== SurfaceMovementEffect.HardBlock;
+        const eastOk = east === null || east.movement !== SurfaceMovementEffect.HardBlock;
         const southOk = south === null || south.movement !== SurfaceMovementEffect.HardBlock;
-        const westOk  = west === null || west.movement !== SurfaceMovementEffect.HardBlock;
+        const westOk = west === null || west.movement !== SurfaceMovementEffect.HardBlock;
         if (hereOk && northBlock && eastOk && southOk && westOk) {
           pickedT = { x, y };
           break;
@@ -582,7 +587,9 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     expect(pickedT).not.toBeNull();
 
     const colony = createColonyRecord(1, 0);
-    colony.entrances = []; colony.rallyPoint = null; colony.digFlowFieldDirty = false;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
     world.colonies[1] = colony;
 
     // Spawn two stationary ants at T. Both have no movement → both end at T
@@ -615,8 +622,7 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     expect(bX === pickedT!.x && bY === pickedT!.y - 1).toBe(false);
   });
 
-
-  it('SoftCost slowdown clamps to min 1 (speed=1 stays at 1, doesn\'t go to 0)', () => {
+  it("SoftCost slowdown clamps to min 1 (speed=1 stays at 1, doesn't go to 0)", () => {
     // Edge case: an ant with the absolute minimum nonzero speed (1) on a
     // SoftCost tile. Half of 1 is 0; the clamp must keep it at 1 so the
     // ant isn't permanently stuck. Verify by reading effective speed via
@@ -635,12 +641,14 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     expect(soft).not.toBeNull();
 
     const colony = createColonyRecord(1, 0);
-    colony.entrances = [{
-      entranceId: 0,
-      surfaceTileX: soft!.x + 30,
-      surfaceTileY: soft!.y,
-      isOpen: true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: 0,
+        surfaceTileX: soft!.x + 30,
+        surfaceTileY: soft!.y,
+        isOpen: true,
+      },
+    ];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[1] = colony;
@@ -656,5 +664,4 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     // 1 sub-pixel per tick (the minimum quantum). NOT stuck.
     expect(endPosX).not.toBe(startPosX);
   });
-
 });

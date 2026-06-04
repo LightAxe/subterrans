@@ -45,11 +45,11 @@ function setupWorld(): { world: WorldState; colony: ColonyRecord; queenId: numbe
 
 function makeStats(overrides: Partial<HudStats> = {}): HudStats {
   return {
-    antCount:       1,
-    foodDisplay:    0,
-    foodCapacity:   BASE_FOOD_STORAGE_CAPACITY >> FP_SHIFT,
+    antCount: 1,
+    foodDisplay: 0,
+    foodCapacity: BASE_FOOD_STORAGE_CAPACITY >> FP_SHIFT,
     queenHealthPct: 100,
-    queenAlive:     true,
+    queenAlive: true,
     ...overrides,
   };
 }
@@ -61,7 +61,7 @@ describe('computeHudStats', () => {
     // many workers were available to forage/dig.
     const { world, colony } = setupWorld();
     colony.workerCount = 5;
-    colony.eggCount    = 3;
+    colony.eggCount = 3;
     colony.larvaeCount = 2;
     const s = computeHudStats(world, colony);
     expect(s.antCount).toBe(5 + 1);
@@ -71,7 +71,7 @@ describe('computeHudStats', () => {
   it('antCount excludes the queen when queen dead (and still excludes brood)', () => {
     const { world, colony, queenId } = setupWorld();
     colony.workerCount = 4;
-    colony.eggCount    = 1;
+    colony.eggCount = 1;
     colony.larvaeCount = 0;
     killAnt(world.ants, queenId);
     const s = computeHudStats(world, colony);
@@ -100,12 +100,22 @@ describe('computeHudStats', () => {
     // Two completed FoodStorage chambers → capacity = BASE + 2 × CHAMBER.
     // Matches colonyFoodCapacity source-of-truth (sim/colony/colony-system).
     colony.chambers.push({
-      chamberId: 9001, chamberType: ChamberType.FoodStorage,
-      foodStored: 0, posX: 0, posY: 0, width: 3, height: 3,
+      chamberId: 9001,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 0,
+      posX: 0,
+      posY: 0,
+      width: 3,
+      height: 3,
     });
     colony.chambers.push({
-      chamberId: 9002, chamberType: ChamberType.FoodStorage,
-      foodStored: 0, posX: 10, posY: 10, width: 3, height: 3,
+      chamberId: 9002,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 0,
+      posX: 10,
+      posY: 10,
+      width: 3,
+      height: 3,
     });
     const s = computeHudStats(world, colony);
     const expected = (BASE_FOOD_STORAGE_CAPACITY + 2 * FOOD_CHAMBER_CAPACITY) >> FP_SHIFT;
@@ -155,20 +165,17 @@ describe('label formatters', () => {
     // 09 HUD clarity pass: food label is now "Food: C/M" so players can
     // see headroom at a glance. At base capacity with nothing stored:
     // "Food: 0/8" (BASE_FOOD_STORAGE_CAPACITY = 2048fp → 8 human units).
-    expect(formatFoodLabel(makeStats({ foodDisplay: 0, foodCapacity: 8 })))
-      .toBe('Food: 0/8');
-    expect(formatFoodLabel(makeStats({ foodDisplay: 8, foodCapacity: 8 })))
-      .toBe('Food: 8/8');
+    expect(formatFoodLabel(makeStats({ foodDisplay: 0, foodCapacity: 8 }))).toBe('Food: 0/8');
+    expect(formatFoodLabel(makeStats({ foodDisplay: 8, foodCapacity: 8 }))).toBe('Food: 8/8');
     // One FoodStorage chamber added: base 8 + chamber 20 = capacity 28.
-    expect(formatFoodLabel(makeStats({ foodDisplay: 8, foodCapacity: 28 })))
-      .toBe('Food: 8/28');
-    expect(formatFoodLabel(makeStats({ foodDisplay: 48, foodCapacity: 48 })))
-      .toBe('Food: 48/48');
+    expect(formatFoodLabel(makeStats({ foodDisplay: 8, foodCapacity: 28 }))).toBe('Food: 8/28');
+    expect(formatFoodLabel(makeStats({ foodDisplay: 48, foodCapacity: 48 }))).toBe('Food: 48/48');
   });
 
   it('formatStatsPrefix combines both with two-space separator', () => {
-    expect(formatStatsPrefix(makeStats({ antCount: 11, foodDisplay: 4, foodCapacity: 8 })))
-      .toBe('Ants: 11  Food: 4/8');
+    expect(formatStatsPrefix(makeStats({ antCount: 11, foodDisplay: 4, foodCapacity: 8 }))).toBe(
+      'Ants: 11  Food: 4/8',
+    );
   });
 
   it('formatQueenLabel returns the readable "Queen" word, not a single char', () => {
@@ -184,8 +191,7 @@ describe('label formatters', () => {
 
 describe('queenHealthState (PRD §6c thresholds)', () => {
   it('returns "dead" when queen is dead regardless of pct', () => {
-    expect(queenHealthState(makeStats({ queenAlive: false, queenHealthPct: 100 })))
-      .toBe('dead');
+    expect(queenHealthState(makeStats({ queenAlive: false, queenHealthPct: 100 }))).toBe('dead');
   });
 
   it('returns "healthy" when pct > 50', () => {
@@ -207,32 +213,39 @@ describe('queenHealthState (PRD §6c thresholds)', () => {
 
 describe('queenHealthBarColor', () => {
   it('maps each health state to its PRD color', () => {
-    expect(queenHealthBarColor(makeStats({ queenHealthPct: 100 })))
-      .toBe(HUD_STATS_COLORS.barHealthy);
-    expect(queenHealthBarColor(makeStats({ queenHealthPct: 40 })))
-      .toBe(HUD_STATS_COLORS.barModerate);
-    expect(queenHealthBarColor(makeStats({ queenHealthPct: 10 })))
-      .toBe(HUD_STATS_COLORS.barCritical);
-    expect(queenHealthBarColor(makeStats({ queenAlive: false })))
-      .toBe(HUD_STATS_COLORS.barCritical);
+    expect(queenHealthBarColor(makeStats({ queenHealthPct: 100 }))).toBe(
+      HUD_STATS_COLORS.barHealthy,
+    );
+    expect(queenHealthBarColor(makeStats({ queenHealthPct: 40 }))).toBe(
+      HUD_STATS_COLORS.barModerate,
+    );
+    expect(queenHealthBarColor(makeStats({ queenHealthPct: 10 }))).toBe(
+      HUD_STATS_COLORS.barCritical,
+    );
+    expect(queenHealthBarColor(makeStats({ queenAlive: false }))).toBe(
+      HUD_STATS_COLORS.barCritical,
+    );
   });
 });
 
 describe('queenHealthBarFillWidth', () => {
   it('scales proportionally to pct', () => {
     expect(queenHealthBarFillWidth(makeStats({ queenHealthPct: 100 }), 48)).toBe(48);
-    expect(queenHealthBarFillWidth(makeStats({ queenHealthPct: 50 }),  48)).toBe(24);
-    expect(queenHealthBarFillWidth(makeStats({ queenHealthPct: 25 }),  48)).toBe(12);
+    expect(queenHealthBarFillWidth(makeStats({ queenHealthPct: 50 }), 48)).toBe(24);
+    expect(queenHealthBarFillWidth(makeStats({ queenHealthPct: 25 }), 48)).toBe(12);
   });
 
   it('returns 0 when queen is dead', () => {
-    expect(queenHealthBarFillWidth(makeStats({ queenAlive: false, queenHealthPct: 99 }), 48))
-      .toBe(0);
+    expect(queenHealthBarFillWidth(makeStats({ queenAlive: false, queenHealthPct: 99 }), 48)).toBe(
+      0,
+    );
   });
 
   it('clamps within [0, totalW]', () => {
     expect(queenHealthBarFillWidth(makeStats({ queenHealthPct: 200 }), 48)).toBeLessThanOrEqual(48);
-    expect(queenHealthBarFillWidth(makeStats({ queenHealthPct: -10 }), 48)).toBeGreaterThanOrEqual(0);
+    expect(queenHealthBarFillWidth(makeStats({ queenHealthPct: -10 }), 48)).toBeGreaterThanOrEqual(
+      0,
+    );
   });
 });
 
@@ -265,7 +278,7 @@ describe('queenLabelRect (09 HUD clarity pass — two-row layout)', () => {
 
   it('label and queen bar on the same row do not overlap', () => {
     const stats = { x: 8, y: 8, w: 200, h: 24 };
-    const bar   = queenBarRect(stats);
+    const bar = queenBarRect(stats);
     const label = queenLabelRect(stats);
     // Label ends before bar starts — leaves visible spacing.
     expect(label.x + label.w).toBeLessThan(bar.x);
@@ -304,15 +317,15 @@ describe('two-row stats layout (09 HUD clarity pass)', () => {
 
   it('ants + food on row 1 stay disjoint at realistic colony sizes', () => {
     const antsX = stats.x + HUD_STATS_LAYOUT.leftTextInset;
-    const antsTextWidth = 60;  // "Ants: 999" ≈ 54px, leave headroom
-    const foodTextWidth = 72;  // "Food: 999/999" generous estimate
+    const antsTextWidth = 60; // "Ants: 999" ≈ 54px, leave headroom
+    const foodTextWidth = 72; // "Food: 999/999" generous estimate
     const foodX = stats.x + stats.w - FOOD_RIGHT_INSET - foodTextWidth;
     expect(antsX + antsTextWidth).toBeLessThanOrEqual(foodX);
   });
 
   it('queen label + bar on row 2 stay disjoint', () => {
     const label = queenLabelRect(stats);
-    const bar   = queenBarRect(stats);
+    const bar = queenBarRect(stats);
     expect(label.x + label.w).toBeLessThanOrEqual(bar.x);
   });
 

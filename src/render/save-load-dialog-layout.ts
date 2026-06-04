@@ -42,12 +42,7 @@ export const DIALOG_INFO_Y = DIALOG_TITLE_Y + DIALOG_TITLE_TO_INFO_GAP;
 // Item types
 // ---------------------------------------------------------------------------
 
-export type SaveLoadDialogItemId =
-  | 'continue'
-  | 'save-now'
-  | 'delete'
-  | 'new-game'
-  | 'back';
+export type SaveLoadDialogItemId = 'continue' | 'save-now' | 'delete' | 'new-game' | 'back';
 
 export interface DialogItemRect {
   x: number;
@@ -137,9 +132,7 @@ export function saveLoadDialogItems(ctx: SaveLoadDialogContext): SaveLoadDialogI
       id: 'new-game',
       // New Game without a save just restarts; confirm is only needed when
       // a save exists (clicking would silently discard player progress).
-      label: saveExists && ctx.confirming.newGame
-        ? 'Click to confirm new game'
-        : 'New Game',
+      label: saveExists && ctx.confirming.newGame ? 'Click to confirm new game' : 'New Game',
       enabled: true,
       confirming: ctx.confirming.newGame,
     },
@@ -167,10 +160,7 @@ export function saveLoadDialogItems(ctx: SaveLoadDialogContext): SaveLoadDialogI
  *  Continue is disabled — visually contradicting the disabled state. The
  *  warning wins so the disabled Continue and the info line tell the same
  *  story. */
-export function formatSaveInfoLine(
-  info: SaveInfo | null,
-  hasIncompatibleSave: boolean,
-): string {
+export function formatSaveInfoLine(info: SaveInfo | null, hasIncompatibleSave: boolean): string {
   if (hasIncompatibleSave) {
     // Surfaces the issue #66 case where bytes exist but this build can't read
     // them (envelope parse fails OR snapshot.simVersion > LATEST_SIM_VERSION).

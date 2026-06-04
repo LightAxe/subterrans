@@ -61,10 +61,22 @@ describe('computeNurseCount — ceil(w/4) cap table', () => {
   // Fixed high brood (1000) so cap is always the binding constraint.
   const HIGH_BROOD = 1000;
   const table: Array<[number, number]> = [
-    [0, 0], [1, 1], [2, 1], [3, 1], [4, 1],
-    [5, 2], [6, 2], [7, 2], [8, 2],
-    [9, 3], [10, 3], [11, 3], [12, 3],
-    [13, 4], [16, 4], [17, 5],
+    [0, 0],
+    [1, 1],
+    [2, 1],
+    [3, 1],
+    [4, 1],
+    [5, 2],
+    [6, 2],
+    [7, 2],
+    [8, 2],
+    [9, 3],
+    [10, 3],
+    [11, 3],
+    [12, 3],
+    [13, 4],
+    [16, 4],
+    [17, 5],
   ];
   for (const [workers, expectedCap] of table) {
     it(`workers=${workers} → max nurses=${expectedCap}`, () => {
@@ -77,7 +89,7 @@ describe('computeNurseCount — ceil(w/4) cap table', () => {
 // allocateWorkers — PRD §8b' scenarios (Phase 10 two-role amendment)
 // ---------------------------------------------------------------------------
 
-describe('allocateWorkers — PRD §8b\' scenarios', () => {
+describe("allocateWorkers — PRD §8b' scenarios", () => {
   it('5. Nurse Carveout at High Brood: workerCount=3, broodCount=30, forage-only, hasNursery', () => {
     // floor(30/3)=10, cap ceil(3/4)=1 → nurse=1; available=2 → forage=2
     const result = allocateWorkers(3, 30, { forage: 10, fight: 0 }, true);
@@ -153,16 +165,16 @@ describe('allocateWorkers — edge cases', () => {
 describe('allocateWorkers — Phase 10 dig contract', () => {
   it('returned `dig` is 0 across many shape combinations (auto-dig owns the live value)', () => {
     const inputs: Array<[number, number, { forage: number; fight: number }, boolean]> = [
-      [10,  0,  { forage: 10, fight: 0 }, true],
-      [10,  0,  { forage: 0,  fight: 10 }, true],
-      [10,  0,  { forage: 1,  fight: 1 },  true],
-      [11,  0,  { forage: 1,  fight: 1 },  true],
-      [3,   30, { forage: 10, fight: 0 }, true],
-      [10,  3,  { forage: 10, fight: 0 }, true],
-      [10,  30, { forage: 1,  fight: 1 },  false],
-      [50,  0,  { forage: 10, fight: 5 },  true],
-      [0,   0,  { forage: 10, fight: 0 }, true],
-      [5,   0,  { forage: 0,  fight: 0 },  true],
+      [10, 0, { forage: 10, fight: 0 }, true],
+      [10, 0, { forage: 0, fight: 10 }, true],
+      [10, 0, { forage: 1, fight: 1 }, true],
+      [11, 0, { forage: 1, fight: 1 }, true],
+      [3, 30, { forage: 10, fight: 0 }, true],
+      [10, 3, { forage: 10, fight: 0 }, true],
+      [10, 30, { forage: 1, fight: 1 }, false],
+      [50, 0, { forage: 10, fight: 5 }, true],
+      [0, 0, { forage: 10, fight: 0 }, true],
+      [5, 0, { forage: 0, fight: 0 }, true],
     ];
     for (const [workers, brood, ratio, hasNursery] of inputs) {
       const result = allocateWorkers(workers, brood, ratio, hasNursery);
@@ -194,7 +206,7 @@ describe('allocateWorkers — 09 memo: hasNursery=false gate', () => {
   });
 
   it('no nursery + zero brood: identical to hasNursery=true (nurse=0 both ways)', () => {
-    const noNursery  = allocateWorkers(10, 0, { forage: 3, fight: 1 }, false);
+    const noNursery = allocateWorkers(10, 0, { forage: 3, fight: 1 }, false);
     const yesNursery = allocateWorkers(10, 0, { forage: 3, fight: 1 }, true);
     expect(noNursery).toEqual(yesNursery);
   });
@@ -236,26 +248,26 @@ describe('allocateWorkers — CTRL-04 immediate allocation', () => {
 
 describe('allocateWorkers — sum invariant', () => {
   const cases: Array<[number, number, { forage: number; fight: number }]> = [
-    [10,  5,  { forage: 3,  fight: 1 }],
-    [100, 50, { forage: 1,  fight: 1 }],
-    [1,   0,  { forage: 1,  fight: 0 }],
-    [50,  0,  { forage: 10, fight: 5 }],
-    [0,   0,  { forage: 10, fight: 0 }],
-    [20,  3,  { forage: 7,  fight: 1 }],
-    [15,  15, { forage: 1,  fight: 1 }],
-    [30,  90, { forage: 10, fight: 0 }],
-    [7,   6,  { forage: 2,  fight: 2 }],
-    [8,   0,  { forage: 3,  fight: 3 }],
-    [12,  9,  { forage: 5,  fight: 2 }],
-    [25,  0,  { forage: 10, fight: 0 }],
-    [5,   5,  { forage: 10, fight: 5 }],
-    [3,   3,  { forage: 1,  fight: 0 }],
-    [99,  0,  { forage: 4,  fight: 3 }],
-    [10,  30, { forage: 1,  fight: 0 }],
-    [6,   6,  { forage: 0,  fight: 10 }],
-    [40,  12, { forage: 6,  fight: 2 }],
-    [11,  0,  { forage: 1,  fight: 1 }],
-    [100, 0,  { forage: 10, fight: 0 }],
+    [10, 5, { forage: 3, fight: 1 }],
+    [100, 50, { forage: 1, fight: 1 }],
+    [1, 0, { forage: 1, fight: 0 }],
+    [50, 0, { forage: 10, fight: 5 }],
+    [0, 0, { forage: 10, fight: 0 }],
+    [20, 3, { forage: 7, fight: 1 }],
+    [15, 15, { forage: 1, fight: 1 }],
+    [30, 90, { forage: 10, fight: 0 }],
+    [7, 6, { forage: 2, fight: 2 }],
+    [8, 0, { forage: 3, fight: 3 }],
+    [12, 9, { forage: 5, fight: 2 }],
+    [25, 0, { forage: 10, fight: 0 }],
+    [5, 5, { forage: 10, fight: 5 }],
+    [3, 3, { forage: 1, fight: 0 }],
+    [99, 0, { forage: 4, fight: 3 }],
+    [10, 30, { forage: 1, fight: 0 }],
+    [6, 6, { forage: 0, fight: 10 }],
+    [40, 12, { forage: 6, fight: 2 }],
+    [11, 0, { forage: 1, fight: 1 }],
+    [100, 0, { forage: 10, fight: 0 }],
   ];
 
   it('15a. nurse + forage + fight === workerCount — hasNursery=true (Phase 10: dig is 0)', () => {

@@ -40,26 +40,26 @@ import { HUD } from './sprites.js';
 export interface ForagingBreakdown {
   searching: number;
   returning: number;
-  carrying:  number;
-  total:     number;
+  carrying: number;
+  total: number;
 }
 
 export interface DiggingBreakdown {
   movingToSite: number;
-  excavating:   number;
-  total:        number;
+  excavating: number;
+  total: number;
 }
 
 export interface AntActivity {
-  capableAnts:  number;
-  queenAlive:   boolean;
-  eggs:         number;
-  larvae:       number;
-  foraging:     ForagingBreakdown;
-  digging:      DiggingBreakdown;
-  fighting:     number;
-  nursing:      number;
-  idle:         number;
+  capableAnts: number;
+  queenAlive: boolean;
+  eggs: number;
+  larvae: number;
+  foraging: ForagingBreakdown;
+  digging: DiggingBreakdown;
+  fighting: number;
+  nursing: number;
+  idle: number;
   totalWorkers: number;
 }
 
@@ -67,15 +67,15 @@ export function computeAntActivity(world: WorldState, colony: ColonyRecord): Ant
   const ants = world.ants;
   const queenAlive = isAlive(ants, colony.queenEntityId);
 
-  let searching    = 0;
-  let returning    = 0;
-  let carrying     = 0;
+  let searching = 0;
+  let returning = 0;
+  let carrying = 0;
   let movingToSite = 0;
-  let excavating   = 0;
-  let fighting     = 0;
-  let nursing      = 0;
-  let idle         = 0;
-  let workers      = 0;
+  let excavating = 0;
+  let fighting = 0;
+  let nursing = 0;
+  let idle = 0;
+  let workers = 0;
 
   for (let i = 0; i < colony.workers.length; i++) {
     const id = colony.workers[i]!;
@@ -83,7 +83,7 @@ export function computeAntActivity(world: WorldState, colony: ColonyRecord): Ant
     workers += 1;
 
     const task = ants.task[id]!;
-    const sub  = ants.subTask[id]!;
+    const sub = ants.subTask[id]!;
 
     if (task === AntTask.Foraging) {
       if (sub === ForagingSubState.CarryingFood) {
@@ -109,17 +109,17 @@ export function computeAntActivity(world: WorldState, colony: ColonyRecord): Ant
   }
 
   return {
-    capableAnts:  workers + (queenAlive ? 1 : 0),
+    capableAnts: workers + (queenAlive ? 1 : 0),
     queenAlive,
-    eggs:         colony.eggCount,
-    larvae:       colony.larvaeCount,
-    foraging:     {
+    eggs: colony.eggCount,
+    larvae: colony.larvaeCount,
+    foraging: {
       searching,
       returning,
       carrying,
       total: searching + returning + carrying,
     },
-    digging:      { movingToSite, excavating, total: movingToSite + excavating },
+    digging: { movingToSite, excavating, total: movingToSite + excavating },
     fighting,
     nursing,
     idle,
@@ -180,8 +180,8 @@ export const ANT_ACTIVITY_PANEL = {
 } as const;
 
 export const ANT_ACTIVITY_PANEL_COLORS = {
-  background:      0x000000,
+  background: 0x000000,
   backgroundAlpha: 0.78,
-  border:          0x444444,
-  textCss:         '#ffffff',
+  border: 0x444444,
+  textCss: '#ffffff',
 } as const;

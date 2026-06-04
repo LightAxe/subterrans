@@ -13,16 +13,10 @@
 //   10. Independence across separate createPheromoneGrid() allocations
 
 import { describe, it, expect } from 'vitest';
-import {
-  createPheromoneGrid,
-  phGet,
-  phSet,
-  pheromoneGridKey,
-} from './pheromone-store.js';
+import { createPheromoneGrid, phGet, phSet, pheromoneGridKey } from './pheromone-store.js';
 import { PheromoneType } from '../enums.js';
 
 describe('pheromone-store', () => {
-
   // -------------------------------------------------------------------------
   // Test 1 — Grid allocation: correct shape and zero-initialisation
   // -------------------------------------------------------------------------
@@ -71,8 +65,8 @@ describe('pheromone-store', () => {
   it('phGet returns 0 for negative x and y coordinates', () => {
     const g = createPheromoneGrid(10, 10);
     phSet(g, 0, 0, 7);
-    expect(phGet(g, -1,  0)).toBe(0);
-    expect(phGet(g,  0, -1)).toBe(0);
+    expect(phGet(g, -1, 0)).toBe(0);
+    expect(phGet(g, 0, -1)).toBe(0);
     expect(phGet(g, -5, -5)).toBe(0);
   });
 
@@ -83,8 +77,8 @@ describe('pheromone-store', () => {
   it('phGet returns 0 for x >= width or y >= height', () => {
     const g = createPheromoneGrid(10, 10);
     phSet(g, 9, 9, 7);
-    expect(phGet(g, 10,  0)).toBe(0);
-    expect(phGet(g,  0, 10)).toBe(0);
+    expect(phGet(g, 10, 0)).toBe(0);
+    expect(phGet(g, 0, 10)).toBe(0);
     expect(phGet(g, 10, 10)).toBe(0);
     expect(phGet(g, 99, 99)).toBe(0);
   });
@@ -101,11 +95,11 @@ describe('pheromone-store', () => {
     }
     const snapshot = Int32Array.from(g.data);
 
-    phSet(g, -1,  0,  999); // negative x
-    phSet(g,  0, -1,  999); // negative y
-    phSet(g,  4,  0,  999); // x >= width
-    phSet(g,  0,  4,  999); // y >= height
-    phSet(g, 10, 10,  999); // both out
+    phSet(g, -1, 0, 999); // negative x
+    phSet(g, 0, -1, 999); // negative y
+    phSet(g, 4, 0, 999); // x >= width
+    phSet(g, 0, 4, 999); // y >= height
+    phSet(g, 10, 10, 999); // both out
 
     // data must be bit-for-bit identical to the snapshot
     expect(g.data).toEqual(snapshot);
@@ -132,10 +126,10 @@ describe('pheromone-store', () => {
   // -------------------------------------------------------------------------
 
   it('PHER-02: FoodTrail and DangerTrail grids are independent per colony', () => {
-    const foodGrid   = createPheromoneGrid(16, 16);
+    const foodGrid = createPheromoneGrid(16, 16);
     const dangerGrid = createPheromoneGrid(16, 16);
 
-    const foodKey   = pheromoneGridKey(1, PheromoneType.FoodTrail,   'surface');
+    const foodKey = pheromoneGridKey(1, PheromoneType.FoodTrail, 'surface');
     const dangerKey = pheromoneGridKey(1, PheromoneType.DangerTrail, 'surface');
 
     // Keys must be distinct
@@ -145,7 +139,7 @@ describe('pheromone-store', () => {
 
     // Store in a plain map (simulating WorldState.pheromoneGrids)
     const grids: Record<string, ReturnType<typeof createPheromoneGrid>> = {
-      [foodKey]:   foodGrid,
+      [foodKey]: foodGrid,
       [dangerKey]: dangerGrid,
     };
 
@@ -174,5 +168,4 @@ describe('pheromone-store', () => {
     phSet(a, 2, 2, 55);
     expect(phGet(b, 2, 2)).toBe(0);
   });
-
 });

@@ -24,10 +24,7 @@ import { createScenario } from '../scenario.js';
 import { tick } from '../tick.js';
 import { PheromoneType } from '../enums.js';
 import { pheromoneGridKey, phGet, phSet } from './pheromone-store.js';
-import {
-  PLAYER_COLONY_ID,
-  PHEROMONE_CAP,
-} from '../constants.js';
+import { PLAYER_COLONY_ID, PHEROMONE_CAP } from '../constants.js';
 import { recordFoodPileDepletion } from '../food-system.js';
 
 describe('issue #112 — food-trail decays naturally after pile depletion', () => {
@@ -79,62 +76,66 @@ describe('issue #112 — food-trail decays naturally after pile depletion', () =
     expect(lastValue).toBe(0);
   });
 
-  it('integration: forced fast depletion → trail at vanished tile decays naturally without re-saturation', { timeout: 60000 }, () => {
-    // Steady-state version of the above: drive a real scenario, force one
-    // pile to deplete quickly (lower its charge count), then verify the trail
-    // at that tile converges to 0 over time without any code path
-    // re-saturating it. No manual ant-suppression — we let in-flight carriers
-    // complete their return cycle naturally.
-    const world = createScenario(42);
-    const trailKey = pheromoneGridKey(PLAYER_COLONY_ID, PheromoneType.FoodTrail, 'surface');
+  it(
+    'integration: forced fast depletion → trail at vanished tile decays naturally without re-saturation',
+    { timeout: 60000 },
+    () => {
+      // Steady-state version of the above: drive a real scenario, force one
+      // pile to deplete quickly (lower its charge count), then verify the trail
+      // at that tile converges to 0 over time without any code path
+      // re-saturating it. No manual ant-suppression — we let in-flight carriers
+      // complete their return cycle naturally.
+      const world = createScenario(42);
+      const trailKey = pheromoneGridKey(PLAYER_COLONY_ID, PheromoneType.FoodTrail, 'surface');
 
-    // Lower every pile's charge count to 2 so depletion happens within the
-    // first round of foraging trips rather than after thousands of ticks.
-    for (const p of world.foodPiles) {
-      p.pickupsRemaining = 2;
-      p.pickupsInitial = 2;
-    }
-
-    const DEPLETION_BUDGET_TICKS = 5000;
-    let depletionTick = -1;
-    for (let t = 0; t < DEPLETION_BUDGET_TICKS && depletionTick === -1; t++) {
-      tick(world, []);
-      if (world.recentlyDepletedFood.length > 0) {
-        depletionTick = world.tick;
+      // Lower every pile's charge count to 2 so depletion happens within the
+      // first round of foraging trips rather than after thousands of ticks.
+      for (const p of world.foodPiles) {
+        p.pickupsRemaining = 2;
+        p.pickupsInitial = 2;
       }
-    }
-    // Fail loud if depletion didn't happen — that's a regression in the
-    // depletion mechanic itself, not "ambient flakiness." Lowering each pile
-    // to 2 charges above gives us several orders of magnitude of slack;
-    // 5000 ticks is well beyond what 3 starting workers need to drain a
-    // 2-charge pile. If this fires, investigate the foraging path before
-    // bumping the budget.
-    expect(depletionTick).toBeGreaterThanOrEqual(0);
 
-    const depletedTile = world.recentlyDepletedFood[0]!;
-    const grid = world.pheromoneGrids[trailKey]!;
-    const startValue = phGet(grid, depletedTile.tileX, depletedTile.tileY);
+      const DEPLETION_BUDGET_TICKS = 5000;
+      let depletionTick = -1;
+      for (let t = 0; t < DEPLETION_BUDGET_TICKS && depletionTick === -1; t++) {
+        tick(world, []);
+        if (world.recentlyDepletedFood.length > 0) {
+          depletionTick = world.tick;
+        }
+      }
+      // Fail loud if depletion didn't happen — that's a regression in the
+      // depletion mechanic itself, not "ambient flakiness." Lowering each pile
+      // to 2 charges above gives us several orders of magnitude of slack;
+      // 5000 ticks is well beyond what 3 starting workers need to drain a
+      // 2-charge pile. If this fires, investigate the foraging path before
+      // bumping the budget.
+      expect(depletionTick).toBeGreaterThanOrEqual(0);
 
-    // Decay window — generous enough for in-flight carriers to clear plus
-    // pheromone decay to drain. 1000 ticks at 20Hz = 50 sim seconds.
-    const DECAY_WINDOW = 1000;
-    let maxValueDuringWindow = startValue;
-    for (let t = 0; t < DECAY_WINDOW; t++) {
-      tick(world, []);
-      const v = phGet(grid, depletedTile.tileX, depletedTile.tileY);
-      if (v > maxValueDuringWindow) maxValueDuringWindow = v;
-    }
+      const depletedTile = world.recentlyDepletedFood[0]!;
+      const grid = world.pheromoneGrids[trailKey]!;
+      const startValue = phGet(grid, depletedTile.tileX, depletedTile.tileY);
 
-    const finalValue = phGet(grid, depletedTile.tileX, depletedTile.tileY);
+      // Decay window — generous enough for in-flight carriers to clear plus
+      // pheromone decay to drain. 1000 ticks at 20Hz = 50 sim seconds.
+      const DECAY_WINDOW = 1000;
+      let maxValueDuringWindow = startValue;
+      for (let t = 0; t < DECAY_WINDOW; t++) {
+        tick(world, []);
+        const v = phGet(grid, depletedTile.tileX, depletedTile.tileY);
+        if (v > maxValueDuringWindow) maxValueDuringWindow = v;
+      }
 
-    // The trail at a depleted tile should not refresh to a strong value
-    // post-depletion. Allow ambient pheromone bleed from cross-pile carrier
-    // traffic; the hard invariant is no permanent re-saturation.
-    expect(finalValue).toBeLessThan(PHEROMONE_CAP);
-    // Peak value during the window should not exceed the starting value by
-    // more than a "single carrier walking through" bump. Use bit-shift
-    // (PHEROMONE_CAP >> 2 = quarter cap) to satisfy the sim/ no-float-divide
-    // ESLint rule even though this is a test file.
-    expect(maxValueDuringWindow - startValue).toBeLessThanOrEqual(PHEROMONE_CAP >> 2);
-  });
+      const finalValue = phGet(grid, depletedTile.tileX, depletedTile.tileY);
+
+      // The trail at a depleted tile should not refresh to a strong value
+      // post-depletion. Allow ambient pheromone bleed from cross-pile carrier
+      // traffic; the hard invariant is no permanent re-saturation.
+      expect(finalValue).toBeLessThan(PHEROMONE_CAP);
+      // Peak value during the window should not exceed the starting value by
+      // more than a "single carrier walking through" bump. Use bit-shift
+      // (PHEROMONE_CAP >> 2 = quarter cap) to satisfy the sim/ no-float-divide
+      // ESLint rule even though this is a test file.
+      expect(maxValueDuringWindow - startValue).toBeLessThanOrEqual(PHEROMONE_CAP >> 2);
+    },
+  );
 });

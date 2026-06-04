@@ -42,11 +42,7 @@ import {
   COLOR_PLAYER_COLONY,
   COLOR_QUEEN_OUTLINE,
 } from './sprites.js';
-import {
-  COLOR_ROCK_BASE,
-  COLOR_FLOOR_BASE,
-  COLOR_BARREN_EARTH,
-} from './terrain-atlas.js';
+import { COLOR_ROCK_BASE, COLOR_FLOOR_BASE, COLOR_BARREN_EARTH } from './terrain-atlas.js';
 import { FOOD_CHAMBER_CAPACITY } from '../sim/constants.js';
 import type { CameraState } from './camera.js';
 import { AntFacingCache } from './ant-facing-cache.js';
@@ -63,31 +59,42 @@ interface GfxCall {
 class MockGfx implements GfxLike {
   calls: GfxCall[] = [];
 
-  clear(): GfxLike { this.calls.push({ method: 'clear', args: [] }); return this; }
+  clear(): GfxLike {
+    this.calls.push({ method: 'clear', args: [] });
+    return this;
+  }
   fillStyle(color: number, alpha?: number): GfxLike {
-    this.calls.push({ method: 'fillStyle', args: [color, alpha] }); return this;
+    this.calls.push({ method: 'fillStyle', args: [color, alpha] });
+    return this;
   }
   lineStyle(width: number, color: number, alpha?: number): GfxLike {
-    this.calls.push({ method: 'lineStyle', args: [width, color, alpha] }); return this;
+    this.calls.push({ method: 'lineStyle', args: [width, color, alpha] });
+    return this;
   }
   fillRect(x: number, y: number, w: number, h: number): GfxLike {
-    this.calls.push({ method: 'fillRect', args: [x, y, w, h] }); return this;
+    this.calls.push({ method: 'fillRect', args: [x, y, w, h] });
+    return this;
   }
   fillCircle(x: number, y: number, r: number): GfxLike {
-    this.calls.push({ method: 'fillCircle', args: [x, y, r] }); return this;
+    this.calls.push({ method: 'fillCircle', args: [x, y, r] });
+    return this;
   }
   strokeCircle(x: number, y: number, r: number): GfxLike {
-    this.calls.push({ method: 'strokeCircle', args: [x, y, r] }); return this;
+    this.calls.push({ method: 'strokeCircle', args: [x, y, r] });
+    return this;
   }
   fillTriangle(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number): GfxLike {
-    this.calls.push({ method: 'fillTriangle', args: [x0, y0, x1, y1, x2, y2] }); return this;
+    this.calls.push({ method: 'fillTriangle', args: [x0, y0, x1, y1, x2, y2] });
+    return this;
   }
 
   callsOf(method: string): GfxCall[] {
-    return this.calls.filter(c => c.method === method);
+    return this.calls.filter((c) => c.method === method);
   }
 
-  reset(): void { this.calls = []; }
+  reset(): void {
+    this.calls = [];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -99,17 +106,29 @@ class MockAntSprites implements AntSpriteLayer {
   staticCalls: StaticSpriteDrawOptions[] = [];
   beginFrames = 0;
   endFrames = 0;
-  beginFrame(): void { this.beginFrames++; }
-  drawAnt(opts: AntSpriteDrawOptions): void { this.calls.push({ ...opts }); }
-  drawStatic(opts: StaticSpriteDrawOptions): void { this.staticCalls.push({ ...opts }); }
-  drawSpider(_opts: SpiderSpriteDrawOptions): void { /* no-op in tests */ }
-  endFrame(): void { this.endFrames++; }
+  beginFrame(): void {
+    this.beginFrames++;
+  }
+  drawAnt(opts: AntSpriteDrawOptions): void {
+    this.calls.push({ ...opts });
+  }
+  drawStatic(opts: StaticSpriteDrawOptions): void {
+    this.staticCalls.push({ ...opts });
+  }
+  drawSpider(_opts: SpiderSpriteDrawOptions): void {
+    /* no-op in tests */
+  }
+  endFrame(): void {
+    this.endFrames++;
+  }
   staticOfKind(kind: StaticSpriteDrawOptions['kind']): StaticSpriteDrawOptions[] {
-    return this.staticCalls.filter(c => c.kind === kind);
+    return this.staticCalls.filter((c) => c.kind === kind);
   }
   reset(): void {
-    this.calls = []; this.staticCalls = [];
-    this.beginFrames = 0; this.endFrames = 0;
+    this.calls = [];
+    this.staticCalls = [];
+    this.beginFrames = 0;
+    this.endFrames = 0;
   }
 }
 
@@ -161,7 +180,9 @@ describe('drawUndergroundTerrain', () => {
     // floor tiles.
     const cam = makeCamera(5, 0.5, 10, 1);
     drawUndergroundTerrain(gfx, world, cam);
-    const ceilingTintStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_CEILING_STRIP);
+    const ceilingTintStyles = gfx
+      .callsOf('fillStyle')
+      .filter((c) => c.args[0] === COLOR_UNDERGROUND_CEILING_STRIP);
     expect(ceilingTintStyles.length).toBeGreaterThan(0);
   });
 
@@ -172,7 +193,9 @@ describe('drawUndergroundTerrain', () => {
     const cam = makeCamera(5, 0.5, 10, 1);
     drawUndergroundTerrain(gfx, world, cam);
 
-    const ceilingTintStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_CEILING_STRIP);
+    const ceilingTintStyles = gfx
+      .callsOf('fillStyle')
+      .filter((c) => c.args[0] === COLOR_UNDERGROUND_CEILING_STRIP);
     // 9 non-entrance columns each apply the ceiling tint exactly once.
     expect(ceilingTintStyles.length).toBe(9);
   });
@@ -180,7 +203,7 @@ describe('drawUndergroundTerrain', () => {
   it('renders Solid tiles with the rock substrate (issue #40 — procedural rock palette)', () => {
     const cam = makeCamera(5, 5, 4, 4);
     drawUndergroundTerrain(gfx, world, cam);
-    const rockBaseStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_ROCK_BASE);
+    const rockBaseStyles = gfx.callsOf('fillStyle').filter((c) => c.args[0] === COLOR_ROCK_BASE);
     expect(rockBaseStyles.length).toBeGreaterThan(0);
   });
 
@@ -188,7 +211,7 @@ describe('drawUndergroundTerrain', () => {
     ugSet(world.undergroundGrids[PLAYER_COLONY_ID]!, 5, 5, UndergroundTileState.Open);
     const cam = makeCamera(5, 5, 2, 2);
     drawUndergroundTerrain(gfx, world, cam);
-    const floorStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_FLOOR_BASE);
+    const floorStyles = gfx.callsOf('fillStyle').filter((c) => c.args[0] === COLOR_FLOOR_BASE);
     expect(floorStyles.length).toBeGreaterThan(0);
   });
 
@@ -196,8 +219,10 @@ describe('drawUndergroundTerrain', () => {
     ugSet(world.undergroundGrids[PLAYER_COLONY_ID]!, 5, 5, UndergroundTileState.Marked);
     const cam = makeCamera(5.5, 5.5, 2, 2);
     drawUndergroundTerrain(gfx, world, cam);
-    const floorStyles  = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_FLOOR_BASE);
-    const markedStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_MARKED_TILE_OVERLAY);
+    const floorStyles = gfx.callsOf('fillStyle').filter((c) => c.args[0] === COLOR_FLOOR_BASE);
+    const markedStyles = gfx
+      .callsOf('fillStyle')
+      .filter((c) => c.args[0] === COLOR_MARKED_TILE_OVERLAY);
     expect(floorStyles.length).toBeGreaterThan(0);
     expect(markedStyles.length).toBeGreaterThan(0);
   });
@@ -206,8 +231,10 @@ describe('drawUndergroundTerrain', () => {
     ugSet(world.undergroundGrids[PLAYER_COLONY_ID]!, 5, 5, UndergroundTileState.BeingDug);
     const cam = makeCamera(5.5, 5.5, 2, 2);
     drawUndergroundTerrain(gfx, world, cam);
-    const floorStyles    = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_FLOOR_BASE);
-    const beingDugStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_BEING_DUG_OVERLAY);
+    const floorStyles = gfx.callsOf('fillStyle').filter((c) => c.args[0] === COLOR_FLOOR_BASE);
+    const beingDugStyles = gfx
+      .callsOf('fillStyle')
+      .filter((c) => c.args[0] === COLOR_BEING_DUG_OVERLAY);
     expect(floorStyles.length).toBeGreaterThan(0);
     expect(beingDugStyles.length).toBeGreaterThan(0);
   });
@@ -219,7 +246,9 @@ describe('drawUndergroundTerrain', () => {
     ];
     const cam = makeCamera(5, 0.5, 10, 1);
     drawUndergroundTerrain(gfx, world, cam);
-    const ceilingTintStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_UNDERGROUND_CEILING_STRIP);
+    const ceilingTintStyles = gfx
+      .callsOf('fillStyle')
+      .filter((c) => c.args[0] === COLOR_UNDERGROUND_CEILING_STRIP);
     // 10 columns - 2 entrances = 8 tinted ceiling tiles.
     expect(ceilingTintStyles.length).toBe(8);
   });
@@ -233,7 +262,7 @@ describe('drawUndergroundTerrain', () => {
     ];
     const cam = makeCamera(5, 0.5, 10, 1);
     drawUndergroundTerrain(gfx, world, cam);
-    const earthStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_BARREN_EARTH);
+    const earthStyles = gfx.callsOf('fillStyle').filter((c) => c.args[0] === COLOR_BARREN_EARTH);
     expect(earthStyles.length).toBeGreaterThan(0);
   });
 
@@ -295,13 +324,12 @@ describe('drawUndergroundEntities', () => {
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const top  = Math.floor(cam.y - cam.viewportHeight / 2);
+    const top = Math.floor(cam.y - cam.viewportHeight / 2);
     const expectedX = 5.5 * TILE_SIZE_PX - left * TILE_SIZE_PX;
-    const expectedY = 3.5 * TILE_SIZE_PX - top  * TILE_SIZE_PX;
-    const antCall = sprites.calls.find(c =>
-      c.kind === 'worker' &&
-      Math.abs(c.x - expectedX) < 0.01 &&
-      Math.abs(c.y - expectedY) < 0.01,
+    const expectedY = 3.5 * TILE_SIZE_PX - top * TILE_SIZE_PX;
+    const antCall = sprites.calls.find(
+      (c) =>
+        c.kind === 'worker' && Math.abs(c.x - expectedX) < 0.01 && Math.abs(c.y - expectedY) < 0.01,
     );
     expect(antCall).toBeDefined();
   });
@@ -321,13 +349,12 @@ describe('drawUndergroundEntities', () => {
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const top  = Math.floor(cam.y - cam.viewportHeight / 2);
+    const top = Math.floor(cam.y - cam.viewportHeight / 2);
     const expectedX = (5 - left) * TILE_SIZE_PX;
-    const expectedY = (3 - top)  * TILE_SIZE_PX;
-    const antCall = sprites.calls.find(c =>
-      c.kind === 'worker' &&
-      Math.abs(c.x - expectedX) < 0.5 &&
-      Math.abs(c.y - expectedY) < 0.5,
+    const expectedY = (3 - top) * TILE_SIZE_PX;
+    const antCall = sprites.calls.find(
+      (c) =>
+        c.kind === 'worker' && Math.abs(c.x - expectedX) < 0.5 && Math.abs(c.y - expectedY) < 0.5,
     );
     expect(antCall).toBeDefined();
   });
@@ -373,13 +400,13 @@ describe('drawUndergroundEntities', () => {
   it('draws a queen chamber as a wavy polygon with COLOR_CHAMBER_QUEEN', () => {
     const queenDims = CHAMBER_DIMENSIONS[ChamberType.Queen];
     const chamber: ChamberRecord = {
-      chamberId:   1,
+      chamberId: 1,
       chamberType: ChamberType.Queen,
-      foodStored:  0,
-      posX:        5 << FP_SHIFT,
-      posY:        10 << FP_SHIFT,
-      width:       queenDims.width,
-      height:      queenDims.height,
+      foodStored: 0,
+      posX: 5 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      width: queenDims.width,
+      height: queenDims.height,
     };
     world.colonies[PLAYER_COLONY_ID]!.chambers = [chamber];
 
@@ -387,7 +414,7 @@ describe('drawUndergroundEntities', () => {
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     // Chamber color is applied at least once before the shape is drawn.
-    const queenStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_CHAMBER_QUEEN);
+    const queenStyles = gfx.callsOf('fillStyle').filter((c) => c.args[0] === COLOR_CHAMBER_QUEEN);
     expect(queenStyles.length).toBeGreaterThanOrEqual(1);
 
     // Fill is a fan triangulation from chamber center: 32 perimeter points
@@ -398,17 +425,17 @@ describe('drawUndergroundEntities', () => {
     // chamber-color fillStyle and the outline-color fillStyle.
     const allCalls = gfx.calls;
     const chamberStyleIdx = allCalls.findIndex(
-      c => c.method === 'fillStyle' && c.args[0] === COLOR_CHAMBER_QUEEN,
+      (c) => c.method === 'fillStyle' && c.args[0] === COLOR_CHAMBER_QUEEN,
     );
     const outlineStyleIdx = allCalls.findIndex(
-      c => c.method === 'fillStyle' && c.args[0] === COLOR_QUEEN_OUTLINE,
+      (c) => c.method === 'fillStyle' && c.args[0] === COLOR_QUEEN_OUTLINE,
     );
     expect(chamberStyleIdx).toBeGreaterThan(-1);
     expect(outlineStyleIdx).toBeGreaterThan(chamberStyleIdx);
 
     const fillTrianglesInBetween = allCalls
       .slice(chamberStyleIdx + 1, outlineStyleIdx)
-      .filter(c => c.method === 'fillTriangle');
+      .filter((c) => c.method === 'fillTriangle');
     // 32 wave-driven edge samples + 4 × 5 corner-arc samples = 52 perimeter
     // points → 52 fan triangles.
     expect(fillTrianglesInBetween.length).toBeGreaterThanOrEqual(52);
@@ -417,13 +444,13 @@ describe('drawUndergroundEntities', () => {
   it('queen outline traces the wavy perimeter as line-segment triangle pairs (no axis-aligned strips)', () => {
     const queenDims = CHAMBER_DIMENSIONS[ChamberType.Queen];
     const chamber: ChamberRecord = {
-      chamberId:   2,
+      chamberId: 2,
       chamberType: ChamberType.Queen,
-      foodStored:  0,
-      posX:        5 << FP_SHIFT,
-      posY:        10 << FP_SHIFT,
-      width:       queenDims.width,
-      height:      queenDims.height,
+      foodStored: 0,
+      posX: 5 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      width: queenDims.width,
+      height: queenDims.height,
     };
     world.colonies[PLAYER_COLONY_ID]!.chambers = [chamber];
 
@@ -431,26 +458,26 @@ describe('drawUndergroundEntities', () => {
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     // Outline pass switches fillStyle to COLOR_QUEEN_OUTLINE exactly once.
-    const goldFillStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_QUEEN_OUTLINE);
+    const goldFillStyles = gfx
+      .callsOf('fillStyle')
+      .filter((c) => c.args[0] === COLOR_QUEEN_OUTLINE);
     expect(goldFillStyles.length).toBe(1);
 
     // 52 perimeter points (32 edge + 4 × 5 corner-arc) × 2 triangles per
     // segment = 104 outline triangles.
     const allCalls = gfx.calls;
     const outlineStyleIdx = allCalls.findIndex(
-      c => c.method === 'fillStyle' && c.args[0] === COLOR_QUEEN_OUTLINE,
+      (c) => c.method === 'fillStyle' && c.args[0] === COLOR_QUEEN_OUTLINE,
     );
     const trianglesAfter = allCalls
       .slice(outlineStyleIdx + 1)
-      .filter(c => c.method === 'fillTriangle');
+      .filter((c) => c.method === 'fillTriangle');
     expect(trianglesAfter.length).toBeGreaterThanOrEqual(104);
 
     // No axis-aligned-strip fillRects in the outline pass — the wave produces
     // non-axis-aligned segments, and the previous rounded-rect implementation
     // emitted exactly 4 thin fillRects here. Regression guard.
-    const rectsAfter = allCalls
-      .slice(outlineStyleIdx + 1)
-      .filter(c => c.method === 'fillRect');
+    const rectsAfter = allCalls.slice(outlineStyleIdx + 1).filter((c) => c.method === 'fillRect');
     expect(rectsAfter.length).toBe(0);
 
     // No strokeCircle either (a previous iteration tried using it for corner
@@ -463,22 +490,22 @@ describe('drawUndergroundEntities', () => {
     // over/under-lap between adjacent segment quads at alpha 0.7.
     const circlesAfter = allCalls
       .slice(outlineStyleIdx + 1)
-      .filter(c => c.method === 'fillCircle');
+      .filter((c) => c.method === 'fillCircle');
     expect(circlesAfter.length).toBe(52);
     // All round-caps are 1-px-radius (half of the 2-px outline thickness).
-    expect(circlesAfter.every(c => Number(c.args[2]) === 1)).toBe(true);
+    expect(circlesAfter.every((c) => Number(c.args[2]) === 1)).toBe(true);
   });
 
   it('non-queen chambers do NOT receive a gold outline (only queen gets the landmark trim)', () => {
     const dims = CHAMBER_DIMENSIONS[ChamberType.Nursery];
     const chamber: ChamberRecord = {
-      chamberId:   3,
+      chamberId: 3,
       chamberType: ChamberType.Nursery,
-      foodStored:  0,
-      posX:        5 << FP_SHIFT,
-      posY:        10 << FP_SHIFT,
-      width:       dims.width,
-      height:      dims.height,
+      foodStored: 0,
+      posX: 5 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      width: dims.width,
+      height: dims.height,
     };
     world.colonies[PLAYER_COLONY_ID]!.chambers = [chamber];
 
@@ -486,35 +513,39 @@ describe('drawUndergroundEntities', () => {
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     // No fillStyle call with COLOR_QUEEN_OUTLINE → no gold outline emitted.
-    const goldFillStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_QUEEN_OUTLINE);
+    const goldFillStyles = gfx
+      .callsOf('fillStyle')
+      .filter((c) => c.args[0] === COLOR_QUEEN_OUTLINE);
     expect(goldFillStyles.length).toBe(0);
   });
 
   it('chamber rendering is deterministic per chamber identity (same triangle vertices across calls)', () => {
     const queenDims = CHAMBER_DIMENSIONS[ChamberType.Queen];
     const chamber: ChamberRecord = {
-      chamberId:   42,
+      chamberId: 42,
       chamberType: ChamberType.Queen,
-      foodStored:  0,
-      posX:        5 << FP_SHIFT,
-      posY:        10 << FP_SHIFT,
-      width:       queenDims.width,
-      height:      queenDims.height,
+      foodStored: 0,
+      posX: 5 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      width: queenDims.width,
+      height: queenDims.height,
     };
     world.colonies[PLAYER_COLONY_ID]!.chambers = [chamber];
 
     const cam = makeCamera(5, 10, 20, 20);
 
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
-    const trianglesA = gfx.callsOf('fillTriangle')
-      .map(c => c.args.map(n => Number(n).toFixed(3)).join(','))
+    const trianglesA = gfx
+      .callsOf('fillTriangle')
+      .map((c) => c.args.map((n) => Number(n).toFixed(3)).join(','))
       .sort();
 
     gfx.reset();
     sprites.reset();
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
-    const trianglesB = gfx.callsOf('fillTriangle')
-      .map(c => c.args.map(n => Number(n).toFixed(3)).join(','))
+    const trianglesB = gfx
+      .callsOf('fillTriangle')
+      .map((c) => c.args.map((n) => Number(n).toFixed(3)).join(','))
       .sort();
 
     // Triangle-vertex equality across calls catches both per-frame wave
@@ -545,11 +576,11 @@ describe('drawUndergroundEntities', () => {
     // it only asserted the egg sprite was emitted, not that no ant sprite was.
     expect(sprites.calls.length).toBe(0);
     // Sprite is positioned at the tile center.
-    const left = Math.floor(cam.x - cam.viewportWidth  / 2);
-    const top  = Math.floor(cam.y - cam.viewportHeight / 2);
+    const left = Math.floor(cam.x - cam.viewportWidth / 2);
+    const top = Math.floor(cam.y - cam.viewportHeight / 2);
     const eggCall = sprites.staticOfKind('egg')[0]!;
     expect(eggCall.x).toBe((4 - left) * TILE_SIZE_PX + TILE_SIZE_PX / 2);
-    expect(eggCall.y).toBe((5 - top)  * TILE_SIZE_PX + TILE_SIZE_PX / 2);
+    expect(eggCall.y).toBe((5 - top) * TILE_SIZE_PX + TILE_SIZE_PX / 2);
   });
 
   // Issue #17 Phase 1.6 — visible carry render offset.
@@ -575,8 +606,8 @@ describe('drawUndergroundEntities', () => {
     const cam = makeCamera(5, 5, 20, 20);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
-    const left = Math.floor(cam.x - cam.viewportWidth  / 2);
-    const top  = Math.floor(cam.y - cam.viewportHeight / 2);
+    const left = Math.floor(cam.x - cam.viewportWidth / 2);
+    const top = Math.floor(cam.y - cam.viewportHeight / 2);
     const eggCall = sprites.staticOfKind('egg')[0]!;
     expect(eggCall.x).toBe((4 - left) * TILE_SIZE_PX + TILE_SIZE_PX / 2);
     // y is shifted upward (smaller value) by ~1/4 tile vs. the un-carried baseline.
@@ -591,11 +622,15 @@ describe('drawUndergroundEntities', () => {
     world.colonies[PLAYER_COLONY_ID]!.queenEntityId = 999;
     initAnt(world.ants, eggId, {
       colonyId: PLAYER_COLONY_ID,
-      posX: 4 << FP_SHIFT, posY: 5 << FP_SHIFT, zone: 1,
+      posX: 4 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      zone: 1,
     });
     initAnt(world.ants, carrierId, {
       colonyId: PLAYER_COLONY_ID,
-      posX: 4 << FP_SHIFT, posY: 5 << FP_SHIFT, zone: 1,
+      posX: 4 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      zone: 1,
     });
     // Dead carrier: alive flips to 0; carriedBy still points at it (this is
     // the dead-carrier orphan state — sim treats the brood as reclaimable,
@@ -637,22 +672,26 @@ describe('drawUndergroundEntities', () => {
   it('FoodStorage chamber with colony.foodStored=0 draws NO food-cache sprites', () => {
     const foodDims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage];
     world.colonies[PLAYER_COLONY_ID]!.foodStored = 0;
-    world.colonies[PLAYER_COLONY_ID]!.chambers = [{
-      chamberId:   9,
-      chamberType: ChamberType.FoodStorage,
-      foodStored:  0,
-      posX:        5 << FP_SHIFT,
-      posY:        5 << FP_SHIFT,
-      width:       foodDims.width,
-      height:      foodDims.height,
-    }];
+    world.colonies[PLAYER_COLONY_ID]!.chambers = [
+      {
+        chamberId: 9,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: 0,
+        posX: 5 << FP_SHIFT,
+        posY: 5 << FP_SHIFT,
+        width: foodDims.width,
+        height: foodDims.height,
+      },
+    ];
 
     const cam = makeCamera(5, 5, 20, 20);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     expect(sprites.staticOfKind('food-cache').length).toBe(0);
     // Legacy overlay path must also be gone — no amber fillRect.
-    const fillStyles = gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_CHAMBER_FOOD_STORAGE_FILL);
+    const fillStyles = gfx
+      .callsOf('fillStyle')
+      .filter((c) => c.args[0] === COLOR_CHAMBER_FOOD_STORAGE_FILL);
     expect(fillStyles.length).toBe(0);
   });
 
@@ -660,15 +699,17 @@ describe('drawUndergroundEntities', () => {
     const foodDims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage];
     const totalTiles = foodDims.width * foodDims.height;
     // Issue #15: chamber.foodStored is the authoritative per-chamber stockpile.
-    world.colonies[PLAYER_COLONY_ID]!.chambers = [{
-      chamberId:   10,
-      chamberType: ChamberType.FoodStorage,
-      foodStored:  Math.floor(FOOD_CHAMBER_CAPACITY / 2),
-      posX:        5 << FP_SHIFT,
-      posY:        5 << FP_SHIFT,
-      width:       foodDims.width,
-      height:      foodDims.height,
-    }];
+    world.colonies[PLAYER_COLONY_ID]!.chambers = [
+      {
+        chamberId: 10,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: Math.floor(FOOD_CHAMBER_CAPACITY / 2),
+        posX: 5 << FP_SHIFT,
+        posY: 5 << FP_SHIFT,
+        width: foodDims.width,
+        height: foodDims.height,
+      },
+    ];
 
     const cam = makeCamera(5, 5, 20, 20);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
@@ -683,15 +724,17 @@ describe('drawUndergroundEntities', () => {
 
   it('FoodStorage full → food-cache sprite per tile, bottom row included', () => {
     const foodDims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage];
-    world.colonies[PLAYER_COLONY_ID]!.chambers = [{
-      chamberId:   11,
-      chamberType: ChamberType.FoodStorage,
-      foodStored:  FOOD_CHAMBER_CAPACITY,
-      posX:        5 << FP_SHIFT,
-      posY:        5 << FP_SHIFT,
-      width:       foodDims.width,
-      height:      foodDims.height,
-    }];
+    world.colonies[PLAYER_COLONY_ID]!.chambers = [
+      {
+        chamberId: 11,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: FOOD_CHAMBER_CAPACITY,
+        posX: 5 << FP_SHIFT,
+        posY: 5 << FP_SHIFT,
+        width: foodDims.width,
+        height: foodDims.height,
+      },
+    ];
 
     const cam = makeCamera(5, 5, 20, 20);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
@@ -704,17 +747,19 @@ describe('drawUndergroundEntities', () => {
       expect(c.tint).toBe(COLOR_CHAMBER_FOOD_STORAGE_FILL);
     }
     // At least one cache sits on the chamber floor row (bottom tiles).
-    const top  = Math.floor(cam.y - cam.viewportHeight / 2);
-    const bottomRowY = (5 - top) * TILE_SIZE_PX + (foodDims.height - 1) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
-    const bottomCaches = caches.filter(c => Math.abs(c.y - bottomRowY) < 0.01);
+    const top = Math.floor(cam.y - cam.viewportHeight / 2);
+    const bottomRowY =
+      (5 - top) * TILE_SIZE_PX + (foodDims.height - 1) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+    const bottomCaches = caches.filter((c) => Math.abs(c.y - bottomRowY) < 0.01);
     expect(bottomCaches.length).toBe(foodDims.width);
     // And at least one sits on the top row — chamber is fully packed.
     const topRowY = (5 - top) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
-    expect(caches.some(c => Math.abs(c.y - topRowY) < 0.01)).toBe(true);
+    expect(caches.some((c) => Math.abs(c.y - topRowY) < 0.01)).toBe(true);
     // Chamber floor is still drawn as COLOR_CHAMBER_FOOD_STORAGE (unchanged
     // baseline). Just make sure the legacy amber fillRect path isn't emitted.
-    expect(gfx.callsOf('fillStyle').filter(c => c.args[0] === COLOR_CHAMBER_FOOD_STORAGE).length)
-      .toBeGreaterThanOrEqual(1);
+    expect(
+      gfx.callsOf('fillStyle').filter((c) => c.args[0] === COLOR_CHAMBER_FOOD_STORAGE).length,
+    ).toBeGreaterThanOrEqual(1);
   });
 
   it('FoodStorage fill reads chamber.foodStored directly (issue #15 chamber-authoritative)', () => {
@@ -726,15 +771,17 @@ describe('drawUndergroundEntities', () => {
     // Set the entrance pool full just to confirm it does NOT bleed into the
     // chamber visual — the bug we fixed.
     world.colonies[PLAYER_COLONY_ID]!.foodStored = 9999;
-    world.colonies[PLAYER_COLONY_ID]!.chambers = [{
-      chamberId:   12,
-      chamberType: ChamberType.FoodStorage,
-      foodStored:  FOOD_CHAMBER_CAPACITY, // full per chamber.foodStored
-      posX:        5 << FP_SHIFT,
-      posY:        5 << FP_SHIFT,
-      width:       foodDims.width,
-      height:      foodDims.height,
-    }];
+    world.colonies[PLAYER_COLONY_ID]!.chambers = [
+      {
+        chamberId: 12,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: FOOD_CHAMBER_CAPACITY, // full per chamber.foodStored
+        posX: 5 << FP_SHIFT,
+        posY: 5 << FP_SHIFT,
+        width: foodDims.width,
+        height: foodDims.height,
+      },
+    ];
 
     const cam = makeCamera(5, 5, 20, 20);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
@@ -749,12 +796,33 @@ describe('drawUndergroundEntities', () => {
     const capa = FOOD_CHAMBER_CAPACITY;
     const colony = createColonyRecord(PLAYER_COLONY_ID, 999);
     colony.chambers = [
-      { chamberId: 1, chamberType: ChamberType.FoodStorage, foodStored: capa,
-        posX: 0, posY: 0, width: foodDims.width, height: foodDims.height },
-      { chamberId: 2, chamberType: ChamberType.FoodStorage, foodStored: Math.floor(capa / 2),
-        posX: 0, posY: 0, width: foodDims.width, height: foodDims.height },
-      { chamberId: 3, chamberType: ChamberType.FoodStorage, foodStored: 0,
-        posX: 0, posY: 0, width: foodDims.width, height: foodDims.height },
+      {
+        chamberId: 1,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: capa,
+        posX: 0,
+        posY: 0,
+        width: foodDims.width,
+        height: foodDims.height,
+      },
+      {
+        chamberId: 2,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: Math.floor(capa / 2),
+        posX: 0,
+        posY: 0,
+        width: foodDims.width,
+        height: foodDims.height,
+      },
+      {
+        chamberId: 3,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: 0,
+        posX: 0,
+        posY: 0,
+        width: foodDims.width,
+        height: foodDims.height,
+      },
     ];
     // Entrance pool is irrelevant to the per-chamber readout.
     colony.foodStored = 12345;
@@ -793,7 +861,7 @@ describe('drawUndergroundEntities', () => {
     // depth 50 for every brood, which painted on top of the egg/larva sprite
     // (depth 48) emitted by the brood loop. User-visible artifact: "eggs
     // appear to have ants drawn on them".
-    const eggId   = 5;
+    const eggId = 5;
     const larvaId = 6;
     world.colonies[PLAYER_COLONY_ID]!.queenEntityId = 999; // avoid id-collision with brood
     initAnt(world.ants, eggId, {
@@ -808,7 +876,7 @@ describe('drawUndergroundEntities', () => {
       posY: 5 << FP_SHIFT,
       zone: 1,
     });
-    world.colonies[PLAYER_COLONY_ID]!.eggs   = [eggId];
+    world.colonies[PLAYER_COLONY_ID]!.eggs = [eggId];
     world.colonies[PLAYER_COLONY_ID]!.larvae = [larvaId];
 
     const cam = makeCamera(5, 5, 20, 20);
@@ -826,8 +894,8 @@ describe('drawUndergroundEntities', () => {
     // Mixed-occupancy regression: a real chamber has worker nurses tending
     // brood. The fix must skip ONLY brood from the ant loop, not workers.
     const workerId = 4;
-    const eggId    = 5;
-    const larvaId  = 6;
+    const eggId = 5;
+    const larvaId = 6;
     world.colonies[PLAYER_COLONY_ID]!.queenEntityId = 999;
     initAnt(world.ants, workerId, {
       colonyId: PLAYER_COLONY_ID,
@@ -847,7 +915,7 @@ describe('drawUndergroundEntities', () => {
       posY: 5 << FP_SHIFT,
       zone: 1,
     });
-    world.colonies[PLAYER_COLONY_ID]!.eggs   = [eggId];
+    world.colonies[PLAYER_COLONY_ID]!.eggs = [eggId];
     world.colonies[PLAYER_COLONY_ID]!.larvae = [larvaId];
 
     const cam = makeCamera(5, 5, 20, 20);
@@ -944,11 +1012,12 @@ describe('drawUndergroundEntities — facing cache smoothing', () => {
     const cam = makeCamera(5, 5, 30, 30);
     const facing = new AntFacingCache();
 
-    let x = 3, y = 3;
+    let x = 3,
+      y = 3;
     const path: Array<[number, number]> = [];
     for (let i = 0; i < 8; i++) {
       if (i % 2 === 0) x += 1;
-      else             y += 1;
+      else y += 1;
       path.push([x, y]);
     }
 
@@ -965,7 +1034,7 @@ describe('drawUndergroundEntities — facing cache smoothing', () => {
     // SVG head native on -x → southeast motion lands rotation in (-π, -π/2).
     expect(lastRotation).toBeGreaterThan(-Math.PI);
     expect(lastRotation).toBeLessThan(-Math.PI / 2);
-    const diag = -3 * Math.PI / 4;
+    const diag = (-3 * Math.PI) / 4;
     expect(Math.abs(lastRotation - diag)).toBeLessThan(Math.abs(lastRotation - -Math.PI));
     expect(Math.abs(lastRotation - diag)).toBeLessThan(Math.abs(lastRotation - -Math.PI / 2));
   });
@@ -998,7 +1067,10 @@ describe('drawUndergroundEntities — facing cache smoothing', () => {
 
     // Build up a heading for id=0.
     let prev = makeUndergroundAntWorld(3, 3);
-    for (const [nx, ny] of [[4, 3], [5, 3]] as Array<[number, number]>) {
+    for (const [nx, ny] of [
+      [4, 3],
+      [5, 3],
+    ] as Array<[number, number]>) {
       const curr = makeUndergroundAntWorld(nx, ny);
       drawUndergroundEntities(gfx, sprites, prev, curr, 1, cam, PLAYER_COLONY_ID, facing);
       prev = curr;
@@ -1057,9 +1129,9 @@ describe('drawUndergroundEntities — wrong-plane flicker guard', () => {
 
     expect(sprites.calls.length).toBe(1);
     const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const top  = Math.floor(cam.y - cam.viewportHeight / 2);
+    const top = Math.floor(cam.y - cam.viewportHeight / 2);
     const expectedCurrX = 6 * TILE_SIZE_PX - left * TILE_SIZE_PX;
-    const expectedCurrY = 7 * TILE_SIZE_PX - top  * TILE_SIZE_PX;
+    const expectedCurrY = 7 * TILE_SIZE_PX - top * TILE_SIZE_PX;
     expect(sprites.calls[0]!.x).toBeCloseTo(expectedCurrX, 5);
     expect(sprites.calls[0]!.y).toBeCloseTo(expectedCurrY, 5);
     expect(sprites.calls[0]!.rotation).toBe(0);
@@ -1087,9 +1159,9 @@ describe('drawUndergroundEntities — wrong-plane flicker guard', () => {
 
     expect(sprites.calls.length).toBe(1);
     const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const top  = Math.floor(cam.y - cam.viewportHeight / 2);
+    const top = Math.floor(cam.y - cam.viewportHeight / 2);
     const expectedCurrX = 6 * TILE_SIZE_PX - left * TILE_SIZE_PX;
-    const expectedCurrY = 7 * TILE_SIZE_PX - top  * TILE_SIZE_PX;
+    const expectedCurrY = 7 * TILE_SIZE_PX - top * TILE_SIZE_PX;
     expect(sprites.calls[0]!.x).toBeCloseTo(expectedCurrX, 5);
     expect(sprites.calls[0]!.y).toBeCloseTo(expectedCurrY, 5);
     expect(sprites.calls[0]!.rotation).toBe(0);

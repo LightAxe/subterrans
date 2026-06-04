@@ -22,12 +22,7 @@ import type { GfxLike } from './draw-surface.js';
 import type { WorldState } from '../sim/types.js';
 import { surfaceFeatureAt } from '../sim/surface-features.js';
 import { TILE_SIZE_PX } from './sprites.js';
-import {
-  spatialHash,
-  pixelNoise,
-  bayer4Threshold,
-  motifOffset,
-} from './terrain-noise.js';
+import { spatialHash, pixelNoise, bayer4Threshold, motifOffset } from './terrain-noise.js';
 import {
   type MotifSprite,
   type LargeFeatureSprite,
@@ -49,14 +44,14 @@ import {
 // tiles asking different questions never accidentally land on the same hash.
 // ---------------------------------------------------------------------------
 
-const SALT_BARREN_BASE     = 101;
-const SALT_BARREN_DITHER   = 102;
-const SALT_BARREN_PEBBLE   = 103;
-const SALT_BARREN_GRASS    = 104;
-const SALT_BARREN_TWIG     = 105;
-const SALT_BARREN_LEAF     = 106;
-const SALT_BARREN_STONE    = 107;
-const SALT_BARREN_SEED     = 108;
+const SALT_BARREN_BASE = 101;
+const SALT_BARREN_DITHER = 102;
+const SALT_BARREN_PEBBLE = 103;
+const SALT_BARREN_GRASS = 104;
+const SALT_BARREN_TWIG = 105;
+const SALT_BARREN_LEAF = 106;
+const SALT_BARREN_STONE = 107;
+const SALT_BARREN_SEED = 108;
 
 // Large multi-tile feature anchor salts and registry now live in
 // `src/sim/surface-features.ts` (issue #44 step 1) — render queries the
@@ -64,13 +59,13 @@ const SALT_BARREN_SEED     = 108;
 // the slice it returns. Salts 151..153 are reserved for boulder/bush/
 // grass-clump anchor channels in the sim registry.
 
-const SALT_SOLID_BASE      = 201;
-const SALT_SOLID_DITHER    = 202;
-const SALT_SOLID_FLECK     = 203;
-const SALT_SOLID_STRATA    = 204;
+const SALT_SOLID_BASE = 201;
+const SALT_SOLID_DITHER = 202;
+const SALT_SOLID_FLECK = 203;
+const SALT_SOLID_STRATA = 204;
 
-const SALT_OPEN_DITHER     = 302;
-const SALT_OPEN_DUST       = 303;
+const SALT_OPEN_DITHER = 302;
+const SALT_OPEN_DUST = 303;
 
 // ---------------------------------------------------------------------------
 // Surface palette — earthy / desaturated. Issue #40 reframe: barren earth is
@@ -78,24 +73,24 @@ const SALT_OPEN_DUST       = 303;
 // ---------------------------------------------------------------------------
 
 /** Default surface base color — dry tan earth. */
-export const COLOR_BARREN_EARTH       = 0x8e7752;
+export const COLOR_BARREN_EARTH = 0x8e7752;
 /** Slightly darker earth used in dithered cells for tonal variation. */
-export const COLOR_BARREN_EARTH_DARK  = 0x6f5a3c;
+export const COLOR_BARREN_EARTH_DARK = 0x6f5a3c;
 /** A lighter earth tone for mineral/sand specks. */
 export const COLOR_BARREN_EARTH_LIGHT = 0xa28a63;
 /** Yet darker patch for occasional damper soil regions. */
-export const COLOR_BARREN_EARTH_DAMP  = 0x5a4a30;
+export const COLOR_BARREN_EARTH_DAMP = 0x5a4a30;
 /** Piled-spoil mound around an entrance hole — between DAMP and BARREN_EARTH,
  *  reading as "fresh excavation dirt" rather than "wet soil patch." */
 export const COLOR_BARREN_EARTH_MOUND = 0x6d563a;
 
 /** Underground solid rock palette. */
-export const COLOR_ROCK_BASE     = 0x2d1f14;
+export const COLOR_ROCK_BASE = 0x2d1f14;
 export const COLOR_ROCK_BASE_DARK = 0x1d130a;
 export const COLOR_ROCK_BASE_LIGHT = 0x3f2c1c;
 
 /** Underground open-floor palette. */
-export const COLOR_FLOOR_BASE      = 0x110a06;
+export const COLOR_FLOOR_BASE = 0x110a06;
 export const COLOR_FLOOR_BASE_DARK = 0x080403;
 
 // ---------------------------------------------------------------------------
@@ -260,7 +255,11 @@ export function drawBarrenEarthSubstrate(
     gfx,
     COLOR_BARREN_EARTH,
     COLOR_BARREN_EARTH_DARK,
-    screenX, screenY, tileX, tileY, SALT_BARREN_DITHER,
+    screenX,
+    screenY,
+    tileX,
+    tileY,
+    SALT_BARREN_DITHER,
     /* ditherCoverage */ 50,
   );
   // Lighter sand specks — sparse hash-sampled positions, ~3-4 per tile.
@@ -296,7 +295,11 @@ export function drawBarrenEarthTile(
     drawMotif(gfx, GRASS_TUFT_SPRITE, screenX, screenY, off.x, off.y);
   } else if ((hGrass & 0xff) < 48) {
     // ~4% — dry grass tuft.
-    const off = motifOffset(hGrass >>> 8, DRY_GRASS_TUFT_SPRITE.width, DRY_GRASS_TUFT_SPRITE.height);
+    const off = motifOffset(
+      hGrass >>> 8,
+      DRY_GRASS_TUFT_SPRITE.width,
+      DRY_GRASS_TUFT_SPRITE.height,
+    );
     drawMotif(gfx, DRY_GRASS_TUFT_SPRITE, screenX, screenY, off.x, off.y);
   }
 
@@ -348,7 +351,11 @@ export function drawSolidRockTile(
     gfx,
     COLOR_ROCK_BASE,
     COLOR_ROCK_BASE_DARK,
-    screenX, screenY, tileX, tileY, SALT_SOLID_DITHER,
+    screenX,
+    screenY,
+    tileX,
+    tileY,
+    SALT_SOLID_DITHER,
     /* ditherCoverage */ 45,
   );
 
@@ -385,7 +392,11 @@ export function drawOpenFloorTile(
     gfx,
     COLOR_FLOOR_BASE,
     COLOR_FLOOR_BASE_DARK,
-    screenX, screenY, tileX, tileY, SALT_OPEN_DITHER,
+    screenX,
+    screenY,
+    tileX,
+    tileY,
+    SALT_OPEN_DITHER,
     /* ditherCoverage */ 25,
   );
 
@@ -433,4 +444,3 @@ function drawSparseSpecks(
     }
   }
 }
-

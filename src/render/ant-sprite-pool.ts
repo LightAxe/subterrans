@@ -29,14 +29,14 @@ import {
   type StaticSpriteKind,
 } from './ant-sprite-layer.js';
 
-const ANT_SPRITE_DEPTH    = 50;
+const ANT_SPRITE_DEPTH = 50;
 // Static entities sit just below ants so a queen standing in the Nursery
 // still reads on top of its own eggs. Keeps Z order predictable.
 const STATIC_SPRITE_DEPTH = 48;
 
 const STATIC_TEXTURES: Record<StaticSpriteKind, string> = {
-  egg:          EGG_TEXTURE,
-  larva:        LARVA_TEXTURE,
+  egg: EGG_TEXTURE,
+  larva: LARVA_TEXTURE,
   'food-cache': FOOD_CACHE_TEXTURE,
 };
 
@@ -102,5 +102,7 @@ export class AntSpritePool implements AntSpriteLayer {
   }
 
   /** Test hook: current pool size (live + hidden). */
-  get size(): number { return this.pool.length; }
+  get size(): number {
+    return this.pool.length;
+  }
 }

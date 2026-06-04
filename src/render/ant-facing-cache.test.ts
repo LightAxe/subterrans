@@ -37,8 +37,14 @@ describe('AntFacingCache', () => {
     // that as alternating axis-aligned deltas of constant magnitude; the cache
     // should blend them into a consistent southeast-ish heading.
     const deltas: Array<[number, number]> = [
-      [16, 0], [0, 16], [16, 0], [0, 16],
-      [16, 0], [0, 16], [16, 0], [0, 16],
+      [16, 0],
+      [0, 16],
+      [16, 0],
+      [0, 16],
+      [16, 0],
+      [0, 16],
+      [16, 0],
+      [0, 16],
     ];
     let last = 0;
     for (const [dx, dy] of deltas) {
@@ -51,10 +57,10 @@ describe('AntFacingCache', () => {
     expect(last).toBeGreaterThan(-Math.PI);
     expect(last).toBeLessThan(-Math.PI / 2);
     // And specifically closer to the diagonal (-3π/4) than to either axis.
-    const diag = -3 * Math.PI / 4;
-    const distDiag    = Math.abs(last - diag);
-    const distRight   = Math.abs(last - -Math.PI);     // axis-aligned right
-    const distDown    = Math.abs(last - -Math.PI / 2); // axis-aligned down
+    const diag = (-3 * Math.PI) / 4;
+    const distDiag = Math.abs(last - diag);
+    const distRight = Math.abs(last - -Math.PI); // axis-aligned right
+    const distDown = Math.abs(last - -Math.PI / 2); // axis-aligned down
     expect(distDiag).toBeLessThan(distRight);
     expect(distDiag).toBeLessThan(distDown);
   });

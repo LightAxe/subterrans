@@ -7,14 +7,17 @@ import type { SimCommand } from '../sim/commands.js';
 
 // Helper: create a spy tick function that records calls without advancing rngState etc.
 function makeSpyTick(): {
-  fn: (world: ReturnType<typeof createWorldState>, cmds: readonly SimCommand[]) => typeof GameOutcome[keyof typeof GameOutcome];
+  fn: (
+    world: ReturnType<typeof createWorldState>,
+    cmds: readonly SimCommand[],
+  ) => (typeof GameOutcome)[keyof typeof GameOutcome];
   calls: Array<{ cmdCount: number }>;
 } {
   const calls: Array<{ cmdCount: number }> = [];
   const fn = (
     _world: ReturnType<typeof createWorldState>,
     cmds: readonly SimCommand[],
-  ): typeof GameOutcome[keyof typeof GameOutcome] => {
+  ): (typeof GameOutcome)[keyof typeof GameOutcome] => {
     calls.push({ cmdCount: cmds.length });
     return GameOutcome.None;
   };
@@ -142,10 +145,10 @@ describe('createGameLoop — Phase 8 opts', () => {
     const spy = vi.fn();
     const loop = createGameLoop(fn, world, { onBeforeTick: spy });
 
-    loop.update(50);   // 1 tick
+    loop.update(50); // 1 tick
     expect(spy).toHaveBeenCalledTimes(1);
 
-    loop.update(150);  // 3 more ticks
+    loop.update(150); // 3 more ticks
     expect(spy).toHaveBeenCalledTimes(4);
   });
 
@@ -164,8 +167,8 @@ describe('createGameLoop — Phase 8 opts', () => {
     });
 
     loop.update(50); // 1 tick
-    expect(receivedWorld[0]).toBe(world);          // same object reference
-    expect(queueLengthAtHook[0]).toBe(1);          // command still present when hook fires
+    expect(receivedWorld[0]).toBe(world); // same object reference
+    expect(queueLengthAtHook[0]).toBe(1); // command still present when hook fires
   });
 
   it('onBeforeTick is NOT called when no tick fires', () => {
@@ -195,14 +198,14 @@ describe('createGameLoop — Phase 8 opts', () => {
     let mpt = 50;
     const loop = createGameLoop(fn, world, { getMsPerTick: () => mpt });
 
-    loop.update(50);   // mpt=50 → 1 tick
+    loop.update(50); // mpt=50 → 1 tick
     expect(calls.length).toBe(1);
 
     mpt = 100;
-    loop.update(100);  // mpt=100, acc=0+100 → 1 tick; 0ms residual
+    loop.update(100); // mpt=100, acc=0+100 → 1 tick; 0ms residual
     expect(calls.length).toBe(2);
 
-    loop.update(50);   // mpt=100, acc=0+50 → 0 ticks (50 < 100)
+    loop.update(50); // mpt=100, acc=0+50 → 0 ticks (50 < 100)
     expect(calls.length).toBe(2);
   });
 
@@ -238,7 +241,7 @@ describe('createGameLoop — Phase 8 opts', () => {
     expect(calls.length).toBe(0);
 
     paused = false;
-    loop.update(100);  // acc=0+100 → 2 ticks (100/50)
+    loop.update(100); // acc=0+100 → 2 ticks (100/50)
     expect(calls.length).toBe(2);
   });
 
@@ -261,7 +264,9 @@ describe('GameLoopOpts Phase 9 seams', () => {
     world.commandQueue.push(makeNoOp(1), makeNoOp(2));
     const drainedArrays: (readonly SimCommand[])[] = [];
     const loop = createGameLoop(makeSpyTick().fn, world, {
-      onAfterDrain: (cmds) => { drainedArrays.push(cmds); },
+      onAfterDrain: (cmds) => {
+        drainedArrays.push(cmds);
+      },
     });
     loop.update(MS_PER_TICK);
     expect(drainedArrays.length).toBe(1);
@@ -283,7 +288,7 @@ describe('GameLoopOpts Phase 9 seams', () => {
   it('onTickOutcome fires exactly once and breaks accumulator loop when tickFn returns Victory', () => {
     const world = createWorldState(42);
     let callCount = 0;
-    const tickFn = (): typeof GameOutcome[keyof typeof GameOutcome] => {
+    const tickFn = (): (typeof GameOutcome)[keyof typeof GameOutcome] => {
       callCount += 1;
       return callCount >= 2 ? GameOutcome.Victory : GameOutcome.None;
     };
@@ -302,7 +307,7 @@ describe('GameLoopOpts Phase 9 seams', () => {
     for (const outcome of [GameOutcome.Defeat, GameOutcome.MutualDestruction]) {
       const world = createWorldState(42);
       let callCount = 0;
-      const tickFn = (): typeof GameOutcome[keyof typeof GameOutcome] => {
+      const tickFn = (): (typeof GameOutcome)[keyof typeof GameOutcome] => {
         callCount += 1;
         return callCount >= 2 ? outcome : GameOutcome.None;
       };
@@ -339,7 +344,7 @@ describe('GameLoop pause()/resume() (Phase 9 Plan 06 Task 1)', () => {
     const world = createWorldState(1);
     const loop = createGameLoop(tickSpy, world);
     loop.pause();
-    loop.update(MS_PER_TICK * 5);  // would fire 5 ticks if running
+    loop.update(MS_PER_TICK * 5); // would fire 5 ticks if running
     expect(tickSpy).toHaveBeenCalledTimes(0);
     expect(loop.isPaused()).toBe(true);
   });
@@ -361,13 +366,13 @@ describe('GameLoop pause()/resume() (Phase 9 Plan 06 Task 1)', () => {
     const world = createWorldState(1);
     const loop = createGameLoop(tickSpy, world);
     // Run once to advance accumulator near a tick boundary
-    loop.update(MS_PER_TICK - 1);     // accumulator = MS_PER_TICK - 1, 0 ticks
+    loop.update(MS_PER_TICK - 1); // accumulator = MS_PER_TICK - 1, 0 ticks
     loop.pause();
-    loop.update(MS_PER_TICK * 100);   // paused — no-op; accumulator preserved internally BUT ignored on resume
-    loop.resume();                    // resume resets accumulator to 0
-    loop.update(MS_PER_TICK - 1);     // 0 ticks (accumulator rebuilds from zero)
+    loop.update(MS_PER_TICK * 100); // paused — no-op; accumulator preserved internally BUT ignored on resume
+    loop.resume(); // resume resets accumulator to 0
+    loop.update(MS_PER_TICK - 1); // 0 ticks (accumulator rebuilds from zero)
     expect(tickSpy).toHaveBeenCalledTimes(0);
-    loop.update(1);                   // crosses boundary → exactly 1 tick
+    loop.update(1); // crosses boundary → exactly 1 tick
     expect(tickSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -392,7 +397,7 @@ describe('GameLoop pause()/resume() (Phase 9 Plan 06 Task 1)', () => {
     let externallyPaused = true;
     const loop = createGameLoop(tickSpy, world, { getIsPaused: () => externallyPaused });
     loop.update(MS_PER_TICK);
-    expect(tickSpy).toHaveBeenCalledTimes(0);  // gated by getIsPaused
+    expect(tickSpy).toHaveBeenCalledTimes(0); // gated by getIsPaused
     externallyPaused = false;
     loop.update(MS_PER_TICK);
     expect(tickSpy).toHaveBeenCalledTimes(1);
@@ -418,7 +423,11 @@ describe('determinism — accumulator + tick composition', () => {
     }
 
     // Sim-state fields must be bit-identical.
-    expect({ tick: worldA.tick, rngState: worldA.rngState, nextEntityId: worldA.nextEntityId }).toEqual({
+    expect({
+      tick: worldA.tick,
+      rngState: worldA.rngState,
+      nextEntityId: worldA.nextEntityId,
+    }).toEqual({
       tick: worldB.tick,
       rngState: worldB.rngState,
       nextEntityId: worldB.nextEntityId,

@@ -12,7 +12,13 @@
 import type { WorldState, SpiderState } from './types.js';
 import { createWorldState, allocateEntityId } from './types.js';
 import { createDefaultAIStateRecord, tierIndex } from './ai-state.js';
-import { createSurfaceGrid, createUndergroundGrid, SurfaceTileState, UndergroundTileState, ugSet } from './terrain.js';
+import {
+  createSurfaceGrid,
+  createUndergroundGrid,
+  SurfaceTileState,
+  UndergroundTileState,
+  ugSet,
+} from './terrain.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import { createPheromoneGrid, pheromoneGridKey } from './pheromone/pheromone-store.js';
@@ -76,7 +82,7 @@ import {
 function generateFoodPiles(world: WorldState, rng: Rng): void {
   const colonies = [
     { x: PLAYER_START_X, y: PLAYER_START_Y },
-    { x: ENEMY_START_X,  y: ENEMY_START_Y  },
+    { x: ENEMY_START_X, y: ENEMY_START_Y },
   ];
 
   for (
@@ -177,22 +183,22 @@ function initColony(
   const queenId = allocateEntityId(world);
   initAnt(world.ants, queenId, {
     colonyId,
-    posX:     startX << FP_SHIFT,
-    posY:     startY << FP_SHIFT,
-    task:     AntTask.Idle,
+    posX: startX << FP_SHIFT,
+    posY: startY << FP_SHIFT,
+    task: AntTask.Idle,
     lifespan: WORKER_LIFESPAN_TICKS,
-    hp:       COMBAT_HP_QUEEN,
+    hp: COMBAT_HP_QUEEN,
   });
 
   const colony = createColonyRecord(colonyId, queenId);
 
   // Phase 3 PRD §2a caller-side extension contract —
   // factory intentionally does not set these three fields:
-  colony.entrances         = [];
-  colony.rallyPoint        = null;
+  colony.entrances = [];
+  colony.rallyPoint = null;
   colony.digFlowFieldDirty = false;
   colony.foodFlowFieldDirty = false;
-  colony.foodStored        = STARTING_FOOD;
+  colony.foodStored = STARTING_FOOD;
 
   // Phase 9 playability: seed each colony with one pre-excavated open entrance
   // at the colony's start column so the forage loop closes on tick 0.
@@ -210,10 +216,10 @@ function initColony(
   const underground = world.undergroundGrids[colonyId];
   if (underground) {
     colony.entrances.push({
-      entranceId:   allocateEntityId(world),
+      entranceId: allocateEntityId(world),
       surfaceTileX: startX,
       surfaceTileY: startY,
-      isOpen:       true,
+      isOpen: true,
     });
     // Pre-excavate the shaft (underground tiles at the entrance column).
     for (let sy = 0; sy < ENTRANCE_SHAFT_DEPTH; sy++) {
@@ -264,10 +270,12 @@ function _placeSpider(world: WorldState): SpiderState {
     const ty = (h2 >>> 0) % SURFACE_GRID_HEIGHT;
 
     // Check Manhattan distance from both colony starts
-    const d1 = (tx > PLAYER_START_X ? tx - PLAYER_START_X : PLAYER_START_X - tx) +
-               (ty > PLAYER_START_Y ? ty - PLAYER_START_Y : PLAYER_START_Y - ty);
-    const d2 = (tx > ENEMY_START_X  ? tx - ENEMY_START_X  : ENEMY_START_X  - tx) +
-               (ty > ENEMY_START_Y  ? ty - ENEMY_START_Y  : ENEMY_START_Y  - ty);
+    const d1 =
+      (tx > PLAYER_START_X ? tx - PLAYER_START_X : PLAYER_START_X - tx) +
+      (ty > PLAYER_START_Y ? ty - PLAYER_START_Y : PLAYER_START_Y - ty);
+    const d2 =
+      (tx > ENEMY_START_X ? tx - ENEMY_START_X : ENEMY_START_X - tx) +
+      (ty > ENEMY_START_Y ? ty - ENEMY_START_Y : ENEMY_START_Y - ty);
     if (d1 >= minDist && d2 >= minDist && Math.abs(d1 - d2) <= 20) {
       lairTileX = tx;
       lairTileY = ty;
@@ -329,7 +337,10 @@ function _placeSpider(world: WorldState): SpiderState {
  * @param difficulty - S5 player-selected difficulty tier. Stored on world.difficulty.
  *                     Defaults to 'Normal' for backward-compatible call sites.
  */
-export function createScenario(seed: number, difficulty: 'Easy' | 'Normal' | 'Hard' = 'Normal'): WorldState {
+export function createScenario(
+  seed: number,
+  difficulty: 'Easy' | 'Normal' | 'Hard' = 'Normal',
+): WorldState {
   // --- Step 1: Create base WorldState ---
   const world = createWorldState(seed);
   world.difficulty = difficulty;
@@ -360,7 +371,7 @@ export function createScenario(seed: number, difficulty: 'Easy' | 'Normal' | 'Ha
 
   // --- Steps 5-6: Colony initialization (player + enemy) ---
   initColony(world, PLAYER_COLONY_ID, PLAYER_START_X, PLAYER_START_Y, rng);
-  initColony(world, ENEMY_COLONY_ID,  ENEMY_START_X,  ENEMY_START_Y,  rng);
+  initColony(world, ENEMY_COLONY_ID, ENEMY_START_X, ENEMY_START_Y, rng);
   // S5 (V22): encode difficulty scaling into the AI colony record so lifecycle-system
   // can apply the numerator without branching on PLAYER_COLONY_ID at runtime.
   world.colonies[ENEMY_COLONY_ID]!.eggIntervalNumerator =
@@ -371,10 +382,16 @@ export function createScenario(seed: number, difficulty: 'Easy' | 'Normal' | 'Ha
   // All 8 must exist so tick-step lookups never hit a missing key.
   for (const cid of [PLAYER_COLONY_ID, ENEMY_COLONY_ID]) {
     for (const pType of [PheromoneType.FoodTrail, PheromoneType.DangerTrail]) {
-      const surfaceKey     = pheromoneGridKey(cid, pType, 'surface');
+      const surfaceKey = pheromoneGridKey(cid, pType, 'surface');
       const undergroundKey = pheromoneGridKey(cid, pType, 'underground');
-      world.pheromoneGrids[surfaceKey]     = createPheromoneGrid(SURFACE_GRID_WIDTH,     SURFACE_GRID_HEIGHT);
-      world.pheromoneGrids[undergroundKey] = createPheromoneGrid(UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT);
+      world.pheromoneGrids[surfaceKey] = createPheromoneGrid(
+        SURFACE_GRID_WIDTH,
+        SURFACE_GRID_HEIGHT,
+      );
+      world.pheromoneGrids[undergroundKey] = createPheromoneGrid(
+        UNDERGROUND_GRID_WIDTH,
+        UNDERGROUND_GRID_HEIGHT,
+      );
     }
   }
 

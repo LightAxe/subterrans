@@ -63,9 +63,10 @@ export function loadSettings(): Settings {
   // doesn't wipe valid neighbors.
   const s = env.settings as Partial<Settings>;
   return {
-    pheromoneOverlay: typeof s.pheromoneOverlay === 'boolean'
-      ? s.pheromoneOverlay
-      : DEFAULT_SETTINGS.pheromoneOverlay,
+    pheromoneOverlay:
+      typeof s.pheromoneOverlay === 'boolean'
+        ? s.pheromoneOverlay
+        : DEFAULT_SETTINGS.pheromoneOverlay,
   };
 }
 

@@ -9,7 +9,11 @@
 //   - formatCauseSubtitle(outcome, cause): string
 
 import { describe, it, expect } from 'vitest';
-import { formatOutcomeTitle, formatKillStatsSubtitle, formatCauseSubtitle } from './ui-scene-logic.js';
+import {
+  formatOutcomeTitle,
+  formatKillStatsSubtitle,
+  formatCauseSubtitle,
+} from './ui-scene-logic.js';
 import { GameOutcome } from '../sim/game-over.js';
 
 // ---------------------------------------------------------------------------
@@ -70,7 +74,9 @@ describe('formatKillStatsSubtitle', () => {
 
 describe('formatCauseSubtitle — Victory', () => {
   it('InvasionKill: your fighters killed their queen', () => {
-    expect(formatCauseSubtitle(GameOutcome.Victory, 'InvasionKill')).toBe('Your fighters killed their queen');
+    expect(formatCauseSubtitle(GameOutcome.Victory, 'InvasionKill')).toBe(
+      'Your fighters killed their queen',
+    );
   });
 
   it('Starvation: their queen starved', () => {
@@ -78,7 +84,9 @@ describe('formatCauseSubtitle — Victory', () => {
   });
 
   it('SpiderRampage: their queen killed by spider', () => {
-    expect(formatCauseSubtitle(GameOutcome.Victory, 'SpiderRampage')).toBe('Their queen was killed by a spider');
+    expect(formatCauseSubtitle(GameOutcome.Victory, 'SpiderRampage')).toBe(
+      'Their queen was killed by a spider',
+    );
   });
 
   it('null cause returns empty string', () => {
@@ -88,7 +96,9 @@ describe('formatCauseSubtitle — Victory', () => {
 
 describe('formatCauseSubtitle — Defeat', () => {
   it('InvasionKill: your queen killed by enemy', () => {
-    expect(formatCauseSubtitle(GameOutcome.Defeat, 'InvasionKill')).toBe('Your queen was killed by the enemy');
+    expect(formatCauseSubtitle(GameOutcome.Defeat, 'InvasionKill')).toBe(
+      'Your queen was killed by the enemy',
+    );
   });
 
   it('Starvation: your queen starved', () => {
@@ -96,7 +106,9 @@ describe('formatCauseSubtitle — Defeat', () => {
   });
 
   it('SpiderRampage: your queen killed by spider', () => {
-    expect(formatCauseSubtitle(GameOutcome.Defeat, 'SpiderRampage')).toBe('Your queen was killed by a spider');
+    expect(formatCauseSubtitle(GameOutcome.Defeat, 'SpiderRampage')).toBe(
+      'Your queen was killed by a spider',
+    );
   });
 
   it('null cause returns empty string', () => {
@@ -106,8 +118,12 @@ describe('formatCauseSubtitle — Defeat', () => {
 
 describe('formatCauseSubtitle — MutualDestruction', () => {
   it('always returns both-queens message regardless of cause', () => {
-    expect(formatCauseSubtitle(GameOutcome.MutualDestruction, 'MutualDestruction')).toBe('Both queens died at the same time');
-    expect(formatCauseSubtitle(GameOutcome.MutualDestruction, null)).toBe('Both queens died at the same time');
+    expect(formatCauseSubtitle(GameOutcome.MutualDestruction, 'MutualDestruction')).toBe(
+      'Both queens died at the same time',
+    );
+    expect(formatCauseSubtitle(GameOutcome.MutualDestruction, null)).toBe(
+      'Both queens died at the same time',
+    );
   });
 });
 

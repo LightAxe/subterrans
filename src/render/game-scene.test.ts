@@ -24,10 +24,7 @@ import {
   toggleView,
   UNDERGROUND_INITIAL_CAMERA_Y,
 } from './camera.js';
-import {
-  resetSurfaceInputState,
-  type SurfaceInputState,
-} from '../input/surface-input.js';
+import { resetSurfaceInputState, type SurfaceInputState } from '../input/surface-input.js';
 import {
   resetUndergroundInputState,
   type UndergroundInputState,
@@ -38,10 +35,7 @@ import {
   resetDragState,
   type DragState,
 } from '../input/camera-input.js';
-import {
-  contextMenuState,
-  hideContextMenu,
-} from './context-menu-state.js';
+import { contextMenuState, hideContextMenu } from './context-menu-state.js';
 import { PLAYER_START_X, PLAYER_START_Y } from '../sim/constants.js';
 import type { WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
@@ -52,15 +46,31 @@ import type { SimCommand } from '../sim/commands.js';
 // ---------------------------------------------------------------------------
 
 /** Build a minimal WorldState-like object with a given colonies plain object. */
-function makeWorldWithColonies(
-  coloniesObj: Record<number, object>,
-): WorldState {
+function makeWorldWithColonies(coloniesObj: Record<number, object>): WorldState {
   return {
     tick: 0,
     rngState: 0,
     nextEntityId: 0,
     commandQueue: [],
-    ants: { posX: new Int32Array(0), posY: new Int32Array(0), colonyId: new Int32Array(0), task: new Int32Array(0), subTask: new Int32Array(0), speed: new Int32Array(0), foodCarrying: new Int32Array(0), starvationTimer: new Int32Array(0), age: new Int32Array(0), alive: new Int32Array(0), lifespan: new Int32Array(0), zone: new Int32Array(0), digTileX: new Int32Array(0), digTileY: new Int32Array(0), digTicksRemaining: new Int32Array(0), targetPosX: new Int32Array(0), targetPosY: new Int32Array(0) },
+    ants: {
+      posX: new Int32Array(0),
+      posY: new Int32Array(0),
+      colonyId: new Int32Array(0),
+      task: new Int32Array(0),
+      subTask: new Int32Array(0),
+      speed: new Int32Array(0),
+      foodCarrying: new Int32Array(0),
+      starvationTimer: new Int32Array(0),
+      age: new Int32Array(0),
+      alive: new Int32Array(0),
+      lifespan: new Int32Array(0),
+      zone: new Int32Array(0),
+      digTileX: new Int32Array(0),
+      digTileY: new Int32Array(0),
+      digTicksRemaining: new Int32Array(0),
+      targetPosX: new Int32Array(0),
+      targetPosY: new Int32Array(0),
+    },
     colonies: coloniesObj as WorldState['colonies'],
     pheromoneGrids: {},
     surface: { data: new Uint8Array(0), width: 0, height: 0 },

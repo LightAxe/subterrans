@@ -33,7 +33,6 @@ import {
   FOOD_CHAMBER_CAPACITY,
 } from './constants.js';
 
-
 // QC Pass 4 AR-P0-001: Normal-only tier index. Used for pre-V22 saves; V22+ uses tierIndex(world.difficulty).
 export const NORMAL_TIER_INDEX = 1 as const;
 
@@ -177,8 +176,8 @@ function allProbeFightersDone(world: WorldState, aiState: AIStateRecord): boolea
     if (ants.alive[id] !== 1) continue; // dead = done
     // "Done" = alive AND back in AI's underground grid AND task !== Fighting.
     // In-transit (alive but on surface or not yet returned) is NOT done.
-    const onAIGrid = ants.zone[id] === Zone.Underground &&
-      ants.currentGridColonyId[id] === aiState.colonyId;
+    const onAIGrid =
+      ants.zone[id] === Zone.Underground && ants.currentGridColonyId[id] === aiState.colonyId;
     const notFighting = ants.task[id] !== AntTask.Fighting;
     if (!(onAIGrid && notFighting)) return false; // still out
   }
@@ -345,7 +344,11 @@ function _checkProbingToWarFooting(
   if (allDead || allDone || timeout) {
     // Emit ClearRallyPoint before clearing rally tile so fighters re-route home.
     if (aiState.invasionRallyTileX !== -1) {
-      const clearCmd: ClearRallyPointCommand = { type: 'ClearRallyPoint', colonyId: aiColonyId, issuedAtTick: world.tick };
+      const clearCmd: ClearRallyPointCommand = {
+        type: 'ClearRallyPoint',
+        colonyId: aiColonyId,
+        issuedAtTick: world.tick,
+      };
       world.commandQueue.push(clearCmd);
     }
     aiState.state = 'WarFooting';
@@ -382,7 +385,8 @@ function _checkInvadingToRecovery(
       // ClearRallyPoint. advanceAIState still emits ai_state_transition after this returns.
       aiState.state = 'Recovery';
       aiState.enteredTick = world.tick;
-      aiState.recoveryEndTick = world.tick + AI_RECOVERY_DURATION_TICKS[tierIndex(world.difficulty)];
+      aiState.recoveryEndTick =
+        world.tick + AI_RECOVERY_DURATION_TICKS[tierIndex(world.difficulty)];
       aiState.invasionStartTick = 0;
       aiState.invasionRallyTileX = -1;
       aiState.invasionRallyTileY = -1;
@@ -437,7 +441,11 @@ function _endInvasion(
   });
 
   // Emit ClearRallyPoint so fighters stop routing to the invasion target and go home.
-  const clearCmd: ClearRallyPointCommand = { type: 'ClearRallyPoint', colonyId: aiColonyId, issuedAtTick: world.tick };
+  const clearCmd: ClearRallyPointCommand = {
+    type: 'ClearRallyPoint',
+    colonyId: aiColonyId,
+    issuedAtTick: world.tick,
+  };
   world.commandQueue.push(clearCmd);
   aiState.state = 'Recovery';
   aiState.enteredTick = world.tick;

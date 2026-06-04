@@ -53,14 +53,11 @@ export const SURVEY_FREE_TEXT_RECT = {
 export const SURVEY_CHECKBOX_SIZE = 20;
 export const SURVEY_CHECKBOX_LABEL_GAP = 12;
 
-export const SURVEY_BROKEN_CHECKBOX_Y =
-  SURVEY_FREE_TEXT_RECT.y + SURVEY_FREE_TEXT_RECT.h + 20;
-export const SURVEY_UPLOAD_CHECKBOX_Y =
-  SURVEY_BROKEN_CHECKBOX_Y + SURVEY_CHECKBOX_SIZE + 16;
+export const SURVEY_BROKEN_CHECKBOX_Y = SURVEY_FREE_TEXT_RECT.y + SURVEY_FREE_TEXT_RECT.h + 20;
+export const SURVEY_UPLOAD_CHECKBOX_Y = SURVEY_BROKEN_CHECKBOX_Y + SURVEY_CHECKBOX_SIZE + 16;
 /** Two-line consent disclosure sits below the upload checkbox, indented to
  *  align with the label text. */
-export const SURVEY_CONSENT_TEXT_Y =
-  SURVEY_UPLOAD_CHECKBOX_Y + SURVEY_CHECKBOX_SIZE + 6;
+export const SURVEY_CONSENT_TEXT_Y = SURVEY_UPLOAD_CHECKBOX_Y + SURVEY_CHECKBOX_SIZE + 6;
 
 /** Visible checkbox square rendered by UIScene. The clickable row hit
  *  zone is wider — see {@link SURVEY_BROKEN_ROW_HIT_RECT}. */
@@ -146,8 +143,7 @@ export interface SurveyRatingButton {
  *  overlay open) — the values are constant for the fixed canvas size so
  *  caching is not warranted. */
 export function surveyRatingButtons(): SurveyRatingButton[] {
-  const totalW =
-    5 * SURVEY_RATING_BUTTON_W + 4 * SURVEY_RATING_BUTTON_GAP;
+  const totalW = 5 * SURVEY_RATING_BUTTON_W + 4 * SURVEY_RATING_BUTTON_GAP;
   const startX = (SURVEY_CANVAS_W - totalW) / 2;
   const out: SurveyRatingButton[] = [];
   for (let i = 0; i < 5; i++) {
@@ -190,10 +186,10 @@ export type SurveyHitTarget =
  *  on the label text register the same as clicks on the visible square. */
 export function surveyHitTest(px: number, py: number): SurveyHitTarget {
   if (pointInRect(px, py, SURVEY_SUBMIT_BUTTON_RECT)) return { kind: 'submit' };
-  if (pointInRect(px, py, SURVEY_SKIP_BUTTON_RECT))   return { kind: 'skip' };
+  if (pointInRect(px, py, SURVEY_SKIP_BUTTON_RECT)) return { kind: 'skip' };
   if (pointInRect(px, py, SURVEY_BROKEN_ROW_HIT_RECT)) return { kind: 'broken-checkbox' };
   if (pointInRect(px, py, SURVEY_UPLOAD_ROW_HIT_RECT)) return { kind: 'upload-checkbox' };
-  if (pointInRect(px, py, SURVEY_FREE_TEXT_RECT))     return { kind: 'free-text' };
+  if (pointInRect(px, py, SURVEY_FREE_TEXT_RECT)) return { kind: 'free-text' };
   for (const btn of surveyRatingButtons()) {
     if (pointInRect(px, py, btn.rect)) {
       return { kind: 'rating', rating: btn.rating };
@@ -204,8 +200,11 @@ export function surveyHitTest(px: number, py: number): SurveyHitTarget {
 
 /** Hit-test for the post-submit/skip confirmation screen. The confirmation
  *  screen reuses the Submit/Skip button positions for New Game and Retry. */
-export function surveyConfirmationHitTest(px: number, py: number): { kind: 'new-game' } | { kind: 'retry' } | null {
+export function surveyConfirmationHitTest(
+  px: number,
+  py: number,
+): { kind: 'new-game' } | { kind: 'retry' } | null {
   if (pointInRect(px, py, SURVEY_SUBMIT_BUTTON_RECT)) return { kind: 'new-game' };
-  if (pointInRect(px, py, SURVEY_SKIP_BUTTON_RECT))   return { kind: 'retry' };
+  if (pointInRect(px, py, SURVEY_SKIP_BUTTON_RECT)) return { kind: 'retry' };
   return null;
 }

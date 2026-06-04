@@ -14,16 +14,18 @@
 import type { WorldState } from '../sim/types.js';
 import type { SimCommand } from '../sim/commands.js';
 import {
-  AntTask, ChamberType, DiggingSubState, FightingSubState,
-  ForagingSubState, NursingSubState, PheromoneType,
+  AntTask,
+  ChamberType,
+  DiggingSubState,
+  FightingSubState,
+  ForagingSubState,
+  NursingSubState,
+  PheromoneType,
 } from '../sim/enums.js';
 import { Zone } from '../sim/terrain.js';
 import { FP_SHIFT, FP_ONE } from '../sim/fixed.js';
 import { pheromoneGridKey, phGet } from '../sim/pheromone/pheromone-store.js';
-import {
-  serializeWorldState,
-  type SerializedWorldState,
-} from './save.js';
+import { serializeWorldState, type SerializedWorldState } from './save.js';
 
 export const DEBUG_SNAPSHOT_VERSION = 2 as const;
 
@@ -45,15 +47,21 @@ const DEBUG_SCENT_RADIUS = 15;
  *  `guide` re-exports this object verbatim, so the legend can never drift from
  *  the code. Explanations mirror the precedence chain in inferMovementSource. */
 export const MOVEMENT_SOURCES = {
-  priority: 'Surface SearchingFood with targetPosX/Y set → chase that priority pile (beats scent/pheromone/wander).',
+  priority:
+    'Surface SearchingFood with targetPosX/Y set → chase that priority pile (beats scent/pheromone/wander).',
   scent: `Surface SearchingFood, no priority, with a food pile within ${DEBUG_SCENT_RADIUS} tiles (Manhattan) → head toward scent.`,
   pheromone: `Surface SearchingFood, no priority/scent, with FoodTrail pheromone within ${DEBUG_TRACE_PHEROMONE_RADIUS} tiles → follow the trail.`,
-  wander: 'Surface SearchingFood with no priority/scent/pheromone signal → chooseExcursionDirection (random walk).',
-  entrance: 'CarryingFood/ReturningToNest heading to a surface entrance (also the fallback when no FoodStorage chamber exists).',
-  'food-storage': 'Underground CarryingFood routing to a FoodStorage chamber via the chamber flow-field.',
-  'underground-exit': 'Underground SearchingFood routing back to the surface via the entrance flow-field (surface scent/pheromone probes do not apply underground).',
+  wander:
+    'Surface SearchingFood with no priority/scent/pheromone signal → chooseExcursionDirection (random walk).',
+  entrance:
+    'CarryingFood/ReturningToNest heading to a surface entrance (also the fallback when no FoodStorage chamber exists).',
+  'food-storage':
+    'Underground CarryingFood routing to a FoodStorage chamber via the chamber flow-field.',
+  'underground-exit':
+    'Underground SearchingFood routing back to the surface via the entrance flow-field (surface scent/pheromone probes do not apply underground).',
   'nursing-chamber': 'Nursing ant routing to the Queen/Nursery chamber via the chamber flow-field.',
-  rally: 'Fighting ant moving to colony.rallyPoint (surface) or, underground, to an entrance as transit toward the rally.',
+  rally:
+    'Fighting ant moving to colony.rallyPoint (surface) or, underground, to an entrance as transit toward the rally.',
   task: 'Non-forager fallback (Digging/Idle), or a Nursing ant whose colony has no Queen/Nursery chamber.',
   dead: 'Slot is not alive (ants.alive !== 1).',
 } as const;
@@ -76,19 +84,19 @@ export interface AntTraceRow {
   zone: number;
   tileX: number;
   tileY: number;
-  posX: number;   // fixed-point (FP_ONE = 256)
+  posX: number; // fixed-point (FP_ONE = 256)
   posY: number;
   foodCarrying: number;
   searchWave: number;
   searchHeadingX: number;
   searchHeadingY: number;
   searchHeadingTicks: number;
-  searchPrevTileX: number;  // -1 sentinel when no prev tile
+  searchPrevTileX: number; // -1 sentinel when no prev tile
   searchPrevTileY: number;
-  targetPosX: number;       // -1 sentinel when no priority target
+  targetPosX: number; // -1 sentinel when no priority target
   targetPosY: number;
-  nearestEntranceDist: number;    // Manhattan tiles; -1 if colony has none
-  nearbyPheromoneRadius: number;  // echoes DEBUG_TRACE_PHEROMONE_RADIUS
+  nearestEntranceDist: number; // Manhattan tiles; -1 if colony has none
+  nearbyPheromoneRadius: number; // echoes DEBUG_TRACE_PHEROMONE_RADIUS
   /** Flat row-major diamond (length = (2r+1)^2). Cells outside the Manhattan
    *  diamond are emitted as 0 so the array is a simple square for consumers
    *  to pretty-print. Centre cell (the ant's tile) is the middle entry. */
@@ -324,20 +332,21 @@ export function buildAntTrace(world: WorldState, antId: number): AntTraceRow {
     tileY,
     posX,
     posY,
-    foodCarrying:       a.foodCarrying[antId]!,
-    searchWave:         a.searchWave[antId]!,
-    searchHeadingX:     a.searchHeadingX[antId]!,
-    searchHeadingY:     a.searchHeadingY[antId]!,
+    foodCarrying: a.foodCarrying[antId]!,
+    searchWave: a.searchWave[antId]!,
+    searchHeadingX: a.searchHeadingX[antId]!,
+    searchHeadingY: a.searchHeadingY[antId]!,
     searchHeadingTicks: a.searchHeadingTicks[antId]!,
-    searchPrevTileX:    a.searchPrevTileX[antId]!,
-    searchPrevTileY:    a.searchPrevTileY[antId]!,
-    targetPosX:         a.targetPosX[antId]!,
-    targetPosY:         a.targetPosY[antId]!,
-    nearestEntranceDist:   nearestEntranceDist(world, colonyId, tileX, tileY),
+    searchPrevTileX: a.searchPrevTileX[antId]!,
+    searchPrevTileY: a.searchPrevTileY[antId]!,
+    targetPosX: a.targetPosX[antId]!,
+    targetPosY: a.targetPosY[antId]!,
+    nearestEntranceDist: nearestEntranceDist(world, colonyId, tileX, tileY),
     nearbyPheromoneRadius: DEBUG_TRACE_PHEROMONE_RADIUS,
-    nearbyPheromone:       a.zone[antId] === Zone.Surface
-      ? samplePheromoneDiamond(world, colonyId, tileX, tileY, DEBUG_TRACE_PHEROMONE_RADIUS)
-      : new Array<number>((2 * DEBUG_TRACE_PHEROMONE_RADIUS + 1) ** 2).fill(0),
+    nearbyPheromone:
+      a.zone[antId] === Zone.Surface
+        ? samplePheromoneDiamond(world, colonyId, tileX, tileY, DEBUG_TRACE_PHEROMONE_RADIUS)
+        : new Array<number>((2 * DEBUG_TRACE_PHEROMONE_RADIUS + 1) ** 2).fill(0),
     movementSource: inferMovementSource(world, antId),
   };
 }

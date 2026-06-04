@@ -39,12 +39,12 @@ describe('CHAMBER_DIMENSIONS', () => {
 describe('PendingChamber interface', () => {
   it('can be constructed with anchorTileX and anchorTileY (no chamberId field)', () => {
     const pending: PendingChamber = {
-      colonyId:    1,
+      colonyId: 1,
       chamberType: ChamberType.Queen,
       anchorTileX: 60,
       anchorTileY: 30,
-      width:       CHAMBER_DIMENSIONS[ChamberType.Queen].width,
-      height:      CHAMBER_DIMENSIONS[ChamberType.Queen].height,
+      width: CHAMBER_DIMENSIONS[ChamberType.Queen].width,
+      height: CHAMBER_DIMENSIONS[ChamberType.Queen].height,
     };
     expect(pending.anchorTileX).toBe(60);
     expect(pending.anchorTileY).toBe(30);
@@ -54,12 +54,12 @@ describe('PendingChamber interface', () => {
 
   it('PendingChamber has no chamberId field', () => {
     const pending: PendingChamber = {
-      colonyId:    1,
+      colonyId: 1,
       chamberType: ChamberType.Nursery,
       anchorTileX: 50,
       anchorTileY: 20,
-      width:       4,
-      height:      3,
+      width: 4,
+      height: 3,
     };
     // chamberId must not exist on the object
     expect('chamberId' in pending).toBe(false);
@@ -67,12 +67,12 @@ describe('PendingChamber interface', () => {
 
   it('can construct PendingChamber for FoodStorage', () => {
     const pending: PendingChamber = {
-      colonyId:    2,
+      colonyId: 2,
       chamberType: ChamberType.FoodStorage,
       anchorTileX: 100,
       anchorTileY: 50,
-      width:       CHAMBER_DIMENSIONS[ChamberType.FoodStorage].width,
-      height:      CHAMBER_DIMENSIONS[ChamberType.FoodStorage].height,
+      width: CHAMBER_DIMENSIONS[ChamberType.FoodStorage].width,
+      height: CHAMBER_DIMENSIONS[ChamberType.FoodStorage].height,
     };
     expect(pending.chamberType).toBe(ChamberType.FoodStorage);
     expect(pending.width).toBe(4);

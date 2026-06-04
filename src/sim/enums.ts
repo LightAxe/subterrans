@@ -15,13 +15,13 @@
 // ---------------------------------------------------------------------------
 
 export const AntTask = {
-  Idle:     0,
+  Idle: 0,
   Foraging: 1,
-  Digging:  2,
+  Digging: 2,
   Fighting: 3,
-  Nursing:  4,
+  Nursing: 4,
 } as const;
-export type AntTask = typeof AntTask[keyof typeof AntTask];
+export type AntTask = (typeof AntTask)[keyof typeof AntTask];
 
 // ---------------------------------------------------------------------------
 // ForagingSubState — sub-state for ants with AntTask.Foraging (PRD §1 lines 62-66)
@@ -29,11 +29,11 @@ export type AntTask = typeof AntTask[keyof typeof AntTask];
 // ---------------------------------------------------------------------------
 
 export const ForagingSubState = {
-  SearchingFood:   0,
-  CarryingFood:    1,
+  SearchingFood: 0,
+  CarryingFood: 1,
   ReturningToNest: 2, // PRD §1 line 66 — required; downstream plans reference this member
 } as const;
-export type ForagingSubState = typeof ForagingSubState[keyof typeof ForagingSubState];
+export type ForagingSubState = (typeof ForagingSubState)[keyof typeof ForagingSubState];
 
 // ---------------------------------------------------------------------------
 // DiggingSubState — sub-state for ants with AntTask.Digging (PRD §1 lines 72-74)
@@ -41,9 +41,9 @@ export type ForagingSubState = typeof ForagingSubState[keyof typeof ForagingSubS
 
 export const DiggingSubState = {
   MovingToTile: 0,
-  Excavating:   1,
+  Excavating: 1,
 } as const;
-export type DiggingSubState = typeof DiggingSubState[keyof typeof DiggingSubState];
+export type DiggingSubState = (typeof DiggingSubState)[keyof typeof DiggingSubState];
 
 // ---------------------------------------------------------------------------
 // NursingSubState — sub-state for ants with AntTask.Nursing (PRD §1 lines 82-84)
@@ -52,10 +52,10 @@ export type DiggingSubState = typeof DiggingSubState[keyof typeof DiggingSubStat
 
 export const NursingSubState = {
   MovingToBrood: 0,
-  Feeding:       1, // PRD §1 line 84 — member is `Feeding`, NOT `FeedingBrood`
-  Attending:     2, // S4 V21+ — nurse dwells at Nursery after deposit; accelerates adjacent larvae
+  Feeding: 1, // PRD §1 line 84 — member is `Feeding`, NOT `FeedingBrood`
+  Attending: 2, // S4 V21+ — nurse dwells at Nursery after deposit; accelerates adjacent larvae
 } as const;
-export type NursingSubState = typeof NursingSubState[keyof typeof NursingSubState];
+export type NursingSubState = (typeof NursingSubState)[keyof typeof NursingSubState];
 
 // ---------------------------------------------------------------------------
 // FightingSubState — sub-state for ants with AntTask.Fighting (PRD §1 lines 91-93)
@@ -64,27 +64,27 @@ export type NursingSubState = typeof NursingSubState[keyof typeof NursingSubStat
 
 export const FightingSubState = {
   MovingToRally: 0, // PRD §1 line 92
-  Engaging:      1, // PRD §1 line 93 — both members canonical at Phase 2 scope
+  Engaging: 1, // PRD §1 line 93 — both members canonical at Phase 2 scope
 } as const;
-export type FightingSubState = typeof FightingSubState[keyof typeof FightingSubState];
+export type FightingSubState = (typeof FightingSubState)[keyof typeof FightingSubState];
 
 // ---------------------------------------------------------------------------
 // ChamberType — underground chamber classification (PRD §2)
 // ---------------------------------------------------------------------------
 
 export const ChamberType = {
-  Queen:       0,
-  Nursery:     1,
+  Queen: 0,
+  Nursery: 1,
   FoodStorage: 2,
 } as const;
-export type ChamberType = typeof ChamberType[keyof typeof ChamberType];
+export type ChamberType = (typeof ChamberType)[keyof typeof ChamberType];
 
 // ---------------------------------------------------------------------------
 // PheromoneType — pheromone trail classification (PRD §5a)
 // ---------------------------------------------------------------------------
 
 export const PheromoneType = {
-  FoodTrail:   0,
+  FoodTrail: 0,
   DangerTrail: 1,
 } as const;
-export type PheromoneType = typeof PheromoneType[keyof typeof PheromoneType];
+export type PheromoneType = (typeof PheromoneType)[keyof typeof PheromoneType];

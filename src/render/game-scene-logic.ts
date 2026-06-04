@@ -17,7 +17,7 @@ export const GamePhase = {
   GameOver: 2,
   SavePrompt: 3,
 } as const;
-export type GamePhase = typeof GamePhase[keyof typeof GamePhase];
+export type GamePhase = (typeof GamePhase)[keyof typeof GamePhase];
 
 // ---------------------------------------------------------------------------
 // decideBootMode — pure boot-path decider

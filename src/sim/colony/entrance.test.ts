@@ -8,10 +8,10 @@ import type { NestEntrance, NestEntranceId } from './entrance.js';
 describe('NestEntrance interface', () => {
   it('can be constructed with isOpen=false (default closed state)', () => {
     const entrance: NestEntrance = {
-      entranceId:   1 as NestEntranceId,
+      entranceId: 1 as NestEntranceId,
       surfaceTileX: 64,
       surfaceTileY: 64,
-      isOpen:       false,
+      isOpen: false,
     };
     expect(entrance.entranceId).toBe(1);
     expect(entrance.surfaceTileX).toBe(64);
@@ -21,10 +21,10 @@ describe('NestEntrance interface', () => {
 
   it('isOpen can be set to true', () => {
     const entrance: NestEntrance = {
-      entranceId:   2 as NestEntranceId,
+      entranceId: 2 as NestEntranceId,
       surfaceTileX: 24,
       surfaceTileY: 24,
-      isOpen:       true,
+      isOpen: true,
     };
     expect(entrance.isOpen).toBe(true);
   });

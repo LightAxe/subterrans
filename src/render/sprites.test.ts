@@ -124,8 +124,9 @@ describe('HUD zone layout', () => {
 
   it('UNDERGROUND_COLONY_TOGGLE sits directly above VIEW_TOGGLE without overlap (issue #14)', () => {
     expect(HUD.UNDERGROUND_COLONY_TOGGLE.x).toBe(HUD.VIEW_TOGGLE.x);
-    expect(HUD.UNDERGROUND_COLONY_TOGGLE.y + HUD.UNDERGROUND_COLONY_TOGGLE.h)
-      .toBeLessThanOrEqual(HUD.VIEW_TOGGLE.y);
+    expect(HUD.UNDERGROUND_COLONY_TOGGLE.y + HUD.UNDERGROUND_COLONY_TOGGLE.h).toBeLessThanOrEqual(
+      HUD.VIEW_TOGGLE.y,
+    );
   });
 });
 

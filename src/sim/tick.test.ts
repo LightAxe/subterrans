@@ -21,8 +21,20 @@ import { GameOutcome } from './game-over.js';
 import type { SimCommand } from './commands.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
-import { createPheromoneGrid, phGet, phSet, pheromoneGridKey } from './pheromone/pheromone-store.js';
-import { AntTask, ForagingSubState, PheromoneType, FightingSubState, ChamberType, NursingSubState } from './enums.js';
+import {
+  createPheromoneGrid,
+  phGet,
+  phSet,
+  pheromoneGridKey,
+} from './pheromone/pheromone-store.js';
+import {
+  AntTask,
+  ForagingSubState,
+  PheromoneType,
+  FightingSubState,
+  ChamberType,
+  NursingSubState,
+} from './enums.js';
 import type { WorldState } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import {
@@ -38,7 +50,11 @@ import { FP_SHIFT } from './fixed.js';
 // Test harness helpers
 // ---------------------------------------------------------------------------
 
-function makeWorldWithColony(seed: number = 42): { world: WorldState; colonyId: ColonyId; queenId: number } {
+function makeWorldWithColony(seed: number = 42): {
+  world: WorldState;
+  colonyId: ColonyId;
+  queenId: number;
+} {
   const world = createWorldState(seed);
   const queenId = allocateEntityId(world);
   initAnt(world.ants, queenId, {
@@ -81,17 +97,22 @@ describe('tick() basic (Phase 5 preserved)', () => {
 
   it('does not allocate via .slice() or the array iterator — PRD line 708 "No allocation" contract', () => {
     const world = createWorldState(42);
-    const cmds: SimCommand[] = Array.from({ length: 100 }, (_, i): SimCommand => ({
-      type: 'NoOp',
-      issuedAtTick: i,
-    }));
+    const cmds: SimCommand[] = Array.from(
+      { length: 100 },
+      (_, i): SimCommand => ({
+        type: 'NoOp',
+        issuedAtTick: i,
+      }),
+    );
     const guarded = new Proxy(cmds, {
       get(target, prop, receiver) {
         if (prop === 'slice') {
           throw new Error('PRD-708 violation: tick() must not call .slice()');
         }
         if (prop === Symbol.iterator) {
-          throw new Error('PRD-708 violation: tick() must not use for...of on commands (allocates iterator object)');
+          throw new Error(
+            'PRD-708 violation: tick() must not use for...of on commands (allocates iterator object)',
+          );
         }
         return Reflect.get(target, prop, receiver);
       },
@@ -259,7 +280,12 @@ describe('Step 1: command processing', () => {
     const forageBefore = colony.targetRatio.forage;
     const cmds: SimCommand[] = [
       { type: 'SetBehaviorRatio', colonyId, ratio: 5, issuedAtTick: 0 } as unknown as SimCommand,
-      { type: 'SetBehaviorRatio', colonyId, ratio: 'bogus', issuedAtTick: 0 } as unknown as SimCommand,
+      {
+        type: 'SetBehaviorRatio',
+        colonyId,
+        ratio: 'bogus',
+        issuedAtTick: 0,
+      } as unknown as SimCommand,
     ];
     expect(() => tick(world, cmds)).not.toThrow();
     expect(world.colonies[colonyId]!.targetRatio.forage).toBe(forageBefore);
@@ -451,10 +477,10 @@ describe('Step ordering observable proofs', () => {
     }
 
     // Set allocation: want 5 foragers; need = 5 - 3 = 2 (the 2 idle ants)
-    colony.computedAllocation.nurse  = 0;
+    colony.computedAllocation.nurse = 0;
     colony.computedAllocation.forage = 5;
-    colony.computedAllocation.dig    = 0;
-    colony.computedAllocation.fight  = 0;
+    colony.computedAllocation.dig = 0;
+    colony.computedAllocation.fight = 0;
 
     tick(world, []);
 
@@ -489,11 +515,11 @@ describe('Step ordering observable proofs', () => {
 
     // Player has shifted the behavior triangle strongly toward forage.
     colony.computedAllocation.forage = 1;
-    colony.computedAllocation.dig    = 0;
-    colony.computedAllocation.fight  = 0;
-    colony.computedAllocation.nurse  = 0;
+    colony.computedAllocation.dig = 0;
+    colony.computedAllocation.fight = 0;
+    colony.computedAllocation.nurse = 0;
     colony.targetRatio.forage = 10;
-    colony.targetRatio.fight  = 0;
+    colony.targetRatio.fight = 0;
 
     // Tick 1: step 10a sees Digging (not Idle) → skipped. Step 10b tickDigExecution
     // runs and releases the sticky digger to AntTask.Idle.
@@ -519,12 +545,14 @@ describe('Step ordering observable proofs', () => {
     colony.workerCount = 1;
     colony.eggCount = 0;
     colony.larvaeCount = 0;
-    colony.entrances = [{
-      entranceId:   allocateEntityId(world),
-      surfaceTileX: 0,
-      surfaceTileY: 0,
-      isOpen:       true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: allocateEntityId(world),
+        surfaceTileX: 0,
+        surfaceTileY: 0,
+        isOpen: true,
+      },
+    ];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
 
@@ -543,13 +571,13 @@ describe('Step ordering observable proofs', () => {
     // to the over-foraged state so step 9b fires on tick 1 (normally
     // taskCensus is written by the prior tick's step 10a — we skip that
     // ramp-up to keep the test focused on the leash gate).
-    colony.computedAllocation.nurse  = 0;
+    colony.computedAllocation.nurse = 0;
     colony.computedAllocation.forage = 0;
-    colony.computedAllocation.dig    = 0;
-    colony.computedAllocation.fight  = 1;
+    colony.computedAllocation.dig = 0;
+    colony.computedAllocation.fight = 1;
     colony.taskCensus.forage = 1;
     colony.targetRatio.forage = 0;
-    colony.targetRatio.fight  = 10;
+    colony.targetRatio.fight = 10;
 
     tick(world, []);
 
@@ -568,12 +596,14 @@ describe('Step ordering observable proofs', () => {
     colony.workerCount = 1;
     colony.eggCount = 0;
     colony.larvaeCount = 0;
-    colony.entrances = [{
-      entranceId:   allocateEntityId(world),
-      surfaceTileX: 0,
-      surfaceTileY: 0,
-      isOpen:       true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: allocateEntityId(world),
+        surfaceTileX: 0,
+        surfaceTileY: 0,
+        isOpen: true,
+      },
+    ];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
 
@@ -588,10 +618,10 @@ describe('Step ordering observable proofs', () => {
     world.ants.foodCarrying[wid] = 256;
     colony.workers.push(wid);
 
-    colony.computedAllocation.nurse  = 0;
+    colony.computedAllocation.nurse = 0;
     colony.computedAllocation.forage = 0;
-    colony.computedAllocation.dig    = 0;
-    colony.computedAllocation.fight  = 1;
+    colony.computedAllocation.dig = 0;
+    colony.computedAllocation.fight = 1;
 
     tick(world, []);
 
@@ -619,12 +649,12 @@ describe('Step ordering observable proofs', () => {
     colony.workers.push(wid);
 
     // Set allocation: want 1 digger, 0 foragers (over-allocated forager)
-    colony.computedAllocation.nurse  = 0;
+    colony.computedAllocation.nurse = 0;
     colony.computedAllocation.forage = 0;
-    colony.computedAllocation.dig    = 1;
-    colony.computedAllocation.fight  = 0;
+    colony.computedAllocation.dig = 1;
+    colony.computedAllocation.fight = 0;
     colony.targetRatio.forage = 0;
-    colony.targetRatio.fight  = 0;
+    colony.targetRatio.fight = 0;
     // Phase 10 (CTRL-06): dig is auto-assigned via need.dig from Marked tiles, not
     // via targetRatio. Step 10a's auto-dig override will set computedAllocation.dig=0
     // here (no Marked tiles, no active digger). The pre-set dig=1 above is noise but
@@ -661,7 +691,14 @@ describe('Step ordering observable proofs', () => {
       // a ratio that doesn't depend on dig-work the test never set up.
       for (let e = 0; e < 9; e++) {
         const eid = allocateEntityId(w);
-        initAnt(w.ants, eid, { colonyId: 1, posX: 100, posY: 100, task: AntTask.Idle, subTask: 0, speed: 0 });
+        initAnt(w.ants, eid, {
+          colonyId: 1,
+          posX: 100,
+          posY: 100,
+          task: AntTask.Idle,
+          subTask: 0,
+          speed: 0,
+        });
         w.ants.age[eid] = 0; // age 0 — will not hatch in 1 tick
         colony.eggs.push(eid);
         colony.eggCount += 1;
@@ -672,11 +709,13 @@ describe('Step ordering observable proofs', () => {
       // Without this chamber, allocateWorkers returns nurse=0 and the
       // {3,4,0,3} expectation below would collapse to {0,6,0,4}.
       colony.chambers.push({
-        chamberId:   9001,
+        chamberId: 9001,
         chamberType: ChamberType.Nursery,
-        foodStored:  0,
-        posX:        0, posY: 0,
-        width:       2, height: 2,
+        foodStored: 0,
+        posX: 0,
+        posY: 0,
+        width: 2,
+        height: 2,
       });
 
       for (let i = 0; i < 10; i++) {
@@ -687,7 +726,7 @@ describe('Step ordering observable proofs', () => {
 
       // targetRatio that produces {nurse:3, forage:4, dig:0, fight:3} via allocateWorkers(10, 9, ratio).
       colony.targetRatio.forage = 4;
-      colony.targetRatio.fight  = 3;
+      colony.targetRatio.fight = 3;
 
       tick(w, []);
 
@@ -742,7 +781,7 @@ describe('Step ordering observable proofs', () => {
       // of which hold for any valid allocation that step 10a produces.
       colony.computedAllocation = { nurse: 1, forage: 2, dig: 2, fight: 1 };
       colony.targetRatio.forage = 10;
-      colony.targetRatio.fight  = 3;
+      colony.targetRatio.fight = 3;
 
       tick(w, []);
 
@@ -780,7 +819,14 @@ describe('09 reproduction-gate memo — starvation-shape regression', () => {
     // 30 larvae (already-hatched brood).
     for (let e = 0; e < 30; e++) {
       const lid = allocateEntityId(w);
-      initAnt(w.ants, lid, { colonyId: 1, posX: 100, posY: 100, task: AntTask.Idle, subTask: 0, speed: 0 });
+      initAnt(w.ants, lid, {
+        colonyId: 1,
+        posX: 100,
+        posY: 100,
+        task: AntTask.Idle,
+        subTask: 0,
+        speed: 0,
+      });
       colony.larvae.push(lid);
       colony.larvaeCount += 1;
     }
@@ -794,12 +840,12 @@ describe('09 reproduction-gate memo — starvation-shape regression', () => {
     // Forage-favored triangle; no chambers at all (intentional — this is the
     // pre-excavation colony state from the memo).
     colony.targetRatio.forage = 10;
-    colony.targetRatio.fight  = 0;
+    colony.targetRatio.fight = 0;
 
     tick(w, []);
 
     const alloc = colony.computedAllocation;
-    const tc    = colony.taskCensus;
+    const tc = colony.taskCensus;
 
     // Memo gate: no Nursery → nurse=0 even with 30 brood.
     expect(alloc.nurse).toBe(0);
@@ -819,7 +865,14 @@ describe('09 reproduction-gate memo — starvation-shape regression', () => {
 
     for (let e = 0; e < 30; e++) {
       const lid = allocateEntityId(w);
-      initAnt(w.ants, lid, { colonyId: 1, posX: 100, posY: 100, task: AntTask.Idle, subTask: 0, speed: 0 });
+      initAnt(w.ants, lid, {
+        colonyId: 1,
+        posX: 100,
+        posY: 100,
+        task: AntTask.Idle,
+        subTask: 0,
+        speed: 0,
+      });
       colony.larvae.push(lid);
       colony.larvaeCount += 1;
     }
@@ -831,7 +884,7 @@ describe('09 reproduction-gate memo — starvation-shape regression', () => {
     }
 
     colony.targetRatio.forage = 3;
-    colony.targetRatio.fight  = 0;
+    colony.targetRatio.fight = 0;
     // Phase 10 (CTRL-06): dig is auto-assigned via Marked-tile presence; this fixture
     // has no Marked tiles so computedAllocation.dig stays 0 and the assertions below
     // (nurse=0 under no-Nursery memo gate; brood inert; sum=workerCount) hold.
@@ -858,7 +911,14 @@ describe('09 reproduction-gate memo — starvation-shape regression', () => {
 
     for (let e = 0; e < 30; e++) {
       const lid = allocateEntityId(w);
-      initAnt(w.ants, lid, { colonyId: 1, posX: 100, posY: 100, task: AntTask.Idle, subTask: 0, speed: 0 });
+      initAnt(w.ants, lid, {
+        colonyId: 1,
+        posX: 100,
+        posY: 100,
+        task: AntTask.Idle,
+        subTask: 0,
+        speed: 0,
+      });
       colony.larvae.push(lid);
       colony.larvaeCount += 1;
     }
@@ -870,14 +930,17 @@ describe('09 reproduction-gate memo — starvation-shape regression', () => {
     }
 
     colony.chambers.push({
-      chamberId:   9000,
+      chamberId: 9000,
       chamberType: ChamberType.Nursery,
-      foodStored:  0,
-      posX: 0, posY: 0, width: 2, height: 2,
+      foodStored: 0,
+      posX: 0,
+      posY: 0,
+      width: 2,
+      height: 2,
     });
 
     colony.targetRatio.forage = 10;
-    colony.targetRatio.fight  = 0;
+    colony.targetRatio.fight = 0;
 
     tick(w, []);
 
@@ -971,14 +1034,27 @@ describe('Tick writeback and return', () => {
   it('Test 17: rngState advances after tick with movement-consuming forager', () => {
     const world = createWorldState(42);
     const queenId = allocateEntityId(world);
-    initAnt(world.ants, queenId, { colonyId: 1, posX: 1024, posY: 1024, task: AntTask.Idle, subTask: 0, speed: 0 });
+    initAnt(world.ants, queenId, {
+      colonyId: 1,
+      posX: 1024,
+      posY: 1024,
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: 0,
+    });
     world.colonies[1] = createColonyRecord(1, queenId);
     world.colonies[1]!.foodStored = 10000;
 
     // Add a forager so movement uses rng
     for (let i = 0; i < 3; i++) {
       const wid = allocateEntityId(world);
-      initAnt(world.ants, wid, { colonyId: 1, posX: 1024, posY: 1024, task: AntTask.Foraging, subTask: ForagingSubState.SearchingFood });
+      initAnt(world.ants, wid, {
+        colonyId: 1,
+        posX: 1024,
+        posY: 1024,
+        task: AntTask.Foraging,
+        subTask: ForagingSubState.SearchingFood,
+      });
       world.colonies[1]!.workers.push(wid);
       world.colonies[1]!.workerCount += 1;
     }
@@ -1023,25 +1099,51 @@ describe('Multi-colony iteration', () => {
 
     // Colony 1
     const q1 = allocateEntityId(world);
-    initAnt(world.ants, q1, { colonyId: 1, posX: 100, posY: 100, task: AntTask.Idle, subTask: 0, speed: 0 });
+    initAnt(world.ants, q1, {
+      colonyId: 1,
+      posX: 100,
+      posY: 100,
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: 0,
+    });
     world.colonies[1] = createColonyRecord(1, q1);
     world.colonies[1]!.foodStored = 5000;
 
     // Colony 2
     const q2 = allocateEntityId(world);
-    initAnt(world.ants, q2, { colonyId: 2, posX: 200, posY: 200, task: AntTask.Idle, subTask: 0, speed: 0 });
+    initAnt(world.ants, q2, {
+      colonyId: 2,
+      posX: 200,
+      posY: 200,
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: 0,
+    });
     world.colonies[2] = createColonyRecord(2, q2);
     world.colonies[2]!.foodStored = 5000;
 
     // Add 2 workers to each colony
     for (let i = 0; i < 2; i++) {
       const w1 = allocateEntityId(world);
-      initAnt(world.ants, w1, { colonyId: 1, posX: 100, posY: 100, task: AntTask.Foraging, subTask: ForagingSubState.SearchingFood });
+      initAnt(world.ants, w1, {
+        colonyId: 1,
+        posX: 100,
+        posY: 100,
+        task: AntTask.Foraging,
+        subTask: ForagingSubState.SearchingFood,
+      });
       world.colonies[1]!.workers.push(w1);
       world.colonies[1]!.workerCount += 1;
 
       const w2 = allocateEntityId(world);
-      initAnt(world.ants, w2, { colonyId: 2, posX: 200, posY: 200, task: AntTask.Foraging, subTask: ForagingSubState.SearchingFood });
+      initAnt(world.ants, w2, {
+        colonyId: 2,
+        posX: 200,
+        posY: 200,
+        task: AntTask.Foraging,
+        subTask: ForagingSubState.SearchingFood,
+      });
       world.colonies[2]!.workers.push(w2);
       world.colonies[2]!.workerCount += 1;
     }
@@ -1146,21 +1248,36 @@ describe('Phase 7: MarkDigTile command processing', () => {
   function makeWorldWithUnderground(seed = 42) {
     const world = createWorldState(seed);
     const queenId = allocateEntityId(world);
-    initAnt(world.ants, queenId, { colonyId: 1, posX: 1024, posY: 1024, task: AntTask.Idle, subTask: 0 });
+    initAnt(world.ants, queenId, {
+      colonyId: 1,
+      posX: 1024,
+      posY: 1024,
+      task: AntTask.Idle,
+      subTask: 0,
+    });
     world.colonies[1] = createColonyRecord(1, queenId);
     world.colonies[1]!.foodStored = 10000;
     // Phase 3 extension fields required by tick.ts
     world.colonies[1]!.entrances = [];
     world.colonies[1]!.rallyPoint = null;
     world.colonies[1]!.digFlowFieldDirty = false;
-    world.undergroundGrids[1] = createUndergroundGrid(UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT);
+    world.undergroundGrids[1] = createUndergroundGrid(
+      UNDERGROUND_GRID_WIDTH,
+      UNDERGROUND_GRID_HEIGHT,
+    );
     return { world, colonyId: 1 as ColonyId };
   }
 
   // Test P7-1: MarkDigTile on Solid tile → becomes Marked, digFlowFieldDirty set true
   it('Test P7-1: MarkDigTile on Solid tile → Marked + digFlowFieldDirty=true', () => {
     const { world, colonyId } = makeWorldWithUnderground();
-    const cmd: SimCommand = { type: 'MarkDigTile', colonyId, tileX: 10, tileY: 10, issuedAtTick: 0 };
+    const cmd: SimCommand = {
+      type: 'MarkDigTile',
+      colonyId,
+      tileX: 10,
+      tileY: 10,
+      issuedAtTick: 0,
+    };
     tick(world, [cmd]);
     const underground = world.undergroundGrids[colonyId]!;
     expect(ugGet(underground, 10, 10)).toBe(UndergroundTileState.Marked);
@@ -1173,7 +1290,13 @@ describe('Phase 7: MarkDigTile command processing', () => {
     const underground = world.undergroundGrids[colonyId]!;
     // Pre-set tile to Open
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
-    const cmd: SimCommand = { type: 'MarkDigTile', colonyId, tileX: 10, tileY: 10, issuedAtTick: 0 };
+    const cmd: SimCommand = {
+      type: 'MarkDigTile',
+      colonyId,
+      tileX: 10,
+      tileY: 10,
+      issuedAtTick: 0,
+    };
     tick(world, [cmd]);
     // Should remain Open (not changed to Marked)
     expect(ugGet(underground, 10, 10)).toBe(UndergroundTileState.Open);
@@ -1199,8 +1322,11 @@ describe('Phase 7: MarkDigTile command processing', () => {
   it('Issue #30: DesignateEntrance still marks the row-0 shaft tile at the entrance column', () => {
     const { world, colonyId } = makeWorldWithUnderground();
     const cmd: SimCommand = {
-      type: 'DesignateEntrance', colonyId,
-      surfaceTileX: 40, surfaceTileY: 64, issuedAtTick: 0,
+      type: 'DesignateEntrance',
+      colonyId,
+      surfaceTileX: 40,
+      surfaceTileY: 64,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     const underground = world.undergroundGrids[colonyId]!;
@@ -1212,7 +1338,13 @@ describe('Phase 7: MarkDigTile command processing', () => {
   // Test P7-3: MarkDigTile out of bounds → silent drop
   it('Test P7-3: MarkDigTile out of bounds → silent drop, no throw', () => {
     const { world, colonyId } = makeWorldWithUnderground();
-    const cmd: SimCommand = { type: 'MarkDigTile', colonyId, tileX: -1, tileY: 10, issuedAtTick: 0 };
+    const cmd: SimCommand = {
+      type: 'MarkDigTile',
+      colonyId,
+      tileX: -1,
+      tileY: 10,
+      issuedAtTick: 0,
+    };
     expect(() => tick(world, [cmd])).not.toThrow();
     expect(world.tick).toBe(1);
   });
@@ -1223,7 +1355,13 @@ describe('Phase 7: MarkDigTile command processing', () => {
     const underground = world.undergroundGrids[colonyId]!;
     // Pre-mark the tile
     underground.data[5 * UNDERGROUND_GRID_WIDTH + 5] = UndergroundTileState.Marked;
-    const cmd: SimCommand = { type: 'CancelDigMark', colonyId, tileX: 5, tileY: 5, issuedAtTick: 0 };
+    const cmd: SimCommand = {
+      type: 'CancelDigMark',
+      colonyId,
+      tileX: 5,
+      tileY: 5,
+      issuedAtTick: 0,
+    };
     tick(world, [cmd]);
     expect(ugGet(underground, 5, 5)).toBe(UndergroundTileState.Solid);
   });
@@ -1233,7 +1371,13 @@ describe('Phase 7: MarkDigTile command processing', () => {
     const { world, colonyId } = makeWorldWithUnderground();
     const underground = world.undergroundGrids[colonyId]!;
     underground.data[7 * UNDERGROUND_GRID_WIDTH + 7] = UndergroundTileState.BeingDug;
-    const cmd: SimCommand = { type: 'CancelDigMark', colonyId, tileX: 7, tileY: 7, issuedAtTick: 0 };
+    const cmd: SimCommand = {
+      type: 'CancelDigMark',
+      colonyId,
+      tileX: 7,
+      tileY: 7,
+      issuedAtTick: 0,
+    };
     tick(world, [cmd]);
     // Should remain BeingDug
     expect(ugGet(underground, 7, 7)).toBe(UndergroundTileState.BeingDug);
@@ -1242,11 +1386,23 @@ describe('Phase 7: MarkDigTile command processing', () => {
   // Test P7-6: MarkFoodPile sets colony.priorityFoodPileId and re-clicking the same pile clears it
   it('Test P7-6: MarkFoodPile sets colony priority on first click, clears on second (toggle off)', () => {
     const { world, colonyId } = makeWorldWithUnderground();
-    const pile: FoodPile = { foodPileId: 0, tileX: 20, tileY: 30 , pickupsRemaining: 50, pickupsInitial: 50};
+    const pile: FoodPile = {
+      foodPileId: 0,
+      tileX: 20,
+      tileY: 30,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    };
     world.foodPiles.push(pile);
     const colony = world.colonies[colonyId]!;
     expect(colony.priorityFoodPileId).toBeNull();
-    const cmd: SimCommand = { type: 'MarkFoodPile', colonyId, tileX: 20, tileY: 30, issuedAtTick: 0 };
+    const cmd: SimCommand = {
+      type: 'MarkFoodPile',
+      colonyId,
+      tileX: 20,
+      tileY: 30,
+      issuedAtTick: 0,
+    };
     tick(world, [cmd]);
     expect(colony.priorityFoodPileId).toBe(0);
     // Toggle-off on re-click of the same pile.
@@ -1257,8 +1413,20 @@ describe('Phase 7: MarkDigTile command processing', () => {
   // Phase 9: selecting a different pile is an EXCLUSIVE redirect, not an additive mark.
   it('MarkFoodPile redirect: clicking a second pile replaces the first (exclusive per colony)', () => {
     const { world, colonyId } = makeWorldWithUnderground();
-    world.foodPiles.push({ foodPileId: 0, tileX: 20, tileY: 30 , pickupsRemaining: 50, pickupsInitial: 50});
-    world.foodPiles.push({ foodPileId: 1, tileX: 40, tileY: 50 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({
+      foodPileId: 0,
+      tileX: 20,
+      tileY: 30,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
+    world.foodPiles.push({
+      foodPileId: 1,
+      tileX: 40,
+      tileY: 50,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
     const colony = world.colonies[colonyId]!;
     tick(world, [{ type: 'MarkFoodPile', colonyId, tileX: 20, tileY: 30, issuedAtTick: 0 }]);
     expect(colony.priorityFoodPileId).toBe(0);
@@ -1276,8 +1444,16 @@ describe('Phase 7: MarkDigTile command processing', () => {
       colonyId: colonyB,
       priorityFoodPileId: null,
     };
-    world.foodPiles.push({ foodPileId: 7, tileX: 10, tileY: 10 , pickupsRemaining: 50, pickupsInitial: 50});
-    tick(world, [{ type: 'MarkFoodPile', colonyId: colonyA, tileX: 10, tileY: 10, issuedAtTick: 0 }]);
+    world.foodPiles.push({
+      foodPileId: 7,
+      tileX: 10,
+      tileY: 10,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
+    tick(world, [
+      { type: 'MarkFoodPile', colonyId: colonyA, tileX: 10, tileY: 10, issuedAtTick: 0 },
+    ]);
     expect(world.colonies[colonyA]!.priorityFoodPileId).toBe(7);
     expect(world.colonies[colonyB]!.priorityFoodPileId).toBeNull();
   });
@@ -1313,9 +1489,8 @@ describe('Phase 7: MarkDigTile command processing', () => {
     // Footprint tiles (were Solid before) are now Marked. Anchor tile was Open → stays Open.
     for (let dy = 0; dy < dims.height; dy++) {
       for (let dx = 0; dx < dims.width; dx++) {
-        const expected = (dx === 0 && dy === 0)
-          ? UndergroundTileState.Open
-          : UndergroundTileState.Marked;
+        const expected =
+          dx === 0 && dy === 0 ? UndergroundTileState.Open : UndergroundTileState.Marked;
         expect(ugGet(underground, 10 + dx, 10 + dy)).toBe(expected);
       }
     }
@@ -1335,8 +1510,12 @@ describe('Phase 7: MarkDigTile command processing', () => {
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
     // Place first chamber
     const cmd1: SimCommand = {
-      type: 'PlaceChamber', colonyId,
-      chamberType: ChamberType.Nursery, anchorTileX: 10, anchorTileY: 10, issuedAtTick: 0,
+      type: 'PlaceChamber',
+      colonyId,
+      chamberType: ChamberType.Nursery,
+      anchorTileX: 10,
+      anchorTileY: 10,
+      issuedAtTick: 0,
     };
     tick(world, [cmd1]);
     expect(world.pendingChambers[`${colonyId}:10:10`]).toBeDefined();
@@ -1344,8 +1523,12 @@ describe('Phase 7: MarkDigTile command processing', () => {
     // Open anchor (12,10) too so only the overlap rule (not the tunnel-end rule) rejects cmd2.
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 12] = UndergroundTileState.Open;
     const cmd2: SimCommand = {
-      type: 'PlaceChamber', colonyId,
-      chamberType: ChamberType.FoodStorage, anchorTileX: 12, anchorTileY: 10, issuedAtTick: 1,
+      type: 'PlaceChamber',
+      colonyId,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: 12,
+      anchorTileY: 10,
+      issuedAtTick: 1,
     };
     tick(world, [cmd2]);
     // Overlapping chamber should NOT have been created
@@ -1359,9 +1542,12 @@ describe('Phase 7: MarkDigTile command processing', () => {
     const underground = world.undergroundGrids[colonyId]!;
     underground.data[0 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
     const cmd: SimCommand = {
-      type: 'PlaceChamber', colonyId,
+      type: 'PlaceChamber',
+      colonyId,
       chamberType: ChamberType.Queen,
-      anchorTileX: 10, anchorTileY: 0, issuedAtTick: 0,
+      anchorTileX: 10,
+      anchorTileY: 0,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     expect(world.pendingChambers[`${colonyId}:10:0`]).toBeUndefined();
@@ -1372,7 +1558,8 @@ describe('Phase 7: MarkDigTile command processing', () => {
     const { world, colonyId } = makeWorldWithUnderground();
     const dims = CHAMBER_DIMENSIONS[ChamberType.Queen]!;
     const cmd: SimCommand = {
-      type: 'PlaceChamber', colonyId,
+      type: 'PlaceChamber',
+      colonyId,
       chamberType: ChamberType.Queen,
       // anchorTileX so that anchor + width > UNDERGROUND_GRID_WIDTH
       anchorTileX: UNDERGROUND_GRID_WIDTH - dims.width + 1,
@@ -1388,8 +1575,11 @@ describe('Phase 7: MarkDigTile command processing', () => {
   it('Test P7-10: DesignateEntrance creates NestEntrance; shaft tiles marked', () => {
     const { world, colonyId } = makeWorldWithUnderground();
     const cmd: SimCommand = {
-      type: 'DesignateEntrance', colonyId,
-      surfaceTileX: 50, surfaceTileY: 0, issuedAtTick: 0,
+      type: 'DesignateEntrance',
+      colonyId,
+      surfaceTileX: 50,
+      surfaceTileY: 0,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     const colony = world.colonies[colonyId]!;
@@ -1416,8 +1606,11 @@ describe('Phase 7: MarkDigTile command processing', () => {
       });
     }
     const cmd: SimCommand = {
-      type: 'DesignateEntrance', colonyId,
-      surfaceTileX: 99, surfaceTileY: 0, issuedAtTick: 0,
+      type: 'DesignateEntrance',
+      colonyId,
+      surfaceTileX: 99,
+      surfaceTileY: 0,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     // Should remain at MAX_ENTRANCES_PER_COLONY
@@ -1428,8 +1621,11 @@ describe('Phase 7: MarkDigTile command processing', () => {
   it('Test P7-12: DesignateEntrance rejected if duplicate surfaceTileX/Y', () => {
     const { world, colonyId } = makeWorldWithUnderground();
     const cmd: SimCommand = {
-      type: 'DesignateEntrance', colonyId,
-      surfaceTileX: 50, surfaceTileY: 0, issuedAtTick: 0,
+      type: 'DesignateEntrance',
+      colonyId,
+      surfaceTileX: 50,
+      surfaceTileY: 0,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     const colony = world.colonies[colonyId]!;
@@ -1447,18 +1643,14 @@ describe('Phase 7: MarkDigTile command processing', () => {
   // the build UI.
   // ---------------------------------------------------------------------------
 
-  function setupPendingQueenAt(
-    world: WorldState,
-    colonyId: ColonyId,
-    ax: number,
-    ay: number,
-  ) {
+  function setupPendingQueenAt(world: WorldState, colonyId: ColonyId, ax: number, ay: number) {
     const dims = CHAMBER_DIMENSIONS[ChamberType.Queen]!;
     const underground = world.undergroundGrids[colonyId]!;
     // Mark the entire footprint, mirroring what PlaceChamber does.
     for (let dy = 0; dy < dims.height; dy++) {
       for (let dx = 0; dx < dims.width; dx++) {
-        underground.data[(ay + dy) * UNDERGROUND_GRID_WIDTH + (ax + dx)] = UndergroundTileState.Marked;
+        underground.data[(ay + dy) * UNDERGROUND_GRID_WIDTH + (ax + dx)] =
+          UndergroundTileState.Marked;
       }
     }
     const pcKey = `${colonyId}:${ax}:${ay}`;
@@ -1479,7 +1671,11 @@ describe('Phase 7: MarkDigTile command processing', () => {
     const { pcKey } = setupPendingQueenAt(world, colonyId, 20, 5);
     // Cancel a footprint tile (not the anchor, to avoid coincidental key matches).
     const cmd: SimCommand = {
-      type: 'CancelDigMark', colonyId, tileX: 21, tileY: 5, issuedAtTick: 0,
+      type: 'CancelDigMark',
+      colonyId,
+      tileX: 21,
+      tileY: 5,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     expect(world.pendingChambers[pcKey]).toBeUndefined();
@@ -1507,7 +1703,9 @@ describe('Phase 7: MarkDigTile command processing', () => {
     // An Open tile (e.g. anchor that was tunnel-end) must stay Open.
     underground.data[8 * UNDERGROUND_GRID_WIDTH + 30] = UndergroundTileState.Open;
     // Cancel a Marked footprint tile that is NOT the BeingDug or Open one.
-    tick(world, [{ type: 'CancelDigMark', colonyId, tileX: 30 + (dims.width - 1), tileY: 8, issuedAtTick: 0 }]);
+    tick(world, [
+      { type: 'CancelDigMark', colonyId, tileX: 30 + (dims.width - 1), tileY: 8, issuedAtTick: 0 },
+    ]);
     expect(world.pendingChambers[pcKey]).toBeUndefined();
     // BeingDug and Open survive.
     expect(ugGet(underground, 31, 8)).toBe(UndergroundTileState.BeingDug);
@@ -1532,17 +1730,23 @@ describe('Phase 7: MarkDigTile command processing', () => {
     const { pcKey: keyA } = setupPendingQueenAt(world, colonyId, 20, 5);
     // Place a second pending chamber far from A.
     const dims = CHAMBER_DIMENSIONS[ChamberType.Nursery]!;
-    const bx = 60, by = 20;
+    const bx = 60,
+      by = 20;
     const underground = world.undergroundGrids[colonyId]!;
     for (let dy = 0; dy < dims.height; dy++) {
       for (let dx = 0; dx < dims.width; dx++) {
-        underground.data[(by + dy) * UNDERGROUND_GRID_WIDTH + (bx + dx)] = UndergroundTileState.Marked;
+        underground.data[(by + dy) * UNDERGROUND_GRID_WIDTH + (bx + dx)] =
+          UndergroundTileState.Marked;
       }
     }
     const keyB = `${colonyId}:${bx}:${by}`;
     world.pendingChambers[keyB] = {
-      colonyId, chamberType: ChamberType.Nursery,
-      anchorTileX: bx, anchorTileY: by, width: dims.width, height: dims.height,
+      colonyId,
+      chamberType: ChamberType.Nursery,
+      anchorTileX: bx,
+      anchorTileY: by,
+      width: dims.width,
+      height: dims.height,
     };
     // Cancel inside A's footprint.
     tick(world, [{ type: 'CancelDigMark', colonyId, tileX: 21, tileY: 5, issuedAtTick: 0 }]);
@@ -1561,19 +1765,30 @@ describe('Phase 7: MarkDigTile command processing', () => {
     // Set up a sibling colony B with its own underground grid.
     const colonyB = (colonyA + 1) as ColonyId;
     const queenB = allocateEntityId(world);
-    initAnt(world.ants, queenB, { colonyId: colonyB, posX: 4096, posY: 4096, task: AntTask.Idle, subTask: 0 });
+    initAnt(world.ants, queenB, {
+      colonyId: colonyB,
+      posX: 4096,
+      posY: 4096,
+      task: AntTask.Idle,
+      subTask: 0,
+    });
     world.colonies[colonyB] = createColonyRecord(colonyB, queenB);
     world.colonies[colonyB]!.entrances = [];
     world.colonies[colonyB]!.rallyPoint = null;
     world.colonies[colonyB]!.digFlowFieldDirty = false;
-    world.undergroundGrids[colonyB] = createUndergroundGrid(UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT);
+    world.undergroundGrids[colonyB] = createUndergroundGrid(
+      UNDERGROUND_GRID_WIDTH,
+      UNDERGROUND_GRID_HEIGHT,
+    );
     // Same anchor coords, but different colonies — the v9 loop must not
     // collapse them into one match.
     const { pcKey: keyA } = setupPendingQueenAt(world, colonyA, 20, 5);
     const { pcKey: keyB } = setupPendingQueenAt(world, colonyB, 20, 5);
     expect(keyA).not.toBe(keyB);
     // Cancel in colony A only.
-    tick(world, [{ type: 'CancelDigMark', colonyId: colonyA, tileX: 20, tileY: 5, issuedAtTick: 0 }]);
+    tick(world, [
+      { type: 'CancelDigMark', colonyId: colonyA, tileX: 20, tileY: 5, issuedAtTick: 0 },
+    ]);
     expect(world.pendingChambers[keyA]).toBeUndefined();
     expect(world.pendingChambers[keyB]).toBeDefined();
   });
@@ -1617,17 +1832,23 @@ describe('Phase 7: MarkDigTile command processing', () => {
     // shared mechanism that orphans the entry.
     const { world, colonyId } = makeWorldWithUnderground();
     const dims = CHAMBER_DIMENSIONS[ChamberType.Nursery]!;
-    const ax = 30, ay = 8;
+    const ax = 30,
+      ay = 8;
     const underground = world.undergroundGrids[colonyId]!;
     for (let dy = 0; dy < dims.height; dy++) {
       for (let dx = 0; dx < dims.width; dx++) {
-        underground.data[(ay + dy) * UNDERGROUND_GRID_WIDTH + (ax + dx)] = UndergroundTileState.Marked;
+        underground.data[(ay + dy) * UNDERGROUND_GRID_WIDTH + (ax + dx)] =
+          UndergroundTileState.Marked;
       }
     }
     const pcKey = `${colonyId}:${ax}:${ay}`;
     world.pendingChambers[pcKey] = {
-      colonyId, chamberType: ChamberType.Nursery,
-      anchorTileX: ax, anchorTileY: ay, width: dims.width, height: dims.height,
+      colonyId,
+      chamberType: ChamberType.Nursery,
+      anchorTileX: ax,
+      anchorTileY: ay,
+      width: dims.width,
+      height: dims.height,
     };
     tick(world, [{ type: 'CancelDigMark', colonyId, tileX: ax + 1, tileY: ay, issuedAtTick: 0 }]);
     expect(world.pendingChambers[pcKey]).toBeUndefined();
@@ -1642,13 +1863,22 @@ describe('Phase 7: Step ordering tests', () => {
   function makeWorldWithUnderground(seed = 42) {
     const world = createWorldState(seed);
     const queenId = allocateEntityId(world);
-    initAnt(world.ants, queenId, { colonyId: 1, posX: 1024, posY: 1024, task: AntTask.Idle, subTask: 0 });
+    initAnt(world.ants, queenId, {
+      colonyId: 1,
+      posX: 1024,
+      posY: 1024,
+      task: AntTask.Idle,
+      subTask: 0,
+    });
     world.colonies[1] = createColonyRecord(1, queenId);
     world.colonies[1]!.foodStored = 10000;
     world.colonies[1]!.entrances = [];
     world.colonies[1]!.rallyPoint = null;
     world.colonies[1]!.digFlowFieldDirty = false;
-    world.undergroundGrids[1] = createUndergroundGrid(UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT);
+    world.undergroundGrids[1] = createUndergroundGrid(
+      UNDERGROUND_GRID_WIDTH,
+      UNDERGROUND_GRID_HEIGHT,
+    );
     return { world, colonyId: 1 as ColonyId };
   }
 
@@ -1656,7 +1886,13 @@ describe('Phase 7: Step ordering tests', () => {
   it('Test P7-13: flow-field recomputed in step 9 before step 10 tick dig execution', () => {
     const { world, colonyId } = makeWorldWithUnderground();
     // Mark a tile in step 1 of next tick — dirty flag will be set; step 9 recomputes
-    const cmd: SimCommand = { type: 'MarkDigTile', colonyId, tileX: 10, tileY: 10, issuedAtTick: 0 };
+    const cmd: SimCommand = {
+      type: 'MarkDigTile',
+      colonyId,
+      tileX: 10,
+      tileY: 10,
+      issuedAtTick: 0,
+    };
     tick(world, [cmd]);
     // After tick: digFlowFieldDirty was reset by step 9 recompute
     expect(world.colonies[colonyId]!.digFlowFieldDirty).toBe(false);
@@ -1667,11 +1903,13 @@ describe('Phase 7: Step ordering tests', () => {
     const { world, colonyId } = makeWorldWithUnderground();
     const underground = world.undergroundGrids[colonyId]!;
     const dims = CHAMBER_DIMENSIONS[ChamberType.Nursery]!;
-    const ax = 20, ay = 5;
+    const ax = 20,
+      ay = 5;
     // Pre-open all footprint tiles
     for (let dy = 0; dy < dims.height; dy++) {
       for (let dx = 0; dx < dims.width; dx++) {
-        underground.data[(ay + dy) * UNDERGROUND_GRID_WIDTH + (ax + dx)] = UndergroundTileState.Open;
+        underground.data[(ay + dy) * UNDERGROUND_GRID_WIDTH + (ax + dx)] =
+          UndergroundTileState.Open;
       }
     }
     // Create PendingChamber directly (bypassing PlaceChamber command)
@@ -1699,7 +1937,8 @@ describe('Phase 7: Step ordering tests', () => {
 
     // 1×1 chamber so only one tile needs to be Open
     const dims = { width: 1, height: 1 };
-    const ax = 15, ay = 3;
+    const ax = 15,
+      ay = 3;
 
     // Set the single footprint tile to BeingDug
     underground.data[ay * UNDERGROUND_GRID_WIDTH + ax] = UndergroundTileState.BeingDug;
@@ -1861,7 +2100,7 @@ describe('Phase 7: Integration tests', () => {
     // ticks see `computeDigDemand` return 0 because an ant is already
     // Digging, so the strict 1-cap holds across the 10-tick window.
     colony.targetRatio.forage = 10;
-    colony.targetRatio.fight  = 0;
+    colony.targetRatio.fight = 0;
 
     // Mark a tile adjacent to the pre-excavated player shaft (entrance column=24,
     // shaft Open at underground rows 0..ENTRANCE_SHAFT_DEPTH-1). Picking a
@@ -1887,7 +2126,9 @@ describe('Phase 7: Integration tests', () => {
     // Workers should have been reassigned to Digging via step 10a
     expect(world.tick).toBe(10);
     // At least some workers are Digging (after allocation kicked in)
-    const diggingCount = colony.workers.filter(wid => world.ants.task[wid] === AntTask.Digging).length;
+    const diggingCount = colony.workers.filter(
+      (wid) => world.ants.task[wid] === AntTask.Digging,
+    ).length;
     expect(diggingCount).toBeGreaterThan(0);
   });
 
@@ -1915,7 +2156,7 @@ describe('Phase 7: Integration tests', () => {
     tick(world, []);
 
     // checkEntranceCompletion (step 12) should have set isOpen=true
-    const entrance = colony.entrances.find(e => e.surfaceTileX === 50);
+    const entrance = colony.entrances.find((e) => e.surfaceTileX === 50);
     expect(entrance).toBeDefined();
     expect(entrance!.isOpen).toBe(true);
   });
@@ -1928,7 +2169,8 @@ describe('Phase 7: Integration tests', () => {
 
     const chamberType = ChamberType.FoodStorage;
     const dims = CHAMBER_DIMENSIONS[chamberType]!;
-    const ax = 30, ay = 10;
+    const ax = 30,
+      ay = 10;
 
     // PRD §3c tunnel-end: open anchors for both placements; surrounding Solid gives adjacency.
     // Add entrance + open shaft at ax so the v5 reachability BFS can reach the anchor.
@@ -1954,13 +2196,16 @@ describe('Phase 7: Integration tests', () => {
     const underground = world.undergroundGrids[colonyId]!;
     for (let dy = 0; dy < dims.height; dy++) {
       for (let dx = 0; dx < dims.width; dx++) {
-        underground.data[(ay + dy) * UNDERGROUND_GRID_WIDTH + (ax + dx)] = UndergroundTileState.Open;
+        underground.data[(ay + dy) * UNDERGROUND_GRID_WIDTH + (ax + dx)] =
+          UndergroundTileState.Open;
       }
     }
     tick(world, []);
 
     // ChamberRecord should exist with correct dimensions
-    const chamber = colony.chambers.find(ch => (ch.posX >> FP_SHIFT) === ax && (ch.posY >> FP_SHIFT) === ay);
+    const chamber = colony.chambers.find(
+      (ch) => ch.posX >> FP_SHIFT === ax && ch.posY >> FP_SHIFT === ay,
+    );
     expect(chamber).toBeDefined();
     expect(chamber!.width).toBe(dims.width);
     expect(chamber!.height).toBe(dims.height);
@@ -2009,13 +2254,22 @@ describe('Regression: reviewer P1 fixes', () => {
   function makeWorldWithUnderground(seed = 42) {
     const world = createWorldState(seed);
     const queenId = allocateEntityId(world);
-    initAnt(world.ants, queenId, { colonyId: 1, posX: 1024, posY: 1024, task: AntTask.Idle, subTask: 0 });
+    initAnt(world.ants, queenId, {
+      colonyId: 1,
+      posX: 1024,
+      posY: 1024,
+      task: AntTask.Idle,
+      subTask: 0,
+    });
     world.colonies[1] = createColonyRecord(1, queenId);
     world.colonies[1]!.foodStored = 10000;
     world.colonies[1]!.entrances = [];
     world.colonies[1]!.rallyPoint = null;
     world.colonies[1]!.digFlowFieldDirty = false;
-    world.undergroundGrids[1] = createUndergroundGrid(UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT);
+    world.undergroundGrids[1] = createUndergroundGrid(
+      UNDERGROUND_GRID_WIDTH,
+      UNDERGROUND_GRID_HEIGHT,
+    );
     return { world, colonyId: 1 as ColonyId };
   }
 
@@ -2026,8 +2280,12 @@ describe('Regression: reviewer P1 fixes', () => {
     colony.entrances.push({ entranceId: 99, surfaceTileX: 50, surfaceTileY: 10, isOpen: true });
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
-      colonyId, posX: 20 << FP_SHIFT, posY: 10 << FP_SHIFT,
-      task: AntTask.Foraging, subTask: ForagingSubState.CarryingFood, speed: 1,
+      colonyId,
+      posX: 20 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+      speed: 1,
     });
     world.ants.foodCarrying[antId] = 5;
     const x0 = world.ants.posX[antId]!;
@@ -2041,8 +2299,12 @@ describe('Regression: reviewer P1 fixes', () => {
     colony.entrances.push({ entranceId: 7, surfaceTileX: 40, surfaceTileY: 10, isOpen: true });
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
-      colonyId, posX: 10 << FP_SHIFT, posY: 5 << FP_SHIFT,
-      task: AntTask.Foraging, subTask: ForagingSubState.SearchingFood, speed: 1,
+      colonyId,
+      posX: 10 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
+      speed: 1,
     });
     world.ants.zone[antId] = 1; // Underground
     const x0 = world.ants.posX[antId]!;
@@ -2058,8 +2320,12 @@ describe('Regression: reviewer P1 fixes', () => {
     // No entrances at all
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
-      colonyId, posX: 20 << FP_SHIFT, posY: 10 << FP_SHIFT,
-      task: AntTask.Nursing, subTask: 0, speed: 1,
+      colonyId,
+      posX: 20 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Nursing,
+      subTask: 0,
+      speed: 1,
     });
     const x0 = world.ants.posX[antId]!;
     const y0 = world.ants.posY[antId]!;
@@ -2080,8 +2346,12 @@ describe('Regression: reviewer P1 fixes', () => {
     world.simVersion = LEGACY_SIM_VERSION;
     // Everything is Solid by default — anchor (10,10) is Solid
     const cmd: SimCommand = {
-      type: 'PlaceChamber', colonyId,
-      chamberType: ChamberType.Queen, anchorTileX: 10, anchorTileY: 10, issuedAtTick: 0,
+      type: 'PlaceChamber',
+      colonyId,
+      chamberType: ChamberType.Queen,
+      anchorTileX: 10,
+      anchorTileY: 10,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     expect(world.pendingChambers[`${colonyId}:10:10`]).toBeUndefined();
@@ -2096,12 +2366,17 @@ describe('Regression: reviewer P1 fixes', () => {
     // Open a 3×3 region around (10,10) — no adjacent Solid
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
-        underground.data[(10 + dy) * UNDERGROUND_GRID_WIDTH + (10 + dx)] = UndergroundTileState.Open;
+        underground.data[(10 + dy) * UNDERGROUND_GRID_WIDTH + (10 + dx)] =
+          UndergroundTileState.Open;
       }
     }
     const cmd: SimCommand = {
-      type: 'PlaceChamber', colonyId,
-      chamberType: ChamberType.Queen, anchorTileX: 10, anchorTileY: 10, issuedAtTick: 0,
+      type: 'PlaceChamber',
+      colonyId,
+      chamberType: ChamberType.Queen,
+      anchorTileX: 10,
+      anchorTileY: 10,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     expect(world.pendingChambers[`${colonyId}:10:10`]).toBeUndefined();
@@ -2113,8 +2388,12 @@ describe('Regression: reviewer P1 fixes', () => {
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open; // anchor
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 11] = UndergroundTileState.BeingDug; // footprint conflict
     const cmd: SimCommand = {
-      type: 'PlaceChamber', colonyId,
-      chamberType: ChamberType.Queen, anchorTileX: 10, anchorTileY: 10, issuedAtTick: 0,
+      type: 'PlaceChamber',
+      colonyId,
+      chamberType: ChamberType.Queen,
+      anchorTileX: 10,
+      anchorTileY: 10,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     expect(world.pendingChambers[`${colonyId}:10:10`]).toBeUndefined();
@@ -2123,15 +2402,21 @@ describe('Regression: reviewer P1 fixes', () => {
   it('PlaceChamber rejected: pendingChambers key already exists at anchor', () => {
     const { world, colonyId } = makeWorldWithUnderground();
     // Add entrance + open shaft so the v5 reachability BFS can reach the anchor at (10,10).
-    world.colonies[colonyId]!.entrances = [{ entranceId: 1, surfaceTileX: 10, surfaceTileY: 0, isOpen: true }];
+    world.colonies[colonyId]!.entrances = [
+      { entranceId: 1, surfaceTileX: 10, surfaceTileY: 0, isOpen: true },
+    ];
     const underground = world.undergroundGrids[colonyId]!;
     for (let y = 0; y < 10; y++) {
       underground.data[y * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
     }
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
     const cmd: SimCommand = {
-      type: 'PlaceChamber', colonyId,
-      chamberType: ChamberType.Queen, anchorTileX: 10, anchorTileY: 10, issuedAtTick: 0,
+      type: 'PlaceChamber',
+      colonyId,
+      chamberType: ChamberType.Queen,
+      anchorTileX: 10,
+      anchorTileY: 10,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     expect(world.pendingChambers[`${colonyId}:10:10`]).toBeDefined();
@@ -2150,20 +2435,30 @@ describe('Regression: reviewer P1 fixes', () => {
       { entranceId: 1, surfaceTileX: 10, surfaceTileY: 0, isOpen: true },
       { entranceId: 2, surfaceTileX: 30, surfaceTileY: 0, isOpen: true },
     ];
-    for (let y = 0; y < 10; y++) underground.data[y * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
-    for (let y = 0; y < 20; y++) underground.data[y * UNDERGROUND_GRID_WIDTH + 30] = UndergroundTileState.Open;
+    for (let y = 0; y < 10; y++)
+      underground.data[y * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
+    for (let y = 0; y < 20; y++)
+      underground.data[y * UNDERGROUND_GRID_WIDTH + 30] = UndergroundTileState.Open;
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
     underground.data[20 * UNDERGROUND_GRID_WIDTH + 30] = UndergroundTileState.Open;
     const c1: SimCommand = {
-      type: 'PlaceChamber', colonyId,
-      chamberType: ChamberType.Queen, anchorTileX: 10, anchorTileY: 10, issuedAtTick: 0,
+      type: 'PlaceChamber',
+      colonyId,
+      chamberType: ChamberType.Queen,
+      anchorTileX: 10,
+      anchorTileY: 10,
+      issuedAtTick: 0,
     };
     tick(world, [c1]);
     const pendingBefore = Object.keys(world.pendingChambers).length;
     expect(pendingBefore).toBe(1);
     const c2: SimCommand = {
-      type: 'PlaceChamber', colonyId,
-      chamberType: ChamberType.Queen, anchorTileX: 30, anchorTileY: 20, issuedAtTick: 1,
+      type: 'PlaceChamber',
+      colonyId,
+      chamberType: ChamberType.Queen,
+      anchorTileX: 30,
+      anchorTileY: 20,
+      issuedAtTick: 1,
     };
     tick(world, [c2]);
     expect(Object.keys(world.pendingChambers).length).toBe(pendingBefore);
@@ -2175,13 +2470,22 @@ describe('Regression: reviewer P1 fixes', () => {
     // Seed an existing Queen chamber directly in colony.chambers.
     const colony = world.colonies[colonyId]!;
     colony.chambers.push({
-      chamberId: 999, chamberType: ChamberType.Queen, foodStored: 0,
-      posX: 5 << FP_SHIFT, posY: 5 << FP_SHIFT, width: 5, height: 3,
+      chamberId: 999,
+      chamberType: ChamberType.Queen,
+      foodStored: 0,
+      posX: 5 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      width: 5,
+      height: 3,
     });
     underground.data[20 * UNDERGROUND_GRID_WIDTH + 30] = UndergroundTileState.Open;
     const c: SimCommand = {
-      type: 'PlaceChamber', colonyId,
-      chamberType: ChamberType.Queen, anchorTileX: 30, anchorTileY: 20, issuedAtTick: 0,
+      type: 'PlaceChamber',
+      colonyId,
+      chamberType: ChamberType.Queen,
+      anchorTileX: 30,
+      anchorTileY: 20,
+      issuedAtTick: 0,
     };
     tick(world, [c]);
     expect(world.pendingChambers[`${colonyId}:30:20`]).toBeUndefined();
@@ -2195,17 +2499,27 @@ describe('Regression: reviewer P1 fixes', () => {
       { entranceId: 1, surfaceTileX: 10, surfaceTileY: 0, isOpen: true },
       { entranceId: 2, surfaceTileX: 30, surfaceTileY: 0, isOpen: true },
     ];
-    for (let y = 0; y < 10; y++) underground.data[y * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
-    for (let y = 0; y < 20; y++) underground.data[y * UNDERGROUND_GRID_WIDTH + 30] = UndergroundTileState.Open;
+    for (let y = 0; y < 10; y++)
+      underground.data[y * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
+    for (let y = 0; y < 20; y++)
+      underground.data[y * UNDERGROUND_GRID_WIDTH + 30] = UndergroundTileState.Open;
     underground.data[10 * UNDERGROUND_GRID_WIDTH + 10] = UndergroundTileState.Open;
     underground.data[20 * UNDERGROUND_GRID_WIDTH + 30] = UndergroundTileState.Open;
     const c1: SimCommand = {
-      type: 'PlaceChamber', colonyId,
-      chamberType: ChamberType.FoodStorage, anchorTileX: 10, anchorTileY: 10, issuedAtTick: 0,
+      type: 'PlaceChamber',
+      colonyId,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: 10,
+      anchorTileY: 10,
+      issuedAtTick: 0,
     };
     const c2: SimCommand = {
-      type: 'PlaceChamber', colonyId,
-      chamberType: ChamberType.FoodStorage, anchorTileX: 30, anchorTileY: 20, issuedAtTick: 1,
+      type: 'PlaceChamber',
+      colonyId,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: 30,
+      anchorTileY: 20,
+      issuedAtTick: 1,
     };
     tick(world, [c1]);
     tick(world, [c2]);
@@ -2217,8 +2531,11 @@ describe('Regression: reviewer P1 fixes', () => {
   it('DesignateEntrance rejected: surfaceTileX out of bounds', () => {
     const { world, colonyId } = makeWorldWithUnderground();
     const cmd: SimCommand = {
-      type: 'DesignateEntrance', colonyId,
-      surfaceTileX: -1, surfaceTileY: 0, issuedAtTick: 0,
+      type: 'DesignateEntrance',
+      colonyId,
+      surfaceTileX: -1,
+      surfaceTileY: 0,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     expect(world.colonies[colonyId]!.entrances.length).toBe(0);
@@ -2227,15 +2544,21 @@ describe('Regression: reviewer P1 fixes', () => {
   it('DesignateEntrance rejected: same-column duplicate (different surfaceTileY)', () => {
     const { world, colonyId } = makeWorldWithUnderground();
     const cmd1: SimCommand = {
-      type: 'DesignateEntrance', colonyId,
-      surfaceTileX: 50, surfaceTileY: 0, issuedAtTick: 0,
+      type: 'DesignateEntrance',
+      colonyId,
+      surfaceTileX: 50,
+      surfaceTileY: 0,
+      issuedAtTick: 0,
     };
     tick(world, [cmd1]);
     expect(world.colonies[colonyId]!.entrances.length).toBe(1);
     // Same column, different surfaceTileY — PRD §3g column uniqueness rejects this
     const cmd2: SimCommand = {
-      type: 'DesignateEntrance', colonyId,
-      surfaceTileX: 50, surfaceTileY: 5, issuedAtTick: 1,
+      type: 'DesignateEntrance',
+      colonyId,
+      surfaceTileX: 50,
+      surfaceTileY: 5,
+      issuedAtTick: 1,
     };
     tick(world, [cmd2]);
     expect(world.colonies[colonyId]!.entrances.length).toBe(1);
@@ -2243,10 +2566,19 @@ describe('Regression: reviewer P1 fixes', () => {
 
   it('DesignateEntrance rejected: food pile at surface tile', () => {
     const { world, colonyId } = makeWorldWithUnderground();
-    world.foodPiles.push({ foodPileId: 0, tileX: 50, tileY: 0 , pickupsRemaining: 50, pickupsInitial: 50});
+    world.foodPiles.push({
+      foodPileId: 0,
+      tileX: 50,
+      tileY: 0,
+      pickupsRemaining: 50,
+      pickupsInitial: 50,
+    });
     const cmd: SimCommand = {
-      type: 'DesignateEntrance', colonyId,
-      surfaceTileX: 50, surfaceTileY: 0, issuedAtTick: 0,
+      type: 'DesignateEntrance',
+      colonyId,
+      surfaceTileX: 50,
+      surfaceTileY: 0,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     expect(world.colonies[colonyId]!.entrances.length).toBe(0);
@@ -2256,8 +2588,11 @@ describe('Regression: reviewer P1 fixes', () => {
     const { world, colonyId } = makeWorldWithUnderground();
     world.colonies[colonyId]!.rallyPoint = { tileX: 50, tileY: 0 };
     const cmd: SimCommand = {
-      type: 'DesignateEntrance', colonyId,
-      surfaceTileX: 50, surfaceTileY: 0, issuedAtTick: 0,
+      type: 'DesignateEntrance',
+      colonyId,
+      surfaceTileX: 50,
+      surfaceTileY: 0,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     expect(world.colonies[colonyId]!.entrances.length).toBe(0);
@@ -2278,14 +2613,20 @@ describe('Regression: reviewer P1 fixes', () => {
       chamberId: 7,
       chamberType: ChamberType.FoodStorage,
       foodStored: 0,
-      posX: 20 << FP_SHIFT, posY: 10 << FP_SHIFT,
-      width: 4, height: 3,
+      posX: 20 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      width: 4,
+      height: 3,
     });
     // Also open a path from ant position to chamber so nothing else interferes
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
-      colonyId, posX: 10 << FP_SHIFT, posY: 10 << FP_SHIFT,
-      task: AntTask.Foraging, subTask: ForagingSubState.CarryingFood, speed: 1,
+      colonyId,
+      posX: 10 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+      speed: 1,
     });
     world.ants.zone[antId] = 1; // Underground
     world.ants.foodCarrying[antId] = 5;
@@ -2302,8 +2643,12 @@ describe('Regression: reviewer P1 fixes', () => {
     colony.entrances.push({ entranceId: 1, surfaceTileX: 40, surfaceTileY: 10, isOpen: true });
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
-      colonyId, posX: 10 << FP_SHIFT, posY: 5 << FP_SHIFT,
-      task: AntTask.Foraging, subTask: ForagingSubState.CarryingFood, speed: 1,
+      colonyId,
+      posX: 10 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+      speed: 1,
     });
     world.ants.zone[antId] = 1; // Underground
     world.ants.foodCarrying[antId] = 5;
@@ -2327,17 +2672,27 @@ describe('Regression: reviewer P1 fixes', () => {
       }
     }
     colony.chambers.push({
-      chamberId: 9, chamberType: ChamberType.FoodStorage, foodStored: 0,
-      posX: 30 << FP_SHIFT, posY: 10 << FP_SHIFT, width: 4, height: 3,
+      chamberId: 9,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 0,
+      posX: 30 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      width: 4,
+      height: 3,
     });
     // Plant a strong surface food-trail gradient to the WEST to prove it's ignored.
     const surfaceGrid = createPheromoneGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
     phSet(surfaceGrid, 5, 10, 9999);
-    world.pheromoneGrids[pheromoneGridKey(colonyId, PheromoneType.FoodTrail, 'surface')] = surfaceGrid;
+    world.pheromoneGrids[pheromoneGridKey(colonyId, PheromoneType.FoodTrail, 'surface')] =
+      surfaceGrid;
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
-      colonyId, posX: 20 << FP_SHIFT, posY: 10 << FP_SHIFT,
-      task: AntTask.Foraging, subTask: ForagingSubState.CarryingFood, speed: 1,
+      colonyId,
+      posX: 20 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+      speed: 1,
     });
     world.ants.zone[antId] = 1; // Underground
     world.ants.foodCarrying[antId] = 5;
@@ -2353,14 +2708,22 @@ describe('Regression: reviewer P1 fixes', () => {
     const queen2 = allocateEntityId(world);
     initAnt(world.ants, queen2, { colonyId: 2, posX: 0, posY: 0, task: AntTask.Idle, subTask: 0 });
     world.colonies[2] = createColonyRecord(2, queen2);
-    world.colonies[2]!.entrances = [{ entranceId: 999, surfaceTileX: 50, surfaceTileY: 0, isOpen: true }];
+    world.colonies[2]!.entrances = [
+      { entranceId: 999, surfaceTileX: 50, surfaceTileY: 0, isOpen: true },
+    ];
     world.colonies[2]!.rallyPoint = null;
     world.colonies[2]!.digFlowFieldDirty = false;
-    world.undergroundGrids[2] = createUndergroundGrid(UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT);
+    world.undergroundGrids[2] = createUndergroundGrid(
+      UNDERGROUND_GRID_WIDTH,
+      UNDERGROUND_GRID_HEIGHT,
+    );
 
     const cmd: SimCommand = {
-      type: 'DesignateEntrance', colonyId,
-      surfaceTileX: 50, surfaceTileY: 0, issuedAtTick: 0,
+      type: 'DesignateEntrance',
+      colonyId,
+      surfaceTileX: 50,
+      surfaceTileY: 0,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     expect(world.colonies[colonyId]!.entrances.length).toBe(0);
@@ -2380,12 +2743,23 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
   function makeWorldWithEntrance(seed = 42, entranceX = 10) {
     const world = createWorldState(seed);
     const queenId = allocateEntityId(world);
-    initAnt(world.ants, queenId, { colonyId: 1, posX: 1024, posY: 1024, task: AntTask.Idle, subTask: 0 });
+    initAnt(world.ants, queenId, {
+      colonyId: 1,
+      posX: 1024,
+      posY: 1024,
+      task: AntTask.Idle,
+      subTask: 0,
+    });
     world.colonies[1] = createColonyRecord(1, queenId);
     world.colonies[1]!.foodStored = 10000;
-    world.colonies[1]!.entrances = [{
-      entranceId: 999, surfaceTileX: entranceX, surfaceTileY: 0, isOpen: true,
-    }];
+    world.colonies[1]!.entrances = [
+      {
+        entranceId: 999,
+        surfaceTileX: entranceX,
+        surfaceTileY: 0,
+        isOpen: true,
+      },
+    ];
     world.colonies[1]!.rallyPoint = null;
     world.colonies[1]!.digFlowFieldDirty = false;
     const ug = createUndergroundGrid(UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT);
@@ -2404,9 +2778,12 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
     // adjacent to the marked column. Reachable via the marked column +
     // own footprint expansion.
     const cmd: SimCommand = {
-      type: 'PlaceChamber', colonyId,
+      type: 'PlaceChamber',
+      colonyId,
       chamberType: ChamberType.FoodStorage,
-      anchorTileX: entranceX, anchorTileY: 10, issuedAtTick: 0,
+      anchorTileX: entranceX,
+      anchorTileY: 10,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     const pcKey = `${colonyId}:${entranceX}:10`;
@@ -2425,9 +2802,12 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
     void ug;
     void entranceX;
     const cmd: SimCommand = {
-      type: 'PlaceChamber', colonyId,
+      type: 'PlaceChamber',
+      colonyId,
       chamberType: ChamberType.FoodStorage,
-      anchorTileX: 50, anchorTileY: 30, issuedAtTick: 0,
+      anchorTileX: 50,
+      anchorTileY: 30,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     expect(world.pendingChambers[`${colonyId}:50:30`]).toBeUndefined();
@@ -2438,9 +2818,12 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
     // Drop the entrance.
     world.colonies[colonyId]!.entrances = [];
     const cmd: SimCommand = {
-      type: 'PlaceChamber', colonyId,
+      type: 'PlaceChamber',
+      colonyId,
       chamberType: ChamberType.FoodStorage,
-      anchorTileX: 5, anchorTileY: 5, issuedAtTick: 0,
+      anchorTileX: 5,
+      anchorTileY: 5,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     expect(world.pendingChambers[`${colonyId}:5:5`]).toBeUndefined();
@@ -2453,9 +2836,12 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
     }
     // Place 4×3 FoodStorage at (entranceX, 10). All footprint tiles start Solid.
     const cmd: SimCommand = {
-      type: 'PlaceChamber', colonyId,
+      type: 'PlaceChamber',
+      colonyId,
       chamberType: ChamberType.FoodStorage,
-      anchorTileX: entranceX, anchorTileY: 10, issuedAtTick: 0,
+      anchorTileX: entranceX,
+      anchorTileY: 10,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     // Every Solid footprint tile should be Marked now.
@@ -2476,9 +2862,12 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
     }
     // Anchor on a Marked tile at row 10 (mid-tunnel).
     const cmd: SimCommand = {
-      type: 'PlaceChamber', colonyId,
+      type: 'PlaceChamber',
+      colonyId,
       chamberType: ChamberType.FoodStorage,
-      anchorTileX: entranceX, anchorTileY: 10, issuedAtTick: 0,
+      anchorTileX: entranceX,
+      anchorTileY: 10,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     expect(world.pendingChambers[`${colonyId}:${entranceX}:10`]).toBeDefined();
@@ -2492,9 +2881,12 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
     // Set the proposed anchor tile to BeingDug.
     ug.data[10 * UNDERGROUND_GRID_WIDTH + entranceX] = UndergroundTileState.BeingDug;
     const cmd: SimCommand = {
-      type: 'PlaceChamber', colonyId,
+      type: 'PlaceChamber',
+      colonyId,
       chamberType: ChamberType.FoodStorage,
-      anchorTileX: entranceX, anchorTileY: 10, issuedAtTick: 0,
+      anchorTileX: entranceX,
+      anchorTileY: 10,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     expect(world.pendingChambers[`${colonyId}:${entranceX}:10`]).toBeUndefined();
@@ -2507,9 +2899,12 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
     }
     // Place chamber on Solid; should enter PendingChamber state.
     const cmd: SimCommand = {
-      type: 'PlaceChamber', colonyId,
+      type: 'PlaceChamber',
+      colonyId,
       chamberType: ChamberType.FoodStorage,
-      anchorTileX: entranceX, anchorTileY: 10, issuedAtTick: 0,
+      anchorTileX: entranceX,
+      anchorTileY: 10,
+      issuedAtTick: 0,
     };
     tick(world, [cmd]);
     expect(world.pendingChambers[`${colonyId}:${entranceX}:10`]).toBeDefined();
@@ -2524,7 +2919,7 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
     // ChamberRecord should exist; PendingChamber is gone.
     const colony = world.colonies[colonyId]!;
     const chamber = colony.chambers.find(
-      (ch) => (ch.posX >> FP_SHIFT) === entranceX && (ch.posY >> FP_SHIFT) === 10,
+      (ch) => ch.posX >> FP_SHIFT === entranceX && ch.posY >> FP_SHIFT === 10,
     );
     expect(chamber).toBeDefined();
     expect(world.pendingChambers[`${colonyId}:${entranceX}:10`]).toBeUndefined();
@@ -2741,7 +3136,7 @@ describe('Phase 9 tick integration', () => {
       lifespan: WORKER_LIFESPAN_TICKS,
     });
     world.ants.zone[enemyFighterId] = 0; // Surface
-    world.ants.zone[playerQueenId] = 0;  // Surface
+    world.ants.zone[playerQueenId] = 0; // Surface
 
     // Register fighter in enemy colony workers
     world.colonies[enemyColonyId]!.workers.push(enemyFighterId);
@@ -2753,7 +3148,12 @@ describe('Phase 9 tick integration', () => {
     // In either case, the result is consistent with the post-combat state.
     // With seed 42, the PRNG determines the winner — we just verify no throw
     // and that result is a valid GameOutcome.
-    const validOutcomes = [GameOutcome.None, GameOutcome.Defeat, GameOutcome.Victory, GameOutcome.MutualDestruction];
+    const validOutcomes = [
+      GameOutcome.None,
+      GameOutcome.Defeat,
+      GameOutcome.Victory,
+      GameOutcome.MutualDestruction,
+    ];
     expect(validOutcomes).toContain(result);
     // Combat ran: either the enemy fighter or the player queen is dead (or both still alive if no valid combat)
     // At minimum world.tick advanced — confirms tick ran to completion
@@ -2778,7 +3178,8 @@ describe('cross-world flow-field cache isolation', () => {
     entranceCol: number,
     rallyTileX: number,
   ): Promise<{ world: WorldState; antId: number; colonyId: ColonyId }> {
-    const { createUndergroundGrid, UndergroundTileState, ugSet, Zone } = await import('./terrain.js');
+    const { createUndergroundGrid, UndergroundTileState, ugSet, Zone } =
+      await import('./terrain.js');
     const { FP_ONE } = await import('./fixed.js');
     const { initAnt: _initAnt } = await import('./ant/ant-store.js');
     const world = createWorldState(42);
@@ -2800,12 +3201,14 @@ describe('cross-world flow-field cache isolation', () => {
     // Rally at (rallyTileX, 0) — only used to give updateFightAntTargets a
     // target; the fighter is underground so it routes to the entrance first.
     colony.rallyPoint = { tileX: rallyTileX, tileY: 0 };
-    colony.entrances = [{
-      entranceId: 10,
-      surfaceTileX: entranceCol,
-      surfaceTileY: 5,
-      isOpen: true,
-    }];
+    colony.entrances = [
+      {
+        entranceId: 10,
+        surfaceTileX: entranceCol,
+        surfaceTileY: 5,
+        isOpen: true,
+      },
+    ];
     world.colonies[colonyId] = colony;
 
     // 16x16 underground grid. Fully open in row 0 so the ant can sidestep
@@ -2851,7 +3254,7 @@ describe('cross-world flow-field cache isolation', () => {
     const beforeA = worldA.ants.posX[antA]! >> FP_SHIFT;
     tick(worldA, []);
     const afterA = worldA.ants.posX[antA]! >> FP_SHIFT;
-    expect(afterA).toBeLessThan(beforeA);  // stepped west toward col 2
+    expect(afterA).toBeLessThan(beforeA); // stepped west toward col 2
 
     // Clear the module-level caches between worlds (simulates bootFresh /
     // bootFromSave flow: new world, same colony id).
@@ -2864,7 +3267,7 @@ describe('cross-world flow-field cache isolation', () => {
     const beforeB = worldB.ants.posX[antB]! >> FP_SHIFT;
     tick(worldB, []);
     const afterB = worldB.ants.posX[antB]! >> FP_SHIFT;
-    expect(afterB).toBeGreaterThan(beforeB);  // stepped east toward col 14 in world B
+    expect(afterB).toBeGreaterThan(beforeB); // stepped east toward col 14 in world B
   });
 
   it('#160 — world B routes per its own topology WITHOUT an explicit reset (per-world caches)', async () => {
@@ -2894,7 +3297,8 @@ describe('cross-world flow-field cache isolation', () => {
   });
 
   it('food chamber routing honors world-B topology after reset', async () => {
-    const { createUndergroundGrid, UndergroundTileState, ugSet, Zone } = await import('./terrain.js');
+    const { createUndergroundGrid, UndergroundTileState, ugSet, Zone } =
+      await import('./terrain.js');
     const { FP_ONE } = await import('./fixed.js');
     const { initAnt: _initAnt } = await import('./ant/ant-store.js');
 
@@ -2904,9 +3308,12 @@ describe('cross-world flow-field cache isolation', () => {
       const queenId = allocateEntityId(world);
       _initAnt(world.ants, queenId, {
         colonyId,
-        posX: 1024, posY: 1024,
-        task: AntTask.Idle, subTask: 0,
-        speed: 0, lifespan: WORKER_LIFESPAN_TICKS,
+        posX: 1024,
+        posY: 1024,
+        task: AntTask.Idle,
+        subTask: 0,
+        speed: 0,
+        lifespan: WORKER_LIFESPAN_TICKS,
       });
       const colony = createColonyRecord(colonyId, queenId);
       colony.foodStored = 10000;
@@ -2919,7 +3326,8 @@ describe('cross-world flow-field cache isolation', () => {
         foodStored: 0,
         posX: chamberTileX << FP_SHIFT,
         posY: 3 << FP_SHIFT,
-        width: 1, height: 1,
+        width: 1,
+        height: 1,
       });
       world.colonies[colonyId] = colony;
 
@@ -2979,7 +3387,8 @@ describe('cross-world flow-field cache isolation', () => {
   // the nearer chamber fills, instead of letting carriers stall at the cap.
   // -------------------------------------------------------------------------
   it('issue #15 — full FoodStorage chamber stops seeding the food flow-field; carriers redirect to non-full chamber', async () => {
-    const { createUndergroundGrid, UndergroundTileState, ugSet, Zone } = await import('./terrain.js');
+    const { createUndergroundGrid, UndergroundTileState, ugSet, Zone } =
+      await import('./terrain.js');
     const { FP_ONE } = await import('./fixed.js');
     const { initAnt: _initAnt } = await import('./ant/ant-store.js');
     const { FOOD_CHAMBER_CAPACITY: CAP } = await import('./constants.js');
@@ -2991,9 +3400,12 @@ describe('cross-world flow-field cache isolation', () => {
     const queenId = allocateEntityId(world);
     _initAnt(world.ants, queenId, {
       colonyId,
-      posX: 1024, posY: 1024,
-      task: AntTask.Idle, subTask: 0,
-      speed: 0, lifespan: WORKER_LIFESPAN_TICKS,
+      posX: 1024,
+      posY: 1024,
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: 0,
+      lifespan: WORKER_LIFESPAN_TICKS,
     });
     const colony = createColonyRecord(colonyId, queenId);
     colony.foodStored = 0;
@@ -3011,12 +3423,22 @@ describe('cross-world flow-field cache isolation', () => {
     // this ordering, withdrawFood would dip chamber A below the cap and the
     // BFS would re-seed from the now-not-full chamber, defeating the test.
     colony.chambers.push({
-      chamberId: 101, chamberType: ChamberType.FoodStorage, foodStored: 100,
-      posX: 14 << FP_SHIFT, posY: 3 << FP_SHIFT, width: 1, height: 1,
+      chamberId: 101,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 100,
+      posX: 14 << FP_SHIFT,
+      posY: 3 << FP_SHIFT,
+      width: 1,
+      height: 1,
     });
     colony.chambers.push({
-      chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: CAP,
-      posX: 2 << FP_SHIFT, posY: 3 << FP_SHIFT, width: 1, height: 1,
+      chamberId: 100,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: CAP,
+      posX: 2 << FP_SHIFT,
+      posY: 3 << FP_SHIFT,
+      width: 1,
+      height: 1,
     });
     world.colonies[colonyId] = colony;
 
@@ -3081,7 +3503,8 @@ describe('cross-world flow-field cache isolation', () => {
   // the carrier's load arrives at B, not A.
   // -------------------------------------------------------------------------
   it('issue #15 follow-up — queen-drain oscillation does NOT pin a carrier on a near-full chamber', async () => {
-    const { createUndergroundGrid, UndergroundTileState, ugSet, Zone } = await import('./terrain.js');
+    const { createUndergroundGrid, UndergroundTileState, ugSet, Zone } =
+      await import('./terrain.js');
     const { FP_ONE } = await import('./fixed.js');
     const { initAnt: _initAnt } = await import('./ant/ant-store.js');
     const { FOOD_CHAMBER_CAPACITY: CAP } = await import('./constants.js');
@@ -3097,9 +3520,12 @@ describe('cross-world flow-field cache isolation', () => {
     // purely to keep the test's mental model close to the dump scenario.
     _initAnt(world.ants, queenId, {
       colonyId,
-      posX: 5 << FP_SHIFT, posY: 3 << FP_SHIFT,
-      task: AntTask.Idle, subTask: 0,
-      speed: 0, lifespan: WORKER_LIFESPAN_TICKS,
+      posX: 5 << FP_SHIFT,
+      posY: 3 << FP_SHIFT,
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: 0,
+      lifespan: WORKER_LIFESPAN_TICKS,
     });
     const colony = createColonyRecord(colonyId, queenId);
     colony.foodStored = 0;
@@ -3110,12 +3536,22 @@ describe('cross-world flow-field cache isolation', () => {
 
     // Chamber A near (col 5) full. Chamber B far (col 14) empty/depositable.
     colony.chambers.push({
-      chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: CAP,
-      posX: 5 << FP_SHIFT, posY: 3 << FP_SHIFT, width: 1, height: 1,
+      chamberId: 100,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: CAP,
+      posX: 5 << FP_SHIFT,
+      posY: 3 << FP_SHIFT,
+      width: 1,
+      height: 1,
     });
     colony.chambers.push({
-      chamberId: 101, chamberType: ChamberType.FoodStorage, foodStored: 0,
-      posX: 14 << FP_SHIFT, posY: 3 << FP_SHIFT, width: 1, height: 1,
+      chamberId: 101,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 0,
+      posX: 14 << FP_SHIFT,
+      posY: 3 << FP_SHIFT,
+      width: 1,
+      height: 1,
     });
     world.colonies[colonyId] = colony;
 
@@ -3156,7 +3592,10 @@ describe('cross-world flow-field cache isolation', () => {
     let landedInB = false;
     for (let t = 0; t < 60; t++) {
       tick(world, []);
-      if (chamberB.foodStored > 0) { landedInB = true; break; }
+      if (chamberB.foodStored > 0) {
+        landedInB = true;
+        break;
+      }
     }
 
     expect(landedInB).toBe(true);
@@ -3245,14 +3684,20 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     colony.workerCount = 3;
     for (let i = 0; i < 3; i++) {
       const wid = allocateEntityId(world);
-      initAnt(world.ants, wid, { colonyId, posX: 24 << FP_SHIFT, posY: 1 << FP_SHIFT, task: AntTask.Idle, subTask: 0 });
+      initAnt(world.ants, wid, {
+        colonyId,
+        posX: 24 << FP_SHIFT,
+        posY: 1 << FP_SHIFT,
+        task: AntTask.Idle,
+        subTask: 0,
+      });
       world.ants.zone[wid] = 1; // Underground; matches the Open shaft cell
       colony.workers.push(wid);
     }
 
     // Forage-only ratio so non-dig demand is 0; auto-dig is the only signal.
     colony.targetRatio.forage = 10;
-    colony.targetRatio.fight  = 0;
+    colony.targetRatio.fight = 0;
 
     // t=0 preconditions
     expect(colony.workers.length).toBe(3);
@@ -3261,7 +3706,8 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     expect(initialIdle).toBe(3);
     expect(ugGet(underground, 25, 1)).toBe(UndergroundTileState.Solid);
     let initialDigging = 0;
-    for (const wid of colony.workers) if (world.ants.task[wid] === AntTask.Digging) initialDigging += 1;
+    for (const wid of colony.workers)
+      if (world.ants.task[wid] === AntTask.Digging) initialDigging += 1;
     expect(initialDigging).toBe(0);
     expect(colony.computedAllocation.dig).toBe(0);
 
@@ -3273,7 +3719,8 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     expect(ugGet(underground, 25, 1)).toBe(UndergroundTileState.Marked);
     expect(colony.computedAllocation.dig).toBe(1);
     let diggingCount = 0;
-    for (const wid of colony.workers) if (world.ants.task[wid] === AntTask.Digging) diggingCount += 1;
+    for (const wid of colony.workers)
+      if (world.ants.task[wid] === AntTask.Digging) diggingCount += 1;
     expect(diggingCount).toBeGreaterThanOrEqual(1);
     // Strict cap holds even on the activation tick.
     expect(diggingCount).toBe(1);
@@ -3287,12 +3734,18 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     colony.workerCount = 5;
     for (let i = 0; i < 5; i++) {
       const wid = allocateEntityId(world);
-      initAnt(world.ants, wid, { colonyId, posX: 24 << FP_SHIFT, posY: 1 << FP_SHIFT, task: AntTask.Idle, subTask: 0 });
+      initAnt(world.ants, wid, {
+        colonyId,
+        posX: 24 << FP_SHIFT,
+        posY: 1 << FP_SHIFT,
+        task: AntTask.Idle,
+        subTask: 0,
+      });
       world.ants.zone[wid] = 1;
       colony.workers.push(wid);
     }
     colony.targetRatio.forage = 10;
-    colony.targetRatio.fight  = 0;
+    colony.targetRatio.fight = 0;
 
     // Mark 5 tiles in a column adjacent to the Open shaft.
     const markCmds: SimCommand[] = [];
@@ -3306,7 +3759,8 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
       expect(ugGet(underground, 25, dy)).toBe(UndergroundTileState.Solid);
     }
     let initialDigging = 0;
-    for (const wid of colony.workers) if (world.ants.task[wid] === AntTask.Digging) initialDigging += 1;
+    for (const wid of colony.workers)
+      if (world.ants.task[wid] === AntTask.Digging) initialDigging += 1;
     expect(initialDigging).toBe(0);
 
     tick(world, markCmds);
@@ -3358,7 +3812,7 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
       foragerIds.push(wid);
     }
     colony.targetRatio.forage = 10;
-    colony.targetRatio.fight  = 0;
+    colony.targetRatio.fight = 0;
     // Pre-populate computedAllocation so step 10a doesn't try to reassign these.
     colony.computedAllocation = { nurse: 0, forage: 3, dig: 0, fight: 0 };
 
@@ -3367,7 +3821,8 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     for (const wid of colony.workers) if (world.ants.task[wid] === AntTask.Idle) initialIdle += 1;
     expect(initialIdle).toBe(0);
     let initialDigging = 0;
-    for (const wid of colony.workers) if (world.ants.task[wid] === AntTask.Digging) initialDigging += 1;
+    for (const wid of colony.workers)
+      if (world.ants.task[wid] === AntTask.Digging) initialDigging += 1;
     expect(initialDigging).toBe(0);
     // Snapshot foragers' tasks at t=0 — they must NOT be preempted at t=N.
     const t0Tasks: Record<number, number> = {};
@@ -3382,7 +3837,8 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     // t=N=5 outcomes
     expect(ugGet(underground, 25, 1)).toBe(UndergroundTileState.Marked); // tile still Marked (nobody reached it)
     let diggingCount = 0;
-    for (const wid of colony.workers) if (world.ants.task[wid] === AntTask.Digging) diggingCount += 1;
+    for (const wid of colony.workers)
+      if (world.ants.task[wid] === AntTask.Digging) diggingCount += 1;
     expect(diggingCount).toBe(0);
     // No forager was preempted to dig.
     for (const wid of foragerIds) {
@@ -3419,7 +3875,7 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     colony.digFlowFieldDirty = true;
 
     colony.targetRatio.forage = 10;
-    colony.targetRatio.fight  = 0;
+    colony.targetRatio.fight = 0;
 
     // t=0 preconditions
     expect(world.ants.task[wid]).toBe(AntTask.Digging);
@@ -3485,25 +3941,34 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
 
     // t=0 preconditions
     let aiDiggingT0 = 0;
-    for (const wid of aiColony.workers) if (world.ants.task[wid] === AntTask.Digging) aiDiggingT0 += 1;
+    for (const wid of aiColony.workers)
+      if (world.ants.task[wid] === AntTask.Digging) aiDiggingT0 += 1;
     expect(aiDiggingT0).toBe(0);
     expect(world.ants.task[aiWorkerId]).toBe(AntTask.Idle);
 
     // Issue MarkDigTile on the AI colony — same command surface as the player.
-    const cmd: SimCommand = { type: 'MarkDigTile', colonyId: aiColonyId, tileX: markX, tileY: markY, issuedAtTick: 0 };
+    const cmd: SimCommand = {
+      type: 'MarkDigTile',
+      colonyId: aiColonyId,
+      tileX: markX,
+      tileY: markY,
+      issuedAtTick: 0,
+    };
     tick(world, [cmd]);
 
     // t=N outcomes — AI colony has exactly 1 Digging ant via the auto-dig path.
     expect(ugGet(aiUg, markX, markY)).toBe(UndergroundTileState.Marked);
     expect(aiColony.computedAllocation.dig).toBe(1);
     let aiDiggingT1 = 0;
-    for (const wid of aiColony.workers) if (world.ants.task[wid] === AntTask.Digging) aiDiggingT1 += 1;
+    for (const wid of aiColony.workers)
+      if (world.ants.task[wid] === AntTask.Digging) aiDiggingT1 += 1;
     expect(aiDiggingT1).toBe(1);
 
     // Player colony got NO Digging ants (no Mark in player colony) — proves the path is colony-scoped.
     const playerColony = world.colonies[playerColonyId]!;
     let playerDiggingT1 = 0;
-    for (const wid of playerColony.workers) if (world.ants.task[wid] === AntTask.Digging) playerDiggingT1 += 1;
+    for (const wid of playerColony.workers)
+      if (world.ants.task[wid] === AntTask.Digging) playerDiggingT1 += 1;
     expect(playerDiggingT1).toBe(0);
   });
 
@@ -3528,21 +3993,36 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     colony.workerCount = 1;
     const wid = allocateEntityId(world);
     initAnt(world.ants, wid, {
-      colonyId, posX: 24 << FP_SHIFT, posY: 1 << FP_SHIFT,
-      task: AntTask.Idle, subTask: 0,
+      colonyId,
+      posX: 24 << FP_SHIFT,
+      posY: 1 << FP_SHIFT,
+      task: AntTask.Idle,
+      subTask: 0,
     });
     world.ants.zone[wid] = 1;
     colony.workers.push(wid);
 
     for (let e = 0; e < 30; e++) {
       const lid = allocateEntityId(world);
-      initAnt(world.ants, lid, { colonyId, posX: 100, posY: 100, task: AntTask.Idle, subTask: 0, speed: 0 });
+      initAnt(world.ants, lid, {
+        colonyId,
+        posX: 100,
+        posY: 100,
+        task: AntTask.Idle,
+        subTask: 0,
+        speed: 0,
+      });
       colony.larvae.push(lid);
       colony.larvaeCount += 1;
     }
     colony.chambers.push({
-      chamberId: 9100, chamberType: ChamberType.Nursery,
-      foodStored: 0, posX: 0, posY: 0, width: 2, height: 2,
+      chamberId: 9100,
+      chamberType: ChamberType.Nursery,
+      foodStored: 0,
+      posX: 0,
+      posY: 0,
+      width: 2,
+      height: 2,
     });
 
     // t=0 preconditions
@@ -3579,8 +4059,11 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     for (let i = 0; i < 3; i++) {
       const wid = allocateEntityId(world);
       initAnt(world.ants, wid, {
-        colonyId, posX: 24 << FP_SHIFT, posY: 1 << FP_SHIFT,
-        task: AntTask.Idle, subTask: 0,
+        colonyId,
+        posX: 24 << FP_SHIFT,
+        posY: 1 << FP_SHIFT,
+        task: AntTask.Idle,
+        subTask: 0,
       });
       world.ants.zone[wid] = 1;
       colony.workers.push(wid);
@@ -3588,7 +4071,7 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     }
 
     colony.targetRatio.forage = 0;
-    colony.targetRatio.fight  = 10;
+    colony.targetRatio.fight = 10;
 
     let initialIdle = 0;
     for (const id of widList) if (world.ants.task[id] === AntTask.Idle) initialIdle += 1;
@@ -3632,8 +4115,11 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     for (let i = 0; i < 3; i++) {
       const wid = allocateEntityId(world);
       initAnt(world.ants, wid, {
-        colonyId, posX: 24 << FP_SHIFT, posY: 1 << FP_SHIFT,
-        task: AntTask.Idle, subTask: 0,
+        colonyId,
+        posX: 24 << FP_SHIFT,
+        posY: 1 << FP_SHIFT,
+        task: AntTask.Idle,
+        subTask: 0,
       });
       world.ants.zone[wid] = 1;
       colony.workers.push(wid);
@@ -3643,7 +4129,7 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     // Valid post-Phase-10 zero-ratio. WR-10 keeps this as-is (the snap only
     // catches legacy {forage:0, dig:N, fight:0} inputs).
     colony.targetRatio.forage = 0;
-    colony.targetRatio.fight  = 0;
+    colony.targetRatio.fight = 0;
 
     const cmd: SimCommand = { type: 'MarkDigTile', colonyId, tileX: 25, tileY: 1, issuedAtTick: 0 };
     tick(world, [cmd]);
@@ -3655,10 +4141,10 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     expect(colony.computedAllocation.fight).toBe(0);
     expect(colony.computedAllocation.dig).toBe(1);
     let diggingCount = 0;
-    let idleCount    = 0;
+    let idleCount = 0;
     for (const id of widList) {
       if (world.ants.task[id] === AntTask.Digging) diggingCount += 1;
-      if (world.ants.task[id] === AntTask.Idle)    idleCount    += 1;
+      if (world.ants.task[id] === AntTask.Idle) idleCount += 1;
     }
     expect(diggingCount).toBe(1);
     expect(idleCount).toBe(2); // remaining Idle ants stay Idle (no other role demands)
@@ -3683,8 +4169,11 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     for (let i = 0; i < 2; i++) {
       const wid = allocateEntityId(world);
       initAnt(world.ants, wid, {
-        colonyId, posX: 24 << FP_SHIFT, posY: 1 << FP_SHIFT,
-        task: AntTask.Idle, subTask: 0,
+        colonyId,
+        posX: 24 << FP_SHIFT,
+        posY: 1 << FP_SHIFT,
+        task: AntTask.Idle,
+        subTask: 0,
       });
       world.ants.zone[wid] = 1;
       colony.workers.push(wid);
@@ -3716,7 +4205,7 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     let diggingCount = 0;
     let foragingCount = 0;
     for (const id of widList) {
-      if (world.ants.task[id] === AntTask.Digging)  diggingCount  += 1;
+      if (world.ants.task[id] === AntTask.Digging) diggingCount += 1;
       if (world.ants.task[id] === AntTask.Foraging) foragingCount += 1;
     }
     expect(diggingCount).toBe(0);
@@ -3734,8 +4223,11 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     colony.workerCount = 1;
     const wid = allocateEntityId(world);
     initAnt(world.ants, wid, {
-      colonyId, posX: 24 << FP_SHIFT, posY: 1 << FP_SHIFT,
-      task: AntTask.Idle, subTask: 0,
+      colonyId,
+      posX: 24 << FP_SHIFT,
+      posY: 1 << FP_SHIFT,
+      task: AntTask.Idle,
+      subTask: 0,
     });
     world.ants.zone[wid] = 1;
     colony.workers.push(wid);
@@ -3769,27 +4261,42 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     colony.workerCount = 1;
     const wid = allocateEntityId(world);
     initAnt(world.ants, wid, {
-      colonyId, posX: 24 << FP_SHIFT, posY: 1 << FP_SHIFT,
-      task: AntTask.Idle, subTask: 0,
+      colonyId,
+      posX: 24 << FP_SHIFT,
+      posY: 1 << FP_SHIFT,
+      task: AntTask.Idle,
+      subTask: 0,
     });
     world.ants.zone[wid] = 1;
     colony.workers.push(wid);
 
     for (let e = 0; e < 30; e++) {
       const lid = allocateEntityId(world);
-      initAnt(world.ants, lid, { colonyId, posX: 100, posY: 100, task: AntTask.Idle, subTask: 0, speed: 0 });
+      initAnt(world.ants, lid, {
+        colonyId,
+        posX: 100,
+        posY: 100,
+        task: AntTask.Idle,
+        subTask: 0,
+        speed: 0,
+      });
       colony.larvae.push(lid);
       colony.larvaeCount += 1;
     }
     colony.chambers.push({
-      chamberId: 9300, chamberType: ChamberType.Nursery,
-      foodStored: 0, posX: 0, posY: 0, width: 2, height: 2,
+      chamberId: 9300,
+      chamberType: ChamberType.Nursery,
+      foodStored: 0,
+      posX: 0,
+      posY: 0,
+      width: 2,
+      height: 2,
     });
 
     // Slider-to-fight; combined with the nurse cap this leaves zero ratio
     // budget for any carve — the all-nurse case.
     colony.targetRatio.forage = 0;
-    colony.targetRatio.fight  = 10;
+    colony.targetRatio.fight = 10;
 
     const cmd: SimCommand = { type: 'MarkDigTile', colonyId, tileX: 25, tileY: 1, issuedAtTick: 0 };
     tick(world, [cmd]);
@@ -3801,7 +4308,6 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     expect(colony.computedAllocation.dig).toBe(0); // no ratio-driven slot to carve
     expect(world.ants.task[wid]).toBe(AntTask.Nursing);
   });
-
 
   it('Test 8 (WR-07): dig slot reserved while digger is active → nurse not preempted by forage', () => {
     // Regression for codex P1 v2: in a 2-worker / brood-heavy / forage-only
@@ -3823,8 +4329,11 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     colony.workerCount = 2;
     const widDigger = allocateEntityId(world);
     initAnt(world.ants, widDigger, {
-      colonyId, posX: 25 << FP_SHIFT, posY: 1 << FP_SHIFT,
-      task: AntTask.Digging, subTask: DiggingSubState.Excavating,
+      colonyId,
+      posX: 25 << FP_SHIFT,
+      posY: 1 << FP_SHIFT,
+      task: AntTask.Digging,
+      subTask: DiggingSubState.Excavating,
     });
     world.ants.zone[widDigger] = 1;
     world.ants.digTileX[widDigger] = 25;
@@ -3837,8 +4346,11 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     // Worker B: Idle, the candidate for nurse vs forage.
     const widIdle = allocateEntityId(world);
     initAnt(world.ants, widIdle, {
-      colonyId, posX: 24 << FP_SHIFT, posY: 1 << FP_SHIFT,
-      task: AntTask.Idle, subTask: 0,
+      colonyId,
+      posX: 24 << FP_SHIFT,
+      posY: 1 << FP_SHIFT,
+      task: AntTask.Idle,
+      subTask: 0,
     });
     world.ants.zone[widIdle] = 1;
     colony.workers.push(widIdle);
@@ -3846,17 +4358,29 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     // Brood + Nursery so nurse=1, available=1, allocation={nurse:1, forage:1}.
     for (let e = 0; e < 30; e++) {
       const lid = allocateEntityId(world);
-      initAnt(world.ants, lid, { colonyId, posX: 100, posY: 100, task: AntTask.Idle, subTask: 0, speed: 0 });
+      initAnt(world.ants, lid, {
+        colonyId,
+        posX: 100,
+        posY: 100,
+        task: AntTask.Idle,
+        subTask: 0,
+        speed: 0,
+      });
       colony.larvae.push(lid);
       colony.larvaeCount += 1;
     }
     colony.chambers.push({
-      chamberId: 9200, chamberType: ChamberType.Nursery,
-      foodStored: 0, posX: 0, posY: 0, width: 2, height: 2,
+      chamberId: 9200,
+      chamberType: ChamberType.Nursery,
+      foodStored: 0,
+      posX: 0,
+      posY: 0,
+      width: 2,
+      height: 2,
     });
 
     colony.targetRatio.forage = 10;
-    colony.targetRatio.fight  = 0;
+    colony.targetRatio.fight = 0;
 
     // t=0 preconditions
     expect(world.ants.task[widDigger]).toBe(AntTask.Digging);
@@ -3898,63 +4422,121 @@ describe('Issue #60 — command coordinate validation', () => {
   });
 
   it('MarkDigTile with NaN coords is dropped (no underground state change)', () => {
-    const cmd = { type: 'MarkDigTile', colonyId: PLAYER, tileX: NaN, tileY: 5, issuedAtTick: 0 } as unknown as SimCommand;
+    const cmd = {
+      type: 'MarkDigTile',
+      colonyId: PLAYER,
+      tileX: NaN,
+      tileY: 5,
+      issuedAtTick: 0,
+    } as unknown as SimCommand;
     const before = JSON.stringify(Array.from(world.undergroundGrids[PLAYER]!.data));
     expect(() => tick(world, [cmd])).not.toThrow();
     const after = JSON.stringify(Array.from(world.undergroundGrids[PLAYER]!.data));
     expect(after).toBe(before);
   });
   it('CancelDigMark with NaN coords is dropped', () => {
-    const cmd = { type: 'CancelDigMark', colonyId: PLAYER, tileX: NaN, tileY: NaN, issuedAtTick: 0 } as unknown as SimCommand;
+    const cmd = {
+      type: 'CancelDigMark',
+      colonyId: PLAYER,
+      tileX: NaN,
+      tileY: NaN,
+      issuedAtTick: 0,
+    } as unknown as SimCommand;
     expect(() => tick(world, [cmd])).not.toThrow();
   });
   it('MarkDigTile with non-integer coords is dropped', () => {
-    // eslint-disable-next-line no-restricted-syntax -- intentional non-integer probe to exercise the integer guard
-    const cmd = { type: 'MarkDigTile', colonyId: PLAYER, tileX: 1.5, tileY: 5, issuedAtTick: 0 } as unknown as SimCommand;
+    const cmd = {
+      type: 'MarkDigTile',
+      colonyId: PLAYER,
+      tileX: 1.5, // eslint-disable-line no-restricted-syntax -- intentional non-integer probe to exercise the integer guard
+      tileY: 5,
+      issuedAtTick: 0,
+    } as unknown as SimCommand;
     const before = JSON.stringify(Array.from(world.undergroundGrids[PLAYER]!.data));
     tick(world, [cmd]);
     const after = JSON.stringify(Array.from(world.undergroundGrids[PLAYER]!.data));
     expect(after).toBe(before);
   });
   it('MarkDigTile with Infinity coords is dropped (no underground state change)', () => {
-    const cmd = { type: 'MarkDigTile', colonyId: PLAYER, tileX: Infinity, tileY: 5, issuedAtTick: 0 } as unknown as SimCommand;
+    const cmd = {
+      type: 'MarkDigTile',
+      colonyId: PLAYER,
+      tileX: Infinity,
+      tileY: 5,
+      issuedAtTick: 0,
+    } as unknown as SimCommand;
     const before = JSON.stringify(Array.from(world.undergroundGrids[PLAYER]!.data));
     expect(() => tick(world, [cmd])).not.toThrow();
     const after = JSON.stringify(Array.from(world.undergroundGrids[PLAYER]!.data));
     expect(after).toBe(before);
   });
   it('SetRallyPoint with NaN coords is dropped — rallyPoint stays null', () => {
-    const cmd = { type: 'SetRallyPoint', colonyId: PLAYER, tileX: NaN, tileY: NaN, issuedAtTick: 0 } as unknown as SimCommand;
+    const cmd = {
+      type: 'SetRallyPoint',
+      colonyId: PLAYER,
+      tileX: NaN,
+      tileY: NaN,
+      issuedAtTick: 0,
+    } as unknown as SimCommand;
     tick(world, [cmd]);
     expect(world.colonies[PLAYER]!.rallyPoint).toBeNull();
   });
   it('SetRallyPoint with non-integer coords is dropped', () => {
-    // eslint-disable-next-line no-restricted-syntax -- intentional non-integer probe to exercise the integer guard
-    const cmd = { type: 'SetRallyPoint', colonyId: PLAYER, tileX: 5.5, tileY: 5, issuedAtTick: 0 } as unknown as SimCommand;
+    const cmd = {
+      type: 'SetRallyPoint',
+      colonyId: PLAYER,
+      tileX: 5.5, // eslint-disable-line no-restricted-syntax -- intentional non-integer probe to exercise the integer guard
+      tileY: 5,
+      issuedAtTick: 0,
+    } as unknown as SimCommand;
     tick(world, [cmd]);
     expect(world.colonies[PLAYER]!.rallyPoint).toBeNull();
   });
   it('SetRallyPoint with valid integer coords sets rallyPoint normally', () => {
-    const cmd: SimCommand = { type: 'SetRallyPoint', colonyId: PLAYER, tileX: 7, tileY: 8, issuedAtTick: 0 };
+    const cmd: SimCommand = {
+      type: 'SetRallyPoint',
+      colonyId: PLAYER,
+      tileX: 7,
+      tileY: 8,
+      issuedAtTick: 0,
+    };
     tick(world, [cmd]);
     expect(world.colonies[PLAYER]!.rallyPoint).toEqual({ tileX: 7, tileY: 8 });
   });
   it('DesignateEntrance with NaN coords is dropped — no new entrance pushed', () => {
     const before = world.colonies[PLAYER]!.entrances.length;
-    const cmd = { type: 'DesignateEntrance', colonyId: PLAYER, surfaceTileX: NaN, surfaceTileY: 0, issuedAtTick: 0 } as unknown as SimCommand;
+    const cmd = {
+      type: 'DesignateEntrance',
+      colonyId: PLAYER,
+      surfaceTileX: NaN,
+      surfaceTileY: 0,
+      issuedAtTick: 0,
+    } as unknown as SimCommand;
     tick(world, [cmd]);
     expect(world.colonies[PLAYER]!.entrances.length).toBe(before);
   });
   it('DesignateEntrance with non-integer coords is dropped', () => {
     const before = world.colonies[PLAYER]!.entrances.length;
-    // eslint-disable-next-line no-restricted-syntax -- intentional non-integer probe to exercise the integer guard
-    const cmd = { type: 'DesignateEntrance', colonyId: PLAYER, surfaceTileX: 7.5, surfaceTileY: 0, issuedAtTick: 0 } as unknown as SimCommand;
+    const cmd = {
+      type: 'DesignateEntrance',
+      colonyId: PLAYER,
+      surfaceTileX: 7.5, // eslint-disable-line no-restricted-syntax -- intentional non-integer probe to exercise the integer guard
+      surfaceTileY: 0,
+      issuedAtTick: 0,
+    } as unknown as SimCommand;
     tick(world, [cmd]);
     expect(world.colonies[PLAYER]!.entrances.length).toBe(before);
   });
   it('PlaceChamber with NaN anchor is dropped — no PendingChamber created', () => {
     const before = Object.keys(world.pendingChambers).length;
-    const cmd = { type: 'PlaceChamber', colonyId: PLAYER, chamberType: ChamberType.FoodStorage, anchorTileX: NaN, anchorTileY: NaN, issuedAtTick: 0 } as unknown as SimCommand;
+    const cmd = {
+      type: 'PlaceChamber',
+      colonyId: PLAYER,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: NaN,
+      anchorTileY: NaN,
+      issuedAtTick: 0,
+    } as unknown as SimCommand;
     tick(world, [cmd]);
     expect(Object.keys(world.pendingChambers).length).toBe(before);
     // Critically: no malformed `${colonyId}:NaN:NaN` key should have been created.
@@ -3962,14 +4544,26 @@ describe('Issue #60 — command coordinate validation', () => {
   });
   it('PlaceChamber with non-integer anchor is dropped', () => {
     const before = Object.keys(world.pendingChambers).length;
-    // eslint-disable-next-line no-restricted-syntax -- intentional non-integer probe to exercise the integer guard
-    const cmd = { type: 'PlaceChamber', colonyId: PLAYER, chamberType: ChamberType.FoodStorage, anchorTileX: 5.5, anchorTileY: 5, issuedAtTick: 0 } as unknown as SimCommand;
+    const cmd = {
+      type: 'PlaceChamber',
+      colonyId: PLAYER,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: 5.5, // eslint-disable-line no-restricted-syntax -- intentional non-integer probe to exercise the integer guard
+      anchorTileY: 5,
+      issuedAtTick: 0,
+    } as unknown as SimCommand;
     tick(world, [cmd]);
     expect(Object.keys(world.pendingChambers).length).toBe(before);
   });
   it('MarkFoodPile with NaN coords is dropped — priorityFoodPileId unchanged', () => {
     const before = world.colonies[PLAYER]!.priorityFoodPileId;
-    const cmd = { type: 'MarkFoodPile', colonyId: PLAYER, tileX: NaN, tileY: NaN, issuedAtTick: 0 } as unknown as SimCommand;
+    const cmd = {
+      type: 'MarkFoodPile',
+      colonyId: PLAYER,
+      tileX: NaN,
+      tileY: NaN,
+      issuedAtTick: 0,
+    } as unknown as SimCommand;
     tick(world, [cmd]);
     expect(world.colonies[PLAYER]!.priorityFoodPileId).toBe(before);
   });
@@ -3978,7 +4572,13 @@ describe('Issue #60 — command coordinate validation', () => {
     // if a malformed command somehow reaches the queue (cast-defeated TS,
     // tampered inputLog), the colony state never absorbs the NaN.
     const { serializeWorldState } = await import('../platform/save.js');
-    const cmd = { type: 'SetRallyPoint', colonyId: PLAYER, tileX: NaN, tileY: NaN, issuedAtTick: 0 } as unknown as SimCommand;
+    const cmd = {
+      type: 'SetRallyPoint',
+      colonyId: PLAYER,
+      tileX: NaN,
+      tileY: NaN,
+      issuedAtTick: 0,
+    } as unknown as SimCommand;
     tick(world, [cmd]);
     const json = JSON.stringify(serializeWorldState(world));
     expect(json).not.toContain('NaN');

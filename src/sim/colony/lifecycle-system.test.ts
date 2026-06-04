@@ -57,10 +57,10 @@ function setupWorldWithQueen(
 
   initAnt(world.ants, queenId, {
     colonyId: COLONY_ID,
-    posX:     queenX,
-    posY:     queenY,
-    task:     AntTask.Idle,
-    speed:    0,
+    posX: queenX,
+    posY: queenY,
+    task: AntTask.Idle,
+    speed: 0,
   });
 
   const colony = createColonyRecord(COLONY_ID, queenId);
@@ -77,13 +77,13 @@ function setupWorldWithQueen(
   for (let i = 0; i < chambers.length; i++) {
     const isQueen = chambers[i]!.chamberType === ChamberType.Queen;
     colony.chambers.push({
-      chamberId:   1000 + i,
+      chamberId: 1000 + i,
       chamberType: chambers[i]!.chamberType,
-      foodStored:  0,
-      posX:        isQueen ? (queenTileX << FP_SHIFT) : 0,
-      posY:        isQueen ? (queenTileY << FP_SHIFT) : 0,
-      width:       2,
-      height:      2,
+      foodStored: 0,
+      posX: isQueen ? queenTileX << FP_SHIFT : 0,
+      posY: isQueen ? queenTileY << FP_SHIFT : 0,
+      width: 2,
+      height: 2,
     });
   }
   world.colonies[COLONY_ID] = colony;
@@ -184,10 +184,9 @@ describe('tickQueenEggProduction — 09 reproduction-gate memo', () => {
   });
 
   it('6b. does NOT produce an egg with only a Queen chamber (Nursery missing)', () => {
-    const { world, colony } = setupWorldWithQueen(
-      10_000, 1024, 512,
-      [{ chamberType: ChamberType.Queen }],
-    );
+    const { world, colony } = setupWorldWithQueen(10_000, 1024, 512, [
+      { chamberType: ChamberType.Queen },
+    ]);
     world.tick = 0;
 
     tickQueenEggProduction(world, colony);
@@ -197,10 +196,9 @@ describe('tickQueenEggProduction — 09 reproduction-gate memo', () => {
   });
 
   it('6c. does NOT produce an egg with only a Nursery chamber (Queen missing)', () => {
-    const { world, colony } = setupWorldWithQueen(
-      10_000, 1024, 512,
-      [{ chamberType: ChamberType.Nursery }],
-    );
+    const { world, colony } = setupWorldWithQueen(10_000, 1024, 512, [
+      { chamberType: ChamberType.Nursery },
+    ]);
     world.tick = 0;
 
     tickQueenEggProduction(world, colony);
@@ -210,10 +208,10 @@ describe('tickQueenEggProduction — 09 reproduction-gate memo', () => {
   });
 
   it('6d. produces an egg once both Queen and Nursery are present', () => {
-    const { world, colony } = setupWorldWithQueen(
-      10_000, 1024, 512,
-      [{ chamberType: ChamberType.Queen }, { chamberType: ChamberType.Nursery }],
-    );
+    const { world, colony } = setupWorldWithQueen(10_000, 1024, 512, [
+      { chamberType: ChamberType.Queen },
+      { chamberType: ChamberType.Nursery },
+    ]);
     world.tick = 0;
 
     tickQueenEggProduction(world, colony);
@@ -223,10 +221,9 @@ describe('tickQueenEggProduction — 09 reproduction-gate memo', () => {
   });
 
   it('6e. FoodStorage alone does not satisfy either gate', () => {
-    const { world, colony } = setupWorldWithQueen(
-      10_000, 1024, 512,
-      [{ chamberType: ChamberType.FoodStorage }],
-    );
+    const { world, colony } = setupWorldWithQueen(10_000, 1024, 512, [
+      { chamberType: ChamberType.FoodStorage },
+    ]);
     world.tick = 0;
 
     tickQueenEggProduction(world, colony);
@@ -378,7 +375,7 @@ describe('tickQueenEggProduction — Gate 6 queen-in-chamber', () => {
     // Shrink the Queen chamber footprint to 1×1 around the queen tile.
     for (const ch of colony.chambers) {
       if (ch.chamberType === ChamberType.Queen) {
-        ch.width  = 1;
+        ch.width = 1;
         ch.height = 1;
       }
     }
@@ -515,7 +512,7 @@ describe('tickLifecycleTransitions — CLNY-03 larva mature', () => {
     expect(colony.larvaeCount).toBe(0);
     expect(colony.workers.length).toBe(1);
     expect(colony.workerCount).toBe(1);
-    expect(world.ants.age[larvaId]).toBe(0);               // age reset on transition
+    expect(world.ants.age[larvaId]).toBe(0); // age reset on transition
     expect(world.ants.task[larvaId]).toBe(AntTask.Idle);
     expect(world.ants.speed[larvaId]).toBe(WORKER_BASE_SPEED);
   });
@@ -648,10 +645,9 @@ describe('tickLifecycleTransitions — brood-aging gate (09 reproduction-gate me
   });
 
   it('19. Queen chamber alone (Nursery missing) still freezes brood', () => {
-    const { world, colony } = setupWorldWithQueen(
-      10_000, 1024, 512,
-      [{ chamberType: ChamberType.Queen }],
-    );
+    const { world, colony } = setupWorldWithQueen(10_000, 1024, 512, [
+      { chamberType: ChamberType.Queen },
+    ]);
 
     const eggId = world.nextEntityId++;
     initAnt(world.ants, eggId, { colonyId: COLONY_ID, posX: 0, posY: 0 });
@@ -701,10 +697,10 @@ describe('tickLifecycleTransitions — brood-aging gate (09 reproduction-gate me
     const workerId = world.nextEntityId++;
     initAnt(world.ants, workerId, {
       colonyId: COLONY_ID,
-      posX:     0,
-      posY:     0,
-      task:     AntTask.Idle,
-      speed:    WORKER_BASE_SPEED,
+      posX: 0,
+      posY: 0,
+      task: AntTask.Idle,
+      speed: WORKER_BASE_SPEED,
     });
     world.ants.age[workerId] = 0;
     colony.workers.push(workerId);
@@ -735,13 +731,13 @@ describe('tickLifecycleTransitions — brood-aging gate (09 reproduction-gate me
 
     // Complete a Nursery — brood unfreezes.
     colony.chambers.push({
-      chamberId:   2001,
+      chamberId: 2001,
       chamberType: ChamberType.Nursery,
-      foodStored:  0,
-      posX:        0,
-      posY:        0,
-      width:       2,
-      height:      2,
+      foodStored: 0,
+      posX: 0,
+      posY: 0,
+      width: 2,
+      height: 2,
     });
 
     for (let t = 0; t < EGG_HATCH_TICKS; t++) tickLifecycleTransitions(world, colony);

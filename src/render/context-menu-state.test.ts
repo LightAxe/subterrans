@@ -12,11 +12,11 @@ import {
 } from './context-menu-state.js';
 
 beforeEach(() => {
-  contextMenuState.visible     = false;
+  contextMenuState.visible = false;
   contextMenuState.pendingHide = false;
   contextMenuState.pendingShow = false;
-  contextMenuState.screenX     = 0;
-  contextMenuState.screenY     = 0;
+  contextMenuState.screenX = 0;
+  contextMenuState.screenY = 0;
   contextMenuState.anchorTileX = 0;
   contextMenuState.anchorTileY = 0;
 });

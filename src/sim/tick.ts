@@ -44,10 +44,7 @@ import {
   isFoodChamberDepositable,
   colonyFoodTotal,
 } from './colony/colony-system.js';
-import {
-  tickQueenEggProduction,
-  tickLifecycleTransitions,
-} from './colony/lifecycle-system.js';
+import { tickQueenEggProduction, tickLifecycleTransitions } from './colony/lifecycle-system.js';
 import { tickLarvaMaturation } from './colony/larva-maturation.js';
 import {
   tickPheromoneDeposit,
@@ -62,11 +59,7 @@ import {
 } from './ant/ant-system.js';
 import { tickPheromoneDecay } from './pheromone/pheromone-system.js';
 import { tickFoodPileSpawn } from './food-system.js';
-import {
-  computeDigFlowField,
-  ensureDigFlowField,
-  createDigFlowFields,
-} from './dig-system.js';
+import { computeDigFlowField, ensureDigFlowField, createDigFlowFields } from './dig-system.js';
 import type { DigFlowFields } from './dig-system.js';
 import {
   computeEntranceFlowField,
@@ -274,7 +267,10 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         srec.operationTargetTileY = sc.operationTargetTileY;
         srec.operationFighterIds.set(sc.operationFighterIds);
         srec.operationFighterIds.fill(-1, sc.operationFighterIds.length);
-        srec.operationFighterCount = Math.min(sc.operationFighterCount, sc.operationFighterIds.length);
+        srec.operationFighterCount = Math.min(
+          sc.operationFighterCount,
+          sc.operationFighterIds.length,
+        );
         srec.operationStartFighterCount = sc.operationStartFighterCount;
         srec.operationAttackerDeaths = sc.operationAttackerDeaths;
         srec.operationDefenderDeaths = sc.operationDefenderDeaths;
@@ -327,7 +323,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         // do the honest narrowing on each field.
         const ratioObj = ratioRaw as { forage?: unknown; fight?: unknown; dig?: unknown };
         let nextForage = ratioObj.forage as number;
-        let nextFight  = ratioObj.fight  as number;
+        let nextFight = ratioObj.fight as number;
         if ('dig' in ratioObj) {
           // Mirror migrateBehaviorRatio in platform/save.ts byte-for-byte:
           //   1. coerce missing/non-finite forage and fight to 0
@@ -338,10 +334,10 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
           // partial-field legacy shapes, breaking SCEN-06 replay determinism
           // for non-loadSave call paths (debug snapshot replay, ad-hoc tests).
           if (!Number.isFinite(nextForage)) nextForage = 0;
-          if (!Number.isFinite(nextFight))  nextFight  = 0;
+          if (!Number.isFinite(nextFight)) nextFight = 0;
           if (nextForage === 0 && nextFight === 0) {
             nextForage = 10;
-            nextFight  = 0;
+            nextFight = 0;
           }
         }
         // Validate ratio fields: reject NaN, +/-Infinity, and negatives.
@@ -352,17 +348,17 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         if (nextForage < 0 || nextFight < 0) break;
         // Field-by-field copy to preserve object identity for copyWorldState determinism.
         colony.targetRatio.forage = nextForage;
-        colony.targetRatio.fight  = nextFight;
+        colony.targetRatio.fight = nextFight;
         // CTRL-04: run allocateWorkers immediately in the same tick the command is issued.
         // alloc0.dig is 0 here under the two-role contract — auto-dig (Plan 02 step 10a)
         // overwrites colony.computedAllocation.dig later in this same tick when need.dig > 0.
         const brood0 = colony.eggCount + colony.larvaeCount;
         const hasNursery0 = hasCompletedChamber(colony, ChamberType.Nursery);
         const alloc0 = allocateWorkers(colony.workerCount, brood0, colony.targetRatio, hasNursery0);
-        colony.computedAllocation.nurse  = alloc0.nurse;
+        colony.computedAllocation.nurse = alloc0.nurse;
         colony.computedAllocation.forage = alloc0.forage;
-        colony.computedAllocation.dig    = alloc0.dig;
-        colony.computedAllocation.fight  = alloc0.fight;
+        colony.computedAllocation.dig = alloc0.dig;
+        colony.computedAllocation.fight = alloc0.fight;
         colony.nurseCount = alloc0.nurse;
         break;
       }
@@ -392,7 +388,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         if (ugGet(underground, cmd.tileX, cmd.tileY) !== UndergroundTileState.Solid) break;
         ugSet(underground, cmd.tileX, cmd.tileY, UndergroundTileState.Marked);
         const colony1 = world.colonies[cmd.colonyId];
-        if (colony1) colony1.digFlowFieldDirty = true;   // typed field (Plan 03 Task 1)
+        if (colony1) colony1.digFlowFieldDirty = true; // typed field (Plan 03 Task 1)
         break;
       }
       case 'MarkFoodPile': {
@@ -416,9 +412,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
           }
         }
         if (matched === null) break;
-        colony.priorityFoodPileId = (colony.priorityFoodPileId === matched)
-          ? null
-          : matched;
+        colony.priorityFoodPileId = colony.priorityFoodPileId === matched ? null : matched;
         break;
       }
       case 'CancelDigMark': {
@@ -431,7 +425,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         if (ugGet(underground, cmd.tileX, cmd.tileY) !== UndergroundTileState.Marked) break;
         ugSet(underground, cmd.tileX, cmd.tileY, UndergroundTileState.Solid);
         const colony2 = world.colonies[cmd.colonyId];
-        if (colony2) colony2.digFlowFieldDirty = true;   // typed field (Plan 03 Task 1)
+        if (colony2) colony2.digFlowFieldDirty = true; // typed field (Plan 03 Task 1)
         // Issue #54 (v9+) — if the cancelled tile is inside a pending chamber's
         // footprint, drop the pending chamber and revert any of its remaining
         // Marked tiles back to Solid. Pre-v9 the pending chamber stayed
@@ -494,7 +488,10 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         if (cmd.chamberType === ChamberType.Queen) {
           let hasQueen = false;
           for (let qi = 0; qi < colony3.chambers.length; qi++) {
-            if (colony3.chambers[qi]!.chamberType === ChamberType.Queen) { hasQueen = true; break; }
+            if (colony3.chambers[qi]!.chamberType === ChamberType.Queen) {
+              hasQueen = true;
+              break;
+            }
           }
           if (!hasQueen) {
             for (const pcKey in world.pendingChambers) {
@@ -525,7 +522,10 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
           let conflictsBeingDug = false;
           for (let dy = 0; dy < dims.height && !conflictsBeingDug; dy++) {
             for (let dx = 0; dx < dims.width; dx++) {
-              if (ugGet(underground, cmd.anchorTileX + dx, cmd.anchorTileY + dy) === UndergroundTileState.BeingDug) {
+              if (
+                ugGet(underground, cmd.anchorTileX + dx, cmd.anchorTileY + dy) ===
+                UndergroundTileState.BeingDug
+              ) {
                 conflictsBeingDug = true;
                 break;
               }
@@ -541,9 +541,14 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         for (const ch of colony3.chambers) {
           const chTileX = ch.posX >> FP_SHIFT;
           const chTileY = ch.posY >> FP_SHIFT;
-          if (cmd.anchorTileX < chTileX + ch.width && cmd.anchorTileX + dims.width > chTileX &&
-              cmd.anchorTileY < chTileY + ch.height && cmd.anchorTileY + dims.height > chTileY) {
-            overlaps = true; break;
+          if (
+            cmd.anchorTileX < chTileX + ch.width &&
+            cmd.anchorTileX + dims.width > chTileX &&
+            cmd.anchorTileY < chTileY + ch.height &&
+            cmd.anchorTileY + dims.height > chTileY
+          ) {
+            overlaps = true;
+            break;
           }
         }
         if (overlaps) break;
@@ -552,9 +557,14 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
           if (!Object.hasOwn(world.pendingChambers, pcKey)) continue;
           const pc = world.pendingChambers[pcKey]!;
           if (pc.colonyId !== cmd.colonyId) continue;
-          if (cmd.anchorTileX < pc.anchorTileX + pc.width && cmd.anchorTileX + dims.width > pc.anchorTileX &&
-              cmd.anchorTileY < pc.anchorTileY + pc.height && cmd.anchorTileY + dims.height > pc.anchorTileY) {
-            overlaps = true; break;
+          if (
+            cmd.anchorTileX < pc.anchorTileX + pc.width &&
+            cmd.anchorTileX + dims.width > pc.anchorTileX &&
+            cmd.anchorTileY < pc.anchorTileY + pc.height &&
+            cmd.anchorTileY + dims.height > pc.anchorTileY
+          ) {
+            overlaps = true;
+            break;
           }
         }
         if (overlaps) break;
@@ -573,10 +583,17 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         // disconnected pre-existing Open cavern could pass them — but
         // those edge cases are unchanged by this PR (pre-v5 replays use
         // the legacy gates verbatim).
-        if (!isFootprintReachableAfterDigs(
-              world, colony3, cmd.anchorTileX, cmd.anchorTileY,
-              dims.width, dims.height,
-            )) break;
+        if (
+          !isFootprintReachableAfterDigs(
+            world,
+            colony3,
+            cmd.anchorTileX,
+            cmd.anchorTileY,
+            dims.width,
+            dims.height,
+          )
+        )
+          break;
         // All checks passed — mark footprint Solid tiles and create PendingChamber
         for (let dy = 0; dy < dims.height; dy++) {
           for (let dx = 0; dx < dims.width; dx++) {
@@ -588,14 +605,14 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
           }
         }
         world.pendingChambers[newPcKey] = {
-          colonyId:    cmd.colonyId,
+          colonyId: cmd.colonyId,
           chamberType: cmd.chamberType,
           anchorTileX: cmd.anchorTileX,
           anchorTileY: cmd.anchorTileY,
-          width:       dims.width,
-          height:      dims.height,
+          width: dims.width,
+          height: dims.height,
         };
-        colony3.digFlowFieldDirty = true;   // typed field (Plan 03 Task 1)
+        colony3.digFlowFieldDirty = true; // typed field (Plan 03 Task 1)
         break;
       }
       case 'DesignateEntrance': {
@@ -636,9 +653,12 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
           if (onFoodPile) break;
         }
         // Colony rally-point collision
-        if (colony4.rallyPoint !== null &&
-            colony4.rallyPoint.tileX === cmd.surfaceTileX &&
-            colony4.rallyPoint.tileY === cmd.surfaceTileY) break;
+        if (
+          colony4.rallyPoint !== null &&
+          colony4.rallyPoint.tileX === cmd.surfaceTileX &&
+          colony4.rallyPoint.tileY === cmd.surfaceTileY
+        )
+          break;
         // Another colony's entrance already occupies this surface tile
         {
           let occupiedByOther = false;
@@ -670,7 +690,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
           entranceId,
           surfaceTileX: cmd.surfaceTileX,
           surfaceTileY: cmd.surfaceTileY,
-          isOpen:       false,
+          isOpen: false,
         });
         // Auto-mark shaft tiles (tileY=0 .. ENTRANCE_SHAFT_DEPTH-1 at surfaceTileX) for excavation
         for (let sy = 0; sy < ENTRANCE_SHAFT_DEPTH; sy++) {
@@ -678,7 +698,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
             ugSet(underground, cmd.surfaceTileX, sy, UndergroundTileState.Marked);
           }
         }
-        colony4.digFlowFieldDirty = true;   // typed field (Plan 03 Task 1)
+        colony4.digFlowFieldDirty = true; // typed field (Plan 03 Task 1)
         break;
       }
       case 'SetRallyPoint': {
@@ -708,7 +728,14 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         if (!Array.isArray(cmd.fighterIds) || cmd.fighterIds.length === 0) break;
         // Invasion cohorts < 3 fighters trigger immediate rout on first tick; reject them.
         if (cmd.kind === 'Invasion' && cmd.fighterIds.length < 3) break;
-        setAIRallyOperation(world, cmd.colonyId, cmd.rallyTileX, cmd.rallyTileY, cmd.fighterIds, cmd.kind);
+        setAIRallyOperation(
+          world,
+          cmd.colonyId,
+          cmd.rallyTileX,
+          cmd.rallyTileY,
+          cmd.fighterIds,
+          cmd.kind,
+        );
         break;
       }
       case 'MarkSpiderPriority': {
@@ -763,20 +790,19 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     const brood8 = colony.eggCount + colony.larvaeCount;
     const hasNursery8 = hasCompletedChamber(colony, ChamberType.Nursery);
     const alloc8 = allocateWorkers(colony.workerCount, brood8, colony.targetRatio, hasNursery8);
-    colony.computedAllocation.nurse  = alloc8.nurse;
+    colony.computedAllocation.nurse = alloc8.nurse;
     colony.computedAllocation.forage = alloc8.forage;
-    colony.computedAllocation.dig    = alloc8.dig;
-    colony.computedAllocation.fight  = alloc8.fight;
+    colony.computedAllocation.dig = alloc8.dig;
+    colony.computedAllocation.fight = alloc8.fight;
     colony.nurseCount = alloc8.nurse;
     // Starvation escape hatch: when the colony has no food AND every worker is
     // allocated as a nurse (forage===0), demote one nurse to forager so the
     // colony isn't starvation-locked. This covers the small-colony case where
     // computeNurseCount's ceil(workers/4) cap assigns the only worker as a
     // nurse, leaving zero foragers regardless of food level.
-    if (alloc8.forage === 0 && alloc8.nurse > 0 &&
-        colonyFoodTotal(colony) === 0) {
-      colony.computedAllocation.nurse  -= 1;
-      colony.computedAllocation.forage  = 1;
+    if (alloc8.forage === 0 && alloc8.nurse > 0 && colonyFoodTotal(colony) === 0) {
+      colony.computedAllocation.nurse -= 1;
+      colony.computedAllocation.forage = 1;
       colony.nurseCount -= 1;
     }
   }
@@ -814,7 +840,8 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       !colony.foodFlowFieldDirty &&
       !firstEntranceCompute &&
       !firstDigCompute
-    ) continue;
+    )
+      continue;
 
     if (colony.digFlowFieldDirty || firstDigCompute) {
       const out = ensureDigFlowField(digFlowFields, colony.colonyId, gridSize);
@@ -969,16 +996,20 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
 
     // (a) Count current per-task totals by iterating colony.workers (skip dead).
     //     Only the 4 target categories; idle is a transient eligibility state, not a census slot.
-    let actualForage = 0, actualDig = 0, actualFight = 0, actualNurse = 0, actualIdle = 0;
+    let actualForage = 0,
+      actualDig = 0,
+      actualFight = 0,
+      actualNurse = 0,
+      actualIdle = 0;
     for (let i = 0; i < colony.workers.length; i++) {
       const id = colony.workers[i]!;
       if (world.ants.alive[id] !== 1) continue;
       const t = world.ants.task[id]!;
-      if      (t === AntTask.Foraging) actualForage += 1;
-      else if (t === AntTask.Digging)  actualDig    += 1;
-      else if (t === AntTask.Fighting) actualFight  += 1;
-      else if (t === AntTask.Nursing)  actualNurse  += 1;
-      else                             actualIdle   += 1;
+      if (t === AntTask.Foraging) actualForage += 1;
+      else if (t === AntTask.Digging) actualDig += 1;
+      else if (t === AntTask.Fighting) actualFight += 1;
+      else if (t === AntTask.Nursing) actualNurse += 1;
+      else actualIdle += 1;
     }
 
     // Phase 10 / CTRL-06 (D-02 LOCKED) — auto-dig demand override.
@@ -1031,16 +1062,17 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // need to introspect Mark/BeingDug grid state, and the drift is one
     // tick / one slot per dig job.
     const undergroundGrid10a = world.undergroundGrids[colony.colonyId];
-    const rawDigDemand = undergroundGrid10a !== undefined
-      ? computeDigDemand(colony, undergroundGrid10a, world.ants)
-      : 0;
+    const rawDigDemand =
+      undergroundGrid10a !== undefined
+        ? computeDigDemand(colony, undergroundGrid10a, world.ants)
+        : 0;
     const wantDigSlot = rawDigDemand > 0 || actualDig > 0;
     // Try to carve from forage first (D-02 preference), then fight. nurse is
     // never carved (CLNY-09 invariant). digDemand is the canonical 0/1 flag
     // both for `colony.computedAllocation.dig` and `need.dig` below.
     let digDemand = 0;
     let carvedForage = colony.computedAllocation.forage;
-    let carvedFight  = colony.computedAllocation.fight;
+    let carvedFight = colony.computedAllocation.fight;
     if (wantDigSlot) {
       if (colony.computedAllocation.forage > 0) {
         digDemand = 1;
@@ -1107,46 +1139,58 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // (c) Walk the sorted eligibles and reassign into under-represented targets.
     //     Canonical target iteration order: forage → dig → fight → nurse (matches PRD §7a result shape).
     //     This deterministic if/else chain is the ONLY selection strategy.
-    let needForage = carvedForage                    - actualForage;
-    let needDig    = colony.computedAllocation.dig    - actualDig;
-    let needFight  = carvedFight                      - actualFight;
-    let needNurse  = colony.computedAllocation.nurse  - actualNurse;
+    let needForage = carvedForage - actualForage;
+    let needDig = colony.computedAllocation.dig - actualDig;
+    let needFight = carvedFight - actualFight;
+    let needNurse = colony.computedAllocation.nurse - actualNurse;
 
     for (let i = 0; i < eligible.length; i++) {
       const id = eligible[i]!;
       let newTask = -1;
       let newSubTask = 0;
 
-      if      (needForage > 0) { newTask = AntTask.Foraging; newSubTask = ForagingSubState.SearchingFood; needForage -= 1; }
-      else if (needDig    > 0) { newTask = AntTask.Digging;  newSubTask = DiggingSubState.MovingToTile;   needDig    -= 1; }
-      else if (needFight  > 0) { newTask = AntTask.Fighting; newSubTask = FightingSubState.MovingToRally; needFight  -= 1; }
-      else if (needNurse  > 0) { newTask = AntTask.Nursing;  newSubTask = NursingSubState.MovingToBrood;  needNurse  -= 1; }
-      else break; // no remaining under-represented targets; leave rest of eligibles in their current state
+      if (needForage > 0) {
+        newTask = AntTask.Foraging;
+        newSubTask = ForagingSubState.SearchingFood;
+        needForage -= 1;
+      } else if (needDig > 0) {
+        newTask = AntTask.Digging;
+        newSubTask = DiggingSubState.MovingToTile;
+        needDig -= 1;
+      } else if (needFight > 0) {
+        newTask = AntTask.Fighting;
+        newSubTask = FightingSubState.MovingToRally;
+        needFight -= 1;
+      } else if (needNurse > 0) {
+        newTask = AntTask.Nursing;
+        newSubTask = NursingSubState.MovingToBrood;
+        needNurse -= 1;
+      } else break; // no remaining under-represented targets; leave rest of eligibles in their current state
 
       // Decrement actual for the OLD task (so counts stay consistent), increment for new.
       const oldTask = world.ants.task[id]!;
-      if      (oldTask === AntTask.Foraging) actualForage -= 1;
-      else if (oldTask === AntTask.Digging)  actualDig    -= 1;
-      else if (oldTask === AntTask.Fighting) actualFight  -= 1;
-      else if (oldTask === AntTask.Nursing)  actualNurse  -= 1;
-      else                                   actualIdle   -= 1;
+      if (oldTask === AntTask.Foraging) actualForage -= 1;
+      else if (oldTask === AntTask.Digging) actualDig -= 1;
+      else if (oldTask === AntTask.Fighting) actualFight -= 1;
+      else if (oldTask === AntTask.Nursing) actualNurse -= 1;
+      else actualIdle -= 1;
 
-      world.ants.task[id]    = newTask;
+      world.ants.task[id] = newTask;
       world.ants.subTask[id] = newSubTask;
 
-      if      (newTask === AntTask.Foraging) actualForage += 1;
-      else if (newTask === AntTask.Digging)  actualDig    += 1;
-      else if (newTask === AntTask.Fighting) actualFight  += 1;
-      else if (newTask === AntTask.Nursing)  actualNurse  += 1;
+      if (newTask === AntTask.Foraging) actualForage += 1;
+      else if (newTask === AntTask.Digging) actualDig += 1;
+      else if (newTask === AntTask.Fighting) actualFight += 1;
+      else if (newTask === AntTask.Nursing) actualNurse += 1;
     }
 
     void actualIdle; // tracked for internal consistency; not exposed on ColonyRecord (Plan 03 removed idleCount)
 
     // (d) Final census write — true post-reassignment distribution (4 fields: PRD §2 WorkerAllocation).
     colony.taskCensus.forage = actualForage;
-    colony.taskCensus.dig    = actualDig;
-    colony.taskCensus.fight  = actualFight;
-    colony.taskCensus.nurse  = actualNurse;
+    colony.taskCensus.dig = actualDig;
+    colony.taskCensus.fight = actualFight;
+    colony.taskCensus.nurse = actualNurse;
   }
 
   // Step 10b: Phase 7 dig-worker state machine (Marked→BeingDug claim, BeingDug→Open countdown).
@@ -1166,8 +1210,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // updateFightAntTargets so spider priority takes precedence over the rally point.
   // Colony identity is carried in world.spiderPriorityColonyId (not a
   // hard-coded player branch) — CLNY-08 compliant.
-  if (world.spiderPriorityColonyId !== null &&
-      world.spider !== null) {
+  if (world.spiderPriorityColonyId !== null && world.spider !== null) {
     const spiderPriorityCid = world.spiderPriorityColonyId;
     const spTileX = world.spider.posX >> FP_SHIFT;
     const spTileY = world.spider.posY >> FP_SHIFT;
@@ -1223,7 +1266,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       // Push ant away from reticle: target = ant_tile + (ant_tile - reticle_tile).
       let tx = ax + (ax - rx);
       // Exact on-reticle: push north if possible, south otherwise (edge guard).
-      let ty = (ay === ry && ax === rx) ? (ay > 0 ? ay - 1 : ay + 1) : ay + (ay - ry);
+      let ty = ay === ry && ax === rx ? (ay > 0 ? ay - 1 : ay + 1) : ay + (ay - ry);
       if (tx < 0) tx = 0;
       if (tx >= SURFACE_GRID_WIDTH) tx = SURFACE_GRID_WIDTH - 1;
       if (ty < 0) ty = 0;
@@ -1405,8 +1448,7 @@ function isFootprintReachableAfterDigs(
   const h = underground.height;
 
   const inFootprint = (x: number, y: number): boolean =>
-    x >= anchorTileX && x < anchorTileX + width &&
-    y >= anchorTileY && y < anchorTileY + height;
+    x >= anchorTileX && x < anchorTileX + width && y >= anchorTileY && y < anchorTileY + height;
 
   const isTraversable = (x: number, y: number): boolean => {
     if (x < 0 || y < 0 || x >= w || y >= h) return false;

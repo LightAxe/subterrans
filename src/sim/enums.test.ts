@@ -179,11 +179,16 @@ describe('AntTask exhaustive switch (type narrowing)', () => {
   // the type alias narrows correctly so the `default` arm is unreachable.
   function describeTask(task: AntTask): string {
     switch (task) {
-      case AntTask.Idle:     return 'idle';
-      case AntTask.Foraging: return 'foraging';
-      case AntTask.Digging:  return 'digging';
-      case AntTask.Fighting: return 'fighting';
-      case AntTask.Nursing:  return 'nursing';
+      case AntTask.Idle:
+        return 'idle';
+      case AntTask.Foraging:
+        return 'foraging';
+      case AntTask.Digging:
+        return 'digging';
+      case AntTask.Fighting:
+        return 'fighting';
+      case AntTask.Nursing:
+        return 'nursing';
       default: {
         const _exhaustive: never = task as unknown as never;
         return _exhaustive;
@@ -222,16 +227,21 @@ describe('headless survival (Node --experimental-strip-types)', () => {
     // to a singleton — we want to prove the switch works over the full union at runtime.
     function dispatchTask(task: AntTask): string {
       switch (task) {
-        case AntTask.Foraging: return 'foraging';
-        default:               return 'other';
+        case AntTask.Foraging:
+          return 'foraging';
+        default:
+          return 'other';
       }
     }
 
     function dispatchSubState(sub: ForagingSubState): string {
       switch (sub) {
-        case ForagingSubState.SearchingFood:   return 'searching';
-        case ForagingSubState.CarryingFood:    return 'carrying';
-        case ForagingSubState.ReturningToNest: return 'returning';
+        case ForagingSubState.SearchingFood:
+          return 'searching';
+        case ForagingSubState.CarryingFood:
+          return 'carrying';
+        case ForagingSubState.ReturningToNest:
+          return 'returning';
         default: {
           const _exhaustive: never = sub as unknown as never;
           return _exhaustive;

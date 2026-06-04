@@ -18,7 +18,7 @@ export const EGG_HATCH_TICKS = 1200;
 export const LARVA_MATURE_TICKS = 1500;
 
 /** PRD §9c — Worker lifespan: effectively immortal (INT32_MAX ticks). */
-export const WORKER_LIFESPAN_TICKS = 0x7FFFFFFF;
+export const WORKER_LIFESPAN_TICKS = 0x7fffffff;
 
 /** PRD §9c — Ticks between queen egg-laying events (pre-V21 static value). */
 export const QUEEN_EGG_INTERVAL_TICKS = 300;
@@ -306,7 +306,7 @@ export const SEARCH_PAUSE_JITTER_TICKS = 5 as const;
  */
 export const DEFAULT_BEHAVIOR_RATIO = {
   forage: 10,
-  fight:  0,
+  fight: 0,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -594,7 +594,6 @@ export const EXCURSION_WOBBLE_PERCENT = 20;
  */
 export const ENTRANCE_DEPOSIT_SUPPRESS_RADIUS = 3;
 
-
 // ---------------------------------------------------------------------------
 // S1 — Combat math (HP / damage / cooldown)
 // ---------------------------------------------------------------------------
@@ -734,7 +733,6 @@ export const AI_MAX_OPERATION_FIGHTERS = 32 as const;
  */
 export const AI_PROBE_FALLBACK_RADIUS_TILES = 40 as const;
 
-
 // ---------------------------------------------------------------------------
 // S3 — Neutral entity sentinel
 // ---------------------------------------------------------------------------
@@ -785,7 +783,6 @@ export const SPIDER_SWARM_FIGHTER_THRESHOLD = 6 as const;
 /** S3 — Manhattan tile radius within which spider hunts for worker density. */
 export const SPIDER_HUNT_SEARCH_RADIUS_TILES = 12 as const;
 
-
 /** S3 — Minimum workers on a tile to qualify as a hunt target. */
 export const SPIDER_HUNT_MIN_TARGET_WORKERS = 2 as const;
 
@@ -811,7 +808,7 @@ export const SPIDER_TERRITORY_RADIUS_TILES = 24 as const;
 
 /** S3 — Brood kills in a single rampage before spider exits to Feeding. */
 export const SPIDER_RAMPAGE_KILL_QUOTA = 2 as const;
-export const SPIDER_RAMPAGE_MAX_TICKS = 1200 as const;  // timeout if no kills after ~20s
+export const SPIDER_RAMPAGE_MAX_TICKS = 1200 as const; // timeout if no kills after ~20s
 
 /** S3 — HP threshold below which spider retreats. */
 export const SPIDER_RAMPAGE_RETREAT_HP = 20 as const;
@@ -886,4 +883,3 @@ export const SPIDER_FEED_HEAL_INTERVAL_TICKS = 10 as const;
  * it is surrounded. The spider moves at 2× ant speed, so a Chase reliably closes.
  */
 export const SPIDER_DEFENSE_TRIGGER_RADIUS = 6 as const;
-

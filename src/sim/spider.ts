@@ -64,7 +64,11 @@ const HUNT_DIRTY: number[] = [];
 const SURFACE_DANGER_SUFFIX = `:${PheromoneType.DangerTrail}:surface`;
 
 // Module-level scratch for findNearestEntrance return value — avoids per-Rampaging-tick allocation.
-const NEAREST_ENTRANCE_SCRATCH: { x: number; y: number; colonyId: number } = { x: -1, y: -1, colonyId: -1 };
+const NEAREST_ENTRANCE_SCRATCH: { x: number; y: number; colonyId: number } = {
+  x: -1,
+  y: -1,
+  colonyId: -1,
+};
 
 // ---------------------------------------------------------------------------
 // Hunt target selection — deterministic (no rng draws)
@@ -110,8 +114,9 @@ function findHuntTarget(
     if (i === huntQueenId0 || i === huntQueenId1) continue; // queens are not prey
     const ax = ants.posX[i]! >> FP_SHIFT;
     const ay = ants.posY[i]! >> FP_SHIFT;
-    const dist = (ax > spiderTileX ? ax - spiderTileX : spiderTileX - ax) +
-                 (ay > spiderTileY ? ay - spiderTileY : spiderTileY - ay);
+    const dist =
+      (ax > spiderTileX ? ax - spiderTileX : spiderTileX - ax) +
+      (ay > spiderTileY ? ay - spiderTileY : spiderTileY - ay);
     if (dist > r) continue;
     const key = (ay << HUNT_KEY_SHIFT) + ax;
     if (HUNT_TILE_COUNTS[key] === 0) HUNT_DIRTY.push(key);
@@ -172,10 +177,14 @@ function findChaseTarget(world: WorldState, spider: SpiderState): number {
     if (i === chaseQueenId0 || i === chaseQueenId1) continue; // queens are not prey
     const ax = ants.posX[i]! >> FP_SHIFT;
     const ay = ants.posY[i]! >> FP_SHIFT;
-    const dist = (ax > spiderTileX ? ax - spiderTileX : spiderTileX - ax) +
-                 (ay > spiderTileY ? ay - spiderTileY : spiderTileY - ay);
+    const dist =
+      (ax > spiderTileX ? ax - spiderTileX : spiderTileX - ax) +
+      (ay > spiderTileY ? ay - spiderTileY : spiderTileY - ay);
     if (dist > r) continue;
-    if (dist < bestDist) { bestDist = dist; bestId = i; } // strict < ⇒ lower id wins on tie
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestId = i;
+    } // strict < ⇒ lower id wins on tie
   }
   return bestId;
 }
@@ -211,7 +220,7 @@ function isSurfaceAntOnTile(world: WorldState, tileX: number, tileY: number): bo
     if (ants.alive[i] !== 1) continue;
     if (ants.zone[i] !== 0) continue; // surface only
     if (i === queenId0 || i === queenId1) continue; // queens are not bite-able
-    if ((ants.posX[i]! >> FP_SHIFT) === tileX && (ants.posY[i]! >> FP_SHIFT) === tileY) return true;
+    if (ants.posX[i]! >> FP_SHIFT === tileX && ants.posY[i]! >> FP_SHIFT === tileY) return true;
   }
   return false;
 }
@@ -239,10 +248,14 @@ function findNearestAttackingFighter(world: WorldState, spider: SpiderState): nu
     if (ants.task[i] !== AntTask.Fighting) continue;
     const ax = ants.posX[i]! >> FP_SHIFT;
     const ay = ants.posY[i]! >> FP_SHIFT;
-    const dist = (ax > spiderTileX ? ax - spiderTileX : spiderTileX - ax) +
-                 (ay > spiderTileY ? ay - spiderTileY : spiderTileY - ay);
+    const dist =
+      (ax > spiderTileX ? ax - spiderTileX : spiderTileX - ax) +
+      (ay > spiderTileY ? ay - spiderTileY : spiderTileY - ay);
     if (dist > r) continue;
-    if (dist < bestDist) { bestDist = dist; bestId = i; } // strict < ⇒ lower id wins on tie
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestId = i;
+    } // strict < ⇒ lower id wins on tie
   }
   return bestId;
 }
@@ -299,7 +312,6 @@ function findNearestEntrance(
   return NEAREST_ENTRANCE_SCRATCH;
 }
 
-
 // ---------------------------------------------------------------------------
 // Rampage target colony selection — 60/40 weighted toward richer colony
 // ---------------------------------------------------------------------------
@@ -340,7 +352,7 @@ function pickRampageTarget(world: WorldState, spider: SpiderState): number {
   // deterministic, no rngState draw.
   const h = hash32(world.terrainSeed ^ spider.rampageStartTick);
   // 60% → richer colony (index 0), 40% → poorer (index 1).
-  return (h % 100) < 60 ? candidates[0]!.colonyId : candidates[1]!.colonyId;
+  return h % 100 < 60 ? candidates[0]!.colonyId : candidates[1]!.colonyId;
 }
 
 // ---------------------------------------------------------------------------
@@ -385,10 +397,22 @@ function tickPatrolMovement(world: WorldState, spider: SpiderState): void {
   let tx: number;
   let ty: number;
   switch (phase) {
-    case 0: tx = lx + r; ty = ly - r; break;
-    case 1: tx = lx + r; ty = ly + r; break;
-    case 2: tx = lx - r; ty = ly + r; break;
-    default: tx = lx - r; ty = ly - r; break;
+    case 0:
+      tx = lx + r;
+      ty = ly - r;
+      break;
+    case 1:
+      tx = lx + r;
+      ty = ly + r;
+      break;
+    case 2:
+      tx = lx - r;
+      ty = ly + r;
+      break;
+    default:
+      tx = lx - r;
+      ty = ly - r;
+      break;
   }
   // Clamp target within grid
   if (tx < 0) tx = 0;
@@ -422,15 +446,30 @@ function seedDangerPheromone(world: WorldState, spider: SpiderState): void {
     if (!colonyKey.endsWith(SURFACE_DANGER_SUFFIX)) continue;
     const grid = world.pheromoneGrids[colonyKey]!;
     // center (spider is always within surface bounds)
-    { const v = phGet(grid, tileX, tileY) + center; phSet(grid, tileX, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
+    {
+      const v = phGet(grid, tileX, tileY) + center;
+      phSet(grid, tileX, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v);
+    }
     // north
-    if (tileY > 0) { const v = phGet(grid, tileX, tileY - 1) + nb; phSet(grid, tileX, tileY - 1, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
+    if (tileY > 0) {
+      const v = phGet(grid, tileX, tileY - 1) + nb;
+      phSet(grid, tileX, tileY - 1, v > PHEROMONE_CAP ? PHEROMONE_CAP : v);
+    }
     // south
-    if (tileY < h - 1) { const v = phGet(grid, tileX, tileY + 1) + nb; phSet(grid, tileX, tileY + 1, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
+    if (tileY < h - 1) {
+      const v = phGet(grid, tileX, tileY + 1) + nb;
+      phSet(grid, tileX, tileY + 1, v > PHEROMONE_CAP ? PHEROMONE_CAP : v);
+    }
     // west
-    if (tileX > 0) { const v = phGet(grid, tileX - 1, tileY) + nb; phSet(grid, tileX - 1, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
+    if (tileX > 0) {
+      const v = phGet(grid, tileX - 1, tileY) + nb;
+      phSet(grid, tileX - 1, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v);
+    }
     // east
-    if (tileX < w - 1) { const v = phGet(grid, tileX + 1, tileY) + nb; phSet(grid, tileX + 1, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v); }
+    if (tileX < w - 1) {
+      const v = phGet(grid, tileX + 1, tileY) + nb;
+      phSet(grid, tileX + 1, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v);
+    }
   }
 }
 
@@ -563,9 +602,11 @@ export function tickSpider(world: WorldState): void {
 // ---------------------------------------------------------------------------
 function tickSpiderV22(world: WorldState, spider: SpiderState): void {
   // HP regeneration: 1 HP per 20 ticks while Retreating or Feeding.
-  if ((spider.state === 'Retreating' || spider.state === 'Feeding') &&
-      (world.tick % 20 === 0) &&
-      spider.hp < SPIDER_HP_FULL) {
+  if (
+    (spider.state === 'Retreating' || spider.state === 'Feeding') &&
+    world.tick % 20 === 0 &&
+    spider.hp < SPIDER_HP_FULL
+  ) {
     spider.hp += SPIDER_HP_REGEN_PER_20_TICKS;
     if (spider.hp > SPIDER_HP_FULL) spider.hp = SPIDER_HP_FULL;
   }
@@ -578,8 +619,10 @@ function tickSpiderV22(world: WorldState, spider: SpiderState): void {
   // --- Priority retreating-threshold check (applies to Striking, Chasing, Rampaging) ---
   // This runs before state-specific logic so a combat-damaged spider retreats
   // immediately, even on the same tick its duration would have expired.
-  if ((spider.state === 'Striking' || spider.state === 'Chasing' || spider.state === 'Rampaging') &&
-      spider.hp < SPIDER_RAMPAGE_RETREAT_HP) {
+  if (
+    (spider.state === 'Striking' || spider.state === 'Chasing' || spider.state === 'Rampaging') &&
+    spider.hp < SPIDER_RAMPAGE_RETREAT_HP
+  ) {
     if (spider.state === 'Striking') {
       emitSpiderHuntEnd(world, 'swarm_retreat', spider.killsThisStrike);
     } else if (spider.state === 'Chasing') {
@@ -619,9 +662,8 @@ function tickSpiderV22(world: WorldState, spider: SpiderState): void {
       } else {
         // V23 (#146): opportunistic chase — a lone ant within trigger radius takes
         // precedence over the scheduled tile-density hunt (but not over rampaging).
-        const chaseId = world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO
-          ? findChaseTarget(world, spider)
-          : -1;
+        const chaseId =
+          world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO ? findChaseTarget(world, spider) : -1;
         if (chaseId >= 0) {
           spider.state = 'Chasing';
           spider.chaseTargetAntId = chaseId;
@@ -764,8 +806,10 @@ function tickSpiderV22(world: WorldState, spider: SpiderState): void {
     }
 
     case 'Retreating': {
-      if (spider.hp >= SPIDER_HP_FULL &&
-          world.tick >= spider.retreatStartTick + SPIDER_RETREAT_MIN_TICKS) {
+      if (
+        spider.hp >= SPIDER_HP_FULL &&
+        world.tick >= spider.retreatStartTick + SPIDER_RETREAT_MIN_TICKS
+      ) {
         spider.state = 'Patrolling';
         spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
       }
@@ -780,7 +824,10 @@ function tickSpiderV22(world: WorldState, spider: SpiderState): void {
   if (spider.state === 'Rampaging' && spider.rampageTargetColonyId < 0) {
     spider.rampageTargetColonyId = pickRampageTarget(world, spider);
   }
-  const rampageNearest = spider.state === 'Rampaging' ? findNearestEntrance(world, spider, spider.rampageTargetColonyId) : null;
+  const rampageNearest =
+    spider.state === 'Rampaging'
+      ? findNearestEntrance(world, spider, spider.rampageTargetColonyId)
+      : null;
   switch (spider.state) {
     case 'Patrolling': {
       tickPatrolMovement(world, spider);
@@ -800,7 +847,11 @@ function tickSpiderV22(world: WorldState, spider: SpiderState): void {
       // handled dead/underground/leash-expired targets, so the id is live here).
       const tid = spider.chaseTargetAntId;
       if (tid >= 0 && world.ants.alive[tid] === 1) {
-        moveTowardTile(spider, world.ants.posX[tid]! >> FP_SHIFT, world.ants.posY[tid]! >> FP_SHIFT);
+        moveTowardTile(
+          spider,
+          world.ants.posX[tid]! >> FP_SHIFT,
+          world.ants.posY[tid]! >> FP_SHIFT,
+        );
       }
       break;
     }
@@ -829,7 +880,6 @@ function tickSpiderV22(world: WorldState, spider: SpiderState): void {
   if (isOnSurface) {
     seedDangerPheromone(world, spider);
   }
-
 
   // --- scatterReticleTile shadow field: written at end for next tick's step 13e ---
   // Hunting/Striking scatter around the hunt target tile; Chasing (V23) scatters around
@@ -1010,11 +1060,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
   //     would let the pinned ant slip underground next tick (movement reads the
   //     spider's state before the spider ticks). Holding is not passive: the spider
   //     still bites back any ant that steps onto its tile via tile-coincident combat.
-  if (
-    spider.state === 'Patrolling' ||
-    spider.state === 'Hunting' ||
-    spider.state === 'Rampaging'
-  ) {
+  if (spider.state === 'Patrolling' || spider.state === 'Hunting' || spider.state === 'Rampaging') {
     let holdGate = false;
     if (spider.state === 'Rampaging' && spider.rampageTargetColonyId >= 0) {
       const camped = findNearestEntrance(world, spider, spider.rampageTargetColonyId);
@@ -1105,7 +1151,11 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
       if (world.tick - spider.strikeStartTick >= SPIDER_STRIKE_TICKS) {
         // Kills route through step 3 (killedThisTick → Feeding). Reaching here
         // means no feed this strike (no kill, or a fighter-adjacent kill); scatter.
-        emitSpiderHuntEnd(world, spider.killsThisStrike > 0 ? 'kill' : 'scatter', spider.killsThisStrike);
+        emitSpiderHuntEnd(
+          world,
+          spider.killsThisStrike > 0 ? 'kill' : 'scatter',
+          spider.killsThisStrike,
+        );
         clearSpiderPairingSentinels(world);
         spider.state = 'Patrolling';
         spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
@@ -1161,11 +1211,14 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
         spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
         spider.rampageTargetColonyId = -1;
         world.spiderPriorityColonyId = null;
-      } else if (spider.rampageTargetColonyId < 0 ||
-                 findNearestEntrance(world, spider, spider.rampageTargetColonyId) === null) {
+      } else if (
+        spider.rampageTargetColonyId < 0 ||
+        findNearestEntrance(world, spider, spider.rampageTargetColonyId) === null
+      ) {
         // No target yet, or the camped colony sealed its only open entrance.
         // (Re-pick first; if still no open entrance, resume patrolling.)
-        if (spider.rampageTargetColonyId < 0) spider.rampageTargetColonyId = pickRampageTarget(world, spider);
+        if (spider.rampageTargetColonyId < 0)
+          spider.rampageTargetColonyId = pickRampageTarget(world, spider);
         if (findNearestEntrance(world, spider, spider.rampageTargetColonyId) === null) {
           emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
           clearSpiderPairingSentinels(world);
@@ -1214,12 +1267,18 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
       } else {
         const sx = spider.posX >> FP_SHIFT;
         const sy = spider.posY >> FP_SHIFT;
-        if (spider.feedArrivedTick < 0 && sx === spider.feedAwayTileX && sy === spider.feedAwayTileY) {
+        if (
+          spider.feedArrivedTick < 0 &&
+          sx === spider.feedAwayTileX &&
+          sy === spider.feedAwayTileY
+        ) {
           spider.feedArrivedTick = world.tick;
         }
         if (spider.feedArrivedTick >= 0) {
-          if ((world.tick - spider.feedArrivedTick) % SPIDER_FEED_HEAL_INTERVAL_TICKS === 0 &&
-              spider.hp < SPIDER_HP_FULL) {
+          if (
+            (world.tick - spider.feedArrivedTick) % SPIDER_FEED_HEAL_INTERVAL_TICKS === 0 &&
+            spider.hp < SPIDER_HP_FULL
+          ) {
             spider.hp += 1;
             if (spider.hp > SPIDER_HP_FULL) spider.hp = SPIDER_HP_FULL;
           }
@@ -1240,9 +1299,10 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
   }
 
   // 6. Movement.
-  const rampageNearest = spider.state === 'Rampaging'
-    ? findNearestEntrance(world, spider, spider.rampageTargetColonyId)
-    : null;
+  const rampageNearest =
+    spider.state === 'Rampaging'
+      ? findNearestEntrance(world, spider, spider.rampageTargetColonyId)
+      : null;
   switch (spider.state) {
     case 'Patrolling': {
       // Slow meander across the whole map: step only every Nth tick toward a
@@ -1269,7 +1329,11 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
     case 'Chasing': {
       const tid = spider.chaseTargetAntId;
       if (tid >= 0 && world.ants.alive[tid] === 1) {
-        moveTowardTile(spider, world.ants.posX[tid]! >> FP_SHIFT, world.ants.posY[tid]! >> FP_SHIFT);
+        moveTowardTile(
+          spider,
+          world.ants.posX[tid]! >> FP_SHIFT,
+          world.ants.posY[tid]! >> FP_SHIFT,
+        );
       }
       break;
     }

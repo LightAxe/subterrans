@@ -77,7 +77,14 @@ export interface ChamberFlowFields {
 }
 
 export function createChamberFlowFields(): ChamberFlowFields {
-  return { food: {}, nursing: {}, queen: {}, nurseDeposit: {}, queues: {}, depositReachVisited: {} };
+  return {
+    food: {},
+    nursing: {},
+    queen: {},
+    nurseDeposit: {},
+    queues: {},
+    depositReachVisited: {},
+  };
 }
 
 /**
@@ -91,19 +98,27 @@ export function ensureChamberFlowFields(
   cache: ChamberFlowFields,
   colonyId: ColonyId,
   gridSize: number,
-): { food: Int32Array; nursing: Int32Array; queen: Int32Array; nurseDeposit: Int32Array; queue: Int32Array; depositReachVisited: Int32Array } {
-  if (!(colonyId in cache.food))         cache.food[colonyId]         = new Int32Array(gridSize);
-  if (!(colonyId in cache.nursing))      cache.nursing[colonyId]      = new Int32Array(gridSize);
-  if (!(colonyId in cache.queen))        cache.queen[colonyId]        = new Int32Array(gridSize);
+): {
+  food: Int32Array;
+  nursing: Int32Array;
+  queen: Int32Array;
+  nurseDeposit: Int32Array;
+  queue: Int32Array;
+  depositReachVisited: Int32Array;
+} {
+  if (!(colonyId in cache.food)) cache.food[colonyId] = new Int32Array(gridSize);
+  if (!(colonyId in cache.nursing)) cache.nursing[colonyId] = new Int32Array(gridSize);
+  if (!(colonyId in cache.queen)) cache.queen[colonyId] = new Int32Array(gridSize);
   if (!(colonyId in cache.nurseDeposit)) cache.nurseDeposit[colonyId] = new Int32Array(gridSize);
-  if (!(colonyId in cache.queues))       cache.queues[colonyId]       = new Int32Array(gridSize);
-  if (!(colonyId in cache.depositReachVisited)) cache.depositReachVisited[colonyId] = new Int32Array(gridSize);
+  if (!(colonyId in cache.queues)) cache.queues[colonyId] = new Int32Array(gridSize);
+  if (!(colonyId in cache.depositReachVisited))
+    cache.depositReachVisited[colonyId] = new Int32Array(gridSize);
   return {
-    food:                cache.food[colonyId]!,
-    nursing:             cache.nursing[colonyId]!,
-    queen:               cache.queen[colonyId]!,
-    nurseDeposit:        cache.nurseDeposit[colonyId]!,
-    queue:               cache.queues[colonyId]!,
+    food: cache.food[colonyId]!,
+    nursing: cache.nursing[colonyId]!,
+    queen: cache.queen[colonyId]!,
+    nurseDeposit: cache.nurseDeposit[colonyId]!,
+    queue: cache.queues[colonyId]!,
     depositReachVisited: cache.depositReachVisited[colonyId]!,
   };
 }
@@ -152,7 +167,10 @@ export function computeChamberFlowField(
     const chamber = chambers[c]!;
     let matches = false;
     for (let t = 0; t < chamberTypes.length; t++) {
-      if (chamber.chamberType === chamberTypes[t]!) { matches = true; break; }
+      if (chamber.chamberType === chamberTypes[t]!) {
+        matches = true;
+        break;
+      }
     }
     if (!matches) continue;
     if (chamberFilter !== undefined && !chamberFilter(chamber)) continue;
@@ -221,10 +239,7 @@ function residentBroodInChamber(
       if (!isBroodReclaimable(ants, bid)) continue;
       const tx = ants.posX[bid]! >> FP_SHIFT;
       const ty = ants.posY[bid]! >> FP_SHIFT;
-      if (
-        tx >= bx && tx < bx + chamber.width &&
-        ty >= by && ty < by + chamber.height
-      ) count++;
+      if (tx >= bx && tx < bx + chamber.width && ty >= by && ty < by + chamber.height) count++;
     }
   }
   return count;
@@ -383,10 +398,7 @@ export function hasReachableNonFullNursery(
   queue: Int32Array,
 ): boolean {
   const { data, width, height } = underground;
-  if (
-    carrierTileX < 0 || carrierTileX >= width ||
-    carrierTileY < 0 || carrierTileY >= height
-  ) {
+  if (carrierTileX < 0 || carrierTileX >= width || carrierTileY < 0 || carrierTileY >= height) {
     return false;
   }
 
@@ -414,10 +426,7 @@ export function hasReachableNonFullNursery(
       const nIdx = nRow * width + nCol;
       if (visited[nIdx] === 1) continue;
       const tileState = data[nIdx]!;
-      if (
-        tileState !== UndergroundTileState.Open &&
-        tileState !== UndergroundTileState.BeingDug
-      ) {
+      if (tileState !== UndergroundTileState.Open && tileState !== UndergroundTileState.BeingDug) {
         continue;
       }
       visited[nIdx] = 1;
@@ -497,11 +506,11 @@ export const NURSERY_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [ChamberType.Nu
 export function computeNursingPickupField(
   underground: UndergroundGrid,
   chambers: ReadonlyArray<ChamberRecord>,
-  ants:      AntComponents,
-  eggIds:    ReadonlyArray<number>,
+  ants: AntComponents,
+  eggIds: ReadonlyArray<number>,
   larvaeIds: ReadonlyArray<number>,
-  out:       Int32Array,
-  queue:     Int32Array,
+  out: Int32Array,
+  queue: Int32Array,
 ): void {
   const { data, width, height } = underground;
 
@@ -545,10 +554,7 @@ export function computeNursingPickupField(
         if (chamber.chamberType !== ChamberType.Nursery) continue;
         const bx = chamber.posX >> FP_SHIFT;
         const by = chamber.posY >> FP_SHIFT;
-        if (
-          tx >= bx && tx < bx + chamber.width &&
-          ty >= by && ty < by + chamber.height
-        ) {
+        if (tx >= bx && tx < bx + chamber.width && ty >= by && ty < by + chamber.height) {
           insideNursery = true;
           break;
         }
@@ -566,10 +572,8 @@ export function computeNursingPickupField(
       // ant-system.ts applies the same Open-or-BeingDug filter so the
       // field-seed-set and the release predicate agree exactly.
       const tileState = data[idx]!;
-      if (
-        tileState !== UndergroundTileState.Open &&
-        tileState !== UndergroundTileState.BeingDug
-      ) continue;
+      if (tileState !== UndergroundTileState.Open && tileState !== UndergroundTileState.BeingDug)
+        continue;
       if (out[idx] !== -2) continue;
       out[idx] = -1;
       queue[tail++] = idx;

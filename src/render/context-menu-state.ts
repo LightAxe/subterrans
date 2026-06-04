@@ -25,9 +25,9 @@
 // Tests use `hideContextMenu()` for immediate synchronous reset between cases.
 
 export interface ContextMenuState {
-  visible:     boolean;
-  screenX:     number;
-  screenY:     number;
+  visible: boolean;
+  screenX: number;
+  screenY: number;
   anchorTileX: number;
   anchorTileY: number;
   /** Set by requestHideContextMenu; cleared by applyPendingContextMenuHide on the next update frame. */
@@ -37,9 +37,9 @@ export interface ContextMenuState {
 }
 
 export const contextMenuState: ContextMenuState = {
-  visible:     false,
-  screenX:     0,
-  screenY:     0,
+  visible: false,
+  screenX: 0,
+  screenY: 0,
   anchorTileX: 0,
   anchorTileY: 0,
   pendingHide: false,
@@ -53,7 +53,7 @@ export const contextMenuState: ContextMenuState = {
  * stale request doesn't resurrect the menu a frame later.
  */
 export function hideContextMenu(): void {
-  contextMenuState.visible     = false;
+  contextMenuState.visible = false;
   contextMenuState.pendingHide = false;
   contextMenuState.pendingShow = false;
 }
@@ -79,13 +79,13 @@ export function requestHideContextMenu(): void {
  * right-click as a menu item selection.
  */
 export function requestShowContextMenu(
-  screenX:     number,
-  screenY:     number,
+  screenX: number,
+  screenY: number,
   anchorTileX: number,
   anchorTileY: number,
 ): void {
-  contextMenuState.screenX     = screenX;
-  contextMenuState.screenY     = screenY;
+  contextMenuState.screenX = screenX;
+  contextMenuState.screenY = screenY;
   contextMenuState.anchorTileX = anchorTileX;
   contextMenuState.anchorTileY = anchorTileY;
   contextMenuState.pendingShow = true;
@@ -97,7 +97,7 @@ export function requestShowContextMenu(
  */
 export function applyPendingContextMenuHide(): void {
   if (contextMenuState.pendingHide) {
-    contextMenuState.visible     = false;
+    contextMenuState.visible = false;
     contextMenuState.pendingHide = false;
   }
 }
@@ -111,7 +111,7 @@ export function applyPendingContextMenuHide(): void {
  */
 export function applyPendingContextMenuShow(): void {
   if (contextMenuState.pendingShow) {
-    contextMenuState.visible     = true;
+    contextMenuState.visible = true;
     contextMenuState.pendingShow = false;
   }
 }

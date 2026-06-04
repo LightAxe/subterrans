@@ -8,7 +8,13 @@
 
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
-import { createWorldState, allocateEntityId, SIM_VERSION_V13_INVARIANT_FIXES, SIM_VERSION_V20_SPIDER, SIM_VERSION_V23_SPIDER_AGGRO } from './types.js';
+import {
+  createWorldState,
+  allocateEntityId,
+  SIM_VERSION_V13_INVARIANT_FIXES,
+  SIM_VERSION_V20_SPIDER,
+  SIM_VERSION_V23_SPIDER_AGGRO,
+} from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import { createPheromoneGrid, phGet, pheromoneGridKey } from './pheromone/pheromone-store.js';
@@ -43,102 +49,122 @@ function serializeWorldState(w: WorldState): string {
     rngState: w.rngState,
     nextEntityId: w.nextEntityId,
     simVersion: w.simVersion,
-    commandQueue: w.commandQueue.map(c => ({ ...c })),
+    commandQueue: w.commandQueue.map((c) => ({ ...c })),
     ants: {
-      posX:            Array.from(w.ants.posX),
-      posY:            Array.from(w.ants.posY),
-      alive:           Array.from(w.ants.alive),
-      age:             Array.from(w.ants.age),
-      task:            Array.from(w.ants.task),
-      subTask:         Array.from(w.ants.subTask),
-      speed:           Array.from(w.ants.speed),
-      lifespan:        Array.from(w.ants.lifespan),
-      colonyId:        Array.from(w.ants.colonyId),
-      foodCarrying:    Array.from(w.ants.foodCarrying),
+      posX: Array.from(w.ants.posX),
+      posY: Array.from(w.ants.posY),
+      alive: Array.from(w.ants.alive),
+      age: Array.from(w.ants.age),
+      task: Array.from(w.ants.task),
+      subTask: Array.from(w.ants.subTask),
+      speed: Array.from(w.ants.speed),
+      lifespan: Array.from(w.ants.lifespan),
+      colonyId: Array.from(w.ants.colonyId),
+      foodCarrying: Array.from(w.ants.foodCarrying),
       starvationTimer: Array.from(w.ants.starvationTimer),
       // Phase 7 ant fields:
-      zone:               Array.from(w.ants.zone),
-      digTileX:           Array.from(w.ants.digTileX),
-      digTileY:           Array.from(w.ants.digTileY),
-      digTicksRemaining:  Array.from(w.ants.digTicksRemaining),
-      targetPosX:         Array.from(w.ants.targetPosX),
-      targetPosY:         Array.from(w.ants.targetPosY),
+      zone: Array.from(w.ants.zone),
+      digTileX: Array.from(w.ants.digTileX),
+      digTileY: Array.from(w.ants.digTileY),
+      digTicksRemaining: Array.from(w.ants.digTicksRemaining),
+      targetPosX: Array.from(w.ants.targetPosX),
+      targetPosY: Array.from(w.ants.targetPosY),
       // Phase 09.1 Chunk 0 — grid-of-occupancy byte (new SoA field).
       currentGridColonyId: Array.from(w.ants.currentGridColonyId),
       // Phase 9 — 6 previously-omitted SoA fields (pre-existing serializer
       // gap closed here per 09.1-00-PLAN). If closure surfaces a latent
       // non-deterministic divergence in one of these fields, revert ONLY the
       // 6 search* lines and document in 09.1-MEMO.md §5 Deviations Log.
-      searchWave:         Array.from(w.ants.searchWave),
-      searchHeadingX:     Array.from(w.ants.searchHeadingX),
-      searchHeadingY:     Array.from(w.ants.searchHeadingY),
+      searchWave: Array.from(w.ants.searchWave),
+      searchHeadingX: Array.from(w.ants.searchHeadingX),
+      searchHeadingY: Array.from(w.ants.searchHeadingY),
       searchHeadingTicks: Array.from(w.ants.searchHeadingTicks),
-      searchPrevTileX:    Array.from(w.ants.searchPrevTileX),
-      searchPrevTileY:    Array.from(w.ants.searchPrevTileY),
+      searchPrevTileX: Array.from(w.ants.searchPrevTileX),
+      searchPrevTileY: Array.from(w.ants.searchPrevTileY),
       // Issue #27 — carrier wait flag (new SoA field). Must round-trip in
       // determinism asserts so a divergence in wait-state would break the
       // byte-identical compare.
-      waitingDeposit:     Array.from(w.ants.waitingDeposit),
+      waitingDeposit: Array.from(w.ants.waitingDeposit),
       // Issue #34 / #35 — Bresenham accumulator + pause counter. Same
       // round-trip rationale: divergence in either field changes future
       // tick output, so determinism compare must include them.
-      pathErr:            Array.from(w.ants.pathErr),
-      searchPauseTicks:   Array.from(w.ants.searchPauseTicks),
+      pathErr: Array.from(w.ants.pathErr),
+      searchPauseTicks: Array.from(w.ants.searchPauseTicks),
       // Phase 9 / S3 combat fields — spider writes these every tick; omitting
       // them would silently pass even if resolveSpiderCombatOnTile diverges.
-      hp:                 Array.from(w.ants.hp),
-      homeGroundBonusHp:  Array.from(w.ants.homeGroundBonusHp),
-      attackCooldown:     Array.from(w.ants.attackCooldown),
-      combatOpponentId:   Array.from(w.ants.combatOpponentId),
-      carryingBroodId:    Array.from(w.ants.carryingBroodId),
-      carriedBy:          Array.from(w.ants.carriedBy),
-      recentTilesX:       Array.from(w.ants.recentTilesX),
-      recentTilesY:       Array.from(w.ants.recentTilesY),
-      recentTilesHead:    Array.from(w.ants.recentTilesHead),
+      hp: Array.from(w.ants.hp),
+      homeGroundBonusHp: Array.from(w.ants.homeGroundBonusHp),
+      attackCooldown: Array.from(w.ants.attackCooldown),
+      combatOpponentId: Array.from(w.ants.combatOpponentId),
+      carryingBroodId: Array.from(w.ants.carryingBroodId),
+      carriedBy: Array.from(w.ants.carriedBy),
+      recentTilesX: Array.from(w.ants.recentTilesX),
+      recentTilesY: Array.from(w.ants.recentTilesY),
+      recentTilesHead: Array.from(w.ants.recentTilesHead),
     },
-    colonies: Object.keys(w.colonies).sort().reduce((acc, k) => {
-      const c = w.colonies[Number(k) as ColonyId]!;
-      acc[k] = {
-        colonyId:             c.colonyId,
-        queenEntityId:        c.queenEntityId,
-        queenStarvationTimer: c.queenStarvationTimer,
-        foodStored:           c.foodStored,
-        workerCount:          c.workerCount,
-        eggCount:             c.eggCount,
-        larvaeCount:          c.larvaeCount,
-        nurseCount:           c.nurseCount,
-        defeated:             c.defeated,
-        reconcileCountdown:   c.reconcileCountdown,
-        killCount:            c.killCount,
-        digFlowFieldDirty:    c.digFlowFieldDirty,
-        eggs:                 [...c.eggs],
-        larvae:               [...c.larvae],
-        workers:              [...c.workers],
-        chambers:             c.chambers.map(ch => ({ ...ch })),
-        entrances:            c.entrances.map(e => ({ ...e })),
-        targetRatio:          { ...c.targetRatio },
-        computedAllocation:   { ...c.computedAllocation },
-        taskCensus:           { ...c.taskCensus },
-      };
-      return acc;
-    }, {} as Record<string, unknown>),
-    pheromoneGrids: Object.keys(w.pheromoneGrids).sort().reduce((acc, k) => {
-      const g = w.pheromoneGrids[k]!;
-      acc[k] = { width: g.width, height: g.height, data: Array.from(g.data) };
-      return acc;
-    }, {} as Record<string, unknown>),
+    colonies: Object.keys(w.colonies)
+      .sort()
+      .reduce(
+        (acc, k) => {
+          const c = w.colonies[Number(k) as ColonyId]!;
+          acc[k] = {
+            colonyId: c.colonyId,
+            queenEntityId: c.queenEntityId,
+            queenStarvationTimer: c.queenStarvationTimer,
+            foodStored: c.foodStored,
+            workerCount: c.workerCount,
+            eggCount: c.eggCount,
+            larvaeCount: c.larvaeCount,
+            nurseCount: c.nurseCount,
+            defeated: c.defeated,
+            reconcileCountdown: c.reconcileCountdown,
+            killCount: c.killCount,
+            digFlowFieldDirty: c.digFlowFieldDirty,
+            eggs: [...c.eggs],
+            larvae: [...c.larvae],
+            workers: [...c.workers],
+            chambers: c.chambers.map((ch) => ({ ...ch })),
+            entrances: c.entrances.map((e) => ({ ...e })),
+            targetRatio: { ...c.targetRatio },
+            computedAllocation: { ...c.computedAllocation },
+            taskCensus: { ...c.taskCensus },
+          };
+          return acc;
+        },
+        {} as Record<string, unknown>,
+      ),
+    pheromoneGrids: Object.keys(w.pheromoneGrids)
+      .sort()
+      .reduce(
+        (acc, k) => {
+          const g = w.pheromoneGrids[k]!;
+          acc[k] = { width: g.width, height: g.height, data: Array.from(g.data) };
+          return acc;
+        },
+        {} as Record<string, unknown>,
+      ),
     // Phase 7: underground grids
-    undergroundGrids: Object.keys(w.undergroundGrids).sort().reduce((acc, k) => {
-      const g = w.undergroundGrids[Number(k) as ColonyId]!;
-      acc[k] = { width: g.width, height: g.height, data: Array.from(g.data) };
-      return acc;
-    }, {} as Record<string, unknown>),
+    undergroundGrids: Object.keys(w.undergroundGrids)
+      .sort()
+      .reduce(
+        (acc, k) => {
+          const g = w.undergroundGrids[Number(k) as ColonyId]!;
+          acc[k] = { width: g.width, height: g.height, data: Array.from(g.data) };
+          return acc;
+        },
+        {} as Record<string, unknown>,
+      ),
     // Phase 7: food piles and pending chambers
-    foodPiles: w.foodPiles.map(p => ({ ...p })),
-    pendingChambers: Object.keys(w.pendingChambers).sort().reduce((acc, k) => {
-      acc[k] = { ...w.pendingChambers[k]! };
-      return acc;
-    }, {} as Record<string, unknown>),
+    foodPiles: w.foodPiles.map((p) => ({ ...p })),
+    pendingChambers: Object.keys(w.pendingChambers)
+      .sort()
+      .reduce(
+        (acc, k) => {
+          acc[k] = { ...w.pendingChambers[k]! };
+          return acc;
+        },
+        {} as Record<string, unknown>,
+      ),
     // S3 V20 — spider entity and priority/scatter shadow fields
     spider: w.spider === null ? null : { ...w.spider },
     spiderPriorityColonyId: w.spiderPriorityColonyId,
@@ -154,13 +180,13 @@ function buildWorld(seed: number): { world: WorldState; queenId: number; colonyI
   const world = createWorldState(seed);
   const queenId = allocateEntityId(world);
   initAnt(world.ants, queenId, {
-    colonyId:  1,
-    posX:      32 << FP_SHIFT,
-    posY:      32 << FP_SHIFT,
-    task:      AntTask.Idle,
-    subTask:   0,
-    speed:     0,
-    lifespan:  WORKER_LIFESPAN_TICKS,
+    colonyId: 1,
+    posX: 32 << FP_SHIFT,
+    posY: 32 << FP_SHIFT,
+    task: AntTask.Idle,
+    subTask: 0,
+    speed: 0,
+    lifespan: WORKER_LIFESPAN_TICKS,
   });
   world.colonies[1] = createColonyRecord(1, queenId);
   // Issue #15: chamber.foodStored is now per-chamber authoritative. The
@@ -172,13 +198,13 @@ function buildWorld(seed: number): { world: WorldState; queenId: number; colonyI
   world.colonies[1]!.foodStored = 0;
   for (let i = 0; i < 20; i++) {
     world.colonies[1]!.chambers.push({
-      chamberId:   1000 + i,
+      chamberId: 1000 + i,
       chamberType: ChamberType.FoodStorage,
-      foodStored:  5000,
-      posX:        0,
-      posY:        0,
-      width:       3,
-      height:      3,
+      foodStored: 5000,
+      posX: 0,
+      posY: 0,
+      width: 3,
+      height: 3,
     });
   }
   // 09 reproduction-gate memo: queen egg production requires a completed
@@ -192,22 +218,28 @@ function buildWorld(seed: number): { world: WorldState; queenId: number; colonyI
   // to simulate relocation via entrances (Test 6 has no entrances or
   // underground grid — it's a behavior-free lifecycle harness).
   world.colonies[1]!.chambers.push({
-    chamberId:   1100,
+    chamberId: 1100,
     chamberType: ChamberType.Queen,
-    foodStored:  0,
-    posX:        32 << FP_SHIFT, posY: 32 << FP_SHIFT, width: 2, height: 2,
+    foodStored: 0,
+    posX: 32 << FP_SHIFT,
+    posY: 32 << FP_SHIFT,
+    width: 2,
+    height: 2,
   });
   world.colonies[1]!.chambers.push({
-    chamberId:   1101,
+    chamberId: 1101,
     chamberType: ChamberType.Nursery,
-    foodStored:  0,
-    posX:        0, posY: 0, width: 2, height: 2,
+    foodStored: 0,
+    posX: 0,
+    posY: 0,
+    width: 2,
+    height: 2,
   });
   world.ants.zone[queenId] = 1; // Zone.Underground — Gate 6 precondition
   // Phase 3 PRD §2a caller-side extension fields (factory does not set these):
-  world.colonies[1]!.entrances          = [];
-  world.colonies[1]!.rallyPoint         = null;
-  world.colonies[1]!.digFlowFieldDirty  = false;
+  world.colonies[1]!.entrances = [];
+  world.colonies[1]!.rallyPoint = null;
+  world.colonies[1]!.digFlowFieldDirty = false;
   world.colonies[1]!.foodFlowFieldDirty = false;
   world.pheromoneGrids[pheromoneGridKey(1, PheromoneType.FoodTrail, 'surface')] =
     createPheromoneGrid(64, 64);
@@ -291,12 +323,26 @@ describe('SCEN-06: Determinism proof', () => {
   // Test 5: Same seed, different commands, different state
   it('Test 5: same seed + different commands at tick 50 produce different state', () => {
     const cmdsA: SimCommand[][] = [];
-    cmdsA[50] = [{ type: 'SetBehaviorRatio', colonyId: 1 as ColonyId, ratio: { forage: 10, fight: 0 }, issuedAtTick: 50 }];
+    cmdsA[50] = [
+      {
+        type: 'SetBehaviorRatio',
+        colonyId: 1 as ColonyId,
+        ratio: { forage: 10, fight: 0 },
+        issuedAtTick: 50,
+      },
+    ];
 
     const cmdsB: SimCommand[][] = [];
     // Phase 10 (CTRL-01'): pivot is forage↔fight, not forage↔dig (dig is auto-assigned per CTRL-06).
     // Both runs still produce non-equal serialized state since the ratio drives a different forage/fight split.
-    cmdsB[50] = [{ type: 'SetBehaviorRatio', colonyId: 1 as ColonyId, ratio: { forage: 0, fight: 10 }, issuedAtTick: 50 }];
+    cmdsB[50] = [
+      {
+        type: 'SetBehaviorRatio',
+        colonyId: 1 as ColonyId,
+        ratio: { forage: 0, fight: 10 },
+        issuedAtTick: 50,
+      },
+    ];
 
     const r1 = runSimulation(42, 100, cmdsA);
     const r2 = runSimulation(42, 100, cmdsB);
@@ -367,12 +413,22 @@ describe('issue #27: simVersion plumbing', () => {
       c.foodFlowFieldDirty = false;
       c.foodStored = 0;
       c.chambers.push({
-        chamberId: 1, chamberType: ChamberType.FoodStorage, foodStored: 100,
-        posX: 0, posY: 0, width: 1, height: 1,
+        chamberId: 1,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: 100,
+        posX: 0,
+        posY: 0,
+        width: 1,
+        height: 1,
       });
       c.chambers.push({
-        chamberId: 2, chamberType: ChamberType.FoodStorage, foodStored: 200,
-        posX: 0, posY: 0, width: 1, height: 1,
+        chamberId: 2,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: 200,
+        posX: 0,
+        posY: 0,
+        width: 1,
+        height: 1,
       });
       return c;
     }
@@ -417,16 +473,16 @@ describe('Phase 6 SC 2: starvation cascade', () => {
     const world = createWorldState(42);
     const queenId = allocateEntityId(world);
     initAnt(world.ants, queenId, {
-      colonyId:  1,
-      posX:      1024,
-      posY:      1024,
-      task:      AntTask.Idle,
-      subTask:   0,
-      speed:     0,
-      lifespan:  WORKER_LIFESPAN_TICKS,
+      colonyId: 1,
+      posX: 1024,
+      posY: 1024,
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: 0,
+      lifespan: WORKER_LIFESPAN_TICKS,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1]!.foodStored = 0;                            // no food — queen cannot eat
+    world.colonies[1]!.foodStored = 0; // no food — queen cannot eat
     world.colonies[1]!.queenStarvationTimer = STARVATION_GRACE_TICKS; // timer at full grace
 
     // Run STARVATION_GRACE_TICKS + 1 ticks — timer decrements by 1 each tick until <= 0 → death
@@ -449,26 +505,26 @@ describe('Phase 6 SC 3: pheromone deposit on traversed cells', () => {
     const world = createWorldState(42);
     const queenId = allocateEntityId(world);
     initAnt(world.ants, queenId, {
-      colonyId:  1,
-      posX:      1024,
-      posY:      1024,
-      task:      AntTask.Idle,
-      subTask:   0,
-      speed:     0,
-      lifespan:  WORKER_LIFESPAN_TICKS,
+      colonyId: 1,
+      posX: 1024,
+      posY: 1024,
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: 0,
+      lifespan: WORKER_LIFESPAN_TICKS,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
     world.colonies[1]!.foodStored = 100000;
 
     const workerId = allocateEntityId(world);
     initAnt(world.ants, workerId, {
-      colonyId:  1,
-      posX:      10 << FP_SHIFT,
-      posY:      10 << FP_SHIFT,
-      task:      AntTask.Foraging,
-      subTask:   ForagingSubState.CarryingFood,
-      speed:     WORKER_BASE_SPEED,
-      lifespan:  WORKER_LIFESPAN_TICKS,
+      colonyId: 1,
+      posX: 10 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+      speed: WORKER_BASE_SPEED,
+      lifespan: WORKER_LIFESPAN_TICKS,
     });
     world.ants.foodCarrying[workerId] = 512; // carrying food — deposit rule activates
     world.colonies[1]!.workers.push(workerId);
@@ -495,13 +551,13 @@ describe('Phase 6 SC 4: CTRL-04 one-tick immediate allocation', () => {
     const world = createWorldState(42);
     const queenId = allocateEntityId(world);
     initAnt(world.ants, queenId, {
-      colonyId:  1,
-      posX:      1024,
-      posY:      1024,
-      task:      AntTask.Idle,
-      subTask:   0,
-      speed:     0,
-      lifespan:  WORKER_LIFESPAN_TICKS,
+      colonyId: 1,
+      posX: 1024,
+      posY: 1024,
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: 0,
+      lifespan: WORKER_LIFESPAN_TICKS,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
     world.colonies[1]!.foodStored = 100000;
@@ -510,11 +566,11 @@ describe('Phase 6 SC 4: CTRL-04 one-tick immediate allocation', () => {
     for (let i = 0; i < 10; i++) {
       const wid = allocateEntityId(world);
       initAnt(world.ants, wid, {
-        colonyId:  1,
-        posX:      1024,
-        posY:      1024,
-        task:      AntTask.Idle,
-        subTask:   0,
+        colonyId: 1,
+        posX: 1024,
+        posY: 1024,
+        task: AntTask.Idle,
+        subTask: 0,
       });
       world.colonies[1]!.workers.push(wid);
       world.colonies[1]!.workerCount += 1;
@@ -522,7 +578,7 @@ describe('Phase 6 SC 4: CTRL-04 one-tick immediate allocation', () => {
 
     // Set initial targetRatio → forage:10 (all 10 workers allocated to forage)
     world.colonies[1]!.targetRatio.forage = 10;
-    world.colonies[1]!.targetRatio.fight  = 0;
+    world.colonies[1]!.targetRatio.fight = 0;
 
     // Tick 0 (no commands): allocation reflects forage:10 ratio
     tick(world, []);
@@ -561,16 +617,19 @@ describe('Phase 7: createScenario determinism with MarkDigTile commands', () => 
 
     // Build a fixed command schedule: mark several tiles at specific ticks
     const cmds: SimCommand[][] = [];
-    cmds[0]  = [{ type: 'MarkDigTile', colonyId, tileX: 10, tileY: 5, issuedAtTick: 0 }];
+    cmds[0] = [{ type: 'MarkDigTile', colonyId, tileX: 10, tileY: 5, issuedAtTick: 0 }];
     cmds[10] = [{ type: 'MarkDigTile', colonyId, tileX: 15, tileY: 8, issuedAtTick: 10 }];
     cmds[20] = [{ type: 'MarkDigTile', colonyId, tileX: 20, tileY: 10, issuedAtTick: 20 }];
     cmds[30] = [{ type: 'CancelDigMark', colonyId, tileX: 10, tileY: 5, issuedAtTick: 30 }];
-    cmds[50] = [{
-      type: 'SetBehaviorRatio', colonyId,
-      // Phase 10 (CTRL-01'): pivot forage↔fight (dig is auto-assigned per CTRL-06).
-      ratio: { forage: 0, fight: 10 },
-      issuedAtTick: 50,
-    }];
+    cmds[50] = [
+      {
+        type: 'SetBehaviorRatio',
+        colonyId,
+        // Phase 10 (CTRL-01'): pivot forage↔fight (dig is auto-assigned per CTRL-06).
+        ratio: { forage: 0, fight: 10 },
+        issuedAtTick: 50,
+      },
+    ];
 
     function runScenario(): string {
       const world = createScenario(42);
@@ -592,13 +651,13 @@ describe('No-allocation invariant: object identity in steady state', () => {
     const world = createWorldState(42);
     const queenId = allocateEntityId(world);
     initAnt(world.ants, queenId, {
-      colonyId:  1,
-      posX:      32 << FP_SHIFT,
-      posY:      32 << FP_SHIFT,
-      task:      AntTask.Idle,
-      subTask:   0,
-      speed:     0,
-      lifespan:  WORKER_LIFESPAN_TICKS,
+      colonyId: 1,
+      posX: 32 << FP_SHIFT,
+      posY: 32 << FP_SHIFT,
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: 0,
+      lifespan: WORKER_LIFESPAN_TICKS,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
     world.colonies[1]!.foodStored = 100000;
@@ -608,9 +667,9 @@ describe('No-allocation invariant: object identity in steady state', () => {
 
     // Capture object references after warmup
     const colony = world.colonies[1]!;
-    const targetRatioRef        = colony.targetRatio;
+    const targetRatioRef = colony.targetRatio;
     const computedAllocationRef = colony.computedAllocation;
-    const taskCensusRef         = colony.taskCensus;
+    const taskCensusRef = colony.taskCensus;
 
     // Run 100 more ticks
     for (let i = 0; i < 100; i++) tick(world, []);
@@ -725,13 +784,13 @@ function buildCrossGridCombatWorld(seed: number): WorldState {
   const playerAntId = allocateEntityId(world);
   initAnt(world.ants, playerAntId, {
     colonyId: PLAYER_COLONY_ID,
-    posX:     (ENEMY_START_X << FP_SHIFT) + (FP_ONE >> 1),
-    posY:     (ENEMY_START_Y << FP_SHIFT) + (FP_ONE >> 1),
-    task:     AntTask.Fighting,
-    subTask:  0,
-    speed:    WORKER_BASE_SPEED,
+    posX: (ENEMY_START_X << FP_SHIFT) + (FP_ONE >> 1),
+    posY: (ENEMY_START_Y << FP_SHIFT) + (FP_ONE >> 1),
+    task: AntTask.Fighting,
+    subTask: 0,
+    speed: WORKER_BASE_SPEED,
     lifespan: WORKER_LIFESPAN_TICKS,
-    zone:     Zone.Surface,
+    zone: Zone.Surface,
   });
   world.colonies[PLAYER_COLONY_ID]!.workers.push(playerAntId);
   world.colonies[PLAYER_COLONY_ID]!.workerCount += 1;
@@ -746,13 +805,13 @@ function buildCrossGridCombatWorld(seed: number): WorldState {
   const hostileId = allocateEntityId(world);
   initAnt(world.ants, hostileId, {
     colonyId: ENEMY_COLONY_ID,
-    posX:     (hostileTileX << FP_SHIFT) + (FP_ONE >> 1),
-    posY:     (hostileTileY << FP_SHIFT) + (FP_ONE >> 1),
-    task:     AntTask.Idle,
-    subTask:  0,
-    speed:    0, // pinned — keeps the test scenario stable and combat-reachable
+    posX: (hostileTileX << FP_SHIFT) + (FP_ONE >> 1),
+    posY: (hostileTileY << FP_SHIFT) + (FP_ONE >> 1),
+    task: AntTask.Idle,
+    subTask: 0,
+    speed: 0, // pinned — keeps the test scenario stable and combat-reachable
     lifespan: WORKER_LIFESPAN_TICKS,
-    zone:     Zone.Underground,
+    zone: Zone.Underground,
   });
   world.ants.currentGridColonyId[hostileId] = ENEMY_COLONY_ID;
   world.colonies[ENEMY_COLONY_ID]!.workers.push(hostileId);
@@ -811,7 +870,7 @@ describe('Phase 09.1 Chunk 4 — cross-grid combat parity (REQ-C4c)', () => {
       if (worldA.ants.alive[id] !== 1) continue;
       if (worldA.ants.zone[id] !== Zone.Underground) continue;
       const owner = worldA.ants.colonyId[id];
-      const grid  = worldA.ants.currentGridColonyId[id];
+      const grid = worldA.ants.currentGridColonyId[id];
       if (owner !== grid) {
         anyDiverged = true;
         if (owner === PLAYER_COLONY_ID && grid === ENEMY_COLONY_ID) {
@@ -880,7 +939,7 @@ describe('S3 V20: spider replay determinism (Hunting → Striking → Rampaging)
 
     function buildSpiderWorld(): WorldState {
       const world = createScenario(SEED);
-      // Fast-fail: world must be V20 so world.spider is non-null. 
+      // Fast-fail: world must be V20 so world.spider is non-null.
       // regresses to a sub-V20 LATEST, this assert fires before the spider!-dereference
       // below would throw a TypeError — clearer than an opaque null-deref.
       expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V20_SPIDER);
@@ -1103,4 +1162,3 @@ describe('S3 V23 redesign: meander + feed-after-kill replay determinism', () => 
     expect({ ...after, killedThisTick: before.killedThisTick }).toEqual(before);
   });
 });
-

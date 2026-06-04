@@ -20,12 +20,12 @@ import type { ColonyId } from './colony-store.js';
 // ---------------------------------------------------------------------------
 
 export interface PendingChamber {
-  colonyId:     ColonyId;
-  chamberType:  ChamberType;
-  anchorTileX:  number;   // top-left tile X in underground grid
-  anchorTileY:  number;   // top-left tile Y in underground grid
-  width:        number;
-  height:       number;
+  colonyId: ColonyId;
+  chamberType: ChamberType;
+  anchorTileX: number; // top-left tile X in underground grid
+  anchorTileY: number; // top-left tile Y in underground grid
+  width: number;
+  height: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -35,7 +35,7 @@ export interface PendingChamber {
 // ---------------------------------------------------------------------------
 
 export const CHAMBER_DIMENSIONS: Record<ChamberType, { width: number; height: number }> = {
-  [0]: { width: 5, height: 3 },  // Queen:       5×3
-  [1]: { width: 4, height: 3 },  // Nursery:     4×3
-  [2]: { width: 4, height: 3 },  // FoodStorage: 4×3
+  [0]: { width: 5, height: 3 }, // Queen:       5×3
+  [1]: { width: 4, height: 3 }, // Nursery:     4×3
+  [2]: { width: 4, height: 3 }, // FoodStorage: 4×3
 };

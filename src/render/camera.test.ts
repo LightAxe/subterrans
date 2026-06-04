@@ -280,16 +280,16 @@ describe('clampCamera', () => {
     const cam = makeCamera(0, 0);
     clampCamera(cam, 128, 128);
     // half-viewport: 50/2 = 25, 37/2 = 18.5
-    expect(cam.x).toBe(VIEWPORT_WIDTH_TILES / 2);   // 25
-    expect(cam.y).toBe(VIEWPORT_HEIGHT_TILES / 2);  // 18.5
+    expect(cam.x).toBe(VIEWPORT_WIDTH_TILES / 2); // 25
+    expect(cam.y).toBe(VIEWPORT_HEIGHT_TILES / 2); // 18.5
   });
 
   it('clamps camera too far right/down to worldSize - half-viewport boundary', () => {
     const cam = makeCamera(200, 200);
     clampCamera(cam, 128, 128);
     // max: 128 - 25 = 103, 128 - 18.5 = 109.5
-    expect(cam.x).toBe(128 - VIEWPORT_WIDTH_TILES / 2);   // 103
-    expect(cam.y).toBe(128 - VIEWPORT_HEIGHT_TILES / 2);  // 109.5
+    expect(cam.x).toBe(128 - VIEWPORT_WIDTH_TILES / 2); // 103
+    expect(cam.y).toBe(128 - VIEWPORT_HEIGHT_TILES / 2); // 109.5
   });
 
   it('leaves camera unchanged when within valid bounds', () => {
@@ -382,7 +382,13 @@ describe('screenToTile', () => {
     const tileTopPx = (ty - top) * TILE_SIZE_PX;
 
     // Four corners + center of the drawn tile all map to (70, 70)
-    for (const [dx, dy] of [[0, 0], [15, 0], [0, 15], [15, 15], [8, 8]]) {
+    for (const [dx, dy] of [
+      [0, 0],
+      [15, 0],
+      [0, 15],
+      [15, 15],
+      [8, 8],
+    ]) {
       const r = screenToTile(tileLeftPx + dx!, tileTopPx + dy!, cam);
       expect(r.tileX).toBe(tx);
       expect(r.tileY).toBe(ty);

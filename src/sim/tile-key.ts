@@ -53,10 +53,8 @@ export function makeTileKey(
   tileY: number,
   gridColonyId: ColonyId = 0,
 ): number {
-  const gridByte = zone === Zone.Underground ? (gridColonyId & 0xff) : 0;
+  const gridByte = zone === Zone.Underground ? gridColonyId & 0xff : 0;
   return (
-    ((zone & 0xff) << 24) |
-    (gridByte << 16) |
-    ((tileY * TILE_KEY_STRIDE + tileX) & 0xffff)
-  ) | 0;
+    ((zone & 0xff) << 24) | (gridByte << 16) | ((tileY * TILE_KEY_STRIDE + tileX) & 0xffff) | 0
+  );
 }

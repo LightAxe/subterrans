@@ -30,16 +30,22 @@ import { createScenario } from '../sim/scenario.js';
 import { copyWorldState, type WorldState } from '../sim/types.js';
 import { tick, resetFlowFieldCaches } from '../sim/tick.js';
 import { createGameLoop, type GameLoop, MS_PER_TICK } from '../platform/game-loop.js';
-import { hasSave, hasIncompatibleSave, loadSave, deleteSave, tickAutosave, FutureSimVersionError, OldSimVersionError, manualSave } from '../platform/save.js';
+import {
+  hasSave,
+  hasIncompatibleSave,
+  loadSave,
+  deleteSave,
+  tickAutosave,
+  FutureSimVersionError,
+  OldSimVersionError,
+  manualSave,
+} from '../platform/save.js';
 import { deserializeWorldState } from '../platform/save.js';
 import { loadSettings, saveSettings } from '../platform/settings.js';
 import { runAIController, resetAIControllerCache } from './ai-controller.js';
 import { buildDebugSnapshot } from '../platform/debug-snapshot.js';
 import { downloadDebugSnapshot } from './debug-snapshot-download.js';
-import {
-  submitPlaytrace,
-  type PlaytraceSurvey,
-} from './playtrace-upload.js';
+import { submitPlaytrace, type PlaytraceSurvey } from './playtrace-upload.js';
 import {
   GamePhase,
   deriveAIColonyIds,
@@ -58,9 +64,12 @@ import {
 } from './camera.js';
 import {
   PLAYER_COLONY_ID,
-  PLAYER_START_X, PLAYER_START_Y,
-  SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT,
-  UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT,
+  PLAYER_START_X,
+  PLAYER_START_Y,
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
+  UNDERGROUND_GRID_WIDTH,
+  UNDERGROUND_GRID_HEIGHT,
   STARVATION_GRACE_TICKS,
 } from '../sim/constants.js';
 import { GameOutcome } from '../sim/game-over.js';
@@ -136,7 +145,12 @@ import { CANVAS_W, CANVAS_H } from './sprites.js';
 // UIScenePhase9 — subset of UIScene public API added in Plan 06 Task 3.
 // Typed here to avoid circular imports; UIScene implements these methods.
 interface UIScenePhase9 {
-  showGameOverOverlay(outcome: GameOutcome, cause: import('./ui-scene-logic.js').QueenDeathCause, onRestart: () => void, narrativeSeed?: string | null): void;
+  showGameOverOverlay(
+    outcome: GameOutcome,
+    cause: import('./ui-scene-logic.js').QueenDeathCause,
+    onRestart: () => void,
+    narrativeSeed?: string | null,
+  ): void;
   hideGameOverOverlay(): void;
   showSavePromptOverlay(callbacks: { onContinue: () => void; onNewGame: () => void }): void;
   hideSavePromptOverlay(): void;
@@ -174,7 +188,9 @@ interface UIScenePhase9 {
   }): void;
   hideSurveyOverlay(): void;
   // S5 — difficulty select overlay. Shown before every new game.
-  showDifficultySelectOverlay(callbacks: { onSelect: (d: 'Easy' | 'Normal' | 'Hard') => void }): void;
+  showDifficultySelectOverlay(callbacks: {
+    onSelect: (d: 'Easy' | 'Normal' | 'Hard') => void;
+  }): void;
   hideDifficultySelectOverlay(): void;
   // S6 — first-occurrence caption overlay (light onboarding).
   showCaption(text: string, screenX: number, screenY: number): void;
@@ -203,7 +219,12 @@ export class GameScene extends Phaser.Scene {
   // so a recycled ant id never inherits a stale heading across sessions.
   private readonly antFacingCache: AntFacingCache = new AntFacingCache();
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
-  private wasd!: { W: Phaser.Input.Keyboard.Key; A: Phaser.Input.Keyboard.Key; S: Phaser.Input.Keyboard.Key; D: Phaser.Input.Keyboard.Key };
+  private wasd!: {
+    W: Phaser.Input.Keyboard.Key;
+    A: Phaser.Input.Keyboard.Key;
+    S: Phaser.Input.Keyboard.Key;
+    D: Phaser.Input.Keyboard.Key;
+  };
   private tabKey!: Phaser.Input.Keyboard.Key;
   private dragState!: { isDragging: boolean; lastX: number; lastY: number; active: boolean };
   private surfaceInputState!: SurfaceInputState;
@@ -237,11 +258,11 @@ export class GameScene extends Phaser.Scene {
   private speedMultiplier: 1 | 2 | 4 = 1;
 
   // S6 — render-side scratch (per-session, reset in resetSessionState).
-  private lastProcessedEventTick = -1;  // tick-based cursor for consumeEventsForRender
+  private lastProcessedEventTick = -1; // tick-based cursor for consumeEventsForRender
   private prevQueenCombinedHp: number | null = null; // queen HP tracking for damage pulse
-  private queenStarvationTriggered = false;           // starvation onset caption/pulse guard
-  private renderFrame = 0;              // frame counter for glow fade maps
-  private readonly contestedGlowFrames: Map<number, number> = new Map();  // surface glow fade
+  private queenStarvationTriggered = false; // starvation onset caption/pulse guard
+  private renderFrame = 0; // frame counter for glow fade maps
+  private readonly contestedGlowFrames: Map<number, number> = new Map(); // surface glow fade
   private readonly undergroundGlowFrames: Map<number, number> = new Map(); // underground glow fade
 
   // Issue #122 / ADR 0013 — playtrace upload state. The endpoint string is
@@ -252,7 +273,9 @@ export class GameScene extends Phaser.Scene {
   private playtraceEndpoint: string = '';
   private playtraceSessionId: string = '';
 
-  constructor() { super({ key: 'GameScene' }); }
+  constructor() {
+    super({ key: 'GameScene' });
+  }
 
   preload() {
     // Load ant SVG sprites. Phaser rasterizes at the given width/height; the
@@ -267,27 +290,33 @@ export class GameScene extends Phaser.Scene {
     if (typeof assetsBaseRaw !== 'string' || assetsBaseRaw.length === 0) {
       throw new Error(
         'GameScene.preload: assetsBase registry value missing or invalid. ' +
-        'GameScene must be mounted via main.ts mount() (sets the registry in callbacks.preBoot).',
+          'GameScene must be mounted via main.ts mount() (sets the registry in callbacks.preBoot).',
       );
     }
     const spriteBase = `${assetsBaseRaw}sprites/`;
     this.load.svg(ANT_TEXTURE_WORKER, `${spriteBase}worker-ant.svg`, {
-      width: WORKER_SPRITE_WIDTH, height: WORKER_SPRITE_HEIGHT,
+      width: WORKER_SPRITE_WIDTH,
+      height: WORKER_SPRITE_HEIGHT,
     });
     this.load.svg(ANT_TEXTURE_QUEEN, `${spriteBase}queen-ant.svg`, {
-      width: QUEEN_SPRITE_WIDTH, height: QUEEN_SPRITE_HEIGHT,
+      width: QUEEN_SPRITE_WIDTH,
+      height: QUEEN_SPRITE_HEIGHT,
     });
     this.load.svg(EGG_TEXTURE, `${spriteBase}egg.svg`, {
-      width: EGG_SPRITE_WIDTH, height: EGG_SPRITE_HEIGHT,
+      width: EGG_SPRITE_WIDTH,
+      height: EGG_SPRITE_HEIGHT,
     });
     this.load.svg(LARVA_TEXTURE, `${spriteBase}larva.svg`, {
-      width: LARVA_SPRITE_WIDTH, height: LARVA_SPRITE_HEIGHT,
+      width: LARVA_SPRITE_WIDTH,
+      height: LARVA_SPRITE_HEIGHT,
     });
     this.load.svg(FOOD_CACHE_TEXTURE, `${spriteBase}food-cache.svg`, {
-      width: FOOD_CACHE_SPRITE_WIDTH, height: FOOD_CACHE_SPRITE_HEIGHT,
+      width: FOOD_CACHE_SPRITE_WIDTH,
+      height: FOOD_CACHE_SPRITE_HEIGHT,
     });
     this.load.svg(SPIDER_TEXTURE, `${spriteBase}spider.svg`, {
-      width: SPIDER_SPRITE_WIDTH, height: SPIDER_SPRITE_HEIGHT,
+      width: SPIDER_SPRITE_WIDTH,
+      height: SPIDER_SPRITE_HEIGHT,
     });
   }
 
@@ -317,7 +346,11 @@ export class GameScene extends Phaser.Scene {
     this.input.mouse!.disableContextMenu();
 
     // Drag-pan registration — returns dragState ref for processCameraInput
-    this.dragState = registerDragPan(this, this.viewState, () => this.gamePhase === GamePhase.GameOver);
+    this.dragState = registerDragPan(
+      this,
+      this.viewState,
+      () => this.gamePhase === GamePhase.GameOver,
+    );
 
     // Issue #116 — Esc opens the pause menu overlay (which also pauses the
     // sim). The Esc keybinding itself lives in UIScene (which already owned
@@ -405,7 +438,7 @@ export class GameScene extends Phaser.Scene {
     // restart. Capturing the current (undefined) reference here would freeze
     // the HUD + world input against a pre-boot world (see Phase 9 stabilization).
     const getWorld = (): WorldState | undefined => this.world;
-    const getPrevWorld = (): WorldState | null => this.world ? this.prevState : null;
+    const getPrevWorld = (): WorldState | null => (this.world ? this.prevState : null);
 
     // Launch HUD scene on top.
     this.scene.launch('UIScene', {
@@ -531,9 +564,7 @@ export class GameScene extends Phaser.Scene {
     // The single-in-flight discipline is instead enforced inside
     // submitPlaytrace itself — each new submission cancels its predecessor.
     this.playtraceSessionId =
-      typeof crypto !== 'undefined' && 'randomUUID' in crypto
-        ? crypto.randomUUID()
-        : '';
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : '';
   }
 
   // ---------------------------------------------------------------------------
@@ -573,12 +604,15 @@ export class GameScene extends Phaser.Scene {
       if (ev.type === 'invasion_start') {
         // Screen-edge flash in the direction of the invasion entrance.
         const playerColony = this.world.colonies[PLAYER_COLONY_ID];
-        const queenChamber = playerColony?.chambers.find(ch => ch.chamberType === ChamberType.Queen);
+        const queenChamber = playerColony?.chambers.find(
+          (ch) => ch.chamberType === ChamberType.Queen,
+        );
         if (queenChamber) {
           const queenTileX = queenChamber.posX >> 8;
           const queenTileY = queenChamber.posY >> 8;
           const direction = inferFlashDirection(
-            queenTileX, queenTileY,
+            queenTileX,
+            queenTileY,
             ev.payload.rallyTile?.x ?? queenTileX,
             ev.payload.rallyTile?.y ?? queenTileY,
           );
@@ -769,7 +803,8 @@ export class GameScene extends Phaser.Scene {
     // screen flashes / captions for invasions that already happened.
     if (nextWorld.events.length > 0) {
       this.lastProcessedEventTick = nextWorld.events.reduce(
-        (m, e) => (e.tick > m ? e.tick : m), -1,
+        (m, e) => (e.tick > m ? e.tick : m),
+        -1,
       );
     }
     // If the queen's starvation timer was already running at save time, mark the
@@ -777,8 +812,7 @@ export class GameScene extends Phaser.Scene {
     // not fire a spurious flash + onboarding caption for a condition that already
     // started before the save.
     const playerColonyOnLoad = nextWorld.colonies[PLAYER_COLONY_ID];
-    if (playerColonyOnLoad &&
-        playerColonyOnLoad.queenStarvationTimer < STARVATION_GRACE_TICKS) {
+    if (playerColonyOnLoad && playerColonyOnLoad.queenStarvationTimer < STARVATION_GRACE_TICKS) {
       this.queenStarvationTriggered = true;
     }
     // SCEN-06 replay truth: restore inputLog completely so the continued session
@@ -822,7 +856,8 @@ export class GameScene extends Phaser.Scene {
               [ChamberType.Nursery]: 'Nursery',
               [ChamberType.FoodStorage]: 'Food Storage',
             };
-            const chamberTypeName = chamberTypeLabel[cmd.chamberType] ?? `chamber type ${cmd.chamberType}`;
+            const chamberTypeName =
+              chamberTypeLabel[cmd.chamberType] ?? `chamber type ${cmd.chamberType}`;
             const text = checkAndTrigger('chamber', chamberTypeName);
             if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80);
           } else if (cmd.type === 'MarkFoodPile') {
@@ -856,16 +891,22 @@ export class GameScene extends Phaser.Scene {
         let cause: import('./ui-scene-logic.js').QueenDeathCause = null;
         for (let i = 0; i < evts.length; i++) {
           const ev = evts[i];
-          if (ev && ev.type === 'queen_death' && ev.tick === deathTick) { cause = ev.payload.cause; break; }
+          if (ev && ev.type === 'queen_death' && ev.tick === deathTick) {
+            cause = ev.payload.cause;
+            break;
+          }
         }
         this.currentCause = cause;
 
         // S6: build narrative for the loss screen.
         const outcomeLabel: GameOutcomeLabel | undefined =
-          outcome === GameOutcome.Victory          ? 'Victory'
-          : outcome === GameOutcome.Defeat         ? 'Defeat'
-          : outcome === GameOutcome.MutualDestruction ? 'MutualDestruction'
-          : undefined;
+          outcome === GameOutcome.Victory
+            ? 'Victory'
+            : outcome === GameOutcome.Defeat
+              ? 'Defeat'
+              : outcome === GameOutcome.MutualDestruction
+                ? 'MutualDestruction'
+                : undefined;
         const summary = buildPlaytraceSummary(this.world, this.resumedFromSave, outcomeLabel);
         const narrativeSeed = summary.outcomeAttribution.narrativeSeed;
 
@@ -885,7 +926,7 @@ export class GameScene extends Phaser.Scene {
     });
 
     this.gamePhase = GamePhase.Playing;
-    this.gameLoop.resume();  // ensure running (createGameLoop default is not paused)
+    this.gameLoop.resume(); // ensure running (createGameLoop default is not paused)
     this.lastAutosaveMs = performance.now();
     // UIScene and world-input handlers resolve `this.world` lazily via the
     // getWorld accessor installed in create(), so the new reference is picked
@@ -930,7 +971,9 @@ export class GameScene extends Phaser.Scene {
       // The shortcuts are Playing-only-gated; the menu surface gives the
       // same control a discoverable home while paused.
       getSpeedMultiplier: () => this.speedMultiplier,
-      onCycleSpeed: (next: 1 | 2 | 4) => { this.speedMultiplier = next; },
+      onCycleSpeed: (next: 1 | 2 | 4) => {
+        this.speedMultiplier = next;
+      },
     };
     // Issue #122 — only attach onQuitAndSurvey when the feature flag is on.
     // The pause menu treats `undefined` as "hide the row" so an open-source
@@ -1195,9 +1238,14 @@ export class GameScene extends Phaser.Scene {
       });
     }
 
-    const cam = this.viewState.activeView === 'surface' ? this.viewState.surfaceCamera : this.viewState.undergroundCamera;
-    const worldW = this.viewState.activeView === 'surface' ? SURFACE_GRID_WIDTH : UNDERGROUND_GRID_WIDTH;
-    const worldH = this.viewState.activeView === 'surface' ? SURFACE_GRID_HEIGHT : UNDERGROUND_GRID_HEIGHT;
+    const cam =
+      this.viewState.activeView === 'surface'
+        ? this.viewState.surfaceCamera
+        : this.viewState.undergroundCamera;
+    const worldW =
+      this.viewState.activeView === 'surface' ? SURFACE_GRID_WIDTH : UNDERGROUND_GRID_WIDTH;
+    const worldH =
+      this.viewState.activeView === 'surface' ? SURFACE_GRID_HEIGHT : UNDERGROUND_GRID_HEIGHT;
     clampCamera(cam, worldW, worldH);
 
     // S6: advance render frame counter and drain events for render effects.
@@ -1252,10 +1300,10 @@ export class GameScene extends Phaser.Scene {
         cam,
         pending,
         this.antFacingCache,
-        this.time.now,          // S6: frameTimeMs for reticle/hunger pulse
+        this.time.now, // S6: frameTimeMs for reticle/hunger pulse
         this.contestedGlowFrames, // S6: surface glow fade map
-        this.renderFrame,       // S6: current render frame
-        overlayGfx,             // #148: health bar renders above sprites
+        this.renderFrame, // S6: current render frame
+        overlayGfx, // #148: health bar renders above sprites
       );
     } else {
       drawUndergroundTerrain(gfx, this.world, cam, this.viewState.activeUndergroundColonyId);
@@ -1272,7 +1320,7 @@ export class GameScene extends Phaser.Scene {
         this.viewState.activeUndergroundColonyId,
         this.antFacingCache,
         this.undergroundGlowFrames, // S6: underground glow fade map
-        this.renderFrame,           // S6: current render frame
+        this.renderFrame, // S6: current render frame
       );
     }
     this.antSprites.endFrame();
@@ -1293,6 +1341,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** Accessor for UIScene / Plan 05 / Plan 06 — safe read-only reference. */
-  getWorld(): WorldState { return this.world; }
-  getViewState(): ViewState { return this.viewState; }
+  getWorld(): WorldState {
+    return this.world;
+  }
+  getViewState(): ViewState {
+    return this.viewState;
+  }
 }

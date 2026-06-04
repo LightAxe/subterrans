@@ -15,7 +15,8 @@ import { pathToFileURL } from 'node:url';
 
 // Register a resolve hook that remaps .js -> .ts for Node strip-types.
 register(
-  'data:text/javascript,' + encodeURIComponent(`
+  'data:text/javascript,' +
+    encodeURIComponent(`
     export async function resolve(specifier, context, nextResolve) {
       if (specifier.endsWith('.js')) {
         const tsSpec = specifier.slice(0, -3) + '.ts';
@@ -24,7 +25,7 @@ register(
       return nextResolve(specifier, context);
     }
   `),
-  pathToFileURL('./')
+  pathToFileURL('./'),
 );
 
 // Dynamic imports run after hook registration — .js paths resolve correctly.

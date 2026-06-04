@@ -6,9 +6,13 @@
 class InMemoryStorage implements Storage {
   private _store: Map<string, string> = new Map();
 
-  get length(): number { return this._store.size; }
+  get length(): number {
+    return this._store.size;
+  }
 
-  clear(): void { this._store.clear(); }
+  clear(): void {
+    this._store.clear();
+  }
 
   getItem(key: string): string | null {
     return this._store.has(key) ? this._store.get(key)! : null;
@@ -19,9 +23,13 @@ class InMemoryStorage implements Storage {
     return index < keys.length ? keys[index]! : null;
   }
 
-  removeItem(key: string): void { this._store.delete(key); }
+  removeItem(key: string): void {
+    this._store.delete(key);
+  }
 
-  setItem(key: string, value: string): void { this._store.set(key, value); }
+  setItem(key: string, value: string): void {
+    this._store.set(key, value);
+  }
 }
 
 const store = new InMemoryStorage();

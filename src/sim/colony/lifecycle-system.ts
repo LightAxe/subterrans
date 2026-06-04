@@ -97,12 +97,12 @@ function eggIntervalForColony(colony: ColonyRecord): number {
   const foodTotal = colonyFoodTotal(colony);
   if (foodTotal < QUEEN_EGG_FOOD_THRESHOLD) return QUEEN_EGG_INTERVAL_DISABLED;
   const mouthsRaw = colony.workerCount + colony.larvaeCount + colony.eggCount + 1; // +1 queen
-  const mouths    = Math.max(mouthsRaw, COLONY_SIZE_FLOOR);
-  const denom     = mouths * FOOD_PER_ANT_BASELINE;
-  const food10    = foodTotal * 10; // multiply once; no division, no | 0 truncation
+  const mouths = Math.max(mouthsRaw, COLONY_SIZE_FLOOR);
+  const denom = mouths * FOOD_PER_ANT_BASELINE;
+  const food10 = foodTotal * 10; // multiply once; no division, no | 0 truncation
   if (food10 >= 100 * denom) return QUEEN_EGG_INTERVAL_FLOOR_TICKS;
-  if (food10 >=  50 * denom) return QUEEN_EGG_INTERVAL_FAST_TICKS;
-  if (food10 >=  30 * denom) return QUEEN_EGG_INTERVAL_MEDIUM_TICKS;
+  if (food10 >= 50 * denom) return QUEEN_EGG_INTERVAL_FAST_TICKS;
+  if (food10 >= 30 * denom) return QUEEN_EGG_INTERVAL_MEDIUM_TICKS;
   return QUEEN_EGG_INTERVAL_BASE_TICKS;
 }
 
@@ -129,7 +129,7 @@ export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord):
 
   // Gate 4/5 (09 reproduction-gate memo): require completed Queen + Nursery
   // chambers before the queen starts laying. Either missing → no eggs.
-  if (!hasCompletedChamber(colony, ChamberType.Queen))   return;
+  if (!hasCompletedChamber(colony, ChamberType.Queen)) return;
   if (!hasCompletedChamber(colony, ChamberType.Nursery)) return;
 
   // Gate 6 (seed936214196-tick2401 fix): queen must be inside the Queen
@@ -147,8 +147,10 @@ export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord):
     const bx = ch.posX >> FP_SHIFT;
     const by = ch.posY >> FP_SHIFT;
     if (
-      queenTileX >= bx && queenTileX < bx + ch.width &&
-      queenTileY >= by && queenTileY < by + ch.height
+      queenTileX >= bx &&
+      queenTileX < bx + ch.width &&
+      queenTileY >= by &&
+      queenTileY < by + ch.height
     ) {
       queenHome = true;
       break;
@@ -233,13 +235,13 @@ export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord):
   // Init the already-allocated egg entity.
   initAnt(world.ants, eggId, {
     colonyId: colony.colonyId,
-    posX:     eggPosX,
-    posY:     eggPosY,
-    task:     AntTask.Idle,
-    subTask:  0,
-    speed:    0,                  // eggs don't move
+    posX: eggPosX,
+    posY: eggPosY,
+    task: AntTask.Idle,
+    subTask: 0,
+    speed: 0, // eggs don't move
     lifespan: WORKER_LIFESPAN_TICKS,
-    zone:     Zone.Underground,   // Gate 6 guarantees queen is Underground
+    zone: Zone.Underground, // Gate 6 guarantees queen is Underground
   });
 
   colony.eggs.push(eggId);
@@ -269,8 +271,8 @@ export function tickLifecycleTransitions(world: WorldState, colony: ColonyRecord
   // Snapshot bucket lengths before each phase so newly-promoted entities are
   // not processed in the same tick they are promoted (PRD §4b: one phase-step
   // per tick per bucket; newly pushed IDs start participating next tick).
-  const eggSnapLen     = colony.eggs.length;
-  const larvaeSnapLen  = colony.larvae.length;
+  const eggSnapLen = colony.eggs.length;
+  const larvaeSnapLen = colony.larvae.length;
   const workersSnapLen = colony.workers.length;
 
   // 09 reproduction-gate memo — brood-aging gate. Egg production is already
@@ -313,7 +315,7 @@ export function tickLifecycleTransitions(world: WorldState, colony: ColonyRecord
       colony.eggs[i] = colony.eggs[colony.eggs.length - 1]!;
       colony.eggs.pop();
       colony.eggCount -= 1;
-      ants.age[id] = 0;         // reset age for larva phase
+      ants.age[id] = 0; // reset age for larva phase
       ants.starvationTimer[id] = STARVATION_GRACE_TICKS;
       colony.larvae.push(id);
       colony.larvaeCount += 1;
@@ -346,7 +348,7 @@ export function tickLifecycleTransitions(world: WorldState, colony: ColonyRecord
       colony.larvae[i] = colony.larvae[colony.larvae.length - 1]!;
       colony.larvae.pop();
       colony.larvaeCount -= 1;
-      ants.age[id] = 0;         // reset age for worker phase
+      ants.age[id] = 0; // reset age for worker phase
       ants.starvationTimer[id] = STARVATION_GRACE_TICKS;
       ants.task[id] = AntTask.Idle;
       ants.speed[id] = WORKER_BASE_SPEED;
@@ -364,7 +366,7 @@ export function tickLifecycleTransitions(world: WorldState, colony: ColonyRecord
           // (e.g. carrier already started carrying a different brood).
           if (ants.alive[carrierId] === 1 && ants.carryingBroodId[carrierId] === id) {
             ants.carryingBroodId[carrierId] = -1;
-            ants.task[carrierId]    = AntTask.Idle;
+            ants.task[carrierId] = AntTask.Idle;
             ants.subTask[carrierId] = 0;
           }
           // Always clear the matured worker's `carriedBy` so the new

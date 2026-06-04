@@ -50,7 +50,9 @@ export function triggerScreenEdgeFlash(
     alpha: 0,
     duration: SCREEN_EDGE_FLASH_DURATION_MS,
     ease: 'Linear',
-    onComplete: () => { gfx.destroy(); },
+    onComplete: () => {
+      gfx.destroy();
+    },
   });
 }
 

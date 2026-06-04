@@ -109,9 +109,7 @@ export interface PauseMenuRenderContext {
  */
 function stackRects(n: number): MenuItemRect[] {
   const stackHeight =
-    PAUSE_MENU_TITLE_HEIGHT
-    + n * PAUSE_MENU_BUTTON_H
-    + (n - 1) * PAUSE_MENU_BUTTON_GAP;
+    PAUSE_MENU_TITLE_HEIGHT + n * PAUSE_MENU_BUTTON_H + (n - 1) * PAUSE_MENU_BUTTON_GAP;
   const top = (CANVAS_H - stackHeight) / 2 + PAUSE_MENU_TITLE_HEIGHT;
   const x = (CANVAS_W - PAUSE_MENU_BUTTON_W) / 2;
   const rects: MenuItemRect[] = [];
@@ -133,15 +131,12 @@ export function titleCenterY(itemCount: number): number {
 }
 
 /** Compose the menu items for the current page. */
-export function pauseMenuItems(
-  page: PauseMenuPage,
-  ctx: PauseMenuRenderContext,
-): PauseMenuItem[] {
+export function pauseMenuItems(page: PauseMenuPage, ctx: PauseMenuRenderContext): PauseMenuItem[] {
   if (page === 'main') {
     const labels: Array<{ id: PauseMenuItemId; label: string; enabled: boolean }> = [
-      { id: 'resume',         label: 'Resume',             enabled: true },
-      { id: 'save-load',      label: 'Save / Load',        enabled: ctx.saveLoadEnabled },
-      { id: 'settings',       label: 'Settings  >',        enabled: true },
+      { id: 'resume', label: 'Resume', enabled: true },
+      { id: 'save-load', label: 'Save / Load', enabled: ctx.saveLoadEnabled },
+      { id: 'settings', label: 'Settings  >', enabled: true },
       { id: 'debug-snapshot', label: 'Download debug log', enabled: true },
     ];
     if (ctx.quitAndSurveyEnabled) {
@@ -196,7 +191,11 @@ function pointInRect(px: number, py: number, r: MenuItemRect): boolean {
 
 /** Returns the topmost ENABLED item under the pointer, or null. Disabled items
  *  swallow no hit so callers can layer additional behavior beneath them later. */
-export function itemAt(items: readonly PauseMenuItem[], px: number, py: number): PauseMenuItem | null {
+export function itemAt(
+  items: readonly PauseMenuItem[],
+  px: number,
+  py: number,
+): PauseMenuItem | null {
   for (const it of items) {
     if (!it.enabled) continue;
     if (pointInRect(px, py, it.rect)) return it;

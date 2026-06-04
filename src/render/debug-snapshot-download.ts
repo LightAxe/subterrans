@@ -18,10 +18,7 @@ import { defaultDebugSnapshotFilename } from '../platform/debug-snapshot.js';
  * @param snap      Payload from buildDebugSnapshot.
  * @param filename  Optional override; defaults to defaultDebugSnapshotFilename.
  */
-export function downloadDebugSnapshot(
-  snap: DebugSnapshot,
-  filename?: string,
-): void {
+export function downloadDebugSnapshot(snap: DebugSnapshot, filename?: string): void {
   const json = JSON.stringify(snap);
   const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);

@@ -15,9 +15,16 @@ beforeEach(() => {
 describe('checkAndTrigger — first occurrence', () => {
   it('returns non-null text on the first call for every key', () => {
     const keys = [
-      'dig', 'chamber', 'spider', 'foodMark', 'rally',
-      'spiderPriority', 'aiInvading', 'spiderRampage',
-      'queenDamage', 'queenStarvation',
+      'dig',
+      'chamber',
+      'spider',
+      'foodMark',
+      'rally',
+      'spiderPriority',
+      'aiInvading',
+      'spiderRampage',
+      'queenDamage',
+      'queenStarvation',
     ] as const;
     for (const key of keys) {
       resetCaptions();
@@ -32,7 +39,9 @@ describe('checkAndTrigger — first occurrence', () => {
   });
 
   it('returns the expected text for "spider"', () => {
-    expect(checkAndTrigger('spider')).toBe('A spider is hunting your ants. Use fighters to protect your queen.');
+    expect(checkAndTrigger('spider')).toBe(
+      'A spider is hunting your ants. Use fighters to protect your queen.',
+    );
   });
 
   it('returns the expected text for "queenDamage"', () => {

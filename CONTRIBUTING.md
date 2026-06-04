@@ -23,10 +23,12 @@ npm run verify     # lint + typecheck + sim-boundary check + tests
 ```
 
 Requirements:
+
 - Node.js 22 LTS or newer
 - A Chromium-based browser for Playwright E2E tests (`npx playwright install` on first run)
 
 Useful scripts:
+
 - `npm test` — Vitest unit/integration suite
 - `npm run test:watch` — Vitest in watch mode
 - `npm run test:e2e` — Playwright browser tests
@@ -38,7 +40,7 @@ Useful scripts:
 1. **[ROADMAP.md](ROADMAP.md)** — high-level direction and upcoming phases. Work that's on the roadmap is pre-approved in principle; scope details still need alignment.
 2. **GitHub Issues** — filter for `good first issue` or `help wanted`.
 3. **Small fixes welcome unannounced** — typos, doc improvements, failing-test reproductions, boundary-rule enforcement.
-4. **For anything larger or off-roadmap, talk first.** The project lead is opinionated about how the game should feel and play — that's not a bug, it's the thesis of the project. If you have a significant gameplay, systems, or design change in mind that isn't already on the roadmap, open a discussion or issue *before* you start coding. Either convince us it fits, or save us both the awkward "this doesn't match the vision" PR review.
+4. **For anything larger or off-roadmap, talk first.** The project lead is opinionated about how the game should feel and play — that's not a bug, it's the thesis of the project. If you have a significant gameplay, systems, or design change in mind that isn't already on the roadmap, open a discussion or issue _before_ you start coding. Either convince us it fits, or save us both the awkward "this doesn't match the vision" PR review.
 
 If you're unsure whether an idea fits, open a discussion or draft issue — we'd rather talk early than reject a finished PR.
 
@@ -47,6 +49,7 @@ If you're unsure whether an idea fits, open a discussion or draft issue — we'd
 Subterrans is partly an experiment in AI-driven software development. **Contributions should be written primarily by AI coding assistants** (Claude Code, Codex, Cursor, Aider, etc.) with human guidance, review, and judgment. Human-written code is welcome as a last resort — for example, when an AI is stuck, when fine-grained control matters, or when you're fixing something trivial and writing it yourself is faster than prompting.
 
 What we actually care about:
+
 - The code is correct, tested, and follows the architectural rules.
 - You understand and take responsibility for what you submit — reviewers will ask questions, and "the AI wrote it" is not an answer.
 - You disclose AI involvement honestly in the PR description if it's the bulk of the work. We're not gatekeeping; we're curious about what works.
@@ -55,12 +58,13 @@ This norm is a preference, not a hard rule. Good human-written contributions won
 
 ## Architectural Rules (Read Before Coding)
 
-Subterrans has strict architectural boundaries that a reviewer *will* block on. Skim these first:
+Subterrans has strict architectural boundaries that a reviewer _will_ block on. Skim these first:
 
 - **[AGENTS.md](AGENTS.md)** — the contributor quick-reference (directory layout, banned APIs, testing expectations).
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — full explanations with examples.
 
 Highlights:
+
 - `src/sim/` is a pure, deterministic, integer-math simulation. **No Phaser, no DOM, no `Math.random`, no `Date`, no floats** — ever.
 - Render and input layers read simulation state; they never mutate it.
 - Fixed 20 Hz tick. No variable timestep.
@@ -71,12 +75,15 @@ Highlights:
 1. **Fork & branch.** Branch off `main` with a short descriptive name: `fix/rally-oscillation`, `feat/scent-trails`.
 2. **Write tests first where practical.** Simulation bugs almost always have a minimal reproducer — prefer a failing test in `src/sim/` over a console log.
 3. **Keep commits small and focused.** One logical change per commit. Commit message style:
+
    ```
    feat(sim): rally hold radius prevents fighter stutter
 
    Explain *why* in the body when the diff doesn't make it obvious.
    ```
+
    Prefixes we use: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `perf`.
+
 4. **Run `npm run verify` before pushing.** Same command CI runs.
 5. **Open a PR** against `main`. Fill out the PR template (summary + test plan).
 
@@ -94,6 +101,7 @@ Owner may override an AI block if it's a false positive; if you disagree with a 
 ## Reporting Bugs
 
 Open an issue with:
+
 - What you did (steps, seed if relevant)
 - What you expected
 - What actually happened

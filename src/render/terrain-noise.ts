@@ -42,12 +42,7 @@ export function pixelNoise(pixelX: number, pixelY: number, salt: number): number
  * stable cross-hatched dither that reads as a textured material rather than
  * either flat color or random noise.
  */
-const BAYER_4: ReadonlyArray<number> = [
-  0,  8,  2, 10,
-  12, 4, 14,  6,
-  3, 11,  1,  9,
-  15, 7, 13,  5,
-];
+const BAYER_4: ReadonlyArray<number> = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 
 export function bayer4(pixelX: number, pixelY: number): number {
   return BAYER_4[((pixelY & 3) << 2) | (pixelX & 3)]!;
@@ -71,11 +66,7 @@ export function bayer4Threshold(pixelX: number, pixelY: number): number {
  * Falls back to (0, 0) when the motif equals the tile size — rare but
  * defensive against zero-range modulos.
  */
-export function motifOffset(
-  hash: number,
-  width: number,
-  height: number,
-): { x: number; y: number } {
+export function motifOffset(hash: number, width: number, height: number): { x: number; y: number } {
   const xRange = TILE_SIZE_PX - width + 1;
   const yRange = TILE_SIZE_PX - height + 1;
   if (xRange <= 1 && yRange <= 1) return { x: 0, y: 0 };

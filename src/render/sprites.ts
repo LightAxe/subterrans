@@ -58,9 +58,9 @@ export const COLOR_FIGHTER_TINT = 0xff4444;
 export const COLOR_CONTESTED_TILE = 0xff6600;
 
 /** S6 — Home-ground glow colors for per-grid combat tile highlight. */
-export const COLOR_PLAYER_HOME_GLOW        = 0x3060a0; // blue — player underground tiles
-export const COLOR_ENEMY_HOME_GLOW         = 0xa06030; // orange — enemy underground tiles
-export const COLOR_NEUTRAL_CONTESTED_GLOW  = 0xa0a030; // yellow — surface contested tiles
+export const COLOR_PLAYER_HOME_GLOW = 0x3060a0; // blue — player underground tiles
+export const COLOR_ENEMY_HOME_GLOW = 0xa06030; // orange — enemy underground tiles
+export const COLOR_NEUTRAL_CONTESTED_GLOW = 0xa0a030; // yellow — surface contested tiles
 
 /** PRD §7g — Underground solid (unexcavated) tile color. */
 export const COLOR_UNDERGROUND_SOLID = 0x2d1a0a;
@@ -138,7 +138,7 @@ export const COLOR_PHEROMONE_DANGER_STRONG = 0xff4000;
  */
 export const HUD = {
   /** Colony stats bar: ant count, food stored, queen health. */
-  STATS:       { x: 8,   y: 8,   w: 200, h: 24  },
+  STATS: { x: 8, y: 8, w: 200, h: 24 },
   /**
    * Behavior allocation slider widget. Field name retained from the Phase 8
    * 3-vertex triangle to minimize diff churn; Phase 10 / D-01 collapsed the
@@ -154,17 +154,17 @@ export const HUD = {
    * 120×120 layout so HUD-anchor pixel positions of neighboring zones are
    * not disturbed.
    */
-  TRIANGLE:    { x: 8,   y: 532, w: 120, h: 44 },
+  TRIANGLE: { x: 8, y: 532, w: 120, h: 44 },
   /**
    * Speed controls zone.
    * Phase 9 layout reservation — Phase 8 draws nothing here.
    * Phase 9 wires 1×/2×/4× speed buttons and pause button.
    */
-  SPEED:       { x: 320, y: 552, w: 160, h: 32,  PAUSE_BUTTON_W: 40, SPEED_BUTTON_W: 32 },
+  SPEED: { x: 320, y: 552, w: 160, h: 32, PAUSE_BUTTON_W: 40, SPEED_BUTTON_W: 32 },
   /** Minimap: full surface overview with colony positions and food sources. */
-  MINIMAP:     { x: 632, y: 424, w: 160, h: 160 },
+  MINIMAP: { x: 632, y: 424, w: 160, h: 160 },
   /** View toggle button: switches between surface and underground views. */
-  VIEW_TOGGLE: { x: 632, y: 396, w: 80,  h: 24  },
+  VIEW_TOGGLE: { x: 632, y: 396, w: 80, h: 24 },
   /**
    * Issue #14 — colony toggle button (underground view only). Flips the
    * underground render between PLAYER and ENEMY grids; equivalent to the
@@ -183,7 +183,7 @@ export const HUD = {
    * Phase 9 layout reservation — Phase 8 draws nothing here.
    * Phase 9 wires autosave indicator rendering.
    */
-  SAVE_ICON:   { x: 772, y: 8,   w: 20,  h: 20  },
+  SAVE_ICON: { x: 772, y: 8, w: 20, h: 20 },
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -210,8 +210,8 @@ export function lerpColor(a: number, b: number, t: number): number {
   const br = (b >> 16) & 0xff;
   const bg = (b >> 8) & 0xff;
   const bb = b & 0xff;
-  const r    = (ar + (br - ar) * tc) | 0;
-  const g    = (ag + (bg - ag) * tc) | 0;
+  const r = (ar + (br - ar) * tc) | 0;
+  const g = (ag + (bg - ag) * tc) | 0;
   const blue = (ab + (bb - ab) * tc) | 0;
   return (r << 16) | (g << 8) | blue;
 }

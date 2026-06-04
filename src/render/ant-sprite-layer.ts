@@ -72,34 +72,34 @@ export interface AntSpriteLayer {
 
 // Texture keys shared by preload (game-scene.ts) and pool (ant-sprite-pool.ts).
 export const ANT_TEXTURE_WORKER = 'ant-worker';
-export const ANT_TEXTURE_QUEEN  = 'ant-queen';
-export const EGG_TEXTURE        = 'egg';
-export const LARVA_TEXTURE      = 'larva';
+export const ANT_TEXTURE_QUEEN = 'ant-queen';
+export const EGG_TEXTURE = 'egg';
+export const LARVA_TEXTURE = 'larva';
 export const FOOD_CACHE_TEXTURE = 'food-cache';
 
 // S3 spider
-export const SPIDER_TEXTURE       = 'spider';
-export const SPIDER_SPRITE_WIDTH  = 48;
+export const SPIDER_TEXTURE = 'spider';
+export const SPIDER_SPRITE_WIDTH = 48;
 export const SPIDER_SPRITE_HEIGHT = 48;
-export const SPIDER_SPRITE_DEPTH  = 52; // above ants (depth 50); exported unlike ant/static depths which are pool-internal
+export const SPIDER_SPRITE_DEPTH = 52; // above ants (depth 50); exported unlike ant/static depths which are pool-internal
 
 // Rasterization sizes — keep in sync with the SVG viewBox values in
 // code/public/assets/sprites/{worker,queen}-ant.svg. Phaser's load.svg
 // rasterizes at these dimensions; the resulting texture is what renders
 // in the scene.
-export const WORKER_SPRITE_WIDTH  = 12;
+export const WORKER_SPRITE_WIDTH = 12;
 export const WORKER_SPRITE_HEIGHT = 8;
-export const QUEEN_SPRITE_WIDTH   = 20;
-export const QUEEN_SPRITE_HEIGHT  = 14;
+export const QUEEN_SPRITE_WIDTH = 20;
+export const QUEEN_SPRITE_HEIGHT = 14;
 
 // Static entity rasterization sizes — these are rasterized at 2× the tile
 // footprint so rotation-less scaling from the pool center keeps crisp edges.
 // Visual size still fits inside TILE_SIZE_PX (16) via draw-underground's
 // setDisplaySize clamp; the higher raster preserves SVG detail when Phaser
 // tints/scales.
-export const EGG_SPRITE_WIDTH        = 10;
-export const EGG_SPRITE_HEIGHT       = 10;
-export const LARVA_SPRITE_WIDTH      = 12;
-export const LARVA_SPRITE_HEIGHT     = 10;
-export const FOOD_CACHE_SPRITE_WIDTH  = 16;
+export const EGG_SPRITE_WIDTH = 10;
+export const EGG_SPRITE_HEIGHT = 10;
+export const LARVA_SPRITE_WIDTH = 12;
+export const LARVA_SPRITE_HEIGHT = 10;
+export const FOOD_CACHE_SPRITE_WIDTH = 16;
 export const FOOD_CACHE_SPRITE_HEIGHT = 16;

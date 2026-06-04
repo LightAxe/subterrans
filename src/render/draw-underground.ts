@@ -46,10 +46,7 @@ import {
   COLOR_PLAYER_HOME_GLOW,
   COLOR_ENEMY_HOME_GLOW,
 } from './sprites.js';
-import {
-  drawBarrenEarthSubstrate,
-  drawOpenFloorTile,
-} from './terrain-atlas.js';
+import { drawBarrenEarthSubstrate, drawOpenFloorTile } from './terrain-atlas.js';
 import { drawAutotiledUndergroundTile, drawUndergroundRim } from './underground-autotile.js';
 import { gatherUnderground3x3Neighbors, type Neighbors3x3 } from './underground-neighbors.js';
 import { chamberSeed, chamberPerimeterPoints } from './chamber-shape.js';
@@ -60,8 +57,8 @@ import type { CameraState } from './camera.js';
 // ---------------------------------------------------------------------------
 
 const CHAMBER_COLORS: Record<number, number> = {
-  [ChamberType.Queen]:       COLOR_CHAMBER_QUEEN,
-  [ChamberType.Nursery]:     COLOR_CHAMBER_NURSERY,
+  [ChamberType.Queen]: COLOR_CHAMBER_QUEEN,
+  [ChamberType.Nursery]: COLOR_CHAMBER_NURSERY,
   [ChamberType.FoodStorage]: COLOR_CHAMBER_FOOD_STORAGE,
 };
 
@@ -80,8 +77,10 @@ const CHAMBER_COLORS: Record<number, number> = {
 
 function drawOutlineSegment(
   gfx: GfxLike,
-  ax: number, ay: number,
-  bx: number, by: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
   thickness: number,
 ): void {
   const dx = bx - ax;
@@ -91,7 +90,7 @@ function drawOutlineSegment(
   // Perpendicular direction × half-thickness. (-dy, dx) is the 90° rotation.
   const halfT = thickness * 0.5;
   const px = (-dy / len) * halfT;
-  const py = ( dx / len) * halfT;
+  const py = (dx / len) * halfT;
   // Quad as two triangles. Vertex order: a+, b+, a-, b-, a-.
   gfx.fillTriangle(ax + px, ay + py, bx + px, by + py, ax - px, ay - py);
   gfx.fillTriangle(bx + px, by + py, bx - px, by - py, ax - px, ay - py);
@@ -153,10 +152,10 @@ export function drawUndergroundTerrain(
   const grid = world.undergroundGrids[activeUndergroundColonyId];
   if (grid === undefined) return;
 
-  const left   = Math.floor(cam.x - cam.viewportWidth  / 2);
-  const top    = Math.floor(cam.y - cam.viewportHeight / 2);
-  const right  = Math.min(left + cam.viewportWidth  + 1, grid.width);
-  const bottom = Math.min(top  + cam.viewportHeight + 1, grid.height);
+  const left = Math.floor(cam.x - cam.viewportWidth / 2);
+  const top = Math.floor(cam.y - cam.viewportHeight / 2);
+  const right = Math.min(left + cam.viewportWidth + 1, grid.width);
+  const bottom = Math.min(top + cam.viewportHeight + 1, grid.height);
 
   // Collect entrance X positions for ceiling gap rendering — uses the viewed
   // colony's entrances so the player sees enemy entrances when inspecting the
@@ -174,15 +173,21 @@ export function drawUndergroundTerrain(
   // Neighbors3x3 per visible tile. Per codex P2 review: a 200-tile
   // viewport at 60fps was spawning ~12k short-lived objects/sec.
   const neighbors: Neighbors3x3 = {
-    nw: 'wall', n: 'wall', ne: 'wall',
-    w:  'wall', c: 'wall', e:  'wall',
-    sw: 'wall', s: 'wall', se: 'wall',
+    nw: 'wall',
+    n: 'wall',
+    ne: 'wall',
+    w: 'wall',
+    c: 'wall',
+    e: 'wall',
+    sw: 'wall',
+    s: 'wall',
+    se: 'wall',
   };
 
   for (let ty = Math.max(top, 0); ty < bottom; ty++) {
     for (let tx = Math.max(left, 0); tx < right; tx++) {
       const screenX = (tx - left) * TILE_SIZE_PX;
-      const screenY = (ty - top)  * TILE_SIZE_PX;
+      const screenY = (ty - top) * TILE_SIZE_PX;
 
       if (ty === 0) {
         // Ceiling strip: open gap at entrance columns, surface earth elsewhere.
@@ -275,10 +280,10 @@ export function drawUndergroundEntities(
   const colony = curr.colonies[activeUndergroundColonyId];
   if (colony === undefined) return;
 
-  const left = Math.floor(cam.x - cam.viewportWidth  / 2);
-  const top  = Math.floor(cam.y - cam.viewportHeight / 2);
+  const left = Math.floor(cam.x - cam.viewportWidth / 2);
+  const top = Math.floor(cam.y - cam.viewportHeight / 2);
 
-  const canvasW = cam.viewportWidth  * TILE_SIZE_PX;
+  const canvasW = cam.viewportWidth * TILE_SIZE_PX;
   const canvasH = cam.viewportHeight * TILE_SIZE_PX;
 
   // --- Chambers ---
@@ -301,9 +306,9 @@ export function drawUndergroundEntities(
     const tileX = chamber.posX >> FP_SHIFT;
     const tileY = chamber.posY >> FP_SHIFT;
     const screenX = (tileX - left) * TILE_SIZE_PX;
-    const screenY = (tileY - top)  * TILE_SIZE_PX;
+    const screenY = (tileY - top) * TILE_SIZE_PX;
     const color = CHAMBER_COLORS[chamber.chamberType] ?? COLOR_CHAMBER_QUEEN;
-    const w = dims.width  * TILE_SIZE_PX;
+    const w = dims.width * TILE_SIZE_PX;
     const h = dims.height * TILE_SIZE_PX;
     const seed = chamberSeed(colony.colonyId, chamber.chamberId, chamber.chamberType);
     const points = chamberPerimeterPoints(seed, screenX, screenY, w, h);
@@ -420,9 +425,10 @@ export function drawUndergroundEntities(
   // Per-grid color: blue for player grid, orange for enemy grid.
   // Fade-out over 5 frames once combat ants leave a tile.
   {
-    const glowColor = activeUndergroundColonyId === PLAYER_COLONY_ID
-      ? COLOR_PLAYER_HOME_GLOW
-      : COLOR_ENEMY_HOME_GLOW;
+    const glowColor =
+      activeUndergroundColonyId === PLAYER_COLONY_ID
+        ? COLOR_PLAYER_HOME_GLOW
+        : COLOR_ENEMY_HOME_GLOW;
     const BASE_ALPHA = 0.2;
     const GLOW_FADE_FRAMES = 5;
 
@@ -453,19 +459,20 @@ export function drawUndergroundEntities(
     // Draw glows for all contested or recently-contested tiles.
     const drawKeys = undergoundGlowFrames
       ? Array.from(undergoundGlowFrames.entries())
-          .filter(([key, frame]) =>
-            (key >>> 24) === activeUndergroundColonyId &&
-            currentFrame - frame < GLOW_FADE_FRAMES)
+          .filter(
+            ([key, frame]) =>
+              key >>> 24 === activeUndergroundColonyId && currentFrame - frame < GLOW_FADE_FRAMES,
+          )
           .map(([key]) => key)
       : Array.from(contested);
     for (const key of drawKeys) {
-      const tx = key & 0xff;         // bits 0-7; tx max = 127
+      const tx = key & 0xff; // bits 0-7; tx max = 127
       const ty = (key >> 16) & 0xff; // bits 16-23; top byte (24+) holds colony ID
       const sx = (tx - left) * TILE_SIZE_PX;
-      const sy = (ty - top)  * TILE_SIZE_PX;
+      const sy = (ty - top) * TILE_SIZE_PX;
       if (sx < -TILE_SIZE_PX || sx > canvasW || sy < -TILE_SIZE_PX || sy > canvasH) continue;
       const framesAgo = undergoundGlowFrames
-        ? (currentFrame - (undergoundGlowFrames.get(key) ?? currentFrame))
+        ? currentFrame - (undergoundGlowFrames.get(key) ?? currentFrame)
         : 0;
       const alpha_g = BASE_ALPHA * (1 - framesAgo / GLOW_FADE_FRAMES);
       if (alpha_g <= 0) continue;
@@ -473,9 +480,9 @@ export function drawUndergroundEntities(
       gfx.fillStyle(glowColor, alpha_g);
       gfx.fillRect(sx + 2, sy + 2, TILE_SIZE_PX - 4, TILE_SIZE_PX - 4);
       gfx.fillStyle(glowColor, alpha_g * 0.5);
-      gfx.fillRect(sx,      sy,      TILE_SIZE_PX, 2);
-      gfx.fillRect(sx,      sy + TILE_SIZE_PX - 2, TILE_SIZE_PX, 2);
-      gfx.fillRect(sx,      sy + 2,  2, TILE_SIZE_PX - 4);
+      gfx.fillRect(sx, sy, TILE_SIZE_PX, 2);
+      gfx.fillRect(sx, sy + TILE_SIZE_PX - 2, TILE_SIZE_PX, 2);
+      gfx.fillRect(sx, sy + 2, 2, TILE_SIZE_PX - 4);
       gfx.fillRect(sx + TILE_SIZE_PX - 2, sy + 2, 2, TILE_SIZE_PX - 4);
     }
     // Prune stale entries.
@@ -489,7 +496,7 @@ export function drawUndergroundEntities(
   const broodIds = new Set<number>();
   for (const c of Object.values(curr.colonies)) {
     if (c === undefined) continue;
-    for (let i = 0; i < c.eggs.length;   i++) broodIds.add(c.eggs[i]!);
+    for (let i = 0; i < c.eggs.length; i++) broodIds.add(c.eggs[i]!);
     for (let i = 0; i < c.larvae.length; i++) broodIds.add(c.larvae[i]!);
   }
   const maxId = curr.ants.alive.length;
@@ -513,10 +520,16 @@ export function drawUndergroundEntities(
     const baseX = useInterp ? prevPxX + (currPxX - prevPxX) * alpha : currPxX;
     const baseY = useInterp ? prevPxY + (currPxY - prevPxY) * alpha : currPxY;
     const screenX = baseX - left * TILE_SIZE_PX;
-    const screenY = baseY - top  * TILE_SIZE_PX;
+    const screenY = baseY - top * TILE_SIZE_PX;
 
     // Trivial viewport cull
-    if (screenX < -TILE_SIZE_PX || screenX > canvasW || screenY < -TILE_SIZE_PX || screenY > canvasH) continue;
+    if (
+      screenX < -TILE_SIZE_PX ||
+      screenX > canvasW ||
+      screenY < -TILE_SIZE_PX ||
+      screenY > canvasH
+    )
+      continue;
 
     // Facing: rotate the SVG (head on -x natively) toward the motion vector.
     // Smoothing is applied by the AntFacingCache when one is supplied — the
@@ -563,8 +576,28 @@ export function drawUndergroundEntities(
   // from the brood entity positions exactly — the sim's nurses have already
   // moved them into the nursery footprint, so rendering at the entity's
   // current tile is what places them inside the chamber visually.
-  drawBrood(sprites, curr, colony.eggs, 'egg', left, top, canvasW, canvasH, activeUndergroundColonyId);
-  drawBrood(sprites, curr, colony.larvae, 'larva', left, top, canvasW, canvasH, activeUndergroundColonyId);
+  drawBrood(
+    sprites,
+    curr,
+    colony.eggs,
+    'egg',
+    left,
+    top,
+    canvasW,
+    canvasH,
+    activeUndergroundColonyId,
+  );
+  drawBrood(
+    sprites,
+    curr,
+    colony.larvae,
+    'larva',
+    left,
+    top,
+    canvasW,
+    canvasH,
+    activeUndergroundColonyId,
+  );
 }
 
 /**
@@ -601,8 +634,14 @@ function drawBrood(
     const tileX = ants.posX[id]! >> FP_SHIFT;
     const tileY = ants.posY[id]! >> FP_SHIFT;
     const screenX = (tileX - left) * TILE_SIZE_PX;
-    const screenY = (tileY - top)  * TILE_SIZE_PX;
-    if (screenX < -TILE_SIZE_PX || screenX > canvasW || screenY < -TILE_SIZE_PX || screenY > canvasH) continue;
+    const screenY = (tileY - top) * TILE_SIZE_PX;
+    if (
+      screenX < -TILE_SIZE_PX ||
+      screenX > canvasW ||
+      screenY < -TILE_SIZE_PX ||
+      screenY > canvasH
+    )
+      continue;
     // Visible-carry offset: when this brood is on a carrier's tile and
     // the carrier is alive, lift it ~1/4 tile so it visually sits
     // above the carrier instead of being hidden under the ant sprite.

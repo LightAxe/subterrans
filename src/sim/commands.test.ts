@@ -237,23 +237,86 @@ describe('SimCommand', () => {
       }
 
       expect(handleCommand({ type: 'NoOp', issuedAtTick: 0 })).toBe('noop@0');
-      expect(handleCommand({ type: 'SetBehaviorRatio', colonyId: 1, ratio: { forage: 5, fight: 2 }, issuedAtTick: 1 })).toBe('ratio:1');
-      expect(handleCommand({ type: 'MarkDigTile', colonyId: 1, tileX: 4, tileY: 8, issuedAtTick: 2 })).toBe('dig:4,8');
-      expect(handleCommand({ type: 'MarkFoodPile', colonyId: 1, tileX: 12, tileY: 16, issuedAtTick: 3 })).toBe('food:12,16');
-      expect(handleCommand({ type: 'CancelDigMark', colonyId: 1, tileX: 5, tileY: 9, issuedAtTick: 4 })).toBe('cancel:5,9');
-      expect(handleCommand({ type: 'PlaceChamber', colonyId: 1, chamberType: ChamberType.Queen, anchorTileX: 3, anchorTileY: 7, issuedAtTick: 5 })).toBe('chamber:3,7:type0');
-      expect(handleCommand({ type: 'DesignateEntrance', colonyId: 1, surfaceTileX: 20, surfaceTileY: 64, issuedAtTick: 6 })).toBe('entrance:20,64');
-      expect(handleCommand({ type: 'SetRallyPoint', colonyId: 1, tileX: 10, tileY: 20, issuedAtTick: 7 })).toBe('rally:1:10,20');
-      expect(handleCommand({ type: 'ClearRallyPoint', colonyId: 1, issuedAtTick: 8 })).toBe('clearrally:1');
-      expect(handleCommand({
-        type: 'SyncAIState', colonyId: 2, issuedAtTick: 9, state: 'WarFooting',
-        enteredTick: 2400, probeCount: 0, lastProbeEndTick: 0, invasionStartTick: 0,
-        invasionRallyTileX: -1, invasionRallyTileY: -1, recoveryEndTick: 0,
-        operationKind: 'None', operationStartTick: 0, operationTargetTileX: -1,
-        operationTargetTileY: -1, operationFighterIds: [], operationFighterCount: 0,
-        operationStartFighterCount: 0, operationAttackerDeaths: 0, operationDefenderDeaths: 0,
-      })).toBe('syncai:2:WarFooting');
-      expect(handleCommand({ type: 'MarkSpiderPriority', colonyId: 1, isPriority: true, issuedAtTick: 10 })).toBe('spiderpriority:1:true');
+      expect(
+        handleCommand({
+          type: 'SetBehaviorRatio',
+          colonyId: 1,
+          ratio: { forage: 5, fight: 2 },
+          issuedAtTick: 1,
+        }),
+      ).toBe('ratio:1');
+      expect(
+        handleCommand({ type: 'MarkDigTile', colonyId: 1, tileX: 4, tileY: 8, issuedAtTick: 2 }),
+      ).toBe('dig:4,8');
+      expect(
+        handleCommand({ type: 'MarkFoodPile', colonyId: 1, tileX: 12, tileY: 16, issuedAtTick: 3 }),
+      ).toBe('food:12,16');
+      expect(
+        handleCommand({ type: 'CancelDigMark', colonyId: 1, tileX: 5, tileY: 9, issuedAtTick: 4 }),
+      ).toBe('cancel:5,9');
+      expect(
+        handleCommand({
+          type: 'PlaceChamber',
+          colonyId: 1,
+          chamberType: ChamberType.Queen,
+          anchorTileX: 3,
+          anchorTileY: 7,
+          issuedAtTick: 5,
+        }),
+      ).toBe('chamber:3,7:type0');
+      expect(
+        handleCommand({
+          type: 'DesignateEntrance',
+          colonyId: 1,
+          surfaceTileX: 20,
+          surfaceTileY: 64,
+          issuedAtTick: 6,
+        }),
+      ).toBe('entrance:20,64');
+      expect(
+        handleCommand({
+          type: 'SetRallyPoint',
+          colonyId: 1,
+          tileX: 10,
+          tileY: 20,
+          issuedAtTick: 7,
+        }),
+      ).toBe('rally:1:10,20');
+      expect(handleCommand({ type: 'ClearRallyPoint', colonyId: 1, issuedAtTick: 8 })).toBe(
+        'clearrally:1',
+      );
+      expect(
+        handleCommand({
+          type: 'SyncAIState',
+          colonyId: 2,
+          issuedAtTick: 9,
+          state: 'WarFooting',
+          enteredTick: 2400,
+          probeCount: 0,
+          lastProbeEndTick: 0,
+          invasionStartTick: 0,
+          invasionRallyTileX: -1,
+          invasionRallyTileY: -1,
+          recoveryEndTick: 0,
+          operationKind: 'None',
+          operationStartTick: 0,
+          operationTargetTileX: -1,
+          operationTargetTileY: -1,
+          operationFighterIds: [],
+          operationFighterCount: 0,
+          operationStartFighterCount: 0,
+          operationAttackerDeaths: 0,
+          operationDefenderDeaths: 0,
+        }),
+      ).toBe('syncai:2:WarFooting');
+      expect(
+        handleCommand({
+          type: 'MarkSpiderPriority',
+          colonyId: 1,
+          isPriority: true,
+          issuedAtTick: 10,
+        }),
+      ).toBe('spiderpriority:1:true');
     });
   });
 
@@ -285,7 +348,13 @@ describe('SimCommand', () => {
     });
 
     it('both are assignable to SimCommand union (9 variants)', () => {
-      const a: SimCommand = { type: 'SetRallyPoint', colonyId: 1, tileX: 3, tileY: 9, issuedAtTick: 0 };
+      const a: SimCommand = {
+        type: 'SetRallyPoint',
+        colonyId: 1,
+        tileX: 3,
+        tileY: 9,
+        issuedAtTick: 0,
+      };
       const b: SimCommand = { type: 'ClearRallyPoint', colonyId: 1, issuedAtTick: 0 };
       expect(a.type).toBe('SetRallyPoint');
       expect(b.type).toBe('ClearRallyPoint');

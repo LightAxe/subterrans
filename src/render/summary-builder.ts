@@ -111,9 +111,7 @@ function buildStrategySignals(world: WorldState): StrategySignals {
 
   // Emit current slider position as the sole history entry.
   const ratio = colony?.targetRatio ?? { forage: 10, fight: 0 };
-  const forageFightRatioHistory = [
-    { tick: 0, forage: ratio.forage, fight: ratio.fight },
-  ];
+  const forageFightRatioHistory = [{ tick: 0, forage: ratio.forage, fight: ratio.fight }];
 
   return {
     chamberCounts,
@@ -181,15 +179,15 @@ export function buildOutcomeAttribution(
       }
       // queen_death can describe either queen; use gameOutcome to pick perspective.
       const victoryNarratives: Record<string, string> = {
-        InvasionKill:      'Your fighters broke through to the enemy queen.',
-        SpiderRampage:     'The spider reached the enemy nursery and killed their queen.',
-        Starvation:        'The enemy queen starved after their colony ran out of food.',
+        InvasionKill: 'Your fighters broke through to the enemy queen.',
+        SpiderRampage: 'The spider reached the enemy nursery and killed their queen.',
+        Starvation: 'The enemy queen starved after their colony ran out of food.',
         MutualDestruction: 'Both queens died in the same final fight.',
       };
       const defeatNarratives: Record<string, string> = {
-        InvasionKill:      'Enemy fighters broke through a tunnel entrance and reached your queen.',
-        SpiderRampage:     'The spider reached your nursery and killed the queen.',
-        Starvation:        'Your queen starved after the colony ran out of food.',
+        InvasionKill: 'Enemy fighters broke through a tunnel entrance and reached your queen.',
+        SpiderRampage: 'The spider reached your nursery and killed the queen.',
+        Starvation: 'Your queen starved after the colony ran out of food.',
         MutualDestruction: 'Both queens died in the same final fight.',
       };
       const narratives = gameOutcome === 'Victory' ? victoryNarratives : defeatNarratives;
@@ -250,7 +248,7 @@ function buildTunableObserved(events: SimEvent[]): TunableObserved {
 
   return {
     defenderHomegroundWinRate: null, // populated once combat data exists (S1)
-    invasionDefenderSurvival: null,  // populated once combat data exists (S1)
+    invasionDefenderSurvival: null, // populated once combat data exists (S1)
     spiderRampageThisRound,
     totalSpiderHunts,
     totalProbes,
@@ -290,11 +288,7 @@ export function buildPlaytraceSummary(
       droppedStructural,
     },
     difficulty: world.difficulty,
-    eventsCoverage: resumedFromSave
-      ? 'since_load'
-      : totalEmitted > 0
-        ? 'full_round'
-        : 'unknown',
+    eventsCoverage: resumedFromSave ? 'since_load' : totalEmitted > 0 ? 'full_round' : 'unknown',
     eventsStartTick: events.length > 0 ? (events[0]?.tick ?? null) : null,
   };
 }

@@ -173,25 +173,35 @@ describe('withdrawFood', () => {
   it('drains chambers before the entrance pool (issue #15)', () => {
     const { colony } = setupWorldWithQueen(100);
     colony.chambers.push({
-      chamberId: 1, chamberType: ChamberType.FoodStorage, foodStored: 200,
-      posX: 0, posY: 0, width: 1, height: 1,
+      chamberId: 1,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 200,
+      posX: 0,
+      posY: 0,
+      width: 1,
+      height: 1,
     });
     const result = withdrawFood(colony, 50, LATEST_SIM_VERSION);
     expect(result).toBe(true);
     expect(colony.chambers[0]!.foodStored).toBe(150); // chamber drained
-    expect(colony.foodStored).toBe(100);              // pool untouched
+    expect(colony.foodStored).toBe(100); // pool untouched
   });
 
   it('drains the entrance pool only after every chamber is empty (issue #15)', () => {
     const { colony } = setupWorldWithQueen(100);
     colony.chambers.push({
-      chamberId: 1, chamberType: ChamberType.FoodStorage, foodStored: 30,
-      posX: 0, posY: 0, width: 1, height: 1,
+      chamberId: 1,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 30,
+      posX: 0,
+      posY: 0,
+      width: 1,
+      height: 1,
     });
     const result = withdrawFood(colony, 50, LATEST_SIM_VERSION);
     expect(result).toBe(true);
-    expect(colony.chambers[0]!.foodStored).toBe(0);   // chamber drained first
-    expect(colony.foodStored).toBe(80);               // remaining 20 from pool
+    expect(colony.chambers[0]!.foodStored).toBe(0); // chamber drained first
+    expect(colony.foodStored).toBe(80); // remaining 20 from pool
   });
 
   it('sets foodFlowFieldDirty only on saturated→depositable transitions (issue #15 follow-up)', () => {
@@ -206,14 +216,24 @@ describe('withdrawFood', () => {
     // Chamber 0: full → still saturated after small drains until we reach
     // the depositable threshold (free space >= HYST).
     colony.chambers.push({
-      chamberId: 1, chamberType: ChamberType.FoodStorage, foodStored: FOOD_CHAMBER_CAPACITY,
-      posX: 0, posY: 0, width: 1, height: 1,
+      chamberId: 1,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: FOOD_CHAMBER_CAPACITY,
+      posX: 0,
+      posY: 0,
+      width: 1,
+      height: 1,
     });
     // Chamber 1: starts depositable (free space > HYST) — drains within the
     // depositable band must NOT fire dirty.
     colony.chambers.push({
-      chamberId: 2, chamberType: ChamberType.FoodStorage, foodStored: 100,
-      posX: 0, posY: 0, width: 1, height: 1,
+      chamberId: 2,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 100,
+      posX: 0,
+      posY: 0,
+      width: 1,
+      height: 1,
     });
     colony.foodFlowFieldDirty = false;
 
@@ -269,12 +289,22 @@ describe('colonyFoodTotal — issue #15', () => {
   it('includes FoodStorage chamber food in the total', () => {
     const { colony } = setupWorldWithQueen(0);
     colony.chambers.push({
-      chamberId: 1, chamberType: ChamberType.FoodStorage, foodStored: 200,
-      posX: 0, posY: 0, width: 1, height: 1,
+      chamberId: 1,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 200,
+      posX: 0,
+      posY: 0,
+      width: 1,
+      height: 1,
     });
     colony.chambers.push({
-      chamberId: 2, chamberType: ChamberType.FoodStorage, foodStored: 50,
-      posX: 0, posY: 0, width: 1, height: 1,
+      chamberId: 2,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 50,
+      posX: 0,
+      posY: 0,
+      width: 1,
+      height: 1,
     });
     expect(colonyFoodTotal(colony)).toBe(250);
   });
@@ -282,8 +312,13 @@ describe('colonyFoodTotal — issue #15', () => {
   it('sums entrance pool + every FoodStorage chamber', () => {
     const { colony } = setupWorldWithQueen(100);
     colony.chambers.push({
-      chamberId: 1, chamberType: ChamberType.FoodStorage, foodStored: 200,
-      posX: 0, posY: 0, width: 1, height: 1,
+      chamberId: 1,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 200,
+      posX: 0,
+      posY: 0,
+      width: 1,
+      height: 1,
     });
     expect(colonyFoodTotal(colony)).toBe(300);
   });
@@ -292,12 +327,22 @@ describe('colonyFoodTotal — issue #15', () => {
     const { colony } = setupWorldWithQueen(100);
     // A non-FoodStorage chamber's foodStored is meaningless — must not contribute.
     colony.chambers.push({
-      chamberId: 1, chamberType: ChamberType.Queen, foodStored: 999,
-      posX: 0, posY: 0, width: 1, height: 1,
+      chamberId: 1,
+      chamberType: ChamberType.Queen,
+      foodStored: 999,
+      posX: 0,
+      posY: 0,
+      width: 1,
+      height: 1,
     });
     colony.chambers.push({
-      chamberId: 2, chamberType: ChamberType.Nursery, foodStored: 999,
-      posX: 0, posY: 0, width: 1, height: 1,
+      chamberId: 2,
+      chamberType: ChamberType.Nursery,
+      foodStored: 999,
+      posX: 0,
+      posY: 0,
+      width: 1,
+      height: 1,
     });
     expect(colonyFoodTotal(colony)).toBe(100);
   });
@@ -479,8 +524,8 @@ describe('tickDeathCleanup', () => {
 
     expect(colony.workers).toHaveLength(2);
     expect(colony.workers).not.toContain(id2); // removed
-    expect(colony.workers).toContain(id1);     // still present
-    expect(colony.workers).toContain(id3);     // still present
+    expect(colony.workers).toContain(id1); // still present
+    expect(colony.workers).toContain(id3); // still present
     expect(colony.workerCount).toBe(2);
   });
 
@@ -499,17 +544,17 @@ describe('tickDeathCleanup', () => {
     const { world, colony } = setupWorldWithQueen();
 
     // Add entities to all three buckets
-    const egg1  = addEgg(world, colony);
-    const egg2  = addEgg(world, colony);
-    const lar1  = addLarva(world, colony);
-    const lar2  = addLarva(world, colony);
-    const wrk1  = addWorker(world, colony);
-    const wrk2  = addWorker(world, colony);
+    const egg1 = addEgg(world, colony);
+    const egg2 = addEgg(world, colony);
+    const lar1 = addLarva(world, colony);
+    const lar2 = addLarva(world, colony);
+    const wrk1 = addWorker(world, colony);
+    const wrk2 = addWorker(world, colony);
 
     // Kill one from each bucket
-    world.ants.alive[egg1]  = 0;
-    world.ants.alive[lar1]  = 0;
-    world.ants.alive[wrk1]  = 0;
+    world.ants.alive[egg1] = 0;
+    world.ants.alive[lar1] = 0;
+    world.ants.alive[wrk1] = 0;
 
     tickDeathCleanup(world, colony);
 
@@ -543,17 +588,39 @@ describe('colonyFoodCapacity', () => {
 
   it('base + 1× FoodStorage chamber → BASE + 1 × FOOD_CHAMBER_CAPACITY', () => {
     const { colony } = setupWorldWithQueen();
-    colony.chambers.push(
-      { chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: 0, posX: 0, posY: 0, width: 3, height: 3 },
-    );
+    colony.chambers.push({
+      chamberId: 100,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 0,
+      posX: 0,
+      posY: 0,
+      width: 3,
+      height: 3,
+    });
     expect(colonyFoodCapacity(colony)).toBe(BASE_FOOD_STORAGE_CAPACITY + FOOD_CHAMBER_CAPACITY);
   });
 
   it('base + 2× FoodStorage chamber → BASE + 2 × FOOD_CHAMBER_CAPACITY', () => {
     const { colony } = setupWorldWithQueen();
     colony.chambers.push(
-      { chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: 0, posX: 0, posY: 0, width: 3, height: 3 },
-      { chamberId: 101, chamberType: ChamberType.FoodStorage, foodStored: 0, posX: 4, posY: 0, width: 3, height: 3 },
+      {
+        chamberId: 100,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: 0,
+        posX: 0,
+        posY: 0,
+        width: 3,
+        height: 3,
+      },
+      {
+        chamberId: 101,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: 0,
+        posX: 4,
+        posY: 0,
+        width: 3,
+        height: 3,
+      },
     );
     expect(colonyFoodCapacity(colony)).toBe(BASE_FOOD_STORAGE_CAPACITY + 2 * FOOD_CHAMBER_CAPACITY);
   });
@@ -561,8 +628,24 @@ describe('colonyFoodCapacity', () => {
   it('Queen / Nursery chambers do NOT contribute to capacity', () => {
     const { colony } = setupWorldWithQueen();
     colony.chambers.push(
-      { chamberId: 100, chamberType: ChamberType.Queen,   foodStored: 0, posX: 0, posY: 0, width: 5, height: 3 },
-      { chamberId: 101, chamberType: ChamberType.Nursery, foodStored: 0, posX: 8, posY: 0, width: 4, height: 3 },
+      {
+        chamberId: 100,
+        chamberType: ChamberType.Queen,
+        foodStored: 0,
+        posX: 0,
+        posY: 0,
+        width: 5,
+        height: 3,
+      },
+      {
+        chamberId: 101,
+        chamberType: ChamberType.Nursery,
+        foodStored: 0,
+        posX: 8,
+        posY: 0,
+        width: 4,
+        height: 3,
+      },
     );
     expect(colonyFoodCapacity(colony)).toBe(BASE_FOOD_STORAGE_CAPACITY);
   });
@@ -645,8 +728,11 @@ describe('tickReconcile', () => {
     tickReconcile(world, colony);
 
     // Allocation must now reflect actual worker/brood counts
-    const total = colony.computedAllocation.nurse + colony.computedAllocation.forage
-                + colony.computedAllocation.dig + colony.computedAllocation.fight;
+    const total =
+      colony.computedAllocation.nurse +
+      colony.computedAllocation.forage +
+      colony.computedAllocation.dig +
+      colony.computedAllocation.fight;
     expect(total).toBe(colony.workerCount);
     expect(colony.nurseCount).toBe(colony.computedAllocation.nurse);
   });
@@ -672,9 +758,15 @@ describe('tickReconcile', () => {
     // Issue #15: chamber.foodStored is per-chamber authoritative; the entrance
     // pool (`colony.foodStored`) caps at BASE alone — chambers are NOT a
     // capacity extension of the pool. Reconcile defensively clamps each side.
-    colony.chambers.push(
-      { chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: FOOD_CHAMBER_CAPACITY + 200, posX: 0, posY: 0, width: 3, height: 3 },
-    );
+    colony.chambers.push({
+      chamberId: 100,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: FOOD_CHAMBER_CAPACITY + 200,
+      posX: 0,
+      posY: 0,
+      width: 3,
+      height: 3,
+    });
     colony.foodStored = BASE_FOOD_STORAGE_CAPACITY + 1000; // pool overshoot
     colony.reconcileCountdown = 1;
     tickReconcile(world, colony);
@@ -706,9 +798,33 @@ describe('tickReconcile', () => {
     // footprint. Reconcile is forbidden from moving food across boundaries.
     const { world, colony } = setupWorldWithQueen(8000);
     colony.chambers.push(
-      { chamberId: 100, chamberType: ChamberType.FoodStorage, foodStored: 0, posX: 0, posY: 0, width: 3, height: 3 },
-      { chamberId: 101, chamberType: ChamberType.Nursery,     foodStored: 0, posX: 4, posY: 0, width: 3, height: 3 },
-      { chamberId: 102, chamberType: ChamberType.FoodStorage, foodStored: 0, posX: 8, posY: 0, width: 3, height: 3 },
+      {
+        chamberId: 100,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: 0,
+        posX: 0,
+        posY: 0,
+        width: 3,
+        height: 3,
+      },
+      {
+        chamberId: 101,
+        chamberType: ChamberType.Nursery,
+        foodStored: 0,
+        posX: 4,
+        posY: 0,
+        width: 3,
+        height: 3,
+      },
+      {
+        chamberId: 102,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: 0,
+        posX: 8,
+        posY: 0,
+        width: 3,
+        height: 3,
+      },
     );
 
     colony.reconcileCountdown = 1;
@@ -726,11 +842,15 @@ describe('tickReconcile', () => {
     // The deposit + withdraw paths cap at source, but reconcile is the safety
     // net for any drift. Direct chamber overshoot is clamped here.
     const { world, colony } = setupWorldWithQueen(0);
-    colony.chambers.push(
-      { chamberId: 100, chamberType: ChamberType.FoodStorage,
-        foodStored: FOOD_CHAMBER_CAPACITY + 12345, // simulated drift
-        posX: 0, posY: 0, width: 3, height: 3 },
-    );
+    colony.chambers.push({
+      chamberId: 100,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: FOOD_CHAMBER_CAPACITY + 12345, // simulated drift
+      posX: 0,
+      posY: 0,
+      width: 3,
+      height: 3,
+    });
 
     colony.reconcileCountdown = 1;
     tickReconcile(world, colony);
@@ -777,7 +897,10 @@ describe('CLNY-07 cached fields — integration', () => {
  * Assigns Phase 3 defaults (entrances, rallyPoint, digFlowFieldDirty) per PRD §2a.
  * Returns world, colony, and the colonyId used.
  */
-function setupWorldWithColonyAndUnderground(gridW = 20, gridH = 20): {
+function setupWorldWithColonyAndUnderground(
+  gridW = 20,
+  gridH = 20,
+): {
   world: WorldState;
   colony: ColonyRecord;
   colonyId: number;
@@ -791,8 +914,8 @@ function setupWorldWithColonyAndUnderground(gridW = 20, gridH = 20): {
 
   const colony = createColonyRecord(colonyId, queenId);
   // Phase 3 caller-side init contract (PRD §2a):
-  colony.entrances         = [];
-  colony.rallyPoint        = null;
+  colony.entrances = [];
+  colony.rallyPoint = null;
   colony.digFlowFieldDirty = false;
 
   world.colonies[colonyId] = colony;
@@ -821,8 +944,8 @@ describe('checkPendingChambers', () => {
       chamberType: ChamberType.Nursery,
       anchorTileX: 3,
       anchorTileY: 4,
-      width:       2,
-      height:      2,
+      width: 2,
+      height: 2,
     };
 
     const entityIdBefore = world.nextEntityId;
@@ -858,8 +981,8 @@ describe('checkPendingChambers', () => {
       chamberType: ChamberType.FoodStorage,
       anchorTileX: 3,
       anchorTileY: 4,
-      width:       2,
-      height:      2,
+      width: 2,
+      height: 2,
     };
 
     checkPendingChambers(world);
@@ -883,8 +1006,8 @@ describe('checkPendingChambers', () => {
       chamberType: ChamberType.Nursery,
       anchorTileX: 3,
       anchorTileY: 4,
-      width:       2,
-      height:      2,
+      width: 2,
+      height: 2,
     };
 
     checkPendingChambers(world);
@@ -901,21 +1024,29 @@ describe('checkPendingChambers', () => {
     ugSet(ug, 2, 2, UndergroundTileState.Open);
     const keyA = `${colonyId}:2:2`;
     world.pendingChambers[keyA] = {
-      colonyId, chamberType: ChamberType.Nursery,
-      anchorTileX: 2, anchorTileY: 2, width: 1, height: 1,
+      colonyId,
+      chamberType: ChamberType.Nursery,
+      anchorTileX: 2,
+      anchorTileY: 2,
+      width: 1,
+      height: 1,
     };
 
     // Chamber B (1×1 at 5,5) — still Solid
     const keyB = `${colonyId}:5:5`;
     world.pendingChambers[keyB] = {
-      colonyId, chamberType: ChamberType.FoodStorage,
-      anchorTileX: 5, anchorTileY: 5, width: 1, height: 1,
+      colonyId,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: 5,
+      anchorTileY: 5,
+      width: 1,
+      height: 1,
     };
 
     checkPendingChambers(world);
 
     expect(world.pendingChambers[keyA]).toBeUndefined(); // completed — deleted
-    expect(world.pendingChambers[keyB]).toBeDefined();   // incomplete — remains
+    expect(world.pendingChambers[keyB]).toBeDefined(); // incomplete — remains
     expect(colony.chambers).toHaveLength(1);
     expect(colony.chambers[0]!.chamberType).toBe(ChamberType.Nursery);
   });
@@ -933,8 +1064,12 @@ describe('checkPendingChambers', () => {
 
     const key = `${colonyId}:1:2`;
     world.pendingChambers[key] = {
-      colonyId, chamberType: ChamberType.FoodStorage,
-      anchorTileX: 1, anchorTileY: 2, width: 3, height: 2,
+      colonyId,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: 1,
+      anchorTileY: 2,
+      width: 3,
+      height: 2,
     };
 
     checkPendingChambers(world);
@@ -961,10 +1096,10 @@ describe('checkEntranceCompletion', () => {
     ugSet(ug, 5, 1, UndergroundTileState.Open);
 
     colony.entrances.push({
-      entranceId:   1,
+      entranceId: 1,
       surfaceTileX: 5,
       surfaceTileY: 0,
-      isOpen:       false,
+      isOpen: false,
     });
 
     checkEntranceCompletion(world);
@@ -980,10 +1115,10 @@ describe('checkEntranceCompletion', () => {
     // (5,1) stays Solid
 
     colony.entrances.push({
-      entranceId:   1,
+      entranceId: 1,
       surfaceTileX: 5,
       surfaceTileY: 0,
-      isOpen:       false,
+      isOpen: false,
     });
 
     checkEntranceCompletion(world);
@@ -998,10 +1133,10 @@ describe('checkEntranceCompletion', () => {
     // Shaft tiles remain Solid (normally would keep entrance closed)
     // but entrance is already marked open
     colony.entrances.push({
-      entranceId:   1,
+      entranceId: 1,
       surfaceTileX: 5,
       surfaceTileY: 0,
-      isOpen:       true, // already open
+      isOpen: true, // already open
     });
 
     // Confirm ug tiles are Solid (default)
@@ -1032,7 +1167,7 @@ describe('checkEntranceCompletion', () => {
 
     checkEntranceCompletion(world);
 
-    expect(colony.entrances[0]!.isOpen).toBe(true);  // entrance A opened
+    expect(colony.entrances[0]!.isOpen).toBe(true); // entrance A opened
     expect(colony.entrances[1]!.isOpen).toBe(false); // entrance B still closed
   });
 });

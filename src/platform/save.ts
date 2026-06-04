@@ -17,7 +17,10 @@ import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/co
 import type { AntComponents } from '../sim/ant/ant-store.js';
 import { createAntComponents } from '../sim/ant/ant-store.js';
 import type {
-  ColonyId, ColonyRecord, WorkerAllocation, ChamberRecord,
+  ColonyId,
+  ColonyRecord,
+  WorkerAllocation,
+  ChamberRecord,
 } from '../sim/colony/colony-store.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { NestEntrance } from '../sim/colony/entrance.js';
@@ -76,7 +79,10 @@ export const SAVE_KEY = 'subterrans:save:v3' as const;
 export const AUTOSAVE_INTERVAL_MS = 30_000 as const;
 
 export class SaveVersionMismatchError extends Error {
-  constructor(public expected: number, public got: number) {
+  constructor(
+    public expected: number,
+    public got: number,
+  ) {
     super(`Save format version mismatch: expected ${expected}, got ${got}`);
     this.name = 'SaveVersionMismatchError';
   }
@@ -95,7 +101,10 @@ export class SaveVersionMismatchError extends Error {
  * fresh without deleting; user can recover by upgrading the build.
  */
 export class FutureSimVersionError extends Error {
-  constructor(public got: number, public latest: number) {
+  constructor(
+    public got: number,
+    public latest: number,
+  ) {
     super(`Save's simVersion (${got}) is newer than this build's LATEST (${latest})`);
     this.name = 'FutureSimVersionError';
   }
@@ -106,7 +115,9 @@ export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V22_DIFFICULTY;
 export class OldSimVersionError extends Error {
   constructor(public got: number | null) {
     const gotStr = got !== null ? String(got) : 'unknown';
-    super(`Save is from an older version (simVersion=${gotStr}); minimum accepted is ${MIN_ACCEPTED_SIM_VERSION}. Please start a new game.`);
+    super(
+      `Save is from an older version (simVersion=${gotStr}); minimum accepted is ${MIN_ACCEPTED_SIM_VERSION}. Please start a new game.`,
+    );
     this.name = 'OldSimVersionError';
   }
 }
@@ -132,20 +143,22 @@ function isTileCoord(value: unknown, max: number): boolean {
 
 /** Issue #110 — envelope seed must round-trip `seed | 0` losslessly (int32). */
 function isInt32(value: unknown): value is number {
-  return typeof value === 'number'
-    && Number.isFinite(value)
-    && Number.isInteger(value)
-    && value >= -0x80000000
-    && value <= 0x7fffffff;
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    value >= -0x80000000 &&
+    value <= 0x7fffffff
+  );
 }
 
 /** Cap on how many entries each top-level Object map may carry on load.
  *  Issue #99 — defense against memory-DoS via unbounded `Object.entries`
  *  loops in deserializeWorldState. Numbers are 4-8× current scenario use,
  *  ample headroom for future scenario tweaks; anything above is tampering. */
-const MAX_COLONIES_LOAD = 16;       // current LIVE_COLONY_COUNT = 2.
+const MAX_COLONIES_LOAD = 16; // current LIVE_COLONY_COUNT = 2.
 const MAX_PHEROMONE_GRID_KEYS = 16; // current = 8 (2 colonies × 2 types × 2 zones).
-const MAX_PENDING_CHAMBERS = 256;   // few per colony in normal play.
+const MAX_PENDING_CHAMBERS = 256; // few per colony in normal play.
 const MAX_FOOD_PILES = FOOD_PILE_COUNT * 4; // issue #109.
 
 /** Issue #99 — verify a serialized grid object matches the canonical
@@ -153,12 +166,7 @@ const MAX_FOOD_PILES = FOOD_PILE_COUNT * 4; // issue #109.
  *  (`src/sim/constants.ts`); a future change to grid size would correctly
  *  require a save-format bump anyway, so a strict equality check is the
  *  right strictness level here. */
-function validateGridShape(
-  s: unknown,
-  expectedW: number,
-  expectedH: number,
-  label: string,
-): void {
+function validateGridShape(s: unknown, expectedW: number, expectedH: number, label: string): void {
   if (s === null || typeof s !== 'object') {
     throw new Error(`Invalid ${label}: not an object`);
   }
@@ -166,7 +174,7 @@ function validateGridShape(
   if (g.width !== expectedW || g.height !== expectedH) {
     throw new Error(
       `Invalid ${label} dimensions: ${String(g.width)}x${String(g.height)} ` +
-      `(expected ${expectedW}x${expectedH})`,
+        `(expected ${expectedW}x${expectedH})`,
     );
   }
   if (!Array.isArray(g.data) && !ArrayBuffer.isView(g.data)) {
@@ -184,44 +192,54 @@ function validateChamberRecord(ch: unknown, label: string): void {
     throw new Error(`Invalid ${label}: not an object`);
   }
   const c = ch as Partial<ChamberRecord>;
-  if (typeof c.chamberId !== 'number'
-      || !Number.isInteger(c.chamberId)
-      || c.chamberId < 0
-      || c.chamberId > MAX_ENTITIES) {
+  if (
+    typeof c.chamberId !== 'number' ||
+    !Number.isInteger(c.chamberId) ||
+    c.chamberId < 0 ||
+    c.chamberId > MAX_ENTITIES
+  ) {
     throw new Error(`Invalid ${label}.chamberId: ${String(c.chamberId)}`);
   }
-  if (typeof c.chamberType !== 'number'
-      || !Number.isInteger(c.chamberType)
-      || c.chamberType < 0
-      || c.chamberType > 2) {
+  if (
+    typeof c.chamberType !== 'number' ||
+    !Number.isInteger(c.chamberType) ||
+    c.chamberType < 0 ||
+    c.chamberType > 2
+  ) {
     throw new Error(`Invalid ${label}.chamberType: ${String(c.chamberType)}`);
   }
   const dims = CHAMBER_DIMENSIONS[c.chamberType as ChamberType];
   if (c.width !== dims.width || c.height !== dims.height) {
     throw new Error(
       `Invalid ${label} dims for type ${c.chamberType}: ` +
-      `${String(c.width)}x${String(c.height)} (expected ${dims.width}x${dims.height})`,
+        `${String(c.width)}x${String(c.height)} (expected ${dims.width}x${dims.height})`,
     );
   }
   // posX/posY are FP coords; require integer in [0, gridSize<<FP_SHIFT).
   const ugWidthFp = UNDERGROUND_GRID_WIDTH << FP_SHIFT;
   const ugHeightFp = UNDERGROUND_GRID_HEIGHT << FP_SHIFT;
-  if (typeof c.posX !== 'number'
-      || !Number.isInteger(c.posX)
-      || c.posX < 0
-      || c.posX >= ugWidthFp) {
+  if (
+    typeof c.posX !== 'number' ||
+    !Number.isInteger(c.posX) ||
+    c.posX < 0 ||
+    c.posX >= ugWidthFp
+  ) {
     throw new Error(`Invalid ${label}.posX: ${String(c.posX)}`);
   }
-  if (typeof c.posY !== 'number'
-      || !Number.isInteger(c.posY)
-      || c.posY < 0
-      || c.posY >= ugHeightFp) {
+  if (
+    typeof c.posY !== 'number' ||
+    !Number.isInteger(c.posY) ||
+    c.posY < 0 ||
+    c.posY >= ugHeightFp
+  ) {
     throw new Error(`Invalid ${label}.posY: ${String(c.posY)}`);
   }
-  if (typeof c.foodStored !== 'number'
-      || !Number.isInteger(c.foodStored)
-      || c.foodStored < 0
-      || c.foodStored > FOOD_CHAMBER_CAPACITY) {
+  if (
+    typeof c.foodStored !== 'number' ||
+    !Number.isInteger(c.foodStored) ||
+    c.foodStored < 0 ||
+    c.foodStored > FOOD_CHAMBER_CAPACITY
+  ) {
     throw new Error(`Invalid ${label}.foodStored: ${String(c.foodStored)}`);
   }
 }
@@ -238,10 +256,12 @@ function validatePendingChamber(pc: unknown, label: string): void {
   if (typeof p.colonyId !== 'number' || !Number.isInteger(p.colonyId) || p.colonyId < 0) {
     throw new Error(`Invalid ${label}.colonyId: ${String(p.colonyId)}`);
   }
-  if (typeof p.chamberType !== 'number'
-      || !Number.isInteger(p.chamberType)
-      || p.chamberType < 0
-      || p.chamberType > 2) {
+  if (
+    typeof p.chamberType !== 'number' ||
+    !Number.isInteger(p.chamberType) ||
+    p.chamberType < 0 ||
+    p.chamberType > 2
+  ) {
     throw new Error(`Invalid ${label}.chamberType: ${String(p.chamberType)}`);
   }
   if (!isTileCoord(p.anchorTileX, UNDERGROUND_GRID_WIDTH)) {
@@ -254,14 +274,16 @@ function validatePendingChamber(pc: unknown, label: string): void {
   if (p.width !== dims.width || p.height !== dims.height) {
     throw new Error(
       `Invalid ${label} dims for type ${p.chamberType}: ` +
-      `${String(p.width)}x${String(p.height)} (expected ${dims.width}x${dims.height})`,
+        `${String(p.width)}x${String(p.height)} (expected ${dims.width}x${dims.height})`,
     );
   }
-  if ((p.anchorTileX as number) + dims.width > UNDERGROUND_GRID_WIDTH
-      || (p.anchorTileY as number) + dims.height > UNDERGROUND_GRID_HEIGHT) {
+  if (
+    (p.anchorTileX as number) + dims.width > UNDERGROUND_GRID_WIDTH ||
+    (p.anchorTileY as number) + dims.height > UNDERGROUND_GRID_HEIGHT
+  ) {
     throw new Error(
       `${label} footprint extends past grid: anchor ` +
-      `(${p.anchorTileX}, ${p.anchorTileY}) + ${dims.width}x${dims.height}`,
+        `(${p.anchorTileX}, ${p.anchorTileY}) + ${dims.width}x${dims.height}`,
     );
   }
 }
@@ -272,10 +294,12 @@ function validateFoodPile(p: unknown, label: string): void {
     throw new Error(`Invalid ${label}: not an object`);
   }
   const fp = p as Partial<FoodPile>;
-  if (typeof fp.foodPileId !== 'number'
-      || !Number.isInteger(fp.foodPileId)
-      || fp.foodPileId < 0
-      || fp.foodPileId > MAX_ENTITIES) {
+  if (
+    typeof fp.foodPileId !== 'number' ||
+    !Number.isInteger(fp.foodPileId) ||
+    fp.foodPileId < 0 ||
+    fp.foodPileId > MAX_ENTITIES
+  ) {
     throw new Error(`Invalid ${label}.foodPileId: ${String(fp.foodPileId)}`);
   }
   if (!isTileCoord(fp.tileX, SURFACE_GRID_WIDTH)) {
@@ -290,19 +314,23 @@ function validateFoodPile(p: unknown, label: string): void {
   // range, so any save with `pickupsInitial < MIN` represents a state the
   // sim cannot generate (either tampered, or a back-port from a build with
   // looser constants — neither survives the contract).
-  if (typeof fp.pickupsInitial !== 'number'
-      || !Number.isInteger(fp.pickupsInitial)
-      || fp.pickupsInitial < FOOD_PILE_INITIAL_PICKUPS_MIN
-      || fp.pickupsInitial > FOOD_PILE_INITIAL_PICKUPS_MAX) {
+  if (
+    typeof fp.pickupsInitial !== 'number' ||
+    !Number.isInteger(fp.pickupsInitial) ||
+    fp.pickupsInitial < FOOD_PILE_INITIAL_PICKUPS_MIN ||
+    fp.pickupsInitial > FOOD_PILE_INITIAL_PICKUPS_MAX
+  ) {
     throw new Error(`Invalid ${label}.pickupsInitial: ${String(fp.pickupsInitial)}`);
   }
   // pickupsRemaining: integer in [1, pickupsInitial]. Live piles always have
   // at least one charge — the runtime splices at zero so saves should never
   // observe a 0 here. Above-initial means tampering or accidental re-creation.
-  if (typeof fp.pickupsRemaining !== 'number'
-      || !Number.isInteger(fp.pickupsRemaining)
-      || fp.pickupsRemaining <= 0
-      || fp.pickupsRemaining > fp.pickupsInitial) {
+  if (
+    typeof fp.pickupsRemaining !== 'number' ||
+    !Number.isInteger(fp.pickupsRemaining) ||
+    fp.pickupsRemaining <= 0 ||
+    fp.pickupsRemaining > fp.pickupsInitial
+  ) {
     throw new Error(`Invalid ${label}.pickupsRemaining: ${String(fp.pickupsRemaining)}`);
   }
 }
@@ -338,15 +366,25 @@ function validateDepletionRecord(d: unknown, label: string): void {
 // ---------------------------------------------------------------------------
 
 interface SerializedAnts {
-  count: number;   // we persist capacity = MAX_ENTITIES; no separate count field exists on AntComponents
+  count: number; // we persist capacity = MAX_ENTITIES; no separate count field exists on AntComponents
   // All 18 Int32Array fields as plain number[]:
-  posX: number[]; posY: number[]; colonyId: number[];
-  task: number[]; subTask: number[]; speed: number[];
-  foodCarrying: number[]; starvationTimer: number[];
-  age: number[]; alive: number[]; lifespan: number[];
+  posX: number[];
+  posY: number[];
+  colonyId: number[];
+  task: number[];
+  subTask: number[];
+  speed: number[];
+  foodCarrying: number[];
+  starvationTimer: number[];
+  age: number[];
+  alive: number[];
+  lifespan: number[];
   zone: number[];
-  digTileX: number[]; digTileY: number[]; digTicksRemaining: number[];
-  targetPosX: number[]; targetPosY: number[];
+  digTileX: number[];
+  digTileY: number[];
+  digTicksRemaining: number[];
+  targetPosX: number[];
+  targetPosY: number[];
   searchWave: number[];
   searchHeadingX: number[];
   searchHeadingY: number[];
@@ -369,15 +407,24 @@ interface SerializedAnts {
 }
 
 interface SerializedColony {
-  colonyId: ColonyId; queenEntityId: EntityId; queenStarvationTimer: number;
-  foodStored: number; workerCount: number; eggCount: number; larvaeCount: number; nurseCount: number;
-  eggs: EntityId[]; larvae: EntityId[]; workers: EntityId[];
+  colonyId: ColonyId;
+  queenEntityId: EntityId;
+  queenStarvationTimer: number;
+  foodStored: number;
+  workerCount: number;
+  eggCount: number;
+  larvaeCount: number;
+  nurseCount: number;
+  eggs: EntityId[];
+  larvae: EntityId[];
+  workers: EntityId[];
   chambers: ChamberRecord[];
   queenLastEggTick: number;
   targetRatio: { forage: number; fight: number };
   computedAllocation: WorkerAllocation;
   taskCensus: WorkerAllocation;
-  defeated: boolean; reconcileCountdown: number;
+  defeated: boolean;
+  reconcileCountdown: number;
   entrances: NestEntrance[];
   rallyPoint: { tileX: number; tileY: number } | null;
   digFlowFieldDirty: boolean;
@@ -387,7 +434,11 @@ interface SerializedColony {
   eggIntervalNumerator: number;
 }
 
-interface SerializedGrid { width: number; height: number; data: number[] }
+interface SerializedGrid {
+  width: number;
+  height: number;
+  data: number[];
+}
 
 /** S3 — serialized form of SpiderState. All fields are plain numbers/strings. */
 interface SerializedSpiderState {
@@ -495,29 +546,29 @@ function serializeAnts(a: AntComponents): SerializedAnts {
   // same size, so unused slots (alive=0) round-trip faithfully.
   return {
     count: a.alive.length,
-    posX:              Array.from(a.posX),
-    posY:              Array.from(a.posY),
-    colonyId:          Array.from(a.colonyId),
-    task:              Array.from(a.task),
-    subTask:           Array.from(a.subTask),
-    speed:             Array.from(a.speed),
-    foodCarrying:      Array.from(a.foodCarrying),
-    starvationTimer:   Array.from(a.starvationTimer),
-    age:               Array.from(a.age),
-    alive:             Array.from(a.alive),
-    lifespan:          Array.from(a.lifespan),
-    zone:              Array.from(a.zone),
-    digTileX:          Array.from(a.digTileX),
-    digTileY:          Array.from(a.digTileY),
+    posX: Array.from(a.posX),
+    posY: Array.from(a.posY),
+    colonyId: Array.from(a.colonyId),
+    task: Array.from(a.task),
+    subTask: Array.from(a.subTask),
+    speed: Array.from(a.speed),
+    foodCarrying: Array.from(a.foodCarrying),
+    starvationTimer: Array.from(a.starvationTimer),
+    age: Array.from(a.age),
+    alive: Array.from(a.alive),
+    lifespan: Array.from(a.lifespan),
+    zone: Array.from(a.zone),
+    digTileX: Array.from(a.digTileX),
+    digTileY: Array.from(a.digTileY),
     digTicksRemaining: Array.from(a.digTicksRemaining),
-    targetPosX:        Array.from(a.targetPosX),
-    targetPosY:        Array.from(a.targetPosY),
-    searchWave:        Array.from(a.searchWave),
-    searchHeadingX:    Array.from(a.searchHeadingX),
-    searchHeadingY:    Array.from(a.searchHeadingY),
-    searchHeadingTicks:Array.from(a.searchHeadingTicks),
-    searchPrevTileX:   Array.from(a.searchPrevTileX),
-    searchPrevTileY:   Array.from(a.searchPrevTileY),
+    targetPosX: Array.from(a.targetPosX),
+    targetPosY: Array.from(a.targetPosY),
+    searchWave: Array.from(a.searchWave),
+    searchHeadingX: Array.from(a.searchHeadingX),
+    searchHeadingY: Array.from(a.searchHeadingY),
+    searchHeadingTicks: Array.from(a.searchHeadingTicks),
+    searchPrevTileX: Array.from(a.searchPrevTileX),
+    searchPrevTileY: Array.from(a.searchPrevTileY),
     // Phase 09.1 Chunk 0 — grid-of-occupancy byte. Array.from works for both
     // Int32Array and Uint8Array, so the shape is identical to the other
     // per-ant fields (number[]).
@@ -529,46 +580,46 @@ function serializeAnts(a: AntComponents): SerializedAnts {
     // Issue #42 — recent-tiles ring buffer. The X/Y arrays are flat
     // (length = maxEntities * RECENT_TILES_LEN); the head array indexes
     // into them. All three round-trip for v6 SCEN-06 replay determinism.
-    recentTilesX:    Array.from(a.recentTilesX),
-    recentTilesY:    Array.from(a.recentTilesY),
+    recentTilesX: Array.from(a.recentTilesX),
+    recentTilesY: Array.from(a.recentTilesY),
     recentTilesHead: Array.from(a.recentTilesHead),
     // Issue #17 Phase 1 — visible brood carry slot + reverse pointer.
     carryingBroodId: Array.from(a.carryingBroodId),
-    carriedBy:       Array.from(a.carriedBy),
+    carriedBy: Array.from(a.carriedBy),
     // S1 — combat HP/damage/cooldown fields.
-    hp:               Array.from(a.hp),
-    homeGroundBonusHp:Array.from(a.homeGroundBonusHp),
-    attackCooldown:   Array.from(a.attackCooldown),
+    hp: Array.from(a.hp),
+    homeGroundBonusHp: Array.from(a.homeGroundBonusHp),
+    attackCooldown: Array.from(a.attackCooldown),
     combatOpponentId: Array.from(a.combatOpponentId),
   };
 }
 
 function serializeColony(c: ColonyRecord): SerializedColony {
   return {
-    colonyId:             c.colonyId,
-    queenEntityId:        c.queenEntityId,
+    colonyId: c.colonyId,
+    queenEntityId: c.queenEntityId,
     queenStarvationTimer: c.queenStarvationTimer,
-    foodStored:           c.foodStored,
-    workerCount:          c.workerCount,
-    eggCount:             c.eggCount,
-    larvaeCount:          c.larvaeCount,
-    nurseCount:           c.nurseCount,
-    eggs:                 [...c.eggs],
-    larvae:               [...c.larvae],
-    workers:              [...c.workers],
-    chambers:             c.chambers.map((ch) => ({ ...ch })),
-    targetRatio:          { ...c.targetRatio },
-    computedAllocation:   { ...c.computedAllocation },
-    taskCensus:           { ...c.taskCensus },
-    defeated:             c.defeated,
-    reconcileCountdown:   c.reconcileCountdown,
-    queenLastEggTick:     c.queenLastEggTick,
-    entrances:            c.entrances.map((e) => ({ ...e })),
-    rallyPoint:           c.rallyPoint === null ? null : { ...c.rallyPoint },
-    digFlowFieldDirty:    c.digFlowFieldDirty,
-    foodFlowFieldDirty:   c.foodFlowFieldDirty,
-    killCount:            c.killCount,
-    priorityFoodPileId:   c.priorityFoodPileId,
+    foodStored: c.foodStored,
+    workerCount: c.workerCount,
+    eggCount: c.eggCount,
+    larvaeCount: c.larvaeCount,
+    nurseCount: c.nurseCount,
+    eggs: [...c.eggs],
+    larvae: [...c.larvae],
+    workers: [...c.workers],
+    chambers: c.chambers.map((ch) => ({ ...ch })),
+    targetRatio: { ...c.targetRatio },
+    computedAllocation: { ...c.computedAllocation },
+    taskCensus: { ...c.taskCensus },
+    defeated: c.defeated,
+    reconcileCountdown: c.reconcileCountdown,
+    queenLastEggTick: c.queenLastEggTick,
+    entrances: c.entrances.map((e) => ({ ...e })),
+    rallyPoint: c.rallyPoint === null ? null : { ...c.rallyPoint },
+    digFlowFieldDirty: c.digFlowFieldDirty,
+    foodFlowFieldDirty: c.foodFlowFieldDirty,
+    killCount: c.killCount,
+    priorityFoodPileId: c.priorityFoodPileId,
     eggIntervalNumerator: c.eggIntervalNumerator,
   };
 }
@@ -608,7 +659,7 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
     nextEntityId: world.nextEntityId,
     simVersion: world.simVersion,
     terrainSeed: world.terrainSeed,
-    commandQueue: world.commandQueue.map((c) => ({ ...c })),  // Pitfall 7 — preserve
+    commandQueue: world.commandQueue.map((c) => ({ ...c })), // Pitfall 7 — preserve
     ants: serializeAnts(world.ants),
     colonies: coloniesOut,
     pheromoneGrids: pheromoneOut,
@@ -653,7 +704,6 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
 // ---------------------------------------------------------------------------
 // Deserialize helpers
 // ---------------------------------------------------------------------------
-
 
 /**
  * Validate `simVersion` at the save boundary.
@@ -739,30 +789,32 @@ function deserializeAnts(saved: SerializedAnts, capacity: number): AntComponents
 function deserializeColony(s: SerializedColony): ColonyRecord {
   const c = createColonyRecord(s.colonyId, s.queenEntityId);
   c.queenStarvationTimer = s.queenStarvationTimer;
-  c.foodStored           = s.foodStored;
-  c.workerCount          = s.workerCount;
-  c.eggCount             = s.eggCount;
-  c.larvaeCount          = s.larvaeCount;
-  c.nurseCount           = s.nurseCount;
-  c.eggs                 = [...s.eggs];
-  c.larvae               = [...s.larvae];
-  c.workers              = [...s.workers];
-  c.chambers             = s.chambers.map((ch) => ({ ...ch }));
-  c.targetRatio          = { ...s.targetRatio };
-  c.computedAllocation   = { ...s.computedAllocation };
-  c.taskCensus           = { ...s.taskCensus };
-  c.defeated             = s.defeated;
-  c.reconcileCountdown   = s.reconcileCountdown;
-  c.entrances            = s.entrances.map((e) => ({ ...e }));
-  c.rallyPoint           = s.rallyPoint === null ? null : { ...s.rallyPoint };
-  c.digFlowFieldDirty    = s.digFlowFieldDirty;
-  c.foodFlowFieldDirty   = s.foodFlowFieldDirty;
-  c.killCount            = s.killCount;
-  c.priorityFoodPileId   = s.priorityFoodPileId;
-  c.queenLastEggTick     = s.queenLastEggTick;
+  c.foodStored = s.foodStored;
+  c.workerCount = s.workerCount;
+  c.eggCount = s.eggCount;
+  c.larvaeCount = s.larvaeCount;
+  c.nurseCount = s.nurseCount;
+  c.eggs = [...s.eggs];
+  c.larvae = [...s.larvae];
+  c.workers = [...s.workers];
+  c.chambers = s.chambers.map((ch) => ({ ...ch }));
+  c.targetRatio = { ...s.targetRatio };
+  c.computedAllocation = { ...s.computedAllocation };
+  c.taskCensus = { ...s.taskCensus };
+  c.defeated = s.defeated;
+  c.reconcileCountdown = s.reconcileCountdown;
+  c.entrances = s.entrances.map((e) => ({ ...e }));
+  c.rallyPoint = s.rallyPoint === null ? null : { ...s.rallyPoint };
+  c.digFlowFieldDirty = s.digFlowFieldDirty;
+  c.foodFlowFieldDirty = s.foodFlowFieldDirty;
+  c.killCount = s.killCount;
+  c.priorityFoodPileId = s.priorityFoodPileId;
+  c.queenLastEggTick = s.queenLastEggTick;
   // Valid difficulty numerators are 3, 4, 5. Reject any out-of-range value (tampered save or future compat).
-  c.eggIntervalNumerator = (s.eggIntervalNumerator === 3 || s.eggIntervalNumerator === 4 || s.eggIntervalNumerator === 5)
-    ? s.eggIntervalNumerator : 4;
+  c.eggIntervalNumerator =
+    s.eggIntervalNumerator === 3 || s.eggIntervalNumerator === 4 || s.eggIntervalNumerator === 5
+      ? s.eggIntervalNumerator
+      : 4;
   // Issue #101 — validate chamber records before they reach the runtime.
   // Done after the spread so the validator inspects the persisted shape;
   // throw aborts deserializeWorldState's map() and propagates to bootFromSave.
@@ -796,13 +848,13 @@ function deserializeAIStateArray(s: SerializedWorldState): AIStateRecord[] {
     const r = raw[i]!;
     if (r === null || typeof r !== 'object') continue;
     const fightIds = Array.isArray(r.operationFighterIds)
-      ? r.operationFighterIds as number[]
+      ? (r.operationFighterIds as number[])
       : [];
     const buf = new Int32Array(AI_MAX_OPERATION_FIGHTERS).fill(-1);
     const copyLen = Math.min(fightIds.length, AI_MAX_OPERATION_FIGHTERS);
     for (let j = 0; j < copyLen; j++) {
       const val = fightIds[j];
-      buf[j] = (typeof val === 'number' && Number.isInteger(val)) ? val : -1;
+      buf[j] = typeof val === 'number' && Number.isInteger(val) ? val : -1;
     }
     result.push({
       colonyId: typeof r.colonyId === 'number' ? r.colonyId : 0,
@@ -816,21 +868,38 @@ function deserializeAIStateArray(s: SerializedWorldState): AIStateRecord[] {
       recoveryEndTick: typeof r.recoveryEndTick === 'number' ? r.recoveryEndTick : 0,
       operationKind: isValidOperationKind(r.operationKind) ? r.operationKind : 'None',
       operationStartTick: typeof r.operationStartTick === 'number' ? r.operationStartTick : 0,
-      operationTargetTileX: typeof r.operationTargetTileX === 'number' ? r.operationTargetTileX : -1,
-      operationTargetTileY: typeof r.operationTargetTileY === 'number' ? r.operationTargetTileY : -1,
+      operationTargetTileX:
+        typeof r.operationTargetTileX === 'number' ? r.operationTargetTileX : -1,
+      operationTargetTileY:
+        typeof r.operationTargetTileY === 'number' ? r.operationTargetTileY : -1,
       operationFighterIds: buf,
-      operationFighterCount: typeof r.operationFighterCount === 'number' ? Math.min(Math.max(0, r.operationFighterCount), AI_MAX_OPERATION_FIGHTERS) : 0,
-      operationStartFighterCount: typeof r.operationStartFighterCount === 'number' ? r.operationStartFighterCount : 0,
-      operationAttackerDeaths: typeof r.operationAttackerDeaths === 'number' ? r.operationAttackerDeaths : 0,
-      operationDefenderDeaths: typeof r.operationDefenderDeaths === 'number' ? r.operationDefenderDeaths : 0,
+      operationFighterCount:
+        typeof r.operationFighterCount === 'number'
+          ? Math.min(Math.max(0, r.operationFighterCount), AI_MAX_OPERATION_FIGHTERS)
+          : 0,
+      operationStartFighterCount:
+        typeof r.operationStartFighterCount === 'number' ? r.operationStartFighterCount : 0,
+      operationAttackerDeaths:
+        typeof r.operationAttackerDeaths === 'number' ? r.operationAttackerDeaths : 0,
+      operationDefenderDeaths:
+        typeof r.operationDefenderDeaths === 'number' ? r.operationDefenderDeaths : 0,
     });
   }
   return result;
 }
 
-function isValidSpiderBehaviorState(v: unknown): v is import('../sim/types.js').SpiderBehaviorState {
-  return v === 'Patrolling' || v === 'Hunting' || v === 'Chasing' || v === 'Striking' ||
-         v === 'Feeding' || v === 'Rampaging' || v === 'Retreating';
+function isValidSpiderBehaviorState(
+  v: unknown,
+): v is import('../sim/types.js').SpiderBehaviorState {
+  return (
+    v === 'Patrolling' ||
+    v === 'Hunting' ||
+    v === 'Chasing' ||
+    v === 'Striking' ||
+    v === 'Feeding' ||
+    v === 'Rampaging' ||
+    v === 'Retreating'
+  );
 }
 
 function deserializeSpider(s: SerializedWorldState): SpiderState | null {
@@ -839,18 +908,28 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
   if (typeof raw !== 'object') return null;
   const r = raw as Partial<SerializedSpiderState>;
   const rawState = isValidSpiderBehaviorState(r.state) ? r.state : 'Patrolling';
-  const rawHuntX = typeof r.huntTargetTileX === 'number' && Number.isInteger(r.huntTargetTileX) ? r.huntTargetTileX : -1;
-  const rawHuntY = typeof r.huntTargetTileY === 'number' && Number.isInteger(r.huntTargetTileY) ? r.huntTargetTileY : -1;
+  const rawHuntX =
+    typeof r.huntTargetTileX === 'number' && Number.isInteger(r.huntTargetTileX)
+      ? r.huntTargetTileX
+      : -1;
+  const rawHuntY =
+    typeof r.huntTargetTileY === 'number' && Number.isInteger(r.huntTargetTileY)
+      ? r.huntTargetTileY
+      : -1;
   // Guard: Hunting/Striking require a valid (non-sentinel) hunt target. A save with
   // state=Hunting but target=-1 (corrupt or truncated) would route the spider to (0,0)
   // for the full telegraph duration. Fall back to Patrolling in that case.
   const huntTargetValid = rawHuntX >= 0 && rawHuntY >= 0;
   // V23: Chasing requires a valid (non-sentinel) ant id; fall back to Patrolling otherwise.
-  const rawChaseId = typeof r.chaseTargetAntId === 'number' && Number.isInteger(r.chaseTargetAntId) ? r.chaseTargetAntId : -1;
+  const rawChaseId =
+    typeof r.chaseTargetAntId === 'number' && Number.isInteger(r.chaseTargetAntId)
+      ? r.chaseTargetAntId
+      : -1;
   const chaseTargetValid = rawChaseId >= 0;
-  let safeState = (rawState === 'Hunting' || rawState === 'Striking') && !huntTargetValid
-    ? 'Patrolling'
-    : rawState;
+  let safeState =
+    (rawState === 'Hunting' || rawState === 'Striking') && !huntTargetValid
+      ? 'Patrolling'
+      : rawState;
   if (safeState === 'Chasing' && !chaseTargetValid) safeState = 'Patrolling';
   return {
     state: safeState,
@@ -858,34 +937,94 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
     posY: typeof r.posY === 'number' && Number.isInteger(r.posY) ? r.posY : 0,
     lairTileX: typeof r.lairTileX === 'number' && Number.isInteger(r.lairTileX) ? r.lairTileX : 0,
     lairTileY: typeof r.lairTileY === 'number' && Number.isInteger(r.lairTileY) ? r.lairTileY : 0,
-    territoryRadiusTiles: typeof r.territoryRadiusTiles === 'number' && Number.isInteger(r.territoryRadiusTiles) ? r.territoryRadiusTiles : 24,
+    territoryRadiusTiles:
+      typeof r.territoryRadiusTiles === 'number' && Number.isInteger(r.territoryRadiusTiles)
+        ? r.territoryRadiusTiles
+        : 24,
     hp: typeof r.hp === 'number' && Number.isInteger(r.hp) ? r.hp : 80,
-    attackCooldown: typeof r.attackCooldown === 'number' && Number.isInteger(r.attackCooldown) ? r.attackCooldown : 0,
-    hungerTicks: typeof r.hungerTicks === 'number' && Number.isInteger(r.hungerTicks) ? r.hungerTicks : 0,
-    nextHuntTick: typeof r.nextHuntTick === 'number' && Number.isInteger(r.nextHuntTick) ? r.nextHuntTick : SPIDER_HUNT_INTERVAL_TICKS,
-    huntStartTick: typeof r.huntStartTick === 'number' && Number.isInteger(r.huntStartTick) ? r.huntStartTick : 0,
-    strikeStartTick: typeof r.strikeStartTick === 'number' && Number.isInteger(r.strikeStartTick) ? r.strikeStartTick : 0,
-    feedingStartTick: typeof r.feedingStartTick === 'number' && Number.isInteger(r.feedingStartTick) ? r.feedingStartTick : 0,
-    retreatStartTick: typeof r.retreatStartTick === 'number' && Number.isInteger(r.retreatStartTick) ? r.retreatStartTick : 0,
-    rampageStartTick: typeof r.rampageStartTick === 'number' && Number.isInteger(r.rampageStartTick) ? r.rampageStartTick : 0,
+    attackCooldown:
+      typeof r.attackCooldown === 'number' && Number.isInteger(r.attackCooldown)
+        ? r.attackCooldown
+        : 0,
+    hungerTicks:
+      typeof r.hungerTicks === 'number' && Number.isInteger(r.hungerTicks) ? r.hungerTicks : 0,
+    nextHuntTick:
+      typeof r.nextHuntTick === 'number' && Number.isInteger(r.nextHuntTick)
+        ? r.nextHuntTick
+        : SPIDER_HUNT_INTERVAL_TICKS,
+    huntStartTick:
+      typeof r.huntStartTick === 'number' && Number.isInteger(r.huntStartTick)
+        ? r.huntStartTick
+        : 0,
+    strikeStartTick:
+      typeof r.strikeStartTick === 'number' && Number.isInteger(r.strikeStartTick)
+        ? r.strikeStartTick
+        : 0,
+    feedingStartTick:
+      typeof r.feedingStartTick === 'number' && Number.isInteger(r.feedingStartTick)
+        ? r.feedingStartTick
+        : 0,
+    retreatStartTick:
+      typeof r.retreatStartTick === 'number' && Number.isInteger(r.retreatStartTick)
+        ? r.retreatStartTick
+        : 0,
+    rampageStartTick:
+      typeof r.rampageStartTick === 'number' && Number.isInteger(r.rampageStartTick)
+        ? r.rampageStartTick
+        : 0,
     huntTargetTileX: huntTargetValid ? rawHuntX : -1,
     huntTargetTileY: huntTargetValid ? rawHuntY : -1,
-    killsThisStrike: typeof r.killsThisStrike === 'number' && Number.isInteger(r.killsThisStrike) ? r.killsThisStrike : 0,
-    rampageKillsThisRampage: typeof r.rampageKillsThisRampage === 'number' && Number.isInteger(r.rampageKillsThisRampage) ? r.rampageKillsThisRampage : 0,
-    rampageTargetColonyId: safeState === 'Rampaging' && typeof r.rampageTargetColonyId === 'number' && r.rampageTargetColonyId > 0 ? r.rampageTargetColonyId : -1,
+    killsThisStrike:
+      typeof r.killsThisStrike === 'number' && Number.isInteger(r.killsThisStrike)
+        ? r.killsThisStrike
+        : 0,
+    rampageKillsThisRampage:
+      typeof r.rampageKillsThisRampage === 'number' && Number.isInteger(r.rampageKillsThisRampage)
+        ? r.rampageKillsThisRampage
+        : 0,
+    rampageTargetColonyId:
+      safeState === 'Rampaging' &&
+      typeof r.rampageTargetColonyId === 'number' &&
+      r.rampageTargetColonyId > 0
+        ? r.rampageTargetColonyId
+        : -1,
     chaseTargetAntId: safeState === 'Chasing' ? rawChaseId : -1,
-    chaseStartTick: typeof r.chaseStartTick === 'number' && Number.isInteger(r.chaseStartTick) ? r.chaseStartTick : 0,
+    chaseStartTick:
+      typeof r.chaseStartTick === 'number' && Number.isInteger(r.chaseStartTick)
+        ? r.chaseStartTick
+        : 0,
     killedThisTick: 0,
-    lastKillTileX: typeof r.lastKillTileX === 'number' && Number.isInteger(r.lastKillTileX) ? r.lastKillTileX : -1,
-    lastKillTileY: typeof r.lastKillTileY === 'number' && Number.isInteger(r.lastKillTileY) ? r.lastKillTileY : -1,
-    feedAwayTileX: typeof r.feedAwayTileX === 'number' && Number.isInteger(r.feedAwayTileX) ? r.feedAwayTileX : -1,
-    feedAwayTileY: typeof r.feedAwayTileY === 'number' && Number.isInteger(r.feedAwayTileY) ? r.feedAwayTileY : -1,
-    feedArrivedTick: typeof r.feedArrivedTick === 'number' && Number.isInteger(r.feedArrivedTick) ? r.feedArrivedTick : -1,
+    lastKillTileX:
+      typeof r.lastKillTileX === 'number' && Number.isInteger(r.lastKillTileX)
+        ? r.lastKillTileX
+        : -1,
+    lastKillTileY:
+      typeof r.lastKillTileY === 'number' && Number.isInteger(r.lastKillTileY)
+        ? r.lastKillTileY
+        : -1,
+    feedAwayTileX:
+      typeof r.feedAwayTileX === 'number' && Number.isInteger(r.feedAwayTileX)
+        ? r.feedAwayTileX
+        : -1,
+    feedAwayTileY:
+      typeof r.feedAwayTileY === 'number' && Number.isInteger(r.feedAwayTileY)
+        ? r.feedAwayTileY
+        : -1,
+    feedArrivedTick:
+      typeof r.feedArrivedTick === 'number' && Number.isInteger(r.feedArrivedTick)
+        ? r.feedArrivedTick
+        : -1,
   };
 }
 
 function isValidAIState(v: unknown): v is import('../sim/types.js').AIState {
-  return v === 'Peacetime' || v === 'WarFooting' || v === 'Probing' || v === 'Invading' || v === 'Recovery';
+  return (
+    v === 'Peacetime' ||
+    v === 'WarFooting' ||
+    v === 'Probing' ||
+    v === 'Invading' ||
+    v === 'Recovery'
+  );
 }
 
 function isValidOperationKind(v: unknown): v is 'None' | 'Probe' | 'Invasion' {
@@ -925,10 +1064,17 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // so a count > MAX_ENTITIES at this point is genuine tampering — a future
   // build raising MAX_ENTITIES would have bumped simVersion to flag the change.
   const rawCount = s.ants.count;
-  if (typeof rawCount !== 'number' || !Number.isInteger(rawCount) || rawCount < 0 || rawCount > MAX_ENTITIES) {
+  if (
+    typeof rawCount !== 'number' ||
+    !Number.isInteger(rawCount) ||
+    rawCount < 0 ||
+    rawCount > MAX_ENTITIES
+  ) {
     // Use String() so NaN/Infinity render as their canonical names; JSON.stringify
     // would coerce them to 'null', which is more confusing than less.
-    throw new Error(`Invalid ants.count in save: ${String(rawCount)} (require integer in [0, ${MAX_ENTITIES}])`);
+    throw new Error(
+      `Invalid ants.count in save: ${String(rawCount)} (require integer in [0, ${MAX_ENTITIES}])`,
+    );
   }
   const capacity = rawCount > 0 ? rawCount : MAX_ENTITIES;
 
@@ -947,21 +1093,27 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   }
   const ugKeys = Object.keys(s.undergroundGrids);
   if (ugKeys.length > MAX_COLONIES_LOAD) {
-    throw new Error(`Too many undergroundGrids in save: ${ugKeys.length} (cap ${MAX_COLONIES_LOAD})`);
+    throw new Error(
+      `Too many undergroundGrids in save: ${ugKeys.length} (cap ${MAX_COLONIES_LOAD})`,
+    );
   }
   if (s.pheromoneGrids === null || typeof s.pheromoneGrids !== 'object') {
     throw new Error('Invalid save shape: missing or non-object pheromoneGrids');
   }
   const pheroKeys = Object.keys(s.pheromoneGrids);
   if (pheroKeys.length > MAX_PHEROMONE_GRID_KEYS) {
-    throw new Error(`Too many pheromoneGrids in save: ${pheroKeys.length} (cap ${MAX_PHEROMONE_GRID_KEYS})`);
+    throw new Error(
+      `Too many pheromoneGrids in save: ${pheroKeys.length} (cap ${MAX_PHEROMONE_GRID_KEYS})`,
+    );
   }
   if (s.pendingChambers === null || typeof s.pendingChambers !== 'object') {
     throw new Error('Invalid save shape: missing or non-object pendingChambers');
   }
   const pcKeys = Object.keys(s.pendingChambers);
   if (pcKeys.length > MAX_PENDING_CHAMBERS) {
-    throw new Error(`Too many pendingChambers in save: ${pcKeys.length} (cap ${MAX_PENDING_CHAMBERS})`);
+    throw new Error(
+      `Too many pendingChambers in save: ${pcKeys.length} (cap ${MAX_PENDING_CHAMBERS})`,
+    );
   }
 
   const colonies: Record<ColonyId, ColonyRecord> = {};
@@ -980,8 +1132,12 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
       throw new Error(`Invalid undergroundGrids key: ${cidStr}`);
     }
     // Issue #99 — verify grid shape before allocator runs.
-    validateGridShape(sg, UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT,
-      `undergroundGrids[${cidStr}]`);
+    validateGridShape(
+      sg,
+      UNDERGROUND_GRID_WIDTH,
+      UNDERGROUND_GRID_HEIGHT,
+      `undergroundGrids[${cidStr}]`,
+    );
     undergroundGrids[Number(cidStr) as ColonyId] = deserializeUndergroundGrid(sg);
   }
   const pheromoneGrids: Record<string, PheromoneGrid> = {};
@@ -994,13 +1150,18 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     }
     let validated = false;
     try {
-      validateGridShape(sg, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT,
-        `pheromoneGrids[${key}]`);
+      validateGridShape(sg, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT, `pheromoneGrids[${key}]`);
       validated = true;
-    } catch { /* try underground next */ }
+    } catch {
+      /* try underground next */
+    }
     if (!validated) {
-      validateGridShape(sg, UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT,
-        `pheromoneGrids[${key}]`);
+      validateGridShape(
+        sg,
+        UNDERGROUND_GRID_WIDTH,
+        UNDERGROUND_GRID_HEIGHT,
+        `pheromoneGrids[${key}]`,
+      );
     }
     pheromoneGrids[key] = deserializePheromoneGrid(sg);
   }
@@ -1025,27 +1186,34 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // the snapshot was written. Match the count check: integer in
   // [0, MAX_ENTITIES] required, anything else throws.
   const rawNext = s.nextEntityId;
-  if (typeof rawNext !== 'number' || !Number.isInteger(rawNext) || rawNext < 0 || rawNext > MAX_ENTITIES) {
-    throw new Error(`Invalid nextEntityId in save: ${String(rawNext)} (require integer in [0, ${MAX_ENTITIES}])`);
+  if (
+    typeof rawNext !== 'number' ||
+    !Number.isInteger(rawNext) ||
+    rawNext < 0 ||
+    rawNext > MAX_ENTITIES
+  ) {
+    throw new Error(
+      `Invalid nextEntityId in save: ${String(rawNext)} (require integer in [0, ${MAX_ENTITIES}])`,
+    );
   }
 
   // Issue #104 — boundary validation for snapshot tick. Same pattern as
   // nextEntityId: `tick: s.tick` previously passed strings/NaN through,
   // and `world.tick += 1` became unbounded string concatenation.
   const rawTick = s.tick;
-  if (typeof rawTick !== 'number'
-      || !Number.isFinite(rawTick)
-      || !Number.isInteger(rawTick)
-      || rawTick < 0) {
+  if (
+    typeof rawTick !== 'number' ||
+    !Number.isFinite(rawTick) ||
+    !Number.isInteger(rawTick) ||
+    rawTick < 0
+  ) {
     throw new Error(`Invalid tick in save: ${String(rawTick)} (require non-negative integer)`);
   }
   // rngState — same hardening for symmetry. Rng's `state | 0` would coerce
   // NaN/strings to 0 on first use, but boundary validation surfaces tampering
   // explicitly instead of silently snapping.
   const rawRng = s.rngState;
-  if (typeof rawRng !== 'number'
-      || !Number.isFinite(rawRng)
-      || !Number.isInteger(rawRng)) {
+  if (typeof rawRng !== 'number' || !Number.isFinite(rawRng) || !Number.isInteger(rawRng)) {
     throw new Error(`Invalid rngState in save: ${String(rawRng)} (require integer)`);
   }
 
@@ -1108,14 +1276,15 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     nextEntityId: rawNext,
     simVersion: validatedSimVersion,
     // terrainSeed: uint32-coerce to guard against NaN/string/negative tampered values.
-    terrainSeed: typeof s.terrainSeed === 'number' && Number.isInteger(s.terrainSeed)
-      ? s.terrainSeed >>> 0
-      : 0,
+    terrainSeed:
+      typeof s.terrainSeed === 'number' && Number.isInteger(s.terrainSeed)
+        ? s.terrainSeed >>> 0
+        : 0,
     // Issue #105 — filter null/non-object entries before the spread so the
     // runtime queue is always consistent with the dispatcher's expectations.
     commandQueue: (Array.isArray(s.commandQueue) ? s.commandQueue : [])
       .filter((c) => c !== null && typeof c === 'object')
-      .map((c) => ({ ...c } as SimCommand)),
+      .map((c) => ({ ...c }) as SimCommand),
     ants: deserializeAnts(s.ants, capacity),
     colonies,
     pheromoneGrids,
@@ -1128,7 +1297,13 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     pendingQueenDeathContexts: [],
     aiState: deserializeAIStateArray(s),
     spider: _deserializedSpider,
-    spiderPriorityColonyId: (_deserializedSpider !== null && typeof s.spiderPriorityColonyId === 'number' && Number.isInteger(s.spiderPriorityColonyId) && s.spiderPriorityColonyId > 0) ? s.spiderPriorityColonyId : null,
+    spiderPriorityColonyId:
+      _deserializedSpider !== null &&
+      typeof s.spiderPriorityColonyId === 'number' &&
+      Number.isInteger(s.spiderPriorityColonyId) &&
+      s.spiderPriorityColonyId > 0
+        ? s.spiderPriorityColonyId
+        : null,
     scatterReticleTile: (() => {
       if (_deserializedSpider === null) return null;
       const r = s.scatterReticleTile;
@@ -1150,7 +1325,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
       s.droppedStructuralCount >= 0
         ? s.droppedStructuralCount
         : 0,
-    difficulty: (s.difficulty === 'Easy' || s.difficulty === 'Hard') ? s.difficulty : 'Normal',
+    difficulty: s.difficulty === 'Easy' || s.difficulty === 'Hard' ? s.difficulty : 'Normal',
   };
 }
 
@@ -1171,7 +1346,6 @@ function buildSaveFile(seed: number, inputLog: readonly SimCommand[], world: Wor
     savedAtMs: Date.now(),
   };
 }
-
 
 // Exported for issue #112 v2-rejection test — verifies that parseSaveFile
 // throws SaveVersionMismatchError on pre-v3 envelopes. loadSave swallows the
@@ -1218,8 +1392,16 @@ export function parseSaveFile(raw: string): SaveFile {
  * Issue #112 — added v2 to the purge list when SAVE_KEY moved to v3.
  */
 function purgeLegacySaves(): void {
-  try { localStorage.removeItem('subterrans:save:v1'); } catch { /* quota / private mode — silent: best-effort cleanup, no UX signal */ }
-  try { localStorage.removeItem('subterrans:save:v2'); } catch { /* quota / private mode — silent: best-effort cleanup, no UX signal */ }
+  try {
+    localStorage.removeItem('subterrans:save:v1');
+  } catch {
+    /* quota / private mode — silent: best-effort cleanup, no UX signal */
+  }
+  try {
+    localStorage.removeItem('subterrans:save:v2');
+  } catch {
+    /* quota / private mode — silent: best-effort cleanup, no UX signal */
+  }
 }
 
 export function hasSave(): boolean {
@@ -1406,32 +1588,31 @@ export function getSaveInfo(): SaveInfo | null {
   const playerKey = String(PLAYER_COLONY_ID);
   // colonies may be undefined / null / a non-object on a malformed envelope;
   // probe defensively before keying into it.
-  const playerColony = colonies !== undefined && colonies !== null && typeof colonies === 'object'
-    ? colonies[playerKey]
-    : undefined;
+  const playerColony =
+    colonies !== undefined && colonies !== null && typeof colonies === 'object'
+      ? colonies[playerKey]
+      : undefined;
   // foodStored is fixed-point; convert to whole-food units for display.
   // Right-shift on a non-number short-circuits cleanly via the ?? fallback.
   const foodFpRaw = playerColony?.foodStored;
-  const foodFp = typeof foodFpRaw === 'number' && Number.isFinite(foodFpRaw) && foodFpRaw >= 0
-    ? foodFpRaw
-    : 0;
+  const foodFp =
+    typeof foodFpRaw === 'number' && Number.isFinite(foodFpRaw) && foodFpRaw >= 0 ? foodFpRaw : 0;
   const workerCountRaw = playerColony?.workerCount;
-  const playerWorkers = typeof workerCountRaw === 'number' && Number.isFinite(workerCountRaw) && workerCountRaw >= 0
-    ? workerCountRaw
-    : 0;
+  const playerWorkers =
+    typeof workerCountRaw === 'number' && Number.isFinite(workerCountRaw) && workerCountRaw >= 0
+      ? workerCountRaw
+      : 0;
   // tick may also be missing on a malformed envelope — surface 0 rather
   // than rendering "Tick undefined" in the dialog.
   const tickRaw = (snapshot as { tick?: unknown }).tick;
-  const tick = typeof tickRaw === 'number' && Number.isFinite(tickRaw) && tickRaw >= 0
-    ? tickRaw
-    : 0;
+  const tick =
+    typeof tickRaw === 'number' && Number.isFinite(tickRaw) && tickRaw >= 0 ? tickRaw : 0;
   // Issue #115 — savedAtMs is optional in the envelope; pre-fix saves and
   // any tampered/malformed timestamp fall back to 0 ("unknown") so the
   // dialog can render a sensible placeholder.
   const stampRaw = (file as { savedAtMs?: unknown }).savedAtMs;
-  const savedAtMs = typeof stampRaw === 'number' && Number.isFinite(stampRaw) && stampRaw >= 0
-    ? stampRaw
-    : 0;
+  const savedAtMs =
+    typeof stampRaw === 'number' && Number.isFinite(stampRaw) && stampRaw >= 0 ? stampRaw : 0;
   return {
     tick,
     playerWorkers,

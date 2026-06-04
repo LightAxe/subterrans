@@ -44,13 +44,13 @@ const SEED = 42;
 // per the acceptance criteria), so the slower bootstrap is the intended
 // trade-off.
 const TOTAL_TICKS = 8000;
-const TRAJECTORY_WINDOW_START = 7000;   // track workerCount from tick 7000..8000
+const TRAJECTORY_WINDOW_START = 7000; // track workerCount from tick 7000..8000
 // S4 change: queen now lays on first eligible tick (elapsed-since-last-lay gate), not at modulo
 // boundaries. In the AI scenario, chambers complete ~tick 4000; first egg lays immediately,
 // creating ~6 larvae by tick 6000. First new worker matures at ~tick 6700 (4000+2700).
 // Window extended from 5500..6000 → 7000..8000 so the monitoring window contains the
 // stable post-first-worker-maturation state.
-const DIAGNOSTIC_INTERVAL = 500;         // log snapshot every 500 ticks (pre-audit)
+const DIAGNOSTIC_INTERVAL = 500; // log snapshot every 500 ticks (pre-audit)
 
 // -----------------------------------------------------------------------------
 // Helpers
@@ -136,7 +136,8 @@ describe('AI-only scenario 6000 ticks', () => {
 
     // --- End-state snapshot (for failure diagnostics) ---
     const finalState = snapshotColony(world, aiColony!);
-    const ctx = `Final state: ${JSON.stringify(finalState)}. ` +
+    const ctx =
+      `Final state: ${JSON.stringify(finalState)}. ` +
       `Trajectory[${TRAJECTORY_WINDOW_START}..${TOTAL_TICKS}] workerCount (${workerCountTrajectory.length} samples): ` +
       `first=${workerCountTrajectory[0]} last=${workerCountTrajectory[workerCountTrajectory.length - 1]}. ` +
       `Diagnostics: ${JSON.stringify(diagnostics)}`;
@@ -180,8 +181,7 @@ describe('AI-only scenario 6000 ticks', () => {
     // assertion is testing.)
     {
       const total = colonyFoodTotal(aiColony!);
-      expect(total, `AI colony food total is not > 0 (found ${total}). ${ctx}`)
-        .toBeGreaterThan(0);
+      expect(total, `AI colony food total is not > 0 (found ${total}). ${ctx}`).toBeGreaterThan(0);
     }
 
     // 7. Chamber uniqueness: exactly 1 Queen, exactly 1 Nursery, ≥1 FoodStorage
@@ -205,7 +205,7 @@ describe('AI-only scenario 6000 ticks', () => {
     expect(
       endWC,
       `workerCount declined across ticks ${TRAJECTORY_WINDOW_START}..${TOTAL_TICKS}: ` +
-      `started=${startWC} ended=${endWC}. ${ctx}`,
+        `started=${startWC} ended=${endWC}. ${ctx}`,
     ).toBeGreaterThanOrEqual(startWC);
   }, 120_000); // 8000 ticks at ~8ms/tick; allow 120s budget (S4 extended window).
 });
@@ -232,7 +232,9 @@ describe('AI-only scenario 18000 ticks (issue #33)', () => {
     }
 
     const grid = world.undergroundGrids[ENEMY_COLONY_ID]!;
-    let minX = Infinity, maxX = -Infinity, maxY = -Infinity;
+    let minX = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
     for (const ch of aiColony.chambers) {
       const x = ch.posX >> FP_SHIFT;
       const y = ch.posY >> FP_SHIFT;
@@ -247,7 +249,7 @@ describe('AI-only scenario 18000 ticks (issue #33)', () => {
       `widthSpan=${widthSpan} (${(widthRatio * 100).toFixed(1)}%), ` +
       `maxChamberY=${maxY}`;
     expect(
-      widthRatio >= 0.30 || maxY > 15,
+      widthRatio >= 0.3 || maxY > 15,
       `Issue #33 acceptance: span >= 30% width OR max chamber Y > 15. Got ${ctx}.`,
     ).toBe(true);
   }, 120_000);

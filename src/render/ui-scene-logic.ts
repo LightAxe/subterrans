@@ -24,11 +24,15 @@ export type QueenDeathCause =
  */
 export function formatOutcomeTitle(outcome: GameOutcome): { text: string; color: number } {
   switch (outcome) {
-    case GameOutcome.Victory:           return { text: 'VICTORY',           color: 0x00ff00 };
-    case GameOutcome.Defeat:            return { text: 'DEFEAT',             color: 0xff0000 };
-    case GameOutcome.MutualDestruction: return { text: 'MUTUAL DESTRUCTION', color: 0xffaa00 };
+    case GameOutcome.Victory:
+      return { text: 'VICTORY', color: 0x00ff00 };
+    case GameOutcome.Defeat:
+      return { text: 'DEFEAT', color: 0xff0000 };
+    case GameOutcome.MutualDestruction:
+      return { text: 'MUTUAL DESTRUCTION', color: 0xffaa00 };
     case GameOutcome.None:
-    default:                            return { text: '',                   color: 0x000000 };
+    default:
+      return { text: '', color: 0x000000 };
   }
 }
 
@@ -57,17 +61,25 @@ export function formatCauseSubtitle(outcome: GameOutcome, cause: QueenDeathCause
   switch (outcome) {
     case GameOutcome.Victory:
       switch (cause) {
-        case 'InvasionKill':  return 'Your fighters killed their queen';
-        case 'Starvation':    return 'Their queen starved';
-        case 'SpiderRampage': return 'Their queen was killed by a spider';
-        default:              return '';
+        case 'InvasionKill':
+          return 'Your fighters killed their queen';
+        case 'Starvation':
+          return 'Their queen starved';
+        case 'SpiderRampage':
+          return 'Their queen was killed by a spider';
+        default:
+          return '';
       }
     case GameOutcome.Defeat:
       switch (cause) {
-        case 'InvasionKill':  return 'Your queen was killed by the enemy';
-        case 'Starvation':    return 'Your queen starved';
-        case 'SpiderRampage': return 'Your queen was killed by a spider';
-        default:              return '';
+        case 'InvasionKill':
+          return 'Your queen was killed by the enemy';
+        case 'Starvation':
+          return 'Your queen starved';
+        case 'SpiderRampage':
+          return 'Your queen was killed by a spider';
+        default:
+          return '';
       }
     case GameOutcome.MutualDestruction:
       return 'Both queens died at the same time';

@@ -3,11 +3,7 @@
 // semantics, and formatted output stability.
 
 import { describe, it, expect } from 'vitest';
-import {
-  computeAntActivity,
-  formatAntActivityLines,
-  ANT_ACTIVITY_PANEL,
-} from './ant-activity.js';
+import { computeAntActivity, formatAntActivityLines, ANT_ACTIVITY_PANEL } from './ant-activity.js';
 import { createWorldState, allocateEntityId } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
 import { initAnt, killAnt } from '../sim/ant/ant-store.js';
@@ -133,7 +129,7 @@ describe('computeAntActivity — capable count', () => {
 
   it('brood counts come from the colony record, not the worker array', () => {
     const { world, colony } = setupWorld();
-    colony.eggCount    = 5;
+    colony.eggCount = 5;
     colony.larvaeCount = 2;
     const a = computeAntActivity(world, colony);
     expect(a.eggs).toBe(5);
@@ -146,7 +142,7 @@ describe('computeAntActivity — dead-worker filtering', () => {
   it('dead workers are skipped entirely', () => {
     const { world, colony } = setupWorld();
     const alive = spawnWorker(world, colony, AntTask.Foraging, ForagingSubState.SearchingFood);
-    const dead  = spawnWorker(world, colony, AntTask.Foraging, ForagingSubState.SearchingFood);
+    const dead = spawnWorker(world, colony, AntTask.Foraging, ForagingSubState.SearchingFood);
     killAnt(world.ants, dead);
     expect(alive).not.toBe(dead);
     const a = computeAntActivity(world, colony);
@@ -158,7 +154,7 @@ describe('computeAntActivity — dead-worker filtering', () => {
 describe('formatAntActivityLines', () => {
   it('emits a stable set of labeled lines', () => {
     const { world, colony } = setupWorld();
-    colony.eggCount    = 3;
+    colony.eggCount = 3;
     colony.larvaeCount = 1;
     spawnWorker(world, colony, AntTask.Foraging, ForagingSubState.SearchingFood);
     spawnWorker(world, colony, AntTask.Foraging, ForagingSubState.CarryingFood);
@@ -205,11 +201,8 @@ describe('antActivityPanelState — state machine', () => {
   // tests lock the state-level contract that handler relies on so a future
   // refactor can't silently break the open-dismiss-reopen cycle.
   it('toggle opens then closes on successive calls (click on Ants)', async () => {
-    const {
-      antActivityPanelState,
-      toggleAntActivityPanel,
-      hideAntActivityPanel,
-    } = await import('./ant-activity-panel-state.js');
+    const { antActivityPanelState, toggleAntActivityPanel, hideAntActivityPanel } =
+      await import('./ant-activity-panel-state.js');
     hideAntActivityPanel(); // reset
     toggleAntActivityPanel();
     expect(antActivityPanelState.visible).toBe(true);
@@ -221,11 +214,8 @@ describe('antActivityPanelState — state machine', () => {
     // Locks the invariant UIScene depends on: the "click inside panel is
     // absorbed" path simply returns without touching panel state — it does
     // NOT schedule a hide. Only click-outside paths call requestHide.
-    const {
-      antActivityPanelState,
-      showAntActivityPanel,
-      hideAntActivityPanel,
-    } = await import('./ant-activity-panel-state.js');
+    const { antActivityPanelState, showAntActivityPanel, hideAntActivityPanel } =
+      await import('./ant-activity-panel-state.js');
     showAntActivityPanel();
     expect(antActivityPanelState.visible).toBe(true);
     expect(antActivityPanelState.pendingHide).toBe(false);

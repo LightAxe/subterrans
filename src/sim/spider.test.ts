@@ -93,7 +93,12 @@ function makeWorld(seed = 0): WorldState {
 }
 
 /** Place a surface worker at tile (tx, ty) in the world. Returns ant index. */
-function placeWorker(world: WorldState, tx: number, ty: number, colonyId = PLAYER_COLONY_ID): number {
+function placeWorker(
+  world: WorldState,
+  tx: number,
+  ty: number,
+  colonyId = PLAYER_COLONY_ID,
+): number {
   const id = world.nextEntityId++;
   initAnt(world.ants, id, {
     colonyId,
@@ -104,7 +109,12 @@ function placeWorker(world: WorldState, tx: number, ty: number, colonyId = PLAYE
   return id;
 }
 
-function placeFighter(world: WorldState, tx: number, ty: number, colonyId = PLAYER_COLONY_ID): number {
+function placeFighter(
+  world: WorldState,
+  tx: number,
+  ty: number,
+  colonyId = PLAYER_COLONY_ID,
+): number {
   const id = world.nextEntityId++;
   initAnt(world.ants, id, {
     colonyId,
@@ -346,13 +356,18 @@ describe('tickSpider', () => {
     });
   });
 
-
   describe('rampageTargetColonyId — weighted colony selection', () => {
     it('sets rampageTargetColonyId on Rampaging entry and clears it on exit', () => {
       const world = makeWorld();
-      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId] = createColonyRecord(PLAYER_COLONY_ID, 0);
+      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId] = createColonyRecord(
+        PLAYER_COLONY_ID,
+        0,
+      );
       world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!.entrances = [];
-      world.colonies[ENEMY_COLONY_ID as unknown as ColonyId] = createColonyRecord(ENEMY_COLONY_ID, 1);
+      world.colonies[ENEMY_COLONY_ID as unknown as ColonyId] = createColonyRecord(
+        ENEMY_COLONY_ID,
+        1,
+      );
       world.colonies[ENEMY_COLONY_ID as unknown as ColonyId]!.entrances = [];
       world.spider = makeSpider({
         state: 'Patrolling',
@@ -362,8 +377,10 @@ describe('tickSpider', () => {
 
       tickSpider(world);
       expect(world.spider!.state).toBe('Rampaging');
-      expect(world.spider!.rampageTargetColonyId === PLAYER_COLONY_ID ||
-             world.spider!.rampageTargetColonyId === ENEMY_COLONY_ID).toBe(true);
+      expect(
+        world.spider!.rampageTargetColonyId === PLAYER_COLONY_ID ||
+          world.spider!.rampageTargetColonyId === ENEMY_COLONY_ID,
+      ).toBe(true);
 
       // Transition to Feeding via kill quota — target should be cleared.
       world.spider!.rampageKillsThisRampage = SPIDER_RAMPAGE_KILL_QUOTA;
@@ -376,10 +393,16 @@ describe('tickSpider', () => {
       // Run 20 rampages across varying seeds and ticks; none should produce -1.
       for (let seed = 1; seed <= 20; seed++) {
         const world = makeWorld(seed * 1000);
-        world.colonies[PLAYER_COLONY_ID as unknown as ColonyId] = createColonyRecord(PLAYER_COLONY_ID, 0);
-      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!.entrances = [];
-        world.colonies[ENEMY_COLONY_ID as unknown as ColonyId] = createColonyRecord(ENEMY_COLONY_ID, 1);
-      world.colonies[ENEMY_COLONY_ID as unknown as ColonyId]!.entrances = [];
+        world.colonies[PLAYER_COLONY_ID as unknown as ColonyId] = createColonyRecord(
+          PLAYER_COLONY_ID,
+          0,
+        );
+        world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!.entrances = [];
+        world.colonies[ENEMY_COLONY_ID as unknown as ColonyId] = createColonyRecord(
+          ENEMY_COLONY_ID,
+          1,
+        );
+        world.colonies[ENEMY_COLONY_ID as unknown as ColonyId]!.entrances = [];
         world.spider = makeSpider({
           state: 'Patrolling',
           hungerTicks: SPIDER_HUNGER_MAX_TICKS[1] - 1,
@@ -394,9 +417,15 @@ describe('tickSpider', () => {
       // Over 50 rampages with varying ticks, both colonies should be chosen at least once.
       const chosen = new Set<number>();
       const world = makeWorld(42);
-      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId] = createColonyRecord(PLAYER_COLONY_ID, 0);
+      world.colonies[PLAYER_COLONY_ID as unknown as ColonyId] = createColonyRecord(
+        PLAYER_COLONY_ID,
+        0,
+      );
       world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!.entrances = [];
-      world.colonies[ENEMY_COLONY_ID as unknown as ColonyId] = createColonyRecord(ENEMY_COLONY_ID, 1);
+      world.colonies[ENEMY_COLONY_ID as unknown as ColonyId] = createColonyRecord(
+        ENEMY_COLONY_ID,
+        1,
+      );
       world.colonies[ENEMY_COLONY_ID as unknown as ColonyId]!.entrances = [];
       for (let tick = 0; tick < 50; tick++) {
         world.spider = makeSpider({
@@ -541,7 +570,11 @@ describe('tickSpider', () => {
 
     it('does not exceed SPIDER_HP_FULL', () => {
       const world = makeWorld();
-      world.spider = makeSpider({ state: 'Retreating', hp: SPIDER_HP_FULL - 1, retreatStartTick: 0 });
+      world.spider = makeSpider({
+        state: 'Retreating',
+        hp: SPIDER_HP_FULL - 1,
+        retreatStartTick: 0,
+      });
       world.tick = 20;
 
       tickSpider(world);
@@ -593,7 +626,11 @@ describe('tickSpider', () => {
       world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
       const sx = 64;
       const sy = 32;
-      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: HUNGRY_TICKS });
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        hungerTicks: HUNGRY_TICKS,
+      });
       world.spider.nextHuntTick = 9999;
       world.tick = SPIDER_GRACE_TICKS; // past grace so the spider is active and hungry
       const antId = placeWorker(world, sx + SPIDER_CHASE_TRIGGER_RADIUS, sy);
@@ -612,11 +649,15 @@ describe('tickSpider', () => {
       world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
       const sx = 64;
       const sy = 32;
-      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: HUNGRY_TICKS });
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        hungerTicks: HUNGRY_TICKS,
+      });
       world.spider.nextHuntTick = 9999;
       world.tick = SPIDER_GRACE_TICKS; // past grace so the spider is active and hungry
       const near = placeWorker(world, sx + 1, sy); // dist 1
-      placeWorker(world, sx + 3, sy);              // dist 3 (farther)
+      placeWorker(world, sx + 3, sy); // dist 3 (farther)
 
       tickSpider(world);
 
@@ -629,7 +670,11 @@ describe('tickSpider', () => {
       world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
       const sx = 64;
       const sy = 32;
-      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: HUNGRY_TICKS });
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        hungerTicks: HUNGRY_TICKS,
+      });
       world.spider.nextHuntTick = 9999;
       placeWorker(world, sx + SPIDER_CHASE_TRIGGER_RADIUS + 1, sy); // out of range
 
@@ -677,7 +722,11 @@ describe('tickSpider', () => {
       world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
       const sx = 64;
       const sy = 32;
-      world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: HUNGRY_TICKS });
+      world.spider = makeSpider({
+        posX: sx << FP_SHIFT,
+        posY: sy << FP_SHIFT,
+        hungerTicks: HUNGRY_TICKS,
+      });
       world.spider.nextHuntTick = 9999;
       world.tick = SPIDER_GRACE_TICKS; // past grace so the no-chase is queen-exclusion, not dormancy
       const queenId = placeWorker(world, sx + 1, sy);
@@ -807,7 +856,7 @@ describe('tickSpider', () => {
       const sy = 32;
       world.spider = makeSpider({ posX: sx << FP_SHIFT, posY: sy << FP_SHIFT, hungerTicks: 0 });
       world.spider.nextHuntTick = 9999;
-      placeFighter(world, sx + 6, sy);            // dist 6 (farther)
+      placeFighter(world, sx + 6, sy); // dist 6 (farther)
       const near = placeFighter(world, sx, sy + 5); // dist 5 (nearer)
 
       tickSpider(world);
@@ -906,7 +955,7 @@ describe('tickSpider', () => {
       const col = createColonyRecord(PLAYER_COLONY_ID, -1);
       col.entrances = [{ entranceId: 1, surfaceTileX: sx, surfaceTileY: sy, isOpen: true }];
       world.colonies[PLAYER_COLONY_ID as unknown as ColonyId] = col;
-      placeWorker(world, sx, sy);                              // descender pinned on the entrance
+      placeWorker(world, sx, sy); // descender pinned on the entrance
       placeFighter(world, sx + SPIDER_CHASE_TRIGGER_RADIUS + 1, sy); // attacker within defense radius
 
       tickSpider(world);
@@ -1006,7 +1055,7 @@ describe('tickSpider', () => {
       const sx = 64;
       const sy = 32;
       campingSpider(world, sx, sy); // entrance at (sx, sy)
-      placeWorker(world, sx, sy);   // descender sitting ON the entrance → must be held, not chased
+      placeWorker(world, sx, sy); // descender sitting ON the entrance → must be held, not chased
 
       tickSpider(world);
 

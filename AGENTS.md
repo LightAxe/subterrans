@@ -105,7 +105,7 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 ### Fixed timestep
 
 - Simulation advances exactly 50 ms per tick (20 Hz). Code under `src/sim/` must not accept or branch on a `dt` / `deltaTime` / `elapsed` parameter. Variable timestep is a blocker.
-- Interpolation for rendering is the responsibility of `src/render/` and reads the *previous* and *current* tick snapshots — flag any render code that mutates sim state to "smooth" a frame.
+- Interpolation for rendering is the responsibility of `src/render/` and reads the _previous_ and _current_ tick snapshots — flag any render code that mutates sim state to "smooth" a frame.
 
 ### ECS conventions
 

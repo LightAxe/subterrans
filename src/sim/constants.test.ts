@@ -49,7 +49,7 @@ describe('PRD §9c lifecycle tick constants', () => {
   });
 
   it('WORKER_LIFESPAN_TICKS === 0x7FFFFFFF (INT32_MAX)', () => {
-    expect(WORKER_LIFESPAN_TICKS).toBe(0x7FFFFFFF);
+    expect(WORKER_LIFESPAN_TICKS).toBe(0x7fffffff);
   });
 
   it('QUEEN_EGG_INTERVAL_TICKS === 300', () => {
@@ -161,7 +161,7 @@ describe('PRD §9c grid dimension constants', () => {
   });
 });
 
-describe('PRD §7 §2 + Phase 10 amendment (CTRL-01\') DEFAULT_BEHAVIOR_RATIO', () => {
+describe("PRD §7 §2 + Phase 10 amendment (CTRL-01') DEFAULT_BEHAVIOR_RATIO", () => {
   it('forage === 10', () => {
     expect(DEFAULT_BEHAVIOR_RATIO.forage).toBe(10);
   });

@@ -27,7 +27,9 @@ import ts from 'typescript';
 // the playtrace upload module (issue #122) can report `gameVersion` on the
 // submission envelope. Same source-of-truth as the standalone build's
 // vite.config.ts; keeping the two configs in sync is a manual review check.
-const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as {
+  version: string;
+};
 
 /** Emit dist-lib/manifest.json after the bundle is written, so the website
  *  deploy can read `entry` and inject the right hashed <script src=…>.
@@ -44,7 +46,7 @@ const manifestPlugin = (): Plugin => ({
     if (entries.length !== 1) {
       throw new Error(
         `subterrans-lib-manifest: expected exactly 1 entry chunk, found ${entries.length}. ` +
-        `Library build assumes a single ESM entry — check vite.lib.config.ts lib.entry.`,
+          `Library build assumes a single ESM entry — check vite.lib.config.ts lib.entry.`,
       );
     }
     const entry = entries[0];

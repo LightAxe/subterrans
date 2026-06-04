@@ -43,10 +43,13 @@ describe('loadSettings', () => {
   });
 
   it('falls back to DEFAULT_SETTINGS when version is newer than this build supports', () => {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      version: SETTINGS_VERSION + 1,
-      settings: { pheromoneOverlay: false },
-    }));
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        version: SETTINGS_VERSION + 1,
+        settings: { pheromoneOverlay: false },
+      }),
+    );
     expect(loadSettings()).toEqual(DEFAULT_SETTINGS);
   });
 
@@ -54,18 +57,24 @@ describe('loadSettings', () => {
     // Permissive merge: a single corrupt field shouldn't wipe valid neighbors.
     // Today we only have one boolean field; this guards the merge logic so a
     // future field is safe to add.
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      version: SETTINGS_VERSION,
-      settings: { pheromoneOverlay: 'not-a-bool' },
-    }));
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        version: SETTINGS_VERSION,
+        settings: { pheromoneOverlay: 'not-a-bool' },
+      }),
+    );
     expect(loadSettings()).toEqual({ pheromoneOverlay: DEFAULT_SETTINGS.pheromoneOverlay });
   });
 
   it('ignores unknown extra keys in the settings object', () => {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      version: SETTINGS_VERSION,
-      settings: { pheromoneOverlay: false, futureKey: 'whatever' },
-    }));
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        version: SETTINGS_VERSION,
+        settings: { pheromoneOverlay: false, futureKey: 'whatever' },
+      }),
+    );
     expect(loadSettings()).toEqual({ pheromoneOverlay: false });
   });
 });

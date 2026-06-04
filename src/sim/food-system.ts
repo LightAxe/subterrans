@@ -190,7 +190,10 @@ export function tickFoodPileSpawn(world: WorldState, rng: Rng): void {
     for (const colony of colonies) {
       if (colony.entrances) {
         for (const e of colony.entrances) {
-          if (Math.abs(tileX - e.surfaceTileX) + Math.abs(tileY - e.surfaceTileY) < FOOD_PILE_MIN_COLONY_DISTANCE) {
+          if (
+            Math.abs(tileX - e.surfaceTileX) + Math.abs(tileY - e.surfaceTileY) <
+            FOOD_PILE_MIN_COLONY_DISTANCE
+          ) {
             tooCloseToColony = true;
             break;
           }
@@ -198,7 +201,10 @@ export function tickFoodPileSpawn(world: WorldState, rng: Rng): void {
       }
       if (tooCloseToColony) break;
       if (colony.rallyPoint) {
-        if (Math.abs(tileX - colony.rallyPoint.tileX) + Math.abs(tileY - colony.rallyPoint.tileY) < FOOD_PILE_MIN_COLONY_DISTANCE) {
+        if (
+          Math.abs(tileX - colony.rallyPoint.tileX) + Math.abs(tileY - colony.rallyPoint.tileY) <
+          FOOD_PILE_MIN_COLONY_DISTANCE
+        ) {
           tooCloseToColony = true;
           break;
         }

@@ -12,27 +12,30 @@
 // Nested writes (world.ants.alive[id] = 0) are NOT caught here; they are caught by
 // scripts/check-sim-boundary.sh (the grep backstop). See RESEARCH.md Pattern 1c for details.
 
-import tseslint from "@typescript-eslint/eslint-plugin";
-import tsParser from "@typescript-eslint/parser";
+import tseslint from '@typescript-eslint/eslint-plugin';
+import tsParser from '@typescript-eslint/parser';
 
 /** Rules applied to ALL TypeScript source files */
 const baseConfig = {
-  files: ["src/**/*.ts", "bench/**/*.ts"],
+  files: ['src/**/*.ts', 'bench/**/*.ts'],
   languageOptions: {
     parser: tsParser,
     ecmaVersion: 2022,
-    sourceType: "module",
+    sourceType: 'module',
   },
-  plugins: { "@typescript-eslint": tseslint },
+  plugins: { '@typescript-eslint': tseslint },
   rules: {
     // Baseline TS rules (non-type-checked — no project overhead)
     ...tseslint.configs.recommended.rules,
     // Allow _-prefixed identifiers to signal intentionally unused args/vars.
-    "@typescript-eslint/no-unused-vars": ["error", {
-      argsIgnorePattern: "^_",
-      varsIgnorePattern: "^_",
-      caughtErrorsIgnorePattern: "^_",
-    }],
+    '@typescript-eslint/no-unused-vars': [
+      'error',
+      {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+        caughtErrorsIgnorePattern: '^_',
+      },
+    ],
   },
 };
 
@@ -40,71 +43,95 @@ const baseConfig = {
  *  Applied ONLY to src/sim/**\/*.ts.
  */
 const simSafetyConfig = {
-  files: ["src/sim/**/*.ts"],
+  files: ['src/sim/**/*.ts'],
   rules: {
     // FNDN-04 (PRD Rule Set 1) — Phaser + cross-layer import bans
     // patterns (glob form) required — string `paths` form only matches exact strings (RESEARCH.md Pitfall 2).
-    "no-restricted-imports": ["error", {
-      patterns: [
-        { group: ["phaser", "phaser/*"],
-          message: "Phaser is banned in src/sim/. The sim layer must be pure TypeScript." },
+    'no-restricted-imports': [
+      'error',
+      {
+        patterns: [
+          {
+            group: ['phaser', 'phaser/*'],
+            message: 'Phaser is banned in src/sim/. The sim layer must be pure TypeScript.',
+          },
 
-        // Relative paths — any-depth globbing (src/sim/systems/ai/foo.ts → ../../../render/...)
-        { group: ["**/render", "**/render/**"],
-          message: "src/sim/ cannot import from render/ at any path depth." },
-        { group: ["**/input", "**/input/**"],
-          message: "src/sim/ cannot import from input/ at any path depth." },
-        { group: ["**/platform", "**/platform/**"],
-          message: "src/sim/ cannot import from platform/ at any path depth." },
+          // Relative paths — any-depth globbing (src/sim/systems/ai/foo.ts → ../../../render/...)
+          {
+            group: ['**/render', '**/render/**'],
+            message: 'src/sim/ cannot import from render/ at any path depth.',
+          },
+          {
+            group: ['**/input', '**/input/**'],
+            message: 'src/sim/ cannot import from input/ at any path depth.',
+          },
+          {
+            group: ['**/platform', '**/platform/**'],
+            message: 'src/sim/ cannot import from platform/ at any path depth.',
+          },
 
-        // Alias paths (@/ prefix configured in tsconfig.json)
-        { group: ["@/render", "@/render/**"],
-          message: "src/sim/ cannot import from src/render/ (even via alias)." },
-        { group: ["@/input", "@/input/**"],
-          message: "src/sim/ cannot import from src/input/ (even via alias)." },
-        { group: ["@/platform", "@/platform/**"],
-          message: "src/sim/ cannot import from src/platform/ (even via alias)." },
-      ],
-    }],
+          // Alias paths (@/ prefix configured in tsconfig.json)
+          {
+            group: ['@/render', '@/render/**'],
+            message: 'src/sim/ cannot import from src/render/ (even via alias).',
+          },
+          {
+            group: ['@/input', '@/input/**'],
+            message: 'src/sim/ cannot import from src/input/ (even via alias).',
+          },
+          {
+            group: ['@/platform', '@/platform/**'],
+            message: 'src/sim/ cannot import from src/platform/ (even via alias).',
+          },
+        ],
+      },
+    ],
 
     // FNDN-05 (PRD Rule Set 2) — wall-clock, async, browser globals, network bans
-    "no-restricted-properties": ["error",
-      { object: "Math", property: "random", message: "Use the seeded Rng instance." },
-      { object: "Math", property: "sqrt",   message: "Use integer approximations or lookup tables." },
-      { object: "Math", property: "sin",    message: "Use a fixed-point lookup table." },
-      { object: "Math", property: "cos",    message: "Use a fixed-point lookup table." },
+    'no-restricted-properties': [
+      'error',
+      { object: 'Math', property: 'random', message: 'Use the seeded Rng instance.' },
+      { object: 'Math', property: 'sqrt', message: 'Use integer approximations or lookup tables.' },
+      { object: 'Math', property: 'sin', message: 'Use a fixed-point lookup table.' },
+      { object: 'Math', property: 'cos', message: 'Use a fixed-point lookup table.' },
     ],
-    "no-restricted-globals": ["error",
-      { name: "Date",                    message: "Wall-clock time is banned in src/sim/. Time = tickCount * MS_PER_TICK." },
-      { name: "performance",             message: "Wall-clock time is banned in src/sim/." },
-      { name: "setTimeout",              message: "Async scheduling is banned in src/sim/." },
-      { name: "setInterval",             message: "Async scheduling is banned in src/sim/." },
-      { name: "window",                  message: "Browser globals are banned in src/sim/." },
-      { name: "document",                message: "Browser globals are banned in src/sim/." },
-      { name: "navigator",               message: "Browser globals are banned in src/sim/." },
-      { name: "localStorage",            message: "Browser storage is banned in src/sim/." },
-      { name: "requestAnimationFrame",   message: "Frame scheduling is banned in src/sim/." },
-      { name: "cancelAnimationFrame",    message: "Frame scheduling is banned in src/sim/." },
-      { name: "fetch",                   message: "Network access is banned in src/sim/." },
-      { name: "XMLHttpRequest",          message: "Network access is banned in src/sim/." },
+    'no-restricted-globals': [
+      'error',
+      {
+        name: 'Date',
+        message: 'Wall-clock time is banned in src/sim/. Time = tickCount * MS_PER_TICK.',
+      },
+      { name: 'performance', message: 'Wall-clock time is banned in src/sim/.' },
+      { name: 'setTimeout', message: 'Async scheduling is banned in src/sim/.' },
+      { name: 'setInterval', message: 'Async scheduling is banned in src/sim/.' },
+      { name: 'window', message: 'Browser globals are banned in src/sim/.' },
+      { name: 'document', message: 'Browser globals are banned in src/sim/.' },
+      { name: 'navigator', message: 'Browser globals are banned in src/sim/.' },
+      { name: 'localStorage', message: 'Browser storage is banned in src/sim/.' },
+      { name: 'requestAnimationFrame', message: 'Frame scheduling is banned in src/sim/.' },
+      { name: 'cancelAnimationFrame', message: 'Frame scheduling is banned in src/sim/.' },
+      { name: 'fetch', message: 'Network access is banned in src/sim/.' },
+      { name: 'XMLHttpRequest', message: 'Network access is banned in src/sim/.' },
     ],
 
     // FNDN-02 — ban float literals and division (both return IEEE 754 doubles)
-    "no-restricted-syntax": ["error",
+    'no-restricted-syntax': [
+      'error',
       {
         // Matches any numeric literal whose source text signals floating-point intent:
         //   - decimal point anywhere after leading digits: 3.14, 1.5, 0.5, 1.0, .5, 1.e5
         //   - scientific notation: 1e3, 1e-3, 2E10, 1.5e2
         // The ^\d* anchor spares string literals (raw starts with ") and hex/binary/octal
         // literals (raw starts with 0x, 0b, 0o — the non-digit char after 0 breaks the match).
-        selector: "Literal[raw=/^\\d*(\\.|\\d[eE])/]",
-        message: "Float literal (decimal or scientific notation) in src/sim/ — convert to fixed-point integer (multiply by FP_ONE).",
+        selector: 'Literal[raw=/^\\d*(\\.|\\d[eE])/]',
+        message:
+          'Float literal (decimal or scientific notation) in src/sim/ — convert to fixed-point integer (multiply by FP_ONE).',
       },
       {
         // JS integer division still returns IEEE 754 double.
         // fpDiv() in src/sim/fixed.ts needs one `// eslint-disable-next-line` on its own line.
         selector: "BinaryExpression[operator='/']",
-        message: "Division in src/sim/ returns a float — use fpDiv() instead.",
+        message: 'Division in src/sim/ returns a float — use fpDiv() instead.',
       },
     ],
   },
@@ -132,22 +159,23 @@ const simSafetyConfig = {
  *  are the CORRECT write pattern from non-sim layers and MUST pass.
  */
 const nonSimMutationGuard = {
-  files: [
-    "src/render/**/*.ts",
-    "src/input/**/*.ts",
-    "src/platform/**/*.ts",
-  ],
+  files: ['src/render/**/*.ts', 'src/input/**/*.ts', 'src/platform/**/*.ts'],
   rules: {
-    "no-restricted-syntax": ["error",
+    'no-restricted-syntax': [
+      'error',
       {
         // Tripwire: catches `world.tick = ...`, `world.rngState = ...`, whole-field replacement.
-        selector: "AssignmentExpression[left.type='MemberExpression'][left.property.name=/^(tick|rngState|nextEntityId|ants|colonies|pheromoneGrids|surface|undergroundGrids|pendingChambers)$/]",
-        message: "FNDN-07 tripwire: direct write to WorldState sim-state field from non-sim layer. Push a SimCommand onto world.commandQueue instead (PRD §5). [Nested writes like world.colonies[id].x are not caught by lint — see grep guard.]",
+        selector:
+          "AssignmentExpression[left.type='MemberExpression'][left.property.name=/^(tick|rngState|nextEntityId|ants|colonies|pheromoneGrids|surface|undergroundGrids|pendingChambers)$/]",
+        message:
+          'FNDN-07 tripwire: direct write to WorldState sim-state field from non-sim layer. Push a SimCommand onto world.commandQueue instead (PRD §5). [Nested writes like world.colonies[id].x are not caught by lint — see grep guard.]',
       },
       {
         // Tripwire: catches `world.tick++`, `--world.nextEntityId`, etc.
-        selector: "UpdateExpression[argument.type='MemberExpression'][argument.property.name=/^(tick|rngState|nextEntityId|ants|colonies|pheromoneGrids|surface|undergroundGrids|pendingChambers)$/]",
-        message: "FNDN-07 tripwire: UpdateExpression on WorldState sim-state field from non-sim layer. Mutations happen inside tick(); use a SimCommand.",
+        selector:
+          "UpdateExpression[argument.type='MemberExpression'][argument.property.name=/^(tick|rngState|nextEntityId|ants|colonies|pheromoneGrids|surface|undergroundGrids|pendingChambers)$/]",
+        message:
+          'FNDN-07 tripwire: UpdateExpression on WorldState sim-state field from non-sim layer. Mutations happen inside tick(); use a SimCommand.',
       },
     ],
   },

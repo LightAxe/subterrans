@@ -28,12 +28,18 @@ describe('FoodPile interface', () => {
 
   it('two FoodPile objects are independent', () => {
     const pile1: FoodPile = {
-      foodPileId: 1, tileX: 10, tileY: 20,
-      pickupsRemaining: 30, pickupsInitial: 30,
+      foodPileId: 1,
+      tileX: 10,
+      tileY: 20,
+      pickupsRemaining: 30,
+      pickupsInitial: 30,
     };
     const pile2: FoodPile = {
-      foodPileId: 2, tileX: 30, tileY: 40,
-      pickupsRemaining: 100, pickupsInitial: 100,
+      foodPileId: 2,
+      tileX: 30,
+      tileY: 40,
+      pickupsRemaining: 100,
+      pickupsInitial: 100,
     };
     expect(pile1.foodPileId).toBe(1);
     expect(pile2.foodPileId).toBe(2);
@@ -46,8 +52,11 @@ describe('FoodPile interface', () => {
 
   it('pile objects do not carry a priority flag (priority lives on ColonyRecord per Phase 9)', () => {
     const pile: FoodPile = {
-      foodPileId: 5, tileX: 0, tileY: 0,
-      pickupsRemaining: 20, pickupsInitial: 20,
+      foodPileId: 5,
+      tileX: 0,
+      tileY: 0,
+      pickupsRemaining: 20,
+      pickupsInitial: 20,
     };
     expect(Object.prototype.hasOwnProperty.call(pile, 'isMarkedPriority')).toBe(false);
   });

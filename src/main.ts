@@ -101,9 +101,9 @@ export function mount(target: HTMLElement, options?: MountOptions): MountedGame 
   // assetsBase normalization so both env-var-derived options share the same
   // empty-string convention.
   const playtraceEndpointRaw =
-    options?.playtraceEndpoint
-    ?? (import.meta.env.VITE_PLAYTRACE_ENDPOINT as string | undefined)
-    ?? '';
+    options?.playtraceEndpoint ??
+    (import.meta.env.VITE_PLAYTRACE_ENDPOINT as string | undefined) ??
+    '';
   const playtraceEndpoint = playtraceEndpointRaw.trim();
 
   const config: Phaser.Types.Core.GameConfig = {

@@ -1,0 +1,19 @@
+# Dependencies & build output
+node_modules/
+dist/
+dist-lib/
+build/
+*.tsbuildinfo
+
+# Test artifacts
+coverage/
+test-results/
+playwright-report/
+
+# Assets — sprites, audio, fonts and any generated/binary-adjacent files.
+# Prettier has no business reformatting these (and may corrupt non-text formats).
+assets/
+public/
+
+# Lockfiles are generated; leave them as the tool writes them.
+package-lock.json

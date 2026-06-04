@@ -51,8 +51,8 @@ export interface PlaceChamberCommand extends SimCommandBase {
   readonly type: 'PlaceChamber';
   readonly colonyId: ColonyId;
   readonly chamberType: ChamberType;
-  readonly anchorTileX: number;  // top-left tile X (accepted Phase 3 PRD command shape)
-  readonly anchorTileY: number;  // top-left tile Y
+  readonly anchorTileX: number; // top-left tile X (accepted Phase 3 PRD command shape)
+  readonly anchorTileY: number; // top-left tile Y
 }
 
 /** PRD §3g — player designates a new nest entrance from the surface. */

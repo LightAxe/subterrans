@@ -19,7 +19,9 @@ function roundEndEvent(
   return { tick: 1200, type: 'round_end', payload: { reason, playerWorkerCount, aiWorkerCount } };
 }
 
-function queenDeathEvent(cause: 'InvasionKill' | 'SpiderRampage' | 'Starvation' | 'MutualDestruction' | null): SimEvent {
+function queenDeathEvent(
+  cause: 'InvasionKill' | 'SpiderRampage' | 'Starvation' | 'MutualDestruction' | null,
+): SimEvent {
   return {
     tick: 500,
     type: 'queen_death',
@@ -71,7 +73,9 @@ describe('buildOutcomeAttribution — StalemateTiebreak', () => {
   it('no gameOutcome provided → draw narrative', () => {
     const result = buildOutcomeAttribution([roundEndEvent('StalemateTiebreak', 0, 0)]);
     expect(result.primaryCause).toBe('StalemateTiebreak');
-    expect(result.narrativeSeed).toBe('Both colonies ran out of food and the round ended in a draw.');
+    expect(result.narrativeSeed).toBe(
+      'Both colonies ran out of food and the round ended in a draw.',
+    );
   });
 
   it('MutualDestruction gameOutcome → draw narrative (not Victory/Defeat)', () => {
@@ -80,7 +84,9 @@ describe('buildOutcomeAttribution — StalemateTiebreak', () => {
       'MutualDestruction',
     );
     expect(result.primaryCause).toBe('StalemateTiebreak');
-    expect(result.narrativeSeed).toBe('Both colonies ran out of food and the round ended in a draw.');
+    expect(result.narrativeSeed).toBe(
+      'Both colonies ran out of food and the round ended in a draw.',
+    );
   });
 });
 
@@ -92,7 +98,15 @@ describe('buildOutcomeAttribution — round_end before queen_death', () => {
   it('round_end is returned even when a queen_death event also exists', () => {
     const events: SimEvent[] = [
       roundEndEvent('TimeoutTiebreak', 7, 2),
-      { tick: 501, type: 'queen_death', payload: { cause: 'Starvation', location: { x: 0, y: 0, grid: 'underground' }, aiStateAtTime: null } },
+      {
+        tick: 501,
+        type: 'queen_death',
+        payload: {
+          cause: 'Starvation',
+          location: { x: 0, y: 0, grid: 'underground' },
+          aiStateAtTime: null,
+        },
+      },
     ];
     const result = buildOutcomeAttribution(events);
     expect(result.primaryCause).toBe('TimeoutTiebreak');

@@ -332,23 +332,29 @@ export function handleSurfaceRightClick(
   // registers. When prevWorld is null (stationary or unavailable) the box is exactly the
   // 48×48px sprite; when the spider moved it expands by one tile in the movement direction.
   if (world.spider !== null) {
-    const camLeft = Math.floor(viewState.surfaceCamera.x - viewState.surfaceCamera.viewportWidth  / 2);
-    const camTop  = Math.floor(viewState.surfaceCamera.y - viewState.surfaceCamera.viewportHeight / 2);
+    const camLeft = Math.floor(
+      viewState.surfaceCamera.x - viewState.surfaceCamera.viewportWidth / 2,
+    );
+    const camTop = Math.floor(
+      viewState.surfaceCamera.y - viewState.surfaceCamera.viewportHeight / 2,
+    );
     const currScrX = (world.spider.posX >> FP_SHIFT) * TILE_SIZE_PX - camLeft * TILE_SIZE_PX;
-    const currScrY = (world.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop  * TILE_SIZE_PX;
-    const prevScrX = (prevWorld?.spider != null)
-      ? (prevWorld.spider.posX >> FP_SHIFT) * TILE_SIZE_PX - camLeft * TILE_SIZE_PX
-      : currScrX;
-    const prevScrY = (prevWorld?.spider != null)
-      ? (prevWorld.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop  * TILE_SIZE_PX
-      : currScrY;
-    const halfW = SPIDER_SPRITE_WIDTH  / 2;
+    const currScrY = (world.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop * TILE_SIZE_PX;
+    const prevScrX =
+      prevWorld?.spider != null
+        ? (prevWorld.spider.posX >> FP_SHIFT) * TILE_SIZE_PX - camLeft * TILE_SIZE_PX
+        : currScrX;
+    const prevScrY =
+      prevWorld?.spider != null
+        ? (prevWorld.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop * TILE_SIZE_PX
+        : currScrY;
+    const halfW = SPIDER_SPRITE_WIDTH / 2;
     const halfH = SPIDER_SPRITE_HEIGHT / 2;
     if (
       screenX >= Math.min(currScrX, prevScrX) - halfW &&
-      screenX <  Math.max(currScrX, prevScrX) + halfW &&
+      screenX < Math.max(currScrX, prevScrX) + halfW &&
       screenY >= Math.min(currScrY, prevScrY) - halfH &&
-      screenY <  Math.max(currScrY, prevScrY) + halfH
+      screenY < Math.max(currScrY, prevScrY) + halfH
     ) {
       state.pendingEntranceTileX = null;
       state.pendingEntranceTileY = null;
@@ -364,7 +370,7 @@ export function handleSurfaceRightClick(
   }
 
   // Rally-point clear: right-click on the current rally point tile (SURF-04)
-  const playerColony = world.colonies[playerColonyId];  // plain-object bracket access (ADR-0006)
+  const playerColony = world.colonies[playerColonyId]; // plain-object bracket access (ADR-0006)
   if (playerColony !== undefined && playerColony.rallyPoint !== null) {
     if (playerColony.rallyPoint.tileX === tileX && playerColony.rallyPoint.tileY === tileY) {
       const cmd: ClearRallyPointCommand = {
@@ -426,7 +432,15 @@ export function registerSurfaceInput(
       handleSurfaceLeftClick(world, viewState, pointer.x, pointer.y, state);
     } else if (pointer.rightButtonDown()) {
       const prevWorld = getPrevWorld?.() ?? null;
-      handleSurfaceRightClick(world, viewState, pointer.x, pointer.y, state, PLAYER_COLONY_ID, prevWorld);
+      handleSurfaceRightClick(
+        world,
+        viewState,
+        pointer.x,
+        pointer.y,
+        state,
+        PLAYER_COLONY_ID,
+        prevWorld,
+      );
     }
   });
   return state;

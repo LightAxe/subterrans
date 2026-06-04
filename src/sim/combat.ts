@@ -110,7 +110,10 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
     const firstCid = ants.colonyId[liveIdx[runStart]!]!;
     let multiColony = false;
     for (let q = runStart + 1; q < p; q++) {
-      if (ants.colonyId[liveIdx[q]!]! !== firstCid) { multiColony = true; break; }
+      if (ants.colonyId[liveIdx[q]!]! !== firstCid) {
+        multiColony = true;
+        break;
+      }
     }
     if (multiColony) {
       for (let q = runStart; q < p; q++) COMBAT_CONTESTED[liveIdx[q]!] = 1;
@@ -137,8 +140,8 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
       if (v23Spider) {
         const onSpiderTile =
           ants.zone[i] === 0 &&
-          (ants.posX[i]! >> FP_SHIFT) === spiderTileX &&
-          (ants.posY[i]! >> FP_SHIFT) === spiderTileY;
+          ants.posX[i]! >> FP_SHIFT === spiderTileX &&
+          ants.posY[i]! >> FP_SHIFT === spiderTileY;
         if (!onSpiderTile) ants.combatOpponentId[i] = -1;
       }
       continue;
@@ -168,9 +171,9 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
   if (world.spider !== null) {
     const ss = world.spider.state;
     const spiderCombatActive =
-      ss === 'Striking' || ss === 'Rampaging' ||
-      (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO &&
-        ss !== 'Feeding' && ss !== 'Retreating');
+      ss === 'Striking' ||
+      ss === 'Rampaging' ||
+      (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO && ss !== 'Feeding' && ss !== 'Retreating');
     if (spiderCombatActive) {
       resolveSpiderCombatOnTile(world);
     }
@@ -203,7 +206,7 @@ function applyDamage(world: WorldState, antIdx: number, damage: number): boolean
     damage -= bonus;
     ants.homeGroundBonusHp[antIdx] = 0;
   }
-  ants.hp[antIdx] = (ants.hp[antIdx]! - damage);
+  ants.hp[antIdx] = ants.hp[antIdx]! - damage;
   return ants.hp[antIdx]! <= 0;
 }
 
@@ -216,7 +219,7 @@ function strikeDamage(world: WorldState, antId: number, strikes: boolean): numbe
   if (!strikes) return 0;
   const { ants } = world;
   if (ants.task[antId] === AntTask.Fighting) {
-    return (ants.zone[antId] === 1 && ants.currentGridColonyId[antId] === ants.colonyId[antId]!)
+    return ants.zone[antId] === 1 && ants.currentGridColonyId[antId] === ants.colonyId[antId]!
       ? COMBAT_DAMAGE_HOMEGROUND
       : COMBAT_DAMAGE_BASE;
   }
@@ -250,17 +253,23 @@ function resolveCombatOnTile_v16(
   // its lowest-slot ant. Because participants ascend by slot, the first ant seen
   // for a colony is that colony's lowest slot. Colonies above the two lowest are
   // ignored — only the active pair matters this tick.
-  let cidA = -1, antA = -1, cidB = -1, antB = -1;
+  let cidA = -1,
+    antA = -1,
+    cidB = -1,
+    antB = -1;
   for (let p = lo; p < hi; p++) {
     const idx = liveIdx[p]!;
     if (ants.alive[idx] !== 1) continue;
     const cid = ants.colonyId[idx]!;
     if (cid === cidA || cid === cidB) continue; // lowest slot already captured
     if (cidA === -1 || cid < cidA) {
-      cidB = cidA; antB = antA; // demote current minimum
-      cidA = cid; antA = idx;
+      cidB = cidA;
+      antB = antA; // demote current minimum
+      cidA = cid;
+      antA = idx;
     } else if (cidB === -1 || cid < cidB) {
-      cidB = cid; antB = idx;
+      cidB = cid;
+      antB = idx;
     }
     // else: cid is larger than both tracked colonies — not part of the active pair.
   }
@@ -287,8 +296,10 @@ function resolveCombatOnTile_v16(
     // bonus if still on home ground; it's zeroed if they've moved off home ground.
     // This prevents unintended healing (bonus restored on replacement) while
     // also clearing stale bonus after a position change.
-    const aOnHome = ants.zone[antA] === 1 && ants.currentGridColonyId[antA] === ants.colonyId[antA]!;
-    const bOnHome = ants.zone[antB] === 1 && ants.currentGridColonyId[antB] === ants.colonyId[antB]!;
+    const aOnHome =
+      ants.zone[antA] === 1 && ants.currentGridColonyId[antA] === ants.colonyId[antA]!;
+    const bOnHome =
+      ants.zone[antB] === 1 && ants.currentGridColonyId[antB] === ants.colonyId[antB]!;
     if (aFresh) {
       ants.homeGroundBonusHp[antA] = aOnHome ? COMBAT_HP_HOMEGROUND_BONUS : 0;
     } else if (!aOnHome) {
@@ -308,8 +319,14 @@ function resolveCombatOnTile_v16(
     // Only reset the newly-paired side — veterans keep accumulated progress.
     // Non-fighters start at COMBAT_COOLDOWN_TICKS+1 when fighterStrikesNow so the
     // immediate decrement below leaves them at exactly COMBAT_COOLDOWN_TICKS.
-    if (aNew) ants.attackCooldown[antA] = aIsFighter ? 1 : COMBAT_COOLDOWN_TICKS + (fighterStrikesNow ? 1 : 0);
-    if (bNew) ants.attackCooldown[antB] = bIsFighter ? 1 : COMBAT_COOLDOWN_TICKS + (fighterStrikesNow ? 1 : 0);
+    if (aNew)
+      ants.attackCooldown[antA] = aIsFighter
+        ? 1
+        : COMBAT_COOLDOWN_TICKS + (fighterStrikesNow ? 1 : 0);
+    if (bNew)
+      ants.attackCooldown[antB] = bIsFighter
+        ? 1
+        : COMBAT_COOLDOWN_TICKS + (fighterStrikesNow ? 1 : 0);
     // Return early unless a newly-paired fighter is about to strike (cooldown=1).
     if (!fighterStrikesNow) return;
   }
@@ -444,16 +461,20 @@ export function killAnt(
     const aiColId = enemyAI.colonyId;
     const victimColId = ants.colonyId[antIndex]! as ColonyId;
     // operationAttackerDeaths: victim is a committed-cohort AI fighter.
-    if (victimColId === aiColId
-        && isInCohort(antIndex, enemyAI.operationFighterIds, enemyAI.operationFighterCount)) {
+    if (
+      victimColId === aiColId &&
+      isInCohort(antIndex, enemyAI.operationFighterIds, enemyAI.operationFighterCount)
+    ) {
       enemyAI.operationAttackerDeaths += 1;
     }
     // operationDefenderDeaths: victim is a non-AI ant (defender) killed by a committed-cohort AI fighter.
-    if (victimColId !== aiColId
-        && killerKind === 'Ant'
-        && killerColonyId === aiColId
-        && killerId !== null
-        && isInCohort(killerId, enemyAI.operationFighterIds, enemyAI.operationFighterCount)) {
+    if (
+      victimColId !== aiColId &&
+      killerKind === 'Ant' &&
+      killerColonyId === aiColId &&
+      killerId !== null &&
+      isInCohort(killerId, enemyAI.operationFighterIds, enemyAI.operationFighterCount)
+    ) {
       enemyAI.operationDefenderDeaths += 1;
     }
   }

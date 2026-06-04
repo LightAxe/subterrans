@@ -37,7 +37,12 @@ import { initAnt } from './ant/ant-store.js';
 import { AntTask, FightingSubState } from './enums.js';
 import { Zone } from './terrain.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
-import { WORKER_BASE_SPEED, WORKER_LIFESPAN_TICKS, PLAYER_COLONY_ID, ENEMY_COLONY_ID } from './constants.js';
+import {
+  WORKER_BASE_SPEED,
+  WORKER_LIFESPAN_TICKS,
+  PLAYER_COLONY_ID,
+  ENEMY_COLONY_ID,
+} from './constants.js';
 import type { WorldState } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 
@@ -46,9 +51,9 @@ import type { ColonyId } from './colony/colony-store.js';
 // ---------------------------------------------------------------------------
 
 interface CrossGridWorld {
-  world:          WorldState;
-  playerAntId:    number;
-  enemyQueenId:   number;
+  world: WorldState;
+  playerAntId: number;
+  enemyQueenId: number;
 }
 
 /**
@@ -78,13 +83,13 @@ function buildCrossGridWorld(seed = 1, queenTileX = 5, queenTileY = 5): CrossGri
   const playerQueen = allocateEntityId(world);
   initAnt(world.ants, playerQueen, {
     colonyId: PLAYER_COLONY_ID,
-    posX:     0 << FP_SHIFT,
-    posY:     0 << FP_SHIFT,
-    task:     AntTask.Idle,
-    subTask:  0,
-    speed:    0,
+    posX: 0 << FP_SHIFT,
+    posY: 0 << FP_SHIFT,
+    task: AntTask.Idle,
+    subTask: 0,
+    speed: 0,
     lifespan: WORKER_LIFESPAN_TICKS,
-    zone:     Zone.Surface,
+    zone: Zone.Surface,
   });
   const playerColony = createColonyRecord(PLAYER_COLONY_ID as ColonyId, playerQueen);
   playerColony.entrances = [];
@@ -96,13 +101,13 @@ function buildCrossGridWorld(seed = 1, queenTileX = 5, queenTileY = 5): CrossGri
   const enemyQueenId = allocateEntityId(world);
   initAnt(world.ants, enemyQueenId, {
     colonyId: ENEMY_COLONY_ID,
-    posX:     (queenTileX << FP_SHIFT) + (FP_ONE >> 1),
-    posY:     (queenTileY << FP_SHIFT) + (FP_ONE >> 1),
-    task:     AntTask.Idle,
-    subTask:  0,
-    speed:    0,
+    posX: (queenTileX << FP_SHIFT) + (FP_ONE >> 1),
+    posY: (queenTileY << FP_SHIFT) + (FP_ONE >> 1),
+    task: AntTask.Idle,
+    subTask: 0,
+    speed: 0,
     lifespan: WORKER_LIFESPAN_TICKS,
-    zone:     Zone.Underground,
+    zone: Zone.Underground,
   });
   // Same colony, same grid — default from initAnt already sets
   // currentGridColonyId = colonyId = ENEMY, but we re-assign for clarity.
@@ -120,13 +125,13 @@ function buildCrossGridWorld(seed = 1, queenTileX = 5, queenTileY = 5): CrossGri
   const playerAntId = allocateEntityId(world);
   initAnt(world.ants, playerAntId, {
     colonyId: PLAYER_COLONY_ID,
-    posX:     (queenTileX << FP_SHIFT) + (FP_ONE >> 1),
-    posY:     (queenTileY << FP_SHIFT) + (FP_ONE >> 1),
-    task:     AntTask.Fighting,
-    subTask:  FightingSubState.Engaging,
-    speed:    WORKER_BASE_SPEED,
+    posX: (queenTileX << FP_SHIFT) + (FP_ONE >> 1),
+    posY: (queenTileY << FP_SHIFT) + (FP_ONE >> 1),
+    task: AntTask.Fighting,
+    subTask: FightingSubState.Engaging,
+    speed: WORKER_BASE_SPEED,
     lifespan: WORKER_LIFESPAN_TICKS,
-    zone:     Zone.Underground,
+    zone: Zone.Underground,
   });
   world.ants.currentGridColonyId[playerAntId] = ENEMY_COLONY_ID;
   world.colonies[PLAYER_COLONY_ID]!.workers.push(playerAntId);
@@ -192,44 +197,48 @@ describe('combat cross-grid — tile-key gridColonyId extension (REQ-C4)', () =>
     const playerQueen = allocateEntityId(world);
     initAnt(world.ants, playerQueen, {
       colonyId: PLAYER_COLONY_ID,
-      posX:     (0 << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (0 << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Idle,
-      subTask:  0,
-      speed:    0,
+      posX: (0 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (0 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: 0,
       lifespan: WORKER_LIFESPAN_TICKS,
-      zone:     Zone.Surface,
+      zone: Zone.Surface,
     });
     const pc = createColonyRecord(PLAYER_COLONY_ID as ColonyId, playerQueen);
-    pc.entrances = []; pc.rallyPoint = null; pc.digFlowFieldDirty = false;
+    pc.entrances = [];
+    pc.rallyPoint = null;
+    pc.digFlowFieldDirty = false;
     world.colonies[PLAYER_COLONY_ID] = pc;
 
     const enemyQueen = allocateEntityId(world);
     initAnt(world.ants, enemyQueen, {
       colonyId: ENEMY_COLONY_ID,
-      posX:     (1 << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (0 << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Idle,
-      subTask:  0,
-      speed:    0,
+      posX: (1 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (0 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: 0,
       lifespan: WORKER_LIFESPAN_TICKS,
-      zone:     Zone.Surface,
+      zone: Zone.Surface,
     });
     const ec = createColonyRecord(ENEMY_COLONY_ID as ColonyId, enemyQueen);
-    ec.entrances = []; ec.rallyPoint = null; ec.digFlowFieldDirty = false;
+    ec.entrances = [];
+    ec.rallyPoint = null;
+    ec.digFlowFieldDirty = false;
     world.colonies[ENEMY_COLONY_ID] = ec;
 
     // Ant A: player-colony ant in the PLAYER grid at (7,7) Underground.
     const antA = allocateEntityId(world);
     initAnt(world.ants, antA, {
       colonyId: PLAYER_COLONY_ID,
-      posX:     (7 << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (7 << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Idle,
-      subTask:  0,
-      speed:    WORKER_BASE_SPEED,
+      posX: (7 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (7 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: WORKER_BASE_SPEED,
       lifespan: WORKER_LIFESPAN_TICKS,
-      zone:     Zone.Underground,
+      zone: Zone.Underground,
     });
     world.ants.currentGridColonyId[antA] = PLAYER_COLONY_ID;
     world.colonies[PLAYER_COLONY_ID]!.workers.push(antA);
@@ -239,13 +248,13 @@ describe('combat cross-grid — tile-key gridColonyId extension (REQ-C4)', () =>
     const antB = allocateEntityId(world);
     initAnt(world.ants, antB, {
       colonyId: ENEMY_COLONY_ID,
-      posX:     (7 << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (7 << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Idle,
-      subTask:  0,
-      speed:    WORKER_BASE_SPEED,
+      posX: (7 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (7 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: WORKER_BASE_SPEED,
       lifespan: WORKER_LIFESPAN_TICKS,
-      zone:     Zone.Underground,
+      zone: Zone.Underground,
     });
     world.ants.currentGridColonyId[antB] = ENEMY_COLONY_ID;
     world.colonies[ENEMY_COLONY_ID]!.workers.push(antB);

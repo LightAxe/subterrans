@@ -70,7 +70,12 @@ function makeMinimalWorld(): WorldState {
 }
 
 /** Spawn N alive fighters for a colony, starting at entity slot `startId`. */
-function spawnFighters(world: WorldState, colonyId: number, count: number, startId: number): number[] {
+function spawnFighters(
+  world: WorldState,
+  colonyId: number,
+  count: number,
+  startId: number,
+): number[] {
   const ids: number[] = [];
   for (let i = 0; i < count; i++) {
     const id = startId + i;
@@ -157,8 +162,9 @@ describe('advanceAIState — Peacetime → WarFooting (CF-P1-010)', () => {
     spawnFighters(world, ENEMY_COLONY_ID, minFighters, 10);
     // Set food: enough for 50% threshold
     const cap = aiFoodCapacity(world, ENEMY_COLONY_ID as ColonyId);
-    // eslint-disable-next-line no-restricted-syntax
-    world.colonies[ENEMY_COLONY_ID as ColonyId]!.foodStored = Math.ceil(cap * AI_WARFOOTING_FOOD_FRAC_PCT / 100);
+    world.colonies[ENEMY_COLONY_ID as ColonyId]!.foodStored = Math.ceil(
+      (cap * AI_WARFOOTING_FOOD_FRAC_PCT) / 100, // eslint-disable-line no-restricted-syntax
+    );
 
     // Player: low workers — NOT frontage ready
     world.colonies[PLAYER_COLONY_ID as ColonyId]!.workerCount = 2;
@@ -175,15 +181,16 @@ describe('advanceAIState — Peacetime → WarFooting (CF-P1-010)', () => {
     const minFighters = AI_WARFOOTING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX];
     spawnFighters(world, ENEMY_COLONY_ID, minFighters, 10);
     const cap = aiFoodCapacity(world, ENEMY_COLONY_ID as ColonyId);
-    // eslint-disable-next-line no-restricted-syntax
-    world.colonies[ENEMY_COLONY_ID as ColonyId]!.foodStored = Math.ceil(cap * AI_WARFOOTING_FOOD_FRAC_PCT / 100);
+    world.colonies[ENEMY_COLONY_ID as ColonyId]!.foodStored = Math.ceil(
+      (cap * AI_WARFOOTING_FOOD_FRAC_PCT) / 100, // eslint-disable-line no-restricted-syntax
+    );
 
     // Player: many workers, satisfying frontage hook
     const aiWorkers = world.colonies[ENEMY_COLONY_ID as ColonyId]!.workerCount;
     const playerNeeded = Math.max(
       AI_FRONTAGE_PLAYER_WORKERS_ABS,
       // eslint-disable-next-line no-restricted-syntax
-      Math.ceil(AI_FRONTAGE_PLAYER_WORKERS_RATIO_X100 * aiWorkers / 100),
+      Math.ceil((AI_FRONTAGE_PLAYER_WORKERS_RATIO_X100 * aiWorkers) / 100),
     );
     world.colonies[PLAYER_COLONY_ID as ColonyId]!.workerCount = playerNeeded;
 
@@ -199,8 +206,9 @@ describe('advanceAIState — Peacetime → WarFooting (CF-P1-010)', () => {
     const minFighters = AI_WARFOOTING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX];
     spawnFighters(world, ENEMY_COLONY_ID, minFighters - 1, 10); // one short
     const cap = aiFoodCapacity(world, ENEMY_COLONY_ID as ColonyId);
-    // eslint-disable-next-line no-restricted-syntax
-    world.colonies[ENEMY_COLONY_ID as ColonyId]!.foodStored = Math.ceil(cap * AI_WARFOOTING_FOOD_FRAC_PCT / 100);
+    world.colonies[ENEMY_COLONY_ID as ColonyId]!.foodStored = Math.ceil(
+      (cap * AI_WARFOOTING_FOOD_FRAC_PCT) / 100, // eslint-disable-line no-restricted-syntax
+    );
 
     // Player: large enough to trigger frontage
     world.colonies[PLAYER_COLONY_ID as ColonyId]!.workerCount = 100;
@@ -359,7 +367,14 @@ describe('setAIRallyOperation — probe cohort', () => {
     aiState.state = 'WarFooting';
 
     const eventsBefore = world.events.length;
-    setAIRallyOperation(world, ENEMY_COLONY_ID as ColonyId, 40, 64, [10, 11, 12, 13, 14], 'Invasion');
+    setAIRallyOperation(
+      world,
+      ENEMY_COLONY_ID as ColonyId,
+      40,
+      64,
+      [10, 11, 12, 13, 14],
+      'Invasion',
+    );
     const newEvents = world.events.slice(eventsBefore);
     const invasionEvent = newEvents.find((e) => e.type === 'invasion_start');
     expect(invasionEvent).toBeDefined();

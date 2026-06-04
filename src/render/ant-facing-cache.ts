@@ -25,10 +25,10 @@
  * (e.g. reversing course) converges within a few frames.
  */
 const SMOOTHING_PREV = 0.65;
-const SMOOTHING_NEW  = 0.35;
+const SMOOTHING_NEW = 0.35;
 
 /** Pixel-space delta threshold below which we treat motion as "no signal". */
-const DELTA_EPSILON  = 0.01;
+const DELTA_EPSILON = 0.01;
 
 /** Minimum blended heading magnitude to emit a rotation from. */
 const HEADING_EPSILON = 0.001;

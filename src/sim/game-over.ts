@@ -11,17 +11,14 @@ export const GameOutcome = {
   Defeat: 2,
   MutualDestruction: 3,
 } as const;
-export type GameOutcome = typeof GameOutcome[keyof typeof GameOutcome];
+export type GameOutcome = (typeof GameOutcome)[keyof typeof GameOutcome];
 
 import type { WorldState, AIState } from './types.js';
 import type { ColonyId, ColonyRecord } from './colony/colony-store.js';
 import { emitEvent } from './telemetry.js';
 import { FP_SHIFT } from './fixed.js';
 import { colonyFoodTotal } from './colony/colony-system.js';
-import {
-  MATCH_TIMEOUT_TICKS,
-  STALEMATE_FOOD_THRESHOLD_FP,
-} from './constants.js';
+import { MATCH_TIMEOUT_TICKS, STALEMATE_FOOD_THRESHOLD_FP } from './constants.js';
 
 /**
  * S2 — infer queen_death cause from the kill context and game outcome.
@@ -159,7 +156,8 @@ export function checkQueenDeath(world: WorldState, playerColonyId?: ColonyId): G
     const qid = colony.queenEntityId;
     const locX = ctx ? ctx.tile.x : (world.ants.posX[qid] ?? 0) >> FP_SHIFT;
     const locY = ctx ? ctx.tile.y : (world.ants.posY[qid] ?? 0) >> FP_SHIFT;
-    const grid: 'surface' | 'underground' = (world.ants.zone[qid] ?? 1) === 0 ? 'surface' : 'underground';
+    const grid: 'surface' | 'underground' =
+      (world.ants.zone[qid] ?? 1) === 0 ? 'surface' : 'underground';
 
     emitEvent(world, {
       tick: world.tick,
@@ -261,7 +259,11 @@ export function checkTiebreaks(world: WorldState, playerColonyId: ColonyId): Gam
     emitEvent(world, {
       tick: world.tick,
       type: 'round_end',
-      payload: { reason: 'TimeoutTiebreak', playerWorkerCount: playerWorkers, aiWorkerCount: aiWorkers },
+      payload: {
+        reason: 'TimeoutTiebreak',
+        playerWorkerCount: playerWorkers,
+        aiWorkerCount: aiWorkers,
+      },
     });
     if (playerWorkers > aiWorkers) return GameOutcome.Victory;
     if (aiWorkers > playerWorkers) return GameOutcome.Defeat;
@@ -279,7 +281,11 @@ export function checkTiebreaks(world: WorldState, playerColonyId: ColonyId): Gam
     emitEvent(world, {
       tick: world.tick,
       type: 'round_end',
-      payload: { reason: 'StalemateTiebreak', playerWorkerCount: playerWorkers, aiWorkerCount: aiWorkers },
+      payload: {
+        reason: 'StalemateTiebreak',
+        playerWorkerCount: playerWorkers,
+        aiWorkerCount: aiWorkers,
+      },
     });
     return GameOutcome.MutualDestruction;
   }

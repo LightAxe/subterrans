@@ -4,18 +4,9 @@
 // All tests run synchronously in < 10ms — no async, no allocations after setup.
 
 import { describe, it, expect } from 'vitest';
-import {
-  createAntComponents,
-  initAnt,
-  killAnt,
-  isAlive,
-} from './ant-store.js';
+import { createAntComponents, initAnt, killAnt, isAlive } from './ant-store.js';
 import { AntTask, ForagingSubState } from '../enums.js';
-import {
-  MAX_ENTITIES,
-  WORKER_BASE_SPEED,
-  WORKER_LIFESPAN_TICKS,
-} from '../constants.js';
+import { MAX_ENTITIES, WORKER_BASE_SPEED, WORKER_LIFESPAN_TICKS } from '../constants.js';
 
 describe('ant-store', () => {
   // ---------------------------------------------------------------------------
@@ -135,7 +126,7 @@ describe('ant-store', () => {
       speed: 64,
     });
 
-    expect(ants.task[id]).toBe(AntTask.Foraging);        // 1
+    expect(ants.task[id]).toBe(AntTask.Foraging); // 1
     expect(ants.subTask[id]).toBe(ForagingSubState.SearchingFood); // 0
     expect(ants.speed[id]).toBe(64);
     // alive still set to 1
@@ -203,9 +194,9 @@ describe('ant-store', () => {
     expect(ants.posX[id]).toBe(50);
     expect(ants.posY[id]).toBe(75);
     expect(ants.speed[id]).toBe(WORKER_BASE_SPEED); // back to default
-    expect(ants.age[id]).toBe(0);                   // reset by initAnt
-    expect(ants.foodCarrying[id]).toBe(0);           // reset by initAnt
-    expect(ants.alive[id]).toBe(1);                  // stays 1
+    expect(ants.age[id]).toBe(0); // reset by initAnt
+    expect(ants.foodCarrying[id]).toBe(0); // reset by initAnt
+    expect(ants.alive[id]).toBe(1); // stays 1
   });
 
   // ---------------------------------------------------------------------------
@@ -215,9 +206,23 @@ describe('ant-store', () => {
   it('createAntComponents(64) returns object with all 17 keys, each Int32Array of length 64', () => {
     const ants = createAntComponents(64);
     const fields: Array<keyof typeof ants> = [
-      'posX', 'posY', 'colonyId', 'task', 'subTask', 'speed',
-      'foodCarrying', 'starvationTimer', 'age', 'alive', 'lifespan',
-      'zone', 'digTileX', 'digTileY', 'digTicksRemaining', 'targetPosX', 'targetPosY',
+      'posX',
+      'posY',
+      'colonyId',
+      'task',
+      'subTask',
+      'speed',
+      'foodCarrying',
+      'starvationTimer',
+      'age',
+      'alive',
+      'lifespan',
+      'zone',
+      'digTileX',
+      'digTileY',
+      'digTicksRemaining',
+      'targetPosX',
+      'targetPosY',
     ];
     expect(fields.length).toBe(17);
     for (const field of fields) {
@@ -234,12 +239,12 @@ describe('ant-store', () => {
     const ants = createAntComponents(64);
     const indices = [0, 31, 63];
     for (const i of indices) {
-      expect(ants.zone[i],              `zone[${i}] should be 0 (Surface)`).toBe(0);
-      expect(ants.digTileX[i],          `digTileX[${i}] should be -1`).toBe(-1);
-      expect(ants.digTileY[i],          `digTileY[${i}] should be -1`).toBe(-1);
+      expect(ants.zone[i], `zone[${i}] should be 0 (Surface)`).toBe(0);
+      expect(ants.digTileX[i], `digTileX[${i}] should be -1`).toBe(-1);
+      expect(ants.digTileY[i], `digTileY[${i}] should be -1`).toBe(-1);
       expect(ants.digTicksRemaining[i], `digTicksRemaining[${i}] should be 0`).toBe(0);
-      expect(ants.targetPosX[i],        `targetPosX[${i}] should be -1`).toBe(-1);
-      expect(ants.targetPosY[i],        `targetPosY[${i}] should be -1`).toBe(-1);
+      expect(ants.targetPosX[i], `targetPosX[${i}] should be -1`).toBe(-1);
+      expect(ants.targetPosY[i], `targetPosY[${i}] should be -1`).toBe(-1);
     }
   });
 
@@ -252,12 +257,12 @@ describe('ant-store', () => {
     const id = 5;
     initAnt(ants, id, { colonyId: 1, posX: 100, posY: 200 });
 
-    expect(ants.zone[id]).toBe(0);              // Surface
-    expect(ants.digTileX[id]).toBe(-1);         // no claimed tile
-    expect(ants.digTileY[id]).toBe(-1);         // no claimed tile
+    expect(ants.zone[id]).toBe(0); // Surface
+    expect(ants.digTileX[id]).toBe(-1); // no claimed tile
+    expect(ants.digTileY[id]).toBe(-1); // no claimed tile
     expect(ants.digTicksRemaining[id]).toBe(0); // not digging
-    expect(ants.targetPosX[id]).toBe(-1);       // no target
-    expect(ants.targetPosY[id]).toBe(-1);       // no target
+    expect(ants.targetPosX[id]).toBe(-1); // no target
+    expect(ants.targetPosY[id]).toBe(-1); // no target
   });
 
   // ---------------------------------------------------------------------------
@@ -284,7 +289,7 @@ describe('ant-store', () => {
     // digTileX and posX start at -1 and 0 respectively (no initAnt needed)
     ants.zone[5] = 1;
     expect(ants.digTileX[5]).toBe(-1); // still sentinel
-    expect(ants.posX[5]).toBe(0);      // unchanged
+    expect(ants.posX[5]).toBe(0); // unchanged
   });
 
   // ---------------------------------------------------------------------------

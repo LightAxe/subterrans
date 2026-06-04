@@ -9,17 +9,16 @@
 //   applyMinimapClick(viewState, px, py) — pan surface camera + X-link underground camera
 //   MINIMAP_SCALE_X, MINIMAP_SCALE_Y — pixel-to-tile scale factors
 
+import { HUD, COLOR_PLAYER_COLONY, COLOR_ENEMY_COLONY, COLOR_FOOD_PILE_NORMAL } from './sprites.js';
+import { COLOR_BARREN_EARTH, COLOR_BARREN_EARTH_DARK } from './terrain-atlas.js';
 import {
-  HUD,
-  COLOR_PLAYER_COLONY,
-  COLOR_ENEMY_COLONY,
-  COLOR_FOOD_PILE_NORMAL,
-} from './sprites.js';
-import {
-  COLOR_BARREN_EARTH,
-  COLOR_BARREN_EARTH_DARK,
-} from './terrain-atlas.js';
-import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT, UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT, PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
+  UNDERGROUND_GRID_WIDTH,
+  UNDERGROUND_GRID_HEIGHT,
+  PLAYER_COLONY_ID,
+  ENEMY_COLONY_ID,
+} from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { isAlive } from '../sim/ant/ant-store.js';
 import { sgGet } from '../sim/terrain.js';
@@ -29,8 +28,8 @@ import type { ViewState } from './camera.js';
 import { clampCamera } from './camera.js';
 import type { GfxLike } from './draw-surface.js';
 
-export const MINIMAP_SCALE_X = HUD.MINIMAP.w / SURFACE_GRID_WIDTH;   // 160 / 128 = 1.25
-export const MINIMAP_SCALE_Y = HUD.MINIMAP.h / SURFACE_GRID_HEIGHT;  // 1.25
+export const MINIMAP_SCALE_X = HUD.MINIMAP.w / SURFACE_GRID_WIDTH; // 160 / 128 = 1.25
+export const MINIMAP_SCALE_Y = HUD.MINIMAP.h / SURFACE_GRID_HEIGHT; // 1.25
 
 // Issue #76 — memorial marker color/size for fully-dead colonies (queen
 // dead AND no live entrances). Distinct dark gray (not a darkened
@@ -100,9 +99,12 @@ export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewStat
   for (const colonyIdStr of Object.keys(world.colonies)) {
     const colonyId = Number(colonyIdStr);
     const colony = world.colonies[colonyId]!;
-    const liveColor = colonyId === PLAYER_COLONY_ID ? COLOR_PLAYER_COLONY
-                    : colonyId === ENEMY_COLONY_ID  ? COLOR_ENEMY_COLONY
-                    : COLOR_PLAYER_COLONY;
+    const liveColor =
+      colonyId === PLAYER_COLONY_ID
+        ? COLOR_PLAYER_COLONY
+        : colonyId === ENEMY_COLONY_ID
+          ? COLOR_ENEMY_COLONY
+          : COLOR_PLAYER_COLONY;
     // Per #76 design: a 'live foothold' is an OPEN entrance (workers can
     // actively transition zones through it). Merely-designated closed
     // entrances are pre-excavation intent — show as live only if the
@@ -111,7 +113,8 @@ export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewStat
     const firstOpenEntrance = liveEntrances.find((e) => e.isOpen);
     const queenAlive = isAlive(world.ants, colony.queenEntityId);
 
-    let tileX = 0, tileY = 0;
+    let tileX = 0,
+      tileY = 0;
     let color = liveColor;
     let size: 2 | 4 = 4;
     let halfOffset: 1 | 2 = 2;
@@ -149,20 +152,23 @@ export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewStat
 
   // Viewport rect — always tracks surfaceCamera (minimap shows surface always per PRD §7a)
   const cam = viewState.surfaceCamera;
-  const rx = HUD.MINIMAP.x + (cam.x - cam.viewportWidth  / 2) * MINIMAP_SCALE_X;
+  const rx = HUD.MINIMAP.x + (cam.x - cam.viewportWidth / 2) * MINIMAP_SCALE_X;
   const ry = HUD.MINIMAP.y + (cam.y - cam.viewportHeight / 2) * MINIMAP_SCALE_Y;
-  const rw = cam.viewportWidth  * MINIMAP_SCALE_X;
+  const rw = cam.viewportWidth * MINIMAP_SCALE_X;
   const rh = cam.viewportHeight * MINIMAP_SCALE_Y;
 
   // Four one-pixel fillRects form the viewport outline (GfxLike has no strokeRect)
   gfx.fillStyle(0xffffff, 0.8);
-  gfx.fillRect(rx,          ry,          rw, 1);   // top edge
-  gfx.fillRect(rx,          ry + rh - 1, rw, 1);   // bottom edge
-  gfx.fillRect(rx,          ry,          1,  rh);  // left edge
-  gfx.fillRect(rx + rw - 1, ry,          1,  rh);  // right edge
+  gfx.fillRect(rx, ry, rw, 1); // top edge
+  gfx.fillRect(rx, ry + rh - 1, rw, 1); // bottom edge
+  gfx.fillRect(rx, ry, 1, rh); // left edge
+  gfx.fillRect(rx + rw - 1, ry, 1, rh); // right edge
 }
 
-export function minimapClickToTile(px: number, py: number): { tileX: number; tileY: number } | null {
+export function minimapClickToTile(
+  px: number,
+  py: number,
+): { tileX: number; tileY: number } | null {
   if (px < HUD.MINIMAP.x || px >= HUD.MINIMAP.x + HUD.MINIMAP.w) return null;
   if (py < HUD.MINIMAP.y || py >= HUD.MINIMAP.y + HUD.MINIMAP.h) return null;
   return {

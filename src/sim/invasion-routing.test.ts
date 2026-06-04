@@ -53,10 +53,10 @@ import type { WorldState } from './types.js';
 // ---------------------------------------------------------------------------
 
 interface InvasionWorld {
-  world:           WorldState;
-  playerAntId:     number;
-  enemyEntTileX:   number;
-  enemyEntTileY:   number;
+  world: WorldState;
+  playerAntId: number;
+  enemyEntTileX: number;
+  enemyEntTileY: number;
 }
 
 /**
@@ -89,12 +89,12 @@ function buildInvasionWorld(seed = 42): InvasionWorld {
   const playerAntId = allocateEntityId(world);
   initAnt(world.ants, playerAntId, {
     colonyId: PLAYER_COLONY_ID,
-    posX:     (enemyEntTileX << FP_SHIFT) + (FP_ONE >> 1),
-    posY:     (enemyEntTileY << FP_SHIFT) + (FP_ONE >> 1),
-    task:     AntTask.Idle,  // caller overrides to Fighting / Foraging per test
-    subTask:  0,
-    speed:    WORKER_BASE_SPEED,
-    zone:     Zone.Surface,
+    posX: (enemyEntTileX << FP_SHIFT) + (FP_ONE >> 1),
+    posY: (enemyEntTileY << FP_SHIFT) + (FP_ONE >> 1),
+    task: AntTask.Idle, // caller overrides to Fighting / Foraging per test
+    subTask: 0,
+    speed: WORKER_BASE_SPEED,
+    zone: Zone.Surface,
   });
   world.colonies[PLAYER_COLONY_ID]!.workers.push(playerAntId);
   world.colonies[PLAYER_COLONY_ID]!.workerCount += 1;
@@ -191,12 +191,12 @@ describe('invasion-routing — Fighting ant descent-intent gate (REQ-C3)', () =>
     const hostileId = allocateEntityId(world);
     initAnt(world.ants, hostileId, {
       colonyId: ENEMY_COLONY_ID,
-      posX:     (hostileTileX << FP_SHIFT) + (FP_ONE >> 1),
-      posY:     (hostileTileY << FP_SHIFT) + (FP_ONE >> 1),
-      task:     AntTask.Idle,
-      subTask:  0,
-      speed:    0, // pin hostile in place so distance-decrease is unambiguous
-      zone:     Zone.Underground,
+      posX: (hostileTileX << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (hostileTileY << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: 0, // pin hostile in place so distance-decrease is unambiguous
+      zone: Zone.Underground,
     });
     world.ants.currentGridColonyId[hostileId] = ENEMY_COLONY_ID;
     world.colonies[ENEMY_COLONY_ID]!.workers.push(hostileId);
@@ -227,8 +227,9 @@ describe('invasion-routing — Fighting ant descent-intent gate (REQ-C3)', () =>
     expect(world.ants.zone[hostileId]).toBe(Zone.Underground);
 
     // Distance at the start of the targeting phase.
-    const d0 = Math.abs(tileXOf(world, playerAntId) - hostileTileX)
-             + Math.abs(tileYOf(world, playerAntId) - hostileTileY);
+    const d0 =
+      Math.abs(tileXOf(world, playerAntId) - hostileTileX) +
+      Math.abs(tileYOf(world, playerAntId) - hostileTileY);
 
     // Tick forward enough for a visible approach. At WORKER_BASE_SPEED the
     // invader moves ~0.5 tiles/tick along the chosen axis, so 10 ticks
@@ -236,8 +237,9 @@ describe('invasion-routing — Fighting ant descent-intent gate (REQ-C3)', () =>
     // Manhattan gap which is at most ~10 tiles (shaft→hostile).
     tickN(world, 10);
 
-    const dN = Math.abs(tileXOf(world, playerAntId) - hostileTileX)
-             + Math.abs(tileYOf(world, playerAntId) - hostileTileY);
+    const dN =
+      Math.abs(tileXOf(world, playerAntId) - hostileTileX) +
+      Math.abs(tileYOf(world, playerAntId) - hostileTileY);
 
     // MANDATORY outcome assertions — invader moved toward the hostile.
     expect(world.ants.zone[playerAntId]).toBe(Zone.Underground);

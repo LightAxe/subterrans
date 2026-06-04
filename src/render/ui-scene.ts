@@ -25,7 +25,12 @@ import { toggleView, toggleUndergroundColony } from './camera.js';
 import type { WorldState } from '../sim/types.js';
 import { HUD } from './sprites.js';
 import { GameOutcome } from '../sim/game-over.js';
-import { formatOutcomeTitle, formatKillStatsSubtitle, formatCauseSubtitle, type QueenDeathCause } from './ui-scene-logic.js';
+import {
+  formatOutcomeTitle,
+  formatKillStatsSubtitle,
+  formatCauseSubtitle,
+  type QueenDeathCause,
+} from './ui-scene-logic.js';
 import { PLAYER_COLONY_ID as _PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 
 // Re-export pure helpers for Plan 07 and external consumers
@@ -97,11 +102,11 @@ export const SAVE_PROMPT_CONTINUE_RECT = { x: 300, y: 280, w: 120, h: 32 } as co
 /** Canvas-local rect for the SavePrompt "New Game" button. */
 export const SAVE_PROMPT_NEW_GAME_RECT = { x: 300, y: 320, w: 120, h: 32 } as const;
 /** Canvas-local rect for the GameOver "Restart" button. */
-export const GAME_OVER_RESTART_RECT    = { x: 300, y: 345, w: 120, h: 32 } as const;
+export const GAME_OVER_RESTART_RECT = { x: 300, y: 345, w: 120, h: 32 } as const;
 /** Canvas-local rects for the DifficultySelect buttons (Easy / Normal / Hard). */
-export const DIFFICULTY_EASY_RECT   = { x: 180, y: 260, w: 140, h: 40 } as const;
+export const DIFFICULTY_EASY_RECT = { x: 180, y: 260, w: 140, h: 40 } as const;
 export const DIFFICULTY_NORMAL_RECT = { x: 330, y: 260, w: 140, h: 40 } as const;
-export const DIFFICULTY_HARD_RECT   = { x: 480, y: 260, w: 140, h: 40 } as const;
+export const DIFFICULTY_HARD_RECT = { x: 480, y: 260, w: 140, h: 40 } as const;
 import {
   createSliderDragState,
   drawSlider,
@@ -203,12 +208,7 @@ import {
  *  noticed without slowing down a player who wants to chain Save → Continue. */
 const SAVE_FLASH_MS = 1500;
 import { loadSettings, saveSettings } from '../platform/settings.js';
-import {
-  hasSave,
-  hasIncompatibleSave,
-  getSaveInfo,
-  deleteSave,
-} from '../platform/save.js';
+import { hasSave, hasIncompatibleSave, getSaveInfo, deleteSave } from '../platform/save.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import type { SetBehaviorRatioCommand, PlaceChamberCommand } from '../sim/commands.js';
 
@@ -347,7 +347,9 @@ export class UIScene extends Phaser.Scene {
   private saveLoadDialogFlash: 'none' | 'saved' | 'failed' = 'none';
   private saveLoadDialogFlashTimer: Phaser.Time.TimerEvent | null = null;
 
-  constructor() { super({ key: 'UIScene' }); }
+  constructor() {
+    super({ key: 'UIScene' });
+  }
 
   init(data: {
     viewState: ViewState;
@@ -368,31 +370,28 @@ export class UIScene extends Phaser.Scene {
     // anchored). Row 2: queenLabelText (white, left) + queen health bar
     // (drawn in update() via gfx so its color can change per frame without
     // Text churn).
-    this.antsText = this.add.text(
-      STATS_TEXT_X,
-      STATS_ROW1_Y,
-      'Ants: 0',
-      { color: HUD_STATS_COLORS.antsTextCss, fontSize: '10px', fontFamily: 'monospace' },
-    );
+    this.antsText = this.add.text(STATS_TEXT_X, STATS_ROW1_Y, 'Ants: 0', {
+      color: HUD_STATS_COLORS.antsTextCss,
+      fontSize: '10px',
+      fontFamily: 'monospace',
+    });
     this.antsText.setScrollFactor(0);
 
-    this.foodText = this.add.text(
-      STATS_TEXT_X,
-      STATS_ROW1_Y,
-      'Food: 0/0',
-      { color: HUD_STATS_COLORS.foodTextCss, fontSize: '10px', fontFamily: 'monospace' },
-    );
+    this.foodText = this.add.text(STATS_TEXT_X, STATS_ROW1_Y, 'Food: 0/0', {
+      color: HUD_STATS_COLORS.foodTextCss,
+      fontSize: '10px',
+      fontFamily: 'monospace',
+    });
     this.foodText.setScrollFactor(0);
 
     // Queen label — "Queen" text sits on row 2 (09 HUD clarity pass).
     // Position is set in update() from queenLabelRect so layout constants
     // remain single-sourced in hud-stats.ts.
-    this.queenLabelText = this.add.text(
-      STATS_TEXT_X,
-      STATS_ROW2_Y,
-      formatQueenLabel(),
-      { color: HUD_STATS_COLORS.queenLabelCss, fontSize: '10px', fontFamily: 'monospace' },
-    );
+    this.queenLabelText = this.add.text(STATS_TEXT_X, STATS_ROW2_Y, formatQueenLabel(), {
+      color: HUD_STATS_COLORS.queenLabelCss,
+      fontSize: '10px',
+      fontFamily: 'monospace',
+    });
     this.queenLabelText.setScrollFactor(0);
 
     // Slider extreme labels — static text, created once. Phase 10 / D-01:
@@ -406,18 +405,14 @@ export class UIScene extends Phaser.Scene {
     // label sits flush at the top edge — trackY=554 - 22 = 532 = HUD.TRIANGLE.y,
     // and the 10px label text occupies y:[532,542], inside the zone.
     this.triangleLabels = [
-      this.add.text(
-        HUD.TRIANGLE.x + 4,
-        SLIDER_GEOMETRY.trackY - 22,
-        'Forage',
-        { color: '#ffffff', fontSize: '10px' },
-      ),
-      this.add.text(
-        HUD.TRIANGLE.x + HUD.TRIANGLE.w - 28,
-        SLIDER_GEOMETRY.trackY - 22,
-        'Fight',
-        { color: '#ffffff', fontSize: '10px' },
-      ),
+      this.add.text(HUD.TRIANGLE.x + 4, SLIDER_GEOMETRY.trackY - 22, 'Forage', {
+        color: '#ffffff',
+        fontSize: '10px',
+      }),
+      this.add.text(HUD.TRIANGLE.x + HUD.TRIANGLE.w - 28, SLIDER_GEOMETRY.trackY - 22, 'Fight', {
+        color: '#ffffff',
+        fontSize: '10px',
+      }),
     ];
     for (const label of this.triangleLabels) {
       label.setScrollFactor(0);
@@ -456,13 +451,12 @@ export class UIScene extends Phaser.Scene {
     // Context menu item labels — created once, positioned/shown per frame.
     // One Phaser.Text per ChamberType (Queen / Nursery / Food Storage) so the
     // player can actually read the choices instead of seeing unlabeled stripes.
-    this.contextMenuLabels = CONTEXT_MENU_ITEMS.map(item => {
-      const t = this.add.text(
-        0,
-        0,
-        item.label,
-        { color: '#ffffff', fontSize: '13px', fontFamily: 'monospace' },
-      );
+    this.contextMenuLabels = CONTEXT_MENU_ITEMS.map((item) => {
+      const t = this.add.text(0, 0, item.label, {
+        color: '#ffffff',
+        fontSize: '13px',
+        fontFamily: 'monospace',
+      });
       t.setScrollFactor(0);
       t.setVisible(false);
       t.setDepth(10); // draw above the gfx stripes
@@ -472,16 +466,11 @@ export class UIScene extends Phaser.Scene {
     // Ant-activity popup body — single multi-line Text widget anchored to the
     // top-left of ANT_ACTIVITY_PANEL. Created once, shown/hidden and retargeted
     // per frame in update() based on antActivityPanelState.visible.
-    this.antActivityText = this.add.text(
-      ANT_ACTIVITY_PANEL.x + 8,
-      ANT_ACTIVITY_PANEL.y + 8,
-      '',
-      {
-        color: ANT_ACTIVITY_PANEL_COLORS.textCss,
-        fontSize: '11px',
-        fontFamily: 'monospace',
-      },
-    );
+    this.antActivityText = this.add.text(ANT_ACTIVITY_PANEL.x + 8, ANT_ACTIVITY_PANEL.y + 8, '', {
+      color: ANT_ACTIVITY_PANEL_COLORS.textCss,
+      fontSize: '11px',
+      fontFamily: 'monospace',
+    });
     this.antActivityText.setScrollFactor(0);
     this.antActivityText.setVisible(false);
     this.antActivityText.setDepth(11);
@@ -583,14 +572,20 @@ export class UIScene extends Phaser.Scene {
       // menu from lingering after unrelated HUD interactions.
       if (contextMenuState.visible) {
         const items = this.contextMenuVisibleItems;
-        if (isInsideContextMenu(
-          pointer.x, pointer.y,
-          contextMenuState.screenX, contextMenuState.screenY,
-          items,
-        )) {
+        if (
+          isInsideContextMenu(
+            pointer.x,
+            pointer.y,
+            contextMenuState.screenX,
+            contextMenuState.screenY,
+            items,
+          )
+        ) {
           const choice = contextMenuItemAt(
-            pointer.x, pointer.y,
-            contextMenuState.screenX, contextMenuState.screenY,
+            pointer.x,
+            pointer.y,
+            contextMenuState.screenX,
+            contextMenuState.screenY,
             items,
           );
           const world = this.getWorld();
@@ -638,14 +633,14 @@ export class UIScene extends Phaser.Scene {
           return;
         }
         const overHud =
-             this.isInsideRect(pointer.x, pointer.y, HUD.TRIANGLE)
-          || this.isInsideRect(pointer.x, pointer.y, HUD.MINIMAP)
-          || this.isInsideRect(pointer.x, pointer.y, HUD.VIEW_TOGGLE)
+          this.isInsideRect(pointer.x, pointer.y, HUD.TRIANGLE) ||
+          this.isInsideRect(pointer.x, pointer.y, HUD.MINIMAP) ||
+          this.isInsideRect(pointer.x, pointer.y, HUD.VIEW_TOGGLE) ||
           // Issue #14 — colony-toggle button. Without this entry, a click
           // on the new toggle while the ant-activity panel is up would
           // be classified as "world click", dismissing the panel and
           // dropping the toggle dispatch.
-          || this.isInsideRect(pointer.x, pointer.y, HUD.UNDERGROUND_COLONY_TOGGLE);
+          this.isInsideRect(pointer.x, pointer.y, HUD.UNDERGROUND_COLONY_TOGGLE);
         if (!overHud) {
           // Click on the world — dismiss and consume. `return` prevents
           // any further UIScene handling; the deferred hide prevents the
@@ -773,7 +768,7 @@ export class UIScene extends Phaser.Scene {
       // small inset). Row 2: "Queen" left-anchored, queen health bar right-
       // anchored. Rows are disjoint so "Food: C/M" can grow without fighting
       // the queen label for horizontal budget.
-      const bar   = queenBarRect(HUD.STATS);
+      const bar = queenBarRect(HUD.STATS);
       const label = queenLabelRect(HUD.STATS);
       this.queenLabelText.setPosition(label.x, label.y);
       const FOOD_RIGHT_INSET = 6;
@@ -806,16 +801,21 @@ export class UIScene extends Phaser.Scene {
       // contradicting the actual (zero-on-axis) state. Fall back to the player's
       // intent (`targetRatio`) so the current marker overlays the target marker
       // rather than fabricating an extreme position.
-      const currentRatio = ff > 0
-        ? {
-            forage: Math.round(colony.taskCensus.forage * 100 / ff),
-            fight:  Math.round(colony.taskCensus.fight  * 100 / ff),
-          }
-        : { forage: colony.targetRatio.forage, fight: colony.targetRatio.fight };
+      const currentRatio =
+        ff > 0
+          ? {
+              forage: Math.round((colony.taskCensus.forage * 100) / ff),
+              fight: Math.round((colony.taskCensus.fight * 100) / ff),
+            }
+          : { forage: colony.targetRatio.forage, fight: colony.targetRatio.fight };
       const targetRatio = this.dragState.isDragging
         ? this.dragState.targetRatio
         : colony.targetRatio;
-      drawSlider(this.gfx as unknown as import('./draw-surface.js').GfxLike, currentRatio, targetRatio);
+      drawSlider(
+        this.gfx as unknown as import('./draw-surface.js').GfxLike,
+        currentRatio,
+        targetRatio,
+      );
     }
 
     // Minimap
@@ -835,9 +835,7 @@ export class UIScene extends Phaser.Scene {
     // string ('Your Colony' / 'Enemy Colony') so existing tests don't have
     // to know about the (X) hint affordance the button now renders.
     const undergroundLabel: ActiveUndergroundLabel =
-      this.viewState.activeUndergroundColonyId === ENEMY_COLONY_ID
-        ? 'Enemy Colony'
-        : 'Your Colony';
+      this.viewState.activeUndergroundColonyId === ENEMY_COLONY_ID ? 'Enemy Colony' : 'Your Colony';
     const undergroundShowing = this.viewState.activeView === 'underground';
     if (undergroundShowing) {
       // Draw the toggle background as a Graphics fill (matches VIEW_TOGGLE
@@ -952,9 +950,10 @@ export class UIScene extends Phaser.Scene {
 
     // S6: prefer narrativeSeed from summary-builder; fall back to formatCauseSubtitle
     // for pre-V22 saves or cases where buildPlaytraceSummary returns null.
-    const causeText = (narrativeSeed != null && narrativeSeed !== '')
-      ? narrativeSeed
-      : formatCauseSubtitle(outcome, cause);
+    const causeText =
+      narrativeSeed != null && narrativeSeed !== ''
+        ? narrativeSeed
+        : formatCauseSubtitle(outcome, cause);
     const causeLabel = this.add.text(W / 2, H / 2 - 25, causeText, {
       fontSize: '18px',
       fontFamily: 'monospace',
@@ -982,9 +981,12 @@ export class UIScene extends Phaser.Scene {
     // Restart button
     const btnR = GAME_OVER_RESTART_RECT;
     const btnBg = this.add.rectangle(
-      btnR.x + btnR.w / 2, btnR.y + btnR.h / 2,
-      btnR.w, btnR.h,
-      0x444444, 1,
+      btnR.x + btnR.w / 2,
+      btnR.y + btnR.h / 2,
+      btnR.w,
+      btnR.h,
+      0x444444,
+      1,
     );
     btnBg.setInteractive();
     btnBg.setDepth(21);
@@ -1032,7 +1034,9 @@ export class UIScene extends Phaser.Scene {
           duration: 400,
           delay: 800,
           ease: 'Linear',
-          onComplete: () => { captionText.destroy(); },
+          onComplete: () => {
+            captionText.destroy();
+          },
         });
       },
     });
@@ -1067,20 +1071,28 @@ export class UIScene extends Phaser.Scene {
     title.setOrigin(0.5);
     title.setDepth(21);
 
-    const subtitle = this.add.text(W / 2, H / 2 - 40, 'Found a previous session. Continue or start new?', {
-      fontSize: '14px',
-      fontFamily: 'monospace',
-      color: '#aaaaaa',
-    });
+    const subtitle = this.add.text(
+      W / 2,
+      H / 2 - 40,
+      'Found a previous session. Continue or start new?',
+      {
+        fontSize: '14px',
+        fontFamily: 'monospace',
+        color: '#aaaaaa',
+      },
+    );
     subtitle.setOrigin(0.5);
     subtitle.setDepth(21);
 
     // Continue button
     const contR = SAVE_PROMPT_CONTINUE_RECT;
     const contBg = this.add.rectangle(
-      contR.x + contR.w / 2, contR.y + contR.h / 2,
-      contR.w, contR.h,
-      0x226622, 1,
+      contR.x + contR.w / 2,
+      contR.y + contR.h / 2,
+      contR.w,
+      contR.h,
+      0x226622,
+      1,
     );
     contBg.setInteractive();
     contBg.setDepth(21);
@@ -1100,9 +1112,12 @@ export class UIScene extends Phaser.Scene {
     // New Game button
     const ngR = SAVE_PROMPT_NEW_GAME_RECT;
     const ngBg = this.add.rectangle(
-      ngR.x + ngR.w / 2, ngR.y + ngR.h / 2,
-      ngR.w, ngR.h,
-      0x662222, 1,
+      ngR.x + ngR.w / 2,
+      ngR.y + ngR.h / 2,
+      ngR.w,
+      ngR.h,
+      0x662222,
+      1,
     );
     ngBg.setInteractive();
     ngBg.setDepth(21);
@@ -1137,7 +1152,9 @@ export class UIScene extends Phaser.Scene {
   // button — the player must choose before the world is created.
   // ---------------------------------------------------------------------------
 
-  public showDifficultySelectOverlay(callbacks: { onSelect: (d: 'Easy' | 'Normal' | 'Hard') => void }): void {
+  public showDifficultySelectOverlay(callbacks: {
+    onSelect: (d: 'Easy' | 'Normal' | 'Hard') => void;
+  }): void {
     this.hideDifficultySelectOverlay();
 
     const W = 800;
@@ -1148,14 +1165,23 @@ export class UIScene extends Phaser.Scene {
     bg.setDepth(20);
 
     const title = this.add.text(W / 2, H / 2 - 100, 'Choose Difficulty', {
-      fontSize: '28px', fontFamily: 'monospace', color: '#ffffff',
+      fontSize: '28px',
+      fontFamily: 'monospace',
+      color: '#ffffff',
     });
     title.setOrigin(0.5);
     title.setDepth(21);
 
-    const subtitle = this.add.text(W / 2, H / 2 - 60, 'Affects the enemy colony\'s aggression and reproduction rate.', {
-      fontSize: '13px', fontFamily: 'monospace', color: '#aaaaaa',
-    });
+    const subtitle = this.add.text(
+      W / 2,
+      H / 2 - 60,
+      "Affects the enemy colony's aggression and reproduction rate.",
+      {
+        fontSize: '13px',
+        fontFamily: 'monospace',
+        color: '#aaaaaa',
+      },
+    );
     subtitle.setOrigin(0.5);
     subtitle.setDepth(21);
 
@@ -1167,8 +1193,12 @@ export class UIScene extends Phaser.Scene {
       difficulty: 'Easy' | 'Normal' | 'Hard',
     ): Phaser.GameObjects.GameObject[] => {
       const btnBg = this.add.rectangle(
-        rect.x + rect.w / 2, rect.y + rect.h / 2,
-        rect.w, rect.h, color, 1,
+        rect.x + rect.w / 2,
+        rect.y + rect.h / 2,
+        rect.w,
+        rect.h,
+        color,
+        1,
       );
       btnBg.setInteractive();
       btnBg.setDepth(21);
@@ -1178,13 +1208,17 @@ export class UIScene extends Phaser.Scene {
       });
 
       const btnLabel = this.add.text(rect.x + rect.w / 2, rect.y + 12, label, {
-        fontSize: '15px', fontFamily: 'monospace', color: '#ffffff',
+        fontSize: '15px',
+        fontFamily: 'monospace',
+        color: '#ffffff',
       });
       btnLabel.setOrigin(0.5, 0);
       btnLabel.setDepth(22);
 
       const btnDesc = this.add.text(rect.x + rect.w / 2, rect.y + 28, desc, {
-        fontSize: '10px', fontFamily: 'monospace', color: '#cccccc',
+        fontSize: '10px',
+        fontFamily: 'monospace',
+        color: '#cccccc',
         wordWrap: { width: rect.w - 8 },
       });
       btnDesc.setOrigin(0.5, 0);
@@ -1197,9 +1231,9 @@ export class UIScene extends Phaser.Scene {
     const normR = DIFFICULTY_NORMAL_RECT;
     const hardR = DIFFICULTY_HARD_RECT;
 
-    const easyObjs  = makeButton('Easy',   'Slower AI', easyR, 0x226622, 'Easy');
-    const normObjs  = makeButton('Normal', 'Balanced',  normR, 0x224466, 'Normal');
-    const hardObjs  = makeButton('Hard',   'Faster AI', hardR, 0x662222, 'Hard');
+    const easyObjs = makeButton('Easy', 'Slower AI', easyR, 0x226622, 'Easy');
+    const normObjs = makeButton('Normal', 'Balanced', normR, 0x224466, 'Normal');
+    const hardObjs = makeButton('Hard', 'Faster AI', hardR, 0x662222, 'Hard');
 
     this.difficultySelectGroup = [bg, title, subtitle, ...easyObjs, ...normObjs, ...hardObjs];
     this.recomputeActiveOverlay();
@@ -1329,24 +1363,16 @@ export class UIScene extends Phaser.Scene {
       const r = item.rect;
       const fillColor = item.enabled ? 0x333333 : 0x202020;
       const labelColor = item.enabled ? '#ffffff' : '#777777';
-      const btn = this.add.rectangle(
-        r.x + r.w / 2,
-        r.y + r.h / 2,
-        r.w,
-        r.h,
-        fillColor,
-        1,
-      );
+      const btn = this.add.rectangle(r.x + r.w / 2, r.y + r.h / 2, r.w, r.h, fillColor, 1);
       btn.setInteractive();
       btn.setDepth(21);
       this.pauseMenuGroup.push(btn);
 
-      const label = this.add.text(
-        r.x + r.w / 2,
-        r.y + r.h / 2,
-        item.label,
-        { fontSize: '16px', fontFamily: 'monospace', color: labelColor },
-      );
+      const label = this.add.text(r.x + r.w / 2, r.y + r.h / 2, item.label, {
+        fontSize: '16px',
+        fontFamily: 'monospace',
+        color: labelColor,
+      });
       label.setOrigin(0.5);
       label.setDepth(22);
       this.pauseMenuGroup.push(label);
@@ -1500,12 +1526,11 @@ export class UIScene extends Phaser.Scene {
     this.saveLoadDialogGroup.push(bg);
 
     // Title
-    const title = this.add.text(
-      PAUSE_MENU_CANVAS_W / 2,
-      DIALOG_TITLE_Y,
-      saveLoadDialogTitle(),
-      { fontSize: '28px', fontFamily: 'monospace', color: '#ffffff' },
-    );
+    const title = this.add.text(PAUSE_MENU_CANVAS_W / 2, DIALOG_TITLE_Y, saveLoadDialogTitle(), {
+      fontSize: '28px',
+      fontFamily: 'monospace',
+      color: '#ffffff',
+    });
     title.setOrigin(0.5);
     title.setDepth(31);
     this.saveLoadDialogGroup.push(title);
@@ -1528,12 +1553,11 @@ export class UIScene extends Phaser.Scene {
     if (this.saveLoadDialogFlash !== 'none') {
       const flashColor = this.saveLoadDialogFlash === 'saved' ? '#88ee88' : '#ff7766';
       const flashText = this.saveLoadDialogFlash === 'saved' ? 'Saved' : 'Save failed';
-      const flash = this.add.text(
-        PAUSE_MENU_CANVAS_W / 2,
-        DIALOG_INFO_Y + 18,
-        flashText,
-        { fontSize: '12px', fontFamily: 'monospace', color: flashColor },
-      );
+      const flash = this.add.text(PAUSE_MENU_CANVAS_W / 2, DIALOG_INFO_Y + 18, flashText, {
+        fontSize: '12px',
+        fontFamily: 'monospace',
+        color: flashColor,
+      });
       flash.setOrigin(0.5);
       flash.setDepth(31);
       this.saveLoadDialogGroup.push(flash);
@@ -1550,30 +1574,18 @@ export class UIScene extends Phaser.Scene {
     // is the sole entry point.
     for (const item of items) {
       const r = item.rect;
-      const fillColor = !item.enabled ? 0x202020
-        : item.confirming ? 0x884422
-        : 0x333333;
-      const labelColor = !item.enabled ? '#777777'
-        : item.confirming ? '#ffeecc'
-        : '#ffffff';
-      const btn = this.add.rectangle(
-        r.x + r.w / 2,
-        r.y + r.h / 2,
-        r.w,
-        r.h,
-        fillColor,
-        1,
-      );
+      const fillColor = !item.enabled ? 0x202020 : item.confirming ? 0x884422 : 0x333333;
+      const labelColor = !item.enabled ? '#777777' : item.confirming ? '#ffeecc' : '#ffffff';
+      const btn = this.add.rectangle(r.x + r.w / 2, r.y + r.h / 2, r.w, r.h, fillColor, 1);
       btn.setInteractive();
       btn.setDepth(31);
       this.saveLoadDialogGroup.push(btn);
 
-      const label = this.add.text(
-        r.x + r.w / 2,
-        r.y + r.h / 2,
-        item.label,
-        { fontSize: '14px', fontFamily: 'monospace', color: labelColor },
-      );
+      const label = this.add.text(r.x + r.w / 2, r.y + r.h / 2, item.label, {
+        fontSize: '14px',
+        fontFamily: 'monospace',
+        color: labelColor,
+      });
       label.setOrigin(0.5);
       label.setDepth(32);
       this.saveLoadDialogGroup.push(label);
@@ -1620,17 +1632,14 @@ export class UIScene extends Phaser.Scene {
         if (this.saveLoadDialogFlashTimer !== null) {
           this.saveLoadDialogFlashTimer.remove();
         }
-        this.saveLoadDialogFlashTimer = this.time.delayedCall(
-          SAVE_FLASH_MS,
-          () => {
-            this.saveLoadDialogFlashTimer = null;
-            this.saveLoadDialogFlash = 'none';
-            // Guard: dialog may have closed between Save Now and the timer
-            // firing (e.g. player clicked Continue or Back). Re-render only
-            // if the dialog is still on screen.
-            if (this.isSaveLoadDialogVisible()) this.renderSaveLoadDialog();
-          },
-        );
+        this.saveLoadDialogFlashTimer = this.time.delayedCall(SAVE_FLASH_MS, () => {
+          this.saveLoadDialogFlashTimer = null;
+          this.saveLoadDialogFlash = 'none';
+          // Guard: dialog may have closed between Save Now and the timer
+          // firing (e.g. player clicked Continue or Back). Re-render only
+          // if the dialog is still on screen.
+          if (this.isSaveLoadDialogVisible()) this.renderSaveLoadDialog();
+        });
         this.renderSaveLoadDialog();
         return;
       }
@@ -1693,7 +1702,8 @@ export class UIScene extends Phaser.Scene {
     else if (this.pauseMenuGroup.length > 0) setActiveOverlay('pause-menu');
     else if (this.gameOverGroup.length > 0) setActiveOverlay('game-over');
     else if (this.savePromptGroup.length > 0) setActiveOverlay('save-prompt');
-    else if (this.difficultySelectGroup.length > 0) setActiveOverlay('save-prompt'); // reuse 'save-prompt' HUD state
+    else if (this.difficultySelectGroup.length > 0)
+      setActiveOverlay('save-prompt'); // reuse 'save-prompt' HUD state
     else setActiveOverlay('none');
   }
 
@@ -1823,7 +1833,8 @@ export class UIScene extends Phaser.Scene {
     // For pause-menu-quit, show a generic "Quitting" heading.
     if (this.surveyState.quitFromPauseMenu) {
       const title = this.add.text(
-        SURVEY_CANVAS_W / 2, SURVEY_TITLE_Y,
+        SURVEY_CANVAS_W / 2,
+        SURVEY_TITLE_Y,
         'Quitting — tell us what you think',
         { fontSize: '22px', fontFamily: 'monospace', color: '#ffffff' },
       );
@@ -1831,23 +1842,25 @@ export class UIScene extends Phaser.Scene {
       title.setDepth(41);
       this.surveyGroup.push(title);
     } else {
-      const { text: outcomeText, color: outcomeColor } = formatOutcomeTitle(this.surveyState.outcome);
-      const outcomeLabel = this.add.text(
-        SURVEY_CANVAS_W / 2, SURVEY_TITLE_Y - 5,
-        outcomeText,
-        { fontSize: '28px', fontFamily: 'monospace', color: '#' + outcomeColor.toString(16).padStart(6, '0') },
+      const { text: outcomeText, color: outcomeColor } = formatOutcomeTitle(
+        this.surveyState.outcome,
       );
+      const outcomeLabel = this.add.text(SURVEY_CANVAS_W / 2, SURVEY_TITLE_Y - 5, outcomeText, {
+        fontSize: '28px',
+        fontFamily: 'monospace',
+        color: '#' + outcomeColor.toString(16).padStart(6, '0'),
+      });
       outcomeLabel.setOrigin(0.5, 0);
       outcomeLabel.setDepth(41);
       this.surveyGroup.push(outcomeLabel);
 
       const causeText = formatCauseSubtitle(this.surveyState.outcome, this.surveyState.cause);
       const secondLine = causeText !== '' ? causeText : 'Tell us what you think:';
-      const causeLabel = this.add.text(
-        SURVEY_CANVAS_W / 2, SURVEY_TITLE_Y + 33,
-        secondLine,
-        { fontSize: '16px', fontFamily: 'monospace', color: '#cccccc' },
-      );
+      const causeLabel = this.add.text(SURVEY_CANVAS_W / 2, SURVEY_TITLE_Y + 33, secondLine, {
+        fontSize: '16px',
+        fontFamily: 'monospace',
+        color: '#cccccc',
+      });
       causeLabel.setOrigin(0.5, 0);
       causeLabel.setDepth(41);
       this.surveyGroup.push(causeLabel);
@@ -1871,23 +1884,15 @@ export class UIScene extends Phaser.Scene {
       const selected = this.surveyState.rating === btn.rating;
       const fillColor = selected ? 0x22aa22 : 0x333333;
       const r = btn.rect;
-      const rect = this.add.rectangle(
-        r.x + r.w / 2,
-        r.y + r.h / 2,
-        r.w,
-        r.h,
-        fillColor,
-        1,
-      );
+      const rect = this.add.rectangle(r.x + r.w / 2, r.y + r.h / 2, r.w, r.h, fillColor, 1);
       rect.setInteractive();
       rect.setDepth(41);
       this.surveyGroup.push(rect);
-      const label = this.add.text(
-        r.x + r.w / 2,
-        r.y + r.h / 2,
-        String(btn.rating),
-        { fontSize: '20px', fontFamily: 'monospace', color: '#ffffff' },
-      );
+      const label = this.add.text(r.x + r.w / 2, r.y + r.h / 2, String(btn.rating), {
+        fontSize: '20px',
+        fontFamily: 'monospace',
+        color: '#ffffff',
+      });
       label.setOrigin(0.5);
       label.setDepth(42);
       this.surveyGroup.push(label);
@@ -1896,14 +1901,7 @@ export class UIScene extends Phaser.Scene {
     // Free-text rect background (the actual editable surface is a DOM
     // textarea positioned over the canvas below — see ensureSurveyTextarea).
     const ft = SURVEY_FREE_TEXT_RECT;
-    const ftBg = this.add.rectangle(
-      ft.x + ft.w / 2,
-      ft.y + ft.h / 2,
-      ft.w,
-      ft.h,
-      0x222222,
-      1,
-    );
+    const ftBg = this.add.rectangle(ft.x + ft.w / 2, ft.y + ft.h / 2, ft.w, ft.h, 0x222222, 1);
     ftBg.setDepth(41);
     this.surveyGroup.push(ftBg);
     this.ensureSurveyTextarea();
@@ -1965,12 +1963,11 @@ export class UIScene extends Phaser.Scene {
     const resultText = this.surveyState.confirmedSubmit
       ? 'Survey submitted — thanks for playing!'
       : 'Thanks for playing!';
-    const title = this.add.text(
-      SURVEY_CANVAS_W / 2,
-      SURVEY_CANVAS_H / 2 - 40,
-      resultText,
-      { fontSize: '22px', fontFamily: 'monospace', color: '#ffffff' },
-    );
+    const title = this.add.text(SURVEY_CANVAS_W / 2, SURVEY_CANVAS_H / 2 - 40, resultText, {
+      fontSize: '22px',
+      fontFamily: 'monospace',
+      color: '#ffffff',
+    });
     title.setOrigin(0.5);
     title.setDepth(41);
     this.surveyGroup.push(title);
@@ -1999,12 +1996,11 @@ export class UIScene extends Phaser.Scene {
     if (checked) {
       // Simple check mark — a Phaser-Text "✓" reads more cleanly than
       // drawing line segments at this resolution.
-      const tick = this.add.text(
-        rect.x + rect.w / 2,
-        rect.y + rect.h / 2,
-        '✓',
-        { fontSize: '16px', fontFamily: 'monospace', color: '#ffffff' },
-      );
+      const tick = this.add.text(rect.x + rect.w / 2, rect.y + rect.h / 2, '✓', {
+        fontSize: '16px',
+        fontFamily: 'monospace',
+        color: '#ffffff',
+      });
       tick.setOrigin(0.5);
       tick.setDepth(42);
       this.surveyGroup.push(tick);
@@ -2040,12 +2036,11 @@ export class UIScene extends Phaser.Scene {
     btn.setInteractive();
     btn.setDepth(41);
     this.surveyGroup.push(btn);
-    const text = this.add.text(
-      rect.x + rect.w / 2,
-      rect.y + rect.h / 2,
-      label,
-      { fontSize: '16px', fontFamily: 'monospace', color: labelColor },
-    );
+    const text = this.add.text(rect.x + rect.w / 2, rect.y + rect.h / 2, label, {
+      fontSize: '16px',
+      fontFamily: 'monospace',
+      color: labelColor,
+    });
     text.setOrigin(0.5);
     text.setDepth(42);
     this.surveyGroup.push(text);
@@ -2079,7 +2074,9 @@ export class UIScene extends Phaser.Scene {
       // preventDefault() for any key in its captures list — which includes
       // WASD and Space by default. stopPropagation prevents the keydown from
       // reaching Phaser so the textarea receives every character normally.
-      ta.addEventListener('keydown', (e) => { if (e.key !== 'Escape') e.stopPropagation(); });
+      ta.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') e.stopPropagation();
+      });
       // Append to the canvas's parent so embedded-in-shadow-DOM hosts
       // (the library-mode embed on the website may eventually mount
       // inside a custom element) keep the textarea inside the same
@@ -2164,7 +2161,7 @@ export class UIScene extends Phaser.Scene {
       const cb = this.surveyCallbacks;
       this.hideSurveyOverlay();
       if (hit.kind === 'new-game') cb?.onNewGame();
-      else                        cb?.onRetry();
+      else cb?.onRetry();
       return;
     }
 

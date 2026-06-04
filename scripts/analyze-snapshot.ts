@@ -27,7 +27,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 register(
-  'data:text/javascript,' + encodeURIComponent(`
+  'data:text/javascript,' +
+    encodeURIComponent(`
     export async function resolve(specifier, context, nextResolve) {
       if (specifier.endsWith('.js')) {
         const tsSpec = specifier.slice(0, -3) + '.ts';
@@ -36,26 +37,26 @@ register(
       return nextResolve(specifier, context);
     }
   `),
-  pathToFileURL('./')
+  pathToFileURL('./'),
 );
 
-const { createScenario }                       = await import('../src/sim/scenario.js');
-const { tick }                                 = await import('../src/sim/tick.js');
-const { Zone, UndergroundTileState, ugGet }    = await import('../src/sim/terrain.js');
-const { FP_SHIFT }                             = await import('../src/sim/fixed.js');
-const { AntTask, ForagingSubState }            = await import('../src/sim/enums.js');
+const { createScenario } = await import('../src/sim/scenario.js');
+const { tick } = await import('../src/sim/tick.js');
+const { Zone, UndergroundTileState, ugGet } = await import('../src/sim/terrain.js');
+const { FP_SHIFT } = await import('../src/sim/fixed.js');
+const { AntTask, ForagingSubState } = await import('../src/sim/enums.js');
 const { serializeWorldState, deserializeWorldState } = await import('../src/platform/save.js');
 
 const ANT_TASK_NAME: Record<number, string> = {
-  [AntTask.Idle]:     'Idle',
+  [AntTask.Idle]: 'Idle',
   [AntTask.Foraging]: 'Foraging',
-  [AntTask.Digging]:  'Digging',
+  [AntTask.Digging]: 'Digging',
   [AntTask.Fighting]: 'Fighting',
-  [AntTask.Nursing]:  'Nursing',
+  [AntTask.Nursing]: 'Nursing',
 };
 const FORAGING_SUB_NAME: Record<number, string> = {
-  [ForagingSubState.SearchingFood]:   'SearchingFood',
-  [ForagingSubState.CarryingFood]:    'CarryingFood',
+  [ForagingSubState.SearchingFood]: 'SearchingFood',
+  [ForagingSubState.CarryingFood]: 'CarryingFood',
   [ForagingSubState.ReturningToNest]: 'ReturningToNest',
 };
 function describeTask(task: number, subTask: number): string {
@@ -70,17 +71,19 @@ function describeTask(task: number, subTask: number): string {
 const CLUSTER_THRESHOLD = 5;
 
 // Motion-history sampling — 20 ticks = 1 sim second; 30 samples = 30 sim sec.
-const SAMPLE_INTERVAL_TICKS    = 20;
-const ANALYSIS_WINDOW_SAMPLES  = 30;
+const SAMPLE_INTERVAL_TICKS = 20;
+const ANALYSIS_WINDOW_SAMPLES = 30;
 // Stationary classification: ≥90% of samples on the same tile.
-const STATIONARY_FRACTION      = 0.9;
+const STATIONARY_FRACTION = 0.9;
 // Oscillation classification: ant visits ≤3 unique tiles across the window
 // AND fails the stationary test (i.e., genuinely cycles between a few tiles).
-const OSCILLATION_MAX_UNIQUE   = 3;
+const OSCILLATION_MAX_UNIQUE = 3;
 
 const argPath = process.argv[2];
 if (!argPath) {
-  console.error('Usage: node --experimental-transform-types scripts/analyze-snapshot.ts <snapshot.json>');
+  console.error(
+    'Usage: node --experimental-transform-types scripts/analyze-snapshot.ts <snapshot.json>',
+  );
   process.exit(2);
 }
 
@@ -89,7 +92,10 @@ const snapPath = resolve(process.cwd(), argPath);
 // Minimal envelope validation — surface a clear error on a missing file,
 // malformed JSON, or wrong-shape envelope instead of a cryptic stack trace
 // mid-replay.
-function bail(msg: string): never { console.error(`Invalid snapshot: ${msg}`); process.exit(3); }
+function bail(msg: string): never {
+  console.error(`Invalid snapshot: ${msg}`);
+  process.exit(3);
+}
 let rawJson: string;
 try {
   rawJson = readFileSync(snapPath, 'utf-8');
@@ -112,13 +118,16 @@ const debug = parsed as {
 // Number.isInteger rejects NaN, ±Infinity, and fractional values — important
 // because tick=Infinity would loop forever and seed=NaN is silently coerced
 // to 0 by createScenario (via `seed >>> 0`).
-if (!Number.isInteger(debug.seed))               bail(`"seed" must be an integer (got ${String(debug.seed)})`);
-if (!Number.isInteger(debug.tick) || debug.tick < 0) bail(`"tick" must be a non-negative integer (got ${String(debug.tick)})`);
-if (!Array.isArray(debug.inputLog))              bail('missing or non-array "inputLog"');
+if (!Number.isInteger(debug.seed)) bail(`"seed" must be an integer (got ${String(debug.seed)})`);
+if (!Number.isInteger(debug.tick) || debug.tick < 0)
+  bail(`"tick" must be a non-negative integer (got ${String(debug.tick)})`);
+if (!Array.isArray(debug.inputLog)) bail('missing or non-array "inputLog"');
 if (!debug.snapshot || typeof debug.snapshot !== 'object') bail('missing "snapshot"');
 
 console.log(`Snapshot: ${snapPath}`);
-console.log(`  seed=${debug.seed}  tick=${debug.tick}  inputLog=${debug.inputLog.length} cmds  version=${debug.version}`);
+console.log(
+  `  seed=${debug.seed}  tick=${debug.tick}  inputLog=${debug.inputLog.length} cmds  version=${debug.version}`,
+);
 console.log('');
 
 // --- 1. Replay-from-seed byte-equality check (SCEN-06) -----------------------
@@ -134,13 +143,19 @@ const replay = createScenario(debug.seed, replayDifficulty);
 // match the original session. createScenario always starts at LATEST_SIM_VERSION; without this
 // a pre-V22 snapshot replayed on V22 code would have V22 paths active, causing divergence.
 const snapshotSimVersion = (debug.snapshot as { simVersion?: unknown }).simVersion;
-if (typeof snapshotSimVersion === 'number' && Number.isInteger(snapshotSimVersion) && snapshotSimVersion > 0) {
+if (
+  typeof snapshotSimVersion === 'number' &&
+  Number.isInteger(snapshotSimVersion) &&
+  snapshotSimVersion > 0
+) {
   replay.simVersion = snapshotSimVersion;
 } else {
-  console.warn(`[analyze-snapshot] Could not restore simVersion from snapshot (got ${String(snapshotSimVersion)}); replay runs at LATEST_SIM_VERSION — byte-equality may fail for pre-V22 captures.`);
+  console.warn(
+    `[analyze-snapshot] Could not restore simVersion from snapshot (got ${String(snapshotSimVersion)}); replay runs at LATEST_SIM_VERSION — byte-equality may fail for pre-V22 captures.`,
+  );
 }
 
-const byTick: typeof debug.inputLog[] = [];
+const byTick: (typeof debug.inputLog)[] = [];
 for (let i = 0; i < debug.inputLog.length; i++) {
   const cmd = debug.inputLog[i];
   if (!cmd || typeof cmd !== 'object') bail(`inputLog[${i}] is not an object`);
@@ -171,7 +186,10 @@ function sampleAnts(): void {
   for (let id = 0; id < replay.nextEntityId; id++) {
     if (a.alive[id] !== 1) continue;
     let arr = history.get(id);
-    if (!arr) { arr = []; history.set(id, arr); }
+    if (!arr) {
+      arr = [];
+      history.set(id, arr);
+    }
     arr.push({
       zone: a.zone[id]!,
       tileX: a.posX[id]! >> FP_SHIFT,
@@ -207,18 +225,26 @@ function stripCommandQueue(s: typeof debug.snapshot): unknown {
   return rest;
 }
 const replaySerialized = serializeWorldState(replay);
-const replayJson   = JSON.stringify(stripCommandQueue(replaySerialized as unknown as typeof debug.snapshot));
+const replayJson = JSON.stringify(
+  stripCommandQueue(replaySerialized as unknown as typeof debug.snapshot),
+);
 const capturedJson = JSON.stringify(stripCommandQueue(debug.snapshot));
 const replayMatches = replayJson === capturedJson;
-const capturedQueuedCount = Array.isArray((debug.snapshot as unknown as { commandQueue?: unknown[] }).commandQueue)
-  ? ((debug.snapshot as unknown as { commandQueue: unknown[] }).commandQueue.length)
+const capturedQueuedCount = Array.isArray(
+  (debug.snapshot as unknown as { commandQueue?: unknown[] }).commandQueue,
+)
+  ? (debug.snapshot as unknown as { commandQueue: unknown[] }).commandQueue.length
   : 0;
 
 console.log(`  replayed ${debug.tick} ticks in ${(replayElapsedMs / 1000).toFixed(1)}s`);
-console.log(`  replay vs captured byte-equality: ${replayMatches ? 'PASS' : 'FAIL'} (commandQueue excluded; captured had ${capturedQueuedCount} pending command${capturedQueuedCount === 1 ? '' : 's'})`);
+console.log(
+  `  replay vs captured byte-equality: ${replayMatches ? 'PASS' : 'FAIL'} (commandQueue excluded; captured had ${capturedQueuedCount} pending command${capturedQueuedCount === 1 ? '' : 's'})`,
+);
 if (!replayMatches) {
   console.log(`  WARNING: SCEN-06 determinism regression — replayed state differs from captured.`);
-  console.log(`  (or a benign serializer key-order change between snapshot capture and this build)`);
+  console.log(
+    `  (or a benign serializer key-order change between snapshot capture and this build)`,
+  );
   console.log(`  Cluster / stuck-in-dirt reports below use the CAPTURED snapshot (trustworthy).`);
   console.log(`  Motion-history reports use the REPLAYED trajectory and may not reflect the`);
   console.log(`  captured ants' real motion when replay has diverged — treat with caution.`);
@@ -228,7 +254,7 @@ console.log('');
 // --- 2. Analysis is run against the CAPTURED snapshot ------------------------
 
 const world = deserializeWorldState(debug.snapshot);
-const ants  = world.ants;
+const ants = world.ants;
 
 let liveCount = 0;
 for (let id = 0; id < world.nextEntityId; id++) {
@@ -251,9 +277,12 @@ const cells = new Map<string, ClusterCell>();
 for (let id = 0; id < world.nextEntityId; id++) {
   if (ants.alive[id] !== 1) continue;
   const zone = ants.zone[id]!;
-  const colonyId = zone === Zone.Underground
-    ? (ants.currentGridColonyId[id]! >= 0 ? ants.currentGridColonyId[id]! : ants.colonyId[id]!)
-    : ants.colonyId[id]!;
+  const colonyId =
+    zone === Zone.Underground
+      ? ants.currentGridColonyId[id]! >= 0
+        ? ants.currentGridColonyId[id]!
+        : ants.colonyId[id]!
+      : ants.colonyId[id]!;
   const tileX = ants.posX[id]! >> FP_SHIFT;
   const tileY = ants.posY[id]! >> FP_SHIFT;
   const key = `${zone}:${colonyId}:${tileX},${tileY}`;
@@ -274,7 +303,9 @@ for (const c of clusters) {
   const zoneLabel = c.zone === Zone.Underground ? 'underground' : 'surface    ';
   const sample = c.ids.slice(0, 6).join(', ');
   const more = c.ids.length > 6 ? ` …+${c.ids.length - 6}` : '';
-  console.log(`  ${zoneLabel}  colony ${c.colonyId}  (${c.tileX.toString().padStart(3)}, ${c.tileY.toString().padStart(3)})  ${c.ids.length} ants  [${sample}${more}]`);
+  console.log(
+    `  ${zoneLabel}  colony ${c.colonyId}  (${c.tileX.toString().padStart(3)}, ${c.tileY.toString().padStart(3)})  ${c.ids.length} ants  [${sample}${more}]`,
+  );
 }
 console.log('');
 
@@ -290,19 +321,18 @@ interface StuckInDirt {
 }
 
 const stuckLabel: Record<number, string> = {
-  [UndergroundTileState.Solid]:    'solid',
-  [UndergroundTileState.Marked]:   'marked-for-dig',
+  [UndergroundTileState.Solid]: 'solid',
+  [UndergroundTileState.Marked]: 'marked-for-dig',
   [UndergroundTileState.BeingDug]: 'being-dug',
-  [UndergroundTileState.Open]:     'open',
+  [UndergroundTileState.Open]: 'open',
 };
 
 const stuck: StuckInDirt[] = [];
 for (let id = 0; id < world.nextEntityId; id++) {
   if (ants.alive[id] !== 1) continue;
   if (ants.zone[id] !== Zone.Underground) continue;
-  const gridColonyId = ants.currentGridColonyId[id]! >= 0
-    ? ants.currentGridColonyId[id]!
-    : ants.colonyId[id]!;
+  const gridColonyId =
+    ants.currentGridColonyId[id]! >= 0 ? ants.currentGridColonyId[id]! : ants.colonyId[id]!;
   const grid = world.undergroundGrids[gridColonyId];
   if (!grid) continue;
   const tileX = ants.posX[id]! >> FP_SHIFT;
@@ -424,13 +454,13 @@ const WINDOW_TICKS = ANALYSIS_WINDOW_SAMPLES * SAMPLE_INTERVAL_TICKS;
 const WINDOW_START = Math.max(0, debug.tick - WINDOW_TICKS);
 console.log(
   `Motion-history analysis (sampled every ${SAMPLE_INTERVAL_TICKS} ticks, ` +
-  `window = ${ANALYSIS_WINDOW_SAMPLES} samples = ${WINDOW_TICKS} ticks; ` +
-  `covers ticks ${WINDOW_START}-${debug.tick}):`,
+    `window = ${ANALYSIS_WINDOW_SAMPLES} samples = ${WINDOW_TICKS} ticks; ` +
+    `covers ticks ${WINDOW_START}-${debug.tick}):`,
 );
 if (!replayMatches) {
   console.log(
     `  (replay diverged — motion below reflects the replayed trajectory, ` +
-    `which may differ from the captured ants' real motion)`,
+      `which may differ from the captured ants' real motion)`,
   );
 }
 
@@ -452,7 +482,14 @@ for (const c of stationary) {
   const k = `${t.zone}:${c.colonyId}:${t.tileX},${t.tileY}`;
   let g = stationaryGroups.get(k);
   if (!g) {
-    g = { zone: t.zone, tileX: t.tileX, tileY: t.tileY, colonyId: c.colonyId, ids: [], taskCounts: new Map() };
+    g = {
+      zone: t.zone,
+      tileX: t.tileX,
+      tileY: t.tileY,
+      colonyId: c.colonyId,
+      ids: [],
+      taskCounts: new Map(),
+    };
     stationaryGroups.set(k, g);
   }
   g.ids.push(c.antId);
@@ -475,7 +512,9 @@ for (const g of stationarySorted.slice(0, 15)) {
   const zoneLabel = g.zone === Zone.Underground ? 'underground' : 'surface    ';
   const sample = g.ids.slice(0, 6).join(', ');
   const more = g.ids.length > 6 ? ` …+${g.ids.length - 6}` : '';
-  console.log(`    ${zoneLabel}  colony ${g.colonyId}  (${g.tileX.toString().padStart(3)}, ${g.tileY.toString().padStart(3)})  ${g.ids.length} ants  ${dominantTask(g.taskCounts)}  [${sample}${more}]`);
+  console.log(
+    `    ${zoneLabel}  colony ${g.colonyId}  (${g.tileX.toString().padStart(3)}, ${g.tileY.toString().padStart(3)})  ${g.ids.length} ants  ${dominantTask(g.taskCounts)}  [${sample}${more}]`,
+  );
 }
 if (stationarySorted.length > 15) console.log(`    …+${stationarySorted.length - 15} more tiles`);
 
@@ -493,7 +532,7 @@ const oscGroups = new Map<string, OscGroup>();
 for (const c of oscillating) {
   const t0 = c.tiles[0]!;
   // Canonical key: sort tiles by (tileX, tileY) so A↔B and B↔A collapse.
-  const sortedTiles = [...c.tiles].sort((a, b) => (a.tileX - b.tileX) || (a.tileY - b.tileY));
+  const sortedTiles = [...c.tiles].sort((a, b) => a.tileX - b.tileX || a.tileY - b.tileY);
   const tileSetKey = sortedTiles.map((tt) => `${tt.tileX},${tt.tileY}`).join('|');
   const k = `${t0.zone}:${c.colonyId}:${tileSetKey}`;
   let g = oscGroups.get(k);
@@ -520,7 +559,9 @@ for (const g of oscSorted.slice(0, 15)) {
   const cycle = g.tiles.map((tt) => `(${tt.tileX},${tt.tileY})`).join(' ↔ ');
   const sample = g.ids.slice(0, 6).join(', ');
   const more = g.ids.length > 6 ? ` …+${g.ids.length - 6}` : '';
-  console.log(`    ${zoneLabel}  colony ${g.colonyId}  ${cycle}  length-${g.tiles.length}  ${g.ids.length} ants  ${dominantTask(g.taskCounts)}  [${sample}${more}]`);
+  console.log(
+    `    ${zoneLabel}  colony ${g.colonyId}  ${cycle}  length-${g.tiles.length}  ${g.ids.length} ants  ${dominantTask(g.taskCounts)}  [${sample}${more}]`,
+  );
 }
 if (oscSorted.length > 15) console.log(`    …+${oscSorted.length - 15} more eddies`);
 

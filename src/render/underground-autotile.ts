@@ -105,10 +105,10 @@ function drawQuadrantMask(
   centerKind: NeighborKind,
   quadrant: Quadrant,
   horizKind: NeighborKind,
-  vertKind:  NeighborKind,
+  vertKind: NeighborKind,
 ): void {
   const sameH = horizKind === centerKind;
-  const sameV = vertKind  === centerKind;
+  const sameV = vertKind === centerKind;
 
   const oppositeColor = centerKind === 'wall' ? COLOR_FLOOR_BASE : COLOR_ROCK_BASE;
   if (!sameH && !sameV) {
@@ -147,12 +147,25 @@ function fillChamferTriangle(
   // one tile edge to the midpoint of the adjacent tile edge.
   for (let i = 0; i < HALF; i++) {
     const width = HALF - i;
-    let x = 0, y = 0;
+    let x = 0,
+      y = 0;
     switch (quadrant) {
-      case 'NW': x = 0;                        y = i;                              break;
-      case 'NE': x = HALF + i;                 y = i;                              break;
-      case 'SE': x = HALF + i;                 y = TILE_SIZE_PX - 1 - i;           break;
-      case 'SW': x = 0;                        y = TILE_SIZE_PX - 1 - i;           break;
+      case 'NW':
+        x = 0;
+        y = i;
+        break;
+      case 'NE':
+        x = HALF + i;
+        y = i;
+        break;
+      case 'SE':
+        x = HALF + i;
+        y = TILE_SIZE_PX - 1 - i;
+        break;
+      case 'SW':
+        x = 0;
+        y = TILE_SIZE_PX - 1 - i;
+        break;
     }
     gfx.fillRect(screenX + x, screenY + y, width, 1);
   }
@@ -184,25 +197,42 @@ function maybeAddChamferChip(
   quadrant: Quadrant,
   centerKind: NeighborKind,
 ): void {
-  const salt = quadrant === 'NW' ? SALT_CHIP_NW
-             : quadrant === 'NE' ? SALT_CHIP_NE
-             : quadrant === 'SE' ? SALT_CHIP_SE
-             :                     SALT_CHIP_SW;
+  const salt =
+    quadrant === 'NW'
+      ? SALT_CHIP_NW
+      : quadrant === 'NE'
+        ? SALT_CHIP_NE
+        : quadrant === 'SE'
+          ? SALT_CHIP_SE
+          : SALT_CHIP_SW;
   const h = spatialHash(tileX, tileY, salt);
   if ((h & 0xff) >= 154) return; // ~60% emission rate
 
   // Sample (lx, ly) inside the safe region. lx ∈ [1..5]; ly ∈ [1..(6 - lx)].
   // The constraint lx + ly ≤ 6 keeps the chip strictly interior.
-  const lx = 1 + ((h >>> 8) & 0xf) % 5;
-  const ly = 1 + ((h >>> 12) & 0xf) % (6 - lx);
+  const lx = 1 + (((h >>> 8) & 0xf) % 5);
+  const ly = 1 + (((h >>> 12) & 0xf) % (6 - lx));
 
   // Map quadrant-local (lx, ly) to tile-relative pixel.
-  let px = 0, py = 0;
+  let px = 0,
+    py = 0;
   switch (quadrant) {
-    case 'NW': px = lx;                          py = ly;                          break;
-    case 'NE': px = TILE_SIZE_PX - 1 - lx;       py = ly;                          break;
-    case 'SE': px = TILE_SIZE_PX - 1 - lx;       py = TILE_SIZE_PX - 1 - ly;       break;
-    case 'SW': px = lx;                          py = TILE_SIZE_PX - 1 - ly;       break;
+    case 'NW':
+      px = lx;
+      py = ly;
+      break;
+    case 'NE':
+      px = TILE_SIZE_PX - 1 - lx;
+      py = ly;
+      break;
+    case 'SE':
+      px = TILE_SIZE_PX - 1 - lx;
+      py = TILE_SIZE_PX - 1 - ly;
+      break;
+    case 'SW':
+      px = lx;
+      py = TILE_SIZE_PX - 1 - ly;
+      break;
   }
 
   // Chip color is the CENTER kind — i.e., a 1-pixel "cut" through the
@@ -266,17 +296,17 @@ export function drawUndergroundRim(
   //   - light band (1 inward): 1 → clip HALF-1 = 7 (chamfer row 1 covers
   //     0..6); the edge pixel at 7 stays visible.
   gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
-  if (wallN) drawHorizontalRimBand(gfx, screenX, screenY,        0, wallW, wallE);
+  if (wallN) drawHorizontalRimBand(gfx, screenX, screenY, 0, wallW, wallE);
   if (wallS) drawHorizontalRimBand(gfx, screenX, screenY + last, 0, wallW, wallE);
-  if (wallW) drawVerticalRimBand(gfx,   screenX, screenY,        0, wallN, wallS);
-  if (wallE) drawVerticalRimBand(gfx,   screenX + last, screenY, 0, wallN, wallS);
+  if (wallW) drawVerticalRimBand(gfx, screenX, screenY, 0, wallN, wallS);
+  if (wallE) drawVerticalRimBand(gfx, screenX + last, screenY, 0, wallN, wallS);
 
   // Light band — 1 pixel inward, lighter alpha for the fade transition.
-  gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.30);
-  if (wallN) drawHorizontalRimBand(gfx, screenX, screenY + 1,        1, wallW, wallE);
+  gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.3);
+  if (wallN) drawHorizontalRimBand(gfx, screenX, screenY + 1, 1, wallW, wallE);
   if (wallS) drawHorizontalRimBand(gfx, screenX, screenY + last - 1, 1, wallW, wallE);
-  if (wallW) drawVerticalRimBand(gfx,   screenX + 1, screenY,        1, wallN, wallS);
-  if (wallE) drawVerticalRimBand(gfx,   screenX + last - 1, screenY, 1, wallN, wallS);
+  if (wallW) drawVerticalRimBand(gfx, screenX + 1, screenY, 1, wallN, wallS);
+  if (wallE) drawVerticalRimBand(gfx, screenX + last - 1, screenY, 1, wallN, wallS);
 
   // Per-tile rim chips — 1-pixel deterministic dark specks inside each
   // active rim band, breaking the rim's flat appearance. Same alpha as
@@ -285,7 +315,7 @@ export function drawUndergroundRim(
   const h = spatialHash(tileX, tileY, SALT_RIM_CHIP);
   gfx.fillStyle(COLOR_ROCK_BASE_DARK, 0.55);
   if (wallN) {
-    const x = (h >>> 0) & 0xf;        // 0..15
+    const x = (h >>> 0) & 0xf; // 0..15
     if (rimXVisible(x, 1, wallW, wallE)) gfx.fillRect(screenX + x, screenY + 1, 1, 1);
   }
   if (wallS) {
@@ -324,8 +354,8 @@ function drawHorizontalRimBand(
     gfx.fillRect(screenX, y, TILE_SIZE_PX, 1);
     return;
   }
-  const start  = clipWestHalf ? clipPx : 0;
-  const endExc = clipEastHalf ? (TILE_SIZE_PX - clipPx) : TILE_SIZE_PX;
+  const start = clipWestHalf ? clipPx : 0;
+  const endExc = clipEastHalf ? TILE_SIZE_PX - clipPx : TILE_SIZE_PX;
   if (endExc > start) {
     gfx.fillRect(screenX + start, y, endExc - start, 1);
   }
@@ -345,8 +375,8 @@ function drawVerticalRimBand(
     gfx.fillRect(x, screenY, 1, TILE_SIZE_PX);
     return;
   }
-  const start  = clipNorthHalf ? clipPx : 0;
-  const endExc = clipSouthHalf ? (TILE_SIZE_PX - clipPx) : TILE_SIZE_PX;
+  const start = clipNorthHalf ? clipPx : 0;
+  const endExc = clipSouthHalf ? TILE_SIZE_PX - clipPx : TILE_SIZE_PX;
   if (endExc > start) {
     gfx.fillRect(x, screenY + start, 1, endExc - start);
   }

@@ -8,7 +8,7 @@ Subterrans exists thanks to the people listed below. See [CONTRIBUTING.md](CONTR
 
 ## Contributors
 
-*(alphabetical by first name)*
+_(alphabetical by first name)_
 
 <!-- Add your name in the same PR as your first substantive contribution. Format: `- Your Name — one-line note on area of contribution (optional)` -->
 

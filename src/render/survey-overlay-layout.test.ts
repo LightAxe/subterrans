@@ -22,14 +22,14 @@ import {
 describe('surveyRatingButtons', () => {
   it('emits exactly five buttons numbered 1..5 in order', () => {
     const btns = surveyRatingButtons();
-    expect(btns.map(b => b.rating)).toEqual([1, 2, 3, 4, 5]);
+    expect(btns.map((b) => b.rating)).toEqual([1, 2, 3, 4, 5]);
   });
 
   it('button row is centered horizontally on the canvas', () => {
     const btns = surveyRatingButtons();
     const first = btns[0]!.rect;
-    const last  = btns[4]!.rect;
-    const leftMargin  = first.x;
+    const last = btns[4]!.rect;
+    const leftMargin = first.x;
     const rightMargin = SURVEY_CANVAS_W - (last.x + last.w);
     // Allow a 1px slack for rounding.
     expect(Math.abs(leftMargin - rightMargin)).toBeLessThanOrEqual(1);
@@ -45,14 +45,12 @@ describe('surveyHitTest — disjoint targets', () => {
   });
 
   it('returns broken-checkbox / upload-checkbox hits on the respective rects', () => {
-    expect(surveyHitTest(
-      SURVEY_BROKEN_CHECKBOX_RECT.x + 5,
-      SURVEY_BROKEN_CHECKBOX_RECT.y + 5,
-    )).toEqual({ kind: 'broken-checkbox' });
-    expect(surveyHitTest(
-      SURVEY_UPLOAD_CHECKBOX_RECT.x + 5,
-      SURVEY_UPLOAD_CHECKBOX_RECT.y + 5,
-    )).toEqual({ kind: 'upload-checkbox' });
+    expect(
+      surveyHitTest(SURVEY_BROKEN_CHECKBOX_RECT.x + 5, SURVEY_BROKEN_CHECKBOX_RECT.y + 5),
+    ).toEqual({ kind: 'broken-checkbox' });
+    expect(
+      surveyHitTest(SURVEY_UPLOAD_CHECKBOX_RECT.x + 5, SURVEY_UPLOAD_CHECKBOX_RECT.y + 5),
+    ).toEqual({ kind: 'upload-checkbox' });
   });
 
   it('checkbox-row clicks register over the label area too (codex P3)', () => {
@@ -61,28 +59,27 @@ describe('surveyHitTest — disjoint targets', () => {
     // checkbox — otherwise users (especially on touch) aim at the obvious
     // target and nothing happens.
     const labelX = SURVEY_BROKEN_CHECKBOX_RECT.x + SURVEY_BROKEN_CHECKBOX_RECT.w + 50;
-    expect(surveyHitTest(labelX, SURVEY_BROKEN_CHECKBOX_RECT.y + 5))
-      .toEqual({ kind: 'broken-checkbox' });
-    expect(surveyHitTest(labelX, SURVEY_UPLOAD_CHECKBOX_RECT.y + 5))
-      .toEqual({ kind: 'upload-checkbox' });
+    expect(surveyHitTest(labelX, SURVEY_BROKEN_CHECKBOX_RECT.y + 5)).toEqual({
+      kind: 'broken-checkbox',
+    });
+    expect(surveyHitTest(labelX, SURVEY_UPLOAD_CHECKBOX_RECT.y + 5)).toEqual({
+      kind: 'upload-checkbox',
+    });
   });
 
   it('returns submit / skip hits on the respective buttons', () => {
-    expect(surveyHitTest(
-      SURVEY_SUBMIT_BUTTON_RECT.x + 5,
-      SURVEY_SUBMIT_BUTTON_RECT.y + 5,
-    )).toEqual({ kind: 'submit' });
-    expect(surveyHitTest(
-      SURVEY_SKIP_BUTTON_RECT.x + 5,
-      SURVEY_SKIP_BUTTON_RECT.y + 5,
-    )).toEqual({ kind: 'skip' });
+    expect(surveyHitTest(SURVEY_SUBMIT_BUTTON_RECT.x + 5, SURVEY_SUBMIT_BUTTON_RECT.y + 5)).toEqual(
+      { kind: 'submit' },
+    );
+    expect(surveyHitTest(SURVEY_SKIP_BUTTON_RECT.x + 5, SURVEY_SKIP_BUTTON_RECT.y + 5)).toEqual({
+      kind: 'skip',
+    });
   });
 
   it('returns free-text on the textarea rect', () => {
-    expect(surveyHitTest(
-      SURVEY_FREE_TEXT_RECT.x + 5,
-      SURVEY_FREE_TEXT_RECT.y + 5,
-    )).toEqual({ kind: 'free-text' });
+    expect(surveyHitTest(SURVEY_FREE_TEXT_RECT.x + 5, SURVEY_FREE_TEXT_RECT.y + 5)).toEqual({
+      kind: 'free-text',
+    });
   });
 
   it('returns null on the panel background', () => {
@@ -105,23 +102,20 @@ describe('consent disclosure', () => {
 
 describe('surveyConfirmationHitTest — issue #131', () => {
   it('returns new-game when pointer is over the Submit button position', () => {
-    expect(surveyConfirmationHitTest(
-      SURVEY_SUBMIT_BUTTON_RECT.x + 5,
-      SURVEY_SUBMIT_BUTTON_RECT.y + 5,
-    )).toEqual({ kind: 'new-game' });
+    expect(
+      surveyConfirmationHitTest(SURVEY_SUBMIT_BUTTON_RECT.x + 5, SURVEY_SUBMIT_BUTTON_RECT.y + 5),
+    ).toEqual({ kind: 'new-game' });
   });
 
   it('returns retry when pointer is over the Skip button position', () => {
-    expect(surveyConfirmationHitTest(
-      SURVEY_SKIP_BUTTON_RECT.x + 5,
-      SURVEY_SKIP_BUTTON_RECT.y + 5,
-    )).toEqual({ kind: 'retry' });
+    expect(
+      surveyConfirmationHitTest(SURVEY_SKIP_BUTTON_RECT.x + 5, SURVEY_SKIP_BUTTON_RECT.y + 5),
+    ).toEqual({ kind: 'retry' });
   });
 
   it('returns null on background (outside both button rects)', () => {
-    expect(surveyConfirmationHitTest(
-      SURVEY_SUBMIT_BUTTON_RECT.x - 10,
-      SURVEY_SUBMIT_BUTTON_RECT.y - 10,
-    )).toBeNull();
+    expect(
+      surveyConfirmationHitTest(SURVEY_SUBMIT_BUTTON_RECT.x - 10, SURVEY_SUBMIT_BUTTON_RECT.y - 10),
+    ).toBeNull();
   });
 });

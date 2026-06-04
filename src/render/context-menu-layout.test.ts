@@ -18,17 +18,35 @@ import { createWorldState, type WorldState } from '../sim/types.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import type { GfxLike } from './draw-surface.js';
 
-interface GfxCall { method: string; args: unknown[] }
+interface GfxCall {
+  method: string;
+  args: unknown[];
+}
 
 class MockGfx implements GfxLike {
   calls: GfxCall[] = [];
-  private rec(method: string, args: unknown[]): this { this.calls.push({ method, args }); return this; }
-  clear()                                                                         { return this.rec('clear', []); }
-  fillStyle(c: number, a?: number)                                                { return this.rec('fillStyle', [c, a]); }
-  lineStyle(w: number, c: number, a?: number)                                     { return this.rec('lineStyle', [w, c, a]); }
-  fillRect(x: number, y: number, w: number, h: number)                            { return this.rec('fillRect', [x, y, w, h]); }
-  fillCircle(x: number, y: number, r: number)                                     { return this.rec('fillCircle', [x, y, r]); }
-  strokeCircle(x: number, y: number, r: number)                                   { return this.rec('strokeCircle', [x, y, r]); }
+  private rec(method: string, args: unknown[]): this {
+    this.calls.push({ method, args });
+    return this;
+  }
+  clear() {
+    return this.rec('clear', []);
+  }
+  fillStyle(c: number, a?: number) {
+    return this.rec('fillStyle', [c, a]);
+  }
+  lineStyle(w: number, c: number, a?: number) {
+    return this.rec('lineStyle', [w, c, a]);
+  }
+  fillRect(x: number, y: number, w: number, h: number) {
+    return this.rec('fillRect', [x, y, w, h]);
+  }
+  fillCircle(x: number, y: number, r: number) {
+    return this.rec('fillCircle', [x, y, r]);
+  }
+  strokeCircle(x: number, y: number, r: number) {
+    return this.rec('strokeCircle', [x, y, r]);
+  }
   fillTriangle(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number) {
     return this.rec('fillTriangle', [x0, y0, x1, y1, x2, y2]);
   }
@@ -37,7 +55,15 @@ class MockGfx implements GfxLike {
 // Test fixtures --------------------------------------------------------------
 
 function makeQueenChamber(): ChamberRecord {
-  return { chamberId: 1, chamberType: ChamberType.Queen, foodStored: 0, posX: 0, posY: 0, width: 5, height: 3 };
+  return {
+    chamberId: 1,
+    chamberType: ChamberType.Queen,
+    foodStored: 0,
+    posX: 0,
+    posY: 0,
+    width: 5,
+    height: 3,
+  };
 }
 
 function makeWorld(): WorldState {
@@ -75,16 +101,16 @@ describe('contextMenuItemAt (full list)', () => {
   const AY = 200;
 
   it('returns the chamber type for each row', () => {
-    expect(contextMenuItemAt(AX + 10, AY + 5,  AX, AY)).toBe(ChamberType.Queen);
+    expect(contextMenuItemAt(AX + 10, AY + 5, AX, AY)).toBe(ChamberType.Queen);
     expect(contextMenuItemAt(AX + 10, AY + 25, AX, AY)).toBe(ChamberType.Nursery);
     expect(contextMenuItemAt(AX + 10, AY + 50, AX, AY)).toBe(ChamberType.FoodStorage);
   });
 
   it('returns null above, below, left, right of the menu', () => {
-    expect(contextMenuItemAt(AX + 10, AY - 1,                                AX, AY)).toBeNull();
-    expect(contextMenuItemAt(AX + 10, AY + CONTEXT_MENU_HEIGHT,              AX, AY)).toBeNull();
-    expect(contextMenuItemAt(AX - 1,  AY + 5,                                AX, AY)).toBeNull();
-    expect(contextMenuItemAt(AX + CONTEXT_MENU.WIDTH, AY + 5,                AX, AY)).toBeNull();
+    expect(contextMenuItemAt(AX + 10, AY - 1, AX, AY)).toBeNull();
+    expect(contextMenuItemAt(AX + 10, AY + CONTEXT_MENU_HEIGHT, AX, AY)).toBeNull();
+    expect(contextMenuItemAt(AX - 1, AY + 5, AX, AY)).toBeNull();
+    expect(contextMenuItemAt(AX + CONTEXT_MENU.WIDTH, AY + 5, AX, AY)).toBeNull();
   });
 });
 
@@ -93,10 +119,10 @@ describe('contextMenuItemAt (filtered list)', () => {
   const AY = 0;
 
   it('with Queen filtered: row 0 = Nursery, row 1 = FoodStorage', () => {
-    const items = CONTEXT_MENU_ITEMS.filter(i => i.chamberType !== ChamberType.Queen);
-    expect(contextMenuItemAt(5,  5,  AX, AY, items)).toBe(ChamberType.Nursery);
-    expect(contextMenuItemAt(5,  25, AX, AY, items)).toBe(ChamberType.FoodStorage);
-    expect(contextMenuItemAt(5,  48, AX, AY, items)).toBeNull(); // past 2-item height
+    const items = CONTEXT_MENU_ITEMS.filter((i) => i.chamberType !== ChamberType.Queen);
+    expect(contextMenuItemAt(5, 5, AX, AY, items)).toBe(ChamberType.Nursery);
+    expect(contextMenuItemAt(5, 25, AX, AY, items)).toBe(ChamberType.FoodStorage);
+    expect(contextMenuItemAt(5, 48, AX, AY, items)).toBeNull(); // past 2-item height
   });
 });
 
@@ -106,24 +132,22 @@ describe('isInsideContextMenu', () => {
 
   it('true for interior points (full list)', () => {
     expect(isInsideContextMenu(AX + 1, AY + 1, AX, AY)).toBe(true);
-    expect(isInsideContextMenu(
-      AX + CONTEXT_MENU.WIDTH - 1,
-      AY + CONTEXT_MENU_HEIGHT - 1,
-      AX, AY,
-    )).toBe(true);
+    expect(
+      isInsideContextMenu(AX + CONTEXT_MENU.WIDTH - 1, AY + CONTEXT_MENU_HEIGHT - 1, AX, AY),
+    ).toBe(true);
   });
 
   it('false for boundary-out and exterior points', () => {
-    expect(isInsideContextMenu(AX - 1, AY + 1,                         AX, AY)).toBe(false);
-    expect(isInsideContextMenu(AX + CONTEXT_MENU.WIDTH, AY + 1,        AX, AY)).toBe(false);
-    expect(isInsideContextMenu(AX + 1, AY - 1,                         AX, AY)).toBe(false);
-    expect(isInsideContextMenu(AX + 1, AY + CONTEXT_MENU_HEIGHT,       AX, AY)).toBe(false);
+    expect(isInsideContextMenu(AX - 1, AY + 1, AX, AY)).toBe(false);
+    expect(isInsideContextMenu(AX + CONTEXT_MENU.WIDTH, AY + 1, AX, AY)).toBe(false);
+    expect(isInsideContextMenu(AX + 1, AY - 1, AX, AY)).toBe(false);
+    expect(isInsideContextMenu(AX + 1, AY + CONTEXT_MENU_HEIGHT, AX, AY)).toBe(false);
   });
 
   it('filtered list shortens the hit rect', () => {
-    const items = CONTEXT_MENU_ITEMS.filter(i => i.chamberType !== ChamberType.Queen);
-    expect(isInsideContextMenu(AX + 1, AY + 47, AX, AY, items)).toBe(true);   // inside 48px
-    expect(isInsideContextMenu(AX + 1, AY + 48, AX, AY, items)).toBe(false);  // now outside
+    const items = CONTEXT_MENU_ITEMS.filter((i) => i.chamberType !== ChamberType.Queen);
+    expect(isInsideContextMenu(AX + 1, AY + 47, AX, AY, items)).toBe(true); // inside 48px
+    expect(isInsideContextMenu(AX + 1, AY + 48, AX, AY, items)).toBe(false); // now outside
     expect(isInsideContextMenu(AX + 1, AY + 60, AX, AY, items)).toBe(false);
   });
 });
@@ -147,7 +171,7 @@ describe('drawContextMenuGeometry', () => {
   it('emits one background fillRect + 3 stripe fillRects (full list)', () => {
     const g = new MockGfx();
     drawContextMenuGeometry(g, 100, 200);
-    const rects = g.calls.filter(c => c.method === 'fillRect');
+    const rects = g.calls.filter((c) => c.method === 'fillRect');
     expect(rects.length).toBe(4); // 1 bg + 3 stripes
     expect(rects[0]!.args).toEqual([100, 200, CONTEXT_MENU.WIDTH, CONTEXT_MENU_HEIGHT]);
   });
@@ -155,7 +179,7 @@ describe('drawContextMenuGeometry', () => {
   it('uses the CONTEXT_MENU_ITEMS stripeColor for each stripe (in order)', () => {
     const g = new MockGfx();
     drawContextMenuGeometry(g, 0, 0);
-    const fillStyles = g.calls.filter(c => c.method === 'fillStyle');
+    const fillStyles = g.calls.filter((c) => c.method === 'fillStyle');
     // 1 bg + 3 stripes = 4 fillStyle calls
     expect(fillStyles[1]!.args[0]).toBe(CONTEXT_MENU_ITEMS[0]!.stripeColor);
     expect(fillStyles[2]!.args[0]).toBe(CONTEXT_MENU_ITEMS[1]!.stripeColor);
@@ -164,9 +188,9 @@ describe('drawContextMenuGeometry', () => {
 
   it('filtered list → fewer stripes + shorter background', () => {
     const g = new MockGfx();
-    const items = CONTEXT_MENU_ITEMS.filter(i => i.chamberType !== ChamberType.Queen);
+    const items = CONTEXT_MENU_ITEMS.filter((i) => i.chamberType !== ChamberType.Queen);
     drawContextMenuGeometry(g, 0, 0, items);
-    const rects = g.calls.filter(c => c.method === 'fillRect');
+    const rects = g.calls.filter((c) => c.method === 'fillRect');
     expect(rects.length).toBe(3); // 1 bg + 2 stripes
     // background height matches filtered height
     expect(rects[0]!.args).toEqual([0, 0, CONTEXT_MENU.WIDTH, 48]);
@@ -180,8 +204,10 @@ describe('visibleContextMenuItems', () => {
     world.colonies[PLAYER_COLONY_ID] = colony;
     const items = visibleContextMenuItems(colony, world);
     expect(items.length).toBe(3);
-    expect(items.map(i => i.chamberType)).toEqual([
-      ChamberType.Queen, ChamberType.Nursery, ChamberType.FoodStorage,
+    expect(items.map((i) => i.chamberType)).toEqual([
+      ChamberType.Queen,
+      ChamberType.Nursery,
+      ChamberType.FoodStorage,
     ]);
   });
 
@@ -192,9 +218,7 @@ describe('visibleContextMenuItems', () => {
     world.colonies[PLAYER_COLONY_ID] = colony;
     const items = visibleContextMenuItems(colony, world);
     expect(items.length).toBe(2);
-    expect(items.map(i => i.chamberType)).toEqual([
-      ChamberType.Nursery, ChamberType.FoodStorage,
-    ]);
+    expect(items.map((i) => i.chamberType)).toEqual([ChamberType.Nursery, ChamberType.FoodStorage]);
   });
 
   it('drops Queen when a pending Queen chamber exists for this colony', () => {
@@ -202,17 +226,15 @@ describe('visibleContextMenuItems', () => {
     const colony = createColonyRecord(PLAYER_COLONY_ID, 0);
     world.colonies[PLAYER_COLONY_ID] = colony;
     world.pendingChambers[`${PLAYER_COLONY_ID}:10:5`] = {
-      colonyId:     PLAYER_COLONY_ID,
-      chamberType:  ChamberType.Queen,
-      anchorTileX:  10,
-      anchorTileY:  5,
-      width:        5,
-      height:       3,
+      colonyId: PLAYER_COLONY_ID,
+      chamberType: ChamberType.Queen,
+      anchorTileX: 10,
+      anchorTileY: 5,
+      width: 5,
+      height: 3,
     };
     const items = visibleContextMenuItems(colony, world);
-    expect(items.map(i => i.chamberType)).toEqual([
-      ChamberType.Nursery, ChamberType.FoodStorage,
-    ]);
+    expect(items.map((i) => i.chamberType)).toEqual([ChamberType.Nursery, ChamberType.FoodStorage]);
   });
 
   it('does NOT drop Queen when only another colony has a pending Queen chamber', () => {
@@ -220,12 +242,12 @@ describe('visibleContextMenuItems', () => {
     const colony = createColonyRecord(PLAYER_COLONY_ID, 0);
     world.colonies[PLAYER_COLONY_ID] = colony;
     world.pendingChambers[`99:10:5`] = {
-      colonyId:     99,
-      chamberType:  ChamberType.Queen,
-      anchorTileX:  10,
-      anchorTileY:  5,
-      width:        5,
-      height:       3,
+      colonyId: 99,
+      chamberType: ChamberType.Queen,
+      anchorTileX: 10,
+      anchorTileY: 5,
+      width: 5,
+      height: 3,
     };
     const items = visibleContextMenuItems(colony, world);
     expect(items.length).toBe(3);
@@ -235,23 +257,45 @@ describe('visibleContextMenuItems', () => {
     const world = makeWorld();
     const colony = createColonyRecord(PLAYER_COLONY_ID, 0);
     colony.chambers.push(
-      { chamberId: 2, chamberType: ChamberType.FoodStorage, foodStored: 0, posX: 0, posY: 0, width: 4, height: 3 },
-      { chamberId: 3, chamberType: ChamberType.FoodStorage, foodStored: 0, posX: 0, posY: 0, width: 4, height: 3 },
+      {
+        chamberId: 2,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: 0,
+        posX: 0,
+        posY: 0,
+        width: 4,
+        height: 3,
+      },
+      {
+        chamberId: 3,
+        chamberType: ChamberType.FoodStorage,
+        foodStored: 0,
+        posX: 0,
+        posY: 0,
+        width: 4,
+        height: 3,
+      },
     );
     world.colonies[PLAYER_COLONY_ID] = colony;
     const items = visibleContextMenuItems(colony, world);
-    expect(items.map(i => i.chamberType)).toContain(ChamberType.FoodStorage);
+    expect(items.map((i) => i.chamberType)).toContain(ChamberType.FoodStorage);
     expect(items.length).toBe(3); // Queen still present, Nursery still present
   });
 
   it('Nursery unchanged: still present regardless of nursery state (policy undecided)', () => {
     const world = makeWorld();
     const colony = createColonyRecord(PLAYER_COLONY_ID, 0);
-    colony.chambers.push(
-      { chamberId: 4, chamberType: ChamberType.Nursery, foodStored: 0, posX: 0, posY: 0, width: 4, height: 3 },
-    );
+    colony.chambers.push({
+      chamberId: 4,
+      chamberType: ChamberType.Nursery,
+      foodStored: 0,
+      posX: 0,
+      posY: 0,
+      width: 4,
+      height: 3,
+    });
     world.colonies[PLAYER_COLONY_ID] = colony;
     const items = visibleContextMenuItems(colony, world);
-    expect(items.map(i => i.chamberType)).toContain(ChamberType.Nursery);
+    expect(items.map((i) => i.chamberType)).toContain(ChamberType.Nursery);
   });
 });
