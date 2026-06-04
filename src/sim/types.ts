@@ -306,7 +306,25 @@ export const SIM_VERSION_V23_SPIDER_AGGRO = 23 as const;
  * deposit (gated on simVersion >= V24) for byte-identical replay.
  */
 export const SIM_VERSION_V24_NURSERY_CAPACITY = 24 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V24_NURSERY_CAPACITY;
+/**
+ * V25 (#174) — Foreign-colony recall keys on the rally point alone, not the
+ * fight ratio. Previously a Fighting invader inside an enemy grid was treated as
+ * "recalled" whenever EITHER `targetRatio.fight === 0` OR `rallyPoint == null`.
+ * So a player who set a rally on the enemy entrance (an explicit "invade here"
+ * command) but left the fight ratio at 0 (don't produce MORE fighters) saw the
+ * `fight === 0` disjunct fire: invaders navigated to the entrance and ascended
+ * the moment they hit tileY=0, then re-descended next tick — a descend/ascend
+ * oscillation that never let fighters commit inside the enemy colony.
+ * Under V25+: an invader is recalled only when its colony's `rallyPoint == null`
+ * (the rally was actually cleared). With a rally still set, `fight === 0` no
+ * longer pulls fighters out — existing fighters hold the invasion while no new
+ * ones are produced. Both gated predicates move together: the underground
+ * recall-navigation step (route to exit) and the ascent `skipAscent` clear.
+ * Pre-V25 saves keep the `fight === 0 || rallyPoint == null` predicate (gated on
+ * simVersion >= V25) for byte-identical replay.
+ */
+export const SIM_VERSION_V25_RALLY_RECALL = 25 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V25_RALLY_RECALL;
 
 /**
  * S2 — AI colony state machine states.

@@ -34,7 +34,12 @@
 import { describe, it, expect } from 'vitest';
 import { createScenario } from './scenario.js';
 import { tick } from './tick.js';
-import { allocateEntityId } from './types.js';
+import {
+  allocateEntityId,
+  LATEST_SIM_VERSION,
+  SIM_VERSION_V24_NURSERY_CAPACITY,
+  SIM_VERSION_V25_RALLY_RECALL,
+} from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask } from './enums.js';
 import { Zone, UndergroundTileState, ugSet } from './terrain.js';
@@ -317,5 +322,100 @@ describe('invasion-routing — Fighting ant descent-intent gate (REQ-C3)', () =>
     expect(world.ants.zone[playerAntId]).toBe(Zone.Surface);
     expect(world.ants.task[playerAntId]).toBe(AntTask.Foraging);
     expect(world.ants.currentGridColonyId[playerAntId]).toBe(PLAYER_COLONY_ID);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #174 — foreign-grid recall keys on the rally point, not the fight ratio.
+//
+// Repro: the player rallies fighters to an OPEN enemy entrance (an explicit
+// "invade here" command) but leaves the fight ratio at 0 ("don't make MORE
+// fighters"). Pre-V25, the `targetRatio.fight === 0` disjunct in the recall
+// predicate fired, so each invader ascended the instant it reached tileY=0 on
+// the enemy entrance column, then re-descended next tick — a descend/ascend
+// bounce that never let fighters commit inside the enemy colony.
+//
+// V25 keys recall on `rallyPoint == null` alone: with a rally still set, a
+// fight ratio of 0 no longer pulls existing fighters out. The control test
+// pins simVersion to V24 to lock in the pre-fix bounce as the version boundary.
+// ---------------------------------------------------------------------------
+describe('invasion-routing — foreign recall keys on rally, not fight ratio (#174)', () => {
+  const DESCENT_TICKS = 5;
+  // Window long enough to catch the period-≈2 descend/ascend bounce many times
+  // over (the bug surfaces within 1–2 ticks of fight=0), but short enough to
+  // stay inside the committed-Fighting state.
+  const HOLD_TICKS = 20;
+
+  /**
+   * Stage a player Fighter committed inside the enemy underground grid, with the
+   * rally still on the enemy entrance. Returns once descent is confirmed; the
+   * caller then zeroes the fight ratio and asserts hold-vs-bounce.
+   */
+  function descendCommittedInvader(seed = 4242) {
+    const ctx = buildInvasionWorld(seed);
+    const { world, playerAntId } = ctx;
+    world.ants.task[playerAntId] = AntTask.Fighting;
+    // buildInvasionWorld already set rally = enemy entrance and fight = 5, so the
+    // invader descends and commits rather than recalling on contact.
+    tickN(world, DESCENT_TICKS);
+    // Precondition: invader is underground in the ENEMY grid. If this fails the
+    // harness broke (descent never happened) — not the recall gate.
+    expect(world.ants.zone[playerAntId]).toBe(Zone.Underground);
+    expect(world.ants.currentGridColonyId[playerAntId]).toBe(ENEMY_COLONY_ID);
+    expect(world.ants.task[playerAntId]).toBe(AntTask.Fighting);
+    return ctx;
+  }
+
+  it('V25: invader HOLDS underground when rally is set and fight ratio drops to 0 (no bounce)', () => {
+    const { world, playerAntId, enemyEntTileX, enemyEntTileY } = descendCommittedInvader();
+
+    // Player stops reinforcing (fight → 0) but leaves the rally on the enemy
+    // entrance: "hold what you have inside, don't make more".
+    world.colonies[PLAYER_COLONY_ID]!.targetRatio.fight = 0;
+
+    // Preconditions for the gate under test.
+    expect(world.simVersion).toBe(LATEST_SIM_VERSION);
+    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V25_RALLY_RECALL);
+    expect(world.colonies[PLAYER_COLONY_ID]!.rallyPoint).toEqual({
+      tileX: enemyEntTileX,
+      tileY: enemyEntTileY,
+    });
+    expect(world.colonies[PLAYER_COLONY_ID]!.targetRatio.fight).toBe(0);
+
+    // Act + assert: the invader must stay underground in the enemy grid for the
+    // whole window — never surfacing. Checking every tick catches the period-≈2
+    // bounce that the pre-V25 predicate produced.
+    for (let t = 0; t < HOLD_TICKS; t++) {
+      const cmds = world.commandQueue.splice(0);
+      tick(world, cmds);
+      expect(world.ants.zone[playerAntId]).toBe(Zone.Underground);
+    }
+    expect(world.ants.currentGridColonyId[playerAntId]).toBe(ENEMY_COLONY_ID);
+    // Still a committed fighter — fight=0 never demoted the existing invader
+    // (reassignment only promotes Idle ants; see tick.ts §10a).
+    expect(world.ants.task[playerAntId]).toBe(AntTask.Fighting);
+  });
+
+  it('V24 control: same scenario bounces the invader back to the surface (pre-fix behavior)', () => {
+    const { world, playerAntId } = descendCommittedInvader();
+    // Pin the sim to the pre-#174 version: recall still fires on fight===0.
+    world.simVersion = SIM_VERSION_V24_NURSERY_CAPACITY;
+    world.colonies[PLAYER_COLONY_ID]!.targetRatio.fight = 0;
+
+    expect(world.simVersion).toBeLessThan(SIM_VERSION_V25_RALLY_RECALL);
+
+    // Under V24 the fight===0 disjunct recalls the invader: it routes to the
+    // entrance exit and ascends. Confirm it reaches the Surface within the
+    // window — the exact bounce that V25 eliminates.
+    let surfaced = false;
+    for (let t = 0; t < HOLD_TICKS; t++) {
+      const cmds = world.commandQueue.splice(0);
+      tick(world, cmds);
+      if (world.ants.zone[playerAntId] === Zone.Surface) {
+        surfaced = true;
+        break;
+      }
+    }
+    expect(surfaced).toBe(true);
   });
 });
