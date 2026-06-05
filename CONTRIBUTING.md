@@ -86,7 +86,7 @@ Highlights:
 
    Prefixes we use: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `perf`.
 
-4. **Run `npm run verify` before pushing.** CI runs the same gate on every PR (`.github/workflows/ci.yml`). The `test:coverage` (80%) and `test:e2e` suites are local-only for now — not CI-gated (tracked in #188 and #186) — so run them locally before pushing.
+4. **Run `npm run verify` before pushing.** CI runs the same gate on every PR (`.github/workflows/ci.yml`), alongside the `e2e` (Playwright) job. The `test:coverage` (80%) suite is intentionally local-only — not CI-gated, because v8 instrumentation blows the long integration tests' timeouts on the CI runner (decision in #188) — so run it locally before pushing.
 5. **Open a PR** against `main`. Fill out the PR template (summary + test plan).
 
 ## PR Review

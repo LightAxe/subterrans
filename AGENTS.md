@@ -53,7 +53,7 @@ Phase 1 targets web only. The architecture preserves portability for native wrap
 - **`src/sim/`**: Full test coverage. Every system function, every component store operation, every edge case. These are pure functions operating on data — they are trivially testable.
 - **`src/render/`, `src/input/`, `src/platform/`**: Smoke tests. Verify initialization, basic rendering, input translation.
 - **Deterministic replay tests**: A recorded input sequence + seed must always produce the same final world state. These tests catch non-determinism bugs.
-- **The full Vitest (unit/integration) suite runs in CI** on every push and PR via `verify` (`.github/workflows/ci.yml`). The coverage-% gate (`test:coverage`) and Playwright E2E are local-only for now, not CI-gated (see Building and Running; tracked in #188 and #186).
+- **The full Vitest (unit/integration) suite and the Playwright E2E suite both run in CI** on every push and PR via the `verify` and `e2e` jobs (`.github/workflows/ci.yml`). The coverage-% gate (`test:coverage`) is intentionally local-only by design — not CI-gated — because v8 instrumentation blows the long integration tests' timeouts on the CI runner while `verify` already gates the same suite un-instrumented (see Building and Running; decision in #188).
 
 ## Branching & PR Workflow
 
@@ -124,7 +124,7 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 - Any new logic under `src/sim/` must ship with Vitest unit tests in the same PR. Untested sim code is a blocker, not a follow-up.
 - Changes to tick-order, command application, save format, or PRNG usage must include or update a deterministic replay test. If the PR claims "replay still works" without a test demonstrating it, ask for one.
 - Render/input/platform changes need at least a smoke test (initialization + one happy path). Full coverage is not required at those layers.
-- **80% coverage gate.** `npm run test:coverage` runs Vitest with v8 instrumentation and enforces global thresholds of 80% on statements / branches / functions / lines (see `vitest.config.ts`). Phaser scene files and `src/main.ts` are excluded from the gate because they are exercised by Playwright E2E, not unit tests. **Run `npm run test:coverage` and confirm the gate passes before pushing.** It is not part of `verify` — coverage instrumentation slows the suite to ~6 minutes and causes some long integration tests to hit their hard-coded timeouts, so keep it as a separate pre-push step rather than wiring it into the fast local loop. It is **not** CI-gated yet for that same timeout reason (the instrumented run blows those timeouts on the slower CI runner); bringing it into CI is tracked in #188.
+- **80% coverage gate.** `npm run test:coverage` runs Vitest with v8 instrumentation and enforces global thresholds of 80% on statements / branches / functions / lines (see `vitest.config.ts`). Phaser scene files and `src/main.ts` are excluded from the gate because they are exercised by Playwright E2E, not unit tests. **Run `npm run test:coverage` and confirm the gate passes before pushing.** It is not part of `verify` — coverage instrumentation slows the suite to ~6 minutes and causes some long integration tests to hit their hard-coded timeouts, so keep it as a separate pre-push step rather than wiring it into the fast local loop. It is intentionally **not** CI-gated (a deliberate decision, not a TODO): the instrumented run multiplies the long integration tests several-fold past their inline timeouts on the slower 2-core CI runner, and making it green would mean scaling per-test timeouts across ~11 sites to absorb a flaky multiplier — permanent complexity for a signal `verify` already covers un-instrumented. So coverage stays a local pre-push step. See #188 (closed) for the full rationale.
 
 ### Asset paths and build hygiene
 
@@ -146,7 +146,7 @@ npm run test:coverage  # Run Vitest with v8 coverage + 80% gate (run before push
 npm run test:e2e       # Run Playwright
 ```
 
-CI (`.github/workflows/ci.yml`) runs `verify` on every PR to `main` and on pushes to `main` — that includes the full Vitest suite (un-instrumented). Two suites are run locally only, **not** CI-gated yet: `test:coverage` (the 80% gate — v8 instrumentation pushes long integration tests past their timeouts on the CI runner, tracked in #188) and `test:e2e` (Playwright — fails headless, canvas/WebGL timeouts, tracked in #186).
+CI (`.github/workflows/ci.yml`) runs `verify` (the full Vitest suite, un-instrumented) and `e2e` (Playwright) on every PR to `main` and on pushes to `main`. One suite is run locally only, intentionally **not** CI-gated: `test:coverage` (the 80% gate — v8 instrumentation pushes long integration tests past their inline timeouts on the CI runner, so it stays a local pre-push step; decision in #188).
 
 ## Debugging snapshots (F9 exports)
 
