@@ -37,8 +37,9 @@ import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
   PHEROMONE_CAP,
+  SPIDER_EDGE_MARGIN_TILES,
 } from './constants.js';
-import { SIM_VERSION_V23_SPIDER_AGGRO } from './types.js';
+import { SIM_VERSION_V23_SPIDER_AGGRO, SIM_VERSION_V26_SPIDER_EDGE_MARGIN } from './types.js';
 import { FP_SHIFT } from './fixed.js';
 
 // HUNT_KEY_SHIFT: number of bits to shift Y to form a tile key (Y << SHIFT + X).
@@ -383,6 +384,22 @@ function moveTowardTile(spider: SpiderState, targetX: number, targetY: number): 
   if (spider.posX < 0) spider.posX = 0;
   if (spider.posX > maxX) spider.posX = maxX;
   if (spider.posY < 0) spider.posY = 0;
+  if (spider.posY > maxY) spider.posY = maxY;
+}
+
+// V26 (#181) — keep the spider SPIDER_EDGE_MARGIN_TILES from every map edge so its
+// 3-tile (48px) centered sprite never renders off the playfield while chasing/
+// fighting/meandering into a corner. Applied once after the movement switch, so it
+// tightens moveTowardTile's [0, max] clamp uniformly across all surface states.
+// Grid (128) is far larger than 2× the margin, so the min/max never cross.
+function clampSpiderWithinEdgeMargin(spider: SpiderState): void {
+  const minX = SPIDER_EDGE_MARGIN_TILES << FP_SHIFT;
+  const minY = SPIDER_EDGE_MARGIN_TILES << FP_SHIFT;
+  const maxX = (SURFACE_GRID_WIDTH - 1 - SPIDER_EDGE_MARGIN_TILES) << FP_SHIFT;
+  const maxY = (SURFACE_GRID_HEIGHT - 1 - SPIDER_EDGE_MARGIN_TILES) << FP_SHIFT;
+  if (spider.posX < minX) spider.posX = minX;
+  if (spider.posX > maxX) spider.posX = maxX;
+  if (spider.posY < minY) spider.posY = minY;
   if (spider.posY > maxY) spider.posY = maxY;
 }
 
@@ -961,22 +978,34 @@ function computeFeedAwayTile(world: WorldState, spider: SpiderState): void {
     if (ax >= ay) signX = dx > 0 ? 1 : -1;
     else signY = dy > 0 ? 1 : -1;
   }
-  spider.feedAwayTileX = feedRetreatCoord(kx, signX, SURFACE_GRID_WIDTH);
-  spider.feedAwayTileY = feedRetreatCoord(ky, signY, SURFACE_GRID_HEIGHT);
+  // V26: keep the feed destination inside the spider's reachable band so the
+  // edge-margin clamp (step 6b) can't strand the spider short of feedAwayTile —
+  // an exact-equality arrival gate against an unreachable margin-band tile would
+  // livelock Feeding (heal never starts). Pre-V26 the band is the full grid.
+  const margin =
+    world.simVersion >= SIM_VERSION_V26_SPIDER_EDGE_MARGIN ? SPIDER_EDGE_MARGIN_TILES : 0;
+  spider.feedAwayTileX = feedRetreatCoord(kx, signX, SURFACE_GRID_WIDTH, margin);
+  spider.feedAwayTileY = feedRetreatCoord(ky, signY, SURFACE_GRID_HEIGHT, margin);
 }
 
 // Retreat `SPIDER_FEED_RETREAT_TILES` from the kill coordinate along one axis.
-// If the preferred direction would exit the grid, reflect inward instead of
-// clamping to the edge — otherwise an edge kill collapses the endpoint onto (or
-// near) the kill tile, so the spider enters Feeding without actually moving away
-// and the post-kill chain-kill avoidance silently fails. The surface grid
-// (128) is far larger than 2× the retreat (20), so at least one direction is
-// always in-bounds; the trailing clamp only guards a hypothetically tiny grid.
-function feedRetreatCoord(k: number, sign: number, size: number): number {
+// If the preferred direction would exit the reachable band, reflect inward
+// instead of clamping to the edge — otherwise an edge kill collapses the
+// endpoint onto (or near) the kill tile, so the spider enters Feeding without
+// actually moving away and the post-kill chain-kill avoidance silently fails.
+// `margin` is the per-edge keep-out band (V26 edge-margin clamp; 0 pre-V26):
+// endpoints are confined to [margin, size-1-margin] so the feed target is always
+// reachable under the step-6b clamp (the exact-equality arrival gate otherwise
+// livelocks Feeding). The surface grid (128) is far larger than 2× the retreat
+// (20) plus 2× the margin (6), so at least one direction is always in-band; the
+// trailing clamp only guards a hypothetically tiny grid.
+function feedRetreatCoord(k: number, sign: number, size: number, margin: number): number {
+  const lo = margin;
+  const hi = size - 1 - margin;
   let end = k + sign * SPIDER_FEED_RETREAT_TILES;
-  if (end < 0 || end > size - 1) end = k - sign * SPIDER_FEED_RETREAT_TILES;
-  if (end < 0) end = 0;
-  if (end > size - 1) end = size - 1;
+  if (end < lo || end > hi) end = k - sign * SPIDER_FEED_RETREAT_TILES;
+  if (end < lo) end = lo;
+  if (end > hi) end = hi;
   return end;
 }
 
@@ -1348,6 +1377,14 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
       }
       break;
     }
+  }
+
+  // 6b. Edge margin (#181, V26): hold the spider a few tiles off every map edge so
+  // its centered 3-tile sprite never clips off-screen when it chases/fights an ant
+  // into a corner. Runs after the movement switch (before pheromone seeding reads
+  // the position) so the deposited danger trail matches the clamped location.
+  if (world.simVersion >= SIM_VERSION_V26_SPIDER_EDGE_MARGIN) {
+    clampSpiderWithinEdgeMargin(spider);
   }
 
   // 7. Danger pheromone — all surface states (everything except Feeding).

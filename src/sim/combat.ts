@@ -17,7 +17,7 @@ import { Rng } from './rng.js';
 import { AntTask } from './enums.js';
 import { makeTileKey } from './tile-key.js';
 import type { WorldState, KillerKind, QueenDeathContext } from './types.js';
-import { SIM_VERSION_V23_SPIDER_AGGRO } from './types.js';
+import { SIM_VERSION_V23_SPIDER_AGGRO, SIM_VERSION_V26_SPIDER_EDGE_MARGIN } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
@@ -31,6 +31,9 @@ import {
   COMBAT_DAMAGE_QUEEN,
   SPIDER_DAMAGE,
   SPIDER_SWARM_FIGHTER_THRESHOLD,
+  SPIDER_EDGE_MARGIN_TILES,
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
 } from './constants.js';
 import { isInCohort } from './ai-state.js';
 
@@ -134,14 +137,37 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
   const v23Spider = spider !== null && world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO;
   const spiderTileX = v23Spider ? spider.posX >> FP_SHIFT : -1;
   const spiderTileY = v23Spider ? spider.posY >> FP_SHIFT : -1;
+  // V26: mirror the boundary fold in resolveSpiderCombatOnTile (gated identically
+  // on V26 + an active pursuit state). When the spider is pinned on a boundary
+  // tile, the resolver folds the unreachable outer margin band into that tile and
+  // re-engages a margin-band ant — so this pass must treat that ant as on-tile too,
+  // or it would clear the ant's -2 windup sentinel every tick and the resolver
+  // would restart the windup forever (permanent stalemate). margin = 0 pre-V26 and
+  // in passive states, collapsing the fold to exact same-tile matching.
+  const v26EdgeStale =
+    v23Spider &&
+    world.simVersion >= SIM_VERSION_V26_SPIDER_EDGE_MARGIN &&
+    (spider.state === 'Chasing' || spider.state === 'Striking' || spider.state === 'Rampaging');
+  const staleMargin = v26EdgeStale ? SPIDER_EDGE_MARGIN_TILES : 0;
+  const staleLoX = staleMargin;
+  const staleHiX = SURFACE_GRID_WIDTH - 1 - staleMargin;
+  const staleLoY = staleMargin;
+  const staleHiY = SURFACE_GRID_HEIGHT - 1 - staleMargin;
   for (let i = 0; i < count; i++) {
     if (ants.alive[i] !== 1) continue;
     if (ants.combatOpponentId[i] === -2) {
       if (v23Spider) {
-        const onSpiderTile =
-          ants.zone[i] === 0 &&
-          ants.posX[i]! >> FP_SHIFT === spiderTileX &&
-          ants.posY[i]! >> FP_SHIFT === spiderTileY;
+        const ax = ants.posX[i]! >> FP_SHIFT;
+        const ay = ants.posY[i]! >> FP_SHIFT;
+        const matchX =
+          ax === spiderTileX ||
+          (spiderTileX === staleLoX && ax < staleLoX) ||
+          (spiderTileX === staleHiX && ax > staleHiX);
+        const matchY =
+          ay === spiderTileY ||
+          (spiderTileY === staleLoY && ay < staleLoY) ||
+          (spiderTileY === staleHiY && ay > staleHiY);
+        const onSpiderTile = ants.zone[i] === 0 && matchX && matchY;
         if (!onSpiderTile) ants.combatOpponentId[i] = -1;
       }
       continue;
@@ -531,6 +557,31 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
     else queenId1 = col.queenEntityId;
   }
 
+  // V26: the spider is clamped to [margin, size-1-margin] on both axes (edge
+  // margin so its 3-tile sprite can't clip off-screen), but ants reach the full
+  // grid. Without this, an ant pinned in the outer margin band shares no tile
+  // with the spider and is never caught — the outer ring would become a chase-
+  // proof safe zone. When the spider sits on a boundary tile, fold the outer
+  // band beyond it into that tile for combat: an ant at tile <= margin (when the
+  // spider is at tile == margin) or >= size-1-margin counts as on-tile on that
+  // axis. Pre-V26 keeps exact same-tile matching (margin = 0 makes both bands
+  // empty so only the boundary itself matches).
+  // The fold is only needed to keep a genuinely-pursued target catchable when the
+  // spider is pinned on a boundary tile during active pursuit. Restricting it to
+  // pursuit states (Chasing/Striking/Rampaging) avoids granting passive states
+  // (Patrolling/Hunting) a multi-tile combat reach into the margin band: a sated
+  // spider routinely meanders onto a boundary tile and would otherwise silently
+  // bite any ant sharing its row/column up to `margin` tiles away. In passive
+  // states margin = 0, so only exact same-tile matching applies (as pre-V26).
+  const v26Edge =
+    world.simVersion >= SIM_VERSION_V26_SPIDER_EDGE_MARGIN &&
+    (spider.state === 'Chasing' || spider.state === 'Striking' || spider.state === 'Rampaging');
+  const margin = v26Edge ? SPIDER_EDGE_MARGIN_TILES : 0;
+  const loX = margin;
+  const hiX = SURFACE_GRID_WIDTH - 1 - margin;
+  const loY = margin;
+  const hiY = SURFACE_GRID_HEIGHT - 1 - margin;
+
   const onTile = SPIDER_TILE_SCRATCH;
   onTile.length = 0;
   const count = ants.alive.length;
@@ -539,7 +590,13 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
     if (ants.zone[i] !== 0) continue; // surface only
     const ax = ants.posX[i]! >> FP_SHIFT;
     const ay = ants.posY[i]! >> FP_SHIFT;
-    if (ax !== spiderTileX || ay !== spiderTileY) continue;
+    // Per-axis match: exact tile, or — when the spider is pinned on the low/high
+    // boundary tile — the unreachable outer margin band beyond it.
+    const matchX =
+      ax === spiderTileX || (spiderTileX === loX && ax < loX) || (spiderTileX === hiX && ax > hiX);
+    const matchY =
+      ay === spiderTileY || (spiderTileY === loY && ay < loY) || (spiderTileY === hiY && ay > hiY);
+    if (!matchX || !matchY) continue;
     if (i === queenId0 || i === queenId1) continue; // skip queens
     onTile.push(i);
   }
