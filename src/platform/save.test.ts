@@ -12,6 +12,7 @@ import {
   tickAutosave,
   manualSave,
   hasIncompatibleSave,
+  classifySaveCompatibility,
   getSaveInfo,
   parseSaveFile,
   FutureSimVersionError,
@@ -1794,6 +1795,76 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         }),
       );
       expect(hasIncompatibleSave()).toBe(true);
+    });
+  });
+
+  describe('Issue #196 — classifySaveCompatibility (three-way verdict)', () => {
+    // The boot path (game-scene decideBootMode) relies on this verdict to arm
+    // autosaveSuspended ONLY for the recoverable future-build case and to leave
+    // corrupt saves overwriting freely. hasIncompatibleSave() collapses both
+    // incompatible verdicts to a single boolean, so these tests are the only
+    // direct guard that the future-vs-corrupt split is wired correctly — a
+    // refactor that swapped the two branches would otherwise stay green.
+    it("returns 'none' when localStorage is empty", () => {
+      expect(classifySaveCompatibility()).toBe('none');
+    });
+
+    it("returns 'compatible' for a freshly-written current-format save", () => {
+      manualSave(42, [], createScenario(42));
+      expect(classifySaveCompatibility()).toBe('compatible');
+    });
+
+    it("returns 'incompatible-future' when simVersion exceeds LATEST (recoverable → suspend autosave)", async () => {
+      const { LATEST_SIM_VERSION } = await import('../sim/types.js');
+      const snap = serializeWorldState(createScenario(7));
+      snap.simVersion = LATEST_SIM_VERSION + 1;
+      window.localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({ version: SAVE_FORMAT_VERSION, seed: 7, inputLog: [], snapshot: snap }),
+      );
+      expect(classifySaveCompatibility()).toBe('incompatible-future');
+    });
+
+    it("returns 'incompatible-corrupt' when simVersion is below MIN_ACCEPTED (tampered down → overwrite freely)", async () => {
+      // The load-bearing distinction from the future case above: a sub-MIN
+      // save is NOT recoverable, so boot must NOT suspend autosave for it.
+      const { LEGACY_SIM_VERSION } = await import('../sim/types.js');
+      const snap = serializeWorldState(createScenario(7));
+      snap.simVersion = LEGACY_SIM_VERSION - 1;
+      window.localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({ version: SAVE_FORMAT_VERSION, seed: 7, inputLog: [], snapshot: snap }),
+      );
+      expect(classifySaveCompatibility()).toBe('incompatible-corrupt');
+    });
+
+    it("returns 'incompatible-corrupt' for a stale save-format envelope (parseSaveFile throws)", () => {
+      window.localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({ version: 2, seed: 1, inputLog: [], snapshot: {} }),
+      );
+      expect(classifySaveCompatibility()).toBe('incompatible-corrupt');
+    });
+
+    it("returns 'incompatible-corrupt' for malformed JSON", () => {
+      window.localStorage.setItem(SAVE_KEY, '{not-json');
+      expect(classifySaveCompatibility()).toBe('incompatible-corrupt');
+    });
+
+    it("returns 'incompatible-corrupt' when snapshot is null (parseable envelope, garbage payload)", () => {
+      window.localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({ version: SAVE_FORMAT_VERSION, seed: 1, inputLog: [], snapshot: null }),
+      );
+      expect(classifySaveCompatibility()).toBe('incompatible-corrupt');
+    });
+
+    it("returns 'incompatible-corrupt' when the snapshot deserialize throws (empty object, missing fields)", () => {
+      window.localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({ version: SAVE_FORMAT_VERSION, seed: 1, inputLog: [], snapshot: {} }),
+      );
+      expect(classifySaveCompatibility()).toBe('incompatible-corrupt');
     });
   });
 

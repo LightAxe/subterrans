@@ -31,8 +31,7 @@ import { copyWorldState, type WorldState } from '../sim/types.js';
 import { tick, resetFlowFieldCaches } from '../sim/tick.js';
 import { createGameLoop, type GameLoop, MS_PER_TICK } from '../platform/game-loop.js';
 import {
-  hasSave,
-  hasIncompatibleSave,
+  classifySaveCompatibility,
   loadSave,
   deleteSave,
   tickAutosave,
@@ -172,6 +171,7 @@ interface UIScenePhase9 {
     onContinue: () => void;
     onNewGame: () => void;
     onSaveNow: () => boolean;
+    onDelete: () => void;
     onBack: () => void;
   }): void;
   hideSaveLoadDialogOverlay(): void;
@@ -459,10 +459,14 @@ export class GameScene extends Phaser.Scene {
     this.surfaceInputState = registerSurfaceInput(this, getWorld, this.viewState, getPrevWorld);
     this.undergroundInputState = registerUndergroundInput(this, getWorld, this.viewState);
 
-    // Phase 9 boot: check for existing save. If found and loadable, show
-    // SavePrompt overlay. Otherwise boot fresh (incompatible saves are
-    // silently skipped here; the new game's first autosave will overwrite them).
-    const bootMode = decideBootMode(() => hasSave() && !hasIncompatibleSave());
+    // Phase 9 boot: classify any existing save ONCE. A loadable ('compatible')
+    // save shows the Continue/New Game SavePrompt. Everything else boots fresh —
+    // but a future-build save ('incompatible-future': simVersion > LATEST) is
+    // recoverable on a newer build, so the fresh boot must NOT let autosave /
+    // Save Now overwrite its bytes (issue #196). Corrupt / absent saves get no
+    // such protection — the new game's first autosave overwrites them freely.
+    const saveCompat = classifySaveCompatibility();
+    const bootMode = decideBootMode(() => saveCompat === 'compatible');
     if (bootMode === 'prompt') {
       this.gamePhase = GamePhase.SavePrompt;
       const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
@@ -474,7 +478,10 @@ export class GameScene extends Phaser.Scene {
         },
       });
     } else {
-      this.showDifficultySelectThenBoot();
+      // issue #196 — preserve a recoverable future-build save by suspending
+      // autosave after the fresh boot (mirrors bootFromSave's
+      // FutureSimVersionError catch on the Continue path).
+      this.showDifficultySelectThenBoot(saveCompat === 'incompatible-future');
     }
 
     // Lifecycle signal — preload assets are loaded (we're in create()), the
@@ -732,11 +739,26 @@ export class GameScene extends Phaser.Scene {
   // S5 — show difficulty selector then boot. Used for every new-game path.
   // Sets gamePhase to SavePrompt so update() returns early (line ~913 guard)
   // before this.gameLoop is initialized by bootFresh → finishBoot.
-  private showDifficultySelectThenBoot(): void {
+  //
+  // preserveFutureSave (issue #196): true only when the fresh boot was chosen
+  // because the existing save is a recoverable future-build save
+  // (simVersion > LATEST). In that case, arm autosaveSuspended AFTER bootFresh
+  // so autosave + Save Now don't clobber the preserved bytes — mirroring
+  // bootFromSave's FutureSimVersionError catch on the Continue path. The flag
+  // MUST be set after bootFresh because resetSessionState (run inside it)
+  // clears it. Corrupt-save / explicit New Game callers pass false (default)
+  // and overwrite freely.
+  private showDifficultySelectThenBoot(preserveFutureSave = false): void {
     this.gamePhase = GamePhase.SavePrompt;
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     uiScene.showDifficultySelectOverlay({
-      onSelect: (d) => this.bootFresh(d),
+      onSelect: (d) => {
+        this.bootFresh(d);
+        if (preserveFutureSave) {
+          // Set after bootFresh — resetSessionState clears the flag.
+          this.autosaveSuspended = true;
+        }
+      },
     });
   }
 
@@ -1153,6 +1175,14 @@ export class GameScene extends Phaser.Scene {
         // 15:33 the next time the player opens it, with no action of theirs.
         if (ok) this.lastAutosaveMs = performance.now();
         return ok;
+      },
+      onDelete: () => {
+        // Issue #196 (Codex P2): the dialog just deleted the save. If autosave
+        // was suspended to preserve a future-build save's bytes, that reason is
+        // gone now — clear the flag so the running fresh session can save and
+        // autosave normally again (otherwise onSaveNow keeps returning false and
+        // the autosave guard skips every write until a page reload).
+        this.autosaveSuspended = false;
       },
       onBack: () => {
         // Re-open the pause menu — gamePhase is still Paused, gameLoop is

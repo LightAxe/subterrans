@@ -284,6 +284,12 @@ export interface SaveLoadDialogCallbacks {
    *  success, false on storage failure. The dialog re-renders afterward so
    *  the info line picks up the new saved tick. */
   onSaveNow(): boolean;
+  /** Issue #196 — the player committed Delete on the existing save. The dialog
+   *  performs the actual `deleteSave()`; this notifies GameScene so it can
+   *  release any autosave suspension armed to protect a future-build save (the
+   *  bytes being protected are now gone, so the running session must be saveable
+   *  again). No-op when nothing was suspended. */
+  onDelete(): void;
   /** Close the dialog and return to the pause menu (no game-state change). */
   onBack(): void;
 }
@@ -1676,6 +1682,11 @@ export class UIScene extends Phaser.Scene {
           return;
         }
         deleteSave();
+        // Issue #196 — releasing the save means any autosave suspension that
+        // was protecting a future-build save's bytes is no longer warranted
+        // (the bytes are gone). Notify GameScene so the running fresh session
+        // can save / autosave again instead of staying frozen until reload.
+        cb?.onDelete();
         this.saveLoadDialogConfirming.delete = false;
         this.renderSaveLoadDialog();
         return;
