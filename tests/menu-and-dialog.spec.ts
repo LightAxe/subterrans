@@ -574,7 +574,14 @@ test.describe('Round-6 (Codex P2) — pheromone toggle survives degraded storage
 });
 
 test.describe('Settings — Speed cycle row (UAT)', () => {
-  test('clicking the speed row cycles 1× → 2× → 4× → 1× (live, session-only)', async ({ page }) => {
+  // QUARANTINED (issue #193): CI-fragile. Passes locally and most CI runs but
+  // intermittently crashes the browser late in the suite on the 2-core runner
+  // ("Target page/context/browser has been closed" + screenshot timeout) across
+  // all retries — a correlated resource-pressure failure retries don't absorb.
+  // Re-enable once the suite's CI footprint is reduced or this is hardened.
+  test.fixme('clicking the speed row cycles 1× → 2× → 4× → 1× (live, session-only)', async ({
+    page,
+  }) => {
     await bootGame(page);
 
     // Open menu → Settings.
