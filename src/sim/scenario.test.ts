@@ -33,6 +33,7 @@ import {
   UNDERGROUND_GRID_WIDTH,
   UNDERGROUND_GRID_HEIGHT,
   ENTRANCE_SHAFT_DEPTH,
+  SPIDER_EDGE_MARGIN_TILES,
 } from './constants.js';
 
 describe('createScenario', () => {
@@ -568,6 +569,34 @@ describe('createScenario', () => {
         const chamberFood = colony.chambers.reduce((s, c) => s + c.foodStored, 0);
         const evidence = colony.foodStored > 0 || chamberFood > 0 || workersCarrying > 0;
         expect(evidence).toBe(true);
+      }
+    });
+  });
+
+  // #181 — The spider must spawn within the SPIDER_EDGE_MARGIN_TILES-inset interior
+  // so its centered 3-tile sprite is fully on-screen from tick 0, without relying on
+  // the runtime per-tick edge clamp to nudge it inward on the first tick.
+  describe('spider lair edge margin (#181)', () => {
+    const MIN = SPIDER_EDGE_MARGIN_TILES;
+    const MAX_X = SURFACE_GRID_WIDTH - 1 - SPIDER_EDGE_MARGIN_TILES;
+    const MAX_Y = SURFACE_GRID_HEIGHT - 1 - SPIDER_EDGE_MARGIN_TILES;
+
+    it('spawns the lair inside [margin, size-1-margin] on both axes across many seeds', () => {
+      // Sweep a spread of seeds: every spawned lair (and its derived position) must
+      // sit in the inset interior, never inside the margin band.
+      for (let seed = 0; seed < 200; seed++) {
+        const world = createScenario(seed);
+        const spider = world.spider;
+        expect(spider).not.toBeNull();
+        expect(spider!.lairTileX).toBeGreaterThanOrEqual(MIN);
+        expect(spider!.lairTileX).toBeLessThanOrEqual(MAX_X);
+        expect(spider!.lairTileY).toBeGreaterThanOrEqual(MIN);
+        expect(spider!.lairTileY).toBeLessThanOrEqual(MAX_Y);
+        // posX/posY are seeded from the lair tile, so they share the invariant.
+        expect(spider!.posX >> FP_SHIFT).toBeGreaterThanOrEqual(MIN);
+        expect(spider!.posX >> FP_SHIFT).toBeLessThanOrEqual(MAX_X);
+        expect(spider!.posY >> FP_SHIFT).toBeGreaterThanOrEqual(MIN);
+        expect(spider!.posY >> FP_SHIFT).toBeLessThanOrEqual(MAX_Y);
       }
     });
   });

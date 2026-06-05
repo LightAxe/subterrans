@@ -50,6 +50,7 @@ import {
   COMBAT_HP_QUEEN,
   SPIDER_HP_FULL,
   SPIDER_TERRITORY_RADIUS_TILES,
+  SPIDER_EDGE_MARGIN_TILES,
   SPIDER_HUNT_INTERVAL_TICKS,
   QUEEN_EGG_INTERVAL_DIFFICULTY_NUMERATOR,
 } from './constants.js';
@@ -261,13 +262,23 @@ function _placeSpider(world: WorldState): SpiderState {
   let lairTileX = SURFACE_GRID_WIDTH >> 1;
   let lairTileY = SURFACE_GRID_HEIGHT >> 1;
 
+  // #181 — Sample the lair from the SPIDER_EDGE_MARGIN_TILES-inset interior
+  // [margin, size-1-margin] instead of the full [0, size-1] grid, so the spider
+  // never spawns inside the margin band the per-tick clamp (tickSpiderV23 step 6b)
+  // enforces during play. Without this the spider could spawn at the very edge and
+  // jump inward on its first tick. Scenario generation is unversioned (always
+  // LATEST, like the rest of createScenario), so no simVersion gate here — only the
+  // runtime movement clamp is gated, for save-replay determinism.
+  const spanX = SURFACE_GRID_WIDTH - 2 * SPIDER_EDGE_MARGIN_TILES;
+  const spanY = SURFACE_GRID_HEIGHT - 2 * SPIDER_EDGE_MARGIN_TILES;
+
   for (let attempt = 0; attempt < 1000; attempt++) {
     h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
     h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
     h ^= h >>> 16;
-    const tx = (h >>> 0) % SURFACE_GRID_WIDTH;
+    const tx = ((h >>> 0) % spanX) + SPIDER_EDGE_MARGIN_TILES;
     const h2 = Math.imul(h, 0x9e3779b9) >>> 0;
-    const ty = (h2 >>> 0) % SURFACE_GRID_HEIGHT;
+    const ty = ((h2 >>> 0) % spanY) + SPIDER_EDGE_MARGIN_TILES;
 
     // Check Manhattan distance from both colony starts
     const d1 =
