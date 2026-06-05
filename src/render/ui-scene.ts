@@ -57,18 +57,26 @@ export type ActiveOverlay =
 // is currently scoped to without OCR against the canvas-drawn HUD.
 export type ActiveUndergroundLabel = 'Your Colony' | 'Enemy Colony';
 
+// Distinguishes the two boot overlays that both report activeOverlay
+// 'save-prompt': the fresh-boot "Choose Difficulty" overlay vs a real
+// Continue/New Game SavePrompt. Without this, a Playwright test cannot tell a
+// fresh boot (Choose Difficulty) from a wrongly-shown SavePrompt, since the
+// activeOverlay HUD state is reused for both. 'none' when neither is up.
+export type BootScreen = 'none' | 'save-prompt' | 'difficulty-select';
+
 declare global {
   interface Window {
     __phase9_ui?: {
       activeOverlay: ActiveOverlay;
       activeUndergroundLabel?: ActiveUndergroundLabel;
+      bootScreen?: BootScreen;
     };
   }
 }
 
 /** Publishes current overlay state to window.__phase9_ui for Playwright observability.
  *  Guarded by typeof window check so Vitest (Node) contexts don't crash.
- *  Preserves activeUndergroundLabel if already set by setActiveUndergroundLabel. */
+ *  Preserves activeUndergroundLabel / bootScreen if already set. */
 function setActiveOverlay(next: ActiveOverlay): void {
   if (typeof window !== 'undefined') {
     const prev = window.__phase9_ui;
@@ -77,18 +85,36 @@ function setActiveOverlay(next: ActiveOverlay): void {
       ...(prev?.activeUndergroundLabel !== undefined
         ? { activeUndergroundLabel: prev.activeUndergroundLabel }
         : {}),
+      ...(prev?.bootScreen !== undefined ? { bootScreen: prev.bootScreen } : {}),
     };
   }
 }
 
 /** Publishes the current underground colony label for Playwright observability.
- *  Preserves activeOverlay if already set. Called every UIScene.update() frame. */
+ *  Preserves activeOverlay / bootScreen if already set. Called every UIScene.update() frame. */
 function setActiveUndergroundLabel(next: ActiveUndergroundLabel): void {
   if (typeof window !== 'undefined') {
     const prev = window.__phase9_ui;
     window.__phase9_ui = {
       activeOverlay: prev?.activeOverlay ?? 'none',
       activeUndergroundLabel: next,
+      ...(prev?.bootScreen !== undefined ? { bootScreen: prev.bootScreen } : {}),
+    };
+  }
+}
+
+/** Publishes which boot overlay is up so Playwright can distinguish the fresh-boot
+ *  "Choose Difficulty" overlay from a real Continue/New Game SavePrompt — both
+ *  report activeOverlay 'save-prompt'. Preserves the other published fields. */
+function setBootScreen(next: BootScreen): void {
+  if (typeof window !== 'undefined') {
+    const prev = window.__phase9_ui;
+    window.__phase9_ui = {
+      activeOverlay: prev?.activeOverlay ?? 'none',
+      ...(prev?.activeUndergroundLabel !== undefined
+        ? { activeUndergroundLabel: prev.activeUndergroundLabel }
+        : {}),
+      bootScreen: next,
     };
   }
 }
@@ -1705,6 +1731,14 @@ export class UIScene extends Phaser.Scene {
     else if (this.difficultySelectGroup.length > 0)
       setActiveOverlay('save-prompt'); // reuse 'save-prompt' HUD state
     else setActiveOverlay('none');
+
+    // bootScreen discriminates the two overlays that share activeOverlay
+    // 'save-prompt' (a real Continue/New Game SavePrompt vs the fresh-boot
+    // Choose Difficulty overlay) so Playwright can verify the "no SavePrompt on
+    // fresh boot" contract. 'none' once neither boot overlay is on screen.
+    if (this.savePromptGroup.length > 0) setBootScreen('save-prompt');
+    else if (this.difficultySelectGroup.length > 0) setBootScreen('difficulty-select');
+    else setBootScreen('none');
   }
 
   // ---------------------------------------------------------------------------

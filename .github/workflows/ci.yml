@@ -7,19 +7,16 @@ name: CI
 #            type-aware lint:types layer, the sim-boundary and asset-path grep
 #            guards, and the full Vitest unit/integration suite). Same command
 #            contributors run locally before pushing.
+#   e2e    — `npm run test:e2e` (Playwright, chromium headless). The webServer
+#            pins VITE_PLAYTRACE_ENDPOINT empty so the run is deterministic
+#            regardless of a developer's .env.local (see playwright.config.ts).
 #
-# Two suites are deliberately NOT gated here yet — both block every PR if wired
-# in, so they stay local-only until stabilized for CI:
-#
-#   coverage (`npm run test:coverage`) — the 80% v8 gate. The coverage % passes,
-#            but v8 instrumentation on a 2-core runner pushes the long simulation
-#            integration tests (ai-controller.integration, foraging-survival,
-#            determinism) past their hard-coded timeouts, so the job fails on
-#            runtime, not on coverage. Note: `verify` already runs the same suite
-#            UN-instrumented and passes — only the % enforcement is missing here.
-#            Tracked in issue #188.
-#   e2e (`npm run test:e2e`, Playwright) — not green headless (canvas/WebGL
-#            timeouts). Tracked in issue #186.
+# Coverage (`npm run test:coverage`) is deliberately NOT gated here: the 80%
+# threshold passes, but v8 instrumentation on a 2-core runner pushes the long
+# simulation integration tests (ai-controller.integration, foraging-survival,
+# determinism) past their hard-coded timeouts, so the job fails on runtime, not
+# on coverage. `verify` already runs the same suite UN-instrumented and passes —
+# only the % enforcement is missing here. Tracked in issue #188.
 
 on:
   pull_request:
@@ -48,3 +45,16 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run verify
+
+  e2e:
+    name: e2e (Playwright chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
