@@ -70,53 +70,61 @@ declare global {
       activeOverlay: ActiveOverlay;
       activeUndergroundLabel?: ActiveUndergroundLabel;
       bootScreen?: BootScreen;
+      // Issue #193 — live game speed (1×/2×/4×), so Playwright can assert the
+      // speed-cycle control by value instead of pixel-diffing the rendered label.
+      speedMultiplier?: SpeedMultiplier;
     };
   }
 }
 
-/** Publishes current overlay state to window.__phase9_ui for Playwright observability.
- *  Guarded by typeof window check so Vitest (Node) contexts don't crash.
- *  Preserves activeUndergroundLabel / bootScreen if already set. */
+/** Single publisher for window.__phase9_ui (Playwright observability). Merges a
+ *  partial patch over the previously-published fields so each caller states only
+ *  what it changes and the other observability fields survive. Guarded by a
+ *  typeof window check so Vitest (Node) contexts don't crash.
+ *
+ *  Preservation uses `??`, so a field is never cleared back to undefined here:
+ *  every published field is set-once-then-sticky. That matches how all callers
+ *  use it — they only ever publish a concrete value, never clear one (the union
+ *  members like 'none' are real strings, not undefined, so they publish fine). */
+function publishPhase9(patch: Partial<NonNullable<Window['__phase9_ui']>>): void {
+  if (typeof window === 'undefined') return;
+  const prev = window.__phase9_ui;
+  const next: NonNullable<Window['__phase9_ui']> = {
+    activeOverlay: patch.activeOverlay ?? prev?.activeOverlay ?? 'none',
+  };
+  const undergroundLabel = patch.activeUndergroundLabel ?? prev?.activeUndergroundLabel;
+  if (undergroundLabel !== undefined) next.activeUndergroundLabel = undergroundLabel;
+  const boot = patch.bootScreen ?? prev?.bootScreen;
+  if (boot !== undefined) next.bootScreen = boot;
+  const speed = patch.speedMultiplier ?? prev?.speedMultiplier;
+  if (speed !== undefined) next.speedMultiplier = speed;
+  window.__phase9_ui = next;
+}
+
+/** Publishes the active overlay. Preserves the other observability fields. */
 function setActiveOverlay(next: ActiveOverlay): void {
-  if (typeof window !== 'undefined') {
-    const prev = window.__phase9_ui;
-    window.__phase9_ui = {
-      activeOverlay: next,
-      ...(prev?.activeUndergroundLabel !== undefined
-        ? { activeUndergroundLabel: prev.activeUndergroundLabel }
-        : {}),
-      ...(prev?.bootScreen !== undefined ? { bootScreen: prev.bootScreen } : {}),
-    };
-  }
+  publishPhase9({ activeOverlay: next });
 }
 
 /** Publishes the current underground colony label for Playwright observability.
- *  Preserves activeOverlay / bootScreen if already set. Called every UIScene.update() frame. */
+ *  Called every UIScene.update() frame. Preserves the other published fields. */
 function setActiveUndergroundLabel(next: ActiveUndergroundLabel): void {
-  if (typeof window !== 'undefined') {
-    const prev = window.__phase9_ui;
-    window.__phase9_ui = {
-      activeOverlay: prev?.activeOverlay ?? 'none',
-      activeUndergroundLabel: next,
-      ...(prev?.bootScreen !== undefined ? { bootScreen: prev.bootScreen } : {}),
-    };
-  }
+  publishPhase9({ activeUndergroundLabel: next });
 }
 
 /** Publishes which boot overlay is up so Playwright can distinguish the fresh-boot
  *  "Choose Difficulty" overlay from a real Continue/New Game SavePrompt — both
  *  report activeOverlay 'save-prompt'. Preserves the other published fields. */
 function setBootScreen(next: BootScreen): void {
-  if (typeof window !== 'undefined') {
-    const prev = window.__phase9_ui;
-    window.__phase9_ui = {
-      activeOverlay: prev?.activeOverlay ?? 'none',
-      ...(prev?.activeUndergroundLabel !== undefined
-        ? { activeUndergroundLabel: prev.activeUndergroundLabel }
-        : {}),
-      bootScreen: next,
-    };
-  }
+  publishPhase9({ bootScreen: next });
+}
+
+/** Publishes the live speed multiplier (1×/2×/4×) so Playwright can assert the
+ *  speed-cycle control deterministically instead of pixel-diffing the rendered
+ *  label (issue #193). GameScene calls this on every speedMultiplier write.
+ *  Preserves the other published fields. */
+export function publishSpeedMultiplier(next: SpeedMultiplier): void {
+  publishPhase9({ speedMultiplier: next });
 }
 
 // ---------------------------------------------------------------------------

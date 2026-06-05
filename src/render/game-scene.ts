@@ -74,7 +74,9 @@ import {
 import { GameOutcome } from '../sim/game-over.js';
 import { drawSurfaceTerrain, drawSurfaceEntities, type GfxLike } from './draw-surface.js';
 import { drawUndergroundTerrain, drawUndergroundEntities } from './draw-underground.js';
-import { drawPheromoneOverlay } from './draw-pheromone.js';
+import { drawPheromoneOverlay, PHEROMONE_VISUAL_MAX } from './draw-pheromone.js';
+import { publishSpeedMultiplier } from './ui-scene.js';
+import { phSet, pheromoneGridKey } from '../sim/pheromone/pheromone-store.js';
 import { AntFacingCache } from './ant-facing-cache.js';
 import {
   ANT_TEXTURE_QUEEN,
@@ -139,8 +141,8 @@ import {
   inferFlashDirection,
   QUEEN_DAMAGE_SUPPRESS_TICKS,
 } from './screen-effects.js';
-import { ChamberType } from '../sim/enums.js';
-import { CANVAS_W, CANVAS_H } from './sprites.js';
+import { ChamberType, PheromoneType } from '../sim/enums.js';
+import { CANVAS_W, CANVAS_H, TILE_SIZE_PX } from './sprites.js';
 // UIScenePhase9 — subset of UIScene public API added in Plan 06 Task 3.
 // Typed here to avoid circular imports; UIScene implements these methods.
 interface UIScenePhase9 {
@@ -201,6 +203,34 @@ import type { SimCommand } from '../sim/commands.js';
 export { GamePhase, decideBootMode, deriveAIColonyIds, appendInputLog, generateFreshSeed };
 export type { GamePhase as GamePhaseType };
 
+declare global {
+  interface Window {
+    /** Dev/E2E-only test seam, separate from the read-only __phase9_ui
+     *  observability hook. Installed by GameScene only when import.meta.env.DEV
+     *  is true (Playwright runs the Vite dev server), so the whole thing is
+     *  tree-shaken out of the production library build. Issue #193. */
+    __phase9_test?: {
+      /** Freeze the simulation (gameLoop.pause) WITHOUT opening the pause menu,
+       *  leaving gamePhase === Playing so the overlay still renders and the 'p'
+       *  toggle still works. With the sim frozen the world renders byte-stable
+       *  frame-to-frame, so a screenshot diff isolates exactly one variable —
+       *  the pheromone overlay — instead of also capturing ant motion. */
+      freezeSim(): boolean;
+      /** Paint a small block of full-strength FoodTrail pheromone offset up-left
+       *  of the surface camera centre (player colony), and return the canvas-pixel
+       *  rect it painted so the caller can clip its screenshots to exactly that
+       *  region. Off-centre on purpose: the onboarding captions and save flash all
+       *  render at canvas centre (x = CANVAS_W/2), so an off-centre clip is immune
+       *  to any tween-driven UI even though none fires in this scenario. Returns
+       *  null if the world/grid isn't ready yet (caller should poll). Lets the
+       *  pheromone draw-order regression test exercise the real render pipeline
+       *  deterministically, instead of waiting ~90s for emergent RNG-seeded
+       *  foraging to lay a trail (the old, flaky approach). */
+      seedPheromoneTrail(): { x: number; y: number; width: number; height: number } | null;
+    };
+  }
+}
+
 export class GameScene extends Phaser.Scene {
   private world!: WorldState;
   private prevState!: WorldState;
@@ -256,6 +286,70 @@ export class GameScene extends Phaser.Scene {
   // below set the same field directly. Narrowed to the cycle set so the
   // type aligns with PauseMenuLayout's SpeedMultiplier.
   private speedMultiplier: 1 | 2 | 4 = 1;
+
+  /** Set the live game speed and mirror it to the Playwright observability hook
+   *  (window.__phase9_ui.speedMultiplier, issue #193). Every speedMultiplier
+   *  write — the 1/2/4 keyboard shortcuts, the pause-menu Settings cycle, and
+   *  the fresh-boot reset — routes through here so the hook never drifts from the
+   *  field. Lets the speed-cycle e2e assert by value instead of pixel-diffing the
+   *  rendered label (the old approach was CI-flaky under screenshot pressure). */
+  private setSpeedMultiplier(next: 1 | 2 | 4): void {
+    this.speedMultiplier = next;
+    publishSpeedMultiplier(next);
+  }
+
+  /** Dev/E2E-only: install Playwright test seams on window. Guarded by
+   *  import.meta.env.DEV so the whole block is tree-shaken out of production
+   *  library builds (Playwright runs the Vite dev server, where DEV is true).
+   *  Issue #193 — gives the renderer a deterministic input so the pheromone
+   *  draw-order regression test no longer depends on ~90s of emergent,
+   *  RNG-seeded foraging happening to lay a visible trail. */
+  private installTestHooks(): void {
+    if (!import.meta.env.DEV || typeof window === 'undefined') return;
+    window.__phase9_test = {
+      freezeSim: (): boolean => {
+        if ((this.gameLoop as GameLoop | undefined) === undefined) return false;
+        this.gameLoop.pause();
+        return true;
+      },
+      seedPheromoneTrail: (): { x: number; y: number; width: number; height: number } | null => {
+        const world = this.world as WorldState | undefined;
+        if (world === undefined) return null;
+        const key = pheromoneGridKey(PLAYER_COLONY_ID, PheromoneType.FoodTrail, 'surface');
+        const grid = world.pheromoneGrids[key];
+        if (grid === undefined) return null;
+        const cam = this.viewState.surfaceCamera;
+        // Mirror draw-pheromone's tile→canvas mapping so the returned rect lines
+        // up exactly with the painted cells.
+        const left = Math.floor(cam.x - cam.viewportWidth / 2);
+        const top = Math.floor(cam.y - cam.viewportHeight / 2);
+        // Centre the block up-left of the camera: clear of the nest entities
+        // (which cluster at centre) and of the centre-aligned caption/flash UI.
+        // Clamp the centre so the whole block stays inside the grid: then every
+        // cell is actually painted and the returned rect lines up with them.
+        // (For the test's interior nest camera the clamp is a no-op; it only
+        // matters if the hook is reused with an edge-positioned camera, where an
+        // unclamped rect would advertise canvas area phSet never painted.)
+        const RADIUS = 3;
+        const clampCentre = (v: number, extent: number): number =>
+          Math.max(RADIUS, Math.min(v, extent - 1 - RADIUS));
+        const cx = clampCentre(Math.floor(cam.x) - 16, grid.width);
+        const cy = clampCentre(Math.floor(cam.y) - 9, grid.height);
+        for (let dy = -RADIUS; dy <= RADIUS; dy++) {
+          for (let dx = -RADIUS; dx <= RADIUS; dx++) {
+            phSet(grid, cx + dx, cy + dy, PHEROMONE_VISUAL_MAX);
+          }
+        }
+        const size = (RADIUS * 2 + 1) * TILE_SIZE_PX;
+        return {
+          x: (cx - RADIUS - left) * TILE_SIZE_PX,
+          y: (cy - RADIUS - top) * TILE_SIZE_PX,
+          width: size,
+          height: size,
+        };
+      },
+    };
+  }
 
   // S6 — render-side scratch (per-session, reset in resetSessionState).
   private lastProcessedEventTick = -1; // tick-based cursor for consumeEventsForRender
@@ -372,15 +466,15 @@ export class GameScene extends Phaser.Scene {
     // X was pressed while paused.
     this.input.keyboard!.on('keydown-ONE', () => {
       if (this.gamePhase !== GamePhase.Playing) return;
-      this.speedMultiplier = 1;
+      this.setSpeedMultiplier(1);
     });
     this.input.keyboard!.on('keydown-TWO', () => {
       if (this.gamePhase !== GamePhase.Playing) return;
-      this.speedMultiplier = 2;
+      this.setSpeedMultiplier(2);
     });
     this.input.keyboard!.on('keydown-FOUR', () => {
       if (this.gamePhase !== GamePhase.Playing) return;
-      this.speedMultiplier = 4;
+      this.setSpeedMultiplier(4);
     });
     // Issue #114 — P toggles the player's pheromone overlay. Render-only:
     // the flag lives on ViewState (so the next frame skips drawPheromoneOverlay)
@@ -493,6 +587,10 @@ export class GameScene extends Phaser.Scene {
     // bootMode branch so both paths reach it. main.ts converts this to
     // `MountedGame.ready: Promise<void>` for the host page.
     this.game.events.emit(SUBTERRANS_READY_EVENT);
+
+    // Dev/E2E-only test seams (no-op in production builds). Installed last so
+    // the world/viewState the hooks read are already constructed.
+    this.installTestHooks();
   }
 
   // ---------------------------------------------------------------------------
@@ -530,7 +628,7 @@ export class GameScene extends Phaser.Scene {
     this.lastActiveView = null;
     this.currentOutcome = GameOutcome.None;
     this.currentCause = null;
-    this.speedMultiplier = 1;
+    this.setSpeedMultiplier(1);
     // Re-enable autosave for the next session. The flag is set only by
     // bootFromSave's deserialize-throw catch (see issue #66 in the field
     // doc); a fresh start via restartGame should resume normal autosave.
@@ -994,7 +1092,7 @@ export class GameScene extends Phaser.Scene {
       // same control a discoverable home while paused.
       getSpeedMultiplier: () => this.speedMultiplier,
       onCycleSpeed: (next: 1 | 2 | 4) => {
-        this.speedMultiplier = next;
+        this.setSpeedMultiplier(next);
       },
     };
     // Issue #122 — only attach onQuitAndSurvey when the feature flag is on.

@@ -99,6 +99,15 @@ async function bootScreen(page: Page): Promise<string> {
   });
 }
 
+// Issue #193 — the live game speed (1/2/4) published on __phase9_ui by GameScene.
+// Lets the speed-cycle test assert by value instead of pixel-diffing the label.
+// Returns undefined before the first publish so callers can poll for a value.
+async function speedMultiplier(page: Page): Promise<number | undefined> {
+  return await page.evaluate(
+    () => (window as { __phase9_ui?: { speedMultiplier?: number } }).__phase9_ui?.speedMultiplier,
+  );
+}
+
 test.describe('Issue #116 — Esc opens / closes pause menu', () => {
   test('Esc on a clean canvas opens the pause menu (single press, not racing closed)', async ({
     page,
@@ -596,19 +605,21 @@ test.describe('Round-6 (Codex P2) — pheromone toggle survives degraded storage
 });
 
 test.describe('Settings — Speed cycle row (UAT)', () => {
-  // QUARANTINED (issue #193): CI-fragile. Passes locally and most CI runs but
-  // intermittently crashes the browser late in the suite on the 2-core runner
-  // ("Target page/context/browser has been closed" + screenshot timeout) across
-  // all retries — a correlated resource-pressure failure retries don't absorb.
-  // Re-enable once the suite's CI footprint is reduced or this is hardened.
-  test.fixme('clicking the speed row cycles 1× → 2× → 4× → 1× (live, session-only)', async ({
+  // De-flaked for #193. The old version sampled the rendered speed label via
+  // canvas screenshots on every step; under the 2-core CI runner's screenshot
+  // pressure it intermittently crashed the browser late in the suite ("Target
+  // page/context/browser has been closed") across all retries — a correlated
+  // resource-pressure failure retries can't absorb. It now reads the live speed
+  // off the __phase9_ui.speedMultiplier hook, so each assertion is a cheap value
+  // read with zero screenshots: deterministic and resource-light.
+  test('clicking the speed row cycles 1× → 2× → 4× → 1× (live, session-only)', async ({
     page,
   }) => {
     await bootGame(page);
 
     // Open menu → Settings.
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(100);
+    await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('pause-menu');
     const settingsRect = await page.evaluate(() => {
       const CANVAS_W = 800,
         CANVAS_H = 592;
@@ -643,58 +654,39 @@ test.describe('Settings — Speed cycle row (UAT)', () => {
       return { x: x + BTN_W / 2, y: speedY + BTN_H / 2 };
     });
 
-    // We don't have a public hook for the speedMultiplier, but the dialog
-    // label encodes it visually. Sample the canvas pixels along the label
-    // baseline — only sanity-checking that consecutive clicks change the
-    // rendered text region (any change suffices: 1×→2×→4× all differ).
-    const sampleLabel = async () => {
-      return await page
-        .locator('canvas')
-        .first()
-        .screenshot({
-          clip: { x: speedRect.x - 60, y: speedRect.y - 8, width: 120, height: 16 },
-        });
-    };
+    const clickSpeedRow = () => page.locator('canvas').first().click({ position: speedRect });
 
-    const at1x = await sampleLabel();
-    await page.locator('canvas').first().click({ position: speedRect });
-    await page.waitForTimeout(100);
-    const at2x = await sampleLabel();
-    await page.locator('canvas').first().click({ position: speedRect });
-    await page.waitForTimeout(100);
-    const at4x = await sampleLabel();
-    await page.locator('canvas').first().click({ position: speedRect });
-    await page.waitForTimeout(100);
-    const at1xAgain = await sampleLabel();
-
-    // Each step must differ from the previous (distinct labels render).
-    expect(at1x.equals(at2x)).toBe(false);
-    expect(at2x.equals(at4x)).toBe(false);
-    expect(at4x.equals(at1xAgain)).toBe(false);
-    // Cycle closes — back at 1× matches the initial 1× label.
-    expect(at1x.equals(at1xAgain)).toBe(true);
+    // Fresh boot starts at 1×; each click advances 1→2→4→1. Assert on the
+    // published value (expect.poll absorbs the click→callback→publish latency).
+    await expect.poll(() => speedMultiplier(page), { timeout: 5_000 }).toBe(1);
+    await clickSpeedRow();
+    await expect.poll(() => speedMultiplier(page), { timeout: 5_000 }).toBe(2);
+    await clickSpeedRow();
+    await expect.poll(() => speedMultiplier(page), { timeout: 5_000 }).toBe(4);
+    await clickSpeedRow();
+    await expect.poll(() => speedMultiplier(page), { timeout: 5_000 }).toBe(1);
   });
 });
 
 test.describe('Pheromone overlay actually renders (UAT P1 — pre-existing draw-order bug)', () => {
-  // The bug: GameScene called drawPheromoneOverlay BEFORE drawSurface, but
-  // drawSurface paints opaque terrain THEN entities. Pheromones got wiped
-  // by the terrain pass — invisible since 9f5b23f. Issue #114's toggle
-  // surfaced it (ON and OFF rendered identically because ON was always
-  // overpainted). Fix: split the orchestrator into terrain → pheromone →
-  // entities so the overlay lands between layers as the docstring intended.
+  // The bug (fixed): GameScene called drawPheromoneOverlay BEFORE the terrain
+  // pass, and terrain paints opaque tiles — so pheromones were wiped and ON/OFF
+  // rendered identically (invisible since 9f5b23f; issue #114's toggle surfaced
+  // it). The fix sequences terrain → pheromone → entities (game-scene.ts
+  // renderWorld), so the overlay lands between the layers. This test is the
+  // regression guard for that ordering.
   //
-  // This test runs ants long enough that *some* FoodTrail cells reach a
-  // visible alpha, then compares ON / OFF screenshots. Foraging is
-  // RNG-seeded (Date.now()-derived per bootFresh), so the wall-clock budget
-  // must be generous enough to cover unlucky seeds. 90s @ 4× = 1800 sim
-  // seconds (~30 sim-minutes) is well above the slowest seed observed.
-  test.setTimeout(180_000);
-
-  // QUARANTINED (issue #193): flaky screenshot-diff over emergent, RNG-driven
-  // sim state (~3/4 pass rate). Unfit for a hard CI gate; needs a deterministic
-  // rework (seed the trail-laid state / assert via a hook, not a pixel diff).
-  test.fixme('after sustained foraging at 4×, ON and OFF screenshots differ', async ({ page }) => {
+  // De-flaked for #193. The old version foraged at 4× for 90s and diffed two
+  // LIVE screenshots — flaky on two counts: it relied on emergent, RNG-seeded
+  // trails forming in the window, and ant motion alone made the frames differ
+  // (so it could pass even if the overlay never drew). It now drives the
+  // renderer deterministically via dev-only test seams (window.__phase9_test,
+  // dev-build only): freeze the sim so the only frame-to-frame delta is the
+  // overlay, seed a known full-strength trail, then prove ON ≠ OFF and that
+  // toggling back ON restores the exact ON frame.
+  test('with the sim frozen, a seeded pheromone trail renders (overlay ON ≠ OFF)', async ({
+    page,
+  }) => {
     await page.goto('/');
     await page.locator('canvas').first().waitFor({ state: 'attached' });
     await page.evaluate(() => {
@@ -703,22 +695,68 @@ test.describe('Pheromone overlay actually renders (UAT P1 — pre-existing draw-
     });
     await page.reload();
     await page.locator('canvas').first().waitFor({ state: 'attached' });
-    await settleToPlaying(page);
+    await settleToPlaying(page); // fresh Normal game; overlay defaults ON
 
-    await page.keyboard.press('4');
-    await page.waitForTimeout(90_000);
+    // Freeze the sim so the only frame-to-frame delta is the overlay (poll:
+    // gameLoop may not exist the instant we reach Playing).
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (window as { __phase9_test?: { freezeSim(): boolean } }).__phase9_test?.freezeSim() ??
+              false,
+          ),
+        { timeout: 5_000 },
+      )
+      .toBe(true);
 
-    const onPng = await page.locator('canvas').first().screenshot();
+    // Seed a guaranteed-visible trail and capture the canvas rect it painted, so
+    // we can clip every screenshot to exactly that region (off-centre, clear of
+    // entities and the centre-aligned caption/flash UI). Poll until non-null:
+    // the world/grid may lag reaching Playing by a frame.
+    type Rect = { x: number; y: number; width: number; height: number };
+    let clip: Rect | null = null;
+    await expect
+      .poll(
+        async () => {
+          clip = await page.evaluate(
+            () =>
+              (
+                window as { __phase9_test?: { seedPheromoneTrail(): Rect | null } }
+              ).__phase9_test?.seedPheromoneTrail() ?? null,
+          );
+          return clip !== null;
+        },
+        { timeout: 5_000 },
+      )
+      .toBe(true);
+    const region = clip as unknown as Rect;
+    const shot = () => page.locator('canvas').first().screenshot({ clip: region });
+    await page.waitForTimeout(100); // let one frame paint the seeded cells
+
+    // With the sim frozen and the clip off-centre, the region is byte-stable
+    // frame-to-frame, so any ON↔OFF difference below can only be the overlay.
+    // Establish that stability first so a noisy frame can't mask a regression.
+    const onA = await shot();
+    await page.waitForTimeout(100);
+    const onB = await shot();
+    expect(onA.equals(onB)).toBe(true);
+
+    // Toggle the overlay OFF ('p'): the seeded cells must disappear. Pre-fix this
+    // was a no-op (terrain had already overpainted the overlay) → ON == OFF.
     await page.keyboard.press('p');
-    await page.waitForTimeout(500);
-    const offPng = await page.locator('canvas').first().screenshot();
+    await page.waitForTimeout(100);
+    const off = await shot();
+    expect(onB.equals(off)).toBe(false);
 
-    // Pre-fix: ON and OFF rendered byte-identical because terrain overpainted
-    // the pheromone overlay. Post-fix: foraged FoodTrail cells render and
-    // the buffers differ. PNG-byte-count assertion is intentionally omitted
-    // (PNG compression sometimes coincidentally produces similar sizes for
-    // visually-distinct frames) — the equals check is the load-bearing one.
-    expect(onPng.equals(offPng)).toBe(false);
+    // Toggle back ON: the overlay returns and the region matches the original ON
+    // exactly (sim frozen ⇒ identical render), proving the overlay is the only
+    // variable — the diff above wasn't incidental drift.
+    await page.keyboard.press('p');
+    await page.waitForTimeout(100);
+    const onC = await shot();
+    expect(onC.equals(onB)).toBe(true);
   });
 });
 
