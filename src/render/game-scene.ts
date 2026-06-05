@@ -171,6 +171,7 @@ interface UIScenePhase9 {
     onContinue: () => void;
     onNewGame: () => void;
     onSaveNow: () => boolean;
+    onDelete: () => void;
     onBack: () => void;
   }): void;
   hideSaveLoadDialogOverlay(): void;
@@ -1174,6 +1175,14 @@ export class GameScene extends Phaser.Scene {
         // 15:33 the next time the player opens it, with no action of theirs.
         if (ok) this.lastAutosaveMs = performance.now();
         return ok;
+      },
+      onDelete: () => {
+        // Issue #196 (Codex P2): the dialog just deleted the save. If autosave
+        // was suspended to preserve a future-build save's bytes, that reason is
+        // gone now — clear the flag so the running fresh session can save and
+        // autosave normally again (otherwise onSaveNow keeps returning false and
+        // the autosave guard skips every write until a page reload).
+        this.autosaveSuspended = false;
       },
       onBack: () => {
         // Re-open the pause menu — gamePhase is still Paused, gameLoop is

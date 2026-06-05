@@ -22,6 +22,9 @@ const DIFFICULTY_NORMAL_RECT = { x: 330, y: 260, w: 140, h: 40 } as const;
 // imported because those modules transitively pull in Phaser.
 const SAVE_LOAD_ROW_RECT = { x: 240, y: 279, w: 320, h: 40 } as const;
 const DIALOG_SAVE_NOW_RECT = { x: 260, y: 220, w: 280, h: 36 } as const;
+// Save/Load dialog "Delete Save" button (index 2 of 5: continue, save-now,
+// delete, new-game, back). firstButtonY 176 + 2*(36+8) = 264.
+const DIALOG_DELETE_RECT = { x: 260, y: 264, w: 280, h: 36 } as const;
 
 async function clickCanvasRect(
   page: Page,
@@ -830,5 +833,99 @@ test.describe('Issue #196 — future-build save survives a fresh boot (Save Now 
     //    silently destroying the recoverable save.
     const after = await page.evaluate(() => localStorage.getItem('subterrans:save:v3'));
     expect(after).toBe(before);
+  });
+
+  // Codex P2 (PR #198): the autosave suspension that protects a future-build
+  // save must be RELEASED when the player explicitly deletes that save via the
+  // dialog — otherwise the running fresh session can never save (onSaveNow
+  // returns false, autosave skips every write) until a page reload. The dialog
+  // performs deleteSave() itself; the fix wires an onDelete callback that clears
+  // autosaveSuspended on GameScene.
+  test('Deleting the preserved future-build save re-enables saving (suspension is released)', async ({
+    page,
+  }) => {
+    // Seed a real save, bump simVersion past LATEST, reload → fresh boot with
+    // autosave suspended (same setup as the test above).
+    await bootGame(page);
+    await page.keyboard.press('Escape');
+    await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('pause-menu');
+    await clickCanvasRect(page, SAVE_LOAD_ROW_RECT);
+    await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('save-load');
+    await page.evaluate(() => localStorage.removeItem('subterrans:save:v3'));
+    await clickCanvasRect(page, DIALOG_SAVE_NOW_RECT);
+    await page.waitForFunction(
+      () => {
+        const raw = localStorage.getItem('subterrans:save:v3');
+        if (raw === null) return false;
+        try {
+          const v = (JSON.parse(raw) as { snapshot?: { simVersion?: unknown } }).snapshot
+            ?.simVersion;
+          return typeof v === 'number' && Number.isInteger(v) && v > 0;
+        } catch {
+          return false;
+        }
+      },
+      undefined,
+      { timeout: 5_000 },
+    );
+    await page.evaluate(() => {
+      const raw = localStorage.getItem('subterrans:save:v3');
+      if (raw === null) throw new Error('expected a save after Save Now');
+      const env = JSON.parse(raw) as { snapshot: { simVersion: number } };
+      env.snapshot.simVersion = 99999;
+      localStorage.setItem('subterrans:save:v3', JSON.stringify(env));
+    });
+    await page.reload();
+    await page.locator('canvas').first().waitFor({ state: 'attached' });
+    await expect.poll(() => bootScreen(page), { timeout: 10_000 }).toBe('difficulty-select');
+    await settleToPlaying(page); // pick difficulty → autosaveSuspended = true
+
+    // Open pause → Save/Load. The future-build save is still in storage and
+    // shows as incompatible; Delete is enabled.
+    await page.keyboard.press('Escape');
+    await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('pause-menu');
+    await clickCanvasRect(page, SAVE_LOAD_ROW_RECT);
+    await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('save-load');
+
+    // Sanity: while suspended, Save Now is a no-op (the future bytes survive).
+    await clickCanvasRect(page, DIALOG_SAVE_NOW_RECT);
+    await page.waitForTimeout(150);
+    expect(
+      await page.evaluate(() => {
+        const raw = localStorage.getItem('subterrans:save:v3');
+        return raw === null
+          ? null
+          : (JSON.parse(raw) as { snapshot: { simVersion: number } }).snapshot.simVersion;
+      }),
+    ).toBe(99999);
+
+    // Delete the save (two clicks: arm confirm, then commit). deleteSave() wipes
+    // the bytes AND onDelete() clears autosaveSuspended.
+    await clickCanvasRect(page, DIALOG_DELETE_RECT);
+    await page.waitForTimeout(120);
+    await clickCanvasRect(page, DIALOG_DELETE_RECT);
+    await page.waitForFunction(() => localStorage.getItem('subterrans:save:v3') === null, {
+      timeout: 5_000,
+    });
+
+    // Now Save Now must SUCCEED — the suspension is released, so the running
+    // fresh session writes a real current-format save (simVersion = LATEST,
+    // not the deleted 99999). Pre-fix this stayed null forever (until reload).
+    await clickCanvasRect(page, DIALOG_SAVE_NOW_RECT);
+    await page.waitForFunction(
+      () => {
+        const raw = localStorage.getItem('subterrans:save:v3');
+        if (raw === null) return false;
+        try {
+          const v = (JSON.parse(raw) as { snapshot?: { simVersion?: unknown } }).snapshot
+            ?.simVersion;
+          return typeof v === 'number' && Number.isInteger(v) && v > 0 && v !== 99999;
+        } catch {
+          return false;
+        }
+      },
+      undefined,
+      { timeout: 5_000 },
+    );
   });
 });
