@@ -13,6 +13,12 @@ const SAVE_PROMPT_CONTINUE_RECT = { x: 300, y: 280, w: 120, h: 32 } as const;
 const SAVE_PROMPT_NEW_GAME_RECT = { x: 300, y: 320, w: 120, h: 32 } as const;
 // S5 "Choose Difficulty" Normal button (canvas-drawn). Mirrors DIFFICULTY_NORMAL_RECT in ui-scene.ts.
 const DIFFICULTY_NORMAL_RECT = { x: 330, y: 260, w: 140, h: 40 } as const;
+// Pause-menu "Save / Load" row — item index 1 of the 4-item main menu
+// (Resume / Save·Load / Settings / Download debug log; playtrace off in CI so no
+// 5th "Quit & feedback" row). Mirrors pause-menu-layout.ts stackRects(4)[1].
+const SAVE_LOAD_ROW_RECT = { x: 240, y: 279, w: 320, h: 40 } as const;
+// Save/Load dialog "Save Now" button — index 1. Mirrors save-load-dialog-layout.ts.
+const DIALOG_SAVE_NOW_RECT = { x: 260, y: 220, w: 280, h: 36 } as const;
 
 const errorFilter = (msg: ConsoleMessage) => msg.type() === 'error';
 const SAVE_KEY = 'subterrans:save:v3';
@@ -50,6 +56,66 @@ async function settleToPlaying(page: Page): Promise<void> {
       { timeout: 15_000 },
     )
     .toBe('none');
+}
+
+async function clickCanvasRect(
+  page: Page,
+  rect: { x: number; y: number; w: number; h: number },
+): Promise<void> {
+  const box = await page.locator('canvas').first().boundingBox();
+  if (!box) throw new Error('canvas has no bounding box');
+  await page.mouse.click(box.x + rect.x + rect.w / 2, box.y + rect.y + rect.h / 2);
+}
+
+// Raw activeOverlay read (returns the full string, incl. 'pause-menu'/'save-load'
+// which the narrow ActiveOverlay type below doesn't enumerate).
+async function rawOverlay(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const u = (window as { __phase9_ui?: { activeOverlay?: string } }).__phase9_ui;
+    return u?.activeOverlay ?? '<undefined>';
+  });
+}
+
+// Write a REAL, current-format save to localStorage by driving the running game
+// through Save Now. Far more robust than a hand-crafted fixture, which rots
+// whenever the snapshot shape changes (the original cause of #192). Leaves the
+// game paused with the save written; callers reload() to exercise the boot
+// SavePrompt against a genuinely loadable, compatible save.
+async function seedRealSave(page: Page): Promise<void> {
+  await page.goto('/');
+  await page.locator('canvas').first().waitFor({ state: 'attached' });
+  await page.evaluate(() => localStorage.removeItem('subterrans:save:v3'));
+  await page.reload();
+  await page.locator('canvas').first().waitFor({ state: 'attached' });
+  await settleToPlaying(page); // fresh game → Playing
+  await page.keyboard.press('Escape');
+  await expect.poll(() => rawOverlay(page), { timeout: 5_000 }).toBe('pause-menu');
+  await clickCanvasRect(page, SAVE_LOAD_ROW_RECT);
+  await expect.poll(() => rawOverlay(page), { timeout: 5_000 }).toBe('save-load');
+  // Airtight assert-absent → click → assert-present: clear the key IMMEDIATELY
+  // before the Save Now click so the post-click presence check can ONLY be
+  // satisfied by Save Now committing — not by a stale key or an autosave that
+  // could otherwise fire if settleToPlaying ran past AUTOSAVE_INTERVAL_MS on a
+  // slow runner. (Game is paused in the dialog, so nothing else writes here.)
+  await page.evaluate(() => localStorage.removeItem('subterrans:save:v3'));
+  await clickCanvasRect(page, DIALOG_SAVE_NOW_RECT);
+  // Tie success to Save Now writing a REAL current-format save: assert the
+  // written envelope parses with a positive integer simVersion so a misrouted
+  // click can't pass on garbage. (Defeats the #192 silent-masking failure mode.)
+  await page.waitForFunction(
+    () => {
+      const raw = localStorage.getItem('subterrans:save:v3');
+      if (raw === null) return false;
+      try {
+        const v = (JSON.parse(raw) as { snapshot?: { simVersion?: unknown } }).snapshot?.simVersion;
+        return typeof v === 'number' && Number.isInteger(v) && v > 0;
+      } catch {
+        return false;
+      }
+    },
+    undefined,
+    { timeout: 5_000 },
+  );
 }
 
 // Canvas-safe overlay visibility probe. The SavePrompt / GameOver overlays are
@@ -92,63 +158,28 @@ async function expectFreshBootDifficultyOverlay(page: Page): Promise<void> {
     .toBe('difficulty-select');
 }
 
-// Matches PRD §8a envelope: { version, seed, inputLog, snapshot }.
-// snapshot is schema-correct (all 11 WorldState fields present per types.ts:23-39) but empty.
-// Purpose: trip hasSave() + loadSave() → SavePrompt overlay renders. We do NOT
-// assert the loaded world's tick value; no in-browser save helper exists to
-// build a real snapshot (see Step 1 of this task's action).
-const MINIMAL_SAVE_FIXTURE = {
-  version: 1,
-  seed: 42,
-  inputLog: [],
-  snapshot: {
-    tick: 0,
-    rngState: 0,
-    nextEntityId: 0,
-    commandQueue: [],
-    ants: {
-      posX: [],
-      posY: [],
-      colonyId: [],
-      task: [],
-      subTask: [],
-      speed: [],
-      foodCarrying: [],
-      starvationTimer: [],
-      age: [],
-      alive: [],
-      lifespan: [],
-      zone: [],
-      digTileX: [],
-      digTileY: [],
-      digTicksRemaining: [],
-      targetPosX: [],
-      targetPosY: [],
-      // Phase 09.1 Chunk 0 — grid-of-occupancy byte (new SoA field). Empty
-      // array matches the empty ants fixture; deserializeWorldState must
-      // accept the field on round-trip.
-      currentGridColonyId: [],
-    },
-    colonies: {},
-    pheromoneGrids: {},
-    surface: { width: 0, height: 0, data: [] },
-    undergroundGrids: {},
-    foodPiles: [],
-    pendingChambers: {},
-  },
-};
+// Inverse of expectFreshBootDifficultyOverlay: assert the boot reached a REAL
+// Continue/New Game SavePrompt (a compatible save exists), NOT the fresh-boot
+// Choose Difficulty overlay — both report activeOverlay 'save-prompt', so the
+// bootScreen discriminator is what makes this honest. Without it, a SCEN-04 test
+// whose seeded save failed to load would silently fall through to Choose
+// Difficulty and still "see" save-prompt (the #192 masking bug).
+async function expectBootSavePrompt(page: Page): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const w = window as unknown as { __phase9_ui?: { bootScreen?: string } };
+          return w.__phase9_ui?.bootScreen ?? '<undefined>';
+        }),
+      { timeout: 5_000 },
+    )
+    .toBe('save-prompt');
+}
 
 async function clearSave(page: Page): Promise<void> {
   await page.goto('/');
   await page.evaluate((key) => window.localStorage.removeItem(key), SAVE_KEY);
-}
-
-async function seedSave(page: Page, fixture: unknown): Promise<void> {
-  await page.goto('/');
-  await page.evaluate(([key, json]) => window.localStorage.setItem(key as string, json as string), [
-    SAVE_KEY,
-    JSON.stringify(fixture),
-  ] as const);
 }
 
 test.describe('Phase 9 — SCEN-01 fresh boot', () => {
@@ -196,53 +227,54 @@ test.describe('Phase 9 — SCEN-01 fresh boot', () => {
   });
 });
 
-// QUARANTINED (issue #192): MINIMAL_SAVE_FIXTURE is a stale v1-era envelope the
-// current v3 deserializer rejects, so seedSave produces no loadable save — boot
-// shows the Choose Difficulty overlay (which also reports activeOverlay
-// 'save-prompt') instead of a real Continue/New Game SavePrompt. These tests need
-// the capture-a-real-save fixture rework (see #192). Not a game bug.
-test.describe.fixme('Phase 9 — SCEN-04 save-prompt flow', () => {
+// SCEN-04 exercises the boot SavePrompt against a REAL, current-format save
+// captured via seedRealSave() (Save Now on a live game) — the prior
+// hand-crafted MINIMAL_SAVE_FIXTURE was a stale v1 envelope the v3 deserializer
+// rejected, so it produced no loadable save (the boot showed Choose Difficulty,
+// which also reports activeOverlay 'save-prompt', masking the failure). Fixed
+// per #192.
+test.describe('Phase 9 — SCEN-04 save-prompt flow', () => {
   test('seeded save → SavePrompt overlay appears → Continue dismisses overlay', async ({
     page,
   }) => {
-    await seedSave(page, MINIMAL_SAVE_FIXTURE);
+    // Capture console errors: Continue now deserializes a REAL non-empty snapshot
+    // (a much richer path than the old empty fixture), so a caught-but-broken load
+    // could leave the canvas up at 'none' yet still be a failed load. Asserting
+    // zero errors makes "load succeeded" honest (mirrors the X-keybind test).
+    const consoleErrors: string[] = [];
+    page.on('console', (m) => {
+      if (errorFilter(m)) consoleErrors.push(m.text());
+    });
+    page.on('pageerror', (e) => consoleErrors.push(e.message));
+
+    await seedRealSave(page);
     await page.reload();
 
-    // Overlay renders — proves hasSave() + loadSave() accepted the envelope shape.
-    // Canvas-drawn; observe via the __phase9_ui hook exported by Plan 09-06.
+    // A real, compatible save exists → boot shows the Continue/New Game SavePrompt.
+    // Assert bootScreen too: both this and Choose Difficulty report activeOverlay
+    // 'save-prompt', so bootScreen === 'save-prompt' is what proves it's the REAL
+    // prompt (the boot accepted hasSave() && !hasIncompatibleSave()), not a
+    // fresh-boot fall-through.
     await expect.poll(() => getActiveOverlay(page), { timeout: 5_000 }).toBe('save-prompt');
+    await expectBootSavePrompt(page);
 
-    // SavePrompt buttons are Phaser.GameObjects.Text rendered to canvas — NOT DOM.
-    // Playwright cannot reliably query canvas text. Click via canvas-relative
-    // coordinates using the button-rect constants exported by Plan 06 Task 3.
-    // Pattern mirrors code/tests/smoke.spec.ts:88-99 (VIEW_TOGGLE click).
-    const canvas = page.locator('canvas').first();
-    const box = await canvas.boundingBox();
-    if (!box) throw new Error('canvas has no bounding box');
-    const R = SAVE_PROMPT_CONTINUE_RECT;
-    await page.mouse.click(box.x + R.x + R.w / 2, box.y + R.y + R.h / 2);
+    // SavePrompt buttons are canvas-drawn — click Continue by canvas-relative rect.
+    await clickCanvasRect(page, SAVE_PROMPT_CONTINUE_RECT);
 
-    // Overlay dismissed — hook flips back to 'none'.
+    // Continue → bootFromSave loads the compatible save → Playing ('none').
     await expect.poll(() => getActiveOverlay(page), { timeout: 5_000 }).toBe('none');
-
-    // Canvas still up (no crash-on-load — the minimal snapshot was accepted by deserializeWorldState).
     await expect(page.locator('canvas').first()).toBeVisible();
-
-    // NOTE: we do not assert world tick/rngState here. The minimal snapshot is empty-but-valid;
-    // asserting loaded-state richness would require an in-browser save helper which no plan exposes.
+    expect(consoleErrors, consoleErrors.join('\n')).toHaveLength(0);
   });
 
   test('seeded save → SavePrompt "New Game" clears save and boots fresh', async ({ page }) => {
-    await seedSave(page, MINIMAL_SAVE_FIXTURE);
+    await seedRealSave(page);
     await page.reload();
 
     await expect.poll(() => getActiveOverlay(page), { timeout: 5_000 }).toBe('save-prompt');
+    await expectBootSavePrompt(page); // real Continue/New Game prompt, not Choose Difficulty
 
-    const canvas2 = page.locator('canvas').first();
-    const box2 = await canvas2.boundingBox();
-    if (!box2) throw new Error('canvas has no bounding box');
-    const R2 = SAVE_PROMPT_NEW_GAME_RECT;
-    await page.mouse.click(box2.x + R2.x + R2.w / 2, box2.y + R2.y + R2.h / 2);
+    await clickCanvasRect(page, SAVE_PROMPT_NEW_GAME_RECT);
 
     // New Game deletes the save (deleteSave) then opens Choose Difficulty (S5);
     // selecting a difficulty boots fresh into Playing.

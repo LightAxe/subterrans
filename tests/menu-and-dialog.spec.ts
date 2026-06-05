@@ -701,15 +701,16 @@ test.describe('Pheromone overlay actually renders (UAT P1 — pre-existing draw-
 });
 
 test.describe('Round-5 (Codex P1) — Save Now respects autosaveSuspended', () => {
-  // QUARANTINED (issue #192): this test's premise is outdated. It assumes a
-  // future-build save routes through SavePrompt → Continue → bootFromSave →
-  // FutureSimVersionError → autosaveSuspended. Under the current boot flow a
-  // future-sim save is treated as INCOMPATIBLE, so decideBootMode routes it to a
-  // FRESH boot (Choose Difficulty), not a Continue prompt — autosaveSuspended is
-  // never set via that path, so Save Now writes a fresh save. The Save Now
-  // protection itself is intact (game-scene.ts gates onSaveNow on
-  // autosaveSuspended); the test needs reworking against the real recovery flow.
-  // Not a game bug. Un-fixme when the flow is re-derived.
+  // QUARANTINED — blocked on GAME BUG #196 (not a test problem). This test guards
+  // a real data-loss protection: a future-build save (simVersion > LATEST) must
+  // survive on the older build so it can be recovered. Investigation (a real-save
+  // capture + simVersion bump, observed via Playwright) confirmed the protection
+  // is currently INERT: a future-sim save is treated as incompatible, so boot
+  // routes to a FRESH game (Choose Difficulty), `autosaveSuspended` is never
+  // armed, and Save Now overwrites the preserved bytes (observed simVersion
+  // 99999 → 26). Fixing that is a game-code change (out of scope for the #192
+  // test-fixture work) tracked in #196. Un-fixme this once #196 lands; the
+  // capture-a-real-save + bump-simVersion setup below is the right harness for it.
   test.fixme('Save Now is a no-op when bootFromSave preserved a future-build save (does NOT overwrite the recoverable bytes)', async ({
     page,
   }) => {
