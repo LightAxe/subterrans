@@ -5,6 +5,7 @@ import {
   allocateEntityId,
   SIM_VERSION_V22_DIFFICULTY,
   SIM_VERSION_V23_SPIDER_AGGRO,
+  SIM_VERSION_V26_SPIDER_EDGE_MARGIN,
 } from './types.js';
 import { Rng } from './rng.js';
 import { createColonyRecord } from './colony/colony-store.js';
@@ -745,5 +746,123 @@ describe('sated meander self-defense (V23 Codex P2)', () => {
     detectAndResolveCombat(world, new Rng(world.rngState));
 
     expect(world.ants.combatOpponentId[worker]).toBe(-2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V26 (#181): combat boundary fold (margin-band catch).
+// The spider is clamped to [margin, size-1-margin] but ants reach the full grid.
+// When the spider sits on a boundary tile, the fold extends combat reach into the
+// margin band to prevent unreachable ants from making the outer ring a safe zone.
+// The stale-pass fold (detectAndResolveCombat) must mirror the resolver fold
+// (resolveSpiderCombatOnTile) exactly so margin-band ants stay paired and their
+// windup sentinels don't get cleared every tick, which would cause permanent stalemate.
+// ---------------------------------------------------------------------------
+
+describe('combat boundary fold (V26 #181)', () => {
+  function makeV26World(seed = 42): { world: WorldState; cid1: ColonyId; cid2: ColonyId } {
+    const r = makeWorldWith2Colonies(seed);
+    r.world.simVersion = SIM_VERSION_V26_SPIDER_EDGE_MARGIN;
+    return r;
+  }
+
+  it('spider Chasing at boundary tile (margin) catches ant in margin band beyond it', () => {
+    // V26: margin = 3, spider clamped to [3, 124]. Ant at tile 0 is in the margin band
+    // beyond the boundary. When spider sits at tile 3 (loX), ant at tile 0 matches via fold.
+    const { world, cid1 } = makeV26World();
+    const fighter = spawnFighter(world, cid1, 0, 10, Zone.Surface); // in margin band
+    const spider = placeSpider(world, 3, 10, 'Chasing'); // at boundary (loX)
+    spider.chaseTargetAntId = fighter;
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    // Ant should be paired with spider (sentinel -2) via the boundary fold.
+    expect(world.ants.combatOpponentId[fighter]).toBe(-2);
+  });
+
+  it('sentinel -2 survives the stale-pass fold when ant remains in margin band', () => {
+    // Regression guard: the stale-pass fold (lines 165-173 in combat.ts) must
+    // preserve -2 sentinels for margin-band ants still paired with a boundary spider.
+    // If the fold is missing or gated incorrectly, the sentinel clears every tick and
+    // the resolver restarts the windup forever (permanent stalemate).
+    const { world, cid1 } = makeV26World();
+    const fighter = spawnFighter(world, cid1, 0, 10, Zone.Surface); // margin band
+    placeSpider(world, 3, 10, 'Chasing'); // boundary (loX)
+
+    // Pre-arm the ant as if it's already paired from a prior tick.
+    world.ants.combatOpponentId[fighter] = -2;
+    world.ants.attackCooldown[fighter] = 3; // mid-windup
+
+    // Run the stale-pass: should preserve -2 because the fold treats the
+    // margin-band ant as on-tile.
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    // Sentinel should survive the fold and not be cleared.
+    expect(world.ants.combatOpponentId[fighter]).toBe(-2);
+  });
+
+  it('spider Chasing at right boundary (hiX) catches ant beyond the margin band', () => {
+    // Mirror test: spider at tile (124, Y) = hiX boundary, ant at tile (127, Y) = margin band.
+    // SURFACE_GRID_WIDTH = 128, so hiX = 128 - 1 - 3 = 124.
+    const { world, cid1 } = makeV26World();
+    const fighter = spawnFighter(world, cid1, 127, 10, Zone.Surface); // east margin band
+    const spider = placeSpider(world, 124, 10, 'Chasing'); // at east boundary (hiX)
+    spider.chaseTargetAntId = fighter;
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    // Should be paired via the fold.
+    expect(world.ants.combatOpponentId[fighter]).toBe(-2);
+  });
+
+  it('spider Chasing at top boundary (loY) catches ant beyond the margin band', () => {
+    // Y-axis boundary fold: spider at (10, 3) = loY, ant at (10, 0) = north margin band.
+    const { world, cid1 } = makeV26World();
+    const fighter = spawnFighter(world, cid1, 10, 0, Zone.Surface); // north margin band
+    const spider = placeSpider(world, 10, 3, 'Chasing'); // at north boundary (loY)
+    spider.chaseTargetAntId = fighter;
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    expect(world.ants.combatOpponentId[fighter]).toBe(-2);
+  });
+
+  it('passive state (Patrolling) does NOT fold the margin band (margin = 0)', () => {
+    // The fold is only active in pursuit states (Chasing/Striking/Rampaging).
+    // A passive Patrolling spider at the boundary should NOT catch margin-band ants.
+    const { world, cid1 } = makeV26World();
+    const fighter = spawnFighter(world, cid1, 0, 10, Zone.Surface); // margin band
+    placeSpider(world, 3, 10, 'Patrolling'); // boundary, but passive
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    // Without the fold in passive states, no pairing.
+    expect(world.ants.combatOpponentId[fighter]).toBe(-1);
+  });
+
+  it('pre-V26 (V25) does NOT fold: exact same-tile matching only', () => {
+    // Guard: boundary fold is V26-only. Pre-V26 worlds keep exact same-tile matching.
+    const r = makeWorldWith2Colonies();
+    r.world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO; // V25 or earlier
+    const fighter = spawnFighter(r.world, r.cid1, 0, 10, Zone.Surface); // margin band
+    placeSpider(r.world, 3, 10, 'Chasing'); // boundary
+
+    detectAndResolveCombat(r.world, new Rng(r.world.rngState));
+
+    // No pairing in pre-V26.
+    expect(r.world.ants.combatOpponentId[fighter]).toBe(-1);
+  });
+
+  it('interior spider at the same Y row as margin-band ant does NOT fold', () => {
+    // Fold only triggers when spider is ON a boundary tile. An interior spider
+    // that happens to share a row with a margin-band ant should not reach it.
+    const { world, cid1 } = makeV26World();
+    const fighter = spawnFighter(world, cid1, 0, 10, Zone.Surface); // margin band
+    placeSpider(world, 50, 10, 'Chasing'); // interior, not boundary
+
+    detectAndResolveCombat(world, new Rng(world.rngState));
+
+    // No pairing: spider is not on a boundary tile.
+    expect(world.ants.combatOpponentId[fighter]).toBe(-1);
   });
 });
