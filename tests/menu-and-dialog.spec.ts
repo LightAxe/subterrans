@@ -15,6 +15,14 @@ import { test, expect, type Page } from '@playwright/test';
 // Mirrors DIFFICULTY_NORMAL_RECT in ui-scene.ts.
 const DIFFICULTY_NORMAL_RECT = { x: 330, y: 260, w: 140, h: 40 } as const;
 
+// Canvas-local rects for the pause-menu "Save/Load" row (index 1 of 4) and the
+// Save/Load dialog's "Save Now" button (index 1). The playtrace feature is
+// forced off in playwright.config, so the pause menu has exactly 4 rows; these
+// mirror pause-menu-layout.ts / save-load-dialog-layout.ts. Inlined rather than
+// imported because those modules transitively pull in Phaser.
+const SAVE_LOAD_ROW_RECT = { x: 240, y: 279, w: 320, h: 40 } as const;
+const DIALOG_SAVE_NOW_RECT = { x: 260, y: 220, w: 280, h: 36 } as const;
+
 async function clickCanvasRect(
   page: Page,
   rect: { x: number; y: number; w: number; h: number },
@@ -74,6 +82,17 @@ async function activeOverlay(page: Page): Promise<string> {
   return await page.evaluate(() => {
     const ui = (window as { __phase9_ui?: { activeOverlay: string } }).__phase9_ui;
     return ui?.activeOverlay ?? '<undefined>';
+  });
+}
+
+// The fresh-boot "Choose Difficulty" overlay and a real Continue/New Game
+// SavePrompt both report activeOverlay 'save-prompt'; __phase9_ui.bootScreen is
+// the discriminator ('difficulty-select' vs 'save-prompt'). Returns '<undefined>'
+// when the hook hasn't published yet so callers can poll for the value they want.
+async function bootScreen(page: Page): Promise<string> {
+  return await page.evaluate(() => {
+    const ui = (window as { __phase9_ui?: { bootScreen?: string } }).__phase9_ui;
+    return ui?.bootScreen ?? '<undefined>';
   });
 }
 
@@ -700,41 +719,57 @@ test.describe('Pheromone overlay actually renders (UAT P1 — pre-existing draw-
   });
 });
 
-test.describe('Round-5 (Codex P1) — Save Now respects autosaveSuspended', () => {
-  // QUARANTINED — blocked on GAME BUG #196 (not a test problem). This test guards
-  // a real data-loss protection: a future-build save (simVersion > LATEST) must
-  // survive on the older build so it can be recovered. Investigation (a real-save
-  // capture + simVersion bump, observed via Playwright) confirmed the protection
-  // is currently INERT: a future-sim save is treated as incompatible, so boot
-  // routes to a FRESH game (Choose Difficulty), `autosaveSuspended` is never
-  // armed, and Save Now overwrites the preserved bytes (observed simVersion
-  // 99999 → 26). Fixing that is a game-code change (out of scope for the #192
-  // test-fixture work) tracked in #196. Un-fixme this once #196 lands; the
-  // capture-a-real-save + bump-simVersion setup below is the right harness for it.
-  test.fixme('Save Now is a no-op when bootFromSave preserved a future-build save (does NOT overwrite the recoverable bytes)', async ({
+test.describe('Issue #196 — future-build save survives a fresh boot (Save Now does NOT overwrite it)', () => {
+  // A save written by a NEWER build (snapshot.simVersion > this build's
+  // LATEST_SIM_VERSION) is recoverable: the bytes are intact and a newer build
+  // can load them. On THIS (older) build the save is incompatible, so boot routes
+  // to a FRESH game ("Choose Difficulty") rather than a Continue/New Game prompt
+  // — but the preserved bytes MUST survive: neither autosave nor "Save Now" may
+  // overwrite them, so the player can recover by reloading on the newer build.
+  //
+  // Before #196 this protection was inert: hasIncompatibleSave() lumped the
+  // future-sim case in with corruption, decideBootMode fell through to a fresh
+  // game with autosaveSuspended = false (only bootFromSave's Continue path armed
+  // it, and the future-sim save never reached Continue), and Save Now overwrote
+  // the recoverable bytes (observed simVersion 99999 → 26). The fix classifies
+  // the incompatibility (incompatible-future vs -corrupt) and arms
+  // autosaveSuspended after the fresh boot for the future case only.
+  test('Save Now is a no-op after a future-build save routes boot to fresh (preserved bytes survive)', async ({
     page,
   }) => {
-    // Bootstrap: populate localStorage with a future-sim save BEFORE the
-    // page loads. bootFromSave will deserialize, catch FutureSimVersionError,
-    // and set autosaveSuspended = true. We then verify Save Now refuses to
-    // write so the preserved future-build bytes survive for recovery.
-    // Capture a REAL, current-format save envelope (rather than hand-crafting one
-    // that rots whenever the snapshot shape changes — the original cause of this
-    // test going stale), then bump its simVersion past LATEST so the next boot's
-    // bootFromSave throws FutureSimVersionError → autosaveSuspended = true.
+    // 1) Seed a REAL, current-format save by driving the live game through
+    //    Save Now (robust vs a hand-crafted fixture, which rots when the
+    //    snapshot shape changes — the original cause of #192).
     await bootGame(page); // fresh Normal game, Playing, autosave NOT suspended
-    // Save Now writes a valid envelope to localStorage. Open pause → Save/Load →
-    // Save Now (rects from pause-menu-layout.ts / save-load-dialog-layout.ts; the
-    // playtrace feature is forced off in playwright.config so the menu is 4 rows).
     await page.keyboard.press('Escape');
     await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('pause-menu');
-    await clickCanvasRect(page, { x: 240, y: 279, w: 320, h: 40 }); // Save/Load row (index 1 of 4)
+    await clickCanvasRect(page, SAVE_LOAD_ROW_RECT);
     await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('save-load');
-    await clickCanvasRect(page, { x: 260, y: 220, w: 280, h: 36 }); // Save Now (dialog index 1)
-    await page.waitForFunction(() => localStorage.getItem('subterrans:save:v3') !== null, {
-      timeout: 5_000,
-    });
-    // Mutate the captured envelope: simVersion > LATEST → future-build save.
+    // Clear the key IMMEDIATELY before the Save Now click so the post-click
+    // presence check can ONLY be satisfied by Save Now committing — not by a
+    // stale key or an autosave (the game is paused in the dialog, nothing else
+    // writes here).
+    await page.evaluate(() => localStorage.removeItem('subterrans:save:v3'));
+    await clickCanvasRect(page, DIALOG_SAVE_NOW_RECT);
+    // Tie success to a REAL current-format envelope (positive integer simVersion)
+    // so a misrouted click can't pass on garbage (defeats #192 silent masking).
+    await page.waitForFunction(
+      () => {
+        const raw = localStorage.getItem('subterrans:save:v3');
+        if (raw === null) return false;
+        try {
+          const v = (JSON.parse(raw) as { snapshot?: { simVersion?: unknown } }).snapshot
+            ?.simVersion;
+          return typeof v === 'number' && Number.isInteger(v) && v > 0;
+        } catch {
+          return false;
+        }
+      },
+      undefined,
+      { timeout: 5_000 },
+    );
+
+    // 2) Bump the captured envelope's simVersion past LATEST → a future-build save.
     await page.evaluate(() => {
       const raw = localStorage.getItem('subterrans:save:v3');
       if (raw === null) throw new Error('expected a save after Save Now');
@@ -743,72 +778,56 @@ test.describe('Round-5 (Codex P1) — Save Now respects autosaveSuspended', () =
       localStorage.setItem('subterrans:save:v3', JSON.stringify(env));
     });
 
-    // Reload — boot path now sees the future-sim save, SavePrompt shows.
+    // 3) Reload. The future-build save is incompatible on this build, so boot
+    //    routes to a FRESH game — "Choose Difficulty", NOT a Continue/New Game
+    //    SavePrompt. bootScreen discriminates the two (both report activeOverlay
+    //    'save-prompt'); pin 'difficulty-select' so a regression that wrongly
+    //    showed a real Continue prompt (and let Continue silently lose the save)
+    //    can't pass silently.
     await page.reload();
     await page.locator('canvas').first().waitFor({ state: 'attached' });
-    await page.waitForFunction(
-      () => {
-        const ui = (window as { __phase9_ui?: { activeOverlay: string } }).__phase9_ui;
-        return ui !== undefined && ui.activeOverlay === 'save-prompt';
-      },
-      { timeout: 5_000 },
-    );
+    await expect.poll(() => bootScreen(page), { timeout: 10_000 }).toBe('difficulty-select');
 
-    // Click Continue → bootFromSave → catches FutureSimVersionError →
-    // bootFresh + autosaveSuspended = true. The preserved bytes stay in
-    // localStorage; the running game is now a fresh scenario.
-    // SAVE_PROMPT_CONTINUE_RECT = { x: 300, y: 280, w: 120, h: 32 }
-    await page
-      .locator('canvas')
-      .first()
-      .click({ position: { x: 360, y: 296 } });
-    await page.waitForFunction(() => {
-      const ui = (window as { __phase9_ui?: { activeOverlay: string } }).__phase9_ui;
-      return ui !== undefined && ui.activeOverlay === 'none';
-    });
+    // The recoverable bytes (simVersion 99999) must still be present at the boot
+    // screen — boot must not have deleted or overwritten them.
+    expect(
+      await page.evaluate(() => {
+        const raw = localStorage.getItem('subterrans:save:v3');
+        if (raw === null) return null;
+        return (JSON.parse(raw) as { snapshot: { simVersion: number } }).snapshot.simVersion;
+      }),
+    ).toBe(99999);
 
-    // Snapshot the preserved bytes BEFORE we touch the dialog.
+    // 4) Pick a difficulty → bootFresh → autosaveSuspended = true (issue #196).
+    await settleToPlaying(page);
+
+    // Snapshot the preserved bytes now the fresh game is running. (If autosave
+    // had fired and overwritten them, this would already be the fresh-session
+    // bytes — the final equality below still holds, so additionally assert the
+    // future simVersion survived into the running session.)
     const before = await page.evaluate(() => localStorage.getItem('subterrans:save:v3'));
     expect(before).not.toBeNull();
-
-    // Open pause menu → Save/Load.
-    await page.keyboard.press('Escape');
-    await page.waitForTimeout(100);
-    const saveLoadRect = await page.evaluate(() => {
-      const CANVAS_W = 800,
-        CANVAS_H = 592;
-      const BTN_W = 320,
-        BTN_H = 40,
-        GAP = 10,
-        TITLE_H = 56;
-      const n = 4;
-      const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
-      const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
-      const x = (CANVAS_W - BTN_W) / 2;
-      const slY = top + 1 * (BTN_H + GAP);
-      return { x: x + BTN_W / 2, y: slY + BTN_H / 2 };
-    });
-    await page.locator('canvas').first().click({ position: saveLoadRect });
-    await page.waitForTimeout(150);
     expect(
       await page.evaluate(
-        () => (window as { __phase9_ui?: { activeOverlay: string } }).__phase9_ui?.activeOverlay,
+        () =>
+          (JSON.parse(localStorage.getItem('subterrans:save:v3')!) as {
+            snapshot: { simVersion: number };
+          }).snapshot.simVersion,
       ),
-    ).toBe('save-load');
+    ).toBe(99999);
 
-    // Click Save Now (button index 1 in the dialog, BTN_W=280, BTN_H=36, GAP=8).
-    // firstY = DIALOG_INFO_Y(152) + DIALOG_INFO_TO_BUTTONS_GAP(24) = 176.
-    const saveNowY = 176 + 1 * (36 + 8) + 36 / 2;
-    const saveNowX = (800 - 280) / 2 + 280 / 2;
-    await page
-      .locator('canvas')
-      .first()
-      .click({ position: { x: saveNowX, y: saveNowY } });
+    // 5) Open pause → Save/Load → Save Now. With autosave suspended, Save Now
+    //    must be a no-op so the recoverable future-build bytes survive unchanged.
+    await page.keyboard.press('Escape');
+    await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('pause-menu');
+    await clickCanvasRect(page, SAVE_LOAD_ROW_RECT);
+    await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('save-load');
+    await clickCanvasRect(page, DIALOG_SAVE_NOW_RECT);
     await page.waitForTimeout(200);
 
-    // The preserved bytes MUST be unchanged. Pre-fix this overwrote the
-    // future-build save with the fresh-session bytes, silently destroying
-    // the recoverable save.
+    // 6) The preserved bytes MUST be unchanged. Pre-fix, Save Now overwrote the
+    //    future-build save with the fresh-session bytes (simVersion 99999 → 26),
+    //    silently destroying the recoverable save.
     const after = await page.evaluate(() => localStorage.getItem('subterrans:save:v3'));
     expect(after).toBe(before);
   });

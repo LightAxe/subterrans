@@ -1470,6 +1470,62 @@ export function manualSave(
   }
 }
 
+/**
+ * Issue #196 — three-way compatibility verdict for the save currently in
+ * localStorage. Distinguishes a recoverable future-build save from definitive
+ * corruption so the boot path can preserve the former (suspend autosave so the
+ * bytes survive for recovery on a newer build) while letting the latter be
+ * overwritten freely.
+ *
+ *   - 'none'                 — no bytes under SAVE_KEY (or storage unreadable)
+ *   - 'compatible'           — parses AND deserializes on this build (loadable)
+ *   - 'incompatible-future'  — parses but `snapshot.simVersion > LATEST`
+ *                              (FutureSimVersionError): a NEWER build wrote it;
+ *                              the bytes are intact and recoverable on that build
+ *   - 'incompatible-corrupt' — any other failure (envelope parse error,
+ *                              non-object snapshot, tampered/missing fields,
+ *                              `simVersion < MIN`): not loadable by any build
+ *
+ * Mirrors the classification `bootFromSave` already performs on the Continue
+ * path (FutureSimVersionError vs plain Error) so the fresh-boot path can make
+ * the same recoverable-vs-corrupt decision at boot time.
+ */
+export type SaveCompatibility =
+  | 'none'
+  | 'compatible'
+  | 'incompatible-future'
+  | 'incompatible-corrupt';
+
+export function classifySaveCompatibility(): SaveCompatibility {
+  let raw: string | null;
+  try {
+    purgeLegacySaves();
+    raw = localStorage.getItem(SAVE_KEY);
+  } catch {
+    return 'none';
+  }
+  if (raw === null) return 'none';
+  let file: SaveFile;
+  try {
+    file = parseSaveFile(raw);
+  } catch {
+    return 'incompatible-corrupt';
+  }
+  // parseSaveFile validates the envelope only; the snapshot can be null / a
+  // non-object on a tampered envelope. Reject before the deserialize attempt.
+  const snapshot = file.snapshot as unknown;
+  if (snapshot === null || typeof snapshot !== 'object') return 'incompatible-corrupt';
+  // The canonical compatibility boundary: a full deserialize. FutureSimVersionError
+  // is the one recoverable failure (newer build wrote it); every other throw is
+  // corruption this build (or any build) cannot load.
+  try {
+    deserializeWorldState(file.snapshot);
+    return 'compatible';
+  } catch (err) {
+    return err instanceof FutureSimVersionError ? 'incompatible-future' : 'incompatible-corrupt';
+  }
+}
+
 /** Issue #115 — true iff bytes exist under SAVE_KEY but this build cannot
  *  load them. Three categories of incompatibility:
  *    1. envelope parse fails (wrong save format version, malformed JSON,
@@ -1495,46 +1551,16 @@ export function manualSave(
  *  prior "envelope-parse only" check that returned false for future-sim
  *  saves and enabled a Continue click that would silently lose the save. */
 export function hasIncompatibleSave(): boolean {
-  let raw: string | null;
-  try {
-    purgeLegacySaves();
-    raw = localStorage.getItem(SAVE_KEY);
-  } catch {
-    return false;
-  }
-  if (raw === null) return false;
-  let file: SaveFile;
-  try {
-    file = parseSaveFile(raw);
-  } catch {
-    return true;
-  }
-  // Codex round-3 P1: parseSaveFile only validates the envelope (version,
-  // seed, inputLog). `snapshot` itself can be `null` or any non-object on
-  // a tampered/malformed envelope. Reject the obviously-broken case before
-  // the deserialize attempt below so we don't waste an allocation on it.
-  const snapshot = file.snapshot as unknown;
-  if (snapshot === null || typeof snapshot !== 'object') return true;
-
-  // Round-4 (Rob's manual review of 6d840ef): the prior simVersion-only
-  // check left a UI-lie window for parseable envelopes whose snapshot is
-  // shape-valid at the top level but missing required deeper fields
-  // (e.g. `snapshot: {}`, or `simVersion: LEGACY_SIM_VERSION - 1`).
-  // Continue would look enabled; bootFromSave would then throw on
-  // deserialize and fall through to bootFresh. Align the dialog's
-  // compatibility boundary with the canonical one — attempt the full
-  // deserialize. Any throw (FutureSimVersionError, plain Error from
-  // tampered/missing-fields, etc.) means Continue would not actually
-  // load the save, so surface as incompatible.
+  // Issue #196 — delegate to the three-way classifier so this and the boot
+  // path share one compatibility boundary. Both incompatible verdicts
+  // (future + corrupt) mean Continue would not actually load the save, so
+  // the dialog surfaces them identically (its info line already does).
   //
-  // Cost: one full WorldState allocation per call. The dialog open path
-  // calls this once (cached for the render); user-initiated, infrequent.
-  try {
-    deserializeWorldState(file.snapshot);
-    return false;
-  } catch {
-    return true;
-  }
+  // Cost: one full WorldState allocation per call (the classifier's
+  // deserialize). The dialog open path calls this once (cached for the
+  // render); user-initiated, infrequent.
+  const verdict = classifySaveCompatibility();
+  return verdict === 'incompatible-future' || verdict === 'incompatible-corrupt';
 }
 
 /** Lightweight save summary surfaced in the Save/Load dialog's info line.
