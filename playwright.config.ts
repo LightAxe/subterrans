@@ -44,7 +44,11 @@ export default defineConfig({
     // POSIX-style prefix is parsed as part of the command by cmd/PowerShell.
     env: { VITE_PLAYTRACE_ENDPOINT: '' },
     port: 5173,
-    reuseExistingServer: !process.env.CI,
+    // Always launch our own server (never reuse). Reuse would silently skip the
+    // `env` pin above when a dev already has `npm run dev` running on :5173 with
+    // their own .env.local — reintroducing the non-determinism this config exists
+    // to remove. The small cold-start cost buys a deterministic playtrace-off run.
+    reuseExistingServer: false,
     timeout: 30_000,
   },
 });
