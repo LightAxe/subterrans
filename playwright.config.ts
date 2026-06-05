@@ -33,13 +33,16 @@ export default defineConfig({
     },
   ],
   webServer: {
+    command: 'npm run dev',
     // Force the playtrace feature OFF for e2e regardless of a developer's
     // .env.local (Vite gives an existing process.env var priority over .env
     // files). Without this, a local VITE_PLAYTRACE_ENDPOINT adds the "Quit &
     // feedback" pause-menu row, shifting the menu layout and breaking the
     // coordinate-based menu tests on that machine but not in CI. Pinning it
-    // empty makes the suite match the open-source default everywhere.
-    command: 'VITE_PLAYTRACE_ENDPOINT= npm run dev',
+    // empty makes the suite match the open-source default everywhere. Set via
+    // `env` (not a `VAR= cmd` command prefix) so it works on Windows too — a
+    // POSIX-style prefix is parsed as part of the command by cmd/PowerShell.
+    env: { VITE_PLAYTRACE_ENDPOINT: '' },
     port: 5173,
     reuseExistingServer: !process.env.CI,
     timeout: 30_000,
