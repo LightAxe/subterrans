@@ -883,3 +883,14 @@ export const SPIDER_FEED_HEAL_INTERVAL_TICKS = 10 as const;
  * it is surrounded. The spider moves at 2× ant speed, so a Chase reliably closes.
  */
 export const SPIDER_DEFENSE_TRIGGER_RADIUS = 6 as const;
+
+/**
+ * V26 (#181) — Minimum tile margin the spider keeps from every map edge, in all
+ * surface states (meander, hunt, chase, rampage, feed). The spider sprite is
+ * 48×48 px = 3 tiles (TILE_SIZE_PX=16) drawn centered on the spider position, so
+ * its half-extent is 1.5 tiles; a 3-tile margin keeps the full sprite — plus the
+ * health bar drawn above it — on the playfield instead of clipping off the edge
+ * when the spider chases/fights an ant into a corner. Gated on simVersion so pre-
+ * V26 saves replay the old to-the-edge movement byte-for-byte.
+ */
+export const SPIDER_EDGE_MARGIN_TILES = 3 as const;

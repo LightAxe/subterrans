@@ -8,6 +8,7 @@ import {
   SIM_VERSION_V20_SPIDER,
   SIM_VERSION_V22_DIFFICULTY,
   SIM_VERSION_V23_SPIDER_AGGRO,
+  SIM_VERSION_V26_SPIDER_EDGE_MARGIN,
 } from './types.js';
 import { tickSpider } from './spider.js';
 import { initAnt } from './ant/ant-store.js';
@@ -39,6 +40,7 @@ import {
   SURFACE_GRID_HEIGHT,
   PLAYER_COLONY_ID,
   ENEMY_COLONY_ID,
+  SPIDER_EDGE_MARGIN_TILES,
 } from './constants.js';
 import { FP_SHIFT } from './fixed.js';
 import { Zone } from './terrain.js';
@@ -1626,6 +1628,97 @@ describe('tickSpider', () => {
       tickSpider(world);
 
       expect(world.spider.state).toBe('Patrolling');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // #181 — Spider keeps a margin from map edges (V26) so its centered 3-tile
+  // sprite never renders off-screen while chasing an ant into a corner.
+  // -------------------------------------------------------------------------
+  describe('edge margin (#181)', () => {
+    const M = SPIDER_EDGE_MARGIN_TILES;
+
+    /**
+     * Stage a spider Chasing a stationary surface ant pinned at the west edge.
+     * The spider starts a handful of tiles inland on the same row, so it moves
+     * purely west (−X) toward the ant. Chase has no distance-escape (only
+     * dead/descended/leash), and we never run combat, so the chase persists for
+     * the whole window. Returns { world, tileXOf }.
+     */
+    function chaseTowardWestEdge(simVersion: number) {
+      const world = makeWorld();
+      world.simVersion = simVersion;
+      world.tick = 0;
+      const rowY = 32;
+      // Target ant at the very west edge; stays put (only tickSpider runs).
+      const antId = placeWorker(world, 0, rowY);
+      world.spider = makeSpider({
+        state: 'Chasing',
+        posX: (M + 5) << FP_SHIFT,
+        posY: rowY << FP_SHIFT,
+        chaseTargetAntId: antId,
+        chaseStartTick: 0,
+      });
+      const tileXOf = () => world.spider!.posX >> FP_SHIFT;
+      const tileYOf = () => world.spider!.posY >> FP_SHIFT;
+      return { world, tileXOf, tileYOf, rowY };
+    }
+
+    it('V26: spider chasing an ant at the west edge holds the margin (never reaches the edge)', () => {
+      const { world, tileXOf, tileYOf, rowY } = chaseTowardWestEdge(
+        SIM_VERSION_V26_SPIDER_EDGE_MARGIN,
+      );
+      // Precondition: started inland, actually Chasing the edge ant.
+      expect(world.spider!.state).toBe('Chasing');
+      expect(tileXOf()).toBe(M + 5);
+
+      // Drive enough ticks to traverse well past the edge had it been unclamped.
+      let minTileX = tileXOf();
+      for (let t = 0; t < 20; t++) {
+        tickSpider(world);
+        minTileX = Math.min(minTileX, tileXOf());
+        // Invariant every tick: never inside the margin band.
+        expect(tileXOf()).toBeGreaterThanOrEqual(M);
+      }
+      // It pressed up against the margin (settled exactly at it) and pursued
+      // purely along X (row unchanged), confirming it WANTED to go further west.
+      expect(minTileX).toBe(M);
+      expect(tileXOf()).toBe(M);
+      expect(tileYOf()).toBe(rowY);
+      expect(world.spider!.state).toBe('Chasing');
+    });
+
+    it('V23 control: same chase pins the spider against the west edge (pre-fix behavior)', () => {
+      const { world, tileXOf } = chaseTowardWestEdge(SIM_VERSION_V23_SPIDER_AGGRO);
+
+      for (let t = 0; t < 20; t++) tickSpider(world);
+
+      // Without the V26 clamp the spider reaches the ant's tile at the very edge.
+      expect(tileXOf()).toBe(0);
+    });
+
+    it('V26: chasing an ant into the NW corner clamps BOTH axes to the margin', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V26_SPIDER_EDGE_MARGIN;
+      world.tick = 0;
+      const antId = placeWorker(world, 0, 0); // NW corner
+      world.spider = makeSpider({
+        state: 'Chasing',
+        posX: (M + 6) << FP_SHIFT,
+        posY: (M + 6) << FP_SHIFT,
+        chaseTargetAntId: antId,
+        chaseStartTick: 0,
+      });
+
+      const spider = world.spider;
+      for (let t = 0; t < 24; t++) {
+        tickSpider(world);
+        expect(spider.posX >> FP_SHIFT).toBeGreaterThanOrEqual(M);
+        expect(spider.posY >> FP_SHIFT).toBeGreaterThanOrEqual(M);
+      }
+      // Settled in the corner of the allowed region, margin off both edges.
+      expect(spider.posX >> FP_SHIFT).toBe(M);
+      expect(spider.posY >> FP_SHIFT).toBe(M);
     });
   });
 });

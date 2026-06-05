@@ -324,7 +324,20 @@ export const SIM_VERSION_V24_NURSERY_CAPACITY = 24 as const;
  * simVersion >= V25) for byte-identical replay.
  */
 export const SIM_VERSION_V25_RALLY_RECALL = 25 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V25_RALLY_RECALL;
+/**
+ * V26 (#181) — Spider keeps a SPIDER_EDGE_MARGIN_TILES margin from every map edge
+ * in all surface states. Previously the V23 chase/combat (and meander/rampage)
+ * movement clamped the spider only to the grid bounds [0, max], so chasing an ant
+ * into a corner pinned the spider against the boundary and its 3-tile (48px)
+ * centered sprite rendered partly off the playfield (#176 had added inward
+ * reflection for the feed-retreat endpoint, but the chase path had no equivalent
+ * clamp). Under V26+ a single post-movement clamp tightens every surface state's
+ * position to [margin, max-margin] on both axes, so the full sprite always stays
+ * on-screen. Pre-V26 saves keep the to-the-edge movement (gated on simVersion >=
+ * V26) for byte-identical replay.
+ */
+export const SIM_VERSION_V26_SPIDER_EDGE_MARGIN = 26 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V26_SPIDER_EDGE_MARGIN;
 
 /**
  * S2 — AI colony state machine states.
