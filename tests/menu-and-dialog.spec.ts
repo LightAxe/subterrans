@@ -674,17 +674,19 @@ test.describe('Pheromone overlay actually renders (UAT P1 — pre-existing draw-
   // rendered identically (invisible since 9f5b23f; issue #114's toggle surfaced
   // it). The fix sequences terrain → pheromone → entities (game-scene.ts
   // renderWorld), so the overlay lands between the layers. This test is the
-  // regression guard for that ordering.
+  // regression guard for that exact ordering.
   //
   // De-flaked for #193. The old version foraged at 4× for 90s and diffed two
   // LIVE screenshots — flaky on two counts: it relied on emergent, RNG-seeded
   // trails forming in the window, and ant motion alone made the frames differ
-  // (so it could pass even if the overlay never drew). It now drives the
-  // renderer deterministically via dev-only test seams (window.__phase9_test,
-  // dev-build only): freeze the sim so the only frame-to-frame delta is the
-  // overlay, seed a known full-strength trail, then prove ON ≠ OFF and that
-  // toggling back ON restores the exact ON frame.
-  test('with the sim frozen, a seeded pheromone trail renders (overlay ON ≠ OFF)', async ({
+  // (so it could pass even if the overlay never drew). It now reads the actual
+  // per-frame layer draw order from a render-only observability hook
+  // (window.__phase9_test.getDrawOrder, dev-build only) and asserts the overlay
+  // is drawn between terrain and entities — the precise invariant the bug
+  // violated. Deterministic, no screenshots, and (unlike a pixel test that would
+  // have to inject pheromone into the sim store from the render layer) it stays
+  // on the right side of the sim/render boundary.
+  test('pheromone overlay draws between terrain and entities (and only when ON)', async ({
     page,
   }) => {
     await page.goto('/');
@@ -695,68 +697,28 @@ test.describe('Pheromone overlay actually renders (UAT P1 — pre-existing draw-
     });
     await page.reload();
     await page.locator('canvas').first().waitFor({ state: 'attached' });
-    await settleToPlaying(page); // fresh Normal game; overlay defaults ON
+    await settleToPlaying(page); // fresh Normal game, surface view, overlay ON
 
-    // Freeze the sim so the only frame-to-frame delta is the overlay (poll:
-    // gameLoop may not exist the instant we reach Playing).
-    await expect
-      .poll(
+    const drawOrder = () =>
+      page.evaluate(
         () =>
-          page.evaluate(
-            () =>
-              (window as { __phase9_test?: { freezeSim(): boolean } }).__phase9_test?.freezeSim() ??
-              false,
-          ),
-        { timeout: 5_000 },
-      )
-      .toBe(true);
+          (window as { __phase9_test?: { getDrawOrder(): string[] } }).__phase9_test?.getDrawOrder() ??
+          [],
+      );
 
-    // Seed a guaranteed-visible trail and capture the canvas rect it painted, so
-    // we can clip every screenshot to exactly that region (off-centre, clear of
-    // entities and the centre-aligned caption/flash UI). Poll until non-null:
-    // the world/grid may lag reaching Playing by a frame.
-    type Rect = { x: number; y: number; width: number; height: number };
-    let clip: Rect | null = null;
-    await expect
-      .poll(
-        async () => {
-          clip = await page.evaluate(
-            () =>
-              (
-                window as { __phase9_test?: { seedPheromoneTrail(): Rect | null } }
-              ).__phase9_test?.seedPheromoneTrail() ?? null,
-          );
-          return clip !== null;
-        },
-        { timeout: 5_000 },
-      )
-      .toBe(true);
-    const region = clip as unknown as Rect;
-    const shot = () => page.locator('canvas').first().screenshot({ clip: region });
-    await page.waitForTimeout(100); // let one frame paint the seeded cells
+    // Overlay ON (default): pheromone must be drawn AFTER terrain and BEFORE
+    // entities. The pre-fix order was [pheromone, terrain, entities] (overlay
+    // overpainted) — this assertion fails on that order. Poll: the first frames
+    // may render before getDrawOrder is populated.
+    await expect.poll(drawOrder, { timeout: 5_000 }).toEqual(['terrain', 'pheromone', 'entities']);
 
-    // With the sim frozen and the clip off-centre, the region is byte-stable
-    // frame-to-frame, so any ON↔OFF difference below can only be the overlay.
-    // Establish that stability first so a noisy frame can't mask a regression.
-    const onA = await shot();
-    await page.waitForTimeout(100);
-    const onB = await shot();
-    expect(onA.equals(onB)).toBe(true);
-
-    // Toggle the overlay OFF ('p'): the seeded cells must disappear. Pre-fix this
-    // was a no-op (terrain had already overpainted the overlay) → ON == OFF.
+    // Toggle the overlay OFF ('p'): pheromone drops out of the draw order.
     await page.keyboard.press('p');
-    await page.waitForTimeout(100);
-    const off = await shot();
-    expect(onB.equals(off)).toBe(false);
+    await expect.poll(drawOrder, { timeout: 5_000 }).toEqual(['terrain', 'entities']);
 
-    // Toggle back ON: the overlay returns and the region matches the original ON
-    // exactly (sim frozen ⇒ identical render), proving the overlay is the only
-    // variable — the diff above wasn't incidental drift.
+    // Toggle back ON: the overlay returns, still correctly ordered between layers.
     await page.keyboard.press('p');
-    await page.waitForTimeout(100);
-    const onC = await shot();
-    expect(onC.equals(onB)).toBe(true);
+    await expect.poll(drawOrder, { timeout: 5_000 }).toEqual(['terrain', 'pheromone', 'entities']);
   });
 });
 

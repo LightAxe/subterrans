@@ -74,9 +74,8 @@ import {
 import { GameOutcome } from '../sim/game-over.js';
 import { drawSurfaceTerrain, drawSurfaceEntities, type GfxLike } from './draw-surface.js';
 import { drawUndergroundTerrain, drawUndergroundEntities } from './draw-underground.js';
-import { drawPheromoneOverlay, PHEROMONE_VISUAL_MAX } from './draw-pheromone.js';
+import { drawPheromoneOverlay } from './draw-pheromone.js';
 import { publishSpeedMultiplier } from './ui-scene.js';
-import { phSet, pheromoneGridKey } from '../sim/pheromone/pheromone-store.js';
 import { AntFacingCache } from './ant-facing-cache.js';
 import {
   ANT_TEXTURE_QUEEN,
@@ -141,8 +140,8 @@ import {
   inferFlashDirection,
   QUEEN_DAMAGE_SUPPRESS_TICKS,
 } from './screen-effects.js';
-import { ChamberType, PheromoneType } from '../sim/enums.js';
-import { CANVAS_W, CANVAS_H, TILE_SIZE_PX } from './sprites.js';
+import { ChamberType } from '../sim/enums.js';
+import { CANVAS_W, CANVAS_H } from './sprites.js';
 // UIScenePhase9 — subset of UIScene public API added in Plan 06 Task 3.
 // Typed here to avoid circular imports; UIScene implements these methods.
 interface UIScenePhase9 {
@@ -210,23 +209,15 @@ declare global {
      *  is true (Playwright runs the Vite dev server), so the whole thing is
      *  tree-shaken out of the production library build. Issue #193. */
     __phase9_test?: {
-      /** Freeze the simulation (gameLoop.pause) WITHOUT opening the pause menu,
-       *  leaving gamePhase === Playing so the overlay still renders and the 'p'
-       *  toggle still works. With the sim frozen the world renders byte-stable
-       *  frame-to-frame, so a screenshot diff isolates exactly one variable —
-       *  the pheromone overlay — instead of also capturing ant motion. */
-      freezeSim(): boolean;
-      /** Paint a small block of full-strength FoodTrail pheromone offset up-left
-       *  of the surface camera centre (player colony), and return the canvas-pixel
-       *  rect it painted so the caller can clip its screenshots to exactly that
-       *  region. Off-centre on purpose: the onboarding captions and save flash all
-       *  render at canvas centre (x = CANVAS_W/2), so an off-centre clip is immune
-       *  to any tween-driven UI even though none fires in this scenario. Returns
-       *  null if the world/grid isn't ready yet (caller should poll). Lets the
-       *  pheromone draw-order regression test exercise the real render pipeline
-       *  deterministically, instead of waiting ~90s for emergent RNG-seeded
-       *  foraging to lay a trail (the old, flaky approach). */
-      seedPheromoneTrail(): { x: number; y: number; width: number; height: number } | null;
+      /** Return the layer draw order recorded on the most recent rendered frame
+       *  (e.g. ['terrain','pheromone','entities']). Lets a Playwright test assert
+       *  the pheromone overlay is drawn between terrain and entities — the exact
+       *  invariant the historical draw-order bug violated (terrain overpainted a
+       *  too-early overlay). Pure render-side observability: it records nothing
+       *  from and mutates nothing in the sim (a pixel test would have to inject
+       *  sim state, crossing the sim/render boundary). Empty until the first
+       *  frame renders. Issue #193. */
+      getDrawOrder(): string[];
     };
   }
 }
@@ -298,56 +289,30 @@ export class GameScene extends Phaser.Scene {
     publishSpeedMultiplier(next);
   }
 
+  /** DEV/E2E-only render-order trace (issue #193). The draw section of update()
+   *  records the layer sequence each frame so a Playwright test can assert the
+   *  pheromone overlay is drawn between terrain and entities — the exact
+   *  invariant the historical draw-order bug violated (terrain overpainted a
+   *  too-early overlay). Pure render-side observability: nothing here reads or
+   *  mutates the sim, so the sim/render boundary is respected (a pixel-based test
+   *  would have to inject pheromone into the sim store from render, which is a
+   *  boundary violation). The bodies are gated on import.meta.env.DEV, which Vite
+   *  statically replaces with false in the library build, so they vanish there. */
+  private readonly drawOrder: string[] = [];
+  private beginDrawTrace(): void {
+    if (import.meta.env.DEV) this.drawOrder.length = 0;
+  }
+  private recordDrawLayer(layer: 'terrain' | 'pheromone' | 'entities'): void {
+    if (import.meta.env.DEV) this.drawOrder.push(layer);
+  }
+
   /** Dev/E2E-only: install Playwright test seams on window. Guarded by
    *  import.meta.env.DEV so the whole block is tree-shaken out of production
-   *  library builds (Playwright runs the Vite dev server, where DEV is true).
-   *  Issue #193 — gives the renderer a deterministic input so the pheromone
-   *  draw-order regression test no longer depends on ~90s of emergent,
-   *  RNG-seeded foraging happening to lay a visible trail. */
+   *  library builds (Playwright runs the Vite dev server, where DEV is true). */
   private installTestHooks(): void {
     if (!import.meta.env.DEV || typeof window === 'undefined') return;
     window.__phase9_test = {
-      freezeSim: (): boolean => {
-        if ((this.gameLoop as GameLoop | undefined) === undefined) return false;
-        this.gameLoop.pause();
-        return true;
-      },
-      seedPheromoneTrail: (): { x: number; y: number; width: number; height: number } | null => {
-        const world = this.world as WorldState | undefined;
-        if (world === undefined) return null;
-        const key = pheromoneGridKey(PLAYER_COLONY_ID, PheromoneType.FoodTrail, 'surface');
-        const grid = world.pheromoneGrids[key];
-        if (grid === undefined) return null;
-        const cam = this.viewState.surfaceCamera;
-        // Mirror draw-pheromone's tile→canvas mapping so the returned rect lines
-        // up exactly with the painted cells.
-        const left = Math.floor(cam.x - cam.viewportWidth / 2);
-        const top = Math.floor(cam.y - cam.viewportHeight / 2);
-        // Centre the block up-left of the camera: clear of the nest entities
-        // (which cluster at centre) and of the centre-aligned caption/flash UI.
-        // Clamp the centre so the whole block stays inside the grid: then every
-        // cell is actually painted and the returned rect lines up with them.
-        // (For the test's interior nest camera the clamp is a no-op; it only
-        // matters if the hook is reused with an edge-positioned camera, where an
-        // unclamped rect would advertise canvas area phSet never painted.)
-        const RADIUS = 3;
-        const clampCentre = (v: number, extent: number): number =>
-          Math.max(RADIUS, Math.min(v, extent - 1 - RADIUS));
-        const cx = clampCentre(Math.floor(cam.x) - 16, grid.width);
-        const cy = clampCentre(Math.floor(cam.y) - 9, grid.height);
-        for (let dy = -RADIUS; dy <= RADIUS; dy++) {
-          for (let dx = -RADIUS; dx <= RADIUS; dx++) {
-            phSet(grid, cx + dx, cy + dy, PHEROMONE_VISUAL_MAX);
-          }
-        }
-        const size = (RADIUS * 2 + 1) * TILE_SIZE_PX;
-        return {
-          x: (cx - RADIUS - left) * TILE_SIZE_PX,
-          y: (cy - RADIUS - top) * TILE_SIZE_PX,
-          width: size,
-          height: size,
-        };
-      },
+      getDrawOrder: (): string[] => [...this.drawOrder],
     };
   }
 
@@ -1406,11 +1371,15 @@ export class GameScene extends Phaser.Scene {
     //
     // Player colony only — enemy pheromones stay hidden regardless of toggle
     // state (PRD §7b / T-08-05).
+    this.beginDrawTrace();
     if (this.viewState.activeView === 'surface') {
+      this.recordDrawLayer('terrain');
       drawSurfaceTerrain(gfx, this.world, cam);
       if (this.viewState.showPheromoneOverlay) {
+        this.recordDrawLayer('pheromone');
         drawPheromoneOverlay(gfx, this.world, cam, 'surface');
       }
+      this.recordDrawLayer('entities');
       const pending =
         this.surfaceInputState.pendingEntranceTileX !== null &&
         this.surfaceInputState.pendingEntranceTileY !== null
@@ -1434,10 +1403,13 @@ export class GameScene extends Phaser.Scene {
         overlayGfx, // #148: health bar renders above sprites
       );
     } else {
+      this.recordDrawLayer('terrain');
       drawUndergroundTerrain(gfx, this.world, cam, this.viewState.activeUndergroundColonyId);
       if (this.viewState.showPheromoneOverlay) {
+        this.recordDrawLayer('pheromone');
         drawPheromoneOverlay(gfx, this.world, cam, 'underground');
       }
+      this.recordDrawLayer('entities');
       drawUndergroundEntities(
         gfx,
         this.antSprites,
