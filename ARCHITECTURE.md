@@ -318,7 +318,7 @@ The principles above are the rules; this section maps what the codebase actually
 
 ### Render / input — `src/render/`, `src/input/`
 
-- Two Phaser scenes: `game-scene.ts` (game world, phase FSM, draw dispatch) and `ui-scene.ts` (HUD and overlays). Surface and underground terrain/entity draw modules, a pheromone overlay, the AI controller, and an optional end-of-game survey + playtrace upload (`playtrace-upload.ts`, behind the `VITE_PLAYTRACE_ENDPOINT` flag).
+- Two Phaser scenes: `game-scene.ts` (game world, phase FSM, draw dispatch) and `ui-scene.ts` (HUD and overlays). Surface and underground terrain/entity draw modules, a pheromone overlay, the AI controller, and an optional end-of-game survey + playtrace upload (`playtrace-upload.ts`, gated on a non-empty resolved `playtraceEndpoint` — the `mount({ playtraceEndpoint })` option if set, else the `VITE_PLAYTRACE_ENDPOINT` build-time env var; empty disables it).
 - Input translates keyboard/pointer into `SimCommand`s — the one-way flow of Principle 1.
 - **E2E observability:** `window.__phase9_ui` exposes read-only HUD state, and a dev-only, tree-shaken `window.__phase9_test` seam exposes just enough for Playwright to drive and assert the game without reaching into simulation internals.
 
