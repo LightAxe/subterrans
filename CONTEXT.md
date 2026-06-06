@@ -128,8 +128,9 @@ _Avoid_: stockpile, reserve.
 ## Foraging & pheromones
 
 **Pheromone**:
-A scalar field on a grid (`PheromoneType`) that biases ant routing. Two types:
-**FoodTrail** and **DangerTrail** (the spider lays DangerTrail).
+A scalar field on a grid (`PheromoneType`). **FoodTrail** is the layer ants read to
+bias foraging routes; **DangerTrail** is laid by the spider and decays, but is
+**not** read by ant movement — it's a danger signal, not a routing input.
 _Avoid_: trail (ambiguous on its own); **marker** (= the player's mark). **scent**
 is a *different* mechanism (see below) — never a synonym for pheromone.
 
@@ -139,8 +140,8 @@ Direct detection of nearby food — a distinct movement source from pheromone tr
 _Avoid_: using "scent" to mean pheromone.
 
 **Food pile** (`FoodPile`):
-A finite surface food source foragers harvest; depletes with pickups and respawns
-over time.
+A finite surface food source foragers harvest. When its pickups run out the pile is
+**removed**; new piles spawn elsewhere over time (the same pile does not regenerate).
 _Avoid_: food node, resource, deposit.
 
 **Flow field**:
