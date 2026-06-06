@@ -30,7 +30,7 @@ docs/         # Additional documentation for contributors.
 
 ## Architectural Principles (Summary)
 
-These are non-negotiable. See [ARCHITECTURE.md](ARCHITECTURE.md) for full explanations and code examples, and [CONTEXT.md](CONTEXT.md) for the domain glossary (the canonical name for each concept named below).
+These are non-negotiable. See [ARCHITECTURE.md](ARCHITECTURE.md) for full explanations and code examples, and [CONTEXT.md](CONTEXT.md) for canonical domain vocabulary.
 
 1. **Strict sim/render separation** — `src/sim/` has zero dependencies on Phaser, the DOM, or any browser API. It must run in Node.js unchanged.
 2. **Fixed 20 Hz timestep** — Simulation advances exactly 50ms per tick. Rendering interpolates at display framerate. Variable delta time is forbidden.
