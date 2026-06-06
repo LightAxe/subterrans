@@ -2,6 +2,8 @@
 
 A modern ant colony simulation game — a spiritual successor to SimAnt (1991) with a retro pixel aesthetic and contemporary design.
 
+> **Project vocabulary:** use the canonical terms in [CONTEXT.md](CONTEXT.md) — the domain glossary (queen/worker/forager, chamber/entrance/tunnel, FoodTrail/DangerTrail, mark/designate/rally, AI states, `simVersion`, …). When several words mean the same concept, CONTEXT.md picks one; match it in code, comments, tests, commits, and PRs.
+
 ## Tech Stack
 
 - **Language:** TypeScript (strict mode)
@@ -28,7 +30,7 @@ docs/         # Additional documentation for contributors.
 
 ## Architectural Principles (Summary)
 
-These are non-negotiable. See [ARCHITECTURE.md](ARCHITECTURE.md) for full explanations and code examples.
+These are non-negotiable. See [ARCHITECTURE.md](ARCHITECTURE.md) for full explanations and code examples, and [CONTEXT.md](CONTEXT.md) for the domain glossary (the canonical name for each concept named below).
 
 1. **Strict sim/render separation** — `src/sim/` has zero dependencies on Phaser, the DOM, or any browser API. It must run in Node.js unchanged.
 2. **Fixed 20 Hz timestep** — Simulation advances exactly 50ms per tick. Rendering interpolates at display framerate. Variable delta time is forbidden.
