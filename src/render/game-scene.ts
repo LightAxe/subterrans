@@ -75,6 +75,7 @@ import { GameOutcome } from '../sim/game-over.js';
 import { drawSurfaceTerrain, drawSurfaceEntities, type GfxLike } from './draw-surface.js';
 import { drawUndergroundTerrain, drawUndergroundEntities } from './draw-underground.js';
 import { drawPheromoneOverlay } from './draw-pheromone.js';
+import { publishSpeedMultiplier } from './ui-scene.js';
 import { AntFacingCache } from './ant-facing-cache.js';
 import {
   ANT_TEXTURE_QUEEN,
@@ -201,6 +202,26 @@ import type { SimCommand } from '../sim/commands.js';
 export { GamePhase, decideBootMode, deriveAIColonyIds, appendInputLog, generateFreshSeed };
 export type { GamePhase as GamePhaseType };
 
+declare global {
+  interface Window {
+    /** Dev/E2E-only test seam, separate from the read-only __phase9_ui
+     *  observability hook. Installed by GameScene only when import.meta.env.DEV
+     *  is true (Playwright runs the Vite dev server), so the whole thing is
+     *  tree-shaken out of the production library build. Issue #193. */
+    __phase9_test?: {
+      /** Return the layer draw order recorded on the most recent rendered frame
+       *  (e.g. ['terrain','pheromone','entities']). Lets a Playwright test assert
+       *  the pheromone overlay is drawn between terrain and entities — the exact
+       *  invariant the historical draw-order bug violated (terrain overpainted a
+       *  too-early overlay). Pure render-side observability: it records nothing
+       *  from and mutates nothing in the sim (a pixel test would have to inject
+       *  sim state, crossing the sim/render boundary). Empty until the first
+       *  frame renders. Issue #193. */
+      getDrawOrder(): string[];
+    };
+  }
+}
+
 export class GameScene extends Phaser.Scene {
   private world!: WorldState;
   private prevState!: WorldState;
@@ -256,6 +277,44 @@ export class GameScene extends Phaser.Scene {
   // below set the same field directly. Narrowed to the cycle set so the
   // type aligns with PauseMenuLayout's SpeedMultiplier.
   private speedMultiplier: 1 | 2 | 4 = 1;
+
+  /** Set the live game speed and mirror it to the Playwright observability hook
+   *  (window.__phase9_ui.speedMultiplier, issue #193). Every speedMultiplier
+   *  write — the 1/2/4 keyboard shortcuts, the pause-menu Settings cycle, and
+   *  the fresh-boot reset — routes through here so the hook never drifts from the
+   *  field. Lets the speed-cycle e2e assert by value instead of pixel-diffing the
+   *  rendered label (the old approach was CI-flaky under screenshot pressure). */
+  private setSpeedMultiplier(next: 1 | 2 | 4): void {
+    this.speedMultiplier = next;
+    publishSpeedMultiplier(next);
+  }
+
+  /** DEV/E2E-only render-order trace (issue #193). The draw section of update()
+   *  records the layer sequence each frame so a Playwright test can assert the
+   *  pheromone overlay is drawn between terrain and entities — the exact
+   *  invariant the historical draw-order bug violated (terrain overpainted a
+   *  too-early overlay). Pure render-side observability: nothing here reads or
+   *  mutates the sim, so the sim/render boundary is respected (a pixel-based test
+   *  would have to inject pheromone into the sim store from render, which is a
+   *  boundary violation). The bodies are gated on import.meta.env.DEV, which Vite
+   *  statically replaces with false in the library build, so they vanish there. */
+  private readonly drawOrder: string[] = [];
+  private beginDrawTrace(): void {
+    if (import.meta.env.DEV) this.drawOrder.length = 0;
+  }
+  private recordDrawLayer(layer: 'terrain' | 'pheromone' | 'entities'): void {
+    if (import.meta.env.DEV) this.drawOrder.push(layer);
+  }
+
+  /** Dev/E2E-only: install Playwright test seams on window. Guarded by
+   *  import.meta.env.DEV so the whole block is tree-shaken out of production
+   *  library builds (Playwright runs the Vite dev server, where DEV is true). */
+  private installTestHooks(): void {
+    if (!import.meta.env.DEV || typeof window === 'undefined') return;
+    window.__phase9_test = {
+      getDrawOrder: (): string[] => [...this.drawOrder],
+    };
+  }
 
   // S6 — render-side scratch (per-session, reset in resetSessionState).
   private lastProcessedEventTick = -1; // tick-based cursor for consumeEventsForRender
@@ -372,15 +431,15 @@ export class GameScene extends Phaser.Scene {
     // X was pressed while paused.
     this.input.keyboard!.on('keydown-ONE', () => {
       if (this.gamePhase !== GamePhase.Playing) return;
-      this.speedMultiplier = 1;
+      this.setSpeedMultiplier(1);
     });
     this.input.keyboard!.on('keydown-TWO', () => {
       if (this.gamePhase !== GamePhase.Playing) return;
-      this.speedMultiplier = 2;
+      this.setSpeedMultiplier(2);
     });
     this.input.keyboard!.on('keydown-FOUR', () => {
       if (this.gamePhase !== GamePhase.Playing) return;
-      this.speedMultiplier = 4;
+      this.setSpeedMultiplier(4);
     });
     // Issue #114 — P toggles the player's pheromone overlay. Render-only:
     // the flag lives on ViewState (so the next frame skips drawPheromoneOverlay)
@@ -493,6 +552,10 @@ export class GameScene extends Phaser.Scene {
     // bootMode branch so both paths reach it. main.ts converts this to
     // `MountedGame.ready: Promise<void>` for the host page.
     this.game.events.emit(SUBTERRANS_READY_EVENT);
+
+    // Dev/E2E-only test seams (no-op in production builds). Installed last so
+    // the world/viewState the hooks read are already constructed.
+    this.installTestHooks();
   }
 
   // ---------------------------------------------------------------------------
@@ -530,7 +593,7 @@ export class GameScene extends Phaser.Scene {
     this.lastActiveView = null;
     this.currentOutcome = GameOutcome.None;
     this.currentCause = null;
-    this.speedMultiplier = 1;
+    this.setSpeedMultiplier(1);
     // Re-enable autosave for the next session. The flag is set only by
     // bootFromSave's deserialize-throw catch (see issue #66 in the field
     // doc); a fresh start via restartGame should resume normal autosave.
@@ -994,7 +1057,7 @@ export class GameScene extends Phaser.Scene {
       // same control a discoverable home while paused.
       getSpeedMultiplier: () => this.speedMultiplier,
       onCycleSpeed: (next: 1 | 2 | 4) => {
-        this.speedMultiplier = next;
+        this.setSpeedMultiplier(next);
       },
     };
     // Issue #122 — only attach onQuitAndSurvey when the feature flag is on.
@@ -1308,11 +1371,15 @@ export class GameScene extends Phaser.Scene {
     //
     // Player colony only — enemy pheromones stay hidden regardless of toggle
     // state (PRD §7b / T-08-05).
+    this.beginDrawTrace();
     if (this.viewState.activeView === 'surface') {
+      this.recordDrawLayer('terrain');
       drawSurfaceTerrain(gfx, this.world, cam);
       if (this.viewState.showPheromoneOverlay) {
+        this.recordDrawLayer('pheromone');
         drawPheromoneOverlay(gfx, this.world, cam, 'surface');
       }
+      this.recordDrawLayer('entities');
       const pending =
         this.surfaceInputState.pendingEntranceTileX !== null &&
         this.surfaceInputState.pendingEntranceTileY !== null
@@ -1336,10 +1403,13 @@ export class GameScene extends Phaser.Scene {
         overlayGfx, // #148: health bar renders above sprites
       );
     } else {
+      this.recordDrawLayer('terrain');
       drawUndergroundTerrain(gfx, this.world, cam, this.viewState.activeUndergroundColonyId);
       if (this.viewState.showPheromoneOverlay) {
+        this.recordDrawLayer('pheromone');
         drawPheromoneOverlay(gfx, this.world, cam, 'underground');
       }
+      this.recordDrawLayer('entities');
       drawUndergroundEntities(
         gfx,
         this.antSprites,
