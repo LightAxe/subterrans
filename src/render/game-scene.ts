@@ -133,7 +133,7 @@ import {
 } from '../input/underground-input.js';
 import { hideContextMenu } from './context-menu-state.js';
 import { buildPlaytraceSummary, type GameOutcomeLabel } from './summary-builder.js';
-import { checkAndTrigger, resetCaptions } from './onboarding-captions.js';
+import { captionForEvent, checkAndTrigger, resetCaptions } from './onboarding-captions.js';
 import {
   triggerScreenEdgeFlash,
   triggerQueenDamagePulse,
@@ -690,16 +690,19 @@ export class GameScene extends Phaser.Scene {
         } else {
           triggerScreenEdgeFlash(this, 'right', CANVAS_W, CANVAS_H);
         }
-        // Caption #7: first AI invasion.
-        const captionText = checkAndTrigger('aiInvading');
+        // Caption #7: AI invasion (one-shot, via the event→caption policy).
+        const captionText = captionForEvent(ev.type);
         if (captionText && uiScene) {
           uiScene.showCaption(captionText, CANVAS_W / 2, 60);
         }
       }
 
       if (ev.type === 'spider_rampage_start') {
-        // Caption #8: first spider rampage.
-        const captionText = checkAndTrigger('spiderRampage');
+        // Spider rampage caption: fires on EVERY rampage, not just the first.
+        // The recurring-vs-one-shot decision lives in captionForEvent; the
+        // spider is surface-only now (#146/#176/#177) so the copy no longer
+        // mentions tunnels.
+        const captionText = captionForEvent(ev.type);
         if (captionText && uiScene) {
           uiScene.showCaption(captionText, CANVAS_W / 2, 60);
         }

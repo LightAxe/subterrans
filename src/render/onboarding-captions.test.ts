@@ -1,7 +1,13 @@
 // onboarding-captions.test.ts — S6 coverage for the first-occurrence caption registry.
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { checkAndTrigger, resetCaptions, triggered } from './onboarding-captions.js';
+import {
+  captionForEvent,
+  checkAndTrigger,
+  resetCaptions,
+  triggered,
+} from './onboarding-captions.js';
+import type { SimEvent } from '../sim/telemetry.js';
 
 // Always start each test with a clean slate.
 beforeEach(() => {
@@ -119,6 +125,76 @@ describe('checkAndTrigger — chamber type substitution', () => {
   it('substitution only happens on first trigger; second call still returns null', () => {
     checkAndTrigger('chamber', 'Queen');
     expect(checkAndTrigger('chamber', 'Nursery')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Event → caption policy (captionForEvent)
+// ---------------------------------------------------------------------------
+
+describe('captionForEvent — recurring alerts fire every time', () => {
+  it('spider_rampage_start returns its caption on EVERY call (per-event dispatch)', () => {
+    const expected = 'The spider has gone hungry and is hunting on the surface.';
+    // Two separate rampage events must both produce the caption — this is the
+    // regression guard for #190 (rampage popup only fired on the first rampage).
+    expect(captionForEvent('spider_rampage_start')).toBe(expected);
+    expect(captionForEvent('spider_rampage_start')).toBe(expected);
+    // ...and again after many occurrences.
+    expect(captionForEvent('spider_rampage_start')).toBe(expected);
+  });
+
+  it('the spider rampage copy no longer mentions tunnels (#190)', () => {
+    const text = captionForEvent('spider_rampage_start');
+    expect(text).not.toBeNull();
+    expect(text?.toLowerCase()).not.toContain('tunnel');
+  });
+
+  it('recurring dispatch does not touch the one-shot triggered map', () => {
+    captionForEvent('spider_rampage_start');
+    captionForEvent('spider_rampage_start');
+    expect(triggered.has('spiderRampage')).toBe(false);
+  });
+});
+
+describe('captionForEvent — one-shot events fire once', () => {
+  it('invasion_start returns its caption once then null', () => {
+    expect(captionForEvent('invasion_start')).toBe('The enemy is attacking your hive.');
+    expect(captionForEvent('invasion_start')).toBeNull();
+  });
+
+  it('shares one-shot state with checkAndTrigger for the same CaptionKey', () => {
+    // invasion_start maps to the 'aiInvading' caption; once the event fires it,
+    // a direct checkAndTrigger('aiInvading') (the ai_state_transition
+    // belt-and-suspenders path) must be suppressed, and vice versa.
+    expect(captionForEvent('invasion_start')).not.toBeNull();
+    expect(checkAndTrigger('aiInvading')).toBeNull();
+
+    resetCaptions();
+
+    expect(checkAndTrigger('aiInvading')).not.toBeNull();
+    expect(captionForEvent('invasion_start')).toBeNull();
+  });
+});
+
+describe('captionForEvent — unknown / caption-less events', () => {
+  it('returns null for events with no caption', () => {
+    expect(captionForEvent('combat_kill')).toBeNull();
+    expect(captionForEvent('ai_state_transition')).toBeNull();
+    // Defensive runtime check: an event type outside the union (e.g. one that
+    // existed in an older save/telemetry stream) must still map to null. The
+    // cast is required because the signature now narrows to SimEvent['type'].
+    expect(captionForEvent('not_a_real_event' as SimEvent['type'])).toBeNull();
+  });
+});
+
+describe('captionForEvent vs checkAndTrigger — one-shot onboarding unaffected', () => {
+  it('genuine onboarding one-shots still fire exactly once', () => {
+    // Per-event recurring dispatch must not regress the one-shot onboarding tips.
+    for (const key of ['dig', 'chamber', 'foodMark', 'rally'] as const) {
+      resetCaptions();
+      expect(checkAndTrigger(key)).not.toBeNull();
+      expect(checkAndTrigger(key)).toBeNull();
+    }
   });
 });
 
