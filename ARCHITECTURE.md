@@ -247,7 +247,7 @@ export function fpMul(a: number, b: number): number {
 
 ## 7. Snapshot Saves with Replay Logging
 
-**Rule:** The game saves by serializing the entire world state to JSON. In parallel, every player command is appended to an input log alongside the seed. This enables two recovery paths: load the snapshot directly, or replay from seed + inputs to reproduce the exact same state.
+**Rule:** The game saves by serializing the entire world state to JSON. In parallel, every command applied to the simulation — the player's *and the AI's* — is appended to an input log alongside the seed. (The AI controller is a render-layer policy that issues `SimCommand`s, so its commands are part of the replayable input — see Principle 1.) This enables two recovery paths: load the snapshot directly, or replay from seed + inputs to reproduce the same state.
 
 **Why:** Snapshot saves are simple and reliable. Replay logs are invaluable for debugging (reproduce any bug by replaying the input sequence) and are the foundation for deterministic lockstep multiplayer.
 
@@ -257,7 +257,7 @@ export function fpMul(a: number, b: number): number {
 interface SaveFile {
   version: number; // save-envelope format version
   seed: number;
-  inputLog: SimCommand[]; // every player command, in order
+  inputLog: SimCommand[]; // every drained command — player AND AI — in order (replay truth)
   snapshot: WorldState; // full serialized world (carries its own simVersion + tick)
   savedAtMs?: number; // wall-clock stamp, display only
 }
@@ -265,10 +265,12 @@ interface SaveFile {
 
 **Replay verification:** Given a save file, we can verify its integrity by replaying `inputLog` from tick 0 with `seed` and asserting the final state matches `snapshot`. If it doesn't, either the save is corrupt or the simulation has a non-determinism bug. This is exercised at the unit level by `src/sim/determinism.test.ts` (byte-identical fresh-world replays).
 
-**Save versioning and the `simVersion` gate:** The envelope lives in `localStorage` with a 30-second autosave. Separately from the envelope `version`, the simulation carries a `simVersion` that increments whenever a change alters the deterministic sequence a save would replay — an algorithm change, a tick-order change, an added/removed `WorldState` field, or a change in PRNG draw count/order. Two rules keep replay correct without migration code:
+**Save versioning and the `simVersion` gate:** The envelope lives in `localStorage` with a 30-second autosave. A save loads by **deserializing its snapshot** — the snapshot is authoritative; loading does not re-derive state from `seed` + `inputLog`. Separately from the envelope `version`, the simulation carries a `simVersion` that increments whenever a change would make an already-written save **deserialize or continue incorrectly**: an added / removed / reinterpreted `WorldState` field, a tick-order change, an algorithm change, or a change in PRNG draw count/order. Two rules keep this correct without migration code:
 
-- **Sticky on load.** A save made at `simVersion` N replays at N; it is never silently upgraded. Determinism-affecting changes are wrapped in `if (world.simVersion >= V_X)` gates so older saves reproduce their original behavior.
-- **Rolling acceptance window, no migrations.** Saves below a `MIN_ACCEPTED_SIM_VERSION` are rejected outright (no `?? default` fallbacks, no migration shims); saves from a *newer* build are preserved — not loaded — so they can be recovered on that build. Bare balance-constant retunes and render-only changes do **not** bump `simVersion`.
+- **Sticky on load.** A save keeps the `simVersion` it was written under; it is never silently upgraded. Behavior changes are wrapped in `if (world.simVersion >= V_X)` gates so a save from an earlier accepted version continues under the rules it was created with.
+- **Rolling acceptance window, no migrations.** Saves below `MIN_ACCEPTED_SIM_VERSION` are rejected outright (no `?? default` fallbacks, no migration shims); saves from a *newer* build are preserved — not loaded — so they can be recovered there.
+
+**What does *not* bump `simVersion`:** render-only changes (the renderer never touches sim state), and bare balance-constant retunes — a retune shifts live balance for new and loaded games alike without changing how a saved snapshot deserializes or continues. The one thing a retune does *not* preserve is byte-identical replay of an *older* save from `seed` + `inputLog`; that replay byte-identity (verified by `src/sim/determinism.test.ts`) is therefore asserted **within a single build**, not across the acceptance window. The bump-and-gate rule exists to keep an older save **loadable and correct when continued on a newer build** — which a field, shape, tick-order, or algorithm change can break (so those bump and gate) but a constant retune cannot.
 
 **Deferred:** binary save format and cloud saves.
 
