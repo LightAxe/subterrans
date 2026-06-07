@@ -337,7 +337,32 @@ export const SIM_VERSION_V25_RALLY_RECALL = 25 as const;
  * V26) for byte-identical replay.
  */
 export const SIM_VERSION_V26_SPIDER_EDGE_MARGIN = 26 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V26_SPIDER_EDGE_MARGIN;
+/**
+ * V27 (#126) — Forager storage backpressure. The issue-#42 fix-#2 demotion
+ * already sends surface SearchingFood ants to Idle when the colony has nowhere
+ * to deposit (entrance pool at capacity AND no FoodStorage chamber depositable),
+ * but the step-10a idle-reassignment re-promoted them to Foraging the very next
+ * tick because it keyed only on `computedAllocation.forage`. Waves of would-be
+ * carriers therefore churned Idle→Foraging→demote→Idle and piled up by the
+ * hundreds at the entrance shaft with nowhere to unload.
+ * Under V27+, step 10a additionally suppresses idle→FORAGING promotion (zeroes
+ * the LOCAL `needForage`, never the persisted `computedAllocation`) for any
+ * colony where `colonyForageBackpressure` holds. Only forage promotion is
+ * suppressed: an idle ant that would have foraged still fills any remaining
+ * dig/fight/nurse demand (the eligibles carve is a sequential need chain), and
+ * only stays Idle when forage was the sole unmet demand. Forage promotion
+ * resumes automatically once a chamber becomes depositable or the queen drains
+ * the pool.
+ * Backpressure (promotion suppression + the #42 demotion) is SCOPED to colonies
+ * that own a FoodStorage chamber — the "hundreds of ants" pile-up only forms in
+ * a mature, fully-saturated colony. A chamberless early-game colony keeps
+ * foraging into its entrance pool; only its CARRIERS park, via the universal
+ * #27 wait-wake gate (`colonyHasNoDepositTarget`), which keeps the pool topped
+ * off at cap. Pre-V27 saves keep the churn AND the chamberless-inclusive
+ * demotion (gated on simVersion >= V27) for byte-identical replay.
+ */
+export const SIM_VERSION_V27_FORAGE_BACKPRESSURE = 27 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V27_FORAGE_BACKPRESSURE;
 
 /**
  * S2 — AI colony state machine states.

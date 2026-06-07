@@ -6730,15 +6730,27 @@ describe('issue #42 — partial-deposit wait gate (v6)', () => {
 
 describe('issue #42 — demote SearchingFood when no deposit target (v6)', () => {
   it('forager inside the wave radius is demoted when colony has nowhere to deposit', () => {
-    // Colony with pool at cap and no chambers — anything a forager finds
-    // has nowhere to land. Demote unconditionally regardless of distance
-    // to entrance. Wave does NOT bump (the demote isn't about radius).
+    // Saturated MATURE colony — pool at cap AND a full FoodStorage chamber, so
+    // anything a forager finds has nowhere to land. Demote unconditionally
+    // regardless of distance to entrance. Wave does NOT bump (the demote isn't
+    // about radius). V27 (#126) scopes the noDeposit demote to colonies that own
+    // a FoodStorage chamber (the mature-colony pile-up); a chamberless colony is
+    // covered separately (forager-backpressure.test.ts) and keeps foraging.
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
     colony.entrances = [{ entranceId: 1, surfaceTileX: 0, surfaceTileY: 0, isOpen: true }];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
+    colony.chambers.push({
+      chamberId: 1,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: FOOD_CHAMBER_CAPACITY, // saturated → not depositable
+      posX: 0,
+      posY: 0,
+      width: 3,
+      height: 3,
+    });
     world.colonies[COLONY_ID] = colony;
 
     const antId = allocateEntityId(world);

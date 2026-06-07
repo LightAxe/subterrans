@@ -26,7 +26,12 @@
 // No Math.floor, no floats, no division operator.
 
 import type { WorldState } from '../types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V3 } from '../types.js';
+import {
+  allocateEntityId,
+  INVALID_ENTITY_ID,
+  SIM_VERSION_V3,
+  SIM_VERSION_V27_FORAGE_BACKPRESSURE,
+} from '../types.js';
 import type { ChamberRecord, ColonyRecord } from './colony-store.js';
 import type { ColonyId } from './colony-store.js';
 import {
@@ -103,6 +108,61 @@ export function colonyFoodTotal(colony: ColonyRecord): number {
 export function isFoodChamberDepositable(chamber: ChamberRecord): boolean {
   if (chamber.chamberType !== ChamberType.FoodStorage) return false;
   return FOOD_CHAMBER_CAPACITY - chamber.foodStored >= FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP;
+}
+
+/**
+ * True when the colony has genuinely nowhere to deposit foraged food: the
+ * entrance pool is at capacity AND no FoodStorage chamber is depositable. This
+ * is the shared "no deposit target" predicate behind the issue-#42 fix-#2
+ * SearchingFood demotion (`tickSearchLeash`), the issue-#126 step-10a
+ * idle-promotion backpressure (both via `colonyForageBackpressure`), and the
+ * issue-#27 carrier wait-wake gate (`tickForagerActions`).
+ *
+ * Strict at-cap, version-independent: a carrier deposits the instant the pool
+ * has any headroom, so a chamberless colony's entrance pool stays pegged at cap
+ * as the queen nibbles it (rather than visibly draining ~2 food before a carrier
+ * tops it back off). The carry-headroom hysteresis a prior revision added here
+ * was reverted — #126's actual fix is the chamber-scoped backpressure below, and
+ * the pool hysteresis only regressed the chamberless larder feel without adding
+ * value (chambered colonies drain their chambers first, so the pool stays at cap
+ * anyway).
+ *
+ * Pure read of `colony.foodStored` + `colony.chambers`; no mutation, no RNG.
+ */
+export function colonyHasNoDepositTarget(colony: ColonyRecord): boolean {
+  if (colony.foodStored < BASE_FOOD_STORAGE_CAPACITY) return false;
+  for (let c = 0; c < colony.chambers.length; c++) {
+    if (isFoodChamberDepositable(colony.chambers[c]!)) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether to apply FORAGER backpressure — suppress idle→Foraging promotion
+ * (#126 step 10a) and demote over-leashed searchers (#42 fix-#2,
+ * `tickSearchLeash`). True only when the colony both has nowhere to deposit
+ * (`colonyHasNoDepositTarget`) AND is "developed" — i.e. it actually owns at
+ * least one FoodStorage chamber.
+ *
+ * The chamber requirement is V27-scoped (#126): the mass entrance pile-up the
+ * issue describes ("hundreds of ants") only forms in a MATURE colony whose pool
+ * AND FoodStorage chambers are all saturated. A chamberless early-game colony is
+ * small and should keep foraging into its entrance pool — backpressuring it just
+ * idles its foragers while the larder slowly drains. (Its CARRIERS still park
+ * via the universal #27 wait-wake gate, which keys on `colonyHasNoDepositTarget`
+ * directly — so a full chamberless pool stays topped off without dispatching new
+ * foragers needlessly.)
+ *
+ * Pre-V27 keeps the chamberless-inclusive at-cap behaviour the #42 demotion
+ * recorded, for byte-identical replay.
+ */
+export function colonyForageBackpressure(colony: ColonyRecord, simVersion: number): boolean {
+  if (!colonyHasNoDepositTarget(colony)) return false;
+  if (simVersion < SIM_VERSION_V27_FORAGE_BACKPRESSURE) return true;
+  for (let c = 0; c < colony.chambers.length; c++) {
+    if (colony.chambers[c]!.chamberType === ChamberType.FoodStorage) return true;
+  }
+  return false;
 }
 
 /**
