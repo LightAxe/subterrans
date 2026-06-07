@@ -146,13 +146,17 @@ _classes_ (every episode the detector raised maps to a catalogued mechanism in
 
 ## 3. Route-kind / transform taxonomy
 
-Base steering source per tick is attributed neutrally via the existing
-`MovementSource` inferencer (`debug-snapshot.ts`), whose precedence mirrors the
-sim dispatch: **surface** `priority > scent > pheromone > wander`; **carrier**
-`food-storage | entrance`; **underground searcher** `underground-exit`; **nurse**
-`nursing-chamber`; **fighter** `rally`; fallback `task`; `dead`. Transforms
-(T1–T9 above) are observed via tile-state + position deltas after occupancy
-resolution. This is the taxonomy used to label every episode below.
+The base steering source of a confined surface searcher is reconstructed from the
+sim's **exact movement-time precedence** (`computeDecisions`, pre-`tick`):
+**`scatter > priority > scent > pheromone > wander`** — where `scatter` is the
+spider-flee override (`tick.ts` step 13e), `priority` is resolved from the colony's
+`priorityFoodPileId` (not the stale `targetPos`), and the pheromone/wander split is
+the real `sampleForagingDirection` (incl. the prev-tile anti-backtrack). The wider
+`MovementSource` enum (`debug-snapshot.ts`) covers the non-searcher routes —
+**carrier** `food-storage | entrance`; **underground searcher** `underground-exit`;
+**nurse** `nursing-chamber`; **fighter** `rally`; fallback `task`; `dead`.
+Transforms (T1–T9 above) are observed via tile-state + position deltas after
+occupancy resolution. This is the taxonomy used to label every episode below.
 
 ---
 
@@ -187,12 +191,13 @@ worst (2050) — and is essentially difficulty-independent.
 
 Movement-source tally across confined ticks (all seeds/difficulties):
 
-| Source    | Confined-tick count | Note                                            |
-| --------- | ------------------: | ----------------------------------------------- |
-| **scent** |           **37495** | dominant                                        |
-| pheromone |                3148 | exact branch (sampleForagingDirection)          |
-| wander    |                 640 |                                                 |
-| priority  |                   0 | none (no player marking in the empty-log sweep) |
+| Source    | Confined-tick count | Note                                                                     |
+| --------- | ------------------: | ------------------------------------------------------------------------ |
+| **scent** |           **37495** | dominant                                                                 |
+| pheromone |                3148 | exact branch (sampleForagingDirection)                                   |
+| wander    |                 640 |                                                                          |
+| priority  |                   0 | none (no player marking in the empty-log sweep)                          |
+| scatter   |                   0 | spider-flee override (radius 1; never coincided with a confinement tick) |
 
 **158 of 183 episodes (86 %)** aim the ant's **actual intended step** — the
 cardinal/diagonal move toward its priority target or nearest scent pile, replicated
@@ -419,19 +424,19 @@ on the acceptance hold-out.
 4. The completion gate is met for **named-seed + command-log + structural** suites
    as the plan specifies — not an open-ended seed sweep.
 5. **Source/wall-aim attribution timing.** Decisions are snapshotted just before
-   `tick()` and reproduce the sim's exact surface precedence (priority > scent >
-   pheromone > wander), with the pheromone/wander split delegated to the real
-   `sampleForagingDirection` (incl. the prev-tile anti-backtrack). This is **exact**
-   for the #127 catalog because (a) the sweep issues **no commands**; (b) scent
-   targets derive from `foodPiles`, which the sim mutates only **after** movement
-   (deplete step 16b, spawn step 16d); (c) priority targets come only from
-   **marked** piles and the harness never issues `MarkFoodPile` (priority count = 0).
-   **Residual:** the pheromone trail grid is read one tick stale — deposit/decay
-   (steps 14–15) run mid-`tick` before movement (step 16) — so a near-threshold
-   cell could flip a pheromone↔wander label; this is far smaller than the prior
-   nearby-pheromone heuristic and cannot affect the scent counts or the
-   scent-vs-wall conclusion. A future command-driven **priority** log, or exact
-   pheromone timing, would need an intra-tick hook (post-step-15, pre-movement).
+   `tick()` and reproduce the sim's exact movement-time precedence
+   **scatter > priority > scent > pheromone > wander**: scatter from
+   `world.scatterReticleTile` (the shadow step 13e consumes), priority from the
+   colony's `priorityFoodPileId` (what `routeForagerPriority` step 13 actually
+   uses — never the stale pre-tick `targetPos`), then `findNearestScentPile`, then
+   the real `sampleForagingDirection` (prev-tile anti-backtrack). **Residual:** the
+   pheromone trail grid is read one tick stale — deposit/decay (steps 14–15) run
+   mid-`tick` before movement (step 16) — so a near-threshold cell could flip a
+   pheromone↔wander label. This is far smaller than the prior nearby-pheromone
+   heuristic and cannot affect the scent/scatter/priority counts or the
+   scent-vs-wall conclusion; an exact pheromone label would need an intra-tick
+   hook (post-step-15, pre-movement). Scatter never coincided with a confinement
+   tick in the sweep (radius 1).
 
 ---
 

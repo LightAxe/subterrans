@@ -27,7 +27,12 @@ import { surfaceMovementAt, SurfaceMovementEffect } from '../../sim/surface-feat
 import { Zone, ugGet } from '../../sim/terrain.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../../sim/enums.js';
 import { FP_SHIFT } from '../../sim/fixed.js';
-import { PLAYER_COLONY_ID, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from '../../sim/constants.js';
+import {
+  PLAYER_COLONY_ID,
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
+  SPIDER_SCATTER_RADIUS_TILES,
+} from '../../sim/constants.js';
 import { Rng } from '../../sim/rng.js';
 import { sampleForagingDirection } from '../../sim/pheromone/pheromone-system.js';
 import { pheromoneGridKey } from '../../sim/pheromone/pheromone-store.js';
@@ -35,6 +40,11 @@ import type { WorldState } from '../../sim/types.js';
 import type { SimCommand } from '../../sim/commands.js';
 import type { MovementSource } from '../debug-snapshot.js';
 import { serializeWorldState } from '../save.js';
+
+/** Movement source as attributed by this harness: the sim's surface-steering
+ *  precedence plus `'scatter'` for the spider-scatter override (step 13e), which
+ *  the `debug-snapshot` `MovementSource` enum does not distinguish. */
+export type HarnessSource = MovementSource | 'scatter';
 
 // ===========================================================================
 // Tuning — episode thresholds. These are DIAGNOSTIC detection thresholds, not
@@ -75,7 +85,7 @@ export interface ConfinementEpisode {
   tileX: number;
   tileY: number;
   /** Distribution of inferred movement sources across the episode. */
-  sources: Partial<Record<MovementSource, number>>;
+  sources: Partial<Record<HarnessSource, number>>;
   /** True if any tick aimed a step into an adjacent HardBlock (scent/priority
    *  vs wall — the worst #127 class). */
   aimedIntoWall: boolean;
@@ -128,7 +138,7 @@ interface AntWindow {
   ys: number[];
   // Active confinement episode (null if not currently confined).
   episodeStart: number | null;
-  episodeSources: Partial<Record<MovementSource, number>>;
+  episodeSources: Partial<Record<HarnessSource, number>>;
   episodeAimedWall: boolean;
   // Tile occupancy tally across the WHOLE detected episode (not just the
   // 20-sample ring) so the reported locus covers the same interval the episode
@@ -208,7 +218,7 @@ export function featureFieldDiffCount(a: WorldState, b: WorldState): number {
 
 /** The steering decision recorded for a tick, computed from PRE-movement state. */
 interface Decision {
-  source: MovementSource;
+  source: HarnessSource;
   /** True iff the ant's intended scent/priority step lands on a HardBlock. */
   wallAim: boolean;
 }
@@ -221,20 +231,33 @@ interface Decision {
  * (Codex P1). Pure read — no `world.rngState` mutation (the pheromone branch is
  * probed with a throwaway `Rng`), so observational neutrality holds.
  *
- * The source is the EXACT sim precedence (`ant-system.ts` surface block), not the
- * `debug-snapshot` heuristic: priority > scent > pheromone > wander. The
- * pheromone-vs-wander split calls the real `sampleForagingDirection` (with the
- * ant's prev-tile anti-backtrack) — pheromone iff it returns a non-zero step.
- * `sampleForagingDirection` only draws RNG to pick WHICH direction in its 10%
- * weak-trail explore; the zero-vs-non-zero outcome is RNG-independent, so a
- * throwaway `Rng` reproduces the branch exactly. (Residual: the trail grid is
- * read one tick stale — deposit/decay run mid-`tick` before movement — a far
- * smaller error than the nearby-pheromone heuristic; see INVESTIGATION.md §9.)
+ * The source is the EXACT sim precedence the sim resolves AT MOVEMENT TIME, not
+ * the `debug-snapshot` heuristic and not the stale pre-tick `targetPos`:
+ *
+ *   scatter > priority > scent > pheromone > wander
+ *
+ * - **scatter** — `tick.ts` step 13e overrides `targetPos` for surface
+ *   non-fighters within `SPIDER_SCATTER_RADIUS_TILES` of `world.scatterReticleTile`
+ *   (the shadow tile set by `tickSpider` the prior tick, so it is readable at
+ *   tick start). This runs AFTER priority routing, so it wins (Codex r6).
+ * - **priority** — `routeForagerPriority` (step 13) sets `targetPos` from the
+ *   colony's `priorityFoodPileId`, else CLEARS it. So a searcher's movement-time
+ *   `targetPos` is governed by `priorityFoodPileId` here, NOT the stale pre-tick
+ *   value — reconstruct from `priorityFoodPileId`, never read `targetPos`.
+ * - **scent / pheromone / wander** — `findNearestScentPile`, then the real
+ *   `sampleForagingDirection` (with prev-tile anti-backtrack): pheromone iff it
+ *   returns a non-zero step. It only draws RNG to pick WHICH direction in its
+ *   10% weak-trail explore; the zero-vs-non-zero outcome is RNG-independent, so a
+ *   throwaway `Rng` reproduces the branch without touching `world.rngState`.
+ *
+ * Residual (INVESTIGATION.md §9): the trail grid is read one tick stale (deposit/
+ * decay run mid-`tick` before movement) — far smaller than the prior heuristic.
  */
 function computeDecisions(world: WorldState): Map<number, Decision> {
   const a = world.ants;
   const out = new Map<number, Decision>();
   const probeRng = new Rng(1); // throwaway; never touches world.rngState
+  const reticle = world.scatterReticleTile;
   for (let id = 0; id < a.alive.length; id++) {
     if (a.alive[id] !== 1) continue;
     if (a.zone[id] !== Zone.Surface) continue;
@@ -242,30 +265,84 @@ function computeDecisions(world: WorldState): Map<number, Decision> {
       continue;
     const tileX = a.posX[id]! >> FP_SHIFT;
     const tileY = a.posY[id]! >> FP_SHIFT;
-    let source: MovementSource;
-    if (a.targetPosX[id]! !== -1 && a.targetPosY[id]! !== -1) {
-      source = 'priority';
-    } else if (nearestScentPile(world, tileX, tileY) !== null) {
-      source = 'scent';
+
+    let source: HarnessSource;
+    let target: { tileX: number; tileY: number } | null = null;
+    if (
+      reticle !== null &&
+      Math.abs(tileX - reticle.x) + Math.abs(tileY - reticle.y) <= SPIDER_SCATTER_RADIUS_TILES
+    ) {
+      source = 'scatter'; // spider flee — not a scent/priority wall-pin
     } else {
-      const grid =
-        world.pheromoneGrids[pheromoneGridKey(a.colonyId[id]!, PheromoneType.FoodTrail, 'surface')];
-      const dir =
-        grid === undefined
-          ? { dx: 0, dy: 0 }
-          : sampleForagingDirection(
-              grid,
-              tileX,
-              tileY,
-              probeRng,
-              a.searchPrevTileX[id],
-              a.searchPrevTileY[id],
-            );
-      source = dir.dx !== 0 || dir.dy !== 0 ? 'pheromone' : 'wander';
+      const priority = priorityPileFor(world, a.colonyId[id]!);
+      const scent = priority ?? nearestScentPile(world, tileX, tileY);
+      if (priority !== null) {
+        source = 'priority';
+        target = priority;
+      } else if (scent !== null) {
+        source = 'scent';
+        target = scent;
+      } else {
+        const grid =
+          world.pheromoneGrids[
+            pheromoneGridKey(a.colonyId[id]!, PheromoneType.FoodTrail, 'surface')
+          ];
+        const dir =
+          grid === undefined
+            ? { dx: 0, dy: 0 }
+            : sampleForagingDirection(
+                grid,
+                tileX,
+                tileY,
+                probeRng,
+                a.searchPrevTileX[id],
+                a.searchPrevTileY[id],
+              );
+        source = dir.dx !== 0 || dir.dy !== 0 ? 'pheromone' : 'wander';
+      }
     }
-    out.set(id, { source, wallAim: aimsIntoWall(world, id, source, tileX, tileY) });
+    // Wall-aim only for the targeted scent/priority class — the #127 worst case.
+    const wallAim =
+      target !== null && stepHitsWall(world, tileX, tileY, target.tileX, target.tileY);
+    out.set(id, { source, wallAim });
   }
   return out;
+}
+
+/** Resolve a colony's priority food pile (set via MarkFoodPile) to tile coords,
+ *  mirroring `routeForagerPriority`. Null if the colony has none or the id is
+ *  stale. The harness issues no `MarkFoodPile`, so this is null in every sweep —
+ *  kept for faithfulness to general worlds. */
+function priorityPileFor(
+  world: WorldState,
+  colonyId: number,
+): { tileX: number; tileY: number } | null {
+  const colony = world.colonies[colonyId];
+  if (colony === undefined || colony.priorityFoodPileId === null) return null;
+  for (const pile of world.foodPiles) {
+    if (pile.foodPileId === colony.priorityFoodPileId) {
+      return { tileX: pile.tileX, tileY: pile.tileY };
+    }
+  }
+  return null;
+}
+
+/** True iff the cardinal/diagonal step toward (targetX,targetY) — the sim's
+ *  `pickCardinalStep` packing (per-axis sign, 8-connected) — lands on a
+ *  HardBlock. The precise scent/priority-vs-wall test (Codex P1). */
+function stepHitsWall(
+  world: WorldState,
+  tileX: number,
+  tileY: number,
+  targetTileX: number,
+  targetTileY: number,
+): boolean {
+  const rawDx = targetTileX - tileX;
+  const rawDy = targetTileY - tileY;
+  const dx = rawDx === 0 ? 0 : rawDx > 0 ? 1 : -1;
+  const dy = rawDy === 0 ? 0 : rawDy > 0 ? 1 : -1;
+  if (dx === 0 && dy === 0) return false;
+  return surfaceMovementAt(world, tileX + dx, tileY + dy) === SurfaceMovementEffect.HardBlock;
 }
 
 /**
@@ -523,64 +600,6 @@ function nearestScentPile(
     }
   }
   return bestId === -1 ? null : { tileX: bestX, tileY: bestY };
-}
-
-/**
- * Reconstruct the cardinal/diagonal step the sim's scent/priority routing
- * actually intends for this ant THIS tick, replicating `findNearestScentPile`
- * (nearest pile within Manhattan radius, tie-break lowest id) and the
- * `pickCardinalStep` packing rule. Returns null when the source is not a
- * targeted one or no target exists. Pure read — consumes no RNG.
- */
-function intendedTargetStep(
-  world: WorldState,
-  id: number,
-  src: MovementSource,
-  tileX: number,
-  tileY: number,
-): { dx: number; dy: number } | null {
-  const a = world.ants;
-  let rawDx: number;
-  let rawDy: number;
-  if (src === 'priority') {
-    const tx = a.targetPosX[id]!;
-    const ty = a.targetPosY[id]!;
-    if (tx === -1 || ty === -1) return null;
-    rawDx = (tx >> FP_SHIFT) - tileX;
-    rawDy = (ty >> FP_SHIFT) - tileY;
-  } else if (src === 'scent') {
-    const pile = nearestScentPile(world, tileX, tileY);
-    if (pile === null) return null;
-    rawDx = pile.tileX - tileX;
-    rawDy = pile.tileY - tileY;
-  } else {
-    return null;
-  }
-  // pickCardinalStep packing: per-axis sign, 8-connected when both non-zero.
-  const dx = rawDx === 0 ? 0 : rawDx > 0 ? 1 : -1;
-  const dy = rawDy === 0 ? 0 : rawDy > 0 ? 1 : -1;
-  if (dx === 0 && dy === 0) return null;
-  return { dx, dy };
-}
-
-/**
- * True iff the ant's *actual intended step* (toward its priority target or the
- * nearest scent pile) lands on a HardBlock — the precise scent/priority-vs-wall
- * class (#127 worst case). Tests the specific intended destination tile, not
- * merely any adjacent wall (Codex P1).
- */
-function aimsIntoWall(
-  world: WorldState,
-  id: number,
-  src: MovementSource,
-  tileX: number,
-  tileY: number,
-): boolean {
-  const step = intendedTargetStep(world, id, src, tileX, tileY);
-  if (step === null) return false;
-  return (
-    surfaceMovementAt(world, tileX + step.dx, tileY + step.dy) === SurfaceMovementEffect.HardBlock
-  );
 }
 
 function finishConfinement(
