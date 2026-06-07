@@ -53,6 +53,7 @@ import {
   hasCompletedChamber,
   isFoodChamberDepositable,
   colonyHasNoDepositTarget,
+  colonyForageBackpressure,
   colonyFoodTotal,
 } from '../colony/colony-system.js';
 import {
@@ -749,7 +750,7 @@ export function tickForagerActions(world: WorldState): void {
       // Iteration cost: O(chambers) only for ants currently in wait — the
       // common case (no carriers in wait) skips this block entirely.
       if (ants.waitingDeposit[id] === 1) {
-        if (!colonyHasNoDepositTarget(colony)) {
+        if (!colonyHasNoDepositTarget(colony, world.simVersion)) {
           ants.waitingDeposit[id] = 0;
           // Fall through to normal deposit handling. The ant didn't move this
           // tick (tickAntMovement skipped it), so it's at the same entrance
@@ -1701,7 +1702,7 @@ export function tickSearchLeash(world: WorldState): void {
   // re-promote them to Foraging once a deposit target opens (chamber built
   // or queen consumes pool down). v6+ only — pre-v6 saves replay byte-
   // identical, only the demote-on-cap behavior is new.
-  const noDepositTarget: Record<number, boolean> = {};
+  const forageBackpressure: Record<number, boolean> = {};
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
     const colony = world.colonies[key as unknown as number]!;
@@ -1710,10 +1711,12 @@ export function tickSearchLeash(world: WorldState): void {
       colony.computedAllocation.dig > 0 || colony.computedAllocation.fight > 0;
     rebalanceNeeded[colony.colonyId] = overForage && nonForageDemand;
 
-    // Shared "no deposit target" predicate — kept in lockstep with the #126
-    // step-10a idle-promotion backpressure (colony-system.ts) so a forager is
-    // never re-promoted into a state this leash would immediately demote.
-    noDepositTarget[colony.colonyId] = colonyHasNoDepositTarget(colony);
+    // Shared forager-backpressure gate — kept in lockstep with the #126 step-10a
+    // idle-promotion suppression (colony-system.ts) so a forager is never
+    // re-promoted into a state this leash would immediately demote. V27 scopes
+    // it to colonies that own a FoodStorage chamber (the mature-colony pile-up);
+    // pre-V27 keeps the chamberless-inclusive at-cap demotion for replay.
+    forageBackpressure[colony.colonyId] = colonyForageBackpressure(colony, world.simVersion);
   }
 
   for (let id = 0; id < world.nextEntityId; id++) {
@@ -1723,7 +1726,7 @@ export function tickSearchLeash(world: WorldState): void {
     if (ants.zone[id] !== Zone.Surface) continue;
 
     const colonyId = ants.colonyId[id]!;
-    const noDeposit = noDepositTarget[colonyId] === true;
+    const noDeposit = forageBackpressure[colonyId] === true;
     const rebalance = rebalanceNeeded[colonyId] === true;
     if (!noDeposit && !rebalance) continue;
 

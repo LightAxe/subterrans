@@ -15,11 +15,12 @@ import {
 } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord, type ColonyId } from './colony/colony-store.js';
-import { colonyHasNoDepositTarget } from './colony/colony-system.js';
+import { colonyHasNoDepositTarget, colonyForageBackpressure } from './colony/colony-system.js';
 import { AntTask, ChamberType } from './enums.js';
 import {
   BASE_FOOD_STORAGE_CAPACITY,
   FOOD_CHAMBER_CAPACITY,
+  FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP,
   WORKER_LIFESPAN_TICKS,
 } from './constants.js';
 import type { WorldState } from './types.js';
@@ -30,6 +31,8 @@ interface SaturatedOpts {
   poolFill?: number;
   /** FoodStorage chamber fill (default: full → non-depositable). */
   chamberFill?: number;
+  /** build with NO FoodStorage chamber (pool is the only deposit target). */
+  noChamber?: boolean;
   /** number of Idle workers eligible for step-10a promotion. */
   idleWorkers?: number;
 }
@@ -83,15 +86,17 @@ function buildSaturatedWorld(opts: SaturatedOpts): {
   colony.targetRatio = { forage: 10, fight: 0 };
 
   colony.foodStored = opts.poolFill ?? BASE_FOOD_STORAGE_CAPACITY;
-  colony.chambers.push({
-    chamberId: 100,
-    chamberType: ChamberType.FoodStorage,
-    foodStored: opts.chamberFill ?? FOOD_CHAMBER_CAPACITY,
-    posX: 0,
-    posY: 0,
-    width: 3,
-    height: 3,
-  });
+  if (!opts.noChamber) {
+    colony.chambers.push({
+      chamberId: 100,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: opts.chamberFill ?? FOOD_CHAMBER_CAPACITY,
+      posX: 0,
+      posY: 0,
+      width: 3,
+      height: 3,
+    });
+  }
 
   return { world, colonyId: 1 as ColonyId, idleIds };
 }
@@ -116,7 +121,7 @@ describe('#126 V27 forager storage backpressure', () => {
         simVersion: SIM_VERSION_V27_FORAGE_BACKPRESSURE,
       });
       const colony = world.colonies[colonyId]!;
-      expect(colonyHasNoDepositTarget(colony)).toBe(true);
+      expect(colonyHasNoDepositTarget(colony, world.simVersion)).toBe(true);
 
       tick(world, []);
 
@@ -137,7 +142,7 @@ describe('#126 V27 forager storage backpressure', () => {
 
       // Free a chamber slot → deposit target exists again.
       colony.chambers[0]!.foodStored = 0;
-      expect(colonyHasNoDepositTarget(colony)).toBe(false);
+      expect(colonyHasNoDepositTarget(colony, world.simVersion)).toBe(false);
       tick(world, []);
 
       expect(foragerCount(world, idleIds)).toBeGreaterThan(0);
@@ -151,9 +156,9 @@ describe('#126 V27 forager storage backpressure', () => {
       tick(world, []);
       expect(foragerCount(world, idleIds)).toBe(0); // suppressed
 
-      // Drain the pool below cap → the pool itself is a deposit target again.
+      // Drain the pool to full carry-headroom → the pool is a deposit target again.
       colony.foodStored = 0;
-      expect(colonyHasNoDepositTarget(colony)).toBe(false);
+      expect(colonyHasNoDepositTarget(colony, world.simVersion)).toBe(false);
       tick(world, []);
 
       expect(foragerCount(world, idleIds)).toBeGreaterThan(0);
@@ -176,6 +181,51 @@ describe('#126 V27 forager storage backpressure', () => {
 
       expect(foragerCount(world, idleIds)).toBe(0); // forage promotion suppressed
       expect(taskCount(world, idleIds, AntTask.Fighting)).toBeGreaterThan(0); // reallocated
+    });
+  });
+
+  // (d) — backpressure is SCOPED to colonies that own a FoodStorage chamber (the
+  // mature-colony pile-up of #126). A chamberless early-game colony keeps
+  // foraging into its entrance pool rather than idling its workers — only its
+  // CARRIERS park (the universal #27 wait-wake, which keys on
+  // colonyHasNoDepositTarget directly, so a full chamberless pool still doesn't
+  // thrash carriers). The carry-headroom hysteresis (codex P1) lives in
+  // colonyHasNoDepositTarget so that wait-wake survives the queen's 2-fp churn.
+  describe('(d) chamberless colonies keep foraging — backpressure scoped to chambered colonies', () => {
+    it('V27: a full chamberless pool does NOT suppress idle→Foraging promotion', () => {
+      const { world, colonyId, idleIds } = buildSaturatedWorld({
+        simVersion: SIM_VERSION_V27_FORAGE_BACKPRESSURE,
+        noChamber: true,
+      });
+      const colony = world.colonies[colonyId]!;
+
+      // The pool is full → carriers WOULD park (no deposit target)...
+      expect(colonyHasNoDepositTarget(colony, world.simVersion)).toBe(true);
+      // ...but promotion/demotion backpressure is NOT applied to a chamberless colony.
+      expect(colonyForageBackpressure(colony, world.simVersion)).toBe(false);
+
+      tick(world, []);
+      expect(foragerCount(world, idleIds)).toBeGreaterThan(0); // idle ants still promoted
+    });
+
+    it('V27: carry-headroom hysteresis holds the chamberless wait-wake through the 2fp queen meal (codex P1)', () => {
+      const { world, colonyId } = buildSaturatedWorld({
+        simVersion: SIM_VERSION_V27_FORAGE_BACKPRESSURE,
+        noChamber: true,
+      });
+      const colony = world.colonies[colonyId]!;
+
+      tick(world, []); // queen eats 2 fp from the pool before any deposit
+
+      // Pool dropped below cap but by far less than one pickup → V27 still has no
+      // deposit target, so a CarryingFood ant's wait-wake gate keeps it parked
+      // (no 2-fp thrash). Pre-V27 strict at-cap would have flipped this false.
+      expect(colony.foodStored).toBeLessThan(BASE_FOOD_STORAGE_CAPACITY);
+      expect(colony.foodStored).toBeGreaterThan(
+        BASE_FOOD_STORAGE_CAPACITY - FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP,
+      );
+      expect(colonyHasNoDepositTarget(colony, world.simVersion)).toBe(true);
+      expect(colonyHasNoDepositTarget(colony, SIM_VERSION_V26_SPIDER_EDGE_MARGIN)).toBe(false);
     });
   });
 
@@ -235,7 +285,7 @@ describe('#126 V27 forager storage backpressure', () => {
         tick(b.world, []);
       }
       // Suppression actually exercised the whole window (chamber still full-ish).
-      expect(colonyHasNoDepositTarget(a.world.colonies[1]!)).toBe(true);
+      expect(colonyHasNoDepositTarget(a.world.colonies[1]!, a.world.simVersion)).toBe(true);
       expect(serialize(a.world)).toBe(serialize(b.world));
     });
   });

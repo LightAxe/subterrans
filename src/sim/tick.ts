@@ -47,7 +47,7 @@ import {
   checkEntranceCompletion,
   hasCompletedChamber,
   isFoodChamberDepositable,
-  colonyHasNoDepositTarget,
+  colonyForageBackpressure,
   colonyFoodTotal,
 } from './colony/colony-system.js';
 import { tickQueenEggProduction, tickLifecycleTransitions } from './colony/lifecycle-system.js';
@@ -1150,23 +1150,26 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     let needFight = carvedFight - actualFight;
     let needNurse = colony.computedAllocation.nurse - actualNurse;
 
-    // V27 (#126) — forager storage backpressure. When the colony has genuinely
-    // nowhere to deposit (entrance pool at cap AND no FoodStorage chamber
-    // depositable), suppress Idle→FORAGING promotion so idle ants are not
-    // churned into searchers the leash (tickSearchLeash fix-#2) would demote the
-    // same tick — the cycle that piled hundreds of would-be carriers at the
-    // entrance shaft. This zeroes ONLY the local `needForage`, so an idle ant
-    // that would have foraged instead falls through the eligibles carve below to
-    // any remaining dig/fight/nurse demand (useful work, not a forager pile-up);
-    // it only stays Idle when forage was the colony's sole unmet demand. The
-    // persisted `colony.computedAllocation.forage` is left untouched (WR-02), so
+    // V27 (#126) — forager storage backpressure. When the (chambered) colony has
+    // genuinely nowhere to deposit (`colonyForageBackpressure`: entrance pool
+    // saturated AND every FoodStorage chamber full), suppress Idle→FORAGING
+    // promotion so idle ants are not churned into searchers the leash
+    // (tickSearchLeash fix-#2) would demote the same tick — the cycle that piled
+    // hundreds of would-be carriers at the entrance shaft. Scoped to colonies
+    // that own a FoodStorage chamber: a chamberless early-game colony keeps
+    // foraging into its pool (its carriers still park via the #27 wait-wake).
+    // This zeroes ONLY the local `needForage`, so an idle ant that would have
+    // foraged instead falls through the eligibles carve below to any remaining
+    // dig/fight/nurse demand (useful work, not a forager pile-up); it only stays
+    // Idle when forage was the colony's sole unmet demand. The persisted
+    // `colony.computedAllocation.forage` is left untouched (WR-02), so
     // renderer/HUD/autosave still read the canonical allocation and forage
-    // promotion resumes automatically once a chamber frees or the queen drains
-    // the pool. Pre-V27 saves keep the churn for byte-identical replay.
+    // promotion resumes once a chamber frees or the queen drains the pool. Pre-V27
+    // saves keep the churn for byte-identical replay.
     if (
       world.simVersion >= SIM_VERSION_V27_FORAGE_BACKPRESSURE &&
       needForage > 0 &&
-      colonyHasNoDepositTarget(colony)
+      colonyForageBackpressure(colony, world.simVersion)
     ) {
       needForage = 0;
     }

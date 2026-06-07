@@ -347,13 +347,24 @@ export const SIM_VERSION_V26_SPIDER_EDGE_MARGIN = 26 as const;
  * hundreds at the entrance shaft with nowhere to unload.
  * Under V27+, step 10a additionally suppresses idle→FORAGING promotion (zeroes
  * the LOCAL `needForage`, never the persisted `computedAllocation`) for any
- * colony where `colonyHasNoDepositTarget` holds. Only forage promotion is
+ * colony where `colonyForageBackpressure` holds. Only forage promotion is
  * suppressed: an idle ant that would have foraged still fills any remaining
  * dig/fight/nurse demand (the eligibles carve is a sequential need chain), and
- * only stays Idle when forage was the sole unmet demand. Existing carriers
- * finish and park (#27 `waitingDeposit`); forage promotion resumes
- * automatically once a chamber becomes depositable or the queen drains the
- * pool. Pre-V27 saves keep the churn (gated on simVersion >= V27) for
+ * only stays Idle when forage was the sole unmet demand. Forage promotion
+ * resumes automatically once a chamber becomes depositable or the queen drains
+ * the pool.
+ * Backpressure (promotion suppression + the #42 demotion) is SCOPED to colonies
+ * that own a FoodStorage chamber — the "hundreds of ants" pile-up only forms in
+ * a mature, fully-saturated colony. A chamberless early-game colony keeps
+ * foraging into its entrance pool; only its CARRIERS park, via the universal
+ * #27 wait-wake gate (`colonyHasNoDepositTarget`).
+ * V27 also tightens the shared `colonyHasNoDepositTarget` pool test from strict
+ * at-cap to a carry-headroom hysteresis (pool saturated when free space < one
+ * pickup, `FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP`, mirroring the chamber rule).
+ * Without it the queen's 2-fp/tick meal — consumed before the wait-wake/leash
+ * passes — would flip a chamberless full pool "open" every tick and thrash its
+ * carriers. Pre-V27 saves keep the churn, the strict at-cap pool test, AND the
+ * chamberless-inclusive demotion (all gated on simVersion >= V27) for
  * byte-identical replay.
  */
 export const SIM_VERSION_V27_FORAGE_BACKPRESSURE = 27 as const;
