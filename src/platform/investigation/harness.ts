@@ -56,7 +56,9 @@ export interface ConfinementEpisode {
   seed: number;
   difficulty: string;
   antId: number;
-  /** Tick the episode began (first no-progress tick in the run). */
+  /** Tick confinement was CONFIRMED (window full + ≥CONFINE_MIN_TICKS of
+   *  no coverage-progress). Onset is ~CONFINE_MIN_TICKS earlier; lengthTicks
+   *  measures the confirmed interval so it matches sources/tile/aimedIntoWall. */
   startTick: number;
   /** Tick the episode ended (progress resumed, ant left, or run ended). */
   endTick: number;
@@ -205,13 +207,6 @@ export function featureFieldDiffCount(a: WorldState, b: WorldState): number {
 // ===========================================================================
 // Core traced run
 // ===========================================================================
-
-const DIRS: ReadonlyArray<readonly [number, number]> = [
-  [0, -1],
-  [1, 0],
-  [0, 1],
-  [-1, 0],
-];
 
 /**
  * Run one scenario for `ticks`, tracing every live ant each tick, and return
@@ -398,7 +393,11 @@ function observeSurface(
 
   if (confinedNow) {
     if (win.episodeStart === null) {
-      win.episodeStart = t - win.ticksSinceProgress + 1;
+      // Start at the CONFIRMATION tick (not backdated), so startTick, endTick,
+      // lengthTicks, sources, tileX/tileY, and aimedIntoWall all describe the
+      // exact same interval [confirmation .. resolution] — no diagnostic-coverage
+      // gap (Codex P2). Onset is ~CONFINE_MIN_TICKS earlier by construction.
+      win.episodeStart = t;
       win.episodeSources = {};
       win.episodeAimedWall = false;
       win.episodeTiles.clear();
@@ -407,7 +406,7 @@ function observeSurface(
     win.episodeTiles.set(tileKey, (win.episodeTiles.get(tileKey) ?? 0) + 1);
     const src = buildAntTrace(world, id).movementSource;
     win.episodeSources[src] = (win.episodeSources[src] ?? 0) + 1;
-    if (!win.episodeAimedWall && aimsIntoWall(world, src, tileX, tileY)) {
+    if (!win.episodeAimedWall && aimsIntoWall(world, id, src, tileX, tileY)) {
       win.episodeAimedWall = true;
     }
   } else if (win.episodeStart !== null) {
@@ -415,21 +414,84 @@ function observeSurface(
   }
 }
 
-/** True if the ant's targeted source (priority/scent) sits next to a HardBlock —
- *  the scent/priority-vs-wall class (#127 worst case). */
+/**
+ * Manhattan radius of the sim's food-scent probe (`FOOD_SCENT_RADIUS`,
+ * `ant-system.ts:2834`, not exported). Mirrored here so the harness reconstructs
+ * the SAME scent target the sim chose. Kept in sync by code review — matches the
+ * mirror `debug-snapshot.ts` already maintains for the same constant.
+ */
+const HARNESS_FOOD_SCENT_RADIUS = 15;
+
+/**
+ * Reconstruct the cardinal/diagonal step the sim's scent/priority routing
+ * actually intends for this ant THIS tick, replicating `findNearestScentPile`
+ * (nearest pile within Manhattan radius, tie-break lowest id) and the
+ * `pickCardinalStep` packing rule. Returns null when the source is not a
+ * targeted one or no target exists. Pure read — consumes no RNG.
+ */
+function intendedTargetStep(
+  world: WorldState,
+  id: number,
+  src: MovementSource,
+  tileX: number,
+  tileY: number,
+): { dx: number; dy: number } | null {
+  const a = world.ants;
+  let rawDx: number;
+  let rawDy: number;
+  if (src === 'priority') {
+    const tx = a.targetPosX[id]!;
+    const ty = a.targetPosY[id]!;
+    if (tx === -1 || ty === -1) return null;
+    rawDx = (tx >> FP_SHIFT) - tileX;
+    rawDy = (ty >> FP_SHIFT) - tileY;
+  } else if (src === 'scent') {
+    // Nearest food pile within FOOD_SCENT_RADIUS (Manhattan), tie-break lowest id.
+    let bestDist = HARNESS_FOOD_SCENT_RADIUS + 1;
+    let bestId = -1;
+    let bestX = 0;
+    let bestY = 0;
+    for (const pile of world.foodPiles) {
+      const d = Math.abs(pile.tileX - tileX) + Math.abs(pile.tileY - tileY);
+      if (d > HARNESS_FOOD_SCENT_RADIUS) continue;
+      if (d < bestDist || (d === bestDist && pile.foodPileId < bestId)) {
+        bestDist = d;
+        bestId = pile.foodPileId;
+        bestX = pile.tileX;
+        bestY = pile.tileY;
+      }
+    }
+    if (bestId === -1) return null;
+    rawDx = bestX - tileX;
+    rawDy = bestY - tileY;
+  } else {
+    return null;
+  }
+  // pickCardinalStep packing: per-axis sign, 8-connected when both non-zero.
+  const dx = rawDx === 0 ? 0 : rawDx > 0 ? 1 : -1;
+  const dy = rawDy === 0 ? 0 : rawDy > 0 ? 1 : -1;
+  if (dx === 0 && dy === 0) return null;
+  return { dx, dy };
+}
+
+/**
+ * True iff the ant's *actual intended step* (toward its priority target or the
+ * nearest scent pile) lands on a HardBlock — the precise scent/priority-vs-wall
+ * class (#127 worst case). Tests the specific intended destination tile, not
+ * merely any adjacent wall (Codex P1).
+ */
 function aimsIntoWall(
   world: WorldState,
+  id: number,
   src: MovementSource,
   tileX: number,
   tileY: number,
 ): boolean {
-  if (src !== 'scent' && src !== 'priority') return false;
-  for (const [dx, dy] of DIRS) {
-    if (surfaceMovementAt(world, tileX + dx, tileY + dy) === SurfaceMovementEffect.HardBlock) {
-      return true;
-    }
-  }
-  return false;
+  const step = intendedTargetStep(world, id, src, tileX, tileY);
+  if (step === null) return false;
+  return (
+    surfaceMovementAt(world, tileX + step.dx, tileY + step.dy) === SurfaceMovementEffect.HardBlock
+  );
 }
 
 function finishConfinement(

@@ -67,24 +67,24 @@ sweep in this harness; "suite" = a pre-existing committed test.
 
 ### Base steering sources
 
-| #   | Branch                                            | Locus (`ant-system.ts` unless noted) | Reachable @V27 | Exercised by                                                 |
-| --- | ------------------------------------------------- | ------------------------------------ | :------------: | ------------------------------------------------------------ |
-| B1  | Idle skip (non-steering)                          | ~4255                                |      yes       | sweep (queens/idle)                                          |
-| B2  | Search-pause hold / trigger                       | ~4469–4486                           |   yes (V4+)    | sweep (#127 episodes interleave pauses)                      |
-| B3  | Priority-target routing (`pickCardinalStep`)      | ~4489–4503                           |      yes       | sweep (4 priority ticks) + `surface-passability.test.ts`     |
-| B4  | **Scent steering** (`findNearestScentPile`, R=15) | ~4514–4519                           |      yes       | **sweep (dominant #127 source)**                             |
-| B5  | Pheromone follow (`sampleForagingDirection`)      | ~4521–4548                           |      yes       | sweep (#127 pheromone episodes)                              |
-| B6  | Excursion wander (`chooseExcursionDirection`)     | ~4545–4554                           |      yes       | sweep (#127 wander episodes)                                 |
-| B7  | Carrier chamber-food routing (flow-field)         | ~4242–4312                           |      yes       | construction-log sweep                                       |
-| B8  | Carrier entrance fallback                         | ~4313–4444                           |      yes       | construction-log sweep                                       |
-| B9  | Surface entrance routing (home-bound)             | ~4396–4444                           |   yes (V11+)   | construction-log sweep                                       |
-| B10 | Digger dig-flow-field (`getTaskDirection`)        | ~4686 / 1490                         |      yes       | construction-log sweep                                       |
-| B11 | Digger excavating hold                            | 1500–1503                            |      yes       | construction-log sweep                                       |
-| B12 | Nurse chamber routing                             | 1532–1626                            |   yes (V10+)   | `chamber-flow.test.ts`                                       |
-| B13 | Fighter rally routing                             | ~4558–4683                           |      yes       | `fighter-rally-hold.test.ts`                                 |
-| B14 | Fighter rally hold                                | ~4676–4683                           |      yes       | `fighter-rally-hold.test.ts`                                 |
-| B15 | Invader underground pursuit                       | ~4585–4652                           |      yes       | `determinism.test.ts` cross-grid, `invasion-routing.test.ts` |
-| B16 | Invader recall-to-entrance                        | ~4600–4627                           |   yes (V25+)   | `invasion-routing.test.ts`                                   |
+| #   | Branch                                            | Locus (`ant-system.ts` unless noted) | Reachable @V27 | Exercised by                                                      |
+| --- | ------------------------------------------------- | ------------------------------------ | :------------: | ----------------------------------------------------------------- |
+| B1  | Idle skip (non-steering)                          | ~4255                                |      yes       | sweep (queens/idle)                                               |
+| B2  | Search-pause hold / trigger                       | ~4469–4486                           |   yes (V4+)    | sweep (#127 episodes interleave pauses)                           |
+| B3  | Priority-target routing (`pickCardinalStep`)      | ~4489–4503                           |      yes       | `surface-passability.test.ts` (no marking in the empty-log sweep) |
+| B4  | **Scent steering** (`findNearestScentPile`, R=15) | ~4514–4519                           |      yes       | **sweep (dominant #127 source)**                                  |
+| B5  | Pheromone follow (`sampleForagingDirection`)      | ~4521–4548                           |      yes       | sweep (#127 pheromone episodes)                                   |
+| B6  | Excursion wander (`chooseExcursionDirection`)     | ~4545–4554                           |      yes       | sweep (#127 wander episodes)                                      |
+| B7  | Carrier chamber-food routing (flow-field)         | ~4242–4312                           |      yes       | construction-log sweep                                            |
+| B8  | Carrier entrance fallback                         | ~4313–4444                           |      yes       | construction-log sweep                                            |
+| B9  | Surface entrance routing (home-bound)             | ~4396–4444                           |   yes (V11+)   | construction-log sweep                                            |
+| B10 | Digger dig-flow-field (`getTaskDirection`)        | ~4686 / 1490                         |      yes       | construction-log sweep                                            |
+| B11 | Digger excavating hold                            | 1500–1503                            |      yes       | construction-log sweep                                            |
+| B12 | Nurse chamber routing                             | 1532–1626                            |   yes (V10+)   | `chamber-flow.test.ts`                                            |
+| B13 | Fighter rally routing                             | ~4558–4683                           |      yes       | `fighter-rally-hold.test.ts`                                      |
+| B14 | Fighter rally hold                                | ~4676–4683                           |      yes       | `fighter-rally-hold.test.ts`                                      |
+| B15 | Invader underground pursuit                       | ~4585–4652                           |      yes       | `determinism.test.ts` cross-grid, `invasion-routing.test.ts`      |
+| B16 | Invader recall-to-entrance                        | ~4600–4627                           |   yes (V25+)   | `invasion-routing.test.ts`                                        |
 
 ### Post-steering transforms
 
@@ -161,18 +161,24 @@ a 20-tick window, it stays inside a ≤3×3 Chebyshev box **while actively movin
 (≥4 tile-crossings/window) **and** its per-excursion coverage high-water (Chebyshev
 distance from the wave's origin) fails to improve for ≥12 consecutive ticks.
 Coverage progress is reset per search wave (entrance re-launch), so productive
-searching never false-positives. Episode length = contiguous confined ticks.
+searching never false-positives. An episode is the contiguous run of _confirmed_
+confined ticks; `startTick` is the confirmation tick and `lengthTicks` measures
+that confirmed interval (onset is ~12 ticks earlier), so length, locus, sources,
+and `aimedIntoWall` all describe the same interval. Counts below therefore reflect
+**sustained** confinement (persisting ≥`CONFINE_MIN_TICKS` past confirmation),
+not transient wobble.
 
 ### 4.1 Severity (measured — 20 seeds × 3 difficulties × 3000 ticks)
 
 | Difficulty | Episodes | Confined ants (sum) |     Worst episode (ticks) |
 | ---------- | -------: | ------------------: | ------------------------: |
-| Easy       |      286 |                  63 |                      2967 |
-| Normal     |      275 |                  62 |                      2967 |
-| Hard       |      277 |                  62 |                      2967 |
-| **Total**  |  **838** |                   — | **2967 (~148 s @ 20 Hz)** |
+| Easy       |       67 |                  18 |                      2050 |
+| Normal     |       65 |                  17 |                      2050 |
+| Hard       |       65 |                  16 |                      1965 |
+| **Total**  |  **197** |                   — | **2050 (~102 s @ 20 Hz)** |
 
-Worst episode is **worse than Step-0's 2050** and is essentially difficulty-independent.
+Worst _confirmed_ episode is **2050 ticks** — independently matching Step-0's
+worst (2050) — and is essentially difficulty-independent.
 
 ### 4.2 Mechanism attribution — **scent-vs-wall dominates** (corrects Step-0)
 
@@ -180,14 +186,17 @@ Movement-source tally across confined ticks (all seeds/difficulties):
 
 | Source    | Confined-tick count | Note                                            |
 | --------- | ------------------: | ----------------------------------------------- |
-| **scent** |           **50125** | dominant                                        |
-| pheromone |                5540 |                                                 |
-| wander    |                1825 |                                                 |
-| priority  |                   2 | rare (no player marking in the empty-log sweep) |
+| **scent** |           **49730** | dominant                                        |
+| pheromone |                5165 |                                                 |
+| wander    |                 438 |                                                 |
+| priority  |                   0 | none (no player marking in the empty-log sweep) |
 
-**217 of 838 episodes** had a step aimed into an **adjacent HardBlock**
-(`aimedIntoWall`), and **every one of the 10 longest episodes is pure-`scent`
-with `aimedIntoWall = true`.** This **confirms the re-plan's corrected root cause**
+**152 of 197 episodes (77 %)** aim the ant's **actual intended step** — the
+cardinal/diagonal move toward its priority target or nearest scent pile, replicated
+from `pickCardinalStep` + `findNearestScentPile` — onto a **`HardBlock`**
+(`aimedIntoWall`, a precise destination-tile test), and **every one of the 10
+longest episodes is pure-`scent` with `aimedIntoWall = true`.** This **confirms the
+re-plan's corrected root cause**
 (scent steering's naive `pickCardinalStep` aims straight at a pile through a
 `HardBlock`, `ant-system.ts:4514`) and **supersedes Step-0's "worst case is pure
 wander"** — Step-0's detector counted milling-ticks; attributing by steering
@@ -200,25 +209,28 @@ but short-tail.
 
 ### 4.3 Canonical reproductions (seed + locus)
 
-| Mechanism                       | Seed | Ant | Start |  Len | Locus (tile)  | Source    | Wall  |
-| ------------------------------- | ---: | --: | ----: | ---: | ------------- | --------- | :---: |
-| **Scent-vs-wall (Codex repro)** |   11 |  22 |   409 | 2591 | (100,43)      | scent     |   ✓   |
-| Scent-vs-wall (worst)           |   51 |  17 |    33 | 2967 | (10–12,56–57) | scent     |   ✓   |
-| Scent-vs-wall                   |   42 |  17 |    96 | 2904 | (17,55)       | scent     |   ✓   |
-| Pheromone confinement           |   11 |  18 |  2361 |  605 | (26,68)       | pheromone |   ✗   |
-| Wander confinement (short-tail) |    7 |   — |     — | ≤379 | various       | wander    | mixed |
+| Mechanism                         | Seed | Ant | Start |  Len | Locus (tile) | Source | Wall |
+| --------------------------------- | ---: | --: | ----: | ---: | ------------ | ------ | :--: |
+| **Scent-vs-wall (Codex repro)**   |   11 |  22 |   950 | 2050 | (100,43)     | scent  |  ✓   |
+| Scent-vs-wall (next-worst)        |   42 |  17 |  1035 | 1965 | (17,55)      | scent  |  ✓   |
+| Scent-vs-wall (calibration worst) |   51 |  17 |     — | 1481 | ~(10–12,56)  | scent  |  ✓   |
 
-Seed 11 / ant 22 reproduces Codex's exact case (`movementSource="scent"`, pinned
-by a wall) at locus (100,43) — adjacent to the enemy start column (104), a player
-forager scenting a pile across a HardBlock.
+Seed 11 / ant 22 reproduces Codex's exact case (`movementSource="scent"`, intended
+step into a `HardBlock`) at locus (100,43) — adjacent to the enemy start column
+(104), a player forager scenting a pile across a wall. Pheromone and wander
+confinement also occur but are **short-tail** (longest non-scent sustained episode
+is well under 300 ticks); after the precise intended-step test, **152/197 sustained
+episodes are scent/priority-vs-wall.**
 
 ### 4.4 Per-seed worst episode (Normal) — calibration drives the caps
 
-Discovery worst: **2904** (seed 42). Calibration worst: **2967** (seed 51).
-Calibration per-seed worst: `13→426, 17→399, 23→177, 51→2967, 88→81, 101→2747,
-202→98, 303→2781, 404→271, 505→157`. Spread is bimodal: a long tail of
-multi-thousand-tick scent-vs-wall pins, plus a cluster of sub-600-tick wander/
-pheromone loops.
+Discovery worst: **2050** (seed 11). Calibration worst: **1481** (seed 51).
+Calibration per-seed worst: `13→298, 17→214, 23→0, 51→1481, 88→38, 101→1446,
+202→0, 303→954, 404→260, 505→0`. Sustained confinement **clusters in a subset of
+seeds** (several show 0): it appears where a food pile sits behind a procedural
+`HardBlock` within scent range, so the scent step pins on the wall — exactly the
+mechanism Fix-A targets. The rest is a short tail of sub-300-tick wander/pheromone
+loops.
 
 ### 4.5 → committed fix
 
@@ -314,7 +326,7 @@ committed and ready to assert this post-fix.
 (`ant-store.ts:259`), so a len-12 run requires a code change touching every
 ring-buffer site in §2 — that is a **fix-side** experiment, correctly belonging to
 the checkpoint, not Phase-0 diagnosis. **Baseline (len=4) confinement is catalogued
-above (838 episodes; 217 wall-pins).** The experiment to run at the checkpoint:
+above (197 sustained episodes; 152 wall-pins).** The experiment to run at the checkpoint:
 rebuild with len=12, re-run the _calibration_ sweep, and retain the deepening
 **only if** it independently reduces confinement (especially the short-tail
 wander/pheromone loops) **without** unacceptable global path change. Until then,
@@ -323,8 +335,8 @@ C-both's recent-tiles deepening is **not** justified by data and stays gated
 
 ### 6.3 Perf baseline + budget (tracing disabled)
 
-Seed 42, 3000 ticks: **~0.27 ms/tick** (Easy 0.273, Normal 0.277, Hard 0.275;
-~825 ms total per run), difficulty-independent, on the dev machine in Node 26.
+Seed 42, 3000 ticks: **~0.26 ms/tick** (Easy 0.253, Normal 0.257, Hard 0.253;
+~765 ms total per run), difficulty-independent, on the dev machine in Node 26.
 **Budget for path-aware routing (Fix-A):** the 20 Hz timestep is 50 ms/tick; the
 current sim uses ~0.5 % of that. A per-pile BFS field or bounded local BFS has
 ample headroom, but Fix-A must still ship with **preallocated per-world caches +
@@ -357,18 +369,18 @@ field breaks byte-parity).
 
 ## 7. Numeric acceptance caps (set from calibration; verify on acceptance)
 
-Derived from the **calibration** seeds (worst = 2967 ticks; 217/838 wall-pins),
+Derived from the **calibration** seeds (worst = 1481 ticks; 152/197 wall-pins),
 to be **verified post-fix on the untouched acceptance seeds** + structural cases
 (never the reverse):
 
 | Metric                                            | Baseline (calibration) | Proposed cap (post-fix)       |
 | ------------------------------------------------- | ---------------------: | ----------------------------- |
-| Worst confinement episode                         |             2967 ticks | **≤ 60 ticks (3 s)**          |
-| Scent/priority-vs-wall episodes (`aimedIntoWall`) |                    217 | **0**                         |
+| Worst confinement episode                         |      2050 ticks (disc) | **≤ 60 ticks (3 s)**          |
+| Scent/priority-vs-wall episodes (`aimedIntoWall`) |                    152 | **0**                         |
 | Confinement episodes > 300 ticks                  |                   many | **0**                         |
 | #128 embedded ant-ticks (structural cases)        |            >0 (latent) | **0**                         |
 | Feature-field hash invariance across events       |         477/900 mutate | **0 mutate (exact equality)** |
-| Tick-time (3000-tick run)                         |          ~0.27 ms/tick | **≤ 0.5 ms/tick**             |
+| Tick-time (3000-tick run)                         |          ~0.26 ms/tick | **≤ 0.5 ms/tick**             |
 | Save size                                         |              ~1.095 MB | **≤ +5 %**                    |
 
 These caps are **proposals for the checkpoint**, not final — they are set here from
