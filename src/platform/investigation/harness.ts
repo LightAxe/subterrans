@@ -208,6 +208,37 @@ export function featureFieldDiffCount(a: WorldState, b: WorldState): number {
 // Core traced run
 // ===========================================================================
 
+/** The steering decision recorded for a tick, computed from PRE-movement state. */
+interface Decision {
+  source: MovementSource;
+  /** True iff the ant's intended scent/priority step lands on a HardBlock. */
+  wallAim: boolean;
+}
+
+/**
+ * Compute, from the CURRENT (pre-`tick`) world state, the steering decision for
+ * every surface `SearchingFood` forager — the movement source and whether its
+ * intended step aims into a wall. Must be called BEFORE `tick()` so the inputs
+ * (position, targets, food piles) describe the state the ant actually steered
+ * from this tick, not the post-movement state (Codex P1). Pure read — no RNG,
+ * no mutation; keeps observational neutrality.
+ */
+function computeDecisions(world: WorldState): Map<number, Decision> {
+  const a = world.ants;
+  const out = new Map<number, Decision>();
+  for (let id = 0; id < a.alive.length; id++) {
+    if (a.alive[id] !== 1) continue;
+    if (a.zone[id] !== Zone.Surface) continue;
+    if (a.task[id] !== AntTask.Foraging || a.subTask[id] !== ForagingSubState.SearchingFood)
+      continue;
+    const tileX = a.posX[id]! >> FP_SHIFT;
+    const tileY = a.posY[id]! >> FP_SHIFT;
+    const source = buildAntTrace(world, id).movementSource;
+    out.set(id, { source, wallAim: aimsIntoWall(world, id, source, tileX, tileY) });
+  }
+  return out;
+}
+
 /**
  * Run one scenario for `ticks`, tracing every live ant each tick, and return
  * the catalogued confinement + embedding episodes. Pure observation — the only
@@ -225,8 +256,9 @@ export function runTracedScenario(
   const embedding: EmbeddingEpisode[] = [];
 
   for (let t = 0; t < ticks; t++) {
+    const decisions = computeDecisions(world); // PRE-movement steering decisions.
     tick(world, commandsPerTick[t] ?? []);
-    observeTick(world, t, windows, confinement, embedding, seed, difficulty);
+    observeTick(world, t, windows, confinement, embedding, seed, difficulty, decisions);
   }
 
   // Flush any still-open episodes at run end.
@@ -263,6 +295,7 @@ function observeTick(
   embedding: EmbeddingEpisode[],
   seed: number,
   difficulty: string,
+  decisions: Map<number, Decision>,
 ): void {
   const a = world.ants;
   for (let id = 0; id < a.alive.length; id++) {
@@ -299,7 +332,18 @@ function observeTick(
     const tileY = a.posY[id]! >> FP_SHIFT;
 
     if (zone === Zone.Surface) {
-      observeSurface(world, t, id, win, confinement, seed, difficulty, tileX, tileY);
+      observeSurface(
+        world,
+        t,
+        id,
+        win,
+        confinement,
+        seed,
+        difficulty,
+        tileX,
+        tileY,
+        decisions.get(id),
+      );
       // Surface ants cannot be embedded; close any open embed episode.
       if (win.embedStart !== null) finishEmbedding(embedding, seed, difficulty, id, win, t - 1);
     } else {
@@ -328,6 +372,7 @@ function observeSurface(
   difficulty: string,
   tileX: number,
   tileY: number,
+  decision: Decision | undefined,
 ): void {
   const a = world.ants;
   const isSearching =
@@ -404,9 +449,12 @@ function observeSurface(
     }
     const tileKey = `${tileX},${tileY}`;
     win.episodeTiles.set(tileKey, (win.episodeTiles.get(tileKey) ?? 0) + 1);
-    const src = buildAntTrace(world, id).movementSource;
+    // Source + wall-aim come from the PRE-movement decision for this tick
+    // (computeDecisions), not a post-tick recompute (Codex P1). `decision` is
+    // always present for a surface SearchingFood ant; fall back defensively.
+    const src = decision?.source ?? buildAntTrace(world, id).movementSource;
     win.episodeSources[src] = (win.episodeSources[src] ?? 0) + 1;
-    if (!win.episodeAimedWall && aimsIntoWall(world, id, src, tileX, tileY)) {
+    if (!win.episodeAimedWall && (decision?.wallAim ?? false)) {
       win.episodeAimedWall = true;
     }
   } else if (win.episodeStart !== null) {
@@ -645,8 +693,9 @@ export function checkObservationalNeutrality(
   const c: ConfinementEpisode[] = [];
   const e: EmbeddingEpisode[] = [];
   for (let t = 0; t < ticks; t++) {
+    const decisions = computeDecisions(traced); // PRE-movement, same path as the sweep.
     tick(traced, commandsPerTick[t] ?? []);
-    observeTick(traced, t, windows, c, e, seed, difficulty);
+    observeTick(traced, t, windows, c, e, seed, difficulty, decisions);
   }
 
   const serializedEqual =
