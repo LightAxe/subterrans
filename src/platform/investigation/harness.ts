@@ -42,9 +42,11 @@ import type { MovementSource } from '../debug-snapshot.js';
 import { serializeWorldState } from '../save.js';
 
 /** Movement source as attributed by this harness: the sim's surface-steering
- *  precedence plus `'scatter'` for the spider-scatter override (step 13e), which
- *  the `debug-snapshot` `MovementSource` enum does not distinguish. */
-export type HarnessSource = MovementSource | 'scatter';
+ *  precedence plus two states the `debug-snapshot` `MovementSource` enum does not
+ *  distinguish — `'scatter'` (the spider-flee override, step 13e) and
+ *  `'search-pause'` (the V4+ stationary pause, where `tickAntMovement` exits
+ *  before any steering, so no step is intended that tick). */
+export type HarnessSource = MovementSource | 'scatter' | 'search-pause';
 
 // ===========================================================================
 // Tuning — episode thresholds. These are DIAGNOSTIC detection thresholds, not
@@ -265,6 +267,18 @@ function computeDecisions(world: WorldState): Map<number, Decision> {
       continue;
     const tileX = a.posX[id]! >> FP_SHIFT;
     const tileY = a.posY[id]! >> FP_SHIFT;
+
+    // V4+ search pause: when searchPauseTicks > 0, tickAntMovement decrements and
+    // `continue`s BEFORE consulting scatter/priority/scent/pheromone — no step is
+    // intended this tick, so it is a non-steering state, never a wall-aim (Codex
+    // P2). Pre-tick searchPauseTicks equals the movement-time value (steps 1–15
+    // do not touch it). The pause-ENTRY tick (searchPauseTicks == 0 → set via an
+    // RNG roll) cannot be detected pre-tick without drawing world RNG; that is a
+    // documented ≤1-tick-per-pause residual (INVESTIGATION.md §9).
+    if (a.searchPauseTicks[id]! > 0) {
+      out.set(id, { source: 'search-pause', wallAim: false });
+      continue;
+    }
 
     let source: HarnessSource;
     let target: { tileX: number; tileY: number } | null = null;

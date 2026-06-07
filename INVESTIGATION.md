@@ -148,7 +148,9 @@ _classes_ (every episode the detector raised maps to a catalogued mechanism in
 
 The base steering source of a confined surface searcher is reconstructed from the
 sim's **exact movement-time precedence** (`computeDecisions`, pre-`tick`):
-**`scatter > priority > scent > pheromone > wander`** — where `scatter` is the
+**`search-pause > scatter > priority > scent > pheromone > wander`** — where
+`search-pause` is the V4+ stationary pause (`tickAntMovement` exits before any
+steering, so no step is intended — never a wall-aim), `scatter` is the
 spider-flee override (`tick.ts` step 13e), `priority` is resolved from the colony's
 `priorityFoodPileId` (not the stale `targetPos`), and the pheromone/wander split is
 the real `sampleForagingDirection` (incl. the prev-tile anti-backtrack). The wider
@@ -191,13 +193,14 @@ worst (2050) — and is essentially difficulty-independent.
 
 Movement-source tally across confined ticks (all seeds/difficulties):
 
-| Source    | Confined-tick count | Note                                                                     |
-| --------- | ------------------: | ------------------------------------------------------------------------ |
-| **scent** |           **37495** | dominant                                                                 |
-| pheromone |                3148 | exact branch (sampleForagingDirection)                                   |
-| wander    |                 640 |                                                                          |
-| priority  |                   0 | none (no player marking in the empty-log sweep)                          |
-| scatter   |                   0 | spider-flee override (radius 1; never coincided with a confinement tick) |
+| Source       | Confined-tick count | Note                                                                     |
+| ------------ | ------------------: | ------------------------------------------------------------------------ |
+| **scent**    |           **33319** | dominant                                                                 |
+| search-pause |                4622 | V4+ stationary pause (non-steering; never a wall-aim)                    |
+| pheromone    |                2758 | exact branch (sampleForagingDirection)                                   |
+| wander       |                 584 |                                                                          |
+| priority     |                   0 | none (no player marking in the empty-log sweep)                          |
+| scatter      |                   0 | spider-flee override (radius 1; never coincided with a confinement tick) |
 
 **158 of 183 episodes (86 %)** aim the ant's **actual intended step** — the
 cardinal/diagonal move toward its priority target or nearest scent pile, replicated
@@ -436,7 +439,11 @@ on the acceptance hold-out.
    heuristic and cannot affect the scent/scatter/priority counts or the
    scent-vs-wall conclusion; an exact pheromone label would need an intra-tick
    hook (post-step-15, pre-movement). Scatter never coincided with a confinement
-   tick in the sweep (radius 1).
+   tick in the sweep (radius 1). **Search pause:** in-pause ticks
+   (`searchPauseTicks > 0`) are labeled `search-pause` exactly from pre-tick state;
+   the pause-ENTRY tick (a `searchPauseTicks == 0 → set` RNG roll) can't be
+   detected pre-tick without drawing world RNG, a ≤1-tick-per-pause residual that
+   cannot set a false wall-aim (entry still skips movement).
 
 ---
 
