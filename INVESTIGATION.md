@@ -195,10 +195,10 @@ Movement-source tally across confined ticks (all seeds/difficulties):
 
 | Source       | Confined-tick count | Note                                                                     |
 | ------------ | ------------------: | ------------------------------------------------------------------------ |
-| **scent**    |           **33319** | dominant                                                                 |
-| search-pause |                4622 | V4+ stationary pause (non-steering; never a wall-aim)                    |
-| pheromone    |                2758 | exact branch (sampleForagingDirection)                                   |
-| wander       |                 584 |                                                                          |
+| **scent**    |           **32610** | dominant                                                                 |
+| search-pause |                5407 | V4+ stationary pause (non-steering; never a wall-aim)                    |
+| pheromone    |                2692 | exact branch (sampleForagingDirection)                                   |
+| wander       |                 574 |                                                                          |
 | priority     |                   0 | none (no player marking in the empty-log sweep)                          |
 | scatter      |                   0 | spider-flee override (radius 1; never coincided with a confinement tick) |
 
@@ -428,7 +428,7 @@ on the acceptance hold-out.
    as the plan specifies — not an open-ended seed sweep.
 5. **Source/wall-aim attribution timing.** Decisions are snapshotted just before
    `tick()` and reproduce the sim's exact movement-time precedence
-   **scatter > priority > scent > pheromone > wander**: scatter from
+   **search-pause > scatter > priority > scent > pheromone > wander**: scatter from
    `world.scatterReticleTile` (the shadow step 13e consumes), priority from the
    colony's `priorityFoodPileId` (what `routeForagerPriority` step 13 actually
    uses — never the stale pre-tick `targetPos`), then `findNearestScentPile`, then
@@ -440,10 +440,11 @@ on the acceptance hold-out.
    scent-vs-wall conclusion; an exact pheromone label would need an intra-tick
    hook (post-step-15, pre-movement). Scatter never coincided with a confinement
    tick in the sweep (radius 1). **Search pause:** in-pause ticks
-   (`searchPauseTicks > 0`) are labeled `search-pause` exactly from pre-tick state;
-   the pause-ENTRY tick (a `searchPauseTicks == 0 → set` RNG roll) can't be
-   detected pre-tick without drawing world RNG, a ≤1-tick-per-pause residual that
-   cannot set a false wall-aim (entry still skips movement).
+   (`searchPauseTicks > 0`) are labeled `search-pause` from pre-tick state, and the
+   pause-ENTRY tick (a `searchPauseTicks == 0 → set` RNG roll that `tick` enters
+   before steering) is caught **post-tick** (the counter went 0→>0) and relabeled
+   `search-pause` too — so no paused tick contributes a steering count or a false
+   wall-aim. No residual remains for pauses.
 
 ---
 

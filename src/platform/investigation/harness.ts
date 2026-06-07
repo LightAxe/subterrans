@@ -572,8 +572,21 @@ function observeSurface(
     // an ant became a searcher this very tick (so the pre-tick pass missed it),
     // skip its source tally for this one tick rather than fabricate it.
     if (decision !== undefined) {
-      win.episodeSources[decision.source] = (win.episodeSources[decision.source] ?? 0) + 1;
-      if (decision.wallAim) win.episodeAimedWall = true;
+      let source = decision.source;
+      let wallAim = decision.wallAim;
+      // Pause-ENTRY relabel (Codex r8): when the pause RNG fired this tick
+      // (pre-tick searchPauseTicks was 0, so `decision` holds a steering source),
+      // tickAntMovement entered the pause and skipped the step — leaving
+      // searchPauseTicks > 0 post-tick. Detect that transition and relabel the
+      // entry tick `search-pause` so it can never contribute a false wall-aim or
+      // inflate a steering count. (A normal steering tick leaves it 0; an
+      // in-pause tick was already labeled `search-pause` pre-tick.)
+      if (source !== 'search-pause' && a.searchPauseTicks[id]! > 0) {
+        source = 'search-pause';
+        wallAim = false;
+      }
+      win.episodeSources[source] = (win.episodeSources[source] ?? 0) + 1;
+      if (wallAim) win.episodeAimedWall = true;
     }
   } else if (win.episodeStart !== null) {
     finishConfinement(confinement, seed, difficulty, id, win, t - 1);
