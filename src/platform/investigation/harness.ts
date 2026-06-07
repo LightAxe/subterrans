@@ -495,12 +495,27 @@ function observeSurface(
   decision: Decision | undefined,
 ): void {
   const a = world.ants;
-  // Eligibility comes from PRE-tick state: `decision` is defined iff the ant was
-  // a surface SearchingFood forager at tick start (computeDecisions). Using the
-  // POST-tick task would discard the final searching movement on a tick where
-  // `tickForagerActions` flips the ant to CarryingFood AFTER it moved — which can
-  // shorten an otherwise-qualifying episode below CONFINE_MIN_TICKS (Codex r9).
-  const isSearching = decision !== undefined;
+  // Eligibility brackets the tick from BOTH ends, because the sim flips the
+  // forager subtask mid-tick at boundaries the harness cannot observe directly:
+  //   - tick start: `decision` is defined iff the ant was a surface SearchingFood
+  //     forager (computeDecisions, pre-`tick`).
+  //   - movement time (step 16): `tickExcursionBoundary` (step 9c) may have
+  //     demoted SearchingFood→ReturningToNest (leash) or promoted the reverse
+  //     BEFORE the ant moved (Codex r10); and `tickForagerActions` (step 16b)
+  //     flips SearchingFood→CarryingFood AFTER a searching move on a pickup (r9).
+  // A tick counts as a searching movement iff the ant was a searcher at tick
+  // start AND is still SearchingFood OR has just picked up (CarryingFood)
+  // post-tick. This EXCLUDES leash-demote home-movement ticks (post-tick
+  // ReturningToNest) and is conservative on the resume tick (post-tick searcher
+  // but not at tick start → its window restarts on the wave bump anyway). The
+  // dominant scent-vs-wall pins are immune: a wall-pinned ant never travels past
+  // its leash radius, so step 9c never fires for it.
+  const postTask = a.task[id];
+  const postSub = a.subTask[id];
+  const postEligible =
+    postTask === AntTask.Foraging &&
+    (postSub === ForagingSubState.SearchingFood || postSub === ForagingSubState.CarryingFood);
+  const isSearching = decision !== undefined && postEligible;
 
   // Only searching foragers are candidates for #127 milling. Carriers/returners
   // are goal-directed and excluded (they have a stable home target).

@@ -446,7 +446,13 @@ on the acceptance hold-out.
    pause-ENTRY tick (a `searchPauseTicks == 0 → set` RNG roll that `tick` enters
    before steering) is caught **post-tick** (the counter went 0→>0) and relabeled
    `search-pause` too — so no paused tick contributes a steering count or a false
-   wall-aim. No residual remains for pauses.
+   wall-aim. No residual remains for pauses. **Excursion-boundary flips:**
+   `tickExcursionBoundary` (step 9c) can flip SearchingFood↔ReturningToNest before
+   movement; a tick counts as searching only if the ant is a searcher at BOTH
+   tick start (`decision`) and post-tick (SearchingFood, or CarryingFood for the
+   pickup case), which excludes leash-demote home-movement ticks and is
+   conservative on the resume tick. Wall-pin episodes are immune (a pinned ant
+   never exceeds its leash radius, so step 9c never fires for it).
 
 ---
 
