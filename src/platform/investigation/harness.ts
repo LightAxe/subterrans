@@ -13,22 +13,27 @@
 // (Per-ant detector state is held on a local object named `win`, never `w`, so
 //  the FNDN-07 boundary grep does not mistake field writes for world mutations.)
 //
-// OBSERVATIONAL NEUTRALITY (plan §1, R3-P0-3): tracing consumes NO RNG and
-// mutates no sim state. `buildAntTrace` is a pure read; the only randomness in
-// the system flows through `tick()`'s internal Rng. `checkObservationalNeutrality`
-// proves an instrumented run and a clean run end byte-identical incl. rngState.
+// OBSERVATIONAL NEUTRALITY (plan §1, R3-P0-3): tracing consumes NO world RNG and
+// mutates no sim state. The probes are pure reads; the pheromone-branch probe
+// (sampleForagingDirection) is fed a THROWAWAY Rng that never touches
+// world.rngState. The only randomness that advances the world flows through
+// `tick()`'s internal Rng. `checkObservationalNeutrality` proves an instrumented
+// run and a clean run end byte-identical incl. rngState.
 
 import { tick } from '../../sim/tick.js';
 import { createScenario } from '../../sim/scenario.js';
 import { canEnterUndergroundTile } from '../../sim/ant/ant-system.js';
 import { surfaceMovementAt, SurfaceMovementEffect } from '../../sim/surface-features.js';
 import { Zone, ugGet } from '../../sim/terrain.js';
-import { AntTask, ForagingSubState } from '../../sim/enums.js';
+import { AntTask, ForagingSubState, PheromoneType } from '../../sim/enums.js';
 import { FP_SHIFT } from '../../sim/fixed.js';
 import { PLAYER_COLONY_ID, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from '../../sim/constants.js';
+import { Rng } from '../../sim/rng.js';
+import { sampleForagingDirection } from '../../sim/pheromone/pheromone-system.js';
+import { pheromoneGridKey } from '../../sim/pheromone/pheromone-store.js';
 import type { WorldState } from '../../sim/types.js';
 import type { SimCommand } from '../../sim/commands.js';
-import { buildAntTrace, type MovementSource } from '../debug-snapshot.js';
+import type { MovementSource } from '../debug-snapshot.js';
 import { serializeWorldState } from '../save.js';
 
 // ===========================================================================
@@ -39,7 +44,8 @@ import { serializeWorldState } from '../save.js';
 
 /** Sliding window (ticks) over which surface confinement is judged. */
 export const CONFINE_WINDOW = 20;
-/** Chebyshev bounding-box side an ant must stay within to count as confined. */
+/** Max box SIDE in distinct tiles the ant must stay within to count as confined.
+ *  3 ⇒ a true 3×3 box (compared as span+1, so X=10..12 passes, X=10..13 fails). */
 export const CONFINE_BBOX = 3;
 /** Min tile-crossings in the window to count as "actively moving" (vs a
  *  legitimate stationary pause, which is NOT confinement). */
@@ -211,13 +217,24 @@ interface Decision {
  * Compute, from the CURRENT (pre-`tick`) world state, the steering decision for
  * every surface `SearchingFood` forager — the movement source and whether its
  * intended step aims into a wall. Must be called BEFORE `tick()` so the inputs
- * (position, targets, food piles) describe the state the ant actually steered
- * from this tick, not the post-movement state (Codex P1). Pure read — no RNG,
- * no mutation; keeps observational neutrality.
+ * describe the state the ant steered from this tick, not the post-movement state
+ * (Codex P1). Pure read — no `world.rngState` mutation (the pheromone branch is
+ * probed with a throwaway `Rng`), so observational neutrality holds.
+ *
+ * The source is the EXACT sim precedence (`ant-system.ts` surface block), not the
+ * `debug-snapshot` heuristic: priority > scent > pheromone > wander. The
+ * pheromone-vs-wander split calls the real `sampleForagingDirection` (with the
+ * ant's prev-tile anti-backtrack) — pheromone iff it returns a non-zero step.
+ * `sampleForagingDirection` only draws RNG to pick WHICH direction in its 10%
+ * weak-trail explore; the zero-vs-non-zero outcome is RNG-independent, so a
+ * throwaway `Rng` reproduces the branch exactly. (Residual: the trail grid is
+ * read one tick stale — deposit/decay run mid-`tick` before movement — a far
+ * smaller error than the nearby-pheromone heuristic; see INVESTIGATION.md §9.)
  */
 function computeDecisions(world: WorldState): Map<number, Decision> {
   const a = world.ants;
   const out = new Map<number, Decision>();
+  const probeRng = new Rng(1); // throwaway; never touches world.rngState
   for (let id = 0; id < a.alive.length; id++) {
     if (a.alive[id] !== 1) continue;
     if (a.zone[id] !== Zone.Surface) continue;
@@ -225,7 +242,27 @@ function computeDecisions(world: WorldState): Map<number, Decision> {
       continue;
     const tileX = a.posX[id]! >> FP_SHIFT;
     const tileY = a.posY[id]! >> FP_SHIFT;
-    const source = buildAntTrace(world, id).movementSource;
+    let source: MovementSource;
+    if (a.targetPosX[id]! !== -1 && a.targetPosY[id]! !== -1) {
+      source = 'priority';
+    } else if (nearestScentPile(world, tileX, tileY) !== null) {
+      source = 'scent';
+    } else {
+      const grid =
+        world.pheromoneGrids[pheromoneGridKey(a.colonyId[id]!, PheromoneType.FoodTrail, 'surface')];
+      const dir =
+        grid === undefined
+          ? { dx: 0, dy: 0 }
+          : sampleForagingDirection(
+              grid,
+              tileX,
+              tileY,
+              probeRng,
+              a.searchPrevTileX[id],
+              a.searchPrevTileY[id],
+            );
+      source = dir.dx !== 0 || dir.dy !== 0 ? 'pheromone' : 'wander';
+    }
     out.set(id, { source, wallAim: aimsIntoWall(world, id, source, tileX, tileY) });
   }
   return out;
@@ -405,16 +442,20 @@ function observeSurface(
   const maxX = Math.max(...win.xs);
   const minY = Math.min(...win.ys);
   const maxY = Math.max(...win.ys);
-  const bbox = Math.max(maxX - minX, maxY - minY);
+  // Box SIDE in distinct tiles (span + 1): X=10..13 is a 4-tile side, not 3.
+  const boxSide = Math.max(maxX - minX, maxY - minY) + 1;
 
-  // Confined THIS tick: trapped in a ≤CONFINE_BBOX box over the full window while
-  // still actively moving. Staying boxed for the whole trailing window is itself
-  // the no-progress signal — no separate progress gate (which, combined with the
-  // duration gate in finishConfinement, would double-count the threshold and
-  // drop qualifying short episodes — Codex P1-b). An episode is the contiguous
-  // run of confined ticks; finishConfinement keeps only runs ≥ CONFINE_MIN_TICKS.
+  // Confined THIS tick: trapped in a box of at most CONFINE_BBOX tiles per side
+  // over the full window while still actively moving. Staying boxed for the whole
+  // trailing window is itself the no-progress signal — no separate progress gate
+  // (which, combined with the duration gate in finishConfinement, would
+  // double-count the threshold and drop qualifying short episodes — Codex P1-b).
+  // An episode is the contiguous run of confined ticks; finishConfinement keeps
+  // only runs ≥ CONFINE_MIN_TICKS.
   const confinedNow =
-    win.xs.length >= CONFINE_WINDOW && bbox <= CONFINE_BBOX && crossings >= CONFINE_MIN_CROSSINGS;
+    win.xs.length >= CONFINE_WINDOW &&
+    boxSide <= CONFINE_BBOX &&
+    crossings >= CONFINE_MIN_CROSSINGS;
 
   if (confinedNow) {
     if (win.episodeStart === null) {
@@ -429,12 +470,13 @@ function observeSurface(
     const tileKey = `${tileX},${tileY}`;
     win.episodeTiles.set(tileKey, (win.episodeTiles.get(tileKey) ?? 0) + 1);
     // Source + wall-aim come from the PRE-movement decision for this tick
-    // (computeDecisions), not a post-tick recompute (Codex P1). `decision` is
-    // always present for a surface SearchingFood ant; fall back defensively.
-    const src = decision?.source ?? buildAntTrace(world, id).movementSource;
-    win.episodeSources[src] = (win.episodeSources[src] ?? 0) + 1;
-    if (!win.episodeAimedWall && (decision?.wallAim ?? false)) {
-      win.episodeAimedWall = true;
+    // (computeDecisions) — the exact sim precedence, not a post-tick recompute
+    // (Codex P1). `decision` is present for every surface SearchingFood ant; if
+    // an ant became a searcher this very tick (so the pre-tick pass missed it),
+    // skip its source tally for this one tick rather than fabricate it.
+    if (decision !== undefined) {
+      win.episodeSources[decision.source] = (win.episodeSources[decision.source] ?? 0) + 1;
+      if (decision.wallAim) win.episodeAimedWall = true;
     }
   } else if (win.episodeStart !== null) {
     finishConfinement(confinement, seed, difficulty, id, win, t - 1);
@@ -448,6 +490,34 @@ function observeSurface(
  * mirror `debug-snapshot.ts` already maintains for the same constant.
  */
 const HARNESS_FOOD_SCENT_RADIUS = 15;
+
+/**
+ * Replicate `findNearestScentPile` (`ant-system.ts`): nearest food pile within
+ * FOOD_SCENT_RADIUS (Manhattan), tie-break lowest id. Returns null if none.
+ * Exact for the harness because the sim mutates `foodPiles` only after movement
+ * (deplete step 16b, spawn step 16d), so a pre-`tick` read matches movement time.
+ */
+function nearestScentPile(
+  world: WorldState,
+  tileX: number,
+  tileY: number,
+): { tileX: number; tileY: number } | null {
+  let bestDist = HARNESS_FOOD_SCENT_RADIUS + 1;
+  let bestId = -1;
+  let bestX = 0;
+  let bestY = 0;
+  for (const pile of world.foodPiles) {
+    const d = Math.abs(pile.tileX - tileX) + Math.abs(pile.tileY - tileY);
+    if (d > HARNESS_FOOD_SCENT_RADIUS) continue;
+    if (d < bestDist || (d === bestDist && pile.foodPileId < bestId)) {
+      bestDist = d;
+      bestId = pile.foodPileId;
+      bestX = pile.tileX;
+      bestY = pile.tileY;
+    }
+  }
+  return bestId === -1 ? null : { tileX: bestX, tileY: bestY };
+}
 
 /**
  * Reconstruct the cardinal/diagonal step the sim's scent/priority routing
@@ -473,24 +543,10 @@ function intendedTargetStep(
     rawDx = (tx >> FP_SHIFT) - tileX;
     rawDy = (ty >> FP_SHIFT) - tileY;
   } else if (src === 'scent') {
-    // Nearest food pile within FOOD_SCENT_RADIUS (Manhattan), tie-break lowest id.
-    let bestDist = HARNESS_FOOD_SCENT_RADIUS + 1;
-    let bestId = -1;
-    let bestX = 0;
-    let bestY = 0;
-    for (const pile of world.foodPiles) {
-      const d = Math.abs(pile.tileX - tileX) + Math.abs(pile.tileY - tileY);
-      if (d > HARNESS_FOOD_SCENT_RADIUS) continue;
-      if (d < bestDist || (d === bestDist && pile.foodPileId < bestId)) {
-        bestDist = d;
-        bestId = pile.foodPileId;
-        bestX = pile.tileX;
-        bestY = pile.tileY;
-      }
-    }
-    if (bestId === -1) return null;
-    rawDx = bestX - tileX;
-    rawDy = bestY - tileY;
+    const pile = nearestScentPile(world, tileX, tileY);
+    if (pile === null) return null;
+    rawDx = pile.tileX - tileX;
+    rawDy = pile.tileY - tileY;
   } else {
     return null;
   }
