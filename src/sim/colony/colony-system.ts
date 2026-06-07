@@ -106,6 +106,26 @@ export function isFoodChamberDepositable(chamber: ChamberRecord): boolean {
 }
 
 /**
+ * True when the colony has genuinely nowhere to deposit foraged food: the
+ * entrance pool is at capacity AND no FoodStorage chamber is depositable. This
+ * is the shared "no deposit target" predicate behind the issue-#42 fix-#2
+ * SearchingFood demotion (`tickSearchLeash`), the issue-#126 step-10a
+ * idle-promotion backpressure, and the issue-#27 carrier wait-wake gate
+ * (`tickForagerActions`) — keeping all three in lockstep so a forager is never
+ * promoted into a state the leash would immediately demote it out of, and the
+ * wait-gate wakes on exactly the conditions the other two gate on.
+ *
+ * Pure read of `colony.foodStored` + `colony.chambers`; no mutation, no RNG.
+ */
+export function colonyHasNoDepositTarget(colony: ColonyRecord): boolean {
+  if (colony.foodStored < BASE_FOOD_STORAGE_CAPACITY) return false;
+  for (let c = 0; c < colony.chambers.length; c++) {
+    if (isFoodChamberDepositable(colony.chambers[c]!)) return false;
+  }
+  return true;
+}
+
+/**
  * Attempt to withdraw `amount` food. All-or-nothing: returns false (no
  * partial withdrawal) if the colony's combined stored food is below `amount`.
  *

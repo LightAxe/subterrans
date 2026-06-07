@@ -52,6 +52,7 @@ import type { ColonyRecord, ChamberRecord } from '../colony/colony-store.js';
 import {
   hasCompletedChamber,
   isFoodChamberDepositable,
+  colonyHasNoDepositTarget,
   colonyFoodTotal,
 } from '../colony/colony-system.js';
 import {
@@ -748,16 +749,7 @@ export function tickForagerActions(world: WorldState): void {
       // Iteration cost: O(chambers) only for ants currently in wait — the
       // common case (no carriers in wait) skips this block entirely.
       if (ants.waitingDeposit[id] === 1) {
-        let canDepositSomewhere = colony.foodStored < BASE_FOOD_STORAGE_CAPACITY;
-        if (!canDepositSomewhere) {
-          for (let c = 0; c < colony.chambers.length; c++) {
-            if (isFoodChamberDepositable(colony.chambers[c]!)) {
-              canDepositSomewhere = true;
-              break;
-            }
-          }
-        }
-        if (canDepositSomewhere) {
+        if (!colonyHasNoDepositTarget(colony)) {
           ants.waitingDeposit[id] = 0;
           // Fall through to normal deposit handling. The ant didn't move this
           // tick (tickAntMovement skipped it), so it's at the same entrance
@@ -1718,17 +1710,10 @@ export function tickSearchLeash(world: WorldState): void {
       colony.computedAllocation.dig > 0 || colony.computedAllocation.fight > 0;
     rebalanceNeeded[colony.colonyId] = overForage && nonForageDemand;
 
-    const poolAtCap = colony.foodStored >= BASE_FOOD_STORAGE_CAPACITY;
-    let anyChamberDepositable = false;
-    if (poolAtCap) {
-      for (let c = 0; c < colony.chambers.length; c++) {
-        if (isFoodChamberDepositable(colony.chambers[c]!)) {
-          anyChamberDepositable = true;
-          break;
-        }
-      }
-    }
-    noDepositTarget[colony.colonyId] = poolAtCap && !anyChamberDepositable;
+    // Shared "no deposit target" predicate — kept in lockstep with the #126
+    // step-10a idle-promotion backpressure (colony-system.ts) so a forager is
+    // never re-promoted into a state this leash would immediately demote.
+    noDepositTarget[colony.colonyId] = colonyHasNoDepositTarget(colony);
   }
 
   for (let id = 0; id < world.nextEntityId; id++) {
