@@ -411,6 +411,12 @@ function observeSurface(
   // are goal-directed and excluded (they have a stable home target).
   if (!isSearching) {
     if (win.episodeStart !== null) finishConfinement(confinement, seed, difficulty, id, win, t - 1);
+    // Clear the ring so a SearchingFood → ReturningToNest → SearchingFood flip
+    // (which `tickExcursionBoundary` can do WITHOUT bumping searchWave) cannot
+    // stitch pre-return positions into the next search stint's bbox window
+    // (Codex r5) — the window must hold only contiguous searching ticks.
+    win.xs.length = 0;
+    win.ys.length = 0;
     return;
   }
 
