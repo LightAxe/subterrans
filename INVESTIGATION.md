@@ -156,26 +156,27 @@ resolution. This is the taxonomy used to label every episode below.
 
 ## 4. #127 — surface forager confinement (catalog)
 
-**Definition used (plan §2):** a `SearchingFood` forager is _confined_ when, over
-a 20-tick window, it stays inside a ≤3×3 Chebyshev box **while actively moving**
-(≥4 tile-crossings/window) **and** its per-excursion coverage high-water (Chebyshev
-distance from the wave's origin) fails to improve for ≥12 consecutive ticks.
-Coverage progress is reset per search wave (entrance re-launch), so productive
-searching never false-positives. An episode is the contiguous run of _confirmed_
-confined ticks; `startTick` is the confirmation tick and `lengthTicks` measures
-that confirmed interval (onset is ~12 ticks earlier), so length, locus, sources,
-and `aimedIntoWall` all describe the same interval. Counts below therefore reflect
-**sustained** confinement (persisting ≥`CONFINE_MIN_TICKS` past confirmation),
-not transient wobble.
+**Definition used (plan §2):** a `SearchingFood` forager is _confined this tick_
+when, over the trailing 20-tick window, it stays inside a ≤3×3 Chebyshev box
+**while actively moving** (≥4 tile-crossings/window) — staying boxed for a full
+window _is_ the no-progress signal, so no separate progress gate is needed. The
+position window is cleared on each new search wave (entrance re-launch) and on
+surface re-entry, so productive searching never false-positives. An **episode** is
+a contiguous run of confined ticks; `startTick` is the first confined tick and
+`lengthTicks` is the run length, so length, locus, sources, and `aimedIntoWall`
+all describe the **same** interval. `finishConfinement` keeps only runs
+≥`CONFINE_MIN_TICKS` (a single duration gate). `aimedIntoWall` is set from the
+ant's **actual intended step** (toward its priority target or nearest scent pile),
+computed from **pre-movement** state each tick.
 
 ### 4.1 Severity (measured — 20 seeds × 3 difficulties × 3000 ticks)
 
 | Difficulty | Episodes | Confined ants (sum) |     Worst episode (ticks) |
 | ---------- | -------: | ------------------: | ------------------------: |
-| Easy       |       67 |                  18 |                      2050 |
-| Normal     |       65 |                  17 |                      2050 |
-| Hard       |       65 |                  16 |                      1965 |
-| **Total**  |  **197** |                   — | **2050 (~102 s @ 20 Hz)** |
+| Easy       |       77 |                  23 |                      2050 |
+| Normal     |       75 |                  22 |                      2050 |
+| Hard       |       74 |                  21 |                      1965 |
+| **Total**  |  **226** |                   — | **2050 (~102 s @ 20 Hz)** |
 
 Worst _confirmed_ episode is **2050 ticks** — independently matching Step-0's
 worst (2050) — and is essentially difficulty-independent.
@@ -186,17 +187,17 @@ Movement-source tally across confined ticks (all seeds/difficulties):
 
 | Source    | Confined-tick count | Note                                            |
 | --------- | ------------------: | ----------------------------------------------- |
-| **scent** |           **49730** | dominant                                        |
-| pheromone |                5165 |                                                 |
-| wander    |                 438 |                                                 |
+| **scent** |           **50230** | dominant                                        |
+| pheromone |                5253 |                                                 |
+| wander    |                 646 |                                                 |
 | priority  |                   0 | none (no player marking in the empty-log sweep) |
 
-**152 of 197 episodes (77 %)** aim the ant's **actual intended step** — the
+**149 of 226 episodes (66 %)** aim the ant's **actual intended step** — the
 cardinal/diagonal move toward its priority target or nearest scent pile, replicated
-from `pickCardinalStep` + `findNearestScentPile` — onto a **`HardBlock`**
-(`aimedIntoWall`, a precise destination-tile test), and **every one of the 10
-longest episodes is pure-`scent` with `aimedIntoWall = true`.** This **confirms the
-re-plan's corrected root cause**
+from `pickCardinalStep` + `findNearestScentPile`, evaluated from **pre-movement**
+state — onto a **`HardBlock`** (`aimedIntoWall`, a precise destination-tile test),
+and **every one of the 10 longest episodes is pure-`scent` with
+`aimedIntoWall = true`.** This **confirms the re-plan's corrected root cause**
 (scent steering's naive `pickCardinalStep` aims straight at a pile through a
 `HardBlock`, `ant-system.ts:4514`) and **supersedes Step-0's "worst case is pure
 wander"** — Step-0's detector counted milling-ticks; attributing by steering
@@ -219,14 +220,14 @@ Seed 11 / ant 22 reproduces Codex's exact case (`movementSource="scent"`, intend
 step into a `HardBlock`) at locus (100,43) — adjacent to the enemy start column
 (104), a player forager scenting a pile across a wall. Pheromone and wander
 confinement also occur but are **short-tail** (longest non-scent sustained episode
-is well under 300 ticks); after the precise intended-step test, **152/197 sustained
-episodes are scent/priority-vs-wall.**
+is well under 300 ticks); after the precise intended-step test, **149/226
+episodes are scent/priority-vs-wall**, and they dominate the long tail.
 
 ### 4.4 Per-seed worst episode (Normal) — calibration drives the caps
 
 Discovery worst: **2050** (seed 11). Calibration worst: **1481** (seed 51).
 Calibration per-seed worst: `13→298, 17→214, 23→0, 51→1481, 88→38, 101→1446,
-202→0, 303→954, 404→260, 505→0`. Sustained confinement **clusters in a subset of
+202→12, 303→960, 404→263, 505→12`. Sustained confinement **clusters in a subset of
 seeds** (several show 0): it appears where a food pile sits behind a procedural
 `HardBlock` within scent range, so the scent step pins on the wall — exactly the
 mechanism Fix-A targets. The rest is a short tail of sub-300-tick wander/pheromone
@@ -326,7 +327,7 @@ committed and ready to assert this post-fix.
 (`ant-store.ts:259`), so a len-12 run requires a code change touching every
 ring-buffer site in §2 — that is a **fix-side** experiment, correctly belonging to
 the checkpoint, not Phase-0 diagnosis. **Baseline (len=4) confinement is catalogued
-above (197 sustained episodes; 152 wall-pins).** The experiment to run at the checkpoint:
+above (226 episodes; 149 wall-pins).** The experiment to run at the checkpoint:
 rebuild with len=12, re-run the _calibration_ sweep, and retain the deepening
 **only if** it independently reduces confinement (especially the short-tail
 wander/pheromone loops) **without** unacceptable global path change. Until then,
@@ -369,14 +370,14 @@ field breaks byte-parity).
 
 ## 7. Numeric acceptance caps (set from calibration; verify on acceptance)
 
-Derived from the **calibration** seeds (worst = 1481 ticks; 152/197 wall-pins),
+Derived from the **calibration** seeds (worst = 1481 ticks; 149/226 wall-pins),
 to be **verified post-fix on the untouched acceptance seeds** + structural cases
 (never the reverse):
 
 | Metric                                            | Baseline (calibration) | Proposed cap (post-fix)       |
 | ------------------------------------------------- | ---------------------: | ----------------------------- |
 | Worst confinement episode                         |      2050 ticks (disc) | **≤ 60 ticks (3 s)**          |
-| Scent/priority-vs-wall episodes (`aimedIntoWall`) |                    152 | **0**                         |
+| Scent/priority-vs-wall episodes (`aimedIntoWall`) |                    149 | **0**                         |
 | Confinement episodes > 300 ticks                  |                   many | **0**                         |
 | #128 embedded ant-ticks (structural cases)        |            >0 (latent) | **0**                         |
 | Feature-field hash invariance across events       |         477/900 mutate | **0 mutate (exact equality)** |
@@ -415,6 +416,16 @@ on the acceptance hold-out.
    editing.
 4. The completion gate is met for **named-seed + command-log + structural** suites
    as the plan specifies — not an open-ended seed sweep.
+5. **Source/wall-aim attribution timing.** Decisions are snapshotted just before
+   `tick()`, whereas the sim finalises steering inputs mid-tick (commands at step 1,
+   `routeForagerPriority` at step 13, movement at step 16). This is **exact** for
+   the #127 catalog because (a) the sweep that produces every #127 number issues
+   **no commands**, (b) scent targets derive from `foodPiles`, which the sim mutates
+   only **after** movement (depletion step 16b, spawn step 16d), and (c) priority
+   targets are set only from **marked** piles and the harness never issues
+   `MarkFoodPile`, so no ant ever carries a priority target (priority count = 0).
+   A future **command-driven priority** log would need an intra-tick hook (post-
+   `routeForagerPriority`, pre-movement) to attribute priority steps exactly.
 
 ---
 

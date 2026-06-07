@@ -44,7 +44,8 @@ export const CONFINE_BBOX = 3;
 /** Min tile-crossings in the window to count as "actively moving" (vs a
  *  legitimate stationary pause, which is NOT confinement). */
 export const CONFINE_MIN_CROSSINGS = 4;
-/** Consecutive no-progress ticks before a confinement episode is recorded. */
+/** Minimum contiguous confined-tick run length to record an episode (a single
+ *  duration gate; there is no separate progress gate). */
 export const CONFINE_MIN_TICKS = 12;
 
 // ===========================================================================
@@ -119,11 +120,6 @@ interface AntWindow {
   // Ring of recent tile positions for bbox + crossing count.
   xs: number[];
   ys: number[];
-  // Coverage high-water (max Chebyshev distance from this excursion's origin).
-  originX: number;
-  originY: number;
-  progressHW: number;
-  ticksSinceProgress: number;
   // Active confinement episode (null if not currently confined).
   episodeStart: number | null;
   episodeSources: Partial<Record<MovementSource, number>>;
@@ -150,10 +146,6 @@ function freshWindow(): AntWindow {
   return {
     xs: [],
     ys: [],
-    originX: -1,
-    originY: -1,
-    progressHW: -1,
-    ticksSinceProgress: 0,
     episodeStart: null,
     episodeSources: {},
     episodeAimedWall: false,
@@ -385,30 +377,15 @@ function observeSurface(
     return;
   }
 
-  // Reset the excursion origin/high-water when a new search wave starts (the
-  // ant just left an entrance) or when the ant has just re-entered the surface
-  // after an underground stint, so progress is measured per-excursion. Also
-  // clear the position ring so bbox/crossing detection never mixes positions
-  // from a prior excursion (different entrance) or pre-dive positions.
+  // Clear the position ring when a new search wave starts (the ant just left an
+  // entrance) or it has just re-entered the surface after an underground stint,
+  // so bbox/crossing detection never mixes positions from a prior excursion
+  // (different entrance) or pre-dive positions.
   const wave = a.searchWave[id]!;
-  if (wave !== win.lastWave || win.originX < 0 || win.lastZone !== Zone.Surface) {
-    win.originX = tileX;
-    win.originY = tileY;
-    win.progressHW = 0;
-    win.ticksSinceProgress = 0;
+  if (wave !== win.lastWave || win.lastZone !== Zone.Surface) {
     win.lastWave = wave;
     win.xs.length = 0;
     win.ys.length = 0;
-  }
-
-  // Coverage progress: Chebyshev distance from the excursion origin. A genuinely
-  // searching ant pushes this high-water up; a milling ant cannot.
-  const cover = Math.max(Math.abs(tileX - win.originX), Math.abs(tileY - win.originY));
-  if (cover > win.progressHW) {
-    win.progressHW = cover;
-    win.ticksSinceProgress = 0;
-  } else {
-    win.ticksSinceProgress++;
   }
 
   // Maintain the position ring.
@@ -430,18 +407,20 @@ function observeSurface(
   const maxY = Math.max(...win.ys);
   const bbox = Math.max(maxX - minX, maxY - minY);
 
+  // Confined THIS tick: trapped in a ≤CONFINE_BBOX box over the full window while
+  // still actively moving. Staying boxed for the whole trailing window is itself
+  // the no-progress signal — no separate progress gate (which, combined with the
+  // duration gate in finishConfinement, would double-count the threshold and
+  // drop qualifying short episodes — Codex P1-b). An episode is the contiguous
+  // run of confined ticks; finishConfinement keeps only runs ≥ CONFINE_MIN_TICKS.
   const confinedNow =
-    win.xs.length >= CONFINE_WINDOW &&
-    bbox <= CONFINE_BBOX &&
-    crossings >= CONFINE_MIN_CROSSINGS &&
-    win.ticksSinceProgress >= CONFINE_MIN_TICKS;
+    win.xs.length >= CONFINE_WINDOW && bbox <= CONFINE_BBOX && crossings >= CONFINE_MIN_CROSSINGS;
 
   if (confinedNow) {
     if (win.episodeStart === null) {
-      // Start at the CONFIRMATION tick (not backdated), so startTick, endTick,
-      // lengthTicks, sources, tileX/tileY, and aimedIntoWall all describe the
-      // exact same interval [confirmation .. resolution] — no diagnostic-coverage
-      // gap (Codex P2). Onset is ~CONFINE_MIN_TICKS earlier by construction.
+      // Start at the first confined tick. startTick, endTick, lengthTicks,
+      // sources, tileX/tileY, and aimedIntoWall therefore all describe the exact
+      // same interval [first-confined .. resolution] — no coverage gap (Codex P2).
       win.episodeStart = t;
       win.episodeSources = {};
       win.episodeAimedWall = false;
