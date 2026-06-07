@@ -357,15 +357,9 @@ export const SIM_VERSION_V26_SPIDER_EDGE_MARGIN = 26 as const;
  * that own a FoodStorage chamber — the "hundreds of ants" pile-up only forms in
  * a mature, fully-saturated colony. A chamberless early-game colony keeps
  * foraging into its entrance pool; only its CARRIERS park, via the universal
- * #27 wait-wake gate (`colonyHasNoDepositTarget`).
- * V27 also tightens the shared `colonyHasNoDepositTarget` pool test from strict
- * at-cap to a carry-headroom hysteresis (pool saturated when free space < one
- * pickup, `FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP`, mirroring the chamber rule).
- * Without it the queen's 2-fp/tick meal — consumed before the wait-wake/leash
- * passes — would flip a chamberless full pool "open" every tick and thrash its
- * carriers. Pre-V27 saves keep the churn, the strict at-cap pool test, AND the
- * chamberless-inclusive demotion (all gated on simVersion >= V27) for
- * byte-identical replay.
+ * #27 wait-wake gate (`colonyHasNoDepositTarget`), which keeps the pool topped
+ * off at cap. Pre-V27 saves keep the churn AND the chamberless-inclusive
+ * demotion (gated on simVersion >= V27) for byte-identical replay.
  */
 export const SIM_VERSION_V27_FORAGE_BACKPRESSURE = 27 as const;
 export const LATEST_SIM_VERSION = SIM_VERSION_V27_FORAGE_BACKPRESSURE;

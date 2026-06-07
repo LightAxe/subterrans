@@ -67,15 +67,7 @@ function makeWorldWithColony(seed: number = 42): {
     lifespan: WORKER_LIFESPAN_TICKS,
   });
   world.colonies[1] = createColonyRecord(1, queenId);
-  // Keep the queen fed, but with at least one carry-pickup of pool headroom so
-  // the chamberless colony is NOT in the V27 (#126) "no deposit target" state,
-  // which suppresses idle→Foraging promotion. V27 treats the pool as saturated
-  // when free space < FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP (512), so foodStored
-  // must stay ≤ BASE_FOOD_STORAGE_CAPACITY - 512 = 1536. 1024 fp leaves ample
-  // headroom (and ≈512 ticks of queen food at 2/tick). The old 10000 was above
-  // the real cap (reconcile clamps to ≤2048) and paired with the chamberless
-  // default to halt forage allocation.
-  world.colonies[1].foodStored = 1024;
+  world.colonies[1].foodStored = 10000;
   return { world, colonyId: 1 as ColonyId, queenId };
 }
 

@@ -69,7 +69,6 @@ import {
   WORKER_CARRY_CAPACITY,
   FOOD_PICKUP_AMOUNT,
   FOOD_CHAMBER_CAPACITY,
-  FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP,
   BASE_FOOD_STORAGE_CAPACITY,
   FOOD_TRAIL_DEPOSIT,
   FOOD_TRAIL_DEPOSIT_V14,
@@ -2818,27 +2817,28 @@ describe('issue #27 — carrier WaitingToDeposit', () => {
     expect(world.ants.waitingDeposit[antId]).toBe(0);
   });
 
-  it('4. wake on pool headroom — V27 requires a full carry-pickup of headroom (no partial-fill thrash)', () => {
+  it('4. wake on pool headroom — entrance pool drops below cap, tickForagerActions wakes', () => {
     const { world, colony, antId } = setupSaturatedColony();
-    // Fixture is at LATEST (>= V27); this asserts the V27 (#126) hysteresis.
     world.ants.waitingDeposit[antId] = 1;
 
-    // Chamber stays saturated; the entrance pool opens only 100 fp — LESS than a
-    // carry-pickup. Pre-V27 the carrier woke, deposited 100, and re-entered wait
-    // with 412 left (the partial-fill thrash). V27 keeps it parked: a sub-pickup
-    // pool is not a deposit target.
+    // Chamber stays saturated; only the entrance pool drains.
     colony.foodStored = BASE_FOOD_STORAGE_CAPACITY - 100;
-    tickForagerActions(world);
-    expect(world.ants.waitingDeposit[antId]).toBe(1); // still waiting (no thrash)
-    expect(world.ants.foodCarrying[antId]).toBe(512); // nothing deposited
-    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY - 100); // pool untouched
 
-    // Open a full carry-pickup of headroom → the carrier wakes and fully unloads.
-    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY - FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP;
     tickForagerActions(world);
-    expect(world.ants.foodCarrying[antId]).toBe(0); // full 512 deposited
+
+    // Wake fires; antDepositFood at the entrance fallback fits 100 fp.
+    // Issue #42 fix: at v6 the partial-deposit branch re-enters wait
+    // because the chamber is still saturated and there's leftover carry
+    // (412 fp) — so on v6 the ant ends the tick BACK in wait. On v5 the
+    // ant ends the tick out-of-wait. The pool drain + carry-down assertions
+    // hold under both versions.
     expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
-    expect(world.ants.waitingDeposit[antId]).toBe(0); // wait cleared on full deposit
+    expect(world.ants.foodCarrying[antId]).toBe(412);
+    if (world.simVersion >= 6) {
+      expect(world.ants.waitingDeposit[antId]).toBe(1); // re-enters wait on partial fill
+    } else {
+      expect(world.ants.waitingDeposit[antId]).toBe(0);
+    }
   });
 
   it('5. movement skip — tickAntMovement does NOT change posX/posY for a waiting ant', () => {

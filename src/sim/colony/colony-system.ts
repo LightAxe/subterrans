@@ -112,36 +112,25 @@ export function isFoodChamberDepositable(chamber: ChamberRecord): boolean {
 
 /**
  * True when the colony has genuinely nowhere to deposit foraged food: the
- * entrance pool is saturated AND no FoodStorage chamber is depositable. This is
- * the shared "no deposit target" predicate behind the issue-#42 fix-#2
+ * entrance pool is at capacity AND no FoodStorage chamber is depositable. This
+ * is the shared "no deposit target" predicate behind the issue-#42 fix-#2
  * SearchingFood demotion (`tickSearchLeash`), the issue-#126 step-10a
- * idle-promotion backpressure, and the issue-#27 carrier wait-wake gate
- * (`tickForagerActions`) — keeping all three in lockstep so a forager is never
- * promoted into a state the leash would immediately demote it out of, and the
- * wait-gate wakes on exactly the conditions the other two gate on.
+ * idle-promotion backpressure (both via `colonyForageBackpressure`), and the
+ * issue-#27 carrier wait-wake gate (`tickForagerActions`).
  *
- * Pool saturation is `simVersion`-gated (#126):
- *   - **V27+**: the pool is a deposit target only with at least one carry-pickup
- *     of headroom (`FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP`), mirroring the chamber
- *     deposit hysteresis. A strict at-cap test is too brittle in the chamberless
- *     case: `tickFoodConsumption` removes the queen's 2-fp meal every tick
- *     BEFORE the promotion/leash passes, so a full pool reads 2 fp below cap and
- *     the predicate would flip false — re-promoting idle ants and waking
- *     carriers to refill those 2 fp, so the entrance pile-up never settles
- *     (codex P1). Requiring a full pickup of headroom keeps the colony
- *     "saturated" through the meal-sized churn.
- *   - **Pre-V27**: strict at-cap (`foodStored >= BASE_FOOD_STORAGE_CAPACITY`) —
- *     byte-identical replay of the recorded #42 / #27 behaviour.
+ * Strict at-cap, version-independent: a carrier deposits the instant the pool
+ * has any headroom, so a chamberless colony's entrance pool stays pegged at cap
+ * as the queen nibbles it (rather than visibly draining ~2 food before a carrier
+ * tops it back off). The carry-headroom hysteresis a prior revision added here
+ * was reverted — #126's actual fix is the chamber-scoped backpressure below, and
+ * the pool hysteresis only regressed the chamberless larder feel without adding
+ * value (chambered colonies drain their chambers first, so the pool stays at cap
+ * anyway).
  *
  * Pure read of `colony.foodStored` + `colony.chambers`; no mutation, no RNG.
  */
-export function colonyHasNoDepositTarget(colony: ColonyRecord, simVersion: number): boolean {
-  const poolHeadroom = BASE_FOOD_STORAGE_CAPACITY - colony.foodStored;
-  const poolSaturated =
-    simVersion >= SIM_VERSION_V27_FORAGE_BACKPRESSURE
-      ? poolHeadroom < FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP
-      : poolHeadroom <= 0;
-  if (!poolSaturated) return false;
+export function colonyHasNoDepositTarget(colony: ColonyRecord): boolean {
+  if (colony.foodStored < BASE_FOOD_STORAGE_CAPACITY) return false;
   for (let c = 0; c < colony.chambers.length; c++) {
     if (isFoodChamberDepositable(colony.chambers[c]!)) return false;
   }
@@ -161,13 +150,14 @@ export function colonyHasNoDepositTarget(colony: ColonyRecord, simVersion: numbe
  * small and should keep foraging into its entrance pool — backpressuring it just
  * idles its foragers while the larder slowly drains. (Its CARRIERS still park
  * via the universal #27 wait-wake gate, which keys on `colonyHasNoDepositTarget`
- * directly — so a full chamberless pool does not thrash carriers.)
+ * directly — so a full chamberless pool stays topped off without dispatching new
+ * foragers needlessly.)
  *
  * Pre-V27 keeps the chamberless-inclusive at-cap behaviour the #42 demotion
  * recorded, for byte-identical replay.
  */
 export function colonyForageBackpressure(colony: ColonyRecord, simVersion: number): boolean {
-  if (!colonyHasNoDepositTarget(colony, simVersion)) return false;
+  if (!colonyHasNoDepositTarget(colony)) return false;
   if (simVersion < SIM_VERSION_V27_FORAGE_BACKPRESSURE) return true;
   for (let c = 0; c < colony.chambers.length; c++) {
     if (colony.chambers[c]!.chamberType === ChamberType.FoodStorage) return true;

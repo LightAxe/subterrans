@@ -750,7 +750,7 @@ export function tickForagerActions(world: WorldState): void {
       // Iteration cost: O(chambers) only for ants currently in wait — the
       // common case (no carriers in wait) skips this block entirely.
       if (ants.waitingDeposit[id] === 1) {
-        if (!colonyHasNoDepositTarget(colony, world.simVersion)) {
+        if (!colonyHasNoDepositTarget(colony)) {
           ants.waitingDeposit[id] = 0;
           // Fall through to normal deposit handling. The ant didn't move this
           // tick (tickAntMovement skipped it), so it's at the same entrance
