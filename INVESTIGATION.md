@@ -380,19 +380,21 @@ field breaks byte-parity).
 
 ## 7. Numeric acceptance caps (set from calibration; verify on acceptance)
 
-Derived from the **calibration** seeds (worst = 1481 ticks; 158/183 wall-pins),
-to be **verified post-fix on the untouched acceptance seeds** + structural cases
+Derived from the **calibration seeds ONLY** (10 seeds × 3 difficulties: **136
+episodes, 127 wall-pins, worst 1481 ticks**) — the §4 severity figures (183/158,
+worst 2050) are the full discovery+calibration sweep and are NOT the cap basis. To
+be **verified post-fix on the untouched acceptance seeds** + structural cases
 (never the reverse):
 
-| Metric                                            | Baseline (calibration) | Proposed cap (post-fix)       |
-| ------------------------------------------------- | ---------------------: | ----------------------------- |
-| Worst confinement episode                         |      2050 ticks (disc) | **≤ 60 ticks (3 s)**          |
-| Scent/priority-vs-wall episodes (`aimedIntoWall`) |                    158 | **0**                         |
-| Confinement episodes > 300 ticks                  |                   many | **0**                         |
-| #128 embedded ant-ticks (structural cases)        |            >0 (latent) | **0**                         |
-| Feature-field hash invariance across events       |         477/900 mutate | **0 mutate (exact equality)** |
-| Tick-time (3000-tick run)                         |          ~0.26 ms/tick | **≤ 0.5 ms/tick**             |
-| Save size                                         |              ~1.095 MB | **≤ +5 %**                    |
+| Metric                                            | Baseline (calibration-only) | Proposed cap (post-fix)       |
+| ------------------------------------------------- | --------------------------: | ----------------------------- |
+| Worst confinement episode                         |                  1481 ticks | **≤ 60 ticks (3 s)**          |
+| Scent/priority-vs-wall episodes (`aimedIntoWall`) |                     127/136 | **0**                         |
+| Confinement episodes > 300 ticks                  |                        many | **0**                         |
+| #128 embedded ant-ticks (structural cases)        |                 >0 (latent) | **0**                         |
+| Feature-field hash invariance across events       |              477/900 mutate | **0 mutate (exact equality)** |
+| Tick-time (3000-tick run)                         |               ~0.26 ms/tick | **≤ 0.5 ms/tick**             |
+| Save size                                         |                   ~1.095 MB | **≤ +5 %**                    |
 
 These caps are **proposals for the checkpoint**, not final — they are set here from
 calibration data so the checkpoint can confirm/adjust them, then verification runs

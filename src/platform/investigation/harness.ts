@@ -495,8 +495,12 @@ function observeSurface(
   decision: Decision | undefined,
 ): void {
   const a = world.ants;
-  const isSearching =
-    a.task[id] === AntTask.Foraging && a.subTask[id] === ForagingSubState.SearchingFood;
+  // Eligibility comes from PRE-tick state: `decision` is defined iff the ant was
+  // a surface SearchingFood forager at tick start (computeDecisions). Using the
+  // POST-tick task would discard the final searching movement on a tick where
+  // `tickForagerActions` flips the ant to CarryingFood AFTER it moved — which can
+  // shorten an otherwise-qualifying episode below CONFINE_MIN_TICKS (Codex r9).
+  const isSearching = decision !== undefined;
 
   // Only searching foragers are candidates for #127 milling. Carriers/returners
   // are goal-directed and excluded (they have a stable home target).
