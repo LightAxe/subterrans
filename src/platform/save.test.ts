@@ -1441,9 +1441,9 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
   // Issue #112 — finite food piles + recentlyDepletedFood persistence
   // ---------------------------------------------------------------------------
   describe('Issue #112 — depletion / spawn save format (v3)', () => {
-    it('SAVE_FORMAT_VERSION === 4 and SAVE_KEY ends with :v4 (PR 4 static terrain)', () => {
-      expect(SAVE_FORMAT_VERSION).toBe(4);
-      expect(SAVE_KEY).toBe('subterrans:save:v4');
+    it('SAVE_FORMAT_VERSION === 3 and SAVE_KEY ends with :v3', () => {
+      expect(SAVE_FORMAT_VERSION).toBe(3);
+      expect(SAVE_KEY).toBe('subterrans:save:v3');
     });
 
     it('rejects v2 envelopes with SaveVersionMismatchError', () => {

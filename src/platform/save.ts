@@ -74,13 +74,15 @@ import { validateSurfaceConnectivity } from '../sim/surface-features.js';
 // require a format bump. `>>> 0` and the prior `| 0` coercion preserve the
 // same 32 bits, so a v3 save's `rngState` reloads to an identical PRNG output
 // sequence either way — there is no on-disk incompatibility to reject.
-//   v4 — PR 4 (static terrain): SerializedWorldState gains a REQUIRED
-//        `bakedSurfaceEffect` (packed/base64). Pre-v4 saves lack it. The
-//        simVersion floor (MIN_ACCEPTED = V28) already rejects them, but the
-//        on-disk shape break is made explicit here so save-shape correctness is
-//        not silently coupled to the simVersion floor (ship-review advisory).
-export const SAVE_FORMAT_VERSION = 4 as const;
-export const SAVE_KEY = 'subterrans:save:v4' as const;
+//
+// PR 4 (static terrain) deliberately does NOT bump SAVE_FORMAT_VERSION: the new
+// required `bakedSurfaceEffect` lives in the SNAPSHOT (SerializedWorldState), and
+// snapshot-content shape changes are gated by `simVersion`, not the envelope's
+// SAVE_FORMAT_VERSION (which versions the envelope structure). Raising
+// MIN_ACCEPTED_SIM_VERSION to V28 rejects every pre-static-terrain save — which
+// also lacks the field — before unpack is reached, matching the v2/v3 precedent.
+export const SAVE_FORMAT_VERSION = 3 as const;
+export const SAVE_KEY = 'subterrans:save:v3' as const;
 export const AUTOSAVE_INTERVAL_MS = 30_000 as const;
 
 export class SaveVersionMismatchError extends Error {
@@ -1530,15 +1532,17 @@ export function parseSaveFile(raw: string): SaveFile {
  * purge fires on the first save-touching operation.
  *
  * Issue #112 — added v2 to the purge list when SAVE_KEY moved to v3.
- * PR 4 — added v3 to the purge list when SAVE_KEY moved to v4 (static terrain).
  */
 function purgeLegacySaves(): void {
-  for (const key of ['subterrans:save:v1', 'subterrans:save:v2', 'subterrans:save:v3']) {
-    try {
-      localStorage.removeItem(key);
-    } catch {
-      /* quota / private mode — silent: best-effort cleanup, no UX signal */
-    }
+  try {
+    localStorage.removeItem('subterrans:save:v1');
+  } catch {
+    /* quota / private mode — silent: best-effort cleanup, no UX signal */
+  }
+  try {
+    localStorage.removeItem('subterrans:save:v2');
+  } catch {
+    /* quota / private mode — silent: best-effort cleanup, no UX signal */
   }
 }
 
