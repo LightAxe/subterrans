@@ -601,20 +601,70 @@ export interface SurfaceRoot {
 
 /**
  * Bake the raw procedural movement-effect grid (no carves) — the frozen
- * snapshot of `surfaceFeatureProcedural(...).movement` for every tile. Used by
+ * per-tile snapshot of `surfaceFeatureProcedural(...).movement`. Used by
  * `createWorldState` (bare worlds) and as the starting point for the reserved +
- * connected bake. `createScenario` does this ONCE (in `createWorldState`);
- * `bakeStaticTerrain` then carves a copy rather than re-baking, so a scenario
- * pays a single full procedural pass (no module-level cache — AGENTS.md forbids
- * mutable state outside the world snapshot).
+ * connected bake; `bakeStaticTerrain` carves a copy rather than re-baking, so a
+ * scenario pays one bake. No module-level cache (AGENTS.md forbids mutable state
+ * outside the world snapshot).
+ *
+ * Iterates ANCHORS, not tiles: the per-tile selector calls the recursive
+ * overlap-suppression check up to 16,384× per grid; walking real anchors in
+ * lex (ay,ax) order and letting the first one claim each footprint tile yields
+ * the IDENTICAL lex-smallest-winner result (so it stays consistent with the
+ * per-tile `surfaceFeatureProcedural` the visual selector still uses) while
+ * calling the suppression check only ~once per real anchor (hundreds, not 16k)
+ * — the difference between a ~8 ms and a sub-ms bake (PR-4 CI regression fix).
  */
 export function bakeSurfaceEffectGrid(world: WorldState): Uint8Array {
-  const grid = new Uint8Array(SURFACE_TILE_COUNT);
-  for (let y = 0; y < SURFACE_GRID_HEIGHT; y++) {
-    for (let x = 0; x < SURFACE_GRID_WIDTH; x++) {
-      const proc = surfaceFeatureProcedural(world, x, y);
-      grid[y * SURFACE_GRID_WIDTH + x] =
-        proc === null ? SurfaceMovementEffect.Cosmetic : proc.movement;
+  const grid = new Uint8Array(SURFACE_TILE_COUNT); // 0 = Cosmetic (no feature)
+  const claimed = new Uint8Array(SURFACE_TILE_COUNT);
+  const terrainSeed = world.terrainSeed;
+  // Per-anchor scratch: for tile-offset (dy,dx) within an anchor, which passing
+  // feature is the FIRST that covers it (the per-tile selector's "first covering
+  // feature, then break"). Reset per anchor (only when it has a passing feature).
+  const offsetHandled = new Uint8Array(MAX_FEATURE_TILES_WIDE * MAX_FEATURE_TILES_TALL);
+  // Anchors in lex (ay, ax) order so the FIRST surviving anchor covering a tile
+  // wins — matching `surfaceFeatureProcedural`'s lex-smallest tie-break. Anchors
+  // start at -(MAX-1): a feature anchored above/left of the grid still covers
+  // in-grid tiles, and the per-tile selector considers those negative anchors.
+  for (let ay = -(MAX_FEATURE_TILES_TALL - 1); ay < SURFACE_GRID_HEIGHT; ay++) {
+    for (let ax = -(MAX_FEATURE_TILES_WIDE - 1); ax < SURFACE_GRID_WIDTH; ax++) {
+      let anchorReset = false;
+      for (let ei = 0; ei < SURFACE_FEATURES.length; ei++) {
+        const entry = SURFACE_FEATURES[ei]!;
+        const h = tileHash(ax, ay, entry.salt, terrainSeed);
+        if ((h & 0x1ff) >= entry.probability) continue; // not a passing anchor for ei
+        if (!anchorReset) {
+          offsetHandled.fill(0);
+          anchorReset = true;
+        }
+        // Suppression is per (ax,ay,ei). When the FIRST passing feature covering
+        // a tile is suppressed, that tile gets nothing from this anchor (the
+        // per-tile selector's break) — mark the offset handled but don't claim,
+        // so neither a later feature here nor this anchor claims it (a later
+        // anchor still can).
+        const suppressed = isAnchorSuppressedByOverlap(world, ax, ay, ei, terrainSeed);
+        for (let dy = 0; dy < entry.footprintTilesTall; dy++) {
+          const ty = ay + dy;
+          if (ty < 0) continue; // off the top edge — a larger dy may be in-grid
+          if (ty >= SURFACE_GRID_HEIGHT) break;
+          for (let dx = 0; dx < entry.footprintTilesWide; dx++) {
+            const tx = ax + dx;
+            if (tx < 0) continue; // off the left edge — a larger dx may be in-grid
+            if (tx >= SURFACE_GRID_WIDTH) break;
+            const off = dy * MAX_FEATURE_TILES_WIDE + dx;
+            if (offsetHandled[off] === 1) continue; // an earlier passing feature covers it
+            offsetHandled[off] = 1; // ei is the first covering feature for this offset
+            if (!suppressed) {
+              const idx = ty * SURFACE_GRID_WIDTH + tx;
+              if (claimed[idx] === 0) {
+                claimed[idx] = 1;
+                grid[idx] = entry.movement;
+              }
+            }
+          }
+        }
+      }
     }
   }
   return grid;

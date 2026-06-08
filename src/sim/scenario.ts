@@ -414,6 +414,13 @@ export function createScenario(
     QUEEN_EGG_INTERVAL_DIFFICULTY_NUMERATOR[tierIndex(difficulty)];
   // Player colony keeps default eggIntervalNumerator=4 (identity).
 
+  // generateFoodPiles above memoised the component mask using the pre-colony
+  // fallback root (no entrances existed yet). Now that colonies + entrances are
+  // in place, drop that cached mask so the persisted/validated mask is rooted at
+  // the real canonical root (the first colony's entrance) rather than relying on
+  // the fallback happening to equal it (ship-review advisory).
+  world.surfaceComponentMask = null;
+
   // PR 4 — assert the connectivity invariant AT WORLD-GEN (not only on save
   // load): every colony entrance (initColony places one at each root start tile,
   // so the entrance IS the root) and every food pile must sit in the single
