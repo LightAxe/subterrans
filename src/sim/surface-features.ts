@@ -297,9 +297,13 @@ function tileHash(tileX: number, tileY: number, salt: number, terrainSeed: numbe
 // ---------------------------------------------------------------------------
 
 /**
- * @param world         used to consult `isAnchorGameplaySuppressed` at v8+
- *                      so suppressors that themselves sit in an entrance/
- *                      food-pile zone don't shadow other anchors.
+ * @param world         only threaded through to the recursive
+ *                      `isAnchorSuppressedByOverlap` calls below; no field of it
+ *                      is read here. (It formerly gated the deleted
+ *                      `isAnchorGameplaySuppressed` check — PR 4 removed dynamic
+ *                      entrance/food-pile suppression, so terrain no longer
+ *                      depends on world state, but the param is kept to avoid
+ *                      churning every caller's signature.)
  */
 function isAnchorSuppressedByOverlap(
   world: WorldState,

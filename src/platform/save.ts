@@ -746,6 +746,13 @@ export function unpackBakedSurfaceEffect(s: string, expectedLen: number): Uint8A
     if (v === 3) return null; // 0/1/2 only — code 3 is a corrupt enum value
     grid[i] = v;
   }
+  // When expectedLen isn't a multiple of 4 the final packed byte has unused high
+  // bits; serialize always leaves them 0, so non-zero bits mean a tampered/
+  // malformed payload that decodes to a grid we'd never emit — reject it. (No-op
+  // for the production 16384-tile grid, but keeps this exported, length-general
+  // validator honest.)
+  const rem = expectedLen & 3;
+  if (rem !== 0 && packed[packed.length - 1]! >> (rem << 1) !== 0) return null;
   return grid;
 }
 
