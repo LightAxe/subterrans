@@ -600,12 +600,28 @@ export interface SurfaceRoot {
 }
 
 /**
+ * Memo of the raw procedural movement-effect grid keyed by `terrainSeed`. The
+ * procedural field is a PURE function of `terrainSeed` (via
+ * `surfaceFeatureProcedural`), so the same seed always yields the same grid.
+ * `createWorldState` + `createScenario` bake on every call (the latter twice via
+ * `bakeStaticTerrain`), and tests construct many same-seed worlds — without this
+ * memo each bake re-scans 16,384 tiles × recursive overlap-suppression, and the
+ * heavy many-iteration tests blow their 5 s timeout (the PR-4 CI regression).
+ * Deterministic (no RNG, no clock); callers always receive a COPY so they can
+ * carve/fill freely. Bounded so a long seed sweep can't grow it without limit.
+ */
+const proceduralBakeCache = new Map<number, Uint8Array>();
+const PROCEDURAL_BAKE_CACHE_CAP = 256;
+
+/**
  * Bake the raw procedural movement-effect grid (no carves) — the frozen
  * snapshot of `surfaceFeatureProcedural(...).movement` for every tile. Used
  * for bare worlds (no colonies) and as the starting point for the reserved +
- * connected bake below.
+ * connected bake below. Returns a fresh copy (safe for the caller to mutate).
  */
 export function bakeSurfaceEffectGrid(world: WorldState): Uint8Array {
+  const cached = proceduralBakeCache.get(world.terrainSeed);
+  if (cached !== undefined) return cached.slice();
   const grid = new Uint8Array(SURFACE_TILE_COUNT);
   for (let y = 0; y < SURFACE_GRID_HEIGHT; y++) {
     for (let x = 0; x < SURFACE_GRID_WIDTH; x++) {
@@ -614,7 +630,9 @@ export function bakeSurfaceEffectGrid(world: WorldState): Uint8Array {
         proc === null ? SurfaceMovementEffect.Cosmetic : proc.movement;
     }
   }
-  return grid;
+  if (proceduralBakeCache.size >= PROCEDURAL_BAKE_CACHE_CAP) proceduralBakeCache.clear();
+  proceduralBakeCache.set(world.terrainSeed, grid);
+  return grid.slice();
 }
 
 /**
@@ -668,9 +686,12 @@ function carveCorridor(world: WorldState, grid: Uint8Array, a: SurfaceRoot, b: S
  * Bake the FROZEN static terrain for a scenario: raw procedural field, then
  * (1) reserve a static clearance neighbourhood around every canonical root
  * (clear ALL features so co-spawned ants have launch space), and (2) carve a
- * deterministic corridor chaining every root to the first, guaranteeing ONE
- * connected walkable component (constructed, not merely asserted — R4-2).
- * Deterministic; no `terrainSeed` retry (R1-3).
+ * deterministic corridor chaining every root to the first, so all canonical
+ * roots — and, via the reachable-spawn gate, every food pile + entrance — share
+ * ONE connected walkable component (constructed, not merely asserted — R4-2).
+ * (Isolated *empty* walkable pockets elsewhere are harmless and not gameplay
+ * tiles; the reachable-spawn gate never places anything in them.) Deterministic;
+ * no `terrainSeed` retry (R1-3).
  */
 export function bakeStaticTerrain(
   world: WorldState,
@@ -795,8 +816,9 @@ export function isSurfaceTileInComponent(world: WorldState, tileX: number, tileY
 }
 
 /**
- * Connectivity invariant (R1-5): exactly one walkable surface component must
- * contain every colony **entrance** and every **food pile**. (Each colony's root
+ * Connectivity invariant (R1-5): the single canonical walkable component (rooted
+ * at `canonicalSurfaceRoot`) must contain every colony **entrance** and every
+ * **food pile** — i.e. they are all mutually reachable. (Each colony's root
  * start tile gets an entrance at world-gen — `initColony` — so the entrance IS
  * the root; a colony with `entrances === undefined` contributes nothing and is
  * skipped.) Returns true iff the invariant holds. Called at world-gen

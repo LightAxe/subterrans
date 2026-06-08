@@ -36,11 +36,7 @@ import {
   PLAYER_COLONY_ID,
   SURFACE_ROOT_CLEARANCE_RADIUS,
 } from './constants.js';
-import {
-  isSurfaceTileInComponent,
-  surfaceMovementAt,
-  SurfaceMovementEffect,
-} from './surface-features.js';
+import { isSurfaceTileInComponent } from './surface-features.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
 import { allocateWorkers, computeDigDemand } from './behavior/allocation-system.js';
 import {
@@ -645,14 +641,21 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         // grid (the static replacement for the old auto-carved entrance halo).
         // Checked before any allocation/mutation.
         {
-          if (!isSurfaceTileInComponent(world, cmd.surfaceTileX, cmd.surfaceTileY)) break;
-          // The halo uses a bare HardBlock test (not a component test) on purpose:
-          // under the single-connected-component invariant, any non-HardBlock tile
-          // within radius of the in-component candidate is itself reachable from it,
-          // hence in-component. (If that invariant is ever relaxed, switch the halo
-          // check to isSurfaceTileInComponent too.)
-          let clearanceBlocked = false;
-          for (let dy = -SURFACE_ROOT_CLEARANCE_RADIUS; dy <= SURFACE_ROOT_CLEARANCE_RADIUS; dy++) {
+          // Candidate AND its whole clearance neighbourhood must be in the SAME
+          // connected walkable component. Checking component membership per halo
+          // tile (not a bare HardBlock test) keeps this correct even if the map
+          // had an isolated walkable pocket — it does NOT rely on a global
+          // "exactly one component" assumption the bake doesn't guarantee.
+          let clearanceBlocked = !isSurfaceTileInComponent(
+            world,
+            cmd.surfaceTileX,
+            cmd.surfaceTileY,
+          );
+          for (
+            let dy = -SURFACE_ROOT_CLEARANCE_RADIUS;
+            dy <= SURFACE_ROOT_CLEARANCE_RADIUS && !clearanceBlocked;
+            dy++
+          ) {
             for (
               let dx = -SURFACE_ROOT_CLEARANCE_RADIUS;
               dx <= SURFACE_ROOT_CLEARANCE_RADIUS;
@@ -662,7 +665,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
               const cy = cmd.surfaceTileY + dy;
               if (cx < 0 || cy < 0 || cx >= SURFACE_GRID_WIDTH || cy >= SURFACE_GRID_HEIGHT)
                 continue;
-              if (surfaceMovementAt(world, cx, cy) === SurfaceMovementEffect.HardBlock) {
+              if (!isSurfaceTileInComponent(world, cx, cy)) {
                 clearanceBlocked = true;
                 break;
               }

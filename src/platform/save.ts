@@ -74,8 +74,13 @@ import { validateSurfaceConnectivity } from '../sim/surface-features.js';
 // require a format bump. `>>> 0` and the prior `| 0` coercion preserve the
 // same 32 bits, so a v3 save's `rngState` reloads to an identical PRNG output
 // sequence either way — there is no on-disk incompatibility to reject.
-export const SAVE_FORMAT_VERSION = 3 as const;
-export const SAVE_KEY = 'subterrans:save:v3' as const;
+//   v4 — PR 4 (static terrain): SerializedWorldState gains a REQUIRED
+//        `bakedSurfaceEffect` (packed/base64). Pre-v4 saves lack it. The
+//        simVersion floor (MIN_ACCEPTED = V28) already rejects them, but the
+//        on-disk shape break is made explicit here so save-shape correctness is
+//        not silently coupled to the simVersion floor (ship-review advisory).
+export const SAVE_FORMAT_VERSION = 4 as const;
+export const SAVE_KEY = 'subterrans:save:v4' as const;
 export const AUTOSAVE_INTERVAL_MS = 30_000 as const;
 
 export class SaveVersionMismatchError extends Error {
@@ -692,10 +697,15 @@ function base64ToBytes(s: string): Uint8Array | null {
   const out = new Uint8Array(outLen);
   let o = 0;
   for (let i = 0; i < s.length; i += 4) {
+    const isFinalQuartet = i + 4 === s.length;
     const c0 = lut[s.charCodeAt(i)] ?? -1;
     const c1 = lut[s.charCodeAt(i + 1)] ?? -1;
     const ch2 = s[i + 2];
     const ch3 = s[i + 3];
+    // `=` padding is only legal in the final quartet, in standard positions
+    // (c3, or c2+c3). Anywhere else it's a corrupt encoding — reject (Codex P2).
+    if ((ch2 === '=' || ch3 === '=') && !isFinalQuartet) return null;
+    if (ch2 === '=' && ch3 !== '=') return null; // "x=y" is never valid
     const c2 = ch2 === '=' ? 0 : (lut[s.charCodeAt(i + 2)] ?? -1);
     const c3 = ch3 === '=' ? 0 : (lut[s.charCodeAt(i + 3)] ?? -1);
     if (c0 < 0 || c1 < 0 || c2 < 0 || c3 < 0) return null;
@@ -1520,17 +1530,15 @@ export function parseSaveFile(raw: string): SaveFile {
  * purge fires on the first save-touching operation.
  *
  * Issue #112 — added v2 to the purge list when SAVE_KEY moved to v3.
+ * PR 4 — added v3 to the purge list when SAVE_KEY moved to v4 (static terrain).
  */
 function purgeLegacySaves(): void {
-  try {
-    localStorage.removeItem('subterrans:save:v1');
-  } catch {
-    /* quota / private mode — silent: best-effort cleanup, no UX signal */
-  }
-  try {
-    localStorage.removeItem('subterrans:save:v2');
-  } catch {
-    /* quota / private mode — silent: best-effort cleanup, no UX signal */
+  for (const key of ['subterrans:save:v1', 'subterrans:save:v2', 'subterrans:save:v3']) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* quota / private mode — silent: best-effort cleanup, no UX signal */
+    }
   }
 }
 
