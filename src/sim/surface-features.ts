@@ -600,28 +600,15 @@ export interface SurfaceRoot {
 }
 
 /**
- * Memo of the raw procedural movement-effect grid keyed by `terrainSeed`. The
- * procedural field is a PURE function of `terrainSeed` (via
- * `surfaceFeatureProcedural`), so the same seed always yields the same grid.
- * `createWorldState` + `createScenario` bake on every call (the latter twice via
- * `bakeStaticTerrain`), and tests construct many same-seed worlds — without this
- * memo each bake re-scans 16,384 tiles × recursive overlap-suppression, and the
- * heavy many-iteration tests blow their 5 s timeout (the PR-4 CI regression).
- * Deterministic (no RNG, no clock); callers always receive a COPY so they can
- * carve/fill freely. Bounded so a long seed sweep can't grow it without limit.
- */
-const proceduralBakeCache = new Map<number, Uint8Array>();
-const PROCEDURAL_BAKE_CACHE_CAP = 256;
-
-/**
  * Bake the raw procedural movement-effect grid (no carves) — the frozen
- * snapshot of `surfaceFeatureProcedural(...).movement` for every tile. Used
- * for bare worlds (no colonies) and as the starting point for the reserved +
- * connected bake below. Returns a fresh copy (safe for the caller to mutate).
+ * snapshot of `surfaceFeatureProcedural(...).movement` for every tile. Used by
+ * `createWorldState` (bare worlds) and as the starting point for the reserved +
+ * connected bake. `createScenario` does this ONCE (in `createWorldState`);
+ * `bakeStaticTerrain` then carves a copy rather than re-baking, so a scenario
+ * pays a single full procedural pass (no module-level cache — AGENTS.md forbids
+ * mutable state outside the world snapshot).
  */
 export function bakeSurfaceEffectGrid(world: WorldState): Uint8Array {
-  const cached = proceduralBakeCache.get(world.terrainSeed);
-  if (cached !== undefined) return cached.slice();
   const grid = new Uint8Array(SURFACE_TILE_COUNT);
   for (let y = 0; y < SURFACE_GRID_HEIGHT; y++) {
     for (let x = 0; x < SURFACE_GRID_WIDTH; x++) {
@@ -630,9 +617,7 @@ export function bakeSurfaceEffectGrid(world: WorldState): Uint8Array {
         proc === null ? SurfaceMovementEffect.Cosmetic : proc.movement;
     }
   }
-  if (proceduralBakeCache.size >= PROCEDURAL_BAKE_CACHE_CAP) proceduralBakeCache.clear();
-  proceduralBakeCache.set(world.terrainSeed, grid);
-  return grid.slice();
+  return grid;
 }
 
 /**
@@ -697,7 +682,9 @@ export function bakeStaticTerrain(
   world: WorldState,
   roots: ReadonlyArray<SurfaceRoot>,
 ): Uint8Array {
-  const grid = bakeSurfaceEffectGrid(world);
+  // Reuse the procedural bake `createWorldState` already computed (carve a copy)
+  // rather than re-baking from scratch — one full procedural pass per scenario.
+  const grid = world.bakedSurfaceEffect.slice();
   const r = SURFACE_ROOT_CLEARANCE_RADIUS;
   for (const root of roots) {
     for (let dy = -r; dy <= r; dy++) {
