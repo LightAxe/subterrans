@@ -17,6 +17,9 @@ import { createSurfaceGrid, createUndergroundGrid } from './terrain.js';
 import type { DepletionRecord, FoodPile } from './food.js';
 import type { PendingChamber } from './colony/chamber.js';
 import { MAX_ENTITIES, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constants.js';
+// PR 4 — runtime import for the procedural terrain bake. surface-features.ts
+// back-imports WorldState as a TYPE only, so there is no runtime import cycle.
+import { bakeSurfaceEffectGrid } from './surface-features.js';
 
 export type EntityId = number; // incrementing counter from 0, no recycling per PRD §1/§3
 
@@ -362,7 +365,12 @@ export const SIM_VERSION_V26_SPIDER_EDGE_MARGIN = 26 as const;
  * demotion (gated on simVersion >= V27) for byte-identical replay.
  */
 export const SIM_VERSION_V27_FORAGE_BACKPRESSURE = 27 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V27_FORAGE_BACKPRESSURE;
+// PR 4 — static surface terrain: the baked movement-effect grid is a new stored
+// WorldState field and the dynamic feature-suppression behaviour is removed, so
+// the field semantics change. Posture 2 (bump + raise MIN_ACCEPTED, no
+// cross-version gate); pre-V28 saves reject at load.
+export const SIM_VERSION_V28_STATIC_TERRAIN = 28 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V28_STATIC_TERRAIN;
 
 /**
  * S2 — AI colony state machine states.
@@ -551,6 +559,28 @@ export interface WorldState {
 
   // Phase 7 additions (PRD §2e):
   surface: SurfaceGrid; // shared surface terrain (SURF-01)
+
+  /**
+   * PR 4 (static terrain) — frozen per-tile surface movement-effect grid
+   * (`SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT` bytes; values 0=Cosmetic,
+   * 1=SoftCost, 2=HardBlock). Baked once at world-gen from the procedural
+   * feature field + deterministic root-clearance/corridor carves; the SOURCE OF
+   * TRUTH for `surfaceMovementAt`. Immutable after bake — pile/entrance events
+   * never rewrite it (that was the #127/#128 static-terrain bug). Serialized
+   * packed+base64 (save.ts). Bare `createWorldState` worlds get the raw
+   * procedural bake (no carves).
+   */
+  bakedSurfaceEffect: Uint8Array;
+
+  /**
+   * PR 4 — DERIVED (not serialized): memoised 0/1 membership mask of the single
+   * connected walkable surface component, lazily computed from
+   * `bakedSurfaceEffect` via `ensureSurfaceComponentMask`. Null until first use;
+   * terrain is immutable so it never needs invalidation. `copyWorldState`
+   * recomputes lazily (set to null) rather than threading it.
+   */
+  surfaceComponentMask: Uint8Array | null;
+
   undergroundGrids: Record<ColonyId, UndergroundGrid>; // per-colony underground (UNDR-08)
   foodPiles: FoodPile[]; // surface food sources (SURF-02 + issue #112 depletion/respawn)
 
@@ -617,7 +647,7 @@ export interface WorldState {
  */
 export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIES): WorldState {
   const seedU32 = seed >>> 0;
-  return {
+  const world: WorldState = {
     tick: 0,
     rngState: seedU32,
     nextEntityId: 0, // PRD §3 line 130: starts at 0, no recycling
@@ -634,6 +664,10 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
     pheromoneGrids: {},
     // Phase 7 defaults:
     surface: createSurfaceGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT),
+    // PR 4 — placeholder; overwritten with the procedural bake below (needs the
+    // constructed world for terrainSeed + the procedural selector).
+    bakedSurfaceEffect: new Uint8Array(SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT),
+    surfaceComponentMask: null,
     undergroundGrids: {},
     foodPiles: [],
     recentlyDepletedFood: [], // issue #112 — empty until first depletion
@@ -651,6 +685,11 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
     spiderPriorityColonyId: null,
     scatterReticleTile: null,
   };
+  // PR 4 — bake the raw procedural movement-effect field now that the world
+  // (terrainSeed) exists. Bare worlds (no colonies) get no carves; createScenario
+  // re-bakes with root reservation + corridor connectivity once colonies exist.
+  world.bakedSurfaceEffect = bakeSurfaceEffectGrid(world);
+  return world;
 }
 
 /**
@@ -988,6 +1027,15 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   // --- Phase 7: surface grid ---
   // Uint8Array.set — zero allocation; dimensions are fixed at world creation
   dst.surface.data.set(src.surface.data);
+
+  // --- PR 4: baked static terrain (Uint8Array.set, fixed dims) + derived mask.
+  // The component mask is derived + immutable; share the src reference (read-only)
+  // so the double-buffered dst sees the same memoised mask without recompute.
+  if (dst.bakedSurfaceEffect.length !== src.bakedSurfaceEffect.length) {
+    dst.bakedSurfaceEffect = new Uint8Array(src.bakedSurfaceEffect.length);
+  }
+  dst.bakedSurfaceEffect.set(src.bakedSurfaceEffect);
+  dst.surfaceComponentMask = src.surfaceComponentMask;
 
   // --- Phase 7: undergroundGrids — same delete-stale + upsert pattern as pheromoneGrids ---
   for (const key in dst.undergroundGrids) {

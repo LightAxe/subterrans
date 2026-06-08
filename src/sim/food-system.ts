@@ -27,7 +27,7 @@
 import type { WorldState } from './types.js';
 import type { FoodPile, FoodPileId } from './food.js';
 import { allocateEntityId, INVALID_ENTITY_ID } from './types.js';
-import { surfaceMovementAt, SurfaceMovementEffect } from './surface-features.js';
+import { isSurfaceTileInComponent } from './surface-features.js';
 import { sgGet, SurfaceTileState } from './terrain.js';
 import { Rng } from './rng.js';
 import {
@@ -179,10 +179,10 @@ export function tickFoodPileSpawn(world: WorldState, rng: Rng): void {
     // stable regardless of which earlier rejection short-circuited a candidate.
     const terrainRoll = rng.nextU32();
 
-    // Surface-passable check — HardBlock features (boulders, twigs, leaves)
-    // are not eligible. SoftCost (bushes, grass clumps as movement layer) is
-    // fine; the tile-state grass weighting handles the "vegetation" axis.
-    if (surfaceMovementAt(world, tileX, tileY) === SurfaceMovementEffect.HardBlock) continue;
+    // PR 4 reachable-spawn invariant: a runtime pile may only land on a walkable
+    // tile in the single connected surface component of the frozen terrain.
+    // Subsumes the old HardBlock check (component membership excludes HardBlock).
+    if (!isSurfaceTileInComponent(world, tileX, tileY)) continue;
 
     // Distance from every colony's entrances + rallyPoint, inlined so we
     // don't allocate a noGoTiles staging array per spawn call.

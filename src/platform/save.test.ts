@@ -949,8 +949,8 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(() => deserializeWorldState(snapshot)).toThrow(FutureSimVersionError);
     });
     it('exact boundary: simVersion = MIN_ACCEPTED - 1 throws OldSimVersionError', () => {
-      // Any simVersion below MIN_ACCEPTED_SIM_VERSION (22) is rejected with
-      // OldSimVersionError so bootFromSave can handle it appropriately.
+      // Any simVersion below MIN_ACCEPTED_SIM_VERSION (28 as of PR 4) is rejected
+      // with OldSimVersionError so bootFromSave can handle it appropriately.
       const snapshot = makeSavedSnapshot((s) => {
         s.simVersion = 1;
       });

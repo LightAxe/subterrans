@@ -12,7 +12,7 @@
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
 import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
-import { LATEST_SIM_VERSION, SIM_VERSION_V22_DIFFICULTY } from '../sim/types.js';
+import { LATEST_SIM_VERSION, SIM_VERSION_V28_STATIC_TERRAIN } from '../sim/types.js';
 import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/constants.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
 import { createAntComponents } from '../sim/ant/ant-store.js';
@@ -46,6 +46,7 @@ import {
 } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
+import { validateSurfaceConnectivity } from '../sim/surface-features.js';
 
 // SAVE_FORMAT_VERSION is bumped on any breaking change to the on-disk shape
 // or to invariants that survivors must respect. Pre-bump saves are rejected
@@ -109,7 +110,11 @@ export class FutureSimVersionError extends Error {
   }
 }
 
-export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V22_DIFFICULTY;
+// PR 4 (posture 2): static terrain changed WorldState field semantics (new baked
+// grid + removed dynamic suppression), so pre-V28 saves cannot be continued
+// correctly — raise the floor to reject them cleanly rather than load a broken
+// (suppression-era) map.
+export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V28_STATIC_TERRAIN;
 
 export class OldSimVersionError extends Error {
   constructor(public got: number | null) {
@@ -506,6 +511,12 @@ export interface SerializedWorldState {
   colonies: Record<string, SerializedColony>;
   pheromoneGrids: Record<string, SerializedGrid>;
   surface: SerializedGrid;
+  /**
+   * PR 4 — frozen surface movement-effect grid, packed 2 bits/tile then base64.
+   * `SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT` entries (values 0/1/2). ~5.5 KB
+   * vs ~48 KB for a raw number[] — keeps the save-size delta well within quota.
+   */
+  bakedSurfaceEffect: string;
   undergroundGrids: Record<string, SerializedGrid>;
   foodPiles: FoodPile[];
   recentlyDepletedFood: DepletionRecord[];
@@ -633,6 +644,99 @@ function serializePheromoneGrid(g: PheromoneGrid): SerializedGrid {
   return { width: g.width, height: g.height, data: Array.from(g.data) };
 }
 
+// ---------------------------------------------------------------------------
+// PR 4 — baked surface terrain pack/unpack (2 bits/tile) + cross-env base64.
+// Pure, table-based base64 (no Buffer/btoa dependency) so it works identically
+// in Node and the browser. Values are 0/1/2 (Cosmetic/SoftCost/HardBlock); the
+// 2-bit code 3 is never produced and is rejected on load as a corrupt enum.
+// ---------------------------------------------------------------------------
+
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let out = '';
+  let i = 0;
+  for (; i + 3 <= bytes.length; i += 3) {
+    const n = (bytes[i]! << 16) | (bytes[i + 1]! << 8) | bytes[i + 2]!;
+    out +=
+      BASE64_ALPHABET[(n >> 18) & 63]! +
+      BASE64_ALPHABET[(n >> 12) & 63]! +
+      BASE64_ALPHABET[(n >> 6) & 63]! +
+      BASE64_ALPHABET[n & 63]!;
+  }
+  const rem = bytes.length - i;
+  if (rem === 1) {
+    const n = bytes[i]! << 16;
+    out += BASE64_ALPHABET[(n >> 18) & 63]! + BASE64_ALPHABET[(n >> 12) & 63]! + '==';
+  } else if (rem === 2) {
+    const n = (bytes[i]! << 16) | (bytes[i + 1]! << 8);
+    out +=
+      BASE64_ALPHABET[(n >> 18) & 63]! +
+      BASE64_ALPHABET[(n >> 12) & 63]! +
+      BASE64_ALPHABET[(n >> 6) & 63]! +
+      '=';
+  }
+  return out;
+}
+
+/** Decode base64 → bytes. Returns null on any malformed input (bad char,
+ *  length not a multiple of 4) so the caller can reject the save loudly. */
+function base64ToBytes(s: string): Uint8Array | null {
+  if (s.length % 4 !== 0) return null;
+  const lut = new Int16Array(128).fill(-1);
+  for (let k = 0; k < BASE64_ALPHABET.length; k++) lut[BASE64_ALPHABET.charCodeAt(k)] = k;
+  let pad = 0;
+  if (s.endsWith('==')) pad = 2;
+  else if (s.endsWith('=')) pad = 1;
+  const outLen = (s.length >> 2) * 3 - pad;
+  const out = new Uint8Array(outLen);
+  let o = 0;
+  for (let i = 0; i < s.length; i += 4) {
+    const c0 = lut[s.charCodeAt(i)] ?? -1;
+    const c1 = lut[s.charCodeAt(i + 1)] ?? -1;
+    const ch2 = s[i + 2];
+    const ch3 = s[i + 3];
+    const c2 = ch2 === '=' ? 0 : (lut[s.charCodeAt(i + 2)] ?? -1);
+    const c3 = ch3 === '=' ? 0 : (lut[s.charCodeAt(i + 3)] ?? -1);
+    if (c0 < 0 || c1 < 0 || c2 < 0 || c3 < 0) return null;
+    const n = (c0 << 18) | (c1 << 12) | (c2 << 6) | c3;
+    if (o < outLen) out[o++] = (n >> 16) & 0xff;
+    if (o < outLen) out[o++] = (n >> 8) & 0xff;
+    if (o < outLen) out[o++] = n & 0xff;
+  }
+  return out;
+}
+
+/** Pack a per-tile effect grid (values 0..3) into 2-bit codes, base64-encoded. */
+function packBakedSurfaceEffect(grid: Uint8Array): string {
+  const packed = new Uint8Array((grid.length + 3) >> 2);
+  for (let i = 0; i < grid.length; i++) {
+    const pi = i >> 2;
+    packed[pi] = packed[pi]! | ((grid[i]! & 0x3) << ((i & 3) << 1));
+  }
+  return bytesToBase64(packed);
+}
+
+/**
+ * Decode + validate a packed baked-surface grid. Returns the Uint8Array of
+ * `expectedLen` effect values, or null if the string is malformed, the wrong
+ * length, or contains an out-of-range (code 3) effect — every failure mode the
+ * load validator must reject.
+ */
+export function unpackBakedSurfaceEffect(s: string, expectedLen: number): Uint8Array | null {
+  if (typeof s !== 'string') return null;
+  const packed = base64ToBytes(s);
+  if (packed === null) return null;
+  if (packed.length !== (expectedLen + 3) >> 2) return null;
+  const grid = new Uint8Array(expectedLen);
+  for (let i = 0; i < expectedLen; i++) {
+    const v = (packed[i >> 2]! >> ((i & 3) << 1)) & 0x3;
+    if (v === 3) return null; // 0/1/2 only — code 3 is a corrupt enum value
+    grid[i] = v;
+  }
+  return grid;
+}
+
 export function serializeWorldState(world: WorldState): SerializedWorldState {
   // ADR-0006: colonies is a PLAIN OBJECT. Use Object.entries — NOT Array.from(world.colonies.entries())
   const coloniesOut: Record<string, SerializedColony> = {};
@@ -663,6 +767,7 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
     colonies: coloniesOut,
     pheromoneGrids: pheromoneOut,
     surface: serializeSurfaceGrid(world.surface),
+    bakedSurfaceEffect: packBakedSurfaceEffect(world.bakedSurfaceEffect),
     undergroundGrids: undergroundOut,
     foodPiles: world.foodPiles.map((p) => ({ ...p })),
     recentlyDepletedFood: world.recentlyDepletedFood.map((r) => ({ ...r })),
@@ -1267,7 +1372,21 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // can be forced null when spider is null (B11 fix: ghost-scatter prevention).
   const _deserializedSpider = deserializeSpider(s);
 
-  return {
+  // PR 4 — decode + validate the baked static-terrain grid. Reject wrong
+  // dimensions, malformed base64, or an out-of-range (code 3) movement-effect
+  // value before accepting the field (R3-8/R5-2). Connectivity is validated
+  // after the world is assembled (it needs colonies + foodPiles).
+  const bakedSurfaceEffect = unpackBakedSurfaceEffect(
+    (s as { bakedSurfaceEffect?: unknown }).bakedSurfaceEffect as string,
+    SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT,
+  );
+  if (bakedSurfaceEffect === null) {
+    throw new Error(
+      'Invalid bakedSurfaceEffect: wrong dimensions, malformed encoding, or out-of-range effect value',
+    );
+  }
+
+  const world: WorldState = {
     tick: rawTick,
     rngState: rawRng,
     nextEntityId: rawNext,
@@ -1286,6 +1405,8 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     colonies,
     pheromoneGrids,
     surface: deserializeSurfaceGrid(s.surface),
+    bakedSurfaceEffect,
+    surfaceComponentMask: null,
     undergroundGrids,
     foodPiles: s.foodPiles.map((p) => ({ ...p })),
     recentlyDepletedFood: validatedRecentlyDepleted.map((r) => ({ ...r })),
@@ -1324,6 +1445,18 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
         : 0,
     difficulty: s.difficulty === 'Easy' || s.difficulty === 'Hard' ? s.difficulty : 'Normal',
   };
+
+  // PR 4 — re-run the FULL connectivity check against the assembled world: every
+  // saved food pile and every saved entrance must sit in the single connected
+  // walkable component of the baked grid (not just the roots — R3-8/R5-2). A
+  // corrupt/old map fails loudly here rather than loading a broken world.
+  if (!validateSurfaceConnectivity(world)) {
+    throw new Error(
+      'Invalid bakedSurfaceEffect: connectivity violated (a food pile or entrance is not in the single walkable component)',
+    );
+  }
+
+  return world;
 }
 
 // ---------------------------------------------------------------------------

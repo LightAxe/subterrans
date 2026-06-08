@@ -1265,6 +1265,11 @@ describe('Phase 7: MarkDigTile command processing', () => {
       UNDERGROUND_GRID_WIDTH,
       UNDERGROUND_GRID_HEIGHT,
     );
+    // PR 4 — clear the frozen surface to fully walkable so the DesignateEntrance
+    // connectivity/clearance gate accepts any candidate tile; these tests cover
+    // the entrance logic, not terrain. (Reset the derived component mask too.)
+    world.bakedSurfaceEffect.fill(0);
+    world.surfaceComponentMask = null;
     return { world, colonyId: 1 as ColonyId };
   }
 
@@ -1879,6 +1884,11 @@ describe('Phase 7: Step ordering tests', () => {
       UNDERGROUND_GRID_WIDTH,
       UNDERGROUND_GRID_HEIGHT,
     );
+    // PR 4 — clear the frozen surface to fully walkable so the DesignateEntrance
+    // connectivity/clearance gate accepts any candidate tile (these tests cover
+    // entrance/step-ordering logic, not terrain).
+    world.bakedSurfaceEffect.fill(0);
+    world.surfaceComponentMask = null;
     return { world, colonyId: 1 as ColonyId };
   }
 
@@ -2135,6 +2145,10 @@ describe('Phase 7: Integration tests', () => {
   // SC 5: createScenario + DesignateEntrance + manually open shaft → entrance.isOpen=true
   it('SC 5: DesignateEntrance then manually open shaft tiles → entrance opens', () => {
     const world = createScenario(42);
+    // PR 4 — clear the frozen surface so the DesignateEntrance gate accepts the
+    // (50,0) candidate (this test exercises entrance opening, not terrain).
+    world.bakedSurfaceEffect.fill(0);
+    world.surfaceComponentMask = null;
     const colonyId = PLAYER_COLONY_ID as ColonyId;
     const colony = world.colonies[colonyId]!;
 
@@ -2270,6 +2284,10 @@ describe('Regression: reviewer P1 fixes', () => {
       UNDERGROUND_GRID_WIDTH,
       UNDERGROUND_GRID_HEIGHT,
     );
+    // PR 4 — clear the frozen surface to fully walkable so DesignateEntrance's
+    // connectivity/clearance gate accepts any candidate tile.
+    world.bakedSurfaceEffect.fill(0);
+    world.surfaceComponentMask = null;
     return { world, colonyId: 1 as ColonyId };
   }
 

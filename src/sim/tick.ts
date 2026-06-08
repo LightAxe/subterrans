@@ -34,7 +34,13 @@ import {
   SURFACE_GRID_HEIGHT,
   SPIDER_SCATTER_RADIUS_TILES,
   PLAYER_COLONY_ID,
+  SURFACE_ROOT_CLEARANCE_RADIUS,
 } from './constants.js';
+import {
+  isSurfaceTileInComponent,
+  surfaceMovementAt,
+  SurfaceMovementEffect,
+} from './surface-features.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
 import { allocateWorkers, computeDigDemand } from './behavior/allocation-system.js';
 import {
@@ -633,6 +639,38 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         // (NaN doesn't round-trip cleanly through JSON.stringify).
         if (!isTileCoord(cmd.surfaceTileX, SURFACE_GRID_WIDTH)) break;
         if (!isTileCoord(cmd.surfaceTileY, SURFACE_GRID_HEIGHT)) break;
+        // PR 4 — terrain is frozen: DesignateEntrance can no longer carve. Reject
+        // unless the candidate tile is in the single connected walkable component
+        // AND its full clearance neighbourhood is already passable on the baked
+        // grid (the static replacement for the old auto-carved entrance halo).
+        // Checked before any allocation/mutation.
+        {
+          if (!isSurfaceTileInComponent(world, cmd.surfaceTileX, cmd.surfaceTileY)) break;
+          // The halo uses a bare HardBlock test (not a component test) on purpose:
+          // under the single-connected-component invariant, any non-HardBlock tile
+          // within radius of the in-component candidate is itself reachable from it,
+          // hence in-component. (If that invariant is ever relaxed, switch the halo
+          // check to isSurfaceTileInComponent too.)
+          let clearanceBlocked = false;
+          for (let dy = -SURFACE_ROOT_CLEARANCE_RADIUS; dy <= SURFACE_ROOT_CLEARANCE_RADIUS; dy++) {
+            for (
+              let dx = -SURFACE_ROOT_CLEARANCE_RADIUS;
+              dx <= SURFACE_ROOT_CLEARANCE_RADIUS;
+              dx++
+            ) {
+              const cx = cmd.surfaceTileX + dx;
+              const cy = cmd.surfaceTileY + dy;
+              if (cx < 0 || cy < 0 || cx >= SURFACE_GRID_WIDTH || cy >= SURFACE_GRID_HEIGHT)
+                continue;
+              if (surfaceMovementAt(world, cx, cy) === SurfaceMovementEffect.HardBlock) {
+                clearanceBlocked = true;
+                break;
+              }
+            }
+            if (clearanceBlocked) break;
+          }
+          if (clearanceBlocked) break;
+        }
         // T-07-12: cap check (mitigate tamper — prevent unbounded entrance creation)
         if (colony4.entrances.length >= MAX_ENTRANCES_PER_COLONY) break;
         // Column uniqueness — same surfaceTileX collapses in underground view (PRD §3g)

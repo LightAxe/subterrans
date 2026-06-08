@@ -15,6 +15,7 @@ import type { GfxLike } from './draw-surface.js';
 import { TILE_SIZE_PX } from './sprites.js';
 import { createWorldState } from '../sim/types.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
+import { SURFACE_GRID_WIDTH } from '../sim/constants.js';
 
 // Issue #44 step 2: drawBarrenEarthTile now consults the sim-side surface-
 // feature selector, which mixes WorldState.terrainSeed into the hash.
@@ -212,12 +213,12 @@ describe('drawBarrenEarthTile + sim selector integration (issue #44 step 2)', ()
     expect(differingTiles).toBeGreaterThan(20);
   });
 
-  it('respects entrance suppression — a feature tile becomes substrate-only when an entrance is placed there', () => {
-    // Build a world; find a tile where the renderer paints a feature
-    // (call cost > substrate-only baseline). Install an entrance at that
-    // tile in a fresh world. The same tile should now render with no
-    // feature — the sim selector returns null and drawBarrenEarthTile
-    // proceeds to per-tile motif scattering only.
+  it('PR 4 — static terrain: an entrance no longer suppresses a feature; the carve override does', () => {
+    // Find a tile where the renderer paints a feature (call cost > substrate
+    // baseline). PR 4 froze terrain: installing an entrance there must NOT change
+    // the render (dynamic suppression deleted), but carving that tile passable in
+    // the baked grid MUST drop it to substrate-only (render consults the carve
+    // override — R4-3).
     const baseline = createWorldState(42);
     let featureTile: { x: number; y: number; baselineCalls: number } | null = null;
     for (let ty = 0; ty < 60 && featureTile === null; ty++) {
@@ -232,27 +233,25 @@ describe('drawBarrenEarthTile + sim selector integration (issue #44 step 2)', ()
     }
     expect(featureTile).not.toBeNull();
 
-    const suppressed = createWorldState(42);
-    // Install a colony with an entrance at the feature tile. surface-features
-    // suppresses any anchor whose footprint enters the entrance radius (3).
+    // Installing an entrance on the feature tile changes nothing (terrain frozen).
+    const withEntrance = createWorldState(42);
     const colony = createColonyRecord(1, 0);
     colony.entrances = [
-      {
-        entranceId: 0,
-        surfaceTileX: featureTile!.x,
-        surfaceTileY: featureTile!.y,
-        isOpen: true,
-      },
+      { entranceId: 0, surfaceTileX: featureTile!.x, surfaceTileY: featureTile!.y, isOpen: true },
     ];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
-    suppressed.colonies[1] = colony;
+    withEntrance.colonies[1] = colony;
+    const gfxEntrance = new MockGfx();
+    drawBarrenEarthTile(gfxEntrance, withEntrance, 0, 0, featureTile!.x, featureTile!.y);
+    expect(gfxEntrance.callsOf('fillRect').length).toBe(featureTile!.baselineCalls);
 
-    const gfx = new MockGfx();
-    drawBarrenEarthTile(gfx, suppressed, 0, 0, featureTile!.x, featureTile!.y);
-    // Feature gone → fewer fillRects than the baseline. (Substrate base ~50,
-    // a feature slice adds 50–250 more depending on sprite density.)
-    expect(gfx.callsOf('fillRect').length).toBeLessThan(featureTile!.baselineCalls);
+    // Carving the tile passable in the baked grid removes the rendered feature.
+    const carved = createWorldState(42);
+    carved.bakedSurfaceEffect[featureTile!.y * SURFACE_GRID_WIDTH + featureTile!.x] = 0; // Cosmetic
+    const gfxCarved = new MockGfx();
+    drawBarrenEarthTile(gfxCarved, carved, 0, 0, featureTile!.x, featureTile!.y);
+    expect(gfxCarved.callsOf('fillRect').length).toBeLessThan(featureTile!.baselineCalls);
   });
 });
 

@@ -200,6 +200,19 @@ for (let i = 0; i < SURFACE_FEATURES.length; i++) {
   if (e.probability < 0 || e.probability > 255) {
     throw new Error(`SURFACE_FEATURES[${i}]: probability must be 0..255`);
   }
+  // PR 4 carve-detection precondition: `surfaceFeatureAt` infers "this feature
+  // was carved passable" from `baked[idx] !== proc.movement` (carving sets the
+  // baked effect to Cosmetic). That proxy is only sound while NO registry
+  // feature has Cosmetic movement — otherwise a carved tile's baked Cosmetic
+  // would equal the feature's own Cosmetic movement, the feature would NOT be
+  // suppressed, and the renderer would paint a sprite over a carved-passable
+  // tile (violating R4-3). Enforce the precondition here so a future Cosmetic
+  // feature fails loudly at boot instead of silently breaking the carve.
+  if (e.movement === SurfaceMovementEffect.Cosmetic) {
+    throw new Error(
+      `SURFACE_FEATURES[${i}]: movement must not be Cosmetic — it breaks PR 4 carve detection in surfaceFeatureAt`,
+    );
+  }
 }
 
 // Cross-entry maximum span — bounds the anchor-candidate scan window. A tile
@@ -241,81 +254,13 @@ export function getSurfaceFeatureRegistryEntry(kind: SurfaceFeatureKind): {
 }
 
 // ---------------------------------------------------------------------------
-// Gameplay suppression — keep features off critical tiles
-// ---------------------------------------------------------------------------
-
-/**
- * Chebyshev-distance radius around every entrance within which feature
- * anchors are suppressed. Picked at 3 to give the queen and starting
- * workers roughly half a screen of clear ground in any direction. Smaller
- * (1..2) leaves grass claustrophobic right at the doorway; larger (5+)
- * starts to dominate the visible surface.
- *
- * Applied to ALL features in this selector — both HardBlock and SoftCost.
- * HardBlock suppression is mandatory (seed luck could otherwise box in the
- * queen on tick 0); SoftCost suppression is a polish call (grass right on
- * the doorstep would feel weird visually too).
- */
-export const SURFACE_FEATURE_ENTRANCE_RADIUS = 3 as const;
-
-/**
- * True if the candidate anchor's footprint overlaps any entrance suppression
- * radius or any food pile tile.
- *
- * Walks every colony's entrances and the food-pile array. Cost is bounded
- * by colony-count × entrance-count + food-pile-count, which the scenario
- * keeps small (typical: ≤4 colonies × ≤4 entrances + ~10 food piles).
- */
-function isAnchorGameplaySuppressed(
-  world: WorldState,
-  anchorX: number,
-  anchorY: number,
-  footprintW: number,
-  footprintH: number,
-): boolean {
-  const fx0 = anchorX;
-  const fy0 = anchorY;
-  const fx1 = anchorX + footprintW - 1;
-  const fy1 = anchorY + footprintH - 1;
-
-  // Entrances — Chebyshev-radius rectangle overlap. Footprint overlaps
-  // (ex - r .. ex + r, ey - r .. ey + r) iff both axes overlap.
-  const r = SURFACE_FEATURE_ENTRANCE_RADIUS;
-  for (const cidStr in world.colonies) {
-    if (!Object.hasOwn(world.colonies, cidStr)) continue;
-    const colony = world.colonies[cidStr as unknown as number]!;
-    // The Phase 3 PRD §2a contract requires the caller to initialize
-    // `entrances` after createColonyRecord, but several pre-#44 tests
-    // create a colony without that init because their code path never
-    // reads it. Be defensive — undefined → "no entrances to suppress
-    // around" rather than a TypeError that breaks unrelated tests.
-    const entrances = colony.entrances;
-    if (entrances === undefined) continue;
-    for (let i = 0; i < entrances.length; i++) {
-      const e = entrances[i]!;
-      const ex = e.surfaceTileX;
-      const ey = e.surfaceTileY;
-      if (fx1 >= ex - r && fx0 <= ex + r && fy1 >= ey - r && fy0 <= ey + r) {
-        return true;
-      }
-    }
-  }
-
-  // Food piles — Chebyshev-radius rectangle overlap (same r as entrances).
-  // Pre-#44 step 4 this was an exact-tile check; once movement honors
-  // HardBlock features, foragers need a clear approach corridor or they
-  // can't deposit pheromone trails to the pile and the colony starves.
-  const piles = world.foodPiles;
-  for (let i = 0; i < piles.length; i++) {
-    const p = piles[i]!;
-    if (fx1 >= p.tileX - r && fx0 <= p.tileX + r && fy1 >= p.tileY - r && fy0 <= p.tileY + r) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
+// PR 4 — dynamic gameplay suppression DELETED. Terrain is now frozen at
+// world-gen (see bakeStaticTerrain below); the old entrance/food-pile
+// suppression halo that flipped terrain as piles depleted / entrances were
+// designated is replaced by the reachable-spawn + connectivity invariants
+// (placement only on already-walkable, in-component tiles) plus a static
+// per-root clearance carve. `SURFACE_FEATURE_ENTRANCE_RADIUS` and
+// `isAnchorGameplaySuppressed` are gone.
 // ---------------------------------------------------------------------------
 // Spatial hash — same MurmurHash3-style mixer as render-side terrain-noise.ts
 // but with terrainSeed folded in. Lives here in sim because src/render/
@@ -380,7 +325,6 @@ function isAnchorSuppressedByOverlap(
         // reduces ownEntryIndex (this branch) or reduces (ay, ax) lex
         // order (the same-type branch).
         if (isAnchorSuppressedByOverlap(world, px, py, ei, terrainSeed)) continue;
-        if (isAnchorGameplaySuppressed(world, px, py, W, H)) continue;
         return true;
       }
     }
@@ -422,7 +366,6 @@ function isAnchorSuppressedByOverlap(
       // zone never renders, so it must not suppress sibling anchors
       // outside the zone.
       if (isAnchorSuppressedByOverlap(world, px, py, ownEntryIndex, terrainSeed)) continue;
-      if (isAnchorGameplaySuppressed(world, px, py, ownW, ownH)) continue;
       return true;
     }
   }
@@ -454,7 +397,7 @@ function isAnchorSuppressedByOverlap(
  * Pure: never mutates `world`. Cost is bounded by MAX_W × MAX_H × kinds ×
  * gameplay-suppression cost (small constants for typical scenarios).
  */
-export function surfaceFeatureAt(
+export function surfaceFeatureProcedural(
   world: WorldState,
   tileX: number,
   tileY: number,
@@ -475,17 +418,6 @@ export function surfaceFeatureAt(
         const h = tileHash(ax, ay, entry.salt, terrainSeed);
         if ((h & 0x1ff) >= entry.probability) continue;
         if (isAnchorSuppressedByOverlap(world, ax, ay, ei, terrainSeed)) {
-          break;
-        }
-        if (
-          isAnchorGameplaySuppressed(
-            world,
-            ax,
-            ay,
-            entry.footprintTilesWide,
-            entry.footprintTilesTall,
-          )
-        ) {
           break;
         }
         if (bestEntryIndex < 0 || ay < bestAy || (ay === bestAy && ax < bestAx)) {
@@ -513,16 +445,62 @@ export function surfaceFeatureAt(
 }
 
 /**
- * Convenience helper for surface movement code (step 4/5). Returns the
- * movement effect of any feature covering this tile, or `Cosmetic` if no
- * feature is present (i.e. ant walks freely with no cost).
+ * STATIC surface feature selector (PR 4). Returns the feature slice covering
+ * (tileX, tileY) for BOTH movement and render, as a pure function of
+ * `terrainSeed` and the **frozen baked grid** — with the old dynamic
+ * entrance/food-pile suppression DELETED, so depleting a pile or designating
+ * an entrance can never flip terrain.
+ *
+ * The procedural feature is filtered by the baked movement-effect grid (the
+ * carve override): a tile reserved/carved passable at world-gen has its whole
+ * feature footprint set to `Cosmetic` in the baked grid, so the procedural
+ * feature there is suppressed (returns null) — the render must not paint a
+ * boulder/leaf over a carved-passable tile (R4-3). When no baked grid is
+ * present yet (mid-bake, or a bare hand-built world), falls back to the raw
+ * procedural feature so the selector still works.
+ */
+export function surfaceFeatureAt(
+  world: WorldState,
+  tileX: number,
+  tileY: number,
+): SurfaceFeatureSlice | null {
+  const proc = surfaceFeatureProcedural(world, tileX, tileY);
+  if (proc === null) return null;
+  const baked = world.bakedSurfaceEffect;
+  if (
+    baked !== undefined &&
+    tileX >= 0 &&
+    tileY >= 0 &&
+    tileX < SURFACE_GRID_WIDTH &&
+    tileY < SURFACE_GRID_HEIGHT
+  ) {
+    // Feature present iff the baked effect at this tile still matches the
+    // procedural movement. A carved-out feature has its footprint set to
+    // Cosmetic, so baked !== proc.movement ⇒ removed.
+    if (baked[tileY * SURFACE_GRID_WIDTH + tileX] !== proc.movement) return null;
+  }
+  return proc;
+}
+
+/**
+ * Movement effect of the (frozen) terrain at this tile. Reads the baked
+ * movement-effect grid directly — O(1), static across pile/entrance events —
+ * falling back to the raw procedural movement only when no baked grid exists
+ * (bare hand-built worlds). `Cosmetic` for out-of-bounds / no feature.
  */
 export function surfaceMovementAt(
   world: WorldState,
   tileX: number,
   tileY: number,
 ): SurfaceMovementEffect {
-  const slice = surfaceFeatureAt(world, tileX, tileY);
+  const baked = world.bakedSurfaceEffect;
+  if (baked !== undefined) {
+    if (tileX < 0 || tileY < 0 || tileX >= SURFACE_GRID_WIDTH || tileY >= SURFACE_GRID_HEIGHT) {
+      return SurfaceMovementEffect.Cosmetic;
+    }
+    return baked[tileY * SURFACE_GRID_WIDTH + tileX] as SurfaceMovementEffect;
+  }
+  const slice = surfaceFeatureProcedural(world, tileX, tileY);
   return slice === null ? SurfaceMovementEffect.Cosmetic : slice.movement;
 }
 
@@ -550,7 +528,13 @@ export function surfaceMovementAt(
 // helpers, never persisted).
 // ---------------------------------------------------------------------------
 
-import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constants.js';
+import {
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
+  SURFACE_ROOT_CLEARANCE_RADIUS,
+  PLAYER_START_X,
+  PLAYER_START_Y,
+} from './constants.js';
 
 const SURFACE_MOVE_CACHE_SENTINEL = 255 as const;
 
@@ -596,4 +580,247 @@ export function surfaceMovementAtCached(
     cache[idx] = v;
   }
   return v as SurfaceMovementEffect;
+}
+
+// ===========================================================================
+// PR 4 — static terrain baking, root reservation, corridor carve, connectivity
+//
+// All pure integer ops (FNDN-04 / determinism): the baked grid + component
+// mask are deterministic functions of (terrainSeed, canonical roots). No
+// PRNG, no float, no clock. A tile is "walkable" iff its effect != HardBlock
+// (SoftCost slows but is passable). Connectivity is 4-connected over walkable.
+// ===========================================================================
+
+const SURFACE_TILE_COUNT = SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT;
+
+/** A canonical colony root (initial start tile) the bake reserves + connects. */
+export interface SurfaceRoot {
+  tileX: number;
+  tileY: number;
+}
+
+/**
+ * Bake the raw procedural movement-effect grid (no carves) — the frozen
+ * snapshot of `surfaceFeatureProcedural(...).movement` for every tile. Used
+ * for bare worlds (no colonies) and as the starting point for the reserved +
+ * connected bake below.
+ */
+export function bakeSurfaceEffectGrid(world: WorldState): Uint8Array {
+  const grid = new Uint8Array(SURFACE_TILE_COUNT);
+  for (let y = 0; y < SURFACE_GRID_HEIGHT; y++) {
+    for (let x = 0; x < SURFACE_GRID_WIDTH; x++) {
+      const proc = surfaceFeatureProcedural(world, x, y);
+      grid[y * SURFACE_GRID_WIDTH + x] =
+        proc === null ? SurfaceMovementEffect.Cosmetic : proc.movement;
+    }
+  }
+  return grid;
+}
+
+/**
+ * Carve (to Cosmetic) the ENTIRE footprint of the procedural feature covering
+ * (tileX, tileY) — at feature granularity so the render never paints a sprite
+ * over a carved-passable tile (R4-3). Only the tiles where this feature is the
+ * procedural winner are cleared (overlapping higher-priority neighbours keep
+ * their effect). No-op if the tile already has no feature. When
+ * `hardBlockOnly`, a SoftCost feature is left intact (used by corridor carving,
+ * which only needs to clear impassable HardBlock).
+ */
+function carveFeatureFootprint(
+  world: WorldState,
+  grid: Uint8Array,
+  tileX: number,
+  tileY: number,
+  hardBlockOnly: boolean,
+): void {
+  const winner = surfaceFeatureProcedural(world, tileX, tileY);
+  if (winner === null) return;
+  if (hardBlockOnly && winner.movement !== SurfaceMovementEffect.HardBlock) return;
+  const ax = winner.anchorX;
+  const ay = winner.anchorY;
+  for (let py = ay; py < ay + winner.footprintTilesTall; py++) {
+    if (py < 0 || py >= SURFACE_GRID_HEIGHT) continue;
+    for (let px = ax; px < ax + winner.footprintTilesWide; px++) {
+      if (px < 0 || px >= SURFACE_GRID_WIDTH) continue;
+      const at = surfaceFeatureProcedural(world, px, py);
+      if (at !== null && at.anchorX === ax && at.anchorY === ay && at.kind === winner.kind) {
+        grid[py * SURFACE_GRID_WIDTH + px] = SurfaceMovementEffect.Cosmetic;
+      }
+    }
+  }
+}
+
+/** Carve a deterministic Manhattan path (horizontal then vertical) between two
+ *  roots, clearing every HardBlock feature it crosses so the two endpoints end
+ *  up in one walkable component. */
+function carveCorridor(world: WorldState, grid: Uint8Array, a: SurfaceRoot, b: SurfaceRoot): void {
+  const stepX = a.tileX <= b.tileX ? 1 : -1;
+  for (let x = a.tileX; x !== b.tileX + stepX; x += stepX) {
+    carveFeatureFootprint(world, grid, x, a.tileY, true);
+  }
+  const stepY = a.tileY <= b.tileY ? 1 : -1;
+  for (let y = a.tileY; y !== b.tileY + stepY; y += stepY) {
+    carveFeatureFootprint(world, grid, b.tileX, y, true);
+  }
+}
+
+/**
+ * Bake the FROZEN static terrain for a scenario: raw procedural field, then
+ * (1) reserve a static clearance neighbourhood around every canonical root
+ * (clear ALL features so co-spawned ants have launch space), and (2) carve a
+ * deterministic corridor chaining every root to the first, guaranteeing ONE
+ * connected walkable component (constructed, not merely asserted — R4-2).
+ * Deterministic; no `terrainSeed` retry (R1-3).
+ */
+export function bakeStaticTerrain(
+  world: WorldState,
+  roots: ReadonlyArray<SurfaceRoot>,
+): Uint8Array {
+  const grid = bakeSurfaceEffectGrid(world);
+  const r = SURFACE_ROOT_CLEARANCE_RADIUS;
+  for (const root of roots) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const tx = root.tileX + dx;
+        const ty = root.tileY + dy;
+        if (tx < 0 || ty < 0 || tx >= SURFACE_GRID_WIDTH || ty >= SURFACE_GRID_HEIGHT) continue;
+        carveFeatureFootprint(world, grid, tx, ty, false);
+      }
+    }
+  }
+  for (let i = 1; i < roots.length; i++) {
+    carveCorridor(world, grid, roots[i]!, roots[0]!);
+  }
+  return grid;
+}
+
+/**
+ * BFS the single connected walkable component (effect != HardBlock, 4-connected)
+ * reachable from (rootX, rootY). Returns a 0/1 membership mask. Pure +
+ * allocation-bounded (one Uint8Array mask + one Int32Array queue).
+ */
+export function computeSurfaceComponentMask(
+  grid: Uint8Array,
+  rootX: number,
+  rootY: number,
+): Uint8Array {
+  // Fail loudly on a malformed grid: out-of-range reads return undefined, and
+  // `undefined !== HardBlock` is true, so a short grid would silently flood the
+  // whole map into one walkable component (a wrong-but-plausible mask).
+  if (grid.length !== SURFACE_TILE_COUNT) {
+    throw new Error(
+      `computeSurfaceComponentMask: grid length ${grid.length} !== ${SURFACE_TILE_COUNT}`,
+    );
+  }
+  const mask = new Uint8Array(SURFACE_TILE_COUNT);
+  if (rootX < 0 || rootY < 0 || rootX >= SURFACE_GRID_WIDTH || rootY >= SURFACE_GRID_HEIGHT) {
+    return mask;
+  }
+  const rootIdx = rootY * SURFACE_GRID_WIDTH + rootX;
+  if (grid[rootIdx] === SurfaceMovementEffect.HardBlock) return mask;
+  const queue = new Int32Array(SURFACE_TILE_COUNT);
+  let head = 0;
+  let tail = 0;
+  mask[rootIdx] = 1;
+  queue[tail++] = rootIdx;
+  while (head < tail) {
+    const idx = queue[head++]!;
+    const x = idx % SURFACE_GRID_WIDTH;
+    // 4-connected neighbours, derived from idx without division: a North
+    // neighbour exists iff idx >= WIDTH; South iff idx < tileCount - WIDTH.
+    if (idx >= SURFACE_GRID_WIDTH)
+      tail = visitNeighbour(grid, mask, queue, idx - SURFACE_GRID_WIDTH, tail);
+    if (idx < SURFACE_TILE_COUNT - SURFACE_GRID_WIDTH)
+      tail = visitNeighbour(grid, mask, queue, idx + SURFACE_GRID_WIDTH, tail);
+    if (x < SURFACE_GRID_WIDTH - 1) tail = visitNeighbour(grid, mask, queue, idx + 1, tail);
+    if (x > 0) tail = visitNeighbour(grid, mask, queue, idx - 1, tail);
+  }
+  return mask;
+}
+
+function visitNeighbour(
+  grid: Uint8Array,
+  mask: Uint8Array,
+  queue: Int32Array,
+  nIdx: number,
+  tail: number,
+): number {
+  if (mask[nIdx] === 0 && grid[nIdx] !== SurfaceMovementEffect.HardBlock) {
+    mask[nIdx] = 1;
+    queue[tail++] = nIdx;
+  }
+  return tail;
+}
+
+/** Canonical BFS root for the connected component — the first colony's first
+ *  entrance (lowest colonyId), else the player start tile for bare worlds. */
+function canonicalSurfaceRoot(world: WorldState): SurfaceRoot {
+  let bestId = Number.POSITIVE_INFINITY;
+  let root: SurfaceRoot | null = null;
+  for (const key in world.colonies) {
+    if (!Object.hasOwn(world.colonies, key)) continue;
+    const colony = world.colonies[key as unknown as number]!;
+    const ents = colony.entrances;
+    if (ents === undefined || ents.length === 0) continue;
+    if (colony.colonyId < bestId) {
+      bestId = colony.colonyId;
+      root = { tileX: ents[0]!.surfaceTileX, tileY: ents[0]!.surfaceTileY };
+    }
+  }
+  return root ?? { tileX: PLAYER_START_X, tileY: PLAYER_START_Y };
+}
+
+/**
+ * Memoised single-component membership mask for the frozen surface terrain.
+ * Terrain is immutable after bake, so the mask is computed once from the baked
+ * grid + canonical root and cached on `world.surfaceComponentMask`.
+ */
+export function ensureSurfaceComponentMask(world: WorldState): Uint8Array {
+  let mask = world.surfaceComponentMask;
+  if (mask === null || mask === undefined) {
+    const root = canonicalSurfaceRoot(world);
+    mask = computeSurfaceComponentMask(world.bakedSurfaceEffect, root.tileX, root.tileY);
+    world.surfaceComponentMask = mask;
+  }
+  return mask;
+}
+
+/** True iff (tileX, tileY) is walkable AND in the single connected surface
+ *  component — the reachable-spawn gate for piles + entrances. */
+export function isSurfaceTileInComponent(world: WorldState, tileX: number, tileY: number): boolean {
+  if (tileX < 0 || tileY < 0 || tileX >= SURFACE_GRID_WIDTH || tileY >= SURFACE_GRID_HEIGHT) {
+    return false;
+  }
+  return ensureSurfaceComponentMask(world)[tileY * SURFACE_GRID_WIDTH + tileX] === 1;
+}
+
+/**
+ * Connectivity invariant (R1-5): exactly one walkable surface component must
+ * contain every colony **entrance** and every **food pile**. (Each colony's root
+ * start tile gets an entrance at world-gen — `initColony` — so the entrance IS
+ * the root; a colony with `entrances === undefined` contributes nothing and is
+ * skipped.) Returns true iff the invariant holds. Called at world-gen
+ * (`createScenario`) and on save load (`deserializeWorldState`).
+ */
+export function validateSurfaceConnectivity(world: WorldState): boolean {
+  const mask = ensureSurfaceComponentMask(world);
+  const inMask = (x: number, y: number): boolean =>
+    x >= 0 &&
+    y >= 0 &&
+    x < SURFACE_GRID_WIDTH &&
+    y < SURFACE_GRID_HEIGHT &&
+    mask[y * SURFACE_GRID_WIDTH + x] === 1;
+  for (const key in world.colonies) {
+    if (!Object.hasOwn(world.colonies, key)) continue;
+    const colony = world.colonies[key as unknown as number]!;
+    const ents = colony.entrances;
+    if (ents === undefined) continue;
+    for (const e of ents) {
+      if (!inMask(e.surfaceTileX, e.surfaceTileY)) return false;
+    }
+  }
+  for (const pile of world.foodPiles) {
+    if (!inMask(pile.tileX, pile.tileY)) return false;
+  }
+  return true;
 }

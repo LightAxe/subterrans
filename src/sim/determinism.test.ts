@@ -154,6 +154,9 @@ function serializeWorldState(w: WorldState): string {
         },
         {} as Record<string, unknown>,
       ),
+    // PR 4: baked static surface terrain — a divergence in the frozen grid must
+    // break byte-identity.
+    bakedSurfaceEffect: Array.from(w.bakedSurfaceEffect),
     // Phase 7: food piles and pending chambers
     foodPiles: w.foodPiles.map((p) => ({ ...p })),
     pendingChambers: Object.keys(w.pendingChambers)

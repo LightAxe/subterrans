@@ -23,7 +23,11 @@
 import { tick } from '../../sim/tick.js';
 import { createScenario } from '../../sim/scenario.js';
 import { canEnterUndergroundTile } from '../../sim/ant/ant-system.js';
-import { surfaceMovementAt, SurfaceMovementEffect } from '../../sim/surface-features.js';
+import {
+  surfaceMovementAt,
+  surfaceFeatureAt,
+  SurfaceMovementEffect,
+} from '../../sim/surface-features.js';
 import { Zone, ugGet } from '../../sim/terrain.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../../sim/enums.js';
 import { FP_SHIFT } from '../../sim/fixed.js';
@@ -185,30 +189,61 @@ function freshWindow(): AntWindow {
 // ===========================================================================
 
 /**
- * FNV-1a hash of the COMPLETE 128×128 surface feature-effect field. Two worlds
- * with the same hash have identical movement effect (Cosmetic/SoftCost/
- * HardBlock) on every surface tile. Used to prove the field MUTATES across
- * pile spawn/depletion + entrance designation today (the bug the static-terrain
- * redesign removes) and to require exact equality across save/load.
+ * FNV-1a hash of the COMPLETE 128×128 surface feature field, over the FULL
+ * `SurfaceFeatureSlice` (kind + variantIndex + anchorX + anchorY + movement) —
+ * not just the movement effect (PR 4 / R1-2). Two worlds with the same hash
+ * render AND move identically on every surface tile, so a visual-only terrain
+ * change (e.g. a feature whose kind/variant flips without changing passability)
+ * cannot slip past the static-terrain invariance oracle. Used to prove the
+ * field is INVARIANT across pile spawn/depletion, entrance designation/opening,
+ * and save/load (PR 4 froze terrain; the old dynamic suppression is gone).
  */
 export function featureFieldHash(world: WorldState): number {
   let h = 0x811c9dc5;
+  const mix = (v: number): void => {
+    h ^= v & 0xff;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  };
   for (let y = 0; y < SURFACE_GRID_HEIGHT; y++) {
     for (let x = 0; x < SURFACE_GRID_WIDTH; x++) {
-      const effect = surfaceMovementAt(world, x, y);
-      h ^= effect & 0xff;
-      h = Math.imul(h, 0x01000193) >>> 0;
+      const slice = surfaceFeatureAt(world, x, y);
+      if (slice === null) {
+        mix(0); // distinct "no feature" sentinel
+        continue;
+      }
+      // +1 so kind 0 (Boulder) doesn't collide with the null sentinel.
+      mix(slice.kind + 1);
+      mix(slice.variantIndex);
+      mix(slice.anchorX);
+      mix(slice.anchorX >> 8);
+      mix(slice.anchorY);
+      mix(slice.anchorY >> 8);
+      mix(slice.movement);
     }
   }
   return h >>> 0;
 }
 
-/** Count of surface tiles whose effect differs between two worlds. */
+/** Count of surface tiles whose FULL feature slice differs between two worlds. */
 export function featureFieldDiffCount(a: WorldState, b: WorldState): number {
   let diff = 0;
   for (let y = 0; y < SURFACE_GRID_HEIGHT; y++) {
     for (let x = 0; x < SURFACE_GRID_WIDTH; x++) {
-      if (surfaceMovementAt(a, x, y) !== surfaceMovementAt(b, x, y)) diff++;
+      const sa = surfaceFeatureAt(a, x, y);
+      const sb = surfaceFeatureAt(b, x, y);
+      if (sa === null || sb === null) {
+        if (sa !== sb) diff++;
+        continue;
+      }
+      if (
+        sa.kind !== sb.kind ||
+        sa.variantIndex !== sb.variantIndex ||
+        sa.anchorX !== sb.anchorX ||
+        sa.anchorY !== sb.anchorY ||
+        sa.movement !== sb.movement
+      ) {
+        diff++;
+      }
     }
   }
   return diff;
