@@ -3678,6 +3678,12 @@ describe('tickAntMovement — wander fallback', () => {
     colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
     setupSurfaceGrid(world); // empty grid — no pheromone
+    // PR 5 Fix-A — isolate priority-vs-wander from terrain: an all-walkable baked
+    // grid makes the path-aware goal field a straight line, so the step toward a
+    // due-west target is the pure -X cardinal (no wall-routing detour in Y).
+    world.bakedSurfaceEffect.fill(0);
+    world.surfaceComponentMask = null;
+    world.surfaceGoalFields = null;
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -3687,7 +3693,8 @@ describe('tickAntMovement — wander fallback', () => {
       task: AntTask.Foraging,
       subTask: ForagingSubState.SearchingFood,
     });
-    // Priority target is west of the ant → deterministic -X step.
+    // Priority target is west of the ant → deterministic -X step (path-aware over
+    // the cleared grid still yields the straight cardinal).
     world.ants.targetPosX[antId] = 10 << FP_SHIFT;
     world.ants.targetPosY[antId] = 64 << FP_SHIFT;
 

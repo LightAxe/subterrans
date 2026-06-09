@@ -46,6 +46,11 @@ import {
   resetSurfaceMovementCache,
   type SurfaceMovementCache,
 } from '../surface-features.js';
+import {
+  stepTowardReachable,
+  surfaceGoalDistance,
+  SURFACE_GOAL_UNREACHED,
+} from '../surface-routing.js';
 import type { AntComponents } from './ant-store.js';
 import { isRecentTile, pushRecentTile, clearRecentTiles, isBroodReclaimable } from './ant-store.js';
 import type { ColonyRecord, ChamberRecord } from '../colony/colony-store.js';
@@ -2710,6 +2715,13 @@ export function tickExcursionBoundary(world: WorldState): void {
 
     // Signal detection — priority target > scent > pheromone (09 follow-up).
     const hasPriority = colonyHasPriorityPile(world, colonyId);
+    // Signal detection stays on the zone-agnostic Manhattan probe
+    // (findNearestScentPile): it reads no terrain grid, so it is safe for the
+    // underground SearchingFood/ReturningToNest ants this loop also visits. Post
+    // PR 4 every food pile is in the single walkable component, so for a surface
+    // ant the Manhattan-nearest in-range pile IS the reachable one the movement
+    // code (findReachableScentPile) picks — the two agree on the real cases, and
+    // off-component piles (where they could differ) cannot occur.
     const hasScent = hasPriority ? false : findNearestScentPile(world, tileX, tileY) !== null;
     let hasPheromone = false;
     if (!hasPriority && !hasScent) {
@@ -2834,9 +2846,10 @@ export function tickExcursionBoundary(world: WorldState): void {
 const FOOD_SCENT_RADIUS = 15;
 
 /**
- * Return the tile coords of the nearest food pile within FOOD_SCENT_RADIUS
- * Manhattan of (tileX, tileY), or null if none. Ties broken by foodPileId
- * (lowest first) for determinism.
+ * Nearest food pile within FOOD_SCENT_RADIUS (Manhattan), tie-break lowest
+ * `foodPileId`. Reads NO terrain grid, so it is zone-agnostic — used by signal
+ * detection (`tickExcursionBoundary`), which also visits underground ants where
+ * a surface-field probe would be wrong. Returns the pile's tile, or null.
  */
 function findNearestScentPile(
   world: WorldState,
@@ -2856,9 +2869,7 @@ function findNearestScentPile(
     bestId = pile.foodPileId;
     bestX = pile.tileX;
     bestY = pile.tileY;
-    continue;
   }
-  // Tie-break pass — if a pile is at the same bestDist as another, prefer lowest id.
   if (bestId === -1) return null;
   for (let p = 0; p < world.foodPiles.length; p++) {
     const pile = world.foodPiles[p]!;
@@ -2869,6 +2880,46 @@ function findNearestScentPile(
       bestY = pile.tileY;
     }
   }
+  return { tileX: bestX, tileY: bestY };
+}
+
+/**
+ * PR 5 Fix-A scent selection: among food piles within FOOD_SCENT_RADIUS
+ * (Manhattan eligibility), pick the one with
+ * the shortest REACHABLE path over the static goal field, so a walled-off
+ * in-range pile loses to a reachable one. Ties (equal path distance) break on
+ * lowest `foodPileId` — preserving the existing deterministic tie-break. An
+ * eligible-but-unreachable pile (off the ant's component) is skipped; post-PR 4
+ * single-component connectivity makes that impossible for spawned piles, but the
+ * guard keeps the selector total. Returns the pile's tile, or null.
+ */
+function findReachableScentPile(
+  world: WorldState,
+  tileX: number,
+  tileY: number,
+): { tileX: number; tileY: number } | null {
+  let bestDist = -1; // path distance of the current best (>=0); -1 = none yet
+  let bestId = -1;
+  let bestX = 0;
+  let bestY = 0;
+  for (let p = 0; p < world.foodPiles.length; p++) {
+    const pile = world.foodPiles[p]!;
+    const manhattan = Math.abs(pile.tileX - tileX) + Math.abs(pile.tileY - tileY);
+    if (manhattan > FOOD_SCENT_RADIUS) continue; // eligibility unchanged
+    const pathDist = surfaceGoalDistance(world, tileX, tileY, pile.tileX, pile.tileY);
+    if (pathDist === SURFACE_GOAL_UNREACHED) continue; // walled off from this ant
+    if (
+      bestId === -1 ||
+      pathDist < bestDist ||
+      (pathDist === bestDist && pile.foodPileId < bestId)
+    ) {
+      bestDist = pathDist;
+      bestId = pile.foodPileId;
+      bestX = pile.tileX;
+      bestY = pile.tileY;
+    }
+  }
+  if (bestId === -1) return null;
   return { tileX: bestX, tileY: bestY };
 }
 
@@ -4092,6 +4143,11 @@ export function tickAntMovement(
 
     let dx = 0;
     let dy = 0;
+    // PR 5 Fix-A — true when dx/dy came from the path-aware goal-field primitive
+    // (priority or scent). Such a step is wall-avoiding and monotonically
+    // approaches the target, so the recent-tiles no-revisit substitution must not
+    // override it into a wall or a higher-distance tile (it is bypassed below).
+    let targetedStep = false;
 
     // --- PRD §4d Food Storage chamber routing (underground carrying foragers) ---
     // Underground + Foraging + foodCarrying > 0 → target the nearest OPEN tile
@@ -4490,33 +4546,61 @@ export function tickAntMovement(
       const targetY = ants.targetPosY[id]!;
 
       if (targetX !== -1 && targetY !== -1) {
-        const posX = ants.posX[id]!;
-        const posY = ants.posY[id]!;
-        // Issue #34 + codex coord-scale fix: tile-space deltas.
-        const step = pickCardinalStep(
-          ants,
-          id,
-          (targetX >> FP_SHIFT) - (posX >> FP_SHIFT),
-          (targetY >> FP_SHIFT) - (posY >> FP_SHIFT),
-        );
-        dx = unpackStepDx(step);
-        dy = unpackStepDy(step);
+        // PR 5 Fix-A — passability-aware step toward the colony's explicit
+        // priority pile (target identity unchanged; only the STEP is path-aware).
+        // In normal play the priority pile and every forager share PR 4's single
+        // connected component, so the complete goal field always yields AtGoal
+        // (0,0 → hold for pickup) or a wall-avoiding Step. Pre-check reachability
+        // (mirrors the scent branch) so a degenerate off-component ant/target —
+        // not reachable in real createScenario play, but constructable in
+        // contrived test states — degrades to the old naive cardinal step rather
+        // than tripping the goal-field invariant assert and crashing movement.
+        const tileX = ants.posX[id]! >> FP_SHIFT;
+        const tileY = ants.posY[id]! >> FP_SHIFT;
+        const ttx = targetX >> FP_SHIFT;
+        const tty = targetY >> FP_SHIFT;
+        // Zone guard — surfaceGoalDistance/stepTowardReachable read the SURFACE
+        // goal field (world.bakedSurfaceEffect) indexed by the ant's tile. An
+        // underground forager (no open entrance → entranceTargetX === -1) falls
+        // through here with a priority target set by routeForagerPriority for ALL
+        // SearchingFood foragers regardless of zone; feeding its underground tile
+        // to the surface field would steer by the wrong terrain. Degrade to the
+        // zone-agnostic cardinal step (pre-PR-5 behaviour) off the surface.
+        if (
+          zone === Zone.Surface &&
+          surfaceGoalDistance(world, tileX, tileY, ttx, tty) !== SURFACE_GOAL_UNREACHED
+        ) {
+          const step = stepTowardReachable(world, tileX, tileY, ttx, tty);
+          dx = unpackStepDx(step);
+          dy = unpackStepDy(step);
+          targetedStep = true;
+        } else {
+          const step = pickCardinalStep(ants, id, ttx - tileX, tty - tileY);
+          dx = unpackStepDx(step);
+          dy = unpackStepDy(step);
+        }
       } else {
         const colonyId = ants.colonyId[id]!;
         const tileX = ants.posX[id]! >> FP_SHIFT;
         const tileY = ants.posY[id]! >> FP_SHIFT;
 
         // 09 foraging-autonomy memo: short-range scent pull. A forager within
-        // FOOD_SCENT_RADIUS tiles of an unmarked pile heads straight for it,
-        // so once diffusion brings a worker into local range discovery is
-        // deterministic rather than Bernoulli. Priority-target piles still win
-        // upstream (targetX/Y branch); this only affects the no-priority path.
-        const scent = findNearestScentPile(world, tileX, tileY);
+        // FOOD_SCENT_RADIUS tiles of an unmarked pile heads for it. PR 5 Fix-A:
+        // eligibility stays Manhattan-FOOD_SCENT_RADIUS, but among eligible piles
+        // pick the one with the shortest REACHABLE path over the static field
+        // (so a walled-off in-range pile loses to a reachable one), final
+        // tie-break lowest foodPileId; then STEP via the path-aware primitive.
+        // Zone guard — findReachableScentPile/stepTowardReachable read the
+        // SURFACE goal field and iterate surface food piles. An underground
+        // forager (no open entrance, no priority target) reaching here must not
+        // be steered by surface terrain; skip the path-aware scent pull and fall
+        // through to the zone-agnostic pheromone/wander logic (pre-PR-5 behaviour).
+        const scent = zone === Zone.Surface ? findReachableScentPile(world, tileX, tileY) : null;
         if (scent !== null) {
-          // Issue #34: see pickCardinalStep helper above.
-          const step = pickCardinalStep(ants, id, scent.tileX - tileX, scent.tileY - tileY);
+          const step = stepTowardReachable(world, tileX, tileY, scent.tileX, scent.tileY);
           dx = unpackStepDx(step);
           dy = unpackStepDy(step);
+          targetedStep = true;
         } else {
           const key = pheromoneGridKey(colonyId, PheromoneType.FoodTrail, 'surface');
           const grid = world.pheromoneGrids[key];
@@ -4699,7 +4783,14 @@ export function tickAntMovement(
     // alternates still available). If every neighbor is filtered, pause
     // (dx=dy=0); the buffer-push gate (only on actual tile crossings) keeps
     // pause ticks from polluting history.
+    //
+    // PR 5 Fix-A — a path-aware priority/scent step (`targetedStep`) is BYPASSED:
+    // it is wall-avoiding and strictly decreases goal-field distance every tick,
+    // so it can never loop, and a no-revisit alternate would risk steering it
+    // into a wall or a higher-distance tile (R2 + R4-5). No-revisit still applies
+    // to the untargeted wander/pheromone path, where C-both's deeper buffer helps.
     if (
+      !targetedStep &&
       zone === Zone.Surface &&
       task === AntTask.Foraging &&
       ants.subTask[id] === ForagingSubState.SearchingFood &&
@@ -4902,13 +4993,19 @@ export function tickAntMovement(
         // check the ant ping-pongs west↔east through the same two tiles
         // when wedged against an obstacle (UAT round 2 stuck-ant repro,
         // ant 17 in seed 1790811502).
+        // PR 5 Fix-A — a path-aware targeted step is never a corner-squeeze
+        // (stepTowardReachable only returns a diagonal when at least one shared
+        // orthogonal is itself a descending passable step, so the per-axis revert
+        // below always has a legal cardinal), and must not be diverted by the
+        // no-revisit (recent-tiles) consult. Keep the pure passability checks but
+        // skip the recent-tiles veto when `targetedStep`.
         const destPassable = canEnterSurfaceTile(world, newTileX, newTileY);
         const passXOnly =
           canEnterSurfaceTile(world, newTileX, prevTileY) &&
-          !isRecentTile(ants, id, newTileX, prevTileY);
+          (targetedStep || !isRecentTile(ants, id, newTileX, prevTileY));
         const passYOnly =
           canEnterSurfaceTile(world, prevTileX, newTileY) &&
-          !isRecentTile(ants, id, prevTileX, newTileY);
+          (targetedStep || !isRecentTile(ants, id, prevTileX, newTileY));
         if (destPassable && (passXOnly || passYOnly)) {
           // Diagonal allowed.
         } else if (passXOnly) {
