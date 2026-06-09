@@ -4541,60 +4541,65 @@ export function tickAntMovement(
         }
       }
 
-      // Non-transitioning forager — priority target (step 13) or pheromone gradient.
+      // Non-transitioning forager — priority target (step 13), else scent /
+      // pheromone / wander.
+      const colonyId = ants.colonyId[id]!;
+      const tileX = ants.posX[id]! >> FP_SHIFT;
+      const tileY = ants.posY[id]! >> FP_SHIFT;
       const targetX = ants.targetPosX[id]!;
       const targetY = ants.targetPosY[id]!;
-
+      const ttx = targetX >> FP_SHIFT;
+      const tty = targetY >> FP_SHIFT;
       if (targetX !== -1 && targetY !== -1) {
-        // PR 5 Fix-A — passability-aware step toward the colony's explicit
-        // priority pile (target identity unchanged; only the STEP is path-aware).
-        // In normal play the priority pile and every forager share PR 4's single
-        // connected component, so the complete goal field always yields AtGoal
-        // (0,0 → hold for pickup) or a wall-avoiding Step. Pre-check reachability
-        // (mirrors the scent branch) so a degenerate off-component ant/target —
-        // not reachable in real createScenario play, but constructable in
-        // contrived test states — degrades to the old naive cardinal step rather
-        // than tripping the goal-field invariant assert and crashing movement.
-        const tileX = ants.posX[id]! >> FP_SHIFT;
-        const tileY = ants.posY[id]! >> FP_SHIFT;
-        const ttx = targetX >> FP_SHIFT;
-        const tty = targetY >> FP_SHIFT;
-        // Zone guard — surfaceGoalDistance/stepTowardReachable read the SURFACE
-        // goal field (world.bakedSurfaceEffect) indexed by the ant's tile. An
-        // underground forager (no open entrance → entranceTargetX === -1) falls
-        // through here with a priority target set by routeForagerPriority for ALL
-        // SearchingFood foragers regardless of zone; feeding its underground tile
-        // to the surface field would steer by the wrong terrain. Degrade to the
-        // zone-agnostic cardinal step (pre-PR-5 behaviour) off the surface.
         if (
           zone === Zone.Surface &&
           surfaceGoalDistance(world, tileX, tileY, ttx, tty) !== SURFACE_GOAL_UNREACHED
         ) {
+          // Surface + reachable priority pile — PR 5 Fix-A passability-aware step
+          // (target identity unchanged; only the STEP is path-aware).
           const step = stepTowardReachable(world, tileX, tileY, ttx, tty);
           dx = unpackStepDx(step);
           dy = unpackStepDy(step);
           targetedStep = true;
         } else {
+          // Naive cardinal step toward the target's coords. Two cases land here:
+          //  (1) UNDERGROUND zone guard — the surface goal field (read by
+          //      surfaceGoalDistance/stepTowardReachable) is meaningless for an
+          //      underground forager, which routeForagerPriority still gives a
+          //      target; step zone-agnostically toward its coords (pre-PR-5).
+          //  (2) A SURFACE target unreachable on the static field. PR 4 guarantees
+          //      the colony's CURRENT priority pile shares every forager's
+          //      component, so this is necessarily a STALE leftover target (e.g.
+          //      from a prior Fighting/zone stint not yet cleared by
+          //      routeForagerPriority), pointing at a non-pile tile. The cardinal
+          //      step + the surface passability/detour guard below keep the ant
+          //      MOVING — it does NOT pin on the wall (the acceptance harness
+          //      confirms worst confinement 0 tk and aimedIntoWall 0), and
+          //      routeForagerPriority clears the stale target within a tick or two.
+          //      We deliberately do NOT assert: stepTowardReachable's internal
+          //      throw is a defensive guard, but a benign transient stale target
+          //      must not crash the sim (it does occur — e.g. spider-combat
+          //      leftovers in the S3 determinism scenarios). Falling through to
+          //      wander instead measurably REGRESSES confinement (wander lacks the
+          //      cardinal step's directional escape), so the cardinal step is the
+          //      correct, cap-satisfying handling.
           const step = pickCardinalStep(ants, id, ttx - tileX, tty - tileY);
           dx = unpackStepDx(step);
           dy = unpackStepDy(step);
         }
       } else {
-        const colonyId = ants.colonyId[id]!;
-        const tileX = ants.posX[id]! >> FP_SHIFT;
-        const tileY = ants.posY[id]! >> FP_SHIFT;
-
-        // 09 foraging-autonomy memo: short-range scent pull. A forager within
-        // FOOD_SCENT_RADIUS tiles of an unmarked pile heads for it. PR 5 Fix-A:
-        // eligibility stays Manhattan-FOOD_SCENT_RADIUS, but among eligible piles
-        // pick the one with the shortest REACHABLE path over the static field
-        // (so a walled-off in-range pile loses to a reachable one), final
-        // tie-break lowest foodPileId; then STEP via the path-aware primitive.
-        // Zone guard — findReachableScentPile/stepTowardReachable read the
-        // SURFACE goal field and iterate surface food piles. An underground
-        // forager (no open entrance, no priority target) reaching here must not
-        // be steered by surface terrain; skip the path-aware scent pull and fall
-        // through to the zone-agnostic pheromone/wander logic (pre-PR-5 behaviour).
+        // 09 foraging-autonomy memo: short-range scent pull toward an unmarked
+        // pile within FOOD_SCENT_RADIUS (Manhattan). PR 5 Fix-A:
+        //  - SURFACE: rank eligible piles by REACHABLE path distance over the
+        //    static field (a walled-off in-range pile loses to a reachable one;
+        //    final tie-break lowest foodPileId), then step path-aware.
+        //  - UNDERGROUND: the pre-PR-5 pull steered underground foragers by
+        //    SURFACE-pile COORDINATES — meaningless in underground space (it fed
+        //    surface tile coords to an underground walker). V29 DELIBERATELY drops
+        //    it (scoped behaviour change, called out in the PR body): underground
+        //    searchers fall through to pheromone/wander, the correct underground
+        //    discovery path. findReachableScentPile reads the surface field, so it
+        //    is gated to the surface zone here.
         const scent = zone === Zone.Surface ? findReachableScentPile(world, tileX, tileY) : null;
         if (scent !== null) {
           const step = stepTowardReachable(world, tileX, tileY, scent.tileX, scent.tileY);

@@ -22,12 +22,8 @@
 
 import { tick } from '../../sim/tick.js';
 import { createScenario } from '../../sim/scenario.js';
-import { canEnterUndergroundTile, unpackStepDx, unpackStepDy } from '../../sim/ant/ant-system.js';
-import {
-  surfaceGoalDistance,
-  stepTowardReachable,
-  SURFACE_GOAL_UNREACHED,
-} from '../../sim/surface-routing.js';
+import { canEnterUndergroundTile } from '../../sim/ant/ant-system.js';
+import { surfaceGoalDistance, SURFACE_GOAL_UNREACHED } from '../../sim/surface-routing.js';
 import {
   surfaceMovementAt,
   surfaceFeatureAt,
@@ -382,16 +378,17 @@ function priorityPileFor(
   return null;
 }
 
-/** True iff the ACTUAL step the sim's Fix-A router would take this tick toward
- *  (targetX,targetY) lands on a HardBlock. This mirrors the real movement —
- *  `stepTowardReachable` over the static goal field (`surface-routing.ts`) —
- *  rather than the pre-Fix-A naive `pickCardinalStep` (per-axis sign, straight at
- *  the target) the harness used to model. By descending the BFS field the router
- *  never aims through a wall, so on a reachable target this returns false by
- *  construction; the detector is the genuine regression guard for Fix-A (it
- *  observes the new step, not a hypothetical old one). An unreachable source —
- *  impossible post-PR 4 single-component connectivity, but kept total — is not a
- *  wall-aim (the ant takes no targeted step). */
+/** True iff the NAIVE per-axis-sign step toward (targetX,targetY) — the pre-Fix-A
+ *  `pickCardinalStep` direction — lands on a HardBlock. This is the #127 wall-aim
+ *  SIGNATURE, measured INDEPENDENTLY of the router under test so the acceptance
+ *  cap stays falsifiable. It must NOT call `stepTowardReachable`: the router
+ *  cannot return a wall step by construction, so mirroring it would make the
+ *  metric tautologically 0 (Fable PR-5 P2). Fix-A satisfies the cap not by
+ *  changing what this flag measures but by ELIMINATING the confinement episodes
+ *  the flag is tallied within (`episodeAimedWall` is only set during a confined
+ *  run) — a forager that descended the goal field marches out of any 3×3 box, so
+ *  no targeted episode forms. If Fix-A ever regressed (an ant confined while its
+ *  naive intent still pointed at a wall), this would trip. */
 function stepLandsOnWall(
   world: WorldState,
   tileX: number,
@@ -399,17 +396,9 @@ function stepLandsOnWall(
   targetTileX: number,
   targetTileY: number,
 ): boolean {
-  // Mirror findReachableScentPile's reachability gate: an off-component source
-  // yields no targeted step, so stepTowardReachable would throw — guard first.
-  if (
-    surfaceGoalDistance(world, tileX, tileY, targetTileX, targetTileY) === SURFACE_GOAL_UNREACHED
-  ) {
-    return false;
-  }
-  const step = stepTowardReachable(world, tileX, tileY, targetTileX, targetTileY);
-  const dx = unpackStepDx(step);
-  const dy = unpackStepDy(step);
-  if (dx === 0 && dy === 0) return false; // AtGoal — no move this tick
+  const dx = targetTileX === tileX ? 0 : targetTileX > tileX ? 1 : -1;
+  const dy = targetTileY === tileY ? 0 : targetTileY > tileY ? 1 : -1;
+  if (dx === 0 && dy === 0) return false; // already on the target column+row
   return surfaceMovementAt(world, tileX + dx, tileY + dy) === SurfaceMovementEffect.HardBlock;
 }
 
@@ -956,6 +945,14 @@ function p95Of(xs: number[]): number {
  * `foodCarrying` 0→+ (pickup) and +→0 (deposit); path counts tile crossings
  * between consecutive deposits (the full forage round-trip the no-revisit buffer
  * influences). performance.now / Math allowed (platform-side harness).
+ *
+ * Underground-carrier behaviour (the spec's named sweep metric) is SUBSUMED by
+ * these counters, not measured separately: a delivery spans pickup (surface) →
+ * descent → underground carry → deposit, and the deepened ring also feeds the
+ * V14 underground CarryingFood no-revisit guard, so a stalled/oscillating
+ * underground carrier shows up directly as fewer `completions` and longer
+ * `latency`/`path`. A separate underground-only counter would double-count the
+ * same effect.
  */
 export function measureForagingThroughput(
   seed: number,

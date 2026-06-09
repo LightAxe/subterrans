@@ -263,3 +263,30 @@ describe('stepTowardReachable', () => {
     expect(landed).toBeLessThan(here); // strictly closer
   });
 });
+
+describe('ensureSurfaceGoalField cache eviction (clear-all on overflow)', () => {
+  it('stays bounded past the cap and a re-requested field still recomputes correctly', () => {
+    const world = createWorldState(42);
+    // Request many distinct targets (more than the 256 cap) to force the
+    // clear-all overflow path at least once. Nested loops avoid `/` (banned in
+    // src/sim); 3 rows × 128 cols = 384 distinct tiles, capped at REQUESTS.
+    const REQUESTS = 300;
+    let requested = 0;
+    for (let ty = 0; ty < 3 && requested < REQUESTS; ty++) {
+      for (let tx = 0; tx < SURFACE_GRID_WIDTH && requested < REQUESTS; tx++) {
+        ensureSurfaceGoalField(world, tx, ty);
+        requested++;
+      }
+    }
+    // The cache cleared on overflow rather than growing unbounded.
+    expect(world.surfaceGoalFields).not.toBeNull();
+    const size = world.surfaceGoalFields!.size;
+    expect(size).toBeLessThan(REQUESTS); // a clear happened
+    expect(size).toBeLessThanOrEqual(256); // bounded by the cap
+    // A field requested after the clears still equals a fresh computation
+    // (eviction is correctness-neutral — entries are pure functions of terrain).
+    const cached = ensureSurfaceGoalField(world, 5, 0);
+    const fresh = computeSurfaceGoalField(world.bakedSurfaceEffect, 5, 0);
+    expect(Array.from(cached)).toEqual(Array.from(fresh));
+  });
+});

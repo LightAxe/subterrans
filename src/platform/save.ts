@@ -574,9 +574,10 @@ export interface SaveFile {
  * PR 5 C-both — encode the per-ant recent-tiles ring compactly. Emits a flat
  * number[] stream of records sorted by ascending antId; each record is
  * `[antId, head, count, (slot, x, y)×count]` for every ant with `antId <
- * nextEntityId` (skips dead-but-allocated entities' stale ring state) AND at
- * least one non-sentinel slot. Slots are emitted in ascending slot order so the
- * encoding is canonical (a given ring state always serializes identically).
+ * nextEntityId` (skips only NEVER-allocated ids; dead-but-allocated ants ARE
+ * included — their ring round-trips exactly, as the canonical encoding requires)
+ * AND at least one non-sentinel slot. Slots are emitted in ascending slot order
+ * so the encoding is canonical (a given ring state always serializes identically).
  */
 function packRecentTiles(a: AntComponents, nextEntityId: number): number[] {
   const out: number[] = [];
@@ -606,7 +607,12 @@ function packRecentTiles(a: AntComponents, nextEntityId: number): number[] {
  * of range, duplicate or non-ascending slot within a record, or out-of-range
  * coords. Slots absent from a record stay sentinel; head is restored verbatim.
  */
-function unpackRecentTiles(a: AntComponents, stream: unknown, capacity: number): void {
+function unpackRecentTiles(
+  a: AntComponents,
+  stream: unknown,
+  nextEntityId: number,
+  capacity: number,
+): void {
   if (!Array.isArray(stream)) throw new Error('recentTiles: not an array');
   // The shared ring holds either surface (SearchingFood) or underground
   // (CarryingFood) tiles, and the stream carries no zone tag, so each axis is
@@ -625,8 +631,20 @@ function unpackRecentTiles(a: AntComponents, stream: unknown, capacity: number):
     const antId = stream[i++] as number;
     const head = stream[i++] as number;
     const count = stream[i++] as number;
-    if (!Number.isInteger(antId) || antId < 0 || antId >= capacity) {
-      throw new Error(`recentTiles: antId ${antId} out of range [0,${capacity})`);
+    // Bound by BOTH nextEntityId AND capacity. nextEntityId is the canonical
+    // bound — the serializer only emits records for antId < nextEntityId, so a
+    // record for a never-allocated id is something serialize can never produce.
+    // capacity is the memory-safety bound — the ring arrays are sized
+    // capacity * RECENT_TILES_LEN, and a tampered save can set ants.count
+    // (→ capacity) and nextEntityId independently (both only checked against
+    // MAX_ENTITIES), so without the capacity check an antId in [capacity,
+    // nextEntityId) would index out of bounds (a silent TypedArray no-op, but it
+    // breaks "load is strictly the inverse of save"). Legitimate saves persist
+    // count = MAX_ENTITIES ≥ nextEntityId, so both bounds coincide.
+    if (!Number.isInteger(antId) || antId < 0 || antId >= nextEntityId || antId >= capacity) {
+      throw new Error(
+        `recentTiles: antId ${antId} out of range [0, min(${nextEntityId},${capacity}))`,
+      );
     }
     if (antId <= prevAntId) throw new Error(`recentTiles: antId ${antId} not strictly ascending`);
     prevAntId = antId;
@@ -980,7 +998,11 @@ function copyIntoUint8(dst: Uint8Array, src: readonly number[]): void {
   for (let i = 0; i < n; i++) dst[i] = src[i]!;
 }
 
-function deserializeAnts(saved: SerializedAnts, capacity: number): AntComponents {
+function deserializeAnts(
+  saved: SerializedAnts,
+  capacity: number,
+  nextEntityId: number,
+): AntComponents {
   const a = createAntComponents(capacity);
   // createAntComponents pre-fills digTileX/digTileY/targetPosX/targetPosY with -1.
   // Overwrite with saved values (including -1 sentinels where appropriate).
@@ -1013,7 +1035,7 @@ function deserializeAnts(saved: SerializedAnts, capacity: number): AntComponents
   copyIntoInt32(a.searchPauseTicks, saved.searchPauseTicks);
   // PR 5 C-both — reconstruct the ring from the compact stream (arrays are
   // already sentinel-filled + head 0 by createAntComponents).
-  unpackRecentTiles(a, saved.recentTiles, capacity);
+  unpackRecentTiles(a, saved.recentTiles, nextEntityId, capacity);
   copyIntoInt32(a.carryingBroodId, saved.carryingBroodId);
   copyIntoInt32(a.carriedBy, saved.carriedBy);
   copyIntoInt32(a.hp, saved.hp);
@@ -1534,7 +1556,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     commandQueue: (Array.isArray(s.commandQueue) ? s.commandQueue : [])
       .filter((c) => c !== null && typeof c === 'object')
       .map((c) => ({ ...c }) as SimCommand),
-    ants: deserializeAnts(s.ants, capacity),
+    ants: deserializeAnts(s.ants, capacity, rawNext),
     colonies,
     pheromoneGrids,
     surface: deserializeSurfaceGrid(s.surface),
