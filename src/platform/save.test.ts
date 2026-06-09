@@ -18,11 +18,17 @@ import {
   FutureSimVersionError,
   OldSimVersionError,
   SaveVersionMismatchError,
+  unpackBakedSurfaceEffect,
   type SaveFile,
 } from './save.js';
 import { createScenario } from '../sim/scenario.js';
 import { tick } from '../sim/tick.js';
-import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
+import {
+  PLAYER_COLONY_ID,
+  ENEMY_COLONY_ID,
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
+} from '../sim/constants.js';
 import type { SimCommand } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { ChamberType } from '../sim/enums.js';
@@ -2043,5 +2049,65 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(info!.playerWorkers).toBe(0);
       expect(info!.playerFoodStored).toBe(0);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR 4 (Fable review) — bakedSurfaceEffect field-specific serialization (R1-12)
+// + unpackBakedSurfaceEffect rejection paths + load-time connectivity rejection.
+// ---------------------------------------------------------------------------
+
+describe('bakedSurfaceEffect serialization', () => {
+  const TILE_COUNT = SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT;
+  // Build standard-base64 of a packed grid where tile 0 holds `code`, rest 0.
+  const packedGridB64 = (code: number): string => {
+    const packed = new Uint8Array((TILE_COUNT + 3) >> 2);
+    packed[0] = code & 0x3;
+    return Buffer.from(packed).toString('base64');
+  };
+  const allHardBlockB64 = (): string => {
+    // every 2-bit code = 2 (HardBlock) → byte 0b10101010 = 0xAA.
+    const packed = new Uint8Array((TILE_COUNT + 3) >> 2).fill(0xaa);
+    return Buffer.from(packed).toString('base64');
+  };
+
+  it('save→load round-trips a MUTATED baked grid (not re-derived from terrainSeed)', () => {
+    const world = createScenario(42, 'Normal');
+    // Flip a procedurally-Cosmetic tile to SoftCost: walkable (no connectivity
+    // break) but DIFFERENT from what terrainSeed would re-derive. A deserializer
+    // that rebuilt the grid from the seed would lose this.
+    let idx = -1;
+    for (let i = 0; i < world.bakedSurfaceEffect.length; i++) {
+      if (world.bakedSurfaceEffect[i] === 0) {
+        idx = i;
+        break;
+      }
+    }
+    expect(idx).toBeGreaterThanOrEqual(0);
+    world.bakedSurfaceEffect[idx] = 1; // SoftCost
+    const restored = deserializeWorldState(serializeWorldState(world));
+    expect(restored.bakedSurfaceEffect[idx]).toBe(1);
+    expect(restored.bakedSurfaceEffect.length).toBe(world.bakedSurfaceEffect.length);
+  });
+
+  it('unpackBakedSurfaceEffect rejects malformed input (all paths return null)', () => {
+    expect(unpackBakedSurfaceEffect('AAA!', TILE_COUNT)).toBeNull(); // bad base64 char
+    expect(unpackBakedSurfaceEffect('AB==CDEF', TILE_COUNT)).toBeNull(); // mid-string padding
+    expect(unpackBakedSurfaceEffect('AB=C', TILE_COUNT)).toBeNull(); // "x=y" padding form
+    expect(unpackBakedSurfaceEffect('AAAA', TILE_COUNT)).toBeNull(); // valid b64, wrong packed length
+    expect(unpackBakedSurfaceEffect(packedGridB64(3), TILE_COUNT)).toBeNull(); // enum code 3
+    // Non-zero unused trailing bits in the final byte (expectedLen not /4):
+    // byte 0b00110000 — tiles 0,1 = 0 but trailing bits 4-7 = 0b0011 ≠ 0.
+    expect(unpackBakedSurfaceEffect(Buffer.from([0x30]).toString('base64'), 2)).toBeNull();
+    // Sanity: a clean all-Cosmetic grid decodes.
+    expect(unpackBakedSurfaceEffect(packedGridB64(0), TILE_COUNT)).not.toBeNull();
+  });
+
+  it('deserialize rejects a baked grid that violates connectivity (all HardBlock)', () => {
+    const ser = serializeWorldState(createScenario(42, 'Normal'));
+    // simVersion stays at LATEST so the version gate passes and we reach the
+    // connectivity check; the all-HardBlock grid disconnects every pile/entrance.
+    const corrupt = { ...ser, bakedSurfaceEffect: allHardBlockB64() };
+    expect(() => deserializeWorldState(corrupt)).toThrow();
   });
 });

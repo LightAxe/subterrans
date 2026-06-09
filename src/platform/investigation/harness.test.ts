@@ -280,6 +280,7 @@ describe('PR 4 — static-terrain feature-field oracle (full SurfaceFeatureSlice
 
     // 3. Entrance designation — issue commands across many columns; terrain is
     //    frozen so the hash must not move whether or not each is accepted.
+    const entrancesBefore = world.colonies[colonyId]!.entrances.length;
     for (let col = 28; col < 100; col += 4) {
       const cmd: SimCommand = {
         type: 'DesignateEntrance',
@@ -290,6 +291,10 @@ describe('PR 4 — static-terrain feature-field oracle (full SurfaceFeatureSlice
       };
       tick(world, [cmd]);
     }
+    // Prove the ACCEPTED path is exercised, not just the rejection path: at least
+    // one designation must have actually added an entrance (else this step would
+    // only cover hash-invariance under rejection — Fable P3).
+    expect(world.colonies[colonyId]!.entrances.length).toBeGreaterThan(entrancesBefore);
     assertSame('entrance-designate');
 
     // 4. Entrance opening — toggle isOpen on every entrance (no terrain effect).

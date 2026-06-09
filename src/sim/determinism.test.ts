@@ -388,6 +388,22 @@ describe('issue #27: simVersion plumbing', () => {
     expect(dst.ants.waitingDeposit[5]).toBe(0); // untouched slots stay zero
   });
 
+  it('copyWorldState round-trips bakedSurfaceEffect (PR 4 — R1-12 per-field copy)', async () => {
+    const { copyWorldState } = await import('./types.js');
+    const src = createWorldState(42);
+    const dst = createWorldState(99);
+    // Mutate distinct effect codes so a copy that re-derives from terrainSeed (or
+    // drops the field) is caught — both worlds have DIFFERENT terrainSeeds.
+    src.bakedSurfaceEffect[0] = 1; // SoftCost
+    src.bakedSurfaceEffect[1] = 2; // HardBlock
+    src.bakedSurfaceEffect[2] = 0; // Cosmetic
+    copyWorldState(src, dst);
+    expect(dst.bakedSurfaceEffect[0]).toBe(1);
+    expect(dst.bakedSurfaceEffect[1]).toBe(2);
+    expect(dst.bakedSurfaceEffect[2]).toBe(0);
+    expect(dst.bakedSurfaceEffect.length).toBe(src.bakedSurfaceEffect.length);
+  });
+
   it('two LATEST runs at the same seed produce byte-identical state (drain-fullest determinism)', () => {
     // Direct duplicate of base SCEN-06 Test 1 but with extra runtime to push
     // colonies into chamber-saturation territory where v3's drain-fullest

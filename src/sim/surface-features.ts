@@ -857,11 +857,17 @@ export function isSurfaceTileInComponent(world: WorldState, tileX: number, tileY
 }
 
 /**
- * Connectivity invariant (R1-5): the single canonical walkable component (rooted
- * at `canonicalSurfaceRoot`) must contain every colony **entrance** and every
- * **food pile** — i.e. they are all mutually reachable. (Each colony's root
- * start tile gets an entrance at world-gen — `initColony` — so the entrance IS
- * the root; a colony with `entrances === undefined` contributes nothing and is
+ * Connectivity invariant (R1-5, spec R3-8): the single canonical walkable
+ * component (rooted at `canonicalSurfaceRoot`) must contain every colony
+ * **entrance** AND that entrance's full clearance halo, plus every **food pile**
+ * — i.e. they are all mutually reachable and an entrance's launch space is open.
+ * The entrance-clearance check mirrors the runtime `DesignateEntrance` gate
+ * (`tick.ts`): an entrance is only legitimately produced (world-gen carve or the
+ * in-component+clear designation gate) with its whole radius-`SURFACE_ROOT_
+ * CLEARANCE_RADIUS` Chebyshev halo in-component, so a save whose halo is blocked
+ * is corrupt/tampered and must be rejected at load. (Each colony's root start
+ * tile gets an entrance at world-gen — `initColony` — so the entrance IS the
+ * root; a colony with `entrances === undefined` contributes nothing and is
  * skipped.) Returns true iff the invariant holds. Called at world-gen
  * (`createScenario`) and on save load (`deserializeWorldState`).
  */
@@ -873,6 +879,13 @@ export function validateSurfaceConnectivity(world: WorldState): boolean {
     x < SURFACE_GRID_WIDTH &&
     y < SURFACE_GRID_HEIGHT &&
     mask[y * SURFACE_GRID_WIDTH + x] === 1;
+  // The canonical root itself must be in-component. Normally trivially true (the
+  // mask is rooted there), but it catches the degenerate/tampered case where the
+  // root tile is HardBlock — then computeSurfaceComponentMask returns an all-zero
+  // mask and, with zero entrances + zero piles to check, the loops below would
+  // otherwise vacuously return true on a garbage component.
+  const root = canonicalSurfaceRoot(world);
+  if (!inMask(root.tileX, root.tileY)) return false;
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
     const colony = world.colonies[key as unknown as number]!;
@@ -880,6 +893,18 @@ export function validateSurfaceConnectivity(world: WorldState): boolean {
     if (ents === undefined) continue;
     for (const e of ents) {
       if (!inMask(e.surfaceTileX, e.surfaceTileY)) return false;
+      // Clearance halo: every in-bounds tile in the entrance's Chebyshev
+      // SURFACE_ROOT_CLEARANCE_RADIUS neighbourhood must also be in-component
+      // (matches the DesignateEntrance gate; off-grid halo tiles are skipped,
+      // as that gate does).
+      for (let dy = -SURFACE_ROOT_CLEARANCE_RADIUS; dy <= SURFACE_ROOT_CLEARANCE_RADIUS; dy++) {
+        for (let dx = -SURFACE_ROOT_CLEARANCE_RADIUS; dx <= SURFACE_ROOT_CLEARANCE_RADIUS; dx++) {
+          const cx = e.surfaceTileX + dx;
+          const cy = e.surfaceTileY + dy;
+          if (cx < 0 || cy < 0 || cx >= SURFACE_GRID_WIDTH || cy >= SURFACE_GRID_HEIGHT) continue;
+          if (!inMask(cx, cy)) return false;
+        }
+      }
     }
   }
   for (const pile of world.foodPiles) {

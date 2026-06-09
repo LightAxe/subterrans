@@ -26,6 +26,7 @@ import {
   bakeStaticTerrain,
   isSurfaceTileInComponent,
   validateSurfaceConnectivity,
+  ensureSurfaceComponentMask,
   type SurfaceRoot,
 } from './surface-features.js';
 import { Rng } from './rng.js';
@@ -431,6 +432,12 @@ export function createScenario(
       'createScenario: surface connectivity invariant violated after bakeStaticTerrain (an entrance or food pile is not in the single walkable component)',
     );
   }
+  // Eagerly materialise the derived component mask at world-gen (idempotent —
+  // validateSurfaceConnectivity already populated it). Terrain is immutable, so
+  // every later `isSurfaceTileInComponent` query — including the render/input
+  // entrance-preview gate — is a pure read of an already-built mask; no query
+  // path lazily mutates the world.
+  ensureSurfaceComponentMask(world);
 
   // --- Step 8: Pheromone grids — all 8 (2 colonies × 2 types × 2 zones) ---
   // All 8 must exist so tick-step lookups never hit a missing key.

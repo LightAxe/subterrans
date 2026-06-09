@@ -10,10 +10,14 @@
 import { describe, it, expect } from 'vitest';
 import { createWorldState, type WorldState } from './types.js';
 import { createColonyRecord } from './colony/colony-store.js';
-import { SURFACE_GRID_WIDTH } from './constants.js';
+import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constants.js';
 import {
   surfaceFeatureAt,
   surfaceMovementAt,
+  surfaceFeatureProcedural,
+  bakeSurfaceEffectGrid,
+  bakeStaticTerrain,
+  computeSurfaceComponentMask,
   SurfaceFeatureKind,
   SurfaceMovementEffect,
   type SurfaceFeatureSlice,
@@ -348,5 +352,84 @@ describe('SURFACE_FEATURES registry contract', () => {
     if (seen.has(SurfaceFeatureKind.GrassClump)) {
       expect(seen.get(SurfaceFeatureKind.GrassClump)).toBe(SurfaceMovementEffect.SoftCost);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR 4 (Fable review) — load-bearing bake↔selector equivalence + component/
+// corridor regression coverage. These were verified out-of-band during PR 4;
+// committing them guards the carve-detection invariant against future drift.
+// ---------------------------------------------------------------------------
+
+describe('bakeSurfaceEffectGrid ≡ per-tile surfaceFeatureProcedural', () => {
+  it('is byte-identical to the per-tile selector across seeds × all 16,384 tiles', () => {
+    // surfaceFeatureAt's carve detection rests on baked[idx] ===
+    // surfaceFeatureProcedural(...).movement for every un-carved tile; the
+    // anchor-iterating bake must reproduce the per-tile selector exactly or
+    // carved-vs-procedural desync silently hides sprites over walkable terrain.
+    let mismatches = 0;
+    for (const seed of [1, 7, 42, 99, 256, 2024]) {
+      const w = createWorldState(seed);
+      const baked = bakeSurfaceEffectGrid(w);
+      for (let y = 0; y < SURFACE_GRID_HEIGHT; y++) {
+        for (let x = 0; x < SURFACE_GRID_WIDTH; x++) {
+          const proc = surfaceFeatureProcedural(w, x, y);
+          const expected = proc === null ? SurfaceMovementEffect.Cosmetic : proc.movement;
+          if (baked[y * SURFACE_GRID_WIDTH + x] !== expected) mismatches++;
+        }
+      }
+    }
+    expect(mismatches).toBe(0);
+  });
+});
+
+describe('computeSurfaceComponentMask', () => {
+  it('marks only the region reachable from the root, excluding a walled-off pocket', () => {
+    // Hand-built grid: a full-height HardBlock wall at x=64 splits left|right.
+    const grid = new Uint8Array(SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT);
+    for (let y = 0; y < SURFACE_GRID_HEIGHT; y++) {
+      grid[y * SURFACE_GRID_WIDTH + 64] = SurfaceMovementEffect.HardBlock;
+    }
+    const mask = computeSurfaceComponentMask(grid, 10, 10); // root on the left
+    expect(mask[10 * SURFACE_GRID_WIDTH + 10]).toBe(1); // root in component
+    expect(mask[10 * SURFACE_GRID_WIDTH + 30]).toBe(1); // same (left) side
+    expect(mask[10 * SURFACE_GRID_WIDTH + 64]).toBe(0); // the wall itself
+    expect(mask[10 * SURFACE_GRID_WIDTH + 100]).toBe(0); // walled-off right pocket
+  });
+});
+
+describe('bakeStaticTerrain corridor clears HardBlocks + connects roots (carveCorridor)', () => {
+  it('carves through a procedural HardBlock on the corridor row, joining the two roots', () => {
+    // carveCorridor clears the PROCEDURAL HardBlock features (via
+    // surfaceFeatureProcedural) along the Manhattan path between two roots — so
+    // this exercises the real carve on procedural terrain (not an injected wall,
+    // which the carve does not recognise). Find a row with a procedural HardBlock
+    // in the interior, run a corridor across it, and assert it is cleared and the
+    // roots end mutually reachable.
+    const world = createWorldState(42);
+    const proc = world.bakedSurfaceEffect; // createWorldState bakes the procedural field
+    let ry = -1;
+    let hx = -1;
+    outer: for (let y = 0; y < SURFACE_GRID_HEIGHT; y++) {
+      for (let x = 25; x <= 95; x++) {
+        if (proc[y * SURFACE_GRID_WIDTH + x] === SurfaceMovementEffect.HardBlock) {
+          ry = y;
+          hx = x;
+          break outer;
+        }
+      }
+    }
+    expect(ry).toBeGreaterThanOrEqual(0); // a procedural HardBlock to clear exists
+    expect(proc[ry * SURFACE_GRID_WIDTH + hx]).toBe(SurfaceMovementEffect.HardBlock);
+
+    const leftRoot = { tileX: 20, tileY: ry };
+    const rightRoot = { tileX: 100, tileY: ry };
+    const baked = bakeStaticTerrain(world, [leftRoot, rightRoot]);
+    // The HardBlock on the corridor row is cleared by the carve.
+    expect(baked[ry * SURFACE_GRID_WIDTH + hx]).not.toBe(SurfaceMovementEffect.HardBlock);
+    // Both roots are in one walkable component after the corridor carve.
+    const post = computeSurfaceComponentMask(baked, leftRoot.tileX, leftRoot.tileY);
+    expect(post[leftRoot.tileY * SURFACE_GRID_WIDTH + leftRoot.tileX]).toBe(1);
+    expect(post[rightRoot.tileY * SURFACE_GRID_WIDTH + rightRoot.tileX]).toBe(1);
   });
 });

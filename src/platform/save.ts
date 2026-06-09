@@ -46,7 +46,10 @@ import {
 } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
-import { validateSurfaceConnectivity } from '../sim/surface-features.js';
+import {
+  validateSurfaceConnectivity,
+  ensureSurfaceComponentMask,
+} from '../sim/surface-features.js';
 
 // SAVE_FORMAT_VERSION is bumped on any breaking change to the on-disk shape
 // or to invariants that survivors must respect. Pre-bump saves are rejected
@@ -719,12 +722,18 @@ function base64ToBytes(s: string): Uint8Array | null {
   return out;
 }
 
-/** Pack a per-tile effect grid (values 0..3) into 2-bit codes, base64-encoded. */
+/** Pack a per-tile effect grid (valid values 0=Cosmetic/1=SoftCost/2=HardBlock)
+ *  into 2-bit codes, base64-encoded. Throws on any out-of-range value so an
+ *  already-corrupt in-memory grid fails at the WRITE rather than masking to a
+ *  wrong-but-loadable terrain (`& 0x3` would launder a 4 into Cosmetic; a 3 would
+ *  only fail at the next load via unpack's code-3 guard). */
 function packBakedSurfaceEffect(grid: Uint8Array): string {
   const packed = new Uint8Array((grid.length + 3) >> 2);
   for (let i = 0; i < grid.length; i++) {
+    const v = grid[i]!;
+    if (v > 2) throw new Error(`packBakedSurfaceEffect: out-of-range effect ${v} at tile ${i}`);
     const pi = i >> 2;
-    packed[pi] = packed[pi]! | ((grid[i]! & 0x3) << ((i & 3) << 1));
+    packed[pi] = packed[pi]! | (v << ((i & 3) << 1));
   }
   return bytesToBase64(packed);
 }
@@ -737,9 +746,17 @@ function packBakedSurfaceEffect(grid: Uint8Array): string {
  */
 export function unpackBakedSurfaceEffect(s: string, expectedLen: number): Uint8Array | null {
   if (typeof s !== 'string') return null;
+  // DoS guard (issue #99 posture): reject by LENGTH before decoding, so a
+  // tampered localStorage save with an arbitrarily long valid-base64 string
+  // can't force a large allocation + O(n) decode in base64ToBytes before the
+  // post-decode size check rejects it. The exact base64 length for a
+  // `expectedLen`-tile grid is ceil(packedBytes / 3) * 4.
+  const packedBytes = (expectedLen + 3) >> 2;
+  const expectedB64Len = (((packedBytes + 2) / 3) | 0) * 4;
+  if (s.length !== expectedB64Len) return null;
   const packed = base64ToBytes(s);
   if (packed === null) return null;
-  if (packed.length !== (expectedLen + 3) >> 2) return null;
+  if (packed.length !== packedBytes) return null;
   const grid = new Uint8Array(expectedLen);
   for (let i = 0; i < expectedLen; i++) {
     const v = (packed[i >> 2]! >> ((i & 3) << 1)) & 0x3;
@@ -1474,6 +1491,11 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
       'Invalid bakedSurfaceEffect: connectivity violated (a food pile or entrance is not in the single walkable component)',
     );
   }
+  // Eagerly materialise the derived component mask on load (idempotent —
+  // validateSurfaceConnectivity already populated it), so post-load
+  // isSurfaceTileInComponent queries (incl. the render/input preview gate) are
+  // pure reads of a pre-built mask, never a lazy world mutation.
+  ensureSurfaceComponentMask(world);
 
   return world;
 }

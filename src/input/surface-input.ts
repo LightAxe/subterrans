@@ -32,7 +32,12 @@ import type {
   MarkSpiderPriorityCommand,
 } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
-import { PLAYER_COLONY_ID, SURFACE_ROOT_CLEARANCE_RADIUS } from '../sim/constants.js';
+import {
+  PLAYER_COLONY_ID,
+  SURFACE_ROOT_CLEARANCE_RADIUS,
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
+} from '../sim/constants.js';
 import { isSurfaceTileInComponent } from '../sim/surface-features.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { TILE_SIZE_PX } from '../render/sprites.js';
@@ -118,7 +123,10 @@ export function isValidEntranceTarget(world: WorldState, tileX: number, tileY: n
     for (let dx = -SURFACE_ROOT_CLEARANCE_RADIUS; dx <= SURFACE_ROOT_CLEARANCE_RADIUS; dx++) {
       const cx = tileX + dx;
       const cy = tileY + dy;
-      if (cx < 0 || cy < 0 || cx >= world.surface.width || cy >= world.surface.height) continue;
+      // Bound with the grid CONSTANTS (not world.surface.*) so the preview gate
+      // clamps identically to the sim gate + isSurfaceTileInComponent (which use
+      // the constants). Identical in production; consistent for hand-built worlds.
+      if (cx < 0 || cy < 0 || cx >= SURFACE_GRID_WIDTH || cy >= SURFACE_GRID_HEIGHT) continue;
       if (!isSurfaceTileInComponent(world, cx, cy)) return false;
     }
   }

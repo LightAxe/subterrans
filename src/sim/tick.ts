@@ -36,7 +36,7 @@ import {
   PLAYER_COLONY_ID,
   SURFACE_ROOT_CLEARANCE_RADIUS,
 } from './constants.js';
-import { isSurfaceTileInComponent } from './surface-features.js';
+import { isSurfaceTileInComponent, ensureSurfaceComponentMask } from './surface-features.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
 import { allocateWorkers, computeDigDemand } from './behavior/allocation-system.js';
 import {
@@ -245,6 +245,13 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   const digFlowFields = caches.dig;
   const entranceFlowFields = caches.entrance;
   const chamberFlowFields = caches.chamber;
+
+  // PR 4 — materialize the derived surface component mask once at tick ENTRY
+  // (idempotent; createScenario/deserialize already do). Terrain is immutable, so
+  // this guarantees mid-tick `isSurfaceTileInComponent` queries (e.g.
+  // tickFoodPileSpawn) are pure reads and never lazily mutate the world during a
+  // step — even for a hand-built world that reached tick() without eager build.
+  ensureSurfaceComponentMask(world);
 
   // Reconstruct Rng from saved state at tick start (PRD §4 contract).
   const rng = new Rng(world.rngState);
