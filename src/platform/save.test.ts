@@ -2091,10 +2091,22 @@ describe('bakedSurfaceEffect serialization', () => {
   });
 
   it('unpackBakedSurfaceEffect rejects malformed input (all paths return null)', () => {
-    expect(unpackBakedSurfaceEffect('AAA!', TILE_COUNT)).toBeNull(); // bad base64 char
-    expect(unpackBakedSurfaceEffect('AB==CDEF', TILE_COUNT)).toBeNull(); // mid-string padding
-    expect(unpackBakedSurfaceEffect('AB=C', TILE_COUNT)).toBeNull(); // "x=y" padding form
-    expect(unpackBakedSurfaceEffect('AAAA', TILE_COUNT)).toBeNull(); // valid b64, wrong packed length
+    // Wrong length: rejected by the DoS length pre-check, never reaches the decoder.
+    expect(unpackBakedSurfaceEffect('AAAA', TILE_COUNT)).toBeNull();
+    // Every other malformed input below must be the EXACT base64 length for a
+    // full grid (ceil(packedBytes/3)*4) so it passes that length gate and
+    // exercises the decoder branch its label names — a short string would be
+    // length-rejected and shadow the branch under test.
+    const valid = packedGridB64(0);
+    expect(valid.length).toBe((((((TILE_COUNT + 3) >> 2) + 2) / 3) | 0) * 4);
+    const corruptAt = (pos: number, repl: string): string =>
+      valid.slice(0, pos) + repl + valid.slice(pos + repl.length);
+    // Bad base64 char (c0 of a mid-string quartet → alphabet lookup fails):
+    expect(unpackBakedSurfaceEffect(corruptAt(100, '!'), TILE_COUNT)).toBeNull();
+    // '=' padding in a NON-final quartet (ch2 of the quartet at index 100):
+    expect(unpackBakedSurfaceEffect(corruptAt(102, '='), TILE_COUNT)).toBeNull();
+    // "x=y" padding form in the final quartet (ch2 '=', ch3 not '='):
+    expect(unpackBakedSurfaceEffect(corruptAt(valid.length - 4, 'AB=C'), TILE_COUNT)).toBeNull();
     expect(unpackBakedSurfaceEffect(packedGridB64(3), TILE_COUNT)).toBeNull(); // enum code 3
     // Non-zero unused trailing bits in the final byte (expectedLen not /4):
     // byte 0b00110000 — tiles 0,1 = 0 but trailing bits 4-7 = 0b0011 ≠ 0.
