@@ -36,9 +36,14 @@ function rotatedAabbHalfExtents(
 
 /** True iff a tile is NOT passable for containment purposes: off-grid tiles and
  *  Solid tiles are "dirt" a sprite must not paint over. (Open/BeingDug/Marked all
- *  render as carved space, so overflow into them is allowed.) */
+ *  render as carved space, so overflow into them is allowed.) Exception: the
+ *  off-grid row ABOVE the grid is NOT dirt — nothing is painted above row 0 in
+ *  the underground viewport, and a freshly-descended ant sits at posY=0 (sprite
+ *  center on the grid's top edge, edgeN=0), so treating above-grid as dirt would
+ *  clamp every descent to scale 0 and make the ant pop out of existence. */
 function isDirt(grid: UndergroundGrid, tileX: number, tileY: number): boolean {
-  if (tileX < 0 || tileY < 0 || tileX >= grid.width || tileY >= grid.height) return true;
+  if (tileY < 0) return false;
+  if (tileX < 0 || tileX >= grid.width || tileY >= grid.height) return true;
   return ugGet(grid, tileX, tileY) === UndergroundTileState.Solid;
 }
 
@@ -49,10 +54,10 @@ function isDirt(grid: UndergroundGrid, tileX: number, tileY: number): boolean {
  * within the union of the anchor tile and its PASSABLE neighbours.
  *
  * Cardinal Solid neighbours clamp the extent toward them to the tile-edge
- * distance exactly; a Solid diagonal clamps BOTH extents toward that corner
- * (conservative — it may shrink slightly more than strictly required for a
- * corner-only obstruction, but never paints dirt and never shrinks below what a
- * Solid cardinal already demands). The anchor tile is assumed walkable (callers
+ * distance exactly; a Solid diagonal clamps only when the AABB crosses both of
+ * its edges, and then only along whichever single axis requires the smaller
+ * shrink (clearing either edge suffices for a corner-only obstruction). The
+ * anchor tile is assumed walkable (callers
  * only draw ants on enterable tiles); a degenerate zero/negative result is
  * floored at 0.
  */
@@ -83,26 +88,25 @@ export function containedScale(
   const clampY = (edge: number): void => {
     factor = Math.min(factor, edge / hy);
   };
+  // A Solid diagonal is only overlapped when the AABB crosses BOTH of its
+  // edges (hx > edgeX AND hy > edgeY), and shrinking along ONE axis suffices
+  // to clear a corner-only obstruction — so take the LESS restrictive of the
+  // two per-axis clamps. Clamping both axes unconditionally would drive the
+  // factor to 0 whenever the center nears a tile edge with dirt diagonally
+  // ahead (e.g. every tile crossing in a 1-wide tunnel).
+  const clampCorner = (edgeX: number, edgeY: number): void => {
+    if (hx > edgeX && hy > edgeY) {
+      factor = Math.min(factor, Math.max(edgeX / hx, edgeY / hy));
+    }
+  };
   if (isDirt(grid, tileX - 1, tileY)) clampX(edgeW);
   if (isDirt(grid, tileX + 1, tileY)) clampX(edgeE);
   if (isDirt(grid, tileX, tileY - 1)) clampY(edgeN);
   if (isDirt(grid, tileX, tileY + 1)) clampY(edgeS);
-  if (isDirt(grid, tileX - 1, tileY - 1)) {
-    clampX(edgeW);
-    clampY(edgeN);
-  }
-  if (isDirt(grid, tileX + 1, tileY - 1)) {
-    clampX(edgeE);
-    clampY(edgeN);
-  }
-  if (isDirt(grid, tileX - 1, tileY + 1)) {
-    clampX(edgeW);
-    clampY(edgeS);
-  }
-  if (isDirt(grid, tileX + 1, tileY + 1)) {
-    clampX(edgeE);
-    clampY(edgeS);
-  }
+  if (isDirt(grid, tileX - 1, tileY - 1)) clampCorner(edgeW, edgeN);
+  if (isDirt(grid, tileX + 1, tileY - 1)) clampCorner(edgeE, edgeN);
+  if (isDirt(grid, tileX - 1, tileY + 1)) clampCorner(edgeW, edgeS);
+  if (isDirt(grid, tileX + 1, tileY + 1)) clampCorner(edgeE, edgeS);
   if (factor >= 1) return desiredScale;
   return Math.max(0, desiredScale * factor);
 }
