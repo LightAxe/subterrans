@@ -573,16 +573,22 @@ export interface SaveFile {
 /**
  * PR 5 C-both — encode the per-ant recent-tiles ring compactly. Emits a flat
  * number[] stream of records sorted by ascending antId; each record is
- * `[antId, head, count, (slot, x, y)×count]` for every ant with `antId <
- * nextEntityId` (skips only NEVER-allocated ids; dead-but-allocated ants ARE
- * included — their ring round-trips exactly, as the canonical encoding requires)
- * AND at least one non-sentinel slot. Slots are emitted in ascending slot order
- * so the encoding is canonical (a given ring state always serializes identically).
+ * `[antId, head, count, (slot, x, y)×count]` for every ALIVE ant with `antId <
+ * nextEntityId` AND at least one non-sentinel slot. Slots are emitted in
+ * ascending slot order so the encoding is canonical (a given ring state always
+ * serializes identically). Dead-but-allocated ants are skipped: entity ids are
+ * never reused and dead rings are never read (all isRecentTile/detour consumers
+ * run only for alive ants), so serializing them would only leak save size
+ * monotonically — an ant killed mid-Searching/CarryingFood (combat, starvation,
+ * lifespan) keeps its populated ring in memory forever. Old saves that contain
+ * dead-ant records still load (unpack doesn't check alive) and self-heal here
+ * on the next save.
  */
 function packRecentTiles(a: AntComponents, nextEntityId: number): number[] {
   const out: number[] = [];
   const limit = Math.min(nextEntityId, a.recentTilesHead.length);
   for (let id = 0; id < limit; id++) {
+    if (a.alive[id] !== 1) continue;
     const base = id * RECENT_TILES_LEN;
     let count = 0;
     for (let s = 0; s < RECENT_TILES_LEN; s++) {

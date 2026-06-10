@@ -464,8 +464,11 @@ describe('PR 5 — recent-tiles field-specific copy + save/load round-trip (R3-1
   it('copyWorldState preserves the ring; save/load round-trips a mutated ring exactly', () => {
     const world = createScenario(42, 'Normal');
     const a = world.ants;
-    // Mutate a deterministic non-trivial ring on a live ant: distinct slots + head.
-    const id = 0;
+    // Mutate a deterministic non-trivial ring on a live ant: distinct slots +
+    // head. Must be an ALIVE ant — packRecentTiles skips dead-but-allocated
+    // ids (their rings are never read and would leak save size).
+    const id = world.colonies[PLAYER_COLONY_ID]!.workers[0]!;
+    expect(a.alive[id]).toBe(1);
     const base = id * RECENT_TILES_LEN;
     for (let s = 0; s < RECENT_TILES_LEN; s++) {
       a.recentTilesX[base + s] = RECENT_TILES_SENTINEL;

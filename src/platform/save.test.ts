@@ -437,46 +437,63 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
 
     // Seed a couple of ants' recent-tiles rings so packRecentTiles emits a
     // non-trivial stream (createScenario starts every ring sentinel-filled).
+    // Uses ALIVE worker ids — packRecentTiles skips dead-but-allocated ants
+    // (their rings are never read and would otherwise leak save size).
     function scenarioWithRecentTiles() {
       const w = createScenario(42);
-      // The scenario already allocates many ants (nextEntityId well above the
-      // ids touched here), so ids 1 and 3 are within packRecentTiles' range.
+      const [idA, idB] = w.colonies[PLAYER_COLONY_ID]!.workers as readonly number[];
+      if (idA === undefined || idB === undefined) throw new Error('scenario lacks two workers');
       const set = (id: number, slot: number, x: number, y: number): void => {
         const base = id * RECENT_TILES_LEN;
         w.ants.recentTilesX[base + slot] = x;
         w.ants.recentTilesY[base + slot] = y;
       };
-      set(1, 0, 5, 6);
-      set(1, 2, 7, 8);
-      w.ants.recentTilesHead[1] = 3;
-      set(3, 1, 10, 20);
-      w.ants.recentTilesHead[3] = 1;
-      return w;
+      set(idA, 0, 5, 6);
+      set(idA, 2, 7, 8);
+      w.ants.recentTilesHead[idA] = 3;
+      set(idB, 1, 10, 20);
+      w.ants.recentTilesHead[idB] = 1;
+      return { w, idA, idB };
     }
 
     it('round-trips a populated ring exactly (slots, coords, head)', () => {
-      const w = scenarioWithRecentTiles();
+      const { w, idA, idB } = scenarioWithRecentTiles();
       const w2 = deserializeWorldState(serializeWorldState(w));
-      const b1 = 1 * RECENT_TILES_LEN;
-      const b3 = 3 * RECENT_TILES_LEN;
+      const b1 = idA * RECENT_TILES_LEN;
+      const b3 = idB * RECENT_TILES_LEN;
       expect(w2.ants.recentTilesX[b1 + 0]).toBe(5);
       expect(w2.ants.recentTilesY[b1 + 0]).toBe(6);
       expect(w2.ants.recentTilesX[b1 + 2]).toBe(7);
       expect(w2.ants.recentTilesY[b1 + 2]).toBe(8);
-      expect(w2.ants.recentTilesHead[1]).toBe(3);
+      expect(w2.ants.recentTilesHead[idA]).toBe(3);
       expect(w2.ants.recentTilesX[b3 + 1]).toBe(10);
       expect(w2.ants.recentTilesY[b3 + 1]).toBe(20);
-      expect(w2.ants.recentTilesHead[3]).toBe(1);
+      expect(w2.ants.recentTilesHead[idB]).toBe(1);
       // Slots not written stay sentinel.
       expect(w2.ants.recentTilesX[b1 + 1]).toBe(SENTINEL);
     });
 
     it('round-trips byte-for-byte through full serialize → deserialize → serialize', () => {
-      const w = scenarioWithRecentTiles();
+      const { w } = scenarioWithRecentTiles();
       const s1 = JSON.stringify(serializeWorldState(w));
       const w2 = deserializeWorldState(JSON.parse(s1));
       const s2 = JSON.stringify(serializeWorldState(w2));
       expect(s2).toBe(s1);
+    });
+
+    it('skips dead-but-allocated ants (populated ring on a dead ant is not serialized)', () => {
+      // Regression: ids are never reused and dead rings are never read, but an
+      // ant killed mid-Searching/CarryingFood keeps its populated ring forever.
+      // Serializing it would grow every subsequent save monotonically.
+      const { w, idA, idB } = scenarioWithRecentTiles();
+      w.ants.alive[idA] = 0; // killed with a populated ring (e.g. spider combat)
+      const w2 = deserializeWorldState(serializeWorldState(w));
+      const b1 = idA * RECENT_TILES_LEN;
+      expect(w2.ants.recentTilesX[b1 + 0]).toBe(SENTINEL);
+      expect(w2.ants.recentTilesHead[idA]).toBe(0);
+      // The surviving alive ant's ring still round-trips.
+      expect(w2.ants.recentTilesX[idB * RECENT_TILES_LEN + 1]).toBe(10);
+      expect(w2.ants.recentTilesHead[idB]).toBe(1);
     });
 
     // Build a valid serialized snapshot, then overwrite ants.recentTiles with a
