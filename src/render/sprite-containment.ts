@@ -20,7 +20,7 @@ import { TILE_SIZE_PX } from './sprites.js';
 /** Rotated axis-aligned bounding-box half-extents (px) of a `w`×`h` sprite at
  *  `scale`, rotated by `rotation` radians. Center-origin, so the AABB is
  *  [cx−hx, cx+hx] × [cy−hy, cy+hy]. */
-export function rotatedAabbHalfExtents(
+function rotatedAabbHalfExtents(
   w: number,
   h: number,
   rotation: number,

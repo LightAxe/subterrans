@@ -712,3 +712,32 @@ describe('PR 6 — save size + tick-time + neutrality (sim guards add no field; 
     );
   }, 120_000);
 });
+
+describe('#128 class-ii queen descent guard (PR 6, all queen descent paths)', () => {
+  it('a queen on an open entrance does NOT descend onto a non-enterable column top', () => {
+    const world = createScenario(42, 'Normal');
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const qId = colony.queenEntityId;
+    // An open entrance whose underground column-top is corrupt (Solid).
+    const ex = PLAYER_START_X + 4;
+    colony.entrances.push({
+      entranceId: 99,
+      surfaceTileX: ex,
+      surfaceTileY: PLAYER_START_Y,
+      isOpen: true,
+    });
+    ugSet(world.undergroundGrids[PLAYER_COLONY_ID]!, ex, 0, UndergroundTileState.Solid);
+    // Stand the queen ON that open entrance tile (surface) — this routes her
+    // through the pre-move descent short-circuit (ant-system.ts ~3686), the third
+    // descent path the V30 guard now covers.
+    world.ants.posX[qId] = (ex << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[qId] = (PLAYER_START_Y << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.zone[qId] = Zone.Surface;
+
+    tick(world, []);
+
+    // The guard blocks descent onto the Solid column top — she holds on the surface.
+    expect(world.ants.zone[qId]).toBe(Zone.Surface);
+    console.log('PASS PR6 #128 class-ii queen: descent onto non-enterable column top blocked');
+  });
+});
