@@ -12,7 +12,7 @@
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
 import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
-import { LATEST_SIM_VERSION, SIM_VERSION_V29_PATH_AWARE_ROUTING } from '../sim/types.js';
+import { LATEST_SIM_VERSION, SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS } from '../sim/types.js';
 import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/constants.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
 import {
@@ -124,12 +124,11 @@ export class FutureSimVersionError extends Error {
   }
 }
 
-// PR 5 (posture 2): path-aware routing changes steering and the recent-tiles ring
-// changes the on-disk recent-tiles shape (compact encoding). A pre-V29 save would
-// either replay differently or carry the old flat recent-tiles layout, so raise
-// the floor to reject pre-V29 saves cleanly rather than load a mismatched world.
-// (Supersedes the PR 4 V28 floor; static-terrain reasoning still applies.)
-export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V29_PATH_AWARE_ROUTING;
+// PR 6-sim (posture 2): the underground-embedding guards change descent and
+// underground-mutation behaviour, so a pre-V30 save would replay differently.
+// Raise the floor to reject pre-V30 saves cleanly. (Supersedes the PR 5 V29
+// floor; path-aware-routing + static-terrain reasoning still applies.)
+export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS;
 
 export class OldSimVersionError extends Error {
   constructor(public got: number | null) {

@@ -1330,6 +1330,10 @@ describe('tickAntMovement — zone transitions', () => {
       isOpen: true,
     });
     setupSurfaceGrid(world); // register pheromone grid (not needed for digging but prevents missing-grid path)
+    // PR 6-sim landing-tile guard: an OPEN entrance has an excavated shaft, so the
+    // landing tile (10, 0) is Open. (Real play: DesignateEntrance marks the shaft
+    // and excavation opens it; this manual entrance.push bypasses that.)
+    ugSet(world.undergroundGrids[COLONY_ID]!, 10, 0, UndergroundTileState.Open);
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -1395,6 +1399,12 @@ describe('tickAntMovement — zone transitions', () => {
       surfaceTileY: 5,
       isOpen: false, // designated but not yet excavated
     });
+
+    // PR 6-sim landing-tile guard: DesignateEntrance auto-marks the shaft column,
+    // so a freshly-designated (closed) entrance has (5, 0) = Marked — enterable by
+    // a Digger (the task that excavates it). This manual entrance.push bypasses the
+    // auto-mark, so set it here to reflect real designated-entrance state.
+    ugSet(world.undergroundGrids[COLONY_ID]!, 5, 0, UndergroundTileState.Marked);
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -8173,6 +8183,9 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     const { world, colony } = setupWorldWithUnderground(16, 16);
     world.simVersion = SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX;
     colony.entrances = [{ entranceId: 1, surfaceTileX: 5, surfaceTileY: 5, isOpen: true }];
+    // PR 6-sim landing-tile guard: an open entrance has an excavated shaft, so the
+    // carrier's landing tile (5, 0) is Open (else the V30 guard blocks descent).
+    ugSet(world.undergroundGrids[COLONY_ID]!, 5, 0, UndergroundTileState.Open);
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {

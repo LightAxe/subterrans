@@ -376,7 +376,14 @@ export const SIM_VERSION_V28_STATIC_TERRAIN = 28 as const;
 // recent-tiles buffer length both change behaviour and on-disk shape. Posture 2
 // (bump + raise MIN_ACCEPTED, no cross-version gate); pre-V29 saves reject at load.
 export const SIM_VERSION_V29_PATH_AWARE_ROUTING = 29 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V29_PATH_AWARE_ROUTING;
+// PR 6-sim — #128 underground-embedding guards: a descent landing-tile validity
+// check (an ant only lands on a tile it canEnterUndergroundTile for its task) and
+// a task-aware occupancy guard on every passability-tightening underground
+// mutation (CancelDigMark, chamber-cancel, dead-digger cleanup). Both change
+// tick-level behaviour. Posture 2 (bump + raise MIN_ACCEPTED, no cross-version
+// gate); pre-V30 saves reject at load. (PR 6-render is render-only — no bump.)
+export const SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS = 30 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS;
 
 /**
  * S2 — AI colony state machine states.

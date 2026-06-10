@@ -46,6 +46,7 @@ import {
 import { ChamberType } from '../enums.js';
 import { allocateWorkers } from '../behavior/allocation-system.js';
 import { ugGet, ugSet, UndergroundTileState } from '../terrain.js';
+import { findEmbeddedByTightening } from '../underground-occupancy.js';
 import { FP_SHIFT } from '../fixed.js';
 
 // ---------------------------------------------------------------------------
@@ -709,6 +710,27 @@ export function tickDeadDiggerCleanup(world: WorldState): void {
     const ug = world.undergroundGrids[cid];
     if (!ug) continue;
     if (ugGet(ug, dtx, dty) === UndergroundTileState.BeingDug) {
+      // PR 6-sim (V30, #128 class-iv) — occupancy guard. Reverting BeingDug→Marked
+      // embeds a non-digger standing on the tile (Marked is non-passable for
+      // them). If such an occupant is present, RETAIN the dead ant's claim and
+      // skip the revert this tick — retry on a later tick once the occupant moves.
+      // Retaining (rather than blocking + clearing the claim) is mandatory: the
+      // claim is the only owner of this BeingDug tile, so clearing it while
+      // blocking would ORPHAN the tile as BeingDug forever (R2-8). A digger
+      // occupant does NOT block (Marked is passable for diggers).
+      //
+      // LIVENESS BOUND: retain+retry assumes the occupant eventually leaves. Every
+      // current underground task does move off a passable BeingDug tile — diggers
+      // dig elsewhere, foragers/carriers route to food/entrance, and idle ants are
+      // reassigned by the step-10a allocation pass — so the deferral resolves in a
+      // bounded number of ticks. Entity ids are monotonic (never reused), so the
+      // dead claim is never aliased by reallocation while it waits. A hypothetical
+      // permanently-stationary non-digger parked on the tile is the only soft-lock,
+      // and no current task produces one; if one is ever added, switch this to the
+      // spec's displace-the-occupant-then-revert alternative (R2-8).
+      if (findEmbeddedByTightening(world, cid, dtx, dty, UndergroundTileState.Marked) !== -1) {
+        continue; // retain claim (digTileX/Y/Remaining untouched); retry next tick
+      }
       ugSet(ug, dtx, dty, UndergroundTileState.Marked);
       world.colonies[cid]!.digFlowFieldDirty = true; // typed field (Plan 03 Task 1)
     }
