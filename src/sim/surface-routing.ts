@@ -53,25 +53,40 @@ export function packReachableStep(dx: number, dy: number): number {
 /** The AtGoal sentinel — a (0,0) step (distance 0; ant already on its target). */
 export const SURFACE_STEP_AT_GOAL = packReachableStep(0, 0);
 
-// Module-level BFS scratch queue (AGENTS.md hot-loop no-alloc rule; same
-// pattern as combat.ts's sweep scratch). Transient within one
-// computeSurfaceGoalField call: head/tail restart at 0 and every cell is
-// written before it is read, so no state crosses calls (or worlds). Lazily
-// allocated so importing the module costs nothing.
-let goalBfsQueueScratch: Int32Array | null = null;
+// Per-world BFS scratch queue (AGENTS.md hot-loop no-alloc rule), keyed by
+// world identity like tick.ts's issue-#160 flow-field scratch — NOT a module
+// singleton, which the ECS conventions ban for src/sim. The queue is transient
+// within one computeSurfaceGoalField call (head/tail restart at 0 and every
+// cell is written before it is read), so it carries no sim state and needs no
+// serialization; the WeakMap only exists so the reusable buffer is owned by a
+// world and garbage-collected with it.
+const goalBfsQueueByWorld = new WeakMap<WorldState, Int32Array>();
+
+function getGoalBfsQueue(world: WorldState): Int32Array {
+  let queue = goalBfsQueueByWorld.get(world);
+  if (queue === undefined) {
+    queue = new Int32Array(SURFACE_TILE_COUNT);
+    goalBfsQueueByWorld.set(world, queue);
+  }
+  return queue;
+}
 
 /**
  * BFS distance-to-target over the connected component of the frozen terrain
  * (4-connected, non-HardBlock). Returns Int32Array(SURFACE_TILE_COUNT): each
  * cell is the tile-count distance to (targetTileX, targetTileY), or
- * SURFACE_GOAL_UNREACHED for tiles in no/another component. Pure + allocates
- * only the returned field (the BFS queue is reused module scratch) — the field
- * itself must be a fresh allocation because `ensureSurfaceGoalField` caches it.
+ * SURFACE_GOAL_UNREACHED for tiles in no/another component. Allocates only the
+ * returned field — the field must be fresh because `ensureSurfaceGoalField`
+ * caches it. `queueScratch` is an optional reusable BFS queue (length
+ * SURFACE_TILE_COUNT; fully overwritten before reads, so its prior contents
+ * never matter); when omitted a transient queue is allocated, which is fine
+ * off the hot path (tests, one-off tools).
  */
 export function computeSurfaceGoalField(
   grid: Uint8Array,
   targetTileX: number,
   targetTileY: number,
+  queueScratch?: Int32Array,
 ): Int32Array {
   if (grid.length !== SURFACE_TILE_COUNT) {
     throw new Error(
@@ -89,11 +104,7 @@ export function computeSurfaceGoalField(
   }
   const targetIdx = targetTileY * SURFACE_GRID_WIDTH + targetTileX;
   if (grid[targetIdx] === SurfaceMovementEffect.HardBlock) return dist;
-  let queue = goalBfsQueueScratch;
-  if (queue === null) {
-    queue = new Int32Array(SURFACE_TILE_COUNT);
-    goalBfsQueueScratch = queue;
-  }
+  const queue = queueScratch !== undefined ? queueScratch : new Int32Array(SURFACE_TILE_COUNT);
   let head = 0;
   let tail = 0;
   dist[targetIdx] = 0;
@@ -141,10 +152,10 @@ function visitGoalNeighbour(
  * Hot-loop note (AGENTS.md): callers sit inside the per-ant movement loop, but
  * the compute path runs at most ONCE per target tile for the world's lifetime
  * (frozen terrain) — every later call is a Map hit. The one-off compute
- * allocates only the cached field itself (the BFS queue is module scratch),
- * the same world-owned-cache shape as the issue-#160 flow-field scratch. New
- * targets appear at pile-spawn cadence (a handful per tick at worst), not per
- * ant.
+ * allocates only the cached field itself (the BFS queue is per-world scratch
+ * via `getGoalBfsQueue`), the same world-owned-cache shape as the issue-#160
+ * flow-field scratch. New targets appear at pile-spawn cadence (a handful per
+ * tick at worst), not per ant.
  */
 export function ensureSurfaceGoalField(
   world: WorldState,
@@ -159,7 +170,12 @@ export function ensureSurfaceGoalField(
   const key = targetTileY * SURFACE_GRID_WIDTH + targetTileX;
   const existing = cache.get(key);
   if (existing !== undefined) return existing;
-  const field = computeSurfaceGoalField(world.bakedSurfaceEffect, targetTileX, targetTileY);
+  const field = computeSurfaceGoalField(
+    world.bakedSurfaceEffect,
+    targetTileX,
+    targetTileY,
+    getGoalBfsQueue(world),
+  );
   if (cache.size >= SURFACE_GOAL_FIELD_CACHE_CAP) cache.clear();
   cache.set(key, field);
   return field;
