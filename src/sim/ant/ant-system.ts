@@ -2719,9 +2719,12 @@ export function tickExcursionBoundary(world: WorldState): void {
     // (findNearestScentPile): it reads no terrain grid, so it is safe for the
     // underground SearchingFood/ReturningToNest ants this loop also visits. Post
     // PR 4 every food pile is in the single walkable component, so for a surface
-    // ant the Manhattan-nearest in-range pile IS the reachable one the movement
-    // code (findReachableScentPile) picks — the two agree on the real cases, and
-    // off-component piles (where they could differ) cannot occur.
+    // ant the Manhattan-nearest in-range pile is usually the reachable one the
+    // movement code (findReachableScentPile) picks. They can diverge when a
+    // wall detour pushes the pile's PATH distance past FOOD_SCENT_RADIUS
+    // (movement gates eligibility on path distance): hasScent is then true
+    // while movement falls through to pheromone/wander — a conservative
+    // keep-searching signal, never a stranding one.
     const hasScent = hasPriority ? false : findNearestScentPile(world, tileX, tileY) !== null;
     let hasPheromone = false;
     if (!hasPriority && !hasScent) {
@@ -2885,13 +2888,28 @@ function findNearestScentPile(
 
 /**
  * PR 5 Fix-A scent selection: among food piles within FOOD_SCENT_RADIUS
- * (Manhattan eligibility), pick the one with
- * the shortest REACHABLE path over the static goal field, so a walled-off
+ * (PATH-distance eligibility over the static goal field), pick the one with
+ * the shortest reachable path, so a walled-off
  * in-range pile loses to a reachable one. Ties (equal path distance) break on
  * lowest `foodPileId` — preserving the existing deterministic tie-break. An
  * eligible-but-unreachable pile (off the ant's component) is skipped; post-PR 4
  * single-component connectivity makes that impossible for spawned piles, but the
  * guard keeps the selector total. Returns the pile's tile, or null.
+ *
+ * Eligibility is gated on PATH distance, not Manhattan distance, because the
+ * targeted-step no-revisit bypass relies on the step strictly decreasing the
+ * eligibility quantity every tick. A path-aware descent step can INCREASE
+ * Manhattan distance to the pile (detour around a wall), so Manhattan
+ * eligibility could flicker at the radius boundary — the targeted pile drops
+ * out on the very step taken toward it, selection switches piles, and the two
+ * targeted steps can form a permanent cycle no loop-breaker interrupts. Path
+ * distance strictly decreases along every stepTowardReachable step, so a
+ * targeted pile can never leave eligibility by stepping toward it. The
+ * Manhattan check below is only a cheap pre-filter: the field is 4-connected
+ * BFS, so pathDist >= manhattan and manhattan > radius implies pathDist >
+ * radius. Consequence: a pile whose shortest path exceeds the radius (long
+ * wall detour) is no longer scent-eligible even when Manhattan-close — it
+ * falls back to trail-following/exploration like any other far pile.
  */
 function findReachableScentPile(
   world: WorldState,
@@ -2905,9 +2923,10 @@ function findReachableScentPile(
   for (let p = 0; p < world.foodPiles.length; p++) {
     const pile = world.foodPiles[p]!;
     const manhattan = Math.abs(pile.tileX - tileX) + Math.abs(pile.tileY - tileY);
-    if (manhattan > FOOD_SCENT_RADIUS) continue; // eligibility unchanged
+    if (manhattan > FOOD_SCENT_RADIUS) continue; // cheap pre-filter (pathDist >= manhattan)
     const pathDist = surfaceGoalDistance(world, tileX, tileY, pile.tileX, pile.tileY);
     if (pathDist === SURFACE_GOAL_UNREACHED) continue; // walled off from this ant
+    if (pathDist > FOOD_SCENT_RADIUS) continue; // eligibility gates on PATH distance (see doc)
     if (
       bestId === -1 ||
       pathDist < bestDist ||
@@ -4589,10 +4608,15 @@ export function tickAntMovement(
         }
       } else {
         // 09 foraging-autonomy memo: short-range scent pull toward an unmarked
-        // pile within FOOD_SCENT_RADIUS (Manhattan). PR 5 Fix-A:
-        //  - SURFACE: rank eligible piles by REACHABLE path distance over the
-        //    static field (a walled-off in-range pile loses to a reachable one;
-        //    final tie-break lowest foodPileId), then step path-aware.
+        // pile within FOOD_SCENT_RADIUS (path distance). PR 5 Fix-A:
+        //  - SURFACE: gate eligibility AND rank by REACHABLE path distance over
+        //    the static field (a walled-off in-range pile loses to a reachable
+        //    one; final tie-break lowest foodPileId), then step path-aware.
+        //    Path-distance eligibility (not Manhattan) keeps the targeted-step
+        //    monotonicity invariant: the quantity that gates eligibility is the
+        //    one each stepTowardReachable step strictly decreases, so the
+        //    selected pile cannot flicker out of range mid-approach (see
+        //    findReachableScentPile doc).
         //  - UNDERGROUND: the pre-PR-5 pull steered underground foragers by
         //    SURFACE-pile COORDINATES — meaningless in underground space (it fed
         //    surface tile coords to an underground walker). V29 DELIBERATELY drops
@@ -4794,6 +4818,11 @@ export function tickAntMovement(
     // so it can never loop, and a no-revisit alternate would risk steering it
     // into a wall or a higher-distance tile (R2 + R4-5). No-revisit still applies
     // to the untargeted wander/pheromone path, where C-both's deeper buffer helps.
+    // The no-loop claim also holds across per-tick scent RESELECTION because
+    // findReachableScentPile gates eligibility on PATH distance: the previously
+    // targeted pile's path distance shrank by 1, so it stays eligible and the
+    // SELECTED pile's path distance strictly decreases every scent-targeted tick
+    // (a monotone potential), regardless of which pile wins reselection.
     if (
       !targetedStep &&
       zone === Zone.Surface &&

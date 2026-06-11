@@ -235,28 +235,17 @@ describe('stepTowardReachable', () => {
 
     const world = worldWithGrid(grid);
     const here = surfaceGoalDistance(world, source.x, source.y, target.x, target.y);
-    const nwDist = surfaceGoalDistance(world, source.x - 1, source.y - 1, target.x, target.y);
-    const northDist = surfaceGoalDistance(world, source.x, source.y - 1, target.x, target.y);
-    const westDist = surfaceGoalDistance(world, source.x - 1, source.y, target.x, target.y);
 
     const step = stepTowardReachable(world, source.x, source.y, target.x, target.y);
     const dx = unpackStepDx(step);
     const dy = unpackStepDy(step);
 
-    // The key check: if the function returned NW diagonal (dx=-1, dy=-1),
-    // then both N and W should be blocked (unreachable or higher cost)
-    // AND NW should have a lower distance than source
-    if (dx === -1 && dy === -1) {
-      // We selected NW. Verify it's a valid descent.
-      expect(nwDist).toBeLessThan(here);
-      // If both N and W are blocked/unreachable, that's the problematic scenario
-      if (northDist === -1 && westDist === -1) {
-        // Both orthogonals unreachable: this is the corner case
-        // The algorithm might still return NW if it has lower distance
-        // This is where the warning applies
-        expect(nwDist).toBeLessThan(here);
-      }
-    }
+    // The key check: NW (dx=-1, dy=-1) must NOT be selected — both of its
+    // orthogonals (N and W) are blocked, so the corner-squeeze rejection in
+    // stepTowardReachable makes the diagonal ineligible even though NW itself
+    // is passable and shorter. The algorithm selects NE instead (or SW — both
+    // are equidistant at 10; NE wins the tie-break due to iteration order).
+    expect([dx, dy]).not.toEqual([-1, -1]);
 
     const landed = surfaceGoalDistance(world, source.x + dx, source.y + dy, target.x, target.y);
     expect(landed).toBeGreaterThanOrEqual(0); // landed on a passable, reachable tile

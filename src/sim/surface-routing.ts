@@ -162,6 +162,17 @@ export function ensureSurfaceGoalField(
   targetTileX: number,
   targetTileY: number,
 ): Int32Array {
+  if (
+    targetTileX < 0 ||
+    targetTileY < 0 ||
+    targetTileX >= SURFACE_GRID_WIDTH ||
+    targetTileY >= SURFACE_GRID_HEIGHT
+  ) {
+    // Out-of-grid target (e.g. a stale leftover coordinate): return an
+    // all-UNREACHED field WITHOUT caching — the key arithmetic below would
+    // alias an out-of-grid target onto a valid tile's cache slot.
+    return new Int32Array(SURFACE_TILE_COUNT).fill(SURFACE_GOAL_UNREACHED);
+  }
   let cache = world.surfaceGoalFields;
   if (cache === null) {
     cache = new Map<number, Int32Array>();

@@ -665,9 +665,10 @@ const HARNESS_FOOD_SCENT_RADIUS = 15;
 
 /**
  * Replicate Fix-A's `findReachableScentPile` (`ant-system.ts`): among food piles
- * within FOOD_SCENT_RADIUS (Manhattan eligibility), pick the one with the
- * shortest REACHABLE path over the static surface goal field, so a walled-off
- * in-range pile loses to a reachable one. Ties (equal path distance) break on
+ * whose PATH distance over the static surface goal field is within
+ * FOOD_SCENT_RADIUS (Manhattan is only a cheap pre-filter), pick the one with
+ * the shortest reachable path, so a walled-off or long-detour in-range pile
+ * loses to a reachable one. Ties (equal path distance) break on
  * lowest `foodPileId`; eligible-but-unreachable piles are skipped. This is the
  * NEW selection — the pre-Fix-A harness used Manhattan-nearest, which could pick
  * a different (possibly walled-off) pile than the sim actually routes to. Exact
@@ -685,9 +686,10 @@ function reachableScentPile(
   let bestY = 0;
   for (const pile of world.foodPiles) {
     const manhattan = Math.abs(pile.tileX - tileX) + Math.abs(pile.tileY - tileY);
-    if (manhattan > HARNESS_FOOD_SCENT_RADIUS) continue; // eligibility unchanged
+    if (manhattan > HARNESS_FOOD_SCENT_RADIUS) continue; // cheap pre-filter (pathDist >= manhattan)
     const pathDist = surfaceGoalDistance(world, tileX, tileY, pile.tileX, pile.tileY);
     if (pathDist === SURFACE_GOAL_UNREACHED) continue; // walled off from this ant
+    if (pathDist > HARNESS_FOOD_SCENT_RADIUS) continue; // eligibility gates on PATH distance (mirrors sim)
     if (
       bestId === -1 ||
       pathDist < bestDist ||
