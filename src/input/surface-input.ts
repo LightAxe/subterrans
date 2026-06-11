@@ -38,7 +38,7 @@ import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
 } from '../sim/constants.js';
-import { isSurfaceTileInComponent } from '../sim/surface-features.js';
+import { getSurfaceComponentMaskReadOnly } from '../sim/surface-features.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { TILE_SIZE_PX } from '../render/sprites.js';
 import { SPIDER_SPRITE_WIDTH, SPIDER_SPRITE_HEIGHT } from '../render/ant-sprite-layer.js';
@@ -118,16 +118,23 @@ export function isEmptySurfaceTile(world: WorldState, tileX: number, tileY: numb
  */
 export function isValidEntranceTarget(world: WorldState, tileX: number, tileY: number): boolean {
   if (!isEmptySurfaceTile(world, tileX, tileY)) return false;
-  if (!isSurfaceTileInComponent(world, tileX, tileY)) return false;
+  // Read-only mask access: `isSurfaceTileInComponent` lazily writes the memoised
+  // mask back to the world on a miss, and input code must never mutate sim state
+  // (sim/render boundary) — fetch the mask once, without filling the cache.
+  const mask = getSurfaceComponentMaskReadOnly(world);
+  if (tileX < 0 || tileY < 0 || tileX >= SURFACE_GRID_WIDTH || tileY >= SURFACE_GRID_HEIGHT) {
+    return false;
+  }
+  if (mask[tileY * SURFACE_GRID_WIDTH + tileX] !== 1) return false;
   for (let dy = -SURFACE_ROOT_CLEARANCE_RADIUS; dy <= SURFACE_ROOT_CLEARANCE_RADIUS; dy++) {
     for (let dx = -SURFACE_ROOT_CLEARANCE_RADIUS; dx <= SURFACE_ROOT_CLEARANCE_RADIUS; dx++) {
       const cx = tileX + dx;
       const cy = tileY + dy;
       // Bound with the grid CONSTANTS (not world.surface.*) so the preview gate
-      // clamps identically to the sim gate + isSurfaceTileInComponent (which use
-      // the constants). Identical in production; consistent for hand-built worlds.
+      // clamps identically to the sim gate + the mask indexing (which use the
+      // constants). Identical in production; consistent for hand-built worlds.
       if (cx < 0 || cy < 0 || cx >= SURFACE_GRID_WIDTH || cy >= SURFACE_GRID_HEIGHT) continue;
-      if (!isSurfaceTileInComponent(world, cx, cy)) return false;
+      if (mask[cy * SURFACE_GRID_WIDTH + cx] !== 1) return false;
     }
   }
   return true;

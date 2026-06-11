@@ -847,6 +847,23 @@ export function ensureSurfaceComponentMask(world: WorldState): Uint8Array {
   return mask;
 }
 
+/**
+ * Read-only component-mask access for non-sim callers (the input-layer entrance
+ * preview). The sim/render boundary lets input code READ world state but never
+ * mutate it, and `ensureSurfaceComponentMask` writes the memoised mask back to
+ * the world on a miss — so input must not call it. The sim lifecycle populates
+ * the mask before any input can run (`createScenario`, `deserializeWorldState`
+ * and the tick all ensure it), so this normally returns the cached mask; on a
+ * null cache (hand-built worlds, unit tests) it computes a TRANSIENT mask and
+ * does NOT cache it, staying pure with respect to the world.
+ */
+export function getSurfaceComponentMaskReadOnly(world: WorldState): Uint8Array {
+  const mask = world.surfaceComponentMask;
+  if (mask !== null && mask !== undefined) return mask;
+  const root = canonicalSurfaceRoot(world);
+  return computeSurfaceComponentMask(world.bakedSurfaceEffect, root.tileX, root.tileY);
+}
+
 /** True iff (tileX, tileY) is walkable AND in the single connected surface
  *  component — the reachable-spawn gate for piles + entrances. */
 export function isSurfaceTileInComponent(world: WorldState, tileX: number, tileY: number): boolean {

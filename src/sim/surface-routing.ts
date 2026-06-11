@@ -53,12 +53,20 @@ export function packReachableStep(dx: number, dy: number): number {
 /** The AtGoal sentinel — a (0,0) step (distance 0; ant already on its target). */
 export const SURFACE_STEP_AT_GOAL = packReachableStep(0, 0);
 
+// Module-level BFS scratch queue (AGENTS.md hot-loop no-alloc rule; same
+// pattern as combat.ts's sweep scratch). Transient within one
+// computeSurfaceGoalField call: head/tail restart at 0 and every cell is
+// written before it is read, so no state crosses calls (or worlds). Lazily
+// allocated so importing the module costs nothing.
+let goalBfsQueueScratch: Int32Array | null = null;
+
 /**
  * BFS distance-to-target over the connected component of the frozen terrain
  * (4-connected, non-HardBlock). Returns Int32Array(SURFACE_TILE_COUNT): each
  * cell is the tile-count distance to (targetTileX, targetTileY), or
- * SURFACE_GOAL_UNREACHED for tiles in no/another component. Pure +
- * allocation-bounded (one Int32Array field + one Int32Array queue).
+ * SURFACE_GOAL_UNREACHED for tiles in no/another component. Pure + allocates
+ * only the returned field (the BFS queue is reused module scratch) — the field
+ * itself must be a fresh allocation because `ensureSurfaceGoalField` caches it.
  */
 export function computeSurfaceGoalField(
   grid: Uint8Array,
@@ -81,7 +89,11 @@ export function computeSurfaceGoalField(
   }
   const targetIdx = targetTileY * SURFACE_GRID_WIDTH + targetTileX;
   if (grid[targetIdx] === SurfaceMovementEffect.HardBlock) return dist;
-  const queue = new Int32Array(SURFACE_TILE_COUNT);
+  let queue = goalBfsQueueScratch;
+  if (queue === null) {
+    queue = new Int32Array(SURFACE_TILE_COUNT);
+    goalBfsQueueScratch = queue;
+  }
   let head = 0;
   let tail = 0;
   dist[targetIdx] = 0;
@@ -125,6 +137,14 @@ function visitGoalNeighbour(
  * needs invalidation while the world lives — a depleted pile's field simply goes
  * unused and a new pile elsewhere builds its own. Bounded; clears all on
  * overflow. Derived state (not serialized), like `surfaceComponentMask`.
+ *
+ * Hot-loop note (AGENTS.md): callers sit inside the per-ant movement loop, but
+ * the compute path runs at most ONCE per target tile for the world's lifetime
+ * (frozen terrain) — every later call is a Map hit. The one-off compute
+ * allocates only the cached field itself (the BFS queue is module scratch),
+ * the same world-owned-cache shape as the issue-#160 flow-field scratch. New
+ * targets appear at pile-spawn cadence (a handful per tick at worst), not per
+ * ant.
  */
 export function ensureSurfaceGoalField(
   world: WorldState,
