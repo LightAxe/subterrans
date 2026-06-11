@@ -25,7 +25,7 @@ import {
   QUEEN_SPRITE_WIDTH,
   QUEEN_SPRITE_HEIGHT,
 } from './ant-sprite-layer.js';
-import { containedScale } from './sprite-containment.js';
+import { containSpritePlacement } from './sprite-containment.js';
 import { computeAntRotation, type AntFacingCache } from './ant-facing-cache.js';
 import { ugGet, UndergroundTileState } from '../sim/terrain.js';
 import { isAlive } from '../sim/ant/ant-store.js';
@@ -570,22 +570,39 @@ export function drawUndergroundEntities(
     const owningColonyId = curr.ants.colonyId[id];
     const tint = owningColonyId === PLAYER_COLONY_ID ? COLOR_PLAYER_COLONY : COLOR_ENEMY_COLONY;
     const isFighter2 = curr.ants.task[id] === AntTask.Fighting;
-    // PR 6-render (#128 class-iii) — clamp the scale so the sprite's rotated
-    // footprint never paints over a Solid/off-grid neighbour. baseX/baseY are the
-    // interpolated grid-space pixel center (pre-camera-offset), which is what the
-    // containment math is in terms of. Workers at natural size already fit a tile,
-    // so they clamp only when rotation enlarges their AABB near dirt.
+    // PR 6-render (#128 class-iii) — contain the sprite's rotated footprint so
+    // it never paints over a Solid/off-grid neighbour. baseX/baseY are the
+    // interpolated grid-space pixel center (pre-camera-offset), which is what
+    // the containment math is in terms of. Containment nudges POSITION before
+    // scale (containSpritePlacement): the sim pins shaft/descent ants to exact
+    // tile-edge coordinates, where a pure scale clamp against the Solid shaft
+    // wall would collapse them to scale 0 (invisible). Workers at natural size
+    // already fit a tile, so they adjust only when rotation enlarges their AABB
+    // near dirt or they sit on a tile edge beside it.
     const desiredScale = isFighter2 && !isQueen ? 1.25 : 1.0;
     const nativeW = isQueen ? QUEEN_SPRITE_WIDTH : WORKER_SPRITE_WIDTH;
     const nativeH = isQueen ? QUEEN_SPRITE_HEIGHT : WORKER_SPRITE_HEIGHT;
-    const scale =
-      ugGrid === undefined
-        ? desiredScale
-        : containedScale(ugGrid, baseX, baseY, nativeW, nativeH, rotation, desiredScale);
+    let scale = desiredScale;
+    let drawX = screenX;
+    let drawY = screenY;
+    if (ugGrid !== undefined) {
+      const placed = containSpritePlacement(
+        ugGrid,
+        baseX,
+        baseY,
+        nativeW,
+        nativeH,
+        rotation,
+        desiredScale,
+      );
+      scale = placed.scale;
+      drawX = placed.cxPx - left * TILE_SIZE_PX;
+      drawY = placed.cyPx - top * TILE_SIZE_PX;
+    }
     sprites.drawAnt({
       kind: isQueen ? 'queen' : 'worker',
-      x: screenX,
-      y: screenY,
+      x: drawX,
+      y: drawY,
       tint: isFighter2 && !isQueen ? COLOR_FIGHTER_TINT : tint,
       rotation,
       scale,

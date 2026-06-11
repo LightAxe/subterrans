@@ -338,6 +338,14 @@ describe('drawUndergroundEntities', () => {
     const antId = 0;
     world.colonies[PLAYER_COLONY_ID]!.queenEntityId = 999;
 
+    // Open the ant's tile and its neighbours: containment placement nudges a
+    // sprite away from adjacent Solid, and this test pins RAW position math.
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        ugSet(world.undergroundGrids[PLAYER_COLONY_ID]!, 5 + dx, 3 + dy, UndergroundTileState.Open);
+      }
+    }
+
     initAnt(world.ants, antId, {
       colonyId: PLAYER_COLONY_ID,
       posX: 5 << FP_SHIFT,
@@ -1111,6 +1119,13 @@ describe('drawUndergroundEntities — wrong-plane flicker guard', () => {
     curr.colonies[PLAYER_COLONY_ID]!.queenEntityId = 999;
 
     const antId = 0;
+    // Open around the curr tile: placement nudges away from adjacent Solid,
+    // and this test pins the RAW snap-to-curr position.
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        ugSet(curr.undergroundGrids[PLAYER_COLONY_ID]!, 6 + dx, 7 + dy, UndergroundTileState.Open);
+      }
+    }
     initAnt(prev.ants, antId, {
       colonyId: PLAYER_COLONY_ID,
       posX: 2 << FP_SHIFT,
@@ -1146,6 +1161,13 @@ describe('drawUndergroundEntities — wrong-plane flicker guard', () => {
     curr.colonies[PLAYER_COLONY_ID]!.queenEntityId = 999;
 
     const antId = 0;
+    // Open around the curr tile: placement nudges away from adjacent Solid,
+    // and this test pins the RAW snap-to-curr position.
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        ugSet(curr.undergroundGrids[PLAYER_COLONY_ID]!, 6 + dx, 7 + dy, UndergroundTileState.Open);
+      }
+    }
     // prev deliberately not initialized — slot is !isAlive with default posX=0.
     initAnt(curr.ants, antId, {
       colonyId: PLAYER_COLONY_ID,

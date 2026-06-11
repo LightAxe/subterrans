@@ -18,7 +18,7 @@ import {
   QUEEN_SPRITE_WIDTH,
   QUEEN_SPRITE_HEIGHT,
 } from './ant-sprite-layer.js';
-import { containedScale, aabbOverlapsDirt } from './sprite-containment.js';
+import { containedScale, containSpritePlacement, aabbOverlapsDirt } from './sprite-containment.js';
 
 const CX = 5;
 const CY = 5;
@@ -151,6 +151,124 @@ describe('PR 6-render containment probe — sprite on an Open tile never paints 
     expect(scale).toBe(1.0);
     expect(aabbOverlapsDirt(g, cx, cy, WORKER_SPRITE_WIDTH, WORKER_SPRITE_HEIGHT, 0, scale)).toBe(
       false,
+    );
+  });
+
+  it('integer-aligned X in a 1-wide shaft: placement nudges the ant visible (Codex P1)', () => {
+    // Regression: descent lands at posX = tileX << FP_SHIFT EXACTLY and ascent
+    // steers to tile-origin X, so a shaft ant's drawn center sits ON its tile's
+    // west edge (edgeW = 0) for the whole vertical run. Pure scale containment
+    // clamped that to scale 0 against the Solid west wall — invisible ant.
+    // containSpritePlacement must instead slide the center east just enough.
+    const g = createUndergroundGrid(16, 16); // all Solid
+    for (let y = 0; y <= 8; y++) ugSet(g, CX, y, UndergroundTileState.Open); // 1-wide shaft
+    const cx = CX * TILE_SIZE_PX; // integer tile coordinate — the descent X
+    const cy = 4 * TILE_SIZE_PX + 8; // mid-shaft
+    // The old behavior this replaces: scale-only containment collapses to 0.
+    expect(containedScale(g, cx, cy, WORKER_SPRITE_WIDTH, WORKER_SPRITE_HEIGHT, 0, 1.0)).toBe(0);
+    const placed = containSpritePlacement(
+      g,
+      cx,
+      cy,
+      WORKER_SPRITE_WIDTH,
+      WORKER_SPRITE_HEIGHT,
+      0,
+      1.0,
+    );
+    // 12×8 worker (hx 6) fits the 16px shaft: full size, center pushed to ≥ hx
+    // from the west wall, and the footprint still paints no dirt.
+    expect(placed.scale).toBe(1.0);
+    expect(placed.cxPx).toBe(CX * TILE_SIZE_PX + 6);
+    expect(placed.cyPx).toBe(cy);
+    expect(
+      aabbOverlapsDirt(
+        g,
+        placed.cxPx,
+        placed.cyPx,
+        WORKER_SPRITE_WIDTH,
+        WORKER_SPRITE_HEIGHT,
+        0,
+        placed.scale,
+      ),
+    ).toBe(false);
+  });
+
+  it('a too-wide queen in a 1-wide shaft is centered and scaled, never zeroed', () => {
+    const g = createUndergroundGrid(16, 16); // all Solid
+    for (let y = 0; y <= 8; y++) ugSet(g, CX, y, UndergroundTileState.Open); // 1-wide shaft
+    const cx = CX * TILE_SIZE_PX; // integer tile coordinate
+    const cy = 4 * TILE_SIZE_PX + 8;
+    // Queen hx 10 > 8: cannot fit between the walls at full size — the axis
+    // falls back to tile center and the scale clamp shrinks to 8/10.
+    const placed = containSpritePlacement(
+      g,
+      cx,
+      cy,
+      QUEEN_SPRITE_WIDTH,
+      QUEEN_SPRITE_HEIGHT,
+      0,
+      1.0,
+    );
+    expect(placed.cxPx).toBe(CX * TILE_SIZE_PX + 8);
+    expect(placed.scale).toBeCloseTo(0.8, 10);
+    expect(placed.scale).toBeGreaterThan(0);
+    expect(
+      aabbOverlapsDirt(
+        g,
+        placed.cxPx,
+        placed.cyPx,
+        QUEEN_SPRITE_WIDTH,
+        QUEEN_SPRITE_HEIGHT,
+        0,
+        placed.scale,
+      ),
+    ).toBe(false);
+  });
+
+  it('placement leaves an unobstructed sprite untouched (no nudge without dirt)', () => {
+    const grid = openFieldGrid();
+    const cx = (CX + 0.1) * TILE_SIZE_PX; // off-center but every neighbour passable
+    const cy = (CY + 0.9) * TILE_SIZE_PX;
+    const placed = containSpritePlacement(
+      grid,
+      cx,
+      cy,
+      QUEEN_SPRITE_WIDTH,
+      QUEEN_SPRITE_HEIGHT,
+      0,
+      1.0,
+    );
+    expect(placed).toEqual({ cxPx: cx, cyPx: cy, scale: 1.0 });
+  });
+
+  it('placement probe: no dirt overlap across kinds × rotations × FULL-RANGE sub-tile centers', () => {
+    // The containedScale probe sweeps interior fractions; placement exists for
+    // the boundary ones, so prove the invariant at the RETURNED position across
+    // a [0, 1) sweep on the worst-case island grid. Fraction 1.0 is excluded
+    // because the floor() tile-occupancy convention (matching the sim's
+    // posX >> FP_SHIFT) assigns that center to the NEXT tile — an ant centered
+    // there occupies the neighbour, which is walkable wherever ants exist (the
+    // anchor-walkable contract), but is Solid on this island fixture.
+    const grid = islandGrid();
+    let checks = 0;
+    for (const kind of KINDS) {
+      for (const rot of ROTATIONS) {
+        for (const fx of [0, 0.25, 0.5, 0.75, 0.96875]) {
+          for (const fy of [0, 0.25, 0.5, 0.75, 0.96875]) {
+            const cx = (CX + fx) * TILE_SIZE_PX;
+            const cy = (CY + fy) * TILE_SIZE_PX;
+            const p = containSpritePlacement(grid, cx, cy, kind.w, kind.h, rot, kind.maxScale);
+            expect(p.scale).toBeGreaterThan(0); // visible everywhere on a valid tile
+            expect(aabbOverlapsDirt(grid, p.cxPx, p.cyPx, kind.w, kind.h, rot, p.scale)).toBe(
+              false,
+            );
+            checks++;
+          }
+        }
+      }
+    }
+    console.log(
+      `PASS PR6 render placement (island): ${checks} configs, 0 dirt overlaps, 0 invisible`,
     );
   });
 

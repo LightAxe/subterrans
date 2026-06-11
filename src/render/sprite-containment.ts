@@ -111,6 +111,87 @@ export function containedScale(
   return Math.max(0, desiredScale * factor);
 }
 
+/** Result of `containSpritePlacement`: possibly-nudged center + clamped scale. */
+export interface ContainedPlacement {
+  cxPx: number;
+  cyPx: number;
+  scale: number;
+}
+
+/**
+ * Containment by position FIRST, scale second. The sim anchors several
+ * underground positions on exact tile coordinates (descent lands at
+ * `tileX << FP_SHIFT`; ascent steers toward tile-origin X), which puts the
+ * drawn sprite center exactly ON the anchor tile's edge — `edgeW`/`edgeN` = 0.
+ * Pure scale containment (`containedScale`) would clamp such a sprite to scale
+ * 0 against a Solid neighbour on that side: a shaft ant with the usual Solid
+ * west wall would be INVISIBLE for its whole integer-X descent. Instead, slide
+ * the center away from each Solid cardinal just far enough that the AABB no
+ * longer crosses toward it (never further than the tile allows); only when
+ * BOTH sides of an axis are Solid and the sprite cannot fit between them does
+ * the axis fall back to tile-center + scale-down. The returned placement is
+ * then re-clamped by `containedScale` from the nudged center, so the
+ * containment invariant (footprint never paints Solid/off-grid) still holds
+ * exactly — the probe checks it at the RETURNED position.
+ *
+ * The nudge is bounded by half a sprite, only ever moves AWAY from dirt the
+ * footprint would otherwise paint, and is constant along a shaft (same
+ * neighbour pattern every row), so descent motion stays smooth.
+ */
+export function containSpritePlacement(
+  grid: UndergroundGrid,
+  cxPx: number,
+  cyPx: number,
+  spriteW: number,
+  spriteH: number,
+  rotation: number,
+  desiredScale: number,
+): ContainedPlacement {
+  const direct = containedScale(grid, cxPx, cyPx, spriteW, spriteH, rotation, desiredScale);
+  if (direct >= desiredScale) return { cxPx, cyPx, scale: direct };
+  const { hx, hy } = rotatedAabbHalfExtents(spriteW, spriteH, rotation, desiredScale);
+  const tileX = Math.floor(cxPx / TILE_SIZE_PX);
+  const tileY = Math.floor(cyPx / TILE_SIZE_PX);
+  const nudgeAxis = (
+    c: number,
+    tile: number,
+    h: number,
+    dirtLo: boolean,
+    dirtHi: boolean,
+  ): number => {
+    const lo = tile * TILE_SIZE_PX + h;
+    const hi = (tile + 1) * TILE_SIZE_PX - h;
+    if (dirtLo && dirtHi) {
+      // Both sides Solid: fit between them if possible, else center the axis
+      // (containedScale below shrinks symmetrically from there).
+      if (lo > hi) return tile * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+      return Math.min(Math.max(c, lo), hi);
+    }
+    if (dirtLo) return Math.max(c, lo);
+    if (dirtHi) return Math.min(c, hi);
+    return c;
+  };
+  const nx = nudgeAxis(
+    cxPx,
+    tileX,
+    hx,
+    isDirt(grid, tileX - 1, tileY),
+    isDirt(grid, tileX + 1, tileY),
+  );
+  const ny = nudgeAxis(
+    cyPx,
+    tileY,
+    hy,
+    isDirt(grid, tileX, tileY - 1),
+    isDirt(grid, tileX, tileY + 1),
+  );
+  return {
+    cxPx: nx,
+    cyPx: ny,
+    scale: containedScale(grid, nx, ny, spriteW, spriteH, rotation, desiredScale),
+  };
+}
+
 /** Containment-invariant predicate (for the probe): does the rotated AABB of a
  *  `w`×`h` sprite at `scale`/`rotation`, centered at (cxPx,cyPx), overlap ANY
  *  Solid/off-grid tile? A clamped sprite must make this false. A tiny epsilon
