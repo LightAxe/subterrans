@@ -23,6 +23,7 @@
 import { tick } from '../../sim/tick.js';
 import { createScenario } from '../../sim/scenario.js';
 import { canEnterUndergroundTile } from '../../sim/ant/ant-system.js';
+import { surfaceGoalDistance, SURFACE_GOAL_UNREACHED } from '../../sim/surface-routing.js';
 import {
   surfaceMovementAt,
   surfaceFeatureAt,
@@ -281,9 +282,10 @@ interface Decision {
  *   colony's `priorityFoodPileId`, else CLEARS it. So a searcher's movement-time
  *   `targetPos` is governed by `priorityFoodPileId` here, NOT the stale pre-tick
  *   value — reconstruct from `priorityFoodPileId`, never read `targetPos`.
- * - **scent / pheromone / wander** — `findNearestScentPile`, then the real
- *   `sampleForagingDirection` (with prev-tile anti-backtrack): pheromone iff it
- *   returns a non-zero step. It only draws RNG to pick WHICH direction in its
+ * - **scent / pheromone / wander** — Fix-A's `findReachableScentPile` (shortest
+ *   REACHABLE path over the static goal field, NOT Manhattan-nearest), then the
+ *   real `sampleForagingDirection` (with prev-tile anti-backtrack): pheromone iff
+ *   it returns a non-zero step. It only draws RNG to pick WHICH direction in its
  *   10% weak-trail explore; the zero-vs-non-zero outcome is RNG-independent, so a
  *   throwaway `Rng` reproduces the branch without touching `world.rngState`.
  *
@@ -324,7 +326,7 @@ function computeDecisions(world: WorldState): Map<number, Decision> {
       source = 'scatter'; // spider flee — not a scent/priority wall-pin
     } else {
       const priority = priorityPileFor(world, a.colonyId[id]!);
-      const scent = priority ?? nearestScentPile(world, tileX, tileY);
+      const scent = priority ?? reachableScentPile(world, tileX, tileY);
       if (priority !== null) {
         source = 'priority';
         target = priority;
@@ -352,7 +354,7 @@ function computeDecisions(world: WorldState): Map<number, Decision> {
     }
     // Wall-aim only for the targeted scent/priority class — the #127 worst case.
     const wallAim =
-      target !== null && stepHitsWall(world, tileX, tileY, target.tileX, target.tileY);
+      target !== null && stepLandsOnWall(world, tileX, tileY, target.tileX, target.tileY);
     out.set(id, { source, wallAim });
   }
   return out;
@@ -376,21 +378,27 @@ function priorityPileFor(
   return null;
 }
 
-/** True iff the cardinal/diagonal step toward (targetX,targetY) — the sim's
- *  `pickCardinalStep` packing (per-axis sign, 8-connected) — lands on a
- *  HardBlock. The precise scent/priority-vs-wall test (Codex P1). */
-function stepHitsWall(
+/** True iff the NAIVE per-axis-sign step toward (targetX,targetY) — the pre-Fix-A
+ *  `pickCardinalStep` direction — lands on a HardBlock. This is the #127 wall-aim
+ *  SIGNATURE, measured INDEPENDENTLY of the router under test so the acceptance
+ *  cap stays falsifiable. It must NOT call `stepTowardReachable`: the router
+ *  cannot return a wall step by construction, so mirroring it would make the
+ *  metric tautologically 0 (Fable PR-5 P2). Fix-A satisfies the cap not by
+ *  changing what this flag measures but by ELIMINATING the confinement episodes
+ *  the flag is tallied within (`episodeAimedWall` is only set during a confined
+ *  run) — a forager that descended the goal field marches out of any 3×3 box, so
+ *  no targeted episode forms. If Fix-A ever regressed (an ant confined while its
+ *  naive intent still pointed at a wall), this would trip. */
+function stepLandsOnWall(
   world: WorldState,
   tileX: number,
   tileY: number,
   targetTileX: number,
   targetTileY: number,
 ): boolean {
-  const rawDx = targetTileX - tileX;
-  const rawDy = targetTileY - tileY;
-  const dx = rawDx === 0 ? 0 : rawDx > 0 ? 1 : -1;
-  const dy = rawDy === 0 ? 0 : rawDy > 0 ? 1 : -1;
-  if (dx === 0 && dy === 0) return false;
+  const dx = targetTileX === tileX ? 0 : targetTileX > tileX ? 1 : -1;
+  const dy = targetTileY === tileY ? 0 : targetTileY > tileY ? 1 : -1;
+  if (dx === 0 && dy === 0) return false; // already on the target column+row
   return surfaceMovementAt(world, tileX + dx, tileY + dy) === SurfaceMovementEffect.HardBlock;
 }
 
@@ -656,25 +664,38 @@ function observeSurface(
 const HARNESS_FOOD_SCENT_RADIUS = 15;
 
 /**
- * Replicate `findNearestScentPile` (`ant-system.ts`): nearest food pile within
- * FOOD_SCENT_RADIUS (Manhattan), tie-break lowest id. Returns null if none.
- * Exact for the harness because the sim mutates `foodPiles` only after movement
+ * Replicate Fix-A's `findReachableScentPile` (`ant-system.ts`): among food piles
+ * whose PATH distance over the static surface goal field is within
+ * FOOD_SCENT_RADIUS (Manhattan is only a cheap pre-filter), pick the one with
+ * the shortest reachable path, so a walled-off or long-detour in-range pile
+ * loses to a reachable one. Ties (equal path distance) break on
+ * lowest `foodPileId`; eligible-but-unreachable piles are skipped. This is the
+ * NEW selection — the pre-Fix-A harness used Manhattan-nearest, which could pick
+ * a different (possibly walled-off) pile than the sim actually routes to. Exact
+ * for the harness because the sim mutates `foodPiles` only after movement
  * (deplete step 16b, spawn step 16d), so a pre-`tick` read matches movement time.
  */
-function nearestScentPile(
+function reachableScentPile(
   world: WorldState,
   tileX: number,
   tileY: number,
 ): { tileX: number; tileY: number } | null {
-  let bestDist = HARNESS_FOOD_SCENT_RADIUS + 1;
+  let bestDist = -1; // path distance of the current best (>=0); -1 = none yet
   let bestId = -1;
   let bestX = 0;
   let bestY = 0;
   for (const pile of world.foodPiles) {
-    const d = Math.abs(pile.tileX - tileX) + Math.abs(pile.tileY - tileY);
-    if (d > HARNESS_FOOD_SCENT_RADIUS) continue;
-    if (d < bestDist || (d === bestDist && pile.foodPileId < bestId)) {
-      bestDist = d;
+    const manhattan = Math.abs(pile.tileX - tileX) + Math.abs(pile.tileY - tileY);
+    if (manhattan > HARNESS_FOOD_SCENT_RADIUS) continue; // cheap pre-filter (pathDist >= manhattan)
+    const pathDist = surfaceGoalDistance(world, tileX, tileY, pile.tileX, pile.tileY);
+    if (pathDist === SURFACE_GOAL_UNREACHED) continue; // walled off from this ant
+    if (pathDist > HARNESS_FOOD_SCENT_RADIUS) continue; // eligibility gates on PATH distance (mirrors sim)
+    if (
+      bestId === -1 ||
+      pathDist < bestDist ||
+      (pathDist === bestDist && pile.foodPileId < bestId)
+    ) {
+      bestDist = pathDist;
       bestId = pile.foodPileId;
       bestX = pile.tileX;
       bestY = pile.tileY;
@@ -883,6 +904,103 @@ export function measurePerfAndSize(
     msTotal,
     msPerTick: msTotal / ticks,
     saveSizeBytes,
+  };
+}
+
+// ===========================================================================
+// PR 5 C-both — foraging-throughput metrics for the 4-vs-N recent-tiles sweep.
+// ===========================================================================
+
+export interface ThroughputSample {
+  seed: number;
+  difficulty: string;
+  ticks: number;
+  /** Pickup→deposit deliveries completed (foodCarrying 0→+→0 per ant). */
+  completions: number;
+  /** Carry-leg latency (deposit tick − pickup tick): mean / 95th percentile. */
+  meanLatency: number;
+  p95Latency: number;
+  /** Tiles traversed per delivery round-trip (crossings between deposits). */
+  meanPath: number;
+  p95Path: number;
+}
+
+function meanOf(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  let s = 0;
+  for (const x of xs) s += x;
+  return s / xs.length;
+}
+
+function p95Of(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  const sorted = [...xs].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.floor(0.95 * (sorted.length - 1)));
+  return sorted[idx]!;
+}
+
+/**
+ * Run an untraced scenario and measure forager throughput: deliveries
+ * completed, pickup→deposit latency, and path length per delivery round-trip.
+ * Drives the §PR5 4-vs-N recent-tiles decision sweep (deepening the no-revisit
+ * buffer must not regress throughput). A delivery is detected purely from
+ * `foodCarrying` 0→+ (pickup) and +→0 (deposit); path counts tile crossings
+ * between consecutive deposits (the full forage round-trip the no-revisit buffer
+ * influences). performance.now / Math allowed (platform-side harness).
+ *
+ * Underground-carrier behaviour (the spec's named sweep metric) is SUBSUMED by
+ * these counters, not measured separately: a delivery spans pickup (surface) →
+ * descent → underground carry → deposit, and the deepened ring also feeds the
+ * V14 underground CarryingFood no-revisit guard, so a stalled/oscillating
+ * underground carrier shows up directly as fewer `completions` and longer
+ * `latency`/`path`. A separate underground-only counter would double-count the
+ * same effect.
+ */
+export function measureForagingThroughput(
+  seed: number,
+  difficulty: 'Easy' | 'Normal' | 'Hard',
+  ticks: number,
+  commandsPerTick: readonly SimCommand[][],
+): ThroughputSample {
+  const world = createScenario(seed, difficulty);
+  const a = world.ants;
+  const cap = a.alive.length;
+  const carryStartTick = new Int32Array(cap).fill(-1);
+  const crossings = new Int32Array(cap);
+  const prevTileX = new Int32Array(cap).fill(-1);
+  const prevTileY = new Int32Array(cap).fill(-1);
+  const prevCarrying = new Uint8Array(cap);
+  const latencies: number[] = [];
+  const paths: number[] = [];
+  for (let t = 0; t < ticks; t++) {
+    tick(world, commandsPerTick[t] ?? []);
+    for (let id = 0; id < world.nextEntityId; id++) {
+      if (a.alive[id] !== 1) continue;
+      const tx = a.posX[id]! >> FP_SHIFT;
+      const ty = a.posY[id]! >> FP_SHIFT;
+      if (prevTileX[id] !== -1 && (tx !== prevTileX[id] || ty !== prevTileY[id])) crossings[id]!++;
+      prevTileX[id] = tx;
+      prevTileY[id] = ty;
+      const carrying = a.foodCarrying[id]! > 0 ? 1 : 0;
+      if (carrying === 1 && prevCarrying[id] === 0) {
+        carryStartTick[id] = t;
+      } else if (carrying === 0 && prevCarrying[id] === 1 && carryStartTick[id]! >= 0) {
+        latencies.push(t - carryStartTick[id]!);
+        paths.push(crossings[id]!);
+        crossings[id] = 0;
+      }
+      prevCarrying[id] = carrying as number;
+    }
+  }
+  return {
+    seed,
+    difficulty,
+    ticks,
+    completions: latencies.length,
+    meanLatency: meanOf(latencies),
+    p95Latency: p95Of(latencies),
+    meanPath: meanOf(paths),
+    p95Path: p95Of(paths),
   };
 }
 

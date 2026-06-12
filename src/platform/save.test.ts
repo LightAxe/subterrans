@@ -421,6 +421,165 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // PR 5 C-both — compact recentTiles pack/unpack round-trip + rejection
+  // branches. The encoding is a flat number[] of records sorted by ascending
+  // antId: `[antId, head, count, (slot, x, y)×count]`. unpackRecentTiles
+  // throws on every malformed shape; without these tests a loosened bound or
+  // a regression in the encoding would pass CI silently (the only prior
+  // coverage lived in a repo-root test file excluded by vitest's
+  // `src/**/*.test.ts` glob, so it never ran).
+  // ---------------------------------------------------------------------------
+  describe('recentTiles compact pack/unpack', () => {
+    const RECENT_TILES_LEN = 12; // src/sim/ant/ant-store.ts
+    const MAX_ENTITIES = 8192; // src/sim/constants.ts
+    const SENTINEL = -1; // RECENT_TILES_SENTINEL
+
+    // Seed a couple of ants' recent-tiles rings so packRecentTiles emits a
+    // non-trivial stream (createScenario starts every ring sentinel-filled).
+    // Uses ALIVE worker ids — packRecentTiles skips dead-but-allocated ants
+    // (their rings are never read and would otherwise leak save size).
+    function scenarioWithRecentTiles() {
+      const w = createScenario(42);
+      const [idA, idB] = w.colonies[PLAYER_COLONY_ID]!.workers as readonly number[];
+      if (idA === undefined || idB === undefined) throw new Error('scenario lacks two workers');
+      const set = (id: number, slot: number, x: number, y: number): void => {
+        const base = id * RECENT_TILES_LEN;
+        w.ants.recentTilesX[base + slot] = x;
+        w.ants.recentTilesY[base + slot] = y;
+      };
+      set(idA, 0, 5, 6);
+      set(idA, 2, 7, 8);
+      w.ants.recentTilesHead[idA] = 3;
+      set(idB, 1, 10, 20);
+      w.ants.recentTilesHead[idB] = 1;
+      return { w, idA, idB };
+    }
+
+    it('round-trips a populated ring exactly (slots, coords, head)', () => {
+      const { w, idA, idB } = scenarioWithRecentTiles();
+      const w2 = deserializeWorldState(serializeWorldState(w));
+      const b1 = idA * RECENT_TILES_LEN;
+      const b3 = idB * RECENT_TILES_LEN;
+      expect(w2.ants.recentTilesX[b1 + 0]).toBe(5);
+      expect(w2.ants.recentTilesY[b1 + 0]).toBe(6);
+      expect(w2.ants.recentTilesX[b1 + 2]).toBe(7);
+      expect(w2.ants.recentTilesY[b1 + 2]).toBe(8);
+      expect(w2.ants.recentTilesHead[idA]).toBe(3);
+      expect(w2.ants.recentTilesX[b3 + 1]).toBe(10);
+      expect(w2.ants.recentTilesY[b3 + 1]).toBe(20);
+      expect(w2.ants.recentTilesHead[idB]).toBe(1);
+      // Slots not written stay sentinel.
+      expect(w2.ants.recentTilesX[b1 + 1]).toBe(SENTINEL);
+    });
+
+    it('round-trips byte-for-byte through full serialize → deserialize → serialize', () => {
+      const { w } = scenarioWithRecentTiles();
+      const s1 = JSON.stringify(serializeWorldState(w));
+      const w2 = deserializeWorldState(JSON.parse(s1));
+      const s2 = JSON.stringify(serializeWorldState(w2));
+      expect(s2).toBe(s1);
+    });
+
+    it('skips dead-but-allocated ants (populated ring on a dead ant is not serialized)', () => {
+      // Regression: ids are never reused and dead rings are never read, but an
+      // ant killed mid-Searching/CarryingFood keeps its populated ring forever.
+      // Serializing it would grow every subsequent save monotonically.
+      const { w, idA, idB } = scenarioWithRecentTiles();
+      w.ants.alive[idA] = 0; // killed with a populated ring (e.g. spider combat)
+      const w2 = deserializeWorldState(serializeWorldState(w));
+      const b1 = idA * RECENT_TILES_LEN;
+      expect(w2.ants.recentTilesX[b1 + 0]).toBe(SENTINEL);
+      expect(w2.ants.recentTilesHead[idA]).toBe(0);
+      // The surviving alive ant's ring still round-trips.
+      expect(w2.ants.recentTilesX[idB * RECENT_TILES_LEN + 1]).toBe(10);
+      expect(w2.ants.recentTilesHead[idB]).toBe(1);
+    });
+
+    // Build a valid serialized snapshot, then overwrite ants.recentTiles with a
+    // tampered stream. Direct mutation of the serialized snapshot mirrors the
+    // existing boundary-hardening tests in this file.
+    function snapshotWithStream(stream: unknown): ReturnType<typeof serializeWorldState> {
+      const s = serializeWorldState(createScenario(42));
+      (s.ants as unknown as { recentTiles: unknown }).recentTiles = stream;
+      return s;
+    }
+
+    it('rejects non-array stream', () => {
+      expect(() => deserializeWorldState(snapshotWithStream({ bad: true }))).toThrow(
+        'recentTiles: not an array',
+      );
+    });
+    it('rejects truncated record header (fewer than 3 leading elements)', () => {
+      expect(() => deserializeWorldState(snapshotWithStream([0, 1]))).toThrow(
+        'recentTiles: truncated record header',
+      );
+    });
+    it('rejects truncated record body (count exceeds remaining elements)', () => {
+      // header [antId=0, head=0, count=2] promises 2 triples but supplies 1.
+      expect(() => deserializeWorldState(snapshotWithStream([0, 0, 2, 0, 5, 6]))).toThrow(
+        'recentTiles: truncated record body',
+      );
+    });
+    it('rejects antId out of range (>= capacity)', () => {
+      expect(() =>
+        deserializeWorldState(snapshotWithStream([MAX_ENTITIES, 0, 1, 0, 5, 6])),
+      ).toThrow(/antId .* out of range/);
+    });
+    it('rejects negative antId', () => {
+      expect(() => deserializeWorldState(snapshotWithStream([-1, 0, 1, 0, 5, 6]))).toThrow(
+        /antId .* out of range/,
+      );
+    });
+    it('rejects non-integer antId', () => {
+      expect(() => deserializeWorldState(snapshotWithStream([1.5, 0, 1, 0, 5, 6]))).toThrow(
+        /antId .* out of range/,
+      );
+    });
+    it('rejects antId not strictly ascending (duplicate / unsorted records)', () => {
+      // two records for antId 1 — second one is not strictly greater.
+      expect(() =>
+        deserializeWorldState(snapshotWithStream([1, 0, 1, 0, 5, 6, 1, 0, 1, 1, 7, 8])),
+      ).toThrow(/antId .* not strictly ascending/);
+    });
+    it('rejects head out of range', () => {
+      expect(() =>
+        deserializeWorldState(snapshotWithStream([0, RECENT_TILES_LEN, 1, 0, 5, 6])),
+      ).toThrow(/head .* out of range/);
+    });
+    it('rejects count out of range (count = 0)', () => {
+      expect(() => deserializeWorldState(snapshotWithStream([0, 0, 0]))).toThrow(
+        /count .* out of range/,
+      );
+    });
+    it('rejects count out of range (count > RECENT_TILES_LEN)', () => {
+      expect(() => deserializeWorldState(snapshotWithStream([0, 0, RECENT_TILES_LEN + 1]))).toThrow(
+        /count .* out of range/,
+      );
+    });
+    it('rejects slot out of range', () => {
+      expect(() =>
+        deserializeWorldState(snapshotWithStream([0, 0, 1, RECENT_TILES_LEN, 5, 6])),
+      ).toThrow(/slot .* out of range/);
+    });
+    it('rejects slot not strictly ascending within a record', () => {
+      // two triples with slot 0 then slot 0 again.
+      expect(() => deserializeWorldState(snapshotWithStream([0, 0, 2, 0, 5, 6, 0, 7, 8]))).toThrow(
+        /slot .* not strictly ascending/,
+      );
+    });
+    it('rejects x out of range', () => {
+      expect(() => deserializeWorldState(snapshotWithStream([0, 0, 1, 0, 128, 6]))).toThrow(
+        /x .* out of range/,
+      );
+    });
+    it('rejects y out of range', () => {
+      expect(() => deserializeWorldState(snapshotWithStream([0, 0, 1, 0, 5, 128]))).toThrow(
+        /y .* out of range/,
+      );
+    });
+  });
+
   describe('SaveFile envelope (PRD §8a: version + seed + inputLog + snapshot)', () => {
     it('hasSave returns false when localStorage empty', () => {
       expect(hasSave()).toBe(false);

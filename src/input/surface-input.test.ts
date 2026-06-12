@@ -657,6 +657,17 @@ describe('handleSurfaceRightClick', () => {
     expect(state.pendingEntranceTileX).toBeNull();
   });
 
+  it('never mutates the world: a null component-mask cache stays null (sim/render boundary)', () => {
+    // Codex P1 regression: the preview used isSurfaceTileInComponent, whose lazy
+    // ensure wrote the memoised mask back to the world — an input-layer world
+    // mutation. The read-only path computes a transient mask and must not fill
+    // the cache.
+    const world = makeWorld({ surfaceWidth: 128, surfaceHeight: 128 });
+    expect(world.surfaceComponentMask).toBeNull();
+    expect(isValidEntranceTarget(world, 40, 50)).toBe(true);
+    expect(world.surfaceComponentMask).toBeNull();
+  });
+
   it('shows NO preview when a clearance-halo tile is blocked (candidate itself walkable)', () => {
     const world = makeWorld({ surfaceWidth: 128, surfaceHeight: 128 });
     world.bakedSurfaceEffect[50 * SURFACE_GRID_WIDTH + 41] = 2; // HardBlock adjacent to (40,50)

@@ -252,11 +252,15 @@ export interface AntComponents {
 }
 
 /**
- * Length of the per-ant recent-tiles ring buffer (issue #42). Four entries
- * is enough to break 2/3/4-cycle eddies but small enough that the per-ant
- * SoA cost stays at 4×Int32 + 4×Int32 + 1×byte = 33 bytes per ant.
+ * Length of the per-ant recent-tiles ring buffer (issue #42; PR 5 C-both). The
+ * original 4 entries broke 2/3/4-cycle eddies but left longer wander/pheromone
+ * short-tail loops (the residual #127 confinement after Fix-A removes the
+ * scent/priority-vs-wall mechanism). PR 5 deepens it to break those longer
+ * loops; the runtime SoA grows linearly (N×Int32 ×2 + 1 byte per ant) and the
+ * SAVE cost is kept in budget by the compact ring encoding (save.ts), not the
+ * flat layout. N was chosen by the §PR5 4-vs-N decision sweep.
  */
-export const RECENT_TILES_LEN = 4 as const;
+export const RECENT_TILES_LEN = 12 as const;
 
 /** Sentinel for an unused slot in the recent-tiles ring buffer. */
 export const RECENT_TILES_SENTINEL = -1 as const;
@@ -476,7 +480,7 @@ export function pushRecentTile(ants: AntComponents, id: EntityId, tx: number, ty
 
 /**
  * True iff (tx, ty) appears anywhere in ant `id`'s recent-tiles ring buffer.
- * Cheap linear scan — RECENT_TILES_LEN is 4.
+ * Cheap linear scan over RECENT_TILES_LEN slots (12 since PR 5 C-both).
  */
 export function isRecentTile(ants: AntComponents, id: EntityId, tx: number, ty: number): boolean {
   const base = id * RECENT_TILES_LEN;

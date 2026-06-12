@@ -12,10 +12,14 @@
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
 import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
-import { LATEST_SIM_VERSION, SIM_VERSION_V28_STATIC_TERRAIN } from '../sim/types.js';
+import { LATEST_SIM_VERSION, SIM_VERSION_V29_PATH_AWARE_ROUTING } from '../sim/types.js';
 import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/constants.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
-import { createAntComponents } from '../sim/ant/ant-store.js';
+import {
+  createAntComponents,
+  RECENT_TILES_LEN,
+  RECENT_TILES_SENTINEL,
+} from '../sim/ant/ant-store.js';
 import type {
   ColonyId,
   ColonyRecord,
@@ -120,11 +124,12 @@ export class FutureSimVersionError extends Error {
   }
 }
 
-// PR 4 (posture 2): static terrain changed WorldState field semantics (new baked
-// grid + removed dynamic suppression), so pre-V28 saves cannot be continued
-// correctly — raise the floor to reject them cleanly rather than load a broken
-// (suppression-era) map.
-export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V28_STATIC_TERRAIN;
+// PR 5 (posture 2): path-aware routing changes steering and the recent-tiles ring
+// changes the on-disk recent-tiles shape (compact encoding). A pre-V29 save would
+// either replay differently or carry the old flat recent-tiles layout, so raise
+// the floor to reject pre-V29 saves cleanly rather than load a mismatched world.
+// (Supersedes the PR 4 V28 floor; static-terrain reasoning still applies.)
+export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V29_PATH_AWARE_ROUTING;
 
 export class OldSimVersionError extends Error {
   constructor(public got: number | null) {
@@ -409,9 +414,13 @@ interface SerializedAnts {
   waitingDeposit: number[];
   pathErr: number[];
   searchPauseTicks: number[];
-  recentTilesX: number[];
-  recentTilesY: number[];
-  recentTilesHead: number[];
+  // PR 5 C-both — recent-tiles ring, COMPACT canonical encoding (not the flat
+  // maxEntities×RECENT_TILES_LEN arrays, which would triple save size and blow
+  // the ≤+5% quota when N deepened from 4). A flat number[] stream of records
+  // sorted by antId; each record is [antId, head, count, (slot,x,y)×count] for
+  // every ant with antId < nextEntityId AND ≥1 non-sentinel slot. Round-trips
+  // the ring EXACTLY (slot order + head preserved); load rejects malformed data.
+  recentTiles: number[];
   carryingBroodId: number[];
   carriedBy: number[];
   hp: number[];
@@ -561,7 +570,122 @@ export interface SaveFile {
 // Serialize helpers
 // ---------------------------------------------------------------------------
 
-function serializeAnts(a: AntComponents): SerializedAnts {
+/**
+ * PR 5 C-both — encode the per-ant recent-tiles ring compactly. Emits a flat
+ * number[] stream of records sorted by ascending antId; each record is
+ * `[antId, head, count, (slot, x, y)×count]` for every ALIVE ant with `antId <
+ * nextEntityId` AND at least one non-sentinel slot. Slots are emitted in
+ * ascending slot order so the encoding is canonical (a given ring state always
+ * serializes identically). Dead-but-allocated ants are skipped: entity ids are
+ * never reused and dead rings are never read (all isRecentTile/detour consumers
+ * run only for alive ants), so serializing them would only leak save size
+ * monotonically — an ant killed mid-Searching/CarryingFood (combat, starvation,
+ * lifespan) keeps its populated ring in memory forever. Old saves that contain
+ * dead-ant records still load (unpack doesn't check alive) and self-heal here
+ * on the next save.
+ */
+function packRecentTiles(a: AntComponents, nextEntityId: number): number[] {
+  const out: number[] = [];
+  const limit = Math.min(nextEntityId, a.recentTilesHead.length);
+  for (let id = 0; id < limit; id++) {
+    if (a.alive[id] !== 1) continue;
+    const base = id * RECENT_TILES_LEN;
+    let count = 0;
+    for (let s = 0; s < RECENT_TILES_LEN; s++) {
+      if (a.recentTilesX[base + s] !== RECENT_TILES_SENTINEL) count++;
+    }
+    if (count === 0) continue;
+    out.push(id, a.recentTilesHead[id]!, count);
+    for (let s = 0; s < RECENT_TILES_LEN; s++) {
+      if (a.recentTilesX[base + s] !== RECENT_TILES_SENTINEL) {
+        out.push(s, a.recentTilesX[base + s]!, a.recentTilesY[base + s]!);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * PR 5 C-both — decode + VALIDATE the compact recent-tiles stream into the
+ * (already sentinel-filled) ant arrays, reconstructing the identical ring. Load
+ * rejects (throws) malformed data: non-array stream, truncated record, antId out
+ * of range or not strictly ascending (duplicate / unsorted), head/slot/count out
+ * of range, duplicate or non-ascending slot within a record, or out-of-range
+ * coords. Slots absent from a record stay sentinel; head is restored verbatim.
+ */
+function unpackRecentTiles(
+  a: AntComponents,
+  stream: unknown,
+  nextEntityId: number,
+  capacity: number,
+): void {
+  if (!Array.isArray(stream)) throw new Error('recentTiles: not an array');
+  // The shared ring holds either surface (SearchingFood) or underground
+  // (CarryingFood) tiles, and the stream carries no zone tag, so each axis is
+  // bounded by the widest legitimate value across both grids: x by the max grid
+  // WIDTH, y by the max grid HEIGHT. The two grids share a width (128) but
+  // differ in height (surface 128, underground 64), so y must use the surface
+  // ceiling — using the smaller underground height would reject valid surface
+  // recent-tiles, while a single conflated coordMax let stray coords through on
+  // the narrower axis.
+  const xMax = Math.max(SURFACE_GRID_WIDTH, UNDERGROUND_GRID_WIDTH);
+  const yMax = Math.max(SURFACE_GRID_HEIGHT, UNDERGROUND_GRID_HEIGHT);
+  let i = 0;
+  let prevAntId = -1;
+  while (i < stream.length) {
+    if (i + 3 > stream.length) throw new Error('recentTiles: truncated record header');
+    const antId = stream[i++] as number;
+    const head = stream[i++] as number;
+    const count = stream[i++] as number;
+    // Bound by BOTH nextEntityId AND capacity. nextEntityId is the canonical
+    // bound — the serializer only emits records for antId < nextEntityId, so a
+    // record for a never-allocated id is something serialize can never produce.
+    // capacity is the memory-safety bound — the ring arrays are sized
+    // capacity * RECENT_TILES_LEN, and a tampered save can set ants.count
+    // (→ capacity) and nextEntityId independently (both only checked against
+    // MAX_ENTITIES), so without the capacity check an antId in [capacity,
+    // nextEntityId) would index out of bounds (a silent TypedArray no-op, but it
+    // breaks "load is strictly the inverse of save"). Legitimate saves persist
+    // count = MAX_ENTITIES ≥ nextEntityId, so both bounds coincide.
+    if (!Number.isInteger(antId) || antId < 0 || antId >= nextEntityId || antId >= capacity) {
+      throw new Error(
+        `recentTiles: antId ${antId} out of range [0, min(${nextEntityId},${capacity}))`,
+      );
+    }
+    if (antId <= prevAntId) throw new Error(`recentTiles: antId ${antId} not strictly ascending`);
+    prevAntId = antId;
+    if (!Number.isInteger(head) || head < 0 || head >= RECENT_TILES_LEN) {
+      throw new Error(`recentTiles: head ${head} out of range [0,${RECENT_TILES_LEN})`);
+    }
+    if (!Number.isInteger(count) || count < 1 || count > RECENT_TILES_LEN) {
+      throw new Error(`recentTiles: count ${count} out of range [1,${RECENT_TILES_LEN}]`);
+    }
+    if (i + count * 3 > stream.length) throw new Error('recentTiles: truncated record body');
+    const base = antId * RECENT_TILES_LEN;
+    let prevSlot = -1;
+    for (let c = 0; c < count; c++) {
+      const slot = stream[i++] as number;
+      const x = stream[i++] as number;
+      const y = stream[i++] as number;
+      if (!Number.isInteger(slot) || slot < 0 || slot >= RECENT_TILES_LEN) {
+        throw new Error(`recentTiles: slot ${slot} out of range [0,${RECENT_TILES_LEN})`);
+      }
+      if (slot <= prevSlot) throw new Error(`recentTiles: slot ${slot} not strictly ascending`);
+      prevSlot = slot;
+      if (!Number.isInteger(x) || x < 0 || x >= xMax) {
+        throw new Error(`recentTiles: x ${x} out of range [0,${xMax})`);
+      }
+      if (!Number.isInteger(y) || y < 0 || y >= yMax) {
+        throw new Error(`recentTiles: y ${y} out of range [0,${yMax})`);
+      }
+      a.recentTilesX[base + slot] = x;
+      a.recentTilesY[base + slot] = y;
+    }
+    a.recentTilesHead[antId] = head;
+  }
+}
+
+function serializeAnts(a: AntComponents, nextEntityId: number): SerializedAnts {
   // Persist the full array (MAX_ENTITIES length). The deserializer allocates the
   // same size, so unused slots (alive=0) round-trip faithfully.
   return {
@@ -597,12 +721,9 @@ function serializeAnts(a: AntComponents): SerializedAnts {
     waitingDeposit: Array.from(a.waitingDeposit),
     pathErr: Array.from(a.pathErr),
     searchPauseTicks: Array.from(a.searchPauseTicks),
-    // Issue #42 — recent-tiles ring buffer. The X/Y arrays are flat
-    // (length = maxEntities * RECENT_TILES_LEN); the head array indexes
-    // into them. All three round-trip for v6 SCEN-06 replay determinism.
-    recentTilesX: Array.from(a.recentTilesX),
-    recentTilesY: Array.from(a.recentTilesY),
-    recentTilesHead: Array.from(a.recentTilesHead),
+    // PR 5 C-both — recent-tiles ring, compact canonical encoding (see
+    // packRecentTiles). Round-trips the ring exactly for SCEN-06 determinism.
+    recentTiles: packRecentTiles(a, nextEntityId),
     // Issue #17 Phase 1 — visible brood carry slot + reverse pointer.
     carryingBroodId: Array.from(a.carryingBroodId),
     carriedBy: Array.from(a.carriedBy),
@@ -799,7 +920,7 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
     simVersion: world.simVersion,
     terrainSeed: world.terrainSeed,
     commandQueue: world.commandQueue.map((c) => ({ ...c })), // Pitfall 7 — preserve
-    ants: serializeAnts(world.ants),
+    ants: serializeAnts(world.ants, world.nextEntityId),
     colonies: coloniesOut,
     pheromoneGrids: pheromoneOut,
     surface: serializeSurfaceGrid(world.surface),
@@ -883,7 +1004,11 @@ function copyIntoUint8(dst: Uint8Array, src: readonly number[]): void {
   for (let i = 0; i < n; i++) dst[i] = src[i]!;
 }
 
-function deserializeAnts(saved: SerializedAnts, capacity: number): AntComponents {
+function deserializeAnts(
+  saved: SerializedAnts,
+  capacity: number,
+  nextEntityId: number,
+): AntComponents {
   const a = createAntComponents(capacity);
   // createAntComponents pre-fills digTileX/digTileY/targetPosX/targetPosY with -1.
   // Overwrite with saved values (including -1 sentinels where appropriate).
@@ -914,9 +1039,9 @@ function deserializeAnts(saved: SerializedAnts, capacity: number): AntComponents
   copyIntoUint8(a.waitingDeposit, saved.waitingDeposit);
   copyIntoInt32(a.pathErr, saved.pathErr);
   copyIntoInt32(a.searchPauseTicks, saved.searchPauseTicks);
-  copyIntoInt32(a.recentTilesX, saved.recentTilesX);
-  copyIntoInt32(a.recentTilesY, saved.recentTilesY);
-  copyIntoUint8(a.recentTilesHead, saved.recentTilesHead);
+  // PR 5 C-both — reconstruct the ring from the compact stream (arrays are
+  // already sentinel-filled + head 0 by createAntComponents).
+  unpackRecentTiles(a, saved.recentTiles, nextEntityId, capacity);
   copyIntoInt32(a.carryingBroodId, saved.carryingBroodId);
   copyIntoInt32(a.carriedBy, saved.carriedBy);
   copyIntoInt32(a.hp, saved.hp);
@@ -1437,12 +1562,14 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     commandQueue: (Array.isArray(s.commandQueue) ? s.commandQueue : [])
       .filter((c) => c !== null && typeof c === 'object')
       .map((c) => ({ ...c }) as SimCommand),
-    ants: deserializeAnts(s.ants, capacity),
+    ants: deserializeAnts(s.ants, capacity, rawNext),
     colonies,
     pheromoneGrids,
     surface: deserializeSurfaceGrid(s.surface),
     bakedSurfaceEffect,
     surfaceComponentMask: null,
+    surfaceGoalFields: null,
+    surfaceGoalBfsScratch: null,
     undergroundGrids,
     foodPiles: s.foodPiles.map((p) => ({ ...p })),
     recentlyDepletedFood: validatedRecentlyDepleted.map((r) => ({ ...r })),

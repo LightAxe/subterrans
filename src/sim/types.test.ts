@@ -29,12 +29,14 @@ describe('WorldState', () => {
       expect(world.rngState).toBe(4294967295);
     });
 
-    it('has exactly twenty-five fields (… + 2 PR 4 static terrain: bakedSurfaceEffect + surfaceComponentMask)', () => {
+    it('has exactly twenty-seven fields (… + PR 4 baked/component + PR 5 goal-field cache + BFS scratch)', () => {
       const world = createWorldState(0);
       const keys = Object.keys(world);
-      expect(keys).toHaveLength(25);
+      expect(keys).toHaveLength(27);
       expect(keys).toContain('bakedSurfaceEffect'); // PR 4
       expect(keys).toContain('surfaceComponentMask'); // PR 4
+      expect(keys).toContain('surfaceGoalFields'); // PR 5
+      expect(keys).toContain('surfaceGoalBfsScratch'); // PR 5
       expect(keys).toContain('tick');
       expect(keys).toContain('rngState');
       expect(keys).toContain('nextEntityId');

@@ -23,7 +23,8 @@ import { describe, it, expect } from 'vitest';
 import { tick } from '../../sim/tick.js';
 import { createScenario } from '../../sim/scenario.js';
 import { allocateEntityId } from '../../sim/types.js';
-import { initAnt } from '../../sim/ant/ant-store.js';
+import { initAnt, RECENT_TILES_LEN, RECENT_TILES_SENTINEL } from '../../sim/ant/ant-store.js';
+import { createWorldState, copyWorldState } from '../../sim/types.js';
 import { canEnterUndergroundTile } from '../../sim/ant/ant-system.js';
 import { Zone, ugSet, ugGet, UndergroundTileState } from '../../sim/terrain.js';
 import { AntTask, ForagingSubState, DiggingSubState } from '../../sim/enums.js';
@@ -59,6 +60,8 @@ import {
   checkObservationalNeutrality,
   featureFieldHash,
   featureFieldDiffCount,
+  measureForagingThroughput,
+  measurePerfAndSize,
 } from './harness.js';
 
 // ---------------------------------------------------------------------------
@@ -114,20 +117,25 @@ describe('traced sweep determinism', () => {
 // 4. #127 surface confinement reproduces
 // ---------------------------------------------------------------------------
 
-describe('#127 surface confinement reproduces on discovery seeds', () => {
-  it('finds at least one confinement episode across a discovery subset', () => {
+describe('#127 surface confinement is eliminated on discovery seeds (PR 5)', () => {
+  it('no scent/priority-vs-wall and no long confinement on the discovery subset', () => {
+    // Phase 0 used these seeds to PROVE the bug reproduced (≥1 episode, worst
+    // ≥12 tk). PR 5 (Fix-A path-aware step + C-both deepened recent-tiles) fixes
+    // it: the discovery seeds — like the acceptance hold-out — now show no
+    // scent/priority-into-wall episodes and no confinement over the §7 cap.
     const seeds = [11, 42, 99];
-    let total = 0;
+    let aimedWall = 0;
+    let over60 = 0;
     let worst = 0;
     for (const seed of seeds) {
-      const r = runTracedScenario(seed, 'Normal', 1500, emptyLog(1500));
-      total += r.confinement.length;
+      const r = runTracedScenario(seed, 'Normal', 3000, emptyLog(3000));
+      aimedWall += r.confinement.filter((e) => e.aimedIntoWall).length;
+      over60 += r.confinement.filter((e) => e.lengthTicks > 60).length;
       worst = Math.max(worst, r.worstConfinementTicks);
     }
-    // The bug is severe (STEP0-FINDINGS: ~13 episodes/difficulty over 3000
-    // ticks); over 3 seeds × 1500 ticks we expect several.
-    expect(total).toBeGreaterThan(0);
-    expect(worst).toBeGreaterThanOrEqual(12);
+    expect(aimedWall).toBe(0);
+    expect(over60).toBe(0);
+    console.log(`PASS #127 discovery: aimedIntoWall=0, episodes>60tk=0, worst=${worst}tk`);
   }, 60_000);
 });
 
@@ -347,10 +355,10 @@ describe('PR 4 — connectivity + reachable-spawn', () => {
   }, 30_000);
 });
 
-describe('PR 4 — simVersion rejection boundary (posture 2)', () => {
+describe('PR 5 — simVersion rejection boundary (posture 2)', () => {
   it('a save at the new LATEST loads; a save below MIN_ACCEPTED is rejected', () => {
     const ser = serializeWorldState(createScenario(42, 'Normal'));
-    expect(LATEST_SIM_VERSION).toBe(28);
+    expect(LATEST_SIM_VERSION).toBe(29);
     // At LATEST → loads.
     expect(() => deserializeWorldState({ ...ser, simVersion: LATEST_SIM_VERSION })).not.toThrow();
     // Below MIN_ACCEPTED → rejected.
@@ -360,5 +368,159 @@ describe('PR 4 — simVersion rejection boundary (posture 2)', () => {
     console.log(
       `PASS simVersion boundary: LATEST=${LATEST_SIM_VERSION} loads, ${MIN_ACCEPTED_SIM_VERSION - 1} (< MIN_ACCEPTED=${MIN_ACCEPTED_SIM_VERSION}) rejected`,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR 5 — Fix-A + C-both acceptance (verified on the ACCEPTANCE hold-out)
+// ---------------------------------------------------------------------------
+
+describe('PR 5 — #127 confinement eliminated on the acceptance hold-out', () => {
+  it('aimedIntoWall=0, worst confinement <=60 tk, 0 episodes >300 tk over acceptance seeds x 3 difficulties', () => {
+    const log = emptyLog(3000);
+    let aimedWall = 0;
+    let over300 = 0;
+    let worst = 0;
+    let episodes = 0;
+    for (const seed of ACCEPTANCE_SEEDS) {
+      for (const d of DIFFICULTIES) {
+        const r = runTracedScenario(seed, d, 3000, log);
+        aimedWall += r.confinement.filter((e) => e.aimedIntoWall).length;
+        over300 += r.confinement.filter((e) => e.lengthTicks > 300).length;
+        worst = Math.max(worst, r.worstConfinementTicks);
+        episodes += r.confinement.length;
+      }
+    }
+    expect(aimedWall).toBe(0); // Fix-A: scent/priority never aim into a wall
+    expect(over300).toBe(0);
+    expect(worst).toBeLessThanOrEqual(60); // §7 cap
+    console.log(
+      `PASS PR5 #127 acceptance: aimedIntoWall=${aimedWall}, worst=${worst}tk, episodes>300=${over300}, totalEpisodes=${episodes}`,
+    );
+  }, 180_000);
+});
+
+describe('PR 5 — C-both 4-vs-N recent-tiles decision sweep', () => {
+  // N=4 BASELINE captured offline over CALIBRATION_SEEDS x Normal x 3000 ticks
+  // (set RECENT_TILES_LEN=4, run measureForagingThroughput, average across seeds).
+  const BASE_COMPLETIONS = 240;
+  const BASE_MEAN_LATENCY = 408.41;
+  const BASE_MEAN_PATH = 71.59;
+  const BASE_P95_PATH = 154.2;
+
+  it('chosen N>=5 meets every throughput cap vs the N=4 baseline (largest qualifying N)', () => {
+    expect(RECENT_TILES_LEN).toBeGreaterThanOrEqual(5); // N=4 is not an allowed outcome
+    const log = emptyLog(3000);
+    let completions = 0;
+    const lat: number[] = [];
+    const mp: number[] = [];
+    const pp: number[] = [];
+    for (const seed of CALIBRATION_SEEDS) {
+      const r = measureForagingThroughput(seed, 'Normal', 3000, log);
+      completions += r.completions;
+      lat.push(r.meanLatency);
+      mp.push(r.meanPath);
+      pp.push(r.p95Path);
+    }
+    const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+    const meanLatency = avg(lat);
+    const meanPath = avg(mp);
+    const p95Path = avg(pp);
+    // Caps (§PR5): completions -0% (no drop), latency +<=5%, mean path +<=3%, 95p +<=5%.
+    expect(completions).toBeGreaterThanOrEqual(BASE_COMPLETIONS);
+    expect(meanLatency).toBeLessThanOrEqual(BASE_MEAN_LATENCY * 1.05);
+    expect(meanPath).toBeLessThanOrEqual(BASE_MEAN_PATH * 1.03);
+    expect(p95Path).toBeLessThanOrEqual(BASE_P95_PATH * 1.05);
+    console.log(
+      `PASS PR5 C-both sweep: chosen N=${RECENT_TILES_LEN} | completions ${completions} (base ${BASE_COMPLETIONS}) | meanLatency ${meanLatency.toFixed(2)} (base ${BASE_MEAN_LATENCY}) | meanPath ${meanPath.toFixed(2)} (base ${BASE_MEAN_PATH}) | p95Path ${p95Path.toFixed(2)} (base ${BASE_P95_PATH})`,
+    );
+  }, 200_000);
+});
+
+describe('PR 5 — save size + tick-time caps', () => {
+  // Aspirational steady-state budget on a dev box (~0.26 ms/tick observed). NOT
+  // asserted directly: msPerTick is wall-clock, so it swings with runner
+  // hardware and load — a shared CI runner measured ~0.69-0.70 ms/tick on
+  // identical code (Codex P1), which would flake the REQUIRED `npm run verify`
+  // gate against an absolute 0.5 cap. The precise figure is logged every run so
+  // a regression is visible, and PERF_TICK_MS_CEILING is a deliberately generous
+  // hardware-robust ceiling (~19x the dev baseline, ~7x the slowest observed CI
+  // runner) that still trips on a catastrophic algorithmic regression (an
+  // accidental per-tick full-grid sweep or O(n^2) blows msPerTick to tens of ms)
+  // without flaking on any plausible healthy hardware.
+  const PERF_TICK_MS_TARGET = 0.5;
+  const PERF_TICK_MS_CEILING = 5.0;
+  it('cumulative serialized delta <= +5% of the ~1.095 MB baseline; tick-time within regression ceiling', () => {
+    const BASELINE_BYTES = 1_095_416; // pre-PR4 ~1.095 MB (INVESTIGATION.md)
+    const log = emptyLog(3000);
+    let worstDeltaPct = -Infinity;
+    let worstMsPerTick = 0;
+    for (const d of DIFFICULTIES) {
+      const m = measurePerfAndSize(42, d, 3000, log);
+      const deltaPct = ((m.saveSizeBytes - BASELINE_BYTES) / BASELINE_BYTES) * 100;
+      worstDeltaPct = Math.max(worstDeltaPct, deltaPct);
+      worstMsPerTick = Math.max(worstMsPerTick, m.msPerTick);
+      console.log(
+        `PR5 size/perf ${d}: saveSize=${m.saveSizeBytes}B delta=${deltaPct.toFixed(2)}% msPerTick=${m.msPerTick.toFixed(3)}`,
+      );
+    }
+    // Save size is deterministic — a hard cap CI can rely on.
+    expect(worstDeltaPct).toBeLessThanOrEqual(5);
+    // Tick-time: catastrophic-regression guard only (see ceiling rationale above).
+    expect(worstMsPerTick).toBeLessThanOrEqual(PERF_TICK_MS_CEILING);
+    const tgt = worstMsPerTick <= PERF_TICK_MS_TARGET ? 'within' : 'OVER';
+    console.log(
+      `PASS PR5 caps: worst save delta=${worstDeltaPct.toFixed(2)}% (<=+5%), worst msPerTick=${worstMsPerTick.toFixed(3)} (ceiling ${PERF_TICK_MS_CEILING}; ${tgt} ${PERF_TICK_MS_TARGET} dev target)`,
+    );
+  }, 120_000);
+});
+
+describe('PR 5 — recent-tiles field-specific copy + save/load round-trip (R3-10)', () => {
+  it('copyWorldState preserves the ring; save/load round-trips a mutated ring exactly', () => {
+    const world = createScenario(42, 'Normal');
+    const a = world.ants;
+    // Mutate a deterministic non-trivial ring on a live ant: distinct slots +
+    // head. Must be an ALIVE ant — packRecentTiles skips dead-but-allocated
+    // ids (their rings are never read and would leak save size).
+    const id = world.colonies[PLAYER_COLONY_ID]!.workers[0]!;
+    expect(a.alive[id]).toBe(1);
+    const base = id * RECENT_TILES_LEN;
+    for (let s = 0; s < RECENT_TILES_LEN; s++) {
+      a.recentTilesX[base + s] = RECENT_TILES_SENTINEL;
+      a.recentTilesY[base + s] = RECENT_TILES_SENTINEL;
+    }
+    a.recentTilesX[base + 0] = 10;
+    a.recentTilesY[base + 0] = 20;
+    a.recentTilesX[base + 2] = 11;
+    a.recentTilesY[base + 2] = 21;
+    a.recentTilesX[base + 5] = 12;
+    a.recentTilesY[base + 5] = 22;
+    a.recentTilesHead[id] = 6;
+
+    // create -> copy round-trip.
+    const dst = createWorldState(world.terrainSeed, a.alive.length);
+    copyWorldState(world, dst); // copyWorldState(src, dst)
+    for (let s = 0; s < RECENT_TILES_LEN; s++) {
+      expect(dst.ants.recentTilesX[base + s]).toBe(a.recentTilesX[base + s]);
+      expect(dst.ants.recentTilesY[base + s]).toBe(a.recentTilesY[base + s]);
+    }
+    expect(dst.ants.recentTilesHead[id]).toBe(6);
+
+    // save -> load round-trip reconstructs the identical ring.
+    const restored = deserializeWorldState(serializeWorldState(world));
+    for (let s = 0; s < RECENT_TILES_LEN; s++) {
+      expect(restored.ants.recentTilesX[base + s]).toBe(a.recentTilesX[base + s]);
+      expect(restored.ants.recentTilesY[base + s]).toBe(a.recentTilesY[base + s]);
+    }
+    expect(restored.ants.recentTilesHead[id]).toBe(6);
+    console.log('PASS PR5 recent-tiles copy + save/load round-trip exact');
+  });
+
+  it('load rejects a malformed compact recent-tiles stream (out-of-range slot)', () => {
+    const ser = serializeWorldState(createScenario(42, 'Normal'));
+    // Corrupt: a record with slot >= RECENT_TILES_LEN must be rejected.
+    const bad = { ...ser, ants: { ...ser.ants, recentTiles: [0, 0, 1, RECENT_TILES_LEN, 5, 5] } };
+    expect(() => deserializeWorldState(bad)).toThrow();
+    console.log('PASS PR5 recent-tiles load rejects malformed stream');
   });
 });

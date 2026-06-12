@@ -370,7 +370,13 @@ export const SIM_VERSION_V27_FORAGE_BACKPRESSURE = 27 as const;
 // the field semantics change. Posture 2 (bump + raise MIN_ACCEPTED, no
 // cross-version gate); pre-V28 saves reject at load.
 export const SIM_VERSION_V28_STATIC_TERRAIN = 28 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V28_STATIC_TERRAIN;
+// PR 5 — path-aware forager routing (Fix-A: complete goal-field step replacing the
+// naive cardinal step for scent + priority) and a deepened recent-tiles ring
+// (C-both, with a compact canonical serialization). Steering algorithm + the
+// recent-tiles buffer length both change behaviour and on-disk shape. Posture 2
+// (bump + raise MIN_ACCEPTED, no cross-version gate); pre-V29 saves reject at load.
+export const SIM_VERSION_V29_PATH_AWARE_ROUTING = 29 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V29_PATH_AWARE_ROUTING;
 
 /**
  * S2 — AI colony state machine states.
@@ -581,6 +587,27 @@ export interface WorldState {
    */
   surfaceComponentMask: Uint8Array | null;
 
+  /**
+   * PR 5 — DERIVED (not serialized): per-target BFS goal-field cache for
+   * passability-aware forager routing (`stepTowardReachable`). Keyed by target
+   * tile index; terrain is immutable (PR 4) so entries never need invalidation
+   * while the world lives. Null until first use; `copyWorldState` resets to null
+   * (lazily recomputed in the copy) rather than sharing the growable Map.
+   */
+  surfaceGoalFields: Map<number, Int32Array> | null;
+
+  /**
+   * PR 5 — DERIVED (not serialized): reusable BFS frontier queue for building
+   * `surfaceGoalFields` entries (one `Int32Array(SURFACE_TILE_COUNT)`). World-
+   * owned (not a module-level singleton) so it stays inside the WorldState
+   * snapshot per the ECS boundary; it is pure transient scratch — fully
+   * overwritten before any read within a single `computeSurfaceGoalField` call,
+   * so it carries no state across calls and is never serialized. Null until
+   * first use; `copyWorldState` resets to null (the render-snapshot copy never
+   * computes fields, so it never reallocates).
+   */
+  surfaceGoalBfsScratch: Int32Array | null;
+
   undergroundGrids: Record<ColonyId, UndergroundGrid>; // per-colony underground (UNDR-08)
   foodPiles: FoodPile[]; // surface food sources (SURF-02 + issue #112 depletion/respawn)
 
@@ -668,6 +695,8 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
     // constructed world for terrainSeed + the procedural selector).
     bakedSurfaceEffect: new Uint8Array(SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT),
     surfaceComponentMask: null,
+    surfaceGoalFields: null,
+    surfaceGoalBfsScratch: null,
     undergroundGrids: {},
     foodPiles: [],
     recentlyDepletedFood: [], // issue #112 — empty until first depletion
@@ -1036,6 +1065,13 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   }
   dst.bakedSurfaceEffect.set(src.bakedSurfaceEffect);
   dst.surfaceComponentMask = src.surfaceComponentMask;
+  // PR 5 — derived goal-field cache: reset (lazily recomputed) rather than
+  // sharing the growable Map between two independently-ticked worlds. The BFS
+  // scratch queue is reset the same way (the render-snapshot dst never computes
+  // goal fields, so it never reallocates; the live sim world keeps its buffer
+  // across in-place ticks).
+  dst.surfaceGoalFields = null;
+  dst.surfaceGoalBfsScratch = null;
 
   // --- Phase 7: undergroundGrids — same delete-stale + upsert pattern as pheromoneGrids ---
   for (const key in dst.undergroundGrids) {
