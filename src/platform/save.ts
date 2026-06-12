@@ -1569,6 +1569,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     bakedSurfaceEffect,
     surfaceComponentMask: null,
     surfaceGoalFields: null,
+    surfaceGoalBfsScratch: null,
     undergroundGrids,
     foodPiles: s.foodPiles.map((p) => ({ ...p })),
     recentlyDepletedFood: validatedRecentlyDepleted.map((r) => ({ ...r })),

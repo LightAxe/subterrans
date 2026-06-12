@@ -596,6 +596,18 @@ export interface WorldState {
    */
   surfaceGoalFields: Map<number, Int32Array> | null;
 
+  /**
+   * PR 5 — DERIVED (not serialized): reusable BFS frontier queue for building
+   * `surfaceGoalFields` entries (one `Int32Array(SURFACE_TILE_COUNT)`). World-
+   * owned (not a module-level singleton) so it stays inside the WorldState
+   * snapshot per the ECS boundary; it is pure transient scratch — fully
+   * overwritten before any read within a single `computeSurfaceGoalField` call,
+   * so it carries no state across calls and is never serialized. Null until
+   * first use; `copyWorldState` resets to null (the render-snapshot copy never
+   * computes fields, so it never reallocates).
+   */
+  surfaceGoalBfsScratch: Int32Array | null;
+
   undergroundGrids: Record<ColonyId, UndergroundGrid>; // per-colony underground (UNDR-08)
   foodPiles: FoodPile[]; // surface food sources (SURF-02 + issue #112 depletion/respawn)
 
@@ -684,6 +696,7 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
     bakedSurfaceEffect: new Uint8Array(SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT),
     surfaceComponentMask: null,
     surfaceGoalFields: null,
+    surfaceGoalBfsScratch: null,
     undergroundGrids: {},
     foodPiles: [],
     recentlyDepletedFood: [], // issue #112 — empty until first depletion
@@ -1053,8 +1066,12 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   dst.bakedSurfaceEffect.set(src.bakedSurfaceEffect);
   dst.surfaceComponentMask = src.surfaceComponentMask;
   // PR 5 — derived goal-field cache: reset (lazily recomputed) rather than
-  // sharing the growable Map between two independently-ticked worlds.
+  // sharing the growable Map between two independently-ticked worlds. The BFS
+  // scratch queue is reset the same way (the render-snapshot dst never computes
+  // goal fields, so it never reallocates; the live sim world keeps its buffer
+  // across in-place ticks).
   dst.surfaceGoalFields = null;
+  dst.surfaceGoalBfsScratch = null;
 
   // --- Phase 7: undergroundGrids — same delete-stale + upsert pattern as pheromoneGrids ---
   for (const key in dst.undergroundGrids) {
