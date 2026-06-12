@@ -137,6 +137,18 @@ export interface ContainedPlacement {
  * The nudge is bounded by half a sprite, only ever moves AWAY from dirt the
  * footprint would otherwise paint, and is constant along a shaft (same
  * neighbour pattern every row), so descent motion stays smooth.
+ *
+ * Diagonals are corner-aware: a Solid diagonal whose BOTH adjacent cardinals
+ * are passable is invisible to a cardinal-only nudge, yet `containedScale`'s
+ * corner clamp can still zero the scale when the center sits on the shared
+ * tile edge — e.g. a shaft ant (descent pins X to the tile edge, edgeW = 0)
+ * crossing a side-tunnel junction row, where the branch opens the west
+ * cardinal but the Solid NW/SW diagonals remain: the ant popped invisible and
+ * snapped sideways at every junction crossing. Such a diagonal is assigned to
+ * ONE axis as nudge dirt, preferring the axis whose OPPOSITE cardinal is also
+ * Solid — that is the corridor's cross-axis, already nudged identically in the
+ * adjacent rows/columns of the run, so the nudge stays constant through the
+ * junction and motion along the open run is smooth.
  */
 export function containSpritePlacement(
   grid: UndergroundGrid,
@@ -147,11 +159,48 @@ export function containSpritePlacement(
   rotation: number,
   desiredScale: number,
 ): ContainedPlacement {
-  const direct = containedScale(grid, cxPx, cyPx, spriteW, spriteH, rotation, desiredScale);
-  if (direct >= desiredScale) return { cxPx, cyPx, scale: direct };
-  const { hx, hy } = rotatedAabbHalfExtents(spriteW, spriteH, rotation, desiredScale);
   const tileX = Math.floor(cxPx / TILE_SIZE_PX);
   const tileY = Math.floor(cyPx / TILE_SIZE_PX);
+  const dirtW = isDirt(grid, tileX - 1, tileY);
+  const dirtE = isDirt(grid, tileX + 1, tileY);
+  const dirtN = isDirt(grid, tileX, tileY - 1);
+  const dirtS = isDirt(grid, tileX, tileY + 1);
+  // Which axis (if any) must nudge away from a Solid diagonal. A Solid
+  // adjacent cardinal already nudges its axis clear of the shared edge, so the
+  // corner needs no handling of its own ('none'). Otherwise the corner-only
+  // obstruction is assigned to the axis whose opposite cardinal is also Solid
+  // (the corridor's cross-axis — see the doc comment), falling back to X when
+  // the surroundings are fully open (either axis clears the corner).
+  const cornerAxis = (
+    diagDirt: boolean,
+    cardXDirt: boolean,
+    cardYDirt: boolean,
+    oppXDirt: boolean,
+    oppYDirt: boolean,
+  ): 'x' | 'y' | 'none' => {
+    if (!diagDirt || cardXDirt || cardYDirt) return 'none';
+    if (oppXDirt) return 'x';
+    if (oppYDirt) return 'y';
+    return 'x';
+  };
+  const nw = cornerAxis(isDirt(grid, tileX - 1, tileY - 1), dirtW, dirtN, dirtE, dirtS);
+  const ne = cornerAxis(isDirt(grid, tileX + 1, tileY - 1), dirtE, dirtN, dirtW, dirtS);
+  const sw = cornerAxis(isDirt(grid, tileX - 1, tileY + 1), dirtW, dirtS, dirtE, dirtN);
+  const se = cornerAxis(isDirt(grid, tileX + 1, tileY + 1), dirtE, dirtS, dirtW, dirtN);
+  const dirtLoX = dirtW || nw === 'x' || sw === 'x';
+  const dirtHiX = dirtE || ne === 'x' || se === 'x';
+  const dirtLoY = dirtN || nw === 'y' || ne === 'y';
+  const dirtHiY = dirtS || sw === 'y' || se === 'y';
+  if (!dirtLoX && !dirtHiX && !dirtLoY && !dirtHiY) {
+    // No nudge-relevant dirt anywhere in the 8-neighbourhood: scale
+    // containment alone decides (a no-op when every neighbour is passable).
+    return {
+      cxPx,
+      cyPx,
+      scale: containedScale(grid, cxPx, cyPx, spriteW, spriteH, rotation, desiredScale),
+    };
+  }
+  const { hx, hy } = rotatedAabbHalfExtents(spriteW, spriteH, rotation, desiredScale);
   const nudgeAxis = (
     c: number,
     tile: number,
@@ -171,20 +220,8 @@ export function containSpritePlacement(
     if (dirtHi) return Math.min(c, hi);
     return c;
   };
-  const nx = nudgeAxis(
-    cxPx,
-    tileX,
-    hx,
-    isDirt(grid, tileX - 1, tileY),
-    isDirt(grid, tileX + 1, tileY),
-  );
-  const ny = nudgeAxis(
-    cyPx,
-    tileY,
-    hy,
-    isDirt(grid, tileX, tileY - 1),
-    isDirt(grid, tileX, tileY + 1),
-  );
+  const nx = nudgeAxis(cxPx, tileX, hx, dirtLoX, dirtHiX);
+  const ny = nudgeAxis(cyPx, tileY, hy, dirtLoY, dirtHiY);
   return {
     cxPx: nx,
     cyPx: ny,

@@ -225,6 +225,47 @@ describe('PR 6-render containment probe — sprite on an Open tile never paints 
     ).toBe(false);
   });
 
+  it('junction crossing: shaft ant passing a side-tunnel row stays visible and laterally steady (Codex)', () => {
+    // Regression (Codex round 1): the placement nudge only saw CARDINAL dirt,
+    // so in a junction row (west cardinal Open, NW/SW diagonals Solid) no
+    // nudge fired and containedScale's corner clamp collapsed the factor to
+    // max(edgeW/hx, edgeN/hy) = 0 at the row boundary — edgeW is 0 for the
+    // whole integer-aligned descent (posX = tileX << FP_SHIFT). The ant popped
+    // invisible and snapped 4px sideways at every shaft↔side-tunnel crossing.
+    // Corner-aware nudging must keep the shaft nudge constant THROUGH the
+    // junction row: same cx as the rows above/below, full scale throughout.
+    const g = createUndergroundGrid(16, 16); // all Solid
+    for (let y = 0; y <= 8; y++) ugSet(g, CX, y, UndergroundTileState.Open); // 1-wide shaft
+    for (let x = 2; x <= CX - 1; x++) ugSet(g, x, 6, UndergroundTileState.Open); // west branch
+    const cx = CX * TILE_SIZE_PX; // integer tile coordinate — the descent X
+    const rot = Math.PI / 2; // facing down: 12×8 worker AABB → hx 4, hy 6
+    for (let cy = 5 * TILE_SIZE_PX + 8; cy <= 7 * TILE_SIZE_PX + 8; cy++) {
+      const p = containSpritePlacement(
+        g,
+        cx,
+        cy,
+        WORKER_SPRITE_WIDTH,
+        WORKER_SPRITE_HEIGHT,
+        rot,
+        1.0,
+      );
+      expect(p.scale).toBe(1.0); // never shrinks through the junction, let alone to 0
+      expect(p.cxPx).toBe(CX * TILE_SIZE_PX + 4); // constant shaft nudge — no lateral snap
+      expect(p.cyPx).toBe(cy); // descent motion untouched
+      expect(
+        aabbOverlapsDirt(
+          g,
+          p.cxPx,
+          p.cyPx,
+          WORKER_SPRITE_WIDTH,
+          WORKER_SPRITE_HEIGHT,
+          rot,
+          p.scale,
+        ),
+      ).toBe(false);
+    }
+  });
+
   it('placement leaves an unobstructed sprite untouched (no nudge without dirt)', () => {
     const grid = openFieldGrid();
     const cx = (CX + 0.1) * TILE_SIZE_PX; // off-center but every neighbour passable
