@@ -26,11 +26,14 @@ import { allocateEntityId } from '../../sim/types.js';
 import { initAnt, RECENT_TILES_LEN, RECENT_TILES_SENTINEL } from '../../sim/ant/ant-store.js';
 import { createWorldState, copyWorldState } from '../../sim/types.js';
 import { canEnterUndergroundTile } from '../../sim/ant/ant-system.js';
+import { tickDeadDiggerCleanup } from '../../sim/colony/colony-system.js';
+import { runAIController, resetAIControllerCache } from '../../render/ai-controller.js';
 import { Zone, ugSet, ugGet, UndergroundTileState } from '../../sim/terrain.js';
-import { AntTask, ForagingSubState, DiggingSubState } from '../../sim/enums.js';
+import { AntTask, ForagingSubState, DiggingSubState, ChamberType } from '../../sim/enums.js';
 import { FP_SHIFT, FP_ONE } from '../../sim/fixed.js';
 import {
   PLAYER_COLONY_ID,
+  ENEMY_COLONY_ID,
   PLAYER_START_X,
   PLAYER_START_Y,
   WORKER_BASE_SPEED,
@@ -156,14 +159,12 @@ function addPlayerAnt(
   return id;
 }
 
-describe('#128 class-iv: terrain mutation reverts under a standing occupant', () => {
-  it('CancelDigMark reverts Marked→Solid under a digger, embedding it', () => {
+describe('#128 class-iv (PR 6 fix): CancelDigMark occupancy guard blocks the embed', () => {
+  it('CancelDigMark under a standing occupant is BLOCKED — tile stays Marked, no embed', () => {
     const world = createScenario(42, 'Normal');
     const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
     const colonyId = PLAYER_COLONY_ID as ColonyId;
 
-    // A Solid tile away from the pre-open shaft; surround stays Solid so the
-    // embedded digger cannot wander out and self-resolve.
     const tx = PLAYER_START_X + 10;
     const ty = 6;
     ugSet(grid, tx, ty, UndergroundTileState.Marked);
@@ -179,33 +180,29 @@ describe('#128 class-iv: terrain mutation reverts under a standing occupant', ()
       lifespan: WORKER_LIFESPAN_TICKS,
       zone: Zone.Underground,
     });
-
-    // Before: Marked is passable for a digger.
     expect(canEnterUndergroundTile(grid, tx, ty, AntTask.Digging)).toBe(true);
 
-    // Cancel the mark this tick — handler reverts Marked→Solid with no
-    // occupancy check (tick.ts CancelDigMark).
+    // Cancel the mark this tick — the V30 occupancy guard sees the occupant (Solid
+    // would embed it) and BLOCKS the Marked→Solid revert.
     tick(world, [{ type: 'CancelDigMark', colonyId, tileX: tx, tileY: ty, issuedAtTick: 0 }]);
 
-    // After: tile is Solid; the digger is still on it and now embedded.
-    expect(ugGet(grid, tx, ty)).toBe(UndergroundTileState.Solid);
-    const stillThere =
-      world.ants.posX[digger]! >> FP_SHIFT === tx && world.ants.posY[digger]! >> FP_SHIFT === ty;
-    expect(stillThere).toBe(true);
-    expect(canEnterUndergroundTile(grid, tx, ty, world.ants.task[digger]! as AntTask)).toBe(false);
+    // After: the Marked→Solid revert was BLOCKED — the tile is not Solid (it is
+    // Marked, or BeingDug if the digger began excavating it later this tick; both
+    // are passable for the digger), so the occupant is not embedded.
+    expect(ugGet(grid, tx, ty)).not.toBe(UndergroundTileState.Solid);
+    expect(canEnterUndergroundTile(grid, tx, ty, world.ants.task[digger]! as AntTask)).toBe(true);
+    console.log('PASS PR6 #128 class-iv: CancelDigMark blocked under occupant (no embed)');
   });
 });
 
-describe('#128 class-ii: descent places an ant without validating the landing tile', () => {
-  it('a CarryingFood forager descends onto a non-Open landing tile and embeds', () => {
+describe('#128 class-ii (PR 6 fix): descent landing-tile guard blocks the embed', () => {
+  it('a CarryingFood forager does NOT descend onto a non-enterable landing tile', () => {
     const world = createScenario(42, 'Normal');
     const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
 
     // Corrupt the entrance landing tile (entrance column, tileY=0) to Solid.
-    // Descent sets posY=0 unconditionally; it never checks the tile is Open.
     ugSet(grid, PLAYER_START_X, 0, UndergroundTileState.Solid);
 
-    // A CarryingFood forager sitting exactly on the open entrance surface tile.
     const forager = addPlayerAnt(world, {
       colonyId: PLAYER_COLONY_ID,
       posX: (PLAYER_START_X << FP_SHIFT) + (FP_ONE >> 1),
@@ -218,19 +215,13 @@ describe('#128 class-ii: descent places an ant without validating the landing ti
     });
     world.ants.foodCarrying[forager] = 256;
 
-    // Step until the forager descends (zone flips to Underground).
-    let descended = false;
-    for (let t = 0; t < 20 && !descended; t++) {
+    // Step several ticks — the V30 landing-tile guard blocks descent onto the
+    // Solid tile, so the forager stays on the surface (never embeds).
+    for (let t = 0; t < 20; t++) {
       tick(world, []);
-      if (world.ants.zone[forager] === Zone.Underground) descended = true;
+      expect(world.ants.zone[forager]).toBe(Zone.Surface);
     }
-    expect(descended).toBe(true);
-
-    // It landed at tileY=0 on the Solid tile we planted → embedded.
-    expect(world.ants.posY[forager]! >> FP_SHIFT).toBe(0);
-    const lx = world.ants.posX[forager]! >> FP_SHIFT;
-    expect(ugGet(grid, lx, 0)).toBe(UndergroundTileState.Solid);
-    expect(canEnterUndergroundTile(grid, lx, 0, AntTask.Foraging)).toBe(false);
+    console.log('PASS PR6 #128 class-ii: descent onto non-enterable landing blocked (no embed)');
   }, 20_000);
 });
 
@@ -355,10 +346,10 @@ describe('PR 4 — connectivity + reachable-spawn', () => {
   }, 30_000);
 });
 
-describe('PR 5 — simVersion rejection boundary (posture 2)', () => {
+describe('PR 6 — simVersion rejection boundary (posture 2)', () => {
   it('a save at the new LATEST loads; a save below MIN_ACCEPTED is rejected', () => {
     const ser = serializeWorldState(createScenario(42, 'Normal'));
-    expect(LATEST_SIM_VERSION).toBe(29);
+    expect(LATEST_SIM_VERSION).toBe(30);
     // At LATEST → loads.
     expect(() => deserializeWorldState({ ...ser, simVersion: LATEST_SIM_VERSION })).not.toThrow();
     // Below MIN_ACCEPTED → rejected.
@@ -522,5 +513,240 @@ describe('PR 5 — recent-tiles field-specific copy + save/load round-trip (R3-1
     const bad = { ...ser, ants: { ...ser.ants, recentTiles: [0, 0, 1, RECENT_TILES_LEN, 5, 5] } };
     expect(() => deserializeWorldState(bad)).toThrow();
     console.log('PASS PR5 recent-tiles load rejects malformed stream');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR 6-sim — #128 dead-digger cleanup + adversarial cancellation + AI replay
+// ---------------------------------------------------------------------------
+
+describe('#128 class-iv dead-digger cleanup occupancy guard (PR 6, orphan-prevention)', () => {
+  it('retains the dead claim under a non-digger occupant, then reverts once it leaves', () => {
+    const world = createScenario(42, 'Normal');
+    const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
+    const tx = PLAYER_START_X + 8;
+    const ty = 5;
+    ugSet(grid, tx, ty, UndergroundTileState.BeingDug);
+
+    // A DEAD digger that still claims (tx,ty) (claim cleared post-mutation pre-V30).
+    const digger = addPlayerAnt(world, {
+      colonyId: PLAYER_COLONY_ID,
+      posX: (tx << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (ty << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Digging,
+      subTask: DiggingSubState.Excavating,
+      speed: WORKER_BASE_SPEED,
+      lifespan: WORKER_LIFESPAN_TICKS,
+      zone: Zone.Underground,
+    });
+    world.ants.alive[digger] = 0; // dead
+    world.ants.digTileX[digger] = tx;
+    world.ants.digTileY[digger] = ty;
+    world.ants.digTicksRemaining[digger] = 3;
+
+    // A LIVE non-digger (forager) standing on the BeingDug tile — BeingDug→Marked
+    // would embed it (Marked is non-passable for non-diggers).
+    const forager = addPlayerAnt(world, {
+      colonyId: PLAYER_COLONY_ID,
+      posX: (tx << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (ty << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
+      speed: WORKER_BASE_SPEED,
+      lifespan: WORKER_LIFESPAN_TICKS,
+      zone: Zone.Underground,
+    });
+
+    // Cleanup #1 — revert is BLOCKED; the claim is RETAINED (not orphaned).
+    tickDeadDiggerCleanup(world);
+    expect(ugGet(grid, tx, ty)).toBe(UndergroundTileState.BeingDug); // not reverted
+    expect(canEnterUndergroundTile(grid, tx, ty, AntTask.Foraging)).toBe(true); // not embedded
+    expect(world.ants.digTileX[digger]).toBe(tx); // claim retained → tile not orphaned
+    expect(world.ants.digTileY[digger]).toBe(ty);
+
+    // Occupant leaves → retry succeeds: tile reverts to Marked, claim clears.
+    world.ants.posX[forager] = (tx + 3) << FP_SHIFT;
+    tickDeadDiggerCleanup(world);
+    expect(ugGet(grid, tx, ty)).toBe(UndergroundTileState.Marked); // reverted now
+    expect(world.ants.digTileX[digger]).toBe(-1); // claim cleared
+    console.log(
+      'PASS PR6 #128 dead-digger: claim retained under occupant; reverts + clears on retry',
+    );
+  });
+});
+
+describe('#128 adversarial cancellation stress (PR 6) — dense cancels under occupants embed 0', () => {
+  it('CancelDigMark + transactional chamber-cancel never embed a standing occupant', () => {
+    const world = createScenario(42, 'Normal');
+    const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
+    const colonyId = PLAYER_COLONY_ID as ColonyId;
+
+    // A row of Marked tiles, each with a standing forager (Marked passable? no —
+    // place diggers so they legally stand on Marked, then cancel under them).
+    const ty = 7;
+    const occupants: number[] = [];
+    for (let tx = PLAYER_START_X + 2; tx <= PLAYER_START_X + 12; tx++) {
+      ugSet(grid, tx, ty, UndergroundTileState.Marked);
+      occupants.push(
+        addPlayerAnt(world, {
+          colonyId: PLAYER_COLONY_ID,
+          posX: (tx << FP_SHIFT) + (FP_ONE >> 1),
+          posY: (ty << FP_SHIFT) + (FP_ONE >> 1),
+          task: AntTask.Digging, // legally on a Marked tile
+          subTask: DiggingSubState.MovingToTile,
+          speed: 0, // pinned so the cancel lands under them
+          lifespan: WORKER_LIFESPAN_TICKS,
+          zone: Zone.Underground,
+        }),
+      );
+    }
+    // A pending chamber footprint, fully Marked, with an occupant inside it.
+    const chx = PLAYER_START_X + 2;
+    const chy = 10;
+    const dims = { width: 3, height: 2 };
+    for (let dy = 0; dy < dims.height; dy++) {
+      for (let dx = 0; dx < dims.width; dx++) {
+        ugSet(grid, chx + dx, chy + dy, UndergroundTileState.Marked);
+      }
+    }
+    world.pendingChambers['1'] = {
+      colonyId,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: chx,
+      anchorTileY: chy,
+      width: dims.width,
+      height: dims.height,
+    };
+    const chamberOccupant = addPlayerAnt(world, {
+      colonyId: PLAYER_COLONY_ID,
+      posX: ((chx + 1) << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (chy << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Digging,
+      subTask: DiggingSubState.MovingToTile,
+      speed: 0,
+      lifespan: WORKER_LIFESPAN_TICKS,
+      zone: Zone.Underground,
+    });
+
+    // Dense adversarial cancels: every occupied tile + the chamber footprint,
+    // repeated over several ticks.
+    let embedded = 0;
+    const check = (id: number): void => {
+      const ax = world.ants.posX[id]! >> FP_SHIFT;
+      const ay = world.ants.posY[id]! >> FP_SHIFT;
+      if (!canEnterUndergroundTile(grid, ax, ay, world.ants.task[id]! as AntTask)) embedded++;
+    };
+    for (let t = 0; t < 4; t++) {
+      const cmds: SimCommand[] = [];
+      for (let tx = PLAYER_START_X + 2; tx <= PLAYER_START_X + 12; tx++) {
+        cmds.push({ type: 'CancelDigMark', colonyId, tileX: tx, tileY: ty, issuedAtTick: 0 });
+      }
+      cmds.push({ type: 'CancelDigMark', colonyId, tileX: chx + 1, tileY: chy, issuedAtTick: 0 });
+      tick(world, cmds);
+      for (const id of occupants) check(id);
+      check(chamberOccupant);
+    }
+    expect(embedded).toBe(0);
+    // The chamber-cancel was blocked transactionally — the pending chamber survives.
+    expect(world.pendingChambers['1']).toBeDefined();
+    console.log(
+      `PASS PR6 #128 stress: 0 embeddings across dense cancels (occupants=${occupants.length + 1})`,
+    );
+  });
+});
+
+describe('#128 AI command record+replay (PR 6) — 0 natural embeddings', () => {
+  it('records the real AI command stream and replays it through the harness with 0 embeddings', () => {
+    const SEED = 4051;
+    const TICKS = 800;
+    // RECORD: run the enemy AI controller live, capturing its per-tick command
+    // emissions (resetAIControllerCache per world so its module cache cannot leak).
+    const recWorld = createScenario(SEED, 'Normal');
+    resetAIControllerCache();
+    const log: SimCommand[][] = [];
+    for (let t = 0; t < TICKS; t++) {
+      recWorld.commandQueue.length = 0;
+      runAIController(recWorld, ENEMY_COLONY_ID as ColonyId);
+      const cmds = [...recWorld.commandQueue];
+      log.push(cmds);
+      tick(recWorld, cmds);
+    }
+    // REPLAY through the instrumented harness (fresh world, same seed + commands →
+    // identical evolution) and assert the AI's natural stream embeds nothing.
+    const r = runTracedScenario(SEED, 'Normal', TICKS, log);
+    expect(r.embedding.length).toBe(0);
+    expect(r.worstEmbeddingTicks).toBe(0);
+    console.log(
+      `PASS PR6 #128 AI replay: 0 natural embeddings over ${TICKS} ticks (commands recorded=${log.reduce((n, c) => n + c.length, 0)})`,
+    );
+  }, 60_000);
+});
+
+describe('PR 6 — save size + tick-time + neutrality (sim guards add no field; render is sim-neutral)', () => {
+  // Same wall-clock caveat as the PR 5 caps test above: msPerTick swings with
+  // runner hardware/load (a CI runner measured ~0.70-0.73 ms/tick on unchanged
+  // code), so an absolute 0.5 cap flakes the required `npm run verify` gate. The
+  // figure is logged every run; the hard bound is the generous hardware-robust
+  // PERF_TICK_MS_CEILING that only trips on a catastrophic regression, with the
+  // 0.5 ms dev target reported in the log.
+  const PERF_TICK_MS_TARGET = 0.5;
+  const PERF_TICK_MS_CEILING = 5.0;
+  it('save delta <= +5%, tick-time within regression ceiling, tracing neutral over a construction run', () => {
+    const BASELINE_BYTES = 1_095_416; // pre-PR4 ~1.095 MB (INVESTIGATION.md)
+    const log = emptyLog(2000);
+    let worstDeltaPct = -Infinity;
+    let worstMsPerTick = 0;
+    for (const d of DIFFICULTIES) {
+      const m = measurePerfAndSize(42, d, 2000, log);
+      const deltaPct = ((m.saveSizeBytes - BASELINE_BYTES) / BASELINE_BYTES) * 100;
+      worstDeltaPct = Math.max(worstDeltaPct, deltaPct);
+      worstMsPerTick = Math.max(worstMsPerTick, m.msPerTick);
+      console.log(
+        `PR6 size/perf ${d}: saveSize=${m.saveSizeBytes}B delta=${deltaPct.toFixed(2)}% msPerTick=${m.msPerTick.toFixed(3)}`,
+      );
+    }
+    expect(worstDeltaPct).toBeLessThanOrEqual(5); // PR 6-sim adds no serialized field
+    expect(worstMsPerTick).toBeLessThanOrEqual(PERF_TICK_MS_CEILING);
+    // Neutrality: the V30 guards consume no RNG and mutate no extra state, so an
+    // instrumented run stays byte-identical to a clean one (incl. rngState). PR
+    // 6-render lives in src/render — never executed by tick()/the harness — so it
+    // cannot affect sim determinism or neutrality.
+    const n = checkObservationalNeutrality(42, 'Normal', 600, playerConstructionLog(600));
+    expect(n.neutral).toBe(true);
+    expect(n.serializedEqual).toBe(true);
+    expect(n.rngStateClean).toBe(n.rngStateTraced);
+    const tgt = worstMsPerTick <= PERF_TICK_MS_TARGET ? 'within' : 'OVER';
+    console.log(
+      `PASS PR6 caps: save delta=${worstDeltaPct.toFixed(2)}% (<=+5%), msPerTick=${worstMsPerTick.toFixed(3)} (ceiling ${PERF_TICK_MS_CEILING}; ${tgt} ${PERF_TICK_MS_TARGET} dev target), neutral=${n.neutral}`,
+    );
+  }, 120_000);
+});
+
+describe('#128 class-ii queen descent guard (PR 6, all queen descent paths)', () => {
+  it('a queen on an open entrance does NOT descend onto a non-enterable column top', () => {
+    const world = createScenario(42, 'Normal');
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const qId = colony.queenEntityId;
+    // An open entrance whose underground column-top is corrupt (Solid).
+    const ex = PLAYER_START_X + 4;
+    colony.entrances.push({
+      entranceId: 99,
+      surfaceTileX: ex,
+      surfaceTileY: PLAYER_START_Y,
+      isOpen: true,
+    });
+    ugSet(world.undergroundGrids[PLAYER_COLONY_ID]!, ex, 0, UndergroundTileState.Solid);
+    // Stand the queen ON that open entrance tile (surface) — this routes her
+    // through the pre-move descent short-circuit (ant-system.ts ~3686), the third
+    // descent path the V30 guard now covers.
+    world.ants.posX[qId] = (ex << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[qId] = (PLAYER_START_Y << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.zone[qId] = Zone.Surface;
+
+    tick(world, []);
+
+    // The guard blocks descent onto the Solid column top — she holds on the surface.
+    expect(world.ants.zone[qId]).toBe(Zone.Surface);
+    console.log('PASS PR6 #128 class-ii queen: descent onto non-enterable column top blocked');
   });
 });

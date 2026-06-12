@@ -106,6 +106,7 @@ import type { EntranceFlowFields } from '../entrance-flow.js';
 import type { ChamberFlowFields } from '../chamber-flow.js';
 import { hasReachableNonFullNursery } from '../chamber-flow.js';
 import { Zone, UndergroundTileState, ugGet, ugSet, type UndergroundGrid } from '../terrain.js';
+import { isUndergroundStateEnterable } from '../underground-occupancy.js';
 
 // ---------------------------------------------------------------------------
 // Direction tables for dig flow-field to dx/dy conversion
@@ -3023,14 +3024,7 @@ export function canEnterUndergroundTile(
   if (tileX < 0 || tileY < 0 || tileX >= underground.width || tileY >= underground.height) {
     return false;
   }
-  const state = ugGet(underground, tileX, tileY);
-  if (state === UndergroundTileState.Open || state === UndergroundTileState.BeingDug) {
-    return true;
-  }
-  if (state === UndergroundTileState.Marked) {
-    return task === AntTask.Digging;
-  }
-  return false; // Solid (and any future state): impassable for every task
+  return isUndergroundStateEnterable(ugGet(underground, tileX, tileY), task);
 }
 
 // ---------------------------------------------------------------------------
@@ -3670,6 +3664,20 @@ function moveQueens(
         const entrance = colony.entrances[e]!;
         if (!entrance.isOpen) continue;
         if (entrance.surfaceTileX !== tileX || entrance.surfaceTileY !== tileY) continue;
+        // PR 6-sim (V30, #128 class-ii) — landing-tile validity guard. This is the
+        // queen's THIRD descent path (already standing on her open entrance); like
+        // the worker descent and the queen step-onto-entrance descent, she lands
+        // ONLY on an enterable (tileX, 0) tile, else holds on the surface this
+        // tick. Fails CLOSED on a missing grid. Without this, a corrupt save
+        // (isOpen true, column-top not enterable) — or the documented starter
+        // case — would embed her, the exact class-ii write the sibling guards stop.
+        const landingGrid = world.undergroundGrids[colony.colonyId];
+        if (
+          landingGrid === undefined ||
+          !canEnterUndergroundTile(landingGrid, tileX, 0, ants.task[qId]! as AntTask)
+        ) {
+          continue;
+        }
         ants.zone[qId] = Zone.Underground;
         // Phase 09.1 Chunk 0 — descent invariant: the entrance-owning colony
         // dictates the queen's occupied grid. Queens never invade, so this
@@ -3935,6 +3943,20 @@ function moveQueens(
           entrance.surfaceTileX === newTileX &&
           entrance.surfaceTileY === newTileY
         ) {
+          // PR 6-sim (V30, #128 class-ii) — landing-tile validity guard, mirroring
+          // the worker descent. The queen lands ONLY on an enterable (newTileX, 0)
+          // tile; otherwise she holds on the surface this tick (re-checked next
+          // tick). In normal play her entrance-column shaft top is Open, so this
+          // never blocks her initial descent.
+          // Fail CLOSED on a missing grid (unreachable in normal play), as the
+          // worker descent does.
+          const landingGrid = world.undergroundGrids[colony.colonyId];
+          if (
+            landingGrid === undefined ||
+            !canEnterUndergroundTile(landingGrid, newTileX, 0, ants.task[qId]! as AntTask)
+          ) {
+            continue;
+          }
           ants.zone[qId] = Zone.Underground;
           // Plan 09.1-00: every Surface→Underground transition must update
           // currentGridColonyId so the descending queen resolves to its own
@@ -5228,6 +5250,24 @@ export function tickAntMovement(
             // `continue` skips descent through this entrance; with no other
             // matching entrance the ant stays on the surface for combat.
             if (isDescentBlocked(world, task, isOwnEntrance, colony, tileX, tileY)) {
+              continue;
+            }
+
+            // PR 6-sim (V30, #128 class-ii) — landing-tile validity guard. Descent
+            // sets posY=0 at the ant's column; pre-V30 there was NO check that the
+            // landing tile (tileX, 0) is enterable, so an ant could descend onto a
+            // Solid/Marked tile and embed. Land ONLY on a tile this ant's task can
+            // enter; otherwise BLOCK descent in place (stay on the surface this
+            // tick, re-checked next tick) — never seek a "nearest legal landing",
+            // which could teleport the ant laterally into an unrelated tunnel.
+            // Fail CLOSED: a missing grid (unreachable in normal play — every
+            // colony gets one at init) means there is nowhere valid to land, so
+            // block descent rather than silently skip the embedding guard.
+            const landingGrid = world.undergroundGrids[colony.colonyId];
+            if (
+              landingGrid === undefined ||
+              !canEnterUndergroundTile(landingGrid, tileX, 0, task)
+            ) {
               continue;
             }
 
