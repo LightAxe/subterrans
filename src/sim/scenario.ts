@@ -22,6 +22,13 @@ import {
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import { createPheromoneGrid, pheromoneGridKey } from './pheromone/pheromone-store.js';
+import {
+  bakeStaticTerrain,
+  isSurfaceTileInComponent,
+  validateSurfaceConnectivity,
+  ensureSurfaceComponentMask,
+  type SurfaceRoot,
+} from './surface-features.js';
 import { Rng } from './rng.js';
 import { FP_SHIFT } from './fixed.js';
 import { AntTask, PheromoneType } from './enums.js';
@@ -93,6 +100,12 @@ function generateFoodPiles(world: WorldState, rng: Rng): void {
   ) {
     const tileX = rng.nextRange(0, SURFACE_GRID_WIDTH - 1);
     const tileY = rng.nextRange(0, SURFACE_GRID_HEIGHT - 1);
+
+    // PR 4 reachable-spawn invariant: a pile may only land on a walkable tile in
+    // the single connected surface component (against the now-frozen terrain), so
+    // baking can never strand a pile behind a wall. Subsumes the old HardBlock
+    // check (component membership excludes HardBlock tiles).
+    if (!isSurfaceTileInComponent(world, tileX, tileY)) continue;
 
     // Reject if too close to any colony start (Manhattan distance)
     let tooCloseToColony = false;
@@ -377,7 +390,20 @@ export function createScenario(
     UNDERGROUND_GRID_HEIGHT,
   );
 
-  // --- Step 4: Food pile scatter ---
+  // --- Step 3b (PR 4): bake FROZEN static terrain BEFORE placing piles. ---
+  // Canonical roots = the colony start tiles (entrances are created at these in
+  // initColony below). Reserve a static clearance around each root and carve a
+  // deterministic corridor so the whole surface is ONE connected walkable
+  // component. No terrainSeed retry, no RNG draws — keeps the pile/spider RNG
+  // stream that follows unaffected by terrain baking.
+  const roots: SurfaceRoot[] = [
+    { tileX: PLAYER_START_X, tileY: PLAYER_START_Y },
+    { tileX: ENEMY_START_X, tileY: ENEMY_START_Y },
+  ];
+  world.bakedSurfaceEffect = bakeStaticTerrain(world, roots);
+  world.surfaceComponentMask = null; // recompute from the carved grid on next use
+
+  // --- Step 4: Food pile scatter (against the fixed, reserved+connected field) ---
   generateFoodPiles(world, rng);
 
   // --- Steps 5-6: Colony initialization (player + enemy) ---
@@ -388,6 +414,30 @@ export function createScenario(
   world.colonies[ENEMY_COLONY_ID]!.eggIntervalNumerator =
     QUEEN_EGG_INTERVAL_DIFFICULTY_NUMERATOR[tierIndex(difficulty)];
   // Player colony keeps default eggIntervalNumerator=4 (identity).
+
+  // generateFoodPiles above memoised the component mask using the pre-colony
+  // fallback root (no entrances existed yet). Now that colonies + entrances are
+  // in place, drop that cached mask so the persisted/validated mask is rooted at
+  // the real canonical root (the first colony's entrance) rather than relying on
+  // the fallback happening to equal it (ship-review advisory).
+  world.surfaceComponentMask = null;
+
+  // PR 4 — assert the connectivity invariant AT WORLD-GEN (not only on save
+  // load): every colony entrance (initColony places one at each root start tile,
+  // so the entrance IS the root) and every food pile must sit in the single
+  // walkable component the bake constructed. A regression in the bake/corridor
+  // logic fails loudly here instead of shipping a stranded world.
+  if (!validateSurfaceConnectivity(world)) {
+    throw new Error(
+      'createScenario: surface connectivity invariant violated after bakeStaticTerrain (an entrance or food pile is not in the single walkable component)',
+    );
+  }
+  // Eagerly materialise the derived component mask at world-gen (idempotent —
+  // validateSurfaceConnectivity already populated it). Terrain is immutable, so
+  // every later `isSurfaceTileInComponent` query — including the render/input
+  // entrance-preview gate — is a pure read of an already-built mask; no query
+  // path lazily mutates the world.
+  ensureSurfaceComponentMask(world);
 
   // --- Step 8: Pheromone grids — all 8 (2 colonies × 2 types × 2 zones) ---
   // All 8 must exist so tick-step lookups never hit a missing key.

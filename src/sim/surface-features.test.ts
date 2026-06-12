@@ -10,12 +10,16 @@
 import { describe, it, expect } from 'vitest';
 import { createWorldState, type WorldState } from './types.js';
 import { createColonyRecord } from './colony/colony-store.js';
+import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constants.js';
 import {
   surfaceFeatureAt,
   surfaceMovementAt,
+  surfaceFeatureProcedural,
+  bakeSurfaceEffectGrid,
+  bakeStaticTerrain,
+  computeSurfaceComponentMask,
   SurfaceFeatureKind,
   SurfaceMovementEffect,
-  SURFACE_FEATURE_ENTRANCE_RADIUS,
   type SurfaceFeatureSlice,
 } from './surface-features.js';
 
@@ -181,205 +185,73 @@ describe('surfaceFeatureAt — anchor overlap suppression', () => {
   });
 });
 
-describe('surfaceFeatureAt — gameplay suppression', () => {
-  it('an entrance suppresses any feature whose footprint enters its radius', () => {
-    // Find a tile where a feature naturally lands without any colony
-    // installed; then install an entrance there and confirm the feature
-    // is gone. If the selector skipped suppression we'd still see the
-    // feature, which is the bug Codex flagged (queen boxed in by seed luck).
+describe('surfaceFeatureAt — STATIC terrain (PR 4): no dynamic suppression', () => {
+  it('installing an entrance on a feature tile does NOT remove the feature', () => {
+    // PR 4 deleted the dynamic entrance suppression halo — terrain is frozen at
+    // bake. Installing an entrance on a feature tile must leave it unchanged.
     const seed = 42;
     const baseline = createWorldState(seed);
     const found = findFirstFeatureTile(baseline, 60, 60);
     expect(found).not.toBeNull();
 
-    const suppressed = createWorldState(seed);
-    installColonyWithEntrance(suppressed, /* colonyId */ 1, found!.x, found!.y);
-    expect(surfaceFeatureAt(suppressed, found!.x, found!.y)).toBeNull();
+    const withEntrance = createWorldState(seed);
+    installColonyWithEntrance(withEntrance, /* colonyId */ 1, found!.x, found!.y);
+    expect(surfaceFeatureAt(withEntrance, found!.x, found!.y)).toEqual(found!.slice);
   });
 
-  it('suppression radius extends SURFACE_FEATURE_ENTRANCE_RADIUS in Chebyshev distance', () => {
-    // An entrance at (50, 50) suppresses any 1-tile probe inside the
-    // [50-3 .. 50+3, 50-3 .. 50+3] square. Anchors with multi-tile
-    // footprints can be suppressed even further out (their footprint
-    // overlaps the radius rectangle), but the per-tile probe at the edge
-    // of the rectangle must consistently return suppressed.
-    const seed = 99;
-    const world = createWorldState(seed);
-    installColonyWithEntrance(world, 1, 50, 50);
-    const r = SURFACE_FEATURE_ENTRANCE_RADIUS;
-    // Every tile inside the suppression rectangle should be free of any
-    // anchor whose own anchor position sits inside the rectangle. The
-    // strongest invariant we can assert without coupling to the registry
-    // hash: the four corner tiles of the radius square (ex±r, ey±r) and
-    // the centre return null OR a slice anchored OUTSIDE the rectangle.
-    const tiles: Array<[number, number]> = [
-      [50, 50],
-      [50 - r, 50 - r],
-      [50 + r, 50 - r],
-      [50 - r, 50 + r],
-      [50 + r, 50 + r],
-    ];
-    for (const [tx, ty] of tiles) {
-      const slice = surfaceFeatureAt(world, tx, ty);
-      if (slice === null) continue;
-      // Anchor must be outside the suppression rectangle (otherwise the
-      // gameplay check should have rejected it).
-      const insideX = slice.anchorX >= 50 - r && slice.anchorX <= 50 + r;
-      const insideY = slice.anchorY >= 50 - r && slice.anchorY <= 50 + r;
-      expect(insideX && insideY).toBe(false);
-    }
-  });
-
-  it('a food pile suppresses any feature covering its tile', () => {
+  it('adding a food pile on a feature tile does NOT remove the feature', () => {
     const seed = 11;
     const baseline = createWorldState(seed);
     const found = findFirstFeatureTile(baseline, 60, 60);
     expect(found).not.toBeNull();
 
-    const suppressed = createWorldState(seed);
-    suppressed.foodPiles.push({
+    const withPile = createWorldState(seed);
+    withPile.foodPiles.push({
       foodPileId: 0,
       tileX: found!.x,
       tileY: found!.y,
       pickupsRemaining: 50,
       pickupsInitial: 50,
     });
-    expect(surfaceFeatureAt(suppressed, found!.x, found!.y)).toBeNull();
+    expect(surfaceFeatureAt(withPile, found!.x, found!.y)).toEqual(found!.slice);
   });
 
-  it('multiple colonies all contribute to suppression', () => {
-    // Install two colonies with entrances at distant tiles. A feature that
-    // would land within either suppression radius should be suppressed.
-    const seed = 55;
-    const baseline = createWorldState(seed);
-    // Find two distant feature tiles so neither colony's radius reaches
-    // the other entrance position.
-    const first = findFirstFeatureTile(baseline, 30, 30);
-    expect(first).not.toBeNull();
-    let second: { x: number; y: number; slice: SurfaceFeatureSlice } | null = null;
-    for (let y = 60; y < 90 && second === null; y++) {
-      for (let x = 60; x < 90; x++) {
-        const slice = surfaceFeatureAt(baseline, x, y);
-        if (slice !== null) {
-          second = { x, y, slice };
-          break;
-        }
-      }
-    }
-    expect(second).not.toBeNull();
-
-    const suppressed = createWorldState(seed);
-    installColonyWithEntrance(suppressed, 1, first!.x, first!.y);
-    installColonyWithEntrance(suppressed, 2, second!.x, second!.y);
-    expect(surfaceFeatureAt(suppressed, first!.x, first!.y)).toBeNull();
-    expect(surfaceFeatureAt(suppressed, second!.x, second!.y)).toBeNull();
-  });
-
-  it('v8+ — gameplay-suppressed shadow no longer hides outside-zone anchors (Codex P2 round-3 fix)', () => {
-    // Pre-fix bug: a higher-priority anchor sitting inside an entrance
-    // suppression zone never rendered, but `isAnchorSuppressedByOverlap`
-    // would still treat it as a real suppressor of LOWER-priority
-    // anchors whose footprints overlap its shadow OUTSIDE the zone.
-    // The result was unintended empty halos around the suppression
-    // ring. Post-fix, the recursion also rejects gameplay-suppressed
-    // candidate suppressors, so lower-priority anchors that pre-fix
-    // were unjustly hidden now surface.
-    //
-    // Property-test pattern: scan many seeds, find a tile T near (but
-    // outside) an entrance suppression zone where:
-    //   - baseline (no entrance) returns a feature at T,
-    //   - the baseline anchor at T sits INSIDE the zone of a
-    //     hypothetical entrance E,
-    // Then install entrance E and verify v8 returns SOMETHING at T
-    // (it might be a different lower-priority anchor than baseline,
-    // but it must NOT be null — that's the v8 invariant). Pre-v8
-    // would return null in the same scenario.
-    //
-    // The test counts how many tiles SHIFT from null (pre-fix) to
-    // non-null (post-fix) across a seed sweep. Even a single proven
-    // example demonstrates the fix; the count gives statistical
-    // confidence the fix matters in practice rather than only in
-    // theory.
-    const r = SURFACE_FEATURE_ENTRANCE_RADIUS;
-    let demonstrationCount = 0;
-    seedLoop: for (let seed = 1; seed < 80; seed++) {
-      const baseline = createWorldState(seed);
-      // Place an entrance at a known location with room around it.
-      const ex = 30,
-        ey = 30;
-      // Examine tiles just OUTSIDE the entrance suppression rectangle
-      // — on the perimeter where the shadow bug would manifest.
-      for (let dy = -r - 6; dy <= r + 6; dy++) {
-        for (let dx = -r - 6; dx <= r + 6; dx++) {
-          const tx = ex + dx;
-          const ty = ey + dy;
-          // Skip tiles inside the suppression rectangle — those are
-          // legitimately suppressed and not part of this bug.
-          if (Math.abs(dx) <= r && Math.abs(dy) <= r) continue;
-          const baselineSlice = surfaceFeatureAt(baseline, tx, ty);
-          if (baselineSlice === null) continue;
-          // Need the baseline anchor to be INSIDE the would-be
-          // suppression rectangle — that's the geometric setup for
-          // the shadow bug.
-          const ax = baselineSlice.anchorX;
-          const ay = baselineSlice.anchorY;
-          const anchorInsideZone = ax >= ex - r && ax <= ex + r && ay >= ey - r && ay <= ey + r;
-          if (!anchorInsideZone) continue;
-          // Setup: install the entrance, re-query.
-          const withEntrance = createWorldState(seed);
-          installColonyWithEntrance(withEntrance, 1, ex, ey);
-          const v8Slice = surfaceFeatureAt(withEntrance, tx, ty);
-          // v8 invariant: the tile MAY have a different feature now
-          // (the baseline shadower is gone), but it should not
-          // collapse to null when a lower-priority anchor exists in
-          // the shadow region. The strongest v8 claim we can make
-          // without re-running the registry-walk: the v8 path returns
-          // SOMETHING for this tile, OR the v8 path correctly returns
-          // null because no lower-priority shadower exists.
-          //
-          // To make the assertion meaningful we narrow further: only
-          // record a demonstration when v8 returns a feature whose
-          // anchor is NOT inside the zone (proves the lower-priority
-          // anchor surfaced) AND whose feature kind differs from
-          // baseline (proves a different anchor took over).
-          if (v8Slice === null) continue;
-          const v8AnchorOutsideZone =
-            v8Slice.anchorX < ex - r ||
-            v8Slice.anchorX > ex + r ||
-            v8Slice.anchorY < ey - r ||
-            v8Slice.anchorY > ey + r;
-          // baselineSlice anchor is INSIDE the zone (anchorInsideZone
-          // gate above); requiring v8 anchor to be OUTSIDE the zone
-          // is sufficient to prove a different anchor surfaced — they
-          // can't match coordinates when one is inside and the other
-          // outside.
-          if (!v8AnchorOutsideZone) continue;
-          demonstrationCount++;
-          if (demonstrationCount >= 3) break seedLoop;
-        }
-      }
-    }
-    // The fix MUST surface at least one previously-hidden anchor
-    // across the 80-seed sweep. Three independent demonstrations
-    // prove the fix is working in practice, not just in a single
-    // contrived setup.
-    expect(demonstrationCount).toBeGreaterThanOrEqual(1);
+  it('the baked carve override suppresses the rendered feature on a carved tile (R4-3)', () => {
+    // A tile carved passable in bakedSurfaceEffect (root reservation / corridor)
+    // must return null from surfaceFeatureAt so render paints no boulder over it,
+    // and surfaceMovementAt must read Cosmetic.
+    const seed = 42;
+    const world = createWorldState(seed);
+    const found = findFirstFeatureTile(world, 60, 60);
+    expect(found).not.toBeNull();
+    world.bakedSurfaceEffect[found!.y * SURFACE_GRID_WIDTH + found!.x] =
+      SurfaceMovementEffect.Cosmetic;
+    expect(surfaceFeatureAt(world, found!.x, found!.y)).toBeNull();
+    expect(surfaceMovementAt(world, found!.x, found!.y)).toBe(SurfaceMovementEffect.Cosmetic);
   });
 });
 
 describe('surfaceMovementAt', () => {
-  it('returns Cosmetic when no feature covers the tile', () => {
-    // Pick a tile that's definitely empty: a tile inside the radius of an
-    // entrance with no other features around. surfaceFeatureAt returns
-    // null → surfaceMovementAt returns Cosmetic.
+  it('returns Cosmetic for a tile with no feature', () => {
     const world = createWorldState(42);
-    installColonyWithEntrance(world, 1, 50, 50);
-    expect(surfaceMovementAt(world, 50, 50)).toBe(SurfaceMovementEffect.Cosmetic);
+    let emptyX = -1;
+    let emptyY = -1;
+    outer: for (let y = 0; y < 80; y++) {
+      for (let x = 0; x < 80; x++) {
+        if (surfaceFeatureAt(world, x, y) === null) {
+          emptyX = x;
+          emptyY = y;
+          break outer;
+        }
+      }
+    }
+    expect(emptyX).toBeGreaterThanOrEqual(0);
+    expect(surfaceMovementAt(world, emptyX, emptyY)).toBe(SurfaceMovementEffect.Cosmetic);
   });
 
   it('returns the slice movement when a feature covers the tile', () => {
     // Walk until we find a covered tile, then assert the helper agrees
-    // with the slice's movement field.
+    // with the slice's movement field (baked grid == procedural for a bare world).
     const world = createWorldState(42);
     const found = findFirstFeatureTile(world, 60, 60);
     expect(found).not.toBeNull();
@@ -480,5 +352,84 @@ describe('SURFACE_FEATURES registry contract', () => {
     if (seen.has(SurfaceFeatureKind.GrassClump)) {
       expect(seen.get(SurfaceFeatureKind.GrassClump)).toBe(SurfaceMovementEffect.SoftCost);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR 4 (Fable review) — load-bearing bake↔selector equivalence + component/
+// corridor regression coverage. These were verified out-of-band during PR 4;
+// committing them guards the carve-detection invariant against future drift.
+// ---------------------------------------------------------------------------
+
+describe('bakeSurfaceEffectGrid ≡ per-tile surfaceFeatureProcedural', () => {
+  it('is byte-identical to the per-tile selector across seeds × all 16,384 tiles', () => {
+    // surfaceFeatureAt's carve detection rests on baked[idx] ===
+    // surfaceFeatureProcedural(...).movement for every un-carved tile; the
+    // anchor-iterating bake must reproduce the per-tile selector exactly or
+    // carved-vs-procedural desync silently hides sprites over walkable terrain.
+    let mismatches = 0;
+    for (const seed of [1, 7, 42, 99, 256, 2024]) {
+      const w = createWorldState(seed);
+      const baked = bakeSurfaceEffectGrid(w);
+      for (let y = 0; y < SURFACE_GRID_HEIGHT; y++) {
+        for (let x = 0; x < SURFACE_GRID_WIDTH; x++) {
+          const proc = surfaceFeatureProcedural(w, x, y);
+          const expected = proc === null ? SurfaceMovementEffect.Cosmetic : proc.movement;
+          if (baked[y * SURFACE_GRID_WIDTH + x] !== expected) mismatches++;
+        }
+      }
+    }
+    expect(mismatches).toBe(0);
+  });
+});
+
+describe('computeSurfaceComponentMask', () => {
+  it('marks only the region reachable from the root, excluding a walled-off pocket', () => {
+    // Hand-built grid: a full-height HardBlock wall at x=64 splits left|right.
+    const grid = new Uint8Array(SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT);
+    for (let y = 0; y < SURFACE_GRID_HEIGHT; y++) {
+      grid[y * SURFACE_GRID_WIDTH + 64] = SurfaceMovementEffect.HardBlock;
+    }
+    const mask = computeSurfaceComponentMask(grid, 10, 10); // root on the left
+    expect(mask[10 * SURFACE_GRID_WIDTH + 10]).toBe(1); // root in component
+    expect(mask[10 * SURFACE_GRID_WIDTH + 30]).toBe(1); // same (left) side
+    expect(mask[10 * SURFACE_GRID_WIDTH + 64]).toBe(0); // the wall itself
+    expect(mask[10 * SURFACE_GRID_WIDTH + 100]).toBe(0); // walled-off right pocket
+  });
+});
+
+describe('bakeStaticTerrain corridor clears HardBlocks + connects roots (carveCorridor)', () => {
+  it('carves through a procedural HardBlock on the corridor row, joining the two roots', () => {
+    // carveCorridor clears the PROCEDURAL HardBlock features (via
+    // surfaceFeatureProcedural) along the Manhattan path between two roots — so
+    // this exercises the real carve on procedural terrain (not an injected wall,
+    // which the carve does not recognise). Find a row with a procedural HardBlock
+    // in the interior, run a corridor across it, and assert it is cleared and the
+    // roots end mutually reachable.
+    const world = createWorldState(42);
+    const proc = world.bakedSurfaceEffect; // createWorldState bakes the procedural field
+    let ry = -1;
+    let hx = -1;
+    outer: for (let y = 0; y < SURFACE_GRID_HEIGHT; y++) {
+      for (let x = 25; x <= 95; x++) {
+        if (proc[y * SURFACE_GRID_WIDTH + x] === SurfaceMovementEffect.HardBlock) {
+          ry = y;
+          hx = x;
+          break outer;
+        }
+      }
+    }
+    expect(ry).toBeGreaterThanOrEqual(0); // a procedural HardBlock to clear exists
+    expect(proc[ry * SURFACE_GRID_WIDTH + hx]).toBe(SurfaceMovementEffect.HardBlock);
+
+    const leftRoot = { tileX: 20, tileY: ry };
+    const rightRoot = { tileX: 100, tileY: ry };
+    const baked = bakeStaticTerrain(world, [leftRoot, rightRoot]);
+    // The HardBlock on the corridor row is cleared by the carve.
+    expect(baked[ry * SURFACE_GRID_WIDTH + hx]).not.toBe(SurfaceMovementEffect.HardBlock);
+    // Both roots are in one walkable component after the corridor carve.
+    const post = computeSurfaceComponentMask(baked, leftRoot.tileX, leftRoot.tileY);
+    expect(post[leftRoot.tileY * SURFACE_GRID_WIDTH + leftRoot.tileX]).toBe(1);
+    expect(post[rightRoot.tileY * SURFACE_GRID_WIDTH + rightRoot.tileX]).toBe(1);
   });
 });

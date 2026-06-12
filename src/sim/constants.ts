@@ -268,6 +268,15 @@ export const UNDERGROUND_GRID_WIDTH = 128;
 export const UNDERGROUND_GRID_HEIGHT = 64;
 
 /**
+ * PR 4 (static terrain) — Chebyshev radius of the static walkable clearance
+ * carved around every canonical colony root at world-gen. Replaces the deleted
+ * dynamic entrance suppression halo (`SURFACE_FEATURE_ENTRANCE_RADIUS`, also 3)
+ * that guaranteed clear launch space for co-spawned ants — now baked once into
+ * the frozen terrain instead of recomputed from live entrance state.
+ */
+export const SURFACE_ROOT_CLEARANCE_RADIUS = 3;
+
+/**
  * Issue #30 — y-coordinate of the underground "ceiling strip." Row 0 of the
  * underground grid renders as the underside of the surface grass (see the
  * `ty === 0` branch in `src/render/draw-underground.ts`); it's a visual cue

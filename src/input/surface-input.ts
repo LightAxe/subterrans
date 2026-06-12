@@ -32,7 +32,13 @@ import type {
   MarkSpiderPriorityCommand,
 } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
-import { PLAYER_COLONY_ID } from '../sim/constants.js';
+import {
+  PLAYER_COLONY_ID,
+  SURFACE_ROOT_CLEARANCE_RADIUS,
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
+} from '../sim/constants.js';
+import { isSurfaceTileInComponent } from '../sim/surface-features.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { TILE_SIZE_PX } from '../render/sprites.js';
 import { SPIDER_SPRITE_WIDTH, SPIDER_SPRITE_HEIGHT } from '../render/ant-sprite-layer.js';
@@ -99,6 +105,31 @@ export function isEmptySurfaceTile(world: WorldState, tileX: number, tileY: numb
     }
   }
 
+  return true;
+}
+
+/**
+ * PR 4 — true iff `DesignateEntrance` would ACCEPT this tile, so the preview
+ * never advertises a target the (now stricter) sim gate will silently drop.
+ * Mirrors `tick.ts`'s gate: the tile is an empty surface tile AND it plus its
+ * whole `SURFACE_ROOT_CLEARANCE_RADIUS` neighbourhood are in the single connected
+ * walkable component of the frozen terrain (terrain can no longer be carved at
+ * designation time). Bounds-clamped halo tiles are skipped, matching the gate.
+ */
+export function isValidEntranceTarget(world: WorldState, tileX: number, tileY: number): boolean {
+  if (!isEmptySurfaceTile(world, tileX, tileY)) return false;
+  if (!isSurfaceTileInComponent(world, tileX, tileY)) return false;
+  for (let dy = -SURFACE_ROOT_CLEARANCE_RADIUS; dy <= SURFACE_ROOT_CLEARANCE_RADIUS; dy++) {
+    for (let dx = -SURFACE_ROOT_CLEARANCE_RADIUS; dx <= SURFACE_ROOT_CLEARANCE_RADIUS; dx++) {
+      const cx = tileX + dx;
+      const cy = tileY + dy;
+      // Bound with the grid CONSTANTS (not world.surface.*) so the preview gate
+      // clamps identically to the sim gate + isSurfaceTileInComponent (which use
+      // the constants). Identical in production; consistent for hand-built worlds.
+      if (cx < 0 || cy < 0 || cx >= SURFACE_GRID_WIDTH || cy >= SURFACE_GRID_HEIGHT) continue;
+      if (!isSurfaceTileInComponent(world, cx, cy)) return false;
+    }
+  }
   return true;
 }
 
@@ -383,12 +414,13 @@ export function handleSurfaceRightClick(
     }
   }
 
-  // Entrance preview — only on valid entrance target tiles. The sim rejects
-  // DesignateEntrance on food piles and tiles already occupied by any colony's
-  // entrance; previewing those would advertise a target the sim will silently
-  // drop and mislead the player. Invalid click: do nothing (no preview, no
-  // state change). isEmptySurfaceTile already does the bounds check.
-  if (!isEmptySurfaceTile(world, tileX, tileY)) return;
+  // Entrance preview — only on tiles DesignateEntrance will actually accept. The
+  // sim rejects food piles, occupied entrances, and (PR 4) any tile whose
+  // candidate+clearance neighbourhood is not in the single connected walkable
+  // component of the frozen terrain. Previewing those would advertise a target
+  // the sim silently drops, so confirmation would do nothing. Invalid click: no
+  // preview, no state change.
+  if (!isValidEntranceTarget(world, tileX, tileY)) return;
   state.pendingEntranceTileX = tileX;
   state.pendingEntranceTileY = tileY;
 }

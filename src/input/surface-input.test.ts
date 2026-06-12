@@ -16,6 +16,7 @@ import {
   handleSurfaceLeftClick,
   handleSurfaceRightClick,
   isEmptySurfaceTile,
+  isValidEntranceTarget,
   isForeignColonyEntrance,
   handleSetRallyPoint,
   resetSurfaceInputState,
@@ -31,7 +32,12 @@ import type { ViewState } from '../render/camera.js';
 import { VIEWPORT_WIDTH_TILES, VIEWPORT_HEIGHT_TILES } from '../render/camera.js';
 import { HUD, TILE_SIZE_PX } from '../render/sprites.js';
 import { SPIDER_SPRITE_WIDTH, SPIDER_SPRITE_HEIGHT } from '../render/ant-sprite-layer.js';
-import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
+import {
+  PLAYER_COLONY_ID,
+  ENEMY_COLONY_ID,
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
+} from '../sim/constants.js';
 import type { SimCommand } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 
@@ -131,6 +137,12 @@ function makeWorld(
     colonies: overrides.colonies ?? {},
     pheromoneGrids: {},
     surface: { data: new Uint8Array(sw * sh), width: sw, height: sh },
+    // PR 4 — fully-walkable frozen terrain (all Cosmetic) so the new
+    // isValidEntranceTarget component/clearance gate treats every empty tile as a
+    // valid preview target, matching pre-PR-4 input behaviour. Tests that need a
+    // rejected target set HardBlock cells explicitly.
+    bakedSurfaceEffect: new Uint8Array(SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT),
+    surfaceComponentMask: null,
     undergroundGrids: {},
     foodPiles: overrides.foodPiles ?? [],
     pendingChambers: {},
@@ -628,6 +640,32 @@ describe('handleSurfaceRightClick', () => {
     handleSurfaceRightClick(world, vs, x, y, state);
     expect(state.pendingEntranceTileX).toBe(40);
     expect(state.pendingEntranceTileY).toBe(50);
+  });
+
+  // PR 4 — the preview must match the stricter DesignateEntrance gate, which
+  // rejects tiles outside the connected component or with a blocked clearance
+  // halo (terrain can no longer be carved at designation time). Previewing those
+  // would advertise a target confirmation silently drops.
+  it('shows NO preview when the target tile is not in the walkable component (HardBlock)', () => {
+    const world = makeWorld({ surfaceWidth: 128, surfaceHeight: 128 });
+    world.bakedSurfaceEffect[50 * SURFACE_GRID_WIDTH + 40] = 2; // HardBlock at (40,50)
+    expect(isValidEntranceTarget(world, 40, 50)).toBe(false);
+    const vs = makeViewState('surface', 64, 64);
+    const state = makeState();
+    const { x, y } = tileToScreen(40, 50, 64, 64);
+    handleSurfaceRightClick(world, vs, x, y, state);
+    expect(state.pendingEntranceTileX).toBeNull();
+  });
+
+  it('shows NO preview when a clearance-halo tile is blocked (candidate itself walkable)', () => {
+    const world = makeWorld({ surfaceWidth: 128, surfaceHeight: 128 });
+    world.bakedSurfaceEffect[50 * SURFACE_GRID_WIDTH + 41] = 2; // HardBlock adjacent to (40,50)
+    expect(isValidEntranceTarget(world, 40, 50)).toBe(false); // halo not all in-component
+    const vs = makeViewState('surface', 64, 64);
+    const state = makeState();
+    const { x, y } = tileToScreen(40, 50, 64, 64);
+    handleSurfaceRightClick(world, vs, x, y, state);
+    expect(state.pendingEntranceTileX).toBeNull();
   });
 
   it('is a no-op when activeView is underground', () => {
