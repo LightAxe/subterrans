@@ -438,7 +438,19 @@ describe('PR 5 — C-both 4-vs-N recent-tiles decision sweep', () => {
 });
 
 describe('PR 5 — save size + tick-time caps', () => {
-  it('cumulative serialized delta <= +5% of the ~1.095 MB baseline; tick-time <= 0.5 ms/tick', () => {
+  // Aspirational steady-state budget on a dev box (~0.26 ms/tick observed). NOT
+  // asserted directly: msPerTick is wall-clock, so it swings with runner
+  // hardware and load — a shared CI runner measured ~0.69-0.70 ms/tick on
+  // identical code (Codex P1), which would flake the REQUIRED `npm run verify`
+  // gate against an absolute 0.5 cap. The precise figure is logged every run so
+  // a regression is visible, and PERF_TICK_MS_CEILING is a deliberately generous
+  // hardware-robust ceiling (~19x the dev baseline, ~7x the slowest observed CI
+  // runner) that still trips on a catastrophic algorithmic regression (an
+  // accidental per-tick full-grid sweep or O(n^2) blows msPerTick to tens of ms)
+  // without flaking on any plausible healthy hardware.
+  const PERF_TICK_MS_TARGET = 0.5;
+  const PERF_TICK_MS_CEILING = 5.0;
+  it('cumulative serialized delta <= +5% of the ~1.095 MB baseline; tick-time within regression ceiling', () => {
     const BASELINE_BYTES = 1_095_416; // pre-PR4 ~1.095 MB (INVESTIGATION.md)
     const log = emptyLog(3000);
     let worstDeltaPct = -Infinity;
@@ -452,10 +464,13 @@ describe('PR 5 — save size + tick-time caps', () => {
         `PR5 size/perf ${d}: saveSize=${m.saveSizeBytes}B delta=${deltaPct.toFixed(2)}% msPerTick=${m.msPerTick.toFixed(3)}`,
       );
     }
+    // Save size is deterministic — a hard cap CI can rely on.
     expect(worstDeltaPct).toBeLessThanOrEqual(5);
-    expect(worstMsPerTick).toBeLessThanOrEqual(0.5);
+    // Tick-time: catastrophic-regression guard only (see ceiling rationale above).
+    expect(worstMsPerTick).toBeLessThanOrEqual(PERF_TICK_MS_CEILING);
+    const tgt = worstMsPerTick <= PERF_TICK_MS_TARGET ? 'within' : 'OVER';
     console.log(
-      `PASS PR5 caps: worst save delta=${worstDeltaPct.toFixed(2)}% (<=+5%), worst msPerTick=${worstMsPerTick.toFixed(3)} (<=0.5)`,
+      `PASS PR5 caps: worst save delta=${worstDeltaPct.toFixed(2)}% (<=+5%), worst msPerTick=${worstMsPerTick.toFixed(3)} (ceiling ${PERF_TICK_MS_CEILING}; ${tgt} ${PERF_TICK_MS_TARGET} dev target)`,
     );
   }, 120_000);
 });

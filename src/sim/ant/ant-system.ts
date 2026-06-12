@@ -2715,17 +2715,17 @@ export function tickExcursionBoundary(world: WorldState): void {
 
     // Signal detection — priority target > scent > pheromone (09 follow-up).
     const hasPriority = colonyHasPriorityPile(world, colonyId);
-    // Signal detection stays on the zone-agnostic Manhattan probe
-    // (findNearestScentPile): it reads no terrain grid, so it is safe for the
-    // underground SearchingFood/ReturningToNest ants this loop also visits. Post
-    // PR 4 every food pile is in the single walkable component, so for a surface
-    // ant the Manhattan-nearest in-range pile is usually the reachable one the
-    // movement code (findReachableScentPile) picks. They can diverge when a
-    // wall detour pushes the pile's PATH distance past FOOD_SCENT_RADIUS
-    // (movement gates eligibility on path distance): hasScent is then true
-    // while movement falls through to pheromone/wander — a conservative
-    // keep-searching signal, never a stranding one.
-    const hasScent = hasPriority ? false : findNearestScentPile(world, tileX, tileY) !== null;
+    // Signal detection uses the SAME path-distance reachability predicate as the
+    // movement code (findReachableScentPile). This loop only visits SURFACE
+    // foragers (zone filter above), so the surface goal field is valid for every
+    // ant reaching here. A cheaper Manhattan probe would diverge from movement
+    // exactly at the radius boundary: a pile that is Manhattan-close but beyond
+    // FOOD_SCENT_RADIUS by PATH (a long wall detour) would flip a
+    // ReturningToNest forager back to SearchingFood while movement — which gates
+    // on path distance — refuses to route to it, so the ant wanders and can
+    // oscillate searching<->returning past the excursion leash (Codex P2).
+    // Sharing one predicate keeps detection and movement in lockstep.
+    const hasScent = hasPriority ? false : findReachableScentPile(world, tileX, tileY) !== null;
     let hasPheromone = false;
     if (!hasPriority && !hasScent) {
       const key = pheromoneGridKey(colonyId, PheromoneType.FoodTrail, 'surface');
@@ -2847,44 +2847,6 @@ export function tickExcursionBoundary(world: WorldState): void {
  * — piles beyond this radius still require trail-following or exploration.
  */
 const FOOD_SCENT_RADIUS = 15;
-
-/**
- * Nearest food pile within FOOD_SCENT_RADIUS (Manhattan), tie-break lowest
- * `foodPileId`. Reads NO terrain grid, so it is zone-agnostic — used by signal
- * detection (`tickExcursionBoundary`), which also visits underground ants where
- * a surface-field probe would be wrong. Returns the pile's tile, or null.
- */
-function findNearestScentPile(
-  world: WorldState,
-  tileX: number,
-  tileY: number,
-): { tileX: number; tileY: number } | null {
-  let bestDist = FOOD_SCENT_RADIUS + 1;
-  let bestId = -1;
-  let bestX = 0;
-  let bestY = 0;
-  for (let p = 0; p < world.foodPiles.length; p++) {
-    const pile = world.foodPiles[p]!;
-    const d = Math.abs(pile.tileX - tileX) + Math.abs(pile.tileY - tileY);
-    if (d >= bestDist) continue;
-    if (d > FOOD_SCENT_RADIUS) continue;
-    bestDist = d;
-    bestId = pile.foodPileId;
-    bestX = pile.tileX;
-    bestY = pile.tileY;
-  }
-  if (bestId === -1) return null;
-  for (let p = 0; p < world.foodPiles.length; p++) {
-    const pile = world.foodPiles[p]!;
-    const d = Math.abs(pile.tileX - tileX) + Math.abs(pile.tileY - tileY);
-    if (d === bestDist && pile.foodPileId < bestId) {
-      bestId = pile.foodPileId;
-      bestX = pile.tileX;
-      bestY = pile.tileY;
-    }
-  }
-  return { tileX: bestX, tileY: bestY };
-}
 
 /**
  * PR 5 Fix-A scent selection: among food piles within FOOD_SCENT_RADIUS
