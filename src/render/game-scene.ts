@@ -458,12 +458,13 @@ export class GameScene extends Phaser.Scene {
 
     // Middle-button drag-pan registration (left/Space pan paths removed —
     // left is now exclusively the gesture arbiter's). Returns dragState ref
-    // for processCameraInput. Suspended during GameOver.
-    this.dragState = registerDragPan(
-      this,
-      this.viewState,
-      () => this.gamePhase === GamePhase.GameOver,
-    );
+    // for processCameraInput. Suspended during any modal (menu / SavePrompt /
+    // GameOver): isModalOpen() is exactly the left arbiter's pan gate
+    // (canPan: () => canArbiterPan(this.isModalOpen())), so an Esc menu opened
+    // mid middle-drag suspends the camera move and it doesn't persist after
+    // Resume (Codex P2). A bare user-pause (Space) is NOT modal, so middle-pan
+    // still works while paused — intended.
+    this.dragState = registerDragPan(this, this.viewState, () => this.isModalOpen());
 
     // Issue #116 — Esc opens the pause menu overlay (which also pauses the
     // sim). The Esc keybinding itself lives in UIScene (which already owned

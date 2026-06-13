@@ -329,7 +329,14 @@ test.describe('Phase 09.1 Chunk 2 — enemy underground toggle', () => {
     // SavePrompt tests can leave focus outside the canvas subtree).
     const box = await canvas.boundingBox();
     if (!box) throw new Error('canvas has no bounding box');
-    await page.mouse.click(box.x + 10, box.y + 10);
+    // Click the canvas CENTER, not the top-left: (box.x+10, box.y+10) lands
+    // inside HUD.STATS ({x:8,y:8,w:200,h:24}), whose click toggles the
+    // ant-activity panel OPEN. With X now gated through canAcceptWorldHotkey()
+    // (which blocks while that panel is visible — intended), the later
+    // page.keyboard.press('x') would be suppressed and the "Enemy Colony"
+    // assertion would fail. The center is clear of every HUD zone, so it only
+    // focuses the canvas.
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
     await page.waitForTimeout(100);
 
     // Enter the underground view. Tab edge-triggers the view toggle per

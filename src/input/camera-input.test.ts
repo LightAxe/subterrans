@@ -2,26 +2,31 @@
 //
 // Stage 1 controls rework (issue #18): Space-pan is gone (panInputState carries
 // only `isPanning`); the new interactive HUD zones (TOOLS / HINTS / SPEED) are
-// masked by isPointerOverHUD. registerDragPan now handles middle-button only and
-// is verified by the browser smoke test (Phaser scene events).
+// masked by isPointerOverHUD. registerDragPan handles middle-button only.
 //
 // Tests cover:
 //   - isPointerOverHUD: each masked zone (incl. TOOLS / HINTS / SPEED) + misses
 //   - isPointerOverHUD: underground-only colony toggle masking
 //   - processCameraInput: keyboard pan (arrow + WASD), clamp after pan
 //   - processCameraInput: suppressed while panInputState.isPanning
+//   - registerDragPan: an in-flight middle-drag stops when isBlocked flips true
+//     (Codex P2 — a modal opening mid-drag must suspend the pan, not just block
+//     new drags)
 //   - reset helpers
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   isPointerOverHUD,
   processCameraInput,
+  registerDragPan,
   panInputState,
   resetPanInputState,
   resetDragState,
   type DragState,
   type PanInputs,
 } from './camera-input.js';
+import type * as Phaser from 'phaser';
+import { TILE_SIZE_PX } from '../render/sprites.js';
 
 beforeEach(() => {
   resetPanInputState();
@@ -189,6 +194,84 @@ describe('processCameraInput', () => {
     processCameraInput(vs, makePanInputs({ leftDown: true }));
     expect(vs.surfaceCamera.x).toBeGreaterThanOrEqual(VIEWPORT_WIDTH_TILES / 2);
     expect(vs.surfaceCamera.x).toBeLessThanOrEqual(SURFACE_GRID_WIDTH - VIEWPORT_WIDTH_TILES / 2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// registerDragPan — in-flight suspend when isBlocked flips true
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal fake Phaser.Scene that captures the input handlers registerDragPan
+ * registers (keyed by event name) so a test can dispatch synthetic pointer
+ * events at them. Only the surface registerDragPan touches (scene.input.on) is
+ * modelled.
+ */
+function makeFakeScene(): {
+  scene: Phaser.Scene;
+  emit: (event: string, pointer: unknown) => void;
+} {
+  const handlers = new Map<string, (pointer: unknown) => void>();
+  const scene = {
+    input: {
+      on: (event: string, fn: (pointer: unknown) => void) => {
+        handlers.set(event, fn);
+      },
+    },
+  } as unknown as Phaser.Scene;
+  const emit = (event: string, pointer: unknown): void => {
+    handlers.get(event)?.(pointer);
+  };
+  return { scene, emit };
+}
+
+/** Fake middle-button pointer at (x, y). */
+function middlePointer(x: number, y: number): Phaser.Input.Pointer {
+  return { x, y, middleButtonDown: () => true } as unknown as Phaser.Input.Pointer;
+}
+
+describe('registerDragPan (middle-button)', () => {
+  it('pans the active camera on a middle-button drag', () => {
+    const vs = makeViewState('surface', 100, 100);
+    const { scene, emit } = makeFakeScene();
+    registerDragPan(scene, vs);
+    // Non-HUD points (mid play-area, clear of every HUD rect).
+    emit('pointerdown', middlePointer(400, 300));
+    expect(panInputState.isPanning).toBe(true);
+    emit('pointermove', middlePointer(400 + TILE_SIZE_PX, 300));
+    // Pointer moved +1 tile in x → camera pans -1 tile in x (drag-the-world).
+    expect(vs.surfaceCamera.x).toBeCloseTo(100 - 1);
+    emit('pointerup', middlePointer(400 + TILE_SIZE_PX, 300));
+    expect(panInputState.isPanning).toBe(false);
+  });
+
+  // Codex P2: a modal (Esc menu / SavePrompt / GameOver) opening DURING an active
+  // middle-drag must suspend the pan — not merely block new drags. isBlocked
+  // flips true mid-gesture; the very next pointermove must release the drag and
+  // stop moving the camera (pointermove calls releaseDrag() when isBlocked()).
+  it('stops an in-flight middle-drag when isBlocked flips true mid-gesture', () => {
+    const vs = makeViewState('surface', 100, 100);
+    const { scene, emit } = makeFakeScene();
+    const blocked = { value: false };
+    registerDragPan(scene, vs, () => blocked.value);
+
+    // Drag starts and pans while unblocked.
+    emit('pointerdown', middlePointer(400, 300));
+    emit('pointermove', middlePointer(400 + TILE_SIZE_PX, 300));
+    expect(vs.surfaceCamera.x).toBeCloseTo(100 - 1);
+    expect(panInputState.isPanning).toBe(true);
+
+    // Modal opens: isBlocked → true. The next pointermove must release the drag,
+    // clearing isPanning and leaving the camera where it was (no further delta).
+    blocked.value = true;
+    emit('pointermove', middlePointer(400 + 5 * TILE_SIZE_PX, 300));
+    expect(panInputState.isPanning).toBe(false);
+    expect(vs.surfaceCamera.x).toBeCloseTo(100 - 1); // unchanged since the block
+
+    // A further move while still blocked is a no-op (drag is no longer active).
+    emit('pointermove', middlePointer(400 + 9 * TILE_SIZE_PX, 300));
+    expect(vs.surfaceCamera.x).toBeCloseTo(100 - 1);
+    expect(panInputState.isPanning).toBe(false);
   });
 });
 

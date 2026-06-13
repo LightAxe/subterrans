@@ -32,10 +32,39 @@ describe('canAcceptWorldHotkey', () => {
     expect(canAcceptWorldHotkey(deps({ modalOpen: true }))).toBe(false);
   });
 
-  it('rejects when the context menu is visible OR pending-show OR pending-hide (Codex R4-2)', () => {
+  it('rejects when the context menu is visible OR pending-show (Codex R4-2)', () => {
     expect(canAcceptWorldHotkey(deps({ contextMenuVisible: true }))).toBe(false);
     expect(canAcceptWorldHotkey(deps({ contextMenuPendingShow: true }))).toBe(false);
-    expect(canAcceptWorldHotkey(deps({ contextMenuPendingHide: true }))).toBe(false);
+  });
+
+  // Codex P2: when the chamber menu is open and the player clicks a tool/speed
+  // HUD control OUTSIDE the menu, ui-scene requests a deferred hide
+  // (pendingHide=true, visible still true this dispatch) and the SAME click falls
+  // through to this gate. It must be ACCEPTED so the tool/speed action lands in
+  // one click — otherwise the first click only closes the menu (click-twice bug).
+  // (A click ON a menu item is intercepted upstream in ui-scene and never reaches
+  // this predicate, so relaxing pendingHide only affects the outside-click path.)
+  it('accepts when the context menu is dismissing this frame (visible && pendingHide)', () => {
+    expect(
+      canAcceptWorldHotkey(deps({ contextMenuVisible: true, contextMenuPendingHide: true })),
+    ).toBe(true);
+  });
+
+  // pendingShow keeps blocking even though pendingHide is the dismiss let-through:
+  // a pendingShow with no pendingHide is the deferred-show race and must stay shut
+  // (Codex R4-2) so a tool hotkey can't switch tools beneath a menu about to open.
+  it('still rejects when the context menu is pending-show (no pendingHide)', () => {
+    expect(canAcceptWorldHotkey(deps({ contextMenuPendingShow: true }))).toBe(false);
+  });
+
+  // The pendingHide let-through is scoped to the context-menu gate and must NOT
+  // relax the others: a modal still blocks even when the menu is dismissing.
+  it('a modal still blocks even when the context menu is dismissing (contextMenuPendingHide)', () => {
+    expect(
+      canAcceptWorldHotkey(
+        deps({ modalOpen: true, contextMenuVisible: true, contextMenuPendingHide: true }),
+      ),
+    ).toBe(false);
   });
 
   it('rejects when the ant-activity panel is visible', () => {
