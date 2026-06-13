@@ -1571,14 +1571,20 @@ export class GameScene extends Phaser.Scene {
     // SavePrompt phase: overlay handles input; no tick updates expected.
     if (this.gamePhase === GamePhase.SavePrompt) return;
 
-    // Issue #129 — suppress keyboard input while the GameOver overlay (survey or
-    // game-over panel) is visible. WASD/Space/Tab fire through to the world
-    // beneath the modal otherwise, which the player can feel even though the
-    // canvas is obscured. Tab and processCameraInput are the two per-frame
-    // keyboard consumers; both are skipped in GameOver. The Paused phase is
-    // intentionally left untouched: the pause menu is not full-screen and
-    // panning while paused is expected behaviour.
-    const keyboardActive = this.gamePhase !== GamePhase.GameOver;
+    // Keyboard PAN gate (Fix 3 / Codex P2). processCameraInput applies held
+    // WASD/arrow pan every frame; it must be BLOCKED whenever a modal owns input
+    // — GameOver, SavePrompt, OR the Esc pause menu (pauseReasons.menu) — and
+    // STILL run during a bare user-pause (Space), where look-around is expected.
+    // Reuse the SAME pure gate the left-arbiter pan uses (canArbiterPan, the
+    // negation of isModalOpen) so all three pan paths — keyboard, left-drag, and
+    // middle-button (registerDragPan, also wired to !isModalOpen) — move together.
+    //
+    // This supersedes the prior GameOver-only check (issue #129): that left
+    // held WASD/arrows panning the camera behind the Esc menu (gamePhase=Paused,
+    // not GameOver) and persisting after Resume, because nothing resets the
+    // camera on close. SavePrompt is also covered now. Tab is gated separately
+    // via canAcceptWorldHotkey() below; this only governs the pan.
+    const keyboardPanActive = canArbiterPan(this.isModalOpen());
 
     // Tab toggles view (JustDown handles key-press edge, not held). Stage 1
     // controls rework (issue #18): Tab now goes through canAcceptWorldHotkey so a
@@ -1615,8 +1621,9 @@ export class GameScene extends Phaser.Scene {
     // freezes tick execution via its internal flag — update() is safe to call.
     this.gameLoop.update(delta);
 
-    // Apply keyboard-pan + final clamp.
-    if (keyboardActive) {
+    // Apply keyboard-pan + final clamp. Blocked behind any modal (menu /
+    // SavePrompt / GameOver); still active during a bare user-pause (Fix 3).
+    if (keyboardPanActive) {
       processCameraInput(this.viewState, {
         cursors: this.cursors,
         wasd: this.wasd,

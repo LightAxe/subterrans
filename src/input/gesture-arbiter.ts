@@ -180,6 +180,19 @@ export class GestureArbiter {
   private snapshot: GestureSnapshot | null = null;
   /** Once the threshold is crossed, the resolved drag mode ('paint' | 'pan'); null while still a tap. */
   private dragMode: 'paint' | 'pan' | null = null;
+  /**
+   * Fix 1 — "draining" state: the left gesture has ENDED for new pointer input
+   * (pointerup of a paint stroke), but the paint stroke + target deliberately
+   * OUTLIVE the gesture so the per-frame flushPaint keeps draining the deferred
+   * tail toward the stored target across subsequent ticks (and across
+   * pause→resume) until the cursor reaches it, THEN clears. snapshot is null
+   * while draining (so onPointerMove ignores stray moves and a new pointerdown
+   * starts fresh), but dragMode stays 'paint' and paintStroke stays active so
+   * flushPaint keeps running. Set ONLY on a paint pointerup whose cursor has not
+   * yet reached the target; cleared when the cursor reaches the target, on
+   * cancelGesture (abandon), or when a new gesture supersedes it.
+   */
+  private draining = false;
   /** Last pointer position seen during a pan drag (for incremental camera delta). */
   private panLastX = 0;
   private panLastY = 0;
@@ -251,6 +264,7 @@ export class GestureArbiter {
   private clearLeftGesture(): void {
     this.snapshot = null;
     this.dragMode = null;
+    this.draining = false;
     this.paintTargetX = -1;
     this.paintTargetY = -1;
     resetPaintStrokeState(this.paintStroke);
@@ -291,12 +305,15 @@ export class GestureArbiter {
   flushPaint(world: WorldState, isPaused: boolean): void {
     if (this.dragMode !== 'paint' || !this.paintStroke.active) return;
     if (this.paintTargetX === -1 && this.paintTargetY === -1) return;
-    // Already at the target → continuePaintStroke debounces to a no-op; calling
-    // it is harmless but we can skip the work.
+    // Already at the target → the deferred tail is fully drained. continuePaint-
+    // Stroke would debounce to a no-op; skip the work, and if this stroke is in
+    // the post-pointerup "draining" state (Fix 1) its job is done — clear it so a
+    // finished drain doesn't linger active across frames.
     if (
       this.paintStroke.lastMarkedTileX === this.paintTargetX &&
       this.paintStroke.lastMarkedTileY === this.paintTargetY
     ) {
+      if (this.draining) this.clearLeftGesture();
       return;
     }
     const capHit = continuePaintStroke(
@@ -308,6 +325,16 @@ export class GestureArbiter {
       isPaused,
     );
     this.notifyCapHit(capHit);
+    // Fix 1: if this flush drained the last of the tail (cursor reached the
+    // target) and we are draining a released stroke, clear now — the deferred
+    // tail has fully emitted, so the stroke must not persist into the next frame.
+    if (
+      this.draining &&
+      this.paintStroke.lastMarkedTileX === this.paintTargetX &&
+      this.paintStroke.lastMarkedTileY === this.paintTargetY
+    ) {
+      this.clearLeftGesture();
+    }
   }
 
   onPointerDown(ev: ArbiterPointerEvent): void {
@@ -334,6 +361,13 @@ export class GestureArbiter {
     // press on canEditWorld here would kill left-drag pan while user-paused.
     if (!this.deps.canPan() && !this.deps.canEditWorld()) return;
     if (this.deps.isPointerOverHUD(ev.x, ev.y)) return;
+
+    // Fix 1 — a new left press cleanly SUPERSEDES any still-draining paint
+    // stroke (a prior stroke released with a tail the per-frame flush hadn't
+    // finished). Clear it before arming the new snapshot so the stale stroke +
+    // target can't bleed into this gesture's flushPaint. clearLeftGesture leaves
+    // panInputState.isPanning untouched (a paint never owned it).
+    if (this.draining) this.clearLeftGesture();
 
     const world = this.deps.getWorld();
     if (!world) return;
@@ -440,18 +474,42 @@ export class GestureArbiter {
       return;
     }
 
-    // Drag occurred → no tap; just end the gesture.
+    // Drag occurred → no tap; end the gesture for new input.
     if (this.dragMode !== null) {
-      // Stroke-end drain (Fix 1.3b): if this was a paint drag whose last move
-      // out-ran the cap, do one final flush toward the stored target so the
-      // tail emitted by the final move isn't stranded when the per-frame flush
-      // stops (the gesture is cancelled just below). Per-frame flushPaint kept
-      // the cursor caught up during the drag, so at most the last move's worth
-      // remains here; this clears what fits (≤ the cap as the queue drains).
       if (this.dragMode === 'paint') {
+        // Fix 1 — the deferred-paint drain must OUTLIVE the gesture. The
+        // per-frame flushPaint kept the cursor caught up DURING the stroke, but
+        // on release the tail emitted by the final move (or the entire stroke,
+        // if the queue was full the whole time — the PAUSED case) may not have
+        // enqueued yet. If we cleared the stroke now (as cancelGesture does), any
+        // un-emitted tail would be lost: paint a >64-tile stroke while paused →
+        // 64 queued, rest held → release → tail vanishes on resume.
+        //
+        // Instead: do one final flush toward the stored target, then if the
+        // cursor still has not reached it, ENTER the draining state — drop only
+        // the snapshot (the gesture is over for new pointer input) but KEEP the
+        // paint stroke + target so the per-frame flushPaint keeps draining toward
+        // the target across subsequent ticks (and across pause→resume) until the
+        // cursor reaches it, at which point flushPaint clears. A new pointerdown
+        // supersedes any still-draining stroke (see onPointerDown).
         const world = this.deps.getWorld();
         if (world) this.flushPaint(world, this.deps.isPaused());
+        const reached =
+          this.paintStroke.lastMarkedTileX === this.paintTargetX &&
+          this.paintStroke.lastMarkedTileY === this.paintTargetY;
+        if (this.paintStroke.active && !reached) {
+          // Tail still outstanding → hand off to the per-frame drain.
+          this.snapshot = null;
+          this.draining = true;
+          return;
+        }
+        // Fully drained (or nothing to drain) → clear as before. No pan was
+        // owned by a paint stroke, so clearLeftGesture (not cancelGesture) is the
+        // right teardown — it leaves panInputState.isPanning untouched.
+        this.clearLeftGesture();
+        return;
       }
+      // Pan drag: end the gesture and release the camera claim.
       this.cancelGesture();
       return;
     }

@@ -104,7 +104,10 @@ describe('GamePhase object-const', () => {
 });
 
 // ---------------------------------------------------------------------------
-// canArbiterPan — left-drag pan gate (advisory fix: block behind modal/menu)
+// canArbiterPan — shared pan gate (block behind modal/menu). Used by the
+// left-drag arbiter pan AND, since Fix 3 (Codex P2), the per-frame keyboard
+// (WASD/arrow) pan in GameScene.update — both gate on canArbiterPan(isModalOpen)
+// so all pan paths (keyboard, left-drag, middle-button) move together.
 // ---------------------------------------------------------------------------
 
 describe('canArbiterPan', () => {
@@ -118,6 +121,16 @@ describe('canArbiterPan', () => {
   it('blocks pan when a modal owns input (Esc menu / SavePrompt / GameOver)', () => {
     // isModalOpen=true is the GameOver || SavePrompt || pauseReasons.menu set.
     expect(canArbiterPan(true)).toBe(false);
+  });
+
+  // Fix 3 (Codex P2): the keyboard PAN gate is this exact predicate. Behind the
+  // Esc pause menu (a modal, isModalOpen=true) held WASD/arrows must NOT pan —
+  // previously processCameraInput ran whenever gamePhase !== GameOver, so it kept
+  // panning the camera behind the menu (gamePhase=Paused) and the move persisted
+  // after Resume. A bare user-pause is NOT a modal, so pan still works there.
+  it('keyboard pan: blocked behind the Esc menu, allowed during a bare user-pause', () => {
+    expect(canArbiterPan(true)).toBe(false); // menu pause / SavePrompt / GameOver
+    expect(canArbiterPan(false)).toBe(true); // bare user-pause (Space) — look-around live
   });
 });
 

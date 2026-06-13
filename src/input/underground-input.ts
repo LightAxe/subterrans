@@ -127,6 +127,51 @@ function isEditableUndergroundTile(
   return true;
 }
 
+/**
+ * Resolve the EFFECTIVE underground dig-state of (tileX,tileY) for `colonyId`,
+ * accounting for dig commands ALREADY queued but not yet applied (Fix 4).
+ *
+ * While bare-user-paused the sim never advances, so `ugGet` returns the frozen
+ * grid state — two taps on the same Solid tile would both read Solid and enqueue
+ * two MarkDigTile (instead of mark-then-cancel), and two taps on a Marked tile
+ * would enqueue two CancelDigMark. Tapping must instead toggle against what the
+ * queue WILL do: scan for the LATEST queued MarkDigTile/CancelDigMark on this
+ * tile+colony and fold it over the grid state, mirroring tick.ts's FIFO apply
+ * order (the last queued command wins because the drain applies them in order):
+ *   - latest queued MarkDigTile  ⇒ Marked  (tick.ts flips Solid→Marked)
+ *   - latest queued CancelDigMark ⇒ Solid   (tick.ts flips Marked→Solid)
+ *   - neither queued              ⇒ the live grid state
+ *
+ * Pure + read-only: never mutates the queue or any sim state. Unpaused this is a
+ * near-no-op — the queue drains every tick so it is usually empty for the tile,
+ * and the grid state is already current — so callers can use it unconditionally.
+ */
+function effectiveDigState(
+  world: WorldState,
+  tileX: number,
+  tileY: number,
+  colonyId: number,
+  gridState: UndergroundTileState,
+): UndergroundTileState {
+  const queue = world.commandQueue;
+  // Walk back-to-front so the FIRST match is the LATEST-queued command for the
+  // tile (the one tick.ts applies last, hence the one that wins).
+  for (let i = queue.length - 1; i >= 0; i--) {
+    const cmd = queue[i];
+    if (!cmd) continue;
+    if (cmd.type === 'MarkDigTile') {
+      if (cmd.colonyId === colonyId && cmd.tileX === tileX && cmd.tileY === tileY) {
+        return UndergroundTileState.Marked;
+      }
+    } else if (cmd.type === 'CancelDigMark') {
+      if (cmd.colonyId === colonyId && cmd.tileX === tileX && cmd.tileY === tileY) {
+        return UndergroundTileState.Solid;
+      }
+    }
+  }
+  return gridState;
+}
+
 // ---------------------------------------------------------------------------
 // handleUndergroundCommandTap — Command tool tap
 // ---------------------------------------------------------------------------
@@ -135,6 +180,13 @@ function isEditableUndergroundTile(
  * Underground Command tap: cancel a queued dig mark (Codex R2-7). A tap on a
  * Marked tile → CancelDigMark; every other tile is a no-op in Stage 1.
  * Player-grid-only. Returns true iff the command was refused at the cap.
+ *
+ * Resolves against the EFFECTIVE dig-state (effectiveDigState) so a bare-user-
+ * paused Command-tap respects already-queued Mark/Cancel commands (Fix 4): a
+ * tile with a pending MarkDigTile is effectively Marked (→ CancelDigMark fires),
+ * and a tile with a pending CancelDigMark is effectively Solid (→ no second,
+ * redundant cancel). Unpaused the queue drains each tick so this equals the grid
+ * state and behaviour is unchanged.
  */
 export function handleUndergroundCommandTap(
   world: WorldState,
@@ -147,7 +199,14 @@ export function handleUndergroundCommandTap(
   const grid = world.undergroundGrids[PLAYER_COLONY_ID];
   if (!grid) return false;
   if (!isEditableUndergroundTile(grid, tileX, tileY)) return false;
-  if (ugGet(grid, tileX, tileY) !== UndergroundTileState.Marked) return false;
+  const tileState = effectiveDigState(
+    world,
+    tileX,
+    tileY,
+    PLAYER_COLONY_ID,
+    ugGet(grid, tileX, tileY),
+  );
+  if (tileState !== UndergroundTileState.Marked) return false;
   const cmd: CancelDigMarkCommand = {
     type: 'CancelDigMark',
     colonyId: PLAYER_COLONY_ID,
@@ -166,6 +225,13 @@ export function handleUndergroundCommandTap(
  * Underground Dig tap (Codex R1-2): Solid/Open → MarkDigTile; Marked →
  * CancelDigMark; BeingDug → no-op (already claimed). Player-grid-only. Returns
  * true iff a command was refused at the cap.
+ *
+ * The mark-vs-cancel branch resolves against the EFFECTIVE dig-state
+ * (effectiveDigState) — the grid state folded with any already-queued
+ * Mark/Cancel for this tile — so a bare-user-paused tap-tap toggles correctly
+ * (Solid→MarkDigTile→CancelDigMark) instead of double-marking against the frozen
+ * grid (Fix 4). Unpaused the queue drains each tick, so the effective state
+ * equals the grid state and behaviour is unchanged.
  */
 export function handleUndergroundDigTap(
   world: WorldState,
@@ -178,7 +244,13 @@ export function handleUndergroundDigTap(
   const grid = world.undergroundGrids[PLAYER_COLONY_ID];
   if (!grid) return false;
   if (!isEditableUndergroundTile(grid, tileX, tileY)) return false;
-  const tileState = ugGet(grid, tileX, tileY);
+  const tileState = effectiveDigState(
+    world,
+    tileX,
+    tileY,
+    PLAYER_COLONY_ID,
+    ugGet(grid, tileX, tileY),
+  );
   if (tileState === UndergroundTileState.Marked) {
     const cmd: CancelDigMarkCommand = {
       type: 'CancelDigMark',
@@ -214,12 +286,15 @@ export function handleUndergroundDigTap(
  * cursor without emitting (matching the prior eager-arm behavior). Player-grid-
  * only. Returns true iff a command was refused at the cap.
  *
- * Note: unlike continuePaintStroke, the cursor is ALWAYS armed at the down-tile
- * even on a cap refusal — begin marks a single tile, and the first
- * continuePaintStroke segment re-interpolates from the down-tile, so a refused
- * down-tile mark is recovered by the stroke's own subsequent segments (and a
- * stroke that never moves was a single-tile gesture whose one refused mark
- * re-emits on the per-frame flush).
+ * Cap-refusal handling mirrors continuePaintStroke (Fix 2): the stroke is armed
+ * (state.active = true) either way, but the CURSOR is only advanced onto the
+ * down-tile when that tile is non-markable (ceiling already rejected above; a
+ * Marked/BeingDug down-tile is not a loss) OR its MarkDigTile actually enqueues.
+ * If the down-tile IS markable (Solid/Open) but the enqueue is REFUSED at the
+ * cap, the cursor is LEFT at the sentinel (-1,-1) so the first
+ * continuePaintStroke/flush re-emits the refused down-tile via its sentinel
+ * single-tile path — no silently lost begin-tile. (Previously the cursor was
+ * advanced unconditionally, so a down-tile refused at the cap was never retried.)
  */
 export function beginPaintStroke(
   state: PaintStrokeState,
@@ -240,13 +315,15 @@ export function beginPaintStroke(
     state.active = false;
     return false;
   }
-  // Arm the stroke cursor up front so a stroke that begins on a Marked/BeingDug
-  // tile still marks subsequently-entered Solid tiles.
+  // Arm the stroke so subsequently-entered Solid tiles still mark. The cursor is
+  // advanced below only on a non-markable down-tile or a successful enqueue.
   state.active = true;
-  state.lastMarkedTileX = tileX;
-  state.lastMarkedTileY = tileY;
   const tileState = ugGet(grid, tileX, tileY);
   if (tileState !== UndergroundTileState.Solid && tileState !== UndergroundTileState.Open) {
+    // Non-markable (Marked / BeingDug) down-tile: not a loss. Advance the cursor
+    // so the first drag segment interpolates from here.
+    state.lastMarkedTileX = tileX;
+    state.lastMarkedTileY = tileY;
     return false;
   }
   const cmd: MarkDigTileCommand = {
@@ -256,7 +333,18 @@ export function beginPaintStroke(
     tileY,
     issuedAtTick: world.tick,
   };
-  return !enqueueCommand(world, cmd, isPaused);
+  if (!enqueueCommand(world, cmd, isPaused)) {
+    // Cap refusal: do NOT advance the cursor onto the refused down-tile. Leave it
+    // at the sentinel so continuePaintStroke's sentinel path re-emits it once the
+    // queue drains (mirrors continuePaintStroke's hold-on-cap).
+    state.lastMarkedTileX = -1;
+    state.lastMarkedTileY = -1;
+    return true;
+  }
+  // Enqueued: advance the cursor to the down-tile.
+  state.lastMarkedTileX = tileX;
+  state.lastMarkedTileY = tileY;
+  return false;
 }
 
 /**

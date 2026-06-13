@@ -333,7 +333,7 @@ describe('tryOpenChamberMenu', () => {
 // ---------------------------------------------------------------------------
 
 describe('paused-queue cap (paint)', () => {
-  it('beginPaintStroke drops the mark at the cap while paused but still arms the cursor', () => {
+  it('beginPaintStroke drops the mark at the cap while paused but still arms the stroke', () => {
     const pre: SimCommand[] = Array.from({ length: MAX_COMMANDS_PER_TICK }, (_, i) => ({
       type: 'NoOp',
       issuedAtTick: i,
@@ -343,8 +343,150 @@ describe('paused-queue cap (paint)', () => {
     const dropped = beginPaintStroke(stroke, world, makeViewState(), 5, 10, true /* paused */);
     expect(dropped).toBe(true);
     expect(markCount(world)).toBe(0);
-    // Cursor still armed so the gesture is coherent on resume.
+    // Stroke armed so subsequent moves still paint; the cursor is NOT advanced
+    // onto the refused down-tile (Fix 2) — see the dedicated block below.
     expect(stroke.active).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix 2: beginPaintStroke must NOT advance the cursor onto a markable down-tile
+// whose MarkDigTile was REFUSED at the cap — it leaves the cursor at the
+// sentinel so the first continuePaintStroke/flush re-emits the down-tile (no
+// silently lost begin-tile). A non-markable down-tile still advances the cursor.
+// ---------------------------------------------------------------------------
+
+describe('beginPaintStroke cap-refusal holds the cursor (Fix 2)', () => {
+  it('a Solid down-tile refused at the cap holds the cursor at the sentinel, re-emits after drain', () => {
+    const pre: SimCommand[] = Array.from({ length: MAX_COMMANDS_PER_TICK }, (_, i) => ({
+      type: 'NoOp',
+      issuedAtTick: i,
+    }));
+    const world = makeWorld({ commandQueue: pre });
+    const stroke = createPaintStrokeState();
+    const dropped = beginPaintStroke(stroke, world, makeViewState(), 5, 10, false /* unpaused */);
+    expect(dropped).toBe(true);
+    expect(markCount(world)).toBe(0);
+    expect(stroke.active).toBe(true);
+    // Cursor NOT advanced onto the refused down-tile — held at the sentinel.
+    expect([stroke.lastMarkedTileX, stroke.lastMarkedTileY]).toEqual([-1, -1]);
+
+    // Drain the queue, then re-drive toward the SAME down-tile (what the arbiter's
+    // flushPaint does). The down-tile (5,10) now enqueues and the cursor advances.
+    world.commandQueue.length = 0;
+    const capHit = continuePaintStroke(stroke, world, makeViewState(), 5, 10, false);
+    expect(capHit).toBe(false);
+    const marks = world.commandQueue
+      .filter((c) => c.type === 'MarkDigTile')
+      .map((c) => [(c as { tileX: number }).tileX, (c as { tileY: number }).tileY]);
+    expect(marks).toEqual([[5, 10]]); // the begin-tile is not lost
+    expect([stroke.lastMarkedTileX, stroke.lastMarkedTileY]).toEqual([5, 10]);
+  });
+
+  it('a non-markable (BeingDug) down-tile still advances the cursor (not a loss)', () => {
+    const world = makeWorld();
+    ugSet(grid(world), 5, 10, UndergroundTileState.BeingDug);
+    const stroke = createPaintStrokeState();
+    const dropped = beginPaintStroke(stroke, world, makeViewState(), 5, 10, false);
+    expect(dropped).toBe(false); // no command to defer — not a cap event
+    expect(markCount(world)).toBe(0);
+    expect(stroke.active).toBe(true);
+    // Cursor ADVANCES so the first drag segment interpolates from the down-tile.
+    expect([stroke.lastMarkedTileX, stroke.lastMarkedTileY]).toEqual([5, 10]);
+  });
+
+  it('a Solid down-tile that enqueues (queue NOT full) advances the cursor as before', () => {
+    const world = makeWorld();
+    const stroke = createPaintStrokeState();
+    const dropped = beginPaintStroke(stroke, world, makeViewState(), 5, 10, false);
+    expect(dropped).toBe(false);
+    expect(markCount(world)).toBe(1);
+    expect([stroke.lastMarkedTileX, stroke.lastMarkedTileY]).toEqual([5, 10]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix 4: paused dig/command taps resolve the EFFECTIVE tile state against
+// PENDING queued commands (not just the frozen grid), so a paused tap-tap
+// toggles correctly instead of double-marking / double-cancelling. The sim is
+// frozen while bare-user-paused, so ugGet alone would read stale state.
+// ---------------------------------------------------------------------------
+
+describe('paused dig-tap effective state (Fix 4)', () => {
+  it('paused tap-tap on a Solid tile → MarkDigTile then CancelDigMark (not two marks)', () => {
+    const world = makeWorld();
+    const vs = makeViewState();
+    // First tap: Solid → MarkDigTile (grid stays Solid; sim is paused/frozen).
+    handleUndergroundDigTap(world, vs, 5, 10, true);
+    // Second tap on the SAME tile: effective state is Marked (pending MarkDigTile)
+    // → CancelDigMark, netting back to Solid on resume.
+    handleUndergroundDigTap(world, vs, 5, 10, true);
+    const types = world.commandQueue.map((c) => c.type);
+    expect(types).toEqual(['MarkDigTile', 'CancelDigMark']);
+  });
+
+  it('paused tap-tap-tap on a Solid tile nets Mark/Cancel/Mark (toggles each tap)', () => {
+    const world = makeWorld();
+    const vs = makeViewState();
+    handleUndergroundDigTap(world, vs, 5, 10, true); // Solid → Mark
+    handleUndergroundDigTap(world, vs, 5, 10, true); // eff Marked → Cancel
+    handleUndergroundDigTap(world, vs, 5, 10, true); // eff Solid → Mark
+    expect(world.commandQueue.map((c) => c.type)).toEqual([
+      'MarkDigTile',
+      'CancelDigMark',
+      'MarkDigTile',
+    ]);
+  });
+
+  it('paused tap-tap on a Marked tile → CancelDigMark then MarkDigTile (nets correctly)', () => {
+    const world = makeWorld();
+    const vs = makeViewState();
+    ugSet(grid(world), 5, 10, UndergroundTileState.Marked); // grid already Marked
+    handleUndergroundDigTap(world, vs, 5, 10, true); // Marked → Cancel
+    handleUndergroundDigTap(world, vs, 5, 10, true); // eff Solid (pending cancel) → Mark
+    expect(world.commandQueue.map((c) => c.type)).toEqual(['CancelDigMark', 'MarkDigTile']);
+  });
+
+  it('the effective state is keyed per-tile: a tap on a different tile is unaffected', () => {
+    const world = makeWorld();
+    const vs = makeViewState();
+    handleUndergroundDigTap(world, vs, 5, 10, true); // (5,10) Solid → Mark
+    handleUndergroundDigTap(world, vs, 6, 10, true); // (6,10) Solid → Mark (different tile)
+    expect(world.commandQueue.map((c) => c.type)).toEqual(['MarkDigTile', 'MarkDigTile']);
+  });
+
+  it('unpaused behaviour is unchanged: each tap reads the live (drained) grid', () => {
+    // Unpaused, the queue drains every tick, so a second tap sees an empty queue
+    // and the (still-Solid, pre-apply) grid → another MarkDigTile, exactly as
+    // before Fix 4. We emulate the drain between taps.
+    const world = makeWorld();
+    const vs = makeViewState();
+    handleUndergroundDigTap(world, vs, 5, 10, false);
+    expect(world.commandQueue.map((c) => c.type)).toEqual(['MarkDigTile']);
+    world.commandQueue.length = 0; // tick() drained it
+    handleUndergroundDigTap(world, vs, 5, 10, false);
+    expect(world.commandQueue.map((c) => c.type)).toEqual(['MarkDigTile']);
+  });
+
+  it('Command-tap respects a pending MarkDigTile (effectively Marked → CancelDigMark)', () => {
+    const world = makeWorld();
+    const vs = makeViewState(PLAYER_COLONY_ID, 'command');
+    // A Dig-tap queued a MarkDigTile on a Solid tile while paused; the grid is
+    // still Solid. A Command-tap on it must see effective=Marked and cancel.
+    handleUndergroundDigTap(world, makeViewState(), 5, 10, true); // queue: MarkDigTile
+    handleUndergroundCommandTap(world, vs, 5, 10, true);
+    expect(world.commandQueue.map((c) => c.type)).toEqual(['MarkDigTile', 'CancelDigMark']);
+  });
+
+  it('Command-tap does NOT double-cancel when a CancelDigMark is already pending', () => {
+    const world = makeWorld();
+    const vs = makeViewState(PLAYER_COLONY_ID, 'command');
+    ugSet(grid(world), 5, 10, UndergroundTileState.Marked); // grid Marked
+    handleUndergroundCommandTap(world, vs, 5, 10, true); // Marked → Cancel
+    // Second Command-tap: effective state is Solid (pending cancel) → no-op, NOT
+    // a redundant second CancelDigMark.
+    handleUndergroundCommandTap(world, vs, 5, 10, true);
+    expect(world.commandQueue.map((c) => c.type)).toEqual(['CancelDigMark']);
   });
 });
 
