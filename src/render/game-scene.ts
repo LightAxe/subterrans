@@ -1431,6 +1431,13 @@ export class GameScene extends Phaser.Scene {
 
   private openPauseMenu(): void {
     if (this.gamePhase !== GamePhase.Playing && this.gamePhase !== GamePhase.Paused) return;
+    // Codex P1 (PR #210): cancel any in-flight left gesture as the modal opens.
+    // The arbiter checks canPan/canEditWorld only at drag CLASSIFICATION; once a
+    // pan/paint is in flight, panMove/paintMove don't re-gate, so without this an
+    // active drag would keep panning the camera / enqueuing dig marks behind the
+    // pause menu, and a pending tap could survive an open→close and fire on
+    // release. Mirrors the GameOver and resetSessionState cancel paths.
+    this.arbiter.cancelGesture();
     setPauseReason(this.pauseReasons, 'menu');
     this.reconcilePause();
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
