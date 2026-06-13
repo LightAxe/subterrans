@@ -443,15 +443,29 @@ export class GestureArbiter {
   // --- internals -----------------------------------------------------------
 
   /**
-   * Surface the "paused queue full" hint for a cap refusal, but ONLY while
-   * paused. An UNPAUSED cap hit is silent transient throttling: the queue drains
+   * Surface the queue-full hint for a PAINT cap refusal, but ONLY while paused.
+   * An UNPAUSED paint cap hit is silent transient throttling: the queue drains
    * each tick and the deferred tiles re-emit on the next flush/move, so there is
    * nothing for the player to act on (a hint would be a spurious flash on every
    * fast stroke). While paused the queue genuinely can't drain, so the refusal is
-   * actionable — resume to continue.
+   * actionable — resume to continue. (One-shot taps use notifyOneShotDrop, which
+   * fires on ANY drop — see below.)
    */
   private notifyCapHit(capHit: boolean): void {
     if (capHit && this.deps.isPaused()) this.deps.onPausedQueueFull?.();
+  }
+
+  /**
+   * Surface the queue-full hint for a ONE-SHOT command drop, paused OR unpaused
+   * (Codex P2). Unlike paint (which holds its cursor and re-emits the deferred
+   * tail on the next move), a one-shot — a surface/underground command tap, a
+   * single Dig tap — does NOT re-emit: a drop at the cap is a real, silent loss.
+   * So whenever enqueueCommand refuses a one-shot we flash the hint regardless of
+   * pause state. (When unpaused this is rare: the queue is momentarily full, e.g.
+   * right after a big dig-paint burst.)
+   */
+  private notifyOneShotDrop(dropped: boolean): void {
+    if (dropped) this.deps.onPausedQueueFull?.();
   }
 
   private dispatchTap(snap: GestureSnapshot, world: WorldState): void {
@@ -475,7 +489,10 @@ export class GestureArbiter {
         tryOpenChamberMenu(world, vs, snap.downX, snap.downY, snap.tileX, snap.tileY);
       }
     }
-    this.notifyCapHit(dropped);
+    // A tap is a ONE-SHOT command (no re-emit): surface the hint on ANY drop,
+    // paused or not (Codex P2). Paint, by contrast, re-drives from its held
+    // cursor on the next move, so it uses the paused-only notifyCapHit.
+    this.notifyOneShotDrop(dropped);
   }
 
   private paintMove(ev: ArbiterPointerEvent): void {

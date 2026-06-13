@@ -18,6 +18,7 @@ import {
   isValidEntranceTarget,
   isSpiderHit,
   effectiveSpiderPriority,
+  effectiveRallyState,
   handleSurfaceCommandTap,
   handleSurfaceDigTap,
 } from './surface-input.js';
@@ -338,6 +339,92 @@ describe('paused spider-priority tap-tap toggles correctly (Codex P2)', () => {
     const cmd = lastCmd(world) as { type: string; isPriority: boolean };
     expect(cmd.type).toBe('MarkSpiderPriority');
     expect(cmd.isPriority).toBe(false); // toggled OFF against the live ON flag
+  });
+});
+
+// ---------------------------------------------------------------------------
+// effectiveRallyState + paused rally tap-tap (Codex P2)
+// ---------------------------------------------------------------------------
+
+describe('effectiveRallyState', () => {
+  it('falls back to the live rallyPoint when nothing is queued', () => {
+    const noneWorld = makeWorld({ colonies: { [PLAYER_COLONY_ID]: makeColony() } });
+    expect(effectiveRallyState(noneWorld, PLAYER_COLONY_ID)).toBeNull();
+    const setWorld = makeWorld({
+      colonies: { [PLAYER_COLONY_ID]: makeColony({ rallyPoint: { tileX: 8, tileY: 2 } }) },
+    });
+    expect(effectiveRallyState(setWorld, PLAYER_COLONY_ID)).toEqual({ tileX: 8, tileY: 2 });
+  });
+
+  it('reflects the LATEST queued Set/Clear for the player colony (last wins)', () => {
+    // A queued Set THEN Clear nets no rally; a queued Clear THEN Set nets the Set.
+    const clearLast = makeWorld({
+      colonies: { [PLAYER_COLONY_ID]: makeColony({ rallyPoint: { tileX: 1, tileY: 1 } }) },
+      commandQueue: [
+        { type: 'SetRallyPoint', colonyId: PLAYER_COLONY_ID, tileX: 8, tileY: 2, issuedAtTick: 0 },
+        { type: 'ClearRallyPoint', colonyId: PLAYER_COLONY_ID, issuedAtTick: 1 },
+      ],
+    });
+    expect(effectiveRallyState(clearLast, PLAYER_COLONY_ID)).toBeNull();
+    const setLast = makeWorld({
+      colonies: { [PLAYER_COLONY_ID]: makeColony({ rallyPoint: { tileX: 1, tileY: 1 } }) },
+      commandQueue: [
+        { type: 'ClearRallyPoint', colonyId: PLAYER_COLONY_ID, issuedAtTick: 0 },
+        { type: 'SetRallyPoint', colonyId: PLAYER_COLONY_ID, tileX: 9, tileY: 3, issuedAtTick: 1 },
+      ],
+    });
+    expect(effectiveRallyState(setLast, PLAYER_COLONY_ID)).toEqual({ tileX: 9, tileY: 3 });
+  });
+
+  it('ignores queued Set/Clear for OTHER colonies', () => {
+    const ENEMY = 2 as ColonyId;
+    const world = makeWorld({
+      colonies: { [PLAYER_COLONY_ID]: makeColony({ rallyPoint: { tileX: 4, tileY: 4 } }) },
+      commandQueue: [
+        { type: 'ClearRallyPoint', colonyId: ENEMY, issuedAtTick: 0 },
+        { type: 'SetRallyPoint', colonyId: ENEMY, tileX: 7, tileY: 7, issuedAtTick: 1 },
+      ],
+    });
+    // Enemy commands don't shadow the player's live rally.
+    expect(effectiveRallyState(world, PLAYER_COLONY_ID)).toEqual({ tileX: 4, tileY: 4 });
+  });
+});
+
+describe('paused rally tap-tap toggles correctly (Codex P2)', () => {
+  it('while PAUSED, tap-tap on an EMPTY tile nets Set then Clear (queue-aware)', () => {
+    // Bare-user-paused: the sim never advances, so playerColony.rallyPoint stays
+    // frozen at null across both taps. The clear-vs-set decision must resolve
+    // against the queue — otherwise the second tap would queue a SECOND Set.
+    const world = makeWorld({ colonies: { [PLAYER_COLONY_ID]: makeColony({ rallyPoint: null }) } });
+    handleSurfaceCommandTap(world, 20, 2, false /* spiderHit */, true /* paused */);
+    handleSurfaceCommandTap(world, 20, 2, false, true);
+    const cmds = world.commandQueue.filter(
+      (c) => c.type === 'SetRallyPoint' || c.type === 'ClearRallyPoint',
+    );
+    expect(cmds.map((c) => c.type)).toEqual(['SetRallyPoint', 'ClearRallyPoint']);
+  });
+
+  it('while PAUSED, tap-tap on the (effective) rally tile nets Clear then Set', () => {
+    // The tile already IS the live rally. First tap clears it; second tap sees the
+    // queued Clear (effective rally null) and re-sets it on the empty tile.
+    const world = makeWorld({
+      colonies: { [PLAYER_COLONY_ID]: makeColony({ rallyPoint: { tileX: 20, tileY: 2 } }) },
+    });
+    handleSurfaceCommandTap(world, 20, 2, false /* spiderHit */, true /* paused */);
+    handleSurfaceCommandTap(world, 20, 2, false, true);
+    const cmds = world.commandQueue.filter(
+      (c) => c.type === 'SetRallyPoint' || c.type === 'ClearRallyPoint',
+    );
+    expect(cmds.map((c) => c.type)).toEqual(['ClearRallyPoint', 'SetRallyPoint']);
+  });
+
+  it('unpaused behaviour unchanged: tapping the live rally tile clears it', () => {
+    // Queue empty (as after a tick drains) → effective rally equals the live one.
+    const world = makeWorld({
+      colonies: { [PLAYER_COLONY_ID]: makeColony({ rallyPoint: { tileX: 8, tileY: 2 } }) },
+    });
+    handleSurfaceCommandTap(world, 8, 2, false /* spiderHit */, false /* unpaused */);
+    expect((lastCmd(world) as { type: string }).type).toBe('ClearRallyPoint');
   });
 });
 

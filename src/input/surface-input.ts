@@ -248,6 +248,53 @@ export function effectiveSpiderPriority(world: WorldState, playerColonyId: Colon
 }
 
 // ---------------------------------------------------------------------------
+// effectiveRallyState — pure, queue-aware current-rally resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the EFFECTIVE rally point for `playerColonyId`, folding in any
+ * SetRallyPoint / ClearRallyPoint command ALREADY queued but not yet applied
+ * (Codex P2 — the last member of the paused-optimistic-state toggle class, after
+ * `effectiveDigState` and `effectiveSpiderPriority`).
+ *
+ * While bare-user-paused the sim never advances, so `playerColony.rallyPoint`
+ * stays frozen: after a first tap queues SetRallyPoint, a second tap on the same
+ * tile would still read `rallyPoint === null` and queue ANOTHER set (never a
+ * clear); two taps on an existing rally would queue two clears. The clear-vs-set
+ * decision must instead resolve against what the queue WILL do — scan back-to-
+ * front for the LATEST queued command for this colony (tick.ts drains FIFO, so
+ * the last-queued command wins):
+ *   - latest queued SetRallyPoint  ⇒ effective rally at that tile
+ *   - latest queued ClearRallyPoint ⇒ no rally (null)
+ *   - neither queued               ⇒ the live `playerColony.rallyPoint`
+ *
+ * Pure + read-only: never mutates the queue or any sim state. Unpaused this is a
+ * near-no-op — the queue drains every tick so it is usually empty of pending
+ * rally commands, and the live field is already current — so the caller can use
+ * it unconditionally.
+ */
+export function effectiveRallyState(
+  world: WorldState,
+  playerColonyId: ColonyId,
+): { tileX: number; tileY: number } | null {
+  const queue = world.commandQueue;
+  // Walk back-to-front so the FIRST match is the LATEST-queued command (the one
+  // tick.ts applies last, hence the one that wins).
+  for (let i = queue.length - 1; i >= 0; i--) {
+    const cmd = queue[i];
+    if (!cmd) continue;
+    if (cmd.type === 'SetRallyPoint' && cmd.colonyId === playerColonyId) {
+      return { tileX: cmd.tileX, tileY: cmd.tileY };
+    }
+    if (cmd.type === 'ClearRallyPoint' && cmd.colonyId === playerColonyId) {
+      return null;
+    }
+  }
+  const playerColony = world.colonies[playerColonyId]; // plain-object bracket access (ADR-0006)
+  return playerColony?.rallyPoint ?? null;
+}
+
+// ---------------------------------------------------------------------------
 // handleSetRallyPoint — inner helper (pure dispatch, extracted for testability)
 // ---------------------------------------------------------------------------
 
@@ -332,13 +379,17 @@ export function handleSurfaceCommandTap(
   //    precedes foreign-entrance so a rally placed ON an enemy entrance can be
   //    cleared by tapping it again (Codex R1-4: enemy-entrance rallies were
   //    otherwise unclearable).
-  const playerColony = world.colonies[playerColonyId]; // plain-object bracket access (ADR-0006)
-  if (
-    playerColony !== undefined &&
-    playerColony.rallyPoint !== null &&
-    playerColony.rallyPoint.tileX === tileX &&
-    playerColony.rallyPoint.tileY === tileY
-  ) {
+  //
+  //    Compare against the EFFECTIVE rally (effectiveRallyState) — the live
+  //    rallyPoint folded with any already-queued Set/Clear for this colony — so a
+  //    bare-user-paused tap-tap nets set-then-clear (Codex P2): the first tap on
+  //    an empty tile queues SetRallyPoint, making that tile the effective rally,
+  //    so the second tap matches here and queues ClearRallyPoint (instead of a
+  //    second set). Re-tapping the effective rally tile clears it. Unpaused the
+  //    queue drains each tick, so the effective rally equals playerColony.rallyPoint
+  //    and behaviour is unchanged.
+  const effectiveRally = effectiveRallyState(world, playerColonyId);
+  if (effectiveRally !== null && effectiveRally.tileX === tileX && effectiveRally.tileY === tileY) {
     const cmd: ClearRallyPointCommand = {
       type: 'ClearRallyPoint',
       colonyId: playerColonyId,

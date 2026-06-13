@@ -1449,6 +1449,15 @@ export class GameScene extends Phaser.Scene {
     // pause menu, and a pending tap could survive an open→close and fire on
     // release. Mirrors the GameOver and resetSessionState cancel paths.
     this.arbiter.cancelGesture();
+    // Codex P2: also reset the MIDDLE-button drag-pan synchronously. cancelGesture
+    // only clears the LEFT arbiter; registerDragPan's dragState.active and
+    // panInputState.isPanning stay set, and its modal gate (isBlocked → releaseDrag)
+    // only clears them on the NEXT pointermove. So opening + closing the menu via
+    // Esc WITHOUT moving, while still holding the middle button, would let the next
+    // movement resume the old drag and apply the accumulated delta as a camera jump.
+    // Clearing both here makes the suspend synchronous with the modal open.
+    resetDragState(this.dragState);
+    resetPanInputState();
     setPauseReason(this.pauseReasons, 'menu');
     this.reconcilePause();
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;

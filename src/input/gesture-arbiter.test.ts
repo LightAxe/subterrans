@@ -364,7 +364,8 @@ describe('HUD + right-click', () => {
 // ---------------------------------------------------------------------------
 
 describe('paused-queue-full surfacing', () => {
-  it('onPausedQueueFull fires when a paint tap is dropped at the cap WHILE PAUSED', () => {
+  it('onPausedQueueFull fires when a one-shot tap is dropped at the cap WHILE PAUSED', () => {
+    // A down+up with no move is a single Dig TAP (a one-shot), not a paint drag.
     const h = makeHarness('underground', 'dig');
     h.paused.value = true;
     for (let i = 0; i < 64; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
@@ -374,18 +375,34 @@ describe('paused-queue-full surfacing', () => {
     expect(h.pausedFullCount()).toBeGreaterThan(0);
   });
 
-  it('an UNPAUSED cap hit is SILENT — no hint (transient throttling)', () => {
-    // Same overflow, but running: the queue drains each tick and the deferred
-    // tiles re-emit on the next flush, so the hint must NOT fire.
+  it('a dropped one-shot tap surfaces the hint even WHILE UNPAUSED (Codex P2)', () => {
+    // A one-shot (a single Dig tap here) does NOT re-emit, so a cap drop is a real
+    // loss — surface the hint regardless of pause state. (Contrast PAINT, whose
+    // unpaused cap hit IS silent because it re-drives from its held cursor on the
+    // next move — covered in the fast-stroke deferral block below.) The queue is
+    // momentarily full, e.g. right after a big dig-paint burst.
     const h = makeHarness('underground', 'dig');
     h.paused.value = false;
     for (let i = 0; i < 64; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
     const p = tileCenter(5, 8, h.vs);
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, p.x, p.y));
     h.arbiter.onPointerUp(ev(LEFT_BUTTON, p.x, p.y)); // Dig tap refused at the cap (unpaused)
-    expect(h.pausedFullCount()).toBe(0);
+    expect(h.pausedFullCount()).toBeGreaterThan(0); // one-shot drop → hint fires
     // The command really was refused (nothing enqueued past the cap).
     expect(h.world.commandQueue.filter((c) => c.type === 'MarkDigTile')).toHaveLength(0);
+  });
+
+  it('a dropped surface Command tap (rally) surfaces the hint WHILE UNPAUSED (Codex P2)', () => {
+    // The surface Command tap is another one-shot. Unpaused, a drop at the cap is
+    // still a real loss and must flash the hint.
+    const h = makeHarness('surface', 'command');
+    h.paused.value = false;
+    for (let i = 0; i < 64; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
+    const p = tileCenter(6, 1, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, p.x, p.y));
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, p.x, p.y)); // SetRallyPoint refused at the cap (unpaused)
+    expect(h.pausedFullCount()).toBeGreaterThan(0);
+    expect(h.world.commandQueue.filter((c) => c.type === 'SetRallyPoint')).toHaveLength(0);
   });
 });
 
