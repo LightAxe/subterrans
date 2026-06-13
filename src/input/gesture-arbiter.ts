@@ -155,8 +155,15 @@ export interface GestureArbiterDeps {
    * behind a request issued in the same pointerdown dispatch (cf. hotkey-policy).
    */
   isContextMenuActive: () => boolean;
-  /** Called when a command is dropped at the paused cap, to surface the hint. */
-  onPausedQueueFull?: () => void;
+  /**
+   * Called when a command is dropped at the queue cap, to surface the queue-full
+   * hint. `paused` carries the live pause state at the moment of the drop so the
+   * hint can be accurate: a PAUSED drop means the queue can't drain ("resume to
+   * continue"), while a RUNNING drop is transient throttling ("try again"). Paint
+   * only calls this while paused (an unpaused paint cap hit is silent — it re-emits
+   * on the next move); one-shot taps call it on ANY drop (no re-emit) (Codex P2).
+   */
+  onPausedQueueFull?: (paused: boolean) => void;
 }
 
 /** Return the active camera for the current view. */
@@ -226,6 +233,14 @@ export class GestureArbiter {
    * stacked keyboard+drag pan (registerDragPan only re-sets isPanning on its
    * pointerdown, never on move). When dragMode!=='pan' the arbiter does not own
    * isPanning, so it leaves the flag to whoever does.
+   *
+   * Fix 2 — cancelGesture (NOT clearLeftGesture) is what the RIGHT-button branch
+   * uses, so a right-click DURING an active left-drag pan (dragMode==='pan')
+   * releases the pan claim: right-click has no registerDragPan release handler, so
+   * without this the flag would stay set and keyboard pan would remain suppressed
+   * (the #85 lock) until another full pan or a session reset. The ownership guard
+   * keeps it safe when the left gesture was NOT panning (dragMode null → a foreign
+   * isPanning, e.g. set by some other owner, is left intact).
    */
   cancelGesture(): void {
     const ownsPan = this.dragMode === 'pan';
@@ -234,13 +249,22 @@ export class GestureArbiter {
   }
 
   /**
-   * clearLeftGesture — drop only the arbiter's OWN left-gesture state (snapshot,
-   * drag mode, paint stroke) without touching panInputState.isPanning. Used by
-   * the secondary-button branch: a middle-button down (registerDragPan's pan)
-   * runs FIRST and sets isPanning = true to claim the camera; cancelGesture's
-   * unconditional clear would then defeat the issue-#85 keyboard-pan suppression
-   * for the whole middle-drag. The arbiter never owns isPanning on a secondary
-   * button, so it must leave that flag to registerDragPan here.
+   * clearLeftGesture — drop ONLY the arbiter's own left-gesture state (snapshot,
+   * drag mode, paint stroke) WITHOUT touching panInputState.isPanning.
+   *
+   * Used by the MIDDLE-button secondary branch, where the flag must survive even
+   * when the left gesture was itself an active pan: on a middle-button down
+   * registerDragPan's pointerdown runs (and sets/keeps isPanning = true to claim
+   * the camera for the MIDDLE drag), so clearing it here — even though the left
+   * gesture "owned" a pan a moment ago — would clobber registerDragPan's fresh
+   * claim and re-open the issue-#85 stacked keyboard+middle-drag pan. The middle
+   * drag is now the owner; its own pointerup/upoutside clears the flag.
+   *
+   * This is why the right-click path uses cancelGesture (ownership-gated release)
+   * while the middle path uses clearLeftGesture (release nothing): right-click has
+   * NO successor pan claim, middle-down DOES. The paint-bail / paint-up sites also
+   * use clearLeftGesture, but there dragMode==='paint' so there is no pan claim to
+   * release anyway.
    */
   private clearLeftGesture(): void {
     this.snapshot = null;
@@ -269,15 +293,28 @@ export class GestureArbiter {
   }
 
   onPointerDown(ev: ArbiterPointerEvent): void {
-    // Secondary buttons: cancel any pending left gesture first (Codex R2-5), then
-    // dispatch the right-click chamber path. Middle is reserved for registerDragPan.
-    // Use clearLeftGesture (not cancelGesture) so we don't clear
-    // panInputState.isPanning: on a middle-button down registerDragPan has already
-    // run and set isPanning = true to claim the camera, and clobbering it here
-    // would re-open the issue-#85 stacked keyboard+middle-drag pan.
+    // Secondary buttons: abandon any pending left gesture first (Codex R2-5), then
+    // dispatch the right-click chamber path. The two buttons differ ONLY in how
+    // they treat panInputState.isPanning (Fix 2):
+    //   - MIDDLE: registerDragPan's pointerdown runs on the same event and sets
+    //     isPanning = true to claim the camera for the MIDDLE drag. Use
+    //     clearLeftGesture, which leaves the flag ALONE — even if the left gesture
+    //     was itself an active pan a moment ago — so we don't clobber
+    //     registerDragPan's fresh claim and re-open the issue-#85 stacked
+    //     keyboard+middle-drag pan. The middle drag's own pointerup clears it.
+    //   - RIGHT: there is NO successor pan claim and right-click has no
+    //     registerDragPan release handler. Use cancelGesture, whose ownership-
+    //     gated release drops isPanning IFF the LEFT gesture owned the pan
+    //     (dragMode==='pan') — otherwise keyboard pan would stay suppressed (the
+    //     #85 lock) until another full pan / session reset. A right-click while
+    //     the left gesture was NOT panning leaves a foreign isPanning intact.
     if (ev.button === MIDDLE_BUTTON || ev.button === RIGHT_BUTTON) {
-      this.clearLeftGesture();
-      if (ev.button === RIGHT_BUTTON) this.handleRightClick(ev);
+      if (ev.button === RIGHT_BUTTON) {
+        this.cancelGesture();
+        this.handleRightClick(ev);
+      } else {
+        this.clearLeftGesture();
+      }
       return;
     }
     if (ev.button !== LEFT_BUTTON) return;
@@ -362,16 +399,24 @@ export class GestureArbiter {
       } else {
         // Pan is a pure camera move, so it obeys canPan (allowed while
         // user-paused, like keyboard / middle-button pan). Bail BEFORE claiming
-        // the camera; clearLeftGesture leaves isPanning untouched (we never set
-        // it on this path, and a concurrent middle-drag may own it).
+        // the camera; clearLeftGesture leaves isPanning untouched (we have not set
+        // it yet on this path — the claim below is the only setter — and a
+        // concurrent middle-drag may own it).
         if (!this.deps.canPan()) {
           this.clearLeftGesture();
           return;
         }
         // Claim the camera so keyboard pan is suppressed for the duration.
         panInputState.isPanning = true;
-        this.panLastX = ev.x;
-        this.panLastY = ev.y;
+        // Seed the pan reference at the pointer-DOWN coords, NOT this move's
+        // coords. The first panMove below then applies the full (current − down)
+        // displacement, so a fast flick delivered as ONE coalesced move past the
+        // threshold actually moves the camera (seeding from ev here would make
+        // the first delta zero — the flick would classify as a drag but pan 0px).
+        // panMove updates panLastX/Y to the current point afterwards, so
+        // subsequent incremental moves are not double-counted.
+        this.panLastX = snap.downX;
+        this.panLastY = snap.downY;
       }
     }
 
@@ -403,9 +448,9 @@ export class GestureArbiter {
         // nothing left outstanding at release. The one accepted residual is a
         // single coalesced >64-tile move followed by an IMMEDIATE release with no
         // intervening move: its tail past the cap is lost because there is no
-        // later move to re-drive from the held cursor. No pan was owned by a paint
-        // stroke, so clearLeftGesture (not cancelGesture) is the right teardown —
-        // it leaves panInputState.isPanning untouched.
+        // later move to re-drive from the held cursor. A paint stroke never owns
+        // the pan (no isPanning claim), so clearLeftGesture (which never touches
+        // isPanning) is the right teardown here.
         this.clearLeftGesture();
         return;
       }
@@ -449,10 +494,11 @@ export class GestureArbiter {
    * nothing for the player to act on (a hint would be a spurious flash on every
    * fast stroke). While paused the queue genuinely can't drain, so the refusal is
    * actionable — resume to continue. (One-shot taps use notifyOneShotDrop, which
-   * fires on ANY drop — see below.)
+   * fires on ANY drop — see below.) This path only fires while paused, so it
+   * always passes paused=true to the hint.
    */
   private notifyCapHit(capHit: boolean): void {
-    if (capHit && this.deps.isPaused()) this.deps.onPausedQueueFull?.();
+    if (capHit && this.deps.isPaused()) this.deps.onPausedQueueFull?.(true);
   }
 
   /**
@@ -461,11 +507,13 @@ export class GestureArbiter {
    * tail on the next move), a one-shot — a surface/underground command tap, a
    * single Dig tap — does NOT re-emit: a drop at the cap is a real, silent loss.
    * So whenever enqueueCommand refuses a one-shot we flash the hint regardless of
-   * pause state. (When unpaused this is rare: the queue is momentarily full, e.g.
-   * right after a big dig-paint burst.)
+   * pause state, passing the LIVE pause state so the message is accurate: a paused
+   * drop says "resume to continue", an unpaused (transient-burst) drop says "try
+   * again". (When unpaused this is rare: the queue is momentarily full, e.g. right
+   * after a big dig-paint burst.)
    */
   private notifyOneShotDrop(dropped: boolean): void {
-    if (dropped) this.deps.onPausedQueueFull?.();
+    if (dropped) this.deps.onPausedQueueFull?.(this.deps.isPaused());
   }
 
   private dispatchTap(snap: GestureSnapshot, world: WorldState): void {

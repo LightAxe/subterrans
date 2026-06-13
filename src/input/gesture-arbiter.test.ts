@@ -97,6 +97,10 @@ interface Harness {
   hudHit: (x: number, y: number) => boolean;
   setHudHit: (fn: (x: number, y: number) => boolean) => void;
   pausedFullCount: () => number;
+  /** The `paused` argument from the most recent onPausedQueueFull call (Fix 3). */
+  lastQueueFullPaused: () => boolean | undefined;
+  /** Every `paused` argument passed to onPausedQueueFull, in order (Fix 3). */
+  queueFullPausedCalls: () => boolean[];
 }
 
 function makeHarness(
@@ -113,6 +117,7 @@ function makeHarness(
   const contextMenuActive = { value: false };
   let hudHit: (x: number, y: number) => boolean = () => false;
   let pausedFull = 0;
+  const queueFullPaused: boolean[] = [];
   const deps: GestureArbiterDeps = {
     getWorld: () => world,
     getPrevWorld: () => null,
@@ -122,8 +127,9 @@ function makeHarness(
     canEditWorld: () => canEditWorld.value,
     canPan: () => canPan.value,
     isContextMenuActive: () => contextMenuActive.value,
-    onPausedQueueFull: () => {
+    onPausedQueueFull: (p) => {
       pausedFull++;
+      queueFullPaused.push(p);
     },
   };
   const arbiter = new GestureArbiter(deps);
@@ -140,6 +146,8 @@ function makeHarness(
       hudHit = fn;
     },
     pausedFullCount: () => pausedFull,
+    lastQueueFullPaused: () => queueFullPaused[queueFullPaused.length - 1],
+    queueFullPausedCalls: () => queueFullPaused,
   };
 }
 
@@ -217,6 +225,87 @@ describe('drag then no tap', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Flick-pan: the first panMove applies the displacement from the pointer-DOWN
+// coords (Fix 1). A quick drag delivered as ONE coalesced move past the
+// threshold then pointer-up must actually move the camera by (current − down),
+// not 0px. Multi-move drags must then continue incrementally with no first-
+// increment loss and no double-count.
+//
+// The test world is 20×20 but the arbiter clamps against the REAL grid
+// (SURFACE 128×128). Center the camera at (50,30) so a small flick stays inside
+// the clamp window [25,103]×[18.5,109.5] and the assertion is exact.
+// ---------------------------------------------------------------------------
+
+describe('flick-pan first-move displacement (Fix 1)', () => {
+  it('a single coalesced move past the threshold then up pans by (current − down)', () => {
+    const h = makeHarness('surface', 'command');
+    h.vs.surfaceCamera.x = 50;
+    h.vs.surfaceCamera.y = 30;
+    const downX = 200;
+    const downY = 200;
+    const flickPx = 48; // 3 tiles; well past the 6px threshold
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, downX, downY));
+    // ONE move that both crosses the threshold AND is the whole flick, then up.
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, downX + flickPx, downY));
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, downX + flickPx, downY));
+    // cam.x -= (current − down)/TILE_SIZE_PX. The OLD bug seeded panLast to the
+    // current move, making this delta 0 (camera unchanged) — this asserts the fix.
+    expect(h.vs.surfaceCamera.x).toBeCloseTo(50 - flickPx / TILE_SIZE_PX, 10);
+    expect(h.vs.surfaceCamera.y).toBeCloseTo(30, 10); // no vertical flick
+    expect(panInputState.isPanning).toBe(false); // released on up
+  });
+
+  it('the first increment is not lost on a vertical flick either', () => {
+    const h = makeHarness('underground', 'command');
+    h.vs.undergroundCamera.x = 50;
+    h.vs.undergroundCamera.y = 30;
+    const downX = 200;
+    const downY = 200;
+    const flickPx = 32; // 2 tiles down
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, downX, downY));
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, downX, downY + flickPx));
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, downX, downY + flickPx));
+    expect(h.vs.undergroundCamera.x).toBeCloseTo(50, 10);
+    expect(h.vs.undergroundCamera.y).toBeCloseTo(30 - flickPx / TILE_SIZE_PX, 10);
+  });
+
+  it('a multi-move drag pans by the cumulative delta — no first-increment loss, no double-count', () => {
+    const h = makeHarness('surface', 'command');
+    h.vs.surfaceCamera.x = 50;
+    h.vs.surfaceCamera.y = 30;
+    const downX = 200;
+    const downY = 200;
+    // Three successive moves; total horizontal displacement from DOWN = 96px.
+    // The first move both classifies (crosses threshold) and applies (m1 − down).
+    const xs = [downX + 16, downX + 48, downX + 96];
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, downX, downY));
+    for (const x of xs) h.arbiter.onPointerMove(ev(LEFT_BUTTON, x, downY));
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, xs[xs.length - 1]!, downY));
+    // Cumulative pan = (last − down)/TILE_SIZE_PX = 96/16 = 6 tiles. If the first
+    // increment were lost the total would be (96−16)/16; if double-counted it
+    // would exceed 6. Exact equality pins both failure modes.
+    expect(h.vs.surfaceCamera.x).toBeCloseTo(50 - 96 / TILE_SIZE_PX, 10);
+    expect(h.vs.surfaceCamera.y).toBeCloseTo(30, 10);
+  });
+
+  it('intermediate moves each apply their own increment (cumulative == final − down)', () => {
+    // Same as above but assert the camera AFTER each move equals the running
+    // (x − down) displacement, proving no per-move double-application.
+    const h = makeHarness('surface', 'command');
+    h.vs.surfaceCamera.x = 50;
+    h.vs.surfaceCamera.y = 30;
+    const downX = 200;
+    const downY = 200;
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, downX, downY));
+    const checkpoints = [downX + 8, downX + 24, downX + 40, downX + 64];
+    for (const x of checkpoints) {
+      h.arbiter.onPointerMove(ev(LEFT_BUTTON, x, downY));
+      expect(h.vs.surfaceCamera.x).toBeCloseTo(50 - (x - downX) / TILE_SIZE_PX, 10);
+    }
+  });
+});
+
 describe('the drag matrix', () => {
   it('Dig + underground drag = paint (no camera move)', () => {
     const h = makeHarness('underground', 'dig');
@@ -263,6 +352,46 @@ describe('cancelGesture', () => {
     h.arbiter.onPointerDown(ev(MIDDLE_BUTTON, start.x, start.y));
     expect(panInputState.isPanning).toBe(true); // left to registerDragPan
     expect(h.arbiter.hasPendingGesture()).toBe(false);
+  });
+
+  it('a RIGHT-button down DURING an active left-drag pan releases isPanning (Fix 2)', () => {
+    // The left gesture is itself the active PAN (it set isPanning = true). A
+    // right-click has no registerDragPan release handler, so the arbiter MUST
+    // release the flag here or keyboard pan stays suppressed (the #85 lock) until
+    // another full pan / session reset. clearLeftGesture's ownership-gated release
+    // (dragMode==='pan') handles it.
+    const h = makeHarness('surface', 'command');
+    const start = tileCenter(10, 10, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 40, start.y)); // left-drag PAN claim
+    expect(panInputState.isPanning).toBe(true);
+    h.arbiter.onPointerDown(ev(RIGHT_BUTTON, start.x, start.y)); // right-click during the pan
+    expect(panInputState.isPanning).toBe(false); // released → keyboard pan re-enabled
+    expect(h.arbiter.hasPendingGesture()).toBe(false);
+  });
+
+  it('a MIDDLE-button down while NOT left-panning leaves a registerDragPan-set isPanning intact (Fix 2 guard)', () => {
+    // Mirror of registerDragPan's claim: the left gesture is NOT panning (no move
+    // past threshold → dragMode null), so the arbiter does not own isPanning. A
+    // middle-down (registerDragPan already set isPanning = true) must NOT clear it.
+    const h = makeHarness('surface', 'command');
+    const start = tileCenter(10, 10, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y)); // pending tap, dragMode null
+    panInputState.isPanning = true; // registerDragPan's middle-down claim (runs first)
+    h.arbiter.onPointerDown(ev(MIDDLE_BUTTON, start.x, start.y));
+    expect(panInputState.isPanning).toBe(true); // preserved for the middle-drag
+    expect(h.arbiter.hasPendingGesture()).toBe(false);
+  });
+
+  it('a RIGHT-button down while NOT left-panning leaves a foreign isPanning intact (Fix 2 guard)', () => {
+    // Symmetric guard for right-click: if the left gesture never panned, the
+    // arbiter does not own isPanning and must not clear a flag another owner set.
+    const h = makeHarness('underground', 'command');
+    const start = tileCenter(5, 8, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y)); // pending tap, dragMode null
+    panInputState.isPanning = true; // some other owner's claim
+    h.arbiter.onPointerDown(ev(RIGHT_BUTTON, start.x, start.y));
+    expect(panInputState.isPanning).toBe(true); // not the arbiter's to clear
   });
 
   it('pointerupoutside abandons the gesture with no tap', () => {
@@ -373,6 +502,7 @@ describe('paused-queue-full surfacing', () => {
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, p.x, p.y));
     h.arbiter.onPointerUp(ev(LEFT_BUTTON, p.x, p.y)); // Dig tap dropped at the cap
     expect(h.pausedFullCount()).toBeGreaterThan(0);
+    expect(h.lastQueueFullPaused()).toBe(true); // paused drop → "resume" message (Fix 3)
   });
 
   it('a dropped one-shot tap surfaces the hint even WHILE UNPAUSED (Codex P2)', () => {
@@ -388,6 +518,7 @@ describe('paused-queue-full surfacing', () => {
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, p.x, p.y));
     h.arbiter.onPointerUp(ev(LEFT_BUTTON, p.x, p.y)); // Dig tap refused at the cap (unpaused)
     expect(h.pausedFullCount()).toBeGreaterThan(0); // one-shot drop → hint fires
+    expect(h.lastQueueFullPaused()).toBe(false); // unpaused drop → "try again" message (Fix 3)
     // The command really was refused (nothing enqueued past the cap).
     expect(h.world.commandQueue.filter((c) => c.type === 'MarkDigTile')).toHaveLength(0);
   });
@@ -402,7 +533,52 @@ describe('paused-queue-full surfacing', () => {
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, p.x, p.y));
     h.arbiter.onPointerUp(ev(LEFT_BUTTON, p.x, p.y)); // SetRallyPoint refused at the cap (unpaused)
     expect(h.pausedFullCount()).toBeGreaterThan(0);
+    expect(h.lastQueueFullPaused()).toBe(false); // unpaused drop → "try again" (Fix 3)
     expect(h.world.commandQueue.filter((c) => c.type === 'SetRallyPoint')).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix 3 — accurate queue-full message: the arbiter threads the LIVE pause state
+// to onPausedQueueFull so the hint reads "resume to continue" when paused and a
+// running-state message when not. (The paused→true / unpaused→false threading is
+// also pinned on the existing one-shot tests above; these isolate the contract.)
+// ---------------------------------------------------------------------------
+
+describe('queue-full message pause-state threading (Fix 3)', () => {
+  it('an UNPAUSED one-shot drop requests the running-state message (paused=false)', () => {
+    const h = makeHarness('underground', 'dig');
+    h.paused.value = false;
+    for (let i = 0; i < 64; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
+    const p = tileCenter(5, 8, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, p.x, p.y));
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, p.x, p.y));
+    expect(h.queueFullPausedCalls()).toEqual([false]);
+  });
+
+  it('a PAUSED one-shot drop requests the paused message (paused=true)', () => {
+    const h = makeHarness('underground', 'dig');
+    h.paused.value = true;
+    for (let i = 0; i < 64; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
+    const p = tileCenter(5, 8, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, p.x, p.y));
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, p.x, p.y));
+    expect(h.queueFullPausedCalls()).toEqual([true]);
+  });
+
+  it('a PAUSED paint cap hit requests the paused message (paint hints only while paused)', () => {
+    // The paint path (notifyCapHit) fires only while paused and always reports
+    // paused=true. An UNPAUSED paint cap hit stays silent (no call) — verified
+    // separately in the fast-stroke deferral block.
+    const h = makeHarness('underground', 'dig', 100, 20);
+    h.paused.value = true;
+    for (let i = 0; i < 64; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
+    const start = tileCenter(1, 10, h.vs);
+    const end = tileCenter(8, 10, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, end.x, end.y)); // refused at cap while paused
+    expect(h.queueFullPausedCalls().length).toBeGreaterThan(0);
+    expect(h.queueFullPausedCalls().every((p) => p === true)).toBe(true);
   });
 });
 

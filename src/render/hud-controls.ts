@@ -116,5 +116,23 @@ export function hintTextFor(tool: ToolId, view: 'surface' | 'underground'): stri
   }
 }
 
-/** The "paused queue full" hint surfaced when enqueueCommand drops at the cap. */
+/** The queue-full hint surfaced when enqueueCommand drops a one-shot command at
+ *  the cap WHILE PAUSED — the queue can't drain, so the player must resume. */
 export const PAUSED_QUEUE_FULL_HINT = 'Paused queue full — resume to continue';
+
+/** The queue-full hint surfaced when a one-shot command is dropped at the cap
+ *  while RUNNING (not paused) — a transient burst (e.g. a big dig-paint stroke)
+ *  momentarily filled the queue; it drains on its own, so "resume" would be
+ *  wrong/misleading. The player just retries. */
+export const RUNNING_QUEUE_FULL_HINT = 'Too many commands at once — try again';
+
+/**
+ * queueFullHint — pick the queue-full hint text for the current pause state.
+ * Paused: the queue genuinely can't drain → "resume to continue". Running: it's
+ * transient throttling that self-clears → "try again". Pulled out as a pure
+ * function so the paused-vs-running message choice is unit-testable without
+ * booting a Phaser scene (Stage 1 controls rework, Fix 3 / Codex P2).
+ */
+export function queueFullHint(paused: boolean): string {
+  return paused ? PAUSED_QUEUE_FULL_HINT : RUNNING_QUEUE_FULL_HINT;
+}

@@ -10,6 +10,9 @@ import {
   speedControlRect,
   speedControlAt,
   hintTextFor,
+  queueFullHint,
+  PAUSED_QUEUE_FULL_HINT,
+  RUNNING_QUEUE_FULL_HINT,
 } from './hud-controls.js';
 import { HUD } from './sprites.js';
 
@@ -71,5 +74,23 @@ describe('hintTextFor', () => {
     expect(hintTextFor('dig', 'surface')).toContain('entrance');
     expect(hintTextFor('dig', 'underground')).toContain('mark');
     expect(hintTextFor('chamber', 'underground')).toContain('chamber');
+  });
+});
+
+describe('queueFullHint (Fix 3 — accurate paused-vs-running message)', () => {
+  it('paused → the resume-to-continue message', () => {
+    expect(queueFullHint(true)).toBe(PAUSED_QUEUE_FULL_HINT);
+    expect(queueFullHint(true)).toContain('resume');
+  });
+
+  it('running → the transient try-again message (NOT the resume message)', () => {
+    expect(queueFullHint(false)).toBe(RUNNING_QUEUE_FULL_HINT);
+    expect(queueFullHint(false)).not.toContain('resume');
+  });
+
+  it('the two messages are distinct and both non-empty', () => {
+    expect(PAUSED_QUEUE_FULL_HINT.length).toBeGreaterThan(0);
+    expect(RUNNING_QUEUE_FULL_HINT.length).toBeGreaterThan(0);
+    expect(PAUSED_QUEUE_FULL_HINT).not.toBe(RUNNING_QUEUE_FULL_HINT);
   });
 });

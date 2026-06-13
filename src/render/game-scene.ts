@@ -205,10 +205,11 @@ interface UIScenePhase9 {
   hideDifficultySelectOverlay(): void;
   // S6 — first-occurrence caption overlay (light onboarding).
   showCaption(text: string, screenX: number, screenY: number): void;
-  // Stage 1 controls rework (issue #18) — surface the "paused queue full" hint
-  // when enqueueCommand drops a command at the paused cap. Optional so other
-  // UIScene consumers (tests) need not implement it.
-  flashPausedQueueFull?(): void;
+  // Stage 1 controls rework (issue #18) — surface the queue-full hint when
+  // enqueueCommand drops a command at the cap. `paused` selects the message:
+  // paused → "resume to continue"; running → "try again" (transient burst).
+  // Optional so other UIScene consumers (tests) need not implement it.
+  flashPausedQueueFull?(paused: boolean): void;
 }
 import type { SimCommand } from '../sim/commands.js';
 
@@ -642,9 +643,9 @@ export class GameScene extends Phaser.Scene {
       // race where `visible` lags a frame behind a same-dispatch request.
       isContextMenuActive: () =>
         contextMenuState.visible || contextMenuState.pendingShow || contextMenuState.pendingHide,
-      onPausedQueueFull: () => {
+      onPausedQueueFull: (paused: boolean) => {
         const ui = this.scene.get('UIScene') as unknown as UIScenePhase9 | null;
-        ui?.flashPausedQueueFull?.();
+        ui?.flashPausedQueueFull?.(paused);
       },
     });
 

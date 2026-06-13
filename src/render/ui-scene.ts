@@ -160,7 +160,7 @@ import {
   speedControlRect,
   speedControlAt,
   hintTextFor,
-  PAUSED_QUEUE_FULL_HINT,
+  queueFullHint,
 } from './hud-controls.js';
 import {
   contextMenuState,
@@ -367,10 +367,13 @@ export class UIScene extends Phaser.Scene {
   // then so the two don't visually collide (Codex R4-1). Cleared naturally as
   // time passes.
   private hintYieldUntilMs = 0;
-  // "Paused queue full" flash: set to time.now + duration when enqueueCommand
-  // drops a command at the paused cap; the hint strip shows the warning until
-  // then, overriding the static legend.
+  // Queue-full flash: set to time.now + duration when enqueueCommand drops a
+  // command at the cap; the hint strip shows the warning until then, overriding
+  // the static legend. `pausedQueueFullWasPaused` records the pause state at the
+  // moment of the drop so renderHintStrip picks the accurate message (paused →
+  // "resume to continue"; running → "try again"). (Fix 3 / Codex P2.)
   private pausedQueueFullUntilMs = 0;
+  private pausedQueueFullWasPaused = false;
   private gfx!: Phaser.GameObjects.Graphics;
   private antsText!: Phaser.GameObjects.Text;
   private foodText!: Phaser.GameObjects.Text;
@@ -729,9 +732,10 @@ export class UIScene extends Phaser.Scene {
             // PlaceChamber is a ONE-SHOT command: it does NOT re-emit, so a drop
             // at the cap is a real loss. Surface the queue-full hint on ANY drop,
             // paused OR unpaused (Codex P2) — unlike the re-emitting paint stroke,
-            // which only hints while paused.
+            // which only hints while paused. Pass `paused` so the message is
+            // accurate (resume-to-continue vs try-again; Fix 3).
             const paused = this.isPausedFn ? this.isPausedFn() : false;
-            if (!enqueueCommand(world, cmd, paused)) this.flashPausedQueueFull();
+            if (!enqueueCommand(world, cmd, paused)) this.flashPausedQueueFull(paused);
           }
           requestHideContextMenu();
           return;
@@ -879,9 +883,9 @@ export class UIScene extends Phaser.Scene {
           // a ONE-SHOT command: it does NOT re-emit, so a drop at the cap is a
           // real loss. Surface the queue-full hint on ANY drop, paused OR unpaused
           // (Codex P2) — unlike the re-emitting paint stroke, which only hints
-          // while paused.
+          // while paused. Pass `paused` so the message is accurate (Fix 3).
           const paused = this.isPausedFn ? this.isPausedFn() : false;
-          if (!enqueueCommand(world, cmd, paused)) this.flashPausedQueueFull();
+          if (!enqueueCommand(world, cmd, paused)) this.flashPausedQueueFull(paused);
         }
         this.dragState.isDragging = false;
       }
@@ -1272,7 +1276,11 @@ export class UIScene extends Phaser.Scene {
     }
     this.hintText.setVisible(true);
     if (now < this.pausedQueueFullUntilMs) {
-      this.hintText.setText(PAUSED_QUEUE_FULL_HINT);
+      // Accurate message for the pause state captured at the drop (Fix 3): paused
+      // → "resume to continue"; running → "try again" (transient burst). Reading
+      // the live isPausedFn here instead would mis-message a drop whose state has
+      // since flipped, so we use the recorded flag.
+      this.hintText.setText(queueFullHint(this.pausedQueueFullWasPaused));
       this.hintText.setColor('#ffcc66');
       return;
     }
@@ -1298,9 +1306,14 @@ export class UIScene extends Phaser.Scene {
     }
   }
 
-  /** Surface the "paused queue full — resume to continue" hint for a moment. */
-  public flashPausedQueueFull(): void {
+  /**
+   * Surface the queue-full hint for a moment. `paused` selects the message
+   * (paused → "resume to continue"; running → "try again") and is recorded so
+   * renderHintStrip shows the right one for the whole flash window (Fix 3).
+   */
+  public flashPausedQueueFull(paused: boolean): void {
     this.pausedQueueFullUntilMs = this.time.now + PAUSED_QUEUE_FULL_HINT_MS;
+    this.pausedQueueFullWasPaused = paused;
   }
 
   // ---------------------------------------------------------------------------
