@@ -362,7 +362,7 @@ describe('HUD + right-click', () => {
 // ---------------------------------------------------------------------------
 
 describe('paused-queue-full surfacing', () => {
-  it('onPausedQueueFull fires when a paint tap is dropped at the cap', () => {
+  it('onPausedQueueFull fires when a paint tap is dropped at the cap WHILE PAUSED', () => {
     const h = makeHarness('underground', 'dig');
     h.paused.value = true;
     for (let i = 0; i < 64; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
@@ -370,6 +370,75 @@ describe('paused-queue-full surfacing', () => {
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, p.x, p.y));
     h.arbiter.onPointerUp(ev(LEFT_BUTTON, p.x, p.y)); // Dig tap dropped at the cap
     expect(h.pausedFullCount()).toBeGreaterThan(0);
+  });
+
+  it('an UNPAUSED cap hit is SILENT — no hint (transient throttling)', () => {
+    // Same overflow, but running: the queue drains each tick and the deferred
+    // tiles re-emit on the next flush, so the hint must NOT fire.
+    const h = makeHarness('underground', 'dig');
+    h.paused.value = false;
+    for (let i = 0; i < 64; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
+    const p = tileCenter(5, 8, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, p.x, p.y));
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, p.x, p.y)); // Dig tap refused at the cap (unpaused)
+    expect(h.pausedFullCount()).toBe(0);
+    // The command really was refused (nothing enqueued past the cap).
+    expect(h.world.commandQueue.filter((c) => c.type === 'MarkDigTile')).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fast-stroke deferral + per-frame flushPaint (Fix 1)
+// ---------------------------------------------------------------------------
+
+describe('flushPaint drains the deferred tail', () => {
+  it('a paint move that out-runs the cap holds the cursor; a later flush re-emits', () => {
+    const h = makeHarness('underground', 'dig');
+    h.paused.value = false;
+    // Fill the queue to the cap so EVERY mark this stroke emits is refused.
+    for (let i = 0; i < 64; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
+    const start = tileCenter(5, 8, h.vs);
+    const end = tileCenter(8, 8, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, end.x, end.y)); // classify → paint; all marks refused
+    // Nothing got through (queue still exactly the 64 NoOps); silent (unpaused).
+    expect(h.world.commandQueue.filter((c) => c.type === 'MarkDigTile')).toHaveLength(0);
+    expect(h.pausedFullCount()).toBe(0);
+    expect(h.arbiter.isPainting()).toBe(true); // stroke still live, cursor held
+
+    // Simulate tick() draining the queue, then the per-frame flush.
+    h.world.commandQueue.length = 0;
+    h.arbiter.flushPaint(h.world, false);
+    const marks = h.world.commandQueue
+      .filter((c) => c.type === 'MarkDigTile')
+      .map((c) => [(c as { tileX: number }).tileX, (c as { tileY: number }).tileY]);
+    // The deferred tiles (5,8)..(8,8) now emit toward the stored target.
+    expect(marks.length).toBeGreaterThan(0);
+    expect(marks).toContainEqual([8, 8]); // reached the target tile
+  });
+
+  it('flushPaint is a no-op when no paint stroke is active', () => {
+    const h = makeHarness('underground', 'dig');
+    h.arbiter.flushPaint(h.world, false);
+    expect(h.world.commandQueue).toHaveLength(0);
+  });
+
+  it('flushPaint itself surfaces the hint on a paused cap refusal during drain', () => {
+    const h = makeHarness('underground', 'dig');
+    h.paused.value = true;
+    const start = tileCenter(5, 8, h.vs);
+    const end = tileCenter(8, 8, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, end.x, end.y)); // paint a few tiles while paused
+    // Jam the queue, then move the target further so the cursor can't reach it.
+    while (h.world.commandQueue.length < 64)
+      h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: 0 });
+    const far = tileCenter(12, 8, h.vs);
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, far.x, far.y)); // records target, refused at cap (fires hint)
+    // Capture the count AFTER the move so the next assertion isolates flushPaint.
+    const afterMove = h.pausedFullCount();
+    h.arbiter.flushPaint(h.world, true); // still capped, target unreached → flushPaint fires the hint
+    expect(h.pausedFullCount()).toBeGreaterThan(afterMove);
   });
 });
 

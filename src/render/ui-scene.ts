@@ -725,10 +725,13 @@ export class UIScene extends Phaser.Scene {
               issuedAtTick: world.tick,
             };
             // Stage 1 controls rework (issue #18) — route through enqueueCommand
-            // so the paused non-Sync cap is enforced across ALL producers (Codex
-            // R2-8). If dropped at the cap, surface the "paused queue full" hint.
+            // so the non-Sync cap is enforced across ALL producers (Codex R2-8).
+            // The cap is now unconditional (paused OR running), so only surface
+            // the "paused queue full" hint when the refusal happened WHILE PAUSED
+            // — an unpaused refusal is silent throttling that drains next tick
+            // (matches the arbiter's notifyCapHit gating).
             const paused = this.isPausedFn ? this.isPausedFn() : false;
-            if (!enqueueCommand(world, cmd, paused)) this.flashPausedQueueFull();
+            if (!enqueueCommand(world, cmd, paused) && paused) this.flashPausedQueueFull();
           }
           requestHideContextMenu();
           return;
@@ -872,9 +875,12 @@ export class UIScene extends Phaser.Scene {
             issuedAtTick: world.tick,
           };
           // Stage 1 controls rework (issue #18) — route through enqueueCommand
-          // (paused cap across all producers; Codex R2-8).
+          // (non-Sync cap across all producers; Codex R2-8). Cap is now
+          // unconditional, so only flash the "paused queue full" hint when the
+          // refusal happened WHILE PAUSED (an unpaused refusal drains next tick;
+          // matches the arbiter's notifyCapHit gating).
           const paused = this.isPausedFn ? this.isPausedFn() : false;
-          if (!enqueueCommand(world, cmd, paused)) this.flashPausedQueueFull();
+          if (!enqueueCommand(world, cmd, paused) && paused) this.flashPausedQueueFull();
         }
         this.dragState.isDragging = false;
       }

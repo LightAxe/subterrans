@@ -1,5 +1,7 @@
 // command-queue.test.ts — Vitest unit tests for the input-side enqueueCommand
-// paused-cap helper (Stage 1 controls rework, issue #18, Codex R1-6/R2-8).
+// non-Sync cap helper (Stage 1 controls rework, issue #18, Codex R1-6/R2-8).
+// The cap is enforced UNCONDITIONALLY (paused OR running) so a fast paint stroke
+// can't silently lose tiles past tick.ts's MAX_COMMANDS_PER_TICK drop.
 
 import { describe, it, expect } from 'vitest';
 import { enqueueCommand } from './command-queue.js';
@@ -12,11 +14,21 @@ function makeWorld(queue: SimCommand[] = []): WorldState {
 const noop = (tick = 0): SimCommand => ({ type: 'NoOp', issuedAtTick: tick });
 
 describe('enqueueCommand', () => {
-  it('always pushes when NOT paused (steady-state queue drains each tick)', () => {
-    const world = makeWorld(Array.from({ length: MAX_COMMANDS_PER_TICK + 50 }, (_, i) => noop(i)));
+  it('pushes when NOT paused and UNDER the non-Sync cap', () => {
+    const world = makeWorld(Array.from({ length: MAX_COMMANDS_PER_TICK - 1 }, (_, i) => noop(i)));
     const ok = enqueueCommand(world, noop(999), false);
     expect(ok).toBe(true);
-    expect(world.commandQueue).toHaveLength(MAX_COMMANDS_PER_TICK + 51);
+    expect(world.commandQueue).toHaveLength(MAX_COMMANDS_PER_TICK);
+  });
+
+  it('REFUSES (returns false, no push) when NOT paused AT the non-Sync cap', () => {
+    // The fast-stroke fix: the cap is enforced UNCONDITIONALLY. tick.ts would
+    // drop anything past 64 regardless of pause state, so refusing here lets the
+    // caller defer the command instead of silently losing it.
+    const world = makeWorld(Array.from({ length: MAX_COMMANDS_PER_TICK }, (_, i) => noop(i)));
+    const ok = enqueueCommand(world, noop(999), false);
+    expect(ok).toBe(false);
+    expect(world.commandQueue).toHaveLength(MAX_COMMANDS_PER_TICK);
   });
 
   it('pushes while paused when under the non-Sync cap', () => {
@@ -26,7 +38,7 @@ describe('enqueueCommand', () => {
     expect(world.commandQueue).toHaveLength(MAX_COMMANDS_PER_TICK);
   });
 
-  it('DROPS (returns false, no push) while paused at the non-Sync cap', () => {
+  it('REFUSES (returns false, no push) while paused at the non-Sync cap', () => {
     const world = makeWorld(Array.from({ length: MAX_COMMANDS_PER_TICK }, (_, i) => noop(i)));
     const ok = enqueueCommand(world, noop(), true);
     expect(ok).toBe(false);

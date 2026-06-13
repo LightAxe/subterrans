@@ -20,8 +20,12 @@
 // switch by the arbiter's cancelGesture.
 //
 // All commands emitted are the SAME SimCommands as before the rework, pushed via
-// enqueueCommand (paused-cap guard). A handler returns whether its command was
-// dropped at the cap so the arbiter can surface the "paused queue full" hint.
+// enqueueCommand (non-Sync cap guard, enforced paused OR running). A tap handler
+// returns whether its command was refused at the cap; the paint handlers return
+// a capHit flag the arbiter uses to defer the un-enqueued tiles (re-emitting on a
+// later flush/move) and — only while paused — to surface the "paused queue full"
+// hint. An unpaused cap hit is silent transient throttling that catches up next
+// tick as the queue drains.
 //
 // UndergroundTileState enum (terrain.ts): Solid=0, Marked=1, BeingDug=2, Open=3
 
@@ -130,7 +134,7 @@ function isEditableUndergroundTile(
 /**
  * Underground Command tap: cancel a queued dig mark (Codex R2-7). A tap on a
  * Marked tile → CancelDigMark; every other tile is a no-op in Stage 1.
- * Player-grid-only. Returns true iff the command was dropped at the paused cap.
+ * Player-grid-only. Returns true iff the command was refused at the cap.
  */
 export function handleUndergroundCommandTap(
   world: WorldState,
@@ -161,7 +165,7 @@ export function handleUndergroundCommandTap(
 /**
  * Underground Dig tap (Codex R1-2): Solid/Open → MarkDigTile; Marked →
  * CancelDigMark; BeingDug → no-op (already claimed). Player-grid-only. Returns
- * true iff a command was dropped at the paused cap.
+ * true iff a command was refused at the cap.
  */
 export function handleUndergroundDigTap(
   world: WorldState,
@@ -208,7 +212,14 @@ export function handleUndergroundDigTap(
  * drag segment interpolates from a real coordinate) and emits MarkDigTile for
  * the down-tile itself when it is Solid/Open. Marked/BeingDug down-tiles seed the
  * cursor without emitting (matching the prior eager-arm behavior). Player-grid-
- * only. Returns true iff a command was dropped at the paused cap.
+ * only. Returns true iff a command was refused at the cap.
+ *
+ * Note: unlike continuePaintStroke, the cursor is ALWAYS armed at the down-tile
+ * even on a cap refusal — begin marks a single tile, and the first
+ * continuePaintStroke segment re-interpolates from the down-tile, so a refused
+ * down-tile mark is recovered by the stroke's own subsequent segments (and a
+ * stroke that never moves was a single-tile gesture whose one refused mark
+ * re-emits on the per-frame flush).
  */
 export function beginPaintStroke(
   state: PaintStrokeState,
@@ -254,10 +265,21 @@ export function beginPaintStroke(
  * target. Any Bresenham step advancing both axes is split into a horizontal
  * bridge then a vertical step so successive emitted tiles stay Manhattan-
  * adjacent (4-connected underground movement requires it). The starting tile is
- * skipped (already emitted by begin/prior segment). Non-markable / out-of-bounds
- * / ceiling tiles are skipped silently; the stroke continues past them.
- * Player-grid-only. Returns true iff ANY command in this segment was dropped at
- * the paused cap.
+ * skipped (already emitted by begin/prior segment).
+ *
+ * Two distinct kinds of "didn't enqueue" are handled differently so a fast
+ * stroke past the MAX_COMMANDS_PER_TICK cap never silently loses tiles:
+ *   - NON-MARKABLE skip (out-of-bounds / ceiling / not Solid/Open): not a loss —
+ *     there was no command to defer. The cursor ADVANCES past it and the stroke
+ *     continues (matching the prior behaviour).
+ *   - CAP REFUSAL (enqueueCommand returned false): the command was deferred, not
+ *     emitted. The cursor is LEFT at the last successfully-handled tile (it is
+ *     NOT advanced onto the refused tile), the loop STOPS, and `capHit` is set
+ *     so the refused tile + the remainder re-emit on a later flush/move (the
+ *     arbiter re-drives toward the stored target as the queue drains).
+ *
+ * Player-grid-only. Returns true iff a command in this segment was refused at the
+ * cap (capHit). A non-markable skip never sets the return.
  */
 export function continuePaintStroke(
   state: PaintStrokeState,
@@ -281,12 +303,13 @@ export function continuePaintStroke(
   const y0 = state.lastMarkedTileY;
   const x1 = tileX;
   const y1 = tileY;
-  let droppedAtCap = false;
+  let capHit = false;
 
   // Sentinel start (no prior cursor): single-tile emission.
   if (x0 === -1 && y0 === -1) {
     if (x1 < 0 || y1 < 0 || x1 >= grid.width || y1 >= grid.height) return false;
     if (y1 === UNDERGROUND_CEILING_ROW_Y) {
+      // Non-markable: advance the cursor past it (not a loss).
       state.lastMarkedTileX = x1;
       state.lastMarkedTileY = y1;
       return false;
@@ -300,11 +323,16 @@ export function continuePaintStroke(
         tileY: y1,
         issuedAtTick: world.tick,
       };
-      if (!enqueueCommand(world, cmd, isPaused)) droppedAtCap = true;
+      if (!enqueueCommand(world, cmd, isPaused)) {
+        // Cap refusal: do NOT advance the cursor onto the refused tile, so the
+        // next flush/move re-emits it. Leave lastMarkedTile at the sentinel.
+        return true;
+      }
     }
+    // Enqueued OR non-markable: advance the cursor.
     state.lastMarkedTileX = x1;
     state.lastMarkedTileY = y1;
-    return droppedAtCap;
+    return false;
   }
 
   const dx = x1 > x0 ? x1 - x0 : x0 - x1;
@@ -317,15 +345,26 @@ export function continuePaintStroke(
   let finalX = x0;
   let finalY = y0;
 
-  // Emit one tile: advances finalX/Y always (stroke-cursor semantics), pushes a
-  // MarkDigTile only for in-bounds, non-ceiling, Solid/Open tiles.
-  const emitTile = (tx: number, ty: number): void => {
-    finalX = tx;
-    finalY = ty;
-    if (tx < 0 || ty < 0 || tx >= grid.width || ty >= grid.height) return;
-    if (ty === UNDERGROUND_CEILING_ROW_Y) return;
+  // Emit one tile. Returns false to signal a CAP REFUSAL (caller must stop and
+  // NOT advance the cursor onto this tile); returns true otherwise (enqueued OR
+  // a non-markable skip — both advance the cursor past the tile).
+  const emitTile = (tx: number, ty: number): boolean => {
+    if (tx < 0 || ty < 0 || tx >= grid.width || ty >= grid.height) {
+      finalX = tx;
+      finalY = ty;
+      return true; // out-of-bounds: not a loss, advance past it
+    }
+    if (ty === UNDERGROUND_CEILING_ROW_Y) {
+      finalX = tx;
+      finalY = ty;
+      return true; // ceiling: not a loss, advance past it
+    }
     const ts = ugGet(grid, tx, ty);
-    if (ts !== UndergroundTileState.Solid && ts !== UndergroundTileState.Open) return;
+    if (ts !== UndergroundTileState.Solid && ts !== UndergroundTileState.Open) {
+      finalX = tx;
+      finalY = ty;
+      return true; // non-markable terrain: not a loss, advance past it
+    }
     const cmd: MarkDigTileCommand = {
       type: 'MarkDigTile',
       colonyId: PLAYER_COLONY_ID,
@@ -333,7 +372,15 @@ export function continuePaintStroke(
       tileY: ty,
       issuedAtTick: world.tick,
     };
-    if (!enqueueCommand(world, cmd, isPaused)) droppedAtCap = true;
+    if (!enqueueCommand(world, cmd, isPaused)) {
+      // Cap refusal: leave finalX/Y at the prior (successfully-handled) tile so
+      // this tile re-emits later. Signal the loop to stop.
+      capHit = true;
+      return false;
+    }
+    finalX = tx;
+    finalY = ty;
+    return true;
   };
 
   while (cx !== x1 || cy !== y1) {
@@ -343,25 +390,25 @@ export function continuePaintStroke(
     if (advanceX && advanceY) {
       err -= dy;
       cx += sx;
-      emitTile(cx, cy); // orthogonal bridge tile
+      if (!emitTile(cx, cy)) break; // orthogonal bridge tile (cap refusal → stop)
       err += dx;
       cy += sy;
-      emitTile(cx, cy); // diagonal destination
+      if (!emitTile(cx, cy)) break; // diagonal destination (cap refusal → stop)
     } else if (advanceX) {
       err -= dy;
       cx += sx;
-      emitTile(cx, cy);
+      if (!emitTile(cx, cy)) break;
     } else if (advanceY) {
       err += dx;
       cy += sy;
-      emitTile(cx, cy);
+      if (!emitTile(cx, cy)) break;
     } else {
       break;
     }
   }
   state.lastMarkedTileX = finalX;
   state.lastMarkedTileY = finalY;
-  return droppedAtCap;
+  return capHit;
 }
 
 // ---------------------------------------------------------------------------

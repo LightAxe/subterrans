@@ -347,3 +347,105 @@ describe('paused-queue cap (paint)', () => {
     expect(stroke.active).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fast-stroke cap deferral (Fix 1): the cap is enforced UNPAUSED too, and the
+// stroke cursor HOLDS at the last enqueued tile on a cap refusal so the
+// remainder re-emits later with NO lost tiles. Non-markable skips still advance.
+// ---------------------------------------------------------------------------
+
+describe('fast-stroke cap deferral (unpaused)', () => {
+  it('a single >64-tile segment enqueues exactly the cap and HOLDS the cursor', () => {
+    const world = makeWorld({ gridWidth: 100, gridHeight: 20 });
+    const stroke = createPaintStrokeState();
+    // Begin at (0,10): one mark for the down-tile.
+    beginPaintStroke(stroke, world, makeViewState(), 0, 10, false);
+    expect(markCount(world)).toBe(1);
+    // One fast move spanning 80 new tiles (x=1..80). The queue holds 1 mark, so
+    // 63 more fit before the cap → 64 total enqueued, the rest deferred.
+    const capHit = continuePaintStroke(stroke, world, makeViewState(), 80, 10, false);
+    expect(capHit).toBe(true);
+    expect(markCount(world)).toBe(MAX_COMMANDS_PER_TICK); // exactly the cap
+    // Cursor HELD at the last successfully-enqueued tile, NOT advanced to 80.
+    // 1 (begin) + 63 (continue) = 64 marks → last enqueued tile is x=63.
+    expect(stroke.lastMarkedTileX).toBe(63);
+    expect(stroke.lastMarkedTileY).toBe(10);
+  });
+
+  it('the deferred remainder re-emits on a subsequent flush with NO lost tiles', () => {
+    const world = makeWorld({ gridWidth: 100, gridHeight: 20 });
+    const stroke = createPaintStrokeState();
+    beginPaintStroke(stroke, world, makeViewState(), 0, 10, false);
+    continuePaintStroke(stroke, world, makeViewState(), 80, 10, false); // caps at 64, holds at 63
+    // Collect the first batch's tiles, then simulate tick() draining the queue.
+    const firstBatch = world.commandQueue
+      .filter((c) => c.type === 'MarkDigTile')
+      .map((c) => (c as { tileX: number }).tileX);
+    world.commandQueue.length = 0; // drain
+    // Re-drive toward the SAME target (what flushPaint does each frame).
+    const capHit2 = continuePaintStroke(stroke, world, makeViewState(), 80, 10, false);
+    expect(capHit2).toBe(false); // remainder (16 tiles) fits now
+    const secondBatch = world.commandQueue
+      .filter((c) => c.type === 'MarkDigTile')
+      .map((c) => (c as { tileX: number }).tileX);
+    // Cursor finally reaches the target.
+    expect(stroke.lastMarkedTileX).toBe(80);
+    // Union of both batches covers x=0..80 contiguously — no lost tiles, no dupes.
+    const allX = [...firstBatch, ...secondBatch].sort((a, b) => a - b);
+    const expected = Array.from({ length: 81 }, (_, i) => i); // 0..80
+    expect(allX).toEqual(expected);
+  });
+
+  it('a further flush once the cursor has reached the target is a debounce no-op', () => {
+    const world = makeWorld({ gridWidth: 100, gridHeight: 20 });
+    const stroke = createPaintStrokeState();
+    beginPaintStroke(stroke, world, makeViewState(), 0, 10, false);
+    continuePaintStroke(stroke, world, makeViewState(), 80, 10, false);
+    world.commandQueue.length = 0;
+    continuePaintStroke(stroke, world, makeViewState(), 80, 10, false); // reaches 80
+    const before = markCount(world);
+    const capHit = continuePaintStroke(stroke, world, makeViewState(), 80, 10, false); // same tile
+    expect(capHit).toBe(false);
+    expect(markCount(world)).toBe(before); // no new marks
+  });
+
+  it('non-markable (BeingDug) tiles are SKIPPED but the cursor ADVANCES past them', () => {
+    const world = makeWorld({ gridWidth: 20, gridHeight: 20 });
+    ugSet(grid(world), 3, 10, UndergroundTileState.BeingDug); // a hole in the row
+    const stroke = createPaintStrokeState();
+    beginPaintStroke(stroke, world, makeViewState(), 0, 10, false); // mark (0,10)
+    const capHit = continuePaintStroke(stroke, world, makeViewState(), 6, 10, false);
+    // Not a cap event — BeingDug is a silent skip, not a deferral.
+    expect(capHit).toBe(false);
+    const marks = world.commandQueue
+      .filter((c) => c.type === 'MarkDigTile')
+      .map((c) => (c as { tileX: number }).tileX);
+    expect(marks).toEqual([0, 1, 2, 4, 5, 6]); // 3 skipped, rest marked
+    // Cursor advanced all the way to the target despite the skip.
+    expect(stroke.lastMarkedTileX).toBe(6);
+    expect(stroke.lastMarkedTileY).toBe(10);
+  });
+
+  it('the sentinel single-tile path HOLDS the cursor at the sentinel on a cap refusal', () => {
+    // No prior cursor (lastMarkedTile = -1): the single-tile branch. A cap
+    // refusal must NOT advance the sentinel, so the tile re-emits next flush.
+    const pre: SimCommand[] = Array.from({ length: MAX_COMMANDS_PER_TICK }, (_, i) => ({
+      type: 'NoOp',
+      issuedAtTick: i,
+    }));
+    const world = makeWorld({ commandQueue: pre });
+    const stroke = createPaintStrokeState();
+    stroke.active = true; // armed but no cursor recorded yet (sentinel)
+    const capHit = continuePaintStroke(stroke, world, makeViewState(), 5, 10, false /* unpaused */);
+    expect(capHit).toBe(true);
+    expect(markCount(world)).toBe(0);
+    expect(stroke.lastMarkedTileX).toBe(-1); // sentinel held
+    expect(stroke.lastMarkedTileY).toBe(-1);
+    // Drain and retry: now it enqueues and advances.
+    world.commandQueue.length = 0;
+    const capHit2 = continuePaintStroke(stroke, world, makeViewState(), 5, 10, false);
+    expect(capHit2).toBe(false);
+    expect(markCount(world)).toBe(1);
+    expect([stroke.lastMarkedTileX, stroke.lastMarkedTileY]).toEqual([5, 10]);
+  });
+});

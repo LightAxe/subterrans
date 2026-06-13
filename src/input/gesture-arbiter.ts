@@ -29,7 +29,19 @@
 // (middle/right) button down instead uses clearLeftGesture so a middle-button
 // drag-pan's isPanning claim survives. The GameScene update loop calls
 // reconcileContext() each frame to catch tool/view/colony transitions that
-// happened via keyboard between pointer events.
+// happened via keyboard between pointer events, AND flushPaint() each frame to
+// drain any dig tiles a fast stroke deferred past the MAX_COMMANDS_PER_TICK cap.
+//
+// Fast-stroke cap deferral (Fix 1): continuePaintStroke emits one MarkDigTile per
+// 4-connected step. A single fast pointer-move can emit far more than the sim's
+// 64-command/tick cap; enqueueCommand now refuses the overflow (paused OR
+// running) and continuePaintStroke holds its cursor at the last enqueued tile
+// instead of skipping ahead. The arbiter remembers the latest paint TARGET tile
+// and re-drives the stroke toward it every frame (flushPaint) plus once on
+// pointerup, so the deferred tail emits as the queue drains — no silently lost
+// tiles. The "paused queue full" hint fires only when a refusal happens WHILE
+// PAUSED (notifyCapHit); an unpaused refusal is silent throttling that catches up
+// next tick.
 //
 // Right-click is handled here too (tool-independent): underground Solid/Open →
 // chamber menu via tryOpenChamberMenu; surface RMB → no-op. Middle button is
@@ -171,6 +183,15 @@ export class GestureArbiter {
   /** Last pointer position seen during a pan drag (for incremental camera delta). */
   private panLastX = 0;
   private panLastY = 0;
+  /**
+   * Latest paint TARGET tile — the tile under the pointer on the most recent
+   * paintMove. The per-frame flushPaint() re-drives continuePaintStroke toward
+   * this so a fast stroke that out-ran the MAX_COMMANDS_PER_TICK cap drains its
+   * deferred tail (≤64/tick) even if the pointer then stops. Meaningful only
+   * while a paint stroke is active; -1 = none recorded yet.
+   */
+  private paintTargetX = -1;
+  private paintTargetY = -1;
 
   /**
    * Context fingerprint captured at down + after each frame, so a keyboard-driven
@@ -230,6 +251,8 @@ export class GestureArbiter {
   private clearLeftGesture(): void {
     this.snapshot = null;
     this.dragMode = null;
+    this.paintTargetX = -1;
+    this.paintTargetY = -1;
     resetPaintStrokeState(this.paintStroke);
   }
 
@@ -251,6 +274,40 @@ export class GestureArbiter {
     this.ctxTool = vs.activeTool;
     this.ctxView = vs.activeView;
     this.ctxColony = vs.activeUndergroundColonyId;
+  }
+
+  /**
+   * flushPaint — called once per frame by GameScene.update() (alongside
+   * reconcileContext). While a paint stroke is active, re-drive
+   * continuePaintStroke toward the latest recorded paint TARGET tile so any
+   * tiles deferred by the MAX_COMMANDS_PER_TICK cap drain out (≤64/tick) even if
+   * the pointer has stopped moving. The whole call is a no-op once the cursor has
+   * reached the target (continuePaintStroke's same-tile debounce returns early),
+   * and a no-op when no paint stroke is active or no target has been recorded.
+   *
+   * Pass-through of the live world + paused flag mirrors paintMove. capHit is
+   * surfaced through the same paused-gated hint path.
+   */
+  flushPaint(world: WorldState, isPaused: boolean): void {
+    if (this.dragMode !== 'paint' || !this.paintStroke.active) return;
+    if (this.paintTargetX === -1 && this.paintTargetY === -1) return;
+    // Already at the target → continuePaintStroke debounces to a no-op; calling
+    // it is harmless but we can skip the work.
+    if (
+      this.paintStroke.lastMarkedTileX === this.paintTargetX &&
+      this.paintStroke.lastMarkedTileY === this.paintTargetY
+    ) {
+      return;
+    }
+    const capHit = continuePaintStroke(
+      this.paintStroke,
+      world,
+      this.deps.viewState,
+      this.paintTargetX,
+      this.paintTargetY,
+      isPaused,
+    );
+    this.notifyCapHit(capHit);
   }
 
   onPointerDown(ev: ArbiterPointerEvent): void {
@@ -342,7 +399,11 @@ export class GestureArbiter {
             snap.tileY,
             this.deps.isPaused(),
           );
-          if (dropped) this.deps.onPausedQueueFull?.();
+          // Seed the flush target at the down-tile; paintMove below overwrites it
+          // with the live tile, and subsequent moves keep it current.
+          this.paintTargetX = snap.tileX;
+          this.paintTargetY = snap.tileY;
+          this.notifyCapHit(dropped);
         }
       } else {
         // Pan is a pure camera move, so it obeys canPan (allowed while
@@ -381,6 +442,16 @@ export class GestureArbiter {
 
     // Drag occurred → no tap; just end the gesture.
     if (this.dragMode !== null) {
+      // Stroke-end drain (Fix 1.3b): if this was a paint drag whose last move
+      // out-ran the cap, do one final flush toward the stored target so the
+      // tail emitted by the final move isn't stranded when the per-frame flush
+      // stops (the gesture is cancelled just below). Per-frame flushPaint kept
+      // the cursor caught up during the drag, so at most the last move's worth
+      // remains here; this clears what fits (≤ the cap as the queue drains).
+      if (this.dragMode === 'paint') {
+        const world = this.deps.getWorld();
+        if (world) this.flushPaint(world, this.deps.isPaused());
+      }
       this.cancelGesture();
       return;
     }
@@ -413,6 +484,18 @@ export class GestureArbiter {
 
   // --- internals -----------------------------------------------------------
 
+  /**
+   * Surface the "paused queue full" hint for a cap refusal, but ONLY while
+   * paused. An UNPAUSED cap hit is silent transient throttling: the queue drains
+   * each tick and the deferred tiles re-emit on the next flush/move, so there is
+   * nothing for the player to act on (a hint would be a spurious flash on every
+   * fast stroke). While paused the queue genuinely can't drain, so the refusal is
+   * actionable — resume to continue.
+   */
+  private notifyCapHit(capHit: boolean): void {
+    if (capHit && this.deps.isPaused()) this.deps.onPausedQueueFull?.();
+  }
+
   private dispatchTap(snap: GestureSnapshot, world: WorldState): void {
     const vs = this.deps.viewState;
     const paused = this.deps.isPaused();
@@ -434,7 +517,7 @@ export class GestureArbiter {
         tryOpenChamberMenu(world, vs, snap.downX, snap.downY, snap.tileX, snap.tileY);
       }
     }
-    if (dropped) this.deps.onPausedQueueFull?.();
+    this.notifyCapHit(dropped);
   }
 
   private paintMove(ev: ArbiterPointerEvent): void {
@@ -442,7 +525,11 @@ export class GestureArbiter {
     if (!world) return;
     const cam = activeCamera(this.deps.viewState);
     const { tileX, tileY } = screenToTile(ev.x, ev.y, cam);
-    const dropped = continuePaintStroke(
+    // Remember the live target so flushPaint can drain the deferred tail toward
+    // it on later frames even if the pointer stops here.
+    this.paintTargetX = tileX;
+    this.paintTargetY = tileY;
+    const capHit = continuePaintStroke(
       this.paintStroke,
       world,
       this.deps.viewState,
@@ -450,7 +537,7 @@ export class GestureArbiter {
       tileY,
       this.deps.isPaused(),
     );
-    if (dropped) this.deps.onPausedQueueFull?.();
+    this.notifyCapHit(capHit);
   }
 
   private panMove(ev: ArbiterPointerEvent): void {

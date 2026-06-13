@@ -660,6 +660,16 @@ export class GameScene extends Phaser.Scene {
       this.hoverScreenX = null;
       this.hoverScreenY = null;
     });
+    // Fix 2: 'pointerout' fires only when the pointer leaves an interactive game
+    // OBJECT — it does NOT fire when the pointer leaves the CANVAS. Phaser emits
+    // 'gameout' for canvas exits (Phaser.Input.Events.GAME_OUT, since 3.16.1;
+    // we're on 3.90). Without this, leaving the canvas while surface Dig is
+    // selected left stale hover coords, so the entrance hover outline lingered
+    // and drifted across tiles during keyboard pan. Clear the hover here too.
+    this.input.on('gameout', () => {
+      this.hoverScreenX = null;
+      this.hoverScreenY = null;
+    });
     // Cancel any in-flight gesture if the canvas loses focus (blur).
     this.game.events.on('blur', () => this.arbiter.cancelGesture());
 
@@ -1582,6 +1592,19 @@ export class GameScene extends Phaser.Scene {
     // between pointer events) and cancel any in-flight gesture under the old
     // context. Also refreshes the arbiter's context fingerprint.
     this.arbiter.reconcileContext();
+
+    // Stage 1 (Fix 1): drain any dig tiles a fast paint stroke deferred past the
+    // MAX_COMMANDS_PER_TICK cap. flushPaint re-drives the active stroke toward
+    // its stored target so the deferred tail emits as the queue drains (≤64/tick)
+    // even if the pointer has stopped; it is a no-op when no paint stroke is
+    // active or the cursor has already reached the target. Runs before
+    // gameLoop.update below so this frame's enqueue is drained by this frame's
+    // tick(s). Guarded by canEditWorld defence-in-depth: a modal already cancels
+    // the gesture via openPauseMenu/restartGame, but this keeps a stray active
+    // stroke from enqueueing under a modal that didn't go through cancelGesture.
+    if (this.world && !this.isModalOpen()) {
+      this.arbiter.flushPaint(this.world, isPausedByAny(this.pauseReasons));
+    }
 
     // Track active view for anything that needs to diff on toggle.
     if (this.viewState.activeView !== this.lastActiveView) {
