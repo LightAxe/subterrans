@@ -51,6 +51,12 @@ export const COLOR_SURFACE_ENTRANCE_HOLE = 0x1a0f00;
 /** PRD §7g — Rally point marker color. */
 export const COLOR_RALLY_POINT = 0xffffff;
 
+/** Stage 1 controls rework (issue #18) — entrance hover outline, VALID target (green). */
+export const COLOR_ENTRANCE_HOVER_VALID = 0x33dd55;
+
+/** Stage 1 controls rework (issue #18) — entrance hover outline, INVALID target (red). */
+export const COLOR_ENTRANCE_HOVER_INVALID = 0xff4040;
+
 /** S1 — Red tint overlay applied to fighter-caste ants (tinted on top of colony color). */
 export const COLOR_FIGHTER_TINT = 0xff4444;
 
@@ -161,6 +167,19 @@ export const HUD = {
    * Phase 9 wires 1×/2×/4× speed buttons and pause button.
    */
   SPEED: { x: 320, y: 552, w: 160, h: 32, PAUSE_BUTTON_W: 40, SPEED_BUTTON_W: 32 },
+  /**
+   * Stage 1 controls rework (issue #18) — tool palette (Command/Dig/Chamber).
+   * Top-right band, clear of STATS (top-left), the ant-activity panel
+   * (8,36,220,264), SAVE_ICON (772,8), and the y≥372 toggles/minimap. Three
+   * 40×40 buttons at x = 632 / 676 / 720 (BUTTON_W 40, GAP 4).
+   */
+  TOOLS: { x: 632, y: 36, w: 128, h: 40, BUTTON_W: 40, GAP: 4 },
+  /**
+   * Stage 1 controls rework (issue #18) — context hint strip (static per-tool/
+   * per-view legend). Lower band: above TRIANGLE/SPEED (y≥532), left of MINIMAP
+   * (x≥632), below the ant-activity panel (y≤300).
+   */
+  HINTS: { x: 8, y: 508, w: 616, h: 18 },
   /** Minimap: full surface overview with colony positions and food sources. */
   MINIMAP: { x: 632, y: 424, w: 160, h: 160 },
   /** View toggle button: switches between surface and underground views. */

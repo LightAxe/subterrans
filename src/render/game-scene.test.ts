@@ -17,6 +17,10 @@ import {
   resetInputLog,
   generateFreshSeed,
   GamePhase,
+  canArbiterPan,
+  resolveCursorTool,
+  cursorToolChanged,
+  type CursorTool,
 } from './game-scene-logic.js';
 import {
   createViewState,
@@ -24,17 +28,14 @@ import {
   toggleView,
   UNDERGROUND_INITIAL_CAMERA_Y,
 } from './camera.js';
-import { resetSurfaceInputState, type SurfaceInputState } from '../input/surface-input.js';
-import {
-  resetUndergroundInputState,
-  type UndergroundInputState,
-} from '../input/underground-input.js';
+import { resetPaintStrokeState, type PaintStrokeState } from '../input/underground-input.js';
 import {
   panInputState,
   resetPanInputState,
   resetDragState,
   type DragState,
 } from '../input/camera-input.js';
+import { clearAllPauseReasons, type PauseReasonState } from './pause-reasons.js';
 import { contextMenuState, hideContextMenu } from './context-menu-state.js';
 import { PLAYER_START_X, PLAYER_START_Y } from '../sim/constants.js';
 import type { WorldState } from '../sim/types.js';
@@ -99,6 +100,121 @@ describe('GamePhase object-const', () => {
     for (const v of values) {
       expect(typeof v).toBe('number');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// canArbiterPan — shared pan gate (block behind modal/menu). Used by the
+// left-drag arbiter pan AND, since Fix 3 (Codex P2), the per-frame keyboard
+// (WASD/arrow) pan in GameScene.update — both gate on canArbiterPan(isModalOpen)
+// so all pan paths (keyboard, left-drag, middle-button) move together.
+// ---------------------------------------------------------------------------
+
+describe('canArbiterPan', () => {
+  // The gate is the negation of isModalOpen(). isModalOpen() is FALSE while
+  // Playing and during a bare user-pause, and TRUE for GameOver/SavePrompt/menu.
+  it('allows pan when no modal is open (Playing or bare user-pause)', () => {
+    // isModalOpen=false covers both Playing and a bare 'user'-only pause.
+    expect(canArbiterPan(false)).toBe(true);
+  });
+
+  it('blocks pan when a modal owns input (Esc menu / SavePrompt / GameOver)', () => {
+    // isModalOpen=true is the GameOver || SavePrompt || pauseReasons.menu set.
+    expect(canArbiterPan(true)).toBe(false);
+  });
+
+  // Fix 3 (Codex P2): the keyboard PAN gate is this exact predicate. Behind the
+  // Esc pause menu (a modal, isModalOpen=true) held WASD/arrows must NOT pan —
+  // previously processCameraInput ran whenever gamePhase !== GameOver, so it kept
+  // panning the camera behind the menu (gamePhase=Paused) and the move persisted
+  // after Resume. A bare user-pause is NOT a modal, so pan still works there.
+  it('keyboard pan: blocked behind the Esc menu, allowed during a bare user-pause', () => {
+    expect(canArbiterPan(true)).toBe(false); // menu pause / SavePrompt / GameOver
+    expect(canArbiterPan(false)).toBe(true); // bare user-pause (Space) — look-around live
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveCursorTool — tool cursor over chrome / during pause (advisory fix)
+// ---------------------------------------------------------------------------
+
+describe('resolveCursorTool', () => {
+  function cursorDeps(
+    overrides: Partial<Parameters<typeof resolveCursorTool>[0]> = {},
+  ): Parameters<typeof resolveCursorTool>[0] {
+    return {
+      activeTool: 'dig',
+      activeView: 'surface',
+      isModalOpen: false,
+      contextMenuVisible: false,
+      antActivityPanelVisible: false,
+      overHud: false,
+      ...overrides,
+    };
+  }
+
+  it('returns the active tool when interactive and not over chrome', () => {
+    expect(resolveCursorTool(cursorDeps({ activeTool: 'dig' }))).toBe('dig');
+    expect(
+      resolveCursorTool(cursorDeps({ activeTool: 'chamber', activeView: 'underground' })),
+    ).toBe('chamber');
+    expect(resolveCursorTool(cursorDeps({ activeTool: 'command' }))).toBe('command');
+  });
+
+  it("collapses Chamber to 'command' outside the underground view", () => {
+    expect(resolveCursorTool(cursorDeps({ activeTool: 'chamber', activeView: 'surface' }))).toBe(
+      'command',
+    );
+  });
+
+  it("returns 'default' over HUD / context menu / inspector panel", () => {
+    expect(resolveCursorTool(cursorDeps({ overHud: true }))).toBe('default');
+    expect(resolveCursorTool(cursorDeps({ contextMenuVisible: true }))).toBe('default');
+    expect(resolveCursorTool(cursorDeps({ antActivityPanelVisible: true }))).toBe('default');
+  });
+
+  it("returns 'default' while a modal owns input (menu / SavePrompt / GameOver)", () => {
+    expect(resolveCursorTool(cursorDeps({ isModalOpen: true }))).toBe('default');
+  });
+
+  // Advisory fix (line 1727): a bare user-pause is NOT a modal, so tap/paint and
+  // entrance-hover stay live — the tool cursor must persist, not revert to arrow.
+  it('keeps the active tool during a bare user-pause (isModalOpen=false)', () => {
+    expect(resolveCursorTool(cursorDeps({ activeTool: 'dig', isModalOpen: false }))).toBe('dig');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cursorToolChanged — memoization short-circuit (advisory fix: 'default' sentinel)
+// ---------------------------------------------------------------------------
+
+describe('cursorToolChanged', () => {
+  it('reports a change when the resolved tool differs', () => {
+    expect(cursorToolChanged('dig', 'surface', 'command', 'surface')).toBe(true);
+  });
+
+  it('reports a change when the view differs', () => {
+    expect(cursorToolChanged('command', 'underground', 'command', 'surface')).toBe(true);
+  });
+
+  it('reports NO change when tool and view are unchanged (dedups the DOM write)', () => {
+    expect(cursorToolChanged('dig', 'surface', 'dig', 'surface')).toBe(false);
+  });
+
+  // The core advisory bug: the 'default' sentinel was previously stored as null
+  // while compared against the 'default' string, so 'default' === null was always
+  // false and setDefaultCursor ran EVERY frame over chrome. Storing/comparing the
+  // literal 'default' makes consecutive default frames short-circuit.
+  it("short-circuits consecutive 'default' frames (sentinel round-trips)", () => {
+    const effective: CursorTool = 'default';
+    // First default frame: last is null → a write is needed.
+    expect(cursorToolChanged(effective, 'surface', null, 'surface')).toBe(true);
+    // After storing 'default' (literal, not null), the next frame must dedup.
+    expect(cursorToolChanged(effective, 'surface', 'default', 'surface')).toBe(false);
+  });
+
+  it('initial frame always writes (lastTool/lastView null)', () => {
+    expect(cursorToolChanged('dig', 'surface', null, null)).toBe(true);
   });
 });
 
@@ -279,19 +395,24 @@ describe('resetInputLog', () => {
 // seeing the live state, as established by the Phase 9 stale-world fix).
 
 describe('session reset orchestration (bootFresh / bootFromSave precondition)', () => {
+  // Stage 1 controls rework (issue #18): resetSessionState's fan-out changed —
+  // the surface/underground input-state resets are replaced by the gesture
+  // arbiter's cancelGesture (modeled here as a PaintStrokeState reset) and the
+  // pause-reason set is cleared entirely. The object-identity contract is
+  // unchanged (in-place resets so captured closures keep seeing live state).
   interface SessionState {
     inputLog: SimCommand[];
     viewState: ReturnType<typeof createViewState>;
-    surfaceInputState: SurfaceInputState;
-    undergroundInputState: UndergroundInputState;
+    paintStroke: PaintStrokeState;
+    pauseReasons: PauseReasonState;
     dragState: DragState;
     /** GameScene scalar — modeled here so the harness exercises the same fan-out. */
     speedMultiplier: number;
   }
 
   function makeDirtySession(): SessionState {
-    // Emulate a mid-session GameScene: mid-game, mid-drag, context menu open,
-    // entrance previewed, pan in flight, game sped up.
+    // Emulate a mid-session GameScene: mid-game, mid-paint-stroke, context menu
+    // open, pan in flight, paused via Esc + Space, game sped up.
     const inputLog: SimCommand[] = [
       { type: 'NoOp', issuedAtTick: 0 },
       { type: 'NoOp', issuedAtTick: 1 },
@@ -301,38 +422,36 @@ describe('session reset orchestration (bootFresh / bootFromSave precondition)', 
     viewState.undergroundCamera.x = 100;
     viewState.undergroundCamera.y = 40;
     viewState.surfaceCamera.x = 90;
-    const surfaceInputState: SurfaceInputState = {
-      pendingEntranceTileX: 22,
-      pendingEntranceTileY: 8,
-    };
-    const undergroundInputState: UndergroundInputState = {
-      isDragging: true,
+    viewState.activeTool = 'chamber'; // non-default tool
+    const paintStroke: PaintStrokeState = {
+      active: true,
       lastMarkedTileX: 14,
       lastMarkedTileY: 6,
     };
+    const pauseReasons: PauseReasonState = { user: true, menu: true };
     const dragState: DragState = { isDragging: true, lastX: 42, lastY: 99, active: true };
-    panInputState.spaceHeld = true;
     panInputState.isPanning = true;
     contextMenuState.visible = true;
     contextMenuState.screenX = 300;
     return {
       inputLog,
       viewState,
-      surfaceInputState,
-      undergroundInputState,
+      paintStroke,
+      pauseReasons,
       dragState,
       speedMultiplier: 4, // player had sped up to 4x before the restart
     };
   }
 
-  // Matches resetSessionState's fan-out exactly — kept here so the contract
-  // is covered by a real test even though the owning method lives on the Phaser-
-  // coupled GameScene.
+  // Matches resetSessionState's fan-out exactly — kept here so the contract is
+  // covered by a real test even though the owning method lives on the Phaser-
+  // coupled GameScene. (arbiter.cancelGesture() == resetPaintStrokeState +
+  // isPanning=false, both exercised here.)
   function runSessionReset(s: SessionState): void {
     resetInputLog(s.inputLog);
     resetViewState(s.viewState, PLAYER_START_X, PLAYER_START_Y);
-    resetSurfaceInputState(s.surfaceInputState);
-    resetUndergroundInputState(s.undergroundInputState);
+    resetPaintStrokeState(s.paintStroke);
+    clearAllPauseReasons(s.pauseReasons);
     resetDragState(s.dragState);
     resetPanInputState();
     hideContextMenu();
@@ -345,27 +464,40 @@ describe('session reset orchestration (bootFresh / bootFromSave precondition)', 
 
     expect(s.inputLog).toHaveLength(0);
     expect(s.viewState.activeView).toBe('surface');
+    expect(s.viewState.activeTool).toBe('command'); // surface default
     expect(s.viewState.surfaceCamera.x).toBe(PLAYER_START_X);
     expect(s.viewState.surfaceCamera.y).toBe(PLAYER_START_Y);
     expect(s.viewState.undergroundCamera.x).toBe(PLAYER_START_X);
     expect(s.viewState.undergroundCamera.y).toBe(UNDERGROUND_INITIAL_CAMERA_Y);
     expect(s.viewState.undergroundVisited).toBe(false);
-    expect(s.surfaceInputState.pendingEntranceTileX).toBeNull();
-    expect(s.surfaceInputState.pendingEntranceTileY).toBeNull();
-    expect(s.undergroundInputState.isDragging).toBe(false);
-    expect(s.undergroundInputState.lastMarkedTileX).toBe(-1);
-    expect(s.undergroundInputState.lastMarkedTileY).toBe(-1);
+    expect(s.paintStroke.active).toBe(false);
+    expect(s.paintStroke.lastMarkedTileX).toBe(-1);
+    expect(s.paintStroke.lastMarkedTileY).toBe(-1);
+    expect(s.pauseReasons.user).toBe(false);
+    expect(s.pauseReasons.menu).toBe(false);
     expect(s.dragState).toEqual({ isDragging: false, lastX: 0, lastY: 0, active: false });
-    expect(panInputState.spaceHeld).toBe(false);
     expect(panInputState.isPanning).toBe(false);
     expect(contextMenuState.visible).toBe(false);
     expect(s.speedMultiplier).toBe(1);
   });
 
+  it('clears the ENTIRE pause-reason set (Codex R2-1 — no stuck menu/user pause)', () => {
+    // A new-game-from-Esc / Save-Load path must not leave 'menu' (or 'user') set.
+    for (const reasons of [
+      { user: true, menu: false },
+      { user: false, menu: true },
+      { user: true, menu: true },
+    ]) {
+      const s = makeDirtySession();
+      s.pauseReasons.user = reasons.user;
+      s.pauseReasons.menu = reasons.menu;
+      runSessionReset(s);
+      expect(s.pauseReasons.user).toBe(false);
+      expect(s.pauseReasons.menu).toBe(false);
+    }
+  });
+
   it('speedMultiplier resets to 1x regardless of prior 2x / 4x setting', () => {
-    // Phase 4 contract: every new session boots at 1x. Save files do not
-    // persist speed so continue-from-save also restarts at 1x — the reset
-    // runs unconditionally at the top of bootFresh and bootFromSave.
     for (const prior of [1, 2, 4]) {
       const s = makeDirtySession();
       s.speedMultiplier = prior;
@@ -375,16 +507,13 @@ describe('session reset orchestration (bootFresh / bootFromSave precondition)', 
   });
 
   it('preserves every object identity — no captured handler is stranded', () => {
-    // This is the invariant that gets the Phase 9 bug right on the second try.
-    // If any of these identities change, a closure captured in create() will
-    // silently dispatch against the old object.
     const s = makeDirtySession();
     const inputLogRef = s.inputLog;
     const viewStateRef = s.viewState;
     const surfaceCamRef = s.viewState.surfaceCamera;
     const undergroundCamRef = s.viewState.undergroundCamera;
-    const surfaceInputRef = s.surfaceInputState;
-    const undergroundInputRef = s.undergroundInputState;
+    const paintStrokeRef = s.paintStroke;
+    const pauseReasonsRef = s.pauseReasons;
     const dragStateRef = s.dragState;
 
     runSessionReset(s);
@@ -393,8 +522,8 @@ describe('session reset orchestration (bootFresh / bootFromSave precondition)', 
     expect(s.viewState).toBe(viewStateRef);
     expect(s.viewState.surfaceCamera).toBe(surfaceCamRef);
     expect(s.viewState.undergroundCamera).toBe(undergroundCamRef);
-    expect(s.surfaceInputState).toBe(surfaceInputRef);
-    expect(s.undergroundInputState).toBe(undergroundInputRef);
+    expect(s.paintStroke).toBe(paintStrokeRef);
+    expect(s.pauseReasons).toBe(pauseReasonsRef);
     expect(s.dragState).toBe(dragStateRef);
   });
 
@@ -416,17 +545,16 @@ describe('session reset orchestration (bootFresh / bootFromSave precondition)', 
     runSessionReset(s);
     appendInputLog(s.inputLog, [{ type: 'NoOp', issuedAtTick: 5 }]);
     s.viewState.surfaceCamera.x = 70;
-    s.surfaceInputState.pendingEntranceTileX = 12;
-    s.surfaceInputState.pendingEntranceTileY = 4;
-    s.undergroundInputState.isDragging = true;
+    s.paintStroke.active = true;
+    s.pauseReasons.user = true;
     s.speedMultiplier = 2;
 
     runSessionReset(s);
 
     expect(s.inputLog).toHaveLength(0);
     expect(s.viewState.surfaceCamera.x).toBe(PLAYER_START_X);
-    expect(s.surfaceInputState.pendingEntranceTileX).toBeNull();
-    expect(s.undergroundInputState.isDragging).toBe(false);
+    expect(s.paintStroke.active).toBe(false);
+    expect(s.pauseReasons.user).toBe(false);
     expect(s.speedMultiplier).toBe(1);
   });
 });

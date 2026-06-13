@@ -28,8 +28,9 @@ import {
   COLOR_SURFACE_ENTRANCE_HOLE,
   COLOR_PLAYER_COLONY,
   COLOR_ENEMY_COLONY,
-  COLOR_QUEEN_OUTLINE,
   COLOR_RALLY_POINT,
+  COLOR_ENTRANCE_HOVER_VALID,
+  COLOR_ENTRANCE_HOVER_INVALID,
   COLOR_FIGHTER_TINT,
   COLOR_NEUTRAL_CONTESTED_GLOW,
   lerpColor,
@@ -121,9 +122,12 @@ export function drawSurfaceTerrain(gfx: GfxLike, world: WorldState, cam: CameraS
  * Moving entities (ants) are interpolated between prev and curr state at alpha.
  * Static entities (food piles, entrances) read directly from curr. (VIEW-03)
  *
- * `pendingEntrance` is the Phase 8.5 right-click preview: when non-null, a
- * gold frame is drawn on that tile so the player can see which tile a
- * confirming left-click will place the entrance at.
+ * `entranceHover` is the Stage 1 controls-rework hover outline (issue #18):
+ * when non-null, a 2-px frame is drawn on the tile under the pointer while the
+ * Dig tool is active on the surface — GREEN when `valid` (DesignateEntrance
+ * would accept) or RED when not. GameScene recomputes both the tile and its
+ * validity from the live camera every frame, so the outline tracks the pointer
+ * even when keyboard/drag pan moves the camera beneath a stationary cursor.
  */
 export function drawSurfaceEntities(
   gfx: GfxLike,
@@ -132,7 +136,7 @@ export function drawSurfaceEntities(
   curr: WorldState,
   alpha: number,
   cam: CameraState,
-  pendingEntrance: { tileX: number; tileY: number } | null = null,
+  entranceHover: { tileX: number; tileY: number; valid: boolean } | null = null,
   facing?: AntFacingCache,
   frameTimeMs: number = 0,
   contestedGlowFrames?: Map<number, number>,
@@ -548,15 +552,20 @@ export function drawSurfaceEntities(
     }
   }
 
-  // --- Pending-entrance preview (Phase 8.5) ---
-  // A 2-px gold frame drawn on the tile the player right-clicked. Reads from
-  // the mutable SurfaceInputState exposed by registerSurfaceInput. Clears
-  // automatically once the player left-clicks the same tileX to confirm.
-  if (pendingEntrance !== null) {
-    const sx = (pendingEntrance.tileX - left) * TILE_SIZE_PX;
-    const sy = (pendingEntrance.tileY - top) * TILE_SIZE_PX;
+  // --- Entrance hover outline (Stage 1 controls rework, issue #18) ---
+  // A 2-px frame on the tile under the pointer while the Dig tool is active on
+  // the surface: GREEN when DesignateEntrance would accept the tile, RED when
+  // not. GameScene re-resolves the tile + validity from the live camera every
+  // frame (Codex R1-9/R2-9/R3-4), so the outline never goes stale and tracks the
+  // pointer even when the camera pans beneath a stationary cursor.
+  if (entranceHover !== null) {
+    const sx = (entranceHover.tileX - left) * TILE_SIZE_PX;
+    const sy = (entranceHover.tileY - top) * TILE_SIZE_PX;
     if (sx > -TILE_SIZE_PX && sx < canvasW && sy > -TILE_SIZE_PX && sy < canvasH) {
-      gfx.fillStyle(COLOR_QUEEN_OUTLINE, 0.7);
+      gfx.fillStyle(
+        entranceHover.valid ? COLOR_ENTRANCE_HOVER_VALID : COLOR_ENTRANCE_HOVER_INVALID,
+        0.8,
+      );
       gfx.fillRect(sx, sy, TILE_SIZE_PX, 2); // top
       gfx.fillRect(sx, sy + TILE_SIZE_PX - 2, TILE_SIZE_PX, 2); // bottom
       gfx.fillRect(sx, sy, 2, TILE_SIZE_PX); // left
@@ -575,8 +584,8 @@ export function drawSurfaceEntities(
  * Note: pheromone overlay is drawn by GameScene between terrain and entities;
  * it is NOT called from here.
  *
- * `pendingEntrance` (Phase 8.5) is forwarded to drawSurfaceEntities so the
- * right-click preview frame renders on top of all other surface layers.
+ * `entranceHover` (Stage 1 controls rework) is forwarded to drawSurfaceEntities
+ * so the Dig-tool hover outline renders on top of all other surface layers.
  */
 export function drawSurface(
   gfx: GfxLike,
@@ -585,9 +594,9 @@ export function drawSurface(
   curr: WorldState,
   alpha: number,
   cam: CameraState,
-  pendingEntrance: { tileX: number; tileY: number } | null = null,
+  entranceHover: { tileX: number; tileY: number; valid: boolean } | null = null,
   facing?: AntFacingCache,
 ): void {
   drawSurfaceTerrain(gfx, curr, cam);
-  drawSurfaceEntities(gfx, sprites, prev, curr, alpha, cam, pendingEntrance, facing);
+  drawSurfaceEntities(gfx, sprites, prev, curr, alpha, cam, entranceHover, facing);
 }

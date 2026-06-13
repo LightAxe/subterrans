@@ -20,8 +20,9 @@
 // files that touch world fields — check-sim-boundary.sh would false-positive on FNDN-07.
 
 import * as Phaser from 'phaser';
-import type { ViewState } from './camera.js';
+import type { ViewState, ToolId } from './camera.js';
 import { toggleView, toggleUndergroundColony } from './camera.js';
+import type { SpeedControl } from './hud-controls.js';
 import type { WorldState } from '../sim/types.js';
 import { HUD } from './sprites.js';
 import { GameOutcome } from '../sim/game-over.js';
@@ -151,6 +152,17 @@ import {
 } from './triangle-widget.js';
 import { drawMinimap, applyMinimapClick } from './minimap.js';
 import {
+  TOOL_ORDER,
+  TOOL_LABEL,
+  toolButtonRect,
+  toolButtonAt,
+  SPEED_CONTROL_ORDER,
+  speedControlRect,
+  speedControlAt,
+  hintTextFor,
+  queueFullHint,
+} from './hud-controls.js';
+import {
   contextMenuState,
   hideContextMenu,
   requestHideContextMenu,
@@ -241,10 +253,19 @@ import {
  *  rendered above the dialog's info line. 1500 ms is long enough to be
  *  noticed without slowing down a player who wants to chain Save → Continue. */
 const SAVE_FLASH_MS = 1500;
+
+/** Stage 1 controls rework (issue #18) — total visible lifetime of an onboarding
+ *  caption (300ms fade-in + 800ms hold + 400ms fade-out), used to size the hint-
+ *  strip yield window so the strip reappears exactly as the caption clears. */
+const CAPTION_TOTAL_MS = 1500;
+
+/** Stage 1 controls rework — how long the "paused queue full" hint stays up. */
+const PAUSED_QUEUE_FULL_HINT_MS = 1500;
 import { loadSettings, saveSettings } from '../platform/settings.js';
 import { hasSave, hasIncompatibleSave, getSaveInfo, deleteSave } from '../platform/save.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import type { SetBehaviorRatioCommand, PlaceChamberCommand } from '../sim/commands.js';
+import { enqueueCommand } from '../input/command-queue.js';
 
 // ---------------------------------------------------------------------------
 // Pause menu callbacks (issue #116)
@@ -330,6 +351,29 @@ export class UIScene extends Phaser.Scene {
   // call sites (none today, but kept for safety) can still launch UIScene
   // without it; without the callback Esc on a clean canvas is a no-op.
   private onEscape: (() => void) | null = null;
+  // Stage 1 controls rework (issue #18) — gated, GameScene-owned callbacks for
+  // the tool palette + speed widget, and a paused-state accessor for the
+  // enqueueCommand cap on chamber/behavior commands.
+  private onSelectTool: ((tool: ToolId) => void) | null = null;
+  private onSpeedControl: ((control: SpeedControl) => void) | null = null;
+  private isPausedFn: (() => boolean) | null = null;
+  private getSpeedMultiplierFn: (() => 1 | 2 | 4) | null = null;
+  // Tool palette button labels (3) and the hint strip text + speed widget labels.
+  private toolButtonTexts: Phaser.GameObjects.Text[] = [];
+  private hintText!: Phaser.GameObjects.Text;
+  private speedControlTexts: Phaser.GameObjects.Text[] = [];
+  // Caption-yield: showCaption sets this to `time.now + duration` when a caption
+  // that overlaps the hint strip is active; the hint strip yields (hides) until
+  // then so the two don't visually collide (Codex R4-1). Cleared naturally as
+  // time passes.
+  private hintYieldUntilMs = 0;
+  // Queue-full flash: set to time.now + duration when enqueueCommand drops a
+  // command at the cap; the hint strip shows the warning until then, overriding
+  // the static legend. `pausedQueueFullWasPaused` records the pause state at the
+  // moment of the drop so renderHintStrip picks the accurate message (paused →
+  // "resume to continue"; running → "try again"). (Fix 3 / Codex P2.)
+  private pausedQueueFullUntilMs = 0;
+  private pausedQueueFullWasPaused = false;
   private gfx!: Phaser.GameObjects.Graphics;
   private antsText!: Phaser.GameObjects.Text;
   private foodText!: Phaser.GameObjects.Text;
@@ -395,10 +439,20 @@ export class UIScene extends Phaser.Scene {
     viewState: ViewState;
     getWorld: () => WorldState | undefined;
     onEscape?: () => void;
+    // Stage 1 controls rework (issue #18) — GameScene-owned, gated callbacks so
+    // the HUD palette/speed widget route through the same gates as the hotkeys.
+    onSelectTool?: (tool: ToolId) => void;
+    onSpeedControl?: (control: SpeedControl) => void;
+    isPaused?: () => boolean;
+    getSpeedMultiplier?: () => 1 | 2 | 4;
   }) {
     this.viewState = data.viewState;
     this.getWorld = data.getWorld;
     this.onEscape = data.onEscape ?? null;
+    this.onSelectTool = data.onSelectTool ?? null;
+    this.onSpeedControl = data.onSpeedControl ?? null;
+    this.isPausedFn = data.isPaused ?? null;
+    this.getSpeedMultiplierFn = data.getSpeedMultiplier ?? null;
   }
 
   create() {
@@ -487,6 +541,41 @@ export class UIScene extends Phaser.Scene {
     );
     this.undergroundLabelText.setScrollFactor(0);
     this.undergroundLabelText.setVisible(false);
+
+    // Stage 1 controls rework (issue #18) — tool palette (HUD.TOOLS), hint strip
+    // (HUD.HINTS), and speed widget (HUD.SPEED). Backgrounds + active-tool
+    // highlight are drawn in update() via gfx; these Text objects carry the
+    // labels. All scroll-locked so they stay pinned to the HUD.
+    this.toolButtonTexts = TOOL_ORDER.map((tool, i) => {
+      const r = toolButtonRect(i);
+      const t = this.add.text(r.x + 4, r.y + r.h / 2 - 6, TOOL_LABEL[tool], {
+        color: '#ffffff',
+        fontSize: '11px',
+        fontFamily: 'monospace',
+      });
+      t.setScrollFactor(0);
+      t.setDepth(5);
+      return t;
+    });
+    this.hintText = this.add.text(HUD.HINTS.x + 2, HUD.HINTS.y + 2, '', {
+      color: '#cfd8dc',
+      fontSize: '11px',
+      fontFamily: 'monospace',
+    });
+    this.hintText.setScrollFactor(0);
+    this.hintText.setDepth(5);
+    this.speedControlTexts = SPEED_CONTROL_ORDER.map((control, i) => {
+      const r = speedControlRect(i);
+      const label = control === 'pause' ? '||' : `${control}x`;
+      const t = this.add.text(r.x + 4, r.y + r.h / 2 - 7, label, {
+        color: '#ffffff',
+        fontSize: '12px',
+        fontFamily: 'monospace',
+      });
+      t.setScrollFactor(0);
+      t.setDepth(5);
+      return t;
+    });
 
     // Context menu item labels — created once, positioned/shown per frame.
     // One Phaser.Text per ChamberType (Queen / Nursery / Food Storage) so the
@@ -638,7 +727,15 @@ export class UIScene extends Phaser.Scene {
               anchorTileY: contextMenuState.anchorTileY,
               issuedAtTick: world.tick,
             };
-            world.commandQueue.push(cmd);
+            // Stage 1 controls rework (issue #18) — route through enqueueCommand
+            // so the non-Sync cap is enforced across ALL producers (Codex R2-8).
+            // PlaceChamber is a ONE-SHOT command: it does NOT re-emit, so a drop
+            // at the cap is a real loss. Surface the queue-full hint on ANY drop,
+            // paused OR unpaused (Codex P2) — unlike the re-emitting paint stroke,
+            // which only hints while paused. Pass `paused` so the message is
+            // accurate (resume-to-continue vs try-again; Fix 3).
+            const paused = this.isPausedFn ? this.isPausedFn() : false;
+            if (!enqueueCommand(world, cmd, paused)) this.flashPausedQueueFull(paused);
           }
           requestHideContextMenu();
           return;
@@ -680,7 +777,14 @@ export class UIScene extends Phaser.Scene {
           // on the new toggle while the ant-activity panel is up would
           // be classified as "world click", dismissing the panel and
           // dropping the toggle dispatch.
-          this.isInsideRect(pointer.x, pointer.y, HUD.UNDERGROUND_COLONY_TOGGLE);
+          this.isInsideRect(pointer.x, pointer.y, HUD.UNDERGROUND_COLONY_TOGGLE) ||
+          // Stage 1 controls rework (issue #18) — the new interactive HUD zones
+          // (tool palette, hint strip, speed widget) must be on the ant-panel
+          // allow-list too, else a click on them while the panel is up dismisses
+          // the panel and drops the palette/speed dispatch.
+          this.isInsideRect(pointer.x, pointer.y, HUD.TOOLS) ||
+          this.isInsideRect(pointer.x, pointer.y, HUD.HINTS) ||
+          this.isInsideRect(pointer.x, pointer.y, HUD.SPEED);
         if (!overHud) {
           // Click on the world — dismiss and consume. `return` prevents
           // any further UIScene handling; the deferred hide prevents the
@@ -709,6 +813,22 @@ export class UIScene extends Phaser.Scene {
         this.isInsideRect(pointer.x, pointer.y, HUD.UNDERGROUND_COLONY_TOGGLE)
       ) {
         toggleUndergroundColony(this.viewState);
+        return;
+      }
+      // Stage 1 controls rework (issue #18) — tool palette click. Routes through
+      // the GameScene-owned, gated selectTool so a palette pick obeys the same
+      // gate as the 1/2/3 hotkeys (and the Chamber-on-surface no-op). Consume the
+      // click so it never falls through to the world arbiter.
+      const toolHit = toolButtonAt(pointer.x, pointer.y, this.viewState.activeView);
+      if (toolHit !== null) {
+        this.onSelectTool?.(toolHit);
+        return;
+      }
+      // Speed widget click — ⏸ toggles the 'user' pause; 1×/2×/4× set the
+      // multiplier (without changing pause reasons). Both via GameScene.
+      const speedHit = speedControlAt(pointer.x, pointer.y);
+      if (speedHit !== null) {
+        this.onSpeedControl?.(speedHit);
         return;
       }
       // Minimap click
@@ -758,7 +878,14 @@ export class UIScene extends Phaser.Scene {
             ratio: this.dragState.targetRatio,
             issuedAtTick: world.tick,
           };
-          world.commandQueue.push(cmd);
+          // Stage 1 controls rework (issue #18) — route through enqueueCommand
+          // (non-Sync cap across all producers; Codex R2-8). SetBehaviorRatio is
+          // a ONE-SHOT command: it does NOT re-emit, so a drop at the cap is a
+          // real loss. Surface the queue-full hint on ANY drop, paused OR unpaused
+          // (Codex P2) — unlike the re-emitting paint stroke, which only hints
+          // while paused. Pass `paused` so the message is accurate (Fix 3).
+          const paused = this.isPausedFn ? this.isPausedFn() : false;
+          if (!enqueueCommand(world, cmd, paused)) this.flashPausedQueueFull(paused);
         }
         this.dragState.isDragging = false;
       }
@@ -893,6 +1020,11 @@ export class UIScene extends Phaser.Scene {
     // Expose regardless of visibility so tests can assert the underlying
     // toggle state even if the surface view is active. Cheap string write.
     setActiveUndergroundLabel(undergroundLabel);
+
+    // Stage 1 controls rework (issue #18) — tool palette + hint strip + speed.
+    this.renderToolPalette();
+    this.renderHintStrip();
+    this.renderSpeedWidget();
 
     // Ant-activity popup — live refresh when visible. Drawn before the
     // context menu so a visible chamber menu stays on top (the underground
@@ -1048,6 +1180,18 @@ export class UIScene extends Phaser.Scene {
 
   // S6 — first-occurrence caption overlay (light onboarding).
   public showCaption(text: string, screenX: number, screenY: number): void {
+    // Stage 1 controls rework (issue #18, Codex R4-1): captions render centered
+    // and can overlap the HUD.HINTS strip (e.g. the command captions at
+    // y≈CANVAS_H-80). When the caption's vertical band overlaps the strip, yield
+    // (hide) the strip for the caption's lifetime so the two don't collide.
+    // Caption height is ~22px (14px font + padding); HINTS is y..y+h.
+    const capTop = screenY - 14;
+    const capBottom = screenY + 14;
+    const stripTop = HUD.HINTS.y;
+    const stripBottom = HUD.HINTS.y + HUD.HINTS.h;
+    if (capTop < stripBottom && capBottom > stripTop) {
+      this.hintYieldUntilMs = this.time.now + CAPTION_TOTAL_MS;
+    }
     const captionText = this.add.text(screenX, screenY, text, {
       fontSize: '14px',
       fontFamily: 'monospace',
@@ -1086,6 +1230,90 @@ export class UIScene extends Phaser.Scene {
     for (const obj of this.gameOverGroup) obj.destroy();
     this.gameOverGroup = [];
     this.recomputeActiveOverlay();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Stage 1 controls rework (issue #18) — tool palette / hint strip / speed
+  // ---------------------------------------------------------------------------
+
+  /** The tool the cursor reflects (Chamber is greyed/inert on the surface). */
+  private effectiveTool(): ToolId {
+    const t = this.viewState.activeTool;
+    if (t === 'chamber' && this.viewState.activeView !== 'underground') return 'command';
+    return t;
+  }
+
+  /** Draw the 3-button tool palette with an active-tool highlight; Chamber is
+   *  greyed on the surface (where it is inert). */
+  private renderToolPalette(): void {
+    const surface = this.viewState.activeView === 'surface';
+    const active = this.viewState.activeTool;
+    for (let i = 0; i < TOOL_ORDER.length; i++) {
+      const tool = TOOL_ORDER[i]!;
+      const r = toolButtonRect(i);
+      const greyed = tool === 'chamber' && surface;
+      const isActive = tool === active && !greyed;
+      // Background: brighter when active, dim when greyed.
+      this.gfx.fillStyle(isActive ? 0x2a6cc0 : greyed ? 0x222222 : 0x444444, 1);
+      this.gfx.fillRect(r.x, r.y, r.w, r.h);
+      if (isActive) {
+        this.gfx.lineStyle(2, 0xffffff, 1);
+        this.gfx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+      }
+      const t = this.toolButtonTexts[i];
+      if (t) t.setAlpha(greyed ? 0.35 : 1);
+    }
+  }
+
+  /** Draw the hint strip: the static per-tool/per-view legend, overridden by the
+   *  transient "paused queue full" warning, and yielded while an overlapping
+   *  caption is active. */
+  private renderHintStrip(): void {
+    const now = this.time.now;
+    if (now < this.hintYieldUntilMs) {
+      this.hintText.setVisible(false);
+      return;
+    }
+    this.hintText.setVisible(true);
+    if (now < this.pausedQueueFullUntilMs) {
+      // Accurate message for the pause state captured at the drop (Fix 3): paused
+      // → "resume to continue"; running → "try again" (transient burst). Reading
+      // the live isPausedFn here instead would mis-message a drop whose state has
+      // since flipped, so we use the recorded flag.
+      this.hintText.setText(queueFullHint(this.pausedQueueFullWasPaused));
+      this.hintText.setColor('#ffcc66');
+      return;
+    }
+    this.hintText.setText(hintTextFor(this.effectiveTool(), this.viewState.activeView));
+    this.hintText.setColor('#cfd8dc');
+  }
+
+  /** Draw the speed widget (⏸ / 1× / 2× / 4×): highlight the ⏸ button while
+   *  paused, and the multiplier preset matching the live speed. */
+  private renderSpeedWidget(): void {
+    const paused = this.isPausedFn ? this.isPausedFn() : false;
+    const speed = this.getSpeedMultiplierFn ? this.getSpeedMultiplierFn() : 1;
+    for (let i = 0; i < SPEED_CONTROL_ORDER.length; i++) {
+      const control = SPEED_CONTROL_ORDER[i]!;
+      const r = speedControlRect(i);
+      const isActive = control === 'pause' ? paused : control === speed;
+      this.gfx.fillStyle(isActive ? 0x2a6cc0 : 0x444444, 1);
+      this.gfx.fillRect(r.x, r.y, r.w, r.h);
+      if (isActive) {
+        this.gfx.lineStyle(2, 0xffffff, 1);
+        this.gfx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+      }
+    }
+  }
+
+  /**
+   * Surface the queue-full hint for a moment. `paused` selects the message
+   * (paused → "resume to continue"; running → "try again") and is recorded so
+   * renderHintStrip shows the right one for the whole flash window (Fix 3).
+   */
+  public flashPausedQueueFull(paused: boolean): void {
+    this.pausedQueueFullUntilMs = this.time.now + PAUSED_QUEUE_FULL_HINT_MS;
+    this.pausedQueueFullWasPaused = paused;
   }
 
   // ---------------------------------------------------------------------------

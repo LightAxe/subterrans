@@ -1,85 +1,84 @@
-// underground-input.ts — Phase 8 underground-click dispatcher.
+// underground-input.ts — Stage 1 controls rework (issue #18): pure underground
+// tap + paint handlers, called by the single left-button gesture arbiter.
 //
-// Handles:
-//   - Left-click / drag: MarkDigTileCommand on Solid or Open tiles (debounced per tile).
-//   - Right-click on Marked tile: CancelDigMarkCommand (CTRL-04: BeingDug is NOT cancellable).
-//   - Right-click on Open tunnel-end: contextMenuState mutation (UNDR-04).
-//   - Right-click on other tiles: no-op.
+// This file no longer registers its own Phaser pointer listeners. The arbiter
+// (gesture-arbiter.ts) owns the LEFT button, classifies pan/paint/tap, and calls
+// these pure functions; right-click (handled by the arbiter's secondary path)
+// opens the chamber menu via the shared tryOpenChamberMenu.
 //
-// Guards:
-//   - viewState.activeView must be 'underground' before dispatching any command.
-//   - isPointerOverHUD rejects clicks that land on HUD zones (Pitfall 2).
-//   - Tile bounds check before accessing grid or pushing commands.
-//   - When contextMenuState.visible is true, left-click is suppressed (no dig-mark).
-//     Dismissal is owned by UIScene (requestHideContextMenu → applied next frame),
-//     which prevents a scene-order race with chamber-placement selection.
+// Tap handlers by tool (underground):
+//   - Command tap → CancelDigMark on a Marked tile (player view only); otherwise
+//     a no-op (no ant-inspect in Stage 1). (PLAN §B5, Codex R2-7.)
+//   - Dig tap     → Solid/Open → MarkDigTile (single tile); Marked → CancelDigMark.
+//                   Drag → paint (4-connected Bresenham). (PLAN §B6, Codex R1-2.)
+//   - Chamber tap → tryOpenChamberMenu (Solid/Open eligibility). (PLAN §B8.)
 //
-// UndergroundTileState enum (terrain.ts):
-//   Solid=0, Marked=1, BeingDug=2, Open=3
+// Player-grid-only invariant (PLAN §B10, Codex R3-2): EVERY underground command
+// path — Dig mark/cancel, Command-tap cancel, Chamber-tool tap, and right-click —
+// requires activeUndergroundColonyId === PLAYER_COLONY_ID. The enemy underground
+// view (X-toggle) is read-only; an in-flight paint stroke is aborted on colony
+// switch by the arbiter's cancelGesture.
+//
+// All commands emitted are the SAME SimCommands as before the rework, pushed via
+// enqueueCommand (non-Sync cap guard, enforced paused OR running). A tap handler
+// returns whether its command was refused at the cap; the paint handlers return
+// a capHit flag the arbiter uses to defer the un-enqueued tiles (re-emitting on a
+// later flush/move) and — only while paused — to surface the "paused queue full"
+// hint. An unpaused cap hit is silent transient throttling that catches up next
+// tick as the queue drains.
+//
+// UndergroundTileState enum (terrain.ts): Solid=0, Marked=1, BeingDug=2, Open=3
 
-import * as Phaser from 'phaser';
 import type { WorldState } from '../sim/types.js';
 import type { ViewState } from '../render/camera.js';
-import { screenToTile } from '../render/camera.js';
 import { ugGet, UndergroundTileState } from '../sim/terrain.js';
 import type { MarkDigTileCommand, CancelDigMarkCommand } from '../sim/commands.js';
 import { PLAYER_COLONY_ID, UNDERGROUND_CEILING_ROW_Y } from '../sim/constants.js';
-import { isPointerOverHUD, panInputState } from './camera-input.js';
-import { contextMenuState, requestShowContextMenu } from '../render/context-menu-state.js';
+import { requestShowContextMenu } from '../render/context-menu-state.js';
+import { enqueueCommand } from './command-queue.js';
 
 // ---------------------------------------------------------------------------
-// UndergroundInputState — mutable per-registration state
+// PaintStrokeState — mutable per-stroke state owned by the arbiter
 // ---------------------------------------------------------------------------
 
 /**
- * Exported so GameScene can hold the reference returned by
- * registerUndergroundInput and call resetUndergroundInputState at session
- * restart boundaries. Direct external callers (tests) also use the shape to
- * assert reset semantics.
+ * Tracks an in-flight underground Dig paint stroke. Created and owned by the
+ * gesture arbiter (one per scene); the pure paint functions below read/advance
+ * it. `lastMarkedTileX/Y` is the debounce + Bresenham interpolation cursor;
+ * -1 is the "no stroke in progress" sentinel.
  */
-export interface UndergroundInputState {
-  /** True from the first pointerdown until pointerup — enables drag tile-mark. */
-  isDragging: boolean;
-  /**
-   * X coord of the last tile the drag cursor has visited (debounce + Bresenham
-   * interpolation start). Seeded by the pointerdown click — including clicks
-   * on Marked/BeingDug tiles where no MarkDigTileCommand was emitted — so the
-   * subsequent drag interpolates from the actual click point, not from the
-   * last *emitted* mark. -1 sentinel means no drag in progress.
-   */
+export interface PaintStrokeState {
+  /** True while a paint stroke is active (from begin until cancel/end). */
+  active: boolean;
+  /** X of the last tile the stroke cursor visited (debounce + Bresenham start). */
   lastMarkedTileX: number;
-  /** Y coord counterpart to lastMarkedTileX. Same semantics — see above. */
+  /** Y counterpart to lastMarkedTileX. */
   lastMarkedTileY: number;
 }
 
-/**
- * Reset an UndergroundInputState in-place: ends any in-flight drag and
- * clears the last-marked debounce. Preserves the object identity captured
- * by registerUndergroundInput's pointerdown / pointermove closures.
- */
-export function resetUndergroundInputState(state: UndergroundInputState): void {
-  state.isDragging = false;
+/** Construct an idle PaintStrokeState. */
+export function createPaintStrokeState(): PaintStrokeState {
+  return { active: false, lastMarkedTileX: -1, lastMarkedTileY: -1 };
+}
+
+/** Reset a PaintStrokeState in-place: end any stroke and clear the cursor. */
+export function resetPaintStrokeState(state: PaintStrokeState): void {
+  state.active = false;
   state.lastMarkedTileX = -1;
   state.lastMarkedTileY = -1;
 }
 
 // ---------------------------------------------------------------------------
-// isTunnelEnd
+// isTunnelEnd — pure helper (retained for completeness / tests)
 // ---------------------------------------------------------------------------
 
 /**
- * Returns true if (tileX, tileY) in the given colony's underground grid is:
- *   (a) Open (UndergroundTileState.Open === 3), AND
- *   (b) at least one orthogonal 4-neighbor is Solid (UndergroundTileState.Solid === 0).
+ * Returns true if (tileX, tileY) in the given colony's underground grid is Open
+ * AND at least one orthogonal 4-neighbor is Solid. Out-of-bounds neighbors are
+ * skipped. Returns false if the grid does not exist.
  *
- * Used by handleUndergroundRightClick to decide whether to open the chamber
- * context menu (UNDR-04 / PRD §8b).
- *
- * Out-of-bounds neighbors are skipped (not counted as Solid) — this preserves
- * correctness for tiles on the grid boundary, but a boundary-adjacent Open tile
- * with valid Solid neighbors still returns true.
- *
- * Returns false if the undergroundGrid for colonyId does not exist.
+ * Stage-1 chamber eligibility is Solid/Open (this is no longer the gate), but the
+ * helper is kept for callers/tests that reason about tunnel topology.
  */
 export function isTunnelEnd(
   world: WorldState,
@@ -91,10 +90,10 @@ export function isTunnelEnd(
   if (!grid) return false;
   if (ugGet(grid, tileX, tileY) !== UndergroundTileState.Open) return false;
   const neighbors: Array<[number, number]> = [
-    [tileX, tileY - 1], // N
-    [tileX + 1, tileY], // E
-    [tileX, tileY + 1], // S
-    [tileX - 1, tileY], // W
+    [tileX, tileY - 1],
+    [tileX + 1, tileY],
+    [tileX, tileY + 1],
+    [tileX - 1, tileY],
   ];
   for (const [nx, ny] of neighbors) {
     if (nx < 0 || ny < 0 || nx >= grid.width || ny >= grid.height) continue;
@@ -104,99 +103,229 @@ export function isTunnelEnd(
 }
 
 // ---------------------------------------------------------------------------
-// handleUndergroundLeftClick
+// Internal guards
 // ---------------------------------------------------------------------------
 
 /**
- * Handles a left-click (or drag initiation) on the underground view.
- *
- * If context menu is open, suppresses the world click entirely — no dig mark,
- * no state mutation. UIScene owns menu dismissal so the dismissal happens on
- * a deterministic frame boundary, not mid-pointerdown dispatch.
- *
- * Otherwise, arms the drag state (isDragging + lastMarkedTile) on every
- * pointerdown that lands on a valid in-bounds tile, regardless of whether the
- * tile is markable. This is intentional: a click-then-drag stroke that starts
- * on an already-Marked or BeingDug tile must still mark newly-entered Solid
- * tiles. Without the eager arm, the subsequent pointermove would observe
- * isDragging=false and silently no-op for the rest of the gesture.
- *
- * Pushes MarkDigTileCommand only when the clicked tile is Solid or Open;
- * Marked/BeingDug tiles are already claimed so emitting a command would just
- * clutter the queue and replay log (the sim's MarkDigTile handler also drops
- * non-Solid tiles, so a duplicate would be a no-op there too).
- *
- * No-ops entirely if: activeView !== 'underground', pointer over HUD, pan
- * mode active, context menu visible, missing grid, or out of bounds. In all
- * those cases the drag state is NOT armed — the gesture was rejected, not
- * accepted-and-skipped.
+ * True iff underground command paths are allowed: the underground view must be
+ * showing the PLAYER's own grid. The enemy view (X-toggle) is read-only.
  */
-export function handleUndergroundLeftClick(
+function isPlayerUndergroundEditable(viewState: ViewState): boolean {
+  return viewState.activeUndergroundColonyId === PLAYER_COLONY_ID;
+}
+
+/** True iff (tileX,tileY) is in-bounds and not the surface-boundary ceiling row. */
+function isEditableUndergroundTile(
+  grid: { width: number; height: number },
+  tileX: number,
+  tileY: number,
+): boolean {
+  if (tileX < 0 || tileY < 0 || tileX >= grid.width || tileY >= grid.height) return false;
+  // Issue #30: the renderer paints row 0 with the grass "surface boundary" cue;
+  // a mark there gives no visual feedback, so it is excluded everywhere.
+  if (tileY === UNDERGROUND_CEILING_ROW_Y) return false;
+  return true;
+}
+
+/**
+ * Resolve the EFFECTIVE underground dig-state of (tileX,tileY) for `colonyId`,
+ * accounting for dig commands ALREADY queued but not yet applied (Fix 4).
+ *
+ * While bare-user-paused the sim never advances, so `ugGet` returns the frozen
+ * grid state — two taps on the same Solid tile would both read Solid and enqueue
+ * two MarkDigTile (instead of mark-then-cancel), and two taps on a Marked tile
+ * would enqueue two CancelDigMark. Tapping must instead toggle against what the
+ * queue WILL do: scan for the LATEST queued MarkDigTile/CancelDigMark on this
+ * tile+colony and fold it over the grid state, mirroring tick.ts's FIFO apply
+ * order (the last queued command wins because the drain applies them in order):
+ *   - latest queued MarkDigTile  ⇒ Marked  (tick.ts flips Solid→Marked)
+ *   - latest queued CancelDigMark ⇒ Solid   (tick.ts flips Marked→Solid)
+ *   - neither queued              ⇒ the live grid state
+ *
+ * Pure + read-only: never mutates the queue or any sim state. Unpaused this is a
+ * near-no-op — the queue drains every tick so it is usually empty for the tile,
+ * and the grid state is already current — so callers can use it unconditionally.
+ */
+function effectiveDigState(
+  world: WorldState,
+  tileX: number,
+  tileY: number,
+  colonyId: number,
+  gridState: UndergroundTileState,
+): UndergroundTileState {
+  const queue = world.commandQueue;
+  // Walk back-to-front so the FIRST match is the LATEST-queued command for the
+  // tile (the one tick.ts applies last, hence the one that wins).
+  for (let i = queue.length - 1; i >= 0; i--) {
+    const cmd = queue[i];
+    if (!cmd) continue;
+    if (cmd.type === 'MarkDigTile') {
+      if (cmd.colonyId === colonyId && cmd.tileX === tileX && cmd.tileY === tileY) {
+        return UndergroundTileState.Marked;
+      }
+    } else if (cmd.type === 'CancelDigMark') {
+      if (cmd.colonyId === colonyId && cmd.tileX === tileX && cmd.tileY === tileY) {
+        return UndergroundTileState.Solid;
+      }
+    }
+  }
+  return gridState;
+}
+
+// ---------------------------------------------------------------------------
+// handleUndergroundCommandTap — Command tool tap
+// ---------------------------------------------------------------------------
+
+/**
+ * Underground Command tap: cancel a queued dig mark (Codex R2-7). A tap on a
+ * Marked tile → CancelDigMark; every other tile is a no-op in Stage 1.
+ * Player-grid-only. Returns true iff the command was refused at the cap.
+ *
+ * Resolves against the EFFECTIVE dig-state (effectiveDigState) so a bare-user-
+ * paused Command-tap respects already-queued Mark/Cancel commands (Fix 4): a
+ * tile with a pending MarkDigTile is effectively Marked (→ CancelDigMark fires),
+ * and a tile with a pending CancelDigMark is effectively Solid (→ no second,
+ * redundant cancel). Unpaused the queue drains each tick so this equals the grid
+ * state and behaviour is unchanged.
+ */
+export function handleUndergroundCommandTap(
   world: WorldState,
   viewState: ViewState,
-  screenX: number,
-  screenY: number,
-  state: UndergroundInputState,
-): void {
-  if (viewState.activeView !== 'underground') return;
-  // Issue #14: when the player flips to view the enemy underground (X
-  // keybind), all underground commands target the PLAYER's grid (every
-  // dispatch below uses PLAYER_COLONY_ID as the colonyId). A click on the
-  // enemy view at screen coords (sx, sy) would silently mark a dig tile in
-  // the player's grid at the same world coords — the player can't see it,
-  // and replay would diverge from the visual state on screen. Treat the
-  // enemy view as read-only.
-  //
-  // Defensive: clear any lingering `isDragging` flag from a prior gesture
-  // that didn't get a clean mouseup (e.g., focus-loss). Without the
-  // explicit reset, a stale `isDragging=true` paired with a stale
-  // lastMarkedTile from the player view could resume scribbling dig
-  // marks if the player flips back via X. Symmetric with the abort path
-  // in handleUndergroundDrag.
-  if (viewState.activeUndergroundColonyId !== PLAYER_COLONY_ID) {
-    state.isDragging = false;
-    return;
-  }
-  if (isPointerOverHUD(screenX, screenY, viewState)) return;
-  // Pan-mode guard: while Space is held or a pan gesture is already in flight,
-  // the left-click/drag is the pan trigger — not a dig-mark.
-  if (panInputState.spaceHeld || panInputState.isPanning) return;
-  // If context menu is visible, suppress this click — UIScene handles the
-  // interaction (selection or dismissal) on its own pointerdown and applies
-  // the hide on the next frame. No state mutation here: modifying visibility
-  // mid-dispatch races with UIScene's handler on the same event.
-  if (contextMenuState.visible) return;
-  const { tileX, tileY } = screenToTile(screenX, screenY, viewState.undergroundCamera);
+  tileX: number,
+  tileY: number,
+  isPaused: boolean,
+): boolean {
+  if (!isPlayerUndergroundEditable(viewState)) return false;
   const grid = world.undergroundGrids[PLAYER_COLONY_ID];
-  if (!grid) return;
-  if (tileX < 0 || tileY < 0 || tileX >= grid.width || tileY >= grid.height) return;
-  // Issue #30: skip the ceiling-strip row. The renderer paints `tileY === 0`
-  // with the grass texture as a "this is the surface boundary" cue (see
-  // `ty === 0` branch in draw-underground.ts:137-153). Without this gate a
-  // click on the visible grass silently dispatches MarkDigTile against the
-  // tile beneath, which the renderer keeps painting as grass — the player
-  // gets no visual feedback the click did anything.
-  //
-  // Codex P2 follow-up: also clear any stale drag state on this guard
-  // path. If a prior gesture left `isDragging=true` (focus-loss / missed
-  // pointerup), simply returning here without the reset would let the
-  // next pointermove resume the stale stroke from the old cursor — the
-  // exact "hidden marking" behavior this fix is supposed to eliminate.
-  // Symmetric with the enemy-view guard's defensive reset.
-  if (tileY === UNDERGROUND_CEILING_ROW_Y) {
-    state.isDragging = false;
-    return;
+  if (!grid) return false;
+  if (!isEditableUndergroundTile(grid, tileX, tileY)) return false;
+  const tileState = effectiveDigState(
+    world,
+    tileX,
+    tileY,
+    PLAYER_COLONY_ID,
+    ugGet(grid, tileX, tileY),
+  );
+  if (tileState !== UndergroundTileState.Marked) return false;
+  const cmd: CancelDigMarkCommand = {
+    type: 'CancelDigMark',
+    colonyId: PLAYER_COLONY_ID,
+    tileX,
+    tileY,
+    issuedAtTick: world.tick,
+  };
+  return !enqueueCommand(world, cmd, isPaused);
+}
+
+// ---------------------------------------------------------------------------
+// handleUndergroundDigTap — Dig tool single-tile tap
+// ---------------------------------------------------------------------------
+
+/**
+ * Underground Dig tap (Codex R1-2): Solid/Open → MarkDigTile; Marked →
+ * CancelDigMark; BeingDug → no-op (already claimed). Player-grid-only. Returns
+ * true iff a command was refused at the cap.
+ *
+ * The mark-vs-cancel branch resolves against the EFFECTIVE dig-state
+ * (effectiveDigState) — the grid state folded with any already-queued
+ * Mark/Cancel for this tile — so a bare-user-paused tap-tap toggles correctly
+ * (Solid→MarkDigTile→CancelDigMark) instead of double-marking against the frozen
+ * grid (Fix 4). Unpaused the queue drains each tick, so the effective state
+ * equals the grid state and behaviour is unchanged.
+ */
+export function handleUndergroundDigTap(
+  world: WorldState,
+  viewState: ViewState,
+  tileX: number,
+  tileY: number,
+  isPaused: boolean,
+): boolean {
+  if (!isPlayerUndergroundEditable(viewState)) return false;
+  const grid = world.undergroundGrids[PLAYER_COLONY_ID];
+  if (!grid) return false;
+  if (!isEditableUndergroundTile(grid, tileX, tileY)) return false;
+  const tileState = effectiveDigState(
+    world,
+    tileX,
+    tileY,
+    PLAYER_COLONY_ID,
+    ugGet(grid, tileX, tileY),
+  );
+  if (tileState === UndergroundTileState.Marked) {
+    const cmd: CancelDigMarkCommand = {
+      type: 'CancelDigMark',
+      colonyId: PLAYER_COLONY_ID,
+      tileX,
+      tileY,
+      issuedAtTick: world.tick,
+    };
+    return !enqueueCommand(world, cmd, isPaused);
   }
-  // Arm drag state up front (before the tile-state branch) so a stroke that
-  // begins on a Marked/BeingDug tile still marks subsequent Solid tiles. The
-  // debounce cursor is seeded to the clicked tile so the first Bresenham
-  // interpolation in handleUndergroundDrag starts from a real coordinate.
-  state.isDragging = true;
-  state.lastMarkedTileX = tileX;
-  state.lastMarkedTileY = tileY;
-  // Only mark Solid or Open tiles (Marked/BeingDug are already claimed).
+  if (tileState === UndergroundTileState.Solid || tileState === UndergroundTileState.Open) {
+    const cmd: MarkDigTileCommand = {
+      type: 'MarkDigTile',
+      colonyId: PLAYER_COLONY_ID,
+      tileX,
+      tileY,
+      issuedAtTick: world.tick,
+    };
+    return !enqueueCommand(world, cmd, isPaused);
+  }
+  // BeingDug — no-op.
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Paint stroke (underground Dig drag)
+// ---------------------------------------------------------------------------
+
+/**
+ * Begin a paint stroke at the down-tile. Seeds the stroke cursor (so the first
+ * drag segment interpolates from a real coordinate) and emits MarkDigTile for
+ * the down-tile itself when it is Solid/Open. Marked/BeingDug down-tiles seed the
+ * cursor without emitting (matching the prior eager-arm behavior). Player-grid-
+ * only. Returns true iff a command was refused at the cap.
+ *
+ * Cap-refusal handling mirrors continuePaintStroke (Fix 2): the stroke is armed
+ * (state.active = true) either way, but the CURSOR is only advanced onto the
+ * down-tile when that tile is non-markable (ceiling already rejected above; a
+ * Marked/BeingDug down-tile is not a loss) OR its MarkDigTile actually enqueues.
+ * If the down-tile IS markable (Solid/Open) but the enqueue is REFUSED at the
+ * cap, the cursor is LEFT at the sentinel (-1,-1) so the first
+ * continuePaintStroke/flush re-emits the refused down-tile via its sentinel
+ * single-tile path — no silently lost begin-tile. (Previously the cursor was
+ * advanced unconditionally, so a down-tile refused at the cap was never retried.)
+ */
+export function beginPaintStroke(
+  state: PaintStrokeState,
+  world: WorldState,
+  viewState: ViewState,
+  tileX: number,
+  tileY: number,
+  isPaused: boolean,
+): boolean {
+  if (!isPlayerUndergroundEditable(viewState)) {
+    state.active = false;
+    return false;
+  }
+  const grid = world.undergroundGrids[PLAYER_COLONY_ID];
+  if (!grid) return false;
+  if (!isEditableUndergroundTile(grid, tileX, tileY)) {
+    // Reject: do not arm a stroke on an out-of-bounds / ceiling down-tile.
+    state.active = false;
+    return false;
+  }
+  // Arm the stroke so subsequently-entered Solid tiles still mark. The cursor is
+  // advanced below only on a non-markable down-tile or a successful enqueue.
+  state.active = true;
   const tileState = ugGet(grid, tileX, tileY);
-  if (tileState !== UndergroundTileState.Solid && tileState !== UndergroundTileState.Open) return;
+  if (tileState !== UndergroundTileState.Solid && tileState !== UndergroundTileState.Open) {
+    // Non-markable (Marked / BeingDug) down-tile: not a loss. Advance the cursor
+    // so the first drag segment interpolates from here.
+    state.lastMarkedTileX = tileX;
+    state.lastMarkedTileY = tileY;
+    return false;
+  }
   const cmd: MarkDigTileCommand = {
     type: 'MarkDigTile',
     colonyId: PLAYER_COLONY_ID,
@@ -204,91 +333,86 @@ export function handleUndergroundLeftClick(
     tileY,
     issuedAtTick: world.tick,
   };
-  world.commandQueue.push(cmd);
+  if (!enqueueCommand(world, cmd, isPaused)) {
+    // Cap refusal: do NOT advance the cursor onto the refused down-tile. Leave it
+    // at the sentinel so continuePaintStroke's sentinel path re-emits it once the
+    // queue drains (mirrors continuePaintStroke's hold-on-cap).
+    state.lastMarkedTileX = -1;
+    state.lastMarkedTileY = -1;
+    return true;
+  }
+  // Enqueued: advance the cursor to the down-tile.
+  state.lastMarkedTileX = tileX;
+  state.lastMarkedTileY = tileY;
+  return false;
 }
 
-// ---------------------------------------------------------------------------
-// handleUndergroundDrag
-// ---------------------------------------------------------------------------
-
 /**
- * Handles pointer-move-while-down (drag) on the underground view.
+ * Continue a paint stroke to (tileX, tileY): emit MarkDigTile for every tile
+ * along a 4-connected (supercover) integer line from the stroke cursor to the
+ * target. Any Bresenham step advancing both axes is split into a horizontal
+ * bridge then a vertical step so successive emitted tiles stay Manhattan-
+ * adjacent (4-connected underground movement requires it). The starting tile is
+ * skipped (already emitted by begin/prior segment).
  *
- * Emits MarkDigTileCommand for every tile along a 4-connected (supercover)
- * integer line from (lastMarkedTileX, lastMarkedTileY) to the current tile.
- * Any Bresenham step that would advance both axes at once is split into two
- * emissions — a horizontal bridge tile followed by the vertical step — so
- * successive emitted tiles are always Manhattan-adjacent (|Δx|+|Δy| === 1).
- * Underground movement and dig-task connectivity are 4-connected, so an
- * 8-connected (corner-touching) path would leave broken tunnels. The
- * starting tile is skipped (the prior click/drag emission already marked it).
+ * Two distinct kinds of "didn't enqueue" are handled differently so a fast
+ * stroke past the MAX_COMMANDS_PER_TICK cap never silently loses tiles:
+ *   - NON-MARKABLE skip (out-of-bounds / ceiling / not Solid/Open): not a loss —
+ *     there was no command to defer. The cursor ADVANCES past it and the stroke
+ *     continues (matching the prior behaviour).
+ *   - CAP REFUSAL (enqueueCommand returned false): the command was deferred, not
+ *     emitted. The cursor is LEFT at the last successfully-handled tile (it is
+ *     NOT advanced onto the refused tile), the loop STOPS, and `capHit` is set.
  *
- * Non-markable path tiles (already Marked or BeingDug, out of bounds) are
- * skipped silently; the stroke continues past them. After processing,
- * lastMarkedTileX/Y tracks the final tile of the stroke so subsequent drags
- * interpolate from there.
+ * The held cursor is the whole deferral mechanism: the refused tile + remainder
+ * re-emit when the NEXT pointermove calls continuePaintStroke from that same held
+ * cursor (the sim drains the queue between moves, so the next move has fresh cap
+ * budget). During a continuous drag this loses nothing. ACCEPTED narrow residual:
+ * a single coalesced >64-tile pointermove followed by an IMMEDIATE release with NO
+ * intervening move drops the tail past the cap — there is no later move to re-emit
+ * it from the held cursor, and there is deliberately no per-frame flush / post-
+ * release drain to paper over it (that machinery caused worse bugs: it redrew a
+ * curved stroke as a straight line to the latest target, and refilled all 64
+ * slots every tick, starving the AI controller's commands).
  *
- * Flips isDragging to false and returns if the active view has changed
- * since drag started (prevents ghost tile marks on view-toggle mid-drag).
+ * Player-grid-only. Returns true iff a command in this segment was refused at the
+ * cap (capHit). A non-markable skip never sets the return.
  */
-export function handleUndergroundDrag(
+export function continuePaintStroke(
+  state: PaintStrokeState,
   world: WorldState,
   viewState: ViewState,
-  screenX: number,
-  screenY: number,
-  state: UndergroundInputState,
-): void {
-  if (!state.isDragging) return;
-  if (viewState.activeView !== 'underground') {
-    state.isDragging = false;
-    return;
+  tileX: number,
+  tileY: number,
+  isPaused: boolean,
+): boolean {
+  if (!state.active) return false;
+  if (!isPlayerUndergroundEditable(viewState)) {
+    state.active = false;
+    return false;
   }
-  // Issue #14: same read-only guard as handleUndergroundLeftClick. If the
-  // player flipped to the enemy view mid-drag (X keybind), abort the stroke
-  // so it can't write through to the player's grid silently.
-  if (viewState.activeUndergroundColonyId !== PLAYER_COLONY_ID) {
-    state.isDragging = false;
-    return;
-  }
-  if (isPointerOverHUD(screenX, screenY, viewState)) return;
-  // Pan-mode guard: if the player pressed Space mid-drag, treat it as a
-  // clean cancel of the excavation drag so further pointer movement goes
-  // through the pan handler exclusively.
-  if (panInputState.spaceHeld || panInputState.isPanning) {
-    state.isDragging = false;
-    return;
-  }
-  const { tileX, tileY } = screenToTile(screenX, screenY, viewState.undergroundCamera);
   // Debounce: same tile as last emission → no work.
-  if (tileX === state.lastMarkedTileX && tileY === state.lastMarkedTileY) return;
+  if (tileX === state.lastMarkedTileX && tileY === state.lastMarkedTileY) return false;
   const grid = world.undergroundGrids[PLAYER_COLONY_ID];
-  if (!grid) return;
+  if (!grid) return false;
 
-  // Bresenham integer line from (lastMarkedTileX/Y) to (tileX, tileY).
-  // Skip the starting tile (already handled by the prior click/drag emission).
-  // If lastMarked is the sentinel (-1,-1), fall back to single-tile emission.
   const x0 = state.lastMarkedTileX;
   const y0 = state.lastMarkedTileY;
   const x1 = tileX;
   const y1 = tileY;
+  let capHit = false;
 
-  let finalX = x0;
-  let finalY = y0;
-
+  // Sentinel start (no prior cursor): single-tile emission.
   if (x0 === -1 && y0 === -1) {
-    if (x1 < 0 || y1 < 0 || x1 >= grid.width || y1 >= grid.height) return;
+    if (x1 < 0 || y1 < 0 || x1 >= grid.width || y1 >= grid.height) return false;
     if (y1 === UNDERGROUND_CEILING_ROW_Y) {
-      // Issue #30: drag-into-ceiling-strip silently rebases the cursor without
-      // emitting a mark. The stroke can continue from here onto regular rows.
+      // Non-markable: advance the cursor past it (not a loss).
       state.lastMarkedTileX = x1;
       state.lastMarkedTileY = y1;
-      return;
+      return false;
     }
-    const tileStateSingle = ugGet(grid, x1, y1);
-    if (
-      tileStateSingle === UndergroundTileState.Solid ||
-      tileStateSingle === UndergroundTileState.Open
-    ) {
+    const ts = ugGet(grid, x1, y1);
+    if (ts === UndergroundTileState.Solid || ts === UndergroundTileState.Open) {
       const cmd: MarkDigTileCommand = {
         type: 'MarkDigTile',
         colonyId: PLAYER_COLONY_ID,
@@ -296,11 +420,16 @@ export function handleUndergroundDrag(
         tileY: y1,
         issuedAtTick: world.tick,
       };
-      world.commandQueue.push(cmd);
+      if (!enqueueCommand(world, cmd, isPaused)) {
+        // Cap refusal: do NOT advance the cursor onto the refused tile, so the
+        // next flush/move re-emits it. Leave lastMarkedTile at the sentinel.
+        return true;
+      }
     }
+    // Enqueued OR non-markable: advance the cursor.
     state.lastMarkedTileX = x1;
     state.lastMarkedTileY = y1;
-    return;
+    return false;
   }
 
   const dx = x1 > x0 ? x1 - x0 : x0 - x1;
@@ -310,23 +439,29 @@ export function handleUndergroundDrag(
   let err = dx - dy;
   let cx = x0;
   let cy = y0;
+  let finalX = x0;
+  let finalY = y0;
 
-  // Emit one tile — advances finalX/Y (always, even for out-of-bounds or
-  // non-markable tiles — matches the stroke-cursor semantics the drag tests
-  // exercise). Pushes a MarkDigTileCommand only when the tile is Solid/Open
-  // and in bounds; returns silently otherwise so the stroke continues.
-  const emitTile = (tx: number, ty: number): void => {
-    finalX = tx;
-    finalY = ty;
-    if (tx < 0 || ty < 0 || tx >= grid.width || ty >= grid.height) return;
-    // Issue #30: skip the ceiling-strip row inside the stroke — same gate as
-    // handleUndergroundLeftClick. The stroke cursor still advances (finalX/Y
-    // already updated above) so a drag that starts on a regular row, crosses
-    // the ceiling, and continues on the other side keeps interpolating; only
-    // the row-0 tiles themselves are skipped.
-    if (ty === UNDERGROUND_CEILING_ROW_Y) return;
+  // Emit one tile. Returns false to signal a CAP REFUSAL (caller must stop and
+  // NOT advance the cursor onto this tile); returns true otherwise (enqueued OR
+  // a non-markable skip — both advance the cursor past the tile).
+  const emitTile = (tx: number, ty: number): boolean => {
+    if (tx < 0 || ty < 0 || tx >= grid.width || ty >= grid.height) {
+      finalX = tx;
+      finalY = ty;
+      return true; // out-of-bounds: not a loss, advance past it
+    }
+    if (ty === UNDERGROUND_CEILING_ROW_Y) {
+      finalX = tx;
+      finalY = ty;
+      return true; // ceiling: not a loss, advance past it
+    }
     const ts = ugGet(grid, tx, ty);
-    if (ts !== UndergroundTileState.Solid && ts !== UndergroundTileState.Open) return;
+    if (ts !== UndergroundTileState.Solid && ts !== UndergroundTileState.Open) {
+      finalX = tx;
+      finalY = ty;
+      return true; // non-markable terrain: not a loss, advance past it
+    }
     const cmd: MarkDigTileCommand = {
       type: 'MarkDigTile',
       colonyId: PLAYER_COLONY_ID,
@@ -334,17 +469,17 @@ export function handleUndergroundDrag(
       tileY: ty,
       issuedAtTick: world.tick,
     };
-    world.commandQueue.push(cmd);
+    if (!enqueueCommand(world, cmd, isPaused)) {
+      // Cap refusal: leave finalX/Y at the prior (successfully-handled) tile so
+      // this tile re-emits later. Signal the loop to stop.
+      capHit = true;
+      return false;
+    }
+    finalX = tx;
+    finalY = ty;
+    return true;
   };
 
-  // Supercover / 4-connected Bresenham. Each iteration inspects the classic
-  // Bresenham "advance X" and "advance Y" flags. When BOTH fire on the same
-  // step we deterministically insert an orthogonal bridge tile before the
-  // diagonal completes: horizontal step first (emit the (cx+sx, cy) bridge),
-  // then the vertical step (emit (cx+sx, cy+sy)). This keeps successive
-  // emissions Manhattan-adjacent, which is what the 4-connected underground
-  // grid requires for a continuous tunnel. When only one axis advances the
-  // behavior is identical to plain Bresenham.
   while (cx !== x1 || cy !== y1) {
     const e2 = err * 2;
     const advanceX = e2 > -dy;
@@ -352,162 +487,63 @@ export function handleUndergroundDrag(
     if (advanceX && advanceY) {
       err -= dy;
       cx += sx;
-      emitTile(cx, cy); // orthogonal bridge tile
+      if (!emitTile(cx, cy)) break; // orthogonal bridge tile (cap refusal → stop)
       err += dx;
       cy += sy;
-      emitTile(cx, cy); // diagonal destination
+      if (!emitTile(cx, cy)) break; // diagonal destination (cap refusal → stop)
     } else if (advanceX) {
       err -= dy;
       cx += sx;
-      emitTile(cx, cy);
+      if (!emitTile(cx, cy)) break;
     } else if (advanceY) {
       err += dx;
       cy += sy;
-      emitTile(cx, cy);
+      if (!emitTile(cx, cy)) break;
     } else {
-      // Degenerate state (both axes already at target) — break defensively
-      // so a malformed input can never spin. In practice the loop guard
-      // (cx !== x1 || cy !== y1) prevents entry when both are at target.
       break;
     }
   }
-  // Update debounce cursor to the last tile we actually visited (may be
-  // outside bounds only if the entire stroke was clipped; in that case
-  // finalX/Y stay at the start, which is fine — the next drag call will
-  // re-run the debounce check).
   state.lastMarkedTileX = finalX;
   state.lastMarkedTileY = finalY;
+  return capHit;
 }
 
 // ---------------------------------------------------------------------------
-// handleUndergroundRightClick
+// tryOpenChamberMenu — shared by the Chamber-tool tap AND right-click (PLAN §B8/§B9)
 // ---------------------------------------------------------------------------
 
 /**
- * Handles a right-click on the underground view.
+ * Open the chamber-placement context menu anchored at (screenX, screenY) for the
+ * world tile (tileX, tileY), iff that tile is eligible. Stage-1 eligibility is
+ * Solid OR Open (Marked and BeingDug excluded; bare-dirt/Solid placement is
+ * preserved). Player-grid-only — the enemy view never opens the menu.
  *
- * Dispatch (v4 / pre-v5):
- *   - Marked tile → push CancelDigMarkCommand.
- *   - Open tunnel-end tile → open chamber-placement context menu.
- *   - Solid / BeingDug / non-tunnel-end Open → no-op.
+ * One guarded entry point used by BOTH the Chamber-tool tap and the right-click
+ * path so the eligibility + anchor logic can't drift between them. The screen
+ * coords are required by requestShowContextMenu (the menu anchors to the click).
  *
- * Dispatch (v5+, issue #38):
- *   - Marked tile → push CancelDigMarkCommand (unchanged — preserves the
- *     existing "right-click cancels a queued dig" muscle memory).
- *   - Solid OR Open tile → open chamber-placement context menu. The sim
- *     layer's reachability gate decides whether the placement actually
- *     lands; the UI just needs to surface the option. Tunnel-end check
- *     dropped because v5 chambers can be planned in untouched dirt.
- *   - BeingDug → no-op (active excavation conflict; sim would reject).
- *
- * The pre-v5 strict path is preserved so legacy saves keep their UX
- * contract (right-click on Solid does nothing). simVersion is sticky on
- * load, so a player who loads a v3/v4 save sees the legacy gate.
- *
- * No-ops if: activeView !== 'underground', pointer over HUD, or out of bounds.
+ * Returns true iff the menu was requested. No SimCommand is emitted here — the
+ * PlaceChamber command is pushed by UIScene when the player picks an item (and
+ * that push goes through enqueueCommand for the paused cap).
  */
-export function handleUndergroundRightClick(
+export function tryOpenChamberMenu(
   world: WorldState,
   viewState: ViewState,
   screenX: number,
   screenY: number,
-): void {
-  if (viewState.activeView !== 'underground') return;
-  // Issue #14: read-only guard for the enemy underground view (X-toggle).
-  // Mirrors handleUndergroundLeftClick — every dispatch below targets
-  // PLAYER_COLONY_ID, so a right-click on the enemy view would silently
-  // hit the player's grid at the matching coords.
-  if (viewState.activeUndergroundColonyId !== PLAYER_COLONY_ID) return;
-  if (isPointerOverHUD(screenX, screenY, viewState)) return;
-  const { tileX, tileY } = screenToTile(screenX, screenY, viewState.undergroundCamera);
+  tileX: number,
+  tileY: number,
+): boolean {
+  if (viewState.activeView !== 'underground') return false;
+  if (!isPlayerUndergroundEditable(viewState)) return false;
   const grid = world.undergroundGrids[PLAYER_COLONY_ID];
-  if (!grid) return;
-  if (tileX < 0 || tileY < 0 || tileX >= grid.width || tileY >= grid.height) return;
-  // Reject ceiling-row right-clicks symmetric with the sim's ceiling guard
-  // (issue #30): the chamber-placement command would always be rejected
-  // anyway, so don't open a menu the player can't act on.
-  if (tileY === UNDERGROUND_CEILING_ROW_Y) return;
+  if (!grid) return false;
+  if (!isEditableUndergroundTile(grid, tileX, tileY)) return false;
   const tileState = ugGet(grid, tileX, tileY);
-  if (tileState === UndergroundTileState.Marked) {
-    // CancelDigMark — only on Marked tiles (CTRL-04: BeingDug finish-then-switch).
-    const cmd: CancelDigMarkCommand = {
-      type: 'CancelDigMark',
-      colonyId: PLAYER_COLONY_ID,
-      tileX,
-      tileY,
-      issuedAtTick: world.tick,
-    };
-    world.commandQueue.push(cmd);
-    return;
+  if (tileState !== UndergroundTileState.Solid && tileState !== UndergroundTileState.Open) {
+    // Marked / BeingDug excluded (PLAN §B8).
+    return false;
   }
-
-  // BeingDug: no-op on either path (sim would reject the placement
-  // anyway via gate (e); avoid surfacing a doomed menu).
-  if (tileState === UndergroundTileState.BeingDug) return;
-
-  // Issue #38 — Solid OR Open. The sim handles reachability rejection
-  // post-selection. Pre-flight check: bounds were already validated above,
-  // ceiling row excluded above. Defer the actual show by a frame to keep
-  // the UIScene pointerdown SHOW-race defense (see below).
   requestShowContextMenu(screenX, screenY, tileX, tileY);
-}
-
-// ---------------------------------------------------------------------------
-// registerUndergroundInput — wires Phaser pointer events
-// ---------------------------------------------------------------------------
-
-/**
- * registerUndergroundInput — attach underground-click + drag handlers to a Phaser.Scene.
- *
- * Called from GameScene.create() (Plan 06 Task 3).
- *
- * getWorld is a LAZY accessor — called on every pointer event — so the
- * handler always dispatches against the live WorldState even if
- * GameScene swaps references mid-session (bootFresh, bootFromSave,
- * restartGame). Direct world-reference capture was a stale-closure bug.
- * Returns undefined pre-boot; all handlers short-circuit.
- *
- * Coexistence with registerDragPan: both register pointerdown/pointermove/pointerup.
- * Phaser fires multiple handlers; drag-pan guards on middle-button only, so left-click
- * and right-click reach only the world-input handlers here. Both sets of handlers
- * also guard on isPointerOverHUD so HUD widgets never receive world-click fallthrough.
- *
- * @param scene     - Phaser.Scene (GameScene) providing the input event bus.
- * @param getWorld  - Lazy accessor for the live WorldState.
- * @param viewState - Render-layer ViewState; activeView is read for guard.
- */
-export function registerUndergroundInput(
-  scene: Phaser.Scene,
-  getWorld: () => WorldState | undefined,
-  viewState: ViewState,
-): UndergroundInputState {
-  const state: UndergroundInputState = {
-    isDragging: false,
-    lastMarkedTileX: -1,
-    lastMarkedTileY: -1,
-  };
-
-  scene.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-    const world = getWorld();
-    if (!world) return;
-    if (pointer.leftButtonDown()) {
-      handleUndergroundLeftClick(world, viewState, pointer.x, pointer.y, state);
-    } else if (pointer.rightButtonDown()) {
-      handleUndergroundRightClick(world, viewState, pointer.x, pointer.y);
-    }
-  });
-
-  scene.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
-    if (pointer.isDown && pointer.leftButtonDown()) {
-      const world = getWorld();
-      if (!world) return;
-      handleUndergroundDrag(world, viewState, pointer.x, pointer.y, state);
-    }
-  });
-
-  scene.input.on('pointerup', () => {
-    state.isDragging = false;
-  });
-
-  return state;
+  return true;
 }

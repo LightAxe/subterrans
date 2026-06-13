@@ -6,6 +6,7 @@
 import type { WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import type { SimCommand } from '../sim/commands.js';
+import type { ToolId, ViewState } from './camera.js';
 
 // ---------------------------------------------------------------------------
 // GamePhase state machine (object-const per project convention — not enum)
@@ -18,6 +19,93 @@ export const GamePhase = {
   SavePrompt: 3,
 } as const;
 export type GamePhase = (typeof GamePhase)[keyof typeof GamePhase];
+
+// ---------------------------------------------------------------------------
+// canArbiterPan — gesture-arbiter left-drag pan gate (Stage 1 controls rework)
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether the gesture arbiter's left-drag pan may run.
+ *
+ * The arbiter's pan is driven by Phaser pointermove handlers that fire
+ * INDEPENDENTLY of GameScene.update() (they mutate the camera directly), so an
+ * update()-level early-return does NOT stop a pan — the gate must be explicit.
+ *
+ * Pan is a pure camera move (no world effect), so it stays available exactly
+ * when the world is interactive: while Playing, AND during a bare user-pause
+ * (Space / the ⏸ button) where tools, taps and pan are all still live. It must
+ * be BLOCKED while a modal owns input — the Esc pause menu (pause reason
+ * 'menu'), SavePrompt, or GameOver — because closePauseMenu()/reconcilePause()
+ * never reset the camera, so a pan behind the menu would persist after Resume.
+ *
+ * `isModalOpen` already encodes exactly that non-interactive set
+ * (GameOver || SavePrompt || pauseReasons.menu) and is false for a bare
+ * user-pause, so the gate is simply its negation.
+ */
+export function canArbiterPan(isModalOpen: boolean): boolean {
+  return !isModalOpen;
+}
+
+// ---------------------------------------------------------------------------
+// Tool cursor resolution + memoization (Stage 1 controls rework)
+// ---------------------------------------------------------------------------
+
+/** The cursor key applied to the canvas: a real tool, or the 'default' sentinel. */
+export type CursorTool = ToolId | 'default';
+
+/** Inputs to resolveCursorTool — plain flags so it is unit-testable without Phaser. */
+export interface CursorToolDeps {
+  /** The active tool from ViewState. */
+  activeTool: ToolId;
+  /** The active view — Chamber is underground-only. */
+  activeView: ViewState['activeView'];
+  /**
+   * True when a modal owns input (GameOver / SavePrompt / Esc 'menu' pause).
+   * Deliberately NOT `gamePhase !== Playing`: a bare user-pause keeps tools,
+   * taps and the entrance-hover outline LIVE (canEditWorld = !isModalOpen), so
+   * the tool cursor must persist then too — otherwise the cursor shows a plain
+   * arrow while a click would still queue an edit (a contradictory affordance).
+   */
+  isModalOpen: boolean;
+  /** contextMenuState.visible — the chamber context menu is up. */
+  contextMenuVisible: boolean;
+  /** antActivityPanelState.visible — the inspector panel is up. */
+  antActivityPanelVisible: boolean;
+  /** True when the pointer is currently over a HUD zone. */
+  overHud: boolean;
+}
+
+/**
+ * Resolve the effective cursor tool. Returns the 'default' sentinel whenever the
+ * cursor must read as the OS arrow — over chrome (HUD / context menu / panel) or
+ * while a modal owns input — and otherwise the active tool (Chamber collapses to
+ * 'command' outside the underground view). The 'default' sentinel is returned as
+ * the literal string (NOT null) so it round-trips through cursorToolChanged.
+ */
+export function resolveCursorTool(deps: CursorToolDeps): CursorTool {
+  const overChrome =
+    deps.isModalOpen || deps.contextMenuVisible || deps.antActivityPanelVisible || deps.overHud;
+  if (overChrome) return 'default';
+  if (deps.activeTool === 'chamber' && deps.activeView !== 'underground') return 'command';
+  return deps.activeTool;
+}
+
+/**
+ * Whether the resolved (tool, view) differs from the last applied pair — i.e.
+ * whether a DOM cursor write is actually needed this frame. The previous code
+ * stored the 'default' case as `null` while comparing against the 'default'
+ * string, so `'default' === null` was always false and setDefaultCursor ran
+ * EVERY frame over chrome. Comparing the sentinel consistently (store and
+ * compare the literal 'default') restores the intended single-write behaviour.
+ */
+export function cursorToolChanged(
+  effectiveTool: CursorTool,
+  view: ViewState['activeView'],
+  lastTool: CursorTool | null,
+  lastView: ViewState['activeView'] | null,
+): boolean {
+  return effectiveTool !== lastTool || view !== lastView;
+}
 
 // ---------------------------------------------------------------------------
 // decideBootMode — pure boot-path decider
