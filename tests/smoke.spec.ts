@@ -99,9 +99,13 @@ test.describe('Phase 8 smoke — boot, toggle, pan', () => {
     });
   });
 
-  test('Space + left-drag pans the surface camera without error (Phase 8.5 primary gesture)', async ({
+  test('left-drag pans the surface camera (Command tool); Space toggles pause — controls rework', async ({
     page,
   }) => {
+    // Stage 1 controls rework (issue #18): Space no longer modifies pan — it is
+    // the pause toggle. On the surface the default Command tool left-drags = pan
+    // (the single gesture arbiter classifies it). This smoke test exercises both
+    // a plain left-drag pan and a Space pause/resume cycle, asserting no errors.
     const consoleErrors: string[] = [];
     page.on('console', (msg) => {
       if (errorFilter(msg)) consoleErrors.push(msg.text());
@@ -113,16 +117,19 @@ test.describe('Phase 8 smoke — boot, toggle, pan', () => {
     await canvas.waitFor({ state: 'attached' });
     await page.waitForTimeout(200);
 
-    // Hold Space → left-button drag over a non-HUD mid-canvas region → release.
+    // Plain left-button drag over a non-HUD mid-canvas region → pan (no Space).
     // Mid-canvas (500, 300) sits clear of HUD.STATS (top-left), HUD.TRIANGLE
     // (bottom-left), HUD.MINIMAP (bottom-right), HUD.VIEW_TOGGLE (above minimap).
     await canvas.focus();
-    await page.keyboard.down('Space');
     await page.mouse.move(500, 300);
     await page.mouse.down();
     await page.mouse.move(300, 300, { steps: 10 });
     await page.mouse.up();
-    await page.keyboard.up('Space');
+
+    // Space toggles the user pause, then again to resume.
+    await page.keyboard.press('Space');
+    await page.waitForTimeout(50);
+    await page.keyboard.press('Space');
 
     await page.waitForTimeout(150);
     await expect(page.locator('canvas').first()).toBeAttached();

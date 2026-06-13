@@ -75,6 +75,27 @@ export const EDGE_PAN_THRESHOLD_PX = 32;
 export const UNDERGROUND_INITIAL_CAMERA_Y = VIEWPORT_HEIGHT_TILES / 2;
 
 // ---------------------------------------------------------------------------
+// Tool palette (Stage 1 controls rework — issue #18)
+// ---------------------------------------------------------------------------
+
+/**
+ * The active input tool. Render/input-only state; lives on ViewState (not a
+ * module singleton — it resets on every view switch, so the view already owns
+ * its lifecycle; Codex R1-16). `chamber` is underground-only.
+ */
+export type ToolId = 'command' | 'dig' | 'chamber';
+
+/**
+ * Per-view default tool. The active tool RESETS to this on every view switch
+ * (toggleView): surface is command-first (direct taps), underground is
+ * dig-first (immediately paint-ready). Within a view the tool persists until
+ * the player changes it.
+ */
+export function defaultToolForView(view: 'surface' | 'underground'): ToolId {
+  return view === 'surface' ? 'command' : 'dig';
+}
+
+// ---------------------------------------------------------------------------
 // ViewState
 // ---------------------------------------------------------------------------
 
@@ -121,6 +142,12 @@ export interface ViewState {
    * Skipped at draw time in game-scene.ts; never round-trips through save.ts.
    */
   showPheromoneOverlay: boolean;
+  /**
+   * Stage 1 controls rework (issue #18) — the active input tool. Resets to the
+   * view default on every `toggleView`; persists within a view. `chamber` is
+   * underground-only (selecting it on the surface is a no-op upstream).
+   */
+  activeTool: ToolId;
 }
 
 // ---------------------------------------------------------------------------
@@ -144,6 +171,7 @@ export interface ViewState {
 export function createViewState(startTileX: number, startTileY: number): ViewState {
   return {
     activeView: 'surface',
+    activeTool: 'command',
     surfaceCamera: {
       x: startTileX,
       y: startTileY,
@@ -185,6 +213,7 @@ export function createViewState(startTileX: number, startTileY: number): ViewSta
  */
 export function resetViewState(viewState: ViewState, startTileX: number, startTileY: number): void {
   viewState.activeView = 'surface';
+  viewState.activeTool = 'command';
   viewState.surfaceCamera.x = startTileX;
   viewState.surfaceCamera.y = startTileY;
   viewState.surfaceCamera.viewportWidth = VIEWPORT_WIDTH_TILES;
@@ -234,9 +263,11 @@ export function toggleView(viewState: ViewState): void {
       viewState.undergroundVisited = true;
     }
     viewState.activeView = 'underground';
+    viewState.activeTool = defaultToolForView('underground');
   } else {
     viewState.surfaceCamera.x = viewState.undergroundCamera.x;
     viewState.activeView = 'surface';
+    viewState.activeTool = defaultToolForView('surface');
   }
 }
 

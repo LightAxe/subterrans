@@ -52,14 +52,20 @@ import {
   generateFreshSeed,
   decideBootMode,
   resetInputLog,
+  canArbiterPan,
+  resolveCursorTool,
+  cursorToolChanged,
+  type CursorTool,
 } from './game-scene-logic.js';
 import {
   type ViewState,
+  type ToolId,
   createViewState,
   resetViewState,
   toggleView,
   toggleUndergroundColony,
   clampCamera,
+  screenToTile,
 } from './camera.js';
 import {
   PLAYER_COLONY_ID,
@@ -120,18 +126,22 @@ import {
   registerDragPan,
   resetDragState,
   resetPanInputState,
+  isPointerOverHUD,
 } from '../input/camera-input.js';
+import { isValidEntranceTarget } from '../input/surface-input.js';
+import { registerGestureArbiter, type GestureArbiter } from '../input/gesture-arbiter.js';
 import {
-  registerSurfaceInput,
-  resetSurfaceInputState,
-  type SurfaceInputState,
-} from '../input/surface-input.js';
-import {
-  registerUndergroundInput,
-  resetUndergroundInputState,
-  type UndergroundInputState,
-} from '../input/underground-input.js';
-import { hideContextMenu } from './context-menu-state.js';
+  type PauseReasonState,
+  createPauseReasonState,
+  setPauseReason,
+  clearPauseReason,
+  togglePauseReason,
+  isPausedByAny,
+  clearAllPauseReasons,
+} from './pause-reasons.js';
+import { canAcceptWorldHotkey, type HotkeyGamePhase } from '../input/hotkey-policy.js';
+import { contextMenuState, hideContextMenu } from './context-menu-state.js';
+import { antActivityPanelState } from './ant-activity-panel-state.js';
 import { buildPlaytraceSummary, type GameOutcomeLabel } from './summary-builder.js';
 import { captionForEvent, checkAndTrigger, resetCaptions } from './onboarding-captions.js';
 import {
@@ -195,6 +205,10 @@ interface UIScenePhase9 {
   hideDifficultySelectOverlay(): void;
   // S6 — first-occurrence caption overlay (light onboarding).
   showCaption(text: string, screenX: number, screenY: number): void;
+  // Stage 1 controls rework (issue #18) — surface the "paused queue full" hint
+  // when enqueueCommand drops a command at the paused cap. Optional so other
+  // UIScene consumers (tests) need not implement it.
+  flashPausedQueueFull?(): void;
 }
 import type { SimCommand } from '../sim/commands.js';
 
@@ -248,8 +262,24 @@ export class GameScene extends Phaser.Scene {
   };
   private tabKey!: Phaser.Input.Keyboard.Key;
   private dragState!: { isDragging: boolean; lastX: number; lastY: number; active: boolean };
-  private surfaceInputState!: SurfaceInputState;
-  private undergroundInputState!: UndergroundInputState;
+  // Stage 1 controls rework (issue #18) — the single left-button gesture arbiter
+  // replaces the old surface/underground pointer listener sets.
+  private arbiter!: GestureArbiter;
+  // Reconciled pause-reason set: the loop is paused iff any reason is set.
+  // 'user' = Space / ⏸; 'menu' = Esc-driven overlay. Reconciled to
+  // gameLoop.pause()/resume() centrally so the two pause independently.
+  private readonly pauseReasons: PauseReasonState = createPauseReasonState();
+  // Entrance hover (Dig + surface): the POINTER screen coords, re-resolved to a
+  // tile + validity every render frame (Codex R1-9/R2-9/R3-4). null when the
+  // pointer is off-canvas / over HUD / not in Dig+surface mode.
+  private hoverScreenX: number | null = null;
+  private hoverScreenY: number | null = null;
+  // Last tool/view we set the canvas cursor for, so update() only writes the
+  // cursor when it actually changes. Stores the 'default' sentinel as the literal
+  // string (CursorTool), NOT null, so the change-detection compare short-circuits
+  // on consecutive default frames instead of re-issuing setDefaultCursor.
+  private lastCursorTool: CursorTool | null = null;
+  private lastCursorView: ViewState['activeView'] | null = null;
   private lastActiveView: ViewState['activeView'] | null = null;
 
   // Phase 9 — GamePhase FSM + session fields
@@ -287,6 +317,18 @@ export class GameScene extends Phaser.Scene {
   private setSpeedMultiplier(next: 1 | 2 | 4): void {
     this.speedMultiplier = next;
     publishSpeedMultiplier(next);
+  }
+
+  /**
+   * Step the speed multiplier among {1, 2, 4}. dir=+1 steps up (clamped at 4),
+   * dir=-1 steps down (clamped at 1). Used by the =/-/numpad keys and the speed
+   * widget. Never changes pause reasons (Codex R2-11).
+   */
+  private stepSpeed(dir: 1 | -1): void {
+    const order: Array<1 | 2 | 4> = [1, 2, 4];
+    const idx = order.indexOf(this.speedMultiplier);
+    const nextIdx = Math.max(0, Math.min(order.length - 1, idx + dir));
+    this.setSpeedMultiplier(order[nextIdx]!);
   }
 
   /** DEV/E2E-only render-order trace (issue #193). The draw section of update()
@@ -404,7 +446,19 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard!.addCapture('TAB');
     this.input.mouse!.disableContextMenu();
 
-    // Drag-pan registration — returns dragState ref for processCameraInput
+    // Stage 1 controls rework (issue #18): Space is now the pause toggle, not a
+    // pan modifier. addKey creates a real Key object (the second arg also adds
+    // the global capture so Space never scrolls the host page while focused,
+    // replacing the bare addCapture this used to do). The Key is required so
+    // Phaser de-dupes OS key auto-repeat on the scene-level keydown-SPACE event:
+    // without a Key, KeyboardPlugin emits keydown-SPACE every repeat tick and a
+    // held Space strobes the pause toggle on/off (see handler below). We only
+    // need the Key to exist in the plugin's key map, so we don't retain the ref.
+    this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE, true);
+
+    // Middle-button drag-pan registration (left/Space pan paths removed —
+    // left is now exclusively the gesture arbiter's). Returns dragState ref
+    // for processCameraInput. Suspended during GameOver.
     this.dragState = registerDragPan(
       this,
       this.viewState,
@@ -429,17 +483,38 @@ export class GameScene extends Phaser.Scene {
     // captures the label at render time and would no longer match), and
     // prevents Resume from snapping the camera to the enemy nest because
     // X was pressed while paused.
-    this.input.keyboard!.on('keydown-ONE', () => {
-      if (this.gamePhase !== GamePhase.Playing) return;
-      this.setSpeedMultiplier(1);
-    });
-    this.input.keyboard!.on('keydown-TWO', () => {
-      if (this.gamePhase !== GamePhase.Playing) return;
-      this.setSpeedMultiplier(2);
-    });
-    this.input.keyboard!.on('keydown-FOUR', () => {
-      if (this.gamePhase !== GamePhase.Playing) return;
-      this.setSpeedMultiplier(4);
+    // Stage 1 controls rework (issue #18) — tool palette hotkeys. 1/2/4 no
+    // longer set speed (freed for tools): 1→Command, 2→Dig, 3→Chamber. All
+    // gated through canAcceptWorldHotkey (selectTool enforces the gate + the
+    // Chamber-is-underground-only rule).
+    this.input.keyboard!.on('keydown-ONE', () => this.selectTool('command'));
+    this.input.keyboard!.on('keydown-TWO', () => this.selectTool('dig'));
+    this.input.keyboard!.on('keydown-THREE', () => this.selectTool('chamber'));
+
+    // Speed step keys: top-row '='/'+' (keycode 187) and numpad-add step UP;
+    // top-row '-' (keycode 189) and numpad-subtract step DOWN, among {1,2,4}.
+    // Ctrl/Cmd combos are ignored so browser zoom shortcuts pass through
+    // (Codex R1-13/R4-3). Gated like the other world hotkeys; speed changes
+    // never touch pause reasons (Codex R2-11).
+    const stepSpeedKey = (dir: 1 | -1) => (ev: KeyboardEvent) => {
+      if (ev.ctrlKey || ev.metaKey) return;
+      if (!this.canAcceptWorldHotkey()) return;
+      this.stepSpeed(dir);
+    };
+    this.input.keyboard!.on('keydown-PLUS', stepSpeedKey(1)); // keycode 187 ('='/'+')
+    this.input.keyboard!.on('keydown-MINUS', stepSpeedKey(-1)); // keycode 189 (top-row '-')
+    this.input.keyboard!.on('keydown-NUMPAD_ADD', stepSpeedKey(1));
+    this.input.keyboard!.on('keydown-NUMPAD_SUBTRACT', stepSpeedKey(-1));
+
+    // Space toggles the 'user' pause (edge-triggered on keydown; the Key
+    // registered above makes Phaser de-dupe OS auto-repeat on this event). The
+    // event.repeat guard is belt-and-suspenders so a held Space can never strobe
+    // the pause on/off. Gated through canAcceptWorldHotkey so a Space behind a
+    // modal/menu can't flip the pause reason underneath it.
+    this.input.keyboard!.on('keydown-SPACE', (ev: KeyboardEvent) => {
+      if (ev.repeat) return;
+      if (!this.canAcceptWorldHotkey()) return;
+      this.toggleUserPause();
     });
     // Issue #114 — P toggles the player's pheromone overlay. Render-only:
     // the flag lives on ViewState (so the next frame skips drawPheromoneOverlay)
@@ -455,7 +530,7 @@ export class GameScene extends Phaser.Scene {
     // stuck OFF. ViewState is the authoritative in-mem source; persist is
     // best-effort and survives reload only when storage cooperates.
     this.input.keyboard!.on('keydown-P', () => {
-      if (this.gamePhase !== GamePhase.Playing) return;
+      if (!this.canAcceptWorldHotkey()) return;
       const next = !this.viewState.showPheromoneOverlay;
       this.viewState.showPheromoneOverlay = next;
       const persisted = loadSettings();
@@ -472,7 +547,7 @@ export class GameScene extends Phaser.Scene {
     // Tab via JustDown. Gated on Playing so a paused player doesn't Resume
     // into a surprise camera flip onto the enemy nest.
     this.input.keyboard!.on('keydown-X', () => {
-      if (this.gamePhase !== GamePhase.Playing) return;
+      if (!this.canAcceptWorldHotkey()) return;
       if (this.viewState.activeView !== 'underground') return;
       toggleUndergroundColony(this.viewState);
       // Clear stale glow entries from the previous colony grid — tile keys are
@@ -508,15 +583,84 @@ export class GameScene extends Phaser.Scene {
       // menu. GameScene was previously binding keydown-ESC alongside
       // UIScene's escKey handler, which raced (open → close in one press).
       onEscape: () => this.openPauseMenu(),
+      // Stage 1 controls rework (issue #18) — the HUD tool palette + speed widget
+      // route through these GameScene-owned, gated handlers so a palette/speed
+      // click obeys the same gate as the 1/2/3 and =/- hotkeys.
+      onSelectTool: (tool: ToolId) => this.selectTool(tool),
+      onSpeedControl: (control: 'pause' | 1 | 2 | 4) => {
+        if (!this.canAcceptWorldHotkey()) return;
+        if (control === 'pause') {
+          // ⏸ toggles the 'user' pause (same as Space). canAcceptWorldHotkey is
+          // true during a bare user-pause (no menu) so ⏸ can also un-pause.
+          this.toggleUserPause();
+        } else {
+          // 1×/2×/4× set the multiplier WITHOUT changing pause reasons (Codex R2-11).
+          this.setSpeedMultiplier(control);
+        }
+      },
+      isPaused: () => isPausedByAny(this.pauseReasons),
+      getSpeedMultiplier: () => this.speedMultiplier,
     });
     this.scene.bringToTop('UIScene');
 
-    // World input dispatchers — internally guard on viewState.activeView.
-    // Both return the per-registration state object so restartGame / boot
-    // helpers can reset them in place without invalidating the closures that
-    // Phaser now holds on pointerdown/pointermove/pointerup.
-    this.surfaceInputState = registerSurfaceInput(this, getWorld, this.viewState, getPrevWorld);
-    this.undergroundInputState = registerUndergroundInput(this, getWorld, this.viewState);
+    // Stage 1 controls rework (issue #18): the single left-button gesture
+    // arbiter replaces registerSurfaceInput + registerUndergroundInput. It owns
+    // the left button exclusively (and the right-click chamber path); the
+    // middle-button pan stays on registerDragPan above. Tap logic lives in the
+    // pure surface/underground handlers the arbiter calls.
+    this.arbiter = registerGestureArbiter(this, {
+      getWorld,
+      getPrevWorld,
+      viewState: this.viewState,
+      isPointerOverHUD: (x, y) => isPointerOverHUD(x, y, this.viewState),
+      isPaused: () => isPausedByAny(this.pauseReasons),
+      // World edits (tap / paint / chamber) are allowed whenever no modal is up —
+      // crucially that INCLUDES a bare user-pause, so a click/dig-paint while
+      // paused queues through enqueueCommand for application on resume (the
+      // paused-cap behaviour). isModalOpen() already covers GameOver/SavePrompt
+      // and the Esc menu pause, which DO block edits.
+      canEditWorld: () => !this.isModalOpen(),
+      // Pan is a pure camera move with no world effect, so — like keyboard /
+      // middle-button pan — it stays available whenever the world is interactive:
+      // while Playing AND during a bare user-pause (Space / ⏸). It is BLOCKED
+      // while a modal owns input: the Esc pause menu, SavePrompt, or GameOver.
+      // The arbiter's pan runs from Phaser pointermove handlers that fire
+      // independently of update() (and no overlay calls stopPropagation here), so
+      // this gate is the ONLY thing stopping a left-drag from panning behind a
+      // modal — and closePauseMenu()/reconcilePause() never reset the camera, so
+      // an un-gated pan would persist after Resume. isModalOpen() is exactly the
+      // non-interactive set (GameOver/SavePrompt/menu) and is false for a bare
+      // user-pause, so `!isModalOpen()` is the correct gate. Do NOT revert this to
+      // a GameOver-only check: SavePrompt and the menu DO reach here.
+      canPan: () => canArbiterPan(this.isModalOpen()),
+      // The chamber context menu is anchored at an arbitrary WORLD tile (not a
+      // HUD zone), so isPointerOverHUD can't catch it and canEditWorld stays true
+      // while it's open. Gate left taps on it directly: a click that selects /
+      // dismisses a menu item (UIScene owns that on its own pointerdown) must not
+      // ALSO fire a world tap. pendingShow/pendingHide cover the deferred-(dis)appear
+      // race where `visible` lags a frame behind a same-dispatch request.
+      isContextMenuActive: () =>
+        contextMenuState.visible || contextMenuState.pendingShow || contextMenuState.pendingHide,
+      onPausedQueueFull: () => {
+        const ui = this.scene.get('UIScene') as unknown as UIScenePhase9 | null;
+        ui?.flashPausedQueueFull?.();
+      },
+    });
+
+    // Entrance hover (Dig + surface): track the POINTER screen coords so the
+    // hover outline can be re-resolved to a tile + validity from the LIVE camera
+    // every frame (Codex R3-4 — a stationary cursor over a panning camera must
+    // still highlight the tile under it). Cleared on pointer-out.
+    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      this.hoverScreenX = pointer.x;
+      this.hoverScreenY = pointer.y;
+    });
+    this.input.on('pointerout', () => {
+      this.hoverScreenX = null;
+      this.hoverScreenY = null;
+    });
+    // Cancel any in-flight gesture if the canvas loses focus (blur).
+    this.game.events.on('blur', () => this.arbiter.cancelGesture());
 
     // Phase 9 boot: classify any existing save ONCE. A loadable ('compatible')
     // save shows the Continue/New Game SavePrompt. Everything else boots fresh —
@@ -578,15 +722,22 @@ export class GameScene extends Phaser.Scene {
    *     files don't persist speed, so continue-from-save also restarts at 1x
    *
    * All mutations are in-place so references already captured by UIScene
-   * and by registerSurfaceInput / registerUndergroundInput / registerDragPan
-   * stay valid. Reassigning would strand those references (same failure
-   * class as the stale-world bug fixed earlier in Phase 9).
+   * and by the gesture arbiter / registerDragPan stay valid. Reassigning would
+   * strand those references (same failure class as the stale-world bug fixed
+   * earlier in Phase 9). The pause-reason set is cleared entirely here.
    */
   private resetSessionState(): void {
     resetInputLog(this.inputLog);
     resetViewState(this.viewState, PLAYER_START_X, PLAYER_START_Y);
-    resetSurfaceInputState(this.surfaceInputState);
-    resetUndergroundInputState(this.undergroundInputState);
+    // Stage 1 controls rework (issue #18): abandon any in-flight gesture and
+    // clear the whole pause-reason set so a new game can't inherit a stuck
+    // 'menu'/'user' pause (Codex R2-1). Hover outline + cursor caches reset too.
+    this.arbiter.cancelGesture();
+    clearAllPauseReasons(this.pauseReasons);
+    this.hoverScreenX = null;
+    this.hoverScreenY = null;
+    this.lastCursorTool = null;
+    this.lastCursorView = null;
     resetDragState(this.dragState);
     resetPanInputState();
     hideContextMenu();
@@ -962,9 +1113,11 @@ export class GameScene extends Phaser.Scene {
         this.gamePhase = GamePhase.GameOver;
         // W2: first-class pause via Plan 06 Task 1 API — no setMsPerTick(Infinity)
         this.gameLoop.pause();
-        // Issue #129 — clear any in-flight pan/drag so spaceHeld and dragState.active
-        // don't leak into the GameOver overlay state (drag-pan event handlers are
-        // independent of processCameraInput and otherwise fire unguarded).
+        // Issue #129 — clear any in-flight pan/drag/gesture so it doesn't leak
+        // into the GameOver overlay state (the middle-button drag-pan handlers
+        // are independent of processCameraInput and otherwise fire unguarded; the
+        // gesture arbiter must also abandon any pending tap/paint/pan).
+        this.arbiter.cancelGesture();
         resetPanInputState();
         resetDragState(this.dragState);
 
@@ -1179,21 +1332,119 @@ export class GameScene extends Phaser.Scene {
     uiScene.hideGameOverOverlay();
   }
 
+  // ---------------------------------------------------------------------------
+  // Stage 1 controls rework (issue #18) — pause reason reconciliation
+  //
+  // The render loop is paused iff ANY reason is set (pause-reasons.ts). Two
+  // reasons pause independently: 'user' (Space / ⏸) and 'menu' (Esc overlay).
+  // reconcilePause() maps the set to the imperative gameLoop.pause()/resume() and
+  // keeps gamePhase in sync (Paused iff any reason set, while Playing-eligible).
+  // Pausing here never touches speedMultiplier (Codex R2-11). The Esc-driven
+  // overlays toggle 'menu'; Space/⏸ toggle 'user'. resetSessionState clears all.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Map GameScene's state to the hotkey-policy phase string. A BARE 'user' pause
+   * (Space / ⏸ with no Esc overlay open) reports 'playing' so Space can un-pause
+   * and speed/tool hotkeys still work while user-paused — the loop being frozen
+   * is not a modal. Only GameOver / SavePrompt / a 'menu'-driven overlay report a
+   * non-playing phase that blocks world hotkeys.
+   */
+  private hotkeyPhase(): HotkeyGamePhase {
+    if (this.gamePhase === GamePhase.GameOver) return 'gameover';
+    if (this.gamePhase === GamePhase.SavePrompt) return 'saveprompt';
+    // Paused-by-menu blocks; paused-by-user-only does not.
+    if (this.pauseReasons.menu) return 'paused';
+    return 'playing';
+  }
+
+  /**
+   * True if a modal overlay (Esc pause menu / Save-Load dialog / survey /
+   * game-over / save-prompt) is up. A bare 'user' pause is NOT a modal.
+   */
+  private isModalOpen(): boolean {
+    if (this.gamePhase === GamePhase.GameOver || this.gamePhase === GamePhase.SavePrompt) {
+      return true;
+    }
+    return this.pauseReasons.menu;
+  }
+
+  /**
+   * canAcceptWorldHotkey — the single gate for 1/2/3 (tools), the speed keys,
+   * Space (user pause), Tab (view toggle), and X/P. Delegates to the pure policy
+   * predicate (hotkey-policy.ts) with today's flag values.
+   */
+  private canAcceptWorldHotkey(): boolean {
+    return canAcceptWorldHotkey({
+      gamePhase: this.hotkeyPhase(),
+      modalOpen: this.isModalOpen(),
+      contextMenuVisible: contextMenuState.visible,
+      contextMenuPendingShow: contextMenuState.pendingShow,
+      contextMenuPendingHide: contextMenuState.pendingHide,
+      antActivityPanelVisible: antActivityPanelState.visible,
+      antActivityPanelPendingHide: antActivityPanelState.pendingHide,
+    });
+  }
+
+  /**
+   * selectTool — set the active input tool from a hotkey / palette click. Gated
+   * by canAcceptWorldHotkey. Chamber is underground-only: selecting it on the
+   * surface is a no-op (PLAN §A1/A4). Cancels any in-flight gesture and a deferred
+   * context-menu show on a tool transition (Codex R4-2).
+   */
+  private selectTool(tool: ToolId): void {
+    if (!this.canAcceptWorldHotkey()) return;
+    if (tool === 'chamber' && this.viewState.activeView !== 'underground') return;
+    if (this.viewState.activeTool === tool) return;
+    this.viewState.activeTool = tool;
+    // A tool change must abort any pending tap / paint / pan and cancel a menu
+    // that was about to appear under the old tool.
+    this.arbiter.cancelGesture();
+    if (contextMenuState.pendingShow) hideContextMenu();
+  }
+
+  /** Reconcile the pause-reason set to the game loop + gamePhase. */
+  private reconcilePause(): void {
+    // Never override the terminal/transitional phases — GameOver/SavePrompt own
+    // the loop, and bootFromSave/restart flip Playing themselves.
+    if (this.gamePhase === GamePhase.GameOver || this.gamePhase === GamePhase.SavePrompt) {
+      return;
+    }
+    if (isPausedByAny(this.pauseReasons)) {
+      this.gamePhase = GamePhase.Paused;
+      this.gameLoop.pause();
+    } else {
+      this.gamePhase = GamePhase.Playing;
+      this.gameLoop.resume();
+    }
+  }
+
+  /** Space / ⏸ — edge-triggered toggle of the 'user' pause reason. */
+  private toggleUserPause(): void {
+    togglePauseReason(this.pauseReasons, 'user');
+    // Toggling 'user' off while 'menu' is still set must NOT resume — the menu is
+    // still up. reconcilePause handles that (paused iff any reason set). But if
+    // the 'menu' reason is set we should leave the menu chrome alone; Space only
+    // moves the 'user' bit.
+    this.reconcilePause();
+  }
+
   private openPauseMenu(): void {
-    if (this.gamePhase !== GamePhase.Playing) return;
-    this.gamePhase = GamePhase.Paused;
-    this.gameLoop.pause();
+    if (this.gamePhase !== GamePhase.Playing && this.gamePhase !== GamePhase.Paused) return;
+    setPauseReason(this.pauseReasons, 'menu');
+    this.reconcilePause();
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     uiScene.showPauseMenuOverlay(this.buildPauseMenuCallbacks());
   }
 
   private closePauseMenu(): void {
-    if (this.gamePhase !== GamePhase.Paused) return;
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     uiScene.hidePauseMenuOverlay();
     uiScene.hideSaveLoadDialogOverlay();
-    this.gamePhase = GamePhase.Playing;
-    this.gameLoop.resume();
+    // Esc-close clears ONLY the 'menu' reason; a concurrent Space ('user') pause
+    // survives (Codex R1-5). reconcilePause resumes only if no reason remains.
+    clearPauseReason(this.pauseReasons, 'menu');
+    this.reconcilePause();
   }
 
   // Issue #115 — opens the Save/Load dialog on top of the pause menu. Hides
@@ -1311,10 +1562,18 @@ export class GameScene extends Phaser.Scene {
     // panning while paused is expected behaviour.
     const keyboardActive = this.gamePhase !== GamePhase.GameOver;
 
-    // Tab toggles view (JustDown handles key-press edge, not held).
-    if (keyboardActive && Phaser.Input.Keyboard.JustDown(this.tabKey)) {
+    // Tab toggles view (JustDown handles key-press edge, not held). Stage 1
+    // controls rework (issue #18): Tab now goes through canAcceptWorldHotkey so a
+    // Tab behind the Esc pause menu can no longer slip a view change underneath
+    // it (Codex R4-4 — previously Tab polled even while Paused).
+    if (Phaser.Input.Keyboard.JustDown(this.tabKey) && this.canAcceptWorldHotkey()) {
       toggleView(this.viewState);
     }
+
+    // Stage 1: detect tool/view/colony transitions (incl. keyboard-driven ones
+    // between pointer events) and cancel any in-flight gesture under the old
+    // context. Also refreshes the arbiter's context fingerprint.
+    this.arbiter.reconcileContext();
 
     // Track active view for anything that needs to diff on toggle.
     if (this.viewState.activeView !== this.lastActiveView) {
@@ -1343,6 +1602,11 @@ export class GameScene extends Phaser.Scene {
     const worldH =
       this.viewState.activeView === 'surface' ? SURFACE_GRID_HEIGHT : UNDERGROUND_GRID_HEIGHT;
     clampCamera(cam, worldW, worldH);
+
+    // Stage 1 controls rework (issue #18): set the per-tool canvas cursor. Reset
+    // to the default cursor over any HUD zone / the context menu / any modal so
+    // the Dig/Chamber cursors never bleed onto chrome (Codex R1-12/R2-10).
+    this.updateToolCursor();
 
     // S6: advance render frame counter and drain events for render effects.
     this.renderFrame++;
@@ -1383,14 +1647,12 @@ export class GameScene extends Phaser.Scene {
         drawPheromoneOverlay(gfx, this.world, cam, 'surface');
       }
       this.recordDrawLayer('entities');
-      const pending =
-        this.surfaceInputState.pendingEntranceTileX !== null &&
-        this.surfaceInputState.pendingEntranceTileY !== null
-          ? {
-              tileX: this.surfaceInputState.pendingEntranceTileX,
-              tileY: this.surfaceInputState.pendingEntranceTileY,
-            }
-          : null;
+      // Stage 1 controls rework (issue #18): the entrance hover outline. Shown
+      // only while the Dig tool is active on the surface and the pointer is on
+      // canvas (and not over HUD). Re-resolve the tile + validity from the LIVE
+      // camera every frame so a keyboard/drag pan under a stationary cursor keeps
+      // the outline under the pointer and never stale (Codex R1-9/R2-9/R3-4).
+      const entranceHover = this.computeEntranceHover(cam);
       drawSurfaceEntities(
         gfx,
         this.antSprites,
@@ -1398,7 +1660,7 @@ export class GameScene extends Phaser.Scene {
         this.world,
         alpha,
         cam,
-        pending,
+        entranceHover,
         this.antFacingCache,
         this.time.now, // S6: frameTimeMs for reticle/hunger pulse
         this.contestedGlowFrames, // S6: surface glow fade map
@@ -1443,11 +1705,89 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * Compute the entrance hover outline for the current frame, or null when it
+   * should not show. Shown only for Dig + surface, with the pointer on canvas
+   * and not over HUD. The tile + validity are recomputed here every frame from
+   * the LIVE camera so the outline tracks the pointer even under a moving camera.
+   */
+  private computeEntranceHover(
+    cam: import('./camera.js').CameraState,
+  ): { tileX: number; tileY: number; valid: boolean } | null {
+    if (this.viewState.activeView !== 'surface') return null;
+    if (this.viewState.activeTool !== 'dig') return null;
+    if (this.hoverScreenX === null || this.hoverScreenY === null) return null;
+    if (isPointerOverHUD(this.hoverScreenX, this.hoverScreenY, this.viewState)) return null;
+    if (this.world === undefined) return null;
+    const { tileX, tileY } = screenToTile(this.hoverScreenX, this.hoverScreenY, cam);
+    if (tileX < 0 || tileY < 0) return null;
+    const valid = isValidEntranceTarget(this.world, tileX, tileY);
+    return { tileX, tileY, valid };
+  }
+
+  /**
+   * Set the canvas cursor for the active tool, resetting to the default cursor
+   * over any HUD zone, the context menu, the inspector panel, or while a modal
+   * owns input. GameScene is the single owner of the tool-cursor (Codex
+   * R1-12/R2-10). Only writes when the resolved cursor changes, to avoid
+   * per-frame DOM churn.
+   *
+   * Note: the modal check is isModalOpen(), NOT gamePhase !== Playing. A bare
+   * user-pause keeps tools/taps/entrance-hover live (canEditWorld = !isModalOpen),
+   * so the tool cursor must persist while user-paused — otherwise the cursor
+   * shows a plain arrow while a click would still queue an edit.
+   */
+  private updateToolCursor(): void {
+    const overHud =
+      this.hoverScreenX !== null &&
+      this.hoverScreenY !== null &&
+      isPointerOverHUD(this.hoverScreenX, this.hoverScreenY, this.viewState);
+    const effectiveTool: CursorTool = resolveCursorTool({
+      activeTool: this.viewState.activeTool,
+      activeView: this.viewState.activeView,
+      isModalOpen: this.isModalOpen(),
+      contextMenuVisible: contextMenuState.visible,
+      antActivityPanelVisible: antActivityPanelState.visible,
+      overHud,
+    });
+
+    // Diff against the last applied (tool, view) so we only touch the DOM cursor
+    // on a real change. The 'default' sentinel is stored as the literal string
+    // (not null) so consecutive default frames compare equal and short-circuit.
+    if (
+      !cursorToolChanged(
+        effectiveTool,
+        this.viewState.activeView,
+        this.lastCursorTool,
+        this.lastCursorView,
+      )
+    ) {
+      return;
+    }
+    this.lastCursorTool = effectiveTool;
+    this.lastCursorView = this.viewState.activeView;
+
+    const cursorCss: Record<CursorTool, string> = {
+      // 'command' uses the OS default arrow; dig/chamber use crosshair so the
+      // commit/paint affordance reads as "place precisely".
+      command: 'default',
+      dig: 'crosshair',
+      chamber: 'cell',
+      default: 'default',
+    };
+    this.input.setDefaultCursor(cursorCss[effectiveTool]);
+  }
+
   /** Accessor for UIScene / Plan 05 / Plan 06 — safe read-only reference. */
   getWorld(): WorldState {
     return this.world;
   }
   getViewState(): ViewState {
     return this.viewState;
+  }
+
+  /** Test/Playwright accessor for the gesture arbiter. */
+  getArbiter(): GestureArbiter {
+    return this.arbiter;
   }
 }

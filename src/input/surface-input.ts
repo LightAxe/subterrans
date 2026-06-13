@@ -1,28 +1,30 @@
-// surface-input.ts — Phase 9 surface-click dispatcher.
+// surface-input.ts — Stage 1 controls rework (issue #18): pure surface tap
+// handlers, called by the single left-button gesture arbiter.
 //
-// Handles left-click (food-pile mark + entrance designation confirmation + rally point set)
-// and right-click (entrance preview + rally point clear + spider priority toggle) on the surface view.
+// The arbiter (gesture-arbiter.ts) exclusively owns the LEFT pointer button. It
+// classifies a press as a pan / paint / tap, and on a tap-without-drag calls the
+// pure handler matching the snapshotted tool + view. This file no longer
+// registers its own Phaser pointer listeners — it exports the pure tap logic and
+// the pure helpers the arbiter and renderer depend on.
 //
-// Priority order for left-click:
-//   1. Entrance designation confirmation (if pendingEntrance matches both X+Y)
-//   2. Food-pile mark (if tile has a food pile)
-//   3. (empty) fall-through: SetRallyPoint (SURF-04)
+// Tap handlers by tool (surface):
+//   - Command tap → priority: spider (sprite bounds) → food pile →
+//     clear-rally (iff down-tile == current rally) → foreign/enemy entrance rally
+//     → empty-tile set-rally. (PLAN §B5, Codex R1-4.)
+//   - Dig tap → DesignateEntrance on a valid target (one tap; PLAN §B6).
+//   - Chamber → underground-only, so there is no surface Chamber tap.
 //
-// Priority order for right-click:
-//   1. Spider priority toggle (if tile is within spider's 3×3 bounding box) — S7/D1
-//   2. Rally-point clear (if tile matches current rally point)
-//   3. Entrance preview (if tile is a valid entrance target)
+// All commands emitted here are the SAME SimCommands as before the rework and
+// are pushed through enqueueCommand (the paused-cap guard); a handler reports
+// whether its command was dropped at the cap so the arbiter can surface the
+// "paused queue full" hint.
 //
-// Guards:
-//   - viewState.activeView must be 'surface' before dispatching any command.
-//   - isPointerOverHUD rejects clicks that land on HUD zones (Pitfall 2).
-//   - Tile bounds check (tileX/Y >= 0) before pushing commands.
-//   - ADR-0006: world.colonies accessed via plain-object bracket notation — never .get().
+// Guards: the arbiter has already rejected HUD / pan / wrong-view presses before
+// calling these. Each handler still bounds-checks the tile defensively.
+// ADR-0006: world.colonies accessed via plain-object bracket notation — never .get().
 
-import * as Phaser from 'phaser';
 import type { WorldState } from '../sim/types.js';
 import type { ViewState } from '../render/camera.js';
-import { screenToTile } from '../render/camera.js';
 import type { FoodPile } from '../sim/food.js';
 import type {
   MarkFoodPileCommand,
@@ -42,36 +44,7 @@ import { getSurfaceComponentMaskReadOnly } from '../sim/surface-features.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { TILE_SIZE_PX } from '../render/sprites.js';
 import { SPIDER_SPRITE_WIDTH, SPIDER_SPRITE_HEIGHT } from '../render/ant-sprite-layer.js';
-import { isPointerOverHUD, panInputState } from './camera-input.js';
-
-// ---------------------------------------------------------------------------
-// SurfaceInputState — mutable per-registration state
-// ---------------------------------------------------------------------------
-
-/**
- * Exported so the render layer (draw-surface.ts) can read `pendingEntranceTileX`
- * / `pendingEntranceTileY` and draw a preview outline on the tile the player
- * right-clicked. Phase 8.5 interaction-feedback fix: before, the right-click
- * preview was invisible and players had to remember the exact tile between
- * right-click and the confirming left-click.
- */
-export interface SurfaceInputState {
-  /** Right-click preview state: null = no pending designation, number = tileX of pending entrance. */
-  pendingEntranceTileX: number | null;
-  /** TileY companion to pendingEntranceTileX — needed so the render layer can outline the right cell. */
-  pendingEntranceTileY: number | null;
-}
-
-/**
- * Reset a SurfaceInputState in-place so the new session starts without any
- * pending entrance-preview left over from the previous game. Called at
- * session-restart boundaries; preserves the object identity captured by
- * registerSurfaceInput's pointerdown closure and by the render layer.
- */
-export function resetSurfaceInputState(state: SurfaceInputState): void {
-  state.pendingEntranceTileX = null;
-  state.pendingEntranceTileY = null;
-}
+import { enqueueCommand } from './command-queue.js';
 
 // ---------------------------------------------------------------------------
 // isEmptySurfaceTile — checks whether a tile is empty (not entrance, not food pile)
@@ -147,22 +120,15 @@ export function isValidEntranceTarget(world: WorldState, tileX: number, tileY: n
 /**
  * Returns true when (tileX, tileY) is the surface tile of an entrance owned
  * by a colony OTHER than `ownColonyId`. Bounds and food-pile checks are not
- * required here — handleSurfaceLeftClick has already evaluated those.
+ * required here — the Command-tap handler has already evaluated those.
  *
- * Issue #14: enables the player to left-click an enemy entrance to rally
- * Fighting ants there. The Phase 09.1 cross-grid descent + combat path is
- * already wired (REQ-C3a, REQ-C4a); the rally input was the missing seam.
+ * Issue #14: enables the player to tap an enemy entrance to rally Fighting ants
+ * there. Closed enemy entrances are intentionally still eligible — the
+ * rally-tile carve-out in updateFightAntTargets walks fighters onto the exact
+ * tile, but the descent-intent gate requires `isOpen` before crossing into the
+ * enemy grid, so a rally on a closed enemy entrance piles fighters at the door.
  *
- * Closed enemy entrances are intentionally still eligible — the rally-tile
- * carve-out in updateFightAntTargets walks fighters onto the exact tile,
- * but the descent-intent gate in tickAntMovement requires `isOpen` before
- * crossing into the enemy grid. So a rally on a closed enemy entrance
- * piles fighters at the door, ready to invade the moment the enemy AI
- * opens it. That's the right read of "I want to attack here" — no need
- * for the input layer to second-guess open/closed.
- *
- * ADR-0006: world.colonies is a PLAIN OBJECT. Uses Object.keys (per the
- * existing isEmptySurfaceTile pattern).
+ * ADR-0006: world.colonies is a PLAIN OBJECT. Uses Object.keys.
  */
 export function isForeignColonyEntrance(
   world: WorldState,
@@ -190,7 +156,7 @@ export function isForeignColonyEntrance(
 
 /**
  * Returns the FoodPile at (tileX, tileY) or null if none.
- * Called by handleSurfaceLeftClick when no entrance confirmation is pending.
+ * Called by handleSurfaceCommandTap when no spider was hit.
  */
 export function findFoodPileAt(world: WorldState, tileX: number, tileY: number): FoodPile | null {
   for (const pile of world.foodPiles) {
@@ -200,104 +166,49 @@ export function findFoodPileAt(world: WorldState, tileX: number, tileY: number):
 }
 
 // ---------------------------------------------------------------------------
-// handleSurfaceLeftClick
+// isSpiderHit — pure spider sprite-bounds hit test (snapshotted at pointer-down)
 // ---------------------------------------------------------------------------
 
 /**
- * Handles a left-click on the surface view.
+ * Returns true if screen point (screenX, screenY) lands within the spider's
+ * rendered sprite bounds. The hit box is the union of the current-tick and
+ * previous-tick 48×48px bounding boxes, so the trailing visual edge (which lags
+ * the sim position during interpolation) always registers. When prevWorld is
+ * null (stationary or unavailable) the box is exactly the current sprite.
  *
- * Priority order:
- *   1. If the clicked tile matches the pending entrance preview in BOTH X and Y,
- *      push DesignateEntranceCommand and clear the preview.
- *   2. Else → try food-pile mark at the clicked tile.
- *
- * No-ops if: activeView !== 'surface', pointer over HUD, or tile out of bounds.
- *
- * Phase 8.5 fix: confirmation previously matched only `tileX`, which meant a
- * player could right-click to preview tile (X, Y1), left-click a different row
- * (X, Y2) on the same column, and still confirm — but the command fired with
- * the second tile's Y. The preview frame and the placed entrance could
- * disagree. Confirmation now requires both tile coordinates to match the
- * previewed tile exactly; a non-matching left-click falls through to food-pile
- * mark and leaves the preview intact so the player can try again.
+ * Extracted unchanged from the former right-click spider-priority path so the
+ * Command-tap snapshot can record "did this press start on the spider?" at
+ * pointer-down. Returns false when there is no spider.
  */
-export function handleSurfaceLeftClick(
+export function isSpiderHit(
   world: WorldState,
   viewState: ViewState,
   screenX: number,
   screenY: number,
-  state: SurfaceInputState,
-): void {
-  if (viewState.activeView !== 'surface') return;
-  if (isPointerOverHUD(screenX, screenY, viewState)) return;
-  // Pan-mode guard: while Space is held or a pan gesture is already in flight,
-  // the left-click is the pan trigger — not a world action.
-  if (panInputState.spaceHeld || panInputState.isPanning) return;
-  const { tileX, tileY } = screenToTile(screenX, screenY, viewState.surfaceCamera);
-  if (tileX < 0 || tileY < 0) return;
-
-  // Entrance designation confirmation: left-click on the exact tile that was
-  // previewed by a prior right-click (both X and Y must match).
-  if (
-    state.pendingEntranceTileX !== null &&
-    state.pendingEntranceTileY !== null &&
-    state.pendingEntranceTileX === tileX &&
-    state.pendingEntranceTileY === tileY
-  ) {
-    const cmd: DesignateEntranceCommand = {
-      type: 'DesignateEntrance',
-      colonyId: PLAYER_COLONY_ID,
-      surfaceTileX: tileX,
-      surfaceTileY: tileY,
-      issuedAtTick: world.tick,
-    };
-    world.commandQueue.push(cmd);
-    state.pendingEntranceTileX = null;
-    state.pendingEntranceTileY = null;
-    return;
-  }
-
-  // Food-pile mark at clicked tile (priority 2).
-  const pile = findFoodPileAt(world, tileX, tileY);
-  if (pile) {
-    const cmd: MarkFoodPileCommand = {
-      type: 'MarkFoodPile',
-      colonyId: PLAYER_COLONY_ID,
-      tileX: pile.tileX,
-      tileY: pile.tileY,
-      issuedAtTick: world.tick,
-    };
-    world.commandQueue.push(cmd);
-    return;
-  }
-
-  // Foreign-colony entrance rally (priority 3 — issue #14): left-click on an
-  // enemy colony's open entrance tile sets the player's rally point there.
-  // This is the input piece that unlocks Phase 09.1's invasion mechanic —
-  // Fighting ants rally to the tile, the rally-on-entrance carve-out in
-  // updateFightAntTargets keeps them walking onto it, and the descent-intent
-  // gate in tickAntMovement crosses them into the enemy underground grid.
-  // Own-colony entrance left-click stays a no-op so the right-click → left-
-  // click entrance designation flow is undisturbed.
-  //
-  // Ordering note: food-pile mark (priority 2) wins over foreign-entrance
-  // rally if a food pile and an enemy entrance somehow share a tile. The
-  // scenario seeder (createScenario) places enemy entrances at the colony
-  // start tile and food piles at distinct tiles, so this collision can't
-  // arise in practice today. If a future feature lets food piles spawn
-  // anywhere, prefer the food-mark — the player can always rally on an
-  // adjacent tile (the rally-on-entrance carve-out only requires the EXACT
-  // entrance tile, but a one-tile-off rally still routes fighters to the
-  // entrance via the existing path-to-rally walk).
-  if (isForeignColonyEntrance(world, tileX, tileY, PLAYER_COLONY_ID)) {
-    handleSetRallyPoint(world, tileX, tileY, PLAYER_COLONY_ID);
-    return;
-  }
-
-  // Empty-tile fallthrough (priority 4): set rally point for player colony (SURF-04).
-  if (isEmptySurfaceTile(world, tileX, tileY)) {
-    handleSetRallyPoint(world, tileX, tileY, PLAYER_COLONY_ID);
-  }
+  prevWorld: WorldState | null = null,
+): boolean {
+  if (world.spider === null) return false;
+  const cam = viewState.surfaceCamera;
+  const camLeft = Math.floor(cam.x - cam.viewportWidth / 2);
+  const camTop = Math.floor(cam.y - cam.viewportHeight / 2);
+  const currScrX = (world.spider.posX >> FP_SHIFT) * TILE_SIZE_PX - camLeft * TILE_SIZE_PX;
+  const currScrY = (world.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop * TILE_SIZE_PX;
+  const prevScrX =
+    prevWorld?.spider != null
+      ? (prevWorld.spider.posX >> FP_SHIFT) * TILE_SIZE_PX - camLeft * TILE_SIZE_PX
+      : currScrX;
+  const prevScrY =
+    prevWorld?.spider != null
+      ? (prevWorld.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop * TILE_SIZE_PX
+      : currScrY;
+  const halfW = SPIDER_SPRITE_WIDTH / 2;
+  const halfH = SPIDER_SPRITE_HEIGHT / 2;
+  return (
+    screenX >= Math.min(currScrX, prevScrX) - halfW &&
+    screenX < Math.max(currScrX, prevScrX) + halfW &&
+    screenY >= Math.min(currScrY, prevScrY) - halfH &&
+    screenY < Math.max(currScrY, prevScrY) + halfH
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -305,16 +216,17 @@ export function handleSurfaceLeftClick(
 // ---------------------------------------------------------------------------
 
 /**
- * Pushes SetRallyPointCommand for the given colony at (tileX, tileY).
- * Called by handleSurfaceLeftClick's empty-tile fallthrough (SURF-04).
+ * Enqueues SetRallyPointCommand for the given colony at (tileX, tileY).
  * colonyId argument is always the player colony — AI colonies are never passed here.
+ * Returns true iff the command was dropped at the paused cap.
  */
 export function handleSetRallyPoint(
   world: WorldState,
   tileX: number,
   tileY: number,
   playerColonyId: ColonyId,
-): void {
+  isPaused: boolean,
+): boolean {
   const cmd: SetRallyPointCommand = {
     type: 'SetRallyPoint',
     colonyId: playerColonyId,
@@ -322,165 +234,116 @@ export function handleSetRallyPoint(
     tileY,
     issuedAtTick: world.tick,
   };
-  world.commandQueue.push(cmd);
+  return !enqueueCommand(world, cmd, isPaused);
 }
 
 // ---------------------------------------------------------------------------
-// handleSurfaceRightClick
+// handleSurfaceCommandTap — the Command-tool tap on the surface view
 // ---------------------------------------------------------------------------
 
 /**
- * Handles a right-click on the surface view.
+ * Surface Command tap. Priority (PLAN §B5, Codex R1-4):
+ *   1. spider hit (snapshotted at pointer-down) → toggle MarkSpiderPriority
+ *   2. food pile at the down-tile → MarkFoodPile
+ *   3. clear-rally — ONLY if the down-tile is the current rally point → ClearRallyPoint
+ *   4. foreign/enemy entrance at the down-tile → SetRallyPoint (invasion rally)
+ *   5. empty tile → SetRallyPoint
  *
- * Priority order:
- *   1. Spider priority toggle (S7/D1): right-click within the spider's rendered sprite bounds
- *      dispatches MarkSpiderPriority and suppresses all other right-click actions.
- *   2. If the clicked tile matches the current rally-point tile, push ClearRallyPointCommand.
- *   3. Otherwise, if the tile is a valid entrance target, set pendingEntranceTileX/Y
- *      for entrance designation preview. A subsequent left-click on the same tile
- *      confirms and pushes DesignateEntranceCommand.
- *   4. Invalid entrance tiles (food piles, existing colony entrances, out-of-bounds) do nothing —
- *      the preview is suppressed so the UI never advertises a target the sim would reject.
- *
- * No-ops if: activeView !== 'surface', pointer over HUD, or tile out of bounds.
- *
- * ADR-0006: world.colonies accessed via plain-object bracket notation.
- *
- * @param prevWorld  Previous-tick world state, used to widen the spider hit box to cover the
- *                   full interpolated path between ticks. Pass null when unavailable (tests,
- *                   stationary spider).
+ * `spiderHit` is passed in (snapshotted at down by the arbiter) rather than
+ * recomputed, so a camera pan between down and up can't move the spider out from
+ * under the press. Returns true iff a command was dropped at the paused cap.
  */
-export function handleSurfaceRightClick(
+export function handleSurfaceCommandTap(
   world: WorldState,
-  viewState: ViewState,
-  screenX: number,
-  screenY: number,
-  state: SurfaceInputState,
+  tileX: number,
+  tileY: number,
+  spiderHit: boolean,
+  isPaused: boolean,
   playerColonyId: ColonyId = PLAYER_COLONY_ID,
-  prevWorld: WorldState | null = null,
-): void {
-  if (viewState.activeView !== 'surface') return;
-  if (isPointerOverHUD(screenX, screenY, viewState)) return;
-  const { tileX, tileY } = screenToTile(screenX, screenY, viewState.surfaceCamera);
-  if (tileX < 0 || tileY < 0) return;
+): boolean {
+  if (tileX < 0 || tileY < 0) return false;
 
-  // Spider priority toggle (S7/D1): right-click within the spider sprite bounds.
-  // Hit box is the union of the current-tick and previous-tick bounding boxes, so the
-  // trailing visual edge (which lags behind the sim position during interpolation) always
-  // registers. When prevWorld is null (stationary or unavailable) the box is exactly the
-  // 48×48px sprite; when the spider moved it expands by one tile in the movement direction.
-  if (world.spider !== null) {
-    const camLeft = Math.floor(
-      viewState.surfaceCamera.x - viewState.surfaceCamera.viewportWidth / 2,
-    );
-    const camTop = Math.floor(
-      viewState.surfaceCamera.y - viewState.surfaceCamera.viewportHeight / 2,
-    );
-    const currScrX = (world.spider.posX >> FP_SHIFT) * TILE_SIZE_PX - camLeft * TILE_SIZE_PX;
-    const currScrY = (world.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop * TILE_SIZE_PX;
-    const prevScrX =
-      prevWorld?.spider != null
-        ? (prevWorld.spider.posX >> FP_SHIFT) * TILE_SIZE_PX - camLeft * TILE_SIZE_PX
-        : currScrX;
-    const prevScrY =
-      prevWorld?.spider != null
-        ? (prevWorld.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop * TILE_SIZE_PX
-        : currScrY;
-    const halfW = SPIDER_SPRITE_WIDTH / 2;
-    const halfH = SPIDER_SPRITE_HEIGHT / 2;
-    if (
-      screenX >= Math.min(currScrX, prevScrX) - halfW &&
-      screenX < Math.max(currScrX, prevScrX) + halfW &&
-      screenY >= Math.min(currScrY, prevScrY) - halfH &&
-      screenY < Math.max(currScrY, prevScrY) + halfH
-    ) {
-      state.pendingEntranceTileX = null;
-      state.pendingEntranceTileY = null;
-      const cmd: MarkSpiderPriorityCommand = {
-        type: 'MarkSpiderPriority',
-        colonyId: playerColonyId,
-        isPriority: world.spiderPriorityColonyId !== playerColonyId,
-        issuedAtTick: world.tick,
-      };
-      world.commandQueue.push(cmd);
-      return;
-    }
+  // 1. Spider priority toggle (was right-click pre-rework; now a Command tap).
+  if (spiderHit && world.spider !== null) {
+    const cmd: MarkSpiderPriorityCommand = {
+      type: 'MarkSpiderPriority',
+      colonyId: playerColonyId,
+      isPriority: world.spiderPriorityColonyId !== playerColonyId,
+      issuedAtTick: world.tick,
+    };
+    return !enqueueCommand(world, cmd, isPaused);
   }
 
-  // Rally-point clear: right-click on the current rally point tile (SURF-04)
+  // 2. Food-pile mark.
+  const pile = findFoodPileAt(world, tileX, tileY);
+  if (pile) {
+    const cmd: MarkFoodPileCommand = {
+      type: 'MarkFoodPile',
+      colonyId: playerColonyId,
+      tileX: pile.tileX,
+      tileY: pile.tileY,
+      issuedAtTick: world.tick,
+    };
+    return !enqueueCommand(world, cmd, isPaused);
+  }
+
+  // 3. Clear-rally — only when the tapped tile IS the current rally point. This
+  //    precedes foreign-entrance so a rally placed ON an enemy entrance can be
+  //    cleared by tapping it again (Codex R1-4: enemy-entrance rallies were
+  //    otherwise unclearable).
   const playerColony = world.colonies[playerColonyId]; // plain-object bracket access (ADR-0006)
-  if (playerColony !== undefined && playerColony.rallyPoint !== null) {
-    if (playerColony.rallyPoint.tileX === tileX && playerColony.rallyPoint.tileY === tileY) {
-      const cmd: ClearRallyPointCommand = {
-        type: 'ClearRallyPoint',
-        colonyId: playerColonyId,
-        issuedAtTick: world.tick,
-      };
-      world.commandQueue.push(cmd);
-      return;
-    }
+  if (
+    playerColony !== undefined &&
+    playerColony.rallyPoint !== null &&
+    playerColony.rallyPoint.tileX === tileX &&
+    playerColony.rallyPoint.tileY === tileY
+  ) {
+    const cmd: ClearRallyPointCommand = {
+      type: 'ClearRallyPoint',
+      colonyId: playerColonyId,
+      issuedAtTick: world.tick,
+    };
+    return !enqueueCommand(world, cmd, isPaused);
   }
 
-  // Entrance preview — only on tiles DesignateEntrance will actually accept. The
-  // sim rejects food piles, occupied entrances, and (PR 4) any tile whose
-  // candidate+clearance neighbourhood is not in the single connected walkable
-  // component of the frozen terrain. Previewing those would advertise a target
-  // the sim silently drops, so confirmation would do nothing. Invalid click: no
-  // preview, no state change.
-  if (!isValidEntranceTarget(world, tileX, tileY)) return;
-  state.pendingEntranceTileX = tileX;
-  state.pendingEntranceTileY = tileY;
+  // 4. Foreign/enemy entrance rally (issue #14): tap an enemy entrance tile to
+  //    rally Fighting ants there. Own-colony entrances fall through (no-op).
+  if (isForeignColonyEntrance(world, tileX, tileY, playerColonyId)) {
+    return handleSetRallyPoint(world, tileX, tileY, playerColonyId, isPaused);
+  }
+
+  // 5. Empty-tile set-rally (SURF-04).
+  if (isEmptySurfaceTile(world, tileX, tileY)) {
+    return handleSetRallyPoint(world, tileX, tileY, playerColonyId, isPaused);
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
-// registerSurfaceInput — wires Phaser pointer events
+// handleSurfaceDigTap — the Dig-tool tap on the surface view
 // ---------------------------------------------------------------------------
 
 /**
- * registerSurfaceInput — attach surface-click handlers to a Phaser.Scene.
- *
- * Called from GameScene.create() (Plan 06 Task 3). Each handler internally
- * guards on viewState.activeView === 'surface', so surface + underground
- * handlers may both be registered without interference.
- *
- * getWorld is a LAZY accessor — called on every pointer event — so the
- * handler always dispatches against the live WorldState even if
- * GameScene swaps references mid-session (bootFresh, bootFromSave,
- * restartGame). Direct world-reference capture was a stale-closure bug:
- * the world assigned after registration was invisible to the handler.
- * Returns undefined pre-boot; all handlers short-circuit.
- *
- * @param scene     - Phaser.Scene (GameScene) providing the input event bus.
- * @param getWorld  - Lazy accessor for the live WorldState.
- * @param viewState - Render-layer ViewState; activeView is read for guard.
+ * Surface Dig tap → DesignateEntrance on a valid target (PLAN §B6). One tap,
+ * irreversible in Stage 1 (entrance undo is a deferred sim-touch). A tap on an
+ * invalid target is a no-op (the hover outline already shows red there). Returns
+ * true iff the command was dropped at the paused cap.
  */
-export function registerSurfaceInput(
-  scene: Phaser.Scene,
-  getWorld: () => WorldState | undefined,
-  viewState: ViewState,
-  getPrevWorld?: () => WorldState | null,
-): SurfaceInputState {
-  const state: SurfaceInputState = {
-    pendingEntranceTileX: null,
-    pendingEntranceTileY: null,
+export function handleSurfaceDigTap(
+  world: WorldState,
+  tileX: number,
+  tileY: number,
+  isPaused: boolean,
+  playerColonyId: ColonyId = PLAYER_COLONY_ID,
+): boolean {
+  if (tileX < 0 || tileY < 0) return false;
+  if (!isValidEntranceTarget(world, tileX, tileY)) return false;
+  const cmd: DesignateEntranceCommand = {
+    type: 'DesignateEntrance',
+    colonyId: playerColonyId,
+    surfaceTileX: tileX,
+    surfaceTileY: tileY,
+    issuedAtTick: world.tick,
   };
-  scene.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-    const world = getWorld();
-    if (!world) return;
-    if (pointer.leftButtonDown()) {
-      handleSurfaceLeftClick(world, viewState, pointer.x, pointer.y, state);
-    } else if (pointer.rightButtonDown()) {
-      const prevWorld = getPrevWorld?.() ?? null;
-      handleSurfaceRightClick(
-        world,
-        viewState,
-        pointer.x,
-        pointer.y,
-        state,
-        PLAYER_COLONY_ID,
-        prevWorld,
-      );
-    }
-  });
-  return state;
+  return !enqueueCommand(world, cmd, isPaused);
 }
