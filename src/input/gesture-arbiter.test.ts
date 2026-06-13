@@ -390,219 +390,178 @@ describe('paused-queue-full surfacing', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Fast-stroke deferral + per-frame flushPaint (Fix 1)
+// Fast-stroke cap deferral: cursor-hold + re-emit on the NEXT move (Fix 1).
+//
+// The minimal mechanism (no per-frame flush, no post-release drain): a paint move
+// that out-runs the MAX_COMMANDS_PER_TICK cap holds the stroke cursor at the last
+// enqueued tile. The held tiles re-emit when the NEXT pointermove drives
+// continuePaintStroke from that same cursor — by then the sim has drained the
+// queue, so the next move has fresh cap budget. A continuous drag therefore loses
+// nothing. Release ENDS the stroke (no draining). cancelGesture clears.
 // ---------------------------------------------------------------------------
 
-describe('flushPaint drains the deferred tail', () => {
-  it('a paint move that out-runs the cap holds the cursor; a later flush re-emits', () => {
-    const h = makeHarness('underground', 'dig');
+describe('fast-stroke cap deferral (cursor-hold + re-emit on next move)', () => {
+  it('a move that out-runs the cap holds the cursor; the NEXT move continues from there', () => {
+    const h = makeHarness('underground', 'dig', 100, 20);
     h.paused.value = false;
-    // Fill the queue to the cap so EVERY mark this stroke emits is refused.
-    for (let i = 0; i < 64; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
-    const start = tileCenter(5, 8, h.vs);
-    const end = tileCenter(8, 8, h.vs);
+    // Leave exactly 3 free slots: the begin-tile (1,10) takes one, then the
+    // classify→paint move emits 2 more tiles (2,10)+(3,10) before the cap refuses
+    // (4,10) — so the cursor is HELD at the real tile (3,10), not the sentinel.
+    for (let i = 0; i < 61; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
+    const start = tileCenter(1, 10, h.vs);
+    const mid = tileCenter(8, 10, h.vs);
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
-    h.arbiter.onPointerMove(ev(LEFT_BUTTON, end.x, end.y)); // classify → paint; all marks refused
-    // Nothing got through (queue still exactly the 64 NoOps); silent (unpaused).
-    expect(h.world.commandQueue.filter((c) => c.type === 'MarkDigTile')).toHaveLength(0);
-    expect(h.pausedFullCount()).toBe(0);
-    expect(h.arbiter.isPainting()).toBe(true); // stroke still live, cursor held
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, mid.x, mid.y)); // classify → paint; caps mid-segment
+    const firstMarks = h.world.commandQueue
+      .filter((c) => c.type === 'MarkDigTile')
+      .map((c) => [(c as { tileX: number }).tileX, (c as { tileY: number }).tileY]);
+    expect(firstMarks).toEqual([
+      [1, 10],
+      [2, 10],
+      [3, 10],
+    ]); // begin + 2 steps, then the cap held the cursor at (3,10)
+    expect(h.pausedFullCount()).toBe(0); // unpaused → silent
+    expect(h.arbiter.isPainting()).toBe(true); // stroke live, cursor held at (3,10)
 
-    // Simulate tick() draining the queue, then the per-frame flush.
+    // Simulate tick() draining the queue, then the player keeps dragging (the
+    // NEXT pointermove — this is what re-emits the held tail, NOT a per-frame flush).
     h.world.commandQueue.length = 0;
-    h.arbiter.flushPaint(h.world, false);
+    const end = tileCenter(10, 10, h.vs);
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, end.x, end.y));
     const marks = h.world.commandQueue
       .filter((c) => c.type === 'MarkDigTile')
       .map((c) => [(c as { tileX: number }).tileX, (c as { tileY: number }).tileY]);
-    // The deferred tiles (5,8)..(8,8) now emit toward the stored target.
-    expect(marks.length).toBeGreaterThan(0);
-    expect(marks).toContainEqual([8, 8]); // reached the target tile
+    // Continues from the held cursor (3,10): no gap, no duplicate, reaches target.
+    expect(marks).toContainEqual([4, 10]); // the tile the cap refused last move
+    expect(marks).toContainEqual([10, 10]); // reached the latest target tile
+    expect(marks).not.toContainEqual([3, 10]); // already enqueued — not re-emitted
   });
 
-  it('flushPaint is a no-op when no paint stroke is active', () => {
-    const h = makeHarness('underground', 'dig');
-    h.arbiter.flushPaint(h.world, false);
-    expect(h.world.commandQueue).toHaveLength(0);
-  });
-
-  it('flushPaint itself surfaces the hint on a paused cap refusal during drain', () => {
-    const h = makeHarness('underground', 'dig');
-    h.paused.value = true;
-    const start = tileCenter(5, 8, h.vs);
-    const end = tileCenter(8, 8, h.vs);
+  it('a continuous drag across many moves digs EVERY tile (queue drains between moves)', () => {
+    // Wide grid; drag in single-tile steps, draining the queue between each move
+    // (one tick per frame). Every stepped tile must be dug exactly once.
+    const h = makeHarness('underground', 'dig', 100, 20);
+    h.paused.value = false;
+    const startTile = 1;
+    const endTile = 90;
+    const start = tileCenter(startTile, 10, h.vs);
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
-    h.arbiter.onPointerMove(ev(LEFT_BUTTON, end.x, end.y)); // paint a few tiles while paused
-    // Jam the queue, then move the target further so the cursor can't reach it.
-    while (h.world.commandQueue.length < 64)
-      h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: 0 });
-    const far = tileCenter(12, 8, h.vs);
-    h.arbiter.onPointerMove(ev(LEFT_BUTTON, far.x, far.y)); // records target, refused at cap (fires hint)
-    // Capture the count AFTER the move so the next assertion isolates flushPaint.
-    const afterMove = h.pausedFullCount();
-    h.arbiter.flushPaint(h.world, true); // still capped, target unreached → flushPaint fires the hint
-    expect(h.pausedFullCount()).toBeGreaterThan(afterMove);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Fix 1: the deferred-paint drain OUTLIVES the gesture. On pointerup of a paint
-// stroke whose cursor has not reached the target, the arbiter enters a "draining"
-// state — the stored stroke + target persist and the per-frame flushPaint keeps
-// draining toward the target across ticks (and across pause→resume) until every
-// tile is dug, THEN clears. cancelGesture ABANDONS (clear immediately). A new
-// pointerdown supersedes a still-draining stroke.
-// ---------------------------------------------------------------------------
-
-describe('deferred-paint drain outlives the gesture (Fix 1)', () => {
-  /** Drain the queue and flush until the stroke finishes (or a tick budget runs out). */
-  function drainToCompletion(h: Harness, paused: boolean, marks: number[][]): void {
-    for (let i = 0; i < 20 && h.arbiter.isPainting(); i++) {
-      // Collect this frame's marks, then simulate tick() draining the queue.
+    const marks: number[][] = [];
+    for (let x = startTile + 1; x <= endTile; x++) {
+      const p = tileCenter(x, 10, h.vs);
+      h.arbiter.onPointerMove(ev(LEFT_BUTTON, p.x, p.y));
       for (const c of h.world.commandQueue) {
         if (c.type === 'MarkDigTile') {
           marks.push([(c as { tileX: number }).tileX, (c as { tileY: number }).tileY]);
         }
       }
-      h.world.commandQueue.length = 0;
-      h.arbiter.flushPaint(h.world, paused);
+      h.world.commandQueue.length = 0; // tick() drains between moves
     }
-    // Capture the final partial frame (the flush that finished the stroke).
-    for (const c of h.world.commandQueue) {
-      if (c.type === 'MarkDigTile') {
-        marks.push([(c as { tileX: number }).tileX, (c as { tileY: number }).tileY]);
-      }
-    }
-  }
-
-  it('a >64-tile stroke released before the queue drains digs EVERY tile (no loss)', () => {
-    // Wide grid so a single straight stroke spans far more than the 64/tick cap.
-    const h = makeHarness('underground', 'dig', 100, 20);
-    h.paused.value = false;
-    const start = tileCenter(1, 10, h.vs);
-    const end = tileCenter(90, 10, h.vs); // 90 new tiles → well past the cap
-    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
-    h.arbiter.onPointerMove(ev(LEFT_BUTTON, end.x, end.y)); // classify → paint; caps at 64, holds
-    expect(h.world.commandQueue.filter((c) => c.type === 'MarkDigTile')).toHaveLength(64);
-
-    // Release with the queue STILL FULL (the tick hasn't drained it yet) — the
-    // cursor is parked mid-stroke, so the pointerup flush can't finish and the
-    // stroke must hand off to the per-frame drain.
-    h.arbiter.onPointerUp(ev(LEFT_BUTTON, end.x, end.y));
-    expect(h.arbiter.hasPendingGesture()).toBe(false); // gesture over for new input
-    expect(h.arbiter.isPainting()).toBe(true); // but still draining the tail
-
-    const marks: number[][] = [];
-    drainToCompletion(h, false, marks);
-
-    // Every tile x=1..90 dug exactly once — the tail was NOT lost on release.
+    h.arbiter.onPointerUp(
+      ev(LEFT_BUTTON, tileCenter(endTile, 10, h.vs).x, tileCenter(endTile, 10, h.vs).y),
+    );
     const xs = marks.map((m) => m[0]).sort((a, b) => a! - b!);
-    expect(xs).toEqual(Array.from({ length: 90 }, (_, i) => i + 1));
-    // Drain finished → stroke cleared.
-    expect(h.arbiter.isPainting()).toBe(false);
+    expect(xs).toEqual(Array.from({ length: 90 }, (_, i) => i + 1)); // 1..90 each once
+    expect(h.arbiter.isPainting()).toBe(false); // release ended the stroke
   });
 
-  it('a PAUSED >64-tile stroke released then resumed digs all tiles', () => {
+  it('begin: a down-tile refused at the cap leaves the cursor at the sentinel; the stroke still paints once the queue drains', () => {
     const h = makeHarness('underground', 'dig', 100, 20);
-    h.paused.value = true; // bare user-pause: edits queue, sim frozen
-    const start = tileCenter(1, 10, h.vs);
-    const end = tileCenter(90, 10, h.vs);
-    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
-    h.arbiter.onPointerMove(ev(LEFT_BUTTON, end.x, end.y)); // 64 queued, rest held (paused)
-    expect(h.world.commandQueue.filter((c) => c.type === 'MarkDigTile')).toHaveLength(64);
-
-    // Release while still paused — the target must survive so resume can finish it.
-    h.arbiter.onPointerUp(ev(LEFT_BUTTON, end.x, end.y));
-    expect(h.arbiter.isPainting()).toBe(true); // draining, target preserved
-
-    // While paused the sim never ticks → the queue never drains, so it stays at
-    // the cap and a flush makes NO progress. The stroke must remain held (the
-    // deferred tail must not be discarded just because frames pass while paused).
-    h.arbiter.flushPaint(h.world, true);
-    expect(h.world.commandQueue.filter((c) => c.type === 'MarkDigTile')).toHaveLength(64); // unchanged
-    expect(h.arbiter.isPainting()).toBe(true);
-
-    // Resume: now ticks drain the queue each frame and the deferred tail emits
-    // until every tile is dug.
     h.paused.value = false;
-    const marks: number[][] = [];
-    drainToCompletion(h, false, marks);
-    const xs = marks.map((m) => m[0]).sort((a, b) => a! - b!);
-    expect(xs).toEqual(Array.from({ length: 90 }, (_, i) => i + 1));
-    expect(h.arbiter.isPainting()).toBe(false);
+    // Jam the queue so the eager begin-tile mark (fired on the classify→paint
+    // move) is refused at the cap. beginPaintStroke leaves the cursor at the
+    // sentinel (-1,-1) so the stroke is not corrupted by a phantom start tile.
+    for (let i = 0; i < 64; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
+    const start = tileCenter(5, 10, h.vs);
+    const firstMove = tileCenter(5, 13, h.vs); // crosses threshold; begin-tile (5,10) refused
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, firstMove.x, firstMove.y));
+    expect(h.world.commandQueue.filter((c) => c.type === 'MarkDigTile')).toHaveLength(0); // all refused
+    expect(h.arbiter.isPainting()).toBe(true); // stroke armed, cursor at sentinel
+
+    // Drain; the next move from the sentinel emits its target via the single-tile
+    // path and the stroke resumes painting normally (it was not left broken by the
+    // refused begin). The begin-tile that the cap dropped is the documented
+    // accepted residual of a coalesced refusal — what matters is the stroke heals.
+    h.world.commandQueue.length = 0;
+    const next = tileCenter(5, 13, h.vs);
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, next.x, next.y));
+    expect(
+      h.world.commandQueue
+        .filter((c) => c.type === 'MarkDigTile')
+        .map((c) => [(c as { tileX: number }).tileX, (c as { tileY: number }).tileY]),
+    ).toContainEqual([5, 13]); // stroke resumed and painted the move target
+
+    // And a later move continues 4-connected from there with no gap.
+    h.world.commandQueue.length = 0;
+    const further = tileCenter(5, 15, h.vs);
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, further.x, further.y));
+    const tail = h.world.commandQueue
+      .filter((c) => c.type === 'MarkDigTile')
+      .map((c) => [(c as { tileX: number }).tileX, (c as { tileY: number }).tileY]);
+    expect(tail).toEqual([
+      [5, 14],
+      [5, 15],
+    ]);
   });
 
-  it('a small stroke whose cursor already reached the target clears immediately on up (no draining)', () => {
-    const h = makeHarness('underground', 'dig');
-    h.paused.value = false;
-    const start = tileCenter(5, 8, h.vs);
-    const end = tileCenter(8, 8, h.vs); // few tiles, well under the cap
+  it('paused: a cap refusal on a paint move surfaces the hint', () => {
+    const h = makeHarness('underground', 'dig', 100, 20);
+    h.paused.value = true; // bare user-pause: queue never drains
+    for (let i = 0; i < 64; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
+    const start = tileCenter(1, 10, h.vs);
+    const end = tileCenter(8, 10, h.vs);
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
-    h.arbiter.onPointerMove(ev(LEFT_BUTTON, end.x, end.y));
-    h.arbiter.onPointerUp(ev(LEFT_BUTTON, end.x, end.y));
-    // Cursor reached the target during the stroke → no leftover drain.
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, end.x, end.y)); // refused at cap while paused → hint
+    expect(h.pausedFullCount()).toBeGreaterThan(0);
+  });
+
+  it('release ENDS the stroke immediately — no post-release draining', () => {
+    // Even when a move out-ran the cap and the tail is held, release clears the
+    // stroke. (The minimal design relies on intervening moves, not a drain.)
+    const h = makeHarness('underground', 'dig', 100, 20);
+    h.paused.value = false;
+    for (let i = 0; i < 64; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
+    const start = tileCenter(1, 10, h.vs);
+    const end = tileCenter(90, 10, h.vs); // single coalesced >64-tile move
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, end.x, end.y)); // caps, holds the tail
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, end.x, end.y)); // IMMEDIATE release, no intervening move
+    // Stroke is fully ended; nothing lingers active to drain on later frames.
     expect(h.arbiter.isPainting()).toBe(false);
     expect(h.arbiter.hasPendingGesture()).toBe(false);
+    // Accepted residual: the held tail past the cap is NOT recovered (there is no
+    // later move and deliberately no flush). Draining the queue + further input
+    // must not resurrect the old stroke.
+    h.world.commandQueue.length = 0;
+    const tap = tileCenter(3, 5, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, tap.x, tap.y));
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, tap.x, tap.y)); // a fresh, independent tap
+    const marks = h.world.commandQueue
+      .filter((c) => c.type === 'MarkDigTile')
+      .map((c) => [(c as { tileX: number }).tileX, (c as { tileY: number }).tileY]);
+    expect(marks).toEqual([[3, 5]]); // only the new tap; the old stroke did not resume
   });
 
-  it('cancelGesture mid-stroke ABANDONS the paint — no further tiles drain', () => {
+  it('cancelGesture mid-stroke clears the paint — a later move does not resume it', () => {
     const h = makeHarness('underground', 'dig', 100, 20);
     h.paused.value = false;
     const start = tileCenter(1, 10, h.vs);
-    const end = tileCenter(90, 10, h.vs);
+    const mid = tileCenter(5, 10, h.vs);
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
-    h.arbiter.onPointerMove(ev(LEFT_BUTTON, end.x, end.y)); // caps at 64, holds, would defer the rest
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, mid.x, mid.y)); // paint a few tiles
+    expect(h.arbiter.isPainting()).toBe(true);
 
     // A modal opens / view switches mid-stroke → cancelGesture abandons.
     h.arbiter.cancelGesture();
     expect(h.arbiter.isPainting()).toBe(false);
     expect(h.arbiter.hasPendingGesture()).toBe(false);
 
-    // Drain the queue and flush repeatedly — NOTHING more should emit.
+    // A stray pointermove with no live snapshot must emit nothing.
     h.world.commandQueue.length = 0;
-    for (let i = 0; i < 5; i++) h.arbiter.flushPaint(h.world, false);
+    const stray = tileCenter(9, 10, h.vs);
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, stray.x, stray.y));
     expect(h.world.commandQueue.filter((c) => c.type === 'MarkDigTile')).toHaveLength(0);
-  });
-
-  it('cancelGesture ABANDONS a stroke that is already in the draining state', () => {
-    const h = makeHarness('underground', 'dig', 100, 20);
-    h.paused.value = false;
-    const start = tileCenter(1, 10, h.vs);
-    const end = tileCenter(90, 10, h.vs);
-    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
-    h.arbiter.onPointerMove(ev(LEFT_BUTTON, end.x, end.y));
-    h.arbiter.onPointerUp(ev(LEFT_BUTTON, end.x, end.y)); // → draining
-    expect(h.arbiter.isPainting()).toBe(true);
-
-    h.arbiter.cancelGesture(); // e.g. blur / colony switch during the drain
-    expect(h.arbiter.isPainting()).toBe(false);
-    h.world.commandQueue.length = 0;
-    for (let i = 0; i < 5; i++) h.arbiter.flushPaint(h.world, false);
-    expect(h.world.commandQueue.filter((c) => c.type === 'MarkDigTile')).toHaveLength(0);
-  });
-
-  it('a new pointerdown SUPERSEDES a still-draining stroke (fresh gesture, old target dropped)', () => {
-    const h = makeHarness('underground', 'dig', 100, 20);
-    h.paused.value = false;
-    const start = tileCenter(1, 10, h.vs);
-    const end = tileCenter(90, 10, h.vs);
-    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
-    h.arbiter.onPointerMove(ev(LEFT_BUTTON, end.x, end.y));
-    h.arbiter.onPointerUp(ev(LEFT_BUTTON, end.x, end.y)); // → draining toward (90,10)
-    expect(h.arbiter.isPainting()).toBe(true);
-
-    // A brand-new press elsewhere: the draining stroke is cleared, a fresh tap is
-    // armed. A quick down+up taps the new tile only — the old (90,10) target is
-    // gone, so a later flush does not resume it.
-    h.world.commandQueue.length = 0;
-    const tap = tileCenter(3, 5, h.vs);
-    h.arbiter.onPointerDown(ev(LEFT_BUTTON, tap.x, tap.y));
-    expect(h.arbiter.hasPendingGesture()).toBe(true);
-    h.arbiter.onPointerUp(ev(LEFT_BUTTON, tap.x, tap.y)); // tap → one mark on (3,5)
-    h.arbiter.flushPaint(h.world, false); // old drain must NOT resume
-    const marks = h.world.commandQueue
-      .filter((c) => c.type === 'MarkDigTile')
-      .map((c) => [(c as { tileX: number }).tileX, (c as { tileY: number }).tileY]);
-    expect(marks).toEqual([[3, 5]]);
   });
 });
 

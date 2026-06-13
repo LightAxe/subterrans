@@ -212,6 +212,42 @@ export function isSpiderHit(
 }
 
 // ---------------------------------------------------------------------------
+// effectiveSpiderPriority — pure, queue-aware current-priority resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the EFFECTIVE spider-priority flag for `playerColonyId`, folding in any
+ * MarkSpiderPriority command ALREADY queued but not yet applied (Codex P2 —
+ * mirrors `effectiveDigState` in underground-input.ts).
+ *
+ * While bare-user-paused the sim never advances, so `world.spiderPriorityColonyId`
+ * stays frozen: two Command-taps on the spider would both read the same value and
+ * both enqueue `isPriority: true` (the second never toggles OFF). The toggle must
+ * instead resolve against what the queue WILL do — scan back-to-front for the
+ * LATEST queued MarkSpiderPriority for the player colony (tick.ts drains FIFO, so
+ * the last-queued command wins) and return its `isPriority`; with none pending,
+ * fall back to the live `world.spiderPriorityColonyId === playerColonyId`.
+ *
+ * Pure + read-only: never mutates the queue or any sim state. Unpaused this is a
+ * near-no-op — the queue drains every tick so it is usually empty of pending
+ * priority commands, and the live flag is already current — so the caller can use
+ * it unconditionally.
+ */
+export function effectiveSpiderPriority(world: WorldState, playerColonyId: ColonyId): boolean {
+  const queue = world.commandQueue;
+  // Walk back-to-front so the FIRST match is the LATEST-queued command (the one
+  // tick.ts applies last, hence the one that wins).
+  for (let i = queue.length - 1; i >= 0; i--) {
+    const cmd = queue[i];
+    if (!cmd) continue;
+    if (cmd.type === 'MarkSpiderPriority' && cmd.colonyId === playerColonyId) {
+      return cmd.isPriority;
+    }
+  }
+  return world.spiderPriorityColonyId === playerColonyId;
+}
+
+// ---------------------------------------------------------------------------
 // handleSetRallyPoint — inner helper (pure dispatch, extracted for testability)
 // ---------------------------------------------------------------------------
 
@@ -264,11 +300,16 @@ export function handleSurfaceCommandTap(
   if (tileX < 0 || tileY < 0) return false;
 
   // 1. Spider priority toggle (was right-click pre-rework; now a Command tap).
+  //    Toggle against the EFFECTIVE priority (effectiveSpiderPriority) — the live
+  //    flag folded with any already-queued MarkSpiderPriority for this colony — so
+  //    a bare-user-paused tap-tap nets priority-on-then-off (Codex P2). Unpaused
+  //    the queue drains each tick, so the effective value equals
+  //    spiderPriorityColonyId === playerColonyId and behaviour is unchanged.
   if (spiderHit && world.spider !== null) {
     const cmd: MarkSpiderPriorityCommand = {
       type: 'MarkSpiderPriority',
       colonyId: playerColonyId,
-      isPriority: world.spiderPriorityColonyId !== playerColonyId,
+      isPriority: !effectiveSpiderPriority(world, playerColonyId),
       issuedAtTick: world.tick,
     };
     return !enqueueCommand(world, cmd, isPaused);

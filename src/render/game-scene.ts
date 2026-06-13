@@ -1599,19 +1599,6 @@ export class GameScene extends Phaser.Scene {
     // context. Also refreshes the arbiter's context fingerprint.
     this.arbiter.reconcileContext();
 
-    // Stage 1 (Fix 1): drain any dig tiles a fast paint stroke deferred past the
-    // MAX_COMMANDS_PER_TICK cap. flushPaint re-drives the active stroke toward
-    // its stored target so the deferred tail emits as the queue drains (≤64/tick)
-    // even if the pointer has stopped; it is a no-op when no paint stroke is
-    // active or the cursor has already reached the target. Runs before
-    // gameLoop.update below so this frame's enqueue is drained by this frame's
-    // tick(s). Guarded by canEditWorld defence-in-depth: a modal already cancels
-    // the gesture via openPauseMenu/restartGame, but this keeps a stray active
-    // stroke from enqueueing under a modal that didn't go through cancelGesture.
-    if (this.world && !this.isModalOpen()) {
-      this.arbiter.flushPaint(this.world, isPausedByAny(this.pauseReasons));
-    }
-
     // Track active view for anything that needs to diff on toggle.
     if (this.viewState.activeView !== this.lastActiveView) {
       this.lastActiveView = this.viewState.activeView;

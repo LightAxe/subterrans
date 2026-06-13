@@ -17,6 +17,7 @@ import {
   isForeignColonyEntrance,
   isValidEntranceTarget,
   isSpiderHit,
+  effectiveSpiderPriority,
   handleSurfaceCommandTap,
   handleSurfaceDigTap,
 } from './surface-input.js';
@@ -262,6 +263,81 @@ describe('handleSurfaceCommandTap priority', () => {
     const world = makeWorld({ colonies: { [PLAYER_COLONY_ID]: makeColony() } });
     handleSurfaceCommandTap(world, -1, 2, false, false);
     expect(world.commandQueue).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// effectiveSpiderPriority + paused spider-priority toggle (Codex P2)
+// ---------------------------------------------------------------------------
+
+describe('effectiveSpiderPriority', () => {
+  it('falls back to the live spiderPriorityColonyId when nothing is queued', () => {
+    const offWorld = makeWorld({ spiderPriorityColonyId: null });
+    expect(effectiveSpiderPriority(offWorld, PLAYER_COLONY_ID)).toBe(false);
+    const onWorld = makeWorld({ spiderPriorityColonyId: PLAYER_COLONY_ID });
+    expect(effectiveSpiderPriority(onWorld, PLAYER_COLONY_ID)).toBe(true);
+  });
+
+  it('reflects the LATEST queued MarkSpiderPriority for the player colony', () => {
+    const world = makeWorld({
+      spiderPriorityColonyId: null,
+      commandQueue: [
+        {
+          type: 'MarkSpiderPriority',
+          colonyId: PLAYER_COLONY_ID,
+          isPriority: true,
+          issuedAtTick: 0,
+        },
+        {
+          type: 'MarkSpiderPriority',
+          colonyId: PLAYER_COLONY_ID,
+          isPriority: false,
+          issuedAtTick: 1,
+        },
+      ],
+    });
+    // Last-queued wins (mirrors tick.ts FIFO apply order) → effectively OFF.
+    expect(effectiveSpiderPriority(world, PLAYER_COLONY_ID)).toBe(false);
+  });
+
+  it('ignores queued MarkSpiderPriority for OTHER colonies', () => {
+    const ENEMY = 2 as ColonyId;
+    const world = makeWorld({
+      spiderPriorityColonyId: null,
+      commandQueue: [
+        { type: 'MarkSpiderPriority', colonyId: ENEMY, isPriority: true, issuedAtTick: 0 },
+      ],
+    });
+    expect(effectiveSpiderPriority(world, PLAYER_COLONY_ID)).toBe(false);
+  });
+});
+
+describe('paused spider-priority tap-tap toggles correctly (Codex P2)', () => {
+  it('while PAUSED, two taps net priority-on-then-off (frozen sim, queue-aware)', () => {
+    // Bare-user-paused: the sim never advances, so spiderPriorityColonyId stays
+    // frozen at null across both taps. The toggle must resolve against the queue.
+    const world = makeWorld({ spider: makeSpider(10, 2), spiderPriorityColonyId: null });
+    handleSurfaceCommandTap(world, 10, 2, true /* spiderHit */, true /* paused */);
+    handleSurfaceCommandTap(world, 10, 2, true, true);
+    const cmds = world.commandQueue.filter((c) => c.type === 'MarkSpiderPriority') as Array<{
+      isPriority: boolean;
+    }>;
+    expect(cmds).toHaveLength(2);
+    expect(cmds[0]!.isPriority).toBe(true); // first tap turns priority ON
+    expect(cmds[1]!.isPriority).toBe(false); // second tap toggles it back OFF
+  });
+
+  it('unpaused behaviour unchanged: a single tap toggles against the live flag', () => {
+    // Priority already ON in the live world (queue empty, as it is after a tick
+    // drains) → one tap turns it OFF.
+    const world = makeWorld({
+      spider: makeSpider(10, 2),
+      spiderPriorityColonyId: PLAYER_COLONY_ID,
+    });
+    handleSurfaceCommandTap(world, 10, 2, true /* spiderHit */, false /* unpaused */);
+    const cmd = lastCmd(world) as { type: string; isPriority: boolean };
+    expect(cmd.type).toBe('MarkSpiderPriority');
+    expect(cmd.isPriority).toBe(false); // toggled OFF against the live ON flag
   });
 });
 

@@ -362,9 +362,18 @@ export function beginPaintStroke(
  *     continues (matching the prior behaviour).
  *   - CAP REFUSAL (enqueueCommand returned false): the command was deferred, not
  *     emitted. The cursor is LEFT at the last successfully-handled tile (it is
- *     NOT advanced onto the refused tile), the loop STOPS, and `capHit` is set
- *     so the refused tile + the remainder re-emit on a later flush/move (the
- *     arbiter re-drives toward the stored target as the queue drains).
+ *     NOT advanced onto the refused tile), the loop STOPS, and `capHit` is set.
+ *
+ * The held cursor is the whole deferral mechanism: the refused tile + remainder
+ * re-emit when the NEXT pointermove calls continuePaintStroke from that same held
+ * cursor (the sim drains the queue between moves, so the next move has fresh cap
+ * budget). During a continuous drag this loses nothing. ACCEPTED narrow residual:
+ * a single coalesced >64-tile pointermove followed by an IMMEDIATE release with NO
+ * intervening move drops the tail past the cap — there is no later move to re-emit
+ * it from the held cursor, and there is deliberately no per-frame flush / post-
+ * release drain to paper over it (that machinery caused worse bugs: it redrew a
+ * curved stroke as a straight line to the latest target, and refilled all 64
+ * slots every tick, starving the AI controller's commands).
  *
  * Player-grid-only. Returns true iff a command in this segment was refused at the
  * cap (capHit). A non-markable skip never sets the return.
