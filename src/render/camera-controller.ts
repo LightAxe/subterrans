@@ -27,8 +27,17 @@ import {
   cancelZoomLerp,
 } from './camera-adapter.js';
 
-/** Per-wheel-notch zoom multiplier (a notch zooms in by ×1.15, out by ÷1.15). */
+/** Per-wheel-notch zoom multiplier (one full ~WHEEL_NOTCH_PX notch zooms ×1.15 / ÷1.15). */
 export const WHEEL_ZOOM_STEP = 1.15;
+
+/**
+ * Wheel deltaY (px) treated as one full zoom notch. A standard mouse-wheel notch is
+ * ~100px; trackpads and high-resolution wheels emit MANY small deltas per gesture, so the
+ * zoom factor is scaled by deltaY/WHEEL_NOTCH_PX (WHEEL_ZOOM_STEP ** (−dy/WHEEL_NOTCH_PX))
+ * — one notch = ×1.15, while small trackpad deltas zoom proportionally instead of slamming
+ * targetZoom to the min/max on every event.
+ */
+export const WHEEL_NOTCH_PX = 100;
 
 /**
  * Per-frame interpolation factor toward targetZoom. A fixed factor gives an

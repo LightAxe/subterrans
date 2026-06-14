@@ -76,7 +76,7 @@ import {
   screenToTileZoom,
   resolveDotMode,
 } from './camera-adapter.js';
-import { CameraController, WHEEL_ZOOM_STEP } from './camera-controller.js';
+import { CameraController, WHEEL_ZOOM_STEP, WHEEL_NOTCH_PX } from './camera-controller.js';
 import {
   TerrainCache,
   surfaceCacheKey,
@@ -560,7 +560,11 @@ export class GameScene extends Phaser.Scene {
           this.viewState.activeView === 'surface'
             ? this.viewState.surfaceCamera
             : this.viewState.undergroundCamera;
-        const factor = dy < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP;
+        // Scale by deltaY magnitude so continuous trackpad / high-res-wheel scrolling
+        // (many small events per gesture) zooms smoothly instead of jumping a full step
+        // every event and slamming to the zoom limit (Codex P1). One ~WHEEL_NOTCH_PX notch
+        // = one ×WHEEL_ZOOM_STEP; dy<0 (scroll up) zooms in.
+        const factor = Math.pow(WHEEL_ZOOM_STEP, -dy / WHEEL_NOTCH_PX);
         this.cameraController.beginZoom(cam, factor, pointer.x, pointer.y);
       },
     );
@@ -1750,6 +1754,11 @@ export class GameScene extends Phaser.Scene {
         }
       }
     }
+    // Free the off-screen baker's command buffer now — a full bake holds the entire
+    // 128×128 procedural-terrain Graphics (hundreds of thousands of primitives) and would
+    // otherwise be retained until the next bake, which may never happen in a surface-only
+    // session (Codex P2).
+    this.terrainBaker.clear();
 
     // Show only the active view's RT.
     for (const k of this.terrainCache.allocatedKeys()) {
