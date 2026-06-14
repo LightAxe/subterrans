@@ -281,7 +281,13 @@ export class GameScene extends Phaser.Scene {
   private terrainBaker!: Phaser.GameObjects.Graphics;
   // Stage 2 §C13: strategic ant-dot LOD mode, resolved each frame from the smoothed zoom
   // via the hysteresis resolver (held across frames so the 0.55/0.65 band doesn't thrash).
-  private dotMode = false;
+  // PER VIEW (Codex P2): surface + underground keep independent zooms, so their LOD modes
+  // must be tracked separately — a single shared flag carries the leaving view's mode onto
+  // the entering view and strands it in the wrong mode inside the hysteresis band on toggle.
+  private readonly dotModeByView: { surface: boolean; underground: boolean } = {
+    surface: false,
+    underground: false,
+  };
   // Render-only ant-facing smoothing (see ant-facing-cache.ts). One instance
   // per scene, threaded into drawSurface + drawUnderground each frame so
   // cardinal zig-zag movement settles into a diagonal heading instead of
@@ -1836,9 +1842,13 @@ export class GameScene extends Phaser.Scene {
     this.cameraController.apply(cam);
 
     // Stage 2 §C13: resolve the strategic dot-LOD mode from the smoothed zoom (stateful
-    // hysteresis — the 0.55/0.65 band holds the prior mode), threaded into the entity
-    // draw so strategic zoom-out renders ants as batched dots instead of full sprites.
-    this.dotMode = resolveDotMode(cam.zoom, this.dotMode);
+    // hysteresis — the 0.55/0.65 band holds the prior mode) for the ACTIVE view, using
+    // that view's own prior mode so a toggle never carries the other view's LOD state
+    // across (Codex P2). Threaded into the entity draw so strategic zoom-out renders ants
+    // as batched dots instead of full sprites.
+    const activeViewKey = this.viewState.activeView;
+    this.dotModeByView[activeViewKey] = resolveDotMode(cam.zoom, this.dotModeByView[activeViewKey]);
+    const dotMode = this.dotModeByView[activeViewKey];
 
     // Stage 1 controls rework (issue #18): set the per-tool canvas cursor. Reset
     // to the default cursor over any HUD zone / the context menu / any modal so
@@ -1906,7 +1916,7 @@ export class GameScene extends Phaser.Scene {
         this.contestedGlowFrames, // S6: surface glow fade map
         this.renderFrame, // S6: current render frame
         overlayGfx, // #148: health bar renders above sprites
-        this.dotMode, // §C13: strategic dot-LOD
+        dotMode, // §C13: strategic dot-LOD
       );
     } else {
       this.recordDrawLayer('terrain');
@@ -1926,7 +1936,7 @@ export class GameScene extends Phaser.Scene {
         this.antFacingCache,
         this.undergroundGlowFrames, // S6: underground glow fade map
         this.renderFrame, // S6: current render frame
-        this.dotMode, // §C13: strategic dot-LOD
+        dotMode, // §C13: strategic dot-LOD
       );
     }
     this.antSprites.endFrame();
