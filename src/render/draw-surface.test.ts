@@ -8,7 +8,12 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
-import { drawSurfaceTerrain, drawSurfaceEntities, drawSurface } from './draw-surface.js';
+import {
+  drawSurfaceTerrain,
+  drawSurfaceEntities,
+  drawSurface,
+  visibleTileRange,
+} from './draw-surface.js';
 import type { GfxLike } from './draw-surface.js';
 import type {
   AntSpriteDrawOptions,
@@ -37,7 +42,7 @@ import {
   COLOR_RALLY_POINT,
 } from './sprites.js';
 import { COLOR_BARREN_EARTH } from './terrain-atlas.js';
-import type { CameraState } from './camera.js';
+import { makeCameraView, type CameraView } from './camera-adapter.js';
 
 // ---------------------------------------------------------------------------
 // MockGfx — spy recorder implementing GfxLike
@@ -128,9 +133,17 @@ class MockAntSprites implements AntSpriteLayer {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Build a minimal camera centered at (cx, cy) with given viewport. */
-function makeCamera(cx: number, cy: number, vpW: number, vpH: number): CameraState {
-  return { x: cx, y: cy, viewportWidth: vpW, viewportHeight: vpH };
+// Stage 2 world-space camera: the per-view camera is now a world-pixel
+// CameraView. To frame on tile (cx, cy) we center on (cx × TILE_SIZE_PX,
+// cy × TILE_SIZE_PX) at zoom 1, where the visible window is CANVAS_W/zoom ×
+// CANVAS_H/zoom = 800 × 592 world px (50 × 37 tiles — the same window the old
+// fixed viewport gave). The old viewport-in-tiles args (vpW/vpH) are gone:
+// drawing is now in world px (tile (tx,ty) → tx × TILE_SIZE_PX), so the entity
+// fixtures here are positioned the same on screen regardless of the removed
+// per-call viewport size, and entity-count assertions are unaffected because
+// their tiles sit well within the 800 × 592 window.
+function makeCamera(cx: number, cy: number): CameraView {
+  return makeCameraView(cx * TILE_SIZE_PX, cy * TILE_SIZE_PX);
 }
 
 /** Build a WorldState with a small surface grid seeded with alternating Grass/Dirt. */
@@ -143,21 +156,22 @@ function makeWorld4x4(): WorldState {
   return w;
 }
 
-/** Collect every fillRect that falls within a single tile's screen window.
- *  Used by the panning-stability test below — proves the same tile produces
- *  the same draws regardless of where the camera centers it on screen. */
-function textureRectsInsideTile(gfx: MockGfx, screenX: number, screenY: number): Rect[] {
+/** Collect every fillRect that falls within a single tile's WORLD-px window
+ *  (top-left at worldX, worldY). Used by the panning-stability test below —
+ *  proves the same tile produces the same draws regardless of where the camera
+ *  centers it (drawing is in world px, so a tile's coords are camera-independent). */
+function textureRectsInsideTile(gfx: MockGfx, worldX: number, worldY: number): Rect[] {
   const rects: Rect[] = [];
   for (const call of gfx.calls) {
     if (call.method !== 'fillRect') continue;
     const [x, y, w, h] = call.args as [number, number, number, number];
     if (
-      x >= screenX &&
-      y >= screenY &&
-      x + w <= screenX + TILE_SIZE_PX &&
-      y + h <= screenY + TILE_SIZE_PX
+      x >= worldX &&
+      y >= worldY &&
+      x + w <= worldX + TILE_SIZE_PX &&
+      y + h <= worldY + TILE_SIZE_PX
     ) {
-      rects.push({ x: x - screenX, y: y - screenY, w, h });
+      rects.push({ x: x - worldX, y: y - worldY, w, h });
     }
   }
   return rects;
@@ -176,14 +190,25 @@ describe('drawSurfaceTerrain', () => {
 
   it('renders every visible tile with the barren-earth substrate (issue #40)', () => {
     // Issue #40: surface is universally barren-earth substrate (with motifs
-    // scattered on top per tile hash). Every visible tile should produce at
-    // least one barren-earth fillStyle.
+    // scattered on top per tile hash). Every visible tile should produce
+    // exactly one barren-earth fillStyle.
+    //
+    // Stage 2: the camera no longer carries a tile viewport; the visible window
+    // is the zoom-1 800×592-world-px frame. drawSurfaceTerrain culls to
+    // visibleTileRange(cam, gridW, gridH) and applies the barren-earth fill once
+    // per visible tile, so the expected count is the area of that clamped tile
+    // range (computed from the camera, NOT copied from the draw output).
     const world = makeWorld4x4();
-    const cam = makeCamera(1.5, 1.5, 3, 3);
+    const cam = makeCamera(1.5, 1.5);
     drawSurfaceTerrain(gfx, world, cam);
     const earthStyles = gfx.callsOf('fillStyle').filter((c) => c.args[0] === COLOR_BARREN_EARTH);
-    // 4×4 visible tiles = 16; each tile applies the barren-earth fill once.
-    expect(earthStyles.length).toBe(16);
+    const { left, top, right, bottom } = visibleTileRange(
+      cam,
+      world.surface.width,
+      world.surface.height,
+    );
+    const expectedTiles = (right - Math.max(left, 0)) * (bottom - Math.max(top, 0));
+    expect(earthStyles.length).toBe(expectedTiles);
   });
 
   it('keeps texture placement stable for the same world tile as the camera pans', () => {
@@ -191,39 +216,34 @@ describe('drawSurfaceTerrain', () => {
     const tileX = 20;
     const tileY = 20;
 
-    const camA = makeCamera(20, 20, 20, 20);
+    // Stage 2: drawing is in world px, so tile (20,20) draws at the SAME world
+    // coordinate (tileX × TILE_SIZE_PX, tileY × TILE_SIZE_PX) no matter where the
+    // camera centers it — the main camera does the screen projection. Panning the
+    // camera one tile (center 20 → 21) must not change the tile's own draws.
+    const camA = makeCamera(20, 20);
     drawSurfaceTerrain(gfx, world, camA);
-    const leftA = Math.floor(camA.x - camA.viewportWidth / 2);
-    const topA = Math.floor(camA.y - camA.viewportHeight / 2);
-    const rectsA = textureRectsInsideTile(
-      gfx,
-      (tileX - leftA) * TILE_SIZE_PX,
-      (tileY - topA) * TILE_SIZE_PX,
-    );
+    const rectsA = textureRectsInsideTile(gfx, tileX * TILE_SIZE_PX, tileY * TILE_SIZE_PX);
 
     gfx.reset();
-    const camB = makeCamera(21, 20, 20, 20);
+    const camB = makeCamera(21, 20);
     drawSurfaceTerrain(gfx, world, camB);
-    const leftB = Math.floor(camB.x - camB.viewportWidth / 2);
-    const topB = Math.floor(camB.y - camB.viewportHeight / 2);
-    const rectsB = textureRectsInsideTile(
-      gfx,
-      (tileX - leftB) * TILE_SIZE_PX,
-      (tileY - topB) * TILE_SIZE_PX,
-    );
+    const rectsB = textureRectsInsideTile(gfx, tileX * TILE_SIZE_PX, tileY * TILE_SIZE_PX);
 
     expect(rectsA.length).toBeGreaterThan(0);
     expect(rectsA).toEqual(rectsB);
   });
 
   it('clips viewport to grid bounds — no fillRect with negative tx or ty offset', () => {
+    // Camera centered on the world's left edge (tile X=0). visibleTileRange
+    // clamps the tile loop at 0, so the leftmost drawn tile is tx=0 → worldX=0;
+    // no tile draws at a negative world X.
     const world = createWorldState(1);
-    const cam = makeCamera(0, 64, 50, 37);
+    const cam = makeCamera(0, 64);
     drawSurfaceTerrain(gfx, world, cam);
     const rects = gfx.callsOf('fillRect');
     for (const r of rects) {
-      const screenX = r.args[0] as number;
-      expect(screenX).toBeGreaterThanOrEqual(0);
+      const worldX = r.args[0] as number;
+      expect(worldX).toBeGreaterThanOrEqual(0);
     }
   });
 
@@ -234,7 +254,7 @@ describe('drawSurfaceTerrain', () => {
         sgSet(world.surface, x, y, SurfaceTileState.Dirt);
       }
     }
-    const cam = makeCamera(0, 0, 200, 200);
+    const cam = makeCamera(0, 0);
     drawSurfaceTerrain(gfx, world, cam);
     // Per-tile fillRect budget — explicit ceiling, bumped intentionally as
     // each kind of large feature has scaled up:
@@ -258,8 +278,8 @@ describe('drawSurfaceTerrain', () => {
     const world = makeWorld4x4();
     const a = new MockGfx();
     const b = new MockGfx();
-    drawSurfaceTerrain(a, world, makeCamera(1.5, 1.5, 3, 3));
-    drawSurfaceTerrain(b, world, makeCamera(1.5, 1.5, 3, 3));
+    drawSurfaceTerrain(a, world, makeCamera(1.5, 1.5));
+    drawSurfaceTerrain(b, world, makeCamera(1.5, 1.5));
     expect(a.calls).toEqual(b.calls);
   });
 });
@@ -300,7 +320,7 @@ describe('drawSurfaceEntities', () => {
       pickupsRemaining: 50,
       pickupsInitial: 50,
     });
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     const circles = gfx.callsOf('fillCircle');
     expect(circles.length).toBe(2);
@@ -327,7 +347,7 @@ describe('drawSurfaceEntities', () => {
       pickupsRemaining: 50,
       pickupsInitial: 50,
     });
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     const markedStyles = gfx
       .callsOf('fillStyle')
@@ -360,7 +380,7 @@ describe('drawSurfaceEntities', () => {
       pickupsRemaining: 50,
       pickupsInitial: 50,
     });
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     const markedStyles = gfx
       .callsOf('fillStyle')
@@ -371,8 +391,9 @@ describe('drawSurfaceEntities', () => {
   it('preserves sub-tile fixed-point precision when projecting ant position to pixels', () => {
     // Regression: previous code did `(posX >> FP_SHIFT) * TILE_SIZE_PX`, which
     // truncated sub-tile precision before multiplying by tile size. The sprite
-    // layer now receives screen-space pixels directly, so the same assertion
-    // applies: an ant at tile 10.5 must land at pixel 10.5 * TILE_SIZE_PX.
+    // layer now receives WORLD-space pixels directly (Stage 2), so the same
+    // assertion applies: an ant at tile 10.5 must land at world px
+    // 10.5 * TILE_SIZE_PX.
     const prev = createWorldState(1);
     const curr = createWorldState(1);
     const workerId = 0;
@@ -398,18 +419,18 @@ describe('drawSurfaceEntities', () => {
       zone: 0,
     });
 
-    const cam = makeCamera(10, 5, 20, 20);
+    const cam = makeCamera(10, 5);
     drawSurfaceEntities(gfx, sprites, prev, curr, 0, cam);
 
-    const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const top = Math.floor(cam.y - cam.viewportHeight / 2);
-    const expectedScreenX = 10.5 * TILE_SIZE_PX - left * TILE_SIZE_PX;
-    const expectedScreenY = 5.5 * TILE_SIZE_PX - top * TILE_SIZE_PX;
+    // World px (Stage 2): an ant at tile 10.5 / 5.5 draws at 10.5 × TILE_SIZE_PX
+    // / 5.5 × TILE_SIZE_PX, no camera offset (the main camera projects it).
+    const expectedWorldX = 10.5 * TILE_SIZE_PX;
+    const expectedWorldY = 5.5 * TILE_SIZE_PX;
     const antCall = sprites.calls.find(
       (c) =>
         c.kind === 'worker' &&
-        Math.abs(c.x - expectedScreenX) < 0.01 &&
-        Math.abs(c.y - expectedScreenY) < 0.01,
+        Math.abs(c.x - expectedWorldX) < 0.01 &&
+        Math.abs(c.y - expectedWorldY) < 0.01,
     );
     expect(antCall).toBeDefined();
   });
@@ -431,13 +452,14 @@ describe('drawSurfaceEntities', () => {
     initAnt(prev.ants, workerId, { colonyId, posX: 10 << FP_SHIFT, posY: 5 << FP_SHIFT, zone: 0 });
     initAnt(curr.ants, workerId, { colonyId, posX: 20 << FP_SHIFT, posY: 5 << FP_SHIFT, zone: 0 });
 
-    const cam = makeCamera(15, 5, 50, 37);
+    const cam = makeCamera(15, 5);
     drawSurfaceEntities(gfx, sprites, prev, curr, 0.5, cam);
 
-    const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const expectedScreenX = 10 * 16 + (20 * 16 - 10 * 16) * 0.5 - left * TILE_SIZE_PX;
+    // World px (Stage 2): halfway between prev tile 10 and curr tile 20 at
+    // alpha 0.5 → (10×16 + 20×16) / 2 = 240, no camera offset.
+    const expectedWorldX = 10 * 16 + (20 * 16 - 10 * 16) * 0.5;
     const antCall = sprites.calls.find(
-      (c) => c.kind === 'worker' && Math.abs(c.x - expectedScreenX) < 0.5,
+      (c) => c.kind === 'worker' && Math.abs(c.x - expectedWorldX) < 0.5,
     );
     expect(antCall).toBeDefined();
   });
@@ -453,7 +475,7 @@ describe('drawSurfaceEntities', () => {
     world.colonies[colonyId] = colony;
 
     initAnt(world.ants, antId, { colonyId, posX: 5 << FP_SHIFT, posY: 5 << FP_SHIFT, zone: 0 });
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
 
     expect(sprites.calls.length).toBe(1);
@@ -472,7 +494,7 @@ describe('drawSurfaceEntities', () => {
     world.colonies[colonyId] = colony;
 
     initAnt(world.ants, antId, { colonyId, posX: 5 << FP_SHIFT, posY: 5 << FP_SHIFT, zone: 0 });
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
 
     expect(sprites.calls.length).toBe(1);
@@ -508,7 +530,7 @@ describe('drawSurfaceEntities', () => {
       zone: 0,
     });
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
 
     const playerTints = sprites.calls.filter((c) => c.tint === COLOR_PLAYER_COLONY);
@@ -531,7 +553,7 @@ describe('drawSurfaceEntities', () => {
       posY: 5 << FP_SHIFT,
       zone: 1,
     });
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     expect(sprites.calls.length).toBe(0);
     expect(gfx.callsOf('fillCircle').length).toBe(0);
@@ -569,7 +591,7 @@ describe('drawSurfaceEntities — ant facing direction', () => {
     const gfx = new MockGfx();
     const sprites = new MockAntSprites();
     const { world } = makeWorldWithSurfaceAnt();
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     expect(sprites.calls.length).toBe(1);
     expect(sprites.calls[0]!.rotation).toBe(0);
@@ -583,7 +605,7 @@ describe('drawSurfaceEntities — ant facing direction', () => {
     // Shift curr ant one full tile to the right relative to prev.
     curr.ants.posX[antId] = 6 << FP_SHIFT;
     curr.ants.posY[antId] = 5 << FP_SHIFT;
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, prev, curr, 1, cam);
     expect(sprites.calls.length).toBe(1);
     // atan2(-0, -1) returns -π in JS; +π and -π both rotate the sprite to face right.
@@ -597,7 +619,7 @@ describe('drawSurfaceEntities — ant facing direction', () => {
     const { world: curr } = makeWorldWithSurfaceAnt();
     curr.ants.posX[antId] = 5 << FP_SHIFT;
     curr.ants.posY[antId] = 6 << FP_SHIFT;
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, prev, curr, 1, cam);
     expect(sprites.calls[0]!.rotation).toBeCloseTo(-Math.PI / 2, 5);
   });
@@ -609,7 +631,7 @@ describe('drawSurfaceEntities — ant facing direction', () => {
     const { world: curr } = makeWorldWithSurfaceAnt();
     curr.ants.posX[antId] = 5 << FP_SHIFT;
     curr.ants.posY[antId] = 4 << FP_SHIFT;
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, prev, curr, 1, cam);
     expect(sprites.calls[0]!.rotation).toBeCloseTo(Math.PI / 2, 5);
   });
@@ -621,7 +643,7 @@ describe('drawSurfaceEntities — ant facing direction', () => {
     const { world: curr } = makeWorldWithSurfaceAnt();
     curr.ants.posX[antId] = 4 << FP_SHIFT;
     curr.ants.posY[antId] = 5 << FP_SHIFT;
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, prev, curr, 1, cam);
     // Sprite's native head is at -x so zero rotation already points left.
     expect(sprites.calls[0]!.rotation).toBeCloseTo(0, 5);
@@ -661,7 +683,7 @@ describe('drawSurfaceEntities — facing cache smoothing', () => {
   it('alternating right/down movement settles toward a diagonal rotation (not axis-aligned)', () => {
     const gfx = new MockGfx();
     const sprites = new MockAntSprites();
-    const cam = makeCamera(10, 10, 30, 30);
+    const cam = makeCamera(10, 10);
     const facing = new AntFacingCache();
 
     // Walk an 8-step southeast zig-zag: (5,5)→(6,5)→(6,6)→(7,6)→(7,7)…
@@ -701,7 +723,7 @@ describe('drawSurfaceEntities — facing cache smoothing', () => {
   it('spawn frame does not inherit a stale heading from a recycled ant id', () => {
     const gfx = new MockGfx();
     const sprites = new MockAntSprites();
-    const cam = makeCamera(10, 10, 30, 30);
+    const cam = makeCamera(10, 10);
     const facing = new AntFacingCache();
 
     // First ant (id=0) builds up a rightward heading over a couple frames.
@@ -737,7 +759,7 @@ describe('drawSurfaceEntities — facing cache smoothing', () => {
   it('stationary ant keeps its prior smoothed heading across idle frames', () => {
     const gfx = new MockGfx();
     const sprites = new MockAntSprites();
-    const cam = makeCamera(10, 10, 30, 30);
+    const cam = makeCamera(10, 10);
     const facing = new AntFacingCache();
 
     // Frame 1: establish a rightward heading. (Cardinal move seeds raw atan2.)
@@ -786,12 +808,12 @@ describe('drawSurfaceEntities — wrong-plane flicker guard', () => {
     initAnt(prev.ants, antId, { colonyId, posX: 10 << FP_SHIFT, posY: 5 << FP_SHIFT, zone: 1 });
     initAnt(curr.ants, antId, { colonyId, posX: 20 << FP_SHIFT, posY: 5 << FP_SHIFT, zone: 0 });
 
-    const cam = makeCamera(15, 5, 50, 37);
+    const cam = makeCamera(15, 5);
     drawSurfaceEntities(gfx, sprites, prev, curr, 0.5, cam);
 
     expect(sprites.calls.length).toBe(1);
-    const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const expectedCurrX = 20 * TILE_SIZE_PX - left * TILE_SIZE_PX;
+    // World px (Stage 2): snap-to-curr at tile 20 → 20 × TILE_SIZE_PX, no offset.
+    const expectedCurrX = 20 * TILE_SIZE_PX;
     expect(sprites.calls[0]!.x).toBeCloseTo(expectedCurrX, 5);
     expect(sprites.calls[0]!.rotation).toBe(0);
   });
@@ -813,12 +835,12 @@ describe('drawSurfaceEntities — wrong-plane flicker guard', () => {
     // prev deliberately not initialized — slot is !isAlive with default posX=0.
     initAnt(curr.ants, antId, { colonyId, posX: 20 << FP_SHIFT, posY: 5 << FP_SHIFT, zone: 0 });
 
-    const cam = makeCamera(20, 5, 50, 37);
+    const cam = makeCamera(20, 5);
     drawSurfaceEntities(gfx, sprites, prev, curr, 0.5, cam);
 
     expect(sprites.calls.length).toBe(1);
-    const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const expectedCurrX = 20 * TILE_SIZE_PX - left * TILE_SIZE_PX;
+    // World px (Stage 2): snap-to-curr at tile 20 → 20 × TILE_SIZE_PX, no offset.
+    const expectedCurrX = 20 * TILE_SIZE_PX;
     expect(sprites.calls[0]!.x).toBeCloseTo(expectedCurrX, 5);
     expect(sprites.calls[0]!.rotation).toBe(0);
   });
@@ -864,28 +886,28 @@ describe('drawSurfaceEntities — rally-point marker', () => {
 
   it('renders a rally marker when the player colony has a rally point', () => {
     addPlayerColony({ tileX: 5, tileY: 5 });
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     expect(rallyRects(gfx).length).toBeGreaterThan(0);
   });
 
   it('renders no rally marker when rallyPoint is null', () => {
     addPlayerColony(null);
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     expect(rallyRects(gfx).length).toBe(0);
   });
 
   it('rally marker moves with the rally point tile (camera-relative position)', () => {
     addPlayerColony({ tileX: 10, tileY: 4 });
-    const cam = makeCamera(10, 4, 20, 20);
+    const cam = makeCamera(10, 4);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     const rects = rallyRects(gfx);
     expect(rects.length).toBeGreaterThan(0);
-    const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const top = Math.floor(cam.y - cam.viewportHeight / 2);
-    const sx = (10 - left) * TILE_SIZE_PX;
-    const sy = (4 - top) * TILE_SIZE_PX;
+    // World px (Stage 2): rally tile (10,4) draws at world (10×16, 4×16); the
+    // crosshair rects all fall inside that one tile box.
+    const sx = 10 * TILE_SIZE_PX;
+    const sy = 4 * TILE_SIZE_PX;
     for (const r of rects) {
       const rx = r.args[0] as number;
       const ry = r.args[1] as number;
@@ -898,7 +920,7 @@ describe('drawSurfaceEntities — rally-point marker', () => {
 
   it('rally marker disappears after rallyPoint is cleared', () => {
     addPlayerColony({ tileX: 5, tileY: 5 });
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
 
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     expect(rallyRects(gfx).length).toBeGreaterThan(0);
@@ -920,7 +942,7 @@ describe('drawSurfaceEntities — rally-point marker', () => {
     enemy.priorityFoodPileId = null;
     world.colonies[enemyId] = enemy;
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     expect(rallyRects(gfx).length).toBe(0);
   });
@@ -936,16 +958,15 @@ describe('drawSurfaceEntities — rally-point marker', () => {
   // any reduction below three COLOR_RALLY_POINT rects fails loudly.
   it('renders the full crosshair composition: exactly 3 white rally rects (H-bar + V-bar + center accent)', () => {
     addPlayerColony({ tileX: 5, tileY: 5 });
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     const rects = rallyRects(gfx);
     expect(rects.length).toBe(3);
 
-    // Derive expected pixel coords for the marker's tile.
-    const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const top = Math.floor(cam.y - cam.viewportHeight / 2);
-    const sx = (5 - left) * TILE_SIZE_PX;
-    const sy = (5 - top) * TILE_SIZE_PX;
+    // Derive expected world-px coords for the marker's tile (Stage 2: tile
+    // (5,5) draws at world (5×16, 5×16), no camera offset).
+    const sx = 5 * TILE_SIZE_PX;
+    const sy = 5 * TILE_SIZE_PX;
 
     // Horizontal bar: full-tile-width minus edges, 2-px thick, centered vertically.
     const hBar = rects.find(
@@ -1046,7 +1067,7 @@ describe('drawSurfaceEntities — spider health bar (issue #148)', () => {
   it('hides the bar at full health', () => {
     const gfx = new MockGfx();
     const world = makeWorldWithSpider(SPIDER_HP_FULL);
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, new MockAntSprites(), world, world, 0, cam);
     expect(findHealthBar(gfx)).toBeNull();
   });
@@ -1054,7 +1075,7 @@ describe('drawSurfaceEntities — spider health bar (issue #148)', () => {
   it('shows a 24×4 bar once damaged, with fill width proportional to hp ratio', () => {
     const gfx = new MockGfx();
     const world = makeWorldWithSpider(SPIDER_HP_FULL / 2);
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, new MockAntSprites(), world, world, 0, cam);
     const bar = findHealthBar(gfx);
     expect(bar).not.toBeNull();
@@ -1069,16 +1090,17 @@ describe('drawSurfaceEntities — spider health bar (issue #148)', () => {
   it('floats above the sprite top edge', () => {
     const gfx = new MockGfx();
     const world = makeWorldWithSpider(10);
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, new MockAntSprites(), world, world, 0, cam);
     const bar = findHealthBar(gfx)!;
-    // Sprite center screen-y is tile 5 → 80px (camera left/top = -5 tiles).
-    const spriteCenterY = 80 - -5 * TILE_SIZE_PX;
+    // World px (Stage 2): the spider at tile 5 has world-y center 5 × TILE_SIZE_PX
+    // = 80 (no camera offset). The bar floats above the sprite's top edge.
+    const spriteCenterY = 5 * TILE_SIZE_PX;
     expect(bar.track.y).toBeLessThan(spriteCenterY - SPIDER_SPRITE_HEIGHT / 2);
   });
 
   it('fill colour skews green at high hp and red at low hp', () => {
-    const camY = makeCamera(5, 5, 20, 20);
+    const camY = makeCamera(5, 5);
     const highGfx = new MockGfx();
     drawSurfaceEntities(
       highGfx,
@@ -1109,7 +1131,7 @@ describe('drawSurfaceEntities — spider health bar (issue #148)', () => {
   it('clamps a negative hp ratio without drawing a negative-width fill', () => {
     const gfx = new MockGfx();
     const world = makeWorldWithSpider(-5);
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, new MockAntSprites(), world, world, 0, cam);
     const bar = findHealthBar(gfx)!;
     expect(bar.fill.w).toBe(0);
@@ -1122,7 +1144,7 @@ describe('drawSurfaceEntities — spider health bar (issue #148)', () => {
     const base = new MockGfx();
     const overlay = new MockGfx();
     const world = makeWorldWithSpider(SPIDER_HP_FULL / 2);
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(
       base,
       new MockAntSprites(),
@@ -1146,7 +1168,7 @@ describe('drawSurfaceEntities — spider health bar (issue #148)', () => {
     // spider indistinguishable from a full-health one (whose bar is hidden).
     const gfx = new MockGfx();
     const world = makeWorldWithSpider(SPIDER_HP_FULL - 1);
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, new MockAntSprites(), world, world, 0, cam);
     const bar = findHealthBar(gfx)!;
     expect(bar.fill.w).toBe(23);
@@ -1158,7 +1180,7 @@ describe('drawSurfaceEntities — spider health bar (issue #148)', () => {
     // dead. A positive hp must always show at least 1px.
     const gfx = new MockGfx();
     const world = makeWorldWithSpider(1);
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, new MockAntSprites(), world, world, 0, cam);
     const bar = findHealthBar(gfx)!;
     expect(bar.fill.w).toBeGreaterThanOrEqual(1);
@@ -1194,7 +1216,7 @@ describe('drawSurfaceEntities — enemy entrance border (issue #14)', () => {
     const tileX = 10;
     const tileY = 0;
     const world = makeWorldWithEnemyEntrance(tileX, tileY);
-    const cam = makeCamera(tileX, tileY, 10, 4);
+    const cam = makeCamera(tileX, tileY);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
 
     // Issue #117 replaced the four-rect perimeter with a single strokeCircle
@@ -1210,11 +1232,10 @@ describe('drawSurfaceEntities — enemy entrance border (issue #14)', () => {
     }
     expect(enemyStrokes.length).toBe(1);
 
-    // Center on tile center, radius = mound outer radius (TILE_SIZE_PX/2 + 2).
-    const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const top = Math.floor(cam.y - cam.viewportHeight / 2);
-    const expectedCx = (tileX - left) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
-    const expectedCy = (tileY - top) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+    // Center on tile center (world px, Stage 2: tileX×16 + 8, tileY×16 + 8),
+    // radius = mound outer radius (TILE_SIZE_PX/2 + 2).
+    const expectedCx = tileX * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+    const expectedCy = tileY * TILE_SIZE_PX + TILE_SIZE_PX / 2;
     const expectedR = TILE_SIZE_PX / 2 + 2;
     expect(enemyStrokes[0]).toEqual([expectedCx, expectedCy, expectedR]);
 
@@ -1239,7 +1260,7 @@ describe('drawSurfaceEntities — enemy entrance border (issue #14)', () => {
     player.digFlowFieldDirty = false;
     player.priorityFoodPileId = null;
     w.colonies[PLAYER_COLONY_ID] = player;
-    const cam = makeCamera(0, 0, 10, 4);
+    const cam = makeCamera(0, 0);
     drawSurfaceEntities(gfx, sprites, w, w, 0, cam);
 
     // No enemy-colored stroke should be present (lineStyle never sets COLOR_ENEMY_COLONY).
@@ -1260,7 +1281,7 @@ describe('drawSurfaceEntities — enemy entrance border (issue #14)', () => {
     const world = makeWorldWithEnemyEntrance(tileX, tileY);
     // Drop the player entrance so the only entrance under inspection is the enemy's.
     world.colonies[PLAYER_COLONY_ID]!.entrances = [];
-    const cam = makeCamera(tileX, tileY, 10, 10);
+    const cam = makeCamera(tileX, tileY);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
 
     // Walk fillStyle/fillCircle pairs and group by color.
@@ -1280,11 +1301,10 @@ describe('drawSurfaceEntities — enemy entrance border (issue #14)', () => {
     expect(circlesByColor.get(0x5a4a30)?.length).toBe(1); // COLOR_BARREN_EARTH_DAMP
     expect(circlesByColor.get(0x1a0f00)?.length).toBe(1); // COLOR_SURFACE_ENTRANCE_HOLE
 
-    // Concentric and centered on the tile center; radii match mound > body > hole.
-    const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const top = Math.floor(cam.y - cam.viewportHeight / 2);
-    const cx = (tileX - left) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
-    const cy = (tileY - top) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+    // Concentric and centered on the tile center (world px, Stage 2: tileX×16 +
+    // 8, tileY×16 + 8); radii match mound > body > hole.
+    const cx = tileX * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+    const cy = tileY * TILE_SIZE_PX + TILE_SIZE_PX / 2;
     expect(circlesByColor.get(0x6d563a)![0]).toEqual([cx, cy, TILE_SIZE_PX / 2 + 2]);
     expect(circlesByColor.get(0x5a4a30)![0]).toEqual([cx, cy, TILE_SIZE_PX / 2 + 1]);
     expect(circlesByColor.get(0x1a0f00)![0]).toEqual([cx, cy, TILE_SIZE_PX / 2 - 2]);
@@ -1307,7 +1327,7 @@ describe('drawSurface', () => {
       pickupsRemaining: 50,
       pickupsInitial: 50,
     });
-    const cam = makeCamera(5, 5, 10, 10);
+    const cam = makeCamera(5, 5);
     drawSurface(gfx, sprites, world, world, 0, cam);
     expect(gfx.callsOf('fillRect').length).toBeGreaterThan(0);
     expect(gfx.callsOf('fillCircle').length).toBe(1);

@@ -25,6 +25,7 @@
 
 import type { WorldState } from '../sim/types.js';
 import type { ViewState } from '../render/camera.js';
+import { screenToWorld } from '../render/camera-adapter.js';
 import type { FoodPile } from '../sim/food.js';
 import type {
   MarkFoodPileCommand,
@@ -188,26 +189,25 @@ export function isSpiderHit(
   prevWorld: WorldState | null = null,
 ): boolean {
   if (world.spider === null) return false;
-  const cam = viewState.surfaceCamera;
-  const camLeft = Math.floor(cam.x - cam.viewportWidth / 2);
-  const camTop = Math.floor(cam.y - cam.viewportHeight / 2);
-  const currScrX = (world.spider.posX >> FP_SHIFT) * TILE_SIZE_PX - camLeft * TILE_SIZE_PX;
-  const currScrY = (world.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop * TILE_SIZE_PX;
-  const prevScrX =
-    prevWorld?.spider != null
-      ? (prevWorld.spider.posX >> FP_SHIFT) * TILE_SIZE_PX - camLeft * TILE_SIZE_PX
-      : currScrX;
-  const prevScrY =
-    prevWorld?.spider != null
-      ? (prevWorld.spider.posY >> FP_SHIFT) * TILE_SIZE_PX - camTop * TILE_SIZE_PX
-      : currScrY;
+  // Stage 2: project the click to WORLD pixels via the adapter and test there, so
+  // the hit box scales correctly under zoom (no manual camera-relative screen math).
+  const click = screenToWorld(screenX, screenY, viewState.surfaceCamera);
+  // Spider world-pixel position at tile granularity (matches the prior hit test);
+  // union the current + previous-tick boxes so the trailing interpolated edge still
+  // registers. When prevWorld is null the box is exactly the current sprite.
+  const currWorldX = (world.spider.posX >> FP_SHIFT) * TILE_SIZE_PX;
+  const currWorldY = (world.spider.posY >> FP_SHIFT) * TILE_SIZE_PX;
+  const prevWorldX =
+    prevWorld?.spider != null ? (prevWorld.spider.posX >> FP_SHIFT) * TILE_SIZE_PX : currWorldX;
+  const prevWorldY =
+    prevWorld?.spider != null ? (prevWorld.spider.posY >> FP_SHIFT) * TILE_SIZE_PX : currWorldY;
   const halfW = SPIDER_SPRITE_WIDTH / 2;
   const halfH = SPIDER_SPRITE_HEIGHT / 2;
   return (
-    screenX >= Math.min(currScrX, prevScrX) - halfW &&
-    screenX < Math.max(currScrX, prevScrX) + halfW &&
-    screenY >= Math.min(currScrY, prevScrY) - halfH &&
-    screenY < Math.max(currScrY, prevScrY) + halfH
+    click.worldX >= Math.min(currWorldX, prevWorldX) - halfW &&
+    click.worldX < Math.max(currWorldX, prevWorldX) + halfW &&
+    click.worldY >= Math.min(currWorldY, prevWorldY) - halfH &&
+    click.worldY < Math.max(currWorldY, prevWorldY) + halfH
   );
 }
 

@@ -1,17 +1,19 @@
-// draw-surface.ts — Phase 8 surface view drawing module.
+// draw-surface.ts — Phase 8 surface view drawing module (Stage 2 world-space migration).
 //
-// Pure functions: take a GfxLike + AntSpriteLayer + WorldState snapshots,
-// issue Graphics API calls and AntSpriteLayer.drawAnt calls. No scene
-// management, no input handling, no state mutation.
+// Pure functions: take a GfxLike + AntSpriteLayer + WorldState snapshots, issue
+// Graphics API calls and AntSpriteLayer.drawAnt calls. No scene management, no input
+// handling, no state mutation.
 //
-// Non-ant primitives use ONLY Graphics: fillRect, fillCircle, strokeCircle,
-// fillTriangle, lineStyle, fillStyle. Ants go through the AntSpriteLayer —
-// GameScene plugs in a Phaser-backed sprite pool; tests plug in a recording
-// mock. draw-surface.ts itself remains Phaser-free.
+// Stage 2 (issue #18): all drawing is now in WORLD pixels (worldX = tileX × TILE_SIZE_PX).
+// The Phaser main camera (driven by the camera adapter: setZoom + centerOn) projects
+// world → screen, so these modules no longer subtract a camera offset. Culling is
+// against the adapter's visibleWorldRect (zoom-aware), not a fixed canvas rectangle.
+// Low-level per-tile/per-sprite helpers are unchanged — they draw at the given px,
+// which are now world px.
 //
 // Draw order: drawSurface calls drawSurfaceTerrain then drawSurfaceEntities.
 // Pheromone overlay is NOT called from here — GameScene calls drawPheromoneOverlay
-// between terrain and entities per RESEARCH §Architecture draw-order diagram.
+// between terrain and entities.
 
 import { sgGet } from '../sim/terrain.js';
 import { AntTask } from '../sim/enums.js';
@@ -41,7 +43,12 @@ import {
   COLOR_BARREN_EARTH_MOUND,
 } from './terrain-atlas.js';
 export type { AntSpriteLayer } from './ant-sprite-layer.js';
-import type { CameraState } from './camera.js';
+import {
+  type CameraView,
+  visibleWorldRect,
+  type WorldRect,
+  ANT_DOT_SCREEN_PX,
+} from './camera-adapter.js';
 import { SPIDER_SPRITE_HEIGHT, SPIDER_SPRITE_WIDTH } from './ant-sprite-layer.js';
 import { SPIDER_HUNGER_MAX_TICKS, SPIDER_HP_FULL } from '../sim/constants.js';
 import { tierIndex } from '../sim/ai-state.js';
@@ -67,17 +74,38 @@ export interface GfxLike {
 // Viewport helpers (shared by all draw modules)
 // ---------------------------------------------------------------------------
 
-/** Compute visible tile range from camera state. Returns { left, top, right, bottom }. */
-function visibleRange(
-  cam: CameraState,
+/**
+ * Compute the visible TILE range from the camera (zoom-aware), clamped to the grid.
+ * Derived from the adapter's world rect; the +1 margin covers tiles straddling the
+ * visible edge. Returns { left, top, right, bottom } in tile coordinates.
+ */
+export function visibleTileRange(
+  cam: CameraView,
   gridWidth: number,
   gridHeight: number,
 ): { left: number; top: number; right: number; bottom: number } {
-  const left = Math.floor(cam.x - cam.viewportWidth / 2);
-  const top = Math.floor(cam.y - cam.viewportHeight / 2);
-  const right = Math.min(left + cam.viewportWidth + 1, gridWidth);
-  const bottom = Math.min(top + cam.viewportHeight + 1, gridHeight);
+  const rect = visibleWorldRect(cam);
+  const left = Math.floor(rect.left / TILE_SIZE_PX);
+  const top = Math.floor(rect.top / TILE_SIZE_PX);
+  const right = Math.min(Math.ceil(rect.right / TILE_SIZE_PX) + 1, gridWidth);
+  const bottom = Math.min(Math.ceil(rect.bottom / TILE_SIZE_PX) + 1, gridHeight);
   return { left, top, right, bottom };
+}
+
+/**
+ * World-space cull test for a tile-anchored primitive whose top-left is at world
+ * (worldX, worldY). Mirrors the prior screen cull (one-tile left/top margin, right/
+ * bottom at the visible edge), now in world px so it is correct under any zoom.
+ * `margin` widens the box for primitives that spill past their tile (entrance mounds,
+ * spider sprite).
+ */
+function tileInView(worldX: number, worldY: number, rect: WorldRect, margin: number): boolean {
+  return (
+    worldX >= rect.left - margin &&
+    worldX <= rect.right + margin &&
+    worldY >= rect.top - margin &&
+    worldY <= rect.bottom + margin
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -85,29 +113,34 @@ function visibleRange(
 // ---------------------------------------------------------------------------
 
 /**
- * Draw the surface terrain tiles visible through the camera.
+ * Draw the surface terrain tiles visible through the camera, in WORLD pixels.
  *
- * Issue #40 reframe: surface is barren-earth-default with grass tufts /
- * pebbles / twigs / dead leaves / stones scattered as deterministic
- * decoration. The sim-layer SurfaceTileState (Dirt vs. Grass) no longer maps
- * to dramatically different colors — we render the same earthy substrate
- * everywhere and let the per-tile motif scattering create variety. Grass
- * tiles still bias slightly toward live-grass tufts (vs. dry-grass on dirt
- * tiles), but the dominant readout is "ant-scale ground", not "lawn vs.
- * dirt patch". This puts the visual focus on the ants where it belongs.
+ * Issue #40 reframe: surface is barren-earth-default with grass tufts / pebbles /
+ * twigs scattered as deterministic decoration. The per-tile motif scattering creates
+ * variety; the dominant readout is "ant-scale ground".
+ *
+ * Stage 2: this draws at world px and culls to the visible tile range, immediate-mode
+ * every frame (it draws tiles at world px into whatever GfxLike target it is given).
  */
-export function drawSurfaceTerrain(gfx: GfxLike, world: WorldState, cam: CameraState): void {
-  const { left, top, right, bottom } = visibleRange(cam, world.surface.width, world.surface.height);
+export function drawSurfaceTerrain(
+  gfx: GfxLike,
+  world: WorldState,
+  cam: CameraView,
+  // Stage 2 §B: when true, draw the WHOLE grid (off-screen RenderTexture bake) instead of
+  // culling to the camera's visible window. (Surface is static → baked once.)
+  bakeAll: boolean = false,
+): void {
+  const { left, top, right, bottom } = bakeAll
+    ? { left: 0, top: 0, right: world.surface.width, bottom: world.surface.height }
+    : visibleTileRange(cam, world.surface.width, world.surface.height);
 
   for (let ty = Math.max(top, 0); ty < bottom; ty++) {
     for (let tx = Math.max(left, 0); tx < right; tx++) {
-      // sgGet is read for future SurfaceTileState-aware decoration biasing
-      // (live-grass density on grass tiles, etc.). Right now barren-earth is
-      // the universal substrate.
+      // sgGet is read for future SurfaceTileState-aware decoration biasing.
       void sgGet(world.surface, tx, ty);
-      const screenX = (tx - left) * TILE_SIZE_PX;
-      const screenY = (ty - top) * TILE_SIZE_PX;
-      drawBarrenEarthTile(gfx, world, screenX, screenY, tx, ty);
+      const worldX = tx * TILE_SIZE_PX;
+      const worldY = ty * TILE_SIZE_PX;
+      drawBarrenEarthTile(gfx, world, worldX, worldY, tx, ty);
     }
   }
 }
@@ -117,17 +150,16 @@ export function drawSurfaceTerrain(gfx: GfxLike, world: WorldState, cam: CameraS
 // ---------------------------------------------------------------------------
 
 /**
- * Draw food piles, entrance holes, and ants (workers + queens) on the surface.
+ * Draw food piles, entrance holes, and ants (workers + queens) on the surface, in
+ * WORLD pixels (the main camera projects them).
  *
  * Moving entities (ants) are interpolated between prev and curr state at alpha.
  * Static entities (food piles, entrances) read directly from curr. (VIEW-03)
  *
- * `entranceHover` is the Stage 1 controls-rework hover outline (issue #18):
- * when non-null, a 2-px frame is drawn on the tile under the pointer while the
- * Dig tool is active on the surface — GREEN when `valid` (DesignateEntrance
- * would accept) or RED when not. GameScene recomputes both the tile and its
- * validity from the live camera every frame, so the outline tracks the pointer
- * even when keyboard/drag pan moves the camera beneath a stationary cursor.
+ * `entranceHover` is the Stage 1 controls-rework hover outline (issue #18): when
+ * non-null, a 2-px frame is drawn on the tile under the pointer while the Dig tool is
+ * active on the surface — GREEN when valid, RED otherwise. GameScene recomputes the
+ * tile + validity from the live camera every frame.
  */
 export function drawSurfaceEntities(
   gfx: GfxLike,
@@ -135,65 +167,44 @@ export function drawSurfaceEntities(
   prev: WorldState,
   curr: WorldState,
   alpha: number,
-  cam: CameraState,
+  cam: CameraView,
   entranceHover: { tileX: number; tileY: number; valid: boolean } | null = null,
   facing?: AntFacingCache,
   frameTimeMs: number = 0,
   contestedGlowFrames?: Map<number, number>,
   currentFrame: number = 0,
   // Overlay layer for primitives that must render ABOVE the sprite pool
-  // (SPIDER_SPRITE_DEPTH = 52). GameScene supplies a Graphics object set to a
-  // higher depth; callers that omit it (orchestrator + tests) fall back to the
-  // base gfx, preserving the previous single-layer behaviour.
+  // (SPIDER_SPRITE_DEPTH = 52). GameScene supplies a higher-depth Graphics; callers
+  // that omit it fall back to the base gfx.
   overlayGfx: GfxLike = gfx,
+  // Stage 2 §C13: strategic LOD — when true, ants render as screen-constant dots and the
+  // ant-derived contested-glow pass is skipped (allocation-free strategic frame).
+  dotMode: boolean = false,
 ): void {
-  const left = Math.floor(cam.x - cam.viewportWidth / 2);
-  const top = Math.floor(cam.y - cam.viewportHeight / 2);
-
-  const canvasW = cam.viewportWidth * TILE_SIZE_PX;
-  const canvasH = cam.viewportHeight * TILE_SIZE_PX;
+  const rect = visibleWorldRect(cam);
 
   // --- Food piles ---
-  // Phase 8.5 readability: add a 1-px dark outline to separate the green pile
-  // circle from the green grass tile underneath.
-  //
-  // Per Phase 9 food-mark fix: the "marked" flag was moved off the shared
-  // FoodPile entity (which is not per-colony) onto ColonyRecord. The HUD
-  // renders the PLAYER colony's perspective only — enemy priority targets
-  // stay invisible so the player can't read the enemy AI's intent.
-  //
   // Issue #112 shrink buckets: each pile renders one of 4 sizes based on
-  // `pickupsRemaining / pickupsInitial`. Bucketing against `pickupsInitial`
-  // (per-pile starting size) ensures small ephemeral piles and large strategic
-  // anchors both visibly shrink across their lifetime — a 30-pickup pile and
-  // a 150-pickup pile both go full → ¾ → ½ → ¼ as they drain.
+  // pickupsRemaining / pickupsInitial.
   const playerColony = curr.colonies[PLAYER_COLONY_ID];
   const playerPriorityPileId = playerColony ? playerColony.priorityFoodPileId : null;
   const baseRadius = TILE_SIZE_PX / 2 - 2;
   for (const pile of curr.foodPiles) {
-    const sx = (pile.tileX - left) * TILE_SIZE_PX;
-    const sy = (pile.tileY - top) * TILE_SIZE_PX;
-    // Trivial viewport cull
-    if (sx < -TILE_SIZE_PX || sx > canvasW || sy < -TILE_SIZE_PX || sy > canvasH) continue;
+    const wx = pile.tileX * TILE_SIZE_PX;
+    const wy = pile.tileY * TILE_SIZE_PX;
+    if (!tileInView(wx, wy, rect, TILE_SIZE_PX)) continue;
     const isPlayerMarked =
       playerPriorityPileId !== null && pile.foodPileId === playerPriorityPileId;
     const color = isPlayerMarked ? COLOR_FOOD_PILE_MARKED : COLOR_FOOD_PILE_NORMAL;
-    const cx = sx + TILE_SIZE_PX / 2;
-    const cy = sy + TILE_SIZE_PX / 2;
+    const cx = wx + TILE_SIZE_PX / 2;
+    const cy = wy + TILE_SIZE_PX / 2;
     // Shrink-bucket radius: percent-remaining buckets in [>75%, >50%, >25%, >0%].
-    // pickupsInitial > 0 by validator + scenario contract, so the divide is safe.
-    // Reads as floats are fine here — render layer is float-permitted (the sim
-    // float-ban only applies to src/sim/).
     const pct = pile.pickupsRemaining / pile.pickupsInitial;
     let r = baseRadius;
     if (pct <= 0.75) r = baseRadius - 2;
     if (pct <= 0.5) r = baseRadius - 4;
     if (pct <= 0.25) r = baseRadius - 6;
-    // Floor at 1: with TILE_SIZE_PX = 16, baseRadius = 6, so the smallest
-    // bucket would compute to r = 0 — invisible. Snap to 1px so a not-yet-
-    // vanished pile is always visible. Once the pile drains to 0 charges,
-    // the sim splices it out of foodPiles (food-system.ts) and this loop
-    // never sees it again, so there's no "ghost 1px circle" risk.
+    // Floor at 1 so a not-yet-vanished pile is always visible.
     if (r < 1) r = 1;
     gfx.fillStyle(color, 1);
     gfx.fillCircle(cx, cy, r);
@@ -202,57 +213,33 @@ export function drawSurfaceEntities(
   }
 
   // --- Entrance holes on surface (issue #117) ---
-  // Round hole in a piled-dirt mound. Three concentric circles (mound rim →
-  // mound body → hole interior) plus, for enemy entrances, a thin
-  // enemy-colored ring traced just outside the mound.
-  //
-  // Footprint spills 2 px onto each adjacent tile so the entrance reads as a
-  // 3-D bump on the surface, not a flat painted disc. The viewport cull
-  // margin below is widened from `TILE_SIZE_PX` to `TILE_SIZE_PX + MOUND_SPILL_PX + 1`
-  // so a tile whose mound spills onto a visible neighbor is still drawn even
-  // when its own center sits slightly off-screen.
-  //
-  // Diameters / radii at TILE_SIZE_PX = 16:
-  //   mound (outer)   = 10 px → spills 2 px onto each neighbor
-  //   mound (body)    = 9 px  → 1 px lighter rim around the body for shading
-  //   hole (interior) = 6 px  → matches food-pile baseRadius for visual weight
-  //
-  // Issue #14 cue: enemy entrances get a 1-px enemy-colony stroke around the
-  // mound so the player reads them as "rally here to invade" targets.
+  // Round hole in a piled-dirt mound. Three concentric circles plus, for enemy
+  // entrances, a thin enemy-colored ring just outside the mound. The footprint spills
+  // MOUND_SPILL_PX onto each adjacent tile, so the cull margin is widened.
   const MOUND_SPILL_PX = 2;
   const MOUND_OUTER_R = TILE_SIZE_PX / 2 + MOUND_SPILL_PX; // 10
-  const MOUND_BODY_R = TILE_SIZE_PX / 2 + 1; // 9 — 1px lighter rim shows around the body
-  const HOLE_R = TILE_SIZE_PX / 2 - 2; // 6 — matches food pile baseRadius
+  const MOUND_BODY_R = TILE_SIZE_PX / 2 + 1; // 9
+  const HOLE_R = TILE_SIZE_PX / 2 - 2; // 6
   for (const colony of Object.values(curr.colonies)) {
     if (!colony.entrances) continue;
     const isEnemy = colony.colonyId !== PLAYER_COLONY_ID;
     for (const entrance of colony.entrances) {
-      const sx = (entrance.surfaceTileX - left) * TILE_SIZE_PX;
-      const sy = (entrance.surfaceTileY - top) * TILE_SIZE_PX;
-      const cullMargin = TILE_SIZE_PX + MOUND_SPILL_PX + 1;
-      if (
-        sx < -cullMargin ||
-        sx > canvasW + MOUND_SPILL_PX ||
-        sy < -cullMargin ||
-        sy > canvasH + MOUND_SPILL_PX
-      )
-        continue;
-      const cx = sx + TILE_SIZE_PX / 2;
-      const cy = sy + TILE_SIZE_PX / 2;
-      // Outer mound rim: lighter spoil tone — reads as "raised dirt edge."
+      const wx = entrance.surfaceTileX * TILE_SIZE_PX;
+      const wy = entrance.surfaceTileY * TILE_SIZE_PX;
+      if (!tileInView(wx, wy, rect, TILE_SIZE_PX + MOUND_SPILL_PX + 1)) continue;
+      const cx = wx + TILE_SIZE_PX / 2;
+      const cy = wy + TILE_SIZE_PX / 2;
+      // Outer mound rim: lighter spoil tone.
       gfx.fillStyle(COLOR_BARREN_EARTH_MOUND, 1);
       gfx.fillCircle(cx, cy, MOUND_OUTER_R);
-      // Mound body: darker damp earth — reads as the "shadowed inside" of the mound.
+      // Mound body: darker damp earth.
       gfx.fillStyle(COLOR_BARREN_EARTH_DAMP, 1);
       gfx.fillCircle(cx, cy, MOUND_BODY_R);
       // Hole interior — round dark cavity.
       gfx.fillStyle(COLOR_SURFACE_ENTRANCE_HOLE, 1);
       gfx.fillCircle(cx, cy, HOLE_R);
       if (isEnemy) {
-        // 1-px enemy-colony ring traced just outside the mound. Replaces the
-        // four-rect rectangle with a stroke that follows the mound's circular
-        // silhouette so the cue reads as "this is an enemy entrance" without
-        // visually fighting the round shape.
+        // 1-px enemy-colony ring just outside the mound.
         gfx.lineStyle(1, COLOR_ENEMY_COLONY, 1);
         gfx.strokeCircle(cx, cy, MOUND_OUTER_R);
       }
@@ -260,9 +247,10 @@ export function drawSurfaceEntities(
   }
 
   // --- Surface contested tile glow (S1 → S6 polished) ---
-  // S6: surface combat uses COLOR_NEUTRAL_CONTESTED_GLOW (yellow) instead of
-  // the raw orange. A 5-frame fade-out is tracked via contestedGlowFrames.
-  {
+  // S6: surface combat uses COLOR_NEUTRAL_CONTESTED_GLOW (yellow). A 5-frame fade-out
+  // is tracked via contestedGlowFrames. Skipped in strategic dot mode (allocation-free
+  // pass — no per-entity Map/Set scan; §C13/R3-2).
+  if (!dotMode) {
     const tileColony = new Map<number, number>(); // tileKey → first colonyId
     const contested = new Set<number>();
     const n = curr.ants.alive.length;
@@ -283,7 +271,7 @@ export function drawSurfaceEntities(
         contestedGlowFrames.set(key, currentFrame);
       }
     }
-    // Draw glows for all tiles that were contested within the last 5 frames.
+    // Draw glows for all tiles contested within the last 5 frames.
     const GLOW_FADE_FRAMES = 5;
     const tilesToDraw = contestedGlowFrames ? contestedGlowFrames : null;
     const drawKeys = tilesToDraw
@@ -294,22 +282,21 @@ export function drawSurfaceEntities(
     for (const key of drawKeys) {
       const tx = key & 0xffff;
       const ty = (key >> 16) & 0xffff;
-      const sx = (tx - left) * TILE_SIZE_PX;
-      const sy = (ty - top) * TILE_SIZE_PX;
-      if (sx < -TILE_SIZE_PX || sx > canvasW || sy < -TILE_SIZE_PX || sy > canvasH) continue;
+      const wx = tx * TILE_SIZE_PX;
+      const wy = ty * TILE_SIZE_PX;
+      if (!tileInView(wx, wy, rect, TILE_SIZE_PX)) continue;
       // Fade alpha based on frames since last seen.
       const framesAgo = tilesToDraw ? currentFrame - (tilesToDraw.get(key) ?? currentFrame) : 0;
       const alpha_g = 0.15 * (1 - framesAgo / GLOW_FADE_FRAMES);
       if (alpha_g <= 0) continue;
-      // Soft edge: draw the center tile at full alpha, then draw 1px-thin
-      // border rects at half alpha to create a soft halo effect.
+      // Soft edge: center tile at full alpha, then 1px-thin border rects at half alpha.
       gfx.fillStyle(COLOR_NEUTRAL_CONTESTED_GLOW, alpha_g);
-      gfx.fillRect(sx + 2, sy + 2, TILE_SIZE_PX - 4, TILE_SIZE_PX - 4);
+      gfx.fillRect(wx + 2, wy + 2, TILE_SIZE_PX - 4, TILE_SIZE_PX - 4);
       gfx.fillStyle(COLOR_NEUTRAL_CONTESTED_GLOW, alpha_g * 0.5);
-      gfx.fillRect(sx, sy, TILE_SIZE_PX, 2);
-      gfx.fillRect(sx, sy + TILE_SIZE_PX - 2, TILE_SIZE_PX, 2);
-      gfx.fillRect(sx, sy + 2, 2, TILE_SIZE_PX - 4);
-      gfx.fillRect(sx + TILE_SIZE_PX - 2, sy + 2, 2, TILE_SIZE_PX - 4);
+      gfx.fillRect(wx, wy, TILE_SIZE_PX, 2);
+      gfx.fillRect(wx, wy + TILE_SIZE_PX - 2, TILE_SIZE_PX, 2);
+      gfx.fillRect(wx, wy + 2, 2, TILE_SIZE_PX - 4);
+      gfx.fillRect(wx + TILE_SIZE_PX - 2, wy + 2, 2, TILE_SIZE_PX - 4);
     }
     // Prune stale entries so the map doesn't grow without bound.
     if (tilesToDraw) {
@@ -320,12 +307,11 @@ export function drawSurfaceEntities(
   }
 
   // --- Hunt reticle (S3 → S6 polished) ---
-  // S6: deep red border with animated alpha pulse; subtle fill at 0.3 alpha.
   if (curr.scatterReticleTile !== null) {
     const { x: rtx, y: rty } = curr.scatterReticleTile;
-    const rsx = (rtx - left) * TILE_SIZE_PX;
-    const rsy = (rty - top) * TILE_SIZE_PX;
-    if (rsx > -TILE_SIZE_PX && rsx < canvasW && rsy > -TILE_SIZE_PX && rsy < canvasH) {
+    const rwx = rtx * TILE_SIZE_PX;
+    const rwy = rty * TILE_SIZE_PX;
+    if (tileInView(rwx, rwy, rect, TILE_SIZE_PX)) {
       // Pulse: alpha oscillates between 0.4 and 0.7 at 1 Hz.
       const pulse = 0.55 + 0.15 * Math.sin((2 * Math.PI * frameTimeMs) / 1000);
       // Scale: 1.0–1.05× on pulse (shift origin to tile center).
@@ -334,16 +320,16 @@ export function drawSurfaceEntities(
       // Tile fill at 0.3 alpha.
       gfx.fillStyle(0xcc1010, 0.3);
       gfx.fillRect(
-        rsx - sizeOffset,
-        rsy - sizeOffset,
+        rwx - sizeOffset,
+        rwy - sizeOffset,
         TILE_SIZE_PX * scalePulse,
         TILE_SIZE_PX * scalePulse,
       );
-      // Border at pulsed alpha: draw as 2-px edge strips.
+      // Border at pulsed alpha: 2-px edge strips.
       const bw = TILE_SIZE_PX * scalePulse;
       const bh = TILE_SIZE_PX * scalePulse;
-      const bx = rsx - sizeOffset;
-      const by = rsy - sizeOffset;
+      const bx = rwx - sizeOffset;
+      const by = rwy - sizeOffset;
       gfx.fillStyle(0xcc1010, pulse);
       gfx.fillRect(bx, by, bw, 2);
       gfx.fillRect(bx, by + bh - 2, bw, 2);
@@ -353,11 +339,9 @@ export function drawSurfaceEntities(
   }
 
   // --- Ants on surface (zone === 0) ---
-  // Wrong-plane flicker guard (09 render polish): when an ant's zone flipped
-  // between prev and curr (e.g. queen descending through an entrance), OR when
-  // the slot wasn't alive in prev (a freshly-spawned ant whose prev.posX/Y is
-  // a stale default like 0), interpolating prev→curr briefly draws the ant
-  // somewhere it never actually was. Snap to the curr position in those cases.
+  // Wrong-plane flicker guard: when an ant's zone flipped between prev and curr, OR
+  // the slot wasn't alive in prev, snap to curr (interpolating would draw it somewhere
+  // it never was).
   const maxId = curr.ants.alive.length;
   for (let id = 0; id < maxId; id++) {
     if (!isAlive(curr.ants, id)) continue;
@@ -365,28 +349,30 @@ export function drawSurfaceEntities(
 
     const useInterp = isAlive(prev.ants, id) && prev.ants.zone[id] === curr.ants.zone[id];
 
-    // Interpolate position: fixed-point → pixel. Multiply BEFORE dividing so
-    // sub-tile precision survives — truncating with `>> FP_SHIFT` first would
-    // snap the ant to its tile's upper-left corner and it would appear
-    // pinned to tile origins instead of moving smoothly within a tile.
+    // Interpolate position: fixed-point → world px. Multiply BEFORE dividing so
+    // sub-tile precision survives.
     const prevPxX = (prev.ants.posX[id]! * TILE_SIZE_PX) / FP_ONE;
     const currPxX = (curr.ants.posX[id]! * TILE_SIZE_PX) / FP_ONE;
     const prevPxY = (prev.ants.posY[id]! * TILE_SIZE_PX) / FP_ONE;
     const currPxY = (curr.ants.posY[id]! * TILE_SIZE_PX) / FP_ONE;
 
-    const baseX = useInterp ? prevPxX + (currPxX - prevPxX) * alpha : currPxX;
-    const baseY = useInterp ? prevPxY + (currPxY - prevPxY) * alpha : currPxY;
-    const screenX = baseX - left * TILE_SIZE_PX;
-    const screenY = baseY - top * TILE_SIZE_PX;
+    const worldX = useInterp ? prevPxX + (currPxX - prevPxX) * alpha : currPxX;
+    const worldY = useInterp ? prevPxY + (currPxY - prevPxY) * alpha : currPxY;
 
-    // Trivial viewport cull
-    if (
-      screenX < -TILE_SIZE_PX ||
-      screenX > canvasW ||
-      screenY < -TILE_SIZE_PX ||
-      screenY > canvasH
-    )
+    // Trivial world-rect cull.
+    if (!tileInView(worldX, worldY, rect, TILE_SIZE_PX)) continue;
+
+    // Strategic LOD (§C13): a screen-constant colony-colored dot instead of the detailed
+    // sprite — allocation-free (no facing/containment/sprite-pool work). ANT_DOT_SCREEN_PX
+    // / zoom keeps it ~constant on screen as the camera zooms out.
+    if (dotMode) {
+      const dotColor =
+        curr.ants.colonyId[id]! === PLAYER_COLONY_ID ? COLOR_PLAYER_COLONY : COLOR_ENEMY_COLONY;
+      const ds = ANT_DOT_SCREEN_PX / cam.zoom;
+      gfx.fillStyle(dotColor, 1);
+      gfx.fillRect(worldX - ds / 2, worldY - ds / 2, ds, ds);
       continue;
+    }
 
     const colonyId = curr.ants.colonyId[id]!;
     const colony = curr.colonies[colonyId];
@@ -394,17 +380,8 @@ export function drawSurfaceEntities(
 
     const color = colonyId === PLAYER_COLONY_ID ? COLOR_PLAYER_COLONY : COLOR_ENEMY_COLONY;
 
-    // Facing: rotate the SVG (head on -x natively) so the head points along
-    // the motion vector. Smoothing is applied by the AntFacingCache when one
-    // is supplied (GameScene owns the instance and hands it to every frame)
-    // — blends recent deltas so cardinal zig-zag movement reads as a diagonal
-    // facing instead of flipping axis every tick. Stationary ants reuse the
-    // prior smoothed rotation so the sprite holds its pose instead of
-    // snapping back to the default. When useInterp is false (zone flip or
-    // spawn frame) the delta is meaningless and the cache evicts stale state;
-    // rotation falls back to the sprite's default pose. See
-    // AntSpriteDrawOptions.rotation for the math and ant-facing-cache.ts for
-    // the blending contract.
+    // Facing: rotate the SVG so the head points along the motion vector; smoothing via
+    // AntFacingCache when supplied. Stationary ants reuse the prior smoothed rotation.
     const dx = currPxX - prevPxX;
     const dy = currPxY - prevPxY;
     const rotation = computeAntRotation(facing, id, curr.ants.zone[id]!, dx, dy, useInterp);
@@ -412,38 +389,34 @@ export function drawSurfaceEntities(
     const isFighter = curr.ants.task[id] === AntTask.Fighting;
     sprites.drawAnt({
       kind: isQueen ? 'queen' : 'worker',
-      x: screenX,
-      y: screenY,
+      x: worldX,
+      y: worldY,
       // S1: fighters get a red tint blended over their colony color.
       tint: isFighter && !isQueen ? lerpColor(color, COLOR_FIGHTER_TINT, 0.45) : color,
       rotation,
-      // S1: fighters render slightly larger (+1px equivalent at TILE_SIZE_PX=16).
+      // S1: fighters render slightly larger.
       scale: isFighter && !isQueen ? 1.25 : 1.0,
     });
   }
 
   // --- Spider sprite + hunger ring (S3) ---
-  // Drawn above ants (SPIDER_SPRITE_DEPTH = 52 > ANT_SPRITE_DEPTH = 50).
-  // Spider is always on the surface regardless of behavior state.
+  // Drawn above ants (SPIDER_SPRITE_DEPTH = 52 > ANT_SPRITE_DEPTH = 50). Spider is
+  // always on the surface regardless of behavior state.
   if (curr.spider !== null) {
     const spiderPrev = prev.spider;
     const currPxX = (curr.spider.posX * TILE_SIZE_PX) / FP_ONE;
     const currPxY = (curr.spider.posY * TILE_SIZE_PX) / FP_ONE;
     const prevPxX = spiderPrev !== null ? (spiderPrev.posX * TILE_SIZE_PX) / FP_ONE : currPxX;
     const prevPxY = spiderPrev !== null ? (spiderPrev.posY * TILE_SIZE_PX) / FP_ONE : currPxY;
-    // Spider has no zone field (surface-only) and never teleports between ticks,
-    // so a null-check on prev.spider suffices as the interp guard.
     const useSpiderInterp = spiderPrev !== null;
-    const baseSX = useSpiderInterp ? prevPxX + (currPxX - prevPxX) * alpha : currPxX;
-    const baseSY = useSpiderInterp ? prevPxY + (currPxY - prevPxY) * alpha : currPxY;
-    const spiderScreenX = baseSX - left * TILE_SIZE_PX;
-    const spiderScreenY = baseSY - top * TILE_SIZE_PX;
+    const spiderWorldX = useSpiderInterp ? prevPxX + (currPxX - prevPxX) * alpha : currPxX;
+    const spiderWorldY = useSpiderInterp ? prevPxY + (currPxY - prevPxY) * alpha : currPxY;
 
     if (
-      spiderScreenX > -SPIDER_SPRITE_WIDTH &&
-      spiderScreenX < canvasW + SPIDER_SPRITE_WIDTH &&
-      spiderScreenY > -SPIDER_SPRITE_HEIGHT &&
-      spiderScreenY < canvasH + SPIDER_SPRITE_HEIGHT
+      spiderWorldX > rect.left - SPIDER_SPRITE_WIDTH &&
+      spiderWorldX < rect.right + SPIDER_SPRITE_WIDTH &&
+      spiderWorldY > rect.top - SPIDER_SPRITE_HEIGHT &&
+      spiderWorldY < rect.bottom + SPIDER_SPRITE_HEIGHT
     ) {
       const hungerFraction = Math.min(
         curr.spider.hungerTicks / SPIDER_HUNGER_MAX_TICKS[tierIndex(curr.difficulty)],
@@ -452,22 +425,18 @@ export function drawSurfaceEntities(
       // S6: linear tint gradient pale (#ffeecc) → deep red (#cc2020) by hungerFraction.
       const tint = lerpColor(0xffeecc, 0xcc2020, hungerFraction);
 
-      sprites.drawSpider({ x: spiderScreenX, y: spiderScreenY, tint });
+      sprites.drawSpider({ x: spiderWorldX, y: spiderWorldY, tint });
 
-      // Hunger ring (S3 → S6 polished):
-      // Appears at 70% hunger, fades in to full alpha at 100%.
-      // At ≥80%, an additional faster pulse (0.5 Hz) signals rampage warning.
+      // Hunger ring (S3 → S6 polished): appears at 70% hunger, fades to full at 100%.
       if (hungerFraction > 0.7) {
         const baseRingAlpha = ((hungerFraction - 0.7) / 0.3) * 0.85;
-        // S6: rampage warning pulse at ≥80% hunger.
         const rampagePulse =
           hungerFraction >= 0.8 ? 0.1 * Math.sin((2 * Math.PI * frameTimeMs) / 2000) : 0;
         const ringAlpha = Math.min(1, baseRingAlpha + rampagePulse);
-        const rl = Math.round(spiderScreenX - SPIDER_SPRITE_WIDTH / 2);
-        const rt = Math.round(spiderScreenY - SPIDER_SPRITE_HEIGHT / 2);
+        const rl = Math.round(spiderWorldX - SPIDER_SPRITE_WIDTH / 2);
+        const rt = Math.round(spiderWorldY - SPIDER_SPRITE_HEIGHT / 2);
         const rw = SPIDER_SPRITE_WIDTH;
         const rh = SPIDER_SPRITE_HEIGHT;
-        // S6: smooth gradient by color-lerping the ring toward deep red.
         const ringColor = lerpColor(0xffeecc, 0xcc2020, hungerFraction);
         gfx.fillStyle(ringColor, ringAlpha);
         gfx.fillRect(rl, rt, rw, 2);
@@ -477,11 +446,9 @@ export function drawSurfaceEntities(
       }
 
       // S7/D1: spider priority indicator — white border when player has set priority.
-      // Drawn 2px outside the sprite bounding box so it remains visible alongside
-      // the hunger ring (which occupies the same edge pixels as the sprite boundary).
       if (curr.spiderPriorityColonyId === PLAYER_COLONY_ID) {
-        const pl = Math.round(spiderScreenX - SPIDER_SPRITE_WIDTH / 2) - 2;
-        const pt = Math.round(spiderScreenY - SPIDER_SPRITE_HEIGHT / 2) - 2;
+        const pl = Math.round(spiderWorldX - SPIDER_SPRITE_WIDTH / 2) - 2;
+        const pt = Math.round(spiderWorldY - SPIDER_SPRITE_HEIGHT / 2) - 2;
         const pw = SPIDER_SPRITE_WIDTH + 4;
         const ph = SPIDER_SPRITE_HEIGHT + 4;
         gfx.fillStyle(0xffffff, 1);
@@ -491,32 +458,20 @@ export function drawSurfaceEntities(
         gfx.fillRect(pl + pw - 2, pt + 2, 2, ph - 4);
       }
 
-      // Health bar (issue #148): render-only HP indicator floating just above
-      // the sprite. maxHp is the regen cap SPIDER_HP_FULL — SpiderState stores
-      // only hp (clamped to that constant), so no sim field is needed. Hidden
-      // at full health; appears once the spider has taken damage. Drawn on
-      // overlayGfx so it renders above the spider sprite (SPIDER_SPRITE_DEPTH).
+      // Health bar (issue #148): render-only HP indicator above the sprite, drawn on
+      // overlayGfx so it renders above the spider sprite.
       const hpRatio = Math.max(0, Math.min(1, curr.spider.hp / SPIDER_HP_FULL));
       if (hpRatio < 1) {
         const barW = 24;
         const barH = 4;
-        const barX = Math.round(spiderScreenX - barW / 2);
-        // Sit above the sprite top edge (and clear of the priority border,
-        // which sits 2px outside the box).
-        const barY = Math.round(spiderScreenY - SPIDER_SPRITE_HEIGHT / 2 - barH - 4);
-        // green (full) → yellow (half) → red (empty).
+        const barX = Math.round(spiderWorldX - barW / 2);
+        const barY = Math.round(spiderWorldY - SPIDER_SPRITE_HEIGHT / 2 - barH - 4);
         const fillColor =
           hpRatio > 0.5
             ? lerpColor(0xffcc00, 0x33cc33, (hpRatio - 0.5) / 0.5)
             : lerpColor(0xcc2020, 0xffcc00, hpRatio / 0.5);
-        // Quantize the fill so a damaged spider never reads as full and a
-        // barely-alive one never reads as empty: any 0 < ratio < 1 paints
-        // between 1px and barW-1px. hp == 0 paints an empty track. Without
-        // this, hp=79/80 rounds to the full 24px (looks undamaged) and hp=1/80
-        // rounds to 0px (looks dead).
         const fillW =
           hpRatio <= 0 ? 0 : Math.max(1, Math.min(barW - 1, Math.round(barW * hpRatio)));
-        // Dark outline + track so a near-empty bar still reads against terrain.
         overlayGfx.fillStyle(0x000000, 0.7);
         overlayGfx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
         overlayGfx.fillStyle(0x333333, 0.85);
@@ -528,48 +483,39 @@ export function drawSurfaceEntities(
   }
 
   // --- Rally-point marker (Phase 9 usability fix) ---
-  // Player-colony only: a crosshair on the rally tile so the fight-control loop
-  // is visible and discoverable. Distinct from every other surface symbol:
-  //   - food piles         → filled green circle w/ dark outline
-  //   - marked food pile   → filled gold circle
-  //   - entrance           → dark hole w/ dirt rim (filled rects)
-  //   - queen              → gold strokeCircle around a filled body
-  //   - pending entrance   → gold 2-px tile frame
-  //   - rally point        → white crosshair: + bars across the tile, center dot
-  // Enemy colonies' rally points are never drawn (leaks AI intent).
+  // Player-colony only: a white crosshair on the rally tile. Enemy rally points are
+  // never drawn (leaks AI intent).
   if (playerColony && playerColony.rallyPoint !== null) {
     const rp = playerColony.rallyPoint;
-    const sx = (rp.tileX - left) * TILE_SIZE_PX;
-    const sy = (rp.tileY - top) * TILE_SIZE_PX;
-    if (sx > -TILE_SIZE_PX && sx < canvasW && sy > -TILE_SIZE_PX && sy < canvasH) {
+    const wx = rp.tileX * TILE_SIZE_PX;
+    const wy = rp.tileY * TILE_SIZE_PX;
+    if (tileInView(wx, wy, rect, TILE_SIZE_PX)) {
       gfx.fillStyle(COLOR_RALLY_POINT, 1);
-      // Horizontal bar across the tile (leave 1-px edges so adjacent tiles don't fuse)
-      gfx.fillRect(sx + 1, sy + 7, TILE_SIZE_PX - 2, 2);
-      // Vertical bar across the tile
-      gfx.fillRect(sx + 7, sy + 1, 2, TILE_SIZE_PX - 2);
-      // Center square accent — makes the crosshair pop against busy backgrounds
-      gfx.fillRect(sx + 6, sy + 6, 4, 4);
+      // Horizontal bar across the tile (leave 1-px edges so adjacent tiles don't fuse).
+      gfx.fillRect(wx + 1, wy + 7, TILE_SIZE_PX - 2, 2);
+      // Vertical bar across the tile.
+      gfx.fillRect(wx + 7, wy + 1, 2, TILE_SIZE_PX - 2);
+      // Center square accent.
+      gfx.fillRect(wx + 6, wy + 6, 4, 4);
     }
   }
 
   // --- Entrance hover outline (Stage 1 controls rework, issue #18) ---
-  // A 2-px frame on the tile under the pointer while the Dig tool is active on
-  // the surface: GREEN when DesignateEntrance would accept the tile, RED when
-  // not. GameScene re-resolves the tile + validity from the live camera every
-  // frame (Codex R1-9/R2-9/R3-4), so the outline never goes stale and tracks the
-  // pointer even when the camera pans beneath a stationary cursor.
+  // A 2-px frame on the tile under the pointer while the Dig tool is active: GREEN when
+  // DesignateEntrance would accept, RED otherwise. GameScene re-resolves tile + validity
+  // from the live camera every frame.
   if (entranceHover !== null) {
-    const sx = (entranceHover.tileX - left) * TILE_SIZE_PX;
-    const sy = (entranceHover.tileY - top) * TILE_SIZE_PX;
-    if (sx > -TILE_SIZE_PX && sx < canvasW && sy > -TILE_SIZE_PX && sy < canvasH) {
+    const wx = entranceHover.tileX * TILE_SIZE_PX;
+    const wy = entranceHover.tileY * TILE_SIZE_PX;
+    if (tileInView(wx, wy, rect, TILE_SIZE_PX)) {
       gfx.fillStyle(
         entranceHover.valid ? COLOR_ENTRANCE_HOVER_VALID : COLOR_ENTRANCE_HOVER_INVALID,
         0.8,
       );
-      gfx.fillRect(sx, sy, TILE_SIZE_PX, 2); // top
-      gfx.fillRect(sx, sy + TILE_SIZE_PX - 2, TILE_SIZE_PX, 2); // bottom
-      gfx.fillRect(sx, sy, 2, TILE_SIZE_PX); // left
-      gfx.fillRect(sx + TILE_SIZE_PX - 2, sy, 2, TILE_SIZE_PX); // right
+      gfx.fillRect(wx, wy, TILE_SIZE_PX, 2); // top
+      gfx.fillRect(wx, wy + TILE_SIZE_PX - 2, TILE_SIZE_PX, 2); // bottom
+      gfx.fillRect(wx, wy, 2, TILE_SIZE_PX); // left
+      gfx.fillRect(wx + TILE_SIZE_PX - 2, wy, 2, TILE_SIZE_PX); // right
     }
   }
 }
@@ -581,11 +527,8 @@ export function drawSurfaceEntities(
 /**
  * Orchestrator: draw terrain then entities for the surface view.
  *
- * Note: pheromone overlay is drawn by GameScene between terrain and entities;
- * it is NOT called from here.
- *
- * `entranceHover` (Stage 1 controls rework) is forwarded to drawSurfaceEntities
- * so the Dig-tool hover outline renders on top of all other surface layers.
+ * Note: pheromone overlay is drawn by GameScene between terrain and entities; it is
+ * NOT called from here.
  */
 export function drawSurface(
   gfx: GfxLike,
@@ -593,7 +536,7 @@ export function drawSurface(
   prev: WorldState,
   curr: WorldState,
   alpha: number,
-  cam: CameraState,
+  cam: CameraView,
   entranceHover: { tileX: number; tileY: number; valid: boolean } | null = null,
   facing?: AntFacingCache,
 ): void {

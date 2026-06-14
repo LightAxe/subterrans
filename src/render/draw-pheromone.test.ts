@@ -19,8 +19,12 @@ import { createWorldState } from '../sim/types.js';
 import { createPheromoneGrid, phSet, pheromoneGridKey } from '../sim/pheromone/pheromone-store.js';
 import { PheromoneType } from '../sim/enums.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
-import { COLOR_PHEROMONE_FOOD_FAINT, COLOR_PHEROMONE_FOOD_STRONG } from './sprites.js';
-import type { CameraState } from './camera.js';
+import {
+  TILE_SIZE_PX,
+  COLOR_PHEROMONE_FOOD_FAINT,
+  COLOR_PHEROMONE_FOOD_STRONG,
+} from './sprites.js';
+import { makeCameraView, type CameraView } from './camera-adapter.js';
 
 // ---------------------------------------------------------------------------
 // MockGfx — spy recorder implementing GfxLike
@@ -76,8 +80,15 @@ class MockGfx implements GfxLike {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeCamera(cx: number, cy: number, vpW: number, vpH: number): CameraState {
-  return { x: cx, y: cy, viewportWidth: vpW, viewportHeight: vpH };
+// Stage 2 world-space camera: the per-view camera is now a world-pixel
+// CameraView. To frame on tile (cx, cy) we center on (cx × TILE_SIZE_PX,
+// cy × TILE_SIZE_PX) at zoom 1, where the visible window is CANVAS_W/zoom ×
+// CANVAS_H/zoom = 800 × 592 world px. The old viewport-in-tiles args (vpW/vpH)
+// are gone — every fixture grid in this file is small enough to sit entirely
+// inside that window, so the visible-tile counts these tests assert (non-zero
+// tiles only, clamped to grid bounds) are unchanged by the wider window.
+function makeCamera(cx: number, cy: number): CameraView {
+  return makeCameraView(cx * TILE_SIZE_PX, cy * TILE_SIZE_PX);
 }
 
 /**
@@ -163,14 +174,14 @@ describe('drawPheromoneOverlay — FoodTrail grid', () => {
   });
 
   it('produces exactly 3 fillRect calls (skips the zero tile)', () => {
-    const cam = makeCamera(2, 0.5, 4, 1);
+    const cam = makeCamera(2, 0.5);
     drawPheromoneOverlay(gfx, world, cam, 'surface');
     const rects = gfx.callsOf('fillRect');
     expect(rects.length).toBe(3);
   });
 
   it('alpha increases from first to last non-zero tile (ramp behavior)', () => {
-    const cam = makeCamera(2, 0.5, 4, 1);
+    const cam = makeCamera(2, 0.5);
     drawPheromoneOverlay(gfx, world, cam, 'surface');
     const styles = gfx.callsOf('fillStyle');
     // fillStyle is called once per non-zero tile, in order tx=1,2,3
@@ -182,7 +193,7 @@ describe('drawPheromoneOverlay — FoodTrail grid', () => {
   });
 
   it('color at ¼-scale value (PHEROMONE_VISUAL_MAX >> 2) is between faint and strong (not equal to either endpoint)', () => {
-    const cam = makeCamera(2, 0.5, 4, 1);
+    const cam = makeCamera(2, 0.5);
     drawPheromoneOverlay(gfx, world, cam, 'surface');
     const styles = gfx.callsOf('fillStyle');
     // First non-zero tile (tx=1, value = PHEROMONE_VISUAL_MAX >> 2 = 128) → normalized=0.25
@@ -200,7 +211,7 @@ describe('drawPheromoneOverlay — missing grid', () => {
   it('produces no fillRect calls and does not throw when grid key is absent', () => {
     const gfx = new MockGfx();
     const world = createWorldState(1); // no pheromoneGrids installed
-    const cam = makeCamera(5, 5, 10, 10);
+    const cam = makeCamera(5, 5);
     expect(() => drawPheromoneOverlay(gfx, world, cam, 'surface')).not.toThrow();
     expect(gfx.callsOf('fillRect').length).toBe(0);
   });
@@ -227,7 +238,7 @@ describe('drawPheromoneOverlay — both pheromone types', () => {
     phSet(dangerGrid, 1, 1, PHEROMONE_VISUAL_MAX);
     world.pheromoneGrids[dangerKey] = dangerGrid;
 
-    const cam = makeCamera(2, 2, 4, 4);
+    const cam = makeCamera(2, 2);
     drawPheromoneOverlay(gfx, world, cam, 'surface');
 
     expect(gfx.callsOf('fillRect').length).toBe(2);
@@ -249,7 +260,7 @@ describe('drawPheromoneOverlay — both pheromone types', () => {
     phSet(dangerGrid, 0, 0, PHEROMONE_VISUAL_MAX);
     world.pheromoneGrids[dangerKey] = dangerGrid;
 
-    const cam = makeCamera(2, 2, 4, 4);
+    const cam = makeCamera(2, 2);
     drawPheromoneOverlay(gfx, world, cam, 'surface');
 
     const styles = gfx.callsOf('fillStyle');
@@ -281,7 +292,7 @@ describe('drawPheromoneOverlay — underground zone', () => {
     // Surface key should NOT be read
     // (no surface grid installed)
 
-    const cam = makeCamera(2, 2, 4, 4);
+    const cam = makeCamera(2, 2);
     drawPheromoneOverlay(gfx, world, cam, 'underground');
 
     expect(gfx.callsOf('fillRect').length).toBe(1); // one non-zero underground tile
@@ -304,7 +315,7 @@ describe('drawPheromoneOverlay — enemy colony pheromones excluded', () => {
     phSet(enemyGrid, 2, 2, PHEROMONE_VISUAL_MAX);
     world.pheromoneGrids[enemyKey] = enemyGrid;
 
-    const cam = makeCamera(2, 2, 4, 4);
+    const cam = makeCamera(2, 2);
     drawPheromoneOverlay(gfx, world, cam, 'surface');
 
     // No player grids → no draws; enemy grid is never accessed
@@ -330,7 +341,7 @@ describe('drawPheromoneOverlay — viewport clipping', () => {
     world.pheromoneGrids[key] = smallGrid;
 
     // Huge viewport — should still produce only 4 fillRect calls (2×2 grid)
-    const cam = makeCamera(0, 0, 100, 100);
+    const cam = makeCamera(0, 0);
     drawPheromoneOverlay(gfx, world, cam, 'surface');
 
     // Only 4 tiles exist; DangerTrail grid is absent (no calls from it)

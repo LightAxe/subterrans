@@ -5,18 +5,18 @@
 //       AI controller wiring (onBeforeTick → runAIController per AI colony),
 //       outcome handling (gameLoop.pause() + UIScene overlay), autosave.
 //
-// Coordinate model (Phase 8.5 stabilization):
-//   The project owns the camera. `CameraState` is in tile units; the draw modules
-//   project world tiles into screen pixels manually by subtracting `left/top` in
-//   visibleRange(). Phaser's own camera (`this.cameras.main`) is left at
-//   scroll=0 and bounds=default — it is NOT synced to CameraState. Previously we
-//   also set `cameras.main.scrollX/scrollY` from CameraState, which double-
-//   translated the Graphics object and pushed the world offscreen (this was the
-//   "surface appears all black" + "underground click Y-offset" bug). The fix is
-//   a single transform: manual projection in the draw modules.
+// Coordinate model (Stage 2 continuous-zoom rework, issue #18):
+//   The render layer draws everything in WORLD pixels (worldX = tileX × TILE_SIZE_PX).
+//   The Phaser main camera IS the projection: CameraController drives
+//   cameras.main.setZoom + centerOn from the active view's world-pixel CameraView
+//   (camera-adapter.ts is the single screen↔world authority). Input never reads a
+//   Phaser matrix — it uses the adapter's pure formula. No setBounds (custom
+//   center-aware clamp instead). Pre-Stage-2 this used manual screen-space projection
+//   in the draw modules with cameras.main left at scroll=0; that is gone.
 //
-// Pitfall 1: Do not sync `cameras.main.scrollX/scrollY` from CameraState. The
-//            draw modules already project to screen space.
+// Pitfall 1: All world drawing is in world px; the camera projects. Do NOT re-introduce
+//            manual screen offsets in the draw modules, and do NOT setScrollFactor(0) on
+//            world objects (that cancels scroll but NOT zoom — see screen-effects).
 // Pitfall 2: Keyboard registration is GameScene-only — UIScene must NOT call createCursorKeys().
 // Pitfall 3: scale.mode = NONE, fixed 800x592 — no DPR scaling.
 // Pitfall 4: NEVER use .keys()/.entries()/.get() on world.colonies — it is a PLAIN OBJECT (ADR-0006).
@@ -64,22 +64,39 @@ import {
   resetViewState,
   toggleView,
   toggleUndergroundColony,
-  clampCamera,
-  screenToTile,
+  worldPxDimensions,
+  SURFACE_WORLD_PX_W,
+  SURFACE_WORLD_PX_H,
+  UNDERGROUND_WORLD_PX_W,
+  UNDERGROUND_WORLD_PX_H,
 } from './camera.js';
+import {
+  type CameraView,
+  clampCameraView,
+  screenToTileZoom,
+  resolveDotMode,
+} from './camera-adapter.js';
+import { CameraController, WHEEL_ZOOM_STEP, WHEEL_NOTCH_PX } from './camera-controller.js';
+import {
+  TerrainCache,
+  surfaceCacheKey,
+  undergroundCacheKey,
+  createTerrainShadow,
+  diffTerrainShadow,
+} from './terrain-bake.js';
 import {
   PLAYER_COLONY_ID,
   PLAYER_START_X,
   PLAYER_START_Y,
-  SURFACE_GRID_WIDTH,
-  SURFACE_GRID_HEIGHT,
-  UNDERGROUND_GRID_WIDTH,
-  UNDERGROUND_GRID_HEIGHT,
   STARVATION_GRACE_TICKS,
 } from '../sim/constants.js';
 import { GameOutcome } from '../sim/game-over.js';
 import { drawSurfaceTerrain, drawSurfaceEntities, type GfxLike } from './draw-surface.js';
-import { drawUndergroundTerrain, drawUndergroundEntities } from './draw-underground.js';
+import {
+  drawUndergroundTerrain,
+  drawUndergroundEntities,
+  restampUndergroundTiles,
+} from './draw-underground.js';
 import { drawPheromoneOverlay } from './draw-pheromone.js';
 import { publishSpeedMultiplier } from './ui-scene.js';
 import { AntFacingCache } from './ant-facing-cache.js';
@@ -127,6 +144,7 @@ import {
   resetDragState,
   resetPanInputState,
   isPointerOverHUD,
+  panInputState,
 } from '../input/camera-input.js';
 import { isValidEntranceTarget } from '../input/surface-input.js';
 import { registerGestureArbiter, type GestureArbiter } from '../input/gesture-arbiter.js';
@@ -145,10 +163,10 @@ import { antActivityPanelState } from './ant-activity-panel-state.js';
 import { buildPlaytraceSummary, type GameOutcomeLabel } from './summary-builder.js';
 import { captionForEvent, checkAndTrigger, resetCaptions } from './onboarding-captions.js';
 import {
-  triggerScreenEdgeFlash,
   triggerQueenDamagePulse,
   inferFlashDirection,
   QUEEN_DAMAGE_SUPPRESS_TICKS,
+  type FlashDirection,
 } from './screen-effects.js';
 import { ChamberType } from '../sim/enums.js';
 import { CANVAS_W, CANVAS_H } from './sprites.js';
@@ -205,6 +223,10 @@ interface UIScenePhase9 {
   hideDifficultySelectOverlay(): void;
   // S6 — first-occurrence caption overlay (light onboarding).
   showCaption(text: string, screenX: number, screenY: number): void;
+  // Stage 2 controls rework (issue #18) — the invasion screen-edge flash renders
+  // on UIScene (non-zooming camera), NOT GameScene (zoom-driven main camera), so
+  // setScrollFactor(0)'s scroll-but-not-zoom gap can't miscale the edge strips.
+  triggerScreenEdgeFlash(direction: FlashDirection): void;
   // Stage 1 controls rework (issue #18) — surface the queue-full hint when
   // enqueueCommand drops a command at the cap. `paused` selects the message:
   // paused → "resume to continue"; running → "try again" (transient burst).
@@ -248,6 +270,24 @@ export class GameScene extends Phaser.Scene {
   // SPIDER_SPRITE_DEPTH so it clears every in-world sprite.
   private overlayGfx!: Phaser.GameObjects.Graphics;
   private antSprites!: AntSpritePool;
+  // Stage 2 (issue #18): the Phaser-bound camera driver. Wraps cameras.main and is
+  // driven from the active view's world-pixel CameraView every frame (setZoom +
+  // centerOn); the only place that touches cameras.main's transform.
+  private cameraController!: CameraController;
+  // Stage 2 §B: baked-terrain RenderTexture cache (one RT per view, lazy enemy) + a
+  // reusable off-screen Graphics used to stamp terrain into the RTs (full bake / dirty
+  // re-stamp). The RTs are world-space GOs at origin (0,0) that cameras.main projects.
+  private terrainCache!: TerrainCache<Phaser.GameObjects.RenderTexture>;
+  private terrainBaker!: Phaser.GameObjects.Graphics;
+  // Stage 2 §C13: strategic ant-dot LOD mode, resolved each frame from the smoothed zoom
+  // via the hysteresis resolver (held across frames so the 0.55/0.65 band doesn't thrash).
+  // PER VIEW (Codex P2): surface + underground keep independent zooms, so their LOD modes
+  // must be tracked separately — a single shared flag carries the leaving view's mode onto
+  // the entering view and strands it in the wrong mode inside the hysteresis band on toggle.
+  private readonly dotModeByView: { surface: boolean; underground: boolean } = {
+    surface: false,
+    underground: false,
+  };
   // Render-only ant-facing smoothing (see ant-facing-cache.ts). One instance
   // per scene, threaded into drawSurface + drawUnderground each frame so
   // cardinal zig-zag movement settles into a diagonal heading instead of
@@ -428,6 +468,42 @@ export class GameScene extends Phaser.Scene {
     this.overlayGfx = this.add.graphics();
     this.overlayGfx.setDepth(SPIDER_SPRITE_DEPTH + 1);
     this.antSprites = new AntSpritePool(this);
+    // Stage 2 (issue #18): bind the continuous-zoom camera. cameras.main is now the
+    // world→screen projection (driven from the CameraView each frame); roundPixels is
+    // disabled inside the controller for smooth sub-pixel pan.
+    this.cameraController = new CameraController(this.cameras.main);
+
+    // Stage 2 §B: baked-terrain RenderTextures (one RT per view, origin (0,0); surface
+    // 2048², underground 2048×1024 per colony, enemy lazily on first X-toggle). NEAREST
+    // filtering for crisp scaling; depth below all dynamic layers; hidden until shown.
+    // cameras.main projects/zooms the RT each frame.
+    this.terrainCache = new TerrainCache<Phaser.GameObjects.RenderTexture>((key) => {
+      const [w, h] =
+        key === surfaceCacheKey()
+          ? [SURFACE_WORLD_PX_W, SURFACE_WORLD_PX_H]
+          : [UNDERGROUND_WORLD_PX_W, UNDERGROUND_WORLD_PX_H];
+      const rt = this.add.renderTexture(0, 0, w, h);
+      rt.setOrigin(0, 0);
+      rt.setDepth(-10); // below the dynamic gfx (depth 0) + ant pool (50)
+      rt.setVisible(false);
+      rt.texture.setFilter(Phaser.Textures.FilterMode.NEAREST);
+      return rt;
+    });
+    // Off-screen reusable Graphics for stamping terrain into the RTs (not on the display list).
+    this.terrainBaker = this.make.graphics({}, false);
+
+    // Stage 2 §B (R2-11/R4-6): a WebGL context restore leaves RT framebuffers blank — flag
+    // every allocated cache for a full rebake. The WebGLRenderer (game.renderer) emits
+    // 'restorewebgl' (game.events does NOT). Unsubscribe + destroy the RTs on shutdown.
+    const renderer = this.game.renderer as unknown as Phaser.Events.EventEmitter;
+    renderer.on('restorewebgl', this.onWebglRestore);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      renderer.off('restorewebgl', this.onWebglRestore);
+      this.terrainCache.destroyAll((rt) => rt.destroy());
+      // terrainBaker is off the display list (make.graphics addToScene=false), so Phaser
+      // won't auto-destroy it on shutdown — free its WebGL batch explicitly.
+      this.terrainBaker.destroy();
+    });
 
     // Issue #122 — pull the playtrace endpoint out of the registry (set by
     // main.ts in callbacks.preBoot). Treat any non-string value as "feature
@@ -466,6 +542,32 @@ export class GameScene extends Phaser.Scene {
     // Resume (Codex P2). A bare user-pause (Space) is NOT modal, so middle-pan
     // still works while paused — intended.
     this.dragState = registerDragPan(this, this.viewState, () => this.isModalOpen());
+
+    // Stage 2 (issue #18): mouse-wheel zoom. Gated exactly like world pan — ignored
+    // over HUD zones and whenever a modal / menu / game-over owns input
+    // (canAcceptWorldHotkey). ctrl/cmd-wheel is ignored so the OS/browser pinch-zoom
+    // gesture is never hijacked for game zoom. Wheel-up (deltaY < 0) zooms IN; the
+    // controller runs the cursor-anchored zoom-lerp from here.
+    this.input.on(
+      'wheel',
+      (pointer: Phaser.Input.Pointer, _over: unknown, _dx: number, dy: number) => {
+        if (!this.canAcceptWorldHotkey()) return;
+        if (isPointerOverHUD(pointer.x, pointer.y, this.viewState)) return;
+        const native = pointer.event as WheelEvent | undefined;
+        if (native?.ctrlKey || native?.metaKey) return;
+        if (dy === 0) return;
+        const cam =
+          this.viewState.activeView === 'surface'
+            ? this.viewState.surfaceCamera
+            : this.viewState.undergroundCamera;
+        // Scale by deltaY magnitude so continuous trackpad / high-res-wheel scrolling
+        // (many small events per gesture) zooms smoothly instead of jumping a full step
+        // every event and slamming to the zoom limit (Codex P1). One ~WHEEL_NOTCH_PX notch
+        // = one ×WHEEL_ZOOM_STEP; dy<0 (scroll up) zooms in.
+        const factor = Math.pow(WHEEL_ZOOM_STEP, -dy / WHEEL_NOTCH_PX);
+        this.cameraController.beginZoom(cam, factor, pointer.x, pointer.y);
+      },
+    );
 
     // Issue #116 — Esc opens the pause menu overlay (which also pauses the
     // sim). The Esc keybinding itself lives in UIScene (which already owned
@@ -552,6 +654,14 @@ export class GameScene extends Phaser.Scene {
       if (!this.canAcceptWorldHotkey()) return;
       if (this.viewState.activeView !== 'underground') return;
       toggleUndergroundColony(this.viewState);
+      // Toggling the active colony retargets where a Dig/Command lands, so it
+      // must abort any pending gesture eagerly — same as selectTool on a tool
+      // change. Otherwise a same-frame keydown-X batched before a queued
+      // pointerup would dispatch the tap onto the now-live colony's grid at a
+      // tile picked while inspecting the OTHER colony (the down-time snapshot's
+      // colony is bypassed in dispatchTap; reconcileContext only covers the
+      // cross-frame case).
+      this.arbiter.cancelGesture();
       // Clear stale glow entries from the previous colony grid — tile keys are
       // not scoped to a colony, so entries from one grid must not bleed into
       // the other when the view switches.
@@ -599,6 +709,17 @@ export class GameScene extends Phaser.Scene {
           // 1×/2×/4× set the multiplier WITHOUT changing pause reasons (Codex R2-11).
           this.setSpeedMultiplier(control);
         }
+      },
+      // A minimap click-to-nav has just recentered the active camera. Cancel any
+      // in-flight wheel zoom-lerp/anchor on it so the next tickZoomLerp doesn't
+      // re-anchor centerX/Y from the fixed cursor point and overwrite the nav —
+      // same cancel the keyboard/drag-pan path does below in update().
+      onMinimapNav: () => {
+        const cam =
+          this.viewState.activeView === 'surface'
+            ? this.viewState.surfaceCamera
+            : this.viewState.undergroundCamera;
+        this.cameraController.cancel(cam);
       },
       isPaused: () => isPausedByAny(this.pauseReasons),
       getSpeedMultiplier: () => this.speedMultiplier,
@@ -849,9 +970,9 @@ export class GameScene extends Phaser.Scene {
             ev.payload.rallyTile?.x ?? queenTileX,
             ev.payload.rallyTile?.y ?? queenTileY,
           );
-          triggerScreenEdgeFlash(this, direction, CANVAS_W, CANVAS_H);
+          uiScene?.triggerScreenEdgeFlash(direction);
         } else {
-          triggerScreenEdgeFlash(this, 'right', CANVAS_W, CANVAS_H);
+          uiScene?.triggerScreenEdgeFlash('right');
         }
         // Caption #7: AI invasion (one-shot, via the event→caption policy).
         const captionText = captionForEvent(ev.type);
@@ -879,7 +1000,7 @@ export class GameScene extends Phaser.Scene {
         // is null and neither flash nor caption fires again here.
         const captionText = checkAndTrigger('aiInvading');
         if (captionText) {
-          triggerScreenEdgeFlash(this, 'right', CANVAS_W, CANVAS_H);
+          uiScene?.triggerScreenEdgeFlash('right');
           if (uiScene) uiScene.showCaption(captionText, CANVAS_W / 2, 60);
         }
       }
@@ -1073,6 +1194,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   private finishBoot(): void {
+    // Stage 2 §B: a fresh/loaded world must rebake every allocated terrain RT (the prior
+    // session's RTs are stale). Optional chaining — finishBoot can run before create() has
+    // instantiated the cache in some boot orderings; the first frame then lazily bakes.
+    this.terrainCache?.invalidateAll();
+
     this.prevState = createScenario(this.currentSeed, this.currentDifficulty);
     copyWorldState(this.world, this.prevState);
 
@@ -1577,6 +1703,76 @@ export class GameScene extends Phaser.Scene {
   // Update loop
   // ---------------------------------------------------------------------------
 
+  /**
+   * Stage 2 §B: (re)bake the active view's terrain into its RenderTexture, then show only
+   * that RT (hide the others). Surface is static → baked once on first visit; underground
+   * full-bakes on first visit / WebGL-restore / restart, then incrementally re-stamps only
+   * the tiles the render-owned shadow-diff reports dirty (AI digging). The RT is a
+   * world-space GO the main camera projects, so this replaces the per-frame immediate-mode
+   * terrain draw. Pixels are validated in UAT (no GPU here).
+   */
+  private bakeAndShowTerrain(cam: CameraView): void {
+    if (this.world === undefined) return;
+    const isSurface = this.viewState.activeView === 'surface';
+    const colonyId = this.viewState.activeUndergroundColonyId;
+    const key = isSurface ? surfaceCacheKey() : undergroundCacheKey(colonyId);
+    const entry = this.terrainCache.ensure(key);
+    const baker = this.terrainBaker as unknown as GfxLike;
+
+    // Entrance ceiling-gap columns for the viewed underground colony (used by the
+    // shadow-diff + autotile ceiling row).
+    const entranceCols = (): Set<number> => {
+      const set = new Set<number>();
+      const colony = this.world?.colonies[colonyId];
+      if (colony?.entrances) {
+        for (const e of colony.entrances) set.add(e.surfaceTileX);
+      }
+      return set;
+    };
+
+    if (entry.needsRebake) {
+      this.terrainBaker.clear();
+      entry.rt.clear();
+      if (isSurface) {
+        drawSurfaceTerrain(baker, this.world, cam, true);
+        entry.rt.draw(this.terrainBaker);
+        this.terrainCache.markBaked(key); // surface is static → no shadow
+      } else {
+        drawUndergroundTerrain(baker, this.world, cam, colonyId, true);
+        entry.rt.draw(this.terrainBaker);
+        const grid = this.world.undergroundGrids[colonyId];
+        this.terrainCache.markBaked(key, grid ? createTerrainShadow(grid, entranceCols()) : null);
+      }
+    } else if (!isSurface && entry.shadow !== null) {
+      const grid = this.world.undergroundGrids[colonyId];
+      if (grid !== undefined) {
+        const dirty = diffTerrainShadow(entry.shadow, grid, entranceCols());
+        if (dirty.size > 0) {
+          this.terrainBaker.clear();
+          restampUndergroundTiles(baker, this.world, colonyId, dirty);
+          entry.rt.draw(this.terrainBaker);
+        }
+      }
+    }
+    // Free the off-screen baker's command buffer now — a full bake holds the entire
+    // 128×128 procedural-terrain Graphics (hundreds of thousands of primitives) and would
+    // otherwise be retained until the next bake, which may never happen in a surface-only
+    // session (Codex P2).
+    this.terrainBaker.clear();
+
+    // Show only the active view's RT.
+    for (const k of this.terrainCache.allocatedKeys()) {
+      const e = this.terrainCache.get(k);
+      if (e !== undefined) e.rt.setVisible(k === key);
+    }
+  }
+
+  /** Stage 2 §B: WebGL context restored → RT framebuffers are blank → flag for rebake.
+   *  Arrow field so the reference is stably bound (lint-safe + same ref for on/off). */
+  private readonly onWebglRestore = (): void => {
+    this.terrainCache.invalidateAll();
+  };
+
   update(time: number, delta: number) {
     // SavePrompt phase: overlay handles input; no tick updates expected.
     if (this.gamePhase === GamePhase.SavePrompt) return;
@@ -1620,23 +1816,48 @@ export class GameScene extends Phaser.Scene {
 
     // Apply keyboard-pan + final clamp. Blocked behind any modal (menu /
     // SavePrompt / GameOver); still active during a bare user-pause (Fix 3).
+    let keyboardPanned = false;
     if (keyboardPanActive) {
-      processCameraInput(this.viewState, {
-        cursors: this.cursors,
-        wasd: this.wasd,
-        dragState: this.dragState,
-      });
+      keyboardPanned = processCameraInput(
+        this.viewState,
+        {
+          cursors: this.cursors,
+          wasd: this.wasd,
+          dragState: this.dragState,
+        },
+        delta / 1000, // time-based keyboard pan: screen-px/sec × dt ÷ zoom
+      );
     }
 
     const cam =
       this.viewState.activeView === 'surface'
         ? this.viewState.surfaceCamera
         : this.viewState.undergroundCamera;
-    const worldW =
-      this.viewState.activeView === 'surface' ? SURFACE_GRID_WIDTH : UNDERGROUND_GRID_WIDTH;
-    const worldH =
-      this.viewState.activeView === 'surface' ? SURFACE_GRID_HEIGHT : UNDERGROUND_GRID_HEIGHT;
-    clampCamera(cam, worldW, worldH);
+    const [worldPxW, worldPxH] = worldPxDimensions(this.viewState.activeView);
+    // Controls rework (issue #18): if the user moved the camera by ANY other input
+    // this frame — keyboard pan above, or a left/middle drag-pan (panInputState.isPanning,
+    // set async by the arbiter / registerDragPan) — drop the in-flight wheel-zoom anchor.
+    // Otherwise the next tickZoomLerp re-anchors centerX/Y purely from the fixed cursor
+    // point and overwrites the pan on the same frame, stuttering/freezing pan for ~0.5s
+    // per notch while a zoom lerps.
+    if (keyboardPanned || panInputState.isPanning) {
+      this.cameraController.cancel(cam);
+    }
+    // Advance any in-flight cursor-anchored wheel zoom (it re-anchors + clamps as it
+    // lerps), keep the active camera valid, then push zoom + center onto Phaser's
+    // camera for this frame. cameras.main IS the projection now.
+    this.cameraController.tickZoomLerp(cam, worldPxW, worldPxH);
+    clampCameraView(cam, worldPxW, worldPxH);
+    this.cameraController.apply(cam);
+
+    // Stage 2 §C13: resolve the strategic dot-LOD mode from the smoothed zoom (stateful
+    // hysteresis — the 0.55/0.65 band holds the prior mode) for the ACTIVE view, using
+    // that view's own prior mode so a toggle never carries the other view's LOD state
+    // across (Codex P2). Threaded into the entity draw so strategic zoom-out renders ants
+    // as batched dots instead of full sprites.
+    const activeViewKey = this.viewState.activeView;
+    this.dotModeByView[activeViewKey] = resolveDotMode(cam.zoom, this.dotModeByView[activeViewKey]);
+    const dotMode = this.dotModeByView[activeViewKey];
 
     // Stage 1 controls rework (issue #18): set the per-tool canvas cursor. Reset
     // to the default cursor over any HUD zone / the context menu / any modal so
@@ -1674,9 +1895,12 @@ export class GameScene extends Phaser.Scene {
     // Player colony only — enemy pheromones stay hidden regardless of toggle
     // state (PRD §7b / T-08-05).
     this.beginDrawTrace();
+    // Stage 2 §B: (re)bake the active view's terrain into its RenderTexture and show it
+    // (cameras.main projects/zooms the RT). Replaces the per-frame immediate-mode terrain
+    // draw — the dynamic layers (pheromone, entities, chambers, dots) still draw into gfx.
+    this.bakeAndShowTerrain(cam);
     if (this.viewState.activeView === 'surface') {
       this.recordDrawLayer('terrain');
-      drawSurfaceTerrain(gfx, this.world, cam);
       if (this.viewState.showPheromoneOverlay) {
         this.recordDrawLayer('pheromone');
         drawPheromoneOverlay(gfx, this.world, cam, 'surface');
@@ -1701,10 +1925,10 @@ export class GameScene extends Phaser.Scene {
         this.contestedGlowFrames, // S6: surface glow fade map
         this.renderFrame, // S6: current render frame
         overlayGfx, // #148: health bar renders above sprites
+        dotMode, // §C13: strategic dot-LOD
       );
     } else {
       this.recordDrawLayer('terrain');
-      drawUndergroundTerrain(gfx, this.world, cam, this.viewState.activeUndergroundColonyId);
       if (this.viewState.showPheromoneOverlay) {
         this.recordDrawLayer('pheromone');
         drawPheromoneOverlay(gfx, this.world, cam, 'underground');
@@ -1721,6 +1945,7 @@ export class GameScene extends Phaser.Scene {
         this.antFacingCache,
         this.undergroundGlowFrames, // S6: underground glow fade map
         this.renderFrame, // S6: current render frame
+        dotMode, // §C13: strategic dot-LOD
       );
     }
     this.antSprites.endFrame();
@@ -1747,15 +1972,21 @@ export class GameScene extends Phaser.Scene {
    * the LIVE camera so the outline tracks the pointer even under a moving camera.
    */
   private computeEntranceHover(
-    cam: import('./camera.js').CameraState,
+    cam: CameraView,
   ): { tileX: number; tileY: number; valid: boolean } | null {
     if (this.viewState.activeView !== 'surface') return null;
     if (this.viewState.activeTool !== 'dig') return null;
     if (this.hoverScreenX === null || this.hoverScreenY === null) return null;
     if (isPointerOverHUD(this.hoverScreenX, this.hoverScreenY, this.viewState)) return null;
     if (this.world === undefined) return null;
-    const { tileX, tileY } = screenToTile(this.hoverScreenX, this.hoverScreenY, cam);
+    const { tileX, tileY } = screenToTileZoom(this.hoverScreenX, this.hoverScreenY, cam);
+    // Reject off-grid tiles on BOTH axes. Zoomed out, the visible world rect can extend
+    // past the grid edge (clampCameraView centers an undersized-vs-viewport world), so a
+    // cursor in that margin maps to an out-of-bounds tile; without the upper-bound guard a
+    // spurious red (invalid) hover frame paints over the empty margin past the right/bottom
+    // edge (a Stage-2 zoom regression — the pre-zoom fixed viewport never exposed margins).
     if (tileX < 0 || tileY < 0) return null;
+    if (tileX >= this.world.surface.width || tileY >= this.world.surface.height) return null;
     const valid = isValidEntranceTarget(this.world, tileX, tileY);
     return { tileX, tileY, valid };
   }

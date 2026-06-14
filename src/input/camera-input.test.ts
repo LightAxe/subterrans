@@ -32,38 +32,31 @@ beforeEach(() => {
   resetPanInputState();
 });
 import type { ViewState } from '../render/camera.js';
-import {
-  VIEWPORT_WIDTH_TILES,
-  VIEWPORT_HEIGHT_TILES,
-  CAMERA_SCROLL_SPEED,
-} from '../render/camera.js';
-import { HUD } from '../render/sprites.js';
-import { SURFACE_GRID_WIDTH, PLAYER_COLONY_ID } from '../sim/constants.js';
+import { SURFACE_WORLD_PX_W } from '../render/camera.js';
+import { makeCameraView, KEYBOARD_PAN_SPEED_PX_PER_SEC } from '../render/camera-adapter.js';
+import { HUD, CANVAS_W } from '../render/sprites.js';
+import { PLAYER_COLONY_ID } from '../sim/constants.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Build a ViewState with world-pixel CameraView cameras centered on
+ * (centerX, centerY) at DEFAULT_ZOOM (1). World-space camera model (issue #18
+ * Stage 2): centerX/centerY are WORLD PIXELS, not tiles. Both cameras are
+ * independent CameraView instances.
+ */
 function makeViewState(
   view: 'surface' | 'underground' = 'surface',
-  camX = 64,
-  camY = 64,
+  centerX = 1024,
+  centerY = 1024,
 ): ViewState {
   return {
     activeView: view,
     activeTool: view === 'surface' ? 'command' : 'dig',
-    surfaceCamera: {
-      x: camX,
-      y: camY,
-      viewportWidth: VIEWPORT_WIDTH_TILES,
-      viewportHeight: VIEWPORT_HEIGHT_TILES,
-    },
-    undergroundCamera: {
-      x: camX,
-      y: camY,
-      viewportWidth: VIEWPORT_WIDTH_TILES,
-      viewportHeight: VIEWPORT_HEIGHT_TILES,
-    },
+    surfaceCamera: makeCameraView(centerX, centerY),
+    undergroundCamera: makeCameraView(centerX, centerY),
     undergroundVisited: false,
     activeUndergroundColonyId: PLAYER_COLONY_ID,
     showPheromoneOverlay: true,
@@ -164,36 +157,55 @@ describe('isPointerOverHUD', () => {
 // processCameraInput
 // ---------------------------------------------------------------------------
 
-describe('processCameraInput', () => {
-  it('pans left/right/up/down by CAMERA_SCROLL_SPEED per held key (arrow keys)', () => {
-    const vs = makeViewState('surface', 100, 100);
-    processCameraInput(vs, makePanInputs({ leftDown: true }));
-    expect(vs.surfaceCamera.x).toBeCloseTo(100 - CAMERA_SCROLL_SPEED);
+// Time-based keyboard pan (issue #18 Stage 2): one frame at 60fps.
+const DT_60FPS = 1 / 60;
+// World-px the camera center moves per held direction at zoom 1, one 60fps frame:
+// KEYBOARD_PAN_SPEED_PX_PER_SEC × dt ÷ zoom. (600/60 = 10 at zoom 1.)
+const PAN_STEP_60FPS = (KEYBOARD_PAN_SPEED_PX_PER_SEC * DT_60FPS) / 1;
+// Clamp half-window in world px at zoom 1: viewWorldWidth(1)/2 = CANVAS_W/2.
+const HALF_VIEW_W_AT_ZOOM_1 = CANVAS_W / 2;
 
-    const vs2 = makeViewState('surface', 100, 100);
-    processCameraInput(vs2, makePanInputs({ downDown: true }));
-    expect(vs2.surfaceCamera.y).toBeCloseTo(100 + CAMERA_SCROLL_SPEED);
+describe('processCameraInput', () => {
+  it('pans left/right/up/down by the time-based step per held key (arrow keys)', () => {
+    // Start well clear of the world edges so the clamp doesn't mask the pan delta.
+    const vs = makeViewState('surface', 1000, 1000);
+    processCameraInput(vs, makePanInputs({ leftDown: true }), DT_60FPS);
+    // Left moves centerX in the −X direction by the time-based step.
+    expect(vs.surfaceCamera.centerX).toBeCloseTo(1000 - PAN_STEP_60FPS);
+
+    const vs2 = makeViewState('surface', 1000, 1000);
+    processCameraInput(vs2, makePanInputs({ downDown: true }), DT_60FPS);
+    // Down moves centerY in the +Y direction by the same step.
+    expect(vs2.surfaceCamera.centerY).toBeCloseTo(1000 + PAN_STEP_60FPS);
   });
 
   it('WASD pans identically to the arrow keys', () => {
-    const vs = makeViewState('surface', 100, 100);
-    processCameraInput(vs, makePanInputs({ wasdD: true }));
-    expect(vs.surfaceCamera.x).toBeCloseTo(100 + CAMERA_SCROLL_SPEED);
+    const vs = makeViewState('surface', 1000, 1000);
+    processCameraInput(vs, makePanInputs({ wasdD: true }), DT_60FPS);
+    expect(vs.surfaceCamera.centerX).toBeCloseTo(1000 + PAN_STEP_60FPS);
+  });
+
+  it('is frame-rate independent: a 2× dt pans 2× as far', () => {
+    const vs = makeViewState('surface', 1000, 1000);
+    processCameraInput(vs, makePanInputs({ wasdD: true }), 2 * DT_60FPS);
+    expect(vs.surfaceCamera.centerX).toBeCloseTo(1000 + 2 * PAN_STEP_60FPS);
   });
 
   it('is suppressed while panInputState.isPanning is true (drag claims the camera)', () => {
-    const vs = makeViewState('surface', 100, 100);
+    const vs = makeViewState('surface', 1000, 1000);
     panInputState.isPanning = true;
-    processCameraInput(vs, makePanInputs({ leftDown: true }));
-    expect(vs.surfaceCamera.x).toBe(100); // unchanged
+    processCameraInput(vs, makePanInputs({ leftDown: true }), DT_60FPS);
+    expect(vs.surfaceCamera.centerX).toBe(1000); // unchanged
   });
 
   it('clamps the camera into world bounds after a pan', () => {
-    // Push left hard against the world edge; clamp pins x at half-viewport.
-    const vs = makeViewState('surface', 0, 100);
-    processCameraInput(vs, makePanInputs({ leftDown: true }));
-    expect(vs.surfaceCamera.x).toBeGreaterThanOrEqual(VIEWPORT_WIDTH_TILES / 2);
-    expect(vs.surfaceCamera.x).toBeLessThanOrEqual(SURFACE_GRID_WIDTH - VIEWPORT_WIDTH_TILES / 2);
+    // Push left hard against the world edge; clamp pins centerX at the half-window.
+    const vs = makeViewState('surface', 0, 1000);
+    processCameraInput(vs, makePanInputs({ leftDown: true }), DT_60FPS);
+    expect(vs.surfaceCamera.centerX).toBeGreaterThanOrEqual(HALF_VIEW_W_AT_ZOOM_1);
+    expect(vs.surfaceCamera.centerX).toBeLessThanOrEqual(
+      SURFACE_WORLD_PX_W - HALF_VIEW_W_AT_ZOOM_1,
+    );
   });
 });
 
@@ -232,15 +244,17 @@ function middlePointer(x: number, y: number): Phaser.Input.Pointer {
 
 describe('registerDragPan (middle-button)', () => {
   it('pans the active camera on a middle-button drag', () => {
-    const vs = makeViewState('surface', 100, 100);
+    // Center clear of the clamp edges so the pan delta isn't masked by clamping.
+    const vs = makeViewState('surface', 1000, 1000);
     const { scene, emit } = makeFakeScene();
     registerDragPan(scene, vs);
     // Non-HUD points (mid play-area, clear of every HUD rect).
     emit('pointerdown', middlePointer(400, 300));
     expect(panInputState.isPanning).toBe(true);
     emit('pointermove', middlePointer(400 + TILE_SIZE_PX, 300));
-    // Pointer moved +1 tile in x → camera pans -1 tile in x (drag-the-world).
-    expect(vs.surfaceCamera.x).toBeCloseTo(100 - 1);
+    // Pointer moved +TILE_SIZE_PX px in x → at zoom 1 the camera center pans
+    // −delta/zoom = −TILE_SIZE_PX world px (drag-the-world: panByScreenDelta).
+    expect(vs.surfaceCamera.centerX).toBeCloseTo(1000 - TILE_SIZE_PX);
     emit('pointerup', middlePointer(400 + TILE_SIZE_PX, 300));
     expect(panInputState.isPanning).toBe(false);
   });
@@ -250,7 +264,7 @@ describe('registerDragPan (middle-button)', () => {
   // flips true mid-gesture; the very next pointermove must release the drag and
   // stop moving the camera (pointermove calls releaseDrag() when isBlocked()).
   it('stops an in-flight middle-drag when isBlocked flips true mid-gesture', () => {
-    const vs = makeViewState('surface', 100, 100);
+    const vs = makeViewState('surface', 1000, 1000);
     const { scene, emit } = makeFakeScene();
     const blocked = { value: false };
     registerDragPan(scene, vs, () => blocked.value);
@@ -258,7 +272,7 @@ describe('registerDragPan (middle-button)', () => {
     // Drag starts and pans while unblocked.
     emit('pointerdown', middlePointer(400, 300));
     emit('pointermove', middlePointer(400 + TILE_SIZE_PX, 300));
-    expect(vs.surfaceCamera.x).toBeCloseTo(100 - 1);
+    expect(vs.surfaceCamera.centerX).toBeCloseTo(1000 - TILE_SIZE_PX);
     expect(panInputState.isPanning).toBe(true);
 
     // Modal opens: isBlocked → true. The next pointermove must release the drag,
@@ -266,11 +280,11 @@ describe('registerDragPan (middle-button)', () => {
     blocked.value = true;
     emit('pointermove', middlePointer(400 + 5 * TILE_SIZE_PX, 300));
     expect(panInputState.isPanning).toBe(false);
-    expect(vs.surfaceCamera.x).toBeCloseTo(100 - 1); // unchanged since the block
+    expect(vs.surfaceCamera.centerX).toBeCloseTo(1000 - TILE_SIZE_PX); // unchanged since the block
 
     // A further move while still blocked is a no-op (drag is no longer active).
     emit('pointermove', middlePointer(400 + 9 * TILE_SIZE_PX, 300));
-    expect(vs.surfaceCamera.x).toBeCloseTo(100 - 1);
+    expect(vs.surfaceCamera.centerX).toBeCloseTo(1000 - TILE_SIZE_PX);
     expect(panInputState.isPanning).toBe(false);
   });
 });

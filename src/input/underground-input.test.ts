@@ -29,7 +29,7 @@ import { UndergroundTileState, ugSet, createUndergroundGrid } from '../sim/terra
 import { contextMenuState, hideContextMenu } from '../render/context-menu-state.js';
 import type { WorldState } from '../sim/types.js';
 import type { ViewState } from '../render/camera.js';
-import { VIEWPORT_WIDTH_TILES, VIEWPORT_HEIGHT_TILES } from '../render/camera.js';
+import { makeCameraView } from '../render/camera-adapter.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID, UNDERGROUND_CEILING_ROW_Y } from '../sim/constants.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from '../sim/commands.js';
 
@@ -44,18 +44,10 @@ function makeViewState(
   return {
     activeView: 'underground',
     activeTool: tool,
-    surfaceCamera: {
-      x: 10,
-      y: 10,
-      viewportWidth: VIEWPORT_WIDTH_TILES,
-      viewportHeight: VIEWPORT_HEIGHT_TILES,
-    },
-    undergroundCamera: {
-      x: 10,
-      y: 10,
-      viewportWidth: VIEWPORT_WIDTH_TILES,
-      viewportHeight: VIEWPORT_HEIGHT_TILES,
-    },
+    // The underground tap/paint/chamber handlers take tile coords directly and
+    // never read camera fields; these CameraViews exist only to satisfy the type.
+    surfaceCamera: makeCameraView(160, 160),
+    undergroundCamera: makeCameraView(160, 160),
     undergroundVisited: true,
     activeUndergroundColonyId: colonyId,
     showPheromoneOverlay: true,

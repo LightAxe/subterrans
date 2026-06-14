@@ -56,9 +56,14 @@
 // enqueueCommand, never mutating WorldState. Determinism/replay unaffected.
 
 import type { WorldState } from '../sim/types.js';
-import type { ViewState, ToolId, CameraState } from '../render/camera.js';
-import { clampCamera, screenToTile } from '../render/camera.js';
+import type { ViewState, ToolId } from '../render/camera.js';
 import { TILE_SIZE_PX } from '../render/sprites.js';
+import {
+  type CameraView,
+  clampCameraView,
+  screenToTileZoom,
+  panByScreenDelta,
+} from '../render/camera-adapter.js';
 import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
@@ -166,16 +171,16 @@ export interface GestureArbiterDeps {
   onPausedQueueFull?: (paused: boolean) => void;
 }
 
-/** Return the active camera for the current view. */
-function activeCamera(viewState: ViewState): CameraState {
+/** Return the active CameraView for the current view. */
+function activeCamera(viewState: ViewState): CameraView {
   return viewState.activeView === 'surface' ? viewState.surfaceCamera : viewState.undergroundCamera;
 }
 
-/** Return [worldW, worldH] tile dimensions for the active view. */
+/** Return [worldPxW, worldPxH] world-pixel dimensions for the active view. */
 function worldDimensions(viewState: ViewState): [number, number] {
   return viewState.activeView === 'surface'
-    ? [SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT]
-    : [UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT];
+    ? [SURFACE_GRID_WIDTH * TILE_SIZE_PX, SURFACE_GRID_HEIGHT * TILE_SIZE_PX]
+    : [UNDERGROUND_GRID_WIDTH * TILE_SIZE_PX, UNDERGROUND_GRID_HEIGHT * TILE_SIZE_PX];
 }
 
 /**
@@ -334,7 +339,7 @@ export class GestureArbiter {
     if (!world) return;
     const vs = this.deps.viewState;
     const cam = activeCamera(vs);
-    const { tileX, tileY } = screenToTile(ev.x, ev.y, cam);
+    const { tileX, tileY } = screenToTileZoom(ev.x, ev.y, cam);
     const spiderHit =
       vs.activeView === 'surface'
         ? isSpiderHit(world, vs, ev.x, ev.y, this.deps.getPrevWorld())
@@ -547,7 +552,7 @@ export class GestureArbiter {
     const world = this.deps.getWorld();
     if (!world) return;
     const cam = activeCamera(this.deps.viewState);
-    const { tileX, tileY } = screenToTile(ev.x, ev.y, cam);
+    const { tileX, tileY } = screenToTileZoom(ev.x, ev.y, cam);
     // A cap-deferred tail from the previous move stays held at the stroke cursor;
     // this move re-drives continuePaintStroke from that cursor (the queue has
     // drained between moves), so the held tiles re-emit and the stroke advances.
@@ -574,13 +579,10 @@ export class GestureArbiter {
       this.panLastY = ev.y;
       return;
     }
-    const dx = (ev.x - this.panLastX) / TILE_SIZE_PX;
-    const dy = (ev.y - this.panLastY) / TILE_SIZE_PX;
     const cam = activeCamera(vs);
-    cam.x -= dx;
-    cam.y -= dy;
+    panByScreenDelta(cam, ev.x - this.panLastX, ev.y - this.panLastY);
     const [worldW, worldH] = worldDimensions(vs);
-    clampCamera(cam, worldW, worldH);
+    clampCameraView(cam, worldW, worldH);
     this.panLastX = ev.x;
     this.panLastY = ev.y;
   }
@@ -593,7 +595,7 @@ export class GestureArbiter {
     const world = this.deps.getWorld();
     if (!world) return;
     const cam = activeCamera(vs);
-    const { tileX, tileY } = screenToTile(ev.x, ev.y, cam);
+    const { tileX, tileY } = screenToTileZoom(ev.x, ev.y, cam);
     tryOpenChamberMenu(world, vs, ev.x, ev.y, tileX, tileY);
   }
 }
