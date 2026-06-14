@@ -1,18 +1,20 @@
-// camera-input.ts — camera pan input (Stage 1 controls rework, issue #18).
+// camera-input.ts — camera pan input (Stage 1 controls rework, issue #18;
+// Stage 2 continuous-zoom migration).
 //
-// Pan triggers after the controls rework:
+// Pan triggers:
 //   1. Left-drag — driven by the gesture arbiter (gesture-arbiter.ts), NOT here.
 //      Command / Dig-surface / Chamber drags pan; underground-Dig drags paint.
 //      The arbiter sets/clears `panInputState.isPanning` while a left-drag pan
 //      is active so keyboard pan is suppressed for the duration.
 //   2. Middle-button drag — secondary pan gesture for three-button mice, owned
-//      by registerDragPan below. Independent of the arbiter (the arbiter cancels
-//      any pending left gesture when a middle button goes down).
+//      by registerDragPan below. Independent of the arbiter.
 //   3. Keyboard pan — arrow keys + WASD (per-frame poll in processCameraInput).
 //
-// Space no longer pans (the Space modifier was retired in the rework — Space is
-// now the pause toggle, bound in game-scene.ts). All `spaceHeld` handling is
-// gone; `panInputState` carries only `isPanning`.
+// Stage 2: the camera is now a world-pixel CameraView with continuous zoom. Pan
+// deltas go through the pure adapter — drag uses panByScreenDelta (screen-delta
+// ÷ zoom, so the drag stays 1:1 with the cursor at any zoom) and keyboard pan is
+// time-based (panByKeyboard: screen-px/sec × dt ÷ zoom), replacing the old fixed
+// per-frame tile delta. Clamp is the custom center-aware clampCameraView.
 //
 // `panInputState` remains a module-level singleton so the arbiter and the
 // keyboard-pan poll can coordinate (keyboard pan no-ops while a drag pan claims
@@ -22,20 +24,15 @@
 // type` only so this file is testable without Phaser.
 
 import type * as Phaser from 'phaser';
-import { HUD, TILE_SIZE_PX } from '../render/sprites.js';
+import { HUD } from '../render/sprites.js';
 import { antActivityPanelState } from '../render/ant-activity-panel-state.js';
+import { type ViewState, worldPxDimensions } from '../render/camera.js';
 import {
-  type ViewState,
-  type CameraState,
-  clampCamera,
-  CAMERA_SCROLL_SPEED,
-} from '../render/camera.js';
-import {
-  SURFACE_GRID_WIDTH,
-  SURFACE_GRID_HEIGHT,
-  UNDERGROUND_GRID_WIDTH,
-  UNDERGROUND_GRID_HEIGHT,
-} from '../sim/constants.js';
+  type CameraView,
+  clampCameraView,
+  panByScreenDelta,
+  panByKeyboard,
+} from '../render/camera-adapter.js';
 
 // ---------------------------------------------------------------------------
 // panInputState — module-level singleton
@@ -47,8 +44,6 @@ import {
  * - `isPanning` is true while a drag pan (middle-button via registerDragPan, or
  *   left-drag via the gesture arbiter) is in flight. processCameraInput skips
  *   keyboard pan while it is true so the two pan systems don't stack deltas.
- *
- * The Space modifier was removed in the controls rework, so `spaceHeld` is gone.
  */
 export const panInputState = {
   isPanning: false,
@@ -60,8 +55,6 @@ export const panInputState = {
  * Used at session-restart boundaries (bootFresh / bootFromSave / restartGame)
  * and by the GameOver guard so a pan gesture in flight at the moment of restart
  * does not leak into the new session.
- *
- * Also used by unit tests as `resetPanInputStateForTests` (aliased below).
  */
 export function resetPanInputState(): void {
   panInputState.isPanning = false;
@@ -90,24 +83,16 @@ export function resetDragState(dragState: DragState): void {
  * isPointerOverHUD — return true if the screen-pixel point (px, py) falls
  * inside any *visible* HUD zone rectangle.
  *
- * Used by drag-pan and the gesture arbiter to suppress pointer events that land
- * on HUD widgets.
- *
- * Stage 1 controls rework (issue #18): HUD.TOOLS (tool palette), HUD.HINTS (hint
- * strip), and HUD.SPEED (speed widget) are now DRAWN and interactive, so all
- * three are masked here. HUD.SPEED was deliberately left unmasked pre-rework
- * (reserved/undrawn); now that the speed widget renders there, masking it stops
- * speed-button clicks leaking into the world arbiter (Codex R5-1). HUD.SAVE_ICON
- * stays unmasked (still undrawn).
+ * Used by drag-pan, the gesture arbiter, and the wheel-zoom handler to suppress
+ * pointer/wheel events that land on HUD widgets.
  *
  * Inclusion rule: x in [rect.x, rect.x + rect.w) and y in [rect.y, rect.y + rect.h).
  */
 export function isPointerOverHUD(px: number, py: number, viewState?: ViewState): boolean {
   // Ant-activity popup full-canvas mask — while the panel is visible OR already
-  // dismissing (pendingHide), treat every screen pixel as HUD. (See the long
-  // rationale retained below: Phaser does not guarantee cross-scene dispatch
-  // order, so masking the whole canvas closes both UIScene-first and
-  // world-input-first orderings of the dismissal click.)
+  // dismissing (pendingHide), treat every screen pixel as HUD (Phaser does not
+  // guarantee cross-scene dispatch order, so masking the whole canvas closes both
+  // dismissal-click orderings).
   if (antActivityPanelState.visible || antActivityPanelState.pendingHide) {
     return true;
   }
@@ -122,9 +107,8 @@ export function isPointerOverHUD(px: number, py: number, viewState?: ViewState):
     HUD.VIEW_TOGGLE,
   ];
   // Issue #14 — colony toggle is rendered ONLY on the underground view. Mask the
-  // click zone only when it's actually visible — otherwise a patch above the
-  // minimap on the surface view becomes a silent dead zone. Callers without a
-  // ViewState (legacy/test) pass undefined and the toggle stays unmasked.
+  // click zone only when it's actually visible. Callers without a ViewState
+  // (legacy/test) pass undefined and the toggle stays unmasked.
   if (viewState !== undefined && viewState.activeView === 'underground') {
     zones.push(HUD.UNDERGROUND_COLONY_TOGGLE);
   }
@@ -169,15 +153,8 @@ export interface PanInputs {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Return [worldW, worldH] tile dimensions for the currently active view. */
-function worldDimensions(viewState: ViewState): [number, number] {
-  return viewState.activeView === 'surface'
-    ? [SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT]
-    : [UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT];
-}
-
-/** Return the active camera for the current view. */
-function activeCamera(viewState: ViewState): CameraState {
+/** Return the active CameraView for the current view. */
+function activeCamera(viewState: ViewState): CameraView {
   return viewState.activeView === 'surface' ? viewState.surfaceCamera : viewState.undergroundCamera;
 }
 
@@ -186,39 +163,50 @@ function activeCamera(viewState: ViewState): CameraState {
 // ---------------------------------------------------------------------------
 
 /**
- * processCameraInput — apply keyboard pan triggers then clamp.
+ * processCameraInput — apply time-based keyboard pan then clamp.
  *
  * Called once per frame from GameScene.update(). Drag-pan mutations happen in
  * the event handlers; this applies the keyboard triggers and the single
- * end-of-frame clamp.
+ * end-of-frame clamp. Keyboard pan is frame-rate independent: panByKeyboard
+ * moves screen-px/sec × dtSeconds ÷ zoom world px.
+ *
+ * Returns true when held WASD/arrow keys actually moved the camera this frame,
+ * so the caller can cancel any in-flight cursor-anchored wheel zoom (whose
+ * per-frame re-anchor would otherwise immediately overwrite the keyboard pan).
+ *
+ * @param viewState - current view state (active CameraView is mutated)
+ * @param inputs - per-frame key state
+ * @param dtSeconds - frame delta in seconds (GameScene update delta ÷ 1000)
  */
-export function processCameraInput(viewState: ViewState, inputs: PanInputs): void {
+export function processCameraInput(
+  viewState: ViewState,
+  inputs: PanInputs,
+  dtSeconds: number,
+): boolean {
   const cam = activeCamera(viewState);
-  const [worldW, worldH] = worldDimensions(viewState);
+  const [worldW, worldH] = worldPxDimensions(viewState.activeView);
 
-  // Issue #85 — suppress keyboard pan while a drag pan claims the camera. Drag
-  // is a 'claim the camera' gesture; keyboard resumes as soon as the drag ends.
+  // Issue #85 — suppress keyboard pan while a drag pan claims the camera.
   if (panInputState.isPanning) {
-    clampCamera(cam, worldW, worldH);
-    return;
+    clampCameraView(cam, worldW, worldH);
+    return false;
   }
 
-  // --- Keyboard pan ---
-  if (inputs.cursors.left.isDown || inputs.wasd.A.isDown) {
-    cam.x -= CAMERA_SCROLL_SPEED;
-  }
-  if (inputs.cursors.right.isDown || inputs.wasd.D.isDown) {
-    cam.x += CAMERA_SCROLL_SPEED;
-  }
-  if (inputs.cursors.up.isDown || inputs.wasd.W.isDown) {
-    cam.y -= CAMERA_SCROLL_SPEED;
-  }
-  if (inputs.cursors.down.isDown || inputs.wasd.S.isDown) {
-    cam.y += CAMERA_SCROLL_SPEED;
+  // --- Keyboard pan (time-based) ---
+  let dirX = 0;
+  let dirY = 0;
+  if (inputs.cursors.left.isDown || inputs.wasd.A.isDown) dirX -= 1;
+  if (inputs.cursors.right.isDown || inputs.wasd.D.isDown) dirX += 1;
+  if (inputs.cursors.up.isDown || inputs.wasd.W.isDown) dirY -= 1;
+  if (inputs.cursors.down.isDown || inputs.wasd.S.isDown) dirY += 1;
+  const panned = dirX !== 0 || dirY !== 0;
+  if (panned) {
+    panByKeyboard(cam, dirX, dirY, dtSeconds);
   }
 
   // --- Single clamp at end of frame ---
-  clampCamera(cam, worldW, worldH);
+  clampCameraView(cam, worldW, worldH);
+  return panned;
 }
 
 // ---------------------------------------------------------------------------
@@ -242,19 +230,14 @@ export interface DragState {
 /**
  * registerDragPan — wire MIDDLE-button drag-pan handlers on a Phaser.Scene.
  *
- * The Space+left and plain-left pan paths were removed in the controls rework
- * (left is now exclusively the gesture arbiter's). This retains only the
- * middle-button pan for three-button mice. While it is active it sets
- * `panInputState.isPanning` so keyboard pan is suppressed; the gesture arbiter
- * also cancels any pending left gesture on a middle-button down so the two
- * never run concurrently.
+ * Retains only the middle-button pan for three-button mice (left is the gesture
+ * arbiter's). While active it sets `panInputState.isPanning` so keyboard pan is
+ * suppressed. HUD-zone pointerdown / pointermove are ignored so a drag starting
+ * inside a HUD widget never pans, and a mid-drag HUD crossing doesn't jump the
+ * camera. Stage 2: pan delta goes through panByScreenDelta (÷ zoom).
  *
- * HUD-zone pointerdown / pointermove are ignored so a drag starting inside a HUD
- * widget never pans, and a mid-drag HUD crossing doesn't jump the camera.
- *
- * Returns the shared dragState object (kept for PanInputs back-compat;
- * processCameraInput ignores it). `isBlocked` lets GameScene suspend pan during
- * GameOver.
+ * Returns the shared dragState object. `isBlocked` lets GameScene suspend pan
+ * during GameOver.
  */
 export function registerDragPan(
   scene: Phaser.Scene,
@@ -301,15 +284,11 @@ export function registerDragPan(
       return;
     }
 
-    const dx = (pointer.x - dragState.lastX) / TILE_SIZE_PX;
-    const dy = (pointer.y - dragState.lastY) / TILE_SIZE_PX;
-
     const cam = activeCamera(viewState);
-    cam.x -= dx;
-    cam.y -= dy;
+    panByScreenDelta(cam, pointer.x - dragState.lastX, pointer.y - dragState.lastY);
 
-    const [worldW, worldH] = worldDimensions(viewState);
-    clampCamera(cam, worldW, worldH);
+    const [worldW, worldH] = worldPxDimensions(viewState.activeView);
+    clampCameraView(cam, worldW, worldH);
 
     dragState.lastX = pointer.x;
     dragState.lastY = pointer.y;

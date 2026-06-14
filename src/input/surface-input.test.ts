@@ -24,7 +24,7 @@ import {
 } from './surface-input.js';
 import type { WorldState } from '../sim/types.js';
 import type { ViewState } from '../render/camera.js';
-import { VIEWPORT_WIDTH_TILES, VIEWPORT_HEIGHT_TILES } from '../render/camera.js';
+import { makeCameraView, worldToScreen } from '../render/camera-adapter.js';
 import { TILE_SIZE_PX } from '../render/sprites.js';
 import { FP_ONE } from '../sim/fixed.js';
 import { SPIDER_SPRITE_WIDTH } from '../render/ant-sprite-layer.js';
@@ -36,37 +36,38 @@ import type { ColonyId } from '../sim/colony/colony-store.js';
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Build a ViewState whose cameras are world-pixel CameraViews centered on tile
+ * (camTileX, camTileY). World-space camera model (issue #18 Stage 2): 1 tile =
+ * TILE_SIZE_PX world px, so centering on a tile is `tile * TILE_SIZE_PX`.
+ */
 function makeViewState(
   view: 'surface' | 'underground' = 'surface',
-  camX = 64,
-  camY = 64,
+  camTileX = 64,
+  camTileY = 64,
 ): ViewState {
   return {
     activeView: view,
     activeTool: view === 'surface' ? 'command' : 'dig',
-    surfaceCamera: {
-      x: camX,
-      y: camY,
-      viewportWidth: VIEWPORT_WIDTH_TILES,
-      viewportHeight: VIEWPORT_HEIGHT_TILES,
-    },
-    undergroundCamera: {
-      x: camX,
-      y: camY,
-      viewportWidth: VIEWPORT_WIDTH_TILES,
-      viewportHeight: VIEWPORT_HEIGHT_TILES,
-    },
+    surfaceCamera: makeCameraView(camTileX * TILE_SIZE_PX, camTileY * TILE_SIZE_PX),
+    undergroundCamera: makeCameraView(camTileX * TILE_SIZE_PX, camTileY * TILE_SIZE_PX),
     undergroundVisited: false,
     activeUndergroundColonyId: PLAYER_COLONY_ID,
     showPheromoneOverlay: true,
   };
 }
 
-/** tile → screen px, mirroring the renderer's integer-tile snap. */
-function tileToScreen(tileX: number, tileY: number, camX: number, camY: number) {
-  const left = Math.floor(camX - VIEWPORT_WIDTH_TILES / 2);
-  const top = Math.floor(camY - VIEWPORT_HEIGHT_TILES / 2);
-  return { x: (tileX - left) * TILE_SIZE_PX, y: (tileY - top) * TILE_SIZE_PX };
+/**
+ * Screen-pixel coordinate that the world-space camera projects a tile's CENTER
+ * to. isSpiderHit projects clicks via screenToWorld and tests against the
+ * spider's world-pixel box, so a click here lands exactly on the spider's
+ * rendered center. Inverse of the adapter's screenToWorld (uses worldToScreen).
+ */
+function tileCenterToScreen(tileX: number, tileY: number, vs: ViewState) {
+  const worldX = tileX * TILE_SIZE_PX;
+  const worldY = tileY * TILE_SIZE_PX;
+  const { screenX, screenY } = worldToScreen(worldX, worldY, vs.surfaceCamera);
+  return { x: screenX, y: screenY };
 }
 
 function makeWorld(
@@ -183,8 +184,11 @@ describe('isSpiderHit', () => {
   it('true within the sprite half-extent, false outside', () => {
     const vs = makeViewState('surface', 64, 64);
     const world = makeWorld({ spider: makeSpider(64, 64) });
-    const { x, y } = tileToScreen(64, 64, 64, 64);
+    // Click that projects (screenToWorld) onto the spider's world-pixel center.
+    const { x, y } = tileCenterToScreen(64, 64, vs);
     expect(isSpiderHit(world, vs, x, y, null)).toBe(true);
+    // At DEFAULT_ZOOM (1) a screen offset of SPIDER_SPRITE_WIDTH (48) px maps to a
+    // world offset of 48 px — clear of the half-extent (24) → miss.
     expect(isSpiderHit(world, vs, x + SPIDER_SPRITE_WIDTH, y, null)).toBe(false);
   });
   it('false when there is no spider', () => {

@@ -44,7 +44,7 @@ import {
 } from './sprites.js';
 import { COLOR_ROCK_BASE, COLOR_FLOOR_BASE, COLOR_BARREN_EARTH } from './terrain-atlas.js';
 import { FOOD_CHAMBER_CAPACITY } from '../sim/constants.js';
-import type { CameraState } from './camera.js';
+import { makeCameraView, type CameraView } from './camera-adapter.js';
 import { AntFacingCache } from './ant-facing-cache.js';
 
 // ---------------------------------------------------------------------------
@@ -136,8 +136,16 @@ class MockAntSprites implements AntSpriteLayer {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeCamera(cx: number, cy: number, vpW: number, vpH: number): CameraState {
-  return { x: cx, y: cy, viewportWidth: vpW, viewportHeight: vpH };
+// Stage 2 world-space camera: the per-view camera is now a world-pixel
+// CameraView. To frame on tile (cx, cy) we center on (cx × TILE_SIZE_PX,
+// cy × TILE_SIZE_PX) at zoom 1, where the visible window is CANVAS_W/zoom ×
+// CANVAS_H/zoom = 800 × 592 world px. The old viewport-in-tiles args (vpW/vpH)
+// are gone — every fixture grid here (10×10) sits entirely inside that window,
+// so the visible-tile counts these tests assert are unchanged by the wider
+// window (ceiling-strip tints still count one per non-entrance ty=0 column,
+// since only the ceiling row gets that color).
+function makeCamera(cx: number, cy: number): CameraView {
+  return makeCameraView(cx * TILE_SIZE_PX, cy * TILE_SIZE_PX);
 }
 
 /** Build a WorldState with a player colony and a 10×10 underground grid. */
@@ -167,7 +175,7 @@ describe('drawUndergroundTerrain', () => {
 
   it('returns immediately (no draws) when player underground grid is absent', () => {
     const w = createWorldState(1);
-    const cam = makeCamera(5, 5, 10, 10);
+    const cam = makeCamera(5, 5);
     drawUndergroundTerrain(gfx, w, cam);
     expect(gfx.calls.length).toBe(0);
   });
@@ -178,7 +186,7 @@ describe('drawUndergroundTerrain', () => {
     // vocabulary) with a ceiling-strip tint overlay. The tint color survives
     // as evidence that ceiling tiles are visually distinct from interior
     // floor tiles.
-    const cam = makeCamera(5, 0.5, 10, 1);
+    const cam = makeCamera(5, 0.5);
     drawUndergroundTerrain(gfx, world, cam);
     const ceilingTintStyles = gfx
       .callsOf('fillStyle')
@@ -190,7 +198,7 @@ describe('drawUndergroundTerrain', () => {
     world.colonies[PLAYER_COLONY_ID]!.entrances = [
       { entranceId: 1, surfaceTileX: 3, surfaceTileY: 64, isOpen: true },
     ];
-    const cam = makeCamera(5, 0.5, 10, 1);
+    const cam = makeCamera(5, 0.5);
     drawUndergroundTerrain(gfx, world, cam);
 
     const ceilingTintStyles = gfx
@@ -201,7 +209,7 @@ describe('drawUndergroundTerrain', () => {
   });
 
   it('renders Solid tiles with the rock substrate (issue #40 — procedural rock palette)', () => {
-    const cam = makeCamera(5, 5, 4, 4);
+    const cam = makeCamera(5, 5);
     drawUndergroundTerrain(gfx, world, cam);
     const rockBaseStyles = gfx.callsOf('fillStyle').filter((c) => c.args[0] === COLOR_ROCK_BASE);
     expect(rockBaseStyles.length).toBeGreaterThan(0);
@@ -209,7 +217,7 @@ describe('drawUndergroundTerrain', () => {
 
   it('renders Open tiles with the floor substrate', () => {
     ugSet(world.undergroundGrids[PLAYER_COLONY_ID]!, 5, 5, UndergroundTileState.Open);
-    const cam = makeCamera(5, 5, 2, 2);
+    const cam = makeCamera(5, 5);
     drawUndergroundTerrain(gfx, world, cam);
     const floorStyles = gfx.callsOf('fillStyle').filter((c) => c.args[0] === COLOR_FLOOR_BASE);
     expect(floorStyles.length).toBeGreaterThan(0);
@@ -217,7 +225,7 @@ describe('drawUndergroundTerrain', () => {
 
   it('renders Marked tiles: open floor base + COLOR_MARKED_TILE_OVERLAY tint', () => {
     ugSet(world.undergroundGrids[PLAYER_COLONY_ID]!, 5, 5, UndergroundTileState.Marked);
-    const cam = makeCamera(5.5, 5.5, 2, 2);
+    const cam = makeCamera(5.5, 5.5);
     drawUndergroundTerrain(gfx, world, cam);
     const floorStyles = gfx.callsOf('fillStyle').filter((c) => c.args[0] === COLOR_FLOOR_BASE);
     const markedStyles = gfx
@@ -229,7 +237,7 @@ describe('drawUndergroundTerrain', () => {
 
   it('renders BeingDug tiles: open floor base + COLOR_BEING_DUG_OVERLAY tint', () => {
     ugSet(world.undergroundGrids[PLAYER_COLONY_ID]!, 5, 5, UndergroundTileState.BeingDug);
-    const cam = makeCamera(5.5, 5.5, 2, 2);
+    const cam = makeCamera(5.5, 5.5);
     drawUndergroundTerrain(gfx, world, cam);
     const floorStyles = gfx.callsOf('fillStyle').filter((c) => c.args[0] === COLOR_FLOOR_BASE);
     const beingDugStyles = gfx
@@ -244,7 +252,7 @@ describe('drawUndergroundTerrain', () => {
       { entranceId: 1, surfaceTileX: 2, surfaceTileY: 64, isOpen: true },
       { entranceId: 2, surfaceTileX: 7, surfaceTileY: 64, isOpen: true },
     ];
-    const cam = makeCamera(5, 0.5, 10, 1);
+    const cam = makeCamera(5, 0.5);
     drawUndergroundTerrain(gfx, world, cam);
     const ceilingTintStyles = gfx
       .callsOf('fillStyle')
@@ -260,7 +268,7 @@ describe('drawUndergroundTerrain', () => {
     world.colonies[PLAYER_COLONY_ID]!.entrances = [
       { entranceId: 1, surfaceTileX: 3, surfaceTileY: 64, isOpen: true },
     ];
-    const cam = makeCamera(5, 0.5, 10, 1);
+    const cam = makeCamera(5, 0.5);
     drawUndergroundTerrain(gfx, world, cam);
     const earthStyles = gfx.callsOf('fillStyle').filter((c) => c.args[0] === COLOR_BARREN_EARTH);
     expect(earthStyles.length).toBeGreaterThan(0);
@@ -279,7 +287,7 @@ describe('drawUndergroundTerrain', () => {
         ugSet(grid, x, y, UndergroundTileState.Marked);
       }
     }
-    const cam = makeCamera(0, 0, 200, 200);
+    const cam = makeCamera(0, 0);
     drawUndergroundTerrain(gfx, world, cam);
     expect(gfx.callsOf('fillRect').length).toBeLessThanOrEqual(grid.width * grid.height * 80);
   });
@@ -287,8 +295,8 @@ describe('drawUndergroundTerrain', () => {
   it('produces deterministic terrain renders for the same seed (issue #40 — replay-stable visuals)', () => {
     const a = new MockGfx();
     const b = new MockGfx();
-    drawUndergroundTerrain(a, world, makeCamera(5, 5, 4, 4));
-    drawUndergroundTerrain(b, world, makeCamera(5, 5, 4, 4));
+    drawUndergroundTerrain(a, world, makeCamera(5, 5));
+    drawUndergroundTerrain(b, world, makeCamera(5, 5));
     expect(a.calls).toEqual(b.calls);
   });
 });
@@ -320,13 +328,13 @@ describe('drawUndergroundEntities', () => {
       zone: 1,
     });
 
-    const cam = makeCamera(5, 3, 20, 20);
+    const cam = makeCamera(5, 3);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
-    const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const top = Math.floor(cam.y - cam.viewportHeight / 2);
-    const expectedX = 5.5 * TILE_SIZE_PX - left * TILE_SIZE_PX;
-    const expectedY = 3.5 * TILE_SIZE_PX - top * TILE_SIZE_PX;
+    // World px (Stage 2): the ant at tile 5.5 / 3.5 draws at 5.5 × TILE_SIZE_PX
+    // / 3.5 × TILE_SIZE_PX with no camera offset (the main camera projects it).
+    const expectedX = 5.5 * TILE_SIZE_PX;
+    const expectedY = 3.5 * TILE_SIZE_PX;
     const antCall = sprites.calls.find(
       (c) =>
         c.kind === 'worker' && Math.abs(c.x - expectedX) < 0.01 && Math.abs(c.y - expectedY) < 0.01,
@@ -353,13 +361,12 @@ describe('drawUndergroundEntities', () => {
       zone: 1,
     });
 
-    const cam = makeCamera(5, 3, 20, 20);
+    const cam = makeCamera(5, 3);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
-    const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const top = Math.floor(cam.y - cam.viewportHeight / 2);
-    const expectedX = (5 - left) * TILE_SIZE_PX;
-    const expectedY = (3 - top) * TILE_SIZE_PX;
+    // World px (Stage 2): tile 5 / 3 draws at 5 × TILE_SIZE_PX / 3 × TILE_SIZE_PX.
+    const expectedX = 5 * TILE_SIZE_PX;
+    const expectedY = 3 * TILE_SIZE_PX;
     const antCall = sprites.calls.find(
       (c) =>
         c.kind === 'worker' && Math.abs(c.x - expectedX) < 0.5 && Math.abs(c.y - expectedY) < 0.5,
@@ -376,7 +383,7 @@ describe('drawUndergroundEntities', () => {
       zone: 0,
     });
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     expect(sprites.calls.length).toBe(0);
@@ -392,7 +399,7 @@ describe('drawUndergroundEntities', () => {
       zone: 1,
     });
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     expect(sprites.calls.length).toBe(1);
@@ -418,7 +425,7 @@ describe('drawUndergroundEntities', () => {
     };
     world.colonies[PLAYER_COLONY_ID]!.chambers = [chamber];
 
-    const cam = makeCamera(5, 10, 20, 20);
+    const cam = makeCamera(5, 10);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     // Chamber color is applied at least once before the shape is drawn.
@@ -462,7 +469,7 @@ describe('drawUndergroundEntities', () => {
     };
     world.colonies[PLAYER_COLONY_ID]!.chambers = [chamber];
 
-    const cam = makeCamera(5, 10, 20, 20);
+    const cam = makeCamera(5, 10);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     // Outline pass switches fillStyle to COLOR_QUEEN_OUTLINE exactly once.
@@ -517,7 +524,7 @@ describe('drawUndergroundEntities', () => {
     };
     world.colonies[PLAYER_COLONY_ID]!.chambers = [chamber];
 
-    const cam = makeCamera(5, 10, 20, 20);
+    const cam = makeCamera(5, 10);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     // No fillStyle call with COLOR_QUEEN_OUTLINE → no gold outline emitted.
@@ -540,7 +547,7 @@ describe('drawUndergroundEntities', () => {
     };
     world.colonies[PLAYER_COLONY_ID]!.chambers = [chamber];
 
-    const cam = makeCamera(5, 10, 20, 20);
+    const cam = makeCamera(5, 10);
 
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
     const trianglesA = gfx
@@ -573,7 +580,7 @@ describe('drawUndergroundEntities', () => {
     });
     world.colonies[PLAYER_COLONY_ID]!.eggs = [eggId];
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     // SVG-backed render path: egg goes through the sprite layer, NOT fillCircle.
@@ -584,11 +591,11 @@ describe('drawUndergroundEntities', () => {
     // it only asserted the egg sprite was emitted, not that no ant sprite was.
     expect(sprites.calls.length).toBe(0);
     // Sprite is positioned at the tile center.
-    const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const top = Math.floor(cam.y - cam.viewportHeight / 2);
+    // World px (Stage 2): tile (4,5) center is at 4 × TILE_SIZE_PX + TILE_SIZE_PX/2
+    // / 5 × TILE_SIZE_PX + TILE_SIZE_PX/2.
     const eggCall = sprites.staticOfKind('egg')[0]!;
-    expect(eggCall.x).toBe((4 - left) * TILE_SIZE_PX + TILE_SIZE_PX / 2);
-    expect(eggCall.y).toBe((5 - top) * TILE_SIZE_PX + TILE_SIZE_PX / 2);
+    expect(eggCall.x).toBe(4 * TILE_SIZE_PX + TILE_SIZE_PX / 2);
+    expect(eggCall.y).toBe(5 * TILE_SIZE_PX + TILE_SIZE_PX / 2);
   });
 
   // Issue #17 Phase 1.6 — visible carry render offset.
@@ -611,15 +618,14 @@ describe('drawUndergroundEntities', () => {
     world.ants.carriedBy[eggId] = carrierId;
     world.colonies[PLAYER_COLONY_ID]!.eggs = [eggId];
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
-    const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const top = Math.floor(cam.y - cam.viewportHeight / 2);
+    // World px (Stage 2): tile (4,5) center, no camera offset.
     const eggCall = sprites.staticOfKind('egg')[0]!;
-    expect(eggCall.x).toBe((4 - left) * TILE_SIZE_PX + TILE_SIZE_PX / 2);
+    expect(eggCall.x).toBe(4 * TILE_SIZE_PX + TILE_SIZE_PX / 2);
     // y is shifted upward (smaller value) by ~1/4 tile vs. the un-carried baseline.
-    const baseline = (5 - top) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+    const baseline = 5 * TILE_SIZE_PX + TILE_SIZE_PX / 2;
     expect(eggCall.y).toBeLessThan(baseline);
     expect(baseline - eggCall.y).toBe(Math.round(TILE_SIZE_PX / 4));
   });
@@ -647,13 +653,12 @@ describe('drawUndergroundEntities', () => {
     world.ants.carriedBy[eggId] = carrierId;
     world.colonies[PLAYER_COLONY_ID]!.eggs = [eggId];
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
-    const top = Math.floor(cam.y - cam.viewportHeight / 2);
     const eggCall = sprites.staticOfKind('egg')[0]!;
-    // No offset — sits at tile center exactly.
-    expect(eggCall.y).toBe((5 - top) * TILE_SIZE_PX + TILE_SIZE_PX / 2);
+    // No offset — sits at tile center exactly (world px, Stage 2).
+    expect(eggCall.y).toBe(5 * TILE_SIZE_PX + TILE_SIZE_PX / 2);
   });
 
   it('does NOT draw enemy-colony ants even when underground in view (PRD §7b)', () => {
@@ -671,7 +676,7 @@ describe('drawUndergroundEntities', () => {
       zone: 1,
     });
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     expect(sprites.calls.length).toBe(0);
@@ -692,7 +697,7 @@ describe('drawUndergroundEntities', () => {
       },
     ];
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     expect(sprites.staticOfKind('food-cache').length).toBe(0);
@@ -719,7 +724,7 @@ describe('drawUndergroundEntities', () => {
       },
     ];
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     const caches = sprites.staticOfKind('food-cache');
@@ -744,7 +749,7 @@ describe('drawUndergroundEntities', () => {
       },
     ];
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     const caches = sprites.staticOfKind('food-cache');
@@ -754,14 +759,14 @@ describe('drawUndergroundEntities', () => {
     for (const c of caches) {
       expect(c.tint).toBe(COLOR_CHAMBER_FOOD_STORAGE_FILL);
     }
-    // At least one cache sits on the chamber floor row (bottom tiles).
-    const top = Math.floor(cam.y - cam.viewportHeight / 2);
-    const bottomRowY =
-      (5 - top) * TILE_SIZE_PX + (foodDims.height - 1) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+    // At least one cache sits on the chamber floor row (bottom tiles). World px
+    // (Stage 2): chamber posY tile 5, bottom row at row (height-1), each cache
+    // centered in its tile.
+    const bottomRowY = 5 * TILE_SIZE_PX + (foodDims.height - 1) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
     const bottomCaches = caches.filter((c) => Math.abs(c.y - bottomRowY) < 0.01);
     expect(bottomCaches.length).toBe(foodDims.width);
     // And at least one sits on the top row — chamber is fully packed.
-    const topRowY = (5 - top) * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+    const topRowY = 5 * TILE_SIZE_PX + TILE_SIZE_PX / 2;
     expect(caches.some((c) => Math.abs(c.y - topRowY) < 0.01)).toBe(true);
     // Chamber floor is still drawn as COLOR_CHAMBER_FOOD_STORAGE (unchanged
     // baseline). Just make sure the legacy amber fillRect path isn't emitted.
@@ -791,7 +796,7 @@ describe('drawUndergroundEntities', () => {
       },
     ];
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     expect(sprites.staticOfKind('food-cache').length).toBe(totalTiles);
@@ -853,7 +858,7 @@ describe('drawUndergroundEntities', () => {
     });
     world.colonies[PLAYER_COLONY_ID]!.larvae = [larvaId];
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     expect(sprites.staticOfKind('larva').length).toBe(1);
@@ -887,7 +892,7 @@ describe('drawUndergroundEntities', () => {
     world.colonies[PLAYER_COLONY_ID]!.eggs = [eggId];
     world.colonies[PLAYER_COLONY_ID]!.larvae = [larvaId];
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     // Brood gets static sprites at the right kind…
@@ -926,7 +931,7 @@ describe('drawUndergroundEntities', () => {
     world.colonies[PLAYER_COLONY_ID]!.eggs = [eggId];
     world.colonies[PLAYER_COLONY_ID]!.larvae = [larvaId];
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
 
     // Exactly one worker ant sprite (the nurse), and the two brood static sprites.
@@ -957,7 +962,7 @@ describe('drawUndergroundEntities — ant facing direction', () => {
     const world = makeWorldWithUnderground();
     world.colonies[PLAYER_COLONY_ID]!.queenEntityId = 999;
     setupAnt(world, 0, 5, 5);
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
     expect(sprites.calls[0]!.rotation).toBe(0);
   });
@@ -971,7 +976,7 @@ describe('drawUndergroundEntities — ant facing direction', () => {
     curr.colonies[PLAYER_COLONY_ID]!.queenEntityId = 999;
     setupAnt(prev, 0, 5, 5);
     setupAnt(curr, 0, 6, 5);
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, prev, curr, 1, cam);
     expect(Math.abs(sprites.calls[0]!.rotation!)).toBeCloseTo(Math.PI, 5);
   });
@@ -985,7 +990,7 @@ describe('drawUndergroundEntities — ant facing direction', () => {
     curr.colonies[PLAYER_COLONY_ID]!.queenEntityId = 999;
     setupAnt(prev, 0, 5, 5);
     setupAnt(curr, 0, 5, 6);
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, prev, curr, 1, cam);
     expect(sprites.calls[0]!.rotation).toBeCloseTo(-Math.PI / 2, 5);
   });
@@ -1017,7 +1022,7 @@ describe('drawUndergroundEntities — facing cache smoothing', () => {
   it('alternating right/down movement settles toward a diagonal rotation (not axis-aligned)', () => {
     const gfx = new MockGfx();
     const sprites = new MockAntSprites();
-    const cam = makeCamera(5, 5, 30, 30);
+    const cam = makeCamera(5, 5);
     const facing = new AntFacingCache();
 
     let x = 3,
@@ -1050,7 +1055,7 @@ describe('drawUndergroundEntities — facing cache smoothing', () => {
   it('stationary ant keeps its prior smoothed heading across idle frames', () => {
     const gfx = new MockGfx();
     const sprites = new MockAntSprites();
-    const cam = makeCamera(5, 5, 30, 30);
+    const cam = makeCamera(5, 5);
     const facing = new AntFacingCache();
 
     const prev1 = makeUndergroundAntWorld(3, 3);
@@ -1070,7 +1075,7 @@ describe('drawUndergroundEntities — facing cache smoothing', () => {
   it('spawn frame does not inherit a stale heading from a recycled ant id', () => {
     const gfx = new MockGfx();
     const sprites = new MockAntSprites();
-    const cam = makeCamera(5, 5, 30, 30);
+    const cam = makeCamera(5, 5);
     const facing = new AntFacingCache();
 
     // Build up a heading for id=0.
@@ -1139,14 +1144,14 @@ describe('drawUndergroundEntities — wrong-plane flicker guard', () => {
       zone: 1,
     });
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, prev, curr, 0.5, cam);
 
     expect(sprites.calls.length).toBe(1);
-    const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const top = Math.floor(cam.y - cam.viewportHeight / 2);
-    const expectedCurrX = 6 * TILE_SIZE_PX - left * TILE_SIZE_PX;
-    const expectedCurrY = 7 * TILE_SIZE_PX - top * TILE_SIZE_PX;
+    // World px (Stage 2): snap-to-curr position is tile (6,7) → 6 × TILE_SIZE_PX
+    // / 7 × TILE_SIZE_PX with no camera offset.
+    const expectedCurrX = 6 * TILE_SIZE_PX;
+    const expectedCurrY = 7 * TILE_SIZE_PX;
     expect(sprites.calls[0]!.x).toBeCloseTo(expectedCurrX, 5);
     expect(sprites.calls[0]!.y).toBeCloseTo(expectedCurrY, 5);
     expect(sprites.calls[0]!.rotation).toBe(0);
@@ -1176,14 +1181,14 @@ describe('drawUndergroundEntities — wrong-plane flicker guard', () => {
       zone: 1,
     });
 
-    const cam = makeCamera(5, 5, 20, 20);
+    const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, prev, curr, 0.5, cam);
 
     expect(sprites.calls.length).toBe(1);
-    const left = Math.floor(cam.x - cam.viewportWidth / 2);
-    const top = Math.floor(cam.y - cam.viewportHeight / 2);
-    const expectedCurrX = 6 * TILE_SIZE_PX - left * TILE_SIZE_PX;
-    const expectedCurrY = 7 * TILE_SIZE_PX - top * TILE_SIZE_PX;
+    // World px (Stage 2): snap-to-curr position is tile (6,7) → 6 × TILE_SIZE_PX
+    // / 7 × TILE_SIZE_PX with no camera offset.
+    const expectedCurrX = 6 * TILE_SIZE_PX;
+    const expectedCurrY = 7 * TILE_SIZE_PX;
     expect(sprites.calls[0]!.x).toBeCloseTo(expectedCurrX, 5);
     expect(sprites.calls[0]!.y).toBeCloseTo(expectedCurrY, 5);
     expect(sprites.calls[0]!.rotation).toBe(0);
@@ -1199,7 +1204,7 @@ describe('drawUnderground', () => {
     const gfx = new MockGfx();
     const sprites = new MockAntSprites();
     const w = createWorldState(1);
-    const cam = makeCamera(5, 5, 10, 10);
+    const cam = makeCamera(5, 5);
     expect(() => drawUnderground(gfx, sprites, w, w, 0, cam)).not.toThrow();
     expect(gfx.callsOf('fillRect').length).toBe(0);
   });
@@ -1208,7 +1213,7 @@ describe('drawUnderground', () => {
     const gfx = new MockGfx();
     const sprites = new MockAntSprites();
     const world = makeWorldWithUnderground();
-    const cam = makeCamera(5, 5, 10, 10);
+    const cam = makeCamera(5, 5);
     expect(() => drawUnderground(gfx, sprites, world, world, 0, cam)).not.toThrow();
     expect(gfx.callsOf('fillRect').length).toBeGreaterThan(0);
   });

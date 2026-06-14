@@ -1,78 +1,64 @@
-// camera.ts — Phase 8 render-layer camera state, view state, and camera utilities.
+// camera.ts — render-layer two-view state (surface + underground) for the
+// continuous-zoom camera (Stage 2 controls rework, issue #18).
 //
-// Source: PRD §7a/§7b/§7c (03-PRD-world-interaction.md)
+// Stage 2 replaced the fixed 50×37-tile viewport with a continuous Phaser-camera
+// zoom. The per-view camera is now a world-pixel `CameraView` ({centerX, centerY,
+// zoom, targetZoom}) owned by the pure adapter (camera-adapter.ts) — the SINGLE
+// screen↔world authority. This file keeps only the two-view lifecycle: create /
+// reset / toggle / colony-flip, plus the tool palette. All projection / clamp /
+// pan / zoom math lives in camera-adapter.ts.
 //
-// This file is in src/render/ — no Phaser imports, no DOM globals.
-// Only imports: src/sim/constants.js (world dimensions) and src/render/sprites.js (TILE_SIZE_PX).
-// Pure TypeScript functions, fully testable under Node + Vitest.
+// This file is in src/render/ — no Phaser imports, no DOM globals. It imports the
+// pure adapter, sim world dimensions, and persisted settings only. Fully testable
+// under Node + Vitest.
 
-import { TILE_SIZE_PX } from './sprites.js';
-import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
+import { CANVAS_H, TILE_SIZE_PX } from './sprites.js';
+import {
+  type CameraView,
+  makeCameraView,
+  DEFAULT_ZOOM,
+  cancelZoomLerp,
+  settleEnteringView,
+} from './camera-adapter.js';
+import {
+  PLAYER_COLONY_ID,
+  ENEMY_COLONY_ID,
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
+  UNDERGROUND_GRID_WIDTH,
+  UNDERGROUND_GRID_HEIGHT,
+} from '../sim/constants.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { loadSettings } from '../platform/settings.js';
 
-// Suppress unused import warning — TILE_SIZE_PX is used in screenToTile below.
-void TILE_SIZE_PX;
+// ---------------------------------------------------------------------------
+// World-pixel dimensions per view (tiles × TILE_SIZE_PX)
+// ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// CameraState
-// ---------------------------------------------------------------------------
+/** Surface world width in pixels (128 tiles × 16 = 2048). */
+export const SURFACE_WORLD_PX_W = SURFACE_GRID_WIDTH * TILE_SIZE_PX;
+/** Surface world height in pixels (2048). */
+export const SURFACE_WORLD_PX_H = SURFACE_GRID_HEIGHT * TILE_SIZE_PX;
+/** Underground world width in pixels (128 tiles × 16 = 2048). */
+export const UNDERGROUND_WORLD_PX_W = UNDERGROUND_GRID_WIDTH * TILE_SIZE_PX;
+/** Underground world height in pixels (64 tiles × 16 = 1024). */
+export const UNDERGROUND_WORLD_PX_H = UNDERGROUND_GRID_HEIGHT * TILE_SIZE_PX;
 
 /**
- * CameraState — pure TypeScript render-layer camera position.
- *
- * All values are in tile units. x/y are the CENTER of the viewport (not top-left).
- * This is distinct from Phaser's camera `scrollX`/`scrollY` which are top-left pixel offsets.
- *
- * To convert for Phaser: `scrollX = (cam.x - cam.viewportWidth / 2) * TILE_SIZE_PX`
+ * Initial underground-camera CENTER Y (world px) on fresh boot / reset / first
+ * view toggle. CANVAS_H/2 places world y=0 (the ceiling / surface-entrance row)
+ * at the very top of the viewport at zoom 1 — the same "shaft anchored to the
+ * top" framing as before Stage 2. It is also the clamp minimum for the 1024-px-
+ * tall underground world at zoom 1, so the shaft stays anchored as zoom changes.
  */
-export interface CameraState {
-  /** Tile-unit X coordinate of the viewport center. */
-  x: number;
-  /** Tile-unit Y coordinate of the viewport center. */
-  y: number;
-  /** Viewport width in tiles. */
-  viewportWidth: number;
-  /** Viewport height in tiles. */
-  viewportHeight: number;
+export const UNDERGROUND_INITIAL_CENTER_Y_PX = CANVAS_H / 2;
+
+/** World-pixel [width, height] for a view. */
+export function worldPxDimensions(view: 'surface' | 'underground'): [number, number] {
+  return view === 'surface'
+    ? [SURFACE_WORLD_PX_W, SURFACE_WORLD_PX_H]
+    : [UNDERGROUND_WORLD_PX_W, UNDERGROUND_WORLD_PX_H];
 }
-
-// ---------------------------------------------------------------------------
-// Camera constants (PRD §7a)
-// ---------------------------------------------------------------------------
-
-/** Number of tiles visible horizontally at the default 800×592 canvas / 16px tiles. PRD §7a. */
-export const VIEWPORT_WIDTH_TILES = 50;
-
-/** Number of tiles visible vertically at the default 800×592 canvas / 16px tiles. PRD §7a. */
-export const VIEWPORT_HEIGHT_TILES = 37;
-
-/**
- * Camera pan speed in tiles per render frame.
- * Applied each frame arrow/WASD key is held. PRD §7a.
- */
-export const CAMERA_SCROLL_SPEED = 0.5;
-
-/**
- * Distance from canvas edge (in pixels) that triggers mouse edge-pan. PRD §7a.
- */
-export const EDGE_PAN_THRESHOLD_PX = 32;
-
-/**
- * Initial underground-camera Y on fresh boot / session reset / first view
- * toggle. Set to half the viewport so tile y=0 sits at the very top of the
- * visible region — this places the surface entrance / starter shaft row
- * near the top-center of the underground view, giving the player an
- * immediate spatial connection between the surface hole they just dug and
- * the tunnel they're about to excavate.
- *
- * Derived from VIEWPORT_HEIGHT_TILES rather than UNDERGROUND_GRID_HEIGHT —
- * the old mid-depth start (UNDERGROUND_GRID_HEIGHT/2) left the shaft
- * entirely off-screen and made the first underground visit disorienting.
- * Using the viewport half puts this value exactly at clampCamera's minimum
- * Y, so if viewport dimensions change the shaft stays anchored to the top.
- */
-export const UNDERGROUND_INITIAL_CAMERA_Y = VIEWPORT_HEIGHT_TILES / 2;
 
 // ---------------------------------------------------------------------------
 // Tool palette (Stage 1 controls rework — issue #18)
@@ -102,21 +88,22 @@ export function defaultToolForView(view: 'surface' | 'underground'): ToolId {
 /**
  * ViewState — render-layer state for the two-view system (surface + underground).
  *
- * Not part of WorldState — this is render-layer state only (PRD §7c).
- * Surface and underground cameras maintain independent Y positions.
- * X positions are linked on toggle (PRD §7c algorithm: Pattern 9).
+ * Not part of WorldState — this is render-layer state only (PRD §7c). Each view
+ * owns an independent world-pixel CameraView; X positions are linked on toggle
+ * (PRD §7c Pattern 9), and each view's zoom is preserved across toggles
+ * (PLAN-stage2 §A5).
  */
 export interface ViewState {
   /** Which view is currently displayed. */
   activeView: 'surface' | 'underground';
-  /** Camera state for the surface top-down view. */
-  surfaceCamera: CameraState;
-  /** Camera state for the underground side-view cross-section. */
-  undergroundCamera: CameraState;
+  /** World-pixel camera for the surface top-down view. */
+  surfaceCamera: CameraView;
+  /** World-pixel camera for the underground side-view cross-section. */
+  undergroundCamera: CameraView;
   /**
    * Whether the underground view has been visited at least once.
-   * Used for first-visit Y-centering (PRD §7c): undergroundCamera.y is set to
-   * UNDERGROUND_INITIAL_CAMERA_Y (shaft row near the top) on the FIRST
+   * Used for first-visit Y-centering (PRD §7c): undergroundCamera.centerY is set
+   * to UNDERGROUND_INITIAL_CENTER_Y_PX (shaft row near the top) on the FIRST
    * toggle to underground only.
    */
   undergroundVisited: boolean;
@@ -124,30 +111,25 @@ export interface ViewState {
    * 09.1 Chunk 2 — which colony's underground grid the player is currently
    * viewing. Defaults to PLAYER_COLONY_ID on fresh boot and after
    * resetViewState. Toggled between PLAYER and ENEMY by the X keybind (via
-   * toggleUndergroundColony) while activeView === 'underground'. 09.1 has
-   * exactly two colonies, so a binary flip is sufficient; future N-colony
-   * expansion is out of scope per 09.1-CONTEXT.
-   *
-   * draw-underground.ts reads this field for all four grid-keyed lookups
-   * (grid, entrances, chambers, ant filter). Ant filter also consults
-   * ants.currentGridColonyId so player Fighters inside the enemy grid
-   * still render (Research Risk D, Chunk 0 dependency).
+   * toggleUndergroundColony) while activeView === 'underground'.
    */
   activeUndergroundColonyId: ColonyId;
   /**
    * Issue #114 — render-only flag controlling whether the player's pheromone
-   * overlay is drawn. Hydrated from persisted settings (subterrans:settings:v1)
-   * on createViewState / resetViewState; toggled by the P key and by the pause
-   * menu Settings sub-screen, both of which write back through saveSettings.
-   * Skipped at draw time in game-scene.ts; never round-trips through save.ts.
+   * overlay is drawn. Hydrated from persisted settings on create/reset; toggled
+   * by the P key and the pause-menu Settings sub-screen.
    */
   showPheromoneOverlay: boolean;
   /**
    * Stage 1 controls rework (issue #18) — the active input tool. Resets to the
-   * view default on every `toggleView`; persists within a view. `chamber` is
-   * underground-only (selecting it on the surface is a no-op upstream).
+   * view default on every `toggleView`; persists within a view.
    */
   activeTool: ToolId;
+}
+
+/** Center (world px) of a tile, used to frame the camera on a tile coordinate. */
+function tileCenterPx(tile: number): number {
+  return (tile + 0.5) * TILE_SIZE_PX;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,13 +139,11 @@ export interface ViewState {
 /**
  * createViewState — construct initial ViewState for a new game session.
  *
- * surfaceCamera is centered at (startTileX, startTileY).
- * undergroundCamera is centered horizontally on the starter entrance column
- * (startTileX) and vertically at UNDERGROUND_INITIAL_CAMERA_Y so the shaft /
- * surface-entrance row sits near the top of the viewport.
- * undergroundVisited is false; activeView is 'surface'.
- *
- * Each camera is an independent object instance (no shared references).
+ * surfaceCamera is centered (world px) on the start tile. undergroundCamera is
+ * centered horizontally on the starter entrance column and vertically at
+ * UNDERGROUND_INITIAL_CENTER_Y_PX so the shaft / surface-entrance row sits near
+ * the top of the viewport. Both start at DEFAULT_ZOOM. undergroundVisited is
+ * false; activeView is 'surface'. Each camera is an independent object instance.
  *
  * @param startTileX - Starting tile X (typically PLAYER_START_X from constants.ts)
  * @param startTileY - Starting tile Y (typically PLAYER_START_Y from constants.ts)
@@ -172,26 +152,17 @@ export function createViewState(startTileX: number, startTileY: number): ViewSta
   return {
     activeView: 'surface',
     activeTool: 'command',
-    surfaceCamera: {
-      x: startTileX,
-      y: startTileY,
-      viewportWidth: VIEWPORT_WIDTH_TILES,
-      viewportHeight: VIEWPORT_HEIGHT_TILES,
-    },
-    undergroundCamera: {
-      x: startTileX,
-      y: UNDERGROUND_INITIAL_CAMERA_Y,
-      viewportWidth: VIEWPORT_WIDTH_TILES,
-      viewportHeight: VIEWPORT_HEIGHT_TILES,
-    },
+    surfaceCamera: makeCameraView(tileCenterPx(startTileX), tileCenterPx(startTileY), DEFAULT_ZOOM),
+    undergroundCamera: makeCameraView(
+      tileCenterPx(startTileX),
+      UNDERGROUND_INITIAL_CENTER_Y_PX,
+      DEFAULT_ZOOM,
+    ),
     undergroundVisited: false,
     // 09.1 Chunk 2 — fresh boot always starts looking at the player's own
     // underground so the first Tab to underground shows "Your Colony".
     activeUndergroundColonyId: PLAYER_COLONY_ID,
     // Issue #114 — hydrate the pheromone overlay flag from persisted settings.
-    // localStorage may be unavailable (Node test runs); loadSettings falls back
-    // to DEFAULT_SETTINGS, which keeps the overlay ON to match the prior
-    // always-visible behavior.
     showPheromoneOverlay: loadSettings().pheromoneOverlay,
   };
 }
@@ -201,71 +172,73 @@ export function createViewState(startTileX: number, startTileY: number): ViewSta
 // ---------------------------------------------------------------------------
 
 /**
- * Reset an existing ViewState back to the same defaults as createViewState,
- * but MUTATING IN PLACE so references captured by UIScene / input handlers
- * remain valid. Reassigning to a fresh object would strand those references
- * on the pre-restart ViewState (same failure class as the stale-world bug).
+ * Reset an existing ViewState back to createViewState defaults, MUTATING IN PLACE
+ * so references captured by UIScene / input handlers remain valid (reassigning to
+ * a fresh object would strand those references — same failure class as the
+ * stale-world bug). CameraView fields are written individually for the same reason.
  *
- * Used by bootFresh / bootFromSave / restartGame: a new session must not
- * inherit the prior session's activeView, camera position, drag state, or
- * first-visit flag. Save files do not persist camera state, so continue-from-
- * save also starts the player back at the default surface view.
+ * Used by bootFresh / bootFromSave / restartGame. Save files do not persist camera
+ * state, so continue-from-save also starts back at the default surface view/zoom.
  */
 export function resetViewState(viewState: ViewState, startTileX: number, startTileY: number): void {
   viewState.activeView = 'surface';
   viewState.activeTool = 'command';
-  viewState.surfaceCamera.x = startTileX;
-  viewState.surfaceCamera.y = startTileY;
-  viewState.surfaceCamera.viewportWidth = VIEWPORT_WIDTH_TILES;
-  viewState.surfaceCamera.viewportHeight = VIEWPORT_HEIGHT_TILES;
-  viewState.undergroundCamera.x = startTileX;
-  viewState.undergroundCamera.y = UNDERGROUND_INITIAL_CAMERA_Y;
-  viewState.undergroundCamera.viewportWidth = VIEWPORT_WIDTH_TILES;
-  viewState.undergroundCamera.viewportHeight = VIEWPORT_HEIGHT_TILES;
+
+  viewState.surfaceCamera.centerX = tileCenterPx(startTileX);
+  viewState.surfaceCamera.centerY = tileCenterPx(startTileY);
+  viewState.surfaceCamera.zoom = DEFAULT_ZOOM;
+  viewState.surfaceCamera.targetZoom = DEFAULT_ZOOM;
+
+  viewState.undergroundCamera.centerX = tileCenterPx(startTileX);
+  viewState.undergroundCamera.centerY = UNDERGROUND_INITIAL_CENTER_Y_PX;
+  viewState.undergroundCamera.zoom = DEFAULT_ZOOM;
+  viewState.undergroundCamera.targetZoom = DEFAULT_ZOOM;
+
   viewState.undergroundVisited = false;
   // 09.1 Chunk 2 — restart always re-anchors the underground view on the
-  // player's own grid. Save files do not persist which enemy nest was being
-  // inspected, so continue-from-save also defaults to "Your Colony".
+  // player's own grid. Save files do not persist which enemy nest was inspected.
   viewState.activeUndergroundColonyId = PLAYER_COLONY_ID;
-  // Issue #114 — re-read the persisted overlay preference. The setting is a
-  // cosmetic preference, not session state, so a restart should respect the
-  // current localStorage value rather than snap back to ON unconditionally.
+  // Issue #114 — re-read the persisted overlay preference.
   viewState.showPheromoneOverlay = loadSettings().pheromoneOverlay;
 }
 
 // ---------------------------------------------------------------------------
-// toggleView
+// toggleView — atomic toggle algorithm (PLAN-stage2 §A5)
 // ---------------------------------------------------------------------------
 
 /**
- * toggleView — PRD §7c algorithm (Pattern 9) for instant view switching.
+ * toggleView — instant view switch with per-view zoom/center preserved.
  *
- * Surface → Underground:
- *   - Copies surfaceCamera.x → undergroundCamera.x (X-link sync)
- *   - If first visit: sets undergroundCamera.y = UNDERGROUND_INITIAL_CAMERA_Y
- *     (shaft/starter-hole row near the top) and marks visited
- *   - Sets activeView = 'underground'
- *
- * Underground → Surface:
- *   - Copies undergroundCamera.x → surfaceCamera.x (X-link sync)
- *   - Surface Y is NOT changed (PRD §7c: "Surface Y is preserved across toggles")
- *   - Sets activeView = 'surface'
+ * Algorithm (PLAN-stage2 §A5), order matters:
+ *   1. Snapshot the LEAVING view — automatic: its CameraView persists in place; we
+ *      only cancel any in-flight zoom-lerp so a later return doesn't resume a stale
+ *      target.
+ *   2. For the ENTERING view: its stored zoom is already restored (it persists on
+ *      the CameraView). Apply the first-underground-visit centering BEFORE the
+ *      X-link, then the X-link (centerX), then settle = cancel-lerp + custom clamp
+ *      at the restored zoom (clamp depends on the zoomed viewport size, so zoom is
+ *      restored before clamping).
+ *   3. Reset the active tool to the entering view's default.
  *
  * Mutates viewState in-place. No animation — instant switch (VIEW-02).
- *
- * @param viewState - The current ViewState to toggle
  */
 export function toggleView(viewState: ViewState): void {
   if (viewState.activeView === 'surface') {
-    viewState.undergroundCamera.x = viewState.surfaceCamera.x;
+    cancelZoomLerp(viewState.surfaceCamera); // freeze the leaving view's snapshot
+    // First-underground-visit centering BEFORE the X-link (independent axes, but
+    // spec order): set the shaft-at-top Y on the first visit only.
     if (!viewState.undergroundVisited) {
-      viewState.undergroundCamera.y = UNDERGROUND_INITIAL_CAMERA_Y;
+      viewState.undergroundCamera.centerY = UNDERGROUND_INITIAL_CENTER_Y_PX;
       viewState.undergroundVisited = true;
     }
+    viewState.undergroundCamera.centerX = viewState.surfaceCamera.centerX; // X-link (world px)
+    settleEnteringView(viewState.undergroundCamera, UNDERGROUND_WORLD_PX_W, UNDERGROUND_WORLD_PX_H);
     viewState.activeView = 'underground';
     viewState.activeTool = defaultToolForView('underground');
   } else {
-    viewState.surfaceCamera.x = viewState.undergroundCamera.x;
+    cancelZoomLerp(viewState.undergroundCamera); // freeze the leaving view's snapshot
+    viewState.surfaceCamera.centerX = viewState.undergroundCamera.centerX; // X-link (world px)
+    settleEnteringView(viewState.surfaceCamera, SURFACE_WORLD_PX_W, SURFACE_WORLD_PX_H);
     viewState.activeView = 'surface';
     viewState.activeTool = defaultToolForView('surface');
   }
@@ -276,98 +249,14 @@ export function toggleView(viewState: ViewState): void {
 // ---------------------------------------------------------------------------
 
 /**
- * toggleUndergroundColony — flip `activeUndergroundColonyId` between the
- * player's colony and the enemy's colony.
- *
- * Binary toggle: 09.1 has exactly 2 colonies, so flipping between
- * PLAYER_COLONY_ID and ENEMY_COLONY_ID is sufficient. Any future N-colony
- * expansion should replace this helper with a parameterized version (cycle
- * forward / set explicit).
+ * toggleUndergroundColony — flip `activeUndergroundColonyId` between the player's
+ * colony and the enemy's colony. Binary toggle (09.1 has exactly 2 colonies).
  *
  * The caller (game-scene.ts X-keybind handler) must gate dispatch on
- * `activeView === 'underground'`. The reducer itself is pure with respect
- * to other fields — it only touches `activeUndergroundColonyId`, so a stray
- * dispatch while on the surface view cannot flip the player out of surface
- * mode. Mutates in place so UIScene and input handlers that captured a
- * reference to the ViewState in create() keep seeing the update (same
- * in-place contract as toggleView / resetViewState).
- *
- * @param viewState - The current ViewState to toggle
+ * `activeView === 'underground'`. Mutates in place so UIScene / input handlers
+ * that captured a ViewState reference keep seeing the update.
  */
 export function toggleUndergroundColony(viewState: ViewState): void {
   viewState.activeUndergroundColonyId =
     viewState.activeUndergroundColonyId === PLAYER_COLONY_ID ? ENEMY_COLONY_ID : PLAYER_COLONY_ID;
-}
-
-// ---------------------------------------------------------------------------
-// clampCamera
-// ---------------------------------------------------------------------------
-
-/**
- * clampCamera — constrain camera center position to valid world bounds.
- *
- * Enforces that the camera center stays at least half a viewport from each world edge,
- * so the visible window never shows outside the world bounds (VIEW-04).
- *
- * Mutates cam in-place.
- *
- * Degenerate guard: if worldW < viewportWidth, cam.x = worldW/2 (centers on the world).
- *
- * @param cam - The CameraState to clamp (mutated in-place)
- * @param worldW - World width in tiles
- * @param worldH - World height in tiles
- */
-export function clampCamera(cam: CameraState, worldW: number, worldH: number): void {
-  const hw = cam.viewportWidth / 2;
-  const hh = cam.viewportHeight / 2;
-
-  // X axis
-  if (worldW < cam.viewportWidth) {
-    cam.x = worldW / 2;
-  } else {
-    cam.x = Math.max(hw, Math.min(worldW - hw, cam.x));
-  }
-
-  // Y axis
-  if (worldH < cam.viewportHeight) {
-    cam.y = worldH / 2;
-  } else {
-    cam.y = Math.max(hh, Math.min(worldH - hh, cam.y));
-  }
-}
-
-// ---------------------------------------------------------------------------
-// screenToTile
-// ---------------------------------------------------------------------------
-
-/**
- * screenToTile — convert screen pixel coordinates to tile coordinates.
- *
- * Converts a screen pixel position (e.g., mouse cursor) to the tile coordinates
- * it corresponds to, given the current camera state.
- *
- * Mirrors the renderer's integer-tile snap: draw-surface / draw-underground /
- * draw-pheromone all compute `left = Math.floor(cam.x - viewportWidth/2)` so
- * world tiles are drawn at integer-aligned pixel offsets. We apply the same
- * floor here so a click lands on the tile the player sees. Using the raw
- * fractional camera caused up to a ~15px drift between the rendered food
- * pile and the tile `findFoodPileAt` resolved to, making clicks miss unless
- * they struck near the tile center.
- *
- * @param screenX - Screen X in pixels (0 = left edge of canvas)
- * @param screenY - Screen Y in pixels (0 = top edge of canvas)
- * @param cam - The active CameraState
- * @returns Tile coordinates { tileX, tileY }
- */
-export function screenToTile(
-  screenX: number,
-  screenY: number,
-  cam: CameraState,
-): { tileX: number; tileY: number } {
-  const left = Math.floor(cam.x - cam.viewportWidth / 2);
-  const top = Math.floor(cam.y - cam.viewportHeight / 2);
-  return {
-    tileX: Math.floor(screenX / TILE_SIZE_PX) + left,
-    tileY: Math.floor(screenY / TILE_SIZE_PX) + top,
-  };
 }

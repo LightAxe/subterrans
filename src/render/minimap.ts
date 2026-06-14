@@ -9,13 +9,17 @@
 //   applyMinimapClick(viewState, px, py) — pan surface camera + X-link underground camera
 //   MINIMAP_SCALE_X, MINIMAP_SCALE_Y — pixel-to-tile scale factors
 
-import { HUD, COLOR_PLAYER_COLONY, COLOR_ENEMY_COLONY, COLOR_FOOD_PILE_NORMAL } from './sprites.js';
+import {
+  HUD,
+  TILE_SIZE_PX,
+  COLOR_PLAYER_COLONY,
+  COLOR_ENEMY_COLONY,
+  COLOR_FOOD_PILE_NORMAL,
+} from './sprites.js';
 import { COLOR_BARREN_EARTH, COLOR_BARREN_EARTH_DARK } from './terrain-atlas.js';
 import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
-  UNDERGROUND_GRID_WIDTH,
-  UNDERGROUND_GRID_HEIGHT,
   PLAYER_COLONY_ID,
   ENEMY_COLONY_ID,
 } from '../sim/constants.js';
@@ -25,7 +29,13 @@ import { sgGet } from '../sim/terrain.js';
 import { spatialHash } from './terrain-noise.js';
 import type { WorldState } from '../sim/types.js';
 import type { ViewState } from './camera.js';
-import { clampCamera } from './camera.js';
+import {
+  SURFACE_WORLD_PX_W,
+  SURFACE_WORLD_PX_H,
+  UNDERGROUND_WORLD_PX_W,
+  UNDERGROUND_WORLD_PX_H,
+} from './camera.js';
+import { clampCameraView, minimapNavTargets, visibleWorldRect } from './camera-adapter.js';
 import type { GfxLike } from './draw-surface.js';
 
 export const MINIMAP_SCALE_X = HUD.MINIMAP.w / SURFACE_GRID_WIDTH; // 160 / 128 = 1.25
@@ -37,6 +47,11 @@ export const MINIMAP_SCALE_Y = HUD.MINIMAP.h / SURFACE_GRID_HEIGHT; // 1.25
 // than the live 4×4 marker — subtler, conveys 'remains' rather than
 // active colony.
 const COLOR_DEAD_COLONY_MEMORIAL = 0x444444 as const;
+
+/** Clamp a scalar to [lo, hi] (render-side float math, ARCHITECTURE.md Principle 6). */
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
+}
 
 export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewState): void {
   // Surface terrain (issue #40 reframe — barren-earth-default). Base layer
@@ -150,12 +165,25 @@ export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewStat
     gfx.fillRect(px - halfOffset, py - halfOffset, size, size);
   }
 
-  // Viewport rect — always tracks surfaceCamera (minimap shows surface always per PRD §7a)
-  const cam = viewState.surfaceCamera;
-  const rx = HUD.MINIMAP.x + (cam.x - cam.viewportWidth / 2) * MINIMAP_SCALE_X;
-  const ry = HUD.MINIMAP.y + (cam.y - cam.viewportHeight / 2) * MINIMAP_SCALE_Y;
-  const rw = cam.viewportWidth * MINIMAP_SCALE_X;
-  const rh = cam.viewportHeight * MINIMAP_SCALE_Y;
+  // Viewport rect — always tracks surfaceCamera (minimap shows surface always per
+  // PRD §7a). Stage 2: the visible window is zoom-dependent, so derive it from the
+  // adapter's world rect (world px → tiles → minimap px).
+  const rect = visibleWorldRect(viewState.surfaceCamera);
+  // Clamp the rect to the minimap frame before drawing. Under zoom the visible
+  // world window can exceed the world/minimap extent (e.g. at MIN_ZOOM the rect
+  // is ~312px wide vs the 160px minimap, and a centered camera pushes its left
+  // edge negative), so the unclamped outline would spill outside the 160×160 box
+  // onto neighboring HUD. Clamp each edge to [HUD.MINIMAP.x .. x+w] / [.y .. y+h].
+  const minX = HUD.MINIMAP.x;
+  const maxX = HUD.MINIMAP.x + HUD.MINIMAP.w;
+  const minY = HUD.MINIMAP.y;
+  const maxY = HUD.MINIMAP.y + HUD.MINIMAP.h;
+  const rx = clamp(HUD.MINIMAP.x + (rect.left / TILE_SIZE_PX) * MINIMAP_SCALE_X, minX, maxX);
+  const ry = clamp(HUD.MINIMAP.y + (rect.top / TILE_SIZE_PX) * MINIMAP_SCALE_Y, minY, maxY);
+  const rRight = clamp(HUD.MINIMAP.x + (rect.right / TILE_SIZE_PX) * MINIMAP_SCALE_X, minX, maxX);
+  const rBottom = clamp(HUD.MINIMAP.y + (rect.bottom / TILE_SIZE_PX) * MINIMAP_SCALE_Y, minY, maxY);
+  const rw = rRight - rx;
+  const rh = rBottom - ry;
 
   // Four one-pixel fillRects form the viewport outline (GfxLike has no strokeRect)
   gfx.fillStyle(0xffffff, 0.8);
@@ -180,18 +208,26 @@ export function minimapClickToTile(
 export function applyMinimapClick(viewState: ViewState, px: number, py: number): boolean {
   const tile = minimapClickToTile(px, py);
   if (!tile) return false;
-  viewState.surfaceCamera.x = tile.tileX;
-  viewState.surfaceCamera.y = tile.tileY;
-  clampCamera(viewState.surfaceCamera, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
-  // X-link per PRD §7c: minimap pans surface; underground X follows surface X.
-  // Issue #86 — defensive clamp the underground camera with its own dimensions
-  // after the X-link. Today SURFACE_GRID_WIDTH === UNDERGROUND_GRID_WIDTH so
-  // this is a no-op, but the constants are independent and a future width
-  // change to either side would silently let the underground camera fall
-  // outside its grid without this clamp.
+  // Click tile (fractional) → world px. minimapNavTargets sets the SURFACE center to
+  // the click and X-links the underground center while PRESERVING its depth (PLAN
+  // §A6) — not "centerOn whichever camera is active".
+  const worldX = tile.tileX * TILE_SIZE_PX;
+  const worldY = tile.tileY * TILE_SIZE_PX;
+  const targets = minimapNavTargets(
+    viewState.surfaceCamera,
+    viewState.undergroundCamera,
+    worldX,
+    worldY,
+  );
+  viewState.surfaceCamera.centerX = targets.surfaceCenterX;
+  viewState.surfaceCamera.centerY = targets.surfaceCenterY;
+  clampCameraView(viewState.surfaceCamera, SURFACE_WORLD_PX_W, SURFACE_WORLD_PX_H);
+  // Issue #86 — clamp the underground camera with its OWN dimensions after the
+  // X-link (independent constants; underground is shorter, so a different clamp).
   if (viewState.activeView === 'underground') {
-    viewState.undergroundCamera.x = viewState.surfaceCamera.x;
-    clampCamera(viewState.undergroundCamera, UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT);
+    viewState.undergroundCamera.centerX = targets.undergroundCenterX;
+    viewState.undergroundCamera.centerY = targets.undergroundCenterY;
+    clampCameraView(viewState.undergroundCamera, UNDERGROUND_WORLD_PX_W, UNDERGROUND_WORLD_PX_H);
   }
   return true;
 }

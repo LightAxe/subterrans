@@ -33,6 +33,11 @@ import {
   type QueenDeathCause,
 } from './ui-scene-logic.js';
 import { PLAYER_COLONY_ID as _PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
+import {
+  triggerScreenEdgeFlash as drawScreenEdgeFlash,
+  type FlashDirection,
+} from './screen-effects.js';
+import { CANVAS_W, CANVAS_H } from './sprites.js';
 
 // Re-export pure helpers for Plan 07 and external consumers
 export { formatOutcomeTitle, formatKillStatsSubtitle, formatCauseSubtitle, type QueenDeathCause };
@@ -356,6 +361,11 @@ export class UIScene extends Phaser.Scene {
   // enqueueCommand cap on chamber/behavior commands.
   private onSelectTool: ((tool: ToolId) => void) | null = null;
   private onSpeedControl: ((control: SpeedControl) => void) | null = null;
+  // Fires after a successful minimap click-to-nav so GameScene can cancel any
+  // in-flight wheel zoom-lerp/anchor on the active camera; otherwise the next
+  // tickZoomLerp re-anchors centerX/Y from the fixed cursor point and throws the
+  // minimap recenter away (mirrors the keyboard/drag-pan cancel in game-scene.ts).
+  private onMinimapNav: (() => void) | null = null;
   private isPausedFn: (() => boolean) | null = null;
   private getSpeedMultiplierFn: (() => 1 | 2 | 4) | null = null;
   // Tool palette button labels (3) and the hint strip text + speed widget labels.
@@ -443,6 +453,7 @@ export class UIScene extends Phaser.Scene {
     // the HUD palette/speed widget route through the same gates as the hotkeys.
     onSelectTool?: (tool: ToolId) => void;
     onSpeedControl?: (control: SpeedControl) => void;
+    onMinimapNav?: () => void;
     isPaused?: () => boolean;
     getSpeedMultiplier?: () => 1 | 2 | 4;
   }) {
@@ -451,6 +462,7 @@ export class UIScene extends Phaser.Scene {
     this.onEscape = data.onEscape ?? null;
     this.onSelectTool = data.onSelectTool ?? null;
     this.onSpeedControl = data.onSpeedControl ?? null;
+    this.onMinimapNav = data.onMinimapNav ?? null;
     this.isPausedFn = data.isPaused ?? null;
     this.getSpeedMultiplierFn = data.getSpeedMultiplier ?? null;
   }
@@ -831,8 +843,14 @@ export class UIScene extends Phaser.Scene {
         this.onSpeedControl?.(speedHit);
         return;
       }
-      // Minimap click
-      if (applyMinimapClick(this.viewState, pointer.x, pointer.y)) return;
+      // Minimap click. On a successful recenter, notify GameScene so it can drop
+      // any in-flight wheel zoom-lerp/anchor on the active camera — otherwise the
+      // next tickZoomLerp re-anchors from the fixed cursor point and overrides the
+      // minimap nav (same class of bug the keyboard/drag-pan cancel prevents).
+      if (applyMinimapClick(this.viewState, pointer.x, pointer.y)) {
+        this.onMinimapNav?.();
+        return;
+      }
       // Behavior slider drag start (Phase 10 / D-01 — 1-D Forage↔Fight axis)
       if (isInsideSlider(pointer.x, pointer.y)) {
         this.dragState.isDragging = true;
@@ -1224,6 +1242,17 @@ export class UIScene extends Phaser.Scene {
         });
       },
     });
+  }
+
+  // Stage 2 controls rework (issue #18) — the invasion screen-edge flash MUST
+  // render on UIScene, NOT GameScene. GameScene's main camera is zoom-driven
+  // (CameraController.apply → setZoom + centerOn), and setScrollFactor(0)
+  // cancels scroll but NOT zoom, so a flash drawn there is scaled/offset at any
+  // zoom != 1 (see game-scene.ts Pitfall 1). UIScene's camera never zooms or
+  // scrolls, so the fixed-canvas edge strips land correctly. Delegates the draw
+  // to the pure screen-effects helper with `this` = UIScene.
+  public triggerScreenEdgeFlash(direction: FlashDirection): void {
+    drawScreenEdgeFlash(this, direction, CANVAS_W, CANVAS_H);
   }
 
   public hideGameOverOverlay(): void {

@@ -27,7 +27,7 @@ import {
 } from './ant-sprite-layer.js';
 import { containSpritePlacement } from './sprite-containment.js';
 import { computeAntRotation, type AntFacingCache } from './ant-facing-cache.js';
-import { ugGet, UndergroundTileState } from '../sim/terrain.js';
+import { ugGet, UndergroundTileState, type UndergroundGrid } from '../sim/terrain.js';
 import { isAlive } from '../sim/ant/ant-store.js';
 import { FP_SHIFT, FP_ONE } from '../sim/fixed.js';
 import { PLAYER_COLONY_ID, FOOD_CHAMBER_CAPACITY } from '../sim/constants.js';
@@ -42,6 +42,7 @@ import {
   COLOR_MARKED_TILE_OVERLAY,
   COLOR_BEING_DUG_OVERLAY,
   COLOR_UNDERGROUND_CEILING_STRIP,
+  COLOR_UNDERGROUND_SOLID,
   COLOR_CHAMBER_QUEEN,
   COLOR_CHAMBER_NURSERY,
   COLOR_CHAMBER_FOOD_STORAGE,
@@ -57,7 +58,13 @@ import { drawBarrenEarthSubstrate, drawOpenFloorTile } from './terrain-atlas.js'
 import { drawAutotiledUndergroundTile, drawUndergroundRim } from './underground-autotile.js';
 import { gatherUnderground3x3Neighbors, type Neighbors3x3 } from './underground-neighbors.js';
 import { chamberSeed, chamberPerimeterPoints } from './chamber-shape.js';
-import type { CameraState } from './camera.js';
+import {
+  type CameraView,
+  visibleWorldRect,
+  type WorldRect,
+  ANT_DOT_SCREEN_PX,
+} from './camera-adapter.js';
+import { visibleTileRange } from './draw-surface.js';
 
 // ---------------------------------------------------------------------------
 // Chamber color map
@@ -153,16 +160,18 @@ export function projectFoodStorageFill(colony: ColonyRecord, chamberId: number):
 export function drawUndergroundTerrain(
   gfx: GfxLike,
   world: WorldState,
-  cam: CameraState,
+  cam: CameraView,
   activeUndergroundColonyId: ColonyId = PLAYER_COLONY_ID,
+  // Stage 2 §B: when true, draw the WHOLE grid (off-screen RenderTexture bake) instead of
+  // culling to the camera's visible window.
+  bakeAll: boolean = false,
 ): void {
   const grid = world.undergroundGrids[activeUndergroundColonyId];
   if (grid === undefined) return;
 
-  const left = Math.floor(cam.x - cam.viewportWidth / 2);
-  const top = Math.floor(cam.y - cam.viewportHeight / 2);
-  const right = Math.min(left + cam.viewportWidth + 1, grid.width);
-  const bottom = Math.min(top + cam.viewportHeight + 1, grid.height);
+  const { left, top, right, bottom } = bakeAll
+    ? { left: 0, top: 0, right: grid.width, bottom: grid.height }
+    : visibleTileRange(cam, grid.width, grid.height);
 
   // Collect entrance X positions for ceiling gap rendering — uses the viewed
   // colony's entrances so the player sees enemy entrances when inspecting the
@@ -193,61 +202,117 @@ export function drawUndergroundTerrain(
 
   for (let ty = Math.max(top, 0); ty < bottom; ty++) {
     for (let tx = Math.max(left, 0); tx < right; tx++) {
-      const screenX = (tx - left) * TILE_SIZE_PX;
-      const screenY = (ty - top) * TILE_SIZE_PX;
-
-      if (ty === 0) {
-        // Ceiling strip: open gap at entrance columns, surface earth elsewhere.
-        // The ceiling reads as the underside of the surface — same barren
-        // earth substrate the player sees on the surface view (issue #40
-        // reframe), so the two views feel like the same continuous world.
-        if (entranceXSet.has(tx)) {
-          // Open shaft top — render as Open floor + gold tint highlight.
-          drawOpenFloorTile(gfx, screenX, screenY, tx, ty);
-          // Phase 8.5 usability (PRD §7c.1): translucent gold tint marks
-          // the "way in" so the entrance reads even on a near-full Solid
-          // grid (first-visit state).
-          gfx.fillStyle(COLOR_QUEEN_OUTLINE, 0.28);
-          gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
-        } else {
-          // Plain ceiling — surface-style barren-earth SUBSTRATE only
-          // (codex P2 follow-up: drawBarrenEarthTile would intermittently
-          // paint multi-tile boulders / bushes into the ceiling strip,
-          // which is supposed to be a consistent texture row).
-          drawBarrenEarthSubstrate(gfx, screenX, screenY, tx, ty);
-          // Subtle ceiling-strip tint to differentiate from a real surface
-          // tile. Half-transparent so the underlying texture still shows.
-          gfx.fillStyle(COLOR_UNDERGROUND_CEILING_STRIP, 0.35);
-          gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
-        }
-      } else {
-        // Issue #43 — quarter-tile autotiling. The classifier treats Solid
-        // (and OOB / non-entrance ceiling) as wall, and Open / Marked /
-        // BeingDug as open. The tile's substrate plus opposite-kind
-        // chamfer/inner-corner masks together resolve stair-step diagonals
-        // into smooth silhouettes across tile boundaries.
-        gatherUnderground3x3Neighbors(grid, tx, ty, entranceXSet, neighbors);
-        drawAutotiledUndergroundTile(gfx, screenX, screenY, tx, ty, neighbors.c, neighbors);
-        // Rim pass — subtle 2-pixel darker band on the open side of each
-        // wall boundary. The shape is correct without it but the corridor
-        // reads as flat black; the rim is what gives it the "carved out
-        // of packed earth" feel.
-        drawUndergroundRim(gfx, screenX, screenY, tx, ty, neighbors.c, neighbors);
-
-        // Marked / BeingDug tint overlay — applied AFTER autotile so the
-        // tint reads through the dug silhouette. Ensures the player sees
-        // what's queued / in progress without losing the smooth shape.
-        const state = ugGet(grid, tx, ty);
-        if (state === UndergroundTileState.Marked) {
-          gfx.fillStyle(COLOR_MARKED_TILE_OVERLAY, 0.55);
-          gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
-        } else if (state === UndergroundTileState.BeingDug) {
-          gfx.fillStyle(COLOR_BEING_DUG_OVERLAY, 0.65);
-          gfx.fillRect(screenX, screenY, TILE_SIZE_PX, TILE_SIZE_PX);
-        }
-      }
+      drawOneUndergroundTile(gfx, grid, entranceXSet, tx, ty, neighbors);
     }
   }
+}
+
+/**
+ * Draw ONE underground terrain tile (ceiling row or autotiled interior + Marked/BeingDug
+ * tints) at world px. Shared by the per-frame/full-bake loop and the incremental dirty
+ * re-stamp (§B). `neighbors` is a reused scratch buffer so the caller can avoid
+ * per-tile allocation.
+ */
+function drawOneUndergroundTile(
+  gfx: GfxLike,
+  grid: UndergroundGrid,
+  entranceXSet: ReadonlySet<number>,
+  tx: number,
+  ty: number,
+  neighbors: Neighbors3x3,
+): void {
+  const worldX = tx * TILE_SIZE_PX;
+  const worldY = ty * TILE_SIZE_PX;
+
+  if (ty === 0) {
+    // Ceiling strip: open gap at entrance columns, surface earth elsewhere.
+    if (entranceXSet.has(tx)) {
+      // Open shaft top — render as Open floor + gold tint highlight.
+      drawOpenFloorTile(gfx, worldX, worldY, tx, ty);
+      gfx.fillStyle(COLOR_QUEEN_OUTLINE, 0.28);
+      gfx.fillRect(worldX, worldY, TILE_SIZE_PX, TILE_SIZE_PX);
+    } else {
+      // Plain ceiling — surface-style barren-earth SUBSTRATE only.
+      drawBarrenEarthSubstrate(gfx, worldX, worldY, tx, ty);
+      gfx.fillStyle(COLOR_UNDERGROUND_CEILING_STRIP, 0.35);
+      gfx.fillRect(worldX, worldY, TILE_SIZE_PX, TILE_SIZE_PX);
+    }
+  } else {
+    // Issue #43 — quarter-tile autotiling resolves stair-step diagonals into smooth
+    // silhouettes across tile boundaries.
+    gatherUnderground3x3Neighbors(grid, tx, ty, entranceXSet, neighbors);
+    drawAutotiledUndergroundTile(gfx, worldX, worldY, tx, ty, neighbors.c, neighbors);
+    // Rim pass — subtle darker band on the open side of each wall boundary.
+    drawUndergroundRim(gfx, worldX, worldY, tx, ty, neighbors.c, neighbors);
+
+    // Marked / BeingDug tint overlay — AFTER autotile so the tint reads through the shape.
+    const state = ugGet(grid, tx, ty);
+    if (state === UndergroundTileState.Marked) {
+      gfx.fillStyle(COLOR_MARKED_TILE_OVERLAY, 0.55);
+      gfx.fillRect(worldX, worldY, TILE_SIZE_PX, TILE_SIZE_PX);
+    } else if (state === UndergroundTileState.BeingDug) {
+      gfx.fillStyle(COLOR_BEING_DUG_OVERLAY, 0.65);
+      gfx.fillRect(worldX, worldY, TILE_SIZE_PX, TILE_SIZE_PX);
+    }
+  }
+}
+
+/**
+ * Incrementally re-stamp specific dirty tiles into a bake target (§B10). Each tile is
+ * first painted with an opaque Solid base so re-stamping fully OVERWRITES the prior RT
+ * pixels (autotile chamfers don't cover every corner — without the opaque base, stale
+ * pixels would bleed through on a state change). `dirtyKeys` are ty*width+tx indices
+ * (from diffTerrainShadow). The caller draws the returned Graphics into the RenderTexture.
+ */
+export function restampUndergroundTiles(
+  gfx: GfxLike,
+  world: WorldState,
+  colonyId: ColonyId,
+  dirtyKeys: Iterable<number>,
+): void {
+  const grid = world.undergroundGrids[colonyId];
+  if (grid === undefined) return;
+  const colony = world.colonies[colonyId];
+  const entranceXSet = new Set<number>();
+  if (colony?.entrances) {
+    for (const entrance of colony.entrances) entranceXSet.add(entrance.surfaceTileX);
+  }
+  const neighbors: Neighbors3x3 = {
+    nw: 'wall',
+    n: 'wall',
+    ne: 'wall',
+    w: 'wall',
+    c: 'wall',
+    e: 'wall',
+    sw: 'wall',
+    s: 'wall',
+    se: 'wall',
+  };
+  for (const key of dirtyKeys) {
+    const tx = key % grid.width;
+    const ty = (key / grid.width) | 0;
+    // Opaque base so the re-stamp cleanly overwrites the prior RT pixels.
+    gfx.fillStyle(COLOR_UNDERGROUND_SOLID, 1);
+    gfx.fillRect(tx * TILE_SIZE_PX, ty * TILE_SIZE_PX, TILE_SIZE_PX, TILE_SIZE_PX);
+    drawOneUndergroundTile(gfx, grid, entranceXSet, tx, ty, neighbors);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// tileInView — world-space cull (copied verbatim from draw-surface.ts, where it
+// is a private helper and not exported). A tile-anchored primitive whose top-left
+// is at world (worldX, worldY) is kept when it lies within the visible world rect
+// expanded by `margin`. `margin` widens the box for primitives that spill past
+// their tile.
+// ---------------------------------------------------------------------------
+
+function tileInView(worldX: number, worldY: number, rect: WorldRect, margin: number): boolean {
+  return (
+    worldX >= rect.left - margin &&
+    worldX <= rect.right + margin &&
+    worldY >= rect.top - margin &&
+    worldY <= rect.bottom + margin
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -278,22 +343,21 @@ export function drawUndergroundEntities(
   prev: WorldState,
   curr: WorldState,
   alpha: number,
-  cam: CameraState,
+  cam: CameraView,
   activeUndergroundColonyId: ColonyId = PLAYER_COLONY_ID,
   facing?: AntFacingCache,
   undergoundGlowFrames?: Map<number, number>,
   currentFrame: number = 0,
+  // Stage 2 §C13: strategic LOD — ants render as screen-constant dots; the ant-derived
+  // contested-glow + brood detail are skipped (allocation-free strategic frame).
+  dotMode: boolean = false,
 ): void {
   const colony = curr.colonies[activeUndergroundColonyId];
   if (colony === undefined) return;
   // PR 6-render (#128 class-iii) — the grid for sprite-containment scale clamping.
   const ugGrid = curr.undergroundGrids[activeUndergroundColonyId];
 
-  const left = Math.floor(cam.x - cam.viewportWidth / 2);
-  const top = Math.floor(cam.y - cam.viewportHeight / 2);
-
-  const canvasW = cam.viewportWidth * TILE_SIZE_PX;
-  const canvasH = cam.viewportHeight * TILE_SIZE_PX;
+  const rect = visibleWorldRect(cam);
 
   // --- Chambers ---
   // Phase 8.5 usability (PRD §7c.1): after drawing the chamber fill, queen
@@ -314,15 +378,15 @@ export function drawUndergroundEntities(
     if (dims === undefined) continue;
     const tileX = chamber.posX >> FP_SHIFT;
     const tileY = chamber.posY >> FP_SHIFT;
-    const screenX = (tileX - left) * TILE_SIZE_PX;
-    const screenY = (tileY - top) * TILE_SIZE_PX;
+    const worldX = tileX * TILE_SIZE_PX;
+    const worldY = tileY * TILE_SIZE_PX;
     const color = CHAMBER_COLORS[chamber.chamberType] ?? COLOR_CHAMBER_QUEEN;
     const w = dims.width * TILE_SIZE_PX;
     const h = dims.height * TILE_SIZE_PX;
     const seed = chamberSeed(colony.colonyId, chamber.chamberId, chamber.chamberType);
-    const points = chamberPerimeterPoints(seed, screenX, screenY, w, h);
-    const cx = screenX + w / 2;
-    const cy = screenY + h / 2;
+    const points = chamberPerimeterPoints(seed, worldX, worldY, w, h);
+    const cx = worldX + w / 2;
+    const cy = worldY + h / 2;
 
     // Fill via fan triangulation from chamber center. The polygon is nearly
     // convex (small jitter on a rectangle), so any "bowtie" overdraw from
@@ -381,8 +445,8 @@ export function drawUndergroundEntities(
         let placed = 0;
         for (let row = dims.height - 1; row >= 0 && placed < filledTiles; row--) {
           for (let col = 0; col < dims.width && placed < filledTiles; col++) {
-            const cx = screenX + col * TILE_SIZE_PX + TILE_SIZE_PX / 2;
-            const cy = screenY + row * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+            const cx = worldX + col * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+            const cy = worldY + row * TILE_SIZE_PX + TILE_SIZE_PX / 2;
             sprites.drawStatic({
               kind: 'food-cache',
               x: cx,
@@ -432,8 +496,9 @@ export function drawUndergroundEntities(
   // entity IDs are world-globally unique (no collision risk).
   // --- Underground home-ground combat tile glow (S6) ---
   // Per-grid color: blue for player grid, orange for enemy grid.
-  // Fade-out over 5 frames once combat ants leave a tile.
-  {
+  // Fade-out over 5 frames once combat ants leave a tile. Skipped in strategic dot mode
+  // (allocation-free pass — no per-entity Map/Set scan; §C13/R3-2).
+  if (!dotMode) {
     const glowColor =
       activeUndergroundColonyId === PLAYER_COLONY_ID
         ? COLOR_PLAYER_HOME_GLOW
@@ -477,9 +542,9 @@ export function drawUndergroundEntities(
     for (const key of drawKeys) {
       const tx = key & 0xff; // bits 0-7; tx max = 127
       const ty = (key >> 16) & 0xff; // bits 16-23; top byte (24+) holds colony ID
-      const sx = (tx - left) * TILE_SIZE_PX;
-      const sy = (ty - top) * TILE_SIZE_PX;
-      if (sx < -TILE_SIZE_PX || sx > canvasW || sy < -TILE_SIZE_PX || sy > canvasH) continue;
+      const worldX = tx * TILE_SIZE_PX;
+      const worldY = ty * TILE_SIZE_PX;
+      if (!tileInView(worldX, worldY, rect, TILE_SIZE_PX)) continue;
       const framesAgo = undergoundGlowFrames
         ? currentFrame - (undergoundGlowFrames.get(key) ?? currentFrame)
         : 0;
@@ -487,12 +552,12 @@ export function drawUndergroundEntities(
       if (alpha_g <= 0) continue;
       // Soft edge.
       gfx.fillStyle(glowColor, alpha_g);
-      gfx.fillRect(sx + 2, sy + 2, TILE_SIZE_PX - 4, TILE_SIZE_PX - 4);
+      gfx.fillRect(worldX + 2, worldY + 2, TILE_SIZE_PX - 4, TILE_SIZE_PX - 4);
       gfx.fillStyle(glowColor, alpha_g * 0.5);
-      gfx.fillRect(sx, sy, TILE_SIZE_PX, 2);
-      gfx.fillRect(sx, sy + TILE_SIZE_PX - 2, TILE_SIZE_PX, 2);
-      gfx.fillRect(sx, sy + 2, 2, TILE_SIZE_PX - 4);
-      gfx.fillRect(sx + TILE_SIZE_PX - 2, sy + 2, 2, TILE_SIZE_PX - 4);
+      gfx.fillRect(worldX, worldY, TILE_SIZE_PX, 2);
+      gfx.fillRect(worldX, worldY + TILE_SIZE_PX - 2, TILE_SIZE_PX, 2);
+      gfx.fillRect(worldX, worldY + 2, 2, TILE_SIZE_PX - 4);
+      gfx.fillRect(worldX + TILE_SIZE_PX - 2, worldY + 2, 2, TILE_SIZE_PX - 4);
     }
     // Prune stale entries.
     if (undergoundGlowFrames) {
@@ -526,19 +591,24 @@ export function drawUndergroundEntities(
     const prevPxY = (prev.ants.posY[id]! * TILE_SIZE_PX) / FP_ONE;
     const currPxY = (curr.ants.posY[id]! * TILE_SIZE_PX) / FP_ONE;
 
+    // baseX/baseY are already world px (posX/posY → px), so they double as the
+    // draw position; the main camera projects them to screen.
     const baseX = useInterp ? prevPxX + (currPxX - prevPxX) * alpha : currPxX;
     const baseY = useInterp ? prevPxY + (currPxY - prevPxY) * alpha : currPxY;
-    const screenX = baseX - left * TILE_SIZE_PX;
-    const screenY = baseY - top * TILE_SIZE_PX;
 
-    // Trivial viewport cull
-    if (
-      screenX < -TILE_SIZE_PX ||
-      screenX > canvasW ||
-      screenY < -TILE_SIZE_PX ||
-      screenY > canvasH
-    )
+    // Trivial world-rect cull.
+    if (!tileInView(baseX, baseY, rect, TILE_SIZE_PX)) continue;
+
+    // Strategic LOD (§C13): a screen-constant colony-colored dot instead of the detailed
+    // sprite — allocation-free (no facing/containment/sprite-pool work).
+    if (dotMode) {
+      const dotColor =
+        curr.ants.colonyId[id]! === PLAYER_COLONY_ID ? COLOR_PLAYER_COLONY : COLOR_ENEMY_COLONY;
+      const ds = ANT_DOT_SCREEN_PX / cam.zoom;
+      gfx.fillStyle(dotColor, 1);
+      gfx.fillRect(baseX - ds / 2, baseY - ds / 2, ds, ds);
       continue;
+    }
 
     // Facing: rotate the SVG (head on -x natively) toward the motion vector.
     // Smoothing is applied by the AntFacingCache when one is supplied — the
@@ -572,19 +642,23 @@ export function drawUndergroundEntities(
     const isFighter2 = curr.ants.task[id] === AntTask.Fighting;
     // PR 6-render (#128 class-iii) — contain the sprite's rotated footprint so
     // it never paints over a Solid/off-grid neighbour. baseX/baseY are the
-    // interpolated grid-space pixel center (pre-camera-offset), which is what
-    // the containment math is in terms of. Containment nudges POSITION before
-    // scale (containSpritePlacement): the sim pins shaft/descent ants to exact
+    // interpolated world-pixel center, which is what the containment math is in
+    // terms of. Containment nudges POSITION before scale
+    // (containSpritePlacement): the sim pins shaft/descent ants to exact
     // tile-edge coordinates, where a pure scale clamp against the Solid shaft
     // wall would collapse them to scale 0 (invisible). Workers at natural size
     // already fit a tile, so they adjust only when rotation enlarges their AABB
     // near dirt or they sit on a tile edge beside it.
+    //
+    // Continuity (issue #18): the containment input/output stays a continuous
+    // float — the world px are NOT rounded — so the main camera's zoom
+    // projection keeps the sub-tile precision PR6 introduced.
     const desiredScale = isFighter2 && !isQueen ? 1.25 : 1.0;
     const nativeW = isQueen ? QUEEN_SPRITE_WIDTH : WORKER_SPRITE_WIDTH;
     const nativeH = isQueen ? QUEEN_SPRITE_HEIGHT : WORKER_SPRITE_HEIGHT;
     let scale = desiredScale;
-    let drawX = screenX;
-    let drawY = screenY;
+    let drawX = baseX;
+    let drawY = baseY;
     if (ugGrid !== undefined) {
       const placed = containSpritePlacement(
         ugGrid,
@@ -596,8 +670,8 @@ export function drawUndergroundEntities(
         desiredScale,
       );
       scale = placed.scale;
-      drawX = placed.cxPx - left * TILE_SIZE_PX;
-      drawY = placed.cyPx - top * TILE_SIZE_PX;
+      drawX = placed.cxPx;
+      drawY = placed.cyPx;
     }
     sprites.drawAnt({
       kind: isQueen ? 'queen' : 'worker',
@@ -614,28 +688,11 @@ export function drawUndergroundEntities(
   // from the brood entity positions exactly — the sim's nurses have already
   // moved them into the nursery footprint, so rendering at the entity's
   // current tile is what places them inside the chamber visually.
-  drawBrood(
-    sprites,
-    curr,
-    colony.eggs,
-    'egg',
-    left,
-    top,
-    canvasW,
-    canvasH,
-    activeUndergroundColonyId,
-  );
-  drawBrood(
-    sprites,
-    curr,
-    colony.larvae,
-    'larva',
-    left,
-    top,
-    canvasW,
-    canvasH,
-    activeUndergroundColonyId,
-  );
+  // Brood detail is skipped in strategic dot mode (§C13).
+  if (!dotMode) {
+    drawBrood(sprites, curr, colony.eggs, 'egg', rect, activeUndergroundColonyId);
+    drawBrood(sprites, curr, colony.larvae, 'larva', rect, activeUndergroundColonyId);
+  }
 }
 
 /**
@@ -654,10 +711,7 @@ function drawBrood(
   curr: WorldState,
   entityIds: readonly number[],
   kind: 'egg' | 'larva',
-  left: number,
-  top: number,
-  canvasW: number,
-  canvasH: number,
+  rect: WorldRect,
   activeUndergroundColonyId: ColonyId,
 ): void {
   const ants = curr.ants;
@@ -671,15 +725,9 @@ function drawBrood(
     if (ants.currentGridColonyId[id] !== activeUndergroundColonyId) continue;
     const tileX = ants.posX[id]! >> FP_SHIFT;
     const tileY = ants.posY[id]! >> FP_SHIFT;
-    const screenX = (tileX - left) * TILE_SIZE_PX;
-    const screenY = (tileY - top) * TILE_SIZE_PX;
-    if (
-      screenX < -TILE_SIZE_PX ||
-      screenX > canvasW ||
-      screenY < -TILE_SIZE_PX ||
-      screenY > canvasH
-    )
-      continue;
+    const worldX = tileX * TILE_SIZE_PX;
+    const worldY = tileY * TILE_SIZE_PX;
+    if (!tileInView(worldX, worldY, rect, TILE_SIZE_PX)) continue;
     // Visible-carry offset: when this brood is on a carrier's tile and
     // the carrier is alive, lift it ~1/4 tile so it visually sits
     // above the carrier instead of being hidden under the ant sprite.
@@ -687,8 +735,8 @@ function drawBrood(
     const carryDy = carrierId !== -1 && isAlive(ants, carrierId) ? CARRY_RENDER_DY_PX : 0;
     sprites.drawStatic({
       kind,
-      x: screenX + TILE_SIZE_PX / 2,
-      y: screenY + TILE_SIZE_PX / 2 + carryDy,
+      x: worldX + TILE_SIZE_PX / 2,
+      y: worldY + TILE_SIZE_PX / 2 + carryDy,
     });
   }
 }
@@ -713,7 +761,7 @@ export function drawUnderground(
   prev: WorldState,
   curr: WorldState,
   alpha: number,
-  cam: CameraState,
+  cam: CameraView,
   activeUndergroundColonyId: ColonyId = PLAYER_COLONY_ID,
   facing?: AntFacingCache,
 ): void {

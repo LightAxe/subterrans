@@ -6,6 +6,14 @@
 // cancelGesture on every trigger; snapshot acts on the DOWN tile; the enemy-view
 // read-only guard; reconcileContext cancelling on a mid-press tool/view/colony
 // change; the right-click chamber path.
+//
+// Stage 2 controls rework: cameras are world-pixel `CameraView`s (centerX,
+// centerY, zoom, targetZoom) instead of tile-based `CameraState`. tileCenter()
+// projects a tile to its screen point via the SAME pure adapter math the arbiter
+// uses (worldToScreen), so a down/up round-trips to the same tile through
+// screenToTileZoom. Pan assertions read centerX/centerY: a screen drag of dx px
+// at zoom 1 moves centerX by dx world px (panByScreenDelta: centerX -= dx/zoom),
+// NOT dx/16 as in the old tile-camera model.
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
@@ -21,7 +29,7 @@ import { contextMenuState, hideContextMenu } from '../render/context-menu-state.
 import { UndergroundTileState, ugSet, createUndergroundGrid } from '../sim/terrain.js';
 import type { WorldState } from '../sim/types.js';
 import type { ViewState } from '../render/camera.js';
-import { VIEWPORT_WIDTH_TILES, VIEWPORT_HEIGHT_TILES } from '../render/camera.js';
+import { makeCameraView, worldToScreen } from '../render/camera-adapter.js';
 import { TILE_SIZE_PX } from '../render/sprites.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 import { DRAG_THRESHOLD_PX } from './gesture.js';
@@ -34,24 +42,15 @@ import type { SimCommand } from '../sim/commands.js';
 function makeViewState(
   view: 'surface' | 'underground',
   tool: 'command' | 'dig' | 'chamber',
-  camX = 10,
-  camY = 10,
+  // World-pixel camera CENTER. Default frames on tile (10,10): 10 × 16 = 160.
+  centerX = 10 * TILE_SIZE_PX,
+  centerY = 10 * TILE_SIZE_PX,
 ): ViewState {
   return {
     activeView: view,
     activeTool: tool,
-    surfaceCamera: {
-      x: camX,
-      y: camY,
-      viewportWidth: VIEWPORT_WIDTH_TILES,
-      viewportHeight: VIEWPORT_HEIGHT_TILES,
-    },
-    undergroundCamera: {
-      x: camX,
-      y: camY,
-      viewportWidth: VIEWPORT_WIDTH_TILES,
-      viewportHeight: VIEWPORT_HEIGHT_TILES,
-    },
+    surfaceCamera: makeCameraView(centerX, centerY),
+    undergroundCamera: makeCameraView(centerX, centerY),
     undergroundVisited: true,
     activeUndergroundColonyId: PLAYER_COLONY_ID,
     showPheromoneOverlay: true,
@@ -75,12 +74,20 @@ function makeWorld(gridW = 20, gridH = 20): WorldState {
   } as unknown as WorldState;
 }
 
-/** Screen px at the CENTER of a tile, mirroring the renderer's integer snap. */
+/**
+ * Screen px at the CENTER of a tile, projected through the SAME pure adapter math
+ * the arbiter uses (worldToScreen). The tile center in world px is (t+0.5)·16;
+ * projecting it and flooring back via screenToTileZoom returns the same tile, so a
+ * down/up here resolves to (tileX,tileY) exactly.
+ */
 function tileCenter(tileX: number, tileY: number, vs: ViewState) {
   const cam = vs.activeView === 'surface' ? vs.surfaceCamera : vs.undergroundCamera;
-  const left = Math.floor(cam.x - cam.viewportWidth / 2);
-  const top = Math.floor(cam.y - cam.viewportHeight / 2);
-  return { x: (tileX - left) * TILE_SIZE_PX + 1, y: (tileY - top) * TILE_SIZE_PX + 1 };
+  const { screenX, screenY } = worldToScreen(
+    (tileX + 0.5) * TILE_SIZE_PX,
+    (tileY + 0.5) * TILE_SIZE_PX,
+    cam,
+  );
+  return { x: screenX, y: screenY };
 }
 
 interface Harness {
@@ -201,12 +208,12 @@ describe('drag then no tap', () => {
   it('a pan drag (Command surface) moves the camera and fires NO tap on up', () => {
     const h = makeHarness('surface', 'command');
     const start = tileCenter(10, 10, h.vs);
-    const camXBefore = h.vs.surfaceCamera.x;
+    const centerXBefore = h.vs.surfaceCamera.centerX;
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
     h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 40, start.y)); // crosses threshold → pan
     expect(panInputState.isPanning).toBe(true);
     h.arbiter.onPointerUp(ev(LEFT_BUTTON, start.x + 40, start.y));
-    expect(h.vs.surfaceCamera.x).not.toBe(camXBefore); // camera panned
+    expect(h.vs.surfaceCamera.centerX).not.toBe(centerXBefore); // camera panned
     expect(h.world.commandQueue).toHaveLength(0); // no tap command
     expect(panInputState.isPanning).toBe(false); // cleared on up
   });
@@ -232,16 +239,18 @@ describe('drag then no tap', () => {
 // not 0px. Multi-move drags must then continue incrementally with no first-
 // increment loss and no double-count.
 //
-// The test world is 20×20 but the arbiter clamps against the REAL grid
-// (SURFACE 128×128). Center the camera at (50,30) so a small flick stays inside
-// the clamp window [25,103]×[18.5,109.5] and the assertion is exact.
+// Stage 2: pan is world-px. panByScreenDelta moves centerX -= dx/zoom, so at
+// zoom 1 a dx-px screen drag moves centerX by dx world px (NOT dx/16). The test
+// world is 20×20 but the arbiter clamps against the REAL grid (SURFACE 2048 px
+// wide). Center the camera at world (800,480) so a small flick stays inside the
+// zoom-1 clamp window [400,1648]×[296,1752] and the assertion is exact.
 // ---------------------------------------------------------------------------
 
 describe('flick-pan first-move displacement (Fix 1)', () => {
   it('a single coalesced move past the threshold then up pans by (current − down)', () => {
     const h = makeHarness('surface', 'command');
-    h.vs.surfaceCamera.x = 50;
-    h.vs.surfaceCamera.y = 30;
+    h.vs.surfaceCamera.centerX = 800;
+    h.vs.surfaceCamera.centerY = 480;
     const downX = 200;
     const downY = 200;
     const flickPx = 48; // 3 tiles; well past the 6px threshold
@@ -249,31 +258,32 @@ describe('flick-pan first-move displacement (Fix 1)', () => {
     // ONE move that both crosses the threshold AND is the whole flick, then up.
     h.arbiter.onPointerMove(ev(LEFT_BUTTON, downX + flickPx, downY));
     h.arbiter.onPointerUp(ev(LEFT_BUTTON, downX + flickPx, downY));
-    // cam.x -= (current − down)/TILE_SIZE_PX. The OLD bug seeded panLast to the
-    // current move, making this delta 0 (camera unchanged) — this asserts the fix.
-    expect(h.vs.surfaceCamera.x).toBeCloseTo(50 - flickPx / TILE_SIZE_PX, 10);
-    expect(h.vs.surfaceCamera.y).toBeCloseTo(30, 10); // no vertical flick
+    // centerX -= (current − down)/zoom; at zoom 1 that's −flickPx world px. The OLD
+    // bug seeded panLast to the current move, making this delta 0 (camera
+    // unchanged) — this asserts the fix.
+    expect(h.vs.surfaceCamera.centerX).toBeCloseTo(800 - flickPx, 10);
+    expect(h.vs.surfaceCamera.centerY).toBeCloseTo(480, 10); // no vertical flick
     expect(panInputState.isPanning).toBe(false); // released on up
   });
 
   it('the first increment is not lost on a vertical flick either', () => {
     const h = makeHarness('underground', 'command');
-    h.vs.undergroundCamera.x = 50;
-    h.vs.undergroundCamera.y = 30;
+    h.vs.undergroundCamera.centerX = 800;
+    h.vs.undergroundCamera.centerY = 480;
     const downX = 200;
     const downY = 200;
     const flickPx = 32; // 2 tiles down
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, downX, downY));
     h.arbiter.onPointerMove(ev(LEFT_BUTTON, downX, downY + flickPx));
     h.arbiter.onPointerUp(ev(LEFT_BUTTON, downX, downY + flickPx));
-    expect(h.vs.undergroundCamera.x).toBeCloseTo(50, 10);
-    expect(h.vs.undergroundCamera.y).toBeCloseTo(30 - flickPx / TILE_SIZE_PX, 10);
+    expect(h.vs.undergroundCamera.centerX).toBeCloseTo(800, 10);
+    expect(h.vs.undergroundCamera.centerY).toBeCloseTo(480 - flickPx, 10);
   });
 
   it('a multi-move drag pans by the cumulative delta — no first-increment loss, no double-count', () => {
     const h = makeHarness('surface', 'command');
-    h.vs.surfaceCamera.x = 50;
-    h.vs.surfaceCamera.y = 30;
+    h.vs.surfaceCamera.centerX = 800;
+    h.vs.surfaceCamera.centerY = 480;
     const downX = 200;
     const downY = 200;
     // Three successive moves; total horizontal displacement from DOWN = 96px.
@@ -282,26 +292,27 @@ describe('flick-pan first-move displacement (Fix 1)', () => {
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, downX, downY));
     for (const x of xs) h.arbiter.onPointerMove(ev(LEFT_BUTTON, x, downY));
     h.arbiter.onPointerUp(ev(LEFT_BUTTON, xs[xs.length - 1]!, downY));
-    // Cumulative pan = (last − down)/TILE_SIZE_PX = 96/16 = 6 tiles. If the first
-    // increment were lost the total would be (96−16)/16; if double-counted it
-    // would exceed 6. Exact equality pins both failure modes.
-    expect(h.vs.surfaceCamera.x).toBeCloseTo(50 - 96 / TILE_SIZE_PX, 10);
-    expect(h.vs.surfaceCamera.y).toBeCloseTo(30, 10);
+    // Cumulative pan = (last − down)/zoom = 96 world px at zoom 1. If the first
+    // increment were lost the total would be 96−16; if double-counted it would
+    // exceed 96. Exact equality pins both failure modes.
+    expect(h.vs.surfaceCamera.centerX).toBeCloseTo(800 - 96, 10);
+    expect(h.vs.surfaceCamera.centerY).toBeCloseTo(480, 10);
   });
 
   it('intermediate moves each apply their own increment (cumulative == final − down)', () => {
     // Same as above but assert the camera AFTER each move equals the running
     // (x − down) displacement, proving no per-move double-application.
     const h = makeHarness('surface', 'command');
-    h.vs.surfaceCamera.x = 50;
-    h.vs.surfaceCamera.y = 30;
+    h.vs.surfaceCamera.centerX = 800;
+    h.vs.surfaceCamera.centerY = 480;
     const downX = 200;
     const downY = 200;
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, downX, downY));
     const checkpoints = [downX + 8, downX + 24, downX + 40, downX + 64];
     for (const x of checkpoints) {
       h.arbiter.onPointerMove(ev(LEFT_BUTTON, x, downY));
-      expect(h.vs.surfaceCamera.x).toBeCloseTo(50 - (x - downX) / TILE_SIZE_PX, 10);
+      // centerX -= (x − down)/zoom; at zoom 1 that's −(x − down) world px.
+      expect(h.vs.surfaceCamera.centerX).toBeCloseTo(800 - (x - downX), 10);
     }
   });
 });
@@ -310,10 +321,10 @@ describe('the drag matrix', () => {
   it('Dig + underground drag = paint (no camera move)', () => {
     const h = makeHarness('underground', 'dig');
     const start = tileCenter(5, 8, h.vs);
-    const camBefore = h.vs.undergroundCamera.x;
+    const camBefore = h.vs.undergroundCamera.centerX;
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
     h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 40, start.y));
-    expect(h.vs.undergroundCamera.x).toBe(camBefore); // paint, not pan
+    expect(h.vs.undergroundCamera.centerX).toBe(camBefore); // paint, not pan
     expect(h.world.commandQueue.some((c) => c.type === 'MarkDigTile')).toBe(true);
   });
 
@@ -326,10 +337,10 @@ describe('the drag matrix', () => {
     const h = makeHarness(view, tool);
     const cam = view === 'surface' ? h.vs.surfaceCamera : h.vs.undergroundCamera;
     const start = tileCenter(10, 10, h.vs);
-    const before = cam.x;
+    const before = cam.centerX;
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
     h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 40, start.y));
-    expect(cam.x).not.toBe(before); // panned
+    expect(cam.centerX).not.toBe(before); // panned
     expect(panInputState.isPanning).toBe(true);
   });
 });
@@ -796,12 +807,12 @@ describe('canEditWorld / canPan split', () => {
     h.canEditWorld.value = false;
     h.canPan.value = true;
     const start = tileCenter(10, 10, h.vs);
-    const camXBefore = h.vs.surfaceCamera.x;
+    const centerXBefore = h.vs.surfaceCamera.centerX;
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
     h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 40, start.y)); // crosses threshold → pan
     expect(panInputState.isPanning).toBe(true);
     h.arbiter.onPointerUp(ev(LEFT_BUTTON, start.x + 40, start.y));
-    expect(h.vs.surfaceCamera.x).not.toBe(camXBefore);
+    expect(h.vs.surfaceCamera.centerX).not.toBe(centerXBefore);
     expect(h.world.commandQueue).toHaveLength(0);
   });
 
@@ -810,12 +821,12 @@ describe('canEditWorld / canPan split', () => {
     h.canPan.value = false;
     h.canEditWorld.value = false; // GameOver blocks both
     const start = tileCenter(10, 10, h.vs);
-    const camXBefore = h.vs.surfaceCamera.x;
+    const centerXBefore = h.vs.surfaceCamera.centerX;
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
     h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 40, start.y));
     h.arbiter.onPointerUp(ev(LEFT_BUTTON, start.x + 40, start.y));
     expect(panInputState.isPanning).toBe(false);
-    expect(h.vs.surfaceCamera.x).toBe(camXBefore);
+    expect(h.vs.surfaceCamera.centerX).toBe(centerXBefore);
   });
 
   it('canEditWorld false: an underground-Dig paint drag paints nothing', () => {

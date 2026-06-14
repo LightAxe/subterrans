@@ -1,4 +1,5 @@
-// draw-pheromone.ts — Phase 8 pheromone heatmap overlay drawing module.
+// draw-pheromone.ts — Phase 8 pheromone heatmap overlay drawing module
+// (Stage 2 world-space migration, Phase A).
 //
 // Pure functions: take a GfxLike + WorldState, issue Graphics API calls.
 // No scene management, no input handling, no state mutation.
@@ -8,6 +9,12 @@
 //
 // Uses ONLY Graphics primitives: fillRect, fillStyle — NO Image, NO Sprite,
 // NO texture loading (HUD-05).
+//
+// Stage 2 (issue #18): tiles are drawn in WORLD pixels (worldX = tileX ×
+// TILE_SIZE_PX); the Phaser main camera (camera adapter: setZoom + centerOn)
+// projects world → screen, so this no longer subtracts a camera offset. The
+// visible tile range comes from the zoom-aware visibleTileRange helper (shared
+// with draw-surface), not a fixed viewport in tiles.
 //
 // Draw order: called by GameScene between terrain and entities.
 
@@ -27,7 +34,8 @@ import {
   COLOR_PHEROMONE_DANGER_STRONG,
   lerpColor,
 } from './sprites.js';
-import type { CameraState } from './camera.js';
+import { type CameraView } from './camera-adapter.js';
+import { visibleTileRange } from './draw-surface.js';
 
 // ---------------------------------------------------------------------------
 // Constants — PRD §7f
@@ -96,19 +104,15 @@ export function pheromoneRenderParams(
  *
  * @param gfx   - GfxLike graphics recorder / Phaser Graphics object.
  * @param world - Current WorldState (read-only; not mutated).
- * @param cam   - Camera position and viewport dimensions (in tiles).
+ * @param cam   - Zoom-aware CameraView (world pixels); drives the visible tile range.
  * @param zone  - 'surface' or 'underground' — selects which pheromone grids to draw.
  */
 export function drawPheromoneOverlay(
   gfx: GfxLike,
   world: WorldState,
-  cam: CameraState,
+  cam: CameraView,
   zone: 'surface' | 'underground',
 ): void {
-  // Compute visible tile range
-  const left = Math.floor(cam.x - cam.viewportWidth / 2);
-  const top = Math.floor(cam.y - cam.viewportHeight / 2);
-
   const pheromoneTypes = [PheromoneType.FoodTrail, PheromoneType.DangerTrail] as const;
 
   for (const pheromoneType of pheromoneTypes) {
@@ -116,9 +120,8 @@ export function drawPheromoneOverlay(
     const grid = world.pheromoneGrids[key];
     if (grid === undefined) continue;
 
-    // Clamp right/bottom to grid bounds
-    const right = Math.min(left + cam.viewportWidth + 1, grid.width);
-    const bottom = Math.min(top + cam.viewportHeight + 1, grid.height);
+    // Visible tile range (zoom-aware), clamped to this grid's bounds.
+    const { left, top, right, bottom } = visibleTileRange(cam, grid.width, grid.height);
 
     // Choose faint/strong palette by pheromone type
     const faintColor =
@@ -137,12 +140,7 @@ export function drawPheromoneOverlay(
 
         const params = pheromoneRenderParams(val, faintColor, strongColor);
         gfx.fillStyle(params.color, params.alpha);
-        gfx.fillRect(
-          (tx - left) * TILE_SIZE_PX,
-          (ty - top) * TILE_SIZE_PX,
-          TILE_SIZE_PX,
-          TILE_SIZE_PX,
-        );
+        gfx.fillRect(tx * TILE_SIZE_PX, ty * TILE_SIZE_PX, TILE_SIZE_PX, TILE_SIZE_PX);
       }
     }
   }

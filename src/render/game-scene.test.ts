@@ -26,7 +26,7 @@ import {
   createViewState,
   resetViewState,
   toggleView,
-  UNDERGROUND_INITIAL_CAMERA_Y,
+  UNDERGROUND_INITIAL_CENTER_Y_PX,
 } from './camera.js';
 import { resetPaintStrokeState, type PaintStrokeState } from '../input/underground-input.js';
 import {
@@ -38,6 +38,7 @@ import {
 import { clearAllPauseReasons, type PauseReasonState } from './pause-reasons.js';
 import { contextMenuState, hideContextMenu } from './context-menu-state.js';
 import { PLAYER_START_X, PLAYER_START_Y } from '../sim/constants.js';
+import { TILE_SIZE_PX } from './sprites.js';
 import type { WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import type { SimCommand } from '../sim/commands.js';
@@ -419,9 +420,10 @@ describe('session reset orchestration (bootFresh / bootFromSave precondition)', 
     ];
     const viewState = createViewState(PLAYER_START_X, PLAYER_START_Y);
     toggleView(viewState); // → underground, visited
-    viewState.undergroundCamera.x = 100;
-    viewState.undergroundCamera.y = 40;
-    viewState.surfaceCamera.x = 90;
+    // Dirty world-px camera centers (Stage 2 CameraView model).
+    viewState.undergroundCamera.centerX = 100;
+    viewState.undergroundCamera.centerY = 40;
+    viewState.surfaceCamera.centerX = 90;
     viewState.activeTool = 'chamber'; // non-default tool
     const paintStroke: PaintStrokeState = {
       active: true,
@@ -465,10 +467,13 @@ describe('session reset orchestration (bootFresh / bootFromSave precondition)', 
     expect(s.inputLog).toHaveLength(0);
     expect(s.viewState.activeView).toBe('surface');
     expect(s.viewState.activeTool).toBe('command'); // surface default
-    expect(s.viewState.surfaceCamera.x).toBe(PLAYER_START_X);
-    expect(s.viewState.surfaceCamera.y).toBe(PLAYER_START_Y);
-    expect(s.viewState.undergroundCamera.x).toBe(PLAYER_START_X);
-    expect(s.viewState.undergroundCamera.y).toBe(UNDERGROUND_INITIAL_CAMERA_Y);
+    // resetViewState frames the surface camera on the start tile CENTER (world px):
+    // centerX/Y = (tile + 0.5) × TILE_SIZE_PX. Underground X-links to the same
+    // start column; its centerY resets to the shaft-at-top initial depth.
+    expect(s.viewState.surfaceCamera.centerX).toBe((PLAYER_START_X + 0.5) * TILE_SIZE_PX);
+    expect(s.viewState.surfaceCamera.centerY).toBe((PLAYER_START_Y + 0.5) * TILE_SIZE_PX);
+    expect(s.viewState.undergroundCamera.centerX).toBe((PLAYER_START_X + 0.5) * TILE_SIZE_PX);
+    expect(s.viewState.undergroundCamera.centerY).toBe(UNDERGROUND_INITIAL_CENTER_Y_PX);
     expect(s.viewState.undergroundVisited).toBe(false);
     expect(s.paintStroke.active).toBe(false);
     expect(s.paintStroke.lastMarkedTileX).toBe(-1);
@@ -544,7 +549,7 @@ describe('session reset orchestration (bootFresh / bootFromSave precondition)', 
     const s = makeDirtySession();
     runSessionReset(s);
     appendInputLog(s.inputLog, [{ type: 'NoOp', issuedAtTick: 5 }]);
-    s.viewState.surfaceCamera.x = 70;
+    s.viewState.surfaceCamera.centerX = 70;
     s.paintStroke.active = true;
     s.pauseReasons.user = true;
     s.speedMultiplier = 2;
@@ -552,7 +557,7 @@ describe('session reset orchestration (bootFresh / bootFromSave precondition)', 
     runSessionReset(s);
 
     expect(s.inputLog).toHaveLength(0);
-    expect(s.viewState.surfaceCamera.x).toBe(PLAYER_START_X);
+    expect(s.viewState.surfaceCamera.centerX).toBe((PLAYER_START_X + 0.5) * TILE_SIZE_PX);
     expect(s.paintStroke.active).toBe(false);
     expect(s.pauseReasons.user).toBe(false);
     expect(s.speedMultiplier).toBe(1);

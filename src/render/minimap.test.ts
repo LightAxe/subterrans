@@ -4,7 +4,7 @@
 // Runs under Node with no Phaser.
 
 import { describe, it, expect } from 'vitest';
-import { HUD } from './sprites.js';
+import { HUD, TILE_SIZE_PX } from './sprites.js';
 import { COLOR_BARREN_EARTH, COLOR_BARREN_EARTH_DARK } from './terrain-atlas.js';
 import { createViewState } from './camera.js';
 import {
@@ -16,7 +16,13 @@ import {
 } from './minimap.js';
 import type { GfxLike } from './draw-surface.js';
 import type { WorldState } from '../sim/types.js';
-import { PLAYER_COLONY_ID, PLAYER_START_X, PLAYER_START_Y } from '../sim/constants.js';
+import {
+  PLAYER_COLONY_ID,
+  PLAYER_START_X,
+  PLAYER_START_Y,
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
+} from '../sim/constants.js';
 import { SurfaceTileState, sgSet } from '../sim/terrain.js';
 
 // ---------------------------------------------------------------------------
@@ -148,48 +154,56 @@ describe('minimapClickToTile', () => {
 // ---------------------------------------------------------------------------
 
 describe('applyMinimapClick', () => {
-  it('click at center sets surfaceCamera to (64, 64) and returns true', () => {
+  it('click at center sets surfaceCamera center to world px (1024, 1024) and returns true', () => {
     const vs = createViewState(PLAYER_START_X, PLAYER_START_Y);
     const cx = HUD.MINIMAP.x + HUD.MINIMAP.w / 2;
     const cy = HUD.MINIMAP.y + HUD.MINIMAP.h / 2;
     const result = applyMinimapClick(vs, cx, cy);
     expect(result).toBe(true);
-    expect(vs.surfaceCamera.x).toBeCloseTo(64, 0);
-    expect(vs.surfaceCamera.y).toBeCloseTo(64, 0);
+    // Minimap center → tile (64, 64) → world px (64×16, 64×16) = (1024, 1024).
+    // At zoom 1 the surface clamp ([400,1648]×[296,1752]) leaves both untouched.
+    const clickedTileX = SURFACE_GRID_WIDTH / 2; // 64
+    const clickedTileY = SURFACE_GRID_HEIGHT / 2; // 64
+    expect(vs.surfaceCamera.centerX).toBeCloseTo(clickedTileX * TILE_SIZE_PX, 0);
+    expect(vs.surfaceCamera.centerY).toBeCloseTo(clickedTileY * TILE_SIZE_PX, 0);
     expect(vs.activeView).toBe('surface'); // unchanged
   });
 
   it('click outside minimap returns false and does not mutate', () => {
     const vs = createViewState(PLAYER_START_X, PLAYER_START_Y);
-    const origX = vs.surfaceCamera.x;
-    const origY = vs.surfaceCamera.y;
+    const origX = vs.surfaceCamera.centerX;
+    const origY = vs.surfaceCamera.centerY;
     const result = applyMinimapClick(vs, 0, 0);
     expect(result).toBe(false);
-    expect(vs.surfaceCamera.x).toBe(origX);
-    expect(vs.surfaceCamera.y).toBe(origY);
+    expect(vs.surfaceCamera.centerX).toBe(origX);
+    expect(vs.surfaceCamera.centerY).toBe(origY);
   });
 
-  it('when activeView=underground, click syncs undergroundCamera.x but not y', () => {
+  it('when activeView=underground, click syncs undergroundCamera.centerX but PRESERVES centerY (depth)', () => {
     const vs = createViewState(PLAYER_START_X, PLAYER_START_Y);
     vs.activeView = 'underground';
-    vs.undergroundCamera.y = 20; // some depth
+    // Pick a depth (world px) that survives the underground clamp at zoom 1
+    // (centerY range [296, 728] for the 1024-px-tall underground world), so the
+    // depth-preservation assertion tests preservation, not the clamp. §A6.
+    const depthY = 500;
+    vs.undergroundCamera.centerY = depthY;
     const cx = HUD.MINIMAP.x + HUD.MINIMAP.w / 2;
     const cy = HUD.MINIMAP.y + HUD.MINIMAP.h / 2;
     applyMinimapClick(vs, cx, cy);
-    // X should be synced to surface camera's clamped X
-    expect(vs.undergroundCamera.x).toBe(vs.surfaceCamera.x);
-    // Y should NOT be changed (underground depth is independent)
-    expect(vs.undergroundCamera.y).toBe(20);
+    // X should be X-linked to the surface camera's clamped center X.
+    expect(vs.undergroundCamera.centerX).toBe(vs.surfaceCamera.centerX);
+    // centerY (depth) must be UNCHANGED — underground depth is independent (§A6).
+    expect(vs.undergroundCamera.centerY).toBe(depthY);
   });
 
-  it('when activeView=surface, click does NOT touch undergroundCamera.x', () => {
+  it('when activeView=surface, click does NOT touch undergroundCamera.centerX', () => {
     const vs = createViewState(PLAYER_START_X, PLAYER_START_Y);
-    const origUnderX = vs.undergroundCamera.x;
+    const origUnderX = vs.undergroundCamera.centerX;
     const cx = HUD.MINIMAP.x + HUD.MINIMAP.w / 2;
     const cy = HUD.MINIMAP.y + HUD.MINIMAP.h / 2;
     applyMinimapClick(vs, cx, cy);
-    // undergroundCamera.x should NOT change when in surface view
-    expect(vs.undergroundCamera.x).toBe(origUnderX);
+    // undergroundCamera.centerX should NOT change when in surface view
+    expect(vs.undergroundCamera.centerX).toBe(origUnderX);
   });
 });
 
