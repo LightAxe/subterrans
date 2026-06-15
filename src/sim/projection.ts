@@ -27,7 +27,12 @@ import { applyCommands } from './tick.js';
  */
 export function projectionCopy(src: WorldState, dst: WorldState): void {
   copyWorldState(src, dst);
-  dst.events = src.events.map((e) => ({ ...e }));
+  // A shallow array copy (slice), NOT a deep clone: the projection needs its OWN events array so a
+  // projected StartAIOperation's append/eviction can't touch the live array — but the event OBJECTS
+  // are SHARED, because emitEvent (telemetry.ts) is the single write path and only appends/evicts,
+  // never mutates an existing event. Deep-cloning every entry would allocate ~2000 objects per
+  // hover-tick once the events cap is reached — needless render-path GC pressure (Codex round 5).
+  dst.events = src.events.slice();
   dst.droppedCombatKillCount = src.droppedCombatKillCount;
   dst.droppedStructuralCount = src.droppedStructuralCount;
 }
