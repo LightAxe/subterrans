@@ -268,9 +268,9 @@ export function handleUndergroundDigTap(
  *
  * Cap-refusal handling mirrors continuePaintStroke (Fix 2): the stroke is armed
  * (state.active = true) either way, but the CURSOR is only advanced onto the
- * down-tile when that tile is non-markable (ceiling already rejected above; a
- * Marked/BeingDug down-tile is not a loss) OR its MarkDigTile actually enqueues.
- * If the down-tile IS markable (Solid/Open) but the enqueue is REFUSED at the
+ * down-tile when that tile is non-markable (ceiling already rejected above; an
+ * Open/Marked/BeingDug down-tile is not a loss) OR its MarkDigTile actually enqueues.
+ * If the down-tile IS markable (Solid only) but the enqueue is REFUSED at the
  * cap, the cursor is LEFT at the sentinel (-1,-1) so the first
  * continuePaintStroke/flush re-emits the refused down-tile via its sentinel
  * single-tile path — no silently lost begin-tile. (Previously the cursor was
@@ -299,9 +299,11 @@ export function beginPaintStroke(
   // advanced below only on a non-markable down-tile or a successful enqueue.
   state.active = true;
   const tileState = ugGet(grid, tileX, tileY);
-  if (tileState !== UndergroundTileState.Solid && tileState !== UndergroundTileState.Open) {
-    // Non-markable (Marked / BeingDug) down-tile: not a loss. Advance the cursor
-    // so the first drag segment interpolates from here.
+  if (tileState !== UndergroundTileState.Solid) {
+    // Non-markable (Open / Marked / BeingDug) down-tile: not a loss — MarkDigTile only takes effect
+    // on Solid (the sim drops it otherwise), so emitting on Open just wastes queue capacity and
+    // contradicts the red dig cue (Codex round 6). Advance the cursor so the first drag segment
+    // interpolates from here; subsequently-entered Solid tiles still mark.
     state.lastMarkedTileX = tileX;
     state.lastMarkedTileY = tileY;
     return false;
@@ -337,9 +339,9 @@ export function beginPaintStroke(
  *
  * Two distinct kinds of "didn't enqueue" are handled differently so a fast
  * stroke past the MAX_COMMANDS_PER_TICK cap never silently loses tiles:
- *   - NON-MARKABLE skip (out-of-bounds / ceiling / not Solid/Open): not a loss —
- *     there was no command to defer. The cursor ADVANCES past it and the stroke
- *     continues (matching the prior behaviour).
+ *   - NON-MARKABLE skip (out-of-bounds / ceiling / not Solid — Open/Marked/BeingDug
+ *     are no-ops the sim drops): not a loss — there was no command to defer. The cursor
+ *     ADVANCES past it and the stroke continues (matching the prior behaviour).
  *   - CAP REFUSAL (enqueueCommand returned false): the command was deferred, not
  *     emitted. The cursor is LEFT at the last successfully-handled tile (it is
  *     NOT advanced onto the refused tile), the loop STOPS, and `capHit` is set.
@@ -392,7 +394,8 @@ export function continuePaintStroke(
       return false;
     }
     const ts = ugGet(grid, x1, y1);
-    if (ts === UndergroundTileState.Solid || ts === UndergroundTileState.Open) {
+    // Solid-only: MarkDigTile is a no-op on Open (Codex round 6) — fall through to advance the cursor.
+    if (ts === UndergroundTileState.Solid) {
       const cmd: MarkDigTileCommand = {
         type: 'MarkDigTile',
         colonyId: PLAYER_COLONY_ID,
@@ -437,10 +440,10 @@ export function continuePaintStroke(
       return true; // ceiling: not a loss, advance past it
     }
     const ts = ugGet(grid, tx, ty);
-    if (ts !== UndergroundTileState.Solid && ts !== UndergroundTileState.Open) {
+    if (ts !== UndergroundTileState.Solid) {
       finalX = tx;
       finalY = ty;
-      return true; // non-markable terrain: not a loss, advance past it
+      return true; // non-markable (Open/Marked/BeingDug): MarkDigTile is a no-op there, advance past it
     }
     const cmd: MarkDigTileCommand = {
       type: 'MarkDigTile',

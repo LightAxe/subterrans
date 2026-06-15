@@ -272,6 +272,22 @@ describe('paint stroke', () => {
     ]);
   });
 
+  it('a stroke crossing an Open tile skips it (no-op there) but still marks the Solid tiles (Codex R6)', () => {
+    const world = makeWorld();
+    ugSet(grid(world), 7, 10, UndergroundTileState.Open); // a dug gap mid-stroke
+    beginPaintStroke(stroke, world, makeViewState(), 5, 10, false); // marks (5,10)
+    continuePaintStroke(stroke, world, makeViewState(), 8, 10, false); // 6, (7 Open → skipped), 8
+    const marks = world.commandQueue
+      .filter((c) => c.type === 'MarkDigTile')
+      .map((c) => [(c as { tileX: number }).tileX, (c as { tileY: number }).tileY]);
+    // (7,10) is omitted — MarkDigTile is a no-op on Open, so paint no longer wastes a queue slot there.
+    expect(marks).toEqual([
+      [5, 10],
+      [6, 10],
+      [8, 10],
+    ]);
+  });
+
   it('diagonal stroke stays 4-connected (Manhattan-adjacent successive tiles)', () => {
     const world = makeWorld();
     beginPaintStroke(stroke, world, makeViewState(), 5, 10, false);
