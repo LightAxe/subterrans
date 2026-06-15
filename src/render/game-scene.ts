@@ -2085,6 +2085,10 @@ export class GameScene extends Phaser.Scene {
   ): HoveredFeedforward | null {
     if (this.viewState.activeView !== 'underground') return null;
     if (this.viewState.activeTool !== 'dig') return null;
+    // Stage 3a (Codex round 3): suppress the tap feedforward during an active paint DRAG. The drag
+    // path (continuePaintStroke) only ever emits MarkDigTile, but once a painted tile reads Marked in
+    // the projection this tap-hover would preview CancelDigMark — the opposite of what painting does.
+    if (this.arbiter.isPainting()) return null;
     if (this.viewState.activeUndergroundColonyId !== PLAYER_COLONY_ID) return null;
     if (this.hoverScreenX === null || this.hoverScreenY === null) return null;
     if (isPointerOverHUD(this.hoverScreenX, this.hoverScreenY, this.viewState)) return null;
