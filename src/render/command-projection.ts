@@ -6,34 +6,14 @@
 // effectiveDigState hand-fold) AND render (feedforward + ghosts), so the cue and the
 // command a tap emits can never disagree (Codex R2-3/4, R3-6).
 //
-// Render-only: reads world + world.commandQueue, builds a throwaway clone, never
-// mutates the live world. NOT a sim change — it merely *calls* sim functions
-// (copyWorldState, applyCommands, ensureSurfaceComponentMask) on a clone.
+// Render-side: this owns the buffer lifecycle + memoization and reads world +
+// world.commandQueue, but the clone+fold MUTATION lives in the sim layer (projectWorld,
+// src/sim/projection.ts) — render never writes a WorldState, even a throwaway clone
+// (AGENTS.md sim/render boundary; Codex P1). This class only CALLS projectWorld + returns it.
 
 import type { WorldState } from '../sim/types.js';
-import { copyWorldState, createWorldState } from '../sim/types.js';
 import { createScenario } from '../sim/scenario.js';
-import { ensureSurfaceComponentMask } from '../sim/surface-features.js';
-import { applyCommands } from '../sim/tick.js';
-
-void createWorldState; // (kept importable for callers/tests; buffer uses createScenario)
-
-/**
- * Complete projection clone (Codex R3-1 / R4-1). `copyWorldState` deep-copies
- * everything EXCEPT `events` (a deliberate render-double-buffer optimization) and
- * transient `pendingQueenDeathContexts`. The projection must copy events + the
- * dropped-event counters too, because `applyCommands` can emit events
- * (StartAIOperation) whose cap/eviction behaviour depends on the existing event
- * count — resetting would diverge from the real drain and break projection parity.
- * The surface-component-mask ref is copied by copyWorldState (derived from static
- * terrain; read-only).
- */
-export function projectionCopy(src: WorldState, dst: WorldState): void {
-  copyWorldState(src, dst);
-  dst.events = src.events.map((e) => ({ ...e }));
-  dst.droppedCombatKillCount = src.droppedCombatKillCount;
-  dst.droppedStructuralCount = src.droppedStructuralCount;
-}
+import { projectWorld } from '../sim/projection.js';
 
 /**
  * Lazily-rebuilt projected world, memoized so it is cheap to call on every input
@@ -92,11 +72,11 @@ export class CommandProjection {
 
     // Rebuild. Buffer is created once via createScenario (the proven copyWorldState
     // destination shape — same as game-scene's prevState); its generated terrain is
-    // immediately overwritten by projectionCopy.
+    // immediately overwritten by the projectWorld clone.
     if (this.buf === null) this.buf = createScenario(world.terrainSeed, world.difficulty);
-    projectionCopy(world, this.buf);
-    ensureSurfaceComponentMask(this.buf); // mirror tick()'s prologue so entrance validity is exact
-    applyCommands(this.buf, world.commandQueue);
+    // Clone + full-queue fold runs in the SIM layer (render never writes a WorldState, even this
+    // throwaway clone — AGENTS.md boundary / Codex P1). This class only owns the buffer + memo.
+    projectWorld(world, world.commandQueue, this.buf);
 
     this.lastResult = this.buf;
     this.lastWorld = world;

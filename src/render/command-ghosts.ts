@@ -105,14 +105,17 @@ export function computeGhostDelta(world: WorldState, projection: WorldState): Gh
       ) {
         continue;
       }
-      const k = cmd.tileY * 100000 + cmd.tileX;
-      if (seen.has(k)) continue;
-      seen.add(k);
-      // Defensive bounds (ship-review LOW): live player input is pre-validated, but a tampered
-      // save could carry an off-grid coord, and ugGet does no bounds check (would wrap rows).
+      // Defensive bounds (ship-review LOW): live player input is pre-validated, but a tampered save
+      // could carry an off-grid coord — ugGet does no bounds check (would wrap rows), and the dedup
+      // key packs tileX into the low digits (k = tileY*100000 + tileX), so an off-grid coord could
+      // ALIAS an in-bounds key. Check bounds BEFORE touching the dedup set so only valid tiles occupy
+      // it (else a poisoned off-grid key would silently drop a legitimate tile's ghost).
       if (cmd.tileX < 0 || cmd.tileY < 0 || cmd.tileX >= wGrid.width || cmd.tileY >= wGrid.height) {
         continue;
       }
+      const k = cmd.tileY * 100000 + cmd.tileX;
+      if (seen.has(k)) continue;
+      seen.add(k);
       const wState = ugGet(wGrid, cmd.tileX, cmd.tileY);
       const pState = ugGet(pGrid, cmd.tileX, cmd.tileY);
       if (wState === pState) continue; // net no-op (e.g. mark then cancel)

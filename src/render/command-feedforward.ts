@@ -18,10 +18,8 @@
 // rejected), 'blocked' (geometrically fine but the live non-Sync queue is at the 64
 // cap, so it can't be queued — a distinct treatment from geometric red).
 
-import { projectionCopy } from './command-projection.js';
 import { createScenario } from '../sim/scenario.js';
-import { ensureSurfaceComponentMask } from '../sim/surface-features.js';
-import { applyCommands } from '../sim/tick.js';
+import { projectWorld } from '../sim/projection.js';
 import { UndergroundTileState, ugGet } from '../sim/terrain.js';
 import { MAX_COMMANDS_PER_TICK } from '../sim/commands.js';
 import type { WorldState } from '../sim/types.js';
@@ -116,7 +114,7 @@ export class CommandFeedforward {
   // changes, but on the empty-queue fast path the projection ALIASES the live world and
   // revision holds steady ACROSS ticks (it only bumps on world identity change). The live
   // world still mutates each tick (ants dig Solid→Open), which changes tookEffect, so the
-  // memo must also break on projection.tick. With a non-empty queue projectionCopy carries
+  // memo must also break on projection.tick. With a non-empty queue projectWorld's clone carries
   // world.tick into the buffer, so projection.tick tracks the live tick in both cases.
   private memoRev = -1;
   private memoTick = -1;
@@ -165,9 +163,9 @@ export class CommandFeedforward {
     if (this.scratch === null) {
       this.scratch = createScenario(projection.terrainSeed, projection.difficulty);
     }
-    projectionCopy(projection, this.scratch);
-    ensureSurfaceComponentMask(this.scratch);
-    applyCommands(this.scratch, [candidate]);
+    // Clone + single-candidate fold runs in the sim layer (render never writes a WorldState,
+    // even this scratch clone — AGENTS.md sim/render boundary; Codex P1).
+    projectWorld(projection, [candidate], this.scratch);
     return tookEffect(projection, this.scratch, candidate);
   }
 }
