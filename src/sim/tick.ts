@@ -237,26 +237,14 @@ function isTileCoord(value: unknown, max: number): boolean {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < max;
 }
 
-export function tick(world: WorldState, commands: readonly SimCommand[]): GameOutcome {
-  // Issue #160 — flow-field BFS scratch owned by this world. Lazily created on
-  // the world's first tick and reused across its subsequent ticks; a different
-  // world (fresh boot, save load, or a test world) gets its own caches, so a
-  // reused colony id can never resolve to another world's topology.
-  const caches = getFlowFieldCaches(world);
-  const digFlowFields = caches.dig;
-  const entranceFlowFields = caches.entrance;
-  const chamberFlowFields = caches.chamber;
-
-  // PR 4 — materialize the derived surface component mask once at tick ENTRY
-  // (idempotent; createScenario/deserialize already do). Terrain is immutable, so
-  // this guarantees mid-tick `isSurfaceTileInComponent` queries (e.g.
-  // tickFoodPileSpawn) are pure reads and never lazily mutate the world during a
-  // step — even for a hand-built world that reached tick() without eager build.
-  ensureSurfaceComponentMask(world);
-
-  // Reconstruct Rng from saved state at tick start (PRD §4 contract).
-  const rng = new Rng(world.rngState);
-
+// ---------------------------------------------------------------------------
+// applyCommands — the command-application core, lifted VERBATIM from tick() (Stage
+// 3a, issue #18). Pure command dispatch: reads only world+commands, mutates only
+// world, consumes NO RNG. tick() calls it; the render layer also runs it on a world
+// clone to build the projected world (feedforward + ghosts). Behaviour-preserving —
+// no simVersion bump; proven by the apply-commands-golden differential.
+// ---------------------------------------------------------------------------
+export function applyCommands(world: WorldState, commands: readonly SimCommand[]): void {
   // ---------------------------------------------------------------------------
   // Step 1: Process commands (FIFO cap — PRD §5; indexed loop, no allocation)
   //         Extended in Phase 7 with real handlers for all 7 SimCommand variants.
@@ -852,6 +840,32 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       }
     }
   }
+}
+
+export function tick(world: WorldState, commands: readonly SimCommand[]): GameOutcome {
+  // Issue #160 — flow-field BFS scratch owned by this world. Lazily created on
+  // the world's first tick and reused across its subsequent ticks; a different
+  // world (fresh boot, save load, or a test world) gets its own caches, so a
+  // reused colony id can never resolve to another world's topology.
+  const caches = getFlowFieldCaches(world);
+  const digFlowFields = caches.dig;
+  const entranceFlowFields = caches.entrance;
+  const chamberFlowFields = caches.chamber;
+
+  // PR 4 — materialize the derived surface component mask once at tick ENTRY
+  // (idempotent; createScenario/deserialize already do). Terrain is immutable, so
+  // this guarantees mid-tick `isSurfaceTileInComponent` queries (e.g.
+  // tickFoodPileSpawn) are pure reads and never lazily mutate the world during a
+  // step — even for a hand-built world that reached tick() without eager build.
+  ensureSurfaceComponentMask(world);
+
+  // Reconstruct Rng from saved state at tick start (PRD §4 contract).
+  const rng = new Rng(world.rngState);
+
+  // Step 1 — command application. Extracted VERBATIM to applyCommands (Stage 3a,
+  // issue #18) so the render layer can project the queue on a world clone; tick()
+  // invokes it here, at the existing post-prologue position (Codex R4-2).
+  applyCommands(world, commands);
 
   // ---------------------------------------------------------------------------
   // Steps 2-8: Per-colony loop

@@ -37,6 +37,7 @@ import {
   COLOR_MARKED_TILE_OVERLAY,
   COLOR_BEING_DUG_OVERLAY,
   COLOR_CHAMBER_QUEEN,
+  COLOR_CHAMBER_NURSERY,
   COLOR_CHAMBER_FOOD_STORAGE,
   COLOR_CHAMBER_FOOD_STORAGE_FILL,
   COLOR_PLAYER_COLONY,
@@ -532,6 +533,59 @@ describe('drawUndergroundEntities', () => {
       .callsOf('fillStyle')
       .filter((c) => c.args[0] === COLOR_QUEEN_OUTLINE);
     expect(goldFillStyles.length).toBe(0);
+  });
+
+  // Issue #18 Stage 3a — committed-pending chambers (world.pendingChambers, dug-out
+  // underway, not yet promoted to colony.chambers) get a faint wavy silhouette so the
+  // shape is continuous from queued → pending → built, rather than appearing only once BUILT.
+  it('draws a faint wavy silhouette for an active-colony committed-pending chamber', () => {
+    const dims = CHAMBER_DIMENSIONS[ChamberType.Nursery];
+    world.pendingChambers['1:5:5'] = {
+      colonyId: PLAYER_COLONY_ID,
+      chamberType: ChamberType.Nursery,
+      anchorTileX: 5,
+      anchorTileY: 5,
+      width: dims.width,
+      height: dims.height,
+    };
+
+    const cam = makeCamera(5, 5);
+    drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
+
+    // Faint pending fill: a single fillStyle in the chamber color at the 0.25 outline alpha,
+    // followed by a perimeter triangle-fan (≥ 32 fillTriangle calls).
+    const pendingStyleIdx = gfx.calls.findIndex(
+      (c) =>
+        c.method === 'fillStyle' &&
+        c.args[0] === COLOR_CHAMBER_NURSERY &&
+        Number(c.args[1]) === 0.25,
+    );
+    expect(pendingStyleIdx).toBeGreaterThan(-1);
+    const fanTriangles = gfx.calls
+      .slice(pendingStyleIdx + 1)
+      .filter((c) => c.method === 'fillTriangle');
+    expect(fanTriangles.length).toBeGreaterThanOrEqual(32);
+  });
+
+  it('does NOT draw a pending-chamber silhouette for a different colony than the viewed grid', () => {
+    const dims = CHAMBER_DIMENSIONS[ChamberType.Nursery];
+    // Pending chamber owned by colony 2 while we view the player (colony 1) grid.
+    world.pendingChambers['2:5:5'] = {
+      colonyId: (PLAYER_COLONY_ID + 1) as typeof PLAYER_COLONY_ID,
+      chamberType: ChamberType.Nursery,
+      anchorTileX: 5,
+      anchorTileY: 5,
+      width: dims.width,
+      height: dims.height,
+    };
+
+    const cam = makeCamera(5, 5);
+    drawUndergroundEntities(gfx, sprites, world, world, 0, cam, PLAYER_COLONY_ID);
+
+    const pendingStyles = gfx
+      .callsOf('fillStyle')
+      .filter((c) => c.args[0] === COLOR_CHAMBER_NURSERY && Number(c.args[1]) === 0.25);
+    expect(pendingStyles.length).toBe(0);
   });
 
   it('chamber rendering is deterministic per chamber identity (same triangle vertices across calls)', () => {

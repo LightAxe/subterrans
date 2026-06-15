@@ -271,6 +271,7 @@ import { hasSave, hasIncompatibleSave, getSaveInfo, deleteSave } from '../platfo
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import type { SetBehaviorRatioCommand, PlaceChamberCommand } from '../sim/commands.js';
 import { enqueueCommand } from '../input/command-queue.js';
+import type { CommandFeedforward } from './command-feedforward.js';
 
 // ---------------------------------------------------------------------------
 // Pause menu callbacks (issue #116)
@@ -351,6 +352,18 @@ export class UIScene extends Phaser.Scene {
   // bootFresh/bootFromSave runs; direct capture in init() was a stale-reference
   // bug that froze the HUD on the pre-boot (undefined) world.
   private getWorld!: () => WorldState | undefined;
+  // Stage 3a controls rework (issue #18) — the "projected world": the command
+  // queue folded through the real sim handlers. Source of truth for the chamber
+  // menu's filtering (Codex R5-2) and the forage/fight requested (target) marker.
+  // Always defined once a world exists (it aliases the live world when the queue
+  // is empty), unlike getWorld which is WorldState|undefined pre-boot.
+  private getProjectedWorld!: () => WorldState;
+  // Stage 3a controls rework (issue #18) — the same trial-apply feedforward the
+  // render cue and underground taps use (GameScene owns the instance). The chamber-
+  // menu click gates its PlaceChamber emit on feedforward.willTakeEffect against the
+  // projected world, mirroring the underground dig/command taps, so the cue the
+  // chamber tint paints and the emitted command can never disagree (cue/command parity).
+  private getFeedforward!: () => CommandFeedforward;
   // Issue #116 / dual-handler-fix: GameScene supplies an Esc callback that
   // fires only when no UIScene overlay is currently open. Optional so older
   // call sites (none today, but kept for safety) can still launch UIScene
@@ -448,6 +461,8 @@ export class UIScene extends Phaser.Scene {
   init(data: {
     viewState: ViewState;
     getWorld: () => WorldState | undefined;
+    getProjectedWorld: () => WorldState;
+    getFeedforward: () => CommandFeedforward;
     onEscape?: () => void;
     // Stage 1 controls rework (issue #18) — GameScene-owned, gated callbacks so
     // the HUD palette/speed widget route through the same gates as the hotkeys.
@@ -459,6 +474,8 @@ export class UIScene extends Phaser.Scene {
   }) {
     this.viewState = data.viewState;
     this.getWorld = data.getWorld;
+    this.getProjectedWorld = data.getProjectedWorld;
+    this.getFeedforward = data.getFeedforward;
     this.onEscape = data.onEscape ?? null;
     this.onSelectTool = data.onSelectTool ?? null;
     this.onSpeedControl = data.onSpeedControl ?? null;
@@ -739,15 +756,27 @@ export class UIScene extends Phaser.Scene {
               anchorTileY: contextMenuState.anchorTileY,
               issuedAtTick: world.tick,
             };
-            // Stage 1 controls rework (issue #18) — route through enqueueCommand
-            // so the non-Sync cap is enforced across ALL producers (Codex R2-8).
-            // PlaceChamber is a ONE-SHOT command: it does NOT re-emit, so a drop
-            // at the cap is a real loss. Surface the queue-full hint on ANY drop,
-            // paused OR unpaused (Codex P2) — unlike the re-emitting paint stroke,
-            // which only hints while paused. Pass `paused` so the message is
-            // accurate (resume-to-continue vs try-again; Fix 3).
-            const paused = this.isPausedFn ? this.isPausedFn() : false;
-            if (!enqueueCommand(world, cmd, paused)) this.flashPausedQueueFull(paused);
+            // Stage 3a controls rework (issue #18) — gate the emit on the SAME
+            // trial-apply the chamber tint paints (computeChamberHover →
+            // feedforward.outcome), mirroring handleUndergroundDigTap/CommandTap, so
+            // the cue and the emitted command can never disagree (cue/command parity,
+            // Codex R2-3/4). visibleContextMenuItems only filters the Queen option on
+            // ownership/pending; a Nursery/FoodStorage (or allowed Queen) whose multi-
+            // tile footprint is unreachable / overlaps / clips the ceiling paints red
+            // yet stays clickable — without this gate that click enqueues a doomed
+            // no-op the sim silently drops, wasting a non-Sync cap slot. willTakeEffect
+            // runs against the PROJECTED world (queue folded), as the cue does.
+            if (this.getFeedforward().willTakeEffect(this.getProjectedWorld(), cmd)) {
+              // Stage 1 controls rework (issue #18) — route through enqueueCommand
+              // so the non-Sync cap is enforced across ALL producers (Codex R2-8).
+              // PlaceChamber is a ONE-SHOT command: it does NOT re-emit, so a drop
+              // at the cap is a real loss. Surface the queue-full hint on ANY drop,
+              // paused OR unpaused (Codex P2) — unlike the re-emitting paint stroke,
+              // which only hints while paused. Pass `paused` so the message is
+              // accurate (resume-to-continue vs try-again; Fix 3).
+              const paused = this.isPausedFn ? this.isPausedFn() : false;
+              if (!enqueueCommand(world, cmd, paused)) this.flashPausedQueueFull(paused);
+            }
           }
           requestHideContextMenu();
           return;
@@ -993,9 +1022,18 @@ export class UIScene extends Phaser.Scene {
               fight: Math.round((colony.taskCensus.fight * 100) / ff),
             }
           : { forage: colony.targetRatio.forage, fight: colony.targetRatio.fight };
+      // Stage 3a controls rework (issue #18): the TARGET (requested) marker reads
+      // the PROJECTED colony's targetRatio so a queued SetBehaviorRatio shows the
+      // requested position immediately while paused; the CURRENT marker above
+      // stays on the LIVE colony's taskCensus. An in-progress drag still wins so
+      // the marker tracks the live drag state (don't break direct manipulation).
+      // projColony is the projected PLAYER colony; it aliases the live colony when
+      // the queue is empty, and is guarded to fall back to the live targetRatio if
+      // (defensively) absent so the marker never reads undefined.
+      const projColony = this.getProjectedWorld().colonies[PLAYER_COLONY_ID];
       const targetRatio = this.dragState.isDragging
         ? this.dragState.targetRatio
-        : colony.targetRatio;
+        : (projColony?.targetRatio ?? colony.targetRatio);
       drawSlider(
         this.gfx as unknown as import('./draw-surface.js').GfxLike,
         currentRatio,
@@ -1079,8 +1117,18 @@ export class UIScene extends Phaser.Scene {
     // Filter the choice list against colony state each frame so the player
     // never sees a disabled Queen option once the colony already owns or has
     // queued a Queen chamber.
-    if (contextMenuState.visible && colony) {
-      const items = visibleContextMenuItems(colony, world);
+    //
+    // Stage 3a controls rework (issue #18, Codex R5-2): filter against the
+    // PROJECTED world/colony (the queue folded through the sim handlers) rather
+    // than the live one, so e.g. a queued Queen-cancel re-enables the Queen
+    // option immediately while paused. getProjectedWorld() is non-undefined here
+    // (the live `world` exists past the early return above; the projected world
+    // aliases it when the queue is empty), so the projected colony lookup mirrors
+    // the live `colonies[PLAYER_COLONY_ID]` shape and is guarded the same way.
+    const projWorld = this.getProjectedWorld();
+    const projColony = projWorld.colonies[PLAYER_COLONY_ID];
+    if (contextMenuState.visible && projColony) {
+      const items = visibleContextMenuItems(projColony, projWorld);
       this.contextMenuVisibleItems = items;
       drawContextMenuGeometry(
         this.gfx as unknown as import('./draw-surface.js').GfxLike,

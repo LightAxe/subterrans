@@ -9,8 +9,12 @@
 // Tap handlers by tool (underground):
 //   - Command tap → CancelDigMark on a Marked tile (player view only); otherwise
 //     a no-op (no ant-inspect in Stage 1). (PLAN §B5, Codex R2-7.)
-//   - Dig tap     → Solid/Open → MarkDigTile (single tile); Marked → CancelDigMark.
-//                   Drag → paint (4-connected Bresenham). (PLAN §B6, Codex R1-2.)
+//   - Dig tap     → Solid → MarkDigTile (single tile); Marked → CancelDigMark.
+//                   Each emit is gated on feedforward.willTakeEffect (the SAME trial-
+//                   apply the cue uses), so an Open tile (mark no-ops) or an embedded-
+//                   ant Marked tile (cancel revert blocked) is a silent no-op, not a
+//                   doomed queued command. Drag → paint (4-connected Bresenham).
+//                   (PLAN §B6, Codex R1-2 / R2-3/4.)
 //   - Chamber tap → tryOpenChamberMenu (Solid/Open eligibility). (PLAN §B8.)
 //
 // Player-grid-only invariant (PLAN §B10, Codex R3-2): EVERY underground command
@@ -35,6 +39,7 @@ import { ugGet, UndergroundTileState } from '../sim/terrain.js';
 import type { MarkDigTileCommand, CancelDigMarkCommand } from '../sim/commands.js';
 import { PLAYER_COLONY_ID, UNDERGROUND_CEILING_ROW_Y } from '../sim/constants.js';
 import { requestShowContextMenu } from '../render/context-menu-state.js';
+import type { CommandFeedforward } from '../render/command-feedforward.js';
 import { enqueueCommand } from './command-queue.js';
 
 // ---------------------------------------------------------------------------
@@ -127,51 +132,6 @@ function isEditableUndergroundTile(
   return true;
 }
 
-/**
- * Resolve the EFFECTIVE underground dig-state of (tileX,tileY) for `colonyId`,
- * accounting for dig commands ALREADY queued but not yet applied (Fix 4).
- *
- * While bare-user-paused the sim never advances, so `ugGet` returns the frozen
- * grid state — two taps on the same Solid tile would both read Solid and enqueue
- * two MarkDigTile (instead of mark-then-cancel), and two taps on a Marked tile
- * would enqueue two CancelDigMark. Tapping must instead toggle against what the
- * queue WILL do: scan for the LATEST queued MarkDigTile/CancelDigMark on this
- * tile+colony and fold it over the grid state, mirroring tick.ts's FIFO apply
- * order (the last queued command wins because the drain applies them in order):
- *   - latest queued MarkDigTile  ⇒ Marked  (tick.ts flips Solid→Marked)
- *   - latest queued CancelDigMark ⇒ Solid   (tick.ts flips Marked→Solid)
- *   - neither queued              ⇒ the live grid state
- *
- * Pure + read-only: never mutates the queue or any sim state. Unpaused this is a
- * near-no-op — the queue drains every tick so it is usually empty for the tile,
- * and the grid state is already current — so callers can use it unconditionally.
- */
-function effectiveDigState(
-  world: WorldState,
-  tileX: number,
-  tileY: number,
-  colonyId: number,
-  gridState: UndergroundTileState,
-): UndergroundTileState {
-  const queue = world.commandQueue;
-  // Walk back-to-front so the FIRST match is the LATEST-queued command for the
-  // tile (the one tick.ts applies last, hence the one that wins).
-  for (let i = queue.length - 1; i >= 0; i--) {
-    const cmd = queue[i];
-    if (!cmd) continue;
-    if (cmd.type === 'MarkDigTile') {
-      if (cmd.colonyId === colonyId && cmd.tileX === tileX && cmd.tileY === tileY) {
-        return UndergroundTileState.Marked;
-      }
-    } else if (cmd.type === 'CancelDigMark') {
-      if (cmd.colonyId === colonyId && cmd.tileX === tileX && cmd.tileY === tileY) {
-        return UndergroundTileState.Solid;
-      }
-    }
-  }
-  return gridState;
-}
-
 // ---------------------------------------------------------------------------
 // handleUndergroundCommandTap — Command tool tap
 // ---------------------------------------------------------------------------
@@ -190,6 +150,8 @@ function effectiveDigState(
  */
 export function handleUndergroundCommandTap(
   world: WorldState,
+  projected: WorldState,
+  feedforward: CommandFeedforward,
   viewState: ViewState,
   tileX: number,
   tileY: number,
@@ -197,15 +159,14 @@ export function handleUndergroundCommandTap(
 ): boolean {
   if (!isPlayerUndergroundEditable(viewState)) return false;
   const grid = world.undergroundGrids[PLAYER_COLONY_ID];
-  if (!grid) return false;
+  const projGrid = projected.undergroundGrids[PLAYER_COLONY_ID];
+  if (!grid || !projGrid) return false;
   if (!isEditableUndergroundTile(grid, tileX, tileY)) return false;
-  const tileState = effectiveDigState(
-    world,
-    tileX,
-    tileY,
-    PLAYER_COLONY_ID,
-    ugGet(grid, tileX, tileY),
-  );
+  // Stage 3a (Codex R2-3/4): resolve mark-vs-cancel against the PROJECTED grid — the
+  // whole queue folded through the real handlers (incl. chamber-cancellation + chamber
+  // footprint marks), the SAME state feedforward uses — so the cue and the emitted
+  // command can never disagree. Supersedes the Stage-1 same-tile effectiveDigState fold.
+  const tileState = ugGet(projGrid, tileX, tileY);
   if (tileState !== UndergroundTileState.Marked) return false;
   const cmd: CancelDigMarkCommand = {
     type: 'CancelDigMark',
@@ -214,6 +175,11 @@ export function handleUndergroundCommandTap(
     tileY,
     issuedAtTick: world.tick,
   };
+  // Cue/command parity (Codex R2-3/4): the tile is Marked in the projection, but the
+  // CancelDigMark revert is BLOCKED when an ant is embedded on it (sim handler's
+  // findEmbeddedByTightening), which feedforward paints red. Gate the emit on the SAME
+  // trial-apply so a tap never enqueues a doomed no-op the cue called invalid.
+  if (!feedforward.willTakeEffect(projected, cmd)) return false;
   return !enqueueCommand(world, cmd, isPaused);
 }
 
@@ -222,9 +188,15 @@ export function handleUndergroundCommandTap(
 // ---------------------------------------------------------------------------
 
 /**
- * Underground Dig tap (Codex R1-2): Solid/Open → MarkDigTile; Marked →
- * CancelDigMark; BeingDug → no-op (already claimed). Player-grid-only. Returns
- * true iff a command was refused at the cap.
+ * Underground Dig tap (Codex R1-2): Solid → MarkDigTile; Marked → CancelDigMark;
+ * Open / BeingDug → no-op. Player-grid-only. Returns true iff a command was refused
+ * at the cap.
+ *
+ * Each emit is gated on feedforward.willTakeEffect — the SAME trial-apply the cue
+ * uses (Codex R2-3/4) — so the cue and the emitted command can never disagree: a
+ * MarkDigTile on an Open tile (marks nothing) or a CancelDigMark on a Marked tile
+ * with an embedded ant (revert blocked) is dropped here instead of enqueuing a
+ * doomed no-op the cue already painted red.
  *
  * The mark-vs-cancel branch resolves against the EFFECTIVE dig-state
  * (effectiveDigState) — the grid state folded with any already-queued
@@ -235,6 +207,8 @@ export function handleUndergroundCommandTap(
  */
 export function handleUndergroundDigTap(
   world: WorldState,
+  projected: WorldState,
+  feedforward: CommandFeedforward,
   viewState: ViewState,
   tileX: number,
   tileY: number,
@@ -242,15 +216,12 @@ export function handleUndergroundDigTap(
 ): boolean {
   if (!isPlayerUndergroundEditable(viewState)) return false;
   const grid = world.undergroundGrids[PLAYER_COLONY_ID];
-  if (!grid) return false;
+  const projGrid = projected.undergroundGrids[PLAYER_COLONY_ID];
+  if (!grid || !projGrid) return false;
   if (!isEditableUndergroundTile(grid, tileX, tileY)) return false;
-  const tileState = effectiveDigState(
-    world,
-    tileX,
-    tileY,
-    PLAYER_COLONY_ID,
-    ugGet(grid, tileX, tileY),
-  );
+  // Stage 3a (Codex R2-3/4): mark-vs-cancel from the PROJECTED grid (whole queue
+  // folded), the same state feedforward uses — supersedes effectiveDigState.
+  const tileState = ugGet(projGrid, tileX, tileY);
   if (tileState === UndergroundTileState.Marked) {
     const cmd: CancelDigMarkCommand = {
       type: 'CancelDigMark',
@@ -259,6 +230,10 @@ export function handleUndergroundDigTap(
       tileY,
       issuedAtTick: world.tick,
     };
+    // Cue/command parity (Codex R2-3/4): a Marked tile under an embedded ant has its
+    // CancelDigMark revert BLOCKED by the sim handler, which feedforward paints red.
+    // Gate the emit on the same trial-apply so the tap doesn't enqueue a doomed no-op.
+    if (!feedforward.willTakeEffect(projected, cmd)) return false;
     return !enqueueCommand(world, cmd, isPaused);
   }
   if (tileState === UndergroundTileState.Solid || tileState === UndergroundTileState.Open) {
@@ -269,6 +244,11 @@ export function handleUndergroundDigTap(
       tileY,
       issuedAtTick: world.tick,
     };
+    // Cue/command parity (Codex R2-3/4 / R1-5): MarkDigTile is a no-op on a non-Solid
+    // tile — an already-excavated Open tunnel tile marks nothing, which feedforward
+    // paints red. Gate the emit on the same trial-apply so an Open-tile tap doesn't
+    // enqueue a command the sim silently drops (the coarse Solid||Open predicate did).
+    if (!feedforward.willTakeEffect(projected, cmd)) return false;
     return !enqueueCommand(world, cmd, isPaused);
   }
   // BeingDug — no-op.
@@ -528,6 +508,7 @@ export function continuePaintStroke(
  */
 export function tryOpenChamberMenu(
   world: WorldState,
+  projected: WorldState,
   viewState: ViewState,
   screenX: number,
   screenY: number,
@@ -537,9 +518,12 @@ export function tryOpenChamberMenu(
   if (viewState.activeView !== 'underground') return false;
   if (!isPlayerUndergroundEditable(viewState)) return false;
   const grid = world.undergroundGrids[PLAYER_COLONY_ID];
-  if (!grid) return false;
+  const projGrid = projected.undergroundGrids[PLAYER_COLONY_ID];
+  if (!grid || !projGrid) return false;
   if (!isEditableUndergroundTile(grid, tileX, tileY)) return false;
-  const tileState = ugGet(grid, tileX, tileY);
+  // Stage 3a (Codex R2-4/R5-2): menu eligibility from the PROJECTED grid — a queued
+  // chamber-cancel can make a committed-Marked tile Solid again, re-enabling placement.
+  const tileState = ugGet(projGrid, tileX, tileY);
   if (tileState !== UndergroundTileState.Solid && tileState !== UndergroundTileState.Open) {
     // Marked / BeingDug excluded (PLAN §B8).
     return false;

@@ -26,14 +26,16 @@ import {
 } from './gesture-arbiter.js';
 import { panInputState, resetPanInputState } from './camera-input.js';
 import { contextMenuState, hideContextMenu } from '../render/context-menu-state.js';
-import { UndergroundTileState, ugSet, createUndergroundGrid } from '../sim/terrain.js';
+import { CommandProjection } from '../render/command-projection.js';
+import { CommandFeedforward } from '../render/command-feedforward.js';
+import { createScenario } from '../sim/scenario.js';
+import { UndergroundTileState, ugSet } from '../sim/terrain.js';
 import type { WorldState } from '../sim/types.js';
 import type { ViewState } from '../render/camera.js';
 import { makeCameraView, worldToScreen } from '../render/camera-adapter.js';
 import { TILE_SIZE_PX } from '../render/sprites.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 import { DRAG_THRESHOLD_PX } from './gesture.js';
-import type { SimCommand } from '../sim/commands.js';
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -57,21 +59,19 @@ function makeViewState(
   };
 }
 
-function makeWorld(gridW = 20, gridH = 20): WorldState {
-  return {
-    tick: 0,
-    commandQueue: [] as SimCommand[],
-    colonies: {
-      [PLAYER_COLONY_ID]: { colonyId: PLAYER_COLONY_ID, entrances: [], rallyPoint: null },
-    },
-    surface: { data: new Uint8Array(gridW * gridH), width: gridW, height: gridH },
-    bakedSurfaceEffect: new Uint8Array(gridW * gridH),
-    surfaceComponentMask: null,
-    undergroundGrids: { [PLAYER_COLONY_ID]: createUndergroundGrid(gridW, gridH) },
-    foodPiles: [],
-    spider: null,
-    spiderPriorityColonyId: null,
-  } as unknown as WorldState;
+// Stage 3a: the arbiter feeds the underground tap/menu handlers a PROJECTED world
+// (deps.getProjectedWorld → CommandProjection.get), which deep-clones the live world
+// and drains its command queue through the real sim handlers. That requires a REAL
+// WorldState, not the former hand-stub — so build from createScenario, then restore the
+// stub's CONTROLLED surface (no spider, no food piles) so the surface-tap / spider-hit
+// assertions stay deterministic. The scenario's player underground grid is all-Solid by
+// default (the entrance shaft is at column 24, away from every coord these tests use)
+// and is a fixed 128×64, large enough that the old per-test grid-size knobs are moot.
+function makeWorld(): WorldState {
+  const world = createScenario(12345, 'Normal');
+  world.spider = null; // controlled surface: no spider sprite under any Command tap
+  world.foodPiles = []; // controlled surface: no pile under a rally/dig tap
+  return world;
 }
 
 /**
@@ -113,10 +113,8 @@ interface Harness {
 function makeHarness(
   view: 'surface' | 'underground',
   tool: 'command' | 'dig' | 'chamber',
-  gridW = 20,
-  gridH = 20,
 ): Harness {
-  const world = makeWorld(gridW, gridH);
+  const world = makeWorld();
   const vs = makeViewState(view, tool);
   const paused = { value: false };
   const canEditWorld = { value: true };
@@ -125,9 +123,19 @@ function makeHarness(
   let hudHit: (x: number, y: number) => boolean = () => false;
   let pausedFull = 0;
   const queueFullPaused: boolean[] = [];
+  const feedforward = new CommandFeedforward();
   const deps: GestureArbiterDeps = {
     getWorld: () => world,
     getPrevWorld: () => null,
+    // Stage 3a: a FRESH projection per call, reading the LIVE queue — exactly what the
+    // production wiring passes. Empty queue → aliases `world` (the common case here);
+    // a non-empty queue (e.g. the paused-cap tests' 64 NoOps) → a drained clone whose
+    // underground grid the tap handlers read for mark-vs-cancel + menu eligibility.
+    getProjectedWorld: () => new CommandProjection().get(world),
+    // Stage 3a: the same trial-apply feedforward the cue uses — the underground taps
+    // gate their emit on it (willTakeEffect), so an Open-tile mark / embedded-ant cancel
+    // is dropped here rather than enqueued. One shared instance, as the production wiring.
+    getFeedforward: () => feedforward,
     viewState: vs,
     isPointerOverHUD: (x, y) => hudHit(x, y),
     isPaused: () => paused.value,
@@ -581,7 +589,7 @@ describe('queue-full message pause-state threading (Fix 3)', () => {
     // The paint path (notifyCapHit) fires only while paused and always reports
     // paused=true. An UNPAUSED paint cap hit stays silent (no call) — verified
     // separately in the fast-stroke deferral block.
-    const h = makeHarness('underground', 'dig', 100, 20);
+    const h = makeHarness('underground', 'dig');
     h.paused.value = true;
     for (let i = 0; i < 64; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
     const start = tileCenter(1, 10, h.vs);
@@ -606,7 +614,7 @@ describe('queue-full message pause-state threading (Fix 3)', () => {
 
 describe('fast-stroke cap deferral (cursor-hold + re-emit on next move)', () => {
   it('a move that out-runs the cap holds the cursor; the NEXT move continues from there', () => {
-    const h = makeHarness('underground', 'dig', 100, 20);
+    const h = makeHarness('underground', 'dig');
     h.paused.value = false;
     // Leave exactly 3 free slots: the begin-tile (1,10) takes one, then the
     // classify→paint move emits 2 more tiles (2,10)+(3,10) before the cap refuses
@@ -644,7 +652,7 @@ describe('fast-stroke cap deferral (cursor-hold + re-emit on next move)', () => 
   it('a continuous drag across many moves digs EVERY tile (queue drains between moves)', () => {
     // Wide grid; drag in single-tile steps, draining the queue between each move
     // (one tick per frame). Every stepped tile must be dug exactly once.
-    const h = makeHarness('underground', 'dig', 100, 20);
+    const h = makeHarness('underground', 'dig');
     h.paused.value = false;
     const startTile = 1;
     const endTile = 90;
@@ -670,7 +678,7 @@ describe('fast-stroke cap deferral (cursor-hold + re-emit on next move)', () => 
   });
 
   it('begin: a down-tile refused at the cap leaves the cursor at the sentinel; the stroke still paints once the queue drains', () => {
-    const h = makeHarness('underground', 'dig', 100, 20);
+    const h = makeHarness('underground', 'dig');
     h.paused.value = false;
     // Jam the queue so the eager begin-tile mark (fired on the classify→paint
     // move) is refused at the cap. beginPaintStroke leaves the cursor at the
@@ -710,7 +718,7 @@ describe('fast-stroke cap deferral (cursor-hold + re-emit on next move)', () => 
   });
 
   it('paused: a cap refusal on a paint move surfaces the hint', () => {
-    const h = makeHarness('underground', 'dig', 100, 20);
+    const h = makeHarness('underground', 'dig');
     h.paused.value = true; // bare user-pause: queue never drains
     for (let i = 0; i < 64; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
     const start = tileCenter(1, 10, h.vs);
@@ -723,7 +731,7 @@ describe('fast-stroke cap deferral (cursor-hold + re-emit on next move)', () => 
   it('release ENDS the stroke immediately — no post-release draining', () => {
     // Even when a move out-ran the cap and the tail is held, release clears the
     // stroke. (The minimal design relies on intervening moves, not a drain.)
-    const h = makeHarness('underground', 'dig', 100, 20);
+    const h = makeHarness('underground', 'dig');
     h.paused.value = false;
     for (let i = 0; i < 64; i++) h.world.commandQueue.push({ type: 'NoOp', issuedAtTick: i });
     const start = tileCenter(1, 10, h.vs);
@@ -748,7 +756,7 @@ describe('fast-stroke cap deferral (cursor-hold + re-emit on next move)', () => 
   });
 
   it('cancelGesture mid-stroke clears the paint — a later move does not resume it', () => {
-    const h = makeHarness('underground', 'dig', 100, 20);
+    const h = makeHarness('underground', 'dig');
     h.paused.value = false;
     const start = tileCenter(1, 10, h.vs);
     const mid = tileCenter(5, 10, h.vs);

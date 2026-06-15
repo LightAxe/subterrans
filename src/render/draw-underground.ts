@@ -76,6 +76,11 @@ const CHAMBER_COLORS: Record<number, number> = {
   [ChamberType.FoodStorage]: COLOR_CHAMBER_FOOD_STORAGE,
 };
 
+// issue #18 Stage 3a — alpha of the faint committed-pending chamber silhouette (drawn while
+// the chamber is dug-out but not yet promoted to colony.chambers). Low so it reads as
+// "forming" against the solid built-chamber fill.
+const PENDING_CHAMBER_OUTLINE_ALPHA = 0.25;
+
 // ---------------------------------------------------------------------------
 // drawOutlineSegment — draw a thick line segment between two arbitrary points
 //
@@ -373,11 +378,17 @@ export function drawUndergroundEntities(
   // chamber center; the queen-chamber gold outline traces the SAME wavy
   // perimeter via 2-px-thick line-segment quads (each segment is two
   // fillTriangle calls forming a thin parallelogram).
+  //
+  // Anchors of promoted chambers (issue #18) — so the pending-outline pass below can skip a
+  // pending entry that has already promoted to a real chamber this frame (avoids drawing the
+  // faint silhouette on top of the solid built fill at the same tile).
+  const completedChamberAnchors = new Set<number>();
   for (const chamber of colony.chambers) {
     const dims = CHAMBER_DIMENSIONS[chamber.chamberType];
     if (dims === undefined) continue;
     const tileX = chamber.posX >> FP_SHIFT;
     const tileY = chamber.posY >> FP_SHIFT;
+    completedChamberAnchors.add(tileX * 100000 + tileY);
     const worldX = tileX * TILE_SIZE_PX;
     const worldY = tileY * TILE_SIZE_PX;
     const color = CHAMBER_COLORS[chamber.chamberType] ?? COLOR_CHAMBER_QUEEN;
@@ -457,6 +468,39 @@ export function drawUndergroundEntities(
           }
         }
       }
+    }
+  }
+
+  // --- Committed-PENDING chamber outline (issue #18 Stage 3a) ---
+  // A chamber in world.pendingChambers is committed + dug-out underway but not yet promoted
+  // to colony.chambers (colony-system deletes the pending entry on promotion). It otherwise
+  // shows only as blue Marked footprint tiles until BUILT. Draw a faint wavy fill of the SAME
+  // shape the queued ghost / built chamber use (chamberSeed id 0) so the silhouette is
+  // continuous across aim → queued → pending → built. Active-colony only; world-space; cheap
+  // (a triangle fan per pending chamber, view-culled). Defensive anchorKey guard skips any
+  // pending entry that already coincides with a promoted chamber this frame (no double-draw).
+  for (const key in curr.pendingChambers) {
+    const pc = curr.pendingChambers[key]!;
+    if (pc.colonyId !== activeUndergroundColonyId) continue;
+    const anchorKey = pc.anchorTileX * 100000 + pc.anchorTileY;
+    if (completedChamberAnchors.has(anchorKey)) continue;
+    const pcWorldX = pc.anchorTileX * TILE_SIZE_PX;
+    const pcWorldY = pc.anchorTileY * TILE_SIZE_PX;
+    const pcW = pc.width * TILE_SIZE_PX;
+    const pcH = pc.height * TILE_SIZE_PX;
+    if (!tileInView(pcWorldX, pcWorldY, rect, Math.max(pcW, pcH))) continue;
+    const seed = chamberSeed(pc.colonyId, 0, pc.chamberType);
+    const pts = chamberPerimeterPoints(seed, pcWorldX, pcWorldY, pcW, pcH);
+    const cx = pcWorldX + pcW / 2;
+    const cy = pcWorldY + pcH / 2;
+    gfx.fillStyle(
+      CHAMBER_COLORS[pc.chamberType] ?? COLOR_CHAMBER_QUEEN,
+      PENDING_CHAMBER_OUTLINE_ALPHA,
+    );
+    for (let i = 0; i < pts.length; i++) {
+      const p1 = pts[i]!;
+      const p2 = pts[(i + 1) % pts.length]!;
+      gfx.fillTriangle(cx, cy, p1.x, p1.y, p2.x, p2.y);
     }
   }
 

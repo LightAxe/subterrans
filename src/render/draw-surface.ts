@@ -180,6 +180,10 @@ export function drawSurfaceEntities(
   // Stage 2 §C13: strategic LOD — when true, ants render as screen-constant dots and the
   // ant-derived contested-glow pass is skipped (allocation-free strategic frame).
   dotMode: boolean = false,
+  // Stage 3a (issue #18): the projected spider-priority colony id (the live queue folded).
+  // When provided, the priority border reads this instead of curr.spiderPriorityColonyId, so a
+  // queued MarkSpiderPriority shows immediately. `undefined` = use the committed live value.
+  previewSpiderPriorityColonyId: number | null | undefined = undefined,
 ): void {
   const rect = visibleWorldRect(cam);
 
@@ -187,6 +191,11 @@ export function drawSurfaceEntities(
   // Issue #112 shrink buckets: each pile renders one of 4 sizes based on
   // pickupsRemaining / pickupsInitial.
   const playerColony = curr.colonies[PLAYER_COLONY_ID];
+  // Stage 3a (ship-review LOW): draw-surface renders ONLY the committed food mark. The queued food
+  // state (a toggle/re-direct) is shown entirely by the ghost overlay — a proto-blue pendingFoodMark
+  // dot on the new pile + a removal cue on the cleared pile — so a pending mark stays visually
+  // distinct from a committed one. Feeding the projected id here painted a queued mark in the full
+  // committed tint (indistinguishable from committed), so food preview lives only in the overlay.
   const playerPriorityPileId = playerColony ? playerColony.priorityFoodPileId : null;
   const baseRadius = TILE_SIZE_PX / 2 - 2;
   for (const pile of curr.foodPiles) {
@@ -446,7 +455,12 @@ export function drawSurfaceEntities(
       }
 
       // S7/D1: spider priority indicator — white border when player has set priority.
-      if (curr.spiderPriorityColonyId === PLAYER_COLONY_ID) {
+      // Stage 3a: read the projected value when supplied (a queued MarkSpiderPriority shows now).
+      const effectiveSpiderPriority =
+        previewSpiderPriorityColonyId === undefined
+          ? curr.spiderPriorityColonyId
+          : previewSpiderPriorityColonyId;
+      if (effectiveSpiderPriority === PLAYER_COLONY_ID) {
         const pl = Math.round(spiderWorldX - SPIDER_SPRITE_WIDTH / 2) - 2;
         const pt = Math.round(spiderWorldY - SPIDER_SPRITE_HEIGHT / 2) - 2;
         const pw = SPIDER_SPRITE_WIDTH + 4;
