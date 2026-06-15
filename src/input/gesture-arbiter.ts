@@ -545,7 +545,17 @@ export class GestureArbiter {
       if (snap.tool === 'command') {
         dropped = handleSurfaceCommandTap(world, snap.tileX, snap.tileY, snap.spiderHit, paused);
       } else if (snap.tool === 'dig') {
-        dropped = handleSurfaceDigTap(world, snap.tileX, snap.tileY, paused);
+        // Gate the entrance on feedforward.willTakeEffect against the projected world (Stage 3a)
+        // — the SAME trial-apply the hover cue uses — so the cue and the tap can never disagree
+        // and a paused repeat-tap can't re-queue a duplicate (or column-dup / capped) no-op (Codex).
+        dropped = handleSurfaceDigTap(
+          world,
+          this.deps.getProjectedWorld(),
+          this.deps.getFeedforward(),
+          snap.tileX,
+          snap.tileY,
+          paused,
+        );
       }
       // surface Chamber is unreachable (no-op).
     } else {

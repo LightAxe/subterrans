@@ -24,6 +24,8 @@ import {
 } from './surface-input.js';
 import type { WorldState } from '../sim/types.js';
 import type { ViewState } from '../render/camera.js';
+import { CommandFeedforward } from '../render/command-feedforward.js';
+import { createScenario } from '../sim/scenario.js';
 import { makeCameraView, worldToScreen } from '../render/camera-adapter.js';
 import { TILE_SIZE_PX } from '../render/sprites.js';
 import { FP_ONE } from '../sim/fixed.js';
@@ -124,6 +126,29 @@ function makeSpider(tileX: number, tileY: number): WorldState['spider'] {
     posX: tileX * FP_ONE,
     posY: tileY * FP_ONE,
   } as unknown as WorldState['spider'];
+}
+
+// handleSurfaceDigTap now gates its DesignateEntrance emit on feedforward.willTakeEffect
+// (the SAME trial-apply the hover cue uses — Codex parity), which deep-clones the projected
+// world via createScenario + projectionCopy + the real applyCommands. That needs a COMPLETE
+// WorldState, not the hand-stubbed `makeWorld` above, so the Dig-tap tests build a real
+// scenario. Seed 12345 'Normal' gives a deterministic surface: the player colony starts with
+// one entrance at column 24, row 64, and the surface is fully walkable, so (2,2)/(3,2) are
+// valid NEW entrance targets (distinct columns) while (24,2) is rejected by the sim's
+// column-uniqueness gate — the exact divergence the feedforward gate now closes.
+const PLAYER_START_ENTRANCE_COL = 24;
+function realWorld(overrides: { commandQueue?: SimCommand[] } = {}): WorldState {
+  const world = createScenario(12345, 'Normal');
+  if (overrides.commandQueue) world.commandQueue = overrides.commandQueue;
+  return world;
+}
+
+// A feedforward instance for a tap call (mirrors underground-input.test.ts): the tap gates its
+// emit on feedforward.willTakeEffect against the PROJECTED world — the same trial-apply the cue
+// uses — so the test exercises the real emit gate (column-dup / rally / capped entrances are
+// dropped here, not enqueued). A fresh instance per call is fine (lazily owns one scratch world).
+function ff(): CommandFeedforward {
+  return new CommandFeedforward();
 }
 
 // ---------------------------------------------------------------------------
@@ -438,19 +463,57 @@ describe('paused rally tap-tap toggles correctly (Codex P2)', () => {
 
 describe('handleSurfaceDigTap', () => {
   it('valid target → DesignateEntrance', () => {
-    const world = makeWorld({ colonies: { [PLAYER_COLONY_ID]: makeColony() } });
-    handleSurfaceDigTap(world, 20, 2, false);
+    const world = realWorld();
+    handleSurfaceDigTap(world, world, ff(), 2, 2, false);
     const cmd = lastCmd(world) as { type: string; surfaceTileX: number; surfaceTileY: number };
     expect(cmd.type).toBe('DesignateEntrance');
-    expect([cmd.surfaceTileX, cmd.surfaceTileY]).toEqual([20, 2]);
+    expect([cmd.surfaceTileX, cmd.surfaceTileY]).toEqual([2, 2]);
   });
 
   it('invalid target (food pile) → no-op', () => {
-    const world = makeWorld({
-      foodPiles: [{ foodPileId: 1, tileX: 5, tileY: 2, pickupsRemaining: 9, pickupsInitial: 9 }],
+    const world = realWorld();
+    // Drop a food pile on an otherwise-valid target; the sim's DesignateEntrance gate rejects it,
+    // so feedforward.willTakeEffect is false and nothing enqueues.
+    world.foodPiles.push({
+      foodPileId: 999,
+      tileX: 2,
+      tileY: 2,
+      pickupsRemaining: 9,
+      pickupsInitial: 9,
     });
-    handleSurfaceDigTap(world, 5, 2, false);
+    world.surfaceComponentMask = null; // re-derive the walkable mask with the pile present
+    handleSurfaceDigTap(world, world, ff(), 2, 2, false);
     expect(world.commandQueue).toHaveLength(0);
+  });
+
+  it('duplicate-column target → no-op (cue/command parity, Codex)', () => {
+    // The colony already has its starting entrance at column 24. A SECOND entrance in the SAME
+    // column (different row) is empty ground inside the walkable component — isValidEntranceTarget
+    // (the old gate) returned TRUE for it — but the sim's column-uniqueness rule silently drops it.
+    // The hover cue paints it red via the full trial-apply; gating the tap on the SAME
+    // feedforward.willTakeEffect closes the divergence so no doomed no-op is enqueued.
+    const world = realWorld();
+    const dropped = handleSurfaceDigTap(world, world, ff(), PLAYER_START_ENTRANCE_COL, 2, false);
+    expect(dropped).toBe(false);
+    expect(world.commandQueue).toHaveLength(0);
+  });
+
+  it('validates the entrance against the projected world, not committed (Codex)', () => {
+    // (2,2) is a valid entrance target in the committed world...
+    const committed = realWorld();
+    // ...but the PROJECTED world already has a queued DesignateEntrance for (2,2) folded in, so a
+    // SECOND entrance there is a duplicate the sim drops — the tap must read the projection (else a
+    // paused re-tap re-queues a duplicate no-op). The projection makes the would-be tile invalid.
+    const projected = realWorld();
+    projected.colonies[PLAYER_COLONY_ID]!.entrances.push({
+      entranceId: 9001,
+      surfaceTileX: 2,
+      surfaceTileY: 2,
+      isOpen: false,
+    });
+    const dropped = handleSurfaceDigTap(committed, projected, ff(), 2, 2, false);
+    expect(dropped).toBe(false);
+    expect(committed.commandQueue).toHaveLength(0);
   });
 });
 
@@ -460,21 +523,24 @@ describe('handleSurfaceDigTap', () => {
 
 describe('paused-queue cap', () => {
   it('drops a Dig-tap entrance command once the queue is at the cap while paused', () => {
-    // Pre-fill with MAX non-Sync commands.
+    // Pre-fill with MAX non-Sync commands. NoOp leaves the projected world unchanged, so (2,2)
+    // is still a geometrically-valid entrance target — the drop is purely the cap (feedforward
+    // returns 'blocked', willTakeEffect is still true), exercising the paused-cap guard.
     const pre: SimCommand[] = Array.from({ length: MAX_COMMANDS_PER_TICK }, (_, i) => ({
       type: 'NoOp',
       issuedAtTick: i,
     }));
-    const world = makeWorld({ commandQueue: pre, colonies: { [PLAYER_COLONY_ID]: makeColony() } });
-    const dropped = handleSurfaceDigTap(world, 20, 2, true /* paused */);
+    const world = realWorld({ commandQueue: pre });
+    const dropped = handleSurfaceDigTap(world, world, ff(), 2, 2, true /* paused */);
     expect(dropped).toBe(true);
     expect(world.commandQueue).toHaveLength(MAX_COMMANDS_PER_TICK); // not pushed
   });
 
   it('still enqueues when under the cap while paused', () => {
-    const world = makeWorld({ colonies: { [PLAYER_COLONY_ID]: makeColony() } });
-    const dropped = handleSurfaceDigTap(world, 20, 2, true);
+    const world = realWorld();
+    const dropped = handleSurfaceDigTap(world, world, ff(), 2, 2, true);
     expect(dropped).toBe(false);
+    // createScenario seeds no commands, so the entrance is the only queued command.
     expect(world.commandQueue).toHaveLength(1);
   });
 });

@@ -45,6 +45,7 @@ import { getSurfaceComponentMaskReadOnly } from '../sim/surface-features.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { TILE_SIZE_PX } from '../render/sprites.js';
 import { SPIDER_SPRITE_WIDTH, SPIDER_SPRITE_HEIGHT } from '../render/ant-sprite-layer.js';
+import type { CommandFeedforward } from '../render/command-feedforward.js';
 import { enqueueCommand } from './command-queue.js';
 
 // ---------------------------------------------------------------------------
@@ -420,16 +421,26 @@ export function handleSurfaceCommandTap(
  * irreversible in Stage 1 (entrance undo is a deferred sim-touch). A tap on an
  * invalid target is a no-op (the hover outline already shows red there). Returns
  * true iff the command was dropped at the paused cap.
+ *
+ * The emit is gated on feedforward.willTakeEffect — the SAME trial-apply the hover
+ * cue uses (computeEntranceHover) — so the surface cue and the surface tap can never
+ * disagree (Codex R2-3/4 parity, mirroring handleUndergroundDigTap). isValidEntranceTarget
+ * only checked the empty-tile + clearance neighbourhood, but the sim's DesignateEntrance
+ * handler ALSO rejects on column-uniqueness, the entrance cap, a rally-point collision, and
+ * another colony's entrance on the tile; trial-applying the real handler covers every case,
+ * so a doomed no-op (e.g. a second entrance in an existing column) is dropped here instead of
+ * re-queuing each paused tap and exhausting the 64-command cap.
  */
 export function handleSurfaceDigTap(
   world: WorldState,
+  projected: WorldState,
+  feedforward: CommandFeedforward,
   tileX: number,
   tileY: number,
   isPaused: boolean,
   playerColonyId: ColonyId = PLAYER_COLONY_ID,
 ): boolean {
   if (tileX < 0 || tileY < 0) return false;
-  if (!isValidEntranceTarget(world, tileX, tileY)) return false;
   const cmd: DesignateEntranceCommand = {
     type: 'DesignateEntrance',
     colonyId: playerColonyId,
@@ -437,5 +448,10 @@ export function handleSurfaceDigTap(
     surfaceTileY: tileY,
     issuedAtTick: world.tick,
   };
+  // Gate on the PROJECTED world (the live queue folded), not the committed one (Codex): while
+  // paused, an already-queued DesignateEntrance leaves the committed tile empty, so a repeat tap
+  // would re-queue a duplicate the sim rejects — paused spam can exhaust the 64-command cap. The
+  // command still enqueues onto the live `world`. Unpaused, projected === world (unchanged).
+  if (!feedforward.willTakeEffect(projected, cmd)) return false;
   return !enqueueCommand(world, cmd, isPaused);
 }

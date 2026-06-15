@@ -147,10 +147,9 @@ import {
   isPointerOverHUD,
   panInputState,
 } from '../input/camera-input.js';
-import { isValidEntranceTarget } from '../input/surface-input.js';
 import { registerGestureArbiter, type GestureArbiter } from '../input/gesture-arbiter.js';
 import { CommandProjection } from './command-projection.js';
-import { CommandFeedforward } from './command-feedforward.js';
+import { CommandFeedforward, type FeedforwardOutcome } from './command-feedforward.js';
 import { computeGhostDelta } from './command-ghosts.js';
 import {
   drawGhostDelta,
@@ -1950,7 +1949,7 @@ export class GameScene extends Phaser.Scene {
       // canvas (and not over HUD). Re-resolve the tile + validity from the LIVE
       // camera every frame so a keyboard/drag pan under a stationary cursor keeps
       // the outline under the pointer and never stale (Codex R1-9/R2-9/R3-4).
-      const entranceHover = this.computeEntranceHover(cam);
+      const entranceHover = this.computeEntranceHover(cam, projected);
       drawSurfaceEntities(
         gfx,
         this.antSprites,
@@ -1965,9 +1964,11 @@ export class GameScene extends Phaser.Scene {
         this.renderFrame, // S6: current render frame
         overlayGfx, // #148: health bar renders above sprites
         dotMode, // §C13: strategic dot-LOD
-        // Stage 3a: gate like every other preview — undefined makes draw-surface fall back to
-        // the committed value, so the projected border hides over a modal too (ship-review LOW).
-        showPreview ? projected.spiderPriorityColonyId : undefined,
+        // Stage 3a (Codex): pass the player's PENDING spider-priority change (from the ghost delta),
+        // not the projected value — draw-surface keeps the committed white border and draws a queued
+        // change distinctly, so a pending toggle never looks already-applied. null over a modal (or
+        // when preview is off) → committed border only.
+        showPreview ? ghostDelta.pendingSpiderPriority : null,
         // (Food priority is deliberately NOT previewed through draw-surface — that would paint a
         // queued mark in the full committed tint. The ghost overlay below carries the queued cue.)
       );
@@ -2032,7 +2033,8 @@ export class GameScene extends Phaser.Scene {
    */
   private computeEntranceHover(
     cam: CameraView,
-  ): { tileX: number; tileY: number; valid: boolean } | null {
+    projected: WorldState,
+  ): { tileX: number; tileY: number; outcome: FeedforwardOutcome } | null {
     if (this.viewState.activeView !== 'surface') return null;
     if (this.viewState.activeTool !== 'dig') return null;
     if (this.hoverScreenX === null || this.hoverScreenY === null) return null;
@@ -2046,8 +2048,26 @@ export class GameScene extends Phaser.Scene {
     // edge (a Stage-2 zoom regression — the pre-zoom fixed viewport never exposed margins).
     if (tileX < 0 || tileY < 0) return null;
     if (tileX >= this.world.surface.width || tileY >= this.world.surface.height) return null;
-    const valid = isValidEntranceTarget(this.world, tileX, tileY);
-    return { tileX, tileY, valid };
+    // Stage 3a (Codex): the verdict is the feedforward outcome for the DesignateEntrance this tap
+    // would emit, trial-applied against the PROJECTED world (the live queue folded) — green/red/
+    // blocked. Reading the projection makes an already-queued entrance turn the tile red, so the
+    // hover (and the tap it gates) stop spamming duplicate no-ops the sim rejects while paused.
+    const candidate = {
+      type: 'DesignateEntrance',
+      colonyId: PLAYER_COLONY_ID,
+      surfaceTileX: tileX,
+      surfaceTileY: tileY,
+      issuedAtTick: this.world.tick,
+    } as const;
+    let nonSync = 0;
+    for (const c of this.world.commandQueue) if (c.type !== 'SyncAIState') nonSync++;
+    const outcome = this.feedforward.outcome(
+      projected,
+      candidate,
+      nonSync,
+      this.projection.revision,
+    );
+    return { tileX, tileY, outcome };
   }
 
   /**

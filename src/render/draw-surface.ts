@@ -33,6 +33,7 @@ import {
   COLOR_RALLY_POINT,
   COLOR_ENTRANCE_HOVER_VALID,
   COLOR_ENTRANCE_HOVER_INVALID,
+  COLOR_ENTRANCE_HOVER_BLOCKED,
   COLOR_FIGHTER_TINT,
   COLOR_NEUTRAL_CONTESTED_GLOW,
   lerpColor,
@@ -42,7 +43,14 @@ import {
   COLOR_BARREN_EARTH_DAMP,
   COLOR_BARREN_EARTH_MOUND,
 } from './terrain-atlas.js';
+import type { FeedforwardOutcome } from './command-feedforward.js';
 export type { AntSpriteLayer } from './ant-sprite-layer.js';
+
+// Stage 3a (issue #18): a QUEUED spider-priority change is drawn distinctly from the committed
+// white border so a pending MarkSpiderPriority is never mistaken for an applied one (Codex). These
+// mirror draw-command-legibility's queued/removal palette; exact hues are UAT-tunable.
+const COLOR_SPIDER_PRIORITY_QUEUED = 0x3a7bd5; // proto-blue — queued ON (not yet committed)
+const COLOR_SPIDER_PRIORITY_REMOVAL = 0xd5773a; // orange — queued OFF (committed until resume)
 import {
   type CameraView,
   visibleWorldRect,
@@ -168,7 +176,7 @@ export function drawSurfaceEntities(
   curr: WorldState,
   alpha: number,
   cam: CameraView,
-  entranceHover: { tileX: number; tileY: number; valid: boolean } | null = null,
+  entranceHover: { tileX: number; tileY: number; outcome: FeedforwardOutcome } | null = null,
   facing?: AntFacingCache,
   frameTimeMs: number = 0,
   contestedGlowFrames?: Map<number, number>,
@@ -180,10 +188,11 @@ export function drawSurfaceEntities(
   // Stage 2 §C13: strategic LOD — when true, ants render as screen-constant dots and the
   // ant-derived contested-glow pass is skipped (allocation-free strategic frame).
   dotMode: boolean = false,
-  // Stage 3a (issue #18): the projected spider-priority colony id (the live queue folded).
-  // When provided, the priority border reads this instead of curr.spiderPriorityColonyId, so a
-  // queued MarkSpiderPriority shows immediately. `undefined` = use the committed live value.
-  previewSpiderPriorityColonyId: number | null | undefined = undefined,
+  // Stage 3a (issue #18): the player's pending spider-priority change from computeGhostDelta
+  // (true = queued ON, false = queued OFF, null = no pending player change). The COMMITTED border
+  // still reads curr.spiderPriorityColonyId; a pending change is drawn in a distinct colour (Codex)
+  // so a queued MarkSpiderPriority is never mistaken for an already-applied one.
+  pendingSpiderPriority: boolean | null = null,
 ): void {
   const rect = visibleWorldRect(cam);
 
@@ -454,18 +463,26 @@ export function drawSurfaceEntities(
         gfx.fillRect(rl + rw - 2, rt + 2, 2, rh - 4);
       }
 
-      // S7/D1: spider priority indicator — white border when player has set priority.
-      // Stage 3a: read the projected value when supplied (a queued MarkSpiderPriority shows now).
-      const effectiveSpiderPriority =
-        previewSpiderPriorityColonyId === undefined
-          ? curr.spiderPriorityColonyId
-          : previewSpiderPriorityColonyId;
-      if (effectiveSpiderPriority === PLAYER_COLONY_ID) {
+      // S7/D1: spider priority indicator — a border around the spider when the player has set
+      // priority. Stage 3a (Codex): the COMMITTED priority draws the solid white border; a QUEUED
+      // change draws a distinct colour (proto-blue = queued ON; orange = queued OFF, the committed
+      // border still showing until resume) so a pending MarkSpiderPriority reads as pending, not
+      // applied. pendingSpiderPriority is the player-attributed delta from computeGhostDelta.
+      const committedSpiderPriority = curr.spiderPriorityColonyId === PLAYER_COLONY_ID;
+      let spiderBorderColor: number | null = null;
+      if (pendingSpiderPriority === true) {
+        spiderBorderColor = COLOR_SPIDER_PRIORITY_QUEUED;
+      } else if (pendingSpiderPriority === false) {
+        spiderBorderColor = COLOR_SPIDER_PRIORITY_REMOVAL;
+      } else if (committedSpiderPriority) {
+        spiderBorderColor = 0xffffff;
+      }
+      if (spiderBorderColor !== null) {
         const pl = Math.round(spiderWorldX - SPIDER_SPRITE_WIDTH / 2) - 2;
         const pt = Math.round(spiderWorldY - SPIDER_SPRITE_HEIGHT / 2) - 2;
         const pw = SPIDER_SPRITE_WIDTH + 4;
         const ph = SPIDER_SPRITE_HEIGHT + 4;
-        gfx.fillStyle(0xffffff, 1);
+        gfx.fillStyle(spiderBorderColor, 1);
         gfx.fillRect(pl, pt, pw, 2);
         gfx.fillRect(pl, pt + ph - 2, pw, 2);
         gfx.fillRect(pl, pt + 2, 2, ph - 4);
@@ -515,17 +532,21 @@ export function drawSurfaceEntities(
   }
 
   // --- Entrance hover outline (Stage 1 controls rework, issue #18) ---
-  // A 2-px frame on the tile under the pointer while the Dig tool is active: GREEN when
-  // DesignateEntrance would accept, RED otherwise. GameScene re-resolves tile + validity
-  // from the live camera every frame.
+  // A 2-px frame on the tile under the pointer while the Dig tool is active. Stage 3a: the outcome
+  // is the feedforward verdict against the PROJECTED world — GREEN = DesignateEntrance would accept,
+  // RED = geometrically rejected (incl. a tile an already-queued entrance occupies), GREY = the
+  // 64-command queue is full ("blocked"). GameScene re-resolves tile + outcome every frame.
   if (entranceHover !== null) {
     const wx = entranceHover.tileX * TILE_SIZE_PX;
     const wy = entranceHover.tileY * TILE_SIZE_PX;
     if (tileInView(wx, wy, rect, TILE_SIZE_PX)) {
-      gfx.fillStyle(
-        entranceHover.valid ? COLOR_ENTRANCE_HOVER_VALID : COLOR_ENTRANCE_HOVER_INVALID,
-        0.8,
-      );
+      const frameColor =
+        entranceHover.outcome === 'valid'
+          ? COLOR_ENTRANCE_HOVER_VALID
+          : entranceHover.outcome === 'blocked'
+            ? COLOR_ENTRANCE_HOVER_BLOCKED
+            : COLOR_ENTRANCE_HOVER_INVALID;
+      gfx.fillStyle(frameColor, 0.8);
       gfx.fillRect(wx, wy, TILE_SIZE_PX, 2); // top
       gfx.fillRect(wx, wy + TILE_SIZE_PX - 2, TILE_SIZE_PX, 2); // bottom
       gfx.fillRect(wx, wy, 2, TILE_SIZE_PX); // left
@@ -551,7 +572,7 @@ export function drawSurface(
   curr: WorldState,
   alpha: number,
   cam: CameraView,
-  entranceHover: { tileX: number; tileY: number; valid: boolean } | null = null,
+  entranceHover: { tileX: number; tileY: number; outcome: FeedforwardOutcome } | null = null,
   facing?: AntFacingCache,
 ): void {
   drawSurfaceTerrain(gfx, curr, cam);
