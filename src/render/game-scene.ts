@@ -1949,7 +1949,10 @@ export class GameScene extends Phaser.Scene {
       // canvas (and not over HUD). Re-resolve the tile + validity from the LIVE
       // camera every frame so a keyboard/drag pan under a stationary cursor keeps
       // the outline under the pointer and never stale (Codex R1-9/R2-9/R3-4).
-      const entranceHover = this.computeEntranceHover(cam, projected);
+      // Stage 3a (Codex round 2): gate the entrance feedforward on showPreview like every other cue,
+      // so the green/red/blocked outline hides behind a blocking modal (and skips the trial-apply
+      // clone when suppressed). showPreview is the §11/§19 gate computed above.
+      const entranceHover = showPreview ? this.computeEntranceHover(cam, projected) : null;
       drawSurfaceEntities(
         gfx,
         this.antSprites,

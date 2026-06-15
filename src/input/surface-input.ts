@@ -84,8 +84,14 @@ export function isEmptySurfaceTile(world: WorldState, tileX: number, tileY: numb
 }
 
 /**
- * PR 4 — true iff `DesignateEntrance` would ACCEPT this tile, so the preview
- * never advertises a target the (now stricter) sim gate will silently drop.
+ * @deprecated Stage 3a (issue #18) superseded this as the entrance gate: the hover + tap now use
+ * `feedforward.outcome` / `willTakeEffect`, which trial-applies the REAL `DesignateEntrance` handler
+ * and therefore also enforces column-uniqueness, the entrance cap, rally collisions, and other-colony
+ * occupancy that this predicate omits. Do NOT reuse this to gate the entrance command — it would
+ * re-open the cue/command divergence Stage 3a closed (ship-review LOW). Retained only as a tested
+ * empty-tile + clearance predicate (no production caller).
+ *
+ * PR 4 — true iff `DesignateEntrance` would ACCEPT this tile by the empty-tile + clearance check.
  * Mirrors `tick.ts`'s gate: the tile is an empty surface tile AND it plus its
  * whole `SURFACE_ROOT_CLEARANCE_RADIUS` neighbourhood are in the single connected
  * walkable component of the frozen terrain (terrain can no longer be carved at

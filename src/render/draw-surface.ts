@@ -464,29 +464,43 @@ export function drawSurfaceEntities(
       }
 
       // S7/D1: spider priority indicator — a border around the spider when the player has set
-      // priority. Stage 3a (Codex): the COMMITTED priority draws the solid white border; a QUEUED
-      // change draws a distinct colour (proto-blue = queued ON; orange = queued OFF, the committed
-      // border still showing until resume) so a pending MarkSpiderPriority reads as pending, not
-      // applied. pendingSpiderPriority is the player-attributed delta from computeGhostDelta.
+      // priority. Stage 3a (Codex): the COMMITTED priority ALWAYS draws the solid white border; a
+      // QUEUED change is layered distinctly — queued-ON (nothing committed yet) draws a proto-blue
+      // border in place of white, and queued-OFF keeps the committed white border AND adds an inset
+      // orange removal frame, so "committed + pending removal" reads as BOTH (Codex round 2: a queued
+      // removal must not erase the committed cue before resume). Delta from computeGhostDelta.
       const committedSpiderPriority = curr.spiderPriorityColonyId === PLAYER_COLONY_ID;
-      let spiderBorderColor: number | null = null;
-      if (pendingSpiderPriority === true) {
-        spiderBorderColor = COLOR_SPIDER_PRIORITY_QUEUED;
-      } else if (pendingSpiderPriority === false) {
-        spiderBorderColor = COLOR_SPIDER_PRIORITY_REMOVAL;
-      } else if (committedSpiderPriority) {
-        spiderBorderColor = 0xffffff;
-      }
-      if (spiderBorderColor !== null) {
+      // Main border: proto-blue when a priority-ON is queued (no committed border yet), else white
+      // when committed; null = no main border. The orange removal cue draws on a queued-OFF
+      // INDEPENDENTLY of the main border, so a queued clear is still cued even if the committed owner
+      // is not the player (latent today — only the player sets spider priority — but keep it ungated
+      // so the cue can't silently vanish; ship-review LOW).
+      const spiderMainBorder =
+        pendingSpiderPriority === true
+          ? COLOR_SPIDER_PRIORITY_QUEUED
+          : committedSpiderPriority
+            ? 0xffffff
+            : null;
+      if (spiderMainBorder !== null || pendingSpiderPriority === false) {
         const pl = Math.round(spiderWorldX - SPIDER_SPRITE_WIDTH / 2) - 2;
         const pt = Math.round(spiderWorldY - SPIDER_SPRITE_HEIGHT / 2) - 2;
         const pw = SPIDER_SPRITE_WIDTH + 4;
         const ph = SPIDER_SPRITE_HEIGHT + 4;
-        gfx.fillStyle(spiderBorderColor, 1);
-        gfx.fillRect(pl, pt, pw, 2);
-        gfx.fillRect(pl, pt + ph - 2, pw, 2);
-        gfx.fillRect(pl, pt + 2, 2, ph - 4);
-        gfx.fillRect(pl + pw - 2, pt + 2, 2, ph - 4);
+        if (spiderMainBorder !== null) {
+          gfx.fillStyle(spiderMainBorder, 1);
+          gfx.fillRect(pl, pt, pw, 2);
+          gfx.fillRect(pl, pt + ph - 2, pw, 2);
+          gfx.fillRect(pl, pt + 2, 2, ph - 4);
+          gfx.fillRect(pl + pw - 2, pt + 2, 2, ph - 4);
+        }
+        // queued-OFF: layer an inset orange removal frame (the committed white border, if any, stays above).
+        if (pendingSpiderPriority === false) {
+          gfx.fillStyle(COLOR_SPIDER_PRIORITY_REMOVAL, 1);
+          gfx.fillRect(pl + 3, pt + 3, pw - 6, 2);
+          gfx.fillRect(pl + 3, pt + ph - 5, pw - 6, 2);
+          gfx.fillRect(pl + 3, pt + 5, 2, ph - 10);
+          gfx.fillRect(pl + pw - 5, pt + 5, 2, ph - 10);
+        }
       }
 
       // Health bar (issue #148): render-only HP indicator above the sprite, drawn on
