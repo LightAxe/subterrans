@@ -212,7 +212,7 @@ import {
 import {
   admitCaption,
   completeCaption,
-  clearPending,
+  clearPendingFirstUse,
   createCaptionQueueState,
   type CaptionQueueState,
   type CaptionRequest,
@@ -2062,7 +2062,7 @@ export class UIScene extends Phaser.Scene {
         // Stage 3b (#3): clear the persisted shown-flags AND drop any queued
         // first-use caption (clearPending) so the hints surface again cleanly.
         resetFirstUseHints();
-        clearPending(this.captionState);
+        clearPendingFirstUse(this.captionState);
         this.renderPauseMenuPage();
         return;
       }

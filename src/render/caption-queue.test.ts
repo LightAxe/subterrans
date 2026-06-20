@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import {
   admitCaption,
   completeCaption,
-  clearPending,
+  clearPendingFirstUse,
   createCaptionQueueState,
   type CaptionRequest,
 } from './caption-queue.js';
@@ -115,13 +115,21 @@ describe('completeCaption', () => {
   });
 });
 
-describe('clearPending', () => {
-  it('drops the pending entry but leaves the active one mid-fade', () => {
+describe('clearPendingFirstUse', () => {
+  it('drops a pending FIRST-USE entry but leaves the active one mid-fade', () => {
     const s = createCaptionQueueState();
     admitCaption(s, evt('a'));
     admitCaption(s, fu('pan'));
-    clearPending(s);
+    clearPendingFirstUse(s);
     expect(s.pending).toBeNull();
     expect(s.active?.text).toBe('a');
+  });
+
+  it('LEAVES a pending EVENT caption intact (Codex PR #218 — do not drop unrelated events)', () => {
+    const s = createCaptionQueueState();
+    admitCaption(s, evt('a')); // active
+    admitCaption(s, evt('queen-damage')); // pending EVENT caption
+    clearPendingFirstUse(s);
+    expect(s.pending?.text).toBe('queen-damage'); // survives the first-use reset
   });
 });

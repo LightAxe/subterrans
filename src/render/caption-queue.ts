@@ -126,9 +126,12 @@ export function completeCaption(state: CaptionQueueState): { begin?: CaptionRequ
   return state.active ? { begin: state.active } : {};
 }
 
-/** Drop any pending entry (used by "Reset hints" so a queued first-use does not
- *  surface after its persisted flag was cleared). Does not touch the active
- *  caption, which is mid-fade and allowed to finish. */
-export function clearPending(state: CaptionQueueState): void {
-  state.pending = null;
+/** Drop a pending FIRST-USE entry (used by "Reset first-use hints" so a queued
+ *  first-use does not surface after its persisted flag was cleared). A pending
+ *  EVENT caption is left intact: event captions are marked-triggered BEFORE they
+ *  reach the queue and this path does not untrigger them, so dropping one would
+ *  suppress it for the rest of the round (Codex PR #218). Does not touch the
+ *  active caption, which is mid-fade and allowed to finish. */
+export function clearPendingFirstUse(state: CaptionQueueState): void {
+  if (state.pending?.source === 'first-use') state.pending = null;
 }
