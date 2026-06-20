@@ -8,7 +8,7 @@
 // 4-state visual vocabulary: green/red/blocked = AIMING (feedforward); dashed/low-alpha =
 // QUEUED (ghosts); solid = committed (drawn elsewhere). Exact colours/alpha are UAT-tunable.
 
-import { TILE_SIZE_PX } from './sprites.js';
+import { TILE_SIZE_PX, COLOR_RALLY_POINT } from './sprites.js';
 import { chamberSeed, chamberPerimeterPoints } from './chamber-shape.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import type { GfxLike } from './draw-surface.js';
@@ -147,15 +147,17 @@ export function drawGhostDelta(
     for (const e of delta.pendingEntrances) {
       fillCellInset(gfx, e.tileX, e.tileY, COLOR_PENDING, GHOST_ALPHA);
     }
-    // surface — pending rally marker (the queued crosshair target).
+    // surface — pending rally marker: a FADED copy of the committed rally crosshair (Rob UAT — the
+    // queued target should read as the same cross marker, just pending, not a blue dot). Mirrors
+    // draw-surface's committed cross (horizontal + vertical bar + center accent) at GHOST_ALPHA.
     if (delta.pendingRally !== null) {
       const t = TILE_SIZE_PX;
-      gfx.fillStyle(COLOR_PENDING, GHOST_ALPHA);
-      gfx.fillCircle(
-        delta.pendingRally.tileX * t + t / 2,
-        delta.pendingRally.tileY * t + t / 2,
-        t / 2,
-      );
+      const wx = delta.pendingRally.tileX * t;
+      const wy = delta.pendingRally.tileY * t;
+      gfx.fillStyle(COLOR_RALLY_POINT, GHOST_ALPHA);
+      gfx.fillRect(wx + 1, wy + 7, t - 2, 2); // horizontal bar
+      gfx.fillRect(wx + 7, wy + 1, 2, t - 2); // vertical bar
+      gfx.fillRect(wx + 6, wy + 6, 4, 4); // center accent
     }
     // A queued ClearRallyPoint: the committed white crosshair (draw-surface.ts) still sits
     // on this tile while paused, so tint a removal crosshair over it as the "pending removal"
