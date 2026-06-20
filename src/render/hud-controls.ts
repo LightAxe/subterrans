@@ -9,6 +9,7 @@
 
 import { HUD } from './sprites.js';
 import type { ToolId } from './camera.js';
+import { glyphFor } from './input-glyphs.js';
 
 // ---------------------------------------------------------------------------
 // Tool palette (HUD.TOOLS) — 3 buttons: Command / Dig / Chamber
@@ -94,26 +95,55 @@ export function speedControlAt(px: number, py: number): SpeedControl | null {
  * surface map has no Chamber entry — callers pass the effective tool.
  */
 export function hintTextFor(tool: ToolId, view: 'surface' | 'underground'): string {
+  // Stage 3b (#2): compose the gesture verbs from the glyph table instead of
+  // hardcoding them, so "Click"/"Drag"/"RMB" have ONE source of truth. All
+  // left-click tool actions share the same glyph, so any one of them yields the
+  // canonical click token; likewise drag/right-click. `?? …` is defensive — the
+  // table always defines these mouse glyphs.
+  const click = glyphFor('DIG_MARK', 'mouse') ?? 'Click';
+  const drag = glyphFor('DIG_PAINT', 'mouse') ?? 'Drag';
+  const rmb = glyphFor('CHAMBER_MENU', 'mouse') ?? 'RMB';
   if (view === 'surface') {
     switch (tool) {
-      case 'command':
-        return 'Cmd: click food to forage, empty ground to rally, the spider to target it';
       case 'dig':
-        return 'Dig: click valid ground to designate an entrance';
+        return `Dig: ${click} valid ground to designate an entrance`;
+      case 'command':
       default:
         // Chamber on the surface is inert; show the Command legend as a fallback.
-        return 'Cmd: click food to forage, empty ground to rally, the spider to target it';
+        return `Cmd: ${click} food to forage, empty ground to rally, the spider to target it`;
     }
   }
   // underground
   switch (tool) {
     case 'command':
-      return 'Cmd: click a marked tile to cancel its dig';
+      return `Cmd: ${click} a marked tile to cancel its dig`;
     case 'dig':
-      return 'Dig: click or drag to mark tunnels; click a marked tile to cancel';
+      return `Dig: ${click} or ${drag} to mark tunnels; ${click} a marked tile to cancel`;
     case 'chamber':
-      return 'Chamber: click dug-out or solid ground to place a chamber';
+      return `Chamber: ${click} dug-out or solid ground to place a chamber (${rmb} anywhere)`;
   }
+}
+
+/**
+ * VISUAL hit-test of the tool palette for tooltips (Stage 3b #5). Unlike
+ * toolButtonAt — which returns null for the inert Chamber-on-surface so a click
+ * is a no-op — this returns every button the player can SEE, with an `enabled`
+ * flag, so the disabled Chamber button still surfaces a tooltip ("underground
+ * only") while its click stays inert (Codex R1#7).
+ */
+export function toolButtonVisualAt(
+  px: number,
+  py: number,
+  view: 'surface' | 'underground',
+): { tool: ToolId; enabled: boolean } | null {
+  for (let i = 0; i < TOOL_ORDER.length; i++) {
+    const tool = TOOL_ORDER[i]!;
+    const r = toolButtonRect(i);
+    if (px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h) {
+      return { tool, enabled: !(tool === 'chamber' && view === 'surface') };
+    }
+  }
+  return null;
 }
 
 /** The queue-full hint surfaced when enqueueCommand drops a one-shot command at

@@ -14,7 +14,7 @@
 //     new drags)
 //   - reset helpers
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   isPointerOverHUD,
   processCameraInput,
@@ -36,6 +36,13 @@ import { SURFACE_WORLD_PX_W } from '../render/camera.js';
 import { makeCameraView, KEYBOARD_PAN_SPEED_PX_PER_SEC } from '../render/camera-adapter.js';
 import { HUD, CANVAS_W } from '../render/sprites.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
+import { hintStripState, resetHintStripState } from '../render/hint-strip-state.js';
+
+// Stage 3b: the hint-strip visibility singleton gates HUD.HINTS masking. Reset
+// it after each test so a hidden-legend case doesn't leak into its neighbors.
+afterEach(() => {
+  resetHintStripState();
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -126,6 +133,19 @@ describe('isPointerOverHUD', () => {
   it('masks the Stage 1 interactive zones: TOOLS, HINTS, and SPEED', () => {
     const vs = makeViewState('surface');
     for (const rect of [HUD.TOOLS, HUD.HINTS, HUD.SPEED]) {
+      const [x, y] = center(rect);
+      expect(isPointerOverHUD(x, y, vs)).toBe(true);
+    }
+  });
+
+  it('Stage 3b: drops HUD.HINTS from the mask when the legend is hidden, keeps TOOLS/SPEED', () => {
+    const vs = makeViewState('surface');
+    hintStripState.visible = false;
+    const [hx, hy] = center(HUD.HINTS);
+    // The freed legend band is no longer a dead input zone…
+    expect(isPointerOverHUD(hx, hy, vs)).toBe(false);
+    // …but the other interactive widgets stay masked.
+    for (const rect of [HUD.TOOLS, HUD.SPEED]) {
       const [x, y] = center(rect);
       expect(isPointerOverHUD(x, y, vs)).toBe(true);
     }

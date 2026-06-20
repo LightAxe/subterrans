@@ -40,6 +40,22 @@ export function resetCaptions(): void {
 }
 
 /**
+ * Un-mark a one-shot caption key so it can fire again.
+ *
+ * checkAndTrigger/captionForEvent mark a key the moment they hand back the text,
+ * before the caption reaches the bounded caption queue. If the queue then DROPS
+ * that caption on overflow it would never display yet stay marked 'already shown'
+ * — losing a first-occurrence onboarding caption forever. UIScene calls this when
+ * a dropped caption carries a key so the trigger re-fires on the next occurrence.
+ *
+ * Recurring captions (e.g. spiderRampage) never populate `triggered`, so calling
+ * this for one of them is a harmless no-op.
+ */
+export function untrigger(key: CaptionKey): void {
+  triggered.delete(key);
+}
+
+/**
  * Check if a caption should fire for the first time this session.
  * Returns the text to display, or null if the caption already triggered.
  *
@@ -102,4 +118,14 @@ export function captionForEvent(eventType: SimEvent['type']): string | null {
     return checkAndTrigger(oneShotKey);
   }
   return null;
+}
+
+/**
+ * The one-shot CaptionKey an event maps to, or null for recurring / caption-less
+ * events. GameScene passes this to showCaption so a dropped one-shot event
+ * caption can be un-marked (re-fired) — without duplicating the event→key policy
+ * at the call site. Recurring events return null here (they never dedup).
+ */
+export function oneShotKeyForEvent(eventType: SimEvent['type']): CaptionKey | null {
+  return ONE_SHOT_EVENT_CAPTIONS.get(eventType) ?? null;
 }
