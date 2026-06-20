@@ -219,6 +219,36 @@ describe('computeGhostDelta', () => {
     expect(d.removedChambers).toHaveLength(0);
   });
 
+  it('cancel-then-replace a chamber at the same anchor (Queen→FoodStorage) → remove + new ghost (Codex R8)', () => {
+    const w = world();
+    const proj = world();
+    copyWorldState(w, proj);
+    // Committed: a Queen pending at (30,30). Projected (queue cancelled it + placed a different type
+    // at the SAME anchor): a FoodStorage. The ghost diff must NOT treat these as equal just because
+    // the anchor matches — the shape changed, so resume will change the plan.
+    w.pendingChambers['1:30:30'] = {
+      colonyId: PLAYER_COLONY_ID,
+      chamberType: ChamberType.Queen,
+      anchorTileX: 30,
+      anchorTileY: 30,
+      width: 5,
+      height: 5,
+    };
+    proj.pendingChambers['1:30:30'] = {
+      colonyId: PLAYER_COLONY_ID,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: 30,
+      anchorTileY: 30,
+      width: 3,
+      height: 3,
+    };
+    const d = computeGhostDelta(w, proj);
+    expect(d.removedChambers).toHaveLength(1);
+    expect(d.removedChambers[0]!.chamberType).toBe(ChamberType.Queen);
+    expect(d.ghostChambers).toHaveLength(1);
+    expect(d.ghostChambers[0]!.chamberType).toBe(ChamberType.FoodStorage);
+  });
+
   it('pending entrance = a player entrance in projection, absent in world (plan §B12)', () => {
     const w = world();
     const proj = world();

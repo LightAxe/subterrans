@@ -79,8 +79,12 @@ const EMPTY: GhostDelta = {
   pendingEntrances: [],
 };
 
+// Chamber-diff identity includes the SHAPE (chamberType + footprint), not just the anchor (Codex
+// R8): a paused cancel-then-replace at the same anchor (e.g. Queen→FoodStorage) would otherwise key
+// identically, so the diff would emit neither a removed-footprint nor a new ghost and the preview
+// would hide a change resume will make. Distinct shapes at one anchor now diff as remove + place.
 function keyOf(c: PendingChamber): string {
-  return `${c.colonyId}:${c.anchorTileX}:${c.anchorTileY}`;
+  return `${c.colonyId}:${c.anchorTileX}:${c.anchorTileY}:${c.chamberType}:${c.width}:${c.height}`;
 }
 
 /**
