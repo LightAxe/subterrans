@@ -5,8 +5,9 @@
 //   - isTunnelEnd (pure topology helper, retained)
 //   - handleUndergroundCommandTap: CancelDigMark on Marked; no-op otherwise;
 //     player-grid-only guard
-//   - handleUndergroundDigTap: Solid/Open → MarkDigTile; Marked → CancelDigMark;
-//     BeingDug → no-op; player-grid-only guard; ceiling-row guard
+//   - handleUndergroundDigTap: Solid → MarkDigTile; Marked → CancelDigMark;
+//     Open / BeingDug → no-op (the emit gate matches the red cue); player-grid-only
+//     guard; ceiling-row guard
 //   - paint stroke: beginPaintStroke + continuePaintStroke 4-connected Bresenham,
 //     first-tile-once, enemy-view abort
 //   - tryOpenChamberMenu: Solid/Open eligibility + anchor; Marked/BeingDug
@@ -25,8 +26,11 @@ import {
   tryOpenChamberMenu,
   type PaintStrokeState,
 } from './underground-input.js';
-import { UndergroundTileState, ugSet, createUndergroundGrid } from '../sim/terrain.js';
+import { UndergroundTileState, ugSet } from '../sim/terrain.js';
 import { contextMenuState, hideContextMenu } from '../render/context-menu-state.js';
+import { CommandProjection } from '../render/command-projection.js';
+import { CommandFeedforward } from '../render/command-feedforward.js';
+import { createScenario } from '../sim/scenario.js';
 import type { WorldState } from '../sim/types.js';
 import type { ViewState } from '../render/camera.js';
 import { makeCameraView } from '../render/camera-adapter.js';
@@ -54,30 +58,46 @@ function makeViewState(
   };
 }
 
+// Stage 3a: the tap/menu handlers now resolve mark-vs-cancel + chamber eligibility
+// against the PROJECTED world (the live world with its whole command queue folded
+// through the real sim handlers), so the test world must be a REAL WorldState that
+// CommandProjection.get() can clone + drain — not a hand-stubbed shape. createScenario
+// gives a complete world whose player underground grid is all-Solid by default
+// (the entrance shaft is carved at column 24, away from every coord these tests touch),
+// which preserves the prior stub's "untouched tile reads Solid" assumption. The grid
+// is a fixed 128×64 (UNDERGROUND_GRID_*), comfortably larger than every tile coord
+// used below, so the old per-test gridWidth/gridHeight knobs are no longer needed.
 function makeWorld(
   overrides: {
-    tick?: number;
-    gridWidth?: number;
-    gridHeight?: number;
     commandQueue?: SimCommand[];
   } = {},
 ): WorldState {
-  const w = overrides.gridWidth ?? 20;
-  const h = overrides.gridHeight ?? 20;
-  const grid = createUndergroundGrid(w, h);
-  return {
-    tick: overrides.tick ?? 0,
-    rngState: 0,
-    nextEntityId: 0,
-    commandQueue: overrides.commandQueue ?? ([] as SimCommand[]),
-    ants: {} as WorldState['ants'],
-    colonies: {},
-    pheromoneGrids: {},
-    surface: { data: new Uint8Array(0), width: 0, height: 0 },
-    undergroundGrids: { [PLAYER_COLONY_ID]: grid },
-    foodPiles: [],
-    pendingChambers: {},
-  } as unknown as WorldState;
+  const world = createScenario(12345, 'Normal');
+  if (overrides.commandQueue) world.commandQueue = overrides.commandQueue;
+  return world;
+}
+
+/**
+ * The projected world for the CURRENT queue — exactly what the gesture arbiter feeds
+ * the underground tap/menu handlers (it calls deps.getProjectedWorld() per tap).
+ * Empty queue → aliases `world`; a queued Mark/Cancel → a projected clone whose grid
+ * reflects it. Rebuilt per call so a paused tap-tap toggle's 2nd tap sees the 1st
+ * tap's queued mark folded in (drives the mark→cancel that the deleted effectiveDigState
+ * used to produce).
+ */
+function projected(world: WorldState): WorldState {
+  return new CommandProjection().get(world);
+}
+
+/**
+ * A feedforward instance for a tap call. Stage 3a (Codex R2-3/4): the tap gates its
+ * emit on feedforward.willTakeEffect against the PROJECTED world — the same trial-apply
+ * the cue uses — so the test exercises the real emit gate (Open marks / embedded-ant
+ * cancels are dropped here, not enqueued). A fresh instance per call is fine (it lazily
+ * owns one scratch world; taps are rare).
+ */
+function ff(): CommandFeedforward {
+  return new CommandFeedforward();
 }
 
 function grid(world: WorldState) {
@@ -130,22 +150,30 @@ describe('handleUndergroundCommandTap', () => {
   it('Marked tile → CancelDigMark', () => {
     const world = makeWorld();
     ugSet(grid(world), 5, 10, UndergroundTileState.Marked);
-    handleUndergroundCommandTap(world, makeViewState(), 5, 10, false);
+    handleUndergroundCommandTap(world, projected(world), ff(), makeViewState(), 5, 10, false);
     expect((lastCmd(world) as { type: string }).type).toBe('CancelDigMark');
   });
   it('Solid / Open / BeingDug → no-op', () => {
     const world = makeWorld();
     ugSet(grid(world), 6, 10, UndergroundTileState.Open);
     ugSet(grid(world), 7, 10, UndergroundTileState.BeingDug);
-    handleUndergroundCommandTap(world, makeViewState(), 5, 10, false); // Solid
-    handleUndergroundCommandTap(world, makeViewState(), 6, 10, false); // Open
-    handleUndergroundCommandTap(world, makeViewState(), 7, 10, false); // BeingDug
+    handleUndergroundCommandTap(world, projected(world), ff(), makeViewState(), 5, 10, false); // Solid
+    handleUndergroundCommandTap(world, projected(world), ff(), makeViewState(), 6, 10, false); // Open
+    handleUndergroundCommandTap(world, projected(world), ff(), makeViewState(), 7, 10, false); // BeingDug
     expect(world.commandQueue).toHaveLength(0);
   });
   it('enemy-view read-only: no command on the enemy grid', () => {
     const world = makeWorld();
     ugSet(grid(world), 5, 10, UndergroundTileState.Marked);
-    handleUndergroundCommandTap(world, makeViewState(ENEMY_COLONY_ID), 5, 10, false);
+    handleUndergroundCommandTap(
+      world,
+      projected(world),
+      ff(),
+      makeViewState(ENEMY_COLONY_ID),
+      5,
+      10,
+      false,
+    );
     expect(world.commandQueue).toHaveLength(0);
   });
 });
@@ -157,35 +185,55 @@ describe('handleUndergroundCommandTap', () => {
 describe('handleUndergroundDigTap', () => {
   it('Solid → MarkDigTile', () => {
     const world = makeWorld();
-    handleUndergroundDigTap(world, makeViewState(), 5, 10, false);
+    handleUndergroundDigTap(world, projected(world), ff(), makeViewState(), 5, 10, false);
     expect((lastCmd(world) as { type: string }).type).toBe('MarkDigTile');
   });
-  it('Open → MarkDigTile', () => {
+  it('Open → no-op (mark no-ops on a non-Solid tile; gate matches the red cue)', () => {
+    // Stage 3a (finding 2 / Codex R1-5): MarkDigTile only marks Solid tiles, so an
+    // already-excavated Open tunnel tile marks nothing. The tap gates on
+    // feedforward.willTakeEffect, so it must NOT enqueue the doomed command (it used
+    // to, against the coarse Solid||Open predicate, while the cue painted it red).
     const world = makeWorld();
     ugSet(grid(world), 5, 10, UndergroundTileState.Open);
-    handleUndergroundDigTap(world, makeViewState(), 5, 10, false);
-    expect((lastCmd(world) as { type: string }).type).toBe('MarkDigTile');
+    handleUndergroundDigTap(world, projected(world), ff(), makeViewState(), 5, 10, false);
+    expect(world.commandQueue).toHaveLength(0);
   });
   it('Marked → CancelDigMark', () => {
     const world = makeWorld();
     ugSet(grid(world), 5, 10, UndergroundTileState.Marked);
-    handleUndergroundDigTap(world, makeViewState(), 5, 10, false);
+    handleUndergroundDigTap(world, projected(world), ff(), makeViewState(), 5, 10, false);
     expect((lastCmd(world) as { type: string }).type).toBe('CancelDigMark');
   });
   it('BeingDug → no-op', () => {
     const world = makeWorld();
     ugSet(grid(world), 5, 10, UndergroundTileState.BeingDug);
-    handleUndergroundDigTap(world, makeViewState(), 5, 10, false);
+    handleUndergroundDigTap(world, projected(world), ff(), makeViewState(), 5, 10, false);
     expect(world.commandQueue).toHaveLength(0);
   });
   it('ceiling row → no-op', () => {
     const world = makeWorld();
-    handleUndergroundDigTap(world, makeViewState(), 5, UNDERGROUND_CEILING_ROW_Y, false);
+    handleUndergroundDigTap(
+      world,
+      projected(world),
+      ff(),
+      makeViewState(),
+      5,
+      UNDERGROUND_CEILING_ROW_Y,
+      false,
+    );
     expect(world.commandQueue).toHaveLength(0);
   });
   it('enemy view → no-op', () => {
     const world = makeWorld();
-    handleUndergroundDigTap(world, makeViewState(ENEMY_COLONY_ID), 5, 10, false);
+    handleUndergroundDigTap(
+      world,
+      projected(world),
+      ff(),
+      makeViewState(ENEMY_COLONY_ID),
+      5,
+      10,
+      false,
+    );
     expect(world.commandQueue).toHaveLength(0);
   });
 });
@@ -220,6 +268,22 @@ describe('paint stroke', () => {
       [5, 10],
       [6, 10],
       [7, 10],
+      [8, 10],
+    ]);
+  });
+
+  it('a stroke crossing an Open tile skips it (no-op there) but still marks the Solid tiles (Codex R6)', () => {
+    const world = makeWorld();
+    ugSet(grid(world), 7, 10, UndergroundTileState.Open); // a dug gap mid-stroke
+    beginPaintStroke(stroke, world, makeViewState(), 5, 10, false); // marks (5,10)
+    continuePaintStroke(stroke, world, makeViewState(), 8, 10, false); // 6, (7 Open → skipped), 8
+    const marks = world.commandQueue
+      .filter((c) => c.type === 'MarkDigTile')
+      .map((c) => [(c as { tileX: number }).tileX, (c as { tileY: number }).tileY]);
+    // (7,10) is omitted — MarkDigTile is a no-op on Open, so paint no longer wastes a queue slot there.
+    expect(marks).toEqual([
+      [5, 10],
+      [6, 10],
       [8, 10],
     ]);
   });
@@ -281,7 +345,7 @@ describe('paint stroke', () => {
 describe('tryOpenChamberMenu', () => {
   it('Solid tile → requests the menu, anchored at the tile + screen coords', () => {
     const world = makeWorld();
-    const ok = tryOpenChamberMenu(world, makeViewState(), 120, 80, 5, 10);
+    const ok = tryOpenChamberMenu(world, projected(world), makeViewState(), 120, 80, 5, 10);
     expect(ok).toBe(true);
     expect(contextMenuState.pendingShow).toBe(true);
     expect([contextMenuState.anchorTileX, contextMenuState.anchorTileY]).toEqual([5, 10]);
@@ -291,32 +355,46 @@ describe('tryOpenChamberMenu', () => {
   it('Open tile → eligible', () => {
     const world = makeWorld();
     ugSet(grid(world), 5, 10, UndergroundTileState.Open);
-    expect(tryOpenChamberMenu(world, makeViewState(), 120, 80, 5, 10)).toBe(true);
+    expect(tryOpenChamberMenu(world, projected(world), makeViewState(), 120, 80, 5, 10)).toBe(true);
   });
 
   it('Marked tile → NOT eligible (excluded)', () => {
     const world = makeWorld();
     ugSet(grid(world), 5, 10, UndergroundTileState.Marked);
-    expect(tryOpenChamberMenu(world, makeViewState(), 120, 80, 5, 10)).toBe(false);
+    expect(tryOpenChamberMenu(world, projected(world), makeViewState(), 120, 80, 5, 10)).toBe(
+      false,
+    );
     expect(contextMenuState.pendingShow).toBe(false);
   });
 
   it('BeingDug tile → NOT eligible', () => {
     const world = makeWorld();
     ugSet(grid(world), 5, 10, UndergroundTileState.BeingDug);
-    expect(tryOpenChamberMenu(world, makeViewState(), 120, 80, 5, 10)).toBe(false);
+    expect(tryOpenChamberMenu(world, projected(world), makeViewState(), 120, 80, 5, 10)).toBe(
+      false,
+    );
   });
 
   it('enemy view → read-only, never opens', () => {
     const world = makeWorld();
-    expect(tryOpenChamberMenu(world, makeViewState(ENEMY_COLONY_ID), 120, 80, 5, 10)).toBe(false);
+    expect(
+      tryOpenChamberMenu(world, projected(world), makeViewState(ENEMY_COLONY_ID), 120, 80, 5, 10),
+    ).toBe(false);
   });
 
   it('ceiling row → not eligible', () => {
     const world = makeWorld();
-    expect(tryOpenChamberMenu(world, makeViewState(), 120, 80, 5, UNDERGROUND_CEILING_ROW_Y)).toBe(
-      false,
-    );
+    expect(
+      tryOpenChamberMenu(
+        world,
+        projected(world),
+        makeViewState(),
+        120,
+        80,
+        5,
+        UNDERGROUND_CEILING_ROW_Y,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -409,10 +487,11 @@ describe('paused dig-tap effective state (Fix 4)', () => {
     const world = makeWorld();
     const vs = makeViewState();
     // First tap: Solid → MarkDigTile (grid stays Solid; sim is paused/frozen).
-    handleUndergroundDigTap(world, vs, 5, 10, true);
-    // Second tap on the SAME tile: effective state is Marked (pending MarkDigTile)
-    // → CancelDigMark, netting back to Solid on resume.
-    handleUndergroundDigTap(world, vs, 5, 10, true);
+    handleUndergroundDigTap(world, projected(world), ff(), vs, 5, 10, true);
+    // Second tap on the SAME tile: the REBUILT projection folds the pending
+    // MarkDigTile, so the tile reads Marked → CancelDigMark, netting back to Solid
+    // on resume. (projected() reads the live queue each call.)
+    handleUndergroundDigTap(world, projected(world), ff(), vs, 5, 10, true);
     const types = world.commandQueue.map((c) => c.type);
     expect(types).toEqual(['MarkDigTile', 'CancelDigMark']);
   });
@@ -420,9 +499,9 @@ describe('paused dig-tap effective state (Fix 4)', () => {
   it('paused tap-tap-tap on a Solid tile nets Mark/Cancel/Mark (toggles each tap)', () => {
     const world = makeWorld();
     const vs = makeViewState();
-    handleUndergroundDigTap(world, vs, 5, 10, true); // Solid → Mark
-    handleUndergroundDigTap(world, vs, 5, 10, true); // eff Marked → Cancel
-    handleUndergroundDigTap(world, vs, 5, 10, true); // eff Solid → Mark
+    handleUndergroundDigTap(world, projected(world), ff(), vs, 5, 10, true); // Solid → Mark
+    handleUndergroundDigTap(world, projected(world), ff(), vs, 5, 10, true); // proj Marked → Cancel
+    handleUndergroundDigTap(world, projected(world), ff(), vs, 5, 10, true); // proj Solid → Mark
     expect(world.commandQueue.map((c) => c.type)).toEqual([
       'MarkDigTile',
       'CancelDigMark',
@@ -434,29 +513,29 @@ describe('paused dig-tap effective state (Fix 4)', () => {
     const world = makeWorld();
     const vs = makeViewState();
     ugSet(grid(world), 5, 10, UndergroundTileState.Marked); // grid already Marked
-    handleUndergroundDigTap(world, vs, 5, 10, true); // Marked → Cancel
-    handleUndergroundDigTap(world, vs, 5, 10, true); // eff Solid (pending cancel) → Mark
+    handleUndergroundDigTap(world, projected(world), ff(), vs, 5, 10, true); // Marked → Cancel
+    handleUndergroundDigTap(world, projected(world), ff(), vs, 5, 10, true); // proj Solid (pending cancel) → Mark
     expect(world.commandQueue.map((c) => c.type)).toEqual(['CancelDigMark', 'MarkDigTile']);
   });
 
   it('the effective state is keyed per-tile: a tap on a different tile is unaffected', () => {
     const world = makeWorld();
     const vs = makeViewState();
-    handleUndergroundDigTap(world, vs, 5, 10, true); // (5,10) Solid → Mark
-    handleUndergroundDigTap(world, vs, 6, 10, true); // (6,10) Solid → Mark (different tile)
+    handleUndergroundDigTap(world, projected(world), ff(), vs, 5, 10, true); // (5,10) Solid → Mark
+    handleUndergroundDigTap(world, projected(world), ff(), vs, 6, 10, true); // (6,10) Solid → Mark (different tile)
     expect(world.commandQueue.map((c) => c.type)).toEqual(['MarkDigTile', 'MarkDigTile']);
   });
 
   it('unpaused behaviour is unchanged: each tap reads the live (drained) grid', () => {
     // Unpaused, the queue drains every tick, so a second tap sees an empty queue
-    // and the (still-Solid, pre-apply) grid → another MarkDigTile, exactly as
-    // before Fix 4. We emulate the drain between taps.
+    // (projection aliases the live world) and the (still-Solid, pre-apply) grid →
+    // another MarkDigTile, exactly as before Fix 4. We emulate the drain between taps.
     const world = makeWorld();
     const vs = makeViewState();
-    handleUndergroundDigTap(world, vs, 5, 10, false);
+    handleUndergroundDigTap(world, projected(world), ff(), vs, 5, 10, false);
     expect(world.commandQueue.map((c) => c.type)).toEqual(['MarkDigTile']);
     world.commandQueue.length = 0; // tick() drained it
-    handleUndergroundDigTap(world, vs, 5, 10, false);
+    handleUndergroundDigTap(world, projected(world), ff(), vs, 5, 10, false);
     expect(world.commandQueue.map((c) => c.type)).toEqual(['MarkDigTile']);
   });
 
@@ -464,9 +543,9 @@ describe('paused dig-tap effective state (Fix 4)', () => {
     const world = makeWorld();
     const vs = makeViewState(PLAYER_COLONY_ID, 'command');
     // A Dig-tap queued a MarkDigTile on a Solid tile while paused; the grid is
-    // still Solid. A Command-tap on it must see effective=Marked and cancel.
-    handleUndergroundDigTap(world, makeViewState(), 5, 10, true); // queue: MarkDigTile
-    handleUndergroundCommandTap(world, vs, 5, 10, true);
+    // still Solid. A Command-tap on it must see the PROJECTED tile = Marked and cancel.
+    handleUndergroundDigTap(world, projected(world), ff(), makeViewState(), 5, 10, true); // queue: MarkDigTile
+    handleUndergroundCommandTap(world, projected(world), ff(), vs, 5, 10, true);
     expect(world.commandQueue.map((c) => c.type)).toEqual(['MarkDigTile', 'CancelDigMark']);
   });
 
@@ -474,10 +553,10 @@ describe('paused dig-tap effective state (Fix 4)', () => {
     const world = makeWorld();
     const vs = makeViewState(PLAYER_COLONY_ID, 'command');
     ugSet(grid(world), 5, 10, UndergroundTileState.Marked); // grid Marked
-    handleUndergroundCommandTap(world, vs, 5, 10, true); // Marked → Cancel
-    // Second Command-tap: effective state is Solid (pending cancel) → no-op, NOT
+    handleUndergroundCommandTap(world, projected(world), ff(), vs, 5, 10, true); // Marked → Cancel
+    // Second Command-tap: the projected tile is Solid (pending cancel) → no-op, NOT
     // a redundant second CancelDigMark.
-    handleUndergroundCommandTap(world, vs, 5, 10, true);
+    handleUndergroundCommandTap(world, projected(world), ff(), vs, 5, 10, true);
     expect(world.commandQueue.map((c) => c.type)).toEqual(['CancelDigMark']);
   });
 });
@@ -490,7 +569,7 @@ describe('paused dig-tap effective state (Fix 4)', () => {
 
 describe('fast-stroke cap deferral (unpaused)', () => {
   it('a single >64-tile segment enqueues exactly the cap and HOLDS the cursor', () => {
-    const world = makeWorld({ gridWidth: 100, gridHeight: 20 });
+    const world = makeWorld();
     const stroke = createPaintStrokeState();
     // Begin at (0,10): one mark for the down-tile.
     beginPaintStroke(stroke, world, makeViewState(), 0, 10, false);
@@ -507,7 +586,7 @@ describe('fast-stroke cap deferral (unpaused)', () => {
   });
 
   it('the deferred remainder re-emits on a subsequent flush with NO lost tiles', () => {
-    const world = makeWorld({ gridWidth: 100, gridHeight: 20 });
+    const world = makeWorld();
     const stroke = createPaintStrokeState();
     beginPaintStroke(stroke, world, makeViewState(), 0, 10, false);
     continuePaintStroke(stroke, world, makeViewState(), 80, 10, false); // caps at 64, holds at 63
@@ -531,7 +610,7 @@ describe('fast-stroke cap deferral (unpaused)', () => {
   });
 
   it('a further flush once the cursor has reached the target is a debounce no-op', () => {
-    const world = makeWorld({ gridWidth: 100, gridHeight: 20 });
+    const world = makeWorld();
     const stroke = createPaintStrokeState();
     beginPaintStroke(stroke, world, makeViewState(), 0, 10, false);
     continuePaintStroke(stroke, world, makeViewState(), 80, 10, false);
@@ -544,7 +623,7 @@ describe('fast-stroke cap deferral (unpaused)', () => {
   });
 
   it('non-markable (BeingDug) tiles are SKIPPED but the cursor ADVANCES past them', () => {
-    const world = makeWorld({ gridWidth: 20, gridHeight: 20 });
+    const world = makeWorld();
     ugSet(grid(world), 3, 10, UndergroundTileState.BeingDug); // a hole in the row
     const stroke = createPaintStrokeState();
     beginPaintStroke(stroke, world, makeViewState(), 0, 10, false); // mark (0,10)

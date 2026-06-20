@@ -89,6 +89,7 @@ import {
   PLAYER_START_X,
   PLAYER_START_Y,
   STARVATION_GRACE_TICKS,
+  UNDERGROUND_CEILING_ROW_Y,
 } from '../sim/constants.js';
 import { GameOutcome } from '../sim/game-over.js';
 import { drawSurfaceTerrain, drawSurfaceEntities, type GfxLike } from './draw-surface.js';
@@ -146,8 +147,18 @@ import {
   isPointerOverHUD,
   panInputState,
 } from '../input/camera-input.js';
-import { isValidEntranceTarget } from '../input/surface-input.js';
 import { registerGestureArbiter, type GestureArbiter } from '../input/gesture-arbiter.js';
+import { CommandProjection } from './command-projection.js';
+import { CommandFeedforward, type FeedforwardOutcome } from './command-feedforward.js';
+import { computeGhostDelta } from './command-ghosts.js';
+import {
+  drawGhostDelta,
+  drawFeedforwardTint,
+  type HoveredFeedforward,
+} from './draw-command-legibility.js';
+import { ugGet, UndergroundTileState } from '../sim/terrain.js';
+import { visibleContextMenuItems, contextMenuItemAt } from './context-menu-layout.js';
+import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import {
   type PauseReasonState,
   createPauseReasonState,
@@ -306,6 +317,11 @@ export class GameScene extends Phaser.Scene {
   // Stage 1 controls rework (issue #18) — the single left-button gesture arbiter
   // replaces the old surface/underground pointer listener sets.
   private arbiter!: GestureArbiter;
+  // Stage 3a (issue #18): the projected world (live queue folded) — single source of
+  // truth for underground tap/menu decisions AND feedforward/ghosts. Lazy + memoized.
+  private readonly projection = new CommandProjection();
+  // Stage 3a: trial-apply feedforward (owns a scratch clone). Paired with `projection`.
+  private readonly feedforward = new CommandFeedforward();
   // Reconciled pause-reason set: the loop is paused iff any reason is set.
   // 'user' = Space / ⏸; 'menu' = Esc-driven overlay. Reconciled to
   // gameLoop.pause()/resume() centrally so the two pause independently.
@@ -690,6 +706,14 @@ export class GameScene extends Phaser.Scene {
     this.scene.launch('UIScene', {
       viewState: this.viewState,
       getWorld,
+      // Stage 3a (issue #18): projected world for the chamber-menu filtering (R5-2) + the
+      // forage/fight requested marker (reads projected.targetRatio). NOTE: scene.launch data
+      // is not type-checked against UIScene.init, so this MUST be passed explicitly here.
+      getProjectedWorld: () => this.projection.get(this.world),
+      // Stage 3a (issue #18): the same trial-apply feedforward the render cue + underground
+      // taps use. The chamber-menu click gates its PlaceChamber emit on willTakeEffect so the
+      // chamber tint and the emitted command can never disagree (cue/command parity, R2-3/4).
+      getFeedforward: () => this.feedforward,
       // Issue #116 — UIScene owns Esc; this callback fires on Esc when no
       // UIScene overlay/panel is open and is the trigger to spawn the pause
       // menu. GameScene was previously binding keydown-ESC alongside
@@ -734,6 +758,13 @@ export class GameScene extends Phaser.Scene {
     this.arbiter = registerGestureArbiter(this, {
       getWorld,
       getPrevWorld,
+      // Stage 3a (issue #18): projected world for underground tap/menu decisions —
+      // the live queue folded, the same state feedforward uses (cue/command agree).
+      getProjectedWorld: () => this.projection.get(this.world),
+      // Stage 3a (issue #18): the same trial-apply feedforward the render cue uses, so
+      // the underground tap gate and the on-screen cue can never disagree. Shared with
+      // computeUndergroundDigHover's outcome() — willTakeEffect never touches its memo.
+      getFeedforward: () => this.feedforward,
       viewState: this.viewState,
       isPointerOverHUD: (x, y) => isPointerOverHUD(x, y, this.viewState),
       isPaused: () => isPausedByAny(this.pauseReasons),
@@ -1899,6 +1930,13 @@ export class GameScene extends Phaser.Scene {
     // (cameras.main projects/zooms the RT). Replaces the per-frame immediate-mode terrain
     // draw — the dynamic layers (pheromone, entities, chambers, dots) still draw into gfx.
     this.bakeAndShowTerrain(cam);
+    // Stage 3a (issue #18): the projected world + pending-command ghost delta for this
+    // frame (memoized — the arbiter's getProjectedWorld shares the same cached result).
+    const projected = this.projection.get(this.world);
+    const ghostDelta = computeGhostDelta(this.world, projected);
+    // Stage 3a §11/§19: the legibility overlay is always-on except over a blocking modal (pause
+    // MENU / GameOver / SavePrompt); see canShowWorldPreview for the §11/§19 reconciliation.
+    const showPreview = this.canShowWorldPreview();
     if (this.viewState.activeView === 'surface') {
       this.recordDrawLayer('terrain');
       if (this.viewState.showPheromoneOverlay) {
@@ -1911,7 +1949,10 @@ export class GameScene extends Phaser.Scene {
       // canvas (and not over HUD). Re-resolve the tile + validity from the LIVE
       // camera every frame so a keyboard/drag pan under a stationary cursor keeps
       // the outline under the pointer and never stale (Codex R1-9/R2-9/R3-4).
-      const entranceHover = this.computeEntranceHover(cam);
+      // Stage 3a (Codex round 2): gate the entrance feedforward on showPreview like every other cue,
+      // so the green/red/blocked outline hides behind a blocking modal (and skips the trial-apply
+      // clone when suppressed). showPreview is the §11/§19 gate computed above.
+      const entranceHover = showPreview ? this.computeEntranceHover(cam, projected) : null;
       drawSurfaceEntities(
         gfx,
         this.antSprites,
@@ -1926,7 +1967,16 @@ export class GameScene extends Phaser.Scene {
         this.renderFrame, // S6: current render frame
         overlayGfx, // #148: health bar renders above sprites
         dotMode, // §C13: strategic dot-LOD
+        // Stage 3a (Codex): pass the player's PENDING spider-priority change (from the ghost delta),
+        // not the projected value — draw-surface keeps the committed white border and draws a queued
+        // change distinctly, so a pending toggle never looks already-applied. null over a modal (or
+        // when preview is off) → committed border only.
+        showPreview ? ghostDelta.pendingSpiderPriority : null,
+        // (Food priority is deliberately NOT previewed through draw-surface — that would paint a
+        // queued mark in the full committed tint. The ghost overlay below carries the queued cue.)
       );
+      // Stage 3a: pending-command ghosts (surface rally) above the entity layer.
+      if (showPreview) drawGhostDelta(overlayGfx, ghostDelta, 'surface', PLAYER_COLONY_ID);
     } else {
       this.recordDrawLayer('terrain');
       if (this.viewState.showPheromoneOverlay) {
@@ -1947,6 +1997,19 @@ export class GameScene extends Phaser.Scene {
         this.renderFrame, // S6: current render frame
         dotMode, // §C13: strategic dot-LOD
       );
+      // Stage 3a: feedforward tint (chamber-menu highlight, else the hovered dig tile) +
+      // the pending-command ghosts — gated to not draw over a modal.
+      if (showPreview) {
+        const hover =
+          this.computeChamberHover(projected) ?? this.computeUndergroundDigHover(cam, projected);
+        drawFeedforwardTint(overlayGfx, hover);
+        drawGhostDelta(
+          overlayGfx,
+          ghostDelta,
+          'underground',
+          this.viewState.activeUndergroundColonyId,
+        );
+      }
     }
     this.antSprites.endFrame();
 
@@ -1973,7 +2036,8 @@ export class GameScene extends Phaser.Scene {
    */
   private computeEntranceHover(
     cam: CameraView,
-  ): { tileX: number; tileY: number; valid: boolean } | null {
+    projected: WorldState,
+  ): { tileX: number; tileY: number; outcome: FeedforwardOutcome } | null {
     if (this.viewState.activeView !== 'surface') return null;
     if (this.viewState.activeTool !== 'dig') return null;
     if (this.hoverScreenX === null || this.hoverScreenY === null) return null;
@@ -1987,8 +2051,155 @@ export class GameScene extends Phaser.Scene {
     // edge (a Stage-2 zoom regression — the pre-zoom fixed viewport never exposed margins).
     if (tileX < 0 || tileY < 0) return null;
     if (tileX >= this.world.surface.width || tileY >= this.world.surface.height) return null;
-    const valid = isValidEntranceTarget(this.world, tileX, tileY);
-    return { tileX, tileY, valid };
+    // Stage 3a (Codex): the verdict is the feedforward outcome for the DesignateEntrance this tap
+    // would emit, trial-applied against the PROJECTED world (the live queue folded) — green/red/
+    // blocked. Reading the projection makes an already-queued entrance turn the tile red, so the
+    // hover (and the tap it gates) stop spamming duplicate no-ops the sim rejects while paused.
+    const candidate = {
+      type: 'DesignateEntrance',
+      colonyId: PLAYER_COLONY_ID,
+      surfaceTileX: tileX,
+      surfaceTileY: tileY,
+      issuedAtTick: this.world.tick,
+    } as const;
+    let nonSync = 0;
+    for (const c of this.world.commandQueue) if (c.type !== 'SyncAIState') nonSync++;
+    const outcome = this.feedforward.outcome(
+      projected,
+      candidate,
+      nonSync,
+      this.projection.revision,
+    );
+    return { tileX, tileY, outcome };
+  }
+
+  /**
+   * Stage 3a (issue #18): the hovered underground dig tile + its feedforward outcome.
+   * Resolves the command a tap would emit (mark vs cancel) from the PROJECTED grid — the
+   * same decision the input layer makes — then trial-applies it for green/red/blocked.
+   * (Chamber feedforward, which needs the open menu's highlighted type, is a follow-on.)
+   */
+  private computeUndergroundDigHover(
+    cam: CameraView,
+    projected: WorldState,
+  ): HoveredFeedforward | null {
+    if (this.viewState.activeView !== 'underground') return null;
+    if (this.viewState.activeTool !== 'dig') return null;
+    // Stage 3a (Codex round 3): suppress the tap feedforward during an active paint DRAG. The drag
+    // path (continuePaintStroke) only ever emits MarkDigTile, but once a painted tile reads Marked in
+    // the projection this tap-hover would preview CancelDigMark — the opposite of what painting does.
+    if (this.arbiter.isPainting()) return null;
+    if (this.viewState.activeUndergroundColonyId !== PLAYER_COLONY_ID) return null;
+    if (this.hoverScreenX === null || this.hoverScreenY === null) return null;
+    if (isPointerOverHUD(this.hoverScreenX, this.hoverScreenY, this.viewState)) return null;
+    if (this.world === undefined) return null;
+    const grid = this.world.undergroundGrids[PLAYER_COLONY_ID];
+    const projGrid = projected.undergroundGrids[PLAYER_COLONY_ID];
+    if (grid === undefined || projGrid === undefined) return null;
+    const { tileX, tileY } = screenToTileZoom(this.hoverScreenX, this.hoverScreenY, cam);
+    if (tileX < 0 || tileY < 0) return null;
+    if (tileX >= grid.width || tileY >= grid.height) return null;
+    // Mirror the input layer's exclusions so the cue never paints a (red) tint over a tile
+    // the tap silently skips (ship-review LOW advisories): the ceiling row gives no dig
+    // feedback anywhere (issue #30), and a BeingDug tile is an intentional neutral no-op —
+    // not a geometric rejection — so neither should show feedforward.
+    if (tileY === UNDERGROUND_CEILING_ROW_Y) return null;
+    const projState = ugGet(projGrid, tileX, tileY);
+    if (projState === UndergroundTileState.BeingDug) return null;
+    const candidate =
+      projState === UndergroundTileState.Marked
+        ? ({
+            type: 'CancelDigMark',
+            colonyId: PLAYER_COLONY_ID,
+            tileX,
+            tileY,
+            issuedAtTick: this.world.tick,
+          } as const)
+        : ({
+            type: 'MarkDigTile',
+            colonyId: PLAYER_COLONY_ID,
+            tileX,
+            tileY,
+            issuedAtTick: this.world.tick,
+          } as const);
+    let nonSync = 0;
+    for (const c of this.world.commandQueue) if (c.type !== 'SyncAIState') nonSync++;
+    // Pass the projection revision so feedforward skips the world deep-clone when neither
+    // the projection nor the hovered candidate changed (Codex R3-2 — avoids a ~300K-element
+    // copyWorldState every hover frame). `projected` is this.projection.get(...) above.
+    const outcome = this.feedforward.outcome(
+      projected,
+      candidate,
+      nonSync,
+      this.projection.revision,
+    );
+    return { tileX, tileY, width: 1, height: 1, chamberType: null, outcome };
+  }
+
+  /**
+   * Stage 3a (issue #18): chamber feedforward. While the chamber context-menu is open, the
+   * item highlighted under the pointer is the chamber TYPE; its footprint (anchored at the
+   * menu's tile) is trial-applied against the projected world for green/red/blocked. The menu
+   * items are filtered against the PROJECTED colony (R5-2) so a queued Queen-cancel re-enables
+   * the Queen option. Returns null when no menu is up / no item is highlighted.
+   */
+  private computeChamberHover(projected: WorldState): HoveredFeedforward | null {
+    if (!contextMenuState.visible) return null;
+    if (this.world === undefined) return null;
+    if (this.hoverScreenX === null || this.hoverScreenY === null) return null;
+    const colony = projected.colonies[PLAYER_COLONY_ID];
+    if (colony === undefined) return null;
+    const items = visibleContextMenuItems(colony, projected);
+    const type = contextMenuItemAt(
+      this.hoverScreenX,
+      this.hoverScreenY,
+      contextMenuState.screenX,
+      contextMenuState.screenY,
+      items,
+    );
+    if (type === null) return null;
+    const dims = CHAMBER_DIMENSIONS[type];
+    const anchorTileX = contextMenuState.anchorTileX;
+    const anchorTileY = contextMenuState.anchorTileY;
+    const candidate = {
+      type: 'PlaceChamber',
+      colonyId: PLAYER_COLONY_ID,
+      chamberType: type,
+      anchorTileX,
+      anchorTileY,
+      issuedAtTick: this.world.tick,
+    } as const;
+    let nonSync = 0;
+    for (const c of this.world.commandQueue) if (c.type !== 'SyncAIState') nonSync++;
+    const outcome = this.feedforward.outcome(
+      projected,
+      candidate,
+      nonSync,
+      this.projection.revision,
+    );
+    return {
+      tileX: anchorTileX,
+      tileY: anchorTileY,
+      width: dims.width,
+      height: dims.height,
+      chamberType: type,
+      outcome,
+    };
+  }
+
+  /**
+   * Stage 3a §11/§19: may the command-legibility overlay (feedforward + ghosts) draw this frame?
+   * Always-on (§19): true except over a blocking modal (Esc pause-MENU / GameOver / SavePrompt).
+   * It is therefore also live during normal running play — but the queue drains each tick, so
+   * ghosts are then near-empty and only live hover-feedforward shows; the SALIENT cases §11 calls
+   * out are a bare user-pause and the open chamber menu, where queued ghosts accumulate and stay
+   * visible. NOT canAcceptWorldHotkey (that blocks pause). Per-pointer HUD / minimap / ant-panel
+   * exclusion is handled by the hover computations + draw order (world-space ghosts are occluded
+   * by the HUD), not here. [UAT lever: to suppress running-play hover-feedforward, gate this on a
+   * bare user-pause OR an open chamber menu instead of merely !isModalOpen().]
+   */
+  private canShowWorldPreview(): boolean {
+    return !this.isModalOpen();
   }
 
   /**

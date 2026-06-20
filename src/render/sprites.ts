@@ -57,6 +57,9 @@ export const COLOR_ENTRANCE_HOVER_VALID = 0x33dd55;
 /** Stage 1 controls rework (issue #18) — entrance hover outline, INVALID target (red). */
 export const COLOR_ENTRANCE_HOVER_INVALID = 0xff4040;
 
+/** Stage 3a (issue #18) — entrance hover outline, BLOCKED (queue full); matches feedforward "blocked". */
+export const COLOR_ENTRANCE_HOVER_BLOCKED = 0x999999;
+
 /** S1 — Red tint overlay applied to fighter-caste ants (tinted on top of colony color). */
 export const COLOR_FIGHTER_TINT = 0xff4444;
 

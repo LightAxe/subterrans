@@ -33,6 +33,7 @@ import {
   COLOR_RALLY_POINT,
   COLOR_ENTRANCE_HOVER_VALID,
   COLOR_ENTRANCE_HOVER_INVALID,
+  COLOR_ENTRANCE_HOVER_BLOCKED,
   COLOR_FIGHTER_TINT,
   COLOR_NEUTRAL_CONTESTED_GLOW,
   lerpColor,
@@ -42,7 +43,14 @@ import {
   COLOR_BARREN_EARTH_DAMP,
   COLOR_BARREN_EARTH_MOUND,
 } from './terrain-atlas.js';
+import type { FeedforwardOutcome } from './command-feedforward.js';
 export type { AntSpriteLayer } from './ant-sprite-layer.js';
+
+// Stage 3a (issue #18): a QUEUED spider-priority change is drawn distinctly from the committed
+// white border so a pending MarkSpiderPriority is never mistaken for an applied one (Codex). These
+// mirror draw-command-legibility's queued/removal palette; exact hues are UAT-tunable.
+const COLOR_SPIDER_PRIORITY_QUEUED = 0x3a7bd5; // proto-blue — queued ON (not yet committed)
+const COLOR_SPIDER_PRIORITY_REMOVAL = 0xd5773a; // orange — queued OFF (committed until resume)
 import {
   type CameraView,
   visibleWorldRect,
@@ -168,7 +176,7 @@ export function drawSurfaceEntities(
   curr: WorldState,
   alpha: number,
   cam: CameraView,
-  entranceHover: { tileX: number; tileY: number; valid: boolean } | null = null,
+  entranceHover: { tileX: number; tileY: number; outcome: FeedforwardOutcome } | null = null,
   facing?: AntFacingCache,
   frameTimeMs: number = 0,
   contestedGlowFrames?: Map<number, number>,
@@ -180,6 +188,11 @@ export function drawSurfaceEntities(
   // Stage 2 §C13: strategic LOD — when true, ants render as screen-constant dots and the
   // ant-derived contested-glow pass is skipped (allocation-free strategic frame).
   dotMode: boolean = false,
+  // Stage 3a (issue #18): the player's pending spider-priority change from computeGhostDelta
+  // (true = queued ON, false = queued OFF, null = no pending player change). The COMMITTED border
+  // still reads curr.spiderPriorityColonyId; a pending change is drawn in a distinct colour (Codex)
+  // so a queued MarkSpiderPriority is never mistaken for an already-applied one.
+  pendingSpiderPriority: boolean | null = null,
 ): void {
   const rect = visibleWorldRect(cam);
 
@@ -187,6 +200,11 @@ export function drawSurfaceEntities(
   // Issue #112 shrink buckets: each pile renders one of 4 sizes based on
   // pickupsRemaining / pickupsInitial.
   const playerColony = curr.colonies[PLAYER_COLONY_ID];
+  // Stage 3a (ship-review LOW): draw-surface renders ONLY the committed food mark. The queued food
+  // state (a toggle/re-direct) is shown entirely by the ghost overlay — a proto-blue pendingFoodMark
+  // dot on the new pile + a removal cue on the cleared pile — so a pending mark stays visually
+  // distinct from a committed one. Feeding the projected id here painted a queued mark in the full
+  // committed tint (indistinguishable from committed), so food preview lives only in the overlay.
   const playerPriorityPileId = playerColony ? playerColony.priorityFoodPileId : null;
   const baseRadius = TILE_SIZE_PX / 2 - 2;
   for (const pile of curr.foodPiles) {
@@ -445,17 +463,44 @@ export function drawSurfaceEntities(
         gfx.fillRect(rl + rw - 2, rt + 2, 2, rh - 4);
       }
 
-      // S7/D1: spider priority indicator — white border when player has set priority.
-      if (curr.spiderPriorityColonyId === PLAYER_COLONY_ID) {
+      // S7/D1: spider priority indicator — a border around the spider when the player has set
+      // priority. Stage 3a (Codex): the COMMITTED priority ALWAYS draws the solid white border; a
+      // QUEUED change is layered distinctly — queued-ON (nothing committed yet) draws a proto-blue
+      // border in place of white, and queued-OFF keeps the committed white border AND adds an inset
+      // orange removal frame, so "committed + pending removal" reads as BOTH (Codex round 2: a queued
+      // removal must not erase the committed cue before resume). Delta from computeGhostDelta.
+      const committedSpiderPriority = curr.spiderPriorityColonyId === PLAYER_COLONY_ID;
+      // Main border: proto-blue when a priority-ON is queued (no committed border yet), else white
+      // when committed; null = no main border. The orange removal cue draws on a queued-OFF
+      // INDEPENDENTLY of the main border, so a queued clear is still cued even if the committed owner
+      // is not the player (latent today — only the player sets spider priority — but keep it ungated
+      // so the cue can't silently vanish; ship-review LOW).
+      const spiderMainBorder =
+        pendingSpiderPriority === true
+          ? COLOR_SPIDER_PRIORITY_QUEUED
+          : committedSpiderPriority
+            ? 0xffffff
+            : null;
+      if (spiderMainBorder !== null || pendingSpiderPriority === false) {
         const pl = Math.round(spiderWorldX - SPIDER_SPRITE_WIDTH / 2) - 2;
         const pt = Math.round(spiderWorldY - SPIDER_SPRITE_HEIGHT / 2) - 2;
         const pw = SPIDER_SPRITE_WIDTH + 4;
         const ph = SPIDER_SPRITE_HEIGHT + 4;
-        gfx.fillStyle(0xffffff, 1);
-        gfx.fillRect(pl, pt, pw, 2);
-        gfx.fillRect(pl, pt + ph - 2, pw, 2);
-        gfx.fillRect(pl, pt + 2, 2, ph - 4);
-        gfx.fillRect(pl + pw - 2, pt + 2, 2, ph - 4);
+        if (spiderMainBorder !== null) {
+          gfx.fillStyle(spiderMainBorder, 1);
+          gfx.fillRect(pl, pt, pw, 2);
+          gfx.fillRect(pl, pt + ph - 2, pw, 2);
+          gfx.fillRect(pl, pt + 2, 2, ph - 4);
+          gfx.fillRect(pl + pw - 2, pt + 2, 2, ph - 4);
+        }
+        // queued-OFF: layer an inset orange removal frame (the committed white border, if any, stays above).
+        if (pendingSpiderPriority === false) {
+          gfx.fillStyle(COLOR_SPIDER_PRIORITY_REMOVAL, 1);
+          gfx.fillRect(pl + 3, pt + 3, pw - 6, 2);
+          gfx.fillRect(pl + 3, pt + ph - 5, pw - 6, 2);
+          gfx.fillRect(pl + 3, pt + 5, 2, ph - 10);
+          gfx.fillRect(pl + pw - 5, pt + 5, 2, ph - 10);
+        }
       }
 
       // Health bar (issue #148): render-only HP indicator above the sprite, drawn on
@@ -501,17 +546,21 @@ export function drawSurfaceEntities(
   }
 
   // --- Entrance hover outline (Stage 1 controls rework, issue #18) ---
-  // A 2-px frame on the tile under the pointer while the Dig tool is active: GREEN when
-  // DesignateEntrance would accept, RED otherwise. GameScene re-resolves tile + validity
-  // from the live camera every frame.
+  // A 2-px frame on the tile under the pointer while the Dig tool is active. Stage 3a: the outcome
+  // is the feedforward verdict against the PROJECTED world — GREEN = DesignateEntrance would accept,
+  // RED = geometrically rejected (incl. a tile an already-queued entrance occupies), GREY = the
+  // 64-command queue is full ("blocked"). GameScene re-resolves tile + outcome every frame.
   if (entranceHover !== null) {
     const wx = entranceHover.tileX * TILE_SIZE_PX;
     const wy = entranceHover.tileY * TILE_SIZE_PX;
     if (tileInView(wx, wy, rect, TILE_SIZE_PX)) {
-      gfx.fillStyle(
-        entranceHover.valid ? COLOR_ENTRANCE_HOVER_VALID : COLOR_ENTRANCE_HOVER_INVALID,
-        0.8,
-      );
+      const frameColor =
+        entranceHover.outcome === 'valid'
+          ? COLOR_ENTRANCE_HOVER_VALID
+          : entranceHover.outcome === 'blocked'
+            ? COLOR_ENTRANCE_HOVER_BLOCKED
+            : COLOR_ENTRANCE_HOVER_INVALID;
+      gfx.fillStyle(frameColor, 0.8);
       gfx.fillRect(wx, wy, TILE_SIZE_PX, 2); // top
       gfx.fillRect(wx, wy + TILE_SIZE_PX - 2, TILE_SIZE_PX, 2); // bottom
       gfx.fillRect(wx, wy, 2, TILE_SIZE_PX); // left
@@ -537,7 +586,7 @@ export function drawSurface(
   curr: WorldState,
   alpha: number,
   cam: CameraView,
-  entranceHover: { tileX: number; tileY: number; valid: boolean } | null = null,
+  entranceHover: { tileX: number; tileY: number; outcome: FeedforwardOutcome } | null = null,
   facing?: AntFacingCache,
 ): void {
   drawSurfaceTerrain(gfx, curr, cam);

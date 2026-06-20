@@ -83,6 +83,7 @@ import {
   tryOpenChamberMenu,
   type PaintStrokeState,
 } from './underground-input.js';
+import type { CommandFeedforward } from '../render/command-feedforward.js';
 
 /** Pointer button codes, matching Phaser's Pointer button accessors. */
 export const LEFT_BUTTON = 0;
@@ -123,6 +124,21 @@ export interface GestureArbiterDeps {
   getWorld: () => WorldState | undefined;
   /** Previous-tick world for spider hit-box widening; null when unavailable. */
   getPrevWorld: () => WorldState | null;
+  /**
+   * Projected world (Stage 3a): the live world with the whole command queue folded
+   * through the real handlers. Underground tap/menu decisions resolve against it so the
+   * cue and the emitted command can never disagree (Codex R2-3/4). Aliases the live
+   * world when the queue is empty, so it is cheap to call per tap.
+   */
+  getProjectedWorld: () => WorldState;
+  /**
+   * Trial-apply feedforward (Stage 3a), paired with getProjectedWorld. The underground
+   * Dig/Command taps gate their emit on feedforward.willTakeEffect against the projected
+   * world — the SAME trial-apply the on-screen cue uses — so a tap never enqueues a
+   * command the cue painted red (an Open-tile mark or an embedded-ant cancel both no-op
+   * in the sim). Shared with the render hover path; cheap to call per tap.
+   */
+  getFeedforward: () => CommandFeedforward;
   /** Render-layer view state (active view/tool/colony + cameras). */
   viewState: ViewState;
   /** True if the screen point falls on a HUD zone (camera-input.isPointerOverHUD). */
@@ -529,17 +545,46 @@ export class GestureArbiter {
       if (snap.tool === 'command') {
         dropped = handleSurfaceCommandTap(world, snap.tileX, snap.tileY, snap.spiderHit, paused);
       } else if (snap.tool === 'dig') {
-        dropped = handleSurfaceDigTap(world, snap.tileX, snap.tileY, paused);
+        // Gate the entrance on feedforward.willTakeEffect against the projected world (Stage 3a)
+        // — the SAME trial-apply the hover cue uses — so the cue and the tap can never disagree
+        // and a paused repeat-tap can't re-queue a duplicate (or column-dup / capped) no-op (Codex).
+        dropped = handleSurfaceDigTap(
+          world,
+          this.deps.getProjectedWorld(),
+          this.deps.getFeedforward(),
+          snap.tileX,
+          snap.tileY,
+          paused,
+        );
       }
       // surface Chamber is unreachable (no-op).
     } else {
-      // underground
+      // underground — resolve mark-vs-cancel + menu eligibility against the projected
+      // world (Stage 3a): the whole queue folded, the same state feedforward uses.
+      const projected = this.deps.getProjectedWorld();
+      const feedforward = this.deps.getFeedforward();
       if (snap.tool === 'command') {
-        dropped = handleUndergroundCommandTap(world, vs, snap.tileX, snap.tileY, paused);
+        dropped = handleUndergroundCommandTap(
+          world,
+          projected,
+          feedforward,
+          vs,
+          snap.tileX,
+          snap.tileY,
+          paused,
+        );
       } else if (snap.tool === 'dig') {
-        dropped = handleUndergroundDigTap(world, vs, snap.tileX, snap.tileY, paused);
+        dropped = handleUndergroundDigTap(
+          world,
+          projected,
+          feedforward,
+          vs,
+          snap.tileX,
+          snap.tileY,
+          paused,
+        );
       } else if (snap.tool === 'chamber') {
-        tryOpenChamberMenu(world, vs, snap.downX, snap.downY, snap.tileX, snap.tileY);
+        tryOpenChamberMenu(world, projected, vs, snap.downX, snap.downY, snap.tileX, snap.tileY);
       }
     }
     // A tap is a ONE-SHOT command (no re-emit): surface the hint on ANY drop,
@@ -596,7 +641,7 @@ export class GestureArbiter {
     if (!world) return;
     const cam = activeCamera(vs);
     const { tileX, tileY } = screenToTileZoom(ev.x, ev.y, cam);
-    tryOpenChamberMenu(world, vs, ev.x, ev.y, tileX, tileY);
+    tryOpenChamberMenu(world, this.deps.getProjectedWorld(), vs, ev.x, ev.y, tileX, tileY);
   }
 }
 

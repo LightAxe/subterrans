@@ -42,9 +42,10 @@ import {
   SURFACE_GRID_HEIGHT,
 } from '../sim/constants.js';
 import { getSurfaceComponentMaskReadOnly } from '../sim/surface-features.js';
-import { FP_SHIFT } from '../sim/fixed.js';
+import { FP_ONE } from '../sim/fixed.js';
 import { TILE_SIZE_PX } from '../render/sprites.js';
 import { SPIDER_SPRITE_WIDTH, SPIDER_SPRITE_HEIGHT } from '../render/ant-sprite-layer.js';
+import type { CommandFeedforward } from '../render/command-feedforward.js';
 import { enqueueCommand } from './command-queue.js';
 
 // ---------------------------------------------------------------------------
@@ -83,8 +84,14 @@ export function isEmptySurfaceTile(world: WorldState, tileX: number, tileY: numb
 }
 
 /**
- * PR 4 — true iff `DesignateEntrance` would ACCEPT this tile, so the preview
- * never advertises a target the (now stricter) sim gate will silently drop.
+ * @deprecated Stage 3a (issue #18) superseded this as the entrance gate: the hover + tap now use
+ * `feedforward.outcome` / `willTakeEffect`, which trial-applies the REAL `DesignateEntrance` handler
+ * and therefore also enforces column-uniqueness, the entrance cap, rally collisions, and other-colony
+ * occupancy that this predicate omits. Do NOT reuse this to gate the entrance command — it would
+ * re-open the cue/command divergence Stage 3a closed (ship-review LOW). Retained only as a tested
+ * empty-tile + clearance predicate (no production caller).
+ *
+ * PR 4 — true iff `DesignateEntrance` would ACCEPT this tile by the empty-tile + clearance check.
  * Mirrors `tick.ts`'s gate: the tile is an empty surface tile AND it plus its
  * whole `SURFACE_ROOT_CLEARANCE_RADIUS` neighbourhood are in the single connected
  * walkable component of the frozen terrain (terrain can no longer be carved at
@@ -192,15 +199,17 @@ export function isSpiderHit(
   // Stage 2: project the click to WORLD pixels via the adapter and test there, so
   // the hit box scales correctly under zoom (no manual camera-relative screen math).
   const click = screenToWorld(screenX, screenY, viewState.surfaceCamera);
-  // Spider world-pixel position at tile granularity (matches the prior hit test);
-  // union the current + previous-tick boxes so the trailing interpolated edge still
-  // registers. When prevWorld is null the box is exactly the current sprite.
-  const currWorldX = (world.spider.posX >> FP_SHIFT) * TILE_SIZE_PX;
-  const currWorldY = (world.spider.posY >> FP_SHIFT) * TILE_SIZE_PX;
+  // Spider world-pixel position — EXACT sub-tile world px, matching the interpolated sprite render
+  // in draw-surface (`posX * TILE_SIZE_PX / FP_ONE`). The prior hit test floored to the tile
+  // (`>> FP_SHIFT`), leaving the hit box up to ~1 tile off the visible sprite, so a moving spider was
+  // hard to tap and clicks fell through to the rally handler (Rob UAT). Union the current + previous-
+  // tick boxes so the trailing interpolated edge still registers; null prev = the current box only.
+  const currWorldX = (world.spider.posX * TILE_SIZE_PX) / FP_ONE;
+  const currWorldY = (world.spider.posY * TILE_SIZE_PX) / FP_ONE;
   const prevWorldX =
-    prevWorld?.spider != null ? (prevWorld.spider.posX >> FP_SHIFT) * TILE_SIZE_PX : currWorldX;
+    prevWorld?.spider != null ? (prevWorld.spider.posX * TILE_SIZE_PX) / FP_ONE : currWorldX;
   const prevWorldY =
-    prevWorld?.spider != null ? (prevWorld.spider.posY >> FP_SHIFT) * TILE_SIZE_PX : currWorldY;
+    prevWorld?.spider != null ? (prevWorld.spider.posY * TILE_SIZE_PX) / FP_ONE : currWorldY;
   const halfW = SPIDER_SPRITE_WIDTH / 2;
   const halfH = SPIDER_SPRITE_HEIGHT / 2;
   return (
@@ -420,16 +429,26 @@ export function handleSurfaceCommandTap(
  * irreversible in Stage 1 (entrance undo is a deferred sim-touch). A tap on an
  * invalid target is a no-op (the hover outline already shows red there). Returns
  * true iff the command was dropped at the paused cap.
+ *
+ * The emit is gated on feedforward.willTakeEffect — the SAME trial-apply the hover
+ * cue uses (computeEntranceHover) — so the surface cue and the surface tap can never
+ * disagree (Codex R2-3/4 parity, mirroring handleUndergroundDigTap). isValidEntranceTarget
+ * only checked the empty-tile + clearance neighbourhood, but the sim's DesignateEntrance
+ * handler ALSO rejects on column-uniqueness, the entrance cap, a rally-point collision, and
+ * another colony's entrance on the tile; trial-applying the real handler covers every case,
+ * so a doomed no-op (e.g. a second entrance in an existing column) is dropped here instead of
+ * re-queuing each paused tap and exhausting the 64-command cap.
  */
 export function handleSurfaceDigTap(
   world: WorldState,
+  projected: WorldState,
+  feedforward: CommandFeedforward,
   tileX: number,
   tileY: number,
   isPaused: boolean,
   playerColonyId: ColonyId = PLAYER_COLONY_ID,
 ): boolean {
   if (tileX < 0 || tileY < 0) return false;
-  if (!isValidEntranceTarget(world, tileX, tileY)) return false;
   const cmd: DesignateEntranceCommand = {
     type: 'DesignateEntrance',
     colonyId: playerColonyId,
@@ -437,5 +456,10 @@ export function handleSurfaceDigTap(
     surfaceTileY: tileY,
     issuedAtTick: world.tick,
   };
+  // Gate on the PROJECTED world (the live queue folded), not the committed one (Codex): while
+  // paused, an already-queued DesignateEntrance leaves the committed tile empty, so a repeat tap
+  // would re-queue a duplicate the sim rejects — paused spam can exhaust the 64-command cap. The
+  // command still enqueues onto the live `world`. Unpaused, projected === world (unchanged).
+  if (!feedforward.willTakeEffect(projected, cmd)) return false;
   return !enqueueCommand(world, cmd, isPaused);
 }
