@@ -42,7 +42,7 @@ import {
   SURFACE_GRID_HEIGHT,
 } from '../sim/constants.js';
 import { getSurfaceComponentMaskReadOnly } from '../sim/surface-features.js';
-import { FP_SHIFT } from '../sim/fixed.js';
+import { FP_ONE } from '../sim/fixed.js';
 import { TILE_SIZE_PX } from '../render/sprites.js';
 import { SPIDER_SPRITE_WIDTH, SPIDER_SPRITE_HEIGHT } from '../render/ant-sprite-layer.js';
 import type { CommandFeedforward } from '../render/command-feedforward.js';
@@ -199,15 +199,17 @@ export function isSpiderHit(
   // Stage 2: project the click to WORLD pixels via the adapter and test there, so
   // the hit box scales correctly under zoom (no manual camera-relative screen math).
   const click = screenToWorld(screenX, screenY, viewState.surfaceCamera);
-  // Spider world-pixel position at tile granularity (matches the prior hit test);
-  // union the current + previous-tick boxes so the trailing interpolated edge still
-  // registers. When prevWorld is null the box is exactly the current sprite.
-  const currWorldX = (world.spider.posX >> FP_SHIFT) * TILE_SIZE_PX;
-  const currWorldY = (world.spider.posY >> FP_SHIFT) * TILE_SIZE_PX;
+  // Spider world-pixel position — EXACT sub-tile world px, matching the interpolated sprite render
+  // in draw-surface (`posX * TILE_SIZE_PX / FP_ONE`). The prior hit test floored to the tile
+  // (`>> FP_SHIFT`), leaving the hit box up to ~1 tile off the visible sprite, so a moving spider was
+  // hard to tap and clicks fell through to the rally handler (Rob UAT). Union the current + previous-
+  // tick boxes so the trailing interpolated edge still registers; null prev = the current box only.
+  const currWorldX = (world.spider.posX * TILE_SIZE_PX) / FP_ONE;
+  const currWorldY = (world.spider.posY * TILE_SIZE_PX) / FP_ONE;
   const prevWorldX =
-    prevWorld?.spider != null ? (prevWorld.spider.posX >> FP_SHIFT) * TILE_SIZE_PX : currWorldX;
+    prevWorld?.spider != null ? (prevWorld.spider.posX * TILE_SIZE_PX) / FP_ONE : currWorldX;
   const prevWorldY =
-    prevWorld?.spider != null ? (prevWorld.spider.posY >> FP_SHIFT) * TILE_SIZE_PX : currWorldY;
+    prevWorld?.spider != null ? (prevWorld.spider.posY * TILE_SIZE_PX) / FP_ONE : currWorldY;
   const halfW = SPIDER_SPRITE_WIDTH / 2;
   const halfH = SPIDER_SPRITE_HEIGHT / 2;
   return (

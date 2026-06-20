@@ -221,6 +221,21 @@ describe('isSpiderHit', () => {
     const world = makeWorld({ spider: null });
     expect(isSpiderHit(world, vs, 100, 100, null)).toBe(false);
   });
+  it('hit box tracks the EXACT sub-tile position, not the floored tile (Rob UAT)', () => {
+    const vs = makeViewState('surface', 64, 64);
+    // Spider half a tile past tile 64 — the sprite renders centered at 64.5 * TILE_SIZE_PX.
+    const world = makeWorld({
+      spider: {
+        posX: Math.round(64.5 * FP_ONE),
+        posY: Math.round(64 * FP_ONE),
+      } as unknown as WorldState['spider'],
+    });
+    // A click visually ON the spider but one tile past where the OLD tile-floored hit box ended
+    // (it anchored at floor(64.5)=64). The fix anchors at the exact 64.5, so this now registers.
+    const clickWorldX = 64.5 * TILE_SIZE_PX + TILE_SIZE_PX;
+    const { screenX, screenY } = worldToScreen(clickWorldX, 64 * TILE_SIZE_PX, vs.surfaceCamera);
+    expect(isSpiderHit(world, vs, screenX, screenY, null)).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
