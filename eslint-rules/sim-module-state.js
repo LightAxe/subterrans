@@ -30,6 +30,10 @@
 //     not matched; bare `new Array()`/`new Map()`/… are.
 //   - declarations inside a TS `namespace`/`module` block (parent `TSModuleBlock`) —
 //     `src/sim` is namespace-free by convention (ES modules), so this is a non-goal.
+//   - destructuring binds (`const [BUF] = [new Int32Array()]`, `const { m } = {...}`) —
+//     the pattern's RHS is not inspected (skipped so the common `const [a, b] = [1, 2]`
+//     form doesn't false-positive); rare at module scope.
+//   - non-null assertions (`new Map()!`) — `TSNonNullExpression` is not unwrapped.
 
 /** `new`-expression callees that produce a mutable collection. */
 const COLLECTION_CONSTRUCTORS = new Set([
@@ -164,6 +168,10 @@ export default {
 
         for (const decl of node.declarations) {
           if (!decl.init) continue;
+          // Destructuring binds the initializer's elements into individual locals; the
+          // array/object literal on the right is consumed, not retained as module state.
+          // Skip these (the `[...] as const` advice is also meaningless for a pattern).
+          if (decl.id.type === 'ArrayPattern' || decl.id.type === 'ObjectPattern') continue;
           const inner = unwrapAssertions(decl.init);
           if (!inner) continue;
 

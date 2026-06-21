@@ -65,6 +65,8 @@ const ALLOWED: ReadonlyArray<readonly [string, string]> = [
   ['non-collection ctor `.exec()` chain', "const R = new RegExp('x').exec('y');"],
   ['function-local array', 'function f() { const t: number[] = []; return t; }'],
   ['function-local let', 'function f() { let t = 0; return t; }'],
+  ['array destructuring (literal consumed into locals)', 'const [a, b] = [1, 2];'],
+  ['object destructuring (literal consumed into locals)', 'const { a } = { a: 1 };'],
 ];
 
 describe('subterrans/sim-module-state', () => {
