@@ -8,7 +8,7 @@
 // at the declaration site (see code/AGENTS.md → Review guidelines → Determinism).
 //
 // WHAT IT FLAGS (module scope only — `Program` or `export` directly under `Program`):
-//   - any `let` binding (reassignable — incl. scalars: the worst cross-tick footgun);
+//   - any `let` or `var` binding (reassignable — incl. scalars: the worst cross-tick footgun);
 //   - any `const` whose initializer, AFTER unwrapping type assertions / `satisfies`
 //     (and trailing method calls), is an array literal, or `new <collection>()` for a
 //     known mutable-collection ctor — incl. chained forms like `new Int32Array(n).fill(-1)`.
@@ -146,7 +146,7 @@ export default {
     schema: [],
     messages: {
       mutableLet:
-        'Module-level `let` in src/sim is reassignable cross-tick state. If immutable, use `const … as const`; otherwise add `// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch:/sim-cache:/sim-memo: <why it is reset/safe>`.',
+        'Module-level `let`/`var` in src/sim is reassignable cross-tick state. If immutable, use `const … as const`; otherwise add `// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch:/sim-cache:/sim-memo: <why it is reset/safe>`.',
       mutableArray:
         'Module-level mutable array literal in src/sim. If it is an immutable lookup, wrap it as `[...] as const`; otherwise add `// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch:/sim-cache:/sim-memo: <why>`. (A `readonly`/`ReadonlyArray<>` annotation, `as number[]`, or a chained `as const` does not make it immutable.)',
       mutableCollection:
@@ -158,13 +158,14 @@ export default {
       VariableDeclaration(node) {
         if (!isModuleScope(node)) return;
 
-        if (node.kind === 'let') {
+        if (node.kind === 'let' || node.kind === 'var') {
+          // `var` is reassignable module state too (and hoisted) — treat it like `let`.
           for (const decl of node.declarations) {
             context.report({ node: decl, messageId: 'mutableLet' });
           }
           return;
         }
-        if (node.kind !== 'const') return; // ignore `var` / `using`
+        if (node.kind !== 'const') return; // ignore `using` / `await using`
 
         for (const decl of node.declarations) {
           if (!decl.init) continue;

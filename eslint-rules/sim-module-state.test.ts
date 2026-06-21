@@ -40,6 +40,8 @@ const FLAGGED: ReadonlyArray<readonly [string, string]> = [
   ['let scalar', 'let X = 0;'],
   ['exported let', 'export let Y = 0;'],
   ['let bound to typed array', 'let B = new Int32Array(0);'],
+  ['module-scope var scalar', 'var X = 0;'],
+  ['module-scope var typed array', 'var B = new Int32Array(8);'],
   [
     'array `as const as number[]` (outer assertion mutable)',
     'const A = [1, 2, 3] as const as number[];',
