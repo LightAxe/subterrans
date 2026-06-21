@@ -34,8 +34,11 @@ export interface PendingChamber {
 // ChamberType values: 0 = Queen, 1 = Nursery, 2 = FoodStorage
 // ---------------------------------------------------------------------------
 
-export const CHAMBER_DIMENSIONS: Record<ChamberType, { width: number; height: number }> = {
+// `as const satisfies` keeps the Record<ChamberType, …> type-check while making the
+// object genuinely immutable (issue #214 — it is an immutable structural constant,
+// not a balance knob and not mutable config).
+export const CHAMBER_DIMENSIONS = {
   [0]: { width: 5, height: 3 }, // Queen:       5×3
   [1]: { width: 4, height: 3 }, // Nursery:     4×3
   [2]: { width: 4, height: 3 }, // FoodStorage: 4×3
-};
+} as const satisfies Record<ChamberType, { width: number; height: number }>;

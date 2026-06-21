@@ -31,7 +31,7 @@
     "lint:fix": "eslint src/ --fix",
     "lint:types": "eslint --config eslint.typecheck.config.ts src/",
     "format": "prettier --write .",
-    "format:check": "prettier --check src/",
+    "format:check": "prettier --check src/ eslint-rules/",
     "verify": "npm run format:check && npm run lint && npm run typecheck && npm run lint:types && bash scripts/check-sim-boundary.sh && bash scripts/check-asset-paths.sh && npm run test"
   },
   "dependencies": {

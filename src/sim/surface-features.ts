@@ -184,7 +184,7 @@ const SURFACE_FEATURES: ReadonlyArray<SurfaceFeatureRegistryEntry> = [
     variantCount: 3, // dense / sparse / tilted
     movement: SurfaceMovementEffect.SoftCost,
   },
-];
+] as const;
 
 // Boot-time integrity check: the registry must be self-consistent or the
 // selector will silently misbehave. Surface bugs at module-load time so
@@ -218,7 +218,9 @@ for (let i = 0; i < SURFACE_FEATURES.length; i++) {
 // Cross-entry maximum span — bounds the anchor-candidate scan window. A tile
 // (X, Y) can be covered by any anchor in the (MAX_W × MAX_H) window above-
 // left of it; nothing further away can reach.
+// eslint-disable-next-line subterrans/sim-module-state -- sim-memo: max feature width, computed once from SURFACE_FEATURES at module load; never mutated per tick
 let _maxW = 0;
+// eslint-disable-next-line subterrans/sim-module-state -- sim-memo: max feature height, computed once from SURFACE_FEATURES at module load; never mutated per tick
 let _maxH = 0;
 for (const e of SURFACE_FEATURES) {
   if (e.footprintTilesWide > _maxW) _maxW = e.footprintTilesWide;

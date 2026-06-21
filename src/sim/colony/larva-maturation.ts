@@ -64,6 +64,7 @@ import { MAX_ENTITIES } from '../constants.js';
 // never serialized, deterministic within any contiguous run or replay.
 // ---------------------------------------------------------------------------
 
+// sim-scratch: per-tick nurse bookkeeping, stamp-invalidated each pass; never serialized (object — not lint-enforced).
 const nurseScratch = {
   /** Per-nurse stamp: nurseScratch.usedStamp[nurseId] === currentStamp means used this tick. */
   usedStamp: new Uint32Array(MAX_ENTITIES),

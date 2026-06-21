@@ -57,7 +57,9 @@ const _meanderRetargetCheck: 128 = SPIDER_MEANDER_RETARGET_TICKS; // fails to co
 // Module-level scratch for findHuntTarget — avoids per-call Map allocation.
 // SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT = 128 * 128 = 16384 tiles.
 // Cleared between calls via HUNT_DIRTY list. Same precedent as tick.ts flow-field buffers.
+// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: cleared between findHuntTarget calls via HUNT_DIRTY; never read before write
 const HUNT_TILE_COUNTS = new Uint16Array(SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT);
+// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: dirty-index list, reset each findHuntTarget call
 const HUNT_DIRTY: number[] = [];
 
 // Precomputed suffix for surface DangerTrail pheromone grid key lookup.
@@ -65,6 +67,7 @@ const HUNT_DIRTY: number[] = [];
 const SURFACE_DANGER_SUFFIX = `:${PheromoneType.DangerTrail}:surface`;
 
 // Module-level scratch for findNearestEntrance return value — avoids per-Rampaging-tick allocation.
+// sim-scratch: overwritten on every findNearestEntrance call (object — not lint-enforced).
 const NEAREST_ENTRANCE_SCRATCH: { x: number; y: number; colonyId: number } = {
   x: -1,
   y: -1,

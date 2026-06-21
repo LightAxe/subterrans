@@ -54,8 +54,11 @@ import { isInCohort } from './ai-state.js';
 //   COMBAT_KEY_BY_SLOT — tileKey indexed by ant slot (written for live slots
 //                       only; read by the sort comparator and run-walk).
 //   COMBAT_CONTESTED  — 1 for ants on a multi-colony tile this tick, else 0.
+// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: reset (length=0) at the top of each combat-resolution tick
 const COMBAT_LIVE_IDX: number[] = [];
+// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: lazily grown per tick; written for live slots before any read
 let COMBAT_KEY_BY_SLOT = new Int32Array(0);
+// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: lazily grown per tick; zeroed before use
 let COMBAT_CONTESTED = new Uint8Array(0);
 
 /** Sort comparator: tileKey ascending, then ant slot ascending (deterministic). */
@@ -519,6 +522,7 @@ export function killAnt(
 
 // Module-level scratch buffer: reused each call to resolveSpiderCombatOnTile to
 // avoid per-tick allocation in the combat hot path (AGENTS.md no-alloc rule).
+// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: reset (length=0) at the top of each resolveSpiderCombatOnTile call
 const SPIDER_TILE_SCRATCH: number[] = [];
 
 /**
