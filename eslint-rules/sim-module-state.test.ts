@@ -46,6 +46,9 @@ const FLAGGED: ReadonlyArray<readonly [string, string]> = [
   ],
   ['array `as unknown as const`', 'const A = [1, 2, 3] as unknown as const;'],
   ['array `as number[] as const`', 'const A = [1, 2, 3] as number[] as const;'],
+  ['typed array via `.fill()` chain', 'const D = new Int32Array(8).fill(-1);'],
+  ['Array() via `.fill()` chain', 'const A = new Array(3).fill(0);'],
+  ['new Map().set() chain', 'const M = new Map().set(1, 2);'],
 ];
 
 // Every row that MUST NOT be flagged (exemptions + documented gaps).
@@ -58,6 +61,8 @@ const ALLOWED: ReadonlyArray<readonly [string, string]> = [
   ['plain object (documented gap)', 'const O = { a: 1 };'],
   ['namespace-scoped let (documented gap)', 'namespace N { let X = 0; }'],
   ['qualified ctor new globalThis.Array() (documented gap)', 'const M = new globalThis.Array();'],
+  ['factory call (documented gap)', 'const X = makeBuffer();'],
+  ['non-collection ctor `.exec()` chain', "const R = new RegExp('x').exec('y');"],
   ['function-local array', 'function f() { const t: number[] = []; return t; }'],
   ['function-local let', 'function f() { let t = 0; return t; }'],
 ];

@@ -9,8 +9,9 @@
 //
 // WHAT IT FLAGS (module scope only — `Program` or `export` directly under `Program`):
 //   - any `let` binding (reassignable — incl. scalars: the worst cross-tick footgun);
-//   - any `const` whose initializer, AFTER unwrapping type assertions / `satisfies`,
-//     is an array literal, or `new <collection>()` for a known mutable-collection ctor.
+//   - any `const` whose initializer, AFTER unwrapping type assertions / `satisfies`
+//     (and trailing method calls), is an array literal, or `new <collection>()` for a
+//     known mutable-collection ctor — incl. chained forms like `new Int32Array(n).fill(-1)`.
 //
 // ESCAPES (each makes intent explicit):
 //   - immutable lookup array  → wrap as `[...] as const` (the ONLY exemption, and only
@@ -77,6 +78,49 @@ function unwrapAssertions(node) {
   return cur;
 }
 
+/**
+ * Strip type assertions AND trailing method-call chains to reach the base expression,
+ * so `new Int32Array(n).fill(-1)` / `(new Map() as T).set(...)` resolve to their
+ * `new <collection>()` root. Returns the innermost wrapped expression.
+ */
+function unwrapToBase(node) {
+  let cur = node;
+  let changed = true;
+  while (cur && changed) {
+    changed = false;
+    while (
+      cur &&
+      (cur.type === 'TSAsExpression' ||
+        cur.type === 'TSSatisfiesExpression' ||
+        cur.type === 'TSTypeAssertion')
+    ) {
+      cur = cur.expression;
+      changed = true;
+    }
+    if (
+      cur &&
+      cur.type === 'CallExpression' &&
+      cur.callee &&
+      cur.callee.type === 'MemberExpression'
+    ) {
+      cur = cur.callee.object;
+      changed = true;
+    }
+  }
+  return cur;
+}
+
+/** True for a `new <collection>()` expression (callee in the allowlist). */
+function isCollectionConstructor(node) {
+  return (
+    node &&
+    node.type === 'NewExpression' &&
+    node.callee &&
+    node.callee.type === 'Identifier' &&
+    COLLECTION_CONSTRUCTORS.has(node.callee.name)
+  );
+}
+
 /** True when the VariableDeclaration sits at module scope (plain or exported). */
 function isModuleScope(declaration) {
   const parent = declaration.parent;
@@ -134,16 +178,18 @@ export default {
               decl.init.expression.type === 'ArrayExpression';
             if (exemptAsConst) continue;
             context.report({ node: decl, messageId: 'mutableArray' });
-          } else if (
-            inner.type === 'NewExpression' &&
-            inner.callee &&
-            inner.callee.type === 'Identifier' &&
-            COLLECTION_CONSTRUCTORS.has(inner.callee.name)
-          ) {
+            continue;
+          }
+
+          // Collection constructor — directly, behind type assertions, or behind a
+          // method-call chain such as `new Int32Array(n).fill(-1)` (a common typed-array
+          // scratch idiom). Peel the chain to its constructor root before checking.
+          const base = unwrapToBase(decl.init);
+          if (isCollectionConstructor(base)) {
             context.report({
               node: decl,
               messageId: 'mutableCollection',
-              data: { ctor: inner.callee.name },
+              data: { ctor: base.callee.name },
             });
           }
         }
