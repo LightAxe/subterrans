@@ -49,6 +49,10 @@ export type PauseMenuItemId =
   | 'debug-snapshot'
   | 'back'
   | 'pheromone-toggle'
+  // Stage 3b (issue #18) — Settings-page rows: toggle the static hint-strip
+  // legend, and reset the one-time first-use navigation hints.
+  | 'control-hints-toggle'
+  | 'reset-first-use-hints'
   | 'speed-cycle'
   // Issue #122 / ADR 0013 — "Quit & feedback" entry. Only emitted when the
   // playtrace feature is enabled (caller passes ctx.quitAndSurveyEnabled);
@@ -85,6 +89,11 @@ export interface PauseMenuRenderContext {
    *  returning the default, so reading the label from persisted state makes
    *  the toggle look broken. The in-mem flag is the authoritative truth. */
   currentPheromoneOverlay: boolean;
+  /** Stage 3b (issue #18) — current hint-strip legend visibility, for the
+   *  "Control hints: ON/OFF" row label. Sourced from the in-memory hintStripState
+   *  singleton by the caller (same authoritative-in-mem rationale as the
+   *  pheromone toggle), NOT from loadSettings(). */
+  currentHintStripVisible: boolean;
   /** Current speedMultiplier (1 | 2 | 4). The Settings page renders this in
    *  the "Speed: N×" cycle row. Source of truth is GameScene's live field —
    *  the menu reads via the onSpeedMultiplier callback at render time and
@@ -155,6 +164,16 @@ export function pauseMenuItems(page: PauseMenuPage, ctx: PauseMenuRenderContext)
     {
       id: 'pheromone-toggle',
       label: `Pheromone trails: ${ctx.currentPheromoneOverlay ? 'ON' : 'OFF'}`,
+      enabled: true,
+    },
+    {
+      id: 'control-hints-toggle',
+      label: `Control hints: ${ctx.currentHintStripVisible ? 'ON' : 'OFF'}`,
+      enabled: true,
+    },
+    {
+      id: 'reset-first-use-hints',
+      label: 'Reset first-use hints',
       enabled: true,
     },
     {

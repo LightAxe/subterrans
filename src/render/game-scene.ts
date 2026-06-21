@@ -172,7 +172,20 @@ import { canAcceptWorldHotkey, type HotkeyGamePhase } from '../input/hotkey-poli
 import { contextMenuState, hideContextMenu } from './context-menu-state.js';
 import { antActivityPanelState } from './ant-activity-panel-state.js';
 import { buildPlaytraceSummary, type GameOutcomeLabel } from './summary-builder.js';
-import { captionForEvent, checkAndTrigger, resetCaptions } from './onboarding-captions.js';
+import {
+  captionForEvent,
+  checkAndTrigger,
+  oneShotKeyForEvent,
+  resetCaptions,
+  type CaptionKey,
+} from './onboarding-captions.js';
+// Stage 3b controls rework (issue #18, #3) — first-use navigation hints.
+import {
+  triggerReactiveHint,
+  notifyFirstWorldInput,
+  resetFirstUseSession,
+  type HintFirstUseId,
+} from './first-use-hints.js';
 import {
   triggerQueenDamagePulse,
   inferFlashDirection,
@@ -232,8 +245,16 @@ interface UIScenePhase9 {
     onSelect: (d: 'Easy' | 'Normal' | 'Hard') => void;
   }): void;
   hideDifficultySelectOverlay(): void;
-  // S6 — first-occurrence caption overlay (light onboarding).
-  showCaption(text: string, screenX: number, screenY: number): void;
+  // S6 — first-occurrence caption overlay (light onboarding). Optional captionKey
+  // (Stage 3b #3) lets a dropped one-shot caption un-mark its trigger so it re-fires.
+  showCaption(text: string, screenX: number, screenY: number, captionKey?: CaptionKey): void;
+  // Stage 3b (issue #18, #3) — display a one-time first-use navigation hint via
+  // the shared caption queue. UIScene satisfies first-use-hints' FirstUseHintSink.
+  showFirstUseHint(id: HintFirstUseId, text: string): void;
+  // Stage 3b (ship-review R1#1/#3) — clear the caption queue + any in-flight
+  // caption on round restart (UIScene survives restartGame, so its caption state
+  // must be reset explicitly, like resetCaptions/resetFirstUseSession).
+  resetCaptionsForRound(): void;
   // Stage 2 controls rework (issue #18) — the invasion screen-edge flash renders
   // on UIScene (non-zooming camera), NOT GameScene (zoom-driven main camera), so
   // setScrollFactor(0)'s scroll-but-not-zoom gap can't miscale the edge strips.
@@ -386,6 +407,40 @@ export class GameScene extends Phaser.Scene {
     const idx = order.indexOf(this.speedMultiplier);
     const nextIdx = Math.max(0, Math.min(order.length - 1, idx + dir));
     this.setSpeedMultiplier(order[nextIdx]!);
+  }
+
+  /** Live UIScene handle (null before launch / mid-restart). UIScene satisfies
+   *  the first-use-hints sink + the caption/overlay API. */
+  private getUIScene(): UIScenePhase9 | null {
+    return this.scene.get('UIScene') as unknown as UIScenePhase9 | null;
+  }
+
+  /**
+   * Stage 3b (#3): fire a reactive first-use hint on a gesture's EFFECT. The
+   * effect gate (camera moved / mark enqueued / zoom accepted) is enforced at the
+   * call site; first-use-hints enforces show-once.
+   */
+  private firstUseReactive(id: 'pan' | 'zoom' | 'paint'): void {
+    const ui = this.getUIScene();
+    if (ui) triggerReactiveHint(ui, id);
+  }
+
+  /**
+   * Stage 3b (#3): note a world input and evaluate the proactive [Tab] nudge on
+   * the player's FIRST world input of the session. Called AFTER the input is
+   * handled (Codex R4) — from the arbiter (pointer gestures), the wheel handler,
+   * and the Tab key — so a Tab first-input has already set undergroundVisited and
+   * self-suppresses. notifyFirstWorldInput latches to the first call per session.
+   */
+  private noteWorldInput(): void {
+    const ui = this.getUIScene();
+    if (ui === null) return;
+    const entranceCount = this.world?.colonies[PLAYER_COLONY_ID]?.entrances.length ?? 0;
+    notifyFirstWorldInput(ui, {
+      activeView: this.viewState.activeView,
+      undergroundVisited: this.viewState.undergroundVisited,
+      entranceCount,
+    });
   }
 
   /** DEV/E2E-only render-order trace (issue #193). The draw section of update()
@@ -581,7 +636,13 @@ export class GameScene extends Phaser.Scene {
         // every event and slamming to the zoom limit (Codex P1). One ~WHEEL_NOTCH_PX notch
         // = one ×WHEEL_ZOOM_STEP; dy<0 (scroll up) zooms in.
         const factor = Math.pow(WHEEL_ZOOM_STEP, -dy / WHEEL_NOTCH_PX);
+        // Stage 3b (#3): fire the "Scroll to zoom" hint only on an ACCEPTED zoom
+        // (targetZoom actually changed — not a clamped no-op at the zoom limit).
+        const beforeZoom = cam.targetZoom;
         this.cameraController.beginZoom(cam, factor, pointer.x, pointer.y);
+        if (cam.targetZoom !== beforeZoom) this.firstUseReactive('zoom');
+        // A wheel is a world input → evaluate the proactive [Tab] nudge.
+        this.noteWorldInput();
       },
     );
 
@@ -799,6 +860,12 @@ export class GameScene extends Phaser.Scene {
         const ui = this.scene.get('UIScene') as unknown as UIScenePhase9 | null;
         ui?.flashPausedQueueFull?.(paused);
       },
+      // Stage 3b (#3) — first-use teaching seams. The arbiter fires these on the
+      // EFFECT (camera moved / ≥1 mark enqueued / a world gesture began); the
+      // teaching policy (show-once, queue) lives entirely on the UIScene side.
+      onPanEffect: () => this.firstUseReactive('pan'),
+      onPaintEffect: () => this.firstUseReactive('paint'),
+      onWorldInput: () => this.noteWorldInput(),
     });
 
     // Entrance hover (Dig + surface): track the POINTER screen coords so the
@@ -938,6 +1005,15 @@ export class GameScene extends Phaser.Scene {
     this.contestedGlowFrames.clear();
     this.undergroundGlowFrames.clear();
     resetCaptions();
+    // Stage 3b (#3): reset the per-session first-world-input latch so the
+    // proactive [Tab] nudge can re-evaluate on a fresh round (the cross-session
+    // shown-flags persist in settings and are NOT cleared here).
+    resetFirstUseSession();
+    // Stage 3b (ship-review R1#1/#3): UIScene survives round restarts, so clear
+    // its caption queue + any in-flight caption here too — otherwise a prior
+    // round's queued caption can surface (and falsely mark a hint shown) in the
+    // new game. No-op before UIScene exists (first boot).
+    this.getUIScene()?.resetCaptionsForRound();
     // Issue #122 — rotate the session UUID so each (re)start gets its own
     // telemetry row server-side.
     //
@@ -1005,10 +1081,16 @@ export class GameScene extends Phaser.Scene {
         } else {
           uiScene?.triggerScreenEdgeFlash('right');
         }
-        // Caption #7: AI invasion (one-shot, via the event→caption policy).
+        // Caption #7: AI invasion (one-shot, via the event→caption policy). Pass
+        // the one-shot key so a dropped caption un-marks and re-fires.
         const captionText = captionForEvent(ev.type);
         if (captionText && uiScene) {
-          uiScene.showCaption(captionText, CANVAS_W / 2, 60);
+          uiScene.showCaption(
+            captionText,
+            CANVAS_W / 2,
+            60,
+            oneShotKeyForEvent(ev.type) ?? undefined,
+          );
         }
       }
 
@@ -1016,7 +1098,7 @@ export class GameScene extends Phaser.Scene {
         // Spider rampage caption: fires on EVERY rampage, not just the first.
         // The recurring-vs-one-shot decision lives in captionForEvent; the
         // spider is surface-only now (#146/#176/#177) so the copy no longer
-        // mentions tunnels.
+        // mentions tunnels. No one-shot key — recurring captions never dedup.
         const captionText = captionForEvent(ev.type);
         if (captionText && uiScene) {
           uiScene.showCaption(captionText, CANVAS_W / 2, 60);
@@ -1032,7 +1114,7 @@ export class GameScene extends Phaser.Scene {
         const captionText = checkAndTrigger('aiInvading');
         if (captionText) {
           uiScene?.triggerScreenEdgeFlash('right');
-          if (uiScene) uiScene.showCaption(captionText, CANVAS_W / 2, 60);
+          if (uiScene) uiScene.showCaption(captionText, CANVAS_W / 2, 60, 'aiInvading');
         }
       }
     }
@@ -1065,7 +1147,7 @@ export class GameScene extends Phaser.Scene {
       // Caption #9: first queen damage.
       const captionText = checkAndTrigger('queenDamage');
       if (captionText && uiScene) {
-        uiScene.showCaption(captionText, CANVAS_W / 2, CANVAS_H / 2 - 40);
+        uiScene.showCaption(captionText, CANVAS_W / 2, CANVAS_H / 2 - 40, 'queenDamage');
       }
     }
     this.prevQueenCombinedHp = combinedHp;
@@ -1083,7 +1165,7 @@ export class GameScene extends Phaser.Scene {
       // Caption #10: queen starvation onset.
       const captionText = checkAndTrigger('queenStarvation');
       if (captionText && uiScene) {
-        uiScene.showCaption(captionText, CANVAS_W / 2, CANVAS_H / 2 - 40);
+        uiScene.showCaption(captionText, CANVAS_W / 2, CANVAS_H / 2 - 40, 'queenStarvation');
       }
     }
 
@@ -1094,13 +1176,13 @@ export class GameScene extends Phaser.Scene {
     if (spiderState === 'Hunting' || spiderState === 'Striking') {
       const captionText = checkAndTrigger('spider');
       if (captionText && uiScene) {
-        uiScene.showCaption(captionText, CANVAS_W / 2, 60);
+        uiScene.showCaption(captionText, CANVAS_W / 2, 60, 'spider');
       }
     }
     if (this.world.spiderPriorityColonyId !== null) {
       const captionText = checkAndTrigger('spiderPriority');
       if (captionText && uiScene) {
-        uiScene.showCaption(captionText, CANVAS_W / 2, 60);
+        uiScene.showCaption(captionText, CANVAS_W / 2, 60, 'spiderPriority');
       }
     }
   }
@@ -1257,7 +1339,7 @@ export class GameScene extends Phaser.Scene {
           if ('colonyId' in cmd && cmd.colonyId !== PLAYER_COLONY_ID) continue;
           if (cmd.type === 'MarkDigTile') {
             const text = checkAndTrigger('dig');
-            if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80);
+            if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80, 'dig');
           } else if (cmd.type === 'PlaceChamber') {
             const chamberTypeLabel: Record<number, string> = {
               [ChamberType.Queen]: 'Queen',
@@ -1267,13 +1349,13 @@ export class GameScene extends Phaser.Scene {
             const chamberTypeName =
               chamberTypeLabel[cmd.chamberType] ?? `chamber type ${cmd.chamberType}`;
             const text = checkAndTrigger('chamber', chamberTypeName);
-            if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80);
+            if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80, 'chamber');
           } else if (cmd.type === 'MarkFoodPile') {
             const text = checkAndTrigger('foodMark');
-            if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80);
+            if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80, 'foodMark');
           } else if (cmd.type === 'SetRallyPoint') {
             const text = checkAndTrigger('rally');
-            if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80);
+            if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80, 'rally');
           }
         }
       },
@@ -1829,6 +1911,9 @@ export class GameScene extends Phaser.Scene {
     // it (Codex R4-4 — previously Tab polled even while Paused).
     if (Phaser.Input.Keyboard.JustDown(this.tabKey) && this.canAcceptWorldHotkey()) {
       toggleView(this.viewState);
+      // Stage 3b (#3): Tab is a world input. Evaluate the [Tab] nudge AFTER the
+      // toggle so a Tab first-input has set undergroundVisited and self-suppresses.
+      this.noteWorldInput();
     }
 
     // Stage 1: detect tool/view/colony transitions (incl. keyboard-driven ones

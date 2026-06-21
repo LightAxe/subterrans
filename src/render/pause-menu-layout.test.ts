@@ -17,6 +17,7 @@ import {
 const ctx: PauseMenuRenderContext = {
   saveLoadEnabled: true,
   currentPheromoneOverlay: true,
+  currentHintStripVisible: true,
   currentSpeedMultiplier: 1,
   quitAndSurveyEnabled: false,
 };
@@ -93,9 +94,34 @@ describe('pauseMenuItems — main page', () => {
 });
 
 describe('pauseMenuItems — settings page', () => {
-  it('returns the pheromone toggle, speed cycle, and a back button', () => {
+  it('returns the pheromone, control-hints, reset-hints, speed, and back rows', () => {
     const items = pauseMenuItems('settings', ctx);
-    expect(items.map((i) => i.id)).toEqual(['pheromone-toggle', 'speed-cycle', 'back']);
+    expect(items.map((i) => i.id)).toEqual([
+      'pheromone-toggle',
+      'control-hints-toggle',
+      'reset-first-use-hints',
+      'speed-cycle',
+      'back',
+    ]);
+  });
+
+  it('control-hints toggle label reflects ON / OFF (Stage 3b)', () => {
+    expect(
+      pauseMenuItems('settings', { ...ctx, currentHintStripVisible: true }).find(
+        (i) => i.id === 'control-hints-toggle',
+      )!.label,
+    ).toContain('ON');
+    expect(
+      pauseMenuItems('settings', { ...ctx, currentHintStripVisible: false }).find(
+        (i) => i.id === 'control-hints-toggle',
+      )!.label,
+    ).toContain('OFF');
+  });
+
+  it('reset-first-use-hints row is present and enabled (Stage 3b)', () => {
+    expect(
+      pauseMenuItems('settings', ctx).find((i) => i.id === 'reset-first-use-hints')!.enabled,
+    ).toBe(true);
   });
 
   it('pheromone toggle label reflects the current ON state', () => {

@@ -26,6 +26,7 @@
 import type * as Phaser from 'phaser';
 import { HUD } from '../render/sprites.js';
 import { antActivityPanelState } from '../render/ant-activity-panel-state.js';
+import { hintStripState } from '../render/hint-strip-state.js';
 import { type ViewState, worldPxDimensions } from '../render/camera.js';
 import {
   type CameraView,
@@ -102,10 +103,16 @@ export function isPointerOverHUD(px: number, py: number, viewState?: ViewState):
     HUD.TRIANGLE,
     HUD.SPEED,
     HUD.TOOLS,
-    HUD.HINTS,
     HUD.MINIMAP,
     HUD.VIEW_TOGGLE,
   ];
+  // Stage 3b (issue #18, Codex R1#2) — the hint strip masks world input ONLY
+  // while its legend is visible. When the player hides the legend (settings
+  // toggle → hintStripState.visible=false), drop HUD.HINTS so the freed band is
+  // not a dead input zone. Default visible → the band stays masked as before.
+  if (hintStripState.visible) {
+    zones.push(HUD.HINTS);
+  }
   // Issue #14 — colony toggle is rendered ONLY on the underground view. Mask the
   // click zone only when it's actually visible. Callers without a ViewState
   // (legacy/test) pass undefined and the toggle stays unmasked.

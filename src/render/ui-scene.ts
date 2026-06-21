@@ -208,6 +208,28 @@ import {
   requestHideAntActivityPanel,
   applyPendingAntActivityPanelHide,
 } from './ant-activity-panel-state.js';
+// Stage 3b controls rework (issue #18) — navigation-teaching surfaces.
+import {
+  admitCaption,
+  completeCaption,
+  clearPendingFirstUse,
+  createCaptionQueueState,
+  type CaptionQueueState,
+  type CaptionRequest,
+} from './caption-queue.js';
+import { untrigger, type CaptionKey } from './onboarding-captions.js';
+import {
+  markFirstUseHintShown,
+  resetFirstUseHints,
+  type HintFirstUseId,
+} from './first-use-hints.js';
+import { hintStripState } from './hint-strip-state.js';
+import {
+  tooltipTargetAt,
+  tooltipTextFor,
+  sameTooltipTarget,
+  type TooltipTarget,
+} from './tooltips.js';
 import {
   pauseMenuItems,
   pageTitle,
@@ -266,6 +288,11 @@ const CAPTION_TOTAL_MS = 1500;
 
 /** Stage 1 controls rework — how long the "paused queue full" hint stays up. */
 const PAUSED_QUEUE_FULL_HINT_MS = 1500;
+
+/** Stage 3b (#5) — hover dwell before a tooltip appears, and the mouse-out grace
+ *  before it disappears. UAT-tunable (Rob). */
+const TOOLTIP_SHOW_DELAY_MS = 400;
+const TOOLTIP_HIDE_GRACE_MS = 1500;
 import { loadSettings, saveSettings } from '../platform/settings.js';
 import { hasSave, hasIncompatibleSave, getSaveInfo, deleteSave } from '../platform/save.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
@@ -397,6 +424,27 @@ export class UIScene extends Phaser.Scene {
   // "resume to continue"; running → "try again"). (Fix 3 / Codex P2.)
   private pausedQueueFullUntilMs = 0;
   private pausedQueueFullWasPaused = false;
+  // Stage 3b (issue #18, #3) — the ONE caption queue ALL callers route through
+  // (event captions, onboarding-captions, first-use hints). Pure policy lives in
+  // caption-queue.ts; this holds the live state + the Phaser Text/tween.
+  private captionState: CaptionQueueState = createCaptionQueueState();
+  // The Phaser Text of the caption currently displaying (null when idle). Tracked
+  // so a round restart can destroy an in-flight caption + its tween (UIScene is
+  // NOT relaunched on restart, so captionState would otherwise leak a prior-round
+  // caption — incl. falsely marking a first-use hint shown; ship-review R1#1/#3).
+  private activeCaptionText: Phaser.GameObjects.Text | null = null;
+  // Stage 3b (#5) — tooltip hover state machine. hoverTarget is the widget the
+  // cursor is over (null = none); the show timer fires after a dwell delay, the
+  // hide timer is the mouse-out grace. tooltipText is the live Phaser Text.
+  private hoverTarget: TooltipTarget | null = null;
+  private tooltipShowTimer: Phaser.Time.TimerEvent | null = null;
+  private tooltipHideTimer: Phaser.Time.TimerEvent | null = null;
+  private tooltipText: Phaser.GameObjects.Text | null = null;
+  // Stage 3b (#5) — last view/colony the tooltip state machine saw, so update()
+  // can detect a keyboard- or button-driven view/colony switch (which fires no
+  // pointermove) and cancel a now-stale tooltip. null = not yet sampled.
+  private lastTooltipView: ViewState['activeView'] | null = null;
+  private lastTooltipColonyId: ViewState['activeUndergroundColonyId'] | null = null;
   private gfx!: Phaser.GameObjects.Graphics;
   private antsText!: Phaser.GameObjects.Text;
   private foodText!: Phaser.GameObjects.Text;
@@ -487,6 +535,9 @@ export class UIScene extends Phaser.Scene {
   create() {
     this.gfx = this.add.graphics();
     this.dragState = createSliderDragState();
+    // Stage 3b (#2): seed the in-mem hint-strip visibility from persisted
+    // settings so a returning player's "hide legend" choice is honored on boot.
+    hintStripState.visible = loadSettings().hintStripVisible;
 
     // HUD-02 stats row — three Texts confined to the 200x24 HUD.STATS rect,
     // two-row layout. Row 1: antsText (white, left) + foodText (green, right-
@@ -791,6 +842,12 @@ export class UIScene extends Phaser.Scene {
       // Checked before other HUD zones so a click on the stats row can never
       // fall through to world input regardless of panel state.
       if (this.isInsideRect(pointer.x, pointer.y, HUD.STATS)) {
+        // The panel-open transition bypasses recomputeActiveOverlay (and the ant
+        // panel isn't part of anyOverlayOpen), so a tooltip shown by hovering
+        // STATS would linger over the freshly-opened popup until the next
+        // pointermove. Cancel it here, the one non-pointermove path that opens
+        // the panel.
+        this.cancelTooltip();
         toggleAntActivityPanel();
         return;
       }
@@ -889,15 +946,23 @@ export class UIScene extends Phaser.Scene {
     });
 
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      // Stage 3b (#5): tooltip hover tracking runs every move (it self-guards on
+      // drag / modal / ant-panel). Kept before the slider-drag short-circuit.
+      this.updateTooltipHover(pointer);
       if (!this.dragState.isDragging) return;
       if (!pointer.isDown) return;
       // 1-D slider: only x is consulted; pointer y is ignored within drag.
       this.dragState.targetRatio = screenToSliderRatio(pointer.x);
     });
 
+    // Stage 3b (#5): the cursor leaving the canvas hides any tooltip + cancels a
+    // pending show (Codex R1#14 — a timer must not outlive the hover).
+    this.input.on('gameout', () => this.cancelTooltip());
+
     // Belt-and-suspenders: clear overlay window state on scene shutdown to
     // prevent stale __phase9_ui surviving a scene restart.
     const teardown = () => {
+      this.cancelTooltip(); // Stage 3b (#5): no timer/Text may outlive the scene.
       this.hideGameOverOverlay();
       this.hideSavePromptOverlay();
       this.hideSaveLoadDialogOverlay();
@@ -961,6 +1026,24 @@ export class UIScene extends Phaser.Scene {
     // surface view would be a stale artifact.
     if (contextMenuState.visible && this.viewState.activeView !== 'underground') {
       hideContextMenu();
+    }
+
+    // Stage 3b (#5): cancel a stale tooltip when the view/colony changes without
+    // a pointer event. updateTooltipHover() — the only place that re-runs the
+    // view-dependent hit-test and tooltip copy — is wired to 'pointermove' only,
+    // but a Tab/X keypress or the view/colony-toggle buttons switch the view
+    // (game-scene toggleView/toggleUndergroundColony) with no cursor movement.
+    // Without this, a tooltip already on screen (e.g. the underground-only colony
+    // toggle) lingers over a widget that is no longer drawn. Mirrors the context-
+    // menu auto-dismiss above. The next pointermove rebuilds the correct tooltip.
+    if (
+      this.lastTooltipView !== this.viewState.activeView ||
+      this.lastTooltipColonyId !== this.viewState.activeUndergroundColonyId
+    ) {
+      // Skip the very first sample (null seed) so we don't cancel spuriously.
+      if (this.lastTooltipView !== null) this.cancelTooltip();
+      this.lastTooltipView = this.viewState.activeView;
+      this.lastTooltipColonyId = this.viewState.activeUndergroundColonyId;
     }
 
     const colony = world.colonies[PLAYER_COLONY_ID];
@@ -1244,21 +1327,60 @@ export class UIScene extends Phaser.Scene {
     this.recomputeActiveOverlay();
   }
 
-  // S6 — first-occurrence caption overlay (light onboarding).
-  public showCaption(text: string, screenX: number, screenY: number): void {
-    // Stage 1 controls rework (issue #18, Codex R4-1): captions render centered
-    // and can overlap the HUD.HINTS strip (e.g. the command captions at
-    // y≈CANVAS_H-80). When the caption's vertical band overlaps the strip, yield
-    // (hide) the strip for the caption's lifetime so the two don't collide.
-    // Caption height is ~22px (14px font + padding); HINTS is y..y+h.
-    const capTop = screenY - 14;
-    const capBottom = screenY + 14;
-    const stripTop = HUD.HINTS.y;
-    const stripBottom = HUD.HINTS.y + HUD.HINTS.h;
-    if (capTop < stripBottom && capBottom > stripTop) {
+  // S6 — first-occurrence caption overlay (light onboarding). Stage 3b (#3):
+  // event captions now route through the shared caption queue so they never
+  // paint on top of a first-use hint (or each other). Admitted as source:'event'.
+  //
+  // `captionKey` is the one-shot trigger key behind this caption, when there is
+  // one. checkAndTrigger/captionForEvent mark that key the moment they return the
+  // text — before the request reaches the bounded queue — so a caption dropped on
+  // overflow would stay marked 'already shown' yet never display, losing it for
+  // the session. Passing the key lets enqueueCaption un-mark it on drop so it
+  // re-fires. Omit for recurring captions (they don't dedup on `triggered`).
+  public showCaption(
+    text: string,
+    screenX: number,
+    screenY: number,
+    captionKey?: CaptionKey,
+  ): void {
+    this.enqueueCaption({ text, x: screenX, y: screenY, source: 'event', captionKey });
+  }
+
+  /**
+   * Stage 3b (#3) — display a one-time first-use navigation hint. Implements the
+   * FirstUseHintSink the trigger seams call. Renders top-center, clear of the
+   * bottom HUD strip. Admitted as source:'first-use' so an event caption
+   * outranks it. The shown flag is persisted only when it BEGINS displaying
+   * (beginCaption), never at enqueue — a dropped/coalesced hint re-triggers later.
+   */
+  public showFirstUseHint(id: HintFirstUseId, text: string): void {
+    this.enqueueCaption({ text, x: CANVAS_W / 2, y: 60, source: 'first-use', hintId: id });
+  }
+
+  /** Admit a caption through the shared policy; begin it now if the queue was
+   *  idle, else it is queued/coalesced/dropped per caption-queue.ts. A dropped
+   *  one-shot event caption (carrying a captionKey) is un-marked so it re-fires
+   *  next occurrence — it never displayed, mirroring mark-on-display for hints. */
+  private enqueueCaption(req: CaptionRequest): void {
+    const result = admitCaption(this.captionState, req);
+    if (result.begin) this.beginCaption(result.begin);
+    if (result.dropped?.captionKey !== undefined) untrigger(result.dropped.captionKey);
+  }
+
+  /** Render a caption Text + run its fade tween. Marks a first-use hint shown the
+   *  moment it begins (Codex R1#9). On finish, promotes any pending caption. */
+  private beginCaption(req: CaptionRequest): void {
+    if (req.source === 'first-use' && req.hintId !== undefined) {
+      markFirstUseHintShown(req.hintId as HintFirstUseId);
+    }
+    // Stage 1 (Codex R4-1): a caption whose vertical band overlaps the HUD.HINTS
+    // strip yields (hides) the strip for its lifetime so the two don't collide.
+    const capTop = req.y - 14;
+    const capBottom = req.y + 14;
+    if (capTop < HUD.HINTS.y + HUD.HINTS.h && capBottom > HUD.HINTS.y) {
       this.hintYieldUntilMs = this.time.now + CAPTION_TOTAL_MS;
     }
-    const captionText = this.add.text(screenX, screenY, text, {
+    const captionText = this.add.text(req.x, req.y, req.text, {
       fontSize: '14px',
       fontFamily: 'monospace',
       color: '#ffffcc',
@@ -1270,8 +1392,10 @@ export class UIScene extends Phaser.Scene {
     captionText.setOrigin(0.5, 0.5);
     captionText.setDepth(30);
     captionText.setAlpha(0);
+    this.activeCaptionText = captionText;
 
-    // Fade in, hold, fade out over 1500ms total.
+    // Fade in, hold, fade out over 1500ms total. The active caption is never
+    // preempted; on its final fade we promote the pending one (if any).
     this.tweens.add({
       targets: captionText,
       alpha: { from: 0, to: 1 },
@@ -1286,10 +1410,157 @@ export class UIScene extends Phaser.Scene {
           ease: 'Linear',
           onComplete: () => {
             captionText.destroy();
+            this.activeCaptionText = null;
+            this.onCaptionFinished();
           },
         });
       },
     });
+  }
+
+  /**
+   * Reset the caption queue for a new round (ship-review R1#1/#3). UIScene is
+   * launched once and survives GameScene's restartGame/retryGame, so — unlike the
+   * time-based yield/queue-full timers, which self-heal — the caption queue would
+   * otherwise carry a prior round's active/pending caption into the new game and
+   * (worse) promote a queued first-use hint that then marks itself shown for a
+   * round it never displayed in. GameScene calls this from resetSessionState,
+   * alongside resetCaptions()/resetFirstUseSession().
+   */
+  public resetCaptionsForRound(): void {
+    if (this.activeCaptionText !== null) {
+      this.tweens.killTweensOf(this.activeCaptionText);
+      this.activeCaptionText.destroy();
+      this.activeCaptionText = null;
+    }
+    this.captionState = createCaptionQueueState();
+    this.hintYieldUntilMs = 0;
+  }
+
+  /** Promote a queued caption once the active one has fully faded. */
+  private onCaptionFinished(): void {
+    const result = completeCaption(this.captionState);
+    if (result.begin) this.beginCaption(result.begin);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Stage 3b (#5) — control-widget tooltips (desktop hover only)
+  // ---------------------------------------------------------------------------
+
+  /** True if any modal overlay is on screen — tooltips never show over a modal. */
+  private anyOverlayOpen(): boolean {
+    return (
+      this.surveyGroup.length > 0 ||
+      this.saveLoadDialogGroup.length > 0 ||
+      this.pauseMenuGroup.length > 0 ||
+      this.gameOverGroup.length > 0 ||
+      this.savePromptGroup.length > 0 ||
+      this.difficultySelectGroup.length > 0
+    );
+  }
+
+  /** Per-move hover tracking that drives the tooltip show/hide timers. Called
+   *  from the pointermove handler. */
+  private updateTooltipHover(pointer: Phaser.Input.Pointer): void {
+    // No tooltips while dragging, over the ant-activity popup, or under a modal.
+    if (pointer.isDown || this.anyOverlayOpen() || antActivityPanelState.visible) {
+      this.cancelTooltip();
+      return;
+    }
+    const target = tooltipTargetAt(pointer.x, pointer.y, this.viewState.activeView);
+    if (sameTooltipTarget(target, this.hoverTarget)) return; // unchanged — let timers run
+    this.hoverTarget = target;
+    this.clearTooltipShowTimer();
+    if (target === null) {
+      // Left the widget — keep the tip up for a short grace, then hide.
+      this.startTooltipHideGrace();
+      return;
+    }
+    // Entered a (new) widget.
+    this.clearTooltipHideTimer();
+    if (this.tooltipText !== null) {
+      // A tip is already up; swap to the new widget immediately (no re-dwell).
+      this.showTooltipNow(target);
+    } else {
+      this.tooltipShowTimer = this.time.delayedCall(TOOLTIP_SHOW_DELAY_MS, () => {
+        this.tooltipShowTimer = null;
+        // Re-check on fire (Codex R1#14): still hovering the same widget, no modal.
+        if (!sameTooltipTarget(this.hoverTarget, target)) return;
+        if (this.anyOverlayOpen() || antActivityPanelState.visible) return;
+        this.showTooltipNow(target);
+      });
+    }
+  }
+
+  /** Create/replace the tooltip Text, positioned clear of the widget. */
+  private showTooltipNow(target: TooltipTarget): void {
+    this.clearTooltipHideTimer();
+    if (this.tooltipText !== null) {
+      this.tooltipText.destroy();
+      this.tooltipText = null;
+    }
+    const t = this.add.text(0, 0, tooltipTextFor(target), {
+      fontSize: '12px',
+      fontFamily: 'monospace',
+      color: '#ffffff',
+      backgroundColor: '#000000cc',
+      padding: { x: 6, y: 3 },
+      align: 'left',
+      wordWrap: { width: 220 },
+    });
+    t.setOrigin(0, 0);
+    t.setDepth(31);
+    // Never cover the element: below it for top-half anchors (so we don't run off
+    // the top edge), above it otherwise; center on the anchor, clamp to canvas.
+    const a = target.anchor;
+    const pad = 6;
+    const w = t.width;
+    const h = t.height;
+    const tx = Math.max(2, Math.min(a.x + a.w / 2 - w / 2, CANVAS_W - w - 2));
+    const below = a.y < CANVAS_H / 2;
+    const ty = Math.max(2, Math.min(below ? a.y + a.h + pad : a.y - h - pad, CANVAS_H - h - 2));
+    t.setPosition(tx, ty);
+    this.tooltipText = t;
+  }
+
+  private startTooltipHideGrace(): void {
+    this.clearTooltipShowTimer();
+    if (this.tooltipText === null) return; // nothing visible to grace-hide
+    this.clearTooltipHideTimer();
+    this.tooltipHideTimer = this.time.delayedCall(TOOLTIP_HIDE_GRACE_MS, () => {
+      this.tooltipHideTimer = null;
+      if (this.tooltipText !== null) {
+        this.tooltipText.destroy();
+        this.tooltipText = null;
+      }
+    });
+  }
+
+  private clearTooltipShowTimer(): void {
+    if (this.tooltipShowTimer !== null) {
+      this.tooltipShowTimer.remove(false);
+      this.tooltipShowTimer = null;
+    }
+  }
+
+  private clearTooltipHideTimer(): void {
+    if (this.tooltipHideTimer !== null) {
+      this.tooltipHideTimer.remove(false);
+      this.tooltipHideTimer = null;
+    }
+  }
+
+  /** Hard-cancel: hide the tooltip + kill both timers + clear hover. Called on
+   *  any overlay open/close (recomputeActiveOverlay), scene teardown, and
+   *  pointer/gameout (Codex R1#14). */
+  private cancelTooltip(): void {
+    this.clearTooltipShowTimer();
+    this.clearTooltipHideTimer();
+    if (this.tooltipText !== null) {
+      this.tooltipText.destroy();
+      this.tooltipText = null;
+    }
+    this.hoverTarget = null;
   }
 
   // Stage 2 controls rework (issue #18) — the invasion screen-edge flash MUST
@@ -1356,9 +1627,18 @@ export class UIScene extends Phaser.Scene {
       // Accurate message for the pause state captured at the drop (Fix 3): paused
       // → "resume to continue"; running → "try again" (transient burst). Reading
       // the live isPausedFn here instead would mis-message a drop whose state has
-      // since flipped, so we use the recorded flag.
+      // since flipped, so we use the recorded flag. The queue-full WARNING shows
+      // regardless of the legend toggle (Codex R1#3).
       this.hintText.setText(queueFullHint(this.pausedQueueFullWasPaused));
       this.hintText.setColor('#ffcc66');
+      return;
+    }
+    // Stage 3b (#2, Codex R1#3): the visibility toggle gates ONLY the static
+    // legend — the caption-yield (above) and the queue-full warning (above) stay
+    // visible. A hidden legend also frees HUD.HINTS from the input mask
+    // (camera-input reads the same hintStripState).
+    if (!hintStripState.visible) {
+      this.hintText.setVisible(false);
       return;
     }
     this.hintText.setText(hintTextFor(this.effectiveTool(), this.viewState.activeView));
@@ -1655,6 +1935,8 @@ export class UIScene extends Phaser.Scene {
       // returning the default, which would freeze the label and make the
       // toggle look broken. ViewState always reflects the current value.
       currentPheromoneOverlay: this.viewState.showPheromoneOverlay,
+      // Stage 3b (#2): hint-strip legend visibility from the in-mem singleton.
+      currentHintStripVisible: hintStripState.visible,
       // Settings page's "Speed: N×" row reads this each render so it
       // reflects writes from EITHER the row click OR the live 1/2/4
       // keyboard shortcuts on GameScene.
@@ -1760,6 +2042,27 @@ export class UIScene extends Phaser.Scene {
         const persisted = loadSettings();
         persisted.pheromoneOverlay = next;
         saveSettings(persisted);
+        this.renderPauseMenuPage();
+        return;
+      }
+      case 'control-hints-toggle': {
+        // Stage 3b (#2): flip the in-mem hint-strip legend visibility (the
+        // authoritative source, same rationale as the pheromone toggle) and
+        // best-effort persist it. renderHintStrip + isPointerOverHUD both read
+        // hintStripState live, so the legend and its input mask flip together.
+        const next = !hintStripState.visible;
+        hintStripState.visible = next;
+        const persisted = loadSettings();
+        persisted.hintStripVisible = next;
+        saveSettings(persisted);
+        this.renderPauseMenuPage();
+        return;
+      }
+      case 'reset-first-use-hints': {
+        // Stage 3b (#3): clear the persisted shown-flags AND drop any queued
+        // first-use caption (clearPending) so the hints surface again cleanly.
+        resetFirstUseHints();
+        clearPendingFirstUse(this.captionState);
         this.renderPauseMenuPage();
         return;
       }
@@ -2045,6 +2348,10 @@ export class UIScene extends Phaser.Scene {
    *  re-show — exactly the kind of observability lie round 1 was supposed
    *  to fix. This recompute reflects whatever overlay is still on screen. */
   private recomputeActiveOverlay(): void {
+    // Stage 3b (#5, Codex R1#14): any overlay open/close cancels a live/pending
+    // tooltip — this is the single chokepoint every show/hideOverlay routes
+    // through, so it covers pause/save/survey/game-over opening AND closing.
+    this.cancelTooltip();
     // Survey takes precedence over the bare game-over overlay so the
     // end-of-game flow lands on the highest-value screen for diagnostics.
     if (this.surveyGroup.length > 0) setActiveOverlay('survey');

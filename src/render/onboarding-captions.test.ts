@@ -4,8 +4,10 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   captionForEvent,
   checkAndTrigger,
+  oneShotKeyForEvent,
   resetCaptions,
   triggered,
+  untrigger,
 } from './onboarding-captions.js';
 import type { SimEvent } from '../sim/telemetry.js';
 
@@ -213,5 +215,62 @@ describe('triggered map state', () => {
     expect(triggered.get('dig')).toBe(true);
     expect(triggered.get('rally')).toBe(true);
     expect(triggered.has('spider')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// untrigger — un-mark a dropped one-shot so it can re-fire (caption-queue overflow)
+// ---------------------------------------------------------------------------
+
+describe('untrigger', () => {
+  it('lets a previously-fired one-shot caption fire again', () => {
+    // checkAndTrigger marks the key BEFORE the caption reaches the bounded queue;
+    // if the queue drops it, untrigger restores the key so the next occurrence
+    // re-fires (the dropped caption never displayed).
+    expect(checkAndTrigger('dig')).not.toBeNull();
+    expect(checkAndTrigger('dig')).toBeNull();
+    untrigger('dig');
+    expect(triggered.has('dig')).toBe(false);
+    expect(checkAndTrigger('dig')).not.toBeNull();
+  });
+
+  it('only un-marks the given key', () => {
+    checkAndTrigger('dig');
+    checkAndTrigger('rally');
+    untrigger('dig');
+    expect(checkAndTrigger('dig')).not.toBeNull(); // re-fires
+    expect(checkAndTrigger('rally')).toBeNull(); // still suppressed
+  });
+
+  it('is a no-op for a key that never fired', () => {
+    expect(() => untrigger('spiderRampage')).not.toThrow();
+    expect(triggered.has('spiderRampage')).toBe(false);
+    // ...and the key still fires normally afterward.
+    expect(checkAndTrigger('spiderRampage')).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// oneShotKeyForEvent — event→one-shot-key lookup (drives un-mark-on-drop)
+// ---------------------------------------------------------------------------
+
+describe('oneShotKeyForEvent', () => {
+  it('returns the one-shot CaptionKey for a one-shot event', () => {
+    expect(oneShotKeyForEvent('invasion_start')).toBe('aiInvading');
+  });
+
+  it('returns null for a recurring event (recurring captions never dedup)', () => {
+    expect(oneShotKeyForEvent('spider_rampage_start')).toBeNull();
+  });
+
+  it('returns null for a caption-less / unknown event', () => {
+    expect(oneShotKeyForEvent('combat_kill')).toBeNull();
+    expect(oneShotKeyForEvent('not_a_real_event' as SimEvent['type'])).toBeNull();
+  });
+
+  it('is pure — it does not consume the one-shot (captionForEvent still fires)', () => {
+    expect(oneShotKeyForEvent('invasion_start')).toBe('aiInvading');
+    expect(triggered.has('aiInvading')).toBe(false);
+    expect(captionForEvent('invasion_start')).not.toBeNull();
   });
 });

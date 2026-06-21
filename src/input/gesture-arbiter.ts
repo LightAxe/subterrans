@@ -185,6 +185,16 @@ export interface GestureArbiterDeps {
    * on the next move); one-shot taps call it on ANY drop (no re-emit) (Codex P2).
    */
   onPausedQueueFull?: (paused: boolean) => void;
+  // Stage 3b (issue #18, #3) — thin teaching seams. Fired on the EFFECT, not the
+  // raw input (Codex R1#10), so first-use hints react to what actually happened.
+  // Optional: tests and any non-teaching caller simply omit them.
+  /** The camera actually moved on a left-drag pan ("Drag to look around"). */
+  onPanEffect?: () => void;
+  /** A dig-paint drag actually enqueued ≥1 mark ("Drag to paint tunnels"). */
+  onPaintEffect?: () => void;
+  /** A world gesture began (a left press that armed a snapshot) — the signal
+   *  GameScene uses to evaluate the proactive [Tab] nudge on first world input. */
+  onWorldInput?: () => void;
 }
 
 /** Return the active CameraView for the current view. */
@@ -376,6 +386,12 @@ export class GestureArbiter {
     this.panLastX = ev.x;
     this.panLastY = ev.y;
 
+    // Stage 3b (#3): a world gesture has begun. Signal it so GameScene can
+    // evaluate the proactive [Tab] first-use nudge on the player's first world
+    // input of the session (the nudge gate reads view/undergroundVisited, which
+    // a pan/dig press does not change, so firing at press-time is safe).
+    this.deps.onWorldInput?.();
+
     // Eagerly begin a paint stroke for underground-Dig so the down-tile mark
     // fires immediately (matching the prior click-then-drag behavior). The
     // stroke only PAINTS once the threshold is crossed; a release before then
@@ -407,6 +423,7 @@ export class GestureArbiter {
         if (world) {
           // Begin the stroke at the SNAPSHOTTED down-tile so the first painted
           // segment interpolates from there, then extend to the current tile.
+          const queuedBefore = world.commandQueue.length;
           const dropped = beginPaintStroke(
             this.paintStroke,
             world,
@@ -415,6 +432,9 @@ export class GestureArbiter {
             snap.tileY,
             this.deps.isPaused(),
           );
+          // Stage 3b (#3): fire the paint hint only if a mark actually enqueued
+          // (queue grew) — not on a no-op drag over already-open tiles.
+          if (world.commandQueue.length > queuedBefore) this.deps.onPaintEffect?.();
           this.notifyCapHit(dropped);
         }
       } else {
@@ -604,6 +624,7 @@ export class GestureArbiter {
     // Accepted residual: a single coalesced >64-tile move + immediate release
     // (no later move) loses the tail past the cap — see continuePaintStroke and
     // the file header.
+    const queuedBefore = world.commandQueue.length;
     const capHit = continuePaintStroke(
       this.paintStroke,
       world,
@@ -612,6 +633,7 @@ export class GestureArbiter {
       tileY,
       this.deps.isPaused(),
     );
+    if (world.commandQueue.length > queuedBefore) this.deps.onPaintEffect?.();
     this.notifyCapHit(capHit);
   }
 
@@ -625,11 +647,21 @@ export class GestureArbiter {
       return;
     }
     const cam = activeCamera(vs);
+    // Snapshot the camera CENTER before the move so the first-use hint fires on
+    // the actual EFFECT, not the raw pointer delta (ship-review R1#2): at a
+    // clamped world edge the pointer can move while the camera stays put. Mirrors
+    // the zoom seam (targetZoom before/after) and the paint seam (queue length).
+    const beforeCenterX = cam.centerX;
+    const beforeCenterY = cam.centerY;
     panByScreenDelta(cam, ev.x - this.panLastX, ev.y - this.panLastY);
     const [worldW, worldH] = worldDimensions(vs);
     clampCameraView(cam, worldW, worldH);
     this.panLastX = ev.x;
     this.panLastY = ev.y;
+    // Stage 3b (#3): the camera ACTUALLY moved → first-use "Drag to look around".
+    if (cam.centerX !== beforeCenterX || cam.centerY !== beforeCenterY) {
+      this.deps.onPanEffect?.();
+    }
   }
 
   private handleRightClick(ev: ArbiterPointerEvent): void {

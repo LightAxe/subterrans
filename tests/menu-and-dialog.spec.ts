@@ -203,7 +203,9 @@ test.describe('Issue #115/#116 — single click triggers single dispatch', () =>
     await page.locator('canvas').first().click({ position: settingsRect });
     await page.waitForTimeout(120);
 
-    // Settings sub-screen has 3 items: pheromone-toggle, speed-cycle, back.
+    // Settings sub-screen items (Stage 3b): pheromone-toggle (i=0),
+    // control-hints-toggle (i=1), reset-first-use-hints (i=2), speed-cycle (i=3),
+    // back (i=4) — 5 rows.
     const toggleRect = await page.evaluate(() => {
       const CANVAS_W = 800,
         CANVAS_H = 592;
@@ -211,7 +213,7 @@ test.describe('Issue #115/#116 — single click triggers single dispatch', () =>
         BTN_H = 40,
         GAP = 10,
         TITLE_H = 56;
-      const n = 3;
+      const n = 5;
       const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
       const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
       const x = (CANVAS_W - BTN_W) / 2;
@@ -561,7 +563,7 @@ test.describe('Round-6 (Codex P2) — pheromone toggle survives degraded storage
     await page.locator('canvas').first().click({ position: settingsRect });
     await page.waitForTimeout(120);
 
-    // Pheromone toggle is index 0 on the Settings sub-page.
+    // Pheromone toggle is index 0 on the Settings sub-page (Stage 3b: 5 rows).
     const toggleClickPos = await page.evaluate(() => {
       const CANVAS_W = 800,
         CANVAS_H = 592;
@@ -569,7 +571,7 @@ test.describe('Round-6 (Codex P2) — pheromone toggle survives degraded storage
         BTN_H = 40,
         GAP = 10,
         TITLE_H = 56;
-      const n = 3;
+      const n = 5;
       const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
       const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
       const x = (CANVAS_W - BTN_W) / 2;
@@ -637,8 +639,9 @@ test.describe('Settings — Speed cycle row (UAT)', () => {
     await page.locator('canvas').first().click({ position: settingsRect });
     await page.waitForTimeout(120);
 
-    // On Settings page: [pheromone-toggle (i=0), speed-cycle (i=1), back (i=2)].
-    // Compute rect for i=1.
+    // On Settings page (Stage 3b, 5 rows): [pheromone-toggle (i=0),
+    // control-hints-toggle (i=1), reset-first-use-hints (i=2), speed-cycle (i=3),
+    // back (i=4)]. Compute rect for i=3.
     const speedRect = await page.evaluate(() => {
       const CANVAS_W = 800,
         CANVAS_H = 592;
@@ -646,11 +649,11 @@ test.describe('Settings — Speed cycle row (UAT)', () => {
         BTN_H = 40,
         GAP = 10,
         TITLE_H = 56;
-      const n = 3;
+      const n = 5;
       const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
       const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
       const x = (CANVAS_W - BTN_W) / 2;
-      const speedY = top + 1 * (BTN_H + GAP);
+      const speedY = top + 3 * (BTN_H + GAP);
       return { x: x + BTN_W / 2, y: speedY + BTN_H / 2 };
     });
 
