@@ -36,9 +36,10 @@
 //   - factory `CallExpression` returns (`const X = makeBuffer()`, `Array.from(...)`), and
 //     plain mutable objects (`const X = {}`). Those carry a plain `// sim-scratch:` marker.
 //   - `new RegExp()` / `new Error()` / custom (non-collection) classes.
-//   - destructuring is inspected by direct array-index / object-property match on an
-//     array/object literal RHS (`const [buf] = [new Int32Array()]` IS caught); a
-//     rest/computed/nested pattern or a non-literal RHS (`const [x] = makePair()`) is not.
+//   - destructuring: array rest (`const [...r] = …` — always a fresh mutable array),
+//     element/property matches on an array/object literal RHS, and string-literal computed
+//     keys ARE caught. Object rest (`{ ...r }`, a plain object), a DYNAMIC computed key, a
+//     nested sub-pattern, or a non-literal array RHS (`const [x] = makePair()`) are not.
 //   - sequence expressions (`(f(), [])`) and identifier aliases (`const A = otherArray`)
 //     are not traced. Conditional (`c ? [] : []`) and logical (`a || []`) ARE traced.
 //   - `var` hoisted out of a nested block; `using` / `await using`; ambient `declare`.
@@ -212,37 +213,47 @@ function isMutableCollectionValue(node) {
  * (documented gaps). `const [a, b] = [1, 2]` (primitives) is correctly not matched.
  */
 function destructuringBindsMutable(pattern, init) {
-  const base = unwrapToBase(init);
-  if (!base) return false;
-  if (pattern.type === 'ArrayPattern' && base.type === 'ArrayExpression') {
+  if (pattern.type === 'ArrayPattern') {
+    // An array rest element collects into a FRESH mutable Array — always persistent
+    // mutable state, regardless of RHS shape (`const [...r] = xs`, `const [a, ...r] = …`).
+    if (pattern.elements.some((el) => el && el.type === 'RestElement')) return true;
+    const base = unwrapToBase(init);
+    if (!base || base.type !== 'ArrayExpression') return false;
     for (let i = 0; i < pattern.elements.length; i++) {
       const pel = pattern.elements[i];
-      if (!pel || pel.type === 'RestElement') continue; // hole / rest — gap
+      if (!pel) continue; // hole
       const rel = base.elements[i];
       if (rel && rel.type !== 'SpreadElement' && isMutableCollectionValue(rel)) return true;
     }
-  } else if (pattern.type === 'ObjectPattern' && base.type === 'ObjectExpression') {
+    return false;
+  }
+  if (pattern.type === 'ObjectPattern') {
+    const base = unwrapToBase(init);
+    if (!base || base.type !== 'ObjectExpression') return false;
     for (const pprop of pattern.properties) {
-      if (
-        pprop.type !== 'Property' ||
-        pprop.computed ||
-        !pprop.key ||
-        pprop.key.type !== 'Identifier'
-      ) {
-        continue;
-      }
-      const rprop = base.properties.find(
-        (p) =>
-          p.type === 'Property' &&
-          !p.computed &&
-          p.key &&
-          p.key.type === 'Identifier' &&
-          p.key.name === pprop.key.name,
-      );
+      // Object rest (`{ ...r }`) binds a plain object — covered by the object gap, not here.
+      if (pprop.type !== 'Property') continue;
+      const key = objKeyName(pprop);
+      if (key == null) continue; // unresolvable computed key — documented gap
+      const rprop = base.properties.find((p) => p.type === 'Property' && objKeyName(p) === key);
       if (rprop && isMutableCollectionValue(rprop.value)) return true;
     }
+    return false;
   }
   return false;
+}
+
+/** Resolve a property's static key (Identifier or string/number literal, incl. computed); null if dynamic. */
+function objKeyName(prop) {
+  if (prop.type !== 'Property' || !prop.key) return null;
+  if (!prop.computed && prop.key.type === 'Identifier') return prop.key.name;
+  if (
+    prop.key.type === 'Literal' &&
+    (typeof prop.key.value === 'string' || typeof prop.key.value === 'number')
+  ) {
+    return String(prop.key.value);
+  }
+  return null;
 }
 
 /**

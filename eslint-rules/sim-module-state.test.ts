@@ -74,6 +74,10 @@ const FLAGGED: ReadonlyArray<readonly [string, string]> = [
   ['destructuring binds a typed array', 'const [buf] = [new Int32Array(8)];'],
   ['destructuring binds a Map (object pattern)', 'const { m } = { m: new Map() };'],
   ['destructuring binds an array literal', 'const [, second] = [0, [1, 2]];'],
+  ['array rest binds a fresh array', 'const [...rest] = [new Map()];'],
+  ['array rest after an element', 'const [x, ...rest] = [1, new Map()];'],
+  ['array rest of primitives is still a mutable array', 'const [...rest] = [1, 2];'],
+  ['string-literal computed key binds a Map', 'const { ["key"]: x } = { key: new Map() };'],
 ];
 
 // MUST NOT be flagged (exemptions, non-persistent scopes, documented gaps).
@@ -103,6 +107,8 @@ const ALLOWED: ReadonlyArray<readonly [string, string]> = [
   ['destructuring of an as-const element', 'const [x] = [[1, 2] as const];'],
   ['destructuring where the collection is unbound', 'const [a] = [1, new Map()];'],
   ['destructuring with non-literal RHS (gap)', 'const [a] = makePair();'],
+  ['object rest binds a plain object (object gap)', 'const { ...rest } = { m: new Map() };'],
+  ['dynamic computed key (gap)', 'const { [dyn]: x } = { a: new Map() };'],
   // ambient — no runtime state
   ['ambient declare const', 'declare const A: number[];'],
   // non-persistent scopes (block/loop/function execute once / per-call, not cross-tick)
