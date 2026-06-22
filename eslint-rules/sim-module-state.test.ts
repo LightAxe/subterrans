@@ -88,6 +88,8 @@ const FLAGGED: ReadonlyArray<readonly [string, string]> = [
   ['Object.freeze(new Map()) — shallow freeze', 'const M = Object.freeze(new Map());'],
   ['Object.freeze([new Map()]) — collection inside', 'const A = Object.freeze([new Map()]);'],
   ['Object.seal(new Set()) — shallow seal', 'const S = Object.seal(new Set());'],
+  ['Object.freeze of a nested array (shallow)', 'const A = Object.freeze([[1]]);'],
+  ['Object.freeze of object with an array value', 'const O = Object.freeze({ a: [1] });'],
   [
     'as-const array with conditional collection element',
     'const A = [cond ? new Map() : null] as const;',

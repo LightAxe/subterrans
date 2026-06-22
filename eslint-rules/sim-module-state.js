@@ -249,6 +249,54 @@ function objectFreezeArg(node) {
   return null;
 }
 
+/** True if a value is a non-primitive (mutable) structure — array/object literal or
+ *  collection ctor (recursing conditional/logical branches). */
+function isNonPrimitiveValue(node) {
+  const base = unwrapToBase(node);
+  if (!base) return false;
+  if (isCollectionConstructor(base)) return true;
+  if (base.type === 'ArrayExpression' || base.type === 'ObjectExpression') return true;
+  if (base.type === 'ConditionalExpression') {
+    return isNonPrimitiveValue(base.consequent) || isNonPrimitiveValue(base.alternate);
+  }
+  if (base.type === 'LogicalExpression') {
+    return isNonPrimitiveValue(base.left) || isNonPrimitiveValue(base.right);
+  }
+  return false;
+}
+
+/** True if shallow-freezing `node` (Object.freeze/seal) leaves nested mutable state — the
+ *  freeze locks only the top level. `Object.freeze([1, 2])` is immutable; `[[1]]`,
+ *  `[new Map()]`, `{ a: [1] }`, and `new Map()` are not. */
+function shallowFreezeLeavesMutable(node) {
+  const base = unwrapToBase(node);
+  if (!base) return false;
+  if (isCollectionConstructor(base)) return true;
+  if (base.type === 'ConditionalExpression') {
+    return (
+      shallowFreezeLeavesMutable(base.consequent) || shallowFreezeLeavesMutable(base.alternate)
+    );
+  }
+  if (base.type === 'LogicalExpression') {
+    return shallowFreezeLeavesMutable(base.left) || shallowFreezeLeavesMutable(base.right);
+  }
+  if (base.type === 'ArrayExpression') {
+    return base.elements.some((el) => {
+      if (!el) return false;
+      if (el.type === 'SpreadElement') return isNonPrimitiveValue(el.argument);
+      return isNonPrimitiveValue(el);
+    });
+  }
+  if (base.type === 'ObjectExpression') {
+    return base.properties.some(
+      (p) =>
+        (p.type === 'Property' && isNonPrimitiveValue(p.value)) ||
+        (p.type === 'SpreadElement' && isNonPrimitiveValue(p.argument)),
+    );
+  }
+  return false;
+}
+
 /**
  * Classify an initializer as yielding persistent mutable state. Recurses through
  * conditional (`c ? a : b`) and logical (`a || b`, `x ?? y`) expressions — ANY branch
@@ -261,7 +309,7 @@ function findMutable(node) {
   // immutable (safe), but a Map/Set/typed-array inside stays mutable (`.set()` still works).
   // Detect it before the generic method-chain peel (which would reduce it to `Object`).
   const frozenArg = objectFreezeArg(node);
-  if (frozenArg) return containsCollectionCtor(frozenArg) ? { kind: 'frozen' } : null;
+  if (frozenArg) return shallowFreezeLeavesMutable(frozenArg) ? { kind: 'frozen' } : null;
   // Unwrap assertions / non-null / method-call chains FIRST, so an outer wrapper on a
   // conditional/logical (`(cond ? [1] : [2]) as number[]`, `(a || [1]).slice()`) still
   // reaches the branch recursion below rather than falling through as non-mutable.
