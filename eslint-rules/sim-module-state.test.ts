@@ -50,6 +50,9 @@ const FLAGGED: ReadonlyArray<readonly [string, string]> = [
   ['collection via non-null + method chain', 'const M = new Map()!.set(1, 2);'],
   ['global-qualified ctor `new globalThis.Array()`', 'const A = new globalThis.Array();'],
   ['global-qualified ctor `new self.Map()`', 'const M = new self.Map();'],
+  ['ctor callee `as` assertion', 'const M = new (Map as any)();'],
+  ['ctor callee non-null assertion', 'const S = new (Set!)();'],
+  ['global-qualified ctor callee assertion', 'const M = new (globalThis.Map as any)();'],
   // reassignable bindings
   ['let scalar', 'let X = 0;'],
   ['exported let', 'export let Y = 0;'],
@@ -68,6 +71,7 @@ const ALLOWED: ReadonlyArray<readonly [string, string]> = [
   ['array `as const`', 'const A = [1, 2, 3] as const;'],
   ['exported array `as const`', 'export const A = [1, 2, 3] as const;'],
   ['array `as const satisfies T`', 'const A = [1, 2, 3] as const satisfies readonly number[];'],
+  ['array `satisfies T as const`', 'const A = [1, 2, 3] satisfies readonly number[] as const;'],
   // non-collection / non-array values
   ['const scalar', 'const N = 5;'],
   ['new RegExp (not a collection)', "const R = new RegExp('x');"],

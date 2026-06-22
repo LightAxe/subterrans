@@ -78,35 +78,54 @@ function isConstAssertion(node) {
   );
 }
 
-/**
- * True when `init` is an immutable array lookup: `[...] as const`, optionally wrapped in
- * outer `satisfies T` (which preserves the readonly value type). Anything else leaves a
- * mutable runtime array.
- */
-function isExemptAsConstArray(init) {
-  let node = init;
-  while (node && node.type === 'TSSatisfiesExpression') node = node.expression;
-  return isConstAssertion(node) && node.expression && node.expression.type === 'ArrayExpression';
+/** Peel `as X` / `<X>` / `satisfies X` / non-null `!` wrappers off an expression. */
+function peelAssertions(node) {
+  let cur = node;
+  while (
+    cur &&
+    (cur.type === 'TSAsExpression' ||
+      cur.type === 'TSSatisfiesExpression' ||
+      cur.type === 'TSTypeAssertion' ||
+      cur.type === 'TSNonNullExpression')
+  ) {
+    cur = cur.expression;
+  }
+  return cur;
+}
+
+/** Peel only `satisfies X` wrappers (type-preserving — never affects mutability). */
+function peelSatisfies(node) {
+  let cur = node;
+  while (cur && cur.type === 'TSSatisfiesExpression') cur = cur.expression;
+  return cur;
 }
 
 /**
- * Strip type assertions, non-null assertions (`!`), AND trailing method-call chains to
- * reach the base expression, so `new Int32Array(n).fill(-1)` / `([1] as const).slice()` /
- * `new Map()!` resolve to their array-literal or `new <collection>()` root.
+ * True when `init` is an immutable array lookup: an array literal whose effective type is
+ * readonly via `as const`. Handles `[...] as const`, `[...] as const satisfies T`, and
+ * `[...] satisfies T as const` (satisfies is type-preserving in either position). A
+ * mutating outer assertion (`as number[]`, `as unknown as const`) leaves it mutable.
+ */
+function isExemptAsConstArray(init) {
+  const outer = peelSatisfies(init);
+  if (!isConstAssertion(outer)) return false;
+  const inner = peelSatisfies(outer.expression);
+  return Boolean(inner) && inner.type === 'ArrayExpression';
+}
+
+/**
+ * Strip type/non-null assertions AND trailing method-call chains to reach the base
+ * expression, so `new Int32Array(n).fill(-1)` / `([1] as const).slice()` / `new Map()!`
+ * resolve to their array-literal or `new <collection>()` root.
  */
 function unwrapToBase(node) {
   let cur = node;
   let changed = true;
   while (cur && changed) {
     changed = false;
-    while (
-      cur &&
-      (cur.type === 'TSAsExpression' ||
-        cur.type === 'TSSatisfiesExpression' ||
-        cur.type === 'TSTypeAssertion' ||
-        cur.type === 'TSNonNullExpression')
-    ) {
-      cur = cur.expression;
+    const peeled = peelAssertions(cur);
+    if (peeled !== cur) {
+      cur = peeled;
       changed = true;
     }
     if (
@@ -122,10 +141,15 @@ function unwrapToBase(node) {
   return cur;
 }
 
-/** True for a `new <collection>()` — bare (`new Map()`) or global-qualified (`new globalThis.Map()`). */
+/**
+ * True for a `new <collection>()` — bare (`new Map()`), global-qualified
+ * (`new globalThis.Map()`), or with the callee itself wrapped in type/non-null
+ * assertions (`new (Map as any)()`, `new (Set!)()`).
+ */
 function isCollectionConstructor(node) {
   if (!node || node.type !== 'NewExpression' || !node.callee) return false;
-  const c = node.callee;
+  const c = peelAssertions(node.callee);
+  if (!c) return false;
   if (c.type === 'Identifier') return COLLECTION_CONSTRUCTORS.has(c.name);
   return (
     c.type === 'MemberExpression' &&
@@ -139,9 +163,10 @@ function isCollectionConstructor(node) {
   );
 }
 
-/** Name of the collection ctor, bare or qualified. */
+/** Name of the collection ctor (callee peeled of assertions), bare or qualified. */
 function collectionCtorName(node) {
-  return node.callee.type === 'Identifier' ? node.callee.name : node.callee.property.name;
+  const c = peelAssertions(node.callee);
+  return c.type === 'Identifier' ? c.name : c.property.name;
 }
 
 /**
