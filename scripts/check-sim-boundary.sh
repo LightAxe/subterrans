@@ -77,3 +77,20 @@ if [[ -n "$DISABLE_HITS" ]]; then
   exit 1
 fi
 echo "sim-module-state disable-reason guard: clean."
+
+# Issue #211 — no blanket (all-rule) eslint-disable in src/sim. A directive with NO rule
+# list (`// eslint-disable-next-line`, `/* eslint-disable */`) suppresses EVERY rule on its
+# target — including subterrans/sim-module-state — without naming it, so the reason guard
+# above (which keys on the rule name) cannot see it. Require rule-specific disables in
+# src/sim so the determinism guard can never be silently blanketed. Test files are exempt
+# (the rule does not run there).
+BLANKET_HITS=$(grep -rnE 'eslint-disable(-next-line|-line)?[[:space:]]*(\*/|$)' src/sim --include='*.ts' | grep -vE '\.test\.ts:' || true)
+if [[ -n "$BLANKET_HITS" ]]; then
+  echo "Blanket (all-rule) eslint-disable in src/sim (issue #211):"
+  echo "$BLANKET_HITS"
+  echo ""
+  echo "Disables in src/sim must name specific rule(s) so they can't silently suppress the"
+  echo "determinism guard — e.g. \`// eslint-disable-next-line no-restricted-syntax\`."
+  exit 1
+fi
+echo "blanket-disable guard: clean."

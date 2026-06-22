@@ -63,6 +63,10 @@ const FLAGGED: ReadonlyArray<readonly [string, string]> = [
   ['namespace-body collection', 'namespace N { const A = new Map(); }'],
   ['namespace-body exported array', 'namespace N { export const A = [1, 2]; }'],
   ['namespace-body let', 'namespace N { let X = 0; }'],
+  // destructuring that binds a live collection into a persistent local
+  ['destructuring binds a typed array', 'const [buf] = [new Int32Array(8)];'],
+  ['destructuring binds a Map (object pattern)', 'const { m } = { m: new Map() };'],
+  ['destructuring binds an array literal', 'const [, second] = [0, [1, 2]];'],
 ];
 
 // MUST NOT be flagged (exemptions, non-persistent scopes, documented gaps).
@@ -86,9 +90,12 @@ const ALLOWED: ReadonlyArray<readonly [string, string]> = [
   ['factory call (documented gap)', 'const X = makeBuffer();'],
   ['Array.from factory (documented gap)', 'const A = Array.from(xs);'],
   ['non-collection ctor `.exec()` chain', "const R = new RegExp('x').exec('y');"],
-  // destructuring — RHS not retained as one binding (documented gap)
-  ['array destructuring', 'const [a, b] = [1, 2];'],
-  ['object destructuring', 'const { a } = { a: 1 };'],
+  // destructuring — primitives / as-const / unbound element / non-literal RHS are safe
+  ['array destructuring of primitives', 'const [a, b] = [1, 2];'],
+  ['object destructuring of primitive', 'const { a } = { a: 1 };'],
+  ['destructuring of an as-const element', 'const [x] = [[1, 2] as const];'],
+  ['destructuring where the collection is unbound', 'const [a] = [1, new Map()];'],
+  ['destructuring with non-literal RHS (gap)', 'const [a] = makePair();'],
   // ambient — no runtime state
   ['ambient declare const', 'declare const A: number[];'],
   // non-persistent scopes (block/loop/function execute once / per-call, not cross-tick)

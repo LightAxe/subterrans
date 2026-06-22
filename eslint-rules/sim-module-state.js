@@ -36,8 +36,9 @@
 //   - factory `CallExpression` returns (`const X = makeBuffer()`, `Array.from(...)`), and
 //     plain mutable objects (`const X = {}`). Those carry a plain `// sim-scratch:` marker.
 //   - `new RegExp()` / `new Error()` / custom (non-collection) classes.
-//   - destructuring binds (`const [BUF] = [new Int32Array()]`) — the pattern's RHS is not
-//     inspected (skipped so the common `const [a, b] = [1, 2]` form doesn't false-positive).
+//   - destructuring is inspected by direct array-index / object-property match on an
+//     array/object literal RHS (`const [buf] = [new Int32Array()]` IS caught); a
+//     rest/computed/nested pattern or a non-literal RHS (`const [x] = makePair()`) is not.
 //   - non-literal/non-ctor expression forms: conditional (`c ? [] : []`), logical,
 //     sequence, and identifier aliases (`const A = otherArray`) are not traced.
 //   - `var` hoisted out of a nested block; `using` / `await using`; ambient `declare`.
@@ -174,6 +175,55 @@ function collectionCtorName(node) {
   return c.type === 'Identifier' ? c.name : c.property.name;
 }
 
+/** True when an expression value is a mutable array literal (not `as const`) or collection ctor. */
+function isMutableCollectionValue(node) {
+  const base = unwrapToBase(node);
+  if (!base) return false;
+  if (base.type === 'ArrayExpression') return !isExemptAsConstArray(node);
+  return isCollectionConstructor(base);
+}
+
+/**
+ * True when a destructuring pattern binds a mutable array/collection element of an
+ * array/object literal initializer into a persistent local — e.g. `const [buf] =
+ * [new Int32Array(8)]` or `const { m } = { m: new Map() }`. Matches by array index /
+ * object-property name; rest/computed/nested patterns and non-literal RHS are not traced
+ * (documented gaps). `const [a, b] = [1, 2]` (primitives) is correctly not matched.
+ */
+function destructuringBindsMutable(pattern, init) {
+  const base = unwrapToBase(init);
+  if (!base) return false;
+  if (pattern.type === 'ArrayPattern' && base.type === 'ArrayExpression') {
+    for (let i = 0; i < pattern.elements.length; i++) {
+      const pel = pattern.elements[i];
+      if (!pel || pel.type === 'RestElement') continue; // hole / rest — gap
+      const rel = base.elements[i];
+      if (rel && rel.type !== 'SpreadElement' && isMutableCollectionValue(rel)) return true;
+    }
+  } else if (pattern.type === 'ObjectPattern' && base.type === 'ObjectExpression') {
+    for (const pprop of pattern.properties) {
+      if (
+        pprop.type !== 'Property' ||
+        pprop.computed ||
+        !pprop.key ||
+        pprop.key.type !== 'Identifier'
+      ) {
+        continue;
+      }
+      const rprop = base.properties.find(
+        (p) =>
+          p.type === 'Property' &&
+          !p.computed &&
+          p.key &&
+          p.key.type === 'Identifier' &&
+          p.key.name === pprop.key.name,
+      );
+      if (rprop && isMutableCollectionValue(rprop.value)) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * True when the declaration is a PERSISTENT module/namespace binding — direct child of a
  * `Program` or `TSModuleBlock` body (plain or `export`ed). Block/loop/function-nested
@@ -201,6 +251,8 @@ export default {
         'Module-level mutable array literal in src/sim. If it is an immutable lookup, wrap it as `[...] as const`; otherwise add `// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch:/sim-cache:/sim-memo: <why>`. (A `readonly`/`ReadonlyArray<>` annotation, `as number[]`, or a chained `as const` does not make it immutable.)',
       mutableCollection:
         'Module-level mutable `new {{ctor}}()` in src/sim is cross-tick state. Add `// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch:/sim-cache:/sim-memo: <why it is reset/safe>`.',
+      mutableDestructure:
+        'Module-level destructuring binds a mutable array/collection into a persistent local. Bind it directly (with `as const` if immutable) or add `// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch:/sim-cache:/sim-memo: <why it is reset/safe>`.',
     },
   },
   create(context) {
@@ -210,9 +262,15 @@ export default {
         if (!isModuleScope(node)) return;
 
         for (const decl of node.declarations) {
-          // Destructuring binds the initializer's elements into sub-locals; the RHS
-          // literal isn't retained as one module binding. Skip (documented gap).
-          if (decl.id.type === 'ArrayPattern' || decl.id.type === 'ObjectPattern') continue;
+          // Destructuring: the RHS literal isn't retained as one binding, but an element
+          // bound into a local can be a live collection (`const [buf] = [new Int32Array()]`).
+          // Inspect the matched element/property rather than skipping wholesale.
+          if (decl.id.type === 'ArrayPattern' || decl.id.type === 'ObjectPattern') {
+            if (decl.init && destructuringBindsMutable(decl.id, decl.init)) {
+              context.report({ node: decl, messageId: 'mutableDestructure' });
+            }
+            continue;
+          }
 
           if (node.kind === 'let' || node.kind === 'var') {
             // `var` is reassignable module state too (and hoisted) — treat it like `let`.
