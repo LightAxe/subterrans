@@ -133,11 +133,21 @@ function isExemptAsConstArray(init) {
   return !containsCollectionCtor(inner);
 }
 
-/** True when an expression (recursing array/object literals) contains a `new <collection>()`. */
+/** True when an expression contains a live `new <collection>()` — recursing array/object
+ *  literals, conditional/logical branches, and `Object.freeze`/`Object.seal` wrappers. */
 function containsCollectionCtor(node) {
+  if (!node) return false;
+  const frozen = objectFreezeArg(node);
+  if (frozen) return containsCollectionCtor(frozen);
   const base = unwrapToBase(node);
   if (!base) return false;
   if (isCollectionConstructor(base)) return true;
+  if (base.type === 'ConditionalExpression') {
+    return containsCollectionCtor(base.consequent) || containsCollectionCtor(base.alternate);
+  }
+  if (base.type === 'LogicalExpression') {
+    return containsCollectionCtor(base.left) || containsCollectionCtor(base.right);
+  }
   if (base.type === 'ArrayExpression') {
     return base.elements.some((el) => {
       if (!el) return false;

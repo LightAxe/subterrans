@@ -88,6 +88,15 @@ const FLAGGED: ReadonlyArray<readonly [string, string]> = [
   ['Object.freeze(new Map()) — shallow freeze', 'const M = Object.freeze(new Map());'],
   ['Object.freeze([new Map()]) — collection inside', 'const A = Object.freeze([new Map()]);'],
   ['Object.seal(new Set()) — shallow seal', 'const S = Object.seal(new Set());'],
+  [
+    'as-const array with conditional collection element',
+    'const A = [cond ? new Map() : null] as const;',
+  ],
+  ['Object.freeze of a logical-fallback collection', 'const M = Object.freeze(pre ?? new Map());'],
+  [
+    'as-const array spreading a frozen collection',
+    'const A = [Object.freeze(new Map())] as const;',
+  ],
   ['array destructuring default is a collection', 'const [buf = new Int32Array(8)] = [];'],
   ['object destructuring default is a collection', 'const { m = new Map() } = {};'],
 ];
@@ -99,6 +108,7 @@ const ALLOWED: ReadonlyArray<readonly [string, string]> = [
   ['exported array `as const`', 'export const A = [1, 2, 3] as const;'],
   ['array `as const satisfies T`', 'const A = [1, 2, 3] as const satisfies readonly number[];'],
   ['as-const nested array literals (deep readonly)', 'const A = [[1, 2], [3, 4]] as const;'],
+  ['as-const array with conditional primitive element', 'const A = [cond ? 1 : 2] as const;'],
   ['as-const spread of identifier (gap)', 'const A = [...xs] as const;'],
   ['export default primitive', 'export default 5;'],
   ['export default function', 'export default function () {};'],
