@@ -39,8 +39,8 @@
 //   - destructuring is inspected by direct array-index / object-property match on an
 //     array/object literal RHS (`const [buf] = [new Int32Array()]` IS caught); a
 //     rest/computed/nested pattern or a non-literal RHS (`const [x] = makePair()`) is not.
-//   - non-literal/non-ctor expression forms: conditional (`c ? [] : []`), logical,
-//     sequence, and identifier aliases (`const A = otherArray`) are not traced.
+//   - sequence expressions (`(f(), [])`) and identifier aliases (`const A = otherArray`)
+//     are not traced. Conditional (`c ? [] : []`) and logical (`a || []`) ARE traced.
 //   - `var` hoisted out of a nested block; `using` / `await using`; ambient `declare`.
 //
 // NOT a hazard (correctly NOT flagged — the collection is discarded, not retained):
@@ -175,12 +175,30 @@ function collectionCtorName(node) {
   return c.type === 'Identifier' ? c.name : c.property.name;
 }
 
-/** True when an expression value is a mutable array literal (not `as const`) or collection ctor. */
-function isMutableCollectionValue(node) {
+/**
+ * Classify an initializer as yielding persistent mutable state. Recurses through
+ * conditional (`c ? a : b`) and logical (`a || b`, `x ?? y`) expressions — ANY branch
+ * that yields a mutable array/collection makes the binding a hazard. Returns
+ * `{ kind: 'array' }` | `{ kind: 'collection', ctor }` | null.
+ */
+function findMutable(node) {
+  if (!node) return null;
+  if (node.type === 'ConditionalExpression') {
+    return findMutable(node.consequent) || findMutable(node.alternate);
+  }
+  if (node.type === 'LogicalExpression') {
+    return findMutable(node.left) || findMutable(node.right);
+  }
   const base = unwrapToBase(node);
-  if (!base) return false;
-  if (base.type === 'ArrayExpression') return !isExemptAsConstArray(node);
-  return isCollectionConstructor(base);
+  if (!base) return null;
+  if (base.type === 'ArrayExpression') return isExemptAsConstArray(node) ? null : { kind: 'array' };
+  if (isCollectionConstructor(base)) return { kind: 'collection', ctor: collectionCtorName(base) };
+  return null;
+}
+
+/** True when an expression value yields a mutable array/collection (used by destructuring). */
+function isMutableCollectionValue(node) {
+  return findMutable(node) !== null;
 }
 
 /**
@@ -280,19 +298,16 @@ export default {
           if (node.kind !== 'const') continue; // ignore `using` / `await using`
           if (!decl.init) continue;
 
-          // Peel type assertions / non-null / trailing method-call chains to the base,
-          // so `[1, 2].map(...)` / `new Int32Array(n).fill(-1)` resolve to their root.
-          const base = unwrapToBase(decl.init);
-          if (!base) continue;
-
-          if (base.type === 'ArrayExpression') {
-            if (isExemptAsConstArray(decl.init)) continue;
+          // Classify the initializer (peeling assertions/non-null/method chains, and
+          // recursing through conditional/logical branches) as a mutable array/collection.
+          const found = findMutable(decl.init);
+          if (found && found.kind === 'array') {
             context.report({ node: decl, messageId: 'mutableArray' });
-          } else if (isCollectionConstructor(base)) {
+          } else if (found && found.kind === 'collection') {
             context.report({
               node: decl,
               messageId: 'mutableCollection',
-              data: { ctor: collectionCtorName(base) },
+              data: { ctor: found.ctor },
             });
           }
         }
