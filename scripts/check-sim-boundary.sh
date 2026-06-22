@@ -66,8 +66,9 @@ echo "FNDN-07 grep guard: clean."
 # bypasses the reviewable acknowledgement the rule exists to force. Match the rule
 # ANYWHERE in the directive (it may sit in a comma-separated multi-rule list, e.g.
 # `eslint-disable-next-line no-restricted-syntax, subterrans/sim-module-state`),
-# then fail any such line lacking a sim-scratch/sim-cache/sim-memo marker.
-DISABLE_HITS=$(grep -rnE 'eslint-disable.*subterrans/sim-module-state' src/sim --include='*.ts' | grep -vE 'sim-(scratch|cache|memo):' || true)
+# then fail any such line lacking a sim-scratch/sim-cache/sim-memo marker WITH a non-empty
+# explanation after the colon (a bare `-- sim-scratch:` is not an acknowledgement).
+DISABLE_HITS=$(grep -rnE 'eslint-disable.*subterrans/sim-module-state' src/sim --include='*.ts' | grep -vE 'sim-(scratch|cache|memo):[[:space:]]*[^[:space:]]' || true)
 if [[ -n "$DISABLE_HITS" ]]; then
   echo "subterrans/sim-module-state disable WITHOUT a reason (issue #211):"
   echo "$DISABLE_HITS"
