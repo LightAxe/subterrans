@@ -85,6 +85,9 @@ const FLAGGED: ReadonlyArray<readonly [string, string]> = [
   ['optional-chain method on a collection', 'const X = new Int32Array(8)?.fill(0);'],
   ['export default collection', 'export default new Map();'],
   ['export default array literal', 'export default [1, 2];'],
+  ['Object.freeze(new Map()) — shallow freeze', 'const M = Object.freeze(new Map());'],
+  ['Object.freeze([new Map()]) — collection inside', 'const A = Object.freeze([new Map()]);'],
+  ['Object.seal(new Set()) — shallow seal', 'const S = Object.seal(new Set());'],
   ['array destructuring default is a collection', 'const [buf = new Int32Array(8)] = [];'],
   ['object destructuring default is a collection', 'const { m = new Map() } = {};'],
 ];
@@ -106,7 +109,8 @@ const ALLOWED: ReadonlyArray<readonly [string, string]> = [
   ['new Error (not a collection)', "const E = new Error('x');"],
   ['identifier alias (documented gap)', 'const A = otherArray;'],
   ['conditional between as-const arrays', 'const A = cond ? ([1] as const) : ([2] as const);'],
-  ['Object.freeze([...]) is immutable', 'const A = Object.freeze([1, 2]);'],
+  ['Object.freeze of primitives is immutable', 'const A = Object.freeze([1, 2]);'],
+  ['Object.freeze of a primitive object', 'const O = Object.freeze({ a: 1 });'],
   ['member access on fresh collection (instance discarded)', 'const A = new Map().get;'],
   ['property access on fresh collection (primitive)', 'const A = new Set().size;'],
   // documented shape gaps

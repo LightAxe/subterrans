@@ -22,7 +22,10 @@
 //     `new <collection>()` (bare `new Map()` or global-qualified `new globalThis.Map()`)
 //     — incl. chained forms like `new Int32Array(n).fill(-1)` and `[1, 2].map(...)`;
 //   - `export default <mutable>` (`export default new Map()` / `export default [1, 2]`),
-//     which caches a mutable module-level singleton.
+//     which caches a mutable module-level singleton;
+//   - `Object.freeze(...)` / `Object.seal(...)` wrapping a live collection — the freeze is
+//     shallow, so the Map/Set inside stays mutable (freezing only primitive literals is
+//     immutable and allowed).
 //
 // ESCAPES (each makes intent explicit):
 //   - immutable lookup array → `[...] as const` (optionally wrapped in an outer
@@ -214,14 +217,41 @@ function collectionCtorName(node) {
   return c.type === 'Identifier' ? c.name : c.property.name;
 }
 
+/** If `node` is `Object.freeze(arg)` / `Object.seal(arg)`, return `arg`; else null. */
+function objectFreezeArg(node) {
+  const peeled = peelAssertions(node);
+  if (
+    peeled &&
+    peeled.type === 'CallExpression' &&
+    peeled.callee &&
+    peeled.callee.type === 'MemberExpression' &&
+    !peeled.callee.computed &&
+    peeled.callee.object &&
+    peeled.callee.object.type === 'Identifier' &&
+    peeled.callee.object.name === 'Object' &&
+    peeled.callee.property &&
+    peeled.callee.property.type === 'Identifier' &&
+    (peeled.callee.property.name === 'freeze' || peeled.callee.property.name === 'seal') &&
+    peeled.arguments.length > 0
+  ) {
+    return peeled.arguments[0];
+  }
+  return null;
+}
+
 /**
  * Classify an initializer as yielding persistent mutable state. Recurses through
  * conditional (`c ? a : b`) and logical (`a || b`, `x ?? y`) expressions — ANY branch
  * that yields a mutable array/collection makes the binding a hazard. Returns
- * `{ kind: 'array' }` | `{ kind: 'collection', ctor }` | null.
+ * `{ kind: 'array' }` | `{ kind: 'collection', ctor }` | `{ kind: 'frozen' }` | null.
  */
 function findMutable(node) {
   if (!node) return null;
+  // `Object.freeze(x)` / `Object.seal(x)` is SHALLOW: a primitive array/object becomes
+  // immutable (safe), but a Map/Set/typed-array inside stays mutable (`.set()` still works).
+  // Detect it before the generic method-chain peel (which would reduce it to `Object`).
+  const frozenArg = objectFreezeArg(node);
+  if (frozenArg) return containsCollectionCtor(frozenArg) ? { kind: 'frozen' } : null;
   // Unwrap assertions / non-null / method-call chains FIRST, so an outer wrapper on a
   // conditional/logical (`(cond ? [1] : [2]) as number[]`, `(a || [1]).slice()`) still
   // reaches the branch recursion below rather than falling through as non-mutable.
@@ -340,6 +370,8 @@ export default {
         'Module-level mutable `new {{ctor}}()` in src/sim is cross-tick state. Add `// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch:/sim-cache:/sim-memo: <why it is reset/safe>`.',
       mutableDestructure:
         'Module-level destructuring binds a mutable array/collection into a persistent local. Bind it directly (with `as const` if immutable) or add `// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch:/sim-cache:/sim-memo: <why it is reset/safe>`.',
+      mutableFrozen:
+        '`Object.freeze(...)` is shallow — a `Map`/`Set`/typed-array inside it stays mutable in src/sim (`.set()`/`.add()` still work). Add `// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch:/sim-cache:/sim-memo: <why>`, or freeze a structure that holds no live collection.',
     },
   },
   create(context) {
@@ -381,6 +413,8 @@ export default {
               messageId: 'mutableCollection',
               data: { ctor: found.ctor },
             });
+          } else if (found && found.kind === 'frozen') {
+            context.report({ node: decl, messageId: 'mutableFrozen' });
           }
         }
       },
@@ -391,6 +425,8 @@ export default {
           context.report({ node, messageId: 'mutableArray' });
         } else if (found && found.kind === 'collection') {
           context.report({ node, messageId: 'mutableCollection', data: { ctor: found.ctor } });
+        } else if (found && found.kind === 'frozen') {
+          context.report({ node, messageId: 'mutableFrozen' });
         }
       },
     };
