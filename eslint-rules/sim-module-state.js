@@ -41,6 +41,11 @@
 //   - non-literal/non-ctor expression forms: conditional (`c ? [] : []`), logical,
 //     sequence, and identifier aliases (`const A = otherArray`) are not traced.
 //   - `var` hoisted out of a nested block; `using` / `await using`; ambient `declare`.
+//
+// NOT a hazard (correctly NOT flagged — the collection is discarded, not retained):
+// member/property access on a fresh collection, e.g. `const x = new Map().get` (a
+// reference to the unbound `Map.prototype.get` — JS methods are not auto-bound) or
+// `const n = new Set().size` (a primitive). Neither keeps a live collection.
 
 /** `new`-expression callees that produce a mutable collection. */
 const COLLECTION_CONSTRUCTORS = new Set([

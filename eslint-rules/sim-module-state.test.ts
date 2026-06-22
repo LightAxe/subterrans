@@ -79,6 +79,8 @@ const ALLOWED: ReadonlyArray<readonly [string, string]> = [
   ['identifier alias (documented gap)', 'const A = otherArray;'],
   ['conditional expression (documented gap)', 'const A = cond ? [1] : [2];'],
   ['Object.freeze([...]) is immutable', 'const A = Object.freeze([1, 2]);'],
+  ['member access on fresh collection (instance discarded)', 'const A = new Map().get;'],
+  ['property access on fresh collection (primitive)', 'const A = new Set().size;'],
   // documented shape gaps
   ['plain object (documented gap)', 'const O = { a: 1 };'],
   ['factory call (documented gap)', 'const X = makeBuffer();'],
