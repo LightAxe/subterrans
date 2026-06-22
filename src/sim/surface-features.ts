@@ -127,7 +127,9 @@ interface SurfaceFeatureRegistryEntry {
 //   - Priority: HardBlock kinds win over SoftCost. Among HardBlocks: Boulder
 //     > Twig > Leaf > BigLeaf (rarer/larger features yield to more common
 //     smaller ones to avoid one BigLeaf wiping out a region's variety).
-const SURFACE_FEATURES: ReadonlyArray<SurfaceFeatureRegistryEntry> = [
+// `as const satisfies` (not a `ReadonlyArray<…>` annotation, which would widen the
+// entries back to mutable) keeps the registry DEEPLY readonly — entries can't be mutated.
+const SURFACE_FEATURES = [
   {
     kind: SurfaceFeatureKind.Boulder,
     salt: 151,
@@ -184,7 +186,7 @@ const SURFACE_FEATURES: ReadonlyArray<SurfaceFeatureRegistryEntry> = [
     variantCount: 3, // dense / sparse / tilted
     movement: SurfaceMovementEffect.SoftCost,
   },
-] as const;
+] as const satisfies ReadonlyArray<SurfaceFeatureRegistryEntry>;
 
 // Boot-time integrity check: the registry must be self-consistent or the
 // selector will silently misbehave. Surface bugs at module-load time so
@@ -208,7 +210,10 @@ for (let i = 0; i < SURFACE_FEATURES.length; i++) {
   // suppressed, and the renderer would paint a sprite over a carved-passable
   // tile (violating R4-3). Enforce the precondition here so a future Cosmetic
   // feature fails loudly at boot instead of silently breaking the carve.
-  if (e.movement === SurfaceMovementEffect.Cosmetic) {
+  // Cast widens `e.movement` (narrowed to the current entries' literals by `as const`)
+  // back to the full enum, so this future-proofing guard keeps compiling and fires if a
+  // later registry entry ever uses Cosmetic movement.
+  if ((e.movement as SurfaceMovementEffect) === SurfaceMovementEffect.Cosmetic) {
     throw new Error(
       `SURFACE_FEATURES[${i}]: movement must not be Cosmetic — it breaks PR 4 carve detection in surfaceFeatureAt`,
     );

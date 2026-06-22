@@ -27,7 +27,9 @@
 //     `satisfies T`, which preserves the readonly value type). This is the ONLY array
 //     exemption: `as number[]`, a `readonly`/`ReadonlyArray<>` annotation, and chained
 //     forms like `[...] as const as number[]` / `[...] as unknown as const` /
-//     `([...] as const).slice()` all leave a mutable runtime array and are flagged.
+//     `([...] as const).slice()` all leave a mutable runtime array and are flagged. An
+//     as-const array holding a live collection (`[new Map()] as const`) is also flagged —
+//     `as const` makes the array readonly but cannot immutabilize the collection inside.
 //   - genuine scratch/cache/memo → `// eslint-disable-next-line subterrans/sim-module-state
 //     -- sim-scratch: reset-per-tick` (or sim-cache:/sim-memo: <why it is safe>). The
 //     `--` reason is enforced separately by scripts/check-sim-boundary.sh.
@@ -36,10 +38,12 @@
 //   - factory `CallExpression` returns (`const X = makeBuffer()`, `Array.from(...)`), and
 //     plain mutable objects (`const X = {}`). Those carry a plain `// sim-scratch:` marker.
 //   - `new RegExp()` / `new Error()` / custom (non-collection) classes.
-//   - destructuring: array rest (`const [...r] = …` — always a fresh mutable array),
-//     element/property matches on an array/object literal RHS, and string-literal computed
-//     keys ARE caught. Object rest (`{ ...r }`, a plain object), a DYNAMIC computed key, a
-//     nested sub-pattern, or a non-literal array RHS (`const [x] = makePair()`) are not.
+//   - destructuring: a `let`/`var` destructuring is flagged (reassignable). For `const`,
+//     array rest (`const [...r] = …` — always a fresh mutable array), defaults
+//     (`[buf = new Map()]`), element/property matches on an array/object literal RHS, and
+//     string-literal computed keys ARE caught. Object rest (`{ ...r }`, a plain object), a
+//     DYNAMIC computed key, a nested sub-pattern, or a non-literal array RHS
+//     (`const [x] = makePair()`) are not.
 //   - sequence expressions (`(f(), [])`) and identifier aliases (`const A = otherArray`)
 //     are not traced. Conditional (`c ? [] : []`) and logical (`a || []`) ARE traced.
 //   - `var` hoisted out of a nested block; `using` / `await using`; ambient `declare`.
@@ -117,7 +121,27 @@ function isExemptAsConstArray(init) {
   const outer = peelSatisfies(init);
   if (!isConstAssertion(outer)) return false;
   const inner = peelSatisfies(outer.expression);
-  return Boolean(inner) && inner.type === 'ArrayExpression';
+  if (!inner || inner.type !== 'ArrayExpression') return false;
+  // `as const` makes nested array/object/primitive literals deeply readonly, but it does
+  // NOT immutabilize a live collection instance — `[new Map()] as const` still allows
+  // `x[0].set(...)`. So an as-const array is exempt only if it holds no collection ctor.
+  return !containsCollectionCtor(inner);
+}
+
+/** True when an expression (recursing array/object literals) contains a `new <collection>()`. */
+function containsCollectionCtor(node) {
+  const base = unwrapToBase(node);
+  if (!base) return false;
+  if (isCollectionConstructor(base)) return true;
+  if (base.type === 'ArrayExpression') {
+    return base.elements.some(
+      (el) => el && el.type !== 'SpreadElement' && containsCollectionCtor(el),
+    );
+  }
+  if (base.type === 'ObjectExpression') {
+    return base.properties.some((p) => p.type === 'Property' && containsCollectionCtor(p.value));
+  }
+  return false;
 }
 
 /**
@@ -217,26 +241,43 @@ function destructuringBindsMutable(pattern, init) {
     // An array rest element collects into a FRESH mutable Array — always persistent
     // mutable state, regardless of RHS shape (`const [...r] = xs`, `const [a, ...r] = …`).
     if (pattern.elements.some((el) => el && el.type === 'RestElement')) return true;
+    // A default (`[buf = new Int32Array()]`) can materialize the mutable value itself,
+    // independent of the RHS — check it regardless of RHS shape.
+    for (const el of pattern.elements) {
+      if (el && el.type === 'AssignmentPattern' && isMutableCollectionValue(el.right)) return true;
+    }
     const base = unwrapToBase(init);
-    if (!base || base.type !== 'ArrayExpression') return false;
-    for (let i = 0; i < pattern.elements.length; i++) {
-      const pel = pattern.elements[i];
-      if (!pel) continue; // hole
-      const rel = base.elements[i];
-      if (rel && rel.type !== 'SpreadElement' && isMutableCollectionValue(rel)) return true;
+    if (base && base.type === 'ArrayExpression') {
+      for (let i = 0; i < pattern.elements.length; i++) {
+        if (!pattern.elements[i]) continue; // hole
+        const rel = base.elements[i];
+        if (rel && rel.type !== 'SpreadElement' && isMutableCollectionValue(rel)) return true;
+      }
     }
     return false;
   }
   if (pattern.type === 'ObjectPattern') {
-    const base = unwrapToBase(init);
-    if (!base || base.type !== 'ObjectExpression') return false;
+    // Defaults (`{ m = new Map() }`) materialize a value independent of the RHS.
     for (const pprop of pattern.properties) {
-      // Object rest (`{ ...r }`) binds a plain object — covered by the object gap, not here.
-      if (pprop.type !== 'Property') continue;
-      const key = objKeyName(pprop);
-      if (key == null) continue; // unresolvable computed key — documented gap
-      const rprop = base.properties.find((p) => p.type === 'Property' && objKeyName(p) === key);
-      if (rprop && isMutableCollectionValue(rprop.value)) return true;
+      if (
+        pprop.type === 'Property' &&
+        pprop.value &&
+        pprop.value.type === 'AssignmentPattern' &&
+        isMutableCollectionValue(pprop.value.right)
+      ) {
+        return true;
+      }
+    }
+    const base = unwrapToBase(init);
+    if (base && base.type === 'ObjectExpression') {
+      for (const pprop of pattern.properties) {
+        // Object rest (`{ ...r }`) binds a plain object — covered by the object gap, not here.
+        if (pprop.type !== 'Property') continue;
+        const key = objKeyName(pprop);
+        if (key == null) continue; // unresolvable computed key — documented gap
+        const rprop = base.properties.find((p) => p.type === 'Property' && objKeyName(p) === key);
+        if (rprop && isMutableCollectionValue(rprop.value)) return true;
+      }
     }
     return false;
   }
@@ -298,7 +339,10 @@ export default {
           // bound into a local can be a live collection (`const [buf] = [new Int32Array()]`).
           // Inspect the matched element/property rather than skipping wholesale.
           if (decl.id.type === 'ArrayPattern' || decl.id.type === 'ObjectPattern') {
-            if (decl.init && destructuringBindsMutable(decl.id, decl.init)) {
+            if (node.kind === 'let' || node.kind === 'var') {
+              // Destructured `let`/`var` bindings are reassignable module state too.
+              context.report({ node: decl, messageId: 'mutableLet' });
+            } else if (decl.init && destructuringBindsMutable(decl.id, decl.init)) {
               context.report({ node: decl, messageId: 'mutableDestructure' });
             }
             continue;

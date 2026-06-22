@@ -78,6 +78,11 @@ const FLAGGED: ReadonlyArray<readonly [string, string]> = [
   ['array rest after an element', 'const [x, ...rest] = [1, new Map()];'],
   ['array rest of primitives is still a mutable array', 'const [...rest] = [1, 2];'],
   ['string-literal computed key binds a Map', 'const { ["key"]: x } = { key: new Map() };'],
+  ['destructured let binding', 'let [tick] = [0];'],
+  ['destructured var binding', 'var { cache } = { cache: 0 };'],
+  ['as-const array holding a collection', 'const C = [new Map()] as const;'],
+  ['array destructuring default is a collection', 'const [buf = new Int32Array(8)] = [];'],
+  ['object destructuring default is a collection', 'const { m = new Map() } = {};'],
 ];
 
 // MUST NOT be flagged (exemptions, non-persistent scopes, documented gaps).
@@ -86,6 +91,7 @@ const ALLOWED: ReadonlyArray<readonly [string, string]> = [
   ['array `as const`', 'const A = [1, 2, 3] as const;'],
   ['exported array `as const`', 'export const A = [1, 2, 3] as const;'],
   ['array `as const satisfies T`', 'const A = [1, 2, 3] as const satisfies readonly number[];'],
+  ['as-const nested array literals (deep readonly)', 'const A = [[1, 2], [3, 4]] as const;'],
   ['array `satisfies T as const`', 'const A = [1, 2, 3] satisfies readonly number[] as const;'],
   // non-collection / non-array values
   ['const scalar', 'const N = 5;'],
