@@ -52,6 +52,10 @@
 //   - sequence expressions (`(f(), [])`) and identifier aliases (`const A = otherArray`)
 //     are not traced. Conditional (`c ? [] : []`) and logical (`a || []`) ARE traced.
 //   - `var` hoisted out of a nested block; `using` / `await using`; ambient `declare`.
+//   - pathological compositions no human writes: nested `Object.freeze(Object.freeze(x))`,
+//     `Object.freeze([Object.seal(x)])`, destructuring of an `Object.freeze(...)` RHS, and
+//     assignment-expression array elements (`[buf = new Int32Array()]`). These retain
+//     mutable state but are out of scope for the syntactic rule — review-checklist items.
 //
 // NOT a hazard (correctly NOT flagged — the collection is discarded, not retained):
 // member/property access on a fresh collection, e.g. `const x = new Map().get` (a
