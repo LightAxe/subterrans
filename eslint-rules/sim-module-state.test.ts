@@ -43,6 +43,9 @@ const FLAGGED: ReadonlyArray<readonly [string, string]> = [
   ['conditional between collections', 'const M = cond ? new Map() : new Set();'],
   ['logical `|| []` fallback', 'const A = pre || [1, 2];'],
   ['logical `?? new Map()` fallback', 'const M = pre ?? new Map();'],
+  ['conditional behind outer assertion', 'const A = (cond ? [1] : [2]) as number[];'],
+  ['logical behind outer assertion', 'const A = (pre || [1, 2]) as number[];'],
+  ['conditional behind method chain', 'const A = (cond ? [1] : [2]).slice();'],
   // collection constructors — bare, asserted, chained, non-null, qualified
   ['new Map()', 'const M = new Map();'],
   ['new Map() as ReadonlyMap', 'const M = new Map() as ReadonlyMap<number, number>;'],

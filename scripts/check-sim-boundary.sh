@@ -84,7 +84,10 @@ echo "sim-module-state disable-reason guard: clean."
 # above (which keys on the rule name) cannot see it. Require rule-specific disables in
 # src/sim so the determinism guard can never be silently blanketed. Test files are exempt
 # (the rule does not run there).
-BLANKET_HITS=$(grep -rnE 'eslint-disable(-next-line|-line)?[[:space:]]*(\*/|$)' src/sim --include='*.ts' | grep -vE '\.test\.ts:' || true)
+# The `--` alternative catches a DESCRIBED blanket disable (`// eslint-disable-next-line
+# -- note`), which ESLint still treats as all-rule; a rule-specific disable always has the
+# rule name before any `--`, so this never matches those.
+BLANKET_HITS=$(grep -rnE 'eslint-disable(-next-line|-line)?[[:space:]]*(--|\*/|$)' src/sim --include='*.ts' | grep -vE '\.test\.ts:' || true)
 if [[ -n "$BLANKET_HITS" ]]; then
   echo "Blanket (all-rule) eslint-disable in src/sim (issue #211):"
   echo "$BLANKET_HITS"

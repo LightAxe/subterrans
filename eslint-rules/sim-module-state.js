@@ -183,14 +183,17 @@ function collectionCtorName(node) {
  */
 function findMutable(node) {
   if (!node) return null;
-  if (node.type === 'ConditionalExpression') {
-    return findMutable(node.consequent) || findMutable(node.alternate);
-  }
-  if (node.type === 'LogicalExpression') {
-    return findMutable(node.left) || findMutable(node.right);
-  }
+  // Unwrap assertions / non-null / method-call chains FIRST, so an outer wrapper on a
+  // conditional/logical (`(cond ? [1] : [2]) as number[]`, `(a || [1]).slice()`) still
+  // reaches the branch recursion below rather than falling through as non-mutable.
   const base = unwrapToBase(node);
   if (!base) return null;
+  if (base.type === 'ConditionalExpression') {
+    return findMutable(base.consequent) || findMutable(base.alternate);
+  }
+  if (base.type === 'LogicalExpression') {
+    return findMutable(base.left) || findMutable(base.right);
+  }
   if (base.type === 'ArrayExpression') return isExemptAsConstArray(node) ? null : { kind: 'array' };
   if (isCollectionConstructor(base)) return { kind: 'collection', ctor: collectionCtorName(base) };
   return null;
