@@ -97,3 +97,20 @@ if [[ -n "$BLANKET_HITS" ]]; then
   exit 1
 fi
 echo "blanket-disable guard: clean."
+
+# Issue #211 — no FILE-WIDE sim-module-state disable. The bare `eslint-disable` form (no
+# `-line`/`-next-line`), e.g. `/* eslint-disable subterrans/sim-module-state -- … */`,
+# suppresses the rule for the REST OF THE FILE — even with a reason marker it defeats the
+# per-declaration review contract (one marker would license unlimited module state below).
+# Match `eslint-disable` followed by whitespace (the file-wide form; `-line`/`-next-line`
+# have a hyphen there, so they don't match) naming the rule. Require per-line disables.
+FILEWIDE_HITS=$(grep -rnE 'eslint-disable[[:space:]].*subterrans/sim-module-state' src/sim --include='*.ts' | grep -vE '\.test\.ts:' || true)
+if [[ -n "$FILEWIDE_HITS" ]]; then
+  echo "File-wide subterrans/sim-module-state disable in src/sim (issue #211):"
+  echo "$FILEWIDE_HITS"
+  echo ""
+  echo "Use a per-line \`// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: …\`"
+  echo "at each declaration, not a file-wide \`eslint-disable\` that blankets the whole file."
+  exit 1
+fi
+echo "file-wide-disable guard: clean."

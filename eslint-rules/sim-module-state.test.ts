@@ -81,6 +81,10 @@ const FLAGGED: ReadonlyArray<readonly [string, string]> = [
   ['destructured let binding', 'let [tick] = [0];'],
   ['destructured var binding', 'var { cache } = { cache: 0 };'],
   ['as-const array holding a collection', 'const C = [new Map()] as const;'],
+  ['as-const array spreading an inline collection literal', 'const A = [...[new Map()]] as const;'],
+  ['optional-chain method on a collection', 'const X = new Int32Array(8)?.fill(0);'],
+  ['export default collection', 'export default new Map();'],
+  ['export default array literal', 'export default [1, 2];'],
   ['array destructuring default is a collection', 'const [buf = new Int32Array(8)] = [];'],
   ['object destructuring default is a collection', 'const { m = new Map() } = {};'],
 ];
@@ -92,6 +96,9 @@ const ALLOWED: ReadonlyArray<readonly [string, string]> = [
   ['exported array `as const`', 'export const A = [1, 2, 3] as const;'],
   ['array `as const satisfies T`', 'const A = [1, 2, 3] as const satisfies readonly number[];'],
   ['as-const nested array literals (deep readonly)', 'const A = [[1, 2], [3, 4]] as const;'],
+  ['as-const spread of identifier (gap)', 'const A = [...xs] as const;'],
+  ['export default primitive', 'export default 5;'],
+  ['export default function', 'export default function () {};'],
   ['array `satisfies T as const`', 'const A = [1, 2, 3] satisfies readonly number[] as const;'],
   // non-collection / non-array values
   ['const scalar', 'const N = 5;'],

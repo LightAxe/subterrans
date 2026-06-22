@@ -20,7 +20,9 @@
 //   - any `const` whose initializer, AFTER unwrapping type assertions / `satisfies` /
 //     non-null `!` and trailing method-call chains, is an array literal, or a
 //     `new <collection>()` (bare `new Map()` or global-qualified `new globalThis.Map()`)
-//     — incl. chained forms like `new Int32Array(n).fill(-1)` and `[1, 2].map(...)`.
+//     — incl. chained forms like `new Int32Array(n).fill(-1)` and `[1, 2].map(...)`;
+//   - `export default <mutable>` (`export default new Map()` / `export default [1, 2]`),
+//     which caches a mutable module-level singleton.
 //
 // ESCAPES (each makes intent explicit):
 //   - immutable lookup array → `[...] as const` (optionally wrapped in an outer
@@ -134,12 +136,19 @@ function containsCollectionCtor(node) {
   if (!base) return false;
   if (isCollectionConstructor(base)) return true;
   if (base.type === 'ArrayExpression') {
-    return base.elements.some(
-      (el) => el && el.type !== 'SpreadElement' && containsCollectionCtor(el),
-    );
+    return base.elements.some((el) => {
+      if (!el) return false;
+      // A spread of an inline literal (`[...[new Map()]]`) still carries its elements in.
+      if (el.type === 'SpreadElement') return containsCollectionCtor(el.argument);
+      return containsCollectionCtor(el);
+    });
   }
   if (base.type === 'ObjectExpression') {
-    return base.properties.some((p) => p.type === 'Property' && containsCollectionCtor(p.value));
+    return base.properties.some(
+      (p) =>
+        (p.type === 'Property' && containsCollectionCtor(p.value)) ||
+        (p.type === 'SpreadElement' && containsCollectionCtor(p.argument)),
+    );
   }
   return false;
 }
@@ -157,6 +166,11 @@ function unwrapToBase(node) {
     const peeled = peelAssertions(cur);
     if (peeled !== cur) {
       cur = peeled;
+      changed = true;
+    }
+    // Optional chains (`x?.m()`, `x?.m`) wrap the whole chain in a ChainExpression.
+    if (cur && cur.type === 'ChainExpression') {
+      cur = cur.expression;
       changed = true;
     }
     if (
@@ -368,6 +382,15 @@ export default {
               data: { ctor: found.ctor },
             });
           }
+        }
+      },
+      ExportDefaultDeclaration(node) {
+        // `export default new Map()` / `[1, 2]` caches a mutable module-level singleton.
+        const found = findMutable(node.declaration);
+        if (found && found.kind === 'array') {
+          context.report({ node, messageId: 'mutableArray' });
+        } else if (found && found.kind === 'collection') {
+          context.report({ node, messageId: 'mutableCollection', data: { ctor: found.ctor } });
         }
       },
     };
