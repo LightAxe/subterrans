@@ -33,7 +33,6 @@
 //   - destructuring binds (`const [BUF] = [new Int32Array()]`, `const { m } = {...}`) —
 //     the pattern's RHS is not inspected (skipped so the common `const [a, b] = [1, 2]`
 //     form doesn't false-positive); rare at module scope.
-//   - non-null assertions (`new Map()!`) — `TSNonNullExpression` is not unwrapped.
 
 /** `new`-expression callees that produce a mutable collection. */
 const COLLECTION_CONSTRUCTORS = new Set([
@@ -68,24 +67,11 @@ function isConstAssertion(node) {
   );
 }
 
-/** Strip every `as X` / `<X>` / `satisfies X` wrapper to reach the wrapped expression. */
-function unwrapAssertions(node) {
-  let cur = node;
-  while (
-    cur &&
-    (cur.type === 'TSAsExpression' ||
-      cur.type === 'TSSatisfiesExpression' ||
-      cur.type === 'TSTypeAssertion')
-  ) {
-    cur = cur.expression;
-  }
-  return cur;
-}
-
 /**
- * Strip type assertions AND trailing method-call chains to reach the base expression,
- * so `new Int32Array(n).fill(-1)` / `(new Map() as T).set(...)` resolve to their
- * `new <collection>()` root. Returns the innermost wrapped expression.
+ * Strip type assertions, non-null assertions (`!`), AND trailing method-call chains to
+ * reach the base expression, so `new Int32Array(n).fill(-1)` / `(new Map() as T).set(...)`
+ * / `new Map()!` resolve to their `new <collection>()` root. Returns the innermost
+ * wrapped expression.
  */
 function unwrapToBase(node) {
   let cur = node;
@@ -96,7 +82,8 @@ function unwrapToBase(node) {
       cur &&
       (cur.type === 'TSAsExpression' ||
         cur.type === 'TSSatisfiesExpression' ||
-        cur.type === 'TSTypeAssertion')
+        cur.type === 'TSTypeAssertion' ||
+        cur.type === 'TSNonNullExpression')
     ) {
       cur = cur.expression;
       changed = true;
@@ -173,28 +160,26 @@ export default {
           // array/object literal on the right is consumed, not retained as module state.
           // Skip these (the `[...] as const` advice is also meaningless for a pattern).
           if (decl.id.type === 'ArrayPattern' || decl.id.type === 'ObjectPattern') continue;
-          const inner = unwrapAssertions(decl.init);
-          if (!inner) continue;
 
-          if (inner.type === 'ArrayExpression') {
+          // Peel type assertions AND trailing method-call chains to the base expression,
+          // so `[1, 2].map(...)` / `([1] as const).slice()` / `new Int32Array(n).fill(-1)`
+          // resolve to their array-literal or `new <collection>()` root.
+          const base = unwrapToBase(decl.init);
+          if (!base) continue;
+
+          if (base.type === 'ArrayExpression') {
             // Exempt ONLY the exact `[...] as const` / `<const>[...]` shape: the const
             // assertion must be the OUTERMOST and sole wrapper directly on the array
-            // literal. Chains like `[...] as const as number[]`, `[...] as number[] as
-            // const`, and `[...] as unknown as const` leave the runtime array mutable.
+            // literal. Anything else — `[...] as const as number[]`, `([...] as const)
+            // .slice()`, `[...].map(...)`, a `readonly`/`ReadonlyArray<>` annotation —
+            // leaves a mutable runtime array and is flagged.
             const exemptAsConst =
               isConstAssertion(decl.init) &&
               decl.init.expression &&
               decl.init.expression.type === 'ArrayExpression';
             if (exemptAsConst) continue;
             context.report({ node: decl, messageId: 'mutableArray' });
-            continue;
-          }
-
-          // Collection constructor — directly, behind type assertions, or behind a
-          // method-call chain such as `new Int32Array(n).fill(-1)` (a common typed-array
-          // scratch idiom). Peel the chain to its constructor root before checking.
-          const base = unwrapToBase(decl.init);
-          if (isCollectionConstructor(base)) {
+          } else if (isCollectionConstructor(base)) {
             context.report({
               node: decl,
               messageId: 'mutableCollection',

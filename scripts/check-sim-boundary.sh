@@ -58,3 +58,21 @@ if [[ -n "$HITS" ]]; then
   exit 1
 fi
 echo "FNDN-07 grep guard: clean."
+
+# Issue #211 — sim-module-state disable-reason guard.
+# A `// eslint-disable[-next]-line subterrans/sim-module-state` MUST carry a
+# `-- sim-scratch:/sim-cache:/sim-memo:` reason. A bare disable still "uses" the
+# directive (it suppresses the rule), so ESLint won't flag it as unused — but it
+# bypasses the reviewable acknowledgement the rule exists to force. Catch bare
+# disables here (a line that names the rule in a disable directive but has no
+# sim-scratch/sim-cache/sim-memo marker).
+DISABLE_HITS=$(grep -rnE 'eslint-disable(-next-line|-line)?[[:space:]]+subterrans/sim-module-state' src/sim --include='*.ts' | grep -vE 'sim-(scratch|cache|memo):' || true)
+if [[ -n "$DISABLE_HITS" ]]; then
+  echo "subterrans/sim-module-state disable WITHOUT a reason (issue #211):"
+  echo "$DISABLE_HITS"
+  echo ""
+  echo "Every such disable must explain why the module-level state is safe, e.g.:"
+  echo "  // eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: reset-per-tick"
+  exit 1
+fi
+echo "sim-module-state disable-reason guard: clean."

@@ -51,6 +51,10 @@ const FLAGGED: ReadonlyArray<readonly [string, string]> = [
   ['typed array via `.fill()` chain', 'const D = new Int32Array(8).fill(-1);'],
   ['Array() via `.fill()` chain', 'const A = new Array(3).fill(0);'],
   ['new Map().set() chain', 'const M = new Map().set(1, 2);'],
+  ['array via `.map()` chain', 'const A = [1, 2].map((x) => x);'],
+  ['array via `(… as const).slice()` chain', 'const A = ([1, 2] as const).slice();'],
+  ['collection via non-null assertion', 'const M = new Map()!;'],
+  ['collection via non-null + method chain', 'const M = new Map()!.set(1, 2);'],
 ];
 
 // Every row that MUST NOT be flagged (exemptions + documented gaps).
