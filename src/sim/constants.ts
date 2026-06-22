@@ -1,11 +1,28 @@
-// constants.ts — Phase 2 PRD §9c balance parameters for src/sim/
+// constants.ts — gameplay-balance parameters for src/sim/ (PRD §9c and later tuning).
 //
-// All values are numeric literals or plain object literals — no imports, no computed values,
-// no float division, no Math.* calls. FP unit comments reference FP_ONE=256 (FP_SHIFT=8)
-// from fixed.ts for documentation purposes only; this file is a pure leaf dependency.
+// BALANCE CONSTANTS ARE NOT TECH DEBT. The values here are gameplay-balance knobs:
+// they are *expected* to drift as we tune, and the current value is our current best
+// guess — NOT a target to roll back to. Changing one is a normal balance edit needing
+// only playtest justification.
 //
-// To update a balance constant, change the literal here — the test in constants.test.ts
-// will catch any drift from the PRD §9c table.
+// A BARE CONSTANT RETUNE (only the numeric literal changes — no new code path,
+// WorldState field, tick-order change, or PRNG draw count/order change) is NOT a
+// `simVersion` bump and must NOT be version-gated (ADR-0015 item 3). Within a build the
+// value is applied identically across record and replay, so determinism (SCEN-06) holds;
+// cross-build replay of an OLDER save under a new value is deliberately not guaranteed
+// (ADR-0014 — short rounds, rolling MIN_ACCEPTED_SIM_VERSION). A change that ALSO alters
+// an algorithm, a WorldState field, tick order, or PRNG draw count/order IS a gated
+// change — that is no longer a bare retune.
+//
+// A few STRUCTURAL / must-not-drift constants are marked `// structural` below (e.g.
+// MAX_ENTITIES sizes serialized typed arrays; SURFACE_GRID_WIDTH sizes the pheromone
+// grids; PLAYER_COLONY_ID is an identity sentinel). These marks are illustrative, not
+// exhaustive — for any constant NOT marked, apply the bare-retune test above.
+//
+// Implementation: all values are numeric/object literals — no imports, computed values,
+// float division, or Math.* (pure leaf). FP unit comments reference FP_ONE=256 (FP_SHIFT=8)
+// from fixed.ts for documentation only. constants.test.ts pins these values — update it
+// as part of a deliberate retune.
 
 // ---------------------------------------------------------------------------
 // Lifecycle ticks (PRD §9c)
@@ -18,6 +35,7 @@ export const EGG_HATCH_TICKS = 1200;
 export const LARVA_MATURE_TICKS = 1500;
 
 /** PRD §9c — Worker lifespan: effectively immortal (INT32_MAX ticks). */
+// structural — must not drift; INT32_MAX "never dies of old age" sentinel, not a balance knob.
 export const WORKER_LIFESPAN_TICKS = 0x7fffffff;
 
 /** PRD §9c — Ticks between queen egg-laying events (pre-V21 static value). */
@@ -31,6 +49,7 @@ export const QUEEN_EGG_FOOD_THRESHOLD = 768; // 3 × FP_ONE
 // ---------------------------------------------------------------------------
 
 /** S4 — Sentinel returned by eggIntervalForColony when food is below the surplus gate. */
+// structural — must not drift; -1 sentinel, not a balance knob.
 export const QUEEN_EGG_INTERVAL_DISABLED = -1;
 /** S4 — Egg interval at < 3× surplus (matches pre-V21 static value). */
 export const QUEEN_EGG_INTERVAL_BASE_TICKS = 300;
@@ -102,13 +121,12 @@ export const NURSE_ATTEND_DWELL_TICKS = 600;
 /**
  * PRD §9c — Ticks an ant can survive with no food before dying.
  *
- * Phase 8.5 stabilization (2026-04-19): raised from 100 → 300 (5s → 15s at
- * 20Hz). While the UI is still being stabilized, the early-game starvation
- * pressure was felt as "the queen keeps dying before I can figure out how to
- * feed her". The PRD (02 §4a, §4c) keeps the 100-tick target for final
- * balance; rebalance back toward it once the interface is trustworthy. Do
- * NOT read this value as load-bearing for the equilibrium formula — it is
- * prototype-stage tuning.
+ * Current value 300 (15s at 20Hz). Raised from an early 100-tick estimate
+ * (2026-04-19) because early-game starvation killed the queen before a new
+ * player could learn to feed her. This is our current best balance guess — a
+ * normal balance knob, not tech debt and not a value to claw back (the 100 was
+ * an early estimate, since superseded by playtest). Not load-bearing for the
+ * equilibrium formula.
  */
 export const STARVATION_GRACE_TICKS = 300;
 
@@ -249,6 +267,7 @@ export const NURSE_RATIO = 3;
 // ---------------------------------------------------------------------------
 
 /** PRD §9c — Maximum active entity count in the simulation. */
+// structural — must not drift; sizes serialized typed arrays (save.ts), so a change IS a simVersion event, not a balance retune.
 export const MAX_ENTITIES = 8192;
 
 // ---------------------------------------------------------------------------
@@ -256,9 +275,11 @@ export const MAX_ENTITIES = 8192;
 // ---------------------------------------------------------------------------
 
 /** PRD §9c — Width of the surface pheromone grid in tiles. */
+// structural — must not drift; sizes the pheromone/occupancy grids, baked into serialized state.
 export const SURFACE_GRID_WIDTH = 128;
 
 /** PRD §9c — Height of the surface pheromone grid in tiles. */
+// structural — must not drift; sizes the pheromone/occupancy grids, baked into serialized state.
 export const SURFACE_GRID_HEIGHT = 128;
 
 /** PRD §9c — Width of the underground pheromone grid in tiles. */
@@ -336,9 +357,11 @@ export const MAX_ENTRANCES_PER_COLONY = 4;
 // ---------------------------------------------------------------------------
 
 /** Phase 7 PRD §6a — ColonyId for the player's colony. */
+// structural — must not drift; identity sentinel used as a colony key throughout, not a balance knob.
 export const PLAYER_COLONY_ID = 1;
 
 /** Phase 7 PRD §6a — ColonyId for the enemy colony. */
+// structural — must not drift; identity sentinel used as a colony key throughout, not a balance knob.
 export const ENEMY_COLONY_ID = 2;
 
 /** Phase 7 PRD §6b — Player colony starting tile X on the surface grid. */
@@ -356,12 +379,12 @@ export const ENEMY_START_Y = 64;
 /**
  * Phase 7 PRD §6b — Starting food units (FP) for each colony.
  *
- * Phase 8.5 stabilization (2026-04-19): raised from 500 → 1280 (≈2.0 → 5.0
- * food units) so the queen starts above QUEEN_EGG_FOOD_THRESHOLD (768 FP =
- * 3.0) and can lay her first egg immediately, rather than stalling until
- * workers bring food back. Like STARVATION_GRACE_TICKS, this is prototype-
- * stage tuning to relax early-game pressure while the UI is being
- * stabilized; the PRD (02 §6b) retains the 500 target for final balance.
+ * Current value 1280 (≈5.0 food units). Raised from an early 500 estimate
+ * (2026-04-19) so the queen starts above QUEEN_EGG_FOOD_THRESHOLD (768 FP =
+ * 3.0) and can lay her first egg immediately rather than stalling until workers
+ * return food. Like STARVATION_GRACE_TICKS, this is a normal balance knob — our
+ * current best guess, not tech debt (the 500 was an early estimate, since
+ * superseded by playtest).
  */
 export const STARTING_FOOD = 1280;
 
@@ -499,9 +522,10 @@ export const CHAMBER_FOOD_HEIGHT = 3;
  * distant food piles before starvation. Base wave preserved because the
  * 09 digger-reassignment memo balances digger↔forager reassignment around it.
  */
-export const SEARCH_LEASH_RADII: readonly number[] = [25, 40, 55, 70];
+export const SEARCH_LEASH_RADII: readonly number[] = [25, 40, 55, 70] as const;
 
 /** Highest valid index into SEARCH_LEASH_RADII. */
+// structural — must not drift; derived from SEARCH_LEASH_RADII.length, not a balance retune.
 export const SEARCH_LEASH_MAX_WAVE = SEARCH_LEASH_RADII.length - 1;
 
 /**

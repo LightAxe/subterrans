@@ -58,3 +58,60 @@ if [[ -n "$HITS" ]]; then
   exit 1
 fi
 echo "FNDN-07 grep guard: clean."
+
+# Issue #211 — sim-module-state disable-reason guard.
+# A `// eslint-disable[-next]-line ... subterrans/sim-module-state` MUST carry a
+# `-- sim-scratch:/sim-cache:/sim-memo:` reason. A bare disable still "uses" the
+# directive (it suppresses the rule), so ESLint won't flag it as unused — but it
+# bypasses the reviewable acknowledgement the rule exists to force. Match the rule
+# ANYWHERE in the directive (it may sit in a comma-separated multi-rule list, e.g.
+# `eslint-disable-next-line no-restricted-syntax, subterrans/sim-module-state`),
+# then fail any such line lacking a sim-scratch/sim-cache/sim-memo marker WITH a non-empty
+# explanation after the colon (a bare `-- sim-scratch:` is not an acknowledgement).
+DISABLE_HITS=$(grep -rnE 'eslint-disable.*subterrans/sim-module-state' src/sim --include='*.ts' | grep -vE 'sim-(scratch|cache|memo):[[:space:]]*[^[:space:]]' || true)
+if [[ -n "$DISABLE_HITS" ]]; then
+  echo "subterrans/sim-module-state disable WITHOUT a reason (issue #211):"
+  echo "$DISABLE_HITS"
+  echo ""
+  echo "Every such disable must explain why the module-level state is safe, e.g.:"
+  echo "  // eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: reset-per-tick"
+  exit 1
+fi
+echo "sim-module-state disable-reason guard: clean."
+
+# Issue #211 — no blanket (all-rule) eslint-disable in src/sim. A directive with NO rule
+# list (`// eslint-disable-next-line`, `/* eslint-disable */`) suppresses EVERY rule on its
+# target — including subterrans/sim-module-state — without naming it, so the reason guard
+# above (which keys on the rule name) cannot see it. Require rule-specific disables in
+# src/sim so the determinism guard can never be silently blanketed. Test files are exempt
+# (the rule does not run there).
+# The `--` alternative catches a DESCRIBED blanket disable (`// eslint-disable-next-line
+# -- note`), which ESLint still treats as all-rule; a rule-specific disable always has the
+# rule name before any `--`, so this never matches those.
+BLANKET_HITS=$(grep -rnE 'eslint-disable(-next-line|-line)?[[:space:]]*(--|\*/|$)' src/sim --include='*.ts' | grep -vE '\.test\.ts:' || true)
+if [[ -n "$BLANKET_HITS" ]]; then
+  echo "Blanket (all-rule) eslint-disable in src/sim (issue #211):"
+  echo "$BLANKET_HITS"
+  echo ""
+  echo "Disables in src/sim must name specific rule(s) so they can't silently suppress the"
+  echo "determinism guard — e.g. \`// eslint-disable-next-line no-restricted-syntax\`."
+  exit 1
+fi
+echo "blanket-disable guard: clean."
+
+# Issue #211 — no FILE-WIDE sim-module-state disable. The bare `eslint-disable` form (no
+# `-line`/`-next-line`), e.g. `/* eslint-disable subterrans/sim-module-state -- … */`,
+# suppresses the rule for the REST OF THE FILE — even with a reason marker it defeats the
+# per-declaration review contract (one marker would license unlimited module state below).
+# Match `eslint-disable` followed by whitespace (the file-wide form; `-line`/`-next-line`
+# have a hyphen there, so they don't match) naming the rule. Require per-line disables.
+FILEWIDE_HITS=$(grep -rnE 'eslint-disable[[:space:]].*subterrans/sim-module-state' src/sim --include='*.ts' | grep -vE '\.test\.ts:' || true)
+if [[ -n "$FILEWIDE_HITS" ]]; then
+  echo "File-wide subterrans/sim-module-state disable in src/sim (issue #211):"
+  echo "$FILEWIDE_HITS"
+  echo ""
+  echo "Use a per-line \`// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: …\`"
+  echo "at each declaration, not a file-wide \`eslint-disable\` that blankets the whole file."
+  exit 1
+fi
+echo "file-wide-disable guard: clean."

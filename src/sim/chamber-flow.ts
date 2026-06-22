@@ -462,14 +462,14 @@ function tileInNonFullNursery(
 }
 
 /** Chamber type lists exported so callers don't hard-code the arrays. */
-export const FOOD_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [ChamberType.FoodStorage];
+export const FOOD_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [ChamberType.FoodStorage] as const;
 export const NURSING_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [
   ChamberType.Queen,
   ChamberType.Nursery,
-];
-export const QUEEN_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [ChamberType.Queen];
+] as const;
+export const QUEEN_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [ChamberType.Queen] as const;
 /** Issue #17 Phase 1 — Nursery-only seeds for the v10 nurseDeposit field. */
-export const NURSERY_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [ChamberType.Nursery];
+export const NURSERY_CHAMBER_TYPES: ReadonlyArray<ChamberType> = [ChamberType.Nursery] as const;
 
 /**
  * Issue #17 Phase 1 — multi-source BFS toward brood pickup tiles for v10+

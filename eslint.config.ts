@@ -14,6 +14,7 @@
 
 import tseslint from '@typescript-eslint/eslint-plugin';
 import tsParser from '@typescript-eslint/parser';
+import simModuleState from './eslint-rules/sim-module-state.js';
 
 /** Rules applied to ALL TypeScript source files */
 const baseConfig = {
@@ -181,4 +182,16 @@ const nonSimMutationGuard = {
   },
 };
 
-export default [baseConfig, simSafetyConfig, nonSimMutationGuard];
+/** Determinism guard (issue #211) — module-level mutable state in src/sim must be
+ *  `as const` (immutable arrays) or carry an explicit `subterrans/sim-module-state`
+ *  disable with a sim-scratch/sim-cache/sim-memo reason. The rule + its test live in
+ *  eslint-rules/ (outside src/) so the tooling stays out of the app bundle and this
+ *  very lint scope. Test files are exempt — their throwaway fixtures aren't sim state. */
+const simModuleStateConfig = {
+  files: ['src/sim/**/*.ts'],
+  ignores: ['src/sim/**/*.test.ts'],
+  plugins: { subterrans: { rules: { 'sim-module-state': simModuleState } } },
+  rules: { 'subterrans/sim-module-state': 'error' },
+};
+
+export default [baseConfig, simSafetyConfig, nonSimMutationGuard, simModuleStateConfig];

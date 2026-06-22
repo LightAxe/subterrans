@@ -367,6 +367,7 @@ export function unpackStepDy(packed: number): number {
  * acceptable because (a) the sim is single-threaded and (b) every current
  * caller reads dx/dy on the next two lines.
  */
+// sim-scratch: return-value buffer, overwritten on every diagonalizeFlowStep call (object — not lint-enforced).
 const cardinalStepScratch: CardinalStep = { dx: 0, dy: 0 };
 
 /**
@@ -375,6 +376,7 @@ const cardinalStepScratch: CardinalStep = { dx: 0, dy: 0 };
  * and discarding it was a measurable GC burden in long sessions. Reset is
  * identical to `createSurfaceMovementCache`'s post-construction fill.
  */
+// sim-scratch: reset (not reallocated) each tick by tickAntMovement (factory return — not lint-enforced).
 const SURFACE_MOVE_CACHE_SCRATCH = createSurfaceMovementCache();
 
 /**
@@ -382,6 +384,7 @@ const SURFACE_MOVE_CACHE_SCRATCH = createSurfaceMovementCache();
  * (not reallocated) each call. Map.clear() is much cheaper than `new Map()`
  * + GC release of the prior tick's map.
  */
+// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: Map.clear()ed at the top of each resolveSameColonyOccupancy call; never read before write
 const OCCUPANCY_SCRATCH = new Map<number, number>();
 
 /**
@@ -389,6 +392,7 @@ const OCCUPANCY_SCRATCH = new Map<number, number>();
  * refilled each call. Reused across the per-tick lookup loops in
  * `tickAntMovement`. Single-threaded sim — no concurrent collection risk.
  */
+// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: cleared+refilled at the top of each collectAliveQueenIds call
 const QUEEN_IDS_SCRATCH = new Set<number>();
 
 // ---------------------------------------------------------------------------
@@ -3094,6 +3098,7 @@ const PROBE_COMPASS_DY = [-1, -1, 0, 1, 1, 1, 0, -1] as const;
 // every call to avoid per-call literal allocation (AGENTS.md "Hot-loop
 // performance" — invoked once per blocked-step per surface ant per tick).
 // Caller MUST consume the values immediately; the helper does NOT clone.
+// sim-scratch: return-value buffer, consumed immediately by caller (object — not lint-enforced).
 const PICK_DETOUR_RESULT = { dx: 0, dy: 0 };
 
 export function pickSurfaceDetour(
@@ -3344,10 +3349,13 @@ export function pickNearestHostileUnderground(
 
 // Path distance from the target tile to each cell (flat y*width+x index), or
 // -1 when unreached on the current call.
+// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: lazily grown BFS distance buffer, resized+filled per invertedBFS call
 let INV_BFS_DIST = new Int32Array(0);
 // FIFO of cell coordinates to expand. Parallel x/y arrays avoid decoding a flat
 // index (which would need division/modulo, banned in sim index arithmetic).
+// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: BFS queue X, reused per invertedBFS call
 let INV_BFS_QX = new Int32Array(0);
+// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: BFS queue Y, reused per invertedBFS call
 let INV_BFS_QY = new Int32Array(0);
 
 /**

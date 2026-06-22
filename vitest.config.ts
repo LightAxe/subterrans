@@ -13,7 +13,9 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
   test: {
-    include: ['src/**/*.test.ts'],
+    // Include the custom-ESLint-rule contract test (issue #211) — it lives in
+    // eslint-rules/ (outside src/) so the tooling stays out of the app bundle.
+    include: ['src/**/*.test.ts', 'eslint-rules/**/*.test.ts'],
     environment: 'node',
     setupFiles: ['src/platform/test-setup.ts'],
     coverage: {

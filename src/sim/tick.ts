@@ -125,6 +125,7 @@ interface FlowFieldCaches {
   chamber: ChamberFlowFields;
 }
 
+// eslint-disable-next-line subterrans/sim-module-state -- sim-cache: per-world flow-field cache keyed by WorldState identity; derived/recomputable, never authoritative sim state
 let cachesByWorld = new WeakMap<WorldState, FlowFieldCaches>();
 
 /** Get (or lazily create) the flow-field scratch owned by `world`. */
@@ -159,6 +160,7 @@ export function resetFlowFieldCaches(): void {
 // across colonies and ticks: reset (length=0) and fully consumed within each
 // colony iteration, so it holds no cross-tick or cross-world state. Avoids the
 // per-colony `eligible` array allocation in this hot path (AGENTS.md no-alloc).
+// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: reset (length=0) and fully consumed within each colony iteration; no cross-tick/cross-world state
 const IDLE_ELIGIBLE_SCRATCH: number[] = [];
 
 // Suppress unused-import TS error for PendingChamber (used in PlaceChamber case shape)

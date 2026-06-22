@@ -7,14 +7,17 @@
 // latency per save). This config builds the program once and is gated only in
 // `npm run lint:types`, `npm run verify`, and CI — where latency is fine.
 //
-// Scope note: this config intentionally does NOT re-declare the sim-safety
-// rules (Phaser/wall-clock/float bans, mutation guard) — eslint.config.ts owns
-// those and owns disable-directive usage reporting. We turn
-// reportUnusedDisableDirectives off here so the sim-rule disable comments (e.g.
-// `// eslint-disable-line no-restricted-syntax`) aren't falsely flagged as
-// unused by a config that never loaded those rules.
+// Scope note: this config intentionally does NOT re-enable the sim-safety
+// rules (Phaser/wall-clock/float bans, mutation guard, sim-module-state) —
+// eslint.config.ts owns those and owns disable-directive usage reporting. We
+// turn reportUnusedDisableDirectives off here so the sim-rule disable comments
+// (e.g. `// eslint-disable-line no-restricted-syntax`) aren't falsely flagged as
+// unused. The `subterrans` plugin IS registered below (rule left off) so that
+// `subterrans/sim-module-state` disable directives resolve to a known rule
+// instead of erroring as "Definition for rule … was not found".
 import tseslint from '@typescript-eslint/eslint-plugin';
 import tsParser from '@typescript-eslint/parser';
+import simModuleState from './eslint-rules/sim-module-state.js';
 
 export default [
   {
@@ -26,7 +29,10 @@ export default [
         tsconfigRootDir: import.meta.dirname,
       },
     },
-    plugins: { '@typescript-eslint': tseslint },
+    plugins: {
+      '@typescript-eslint': tseslint,
+      subterrans: { rules: { 'sim-module-state': simModuleState } },
+    },
     linterOptions: { reportUnusedDisableDirectives: 'off' },
     rules: {
       ...tseslint.configs['recommended-type-checked'].rules,
