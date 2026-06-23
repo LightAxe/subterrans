@@ -135,6 +135,12 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 - Runtime asset URLs in `src/render/` must be built from `import.meta.env.BASE_URL` (or the `assetsBase` registry value plumbed via `mount()`), never hard-coded as root-absolute (`/assets/...`) or relative (`./assets/...`). Hard-coded paths break the embedded library build at non-root deploy paths. See `vite.lib.config.ts` and `src/main.ts`.
 - The library entry point is `src/main.ts`. Adding new top-level exports there expands the public API surface — flag undocumented additions and ask for a JSDoc block matching the existing `MountOptions` / `MountedGame` / `mount` style.
 
+### Layout discipline (HUD/overlay geometry — issue #213)
+
+- HUD/overlay geometry is a pure function of a `LayoutContext` (`src/render/layout.ts`, `{ w, h }`), **not** of the fixed `CANVAS_W`/`CANVAS_H` constants or inline `800`/`592` literals. The game still renders at the fixed 800×592 logical resolution today; this is a *seam* so the eventual responsive/mobile work is "compute a `LayoutContext` from the real canvas + reflow on resize", not a refactor of every overlay under deadline.
+- A layout module takes `(…, layout)` and derives every canvas-relative coordinate from `layout.w` / `layout.h` (anchors, fractions, insets from an edge). **Blockers:** a new module-scope constant tied to the canvas size (e.g. `const CANVAS_W = 800` redefined locally, or a rect centered with a hard-coded `800 / 2`), a new inline `800`/`592` in an overlay/`ui-scene.ts` method, or importing `CANVAS_W`/`CANVAS_H` to compute overlay geometry. Canvas-**independent** constants (a fixed inset, a button size, an offset from another anchor) may stay plain constants — the rule targets dimensions a resize has to move.
+- Pattern to copy: `pause-menu-layout.ts`, `save-load-dialog-layout.ts`, `survey-overlay-layout.ts` (pure functions of `layout`), and `UIScene.layout` threading the single context into them. `HUD` in `sprites.ts` remains the canonical anchor table other modules derive from; `camera-adapter.ts` is the screen↔world authority and owns the canvas-size dependency for projection.
+
 ## Building and Running
 
 ```bash

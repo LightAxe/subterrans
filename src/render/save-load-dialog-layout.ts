@@ -17,13 +17,15 @@
 //   - back       — close the dialog, return to the pause menu (no game changes)
 
 import type { SaveInfo } from '../platform/save.js';
+import type { LayoutContext } from './layout.js';
 
 // ---------------------------------------------------------------------------
-// Geometry constants (canvas-local pixels — 800 × 592)
+// Geometry constants (canvas-local pixels)
+//
+// Button sizes/gaps and the title/info anchors are canvas-INDEPENDENT and stay
+// constants; the canvas-relative centering (buttonRects) derives from the
+// LayoutContext passed in (issue #213). No local CANVAS_W/CANVAS_H.
 // ---------------------------------------------------------------------------
-
-export const CANVAS_W = 800;
-export const CANVAS_H = 592;
 
 export const DIALOG_BUTTON_W = 280;
 export const DIALOG_BUTTON_H = 36;
@@ -79,8 +81,8 @@ export interface SaveLoadDialogContext {
 // Layout
 // ---------------------------------------------------------------------------
 
-function buttonRects(buttonCount: number, firstY: number): DialogItemRect[] {
-  const x = (CANVAS_W - DIALOG_BUTTON_W) / 2;
+function buttonRects(buttonCount: number, firstY: number, layout: LayoutContext): DialogItemRect[] {
+  const x = (layout.w - DIALOG_BUTTON_W) / 2;
   const rects: DialogItemRect[] = [];
   for (let i = 0; i < buttonCount; i++) {
     rects.push({
@@ -99,7 +101,10 @@ export function firstButtonY(): number {
 }
 
 /** Compose the dialog items. Order is fixed; enabled flags reflect ctx. */
-export function saveLoadDialogItems(ctx: SaveLoadDialogContext): SaveLoadDialogItem[] {
+export function saveLoadDialogItems(
+  ctx: SaveLoadDialogContext,
+  layout: LayoutContext,
+): SaveLoadDialogItem[] {
   const saveExists = ctx.hasCompatibleSave;
   const items: Array<{
     id: SaveLoadDialogItemId;
@@ -143,7 +148,7 @@ export function saveLoadDialogItems(ctx: SaveLoadDialogContext): SaveLoadDialogI
       confirming: false,
     },
   ];
-  const rects = buttonRects(items.length, firstButtonY());
+  const rects = buttonRects(items.length, firstButtonY(), layout);
   return items.map((it, i) => ({ ...it, rect: rects[i]! }));
 }
 

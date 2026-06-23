@@ -1,17 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import {
-  saveLoadDialogItems,
+  saveLoadDialogItems as saveLoadDialogItemsAt,
   formatSaveInfoLine,
   formatSaveTime,
   dialogTitle,
   firstButtonY,
   itemAt,
-  CANVAS_W,
   DIALOG_BUTTON_W,
   DIALOG_BUTTON_H,
   DIALOG_BUTTON_GAP,
   type SaveLoadDialogContext,
 } from './save-load-dialog-layout.js';
+import { DEFAULT_LAYOUT, createLayoutContext } from './layout.js';
+import { CANVAS_W } from './sprites.js';
 import type { SaveInfo } from '../platform/save.js';
 
 const baseCtx: SaveLoadDialogContext = {
@@ -19,6 +20,11 @@ const baseCtx: SaveLoadDialogContext = {
   hasIncompatibleSave: false,
   confirming: { delete: false, newGame: false },
 };
+
+// Issue #213: saveLoadDialogItems now takes a LayoutContext. Bind the fixed
+// default layout (800×592) so the existing parity assertions are unchanged; the
+// seam describe at the bottom exercises a non-default LayoutContext.
+const saveLoadDialogItems = (c: SaveLoadDialogContext) => saveLoadDialogItemsAt(c, DEFAULT_LAYOUT);
 
 describe('saveLoadDialogItems', () => {
   it('returns 5 items in the documented order', () => {
@@ -108,6 +114,15 @@ describe('saveLoadDialogItems', () => {
   it('first button starts at firstButtonY()', () => {
     const items = saveLoadDialogItems(baseCtx);
     expect(items[0]!.rect.y).toBe(firstButtonY());
+  });
+});
+
+describe('saveLoadDialogItems — LayoutContext seam (issue #213)', () => {
+  it('horizontally centers the buttons on the passed layout width, not a fixed 800', () => {
+    const wide = createLayoutContext(1000, 700);
+    for (const i of saveLoadDialogItemsAt(baseCtx, wide)) {
+      expect(i.rect.x + i.rect.w / 2).toBeCloseTo(wide.w / 2, 5);
+    }
   });
 });
 

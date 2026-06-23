@@ -7,17 +7,30 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  surveyRatingButtons,
-  surveyHitTest,
-  surveyConfirmationHitTest,
-  SURVEY_CANVAS_W,
-  SURVEY_SUBMIT_BUTTON_RECT,
-  SURVEY_SKIP_BUTTON_RECT,
+  surveyRatingButtons as surveyRatingButtonsAt,
+  surveyHitTest as surveyHitTestAt,
+  surveyConfirmationHitTest as surveyConfirmationHitTestAt,
+  surveySubmitButtonRect,
+  surveySkipButtonRect,
+  surveyFreeTextRect,
   SURVEY_BROKEN_CHECKBOX_RECT,
   SURVEY_UPLOAD_CHECKBOX_RECT,
-  SURVEY_FREE_TEXT_RECT,
   SURVEY_CONSENT_DISCLOSURE,
 } from './survey-overlay-layout.js';
+import { DEFAULT_LAYOUT, createLayoutContext } from './layout.js';
+
+// Issue #213: the overlay geometry is now a function of a LayoutContext. Bind the
+// fixed default layout (800×592) and evaluate the rect helpers to constants so
+// the existing parity assertions are unchanged. The seam describe at the bottom
+// proves the geometry responds to a different layout.
+const L = DEFAULT_LAYOUT;
+const surveyRatingButtons = () => surveyRatingButtonsAt(L);
+const surveyHitTest = (px: number, py: number) => surveyHitTestAt(px, py, L);
+const surveyConfirmationHitTest = (px: number, py: number) =>
+  surveyConfirmationHitTestAt(px, py, L);
+const SURVEY_SUBMIT_BUTTON_RECT = surveySubmitButtonRect(L);
+const SURVEY_SKIP_BUTTON_RECT = surveySkipButtonRect(L);
+const SURVEY_FREE_TEXT_RECT = surveyFreeTextRect(L);
 
 describe('surveyRatingButtons', () => {
   it('emits exactly five buttons numbered 1..5 in order', () => {
@@ -30,7 +43,7 @@ describe('surveyRatingButtons', () => {
     const first = btns[0]!.rect;
     const last = btns[4]!.rect;
     const leftMargin = first.x;
-    const rightMargin = SURVEY_CANVAS_W - (last.x + last.w);
+    const rightMargin = L.w - (last.x + last.w);
     // Allow a 1px slack for rounding.
     expect(Math.abs(leftMargin - rightMargin)).toBeLessThanOrEqual(1);
   });
@@ -85,7 +98,7 @@ describe('surveyHitTest — disjoint targets', () => {
   it('returns null on the panel background', () => {
     // A point in the title gap above the rating buttons should not hit
     // any interactive element.
-    expect(surveyHitTest(SURVEY_CANVAS_W / 2, 30)).toBeNull();
+    expect(surveyHitTest(L.w / 2, 30)).toBeNull();
   });
 });
 
@@ -117,5 +130,26 @@ describe('surveyConfirmationHitTest — issue #131', () => {
     expect(
       surveyConfirmationHitTest(SURVEY_SUBMIT_BUTTON_RECT.x - 10, SURVEY_SUBMIT_BUTTON_RECT.y - 10),
     ).toBeNull();
+  });
+});
+
+describe('survey layout — LayoutContext seam (issue #213)', () => {
+  it('keeps the submit/skip pair centered on a wider layout', () => {
+    const wide = createLayoutContext(1000, 700);
+    const submit = surveySubmitButtonRect(wide);
+    const skip = surveySkipButtonRect(wide);
+    // Group spans submit.x → skip.x+skip.w; its center tracks the layout center.
+    const groupCenter = (submit.x + (skip.x + skip.w)) / 2;
+    expect(groupCenter).toBeCloseTo(wide.w / 2, 5);
+  });
+
+  it('pushes the button row down on a taller layout (panel bottom follows height)', () => {
+    const tall = createLayoutContext(L.w, L.h + 200);
+    expect(surveySubmitButtonRect(tall).y).toBeGreaterThan(surveySubmitButtonRect(L).y);
+  });
+
+  it('spans the free-text + row-hit width across the layout (inset 80px each side)', () => {
+    const wide = createLayoutContext(1000, 700);
+    expect(surveyFreeTextRect(wide).w).toBe(wide.w - 160);
   });
 });

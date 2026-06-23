@@ -6,8 +6,8 @@
 // Vitest without spinning up a Phaser scene.
 //
 // Layout: vertical stack of fixed-size buttons, centered horizontally on the
-// 800×592 canvas. Vertical anchor is the canvas centerline minus half the
-// stack height, so the stack stays visually centered as page contents change.
+// canvas (a LayoutContext). Vertical anchor is the canvas centerline minus half
+// the stack height, so the stack stays visually centered as page contents change.
 //
 // State machine (consumer drives, this module renders):
 //   main     → Resume / Save+Load / Settings → / Download debug log
@@ -20,12 +20,15 @@
 // (Settings type was imported here pre-round-6; removed when the
 // pheromone-toggle label moved to an in-memory ctx field per Codex P2.)
 
+import type { LayoutContext } from './layout.js';
+
 // ---------------------------------------------------------------------------
 // Geometry constants (canvas-local pixels)
+//
+// Button sizes/gaps/title-height are canvas-INDEPENDENT and stay constants; the
+// canvas-relative centering (stackRects) derives from the LayoutContext passed
+// in (issue #213). No local CANVAS_W/CANVAS_H — that was the layout debt.
 // ---------------------------------------------------------------------------
-
-export const CANVAS_W = 800;
-export const CANVAS_H = 592;
 
 export const PAUSE_MENU_BUTTON_W = 320;
 export const PAUSE_MENU_BUTTON_H = 40;
@@ -116,11 +119,11 @@ export interface PauseMenuRenderContext {
  * Compute the vertical center anchor for a stack of n buttons (with the title
  * gap), then derive each button's rect. Returns rects in render order top→bottom.
  */
-function stackRects(n: number): MenuItemRect[] {
+function stackRects(n: number, layout: LayoutContext): MenuItemRect[] {
   const stackHeight =
     PAUSE_MENU_TITLE_HEIGHT + n * PAUSE_MENU_BUTTON_H + (n - 1) * PAUSE_MENU_BUTTON_GAP;
-  const top = (CANVAS_H - stackHeight) / 2 + PAUSE_MENU_TITLE_HEIGHT;
-  const x = (CANVAS_W - PAUSE_MENU_BUTTON_W) / 2;
+  const top = (layout.h - stackHeight) / 2 + PAUSE_MENU_TITLE_HEIGHT;
+  const x = (layout.w - PAUSE_MENU_BUTTON_W) / 2;
   const rects: MenuItemRect[] = [];
   for (let i = 0; i < n; i++) {
     rects.push({
@@ -134,13 +137,17 @@ function stackRects(n: number): MenuItemRect[] {
 }
 
 /** Y-coordinate of the page title baseline (above the first button rect). */
-export function titleCenterY(itemCount: number): number {
-  const rects = stackRects(itemCount);
+export function titleCenterY(itemCount: number, layout: LayoutContext): number {
+  const rects = stackRects(itemCount, layout);
   return rects[0]!.y - PAUSE_MENU_TITLE_HEIGHT / 2;
 }
 
 /** Compose the menu items for the current page. */
-export function pauseMenuItems(page: PauseMenuPage, ctx: PauseMenuRenderContext): PauseMenuItem[] {
+export function pauseMenuItems(
+  page: PauseMenuPage,
+  ctx: PauseMenuRenderContext,
+  layout: LayoutContext,
+): PauseMenuItem[] {
   if (page === 'main') {
     const labels: Array<{ id: PauseMenuItemId; label: string; enabled: boolean }> = [
       { id: 'resume', label: 'Resume', enabled: true },
@@ -151,7 +158,7 @@ export function pauseMenuItems(page: PauseMenuPage, ctx: PauseMenuRenderContext)
     if (ctx.quitAndSurveyEnabled) {
       labels.push({ id: 'quit-and-survey', label: 'Quit & feedback', enabled: true });
     }
-    const rects = stackRects(labels.length);
+    const rects = stackRects(labels.length, layout);
     return labels.map((l, i) => ({
       id: l.id,
       label: l.label,
@@ -186,7 +193,7 @@ export function pauseMenuItems(page: PauseMenuPage, ctx: PauseMenuRenderContext)
     },
     { id: 'back', label: '<  Back', enabled: true },
   ];
-  const rects = stackRects(labels.length);
+  const rects = stackRects(labels.length, layout);
   return labels.map((l, i) => ({
     id: l.id,
     label: l.label,

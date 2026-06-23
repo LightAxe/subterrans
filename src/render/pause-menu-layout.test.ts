@@ -1,18 +1,26 @@
 import { describe, it, expect } from 'vitest';
 import {
-  pauseMenuItems,
+  pauseMenuItems as pauseMenuItemsAt,
   pageTitle,
   itemAt,
   nextSpeedMultiplier,
-  CANVAS_W,
-  CANVAS_H,
   PAUSE_MENU_BUTTON_W,
   PAUSE_MENU_BUTTON_H,
   PAUSE_MENU_BUTTON_GAP,
+  type PauseMenuPage,
   type PauseMenuRenderContext,
 } from './pause-menu-layout.js';
+import { DEFAULT_LAYOUT, createLayoutContext } from './layout.js';
+import { CANVAS_W, CANVAS_H } from './sprites.js';
 // (DEFAULT_SETTINGS no longer imported — ctx now uses in-memory boolean
 // for currentPheromoneOverlay instead of a full Settings snapshot.)
+
+// Issue #213: pauseMenuItems now takes a LayoutContext. The existing geometry
+// tests assert parity at the fixed default layout (800×592); bind it here so the
+// call sites stay focused on item composition. The seam describe at the bottom
+// exercises a non-default LayoutContext.
+const pauseMenuItems = (page: PauseMenuPage, c: PauseMenuRenderContext) =>
+  pauseMenuItemsAt(page, c, DEFAULT_LAYOUT);
 
 const ctx: PauseMenuRenderContext = {
   saveLoadEnabled: true,
@@ -195,5 +203,21 @@ describe('itemAt', () => {
     const items = pauseMenuItems('main', { ...ctx, saveLoadEnabled: false });
     const saveLoad = items.find((i) => i.id === 'save-load')!;
     expect(itemAt(items, saveLoad.rect.x + 5, saveLoad.rect.y + 5)).toBeNull();
+  });
+});
+
+describe('pauseMenuItems — LayoutContext seam (issue #213)', () => {
+  it('horizontally centers the buttons on the passed layout width, not a fixed 800', () => {
+    const wide = createLayoutContext(1000, 700);
+    for (const i of pauseMenuItemsAt('main', ctx, wide)) {
+      expect(i.rect.x + i.rect.w / 2).toBeCloseTo(wide.w / 2, 5);
+    }
+  });
+
+  it('shifts the vertical stack down on a taller layout', () => {
+    const tall = createLayoutContext(CANVAS_W, CANVAS_H + 200);
+    const def = pauseMenuItemsAt('main', ctx, DEFAULT_LAYOUT);
+    const taller = pauseMenuItemsAt('main', ctx, tall);
+    expect(taller[0]!.rect.y).toBeGreaterThan(def[0]!.rect.y);
   });
 });
