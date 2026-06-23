@@ -6,9 +6,10 @@
 // `import('./x.js')`, and bare side-effect `import './x.js'` among src/sim/ant/*.ts
 // (excluding *.test.ts), builds the intra-ant import graph, detects cycles, and forbids
 // any sub-module from importing the barrel './ant-system.js' (a module->barrel->module
-// cycle). Pure `import type { … } from './x'` statements are excluded — type-only
-// imports are erased at compile time and cannot form a runtime cycle, so counting them
-// would risk a phantom-cycle false positive.
+// cycle). Pure type-only statements — `import type { … } from './x'` AND
+// `export type { … } from './x'` re-exports — are excluded: both are erased at compile
+// time and cannot form a runtime cycle, so counting them would risk a phantom-cycle
+// false positive (over-strict layer/cycle/barrel reports).
 //
 // Known limitation: comment stripping is not string-literal aware, so a `/*`…`*/` pair
 // split across two separate string literals could elide a real import line. The ant/
@@ -34,13 +35,19 @@ const fileset = new Set(files);
 function stripComments(s) {
   return s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 }
-function stripTypeOnlyImports(s) {
-  return s
-    .replace(/\bimport\s+type\s*\{[^}]*\}\s*from\s*['"][^'"]+['"];?/g, '') // braced
-    .replace(
-      /\bimport\s+type\s+(?:\*\s+as\s+[A-Za-z_$][\w$]*|[A-Za-z_$][\w$]*)\s+from\s*['"][^'"]+['"];?/g,
-      '', // default / namespace type-only imports
-    );
+function stripTypeOnly(s) {
+  return (
+    s
+      // type-only IMPORTS — braced, default, namespace
+      .replace(/\bimport\s+type\s*\{[^}]*\}\s*from\s*['"][^'"]+['"];?/g, '')
+      .replace(
+        /\bimport\s+type\s+(?:\*\s+as\s+[A-Za-z_$][\w$]*|[A-Za-z_$][\w$]*)\s+from\s*['"][^'"]+['"];?/g,
+        '',
+      )
+      // type-only RE-EXPORTS — braced and namespace (also runtime-erased; no edge)
+      .replace(/\bexport\s+type\s*\{[^}]*\}\s*from\s*['"][^'"]+['"];?/g, '')
+      .replace(/\bexport\s+type\s*\*\s*(?:as\s+[A-Za-z_$][\w$]*\s+)?from\s*['"][^'"]+['"];?/g, '')
+  );
 }
 
 // Runtime-edge sources, all matched over the whole (comment-stripped) file so multi-line
@@ -60,7 +67,7 @@ const graph = new Map(files.map((f) => [f, new Set()]));
 const barrelImporters = [];
 
 for (const mod of files) {
-  const src = stripTypeOnlyImports(stripComments(readFileSync(join(DIR, mod + '.ts'), 'utf8')));
+  const src = stripTypeOnly(stripComments(readFileSync(join(DIR, mod + '.ts'), 'utf8')));
   for (const RE of [STATIC_RE, DYNAMIC_RE, SIDEEFFECT_RE]) {
     RE.lastIndex = 0;
     let m;
