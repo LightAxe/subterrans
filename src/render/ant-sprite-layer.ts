@@ -56,6 +56,15 @@ export interface SpiderSpriteDrawOptions {
   y: number;
   /** Hunger-derived multiplicative tint: 0xCCCCCC (idle) → 0xFF3300 (rampage). */
   tint: number;
+  /**
+   * Rotation in radians. Omit (or 0) for the sprite's native pose. Like the ant
+   * SVGs, the spider sprite renders with its head/front on the LEFT side of the
+   * texture (chelicerae + eyes + cephalothorax on -x), so callers that want the
+   * head to face movement direction (dx, dy) pass `Math.atan2(-dy, -dx)`. When
+   * the spider is stationary the caller holds the last rotation (via the shared
+   * facing cache) rather than snapping back to the default pose.
+   */
+  rotation?: number;
 }
 
 export interface AntSpriteLayer {
