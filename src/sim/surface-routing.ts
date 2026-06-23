@@ -38,7 +38,7 @@ const SURFACE_GOAL_FIELD_CACHE_CAP = 256;
 /**
  * Three-valued step result, encoded to avoid per-call allocation in the movement
  * hot loop. `stepTowardReachable` returns a packed step using the SAME encoding
- * as ant-system's `packStep` — `((dy + 1) << 2) | (dx + 1)` with dx,dy in
+ * as ant-motion's `packStep` — `((dy + 1) << 2) | (dx + 1)` with dx,dy in
  * {-1,0,1} — so callers decode with the existing `unpackStepDx/Dy`. The (0,0)
  * step IS the AtGoal case (the ant is on its target tile; hold for the tick's
  * pickup). The third value, InvariantViolation, is a thrown error: on a COMPLETE
