@@ -22,7 +22,7 @@ import { FP_ONE } from '../sim/fixed.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import type { WorldState } from '../sim/types.js';
 import type { AntSpriteLayer } from './ant-sprite-layer.js';
-import { computeAntRotation, type AntFacingCache } from './ant-facing-cache.js';
+import { computeAntRotation, SPIDER_FACING_ID, type AntFacingCache } from './ant-facing-cache.js';
 import {
   TILE_SIZE_PX,
   COLOR_FOOD_PILE_NORMAL,
@@ -443,7 +443,20 @@ export function drawSurfaceEntities(
       // S6: linear tint gradient pale (#ffeecc) → deep red (#cc2020) by hungerFraction.
       const tint = lerpColor(0xffeecc, 0xcc2020, hungerFraction);
 
-      sprites.drawSpider({ x: spiderWorldX, y: spiderWorldY, tint });
+      // Facing: rotate the spider sprite so its head points along the motion
+      // vector, reusing the ant facing-smoothing logic under a reserved spider
+      // key. The spider is always on the surface (zone 0). Stationary → the cache
+      // holds the prior smoothed rotation; no prev (just spawned) → default pose.
+      const spiderRotation = computeAntRotation(
+        facing,
+        SPIDER_FACING_ID,
+        0,
+        currPxX - prevPxX,
+        currPxY - prevPxY,
+        useSpiderInterp,
+      );
+
+      sprites.drawSpider({ x: spiderWorldX, y: spiderWorldY, tint, rotation: spiderRotation });
 
       // Hunger ring (S3 → S6 polished): appears at 70% hunger, fades to full at 100%.
       if (hungerFraction > 0.7) {

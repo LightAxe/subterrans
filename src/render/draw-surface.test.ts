@@ -104,6 +104,7 @@ class MockGfx implements GfxLike {
 class MockAntSprites implements AntSpriteLayer {
   calls: AntSpriteDrawOptions[] = [];
   staticCalls: StaticSpriteDrawOptions[] = [];
+  spiderCalls: SpiderSpriteDrawOptions[] = [];
   beginFrames = 0;
   endFrames = 0;
   beginFrame(): void {
@@ -115,8 +116,8 @@ class MockAntSprites implements AntSpriteLayer {
   drawStatic(opts: StaticSpriteDrawOptions): void {
     this.staticCalls.push({ ...opts });
   }
-  drawSpider(_opts: SpiderSpriteDrawOptions): void {
-    /* no-op in tests */
+  drawSpider(opts: SpiderSpriteDrawOptions): void {
+    this.spiderCalls.push({ ...opts });
   }
   endFrame(): void {
     this.endFrames++;
@@ -124,6 +125,7 @@ class MockAntSprites implements AntSpriteLayer {
   reset(): void {
     this.calls = [];
     this.staticCalls = [];
+    this.spiderCalls = [];
     this.beginFrames = 0;
     this.endFrames = 0;
   }
@@ -775,6 +777,176 @@ describe('drawSurfaceEntities — facing cache smoothing', () => {
       sprites.reset();
       drawSurfaceEntities(gfx, sprites, still, still, 1, cam, null, facing);
       expect(sprites.calls[0]!.rotation).toBe(settledRotation);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: spider facing direction (issue #216)
+//
+// The spider sprite, like the ant SVGs, has its head/front on -x natively
+// (chelicerae + eyes + cephalothorax on the left), so drawSurfaceEntities passes
+// rotation = atan2(-dy, -dx) to face the motion vector — reusing the ant
+// facing-smoothing logic under SPIDER_FACING_ID. Stationary → the prior smoothed
+// rotation holds; no prev (just spawned) → the default pose (0).
+// ---------------------------------------------------------------------------
+
+describe('drawSurfaceEntities — spider facing direction (issue #216)', () => {
+  function makeWorldWithSpiderAt(tileX: number, tileY: number): WorldState {
+    const w = createWorldState(1);
+    const spider: SpiderState = {
+      state: 'Patrolling',
+      posX: tileX << FP_SHIFT,
+      posY: tileY << FP_SHIFT,
+      lairTileX: tileX,
+      lairTileY: tileY,
+      territoryRadiusTiles: 24,
+      hp: SPIDER_HP_FULL,
+      attackCooldown: 0,
+      hungerTicks: 0,
+      nextHuntTick: 0,
+      huntStartTick: 0,
+      strikeStartTick: 0,
+      feedingStartTick: 0,
+      retreatStartTick: 0,
+      rampageStartTick: 0,
+      huntTargetTileX: -1,
+      huntTargetTileY: -1,
+      killsThisStrike: 0,
+      rampageKillsThisRampage: 0,
+      rampageTargetColonyId: -1,
+      chaseTargetAntId: -1,
+      chaseStartTick: 0,
+      killedThisTick: 0,
+      lastKillTileX: -1,
+      lastKillTileY: -1,
+      feedAwayTileX: -1,
+      feedAwayTileY: -1,
+      feedArrivedTick: -1,
+    };
+    w.spider = spider;
+    return w;
+  }
+
+  it('rotation defaults to 0 when prev == curr (stationary spider)', () => {
+    const gfx = new MockGfx();
+    const sprites = new MockAntSprites();
+    const world = makeWorldWithSpiderAt(5, 5);
+    const cam = makeCamera(5, 5);
+    drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
+    expect(sprites.spiderCalls.length).toBe(1);
+    expect(sprites.spiderCalls[0]!.rotation).toBe(0);
+  });
+
+  it('no prev spider (just spawned) → default pose (rotation 0)', () => {
+    const gfx = new MockGfx();
+    const sprites = new MockAntSprites();
+    const prev = createWorldState(1); // prev.spider === null
+    const curr = makeWorldWithSpiderAt(5, 5);
+    const cam = makeCamera(5, 5);
+    drawSurfaceEntities(gfx, sprites, prev, curr, 1, cam);
+    expect(sprites.spiderCalls.length).toBe(1);
+    expect(sprites.spiderCalls[0]!.rotation).toBe(0);
+  });
+
+  it('moving right (+x): rotation has magnitude π (head flipped to face +x)', () => {
+    const gfx = new MockGfx();
+    const sprites = new MockAntSprites();
+    const prev = makeWorldWithSpiderAt(5, 5);
+    const curr = makeWorldWithSpiderAt(6, 5);
+    const cam = makeCamera(5, 5);
+    drawSurfaceEntities(gfx, sprites, prev, curr, 1, cam);
+    expect(sprites.spiderCalls.length).toBe(1);
+    expect(Math.abs(sprites.spiderCalls[0]!.rotation!)).toBeCloseTo(Math.PI, 5);
+  });
+
+  it('moving down (+y): rotation = -π/2', () => {
+    const gfx = new MockGfx();
+    const sprites = new MockAntSprites();
+    const prev = makeWorldWithSpiderAt(5, 5);
+    const curr = makeWorldWithSpiderAt(5, 6);
+    const cam = makeCamera(5, 5);
+    drawSurfaceEntities(gfx, sprites, prev, curr, 1, cam);
+    expect(sprites.spiderCalls[0]!.rotation).toBeCloseTo(-Math.PI / 2, 5);
+  });
+
+  it('moving up (-y): rotation = +π/2', () => {
+    const gfx = new MockGfx();
+    const sprites = new MockAntSprites();
+    const prev = makeWorldWithSpiderAt(5, 5);
+    const curr = makeWorldWithSpiderAt(5, 4);
+    const cam = makeCamera(5, 5);
+    drawSurfaceEntities(gfx, sprites, prev, curr, 1, cam);
+    expect(sprites.spiderCalls[0]!.rotation).toBeCloseTo(Math.PI / 2, 5);
+  });
+
+  it('moving left (-x): rotation = 0 (native head already points left)', () => {
+    const gfx = new MockGfx();
+    const sprites = new MockAntSprites();
+    const prev = makeWorldWithSpiderAt(5, 5);
+    const curr = makeWorldWithSpiderAt(4, 5);
+    const cam = makeCamera(5, 5);
+    drawSurfaceEntities(gfx, sprites, prev, curr, 1, cam);
+    expect(sprites.spiderCalls[0]!.rotation).toBeCloseTo(0, 5);
+  });
+
+  it('alternating right/down movement settles toward a diagonal rotation (no flicker)', () => {
+    const gfx = new MockGfx();
+    const sprites = new MockAntSprites();
+    const cam = makeCamera(10, 10);
+    const facing = new AntFacingCache();
+
+    // 8-step southeast zig-zag, one cardinal tile per frame. The shared cache
+    // low-pass-blends the alternating axis deltas into a stable diagonal heading
+    // instead of flipping right→down→right every tick.
+    let x = 5,
+      y = 5;
+    const path: Array<[number, number]> = [];
+    for (let i = 0; i < 8; i++) {
+      if (i % 2 === 0) x += 1;
+      else y += 1;
+      path.push([x, y]);
+    }
+
+    let prev = makeWorldWithSpiderAt(5, 5);
+    let lastRotation = 0;
+    for (const [nx, ny] of path) {
+      sprites.reset();
+      const curr = makeWorldWithSpiderAt(nx, ny);
+      drawSurfaceEntities(gfx, sprites, prev, curr, 1, cam, null, facing);
+      lastRotation = sprites.spiderCalls[0]!.rotation!;
+      prev = curr;
+    }
+
+    // Southeast motion → rotation in (-π, -π/2), nearer the diagonal (-3π/4)
+    // than either axis. Per-frame-raw rotation would instead oscillate between
+    // ≈ -π (right) and -π/2 (down) — the flicker the cache removes.
+    expect(lastRotation).toBeGreaterThan(-Math.PI);
+    expect(lastRotation).toBeLessThan(-Math.PI / 2);
+    const diag = (-3 * Math.PI) / 4;
+    expect(Math.abs(lastRotation - diag)).toBeLessThan(Math.abs(lastRotation - -Math.PI));
+    expect(Math.abs(lastRotation - diag)).toBeLessThan(Math.abs(lastRotation - -Math.PI / 2));
+  });
+
+  it('stationary spider holds its prior smoothed heading across idle frames', () => {
+    const gfx = new MockGfx();
+    const sprites = new MockAntSprites();
+    const cam = makeCamera(10, 10);
+    const facing = new AntFacingCache();
+
+    // Establish a rightward heading.
+    const prev1 = makeWorldWithSpiderAt(5, 5);
+    const curr1 = makeWorldWithSpiderAt(6, 5);
+    drawSurfaceEntities(gfx, sprites, prev1, curr1, 1, cam, null, facing);
+    const settled = sprites.spiderCalls[0]!.rotation!;
+    expect(Math.abs(settled)).toBeCloseTo(Math.PI, 5);
+
+    // Idle frames: prev == curr. Rotation must hold, not snap back to 0.
+    const still = makeWorldWithSpiderAt(6, 5);
+    for (let i = 0; i < 4; i++) {
+      sprites.reset();
+      drawSurfaceEntities(gfx, sprites, still, still, 1, cam, null, facing);
+      expect(sprites.spiderCalls[0]!.rotation).toBe(settled);
     }
   });
 });

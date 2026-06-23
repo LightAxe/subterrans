@@ -6,7 +6,7 @@
 // IDs never inherit stale headings.
 
 import { describe, it, expect } from 'vitest';
-import { AntFacingCache, computeAntRotation } from './ant-facing-cache.js';
+import { AntFacingCache, computeAntRotation, SPIDER_FACING_ID } from './ant-facing-cache.js';
 
 describe('AntFacingCache', () => {
   it('first observation seeds from the raw delta (rotation matches atan2)', () => {
@@ -131,5 +131,49 @@ describe('computeAntRotation (helper)', () => {
     const cache = new AntFacingCache();
     computeAntRotation(cache, 1, 0, 16, 0, true);
     expect(cache.size).toBe(1);
+  });
+});
+
+// The singleton surface spider reuses this same cache for facing smoothing — it
+// just needs one stable key. SPIDER_FACING_ID reserves a negative slot that can
+// never collide with the non-negative array-index ids the ants use.
+describe('SPIDER_FACING_ID (issue #216 — spider reuses the ant facing cache)', () => {
+  it('is a negative key that cannot collide with non-negative ant ids', () => {
+    expect(SPIDER_FACING_ID).toBeLessThan(0);
+  });
+
+  it('smooths under the spider key without interfering with ant entries in the same cache', () => {
+    const cache = new AntFacingCache();
+    // An ant (id 0) heads right; the spider heads down — same cache instance.
+    cache.sample({ id: 0, zone: 0, dx: 16, dy: 0, useInterp: true });
+    const spider = cache.sample({
+      id: SPIDER_FACING_ID,
+      zone: 0,
+      dx: 0,
+      dy: 16,
+      useInterp: true,
+    });
+    expect(cache.size).toBe(2);
+    // Spider's first observation seeds raw atan2(-16, -0) = -π/2 (facing +y/down).
+    expect(spider).toBeCloseTo(-Math.PI / 2, 5);
+    // The ant entry is untouched: a stationary follow-up holds its rightward pose.
+    const ant = cache.sample({ id: 0, zone: 0, dx: 0, dy: 0, useInterp: true });
+    expect(Math.abs(ant)).toBeCloseTo(Math.PI, 5);
+  });
+
+  it('holds the prior rotation when the spider is stationary', () => {
+    const cache = new AntFacingCache();
+    const moving = cache.sample({ id: SPIDER_FACING_ID, zone: 0, dx: 0, dy: 16, useInterp: true });
+    const still = cache.sample({ id: SPIDER_FACING_ID, zone: 0, dx: 0, dy: 0, useInterp: true });
+    expect(still).toBe(moving);
+  });
+
+  it('evicts the spider entry on useInterp=false (just-spawned → default pose)', () => {
+    const cache = new AntFacingCache();
+    cache.sample({ id: SPIDER_FACING_ID, zone: 0, dx: 0, dy: 16, useInterp: true });
+    expect(cache.size).toBe(1);
+    const r = cache.sample({ id: SPIDER_FACING_ID, zone: 0, dx: 99, dy: 99, useInterp: false });
+    expect(r).toBe(0);
+    expect(cache.size).toBe(0);
   });
 });

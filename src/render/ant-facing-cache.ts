@@ -33,6 +33,14 @@ const DELTA_EPSILON = 0.01;
 /** Minimum blended heading magnitude to emit a rotation from. */
 const HEADING_EPSILON = 0.001;
 
+/**
+ * Reserved facing-cache key for the singleton surface spider. The cache is keyed
+ * by entity id, and ant ids are non-negative array indices, so a negative id can
+ * never collide with one. The spider reuses the exact same smoothing — its sprite,
+ * like the ants', has its head on -x — it just needs one stable key of its own.
+ */
+export const SPIDER_FACING_ID = -1;
+
 export interface AntFacingSample {
   id: number;
   /** Current zone (0 = surface, 1 = underground). Used for stale-zone eviction. */
