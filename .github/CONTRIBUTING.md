@@ -4,7 +4,7 @@ Thanks for your interest! Subterrans is a spiritual successor to SimAnt (1991), 
 
 ## License & Inbound=Outbound
 
-Subterrans is licensed under **AGPL-3.0-or-later** (see [LICENSE](LICENSE)). By submitting a contribution you agree it is licensed under the same terms. We do not require a CLA — your copyright stays yours, we just need the AGPL license to the project.
+Subterrans is licensed under **AGPL-3.0-or-later** (see [LICENSE](../LICENSE)). By submitting a contribution you agree it is licensed under the same terms. We do not require a CLA — your copyright stays yours, we just need the AGPL license to the project.
 
 If you can't accept AGPL terms for your employer or other reason, please don't submit code changes; issue reports and documentation corrections are still welcome.
 
@@ -39,7 +39,7 @@ Useful scripts:
 
 ## Finding Something to Work On
 
-1. **[ROADMAP.md](ROADMAP.md)** — high-level direction and upcoming phases. Work that's on the roadmap is pre-approved in principle; scope details still need alignment.
+1. **[ROADMAP.md](../ROADMAP.md)** — high-level direction and upcoming phases. Work that's on the roadmap is pre-approved in principle; scope details still need alignment.
 2. **GitHub Issues** — filter for `good first issue` or `help wanted`.
 3. **Small fixes welcome unannounced** — typos, doc improvements, failing-test reproductions, boundary-rule enforcement.
 4. **For anything larger or off-roadmap, talk first.** The project lead is opinionated about how the game should feel and play — that's not a bug, it's the thesis of the project. If you have a significant gameplay, systems, or design change in mind that isn't already on the roadmap, open a discussion or issue _before_ you start coding. Either convince us it fits, or save us both the awkward "this doesn't match the vision" PR review.
@@ -62,8 +62,8 @@ This norm is a preference, not a hard rule. Good human-written contributions won
 
 Subterrans has strict architectural boundaries that a reviewer _will_ block on. Skim these first:
 
-- **[AGENTS.md](AGENTS.md)** — the contributor quick-reference (directory layout, banned APIs, testing expectations).
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** — full explanations with examples.
+- **[AGENTS.md](../AGENTS.md)** — the contributor quick-reference (directory layout, banned APIs, testing expectations).
+- **[ARCHITECTURE.md](../ARCHITECTURE.md)** — full explanations with examples.
 
 Highlights:
 

@@ -67,7 +67,7 @@ Full detail in [ARCHITECTURE.md](ARCHITECTURE.md). A condensed contributor refer
 
 ## Contributing
 
-We welcome contributions, and the project is partly an experiment in AI-driven development — so contributions written with AI coding assistants are the norm, not the exception. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations.
+We welcome contributions, and the project is partly an experiment in AI-driven development — so contributions written with AI coding assistants are the norm, not the exception. See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the full guide, and [CODE_OF_CONDUCT.md](.github/CODE_OF_CONDUCT.md) for community expectations.
 
 Quick pointers:
 
@@ -75,11 +75,11 @@ Quick pointers:
 - Anything on the roadmap: open an issue to claim it, then PR.
 - Anything _off_ the roadmap: talk to us first — open an issue or discussion before starting work.
 
-Past and present contributors are listed in [CONTRIBUTORS.md](CONTRIBUTORS.md).
+Past and present contributors are listed in [CONTRIBUTORS.md](.github/CONTRIBUTORS.md).
 
 ## Security
 
-Please don't report security issues in public. See [SECURITY.md](SECURITY.md) for the private reporting process.
+Please don't report security issues in public. See [SECURITY.md](.github/SECURITY.md) for the private reporting process.
 
 ## License
 
