@@ -230,14 +230,13 @@ import {
   sameTooltipTarget,
   type TooltipTarget,
 } from './tooltips.js';
+import { DEFAULT_LAYOUT, type LayoutContext } from './layout.js';
 import {
   pauseMenuItems,
   pageTitle,
   itemAt as pauseMenuItemAt,
   titleCenterY as pauseMenuTitleCenterY,
   nextSpeedMultiplier,
-  CANVAS_W as PAUSE_MENU_CANVAS_W,
-  CANVAS_H as PAUSE_MENU_CANVAS_H,
   type PauseMenuPage,
   type PauseMenuItem,
   type PauseMenuItemId,
@@ -254,17 +253,15 @@ import {
   type SaveLoadDialogItemId,
 } from './save-load-dialog-layout.js';
 import {
-  SURVEY_CANVAS_W,
-  SURVEY_CANVAS_H,
   SURVEY_TITLE_Y,
   SURVEY_RATING_ROW_Y,
-  SURVEY_FREE_TEXT_RECT,
+  surveyFreeTextRect,
   SURVEY_BROKEN_CHECKBOX_RECT,
   SURVEY_UPLOAD_CHECKBOX_RECT,
   SURVEY_CONSENT_TEXT_Y,
   SURVEY_CONSENT_DISCLOSURE,
-  SURVEY_SUBMIT_BUTTON_RECT,
-  SURVEY_SKIP_BUTTON_RECT,
+  surveySubmitButtonRect,
+  surveySkipButtonRect,
   SURVEY_CHECKBOX_LABEL_GAP,
   surveyRatingButtons,
   surveyHitTest,
@@ -373,6 +370,14 @@ const STATS_ROW2_Y = HUD.STATS.y + HUD_STATS_LAYOUT.row2YOffset;
 const STATS_TEXT_X = HUD.STATS.x + HUD_STATS_LAYOUT.leftTextInset;
 
 export class UIScene extends Phaser.Scene {
+  /**
+   * Issue #213 — the LayoutContext seam. All HUD/overlay geometry derives from
+   * this rather than fixed CANVAS_W/CANVAS_H or inline 800/592 literals. Fixed at
+   * the canvas size today (DEFAULT_LAYOUT = 800×592); the eventual responsive
+   * work recomputes it from the real canvas and reflows on resize.
+   */
+  private layout: LayoutContext = DEFAULT_LAYOUT;
+
   private viewState!: ViewState;
   // Lazy accessor — returns the live WorldState or undefined pre-boot.
   // GameScene stores a class-field world reference that is undefined until
@@ -1252,8 +1257,7 @@ export class UIScene extends Phaser.Scene {
   ): void {
     this.hideGameOverOverlay(); // clear any prior instance first
 
-    const W = 800;
-    const H = 592;
+    const { w: W, h: H } = this.layout;
 
     // Semi-transparent background — input-blocking to absorb clicks behind overlay.
     const bg = this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.6);
@@ -1680,8 +1684,7 @@ export class UIScene extends Phaser.Scene {
   public showSavePromptOverlay(callbacks: { onContinue: () => void; onNewGame: () => void }): void {
     this.hideSavePromptOverlay(); // clear any prior instance first
 
-    const W = 800;
-    const H = 592;
+    const { w: W, h: H } = this.layout;
 
     // Semi-transparent background
     const bg = this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.7);
@@ -1782,8 +1785,7 @@ export class UIScene extends Phaser.Scene {
   }): void {
     this.hideDifficultySelectOverlay();
 
-    const W = 800;
-    const H = 592;
+    const { w: W, h: H } = this.layout;
 
     const bg = this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.75);
     bg.setInteractive();
@@ -1946,17 +1948,17 @@ export class UIScene extends Phaser.Scene {
       // callback → row hidden.
       quitAndSurveyEnabled: this.pauseMenuCallbacks?.onQuitAndSurvey !== undefined,
     };
-    const items = pauseMenuItems(page, ctx);
+    const items = pauseMenuItems(page, ctx, this.layout);
     this.pauseMenuVisibleItems = items;
 
     // Background scrim — input-blocking absorbs background clicks. Click-on-
     // background does NOT dismiss the menu (see pointerdown handler above);
     // dismissal is via Resume button or Esc key only.
     const bg = this.add.rectangle(
-      PAUSE_MENU_CANVAS_W / 2,
-      PAUSE_MENU_CANVAS_H / 2,
-      PAUSE_MENU_CANVAS_W,
-      PAUSE_MENU_CANVAS_H,
+      this.layout.w / 2,
+      this.layout.h / 2,
+      this.layout.w,
+      this.layout.h,
       0x000000,
       0.7,
     );
@@ -1966,8 +1968,8 @@ export class UIScene extends Phaser.Scene {
 
     // Title — "Paused" or "Settings" depending on page.
     const title = this.add.text(
-      PAUSE_MENU_CANVAS_W / 2,
-      pauseMenuTitleCenterY(items.length),
+      this.layout.w / 2,
+      pauseMenuTitleCenterY(items.length, this.layout),
       pageTitle(page),
       { fontSize: '32px', fontFamily: 'monospace', color: '#ffffff' },
     );
@@ -2155,17 +2157,17 @@ export class UIScene extends Phaser.Scene {
       hasIncompatibleSave: incompatible,
       confirming: { ...this.saveLoadDialogConfirming },
     };
-    const items = saveLoadDialogItems(ctx);
+    const items = saveLoadDialogItems(ctx, this.layout);
     this.saveLoadDialogVisibleItems = items;
     const info = getSaveInfo();
 
     // Background scrim — slightly darker than the pause menu so the layered
     // overlay reads as "deeper than the menu underneath."
     const bg = this.add.rectangle(
-      PAUSE_MENU_CANVAS_W / 2,
-      PAUSE_MENU_CANVAS_H / 2,
-      PAUSE_MENU_CANVAS_W,
-      PAUSE_MENU_CANVAS_H,
+      this.layout.w / 2,
+      this.layout.h / 2,
+      this.layout.w,
+      this.layout.h,
       0x000000,
       0.85,
     );
@@ -2174,7 +2176,7 @@ export class UIScene extends Phaser.Scene {
     this.saveLoadDialogGroup.push(bg);
 
     // Title
-    const title = this.add.text(PAUSE_MENU_CANVAS_W / 2, DIALOG_TITLE_Y, saveLoadDialogTitle(), {
+    const title = this.add.text(this.layout.w / 2, DIALOG_TITLE_Y, saveLoadDialogTitle(), {
       fontSize: '28px',
       fontFamily: 'monospace',
       color: '#ffffff',
@@ -2186,7 +2188,7 @@ export class UIScene extends Phaser.Scene {
     // Info line — live state of saved-game (or "no save" / "incompatible save").
     const infoLineColor = ctx.hasIncompatibleSave && info === null ? '#ffaa00' : '#aaaaaa';
     const infoLine = this.add.text(
-      PAUSE_MENU_CANVAS_W / 2,
+      this.layout.w / 2,
       DIALOG_INFO_Y,
       formatSaveInfoLine(info, ctx.hasIncompatibleSave),
       { fontSize: '13px', fontFamily: 'monospace', color: infoLineColor },
@@ -2201,7 +2203,7 @@ export class UIScene extends Phaser.Scene {
     if (this.saveLoadDialogFlash !== 'none') {
       const flashColor = this.saveLoadDialogFlash === 'saved' ? '#88ee88' : '#ff7766';
       const flashText = this.saveLoadDialogFlash === 'saved' ? 'Saved' : 'Save failed';
-      const flash = this.add.text(PAUSE_MENU_CANVAS_W / 2, DIALOG_INFO_Y + 18, flashText, {
+      const flash = this.add.text(this.layout.w / 2, DIALOG_INFO_Y + 18, flashText, {
         fontSize: '12px',
         fontFamily: 'monospace',
         color: flashColor,
@@ -2483,10 +2485,10 @@ export class UIScene extends Phaser.Scene {
 
     // Background scrim — opaque-ish so the game beneath reads as paused.
     const bg = this.add.rectangle(
-      SURVEY_CANVAS_W / 2,
-      SURVEY_CANVAS_H / 2,
-      SURVEY_CANVAS_W,
-      SURVEY_CANVAS_H,
+      this.layout.w / 2,
+      this.layout.h / 2,
+      this.layout.w,
+      this.layout.h,
       0x000000,
       0.85,
     );
@@ -2498,7 +2500,7 @@ export class UIScene extends Phaser.Scene {
     // For pause-menu-quit, show a generic "Quitting" heading.
     if (this.surveyState.quitFromPauseMenu) {
       const title = this.add.text(
-        SURVEY_CANVAS_W / 2,
+        this.layout.w / 2,
         SURVEY_TITLE_Y,
         'Quitting — tell us what you think',
         { fontSize: '22px', fontFamily: 'monospace', color: '#ffffff' },
@@ -2510,7 +2512,7 @@ export class UIScene extends Phaser.Scene {
       const { text: outcomeText, color: outcomeColor } = formatOutcomeTitle(
         this.surveyState.outcome,
       );
-      const outcomeLabel = this.add.text(SURVEY_CANVAS_W / 2, SURVEY_TITLE_Y - 5, outcomeText, {
+      const outcomeLabel = this.add.text(this.layout.w / 2, SURVEY_TITLE_Y - 5, outcomeText, {
         fontSize: '28px',
         fontFamily: 'monospace',
         color: '#' + outcomeColor.toString(16).padStart(6, '0'),
@@ -2521,7 +2523,7 @@ export class UIScene extends Phaser.Scene {
 
       const causeText = formatCauseSubtitle(this.surveyState.outcome, this.surveyState.cause);
       const secondLine = causeText !== '' ? causeText : 'Tell us what you think:';
-      const causeLabel = this.add.text(SURVEY_CANVAS_W / 2, SURVEY_TITLE_Y + 33, secondLine, {
+      const causeLabel = this.add.text(this.layout.w / 2, SURVEY_TITLE_Y + 33, secondLine, {
         fontSize: '16px',
         fontFamily: 'monospace',
         color: '#cccccc',
@@ -2533,7 +2535,7 @@ export class UIScene extends Phaser.Scene {
 
     // Rating label — clarifies what 1–5 means.
     const ratingLabel = this.add.text(
-      SURVEY_CANVAS_W / 2,
+      this.layout.w / 2,
       SURVEY_RATING_ROW_Y - 26,
       'Rate your experience (1 = poor, 5 = great)',
       { fontSize: '13px', fontFamily: 'monospace', color: '#aaaaaa' },
@@ -2544,7 +2546,7 @@ export class UIScene extends Phaser.Scene {
 
     // Rating row — five buttons. Selected button renders with a green
     // fill so the choice is visible at a glance.
-    const ratings = surveyRatingButtons();
+    const ratings = surveyRatingButtons(this.layout);
     for (const btn of ratings) {
       const selected = this.surveyState.rating === btn.rating;
       const fillColor = selected ? 0x22aa22 : 0x333333;
@@ -2565,7 +2567,7 @@ export class UIScene extends Phaser.Scene {
 
     // Free-text rect background (the actual editable surface is a DOM
     // textarea positioned over the canvas below — see ensureSurveyTextarea).
-    const ft = SURVEY_FREE_TEXT_RECT;
+    const ft = surveyFreeTextRect(this.layout);
     const ftBg = this.add.rectangle(ft.x + ft.w / 2, ft.y + ft.h / 2, ft.w, ft.h, 0x222222, 1);
     ftBg.setDepth(41);
     this.surveyGroup.push(ftBg);
@@ -2596,7 +2598,7 @@ export class UIScene extends Phaser.Scene {
         fontSize: '11px',
         fontFamily: 'monospace',
         color: '#aaaaaa',
-        wordWrap: { width: SURVEY_CANVAS_W - 2 * SURVEY_BROKEN_CHECKBOX_RECT.x },
+        wordWrap: { width: this.layout.w - 2 * SURVEY_BROKEN_CHECKBOX_RECT.x },
       },
     );
     consent.setDepth(42);
@@ -2605,8 +2607,8 @@ export class UIScene extends Phaser.Scene {
     // Submit + Skip buttons. Submit is disabled until a rating is picked
     // so the survey row always carries a 1-5 value; Skip is always live.
     const submitEnabled = this.surveyState.rating !== 0;
-    this.drawSurveyButton(SURVEY_SUBMIT_BUTTON_RECT, 'Submit', submitEnabled);
-    this.drawSurveyButton(SURVEY_SKIP_BUTTON_RECT, 'Skip', true);
+    this.drawSurveyButton(surveySubmitButtonRect(this.layout), 'Submit', submitEnabled);
+    this.drawSurveyButton(surveySkipButtonRect(this.layout), 'Skip', true);
   }
 
   /** Issue #131 — render the post-submit/skip confirmation screen. Shows a
@@ -2614,10 +2616,10 @@ export class UIScene extends Phaser.Scene {
    *  seed). The buttons reuse the Submit/Skip positions from the form phase. */
   private renderSurveyConfirmation(): void {
     const bg = this.add.rectangle(
-      SURVEY_CANVAS_W / 2,
-      SURVEY_CANVAS_H / 2,
-      SURVEY_CANVAS_W,
-      SURVEY_CANVAS_H,
+      this.layout.w / 2,
+      this.layout.h / 2,
+      this.layout.w,
+      this.layout.h,
       0x000000,
       0.85,
     );
@@ -2628,7 +2630,7 @@ export class UIScene extends Phaser.Scene {
     const resultText = this.surveyState.confirmedSubmit
       ? 'Survey submitted — thanks for playing!'
       : 'Thanks for playing!';
-    const title = this.add.text(SURVEY_CANVAS_W / 2, SURVEY_CANVAS_H / 2 - 40, resultText, {
+    const title = this.add.text(this.layout.w / 2, this.layout.h / 2 - 40, resultText, {
       fontSize: '22px',
       fontFamily: 'monospace',
       color: '#ffffff',
@@ -2637,8 +2639,8 @@ export class UIScene extends Phaser.Scene {
     title.setDepth(41);
     this.surveyGroup.push(title);
 
-    this.drawSurveyButton(SURVEY_SUBMIT_BUTTON_RECT, 'New Game', true);
-    this.drawSurveyButton(SURVEY_SKIP_BUTTON_RECT, 'Retry', true);
+    this.drawSurveyButton(surveySubmitButtonRect(this.layout), 'New Game', true);
+    this.drawSurveyButton(surveySkipButtonRect(this.layout), 'Retry', true);
   }
 
   /** Helper — draw a checkbox square + label for the survey overlay. */
@@ -2767,8 +2769,8 @@ export class UIScene extends Phaser.Scene {
     const canvas = this.game.canvas;
     if (canvas === null) return;
     const canvasRect = canvas.getBoundingClientRect();
-    const scaleX = canvasRect.width / SURVEY_CANVAS_W;
-    const scaleY = canvasRect.height / SURVEY_CANVAS_H;
+    const scaleX = canvasRect.width / this.layout.w;
+    const scaleY = canvasRect.height / this.layout.h;
     const ta = this.surveyTextarea;
     // The textarea is absolutely-positioned and sits in `document.body` or
     // in `canvas.parentElement` (see ensureSurveyTextarea). For an
@@ -2808,10 +2810,11 @@ export class UIScene extends Phaser.Scene {
       originX = canvasRect.left;
       originY = canvasRect.top;
     }
-    ta.style.left = `${originX + SURVEY_FREE_TEXT_RECT.x * scaleX}px`;
-    ta.style.top = `${originY + SURVEY_FREE_TEXT_RECT.y * scaleY}px`;
-    ta.style.width = `${SURVEY_FREE_TEXT_RECT.w * scaleX}px`;
-    ta.style.height = `${SURVEY_FREE_TEXT_RECT.h * scaleY}px`;
+    const ft = surveyFreeTextRect(this.layout);
+    ta.style.left = `${originX + ft.x * scaleX}px`;
+    ta.style.top = `${originY + ft.y * scaleY}px`;
+    ta.style.width = `${ft.w * scaleX}px`;
+    ta.style.height = `${ft.h * scaleY}px`;
   }
 
   /** Dispatch a click on the survey overlay. Called from the pointerdown
@@ -2821,7 +2824,7 @@ export class UIScene extends Phaser.Scene {
     // Issue #131 — when the confirmation screen is showing, use the
     // confirmation hit-test (New Game / Retry) instead of the form hit-test.
     if (this.surveyState.showConfirmation) {
-      const hit = surveyConfirmationHitTest(px, py);
+      const hit = surveyConfirmationHitTest(px, py, this.layout);
       if (hit === null) return;
       const cb = this.surveyCallbacks;
       this.hideSurveyOverlay();
@@ -2830,7 +2833,7 @@ export class UIScene extends Phaser.Scene {
       return;
     }
 
-    const hit = surveyHitTest(px, py);
+    const hit = surveyHitTest(px, py, this.layout);
     if (hit === null) return;
     switch (hit.kind) {
       case 'rating':
