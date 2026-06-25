@@ -61,7 +61,7 @@ Phase 1 targets web only. The architecture preserves portability for native wrap
 
 **All changes — including doc-only and one-line fixes — go through a feature branch and a pull request.** Direct pushes to `main` are not the path here, even when admin bypass is technically available. The `main` branch is protected: PR required, ≥1 approving review, force-pushes blocked, branch deletion blocked.
 
-Branch names: `feat/<short-description>`, `fix/<short-description>`, `chore/<short-description>`, `docs/<short-description>`. Open the PR against `main`, fill in the summary and test plan, and wait for review. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full mechanics.
+Branch names: `feat/<short-description>`, `fix/<short-description>`, `chore/<short-description>`, `docs/<short-description>`. Open the PR against `main`, fill in the summary and test plan, and wait for review. See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the full mechanics.
 
 This applies to AI agents working in this repo as well as human contributors. The size of the change is not the criterion.
 
