@@ -437,7 +437,10 @@ describe('createScenario', () => {
       expect(world.ants.alive[enemy.queenEntityId]).toBe(1);
       expect(player.defeated).toBe(false);
       expect(enemy.defeated).toBe(false);
-    });
+      // #227: deliberately long statistical run — explicit generous timeout so
+      // the local coverage gate passes under v8 instrumentation (default 5s
+      // stays the tripwire for every other test).
+    }, 30_000);
 
     it('pheromone food-trail grids were laid at some point during 1500 ticks — foragers discovered piles', () => {
       // The carry-only deposit rule (PHER-03) means the surface food-trail

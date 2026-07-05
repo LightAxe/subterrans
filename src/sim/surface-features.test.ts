@@ -324,7 +324,9 @@ describe('overlap-suppression invariant — UAT "two overlapping rocks" guard', 
         }
       }
     }
-  });
+    // #227: deliberately long multi-seed sweep — explicit generous timeout so
+    // the local coverage gate passes under v8 instrumentation.
+  }, 20_000);
 });
 
 describe('SURFACE_FEATURES registry contract', () => {
