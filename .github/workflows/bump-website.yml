@@ -81,7 +81,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GAME_SHA: ${{ github.sha }}
         run: |
-          gh issue create \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "bump-website failed for ${GAME_SHA:0:7}" \
-            --body "bump-website could not push a submodule bump for code SHA \`$GAME_SHA\`; the website was NOT updated to this build. Re-run Actions → Bump website submodule → Run workflow once website main is clear, or push a new code-main commit."
+          # Dedup (ship-review advisory): this workflow runs on every push to main,
+          # so a standing failure (revoked deploy key, website repo down) would
+          # otherwise file a fresh issue per push. Coalesce into ONE open issue with
+          # a stable title — comment on it if it already exists, else create it.
+          TITLE="bump-website deploy failing"
+          BODY="bump-website could not push a submodule bump for code SHA \`$GAME_SHA\` (run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID). The website was NOT updated to this build; re-run Actions → Bump website submodule once website main is clear, or push a new code-main commit."
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "$TITLE in:title" --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "Still failing. $BODY"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+          fi
