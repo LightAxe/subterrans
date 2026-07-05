@@ -4,7 +4,7 @@
 
 import type { WorldState, SpiderState } from './types.js';
 import { emitEvent } from './telemetry.js';
-import { phGet, phSet } from './pheromone/pheromone-store.js';
+import { phGet, phSet, pheromoneKeySuffix } from './pheromone/pheromone-store.js';
 import { AntTask, PheromoneType } from './enums.js';
 import { tierIndex } from './ai-state.js';
 import {
@@ -63,8 +63,9 @@ const HUNT_TILE_COUNTS = new Uint16Array(SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGH
 const HUNT_DIRTY: number[] = [];
 
 // Precomputed suffix for surface DangerTrail pheromone grid key lookup.
-// Avoids per-tick string allocation while remaining enum-safe.
-const SURFACE_DANGER_SUFFIX = `:${PheromoneType.DangerTrail}:surface`;
+// Avoids per-tick string allocation while remaining enum-safe. Built via the
+// centralized key-contract helper (#242) so it can't drift from pheromoneGridKey.
+const SURFACE_DANGER_SUFFIX = pheromoneKeySuffix(PheromoneType.DangerTrail, 'surface');
 
 // Module-level scratch for findNearestEntrance return value — avoids per-Rampaging-tick allocation.
 // sim-scratch: overwritten on every findNearestEntrance call (object — not lint-enforced).

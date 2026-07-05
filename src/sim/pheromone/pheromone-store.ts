@@ -94,3 +94,38 @@ export function phSet(g: PheromoneGrid, x: number, y: number, v: number): void {
 export function pheromoneGridKey(colonyId: number, type: number, zone: Zone): string {
   return `${colonyId}:${type}:${zone}`;
 }
+
+/**
+ * Suffix form of the key contract (`:${type}:${zone}`), for endsWith-style
+ * matching without per-tick allocation — build ONCE at module scope (see
+ * spider.ts SURFACE_DANGER_SUFFIX). Must stay in lockstep with pheromoneGridKey
+ * above; centralizing both here (#242) keeps the format contract in one place.
+ */
+export function pheromoneKeySuffix(type: number, zone: Zone): string {
+  return `:${type}:${zone}`;
+}
+
+/**
+ * True iff the key's zone segment is 'surface'. Exact under the 3-segment
+ * contract: zone is the final segment and ':surface' is never a suffix of
+ * ':underground'. Allocation-free (endsWith, no split).
+ */
+export function pheromoneKeyIsSurface(key: string): boolean {
+  return key.endsWith(':surface');
+}
+
+/**
+ * Decode the middle (PheromoneType) segment. Moved VERBATIM from tick.ts's decay
+ * loop (#242) — charCode arithmetic, no split()/slice() allocation (hot path:
+ * runs per grid per tick, AGENTS.md no-alloc rule). Returns the accumulated
+ * integer; garbage in → garbage out (callers own key validity, as before).
+ */
+export function decodePheromoneKeyType(key: string): number {
+  const firstColon = key.indexOf(':');
+  const secondColon = key.indexOf(':', firstColon + 1);
+  let pheromoneType = 0;
+  for (let c = firstColon + 1; c < secondColon; c++) {
+    pheromoneType = pheromoneType * 10 + (key.charCodeAt(c) - 48);
+  }
+  return pheromoneType;
+}

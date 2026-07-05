@@ -440,7 +440,11 @@ export function createScenario(
   ensureSurfaceComponentMask(world);
 
   // --- Step 8: Pheromone grids — all 8 (2 colonies × 2 types × 2 zones) ---
-  // All 8 must exist so tick-step lookups never hit a missing key.
+  // All 8 must exist so tick-step lookups never hit a missing key. NOTE (#242):
+  // only the SURFACE grids are live — the underground grids have no writer or
+  // reader anywhere in the sim (allocated-but-unused, kept for save-shape
+  // stability pending underground pheromone work in Phase 4/5b); the step-15
+  // decay sweep skips them.
   for (const cid of [PLAYER_COLONY_ID, ENEMY_COLONY_ID]) {
     for (const pType of [PheromoneType.FoodTrail, PheromoneType.DangerTrail]) {
       const surfaceKey = pheromoneGridKey(cid, pType, 'surface');

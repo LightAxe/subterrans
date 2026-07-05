@@ -26,6 +26,7 @@ import {
   phGet,
   phSet,
   pheromoneGridKey,
+  pheromoneKeyIsSurface,
 } from './pheromone/pheromone-store.js';
 import {
   AntTask,
@@ -4603,5 +4604,39 @@ describe('Issue #60 — command coordinate validation', () => {
     // rallyPoint is still null, not {tileX: null, tileY: null}.
     const parsed = JSON.parse(json) as { colonies: Record<string, { rallyPoint: unknown }> };
     expect(parsed.colonies[String(PLAYER)]!.rallyPoint).toBeNull();
+  });
+});
+
+describe('#242 pheromone decay skips underground grids', () => {
+  it('every underground grid is all-zero after createScenario + 50 ticks (skip-safety invariant)', () => {
+    const world = createScenario(42);
+    for (let t = 0; t < 50; t++) tick(world, []);
+    for (const key in world.pheromoneGrids) {
+      if (pheromoneKeyIsSurface(key)) continue;
+      const grid = world.pheromoneGrids[key]!;
+      let sum = 0;
+      for (let i = 0; i < grid.data.length; i++) sum += grid.data[i]!;
+      expect(sum).toBe(0);
+    }
+  });
+
+  it('one tick sweeps a surface cell but leaves a hand-seeded underground cell untouched (the skip)', () => {
+    const world = createScenario(42);
+    const surfaceKey = pheromoneGridKey(PLAYER_COLONY_ID, PheromoneType.FoodTrail, 'surface');
+    const undergroundKey = pheromoneGridKey(
+      PLAYER_COLONY_ID,
+      PheromoneType.FoodTrail,
+      'underground',
+    );
+    const surfaceGrid = world.pheromoneGrids[surfaceKey]!;
+    const undergroundGrid = world.pheromoneGrids[undergroundKey]!;
+    // Seed both well above the V14 decay floor so the sweep would visibly act.
+    phSet(surfaceGrid, 10, 10, 5000);
+    phSet(undergroundGrid, 10, 10, 5000);
+    tick(world, []);
+    // Surface grid IS swept (decay lowers it, or a forager deposit raises it) —
+    // either way it changed. Underground grid is SKIPPED — byte-for-byte intact.
+    expect(phGet(surfaceGrid, 10, 10)).not.toBe(5000);
+    expect(phGet(undergroundGrid, 10, 10)).toBe(5000);
   });
 });

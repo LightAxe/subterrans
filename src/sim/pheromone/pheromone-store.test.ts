@@ -13,7 +13,15 @@
 //   10. Independence across separate createPheromoneGrid() allocations
 
 import { describe, it, expect } from 'vitest';
-import { createPheromoneGrid, phGet, phSet, pheromoneGridKey } from './pheromone-store.js';
+import {
+  createPheromoneGrid,
+  phGet,
+  phSet,
+  pheromoneGridKey,
+  pheromoneKeySuffix,
+  pheromoneKeyIsSurface,
+  decodePheromoneKeyType,
+} from './pheromone-store.js';
 import { PheromoneType } from '../enums.js';
 
 describe('pheromone-store', () => {
@@ -167,5 +175,30 @@ describe('pheromone-store', () => {
     // Mutation on one must not affect the other
     phSet(a, 2, 2, 55);
     expect(phGet(b, 2, 2)).toBe(0);
+  });
+});
+
+describe('pheromone key-contract helpers (#242)', () => {
+  it('decodePheromoneKeyType extracts the middle type token (incl. multi-digit)', () => {
+    expect(decodePheromoneKeyType('1:0:surface')).toBe(0);
+    expect(decodePheromoneKeyType('2:1:underground')).toBe(1);
+    expect(decodePheromoneKeyType('3:12:surface')).toBe(12);
+  });
+
+  it('pheromoneKeyIsSurface distinguishes zones', () => {
+    expect(pheromoneKeyIsSurface('1:0:surface')).toBe(true);
+    expect(pheromoneKeyIsSurface('2:1:underground')).toBe(false);
+  });
+
+  it('pheromoneKeySuffix builds the :type:zone suffix', () => {
+    expect(pheromoneKeySuffix(PheromoneType.DangerTrail, 'surface')).toBe(':1:surface');
+    expect(pheromoneKeySuffix(PheromoneType.FoodTrail, 'underground')).toBe(':0:underground');
+  });
+
+  it('suffix / decode / isSurface stay in lockstep with pheromoneGridKey (contract)', () => {
+    const key = pheromoneGridKey(2, PheromoneType.DangerTrail, 'underground');
+    expect(key.endsWith(pheromoneKeySuffix(PheromoneType.DangerTrail, 'underground'))).toBe(true);
+    expect(decodePheromoneKeyType(key)).toBe(PheromoneType.DangerTrail);
+    expect(pheromoneKeyIsSurface(key)).toBe(false);
   });
 });
