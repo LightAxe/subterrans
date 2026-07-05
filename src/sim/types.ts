@@ -391,7 +391,10 @@ export const SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS = 30 as const;
  * engage. Under V31+ (live V23 path only; frozen tickSpiderV22 untouched):
  * (a) each combat/meander movement step refuses to enter a HardBlock tile —
  * preferred axis first (same ax >= ay tie-break as moveTowardTile), then the
- * other axis when it approaches the target, else the spider holds this tick;
+ * other axis when it approaches the target, else the spider holds this tick
+ * (with an escape hatch: a spider ALREADY on an impassable tile — an unversioned
+ * lair placement can land inside a boulder — steps terrain-blind toward the
+ * target until it reaches passable ground, so it can never be stranded);
  * (b) the meander picker keeps its two hash32 draws, then linear-probes (tile
  * index +1, wrapping at width*height) to the first passable tile — deterministic,
  * no rngState use. Feeding movement stays terrain-blind (its heal gate needs exact

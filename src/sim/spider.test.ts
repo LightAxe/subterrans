@@ -1920,4 +1920,39 @@ describe('spider terrain passability (#225, V31)', () => {
     // No probe below V31: the endpoint stays inside the boulder (old behavior).
     expect(isSpiderPassable(world, spider.feedAwayTileX, spider.feedAwayTileY)).toBe(false);
   });
+
+  it('V31 spider that starts on an impassable tile escapes via the terrain-blind hatch (Codex P1)', () => {
+    const world = makeCleanWorld(V31);
+    // 5x5 boulder with the spider in the dead centre — all four cardinal neighbours
+    // are HardBlock, so passability-aware stepping alone would strand it forever.
+    for (let y = 30; y <= 34; y++) {
+      for (let x = 62; x <= 66; x++) {
+        setHardBlock(world, x, y);
+      }
+    }
+    const antId = placeWorker(world, 70, 32); // chase target on open ground, east of the boulder
+    world.spider = makeSpider({
+      posX: 64 << FP_SHIFT,
+      posY: 32 << FP_SHIFT,
+      state: 'Chasing',
+      chaseTargetAntId: antId,
+      chaseStartTick: 0,
+    });
+    // Precondition: it starts on an impassable tile.
+    expect(isSpiderPassable(world, 64, 32)).toBe(false);
+    let escaped = false;
+    for (let t = 1; t <= 10; t++) {
+      world.tick = t;
+      tickSpider(world);
+      if (world.spider === null) break;
+      const sx = world.spider.posX >> FP_SHIFT;
+      const sy = world.spider.posY >> FP_SHIFT;
+      if (isSpiderPassable(world, sx, sy)) {
+        escaped = true;
+        break;
+      }
+    }
+    // Terrain-blind hatch walked it out onto passable ground (never stranded).
+    expect(escaped).toBe(true);
+  });
 });

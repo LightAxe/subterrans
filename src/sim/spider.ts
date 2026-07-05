@@ -427,6 +427,16 @@ function moveTowardTilePassable(
   const curX = spider.posX >> FP_SHIFT;
   const curY = spider.posY >> FP_SHIFT;
   if (curX === targetX && curY === targetY) return;
+  // Escape hatch: if the spider is ALREADY on an impassable tile (scenario lair
+  // placement — _placeSpider — filters by colony distance only, not passability,
+  // so a lair can land inside a 4x4+ boulder; a legacy save could also hold such a
+  // position), passability-aware stepping would refuse every blocked neighbour and
+  // strand it forever. Step terrain-blind toward the target so it walks out; the
+  // gate resumes the moment it reaches passable ground.
+  if (!isSpiderPassable(world, curX, curY)) {
+    moveTowardTile(spider, targetX, targetY);
+    return;
+  }
   const dx = targetX - curX;
   const dy = targetY - curY;
   const ax = dx < 0 ? -dx : dx;
