@@ -33,7 +33,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check src/ eslint-rules/",
     "check:cycles": "node scripts/check-ant-cycles.mjs",
-    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run lint:types && bash scripts/check-sim-boundary.sh && bash scripts/check-asset-paths.sh && npm run check:cycles && npm run test"
+    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run lint:types && bash scripts/check-sim-boundary.sh && bash scripts/check-asset-paths.sh && bash scripts/check-e2e-geometry.sh && npm run check:cycles && npm run test"
   },
   "dependencies": {
     "phaser": "^3.90.0"

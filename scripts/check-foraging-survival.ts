@@ -168,3 +168,60 @@ console.log('');
 console.log('Acceptance targets: ≥95% queen survival both colonies,');
 console.log('                    no-deposit seeds near zero,');
 console.log('                    P95 first-deposit substantially below 1098');
+
+// #241 — turn the printed targets into real assertions with an exit code, so this
+// stops being a "human reads the output" gate. `--report-only` prints the verdict
+// but never exits non-zero (for exploratory / tuning runs).
+const MIN_QUEEN_SURVIVAL_PCT = 95; // memo hard target, both colonies
+const MAX_NO_DEPOSIT_FRACTION = 0.02; // "near zero" -> <=2% of seeds
+const MAX_P95_FIRST_DEPOSIT = 800; // "substantially below" the 1098 baseline
+const REPORT_ONLY = process.argv.slice(2).includes('--report-only');
+
+const acceptanceChecks: ReadonlyArray<readonly [string, boolean, string]> = [
+  [
+    'Player queen survival',
+    (playerAlive / SEEDS) * 100 >= MIN_QUEEN_SURVIVAL_PCT,
+    `${((playerAlive / SEEDS) * 100).toFixed(1)}% (>=${MIN_QUEEN_SURVIVAL_PCT}%)`,
+  ],
+  [
+    'Enemy queen survival',
+    (enemyAlive / SEEDS) * 100 >= MIN_QUEEN_SURVIVAL_PCT,
+    `${((enemyAlive / SEEDS) * 100).toFixed(1)}% (>=${MIN_QUEEN_SURVIVAL_PCT}%)`,
+  ],
+  [
+    'Player no-deposit',
+    playerNoDeposit / SEEDS <= MAX_NO_DEPOSIT_FRACTION,
+    `${playerNoDeposit}/${SEEDS} (<=${(MAX_NO_DEPOSIT_FRACTION * 100).toFixed(0)}%)`,
+  ],
+  [
+    'Enemy no-deposit',
+    enemyNoDeposit / SEEDS <= MAX_NO_DEPOSIT_FRACTION,
+    `${enemyNoDeposit}/${SEEDS} (<=${(MAX_NO_DEPOSIT_FRACTION * 100).toFixed(0)}%)`,
+  ],
+  [
+    'Player P95 first-deposit',
+    !Number.isNaN(playerP95) && playerP95 <= MAX_P95_FIRST_DEPOSIT,
+    `${playerP95} (<=${MAX_P95_FIRST_DEPOSIT})`,
+  ],
+  [
+    'Enemy P95 first-deposit',
+    !Number.isNaN(enemyP95) && enemyP95 <= MAX_P95_FIRST_DEPOSIT,
+    `${enemyP95} (<=${MAX_P95_FIRST_DEPOSIT})`,
+  ],
+];
+
+console.log('');
+console.log('Acceptance checks:');
+for (const [name, pass, detail] of acceptanceChecks) {
+  console.log(`  [${pass ? 'PASS' : 'FAIL'}] ${name}: ${detail}`);
+}
+const failedChecks = acceptanceChecks.filter(([, pass]) => !pass);
+if (failedChecks.length && !REPORT_ONLY) {
+  console.error(`\n${failedChecks.length} acceptance check(s) FAILED.`);
+  process.exit(1);
+}
+console.log(
+  failedChecks.length
+    ? `\n${failedChecks.length} failed (--report-only: not exiting non-zero).`
+    : '\nAll acceptance checks passed.',
+);

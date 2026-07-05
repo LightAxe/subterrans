@@ -1,4 +1,5 @@
 import { test, expect, type ConsoleMessage } from '@playwright/test';
+import { VIEW_TOGGLE_RECT } from './helpers/geometry.js';
 
 const errorFilter = (msg: ConsoleMessage) => msg.type() === 'error';
 
@@ -87,10 +88,11 @@ test.describe('Phase 8 smoke — boot, toggle, pan', () => {
     await page.waitForTimeout(300);
 
     // Click the VIEW_TOGGLE HUD button (more reliable than Tab keyboard — no
-    // focus dependency). HUD.VIEW_TOGGLE sits at canvas-local (632, 396, 80×24).
+    // focus dependency). Rect from geometry.ts (#240) — no inline pixels.
     const box = await canvas.boundingBox();
     if (!box) throw new Error('canvas has no bounding box');
-    await page.mouse.click(box.x + 632 + 40, box.y + 396 + 12);
+    const r = VIEW_TOGGLE_RECT;
+    await page.mouse.click(box.x + r.x + r.w / 2, box.y + r.y + r.h / 2);
     await page.waitForTimeout(300);
 
     await page.screenshot({

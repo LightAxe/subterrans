@@ -32,6 +32,7 @@ import {
 import type { SimCommand } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { ChamberType } from '../sim/enums.js';
+import { pheromoneKeyIsSurface } from '../sim/pheromone/pheromone-store.js';
 
 describe('save.ts (SCEN-04 + SCEN-06)', () => {
   // Use window.localStorage to ensure jsdom's implementation (not Node 25 native localStorage)
@@ -2280,5 +2281,20 @@ describe('bakedSurfaceEffect serialization', () => {
     // connectivity check; the all-HardBlock grid disconnects every pile/entrance.
     const corrupt = { ...ser, bakedSurfaceEffect: allHardBlockB64() };
     expect(() => deserializeWorldState(corrupt)).toThrow();
+  });
+
+  describe('#242 underground pheromone grids stay all-zero across serialize/deserialize', () => {
+    it('a fresh + 30-tick world round-trips with every underground grid all-zero (skip invariant holds for a loaded save)', () => {
+      const world = createScenario(42);
+      for (let t = 0; t < 30; t++) tick(world, []);
+      const restored = deserializeWorldState(serializeWorldState(world));
+      for (const key in restored.pheromoneGrids) {
+        if (pheromoneKeyIsSurface(key)) continue;
+        const grid = restored.pheromoneGrids[key]!;
+        let sum = 0;
+        for (let i = 0; i < grid.data.length; i++) sum += grid.data[i]!;
+        expect(sum).toBe(0);
+      }
+    });
   });
 });

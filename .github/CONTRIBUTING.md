@@ -16,10 +16,10 @@ This project follows the [Contributor Covenant v2.1](CODE_OF_CONDUCT.md). By par
 
 ```bash
 git clone https://github.com/LightAxe/subterrans.git
-cd subterrans/code
+cd subterrans
 npm install
 npm run dev        # launches Vite dev server
-npm run verify     # format:check + lint + typecheck + lint:types + sim-boundary + asset-path + tests
+npm run verify     # format:check + lint + typecheck + lint:types + sim-boundary + asset-path + e2e-geometry + ant-cycle + tests
 ```
 
 Requirements:
@@ -35,7 +35,7 @@ Useful scripts:
 - `npm run typecheck` — TypeScript in noEmit mode
 - `npm run lint` / `npm run lint:fix` — fast ESLint (sim-safety + base rules)
 - `npm run lint:types` — type-aware ESLint (`recommended-type-checked`); slower, runs the TS program
-- `npm run format` / `npm run format:check` — Prettier (write / check); `format:check` is scoped to `src/` and runs inside `verify`
+- `npm run format` / `npm run format:check` — Prettier (write / check); `format:check` is scoped to `src/` and `eslint-rules/` and runs inside `verify`
 
 ## Finding Something to Work On
 
@@ -108,7 +108,7 @@ Open an issue with:
 - What you expected
 - What actually happened
 - Browser + OS
-- Attach a debug snapshot if you have one (see in-game debug menu)
+- Attach a debug snapshot if you have one (press **F9** in-game to download one)
 
 For deterministic reproducers: **the seed is gold.** Include it.
 

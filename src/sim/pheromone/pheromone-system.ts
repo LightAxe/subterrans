@@ -1,10 +1,15 @@
 // pheromone-system.ts — PRD §5b/§5c/§5d pheromone deposit, decay, and gradient sampling
 //
-// Implements the four core pheromone operations:
-//   depositFoodTrail  — PRD §5b: accumulate food-trail strength at a cell, clamped at PHEROMONE_CAP
-//   depositDanger     — PRD §5b: defined for completeness; NOT called from Phase 6 tick steps (Phase 9 scope)
-//   tickPheromoneDecay — PRD §5c: O(grid.data.length) sweep; floor-snap prevents zombie trails (PHER-04/PHER-07)
-//   sampleGradient    — PRD §5d: deterministic 4-connected neighbor sampling with explore/exploit (PHER-05)
+// Implements the surviving core pheromone operations (#242 deleted two dead
+// exports, depositDanger and sampleGradient — see the DangerTrail note below):
+//   depositFoodTrail        — PRD §5b: accumulate food-trail strength at a cell, clamped at PHEROMONE_CAP
+//   tickPheromoneDecay      — PRD §5c: O(grid.data.length) sweep; floor-snap prevents zombie trails (PHER-04/PHER-07)
+//   sampleForagingDirection — 09 memo: pheromone-first reacquisition sampler for SearchingFood foragers
+//
+// DangerTrail note (#242): deposits come from spider.ts seedDangerPheromone
+// (inline, spider-calibrated magnitudes); NO sim code READS DangerTrail — ant
+// danger-avoidance is Phase 5b (a NEW RNG-consuming, simVersion-gated behavior,
+// not an activation of existing plumbing).
 //
 // MUST NOT use: Math.floor, Math.round, division (/), Date, performance, setTimeout, Math.random.
 // All fixed-point operations use >>  and Math.imul.
@@ -64,23 +69,6 @@ export function depositFoodTrail(
 }
 
 // ---------------------------------------------------------------------------
-// depositDanger — PRD §5b (defined; Phase 9 wires call sites)
-// ---------------------------------------------------------------------------
-
-/**
- * Phase 6: defined for type completeness; NOT called from any Phase 6 tick step.
- * Phase 9 wires combat deposit triggers.
- *
- * Accumulate danger-trail pheromone at (tileX, tileY), clamped to PHEROMONE_CAP.
- * Uses the same deposit magnitude as food-trail per PRD §5b (FOOD_TRAIL_DEPOSIT).
- */
-export function depositDanger(grid: PheromoneGrid, tileX: number, tileY: number): void {
-  const current = phGet(grid, tileX, tileY);
-  const sum = current + FOOD_TRAIL_DEPOSIT;
-  phSet(grid, tileX, tileY, sum > PHEROMONE_CAP ? PHEROMONE_CAP : sum);
-}
-
-// ---------------------------------------------------------------------------
 // tickPheromoneDecay — PRD §5c verbatim (PHER-04, PHER-07)
 // ---------------------------------------------------------------------------
 
@@ -122,73 +110,11 @@ export function tickPheromoneDecay(
 }
 
 // ---------------------------------------------------------------------------
-// sampleGradient — PRD §5d (PHER-05, SCEN-06)
-// ---------------------------------------------------------------------------
-
-/**
- * Return the direction `{dx, dy}` a forager should move based on the pheromone
- * gradient at (tileX, tileY).
- *
- * Algorithm (PRD §5d):
- *   1. Explore check: rng.nextInt(100) — if < EXPLORE_RATE_PERCENT (10), pick
- *      rng.nextInt(4) and return DIRS[idx]. One PRNG call consumed unconditionally
- *      for the explore check; a second consumed only when explore is taken.
- *   2. Exploit: iterate DIRS in fixed order (up, down, left, right); phGet each
- *      neighbor; strict > comparison for first-found tie-break (deterministic).
- *   3. Empty fallback: if bestStrength === 0 (all empty), return {dx:0, dy:0}.
- *
- * PRNG invariants (critical for determinism):
- *   - nextInt(100) ALWAYS consumed once per call.
- *   - nextInt(4)   consumed ONLY when explore branch is taken.
- *   - No other Math.random or PRNG calls occur inside this function.
- *
- * @param grid   Pheromone grid to read neighbor strengths from.
- * @param tileX  Tile X of the forager (integer, already >> FP_SHIFT at call site).
- * @param tileY  Tile Y of the forager (integer, already >> FP_SHIFT at call site).
- * @param rng    WorldState Rng instance — passed explicitly, never a singleton.
- * @returns      Direction vector with dx, dy each in {-1, 0, 1}.
- */
-export function sampleGradient(
-  grid: PheromoneGrid,
-  tileX: number,
-  tileY: number,
-  rng: Rng,
-): { dx: number; dy: number } {
-  // Explore branch (PRD §5d)
-  if (rng.nextInt(100) < EXPLORE_RATE_PERCENT) {
-    const idx = rng.nextInt(4);
-    const dir = DIRS[idx]!;
-    return { dx: dir.dx, dy: dir.dy };
-  }
-
-  // Exploit branch — 4-connected neighbor sampling, fixed order (up, down, left, right)
-  let bestStrength = 0;
-  let bestDx = 0;
-  let bestDy = 0;
-
-  for (let d = 0; d < 4; d++) {
-    const dir = DIRS[d]!;
-    const s = phGet(grid, tileX + dir.dx, tileY + dir.dy);
-    if (s > bestStrength) {
-      bestStrength = s;
-      bestDx = dir.dx;
-      bestDy = dir.dy;
-    }
-  }
-
-  // Empty fallback
-  if (bestStrength === 0) {
-    return { dx: 0, dy: 0 };
-  }
-
-  return { dx: bestDx, dy: bestDy };
-}
-
-// ---------------------------------------------------------------------------
 // sampleForagingDirection — 09 pheromone-reacquisition memo
 // ---------------------------------------------------------------------------
 //
-// A pheromone-first refinement of sampleGradient for SearchingFood foragers.
+// A pheromone-first refinement of the plain 4-neighbor explore/exploit sampler
+// this module used to export, for SearchingFood foragers.
 // Three behavior layers:
 //
 //   1. Strong local trail (max 4-neighbor ≥ TRAIL_STRONG_THRESHOLD):
@@ -247,7 +173,7 @@ const REACQUIRE_RADIUS = 3;
 /**
  * Return the direction a SearchingFood forager should move based on the
  * pheromone gradient at (tileX, tileY), with stronger trail commitment and
- * wider reacquisition than sampleGradient.
+ * wider reacquisition than a plain 4-neighbor sample.
  *
  * Returns {0, 0} when no pheromone is within REACQUIRE_RADIUS — callers fall
  * through to the wander-fallback branch.

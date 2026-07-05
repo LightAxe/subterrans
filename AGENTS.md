@@ -9,7 +9,7 @@ A modern ant colony simulation game — a spiritual successor to SimAnt (1991) w
 - **Language:** TypeScript (strict mode)
 - **Rendering:** Phaser 3
 - **Testing:** Vitest (unit/integration), Playwright (browser/E2E)
-- **Build:** Vite (tentative, finalized during PRD)
+- **Build:** Vite — two configs: `vite.config.ts` (standalone HTML app) and `vite.lib.config.ts` (embeddable library bundle for the website demo)
 - **Formatting:** Prettier (`.prettierrc.json`) — run `npm run format`. Two ESLint configs: the fast `eslint.config.ts` (sim-safety + base rules, run by `lint`) and the type-aware `eslint.typecheck.config.ts` (`recommended-type-checked`, run by `lint:types`).
 - **Target:** Web browsers (Chrome, Firefox, Safari, Edge — latest two versions)
 
@@ -18,14 +18,16 @@ A modern ant colony simulation game — a spiritual successor to SimAnt (1991) w
 ```
 src/
   sim/        # Pure TypeScript simulation. SACRED BOUNDARY — no Phaser, no DOM, no browser APIs.
-  render/     # Phaser-specific rendering. Reads sim state, never writes to it.
+  render/     # Phaser rendering + the AI-controller policy. Reads sim state, never writes it.
   input/      # Translates browser/device input into simulation commands.
-  platform/   # Platform abstractions: storage, audio stubs, feature detection.
-assets/
-  sprites/    # Sprite sheets and tilesets (Phase 2; Phase 1 uses Graphics API).
-  audio/      # Sound effects and music (Phase 2).
-  fonts/      # Custom fonts.
-docs/         # Additional documentation for contributors.
+  platform/   # Game loop, save/load, storage, feature detection.
+public/assets/sprites/  # Real sprite SVGs, served by Vite (referenced via BASE_URL/assetsBase).
+assets/       # Empty .gitkeep placeholders (sprites/ audio/ fonts/); real sprites live in public/assets/sprites/, audio is roadmap Phase 5a.
+tests/        # Playwright E2E specs (*.spec.ts).
+scripts/      # Guard + tooling scripts (check-sim-boundary.sh, check-ant-cycles.mjs, check-asset-paths.sh, check-e2e-geometry.sh, …).
+eslint-rules/ # Custom ESLint rules (sim-module-state, …) + their Vitest contract tests.
+bench/        # Micro-benchmarks.
+docs/         # Contributor docs (currently an empty placeholder).
 ```
 
 ## Architectural Principles (Summary)
@@ -59,7 +61,7 @@ Phase 1 targets web only. The architecture preserves portability for native wrap
 
 ## Branching & PR Workflow
 
-**All changes — including doc-only and one-line fixes — go through a feature branch and a pull request.** Direct pushes to `main` are not the path here, even when admin bypass is technically available. The `main` branch is protected: PR required, ≥1 approving review, force-pushes blocked, branch deletion blocked.
+**All changes — including doc-only and one-line fixes — go through a feature branch and a pull request.** Direct pushes to `main` are not the path here, even when admin bypass is technically available. The `main` branch is protected: PRs are required, the CI `verify` check must pass, conversation resolution is required, and force-pushes and branch deletion are blocked. The platform's required **approving-review count is deliberately 0**: this is a solo-maintainer repo, GitHub does not permit approving your own PR, and the AI reviewers comment rather than submit counting approvals — so a required review would force either a second-account approval or a standing admin bypass, both worse than an honest convention. Review is enforced by process instead: the mandatory internal agent review pass (below) plus Codex and CodeRabbit on every PR (#245).
 
 Branch names: `feat/<short-description>`, `fix/<short-description>`, `chore/<short-description>`, `docs/<short-description>`. Open the PR against `main`, fill in the summary and test plan, and wait for review. See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the full mechanics.
 
@@ -99,10 +101,11 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 - Floating-point arithmetic is forbidden in `src/sim/`. All quantities are fixed-point integers using `FP_SHIFT = 8` / `FP_ONE = 256` (see `src/sim/fixed.ts`). Float literals (`1.5`, `0.1`), the division operator (`/`), and `Math.sqrt`/`sin`/`cos`/`atan2` are banned. The ESLint `simSafetyConfig` enforces this; review still reads PRs that disable the rule inline.
 - Every PRNG call must be seeded from the world's RNG instance — never construct a fresh `Mulberry32` per call site, and never thread a literal seed through new code without explaining why in the PR description.
 - **Balance-constant retunes are not tech debt and not a `simVersion` bump.** A change to a gameplay-balance value in `src/sim/constants.ts` (e.g. `STARVATION_GRACE_TICKS`, `STARTING_FOOD`) that moves only the numeric literal — no new code path, `WorldState` field, tick-order change, or PRNG draw count/order change — must **not** be flagged as debt and must **not** be gated behind a new `simVersion` (ADR-0015 item 3, the standing rebuttal to "gate this behind a simVersion" on a bare retune). Do not ask authors to "revert to the PRD value." A change that _also_ alters an algorithm, a `WorldState` field, tick order, or PRNG draw count/order **is** a gated change. Constants that must not drift are marked `// structural` in that file; for anything unmarked, apply that bare-retune test.
+- **Raising `MIN_ACCEPTED_SIM_VERSION` is a player-facing save wipe, not housekeeping (#228).** The default posture for any sim behavior change is a sticky `simVersion >=` gate with `MIN_ACCEPTED_SIM_VERSION` (`src/platform/save.ts`) left where it is, so saves inside the window keep loading. A PR that raises MIN must justify the wipe explicitly in its description and follow the `DELIBERATE_WINDOW_BREAK_AT` ritual next to the constant (set it to the new LATEST in the same PR; back to `null` in the next LATEST bump — `version-policy.test.ts` enforces this). Flag any MIN raise that arrives as a silent convention. Gates whose version is ≤ MIN are production-dead and may be **reaped** (deleted, with their pinned old-side tests) in a mechanical, replay-verified follow-up per the playbook in ARCHITECTURE.md Principle 7.
 
 ### Sim/render boundary (FNDN-04, FNDN-07)
 
-- `src/sim/` must not import from `src/render/`, `src/input/`, `src/platform/`, `phaser`, or any browser global (`window`, `document`, `localStorage`, `navigator`, `fetch`). This is enforced by `eslint.config.ts` and the `scripts/check-sim-boundary.sh` grep backstop — flag any change that loosens either.
+- `src/sim/` must not import from `src/render/`, `src/input/`, `src/platform/`, `phaser`, or any browser global (`window`, `document`, `localStorage`, `navigator`, `fetch`). This is enforced by `eslint.config.ts` (the `no-restricted-imports` / `no-restricted-globals` rules in `simSafetyConfig`) — flag any change that loosens it. (The `scripts/check-sim-boundary.sh` grep backstop guards a different direction: nested `WorldState` writes from render/input/platform that the ESLint tripwire misses, plus #211 disable hygiene.)
 - `src/render/`, `src/input/`, and `src/platform/` must not mutate `WorldState` or any nested simulation store. They read sim state and enqueue commands via `commandQueue` (`src/sim/commands.ts`). A direct write to a sim store from outside `src/sim/` is a blocker even if tests pass.
 - New code under `src/sim/` must run unchanged in Node.js — no DOM types, no `HTMLElement`, no Phaser scene references. If a file under `src/sim/` needs a browser API, the design is wrong; suggest moving the logic to `src/platform/` or `src/render/`.
 
@@ -116,7 +119,7 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 - Entities are integer IDs (`EntityId = number`). Do not introduce `class Ant`, `class Pheromone`, or other entity classes — components live in typed-array stores (`Int32Array`, `Uint8Array`) or `Map<EntityId, T>`, not on instances.
 - Systems are pure functions over component stores. Module-level mutable state in `src/sim/` (array, `Map`/`Set`, typed array, or reassignable `let`) is a determinism footgun — it does not survive save/load or replay and diverges peers under lockstep. The `subterrans/sim-module-state` ESLint rule (issue #211) enforces it: every such binding must be an immutable `as const` lookup **or** carry `// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch:/sim-cache:/sim-memo: <why it is reset/safe>`. **Enforcement boundary:** the rule catches array/collection/`let` shapes and forces a reviewable acknowledgement at the declaration site — it does **not** verify reset-per-tick correctness, and it does **not** catch factory-`CallExpression` returns (`const X = makeBuffer()`) or plain mutable objects (`const X = {}`); those carry a plain `// sim-scratch:` marker comment and remain a manual review item. Block any new module-level mutable that is neither `as const` nor explicitly justified.
 - New components should follow the structure-of-arrays pattern already used in `src/sim/ant/`, `src/sim/colony/`, `src/sim/pheromone/`. Flag array-of-structs designs unless the PR explains why SoA is impractical for that data.
-- **Ant subsystem layering (issue #212).** `src/sim/ant/` is split into cohesive sub-modules along a strict **acyclic** dependency graph: Layer 0 `ant-motion.ts` (stepping / passability / geometry primitives + the shared per-call scratch buffers), Layer 1 behaviors (`ant-foraging`, `ant-nursing`, `ant-queens`, `ant-combat-targeting`, `ant-dig`, `ant-pheromone`), and Layer 2 `ant-movement.ts` (the `tickAntMovement` orchestrator + occupancy). `ant-system.ts` is a thin **named re-export barrel** — the single public import path for consumers (`tick.ts`, `harness.ts`, tests). **New ant behavior goes in a new `src/sim/ant/*.ts` sub-module — do not regrow `ant-system.ts` (kept a barrel) or bolt unrelated behavior onto `ant-movement.ts`.** A behavior sub-module may depend only on Layer 0, never on another behavior or the orchestrator; `scripts/check-ant-cycles.mjs` (run in `verify`) enforces the no-cycle / no-barrel-import rule, and `ant-system.barrel.test.ts` pins the public surface so a dropped re-export fails CI.
+- **Ant subsystem layering (issue #212).** `src/sim/ant/` is split into cohesive sub-modules along a strict **acyclic** dependency graph: Layer 0 `ant-motion.ts` + `ant-store.ts` (stepping / passability / geometry primitives + the shared per-call scratch buffers, and the SoA ant store), Layer 1 behaviors (`ant-foraging`, `ant-nursing`, `ant-queens`, `ant-combat-targeting`, `ant-dig`, `ant-pheromone`), and Layer 2 `ant-movement.ts` (the `tickAntMovement` orchestrator + occupancy). `ant-system.ts` is a thin **named re-export barrel** — the single public import path for consumers (`tick.ts`, tests). **New ant behavior goes in a new `src/sim/ant/*.ts` sub-module — do not regrow `ant-system.ts` (kept a barrel) or bolt unrelated behavior onto `ant-movement.ts`.** A behavior sub-module may depend only on Layer 0, never on another behavior or the orchestrator; `scripts/check-ant-cycles.mjs` (run in `verify`) enforces the no-cycle / no-barrel-import rule, and `ant-system.barrel.test.ts` pins the public surface so a dropped re-export fails CI.
 
 ### Hot-loop performance
 
@@ -128,7 +131,7 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 - Any new logic under `src/sim/` must ship with Vitest unit tests in the same PR. Untested sim code is a blocker, not a follow-up.
 - Changes to tick-order, command application, save format, or PRNG usage must include or update a deterministic replay test. If the PR claims "replay still works" without a test demonstrating it, ask for one.
 - Render/input/platform changes need at least a smoke test (initialization + one happy path). Full coverage is not required at those layers.
-- **80% coverage gate.** `npm run test:coverage` runs Vitest with v8 instrumentation and enforces global thresholds of 80% on statements / branches / functions / lines (see `vitest.config.ts`). Phaser scene files and `src/main.ts` are excluded from the gate because they are exercised by Playwright E2E, not unit tests. **Run `npm run test:coverage` and confirm the gate passes before pushing.** It is not part of `verify` — coverage instrumentation slows the suite to ~6 minutes and causes some long integration tests to hit their hard-coded timeouts, so keep it as a separate pre-push step rather than wiring it into the fast local loop. It is intentionally **not** CI-gated (a deliberate decision, not a TODO): the instrumented run multiplies the long integration tests several-fold past their inline timeouts on the slower 2-core CI runner, and making it green would mean scaling per-test timeouts across ~11 sites to absorb a flaky multiplier — permanent complexity for a signal `verify` already covers un-instrumented. So coverage stays a local pre-push step. See #188 (closed) for the full rationale.
+- **80% coverage gate.** `npm run test:coverage` runs Vitest with v8 instrumentation and enforces global thresholds of 80% on statements / branches / functions / lines (see `vitest.config.ts`). Phaser scene files and `src/main.ts` are excluded from the gate because they are exercised by Playwright E2E, not unit tests. **Run `npm run test:coverage` and confirm the gate passes before pushing.** It is not part of `verify` — coverage instrumentation slows the suite to ~6 minutes and causes some long integration tests to hit their hard-coded timeouts, so keep it as a separate pre-push step rather than wiring it into the fast local loop. It is intentionally **not** CI-gated (a deliberate decision, not a TODO): the instrumented run multiplies the long integration tests several-fold past their inline timeouts on the slower 2-core CI runner, and making it green would mean scaling per-test timeouts across ~11 sites to absorb a flaky multiplier — permanent complexity for a signal `verify` already covers un-instrumented. So coverage stays a local pre-push step. See #188 (closed) for the full rationale. A few deliberately long statistical tests (the ≥2000-tick queen-survival run in `src/sim/scenario.test.ts` and the multi-seed overlap-suppression sweep in `src/sim/surface-features.test.ts`) carry explicit generous inline timeouts sized for instrumented runs, so the local gate passes on a typical dev machine (#227).
 
 ### Asset paths and build hygiene
 
@@ -144,14 +147,13 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 ## Building and Running
 
 ```bash
-cd code/
 npm install
 npm run dev            # Start dev server
 npm run format         # Prettier-format the tree (format:check is the verify gate)
 npm run lint           # Fast ESLint (sim-safety + base rules)
 npm run lint:types     # Type-aware ESLint (recommended-type-checked) — slower
 npm run test           # Run Vitest (fast local loop)
-npm run verify         # Full gate: format:check + lint + typecheck + lint:types + sim/asset guards + tests
+npm run verify         # Full gate: format:check + lint + typecheck + lint:types + sim-boundary + asset-path + e2e-geometry + ant-cycle guards + tests
 npm run test:coverage  # Run Vitest with v8 coverage + 80% gate (run before pushing)
 npm run test:e2e       # Run Playwright
 ```
@@ -175,7 +177,6 @@ End-of-game survey overlay with an opt-in debug-snapshot upload. **Disabled by d
 To exercise the upload flow on localhost without standing up the website's Lambda + S3 stack:
 
 ```bash
-cd code/
 cp .env.example .env.local
 # uncomment VITE_PLAYTRACE_ENDPOINT=/api/playtrace in .env.local
 npm run dev

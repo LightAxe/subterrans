@@ -67,6 +67,7 @@ import {
 } from './ant/ant-system.js';
 import { findEmbeddedByTightening } from './underground-occupancy.js';
 import { tickPheromoneDecay } from './pheromone/pheromone-system.js';
+import { decodePheromoneKeyType, pheromoneKeyIsSurface } from './pheromone/pheromone-store.js';
 import { tickFoodPileSpawn } from './food-system.js';
 import { computeDigFlowField, ensureDigFlowField, createDigFlowFields } from './dig-system.js';
 import type { DigFlowFields } from './dig-system.js';
@@ -203,7 +204,9 @@ void (undefined as unknown as PendingChamber);
  * 19.  rngState writeback + world.tick increment
  *
  * tick() retains its accepted Phase 4 2-arg signature.
- * DigFlowFields is module-level scratch state, invisible to callers.
+ * DigFlowFields (+ entrance/chamber fields) are per-world scratch caches — a
+ * WeakMap keyed by world identity (see the block at lines ~100-121), invisible
+ * to callers.
  *
  * @param world    - Mutable world state; mutated in place across all 19 steps.
  * @param commands - Point-in-time snapshot of commands for this tick. Not mutated.
@@ -1419,19 +1422,24 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // ---------------------------------------------------------------------------
   for (const gridKey in world.pheromoneGrids) {
     if (!Object.hasOwn(world.pheromoneGrids, gridKey)) continue;
+    // #242: underground grids are allocated (save-shape stability + future
+    // underground pheromone work) but have NO writer anywhere in the sim —
+    // provably all-zero — and tickPheromoneDecay's s===0 fast path makes
+    // sweeping them a mutation-free, RNG-free no-op. Skip them instead of paying
+    // 2×128×64 reads per colony every tick. Behavior-identical for every
+    // legitimately produced save (a hand-edited save with a nonzero underground
+    // cell would stop decaying it — outside the determinism/compat model).
+    if (!pheromoneKeyIsSurface(gridKey)) continue;
     const grid = world.pheromoneGrids[gridKey]!;
-    // Key format: "${colonyId}:${pheromoneType}:${zone}"
-    // PheromoneType: 0 = FoodTrail, 1 = DangerTrail (per enums.ts)
-    // Parse the middle (type) token without allocating a split array (hot path,
-    // runs per grid every tick — AGENTS.md no-alloc rule).
-    const firstColon = gridKey.indexOf(':');
-    const secondColon = gridKey.indexOf(':', firstColon + 1);
-    let pheromoneType = 0;
-    for (let c = firstColon + 1; c < secondColon; c++) {
-      pheromoneType = pheromoneType * 10 + (gridKey.charCodeAt(c) - 48);
-    }
+    // Key format: "${colonyId}:${pheromoneType}:${zone}". Decode the middle
+    // (type) token allocation-free via the centralized helper (#242).
+    const pheromoneType = decodePheromoneKeyType(gridKey);
     // V14+: slower food-trail decay (PHEROMONE_DECAY_FP_V14=2 vs legacy 5).
-    // DangerTrail stays at DANGER_DECAY_FP until S3.
+    // DangerTrail decays at DANGER_DECAY_FP; the spider deposits it every tick
+    // (spider.ts seedDangerPheromone) and the render overlay draws it, but NO
+    // ant reads it for routing today — danger avoidance is Phase 5b work and will
+    // be a NEW RNG-consuming, simVersion-gated behavior, not an activation of
+    // existing plumbing.
     // V14+ floor is raised to 128 to match the decayFp=2 arithmetic stall
     // point (decayFp=2 gives 0 decay for values < 128); prevents zombie trails.
     let decayRate: number;

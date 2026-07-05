@@ -3,7 +3,6 @@
 // Coverage:
 //   PHER-03 — depositFoodTrail: basic, accumulate, cap, out-of-bounds
 //   PHER-04 — tickPheromoneDecay: decay-to-zero, skip zeros, floor snap, two-grid PHER-02
-//   PHER-05 — sampleGradient: determinism, exploit, tie-break, empty, explore
 //   PHER-07 — grid.data.length invariant (timing proof lives in bench/pheromone-decay.bench.ts)
 //
 // MUST NOT use performance.now, Date.now, or setTimeout — simSafetyConfig ESLint
@@ -13,7 +12,6 @@ import { describe, it, expect } from 'vitest';
 import {
   depositFoodTrail,
   tickPheromoneDecay,
-  sampleGradient,
   sampleForagingDirection,
 } from './pheromone-system.js';
 import { createPheromoneGrid, phGet, phSet } from './pheromone-store.js';
@@ -148,147 +146,6 @@ describe('tickPheromoneDecay (PHER-04)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Gradient tests (PHER-05, SCEN-06)
-// ---------------------------------------------------------------------------
-
-describe('sampleGradient (PHER-05)', () => {
-  it('9. gradient determinism: same seed → same output', () => {
-    const grid = createPheromoneGrid(10, 10);
-    // Asymmetric gradient
-    phSet(grid, 5, 4, 500); // up neighbor of (5,5)
-    phSet(grid, 5, 6, 200); // down neighbor of (5,5)
-    phSet(grid, 4, 5, 100); // left neighbor of (5,5)
-
-    const rng1 = new Rng(42);
-    const rng2 = new Rng(42);
-
-    const result1 = sampleGradient(grid, 5, 5, rng1);
-    const result2 = sampleGradient(grid, 5, 5, rng2);
-
-    expect(result1).toEqual(result2);
-
-    // Call twice more — same sequences
-    const r1b = sampleGradient(grid, 5, 5, rng1);
-    const r2b = sampleGradient(grid, 5, 5, rng2);
-    expect(r1b).toEqual(r2b);
-  });
-
-  it('10. gradient exploit — strongest neighbor wins: right neighbor with 1000', () => {
-    // We need a seed where explore roll does NOT trigger (nextInt(100) >= 10)
-    // Find such a seed by scanning
-    let seed = 1;
-    let exploitSeed = -1;
-    for (let attempt = 0; attempt < 1000; attempt++) {
-      const testRng = new Rng(seed);
-      const roll = testRng.nextInt(100);
-      if (roll >= 10) {
-        exploitSeed = seed;
-        break;
-      }
-      seed++;
-    }
-    expect(exploitSeed).toBeGreaterThan(-1); // Found a non-explore seed
-
-    const grid = createPheromoneGrid(10, 10);
-    // Right neighbor of (5,5) is (6,5)
-    phSet(grid, 6, 5, 1000);
-
-    const rng = new Rng(exploitSeed);
-    const result = sampleGradient(grid, 5, 5, rng);
-    expect(result).toEqual({ dx: 1, dy: 0 }); // right
-  });
-
-  it('11. gradient tie-break: up wins over down (first-found in DIRS order)', () => {
-    // up=y-1, down=y+1 both have 500; left/right are 0
-    // DIRS order is up (index 0), down (index 1), left, right
-    // First-found wins → up should be returned on exploit
-    let seed = 1;
-    let exploitSeed = -1;
-    for (let attempt = 0; attempt < 1000; attempt++) {
-      const testRng = new Rng(seed);
-      const roll = testRng.nextInt(100);
-      if (roll >= 10) {
-        exploitSeed = seed;
-        break;
-      }
-      seed++;
-    }
-    expect(exploitSeed).toBeGreaterThan(-1);
-
-    const grid = createPheromoneGrid(10, 10);
-    phSet(grid, 5, 4, 500); // up neighbor: (5, 4)
-    phSet(grid, 5, 6, 500); // down neighbor: (5, 6)
-
-    const rng = new Rng(exploitSeed);
-    const result = sampleGradient(grid, 5, 5, rng);
-    expect(result).toEqual({ dx: 0, dy: -1 }); // up — first in DIRS order
-  });
-
-  it('12. gradient empty: all neighbors zero → returns {dx:0, dy:0}', () => {
-    // Need a seed that does NOT explore
-    let seed = 1;
-    let exploitSeed = -1;
-    for (let attempt = 0; attempt < 1000; attempt++) {
-      const testRng = new Rng(seed);
-      const roll = testRng.nextInt(100);
-      if (roll >= 10) {
-        exploitSeed = seed;
-        break;
-      }
-      seed++;
-    }
-    expect(exploitSeed).toBeGreaterThan(-1);
-
-    const grid = createPheromoneGrid(10, 10);
-    // No deposits — all cells remain 0
-
-    const rng = new Rng(exploitSeed);
-    const result = sampleGradient(grid, 5, 5, rng);
-    expect(result).toEqual({ dx: 0, dy: 0 });
-  });
-
-  it('13. gradient exploration branch: low roll → random direction from DIRS', () => {
-    // We need a seed where rng.nextInt(100) < 10 (explore triggers)
-    // Find such a seed and verify the direction matches DIRS[rng.nextInt(4)]
-    let seed = 1;
-    let exploreSeed = -1;
-    let exploreRoll = -1;
-    for (let attempt = 0; attempt < 10000; attempt++) {
-      const testRng = new Rng(seed);
-      const roll = testRng.nextInt(100);
-      if (roll < 10) {
-        exploreSeed = seed;
-        exploreRoll = roll;
-        break;
-      }
-      seed++;
-    }
-    expect(exploreSeed).toBeGreaterThan(-1); // Must find an explore seed
-
-    const grid = createPheromoneGrid(10, 10);
-    const rng = new Rng(exploreSeed);
-    const result = sampleGradient(grid, 5, 5, rng);
-
-    // Replay to find expected direction
-    const replayRng = new Rng(exploreSeed);
-    const replayRoll = replayRng.nextInt(100);
-    expect(replayRoll).toBe(exploreRoll); // Sanity: same seed same roll
-    expect(replayRoll).toBeLessThan(10); // Must be explore
-
-    const expectedIdx = replayRng.nextInt(4);
-    const DIRS = [
-      { dx: 0, dy: -1 }, // up
-      { dx: 0, dy: 1 }, // down
-      { dx: -1, dy: 0 }, // left
-      { dx: 1, dy: 0 }, // right
-    ];
-    const expected = DIRS[expectedIdx]!;
-
-    expect(result).toEqual({ dx: expected.dx, dy: expected.dy });
-  });
-});
-
-// ---------------------------------------------------------------------------
 // sampleForagingDirection — 09 pheromone-reacquisition memo
 // ---------------------------------------------------------------------------
 
@@ -327,7 +184,7 @@ describe('sampleForagingDirection (09 pheromone-reacquisition memo)', () => {
     expect(rngTest.nextInt(1_000_000)).toBe(rngControl.nextInt(1_000_000));
   });
 
-  it('weak local trail (1 ≤ s < 128) → preserves sampleGradient 10/90 behavior', () => {
+  it('weak local trail (1 ≤ s < 128) → preserves the 10/90 explore/exploit behavior', () => {
     // Over many seeds the explore branch should fire roughly 10% of the time.
     // Set a single weak neighbor (below 128) as the only trail signal.
     const grid = createPheromoneGrid(10, 10);

@@ -3,10 +3,13 @@ name: CI
 # Automated gate for the game code. Runs on every PR targeting main and on
 # pushes to main.
 #
-#   verify — `npm run verify` (prettier --check src/, eslint, tsc --noEmit, the
-#            type-aware lint:types layer, the sim-boundary and asset-path grep
-#            guards, and the full Vitest unit/integration suite). Same command
-#            contributors run locally before pushing.
+#   verify — `npm run verify` (prettier --check src/ eslint-rules/, eslint,
+#            tsc --noEmit, the type-aware lint:types layer, the sim-boundary,
+#            asset-path, e2e-geometry, and ant-cycle grep/parse guards, and the
+#            full Vitest unit/integration suite), then compiles both production
+#            targets (`npm run build` + `build:lib`) as a smoke gate. The
+#            `verify` command itself is what contributors run locally before
+#            pushing.
 #   e2e    — `npm run test:e2e` (Playwright, chromium headless). The webServer
 #            pins VITE_PLAYTRACE_ENDPOINT empty so the run is deterministic
 #            regardless of a developer's .env.local (see playwright.config.ts).
@@ -49,6 +52,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run verify
+      # Production build smoke gate (#239): a lib-mode-only breakage (rollup
+      # config, manifest/dts plugin, .d.ts emit) otherwise first surfaces in the
+      # website deploy POST-merge, after the submodule pointer is already pushed.
+      # Compile both targets here. Artifacts are NOT uploaded — this is a gate,
+      # not a release step. (build = tsc && vite build; the tsc re-run duplicates
+      # verify's tsc --noEmit by a few seconds — acceptable for the isolation.)
+      - run: npm run build
+      - run: npm run build:lib
 
   e2e:
     name: e2e (Playwright chromium)

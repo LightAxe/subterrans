@@ -4,21 +4,16 @@
 
 import { test, expect, type ConsoleMessage, type Page } from '@playwright/test';
 
-// Canvas-coordinate click rects from Plan 09-06 Task 3 (ui-scene.ts lines 59-61).
-// Inlined here (not imported) because ui-scene.ts transitively imports Phaser,
-// which calls `window` at module load — crashing the Node.js Playwright runner
-// before browser launch. Inline values must be kept in sync with ui-scene.ts.
-// Phaser text overlay buttons are canvas-drawn; Playwright clicks by coordinate.
-const SAVE_PROMPT_CONTINUE_RECT = { x: 300, y: 280, w: 120, h: 32 } as const;
-const SAVE_PROMPT_NEW_GAME_RECT = { x: 300, y: 320, w: 120, h: 32 } as const;
-// S5 "Choose Difficulty" Normal button (canvas-drawn). Mirrors DIFFICULTY_NORMAL_RECT in ui-scene.ts.
-const DIFFICULTY_NORMAL_RECT = { x: 330, y: 260, w: 140, h: 40 } as const;
-// Pause-menu "Save / Load" row — item index 1 of the 4-item main menu
-// (Resume / Save·Load / Settings / Download debug log; playtrace off in CI so no
-// 5th "Quit & feedback" row). Mirrors pause-menu-layout.ts stackRects(4)[1].
-const SAVE_LOAD_ROW_RECT = { x: 240, y: 279, w: 320, h: 40 } as const;
-// Save/Load dialog "Save Now" button — index 1. Mirrors save-load-dialog-layout.ts.
-const DIALOG_SAVE_NOW_RECT = { x: 260, y: 220, w: 280, h: 36 } as const;
+// #240 — canvas-click geometry imported from the single source of truth
+// (tests/helpers/geometry.ts evaluates the pure, Phaser-free layout modules), so
+// these coordinates are no longer hand-kept "in sync" with ui-scene.ts.
+import {
+  SAVE_PROMPT_CONTINUE_RECT,
+  SAVE_PROMPT_NEW_GAME_RECT,
+  DIFFICULTY_NORMAL_RECT,
+  SAVE_LOAD_ROW_RECT,
+  DIALOG_SAVE_NOW_RECT,
+} from './helpers/geometry.js';
 
 const errorFilter = (msg: ConsoleMessage) => msg.type() === 'error';
 const SAVE_KEY = 'subterrans:save:v3';

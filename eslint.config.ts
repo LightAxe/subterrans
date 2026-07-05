@@ -40,6 +40,29 @@ const baseConfig = {
   },
 };
 
+/** FNDN-02 — ban float literals and division (both return IEEE 754 doubles).
+ *  Extracted (#241) so the src/sim test-file override can re-apply EXACTLY these
+ *  without the dynamic-import ban: flat config REPLACES a rule's whole options
+ *  array for a matching file, it does not merge. */
+const simFloatDivisionSelectors = [
+  {
+    // Matches any numeric literal whose source text signals floating-point intent:
+    //   - decimal point anywhere after leading digits: 3.14, 1.5, 0.5, 1.0, .5, 1.e5
+    //   - scientific notation: 1e3, 1e-3, 2E10, 1.5e2
+    // The ^\d* anchor spares string literals (raw starts with ") and hex/binary/octal
+    // literals (raw starts with 0x, 0b, 0o — the non-digit char after 0 breaks the match).
+    selector: 'Literal[raw=/^\\d*(\\.|\\d[eE])/]',
+    message:
+      'Float literal (decimal or scientific notation) in src/sim/ — convert to fixed-point integer (multiply by FP_ONE).',
+  },
+  {
+    // JS integer division still returns IEEE 754 double.
+    // fpDiv() in src/sim/fixed.ts needs one `// eslint-disable-next-line` on its own line.
+    selector: "BinaryExpression[operator='/']",
+    message: 'Division in src/sim/ returns a float — use fpDiv() instead.',
+  },
+];
+
 /** Sim-layer-specific safety rules — mirrors PRD §6 Rule Sets 1 & 2 verbatim.
  *  Applied ONLY to src/sim/**\/*.ts.
  */
@@ -95,6 +118,11 @@ const simSafetyConfig = {
       { object: 'Math', property: 'sqrt', message: 'Use integer approximations or lookup tables.' },
       { object: 'Math', property: 'sin', message: 'Use a fixed-point lookup table.' },
       { object: 'Math', property: 'cos', message: 'Use a fixed-point lookup table.' },
+      {
+        object: 'Math',
+        property: 'atan2',
+        message: 'Use a fixed-point angle helper / lookup table.',
+      },
     ],
     'no-restricted-globals': [
       'error',
@@ -115,24 +143,17 @@ const simSafetyConfig = {
       { name: 'XMLHttpRequest', message: 'Network access is banned in src/sim/.' },
     ],
 
-    // FNDN-02 — ban float literals and division (both return IEEE 754 doubles)
+    // FNDN-02 — ban float literals and division (shared selectors above); and
+    // #241 — ban dynamic import() in src/sim/ (static no-restricted-imports can't
+    // see `await import(...)`, so a sim file could dynamically pull in Phaser and
+    // nothing would catch it). Test files re-drop the ImportExpression ban below.
     'no-restricted-syntax': [
       'error',
+      ...simFloatDivisionSelectors,
       {
-        // Matches any numeric literal whose source text signals floating-point intent:
-        //   - decimal point anywhere after leading digits: 3.14, 1.5, 0.5, 1.0, .5, 1.e5
-        //   - scientific notation: 1e3, 1e-3, 2E10, 1.5e2
-        // The ^\d* anchor spares string literals (raw starts with ") and hex/binary/octal
-        // literals (raw starts with 0x, 0b, 0o — the non-digit char after 0 breaks the match).
-        selector: 'Literal[raw=/^\\d*(\\.|\\d[eE])/]',
+        selector: 'ImportExpression',
         message:
-          'Float literal (decimal or scientific notation) in src/sim/ — convert to fixed-point integer (multiply by FP_ONE).',
-      },
-      {
-        // JS integer division still returns IEEE 754 double.
-        // fpDiv() in src/sim/fixed.ts needs one `// eslint-disable-next-line` on its own line.
-        selector: "BinaryExpression[operator='/']",
-        message: 'Division in src/sim/ returns a float — use fpDiv() instead.',
+          'Dynamic import() is banned in src/sim/ — it bypasses the static sim-boundary import check. Use a static import.',
       },
     ],
   },
@@ -194,4 +215,22 @@ const simModuleStateConfig = {
   rules: { 'subterrans/sim-module-state': 'error' },
 };
 
-export default [baseConfig, simSafetyConfig, nonSimMutationGuard, simModuleStateConfig];
+/** #241 — src/sim test files legitimately use dynamic `await import()` (e.g.
+ *  determinism.test.ts, tick.test.ts load platform/sim modules at runtime), so the
+ *  ImportExpression ban is dropped for them. The float/division bans are RE-APPLIED
+ *  (flat config replaces the whole no-restricted-syntax array, so they must be
+ *  restated or test files would silently lose them). Must be LAST so it wins. */
+const simTestImportOverride = {
+  files: ['src/sim/**/*.test.ts'],
+  rules: {
+    'no-restricted-syntax': ['error', ...simFloatDivisionSelectors],
+  },
+};
+
+export default [
+  baseConfig,
+  simSafetyConfig,
+  nonSimMutationGuard,
+  simModuleStateConfig,
+  simTestImportOverride,
+];
