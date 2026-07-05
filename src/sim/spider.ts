@@ -39,8 +39,13 @@ import {
   PHEROMONE_CAP,
   SPIDER_EDGE_MARGIN_TILES,
 } from './constants.js';
-import { SIM_VERSION_V23_SPIDER_AGGRO, SIM_VERSION_V26_SPIDER_EDGE_MARGIN } from './types.js';
+import {
+  SIM_VERSION_V23_SPIDER_AGGRO,
+  SIM_VERSION_V26_SPIDER_EDGE_MARGIN,
+  SIM_VERSION_V31_SPIDER_TERRAIN,
+} from './types.js';
 import { FP_SHIFT } from './fixed.js';
+import { surfaceMovementAt, SurfaceMovementEffect } from './surface-features.js';
 
 // HUNT_KEY_SHIFT: number of bits to shift Y to form a tile key (Y << SHIFT + X).
 // Requires SURFACE_GRID_WIDTH === 2^HUNT_KEY_SHIFT. Compile-time assertion below.
@@ -383,6 +388,64 @@ function moveTowardTile(spider: SpiderState, targetX: number, targetY: number): 
   }
 
   // Clamp to grid bounds
+  const maxX = (SURFACE_GRID_WIDTH - 1) << FP_SHIFT;
+  const maxY = (SURFACE_GRID_HEIGHT - 1) << FP_SHIFT;
+  if (spider.posX < 0) spider.posX = 0;
+  if (spider.posX > maxX) spider.posX = maxX;
+  if (spider.posY < 0) spider.posY = 0;
+  if (spider.posY > maxY) spider.posY = maxY;
+}
+
+/** V31 (#225): can the spider stand on this tile? Bounds-checks explicitly first
+ *  — surfaceMovementAt returns Cosmetic (passable) for OOB coords, so an
+ *  unchecked comparison would treat off-grid as walkable; ants' canEnterSurfaceTile
+ *  bounds-checks the same way (ant-motion.ts). */
+export function isSpiderPassable(world: WorldState, tileX: number, tileY: number): boolean {
+  if (tileX < 0 || tileY < 0 || tileX >= SURFACE_GRID_WIDTH || tileY >= SURFACE_GRID_HEIGHT) {
+    return false;
+  }
+  return surfaceMovementAt(world, tileX, tileY) !== SurfaceMovementEffect.HardBlock;
+}
+
+/** V31 (#225) gate wrapper for the live (V23) path. Pre-V31 delegates verbatim to
+ *  moveTowardTile (frozen tickSpiderV22 relies on that body staying identical).
+ *  V31+: one axis step per tick (SPIDER_SPEED === FP_ONE, so an axis step lands
+ *  exactly one tile over), refusing HardBlock destinations — preferred axis
+ *  (ax >= ay → X, moveTowardTile's tie-break) first, then the other axis if it
+ *  approaches the target, else hold this tick. Not used for Feeding (see V31 doc
+ *  in types.ts): that heal gate needs exact arrival, so it keeps moveTowardTile. */
+function moveTowardTilePassable(
+  world: WorldState,
+  spider: SpiderState,
+  targetX: number,
+  targetY: number,
+): void {
+  if (world.simVersion < SIM_VERSION_V31_SPIDER_TERRAIN) {
+    moveTowardTile(spider, targetX, targetY);
+    return;
+  }
+  const curX = spider.posX >> FP_SHIFT;
+  const curY = spider.posY >> FP_SHIFT;
+  if (curX === targetX && curY === targetY) return;
+  const dx = targetX - curX;
+  const dy = targetY - curY;
+  const ax = dx < 0 ? -dx : dx;
+  const ay = dy < 0 ? -dy : dy;
+  if (ax >= ay) {
+    // ax >= ay with (dx,dy) !== (0,0) implies dx !== 0.
+    if (isSpiderPassable(world, curX + (dx > 0 ? 1 : -1), curY)) {
+      spider.posX += dx > 0 ? SPIDER_SPEED : -SPIDER_SPEED;
+    } else if (dy !== 0 && isSpiderPassable(world, curX, curY + (dy > 0 ? 1 : -1))) {
+      spider.posY += dy > 0 ? SPIDER_SPEED : -SPIDER_SPEED;
+    } // else: both approach axes blocked — hold this tick.
+  } else {
+    if (isSpiderPassable(world, curX, curY + (dy > 0 ? 1 : -1))) {
+      spider.posY += dy > 0 ? SPIDER_SPEED : -SPIDER_SPEED;
+    } else if (dx !== 0 && isSpiderPassable(world, curX + (dx > 0 ? 1 : -1), curY)) {
+      spider.posX += dx > 0 ? SPIDER_SPEED : -SPIDER_SPEED;
+    }
+  }
+  // Same defensive grid clamp as moveTowardTile (verbatim).
   const maxX = (SURFACE_GRID_WIDTH - 1) << FP_SHIFT;
   const maxY = (SURFACE_GRID_HEIGHT - 1) << FP_SHIFT;
   if (spider.posX < 0) spider.posX = 0;
@@ -1348,21 +1411,45 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
         // the float-division lint and keeps the bucket deterministic.
         const bucket = world.tick >> SPIDER_MEANDER_RETARGET_SHIFT;
         const seed = bucket ^ world.terrainSeed;
-        const tx = hash32(seed) % SURFACE_GRID_WIDTH;
-        const ty = hash32(seed ^ 0x9e3779b9) % SURFACE_GRID_HEIGHT;
-        moveTowardTile(spider, tx, ty);
+        let tx = hash32(seed) % SURFACE_GRID_WIDTH;
+        let ty = hash32(seed ^ 0x9e3779b9) % SURFACE_GRID_HEIGHT;
+        // V31 (#225): reject an impassable meander target WITHOUT consuming RNG —
+        // keep the two hash32 draws above, then linear-probe (tile index +1,
+        // row-major, wrapping at width*height) to the first passable tile. Probe
+        // order is a pure function of the hashed tile, so replays stay deterministic.
+        if (
+          world.simVersion >= SIM_VERSION_V31_SPIDER_TERRAIN &&
+          !isSpiderPassable(world, tx, ty)
+        ) {
+          const tileCount = SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT;
+          let idx = (ty << HUNT_KEY_SHIFT) + tx; // row-major key (width 128 = 2^7, compile-asserted)
+          for (let probe = 0; probe < tileCount; probe++) {
+            idx = idx + 1 < tileCount ? idx + 1 : 0;
+            const px = idx % SURFACE_GRID_WIDTH;
+            const py = idx >> HUNT_KEY_SHIFT;
+            if (isSpiderPassable(world, px, py)) {
+              tx = px;
+              ty = py;
+              break;
+            }
+          }
+          // All tiles blocked (impossible on generated maps): keep the hashed
+          // target; moveTowardTilePassable refuses the final blocked step anyway.
+        }
+        moveTowardTilePassable(world, spider, tx, ty);
       }
       break;
     }
     case 'Hunting':
     case 'Striking': {
-      moveTowardTile(spider, spider.huntTargetTileX, spider.huntTargetTileY);
+      moveTowardTilePassable(world, spider, spider.huntTargetTileX, spider.huntTargetTileY);
       break;
     }
     case 'Chasing': {
       const tid = spider.chaseTargetAntId;
       if (tid >= 0 && world.ants.alive[tid] === 1) {
-        moveTowardTile(
+        moveTowardTilePassable(
+          world,
           spider,
           world.ants.posX[tid]! >> FP_SHIFT,
           world.ants.posY[tid]! >> FP_SHIFT,
@@ -1377,7 +1464,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
     }
     case 'Rampaging': {
       if (rampageNearest !== null) {
-        moveTowardTile(spider, rampageNearest.x, rampageNearest.y);
+        moveTowardTilePassable(world, spider, rampageNearest.x, rampageNearest.y);
       }
       break;
     }

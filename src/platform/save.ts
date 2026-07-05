@@ -152,11 +152,13 @@ export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GU
  *   2. In the NEXT PR that bumps LATEST while leaving MIN behind: set this back to
  *      `null` (the guard test fails until you do). Never leave a stale version here.
  *
- * Initial value is V30 because HEAD has MIN == LATEST == V30 and that raise
- * predates this policy; the first behavior PR that bumps LATEST past V30 (leaving
- * MIN at V30) must set this to `null`.
+ * Now `null`: #225 (V31) is the first behavior PR to bump LATEST past V30 while
+ * leaving MIN at V30, re-opening the acceptance window (V30..LATEST), so the
+ * deliberate V30 break declared at HEAD is retired per step 2 of the ritual. It
+ * stays `null` until some future PR runs the ritual again (raise MIN to LATEST +
+ * set this to that LATEST).
  */
-export const DELIBERATE_WINDOW_BREAK_AT: number | null = LATEST_SIM_VERSION;
+export const DELIBERATE_WINDOW_BREAK_AT: number | null = null;
 
 export class OldSimVersionError extends Error {
   constructor(public got: number | null) {

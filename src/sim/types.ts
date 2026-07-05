@@ -383,7 +383,25 @@ export const SIM_VERSION_V29_PATH_AWARE_ROUTING = 29 as const;
 // tick-level behaviour. Posture 2 (bump + raise MIN_ACCEPTED, no cross-version
 // gate); pre-V30 saves reject at load. (PR 6-render is render-only — no bump.)
 export const SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS = 30 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS;
+/**
+ * V31 (#225) — Spider surface-terrain awareness. Previously spider movement
+ * ignored passability: moveTowardTile stepped onto HardBlock features and the
+ * V23 meander hash could pick a HardBlock target, parking the tile-coincident-
+ * combat spider on a boulder where fighters dogpile adjacent tiles unable to
+ * engage. Under V31+ (live V23 path only; frozen tickSpiderV22 untouched):
+ * (a) each combat/meander movement step refuses to enter a HardBlock tile —
+ * preferred axis first (same ax >= ay tie-break as moveTowardTile), then the
+ * other axis when it approaches the target, else the spider holds this tick;
+ * (b) the meander picker keeps its two hash32 draws, then linear-probes (tile
+ * index +1, wrapping at width*height) to the first passable tile — deterministic,
+ * no rngState use. The Feeding movement stays terrain-blind (its heal gate needs
+ * exact arrival at feedAwayTile, which passability-aware stepping can't
+ * guarantee; a Feeding spider neither bites — off the V23 combat gate — nor is a
+ * dogpile target — interruption is adjacency-based). Pre-V31 saves keep the
+ * terrain-blind movement (gated on simVersion >= V31) for byte-identical replay.
+ */
+export const SIM_VERSION_V31_SPIDER_TERRAIN = 31 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V31_SPIDER_TERRAIN;
 
 /**
  * S2 — AI colony state machine states.
