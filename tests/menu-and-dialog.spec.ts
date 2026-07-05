@@ -10,21 +10,22 @@
 
 import { test, expect, type Page } from '@playwright/test';
 
-// "Choose Difficulty" (S5) "Normal" button rect — canvas-drawn, not DOM-queryable.
-// Inlined rather than imported because ui-scene.ts transitively pulls in Phaser.
-// Mirrors DIFFICULTY_NORMAL_RECT in ui-scene.ts.
-const DIFFICULTY_NORMAL_RECT = { x: 330, y: 260, w: 140, h: 40 } as const;
-
-// Canvas-local rects for the pause-menu "Save/Load" row (index 1 of 4) and the
-// Save/Load dialog's "Save Now" button (index 1). The playtrace feature is
-// forced off in playwright.config, so the pause menu has exactly 4 rows; these
-// mirror pause-menu-layout.ts / save-load-dialog-layout.ts. Inlined rather than
-// imported because those modules transitively pull in Phaser.
-const SAVE_LOAD_ROW_RECT = { x: 240, y: 279, w: 320, h: 40 } as const;
-const DIALOG_SAVE_NOW_RECT = { x: 260, y: 220, w: 280, h: 36 } as const;
-// Save/Load dialog "Delete Save" button (index 2 of 5: continue, save-now,
-// delete, new-game, back). firstButtonY 176 + 2*(36+8) = 264.
-const DIALOG_DELETE_RECT = { x: 260, y: 264, w: 280, h: 36 } as const;
+// #240 — canvas-click geometry now comes from ONE source of truth: the pure
+// layout modules, evaluated at the default layout in tests/helpers/geometry.ts.
+// No more literals hand-kept "in sync" with pause-menu-layout.ts /
+// save-load-dialog-layout.ts / ui-scene.ts — a layout change updates the helper,
+// specs never touch pixels. (Phaser-free imports; the Node runner stays happy.)
+import {
+  DIFFICULTY_NORMAL_RECT,
+  SAVE_LOAD_ROW_RECT,
+  SETTINGS_ROW_RECT,
+  PHEROMONE_TOGGLE_RECT,
+  SPEED_ROW_RECT,
+  DIALOG_SAVE_NOW_RECT,
+  DIALOG_DELETE_RECT,
+  SAVE_PROMPT_CONTINUE_RECT,
+  centerOf,
+} from './helpers/geometry.js';
 
 async function clickCanvasRect(
   page: Page,
@@ -183,45 +184,12 @@ test.describe('Issue #115/#116 — single click triggers single dispatch', () =>
     await page.waitForTimeout(100);
     expect(await activeOverlay(page)).toBe('pause-menu');
 
-    // Layout from pause-menu-layout: Settings is the third button. Each button
-    // is 320×40 with 10px gap, stacked centered. We compute the rect to click.
-    const settingsRect = await page.evaluate(() => {
-      // Mirror pauseMenuItems('main', ...) layout for index=2 (Settings).
-      const CANVAS_W = 800,
-        CANVAS_H = 592;
-      const BTN_W = 320,
-        BTN_H = 40,
-        GAP = 10,
-        TITLE_H = 56;
-      const n = 4; // resume, save-load, settings, debug-snapshot
-      const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
-      const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
-      const x = (CANVAS_W - BTN_W) / 2;
-      const settingsY = top + 2 * (BTN_H + GAP);
-      return { x: x + BTN_W / 2, y: settingsY + BTN_H / 2 };
-    });
-    await page.locator('canvas').first().click({ position: settingsRect });
+    // Settings is main-menu row index 2 (geometry.ts).
+    await clickCanvasRect(page, SETTINGS_ROW_RECT);
     await page.waitForTimeout(120);
 
-    // Settings sub-screen items (Stage 3b): pheromone-toggle (i=0),
-    // control-hints-toggle (i=1), reset-first-use-hints (i=2), speed-cycle (i=3),
-    // back (i=4) — 5 rows.
-    const toggleRect = await page.evaluate(() => {
-      const CANVAS_W = 800,
-        CANVAS_H = 592;
-      const BTN_W = 320,
-        BTN_H = 40,
-        GAP = 10,
-        TITLE_H = 56;
-      const n = 5;
-      const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
-      const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
-      const x = (CANVAS_W - BTN_W) / 2;
-      // pheromone-toggle is index 0
-      const toggleY = top + 0 * (BTN_H + GAP);
-      return { x: x + BTN_W / 2, y: toggleY + BTN_H / 2 };
-    });
-    await page.locator('canvas').first().click({ position: toggleRect });
+    // Pheromone toggle is settings-page row index 0 (geometry.ts).
+    await clickCanvasRect(page, PHEROMONE_TOGGLE_RECT);
     await page.waitForTimeout(120);
 
     const after = await page.evaluate(() => {
@@ -273,22 +241,8 @@ test.describe('Round-2 review — overlay observability stays coherent across tr
     await page.waitForTimeout(100);
     expect(await activeOverlay(page)).toBe('pause-menu');
 
-    // Open Save/Load (button index 1).
-    const saveLoadRect = await page.evaluate(() => {
-      const CANVAS_W = 800,
-        CANVAS_H = 592;
-      const BTN_W = 320,
-        BTN_H = 40,
-        GAP = 10,
-        TITLE_H = 56;
-      const n = 4;
-      const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
-      const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
-      const x = (CANVAS_W - BTN_W) / 2;
-      const slY = top + 1 * (BTN_H + GAP);
-      return { x: x + BTN_W / 2, y: slY + BTN_H / 2 };
-    });
-    await page.locator('canvas').first().click({ position: saveLoadRect });
+    // Open Save/Load — main-menu row index 1 (geometry.ts).
+    await clickCanvasRect(page, SAVE_LOAD_ROW_RECT);
     await page.waitForTimeout(100);
     expect(await activeOverlay(page)).toBe('save-load');
 
@@ -356,22 +310,8 @@ test.describe('Issue #115 — Save/Load dialog reachable from pause menu', () =>
     await page.waitForTimeout(100);
     expect(await activeOverlay(page)).toBe('pause-menu');
 
-    // Save/Load is the 2nd button (index 1) in the main menu.
-    const saveLoadRect = await page.evaluate(() => {
-      const CANVAS_W = 800,
-        CANVAS_H = 592;
-      const BTN_W = 320,
-        BTN_H = 40,
-        GAP = 10,
-        TITLE_H = 56;
-      const n = 4;
-      const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
-      const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
-      const x = (CANVAS_W - BTN_W) / 2;
-      const slY = top + 1 * (BTN_H + GAP);
-      return { x: x + BTN_W / 2, y: slY + BTN_H / 2 };
-    });
-    await page.locator('canvas').first().click({ position: saveLoadRect });
+    // Save/Load is main-menu row index 1 (geometry.ts).
+    await clickCanvasRect(page, SAVE_LOAD_ROW_RECT);
     await page.waitForTimeout(150);
     expect(await activeOverlay(page)).toBe('save-load');
   });
@@ -430,11 +370,7 @@ test.describe('Issue #115 — Save/Load dialog reachable from pause menu', () =>
       return ui !== undefined;
     });
     // Boot lands on SavePrompt — click Continue to enter Playing.
-    // SAVE_PROMPT_CONTINUE_RECT = { x: 300, y: 280, w: 120, h: 32 }
-    await page
-      .locator('canvas')
-      .first()
-      .click({ position: { x: 360, y: 296 } });
+    await clickCanvasRect(page, SAVE_PROMPT_CONTINUE_RECT);
     await page.waitForTimeout(150);
     // (Continue may fall back to bootFresh on the synthetic envelope, which then
     // shows the Choose Difficulty overlay — settleToPlaying drives either path to
@@ -494,33 +430,19 @@ test.describe('Issue #115 — Save/Load dialog reachable from pause menu', () =>
     await page.keyboard.press('Escape');
     await page.waitForTimeout(100);
     expect(await activeOverlay(page)).toBe('pause-menu');
-    // Save/Load row.
-    await page
-      .locator('canvas')
-      .first()
-      .click({ position: { x: 400, y: 312 } });
+    // Save/Load row (main-menu index 1, geometry.ts).
+    await clickCanvasRect(page, SAVE_LOAD_ROW_RECT);
     await page.waitForTimeout(150);
     expect(await activeOverlay(page)).toBe('save-load');
 
-    // Delete row is index 2 in the dialog. CANVAS=800x592, BTN_W=280, BTN_H=36,
-    // GAP=8, firstY = DIALOG_INFO_Y + 24 = 152 + 24 = 176. Delete is index 2.
-    const deleteY = 176 + 2 * (36 + 8) + 36 / 2;
-    const deleteX = (800 - 280) / 2 + 280 / 2;
-
-    // First click — arms confirm (save still present).
-    await page
-      .locator('canvas')
-      .first()
-      .click({ position: { x: deleteX, y: deleteY } });
+    // Delete row — dialog index 2 (geometry.ts). First click arms confirm.
+    await clickCanvasRect(page, DIALOG_DELETE_RECT);
     await page.waitForTimeout(150);
     const stillThere = await page.evaluate(() => localStorage.getItem('subterrans:save:v3'));
     expect(stillThere).not.toBeNull();
 
     // Second click — commits delete.
-    await page
-      .locator('canvas')
-      .first()
-      .click({ position: { x: deleteX, y: deleteY } });
+    await clickCanvasRect(page, DIALOG_DELETE_RECT);
     await page.waitForTimeout(150);
     const gone = await page.evaluate(() => localStorage.getItem('subterrans:save:v3'));
     expect(gone).toBeNull();
@@ -546,38 +468,12 @@ test.describe('Round-6 (Codex P2) — pheromone toggle survives degraded storage
     // comparison of the toggle label is then deterministic.
     await page.keyboard.press('Escape');
     await page.waitForTimeout(100);
-    const settingsRect = await page.evaluate(() => {
-      const CANVAS_W = 800,
-        CANVAS_H = 592;
-      const BTN_W = 320,
-        BTN_H = 40,
-        GAP = 10,
-        TITLE_H = 56;
-      const n = 4;
-      const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
-      const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
-      const x = (CANVAS_W - BTN_W) / 2;
-      const settingsY = top + 2 * (BTN_H + GAP);
-      return { x: x + BTN_W / 2, y: settingsY + BTN_H / 2 };
-    });
-    await page.locator('canvas').first().click({ position: settingsRect });
+    // Settings is main-menu row index 2 (geometry.ts).
+    await clickCanvasRect(page, SETTINGS_ROW_RECT);
     await page.waitForTimeout(120);
 
     // Pheromone toggle is index 0 on the Settings sub-page (Stage 3b: 5 rows).
-    const toggleClickPos = await page.evaluate(() => {
-      const CANVAS_W = 800,
-        CANVAS_H = 592;
-      const BTN_W = 320,
-        BTN_H = 40,
-        GAP = 10,
-        TITLE_H = 56;
-      const n = 5;
-      const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
-      const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
-      const x = (CANVAS_W - BTN_W) / 2;
-      const y = top + 0 * (BTN_H + GAP);
-      return { x: x + BTN_W / 2, y: y + BTN_H / 2 };
-    });
+    const toggleClickPos = centerOf(PHEROMONE_TOGGLE_RECT);
     const labelClip = {
       x: toggleClickPos.x - 60,
       y: toggleClickPos.y - 8,
@@ -614,48 +510,20 @@ test.describe('Settings — Speed cycle row (UAT)', () => {
   // resource-pressure failure retries can't absorb. It now reads the live speed
   // off the __phase9_ui.speedMultiplier hook, so each assertion is a cheap value
   // read with zero screenshots: deterministic and resource-light.
-  test('clicking the speed row cycles 1× → 2× → 4× → 1× (live, session-only)', async ({
-    page,
-  }) => {
+  test('clicking the speed row cycles 1× → 2× → 4× → 1× (live, session-only)', async ({ page }) => {
     await bootGame(page);
 
     // Open menu → Settings.
     await page.keyboard.press('Escape');
     await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('pause-menu');
-    const settingsRect = await page.evaluate(() => {
-      const CANVAS_W = 800,
-        CANVAS_H = 592;
-      const BTN_W = 320,
-        BTN_H = 40,
-        GAP = 10,
-        TITLE_H = 56;
-      const n = 4;
-      const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
-      const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
-      const x = (CANVAS_W - BTN_W) / 2;
-      const settingsY = top + 2 * (BTN_H + GAP);
-      return { x: x + BTN_W / 2, y: settingsY + BTN_H / 2 };
-    });
-    await page.locator('canvas').first().click({ position: settingsRect });
+    // Settings is main-menu row index 2 (geometry.ts).
+    await clickCanvasRect(page, SETTINGS_ROW_RECT);
     await page.waitForTimeout(120);
 
     // On Settings page (Stage 3b, 5 rows): [pheromone-toggle (i=0),
     // control-hints-toggle (i=1), reset-first-use-hints (i=2), speed-cycle (i=3),
     // back (i=4)]. Compute rect for i=3.
-    const speedRect = await page.evaluate(() => {
-      const CANVAS_W = 800,
-        CANVAS_H = 592;
-      const BTN_W = 320,
-        BTN_H = 40,
-        GAP = 10,
-        TITLE_H = 56;
-      const n = 5;
-      const stackHeight = TITLE_H + n * BTN_H + (n - 1) * GAP;
-      const top = (CANVAS_H - stackHeight) / 2 + TITLE_H;
-      const x = (CANVAS_W - BTN_W) / 2;
-      const speedY = top + 3 * (BTN_H + GAP);
-      return { x: x + BTN_W / 2, y: speedY + BTN_H / 2 };
-    });
+    const speedRect = centerOf(SPEED_ROW_RECT);
 
     const clickSpeedRow = () => page.locator('canvas').first().click({ position: speedRect });
 
@@ -705,8 +573,9 @@ test.describe('Pheromone overlay actually renders (UAT P1 — pre-existing draw-
     const drawOrder = () =>
       page.evaluate(
         () =>
-          (window as { __phase9_test?: { getDrawOrder(): string[] } }).__phase9_test?.getDrawOrder() ??
-          [],
+          (
+            window as { __phase9_test?: { getDrawOrder(): string[] } }
+          ).__phase9_test?.getDrawOrder() ?? [],
       );
 
     // Overlay ON (default): pheromone must be drawn AFTER terrain and BEFORE
@@ -816,9 +685,11 @@ test.describe('Issue #196 — future-build save survives a fresh boot (Save Now 
     expect(
       await page.evaluate(
         () =>
-          (JSON.parse(localStorage.getItem('subterrans:save:v3')!) as {
-            snapshot: { simVersion: number };
-          }).snapshot.simVersion,
+          (
+            JSON.parse(localStorage.getItem('subterrans:save:v3')!) as {
+              snapshot: { simVersion: number };
+            }
+          ).snapshot.simVersion,
       ),
     ).toBe(99999);
 
