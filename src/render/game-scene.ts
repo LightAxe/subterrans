@@ -55,6 +55,7 @@ import {
   canArbiterPan,
   resolveCursorTool,
   cursorToolChanged,
+  computeInterpAlpha,
   type CursorTool,
 } from './game-scene-logic.js';
 import {
@@ -1988,7 +1989,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     // Draw world.
-    const alpha = this.gameLoop.accumulatorMs / MS_PER_TICK;
+    const alpha = computeInterpAlpha(this.gameLoop.accumulatorMs, MS_PER_TICK / this.speedMultiplier);
     const gfx = this.gfx as unknown as GfxLike;
     const overlayGfx = this.overlayGfx as unknown as GfxLike;
     gfx.clear();

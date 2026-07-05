@@ -183,3 +183,30 @@ export function resetInputLog(log: SimCommand[]): void {
 export function generateFreshSeed(nowMs: number): number {
   return (nowMs & 0x7fffffff) | 0;
 }
+
+// ---------------------------------------------------------------------------
+// computeInterpAlpha — render interpolation fraction (#224)
+// ---------------------------------------------------------------------------
+
+/**
+ * Fraction of the CURRENT tick period elapsed since the last sim tick, used to
+ * lerp prevState → world in the entity draws. `msPerTick` must be the loop's
+ * LIVE period (MS_PER_TICK / speedMultiplier — the same value GameLoopOpts.
+ * getMsPerTick returns), never the raw MS_PER_TICK constant: at 2x the
+ * accumulator only reaches ~MS_PER_TICK/2 before the tick fires, so dividing
+ * by the constant froze alpha below ~0.5 and every entity visually jumped the
+ * remaining displacement at each tick boundary (#224).
+ *
+ * Clamped: non-finite/non-positive msPerTick or non-positive alpha → 0;
+ * alpha >= 1 → 1 (reachable only when the loop breaks out early on a game
+ * outcome with a full period still accumulated — draw at the current state).
+ * In normal operation update() drains the accumulator below one period, so
+ * the result stays in [0, 1).
+ */
+export function computeInterpAlpha(accumulatorMs: number, msPerTick: number): number {
+  if (!(msPerTick > 0)) return 0;
+  const alpha = accumulatorMs / msPerTick;
+  if (!(alpha > 0)) return 0;
+  if (alpha >= 1) return 1;
+  return alpha;
+}

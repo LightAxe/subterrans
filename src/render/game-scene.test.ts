@@ -20,6 +20,7 @@ import {
   canArbiterPan,
   resolveCursorTool,
   cursorToolChanged,
+  computeInterpAlpha,
   type CursorTool,
 } from './game-scene-logic.js';
 import {
@@ -592,5 +593,33 @@ describe('generateFreshSeed', () => {
     const bigNow = 1_700_000_000_000;
     const seed = generateFreshSeed(bigNow);
     expect(seed).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('computeInterpAlpha (#224)', () => {
+  it('1x mid-period is exactly 0.5', () => {
+    expect(computeInterpAlpha(25, 50)).toBe(0.5);
+  });
+
+  it('2x near the tick boundary reaches ~1.0 (regression: old 24/50=0.48 formula failed this)', () => {
+    const alpha = computeInterpAlpha(24, 25); // period is MS_PER_TICK/2 = 25 at 2x
+    expect(alpha).toBeCloseTo(0.96, 10);
+    expect(alpha).toBeGreaterThan(0.9);
+  });
+
+  it('4x near the tick boundary also reaches ~1.0', () => {
+    expect(computeInterpAlpha(12, 12.5)).toBeCloseTo(0.96, 10);
+  });
+
+  it('clamps to 1 at and beyond the tick boundary (outcome-break frame)', () => {
+    expect(computeInterpAlpha(25, 25)).toBe(1);
+    expect(computeInterpAlpha(50, 25)).toBe(1);
+  });
+
+  it('degenerate inputs clamp to 0', () => {
+    expect(computeInterpAlpha(-5, 50)).toBe(0);
+    expect(computeInterpAlpha(10, 0)).toBe(0);
+    expect(computeInterpAlpha(NaN, 50)).toBe(0);
+    expect(computeInterpAlpha(10, NaN)).toBe(0);
   });
 });
