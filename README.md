@@ -22,13 +22,13 @@ See the [roadmap](https://subterrans.com/roadmap) for the current phase structur
 
 ## Play It
 
-Subterrans is a browser game. Public hosted builds are not published yet during early development; to try it, clone and run locally (see [Build & Run](#build--run) below).
+Subterrans is a browser game. Play the current build in your browser at **[subterrans.com/demo](https://subterrans.com/demo)** — auto-deployed from this repo on every push to `main`. To run it locally instead, see [Build & Run](#build--run) below.
 
 ## Build & Run
 
 ```bash
 git clone https://github.com/LightAxe/subterrans.git
-cd subterrans/code
+cd subterrans
 npm install
 npm run dev       # launches Vite dev server, opens in browser
 ```
@@ -48,7 +48,7 @@ Useful scripts:
 | `npm run test:e2e`  | Playwright browser tests                                     |
 | `npm run typecheck` | TypeScript in `--noEmit` mode                                |
 | `npm run lint`      | ESLint                                                       |
-| `npm run verify`    | Lint + typecheck + sim-boundary check + tests (what CI runs) |
+| `npm run verify`    | Format check + lint + typecheck + type-aware lint + sim-boundary/asset-path/e2e-geometry/ant-cycle guards + unit tests (CI's verify job; e2e is a separate job) |
 
 ---
 

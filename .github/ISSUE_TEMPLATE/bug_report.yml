@@ -33,7 +33,7 @@ body:
       description: A numbered list of steps. Please be precise — "click around" is not reproducible; "click tile (5, 10), then drag to (8, 10)" is.
       placeholder: |
         1. Start a fresh game with seed 12345.
-        2. Switch to underground view (T).
+        2. Switch to underground view (Tab).
         3. ...
     validations:
       required: true

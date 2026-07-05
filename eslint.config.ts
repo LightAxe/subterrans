@@ -118,6 +118,11 @@ const simSafetyConfig = {
       { object: 'Math', property: 'sqrt', message: 'Use integer approximations or lookup tables.' },
       { object: 'Math', property: 'sin', message: 'Use a fixed-point lookup table.' },
       { object: 'Math', property: 'cos', message: 'Use a fixed-point lookup table.' },
+      {
+        object: 'Math',
+        property: 'atan2',
+        message: 'Use a fixed-point angle helper / lookup table.',
+      },
     ],
     'no-restricted-globals': [
       'error',

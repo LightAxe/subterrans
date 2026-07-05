@@ -83,7 +83,7 @@ function update(dtMs: number): void {
 **Example — ant position and hunger as structure-of-arrays:**
 
 ```typescript
-// src/sim/components.ts
+// Illustrative SoA sketch — real component stores live in e.g. src/sim/ant/ant-store.ts
 
 export type EntityId = number;
 
@@ -109,7 +109,7 @@ export function createPositionStore(capacity: number): PositionStore {
 **Example — a system as a pure function:**
 
 ```typescript
-// src/sim/systems/hunger.ts
+// Illustrative — real systems live in e.g. src/sim/colony/colony-system.ts
 
 export function tickHunger(
   hunger: HungerStore,
@@ -151,12 +151,12 @@ export class Rng {
   private state: number;
 
   constructor(seed: number) {
-    this.state = seed | 0;
+    this.state = seed >>> 0; // coerce to uint32 (matches setState + PRD §4 vectors)
   }
 
   /** Returns an integer in [0, 0xFFFFFFFF] */
   nextU32(): number {
-    let t = (this.state += 0x6d2b79f5);
+    let t = (this.state = (this.state + 0x6d2b79f5) >>> 0); // Mulberry32 advance — keep uint32
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return (t ^ (t >>> 14)) >>> 0;
@@ -170,6 +170,16 @@ export class Rng {
   /** Returns an integer in [min, max] inclusive */
   nextRange(min: number, max: number): number {
     return min + (this.nextU32() % (max - min + 1));
+  }
+
+  /** Snapshot / restore for the tick RNG contract (#161): tick() reconstructs an
+   *  Rng from state.rngState at tick start and writes getState() back at tick
+   *  end, so the stream is a pure function of WorldState. */
+  getState(): number {
+    return this.state;
+  }
+  setState(state: number): void {
+    this.state = state >>> 0;
   }
 }
 ```
@@ -225,9 +235,16 @@ export function toFloat(fixed: number): number {
   return fixed / FP_ONE;
 }
 
-/** Fixed-point multiply: (a * b) >> SHIFT */
+/** Fixed-point multiply. Math.imul for C-style 32-bit signed semantics; signed
+ *  >> preserves negatives (do NOT use >>>). */
 export function fpMul(a: number, b: number): number {
-  return (a * b) >> FP_SHIFT;
+  return Math.imul(a, b) >> FP_SHIFT;
+}
+/** Fixed-point divide. Left-shift the dividend for sub-unit precision; Math.trunc
+ *  for integer semantics. The only sanctioned division in src/sim/. */
+export function fpDiv(a: number, b: number): number {
+  // eslint-disable-next-line no-restricted-syntax -- fpDiv is the only sanctioned division in src/sim/; result immediately truncated
+  return Math.trunc((a << FP_SHIFT) / b);
 }
 ```
 
@@ -298,17 +315,17 @@ this.load.svg(KEY, `${SPRITE_BASE}worker-ant.svg`);
 
 ## Implemented Systems
 
-The principles above are the rules; this section maps what the codebase actually contains as of **Phase 3 ("First Real Round", shipped 2026-05-31)**. Simulation systems live under `src/sim/` and run through the tick dispatcher; rendering, input, and AI policy live under `src/render/` and `src/input/`.
+The principles above are the rules; this section maps what the codebase actually contains as of the post-Phase-3 two-role controls rework (2026-06); Phase 3 ("First Real Round") shipped 2026-05-27. Simulation systems live under `src/sim/` and run through the tick dispatcher; rendering, input, and AI policy live under `src/render/` and `src/input/`.
 
 ### Simulation — `src/sim/`
 
 - **Tick dispatcher** (`tick.ts`) — `tick(world, commands)` applies the `SimCommand` array the platform game loop drained from `world.commandQueue`. The loop (`game-loop.ts`) owns the `splice` and invokes an optional `onAfterDrain` seam; `GameScene`'s callback appends those commands to the replay `inputLog` — `tick` itself never drains the queue or logs. It then runs ~19 ordered steps each tick: reconcile colony stats → food consumption / starvation → death cleanup → queen egg production → lifecycle transitions → worker allocation → flow-field rebuild → task assignment → chamber/entrance completion → forage routing → pheromone deposit/decay → movement → forager & nurse actions → combat → spider (so its retreat reads post-combat HP) → game-over check → RNG writeback.
 - **World / ECS** (`types.ts`, `ant/ant-store.ts`) — a plain-object `WorldState`; ants stored as structure-of-arrays typed arrays (Principle 3).
 - **Colony lifecycle** (`colony/`) — eggs → larvae → workers; the queen's egg interval scales with food surplus and nurses accelerate larva maturation, with Nursery capacity as the growth bottleneck (the *reproduction lever*).
-- **Foraging & pheromones** (`pheromone/`, foraging systems) — grid-based `FoodTrail` and `DangerTrail` pheromone layers (Principle: pheromones-as-grid); leash-bounded search waves; BFS flow-field pathfinding (`tick.ts`) for dig / entrance / chamber routing.
+- **Foraging & pheromones** (`pheromone/`, foraging systems) — grid-based `FoodTrail` and `DangerTrail` pheromone layers (Principle: pheromones-as-grid); leash-bounded search waves; BFS flow-field pathfinding (in `dig-system.ts` / `entrance-flow.ts` / `chamber-flow.ts`; `tick.ts` orchestrates and owns the per-world caches) for dig / entrance / chamber routing.
 - **Combat** (`combat.ts`) — HP / damage / cooldown resolution for ants, queens, and the spider, with a home-ground bonus underground.
 - **Spider** (`spider.ts`) — a neutral predator with a hunger clock, a telegraphed hunt reticle, chase / rampage / feed states, and danger-pheromone deposition; clamped to stay a margin inside the playfield.
-- **AI state machine** (`ai-state.ts`) — the enemy colony moves through Peacetime → WarFooting → Probing → Invading → Recovery. The *policy* that issues its commands lives in `src/render/ai-controller.ts`: it reads sim state and enqueues the same `SimCommand`s a player would (Principle 1 — same colony systems for player and AI).
+- **AI state machine** (`ai-state.ts`) — the enemy colony moves through Peacetime → WarFooting → Probing → Invading → Recovery. The FSM *transitions* themselves (`advanceAIState`) run **in-sim** — tick step 18b, after the game-over check — and are recorded to the input log as replay truth. Only the *policy* that issues commands lives in `src/render/ai-controller.ts`: it reads sim state and enqueues the same `SimCommand`s a player would (Principle 1 — same colony systems for player and AI).
 - **Difficulty** (`scenario.ts`, `ai-state.ts`) — `Easy | Normal | Hard`, chosen at boot; tunes AI thresholds, spider hunger, and the egg interval.
 - **Win / loss** (`game-over.ts`) — single-queen survival: `Victory` / `Defeat` / `MutualDestruction`, with difficulty tiebreaks.
 

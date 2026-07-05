@@ -204,7 +204,9 @@ void (undefined as unknown as PendingChamber);
  * 19.  rngState writeback + world.tick increment
  *
  * tick() retains its accepted Phase 4 2-arg signature.
- * DigFlowFields is module-level scratch state, invisible to callers.
+ * DigFlowFields (+ entrance/chamber fields) are per-world scratch caches — a
+ * WeakMap keyed by world identity (see the block at lines ~100-121), invisible
+ * to callers.
  *
  * @param world    - Mutable world state; mutated in place across all 19 steps.
  * @param commands - Point-in-time snapshot of commands for this tick. Not mutated.
