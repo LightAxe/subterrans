@@ -49,6 +49,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run verify
+      # Production build smoke gate (#239): a lib-mode-only breakage (rollup
+      # config, manifest/dts plugin, .d.ts emit) otherwise first surfaces in the
+      # website deploy POST-merge, after the submodule pointer is already pushed.
+      # Compile both targets here. Artifacts are NOT uploaded — this is a gate,
+      # not a release step. (build = tsc && vite build; the tsc re-run duplicates
+      # verify's tsc --noEmit by a few seconds — acceptable for the isolation.)
+      - run: npm run build
+      - run: npm run build:lib
 
   e2e:
     name: e2e (Playwright chromium)

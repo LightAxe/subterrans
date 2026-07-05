@@ -12,6 +12,14 @@ concurrency:
   group: bump-website
   cancel-in-progress: false
 
+# The push to the website repo uses the SSH deploy key (WEBSITE_DEPLOY_KEY), not
+# GITHUB_TOKEN, so contents:read is enough for it. issues:write is needed only so
+# the failure step below can open an issue in THIS repo via GITHUB_TOKEN (the SSH
+# deploy key cannot create issues).
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   bump:
     runs-on: ubuntu-latest
@@ -44,4 +52,36 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add vendor/game
           git commit -m "chore(game): bump submodule to ${GAME_SHA:0:7}"
-          git push origin main
+
+          # Race fix (#239): a human commit landing on website main between our
+          # clone and push makes a bare push fail non-fast-forward, silently
+          # dropping this game SHA from deploy. The bump commit touches ONLY the
+          # vendor/game gitlink, and the concurrency group above serializes bump
+          # runs, so a concurrent website commit almost never edits that path —
+          # the rebase is conflict-free in the common case. On the rare conflict,
+          # abort cleanly and escalate to the failure notifier rather than looping
+          # on a conflicted tree. Retry the fast-forward race up to 3x.
+          pushed=false
+          for attempt in 1 2 3; do
+            git fetch origin main
+            if ! git rebase origin/main; then
+              git rebase --abort || true
+              echo "::error::bump-website rebase hit a conflict on attempt $attempt for $GAME_SHA"
+              break
+            fi
+            if git push origin main; then pushed=true; break; fi
+            echo "push attempt $attempt failed (non-fast-forward) — retrying"
+            sleep 5
+          done
+          [ "$pushed" = true ] || { echo "::error::bump-website push failed for $GAME_SHA"; exit 1; }
+
+      - name: Report bump failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GAME_SHA: ${{ github.sha }}
+        run: |
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "bump-website failed for ${GAME_SHA:0:7}" \
+            --body "bump-website could not push a submodule bump for code SHA \`$GAME_SHA\`; the website was NOT updated to this build. Re-run Actions → Bump website submodule → Run workflow once website main is clear, or push a new code-main commit."

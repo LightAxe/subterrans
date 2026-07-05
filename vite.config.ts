@@ -1,16 +1,7 @@
 import { defineConfig, type Plugin } from 'vite';
-import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-
-// Read package.json at config-evaluation time so __APP_VERSION__ in the built
-// bundle reflects the version on disk when `npm run build` ran. Used by the
-// playtrace upload module (issue #122) as the `gameVersion` field on the
-// submission envelope — sourced from package.json rather than hand-maintained
-// so version bumps flow through to telemetry automatically.
-const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as {
-  version: string;
-};
+import { appVersion } from './scripts/version.mjs';
 
 /**
  * Issue #122 — dev-server mock for the playtrace upload endpoint.
@@ -133,7 +124,7 @@ const playtraceMockPlugin = (): Plugin => ({
 
 export default defineConfig({
   define: {
-    __APP_VERSION__: JSON.stringify(pkg.version),
+    __APP_VERSION__: JSON.stringify(appVersion()),
   },
   plugins: [playtraceMockPlugin()],
   server: {
