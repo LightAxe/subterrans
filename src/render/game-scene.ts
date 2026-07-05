@@ -1989,7 +1989,10 @@ export class GameScene extends Phaser.Scene {
     }
 
     // Draw world.
-    const alpha = computeInterpAlpha(this.gameLoop.accumulatorMs, MS_PER_TICK / this.speedMultiplier);
+    const alpha = computeInterpAlpha(
+      this.gameLoop.accumulatorMs,
+      MS_PER_TICK / this.speedMultiplier,
+    );
     const gfx = this.gfx as unknown as GfxLike;
     const overlayGfx = this.overlayGfx as unknown as GfxLike;
     gfx.clear();
