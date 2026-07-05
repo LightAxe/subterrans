@@ -5,6 +5,16 @@
 // imports Phaser, which touches `window` at module load) — can import these
 // coordinates from ONE source of truth instead of hand-duplicating them.
 // ui-scene.ts re-exports them to preserve its public surface; values unchanged.
+//
+// LAYOUT DISCIPLINE NOTE (#213 / #238): these are canvas-tied absolute rects
+// relocated VERBATIM from ui-scene.ts (they were already module-scope constants
+// there on main). #240 is a pure decoupling refactor with a zero-coordinate-change
+// invariant, so it does not convert them. Making them pure functions of
+// `LayoutContext` (like pause-menu-layout.ts) is #238's tracked scope ("residual
+// fixed-canvas geometry") — the save-prompt rects in particular are NOT cleanly
+// centered (x=300 → button-center 360, not canvas-center 400), so their reflow
+// anchors are a deliberate #238 design decision, not a mechanical rewrite. Do not
+// add NEW canvas-tied constants here; the conversion happens in #238.
 
 /** Canvas-local rect for the SavePrompt "Continue" button. */
 export const SAVE_PROMPT_CONTINUE_RECT = { x: 300, y: 280, w: 120, h: 32 } as const;
