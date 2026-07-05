@@ -130,6 +130,34 @@ export class FutureSimVersionError extends Error {
 // floor; path-aware-routing + static-terrain reasoning still applies.)
 export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS;
 
+/**
+ * #228 window policy — deliberate-break escape hatch (version-scoped).
+ *
+ * POLICY (ARCHITECTURE.md Principle 7): `MIN_ACCEPTED_SIM_VERSION` stays put while
+ * `LATEST_SIM_VERSION` advances, so saves within the window keep loading — each
+ * behavior change ships a sticky `simVersion >=` gate instead. Raising MIN wipes
+ * real players' localStorage saves and orphans in-flight playtrace uploads (they
+ * keep arriving from the previous deploy for days), so it is a deliberate
+ * exception, not the default posture.
+ *
+ * This records WHICH version a deliberate break was declared at (`null` = no
+ * active break), so a stale flag can't ride silently through a later break. The
+ * guard in `version-policy.test.ts` enforces:
+ *     BREAK_AT === null ? MIN < LATEST : (MIN === LATEST && BREAK_AT === LATEST)
+ *
+ * THE RITUAL for a deliberate compat break (a change that genuinely cannot be
+ * gated — e.g. a stored-field semantics change like V28/V30):
+ *   1. In the breaking PR: raise MIN to LATEST AND set this to that new LATEST,
+ *      and justify the player-facing save wipe in the PR description.
+ *   2. In the NEXT PR that bumps LATEST while leaving MIN behind: set this back to
+ *      `null` (the guard test fails until you do). Never leave a stale version here.
+ *
+ * Initial value is V30 because HEAD has MIN == LATEST == V30 and that raise
+ * predates this policy; the first behavior PR that bumps LATEST past V30 (leaving
+ * MIN at V30) must set this to `null`.
+ */
+export const DELIBERATE_WINDOW_BREAK_AT: number | null = LATEST_SIM_VERSION;
+
 export class OldSimVersionError extends Error {
   constructor(public got: number | null) {
     const gotStr = got !== null ? String(got) : 'unknown';
