@@ -11,7 +11,7 @@ import {
   SIM_VERSION_V26_SPIDER_EDGE_MARGIN,
   SIM_VERSION_V31_SPIDER_TERRAIN,
 } from './types.js';
-import { tickSpider, isSpiderPassable } from './spider.js';
+import { tickSpider, isSpiderPassable, computeFeedAwayTile } from './spider.js';
 import { SurfaceMovementEffect } from './surface-features.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask, PheromoneType } from './enums.js';
@@ -1879,5 +1879,45 @@ describe('spider terrain passability (#225, V31)', () => {
     // On passable ground, and never standing on the HardBlock hash tile.
     expect(isSpiderPassable(world, finalX, finalY)).toBe(true);
     expect(finalX === tx && finalY === ty).toBe(false);
+  });
+
+  it('V31 computeFeedAwayTile probes a boulder feed endpoint to passable in-band ground (Codex P2)', () => {
+    const world = makeCleanWorld(V31);
+    // Boulder a large square around the spider/kill so that wherever the ~10-tile
+    // retreat endpoint lands (±10 on one axis), it is inside the block; passable
+    // ground remains just beyond it.
+    for (let y = 20; y <= 44; y++) {
+      for (let x = 52; x <= 76; x++) {
+        setHardBlock(world, x, y);
+      }
+    }
+    const spider = makeSpider({
+      posX: 64 << FP_SHIFT,
+      posY: 32 << FP_SHIFT,
+      lastKillTileX: 64,
+      lastKillTileY: 32,
+    });
+    computeFeedAwayTile(world, spider);
+    // The endpoint landed in the boulder; the probe redirected it to passable,
+    // in-band ground so the spider heals where an adjacent fighter can interrupt it.
+    expect(isSpiderPassable(world, spider.feedAwayTileX, spider.feedAwayTileY)).toBe(true);
+  });
+
+  it('pre-V31 computeFeedAwayTile leaves the endpoint in the boulder (un-probed, gated)', () => {
+    const world = makeCleanWorld(SIM_VERSION_V23_SPIDER_AGGRO);
+    for (let y = 20; y <= 44; y++) {
+      for (let x = 52; x <= 76; x++) {
+        setHardBlock(world, x, y);
+      }
+    }
+    const spider = makeSpider({
+      posX: 64 << FP_SHIFT,
+      posY: 32 << FP_SHIFT,
+      lastKillTileX: 64,
+      lastKillTileY: 32,
+    });
+    computeFeedAwayTile(world, spider);
+    // No probe below V31: the endpoint stays inside the boulder (old behavior).
+    expect(isSpiderPassable(world, spider.feedAwayTileX, spider.feedAwayTileY)).toBe(false);
   });
 });

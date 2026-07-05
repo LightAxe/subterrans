@@ -1024,7 +1024,7 @@ function isFighterAdjacent(world: WorldState, spider: SpiderState): boolean {
  * that case a deterministic hash picks one of ±X/±Y. Otherwise step along the
  * dominant away-axis (no diagonals). Clamped to grid bounds. No allocation.
  */
-function computeFeedAwayTile(world: WorldState, spider: SpiderState): void {
+export function computeFeedAwayTile(world: WorldState, spider: SpiderState): void {
   const sx = spider.posX >> FP_SHIFT;
   const sy = spider.posY >> FP_SHIFT;
   const kx = spider.lastKillTileX >= 0 ? spider.lastKillTileX : sx;
@@ -1053,6 +1053,36 @@ function computeFeedAwayTile(world: WorldState, spider: SpiderState): void {
     world.simVersion >= SIM_VERSION_V26_SPIDER_EDGE_MARGIN ? SPIDER_EDGE_MARGIN_TILES : 0;
   spider.feedAwayTileX = feedRetreatCoord(kx, signX, SURFACE_GRID_WIDTH, margin);
   spider.feedAwayTileY = feedRetreatCoord(ky, signY, SURFACE_GRID_HEIGHT, margin);
+  // V31 (#225): the retreat endpoint ignores passability, so it can land inside a
+  // 4x4+ HardBlock. Feeding movement stays terrain-blind (its exact-arrival heal
+  // gate needs a reachable target), so an in-boulder endpoint would heal the spider
+  // in the interior where no fighter reaches the DANGER_RADIUS=1 interrupt range —
+  // an uninterruptible, unengageable heal, the very case V31 fixes for combat
+  // states. Probe the endpoint to the first passable tile (row-major +1, wrapping)
+  // that is ALSO inside the reachable [margin, size-1-margin] band, so the spider
+  // heals on open ground AND the step-6b edge clamp can't strand it short of the
+  // target (which would re-livelock the arrival gate). Deterministic, no RNG.
+  if (
+    world.simVersion >= SIM_VERSION_V31_SPIDER_TERRAIN &&
+    !isSpiderPassable(world, spider.feedAwayTileX, spider.feedAwayTileY)
+  ) {
+    const tileCount = SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT;
+    const hiX = SURFACE_GRID_WIDTH - 1 - margin;
+    const hiY = SURFACE_GRID_HEIGHT - 1 - margin;
+    let idx = (spider.feedAwayTileY << HUNT_KEY_SHIFT) + spider.feedAwayTileX;
+    for (let probe = 0; probe < tileCount; probe++) {
+      idx = idx + 1 < tileCount ? idx + 1 : 0;
+      const px = idx % SURFACE_GRID_WIDTH;
+      const py = idx >> HUNT_KEY_SHIFT;
+      if (px < margin || px > hiX || py < margin || py > hiY) continue;
+      if (isSpiderPassable(world, px, py)) {
+        spider.feedAwayTileX = px;
+        spider.feedAwayTileY = py;
+        break;
+      }
+    }
+    // All in-band tiles blocked (impossible on generated maps): keep the endpoint.
+  }
 }
 
 // Retreat `SPIDER_FEED_RETREAT_TILES` from the kill coordinate along one axis.
