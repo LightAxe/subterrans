@@ -9,8 +9,10 @@ import {
   SIM_VERSION_V22_DIFFICULTY,
   SIM_VERSION_V23_SPIDER_AGGRO,
   SIM_VERSION_V26_SPIDER_EDGE_MARGIN,
+  SIM_VERSION_V31_SPIDER_TERRAIN,
 } from './types.js';
-import { tickSpider } from './spider.js';
+import { tickSpider, isSpiderPassable, computeFeedAwayTile } from './spider.js';
+import { SurfaceMovementEffect } from './surface-features.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask, PheromoneType } from './enums.js';
 import { createPheromoneGrid, pheromoneGridKey } from './pheromone/pheromone-store.js';
@@ -1720,5 +1722,251 @@ describe('tickSpider', () => {
       expect(spider.posX >> FP_SHIFT).toBe(M);
       expect(spider.posY >> FP_SHIFT).toBe(M);
     });
+  });
+});
+
+describe('spider terrain passability (#225, V31)', () => {
+  const V31 = SIM_VERSION_V31_SPIDER_TERRAIN;
+  function setHardBlock(world: WorldState, tx: number, ty: number): void {
+    world.bakedSurfaceEffect[ty * SURFACE_GRID_WIDTH + tx] = SurfaceMovementEffect.HardBlock;
+  }
+  // createWorldState bakes real procedural terrain (scattered boulders); wipe it
+  // to an all-passable slate so each test controls exactly which tiles block.
+  function makeCleanWorld(simVersion: number): WorldState {
+    const world = makeWorld();
+    world.simVersion = simVersion;
+    world.bakedSurfaceEffect.fill(SurfaceMovementEffect.Cosmetic);
+    return world;
+  }
+
+  it('isSpiderPassable treats OOB as impassable and honors HardBlock (C2)', () => {
+    const world = makeCleanWorld(V31);
+    // surfaceMovementAt returns Cosmetic (passable) for OOB, so the predicate
+    // must bounds-check itself — off-grid is impassable.
+    expect(isSpiderPassable(world, -1, 5)).toBe(false);
+    expect(isSpiderPassable(world, SURFACE_GRID_WIDTH, 5)).toBe(false);
+    expect(isSpiderPassable(world, 5, -1)).toBe(false);
+    expect(isSpiderPassable(world, 5, SURFACE_GRID_HEIGHT)).toBe(false);
+    // In-bounds: passable by default (Cosmetic), impassable on a boulder.
+    expect(isSpiderPassable(world, 5, 5)).toBe(true);
+    setHardBlock(world, 5, 5);
+    expect(isSpiderPassable(world, 5, 5)).toBe(false);
+  });
+
+  it('V31 step refuses a HardBlock on the preferred axis and takes the other axis', () => {
+    const world = makeCleanWorld(V31);
+    const sx = 64;
+    const sy = 32;
+    // Target 3 east + 2 north → prefers X (ax = 3 >= ay = 2).
+    const antId = placeWorker(world, sx + 3, sy - 2);
+    setHardBlock(world, sx + 1, sy); // east neighbour is a boulder
+    world.spider = makeSpider({
+      posX: sx << FP_SHIFT,
+      posY: sy << FP_SHIFT,
+      state: 'Chasing',
+      chaseTargetAntId: antId,
+      chaseStartTick: 0,
+    });
+    world.tick = 1;
+    tickSpider(world);
+    expect(world.spider.state).toBe('Chasing');
+    expect(world.spider.posX).toBe(sx << FP_SHIFT); // X refused (boulder)
+    expect(world.spider.posY).toBe((sy << FP_SHIFT) - SPIDER_SPEED); // stepped north instead
+  });
+
+  it('V31 Chasing routes around a multi-tile boulder wall to reach the prey (routing P2)', () => {
+    const world = makeCleanWorld(V31);
+    // A vertical wall between the spider (west) and its prey (east), with gaps
+    // above and below. Greedy movement would hold at the wall's west face until
+    // the chase times out (dy === 0, no sideways detour); flow-field routing steps
+    // down the goal field and goes around it.
+    const wallX = 64;
+    for (let y = 30; y <= 34; y++) setHardBlock(world, wallX, y);
+    const antId = placeWorker(world, wallX + 4, 32); // prey on the far side of the wall
+    world.spider = makeSpider({
+      posX: (wallX - 4) << FP_SHIFT,
+      posY: 32 << FP_SHIFT,
+      state: 'Chasing',
+      chaseTargetAntId: antId,
+      chaseStartTick: 0,
+    });
+    let gotPastWall = false;
+    let steppedOnWall = false;
+    for (let t = 1; t <= 60; t++) {
+      world.tick = t;
+      tickSpider(world);
+      if (world.spider === null) break;
+      const sx = world.spider.posX >> FP_SHIFT;
+      const sy = world.spider.posY >> FP_SHIFT;
+      if (!isSpiderPassable(world, sx, sy)) steppedOnWall = true;
+      if (sx > wallX) {
+        gotPastWall = true;
+        break;
+      }
+    }
+    expect(steppedOnWall).toBe(false); // never walked onto the wall
+    expect(gotPastWall).toBe(true); // detoured around it (greedy would hold at wallX-1 for 300 ticks)
+  });
+
+  it('pre-V31 (V23) steps onto the boulder — terrain-blind movement preserved byte-for-byte', () => {
+    const world = makeCleanWorld(SIM_VERSION_V23_SPIDER_AGGRO);
+    const sx = 64;
+    const sy = 32;
+    const antId = placeWorker(world, sx + 3, sy);
+    setHardBlock(world, sx + 1, sy); // ignored below the V31 gate
+    world.spider = makeSpider({
+      posX: sx << FP_SHIFT,
+      posY: sy << FP_SHIFT,
+      state: 'Chasing',
+      chaseTargetAntId: antId,
+      chaseStartTick: 0,
+    });
+    world.tick = 1;
+    tickSpider(world);
+    expect(world.spider.posX).toBe((sx << FP_SHIFT) + SPIDER_SPEED); // stepped onto the boulder tile
+  });
+
+  it('Feeding stays terrain-blind under V31: crosses a boulder to the feed tile and heals (C3)', () => {
+    const world = makeCleanWorld(V31);
+    const sx = 64;
+    const sy = 32;
+    setHardBlock(world, sx + 1, sy); // boulder between the spider and its feed tile
+    world.spider = makeSpider({
+      posX: sx << FP_SHIFT,
+      posY: sy << FP_SHIFT,
+      state: 'Feeding',
+      feedAwayTileX: sx + 2,
+      feedAwayTileY: sy,
+      feedArrivedTick: -1,
+      hp: SPIDER_HP_FULL - 5,
+      lastKillTileX: sx,
+      lastKillTileY: sy,
+    });
+    let reachedFeedTile = false;
+    let healed = false;
+    for (let t = 1; t <= 60; t++) {
+      world.tick = t;
+      tickSpider(world);
+      if (world.spider === null) break;
+      if (world.spider.posX >> FP_SHIFT === sx + 2 && world.spider.posY >> FP_SHIFT === sy) {
+        reachedFeedTile = true;
+      }
+      if (world.spider.hp > SPIDER_HP_FULL - 5) healed = true;
+    }
+    // Passability-gated Feeding would livelock at sx (refusing the boulder step).
+    expect(reachedFeedTile).toBe(true);
+    expect(healed).toBe(true);
+  });
+
+  it('V31 meander fires the probe on a HardBlock hash target and steps onto passable ground', () => {
+    // hash32 replicated from spider.ts — keep in sync with that murmur finalizer.
+    const hash32 = (x: number): number => {
+      let h = Math.imul(x | 0, 2654435761) >>> 0;
+      h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
+      h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
+      return (h ^ (h >>> 16)) >>> 0;
+    };
+    const world = makeCleanWorld(V31);
+    world.tick = 0; // meander tick (0 % divisor === 0), tick-bucket 0
+    const seed = 0 ^ world.terrainSeed;
+    const tx = hash32(seed) % SURFACE_GRID_WIDTH;
+    const ty = hash32(seed ^ 0x9e3779b9) % SURFACE_GRID_HEIGHT;
+    // For seed 0 the hashed meander target is (0, 37) — make it a boulder so the
+    // V31 probe branch fires and redirects to a passable tile.
+    setHardBlock(world, tx, ty);
+    // Park the spider centrally (clear of the V26 edge-margin clamp so it can't
+    // confound the post-move position). It steps one tile toward the probed
+    // (passable) target and lands on open ground — never on the boulder.
+    world.spider = makeSpider({
+      posX: 64 << FP_SHIFT,
+      posY: 40 << FP_SHIFT,
+      state: 'Patrolling',
+      hungerTicks: 0,
+    });
+    tickSpider(world);
+    expect(world.spider.state).toBe('Patrolling');
+    const finalX = world.spider.posX >> FP_SHIFT;
+    const finalY = world.spider.posY >> FP_SHIFT;
+    // Deterministic single step toward the redirected target (west of centre).
+    expect(finalX).toBe(63);
+    expect(finalY).toBe(40);
+    // On passable ground, and never standing on the HardBlock hash tile.
+    expect(isSpiderPassable(world, finalX, finalY)).toBe(true);
+    expect(finalX === tx && finalY === ty).toBe(false);
+  });
+
+  it('V31 computeFeedAwayTile probes a boulder feed endpoint to passable in-band ground (Codex P2)', () => {
+    const world = makeCleanWorld(V31);
+    // Boulder a large square around the spider/kill so that wherever the ~10-tile
+    // retreat endpoint lands (±10 on one axis), it is inside the block; passable
+    // ground remains just beyond it.
+    for (let y = 20; y <= 44; y++) {
+      for (let x = 52; x <= 76; x++) {
+        setHardBlock(world, x, y);
+      }
+    }
+    const spider = makeSpider({
+      posX: 64 << FP_SHIFT,
+      posY: 32 << FP_SHIFT,
+      lastKillTileX: 64,
+      lastKillTileY: 32,
+    });
+    computeFeedAwayTile(world, spider);
+    // The endpoint landed in the boulder; the probe redirected it to passable,
+    // in-band ground so the spider heals where an adjacent fighter can interrupt it.
+    expect(isSpiderPassable(world, spider.feedAwayTileX, spider.feedAwayTileY)).toBe(true);
+  });
+
+  it('pre-V31 computeFeedAwayTile leaves the endpoint in the boulder (un-probed, gated)', () => {
+    const world = makeCleanWorld(SIM_VERSION_V23_SPIDER_AGGRO);
+    for (let y = 20; y <= 44; y++) {
+      for (let x = 52; x <= 76; x++) {
+        setHardBlock(world, x, y);
+      }
+    }
+    const spider = makeSpider({
+      posX: 64 << FP_SHIFT,
+      posY: 32 << FP_SHIFT,
+      lastKillTileX: 64,
+      lastKillTileY: 32,
+    });
+    computeFeedAwayTile(world, spider);
+    // No probe below V31: the endpoint stays inside the boulder (old behavior).
+    expect(isSpiderPassable(world, spider.feedAwayTileX, spider.feedAwayTileY)).toBe(false);
+  });
+
+  it('V31 spider that starts on an impassable tile escapes via the terrain-blind hatch (Codex P1)', () => {
+    const world = makeCleanWorld(V31);
+    // 5x5 boulder with the spider in the dead centre — all four cardinal neighbours
+    // are HardBlock, so passability-aware stepping alone would strand it forever.
+    for (let y = 30; y <= 34; y++) {
+      for (let x = 62; x <= 66; x++) {
+        setHardBlock(world, x, y);
+      }
+    }
+    const antId = placeWorker(world, 70, 32); // chase target on open ground, east of the boulder
+    world.spider = makeSpider({
+      posX: 64 << FP_SHIFT,
+      posY: 32 << FP_SHIFT,
+      state: 'Chasing',
+      chaseTargetAntId: antId,
+      chaseStartTick: 0,
+    });
+    // Precondition: it starts on an impassable tile.
+    expect(isSpiderPassable(world, 64, 32)).toBe(false);
+    let escaped = false;
+    for (let t = 1; t <= 10; t++) {
+      world.tick = t;
+      tickSpider(world);
+      if (world.spider === null) break;
+      const sx = world.spider.posX >> FP_SHIFT;
+      const sy = world.spider.posY >> FP_SHIFT;
+      if (isSpiderPassable(world, sx, sy)) {
+        escaped = true;
+        break;
+      }
+    }
+    // Terrain-blind hatch walked it out onto passable ground (never stranded).
+    expect(escaped).toBe(true);
   });
 });

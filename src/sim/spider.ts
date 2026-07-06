@@ -39,8 +39,14 @@ import {
   PHEROMONE_CAP,
   SPIDER_EDGE_MARGIN_TILES,
 } from './constants.js';
-import { SIM_VERSION_V23_SPIDER_AGGRO, SIM_VERSION_V26_SPIDER_EDGE_MARGIN } from './types.js';
+import {
+  SIM_VERSION_V23_SPIDER_AGGRO,
+  SIM_VERSION_V26_SPIDER_EDGE_MARGIN,
+  SIM_VERSION_V31_SPIDER_TERRAIN,
+} from './types.js';
 import { FP_SHIFT } from './fixed.js';
+import { surfaceMovementAt, SurfaceMovementEffect } from './surface-features.js';
+import { ensureSurfaceGoalField, SURFACE_GOAL_UNREACHED } from './surface-routing.js';
 
 // HUNT_KEY_SHIFT: number of bits to shift Y to form a tile key (Y << SHIFT + X).
 // Requires SURFACE_GRID_WIDTH === 2^HUNT_KEY_SHIFT. Compile-time assertion below.
@@ -383,6 +389,153 @@ function moveTowardTile(spider: SpiderState, targetX: number, targetY: number): 
   }
 
   // Clamp to grid bounds
+  const maxX = (SURFACE_GRID_WIDTH - 1) << FP_SHIFT;
+  const maxY = (SURFACE_GRID_HEIGHT - 1) << FP_SHIFT;
+  if (spider.posX < 0) spider.posX = 0;
+  if (spider.posX > maxX) spider.posX = maxX;
+  if (spider.posY < 0) spider.posY = 0;
+  if (spider.posY > maxY) spider.posY = maxY;
+}
+
+/** V31 (#225): can the spider stand on this tile? Bounds-checks explicitly first
+ *  — surfaceMovementAt returns Cosmetic (passable) for OOB coords, so an
+ *  unchecked comparison would treat off-grid as walkable; ants' canEnterSurfaceTile
+ *  bounds-checks the same way (ant-motion.ts). */
+export function isSpiderPassable(world: WorldState, tileX: number, tileY: number): boolean {
+  if (tileX < 0 || tileY < 0 || tileX >= SURFACE_GRID_WIDTH || tileY >= SURFACE_GRID_HEIGHT) {
+    return false;
+  }
+  return surfaceMovementAt(world, tileX, tileY) !== SurfaceMovementEffect.HardBlock;
+}
+
+/** V31 (#225) gate wrapper for the live (V23) path. Pre-V31 delegates verbatim to
+ *  moveTowardTile (frozen tickSpiderV22 relies on that body staying identical).
+ *  V31+: one axis step per tick (SPIDER_SPEED === FP_ONE, so an axis step lands
+ *  exactly one tile over), refusing HardBlock destinations — preferred axis
+ *  (ax >= ay → X, moveTowardTile's tie-break) first, then the other axis if it
+ *  approaches the target, else hold this tick. Not used for Feeding (see V31 doc
+ *  in types.ts): that heal gate needs exact arrival, so it keeps moveTowardTile. */
+function moveTowardTilePassable(
+  world: WorldState,
+  spider: SpiderState,
+  targetX: number,
+  targetY: number,
+): void {
+  if (world.simVersion < SIM_VERSION_V31_SPIDER_TERRAIN) {
+    moveTowardTile(spider, targetX, targetY);
+    return;
+  }
+  const curX = spider.posX >> FP_SHIFT;
+  const curY = spider.posY >> FP_SHIFT;
+  if (curX === targetX && curY === targetY) return;
+  // Escape hatch: if the spider is ALREADY on an impassable tile, passability-aware
+  // stepping would refuse every blocked neighbour and strand it forever. Fresh V31
+  // lairs are passability-filtered (_placeSpider), so this now only covers a legacy
+  // save / corrupt load that holds such a position. Step terrain-blind toward the
+  // target so it walks out; the gate resumes the moment it reaches passable ground.
+  if (!isSpiderPassable(world, curX, curY)) {
+    moveTowardTile(spider, targetX, targetY);
+    return;
+  }
+  const dx = targetX - curX;
+  const dy = targetY - curY;
+  const ax = dx < 0 ? -dx : dx;
+  const ay = dy < 0 ? -dy : dy;
+  if (ax >= ay) {
+    // ax >= ay with (dx,dy) !== (0,0) implies dx !== 0.
+    if (isSpiderPassable(world, curX + (dx > 0 ? 1 : -1), curY)) {
+      spider.posX += dx > 0 ? SPIDER_SPEED : -SPIDER_SPEED;
+    } else if (dy !== 0 && isSpiderPassable(world, curX, curY + (dy > 0 ? 1 : -1))) {
+      spider.posY += dy > 0 ? SPIDER_SPEED : -SPIDER_SPEED;
+    } // else: both approach axes blocked — hold this tick.
+  } else {
+    if (isSpiderPassable(world, curX, curY + (dy > 0 ? 1 : -1))) {
+      spider.posY += dy > 0 ? SPIDER_SPEED : -SPIDER_SPEED;
+    } else if (dx !== 0 && isSpiderPassable(world, curX + (dx > 0 ? 1 : -1), curY)) {
+      spider.posX += dx > 0 ? SPIDER_SPEED : -SPIDER_SPEED;
+    }
+  }
+  // Same defensive grid clamp as moveTowardTile (verbatim).
+  const maxX = (SURFACE_GRID_WIDTH - 1) << FP_SHIFT;
+  const maxY = (SURFACE_GRID_HEIGHT - 1) << FP_SHIFT;
+  if (spider.posX < 0) spider.posX = 0;
+  if (spider.posX > maxX) spider.posX = maxX;
+  if (spider.posY < 0) spider.posY = 0;
+  if (spider.posY > maxY) spider.posY = maxY;
+}
+
+/** V31 (#225) target-seeking movement for the combat/pursuit states (Hunting,
+ *  Striking, Chasing, Rampaging). Pre-V31 delegates verbatim to moveTowardTile
+ *  (frozen V22/pre-gate behaviour). V31+: step ONE cardinal tile down the BFS goal
+ *  field toward the target (`ensureSurfaceGoalField`, HardBlock-impassable, cached
+ *  per world by target tile), so the spider routes AROUND obstacles instead of
+ *  greedily holding at a wall face — distance-to-target strictly decreases each
+ *  step, so it never oscillates. Cardinal only (one axis/tick, the spider's model);
+ *  candidate order biases toward the target (dominant axis first) for natural,
+ *  deterministic movement. Escape/fallback: if the spider is on an impassable tile
+ *  (only a legacy/corrupt loaded position — fresh V31 lairs are passability-filtered)
+ *  or the target is unreachable from it (a different terrain component), its
+ *  goal-field cell is UNREACHED — step terrain-blind toward the target so it walks
+ *  out / makes progress, and the field resumes once it is back on the component. */
+function moveTowardTileRouted(
+  world: WorldState,
+  spider: SpiderState,
+  targetX: number,
+  targetY: number,
+): void {
+  if (world.simVersion < SIM_VERSION_V31_SPIDER_TERRAIN) {
+    moveTowardTile(spider, targetX, targetY);
+    return;
+  }
+  const curX = spider.posX >> FP_SHIFT;
+  const curY = spider.posY >> FP_SHIFT;
+  if (curX === targetX && curY === targetY) return;
+  const field = ensureSurfaceGoalField(world, targetX, targetY);
+  const here = field[curY * SURFACE_GRID_WIDTH + curX]!;
+  if (here === SURFACE_GOAL_UNREACHED) {
+    moveTowardTile(spider, targetX, targetY);
+    return;
+  }
+  const dx = targetX - curX;
+  const dy = targetY - curY;
+  const ax = dx < 0 ? -dx : dx;
+  const ay = dy < 0 ? -dy : dy;
+  const tX = dx > 0 ? 1 : dx < 0 ? -1 : 0;
+  const tY = dy > 0 ? 1 : dy < 0 ? -1 : 0;
+  // Cardinal candidates in priority order: toward-dominant, toward-minor (both
+  // perpendiculars when that delta is 0, so a wall head-on still yields a sideways
+  // descent), then the reverses. curX/curY !== target above ⇒ the dominant axis'
+  // toward-step is non-zero.
+  const cand: Array<readonly [number, number]> = [];
+  if (ax >= ay) {
+    cand.push([tX, 0]);
+    if (tY !== 0) cand.push([0, tY]);
+    else cand.push([0, 1], [0, -1]);
+    if (tY !== 0) cand.push([0, -tY]);
+    cand.push([-tX, 0]);
+  } else {
+    cand.push([0, tY]);
+    if (tX !== 0) cand.push([tX, 0]);
+    else cand.push([1, 0], [-1, 0]);
+    if (tX !== 0) cand.push([-tX, 0]);
+    cand.push([0, -tY]);
+  }
+  let bestDx = 0;
+  let bestDy = 0;
+  for (const [sdx, sdy] of cand) {
+    const nx = curX + sdx;
+    const ny = curY + sdy;
+    if (nx < 0 || ny < 0 || nx >= SURFACE_GRID_WIDTH || ny >= SURFACE_GRID_HEIGHT) continue;
+    const nd = field[ny * SURFACE_GRID_WIDTH + nx]!;
+    if (nd !== SURFACE_GOAL_UNREACHED && nd < here) {
+      bestDx = sdx;
+      bestDy = sdy;
+      break;
+    }
+  }
+  if (bestDx !== 0) spider.posX += bestDx > 0 ? SPIDER_SPEED : -SPIDER_SPEED;
+  else if (bestDy !== 0) spider.posY += bestDy > 0 ? SPIDER_SPEED : -SPIDER_SPEED;
+  // else: no strictly-descending neighbour (target enclosed) — hold this tick.
   const maxX = (SURFACE_GRID_WIDTH - 1) << FP_SHIFT;
   const maxY = (SURFACE_GRID_HEIGHT - 1) << FP_SHIFT;
   if (spider.posX < 0) spider.posX = 0;
@@ -961,7 +1114,7 @@ function isFighterAdjacent(world: WorldState, spider: SpiderState): boolean {
  * that case a deterministic hash picks one of ±X/±Y. Otherwise step along the
  * dominant away-axis (no diagonals). Clamped to grid bounds. No allocation.
  */
-function computeFeedAwayTile(world: WorldState, spider: SpiderState): void {
+export function computeFeedAwayTile(world: WorldState, spider: SpiderState): void {
   const sx = spider.posX >> FP_SHIFT;
   const sy = spider.posY >> FP_SHIFT;
   const kx = spider.lastKillTileX >= 0 ? spider.lastKillTileX : sx;
@@ -990,6 +1143,36 @@ function computeFeedAwayTile(world: WorldState, spider: SpiderState): void {
     world.simVersion >= SIM_VERSION_V26_SPIDER_EDGE_MARGIN ? SPIDER_EDGE_MARGIN_TILES : 0;
   spider.feedAwayTileX = feedRetreatCoord(kx, signX, SURFACE_GRID_WIDTH, margin);
   spider.feedAwayTileY = feedRetreatCoord(ky, signY, SURFACE_GRID_HEIGHT, margin);
+  // V31 (#225): the retreat endpoint ignores passability, so it can land inside a
+  // 4x4+ HardBlock. Feeding movement stays terrain-blind (its exact-arrival heal
+  // gate needs a reachable target), so an in-boulder endpoint would heal the spider
+  // in the interior where no fighter reaches the DANGER_RADIUS=1 interrupt range —
+  // an uninterruptible, unengageable heal, the very case V31 fixes for combat
+  // states. Probe the endpoint to the first passable tile (row-major +1, wrapping)
+  // that is ALSO inside the reachable [margin, size-1-margin] band, so the spider
+  // heals on open ground AND the step-6b edge clamp can't strand it short of the
+  // target (which would re-livelock the arrival gate). Deterministic, no RNG.
+  if (
+    world.simVersion >= SIM_VERSION_V31_SPIDER_TERRAIN &&
+    !isSpiderPassable(world, spider.feedAwayTileX, spider.feedAwayTileY)
+  ) {
+    const tileCount = SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT;
+    const hiX = SURFACE_GRID_WIDTH - 1 - margin;
+    const hiY = SURFACE_GRID_HEIGHT - 1 - margin;
+    let idx = (spider.feedAwayTileY << HUNT_KEY_SHIFT) + spider.feedAwayTileX;
+    for (let probe = 0; probe < tileCount; probe++) {
+      idx = idx + 1 < tileCount ? idx + 1 : 0;
+      const px = idx % SURFACE_GRID_WIDTH;
+      const py = idx >> HUNT_KEY_SHIFT;
+      if (px < margin || px > hiX || py < margin || py > hiY) continue;
+      if (isSpiderPassable(world, px, py)) {
+        spider.feedAwayTileX = px;
+        spider.feedAwayTileY = py;
+        break;
+      }
+    }
+    // All in-band tiles blocked (impossible on generated maps): keep the endpoint.
+  }
 }
 
 // Retreat `SPIDER_FEED_RETREAT_TILES` from the kill coordinate along one axis.
@@ -1348,21 +1531,45 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
         // the float-division lint and keeps the bucket deterministic.
         const bucket = world.tick >> SPIDER_MEANDER_RETARGET_SHIFT;
         const seed = bucket ^ world.terrainSeed;
-        const tx = hash32(seed) % SURFACE_GRID_WIDTH;
-        const ty = hash32(seed ^ 0x9e3779b9) % SURFACE_GRID_HEIGHT;
-        moveTowardTile(spider, tx, ty);
+        let tx = hash32(seed) % SURFACE_GRID_WIDTH;
+        let ty = hash32(seed ^ 0x9e3779b9) % SURFACE_GRID_HEIGHT;
+        // V31 (#225): reject an impassable meander target WITHOUT consuming RNG —
+        // keep the two hash32 draws above, then linear-probe (tile index +1,
+        // row-major, wrapping at width*height) to the first passable tile. Probe
+        // order is a pure function of the hashed tile, so replays stay deterministic.
+        if (
+          world.simVersion >= SIM_VERSION_V31_SPIDER_TERRAIN &&
+          !isSpiderPassable(world, tx, ty)
+        ) {
+          const tileCount = SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT;
+          let idx = (ty << HUNT_KEY_SHIFT) + tx; // row-major key (width 128 = 2^7, compile-asserted)
+          for (let probe = 0; probe < tileCount; probe++) {
+            idx = idx + 1 < tileCount ? idx + 1 : 0;
+            const px = idx % SURFACE_GRID_WIDTH;
+            const py = idx >> HUNT_KEY_SHIFT;
+            if (isSpiderPassable(world, px, py)) {
+              tx = px;
+              ty = py;
+              break;
+            }
+          }
+          // All tiles blocked (impossible on generated maps): keep the hashed
+          // target; moveTowardTilePassable refuses the final blocked step anyway.
+        }
+        moveTowardTilePassable(world, spider, tx, ty);
       }
       break;
     }
     case 'Hunting':
     case 'Striking': {
-      moveTowardTile(spider, spider.huntTargetTileX, spider.huntTargetTileY);
+      moveTowardTileRouted(world, spider, spider.huntTargetTileX, spider.huntTargetTileY);
       break;
     }
     case 'Chasing': {
       const tid = spider.chaseTargetAntId;
       if (tid >= 0 && world.ants.alive[tid] === 1) {
-        moveTowardTile(
+        moveTowardTileRouted(
+          world,
           spider,
           world.ants.posX[tid]! >> FP_SHIFT,
           world.ants.posY[tid]! >> FP_SHIFT,
@@ -1377,7 +1584,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
     }
     case 'Rampaging': {
       if (rampageNearest !== null) {
-        moveTowardTile(spider, rampageNearest.x, rampageNearest.y);
+        moveTowardTileRouted(world, spider, rampageNearest.x, rampageNearest.y);
       }
       break;
     }

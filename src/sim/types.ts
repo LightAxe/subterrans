@@ -383,7 +383,34 @@ export const SIM_VERSION_V29_PATH_AWARE_ROUTING = 29 as const;
 // tick-level behaviour. Posture 2 (bump + raise MIN_ACCEPTED, no cross-version
 // gate); pre-V30 saves reject at load. (PR 6-render is render-only — no bump.)
 export const SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS = 30 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS;
+/**
+ * V31 (#225) — Spider surface-terrain awareness. Previously spider movement
+ * ignored passability: moveTowardTile stepped onto HardBlock features and the
+ * V23 meander hash could pick a HardBlock target, parking the tile-coincident-
+ * combat spider on a boulder where fighters dogpile adjacent tiles unable to
+ * engage. Under V31+ (live V23 path only; frozen tickSpiderV22 untouched):
+ * (a) the pursuit states (Hunting, Striking, Chasing, Rampaging) step ONE cardinal
+ * tile down a BFS goal field toward the target (ensureSurfaceGoalField —
+ * HardBlock-impassable, cached per world by target tile), so the spider ROUTES
+ * AROUND obstacles instead of holding at a wall face; distance-to-target strictly
+ * decreases each step, so it never oscillates. The Patrolling meander keeps a
+ * cheaper greedy passable-step (refuse HardBlock, try the other axis, else hold)
+ * toward its probed wander target. Escape hatch shared by both: a spider ALREADY on
+ * an impassable tile (only a legacy/corrupt loaded position — fresh V31 lairs are
+ * passability-filtered in _placeSpider), or one whose target is unreachable on the
+ * frozen terrain, steps terrain-blind toward the target until it reaches passable
+ * ground, so it can never be stranded;
+ * (b) the meander picker keeps its two hash32 draws, then linear-probes (tile
+ * index +1, wrapping at width*height) to the first passable tile — deterministic,
+ * no rngState use. Feeding movement stays terrain-blind (its heal gate needs exact
+ * arrival at feedAwayTile, which passability-aware stepping can't guarantee), but
+ * computeFeedAwayTile probes the feed endpoint to a passable in-band tile so the
+ * spider heals on open ground where an adjacent fighter can still interrupt it,
+ * never inside a boulder. Pre-V31 saves keep the terrain-blind movement and the
+ * un-probed feed endpoint (gated on simVersion >= V31) for byte-identical replay.
+ */
+export const SIM_VERSION_V31_SPIDER_TERRAIN = 31 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V31_SPIDER_TERRAIN;
 
 /**
  * S2 — AI colony state machine states.
