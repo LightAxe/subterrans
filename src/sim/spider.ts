@@ -46,6 +46,7 @@ import {
 } from './types.js';
 import { FP_SHIFT } from './fixed.js';
 import { surfaceMovementAt, SurfaceMovementEffect } from './surface-features.js';
+import { ensureSurfaceGoalField, SURFACE_GOAL_UNREACHED } from './surface-routing.js';
 
 // HUNT_KEY_SHIFT: number of bits to shift Y to form a tile key (Y << SHIFT + X).
 // Requires SURFACE_GRID_WIDTH === 2^HUNT_KEY_SHIFT. Compile-time assertion below.
@@ -456,6 +457,86 @@ function moveTowardTilePassable(
     }
   }
   // Same defensive grid clamp as moveTowardTile (verbatim).
+  const maxX = (SURFACE_GRID_WIDTH - 1) << FP_SHIFT;
+  const maxY = (SURFACE_GRID_HEIGHT - 1) << FP_SHIFT;
+  if (spider.posX < 0) spider.posX = 0;
+  if (spider.posX > maxX) spider.posX = maxX;
+  if (spider.posY < 0) spider.posY = 0;
+  if (spider.posY > maxY) spider.posY = maxY;
+}
+
+/** V31 (#225) target-seeking movement for the combat/pursuit states (Hunting,
+ *  Striking, Chasing, Rampaging). Pre-V31 delegates verbatim to moveTowardTile
+ *  (frozen V22/pre-gate behaviour). V31+: step ONE cardinal tile down the BFS goal
+ *  field toward the target (`ensureSurfaceGoalField`, HardBlock-impassable, cached
+ *  per world by target tile), so the spider routes AROUND obstacles instead of
+ *  greedily holding at a wall face — distance-to-target strictly decreases each
+ *  step, so it never oscillates. Cardinal only (one axis/tick, the spider's model);
+ *  candidate order biases toward the target (dominant axis first) for natural,
+ *  deterministic movement. Escape/fallback: if the spider is on an impassable tile
+ *  (a lair can spawn inside a boulder) or the target is unreachable from it (target
+ *  on HardBlock / a different terrain component), its goal-field cell is UNREACHED —
+ *  step terrain-blind toward the target so it walks out / makes progress, and the
+ *  field resumes once it is back on the target's connected component. */
+function moveTowardTileRouted(
+  world: WorldState,
+  spider: SpiderState,
+  targetX: number,
+  targetY: number,
+): void {
+  if (world.simVersion < SIM_VERSION_V31_SPIDER_TERRAIN) {
+    moveTowardTile(spider, targetX, targetY);
+    return;
+  }
+  const curX = spider.posX >> FP_SHIFT;
+  const curY = spider.posY >> FP_SHIFT;
+  if (curX === targetX && curY === targetY) return;
+  const field = ensureSurfaceGoalField(world, targetX, targetY);
+  const here = field[curY * SURFACE_GRID_WIDTH + curX]!;
+  if (here === SURFACE_GOAL_UNREACHED) {
+    moveTowardTile(spider, targetX, targetY);
+    return;
+  }
+  const dx = targetX - curX;
+  const dy = targetY - curY;
+  const ax = dx < 0 ? -dx : dx;
+  const ay = dy < 0 ? -dy : dy;
+  const tX = dx > 0 ? 1 : dx < 0 ? -1 : 0;
+  const tY = dy > 0 ? 1 : dy < 0 ? -1 : 0;
+  // Cardinal candidates in priority order: toward-dominant, toward-minor (both
+  // perpendiculars when that delta is 0, so a wall head-on still yields a sideways
+  // descent), then the reverses. curX/curY !== target above ⇒ the dominant axis'
+  // toward-step is non-zero.
+  const cand: Array<readonly [number, number]> = [];
+  if (ax >= ay) {
+    cand.push([tX, 0]);
+    if (tY !== 0) cand.push([0, tY]);
+    else cand.push([0, 1], [0, -1]);
+    if (tY !== 0) cand.push([0, -tY]);
+    cand.push([-tX, 0]);
+  } else {
+    cand.push([0, tY]);
+    if (tX !== 0) cand.push([tX, 0]);
+    else cand.push([1, 0], [-1, 0]);
+    if (tX !== 0) cand.push([-tX, 0]);
+    cand.push([0, -tY]);
+  }
+  let bestDx = 0;
+  let bestDy = 0;
+  for (const [sdx, sdy] of cand) {
+    const nx = curX + sdx;
+    const ny = curY + sdy;
+    if (nx < 0 || ny < 0 || nx >= SURFACE_GRID_WIDTH || ny >= SURFACE_GRID_HEIGHT) continue;
+    const nd = field[ny * SURFACE_GRID_WIDTH + nx]!;
+    if (nd !== SURFACE_GOAL_UNREACHED && nd < here) {
+      bestDx = sdx;
+      bestDy = sdy;
+      break;
+    }
+  }
+  if (bestDx !== 0) spider.posX += bestDx > 0 ? SPIDER_SPEED : -SPIDER_SPEED;
+  else if (bestDy !== 0) spider.posY += bestDy > 0 ? SPIDER_SPEED : -SPIDER_SPEED;
+  // else: no strictly-descending neighbour (target enclosed) — hold this tick.
   const maxX = (SURFACE_GRID_WIDTH - 1) << FP_SHIFT;
   const maxY = (SURFACE_GRID_HEIGHT - 1) << FP_SHIFT;
   if (spider.posX < 0) spider.posX = 0;
@@ -1482,13 +1563,13 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
     }
     case 'Hunting':
     case 'Striking': {
-      moveTowardTilePassable(world, spider, spider.huntTargetTileX, spider.huntTargetTileY);
+      moveTowardTileRouted(world, spider, spider.huntTargetTileX, spider.huntTargetTileY);
       break;
     }
     case 'Chasing': {
       const tid = spider.chaseTargetAntId;
       if (tid >= 0 && world.ants.alive[tid] === 1) {
-        moveTowardTilePassable(
+        moveTowardTileRouted(
           world,
           spider,
           world.ants.posX[tid]! >> FP_SHIFT,
@@ -1504,7 +1585,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
     }
     case 'Rampaging': {
       if (rampageNearest !== null) {
-        moveTowardTilePassable(world, spider, rampageNearest.x, rampageNearest.y);
+        moveTowardTileRouted(world, spider, rampageNearest.x, rampageNearest.y);
       }
       break;
     }

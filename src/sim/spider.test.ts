@@ -1774,24 +1774,38 @@ describe('spider terrain passability (#225, V31)', () => {
     expect(world.spider.posY).toBe((sy << FP_SHIFT) - SPIDER_SPEED); // stepped north instead
   });
 
-  it('V31 holds in place when both approach axes are blocked', () => {
+  it('V31 Chasing routes around a multi-tile boulder wall to reach the prey (routing P2)', () => {
     const world = makeCleanWorld(V31);
-    const sx = 64;
-    const sy = 32;
-    // Target due east (dy === 0) → only the X approach exists; block it.
-    const antId = placeWorker(world, sx + 3, sy);
-    setHardBlock(world, sx + 1, sy);
+    // A vertical wall between the spider (west) and its prey (east), with gaps
+    // above and below. Greedy movement would hold at the wall's west face until
+    // the chase times out (dy === 0, no sideways detour); flow-field routing steps
+    // down the goal field and goes around it.
+    const wallX = 64;
+    for (let y = 30; y <= 34; y++) setHardBlock(world, wallX, y);
+    const antId = placeWorker(world, wallX + 4, 32); // prey on the far side of the wall
     world.spider = makeSpider({
-      posX: sx << FP_SHIFT,
-      posY: sy << FP_SHIFT,
+      posX: (wallX - 4) << FP_SHIFT,
+      posY: 32 << FP_SHIFT,
       state: 'Chasing',
       chaseTargetAntId: antId,
       chaseStartTick: 0,
     });
-    world.tick = 1;
-    tickSpider(world);
-    expect(world.spider.posX).toBe(sx << FP_SHIFT);
-    expect(world.spider.posY).toBe(sy << FP_SHIFT);
+    let gotPastWall = false;
+    let steppedOnWall = false;
+    for (let t = 1; t <= 60; t++) {
+      world.tick = t;
+      tickSpider(world);
+      if (world.spider === null) break;
+      const sx = world.spider.posX >> FP_SHIFT;
+      const sy = world.spider.posY >> FP_SHIFT;
+      if (!isSpiderPassable(world, sx, sy)) steppedOnWall = true;
+      if (sx > wallX) {
+        gotPastWall = true;
+        break;
+      }
+    }
+    expect(steppedOnWall).toBe(false); // never walked onto the wall
+    expect(gotPastWall).toBe(true); // detoured around it (greedy would hold at wallX-1 for 300 ticks)
   });
 
   it('pre-V31 (V23) steps onto the boulder — terrain-blind movement preserved byte-for-byte', () => {

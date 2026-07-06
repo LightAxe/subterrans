@@ -389,12 +389,16 @@ export const SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS = 30 as const;
  * V23 meander hash could pick a HardBlock target, parking the tile-coincident-
  * combat spider on a boulder where fighters dogpile adjacent tiles unable to
  * engage. Under V31+ (live V23 path only; frozen tickSpiderV22 untouched):
- * (a) each combat/meander movement step refuses to enter a HardBlock tile —
- * preferred axis first (same ax >= ay tie-break as moveTowardTile), then the
- * other axis when it approaches the target, else the spider holds this tick
- * (with an escape hatch: a spider ALREADY on an impassable tile — an unversioned
- * lair placement can land inside a boulder — steps terrain-blind toward the
- * target until it reaches passable ground, so it can never be stranded);
+ * (a) the pursuit states (Hunting, Striking, Chasing, Rampaging) step ONE cardinal
+ * tile down a BFS goal field toward the target (ensureSurfaceGoalField —
+ * HardBlock-impassable, cached per world by target tile), so the spider ROUTES
+ * AROUND obstacles instead of holding at a wall face; distance-to-target strictly
+ * decreases each step, so it never oscillates. The Patrolling meander keeps a
+ * cheaper greedy passable-step (refuse HardBlock, try the other axis, else hold)
+ * toward its probed wander target. Escape hatch shared by both: a spider ALREADY on
+ * an impassable tile (an unversioned lair placement can land inside a boulder), or
+ * one whose target is unreachable on the frozen terrain, steps terrain-blind toward
+ * the target until it reaches passable ground, so it can never be stranded;
  * (b) the meander picker keeps its two hash32 draws, then linear-probes (tile
  * index +1, wrapping at width*height) to the first passable tile — deterministic,
  * no rngState use. Feeding movement stays terrain-blind (its heal gate needs exact
