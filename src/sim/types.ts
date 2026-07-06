@@ -424,7 +424,20 @@ export const SIM_VERSION_V31_SPIDER_TERRAIN = 31 as const;
  * dangling hunt episode for byte-identical replay. MIN_ACCEPTED unchanged (#228).
  */
 export const SIM_VERSION_V32_AI_OP_VALIDATION = 32 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V32_AI_OP_VALIDATION;
+/**
+ * V33 (#243) — save-shape epoch marker for the removed dead `pathErr` field.
+ * NOT a behavior gate (there is no `simVersion >= V33` branch): the field was
+ * never read, so tick output is unchanged and old saves still deserialize on the
+ * new build (the stray key is ignored). The bump exists purely to mark the
+ * serialized-ant SHAPE change so an OLDER build loading a NEWER (pathErr-less)
+ * save routes through FutureSimVersionError → the save is PRESERVED, instead of
+ * hitting `copyIntoInt32(a.pathErr, undefined)` → TypeError → the generic-corruption
+ * path that deleteSave()s it. Per ARCHITECTURE.md's rule that a removed WorldState
+ * field bumps simVersion; distinct from gate-reaping, which preserves byte-identity.
+ * MIN_ACCEPTED unchanged (window 30..33 stays open; DELIBERATE_WINDOW_BREAK_AT null).
+ */
+export const SIM_VERSION_V33_PATHERR_REMOVED = 33 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V33_PATHERR_REMOVED;
 
 /**
  * S2 — AI colony state machine states.

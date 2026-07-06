@@ -190,11 +190,8 @@ export function moveQueens(
       }
       if (targetTileX < 0) continue;
       if (targetTileX === tileX && targetTileY === tileY) continue;
-      // Issue #34: per-ant Bresenham accumulator (in pickCardinalStep)
-      // produces strict alternation at 45° and proportional alternation
-      // at other slopes. Replaces the prior `Math.abs(rawDx) >=
-      // Math.abs(rawDy)` greedy axis pick that exhausted the leading
-      // axis before switching, producing visible stair-step.
+      // pickCardinalStep selects one cardinal (v2/v3 greedy) or 8-connected
+      // diagonal (v4+) step per tick from the tile-space delta.
       const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY);
       dx = unpackStepDx(step);
       dy = unpackStepDy(step);

@@ -516,8 +516,8 @@ export function tickAntMovement(
       }
 
       if (!stepped) {
-        // Issue #34 + codex coord-scale fix: tile-space deltas (see the
-        // chamber-target site above for rationale).
+        // Codex coord-scale fix: tile-space deltas (see the chamber-target site
+        // above for the same-tile rationale).
         const step = pickCardinalStep(
           ants,
           id,
@@ -785,11 +785,11 @@ export function tickAntMovement(
       }
 
       if (haveTarget) {
-        // Issue #34 + codex coord-scale fix: rawDx/rawDy were FP-space
-        // (target − pos, both fp). Recompute as tile-space so the shared
-        // per-ant accumulator stays consistent with the queen and scent
-        // paths. The original target value is recoverable as
-        // `rawDx + posX` (== absolute fp target X).
+        // Codex coord-scale fix: rawDx/rawDy were FP-space (target − pos, both
+        // fp). Recompute as tile-space so the same-tile hold (absDx/absDy === 0
+        // in pickCardinalStep) is decided in tile units, matching the queen and
+        // scent paths. The original target is recoverable as `rawDx + posX`
+        // (== absolute fp target X).
         const targetTileX = (rawDx + posX) >> FP_SHIFT;
         const targetTileY = (rawDy + posY) >> FP_SHIFT;
         const tileX = posX >> FP_SHIFT;

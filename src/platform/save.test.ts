@@ -164,7 +164,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // simply ignored and the rest round-trips.
       const legacy = {
         ...s,
-        ants: { ...s.ants, pathErr: new Array<number>(w.ants.posX.length).fill(0) },
+        ants: { ...s.ants, pathErr: new Array<number>(w.ants.posX.length).fill(7) },
       };
       expect(() => deserializeWorldState(legacy)).not.toThrow();
       const w2 = deserializeWorldState(legacy);
