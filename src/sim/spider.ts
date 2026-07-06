@@ -43,6 +43,7 @@ import {
   SIM_VERSION_V23_SPIDER_AGGRO,
   SIM_VERSION_V26_SPIDER_EDGE_MARGIN,
   SIM_VERSION_V31_SPIDER_TERRAIN,
+  SIM_VERSION_V32_AI_OP_VALIDATION,
 } from './types.js';
 import { FP_SHIFT } from './fixed.js';
 import { surfaceMovementAt, SurfaceMovementEffect } from './surface-features.js';
@@ -752,6 +753,14 @@ export function tickSpider(world: WorldState): void {
       emitSpiderChaseEnd(world, 'killed');
     } else if (spider.state === 'Rampaging') {
       emitSpiderRampageEnd(world, 'killed_in_nest', spider.rampageKillsThisRampage, false);
+    } else if (spider.state === 'Hunting' && world.simVersion >= SIM_VERSION_V32_AI_OP_VALIDATION) {
+      // V32 (#226): close the episode opened by spider_hunt_start — under the V23
+      // always-on combat gate a spider can die mid-telegraph. deaths is 0, not
+      // killsThisStrike: that counter only resets at Hunting→Striking, so during
+      // Hunting it still holds the PREVIOUS strike's kills. (Pre-V23 can't reach
+      // hp<=0 while Hunting — combat excludes Hunting below V23 — so the gate's old
+      // branch covers exactly the V23–V31 range where the dangling episode existed.)
+      emitSpiderHuntEnd(world, 'swarm_retreat', 0);
     }
     clearSpiderPairingSentinels(world);
     world.spider = null;

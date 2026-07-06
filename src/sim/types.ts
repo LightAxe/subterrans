@@ -410,7 +410,21 @@ export const SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS = 30 as const;
  * un-probed feed endpoint (gated on simVersion >= V31) for byte-identical replay.
  */
 export const SIM_VERSION_V31_SPIDER_TERRAIN = 31 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V31_SPIDER_TERRAIN;
+/**
+ * V32 (#226) — AI-operation validation + spider hunt-episode closure (one gate,
+ * two deltas). (1) StartAIOperation is validated against the target colony's
+ * current aiState.state: Probe applies only from WarFooting, Invasion only while
+ * already Invading (the WarFooting→Invading transition fires in advanceAIState at
+ * step 18b, before the render controller pushes the command); a malformed kind or
+ * an illegal source silently drops, changing which replayed commands apply.
+ * (2) A spider killed while Hunting (reachable under the V23 always-on combat gate)
+ * emits the previously-missing spider_hunt_end; that emission can bump the
+ * PERSISTED dropped-event counters at the event cap, so it shares the gate. Sticky
+ * (simVersion >= V32): pre-V32 worlds keep the unvalidated command apply and the
+ * dangling hunt episode for byte-identical replay. MIN_ACCEPTED unchanged (#228).
+ */
+export const SIM_VERSION_V32_AI_OP_VALIDATION = 32 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V32_AI_OP_VALIDATION;
 
 /**
  * S2 — AI colony state machine states.
