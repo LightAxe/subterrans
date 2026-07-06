@@ -233,15 +233,15 @@ describe('getTaskDirection — dig direction lookup (purity checks)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// canEnterUndergroundTile + tickAntMovement — underground passability
+// canEnterUndergroundTile — underground passability predicate
 //
-// Contract: non-digging ants must not cut through Solid dirt to reach their
-// target (chamber, food pile, entrance). A Nurse routing to the Queen chamber,
-// a carrying forager routing to FoodStorage, or an ascending forager heading
-// for the entrance all derive a Manhattan unit step toward their target; the
-// tickAntMovement guard must reject a step whose destination tile is Solid
-// (or Marked for a non-Digger). Diggers retain the right to step onto Marked
-// tiles — that's how tickDigExecution claims them.
+// Contract: the standalone predicate deciding whether a given task may step
+// onto an underground tile by its state. Open/BeingDug are passable for all;
+// Solid is impassable for all; Marked is enterable only by a Digger — that's
+// how tickDigExecution claims them. The tickAntMovement guard that consumes
+// this predicate to reject a Solid/Marked step mid-route (Nurse → Queen chamber,
+// carrying forager → FoodStorage, ascending forager → entrance) is exercised in
+// ant-movement.test.ts ("underground passability guard").
 // ---------------------------------------------------------------------------
 
 describe('canEnterUndergroundTile', () => {
