@@ -763,7 +763,10 @@ export function tickSpider(world: WorldState): void {
       // reach hp<=0 while Hunting — combat excludes Hunting below V23 — so the gate's
       // old branch covers exactly the V23–V31 range where the dangling episode existed.)
       if (spider.killedThisTick === 1) {
-        emitSpiderHuntEnd(world, 'kill', spider.killsThisStrike > 0 ? spider.killsThisStrike : 1);
+        // Report the ONE fresh same-tick kill. killsThisStrike is stale during
+        // Hunting (only reset at Hunting→Striking, so it holds the PREVIOUS strike's
+        // count), so use killedThisTick — the combat resolver sets it to at most 1.
+        emitSpiderHuntEnd(world, 'kill', spider.killedThisTick);
       } else {
         emitSpiderHuntEnd(world, 'swarm_retreat', 0);
       }

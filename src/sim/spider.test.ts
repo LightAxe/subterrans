@@ -496,18 +496,19 @@ describe('tickSpider', () => {
       }
     });
 
-    it('V32: a same-tick Hunting kill + death reports outcome kill with >=1 death (#226)', () => {
+    it('V32: a same-tick Hunting kill + death reports outcome kill with exactly the fresh death (#226)', () => {
       const world = makeWorld();
       world.simVersion = SIM_VERSION_V32_AI_OP_VALIDATION;
       // The combat resolver can set killedThisTick=1 while also dropping hp<=0 in the
-      // same step — the hunt episode closed as a no-death retreat would under-count it.
-      world.spider = makeSpider({ state: 'Hunting', hp: 0, killedThisTick: 1, killsThisStrike: 0 });
+      // same step. killsThisStrike is deliberately STALE (5, from a prior strike) — the
+      // report must use the one fresh same-tick kill (killedThisTick), not the stale count.
+      world.spider = makeSpider({ state: 'Hunting', hp: 0, killedThisTick: 1, killsThisStrike: 5 });
       tickSpider(world);
       const evt = world.events.find((e) => e.type === 'spider_hunt_end');
       expect(evt).toBeDefined();
       if (evt?.type === 'spider_hunt_end') {
         expect(evt.payload.outcome).toBe('kill');
-        expect(evt.payload.deaths).toBeGreaterThanOrEqual(1);
+        expect(evt.payload.deaths).toBe(1); // NOT the stale killsThisStrike (5)
       }
     });
 
