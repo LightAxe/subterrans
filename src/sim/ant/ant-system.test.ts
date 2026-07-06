@@ -47,7 +47,7 @@ import {
   SIM_VERSION_V22_DIFFICULTY,
   SIM_VERSION_V23_SPIDER_AGGRO,
   SIM_VERSION_V24_NURSERY_CAPACITY,
-  SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS,
+  SIM_VERSION_V32_AI_OP_VALIDATION,
   SIM_VERSION_V33_OCCUPANCY_CENTER,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
@@ -5978,8 +5978,13 @@ describe('tickAntMovement — same-colony occupancy enforcement', () => {
     expect(world.ants.posY[bId]! & (FP_ONE - 1)).toBe(FP_ONE >> 1);
   });
 
-  it('pre-V33 (V30): a shifted colliding ant parks at the tile CORNER (offset 0)', () => {
-    const { world, bId } = collideTwo(SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS);
+  it('pre-V33 (V32, LATEST−1): a shifted colliding ant parks at the tile CORNER (offset 0)', () => {
+    // Pin the gate at exactly >= V33 by testing the boundary just below it. A
+    // regression mis-gating at >= V31 or >= V32 would still pass a V30 corner test
+    // (V30 < any mis-gate) yet silently break replay for real V31/V32 saves; V32
+    // here (LATEST−1) catches that. The occupancy resolver is unchanged V30→V32, so
+    // the corner write is identical at V32.
+    const { world, bId } = collideTwo(SIM_VERSION_V32_AI_OP_VALIDATION);
     tickAntMovement(world, new Rng(42), createDigFlowFields());
     expect(uniqueTiles(world, COLONY_ID).size).toBe(2);
     expect(world.ants.posX[bId]! & (FP_ONE - 1)).toBe(0);
