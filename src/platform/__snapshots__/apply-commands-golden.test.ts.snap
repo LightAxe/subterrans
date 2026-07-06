@@ -273,7 +273,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > C
     },
   ],
   "hashes": {
-    "ants": "0df7eef781936394a38a3b40455823005f7ec345",
+    "ants": "0e812377022f760927e147b5882db0dfdf395880",
     "bakedSurfaceEffect": "db2458391bcfc8799839754ebf9f6ead70e3bd0b",
     "pheromoneGrids": "3658e62b00683bcb893620ab2f8bab9ca020b0cb",
     "surface": "a3582799dd0540e32b8f75ef76d3968cbf2a833c",
@@ -603,7 +603,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > D
     },
   ],
   "hashes": {
-    "ants": "0df7eef781936394a38a3b40455823005f7ec345",
+    "ants": "0e812377022f760927e147b5882db0dfdf395880",
     "bakedSurfaceEffect": "db2458391bcfc8799839754ebf9f6ead70e3bd0b",
     "pheromoneGrids": "3658e62b00683bcb893620ab2f8bab9ca020b0cb",
     "surface": "a3582799dd0540e32b8f75ef76d3968cbf2a833c",
@@ -927,7 +927,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > M
     },
   ],
   "hashes": {
-    "ants": "0df7eef781936394a38a3b40455823005f7ec345",
+    "ants": "0e812377022f760927e147b5882db0dfdf395880",
     "bakedSurfaceEffect": "db2458391bcfc8799839754ebf9f6ead70e3bd0b",
     "pheromoneGrids": "3658e62b00683bcb893620ab2f8bab9ca020b0cb",
     "surface": "a3582799dd0540e32b8f75ef76d3968cbf2a833c",
@@ -1251,7 +1251,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > M
     },
   ],
   "hashes": {
-    "ants": "0df7eef781936394a38a3b40455823005f7ec345",
+    "ants": "0e812377022f760927e147b5882db0dfdf395880",
     "bakedSurfaceEffect": "db2458391bcfc8799839754ebf9f6ead70e3bd0b",
     "pheromoneGrids": "3658e62b00683bcb893620ab2f8bab9ca020b0cb",
     "surface": "a3582799dd0540e32b8f75ef76d3968cbf2a833c",
@@ -1575,7 +1575,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > M
     },
   ],
   "hashes": {
-    "ants": "0df7eef781936394a38a3b40455823005f7ec345",
+    "ants": "0e812377022f760927e147b5882db0dfdf395880",
     "bakedSurfaceEffect": "db2458391bcfc8799839754ebf9f6ead70e3bd0b",
     "pheromoneGrids": "3658e62b00683bcb893620ab2f8bab9ca020b0cb",
     "surface": "a3582799dd0540e32b8f75ef76d3968cbf2a833c",
@@ -1899,7 +1899,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > N
     },
   ],
   "hashes": {
-    "ants": "0df7eef781936394a38a3b40455823005f7ec345",
+    "ants": "0e812377022f760927e147b5882db0dfdf395880",
     "bakedSurfaceEffect": "db2458391bcfc8799839754ebf9f6ead70e3bd0b",
     "pheromoneGrids": "3658e62b00683bcb893620ab2f8bab9ca020b0cb",
     "surface": "a3582799dd0540e32b8f75ef76d3968cbf2a833c",
@@ -2223,7 +2223,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > P
     },
   ],
   "hashes": {
-    "ants": "0df7eef781936394a38a3b40455823005f7ec345",
+    "ants": "0e812377022f760927e147b5882db0dfdf395880",
     "bakedSurfaceEffect": "db2458391bcfc8799839754ebf9f6ead70e3bd0b",
     "pheromoneGrids": "3658e62b00683bcb893620ab2f8bab9ca020b0cb",
     "surface": "a3582799dd0540e32b8f75ef76d3968cbf2a833c",
@@ -2547,7 +2547,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > S
     },
   ],
   "hashes": {
-    "ants": "f100a67ea3d2cc85755ceddc34bef10beeb83053",
+    "ants": "0fd939a267a76aa615988742b67ca437d03a469d",
     "bakedSurfaceEffect": "db2458391bcfc8799839754ebf9f6ead70e3bd0b",
     "pheromoneGrids": "3658e62b00683bcb893620ab2f8bab9ca020b0cb",
     "surface": "a3582799dd0540e32b8f75ef76d3968cbf2a833c",
@@ -2871,7 +2871,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > S
     },
   ],
   "hashes": {
-    "ants": "0df7eef781936394a38a3b40455823005f7ec345",
+    "ants": "0e812377022f760927e147b5882db0dfdf395880",
     "bakedSurfaceEffect": "db2458391bcfc8799839754ebf9f6ead70e3bd0b",
     "pheromoneGrids": "3658e62b00683bcb893620ab2f8bab9ca020b0cb",
     "surface": "a3582799dd0540e32b8f75ef76d3968cbf2a833c",
@@ -3195,7 +3195,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > S
     },
   ],
   "hashes": {
-    "ants": "0df7eef781936394a38a3b40455823005f7ec345",
+    "ants": "0e812377022f760927e147b5882db0dfdf395880",
     "bakedSurfaceEffect": "db2458391bcfc8799839754ebf9f6ead70e3bd0b",
     "pheromoneGrids": "3658e62b00683bcb893620ab2f8bab9ca020b0cb",
     "surface": "a3582799dd0540e32b8f75ef76d3968cbf2a833c",
@@ -3541,7 +3541,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > S
     },
   ],
   "hashes": {
-    "ants": "0df7eef781936394a38a3b40455823005f7ec345",
+    "ants": "0e812377022f760927e147b5882db0dfdf395880",
     "bakedSurfaceEffect": "db2458391bcfc8799839754ebf9f6ead70e3bd0b",
     "pheromoneGrids": "3658e62b00683bcb893620ab2f8bab9ca020b0cb",
     "surface": "a3582799dd0540e32b8f75ef76d3968cbf2a833c",
@@ -3865,7 +3865,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > e
     },
   ],
   "hashes": {
-    "ants": "0df7eef781936394a38a3b40455823005f7ec345",
+    "ants": "0e812377022f760927e147b5882db0dfdf395880",
     "bakedSurfaceEffect": "db2458391bcfc8799839754ebf9f6ead70e3bd0b",
     "pheromoneGrids": "3658e62b00683bcb893620ab2f8bab9ca020b0cb",
     "surface": "a3582799dd0540e32b8f75ef76d3968cbf2a833c",
@@ -4189,7 +4189,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > i
     },
   ],
   "hashes": {
-    "ants": "0df7eef781936394a38a3b40455823005f7ec345",
+    "ants": "0e812377022f760927e147b5882db0dfdf395880",
     "bakedSurfaceEffect": "db2458391bcfc8799839754ebf9f6ead70e3bd0b",
     "pheromoneGrids": "3658e62b00683bcb893620ab2f8bab9ca020b0cb",
     "surface": "a3582799dd0540e32b8f75ef76d3968cbf2a833c",
@@ -4516,7 +4516,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > m
     },
   ],
   "hashes": {
-    "ants": "81c4c107d8df5a87964904df248e80b23123945b",
+    "ants": "1c801b7d205b73f00d0956c1b2257d7ad099a65a",
     "bakedSurfaceEffect": "db2458391bcfc8799839754ebf9f6ead70e3bd0b",
     "pheromoneGrids": "3658e62b00683bcb893620ab2f8bab9ca020b0cb",
     "surface": "a3582799dd0540e32b8f75ef76d3968cbf2a833c",
@@ -4840,7 +4840,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > u
     },
   ],
   "hashes": {
-    "ants": "0df7eef781936394a38a3b40455823005f7ec345",
+    "ants": "0e812377022f760927e147b5882db0dfdf395880",
     "bakedSurfaceEffect": "db2458391bcfc8799839754ebf9f6ead70e3bd0b",
     "pheromoneGrids": "3658e62b00683bcb893620ab2f8bab9ca020b0cb",
     "surface": "a3582799dd0540e32b8f75ef76d3968cbf2a833c",

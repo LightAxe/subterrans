@@ -296,9 +296,8 @@ export function getTaskDirection(
       }
     }
 
-    // Issue #34: compute the cardinal step once outside the loop so the
-    // per-ant Bresenham accumulator (`ants.pathErr`) is bumped exactly
-    // once per tick, regardless of how many chambers were considered.
+    // Compute the cardinal step once outside the loop (one step per tick
+    // regardless of how many chambers were considered).
     if (bestDist >= 0) {
       const step = pickCardinalStep(
         ants,

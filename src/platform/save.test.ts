@@ -151,6 +151,25 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const s2 = JSON.stringify(serializeWorldState(w2));
       expect(s2).toBe(s1);
     });
+    it('#243: a fresh save omits the deleted pathErr field', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      expect('pathErr' in s.ants).toBe(false);
+    });
+    it('#243: a legacy save carrying a stray pathErr key still deserializes cleanly (upgrade path)', () => {
+      const w = createScenario(42);
+      const s = serializeWorldState(w);
+      // Simulate a pre-#243 save: the ants object still carries the (now-deleted)
+      // pathErr array. The new deserializer never reads it, so the stray key is
+      // simply ignored and the rest round-trips.
+      const legacy = {
+        ...s,
+        ants: { ...s.ants, pathErr: new Array<number>(w.ants.posX.length).fill(0) },
+      };
+      expect(() => deserializeWorldState(legacy)).not.toThrow();
+      const w2 = deserializeWorldState(legacy);
+      expect(Array.from(w2.ants.posX.slice(0, 5))).toEqual(Array.from(w.ants.posX.slice(0, 5)));
+    });
     it('rehydrates every Int32Array ant field with correct values', () => {
       const w = createScenario(42);
       for (let t = 0; t < 10; t++) tick(w, []);
