@@ -190,8 +190,8 @@ export function moveQueens(
       }
       if (targetTileX < 0) continue;
       if (targetTileX === tileX && targetTileY === tileY) continue;
-      // pickCardinalStep selects one cardinal (v2/v3 greedy) or 8-connected
-      // diagonal (v4+) step per tick from the tile-space delta.
+      // pickCardinalStep takes one 8-connected step per tick from the tile-space
+      // delta (cardinal when an axis delta is zero, diagonal otherwise).
       const step = pickCardinalStep(ants, qId, targetTileX - tileX, targetTileY - tileY);
       dx = unpackStepDx(step);
       dy = unpackStepDy(step);

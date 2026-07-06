@@ -151,23 +151,30 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const s2 = JSON.stringify(serializeWorldState(w2));
       expect(s2).toBe(s1);
     });
-    it('#243: a fresh save omits the deleted pathErr field', () => {
+    it('#243: the save still emits a pathErr zeros vestige (forward-compat for older builds)', () => {
+      // The RUNTIME pathErr field is deleted, but the save format keeps a zeros
+      // array so an older build (which still reads the key via copyIntoInt32) never
+      // chokes on a missing field and deleteSave()s a newer-build save — including
+      // migrated saves that keep their in-window sticky simVersion. This is the key
+      // property: every window-stamped save carries every key the deployed
+      // deserializer requires. Reap the vestige once MIN_ACCEPTED passes it.
       const w = createScenario(42);
       const s = serializeWorldState(w);
-      expect('pathErr' in s.ants).toBe(false);
+      expect('pathErr' in s.ants).toBe(true);
+      expect(s.ants.pathErr.length).toBe(w.ants.posX.length);
+      expect(s.ants.pathErr.every((v) => v === 0)).toBe(true);
     });
-    it('#243: a legacy save carrying a stray pathErr key still deserializes cleanly (upgrade path)', () => {
+    it('#243: deserialize ignores the pathErr vestige regardless of its values', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
-      // Simulate a pre-#243 save: the ants object still carries the (now-deleted)
-      // pathErr array. The new deserializer never reads it, so the stray key is
-      // simply ignored and the rest round-trips.
-      const legacy = {
+      // Non-zero pathErr (as a legacy save could carry) must be ignored, not read
+      // into any runtime state — the field no longer exists at runtime.
+      const withValues = {
         ...s,
         ants: { ...s.ants, pathErr: new Array<number>(w.ants.posX.length).fill(7) },
       };
-      expect(() => deserializeWorldState(legacy)).not.toThrow();
-      const w2 = deserializeWorldState(legacy);
+      expect(() => deserializeWorldState(withValues)).not.toThrow();
+      const w2 = deserializeWorldState(withValues);
       expect(Array.from(w2.ants.posX.slice(0, 5))).toEqual(Array.from(w.ants.posX.slice(0, 5)));
     });
     it('rehydrates every Int32Array ant field with correct values', () => {

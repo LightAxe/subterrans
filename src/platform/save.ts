@@ -441,6 +441,14 @@ interface SerializedAnts {
   searchPrevTileY: number[];
   currentGridColonyId: number[];
   waitingDeposit: number[];
+  // #243 — write-only vestige of the deleted runtime `pathErr` field. The runtime
+  // AntComponents.pathErr is gone (dead Bresenham accumulator), but the save format
+  // keeps emitting a zeros array so an OLDER build (which still reads this key via
+  // copyIntoInt32) never chokes on a missing field and deleteSave()s a save written
+  // by a newer build — including MIGRATED saves that keep their in-window sticky
+  // simVersion. Reap this vestige once MIN_ACCEPTED_SIM_VERSION passes the version
+  // that introduced the removal. Deserialize ignores it.
+  pathErr: number[];
   searchPauseTicks: number[];
   // PR 5 C-both — recent-tiles ring, COMPACT canonical encoding (not the flat
   // maxEntities×RECENT_TILES_LEN arrays, which would triple save size and blow
@@ -747,6 +755,10 @@ function serializeAnts(a: AntComponents, nextEntityId: number): SerializedAnts {
     currentGridColonyId: Array.from(a.currentGridColonyId),
     // Issue #27 — carrier wait flag (Uint8Array; serialized as number[]).
     waitingDeposit: Array.from(a.waitingDeposit),
+    // #243 — write-only zeros vestige of the deleted runtime pathErr field (see
+    // SerializedAnts.pathErr). Emitting all-zeros is byte-identical to the old
+    // serialization (the field was never written, so it was always zeros).
+    pathErr: new Array<number>(a.posX.length).fill(0),
     searchPauseTicks: Array.from(a.searchPauseTicks),
     // PR 5 C-both — recent-tiles ring, compact canonical encoding (see
     // packRecentTiles). Round-trips the ring exactly for SCEN-06 determinism.

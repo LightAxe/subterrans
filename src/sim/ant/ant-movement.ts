@@ -384,7 +384,7 @@ export function tickAntMovement(
       if (!stepped) {
         // Cache absent (test harness) — retain the original Manhattan step via
         // pickCardinalStep; deltas are tile-space (all call sites pass tile
-        // units, a single consistent unit across the 9 call sites), matching
+        // units, a single consistent unit), matching
         // the production flow-field path's step selection.
         const step = pickCardinalStep(
           ants,
