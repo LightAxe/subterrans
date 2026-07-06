@@ -35,7 +35,11 @@ import {
   surfaceGoalDistance,
 } from '../surface-routing.js';
 import { UndergroundTileState, Zone, ugGet } from '../terrain.js';
-import { SIM_VERSION_V25_RALLY_RECALL, type WorldState } from '../types.js';
+import {
+  SIM_VERSION_V25_RALLY_RECALL,
+  SIM_VERSION_V33_OCCUPANCY_CENTER,
+  type WorldState,
+} from '../types.js';
 import {
   pickInvaderUndergroundStep,
   pickNearestHostileUnderground,
@@ -1417,6 +1421,11 @@ export function tickAntMovement(
 // ---------------------------------------------------------------------------
 function resolveSameColonyOccupancy(world: WorldState): void {
   const ants = world.ants;
+  // V33 (#243): park a shifted ant at tile CENTER, like every other position
+  // writer, instead of the tile corner. `+ 0` is bit-identical to the old corner
+  // write, preserving pre-V33 replay.
+  const occupancyCenterOffset =
+    world.simVersion >= SIM_VERSION_V33_OCCUPANCY_CENTER ? FP_ONE >> 1 : 0;
   // Issue #67 — reuse a module-level Map instead of allocating per tick.
   // Map.clear() is O(n) where n is the size of the previous tick's map;
   // negligible vs. the prior `new Map()` + GC churn. Same observable
@@ -1503,8 +1512,8 @@ function resolveSameColonyOccupancy(world: WorldState): void {
       if (isOccupancyExempt(world, colonyId, zone, nx, ny)) {
         tileX = nx;
         tileY = ny;
-        ants.posX[id] = tileX << FP_SHIFT;
-        ants.posY[id] = tileY << FP_SHIFT;
+        ants.posX[id] = (tileX << FP_SHIFT) + occupancyCenterOffset;
+        ants.posY[id] = (tileY << FP_SHIFT) + occupancyCenterOffset;
         shifted = true;
         break;
       }
@@ -1516,8 +1525,8 @@ function resolveSameColonyOccupancy(world: WorldState): void {
       if (occupancy.has(adjKey)) continue;
       tileX = nx;
       tileY = ny;
-      ants.posX[id] = tileX << FP_SHIFT;
-      ants.posY[id] = tileY << FP_SHIFT;
+      ants.posX[id] = (tileX << FP_SHIFT) + occupancyCenterOffset;
+      ants.posY[id] = (tileY << FP_SHIFT) + occupancyCenterOffset;
       occupancy.set(adjKey, id);
       shifted = true;
       break;

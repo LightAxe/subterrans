@@ -424,7 +424,18 @@ export const SIM_VERSION_V31_SPIDER_TERRAIN = 31 as const;
  * dangling hunt episode for byte-identical replay. MIN_ACCEPTED unchanged (#228).
  */
 export const SIM_VERSION_V32_AI_OP_VALIDATION = 32 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V32_AI_OP_VALIDATION;
+/**
+ * V33 (#243) — resolveSameColonyOccupancy shift-writes park the bumped ant at tile
+ * CENTER (`(tile << FP_SHIFT) + (FP_ONE >> 1)`) like every other position writer
+ * (the #70 class), not the tile CORNER. Both write pairs (exempt shift + non-exempt
+ * claim) were corner writes; a sub-tile consumer would see a shifted ant displaced
+ * half a tile. Harmless at tile granularity today (all current consumers round via
+ * `>> FP_SHIFT`), so this is behavior-inert at the tile level but changes stored
+ * bytes. Pre-V33 keeps the corner write (gated `simVersion >= V33`) for
+ * byte-identical replay. MIN_ACCEPTED unchanged.
+ */
+export const SIM_VERSION_V33_OCCUPANCY_CENTER = 33 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V33_OCCUPANCY_CENTER;
 
 /**
  * S2 — AI colony state machine states.
