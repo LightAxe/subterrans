@@ -16,6 +16,7 @@ import { AntTask, PheromoneType } from './enums.js';
 import { pheromoneGridKey } from './pheromone/pheromone-store.js';
 import { FP_SHIFT } from './fixed.js';
 import { UndergroundTileState, ugGet } from './terrain.js';
+import { surfaceMovementAt, SurfaceMovementEffect } from './surface-features.js';
 import {
   PLAYER_COLONY_ID,
   ENEMY_COLONY_ID,
@@ -600,6 +601,32 @@ describe('createScenario', () => {
         expect(spider!.posX >> FP_SHIFT).toBeLessThanOrEqual(MAX_X);
         expect(spider!.posY >> FP_SHIFT).toBeGreaterThanOrEqual(MIN);
         expect(spider!.posY >> FP_SHIFT).toBeLessThanOrEqual(MAX_Y);
+      }
+    });
+  });
+
+  // #225 — The lair must be a passable, colony-reachable tile: _placeSpider rejects
+  // HardBlock / off-main-component tiles via the player-start goal field. Seeds
+  // 2/3/9 previously spawned the spider inside a boulder, where V31 movement would
+  // strand it terrain-blind and temporarily unengageable (the #225 failure mode).
+  describe('spider lair passability (#225)', () => {
+    it('never spawns the lair on a HardBlock tile across many seeds', () => {
+      for (let seed = 0; seed < 200; seed++) {
+        const world = createScenario(seed);
+        const spider = world.spider;
+        expect(spider).not.toBeNull();
+        const sx = spider!.posX >> FP_SHIFT;
+        const sy = spider!.posY >> FP_SHIFT;
+        expect(surfaceMovementAt(world, sx, sy)).not.toBe(SurfaceMovementEffect.HardBlock);
+      }
+    });
+
+    it('specifically fixes seeds 2, 3, 9 (previously spawned inside a boulder)', () => {
+      for (const seed of [2, 3, 9]) {
+        const world = createScenario(seed);
+        const sx = world.spider!.posX >> FP_SHIFT;
+        const sy = world.spider!.posY >> FP_SHIFT;
+        expect(surfaceMovementAt(world, sx, sy)).not.toBe(SurfaceMovementEffect.HardBlock);
       }
     });
   });

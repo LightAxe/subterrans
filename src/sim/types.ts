@@ -396,9 +396,10 @@ export const SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS = 30 as const;
  * decreases each step, so it never oscillates. The Patrolling meander keeps a
  * cheaper greedy passable-step (refuse HardBlock, try the other axis, else hold)
  * toward its probed wander target. Escape hatch shared by both: a spider ALREADY on
- * an impassable tile (an unversioned lair placement can land inside a boulder), or
- * one whose target is unreachable on the frozen terrain, steps terrain-blind toward
- * the target until it reaches passable ground, so it can never be stranded;
+ * an impassable tile (only a legacy/corrupt loaded position — fresh V31 lairs are
+ * passability-filtered in _placeSpider), or one whose target is unreachable on the
+ * frozen terrain, steps terrain-blind toward the target until it reaches passable
+ * ground, so it can never be stranded;
  * (b) the meander picker keeps its two hash32 draws, then linear-probes (tile
  * index +1, wrapping at width*height) to the first passable tile — deterministic,
  * no rngState use. Feeding movement stays terrain-blind (its heal gate needs exact

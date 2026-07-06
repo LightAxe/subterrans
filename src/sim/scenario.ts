@@ -32,6 +32,7 @@ import {
 import { Rng } from './rng.js';
 import { FP_SHIFT } from './fixed.js';
 import { AntTask, PheromoneType } from './enums.js';
+import { ensureSurfaceGoalField, SURFACE_GOAL_UNREACHED } from './surface-routing.js';
 import {
   PLAYER_COLONY_ID,
   ENEMY_COLONY_ID,
@@ -285,6 +286,15 @@ function _placeSpider(world: WorldState): SpiderState {
   const spanX = SURFACE_GRID_WIDTH - 2 * SPIDER_EDGE_MARGIN_TILES;
   const spanY = SURFACE_GRID_HEIGHT - 2 * SPIDER_EDGE_MARGIN_TILES;
 
+  // #225 — reject lair tiles that are HardBlock or cut off from the colonies: a
+  // spider spawned inside a boulder (seeds 2/3/9 did this) is terrain-blind-
+  // reachable but temporarily unengageable (the #225 failure mode), and one on a
+  // disconnected pocket can never hunt. The player-start goal field is UNREACHED on
+  // exactly those tiles (HardBlock or off the main component), so requiring a
+  // reachable lair gives passable AND connected in one check. (The runtime escape
+  // hatch in tickSpiderV23 now only covers legacy/loaded positions.)
+  const reachField = ensureSurfaceGoalField(world, PLAYER_START_X, PLAYER_START_Y);
+
   for (let attempt = 0; attempt < 1000; attempt++) {
     h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
     h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
@@ -300,7 +310,12 @@ function _placeSpider(world: WorldState): SpiderState {
     const d2 =
       (tx > ENEMY_START_X ? tx - ENEMY_START_X : ENEMY_START_X - tx) +
       (ty > ENEMY_START_Y ? ty - ENEMY_START_Y : ENEMY_START_Y - ty);
-    if (d1 >= minDist && d2 >= minDist && Math.abs(d1 - d2) <= 20) {
+    if (
+      d1 >= minDist &&
+      d2 >= minDist &&
+      Math.abs(d1 - d2) <= 20 &&
+      reachField[ty * SURFACE_GRID_WIDTH + tx] !== SURFACE_GOAL_UNREACHED
+    ) {
       lairTileX = tx;
       lairTileY = ty;
       break;

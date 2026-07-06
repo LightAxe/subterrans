@@ -428,12 +428,11 @@ function moveTowardTilePassable(
   const curX = spider.posX >> FP_SHIFT;
   const curY = spider.posY >> FP_SHIFT;
   if (curX === targetX && curY === targetY) return;
-  // Escape hatch: if the spider is ALREADY on an impassable tile (scenario lair
-  // placement — _placeSpider — filters by colony distance only, not passability,
-  // so a lair can land inside a 4x4+ boulder; a legacy save could also hold such a
-  // position), passability-aware stepping would refuse every blocked neighbour and
-  // strand it forever. Step terrain-blind toward the target so it walks out; the
-  // gate resumes the moment it reaches passable ground.
+  // Escape hatch: if the spider is ALREADY on an impassable tile, passability-aware
+  // stepping would refuse every blocked neighbour and strand it forever. Fresh V31
+  // lairs are passability-filtered (_placeSpider), so this now only covers a legacy
+  // save / corrupt load that holds such a position. Step terrain-blind toward the
+  // target so it walks out; the gate resumes the moment it reaches passable ground.
   if (!isSpiderPassable(world, curX, curY)) {
     moveTowardTile(spider, targetX, targetY);
     return;
@@ -474,10 +473,10 @@ function moveTowardTilePassable(
  *  step, so it never oscillates. Cardinal only (one axis/tick, the spider's model);
  *  candidate order biases toward the target (dominant axis first) for natural,
  *  deterministic movement. Escape/fallback: if the spider is on an impassable tile
- *  (a lair can spawn inside a boulder) or the target is unreachable from it (target
- *  on HardBlock / a different terrain component), its goal-field cell is UNREACHED —
- *  step terrain-blind toward the target so it walks out / makes progress, and the
- *  field resumes once it is back on the target's connected component. */
+ *  (only a legacy/corrupt loaded position — fresh V31 lairs are passability-filtered)
+ *  or the target is unreachable from it (a different terrain component), its
+ *  goal-field cell is UNREACHED — step terrain-blind toward the target so it walks
+ *  out / makes progress, and the field resumes once it is back on the component. */
 function moveTowardTileRouted(
   world: WorldState,
   spider: SpiderState,
