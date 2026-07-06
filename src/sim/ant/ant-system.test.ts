@@ -47,6 +47,8 @@ import {
   SIM_VERSION_V22_DIFFICULTY,
   SIM_VERSION_V23_SPIDER_AGGRO,
   SIM_VERSION_V24_NURSERY_CAPACITY,
+  SIM_VERSION_V32_AI_OP_VALIDATION,
+  SIM_VERSION_V33_OCCUPANCY_CENTER,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt, createAntComponents, RECENT_TILES_LEN, isRecentTile } from './ant-store.js';
@@ -5947,6 +5949,77 @@ describe('tickAntMovement — same-colony occupancy enforcement', () => {
     }
 
     expect(run()).toEqual(run());
+  });
+
+  // #243 (V33) — resolveSameColonyOccupancy shift-writes park a bumped ant at tile
+  // CENTER, not the corner. Two same-colony ants forced onto one tile → the
+  // higher-id one shifts; assert the sub-tile offset on both axes and both write
+  // pairs (the non-exempt claim and the exempt chamber shift).
+  function collideTwo(simVersion: number): { world: WorldState; bId: number } {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = simVersion;
+    world.bakedSurfaceEffect.fill(0); // all-passable so the shift always finds a tile
+    const colony = createColonyRecord(COLONY_ID, 0);
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    world.colonies[COLONY_ID] = colony;
+    const aId = spawnSurfaceHolding(world, COLONY_ID, 6, 5);
+    const bId = spawnSurfaceHolding(world, COLONY_ID, 6, 5); // same tile → B (higher id) shifts
+    expect(aId).toBeLessThan(bId);
+    return { world, bId };
+  }
+
+  it('V33: a shifted colliding ant parks at tile CENTER on both axes (non-exempt write)', () => {
+    const { world, bId } = collideTwo(SIM_VERSION_V33_OCCUPANCY_CENTER);
+    tickAntMovement(world, new Rng(42), createDigFlowFields());
+    expect(uniqueTiles(world, COLONY_ID).size).toBe(2); // B was shifted off (6,5)
+    expect(world.ants.posX[bId]! & (FP_ONE - 1)).toBe(FP_ONE >> 1);
+    expect(world.ants.posY[bId]! & (FP_ONE - 1)).toBe(FP_ONE >> 1);
+  });
+
+  it('pre-V33 (V32, LATEST−1): a shifted colliding ant parks at the tile CORNER (offset 0)', () => {
+    // Pin the gate at exactly >= V33 by testing the boundary just below it. A
+    // regression mis-gating at >= V31 or >= V32 would still pass a V30 corner test
+    // (V30 < any mis-gate) yet silently break replay for real V31/V32 saves; V32
+    // here (LATEST−1) catches that. The occupancy resolver is unchanged V30→V32, so
+    // the corner write is identical at V32.
+    const { world, bId } = collideTwo(SIM_VERSION_V32_AI_OP_VALIDATION);
+    tickAntMovement(world, new Rng(42), createDigFlowFields());
+    expect(uniqueTiles(world, COLONY_ID).size).toBe(2);
+    expect(world.ants.posX[bId]! & (FP_ONE - 1)).toBe(0);
+    expect(world.ants.posY[bId]! & (FP_ONE - 1)).toBe(0);
+  });
+
+  it('V33: the exempt-tile shift (into a chamber footprint) also parks at tile CENTER', () => {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = SIM_VERSION_V33_OCCUPANCY_CENTER;
+    world.bakedSurfaceEffect.fill(0);
+    const colony = createColonyRecord(COLONY_ID, 0);
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    // Chamber footprint over the North neighbour (6,4) — the first tile the resolver
+    // tries (DIR order N,E,S,W) — so the shift takes the EXEMPT write pair.
+    colony.chambers.push({
+      chamberId: 1,
+      chamberType: ChamberType.FoodStorage,
+      foodStored: 0,
+      posX: 6 << FP_SHIFT,
+      posY: 4 << FP_SHIFT,
+      width: 1,
+      height: 1,
+    });
+    world.colonies[COLONY_ID] = colony;
+    const aId = spawnSurfaceHolding(world, COLONY_ID, 6, 5);
+    const bId = spawnSurfaceHolding(world, COLONY_ID, 6, 5);
+    expect(aId).toBeLessThan(bId);
+    tickAntMovement(world, new Rng(42), createDigFlowFields());
+    // B shifted North into the exempt chamber tile (6,4), at tile center.
+    expect(world.ants.posX[bId]! >> FP_SHIFT).toBe(6);
+    expect(world.ants.posY[bId]! >> FP_SHIFT).toBe(4);
+    expect(world.ants.posX[bId]! & (FP_ONE - 1)).toBe(FP_ONE >> 1);
+    expect(world.ants.posY[bId]! & (FP_ONE - 1)).toBe(FP_ONE >> 1);
   });
 });
 
