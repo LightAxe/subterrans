@@ -3,7 +3,8 @@
 //
 // Lives in platform/ (NOT sim/) because the sacred sim→platform import boundary
 // forbids a sim/ file from importing the full save serializer; platform→sim is
-// allowed, so here we get BOTH createScenario/tick AND save.ts serializeWorldState.
+// allowed, so here we get BOTH createScenario/tick AND (via world-hash.ts) the
+// save.ts serializer used by hashWorldState.
 //
 // NOT a normal-suite test: env-gated, SKIPS unless BYTE_GATE_MODE is set, so
 // `npm run verify` stays green and no golden hash is committed (PLAN.md D2 — a
@@ -22,9 +23,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { tick } from '../sim/tick.js';
 import { createScenario } from '../sim/scenario.js';
-import { serializeWorldState } from './save.js';
+import { hashWorldState } from './world-hash.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
-import type { WorldState } from '../sim/types.js';
 import type { SimCommand } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 
@@ -33,19 +33,8 @@ const FILE = process.env.BYTE_GATE_FILE ?? '';
 const CHECKPOINT_EVERY = 25; // hash cadence for first-divergence localization
 const PC = PLAYER_COLONY_ID as ColonyId;
 
-// FNV-1a over a string — fast, deterministic change-detection hash (not crypto).
-function fnv1a(s: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return (h >>> 0).toString(16).padStart(8, '0');
-}
-
-function hashWorld(world: WorldState): string {
-  return fnv1a(JSON.stringify(serializeWorldState(world)));
-}
+// #229 — fnv1a + hashWorldState moved to world-hash.ts (shared with the
+// cross-engine determinism proof); imported above.
 
 // Fixed command schedule: dig downward (diggers + descent toward the enemy grid →
 // underground movement + invader/combat paths) and pivot the fight ratio — exercises
@@ -129,9 +118,9 @@ function runScenario(scn: Scenario): ScenarioResult {
   const checkpoints: Array<[number, string]> = [];
   for (let t = 0; t < scn.ticks; t++) {
     tick(world, scn.commands[t] ?? []);
-    if ((t + 1) % CHECKPOINT_EVERY === 0) checkpoints.push([t + 1, hashWorld(world)]);
+    if ((t + 1) % CHECKPOINT_EVERY === 0) checkpoints.push([t + 1, hashWorldState(world)]);
   }
-  return { final: hashWorld(world), checkpoints };
+  return { final: hashWorldState(world), checkpoints };
 }
 
 function firstDivergentTick(a: ScenarioResult, b: ScenarioResult): number {

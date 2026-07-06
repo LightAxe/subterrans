@@ -93,12 +93,17 @@ export const SAVE_KEY = 'subterrans:save:v3' as const;
 export const AUTOSAVE_INTERVAL_MS = 30_000 as const;
 
 export class SaveVersionMismatchError extends Error {
-  constructor(
-    public expected: number,
-    public got: number,
-  ) {
+  // #229 — explicit fields (not `constructor(public …)` parameter properties):
+  // parameter properties are unsupported by Node's strip-only TypeScript loader,
+  // and the cross-engine determinism proof runs save.ts under `node
+  // --experimental-strip-types`. Behaviour is identical (pure desugaring).
+  expected: number;
+  got: number;
+  constructor(expected: number, got: number) {
     super(`Save format version mismatch: expected ${expected}, got ${got}`);
     this.name = 'SaveVersionMismatchError';
+    this.expected = expected;
+    this.got = got;
   }
 }
 
@@ -115,12 +120,14 @@ export class SaveVersionMismatchError extends Error {
  * fresh without deleting; user can recover by upgrading the build.
  */
 export class FutureSimVersionError extends Error {
-  constructor(
-    public got: number,
-    public latest: number,
-  ) {
+  // #229 — explicit fields (see SaveVersionMismatchError): strip-only Node compat.
+  got: number;
+  latest: number;
+  constructor(got: number, latest: number) {
     super(`Save's simVersion (${got}) is newer than this build's LATEST (${latest})`);
     this.name = 'FutureSimVersionError';
+    this.got = got;
+    this.latest = latest;
   }
 }
 
@@ -161,12 +168,15 @@ export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GU
 export const DELIBERATE_WINDOW_BREAK_AT: number | null = null;
 
 export class OldSimVersionError extends Error {
-  constructor(public got: number | null) {
+  // #229 — explicit field (see SaveVersionMismatchError): strip-only Node compat.
+  got: number | null;
+  constructor(got: number | null) {
     const gotStr = got !== null ? String(got) : 'unknown';
     super(
       `Save is from an older version (simVersion=${gotStr}); minimum accepted is ${MIN_ACCEPTED_SIM_VERSION}. Please start a new game.`,
     );
     this.name = 'OldSimVersionError';
+    this.got = got;
   }
 }
 
