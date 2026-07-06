@@ -5,11 +5,12 @@ import {
   INVALID_ENTITY_ID,
   SIM_VERSION_V24_NURSERY_CAPACITY,
   SIM_VERSION_V27_FORAGE_BACKPRESSURE,
+  SIM_VERSION_V32_AI_OP_VALIDATION,
 } from './types.js';
 import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
-import { advanceAIState, setAIRallyOperation } from './ai-state.js';
+import { advanceAIState, getAIStateForColony, setAIRallyOperation } from './ai-state.js';
 import { detectAndResolveCombat } from './combat.js';
 import { Rng } from './rng.js';
 import {
@@ -814,6 +815,25 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         if (!Array.isArray(cmd.fighterIds) || cmd.fighterIds.length === 0) break;
         // Invasion cohorts < 3 fighters trigger immediate rout on first tick; reject them.
         if (cmd.kind === 'Invasion' && cmd.fighterIds.length < 3) break;
+        // V32 (#226): validate against the colony's current AI state. ALL gated so
+        // pre-V32 replays keep their exact apply — a malformed kind is coerced to the
+        // Invasion branch by setAIRallyOperation there, and dropping it ungated would
+        // break byte-identical replay of accepted old saves. At V32+: reject a
+        // malformed kind before the state ternary can mis-route it, then require the
+        // legal source state — Probe launches only from WarFooting, Invasion
+        // cohort-commit only while already Invading (advanceAIState performs
+        // WarFooting→Invading at step 18b, before the render controller pushes this
+        // command). Illegal kind/source or unknown colony → silent drop (sibling
+        // invalid-command semantics). No legit-command-rejection race: applyCommands
+        // runs at step 1, before advanceAIState (step 18b), so the apply-time state
+        // is exactly what the emitter read.
+        if (world.simVersion >= SIM_VERSION_V32_AI_OP_VALIDATION) {
+          if (cmd.kind !== 'Probe' && cmd.kind !== 'Invasion') break;
+          const aiStateForCmd = getAIStateForColony(world, cmd.colonyId);
+          if (aiStateForCmd === null) break;
+          const legalSource = cmd.kind === 'Probe' ? 'WarFooting' : 'Invading';
+          if (aiStateForCmd.state !== legalSource) break;
+        }
         setAIRallyOperation(
           world,
           cmd.colonyId,

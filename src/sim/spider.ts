@@ -43,6 +43,7 @@ import {
   SIM_VERSION_V23_SPIDER_AGGRO,
   SIM_VERSION_V26_SPIDER_EDGE_MARGIN,
   SIM_VERSION_V31_SPIDER_TERRAIN,
+  SIM_VERSION_V32_AI_OP_VALIDATION,
 } from './types.js';
 import { FP_SHIFT } from './fixed.js';
 import { surfaceMovementAt, SurfaceMovementEffect } from './surface-features.js';
@@ -752,6 +753,23 @@ export function tickSpider(world: WorldState): void {
       emitSpiderChaseEnd(world, 'killed');
     } else if (spider.state === 'Rampaging') {
       emitSpiderRampageEnd(world, 'killed_in_nest', spider.rampageKillsThisRampage, false);
+    } else if (spider.state === 'Hunting' && world.simVersion >= SIM_VERSION_V32_AI_OP_VALIDATION) {
+      // V32 (#226): close the episode opened by spider_hunt_start — under the V23
+      // always-on combat gate a spider can die mid-telegraph. If it killed an ant in
+      // the SAME combat step it died (killedThisTick — the resolver can set it while
+      // also dropping hp<=0), report the kill exactly like the live Hunting-kill path
+      // (spider.ts:1249): outcome 'kill', deaths = killsThisStrike or at least 1.
+      // Otherwise the swarm got it with no trade: 'swarm_retreat', 0. (Pre-V23 can't
+      // reach hp<=0 while Hunting — combat excludes Hunting below V23 — so the gate's
+      // old branch covers exactly the V23–V31 range where the dangling episode existed.)
+      if (spider.killedThisTick === 1) {
+        // Report the ONE fresh same-tick kill. killsThisStrike is stale during
+        // Hunting (only reset at Hunting→Striking, so it holds the PREVIOUS strike's
+        // count), so use killedThisTick — the combat resolver sets it to at most 1.
+        emitSpiderHuntEnd(world, 'kill', spider.killedThisTick);
+      } else {
+        emitSpiderHuntEnd(world, 'swarm_retreat', 0);
+      }
     }
     clearSpiderPairingSentinels(world);
     world.spider = null;

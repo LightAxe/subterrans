@@ -14,6 +14,7 @@ import {
   SIM_VERSION_V13_INVARIANT_FIXES,
   SIM_VERSION_V20_SPIDER,
   SIM_VERSION_V23_SPIDER_AGGRO,
+  SIM_VERSION_V32_AI_OP_VALIDATION,
 } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
@@ -1180,5 +1181,51 @@ describe('S3 V23 redesign: meander + feed-after-kill replay determinism', () => 
     // Every field round-trips except killedThisTick, which is hard-defaulted 0.
     expect(after.killedThisTick).toBe(0);
     expect({ ...after, killedThisTick: before.killedThisTick }).toEqual(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCEN-06: the #226 V32 StartAIOperation command-application gate replays
+// deterministically through the full tick pipeline (AGENTS.md:132 — command-
+// application changes must include a deterministic replay test).
+// ---------------------------------------------------------------------------
+describe('SCEN-06: StartAIOperation V32 gate replay (#226)', () => {
+  const probeCmd: SimCommand = {
+    type: 'StartAIOperation',
+    colonyId: ENEMY_COLONY_ID as ColonyId,
+    kind: 'Probe',
+    rallyTileX: 40,
+    rallyTileY: 40,
+    fighterIds: [10, 11, 12],
+    issuedAtTick: 0,
+  };
+  function runFrom(sourceState: 'WarFooting' | 'Peacetime', ticks: number): WorldState {
+    const world = createScenario(7);
+    world.simVersion = SIM_VERSION_V32_AI_OP_VALIDATION;
+    const ai = world.aiState.find((a) => a.colonyId === ENEMY_COLONY_ID)!;
+    ai.state = sourceState;
+    ai.operationKind = 'None';
+    for (let t = 0; t < ticks; t++) tick(world, t === 0 ? [probeCmd] : []);
+    return world;
+  }
+  // The Probe emits a WarFooting→Probing ai_state_transition when it APPLIES — a
+  // direct signal of the gate's effect (serializeWorldState omits world.aiState).
+  const appliedProbe = (w: WorldState): boolean =>
+    w.events.some((e) => e.type === 'ai_state_transition' && e.payload.to === 'Probing');
+
+  it('applies a legal Probe (WarFooting), drops an illegal one (Peacetime), and replays deterministically', () => {
+    // Legal source → the gate lets the Probe through the full tick pipeline.
+    expect(appliedProbe(runFrom('WarFooting', 1))).toBe(true);
+    // Illegal source → the V32 gate silently drops it (no transition to Probing).
+    expect(appliedProbe(runFrom('Peacetime', 1))).toBe(false);
+    // Deterministic replay: two identical legal runs reach byte-identical world AND
+    // the same AI operation state (which serializeWorldState does not itself cover).
+    const a = runFrom('WarFooting', 20);
+    const b = runFrom('WarFooting', 20);
+    expect(serializeWorldState(a)).toBe(serializeWorldState(b));
+    const aiA = a.aiState.find((x) => x.colonyId === ENEMY_COLONY_ID)!;
+    const aiB = b.aiState.find((x) => x.colonyId === ENEMY_COLONY_ID)!;
+    expect(aiA.state).toBe(aiB.state);
+    expect(aiA.operationKind).toBe(aiB.operationKind);
   });
 });

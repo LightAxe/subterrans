@@ -1,7 +1,9 @@
 // src/sim/ai-state.ts
 // S2 — narrow sim helpers for AI state machine mutation + event emission.
 //
-// Render-side ai-controller.ts calls these helpers; it never writes world.aiState.* directly.
+// advanceAIState runs in-sim at tick step 18b (tick.ts); setAIRallyOperation is
+// applied by tick.ts's StartAIOperation command handler. Render-side ai-controller.ts
+// only pushes commands and reads state; it never writes world.aiState.* directly.
 // Per CF-P0-004 / ADR-0007: sim owns mutation and event emission; render owns policy.
 //
 // QC Pass 4 AR-P0-001: S2 V17 ships Normal-only tier reads. S5 V22 gates all
@@ -190,7 +192,7 @@ function allProbeFightersDone(world: WorldState, aiState: AIStateRecord): boolea
 
 /**
  * Evaluate AI state machine transitions for one tick and mutate world.aiState.
- * Called from render-side aiStateMachineTick; never called with a player colony.
+ * Called from tick() at step 18b for every world.aiState record; never called with a player colony.
  * Returns the (potentially updated) AIStateRecord for the colony.
  */
 export function advanceAIState(world: WorldState, aiColonyId: ColonyId): AIStateRecord {
@@ -475,7 +477,8 @@ function _clearOperationFields(aiState: AIStateRecord): void {
 /**
  * Atomically writes rally/operation state and transitions to Probing or Invading.
  * Emits invasion_start for Invasion operations.
- * Called by render-side ai-controller.ts after target selection.
+ * Applied by tick.ts's StartAIOperation command handler; render-side ai-controller.ts
+ * selects the target and pushes the command (ADR-0007).
  */
 export function setAIRallyOperation(
   world: WorldState,
@@ -487,6 +490,11 @@ export function setAIRallyOperation(
 ): void {
   let aiState = getAIStateForColony(world, aiColonyId);
   if (aiState === null) return;
+  // #226 — record the pre-transition state so the ai_state_transition event below
+  // reports the actual source, not a hardcoded 'WarFooting'. Ungated: the payload
+  // is transient (never persisted, not in the byte-compare) and the emission
+  // count/order is unchanged. In legal flows fromState is always 'WarFooting'.
+  const fromState = aiState.state;
 
   const count = Math.min(committedFighterIds.length, AI_MAX_OPERATION_FIGHTERS);
   aiState.operationKind = operationKind;
@@ -507,9 +515,9 @@ export function setAIRallyOperation(
     aiState.invasionRallyTileY = rallyTileY;
     aiState.state = 'Probing';
     aiState.enteredTick = world.tick;
-    // ai_state_transition event emitted by advanceAIState caller check
-    // (but since setAIRallyOperation is called from the render controller AFTER
-    // advanceAIState, we emit it here directly)
+    // The WarFooting→Probing transition happens HERE, not in advanceAIState
+    // (_tryTransitionWarFootingToProbing mutates no state), so this function emits
+    // the ai_state_transition event directly.
     const fighters = aiFighterCount(world, aiColonyId);
     const foodStored = aiFoodStored(world, aiColonyId);
     const foodCap = aiFoodCapacity(world, aiColonyId);
@@ -518,7 +526,7 @@ export function setAIRallyOperation(
       type: 'ai_state_transition',
       payload: {
         colonyId: aiColonyId,
-        from: 'WarFooting',
+        from: fromState,
         to: 'Probing',
         triggerValues: {
           aiFighterCount: fighters,

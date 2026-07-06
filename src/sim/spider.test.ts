@@ -10,7 +10,9 @@ import {
   SIM_VERSION_V23_SPIDER_AGGRO,
   SIM_VERSION_V26_SPIDER_EDGE_MARGIN,
   SIM_VERSION_V31_SPIDER_TERRAIN,
+  SIM_VERSION_V32_AI_OP_VALIDATION,
 } from './types.js';
+import { PLAYTRACE_EVENT_CAP_PER_ROUND } from './telemetry.js';
 import { tickSpider, isSpiderPassable, computeFeedAwayTile } from './spider.js';
 import { SurfaceMovementEffect } from './surface-features.js';
 import { initAnt } from './ant/ant-store.js';
@@ -476,6 +478,80 @@ describe('tickSpider', () => {
         expect(evt.payload.outcome).toBe('swarm_retreat');
         expect(evt.payload.deaths).toBe(2);
       }
+    });
+
+    it('V32: emits spider_hunt_end(swarm_retreat, deaths 0) when dying while Hunting (#226)', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V32_AI_OP_VALIDATION;
+      // killsThisStrike is deliberately nonzero: deaths must still report 0, since
+      // that counter holds the PREVIOUS strike's kills during the Hunting telegraph.
+      world.spider = makeSpider({ state: 'Hunting', hp: 0, killsThisStrike: 2 });
+      tickSpider(world);
+      expect(world.spider).toBeNull();
+      const evt = world.events.find((e) => e.type === 'spider_hunt_end');
+      expect(evt).toBeDefined();
+      if (evt?.type === 'spider_hunt_end') {
+        expect(evt.payload.outcome).toBe('swarm_retreat');
+        expect(evt.payload.deaths).toBe(0);
+      }
+    });
+
+    it('V32: a same-tick Hunting kill + death reports outcome kill with exactly the fresh death (#226)', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V32_AI_OP_VALIDATION;
+      // The combat resolver can set killedThisTick=1 while also dropping hp<=0 in the
+      // same step. killsThisStrike is deliberately STALE (5, from a prior strike) — the
+      // report must use the one fresh same-tick kill (killedThisTick), not the stale count.
+      world.spider = makeSpider({ state: 'Hunting', hp: 0, killedThisTick: 1, killsThisStrike: 5 });
+      tickSpider(world);
+      const evt = world.events.find((e) => e.type === 'spider_hunt_end');
+      expect(evt).toBeDefined();
+      if (evt?.type === 'spider_hunt_end') {
+        expect(evt.payload.outcome).toBe('kill');
+        expect(evt.payload.deaths).toBe(1); // NOT the stale killsThisStrike (5)
+      }
+    });
+
+    it('pre-V32: dying while Hunting emits no spider_hunt_end (dangling episode preserved)', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V31_SPIDER_TERRAIN;
+      world.spider = makeSpider({ state: 'Hunting', hp: 0, killsThisStrike: 2 });
+      tickSpider(world);
+      expect(world.spider).toBeNull();
+      expect(world.events.some((e) => e.type === 'spider_hunt_end')).toBe(false);
+    });
+
+    it('V32 cap-full: dying while Hunting bumps a persisted dropped-event counter (byte-impact pin)', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V32_AI_OP_VALIDATION;
+      // Fill the event buffer to the hard cap so the added hunt_end overflows and
+      // bumps a PERSISTED dropped counter — the exact divergence that requires
+      // gating this emission (#226 item 1).
+      for (let i = 0; i < PLAYTRACE_EVENT_CAP_PER_ROUND; i++) {
+        world.events.push({
+          tick: 0,
+          type: 'spider_hunt_end',
+          payload: { outcome: 'kill', deaths: 0 },
+        });
+      }
+      world.spider = makeSpider({ state: 'Hunting', hp: 0 });
+      tickSpider(world);
+      expect(world.droppedStructuralCount + world.droppedCombatKillCount).toBeGreaterThan(0);
+    });
+
+    it('pre-V32 cap-full: dying while Hunting emits nothing, dropped counters unchanged', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V31_SPIDER_TERRAIN;
+      for (let i = 0; i < PLAYTRACE_EVENT_CAP_PER_ROUND; i++) {
+        world.events.push({
+          tick: 0,
+          type: 'spider_hunt_end',
+          payload: { outcome: 'kill', deaths: 0 },
+        });
+      }
+      world.spider = makeSpider({ state: 'Hunting', hp: 0 });
+      tickSpider(world);
+      expect(world.droppedStructuralCount + world.droppedCombatKillCount).toBe(0);
     });
   });
 
