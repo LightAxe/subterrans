@@ -326,15 +326,6 @@ describe('WorldState', () => {
         src.ants.waitingDeposit[0] = 0;
         expect(dst.ants.waitingDeposit[0]).toBe(1);
       });
-      it('Issue #34: pathErr copied (Bresenham accumulator)', () => {
-        src.ants.pathErr[0] = 42;
-        src.ants.pathErr[1] = -7;
-        copyWorldState(src, dst);
-        expect(dst.ants.pathErr[0]).toBe(42);
-        expect(dst.ants.pathErr[1]).toBe(-7);
-        src.ants.pathErr[0] = 0;
-        expect(dst.ants.pathErr[0]).toBe(42);
-      });
       it('Issue #35: searchPauseTicks copied (pause-while-searching counter)', () => {
         src.ants.searchPauseTicks[0] = 5;
         copyWorldState(src, dst);

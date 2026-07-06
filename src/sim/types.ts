@@ -943,10 +943,8 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   // sees the same wait state as the current frame, and so SCEN-06 replay
   // determinism is preserved across save/reload boundaries.
   dst.ants.waitingDeposit.set(src.ants.waitingDeposit);
-  // Issue #34 — Bresenham accumulator and #35 — pause counter. Both round-
-  // trip for SCEN-06 replay determinism (same seed + commands → same
-  // step pattern + pause schedule).
-  dst.ants.pathErr.set(src.ants.pathErr);
+  // Issue #35 — pause counter. Round-trips for SCEN-06 replay determinism
+  // (same seed + commands → same pause schedule).
   dst.ants.searchPauseTicks.set(src.ants.searchPauseTicks);
   // Issue #42 — recent-tiles ring buffer. The buffer is read by the v6
   // forager step-picker, so it must round-trip for replay determinism.

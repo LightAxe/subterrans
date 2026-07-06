@@ -86,10 +86,8 @@ function serializeWorldState(w: WorldState): string {
       // determinism asserts so a divergence in wait-state would break the
       // byte-identical compare.
       waitingDeposit: Array.from(w.ants.waitingDeposit),
-      // Issue #34 / #35 — Bresenham accumulator + pause counter. Same
-      // round-trip rationale: divergence in either field changes future
-      // tick output, so determinism compare must include them.
-      pathErr: Array.from(w.ants.pathErr),
+      // Issue #35 — pause counter. Divergence changes future tick output, so the
+      // determinism compare must include it.
       searchPauseTicks: Array.from(w.ants.searchPauseTicks),
       // Phase 9 / S3 combat fields — spider writes these every tick; omitting
       // them would silently pass even if resolveSpiderCombatOnTile diverges.

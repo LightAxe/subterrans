@@ -6408,15 +6408,6 @@ describe('pickCardinalStep (issue #34) — v2/v3 legacy greedy cardinal', () => 
     expect(step(pickCardinalStep(ants, 0, 0, -3, SIM_VERSION_V3))).toEqual({ dx: 0, dy: -1 });
   });
 
-  it('v3 leaves pathErr untouched (the accumulator is dead state on every path)', () => {
-    // pathErr is preserved on the SoA / save-format only for forward-compat;
-    // pickCardinalStep neither reads nor writes it under v3 or v4.
-    const ants = emptyAnts();
-    ants.pathErr[0] = 99;
-    pickCardinalStep(ants, 0, 5, 5, SIM_VERSION_V3);
-    expect(ants.pathErr[0]).toBe(99);
-  });
-
   it('LEGACY_SIM_VERSION (v2) uses the same legacy greedy path as v3', () => {
     // v2 was the issue-#15 baseline; v2 → v3 only shifted withdrawFood
     // ordering (issue #27), never the movement algorithm. Both replay
@@ -6514,16 +6505,6 @@ describe('pickCardinalStep (issue #34) — v4 8-connected diagonal', () => {
     const ants = emptyAnts();
     const stepP = pickCardinalStep(ants, 0, 2, -2, SIM_VERSION_V4_DIAGONAL_MOTION);
     expect(step(stepP)).toEqual({ dx: 1, dy: -1 });
-  });
-
-  it('v4 leaves pathErr untouched when stepping diagonally', () => {
-    // The accumulator is unused on the v4 path. A pre-existing non-zero
-    // value must survive the call so a legacy save mid-replay (resuming
-    // under v2 sticky version) keeps its accumulator state.
-    const ants = emptyAnts();
-    ants.pathErr[0] = 7;
-    pickCardinalStep(ants, 0, 5, 5, SIM_VERSION_V4_DIAGONAL_MOTION);
-    expect(ants.pathErr[0]).toBe(7);
   });
 });
 

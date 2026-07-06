@@ -382,16 +382,10 @@ export function tickAntMovement(
         }
       }
       if (!stepped) {
-        // Cache absent (test harness) — retain the original Manhattan step
-        // routed through pickCardinalStep (issue #34) so the test path
-        // gets the same Bresenham accumulator as the production flow-
-        // field path.
-        //
-        // Codex coord-scale fix: deltas converted to tile-space so the
-        // shared per-ant `pathErr` accumulator stays in a single unit
-        // across all 9 call sites. Mixing FP and tile inputs leaves
-        // FP-era debt that dwarfs tile-era comparisons, producing long
-        // one-axis stair-steps when an ant transitions between tasks.
+        // Cache absent (test harness) — retain the original Manhattan step via
+        // pickCardinalStep; deltas are tile-space (all call sites pass tile
+        // units, a single consistent unit), matching
+        // the production flow-field path's step selection.
         const step = pickCardinalStep(
           ants,
           id,
@@ -522,8 +516,8 @@ export function tickAntMovement(
       }
 
       if (!stepped) {
-        // Issue #34 + codex coord-scale fix: tile-space deltas (see the
-        // chamber-target site above for rationale).
+        // Codex coord-scale fix: tile-space deltas (see the chamber-target site
+        // above for the same-tile rationale).
         const step = pickCardinalStep(
           ants,
           id,
@@ -719,7 +713,8 @@ export function tickAntMovement(
         // "come home". Pre-V25 also recalled on fight===0, which fought an explicit
         // rally on the enemy entrance and bounced invaders at the shaft. Kept gated
         // for byte-identical replay of pre-V25 saves. Must stay in lockstep with the
-        // ascent skipAscent predicate below (~line 5210).
+        // ascent `isRecallingFromForeign` / `skipAscent` predicate in the
+        // surface-ascent block later in tickAntMovement.
         const isRecalling =
           ownColony != null &&
           (world.simVersion >= SIM_VERSION_V25_RALLY_RECALL
@@ -790,11 +785,11 @@ export function tickAntMovement(
       }
 
       if (haveTarget) {
-        // Issue #34 + codex coord-scale fix: rawDx/rawDy were FP-space
-        // (target − pos, both fp). Recompute as tile-space so the shared
-        // per-ant accumulator stays consistent with the queen and scent
-        // paths. The original target value is recoverable as
-        // `rawDx + posX` (== absolute fp target X).
+        // Codex coord-scale fix: rawDx/rawDy were FP-space (target − pos, both
+        // fp). Recompute as tile-space so the same-tile hold (absDx/absDy === 0
+        // in pickCardinalStep) is decided in tile units, matching the queen and
+        // scent paths. The original target is recoverable as `rawDx + posX`
+        // (== absolute fp target X).
         const targetTileX = (rawDx + posX) >> FP_SHIFT;
         const targetTileY = (rawDy + posY) >> FP_SHIFT;
         const tileX = posX >> FP_SHIFT;
@@ -1361,7 +1356,8 @@ export function tickAntMovement(
           // ascend the moment they reached tileY=0 on the enemy entrance column
           // even with a rally explicitly set there, producing a descend/ascend
           // bounce. Kept gated for byte-identical replay. Must match the
-          // underground recall-navigation predicate above (~line 4600).
+          // underground recall-navigation `isRecalling` predicate in the
+          // recalled-invader block earlier in tickAntMovement.
           const ownColonyForAscent = world.colonies[ants.colonyId[id]!];
           const isRecallingFromForeign =
             !inOwnGrid &&
