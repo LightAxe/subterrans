@@ -755,12 +755,18 @@ export function tickSpider(world: WorldState): void {
       emitSpiderRampageEnd(world, 'killed_in_nest', spider.rampageKillsThisRampage, false);
     } else if (spider.state === 'Hunting' && world.simVersion >= SIM_VERSION_V32_AI_OP_VALIDATION) {
       // V32 (#226): close the episode opened by spider_hunt_start — under the V23
-      // always-on combat gate a spider can die mid-telegraph. deaths is 0, not
-      // killsThisStrike: that counter only resets at Hunting→Striking, so during
-      // Hunting it still holds the PREVIOUS strike's kills. (Pre-V23 can't reach
-      // hp<=0 while Hunting — combat excludes Hunting below V23 — so the gate's old
-      // branch covers exactly the V23–V31 range where the dangling episode existed.)
-      emitSpiderHuntEnd(world, 'swarm_retreat', 0);
+      // always-on combat gate a spider can die mid-telegraph. If it killed an ant in
+      // the SAME combat step it died (killedThisTick — the resolver can set it while
+      // also dropping hp<=0), report the kill exactly like the live Hunting-kill path
+      // (spider.ts:1249): outcome 'kill', deaths = killsThisStrike or at least 1.
+      // Otherwise the swarm got it with no trade: 'swarm_retreat', 0. (Pre-V23 can't
+      // reach hp<=0 while Hunting — combat excludes Hunting below V23 — so the gate's
+      // old branch covers exactly the V23–V31 range where the dangling episode existed.)
+      if (spider.killedThisTick === 1) {
+        emitSpiderHuntEnd(world, 'kill', spider.killsThisStrike > 0 ? spider.killsThisStrike : 1);
+      } else {
+        emitSpiderHuntEnd(world, 'swarm_retreat', 0);
+      }
     }
     clearSpiderPairingSentinels(world);
     world.spider = null;

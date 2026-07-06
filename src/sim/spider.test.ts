@@ -496,6 +496,21 @@ describe('tickSpider', () => {
       }
     });
 
+    it('V32: a same-tick Hunting kill + death reports outcome kill with >=1 death (#226)', () => {
+      const world = makeWorld();
+      world.simVersion = SIM_VERSION_V32_AI_OP_VALIDATION;
+      // The combat resolver can set killedThisTick=1 while also dropping hp<=0 in the
+      // same step — the hunt episode closed as a no-death retreat would under-count it.
+      world.spider = makeSpider({ state: 'Hunting', hp: 0, killedThisTick: 1, killsThisStrike: 0 });
+      tickSpider(world);
+      const evt = world.events.find((e) => e.type === 'spider_hunt_end');
+      expect(evt).toBeDefined();
+      if (evt?.type === 'spider_hunt_end') {
+        expect(evt.payload.outcome).toBe('kill');
+        expect(evt.payload.deaths).toBeGreaterThanOrEqual(1);
+      }
+    });
+
     it('pre-V32: dying while Hunting emits no spider_hunt_end (dangling episode preserved)', () => {
       const world = makeWorld();
       world.simVersion = SIM_VERSION_V31_SPIDER_TERRAIN;
