@@ -14,6 +14,7 @@ import {
   SIM_VERSION_V13_INVARIANT_FIXES,
   SIM_VERSION_V20_SPIDER,
   SIM_VERSION_V23_SPIDER_AGGRO,
+  SIM_VERSION_V32_AI_OP_VALIDATION,
 } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
@@ -1180,5 +1181,39 @@ describe('S3 V23 redesign: meander + feed-after-kill replay determinism', () => 
     // Every field round-trips except killedThisTick, which is hard-defaulted 0.
     expect(after.killedThisTick).toBe(0);
     expect({ ...after, killedThisTick: before.killedThisTick }).toEqual(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCEN-06: the #226 V32 StartAIOperation command-application gate replays
+// deterministically through the full tick pipeline (AGENTS.md:132 — command-
+// application changes must include a deterministic replay test).
+// ---------------------------------------------------------------------------
+describe('SCEN-06: StartAIOperation V32 gate replay (#226)', () => {
+  it('a StartAIOperation applied through tick replays byte-identically', () => {
+    function run(): string {
+      const world = createScenario(7);
+      world.simVersion = SIM_VERSION_V32_AI_OP_VALIDATION;
+      // Force the AI colony to the legal source state so the injected Probe is
+      // APPLIED through the V32 gate (exercises the apply path and its downstream
+      // rally behavior across the replay window, not just a no-op drop).
+      const ai = world.aiState.find((a) => a.colonyId === ENEMY_COLONY_ID);
+      if (ai) ai.state = 'WarFooting';
+      const cmd: SimCommand = {
+        type: 'StartAIOperation',
+        colonyId: ENEMY_COLONY_ID as ColonyId,
+        kind: 'Probe',
+        rallyTileX: 40,
+        rallyTileY: 40,
+        fighterIds: [10, 11, 12],
+        issuedAtTick: 0,
+      };
+      for (let t = 0; t < 20; t++) tick(world, t === 0 ? [cmd] : []);
+      return serializeWorldState(world);
+    }
+    // Two independent replays from the same seed + input sequence must be
+    // byte-for-byte identical — the new V32 apply/drop path introduces no
+    // non-determinism into command application.
+    expect(run()).toBe(run());
   });
 });
