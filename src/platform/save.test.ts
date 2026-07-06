@@ -157,25 +157,31 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // chokes on a missing field and deleteSave()s a newer-build save — including
       // migrated saves that keep their in-window sticky simVersion. This is the key
       // property: every window-stamped save carries every key the deployed
-      // deserializer requires. Reap the vestige once MIN_ACCEPTED passes it.
+      // deserializer requires. Reap the vestige once MIN_ACCEPTED > V32.
       const w = createScenario(42);
       const s = serializeWorldState(w);
       expect('pathErr' in s.ants).toBe(true);
-      expect(s.ants.pathErr.length).toBe(w.ants.posX.length);
+      // Pin length against the serialized `count` (the capacity anchor the LOADER
+      // uses), not the impl's own `a.posX.length` — catches a capacity-coupling regression.
+      expect(s.ants.pathErr.length).toBe(s.ants.count);
       expect(s.ants.pathErr.every((v) => v === 0)).toBe(true);
     });
-    it('#243: deserialize ignores the pathErr vestige regardless of its values', () => {
+    it('#243: deserialize ignores the pathErr vestige and never lets its values leak back out', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
       // Non-zero pathErr (as a legacy save could carry) must be ignored, not read
       // into any runtime state — the field no longer exists at runtime.
       const withValues = {
         ...s,
-        ants: { ...s.ants, pathErr: new Array<number>(w.ants.posX.length).fill(7) },
+        ants: { ...s.ants, pathErr: new Array<number>(s.ants.count).fill(7) },
       };
       expect(() => deserializeWorldState(withValues)).not.toThrow();
       const w2 = deserializeWorldState(withValues);
       expect(Array.from(w2.ants.posX.slice(0, 5))).toEqual(Array.from(w.ants.posX.slice(0, 5)));
+      // The 7s must not survive a re-serialize — the runtime field is gone, so the
+      // emitted vestige is unconditionally zeros (write-only proven end-to-end).
+      const reserialized = serializeWorldState(w2);
+      expect(reserialized.ants.pathErr.every((v) => v === 0)).toBe(true);
     });
     it('rehydrates every Int32Array ant field with correct values', () => {
       const w = createScenario(42);

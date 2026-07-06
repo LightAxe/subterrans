@@ -446,8 +446,11 @@ interface SerializedAnts {
   // keeps emitting a zeros array so an OLDER build (which still reads this key via
   // copyIntoInt32) never chokes on a missing field and deleteSave()s a save written
   // by a newer build — including MIGRATED saves that keep their in-window sticky
-  // simVersion. Reap this vestige once MIN_ACCEPTED_SIM_VERSION passes the version
-  // that introduced the removal. Deserialize ignores it.
+  // simVersion. Reap this vestige once MIN_ACCEPTED_SIM_VERSION > V32 (the LATEST
+  // when it shipped): then every save a post-reap build writes is stamped > V32, so
+  // an old pathErr-reading build rejects it as FutureSimVersionError (preserved, not
+  // corrupt) at the version gate before the ant shape ever matters. Deserialize
+  // ignores it.
   pathErr: number[];
   searchPauseTicks: number[];
   // PR 5 C-both — recent-tiles ring, COMPACT canonical encoding (not the flat
