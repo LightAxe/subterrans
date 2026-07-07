@@ -3433,6 +3433,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > S
     {
       "colonyId": 2,
       "issuedAtTick": 0,
+      "origin": "sim",
       "type": "ClearRallyPoint",
     },
   ],

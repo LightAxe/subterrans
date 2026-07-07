@@ -15,6 +15,7 @@ import {
 } from './commands.js';
 import { ChamberType } from './enums.js';
 import { createWorldState } from './types.js';
+import { tick } from './tick.js';
 
 describe('SimCommand', () => {
   describe('NoOpCommand assignability', () => {
@@ -387,6 +388,30 @@ describe('SimCommand', () => {
       // SimCommand and apply unchanged — no handler branches on origin.
       const legacy: SimCommand = { type: 'NoOp', issuedAtTick: 0 };
       expect(legacy.origin).toBeUndefined();
+    });
+  });
+
+  describe('droppedCommandOverflowCount (#230)', () => {
+    it('counts exactly the non-Sync commands dropped past MAX_COMMANDS_PER_TICK', () => {
+      const world = createWorldState(3);
+      expect(world.droppedCommandOverflowCount).toBe(0); // fresh world starts at 0
+      const n = MAX_COMMANDS_PER_TICK + 6; // 70
+      const cmds: SimCommand[] = Array.from({ length: n }, (_, i) => ({
+        type: 'NoOp' as const,
+        issuedAtTick: i,
+      }));
+      tick(world, cmds);
+      expect(world.droppedCommandOverflowCount).toBe(6); // 70 - 64
+    });
+
+    it('does not count when at/under the cap', () => {
+      const world = createWorldState(4);
+      const cmds: SimCommand[] = Array.from({ length: MAX_COMMANDS_PER_TICK }, (_, i) => ({
+        type: 'NoOp' as const,
+        issuedAtTick: i,
+      }));
+      tick(world, cmds);
+      expect(world.droppedCommandOverflowCount).toBe(0);
     });
   });
 

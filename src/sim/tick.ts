@@ -303,7 +303,15 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
   for (let i = 0; i < commands.length; i++) {
     const cmd = commands[i]!;
     if (cmd.type === 'SyncAIState') continue;
-    if (nonSyncCmdCount >= MAX_COMMANDS_PER_TICK) break;
+    if (nonSyncCmdCount >= MAX_COMMANDS_PER_TICK) {
+      // #230 — the FIFO drop past the cap was formerly silent. Count the dropped
+      // gameplay (non-Sync) commands into the transient session counter for
+      // observability. Transient + unserialized ⇒ byte-identical replay.
+      for (let j = i; j < commands.length; j++) {
+        if (commands[j]!.type !== 'SyncAIState') world.droppedCommandOverflowCount++;
+      }
+      break;
+    }
     nonSyncCmdCount++;
     switch (cmd.type) {
       case 'NoOp':
