@@ -22,6 +22,7 @@ import type { ColonyId } from './colony/colony-store.js';
 import type { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
 import { emitEvent } from './telemetry.js';
+import { getScratch } from './scratch.js';
 import {
   COMBAT_HP_HOMEGROUND_BONUS,
   COMBAT_DAMAGE_BASE,
@@ -40,31 +41,30 @@ import { isInCohort } from './ai-state.js';
 // ---------------------------------------------------------------------------
 // Per-tick combat-sweep scratch (no-alloc rule, AGENTS.md hot-loop section).
 //
-// These module-level buffers are TRANSIENT scratch: reset at the top of
-// detectAndResolveCombat and fully consumed within that single synchronous
-// call. They hold no cross-tick or cross-world state — a tick runs to
-// completion before any other world ticks — so, like SPIDER_TILE_SCRATCH
-// below, sharing one module instance across worlds cannot bleed state (this
-// is unlike the persistent flow-field caches, which are correctly scoped
-// per-world). They replace the per-tick Map/Set/Array.from/sort allocations
-// the bucketing sweep used to make on every tick, including no-combat ticks.
+// #231 — these sweep buffers now live on the per-world scratch arena
+// (getScratch(world).combat: liveIdx, keyBySlot, contested; spiderTile below), so
+// two worlds ticking in one process (Phase 6 background/replay, Phase 7 rollback)
+// no longer share them. Reset semantics, sizes, and iteration order are unchanged,
+// so replay stays byte-identical. They still replace the per-tick
+// Map/Set/Array.from/sort allocations the bucketing sweep used to make every tick.
 //
-//   COMBAT_LIVE_IDX   — live, colony-affiliated ant slots, sorted by
-//                       (tileKey, slot) ascending.
-//   COMBAT_KEY_BY_SLOT — tileKey indexed by ant slot (written for live slots
-//                       only; read by the sort comparator and run-walk).
-//   COMBAT_CONTESTED  — 1 for ants on a multi-colony tile this tick, else 0.
-// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: reset (length=0) at the top of each combat-resolution tick
-const COMBAT_LIVE_IDX: number[] = [];
-// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: lazily grown per tick; written for live slots before any read
-let COMBAT_KEY_BY_SLOT = new Int32Array(0);
-// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: lazily grown per tick; zeroed before use
-let COMBAT_CONTESTED = new Uint8Array(0);
+//   combat.liveIdx   — live, colony-affiliated ant slots, sorted (tileKey, slot).
+//   combat.keyBySlot — tileKey indexed by ant slot (written for live slots only;
+//                      read by the sort comparator via ACTIVE_COMBAT_KEYS + run-walk).
+//   combat.contested — 1 for ants on a multi-colony tile this tick, else 0.
+//
+// ACTIVE_COMBAT_KEYS is a transient access-pointer to the CURRENT world's
+// keyBySlot, reassigned at the top of every detectAndResolveCombat before the sort
+// — Array.sort's comparator can't take extra args, so compareBySweepKey reads it.
+// It holds no cross-world DATA (reset before each synchronous sort; single-thread
+// ticking is atomic per world; workers do not share module memory).
+// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: transient sort-access pointer, reassigned before each detectAndResolveCombat sort; holds no cross-world data
+let ACTIVE_COMBAT_KEYS = new Int32Array(0);
 
 /** Sort comparator: tileKey ascending, then ant slot ascending (deterministic). */
 function compareBySweepKey(a: number, b: number): number {
-  const ka = COMBAT_KEY_BY_SLOT[a]!;
-  const kb = COMBAT_KEY_BY_SLOT[b]!;
+  const ka = ACTIVE_COMBAT_KEYS[a]!;
+  const kb = ACTIVE_COMBAT_KEYS[b]!;
   return ka !== kb ? ka - kb : a - b;
 }
 
@@ -76,20 +76,24 @@ function compareBySweepKey(a: number, b: number): number {
 export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
   const { ants } = world;
   const count = ants.alive.length;
+  const s = getScratch(world);
 
-  if (COMBAT_KEY_BY_SLOT.length < count) COMBAT_KEY_BY_SLOT = new Int32Array(count);
-  if (COMBAT_CONTESTED.length < count) COMBAT_CONTESTED = new Uint8Array(count);
-  COMBAT_CONTESTED.fill(0, 0, count);
+  if (s.combat.keyBySlot.length < count) s.combat.keyBySlot = new Int32Array(count);
+  if (s.combat.contested.length < count) s.combat.contested = new Uint8Array(count);
+  const keyBySlot = s.combat.keyBySlot;
+  const contested = s.combat.contested;
+  ACTIVE_COMBAT_KEYS = keyBySlot; // comparator access-pointer for the sort below
+  contested.fill(0, 0, count);
 
   // Collect live, colony-affiliated ants and their tileKeys (ascending by slot).
-  const liveIdx = COMBAT_LIVE_IDX;
+  const liveIdx = s.combat.liveIdx;
   liveIdx.length = 0;
   for (let i = 0; i < count; i++) {
     if (ants.alive[i] !== 1) continue;
     if (ants.colonyId[i] === 0) continue;
     const tileX = ants.posX[i]! >> FP_SHIFT;
     const tileY = ants.posY[i]! >> FP_SHIFT;
-    COMBAT_KEY_BY_SLOT[i] = makeTileKey(
+    keyBySlot[i] = makeTileKey(
       ants.zone[i] as unknown as Zone,
       tileX,
       tileY,
@@ -109,9 +113,9 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
   // cleared so the next encounter triggers a fresh windup (Codex P1 finding).
   for (let p = 0; p < m; ) {
     const runStart = p;
-    const key = COMBAT_KEY_BY_SLOT[liveIdx[p]!]!;
+    const key = keyBySlot[liveIdx[p]!]!;
     p++;
-    while (p < m && COMBAT_KEY_BY_SLOT[liveIdx[p]!]! === key) p++;
+    while (p < m && keyBySlot[liveIdx[p]!]! === key) p++;
     if (p - runStart < 2) continue;
     const firstCid = ants.colonyId[liveIdx[runStart]!]!;
     let multiColony = false;
@@ -122,7 +126,7 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
       }
     }
     if (multiColony) {
-      for (let q = runStart; q < p; q++) COMBAT_CONTESTED[liveIdx[q]!] = 1;
+      for (let q = runStart; q < p; q++) contested[liveIdx[q]!] = 1;
     }
   }
   // Spider-pairing sentinel (-2) handling differs by version:
@@ -175,7 +179,7 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
       }
       continue;
     }
-    if (COMBAT_CONTESTED[i] === 0) {
+    if (contested[i] === 0) {
       ants.combatOpponentId[i] = -1;
     }
   }
@@ -184,9 +188,9 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
   // colony split internally and returns early for single-colony runs.
   for (let p = 0; p < m; ) {
     const runStart = p;
-    const key = COMBAT_KEY_BY_SLOT[liveIdx[p]!]!;
+    const key = keyBySlot[liveIdx[p]!]!;
     p++;
-    while (p < m && COMBAT_KEY_BY_SLOT[liveIdx[p]!]! === key) p++;
+    while (p < m && keyBySlot[liveIdx[p]!]! === key) p++;
     if (p - runStart < 2) continue;
     resolveCombatOnTile_v16(world, liveIdx, runStart, p);
   }
@@ -520,10 +524,8 @@ export function killAnt(
 // S3 — Spider combat resolver
 // ---------------------------------------------------------------------------
 
-// Module-level scratch buffer: reused each call to resolveSpiderCombatOnTile to
-// avoid per-tick allocation in the combat hot path (AGENTS.md no-alloc rule).
-// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: reset (length=0) at the top of each resolveSpiderCombatOnTile call
-const SPIDER_TILE_SCRATCH: number[] = [];
+// #231 — the spider on-tile scratch list now lives on the per-world arena
+// (getScratch(world).combat.spiderTile); resolveSpiderCombatOnTile reads it below.
 
 /**
  * Resolve one combat tick between the spider and ants on its tile.
@@ -586,7 +588,7 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
   const loY = margin;
   const hiY = SURFACE_GRID_HEIGHT - 1 - margin;
 
-  const onTile = SPIDER_TILE_SCRATCH;
+  const onTile = getScratch(world).combat.spiderTile;
   onTile.length = 0;
   const count = ants.alive.length;
   for (let i = 0; i < count; i++) {
