@@ -54,7 +54,6 @@ import {
   DIR_DY,
   canEnterSurfaceTile,
   canEnterUndergroundTile,
-  cardinalStepScratch,
   diagonalizeFlowStep,
   getTaskDirection,
   isDescentBlocked,
@@ -373,10 +372,10 @@ export function tickAntMovement(
               DIR_DY[dir]!,
               task as AntTask,
               world.simVersion,
-              cardinalStepScratch,
+              getScratch(world).motion.cardinalStep,
             );
-            dx = cardinalStepScratch.dx;
-            dy = cardinalStepScratch.dy;
+            dx = getScratch(world).motion.cardinalStep.dx;
+            dy = getScratch(world).motion.cardinalStep.dy;
             stepped = true;
           }
           // dir === -2 is unreachable here — chamberFoodUnreachable was set
@@ -441,10 +440,10 @@ export function tickAntMovement(
               DIR_DY[dir]!,
               task as AntTask,
               world.simVersion,
-              cardinalStepScratch,
+              getScratch(world).motion.cardinalStep,
             );
-            dx = cardinalStepScratch.dx;
-            dy = cardinalStepScratch.dy;
+            dx = getScratch(world).motion.cardinalStep.dx;
+            dy = getScratch(world).motion.cardinalStep.dy;
             stepped = true;
           } else {
             // dir === -2 (unreachable). Deterministic failsafe: hold position

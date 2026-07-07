@@ -13,6 +13,7 @@ import { isRecentTile } from './ant-store.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
 import { AntTask, DiggingSubState, NursingSubState, ChamberType } from '../enums.js';
 import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from '../constants.js';
+import { getScratch } from '../scratch.js';
 import { FP_SHIFT } from '../fixed.js';
 import type { DigFlowFields } from '../dig-system.js';
 import type { ChamberFlowFields } from '../chamber-flow.js';
@@ -101,13 +102,10 @@ export function unpackStepDy(packed: number): number {
  * diagonal — encoding both axes' independent state cleanly into a single
  * int while preserving the in-place mutation contract is awkward.
  *
- * Each caller passes this single shared scratch — read dx/dy immediately
- * before any subsequent diagonalizeFlowStep call. The shared mutable is
- * acceptable because (a) the sim is single-threaded and (b) every current
- * caller reads dx/dy on the next two lines.
+ * #231 — the `out` buffer now lives on the per-world scratch arena; each caller
+ * passes getScratch(world).motion.cardinalStep as the `out` arg and reads dx/dy
+ * immediately after (diagonalizeFlowStep's signature is unchanged).
  */
-// sim-scratch: return-value buffer, overwritten on every diagonalizeFlowStep call (object — not lint-enforced).
-export const cardinalStepScratch: CardinalStep = { dx: 0, dy: 0 };
 
 export function diagonalizeFlowStep(
   underground: UndergroundGrid,
@@ -343,12 +341,10 @@ const PROBE_COMPASS_DX = [0, 1, 1, 1, 0, -1, -1, -1] as const;
 
 const PROBE_COMPASS_DY = [-1, -1, 0, 1, 1, 1, 0, -1] as const;
 
-// Module-scratch result object for `pickSurfaceDetour` — reused across
-// every call to avoid per-call literal allocation (AGENTS.md "Hot-loop
-// performance" — invoked once per blocked-step per surface ant per tick).
-// Caller MUST consume the values immediately; the helper does NOT clone.
-// sim-scratch: return-value buffer, consumed immediately by caller (object — not lint-enforced).
-const PICK_DETOUR_RESULT = { dx: 0, dy: 0 };
+// #231 — pickSurfaceDetour's result object now lives on the per-world scratch
+// arena (getScratch(world).motion.detourResult). Caller MUST consume the values
+// immediately (the helper does NOT clone), invoked once per blocked-step per
+// surface ant per tick (AGENTS.md hot-loop).
 
 export function pickSurfaceDetour(
   world: WorldState,
@@ -494,9 +490,10 @@ export function pickSurfaceDetour(
     bestDx = bestRecentDx;
     bestDy = bestRecentDy;
   }
-  PICK_DETOUR_RESULT.dx = bestDx;
-  PICK_DETOUR_RESULT.dy = bestDy;
-  return PICK_DETOUR_RESULT;
+  const detour = getScratch(world).motion.detourResult;
+  detour.dx = bestDx;
+  detour.dy = bestDy;
+  return detour;
 }
 
 /**

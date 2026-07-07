@@ -59,7 +59,7 @@ import { isInCohort } from './ai-state.js';
 // It holds no cross-world DATA (reset before each synchronous sort; single-thread
 // ticking is atomic per world; workers do not share module memory).
 // eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: transient sort-access pointer, reassigned before each detectAndResolveCombat sort; holds no cross-world data
-let ACTIVE_COMBAT_KEYS = new Int32Array(0);
+let ACTIVE_COMBAT_KEYS: Int32Array = new Int32Array(0);
 
 /** Sort comparator: tileKey ascending, then ant slot ascending (deterministic). */
 function compareBySweepKey(a: number, b: number): number {

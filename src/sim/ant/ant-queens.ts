@@ -28,13 +28,13 @@ import {
   pickCardinalStep,
   unpackStepDx,
   unpackStepDy,
-  cardinalStepScratch,
   diagonalizeFlowStep,
   canEnterUndergroundTile,
   canEnterSurfaceTile,
   pickSurfaceDetour,
   isInsideQueenChamber,
 } from './ant-motion.js';
+import { getScratch } from '../scratch.js';
 
 /**
  * Issue #67 — module-level scratch for `collectAliveQueenIds`. Cleared and
@@ -302,10 +302,10 @@ export function moveQueens(
               DIR_DY[dir]!,
               AntTask.Idle,
               world.simVersion,
-              cardinalStepScratch,
+              getScratch(world).motion.cardinalStep,
             );
-            dx = cardinalStepScratch.dx;
-            dy = cardinalStepScratch.dy;
+            dx = getScratch(world).motion.cardinalStep.dx;
+            dy = getScratch(world).motion.cardinalStep.dy;
             stepped = true;
           }
         }
