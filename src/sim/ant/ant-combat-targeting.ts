@@ -6,7 +6,7 @@ import { FIGHT_AGGRO_RADIUS } from '../constants.js';
 import { AntTask } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import { Zone, type UndergroundGrid } from '../terrain.js';
-import { SIM_VERSION_V23_SPIDER_AGGRO, type WorldState } from '../types.js';
+import type { WorldState } from '../types.js';
 import { DIR_DX, DIR_DY, canEnterUndergroundTile, packStep } from './ant-motion.js';
 import type { AntComponents } from './ant-store.js';
 import type { ScratchArena } from '../scratch.js';
@@ -265,7 +265,7 @@ export function updateFightAntTargets(world: WorldState): void {
       // The spider is targetable in ANY state: fighters may pursue a Feeding spider to
       // interrupt its heal (tickSpiderV23 forfeits the heal once a fighter is adjacent).
       let nearestIsSpider = false;
-      if (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO && world.spider !== null) {
+      if (world.spider !== null) {
         const spTileX = world.spider.posX >> FP_SHIFT;
         const spTileY = world.spider.posY >> FP_SHIFT;
         const dist = Math.abs(spTileX - aggroTileX) + Math.abs(spTileY - aggroTileY);
