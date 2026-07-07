@@ -695,6 +695,14 @@ export interface WorldState {
   droppedStructuralCount: number;
 
   /**
+   * #230 — TRANSIENT (not serialized, reset to 0 on load, like `events`): count of
+   * gameplay (non-Sync) commands dropped this SESSION past MAX_COMMANDS_PER_TICK. An
+   * observability signal for the formerly-silent FIFO drop; a plain field NOT
+   * emitEvent (which could bump the PERSISTED dropped* counters at the 2000-event cap).
+   */
+  droppedCommandOverflowCount: number;
+
+  /**
    * S1 — transient per-colony queen-kill context. Written by combat.killAnt when
    * a queen dies; read and cleared by checkQueenDeath later the same tick.
    * Index by victim colonyId. Empty array between ticks.
@@ -766,6 +774,7 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
     pendingChambers: {}, // empty Record; PlaceChamberCommand creates entries
     // S0b — telemetry fields.
     events: [],
+    droppedCommandOverflowCount: 0, // #230 — transient
     droppedCombatKillCount: 0,
     droppedStructuralCount: 0,
     // S1 — transient; cleared between ticks by combat resolver.
@@ -814,6 +823,8 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   // droppedCombatKillCount / droppedStructuralCount are also telemetry-only.
   dst.droppedCombatKillCount = src.droppedCombatKillCount;
   dst.droppedStructuralCount = src.droppedStructuralCount;
+  // droppedCommandOverflowCount (#230): transient session counter — intentionally
+  // NOT copied to the render double-buffer (nothing reads prevState's value), like events.
   // pendingQueenDeathContexts: transient within-tick (cleared by checkQueenDeath every tick,
   // always null at the tick boundary when copyWorldState runs). No render code reads it,
   // so no copy is needed and the allocation is skipped to preserve zero-alloc steady state.

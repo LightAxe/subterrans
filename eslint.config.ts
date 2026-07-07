@@ -63,6 +63,41 @@ const simFloatDivisionSelectors = [
   },
 ];
 
+/** #230 — ban raw `<x>.commandQueue.push(...)`: every producer must route through
+ *  pushCommand(world, cmd) (src/sim/commands.ts), the single provenance chokepoint.
+ *  Added to BOTH no-restricted-syntax arrays (simSafetyConfig for src/sim, and
+ *  nonSimMutationGuard for render/input/platform) since it applies across layers.
+ *  The chokepoint itself carries an inline disable; the game-loop `.splice` drain is
+ *  not matched (`.splice`, not `.push`); non-sim test files re-drop it below. */
+const commandQueuePushBanSelector = {
+  selector:
+    "CallExpression[callee.type='MemberExpression'][callee.property.name='push']" +
+    "[callee.object.type='MemberExpression'][callee.object.property.name='commandQueue']",
+  message:
+    'Route through pushCommand(world, cmd) (src/sim/commands.ts) — the #230 provenance chokepoint. Raw world.commandQueue.push bypasses it.',
+};
+
+/** FNDN-07 tripwire selectors — direct writes/updates to WorldState sim-state fields
+ *  from a non-sim layer. Extracted so the non-sim TEST override (#230) can keep the
+ *  tripwire active (test fixtures that write world.tick carry their own inline
+ *  disables) while dropping ONLY the commandQueue-push ban. */
+const nonSimWriteTripwireSelectors = [
+  {
+    // Tripwire: catches `world.tick = ...`, `world.rngState = ...`, whole-field replacement.
+    selector:
+      "AssignmentExpression[left.type='MemberExpression'][left.property.name=/^(tick|rngState|nextEntityId|ants|colonies|pheromoneGrids|surface|undergroundGrids|pendingChambers)$/]",
+    message:
+      'FNDN-07 tripwire: direct write to WorldState sim-state field from non-sim layer. Push a SimCommand onto world.commandQueue instead (PRD §5). [Nested writes like world.colonies[id].x are not caught by lint — see grep guard.]',
+  },
+  {
+    // Tripwire: catches `world.tick++`, `--world.nextEntityId`, etc.
+    selector:
+      "UpdateExpression[argument.type='MemberExpression'][argument.property.name=/^(tick|rngState|nextEntityId|ants|colonies|pheromoneGrids|surface|undergroundGrids|pendingChambers)$/]",
+    message:
+      'FNDN-07 tripwire: UpdateExpression on WorldState sim-state field from non-sim layer. Mutations happen inside tick(); use a SimCommand.',
+  },
+];
+
 /** Sim-layer-specific safety rules — mirrors PRD §6 Rule Sets 1 & 2 verbatim.
  *  Applied ONLY to src/sim/**\/*.ts.
  */
@@ -150,6 +185,7 @@ const simSafetyConfig = {
     'no-restricted-syntax': [
       'error',
       ...simFloatDivisionSelectors,
+      commandQueuePushBanSelector, // #230
       {
         selector: 'ImportExpression',
         message:
@@ -185,20 +221,8 @@ const nonSimMutationGuard = {
   rules: {
     'no-restricted-syntax': [
       'error',
-      {
-        // Tripwire: catches `world.tick = ...`, `world.rngState = ...`, whole-field replacement.
-        selector:
-          "AssignmentExpression[left.type='MemberExpression'][left.property.name=/^(tick|rngState|nextEntityId|ants|colonies|pheromoneGrids|surface|undergroundGrids|pendingChambers)$/]",
-        message:
-          'FNDN-07 tripwire: direct write to WorldState sim-state field from non-sim layer. Push a SimCommand onto world.commandQueue instead (PRD §5). [Nested writes like world.colonies[id].x are not caught by lint — see grep guard.]',
-      },
-      {
-        // Tripwire: catches `world.tick++`, `--world.nextEntityId`, etc.
-        selector:
-          "UpdateExpression[argument.type='MemberExpression'][argument.property.name=/^(tick|rngState|nextEntityId|ants|colonies|pheromoneGrids|surface|undergroundGrids|pendingChambers)$/]",
-        message:
-          'FNDN-07 tripwire: UpdateExpression on WorldState sim-state field from non-sim layer. Mutations happen inside tick(); use a SimCommand.',
-      },
+      ...nonSimWriteTripwireSelectors,
+      commandQueuePushBanSelector, // #230 — raw push bypasses the provenance chokepoint
     ],
   },
 };
@@ -227,10 +251,36 @@ const simTestImportOverride = {
   },
 };
 
+/** #230 — non-sim TEST files (render/input/platform) build command queues directly
+ *  as fixtures, so drop ONLY the commandQueue-push ban for them while KEEPING the
+ *  FNDN-07 write tripwire (some fixtures write world.tick with their own inline
+ *  disables, which would go unused if the whole rule were turned off). Sim test files
+ *  are handled by simTestImportOverride above. Must come after nonSimMutationGuard. */
+const nonSimTestCommandQueueOverride = {
+  files: ['src/render/**/*.test.ts', 'src/input/**/*.test.ts', 'src/platform/**/*.test.ts'],
+  rules: {
+    'no-restricted-syntax': ['error', ...nonSimWriteTripwireSelectors],
+  },
+};
+
+/** #230 — root-level src files (only src/main.ts today, the Phaser bootstrap) match
+ *  neither simSafetyConfig (src/sim/**) nor nonSimMutationGuard (render|input|platform),
+ *  so the commandQueue-push ban would not cover them. `src/*.ts` matches root files
+ *  only (`*` does not cross `/`), so this adds JUST the ban there without clobbering
+ *  the layer configs. No FNDN-07 tripwire needed — main.ts has no world access. */
+const rootSrcCommandQueueBan = {
+  files: ['src/*.ts'],
+  rules: {
+    'no-restricted-syntax': ['error', commandQueuePushBanSelector],
+  },
+};
+
 export default [
   baseConfig,
   simSafetyConfig,
   nonSimMutationGuard,
   simModuleStateConfig,
   simTestImportOverride,
+  nonSimTestCommandQueueOverride,
+  rootSrcCommandQueueBan,
 ];

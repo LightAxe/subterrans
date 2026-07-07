@@ -56,6 +56,7 @@ export const TRANSIENT_WORLD_FIELDS: readonly (keyof WorldState)[] = [
   'surfaceGoalFields', // DERIVED per-target BFS cache (types.ts:761)
   'surfaceGoalBfsScratch', // pure BFS scratch, overwritten before read (types.ts:762)
   'pendingQueenDeathContexts', // within-tick transient, cleared every tick (types.ts:772, copyWorldState:817-819)
+  'droppedCommandOverflowCount', // #230 — transient session counter, reset to 0 on load (like events)
 ];
 
 /**

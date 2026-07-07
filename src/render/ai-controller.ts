@@ -13,6 +13,7 @@ import type {
   SetBehaviorRatioCommand,
   SyncAIStateCommand,
 } from '../sim/commands.js';
+import { pushCommand } from '../sim/commands.js';
 import { ChamberType } from '../sim/enums.js';
 import { UndergroundTileState, ugGet } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
@@ -166,7 +167,7 @@ export function aiInitialSetup(world: WorldState, colony: ColonyRecord): void {
       surfaceTileY: 0, // surface row
       issuedAtTick: world.tick,
     };
-    world.commandQueue.push(designateCmd);
+    pushCommand(world, designateCmd, 'ai');
   }
 }
 
@@ -248,7 +249,7 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
             tileY: ty,
             issuedAtTick: world.tick,
           };
-          world.commandQueue.push(cmd);
+          pushCommand(world, cmd, 'ai');
           budget -= 1;
         }
       }
@@ -294,13 +295,17 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
       const k = tileKey(cand.tileX, cand.tileY);
       if (seenMarks.has(k)) continue;
       seenMarks.add(k);
-      world.commandQueue.push({
-        type: 'MarkDigTile',
-        colonyId: colony.colonyId,
-        tileX: cand.tileX,
-        tileY: cand.tileY,
-        issuedAtTick: world.tick,
-      });
+      pushCommand(
+        world,
+        {
+          type: 'MarkDigTile',
+          colonyId: colony.colonyId,
+          tileX: cand.tileX,
+          tileY: cand.tileY,
+          issuedAtTick: world.tick,
+        },
+        'ai',
+      );
       budget -= 1;
     }
   }
@@ -328,13 +333,17 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
       const k = tileKey(tx, ty);
       if (seenMarks.has(k)) continue;
       seenMarks.add(k);
-      world.commandQueue.push({
-        type: 'MarkDigTile',
-        colonyId: colony.colonyId,
-        tileX: tx,
-        tileY: ty,
-        issuedAtTick: world.tick,
-      });
+      pushCommand(
+        world,
+        {
+          type: 'MarkDigTile',
+          colonyId: colony.colonyId,
+          tileX: tx,
+          tileY: ty,
+          issuedAtTick: world.tick,
+        },
+        'ai',
+      );
       budget -= 1;
     }
     // Bottom border
@@ -345,13 +354,17 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
       const k = tileKey(tx, ty);
       if (seenMarks.has(k)) continue;
       seenMarks.add(k);
-      world.commandQueue.push({
-        type: 'MarkDigTile',
-        colonyId: colony.colonyId,
-        tileX: tx,
-        tileY: ty,
-        issuedAtTick: world.tick,
-      });
+      pushCommand(
+        world,
+        {
+          type: 'MarkDigTile',
+          colonyId: colony.colonyId,
+          tileX: tx,
+          tileY: ty,
+          issuedAtTick: world.tick,
+        },
+        'ai',
+      );
       budget -= 1;
     }
     // Left border
@@ -362,13 +375,17 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
       const k = tileKey(tx, ty);
       if (seenMarks.has(k)) continue;
       seenMarks.add(k);
-      world.commandQueue.push({
-        type: 'MarkDigTile',
-        colonyId: colony.colonyId,
-        tileX: tx,
-        tileY: ty,
-        issuedAtTick: world.tick,
-      });
+      pushCommand(
+        world,
+        {
+          type: 'MarkDigTile',
+          colonyId: colony.colonyId,
+          tileX: tx,
+          tileY: ty,
+          issuedAtTick: world.tick,
+        },
+        'ai',
+      );
       budget -= 1;
     }
     // Right border
@@ -379,13 +396,17 @@ export function aiDigHeuristic(world: WorldState, colony: ColonyRecord): void {
       const k = tileKey(tx, ty);
       if (seenMarks.has(k)) continue;
       seenMarks.add(k);
-      world.commandQueue.push({
-        type: 'MarkDigTile',
-        colonyId: colony.colonyId,
-        tileX: tx,
-        tileY: ty,
-        issuedAtTick: world.tick,
-      });
+      pushCommand(
+        world,
+        {
+          type: 'MarkDigTile',
+          colonyId: colony.colonyId,
+          tileX: tx,
+          tileY: ty,
+          issuedAtTick: world.tick,
+        },
+        'ai',
+      );
       budget -= 1;
     }
   }
@@ -414,7 +435,7 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
         anchorTileY: placement.tileY,
         issuedAtTick: world.tick,
       };
-      world.commandQueue.push(cmd);
+      pushCommand(world, cmd, 'ai');
     }
   }
   // Food storage — if food stockpile crossed threshold and no FoodStorage yet.
@@ -457,7 +478,7 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
         anchorTileY: placement.tileY,
         issuedAtTick: world.tick,
       };
-      world.commandQueue.push(cmd);
+      pushCommand(world, cmd, 'ai');
     }
   }
   // Nursery — gate rewritten per plan 09.1-01 Task 2 (Option B, bootstrap-aware):
@@ -493,7 +514,7 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
           anchorTileY: placement.tileY,
           issuedAtTick: world.tick,
         };
-        world.commandQueue.push(cmd);
+        pushCommand(world, cmd, 'ai');
       }
     }
   }
@@ -514,7 +535,7 @@ export function aiEntranceDesignation(world: WorldState, colony: ColonyRecord): 
         surfaceTileY: 0,
         issuedAtTick: world.tick,
       };
-      world.commandQueue.push(cmd);
+      pushCommand(world, cmd, 'ai');
       return;
     }
   }
@@ -626,7 +647,7 @@ function _pushSyncAIState(world: WorldState, aiColonyId: ColonyId): void {
     operationAttackerDeaths: rec.operationAttackerDeaths,
     operationDefenderDeaths: rec.operationDefenderDeaths,
   };
-  world.commandQueue.push(cmd);
+  pushCommand(world, cmd, 'ai');
 }
 
 /** Sync the AI colony behavior ratio to its current state. */
@@ -654,7 +675,7 @@ function _syncBehaviorRatioToAIState(
       ratio: { ...targetRatio },
       issuedAtTick: world.tick,
     };
-    world.commandQueue.push(setRatioCmd);
+    pushCommand(world, setRatioCmd, 'ai');
   }
 }
 
@@ -678,15 +699,19 @@ function aiStateMachineTick_probeEntry(
   if (fighters.length < AI_PROBE_FIGHTER_COUNT) return; // not enough fighters
 
   // Push StartAIOperation so tick.ts applies setAIRallyOperation sim-side (ADR-0007).
-  world.commandQueue.push({
-    type: 'StartAIOperation',
-    colonyId: aiColonyId,
-    kind: 'Probe',
-    rallyTileX: target.tileX,
-    rallyTileY: target.tileY,
-    fighterIds: fighters,
-    issuedAtTick: world.tick,
-  });
+  pushCommand(
+    world,
+    {
+      type: 'StartAIOperation',
+      colonyId: aiColonyId,
+      kind: 'Probe',
+      rallyTileX: target.tileX,
+      rallyTileY: target.tileY,
+      fighterIds: fighters,
+      issuedAtTick: world.tick,
+    },
+    'ai',
+  );
 
   // Emit SetRallyPoint SimCommand so world.rallyPoint is set for fighters.
   _emitSetRallyPoint(world, aiColonyId, target.tileX, target.tileY);
@@ -745,15 +770,19 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId): void {
     if (fighters.length < 3) return;
 
     // Push StartAIOperation so tick.ts applies setAIRallyOperation sim-side (ADR-0007).
-    world.commandQueue.push({
-      type: 'StartAIOperation',
-      colonyId: aiColonyId,
-      kind: 'Invasion',
-      rallyTileX: targetEntrance.surfaceTileX,
-      rallyTileY: targetEntrance.surfaceTileY,
-      fighterIds: fighters,
-      issuedAtTick: world.tick,
-    });
+    pushCommand(
+      world,
+      {
+        type: 'StartAIOperation',
+        colonyId: aiColonyId,
+        kind: 'Invasion',
+        rallyTileX: targetEntrance.surfaceTileX,
+        rallyTileY: targetEntrance.surfaceTileY,
+        fighterIds: fighters,
+        issuedAtTick: world.tick,
+      },
+      'ai',
+    );
     _emitSetRallyPoint(world, aiColonyId, targetEntrance.surfaceTileX, targetEntrance.surfaceTileY);
     return;
   }
@@ -904,7 +933,7 @@ function _emitSetRallyPoint(
     tileY,
     issuedAtTick: world.tick,
   };
-  world.commandQueue.push(cmd);
+  pushCommand(world, cmd, 'ai');
 }
 
 // --- Helpers ---

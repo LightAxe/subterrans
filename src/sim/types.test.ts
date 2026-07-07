@@ -29,10 +29,11 @@ describe('WorldState', () => {
       expect(world.rngState).toBe(4294967295);
     });
 
-    it('has exactly twenty-seven fields (… + PR 4 baked/component + PR 5 goal-field cache + BFS scratch)', () => {
+    it('has exactly twenty-eight fields (… + PR 4 baked/component + PR 5 goal-field cache + BFS scratch + #230 overflow counter)', () => {
       const world = createWorldState(0);
       const keys = Object.keys(world);
-      expect(keys).toHaveLength(27);
+      expect(keys).toHaveLength(28);
+      expect(keys).toContain('droppedCommandOverflowCount'); // #230 (transient)
       expect(keys).toContain('bakedSurfaceEffect'); // PR 4
       expect(keys).toContain('surfaceComponentMask'); // PR 4
       expect(keys).toContain('surfaceGoalFields'); // PR 5

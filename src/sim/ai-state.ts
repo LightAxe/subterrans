@@ -12,6 +12,7 @@
 import type { WorldState, AIStateRecord } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { ClearRallyPointCommand } from './commands.js';
+import { pushCommand } from './commands.js';
 import { emitEvent } from './telemetry.js';
 import { AntTask, ChamberType } from './enums.js';
 import { Zone } from './terrain.js';
@@ -351,7 +352,7 @@ function _checkProbingToWarFooting(
         colonyId: aiColonyId,
         issuedAtTick: world.tick,
       };
-      world.commandQueue.push(clearCmd);
+      pushCommand(world, clearCmd, 'sim');
     }
     aiState.state = 'WarFooting';
     aiState.enteredTick = world.tick;
@@ -448,7 +449,7 @@ function _endInvasion(
     colonyId: aiColonyId,
     issuedAtTick: world.tick,
   };
-  world.commandQueue.push(clearCmd);
+  pushCommand(world, clearCmd, 'sim');
   aiState.state = 'Recovery';
   aiState.enteredTick = world.tick;
   aiState.recoveryEndTick = world.tick + AI_RECOVERY_DURATION_TICKS[tierIndex(world.difficulty)];

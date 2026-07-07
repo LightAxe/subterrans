@@ -11,8 +11,11 @@ import {
   type SetRallyPointCommand,
   type ClearRallyPointCommand,
   MAX_COMMANDS_PER_TICK,
+  pushCommand,
 } from './commands.js';
 import { ChamberType } from './enums.js';
+import { createWorldState } from './types.js';
+import { tick } from './tick.js';
 
 describe('SimCommand', () => {
   describe('NoOpCommand assignability', () => {
@@ -358,6 +361,57 @@ describe('SimCommand', () => {
       const b: SimCommand = { type: 'ClearRallyPoint', colonyId: 1, issuedAtTick: 0 };
       expect(a.type).toBe('SetRallyPoint');
       expect(b.type).toBe('ClearRallyPoint');
+    });
+  });
+
+  describe('pushCommand provenance (#230)', () => {
+    it('stamps origin in place and appends the same object to the queue', () => {
+      const world = createWorldState(1);
+      const cmd: SimCommand = { type: 'NoOp', issuedAtTick: 5 };
+      const ok = pushCommand(world, cmd, 'ai');
+      expect(ok).toBe(true);
+      expect(cmd.origin).toBe('ai');
+      expect(world.commandQueue.at(-1)).toBe(cmd); // same reference, no copy
+      expect(world.commandQueue).toHaveLength(1);
+    });
+
+    it('stamps each of the three provenances', () => {
+      const world = createWorldState(2);
+      pushCommand(world, { type: 'NoOp', issuedAtTick: 0 }, 'player');
+      pushCommand(world, { type: 'NoOp', issuedAtTick: 1 }, 'ai');
+      pushCommand(world, { type: 'NoOp', issuedAtTick: 2 }, 'sim');
+      expect(world.commandQueue.map((c) => c.origin)).toEqual(['player', 'ai', 'sim']);
+    });
+
+    it('a pre-provenance command (no origin) is valid and unread by replay (origin optional forever)', () => {
+      // Old inputLogs carry commands WITHOUT origin. They must remain assignable to
+      // SimCommand and apply unchanged — no handler branches on origin.
+      const legacy: SimCommand = { type: 'NoOp', issuedAtTick: 0 };
+      expect(legacy.origin).toBeUndefined();
+    });
+  });
+
+  describe('droppedCommandOverflowCount (#230)', () => {
+    it('counts exactly the non-Sync commands dropped past MAX_COMMANDS_PER_TICK', () => {
+      const world = createWorldState(3);
+      expect(world.droppedCommandOverflowCount).toBe(0); // fresh world starts at 0
+      const n = MAX_COMMANDS_PER_TICK + 6; // 70
+      const cmds: SimCommand[] = Array.from({ length: n }, (_, i) => ({
+        type: 'NoOp' as const,
+        issuedAtTick: i,
+      }));
+      tick(world, cmds);
+      expect(world.droppedCommandOverflowCount).toBe(6); // 70 - 64
+    });
+
+    it('does not count when at/under the cap', () => {
+      const world = createWorldState(4);
+      const cmds: SimCommand[] = Array.from({ length: MAX_COMMANDS_PER_TICK }, (_, i) => ({
+        type: 'NoOp' as const,
+        issuedAtTick: i,
+      }));
+      tick(world, cmds);
+      expect(world.droppedCommandOverflowCount).toBe(0);
     });
   });
 

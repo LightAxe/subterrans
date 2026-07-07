@@ -1629,6 +1629,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     recentlyDepletedFood: validatedRecentlyDepleted.map((r) => ({ ...r })),
     pendingChambers,
     events: [],
+    droppedCommandOverflowCount: 0, // #230 — transient, reset on load
     pendingQueenDeathContexts: [],
     aiState: deserializeAIStateArray(s),
     spider: _deserializedSpider,
