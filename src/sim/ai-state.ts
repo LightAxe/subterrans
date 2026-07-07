@@ -352,7 +352,7 @@ function _checkProbingToWarFooting(
         colonyId: aiColonyId,
         issuedAtTick: world.tick,
       };
-      pushCommand(world, clearCmd);
+      pushCommand(world, clearCmd, 'sim');
     }
     aiState.state = 'WarFooting';
     aiState.enteredTick = world.tick;
@@ -449,7 +449,7 @@ function _endInvasion(
     colonyId: aiColonyId,
     issuedAtTick: world.tick,
   };
-  pushCommand(world, clearCmd);
+  pushCommand(world, clearCmd, 'sim');
   aiState.state = 'Recovery';
   aiState.enteredTick = world.tick;
   aiState.recoveryEndTick = world.tick + AI_RECOVERY_DURATION_TICKS[tierIndex(world.difficulty)];

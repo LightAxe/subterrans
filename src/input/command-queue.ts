@@ -84,5 +84,5 @@ export function enqueueCommand(world: WorldState, cmd: SimCommand, isPaused: boo
       return false;
     }
   }
-  return pushCommand(world, cmd); // #230 — the input-side cap stays here; the actual push routes through the chokepoint
+  return pushCommand(world, cmd, 'player'); // #230 — the input-side cap stays here; the actual push routes through the chokepoint
 }
