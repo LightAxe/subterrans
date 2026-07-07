@@ -17,6 +17,7 @@ import {
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt } from './ant-store.js';
+import { getScratch } from '../scratch.js';
 import { AntTask } from '../enums.js';
 import { FIGHT_AGGRO_RADIUS, SPIDER_HP_FULL, SPIDER_HUNT_INTERVAL_TICKS } from '../constants.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
@@ -527,6 +528,10 @@ describe('updateFightAntTargets', () => {
 // ---------------------------------------------------------------------------
 
 describe('pickInvaderUndergroundStep — wall-aware BFS invader step', () => {
+  // #231 — one per-world scratch arena reused across all cases, exactly as the
+  // module buffer was (each call restores its touched dist cells to -1).
+  const scratch = getScratch(createWorldState(1));
+
   it('returns direct cardinal step when a straight open path exists', () => {
     // 5x5 grid. Fighter at (1,1), target at (1,4) due south. Carve the full
     // column (1,1)..(1,4) Open. BFS distances south are 3,2,1,0; the invader's
@@ -536,7 +541,7 @@ describe('pickInvaderUndergroundStep — wall-aware BFS invader step', () => {
     ugSet(underground, 1, 2, UndergroundTileState.Open);
     ugSet(underground, 1, 3, UndergroundTileState.Open);
     ugSet(underground, 1, 4, UndergroundTileState.Open);
-    const step = pickInvaderUndergroundStep(underground, 1, 1, 1, 4);
+    const step = pickInvaderUndergroundStep(underground, 1, 1, 1, 4, scratch);
     expect(unpackStepDx(step)).toBe(0);
     expect(unpackStepDy(step)).toBe(1);
   });
@@ -552,14 +557,14 @@ describe('pickInvaderUndergroundStep — wall-aware BFS invader step', () => {
     ugSet(underground, 4, 1, UndergroundTileState.Open);
     ugSet(underground, 4, 2, UndergroundTileState.Open);
     ugSet(underground, 4, 3, UndergroundTileState.Open);
-    const step = pickInvaderUndergroundStep(underground, 2, 1, 4, 3);
+    const step = pickInvaderUndergroundStep(underground, 2, 1, 4, 3, scratch);
     expect(unpackStepDx(step)).toBe(1);
     expect(unpackStepDy(step)).toBe(0);
   });
 
   it('returns (0,0) when already on target tile', () => {
     const { underground } = setupWorldWithUnderground(5, 5);
-    const step = pickInvaderUndergroundStep(underground, 3, 3, 3, 3);
+    const step = pickInvaderUndergroundStep(underground, 3, 3, 3, 3, scratch);
     expect(unpackStepDx(step)).toBe(0);
     expect(unpackStepDy(step)).toBe(0);
   });
@@ -571,7 +576,7 @@ describe('pickInvaderUndergroundStep — wall-aware BFS invader step', () => {
     // oscillating against the wall.
     const { underground } = setupWorldWithUnderground(3, 3);
     ugSet(underground, 1, 0, UndergroundTileState.Open);
-    const step = pickInvaderUndergroundStep(underground, 1, 0, 1, 2);
+    const step = pickInvaderUndergroundStep(underground, 1, 0, 1, 2, scratch);
     expect(unpackStepDx(step)).toBe(0);
     expect(unpackStepDy(step)).toBe(0);
   });
@@ -591,7 +596,7 @@ describe('pickInvaderUndergroundStep — wall-aware BFS invader step', () => {
     ugSet(underground, 2, 1, UndergroundTileState.Open);
 
     // First step is the distance-increasing detour (south), not a hold.
-    const first = pickInvaderUndergroundStep(underground, 0, 1, 2, 1);
+    const first = pickInvaderUndergroundStep(underground, 0, 1, 2, 1, scratch);
     expect(unpackStepDx(first)).toBe(0);
     expect(unpackStepDy(first)).toBe(1);
 
@@ -601,7 +606,7 @@ describe('pickInvaderUndergroundStep — wall-aware BFS invader step', () => {
     let y = 1;
     let steps = 0;
     while (!(x === 2 && y === 1) && steps < 16) {
-      const s = pickInvaderUndergroundStep(underground, x, y, 2, 1);
+      const s = pickInvaderUndergroundStep(underground, x, y, 2, 1, scratch);
       const sdx = unpackStepDx(s);
       const sdy = unpackStepDy(s);
       expect(sdx !== 0 || sdy !== 0).toBe(true); // never stalls on a connected path

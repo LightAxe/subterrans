@@ -12,6 +12,7 @@ import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
 import { advanceAIState, getAIStateForColony, setAIRallyOperation } from './ai-state.js';
 import { detectAndResolveCombat } from './combat.js';
+import { getScratch } from './scratch.js';
 import { Rng } from './rng.js';
 import {
   AntTask,
@@ -158,12 +159,9 @@ export function resetFlowFieldCaches(): void {
   cachesByWorld = new WeakMap();
 }
 
-// Transient per-tick scratch for the step-10a idle-reassignment pass. Reused
-// across colonies and ticks: reset (length=0) and fully consumed within each
-// colony iteration, so it holds no cross-tick or cross-world state. Avoids the
-// per-colony `eligible` array allocation in this hot path (AGENTS.md no-alloc).
-// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: reset (length=0) and fully consumed within each colony iteration; no cross-tick/cross-world state
-const IDLE_ELIGIBLE_SCRATCH: number[] = [];
+// #231 — the step-10a idle-reassignment scratch list now lives on the per-world
+// scratch arena (getScratch(world).tickIdle); reset (length=0) and fully consumed
+// within each colony iteration as before.
 
 // Suppress unused-import TS error for PendingChamber (used in PlaceChamber case shape)
 void (undefined as unknown as PendingChamber);
@@ -1258,7 +1256,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     //     post-excavation for Digging, post-feed for Nursing) describe the action-system transitions
     //     that PUT an ant into AntTask.Idle — NOT sub-state predicates against the current task.
     //     AntTask.Fighting not eligible in Phase 6 — no combat resolution yet (Phase 9 scope).
-    const eligible = IDLE_ELIGIBLE_SCRATCH;
+    const eligible = getScratch(world).tickIdle;
     eligible.length = 0;
     for (let i = 0; i < colony.workers.length; i++) {
       const id = colony.workers[i]!;

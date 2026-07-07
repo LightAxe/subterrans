@@ -7,6 +7,7 @@ import { emitEvent } from './telemetry.js';
 import { phGet, phSet, pheromoneKeySuffix } from './pheromone/pheromone-store.js';
 import { AntTask, PheromoneType } from './enums.js';
 import { tierIndex } from './ai-state.js';
+import { getScratch } from './scratch.js';
 import {
   SPIDER_HP_FULL,
   SPIDER_HUNT_INTERVAL_TICKS,
@@ -61,26 +62,17 @@ const SPIDER_MEANDER_RETARGET_SHIFT = 7; // SPIDER_MEANDER_RETARGET_TICKS = 128 
 const _meanderRetargetCheck: 128 = SPIDER_MEANDER_RETARGET_TICKS; // fails to compile if != 128
 
 // ---------------------------------------------------------------------------
-// Module-level scratch for findHuntTarget — avoids per-call Map allocation.
-// SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT = 128 * 128 = 16384 tiles.
-// Cleared between calls via HUNT_DIRTY list. Same precedent as tick.ts flow-field buffers.
-// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: cleared between findHuntTarget calls via HUNT_DIRTY; never read before write
-const HUNT_TILE_COUNTS = new Uint16Array(SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT);
-// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: dirty-index list, reset each findHuntTarget call
-const HUNT_DIRTY: number[] = [];
+// #231 — findHuntTarget's hunt histogram (SURFACE_GRID_WIDTH*HEIGHT tiles) + its
+// dirty-index list now live on the per-world scratch arena
+// (getScratch(world).spider), cleared between calls via the dirty list as before.
 
 // Precomputed suffix for surface DangerTrail pheromone grid key lookup.
 // Avoids per-tick string allocation while remaining enum-safe. Built via the
 // centralized key-contract helper (#242) so it can't drift from pheromoneGridKey.
 const SURFACE_DANGER_SUFFIX = pheromoneKeySuffix(PheromoneType.DangerTrail, 'surface');
 
-// Module-level scratch for findNearestEntrance return value — avoids per-Rampaging-tick allocation.
-// sim-scratch: overwritten on every findNearestEntrance call (object — not lint-enforced).
-const NEAREST_ENTRANCE_SCRATCH: { x: number; y: number; colonyId: number } = {
-  x: -1,
-  y: -1,
-  colonyId: -1,
-};
+// #231 — findNearestEntrance's return-value out-param now lives on the per-world
+// arena (getScratch(world).spider.nearestEntrance).
 
 // ---------------------------------------------------------------------------
 // Hunt target selection — deterministic (no rng draws)
@@ -98,10 +90,14 @@ function findHuntTarget(
   const spiderTileX = spider.posX >> FP_SHIFT;
   const spiderTileY = spider.posY >> FP_SHIFT;
   const r = SPIDER_HUNT_SEARCH_RADIUS_TILES;
+  // #231 — hunt histogram + dirty list on the per-world scratch arena.
+  const s = getScratch(world);
+  const huntTileCounts = s.spider.huntTileCounts;
+  const huntDirty = s.spider.huntDirty;
 
   // Clear dirty tiles from previous call (reuse scratch buffer, avoid Map alloc).
-  for (let d = 0; d < HUNT_DIRTY.length; d++) HUNT_TILE_COUNTS[HUNT_DIRTY[d]!] = 0;
-  HUNT_DIRTY.length = 0;
+  for (let d = 0; d < huntDirty.length; d++) huntTileCounts[huntDirty[d]!] = 0;
+  huntDirty.length = 0;
 
   // Pre-scan queen IDs so they are excluded from worker density. Queens are identified
   // by colony.queenEntityId (not by task — queen task may vary) to avoid counting them
@@ -131,17 +127,17 @@ function findHuntTarget(
       (ay > spiderTileY ? ay - spiderTileY : spiderTileY - ay);
     if (dist > r) continue;
     const key = (ay << HUNT_KEY_SHIFT) + ax;
-    if (HUNT_TILE_COUNTS[key] === 0) HUNT_DIRTY.push(key);
-    HUNT_TILE_COUNTS[key] = HUNT_TILE_COUNTS[key]! + 1;
+    if (huntTileCounts[key] === 0) huntDirty.push(key);
+    huntTileCounts[key] = huntTileCounts[key]! + 1;
   }
 
   let bestKey = -1;
   let bestCount = SPIDER_HUNT_MIN_TARGET_WORKERS - 1; // must exceed to qualify
   let bestX = -1;
   let bestY = -1;
-  for (let d = 0; d < HUNT_DIRTY.length; d++) {
-    const k = HUNT_DIRTY[d]!;
-    const c = HUNT_TILE_COUNTS[k]!;
+  for (let d = 0; d < huntDirty.length; d++) {
+    const k = huntDirty[d]!;
+    const c = huntTileCounts[k]!;
     if (c > bestCount || (c === bestCount && bestKey !== -1 && k < bestKey)) {
       bestCount = c;
       bestKey = k;
@@ -318,10 +314,11 @@ function findNearestEntrance(
     }
   }
   if (bestX === -1) return null;
-  NEAREST_ENTRANCE_SCRATCH.x = bestX;
-  NEAREST_ENTRANCE_SCRATCH.y = bestY;
-  NEAREST_ENTRANCE_SCRATCH.colonyId = bestColonyId;
-  return NEAREST_ENTRANCE_SCRATCH;
+  const ne = getScratch(world).spider.nearestEntrance;
+  ne.x = bestX;
+  ne.y = bestY;
+  ne.colonyId = bestColonyId;
+  return ne;
 }
 
 // ---------------------------------------------------------------------------
