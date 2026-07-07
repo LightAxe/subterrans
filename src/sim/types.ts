@@ -823,6 +823,8 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   // droppedCombatKillCount / droppedStructuralCount are also telemetry-only.
   dst.droppedCombatKillCount = src.droppedCombatKillCount;
   dst.droppedStructuralCount = src.droppedStructuralCount;
+  // droppedCommandOverflowCount (#230): transient session counter — intentionally
+  // NOT copied to the render double-buffer (nothing reads prevState's value), like events.
   // pendingQueenDeathContexts: transient within-tick (cleared by checkQueenDeath every tick,
   // always null at the tick boundary when copyWorldState runs). No render code reads it,
   // so no copy is needed and the allocation is skipped to preserve zero-alloc steady state.

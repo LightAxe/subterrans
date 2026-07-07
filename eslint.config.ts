@@ -263,6 +263,18 @@ const nonSimTestCommandQueueOverride = {
   },
 };
 
+/** #230 — root-level src files (only src/main.ts today, the Phaser bootstrap) match
+ *  neither simSafetyConfig (src/sim/**) nor nonSimMutationGuard (render|input|platform),
+ *  so the commandQueue-push ban would not cover them. `src/*.ts` matches root files
+ *  only (`*` does not cross `/`), so this adds JUST the ban there without clobbering
+ *  the layer configs. No FNDN-07 tripwire needed — main.ts has no world access. */
+const rootSrcCommandQueueBan = {
+  files: ['src/*.ts'],
+  rules: {
+    'no-restricted-syntax': ['error', commandQueuePushBanSelector],
+  },
+};
+
 export default [
   baseConfig,
   simSafetyConfig,
@@ -270,4 +282,5 @@ export default [
   simModuleStateConfig,
   simTestImportOverride,
   nonSimTestCommandQueueOverride,
+  rootSrcCommandQueueBan,
 ];
