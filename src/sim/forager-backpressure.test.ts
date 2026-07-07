@@ -10,7 +10,6 @@ import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
 import { createWorldState, allocateEntityId } from './types.js';
 import {
-  SIM_VERSION_V26_SPIDER_EDGE_MARGIN,
   SIM_VERSION_V27_FORAGE_BACKPRESSURE,
 } from './types.js';
 import { initAnt } from './ant/ant-store.js';
@@ -208,16 +207,10 @@ describe('#126 V27 forager storage backpressure', () => {
 
   // (c) — version gate. Identical saturated setup: V26 still promotes (the old
   // churn), V27 suppresses. This proves the gate, not just same-version parity.
-  describe('(c) V26-vs-V27 gate', () => {
-    it('V26 promotes idle ants into Foraging (pre-fix churn)', () => {
-      const { world, idleIds } = buildSaturatedWorld({
-        simVersion: SIM_VERSION_V26_SPIDER_EDGE_MARGIN,
-      });
-      tick(world, []);
-      expect(foragerCount(world, idleIds)).toBeGreaterThan(0);
-    });
-
-    it('V27 suppresses promotion under the identical saturated state', () => {
+  describe('(c) forage-backpressure suppression', () => {
+    // #247 — the "V26 promotes idle ants (pre-fix churn)" control was removed: V26 is
+    // unloadable under MIN=V30 and the reaped V27 gate makes suppression unconditional.
+    it('suppresses promotion under a saturated state', () => {
       const { world, idleIds } = buildSaturatedWorld({
         simVersion: SIM_VERSION_V27_FORAGE_BACKPRESSURE,
       });
