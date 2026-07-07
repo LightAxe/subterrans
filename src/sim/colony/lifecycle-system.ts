@@ -320,6 +320,12 @@ export function tickLifecycleTransitions(world: WorldState, colony: ColonyRecord
       ants.starvationTimer[id] = STARVATION_GRACE_TICKS;
       colony.larvae.push(id);
       colony.larvaeCount += 1;
+      // #235 — the brood stays on the same tile, but the swap-remove from eggs[]
+      // and append to larvae[] REORDER the pickup/deposit BFS seed enumeration
+      // (eggs-then-larvae, array order; the flow-field BFS is first-claim-wins on
+      // equidistant tiles), so an equidistant tile's step direction can flip. NOT
+      // output-inert — the field must rebuild.
+      colony.broodFieldDirty = true;
     }
   }
 

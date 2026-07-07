@@ -630,6 +630,16 @@ export function checkPendingChambers(world: WorldState): void {
         width: pc.width,
         height: pc.height,
       });
+      // #235 — a new chamber changes the pickup/deposit field seed sets (a Nursery
+      // enters the deposit seeds + pickup's inside-Nursery exclusion). The normal
+      // dug-to-completion path is covered by the completing tile-flip's
+      // digFlowFieldDirty, but a PlaceChamber over an ALREADY-Open footprint marks
+      // zero tiles, so step-9 (step 8) already consumed digFlowFieldDirty before this
+      // step-11 promotion — nothing would recompute. Flag here so step 9 rebuilds
+      // next tick (matches the pre-#235 every-tick second loop). Set only
+      // broodFieldDirty (not digFlowFieldDirty): pre-#235 the first-loop chamber
+      // fields were likewise NOT healed on the all-Open path, so keep byte-identical.
+      colony.broodFieldDirty = true;
 
       // Remove PendingChamber by key (safe during for-in iteration — delete is allowed)
       delete world.pendingChambers[key];

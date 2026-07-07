@@ -813,7 +813,6 @@ function serializeColony(c: ColonyRecord): SerializedColony {
     digFlowFieldDirty: c.digFlowFieldDirty,
     foodFlowFieldDirty: c.foodFlowFieldDirty,
     broodFieldDirty: c.broodFieldDirty, // #235
-
     killCount: c.killCount,
     priorityFoodPileId: c.priorityFoodPileId,
     eggIntervalNumerator: c.eggIntervalNumerator,

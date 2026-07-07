@@ -20,10 +20,10 @@ import { initAnt } from './ant/ant-store.js';
 import { createUndergroundGrid, ugSet, UndergroundTileState, Zone } from './terrain.js';
 import { ChamberType, AntTask } from './enums.js';
 import { FP_SHIFT } from './fixed.js';
-import { LARVA_MATURE_TICKS, FOOD_CHAMBER_CAPACITY } from './constants.js';
+import { LARVA_MATURE_TICKS, FOOD_CHAMBER_CAPACITY, EGG_HATCH_TICKS } from './constants.js';
 import { tick, __getChamberFlowFieldsForTest } from './tick.js';
 import { killAnt } from './combat.js';
-import { tickFoodConsumption } from './colony/colony-system.js';
+import { tickFoodConsumption, checkPendingChambers } from './colony/colony-system.js';
 import { tickLifecycleTransitions } from './colony/lifecycle-system.js';
 // eslint-disable-next-line no-restricted-imports -- #235 differential proof needs the platform serializer (telemetry.test.ts:8 pattern)
 import { serializeWorldState } from '../platform/save.js';
@@ -135,6 +135,30 @@ function buildBroodColony(seed: number): WorldState {
     });
     colony.larvae.push(id);
     colony.larvaeCount += 1;
+  }
+
+  // Seed a few eggs on DISTINCT Queen-chamber tiles with OFF-CADENCE ages so their
+  // egg→larva hatches land on ticks that do NOT coincide with a queen lay. This
+  // breaks the lay/hatch cadence resonance that would otherwise let a lay trigger
+  // mask a missing hatch trigger, so the differential exercises the hatch reorder.
+  const eggSeeds: Array<[number, number, number]> = [
+    [2, 2, EGG_HATCH_TICKS - 137],
+    [4, 2, EGG_HATCH_TICKS - 289],
+    [2, 4, EGG_HATCH_TICKS - 431],
+  ];
+  for (const [tx, ty, age] of eggSeeds) {
+    const id = allocateEntityId(world);
+    initAnt(world.ants, id, {
+      colonyId: COLONY_ID,
+      posX: tx << FP_SHIFT,
+      posY: ty << FP_SHIFT,
+      task: AntTask.Idle,
+      speed: 0,
+      zone: Zone.Underground,
+    });
+    world.ants.age[id] = age;
+    colony.eggs.push(id);
+    colony.eggCount += 1;
   }
 
   return world;
@@ -284,6 +308,57 @@ describe('broodFieldDirty triggers (#235) — the two hardest, deterministically
     colony.broodFieldDirty = false;
     tickLifecycleTransitions(world, colony);
     expect(colony.workers).toContain(larva);
+    expect(colony.broodFieldDirty).toBe(true);
+  });
+
+  it('an egg hatching to a larva sets broodFieldDirty (seed-order reorder)', () => {
+    // The hatch swap-removes from eggs[] and appends to larvae[], reordering the
+    // pickup/deposit BFS seed enumeration — so it MUST rebuild the fields even
+    // though the brood stays on the same tile. Age an egg to the brink and step
+    // lifecycle directly (a full tick would clear the flag in step-9).
+    const world = buildBroodColony(1337);
+    const colony = world.colonies[COLONY_ID]!;
+    const ants = world.ants;
+    const eggId = allocateEntityId(world);
+    initAnt(world.ants, eggId, {
+      colonyId: COLONY_ID,
+      posX: 3 << FP_SHIFT,
+      posY: 2 << FP_SHIFT,
+      speed: 0,
+      zone: Zone.Underground,
+    });
+    ants.age[eggId] = EGG_HATCH_TICKS - 1;
+    colony.eggs.push(eggId);
+    colony.eggCount += 1;
+    colony.broodFieldDirty = false;
+    tickLifecycleTransitions(world, colony);
+    expect(colony.larvae).toContain(eggId);
+    expect(colony.broodFieldDirty).toBe(true);
+  });
+
+  it('a chamber promoting over an all-Open footprint sets broodFieldDirty', () => {
+    // PlaceChamber over already-Open tiles marks zero tiles, so step-9 consumed
+    // digFlowFieldDirty before this step-11 promotion — the new Nursery must flag
+    // broodFieldDirty here or its pickup/deposit seeds go stale. Set up a pending
+    // Nursery over a carved-Open footprint and run checkPendingChambers directly.
+    const world = buildBroodColony(1337);
+    const colony = world.colonies[COLONY_ID]!;
+    const underground = world.undergroundGrids[COLONY_ID]!;
+    // Carve a 3x3 Open footprint at (15,2) and queue a Nursery there.
+    for (let dy = 0; dy < 3; dy++)
+      for (let dx = 0; dx < 3; dx++) ugSet(underground, 15 + dx, 2 + dy, UndergroundTileState.Open);
+    world.pendingChambers['1:15:2'] = {
+      colonyId: COLONY_ID,
+      chamberType: ChamberType.Nursery,
+      anchorTileX: 15,
+      anchorTileY: 2,
+      width: 3,
+      height: 3,
+    };
+    const before = colony.chambers.length;
+    colony.broodFieldDirty = false;
+    checkPendingChambers(world);
+    expect(colony.chambers.length).toBe(before + 1);
     expect(colony.broodFieldDirty).toBe(true);
   });
 });

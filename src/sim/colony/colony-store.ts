@@ -147,15 +147,23 @@ export interface ColonyRecord {
    *
    *  Trigger sites (every real input-change to those fields MUST set this true):
    *    - lifecycle-system.ts   egg lay (new reclaimable seed)
+   *    - lifecycle-system.ts   egg→larva hatch (swap-remove + push REORDERS the
+   *                            eggs-then-larvae BFS seed enumeration; the flow BFS
+   *                            is first-claim-wins on equidistant tiles, so a tie
+   *                            tile's direction can flip — NOT output-inert)
    *    - lifecycle-system.ts   larva→worker promotion (brood leaves the set)
    *    - lifecycle-system.ts   worker lifespan death (defensive: carried-brood orphan)
    *    - larva-maturation.ts   larva→worker promotion (2nd promotion site)
    *    - colony-system.ts      larva starvation death
+   *    - colony-system.ts      checkPendingChambers chamber promotion (a new Nursery
+   *                            joins the seed/exclusion set; needed for the all-Open
+   *                            PlaceChamber path where no tile-flip dirties step 9)
    *    - ant-nursing.ts        nurse pickup (carriedBy set) + depositCarriedBrood
    *    - combat.ts killAnt     brood death AND carrier-death orphan
-   *  NOT triggers (output-identical): egg→larva hatch (list move, same tile/entity);
-   *  carried-brood per-tick position sync (carried brood is excluded by
-   *  isBroodReclaimable); tickDeathCleanup swap-remove (alive=0 already excluded). */
+   *  NOT triggers (output-identical): carried-brood per-tick position sync (carried
+   *  brood is excluded by isBroodReclaimable); tickDeathCleanup swap-remove of an
+   *  already-dead brood (the death that set alive=0 already flagged, and the removal
+   *  happens after that tick's step 9). */
   broodFieldDirty: boolean;
 
   /** Phase 9 / CMBT-06/07 / PRD §1a — cumulative count of enemies killed by this colony's ants.
