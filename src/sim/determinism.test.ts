@@ -39,68 +39,32 @@ import type { WorldState } from './types.js';
 import type { SimCommand } from './commands.js';
 import type { ColonyId } from './colony/colony-store.js';
 import { createScenario } from './scenario.js';
+// eslint-disable-next-line no-restricted-imports -- #229: this SCEN-06 serializer consumes the canonical serialized-field list from the platform layer (same pattern as telemetry.test.ts:8)
+import { SERIALIZED_ANT_SOA_FIELDS } from '../platform/save-schema.js';
 
 // ---------------------------------------------------------------------------
 // Helper: deterministic serialization
 // ---------------------------------------------------------------------------
 
 function serializeWorldState(w: WorldState): string {
+  // #229 — list-driven ant block: the serialized SoA columns come from the
+  // canonical schema (save-schema.ts) so a newly-added persisted ant field
+  // cannot silently escape this SCEN-06 byte-identity compare. Coverage-identical
+  // to the prior hand-rolled literal — SERIALIZED_ANT_SOA_FIELDS is exactly the
+  // 35 fields it enumerated (incl. recentTilesX/Y/Head raw); only key ORDER in
+  // the emitted string changes, which is irrelevant to the same-serializer
+  // self-compare (r1===r2, r1!==r3).
+  const antsOut: Record<string, number[]> = {};
+  for (const f of SERIALIZED_ANT_SOA_FIELDS) {
+    antsOut[f] = Array.from(w.ants[f] as ArrayLike<number>);
+  }
   return JSON.stringify({
     tick: w.tick,
     rngState: w.rngState,
     nextEntityId: w.nextEntityId,
     simVersion: w.simVersion,
     commandQueue: w.commandQueue.map((c) => ({ ...c })),
-    ants: {
-      posX: Array.from(w.ants.posX),
-      posY: Array.from(w.ants.posY),
-      alive: Array.from(w.ants.alive),
-      age: Array.from(w.ants.age),
-      task: Array.from(w.ants.task),
-      subTask: Array.from(w.ants.subTask),
-      speed: Array.from(w.ants.speed),
-      lifespan: Array.from(w.ants.lifespan),
-      colonyId: Array.from(w.ants.colonyId),
-      foodCarrying: Array.from(w.ants.foodCarrying),
-      starvationTimer: Array.from(w.ants.starvationTimer),
-      // Phase 7 ant fields:
-      zone: Array.from(w.ants.zone),
-      digTileX: Array.from(w.ants.digTileX),
-      digTileY: Array.from(w.ants.digTileY),
-      digTicksRemaining: Array.from(w.ants.digTicksRemaining),
-      targetPosX: Array.from(w.ants.targetPosX),
-      targetPosY: Array.from(w.ants.targetPosY),
-      // Phase 09.1 Chunk 0 — grid-of-occupancy byte (new SoA field).
-      currentGridColonyId: Array.from(w.ants.currentGridColonyId),
-      // Phase 9 — 6 previously-omitted SoA fields (pre-existing serializer
-      // gap closed here per 09.1-00-PLAN). If closure surfaces a latent
-      // non-deterministic divergence in one of these fields, revert ONLY the
-      // 6 search* lines and document in 09.1-MEMO.md §5 Deviations Log.
-      searchWave: Array.from(w.ants.searchWave),
-      searchHeadingX: Array.from(w.ants.searchHeadingX),
-      searchHeadingY: Array.from(w.ants.searchHeadingY),
-      searchHeadingTicks: Array.from(w.ants.searchHeadingTicks),
-      searchPrevTileX: Array.from(w.ants.searchPrevTileX),
-      searchPrevTileY: Array.from(w.ants.searchPrevTileY),
-      // Issue #27 — carrier wait flag (new SoA field). Must round-trip in
-      // determinism asserts so a divergence in wait-state would break the
-      // byte-identical compare.
-      waitingDeposit: Array.from(w.ants.waitingDeposit),
-      // Issue #35 — pause counter. Divergence changes future tick output, so the
-      // determinism compare must include it.
-      searchPauseTicks: Array.from(w.ants.searchPauseTicks),
-      // Phase 9 / S3 combat fields — spider writes these every tick; omitting
-      // them would silently pass even if resolveSpiderCombatOnTile diverges.
-      hp: Array.from(w.ants.hp),
-      homeGroundBonusHp: Array.from(w.ants.homeGroundBonusHp),
-      attackCooldown: Array.from(w.ants.attackCooldown),
-      combatOpponentId: Array.from(w.ants.combatOpponentId),
-      carryingBroodId: Array.from(w.ants.carryingBroodId),
-      carriedBy: Array.from(w.ants.carriedBy),
-      recentTilesX: Array.from(w.ants.recentTilesX),
-      recentTilesY: Array.from(w.ants.recentTilesY),
-      recentTilesHead: Array.from(w.ants.recentTilesHead),
-    },
+    ants: antsOut,
     colonies: Object.keys(w.colonies)
       .sort()
       .reduce(

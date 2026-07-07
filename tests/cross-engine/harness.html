@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>cross-engine determinism harness (#229)</title>
+  </head>
+  <body>
+    <!-- Vite serves this at /tests/cross-engine/harness.html and transforms the .ts entry
+         on the fly. harness-entry.ts sets window.__simHash for the Playwright spec. -->
+    <script type="module" src="./harness-entry.ts"></script>
+  </body>
+</html>
