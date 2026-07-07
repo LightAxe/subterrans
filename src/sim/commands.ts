@@ -4,7 +4,7 @@
 // Phase 7 adds 3 variants: CancelDigMark, PlaceChamber, DesignateEntrance.
 
 import type { ColonyId, BehaviorRatio } from './colony/colony-store.js';
-import type { AIState } from './types.js';
+import type { AIState, WorldState } from './types.js';
 import type { ChamberType } from './enums.js';
 
 export interface SimCommandBase {
@@ -142,3 +142,19 @@ export type SimCommand =
   | MarkSpiderPriorityCommand;
 
 export const MAX_COMMANDS_PER_TICK = 64; // PRD §5 line 680 — FIFO silent-drop beyond cap
+
+/**
+ * #230 — the single sanctioned `commandQueue.push` chokepoint. EVERY producer
+ * (player input via enqueueCommand, the render AI controller, and sim self-emits)
+ * routes through here so the queue has one provenance seam for Phase 7 netcode. A
+ * lint rule (eslint.config.ts) bans raw `world.commandQueue.push` everywhere else.
+ *
+ * Returns a boolean that always resolves `true` today — it reserves the Phase-7
+ * reject signature (per-producer budgets / an ack channel) without implementing it,
+ * so no caller yet needs to handle a refusal. Pure pass-through: byte-identical replay.
+ */
+export function pushCommand(world: WorldState, cmd: SimCommand): boolean {
+  // eslint-disable-next-line no-restricted-syntax -- the single sanctioned commandQueue.push chokepoint (#230)
+  world.commandQueue.push(cmd);
+  return true;
+}

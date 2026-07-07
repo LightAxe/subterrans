@@ -35,7 +35,7 @@
 // The isPaused param is retained so callers can pass it uniformly, but it no
 // longer gates the cap (it never needed to — the cap is the same either way).
 
-import { MAX_COMMANDS_PER_TICK, type SimCommand } from '../sim/commands.js';
+import { MAX_COMMANDS_PER_TICK, pushCommand, type SimCommand } from '../sim/commands.js';
 import type { WorldState } from '../sim/types.js';
 
 /**
@@ -84,6 +84,5 @@ export function enqueueCommand(world: WorldState, cmd: SimCommand, isPaused: boo
       return false;
     }
   }
-  world.commandQueue.push(cmd);
-  return true;
+  return pushCommand(world, cmd); // #230 — the input-side cap stays here; the actual push routes through the chokepoint
 }
