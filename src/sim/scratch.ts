@@ -2,15 +2,20 @@
  * #231 — per-world scratch arena.
  *
  * The sim's module-level scratch buffers (combat sweep arrays, spider hunt
- * counters, invader-BFS buffers, occupancy map, idle list, motion out-params) are
- * all reset-before-use and safe for sequential single-threaded ticking of ONE
- * world — but they are shared across every world in the process, which breaks the
- * moment two worlds tick in the same worker (Phase 6 background/replay sim) or a
- * rolled-back world interleaves with the live one (Phase 7 rollback). This module
- * moves them to a per-world arena keyed by WorldState identity — the proven
- * pattern already used by tick.ts's flow-field `cachesByWorld` WeakMap and
- * `surfaceGoalBfsScratch`. Pure move: sizes, reset semantics, and iteration order
- * are preserved verbatim, so replay stays byte-identical (no simVersion bump).
+ * counters, invader-BFS buffers, occupancy map, idle list, motion out-params,
+ * alive-queen id set, surface-movement cache) are all reset-before-use and safe
+ * for sequential single-threaded ticking of ONE world — but they are shared across
+ * every world in the process, which breaks the moment two worlds tick in the same
+ * worker (Phase 6 background/replay sim) or a rolled-back world interleaves with
+ * the live one (Phase 7 rollback). This module moves them to a per-world arena
+ * keyed by WorldState identity — the proven pattern already used by tick.ts's
+ * flow-field `cachesByWorld` WeakMap and `surfaceGoalBfsScratch`. Pure move: sizes,
+ * reset semantics, and iteration order are preserved verbatim, so replay stays
+ * byte-identical (no simVersion bump).
+ *
+ * NOT migrated: larva-maturation.ts's `nurseScratch` — a monotonic per-tick STAMP
+ * (not a reset buffer), provably byte-safe even when shared; tracked for a
+ * per-world move in the Phase-7 follow-up (#256).
  *
  * Layering: this sits at `src/sim/` root (NOT under `src/sim/ant/`), so it stays
  * outside the ant-cycle graph that check-ant-cycles.mjs enforces. Its only
@@ -19,6 +24,7 @@
 import type { WorldState } from './types.js';
 import type { CardinalStep } from './ant/ant-motion.js';
 import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constants.js';
+import { createSurfaceMovementCache, type SurfaceMovementCache } from './surface-features.js';
 
 export interface ScratchArena {
   /** combat.ts — sweep-and-pair sort buffers + spider on-tile list. */
@@ -44,6 +50,10 @@ export interface ScratchArena {
   movementOccupancy: Map<number, number>;
   /** tick.ts — step-10a idle-eligible ant list. */
   tickIdle: number[];
+  /** ant-queens.ts — alive-queen id set (collectAliveQueenIds, cleared+refilled per call). */
+  queenIds: Set<number>;
+  /** ant-movement.ts — per-tick surface-movement effect cache (reset each tick). */
+  surfaceMoveCache: SurfaceMovementCache;
   /** ant-motion.ts — cross-module cardinal-step + detour out-params. */
   motion: { cardinalStep: CardinalStep; detourResult: CardinalStep };
 }
@@ -80,6 +90,8 @@ export function getScratch(world: WorldState): ScratchArena {
       },
       movementOccupancy: new Map(),
       tickIdle: [],
+      queenIds: new Set(),
+      surfaceMoveCache: createSurfaceMovementCache(),
       motion: { cardinalStep: { dx: 0, dy: 0 }, detourResult: { dx: 0, dy: 0 } },
     };
     SCRATCH.set(world, a);

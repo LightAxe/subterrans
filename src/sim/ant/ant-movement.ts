@@ -26,7 +26,6 @@ import { sampleForagingDirection } from '../pheromone/pheromone-system.js';
 import { Rng } from '../rng.js';
 import {
   SurfaceMovementEffect,
-  createSurfaceMovementCache,
   resetSurfaceMovementCache,
   surfaceMovementAtCached,
 } from '../surface-features.js';
@@ -65,14 +64,9 @@ import {
 import { collectAliveQueenIds, moveQueens } from './ant-queens.js';
 import { clearRecentTiles, isRecentTile, pushRecentTile } from './ant-store.js';
 
-/**
- * Issue #67 — module-level surface movement cache. Reset (not reallocated)
- * each tick by `tickAntMovement`. Allocating ~16 KB of Uint8Array per tick
- * and discarding it was a measurable GC burden in long sessions. Reset is
- * identical to `createSurfaceMovementCache`'s post-construction fill.
- */
-// sim-scratch: reset (not reallocated) each tick by tickAntMovement (factory return — not lint-enforced).
-const SURFACE_MOVE_CACHE_SCRATCH = createSurfaceMovementCache();
+// #231 — the per-tick surface-movement cache (issue #67, ~16 KB Uint8Array) now
+// lives on the per-world scratch arena (getScratch(world).surfaceMoveCache), reset
+// (not reallocated) each tick as before.
 
 // #231 — resolveSameColonyOccupancy's reuse Map (issue #67) now lives on the
 // per-world scratch arena (getScratch(world).movementOccupancy), Map.clear()ed at
@@ -128,8 +122,12 @@ export function tickAntMovement(
   // a fresh ~16 KB Uint8Array. The reset is the same fill(255) work that
   // createSurfaceMovementCache does after allocation, just without the
   // allocation+GC churn.
-  resetSurfaceMovementCache(SURFACE_MOVE_CACHE_SCRATCH);
-  const surfaceMoveCache = SURFACE_MOVE_CACHE_SCRATCH;
+  const arena = getScratch(world);
+  const surfaceMoveCache = arena.surfaceMoveCache;
+  resetSurfaceMovementCache(surfaceMoveCache);
+  // #231 — hoist the diagonalizeFlowStep out-param once (arena object identity is
+  // stable per world); the underground flow-follow branches below pass it and read dx/dy.
+  const cardinalStep = arena.motion.cardinalStep;
 
   // P1 queen-relocation: queens have their own movement path (route to Queen
   // chamber). They must be skipped in the main loop below so the default
@@ -372,10 +370,10 @@ export function tickAntMovement(
               DIR_DY[dir]!,
               task as AntTask,
               world.simVersion,
-              getScratch(world).motion.cardinalStep,
+              cardinalStep,
             );
-            dx = getScratch(world).motion.cardinalStep.dx;
-            dy = getScratch(world).motion.cardinalStep.dy;
+            dx = cardinalStep.dx;
+            dy = cardinalStep.dy;
             stepped = true;
           }
           // dir === -2 is unreachable here — chamberFoodUnreachable was set
@@ -440,10 +438,10 @@ export function tickAntMovement(
               DIR_DY[dir]!,
               task as AntTask,
               world.simVersion,
-              getScratch(world).motion.cardinalStep,
+              cardinalStep,
             );
-            dx = getScratch(world).motion.cardinalStep.dx;
-            dy = getScratch(world).motion.cardinalStep.dy;
+            dx = cardinalStep.dx;
+            dy = cardinalStep.dy;
             stepped = true;
           } else {
             // dir === -2 (unreachable). Deterministic failsafe: hold position

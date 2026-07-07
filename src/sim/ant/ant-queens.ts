@@ -36,17 +36,12 @@ import {
 } from './ant-motion.js';
 import { getScratch } from '../scratch.js';
 
-/**
- * Issue #67 — module-level scratch for `collectAliveQueenIds`. Cleared and
- * refilled each call. Reused across the per-tick lookup loops in
- * `tickAntMovement`. Single-threaded sim — no concurrent collection risk.
- */
-// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: cleared+refilled at the top of each collectAliveQueenIds call
-const QUEEN_IDS_SCRATCH = new Set<number>();
+// #231 — collectAliveQueenIds's alive-queen id set now lives on the per-world
+// scratch arena (getScratch(world).queenIds), cleared+refilled per call as before.
 
 /**
- * Collect alive queen entity ids. Returns the module-level
- * `QUEEN_IDS_SCRATCH` singleton (filled in place) or `null` if no queens
+ * Collect alive queen entity ids. Returns the per-world scratch arena's
+ * `queenIds` set (filled in place) or `null` if no queens
  * qualify. Caller MUST consume the returned set before any other call to
  * `collectAliveQueenIds` — the next call clears and refills the same
  * instance, silently invalidating prior references. Today's only caller
@@ -62,10 +57,11 @@ export function collectAliveQueenIds(world: WorldState): Set<number> | null {
   // Without a Queen chamber moveQueens is a no-op, so the main loop must
   // remain responsible for moving that entity.
   //
-  // Issue #67 — clear-and-fill the module-level scratch instead of
+  // Issue #67 / #231 — clear-and-fill the per-world arena set instead of
   // allocating a new Set per tick. Returning `null` for "no queens to skip"
   // is preserved; callers fast-path on null without touching the set.
-  QUEEN_IDS_SCRATCH.clear();
+  const queenIds = getScratch(world).queenIds;
+  queenIds.clear();
   let any = false;
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
@@ -74,10 +70,10 @@ export function collectAliveQueenIds(world: WorldState): Set<number> | null {
     if (world.ants.alive[qId] !== 1) continue;
     if (world.ants.task[qId] !== AntTask.Idle) continue;
     if (!hasCompletedChamber(colony, ChamberType.Queen)) continue;
-    QUEEN_IDS_SCRATCH.add(qId);
+    queenIds.add(qId);
     any = true;
   }
-  return any ? QUEEN_IDS_SCRATCH : null;
+  return any ? queenIds : null;
 }
 
 /**
@@ -115,6 +111,8 @@ export function moveQueens(
   const surfaceMaxY = (SURFACE_GRID_HEIGHT << FP_SHIFT) - 1;
   const undergroundMaxX = (UNDERGROUND_GRID_WIDTH << FP_SHIFT) - 1;
   const undergroundMaxY = (UNDERGROUND_GRID_HEIGHT << FP_SHIFT) - 1;
+  // #231 — hoist the diagonalizeFlowStep out-param once (see ant-movement).
+  const cardinalStep = getScratch(world).motion.cardinalStep;
 
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
@@ -302,10 +300,10 @@ export function moveQueens(
               DIR_DY[dir]!,
               AntTask.Idle,
               world.simVersion,
-              getScratch(world).motion.cardinalStep,
+              cardinalStep,
             );
-            dx = getScratch(world).motion.cardinalStep.dx;
-            dy = getScratch(world).motion.cardinalStep.dy;
+            dx = cardinalStep.dx;
+            dy = cardinalStep.dy;
             stepped = true;
           }
         }

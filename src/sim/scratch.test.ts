@@ -9,8 +9,9 @@
 // separately proves the migration is byte-identical to the pre-#231 tree.
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createScenario } from './scenario.js';
+import { createWorldState } from './types.js';
 import { tick } from './tick.js';
-import { resetScratchArenas } from './scratch.js';
+import { getScratch, resetScratchArenas } from './scratch.js';
 import { PLAYER_COLONY_ID } from './constants.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { SimCommand } from './commands.js';
@@ -87,5 +88,40 @@ describe('per-world scratch arena (#231) — interleave safety', () => {
     const worldA = createScenario(1337);
     for (let t = 0; t < TICKS; t++) tick(worldA, script[t] ?? []);
     expect(serialize(worldA)).toBe(soloA);
+  });
+});
+
+describe('per-world scratch arena (#231) — object independence (discriminating)', () => {
+  // Unlike the interleave tests above (which pass even on the pre-#231 module
+  // buffers, since every buffer is reset-before-use per call), these assert the
+  // ACTUAL migration property: two worlds get DISTINCT arena objects. A shared
+  // module buffer fails these.
+  it('distinct worlds get distinct arena objects; the same world is stable', () => {
+    resetScratchArenas();
+    const a = getScratch(createWorldState(1));
+    const wB = createWorldState(2);
+    const b = getScratch(wB);
+    expect(a).not.toBe(b);
+    expect(a.combat.keyBySlot).not.toBe(b.combat.keyBySlot);
+    expect(a.antTargeting.invBfsDist).not.toBe(b.antTargeting.invBfsDist);
+    expect(a.spider.huntTileCounts).not.toBe(b.spider.huntTileCounts);
+    expect(a.movementOccupancy).not.toBe(b.movementOccupancy);
+    expect(a.motion.cardinalStep).not.toBe(b.motion.cardinalStep);
+    expect(a.motion.detourResult).not.toBe(b.motion.detourResult);
+    expect(a.queenIds).not.toBe(b.queenIds);
+    expect(a.surfaceMoveCache).not.toBe(b.surfaceMoveCache);
+    expect(getScratch(wB)).toBe(b); // same world → same arena
+  });
+
+  it('a world-B motion out-param write does not alias world A (shared buffer would clobber)', () => {
+    resetScratchArenas();
+    const stepA = getScratch(createWorldState(1)).motion.cardinalStep;
+    stepA.dx = 7;
+    stepA.dy = -3;
+    const stepB = getScratch(createWorldState(2)).motion.cardinalStep;
+    stepB.dx = 0;
+    stepB.dy = 0;
+    expect(stepA.dx).toBe(7);
+    expect(stepA.dy).toBe(-3);
   });
 });
