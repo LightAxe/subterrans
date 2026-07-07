@@ -15,5 +15,9 @@ export default defineConfig({
   test: {
     include: ['bench/**/*.bench.ts'],
     environment: 'node',
+    // #235 — let tick-cost.bench.ts's console.log ticks/sec lines reach stdout
+    // (Vitest intercepts console by default). The pheromone bench uses expect(),
+    // so this only affects console-printing benches.
+    disableConsoleIntercept: true,
   },
 });

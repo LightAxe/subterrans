@@ -444,6 +444,13 @@ export function killAnt(
   const victimColony = world.colonies[victimColonyId];
   const isQueenVictim = victimColony !== undefined && antIndex === victimColony.queenEntityId;
 
+  // #235 — a death may remove a reclaimable brood seed (brood killed) OR orphan a
+  // carried brood (a carrier died — carry pointers cleared just above at :427-435),
+  // both of which change the pickup/deposit field seed set. Over-triggering on
+  // worker/fighter deaths is deliberate (correct + simple; deaths are rare vs the
+  // every-tick recompute this gate replaces).
+  if (victimColony !== undefined) victimColony.broodFieldDirty = true;
+
   // combat_kill is only emitted for Ant/Spider kills; Environment is reserved (no event).
   if (killerKind !== 'Environment') {
     emitEvent(world, {

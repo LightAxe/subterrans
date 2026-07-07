@@ -482,6 +482,12 @@ export function clearRecentTiles(ants: AntComponents, id: EntityId): void {
 /**
  * Mark entity `id` as dead. O(1) — no array mutation, no swap-remove.
  * The colony-bucket system (Plan 03) handles slot reuse.
+ *
+ * TEST-ONLY today: every PRODUCTION kill routes through combat.ts `killAnt`
+ * (the 5-arg version), which also sets `colony.broodFieldDirty` (#235) so the
+ * nursing pickup/deposit fields rebuild when a brood dies or a carrier is orphaned.
+ * This bare helper does NOT flag it — do NOT route a brood/carrier death through it
+ * from production code, or the gated field would go stale.
  */
 export function killAnt(ants: AntComponents, id: EntityId): void {
   ants.alive[id] = 0;

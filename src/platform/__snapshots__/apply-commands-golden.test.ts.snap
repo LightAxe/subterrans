@@ -59,6 +59,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > C
   ],
   "colonies": {
     "1": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 1,
       "computedAllocation": {
@@ -110,6 +111,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > C
       ],
     },
     "2": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 2,
       "computedAllocation": {
@@ -383,6 +385,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > D
   ],
   "colonies": {
     "1": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 1,
       "computedAllocation": {
@@ -440,6 +443,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > D
       ],
     },
     "2": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 2,
       "computedAllocation": {
@@ -713,6 +717,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > M
   ],
   "colonies": {
     "1": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 1,
       "computedAllocation": {
@@ -764,6 +769,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > M
       ],
     },
     "2": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 2,
       "computedAllocation": {
@@ -1037,6 +1043,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > M
   ],
   "colonies": {
     "1": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 1,
       "computedAllocation": {
@@ -1088,6 +1095,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > M
       ],
     },
     "2": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 2,
       "computedAllocation": {
@@ -1361,6 +1369,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > M
   ],
   "colonies": {
     "1": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 1,
       "computedAllocation": {
@@ -1412,6 +1421,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > M
       ],
     },
     "2": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 2,
       "computedAllocation": {
@@ -1685,6 +1695,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > N
   ],
   "colonies": {
     "1": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 1,
       "computedAllocation": {
@@ -1736,6 +1747,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > N
       ],
     },
     "2": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 2,
       "computedAllocation": {
@@ -2009,6 +2021,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > P
   ],
   "colonies": {
     "1": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 1,
       "computedAllocation": {
@@ -2060,6 +2073,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > P
       ],
     },
     "2": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 2,
       "computedAllocation": {
@@ -2333,6 +2347,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > S
   ],
   "colonies": {
     "1": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 1,
       "computedAllocation": {
@@ -2384,6 +2399,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > S
       ],
     },
     "2": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 2,
       "computedAllocation": {
@@ -2657,6 +2673,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > S
   ],
   "colonies": {
     "1": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 1,
       "computedAllocation": {
@@ -2708,6 +2725,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > S
       ],
     },
     "2": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 2,
       "computedAllocation": {
@@ -2981,6 +2999,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > S
   ],
   "colonies": {
     "1": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 1,
       "computedAllocation": {
@@ -3032,6 +3051,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > S
       ],
     },
     "2": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 2,
       "computedAllocation": {
@@ -3305,6 +3325,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > S
   ],
   "colonies": {
     "1": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 1,
       "computedAllocation": {
@@ -3356,6 +3377,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > S
       ],
     },
     "2": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 2,
       "computedAllocation": {
@@ -3651,6 +3673,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > e
   ],
   "colonies": {
     "1": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 1,
       "computedAllocation": {
@@ -3702,6 +3725,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > e
       ],
     },
     "2": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 2,
       "computedAllocation": {
@@ -3975,6 +3999,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > i
   ],
   "colonies": {
     "1": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 1,
       "computedAllocation": {
@@ -4026,6 +4051,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > i
       ],
     },
     "2": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 2,
       "computedAllocation": {
@@ -4299,6 +4325,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > m
   ],
   "colonies": {
     "1": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 1,
       "computedAllocation": {
@@ -4353,6 +4380,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > m
       ],
     },
     "2": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 2,
       "computedAllocation": {
@@ -4626,6 +4654,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > u
   ],
   "colonies": {
     "1": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 1,
       "computedAllocation": {
@@ -4677,6 +4706,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > u
       ],
     },
     "2": {
+      "broodFieldDirty": false,
       "chambers": [],
       "colonyId": 2,
       "computedAllocation": {

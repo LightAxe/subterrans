@@ -148,6 +148,7 @@ export function tickLarvaMaturation(world: WorldState, colony: ColonyRecord): vo
       ants.speed[larvaId] = WORKER_BASE_SPEED;
       colony.workers.push(larvaId);
       colony.workerCount += 1;
+      colony.broodFieldDirty = true; // #235 — brood left the reclaimable set (larva→worker, 2nd promotion site)
       // If a nurse was carrying this larva (Feeding state), drop the carry.
       // The new worker keeps the carrier's last position (posX/posY were synced).
       const carrierId = ants.carriedBy[larvaId]!;

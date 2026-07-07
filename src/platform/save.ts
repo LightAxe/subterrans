@@ -501,6 +501,7 @@ interface SerializedColony {
   rallyPoint: { tileX: number; tileY: number } | null;
   digFlowFieldDirty: boolean;
   foodFlowFieldDirty: boolean;
+  broodFieldDirty?: boolean; // #235 — optional: absent on pre-#235 saves (deserialize defaults false)
   killCount: number;
   priorityFoodPileId: FoodPileId | null;
   eggIntervalNumerator: number;
@@ -811,6 +812,7 @@ function serializeColony(c: ColonyRecord): SerializedColony {
     rallyPoint: c.rallyPoint === null ? null : { ...c.rallyPoint },
     digFlowFieldDirty: c.digFlowFieldDirty,
     foodFlowFieldDirty: c.foodFlowFieldDirty,
+    broodFieldDirty: c.broodFieldDirty, // #235
     killCount: c.killCount,
     priorityFoodPileId: c.priorityFoodPileId,
     eggIntervalNumerator: c.eggIntervalNumerator,
@@ -1123,6 +1125,7 @@ function deserializeColony(s: SerializedColony): ColonyRecord {
   c.rallyPoint = s.rallyPoint === null ? null : { ...s.rallyPoint };
   c.digFlowFieldDirty = s.digFlowFieldDirty;
   c.foodFlowFieldDirty = s.foodFlowFieldDirty;
+  c.broodFieldDirty = s.broodFieldDirty ?? false; // #235 — absent on pre-#235 saves; tick-1 firstDigCompute forces recompute regardless
   c.killCount = s.killCount;
   c.priorityFoodPileId = s.priorityFoodPileId;
   c.queenLastEggTick = s.queenLastEggTick;
