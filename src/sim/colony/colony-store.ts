@@ -162,8 +162,13 @@ export interface ColonyRecord {
    *    - combat.ts killAnt     brood death AND carrier-death orphan
    *  NOT triggers (output-identical): carried-brood per-tick position sync (carried
    *  brood is excluded by isBroodReclaimable); tickDeathCleanup swap-remove of an
-   *  already-dead brood (the death that set alive=0 already flagged, and the removal
-   *  happens after that tick's step 9). */
+   *  already-dead brood. The swap-remove DOES reorder the surviving seeds (same
+   *  first-claim-wins hazard as the hatch above), but it is safe because the death
+   *  that set alive=0 already flagged and that flag is still UNCONSUMED at the first
+   *  step-9 following the reorder: starvation death flags at step 3 → cleanup reorders
+   *  at step 5 → step 9 (same tick) recomputes; combat/spider death flags at step 17
+   *  → the flag persists to T+1 where step-5 cleanup reorders and T+1 step 9 consumes
+   *  it. (killAnt itself never touches eggs[]/larvae[], only alive + carry pointers.) */
   broodFieldDirty: boolean;
 
   /** Phase 9 / CMBT-06/07 / PRD §1a — cumulative count of enemies killed by this colony's ants.
