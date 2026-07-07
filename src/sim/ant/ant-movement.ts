@@ -35,11 +35,7 @@ import {
   surfaceGoalDistance,
 } from '../surface-routing.js';
 import { UndergroundTileState, Zone, ugGet } from '../terrain.js';
-import {
-  SIM_VERSION_V25_RALLY_RECALL,
-  SIM_VERSION_V33_OCCUPANCY_CENTER,
-  type WorldState,
-} from '../types.js';
+import { SIM_VERSION_V33_OCCUPANCY_CENTER, type WorldState } from '../types.js';
 import {
   pickInvaderUndergroundStep,
   pickNearestHostileUnderground,
@@ -709,16 +705,11 @@ export function tickAntMovement(
         // null colony is treated as NOT recalled (matches isRecallingFromForeign guard
         // in skipAscent) — missing colony record is a defensive fallback, not a recall.
         // V25 (#174): recall keys on the rally point alone — a cleared rally means
-        // "come home". Pre-V25 also recalled on fight===0, which fought an explicit
-        // rally on the enemy entrance and bounced invaders at the shaft. Kept gated
-        // for byte-identical replay of pre-V25 saves. Must stay in lockstep with the
-        // ascent `isRecallingFromForeign` / `skipAscent` predicate in the
-        // surface-ascent block later in tickAntMovement.
-        const isRecalling =
-          ownColony != null &&
-          (world.simVersion >= SIM_VERSION_V25_RALLY_RECALL
-            ? ownColony.rallyPoint == null
-            : ownColony.targetRatio.fight === 0 || ownColony.rallyPoint == null);
+        // "come home". (#247: the pre-V25 fight===0 recall branch was reaped — MIN=V30 —
+        // so this is unconditional now.) Must stay in lockstep with the ascent
+        // `isRecallingFromForeign` / `skipAscent` predicate in the surface-ascent block
+        // later in tickAntMovement.
+        const isRecalling = ownColony != null && ownColony.rallyPoint == null;
 
         if (isRecalling) {
           // Recalled invader: navigate toward the nearest foreign entrance exit
@@ -1358,20 +1349,13 @@ export function tickAntMovement(
           const inOwnGrid = ants.currentGridColonyId[id] === ants.colonyId[id];
           // Recalled invaders must be able to exit the enemy underground, so
           // skipAscent is cleared for them. V25 (#174): recall keys on a cleared
-          // rally alone. Pre-V25 also recalled on fight===0, which made invaders
-          // ascend the moment they reached tileY=0 on the enemy entrance column
-          // even with a rally explicitly set there, producing a descend/ascend
-          // bounce. Kept gated for byte-identical replay. Must match the
-          // underground recall-navigation `isRecalling` predicate in the
-          // recalled-invader block earlier in tickAntMovement.
+          // rally alone. (#247: the pre-V25 fight===0 recall branch was reaped —
+          // MIN=V30 — so this is unconditional now.) Must match the underground
+          // recall-navigation `isRecalling` predicate in the recalled-invader block
+          // earlier in tickAntMovement.
           const ownColonyForAscent = world.colonies[ants.colonyId[id]!];
           const isRecallingFromForeign =
-            !inOwnGrid &&
-            ownColonyForAscent != null &&
-            (world.simVersion >= SIM_VERSION_V25_RALLY_RECALL
-              ? ownColonyForAscent.rallyPoint == null
-              : ownColonyForAscent.targetRatio.fight === 0 ||
-                ownColonyForAscent.rallyPoint == null);
+            !inOwnGrid && ownColonyForAscent != null && ownColonyForAscent.rallyPoint == null;
           const skipAscent = task === AntTask.Fighting && !inOwnGrid && !isRecallingFromForeign;
           if (!skipAscent) {
             const lookupColonyId = ants.currentGridColonyId[id]!;

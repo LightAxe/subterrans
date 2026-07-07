@@ -12,7 +12,6 @@ import {
   createWorldState,
   allocateEntityId,
   SIM_VERSION_V17_COMBAT_AGGRO,
-  SIM_VERSION_V22_DIFFICULTY,
   SIM_VERSION_V23_SPIDER_AGGRO,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
@@ -489,33 +488,9 @@ describe('updateFightAntTargets', () => {
     expect(world.ants.targetPosY[fighter]).toBe(spider.posY);
   });
 
-  it('V23 gate: a pre-V23 (V22) world shows no spider auto-aggro', () => {
-    const world = createWorldState(42, MAX_TEST_ENTITIES);
-    world.simVersion = SIM_VERSION_V22_DIFFICULTY;
-    const colA = createColonyRecord(COLONY_ID, 0);
-    colA.entrances = [];
-    colA.rallyPoint = { tileX: 50, tileY: 5 };
-    colA.digFlowFieldDirty = false;
-    world.colonies[COLONY_ID] = colA;
-
-    const fighter = allocateEntityId(world);
-    initAnt(world.ants, fighter, {
-      colonyId: COLONY_ID,
-      posX: 10 << FP_SHIFT,
-      posY: 10 << FP_SHIFT,
-      task: AntTask.Fighting,
-      subTask: 0,
-    });
-    world.ants.zone[fighter] = Zone.Surface;
-
-    const spider = placeAggroSpider(world, 11, 10); // dist 1, but gate is closed pre-V23
-
-    updateFightAntTargets(world);
-
-    // No auto-aggro: fighter follows the rally, not the spider.
-    expect(world.ants.targetPosX[fighter]).toBe((50 << FP_SHIFT) + (FP_ONE >> 1));
-    expect(world.ants.targetPosX[fighter]).not.toBe(spider.posX);
-  });
+  // #247 — the "pre-V23 world shows no spider auto-aggro" pinning test was removed:
+  // MIN_ACCEPTED_SIM_VERSION is V30, so no V22 world can load; the reaped gate's
+  // legacy branch is unreachable in production.
 });
 
 // ---------------------------------------------------------------------------

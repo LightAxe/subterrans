@@ -17,7 +17,6 @@ import { Rng } from './rng.js';
 import { AntTask } from './enums.js';
 import { makeTileKey } from './tile-key.js';
 import type { WorldState, KillerKind, QueenDeathContext } from './types.js';
-import { SIM_VERSION_V23_SPIDER_AGGRO, SIM_VERSION_V26_SPIDER_EDGE_MARGIN } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
@@ -141,7 +140,7 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
   //     preserving it for ants still on the tile so resolveSpiderCombatOnTile can
   //     continue their windup. (Codex P1.)
   const spider = world.spider;
-  const v23Spider = spider !== null && world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO;
+  const v23Spider = spider !== null; // #247 — V23 spider-aggro unconditional (MIN=V30)
   const spiderTileX = v23Spider ? spider.posX >> FP_SHIFT : -1;
   const spiderTileY = v23Spider ? spider.posY >> FP_SHIFT : -1;
   // V26: mirror the boundary fold in resolveSpiderCombatOnTile (gated identically
@@ -153,7 +152,7 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
   // in passive states, collapsing the fold to exact same-tile matching.
   const v26EdgeStale =
     v23Spider &&
-    world.simVersion >= SIM_VERSION_V26_SPIDER_EDGE_MARGIN &&
+    // #247 — V26 spider-edge-margin unconditional (MIN=V30)
     (spider.state === 'Chasing' || spider.state === 'Striking' || spider.state === 'Rampaging');
   const staleMargin = v26EdgeStale ? SPIDER_EDGE_MARGIN_TILES : 0;
   const staleLoX = staleMargin;
@@ -206,7 +205,8 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
     const spiderCombatActive =
       ss === 'Striking' ||
       ss === 'Rampaging' ||
-      (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO && ss !== 'Feeding' && ss !== 'Retreating');
+      // #247 — V23 spider-aggro unconditional (MIN=V30)
+      (ss !== 'Feeding' && ss !== 'Retreating');
     if (spiderCombatActive) {
       resolveSpiderCombatOnTile(world);
     }
@@ -587,8 +587,8 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
   // bite any ant sharing its row/column up to `margin` tiles away. In passive
   // states margin = 0, so only exact same-tile matching applies (as pre-V26).
   const v26Edge =
-    world.simVersion >= SIM_VERSION_V26_SPIDER_EDGE_MARGIN &&
-    (spider.state === 'Chasing' || spider.state === 'Striking' || spider.state === 'Rampaging');
+    // #247 — V26 spider-edge-margin unconditional (MIN=V30)
+    spider.state === 'Chasing' || spider.state === 'Striking' || spider.state === 'Rampaging';
   const margin = v26Edge ? SPIDER_EDGE_MARGIN_TILES : 0;
   const loX = margin;
   const hiX = SURFACE_GRID_WIDTH - 1 - margin;
@@ -642,7 +642,7 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
   // worker merely sharing the tile. Pre-V23 never reaches here in Patrolling (gate is
   // Striking/Rampaging only), so this is V23-only by construction.
   if (
-    world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO &&
+    // #247 — V23 spider-aggro unconditional (MIN=V30)
     spider.state === 'Patrolling' &&
     !hasFighter
   ) {
@@ -740,11 +740,10 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
     if (antDies) {
       if (spider.state === 'Striking') spider.killsThisStrike += 1;
       if (spider.state === 'Rampaging') spider.rampageKillsThisRampage += 1;
-      if (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO) {
-        spider.killedThisTick = 1;
-        spider.lastKillTileX = spiderTileX;
-        spider.lastKillTileY = spiderTileY;
-      }
+      // #247 — V23 spider-aggro unconditional (MIN=V30)
+      spider.killedThisTick = 1;
+      spider.lastKillTileX = spiderTileX;
+      spider.lastKillTileY = spiderTileY;
       killAnt(world, swarmRetaliationTarget, null, null, 'Spider');
     }
     return;
@@ -802,11 +801,10 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
   if (antDies2) {
     if (spider.state === 'Striking') spider.killsThisStrike += 1;
     if (spider.state === 'Rampaging') spider.rampageKillsThisRampage += 1;
-    if (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO) {
-      spider.killedThisTick = 1;
-      spider.lastKillTileX = spiderTileX;
-      spider.lastKillTileY = spiderTileY;
-    }
+    // #247 — V23 spider-aggro unconditional (MIN=V30)
+    spider.killedThisTick = 1;
+    spider.lastKillTileX = spiderTileX;
+    spider.lastKillTileY = spiderTileY;
     killAnt(world, activeAntIdx, null, null, 'Spider');
   }
 }
