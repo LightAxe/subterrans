@@ -37,7 +37,6 @@ import { tick } from './tick.js';
 import {
   allocateEntityId,
   LATEST_SIM_VERSION,
-  SIM_VERSION_V24_NURSERY_CAPACITY,
   SIM_VERSION_V25_RALLY_RECALL,
 } from './types.js';
 import { initAnt } from './ant/ant-store.js';
@@ -396,26 +395,7 @@ describe('invasion-routing — foreign recall keys on rally, not fight ratio (#1
     expect(world.ants.task[playerAntId]).toBe(AntTask.Fighting);
   });
 
-  it('V24 control: same scenario bounces the invader back to the surface (pre-fix behavior)', () => {
-    const { world, playerAntId } = descendCommittedInvader();
-    // Pin the sim to the pre-#174 version: recall still fires on fight===0.
-    world.simVersion = SIM_VERSION_V24_NURSERY_CAPACITY;
-    world.colonies[PLAYER_COLONY_ID]!.targetRatio.fight = 0;
-
-    expect(world.simVersion).toBeLessThan(SIM_VERSION_V25_RALLY_RECALL);
-
-    // Under V24 the fight===0 disjunct recalls the invader: it routes to the
-    // entrance exit and ascends. Confirm it reaches the Surface within the
-    // window — the exact bounce that V25 eliminates.
-    let surfaced = false;
-    for (let t = 0; t < HOLD_TICKS; t++) {
-      const cmds = world.commandQueue.splice(0);
-      tick(world, cmds);
-      if (world.ants.zone[playerAntId] === Zone.Surface) {
-        surfaced = true;
-        break;
-      }
-    }
-    expect(surfaced).toBe(true);
-  });
+  // #247 — the "V24 control (pre-fix bounce)" test was removed: it pinned the sim
+  // to V24 to exercise the pre-V25 fight===0 recall disjunct, which the V25 gate reap
+  // deleted. MIN_ACCEPTED_SIM_VERSION is V30, so no V24 world can load in production.
 });

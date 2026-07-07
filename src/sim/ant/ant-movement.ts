@@ -36,7 +36,6 @@ import {
 } from '../surface-routing.js';
 import { UndergroundTileState, Zone, ugGet } from '../terrain.js';
 import {
-  SIM_VERSION_V25_RALLY_RECALL,
   SIM_VERSION_V33_OCCUPANCY_CENTER,
   type WorldState,
 } from '../types.js';
@@ -714,11 +713,7 @@ export function tickAntMovement(
         // for byte-identical replay of pre-V25 saves. Must stay in lockstep with the
         // ascent `isRecallingFromForeign` / `skipAscent` predicate in the
         // surface-ascent block later in tickAntMovement.
-        const isRecalling =
-          ownColony != null &&
-          (world.simVersion >= SIM_VERSION_V25_RALLY_RECALL
-            ? ownColony.rallyPoint == null
-            : ownColony.targetRatio.fight === 0 || ownColony.rallyPoint == null);
+        const isRecalling = ownColony != null && ownColony.rallyPoint == null; // #247 — V25 unconditional (MIN=V30)
 
         if (isRecalling) {
           // Recalled invader: navigate toward the nearest foreign entrance exit
@@ -1368,10 +1363,7 @@ export function tickAntMovement(
           const isRecallingFromForeign =
             !inOwnGrid &&
             ownColonyForAscent != null &&
-            (world.simVersion >= SIM_VERSION_V25_RALLY_RECALL
-              ? ownColonyForAscent.rallyPoint == null
-              : ownColonyForAscent.targetRatio.fight === 0 ||
-                ownColonyForAscent.rallyPoint == null);
+            ownColonyForAscent.rallyPoint == null; // #247 — V25 unconditional (MIN=V30)
           const skipAscent = task === AntTask.Fighting && !inOwnGrid && !isRecallingFromForeign;
           if (!skipAscent) {
             const lookupColonyId = ants.currentGridColonyId[id]!;
