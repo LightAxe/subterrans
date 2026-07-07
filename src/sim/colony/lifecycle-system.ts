@@ -246,6 +246,7 @@ export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord):
 
   colony.eggs.push(eggId);
   colony.eggCount += 1;
+  colony.broodFieldDirty = true; // #235 — new reclaimable brood seed for the pickup/deposit fields
   colony.queenLastEggTick = world.tick; // update after lay so next interval is measured from here
 }
 
@@ -354,6 +355,7 @@ export function tickLifecycleTransitions(world: WorldState, colony: ColonyRecord
       ants.speed[id] = WORKER_BASE_SPEED;
       colony.workers.push(id);
       colony.workerCount += 1;
+      colony.broodFieldDirty = true; // #235 — brood left the reclaimable set (larva→worker)
       // Issue #17 Phase 1 — if a nurse was carrying this larva when
       // it matured, drop the carry. The new worker stays at the carrier's
       // current tile (posX/posY were synced last tick); the carrier
@@ -399,6 +401,7 @@ export function tickLifecycleTransitions(world: WorldState, colony: ColonyRecord
     // Lifespan check — effectively disabled in Phase 6 (WORKER_LIFESPAN_TICKS = 0x7FFFFFFF)
     if (workerAge >= ants.lifespan[id]!) {
       ants.alive[id] = 0;
+      colony.broodFieldDirty = true; // #235 — defensive: a dying worker could be carrying brood (orphan)
       // Note: dead workers are removed on the NEXT tick's backwards iteration pass
       // (the worker remains in colony.workers until then — Plan 09 death cleanup
       // will handle immediate removal once implemented)

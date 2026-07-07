@@ -15,7 +15,14 @@ import { describe, it } from 'vitest';
 import { createScenario } from '../src/sim/scenario.js';
 import { tick } from '../src/sim/tick.js';
 import { PLAYER_COLONY_ID } from '../src/sim/constants.js';
+import { createWorldState, allocateEntityId, LATEST_SIM_VERSION } from '../src/sim/types.js';
+import type { WorldState } from '../src/sim/types.js';
+import { createColonyRecord } from '../src/sim/colony/colony-store.js';
 import type { ColonyId } from '../src/sim/colony/colony-store.js';
+import { initAnt } from '../src/sim/ant/ant-store.js';
+import { createUndergroundGrid, ugSet, UndergroundTileState, Zone } from '../src/sim/terrain.js';
+import { ChamberType, AntTask } from '../src/sim/enums.js';
+import { FP_SHIFT } from '../src/sim/fixed.js';
 import type { SimCommand } from '../src/sim/commands.js';
 
 const SEED = 42;
@@ -77,5 +84,114 @@ describe('whole-sim tick-cost benchmark (#235 — informational)', () => {
     ticksPerSec('idle', idleScript);
     ticksPerSec('excavation', excavationScript);
     ticksPerSec('combat', combatScript);
+  });
+});
+
+// A brood-heavy colony (Queen chamber + Nursery + brood) — the case the #235
+// step-9 second-loop gate actually helps, since createScenario has no chambers.
+// Times the SAME world gated (normal) vs forced (broodFieldDirty=true every tick,
+// = the pre-#235 unconditional recompute) so the delta IS the gating win, with no
+// dependence on comparing against another build.
+const BROOD_CID = PLAYER_COLONY_ID as ColonyId;
+function buildBroodColony(): WorldState {
+  const world = createWorldState(1337, 256);
+  world.simVersion = LATEST_SIM_VERSION;
+  const ug = createUndergroundGrid(20, 20);
+  world.undergroundGrids[BROOD_CID] = ug;
+  for (let dy = 0; dy < 3; dy++)
+    for (let dx = 0; dx < 3; dx++) ugSet(ug, 2 + dx, 2 + dy, UndergroundTileState.Open);
+  const q = allocateEntityId(world);
+  initAnt(world.ants, q, {
+    colonyId: BROOD_CID,
+    posX: 3 << FP_SHIFT,
+    posY: 3 << FP_SHIFT,
+    speed: 0,
+    zone: Zone.Underground,
+  });
+  const c = createColonyRecord(BROOD_CID, q);
+  c.entrances = [];
+  c.rallyPoint = null;
+  c.digFlowFieldDirty = false;
+  c.foodFlowFieldDirty = false;
+  c.broodFieldDirty = false;
+  c.foodStored = 500_000;
+  world.colonies[BROOD_CID] = c;
+  c.chambers.push({
+    chamberId: 1,
+    chamberType: ChamberType.Queen,
+    foodStored: 0,
+    posX: 2 << FP_SHIFT,
+    posY: 2 << FP_SHIFT,
+    width: 3,
+    height: 3,
+  });
+  for (let dy = 0; dy < 3; dy++)
+    for (let dx = 0; dx < 3; dx++) ugSet(ug, 12 + dx, 12 + dy, UndergroundTileState.Open);
+  c.chambers.push({
+    chamberId: 2,
+    chamberType: ChamberType.Nursery,
+    foodStored: 0,
+    posX: 12 << FP_SHIFT,
+    posY: 12 << FP_SHIFT,
+    width: 3,
+    height: 3,
+  });
+  for (let x = 4; x <= 13; x++) ugSet(ug, x, 3, UndergroundTileState.Open);
+  for (let y = 3; y <= 13; y++) ugSet(ug, 13, y, UndergroundTileState.Open);
+  for (let i = 0; i < 8; i++) {
+    const id = allocateEntityId(world);
+    initAnt(world.ants, id, {
+      colonyId: BROOD_CID,
+      posX: (3 + (i % 2)) << FP_SHIFT,
+      posY: (3 + (i % 2)) << FP_SHIFT,
+      task: AntTask.Idle,
+    });
+    c.workers.push(id);
+    c.workerCount += 1;
+  }
+  for (let i = 0; i < 2; i++) {
+    const id = allocateEntityId(world);
+    initAnt(world.ants, id, {
+      colonyId: BROOD_CID,
+      posX: (10 + i) << FP_SHIFT,
+      posY: 3 << FP_SHIFT,
+      task: AntTask.Idle,
+      speed: 0,
+      zone: Zone.Underground,
+    });
+    c.larvae.push(id);
+    c.larvaeCount += 1;
+  }
+  return world;
+}
+
+function timeBroodColony(force: boolean): number {
+  {
+    const warm = buildBroodColony();
+    for (let t = 0; t < WARMUP_TICKS; t++) tick(warm, []);
+  }
+  const world = buildBroodColony();
+  const start = performance.now();
+  for (let t = 0; t < TICKS; t++) {
+    if (force)
+      for (const key in world.colonies) {
+        if (!Object.hasOwn(world.colonies, key)) continue;
+        world.colonies[key as unknown as ColonyId]!.broodFieldDirty = true;
+      }
+    tick(world, []);
+  }
+  const elapsedMs = performance.now() - start;
+  return TICKS / (elapsedMs / 1000);
+}
+
+describe('step-9 brood-field gate win (#235 — informational)', () => {
+  it('gated vs forced (every-tick recompute) on a brood-heavy colony', () => {
+    const gated = timeBroodColony(false);
+    const forced = timeBroodColony(true);
+    const speedup = ((gated - forced) / forced) * 100;
+    // eslint-disable-next-line no-console -- bench output is the deliverable
+    console.log(
+      `[tick-cost] brood gated=${gated.toFixed(0)} forced=${forced.toFixed(0)} ticks/sec  (gate saves ${speedup.toFixed(1)}%)`,
+    );
   });
 });

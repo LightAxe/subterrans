@@ -239,6 +239,7 @@ const stubColonies: WorldState['colonies'] = {
     rallyPoint: null,
     digFlowFieldDirty: false,
     foodFlowFieldDirty: false,
+    broodFieldDirty: false,
     killCount: 0,
     priorityFoodPileId: null,
     queenLastEggTick: -300,

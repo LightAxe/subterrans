@@ -200,9 +200,11 @@ export function tickNurseActions(world: WorldState, chamberFlowFields?: ChamberF
     ants.carryingBroodId[id] = broodId;
     ants.carriedBy[broodId] = id;
     ants.subTask[id] = NursingSubState.Feeding;
-    // Carried brood is no longer a pickup seed — the next per-tick
-    // recompute of the `nursing` field in tick.ts step 9 will exclude
-    // it because `carriedBy[broodId] !== -1`. No dirty flag needed.
+    // #235 — the brood just left the pickup-seed set (carried brood is excluded
+    // by carriedBy !== -1), so the pickup/deposit fields must rebuild. Formerly
+    // this was invisible because those fields recomputed unconditionally every
+    // tick; now step-9's second loop is gated on broodFieldDirty.
+    colony.broodFieldDirty = true;
     continue;
   }
 }
@@ -571,6 +573,10 @@ function depositCarriedBrood(
   // Clear both ends of the carry pointer.
   ants.carryingBroodId[nurseId] = -1;
   ants.carriedBy[broodId] = -1;
+  // #235 — the brood moved into a Nursery (changing that Nursery's fill level,
+  // which the V24 capacity-aware deposit field seeds on) and its carried state
+  // flipped; rebuild the pickup/deposit fields.
+  colony.broodFieldDirty = true;
   // S4 V21+: nurse enters Attending substate and dwells at the Nursery tile
   // for NURSE_ATTEND_DWELL_TICKS, accelerating adjacent larvae. Pre-V21:
   // carrier returns to Idle immediately; step 10a re-allocates next tick.

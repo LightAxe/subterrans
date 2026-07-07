@@ -386,6 +386,7 @@ export function tickFoodConsumption(world: WorldState, colony: ColonyRecord): vo
       ants.starvationTimer[id] = timer;
       if (timer <= 0) {
         ants.alive[id] = 0;
+        colony.broodFieldDirty = true; // #235 — a larva (reclaimable seed) died
       }
     }
   }

@@ -83,6 +83,7 @@ function serializeWorldState(w: WorldState): string {
             reconcileCountdown: c.reconcileCountdown,
             killCount: c.killCount,
             digFlowFieldDirty: c.digFlowFieldDirty,
+            broodFieldDirty: c.broodFieldDirty, // #235
             eggs: [...c.eggs],
             larvae: [...c.larvae],
             workers: [...c.workers],

@@ -137,6 +137,27 @@ export interface ColonyRecord {
    *  Cleared by tick.ts step 9 after recompute. Initialized to false. */
   foodFlowFieldDirty: boolean;
 
+  /** #235 — set true when any INPUT to the nursing-pickup / V24 nursery-deposit
+   *  fields changes, so tick.ts step-9's second loop can gate those every-tick
+   *  O(grid) BFS rebuilds instead of running them unconditionally. Cleared by that
+   *  loop after recompute; also forced true by the step-9 FIRST loop whenever it
+   *  recomputes (topology change / first-compute-on-load), which is what makes a
+   *  loaded world recompute on tick 1 regardless of the deserialized value.
+   *  Assigned caller-side (factory does not init), like digFlowFieldDirty.
+   *
+   *  Trigger sites (every real input-change to those fields MUST set this true):
+   *    - lifecycle-system.ts   egg lay (new reclaimable seed)
+   *    - lifecycle-system.ts   larva→worker promotion (brood leaves the set)
+   *    - lifecycle-system.ts   worker lifespan death (defensive: carried-brood orphan)
+   *    - larva-maturation.ts   larva→worker promotion (2nd promotion site)
+   *    - colony-system.ts      larva starvation death
+   *    - ant-nursing.ts        nurse pickup (carriedBy set) + depositCarriedBrood
+   *    - combat.ts killAnt     brood death AND carrier-death orphan
+   *  NOT triggers (output-identical): egg→larva hatch (list move, same tile/entity);
+   *  carried-brood per-tick position sync (carried brood is excluded by
+   *  isBroodReclaimable); tickDeathCleanup swap-remove (alive=0 already excluded). */
+  broodFieldDirty: boolean;
+
   /** Phase 9 / CMBT-06/07 / PRD §1a — cumulative count of enemies killed by this colony's ants.
    *  Incremented inside combat.killAnt (Plan 02) when ants from this colony win a combat round.
    *  Initialized to 0 in createColonyRecord. Round-trips through copyWorldState + save. */
@@ -179,8 +200,9 @@ export interface ColonyRecord {
 //   colony.rallyPoint        = null;
 //   colony.digFlowFieldDirty  = false;
 //   colony.foodFlowFieldDirty = false;
+//   colony.broodFieldDirty    = false;  // #235
 // Callers: createScenario (Plan 07), copyWorldState new-colony fallback (Plan 03 Task 2),
-// deserializeColony (save.ts — defaults `foodFlowFieldDirty` to false on pre-#15 saves).
+// deserializeColony (save.ts — defaults `foodFlowFieldDirty`/`broodFieldDirty` to false on old saves).
 //
 // Default values (Phase 2 fields):
 //   - foodStored=0, workerCount=0, eggCount=0, larvaeCount=0, nurseCount=0

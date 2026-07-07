@@ -146,6 +146,16 @@ function getFlowFieldCaches(world: WorldState): FlowFieldCaches {
 }
 
 /**
+ * #235 — TEST-ONLY accessor for the per-world chamber flow-field cache (nursing
+ * pickup + V24 nurseDeposit fields), so chamber-flow-gating.test.ts can assert the
+ * gated recompute is elementwise-identical to a force-recompute-every-tick baseline.
+ * Not part of the production API.
+ */
+export function __getChamberFlowFieldsForTest(world: WorldState): ChamberFlowFields {
+  return getFlowFieldCaches(world).chamber;
+}
+
+/**
  * Drop all per-world flow-field scratch.
  *
  * As of issue #160 this is no longer required for cross-world correctness —
@@ -1049,20 +1059,35 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
 
     colony.digFlowFieldDirty = false;
     colony.foodFlowFieldDirty = false;
+    // #235 — the first loop just recomputed the chamber topology (or is doing the
+    // first-compute-on-load), so the pickup/deposit fields the second loop owns are
+    // now stale; force their rebuild. This is ALSO what makes a loaded world recompute
+    // on tick 1 (firstDigCompute is always true on a fresh per-world cache), so the
+    // deserialized broodFieldDirty value can never leave a stale field.
+    colony.broodFieldDirty = true;
   }
 
   // Issue #17 Phase 1 — under v10+, the `nursing` chamber-flow field is
   // re-seeded from Queen Open tiles AND any uncarried-brood-entity tile
-  // outside Nursery (the v10 pickup field). Brood positions move with their
-  // carriers each tick, so the field MUST recompute every tick (not just
-  // on dirty signal) to stay in sync. Overwrites the buffer that the
+  // outside Nursery (the v10 pickup field). Overwrites the buffer that the
   // dirty-gated block above filled with the legacy NURSING_CHAMBER_TYPES
   // seeding — pre-v10 worlds keep the legacy seeding (Queen+Nursery).
+  //
+  // #235 — formerly recomputed EVERY tick "because brood positions move with
+  // their carriers". But CARRIED brood is excluded from both fields by
+  // isBroodReclaimable, so per-tick carrier motion is invisible to field output;
+  // only the discrete inputs (a brood laid / promoted / died, or a nurse
+  // pickup/deposit) change it. So gate on colony.broodFieldDirty, set by those
+  // input-changes (see the ColonyRecord.broodFieldDirty trigger list) and forced
+  // true by the first loop above. The differential test (chamber-flow-gating.test)
+  // proves this is output-identical to the old unconditional recompute; a divergence
+  // there means a missing trigger — fix the trigger, never gate behind a simVersion.
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
     const colony = world.colonies[key as unknown as ColonyId]!;
     const underground = world.undergroundGrids[colony.colonyId];
     if (!underground) continue;
+    if (!colony.broodFieldDirty) continue; // #235 — skip the O(grid) BFS rebuild when no brood input changed
     const gridSize = underground.width * underground.height;
     const chamberBufs = ensureChamberFlowFields(chamberFlowFields, colony.colonyId, gridSize);
     computeNursingPickupField(
@@ -1091,6 +1116,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         chamberBufs.queue,
       );
     }
+    colony.broodFieldDirty = false; // #235 — consumed; the second loop is the sole clearer
   }
 
   // ---------------------------------------------------------------------------
