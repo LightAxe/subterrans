@@ -34,11 +34,7 @@
 import { describe, it, expect } from 'vitest';
 import { createScenario } from './scenario.js';
 import { tick } from './tick.js';
-import {
-  allocateEntityId,
-  LATEST_SIM_VERSION,
-  SIM_VERSION_V25_RALLY_RECALL,
-} from './types.js';
+import { allocateEntityId, LATEST_SIM_VERSION, SIM_VERSION_V25_RALLY_RECALL } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask } from './enums.js';
 import { Zone, UndergroundTileState, ugSet } from './terrain.js';

@@ -35,10 +35,7 @@ import {
   surfaceGoalDistance,
 } from '../surface-routing.js';
 import { UndergroundTileState, Zone, ugGet } from '../terrain.js';
-import {
-  SIM_VERSION_V33_OCCUPANCY_CENTER,
-  type WorldState,
-} from '../types.js';
+import { SIM_VERSION_V33_OCCUPANCY_CENTER, type WorldState } from '../types.js';
 import {
   pickInvaderUndergroundStep,
   pickNearestHostileUnderground,
@@ -1361,9 +1358,7 @@ export function tickAntMovement(
           // recalled-invader block earlier in tickAntMovement.
           const ownColonyForAscent = world.colonies[ants.colonyId[id]!];
           const isRecallingFromForeign =
-            !inOwnGrid &&
-            ownColonyForAscent != null &&
-            ownColonyForAscent.rallyPoint == null; // #247 — V25 unconditional (MIN=V30)
+            !inOwnGrid && ownColonyForAscent != null && ownColonyForAscent.rallyPoint == null; // #247 — V25 unconditional (MIN=V30)
           const skipAscent = task === AntTask.Fighting && !inOwnGrid && !isRecallingFromForeign;
           if (!skipAscent) {
             const lookupColonyId = ants.currentGridColonyId[id]!;
