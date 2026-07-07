@@ -989,82 +989,94 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       computeDigFlowField(underground, out, queue);
     }
 
-    // Recompute entrance flow-field on the same topology-changed signal that
-    // drives dig recompute: tile state flips (Solid↔Marked↔BeingDug↔Open) and
-    // entrance designation/completion all mutate reachability through tunnels.
-    const entOut = ensureEntranceFlowField(entranceFlowFields, colony.colonyId, gridSize);
-    const entQueue = entranceFlowFields.queues[colony.colonyId]!;
-    computeEntranceFlowField(underground, colony.entrances ?? [], entOut, entQueue);
+    // #235 — split the every-recompute group. Only TOPOLOGY changes (tile flips /
+    // first-compute-on-load) affect the entrance, surface-entrance, nursing-legacy,
+    // queen, and nurseDeposit-legacy fields; foodFlowFieldDirty fires ONLY when a
+    // FoodStorage chamber crosses the full↔not-full boundary, which changes ONLY
+    // the food field's saturated-seed set (via isFoodChamberDepositable) and nothing
+    // else. So gate the five non-food computes on topology alone, and the food
+    // compute on topology OR food. Net: a food-fill-only tick rebuilds one field,
+    // not six. (Dig transitions still rebuild the chamber fields — those BFS-traverse
+    // Open+BeingDug and seed from Open tiles in chamber footprints, so a
+    // Marked→BeingDug claim genuinely changes their output; NOT decoupled here.)
+    const topologyDirty = colony.digFlowFieldDirty || firstDigCompute || firstEntranceCompute;
 
-    // Issue #63 (v11+) — surface entrance flow field. Recomputed on the
-    // same cadence as the underground entrance field. Tile features are
-    // static post-init, so the only inputs that change are the entrance
-    // list (open/closed). Recomputing every dirty cycle is generous but
-    // simple; future optimization could gate on entrance-changed-only.
-    const sfcOut = ensureSurfaceEntranceFlowField(entranceFlowFields, colony.colonyId);
-    const sfcQueue = entranceFlowFields.surfaceQueues[colony.colonyId]!;
-    computeSurfaceEntranceFlowField(world, colony.entrances ?? [], sfcOut, sfcQueue);
+    if (topologyDirty) {
+      // Recompute entrance flow-field on the topology-changed signal: tile state
+      // flips (Solid↔Marked↔BeingDug↔Open) and entrance designation/completion all
+      // mutate reachability through tunnels.
+      const entOut = ensureEntranceFlowField(entranceFlowFields, colony.colonyId, gridSize);
+      const entQueue = entranceFlowFields.queues[colony.colonyId]!;
+      computeEntranceFlowField(underground, colony.entrances ?? [], entOut, entQueue);
 
-    // Recompute chamber flow-fields on the same cycle. Chamber completion
-    // (which flips tile states from Marked/BeingDug to Open) is one of the
-    // signals that sets digFlowFieldDirty upstream, so this cadence is
-    // sufficient to keep the fields fresh. Issue #15: the food field also
-    // recomputes when foodFlowFieldDirty fires (set when a FoodStorage chamber
-    // crosses the full↔not-full boundary) so carriers redirect away from full
-    // chambers without waiting for an unrelated topology change.
+      // Issue #63 (v11+) — surface entrance flow field, same cadence as the
+      // underground entrance field. Its only inputs are topology + the entrance list.
+      const sfcOut = ensureSurfaceEntranceFlowField(entranceFlowFields, colony.colonyId);
+      const sfcQueue = entranceFlowFields.surfaceQueues[colony.colonyId]!;
+      computeSurfaceEntranceFlowField(world, colony.entrances ?? [], sfcOut, sfcQueue);
+    }
+
+    // Chamber flow-fields. ensureChamberFlowFields is idempotent (returns the cached
+    // buffers or allocates on first compute), so it is safe to call whenever the loop
+    // body runs; the individual computes below are gated.
     const chamberBufs = ensureChamberFlowFields(chamberFlowFields, colony.colonyId, gridSize);
-    computeChamberFlowField(
-      underground,
-      colony.chambers,
-      FOOD_CHAMBER_TYPES,
-      chamberBufs.food,
-      chamberBufs.queue,
-      // Issue #15 follow-up: saturated chambers (free space <
-      // FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP) must not seed the BFS — otherwise
-      // a carrier mid-traversal across a near-full chamber gets pinned by
-      // the queen-drain-then-redeposit oscillation. Shared with the deposit
-      // path in ant-system.ts via `isFoodChamberDepositable`, so seed
-      // exclusion and deposit refusal stay in lockstep.
-      isFoodChamberDepositable,
-    );
-    computeChamberFlowField(
-      underground,
-      colony.chambers,
-      NURSING_CHAMBER_TYPES,
-      chamberBufs.nursing,
-      chamberBufs.queue,
-    );
-    computeChamberFlowField(
-      underground,
-      colony.chambers,
-      QUEEN_CHAMBER_TYPES,
-      chamberBufs.queen,
-      chamberBufs.queue,
-    );
-    // Issue #17 Phase 1 — Nursery-only deposit field for v10+ carrying nurses.
-    // Pre-v10 the field is allocated but unread; computed alongside the other
-    // chamber fields for code symmetry — no measurable cost.
-    // Issue #173 (V24+): the capacity-aware deposit field is rebuilt every tick
-    // in the loop below; here we compute only the legacy nearest-seed field for
-    // pre-V24 byte-identical replay.
-    if (world.simVersion < SIM_VERSION_V24_NURSERY_CAPACITY) {
+    if (topologyDirty || colony.foodFlowFieldDirty) {
       computeChamberFlowField(
         underground,
         colony.chambers,
-        NURSERY_CHAMBER_TYPES,
-        chamberBufs.nurseDeposit,
+        FOOD_CHAMBER_TYPES,
+        chamberBufs.food,
+        chamberBufs.queue,
+        // Issue #15 follow-up: saturated chambers (free space <
+        // FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP) must not seed the BFS — otherwise
+        // a carrier mid-traversal across a near-full chamber gets pinned by
+        // the queen-drain-then-redeposit oscillation. Shared with the deposit
+        // path in ant-system.ts via `isFoodChamberDepositable`, so seed
+        // exclusion and deposit refusal stay in lockstep.
+        isFoodChamberDepositable,
+      );
+    }
+    if (topologyDirty) {
+      computeChamberFlowField(
+        underground,
+        colony.chambers,
+        NURSING_CHAMBER_TYPES,
+        chamberBufs.nursing,
         chamberBufs.queue,
       );
+      computeChamberFlowField(
+        underground,
+        colony.chambers,
+        QUEEN_CHAMBER_TYPES,
+        chamberBufs.queen,
+        chamberBufs.queue,
+      );
+      // Issue #17 Phase 1 — Nursery-only deposit field for v10+ carrying nurses.
+      // Pre-v10 the field is allocated but unread; computed alongside the other
+      // chamber fields for code symmetry — no measurable cost.
+      // Issue #173 (V24+): the capacity-aware deposit field is rebuilt every tick
+      // in the loop below; here we compute only the legacy nearest-seed field for
+      // pre-V24 byte-identical replay.
+      if (world.simVersion < SIM_VERSION_V24_NURSERY_CAPACITY) {
+        computeChamberFlowField(
+          underground,
+          colony.chambers,
+          NURSERY_CHAMBER_TYPES,
+          chamberBufs.nurseDeposit,
+          chamberBufs.queue,
+        );
+      }
     }
 
     colony.digFlowFieldDirty = false;
     colony.foodFlowFieldDirty = false;
-    // #235 — the first loop just recomputed the chamber topology (or is doing the
-    // first-compute-on-load), so the pickup/deposit fields the second loop owns are
-    // now stale; force their rebuild. This is ALSO what makes a loaded world recompute
-    // on tick 1 (firstDigCompute is always true on a fresh per-world cache), so the
-    // deserialized broodFieldDirty value can never leave a stale field.
-    colony.broodFieldDirty = true;
+    // #235 — a TOPOLOGY recompute (or first-compute-on-load) makes the pickup/deposit
+    // fields the second loop owns stale; force their rebuild. Gated on topologyDirty
+    // (not any dirty): a food-fill-only tick changes neither topology nor brood, so it
+    // must not force an unnecessary pickup/deposit recompute. firstDigCompute (⊂
+    // topologyDirty) is always true on a fresh per-world cache, so a loaded world still
+    // recomputes on tick 1 regardless of the deserialized broodFieldDirty value.
+    if (topologyDirty) colony.broodFieldDirty = true;
   }
 
   // Issue #17 Phase 1 — under v10+, the `nursing` chamber-flow field is

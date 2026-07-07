@@ -20,7 +20,7 @@ import { initAnt } from './ant/ant-store.js';
 import { createUndergroundGrid, ugSet, UndergroundTileState, Zone } from './terrain.js';
 import { ChamberType, AntTask } from './enums.js';
 import { FP_SHIFT } from './fixed.js';
-import { LARVA_MATURE_TICKS } from './constants.js';
+import { LARVA_MATURE_TICKS, FOOD_CHAMBER_CAPACITY } from './constants.js';
 import { tick, __getChamberFlowFieldsForTest } from './tick.js';
 import { killAnt } from './combat.js';
 import { tickFoodConsumption } from './colony/colony-system.js';
@@ -86,6 +86,22 @@ function buildBroodColony(seed: number): WorldState {
     height: 3,
   });
 
+  // FoodStorage (3x3 Open) at (5,6) — its foodStored is toggled across the
+  // isFoodChamberDepositable boundary in the loop to fire foodFlowFieldDirty, so
+  // the #235 PR3 food-decouple (food field rebuilds on food OR topology; the other
+  // five first-loop fields on topology only) is exercised.
+  for (let dy = 0; dy < 3; dy++)
+    for (let dx = 0; dx < 3; dx++) ugSet(underground, 5 + dx, 6 + dy, UndergroundTileState.Open);
+  colony.chambers.push({
+    chamberId: 3,
+    chamberType: ChamberType.FoodStorage,
+    foodStored: 0,
+    posX: 5 << FP_SHIFT,
+    posY: 6 << FP_SHIFT,
+    width: 3,
+    height: 3,
+  });
+
   // Tunnel connecting Queen (2..4,2..4) to Nursery (12..14,12..14).
   for (let x = 4; x <= 13; x++) ugSet(underground, x, 3, UndergroundTileState.Open);
   for (let y = 3; y <= 13; y++) ugSet(underground, 13, y, UndergroundTileState.Open);
@@ -138,6 +154,8 @@ function chamberFieldSig(world: WorldState): string {
     const cid = Number(key);
     parts.push(`${cid}:n:${Array.from(cff.nursing[cid] ?? []).join(',')}`);
     parts.push(`${cid}:d:${Array.from(cff.nurseDeposit[cid] ?? []).join(',')}`);
+    // #235 PR3 — the food field is not serialized, so compare it here directly.
+    parts.push(`${cid}:f:${Array.from(cff.food[cid] ?? []).join(',')}`);
   }
   return parts.join('|');
 }
@@ -152,17 +170,39 @@ describe('chamber-flow gating (#235) — gated ≡ force-recompute-every-tick', 
       const f = buildBroodColony(seed); // forced (baseline)
       const ga = g.ants;
       const gc = g.colonies[COLONY_ID]!;
+      const fc = f.colonies[COLONY_ID]!;
+      const gFood = gc.chambers.find((ch) => ch.chamberType === ChamberType.FoodStorage)!;
+      const fFood = fc.chambers.find((ch) => ch.chamberType === ChamberType.FoodStorage)!;
       let layEvents = 0;
       let carryTicks = 0;
       let gatedSkips = 0;
+      let foodFull = false;
       let prevLastEgg = gc.queenLastEggTick;
       let prevSig = chamberFieldSig(g);
       for (let t = 0; t < TICKS; t++) {
+        // Toggle the FoodStorage chamber across the depositable boundary every 40
+        // ticks, in BOTH worlds identically, and set foodFlowFieldDirty (the sole
+        // trigger of that flag in the real sim = a deposit crossing full↔not-full).
+        // This exercises PR3's food-decouple: G rebuilds ONLY the food field, F (all
+        // flags forced) rebuilds every field — the food field must still match.
+        if (t % 40 === 0) {
+          foodFull = !foodFull;
+          const fv = foodFull ? FOOD_CHAMBER_CAPACITY : 0;
+          gFood.foodStored = fv;
+          fFood.foodStored = fv;
+          gc.foodFlowFieldDirty = true;
+          fc.foodFlowFieldDirty = true;
+        }
         tick(g, []);
-        // Force every-tick recompute in F: dirty every colony BEFORE its tick.
+        // F = the full pre-#235 baseline: force EVERY first-loop + second-loop
+        // recompute (dig/food/brood dirty) before its tick, so any gate G applies
+        // that changes output would diverge here.
         for (const key in f.colonies) {
           if (!Object.hasOwn(f.colonies, key)) continue;
-          f.colonies[key as unknown as ColonyId]!.broodFieldDirty = true;
+          const c = f.colonies[key as unknown as ColonyId]!;
+          c.digFlowFieldDirty = true;
+          c.foodFlowFieldDirty = true;
+          c.broodFieldDirty = true;
         }
         tick(f, []);
 
@@ -170,7 +210,7 @@ describe('chamber-flow gating (#235) — gated ≡ force-recompute-every-tick', 
         const gSig = chamberFieldSig(g);
         if (gSig !== chamberFieldSig(f)) {
           throw new Error(
-            `seed ${seed}: chamber fields diverged at tick ${t} — missing broodFieldDirty trigger`,
+            `seed ${seed}: chamber fields (nursing/deposit/food) diverged at tick ${t} — a gated rebuild went stale (missing broodFieldDirty trigger, or the PR3 food-decouple is unsafe)`,
           );
         }
         if (serialize(g) !== serialize(f)) {
