@@ -5,6 +5,13 @@
  * is the only gate that compares a Node-run sim to a headless-Chromium-run sim
  * for the same (seed, script) — and cross-engine byte identity is the single
  * load-bearing assumption of Phase 7 lockstep (and Phase 6 mobile Safari/WebView).
+ *
+ * SCOPE: this covers the Node(V8) <-> Chromium(V8) axis — transform-vs-loader,
+ * embedder, and future V8-version drift. The JSC/WebKit axis (iOS Safari /
+ * WKWebView, the actual Phase-6 target) is NOT yet exercised here — tracked as a
+ * follow-up (#254); the harness is engine-agnostic, so it only needs a Playwright
+ * `webkit` project + a CI browser install.
+ *
  * Auto-matched by testMatch:/.*\.spec\.ts/ — runs in the existing e2e job.
  */
 import { test, expect } from '@playwright/test';

@@ -26,6 +26,11 @@ import {
 const RING_FIELDS = ['recentTilesX', 'recentTilesY', 'recentTilesHead'];
 
 describe('serializer completeness (#229) — struct partition', () => {
+  // NOTE: this partitions the RUNTIME keys via Object.keys(createWorldState/.ants).
+  // An OPTIONAL field (`foo?: T`) that the factory leaves unassigned would not
+  // appear in Object.keys and would silently dodge this guard — so every field must
+  // be assigned by createWorldState/createAntComponents (even to `undefined`).
+  // WorldState + AntComponents have ZERO optional fields today; keep it that way.
   it('every WorldState field is serialized xor deliberately transient', () => {
     const liveKeys = new Set(Object.keys(createWorldState(1337)));
     const listed = new Set<string>([
