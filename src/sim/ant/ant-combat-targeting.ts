@@ -9,6 +9,7 @@ import { Zone, type UndergroundGrid } from '../terrain.js';
 import { SIM_VERSION_V23_SPIDER_AGGRO, type WorldState } from '../types.js';
 import { DIR_DX, DIR_DY, canEnterUndergroundTile, packStep } from './ant-motion.js';
 import type { AntComponents } from './ant-store.js';
+import type { ScratchArena } from '../scratch.js';
 
 // #212: RALLY_HOLD_RADIUS_TILES lives with its sole consumer (fighter rally hold).
 const RALLY_HOLD_RADIUS_TILES = 2;
@@ -364,18 +365,10 @@ export function pickNearestHostileUnderground(
   return { targetX: bestPosX, targetY: bestPosY };
 }
 
-// Path distance from the target tile to each cell (flat y*width+x index), or
-// -1 when unreached on the current call.
-// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: lazily grown BFS distance buffer, resized+filled per invertedBFS call
-let INV_BFS_DIST = new Int32Array(0);
-
-// FIFO of cell coordinates to expand. Parallel x/y arrays avoid decoding a flat
-// index (which would need division/modulo, banned in sim index arithmetic).
-// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: BFS queue X, reused per invertedBFS call
-let INV_BFS_QX = new Int32Array(0);
-
-// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: BFS queue Y, reused per invertedBFS call
-let INV_BFS_QY = new Int32Array(0);
+// #231 — the invader-BFS buffers (distance + parallel x/y FIFO) now live on the
+// per-world scratch arena (scratch.antTargeting), passed into
+// pickInvaderUndergroundStep. The "-1 between calls" invariant is preserved
+// per-world: each world's dist buffer keeps its own touched-cell-restored state.
 
 /**
  * @param underground  The grid the invader currently occupies.
@@ -392,6 +385,7 @@ export function pickInvaderUndergroundStep(
   tileY: number,
   targetTileX: number,
   targetTileY: number,
+  scratch: ScratchArena,
 ): number {
   // Already on the target tile — nothing to do.
   if (tileX === targetTileX && tileY === targetTileY) return packStep(0, 0);
@@ -413,15 +407,16 @@ export function pickInvaderUndergroundStep(
   // dist buffer is filled with -1 so the "every cell is -1 between calls"
   // invariant holds from the start; each call below restores it by clearing
   // only the cells it touched (never a full-grid wipe).
-  if (INV_BFS_DIST.length < cells) {
-    INV_BFS_DIST = new Int32Array(cells);
-    INV_BFS_DIST.fill(-1);
-    INV_BFS_QX = new Int32Array(cells);
-    INV_BFS_QY = new Int32Array(cells);
+  const at = scratch.antTargeting;
+  if (at.invBfsDist.length < cells) {
+    at.invBfsDist = new Int32Array(cells);
+    at.invBfsDist.fill(-1);
+    at.invBfsQX = new Int32Array(cells);
+    at.invBfsQY = new Int32Array(cells);
   }
-  const dist = INV_BFS_DIST;
-  const qx = INV_BFS_QX;
-  const qy = INV_BFS_QY;
+  const dist = at.invBfsDist;
+  const qx = at.invBfsQX;
+  const qy = at.invBfsQY;
 
   // BFS rooted at the target, expanding through passable tiles only in fixed
   // N/E/S/W order. Stop as soon as the invader's own tile is dequeued: at that

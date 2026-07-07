@@ -3,7 +3,8 @@
 // step 16) — plus same-colony occupancy resolution. Sits ABOVE the behavior modules:
 // depends on Layer-0 ant-motion AND Layer-1 behaviors (foraging/queens/combat). Nothing
 // in ant/ depends on it; tick.ts is its sole production caller. Owns SURFACE_MOVE_CACHE
-// (reset each tick) and OCCUPANCY_SCRATCH.
+// (reset each tick); its same-colony occupancy Map now lives on the per-world scratch
+// arena (#231).
 import type { ChamberFlowFields } from '../chamber-flow.js';
 import { isFoodChamberDepositable } from '../colony/colony-system.js';
 import {
@@ -45,6 +46,7 @@ import {
   pickNearestHostileUnderground,
 } from './ant-combat-targeting.js';
 import { chooseExcursionDirection, findReachableScentPile } from './ant-foraging.js';
+import { getScratch } from '../scratch.js';
 import {
   ALT_DX,
   ALT_DY,
@@ -73,13 +75,9 @@ import { clearRecentTiles, isRecentTile, pushRecentTile } from './ant-store.js';
 // sim-scratch: reset (not reallocated) each tick by tickAntMovement (factory return — not lint-enforced).
 const SURFACE_MOVE_CACHE_SCRATCH = createSurfaceMovementCache();
 
-/**
- * Issue #67 — module-level scratch for `resolveSameColonyOccupancy`. Cleared
- * (not reallocated) each call. Map.clear() is much cheaper than `new Map()`
- * + GC release of the prior tick's map.
- */
-// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: Map.clear()ed at the top of each resolveSameColonyOccupancy call; never read before write
-const OCCUPANCY_SCRATCH = new Map<number, number>();
+// #231 — resolveSameColonyOccupancy's reuse Map (issue #67) now lives on the
+// per-world scratch arena (getScratch(world).movementOccupancy), Map.clear()ed at
+// the top of each call as before.
 
 /**
  * Move every alive ant one step based on its current task and zone.
@@ -767,7 +765,14 @@ export function tickAntMovement(
               const tileY = posY >> FP_SHIFT;
               const tTileX = hostile.targetX >> FP_SHIFT;
               const tTileY = hostile.targetY >> FP_SHIFT;
-              const step = pickInvaderUndergroundStep(invUnderground, tileX, tileY, tTileX, tTileY);
+              const step = pickInvaderUndergroundStep(
+                invUnderground,
+                tileX,
+                tileY,
+                tTileX,
+                tTileY,
+                getScratch(world),
+              );
               rawDx = unpackStepDx(step) * FP_ONE;
               rawDy = unpackStepDy(step) * FP_ONE;
             } else {
@@ -1431,7 +1436,7 @@ function resolveSameColonyOccupancy(world: WorldState): void {
   // negligible vs. the prior `new Map()` + GC churn. Same observable
   // behavior — Map iteration order is insertion order, which we don't
   // rely on (lookups are key-based).
-  const occupancy = OCCUPANCY_SCRATCH;
+  const occupancy = getScratch(world).movementOccupancy;
   occupancy.clear();
 
   for (let id = 0; id < world.nextEntityId; id++) {
