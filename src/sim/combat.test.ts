@@ -595,17 +595,8 @@ describe('spider combat gate (V23 #146/#147)', () => {
     expect(spider.hp).toBe(SPIDER_HP_FULL - COMBAT_DAMAGE_BASE);
   });
 
-  it('Patrolling spider takes NO damage under a pre-V23 (V22) world — old-replay guard', () => {
-    const { world, cid1 } = makeWorldWith2Colonies();
-    world.simVersion = SIM_VERSION_V22_DIFFICULTY;
-    const fighter = spawnFighter(world, cid1, 5, 7, Zone.Surface);
-    const spider = placeSpider(world, 5, 7, 'Patrolling');
-    armFighterAgainstSpider(world, fighter);
-
-    detectAndResolveCombat(world, new Rng(world.rngState));
-
-    expect(spider.hp).toBe(SPIDER_HP_FULL); // gate closed pre-V23
-  });
+  // #247 — "Patrolling spider takes NO damage under pre-V23" pinning test removed
+  // (V22 unloadable under MIN=V30; the reaped gate is unconditional now).
 
   it('Striking spider still engages even under a pre-V23 world (unchanged behavior)', () => {
     const { world, cid1 } = makeWorldWith2Colonies();
@@ -673,19 +664,8 @@ describe('spider-pairing sentinel cleanup (V23 Codex P1)', () => {
     expect(world.ants.combatOpponentId[ant]).toBe(-1);
   });
 
-  it('does NOT clear off-tile -2 under a pre-V23 (V22) world — old-replay guard', () => {
-    const { world, cid1 } = makeWorldWith2Colonies();
-    world.simVersion = SIM_VERSION_V22_DIFFICULTY;
-    placeSpider(world, 5, 7, 'Striking');
-    const ant = spawnFighter(world, cid1, 9, 9, Zone.Surface);
-    world.ants.combatOpponentId[ant] = -2;
-
-    detectAndResolveCombat(world, new Rng(world.rngState));
-
-    // V22 clears -2 only via clearSpiderPairingSentinels on episode exit, never
-    // in this pass — byte-identical guard.
-    expect(world.ants.combatOpponentId[ant]).toBe(-2);
-  });
+  // #247 — "does NOT clear off-tile -2 under pre-V23" pinning test removed
+  // (V22 unloadable under MIN=V30; the reaped gate is unconditional now).
 });
 
 // ---------------------------------------------------------------------------
@@ -840,18 +820,8 @@ describe('combat boundary fold (V26 #181)', () => {
     expect(world.ants.combatOpponentId[fighter]).toBe(-1);
   });
 
-  it('pre-V26 (V25) does NOT fold: exact same-tile matching only', () => {
-    // Guard: boundary fold is V26-only. Pre-V26 worlds keep exact same-tile matching.
-    const r = makeWorldWith2Colonies();
-    r.world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO; // V25 or earlier
-    const fighter = spawnFighter(r.world, r.cid1, 0, 10, Zone.Surface); // margin band
-    placeSpider(r.world, 3, 10, 'Chasing'); // boundary
-
-    detectAndResolveCombat(r.world, new Rng(r.world.rngState));
-
-    // No pairing in pre-V26.
-    expect(r.world.ants.combatOpponentId[fighter]).toBe(-1);
-  });
+  // #247 — "pre-V26 does NOT fold" pinning test removed (V25 unloadable under
+  // MIN=V30; the V26 boundary fold is unconditional now).
 
   it('interior spider at the same Y row as margin-band ant does NOT fold', () => {
     // Fold only triggers when spider is ON a boundary tile. An interior spider
