@@ -7,14 +7,15 @@
 // Importing ui-scene.ts (Phaser) would crash the Node runner, but these modules
 // don't touch Phaser: layout.ts→sprites.ts (zero imports), pause-menu-layout.ts /
 // save-load-dialog-layout.ts (type-only cross-imports), boot-overlay-layout.ts and
-// sprites.ts (zero imports).
+// sprites.ts (zero imports), and hud-layout.ts (#238 — type-only import of
+// LayoutContext; the VIEW_TOGGLE rect now comes from buildHudLayout).
 import { DEFAULT_LAYOUT } from '../../src/render/layout.js';
 import { pauseMenuItems, type PauseMenuRenderContext } from '../../src/render/pause-menu-layout.js';
 import {
   saveLoadDialogItems,
   type SaveLoadDialogContext,
 } from '../../src/render/save-load-dialog-layout.js';
-import { HUD } from '../../src/render/sprites.js';
+import { buildHudLayout } from '../../src/render/hud-layout.js';
 
 export interface Rect {
   x: number;
@@ -61,7 +62,7 @@ export const DIALOG_SAVE_NOW_RECT: Rect = dialogItems[1]!.rect;
 export const DIALOG_DELETE_RECT: Rect = dialogItems[2]!.rect;
 
 /** HUD view-toggle button (surface ↔ underground). */
-export const VIEW_TOGGLE_RECT: Rect = HUD.VIEW_TOGGLE;
+export const VIEW_TOGGLE_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).VIEW_TOGGLE;
 
 // Boot-overlay rects re-exported from the Phaser-free module (the same source
 // ui-scene.ts uses), so specs import their click targets from one place.
