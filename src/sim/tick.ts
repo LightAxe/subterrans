@@ -1313,10 +1313,9 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // Idle when forage was the colony's sole unmet demand. The persisted
     // `colony.computedAllocation.forage` is left untouched (WR-02), so
     // renderer/HUD/autosave still read the canonical allocation and forage
-    // promotion resumes once a chamber frees or the queen drains the pool. Pre-V27
-    // saves keep the churn for byte-identical replay.
+    // promotion resumes once a chamber frees or the queen drains the pool.
     // #247 — V27 forage-backpressure unconditional (MIN=V30)
-    if (needForage > 0 && colonyForageBackpressure(colony, world.simVersion)) {
+    if (needForage > 0 && colonyForageBackpressure(colony)) {
       needForage = 0;
     }
 
