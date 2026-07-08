@@ -9,9 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
 import { createWorldState, allocateEntityId } from './types.js';
-import {
-  SIM_VERSION_V27_FORAGE_BACKPRESSURE,
-} from './types.js';
+import { SIM_VERSION_V27_FORAGE_BACKPRESSURE } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord, type ColonyId } from './colony/colony-store.js';
 import { colonyHasNoDepositTarget, colonyForageBackpressure } from './colony/colony-system.js';

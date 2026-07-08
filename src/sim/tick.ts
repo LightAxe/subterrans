@@ -1,10 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import {
-  allocateEntityId,
-  INVALID_ENTITY_ID,
-  SIM_VERSION_V32_AI_OP_VALIDATION,
-} from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V32_AI_OP_VALIDATION } from './types.js';
 import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
