@@ -2426,12 +2426,31 @@ describe('#234 StorageDriver seam', () => {
         return Promise.resolve();
       }
     }
+    // Seed a REAL, valid save via the default driver first, then inject the
+    // rejecting driver. This makes the test bypass-sensitive: if the seam were
+    // bypassed and these functions read localStorage directly, they would find
+    // the seeded save and return true / non-null — the rejecting driver's get
+    // MUST be what drives them to the empty-state values.
+    window.localStorage.clear();
+    expect(await manualSave(7, [], createScenario(7))).toBe(true);
+    expect(window.localStorage.getItem(SAVE_KEY)).not.toBeNull();
     setStorageDriver(new RejectingGetDriver());
 
     // The existing try/catch in each function swallows the rejection and
     // returns the "no readable save" value rather than propagating.
     await expect(hasSave()).resolves.toBe(false);
     await expect(loadSave()).resolves.toBeNull();
+  });
+
+  it('LocalStorageDriver.set rejects (not throws) when the backing store throws', async () => {
+    const driver = new LocalStorageDriver();
+    const spy = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+    // Pins the seam's core contract directly: a synchronous localStorage throw
+    // becomes a rejected promise (so awaiting call sites' try/catch still catch).
+    await expect(driver.set(SAVE_KEY, 'x')).rejects.toThrow('QuotaExceededError');
+    spy.mockRestore();
   });
 
   it('the async save functions return Promises (Promise-returning signatures)', async () => {

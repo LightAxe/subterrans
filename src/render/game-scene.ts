@@ -901,6 +901,16 @@ export class GameScene extends Phaser.Scene {
     // classifySaveCompatibility now hits the async storage driver (#234), so
     // create() can't await it — fire-and-forget. The overlay/fresh-boot dispatch
     // lands one microtask later (same frame under the sync-backed driver).
+    //
+    // Hold at SavePrompt synchronously first: update() early-returns on
+    // SavePrompt, so this closes the boot window in which it would otherwise
+    // tick an unbuilt world/gameLoop (gamePhase is field-initialised Playing).
+    // Both dispatch branches converge on SavePrompt anyway — the prompt branch
+    // sets it directly, the fresh branch via showDifficultySelectThenBoot — so
+    // this is a no-op under today's sync driver and hardens the seam for a
+    // future macrotask-resolving driver (Phase 6 IndexedDB/OPFS), which would
+    // otherwise have a pre-boot frame to crash on.
+    this.gamePhase = GamePhase.SavePrompt;
     void this.dispatchInitialBoot();
 
     // Lifecycle signal — preload assets are loaded (we're in create()), the
