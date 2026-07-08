@@ -34,6 +34,7 @@ import {
   ENEMY_COLONY_ID,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
+  MAX_ENTITIES,
 } from '../sim/constants.js';
 import type { SimCommand } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
@@ -145,6 +146,103 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       w.colonies[PLAYER_COLONY_ID]!.foodFlowFieldDirty = true;
       const s = serializeWorldState(w);
       expect(s.colonies[String(PLAYER_COLONY_ID)]!.foodFlowFieldDirty).toBe(true);
+    });
+  });
+
+  // #234 PR3 — load-validation asymmetry: colony scalars / brood-id-lists + the
+  // ant SoA now range-check on deserialize (previously verbatim). A tampered or
+  // corrupt save throws a plain Error → classifies 'incompatible-corrupt'. These
+  // pin one reject per rule class AND prove no VALID save (incl. dead-slot
+  // residue) is falsely rejected.
+  describe('#234 PR3 load-validation (deserialize range checks)', () => {
+    const PKEY = String(PLAYER_COLONY_ID);
+    // Serialize a valid world, mutate one field, expect deserialize to reject it.
+    function rejects(mutate: (s: ReturnType<typeof serializeWorldState>) => void): void {
+      const s = serializeWorldState(createScenario(42));
+      mutate(s);
+      expect(() => deserializeWorldState(s)).toThrow();
+    }
+
+    it('ant POS_FP: posX at the surface max (exclusive bound) is rejected', () => {
+      rejects((s) => {
+        s.ants.posX[0] = SURFACE_GRID_WIDTH << 8; // 32768 == POSMAX (exclusive)
+      });
+    });
+    it('ant ENUM: task outside [0,4] is rejected', () => {
+      rejects((s) => {
+        s.ants.task[0] = 5;
+      });
+    });
+    it('ant binary: zone not in {0,1} is rejected', () => {
+      rejects((s) => {
+        s.ants.zone[0] = 2;
+      });
+    });
+    it('ant TRI: searchHeadingX not in {-1,0,1} is rejected', () => {
+      rejects((s) => {
+        s.ants.searchHeadingX[0] = 2;
+      });
+    });
+    it('ant ID_SENTINEL: carriedBy >= capacity is rejected', () => {
+      rejects((s) => {
+        s.ants.carriedBy[0] = MAX_ENTITIES; // >= any load capacity
+      });
+    });
+    it('ant non-array column is rejected (previously a silent zero-fill)', () => {
+      rejects((s) => {
+        (s.ants as { zone: unknown }).zone = 5;
+      });
+    });
+    it('colony scalar: negative foodStored is rejected', () => {
+      rejects((s) => {
+        s.colonies[PKEY]!.foodStored = -1;
+      });
+    });
+    it('colony scalar: workerCount above MAX_ENTITIES is rejected', () => {
+      rejects((s) => {
+        s.colonies[PKEY]!.workerCount = MAX_ENTITIES + 1;
+      });
+    });
+    it('colony id-list: eggs containing a negative id is rejected', () => {
+      rejects((s) => {
+        s.colonies[PKEY]!.eggs = [-1];
+      });
+    });
+
+    it('a corrupt snapshot classifies as incompatible-corrupt end-to-end', async () => {
+      window.localStorage.clear();
+      setStorageDriver(new LocalStorageDriver());
+      expect(await manualSave(42, [], createScenario(42))).toBe(true); // valid save in storage
+      const env = JSON.parse(window.localStorage.getItem(SAVE_KEY)!) as {
+        snapshot: { ants: { task: number[] } };
+      };
+      env.snapshot.ants.task[0] = 99; // corrupt the snapshot, envelope stays valid
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
+      await expect(classifySaveCompatibility()).resolves.toBe('incompatible-corrupt');
+    });
+
+    it('does NOT reject a valid save carrying dead-slot residue (combat-killed ant, negative hp)', () => {
+      const w = createScenario(42);
+      // A combat-killed ant leaves a dead-but-allocated slot with end-of-life
+      // residue; serializeAnts writes ALL slots, so a >=0 bound would wrongly
+      // reject this valid round-trip. FINITE_INT must allow it.
+      w.ants.alive[1] = 0;
+      w.ants.hp[1] = -37;
+      w.ants.attackCooldown[1] = -5;
+      const s = serializeWorldState(w);
+      expect(() => deserializeWorldState(s)).not.toThrow();
+      expect(deserializeWorldState(s).ants.hp[1]).toBe(-37);
+    });
+
+    it('does NOT reject a valid save mid-spider-fight (combatOpponentId = -2 sentinel)', () => {
+      const w = createScenario(42);
+      // -2 is the sticky "paired with the spider" combat sentinel (combat.ts):
+      // set-if-not-already and read across ticks, so a save taken while an ant
+      // is engaging the spider legitimately carries it. ID_SENTINEL must allow it.
+      w.ants.combatOpponentId[1] = -2;
+      const s = serializeWorldState(w);
+      expect(() => deserializeWorldState(s)).not.toThrow();
+      expect(deserializeWorldState(s).ants.combatOpponentId[1]).toBe(-2);
     });
   });
 

@@ -43,6 +43,7 @@ import {
   FOOD_PILE_INITIAL_PICKUPS_MAX,
   FOOD_PILE_SOFT_CEILING,
   FOOD_CHAMBER_CAPACITY,
+  BASE_FOOD_STORAGE_CAPACITY,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
   UNDERGROUND_GRID_WIDTH,
@@ -1059,11 +1060,100 @@ function copyIntoUint8(dst: Uint8Array, src: readonly number[]): void {
   for (let i = 0; i < n; i++) dst[i] = src[i]!;
 }
 
+// #234 PR3 — load-validation for the ant SoA. Historically every ant column
+// deserialized verbatim (in contrast to the heavily-validated chambers /
+// foodPiles), and a non-array column zero-filled silently. This range-checks
+// each serialized column BEFORE it reaches the runtime arrays: a tampered /
+// corrupt save throws a PLAIN Error (→ 'incompatible-corrupt' → bootFromSave
+// deletes + boots fresh, matching validateChamberRecord), never admitting an
+// out-of-range value or silently zero-filling.
+//
+// FINITE_INT columns are Number.isInteger-only with NO magnitude / >=0 bound:
+// dead-but-allocated slots retain end-of-life residue (a combat-killed ant keeps
+// a negative hp; serializeAnts writes ALL slots), so a tighter bound would reject
+// a valid round-trip. Positions use the SURFACE max on both axes so smaller
+// underground-zone values are never rejected.
+function validateAntColumns(saved: SerializedAnts, capacity: number): void {
+  const POSMAX = SURFACE_GRID_WIDTH << FP_SHIFT; // == SURFACE_GRID_HEIGHT << FP_SHIFT
+  const finiteInt = (v: number): boolean => Number.isInteger(v);
+  const posFp = (v: number): boolean => Number.isInteger(v) && v >= 0 && v < POSMAX;
+  const posFpSentinel = (v: number): boolean => v === -1 || posFp(v);
+  const tileSentinel = (v: number): boolean =>
+    v === -1 || (Number.isInteger(v) && v >= 0 && v < SURFACE_GRID_WIDTH);
+  const idSentinel = (v: number): boolean =>
+    v === -1 || (Number.isInteger(v) && v >= 0 && v < capacity);
+  // combatOpponentId additionally uses -2 as a sticky "paired with the spider"
+  // sentinel (combat.ts) — set-if-not-already and read across ticks, so a save
+  // taken mid-spider-fight legitimately carries it. Widen ID_SENTINEL for this
+  // one column so it is not falsely rejected.
+  const combatOppSentinel = (v: number): boolean => v === -2 || idSentinel(v);
+  const byte = (v: number): boolean => Number.isInteger(v) && v >= 0 && v < 256;
+  const enumMax =
+    (max: number) =>
+    (v: number): boolean =>
+      Number.isInteger(v) && v >= 0 && v <= max;
+  const binary = (v: number): boolean => v === 0 || v === 1;
+  const tri = (v: number): boolean => v === -1 || v === 0 || v === 1;
+
+  // Every deserialized column + its rule. recentTiles (unpackRecentTiles) and
+  // count (deserializeWorldState) are validated elsewhere and intentionally omitted.
+  const columns: ReadonlyArray<readonly [string, unknown, (v: number) => boolean]> = [
+    ['posX', saved.posX, posFp],
+    ['posY', saved.posY, posFp],
+    ['colonyId', saved.colonyId, byte],
+    ['task', saved.task, enumMax(4)],
+    ['subTask', saved.subTask, enumMax(2)],
+    ['speed', saved.speed, finiteInt],
+    ['foodCarrying', saved.foodCarrying, finiteInt],
+    ['starvationTimer', saved.starvationTimer, finiteInt],
+    ['age', saved.age, finiteInt],
+    ['alive', saved.alive, binary],
+    ['lifespan', saved.lifespan, finiteInt],
+    ['zone', saved.zone, binary],
+    ['digTileX', saved.digTileX, tileSentinel],
+    ['digTileY', saved.digTileY, tileSentinel],
+    ['digTicksRemaining', saved.digTicksRemaining, finiteInt],
+    ['targetPosX', saved.targetPosX, posFpSentinel],
+    ['targetPosY', saved.targetPosY, posFpSentinel],
+    ['searchWave', saved.searchWave, finiteInt],
+    ['searchHeadingX', saved.searchHeadingX, tri],
+    ['searchHeadingY', saved.searchHeadingY, tri],
+    ['searchHeadingTicks', saved.searchHeadingTicks, finiteInt],
+    ['searchPrevTileX', saved.searchPrevTileX, tileSentinel],
+    ['searchPrevTileY', saved.searchPrevTileY, tileSentinel],
+    ['currentGridColonyId', saved.currentGridColonyId, byte],
+    ['waitingDeposit', saved.waitingDeposit, binary],
+    ['searchPauseTicks', saved.searchPauseTicks, finiteInt],
+    ['carryingBroodId', saved.carryingBroodId, idSentinel],
+    ['carriedBy', saved.carriedBy, idSentinel],
+    ['hp', saved.hp, finiteInt],
+    ['homeGroundBonusHp', saved.homeGroundBonusHp, finiteInt],
+    ['attackCooldown', saved.attackCooldown, finiteInt],
+    ['combatOpponentId', saved.combatOpponentId, combatOppSentinel],
+  ];
+
+  for (const [name, col, rule] of columns) {
+    if (!Array.isArray(col)) {
+      throw new Error(`Invalid ants.${name}: expected a number[]`);
+    }
+    // copyInto* is length-clamped to capacity, so values past it are never
+    // consumed — only validate what will actually be loaded.
+    const n = Math.min(col.length, capacity);
+    for (let i = 0; i < n; i++) {
+      const v = col[i] as unknown;
+      if (typeof v !== 'number' || !rule(v)) {
+        throw new Error(`Invalid ants.${name}[${i}]: ${String(v)}`);
+      }
+    }
+  }
+}
+
 function deserializeAnts(
   saved: SerializedAnts,
   capacity: number,
   nextEntityId: number,
 ): AntComponents {
+  validateAntColumns(saved, capacity);
   const a = createAntComponents(capacity);
   // createAntComponents pre-fills digTileX/digTileY/targetPosX/targetPosY with -1.
   // Overwrite with saved values (including -1 sentinels where appropriate).
@@ -1105,7 +1195,41 @@ function deserializeAnts(
   return a;
 }
 
+// #234 PR3 — range-check the colony scalars + brood/worker id-lists that
+// previously deserialized verbatim (unlike the validated chambers / foodPiles).
+// Runs BEFORE the `[...s.eggs]` spreads so a non-array id-list is caught with a
+// clean message rather than a raw TypeError from the spread. Plain Error →
+// 'incompatible-corrupt' → bootFromSave deletes + boots fresh. The ceilings are
+// structurally-unreachable tamper bounds, never a legitimate game state.
+function validateColonyScalars(s: SerializedColony): void {
+  const intIn = (v: number, lo: number, hi: number): boolean =>
+    Number.isInteger(v) && v >= lo && v <= hi;
+  // Entrance pool + every FoodStorage chamber maxed — a stockpile can't exceed this.
+  const FOOD_CEILING = BASE_FOOD_STORAGE_CAPACITY + MAX_ENTITIES * FOOD_CHAMBER_CAPACITY;
+  if (!intIn(s.foodStored, 0, FOOD_CEILING)) {
+    throw new Error(`Invalid colony.foodStored: ${String(s.foodStored)}`);
+  }
+  for (const key of ['workerCount', 'eggCount', 'larvaeCount', 'nurseCount'] as const) {
+    if (!intIn(s[key], 0, MAX_ENTITIES)) {
+      throw new Error(`Invalid colony.${key}: ${String(s[key])}`);
+    }
+  }
+  for (const key of ['eggs', 'larvae', 'workers'] as const) {
+    const list = s[key] as unknown;
+    if (!Array.isArray(list) || list.length > MAX_ENTITIES) {
+      throw new Error(`Invalid colony.${key}: not a number[] of length <= MAX_ENTITIES`);
+    }
+    for (let i = 0; i < list.length; i++) {
+      const v = list[i] as unknown;
+      if (typeof v !== 'number' || !intIn(v, 0, MAX_ENTITIES - 1)) {
+        throw new Error(`Invalid colony.${key}[${i}]: ${String(v)}`);
+      }
+    }
+  }
+}
+
 function deserializeColony(s: SerializedColony): ColonyRecord {
+  validateColonyScalars(s);
   const c = createColonyRecord(s.colonyId, s.queenEntityId);
   c.queenStarvationTimer = s.queenStarvationTimer;
   c.foodStored = s.foodStored;
