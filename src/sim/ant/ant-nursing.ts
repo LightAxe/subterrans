@@ -88,8 +88,8 @@ export function tickNurseActions(world: WorldState, chamberFlowFields?: ChamberF
       // non-full Nursery, or — when none is reachable — the fallback Nursery).
       // A carrier merely TRANSITING a full Nursery toward a non-full one sits on
       // a step tile (0..3), so it keeps moving instead of overflowing the full
-      // Nursery. Pre-V24 — or when no field is supplied (unit tests that drive
-      // tickNurseActions directly) — keeps the original isInsideNursery deposit.
+      // Nursery. When no field is supplied (unit tests that drive tickNurseActions
+      // directly) the else keeps the original isInsideNursery deposit.
       let shouldDeposit: boolean;
       // #247 — V24 gate reaped (MIN=V30); the else still handles the no-field case
       // (unit tests that drive tickNurseActions without chamberFlowFields).
@@ -312,8 +312,8 @@ function findUncarriedBroodOnTile(
 }
 
 /**
- * Compute a deposit position within a single Nursery `chamber`, spread
- * across its Open tiles by `broodId % openCount` in row-major order.
+ * Compute a deposit position within a single Nursery `chamber`: the first
+ * UNOCCUPIED Open tile in row-major order (occupancy per `tileHasResidentBrood`).
  * Returns `null` if no underground grid or no Open tile exists in that chamber.
  *
  * Used by `depositCarriedBrood` (v10+) to keep brood in the specific chamber

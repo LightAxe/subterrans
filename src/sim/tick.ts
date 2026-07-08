@@ -1104,8 +1104,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // tick like the pickup field above (a Nursery's fill level changes as
     // carriers deposit). A full Nursery drops out of the preferred seed set so
     // carriers route to a non-full one; the two-pass fallback keeps every
-    // reachable carrier routed to SOME Nursery. Pre-V24 uses the dirty-gated
-    // nearest-seed field above.
+    // reachable carrier routed to SOME Nursery.
     // #247 — V24 capacity-aware deposit field is unconditional (MIN=V30).
     computeNurseryDepositField(
       underground,

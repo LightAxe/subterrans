@@ -203,8 +203,7 @@ describe('#126 V27 forager storage backpressure', () => {
     });
   });
 
-  // (c) — version gate. Identical saturated setup: V26 still promotes (the old
-  // churn), V27 suppresses. This proves the gate, not just same-version parity.
+  // (c) — suppression under a saturated state.
   describe('(c) forage-backpressure suppression', () => {
     // #247 — the "V26 promotes idle ants (pre-fix churn)" control was removed: V26 is
     // unloadable under MIN=V30 and the reaped V27 gate makes suppression unconditional.
