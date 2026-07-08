@@ -34,6 +34,12 @@ import type { ColonyId } from './colony/colony-store.js';
 /** Tile-key stride. See module header re: surface/underground parity. */
 const TILE_KEY_STRIDE = SURFACE_GRID_WIDTH;
 
+// Guard: the stride + the 16-bit tile field `(tileY * TILE_KEY_STRIDE + tileX)
+// & 0xffff` assume width 128 (see module header). Fails to compile if the width
+// drifts — the Phase-4 reshape must revisit this packing. (entrance-flow.ts:36 pattern)
+const _TILE_KEY_STRIDE_IS_128: 128 = SURFACE_GRID_WIDTH;
+void _TILE_KEY_STRIDE_IS_128;
+
 /**
  * Encode (zone, tileX, tileY, gridColonyId) as a single int32 key.
  *

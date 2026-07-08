@@ -386,8 +386,11 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         const underground = world.undergroundGrids[cmd.colonyId];
         if (!underground) break;
         // Issue #60 — integer + bounds. Pre-fix `< 0 || >= max` let NaN through.
-        if (!isTileCoord(cmd.tileX, UNDERGROUND_GRID_WIDTH)) break;
-        if (!isTileCoord(cmd.tileY, UNDERGROUND_GRID_HEIGHT)) break;
+        // #232 — bound against the per-colony grid (underground.width/height ===
+        // the global constant today; replay-proven no-op) so the Phase-4 reshape
+        // need not revisit this site.
+        if (!isTileCoord(cmd.tileX, underground.width)) break;
+        if (!isTileCoord(cmd.tileY, underground.height)) break;
         // Issue #30 (sim-side): reject ceiling-strip dispatches at the
         // MarkDigTile boundary. The renderer paints `tileY === 0` as grass
         // for non-entrance columns (entrance columns get the gold-tinted
@@ -526,8 +529,10 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         // pendingChambers map key (`${colonyId}:NaN:NaN`) that no future
         // PlaceChamber/CancelDigMark can address; persists into save state
         // and breaks SCEN-06 byte-identity. Validate before any field use.
-        if (!isTileCoord(cmd.anchorTileX, UNDERGROUND_GRID_WIDTH - dims.width + 1)) break;
-        if (!isTileCoord(cmd.anchorTileY, UNDERGROUND_GRID_HEIGHT - dims.height + 1)) break;
+        // #232 — per-colony grid bounds (underground.width/height === the global
+        // constants today; replay-proven no-op).
+        if (!isTileCoord(cmd.anchorTileX, underground.width - dims.width + 1)) break;
+        if (!isTileCoord(cmd.anchorTileY, underground.height - dims.height + 1)) break;
         // Issue #30 (sim-side): reject any chamber whose footprint overlaps
         // the ceiling row. CHAMBER_DIMENSIONS extend DOWN from the anchor,
         // so anchorTileY === UNDERGROUND_CEILING_ROW_Y is exactly the
