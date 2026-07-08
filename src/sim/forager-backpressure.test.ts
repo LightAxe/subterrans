@@ -196,7 +196,7 @@ describe('#126 V27 forager storage backpressure', () => {
       // The pool is full → carriers WOULD park (no deposit target)...
       expect(colonyHasNoDepositTarget(colony)).toBe(true);
       // ...but promotion/demotion backpressure is NOT applied to a chamberless colony.
-      expect(colonyForageBackpressure(colony, world.simVersion)).toBe(false);
+      expect(colonyForageBackpressure(colony)).toBe(false);
 
       tick(world, []);
       expect(foragerCount(world, idleIds)).toBeGreaterThan(0); // idle ants still promoted

@@ -377,57 +377,6 @@ describe('issue #27: simVersion plumbing', () => {
     const r2 = runSimulation(42, 800);
     expect(r1).toBe(r2);
   });
-
-  it('LEGACY vs LATEST simVersion produce different state at the same seed when chambers diverge', async () => {
-    // No tools to flip simVersion mid-run — but we can construct a colony
-    // with two chambers of unequal fill and compare the two drain orders
-    // directly. The integration-level test above proves determinism within
-    // a version; this test proves the algorithms genuinely differ.
-    const { withdrawFood } = await import('./colony/colony-system.js');
-    const { createColonyRecord } = await import('./colony/colony-store.js');
-    const { ChamberType } = await import('./enums.js');
-    const { LEGACY_SIM_VERSION, LATEST_SIM_VERSION } = await import('./types.js');
-
-    function buildColony() {
-      const c = createColonyRecord(1, 0);
-      c.entrances = [];
-      c.rallyPoint = null;
-      c.digFlowFieldDirty = false;
-      c.foodFlowFieldDirty = false;
-      c.foodStored = 0;
-      c.chambers.push({
-        chamberId: 1,
-        chamberType: ChamberType.FoodStorage,
-        foodStored: 100,
-        posX: 0,
-        posY: 0,
-        width: 1,
-        height: 1,
-      });
-      c.chambers.push({
-        chamberId: 2,
-        chamberType: ChamberType.FoodStorage,
-        foodStored: 200,
-        posX: 0,
-        posY: 0,
-        width: 1,
-        height: 1,
-      });
-      return c;
-    }
-
-    const cLegacy = buildColony();
-    withdrawFood(cLegacy, 50, LEGACY_SIM_VERSION);
-    // v2: array-order — chambers[0] (100) drains first → 50, chambers[1] untouched.
-    expect(cLegacy.chambers[0]!.foodStored).toBe(50);
-    expect(cLegacy.chambers[1]!.foodStored).toBe(200);
-
-    const cLatest = buildColony();
-    withdrawFood(cLatest, 50, LATEST_SIM_VERSION);
-    // v3: fullest-first — chambers[1] (200) drains first → 150, chambers[0] untouched.
-    expect(cLatest.chambers[0]!.foodStored).toBe(100);
-    expect(cLatest.chambers[1]!.foodStored).toBe(150);
-  });
 });
 
 // ---------------------------------------------------------------------------

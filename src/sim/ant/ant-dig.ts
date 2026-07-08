@@ -69,7 +69,7 @@ export function tickSearchLeash(world: WorldState): void {
     // re-promoted into a state this leash would immediately demote. V27 scopes
     // it to colonies that own a FoodStorage chamber (the mature-colony pile-up);
     // pre-V27 keeps the chamberless-inclusive at-cap demotion for replay.
-    forageBackpressure[colony.colonyId] = colonyForageBackpressure(colony, world.simVersion);
+    forageBackpressure[colony.colonyId] = colonyForageBackpressure(colony);
   }
 
   for (let id = 0; id < world.nextEntityId; id++) {

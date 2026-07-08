@@ -26,12 +26,7 @@
 // No Math.floor, no floats, no division operator.
 
 import type { WorldState } from '../types.js';
-import {
-  allocateEntityId,
-  INVALID_ENTITY_ID,
-  SIM_VERSION_V3,
-  SIM_VERSION_V27_FORAGE_BACKPRESSURE,
-} from '../types.js';
+import { allocateEntityId, INVALID_ENTITY_ID } from '../types.js';
 import type { ChamberRecord, ColonyRecord } from './colony-store.js';
 import type { ColonyId } from './colony-store.js';
 import {
@@ -153,13 +148,9 @@ export function colonyHasNoDepositTarget(colony: ColonyRecord): boolean {
  * via the universal #27 wait-wake gate, which keys on `colonyHasNoDepositTarget`
  * directly — so a full chamberless pool stays topped off without dispatching new
  * foragers needlessly.)
- *
- * Pre-V27 keeps the chamberless-inclusive at-cap behaviour the #42 demotion
- * recorded, for byte-identical replay.
  */
-export function colonyForageBackpressure(colony: ColonyRecord, simVersion: number): boolean {
+export function colonyForageBackpressure(colony: ColonyRecord): boolean {
   if (!colonyHasNoDepositTarget(colony)) return false;
-  if (simVersion < SIM_VERSION_V27_FORAGE_BACKPRESSURE) return true;
   for (let c = 0; c < colony.chambers.length; c++) {
     if (colony.chambers[c]!.chamberType === ChamberType.FoodStorage) return true;
   }
@@ -170,20 +161,11 @@ export function colonyForageBackpressure(colony: ColonyRecord, simVersion: numbe
  * Attempt to withdraw `amount` food. All-or-nothing: returns false (no
  * partial withdrawal) if the colony's combined stored food is below `amount`.
  *
- * Drain order is deterministic and gated on `simVersion`:
- *
- *   simVersion === LEGACY_SIM_VERSION (2): FoodStorage chambers in
- *     colony.chambers array order, then the entrance-shaft pool. Each
- *     source contributes up to its current contents. Issue #15 baseline.
- *
- *   simVersion === LATEST_SIM_VERSION (3): drain the FoodStorage chamber
- *     with the highest fill level first; on ties, lowest array index wins
- *     (matches LEGACY semantics on equal fills, so single-chamber colonies
- *     have identical behavior across versions). Then the entrance pool.
- *     Reduces flow-field re-seed thrash when many chambers cluster near
- *     saturation: drain-fullest concentrates the saturated→depositable
- *     crossing on one chamber at a time instead of cycling through several.
- *     Closes issue #27.
+ * Drain order: the FoodStorage chamber with the highest fill level first; on
+ * ties, lowest array index wins. Then the entrance-shaft pool. Draining
+ * fullest-first reduces flow-field re-seed thrash when many chambers cluster
+ * near saturation — it concentrates the saturated→depositable crossing on one
+ * chamber at a time instead of cycling through several (closes issue #27).
  *
  * Issue #15 follow-up — flow-field dirty: fires only when a chamber crosses
  * the saturation→depositable boundary (per isFoodChamberDepositable), not
@@ -193,60 +175,43 @@ export function colonyForageBackpressure(colony: ColonyRecord, simVersion: numbe
  * the oscillation cycle described in the FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP
  * constant docs.
  */
-export function withdrawFood(colony: ColonyRecord, amount: number, simVersion: number): boolean {
+export function withdrawFood(colony: ColonyRecord, amount: number): boolean {
   if (colonyFoodTotal(colony) < amount) return false;
 
   let remaining = amount;
-  if (simVersion >= SIM_VERSION_V3) {
-    // LATEST: drain fullest-first, array-index tie-break. Outer `while`
-    // re-scans on each iteration; in steady state both production callers
-    // (queen 2 fp, larva 1 fp) terminate after iteration 1 because the
-    // fullest chamber holds far more than the drain amount. Theoretical
-    // worst case (tiny dribbles across many chambers) is O(N²) but does
-    // not arise in any current call path. If a future caller drains an
-    // amount that may exceed several chambers' holdings, replace this
-    // with a single-pass merge over a pre-sorted view.
-    while (remaining > 0) {
-      let pickIdx = -1;
-      let pickFill = -1;
-      for (let i = 0; i < colony.chambers.length; i++) {
-        const ch = colony.chambers[i]!;
-        if (ch.chamberType !== ChamberType.FoodStorage) continue;
-        if (ch.foodStored <= 0) continue;
-        if (ch.foodStored > pickFill) {
-          pickFill = ch.foodStored;
-          pickIdx = i;
-        }
-      }
-      if (pickIdx < 0) break; // no chamber has food
-
-      const ch = colony.chambers[pickIdx]!;
-      const wasDepositable = isFoodChamberDepositable(ch);
-      const take = ch.foodStored < remaining ? ch.foodStored : remaining;
-      ch.foodStored -= take;
-      remaining -= take;
-      // `wasDepositable` is recomputed each outer iteration; the dirty
-      // fire is naturally idempotent across the saturation crossing —
-      // once a chamber is depositable, subsequent picks that still drain
-      // it observe wasDepositable=true and skip the dirty write.
-      if (!wasDepositable && isFoodChamberDepositable(ch)) {
-        colony.foodFlowFieldDirty = true;
-      }
-    }
-  } else {
-    // LEGACY (simVersion <= 2): array-order drain — issue #15 baseline.
-    // Replays of pre-#27 saves continue to use this path verbatim.
-    for (let i = 0; i < colony.chambers.length && remaining > 0; i++) {
+  // Drain fullest-first, array-index tie-break. Outer `while` re-scans on
+  // each iteration; in steady state both production callers (queen 2 fp,
+  // larva 1 fp) terminate after iteration 1 because the fullest chamber
+  // holds far more than the drain amount. Theoretical worst case (tiny
+  // dribbles across many chambers) is O(N²) but does not arise in any
+  // current call path. If a future caller drains an amount that may exceed
+  // several chambers' holdings, replace this with a single-pass merge over
+  // a pre-sorted view.
+  while (remaining > 0) {
+    let pickIdx = -1;
+    let pickFill = -1;
+    for (let i = 0; i < colony.chambers.length; i++) {
       const ch = colony.chambers[i]!;
       if (ch.chamberType !== ChamberType.FoodStorage) continue;
       if (ch.foodStored <= 0) continue;
-      const wasDepositable = isFoodChamberDepositable(ch);
-      const take = ch.foodStored < remaining ? ch.foodStored : remaining;
-      ch.foodStored -= take;
-      remaining -= take;
-      if (!wasDepositable && isFoodChamberDepositable(ch)) {
-        colony.foodFlowFieldDirty = true;
+      if (ch.foodStored > pickFill) {
+        pickFill = ch.foodStored;
+        pickIdx = i;
       }
+    }
+    if (pickIdx < 0) break; // no chamber has food
+
+    const ch = colony.chambers[pickIdx]!;
+    const wasDepositable = isFoodChamberDepositable(ch);
+    const take = ch.foodStored < remaining ? ch.foodStored : remaining;
+    ch.foodStored -= take;
+    remaining -= take;
+    // `wasDepositable` is recomputed each outer iteration; the dirty
+    // fire is naturally idempotent across the saturation crossing —
+    // once a chamber is depositable, subsequent picks that still drain
+    // it observe wasDepositable=true and skip the dirty write.
+    if (!wasDepositable && isFoodChamberDepositable(ch)) {
+      colony.foodFlowFieldDirty = true;
     }
   }
 
@@ -354,17 +319,10 @@ export function largestNurseryTileCount(colony: ColonyRecord): number {
 export function tickFoodConsumption(world: WorldState, colony: ColonyRecord): void {
   const ants = world.ants;
 
-  // Issue #27 — drain order varies by sim version (see withdrawFood JSDoc);
-  // capture once so both queen and larva loops use a consistent value for
-  // the entire tick (defensive — `world.simVersion` is sticky on load and
-  // can't change mid-tick, but pulling it once costs nothing and keeps the
-  // intent local).
-  const simVersion = world.simVersion;
-
   // Queen (CLNY-04) — reset on success, decrement + death-check on fail.
   const queenId = colony.queenEntityId;
   if (ants.alive[queenId] === 1) {
-    if (withdrawFood(colony, QUEEN_FOOD_PER_TICK, simVersion)) {
+    if (withdrawFood(colony, QUEEN_FOOD_PER_TICK)) {
       colony.queenStarvationTimer = STARVATION_GRACE_TICKS;
     } else {
       colony.queenStarvationTimer -= 1;
@@ -378,7 +336,7 @@ export function tickFoodConsumption(world: WorldState, colony: ColonyRecord): vo
   for (let i = 0; i < colony.larvae.length; i++) {
     const id = colony.larvae[i]!;
     if (ants.alive[id] !== 1) continue;
-    if (withdrawFood(colony, LARVA_FOOD_PER_TICK, simVersion)) {
+    if (withdrawFood(colony, LARVA_FOOD_PER_TICK)) {
       ants.starvationTimer[id] = STARVATION_GRACE_TICKS;
     } else {
       // Non-null assertion: id is a valid entity index, bounds verified by colony.larvae membership.
