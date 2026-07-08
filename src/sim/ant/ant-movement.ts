@@ -68,6 +68,14 @@ import { clearRecentTiles, isRecentTile, pushRecentTile } from './ant-store.js';
 // per-world scratch arena (getScratch(world).movementOccupancy), Map.clear()ed at
 // the top of each call as before.
 
+// Guard: resolveSameColonyOccupancy's occupancy key `(… | (tileY << 7) | tileX)`
+// packs tileX in bits 0..6 — both grid widths must stay 128; tileY (bits 7..14,
+// max 255) fits h=128/64. Fails to compile if a width drifts. (entrance-flow.ts:36 pattern)
+const _OCC_SURFACE_WIDTH_IS_128: 128 = SURFACE_GRID_WIDTH;
+const _OCC_UNDERGROUND_WIDTH_IS_128: 128 = UNDERGROUND_GRID_WIDTH;
+void _OCC_SURFACE_WIDTH_IS_128;
+void _OCC_UNDERGROUND_WIDTH_IS_128;
+
 /**
  * Move every alive ant one step based on its current task and zone.
  *

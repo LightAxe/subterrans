@@ -28,11 +28,21 @@
 // Pure-sim: no Phaser, no DOM, no Math.*, zero allocation.
 
 import { Zone } from './terrain.js';
-import { SURFACE_GRID_WIDTH } from './constants.js';
+import { SURFACE_GRID_WIDTH, UNDERGROUND_GRID_WIDTH } from './constants.js';
 import type { ColonyId } from './colony/colony-store.js';
 
 /** Tile-key stride. See module header re: surface/underground parity. */
 const TILE_KEY_STRIDE = SURFACE_GRID_WIDTH;
+
+// Guard: the stride + the 16-bit tile field `(tileY * TILE_KEY_STRIDE + tileX)
+// & 0xffff` assume width 128 for BOTH zones — underground tiles are encoded with
+// the surface stride (see module header), so an underground width > 128 would
+// collide keys just as a surface-width drift would. Fails to compile if either
+// width drifts — the Phase-4 reshape must revisit this packing. (entrance-flow.ts:36)
+const _TILE_KEY_STRIDE_IS_128: 128 = SURFACE_GRID_WIDTH;
+const _TILE_KEY_UG_WIDTH_IS_128: 128 = UNDERGROUND_GRID_WIDTH;
+void _TILE_KEY_STRIDE_IS_128;
+void _TILE_KEY_UG_WIDTH_IS_128;
 
 /**
  * Encode (zone, tileX, tileY, gridColonyId) as a single int32 key.

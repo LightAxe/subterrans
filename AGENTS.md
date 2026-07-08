@@ -84,6 +84,7 @@ The review checklist:
 - [ ] No variable timestep usage
 - [ ] Tests cover new simulation logic
 - [ ] Deterministic replay is not broken (replay tests pass)
+- [ ] New bit-packed keys or grid-size assumptions carry a compile-time guard (entrance-flow.ts pattern) + a docs/phase-4-preflight.md row
 
 ## Review guidelines
 

@@ -30,7 +30,12 @@ import { computeAntRotation, type AntFacingCache } from './ant-facing-cache.js';
 import { ugGet, UndergroundTileState, type UndergroundGrid } from '../sim/terrain.js';
 import { isAlive } from '../sim/ant/ant-store.js';
 import { FP_SHIFT, FP_ONE } from '../sim/fixed.js';
-import { PLAYER_COLONY_ID, FOOD_CHAMBER_CAPACITY } from '../sim/constants.js';
+import {
+  PLAYER_COLONY_ID,
+  FOOD_CHAMBER_CAPACITY,
+  UNDERGROUND_GRID_WIDTH,
+  UNDERGROUND_GRID_HEIGHT,
+} from '../sim/constants.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { ChamberType } from '../sim/enums.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
@@ -65,6 +70,15 @@ import {
   ANT_DOT_SCREEN_PX,
 } from './camera-adapter.js';
 import { visibleTileRange } from './draw-surface.js';
+
+// Guard: the glow key `((colonyId << 24) | (ty << 16) | tx)` (packed ~L565,
+// decoded ~L587) packs tx in bits 0..7 and ty in bits 16..23 — one byte each,
+// with the colony id in the top byte. The underground grid must stay within a
+// byte per axis. Fails to compile if a dimension drifts. (entrance-flow.ts:36 pattern)
+const _GLOW_UG_WIDTH_IS_128: 128 = UNDERGROUND_GRID_WIDTH;
+const _GLOW_UG_HEIGHT_IS_64: 64 = UNDERGROUND_GRID_HEIGHT;
+void _GLOW_UG_WIDTH_IS_128;
+void _GLOW_UG_HEIGHT_IS_64;
 
 // ---------------------------------------------------------------------------
 // Chamber color map
