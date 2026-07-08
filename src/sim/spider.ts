@@ -11,14 +11,8 @@ import { getScratch } from './scratch.js';
 import {
   SPIDER_HP_FULL,
   SPIDER_HUNT_INTERVAL_TICKS,
-  SPIDER_HUNGER_MAX_TICKS,
   SPIDER_TELEGRAPH_TICKS,
   SPIDER_STRIKE_TICKS,
-  SPIDER_FEEDING_TICKS,
-  SPIDER_HP_REGEN_PER_20_TICKS,
-  SPIDER_RAMPAGE_RETREAT_HP,
-  SPIDER_RETREAT_MIN_TICKS,
-  SPIDER_RAMPAGE_KILL_QUOTA,
   SPIDER_RAMPAGE_MAX_TICKS,
   SPIDER_HUNT_SEARCH_RADIUS_TILES,
   SPIDER_HUNT_MIN_TARGET_WORKERS,
@@ -40,12 +34,7 @@ import {
   PHEROMONE_CAP,
   SPIDER_EDGE_MARGIN_TILES,
 } from './constants.js';
-import {
-  SIM_VERSION_V23_SPIDER_AGGRO,
-  SIM_VERSION_V26_SPIDER_EDGE_MARGIN,
-  SIM_VERSION_V31_SPIDER_TERRAIN,
-  SIM_VERSION_V32_AI_OP_VALIDATION,
-} from './types.js';
+import { SIM_VERSION_V31_SPIDER_TERRAIN, SIM_VERSION_V32_AI_OP_VALIDATION } from './types.js';
 import { FP_SHIFT } from './fixed.js';
 import { surfaceMovementAt, SurfaceMovementEffect } from './surface-features.js';
 import { ensureSurfaceGoalField, SURFACE_GOAL_UNREACHED } from './surface-routing.js';
@@ -407,7 +396,7 @@ export function isSpiderPassable(world: WorldState, tileX: number, tileY: number
 }
 
 /** V31 (#225) gate wrapper for the live (V23) path. Pre-V31 delegates verbatim to
- *  moveTowardTile (frozen tickSpiderV22 relies on that body staying identical).
+ *  moveTowardTile (the shared surface-movement helper).
  *  V31+: one axis step per tick (SPIDER_SPEED === FP_ONE, so an axis step lands
  *  exactly one tile over), refusing HardBlock destinations — preferred axis
  *  (ax >= ay → X, moveTowardTile's tie-break) first, then the other axis if it
@@ -556,42 +545,6 @@ function clampSpiderWithinEdgeMargin(spider: SpiderState): void {
   if (spider.posX > maxX) spider.posX = maxX;
   if (spider.posY < minY) spider.posY = minY;
   if (spider.posY > maxY) spider.posY = maxY;
-}
-
-/** Move spider in a deterministic patrol arc within territory radius of lair. */
-function tickPatrolMovement(world: WorldState, spider: SpiderState): void {
-  // Simple deterministic patrol: move in a clockwise square orbit around lair.
-  // Uses world.tick to pick a target corner deterministically (no rng draws).
-  const r = spider.territoryRadiusTiles >> 1; // patrol at half radius
-  const phase = (world.tick >> 6) & 3; // change quadrant every 64 ticks
-  const lx = spider.lairTileX;
-  const ly = spider.lairTileY;
-  let tx: number;
-  let ty: number;
-  switch (phase) {
-    case 0:
-      tx = lx + r;
-      ty = ly - r;
-      break;
-    case 1:
-      tx = lx + r;
-      ty = ly + r;
-      break;
-    case 2:
-      tx = lx - r;
-      ty = ly + r;
-      break;
-    default:
-      tx = lx - r;
-      ty = ly - r;
-      break;
-  }
-  // Clamp target within grid
-  if (tx < 0) tx = 0;
-  if (tx >= SURFACE_GRID_WIDTH) tx = SURFACE_GRID_WIDTH - 1;
-  if (ty < 0) ty = 0;
-  if (ty >= SURFACE_GRID_HEIGHT) ty = SURFACE_GRID_HEIGHT - 1;
-  moveTowardTile(spider, tx, ty);
 }
 
 // ---------------------------------------------------------------------------
@@ -775,326 +728,9 @@ export function tickSpider(world: WorldState): void {
     return;
   }
 
-  // Version dispatch: V23+ uses the hunger-gated meandering predator; V22 and
-  // earlier use the frozen lair-orbit/scheduled-rampage behavior (byte-identical).
-  if (world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO) {
-    tickSpiderV23(world, spider);
-    return;
-  }
-  tickSpiderV22(world, spider);
-}
-
-// ---------------------------------------------------------------------------
-// tickSpiderV22 — frozen pre-V23 behavior (lair orbit + scheduled rampage).
-// Verbatim move of the original tickSpider body. Do NOT modify: V22-and-earlier
-// replays must stay byte-identical.
-// ---------------------------------------------------------------------------
-function tickSpiderV22(world: WorldState, spider: SpiderState): void {
-  // HP regeneration: 1 HP per 20 ticks while Retreating or Feeding.
-  if (
-    (spider.state === 'Retreating' || spider.state === 'Feeding') &&
-    world.tick % 20 === 0 &&
-    spider.hp < SPIDER_HP_FULL
-  ) {
-    spider.hp += SPIDER_HP_REGEN_PER_20_TICKS;
-    if (spider.hp > SPIDER_HP_FULL) spider.hp = SPIDER_HP_FULL;
-  }
-
-  // Hunger accrual: only while not Feeding.
-  if (spider.state !== 'Feeding') {
-    spider.hungerTicks += 1;
-  }
-
-  // --- Priority retreating-threshold check (applies to Striking, Chasing, Rampaging) ---
-  // This runs before state-specific logic so a combat-damaged spider retreats
-  // immediately, even on the same tick its duration would have expired.
-  if (
-    (spider.state === 'Striking' || spider.state === 'Chasing' || spider.state === 'Rampaging') &&
-    spider.hp < SPIDER_RAMPAGE_RETREAT_HP
-  ) {
-    if (spider.state === 'Striking') {
-      emitSpiderHuntEnd(world, 'swarm_retreat', spider.killsThisStrike);
-    } else if (spider.state === 'Chasing') {
-      emitSpiderChaseEnd(world, 'retreat');
-    } else {
-      emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
-    }
-    clearSpiderPairingSentinels(world);
-    spider.state = 'Retreating';
-    spider.retreatStartTick = world.tick;
-    spider.huntTargetTileX = -1;
-    spider.huntTargetTileY = -1;
-    spider.chaseTargetAntId = -1;
-    spider.hungerTicks = 0; // prevent immediate re-rampaging on return to Patrolling
-    spider.rampageTargetColonyId = -1;
-    world.spiderPriorityColonyId = null;
-    // Fall through to movement + pheromone below.
-  }
-
-  // --- State machine transitions ---
-  switch (spider.state) {
-    case 'Patrolling': {
-      // Hunger check first: rampaging wins over hunting on same tick.
-      if (spider.hungerTicks >= SPIDER_HUNGER_MAX_TICKS[tierIndex(world.difficulty)]) {
-        spider.state = 'Rampaging';
-        spider.rampageStartTick = world.tick;
-        spider.rampageKillsThisRampage = 0;
-        spider.rampageTargetColonyId = pickRampageTarget(world, spider);
-        emitEvent(world, {
-          tick: world.tick,
-          type: 'spider_rampage_start',
-          payload: {
-            lairTile: { x: spider.lairTileX, y: spider.lairTileY },
-            hungerTicks: spider.hungerTicks,
-          },
-        });
-      } else {
-        // V23 (#146): opportunistic chase — a lone ant within trigger radius takes
-        // precedence over the scheduled tile-density hunt (but not over rampaging).
-        const chaseId =
-          world.simVersion >= SIM_VERSION_V23_SPIDER_AGGRO ? findChaseTarget(world, spider) : -1;
-        if (chaseId >= 0) {
-          spider.state = 'Chasing';
-          spider.chaseTargetAntId = chaseId;
-          spider.chaseStartTick = world.tick;
-          emitEvent(world, {
-            tick: world.tick,
-            type: 'spider_chase_start',
-            payload: {
-              targetAntId: chaseId,
-              targetTile: {
-                x: world.ants.posX[chaseId]! >> FP_SHIFT,
-                y: world.ants.posY[chaseId]! >> FP_SHIFT,
-              },
-            },
-          });
-        } else if (world.tick >= spider.nextHuntTick) {
-          const target = findHuntTarget(world, spider);
-          if (target !== null) {
-            spider.state = 'Hunting';
-            spider.huntTargetTileX = target.x;
-            spider.huntTargetTileY = target.y;
-            spider.huntStartTick = world.tick;
-            emitEvent(world, {
-              tick: world.tick,
-              type: 'spider_hunt_start',
-              payload: {
-                reticleTile: { x: target.x, y: target.y, grid: 'surface' },
-                targetWorkers: target.workerCount,
-              },
-            });
-          } else {
-            // No qualifying workers in range — postpone hunt by one interval to preserve
-            // the 1200-tick cadence rather than re-scanning every tick.
-            spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
-          }
-        }
-      }
-      break;
-    }
-
-    case 'Hunting': {
-      if (world.tick - spider.huntStartTick >= SPIDER_TELEGRAPH_TICKS) {
-        spider.state = 'Striking';
-        spider.strikeStartTick = world.tick;
-        spider.killsThisStrike = 0;
-      }
-      break;
-    }
-
-    case 'Chasing': {
-      // Combat ran at step 17 (this tick) before tickSpider, so a catch shows up as a
-      // dead target here. Exit on catch / escape underground / leash-timeout; otherwise
-      // keep pursuing (movement happens in the movement switch below).
-      const tid = spider.chaseTargetAntId;
-      const targetAlive = tid >= 0 && world.ants.alive[tid] === 1;
-      if (!targetAlive) {
-        // Target died — treat as a successful catch (hunger satisfied).
-        emitSpiderChaseEnd(world, 'kill');
-        clearSpiderPairingSentinels(world);
-        spider.state = 'Patrolling';
-        spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
-        spider.chaseTargetAntId = -1;
-        spider.hungerTicks = 0;
-      } else if (world.ants.zone[tid] !== 0) {
-        // Target reached safety underground — abandon.
-        emitSpiderChaseEnd(world, 'escape');
-        clearSpiderPairingSentinels(world);
-        spider.state = 'Patrolling';
-        spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
-        spider.chaseTargetAntId = -1;
-      } else if (world.tick - spider.chaseStartTick >= SPIDER_CHASE_MAX_TICKS) {
-        // Safety leash expired — give up and return to patrol.
-        emitSpiderChaseEnd(world, 'leash');
-        clearSpiderPairingSentinels(world);
-        spider.state = 'Patrolling';
-        spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
-        spider.chaseTargetAntId = -1;
-      }
-      break;
-    }
-
-    case 'Striking': {
-      // Duration check (retreat threshold was already handled above).
-      if (world.tick - spider.strikeStartTick >= SPIDER_STRIKE_TICKS) {
-        if (spider.killsThisStrike > 0) {
-          emitSpiderHuntEnd(world, 'kill', spider.killsThisStrike);
-          clearSpiderPairingSentinels(world);
-          spider.state = 'Feeding';
-          spider.feedingStartTick = world.tick;
-          spider.hungerTicks = 0; // CF-P0-006: reset on Feeding entry
-          spider.huntTargetTileX = -1;
-          spider.huntTargetTileY = -1;
-          world.spiderPriorityColonyId = null;
-        } else {
-          emitSpiderHuntEnd(world, 'scatter', 0);
-          clearSpiderPairingSentinels(world);
-          spider.state = 'Patrolling';
-          spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
-          spider.huntTargetTileX = -1;
-          spider.huntTargetTileY = -1;
-          world.spiderPriorityColonyId = null;
-        }
-      }
-      break;
-    }
-
-    case 'Feeding': {
-      if (world.tick >= spider.feedingStartTick + SPIDER_FEEDING_TICKS) {
-        spider.state = 'Patrolling';
-        spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
-        spider.huntTargetTileX = -1;
-        spider.huntTargetTileY = -1;
-      }
-      break;
-    }
-
-    case 'Rampaging': {
-      // Quota check: fed enough brood.
-      if (spider.rampageKillsThisRampage >= SPIDER_RAMPAGE_KILL_QUOTA) {
-        emitSpiderRampageEnd(world, 'quota_met', spider.rampageKillsThisRampage, false);
-        clearSpiderPairingSentinels(world);
-        spider.state = 'Feeding';
-        spider.feedingStartTick = world.tick;
-        spider.hungerTicks = 0;
-        spider.rampageTargetColonyId = -1;
-        world.spiderPriorityColonyId = null;
-      } else if (world.tick - spider.rampageStartTick >= SPIDER_RAMPAGE_MAX_TICKS) {
-        // Timeout: no ants surfaced at entrance — treat as failed rampage and retreat.
-        emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
-        clearSpiderPairingSentinels(world);
-        spider.state = 'Retreating';
-        spider.retreatStartTick = world.tick;
-        spider.huntTargetTileX = -1;
-        spider.huntTargetTileY = -1;
-        spider.hungerTicks = 0; // prevent immediate re-rampaging on return to Patrolling
-        spider.rampageTargetColonyId = -1;
-        world.spiderPriorityColonyId = null;
-      }
-      break;
-    }
-
-    case 'Retreating': {
-      if (
-        spider.hp >= SPIDER_HP_FULL &&
-        world.tick >= spider.retreatStartTick + SPIDER_RETREAT_MIN_TICKS
-      ) {
-        spider.state = 'Patrolling';
-        spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
-      }
-      break;
-    }
-  }
-
-  // --- Movement ---
-  // Cache nearest entrance for Rampaging once per tick (used by both movement and pheromone seeding).
-  // Self-heal: a Rampaging spider loaded from a save predating rampageTargetColonyId derives
-  // its target here so behavior is consistent with a spider that never reloaded.
-  if (spider.state === 'Rampaging' && spider.rampageTargetColonyId < 0) {
-    spider.rampageTargetColonyId = pickRampageTarget(world, spider);
-  }
-  const rampageNearest =
-    spider.state === 'Rampaging'
-      ? findNearestEntrance(world, spider, spider.rampageTargetColonyId)
-      : null;
-  switch (spider.state) {
-    case 'Patrolling': {
-      tickPatrolMovement(world, spider);
-      break;
-    }
-    case 'Hunting': {
-      moveTowardTile(spider, spider.huntTargetTileX, spider.huntTargetTileY);
-      break;
-    }
-    case 'Striking': {
-      // Stay on target tile.
-      moveTowardTile(spider, spider.huntTargetTileX, spider.huntTargetTileY);
-      break;
-    }
-    case 'Chasing': {
-      // Pursue the target ant's current tile each tick (transition logic above already
-      // handled dead/underground/leash-expired targets, so the id is live here).
-      const tid = spider.chaseTargetAntId;
-      if (tid >= 0 && world.ants.alive[tid] === 1) {
-        moveTowardTile(
-          spider,
-          world.ants.posX[tid]! >> FP_SHIFT,
-          world.ants.posY[tid]! >> FP_SHIFT,
-        );
-      }
-      break;
-    }
-    case 'Feeding':
-    case 'Retreating': {
-      moveTowardTile(spider, spider.lairTileX, spider.lairTileY);
-      break;
-    }
-    case 'Rampaging': {
-      if (rampageNearest !== null) {
-        // Park ON the entrance tile. The pre-descent gate (#165, ant-system.ts)
-        // holds surface ants here instead of letting them descend before combat,
-        // and spider combat scans the spider's own tile — so blockading the
-        // entrance tile itself is what actually catches entrance traffic,
-        // regardless of which direction the ant approached from. (Parking one
-        // tile above only caught ants approaching from that side.)
-        moveTowardTile(spider, rampageNearest.x, rampageNearest.y);
-      }
-      break;
-    }
-  }
-
-  // --- Danger pheromone seeding ---
-  // Surface states: Patrolling, Hunting, Chasing, Striking, Rampaging (while on surface)
-  const isOnSurface = spider.state !== 'Feeding' && spider.state !== 'Retreating';
-  if (isOnSurface) {
-    seedDangerPheromone(world, spider);
-  }
-
-  // --- scatterReticleTile shadow field: written at end for next tick's step 13e ---
-  // Hunting/Striking scatter around the hunt target tile; Chasing (V23) scatters around
-  // the pursued ant's current tile so nearby non-fighters flee the chase.
-  const chaseTid = spider.chaseTargetAntId;
-  const chaseReticleValid =
-    spider.state === 'Chasing' && chaseTid >= 0 && world.ants.alive[chaseTid] === 1;
-  if (spider.state === 'Hunting' || spider.state === 'Striking') {
-    if (world.scatterReticleTile === null) {
-      world.scatterReticleTile = { x: spider.huntTargetTileX, y: spider.huntTargetTileY };
-    } else {
-      world.scatterReticleTile.x = spider.huntTargetTileX;
-      world.scatterReticleTile.y = spider.huntTargetTileY;
-    }
-  } else if (chaseReticleValid) {
-    const rx = world.ants.posX[chaseTid]! >> FP_SHIFT;
-    const ry = world.ants.posY[chaseTid]! >> FP_SHIFT;
-    if (world.scatterReticleTile === null) {
-      world.scatterReticleTile = { x: rx, y: ry };
-    } else {
-      world.scatterReticleTile.x = rx;
-      world.scatterReticleTile.y = ry;
-    }
-  } else {
-    world.scatterReticleTile = null;
-  }
+  // #247 — the V23+ hunger-gated meandering predator is unconditional (MIN=V30);
+  // the frozen pre-V23 tickSpiderV22 dispatch + 306-line function were reaped.
+  tickSpiderV23(world, spider);
 }
 
 // ---------------------------------------------------------------------------
@@ -1154,8 +790,7 @@ export function computeFeedAwayTile(world: WorldState, spider: SpiderState): voi
   // edge-margin clamp (step 6b) can't strand the spider short of feedAwayTile —
   // an exact-equality arrival gate against an unreachable margin-band tile would
   // livelock Feeding (heal never starts). Pre-V26 the band is the full grid.
-  const margin =
-    world.simVersion >= SIM_VERSION_V26_SPIDER_EDGE_MARGIN ? SPIDER_EDGE_MARGIN_TILES : 0;
+  const margin = SPIDER_EDGE_MARGIN_TILES; // #247 — V26 spider-edge-margin unconditional (MIN=V30)
   spider.feedAwayTileX = feedRetreatCoord(kx, signX, SURFACE_GRID_WIDTH, margin);
   spider.feedAwayTileY = feedRetreatCoord(ky, signY, SURFACE_GRID_HEIGHT, margin);
   // V31 (#225): the retreat endpoint ignores passability, so it can land inside a
@@ -1609,9 +1244,8 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
   // its centered 3-tile sprite never clips off-screen when it chases/fights an ant
   // into a corner. Runs after the movement switch (before pheromone seeding reads
   // the position) so the deposited danger trail matches the clamped location.
-  if (world.simVersion >= SIM_VERSION_V26_SPIDER_EDGE_MARGIN) {
-    clampSpiderWithinEdgeMargin(spider);
-  }
+  // #247 — V26 spider-edge-margin unconditional (MIN=V30)
+  clampSpiderWithinEdgeMargin(spider);
 
   // 7. Danger pheromone — all surface states (everything except Feeding).
   if (spider.state !== 'Feeding') {
