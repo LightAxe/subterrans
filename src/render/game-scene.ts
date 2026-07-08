@@ -224,7 +224,7 @@ interface UIScenePhase9 {
   showSaveLoadDialogOverlay(callbacks: {
     onContinue: () => void;
     onNewGame: () => void;
-    onSaveNow: () => boolean;
+    onSaveNow: () => Promise<boolean>;
     onDelete: () => void;
     onBack: () => void;
   }): void;
@@ -379,6 +379,9 @@ export class GameScene extends Phaser.Scene {
    * Cleared on resetSessionState so an explicit restartGame re-enables it.
    */
   private autosaveSuspended: boolean = false;
+  // #234 — guards against overlapping fire-and-forget autosave writes (the async
+  // storage set can outlast the 30s interval); scene.update never awaits.
+  private autosaveInFlight: boolean = false;
   private resumedFromSave: boolean = false;
   private currentSeed: number = 0;
   // Issue #114 UAT — Settings sub-screen has a "Speed: N×" cycle row that
@@ -894,30 +897,11 @@ export class GameScene extends Phaser.Scene {
     // Cancel any in-flight gesture if the canvas loses focus (blur).
     this.game.events.on('blur', () => this.arbiter.cancelGesture());
 
-    // Phase 9 boot: classify any existing save ONCE. A loadable ('compatible')
-    // save shows the Continue/New Game SavePrompt. Everything else boots fresh —
-    // but a future-build save ('incompatible-future': simVersion > LATEST) is
-    // recoverable on a newer build, so the fresh boot must NOT let autosave /
-    // Save Now overwrite its bytes (issue #196). Corrupt / absent saves get no
-    // such protection — the new game's first autosave overwrites them freely.
-    const saveCompat = classifySaveCompatibility();
-    const bootMode = decideBootMode(() => saveCompat === 'compatible');
-    if (bootMode === 'prompt') {
-      this.gamePhase = GamePhase.SavePrompt;
-      const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
-      uiScene.showSavePromptOverlay({
-        onContinue: () => this.bootFromSave(),
-        onNewGame: () => {
-          deleteSave();
-          this.showDifficultySelectThenBoot();
-        },
-      });
-    } else {
-      // issue #196 — preserve a recoverable future-build save by suspending
-      // autosave after the fresh boot (mirrors bootFromSave's
-      // FutureSimVersionError catch on the Continue path).
-      this.showDifficultySelectThenBoot(saveCompat === 'incompatible-future');
-    }
+    // Phase 9 boot: classify any existing save and dispatch the right boot path.
+    // classifySaveCompatibility now hits the async storage driver (#234), so
+    // create() can't await it — fire-and-forget. The overlay/fresh-boot dispatch
+    // lands one microtask later (same frame under the sync-backed driver).
+    void this.dispatchInitialBoot();
 
     // Lifecycle signal — preload assets are loaded (we're in create()), the
     // scene graph is constructed, and the chosen boot path (fresh world or
@@ -937,6 +921,37 @@ export class GameScene extends Phaser.Scene {
   // ---------------------------------------------------------------------------
   // Boot helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Phase 9 boot dispatch — classify any existing save ONCE and route to the
+   * right boot path. A loadable ('compatible') save shows the Continue/New Game
+   * SavePrompt; everything else boots fresh — but a future-build save
+   * ('incompatible-future': simVersion > LATEST) is recoverable on a newer build,
+   * so the fresh boot must NOT let autosave / Save Now overwrite its bytes
+   * (issue #196). Corrupt / absent saves get no such protection — the new game's
+   * first autosave overwrites them freely.
+   *
+   * Async because classifySaveCompatibility now awaits the storage driver (#234);
+   * create() fires this and returns (it can't await). Callbacks that touch async
+   * save fns fire-and-forget (`void`), preserving each fn's own try/catch.
+   */
+  private async dispatchInitialBoot(): Promise<void> {
+    const saveCompat = await classifySaveCompatibility();
+    const bootMode = decideBootMode(() => saveCompat === 'compatible');
+    if (bootMode === 'prompt') {
+      this.gamePhase = GamePhase.SavePrompt;
+      const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
+      uiScene.showSavePromptOverlay({
+        onContinue: () => void this.bootFromSave(),
+        onNewGame: () => {
+          void deleteSave();
+          this.showDifficultySelectThenBoot();
+        },
+      });
+    } else {
+      this.showDifficultySelectThenBoot(saveCompat === 'incompatible-future');
+    }
+  }
 
   /**
    * Clear every piece of per-session state that lives on the GameScene
@@ -1226,11 +1241,11 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  private bootFromSave(): void {
-    const loaded = loadSave();
+  private async bootFromSave(): Promise<void> {
+    const loaded = await loadSave();
     if (loaded === null) {
       // Corrupt save: fall through to fresh (bootFresh runs its own reset)
-      deleteSave();
+      await deleteSave();
       this.bootFresh();
       return;
     }
@@ -1271,12 +1286,12 @@ export class GameScene extends Phaser.Scene {
       if (err instanceof OldSimVersionError) {
         // Pre-V22 save — no migration path; discard and start fresh.
         console.error(err.message);
-        deleteSave();
+        await deleteSave();
         this.bootFresh();
         return;
       }
       // Genuine corruption: discard so we don't loop the user.
-      deleteSave();
+      await deleteSave();
       this.bootFresh();
       return;
     }
@@ -1568,7 +1583,7 @@ export class GameScene extends Phaser.Scene {
   private retryGame(seed: number): void {
     const wasSuspended = this.autosaveSuspended;
     if (!wasSuspended) {
-      deleteSave();
+      void deleteSave();
     }
     this.currentOutcome = GameOutcome.None;
     this.currentCause = null;
@@ -1731,7 +1746,7 @@ export class GameScene extends Phaser.Scene {
         // gameLoop.resume(). We just need to flip out of Paused phase first
         // so finishBoot's `gamePhase = Playing` overwrite is consistent.
         this.gamePhase = GamePhase.Playing;
-        this.bootFromSave();
+        void this.bootFromSave();
       },
       onNewGame: () => {
         // restartGame deletes the existing save (preserving the issue #66
@@ -1741,7 +1756,7 @@ export class GameScene extends Phaser.Scene {
         this.gamePhase = GamePhase.Playing;
         this.restartGame();
       },
-      onSaveNow: () => {
+      onSaveNow: async () => {
         if (this.world === undefined) return false;
         // Round-5 P1 (Codex): bootFromSave sets autosaveSuspended = true when
         // it catches a FutureSimVersionError so the preserved newer-build
@@ -1753,7 +1768,7 @@ export class GameScene extends Phaser.Scene {
         // preserved bytes. Surface as a failed save so the player gets a
         // flash and can recover via Delete / a newer-build reload.
         if (this.autosaveSuspended) return false;
-        const ok = manualSave(this.currentSeed, this.inputLog, this.world);
+        const ok = await manualSave(this.currentSeed, this.inputLog, this.world);
         // Round-2 review: bump the autosave cooldown so the next autosave
         // window doesn't fire seconds later and overwrite the manual save's
         // timestamp. The dialog's "Saved 15:32" line otherwise jumps to
@@ -1794,7 +1809,7 @@ export class GameScene extends Phaser.Scene {
     //     that knows the simVersion).
     const wasSuspended = this.autosaveSuspended;
     if (!wasSuspended) {
-      deleteSave();
+      void deleteSave();
     }
     this.currentOutcome = GameOutcome.None;
     this.currentCause = null;
@@ -2106,14 +2121,19 @@ export class GameScene extends Phaser.Scene {
     // incompatible save is sitting in localStorage waiting for recovery
     // (issue #66: bootFromSave's deserialize-throw catch suspends autosave
     // so the preserved bytes aren't overwritten by this fresh session).
-    if (this.gamePhase === GamePhase.Playing && !this.autosaveSuspended) {
-      this.lastAutosaveMs = tickAutosave(
-        this.currentSeed,
-        this.inputLog,
-        this.world,
-        this.lastAutosaveMs,
-        time,
-      );
+    if (this.gamePhase === GamePhase.Playing && !this.autosaveSuspended && !this.autosaveInFlight) {
+      // Fire-and-forget (#234): scene.update never awaits — the async storage
+      // write must not block the frame. The in-flight guard prevents overlapping
+      // 30s writes; tickAutosave keeps its own interval gate, so a not-due call
+      // resolves immediately and just clears the guard the same microtask.
+      this.autosaveInFlight = true;
+      void tickAutosave(this.currentSeed, this.inputLog, this.world, this.lastAutosaveMs, time)
+        .then((next) => {
+          this.lastAutosaveMs = next;
+        })
+        .finally(() => {
+          this.autosaveInFlight = false;
+        });
     }
   }
 

@@ -30,6 +30,7 @@ import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { NestEntrance } from '../sim/colony/entrance.js';
 import type { PendingChamber } from '../sim/colony/chamber.js';
 import type { SimCommand } from '../sim/commands.js';
+import { getStorageDriver } from './storage.js';
 import type { SurfaceGrid, UndergroundGrid } from '../sim/terrain.js';
 import { createSurfaceGrid, createUndergroundGrid } from '../sim/terrain.js';
 import type { PheromoneGrid } from '../sim/pheromone/pheromone-store.js';
@@ -1744,23 +1745,23 @@ export function parseSaveFile(raw: string): SaveFile {
  *
  * Issue #112 — added v2 to the purge list when SAVE_KEY moved to v3.
  */
-function purgeLegacySaves(): void {
+async function purgeLegacySaves(): Promise<void> {
   try {
-    localStorage.removeItem('subterrans:save:v1');
+    await getStorageDriver().remove('subterrans:save:v1');
   } catch {
     /* quota / private mode — silent: best-effort cleanup, no UX signal */
   }
   try {
-    localStorage.removeItem('subterrans:save:v2');
+    await getStorageDriver().remove('subterrans:save:v2');
   } catch {
     /* quota / private mode — silent: best-effort cleanup, no UX signal */
   }
 }
 
-export function hasSave(): boolean {
+export async function hasSave(): Promise<boolean> {
   try {
-    purgeLegacySaves();
-    const raw = localStorage.getItem(SAVE_KEY);
+    await purgeLegacySaves();
+    const raw = await getStorageDriver().get(SAVE_KEY);
     if (raw === null) return false;
     parseSaveFile(raw);
     return true;
@@ -1769,10 +1770,10 @@ export function hasSave(): boolean {
   }
 }
 
-export function loadSave(): SaveFile | null {
+export async function loadSave(): Promise<SaveFile | null> {
   try {
-    purgeLegacySaves();
-    const raw = localStorage.getItem(SAVE_KEY);
+    await purgeLegacySaves();
+    const raw = await getStorageDriver().get(SAVE_KEY);
     if (raw === null) return null;
     return parseSaveFile(raw);
   } catch {
@@ -1780,9 +1781,9 @@ export function loadSave(): SaveFile | null {
   }
 }
 
-export function deleteSave(): void {
+export async function deleteSave(): Promise<void> {
   try {
-    localStorage.removeItem(SAVE_KEY);
+    await getStorageDriver().remove(SAVE_KEY);
   } catch {
     // swallow — quota / private-mode errors are non-fatal for delete
   }
@@ -1812,14 +1813,14 @@ export function deleteSave(): void {
 /** Issue #115 — manual save. Returns true on successful write, false on
  *  quota / private-mode / blocked-storage failure. Does NOT touch the
  *  autosave timer; callers driving tickAutosave keep their own lastSaveMs. */
-export function manualSave(
+export async function manualSave(
   seed: number,
   inputLog: readonly SimCommand[],
   world: WorldState,
-): boolean {
+): Promise<boolean> {
   try {
     const envelope = buildSaveFile(seed, inputLog, world);
-    localStorage.setItem(SAVE_KEY, JSON.stringify(envelope));
+    await getStorageDriver().set(SAVE_KEY, JSON.stringify(envelope));
     return true;
   } catch {
     return false;
@@ -1852,11 +1853,11 @@ export type SaveCompatibility =
   | 'incompatible-future'
   | 'incompatible-corrupt';
 
-export function classifySaveCompatibility(): SaveCompatibility {
+export async function classifySaveCompatibility(): Promise<SaveCompatibility> {
   let raw: string | null;
   try {
-    purgeLegacySaves();
-    raw = localStorage.getItem(SAVE_KEY);
+    await purgeLegacySaves();
+    raw = await getStorageDriver().get(SAVE_KEY);
   } catch {
     return 'none';
   }
@@ -1906,7 +1907,7 @@ export function classifySaveCompatibility(): SaveCompatibility {
  *  Round-3 (Codex P2 follow-up): the simVersion check above replaces the
  *  prior "envelope-parse only" check that returned false for future-sim
  *  saves and enabled a Continue click that would silently lose the save. */
-export function hasIncompatibleSave(): boolean {
+export async function hasIncompatibleSave(): Promise<boolean> {
   // Issue #196 — delegate to the three-way classifier so this and the boot
   // path share one compatibility boundary. Both incompatible verdicts
   // (future + corrupt) mean Continue would not actually load the save, so
@@ -1915,7 +1916,7 @@ export function hasIncompatibleSave(): boolean {
   // Cost: one full WorldState allocation per call (the classifier's
   // deserialize). The dialog open path calls this once (cached for the
   // render); user-initiated, infrequent.
-  const verdict = classifySaveCompatibility();
+  const verdict = await classifySaveCompatibility();
   return verdict === 'incompatible-future' || verdict === 'incompatible-corrupt';
 }
 
@@ -1939,10 +1940,10 @@ export interface SaveInfo {
  *  deserialize. Returns null if no save exists or the envelope is unreadable.
  *  Player colony key is `String(PLAYER_COLONY_ID)` per the colonies map's
  *  stringified-int convention (ADR-0006). */
-export function getSaveInfo(): SaveInfo | null {
+export async function getSaveInfo(): Promise<SaveInfo | null> {
   let raw: string | null;
   try {
-    raw = localStorage.getItem(SAVE_KEY);
+    raw = await getStorageDriver().get(SAVE_KEY);
   } catch {
     return null;
   }
@@ -2016,17 +2017,17 @@ export function getSaveInfo(): SaveInfo | null {
  *
  * Caller reassigns: `lastSaveMs = tickAutosave(seed, inputLog, world, lastSaveMs, now);`
  */
-export function tickAutosave(
+export async function tickAutosave(
   seed: number,
   inputLog: readonly SimCommand[],
   world: WorldState,
   lastSaveMs: number,
   nowMs: number,
-): number {
+): Promise<number> {
   if (nowMs - lastSaveMs < AUTOSAVE_INTERVAL_MS) return lastSaveMs;
   try {
     const envelope = buildSaveFile(seed, inputLog, world);
-    localStorage.setItem(SAVE_KEY, JSON.stringify(envelope));
+    await getStorageDriver().set(SAVE_KEY, JSON.stringify(envelope));
     return nowMs;
   } catch {
     // Honor the cooldown on failure too — see #80 above.
