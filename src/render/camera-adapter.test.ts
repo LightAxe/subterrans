@@ -143,6 +143,21 @@ describe('setViewportSize (#238 PR3 — non-default viewport)', () => {
     expect(screenToWorld(0, 0, v).worldY).toBeCloseTo(180, 6); // 500 − 640/2
   });
 
+  it('applyZoomAnchor keeps the anchored point under the cursor at the new viewport (#269 F5)', () => {
+    setViewportSize(360, 640);
+    const v = view(1000, 500, 1);
+    // Cursor at (300, 500): the zoom-anchor invariant only holds if applyZoomAnchor
+    // reads the 360×640 viewport, not the 800×592 default.
+    const anchor = beginWheelZoom(v, 1.8, 300, 500);
+    for (let i = 0; i < 20; i++) {
+      stepZoomLerp(v, 0.25);
+      applyZoomAnchor(v, anchor);
+      const back = screenToWorld(anchor.screenX, anchor.screenY, v);
+      expect(back.worldX).toBeCloseTo(anchor.worldX, 4);
+      expect(back.worldY).toBeCloseTo(anchor.worldY, 4);
+    }
+  });
+
   it('afterEach restores the default CANVAS_W×CANVAS_H projection', () => {
     // No setViewportSize here — the prior case's afterEach has reset it.
     expect(viewWorldWidth(1)).toBe(CANVAS_W);

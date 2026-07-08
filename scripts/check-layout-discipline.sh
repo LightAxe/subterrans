@@ -21,7 +21,10 @@
 set -euo pipefail
 
 SCOPE=(src/render src/input)
-COMMENT_FILTER=':[[:space:]]*[/*]' # drop //, /*, and ` * ` JSDoc continuation lines
+# Drop FULL-LINE comments only (//, /*, ` * ` JSDoc), anchored to grep's
+# `path:line:` prefix so a mid-line comment (e.g. `x = 592 /* note */`) can't
+# hide a real violation on the same line (Codex #269 F2).
+COMMENT_FILTER='^[^:]*:[0-9]+:[[:space:]]*(//|/\*|\*)'
 
 # --- Check 1: no bare 800 / 592 canvas literal -----------------------------
 # File allowlist: sprites.ts (the CANVAS_W/H definitions) and layout.ts (the
@@ -31,7 +34,7 @@ COMMENT_FILTER=':[[:space:]]*[/*]' # drop //, /*, and ` * ` JSDoc continuation l
 NUM_HITS=$( { grep -rnE '\b(800|592)\b' "${SCOPE[@]}" --include='*.ts' --exclude='*.test.ts' || true; } \
   | grep -vE "$COMMENT_FILTER" \
   | grep -vE '/(sprites|layout)\.ts:' \
-  | grep -vE 'delay: 800' \
+  | grep -vE '/ui-scene\.ts:[0-9]+:[[:space:]]*delay: 800,' \
   || true )
 
 if [[ -n "$NUM_HITS" ]]; then
@@ -51,19 +54,19 @@ echo "layout-discipline bare-800/592 guard: clean."
 # still coupling render/input geometry to the fixed canvas size.
 # File allowlist: sprites.ts (defines them), layout.ts (the default-context
 # seam), camera-adapter.ts (the screen↔world authority — AGENTS.md §"Layout
-# discipline" sanctions its canvas-size dependency), camera.ts (owns the
-# underground initial-center-Y = CANVAS_H/2 dependency; a candidate for a future
-# adapter-owned move, out of #238 PR2–5 scope), and src/main.ts (Phaser config).
+# discipline" sanctions its canvas-size dependency), and camera.ts (owns the
+# underground initial-center-Y = CANVAS_H/2 dependency; deferred adapter-owned
+# move tracked in #270). src/main.ts is outside SCOPE (render/input), so no entry.
 USE_HITS=$( { grep -rnE '\bCANVAS_[WH]\b' "${SCOPE[@]}" --include='*.ts' --exclude='*.test.ts' || true; } \
   | grep -vE "$COMMENT_FILTER" \
-  | grep -vE '/(sprites|layout|camera-adapter|camera|main)\.ts:' \
+  | grep -vE '/(sprites|layout|camera-adapter|camera)\.ts:' \
   || true )
 
 if [[ -n "$USE_HITS" ]]; then
   echo "Layout discipline (#238): CANVAS_W/CANVAS_H used outside the authority files:"
   echo "$USE_HITS"
   echo ""
-  echo "Only sprites.ts / layout.ts / camera-adapter.ts / camera.ts / main.ts may reference"
+  echo "Only sprites.ts / layout.ts / camera-adapter.ts / camera.ts may reference"
   echo "CANVAS_W/CANVAS_H. Elsewhere, take a LayoutContext and derive from layout.w / layout.h."
   exit 1
 fi
