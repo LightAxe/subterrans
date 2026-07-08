@@ -23,8 +23,6 @@ import {
   DANGER_DECAY_FP,
   MAX_ENTRANCES_PER_COLONY,
   ENTRANCE_SHAFT_DEPTH,
-  UNDERGROUND_GRID_WIDTH,
-  UNDERGROUND_GRID_HEIGHT,
   UNDERGROUND_CEILING_ROW_Y,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
@@ -442,8 +440,10 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         const underground = world.undergroundGrids[cmd.colonyId];
         if (!underground) break;
         // Issue #60 — integer + bounds.
-        if (!isTileCoord(cmd.tileX, UNDERGROUND_GRID_WIDTH)) break;
-        if (!isTileCoord(cmd.tileY, UNDERGROUND_GRID_HEIGHT)) break;
+        // #232 — per-colony grid bounds (underground.width/height === the global
+        // constants today; replay-proven no-op), same class as MarkDigTile above.
+        if (!isTileCoord(cmd.tileX, underground.width)) break;
+        if (!isTileCoord(cmd.tileY, underground.height)) break;
         if (ugGet(underground, cmd.tileX, cmd.tileY) !== UndergroundTileState.Marked) break;
         const colony2 = world.colonies[cmd.colonyId];
         // Issue #54 (v9+) — find a pending chamber whose footprint covers the

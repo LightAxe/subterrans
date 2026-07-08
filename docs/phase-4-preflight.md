@@ -15,6 +15,7 @@ the Phase 4 WorldState reshape unless another issue owns them.
 | glow key tx/ty bytes | `render/draw-underground.ts:565-588` | bit-packing (render) | guard added | #232 |
 | HUNT_KEY_SHIFT / meander shift | `spider.ts:47-54` | bit-packing | already guarded | — |
 | MarkDigTile bounds | `tick.ts:376-377` | constant-bounds | swapped → `underground.width/height` | #232 |
+| CancelDigMark bounds | `tick.ts:429-430` | constant-bounds | swapped → `underground.width/height` | #232 |
 | PlaceChamber bounds | `tick.ts:516-517` | constant-bounds | swapped → `underground.width/height` | #232 |
 | MarkFoodPile bounds | `tick.ts:411-412` | constant-bounds | left on SURFACE_GRID_* (surface is shared) | #232 (documented) |
 | MAX_PHEROMONE_GRID_KEYS / MAX_COLONIES_LOAD caps | `save.ts:177-180` | save caps | none | #234 |
