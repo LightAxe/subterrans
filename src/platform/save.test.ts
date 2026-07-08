@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   SAVE_FORMAT_VERSION,
   SAVE_KEY,
@@ -21,6 +21,12 @@ import {
   unpackBakedSurfaceEffect,
   type SaveFile,
 } from './save.js';
+import {
+  setStorageDriver,
+  getStorageDriver,
+  LocalStorageDriver,
+  type StorageDriver,
+} from './storage.js';
 import { createScenario } from '../sim/scenario.js';
 import { tick } from '../sim/tick.js';
 import {
@@ -614,10 +620,10 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
   });
 
   describe('SaveFile envelope (PRD §8a: version + seed + inputLog + snapshot)', () => {
-    it('hasSave returns false when localStorage empty', () => {
-      expect(hasSave()).toBe(false);
+    it('hasSave returns false when localStorage empty', async () => {
+      expect(await hasSave()).toBe(false);
     });
-    it('hasSave returns true when valid envelope present', () => {
+    it('hasSave returns true when valid envelope present', async () => {
       const w = createScenario(42);
       localStorage.setItem(
         SAVE_KEY,
@@ -628,13 +634,13 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           snapshot: serializeWorldState(w),
         } satisfies SaveFile),
       );
-      expect(hasSave()).toBe(true);
+      expect(await hasSave()).toBe(true);
     });
-    it('hasSave returns false on malformed JSON', () => {
+    it('hasSave returns false on malformed JSON', async () => {
       localStorage.setItem(SAVE_KEY, 'not-json');
-      expect(hasSave()).toBe(false);
+      expect(await hasSave()).toBe(false);
     });
-    it('hasSave returns false on mismatched version', () => {
+    it('hasSave returns false on mismatched version', async () => {
       const w = createScenario(42);
       localStorage.setItem(
         SAVE_KEY,
@@ -645,9 +651,9 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           snapshot: serializeWorldState(w),
         }),
       );
-      expect(hasSave()).toBe(false);
+      expect(await hasSave()).toBe(false);
     });
-    it('rejects v1 saves (issue #15 — chamber-authoritative food storage)', () => {
+    it('rejects v1 saves (issue #15 — chamber-authoritative food storage)', async () => {
       // Pre-#15 saves stored the entire stockpile in `colony.foodStored`
       // and projected slices into `chamber.foodStored` on each reconcile.
       // Loading them under v2 would either double-count (slices + pool) or
@@ -664,10 +670,10 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           snapshot: serializeWorldState(w),
         }),
       );
-      expect(hasSave()).toBe(false);
-      expect(loadSave()).toBeNull();
+      expect(await hasSave()).toBe(false);
+      expect(await loadSave()).toBeNull();
     });
-    it('loadSave returns a SaveFile with seed + inputLog + snapshot fields', () => {
+    it('loadSave returns a SaveFile with seed + inputLog + snapshot fields', async () => {
       const w = createScenario(42);
       const inputLog: SimCommand[] = [
         {
@@ -687,17 +693,17 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           snapshot: serializeWorldState(w),
         } satisfies SaveFile),
       );
-      const loaded = loadSave();
+      const loaded = await loadSave();
       expect(loaded).not.toBeNull();
       expect(loaded!.seed).toBe(42);
       expect(loaded!.inputLog.length).toBe(1);
       expect(loaded!.snapshot).toBeDefined();
     });
-    it('loadSave returns null on malformed JSON (never throws)', () => {
+    it('loadSave returns null on malformed JSON (never throws)', async () => {
       localStorage.setItem(SAVE_KEY, '{ bad }');
-      expect(loadSave()).toBeNull();
+      expect(await loadSave()).toBeNull();
     });
-    it('deleteSave removes the key and does not throw on missing', () => {
+    it('deleteSave removes the key and does not throw on missing', async () => {
       localStorage.setItem(
         SAVE_KEY,
         JSON.stringify({
@@ -707,24 +713,24 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           snapshot: serializeWorldState(createScenario(1)),
         }),
       );
-      deleteSave();
+      await deleteSave();
       expect(localStorage.getItem(SAVE_KEY)).toBeNull();
-      expect(() => deleteSave()).not.toThrow();
+      await expect(deleteSave()).resolves.not.toThrow();
     });
   });
 
   describe('tickAutosave gating', () => {
-    it('does not save before interval elapsed (returns lastSaveMs unchanged)', () => {
+    it('does not save before interval elapsed (returns lastSaveMs unchanged)', async () => {
       const w = createScenario(42);
       const prev = 1000;
-      const result = tickAutosave(42, [], w, prev, prev + AUTOSAVE_INTERVAL_MS - 1);
+      const result = await tickAutosave(42, [], w, prev, prev + AUTOSAVE_INTERVAL_MS - 1);
       expect(result).toBe(prev);
       expect(localStorage.getItem(SAVE_KEY)).toBeNull();
     });
-    it('writes SaveFile after interval elapsed (returns nowMs)', () => {
+    it('writes SaveFile after interval elapsed (returns nowMs)', async () => {
       const w = createScenario(42);
       const now = AUTOSAVE_INTERVAL_MS + 500;
-      const result = tickAutosave(42, [], w, 0, now);
+      const result = await tickAutosave(42, [], w, 0, now);
       expect(result).toBe(now);
       const raw = localStorage.getItem(SAVE_KEY);
       expect(raw).not.toBeNull();
@@ -732,7 +738,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(env.version).toBe(SAVE_FORMAT_VERSION);
       expect(env.seed).toBe(42);
     });
-    it('returns nowMs on setItem throw — honors cooldown to prevent retry storm (#80)', () => {
+    it('returns nowMs on setItem throw — honors cooldown to prevent retry storm (#80)', async () => {
       const w = createScenario(42);
       // Spy on the actual localStorage instance (InMemoryStorage replaces Storage.prototype on Node 25)
       const spy = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
@@ -740,7 +746,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       });
       try {
         const now = AUTOSAVE_INTERVAL_MS + 1;
-        const result = tickAutosave(42, [], w, 0, now);
+        const result = await tickAutosave(42, [], w, 0, now);
         // Pre-#80 returned 0 (lastSaveMs unchanged) → next frame instantly
         // satisfied the elapsed check and stormed setItem at 60 FPS.
         // Post-fix advances to nowMs so retry waits a full interval.
@@ -749,18 +755,18 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         spy.mockRestore();
       }
     });
-    it('after setItem throw, the next call within the interval is a no-op (cooldown observed)', () => {
+    it('after setItem throw, the next call within the interval is a no-op (cooldown observed)', async () => {
       const w = createScenario(42);
       const spy = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
         throw new Error('quota');
       });
       try {
         const t1 = AUTOSAVE_INTERVAL_MS + 1;
-        const lastSaveMs = tickAutosave(42, [], w, 0, t1);
+        const lastSaveMs = await tickAutosave(42, [], w, 0, t1);
         expect(spy).toHaveBeenCalledTimes(1);
         // Half an interval later — cooldown should suppress the retry.
         const t2 = t1 + AUTOSAVE_INTERVAL_MS / 2;
-        const result = tickAutosave(42, [], w, lastSaveMs, t2);
+        const result = await tickAutosave(42, [], w, lastSaveMs, t2);
         expect(spy).toHaveBeenCalledTimes(1); // no second attempt
         expect(result).toBe(lastSaveMs);
       } finally {
@@ -770,12 +776,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
   });
 
   describe('SCEN-06 replay truth — seed + inputLog reproduce snapshot', () => {
-    it('(a) seed round-trips', () => {
+    it('(a) seed round-trips', async () => {
       const w = createScenario(777);
-      tickAutosave(777, [], w, 0, AUTOSAVE_INTERVAL_MS + 1);
-      expect(loadSave()!.seed).toBe(777);
+      await tickAutosave(777, [], w, 0, AUTOSAVE_INTERVAL_MS + 1);
+      expect((await loadSave())!.seed).toBe(777);
     });
-    it('(b) inputLog round-trips', () => {
+    it('(b) inputLog round-trips', async () => {
       const w = createScenario(42);
       const log: SimCommand[] = [
         {
@@ -793,12 +799,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           issuedAtTick: 5,
         },
       ];
-      tickAutosave(42, log, w, 0, AUTOSAVE_INTERVAL_MS + 1);
-      const loaded = loadSave()!;
+      await tickAutosave(42, log, w, 0, AUTOSAVE_INTERVAL_MS + 1);
+      const loaded = (await loadSave())!;
       expect(loaded.inputLog.length).toBe(2);
       expect(loaded.inputLog[1]).toMatchObject({ tileX: 3, tileY: 3 });
     });
-    it('(c) queued unprocessed commands round-trip via snapshot.commandQueue', () => {
+    it('(c) queued unprocessed commands round-trip via snapshot.commandQueue', async () => {
       const w = createScenario(42);
       w.commandQueue.push({
         type: 'MarkDigTile',
@@ -807,22 +813,22 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         tileY: 9,
         issuedAtTick: 0,
       });
-      tickAutosave(42, [], w, 0, AUTOSAVE_INTERVAL_MS + 1);
-      const loaded = loadSave()!;
+      await tickAutosave(42, [], w, 0, AUTOSAVE_INTERVAL_MS + 1);
+      const loaded = (await loadSave())!;
       expect(loaded.snapshot.commandQueue.length).toBe(1);
       expect(loaded.snapshot.commandQueue[0]).toMatchObject({ tileX: 9, tileY: 9 });
     });
-    it('(d) loaded snapshot when re-serialized equals original (byte-for-byte)', () => {
+    it('(d) loaded snapshot when re-serialized equals original (byte-for-byte)', async () => {
       const w = createScenario(42);
       for (let t = 0; t < 25; t++) tick(w, []);
-      tickAutosave(42, [], w, 0, AUTOSAVE_INTERVAL_MS + 1);
-      const loaded = loadSave()!;
+      await tickAutosave(42, [], w, 0, AUTOSAVE_INTERVAL_MS + 1);
+      const loaded = (await loadSave())!;
       const rebuilt = deserializeWorldState(loaded.snapshot);
       expect(JSON.stringify(serializeWorldState(rebuilt))).toBe(
         JSON.stringify(serializeWorldState(w)),
       );
     });
-    it('(e) inputLog replay: createScenario(seed) + tick(cmds[t]) for each tick reproduces snapshot', () => {
+    it('(e) inputLog replay: createScenario(seed) + tick(cmds[t]) for each tick reproduces snapshot', async () => {
       // Build a reference world with a deterministic schedule
       const seed = 42;
       const schedule: SimCommand[][] = [];
@@ -846,8 +852,8 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       }
 
       // Save
-      tickAutosave(seed, inputLog, original, 0, AUTOSAVE_INTERVAL_MS + 1);
-      const loaded = loadSave()!;
+      await tickAutosave(seed, inputLog, original, 0, AUTOSAVE_INTERVAL_MS + 1);
+      const loaded = (await loadSave())!;
       expect(loaded.seed).toBe(seed);
 
       // Replay inputLog against a fresh scenario — use issuedAtTick to schedule
@@ -925,7 +931,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       localStorage.setItem(SAVE_KEY, JSON.stringify(file));
     }
 
-    it('post-Phase-10 entry without dig field passes through unchanged (including idle {0,0})', () => {
+    it('post-Phase-10 entry without dig field passes through unchanged (including idle {0,0})', async () => {
       const w = createScenario(42);
       const modernIdle: SimCommand = {
         type: 'SetBehaviorRatio',
@@ -939,7 +945,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         inputLog: [modernIdle],
         snapshot: serializeWorldState(w),
       });
-      const loaded = loadSave()!;
+      const loaded = (await loadSave())!;
       expect((loaded.inputLog[0] as { ratio: unknown }).ratio).toEqual({ forage: 0, fight: 0 });
     });
   });
@@ -1173,7 +1179,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       localStorage.setItem(SAVE_KEY, JSON.stringify(file));
     }
 
-    it('null ratio in inputLog: save still loads (command preserved verbatim)', () => {
+    it('null ratio in inputLog: save still loads (command preserved verbatim)', async () => {
       const w = createScenario(42);
       writeSave({
         version: SAVE_FORMAT_VERSION,
@@ -1183,12 +1189,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         ],
         snapshot: serializeWorldState(w),
       });
-      const loaded = loadSave();
+      const loaded = await loadSave();
       expect(loaded).not.toBeNull();
       expect(loaded!.inputLog.length).toBe(1);
       expect((loaded!.inputLog[0] as { ratio: unknown }).ratio).toBeNull();
     });
-    it('numeric ratio in inputLog: save still loads', () => {
+    it('numeric ratio in inputLog: save still loads', async () => {
       const w = createScenario(42);
       writeSave({
         version: SAVE_FORMAT_VERSION,
@@ -1198,9 +1204,9 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         ],
         snapshot: serializeWorldState(w),
       });
-      expect(loadSave()).not.toBeNull();
+      expect(await loadSave()).not.toBeNull();
     });
-    it('string ratio in inputLog: save still loads', () => {
+    it('string ratio in inputLog: save still loads', async () => {
       const w = createScenario(42);
       writeSave({
         version: SAVE_FORMAT_VERSION,
@@ -1210,7 +1216,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         ],
         snapshot: serializeWorldState(w),
       });
-      expect(loadSave()).not.toBeNull();
+      expect(await loadSave()).not.toBeNull();
     });
   });
 
@@ -1233,7 +1239,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     // -----------------------------------------------------------------------
     // #110 — envelope seed validation
     // -----------------------------------------------------------------------
-    it('#110 rejects envelope seed: string', () => {
+    it('#110 rejects envelope seed: string', async () => {
       const w = createScenario(42);
       writeSave({
         version: SAVE_FORMAT_VERSION,
@@ -1241,9 +1247,9 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         inputLog: [],
         snapshot: serializeWorldState(w),
       });
-      expect(loadSave()).toBeNull();
+      expect(await loadSave()).toBeNull();
     });
-    it('#110 rejects envelope seed: null', () => {
+    it('#110 rejects envelope seed: null', async () => {
       const w = createScenario(42);
       writeSave({
         version: SAVE_FORMAT_VERSION,
@@ -1251,15 +1257,15 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         inputLog: [],
         snapshot: serializeWorldState(w),
       });
-      expect(loadSave()).toBeNull();
+      expect(await loadSave()).toBeNull();
     });
-    it('#110 rejects envelope seed: missing', () => {
+    it('#110 rejects envelope seed: missing', async () => {
       const w = createScenario(42);
       const file = { version: SAVE_FORMAT_VERSION, inputLog: [], snapshot: serializeWorldState(w) };
       localStorage.setItem(SAVE_KEY, JSON.stringify(file));
-      expect(loadSave()).toBeNull();
+      expect(await loadSave()).toBeNull();
     });
-    it('#110 rejects envelope seed: non-integer', () => {
+    it('#110 rejects envelope seed: non-integer', async () => {
       const w = createScenario(42);
       writeSave({
         version: SAVE_FORMAT_VERSION,
@@ -1267,9 +1273,9 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         inputLog: [],
         snapshot: serializeWorldState(w),
       });
-      expect(loadSave()).toBeNull();
+      expect(await loadSave()).toBeNull();
     });
-    it('#110 rejects envelope seed: out of int32 range', () => {
+    it('#110 rejects envelope seed: out of int32 range', async () => {
       const w = createScenario(42);
       writeSave({
         version: SAVE_FORMAT_VERSION,
@@ -1277,9 +1283,9 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         inputLog: [],
         snapshot: serializeWorldState(w),
       });
-      expect(loadSave()).toBeNull();
+      expect(await loadSave()).toBeNull();
     });
-    it('#110 accepts envelope seed: int32 boundary values', () => {
+    it('#110 accepts envelope seed: int32 boundary values', async () => {
       const w = createScenario(42);
       writeSave({
         version: SAVE_FORMAT_VERSION,
@@ -1287,28 +1293,28 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         inputLog: [],
         snapshot: serializeWorldState(w),
       });
-      expect(loadSave()).not.toBeNull();
+      expect(await loadSave()).not.toBeNull();
       writeSave({
         version: SAVE_FORMAT_VERSION,
         seed: -0x80000000,
         inputLog: [],
         snapshot: serializeWorldState(w),
       });
-      expect(loadSave()).not.toBeNull();
+      expect(await loadSave()).not.toBeNull();
     });
 
     // -----------------------------------------------------------------------
     // #103 — non-array inputLog normalization (no soft-brick)
     // -----------------------------------------------------------------------
-    it('#103 normalizes missing inputLog to empty array', () => {
+    it('#103 normalizes missing inputLog to empty array', async () => {
       const w = createScenario(42);
       const file = { version: SAVE_FORMAT_VERSION, seed: 42, snapshot: serializeWorldState(w) };
       localStorage.setItem(SAVE_KEY, JSON.stringify(file));
-      const loaded = loadSave();
+      const loaded = await loadSave();
       expect(loaded).not.toBeNull();
       expect(loaded!.inputLog).toEqual([]);
     });
-    it('#103 normalizes null inputLog to empty array', () => {
+    it('#103 normalizes null inputLog to empty array', async () => {
       const w = createScenario(42);
       writeSave({
         version: SAVE_FORMAT_VERSION,
@@ -1316,11 +1322,11 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         inputLog: null,
         snapshot: serializeWorldState(w),
       });
-      const loaded = loadSave();
+      const loaded = await loadSave();
       expect(loaded).not.toBeNull();
       expect(loaded!.inputLog).toEqual([]);
     });
-    it('#103 normalizes string inputLog to empty array', () => {
+    it('#103 normalizes string inputLog to empty array', async () => {
       const w = createScenario(42);
       writeSave({
         version: SAVE_FORMAT_VERSION,
@@ -1328,7 +1334,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         inputLog: 'abc',
         snapshot: serializeWorldState(w),
       });
-      const loaded = loadSave();
+      const loaded = await loadSave();
       expect(loaded).not.toBeNull();
       expect(loaded!.inputLog).toEqual([]);
     });
@@ -1336,7 +1342,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     // -----------------------------------------------------------------------
     // #105 — null inputLog entry doesn't destroy the save
     // -----------------------------------------------------------------------
-    it('#105 null inputLog entry passes through migrateInputLogCommand without throwing', () => {
+    it('#105 null inputLog entry passes through migrateInputLogCommand without throwing', async () => {
       const w = createScenario(42);
       writeSave({
         version: SAVE_FORMAT_VERSION,
@@ -1346,7 +1352,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       });
       // Pre-fix: this returned null (loadSave swallowed the TypeError).
       // Post-fix: parseSaveFile completes; the null entry passes through.
-      const loaded = loadSave();
+      const loaded = await loadSave();
       expect(loaded).not.toBeNull();
       expect(loaded!.inputLog).toHaveLength(1);
       expect(loaded!.inputLog[0]).toBeNull();
@@ -1644,7 +1650,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(SAVE_KEY).toBe('subterrans:save:v3');
     });
 
-    it('rejects v2 envelopes with SaveVersionMismatchError', () => {
+    it('rejects v2 envelopes with SaveVersionMismatchError', async () => {
       const v2Envelope = JSON.stringify({
         version: 2,
         seed: 42,
@@ -1656,18 +1662,18 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // future refactor that downgrades to a generic Error would slip past
       // the swallowed-error path otherwise.
       localStorage.setItem(SAVE_KEY, v2Envelope);
-      expect(hasSave()).toBe(false);
-      expect(loadSave()).toBeNull();
+      expect(await hasSave()).toBe(false);
+      expect(await loadSave()).toBeNull();
 
       // Direct production-path assertion — calls the module-exported
       // parseSaveFile, which is the function that actually decides to throw.
       expect(() => parseSaveFile(v2Envelope)).toThrow(SaveVersionMismatchError);
     });
 
-    it('purges legacy v2 keys on hasSave/loadSave', () => {
+    it('purges legacy v2 keys on hasSave/loadSave', async () => {
       localStorage.setItem('subterrans:save:v2', '{"version":2}');
       // Trigger the purge.
-      hasSave();
+      await hasSave();
       expect(localStorage.getItem('subterrans:save:v2')).toBeNull();
     });
 
@@ -1764,19 +1770,19 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
   // -------------------------------------------------------------------------
 
   describe('Issue #115 — manualSave', () => {
-    it('writes a parseable save under SAVE_KEY and returns true on success', () => {
+    it('writes a parseable save under SAVE_KEY and returns true on success', async () => {
       const world = createScenario(42);
-      const ok = manualSave(42, [], world);
+      const ok = await manualSave(42, [], world);
       expect(ok).toBe(true);
       expect(window.localStorage.getItem(SAVE_KEY)).not.toBeNull();
       // Round-trip via the public read path.
-      const loaded = loadSave();
+      const loaded = await loadSave();
       expect(loaded).not.toBeNull();
       expect(loaded!.seed).toBe(42);
       expect(loaded!.snapshot.tick).toBe(0);
     });
 
-    it('preserves the inputLog the caller supplies', () => {
+    it('preserves the inputLog the caller supplies', async () => {
       const world = createScenario(42);
       const log: SimCommand[] = [
         {
@@ -1786,57 +1792,57 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           issuedAtTick: 0,
         },
       ];
-      manualSave(42, log, world);
-      const loaded = loadSave();
+      await manualSave(42, log, world);
+      const loaded = await loadSave();
       expect(loaded!.inputLog).toHaveLength(1);
       expect(loaded!.inputLog[0]!.type).toBe('SetBehaviorRatio');
     });
 
-    it('returns false (does not throw) when localStorage.setItem rejects', () => {
+    it('returns false (does not throw) when localStorage.setItem rejects', async () => {
       const world = createScenario(42);
       const orig = window.localStorage.setItem;
       window.localStorage.setItem = vi.fn(() => {
         throw new Error('QuotaExceededError');
       });
       try {
-        const ok = manualSave(42, [], world);
+        const ok = await manualSave(42, [], world);
         expect(ok).toBe(false);
       } finally {
         window.localStorage.setItem = orig;
       }
     });
 
-    it('does NOT depend on or update the autosave timer (manual save is independent)', () => {
+    it('does NOT depend on or update the autosave timer (manual save is independent)', async () => {
       // tickAutosave returns the new lastSaveMs each call. A manual save in
       // between two autosave windows must not bump the autosave's clock —
       // they share the SAVE_KEY but track cadence independently.
       const world = createScenario(42);
       // First autosave at t=0 → writes, returns 0.
-      const t0 = tickAutosave(42, [], world, -AUTOSAVE_INTERVAL_MS, 0);
+      const t0 = await tickAutosave(42, [], world, -AUTOSAVE_INTERVAL_MS, 0);
       expect(t0).toBe(0);
       // Manual save at t=5000 — should write, but the autosave's lastSaveMs
       // is whatever the caller passes; manualSave doesn't see it. Verify by
       // calling tickAutosave again at t = AUTOSAVE_INTERVAL_MS-1 with the
       // unchanged lastSaveMs → still NOT due (cooldown not elapsed).
-      manualSave(42, [], world);
-      const t1 = tickAutosave(42, [], world, t0, AUTOSAVE_INTERVAL_MS - 1);
+      await manualSave(42, [], world);
+      const t1 = await tickAutosave(42, [], world, t0, AUTOSAVE_INTERVAL_MS - 1);
       expect(t1).toBe(t0); // still pre-cooldown — unchanged
     });
   });
 
   describe('Issue #115 — hasIncompatibleSave', () => {
-    it('returns false when localStorage is empty', () => {
-      expect(hasIncompatibleSave()).toBe(false);
+    it('returns false when localStorage is empty', async () => {
+      expect(await hasIncompatibleSave()).toBe(false);
     });
 
-    it('returns false for a freshly-written compatible save', () => {
-      manualSave(42, [], createScenario(42));
-      expect(hasIncompatibleSave()).toBe(false);
+    it('returns false for a freshly-written compatible save', async () => {
+      await manualSave(42, [], createScenario(42));
+      expect(await hasIncompatibleSave()).toBe(false);
       // hasSave is the symmetric positive case
-      expect(hasSave()).toBe(true);
+      expect(await hasSave()).toBe(true);
     });
 
-    it('returns true when SAVE_KEY holds a v2-shaped envelope (rejected by parseSaveFile)', () => {
+    it('returns true when SAVE_KEY holds a v2-shaped envelope (rejected by parseSaveFile)', async () => {
       // Stash a known-v2 envelope. parseSaveFile throws SaveVersionMismatchError
       // → hasIncompatibleSave returns true; hasSave returns false. The pair
       // lets the dialog distinguish "no save" from "save present, this build
@@ -1850,14 +1856,14 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           snapshot: {},
         }),
       );
-      expect(hasIncompatibleSave()).toBe(true);
-      expect(hasSave()).toBe(false);
+      expect(await hasIncompatibleSave()).toBe(true);
+      expect(await hasSave()).toBe(false);
     });
 
-    it('returns true when SAVE_KEY holds completely malformed JSON', () => {
+    it('returns true when SAVE_KEY holds completely malformed JSON', async () => {
       window.localStorage.setItem(SAVE_KEY, '{not-json');
-      expect(hasIncompatibleSave()).toBe(true);
-      expect(hasSave()).toBe(false);
+      expect(await hasIncompatibleSave()).toBe(true);
+      expect(await hasSave()).toBe(false);
     });
 
     it('round-3 (Codex P2): returns true when snapshot.simVersion exceeds LATEST_SIM_VERSION (future-build save)', async () => {
@@ -1878,10 +1884,10 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         savedAtMs: Date.now(),
       };
       window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
-      expect(hasIncompatibleSave()).toBe(true);
+      expect(await hasIncompatibleSave()).toBe(true);
       // hasSave still returns true (envelope parses) — caller is expected
       // to gate on `hasSave() && !hasIncompatibleSave()` for "loadable".
-      expect(hasSave()).toBe(true);
+      expect(await hasSave()).toBe(true);
     });
 
     it('round-3: returns false when simVersion equals LATEST_SIM_VERSION (loadable)', async () => {
@@ -1897,8 +1903,8 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         savedAtMs: Date.now(),
       };
       window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
-      expect(hasIncompatibleSave()).toBe(false);
-      expect(hasSave()).toBe(true);
+      expect(await hasIncompatibleSave()).toBe(false);
+      expect(await hasSave()).toBe(true);
     });
 
     it('round-3: returns true when simVersion is omitted (old save below MIN_ACCEPTED — not loadable)', async () => {
@@ -1914,10 +1920,10 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         savedAtMs: Date.now(),
       };
       window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
-      expect(hasIncompatibleSave()).toBe(true);
+      expect(await hasIncompatibleSave()).toBe(true);
     });
 
-    it('Codex round-3 P1: returns true when snapshot is null (parseable envelope, garbage payload)', () => {
+    it('Codex round-3 P1: returns true when snapshot is null (parseable envelope, garbage payload)', async () => {
       // parseSaveFile only validates the envelope. A v3 envelope with
       // snapshot=null parses fine but reading snapshot.simVersion would
       // throw and crash the dialog. Treat as incompatible.
@@ -1930,10 +1936,10 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           snapshot: null,
         }),
       );
-      expect(hasIncompatibleSave()).toBe(true);
+      expect(await hasIncompatibleSave()).toBe(true);
     });
 
-    it('Codex round-3 P1: returns true when snapshot is a non-object (string / number)', () => {
+    it('Codex round-3 P1: returns true when snapshot is a non-object (string / number)', async () => {
       window.localStorage.setItem(
         SAVE_KEY,
         JSON.stringify({
@@ -1943,7 +1949,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           snapshot: 'not an object',
         }),
       );
-      expect(hasIncompatibleSave()).toBe(true);
+      expect(await hasIncompatibleSave()).toBe(true);
     });
 
     it('round-4 (Rob): returns true when snapshot is empty object (parseable but unloadable — Continue would lie)', async () => {
@@ -1961,7 +1967,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           snapshot: {},
         }),
       );
-      expect(hasIncompatibleSave()).toBe(true);
+      expect(await hasIncompatibleSave()).toBe(true);
     });
 
     it('round-4 (Rob): returns true when simVersion is below LEGACY_SIM_VERSION (tampered down)', async () => {
@@ -1979,10 +1985,10 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           savedAtMs: Date.now(),
         }),
       );
-      expect(hasIncompatibleSave()).toBe(true);
+      expect(await hasIncompatibleSave()).toBe(true);
     });
 
-    it('round-4 (Rob): returns true when snapshot.colonies is missing (deserialize would throw)', () => {
+    it('round-4 (Rob): returns true when snapshot.colonies is missing (deserialize would throw)', async () => {
       window.localStorage.setItem(
         SAVE_KEY,
         JSON.stringify({
@@ -1992,7 +1998,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           snapshot: { tick: 0, rngState: 0, nextEntityId: 0, commandQueue: [] },
         }),
       );
-      expect(hasIncompatibleSave()).toBe(true);
+      expect(await hasIncompatibleSave()).toBe(true);
     });
   });
 
@@ -2003,13 +2009,13 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     // incompatible verdicts to a single boolean, so these tests are the only
     // direct guard that the future-vs-corrupt split is wired correctly — a
     // refactor that swapped the two branches would otherwise stay green.
-    it("returns 'none' when localStorage is empty", () => {
-      expect(classifySaveCompatibility()).toBe('none');
+    it("returns 'none' when localStorage is empty", async () => {
+      expect(await classifySaveCompatibility()).toBe('none');
     });
 
-    it("returns 'compatible' for a freshly-written current-format save", () => {
-      manualSave(42, [], createScenario(42));
-      expect(classifySaveCompatibility()).toBe('compatible');
+    it("returns 'compatible' for a freshly-written current-format save", async () => {
+      await manualSave(42, [], createScenario(42));
+      expect(await classifySaveCompatibility()).toBe('compatible');
     });
 
     it("returns 'incompatible-future' when simVersion exceeds LATEST (recoverable → suspend autosave)", async () => {
@@ -2020,7 +2026,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         SAVE_KEY,
         JSON.stringify({ version: SAVE_FORMAT_VERSION, seed: 7, inputLog: [], snapshot: snap }),
       );
-      expect(classifySaveCompatibility()).toBe('incompatible-future');
+      expect(await classifySaveCompatibility()).toBe('incompatible-future');
     });
 
     it("returns 'incompatible-corrupt' when simVersion is below MIN_ACCEPTED (tampered down → overwrite freely)", async () => {
@@ -2033,53 +2039,53 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         SAVE_KEY,
         JSON.stringify({ version: SAVE_FORMAT_VERSION, seed: 7, inputLog: [], snapshot: snap }),
       );
-      expect(classifySaveCompatibility()).toBe('incompatible-corrupt');
+      expect(await classifySaveCompatibility()).toBe('incompatible-corrupt');
     });
 
-    it("returns 'incompatible-corrupt' for a stale save-format envelope (parseSaveFile throws)", () => {
+    it("returns 'incompatible-corrupt' for a stale save-format envelope (parseSaveFile throws)", async () => {
       window.localStorage.setItem(
         SAVE_KEY,
         JSON.stringify({ version: 2, seed: 1, inputLog: [], snapshot: {} }),
       );
-      expect(classifySaveCompatibility()).toBe('incompatible-corrupt');
+      expect(await classifySaveCompatibility()).toBe('incompatible-corrupt');
     });
 
-    it("returns 'incompatible-corrupt' for malformed JSON", () => {
+    it("returns 'incompatible-corrupt' for malformed JSON", async () => {
       window.localStorage.setItem(SAVE_KEY, '{not-json');
-      expect(classifySaveCompatibility()).toBe('incompatible-corrupt');
+      expect(await classifySaveCompatibility()).toBe('incompatible-corrupt');
     });
 
-    it("returns 'incompatible-corrupt' when snapshot is null (parseable envelope, garbage payload)", () => {
+    it("returns 'incompatible-corrupt' when snapshot is null (parseable envelope, garbage payload)", async () => {
       window.localStorage.setItem(
         SAVE_KEY,
         JSON.stringify({ version: SAVE_FORMAT_VERSION, seed: 1, inputLog: [], snapshot: null }),
       );
-      expect(classifySaveCompatibility()).toBe('incompatible-corrupt');
+      expect(await classifySaveCompatibility()).toBe('incompatible-corrupt');
     });
 
-    it("returns 'incompatible-corrupt' when the snapshot deserialize throws (empty object, missing fields)", () => {
+    it("returns 'incompatible-corrupt' when the snapshot deserialize throws (empty object, missing fields)", async () => {
       window.localStorage.setItem(
         SAVE_KEY,
         JSON.stringify({ version: SAVE_FORMAT_VERSION, seed: 1, inputLog: [], snapshot: {} }),
       );
-      expect(classifySaveCompatibility()).toBe('incompatible-corrupt');
+      expect(await classifySaveCompatibility()).toBe('incompatible-corrupt');
     });
   });
 
   describe('Issue #115 — getSaveInfo', () => {
-    it('returns null when no save exists', () => {
-      expect(getSaveInfo()).toBeNull();
+    it('returns null when no save exists', async () => {
+      expect(await getSaveInfo()).toBeNull();
     });
 
-    it('returns null when the save is unreadable (would let the dialog show "incompatible save")', () => {
+    it('returns null when the save is unreadable (would let the dialog show "incompatible save")', async () => {
       window.localStorage.setItem(SAVE_KEY, '{not-json');
-      expect(getSaveInfo()).toBeNull();
+      expect(await getSaveInfo()).toBeNull();
     });
 
-    it('returns tick + player worker count + player food (human units) for a fresh save', () => {
+    it('returns tick + player worker count + player food (human units) for a fresh save', async () => {
       const world = createScenario(42);
-      manualSave(42, [], world);
-      const info = getSaveInfo();
+      await manualSave(42, [], world);
+      const info = await getSaveInfo();
       expect(info).not.toBeNull();
       expect(info!.tick).toBe(0);
       // Fresh scenario: queen alive; workerCount tracks living workers (no
@@ -2091,16 +2097,16 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(info!.playerFoodStored).toBe(playerColony.foodStored >> FP_SHIFT);
     });
 
-    it('returns the wall-clock savedAtMs from the envelope (issue #115)', () => {
+    it('returns the wall-clock savedAtMs from the envelope (issue #115)', async () => {
       const before = Date.now();
-      manualSave(42, [], createScenario(42));
+      await manualSave(42, [], createScenario(42));
       const after = Date.now();
-      const info = getSaveInfo();
+      const info = await getSaveInfo();
       expect(info!.savedAtMs).toBeGreaterThanOrEqual(before);
       expect(info!.savedAtMs).toBeLessThanOrEqual(after);
     });
 
-    it('returns savedAtMs=0 when the envelope omits the field (pre-issue-#115 saves)', () => {
+    it('returns savedAtMs=0 when the envelope omits the field (pre-issue-#115 saves)', async () => {
       // Simulate an older v3 envelope written before issue #115 added savedAtMs.
       // parseSaveFile must accept it (no version bump) and getSaveInfo falls
       // back to 0 ("unknown") rather than NaN or a 1970 stamp.
@@ -2112,12 +2118,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         // savedAtMs intentionally omitted
       };
       window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
-      const info = getSaveInfo();
+      const info = await getSaveInfo();
       expect(info).not.toBeNull();
       expect(info!.savedAtMs).toBe(0);
     });
 
-    it('returns savedAtMs=0 when the envelope field is malformed (negative or non-finite)', () => {
+    it('returns savedAtMs=0 when the envelope field is malformed (negative or non-finite)', async () => {
       const env = {
         version: SAVE_FORMAT_VERSION,
         seed: 1,
@@ -2126,19 +2132,19 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         savedAtMs: -1,
       };
       window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
-      const info = getSaveInfo();
+      const info = await getSaveInfo();
       expect(info!.savedAtMs).toBe(0);
     });
 
-    it('reflects updated tick count after the world advances', () => {
+    it('reflects updated tick count after the world advances', async () => {
       const world = createScenario(42);
       for (let i = 0; i < 5; i++) tick(world, []);
-      manualSave(42, [], world);
-      const info = getSaveInfo();
+      await manualSave(42, [], world);
+      const info = await getSaveInfo();
       expect(info!.tick).toBe(5);
     });
 
-    it('Codex round-3 P1: does NOT throw when snapshot is null (parseable envelope, garbage payload)', () => {
+    it('Codex round-3 P1: does NOT throw when snapshot is null (parseable envelope, garbage payload)', async () => {
       // The dialog opens by calling getSaveInfo + hasIncompatibleSave. Both
       // need to survive a parseable-but-garbage envelope so the user sees
       // the "incompatible" warning + can use Delete/New Game to recover.
@@ -2153,11 +2159,11 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           snapshot: null,
         }),
       );
-      expect(() => getSaveInfo()).not.toThrow();
-      expect(getSaveInfo()).toBeNull();
+      await expect(getSaveInfo()).resolves.not.toThrow();
+      expect(await getSaveInfo()).toBeNull();
     });
 
-    it('Codex round-3 P1: does NOT throw when snapshot.colonies is missing', () => {
+    it('Codex round-3 P1: does NOT throw when snapshot.colonies is missing', async () => {
       // A snapshot with tick/rngState/etc. but no `colonies` field.
       // Pre-fix: dereferencing colonies[playerKey] would throw TypeError.
       window.localStorage.setItem(
@@ -2169,15 +2175,15 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           snapshot: { tick: 5, rngState: 1, nextEntityId: 0 },
         }),
       );
-      expect(() => getSaveInfo()).not.toThrow();
-      const info = getSaveInfo();
+      await expect(getSaveInfo()).resolves.not.toThrow();
+      const info = await getSaveInfo();
       expect(info).not.toBeNull();
       expect(info!.tick).toBe(5);
       expect(info!.playerWorkers).toBe(0);
       expect(info!.playerFoodStored).toBe(0);
     });
 
-    it('Codex round-3 P1: returns 0 fields when snapshot.tick is missing/non-numeric', () => {
+    it('Codex round-3 P1: returns 0 fields when snapshot.tick is missing/non-numeric', async () => {
       window.localStorage.setItem(
         SAVE_KEY,
         JSON.stringify({
@@ -2187,12 +2193,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           snapshot: { colonies: {} },
         }),
       );
-      const info = getSaveInfo();
+      const info = await getSaveInfo();
       expect(info).not.toBeNull();
       expect(info!.tick).toBe(0);
     });
 
-    it('returns 0 worker / 0 food when the player colony key is absent (defensive)', () => {
+    it('returns 0 worker / 0 food when the player colony key is absent (defensive)', async () => {
       // Hand-craft an envelope with a missing player colony record. This
       // should never happen in legitimate gameplay, but the dialog must not
       // crash if it does — surface zeros and let the player decide.
@@ -2235,7 +2241,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         },
       };
       window.localStorage.setItem(SAVE_KEY, JSON.stringify(env));
-      const info = getSaveInfo();
+      const info = await getSaveInfo();
       expect(info).not.toBeNull();
       expect(info!.tick).toBe(7);
       expect(info!.playerWorkers).toBe(0);
@@ -2328,5 +2334,146 @@ describe('bakedSurfaceEffect serialization', () => {
         expect(sum).toBe(0);
       }
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #234 PR1 — the async StorageDriver seam. The 9 save.ts functions now route
+// every read/write through getStorageDriver() instead of touching the
+// `localStorage` global directly, so the whole save path can move to async,
+// evict-resistant backends (Capacitor / Tauri / IndexedDB / OPFS) later by
+// injecting a driver — without editing a single save.ts call site again.
+// These tests prove the async API round-trips through an INJECTED driver (not
+// localStorage) and that a driver whose get/set reject surfaces gracefully
+// through the existing try/catch in each save function.
+// ---------------------------------------------------------------------------
+describe('#234 StorageDriver seam', () => {
+  // Restore the process-default driver after every test so an injected fake
+  // never leaks into a later test (setStorageDriver mutates module state).
+  afterEach(() => {
+    setStorageDriver(new LocalStorageDriver());
+  });
+
+  /** In-memory, Map-backed driver — the canonical "not localStorage" backend. */
+  class FakeStorageDriver implements StorageDriver {
+    readonly store = new Map<string, string>();
+    get(key: string): Promise<string | null> {
+      return Promise.resolve(this.store.has(key) ? this.store.get(key)! : null);
+    }
+    set(key: string, value: string): Promise<void> {
+      this.store.set(key, value);
+      return Promise.resolve();
+    }
+    remove(key: string): Promise<void> {
+      this.store.delete(key);
+      return Promise.resolve();
+    }
+  }
+
+  it('round-trips a save through an injected in-memory driver (not localStorage)', async () => {
+    const fake = new FakeStorageDriver();
+    setStorageDriver(fake);
+    // Clear the real localStorage so a stale save there can't masquerade as a
+    // round-trip through the fake — the read MUST come from the injected driver.
+    window.localStorage.clear();
+    const world = createScenario(1234);
+
+    expect(await manualSave(1234, [], world)).toBe(true);
+    // Proof the write landed in the injected driver, not localStorage.
+    expect(fake.store.has(SAVE_KEY)).toBe(true);
+    expect(window.localStorage.getItem(SAVE_KEY)).toBeNull();
+
+    const loaded = await loadSave();
+    expect(loaded).not.toBeNull();
+    expect(loaded!.seed).toBe(1234);
+    expect(loaded!.snapshot.tick).toBe(0);
+  });
+
+  it('manualSave + tickAutosave resolve gracefully when the driver.set rejects (no throw)', async () => {
+    class RejectingSetDriver implements StorageDriver {
+      get(): Promise<string | null> {
+        return Promise.resolve(null);
+      }
+      set(): Promise<void> {
+        return Promise.reject(new Error('quota'));
+      }
+      remove(): Promise<void> {
+        return Promise.resolve();
+      }
+    }
+    setStorageDriver(new RejectingSetDriver());
+    const world = createScenario(42);
+
+    // manualSave swallows the rejection and reports failure.
+    await expect(manualSave(42, [], world)).resolves.toBe(false);
+
+    // tickAutosave honors the #80 cooldown on a failed write: it advances to
+    // nowMs (not lastSaveMs) so a full-storage backend can't storm setItem at
+    // 60 FPS. The interval has elapsed here (nowMs - 0 > AUTOSAVE_INTERVAL_MS).
+    const nowMs = AUTOSAVE_INTERVAL_MS + 1;
+    await expect(tickAutosave(42, [], world, 0, nowMs)).resolves.toBe(nowMs);
+  });
+
+  it('hasSave + loadSave resolve to the empty-state values when the driver.get rejects (no throw)', async () => {
+    class RejectingGetDriver implements StorageDriver {
+      get(): Promise<string | null> {
+        return Promise.reject(new Error('storage blocked'));
+      }
+      set(): Promise<void> {
+        return Promise.resolve();
+      }
+      remove(): Promise<void> {
+        return Promise.resolve();
+      }
+    }
+    // Seed a REAL, valid save via the default driver first, then inject the
+    // rejecting driver. This makes the test bypass-sensitive: if the seam were
+    // bypassed and these functions read localStorage directly, they would find
+    // the seeded save and return true / non-null — the rejecting driver's get
+    // MUST be what drives them to the empty-state values.
+    window.localStorage.clear();
+    expect(await manualSave(7, [], createScenario(7))).toBe(true);
+    expect(window.localStorage.getItem(SAVE_KEY)).not.toBeNull();
+    setStorageDriver(new RejectingGetDriver());
+
+    // The existing try/catch in each function swallows the rejection and
+    // returns the "no readable save" value rather than propagating.
+    await expect(hasSave()).resolves.toBe(false);
+    await expect(loadSave()).resolves.toBeNull();
+  });
+
+  it('LocalStorageDriver.set rejects (not throws) when the backing store throws', async () => {
+    const driver = new LocalStorageDriver();
+    const spy = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+    // Pins the seam's core contract directly: a synchronous localStorage throw
+    // becomes a rejected promise (so awaiting call sites' try/catch still catch).
+    await expect(driver.set(SAVE_KEY, 'x')).rejects.toThrow('QuotaExceededError');
+    spy.mockRestore();
+  });
+
+  it('the async save functions return Promises (Promise-returning signatures)', async () => {
+    // Inject a fake so the instanceof probe performs no real IO.
+    setStorageDriver(new FakeStorageDriver());
+    const world = createScenario(42);
+
+    const savePromise = manualSave(42, [], world);
+    expect(savePromise).toBeInstanceOf(Promise);
+    const hasPromise = hasSave();
+    expect(hasPromise).toBeInstanceOf(Promise);
+
+    // Settle both so neither floats as an unhandled promise.
+    await savePromise;
+    await hasPromise;
+  });
+
+  it('getStorageDriver returns the injected driver until it is replaced', () => {
+    const fake = new FakeStorageDriver();
+    setStorageDriver(fake);
+    expect(getStorageDriver()).toBe(fake);
+    const next = new LocalStorageDriver();
+    setStorageDriver(next);
+    expect(getStorageDriver()).toBe(next);
   });
 });

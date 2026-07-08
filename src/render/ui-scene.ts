@@ -300,7 +300,13 @@ const PAUSED_QUEUE_FULL_HINT_MS = 1500;
 const TOOLTIP_SHOW_DELAY_MS = 400;
 const TOOLTIP_HIDE_GRACE_MS = 1500;
 import { loadSettings, saveSettings } from '../platform/settings.js';
-import { hasSave, hasIncompatibleSave, getSaveInfo, deleteSave } from '../platform/save.js';
+import {
+  classifySaveCompatibility,
+  getSaveInfo,
+  deleteSave,
+  type SaveCompatibility,
+  type SaveInfo,
+} from '../platform/save.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import type { SetBehaviorRatioCommand, PlaceChamberCommand } from '../sim/commands.js';
 import { enqueueCommand } from '../input/command-queue.js';
@@ -351,7 +357,7 @@ export interface SaveLoadDialogCallbacks {
   /** Write the current world to localStorage via manualSave. Returns true on
    *  success, false on storage failure. The dialog re-renders afterward so
    *  the info line picks up the new saved tick. */
-  onSaveNow(): boolean;
+  onSaveNow(): Promise<boolean>;
   /** Issue #196 — the player committed Delete on the existing save. The dialog
    *  performs the actual `deleteSave()`; this notifies GameScene so it can
    *  release any autosave suspension armed to protect a future-build save (the
@@ -507,6 +513,11 @@ export class UIScene extends Phaser.Scene {
     delete: false,
     newGame: false,
   };
+  // #234 — prefetched storage state for the Save/Load dialog. Populated by the
+  // async refreshSaveDialogState() so renderSaveLoadDialog() stays synchronous
+  // (reads only these caches, never the async save API).
+  private saveDialogCompat: SaveCompatibility = 'none';
+  private saveDialogInfo: SaveInfo | null = null;
   // Issue #115 — Save Now feedback. After a manualSave call, the dialog
   // flashes a brief "Saved" / "Save failed" line above the regular info
   // text for SAVE_FLASH_MS so the player sees an explicit acknowledgement
@@ -2114,7 +2125,14 @@ export class UIScene extends Phaser.Scene {
     this.hideSaveLoadDialogOverlay(); // idempotent — clear any prior instance
     this.saveLoadDialogCallbacks = callbacks;
     this.saveLoadDialogConfirming = { delete: false, newGame: false };
+    // #234 — render immediately from the cached storage verdict (last-known
+    // across opens, or 'none' on the first open) so the dialog appears this
+    // frame — refreshSaveDialogState's own render is gated on
+    // isSaveLoadDialogVisible() (group non-empty), which only holds AFTER this
+    // first render. Then kick the async refresh to reconcile with a fresh
+    // storage read (it re-renders when the verdict/info lands).
     this.renderSaveLoadDialog();
+    void this.refreshSaveDialogState();
     this.recomputeActiveOverlay();
   }
 
@@ -2138,6 +2156,17 @@ export class UIScene extends Phaser.Scene {
     return this.saveLoadDialogGroup.length > 0;
   }
 
+  /** #234 — prefetch the dialog's storage state via the now-async save API,
+   *  cache it into saveDialogCompat / saveDialogInfo, then re-render from the
+   *  cache. Keeps renderSaveLoadDialog() synchronous. Called on dialog open and
+   *  after Save Now / Delete (the state-changing actions). */
+  private async refreshSaveDialogState(): Promise<void> {
+    const [compat, info] = await Promise.all([classifySaveCompatibility(), getSaveInfo()]);
+    this.saveDialogCompat = compat;
+    this.saveDialogInfo = info;
+    if (this.isSaveLoadDialogVisible()) this.renderSaveLoadDialog();
+  }
+
   /** Render (or re-render) the dialog in place. Called on show, on confirm
    *  flag flip, and after every state-changing action (Save Now, Delete) so
    *  the info line and button enable states stay current. */
@@ -2145,30 +2174,24 @@ export class UIScene extends Phaser.Scene {
     for (const obj of this.saveLoadDialogGroup) obj.destroy();
     this.saveLoadDialogGroup = [];
 
-    // Cache hasIncompatibleSave once per render — round-5 made it run a
-    // full deserialize, so calling it twice for the ctx fields below
-    // would deserialize the entire WorldState twice per frame.
-    const incompatible = hasIncompatibleSave();
+    // #234 — read the prefetched storage verdict from the cache
+    // (refreshSaveDialogState populated it via the async save API before this
+    // render; render itself stays synchronous). The classifier's 'compatible'
+    // verdict is exactly the old `hasSave() && !hasIncompatibleSave`: parseable
+    // envelope AND a successful deserialize. Both incompatible verdicts
+    // (future-sim / corrupt) mean Continue would silently fall through to
+    // bootFresh, so the dialog surfaces them identically. See save.ts.
+    const incompatible =
+      this.saveDialogCompat === 'incompatible-future' ||
+      this.saveDialogCompat === 'incompatible-corrupt';
     const ctx = {
-      // Round-3 (Codex P2): a future-sim save still passes parseSaveFile
-      // (so hasSave returns true) but bootFromSave would reject it via
-      // FutureSimVersionError. Treat the save as compatible only when
-      // BOTH envelope is parseable AND deserialize succeeds. The
-      // hasIncompatibleSave check covers parse-fails, future-sim, and
-      // (round-4) any other shape error that would make Continue a
-      // silent fall-through to bootFresh. See save.ts for the full
-      // classification.
-      //
-      // Round-5 (cache): hasIncompatibleSave now performs a full
-      // deserialize on the saved envelope. Local-cache the result so
-      // a single renderSaveLoadDialog() doesn't pay the cost twice.
-      hasCompatibleSave: hasSave() && !incompatible,
+      hasCompatibleSave: this.saveDialogCompat === 'compatible',
       hasIncompatibleSave: incompatible,
       confirming: { ...this.saveLoadDialogConfirming },
     };
     const items = saveLoadDialogItems(ctx, this.layout);
     this.saveLoadDialogVisibleItems = items;
-    const info = getSaveInfo();
+    const info = this.saveDialogInfo;
 
     // Background scrim — slightly darker than the pause menu so the layered
     // overlay reads as "deeper than the menu underneath."
@@ -2284,22 +2307,29 @@ export class UIScene extends Phaser.Scene {
         // toast — the flash plays the same role without a separate Phaser
         // tween / DOM-toast layer). Failure most often means quota /
         // private-mode; retry once or close other tabs.
-        const ok = cb?.onSaveNow() ?? false;
-        this.saveLoadDialogFlash = ok ? 'saved' : 'failed';
-        // Cancel any in-flight prior flash timer so a second Save Now in
-        // quick succession doesn't clear the new flash early.
-        if (this.saveLoadDialogFlashTimer !== null) {
-          this.saveLoadDialogFlashTimer.remove();
-        }
-        this.saveLoadDialogFlashTimer = this.time.delayedCall(SAVE_FLASH_MS, () => {
-          this.saveLoadDialogFlashTimer = null;
-          this.saveLoadDialogFlash = 'none';
-          // Guard: dialog may have closed between Save Now and the timer
-          // firing (e.g. player clicked Continue or Back). Re-render only
-          // if the dialog is still on screen.
-          if (this.isSaveLoadDialogVisible()) this.renderSaveLoadDialog();
-        });
-        this.renderSaveLoadDialog();
+        // #234 — onSaveNow is async now (storage seam). Fire-and-forget: the
+        // click dispatcher stays sync; the flash + info refresh land a microtask
+        // later (same frame under the sync-backed driver).
+        void (async () => {
+          const ok = (await cb?.onSaveNow()) ?? false;
+          this.saveLoadDialogFlash = ok ? 'saved' : 'failed';
+          // Cancel any in-flight prior flash timer so a second Save Now in
+          // quick succession doesn't clear the new flash early.
+          if (this.saveLoadDialogFlashTimer !== null) {
+            this.saveLoadDialogFlashTimer.remove();
+          }
+          this.saveLoadDialogFlashTimer = this.time.delayedCall(SAVE_FLASH_MS, () => {
+            this.saveLoadDialogFlashTimer = null;
+            this.saveLoadDialogFlash = 'none';
+            // Guard: dialog may have closed between Save Now and the timer
+            // firing (e.g. player clicked Continue or Back). Re-render only
+            // if the dialog is still on screen.
+            if (this.isSaveLoadDialogVisible()) this.renderSaveLoadDialog();
+          });
+          // Re-render from a fresh storage read (the manual save bumped the
+          // info line's timestamp / counts). refreshSaveDialogState renders.
+          await this.refreshSaveDialogState();
+        })();
         return;
       }
       case 'delete': {
@@ -2308,21 +2338,23 @@ export class UIScene extends Phaser.Scene {
           this.renderSaveLoadDialog();
           return;
         }
-        deleteSave();
-        // Issue #196 — releasing the save means any autosave suspension that
-        // was protecting a future-build save's bytes is no longer warranted
-        // (the bytes are gone). Notify GameScene so the running fresh session
-        // can save / autosave again instead of staying frozen until reload.
-        cb?.onDelete();
-        this.saveLoadDialogConfirming.delete = false;
-        this.renderSaveLoadDialog();
+        void (async () => {
+          await deleteSave();
+          // Issue #196 — releasing the save means any autosave suspension that
+          // was protecting a future-build save's bytes is no longer warranted
+          // (the bytes are gone). Notify GameScene so the running fresh session
+          // can save / autosave again instead of staying frozen until reload.
+          cb?.onDelete();
+          this.saveLoadDialogConfirming.delete = false;
+          await this.refreshSaveDialogState();
+        })();
         return;
       }
       case 'new-game': {
         // Confirm gate is only needed when a save exists — clicking New Game
         // with no save is just "restart the running scenario" and has no
         // hidden destructive consequence.
-        if (hasSave() && !this.saveLoadDialogConfirming.newGame) {
+        if (this.saveDialogCompat !== 'none' && !this.saveLoadDialogConfirming.newGame) {
           this.saveLoadDialogConfirming.newGame = true;
           this.renderSaveLoadDialog();
           return;
