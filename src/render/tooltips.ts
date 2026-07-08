@@ -2,9 +2,9 @@
 //
 // Pure hit-test + copy for on-hover tooltips over the HUD CONTROL widgets: the
 // tool palette, speed widget, view toggle, colony toggle, the Forage↔Fight
-// slider, and HUD.STATS (whose tooltip teaches the non-obvious "click for ant
-// activity"). EXCLUDED: the minimap (hover vs click-nav ambiguity) and the
-// ant-activity panel popup (Codex R1#6/R2).
+// slider, and the stats bar (hud.STATS, whose tooltip teaches the non-obvious
+// "click for ant activity"). EXCLUDED: the minimap (hover vs click-nav
+// ambiguity) and the ant-activity panel popup (Codex R1#6/R2).
 //
 // Phaser-free: UIScene owns the hover-state machine, the delay timers, the
 // modal/teardown lifecycle, and the Text object; this module owns only the
@@ -12,8 +12,8 @@
 // so it is unit-testable. The tool hit-test uses toolButtonVisualAt so the
 // DISABLED Chamber-on-surface still tooltips (Codex R1#7).
 
-import { HUD } from './sprites.js';
 import type { ToolId } from './camera.js';
+import type { HudLayout } from './hud-layout.js';
 import { toolButtonVisualAt, speedControlAt, type SpeedControl } from './hud-controls.js';
 import { isInsideSlider } from './triangle-widget.js';
 import { glyphFor } from './input-glyphs.js';
@@ -50,20 +50,21 @@ export function tooltipTargetAt(
   px: number,
   py: number,
   view: 'surface' | 'underground',
+  hud: HudLayout,
 ): TooltipTarget | null {
-  if (inRect(px, py, HUD.STATS)) return { kind: 'stats', anchor: HUD.STATS };
-  if (inRect(px, py, HUD.VIEW_TOGGLE)) return { kind: 'view-toggle', anchor: HUD.VIEW_TOGGLE };
-  if (view === 'underground' && inRect(px, py, HUD.UNDERGROUND_COLONY_TOGGLE)) {
-    return { kind: 'colony-toggle', anchor: HUD.UNDERGROUND_COLONY_TOGGLE };
+  if (inRect(px, py, hud.STATS)) return { kind: 'stats', anchor: hud.STATS };
+  if (inRect(px, py, hud.VIEW_TOGGLE)) return { kind: 'view-toggle', anchor: hud.VIEW_TOGGLE };
+  if (view === 'underground' && inRect(px, py, hud.UNDERGROUND_COLONY_TOGGLE)) {
+    return { kind: 'colony-toggle', anchor: hud.UNDERGROUND_COLONY_TOGGLE };
   }
-  const toolHit = toolButtonVisualAt(px, py, view);
+  const toolHit = toolButtonVisualAt(px, py, view, hud.TOOLS);
   if (toolHit !== null) {
-    return { kind: 'tool', tool: toolHit.tool, enabled: toolHit.enabled, anchor: HUD.TOOLS };
+    return { kind: 'tool', tool: toolHit.tool, enabled: toolHit.enabled, anchor: hud.TOOLS };
   }
-  const speedHit = speedControlAt(px, py);
-  if (speedHit !== null) return { kind: 'speed', control: speedHit, anchor: HUD.SPEED };
-  // The slider lives inside the HUD.TRIANGLE box (legacy field name).
-  if (isInsideSlider(px, py)) return { kind: 'slider', anchor: HUD.TRIANGLE };
+  const speedHit = speedControlAt(px, py, hud.SPEED);
+  if (speedHit !== null) return { kind: 'speed', control: speedHit, anchor: hud.SPEED };
+  // The slider lives inside the hud.TRIANGLE box (legacy field name).
+  if (isInsideSlider(px, py, hud.TRIANGLE)) return { kind: 'slider', anchor: hud.TRIANGLE };
   return null;
 }
 

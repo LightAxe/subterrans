@@ -35,7 +35,7 @@ import type { WorldState } from '../sim/types.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { isAlive } from '../sim/ant/ant-store.js';
 import { AntTask, ForagingSubState, DiggingSubState } from '../sim/enums.js';
-import { HUD } from './sprites.js';
+import type { HudRect } from './hud-layout.js';
 
 export interface ForagingBreakdown {
   searching: number;
@@ -163,21 +163,24 @@ export function formatAntActivityLines(a: AntActivity): string[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Fixed screen rect the popup renders into. Anchored just below HUD.STATS
- * (top-left), wide enough to hold the longest formatted line without clipping
- * (`  carrying:  NN` at 10px monospace), tall enough for the 19 lines in
- * `formatAntActivityLines` plus padding.
+ * Fixed screen rect the popup renders into, derived from the passed stats rect
+ * (hud.STATS). Anchored just below the stats bar (top-left), wide enough to hold
+ * the longest formatted line without clipping (`  carrying:  NN` at 10px
+ * monospace), tall enough for the 19 lines in `formatAntActivityLines` plus
+ * padding. At the default 800×592 layout (stats = {x:8, y:8, w:200, h:24}) this
+ * yields the former `ANT_ACTIVITY_PANEL` constant: {x:8, y:36, w:220, h:264}.
  *
- * Exported so `isPointerOverHUD` (camera-input) can include this rect when
- * the panel is visible — otherwise clicks inside the panel would fall
- * through to the world.
+ * Used by `isPointerOverHUD` (camera-input) so clicks inside the panel don't
+ * fall through to the world while it is visible.
  */
-export const ANT_ACTIVITY_PANEL = {
-  x: HUD.STATS.x,
-  y: HUD.STATS.y + HUD.STATS.h + 4,
-  w: 220,
-  h: 264,
-} as const;
+export function antActivityPanelRect(stats: HudRect): HudRect {
+  return {
+    x: stats.x,
+    y: stats.y + stats.h + 4,
+    w: 220,
+    h: 264,
+  };
+}
 
 export const ANT_ACTIVITY_PANEL_COLORS = {
   background: 0x000000,

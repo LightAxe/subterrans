@@ -20,7 +20,7 @@ import {
 import { DEFAULT_LAYOUT } from './layout.js';
 import { pauseMenuItems, type PauseMenuRenderContext } from './pause-menu-layout.js';
 import { saveLoadDialogItems, type SaveLoadDialogContext } from './save-load-dialog-layout.js';
-import { HUD } from './sprites.js';
+import { buildHudLayout } from './hud-layout.js';
 
 // Same contexts tests/helpers/geometry.ts uses (playtrace off → 4-row main menu).
 const MAIN: PauseMenuRenderContext = {
@@ -67,6 +67,6 @@ describe('#240 layout functions equal the specs’ former inline literals', () =
   });
 
   it('HUD view-toggle button', () => {
-    expect(HUD.VIEW_TOGGLE).toEqual({ x: 632, y: 396, w: 80, h: 24 });
+    expect(buildHudLayout(DEFAULT_LAYOUT).VIEW_TOGGLE).toEqual({ x: 632, y: 396, w: 80, h: 24 });
   });
 });

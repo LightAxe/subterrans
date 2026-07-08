@@ -3,7 +3,13 @@
 // semantics, and formatted output stability.
 
 import { describe, it, expect } from 'vitest';
-import { computeAntActivity, formatAntActivityLines, ANT_ACTIVITY_PANEL } from './ant-activity.js';
+import {
+  computeAntActivity,
+  formatAntActivityLines,
+  antActivityPanelRect,
+} from './ant-activity.js';
+import { buildHudLayout } from './hud-layout.js';
+import { DEFAULT_LAYOUT } from './layout.js';
 import { createWorldState, allocateEntityId } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
 import { initAnt, killAnt } from '../sim/ant/ant-store.js';
@@ -187,12 +193,13 @@ describe('formatAntActivityLines', () => {
   });
 });
 
-describe('ANT_ACTIVITY_PANEL layout', () => {
-  it('anchors below HUD.STATS and fits within the 800x592 canvas', () => {
-    expect(ANT_ACTIVITY_PANEL.x).toBeGreaterThanOrEqual(0);
-    expect(ANT_ACTIVITY_PANEL.y).toBeGreaterThan(8 + 24); // below HUD.STATS
-    expect(ANT_ACTIVITY_PANEL.x + ANT_ACTIVITY_PANEL.w).toBeLessThanOrEqual(800);
-    expect(ANT_ACTIVITY_PANEL.y + ANT_ACTIVITY_PANEL.h).toBeLessThanOrEqual(592);
+describe('antActivityPanelRect layout', () => {
+  it('anchors below the stats bar and fits within the 800x592 canvas', () => {
+    const panel = antActivityPanelRect(buildHudLayout(DEFAULT_LAYOUT).STATS);
+    expect(panel.x).toBeGreaterThanOrEqual(0);
+    expect(panel.y).toBeGreaterThan(8 + 24); // below the stats bar (y=8, h=24)
+    expect(panel.x + panel.w).toBeLessThanOrEqual(800);
+    expect(panel.y + panel.h).toBeLessThanOrEqual(592);
   });
 });
 

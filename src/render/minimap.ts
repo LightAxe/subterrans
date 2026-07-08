@@ -1,21 +1,22 @@
 // minimap.ts — Phase 8 minimap pure draw + click-to-pan helpers.
 //
-// Renders the surface overview (160x160 at HUD.MINIMAP) onto a GfxLike.
+// Renders the surface overview (160x160 at hud.MINIMAP) onto a GfxLike.
 // The minimap always shows the surface view regardless of activeView per PRD §7a.
 //
 // Exports:
-//   drawMinimap(gfx, world, viewState) — called per frame from UIScene.update()
-//   minimapClickToTile(px, py) — converts screen pixel to tile coord, returns null if outside
-//   applyMinimapClick(viewState, px, py) — pan surface camera + X-link underground camera
-//   MINIMAP_SCALE_X, MINIMAP_SCALE_Y — pixel-to-tile scale factors
+//   drawMinimap(gfx, world, viewState, hud) — called per frame from UIScene.update()
+//   minimapClickToTile(px, py, hud) — converts screen pixel to tile coord, returns null if outside
+//   applyMinimapClick(viewState, px, py, hud) — pan surface camera + X-link underground camera
+//   MINIMAP_SCALE_X, MINIMAP_SCALE_Y — default-layout pixel-to-tile scale factors
 
 import {
-  HUD,
   TILE_SIZE_PX,
   COLOR_PLAYER_COLONY,
   COLOR_ENEMY_COLONY,
   COLOR_FOOD_PILE_NORMAL,
 } from './sprites.js';
+import { buildHudLayout, type HudLayout } from './hud-layout.js';
+import { DEFAULT_LAYOUT } from './layout.js';
 import { COLOR_BARREN_EARTH, COLOR_BARREN_EARTH_DARK } from './terrain-atlas.js';
 import {
   SURFACE_GRID_WIDTH,
@@ -38,8 +39,13 @@ import {
 import { clampCameraView, minimapNavTargets, visibleWorldRect } from './camera-adapter.js';
 import type { GfxLike } from './draw-surface.js';
 
-export const MINIMAP_SCALE_X = HUD.MINIMAP.w / SURFACE_GRID_WIDTH; // 160 / 128 = 1.25
-export const MINIMAP_SCALE_Y = HUD.MINIMAP.h / SURFACE_GRID_HEIGHT; // 1.25
+// Exported for tests + external consumers. Derived from the default 800×592
+// layout's minimap rect so they stay byte-identical to the pre-#238 values
+// (160/128 = 1.25). Consumers inside this module derive the scale from the
+// passed `hud` instead so the minimap reflows with the layout.
+const DEFAULT_MINIMAP = buildHudLayout(DEFAULT_LAYOUT).MINIMAP;
+export const MINIMAP_SCALE_X = DEFAULT_MINIMAP.w / SURFACE_GRID_WIDTH; // 160 / 128 = 1.25
+export const MINIMAP_SCALE_Y = DEFAULT_MINIMAP.h / SURFACE_GRID_HEIGHT; // 1.25
 
 // Issue #76 — memorial marker color/size for fully-dead colonies (queen
 // dead AND no live entrances). Distinct dark gray (not a darkened
@@ -53,7 +59,19 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
-export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewState): void {
+export function drawMinimap(
+  gfx: GfxLike,
+  world: WorldState,
+  viewState: ViewState,
+  hud: HudLayout,
+): void {
+  // Scale + anchor derive from the passed layout's minimap rect so the minimap
+  // reflows on resize; at the default 800×592 layout these equal the exported
+  // MINIMAP_SCALE_X/Y (1.25) and the former HUD-table MINIMAP anchor.
+  const mm = hud.MINIMAP;
+  const sx = mm.w / SURFACE_GRID_WIDTH;
+  const sy = mm.h / SURFACE_GRID_HEIGHT;
+
   // Surface terrain (issue #40 reframe — barren-earth-default). Base layer
   // is the warm tan barren-earth color used by the surface render; a sparse
   // darker-earth dapple gives the minimap a textured "ant scale" feel
@@ -65,17 +83,17 @@ export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewStat
   // The intent is "you are looking at a faraway ground", not "every blade
   // of grass and pebble visible".
   gfx.fillStyle(COLOR_BARREN_EARTH, 1);
-  gfx.fillRect(HUD.MINIMAP.x, HUD.MINIMAP.y, HUD.MINIMAP.w, HUD.MINIMAP.h);
+  gfx.fillRect(mm.x, mm.y, mm.w, mm.h);
 
   const surface = world.surface;
   if (surface !== undefined) {
     // Sparse darker-earth dapple — ~12% of tiles, deterministic per (tx, ty).
     // Codex P2 fix from PR #41 review (which got squash-merged before this
     // commit landed): each dapple is a 1×1 pixel dot, NOT a `ceil(scale)+1`
-    // sized cell. With MINIMAP_SCALE_X = 1.25, drawing 3×3 cells caused
-    // each dapple to overlap ~2 neighboring cells, so 12% of tiles ended
-    // up covering ~50% of the minimap area — darkening the whole map and
-    // making colony / food markers harder to read.
+    // sized cell. With sx = 1.25, drawing 3×3 cells caused each dapple to
+    // overlap ~2 neighboring cells, so 12% of tiles ended up covering ~50%
+    // of the minimap area — darkening the whole map and making colony /
+    // food markers harder to read.
     gfx.fillStyle(COLOR_BARREN_EARTH_DARK, 0.7);
     const SALT_MINIMAP_DAPPLE = 901;
     for (let ty = 0; ty < surface.height; ty++) {
@@ -88,8 +106,8 @@ export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewStat
         if ((h & 0xff) >= 32) continue; // ~12% coverage
         // Floor to integer pixel for crisp rendering — avoids sub-pixel
         // sampling artifacts on Phaser's WebGL pipeline.
-        const px = (HUD.MINIMAP.x + tx * MINIMAP_SCALE_X) | 0;
-        const py = (HUD.MINIMAP.y + ty * MINIMAP_SCALE_Y) | 0;
+        const px = (mm.x + tx * sx) | 0;
+        const py = (mm.y + ty * sy) | 0;
         gfx.fillRect(px, py, 1, 1);
       }
     }
@@ -97,8 +115,8 @@ export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewStat
 
   // Food piles (2x2 pixels per pile)
   for (const pile of world.foodPiles) {
-    const px = HUD.MINIMAP.x + pile.tileX * MINIMAP_SCALE_X;
-    const py = HUD.MINIMAP.y + pile.tileY * MINIMAP_SCALE_Y;
+    const px = mm.x + pile.tileX * sx;
+    const py = mm.y + pile.tileY * sy;
     gfx.fillStyle(COLOR_FOOD_PILE_NORMAL, 1);
     gfx.fillRect(px - 1, py - 1, 2, 2);
   }
@@ -159,8 +177,8 @@ export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewStat
       halfOffset = 1;
     }
 
-    const px = HUD.MINIMAP.x + tileX * MINIMAP_SCALE_X;
-    const py = HUD.MINIMAP.y + tileY * MINIMAP_SCALE_Y;
+    const px = mm.x + tileX * sx;
+    const py = mm.y + tileY * sy;
     gfx.fillStyle(color, 1);
     gfx.fillRect(px - halfOffset, py - halfOffset, size, size);
   }
@@ -173,15 +191,15 @@ export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewStat
   // world window can exceed the world/minimap extent (e.g. at MIN_ZOOM the rect
   // is ~312px wide vs the 160px minimap, and a centered camera pushes its left
   // edge negative), so the unclamped outline would spill outside the 160×160 box
-  // onto neighboring HUD. Clamp each edge to [HUD.MINIMAP.x .. x+w] / [.y .. y+h].
-  const minX = HUD.MINIMAP.x;
-  const maxX = HUD.MINIMAP.x + HUD.MINIMAP.w;
-  const minY = HUD.MINIMAP.y;
-  const maxY = HUD.MINIMAP.y + HUD.MINIMAP.h;
-  const rx = clamp(HUD.MINIMAP.x + (rect.left / TILE_SIZE_PX) * MINIMAP_SCALE_X, minX, maxX);
-  const ry = clamp(HUD.MINIMAP.y + (rect.top / TILE_SIZE_PX) * MINIMAP_SCALE_Y, minY, maxY);
-  const rRight = clamp(HUD.MINIMAP.x + (rect.right / TILE_SIZE_PX) * MINIMAP_SCALE_X, minX, maxX);
-  const rBottom = clamp(HUD.MINIMAP.y + (rect.bottom / TILE_SIZE_PX) * MINIMAP_SCALE_Y, minY, maxY);
+  // onto neighboring HUD zones. Clamp each edge to [mm.x .. x+w] / [.y .. y+h].
+  const minX = mm.x;
+  const maxX = mm.x + mm.w;
+  const minY = mm.y;
+  const maxY = mm.y + mm.h;
+  const rx = clamp(mm.x + (rect.left / TILE_SIZE_PX) * sx, minX, maxX);
+  const ry = clamp(mm.y + (rect.top / TILE_SIZE_PX) * sy, minY, maxY);
+  const rRight = clamp(mm.x + (rect.right / TILE_SIZE_PX) * sx, minX, maxX);
+  const rBottom = clamp(mm.y + (rect.bottom / TILE_SIZE_PX) * sy, minY, maxY);
   const rw = rRight - rx;
   const rh = rBottom - ry;
 
@@ -196,17 +214,26 @@ export function drawMinimap(gfx: GfxLike, world: WorldState, viewState: ViewStat
 export function minimapClickToTile(
   px: number,
   py: number,
+  hud: HudLayout,
 ): { tileX: number; tileY: number } | null {
-  if (px < HUD.MINIMAP.x || px >= HUD.MINIMAP.x + HUD.MINIMAP.w) return null;
-  if (py < HUD.MINIMAP.y || py >= HUD.MINIMAP.y + HUD.MINIMAP.h) return null;
+  const mm = hud.MINIMAP;
+  const sx = mm.w / SURFACE_GRID_WIDTH;
+  const sy = mm.h / SURFACE_GRID_HEIGHT;
+  if (px < mm.x || px >= mm.x + mm.w) return null;
+  if (py < mm.y || py >= mm.y + mm.h) return null;
   return {
-    tileX: (px - HUD.MINIMAP.x) / MINIMAP_SCALE_X,
-    tileY: (py - HUD.MINIMAP.y) / MINIMAP_SCALE_Y,
+    tileX: (px - mm.x) / sx,
+    tileY: (py - mm.y) / sy,
   };
 }
 
-export function applyMinimapClick(viewState: ViewState, px: number, py: number): boolean {
-  const tile = minimapClickToTile(px, py);
+export function applyMinimapClick(
+  viewState: ViewState,
+  px: number,
+  py: number,
+  hud: HudLayout,
+): boolean {
+  const tile = minimapClickToTile(px, py, hud);
   if (!tile) return false;
   // Click tile (fractional) → world px. minimapNavTargets sets the SURFACE center to
   // the click and X-links the underground center while PRESERVING its depth (PLAN

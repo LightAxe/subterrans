@@ -6,7 +6,7 @@
 // versa):
 //   - UIScene.renderHintStrip() gates ONLY the static legend on it (the paused-
 //     queue-full warning + caption-yield stay visible regardless — Codex R1#3).
-//   - isPointerOverHUD() drops HUD.HINTS from the world-input mask when the
+//   - isPointerOverHUD() drops hud.HINTS from the world-input mask when the
 //     legend is hidden, so a hidden strip leaves no dead input zone (Codex R1#2).
 //
 // Authoritative in-memory truth (like ViewState.showPheromoneOverlay): the
