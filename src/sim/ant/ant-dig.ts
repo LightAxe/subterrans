@@ -66,9 +66,8 @@ export function tickSearchLeash(world: WorldState): void {
 
     // Shared forager-backpressure gate — kept in lockstep with the #126 step-10a
     // idle-promotion suppression (colony-system.ts) so a forager is never
-    // re-promoted into a state this leash would immediately demote. V27 scopes
-    // it to colonies that own a FoodStorage chamber (the mature-colony pile-up);
-    // pre-V27 keeps the chamberless-inclusive at-cap demotion for replay.
+    // re-promoted into a state this leash would immediately demote. Scoped to
+    // colonies that own a FoodStorage chamber (the mature-colony pile-up of #126).
     forageBackpressure[colony.colonyId] = colonyForageBackpressure(colony);
   }
 
