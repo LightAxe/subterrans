@@ -382,6 +382,9 @@ export class GameScene extends Phaser.Scene {
   // #234 — guards against overlapping fire-and-forget autosave writes (the async
   // storage set can outlast the 30s interval); scene.update never awaits.
   private autosaveInFlight: boolean = false;
+  // #234 PR2 — at-most-once-per-session guard for the autosave-failure caption.
+  // Reset in resetSessionState so a fresh session can warn again.
+  private autosaveFailureNotified: boolean = false;
   private resumedFromSave: boolean = false;
   private currentSeed: number = 0;
   // Issue #114 UAT — Settings sub-screen has a "Speed: N×" cycle row that
@@ -1006,6 +1009,9 @@ export class GameScene extends Phaser.Scene {
     // bootFromSave's deserialize-throw catch (see issue #66 in the field
     // doc); a fresh start via restartGame should resume normal autosave.
     this.autosaveSuspended = false;
+    // #234 PR2 — re-arm the autosave-failure caption for the new session so a
+    // fresh game whose storage is still full warns again (once).
+    this.autosaveFailureNotified = false;
     this.resumedFromSave = false;
     // tick.ts owns entrance/dig/chamber flow-field scratch per-world (issue
     // #160): each WorldState gets its own caches, so bootFresh/bootFromSave
@@ -2137,7 +2143,14 @@ export class GameScene extends Phaser.Scene {
       // 30s writes; tickAutosave keeps its own interval gate, so a not-due call
       // resolves immediately and just clears the guard the same microtask.
       this.autosaveInFlight = true;
-      void tickAutosave(this.currentSeed, this.inputLog, this.world, this.lastAutosaveMs, time)
+      void tickAutosave(
+        this.currentSeed,
+        this.inputLog,
+        this.world,
+        this.lastAutosaveMs,
+        time,
+        () => this.notifyAutosaveFailed(),
+      )
         .then((next) => {
           this.lastAutosaveMs = next;
         })
@@ -2145,6 +2158,19 @@ export class GameScene extends Phaser.Scene {
           this.autosaveInFlight = false;
         });
     }
+  }
+
+  /**
+   * #234 PR2 — surface an autosave-persist failure to the player, once per
+   * session. tickAutosave calls this from its catch when the storage write
+   * throws (quota / private-mode / blocked storage). The guard flag is reset in
+   * resetSessionState so a fresh session whose storage is still full warns again.
+   */
+  private notifyAutosaveFailed(): void {
+    if (this.autosaveFailureNotified) return;
+    this.autosaveFailureNotified = true;
+    const ui = this.scene.get('UIScene') as unknown as UIScenePhase9;
+    ui.showCaption('Autosave failed — storage full or blocked', CANVAS_W / 2, 60);
   }
 
   /**
