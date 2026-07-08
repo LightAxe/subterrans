@@ -2414,6 +2414,44 @@ describe('#234 StorageDriver seam', () => {
     await expect(tickAutosave(42, [], world, 0, nowMs)).resolves.toBe(nowMs);
   });
 
+  it('#234 PR2: tickAutosave invokes onPersistFailure on a due failed write, honoring the cooldown', async () => {
+    class RejectingSetDriver implements StorageDriver {
+      get(): Promise<string | null> {
+        return Promise.resolve(null);
+      }
+      set(): Promise<void> {
+        return Promise.reject(new Error('quota'));
+      }
+      remove(): Promise<void> {
+        return Promise.resolve();
+      }
+    }
+    setStorageDriver(new RejectingSetDriver());
+    const world = createScenario(42);
+    const onFail = vi.fn();
+
+    // Due tick (interval elapsed) → write fails → onPersistFailure fires once;
+    // the #80 cooldown advances lastSaveMs to nowMs.
+    let last = await tickAutosave(42, [], world, 0, AUTOSAVE_INTERVAL_MS + 1, onFail);
+    expect(onFail).toHaveBeenCalledTimes(1);
+    expect(last).toBe(AUTOSAVE_INTERVAL_MS + 1);
+
+    // A follow-up tick within the interval is NOT due → no write, no callback.
+    last = await tickAutosave(42, [], world, last, last + 10, onFail);
+    expect(onFail).toHaveBeenCalledTimes(1);
+
+    // The next DUE tick fails again → fires again (once per due failure, not per frame).
+    await tickAutosave(42, [], world, last, last + AUTOSAVE_INTERVAL_MS + 1, onFail);
+    expect(onFail).toHaveBeenCalledTimes(2);
+
+    // A SUCCESSFUL due write must NOT invoke onPersistFailure (guards against the
+    // callback drifting to fire on the success path too).
+    setStorageDriver(new LocalStorageDriver());
+    const onOk = vi.fn();
+    await tickAutosave(42, [], world, 0, AUTOSAVE_INTERVAL_MS + 1, onOk);
+    expect(onOk).toHaveBeenCalledTimes(0);
+  });
+
   it('hasSave + loadSave resolve to the empty-state values when the driver.get rejects (no throw)', async () => {
     class RejectingGetDriver implements StorageDriver {
       get(): Promise<string | null> {

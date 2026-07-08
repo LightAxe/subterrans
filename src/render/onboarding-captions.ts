@@ -17,7 +17,8 @@ export type CaptionKey =
   | 'aiInvading'
   | 'spiderRampage'
   | 'queenDamage'
-  | 'queenStarvation';
+  | 'queenStarvation'
+  | 'autosaveFailed';
 
 const CAPTION_TEXTS: Record<CaptionKey, string> = {
   dig: 'Your workers will excavate the marked tile.',
@@ -30,6 +31,7 @@ const CAPTION_TEXTS: Record<CaptionKey, string> = {
   spiderRampage: 'The spider has gone hungry and is hunting on the surface.',
   queenDamage: 'Your queen is in danger.',
   queenStarvation: 'Your queen is growing hungry.',
+  autosaveFailed: 'Autosave failed — storage full or blocked.',
 };
 
 // Exported so game-scene.ts can reset on round start.

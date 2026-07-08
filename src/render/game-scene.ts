@@ -2137,7 +2137,14 @@ export class GameScene extends Phaser.Scene {
       // 30s writes; tickAutosave keeps its own interval gate, so a not-due call
       // resolves immediately and just clears the guard the same microtask.
       this.autosaveInFlight = true;
-      void tickAutosave(this.currentSeed, this.inputLog, this.world, this.lastAutosaveMs, time)
+      void tickAutosave(
+        this.currentSeed,
+        this.inputLog,
+        this.world,
+        this.lastAutosaveMs,
+        time,
+        () => this.notifyAutosaveFailed(),
+      )
         .then((next) => {
           this.lastAutosaveMs = next;
         })
@@ -2145,6 +2152,26 @@ export class GameScene extends Phaser.Scene {
           this.autosaveInFlight = false;
         });
     }
+  }
+
+  /**
+   * #234 PR2 — surface an autosave-persist failure to the player, once per
+   * session. tickAutosave calls this from its catch when the storage write
+   * throws (quota / private-mode / blocked storage).
+   *
+   * Routed through the one-shot caption registry (checkAndTrigger + the
+   * 'autosaveFailed' key) rather than a bespoke boolean: checkAndTrigger gates
+   * once-per-session, resetCaptions() (in resetSessionState) re-arms it per
+   * session, and — crucially — passing the key lets UIScene's untrigger re-fire
+   * the caption if the bounded caption queue DROPS it under overflow, so a real
+   * failure is never silently swallowed (a keyless caption + a latched boolean
+   * would be: the flag stays set even though nothing displayed).
+   */
+  private notifyAutosaveFailed(): void {
+    const text = checkAndTrigger('autosaveFailed');
+    if (text === null) return;
+    const ui = this.scene.get('UIScene') as unknown as UIScenePhase9;
+    ui.showCaption(text, CANVAS_W / 2, 60, 'autosaveFailed');
   }
 
   /**

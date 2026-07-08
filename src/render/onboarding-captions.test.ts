@@ -33,6 +33,7 @@ describe('checkAndTrigger — first occurrence', () => {
       'spiderRampage',
       'queenDamage',
       'queenStarvation',
+      'autosaveFailed',
     ] as const;
     for (const key of keys) {
       resetCaptions();
@@ -54,6 +55,10 @@ describe('checkAndTrigger — first occurrence', () => {
 
   it('returns the expected text for "queenDamage"', () => {
     expect(checkAndTrigger('queenDamage')).toBe('Your queen is in danger.');
+  });
+
+  it('returns the expected text for "autosaveFailed" (#234 PR2)', () => {
+    expect(checkAndTrigger('autosaveFailed')).toBe('Autosave failed — storage full or blocked.');
   });
 });
 

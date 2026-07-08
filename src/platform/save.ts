@@ -2023,6 +2023,7 @@ export async function tickAutosave(
   world: WorldState,
   lastSaveMs: number,
   nowMs: number,
+  onPersistFailure?: () => void,
 ): Promise<number> {
   if (nowMs - lastSaveMs < AUTOSAVE_INTERVAL_MS) return lastSaveMs;
   try {
@@ -2030,7 +2031,11 @@ export async function tickAutosave(
     await getStorageDriver().set(SAVE_KEY, JSON.stringify(envelope));
     return nowMs;
   } catch {
-    // Honor the cooldown on failure too — see #80 above.
+    // #234 PR2 — notify the caller a persist failed (quota / private-mode /
+    // blocked storage) so it can surface a one-time UX signal; without this the
+    // player silently stops being saved. The #80 cooldown is still honored
+    // (advance to nowMs), so this fires at most once per AUTOSAVE_INTERVAL_MS.
+    onPersistFailure?.();
     return nowMs;
   }
 }
