@@ -1082,6 +1082,11 @@ function validateAntColumns(saved: SerializedAnts, capacity: number): void {
     v === -1 || (Number.isInteger(v) && v >= 0 && v < SURFACE_GRID_WIDTH);
   const idSentinel = (v: number): boolean =>
     v === -1 || (Number.isInteger(v) && v >= 0 && v < capacity);
+  // combatOpponentId additionally uses -2 as a sticky "paired with the spider"
+  // sentinel (combat.ts) — set-if-not-already and read across ticks, so a save
+  // taken mid-spider-fight legitimately carries it. Widen ID_SENTINEL for this
+  // one column so it is not falsely rejected.
+  const combatOppSentinel = (v: number): boolean => v === -2 || idSentinel(v);
   const byte = (v: number): boolean => Number.isInteger(v) && v >= 0 && v < 256;
   const enumMax =
     (max: number) =>
@@ -1124,7 +1129,7 @@ function validateAntColumns(saved: SerializedAnts, capacity: number): void {
     ['hp', saved.hp, finiteInt],
     ['homeGroundBonusHp', saved.homeGroundBonusHp, finiteInt],
     ['attackCooldown', saved.attackCooldown, finiteInt],
-    ['combatOpponentId', saved.combatOpponentId, idSentinel],
+    ['combatOpponentId', saved.combatOpponentId, combatOppSentinel],
   ];
 
   for (const [name, col, rule] of columns) {

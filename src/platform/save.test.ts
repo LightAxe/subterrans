@@ -233,6 +233,17 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(() => deserializeWorldState(s)).not.toThrow();
       expect(deserializeWorldState(s).ants.hp[1]).toBe(-37);
     });
+
+    it('does NOT reject a valid save mid-spider-fight (combatOpponentId = -2 sentinel)', () => {
+      const w = createScenario(42);
+      // -2 is the sticky "paired with the spider" combat sentinel (combat.ts):
+      // set-if-not-already and read across ticks, so a save taken while an ant
+      // is engaging the spider legitimately carries it. ID_SENTINEL must allow it.
+      w.ants.combatOpponentId[1] = -2;
+      const s = serializeWorldState(w);
+      expect(() => deserializeWorldState(s)).not.toThrow();
+      expect(deserializeWorldState(s).ants.combatOpponentId[1]).toBe(-2);
+    });
   });
 
   describe('deserializeWorldState — round-trip', () => {
