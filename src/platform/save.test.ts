@@ -2443,6 +2443,13 @@ describe('#234 StorageDriver seam', () => {
     // The next DUE tick fails again → fires again (once per due failure, not per frame).
     await tickAutosave(42, [], world, last, last + AUTOSAVE_INTERVAL_MS + 1, onFail);
     expect(onFail).toHaveBeenCalledTimes(2);
+
+    // A SUCCESSFUL due write must NOT invoke onPersistFailure (guards against the
+    // callback drifting to fire on the success path too).
+    setStorageDriver(new LocalStorageDriver());
+    const onOk = vi.fn();
+    await tickAutosave(42, [], world, 0, AUTOSAVE_INTERVAL_MS + 1, onOk);
+    expect(onOk).toHaveBeenCalledTimes(0);
   });
 
   it('hasSave + loadSave resolve to the empty-state values when the driver.get rejects (no throw)', async () => {
