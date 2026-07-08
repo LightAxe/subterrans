@@ -1,12 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import {
-  allocateEntityId,
-  INVALID_ENTITY_ID,
-  SIM_VERSION_V24_NURSERY_CAPACITY,
-  SIM_VERSION_V27_FORAGE_BACKPRESSURE,
-  SIM_VERSION_V32_AI_OP_VALIDATION,
-} from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V32_AI_OP_VALIDATION } from './types.js';
 import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
@@ -89,7 +83,6 @@ import {
   createChamberFlowFields,
   FOOD_CHAMBER_TYPES,
   NURSING_CHAMBER_TYPES,
-  NURSERY_CHAMBER_TYPES,
   QUEEN_CHAMBER_TYPES,
 } from './chamber-flow.js';
 import type { ChamberFlowFields } from './chamber-flow.js';
@@ -1059,21 +1052,9 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
         chamberBufs.queen,
         chamberBufs.queue,
       );
-      // Issue #17 Phase 1 — Nursery-only deposit field for v10+ carrying nurses.
-      // Pre-v10 the field is allocated but unread; computed alongside the other
-      // chamber fields for code symmetry — no measurable cost.
-      // Issue #173 (V24+): the capacity-aware deposit field is rebuilt every tick
-      // in the loop below; here we compute only the legacy nearest-seed field for
-      // pre-V24 byte-identical replay.
-      if (world.simVersion < SIM_VERSION_V24_NURSERY_CAPACITY) {
-        computeChamberFlowField(
-          underground,
-          colony.chambers,
-          NURSERY_CHAMBER_TYPES,
-          chamberBufs.nurseDeposit,
-          chamberBufs.queue,
-        );
-      }
+      // #247 — the pre-V24 legacy nearest-seed nurseDeposit compute (a
+      // `simVersion < V24` block) was reaped: unreachable under MIN=V30. The V24+
+      // capacity-aware deposit field is rebuilt every tick in the second loop below.
     }
 
     colony.digFlowFieldDirty = false;
@@ -1123,19 +1104,17 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // tick like the pickup field above (a Nursery's fill level changes as
     // carriers deposit). A full Nursery drops out of the preferred seed set so
     // carriers route to a non-full one; the two-pass fallback keeps every
-    // reachable carrier routed to SOME Nursery. Pre-V24 uses the dirty-gated
-    // nearest-seed field above.
-    if (world.simVersion >= SIM_VERSION_V24_NURSERY_CAPACITY) {
-      computeNurseryDepositField(
-        underground,
-        colony.chambers,
-        world.ants,
-        colony.eggs,
-        colony.larvae,
-        chamberBufs.nurseDeposit,
-        chamberBufs.queue,
-      );
-    }
+    // reachable carrier routed to SOME Nursery.
+    // #247 — V24 capacity-aware deposit field is unconditional (MIN=V30).
+    computeNurseryDepositField(
+      underground,
+      colony.chambers,
+      world.ants,
+      colony.eggs,
+      colony.larvae,
+      chamberBufs.nurseDeposit,
+      chamberBufs.queue,
+    );
     colony.broodFieldDirty = false; // #235 — consumed; the second loop is the sole clearer
   }
 
@@ -1336,11 +1315,8 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // renderer/HUD/autosave still read the canonical allocation and forage
     // promotion resumes once a chamber frees or the queen drains the pool. Pre-V27
     // saves keep the churn for byte-identical replay.
-    if (
-      world.simVersion >= SIM_VERSION_V27_FORAGE_BACKPRESSURE &&
-      needForage > 0 &&
-      colonyForageBackpressure(colony, world.simVersion)
-    ) {
+    // #247 — V27 forage-backpressure unconditional (MIN=V30)
+    if (needForage > 0 && colonyForageBackpressure(colony, world.simVersion)) {
       needForage = 0;
     }
 

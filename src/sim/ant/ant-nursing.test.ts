@@ -8,7 +8,6 @@ import {
   allocateEntityId,
   SIM_VERSION_V9_CANCEL_DROPS_PENDING,
   SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
-  SIM_VERSION_V23_SPIDER_AGGRO,
   SIM_VERSION_V24_NURSERY_CAPACITY,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
@@ -1533,13 +1532,9 @@ describe('Nursery brood deposit — capacity-aware spread, real pipeline (#173, 
     expect(inB).toBeLessThanOrEqual(12);
   });
 
-  it('V23 control: the same 13 carriers funnel into the nearest Nursery A; B stays empty (old behavior preserved)', () => {
-    const { world, colony, underground, A, B } = mkWorld(SIM_VERSION_V23_SPIDER_AGGRO);
-    const driver = makeDriver(world, colony, underground);
-    for (let n = 0; n < 13; n++) driver.carryOne(400);
-    expect(broodCountIn(world, colony, A)).toBe(13); // all funneled to nearest (stacked)
-    expect(broodCountIn(world, colony, B)).toBe(0); // far Nursery never used
-  });
+  // #247 — "V23 control: carriers funnel into nearest Nursery (pre-V24 modulo)"
+  // pinning test removed: V23 unloadable under MIN=V30; the pre-V24 modulo-slot
+  // branch it exercised was reaped (occupancy-aware placement is unconditional).
 
   it('V24 saturation: when EVERY Nursery is full, a carrier overflow-deposits (stacks) rather than piling up forever', () => {
     // When no Nursery has free capacity anywhere, deferring forever would pile up

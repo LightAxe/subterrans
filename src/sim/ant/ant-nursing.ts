@@ -9,7 +9,7 @@ import { NURSE_ATTEND_DWELL_TICKS } from '../constants.js';
 import { AntTask, ChamberType, NursingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import { UndergroundTileState, Zone, type UndergroundGrid, ugGet } from '../terrain.js';
-import { SIM_VERSION_V24_NURSERY_CAPACITY, type WorldState } from '../types.js';
+import type { WorldState } from '../types.js';
 import { isInsideQueenChamber } from './ant-motion.js';
 import { isBroodReclaimable, type AntComponents } from './ant-store.js';
 
@@ -88,10 +88,12 @@ export function tickNurseActions(world: WorldState, chamberFlowFields?: ChamberF
       // non-full Nursery, or — when none is reachable — the fallback Nursery).
       // A carrier merely TRANSITING a full Nursery toward a non-full one sits on
       // a step tile (0..3), so it keeps moving instead of overflowing the full
-      // Nursery. Pre-V24 — or when no field is supplied (unit tests that drive
-      // tickNurseActions directly) — keeps the original isInsideNursery deposit.
+      // Nursery. When no field is supplied (unit tests that drive tickNurseActions
+      // directly) the else keeps the original isInsideNursery deposit.
       let shouldDeposit: boolean;
-      if (world.simVersion >= SIM_VERSION_V24_NURSERY_CAPACITY && chamberFlowFields !== undefined) {
+      // #247 — V24 gate reaped (MIN=V30); the else still handles the no-field case
+      // (unit tests that drive tickNurseActions without chamberFlowFields).
+      if (chamberFlowFields !== undefined) {
         const field = chamberFlowFields.nurseDeposit[colonyId];
         const underground = world.undergroundGrids[colonyId];
         shouldDeposit =
@@ -310,8 +312,8 @@ function findUncarriedBroodOnTile(
 }
 
 /**
- * Compute a deposit position within a single Nursery `chamber`, spread
- * across its Open tiles by `broodId % openCount` in row-major order.
+ * Compute a deposit position within a single Nursery `chamber`: the first
+ * UNOCCUPIED Open tile in row-major order (occupancy per `tileHasResidentBrood`).
  * Returns `null` if no underground grid or no Open tile exists in that chamber.
  *
  * Used by `depositCarriedBrood` (v10+) to keep brood in the specific chamber
@@ -346,30 +348,17 @@ function computeDepositPositionInChamber(
   // caller keeps the brood at the carrier's current tile, preserving the
   // one-per-tile invariant (the brood is re-deposited on a later tick once a
   // tile frees up).
-  if (world.simVersion >= SIM_VERSION_V24_NURSERY_CAPACITY) {
-    for (let ty = 0; ty < chamber.height; ty++) {
-      for (let tx = 0; tx < chamber.width; tx++) {
-        const cx = bx + tx;
-        const cy = by + ty;
-        if (ugGet(underground, cx, cy) !== UndergroundTileState.Open) continue;
-        if (tileHasResidentBrood(world, colony, broodId, cx, cy)) continue;
-        return { x: (cx << FP_SHIFT) + (FP_ONE >> 1), y: (cy << FP_SHIFT) + (FP_ONE >> 1) };
-      }
-    }
-    return null;
-  }
-
-  const targetIndex = broodId % openCount;
-  let cursor = 0;
+  // #247 — V24 occupancy-aware placement is unconditional (MIN=V30). The legacy
+  // `broodId % openCount` modulo-slot fallback that followed was dead (this block
+  // always returns a tile or null) and is reaped. (openCount is still read by the
+  // openCount===0 early-return guard above.)
   for (let ty = 0; ty < chamber.height; ty++) {
     for (let tx = 0; tx < chamber.width; tx++) {
       const cx = bx + tx;
       const cy = by + ty;
       if (ugGet(underground, cx, cy) !== UndergroundTileState.Open) continue;
-      if (cursor === targetIndex) {
-        return { x: (cx << FP_SHIFT) + (FP_ONE >> 1), y: (cy << FP_SHIFT) + (FP_ONE >> 1) };
-      }
-      cursor++;
+      if (tileHasResidentBrood(world, colony, broodId, cx, cy)) continue;
+      return { x: (cx << FP_SHIFT) + (FP_ONE >> 1), y: (cy << FP_SHIFT) + (FP_ONE >> 1) };
     }
   }
   return null;
@@ -525,7 +514,8 @@ function depositCarriedBrood(
   //     sustained saturation (e.g. a colony with a single Nursery and continuous
   //     egg-laying) deferring forever would pile up carriers and starve brood
   //     transport. Falls through to the carrier-tile drop below.
-  if (pos === null && world.simVersion >= SIM_VERSION_V24_NURSERY_CAPACITY) {
+  if (pos === null) {
+    // #247 — V24 gate reaped (MIN=V30)
     const underground = world.undergroundGrids[colony.colonyId];
     // Issue #173 (V24+): only DEFER if a non-full Nursery is reachable from the
     // carrier's CURRENT tile over the walkable graph. A non-full Nursery that
