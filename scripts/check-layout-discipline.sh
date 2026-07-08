@@ -44,25 +44,29 @@ if [[ -n "$NUM_HITS" ]]; then
 fi
 echo "layout-discipline bare-800/592 guard: clean."
 
-# --- Check 2: no CANVAS_W/CANVAS_H import outside the authority files -------
+# --- Check 2: no CANVAS_W/CANVAS_H USE outside the authority files ----------
+# Match any CANVAS_W/CANVAS_H *reference*, not just a single-line `import …`
+# statement (CodeRabbit #269): a multiline named-import member or a
+# `sprites.CANVAS_W` namespace access would evade an import-only pattern while
+# still coupling render/input geometry to the fixed canvas size.
 # File allowlist: sprites.ts (defines them), layout.ts (the default-context
 # seam), camera-adapter.ts (the screen↔world authority — AGENTS.md §"Layout
 # discipline" sanctions its canvas-size dependency), camera.ts (owns the
 # underground initial-center-Y = CANVAS_H/2 dependency; a candidate for a future
 # adapter-owned move, out of #238 PR2–5 scope), and src/main.ts (Phaser config).
-IMPORT_HITS=$( { grep -rnE 'import.*CANVAS_[WH]' "${SCOPE[@]}" --include='*.ts' --exclude='*.test.ts' || true; } \
+USE_HITS=$( { grep -rnE '\bCANVAS_[WH]\b' "${SCOPE[@]}" --include='*.ts' --exclude='*.test.ts' || true; } \
   | grep -vE "$COMMENT_FILTER" \
   | grep -vE '/(sprites|layout|camera-adapter|camera|main)\.ts:' \
   || true )
 
-if [[ -n "$IMPORT_HITS" ]]; then
-  echo "Layout discipline (#238): CANVAS_W/CANVAS_H imported outside the authority files:"
-  echo "$IMPORT_HITS"
+if [[ -n "$USE_HITS" ]]; then
+  echo "Layout discipline (#238): CANVAS_W/CANVAS_H used outside the authority files:"
+  echo "$USE_HITS"
   echo ""
-  echo "Only sprites.ts / layout.ts / camera-adapter.ts / camera.ts / main.ts may import"
+  echo "Only sprites.ts / layout.ts / camera-adapter.ts / camera.ts / main.ts may reference"
   echo "CANVAS_W/CANVAS_H. Elsewhere, take a LayoutContext and derive from layout.w / layout.h."
   exit 1
 fi
-echo "layout-discipline CANVAS-import guard: clean."
+echo "layout-discipline CANVAS-use guard: clean."
 
 echo "Layout-discipline guard: clean."
