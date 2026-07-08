@@ -18,7 +18,9 @@
 //            manual screen offsets in the draw modules, and do NOT setScrollFactor(0) on
 //            world objects (that cancels scroll but NOT zoom — see screen-effects).
 // Pitfall 2: Keyboard registration is GameScene-only — UIScene must NOT call createCursorKeys().
-// Pitfall 3: scale.mode = NONE, fixed 800x592 — no DPR scaling.
+// Pitfall 3: logical resolution is fixed at CANVAS_W×CANVAS_H; Phaser.Scale.FIT (see
+//            main.ts scale config) scales only the canvas's CSS box to fit the parent
+//            while preserving aspect ratio, so game pixels are never DPR-distorted.
 // Pitfall 4: NEVER use .keys()/.entries()/.get() on world.colonies — it is a PLAIN OBJECT (ADR-0006).
 // Pitfall 5: No setMsPerTick(Infinity) for pause — use gameLoop.pause()/resume() (Plan 06 Task 1).
 // Pitfall 6: Pause is opened via Esc (issue #116) and routed through the UIScene pause-menu
@@ -76,6 +78,7 @@ import {
   clampCameraView,
   screenToTileZoom,
   resolveDotMode,
+  setViewportSize,
 } from './camera-adapter.js';
 import { CameraController, WHEEL_ZOOM_STEP, WHEEL_NOTCH_PX } from './camera-controller.js';
 import {
@@ -194,7 +197,6 @@ import {
   type FlashDirection,
 } from './screen-effects.js';
 import { ChamberType } from '../sim/enums.js';
-import { CANVAS_W, CANVAS_H } from './sprites.js';
 import { DEFAULT_LAYOUT } from './layout.js';
 import { buildHudLayout } from './hud-layout.js';
 // UIScenePhase9 — subset of UIScene public API added in Plan 06 Task 3.
@@ -547,6 +549,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   create() {
+    // #238 PR3 — publish this scene's logical canvas size to the camera-adapter
+    // projection before any camera/projection math runs this frame. Byte-identical
+    // to CANVAS_W×CANVAS_H today; both scenes set it at boot (idempotent).
+    setViewportSize(this.layout.w, this.layout.h);
     this.viewState = createViewState(PLAYER_START_X, PLAYER_START_Y);
     this.gfx = this.add.graphics();
     this.overlayGfx = this.add.graphics();
@@ -1122,7 +1128,7 @@ export class GameScene extends Phaser.Scene {
         if (captionText && uiScene) {
           uiScene.showCaption(
             captionText,
-            CANVAS_W / 2,
+            this.layout.w / 2,
             60,
             oneShotKeyForEvent(ev.type) ?? undefined,
           );
@@ -1136,7 +1142,7 @@ export class GameScene extends Phaser.Scene {
         // mentions tunnels. No one-shot key — recurring captions never dedup.
         const captionText = captionForEvent(ev.type);
         if (captionText && uiScene) {
-          uiScene.showCaption(captionText, CANVAS_W / 2, 60);
+          uiScene.showCaption(captionText, this.layout.w / 2, 60);
         }
       }
 
@@ -1149,7 +1155,7 @@ export class GameScene extends Phaser.Scene {
         const captionText = checkAndTrigger('aiInvading');
         if (captionText) {
           uiScene?.triggerScreenEdgeFlash('right');
-          if (uiScene) uiScene.showCaption(captionText, CANVAS_W / 2, 60, 'aiInvading');
+          if (uiScene) uiScene.showCaption(captionText, this.layout.w / 2, 60, 'aiInvading');
         }
       }
     }
@@ -1182,7 +1188,7 @@ export class GameScene extends Phaser.Scene {
       // Caption #9: first queen damage.
       const captionText = checkAndTrigger('queenDamage');
       if (captionText && uiScene) {
-        uiScene.showCaption(captionText, CANVAS_W / 2, CANVAS_H / 2 - 40, 'queenDamage');
+        uiScene.showCaption(captionText, this.layout.w / 2, this.layout.h / 2 - 40, 'queenDamage');
       }
     }
     this.prevQueenCombinedHp = combinedHp;
@@ -1200,7 +1206,12 @@ export class GameScene extends Phaser.Scene {
       // Caption #10: queen starvation onset.
       const captionText = checkAndTrigger('queenStarvation');
       if (captionText && uiScene) {
-        uiScene.showCaption(captionText, CANVAS_W / 2, CANVAS_H / 2 - 40, 'queenStarvation');
+        uiScene.showCaption(
+          captionText,
+          this.layout.w / 2,
+          this.layout.h / 2 - 40,
+          'queenStarvation',
+        );
       }
     }
 
@@ -1211,13 +1222,13 @@ export class GameScene extends Phaser.Scene {
     if (spiderState === 'Hunting' || spiderState === 'Striking') {
       const captionText = checkAndTrigger('spider');
       if (captionText && uiScene) {
-        uiScene.showCaption(captionText, CANVAS_W / 2, 60, 'spider');
+        uiScene.showCaption(captionText, this.layout.w / 2, 60, 'spider');
       }
     }
     if (this.world.spiderPriorityColonyId !== null) {
       const captionText = checkAndTrigger('spiderPriority');
       if (captionText && uiScene) {
-        uiScene.showCaption(captionText, CANVAS_W / 2, 60, 'spiderPriority');
+        uiScene.showCaption(captionText, this.layout.w / 2, 60, 'spiderPriority');
       }
     }
   }
@@ -1374,7 +1385,8 @@ export class GameScene extends Phaser.Scene {
           if ('colonyId' in cmd && cmd.colonyId !== PLAYER_COLONY_ID) continue;
           if (cmd.type === 'MarkDigTile') {
             const text = checkAndTrigger('dig');
-            if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80, 'dig');
+            if (text && uiScene)
+              uiScene.showCaption(text, this.layout.w / 2, this.layout.h - 80, 'dig');
           } else if (cmd.type === 'PlaceChamber') {
             const chamberTypeLabel: Record<number, string> = {
               [ChamberType.Queen]: 'Queen',
@@ -1384,13 +1396,16 @@ export class GameScene extends Phaser.Scene {
             const chamberTypeName =
               chamberTypeLabel[cmd.chamberType] ?? `chamber type ${cmd.chamberType}`;
             const text = checkAndTrigger('chamber', chamberTypeName);
-            if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80, 'chamber');
+            if (text && uiScene)
+              uiScene.showCaption(text, this.layout.w / 2, this.layout.h - 80, 'chamber');
           } else if (cmd.type === 'MarkFoodPile') {
             const text = checkAndTrigger('foodMark');
-            if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80, 'foodMark');
+            if (text && uiScene)
+              uiScene.showCaption(text, this.layout.w / 2, this.layout.h - 80, 'foodMark');
           } else if (cmd.type === 'SetRallyPoint') {
             const text = checkAndTrigger('rally');
-            if (text && uiScene) uiScene.showCaption(text, CANVAS_W / 2, CANVAS_H - 80, 'rally');
+            if (text && uiScene)
+              uiScene.showCaption(text, this.layout.w / 2, this.layout.h - 80, 'rally');
           }
         }
       },
@@ -2180,7 +2195,7 @@ export class GameScene extends Phaser.Scene {
     const text = checkAndTrigger('autosaveFailed');
     if (text === null) return;
     const ui = this.scene.get('UIScene') as unknown as UIScenePhase9;
-    ui.showCaption(text, CANVAS_W / 2, 60, 'autosaveFailed');
+    ui.showCaption(text, this.layout.w / 2, 60, 'autosaveFailed');
   }
 
   /**

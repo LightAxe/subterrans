@@ -9,7 +9,7 @@
 //   - per-view settle (lerp cancel + clamp) and minimap-nav (underground preserves depth)
 //   - LOD hysteresis (0.55 / 0.65, band holds prior mode)
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { CANVAS_W, CANVAS_H, TILE_SIZE_PX } from './sprites.js';
 import {
   MIN_ZOOM,
@@ -22,6 +22,7 @@ import {
   makeCameraView,
   viewWorldWidth,
   viewWorldHeight,
+  setViewportSize,
   visibleWorldRect,
   screenToWorld,
   worldToScreen,
@@ -103,6 +104,49 @@ describe('screenToWorld / worldToScreen', () => {
     const a = screenToWorld(0, 0, v).worldX;
     const b = screenToWorld(1, 0, v).worldX;
     expect(b - a).toBeCloseTo(1 / 0.5, 9); // 2 world px per screen px at 0.5×
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setViewportSize — #238 PR3 module setter. A non-default logical canvas size
+// drives the projection (the mobile/responsive seam), NOT the fixed CANVAS_W/H.
+// Reset to CANVAS_W×CANVAS_H after each case so the rest of the suite keeps the
+// default viewport (the module state is a singleton).
+// ---------------------------------------------------------------------------
+
+describe('setViewportSize (#238 PR3 — non-default viewport)', () => {
+  afterEach(() => setViewportSize(CANVAS_W, CANVAS_H));
+
+  it('viewWorldWidth/Height are computed against the set size, not CANVAS_W/H', () => {
+    setViewportSize(360, 640);
+    expect(viewWorldWidth(1)).toBe(360);
+    expect(viewWorldHeight(1)).toBe(640);
+    expect(viewWorldWidth(0.5)).toBe(720); // 360 / 0.5 — still ÷zoom
+  });
+
+  it('the screen center of the new viewport maps to the camera center', () => {
+    setViewportSize(360, 640);
+    const v = view(1000, 500, 1);
+    const { worldX, worldY } = screenToWorld(180, 320, v); // (360/2, 640/2)
+    expect(worldX).toBeCloseTo(1000, 6);
+    expect(worldY).toBeCloseTo(500, 6);
+    const { screenX, screenY } = worldToScreen(1000, 500, v);
+    expect(screenX).toBeCloseTo(180, 6);
+    expect(screenY).toBeCloseTo(320, 6);
+  });
+
+  it('a screen corner projects using the new size (not the 800×592 default)', () => {
+    setViewportSize(360, 640);
+    const v = view(1000, 500, 1);
+    // top-left (0,0) → centerX − viewportW/2 = 1000 − 180 = 820 (would be 600 at 800w).
+    expect(screenToWorld(0, 0, v).worldX).toBeCloseTo(820, 6);
+    expect(screenToWorld(0, 0, v).worldY).toBeCloseTo(180, 6); // 500 − 640/2
+  });
+
+  it('afterEach restores the default CANVAS_W×CANVAS_H projection', () => {
+    // No setViewportSize here — the prior case's afterEach has reset it.
+    expect(viewWorldWidth(1)).toBe(CANVAS_W);
+    expect(viewWorldHeight(1)).toBe(CANVAS_H);
   });
 });
 

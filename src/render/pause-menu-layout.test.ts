@@ -9,6 +9,7 @@ import {
   PAUSE_MENU_BUTTON_GAP,
   type PauseMenuPage,
   type PauseMenuRenderContext,
+  type MenuItemRect,
 } from './pause-menu-layout.js';
 import { DEFAULT_LAYOUT, createLayoutContext } from './layout.js';
 import { CANVAS_W, CANVAS_H } from './sprites.js';
@@ -220,4 +221,54 @@ describe('pauseMenuItems — LayoutContext seam (issue #213)', () => {
     const taller = pauseMenuItemsAt('main', ctx, tall);
     expect(taller[0]!.rect.y).toBeGreaterThan(def[0]!.rect.y);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Small-context regression fixtures (#238 PR4). Guard the PR1–3 LayoutContext
+// reflow + the Phase 6 mobile work: at a phone-portrait 360×640 context every
+// clickable rect must stay on-screen and none may overlap. These PASS today
+// (verified in #238) — they exist to fail loudly if a future reflow regresses.
+//
+// Heights below ~490 need genuine reflow (scroll / re-order), NOT proportional
+// row compression (which fails its own no-overlap test at real phone heights —
+// see #238). That reflow is owned by Phase 6.
+// ---------------------------------------------------------------------------
+
+/** True iff rect r lies fully inside the 0..w × 0..h canvas. */
+function within(r: MenuItemRect, w: number, h: number): boolean {
+  return r.x >= 0 && r.y >= 0 && r.x + r.w <= w && r.y + r.h <= h;
+}
+
+/** True iff any two rects overlap (strict — touching edges do not count). */
+function anyOverlap(rects: readonly MenuItemRect[]): boolean {
+  for (let i = 0; i < rects.length; i++) {
+    for (let j = i + 1; j < rects.length; j++) {
+      const a = rects[i]!;
+      const b = rects[j]!;
+      if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) return true;
+    }
+  }
+  return false;
+}
+
+describe('pause menu — small-context regression (#238 PR4, 360×640)', () => {
+  const phone = createLayoutContext(360, 640);
+  // The tallest stacks the layout produces: main (4), main + Quit (5), settings (5).
+  const cases: Array<[string, MenuItemRect[]]> = [
+    ['main', pauseMenuItemsAt('main', ctx, phone).map((i) => i.rect)],
+    [
+      'main+quit',
+      pauseMenuItemsAt('main', { ...ctx, quitAndSurveyEnabled: true }, phone).map((i) => i.rect),
+    ],
+    ['settings', pauseMenuItemsAt('settings', ctx, phone).map((i) => i.rect)],
+  ];
+
+  for (const [name, rects] of cases) {
+    it(`${name}: every interactive rect is within the 360×640 canvas`, () => {
+      for (const r of rects) expect(within(r, 360, 640)).toBe(true);
+    });
+    it(`${name}: no interactive rects overlap`, () => {
+      expect(anyOverlap(rects)).toBe(false);
+    });
+  }
 });

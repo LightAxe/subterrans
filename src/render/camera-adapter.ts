@@ -22,6 +22,29 @@
 import { CANVAS_W, CANVAS_H, TILE_SIZE_PX } from './sprites.js';
 
 // ---------------------------------------------------------------------------
+// Viewport size (#238 PR3)
+// ---------------------------------------------------------------------------
+
+// The logical viewport (screen) size the screen↔world projection is computed
+// against. Initialised to the fixed canvas size; UIScene/GameScene push their
+// LayoutContext size via setViewportSize() at boot. A module setter — NOT a
+// threaded {w,h} param — because these readers fan out through clampCameraView /
+// visibleWorldRect / screenToTileZoom / beginWheelZoom into dozens of call sites.
+// AGENTS.md §"Layout discipline" names camera-adapter the screen↔world authority
+// that owns the canvas-size dependency, so it keeps the CANVAS_W/CANVAS_H import
+// as the default init value (permanently on the PR5 guard's import allowlist).
+let viewportW = CANVAS_W;
+let viewportH = CANVAS_H;
+
+/** Set the logical viewport (screen) size the projection is computed against.
+ *  Byte-identical to CANVAS_W×CANVAS_H until a responsive layout passes a real
+ *  size. Idempotent; both scenes call it at boot. */
+export function setViewportSize(w: number, h: number): void {
+  viewportW = w;
+  viewportH = h;
+}
+
+// ---------------------------------------------------------------------------
 // Zoom limits
 // ---------------------------------------------------------------------------
 
@@ -114,14 +137,14 @@ export function makeCameraView(
 // Visible-window helpers
 // ---------------------------------------------------------------------------
 
-/** Width in world pixels of the visible window at a given zoom (CANVAS_W / zoom). */
+/** Width in world pixels of the visible window at a given zoom (viewportW / zoom). */
 export function viewWorldWidth(zoom: number): number {
-  return CANVAS_W / zoom;
+  return viewportW / zoom;
 }
 
-/** Height in world pixels of the visible window at a given zoom (CANVAS_H / zoom). */
+/** Height in world pixels of the visible window at a given zoom (viewportH / zoom). */
 export function viewWorldHeight(zoom: number): number {
-  return CANVAS_H / zoom;
+  return viewportH / zoom;
 }
 
 /**
@@ -150,9 +173,9 @@ export function visibleWorldRect(v: CameraView): WorldRect {
 // ---------------------------------------------------------------------------
 
 /**
- * screen→world (world pixels). Derivation: the visible window is CANVAS_W/zoom world px
+ * screen→world (world pixels). Derivation: the visible window is viewportW/zoom world px
  * wide, centered on centerX; a screen pixel sx maps linearly across it, so
- *   worldX = centerX + (sx − CANVAS_W/2) / zoom.
+ *   worldX = centerX + (sx − viewportW/2) / zoom.
  * This agrees with Phaser's render of camera.centerOn(centerX, centerY) at zoom, but is
  * computed without touching any Phaser matrix (no staleness after a zoom change).
  */
@@ -162,8 +185,8 @@ export function screenToWorld(
   v: CameraView,
 ): { worldX: number; worldY: number } {
   return {
-    worldX: v.centerX + (screenX - CANVAS_W / 2) / v.zoom,
-    worldY: v.centerY + (screenY - CANVAS_H / 2) / v.zoom,
+    worldX: v.centerX + (screenX - viewportW / 2) / v.zoom,
+    worldY: v.centerY + (screenY - viewportH / 2) / v.zoom,
   };
 }
 
@@ -174,8 +197,8 @@ export function worldToScreen(
   v: CameraView,
 ): { screenX: number; screenY: number } {
   return {
-    screenX: (worldX - v.centerX) * v.zoom + CANVAS_W / 2,
-    screenY: (worldY - v.centerY) * v.zoom + CANVAS_H / 2,
+    screenX: (worldX - v.centerX) * v.zoom + viewportW / 2,
+    screenY: (worldY - v.centerY) * v.zoom + viewportH / 2,
   };
 }
 
@@ -277,12 +300,12 @@ export function beginWheelZoom(
 /**
  * Re-anchor the camera center so the anchor's world point sits under its screen point at
  * the current zoom. Solving screenToWorld(screenX) == worldX for centerX:
- *   worldX = centerX + (screenX − CANVAS_W/2)/zoom  ⇒  centerX = worldX − (screenX − CANVAS_W/2)/zoom.
+ *   worldX = centerX + (screenX − viewportW/2)/zoom  ⇒  centerX = worldX − (screenX − viewportW/2)/zoom.
  * Mutates v. Call AFTER each zoom-lerp step, then clamp.
  */
 export function applyZoomAnchor(v: CameraView, anchor: ZoomAnchor): void {
-  v.centerX = anchor.worldX - (anchor.screenX - CANVAS_W / 2) / v.zoom;
-  v.centerY = anchor.worldY - (anchor.screenY - CANVAS_H / 2) / v.zoom;
+  v.centerX = anchor.worldX - (anchor.screenX - viewportW / 2) / v.zoom;
+  v.centerY = anchor.worldY - (anchor.screenY - viewportH / 2) / v.zoom;
 }
 
 /** Smallest zoom delta treated as "arrived" — snaps to target and ends the lerp. */

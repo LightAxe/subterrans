@@ -36,7 +36,6 @@ import {
   triggerScreenEdgeFlash as drawScreenEdgeFlash,
   type FlashDirection,
 } from './screen-effects.js';
-import { CANVAS_W, CANVAS_H } from './sprites.js';
 
 // Re-export pure helpers for Plan 07 and external consumers
 export { formatOutcomeTitle, formatKillStatsSubtitle, formatCauseSubtitle, type QueenDeathCause };
@@ -240,6 +239,7 @@ import {
 } from './tooltips.js';
 import { DEFAULT_LAYOUT, type LayoutContext } from './layout.js';
 import { buildHudLayout, type HudLayout } from './hud-layout.js';
+import { setViewportSize } from './camera-adapter.js';
 import {
   pauseMenuItems,
   pageTitle,
@@ -570,6 +570,10 @@ export class UIScene extends Phaser.Scene {
   }
 
   create() {
+    // #238 PR3 — publish this scene's logical canvas size to the camera-adapter
+    // projection (the screen↔world authority). Byte-identical to CANVAS_W×CANVAS_H
+    // today; both scenes set it at boot (idempotent — they share DEFAULT_LAYOUT).
+    setViewportSize(this.layout.w, this.layout.h);
     this.gfx = this.add.graphics();
     this.dragState = createSliderDragState();
     // Stage 3b (#2): seed the in-mem hint-strip visibility from persisted
@@ -1394,7 +1398,7 @@ export class UIScene extends Phaser.Scene {
    * (beginCaption), never at enqueue — a dropped/coalesced hint re-triggers later.
    */
   public showFirstUseHint(id: HintFirstUseId, text: string): void {
-    this.enqueueCaption({ text, x: CANVAS_W / 2, y: 60, source: 'first-use', hintId: id });
+    this.enqueueCaption({ text, x: this.layout.w / 2, y: 60, source: 'first-use', hintId: id });
   }
 
   /** Admit a caption through the shared policy; begin it now if the queue was
@@ -1557,9 +1561,12 @@ export class UIScene extends Phaser.Scene {
     const pad = 6;
     const w = t.width;
     const h = t.height;
-    const tx = Math.max(2, Math.min(a.x + a.w / 2 - w / 2, CANVAS_W - w - 2));
-    const below = a.y < CANVAS_H / 2;
-    const ty = Math.max(2, Math.min(below ? a.y + a.h + pad : a.y - h - pad, CANVAS_H - h - 2));
+    const tx = Math.max(2, Math.min(a.x + a.w / 2 - w / 2, this.layout.w - w - 2));
+    const below = a.y < this.layout.h / 2;
+    const ty = Math.max(
+      2,
+      Math.min(below ? a.y + a.h + pad : a.y - h - pad, this.layout.h - h - 2),
+    );
     t.setPosition(tx, ty);
     this.tooltipText = t;
   }
@@ -1612,7 +1619,7 @@ export class UIScene extends Phaser.Scene {
   // scrolls, so the fixed-canvas edge strips land correctly. Delegates the draw
   // to the pure screen-effects helper with `this` = UIScene.
   public triggerScreenEdgeFlash(direction: FlashDirection): void {
-    drawScreenEdgeFlash(this, direction, CANVAS_W, CANVAS_H);
+    drawScreenEdgeFlash(this, direction, this.layout.w, this.layout.h);
   }
 
   public hideGameOverOverlay(): void {
