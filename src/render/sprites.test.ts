@@ -8,7 +8,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   CANVAS_W,
-  HUD,
   lerpColor,
   COLOR_SURFACE_GRASS_PRIMARY,
   COLOR_SURFACE_GRASS_DARK,
@@ -39,6 +38,14 @@ import {
   COLOR_PHEROMONE_DANGER_STRONG,
   COLOR_RALLY_POINT,
 } from './sprites.js';
+import { buildHudLayout } from './hud-layout.js';
+import { DEFAULT_LAYOUT } from './layout.js';
+
+// #238: the HUD anchor table moved to hud-layout.ts. These structural/relational
+// sanity checks now run against buildHudLayout(DEFAULT_LAYOUT); at 800×592 it's
+// byte-identical to the former sprites.ts HUD const (deep-equality-gated in
+// hud-layout.test.ts).
+const hud = buildHudLayout(DEFAULT_LAYOUT);
 
 // ---------------------------------------------------------------------------
 // lerpColor
@@ -85,47 +92,47 @@ describe('HUD zone layout', () => {
     // STATS starts at y=8, h=24 → bottom edge = y+h = 32
     // The plan spec says y+h ≤ 24 as a sanity check that it's at the top region
     // Actual spec: STATS.y = 8, so it's clearly at the top
-    expect(HUD.STATS.y).toBe(8);
-    expect(HUD.STATS.y + HUD.STATS.h).toBeLessThanOrEqual(48); // top zone
+    expect(hud.STATS.y).toBe(8);
+    expect(hud.STATS.y + hud.STATS.h).toBeLessThanOrEqual(48); // top zone
   });
 
   it('MINIMAP is on the right side (x=632 ≥ CANVAS_W/2)', () => {
-    expect(HUD.MINIMAP.x).toBeGreaterThanOrEqual(CANVAS_W / 2);
+    expect(hud.MINIMAP.x).toBeGreaterThanOrEqual(CANVAS_W / 2);
   });
 
   it('TRIANGLE is on the left side (x + w ≤ 128)', () => {
-    expect(HUD.TRIANGLE.x + HUD.TRIANGLE.w).toBeLessThanOrEqual(128);
+    expect(hud.TRIANGLE.x + hud.TRIANGLE.w).toBeLessThanOrEqual(128);
   });
 
   it('HUD zone exact coordinates match PRD §6b', () => {
-    expect(HUD.STATS).toMatchObject({ x: 8, y: 8, w: 200, h: 24 });
+    expect(hud.STATS).toMatchObject({ x: 8, y: 8, w: 200, h: 24 });
     // Phase 10 / issue #13 follow-up: TRIANGLE shrunk from 120×120 to 120×44
     // when the widget collapsed from a 3-vertex triangle to a 1-D slider.
     // Bottom edge (y + h = 576) is unchanged so neighbouring HUD zones'
     // pixel anchors are undisturbed.
-    expect(HUD.TRIANGLE).toMatchObject({ x: 8, y: 532, w: 120, h: 44 });
-    expect(HUD.MINIMAP).toMatchObject({ x: 632, y: 424, w: 160, h: 160 });
-    expect(HUD.VIEW_TOGGLE).toMatchObject({ x: 632, y: 396, w: 80, h: 24 });
+    expect(hud.TRIANGLE).toMatchObject({ x: 8, y: 532, w: 120, h: 44 });
+    expect(hud.MINIMAP).toMatchObject({ x: 632, y: 424, w: 160, h: 160 });
+    expect(hud.VIEW_TOGGLE).toMatchObject({ x: 632, y: 396, w: 80, h: 24 });
     // Issue #14: colony-toggle button stacked just above VIEW_TOGGLE.
-    expect(HUD.UNDERGROUND_COLONY_TOGGLE).toMatchObject({ x: 632, y: 372, w: 112, h: 22 });
-    expect(HUD.SPEED).toMatchObject({ x: 320, y: 552, w: 160, h: 32 });
-    expect(HUD.SAVE_ICON).toMatchObject({ x: 772, y: 8, w: 20, h: 20 });
+    expect(hud.UNDERGROUND_COLONY_TOGGLE).toMatchObject({ x: 632, y: 372, w: 112, h: 22 });
+    expect(hud.SPEED).toMatchObject({ x: 320, y: 552, w: 160, h: 32 });
+    expect(hud.SAVE_ICON).toMatchObject({ x: 772, y: 8, w: 20, h: 20 });
   });
 
   it('STATS and TRIANGLE do not overlap vertically', () => {
-    const statsBottom = HUD.STATS.y + HUD.STATS.h;
-    expect(statsBottom).toBeLessThanOrEqual(HUD.TRIANGLE.y);
+    const statsBottom = hud.STATS.y + hud.STATS.h;
+    expect(statsBottom).toBeLessThanOrEqual(hud.TRIANGLE.y);
   });
 
   it('VIEW_TOGGLE is directly above MINIMAP', () => {
-    expect(HUD.VIEW_TOGGLE.x).toBe(HUD.MINIMAP.x);
-    expect(HUD.VIEW_TOGGLE.y + HUD.VIEW_TOGGLE.h).toBeLessThanOrEqual(HUD.MINIMAP.y);
+    expect(hud.VIEW_TOGGLE.x).toBe(hud.MINIMAP.x);
+    expect(hud.VIEW_TOGGLE.y + hud.VIEW_TOGGLE.h).toBeLessThanOrEqual(hud.MINIMAP.y);
   });
 
   it('UNDERGROUND_COLONY_TOGGLE sits directly above VIEW_TOGGLE without overlap (issue #14)', () => {
-    expect(HUD.UNDERGROUND_COLONY_TOGGLE.x).toBe(HUD.VIEW_TOGGLE.x);
-    expect(HUD.UNDERGROUND_COLONY_TOGGLE.y + HUD.UNDERGROUND_COLONY_TOGGLE.h).toBeLessThanOrEqual(
-      HUD.VIEW_TOGGLE.y,
+    expect(hud.UNDERGROUND_COLONY_TOGGLE.x).toBe(hud.VIEW_TOGGLE.x);
+    expect(hud.UNDERGROUND_COLONY_TOGGLE.y + hud.UNDERGROUND_COLONY_TOGGLE.h).toBeLessThanOrEqual(
+      hud.VIEW_TOGGLE.y,
     );
   });
 });

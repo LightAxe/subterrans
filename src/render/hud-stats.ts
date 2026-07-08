@@ -61,9 +61,9 @@ export const HUD_STATS_COLORS = {
 } as const;
 
 export const HUD_STATS_LAYOUT = {
-  // Two-row micro-layout inside HUD.STATS (200×24 at y=8). Row 1 carries
-  // Ants+Food; row 2 carries the Queen label + health bar. yOffsets are
-  // relative to HUD.STATS.y and chosen so the 10px Text widgets + the 6px
+  // Two-row micro-layout inside the stats rect (hud.STATS; 200×24 at y=8). Row 1
+  // carries Ants+Food; row 2 carries the Queen label + health bar. yOffsets are
+  // relative to the stats rect's y and chosen so the 10px Text widgets + the 6px
   // bar all sit inside the 24px rect.
   row1YOffset: 1, // canvas y = 9
   row2YOffset: 13, // canvas y = 21

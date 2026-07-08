@@ -250,17 +250,17 @@ describe('queenHealthBarFillWidth', () => {
 });
 
 describe('queenBarRect', () => {
-  it('right-anchors the bar inside the 200x24 HUD.STATS rect', () => {
+  it('right-anchors the bar inside the 200x24 hud.STATS rect', () => {
     const rect = queenBarRect({ x: 8, y: 8, w: 200, h: 24 });
     const { w, h, yOffset, rightInset } = HUD_STATS_LAYOUT.queenBar;
     expect(rect.w).toBe(w);
     expect(rect.h).toBe(h);
     expect(rect.y).toBe(8 + yOffset);
     expect(rect.x).toBe(8 + 200 - rightInset - w);
-    // stays inside HUD.STATS horizontally
+    // stays inside hud.STATS horizontally
     expect(rect.x).toBeGreaterThanOrEqual(8);
     expect(rect.x + rect.w).toBeLessThanOrEqual(8 + 200);
-    // stays inside HUD.STATS vertically
+    // stays inside hud.STATS vertically
     expect(rect.y).toBeGreaterThanOrEqual(8);
     expect(rect.y + rect.h).toBeLessThanOrEqual(8 + 24);
   });
@@ -284,7 +284,7 @@ describe('queenLabelRect (09 HUD clarity pass — two-row layout)', () => {
     expect(label.x + label.w).toBeLessThan(bar.x);
   });
 
-  it('stays inside HUD.STATS both horizontally and vertically', () => {
+  it('stays inside hud.STATS both horizontally and vertically', () => {
     const stats = { x: 8, y: 8, w: 200, h: 24 };
     const label = queenLabelRect(stats);
     expect(label.x).toBeGreaterThanOrEqual(stats.x);
@@ -329,7 +329,7 @@ describe('two-row stats layout (09 HUD clarity pass)', () => {
     expect(label.x + label.w).toBeLessThanOrEqual(bar.x);
   });
 
-  it('both rows remain inside the HUD.STATS rect vertically', () => {
+  it('both rows remain inside the hud.STATS rect vertically', () => {
     // Approximate rendered height of a 10px monospace Text widget.
     const TEXT_HEIGHT = 12;
     const row1Top = stats.y + HUD_STATS_LAYOUT.row1YOffset;

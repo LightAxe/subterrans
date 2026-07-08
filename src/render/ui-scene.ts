@@ -24,7 +24,6 @@ import type { ViewState, ToolId } from './camera.js';
 import { toggleView, toggleUndergroundColony } from './camera.js';
 import type { SpeedControl } from './hud-controls.js';
 import type { WorldState } from '../sim/types.js';
-import { HUD } from './sprites.js';
 import { GameOutcome } from '../sim/game-over.js';
 import {
   formatOutcomeTitle,
@@ -60,7 +59,7 @@ export type ActiveOverlay =
 
 // Phase 09.1 Chunk 2 — enemy underground observability. Exposed via the same
 // __phase9_ui global so Playwright can read which colony the underground view
-// is currently scoped to without OCR against the canvas-drawn HUD.
+// is currently scoped to without OCR against the canvas-drawn HUD text.
 export type ActiveUndergroundLabel = 'Your Colony' | 'Enemy Colony';
 
 // Distinguishes the two boot overlays that both report activeOverlay
@@ -161,7 +160,7 @@ import {
   drawSlider,
   screenToSliderRatio,
   isInsideSlider,
-  SLIDER_GEOMETRY,
+  sliderGeometry,
   type SliderDragState,
 } from './triangle-widget.js';
 import { drawMinimap, applyMinimapClick } from './minimap.js';
@@ -207,7 +206,7 @@ import {
 import {
   computeAntActivity,
   formatAntActivityLines,
-  ANT_ACTIVITY_PANEL,
+  antActivityPanelRect,
   ANT_ACTIVITY_PANEL_COLORS,
 } from './ant-activity.js';
 import {
@@ -240,6 +239,7 @@ import {
   type TooltipTarget,
 } from './tooltips.js';
 import { DEFAULT_LAYOUT, type LayoutContext } from './layout.js';
+import { buildHudLayout, type HudLayout } from './hud-layout.js';
 import {
   pauseMenuItems,
   pageTitle,
@@ -368,7 +368,7 @@ export interface SaveLoadDialogCallbacks {
   onBack(): void;
 }
 
-// HUD-02 stats row lives entirely inside the 200x24 HUD.STATS rect so
+// HUD-02 stats row lives entirely inside the 200x24 hud.STATS rect so
 // isPointerOverHUD() correctly masks world-input click-through. Per PRD §6c
 // + 09 HUD clarity pass:
 //   - Semi-transparent dark background (0x000000, α=0.6) fills the full rect.
@@ -380,9 +380,13 @@ export interface SaveLoadDialogCallbacks {
 //     completes and capacity grows.
 //   - Queen label restored to "Queen" from the prior single-char 'Q' — the
 //     bar color alone was not enough for players to tell what it measured.
-const STATS_ROW1_Y = HUD.STATS.y + HUD_STATS_LAYOUT.row1YOffset;
-const STATS_ROW2_Y = HUD.STATS.y + HUD_STATS_LAYOUT.row2YOffset;
-const STATS_TEXT_X = HUD.STATS.x + HUD_STATS_LAYOUT.leftTextInset;
+// Module-scope, so derived from the fixed default layout's STATS rect (these
+// text anchors can't read the per-instance `this.hud`). Byte-identical to the
+// former hud.STATS-based values at 800×592.
+const DEFAULT_STATS = buildHudLayout(DEFAULT_LAYOUT).STATS;
+const STATS_ROW1_Y = DEFAULT_STATS.y + HUD_STATS_LAYOUT.row1YOffset;
+const STATS_ROW2_Y = DEFAULT_STATS.y + HUD_STATS_LAYOUT.row2YOffset;
+const STATS_TEXT_X = DEFAULT_STATS.x + HUD_STATS_LAYOUT.leftTextInset;
 
 export class UIScene extends Phaser.Scene {
   /**
@@ -392,6 +396,14 @@ export class UIScene extends Phaser.Scene {
    * work recomputes it from the real canvas and reflows on resize.
    */
   private layout: LayoutContext = DEFAULT_LAYOUT;
+
+  /**
+   * Issue #238 — the HUD anchor table for this scene, built from `layout`. Every
+   * HUD zone rect (`this.hud.STATS`, `this.hud.MINIMAP`, …) comes from here
+   * rather than a fixed table, so a future resize rebuilds it from the new
+   * layout. Declared right after `layout` so its field initializer sees it.
+   */
+  private hud: HudLayout = buildHudLayout(this.layout);
 
   private viewState!: ViewState;
   // Lazy accessor — returns the live WorldState or undefined pre-boot.
@@ -564,7 +576,7 @@ export class UIScene extends Phaser.Scene {
     // settings so a returning player's "hide legend" choice is honored on boot.
     hintStripState.visible = loadSettings().hintStripVisible;
 
-    // HUD-02 stats row — three Texts confined to the 200x24 HUD.STATS rect,
+    // HUD-02 stats row — three Texts confined to the 200x24 hud.STATS rect,
     // two-row layout. Row 1: antsText (white, left) + foodText (green, right-
     // anchored). Row 2: queenLabelText (white, left) + queen health bar
     // (drawn in update() via gfx so its color can change per frame without
@@ -598,17 +610,18 @@ export class UIScene extends Phaser.Scene {
     // Field name `triangleLabels` retained to minimize diff churn — a future
     // cleanup may rename to `sliderLabels` alongside the file rename.
     //
-    // Phase 8.5 invariant preserved: labels render INSIDE HUD.TRIANGLE zone
+    // Phase 8.5 invariant preserved: labels render INSIDE the hud.TRIANGLE zone
     // (x: [8,128), y: [532,576)) so pointer clicks on the visible text don't
     // fall through to world input. After issue #13's slider-zone shrink the
-    // label sits flush at the top edge — trackY=554 - 22 = 532 = HUD.TRIANGLE.y,
+    // label sits flush at the top edge — trackY=554 - 22 = 532 = hud.TRIANGLE.y,
     // and the 10px label text occupies y:[532,542], inside the zone.
+    const sliderTrackY = sliderGeometry(this.hud.TRIANGLE).trackY;
     this.triangleLabels = [
-      this.add.text(HUD.TRIANGLE.x + 4, SLIDER_GEOMETRY.trackY - 22, 'Forage', {
+      this.add.text(this.hud.TRIANGLE.x + 4, sliderTrackY - 22, 'Forage', {
         color: '#ffffff',
         fontSize: '10px',
       }),
-      this.add.text(HUD.TRIANGLE.x + HUD.TRIANGLE.w - 28, SLIDER_GEOMETRY.trackY - 22, 'Fight', {
+      this.add.text(this.hud.TRIANGLE.x + this.hud.TRIANGLE.w - 28, sliderTrackY - 22, 'Fight', {
         color: '#ffffff',
         fontSize: '10px',
       }),
@@ -619,8 +632,8 @@ export class UIScene extends Phaser.Scene {
 
     // View toggle button label — text updated per-frame.
     this.viewToggleText = this.add.text(
-      HUD.VIEW_TOGGLE.x + 4,
-      HUD.VIEW_TOGGLE.y + 6,
+      this.hud.VIEW_TOGGLE.x + 4,
+      this.hud.VIEW_TOGGLE.y + 6,
       'Underground >',
       { color: '#ffffff', fontSize: '12px', backgroundColor: '#333333' },
     );
@@ -628,7 +641,7 @@ export class UIScene extends Phaser.Scene {
     this.viewToggleText.setScrollFactor(0);
 
     // Phase 09.1 Chunk 2 + issue #14 — underground colony toggle button.
-    // Sits above VIEW_TOGGLE (HUD.UNDERGROUND_COLONY_TOGGLE) so the two
+    // Sits above VIEW_TOGGLE (hud.UNDERGROUND_COLONY_TOGGLE) so the two
     // underground-only HUD elements stack vertically. Visibility is bound
     // to activeView === 'underground' in update(); text follows
     // activeUndergroundColonyId (binary toggle).
@@ -639,20 +652,20 @@ export class UIScene extends Phaser.Scene {
     // for keyboard players. Background matches VIEW_TOGGLE styling so the
     // two read as a stacked pair of toggle buttons.
     this.undergroundLabelText = this.add.text(
-      HUD.UNDERGROUND_COLONY_TOGGLE.x + 4,
-      HUD.UNDERGROUND_COLONY_TOGGLE.y + 4,
+      this.hud.UNDERGROUND_COLONY_TOGGLE.x + 4,
+      this.hud.UNDERGROUND_COLONY_TOGGLE.y + 4,
       'Your Colony (X)',
       { color: '#ffffff', fontSize: '12px' },
     );
     this.undergroundLabelText.setScrollFactor(0);
     this.undergroundLabelText.setVisible(false);
 
-    // Stage 1 controls rework (issue #18) — tool palette (HUD.TOOLS), hint strip
-    // (HUD.HINTS), and speed widget (HUD.SPEED). Backgrounds + active-tool
+    // Stage 1 controls rework (issue #18) — tool palette (hud.TOOLS), hint strip
+    // (hud.HINTS), and speed widget (hud.SPEED). Backgrounds + active-tool
     // highlight are drawn in update() via gfx; these Text objects carry the
-    // labels. All scroll-locked so they stay pinned to the HUD.
+    // labels. All scroll-locked so they stay pinned to the HUD region.
     this.toolButtonTexts = TOOL_ORDER.map((tool, i) => {
-      const r = toolButtonRect(i);
+      const r = toolButtonRect(i, this.hud.TOOLS);
       const t = this.add.text(r.x + 4, r.y + r.h / 2 - 6, TOOL_LABEL[tool], {
         color: '#ffffff',
         fontSize: '11px',
@@ -662,7 +675,7 @@ export class UIScene extends Phaser.Scene {
       t.setDepth(5);
       return t;
     });
-    this.hintText = this.add.text(HUD.HINTS.x + 2, HUD.HINTS.y + 2, '', {
+    this.hintText = this.add.text(this.hud.HINTS.x + 2, this.hud.HINTS.y + 2, '', {
       color: '#cfd8dc',
       fontSize: '11px',
       fontFamily: 'monospace',
@@ -670,7 +683,7 @@ export class UIScene extends Phaser.Scene {
     this.hintText.setScrollFactor(0);
     this.hintText.setDepth(5);
     this.speedControlTexts = SPEED_CONTROL_ORDER.map((control, i) => {
-      const r = speedControlRect(i);
+      const r = speedControlRect(i, this.hud.SPEED);
       const label = control === 'pause' ? '||' : `${control}x`;
       const t = this.add.text(r.x + 4, r.y + r.h / 2 - 7, label, {
         color: '#ffffff',
@@ -698,9 +711,10 @@ export class UIScene extends Phaser.Scene {
     });
 
     // Ant-activity popup body — single multi-line Text widget anchored to the
-    // top-left of ANT_ACTIVITY_PANEL. Created once, shown/hidden and retargeted
-    // per frame in update() based on antActivityPanelState.visible.
-    this.antActivityText = this.add.text(ANT_ACTIVITY_PANEL.x + 8, ANT_ACTIVITY_PANEL.y + 8, '', {
+    // top-left of the ant-activity panel rect. Created once, shown/hidden and
+    // retargeted per frame in update() based on antActivityPanelState.visible.
+    const antActivityPanel = antActivityPanelRect(this.hud.STATS);
+    this.antActivityText = this.add.text(antActivityPanel.x + 8, antActivityPanel.y + 8, '', {
       color: ANT_ACTIVITY_PANEL_COLORS.textCss,
       fontSize: '11px',
       fontFamily: 'monospace',
@@ -866,7 +880,7 @@ export class UIScene extends Phaser.Scene {
       // Ant-activity popup — STATS rect click toggles the panel open/closed.
       // Checked before other HUD zones so a click on the stats row can never
       // fall through to world input regardless of panel state.
-      if (this.isInsideRect(pointer.x, pointer.y, HUD.STATS)) {
+      if (this.isInsideRect(pointer.x, pointer.y, this.hud.STATS)) {
         // The panel-open transition bypasses recomputeActiveOverlay (and the ant
         // panel isn't part of anyOverlayOpen), so a tooltip shown by hovering
         // STATS would linger over the freshly-opened popup until the next
@@ -889,25 +903,25 @@ export class UIScene extends Phaser.Scene {
       //     marking. applyPendingAntActivityPanelHide commits the flip at
       //     the top of the next UIScene.update frame.
       if (antActivityPanelState.visible) {
-        if (this.isInsideRect(pointer.x, pointer.y, ANT_ACTIVITY_PANEL)) {
+        if (this.isInsideRect(pointer.x, pointer.y, antActivityPanelRect(this.hud.STATS))) {
           return;
         }
         const overHud =
-          this.isInsideRect(pointer.x, pointer.y, HUD.TRIANGLE) ||
-          this.isInsideRect(pointer.x, pointer.y, HUD.MINIMAP) ||
-          this.isInsideRect(pointer.x, pointer.y, HUD.VIEW_TOGGLE) ||
+          this.isInsideRect(pointer.x, pointer.y, this.hud.TRIANGLE) ||
+          this.isInsideRect(pointer.x, pointer.y, this.hud.MINIMAP) ||
+          this.isInsideRect(pointer.x, pointer.y, this.hud.VIEW_TOGGLE) ||
           // Issue #14 — colony-toggle button. Without this entry, a click
           // on the new toggle while the ant-activity panel is up would
           // be classified as "world click", dismissing the panel and
           // dropping the toggle dispatch.
-          this.isInsideRect(pointer.x, pointer.y, HUD.UNDERGROUND_COLONY_TOGGLE) ||
+          this.isInsideRect(pointer.x, pointer.y, this.hud.UNDERGROUND_COLONY_TOGGLE) ||
           // Stage 1 controls rework (issue #18) — the new interactive HUD zones
           // (tool palette, hint strip, speed widget) must be on the ant-panel
           // allow-list too, else a click on them while the panel is up dismisses
           // the panel and drops the palette/speed dispatch.
-          this.isInsideRect(pointer.x, pointer.y, HUD.TOOLS) ||
-          this.isInsideRect(pointer.x, pointer.y, HUD.HINTS) ||
-          this.isInsideRect(pointer.x, pointer.y, HUD.SPEED);
+          this.isInsideRect(pointer.x, pointer.y, this.hud.TOOLS) ||
+          this.isInsideRect(pointer.x, pointer.y, this.hud.HINTS) ||
+          this.isInsideRect(pointer.x, pointer.y, this.hud.SPEED);
         if (!overHud) {
           // Click on the world — dismiss and consume. `return` prevents
           // any further UIScene handling; the deferred hide prevents the
@@ -923,7 +937,7 @@ export class UIScene extends Phaser.Scene {
       }
 
       // View toggle button
-      if (this.isInsideRect(pointer.x, pointer.y, HUD.VIEW_TOGGLE)) {
+      if (this.isInsideRect(pointer.x, pointer.y, this.hud.VIEW_TOGGLE)) {
         toggleView(this.viewState);
         return;
       }
@@ -933,7 +947,7 @@ export class UIScene extends Phaser.Scene {
       // invisible) doesn't flip the underground colony invisibly.
       if (
         this.viewState.activeView === 'underground' &&
-        this.isInsideRect(pointer.x, pointer.y, HUD.UNDERGROUND_COLONY_TOGGLE)
+        this.isInsideRect(pointer.x, pointer.y, this.hud.UNDERGROUND_COLONY_TOGGLE)
       ) {
         toggleUndergroundColony(this.viewState);
         return;
@@ -942,14 +956,14 @@ export class UIScene extends Phaser.Scene {
       // the GameScene-owned, gated selectTool so a palette pick obeys the same
       // gate as the 1/2/3 hotkeys (and the Chamber-on-surface no-op). Consume the
       // click so it never falls through to the world arbiter.
-      const toolHit = toolButtonAt(pointer.x, pointer.y, this.viewState.activeView);
+      const toolHit = toolButtonAt(pointer.x, pointer.y, this.viewState.activeView, this.hud.TOOLS);
       if (toolHit !== null) {
         this.onSelectTool?.(toolHit);
         return;
       }
       // Speed widget click — ⏸ toggles the 'user' pause; 1×/2×/4× set the
       // multiplier (without changing pause reasons). Both via GameScene.
-      const speedHit = speedControlAt(pointer.x, pointer.y);
+      const speedHit = speedControlAt(pointer.x, pointer.y, this.hud.SPEED);
       if (speedHit !== null) {
         this.onSpeedControl?.(speedHit);
         return;
@@ -958,14 +972,14 @@ export class UIScene extends Phaser.Scene {
       // any in-flight wheel zoom-lerp/anchor on the active camera — otherwise the
       // next tickZoomLerp re-anchors from the fixed cursor point and overrides the
       // minimap nav (same class of bug the keyboard/drag-pan cancel prevents).
-      if (applyMinimapClick(this.viewState, pointer.x, pointer.y)) {
+      if (applyMinimapClick(this.viewState, pointer.x, pointer.y, this.hud)) {
         this.onMinimapNav?.();
         return;
       }
       // Behavior slider drag start (Phase 10 / D-01 — 1-D Forage↔Fight axis)
-      if (isInsideSlider(pointer.x, pointer.y)) {
+      if (isInsideSlider(pointer.x, pointer.y, this.hud.TRIANGLE)) {
         this.dragState.isDragging = true;
-        this.dragState.targetRatio = screenToSliderRatio(pointer.x);
+        this.dragState.targetRatio = screenToSliderRatio(pointer.x, this.hud.TRIANGLE);
         return;
       }
     });
@@ -977,7 +991,7 @@ export class UIScene extends Phaser.Scene {
       if (!this.dragState.isDragging) return;
       if (!pointer.isDown) return;
       // 1-D slider: only x is consulted; pointer y is ignored within drag.
-      this.dragState.targetRatio = screenToSliderRatio(pointer.x);
+      this.dragState.targetRatio = screenToSliderRatio(pointer.x, this.hud.TRIANGLE);
     });
 
     // Stage 3b (#5): the cursor leaving the canvas hides any tooltip + cancels a
@@ -1078,7 +1092,7 @@ export class UIScene extends Phaser.Scene {
     //   - "Ants: N" white text, "Food: N" green-tinted text, "Queen:" label
     //   - visual queen-health bar right-anchored inside the rect, color by pct
     this.gfx.fillStyle(HUD_STATS_COLORS.background, HUD_STATS_COLORS.backgroundAlpha);
-    this.gfx.fillRect(HUD.STATS.x, HUD.STATS.y, HUD.STATS.w, HUD.STATS.h);
+    this.gfx.fillRect(this.hud.STATS.x, this.hud.STATS.y, this.hud.STATS.w, this.hud.STATS.h);
 
     if (colony) {
       const s = computeHudStats(world, colony);
@@ -1090,11 +1104,11 @@ export class UIScene extends Phaser.Scene {
       // small inset). Row 2: "Queen" left-anchored, queen health bar right-
       // anchored. Rows are disjoint so "Food: C/M" can grow without fighting
       // the queen label for horizontal budget.
-      const bar = queenBarRect(HUD.STATS);
-      const label = queenLabelRect(HUD.STATS);
+      const bar = queenBarRect(this.hud.STATS);
+      const label = queenLabelRect(this.hud.STATS);
       this.queenLabelText.setPosition(label.x, label.y);
       const FOOD_RIGHT_INSET = 6;
-      const foodX = HUD.STATS.x + HUD.STATS.w - FOOD_RIGHT_INSET - this.foodText.width;
+      const foodX = this.hud.STATS.x + this.hud.STATS.w - FOOD_RIGHT_INSET - this.foodText.width;
       this.foodText.setPosition(foodX, STATS_ROW1_Y);
 
       // Queen health bar — track + proportional fill.
@@ -1146,15 +1160,26 @@ export class UIScene extends Phaser.Scene {
         this.gfx as unknown as import('./draw-surface.js').GfxLike,
         currentRatio,
         targetRatio,
+        this.hud.TRIANGLE,
       );
     }
 
     // Minimap
-    drawMinimap(this.gfx as unknown as import('./draw-surface.js').GfxLike, world, this.viewState);
+    drawMinimap(
+      this.gfx as unknown as import('./draw-surface.js').GfxLike,
+      world,
+      this.viewState,
+      this.hud,
+    );
 
     // View toggle button background
     this.gfx.fillStyle(0x333333, 1);
-    this.gfx.fillRect(HUD.VIEW_TOGGLE.x, HUD.VIEW_TOGGLE.y, HUD.VIEW_TOGGLE.w, HUD.VIEW_TOGGLE.h);
+    this.gfx.fillRect(
+      this.hud.VIEW_TOGGLE.x,
+      this.hud.VIEW_TOGGLE.y,
+      this.hud.VIEW_TOGGLE.w,
+      this.hud.VIEW_TOGGLE.h,
+    );
     this.viewToggleText.setText(
       this.viewState.activeView === 'surface' ? 'Underground >' : '< Surface',
     );
@@ -1173,10 +1198,10 @@ export class UIScene extends Phaser.Scene {
       // pattern below) so the click zone reads as a button.
       this.gfx.fillStyle(0x333333, 1);
       this.gfx.fillRect(
-        HUD.UNDERGROUND_COLONY_TOGGLE.x,
-        HUD.UNDERGROUND_COLONY_TOGGLE.y,
-        HUD.UNDERGROUND_COLONY_TOGGLE.w,
-        HUD.UNDERGROUND_COLONY_TOGGLE.h,
+        this.hud.UNDERGROUND_COLONY_TOGGLE.x,
+        this.hud.UNDERGROUND_COLONY_TOGGLE.y,
+        this.hud.UNDERGROUND_COLONY_TOGGLE.w,
+        this.hud.UNDERGROUND_COLONY_TOGGLE.h,
       );
     }
     this.undergroundLabelText.setText(`${undergroundLabel} (X)`);
@@ -1200,23 +1225,14 @@ export class UIScene extends Phaser.Scene {
       this.antActivityText.setText(body);
       this.antActivityText.setVisible(true);
 
+      const panel = antActivityPanelRect(this.hud.STATS);
       this.gfx.fillStyle(
         ANT_ACTIVITY_PANEL_COLORS.background,
         ANT_ACTIVITY_PANEL_COLORS.backgroundAlpha,
       );
-      this.gfx.fillRect(
-        ANT_ACTIVITY_PANEL.x,
-        ANT_ACTIVITY_PANEL.y,
-        ANT_ACTIVITY_PANEL.w,
-        ANT_ACTIVITY_PANEL.h,
-      );
+      this.gfx.fillRect(panel.x, panel.y, panel.w, panel.h);
       this.gfx.lineStyle(1, ANT_ACTIVITY_PANEL_COLORS.border, 1);
-      this.gfx.strokeRect(
-        ANT_ACTIVITY_PANEL.x,
-        ANT_ACTIVITY_PANEL.y,
-        ANT_ACTIVITY_PANEL.w,
-        ANT_ACTIVITY_PANEL.h,
-      );
+      this.gfx.strokeRect(panel.x, panel.y, panel.w, panel.h);
     } else {
       this.antActivityText.setVisible(false);
     }
@@ -1397,11 +1413,12 @@ export class UIScene extends Phaser.Scene {
     if (req.source === 'first-use' && req.hintId !== undefined) {
       markFirstUseHintShown(req.hintId as HintFirstUseId);
     }
-    // Stage 1 (Codex R4-1): a caption whose vertical band overlaps the HUD.HINTS
-    // strip yields (hides) the strip for its lifetime so the two don't collide.
+    // Stage 1 (Codex R4-1): a caption whose vertical band overlaps the hint
+    // strip (hud.HINTS) yields (hides) the strip for its lifetime so the two
+    // don't collide.
     const capTop = req.y - 14;
     const capBottom = req.y + 14;
-    if (capTop < HUD.HINTS.y + HUD.HINTS.h && capBottom > HUD.HINTS.y) {
+    if (capTop < this.hud.HINTS.y + this.hud.HINTS.h && capBottom > this.hud.HINTS.y) {
       this.hintYieldUntilMs = this.time.now + CAPTION_TOTAL_MS;
     }
     const captionText = this.add.text(req.x, req.y, req.text, {
@@ -1491,7 +1508,7 @@ export class UIScene extends Phaser.Scene {
       this.cancelTooltip();
       return;
     }
-    const target = tooltipTargetAt(pointer.x, pointer.y, this.viewState.activeView);
+    const target = tooltipTargetAt(pointer.x, pointer.y, this.viewState.activeView, this.hud);
     if (sameTooltipTarget(target, this.hoverTarget)) return; // unchanged — let timers run
     this.hoverTarget = target;
     this.clearTooltipShowTimer();
@@ -1622,7 +1639,7 @@ export class UIScene extends Phaser.Scene {
     const active = this.viewState.activeTool;
     for (let i = 0; i < TOOL_ORDER.length; i++) {
       const tool = TOOL_ORDER[i]!;
-      const r = toolButtonRect(i);
+      const r = toolButtonRect(i, this.hud.TOOLS);
       const greyed = tool === 'chamber' && surface;
       const isActive = tool === active && !greyed;
       // Background: brighter when active, dim when greyed.
@@ -1659,7 +1676,7 @@ export class UIScene extends Phaser.Scene {
     }
     // Stage 3b (#2, Codex R1#3): the visibility toggle gates ONLY the static
     // legend — the caption-yield (above) and the queue-full warning (above) stay
-    // visible. A hidden legend also frees HUD.HINTS from the input mask
+    // visible. A hidden legend also frees hud.HINTS from the input mask
     // (camera-input reads the same hintStripState).
     if (!hintStripState.visible) {
       this.hintText.setVisible(false);
@@ -1676,7 +1693,7 @@ export class UIScene extends Phaser.Scene {
     const speed = this.getSpeedMultiplierFn ? this.getSpeedMultiplierFn() : 1;
     for (let i = 0; i < SPEED_CONTROL_ORDER.length; i++) {
       const control = SPEED_CONTROL_ORDER[i]!;
-      const r = speedControlRect(i);
+      const r = speedControlRect(i, this.hud.SPEED);
       const isActive = control === 'pause' ? paused : control === speed;
       this.gfx.fillStyle(isActive ? 0x2a6cc0 : 0x444444, 1);
       this.gfx.fillRect(r.x, r.y, r.w, r.h);

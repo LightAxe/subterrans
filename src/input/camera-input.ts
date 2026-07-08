@@ -24,7 +24,7 @@
 // type` only so this file is testable without Phaser.
 
 import type * as Phaser from 'phaser';
-import { HUD } from '../render/sprites.js';
+import type { HudLayout } from '../render/hud-layout.js';
 import { antActivityPanelState } from '../render/ant-activity-panel-state.js';
 import { hintStripState } from '../render/hint-strip-state.js';
 import { type ViewState, worldPxDimensions } from '../render/camera.js';
@@ -87,9 +87,17 @@ export function resetDragState(dragState: DragState): void {
  * Used by drag-pan, the gesture arbiter, and the wheel-zoom handler to suppress
  * pointer/wheel events that land on HUD widgets.
  *
+ * Zones come from the passed `hud` (buildHudLayout output) so this reflows with
+ * the layout instead of reading a fixed table.
+ *
  * Inclusion rule: x in [rect.x, rect.x + rect.w) and y in [rect.y, rect.y + rect.h).
  */
-export function isPointerOverHUD(px: number, py: number, viewState?: ViewState): boolean {
+export function isPointerOverHUD(
+  px: number,
+  py: number,
+  hud: HudLayout,
+  viewState?: ViewState,
+): boolean {
   // Ant-activity popup full-canvas mask — while the panel is visible OR already
   // dismissing (pendingHide), treat every screen pixel as HUD (Phaser does not
   // guarantee cross-scene dispatch order, so masking the whole canvas closes both
@@ -99,25 +107,25 @@ export function isPointerOverHUD(px: number, py: number, viewState?: ViewState):
   }
 
   const zones: Array<{ x: number; y: number; w: number; h: number }> = [
-    HUD.STATS,
-    HUD.TRIANGLE,
-    HUD.SPEED,
-    HUD.TOOLS,
-    HUD.MINIMAP,
-    HUD.VIEW_TOGGLE,
+    hud.STATS,
+    hud.TRIANGLE,
+    hud.SPEED,
+    hud.TOOLS,
+    hud.MINIMAP,
+    hud.VIEW_TOGGLE,
   ];
   // Stage 3b (issue #18, Codex R1#2) — the hint strip masks world input ONLY
   // while its legend is visible. When the player hides the legend (settings
-  // toggle → hintStripState.visible=false), drop HUD.HINTS so the freed band is
+  // toggle → hintStripState.visible=false), drop hud.HINTS so the freed band is
   // not a dead input zone. Default visible → the band stays masked as before.
   if (hintStripState.visible) {
-    zones.push(HUD.HINTS);
+    zones.push(hud.HINTS);
   }
   // Issue #14 — colony toggle is rendered ONLY on the underground view. Mask the
   // click zone only when it's actually visible. Callers without a ViewState
   // (legacy/test) pass undefined and the toggle stays unmasked.
   if (viewState !== undefined && viewState.activeView === 'underground') {
-    zones.push(HUD.UNDERGROUND_COLONY_TOGGLE);
+    zones.push(hud.UNDERGROUND_COLONY_TOGGLE);
   }
   for (const zone of zones) {
     if (px >= zone.x && px < zone.x + zone.w && py >= zone.y && py < zone.y + zone.h) {
@@ -243,12 +251,14 @@ export interface DragState {
  * inside a HUD widget never pans, and a mid-drag HUD crossing doesn't jump the
  * camera. Stage 2: pan delta goes through panByScreenDelta (÷ zoom).
  *
+ * `hud` is the built HUD layout, threaded into the isPointerOverHUD masks.
  * Returns the shared dragState object. `isBlocked` lets GameScene suspend pan
  * during GameOver.
  */
 export function registerDragPan(
   scene: Phaser.Scene,
   viewState: ViewState,
+  hud: HudLayout,
   isBlocked?: () => boolean,
 ): DragState {
   const dragState: DragState = {
@@ -261,7 +271,7 @@ export function registerDragPan(
   scene.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
     if (isBlocked?.()) return;
     if (!pointer.middleButtonDown()) return;
-    if (isPointerOverHUD(pointer.x, pointer.y, viewState)) return;
+    if (isPointerOverHUD(pointer.x, pointer.y, hud, viewState)) return;
     dragState.active = true;
     dragState.lastX = pointer.x;
     dragState.lastY = pointer.y;
@@ -285,7 +295,7 @@ export function registerDragPan(
     if (!pointer.middleButtonDown()) return;
     // Issue #73 — over a HUD widget mid-drag, suppress the camera delta but
     // still track lastX/lastY so the next non-HUD move is incremental.
-    if (isPointerOverHUD(pointer.x, pointer.y, viewState)) {
+    if (isPointerOverHUD(pointer.x, pointer.y, hud, viewState)) {
       dragState.lastX = pointer.x;
       dragState.lastY = pointer.y;
       return;

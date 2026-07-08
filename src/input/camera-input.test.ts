@@ -34,11 +34,17 @@ beforeEach(() => {
 import type { ViewState } from '../render/camera.js';
 import { SURFACE_WORLD_PX_W } from '../render/camera.js';
 import { makeCameraView, KEYBOARD_PAN_SPEED_PX_PER_SEC } from '../render/camera-adapter.js';
-import { HUD, CANVAS_W } from '../render/sprites.js';
+import { CANVAS_W } from '../render/sprites.js';
+import { buildHudLayout } from '../render/hud-layout.js';
+import { DEFAULT_LAYOUT } from '../render/layout.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import { hintStripState, resetHintStripState } from '../render/hint-strip-state.js';
 
-// Stage 3b: the hint-strip visibility singleton gates HUD.HINTS masking. Reset
+// #238: isPointerOverHUD / registerDragPan now take the built HUD layout; at the
+// default 800×592 layout hud.* == the former HUD table.
+const hud = buildHudLayout(DEFAULT_LAYOUT);
+
+// Stage 3b: the hint-strip visibility singleton gates hud.HINTS masking. Reset
 // it after each test so a hidden-legend case doesn't leak into its neighbors.
 afterEach(() => {
   resetHintStripState();
@@ -124,52 +130,52 @@ function center(rect: { x: number; y: number; w: number; h: number }): [number, 
 describe('isPointerOverHUD', () => {
   it('masks STATS / TRIANGLE / MINIMAP / VIEW_TOGGLE', () => {
     const vs = makeViewState('surface');
-    for (const rect of [HUD.STATS, HUD.TRIANGLE, HUD.MINIMAP, HUD.VIEW_TOGGLE]) {
+    for (const rect of [hud.STATS, hud.TRIANGLE, hud.MINIMAP, hud.VIEW_TOGGLE]) {
       const [x, y] = center(rect);
-      expect(isPointerOverHUD(x, y, vs)).toBe(true);
+      expect(isPointerOverHUD(x, y, hud, vs)).toBe(true);
     }
   });
 
   it('masks the Stage 1 interactive zones: TOOLS, HINTS, and SPEED', () => {
     const vs = makeViewState('surface');
-    for (const rect of [HUD.TOOLS, HUD.HINTS, HUD.SPEED]) {
+    for (const rect of [hud.TOOLS, hud.HINTS, hud.SPEED]) {
       const [x, y] = center(rect);
-      expect(isPointerOverHUD(x, y, vs)).toBe(true);
+      expect(isPointerOverHUD(x, y, hud, vs)).toBe(true);
     }
   });
 
-  it('Stage 3b: drops HUD.HINTS from the mask when the legend is hidden, keeps TOOLS/SPEED', () => {
+  it('Stage 3b: drops hud.HINTS from the mask when the legend is hidden, keeps TOOLS/SPEED', () => {
     const vs = makeViewState('surface');
     hintStripState.visible = false;
-    const [hx, hy] = center(HUD.HINTS);
+    const [hx, hy] = center(hud.HINTS);
     // The freed legend band is no longer a dead input zone…
-    expect(isPointerOverHUD(hx, hy, vs)).toBe(false);
+    expect(isPointerOverHUD(hx, hy, hud, vs)).toBe(false);
     // …but the other interactive widgets stay masked.
-    for (const rect of [HUD.TOOLS, HUD.SPEED]) {
+    for (const rect of [hud.TOOLS, hud.SPEED]) {
       const [x, y] = center(rect);
-      expect(isPointerOverHUD(x, y, vs)).toBe(true);
+      expect(isPointerOverHUD(x, y, hud, vs)).toBe(true);
     }
   });
 
   it('returns false for a clearly-empty world point', () => {
     const vs = makeViewState('surface');
     // A point in the mid-canvas play area clear of every rect.
-    expect(isPointerOverHUD(400, 300, vs)).toBe(false);
+    expect(isPointerOverHUD(400, 300, hud, vs)).toBe(false);
   });
 
   it('uses a half-open inclusion rule [x, x+w) × [y, y+h)', () => {
     const vs = makeViewState('surface');
     // Top-left corner is inside.
-    expect(isPointerOverHUD(HUD.TOOLS.x, HUD.TOOLS.y, vs)).toBe(true);
+    expect(isPointerOverHUD(hud.TOOLS.x, hud.TOOLS.y, hud, vs)).toBe(true);
     // The exclusive right/bottom edge is outside.
-    expect(isPointerOverHUD(HUD.TOOLS.x + HUD.TOOLS.w, HUD.TOOLS.y, vs)).toBe(false);
-    expect(isPointerOverHUD(HUD.TOOLS.x, HUD.TOOLS.y + HUD.TOOLS.h, vs)).toBe(false);
+    expect(isPointerOverHUD(hud.TOOLS.x + hud.TOOLS.w, hud.TOOLS.y, hud, vs)).toBe(false);
+    expect(isPointerOverHUD(hud.TOOLS.x, hud.TOOLS.y + hud.TOOLS.h, hud, vs)).toBe(false);
   });
 
   it('masks UNDERGROUND_COLONY_TOGGLE only on the underground view', () => {
-    const [x, y] = center(HUD.UNDERGROUND_COLONY_TOGGLE);
-    expect(isPointerOverHUD(x, y, makeViewState('surface'))).toBe(false);
-    expect(isPointerOverHUD(x, y, makeViewState('underground'))).toBe(true);
+    const [x, y] = center(hud.UNDERGROUND_COLONY_TOGGLE);
+    expect(isPointerOverHUD(x, y, hud, makeViewState('surface'))).toBe(false);
+    expect(isPointerOverHUD(x, y, hud, makeViewState('underground'))).toBe(true);
   });
 });
 
@@ -267,7 +273,7 @@ describe('registerDragPan (middle-button)', () => {
     // Center clear of the clamp edges so the pan delta isn't masked by clamping.
     const vs = makeViewState('surface', 1000, 1000);
     const { scene, emit } = makeFakeScene();
-    registerDragPan(scene, vs);
+    registerDragPan(scene, vs, hud);
     // Non-HUD points (mid play-area, clear of every HUD rect).
     emit('pointerdown', middlePointer(400, 300));
     expect(panInputState.isPanning).toBe(true);
@@ -287,7 +293,7 @@ describe('registerDragPan (middle-button)', () => {
     const vs = makeViewState('surface', 1000, 1000);
     const { scene, emit } = makeFakeScene();
     const blocked = { value: false };
-    registerDragPan(scene, vs, () => blocked.value);
+    registerDragPan(scene, vs, hud, () => blocked.value);
 
     // Drag starts and pans while unblocked.
     emit('pointerdown', middlePointer(400, 300));

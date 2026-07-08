@@ -1,7 +1,7 @@
-// sprites.ts — Phase 8 render-layer color palette, canvas dimensions, HUD zone layout, and color utilities.
+// sprites.ts — Phase 8 render-layer color palette, canvas dimensions, and color utilities.
 //
-// Source: PRD §7g (03-PRD-world-interaction.md) for color constants,
-//         PRD §6b (04-PRD-playable-game-loop.md) for HUD zone layout.
+// Source: PRD §7g (03-PRD-world-interaction.md) for color constants.
+// (The HUD anchor table moved to hud-layout.ts — #238; buildHudLayout(layout).)
 //
 // This file is in src/render/ — ESLint simSafetyConfig does NOT apply here.
 // Float arithmetic is permitted in the render layer per ARCHITECTURE.md Principle 6.
@@ -130,83 +130,6 @@ export const COLOR_PHEROMONE_DANGER_FAINT = 0x400000;
 
 /** PRD §7g — Danger-trail pheromone (high intensity) color. */
 export const COLOR_PHEROMONE_DANGER_STRONG = 0xff4000;
-
-// ---------------------------------------------------------------------------
-// HUD zone layout — PRD §6b normative pixel coordinates for 800×592 canvas
-// ---------------------------------------------------------------------------
-
-/**
- * HUD zone rectangles.
- *
- * All coordinates are screen pixels for the 800×592 canvas.
- *
- * SPEED and SAVE_ICON are Phase 9 layout reservations — coordinates are defined here
- * so Phase 9 has stable pixel targets, but Phase 8 draws NOTHING in these zones.
- *
- * Source: PRD §6b (04-PRD-playable-game-loop.md)
- */
-export const HUD = {
-  /** Colony stats bar: ant count, food stored, queen health. */
-  STATS: { x: 8, y: 8, w: 200, h: 24 },
-  /**
-   * Behavior allocation slider widget. Field name retained from the Phase 8
-   * 3-vertex triangle to minimize diff churn; Phase 10 / D-01 collapsed the
-   * widget to a 1-D Forage↔Fight slider, so the box no longer needs to be a
-   * 120×120 square. Issue #13 follow-up: shrunk to 120×44 to hug the slider
-   * track + extreme-icon labels and avoid the unsightly empty square that
-   * the original triangle bounding box left behind.
-   *
-   * Geometry is sized to keep `trackY = y + h/2` valid given the 22px label
-   * gap (`trackY - 22 == y` ⇒ labels render flush with the box top edge).
-   * h must stay ≥ 44 for that invariant to hold without re-deriving the
-   * track formula. Bottom edge (y + h = 576) is unchanged from the prior
-   * 120×120 layout so HUD-anchor pixel positions of neighboring zones are
-   * not disturbed.
-   */
-  TRIANGLE: { x: 8, y: 532, w: 120, h: 44 },
-  /**
-   * Speed controls zone.
-   * Phase 9 layout reservation — Phase 8 draws nothing here.
-   * Phase 9 wires 1×/2×/4× speed buttons and pause button.
-   */
-  SPEED: { x: 320, y: 552, w: 160, h: 32, PAUSE_BUTTON_W: 40, SPEED_BUTTON_W: 32 },
-  /**
-   * Stage 1 controls rework (issue #18) — tool palette (Command/Dig/Chamber).
-   * Top-right band, clear of STATS (top-left), the ant-activity panel
-   * (8,36,220,264), SAVE_ICON (772,8), and the y≥372 toggles/minimap. Three
-   * 40×40 buttons at x = 632 / 676 / 720 (BUTTON_W 40, GAP 4).
-   */
-  TOOLS: { x: 632, y: 36, w: 128, h: 40, BUTTON_W: 40, GAP: 4 },
-  /**
-   * Stage 1 controls rework (issue #18) — context hint strip (static per-tool/
-   * per-view legend). Lower band: above TRIANGLE/SPEED (y≥532), left of MINIMAP
-   * (x≥632), below the ant-activity panel (y≤300).
-   */
-  HINTS: { x: 8, y: 508, w: 616, h: 18 },
-  /** Minimap: full surface overview with colony positions and food sources. */
-  MINIMAP: { x: 632, y: 424, w: 160, h: 160 },
-  /** View toggle button: switches between surface and underground views. */
-  VIEW_TOGGLE: { x: 632, y: 396, w: 80, h: 24 },
-  /**
-   * Issue #14 — colony toggle button (underground view only). Flips the
-   * underground render between PLAYER and ENEMY grids; equivalent to the
-   * X keybind. Visible only while activeView === 'underground'. Sits just
-   * above VIEW_TOGGLE so the underground HUD chrome stacks vertically.
-   *
-   * Width 112 fits "Enemy Colony (X)" at fontSize 12 with breathing room
-   * (~6 px/char × 16 chars + 8 px padding ≈ 104 px). 100 px was the
-   * original sizing and clipped right against the rightmost glyph; 112
-   * gives a comfortable margin without crowding the canvas-right edge
-   * (canvas width 800; toggle right edge 744 leaves 56 px for SAVE_ICON).
-   */
-  UNDERGROUND_COLONY_TOGGLE: { x: 632, y: 372, w: 112, h: 22 },
-  /**
-   * Save icon zone.
-   * Phase 9 layout reservation — Phase 8 draws nothing here.
-   * Phase 9 wires autosave indicator rendering.
-   */
-  SAVE_ICON: { x: 772, y: 8, w: 20, h: 20 },
-} as const;
 
 // ---------------------------------------------------------------------------
 // Color interpolation utility

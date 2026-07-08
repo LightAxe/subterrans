@@ -195,6 +195,8 @@ import {
 } from './screen-effects.js';
 import { ChamberType } from '../sim/enums.js';
 import { CANVAS_W, CANVAS_H } from './sprites.js';
+import { DEFAULT_LAYOUT } from './layout.js';
+import { buildHudLayout } from './hud-layout.js';
 // UIScenePhase9 — subset of UIScene public API added in Plan 06 Task 3.
 // Typed here to avoid circular imports; UIScene implements these methods.
 interface UIScenePhase9 {
@@ -296,6 +298,13 @@ export class GameScene extends Phaser.Scene {
   private world!: WorldState;
   private prevState!: WorldState;
   private viewState!: ViewState;
+  // Issue #213 / #238 — the LayoutContext seam + its built HUD anchor table.
+  // Fixed at the canvas size today (DEFAULT_LAYOUT = 800×592); the eventual
+  // responsive work recomputes `layout` from the real canvas and rebuilds `hud`.
+  // `hud` is threaded into isPointerOverHUD / registerDragPan so the pan/zoom
+  // masks read the same zone rects the HUD draws.
+  private layout = DEFAULT_LAYOUT;
+  private hud = buildHudLayout(this.layout);
   private gameLoop!: GameLoop;
   private gfx!: Phaser.GameObjects.Graphics;
   // Overlay layer for world-space primitives that must render above the sprite
@@ -616,7 +625,7 @@ export class GameScene extends Phaser.Scene {
     // mid middle-drag suspends the camera move and it doesn't persist after
     // Resume (Codex P2). A bare user-pause (Space) is NOT modal, so middle-pan
     // still works while paused — intended.
-    this.dragState = registerDragPan(this, this.viewState, () => this.isModalOpen());
+    this.dragState = registerDragPan(this, this.viewState, this.hud, () => this.isModalOpen());
 
     // Stage 2 (issue #18): mouse-wheel zoom. Gated exactly like world pan — ignored
     // over HUD zones and whenever a modal / menu / game-over owns input
@@ -627,7 +636,7 @@ export class GameScene extends Phaser.Scene {
       'wheel',
       (pointer: Phaser.Input.Pointer, _over: unknown, _dx: number, dy: number) => {
         if (!this.canAcceptWorldHotkey()) return;
-        if (isPointerOverHUD(pointer.x, pointer.y, this.viewState)) return;
+        if (isPointerOverHUD(pointer.x, pointer.y, this.hud, this.viewState)) return;
         const native = pointer.event as WheelEvent | undefined;
         if (native?.ctrlKey || native?.metaKey) return;
         if (dy === 0) return;
@@ -831,7 +840,7 @@ export class GameScene extends Phaser.Scene {
       // computeUndergroundDigHover's outcome() — willTakeEffect never touches its memo.
       getFeedforward: () => this.feedforward,
       viewState: this.viewState,
-      isPointerOverHUD: (x, y) => isPointerOverHUD(x, y, this.viewState),
+      isPointerOverHUD: (x, y) => isPointerOverHUD(x, y, this.hud, this.viewState),
       isPaused: () => isPausedByAny(this.pauseReasons),
       // World edits (tap / paint / chamber) are allowed whenever no modal is up —
       // crucially that INCLUDES a bare user-pause, so a click/dig-paint while
@@ -2177,7 +2186,7 @@ export class GameScene extends Phaser.Scene {
   /**
    * Compute the entrance hover outline for the current frame, or null when it
    * should not show. Shown only for Dig + surface, with the pointer on canvas
-   * and not over HUD. The tile + validity are recomputed here every frame from
+   * and not over a HUD zone. The tile + validity are recomputed here every frame from
    * the LIVE camera so the outline tracks the pointer even under a moving camera.
    */
   private computeEntranceHover(
@@ -2187,7 +2196,8 @@ export class GameScene extends Phaser.Scene {
     if (this.viewState.activeView !== 'surface') return null;
     if (this.viewState.activeTool !== 'dig') return null;
     if (this.hoverScreenX === null || this.hoverScreenY === null) return null;
-    if (isPointerOverHUD(this.hoverScreenX, this.hoverScreenY, this.viewState)) return null;
+    if (isPointerOverHUD(this.hoverScreenX, this.hoverScreenY, this.hud, this.viewState))
+      return null;
     if (this.world === undefined) return null;
     const { tileX, tileY } = screenToTileZoom(this.hoverScreenX, this.hoverScreenY, cam);
     // Reject off-grid tiles on BOTH axes. Zoomed out, the visible world rect can extend
@@ -2237,7 +2247,8 @@ export class GameScene extends Phaser.Scene {
     if (this.arbiter.isPainting()) return null;
     if (this.viewState.activeUndergroundColonyId !== PLAYER_COLONY_ID) return null;
     if (this.hoverScreenX === null || this.hoverScreenY === null) return null;
-    if (isPointerOverHUD(this.hoverScreenX, this.hoverScreenY, this.viewState)) return null;
+    if (isPointerOverHUD(this.hoverScreenX, this.hoverScreenY, this.hud, this.viewState))
+      return null;
     if (this.world === undefined) return null;
     const grid = this.world.undergroundGrids[PLAYER_COLONY_ID];
     const projGrid = projected.undergroundGrids[PLAYER_COLONY_ID];
@@ -2364,7 +2375,7 @@ export class GameScene extends Phaser.Scene {
     const overHud =
       this.hoverScreenX !== null &&
       this.hoverScreenY !== null &&
-      isPointerOverHUD(this.hoverScreenX, this.hoverScreenY, this.viewState);
+      isPointerOverHUD(this.hoverScreenX, this.hoverScreenY, this.hud, this.viewState);
     const effectiveTool: CursorTool = resolveCursorTool({
       activeTool: this.viewState.activeTool,
       activeView: this.viewState.activeView,

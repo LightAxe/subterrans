@@ -4,7 +4,9 @@
 // Runs under Node with no Phaser.
 
 import { describe, it, expect } from 'vitest';
-import { HUD, TILE_SIZE_PX } from './sprites.js';
+import { TILE_SIZE_PX } from './sprites.js';
+import { buildHudLayout } from './hud-layout.js';
+import { DEFAULT_LAYOUT } from './layout.js';
 import { COLOR_BARREN_EARTH, COLOR_BARREN_EARTH_DARK } from './terrain-atlas.js';
 import { createViewState } from './camera.js';
 import {
@@ -24,6 +26,10 @@ import {
   SURFACE_GRID_HEIGHT,
 } from '../sim/constants.js';
 import { SurfaceTileState, sgSet } from '../sim/terrain.js';
+
+// #238: minimap.ts now takes the built HUD layout; at the default 800×592 layout
+// hud.MINIMAP == the former hud.MINIMAP, so these tests stay byte-identical.
+const hud = buildHudLayout(DEFAULT_LAYOUT);
 
 // ---------------------------------------------------------------------------
 // MockGfx — records calls, does not render anything
@@ -121,31 +127,31 @@ function makeMinimalWorld(overrides?: {
 
 describe('minimapClickToTile', () => {
   it('top-left corner of minimap returns tileX=0, tileY=0', () => {
-    const result = minimapClickToTile(HUD.MINIMAP.x, HUD.MINIMAP.y);
+    const result = minimapClickToTile(hud.MINIMAP.x, hud.MINIMAP.y, hud);
     expect(result).not.toBeNull();
     expect(result!.tileX).toBeCloseTo(0, 5);
     expect(result!.tileY).toBeCloseTo(0, 5);
   });
 
   it('center of minimap returns tileX=64, tileY=64', () => {
-    const cx = HUD.MINIMAP.x + HUD.MINIMAP.w / 2;
-    const cy = HUD.MINIMAP.y + HUD.MINIMAP.h / 2;
-    const result = minimapClickToTile(cx, cy);
+    const cx = hud.MINIMAP.x + hud.MINIMAP.w / 2;
+    const cy = hud.MINIMAP.y + hud.MINIMAP.h / 2;
+    const result = minimapClickToTile(cx, cy, hud);
     expect(result).not.toBeNull();
     expect(result!.tileX).toBeCloseTo(64, 5);
     expect(result!.tileY).toBeCloseTo(64, 5);
   });
 
   it('point (0, 0) far outside minimap returns null', () => {
-    expect(minimapClickToTile(0, 0)).toBeNull();
+    expect(minimapClickToTile(0, 0, hud)).toBeNull();
   });
 
   it('x just outside right edge returns null', () => {
-    expect(minimapClickToTile(HUD.MINIMAP.x + HUD.MINIMAP.w, HUD.MINIMAP.y)).toBeNull();
+    expect(minimapClickToTile(hud.MINIMAP.x + hud.MINIMAP.w, hud.MINIMAP.y, hud)).toBeNull();
   });
 
   it('y just outside bottom edge returns null', () => {
-    expect(minimapClickToTile(HUD.MINIMAP.x, HUD.MINIMAP.y + HUD.MINIMAP.h)).toBeNull();
+    expect(minimapClickToTile(hud.MINIMAP.x, hud.MINIMAP.y + hud.MINIMAP.h, hud)).toBeNull();
   });
 });
 
@@ -156,9 +162,9 @@ describe('minimapClickToTile', () => {
 describe('applyMinimapClick', () => {
   it('click at center sets surfaceCamera center to world px (1024, 1024) and returns true', () => {
     const vs = createViewState(PLAYER_START_X, PLAYER_START_Y);
-    const cx = HUD.MINIMAP.x + HUD.MINIMAP.w / 2;
-    const cy = HUD.MINIMAP.y + HUD.MINIMAP.h / 2;
-    const result = applyMinimapClick(vs, cx, cy);
+    const cx = hud.MINIMAP.x + hud.MINIMAP.w / 2;
+    const cy = hud.MINIMAP.y + hud.MINIMAP.h / 2;
+    const result = applyMinimapClick(vs, cx, cy, hud);
     expect(result).toBe(true);
     // Minimap center → tile (64, 64) → world px (64×16, 64×16) = (1024, 1024).
     // At zoom 1 the surface clamp ([400,1648]×[296,1752]) leaves both untouched.
@@ -173,7 +179,7 @@ describe('applyMinimapClick', () => {
     const vs = createViewState(PLAYER_START_X, PLAYER_START_Y);
     const origX = vs.surfaceCamera.centerX;
     const origY = vs.surfaceCamera.centerY;
-    const result = applyMinimapClick(vs, 0, 0);
+    const result = applyMinimapClick(vs, 0, 0, hud);
     expect(result).toBe(false);
     expect(vs.surfaceCamera.centerX).toBe(origX);
     expect(vs.surfaceCamera.centerY).toBe(origY);
@@ -187,9 +193,9 @@ describe('applyMinimapClick', () => {
     // depth-preservation assertion tests preservation, not the clamp. §A6.
     const depthY = 500;
     vs.undergroundCamera.centerY = depthY;
-    const cx = HUD.MINIMAP.x + HUD.MINIMAP.w / 2;
-    const cy = HUD.MINIMAP.y + HUD.MINIMAP.h / 2;
-    applyMinimapClick(vs, cx, cy);
+    const cx = hud.MINIMAP.x + hud.MINIMAP.w / 2;
+    const cy = hud.MINIMAP.y + hud.MINIMAP.h / 2;
+    applyMinimapClick(vs, cx, cy, hud);
     // X should be X-linked to the surface camera's clamped center X.
     expect(vs.undergroundCamera.centerX).toBe(vs.surfaceCamera.centerX);
     // centerY (depth) must be UNCHANGED — underground depth is independent (§A6).
@@ -199,9 +205,9 @@ describe('applyMinimapClick', () => {
   it('when activeView=surface, click does NOT touch undergroundCamera.centerX', () => {
     const vs = createViewState(PLAYER_START_X, PLAYER_START_Y);
     const origUnderX = vs.undergroundCamera.centerX;
-    const cx = HUD.MINIMAP.x + HUD.MINIMAP.w / 2;
-    const cy = HUD.MINIMAP.y + HUD.MINIMAP.h / 2;
-    applyMinimapClick(vs, cx, cy);
+    const cx = hud.MINIMAP.x + hud.MINIMAP.w / 2;
+    const cy = hud.MINIMAP.y + hud.MINIMAP.h / 2;
+    applyMinimapClick(vs, cx, cy, hud);
     // undergroundCamera.centerX should NOT change when in surface view
     expect(vs.undergroundCamera.centerX).toBe(origUnderX);
   });
@@ -262,7 +268,7 @@ describe('drawMinimap smoke test', () => {
     const gfx = new MockGfx();
     const world = makeMinimalWorld({ foodPiles: stubFoodPiles, colonies: stubColonies });
     const vs = createViewState(PLAYER_START_X, PLAYER_START_Y);
-    drawMinimap(gfx, world, vs);
+    drawMinimap(gfx, world, vs, hud);
 
     const fillRects = gfx.callsOf('fillRect');
     // Should have at least: 1 background + 1 food pile + 1 colony + 4 viewport outline = 7
@@ -270,10 +276,10 @@ describe('drawMinimap smoke test', () => {
 
     // First fillRect is the grass background covering the full minimap
     const bg = fillRects[0]!;
-    expect(bg.args[0]).toBe(HUD.MINIMAP.x);
-    expect(bg.args[1]).toBe(HUD.MINIMAP.y);
-    expect(bg.args[2]).toBe(HUD.MINIMAP.w);
-    expect(bg.args[3]).toBe(HUD.MINIMAP.h);
+    expect(bg.args[0]).toBe(hud.MINIMAP.x);
+    expect(bg.args[1]).toBe(hud.MINIMAP.y);
+    expect(bg.args[2]).toBe(hud.MINIMAP.w);
+    expect(bg.args[3]).toBe(hud.MINIMAP.h);
   });
 
   it('MINIMAP_SCALE_X and MINIMAP_SCALE_Y equal 1.25 for 128-tile world', () => {
@@ -293,7 +299,7 @@ describe('drawMinimap smoke test', () => {
 
     const world = makeMinimalWorld({ foodPiles: [], colonies: stubColonies });
     const vs = createViewState(PLAYER_START_X, PLAYER_START_Y);
-    drawMinimap(gfx, world, vs);
+    drawMinimap(gfx, world, vs, hud);
 
     const styles = gfx.callsOf('fillStyle');
     // No black background anywhere.
