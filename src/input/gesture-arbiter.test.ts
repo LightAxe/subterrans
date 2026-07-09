@@ -1273,6 +1273,20 @@ describe('#237 PR4 — touch long-press', () => {
     expect(h.world.commandQueue.length).toBe(before);
   });
 
+  it('targets the SNAPSHOTTED tile even if the camera pans during the hold (Codex #274)', () => {
+    const h = makeHarness('underground', 'command', undefined, true);
+    const p = tileCenter(5, 8, h.vs); // press down on tile (5,8)
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, p.x, p.y));
+    // A keyboard pan shifts the camera during the hold — the SAME screen point now
+    // reprojects to a different tile (reconcileContext does not cancel on a pan).
+    h.vs.undergroundCamera.centerX += 3 * TILE_SIZE_PX;
+    h.fireTimers();
+    // The menu still opens on the DOWN tile (5,8), matching the tap — NOT the
+    // reprojected (8,8) that a live re-projection would have picked.
+    expect(contextMenuState.pendingShow).toBe(true);
+    expect([contextMenuState.anchorTileX, contextMenuState.anchorTileY]).toEqual([5, 8]);
+  });
+
   it('a MOUSE press does not arm a long-press (right-click is the mouse path)', () => {
     const h = makeHarness('underground', 'command', undefined, true);
     const p = tileCenter(5, 8, h.vs);

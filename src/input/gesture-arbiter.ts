@@ -966,25 +966,29 @@ export class GestureArbiter {
   }
 
   private handleRightClick(ev: ArbiterPointerEvent): void {
-    this.tryContextMenuAt(ev.x, ev.y);
+    // Right-click acts on the LIVE tile under the cursor (the click just happened).
+    const { tileX, tileY } = screenToTileZoom(ev.x, ev.y, activeCamera(this.deps.viewState));
+    this.tryContextMenuAt(ev.x, ev.y, tileX, tileY);
   }
 
   /**
-   * tryContextMenuAt — open the underground chamber menu at a screen point when
-   * eligible. Shared by right-click (handleRightClick) and the #237 PR4 touch
-   * long-press. Returns tryOpenChamberMenu's result (did the menu open?), so the
-   * long-press can leave a pending tap intact when nothing opens (surface / HUD /
-   * non-editable tile / no world).
+   * tryContextMenuAt — open the underground chamber menu for a screen point +
+   * target tile when eligible. Shared by right-click and the #237 PR4 touch
+   * long-press; the CALLER supplies the tile so each picks the right frame:
+   * right-click reprojects the live cursor, but the long-press passes the
+   * SNAPSHOTTED down-tile (single.tileX/tileY) so it agrees with the tap — a
+   * keyboard-pan / wheel-zoom during the hold must not retarget the menu to a
+   * tile the finger never pressed (Codex #274). Returns tryOpenChamberMenu's
+   * result (did the menu open?), so the long-press can leave a pending tap intact
+   * when nothing opens (surface / HUD / non-editable tile / no world).
    */
-  private tryContextMenuAt(x: number, y: number): boolean {
+  private tryContextMenuAt(x: number, y: number, tileX: number, tileY: number): boolean {
     if (!this.deps.canEditWorld()) return false;
     const vs = this.deps.viewState;
     if (vs.activeView !== 'underground') return false; // surface has no chamber menu
     if (this.deps.isPointerOverHUD(x, y)) return false;
     const world = this.deps.getWorld();
     if (!world) return false;
-    const cam = activeCamera(vs);
-    const { tileX, tileY } = screenToTileZoom(x, y, cam);
     return tryOpenChamberMenu(world, this.deps.getProjectedWorld(), vs, x, y, tileX, tileY);
   }
 
@@ -999,8 +1003,10 @@ export class GestureArbiter {
   private fireLongPress(): void {
     this.longPressCancel = null; // the timer just fired — nothing left to cancel
     if (this.mode !== 'single' || this.single === null || this.dragMode !== null) return;
-    const { downX, downY } = this.single;
-    if (!this.tryContextMenuAt(downX, downY)) return;
+    const snap = this.single;
+    // Use the SNAPSHOTTED down-tile (not a live reprojection of downX/downY) so the
+    // menu targets the tile the finger pressed, matching the tap — see Codex #274.
+    if (!this.tryContextMenuAt(snap.downX, snap.downY, snap.tileX, snap.tileY)) return;
     this.cancelGesture(); // menu opened → the press belongs to the menu, not a tap
   }
 
