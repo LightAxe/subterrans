@@ -848,3 +848,115 @@ describe('canEditWorld / canPan split', () => {
     expect(h.arbiter.isPainting()).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #237 PR1 — two-pointer transition table
+//
+// The arbiter tracks up to two button-0 (touch) pointers through an
+// idle → single → pinch → single state machine. PR1 only wires the state
+// bookkeeping (which finger owns the gesture, when a tap is / isn't emitted,
+// and the load-bearing pan-ownership handoff); the actual pinch-zoom camera
+// math lands in PR2. These tests pin the transitions by their OBSERVABLE
+// effects — hasPendingGesture() (a single is armed), panInputState.isPanning
+// (pan ownership), and world.commandQueue (a tap fired) — since mode/pointers
+// are private. Two fingers are distinct pointerIds on the same LEFT_BUTTON.
+// ---------------------------------------------------------------------------
+
+describe('#237 PR1 — two-pointer transition table', () => {
+  it('idle→single→pinch→single: a 2nd finger clears the single; lifting one re-arms the survivor', () => {
+    const h = makeHarness('surface', 'command');
+    const f1 = tileCenter(6, 1, h.vs);
+    const f2 = tileCenter(10, 1, h.vs);
+    // idle → single
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    expect(h.arbiter.hasPendingGesture()).toBe(true);
+    // single → pinch: the single snapshot is cleared (no pending tap while pinching)
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f2.x, f2.y, 2));
+    expect(h.arbiter.hasPendingGesture()).toBe(false);
+    // pinch → single: lifting finger 1 re-snapshots the survivor (finger 2)
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    expect(h.arbiter.hasPendingGesture()).toBe(true);
+  });
+
+  it('a re-down of the SAME finger while single does NOT enter pinch', () => {
+    const h = makeHarness('surface', 'command');
+    const f1 = tileCenter(6, 1, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    // Same pointerId down again → ignored; still a live single (not pinch).
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    expect(h.arbiter.hasPendingGesture()).toBe(true);
+    // Lifting it taps (proves it stayed 'single', not 'pinch' which emits no tap).
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    expect(h.world.commandQueue.some((c) => c.type === 'SetRallyPoint')).toBe(true);
+  });
+
+  it('lifting a pinch finger emits NO tap (pinch fingers are not taps)', () => {
+    const h = makeHarness('surface', 'command'); // a surface tap would enqueue SetRallyPoint
+    const f1 = tileCenter(6, 1, h.vs);
+    const f2 = tileCenter(10, 1, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // → pinch
+    const before = h.world.commandQueue.length;
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f1.x, f1.y, 1)); // lift a pinch finger
+    expect(h.world.commandQueue.length).toBe(before); // no tap enqueued
+  });
+
+  it('entering pinch from a live left-drag pan RELEASES the pan claim (#85 ownership protocol)', () => {
+    const h = makeHarness('surface', 'command');
+    const f1 = tileCenter(6, 4, h.vs);
+    const f2 = tileCenter(12, 4, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, f1.x + 40, f1.y, 1)); // cross threshold → pan
+    expect(panInputState.isPanning).toBe(true);
+    // 2nd finger → pinch. The handoff MUST go through cancelGesture (ownership-gated)
+    // so the live pan's isPanning claim is dropped — else keyboard pan stays locked.
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f2.x, f2.y, 2));
+    expect(panInputState.isPanning).toBe(false);
+  });
+
+  it('a 3rd finger during pinch is ignored and does not disturb the two tracked fingers', () => {
+    const h = makeHarness('surface', 'command');
+    const f1 = tileCenter(6, 1, h.vs);
+    const f2 = tileCenter(10, 1, h.vs);
+    const f3 = tileCenter(14, 1, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // → pinch
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f3.x, f3.y, 3)); // 3rd → ignored (untracked)
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f3.x, f3.y, 3)); // untracked up → ignored
+    expect(h.arbiter.hasPendingGesture()).toBe(false); // still pinch, undisturbed
+    // Lifting a REAL pinch finger still re-arms the survivor → proves f1/f2 intact.
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f2.x, f2.y, 2));
+    expect(h.arbiter.hasPendingGesture()).toBe(true);
+  });
+
+  it('onPointerUpOutside abandons a pinch: releases the pan claim, clears pointers, re-idles', () => {
+    const h = makeHarness('surface', 'command');
+    const f1 = tileCenter(6, 4, h.vs);
+    const f2 = tileCenter(12, 4, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, f1.x + 40, f1.y, 1)); // pan
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // → pinch (releases pan)
+    h.arbiter.onPointerUpOutside();
+    expect(h.arbiter.hasPendingGesture()).toBe(false);
+    expect(panInputState.isPanning).toBe(false);
+    // A fresh single works after the reset — the arbiter is not stranded in 'pinch'.
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    expect(h.arbiter.hasPendingGesture()).toBe(true);
+  });
+
+  it('a full two-finger pinch that lifts BOTH fingers returns to idle (no residual tap)', () => {
+    const h = makeHarness('surface', 'command');
+    const f1 = tileCenter(6, 1, h.vs);
+    const f2 = tileCenter(10, 1, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // → pinch
+    const before = h.world.commandQueue.length;
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f1.x, f1.y, 1)); // → survivor f2 single (no tap)
+    // Lifting the survivor with no intervening move IS a tap on its snapshot tile —
+    // that's the survivor behaving as a real single, which is correct. Assert only
+    // that the FIRST lift (the pinch finger) emitted nothing.
+    expect(h.world.commandQueue.length).toBe(before);
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // survivor up → back to idle
+    expect(h.arbiter.hasPendingGesture()).toBe(false);
+  });
+});

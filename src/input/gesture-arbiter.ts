@@ -100,6 +100,12 @@ export interface ArbiterPointerEvent {
   x: number;
   /** Screen Y in pixels. */
   y: number;
+  /**
+   * #237 — Phaser `pointer.wasTouch`: true when this event came from touch. The
+   * stable boolean to gate touch-only behavior (pinch entry / long-press / hover
+   * preview). Optional so existing unit tests need not set it (mouse paths).
+   */
+  wasTouch?: boolean;
 }
 
 /** Snapshot taken at left pointer-down; the tap acts on these, not live state. */
@@ -217,8 +223,17 @@ export class GestureArbiter {
   private readonly deps: GestureArbiterDeps;
   private readonly paintStroke: PaintStrokeState = createPaintStrokeState();
 
-  /** Snapshot of the active left press, or null when no left gesture is pending. */
-  private snapshot: GestureSnapshot | null = null;
+  /**
+   * #237 PR1 — two-pointer state. `mode` gates the handlers; `pointers` tracks
+   * every down button-0/touch pointer's live position (the source for a pinch's
+   * midpoint/distance in PR2, and for re-snapshotting the survivor when one pinch
+   * finger lifts). `single` is the tap/drag gesture (the former `snapshot`). The
+   * pinch camera state (`PinchState` + begin/applyPinch) arrives in PR2.
+   */
+  private mode: 'idle' | 'single' | 'pinch' = 'idle';
+  private pointers = new Map<number, { pointerId: number; x: number; y: number }>();
+  /** Snapshot of the active single (tap/drag) press, or null when none is pending. */
+  private single: GestureSnapshot | null = null;
   /** Once the threshold is crossed, the resolved drag mode ('paint' | 'pan'); null while still a tap. */
   private dragMode: 'paint' | 'pan' | null = null;
   /** Last pointer position seen during a pan drag (for incremental camera delta). */
@@ -245,9 +260,9 @@ export class GestureArbiter {
     return this.dragMode === 'paint' && this.paintStroke.active;
   }
 
-  /** True while a left gesture is pending (down seen, up not yet). */
+  /** True while a single (tap/drag) gesture is pending (down seen, up not yet). */
   hasPendingGesture(): boolean {
-    return this.snapshot !== null;
+    return this.single !== null;
   }
 
   /**
@@ -298,7 +313,7 @@ export class GestureArbiter {
    * release anyway.
    */
   private clearLeftGesture(): void {
-    this.snapshot = null;
+    this.single = null;
     this.dragMode = null;
     resetPaintStrokeState(this.paintStroke);
   }
@@ -349,32 +364,73 @@ export class GestureArbiter {
       return;
     }
     if (ev.button !== LEFT_BUTTON) return;
-    // While the chamber context menu is up (or about to (dis)appear), a left
-    // press is a menu select/dismiss owned by UIScene's pointerdown — don't arm
-    // a snapshot, or the same click would also fire a world tap (re-open the
-    // menu / mark a dig). Mirrors the retired underground-input guard.
+
+    // #237 PR1 — two-pointer transitions (button-0 / touch). `pointers` tracks
+    // every down button-0 pointer; `mode` gates the handlers.
+    if (this.mode === 'pinch') {
+      // A 3rd+ finger while pinching → ignore (not tracked).
+      return;
+    }
+    if (this.mode === 'single') {
+      // A 2nd distinct pointer while a single gesture is live → enter pinch.
+      if (this.single !== null && ev.pointerId === this.single.pointerId) return; // same id re-down
+      // Hand off via cancelGesture (NOT clearLeftGesture) so a live left-drag pan
+      // releases its panInputState.isPanning claim — the load-bearing pan-ownership
+      // protocol (see cancelGesture / issue #85 / Fix 2). It clears single/dragMode/
+      // paint but LEAVES `pointers` intact (finger 1 stays tracked).
+      this.cancelGesture();
+      this.pointers.set(ev.pointerId, { pointerId: ev.pointerId, x: ev.x, y: ev.y });
+      this.mode = 'pinch';
+      // PR2 wires beginPinch(...) here from the two tracked pointers.
+      return;
+    }
+
+    // mode === 'idle' — arm a single from the first pointer if the guards pass.
+    // While the chamber context menu is up (or about to (dis)appear), a left press
+    // is a menu select/dismiss owned by UIScene's pointerdown — don't arm, or the
+    // same click would also fire a world tap. Mirrors the retired underground guard.
     if (this.deps.isContextMenuActive()) return;
-    // Arm a snapshot if EITHER a pan or a world edit could result; the per-mode
-    // gate is re-checked when the gesture resolves (canPan in the move→pan
-    // branch, canEditWorld at paint-begin / tap dispatch). Gating the whole
-    // press on canEditWorld here would kill left-drag pan while user-paused.
+    // Arm if EITHER a pan or a world edit could result; the per-mode gate is
+    // re-checked when the gesture resolves (canPan in the move→pan branch,
+    // canEditWorld at paint-begin / tap dispatch). Gating the whole press on
+    // canEditWorld here would kill left-drag pan while user-paused.
     if (!this.deps.canPan() && !this.deps.canEditWorld()) return;
     if (this.deps.isPointerOverHUD(ev.x, ev.y)) return;
+    if (!this.armSingle(ev.pointerId, ev.x, ev.y)) return; // world unavailable
+    this.mode = 'single';
+    this.pointers.set(ev.pointerId, { pointerId: ev.pointerId, x: ev.x, y: ev.y });
 
+    // Stage 3b (#3): a world gesture has begun. Signal it so GameScene can evaluate
+    // the proactive [Tab] first-use nudge on the player's first world input of the
+    // session (the nudge gate reads view/undergroundVisited, which a pan/dig press
+    // does not change, so firing at press-time is safe).
+    this.deps.onWorldInput?.();
+  }
+
+  /**
+   * armSingle — capture a fresh single (tap/drag) snapshot at a screen position.
+   * Shared by a first left/touch down and by the survivor re-snapshot when one
+   * pinch finger lifts (#237 PR1). Returns false (nothing armed) when the world is
+   * unavailable. The tap acts on the SNAPSHOTTED tile/tool/view, not live state (a
+   * later keyboard change can't retarget it; reconcileContext cancels on such
+   * changes).
+   *
+   * Paint note: the underground-Dig stroke is NOT begun here — it is armed lazily
+   * on the first move classified as paint (see onPointerMove), so a release before
+   * the threshold is a single-tile Dig tap (onPointerUp) and cannot double-emit.
+   */
+  private armSingle(pointerId: number, x: number, y: number): boolean {
     const world = this.deps.getWorld();
-    if (!world) return;
+    if (!world) return false;
     const vs = this.deps.viewState;
     const cam = activeCamera(vs);
-    const { tileX, tileY } = screenToTileZoom(ev.x, ev.y, cam);
+    const { tileX, tileY } = screenToTileZoom(x, y, cam);
     const spiderHit =
-      vs.activeView === 'surface'
-        ? isSpiderHit(world, vs, ev.x, ev.y, this.deps.getPrevWorld())
-        : false;
-
-    this.snapshot = {
-      pointerId: ev.pointerId,
-      downX: ev.x,
-      downY: ev.y,
+      vs.activeView === 'surface' ? isSpiderHit(world, vs, x, y, this.deps.getPrevWorld()) : false;
+    this.single = {
+      pointerId,
+      downX: x,
+      downY: y,
       tileX,
       tileY,
       spiderHit,
@@ -383,26 +439,33 @@ export class GestureArbiter {
       undergroundColonyId: vs.activeUndergroundColonyId,
     };
     this.dragMode = null;
-    this.panLastX = ev.x;
-    this.panLastY = ev.y;
-
-    // Stage 3b (#3): a world gesture has begun. Signal it so GameScene can
-    // evaluate the proactive [Tab] first-use nudge on the player's first world
-    // input of the session (the nudge gate reads view/undergroundVisited, which
-    // a pan/dig press does not change, so firing at press-time is safe).
-    this.deps.onWorldInput?.();
-
-    // Eagerly begin a paint stroke for underground-Dig so the down-tile mark
-    // fires immediately (matching the prior click-then-drag behavior). The
-    // stroke only PAINTS once the threshold is crossed; a release before then
-    // is a single-tile Dig tap (handled in onPointerUp), so we must not let the
-    // eager begin double-emit. We therefore arm the stroke lazily on the first
-    // move classified as paint instead — see onPointerMove.
+    this.panLastX = x;
+    this.panLastY = y;
+    return true;
   }
 
   onPointerMove(ev: ArbiterPointerEvent): void {
-    const snap = this.snapshot;
+    // #237 PR1 — pinch: track each finger's live position (PR2 recomputes the
+    // midpoint/distance from `pointers` and applies the zoom here).
+    if (this.mode === 'pinch') {
+      const p = this.pointers.get(ev.pointerId);
+      if (p !== undefined) {
+        p.x = ev.x;
+        p.y = ev.y;
+      }
+      return;
+    }
+    if (this.mode !== 'single') return; // idle — no gesture pending
+
+    const snap = this.single;
     if (snap === null || ev.pointerId !== snap.pointerId) return;
+    // Keep the tracked position current so a 2nd finger's pinch begins from this
+    // pointer's live (moved) position, not its stale down position.
+    const tracked = this.pointers.get(ev.pointerId);
+    if (tracked !== undefined) {
+      tracked.x = ev.x;
+      tracked.y = ev.y;
+    }
 
     // Classify on first crossing of the threshold.
     if (this.dragMode === null) {
@@ -469,7 +532,39 @@ export class GestureArbiter {
   }
 
   onPointerUp(ev: ArbiterPointerEvent): void {
-    const snap = this.snapshot;
+    // #237 PR1 — a pinch finger lifted: NO tap. Drop it and re-snapshot the
+    // survivor as a fresh single (so lifting it later taps, moving it pans/paints).
+    if (this.mode === 'pinch') {
+      if (!this.pointers.has(ev.pointerId)) return; // untracked 3rd-finger up — ignore
+      this.pointers.delete(ev.pointerId);
+      const survivor = [...this.pointers.values()][0];
+      if (survivor !== undefined && this.armSingle(survivor.pointerId, survivor.x, survivor.y)) {
+        this.mode = 'single';
+      } else {
+        this.pointers.clear();
+        this.single = null;
+        this.dragMode = null;
+        this.mode = 'idle';
+      }
+      // PR2 clears pinch state (pinch = null) here.
+      return;
+    }
+    if (this.mode !== 'single') return; // idle — nothing pending
+
+    // Remove this pointer up-front so every exit path of the single-up teardown
+    // leaves `pointers` correct; then run today's single-gesture up handling.
+    this.pointers.delete(ev.pointerId);
+    this.handleSingleUp(ev);
+    if (this.pointers.size === 0) this.mode = 'idle';
+  }
+
+  /**
+   * handleSingleUp — today's single-pointer up handling (drag-end / menu-swallow /
+   * TAP). Operates on `this.single`; onPointerUp above owns the two-pointer
+   * bookkeeping. Extracted verbatim in #237 PR1.
+   */
+  private handleSingleUp(ev: ArbiterPointerEvent): void {
+    const snap = this.single;
     if (snap === null || ev.pointerId !== snap.pointerId) {
       // A left-up with no matching snapshot: the arbiter has no pending left
       // gesture, so it does NOT own panInputState.isPanning here. Leave the flag
@@ -521,9 +616,14 @@ export class GestureArbiter {
     this.cancelGesture();
   }
 
-  /** pointerupoutside / blur — abandon whatever was pending. */
+  /** pointerupoutside / blur — abandon everything pending. */
   onPointerUpOutside(): void {
+    // Release the single gesture (dropping pan iff owned), then clear all tracked
+    // pointers + any pinch so a stray finger can't strand the arbiter in 'pinch'.
     this.cancelGesture();
+    this.pointers.clear();
+    this.mode = 'idle';
+    // PR2 clears pinch state here.
   }
 
   // --- internals -----------------------------------------------------------
@@ -708,6 +808,7 @@ export function registerGestureArbiter(
       button: pointer.button,
       x: pointer.x,
       y: pointer.y,
+      wasTouch: pointer.wasTouch,
     });
   });
   scene.input.on('pointermove', (pointer: import('phaser').Input.Pointer) => {
@@ -719,6 +820,7 @@ export function registerGestureArbiter(
       button: pointer.button,
       x: pointer.x,
       y: pointer.y,
+      wasTouch: pointer.wasTouch,
     });
   });
   scene.input.on('pointerup', (pointer: import('phaser').Input.Pointer) => {
@@ -727,6 +829,7 @@ export function registerGestureArbiter(
       button: pointer.button,
       x: pointer.x,
       y: pointer.y,
+      wasTouch: pointer.wasTouch,
     });
   });
   scene.input.on('pointerupoutside', () => {

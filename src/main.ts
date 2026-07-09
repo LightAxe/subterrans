@@ -121,6 +121,10 @@ export function mount(target: HTMLElement, options?: MountOptions): MountedGame 
       width: CANVAS_W,
       height: CANVAS_H,
     },
+    // #237 — Phaser's default gives ONE active touch pointer, so a 2nd finger is
+    // invisible. Allow 3 (two fingers for pinch + headroom) so the arbiter's
+    // two-pointer tracking sees the second touch.
+    input: { activePointers: 3 },
     scene: [GameScene, UIScene],
     callbacks: {
       // preBoot fires before any scene is added or starts preload(), so the
