@@ -1074,6 +1074,20 @@ describe('#237 PR2 — pinch zoom drive', () => {
     expect(cam.zoom).toBe(cam.targetZoom); // zoom===targetZoom → tickZoomLerp is a no-op
   });
 
+  it('entering pinch cancels an in-flight wheel-zoom lerp so a stationary hold does not drift (Codex PR2)', () => {
+    const h = makeHarness('surface', 'command');
+    const cam = h.vs.surfaceCamera;
+    // Simulate a wheel zoom mid-lerp: zoom lags behind a larger targetZoom.
+    cam.zoom = 1;
+    cam.targetZoom = 1.8;
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, 350, 300, 1));
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, 450, 300, 2)); // enter pinch — must seize zoom now
+    // No pinch move yet. targetZoom must have snapped to zoom, or the per-frame
+    // tickZoomLerp would keep zooming toward 1.8 under stationary fingers.
+    expect(cam.targetZoom).toBe(cam.zoom);
+    expect(cam.zoom).toBe(1); // and the current zoom is untouched (no jump on entry)
+  });
+
   it('a two-finger drag ending at the same spread pans the camera (net zoom unchanged, center shifts)', () => {
     const h = makeHarness('surface', 'command');
     const cam = h.vs.surfaceCamera;

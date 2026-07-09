@@ -63,6 +63,7 @@ import {
   type PinchState,
   beginPinch,
   applyPinch,
+  cancelZoomLerp,
   clampCameraView,
   screenToTileZoom,
   panByScreenDelta,
@@ -438,8 +439,14 @@ export class GestureArbiter {
       // #237 PR2 — capture the pinch anchor from the two tracked fingers. Math.max
       // (dist, 1) guards a zero startDist (two touches reported at the same point)
       // so applyPinch's distance ratio stays finite.
+      const cam = activeCamera(this.deps.viewState);
+      // The pinch takes over the zoom NOW: cancel any in-flight wheel-zoom lerp
+      // (targetZoom≠zoom) so a STATIONARY two-finger hold can't keep lerping toward
+      // a stale targetZoom under the fingers before the first pinch move (Codex
+      // PR2). applyPinch then drives zoom===targetZoom directly.
+      cancelZoomLerp(cam);
       const { midX, midY, dist } = this.twoPointerMidDist();
-      this.pinch = beginPinch(activeCamera(this.deps.viewState), midX, midY, Math.max(dist, 1));
+      this.pinch = beginPinch(cam, midX, midY, Math.max(dist, 1));
       return;
     }
 
