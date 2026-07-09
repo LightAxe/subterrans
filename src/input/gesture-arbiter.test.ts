@@ -1197,4 +1197,16 @@ describe('#237 PR3 — injected drag threshold (touch-gated)', () => {
     h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 10, start.y));
     expect(panInputState.isPanning).toBe(true); // mouse desktop feel unchanged
   });
+
+  it('a mixed mouse+touch pinch leaves the survivor on its OWN device threshold (F2)', () => {
+    const h = makeHarness('surface', 'command', 20); // touch threshold injected
+    const start = tileCenter(6, 4, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y, 1, false)); // MOUSE finger 1
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x + 60, start.y, 2, true)); // TOUCH finger 2 → pinch
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, start.x + 60, start.y, 2, true)); // lift TOUCH → survivor = MOUSE finger 1
+    // The survivor carries the mouse's wasTouch=false, so a 10px drag pans at the
+    // fixed 6px, NOT the injected 20px touch threshold (a hardcoded `true` would defer).
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 10, start.y, 1, false));
+    expect(panInputState.isPanning).toBe(true);
+  });
 });

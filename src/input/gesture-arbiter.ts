@@ -248,7 +248,10 @@ export class GestureArbiter {
    * (PR2) is the captured pinch-start state; non-null iff `mode === 'pinch'`.
    */
   private mode: 'idle' | 'single' | 'pinch' = 'idle';
-  private pointers = new Map<number, { pointerId: number; x: number; y: number }>();
+  private pointers = new Map<
+    number,
+    { pointerId: number; x: number; y: number; wasTouch: boolean }
+  >();
   /** Snapshot of the active single (tap/drag) press, or null when none is pending. */
   private single: GestureSnapshot | null = null;
   /** #237 PR2 — captured pinch-start (zoom/dist/anchor); non-null iff mode==='pinch'. */
@@ -456,7 +459,12 @@ export class GestureArbiter {
       // stays tracked in `pointers` — cancelGesture would additionally reset the
       // very bookkeeping we are about to build the pinch from.
       this.releaseSingle();
-      this.pointers.set(ev.pointerId, { pointerId: ev.pointerId, x: ev.x, y: ev.y });
+      this.pointers.set(ev.pointerId, {
+        pointerId: ev.pointerId,
+        x: ev.x,
+        y: ev.y,
+        wasTouch: ev.wasTouch ?? false,
+      });
       this.mode = 'pinch';
       // #237 PR2 — capture the pinch anchor from the two tracked fingers. Math.max
       // (dist, 1) guards a zero startDist (two touches reported at the same point)
@@ -477,7 +485,12 @@ export class GestureArbiter {
     if (!this.canArmSingleAt(ev.x, ev.y)) return;
     if (!this.armSingle(ev.pointerId, ev.x, ev.y, ev.wasTouch ?? false)) return; // world unavailable
     this.mode = 'single';
-    this.pointers.set(ev.pointerId, { pointerId: ev.pointerId, x: ev.x, y: ev.y });
+    this.pointers.set(ev.pointerId, {
+      pointerId: ev.pointerId,
+      x: ev.x,
+      y: ev.y,
+      wasTouch: ev.wasTouch ?? false,
+    });
 
     // Stage 3b (#3): a world gesture has begun. Signal it so GameScene can evaluate
     // the proactive [Tab] first-use nudge on the player's first world input of the
@@ -690,8 +703,10 @@ export class GestureArbiter {
       if (
         survivor !== undefined &&
         this.canArmSingleAt(survivor.x, survivor.y) &&
-        // A pinch is touch-only (two fingers), so the survivor is a touch gesture.
-        this.armSingle(survivor.pointerId, survivor.x, survivor.y, true)
+        // Carry the survivor's OWN wasTouch (usually a touch pinch finger, but a
+        // mixed mouse+touch pinch can leave the mouse as survivor) so its drag
+        // threshold matches its real device (Fable #273 F2).
+        this.armSingle(survivor.pointerId, survivor.x, survivor.y, survivor.wasTouch)
       ) {
         this.mode = 'single';
         this.pinch = null; // #237 PR2 — pinch ended; the survivor is a plain single now
