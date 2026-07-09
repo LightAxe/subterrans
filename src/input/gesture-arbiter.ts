@@ -433,17 +433,9 @@ export class GestureArbiter {
       return;
     }
 
-    // mode === 'idle' — arm a single from the first pointer if the guards pass.
-    // While the chamber context menu is up (or about to (dis)appear), a left press
-    // is a menu select/dismiss owned by UIScene's pointerdown — don't arm, or the
-    // same click would also fire a world tap. Mirrors the retired underground guard.
-    if (this.deps.isContextMenuActive()) return;
-    // Arm if EITHER a pan or a world edit could result; the per-mode gate is
-    // re-checked when the gesture resolves (canPan in the move→pan branch,
-    // canEditWorld at paint-begin / tap dispatch). Gating the whole press on
-    // canEditWorld here would kill left-drag pan while user-paused.
-    if (!this.deps.canPan() && !this.deps.canEditWorld()) return;
-    if (this.deps.isPointerOverHUD(ev.x, ev.y)) return;
+    // mode === 'idle' — arm a single from the first pointer if the admission
+    // guards pass (context-menu / pan-or-edit / HUD; see canArmSingleAt).
+    if (!this.canArmSingleAt(ev.x, ev.y)) return;
     if (!this.armSingle(ev.pointerId, ev.x, ev.y)) return; // world unavailable
     this.mode = 'single';
     this.pointers.set(ev.pointerId, { pointerId: ev.pointerId, x: ev.x, y: ev.y });
@@ -456,12 +448,37 @@ export class GestureArbiter {
   }
 
   /**
+   * canArmSingleAt — the idle-down ADMISSION guards for arming a single (tap/drag)
+   * at a screen point. Applied both to a fresh first-pointer down AND to the
+   * survivor re-snapshot when one pinch finger lifts. The survivor re-check is
+   * load-bearing (Codex #271): the 2nd-finger→pinch handoff does NOT HUD-guard its
+   * pointer, so without re-checking here a finger placed on the HUD could outlive
+   * the pinch and dispatch a world tap from HUD coordinates.
+   *
+   *  - isContextMenuActive: while the chamber menu is up (or about to (dis)appear)
+   *    a left press is a menu select/dismiss owned by UIScene's pointerdown — don't
+   *    arm, or the same click would also fire a world tap.
+   *  - canPan || canEditWorld: arm if EITHER a pan or a world edit could result;
+   *    the per-mode gate is re-checked when the gesture resolves (canPan in the
+   *    move→pan branch, canEditWorld at paint-begin / tap dispatch). Gating the
+   *    whole press on canEditWorld would kill left-drag pan while user-paused.
+   *  - isPointerOverHUD: a press on a HUD zone belongs to the HUD, not the world.
+   */
+  private canArmSingleAt(x: number, y: number): boolean {
+    if (this.deps.isContextMenuActive()) return false;
+    if (!this.deps.canPan() && !this.deps.canEditWorld()) return false;
+    if (this.deps.isPointerOverHUD(x, y)) return false;
+    return true;
+  }
+
+  /**
    * armSingle — capture a fresh single (tap/drag) snapshot at a screen position.
    * Shared by a first left/touch down and by the survivor re-snapshot when one
    * pinch finger lifts (#237 PR1). Returns false (nothing armed) when the world is
-   * unavailable. The tap acts on the SNAPSHOTTED tile/tool/view, not live state (a
-   * later keyboard change can't retarget it; reconcileContext cancels on such
-   * changes).
+   * unavailable. Callers gate on canArmSingleAt FIRST (HUD/menu/edit admission);
+   * this only fails on an unavailable world. The tap acts on the SNAPSHOTTED
+   * tile/tool/view, not live state (a later keyboard change can't retarget it;
+   * reconcileContext cancels on such changes).
    *
    * Paint note: the underground-Dig stroke is NOT begun here — it is armed lazily
    * on the first move classified as paint (see onPointerMove), so a release before
@@ -595,13 +612,18 @@ export class GestureArbiter {
       if (!this.pointers.has(ev.pointerId)) return; // untracked 3rd-finger up — ignore
       this.pointers.delete(ev.pointerId);
       const survivor = [...this.pointers.values()][0];
-      if (survivor !== undefined && this.armSingle(survivor.pointerId, survivor.x, survivor.y)) {
+      // Re-apply the idle-down admission guards before re-arming (Codex #271): a
+      // survivor now over the HUD / under an open menu / with the world gone must
+      // NOT become a tap. If it can't arm, cancelGesture drops everything → idle
+      // (the still-down finger then no-ops until it lifts and a fresh press starts).
+      if (
+        survivor !== undefined &&
+        this.canArmSingleAt(survivor.x, survivor.y) &&
+        this.armSingle(survivor.pointerId, survivor.x, survivor.y)
+      ) {
         this.mode = 'single';
       } else {
-        this.pointers.clear();
-        this.single = null;
-        this.dragMode = null;
-        this.mode = 'idle';
+        this.cancelGesture();
       }
       // PR2 clears pinch state (pinch = null) here.
       return;

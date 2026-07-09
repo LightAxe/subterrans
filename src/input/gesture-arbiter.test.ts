@@ -1022,4 +1022,35 @@ describe('#237 PR1 — two-pointer transition table', () => {
     h.arbiter.onPointerUp(ev(LEFT_BUTTON, tap.x, tap.y, 1));
     expect(h.world.commandQueue.filter((c) => c.type === 'SetRallyPoint')).toHaveLength(1);
   });
+
+  it('a mid-drag paint-bail (canEditWorld→false) resets tracking so a later fresh dig tap marks once (F2 paint twin)', () => {
+    const h = makeHarness('underground', 'dig'); // underground+Dig → a drag classifies as paint
+    h.canEditWorld.value = false;
+    const start = tileCenter(5, 8, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y, 1));
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 40, start.y, 1)); // classify=paint → bail
+    expect(h.arbiter.hasPendingGesture()).toBe(false);
+    expect(h.arbiter.isPainting()).toBe(false);
+    // The bail reset the two-pointer bookkeeping; a fresh dig tap now marks once.
+    h.canEditWorld.value = true;
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y, 1));
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, start.x, start.y, 1));
+    expect(h.world.commandQueue.filter((c) => c.type === 'MarkDigTile')).toHaveLength(1);
+  });
+
+  it('a pinch survivor over the HUD is NOT re-armed as a world tap (idle guards re-applied on re-snapshot) (Codex #271)', () => {
+    const h = makeHarness('surface', 'command');
+    const worldPt = tileCenter(6, 1, h.vs);
+    const hudPt = { x: 4, y: 4 };
+    // Only finger 2's location reads as HUD. The 2nd-finger→pinch handoff does NOT
+    // HUD-guard, so finger 2 is tracked; the guard must bite on the survivor lift.
+    h.setHudHit((x, y) => x === hudPt.x && y === hudPt.y);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, worldPt.x, worldPt.y, 1)); // finger 1: world single
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, hudPt.x, hudPt.y, 2)); // finger 2 on HUD → pinch
+    const before = h.world.commandQueue.length;
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, worldPt.x, worldPt.y, 1)); // lift world finger → survivor = HUD finger
+    expect(h.arbiter.hasPendingGesture()).toBe(false); // survivor over HUD → dropped, not re-armed
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, hudPt.x, hudPt.y, 2)); // lift the HUD finger
+    expect(h.world.commandQueue.length).toBe(before); // no world tap from HUD coordinates
+  });
 });
