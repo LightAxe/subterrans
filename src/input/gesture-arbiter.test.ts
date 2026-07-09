@@ -944,20 +944,45 @@ describe('#237 PR1 — two-pointer transition table', () => {
     expect(h.arbiter.hasPendingGesture()).toBe(true);
   });
 
-  it('a full two-finger pinch that lifts BOTH fingers returns to idle (no residual tap)', () => {
+  it('a full two-finger pinch that lifts BOTH fingers returns to idle with NO tap (Codex #272)', () => {
     const h = makeHarness('surface', 'command');
     const f1 = tileCenter(6, 1, h.vs);
     const f2 = tileCenter(10, 1, h.vs);
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // → pinch
     const before = h.world.commandQueue.length;
-    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f1.x, f1.y, 1)); // → survivor f2 single (no tap)
-    // Lifting the survivor with no intervening move IS a tap on its snapshot tile —
-    // that's the survivor behaving as a real single, which is correct. Assert only
-    // that the FIRST lift (the pinch finger) emitted nothing.
-    expect(h.world.commandQueue.length).toBe(before);
-    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // survivor up → back to idle
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f1.x, f1.y, 1)); // lift finger 1 → survivor f2 re-armed
+    // The survivor is a pinch CONTINUATION, not a fresh press: lifting it with no
+    // intervening move is the pinch's paired release, so it must NOT tap — else a
+    // pinch-zoom release would drop a rally point / mark a dig tile.
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // lift finger 2 → end the pinch
+    expect(h.world.commandQueue.length).toBe(before); // neither lift enqueued anything
     expect(h.arbiter.hasPendingGesture()).toBe(false);
+  });
+
+  it('ending an underground-Dig pinch by lifting both fingers marks NO tile (Codex #272)', () => {
+    const h = makeHarness('underground', 'dig'); // a stray tap here would MarkDigTile
+    const f1 = tileCenter(5, 8, h.vs);
+    const f2 = tileCenter(9, 8, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // → pinch
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f1.x, f1.y, 1)); // survivor re-armed
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // paired release
+    expect(h.world.commandQueue.filter((c) => c.type === 'MarkDigTile')).toHaveLength(0);
+  });
+
+  it('a pinch survivor that CONTINUES as a one-finger drag still pans (fix suppresses only the no-move tap)', () => {
+    const h = makeHarness('surface', 'command');
+    const f1 = tileCenter(6, 1, h.vs);
+    const f2 = tileCenter(10, 1, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // → pinch
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // lift f2 → survivor = f1
+    // Survivor moves > threshold → it's a real one-finger pan, unaffected by the tap guard.
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, f1.x + 40, f1.y, 1));
+    expect(panInputState.isPanning).toBe(true);
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f1.x + 40, f1.y, 1));
+    expect(panInputState.isPanning).toBe(false); // pan ended cleanly, still no tap
   });
 
   // --- Codex-review regressions (abandon paths must reset the two-pointer
@@ -1052,5 +1077,72 @@ describe('#237 PR1 — two-pointer transition table', () => {
     expect(h.arbiter.hasPendingGesture()).toBe(false); // survivor over HUD → dropped, not re-armed
     h.arbiter.onPointerUp(ev(LEFT_BUTTON, hudPt.x, hudPt.y, 2)); // lift the HUD finger
     expect(h.world.commandQueue.length).toBe(before); // no world tap from HUD coordinates
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #237 PR2 — the arbiter drives the pinch zoom on the active camera. (The pinch
+// math itself is unit-tested in camera-adapter.test.ts; here we assert the
+// arbiter wires two-finger geometry into beginPinch/applyPinch + clears it.)
+// ---------------------------------------------------------------------------
+
+describe('#237 PR2 — pinch zoom drive', () => {
+  it('spreading two fingers apart zooms the active camera IN, driving zoom directly (no lerp)', () => {
+    const h = makeHarness('surface', 'command');
+    const cam = h.vs.surfaceCamera;
+    cam.zoom = cam.targetZoom = 1; // known mid-range start
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, 350, 300, 1));
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, 450, 300, 2)); // enter pinch (dist 100)
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, 300, 300, 1)); // dist 150
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, 500, 300, 2)); // dist 200 → 2×
+    expect(cam.zoom).toBeGreaterThan(1);
+    expect(cam.zoom).toBe(cam.targetZoom); // zoom===targetZoom → tickZoomLerp is a no-op
+  });
+
+  it('entering pinch cancels an in-flight wheel-zoom lerp so a stationary hold does not drift (Codex PR2)', () => {
+    const h = makeHarness('surface', 'command');
+    const cam = h.vs.surfaceCamera;
+    // Simulate a wheel zoom mid-lerp: zoom lags behind a larger targetZoom.
+    cam.zoom = 1;
+    cam.targetZoom = 1.8;
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, 350, 300, 1));
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, 450, 300, 2)); // enter pinch — must seize zoom now
+    // No pinch move yet. targetZoom must have snapped to zoom, or the per-frame
+    // tickZoomLerp would keep zooming toward 1.8 under stationary fingers.
+    expect(cam.targetZoom).toBe(cam.zoom);
+    expect(cam.zoom).toBe(1); // and the current zoom is untouched (no jump on entry)
+  });
+
+  it('a two-finger drag ending at the same spread pans the camera (net zoom unchanged, center shifts)', () => {
+    const h = makeHarness('surface', 'command');
+    const cam = h.vs.surfaceCamera;
+    // Seat the camera well inside the world so clampCameraView is a no-op and the
+    // raw pan shift is observable (the default harness center hugs an edge).
+    cam.zoom = cam.targetZoom = 1;
+    cam.centerX = 1000;
+    cam.centerY = 500;
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, 350, 300, 1));
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, 450, 300, 2)); // dist 100
+    // Slide both fingers +60px right (final spread back to 100) → net pan, no net zoom.
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, 410, 300, 1));
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, 510, 300, 2));
+    expect(cam.zoom).toBeCloseTo(1, 6); // final spread == start spread → no net zoom
+    expect(cam.centerX).toBeCloseTo(940, 6); // 1000 − 60: content followed the fingers
+  });
+
+  it('lifting one pinch finger ends the zoom drive — a later single-finger move pans, not zooms', () => {
+    const h = makeHarness('surface', 'command');
+    const cam = h.vs.surfaceCamera;
+    cam.zoom = cam.targetZoom = 1;
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, 350, 300, 1));
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, 450, 300, 2)); // pinch
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, 300, 300, 1)); // zoom in
+    const zoomedIn = cam.zoom;
+    expect(zoomedIn).toBeGreaterThan(1);
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, 450, 300, 2)); // lift finger 2 → survivor finger 1 becomes a single
+    // A single-finger drag now pans; it must NOT keep driving the (ended) pinch zoom.
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, 340, 300, 1)); // 40px from re-snapshot (300) → crosses threshold → pan
+    expect(cam.zoom).toBe(zoomedIn); // zoom frozen at the pinch's last value
+    expect(panInputState.isPanning).toBe(true); // it resolved as a pan
   });
 });

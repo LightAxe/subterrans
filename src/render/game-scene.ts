@@ -292,6 +292,11 @@ declare global {
        *  sim state, crossing the sim/render boundary). Empty until the first
        *  frame renders. Issue #193. */
       getDrawOrder(): string[];
+      /** Return the ACTIVE camera's current zoom (surface or underground per the
+       *  active view). Render-side observability for the #237 pinch-zoom e2e
+       *  (touch-smoke.spec.ts): reads viewState, mutates nothing, crosses no
+       *  sim/render boundary. Dev-build only. */
+      getActiveZoom(): number;
     };
   }
 }
@@ -482,6 +487,11 @@ export class GameScene extends Phaser.Scene {
     if (!import.meta.env.DEV || typeof window === 'undefined') return;
     window.__phase9_test = {
       getDrawOrder: (): string[] => [...this.drawOrder],
+      getActiveZoom: (): number =>
+        (this.viewState.activeView === 'surface'
+          ? this.viewState.surfaceCamera
+          : this.viewState.undergroundCamera
+        ).zoom,
     };
   }
 
