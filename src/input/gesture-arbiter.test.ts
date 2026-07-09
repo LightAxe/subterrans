@@ -959,4 +959,67 @@ describe('#237 PR1 — two-pointer transition table', () => {
     h.arbiter.onPointerUp(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // survivor up → back to idle
     expect(h.arbiter.hasPendingGesture()).toBe(false);
   });
+
+  // --- Codex-review regressions (abandon paths must reset the two-pointer
+  // bookkeeping, or the NEXT down mis-routes; the invariant is
+  // `mode==='single' ⇒ single!==null`). ------------------------------------
+
+  it('reconcileContext during a pinch abandons it: the fingers lift with no tap, then a fresh tap works once (F1)', () => {
+    const h = makeHarness('surface', 'command');
+    const f1 = tileCenter(6, 1, h.vs);
+    const f2 = tileCenter(10, 1, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // → pinch
+    // A keyboard tool switch lands mid-pinch; the per-frame reconcile aborts it.
+    h.vs.activeTool = 'dig';
+    h.arbiter.reconcileContext();
+    const before = h.world.commandQueue.length;
+    // Teeth: lifting one finger must NOT re-arm the survivor as a single. Pre-fix
+    // the reconcile stranded mode='pinch' with both pointers, so this up re-armed
+    // finger 2 (hasPendingGesture → true) and its later lift could tap. Post-fix
+    // the pinch is fully reset, so the lift is a no-op against an idle arbiter.
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    expect(h.arbiter.hasPendingGesture()).toBe(false); // survivor NOT re-armed
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f2.x, f2.y, 2));
+    expect(h.world.commandQueue.length).toBe(before); // neither lift emitted a tap
+    // Settle the context back and prove a fresh single taps exactly once.
+    h.vs.activeTool = 'command';
+    h.arbiter.reconcileContext();
+    const tap = tileCenter(7, 1, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, tap.x, tap.y, 1));
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, tap.x, tap.y, 1));
+    expect(h.world.commandQueue.filter((c) => c.type === 'SetRallyPoint')).toHaveLength(1);
+  });
+
+  it('cancelGesture during a single (matching pointerup LOST), then a fresh same-finger tap fires once — not swallowed (F2)', () => {
+    const h = makeHarness('surface', 'command');
+    const f1 = tileCenter(6, 1, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    // A blur / tool-select cancels the gesture; the matching pointerup never arrives.
+    h.arbiter.cancelGesture();
+    expect(h.arbiter.hasPendingGesture()).toBe(false);
+    // A fresh press of the SAME pointerId must arm a NEW single (idle→single), not
+    // fall through the stale mode==='single' path into the 2nd-finger pinch branch.
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    expect(h.arbiter.hasPendingGesture()).toBe(true);
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    expect(h.world.commandQueue.filter((c) => c.type === 'SetRallyPoint')).toHaveLength(1);
+  });
+
+  it('a mid-drag pan-bail (canPan→false) resets tracking so a later fresh tap fires once (F2)', () => {
+    const h = makeHarness('surface', 'command');
+    const start = tileCenter(6, 4, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y, 1));
+    h.canPan.value = false; // the pan gate flips off before the drag classifies
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 40, start.y, 1)); // classify=pan → bail
+    expect(h.arbiter.hasPendingGesture()).toBe(false);
+    expect(panInputState.isPanning).toBe(false); // never claimed
+    // The bail must have reset the two-pointer bookkeeping to idle; a fresh press
+    // (same id) therefore arms a clean single and taps once.
+    h.canPan.value = true;
+    const tap = tileCenter(7, 1, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, tap.x, tap.y, 1));
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, tap.x, tap.y, 1));
+    expect(h.world.commandQueue.filter((c) => c.type === 'SetRallyPoint')).toHaveLength(1);
+  });
 });

@@ -266,12 +266,39 @@ export class GestureArbiter {
   }
 
   /**
-   * cancelGesture — synchronously abandon any in-flight left gesture: clear the
-   * pending tap (snapshot), the paint stroke, the pan/drag state, AND
-   * panInputState.isPanning IFF the arbiter currently owns the pan (a left-drag
-   * pan, dragMode==='pan'). Idempotent; safe to call when nothing is pending.
+   * cancelGesture — FULLY abandon any in-flight gesture: release the single
+   * (tap/drag) snapshot + paint stroke, drop panInputState.isPanning IFF the
+   * arbiter owns the pan (dragMode==='pan'), AND reset the two-pointer
+   * bookkeeping (mode→idle, every tracked pointer forgotten). Idempotent; safe
+   * when nothing is pending.
    *
-   * The isPanning clear is guarded on ownership because that flag is a shared
+   * This is the "abandon everything" primitive every abort caller wants —
+   * reconcileContext (tool/view/colony change), selectTool, blur, the RIGHT
+   * button, and the pan/menu/tap teardowns in handleSingleUp. The two-pointer
+   * reset (#237 PR1) is load-bearing: a keyboard-driven cancel DURING a pinch
+   * must not strand mode='pinch' with live `pointers`, or a later finger-lift
+   * would re-arm a stray single / emit a tap under the changed context (Codex
+   * F1). Likewise it guarantees the invariant `mode==='single' ⇒ single!==null`:
+   * a cancel can never leave mode='single' with a null snapshot for the next
+   * down to mis-route into the 2nd-finger (pinch) branch (Codex F2).
+   *
+   * The single→pinch handoff (onPointerDown) deliberately does NOT use this — it
+   * needs the ownership-gated release WITHOUT the pointer reset (finger 1 stays
+   * tracked for the pinch), so it calls releaseSingle directly.
+   */
+  cancelGesture(): void {
+    this.releaseSingle();
+    this.resetPointerTracking();
+  }
+
+  /**
+   * releaseSingle — ownership-gated teardown of the single (tap/drag) gesture:
+   * clear its snapshot + paint stroke, and drop panInputState.isPanning IFF this
+   * gesture owned the pan (dragMode==='pan'). Does NOT touch the two-pointer
+   * bookkeeping — cancelGesture layers resetPointerTracking on top; the
+   * single→pinch handoff calls this ALONE so finger 1 stays tracked.
+   *
+   * The isPanning clear is ownership-guarded because that flag is a shared
    * singleton: registerDragPan claims it for a MIDDLE-button drag-pan. Callers
    * such as reconcileContext (tool/view/colony change) and selectTool fire on the
    * frame a hotkey lands, which can be DURING a live middle-drag; an unconditional
@@ -280,18 +307,33 @@ export class GestureArbiter {
    * pointerdown, never on move). When dragMode!=='pan' the arbiter does not own
    * isPanning, so it leaves the flag to whoever does.
    *
-   * Fix 2 — cancelGesture (NOT clearLeftGesture) is what the RIGHT-button branch
-   * uses, so a right-click DURING an active left-drag pan (dragMode==='pan')
-   * releases the pan claim: right-click has no registerDragPan release handler, so
-   * without this the flag would stay set and keyboard pan would remain suppressed
-   * (the #85 lock) until another full pan or a session reset. The ownership guard
-   * keeps it safe when the left gesture was NOT panning (dragMode null → a foreign
-   * isPanning, e.g. set by some other owner, is left intact).
+   * Fix 2 — cancelGesture (via releaseSingle, NOT clearLeftGesture) is what the
+   * RIGHT-button branch uses, so a right-click DURING an active left-drag pan
+   * (dragMode==='pan') releases the pan claim: right-click has no registerDragPan
+   * release handler, so without this the flag would stay set and keyboard pan
+   * would remain suppressed (the #85 lock) until another full pan or a session
+   * reset. The ownership guard keeps it safe when the left gesture was NOT panning
+   * (dragMode null → a foreign isPanning, e.g. set by some other owner, is left
+   * intact).
    */
-  cancelGesture(): void {
+  private releaseSingle(): void {
     const ownsPan = this.dragMode === 'pan';
     this.clearLeftGesture();
     if (ownsPan) panInputState.isPanning = false;
+  }
+
+  /**
+   * resetPointerTracking — return the two-pointer state machine to idle: forget
+   * every tracked pointer and set mode='idle'. Paired with releaseSingle by
+   * cancelGesture, and with clearLeftGesture by the mid-drag paint/pan bails and
+   * the secondary-button branch — i.e. anywhere a gesture is abandoned WITHOUT a
+   * matching pointerup. Keeping it out of those paths would let mode='single'
+   * linger with a null single (or mode='pinch' linger with dead pointers), which
+   * mis-routes the next down (Codex F1/F2).
+   */
+  private resetPointerTracking(): void {
+    this.pointers.clear();
+    this.mode = 'idle';
   }
 
   /**
@@ -359,7 +401,12 @@ export class GestureArbiter {
         this.cancelGesture();
         this.handleRightClick(ev);
       } else {
+        // MIDDLE: clearLeftGesture leaves isPanning ALONE (registerDragPan just
+        // claimed it for the middle drag); resetPointerTracking still abandons the
+        // left gesture's two-pointer bookkeeping so a stale mode/pointer can't
+        // outlive it (without touching isPanning).
         this.clearLeftGesture();
+        this.resetPointerTracking();
       }
       return;
     }
@@ -374,11 +421,12 @@ export class GestureArbiter {
     if (this.mode === 'single') {
       // A 2nd distinct pointer while a single gesture is live → enter pinch.
       if (this.single !== null && ev.pointerId === this.single.pointerId) return; // same id re-down
-      // Hand off via cancelGesture (NOT clearLeftGesture) so a live left-drag pan
-      // releases its panInputState.isPanning claim — the load-bearing pan-ownership
-      // protocol (see cancelGesture / issue #85 / Fix 2). It clears single/dragMode/
-      // paint but LEAVES `pointers` intact (finger 1 stays tracked).
-      this.cancelGesture();
+      // Hand off via releaseSingle (NOT cancelGesture) so a live left-drag pan
+      // releases its panInputState.isPanning claim through the load-bearing
+      // ownership protocol (see releaseSingle / issue #85 / Fix 2) while finger 1
+      // stays tracked in `pointers` — cancelGesture would additionally reset the
+      // very bookkeeping we are about to build the pinch from.
+      this.releaseSingle();
       this.pointers.set(ev.pointerId, { pointerId: ev.pointerId, x: ev.x, y: ev.y });
       this.mode = 'pinch';
       // PR2 wires beginPinch(...) here from the two tracked pointers.
@@ -479,7 +527,11 @@ export class GestureArbiter {
         // Use clearLeftGesture (not cancelGesture): no pan was claimed here, so
         // we must not touch panInputState.isPanning a concurrent owner may hold.
         if (!this.deps.canEditWorld()) {
+          // Abandon the whole gesture: clearLeftGesture (no isPanning to release —
+          // paint never claimed it) + resetPointerTracking so mode/pointers don't
+          // linger as a stale 'single' the next down would mis-route (Codex F2).
           this.clearLeftGesture();
+          this.resetPointerTracking();
           return;
         }
         const world = this.deps.getWorld();
@@ -507,7 +559,12 @@ export class GestureArbiter {
         // it yet on this path — the claim below is the only setter — and a
         // concurrent middle-drag may own it).
         if (!this.deps.canPan()) {
+          // Abandon before claiming the camera: clearLeftGesture leaves isPanning
+          // untouched (we never set it on this path; a concurrent middle-drag may
+          // own it) and resets dragMode→null; resetPointerTracking clears the stale
+          // 'single' bookkeeping so the next down isn't mis-routed (Codex F2).
           this.clearLeftGesture();
+          this.resetPointerTracking();
           return;
         }
         // Claim the camera so keyboard pan is suppressed for the duration.
@@ -618,11 +675,10 @@ export class GestureArbiter {
 
   /** pointerupoutside / blur — abandon everything pending. */
   onPointerUpOutside(): void {
-    // Release the single gesture (dropping pan iff owned), then clear all tracked
-    // pointers + any pinch so a stray finger can't strand the arbiter in 'pinch'.
+    // cancelGesture now fully resets: releases the single (dropping pan iff owned)
+    // AND clears the two-pointer bookkeeping (mode→idle, pointers cleared), so a
+    // stray finger can't strand the arbiter in 'pinch'.
     this.cancelGesture();
-    this.pointers.clear();
-    this.mode = 'idle';
     // PR2 clears pinch state here.
   }
 
