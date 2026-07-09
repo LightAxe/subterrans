@@ -922,6 +922,13 @@ export class GameScene extends Phaser.Scene {
       // #237 PR3 — scale-tuned drag threshold; recomputeDragThreshold keeps the
       // stored value current across resizes.
       getDragThreshold: () => this.dragThresholdPx,
+      // #237 PR4 — Phaser timer seam for the touch long-press → chamber menu. The
+      // returned canceller removes the pending event; Phaser's remove() is a no-op
+      // once the event has fired, matching the dep's "safe after fire" contract.
+      scheduleTimeout: (cb: () => void, ms: number): (() => void) => {
+        const event = this.time.delayedCall(ms, cb);
+        return () => event.remove();
+      },
     });
     // Seed the threshold from the real canvas size now the scene is live, and keep
     // it current as the FIT-scaled canvas resizes (window resize / rotate).
