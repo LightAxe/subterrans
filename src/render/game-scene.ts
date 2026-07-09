@@ -152,6 +152,7 @@ import {
   panInputState,
 } from '../input/camera-input.js';
 import { registerGestureArbiter, type GestureArbiter } from '../input/gesture-arbiter.js';
+import { thresholdLogicalPx, DRAG_THRESHOLD_PX } from '../input/gesture.js';
 import { CommandProjection } from './command-projection.js';
 import { CommandFeedforward, type FeedforwardOutcome } from './command-feedforward.js';
 import { computeGhostDelta } from './command-ghosts.js';
@@ -197,7 +198,7 @@ import {
   type FlashDirection,
 } from './screen-effects.js';
 import { ChamberType } from '../sim/enums.js';
-import { DEFAULT_LAYOUT } from './layout.js';
+import { DEFAULT_LAYOUT, cssScaleX } from './layout.js';
 import { buildHudLayout } from './hud-layout.js';
 // UIScenePhase9 — subset of UIScene public API added in Plan 06 Task 3.
 // Typed here to avoid circular imports; UIScene implements these methods.
@@ -312,6 +313,11 @@ export class GameScene extends Phaser.Scene {
   // masks read the same zone rects the HUD draws.
   private layout = DEFAULT_LAYOUT;
   private hud = buildHudLayout(this.layout);
+  // #237 PR3 — scale-tuned drag threshold in LOGICAL px, recomputed from the
+  // canvas CSS width at boot + on resize (recomputeDragThreshold) and read by the
+  // arbiter via getDragThreshold. Starts at the fixed desktop default until the
+  // first real measurement (a pre-layout width of 0 is ignored).
+  private dragThresholdPx = DRAG_THRESHOLD_PX;
   private gameLoop!: GameLoop;
   private gfx!: Phaser.GameObjects.Graphics;
   // Overlay layer for world-space primitives that must render above the sprite
@@ -463,6 +469,21 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * #237 PR3 — recompute the scale-tuned drag threshold (logical px) from the
+   * canvas's current CSS width. Called at boot and on Scale RESIZE. A pre-layout
+   * or hidden canvas can report width 0; skip then and keep the current value
+   * (the fixed default at boot) rather than dividing by zero into a bogus scale.
+   *
+   * A bound arrow property (not a method) so the SAME reference registers and
+   * de-registers on the game-global Scale Manager, and `this` stays the scene.
+   */
+  private readonly recomputeDragThreshold = (): void => {
+    const cssWidth = this.game.canvas?.getBoundingClientRect().width ?? 0;
+    if (!(cssWidth > 0)) return; // negated so NaN (NaN > 0 is false) is also skipped
+    this.dragThresholdPx = thresholdLogicalPx(cssScaleX(cssWidth, this.layout));
+  };
+
   /** DEV/E2E-only render-order trace (issue #193). The draw section of update()
    *  records the layer sequence each frame so a Playwright test can assert the
    *  pheromone overlay is drawn between terrain and entities — the exact
@@ -603,6 +624,9 @@ export class GameScene extends Phaser.Scene {
       // terrainBaker is off the display list (make.graphics addToScene=false), so Phaser
       // won't auto-destroy it on shutdown — free its WebGL batch explicitly.
       this.terrainBaker.destroy();
+      // #237 PR3 — the RESIZE listener is on the game-global Scale Manager, which
+      // outlives the scene; drop it so a restart can't accumulate stale callbacks.
+      this.scale.off(Phaser.Scale.Events.RESIZE, this.recomputeDragThreshold);
     });
 
     // Issue #122 — pull the playtrace endpoint out of the registry (set by
@@ -895,7 +919,14 @@ export class GameScene extends Phaser.Scene {
       onPanEffect: () => this.firstUseReactive('pan'),
       onPaintEffect: () => this.firstUseReactive('paint'),
       onWorldInput: () => this.noteWorldInput(),
+      // #237 PR3 — scale-tuned drag threshold; recomputeDragThreshold keeps the
+      // stored value current across resizes.
+      getDragThreshold: () => this.dragThresholdPx,
     });
+    // Seed the threshold from the real canvas size now the scene is live, and keep
+    // it current as the FIT-scaled canvas resizes (window resize / rotate).
+    this.recomputeDragThreshold();
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.recomputeDragThreshold);
 
     // Entrance hover (Dig + surface): track the POINTER screen coords so the
     // hover outline can be re-resolved to a tile + validity from the LIVE camera
