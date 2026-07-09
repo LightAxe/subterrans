@@ -21,11 +21,32 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
+      // Exclude the touch-only specs (#237) — they need hasTouch and run in the
+      // chromium-touch project below. Anchored to a basename starting with
+      // `touch-` (leading slash) so a hypothetical `retouch-*.spec.ts` can't
+      // sneak in, while future `touch-<feature>.spec.ts` (PR4 long-press, PR5
+      // hover) match without a config change.
+      testIgnore: /[\\/]touch-[^\\/]*\.spec\.ts$/,
       use: {
         ...devices['Desktop Chrome'],
         // --disable-gpu prevents WebGL framebuffer errors in headless Chromium
         // (Phaser falls back to Canvas renderer cleanly without this flag causing
         //  "Framebuffer status: Framebuffer Unsupported" console errors).
+        launchOptions: {
+          args: ['--disable-gpu'],
+        },
+      },
+    },
+    {
+      // #237 PR2 — touch project: same Chrome, but hasTouch so page.touchscreen /
+      // CDP Input.dispatchTouchEvent deliver real touch pointers (activePointers:3
+      // in main.ts then surfaces the 2nd finger to the arbiter). Same testMatch
+      // anchor as the chromium testIgnore above, kept in sync deliberately.
+      name: 'chromium-touch',
+      testMatch: /[\\/]touch-[^\\/]*\.spec\.ts$/,
+      use: {
+        ...devices['Desktop Chrome'],
+        hasTouch: true,
         launchOptions: {
           args: ['--disable-gpu'],
         },

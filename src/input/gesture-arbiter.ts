@@ -60,6 +60,9 @@ import type { ViewState, ToolId } from '../render/camera.js';
 import { TILE_SIZE_PX } from '../render/sprites.js';
 import {
   type CameraView,
+  type PinchState,
+  beginPinch,
+  applyPinch,
   clampCameraView,
   screenToTileZoom,
   panByScreenDelta,
@@ -224,16 +227,18 @@ export class GestureArbiter {
   private readonly paintStroke: PaintStrokeState = createPaintStrokeState();
 
   /**
-   * #237 PR1 — two-pointer state. `mode` gates the handlers; `pointers` tracks
-   * every down button-0/touch pointer's live position (the source for a pinch's
-   * midpoint/distance in PR2, and for re-snapshotting the survivor when one pinch
-   * finger lifts). `single` is the tap/drag gesture (the former `snapshot`). The
-   * pinch camera state (`PinchState` + begin/applyPinch) arrives in PR2.
+   * #237 two-pointer state. `mode` gates the handlers; `pointers` tracks every
+   * down button-0/touch pointer's live position (the source for a pinch's
+   * midpoint/distance, and for re-snapshotting the survivor when one pinch finger
+   * lifts). `single` is the tap/drag gesture (the former `snapshot`). `pinch`
+   * (PR2) is the captured pinch-start state; non-null iff `mode === 'pinch'`.
    */
   private mode: 'idle' | 'single' | 'pinch' = 'idle';
   private pointers = new Map<number, { pointerId: number; x: number; y: number }>();
   /** Snapshot of the active single (tap/drag) press, or null when none is pending. */
   private single: GestureSnapshot | null = null;
+  /** #237 PR2 — captured pinch-start (zoom/dist/anchor); non-null iff mode==='pinch'. */
+  private pinch: PinchState | null = null;
   /** Once the threshold is crossed, the resolved drag mode ('paint' | 'pan'); null while still a tap. */
   private dragMode: 'paint' | 'pan' | null = null;
   /** Last pointer position seen during a pan drag (for incremental camera delta). */
@@ -334,6 +339,7 @@ export class GestureArbiter {
   private resetPointerTracking(): void {
     this.pointers.clear();
     this.mode = 'idle';
+    this.pinch = null; // #237 PR2 — pinch state lives only while mode==='pinch'
   }
 
   /**
@@ -429,7 +435,11 @@ export class GestureArbiter {
       this.releaseSingle();
       this.pointers.set(ev.pointerId, { pointerId: ev.pointerId, x: ev.x, y: ev.y });
       this.mode = 'pinch';
-      // PR2 wires beginPinch(...) here from the two tracked pointers.
+      // #237 PR2 — capture the pinch anchor from the two tracked fingers. Math.max
+      // (dist, 1) guards a zero startDist (two touches reported at the same point)
+      // so applyPinch's distance ratio stays finite.
+      const { midX, midY, dist } = this.twoPointerMidDist();
+      this.pinch = beginPinch(activeCamera(this.deps.viewState), midX, midY, Math.max(dist, 1));
       return;
     }
 
@@ -509,14 +519,37 @@ export class GestureArbiter {
     return true;
   }
 
+  /**
+   * twoPointerMidDist — the midpoint and finger-distance of the two tracked pinch
+   * pointers (#237 PR2), the source for beginPinch/applyPinch. Only called while
+   * pinching (exactly two tracked fingers); the undefined-guard satisfies
+   * noUncheckedIndexedAccess and degrades to a no-op zoom (dist=1) if ever reached
+   * with fewer.
+   */
+  private twoPointerMidDist(): { midX: number; midY: number; dist: number } {
+    const [a, b] = [...this.pointers.values()];
+    if (a === undefined || b === undefined) {
+      return { midX: a?.x ?? b?.x ?? 0, midY: a?.y ?? b?.y ?? 0, dist: 1 };
+    }
+    return { midX: (a.x + b.x) / 2, midY: (a.y + b.y) / 2, dist: Math.hypot(a.x - b.x, a.y - b.y) };
+  }
+
   onPointerMove(ev: ArbiterPointerEvent): void {
-    // #237 PR1 — pinch: track each finger's live position (PR2 recomputes the
-    // midpoint/distance from `pointers` and applies the zoom here).
+    // #237 pinch: track each tracked finger's live position, then recompute the
+    // midpoint/distance and drive the anchored zoom (PR2).
     if (this.mode === 'pinch') {
       const p = this.pointers.get(ev.pointerId);
-      if (p !== undefined) {
-        p.x = ev.x;
-        p.y = ev.y;
+      if (p === undefined) return; // untracked 3rd finger — its moves don't drive the pinch
+      p.x = ev.x;
+      p.y = ev.y;
+      if (this.pinch !== null) {
+        const vs = this.deps.viewState;
+        const cam = activeCamera(vs);
+        const { midX, midY, dist } = this.twoPointerMidDist();
+        // Anchored zoom about the CURRENT midpoint folds the two-finger pan in.
+        applyPinch(cam, this.pinch, midX, midY, dist);
+        const [worldW, worldH] = worldDimensions(vs);
+        clampCameraView(cam, worldW, worldH);
       }
       return;
     }
@@ -622,10 +655,10 @@ export class GestureArbiter {
         this.armSingle(survivor.pointerId, survivor.x, survivor.y)
       ) {
         this.mode = 'single';
+        this.pinch = null; // #237 PR2 — pinch ended; the survivor is a plain single now
       } else {
-        this.cancelGesture();
+        this.cancelGesture(); // drops pinch via resetPointerTracking
       }
-      // PR2 clears pinch state (pinch = null) here.
       return;
     }
     if (this.mode !== 'single') return; // idle — nothing pending
@@ -697,11 +730,10 @@ export class GestureArbiter {
 
   /** pointerupoutside / blur — abandon everything pending. */
   onPointerUpOutside(): void {
-    // cancelGesture now fully resets: releases the single (dropping pan iff owned)
-    // AND clears the two-pointer bookkeeping (mode→idle, pointers cleared), so a
-    // stray finger can't strand the arbiter in 'pinch'.
+    // cancelGesture fully resets: releases the single (dropping pan iff owned) AND
+    // clears the two-pointer bookkeeping via resetPointerTracking (mode→idle,
+    // pointers cleared, pinch=null), so a stray finger can't strand the arbiter.
     this.cancelGesture();
-    // PR2 clears pinch state here.
   }
 
   // --- internals -----------------------------------------------------------

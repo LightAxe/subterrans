@@ -1054,3 +1054,56 @@ describe('#237 PR1 — two-pointer transition table', () => {
     expect(h.world.commandQueue.length).toBe(before); // no world tap from HUD coordinates
   });
 });
+
+// ---------------------------------------------------------------------------
+// #237 PR2 — the arbiter drives the pinch zoom on the active camera. (The pinch
+// math itself is unit-tested in camera-adapter.test.ts; here we assert the
+// arbiter wires two-finger geometry into beginPinch/applyPinch + clears it.)
+// ---------------------------------------------------------------------------
+
+describe('#237 PR2 — pinch zoom drive', () => {
+  it('spreading two fingers apart zooms the active camera IN, driving zoom directly (no lerp)', () => {
+    const h = makeHarness('surface', 'command');
+    const cam = h.vs.surfaceCamera;
+    cam.zoom = cam.targetZoom = 1; // known mid-range start
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, 350, 300, 1));
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, 450, 300, 2)); // enter pinch (dist 100)
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, 300, 300, 1)); // dist 150
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, 500, 300, 2)); // dist 200 → 2×
+    expect(cam.zoom).toBeGreaterThan(1);
+    expect(cam.zoom).toBe(cam.targetZoom); // zoom===targetZoom → tickZoomLerp is a no-op
+  });
+
+  it('a two-finger drag ending at the same spread pans the camera (net zoom unchanged, center shifts)', () => {
+    const h = makeHarness('surface', 'command');
+    const cam = h.vs.surfaceCamera;
+    // Seat the camera well inside the world so clampCameraView is a no-op and the
+    // raw pan shift is observable (the default harness center hugs an edge).
+    cam.zoom = cam.targetZoom = 1;
+    cam.centerX = 1000;
+    cam.centerY = 500;
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, 350, 300, 1));
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, 450, 300, 2)); // dist 100
+    // Slide both fingers +60px right (final spread back to 100) → net pan, no net zoom.
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, 410, 300, 1));
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, 510, 300, 2));
+    expect(cam.zoom).toBeCloseTo(1, 6); // final spread == start spread → no net zoom
+    expect(cam.centerX).toBeCloseTo(940, 6); // 1000 − 60: content followed the fingers
+  });
+
+  it('lifting one pinch finger ends the zoom drive — a later single-finger move pans, not zooms', () => {
+    const h = makeHarness('surface', 'command');
+    const cam = h.vs.surfaceCamera;
+    cam.zoom = cam.targetZoom = 1;
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, 350, 300, 1));
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, 450, 300, 2)); // pinch
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, 300, 300, 1)); // zoom in
+    const zoomedIn = cam.zoom;
+    expect(zoomedIn).toBeGreaterThan(1);
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, 450, 300, 2)); // lift finger 2 → survivor finger 1 becomes a single
+    // A single-finger drag now pans; it must NOT keep driving the (ended) pinch zoom.
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, 340, 300, 1)); // 40px from re-snapshot (300) → crosses threshold → pan
+    expect(cam.zoom).toBe(zoomedIn); // zoom frozen at the pinch's last value
+    expect(panInputState.isPanning).toBe(true); // it resolved as a pan
+  });
+});

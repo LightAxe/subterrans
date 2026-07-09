@@ -334,6 +334,66 @@ export function cancelZoomLerp(v: CameraView): void {
 }
 
 // ---------------------------------------------------------------------------
+// Pinch zoom (touch — #237 PR2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Captured at pinch-start: the zoom and finger-distance the gesture began at, plus
+ * the world point under the START midpoint. applyPinch scales zoom by the live
+ * distance ratio and re-anchors so that world point stays under the CURRENT
+ * midpoint — which folds the two-finger pan into the same operation (no separate
+ * pan term). The wheel-zoom analog is ZoomAnchor; pinch differs in that it drives
+ * zoom DIRECTLY (both zoom and targetZoom), bypassing the per-frame lerp — the
+ * fingers ARE the animation, so a lerp would only add lag.
+ */
+export interface PinchState {
+  startZoom: number;
+  startDist: number;
+  anchorWorldX: number;
+  anchorWorldY: number;
+}
+
+/**
+ * Begin a pinch. Captures the current zoom + the world point under the start
+ * midpoint (screenToWorld at the current view). Does NOT mutate v. Callers pass a
+ * strictly-positive startDist (guard Math.max(dist, 1)) so applyPinch's ratio is
+ * finite.
+ */
+export function beginPinch(
+  v: CameraView,
+  midX: number,
+  midY: number,
+  startDist: number,
+): PinchState {
+  const { worldX, worldY } = screenToWorld(midX, midY, v);
+  return { startZoom: v.zoom, startDist, anchorWorldX: worldX, anchorWorldY: worldY };
+}
+
+/**
+ * Apply a pinch update. Scales zoom by the live finger-distance ratio (clamped),
+ * then re-anchors the center so the start-midpoint world point sits under the
+ * CURRENT midpoint at the new zoom — same center-solve as applyZoomAnchor
+ * (centerX = worldX − (screenX − viewportW/2)/zoom), evaluated at the moved
+ * midpoint so a two-finger drag pans for free. Sets zoom === targetZoom so the
+ * per-frame tickZoomLerp is a no-op and cameraController.apply just pushes this
+ * view. Mutates v (matches applyZoomAnchor / panByScreenDelta). Caller clamps to
+ * world bounds afterward (clampCameraView).
+ */
+export function applyPinch(
+  v: CameraView,
+  p: PinchState,
+  midX: number,
+  midY: number,
+  curDist: number,
+): void {
+  const z = clampZoom((p.startZoom * curDist) / p.startDist);
+  v.zoom = z;
+  v.targetZoom = z;
+  v.centerX = p.anchorWorldX - (midX - viewportW / 2) / z;
+  v.centerY = p.anchorWorldY - (midY - viewportH / 2) / z;
+}
+
+// ---------------------------------------------------------------------------
 // Pan (PLAN §D15)
 // ---------------------------------------------------------------------------
 

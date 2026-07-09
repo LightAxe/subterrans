@@ -30,6 +30,8 @@ import {
   clampCameraView,
   beginWheelZoom,
   applyZoomAnchor,
+  beginPinch,
+  applyPinch,
   stepZoomLerp,
   cancelZoomLerp,
   panByScreenDelta,
@@ -267,6 +269,61 @@ describe('cursor-anchored zoom (no drift across lerp)', () => {
     v.targetZoom = 1.9;
     cancelZoomLerp(v);
     expect(v.targetZoom).toBe(0.7);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pinch zoom (touch — #237 PR2)
+// ---------------------------------------------------------------------------
+
+describe('pinch zoom (#237 PR2)', () => {
+  it('beginPinch captures startZoom + the world point under the start midpoint, and does not mutate v', () => {
+    const v = view(1000, 500, 1.3);
+    const before = { ...v };
+    const p = beginPinch(v, 350, 275, 90);
+    expect(p.startZoom).toBe(1.3);
+    expect(p.startDist).toBe(90);
+    const w = screenToWorld(350, 275, v);
+    expect(p.anchorWorldX).toBeCloseTo(w.worldX, 6);
+    expect(p.anchorWorldY).toBeCloseTo(w.worldY, 6);
+    expect(v).toEqual(before); // begin is read-only
+  });
+
+  it('applyPinch scales zoom by the live finger-distance ratio, driving zoom directly (no lerp)', () => {
+    const v = view(1000, 500, 1);
+    const p = beginPinch(v, 400, 300, 100);
+    applyPinch(v, p, 400, 300, 150); // 1.5× the start distance, stays within [MIN,MAX]
+    expect(v.zoom).toBeCloseTo(1.5, 6);
+    expect(v.targetZoom).toBe(v.zoom); // zoom===targetZoom → tickZoomLerp is a no-op
+  });
+
+  it('clamps zoom to [MIN_ZOOM, MAX_ZOOM] at extreme distance ratios', () => {
+    const vIn = view(1000, 500, 1);
+    applyPinch(vIn, beginPinch(vIn, 400, 300, 10), 400, 300, 10000); // huge ratio
+    expect(vIn.zoom).toBe(MAX_ZOOM);
+    const vOut = view(1000, 500, 1);
+    applyPinch(vOut, beginPinch(vOut, 400, 300, 10000), 400, 300, 10); // tiny ratio
+    expect(vOut.zoom).toBe(MIN_ZOOM);
+  });
+
+  it('keeps the start-midpoint world point under the CURRENT (moved) midpoint — folds the two-finger pan in', () => {
+    const v = view(1000, 500, 0.8);
+    const p = beginPinch(v, 300, 250, 120);
+    // Move the midpoint AND change the distance in one update.
+    applyPinch(v, p, 500, 420, 240);
+    const under = screenToWorld(500, 420, v);
+    expect(under.worldX).toBeCloseTo(p.anchorWorldX, 4);
+    expect(under.worldY).toBeCloseTo(p.anchorWorldY, 4);
+  });
+
+  it('a pure two-finger pan (same distance, moved midpoint) zooms not at all but shifts the center', () => {
+    const v = view(1000, 500, 1);
+    const p = beginPinch(v, 400, 300, 150);
+    applyPinch(v, p, 460, 300, 150); // midpoint slid +60px right, distance unchanged
+    expect(v.zoom).toBeCloseTo(1, 6); // ratio 1 → no zoom
+    // Content follows the fingers: center shifts −60/zoom world px (like panByScreenDelta).
+    expect(v.centerX).toBeCloseTo(1000 - 60, 6);
+    expect(v.centerY).toBeCloseTo(500, 6);
   });
 });
 
