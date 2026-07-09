@@ -944,20 +944,45 @@ describe('#237 PR1 — two-pointer transition table', () => {
     expect(h.arbiter.hasPendingGesture()).toBe(true);
   });
 
-  it('a full two-finger pinch that lifts BOTH fingers returns to idle (no residual tap)', () => {
+  it('a full two-finger pinch that lifts BOTH fingers returns to idle with NO tap (Codex #272)', () => {
     const h = makeHarness('surface', 'command');
     const f1 = tileCenter(6, 1, h.vs);
     const f2 = tileCenter(10, 1, h.vs);
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
     h.arbiter.onPointerDown(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // → pinch
     const before = h.world.commandQueue.length;
-    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f1.x, f1.y, 1)); // → survivor f2 single (no tap)
-    // Lifting the survivor with no intervening move IS a tap on its snapshot tile —
-    // that's the survivor behaving as a real single, which is correct. Assert only
-    // that the FIRST lift (the pinch finger) emitted nothing.
-    expect(h.world.commandQueue.length).toBe(before);
-    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // survivor up → back to idle
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f1.x, f1.y, 1)); // lift finger 1 → survivor f2 re-armed
+    // The survivor is a pinch CONTINUATION, not a fresh press: lifting it with no
+    // intervening move is the pinch's paired release, so it must NOT tap — else a
+    // pinch-zoom release would drop a rally point / mark a dig tile.
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // lift finger 2 → end the pinch
+    expect(h.world.commandQueue.length).toBe(before); // neither lift enqueued anything
     expect(h.arbiter.hasPendingGesture()).toBe(false);
+  });
+
+  it('ending an underground-Dig pinch by lifting both fingers marks NO tile (Codex #272)', () => {
+    const h = makeHarness('underground', 'dig'); // a stray tap here would MarkDigTile
+    const f1 = tileCenter(5, 8, h.vs);
+    const f2 = tileCenter(9, 8, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // → pinch
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f1.x, f1.y, 1)); // survivor re-armed
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // paired release
+    expect(h.world.commandQueue.filter((c) => c.type === 'MarkDigTile')).toHaveLength(0);
+  });
+
+  it('a pinch survivor that CONTINUES as a one-finger drag still pans (fix suppresses only the no-move tap)', () => {
+    const h = makeHarness('surface', 'command');
+    const f1 = tileCenter(6, 1, h.vs);
+    const f2 = tileCenter(10, 1, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f1.x, f1.y, 1));
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // → pinch
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f2.x, f2.y, 2)); // lift f2 → survivor = f1
+    // Survivor moves > threshold → it's a real one-finger pan, unaffected by the tap guard.
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, f1.x + 40, f1.y, 1));
+    expect(panInputState.isPanning).toBe(true);
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, f1.x + 40, f1.y, 1));
+    expect(panInputState.isPanning).toBe(false); // pan ended cleanly, still no tap
   });
 
   // --- Codex-review regressions (abandon paths must reset the two-pointer

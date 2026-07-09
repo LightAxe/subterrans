@@ -240,6 +240,14 @@ export class GestureArbiter {
   private single: GestureSnapshot | null = null;
   /** #237 PR2 — captured pinch-start (zoom/dist/anchor); non-null iff mode==='pinch'. */
   private pinch: PinchState | null = null;
+  /**
+   * #237 — true when `single` was re-armed from a pinch SURVIVOR (one finger of a
+   * two-finger pinch lifted while the other stayed down). Such a single may still
+   * pan/paint if it MOVES, but a lift with no intervening move is the paired
+   * release of the pinch (both fingers up ~together), NOT a one-finger tap — so it
+   * must not dispatch a tap (Codex #272 P1). Reset on every fresh arm / abandon.
+   */
+  private singleFromPinch = false;
   /** Once the threshold is crossed, the resolved drag mode ('paint' | 'pan'); null while still a tap. */
   private dragMode: 'paint' | 'pan' | null = null;
   /** Last pointer position seen during a pan drag (for incremental camera delta). */
@@ -364,6 +372,7 @@ export class GestureArbiter {
   private clearLeftGesture(): void {
     this.single = null;
     this.dragMode = null;
+    this.singleFromPinch = false;
     resetPaintStrokeState(this.paintStroke);
   }
 
@@ -521,6 +530,7 @@ export class GestureArbiter {
       undergroundColonyId: vs.activeUndergroundColonyId,
     };
     this.dragMode = null;
+    this.singleFromPinch = false; // fresh arm; the survivor re-arm re-sets this true
     this.panLastX = x;
     this.panLastY = y;
     return true;
@@ -663,6 +673,9 @@ export class GestureArbiter {
       ) {
         this.mode = 'single';
         this.pinch = null; // #237 PR2 — pinch ended; the survivor is a plain single now
+        // Mark it pinch-derived: it can pan/paint if it MOVES, but a lift with no
+        // move is the pinch's paired release, not a tap (suppressed in handleSingleUp).
+        this.singleFromPinch = true;
       } else {
         this.cancelGesture(); // drops pinch via resetPointerTracking
       }
@@ -721,6 +734,16 @@ export class GestureArbiter {
     // or mark a dig at the menu-anchor tile. (onPointerDown already blocks NEW
     // presses while the menu is active; this covers the in-flight case.)
     if (this.deps.isContextMenuActive()) {
+      this.cancelGesture();
+      return;
+    }
+
+    // A pinch SURVIVOR that never moved is the paired release of the two-finger
+    // pinch (both fingers lift ~together), NOT a one-finger tap — suppress it so a
+    // pinch-zoom release can't move the rally point / mark a dig tile (Codex #272
+    // P1). A survivor that MOVED took the dragMode!==null path above (pan/paint),
+    // so this only gates the no-move release; a genuine tap needs a fresh press.
+    if (this.singleFromPinch) {
       this.cancelGesture();
       return;
     }
