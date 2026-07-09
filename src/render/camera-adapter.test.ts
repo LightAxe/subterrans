@@ -23,6 +23,8 @@ import {
   viewWorldWidth,
   viewWorldHeight,
   setViewportSize,
+  getViewportWidth,
+  getViewportHeight,
   visibleWorldRect,
   screenToWorld,
   worldToScreen,
@@ -164,6 +166,18 @@ describe('setViewportSize (#238 PR3 — non-default viewport)', () => {
     // No setViewportSize here — the prior case's afterEach has reset it.
     expect(viewWorldWidth(1)).toBe(CANVAS_W);
     expect(viewWorldHeight(1)).toBe(CANVAS_H);
+  });
+});
+
+describe('getViewportWidth / getViewportHeight (#236 PR1 — pheromone cache key)', () => {
+  afterEach(() => setViewportSize(CANVAS_W, CANVAS_H));
+
+  it('return the default canvas size, then reflect setViewportSize', () => {
+    expect(getViewportWidth()).toBe(CANVAS_W);
+    expect(getViewportHeight()).toBe(CANVAS_H);
+    setViewportSize(360, 640);
+    expect(getViewportWidth()).toBe(360);
+    expect(getViewportHeight()).toBe(640);
   });
 });
 
