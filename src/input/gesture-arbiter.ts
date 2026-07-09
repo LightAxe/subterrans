@@ -100,6 +100,12 @@ export interface ArbiterPointerEvent {
   x: number;
   /** Screen Y in pixels. */
   y: number;
+  /**
+   * #237 — Phaser `pointer.wasTouch`: true when this event came from touch. The
+   * stable boolean to gate touch-only behavior (pinch entry / long-press / hover
+   * preview). Optional so existing unit tests need not set it (mouse paths).
+   */
+  wasTouch?: boolean;
 }
 
 /** Snapshot taken at left pointer-down; the tap acts on these, not live state. */
@@ -217,8 +223,17 @@ export class GestureArbiter {
   private readonly deps: GestureArbiterDeps;
   private readonly paintStroke: PaintStrokeState = createPaintStrokeState();
 
-  /** Snapshot of the active left press, or null when no left gesture is pending. */
-  private snapshot: GestureSnapshot | null = null;
+  /**
+   * #237 PR1 — two-pointer state. `mode` gates the handlers; `pointers` tracks
+   * every down button-0/touch pointer's live position (the source for a pinch's
+   * midpoint/distance in PR2, and for re-snapshotting the survivor when one pinch
+   * finger lifts). `single` is the tap/drag gesture (the former `snapshot`). The
+   * pinch camera state (`PinchState` + begin/applyPinch) arrives in PR2.
+   */
+  private mode: 'idle' | 'single' | 'pinch' = 'idle';
+  private pointers = new Map<number, { pointerId: number; x: number; y: number }>();
+  /** Snapshot of the active single (tap/drag) press, or null when none is pending. */
+  private single: GestureSnapshot | null = null;
   /** Once the threshold is crossed, the resolved drag mode ('paint' | 'pan'); null while still a tap. */
   private dragMode: 'paint' | 'pan' | null = null;
   /** Last pointer position seen during a pan drag (for incremental camera delta). */
@@ -245,18 +260,45 @@ export class GestureArbiter {
     return this.dragMode === 'paint' && this.paintStroke.active;
   }
 
-  /** True while a left gesture is pending (down seen, up not yet). */
+  /** True while a single (tap/drag) gesture is pending (down seen, up not yet). */
   hasPendingGesture(): boolean {
-    return this.snapshot !== null;
+    return this.single !== null;
   }
 
   /**
-   * cancelGesture — synchronously abandon any in-flight left gesture: clear the
-   * pending tap (snapshot), the paint stroke, the pan/drag state, AND
-   * panInputState.isPanning IFF the arbiter currently owns the pan (a left-drag
-   * pan, dragMode==='pan'). Idempotent; safe to call when nothing is pending.
+   * cancelGesture — FULLY abandon any in-flight gesture: release the single
+   * (tap/drag) snapshot + paint stroke, drop panInputState.isPanning IFF the
+   * arbiter owns the pan (dragMode==='pan'), AND reset the two-pointer
+   * bookkeeping (mode→idle, every tracked pointer forgotten). Idempotent; safe
+   * when nothing is pending.
    *
-   * The isPanning clear is guarded on ownership because that flag is a shared
+   * This is the "abandon everything" primitive every abort caller wants —
+   * reconcileContext (tool/view/colony change), selectTool, blur, the RIGHT
+   * button, and the pan/menu/tap teardowns in handleSingleUp. The two-pointer
+   * reset (#237 PR1) is load-bearing: a keyboard-driven cancel DURING a pinch
+   * must not strand mode='pinch' with live `pointers`, or a later finger-lift
+   * would re-arm a stray single / emit a tap under the changed context (Codex
+   * F1). Likewise it guarantees the invariant `mode==='single' ⇒ single!==null`:
+   * a cancel can never leave mode='single' with a null snapshot for the next
+   * down to mis-route into the 2nd-finger (pinch) branch (Codex F2).
+   *
+   * The single→pinch handoff (onPointerDown) deliberately does NOT use this — it
+   * needs the ownership-gated release WITHOUT the pointer reset (finger 1 stays
+   * tracked for the pinch), so it calls releaseSingle directly.
+   */
+  cancelGesture(): void {
+    this.releaseSingle();
+    this.resetPointerTracking();
+  }
+
+  /**
+   * releaseSingle — ownership-gated teardown of the single (tap/drag) gesture:
+   * clear its snapshot + paint stroke, and drop panInputState.isPanning IFF this
+   * gesture owned the pan (dragMode==='pan'). Does NOT touch the two-pointer
+   * bookkeeping — cancelGesture layers resetPointerTracking on top; the
+   * single→pinch handoff calls this ALONE so finger 1 stays tracked.
+   *
+   * The isPanning clear is ownership-guarded because that flag is a shared
    * singleton: registerDragPan claims it for a MIDDLE-button drag-pan. Callers
    * such as reconcileContext (tool/view/colony change) and selectTool fire on the
    * frame a hotkey lands, which can be DURING a live middle-drag; an unconditional
@@ -265,18 +307,33 @@ export class GestureArbiter {
    * pointerdown, never on move). When dragMode!=='pan' the arbiter does not own
    * isPanning, so it leaves the flag to whoever does.
    *
-   * Fix 2 — cancelGesture (NOT clearLeftGesture) is what the RIGHT-button branch
-   * uses, so a right-click DURING an active left-drag pan (dragMode==='pan')
-   * releases the pan claim: right-click has no registerDragPan release handler, so
-   * without this the flag would stay set and keyboard pan would remain suppressed
-   * (the #85 lock) until another full pan or a session reset. The ownership guard
-   * keeps it safe when the left gesture was NOT panning (dragMode null → a foreign
-   * isPanning, e.g. set by some other owner, is left intact).
+   * Fix 2 — cancelGesture (via releaseSingle, NOT clearLeftGesture) is what the
+   * RIGHT-button branch uses, so a right-click DURING an active left-drag pan
+   * (dragMode==='pan') releases the pan claim: right-click has no registerDragPan
+   * release handler, so without this the flag would stay set and keyboard pan
+   * would remain suppressed (the #85 lock) until another full pan or a session
+   * reset. The ownership guard keeps it safe when the left gesture was NOT panning
+   * (dragMode null → a foreign isPanning, e.g. set by some other owner, is left
+   * intact).
    */
-  cancelGesture(): void {
+  private releaseSingle(): void {
     const ownsPan = this.dragMode === 'pan';
     this.clearLeftGesture();
     if (ownsPan) panInputState.isPanning = false;
+  }
+
+  /**
+   * resetPointerTracking — return the two-pointer state machine to idle: forget
+   * every tracked pointer and set mode='idle'. Paired with releaseSingle by
+   * cancelGesture, and with clearLeftGesture by the mid-drag paint/pan bails and
+   * the secondary-button branch — i.e. anywhere a gesture is abandoned WITHOUT a
+   * matching pointerup. Keeping it out of those paths would let mode='single'
+   * linger with a null single (or mode='pinch' linger with dead pointers), which
+   * mis-routes the next down (Codex F1/F2).
+   */
+  private resetPointerTracking(): void {
+    this.pointers.clear();
+    this.mode = 'idle';
   }
 
   /**
@@ -298,7 +355,7 @@ export class GestureArbiter {
    * release anyway.
    */
   private clearLeftGesture(): void {
-    this.snapshot = null;
+    this.single = null;
     this.dragMode = null;
     resetPaintStrokeState(this.paintStroke);
   }
@@ -344,37 +401,101 @@ export class GestureArbiter {
         this.cancelGesture();
         this.handleRightClick(ev);
       } else {
+        // MIDDLE: clearLeftGesture leaves isPanning ALONE (registerDragPan just
+        // claimed it for the middle drag); resetPointerTracking still abandons the
+        // left gesture's two-pointer bookkeeping so a stale mode/pointer can't
+        // outlive it (without touching isPanning).
         this.clearLeftGesture();
+        this.resetPointerTracking();
       }
       return;
     }
     if (ev.button !== LEFT_BUTTON) return;
-    // While the chamber context menu is up (or about to (dis)appear), a left
-    // press is a menu select/dismiss owned by UIScene's pointerdown — don't arm
-    // a snapshot, or the same click would also fire a world tap (re-open the
-    // menu / mark a dig). Mirrors the retired underground-input guard.
-    if (this.deps.isContextMenuActive()) return;
-    // Arm a snapshot if EITHER a pan or a world edit could result; the per-mode
-    // gate is re-checked when the gesture resolves (canPan in the move→pan
-    // branch, canEditWorld at paint-begin / tap dispatch). Gating the whole
-    // press on canEditWorld here would kill left-drag pan while user-paused.
-    if (!this.deps.canPan() && !this.deps.canEditWorld()) return;
-    if (this.deps.isPointerOverHUD(ev.x, ev.y)) return;
 
+    // #237 PR1 — two-pointer transitions (button-0 / touch). `pointers` tracks
+    // every down button-0 pointer; `mode` gates the handlers.
+    if (this.mode === 'pinch') {
+      // A 3rd+ finger while pinching → ignore (not tracked).
+      return;
+    }
+    if (this.mode === 'single') {
+      // A 2nd distinct pointer while a single gesture is live → enter pinch.
+      if (this.single !== null && ev.pointerId === this.single.pointerId) return; // same id re-down
+      // Hand off via releaseSingle (NOT cancelGesture) so a live left-drag pan
+      // releases its panInputState.isPanning claim through the load-bearing
+      // ownership protocol (see releaseSingle / issue #85 / Fix 2) while finger 1
+      // stays tracked in `pointers` — cancelGesture would additionally reset the
+      // very bookkeeping we are about to build the pinch from.
+      this.releaseSingle();
+      this.pointers.set(ev.pointerId, { pointerId: ev.pointerId, x: ev.x, y: ev.y });
+      this.mode = 'pinch';
+      // PR2 wires beginPinch(...) here from the two tracked pointers.
+      return;
+    }
+
+    // mode === 'idle' — arm a single from the first pointer if the admission
+    // guards pass (context-menu / pan-or-edit / HUD; see canArmSingleAt).
+    if (!this.canArmSingleAt(ev.x, ev.y)) return;
+    if (!this.armSingle(ev.pointerId, ev.x, ev.y)) return; // world unavailable
+    this.mode = 'single';
+    this.pointers.set(ev.pointerId, { pointerId: ev.pointerId, x: ev.x, y: ev.y });
+
+    // Stage 3b (#3): a world gesture has begun. Signal it so GameScene can evaluate
+    // the proactive [Tab] first-use nudge on the player's first world input of the
+    // session (the nudge gate reads view/undergroundVisited, which a pan/dig press
+    // does not change, so firing at press-time is safe).
+    this.deps.onWorldInput?.();
+  }
+
+  /**
+   * canArmSingleAt — the idle-down ADMISSION guards for arming a single (tap/drag)
+   * at a screen point. Applied both to a fresh first-pointer down AND to the
+   * survivor re-snapshot when one pinch finger lifts. The survivor re-check is
+   * load-bearing (Codex #271): the 2nd-finger→pinch handoff does NOT HUD-guard its
+   * pointer, so without re-checking here a finger placed on the HUD could outlive
+   * the pinch and dispatch a world tap from HUD coordinates.
+   *
+   *  - isContextMenuActive: while the chamber menu is up (or about to (dis)appear)
+   *    a left press is a menu select/dismiss owned by UIScene's pointerdown — don't
+   *    arm, or the same click would also fire a world tap.
+   *  - canPan || canEditWorld: arm if EITHER a pan or a world edit could result;
+   *    the per-mode gate is re-checked when the gesture resolves (canPan in the
+   *    move→pan branch, canEditWorld at paint-begin / tap dispatch). Gating the
+   *    whole press on canEditWorld would kill left-drag pan while user-paused.
+   *  - isPointerOverHUD: a press on a HUD zone belongs to the HUD, not the world.
+   */
+  private canArmSingleAt(x: number, y: number): boolean {
+    if (this.deps.isContextMenuActive()) return false;
+    if (!this.deps.canPan() && !this.deps.canEditWorld()) return false;
+    if (this.deps.isPointerOverHUD(x, y)) return false;
+    return true;
+  }
+
+  /**
+   * armSingle — capture a fresh single (tap/drag) snapshot at a screen position.
+   * Shared by a first left/touch down and by the survivor re-snapshot when one
+   * pinch finger lifts (#237 PR1). Returns false (nothing armed) when the world is
+   * unavailable. Callers gate on canArmSingleAt FIRST (HUD/menu/edit admission);
+   * this only fails on an unavailable world. The tap acts on the SNAPSHOTTED
+   * tile/tool/view, not live state (a later keyboard change can't retarget it;
+   * reconcileContext cancels on such changes).
+   *
+   * Paint note: the underground-Dig stroke is NOT begun here — it is armed lazily
+   * on the first move classified as paint (see onPointerMove), so a release before
+   * the threshold is a single-tile Dig tap (onPointerUp) and cannot double-emit.
+   */
+  private armSingle(pointerId: number, x: number, y: number): boolean {
     const world = this.deps.getWorld();
-    if (!world) return;
+    if (!world) return false;
     const vs = this.deps.viewState;
     const cam = activeCamera(vs);
-    const { tileX, tileY } = screenToTileZoom(ev.x, ev.y, cam);
+    const { tileX, tileY } = screenToTileZoom(x, y, cam);
     const spiderHit =
-      vs.activeView === 'surface'
-        ? isSpiderHit(world, vs, ev.x, ev.y, this.deps.getPrevWorld())
-        : false;
-
-    this.snapshot = {
-      pointerId: ev.pointerId,
-      downX: ev.x,
-      downY: ev.y,
+      vs.activeView === 'surface' ? isSpiderHit(world, vs, x, y, this.deps.getPrevWorld()) : false;
+    this.single = {
+      pointerId,
+      downX: x,
+      downY: y,
       tileX,
       tileY,
       spiderHit,
@@ -383,26 +504,33 @@ export class GestureArbiter {
       undergroundColonyId: vs.activeUndergroundColonyId,
     };
     this.dragMode = null;
-    this.panLastX = ev.x;
-    this.panLastY = ev.y;
-
-    // Stage 3b (#3): a world gesture has begun. Signal it so GameScene can
-    // evaluate the proactive [Tab] first-use nudge on the player's first world
-    // input of the session (the nudge gate reads view/undergroundVisited, which
-    // a pan/dig press does not change, so firing at press-time is safe).
-    this.deps.onWorldInput?.();
-
-    // Eagerly begin a paint stroke for underground-Dig so the down-tile mark
-    // fires immediately (matching the prior click-then-drag behavior). The
-    // stroke only PAINTS once the threshold is crossed; a release before then
-    // is a single-tile Dig tap (handled in onPointerUp), so we must not let the
-    // eager begin double-emit. We therefore arm the stroke lazily on the first
-    // move classified as paint instead — see onPointerMove.
+    this.panLastX = x;
+    this.panLastY = y;
+    return true;
   }
 
   onPointerMove(ev: ArbiterPointerEvent): void {
-    const snap = this.snapshot;
+    // #237 PR1 — pinch: track each finger's live position (PR2 recomputes the
+    // midpoint/distance from `pointers` and applies the zoom here).
+    if (this.mode === 'pinch') {
+      const p = this.pointers.get(ev.pointerId);
+      if (p !== undefined) {
+        p.x = ev.x;
+        p.y = ev.y;
+      }
+      return;
+    }
+    if (this.mode !== 'single') return; // idle — no gesture pending
+
+    const snap = this.single;
     if (snap === null || ev.pointerId !== snap.pointerId) return;
+    // Keep the tracked position current so a 2nd finger's pinch begins from this
+    // pointer's live (moved) position, not its stale down position.
+    const tracked = this.pointers.get(ev.pointerId);
+    if (tracked !== undefined) {
+      tracked.x = ev.x;
+      tracked.y = ev.y;
+    }
 
     // Classify on first crossing of the threshold.
     if (this.dragMode === null) {
@@ -416,7 +544,11 @@ export class GestureArbiter {
         // Use clearLeftGesture (not cancelGesture): no pan was claimed here, so
         // we must not touch panInputState.isPanning a concurrent owner may hold.
         if (!this.deps.canEditWorld()) {
+          // Abandon the whole gesture: clearLeftGesture (no isPanning to release —
+          // paint never claimed it) + resetPointerTracking so mode/pointers don't
+          // linger as a stale 'single' the next down would mis-route (Codex F2).
           this.clearLeftGesture();
+          this.resetPointerTracking();
           return;
         }
         const world = this.deps.getWorld();
@@ -444,7 +576,12 @@ export class GestureArbiter {
         // it yet on this path — the claim below is the only setter — and a
         // concurrent middle-drag may own it).
         if (!this.deps.canPan()) {
+          // Abandon before claiming the camera: clearLeftGesture leaves isPanning
+          // untouched (we never set it on this path; a concurrent middle-drag may
+          // own it) and resets dragMode→null; resetPointerTracking clears the stale
+          // 'single' bookkeeping so the next down isn't mis-routed (Codex F2).
           this.clearLeftGesture();
+          this.resetPointerTracking();
           return;
         }
         // Claim the camera so keyboard pan is suppressed for the duration.
@@ -469,7 +606,44 @@ export class GestureArbiter {
   }
 
   onPointerUp(ev: ArbiterPointerEvent): void {
-    const snap = this.snapshot;
+    // #237 PR1 — a pinch finger lifted: NO tap. Drop it and re-snapshot the
+    // survivor as a fresh single (so lifting it later taps, moving it pans/paints).
+    if (this.mode === 'pinch') {
+      if (!this.pointers.has(ev.pointerId)) return; // untracked 3rd-finger up — ignore
+      this.pointers.delete(ev.pointerId);
+      const survivor = [...this.pointers.values()][0];
+      // Re-apply the idle-down admission guards before re-arming (Codex #271): a
+      // survivor now over the HUD / under an open menu / with the world gone must
+      // NOT become a tap. If it can't arm, cancelGesture drops everything → idle
+      // (the still-down finger then no-ops until it lifts and a fresh press starts).
+      if (
+        survivor !== undefined &&
+        this.canArmSingleAt(survivor.x, survivor.y) &&
+        this.armSingle(survivor.pointerId, survivor.x, survivor.y)
+      ) {
+        this.mode = 'single';
+      } else {
+        this.cancelGesture();
+      }
+      // PR2 clears pinch state (pinch = null) here.
+      return;
+    }
+    if (this.mode !== 'single') return; // idle — nothing pending
+
+    // Remove this pointer up-front so every exit path of the single-up teardown
+    // leaves `pointers` correct; then run today's single-gesture up handling.
+    this.pointers.delete(ev.pointerId);
+    this.handleSingleUp(ev);
+    if (this.pointers.size === 0) this.mode = 'idle';
+  }
+
+  /**
+   * handleSingleUp — today's single-pointer up handling (drag-end / menu-swallow /
+   * TAP). Operates on `this.single`; onPointerUp above owns the two-pointer
+   * bookkeeping. Extracted verbatim in #237 PR1.
+   */
+  private handleSingleUp(ev: ArbiterPointerEvent): void {
+    const snap = this.single;
     if (snap === null || ev.pointerId !== snap.pointerId) {
       // A left-up with no matching snapshot: the arbiter has no pending left
       // gesture, so it does NOT own panInputState.isPanning here. Leave the flag
@@ -521,9 +695,13 @@ export class GestureArbiter {
     this.cancelGesture();
   }
 
-  /** pointerupoutside / blur — abandon whatever was pending. */
+  /** pointerupoutside / blur — abandon everything pending. */
   onPointerUpOutside(): void {
+    // cancelGesture now fully resets: releases the single (dropping pan iff owned)
+    // AND clears the two-pointer bookkeeping (mode→idle, pointers cleared), so a
+    // stray finger can't strand the arbiter in 'pinch'.
     this.cancelGesture();
+    // PR2 clears pinch state here.
   }
 
   // --- internals -----------------------------------------------------------
@@ -708,6 +886,7 @@ export function registerGestureArbiter(
       button: pointer.button,
       x: pointer.x,
       y: pointer.y,
+      wasTouch: pointer.wasTouch,
     });
   });
   scene.input.on('pointermove', (pointer: import('phaser').Input.Pointer) => {
@@ -719,6 +898,7 @@ export function registerGestureArbiter(
       button: pointer.button,
       x: pointer.x,
       y: pointer.y,
+      wasTouch: pointer.wasTouch,
     });
   });
   scene.input.on('pointerup', (pointer: import('phaser').Input.Pointer) => {
@@ -727,6 +907,7 @@ export function registerGestureArbiter(
       button: pointer.button,
       x: pointer.x,
       y: pointer.y,
+      wasTouch: pointer.wasTouch,
     });
   });
   scene.input.on('pointerupoutside', () => {
