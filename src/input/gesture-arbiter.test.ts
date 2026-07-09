@@ -108,6 +108,10 @@ interface Harness {
   lastQueueFullPaused: () => boolean | undefined;
   /** Every `paused` argument passed to onPausedQueueFull, in order (Fix 3). */
   queueFullPausedCalls: () => boolean[];
+  /** #237 PR4 — fire every pending fake long-press timer once (simulates 500ms). */
+  fireTimers: () => void;
+  /** #237 PR4 — armed long-press timers not yet fired or cancelled. */
+  pendingTimerCount: () => number;
 }
 
 function makeHarness(
@@ -117,6 +121,10 @@ function makeHarness(
   // arbiter exercises its `?? DRAG_THRESHOLD_PX` fallback (as in production before
   // GameScene wires the dep, and every pre-PR3 test).
   dragThreshold?: number,
+  // #237 PR4 — wire a fake scheduleTimeout so long-press timers can be fired
+  // deterministically (h.fireTimers()). OMITTED by default so pre-PR4 tests keep
+  // the no-long-press fallback (mouse right-click still works).
+  enableLongPress = false,
 ): Harness {
   const world = makeWorld();
   const vs = makeViewState(view, tool);
@@ -152,6 +160,18 @@ function makeHarness(
     },
   };
   if (dragThreshold !== undefined) deps.getDragThreshold = () => dragThreshold;
+  // #237 PR4 — a fake scheduleTimeout: record each timer; the returned canceller
+  // (or a fire) marks it done so it can't run twice. fireTimers() runs all pending.
+  const timers: Array<{ cb: () => void; done: boolean }> = [];
+  if (enableLongPress) {
+    deps.scheduleTimeout = (cb) => {
+      const t = { cb, done: false };
+      timers.push(t);
+      return () => {
+        t.done = true;
+      };
+    };
+  }
   const arbiter = new GestureArbiter(deps);
   return {
     arbiter,
@@ -168,6 +188,15 @@ function makeHarness(
     pausedFullCount: () => pausedFull,
     lastQueueFullPaused: () => queueFullPaused[queueFullPaused.length - 1],
     queueFullPausedCalls: () => queueFullPaused,
+    fireTimers: () => {
+      for (const t of timers) {
+        if (!t.done) {
+          t.done = true;
+          t.cb();
+        }
+      }
+    },
+    pendingTimerCount: () => timers.filter((t) => !t.done).length,
   };
 }
 
@@ -1218,5 +1247,96 @@ describe('#237 PR3 — injected drag threshold (touch-gated)', () => {
     // a 10px move therefore crosses it and pans.
     h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 10, start.y, 1, true));
     expect(panInputState.isPanning).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #237 PR4 — touch long-press → chamber menu (scheduleTimeout dep)
+// makeHarness(..., enableLongPress=true) wires a fake timer; h.fireTimers()
+// simulates the 500ms elapsing. beforeEach's hideContextMenu resets the menu.
+// ---------------------------------------------------------------------------
+
+describe('#237 PR4 — touch long-press', () => {
+  const touch = (button: number, x: number, y: number, id = 1) => ev(button, x, y, id, true);
+
+  it('a touch long-press underground opens the chamber menu and abandons the tap', () => {
+    const h = makeHarness('underground', 'command', undefined, true);
+    const p = tileCenter(5, 8, h.vs); // an editable Solid tile (same as the right-click test)
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, p.x, p.y));
+    expect(h.pendingTimerCount()).toBe(1); // long-press armed
+    h.fireTimers(); // 500ms elapse
+    expect(contextMenuState.pendingShow).toBe(true);
+    expect([contextMenuState.anchorTileX, contextMenuState.anchorTileY]).toEqual([5, 8]);
+    // The pending tap is abandoned — lifting the finger enqueues nothing.
+    const before = h.world.commandQueue.length;
+    h.arbiter.onPointerUp(touch(LEFT_BUTTON, p.x, p.y));
+    expect(h.world.commandQueue.length).toBe(before);
+  });
+
+  it('targets the SNAPSHOTTED tile even if the camera pans during the hold (Codex #274)', () => {
+    const h = makeHarness('underground', 'command', undefined, true);
+    const p = tileCenter(5, 8, h.vs); // press down on tile (5,8)
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, p.x, p.y));
+    // A keyboard pan shifts the camera during the hold — the SAME screen point now
+    // reprojects to a different tile (reconcileContext does not cancel on a pan).
+    h.vs.undergroundCamera.centerX += 3 * TILE_SIZE_PX;
+    h.fireTimers();
+    // The menu still opens on the DOWN tile (5,8), matching the tap — NOT the
+    // reprojected (8,8) that a live re-projection would have picked.
+    expect(contextMenuState.pendingShow).toBe(true);
+    expect([contextMenuState.anchorTileX, contextMenuState.anchorTileY]).toEqual([5, 8]);
+  });
+
+  it('a MOUSE press does not arm a long-press (right-click is the mouse path)', () => {
+    const h = makeHarness('underground', 'command', undefined, true);
+    const p = tileCenter(5, 8, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, p.x, p.y, 1, false)); // MOUSE
+    expect(h.pendingTimerCount()).toBe(0);
+    h.fireTimers();
+    expect(contextMenuState.pendingShow).toBe(false);
+  });
+
+  it('a long-press on the SURFACE opens no menu and leaves the tap pending', () => {
+    const h = makeHarness('surface', 'command', undefined, true);
+    const p = tileCenter(6, 1, h.vs);
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, p.x, p.y));
+    h.fireTimers(); // fires, but surface has no chamber menu
+    expect(contextMenuState.pendingShow).toBe(false);
+    expect(h.arbiter.hasPendingGesture()).toBe(true); // tap NOT abandoned
+    h.arbiter.onPointerUp(touch(LEFT_BUTTON, p.x, p.y)); // → normal tap
+    expect(h.world.commandQueue.some((c) => c.type === 'SetRallyPoint')).toBe(true);
+  });
+
+  it('a drag before the long-press fires cancels it (no menu)', () => {
+    const h = makeHarness('surface', 'command', undefined, true);
+    const start = tileCenter(6, 4, h.vs);
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, start.x, start.y));
+    expect(h.pendingTimerCount()).toBe(1);
+    h.arbiter.onPointerMove(touch(LEFT_BUTTON, start.x + 40, start.y)); // crosses threshold → drag
+    expect(h.pendingTimerCount()).toBe(0); // cancelled at drag-resolve
+    h.fireTimers();
+    expect(contextMenuState.pendingShow).toBe(false);
+  });
+
+  it('lifting before the long-press fires cancels it (menu never opens)', () => {
+    const h = makeHarness('underground', 'command', undefined, true);
+    const p = tileCenter(5, 8, h.vs);
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, p.x, p.y));
+    h.arbiter.onPointerUp(touch(LEFT_BUTTON, p.x, p.y)); // quick tap, well under 500ms
+    expect(h.pendingTimerCount()).toBe(0);
+    h.fireTimers();
+    expect(contextMenuState.pendingShow).toBe(false);
+  });
+
+  it('a 2nd finger (entering pinch) cancels the long-press', () => {
+    const h = makeHarness('underground', 'command', undefined, true);
+    const p1 = tileCenter(5, 8, h.vs);
+    const p2 = tileCenter(9, 8, h.vs);
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, p1.x, p1.y, 1));
+    expect(h.pendingTimerCount()).toBe(1);
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, p2.x, p2.y, 2)); // → pinch
+    expect(h.pendingTimerCount()).toBe(0); // the single→pinch handoff cancelled it
+    h.fireTimers();
+    expect(contextMenuState.pendingShow).toBe(false);
   });
 });

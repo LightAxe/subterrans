@@ -94,6 +94,10 @@ export const LEFT_BUTTON = 0;
 export const MIDDLE_BUTTON = 1;
 export const RIGHT_BUTTON = 2;
 
+/** #237 PR4 — hold a touch press this long (ms) without dragging → chamber menu
+ *  (the touch analog of right-click). Tuned in UAT alongside DRAG_THRESHOLD_PX. */
+export const LONG_PRESS_MS = 500;
+
 /** A device-agnostic pointer event the arbiter core consumes (no Phaser type). */
 export interface ArbiterPointerEvent {
   /** Phaser pointer.id — used to ignore moves/ups from a different pointer. */
@@ -218,6 +222,13 @@ export interface GestureArbiterDeps {
    * unit test) → even touch falls back to DRAG_THRESHOLD_PX.
    */
   getDragThreshold?: () => number;
+  /**
+   * #237 PR4 — schedule `cb` after `ms`, returning a canceller. Keeps the arbiter
+   * core Phaser-free (GameScene passes scene.time.delayedCall + its .remove()).
+   * Used only for the touch long-press; omitted → no long-press (mouse right-click
+   * still works). The canceller must be safe to call after the timer has fired.
+   */
+  scheduleTimeout?: (cb: () => void, ms: number) => () => void;
 }
 
 /** Return the active CameraView for the current view. */
@@ -264,6 +275,8 @@ export class GestureArbiter {
    * must not dispatch a tap (Codex #272 P1). Reset on every fresh arm / abandon.
    */
   private singleFromPinch = false;
+  /** #237 PR4 — canceller for the in-flight touch long-press timer, or null. */
+  private longPressCancel: (() => void) | null = null;
   /** Once the threshold is crossed, the resolved drag mode ('paint' | 'pan'); null while still a tap. */
   private dragMode: 'paint' | 'pan' | null = null;
   /** Last pointer position seen during a pan drag (for incremental camera delta). */
@@ -389,6 +402,7 @@ export class GestureArbiter {
     this.single = null;
     this.dragMode = null;
     this.singleFromPinch = false;
+    this.cancelLongPress(); // #237 PR4 — abandoning the gesture cancels its long-press
     resetPaintStrokeState(this.paintStroke);
   }
 
@@ -497,6 +511,15 @@ export class GestureArbiter {
     // session (the nudge gate reads view/undergroundVisited, which a pan/dig press
     // does not change, so firing at press-time is safe).
     this.deps.onWorldInput?.();
+
+    // #237 PR4 — a held TOUCH press is the touch analog of right-click → chamber
+    // menu. Arm a timer (touch only — mouse has real right-click); fireLongPress
+    // re-checks eligibility and leaves the tap pending if nothing opens. Cancelled
+    // the moment the press resolves to a drag (onPointerMove) or is abandoned
+    // (clearLeftGesture).
+    if ((ev.wasTouch ?? false) && this.deps.scheduleTimeout !== undefined) {
+      this.longPressCancel = this.deps.scheduleTimeout(() => this.fireLongPress(), LONG_PRESS_MS);
+    }
   }
 
   /**
@@ -621,6 +644,7 @@ export class GestureArbiter {
       if (!hasCrossedDragThreshold(snap.downX, snap.downY, ev.x, ev.y, threshold)) {
         return; // still a potential tap
       }
+      this.cancelLongPress(); // #237 PR4 — the press resolved to a drag, not a long-press
       this.dragMode = classifyDragMode(snap.tool, snap.view);
       if (this.dragMode === 'paint') {
         // Paint writes to the world, so it obeys canEditWorld (a menu pause /
@@ -942,15 +966,56 @@ export class GestureArbiter {
   }
 
   private handleRightClick(ev: ArbiterPointerEvent): void {
-    if (!this.deps.canEditWorld()) return;
+    // Right-click acts on the LIVE tile under the cursor (the click just happened).
+    const { tileX, tileY } = screenToTileZoom(ev.x, ev.y, activeCamera(this.deps.viewState));
+    this.tryContextMenuAt(ev.x, ev.y, tileX, tileY);
+  }
+
+  /**
+   * tryContextMenuAt — open the underground chamber menu for a screen point +
+   * target tile when eligible. Shared by right-click and the #237 PR4 touch
+   * long-press; the CALLER supplies the tile so each picks the right frame:
+   * right-click reprojects the live cursor, but the long-press passes the
+   * SNAPSHOTTED down-tile (single.tileX/tileY) so it agrees with the tap — a
+   * keyboard-pan / wheel-zoom during the hold must not retarget the menu to a
+   * tile the finger never pressed (Codex #274). Returns tryOpenChamberMenu's
+   * result (did the menu open?), so the long-press can leave a pending tap intact
+   * when nothing opens (surface / HUD / non-editable tile / no world).
+   */
+  private tryContextMenuAt(x: number, y: number, tileX: number, tileY: number): boolean {
+    if (!this.deps.canEditWorld()) return false;
     const vs = this.deps.viewState;
-    if (vs.activeView !== 'underground') return; // surface RMB no-op
-    if (this.deps.isPointerOverHUD(ev.x, ev.y)) return;
+    if (vs.activeView !== 'underground') return false; // surface has no chamber menu
+    if (this.deps.isPointerOverHUD(x, y)) return false;
     const world = this.deps.getWorld();
-    if (!world) return;
-    const cam = activeCamera(vs);
-    const { tileX, tileY } = screenToTileZoom(ev.x, ev.y, cam);
-    tryOpenChamberMenu(world, this.deps.getProjectedWorld(), vs, ev.x, ev.y, tileX, tileY);
+    if (!world) return false;
+    return tryOpenChamberMenu(world, this.deps.getProjectedWorld(), vs, x, y, tileX, tileY);
+  }
+
+  /**
+   * fireLongPress — #237 PR4 timer callback: a touch press held past LONG_PRESS_MS
+   * without dragging. Opens the chamber menu at the snapshotted down-point; only if
+   * it ACTUALLY opens do we abandon the pending tap (via cancelGesture — a full
+   * reset that keeps the mode==='single' ⇒ single!==null invariant, unlike a bare
+   * clearLeftGesture). If nothing opens (surface / HUD / non-editable), the tap
+   * stays armed so a normal lift still taps.
+   */
+  private fireLongPress(): void {
+    this.longPressCancel = null; // the timer just fired — nothing left to cancel
+    if (this.mode !== 'single' || this.single === null || this.dragMode !== null) return;
+    const snap = this.single;
+    // Use the SNAPSHOTTED down-tile (not a live reprojection of downX/downY) so the
+    // menu targets the tile the finger pressed, matching the tap — see Codex #274.
+    if (!this.tryContextMenuAt(snap.downX, snap.downY, snap.tileX, snap.tileY)) return;
+    this.cancelGesture(); // menu opened → the press belongs to the menu, not a tap
+  }
+
+  /** Cancel a pending long-press timer (drag-resolve, abandon, or gesture end). */
+  private cancelLongPress(): void {
+    if (this.longPressCancel !== null) {
+      this.longPressCancel();
+      this.longPressCancel = null;
+    }
   }
 }
 
