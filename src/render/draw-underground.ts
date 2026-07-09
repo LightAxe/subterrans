@@ -18,7 +18,11 @@
 export type { GfxLike } from './draw-surface.js';
 
 import type { GfxLike } from './draw-surface.js';
-import type { AntSpriteLayer } from './ant-sprite-layer.js';
+import type {
+  AntSpriteLayer,
+  AntSpriteDrawOptions,
+  StaticSpriteDrawOptions,
+} from './ant-sprite-layer.js';
 import {
   WORKER_SPRITE_WIDTH,
   WORKER_SPRITE_HEIGHT,
@@ -94,6 +98,48 @@ const CHAMBER_COLORS: Record<number, number> = {
 // the chamber is dug-out but not yet promoted to colony.chambers). Low so it reads as
 // "forming" against the solid built-chamber fill.
 const PENDING_CHAMBER_OUTLINE_ALPHA = 0.25;
+
+// ---------------------------------------------------------------------------
+// #236 PR2 render-scratch — module-level buffers reused across frames.
+//
+// Render layer only (no sim determinism constraint): declared once at module
+// scope and reset (.clear() / .length = 0 / full field overwrite) at the START
+// of each use, so a frame never inherits the prior frame's contents.
+// drawUndergroundEntities runs once per frame (XOR drawSurfaceEntities) — no
+// re-entrancy — so the reset is the whole correctness guarantee. Names are
+// independent of draw-surface's scratch (a different module / a different view).
+// ---------------------------------------------------------------------------
+
+// #236 PR2 render-scratch: reset per use
+const ugGlowTileColony = new Map<number, number>(); // tileKey → first colonyId
+const ugGlowContested = new Set<number>();
+const ugGlowDrawKeys: number[] = [];
+
+// #236 PR2 render-scratch: reset per use — brood-id set, rebuilt (.clear()) each call.
+const ugBroodIds = new Set<number>();
+
+// #236 PR2 render-scratch: reset per use (all fields overwritten each draw).
+// Retention-safe: AntSpritePool.drawAnt (ant-sprite-pool.ts:63-72) reads every field
+// synchronously and never stores the opts reference — so mutate-then-pass is safe.
+const scratchAntOptsUg: AntSpriteDrawOptions = {
+  kind: 'worker',
+  x: 0,
+  y: 0,
+  tint: 0,
+  rotation: 0,
+  scale: 1,
+};
+
+// #236 PR2 render-scratch: reset per use — SHARED by the food-cache and brood drawStatic
+// sites. EVERY field (incl. tint) is set at each call site so a shared object never leaks a
+// prior draw's tint (pixel-identical). Retention-safe: AntSpritePool.drawStatic
+// (ant-sprite-pool.ts:74-85) reads every field synchronously, never stores the opts reference.
+const scratchStaticOptsUg: StaticSpriteDrawOptions = {
+  kind: 'egg',
+  x: 0,
+  y: 0,
+  tint: undefined,
+};
 
 // ---------------------------------------------------------------------------
 // drawOutlineSegment — draw a thick line segment between two arbitrary points
@@ -472,12 +518,12 @@ export function drawUndergroundEntities(
           for (let col = 0; col < dims.width && placed < filledTiles; col++) {
             const cx = worldX + col * TILE_SIZE_PX + TILE_SIZE_PX / 2;
             const cy = worldY + row * TILE_SIZE_PX + TILE_SIZE_PX / 2;
-            sprites.drawStatic({
-              kind: 'food-cache',
-              x: cx,
-              y: cy,
-              tint: COLOR_CHAMBER_FOOD_STORAGE_FILL,
-            });
+            // #236 PR2 render-scratch: mutate the reused opts (every field set) then pass.
+            scratchStaticOptsUg.kind = 'food-cache';
+            scratchStaticOptsUg.x = cx;
+            scratchStaticOptsUg.y = cy;
+            scratchStaticOptsUg.tint = COLOR_CHAMBER_FOOD_STORAGE_FILL;
+            sprites.drawStatic(scratchStaticOptsUg);
             placed++;
           }
         }
@@ -565,8 +611,9 @@ export function drawUndergroundEntities(
     const GLOW_FADE_FRAMES = 5;
 
     // Collect tiles that have ants from 2+ colonies.
-    const tileColony = new Map<number, number>(); // tileKey → first colonyId
-    const contested = new Set<number>();
+    // #236 PR2 render-scratch: reset per use (see module-level decls).
+    ugGlowTileColony.clear();
+    ugGlowContested.clear();
     const n = curr.ants.alive.length;
     for (let id = 0; id < n; id++) {
       if (!isAlive(curr.ants, id)) continue;
@@ -578,26 +625,28 @@ export function drawUndergroundEntities(
       // different colony views don't collide when the player switches grids.
       const key = (activeUndergroundColonyId << 24) | (ty << 16) | tx;
       const cid = curr.ants.colonyId[id]!;
-      const existing = tileColony.get(key);
-      if (existing === undefined) tileColony.set(key, cid);
-      else if (existing !== cid) contested.add(key);
+      const existing = ugGlowTileColony.get(key);
+      if (existing === undefined) ugGlowTileColony.set(key, cid);
+      else if (existing !== cid) ugGlowContested.add(key);
     }
     // Stamp active tiles with current frame.
     if (undergoundGlowFrames) {
-      for (const key of contested) {
+      for (const key of ugGlowContested) {
         undergoundGlowFrames.set(key, currentFrame);
       }
     }
     // Draw glows for all contested or recently-contested tiles.
-    const drawKeys = undergoundGlowFrames
-      ? Array.from(undergoundGlowFrames.entries())
-          .filter(
-            ([key, frame]) =>
-              key >>> 24 === activeUndergroundColonyId && currentFrame - frame < GLOW_FADE_FRAMES,
-          )
-          .map(([key]) => key)
-      : Array.from(contested);
-    for (const key of drawKeys) {
+    // #236 PR2 render-scratch: rebuild the reused key list (same filter + insertion order
+    // as the prior Array.from(...).filter().map()).
+    ugGlowDrawKeys.length = 0;
+    if (undergoundGlowFrames) {
+      for (const [key, frame] of undergoundGlowFrames)
+        if (key >>> 24 === activeUndergroundColonyId && currentFrame - frame < GLOW_FADE_FRAMES)
+          ugGlowDrawKeys.push(key);
+    } else {
+      for (const key of ugGlowContested) ugGlowDrawKeys.push(key);
+    }
+    for (const key of ugGlowDrawKeys) {
       const tx = key & 0xff; // bits 0-7; tx max = 127
       const ty = (key >> 16) & 0xff; // bits 16-23; top byte (24+) holds colony ID
       const worldX = tx * TILE_SIZE_PX;
@@ -625,18 +674,20 @@ export function drawUndergroundEntities(
     }
   }
 
-  const broodIds = new Set<number>();
+  // #236 PR2 render-scratch: reset per use (see module-level decls). Rebuilt every call
+  // (incl. dotMode — the ants loop below reads it before the dot-draw branch).
+  ugBroodIds.clear();
   for (const c of Object.values(curr.colonies)) {
     if (c === undefined) continue;
-    for (let i = 0; i < c.eggs.length; i++) broodIds.add(c.eggs[i]!);
-    for (let i = 0; i < c.larvae.length; i++) broodIds.add(c.larvae[i]!);
+    for (let i = 0; i < c.eggs.length; i++) ugBroodIds.add(c.eggs[i]!);
+    for (let i = 0; i < c.larvae.length; i++) ugBroodIds.add(c.larvae[i]!);
   }
   const maxId = curr.ants.alive.length;
   for (let id = 0; id < maxId; id++) {
     if (!isAlive(curr.ants, id)) continue;
     if (curr.ants.zone[id] !== 1) continue; // underground only
     if (curr.ants.currentGridColonyId[id] !== activeUndergroundColonyId) continue; // grid-of-occupancy filter
-    if (broodIds.has(id)) continue; // issue #22 — brood is rendered by drawBrood, not as worker sprites
+    if (ugBroodIds.has(id)) continue; // issue #22 — brood is rendered by drawBrood, not as worker sprites
 
     const useInterp = isAlive(prev.ants, id) && prev.ants.zone[id] === curr.ants.zone[id];
 
@@ -731,14 +782,15 @@ export function drawUndergroundEntities(
       drawX = placed.cxPx;
       drawY = placed.cyPx;
     }
-    sprites.drawAnt({
-      kind: isQueen ? 'queen' : 'worker',
-      x: drawX,
-      y: drawY,
-      tint: isFighter2 && !isQueen ? COLOR_FIGHTER_TINT : tint,
-      rotation,
-      scale,
-    });
+    // #236 PR2 render-scratch: mutate the reused opts (every field set) then pass.
+    // Retention-safe (drawAnt reads fields synchronously; see decl).
+    scratchAntOptsUg.kind = isQueen ? 'queen' : 'worker';
+    scratchAntOptsUg.x = drawX;
+    scratchAntOptsUg.y = drawY;
+    scratchAntOptsUg.tint = isFighter2 && !isQueen ? COLOR_FIGHTER_TINT : tint;
+    scratchAntOptsUg.rotation = rotation;
+    scratchAntOptsUg.scale = scale;
+    sprites.drawAnt(scratchAntOptsUg);
   }
 
   // Eggs + larvae (nursery brood). Route through the sprite layer so both
@@ -791,11 +843,14 @@ function drawBrood(
     // above the carrier instead of being hidden under the ant sprite.
     const carrierId = ants.carriedBy[id]!;
     const carryDy = carrierId !== -1 && isAlive(ants, carrierId) ? CARRY_RENDER_DY_PX : 0;
-    sprites.drawStatic({
-      kind,
-      x: worldX + TILE_SIZE_PX / 2,
-      y: worldY + TILE_SIZE_PX / 2 + carryDy,
-    });
+    // #236 PR2 render-scratch: mutate the reused opts then pass. tint is explicitly reset to
+    // undefined (the original literal omitted it) so a prior food-cache draw's tint can't leak;
+    // drawStatic applies `?? 0xffffff`, so this stays pixel-identical to the omitted-tint literal.
+    scratchStaticOptsUg.kind = kind;
+    scratchStaticOptsUg.x = worldX + TILE_SIZE_PX / 2;
+    scratchStaticOptsUg.y = worldY + TILE_SIZE_PX / 2 + carryDy;
+    scratchStaticOptsUg.tint = undefined;
+    sprites.drawStatic(scratchStaticOptsUg);
   }
 }
 
