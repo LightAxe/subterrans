@@ -1427,4 +1427,46 @@ describe('#237 PR5 — touch hover preview', () => {
     expect(h.hoverPreviewCalls()).toEqual([]);
     expect(h.hoverPreviewEndCount()).toBe(0); // never fired → no End
   });
+
+  it('endHoverPreview cancels a PENDING hover timer so a canvas exit cannot resurrect it (Codex #275)', () => {
+    const h = makeHarness('surface', 'command', undefined, true, true);
+    const p = tileCenter(6, 1, h.vs);
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, p.x, p.y)); // hover timer armed (still pending)
+    h.arbiter.endHoverPreview(); // canvas exit (pointerout/gameout) before 200ms
+    h.fireTimers(HOVER_PREVIEW_MS); // the 200ms timer would fire — but it was cancelled
+    expect(h.hoverPreviewCalls()).toEqual([]); // no resurrect at the stale down-point
+  });
+
+  it('endHoverPreview ends an ACTIVE preview (End fired, flag synced) without abandoning the gesture (Codex #275)', () => {
+    const h = makeHarness('surface', 'command', undefined, true, true);
+    const p = tileCenter(6, 1, h.vs);
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, p.x, p.y));
+    h.fireTimers(HOVER_PREVIEW_MS); // preview showing
+    expect(h.hoverPreviewCalls().length).toBe(1);
+    h.arbiter.endHoverPreview(); // canvas exit while showing
+    expect(h.hoverPreviewEndCount()).toBe(1); // ended
+    expect(h.arbiter.hasPendingGesture()).toBe(true); // gesture NOT abandoned (hover-only)
+    // A later under-threshold move no longer re-forwards (preview flag synced off).
+    h.arbiter.onPointerMove(touch(LEFT_BUTTON, p.x + 3, p.y));
+    expect(h.hoverPreviewCalls().length).toBe(1);
+  });
+
+  it('a touchcancel (wasCanceled) up abandons the gesture with NO tap (Codex #275)', () => {
+    const h = makeHarness('surface', 'command', undefined, true, true);
+    const p = tileCenter(6, 1, h.vs);
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, p.x, p.y));
+    const before = h.world.commandQueue.length;
+    // Phaser routes a touchcancel through the pointerup path with wasCanceled=true.
+    h.arbiter.onPointerUp({
+      pointerId: 1,
+      button: LEFT_BUTTON,
+      x: p.x,
+      y: p.y,
+      wasTouch: true,
+      wasCanceled: true,
+    });
+    expect(h.world.commandQueue.length).toBe(before); // NO tap
+    expect(h.arbiter.hasPendingGesture()).toBe(false); // gesture abandoned
+    expect(h.hoverPreviewEndCount()).toBe(0); // preview never fired; timers cancelled
+  });
 });

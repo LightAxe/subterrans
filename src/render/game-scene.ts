@@ -947,6 +947,10 @@ export class GameScene extends Phaser.Scene {
       this.hoverScreenY = pointer.y;
     });
     this.input.on('pointerout', () => {
+      // #237 PR5 — sync the arbiter's touch hover preview (cancel its timer, end it
+      // if showing) so a canvas exit can't resurrect it at the stale down-point;
+      // then clear the fields for the mouse case (endHoverPreview no-ops on mouse).
+      this.arbiter.endHoverPreview();
       this.hoverScreenX = null;
       this.hoverScreenY = null;
     });
@@ -957,6 +961,7 @@ export class GameScene extends Phaser.Scene {
     // selected left stale hover coords, so the entrance hover outline lingered
     // and drifted across tiles during keyboard pan. Clear the hover here too.
     this.input.on('gameout', () => {
+      this.arbiter.endHoverPreview(); // #237 PR5 — as pointerout above
       this.hoverScreenX = null;
       this.hoverScreenY = null;
     });

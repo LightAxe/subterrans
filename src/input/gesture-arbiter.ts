@@ -119,6 +119,12 @@ export interface ArbiterPointerEvent {
    * preview). Optional so existing unit tests need not set it (mouse paths).
    */
   wasTouch?: boolean;
+  /**
+   * #237 PR5 — Phaser `pointer.wasCanceled`: an OS/browser touchcancel (a system
+   * gesture took over). Phaser routes it through the pointerup path, so onPointerUp
+   * must abandon the gesture with NO tap. Only meaningful on an up event.
+   */
+  wasCanceled?: boolean;
 }
 
 /** Snapshot taken at left pointer-down; the tap acts on these, not live state. */
@@ -327,6 +333,18 @@ export class GestureArbiter {
   /** True while a single (tap/drag) gesture is pending (down seen, up not yet). */
   hasPendingGesture(): boolean {
     return this.single !== null;
+  }
+
+  /**
+   * #237 PR5 — end just the touch hover preview (cancel its pending timer + fire
+   * onHoverPreviewEnd if it was showing), WITHOUT abandoning the gesture. Called by
+   * GameScene on canvas exit (pointerout / gameout): the preview must not linger or
+   * a pending timer resurrect it at the stale down-point while the finger is off
+   * the canvas — but a live drag (mouse or touch) should keep running until its own
+   * up/upoutside, so this does NOT cancel the whole gesture.
+   */
+  endHoverPreview(): void {
+    this.cancelHoverPreview();
   }
 
   /**
@@ -748,6 +766,14 @@ export class GestureArbiter {
   }
 
   onPointerUp(ev: ArbiterPointerEvent): void {
+    // #237 PR5 — a touchcancel (OS/browser took over the gesture) arrives on the
+    // pointerup path with wasCanceled=true. Abandon everything with NO tap — the
+    // finger never "lifted" intentionally. cancelGesture also ends any hover
+    // preview / long-press timer via clearLeftGesture.
+    if (ev.wasCanceled) {
+      this.cancelGesture();
+      return;
+    }
     // #237 PR1 — a pinch finger lifted: NO tap. Drop it and re-snapshot the
     // survivor as a fresh single (so lifting it later taps, moving it pans/paints).
     if (this.mode === 'pinch') {
@@ -1136,6 +1162,7 @@ export function registerGestureArbiter(
       x: pointer.x,
       y: pointer.y,
       wasTouch: pointer.wasTouch,
+      wasCanceled: pointer.wasCanceled, // #237 PR5 — touchcancel → abandon, no tap
     });
   });
   scene.input.on('pointerupoutside', () => {
