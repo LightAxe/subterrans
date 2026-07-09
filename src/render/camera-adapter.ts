@@ -44,6 +44,14 @@ export function setViewportSize(w: number, h: number): void {
   viewportH = h;
 }
 
+/** Read the current logical viewport size. #236 PR1 — the pheromone-layer cache
+ *  keys on this: visibleTileRange depends on the viewport, so a future responsive
+ *  resize (setViewportSize with new dims) must invalidate a cached overlay even
+ *  when the camera/tick/view are unchanged. Fixed at CANVAS_W×CANVAS_H today. */
+export function getViewportSize(): { w: number; h: number } {
+  return { w: viewportW, h: viewportH };
+}
+
 // ---------------------------------------------------------------------------
 // Zoom limits
 // ---------------------------------------------------------------------------

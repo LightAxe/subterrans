@@ -79,6 +79,7 @@ import {
   screenToTileZoom,
   resolveDotMode,
   setViewportSize,
+  getViewportSize,
 } from './camera-adapter.js';
 import { CameraController } from './camera-controller.js';
 import {
@@ -333,6 +334,9 @@ export class GameScene extends Phaser.Scene {
   private lastPheromoneTick = -1;
   private readonly lastPheromoneCam = { centerX: NaN, centerY: NaN, zoom: NaN };
   private lastPheromoneView = '';
+  // #236 PR1 — the culled tile set (visibleTileRange) also depends on the logical
+  // viewport, so a future responsive resize must invalidate a cached overlay.
+  private readonly lastPheromoneViewport = { w: NaN, h: NaN };
   private antSprites!: AntSpritePool;
   // Stage 2 (issue #18): the Phaser-bound camera driver. Wraps cameras.main and is
   // driven from the active view's world-pixel CameraView every frame (setZoom +
@@ -2294,13 +2298,17 @@ export class GameScene extends Phaser.Scene {
     // terrain and entities whether or not it redrew), so the e2e trace stays
     // consistent. Only the drawPheromoneOverlay call below is cache-gated.
     this.recordDrawLayer('pheromone');
-    // Gate (b) — redraw only on a tick / camera / view change.
+    // Gate (b) — redraw only on a tick / camera / view / viewport change (all the
+    // inputs to drawPheromoneOverlay's culled fillRect set).
+    const viewport = getViewportSize();
     if (
       this.world.tick === this.lastPheromoneTick &&
       cam.centerX === this.lastPheromoneCam.centerX &&
       cam.centerY === this.lastPheromoneCam.centerY &&
       cam.zoom === this.lastPheromoneCam.zoom &&
-      view === this.lastPheromoneView
+      view === this.lastPheromoneView &&
+      viewport.w === this.lastPheromoneViewport.w &&
+      viewport.h === this.lastPheromoneViewport.h
     ) {
       return;
     }
@@ -2311,6 +2319,8 @@ export class GameScene extends Phaser.Scene {
     this.lastPheromoneCam.centerY = cam.centerY;
     this.lastPheromoneCam.zoom = cam.zoom;
     this.lastPheromoneView = view;
+    this.lastPheromoneViewport.w = viewport.w;
+    this.lastPheromoneViewport.h = viewport.h;
   }
 
   /**
