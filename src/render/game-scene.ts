@@ -80,7 +80,7 @@ import {
   resolveDotMode,
   setViewportSize,
 } from './camera-adapter.js';
-import { CameraController, WHEEL_ZOOM_STEP, WHEEL_NOTCH_PX } from './camera-controller.js';
+import { CameraController } from './camera-controller.js';
 import {
   TerrainCache,
   surfaceCacheKey,
@@ -146,6 +146,7 @@ import { SUBTERRANS_READY_EVENT } from './lifecycle.js';
 import {
   processCameraInput,
   registerDragPan,
+  registerWheelZoom,
   resetDragState,
   resetPanInputState,
   isPointerOverHUD,
@@ -667,37 +668,23 @@ export class GameScene extends Phaser.Scene {
     // still works while paused — intended.
     this.dragState = registerDragPan(this, this.viewState, this.hud, () => this.isModalOpen());
 
-    // Stage 2 (issue #18): mouse-wheel zoom. Gated exactly like world pan — ignored
-    // over HUD zones and whenever a modal / menu / game-over owns input
-    // (canAcceptWorldHotkey). ctrl/cmd-wheel is ignored so the OS/browser pinch-zoom
-    // gesture is never hijacked for game zoom. Wheel-up (deltaY < 0) zooms IN; the
-    // controller runs the cursor-anchored zoom-lerp from here.
-    this.input.on(
-      'wheel',
-      (pointer: Phaser.Input.Pointer, _over: unknown, _dx: number, dy: number) => {
-        if (!this.canAcceptWorldHotkey()) return;
-        if (isPointerOverHUD(pointer.x, pointer.y, this.hud, this.viewState)) return;
-        const native = pointer.event as WheelEvent | undefined;
-        if (native?.ctrlKey || native?.metaKey) return;
-        if (dy === 0) return;
-        const cam =
-          this.viewState.activeView === 'surface'
-            ? this.viewState.surfaceCamera
-            : this.viewState.undergroundCamera;
-        // Scale by deltaY magnitude so continuous trackpad / high-res-wheel scrolling
-        // (many small events per gesture) zooms smoothly instead of jumping a full step
-        // every event and slamming to the zoom limit (Codex P1). One ~WHEEL_NOTCH_PX notch
-        // = one ×WHEEL_ZOOM_STEP; dy<0 (scroll up) zooms in.
-        const factor = Math.pow(WHEEL_ZOOM_STEP, -dy / WHEEL_NOTCH_PX);
-        // Stage 3b (#3): fire the "Scroll to zoom" hint only on an ACCEPTED zoom
-        // (targetZoom actually changed — not a clamped no-op at the zoom limit).
-        const beforeZoom = cam.targetZoom;
-        this.cameraController.beginZoom(cam, factor, pointer.x, pointer.y);
-        if (cam.targetZoom !== beforeZoom) this.firstUseReactive('zoom');
-        // A wheel is a world input → evaluate the proactive [Tab] nudge.
-        this.noteWorldInput();
-      },
-    );
+    // Stage 2 (issue #18): mouse-wheel / trackpad zoom. #237 PR5 — relocated to
+    // camera-input.registerWheelZoom (mirrors registerDragPan) so the gesture the
+    // pinch extends has an input-layer home + a unit test. Gated exactly like world
+    // pan (canAcceptWorldHotkey + HUD); ctrl/cmd-wheel is left to the OS/browser
+    // pinch-zoom; wheel-up (dy < 0) zooms IN. onZoomAccepted fires the "Scroll to
+    // zoom" hint only when targetZoom actually changed (not a clamped no-op).
+    registerWheelZoom(this, {
+      canAcceptWorldHotkey: () => this.canAcceptWorldHotkey(),
+      isPointerOverHUD: (x, y) => isPointerOverHUD(x, y, this.hud, this.viewState),
+      getActiveCamera: () =>
+        this.viewState.activeView === 'surface'
+          ? this.viewState.surfaceCamera
+          : this.viewState.undergroundCamera,
+      beginZoom: (cam, factor, sx, sy) => this.cameraController.beginZoom(cam, factor, sx, sy),
+      onZoomAccepted: () => this.firstUseReactive('zoom'),
+      noteWorldInput: () => this.noteWorldInput(),
+    });
 
     // Issue #116 — Esc opens the pause menu overlay (which also pauses the
     // sim). The Esc keybinding itself lives in UIScene (which already owned
@@ -929,6 +916,18 @@ export class GameScene extends Phaser.Scene {
         const event = this.time.delayedCall(ms, cb);
         return () => event.remove();
       },
+      // #237 PR5 — touch press-and-hold drives the SAME hover fields the mouse
+      // pointermove handler sets (below), so the existing per-frame feedforward
+      // hover resolution renders the touch preview. onHoverPreviewEnd clears it on
+      // release — pointerout/gameout don't fire on a touch-up inside the canvas.
+      onHoverPreview: (x: number, y: number) => {
+        this.hoverScreenX = x;
+        this.hoverScreenY = y;
+      },
+      onHoverPreviewEnd: () => {
+        this.hoverScreenX = null;
+        this.hoverScreenY = null;
+      },
     });
     // Seed the threshold from the real canvas size now the scene is live, and keep
     // it current as the FIT-scaled canvas resizes (window resize / rotate).
@@ -940,6 +939,10 @@ export class GameScene extends Phaser.Scene {
     // every frame (Codex R3-4 — a stationary cursor over a panning camera must
     // still highlight the tile under it). Cleared on pointer-out.
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      // #237 PR5 — MOUSE hover only. Touch has no real hover; its feedforward
+      // preview is the arbiter's press-and-hold (onHoverPreview above), so a raw
+      // touch-drag must NOT paint the hover outline the instant a finger moves.
+      if (pointer.wasTouch) return;
       this.hoverScreenX = pointer.x;
       this.hoverScreenY = pointer.y;
     });

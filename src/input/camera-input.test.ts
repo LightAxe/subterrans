@@ -19,11 +19,14 @@ import {
   isPointerOverHUD,
   processCameraInput,
   registerDragPan,
+  registerWheelZoom,
+  wheelZoomFactor,
   panInputState,
   resetPanInputState,
   resetDragState,
   type DragState,
   type PanInputs,
+  type WheelZoomDeps,
 } from './camera-input.js';
 import type * as Phaser from 'phaser';
 import { TILE_SIZE_PX } from '../render/sprites.js';
@@ -247,18 +250,20 @@ describe('processCameraInput', () => {
  */
 function makeFakeScene(): {
   scene: Phaser.Scene;
-  emit: (event: string, pointer: unknown) => void;
+  emit: (event: string, ...args: unknown[]) => void;
 } {
-  const handlers = new Map<string, (pointer: unknown) => void>();
+  // varargs so a 'wheel' handler (pointer, over, dx, dy) can be driven as well as
+  // the single-arg pointer handlers registerDragPan uses.
+  const handlers = new Map<string, (...args: unknown[]) => void>();
   const scene = {
     input: {
-      on: (event: string, fn: (pointer: unknown) => void) => {
+      on: (event: string, fn: (...args: unknown[]) => void) => {
         handlers.set(event, fn);
       },
     },
   } as unknown as Phaser.Scene;
-  const emit = (event: string, pointer: unknown): void => {
-    handlers.get(event)?.(pointer);
+  const emit = (event: string, ...args: unknown[]): void => {
+    handlers.get(event)?.(...args);
   };
   return { scene, emit };
 }
@@ -332,5 +337,106 @@ describe('reset helpers', () => {
     resetDragState(ds);
     expect(ds).toBe(ref);
     expect(ds).toEqual({ isDragging: false, lastX: 0, lastY: 0, active: false });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #237 PR5 — wheel zoom (relocated from game-scene)
+// ---------------------------------------------------------------------------
+
+describe('wheelZoomFactor (#237 PR5)', () => {
+  it('dy<0 (scroll up) zooms IN (>1), dy>0 zooms OUT (<1), dy=0 is a no-op (1)', () => {
+    expect(wheelZoomFactor(-100, 2, 100)).toBeCloseTo(2, 6); // one notch up = ×step
+    expect(wheelZoomFactor(100, 2, 100)).toBeCloseTo(0.5, 6); // one notch down = ÷step
+    expect(wheelZoomFactor(0, 2, 100)).toBe(1);
+  });
+
+  it('scales by the deltaY magnitude (half a notch = sqrt(step))', () => {
+    expect(wheelZoomFactor(-50, 2, 100)).toBeCloseTo(Math.SQRT2, 6);
+  });
+});
+
+describe('registerWheelZoom (#237 PR5)', () => {
+  function wheelPointer(
+    x: number,
+    y: number,
+    mods: { ctrl?: boolean; meta?: boolean } = {},
+  ): Phaser.Input.Pointer {
+    return {
+      x,
+      y,
+      event: { ctrlKey: !!mods.ctrl, metaKey: !!mods.meta },
+    } as unknown as Phaser.Input.Pointer;
+  }
+
+  it('a wheel-up event zooms in and fires the accepted + world-input hooks', () => {
+    const { scene, emit } = makeFakeScene();
+    const cam = makeCameraView(100, 100, 1);
+    let beginCalls = 0;
+    let lastFactor = 0;
+    let accepted = 0;
+    let worldInput = 0;
+    registerWheelZoom(scene, {
+      canAcceptWorldHotkey: () => true,
+      isPointerOverHUD: () => false,
+      getActiveCamera: () => cam,
+      beginZoom: (c, factor) => {
+        beginCalls++;
+        lastFactor = factor;
+        c.targetZoom = c.targetZoom * factor;
+      },
+      onZoomAccepted: () => {
+        accepted++;
+      },
+      noteWorldInput: () => {
+        worldInput++;
+      },
+    });
+    emit('wheel', wheelPointer(400, 300), undefined, 0, -100); // scroll up
+    expect(beginCalls).toBe(1);
+    expect(lastFactor).toBeGreaterThan(1); // zoom IN
+    expect(cam.targetZoom).toBeGreaterThan(1);
+    expect(accepted).toBe(1); // targetZoom changed → hint fires
+    expect(worldInput).toBe(1);
+  });
+
+  it.each([
+    ['blocked hotkey', { canAcceptWorldHotkey: () => false } as Partial<WheelZoomDeps>, {}, -100],
+    ['over HUD', { isPointerOverHUD: () => true } as Partial<WheelZoomDeps>, {}, -100],
+    ['ctrl-wheel (OS pinch)', {} as Partial<WheelZoomDeps>, { ctrl: true }, -100],
+    ['cmd-wheel (OS pinch)', {} as Partial<WheelZoomDeps>, { meta: true }, -100],
+    ['dy === 0', {} as Partial<WheelZoomDeps>, {}, 0],
+  ])('is gated: %s → no beginZoom', (_label, overrides, mods, dy) => {
+    const { scene, emit } = makeFakeScene();
+    let beginCalls = 0;
+    registerWheelZoom(scene, {
+      canAcceptWorldHotkey: () => true,
+      isPointerOverHUD: () => false,
+      getActiveCamera: () => makeCameraView(0, 0, 1),
+      beginZoom: () => {
+        beginCalls++;
+      },
+      ...overrides,
+    });
+    emit('wheel', wheelPointer(400, 300, mods), undefined, 0, dy);
+    expect(beginCalls).toBe(0);
+  });
+
+  it('does NOT fire onZoomAccepted when targetZoom is unchanged (clamped no-op at the limit)', () => {
+    const { scene, emit } = makeFakeScene();
+    let accepted = 0;
+    registerWheelZoom(scene, {
+      canAcceptWorldHotkey: () => true,
+      isPointerOverHUD: () => false,
+      getActiveCamera: () => makeCameraView(0, 0, 1),
+      beginZoom: () => {
+        /* already at the zoom limit — leaves targetZoom unchanged */
+      },
+      onZoomAccepted: () => {
+        accepted++;
+      },
+    });
+    emit('wheel', wheelPointer(400, 300), undefined, 0, -100);
+    expect(accepted).toBe(0);
   });
 });

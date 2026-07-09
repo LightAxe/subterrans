@@ -34,6 +34,9 @@ import {
   panByScreenDelta,
   panByKeyboard,
 } from '../render/camera-adapter.js';
+// #237 PR5 — wheel-zoom constants (type-free numbers; camera-controller has no
+// Phaser runtime import, so this keeps camera-input Phaser-runtime-free).
+import { WHEEL_ZOOM_STEP, WHEEL_NOTCH_PX } from '../render/camera-controller.js';
 
 // ---------------------------------------------------------------------------
 // panInputState — module-level singleton
@@ -318,4 +321,61 @@ export function registerDragPan(
   scene.input.on('pointerupoutside', releaseDrag);
 
   return dragState;
+}
+
+// ---------------------------------------------------------------------------
+// Wheel zoom (#237 PR5 — relocated from game-scene's inline closure)
+// ---------------------------------------------------------------------------
+
+/**
+ * wheelZoomFactor — the multiplicative zoom for one wheel event:
+ * `step ** (−dy / notch)`. dy < 0 (scroll up) → factor > 1 (zoom in). Scaling by
+ * the deltaY magnitude keeps a continuous trackpad / high-res wheel (many small
+ * events per gesture) smooth instead of slamming a full step per event and
+ * hitting the zoom limit (Codex P1). Pure — unit-tested.
+ */
+export function wheelZoomFactor(dy: number, step: number, notch: number): number {
+  return Math.pow(step, -dy / notch);
+}
+
+/** Injected seams for registerWheelZoom (keeps the wire Phaser-testable). */
+export interface WheelZoomDeps {
+  /** World input allowed right now (no modal / menu / game-over owns input). */
+  canAcceptWorldHotkey: () => boolean;
+  /** True if a screen point falls on a HUD zone (bind hud + viewState at the call site). */
+  isPointerOverHUD: (x: number, y: number) => boolean;
+  /** The active CameraView to zoom. */
+  getActiveCamera: () => CameraView;
+  /** Apply an anchored zoom (cameraController.beginZoom). */
+  beginZoom: (cam: CameraView, factor: number, screenX: number, screenY: number) => void;
+  /** Fired when the zoom was ACCEPTED (targetZoom changed — not a clamped no-op). */
+  onZoomAccepted?: () => void;
+  /** A wheel is a world input (proactive [Tab] nudge). */
+  noteWorldInput?: () => void;
+}
+
+/**
+ * registerWheelZoom — wire mouse-wheel / trackpad zoom to a scene, mirroring
+ * registerDragPan. Gated exactly like world pan (canAcceptWorldHotkey + HUD);
+ * ctrl/cmd-wheel is left to the OS/browser pinch-zoom, and dy===0 is ignored.
+ * Wheel-up (dy < 0) zooms IN. #237 PR5 — moved out of game-scene so the gesture
+ * the pinch extends has an input-layer home + a unit test.
+ */
+export function registerWheelZoom(scene: Phaser.Scene, deps: WheelZoomDeps): void {
+  scene.input.on(
+    'wheel',
+    (pointer: Phaser.Input.Pointer, _over: unknown, _dx: number, dy: number) => {
+      if (!deps.canAcceptWorldHotkey()) return;
+      if (deps.isPointerOverHUD(pointer.x, pointer.y)) return;
+      const native = pointer.event as WheelEvent | undefined;
+      if (native?.ctrlKey || native?.metaKey) return;
+      if (dy === 0) return;
+      const cam = deps.getActiveCamera();
+      const factor = wheelZoomFactor(dy, WHEEL_ZOOM_STEP, WHEEL_NOTCH_PX);
+      const beforeZoom = cam.targetZoom;
+      deps.beginZoom(cam, factor, pointer.x, pointer.y);
+      if (cam.targetZoom !== beforeZoom) deps.onZoomAccepted?.();
+      deps.noteWorldInput?.();
+    },
+  );
 }

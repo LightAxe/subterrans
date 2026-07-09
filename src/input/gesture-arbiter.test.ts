@@ -21,6 +21,7 @@ import {
   LEFT_BUTTON,
   MIDDLE_BUTTON,
   RIGHT_BUTTON,
+  HOVER_PREVIEW_MS,
   type GestureArbiterDeps,
   type ArbiterPointerEvent,
 } from './gesture-arbiter.js';
@@ -108,10 +109,18 @@ interface Harness {
   lastQueueFullPaused: () => boolean | undefined;
   /** Every `paused` argument passed to onPausedQueueFull, in order (Fix 3). */
   queueFullPausedCalls: () => boolean[];
-  /** #237 PR4 — fire every pending fake long-press timer once (simulates 500ms). */
-  fireTimers: () => void;
-  /** #237 PR4 — armed long-press timers not yet fired or cancelled. */
+  /**
+   * #237 PR4/PR5 — fire pending fake timers whose delay ≤ untilMs, in delay order
+   * (default Infinity = all). Lets a test advance to HOVER_PREVIEW_MS (200) without
+   * also firing the LONG_PRESS_MS (500) timer.
+   */
+  fireTimers: (untilMs?: number) => void;
+  /** #237 PR4/PR5 — armed timers not yet fired or cancelled. */
   pendingTimerCount: () => number;
+  /** #237 PR5 — every onHoverPreview(x, y) call, in order. */
+  hoverPreviewCalls: () => Array<{ x: number; y: number }>;
+  /** #237 PR5 — number of onHoverPreviewEnd() calls. */
+  hoverPreviewEndCount: () => number;
 }
 
 function makeHarness(
@@ -125,6 +134,9 @@ function makeHarness(
   // deterministically (h.fireTimers()). OMITTED by default so pre-PR4 tests keep
   // the no-long-press fallback (mouse right-click still works).
   enableLongPress = false,
+  // #237 PR5 — wire onHoverPreview/onHoverPreviewEnd (recorded on the harness).
+  // Requires enableLongPress (the hover uses the same scheduleTimeout seam).
+  enableHoverPreview = false,
 ): Harness {
   const world = makeWorld();
   const vs = makeViewState(view, tool);
@@ -160,16 +172,28 @@ function makeHarness(
     },
   };
   if (dragThreshold !== undefined) deps.getDragThreshold = () => dragThreshold;
-  // #237 PR4 — a fake scheduleTimeout: record each timer; the returned canceller
-  // (or a fire) marks it done so it can't run twice. fireTimers() runs all pending.
-  const timers: Array<{ cb: () => void; done: boolean }> = [];
+  // #237 PR4/PR5 — a fake scheduleTimeout: record each timer's cb + delay; the
+  // returned canceller (or a fire) marks it done so it can't run twice.
+  const timers: Array<{ cb: () => void; ms: number; done: boolean }> = [];
   if (enableLongPress) {
-    deps.scheduleTimeout = (cb) => {
-      const t = { cb, done: false };
+    deps.scheduleTimeout = (cb, ms) => {
+      const t = { cb, ms, done: false };
       timers.push(t);
       return () => {
         t.done = true;
       };
+    };
+  }
+  // #237 PR5 — record hover-preview callbacks (and wire them only when asked, so
+  // the hover timer stays un-armed for the PR4 long-press-only tests).
+  const hoverCalls: Array<{ x: number; y: number }> = [];
+  let hoverEnds = 0;
+  if (enableHoverPreview) {
+    deps.onHoverPreview = (x, y) => {
+      hoverCalls.push({ x, y });
+    };
+    deps.onHoverPreviewEnd = () => {
+      hoverEnds++;
     };
   }
   const arbiter = new GestureArbiter(deps);
@@ -188,15 +212,18 @@ function makeHarness(
     pausedFullCount: () => pausedFull,
     lastQueueFullPaused: () => queueFullPaused[queueFullPaused.length - 1],
     queueFullPausedCalls: () => queueFullPaused,
-    fireTimers: () => {
-      for (const t of timers) {
-        if (!t.done) {
-          t.done = true;
-          t.cb();
-        }
+    fireTimers: (untilMs = Infinity) => {
+      // Fire due (ms ≤ untilMs) pending timers in delay order, so a 200ms hover
+      // resolves before a 500ms long-press when both are due.
+      const due = timers.filter((t) => !t.done && t.ms <= untilMs).sort((a, b) => a.ms - b.ms);
+      for (const t of due) {
+        t.done = true;
+        t.cb();
       }
     },
     pendingTimerCount: () => timers.filter((t) => !t.done).length,
+    hoverPreviewCalls: () => hoverCalls,
+    hoverPreviewEndCount: () => hoverEnds,
   };
 }
 
@@ -1338,5 +1365,66 @@ describe('#237 PR4 — touch long-press', () => {
     expect(h.pendingTimerCount()).toBe(0); // the single→pinch handoff cancelled it
     h.fireTimers();
     expect(contextMenuState.pendingShow).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #237 PR5 — touch hover preview (onHoverPreview / onHoverPreviewEnd)
+// makeHarness(..., enableLongPress=true, enableHoverPreview=true) wires the
+// timer seam + records the callbacks. fireTimers(HOVER_PREVIEW_MS) advances to
+// the 200ms hover without also firing the 500ms long-press.
+// ---------------------------------------------------------------------------
+
+describe('#237 PR5 — touch hover preview', () => {
+  const touch = (button: number, x: number, y: number, id = 1) => ev(button, x, y, id, true);
+
+  it('a still touch press shows the preview at HOVER_PREVIEW_MS without abandoning the tap', () => {
+    const h = makeHarness('surface', 'command', undefined, true, true);
+    const p = tileCenter(6, 1, h.vs);
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, p.x, p.y));
+    h.fireTimers(HOVER_PREVIEW_MS); // fire the 200ms hover, NOT the 500ms long-press
+    expect(h.hoverPreviewCalls()).toEqual([{ x: p.x, y: p.y }]); // preview at the down-point
+    expect(h.arbiter.hasPendingGesture()).toBe(true); // hover is additive — tap NOT abandoned
+    // Release → the preview ends AND the tap still commits.
+    h.arbiter.onPointerUp(touch(LEFT_BUTTON, p.x, p.y));
+    expect(h.hoverPreviewEndCount()).toBe(1);
+    expect(h.world.commandQueue.some((c) => c.type === 'SetRallyPoint')).toBe(true);
+  });
+
+  it('under-threshold drift forwards the preview under the finger', () => {
+    const h = makeHarness('surface', 'command', undefined, true, true);
+    const p = tileCenter(6, 4, h.vs);
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, p.x, p.y));
+    h.fireTimers(HOVER_PREVIEW_MS);
+    h.arbiter.onPointerMove(touch(LEFT_BUTTON, p.x + 3, p.y)); // 3px, under the threshold
+    const calls = h.hoverPreviewCalls();
+    expect(calls[calls.length - 1]).toEqual({ x: p.x + 3, y: p.y }); // tracked the finger
+  });
+
+  it('a drag ends the hover preview (a drag is not a hover)', () => {
+    const h = makeHarness('surface', 'command', undefined, true, true);
+    const p = tileCenter(6, 4, h.vs);
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, p.x, p.y));
+    h.fireTimers(HOVER_PREVIEW_MS); // preview showing
+    h.arbiter.onPointerMove(touch(LEFT_BUTTON, p.x + 40, p.y)); // crosses threshold → drag
+    expect(h.hoverPreviewEndCount()).toBe(1);
+  });
+
+  it('a MOUSE press shows no hover preview (mouse has a real hover)', () => {
+    const h = makeHarness('surface', 'command', undefined, true, true);
+    const p = tileCenter(6, 1, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, p.x, p.y, 1, false)); // MOUSE
+    h.fireTimers(); // fire everything
+    expect(h.hoverPreviewCalls()).toEqual([]);
+  });
+
+  it('a quick lift before HOVER_PREVIEW_MS shows no preview', () => {
+    const h = makeHarness('surface', 'command', undefined, true, true);
+    const p = tileCenter(6, 1, h.vs);
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, p.x, p.y));
+    h.arbiter.onPointerUp(touch(LEFT_BUTTON, p.x, p.y)); // lift before the timer fires
+    h.fireTimers(); // both timers were cancelled on lift
+    expect(h.hoverPreviewCalls()).toEqual([]);
+    expect(h.hoverPreviewEndCount()).toBe(0); // never fired → no End
   });
 });
