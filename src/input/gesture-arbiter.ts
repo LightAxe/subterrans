@@ -98,6 +98,11 @@ export const RIGHT_BUTTON = 2;
  *  (the touch analog of right-click). Tuned in UAT alongside DRAG_THRESHOLD_PX. */
 export const LONG_PRESS_MS = 500;
 
+/** #237 PR5 — hold a touch press this long (ms) without dragging → show the
+ *  feedforward hover preview (touch has no real hover). Shorter than LONG_PRESS_MS
+ *  so the preview appears well before the long-press chamber menu. */
+export const HOVER_PREVIEW_MS = 200;
+
 /** A device-agnostic pointer event the arbiter core consumes (no Phaser type). */
 export interface ArbiterPointerEvent {
   /** Phaser pointer.id — used to ignore moves/ups from a different pointer. */
@@ -114,6 +119,12 @@ export interface ArbiterPointerEvent {
    * preview). Optional so existing unit tests need not set it (mouse paths).
    */
   wasTouch?: boolean;
+  /**
+   * #237 PR5 — Phaser `pointer.wasCanceled`: an OS/browser touchcancel (a system
+   * gesture took over). Phaser routes it through the pointerup path, so onPointerUp
+   * must abandon the gesture with NO tap. Only meaningful on an up event.
+   */
+  wasCanceled?: boolean;
 }
 
 /** Snapshot taken at left pointer-down; the tap acts on these, not live state. */
@@ -229,6 +240,17 @@ export interface GestureArbiterDeps {
    * still works). The canceller must be safe to call after the timer has fired.
    */
   scheduleTimeout?: (cb: () => void, ms: number) => () => void;
+  /**
+   * #237 PR5 — touch press-and-hold feedforward preview (touch has no hover).
+   * onHoverPreview(x, y) is called when a still touch press passes
+   * HOVER_PREVIEW_MS, and again as the finger drifts under the drag threshold;
+   * onHoverPreviewEnd() on release / drag-out / cancel. GameScene points these at
+   * the same hoverScreenX/Y fields its mouse pointermove handler drives, so the
+   * existing per-frame hover resolution renders the preview. Both omitted → no
+   * touch preview (mouse hover unaffected).
+   */
+  onHoverPreview?: (x: number, y: number) => void;
+  onHoverPreviewEnd?: () => void;
 }
 
 /** Return the active CameraView for the current view. */
@@ -277,6 +299,11 @@ export class GestureArbiter {
   private singleFromPinch = false;
   /** #237 PR4 — canceller for the in-flight touch long-press timer, or null. */
   private longPressCancel: (() => void) | null = null;
+  /** #237 PR5 — canceller for the in-flight touch hover-preview timer, or null. */
+  private hoverPreviewCancel: (() => void) | null = null;
+  /** #237 PR5 — true once the hover preview has FIRED (so under-threshold moves
+   *  forward to onHoverPreview and release/drag-out calls onHoverPreviewEnd). */
+  private hoverPreviewActive = false;
   /** Once the threshold is crossed, the resolved drag mode ('paint' | 'pan'); null while still a tap. */
   private dragMode: 'paint' | 'pan' | null = null;
   /** Last pointer position seen during a pan drag (for incremental camera delta). */
@@ -306,6 +333,18 @@ export class GestureArbiter {
   /** True while a single (tap/drag) gesture is pending (down seen, up not yet). */
   hasPendingGesture(): boolean {
     return this.single !== null;
+  }
+
+  /**
+   * #237 PR5 — end just the touch hover preview (cancel its pending timer + fire
+   * onHoverPreviewEnd if it was showing), WITHOUT abandoning the gesture. Called by
+   * GameScene on canvas exit (pointerout / gameout): the preview must not linger or
+   * a pending timer resurrect it at the stale down-point while the finger is off
+   * the canvas — but a live drag (mouse or touch) should keep running until its own
+   * up/upoutside, so this does NOT cancel the whole gesture.
+   */
+  endHoverPreview(): void {
+    this.cancelHoverPreview();
   }
 
   /**
@@ -403,6 +442,7 @@ export class GestureArbiter {
     this.dragMode = null;
     this.singleFromPinch = false;
     this.cancelLongPress(); // #237 PR4 — abandoning the gesture cancels its long-press
+    this.cancelHoverPreview(); // #237 PR5 — ...and ends/cancels its hover preview
     resetPaintStrokeState(this.paintStroke);
   }
 
@@ -512,12 +552,20 @@ export class GestureArbiter {
     // does not change, so firing at press-time is safe).
     this.deps.onWorldInput?.();
 
-    // #237 PR4 — a held TOUCH press is the touch analog of right-click → chamber
-    // menu. Arm a timer (touch only — mouse has real right-click); fireLongPress
-    // re-checks eligibility and leaves the tap pending if nothing opens. Cancelled
-    // the moment the press resolves to a drag (onPointerMove) or is abandoned
-    // (clearLeftGesture).
+    // A held TOUCH press drives two touch-only timers (mouse has real hover +
+    // right-click), both cancelled the moment the press resolves to a drag
+    // (onPointerMove) or is abandoned (clearLeftGesture):
+    //   - #237 PR5 hover preview at HOVER_PREVIEW_MS (feedforward cue), and
+    //   - #237 PR4 long-press → chamber menu at LONG_PRESS_MS.
     if ((ev.wasTouch ?? false) && this.deps.scheduleTimeout !== undefined) {
+      // Hover preview only when a consumer wants it (onHoverPreview wired); the
+      // long-press always arms (fireLongPress re-checks menu eligibility).
+      if (this.deps.onHoverPreview !== undefined) {
+        this.hoverPreviewCancel = this.deps.scheduleTimeout(
+          () => this.fireHoverPreview(),
+          HOVER_PREVIEW_MS,
+        );
+      }
       this.longPressCancel = this.deps.scheduleTimeout(() => this.fireLongPress(), LONG_PRESS_MS);
     }
   }
@@ -642,9 +690,13 @@ export class GestureArbiter {
           ? this.deps.getDragThreshold()
           : DRAG_THRESHOLD_PX;
       if (!hasCrossedDragThreshold(snap.downX, snap.downY, ev.x, ev.y, threshold)) {
-        return; // still a potential tap
+        // Still a potential tap. #237 PR5 — if the hover preview is showing, track
+        // it under the (under-threshold) finger drift.
+        if (this.hoverPreviewActive) this.deps.onHoverPreview?.(ev.x, ev.y);
+        return;
       }
       this.cancelLongPress(); // #237 PR4 — the press resolved to a drag, not a long-press
+      this.cancelHoverPreview(); // #237 PR5 — a drag ends the hover preview
       this.dragMode = classifyDragMode(snap.tool, snap.view);
       if (this.dragMode === 'paint') {
         // Paint writes to the world, so it obeys canEditWorld (a menu pause /
@@ -714,6 +766,14 @@ export class GestureArbiter {
   }
 
   onPointerUp(ev: ArbiterPointerEvent): void {
+    // #237 PR5 — a touchcancel (OS/browser took over the gesture) arrives on the
+    // pointerup path with wasCanceled=true. Abandon everything with NO tap — the
+    // finger never "lifted" intentionally. cancelGesture also ends any hover
+    // preview / long-press timer via clearLeftGesture.
+    if (ev.wasCanceled) {
+      this.cancelGesture();
+      return;
+    }
     // #237 PR1 — a pinch finger lifted: NO tap. Drop it and re-snapshot the
     // survivor as a fresh single (so lifting it later taps, moving it pans/paints).
     if (this.mode === 'pinch') {
@@ -1017,6 +1077,36 @@ export class GestureArbiter {
       this.longPressCancel = null;
     }
   }
+
+  /**
+   * fireHoverPreview — #237 PR5 timer callback: a still touch press held past
+   * HOVER_PREVIEW_MS. Show the feedforward preview at the snapshotted down-point;
+   * under-threshold moves then track it (onPointerMove), and any gesture end /
+   * drag-out clears it (cancelHoverPreview). Does NOT abandon the tap — a lift
+   * still taps; the preview is purely additive on-screen state.
+   */
+  private fireHoverPreview(): void {
+    this.hoverPreviewCancel = null; // the timer just fired
+    if (this.mode !== 'single' || this.single === null || this.dragMode !== null) return;
+    this.hoverPreviewActive = true;
+    this.deps.onHoverPreview?.(this.single.downX, this.single.downY);
+  }
+
+  /**
+   * cancelHoverPreview — drop a pending hover-preview timer AND, if the preview
+   * already fired, end it (onHoverPreviewEnd). Called on drag-resolve and from
+   * clearLeftGesture (release / abandon / pinch-handoff / reconcile).
+   */
+  private cancelHoverPreview(): void {
+    if (this.hoverPreviewCancel !== null) {
+      this.hoverPreviewCancel();
+      this.hoverPreviewCancel = null;
+    }
+    if (this.hoverPreviewActive) {
+      this.hoverPreviewActive = false;
+      this.deps.onHoverPreviewEnd?.();
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1072,6 +1162,7 @@ export function registerGestureArbiter(
       x: pointer.x,
       y: pointer.y,
       wasTouch: pointer.wasTouch,
+      wasCanceled: pointer.wasCanceled, // #237 PR5 — touchcancel → abandon, no tap
     });
   });
   scene.input.on('pointerupoutside', () => {
