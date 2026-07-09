@@ -44,12 +44,17 @@ export function setViewportSize(w: number, h: number): void {
   viewportH = h;
 }
 
-/** Read the current logical viewport size. #236 PR1 — the pheromone-layer cache
- *  keys on this: visibleTileRange depends on the viewport, so a future responsive
- *  resize (setViewportSize with new dims) must invalidate a cached overlay even
- *  when the camera/tick/view are unchanged. Fixed at CANVAS_W×CANVAS_H today. */
-export function getViewportSize(): { w: number; h: number } {
-  return { w: viewportW, h: viewportH };
+/** Read the current logical viewport width / height. #236 PR1 — the pheromone-
+ *  layer cache keys on these: visibleTileRange depends on the viewport, so a
+ *  future responsive resize (setViewportSize with new dims) must invalidate a
+ *  cached overlay even when the camera/tick/view are unchanged. SCALAR getters
+ *  (not an object) so the per-frame cache check allocates nothing. Fixed at
+ *  CANVAS_W×CANVAS_H today. */
+export function getViewportWidth(): number {
+  return viewportW;
+}
+export function getViewportHeight(): number {
+  return viewportH;
 }
 
 // ---------------------------------------------------------------------------

@@ -79,7 +79,8 @@ import {
   screenToTileZoom,
   resolveDotMode,
   setViewportSize,
-  getViewportSize,
+  getViewportWidth,
+  getViewportHeight,
 } from './camera-adapter.js';
 import { CameraController } from './camera-controller.js';
 import {
@@ -2299,16 +2300,18 @@ export class GameScene extends Phaser.Scene {
     // consistent. Only the drawPheromoneOverlay call below is cache-gated.
     this.recordDrawLayer('pheromone');
     // Gate (b) — redraw only on a tick / camera / view / viewport change (all the
-    // inputs to drawPheromoneOverlay's culled fillRect set).
-    const viewport = getViewportSize();
+    // inputs to drawPheromoneOverlay's culled fillRect set). Scalar getters so the
+    // per-frame cache-hit path allocates nothing.
+    const vpW = getViewportWidth();
+    const vpH = getViewportHeight();
     if (
       this.world.tick === this.lastPheromoneTick &&
       cam.centerX === this.lastPheromoneCam.centerX &&
       cam.centerY === this.lastPheromoneCam.centerY &&
       cam.zoom === this.lastPheromoneCam.zoom &&
       view === this.lastPheromoneView &&
-      viewport.w === this.lastPheromoneViewport.w &&
-      viewport.h === this.lastPheromoneViewport.h
+      vpW === this.lastPheromoneViewport.w &&
+      vpH === this.lastPheromoneViewport.h
     ) {
       return;
     }
@@ -2319,8 +2322,8 @@ export class GameScene extends Phaser.Scene {
     this.lastPheromoneCam.centerY = cam.centerY;
     this.lastPheromoneCam.zoom = cam.zoom;
     this.lastPheromoneView = view;
-    this.lastPheromoneViewport.w = viewport.w;
-    this.lastPheromoneViewport.h = viewport.h;
+    this.lastPheromoneViewport.w = vpW;
+    this.lastPheromoneViewport.h = vpH;
   }
 
   /**
