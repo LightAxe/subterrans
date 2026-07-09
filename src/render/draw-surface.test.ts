@@ -27,7 +27,7 @@ import { createWorldState } from '../sim/types.js';
 import { sgSet, SurfaceTileState } from '../sim/terrain.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { FP_SHIFT } from '../sim/fixed.js';
-import { PLAYER_COLONY_ID, SPIDER_HP_FULL } from '../sim/constants.js';
+import { PLAYER_COLONY_ID, ENEMY_COLONY_ID, SPIDER_HP_FULL } from '../sim/constants.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import { AntFacingCache } from './ant-facing-cache.js';
 import {
@@ -40,6 +40,7 @@ import {
   COLOR_PLAYER_COLONY,
   COLOR_ENEMY_COLONY,
   COLOR_RALLY_POINT,
+  COLOR_NEUTRAL_CONTESTED_GLOW,
 } from './sprites.js';
 import { COLOR_BARREN_EARTH } from './terrain-atlas.js';
 import { makeCameraView, type CameraView } from './camera-adapter.js';
@@ -299,6 +300,51 @@ describe('drawSurfaceEntities', () => {
     gfx = new MockGfx();
     sprites = new MockAntSprites();
     world = createWorldState(1);
+  });
+
+  it('#236 PR2 — the reused contested-glow scratch is cleared per call (no stale glow)', () => {
+    // Two ants of DIFFERENT colonies on the SAME surface tile → that tile is
+    // "contested" and draws COLOR_NEUTRAL_CONTESTED_GLOW.
+    const quietColony = (id: number, seed: number) => {
+      const c = createColonyRecord(id, seed);
+      c.entrances = [];
+      c.rallyPoint = null;
+      c.digFlowFieldDirty = false;
+      return c;
+    };
+    const makeAnts = (ax: number, ay: number, bx: number, by: number): WorldState => {
+      const w = createWorldState(1);
+      w.colonies[PLAYER_COLONY_ID] = quietColony(PLAYER_COLONY_ID, 1);
+      w.colonies[ENEMY_COLONY_ID] = quietColony(ENEMY_COLONY_ID, 2);
+      initAnt(w.ants, 0, {
+        colonyId: PLAYER_COLONY_ID,
+        posX: ax << FP_SHIFT,
+        posY: ay << FP_SHIFT,
+        zone: 0,
+      });
+      initAnt(w.ants, 1, {
+        colonyId: ENEMY_COLONY_ID,
+        posX: bx << FP_SHIFT,
+        posY: by << FP_SHIFT,
+        zone: 0,
+      });
+      return w;
+    };
+    const cam = makeCamera(6, 6); // sees tiles 5..9
+    const glowStyles = (): number =>
+      gfx.callsOf('fillStyle').filter((c) => c.args[0] === COLOR_NEUTRAL_CONTESTED_GLOW).length;
+
+    // Frame 1: both ants on tile (5,5) → contested → glow drawn.
+    const world1 = makeAnts(5, 5, 5, 5);
+    drawSurfaceEntities(gfx, sprites, world1, world1, 0, cam);
+    expect(glowStyles()).toBeGreaterThan(0);
+
+    // Frame 2: ants on DIFFERENT tiles → NOT contested. If the Map/Set scratch
+    // weren't cleared per call, frame 1's contested (5,5) would draw a stale glow.
+    gfx.reset();
+    const world2 = makeAnts(5, 5, 9, 9);
+    drawSurfaceEntities(gfx, sprites, world2, world2, 0, cam);
+    expect(glowStyles()).toBe(0);
   });
 
   it('draws 2 fillCircle calls for two food piles (one marked, one normal)', () => {

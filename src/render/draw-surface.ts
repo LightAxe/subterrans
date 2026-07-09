@@ -21,7 +21,7 @@ import { isAlive } from '../sim/ant/ant-store.js';
 import { FP_ONE } from '../sim/fixed.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import type { WorldState } from '../sim/types.js';
-import type { AntSpriteLayer } from './ant-sprite-layer.js';
+import type { AntSpriteLayer, AntSpriteDrawOptions } from './ant-sprite-layer.js';
 import { computeAntRotation, SPIDER_FACING_ID, type AntFacingCache } from './ant-facing-cache.js';
 import {
   TILE_SIZE_PX,
@@ -60,6 +60,35 @@ import {
 import { SPIDER_SPRITE_HEIGHT, SPIDER_SPRITE_WIDTH } from './ant-sprite-layer.js';
 import { SPIDER_HUNGER_MAX_TICKS, SPIDER_HP_FULL } from '../sim/constants.js';
 import { tierIndex } from '../sim/ai-state.js';
+
+// ---------------------------------------------------------------------------
+// #236 PR2 render-scratch — module-level buffers reused across frames.
+//
+// Render layer only (no sim determinism constraint): declared once at module
+// scope and reset (.clear() / .length = 0 / full field overwrite) at the START
+// of each use, so a frame never inherits the prior frame's contents.
+// drawSurfaceEntities runs once per frame (XOR drawUndergroundEntities) — no
+// re-entrancy — so the reset is the whole correctness guarantee.
+// ---------------------------------------------------------------------------
+
+// #236 PR2 render-scratch: reset per use
+const glowTileColony = new Map<number, number>(); // tileKey → first colonyId
+const glowContested = new Set<number>();
+const glowDrawKeys: number[] = [];
+
+// #236 PR2 render-scratch: reset per use (all fields overwritten each draw).
+// Retention-safe: AntSpritePool.drawAnt (ant-sprite-pool.ts:63-72) reads every
+// field synchronously (setTexture/Position/Tint/Rotation/Scale) and never stores
+// the opts reference — so mutate-then-pass is safe. The test mock also clones via
+// `{ ...opts }`, so recorded calls snapshot the fields at draw time.
+const scratchAntOpts: AntSpriteDrawOptions = {
+  kind: 'worker',
+  x: 0,
+  y: 0,
+  tint: 0,
+  rotation: 0,
+  scale: 1,
+};
 
 // ---------------------------------------------------------------------------
 // GfxLike — minimal Graphics interface (Phaser.GameObjects.Graphics satisfies this)
@@ -269,8 +298,9 @@ export function drawSurfaceEntities(
   // is tracked via contestedGlowFrames. Skipped in strategic dot mode (allocation-free
   // pass — no per-entity Map/Set scan; §C13/R3-2).
   if (!dotMode) {
-    const tileColony = new Map<number, number>(); // tileKey → first colonyId
-    const contested = new Set<number>();
+    // #236 PR2 render-scratch: reset per use (see module-level decls).
+    glowTileColony.clear();
+    glowContested.clear();
     const n = curr.ants.alive.length;
     for (let id = 0; id < n; id++) {
       if (!isAlive(curr.ants, id)) continue;
@@ -279,25 +309,29 @@ export function drawSurfaceEntities(
       const ty = curr.ants.posY[id]! >> 8;
       const key = (ty << 16) | tx;
       const cid = curr.ants.colonyId[id]!;
-      const existing = tileColony.get(key);
-      if (existing === undefined) tileColony.set(key, cid);
-      else if (existing !== cid) contested.add(key);
+      const existing = glowTileColony.get(key);
+      if (existing === undefined) glowTileColony.set(key, cid);
+      else if (existing !== cid) glowContested.add(key);
     }
     // Stamp active contested tiles with the current frame number.
     if (contestedGlowFrames) {
-      for (const key of contested) {
+      for (const key of glowContested) {
         contestedGlowFrames.set(key, currentFrame);
       }
     }
     // Draw glows for all tiles contested within the last 5 frames.
     const GLOW_FADE_FRAMES = 5;
     const tilesToDraw = contestedGlowFrames ? contestedGlowFrames : null;
-    const drawKeys = tilesToDraw
-      ? Array.from(tilesToDraw.entries())
-          .filter(([, frame]) => currentFrame - frame < GLOW_FADE_FRAMES)
-          .map(([key]) => key)
-      : Array.from(contested);
-    for (const key of drawKeys) {
+    // #236 PR2 render-scratch: rebuild the reused key list (same order as the prior
+    // Array.from(...).filter().map() — Map/Set iterate in insertion order).
+    glowDrawKeys.length = 0;
+    if (tilesToDraw) {
+      for (const [key, frame] of tilesToDraw)
+        if (currentFrame - frame < GLOW_FADE_FRAMES) glowDrawKeys.push(key);
+    } else {
+      for (const key of glowContested) glowDrawKeys.push(key);
+    }
+    for (const key of glowDrawKeys) {
       const tx = key & 0xffff;
       const ty = (key >> 16) & 0xffff;
       const wx = tx * TILE_SIZE_PX;
@@ -405,16 +439,18 @@ export function drawSurfaceEntities(
     const rotation = computeAntRotation(facing, id, curr.ants.zone[id]!, dx, dy, useInterp);
 
     const isFighter = curr.ants.task[id] === AntTask.Fighting;
-    sprites.drawAnt({
-      kind: isQueen ? 'queen' : 'worker',
-      x: worldX,
-      y: worldY,
-      // S1: fighters get a red tint blended over their colony color.
-      tint: isFighter && !isQueen ? lerpColor(color, COLOR_FIGHTER_TINT, 0.45) : color,
-      rotation,
-      // S1: fighters render slightly larger.
-      scale: isFighter && !isQueen ? 1.25 : 1.0,
-    });
+    // #236 PR2 render-scratch: mutate the reused opts (every field set) then pass.
+    // Retention-safe (drawAnt reads fields synchronously; see decl).
+    scratchAntOpts.kind = isQueen ? 'queen' : 'worker';
+    scratchAntOpts.x = worldX;
+    scratchAntOpts.y = worldY;
+    // S1: fighters get a red tint blended over their colony color.
+    scratchAntOpts.tint =
+      isFighter && !isQueen ? lerpColor(color, COLOR_FIGHTER_TINT, 0.45) : color;
+    scratchAntOpts.rotation = rotation;
+    // S1: fighters render slightly larger.
+    scratchAntOpts.scale = isFighter && !isQueen ? 1.25 : 1.0;
+    sprites.drawAnt(scratchAntOpts);
   }
 
   // --- Spider sprite + hunger ring (S3) ---
