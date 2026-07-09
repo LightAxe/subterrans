@@ -95,10 +95,11 @@ test('two-finger spread pinch-zooms the camera in', async ({ page }) => {
   // applyPinch — poll until the zoom reflects the spread.
   await expect.poll(async () => getZoom(page), { timeout: 5_000 }).toBeGreaterThan(z0 + 0.1);
 
-  await client.send('Input.dispatchTouchEvent', {
-    type: 'touchEnd',
-    touchPoints: [{ x: cx + 230, y: cy }],
-  });
+  // Release the gesture. CDP requires touchEnd/touchCancel to carry NO points —
+  // it ends ALL active touches at once (a partial one-finger release is not
+  // expressible via Input.dispatchTouchEvent, and the survivor→single path is
+  // covered in gesture-arbiter.test.ts). A non-empty touchEnd is a protocol
+  // violation Chrome may reject.
   await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
 });
 
