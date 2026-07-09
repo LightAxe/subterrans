@@ -24,20 +24,24 @@ import type { ToolId } from '../render/camera.js';
 export const DRAG_THRESHOLD_PX = 6;
 
 /**
- * thresholdLogicalPx — the drag threshold (in LOGICAL/game pixels) tuned for the
- * current display scale (#237 PR3). The arbiter classifies in logical pixels
- * (Phaser.Scale.FIT maps the CSS-displayed canvas back to the fixed logical
- * canvas), so a fixed physical finger jitter maps to MORE logical pixels the
- * smaller the canvas is displayed.
+ * thresholdLogicalPx — the TOUCH drag threshold (in LOGICAL/game pixels) tuned for
+ * the current display scale (#237 PR3). The arbiter applies this ONLY to touch
+ * gestures; mouse/trackpad keeps the fixed DRAG_THRESHOLD_PX above (unchanged).
+ *
+ * The arbiter classifies in logical pixels (Phaser.Scale.FIT maps the CSS-
+ * displayed canvas back to the fixed logical canvas), so a fixed physical finger
+ * jitter maps to MORE logical pixels the smaller the canvas is displayed.
  *
  * `cssScale` = displayed CSS width / logical width (see layout.cssScaleX). A
- * ~10px physical jitter is therefore `10 / cssScale` logical px:
+ * ~10px physical finger jitter is therefore `ceil(10 / cssScale)` logical px:
  *   - phone, canvas shrunk (cssScale 0.5) → 20 logical px of jitter → threshold 20
  *   - 1:1 display (cssScale 1)            → 10
- *   - canvas enlarged (cssScale 3)        → ~3 → clamped up to the 6px floor
- * Clamped to [6, 24]: the 6px floor keeps trackpad clicks from registering as
- * drags on large displays (the original DRAG_THRESHOLD_PX intent); the 24px
- * ceiling stops a pathologically tiny canvas from swallowing real short drags.
+ *   - canvas enlarged (cssScale 3)        → ceil(3.33) = 4 → clamped up to the 6 floor
+ * Clamped to [6, 24]: the 6px floor keeps a big-display touch from being twitchier
+ * than the desktop default; the 24px ceiling stops a pathologically tiny canvas
+ * from swallowing real short drags. A degenerate cssScale ≤ 0 yields +Infinity or a
+ * negative and clamps to 24 / 6 respectively (no throw); callers still guard a
+ * zero canvas width so this isn't reached in practice.
  */
 export function thresholdLogicalPx(cssScale: number): number {
   return Math.max(6, Math.min(24, Math.ceil(10 / cssScale)));

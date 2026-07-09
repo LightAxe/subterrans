@@ -171,8 +171,14 @@ function makeHarness(
   };
 }
 
-function ev(button: number, x: number, y: number, pointerId = 1): ArbiterPointerEvent {
-  return { pointerId, button, x, y };
+function ev(
+  button: number,
+  x: number,
+  y: number,
+  pointerId = 1,
+  wasTouch = false,
+): ArbiterPointerEvent {
+  return { pointerId, button, x, y, wasTouch };
 }
 
 beforeEach(() => {
@@ -1156,26 +1162,39 @@ describe('#237 PR2 — pinch zoom drive', () => {
 // #237 PR3 — scale-tuned drag threshold (getDragThreshold dep)
 // ---------------------------------------------------------------------------
 
-describe('#237 PR3 — injected drag threshold', () => {
-  it('defers pan classification until the move crosses the LARGER injected threshold', () => {
+describe('#237 PR3 — injected drag threshold (touch-gated)', () => {
+  // Touch events carry wasTouch=true (the 5th ev() arg), so the injected 20px
+  // threshold applies; mouse events (default false) keep the fixed DRAG_THRESHOLD_PX.
+  const touch = (button: number, x: number, y: number, id = 1) => ev(button, x, y, id, true);
+
+  it('TOUCH: defers pan classification until the move crosses the LARGER injected threshold', () => {
     const h = makeHarness('surface', 'command', 20); // touch-scale threshold, not the 6px default
     const start = tileCenter(6, 4, h.vs);
-    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, start.x, start.y));
     // 10px crosses the fixed 6px default but NOT the injected 20px → still a tap.
-    h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 10, start.y));
+    h.arbiter.onPointerMove(touch(LEFT_BUTTON, start.x + 10, start.y));
     expect(panInputState.isPanning).toBe(false);
     // Past 20px → now classified as a pan.
-    h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 25, start.y));
+    h.arbiter.onPointerMove(touch(LEFT_BUTTON, start.x + 25, start.y));
     expect(panInputState.isPanning).toBe(true);
   });
 
-  it('a tap within the injected threshold still taps (no drag misclassification)', () => {
+  it('TOUCH: a tap within the injected threshold still taps (no drag misclassification)', () => {
     const h = makeHarness('surface', 'command', 20);
     const p = tileCenter(6, 1, h.vs);
-    h.arbiter.onPointerDown(ev(LEFT_BUTTON, p.x, p.y));
-    h.arbiter.onPointerMove(ev(LEFT_BUTTON, p.x + 15, p.y)); // 15px < 20 → under threshold
-    h.arbiter.onPointerUp(ev(LEFT_BUTTON, p.x + 15, p.y));
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, p.x, p.y));
+    h.arbiter.onPointerMove(touch(LEFT_BUTTON, p.x + 15, p.y)); // 15px < 20 → under threshold
+    h.arbiter.onPointerUp(touch(LEFT_BUTTON, p.x + 15, p.y));
     expect(panInputState.isPanning).toBe(false);
     expect(h.world.commandQueue.some((c) => c.type === 'SetRallyPoint')).toBe(true); // acted as a tap
+  });
+
+  it('MOUSE: ignores the injected touch threshold — a 10px drag still pans at the fixed 6px (F1)', () => {
+    const h = makeHarness('surface', 'command', 20); // touch threshold injected...
+    const start = tileCenter(6, 4, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y)); // ...but this is a MOUSE press (wasTouch=false)
+    // 10px crosses the fixed 6px default; the 20px touch threshold must NOT apply.
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 10, start.y));
+    expect(panInputState.isPanning).toBe(true); // mouse desktop feel unchanged
   });
 });

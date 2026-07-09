@@ -123,6 +123,9 @@ interface GestureSnapshot {
   tool: ToolId;
   view: 'surface' | 'underground';
   undergroundColonyId: ViewState['activeUndergroundColonyId'];
+  /** #237 PR3 — was this gesture started by a touch pointer? Only touch gets the
+   *  scale-tuned drag threshold; mouse/trackpad keeps the fixed DRAG_THRESHOLD_PX. */
+  wasTouch: boolean;
 }
 
 /**
@@ -206,11 +209,13 @@ export interface GestureArbiterDeps {
    *  GameScene uses to evaluate the proactive [Tab] nudge on first world input. */
   onWorldInput?: () => void;
   /**
-   * #237 PR3 — the drag threshold in LOGICAL pixels, scale-tuned for the current
-   * display (see gesture.thresholdLogicalPx). GameScene computes it from the
-   * canvas's CSS width at boot and on resize; the arbiter reads it per move.
-   * Optional: omitted callers (and every existing unit test) fall back to the
-   * fixed DRAG_THRESHOLD_PX, so desktop behavior is unchanged.
+   * #237 PR3 — the TOUCH drag threshold in LOGICAL pixels, scale-tuned for the
+   * current display (see gesture.thresholdLogicalPx). GameScene computes it from
+   * the canvas's CSS width at boot and on resize; the arbiter reads it per move
+   * but applies it ONLY to touch gestures (snap.wasTouch). Mouse/trackpad always
+   * uses the fixed, UAT-tuned DRAG_THRESHOLD_PX, so desktop click-vs-drag is
+   * unchanged regardless of this value. Optional: omitted (as in every existing
+   * unit test) → even touch falls back to DRAG_THRESHOLD_PX.
    */
   getDragThreshold?: () => number;
 }
@@ -470,7 +475,7 @@ export class GestureArbiter {
     // mode === 'idle' — arm a single from the first pointer if the admission
     // guards pass (context-menu / pan-or-edit / HUD; see canArmSingleAt).
     if (!this.canArmSingleAt(ev.x, ev.y)) return;
-    if (!this.armSingle(ev.pointerId, ev.x, ev.y)) return; // world unavailable
+    if (!this.armSingle(ev.pointerId, ev.x, ev.y, ev.wasTouch ?? false)) return; // world unavailable
     this.mode = 'single';
     this.pointers.set(ev.pointerId, { pointerId: ev.pointerId, x: ev.x, y: ev.y });
 
@@ -518,7 +523,7 @@ export class GestureArbiter {
    * on the first move classified as paint (see onPointerMove), so a release before
    * the threshold is a single-tile Dig tap (onPointerUp) and cannot double-emit.
    */
-  private armSingle(pointerId: number, x: number, y: number): boolean {
+  private armSingle(pointerId: number, x: number, y: number, wasTouch: boolean): boolean {
     const world = this.deps.getWorld();
     if (!world) return false;
     const vs = this.deps.viewState;
@@ -536,6 +541,7 @@ export class GestureArbiter {
       tool: vs.activeTool,
       view: vs.activeView,
       undergroundColonyId: vs.activeUndergroundColonyId,
+      wasTouch,
     };
     this.dragMode = null;
     this.singleFromPinch = false; // fresh arm; the survivor re-arm re-sets this true
@@ -590,10 +596,15 @@ export class GestureArbiter {
       tracked.y = ev.y;
     }
 
-    // Classify on first crossing of the threshold (#237 PR3: scale-tuned in
-    // logical px when GameScene provides it; fixed DRAG_THRESHOLD_PX otherwise).
+    // Classify on first crossing of the threshold. #237 PR3: TOUCH uses the
+    // scale-tuned threshold (finger jitter grows in logical px as the FIT-scaled
+    // canvas shrinks) when GameScene provides it; mouse/trackpad keeps the fixed,
+    // UAT-tuned DRAG_THRESHOLD_PX so desktop click-vs-drag is unchanged.
     if (this.dragMode === null) {
-      const threshold = this.deps.getDragThreshold?.() ?? DRAG_THRESHOLD_PX;
+      const threshold =
+        snap.wasTouch && this.deps.getDragThreshold !== undefined
+          ? this.deps.getDragThreshold()
+          : DRAG_THRESHOLD_PX;
       if (!hasCrossedDragThreshold(snap.downX, snap.downY, ev.x, ev.y, threshold)) {
         return; // still a potential tap
       }
@@ -679,7 +690,8 @@ export class GestureArbiter {
       if (
         survivor !== undefined &&
         this.canArmSingleAt(survivor.x, survivor.y) &&
-        this.armSingle(survivor.pointerId, survivor.x, survivor.y)
+        // A pinch is touch-only (two fingers), so the survivor is a touch gesture.
+        this.armSingle(survivor.pointerId, survivor.x, survivor.y, true)
       ) {
         this.mode = 'single';
         this.pinch = null; // #237 PR2 — pinch ended; the survivor is a plain single now

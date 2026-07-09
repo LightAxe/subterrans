@@ -46,13 +46,14 @@ export function createLayoutContext(w: number = CANVAS_W, h: number = CANVAS_H):
 export const DEFAULT_LAYOUT: LayoutContext = createLayoutContext();
 
 /**
- * cssScaleX — CSS pixels per logical pixel: how much the FIT-scaled canvas is
+ * cssScaleX — CSS pixels per logical pixel (X): how much the FIT-scaled canvas is
  * displayed larger (>1) or smaller (<1) than its logical width. `cssWidth` is the
- * canvas's on-screen width (canvas.getBoundingClientRect().width). Centralizes
- * the ratio that both the free-text overlay positioning (ui-scene) and the
- * touch-tuned drag threshold (#237 PR3, input.thresholdLogicalPx) need, so the
- * two can't drift. Callers guard a zero/NaN cssWidth themselves if a pre-layout
- * measurement is possible.
+ * canvas's on-screen width (canvas.getBoundingClientRect().width). Centralizes the
+ * X ratio shared by the free-text overlay positioning (ui-scene) and the touch-
+ * tuned drag threshold (#237 PR3, input.thresholdLogicalPx). (ui-scene keeps its
+ * own inline Y ratio; FIT preserves aspect so X≈Y, and only X feeds the threshold
+ * — a cssScaleY can be added if a Y consumer ever needs it.) Callers guard a
+ * zero/NaN cssWidth themselves if a pre-layout measurement is possible.
  */
 export function cssScaleX(cssWidth: number, layout: LayoutContext): number {
   return cssWidth / layout.w;

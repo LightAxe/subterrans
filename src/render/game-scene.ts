@@ -480,7 +480,7 @@ export class GameScene extends Phaser.Scene {
    */
   private readonly recomputeDragThreshold = (): void => {
     const cssWidth = this.game.canvas?.getBoundingClientRect().width ?? 0;
-    if (cssWidth <= 0) return;
+    if (!(cssWidth > 0)) return; // negated so NaN (NaN > 0 is false) is also skipped
     this.dragThresholdPx = thresholdLogicalPx(cssScaleX(cssWidth, this.layout));
   };
 
