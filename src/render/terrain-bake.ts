@@ -197,6 +197,12 @@ export class TerrainCache<RT> {
     return [...this.entries.keys()];
   }
 
+  /** #236 PR3 — the live key iterator (no array allocation), for the per-frame
+   *  visibility sweep. allocatedKeys() stays for callers that need a snapshot. */
+  keys(): IterableIterator<TerrainCacheKey> {
+    return this.entries.keys();
+  }
+
   /**
    * Fetch (or lazily allocate) the entry for a key. A new entry is created at origin
    * (0,0) with needsRebake=true and no shadow; the RT factory runs exactly once per key.

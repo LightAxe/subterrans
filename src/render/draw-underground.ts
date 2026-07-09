@@ -18,6 +18,7 @@
 export type { GfxLike } from './draw-surface.js';
 
 import type { GfxLike } from './draw-surface.js';
+import { tileInView } from './draw-surface.js'; // #236 PR3 — shared (was a verbatim copy)
 import type {
   AntSpriteLayer,
   AntSpriteDrawOptions,
@@ -361,23 +362,6 @@ export function restampUndergroundTiles(
     gfx.fillRect(tx * TILE_SIZE_PX, ty * TILE_SIZE_PX, TILE_SIZE_PX, TILE_SIZE_PX);
     drawOneUndergroundTile(gfx, grid, entranceXSet, tx, ty, neighbors);
   }
-}
-
-// ---------------------------------------------------------------------------
-// tileInView — world-space cull (copied verbatim from draw-surface.ts, where it
-// is a private helper and not exported). A tile-anchored primitive whose top-left
-// is at world (worldX, worldY) is kept when it lies within the visible world rect
-// expanded by `margin`. `margin` widens the box for primitives that spill past
-// their tile.
-// ---------------------------------------------------------------------------
-
-function tileInView(worldX: number, worldY: number, rect: WorldRect, margin: number): boolean {
-  return (
-    worldX >= rect.left - margin &&
-    worldX <= rect.right + margin &&
-    worldY >= rect.top - margin &&
-    worldY <= rect.bottom + margin
-  );
 }
 
 // ---------------------------------------------------------------------------
