@@ -23,6 +23,26 @@ import type { ToolId } from '../render/camera.js';
  */
 export const DRAG_THRESHOLD_PX = 6;
 
+/**
+ * thresholdLogicalPx — the drag threshold (in LOGICAL/game pixels) tuned for the
+ * current display scale (#237 PR3). The arbiter classifies in logical pixels
+ * (Phaser.Scale.FIT maps the CSS-displayed canvas back to the fixed logical
+ * canvas), so a fixed physical finger jitter maps to MORE logical pixels the
+ * smaller the canvas is displayed.
+ *
+ * `cssScale` = displayed CSS width / logical width (see layout.cssScaleX). A
+ * ~10px physical jitter is therefore `10 / cssScale` logical px:
+ *   - phone, canvas shrunk (cssScale 0.5) → 20 logical px of jitter → threshold 20
+ *   - 1:1 display (cssScale 1)            → 10
+ *   - canvas enlarged (cssScale 3)        → ~3 → clamped up to the 6px floor
+ * Clamped to [6, 24]: the 6px floor keeps trackpad clicks from registering as
+ * drags on large displays (the original DRAG_THRESHOLD_PX intent); the 24px
+ * ceiling stops a pathologically tiny canvas from swallowing real short drags.
+ */
+export function thresholdLogicalPx(cssScale: number): number {
+  return Math.max(6, Math.min(24, Math.ceil(10 / cssScale)));
+}
+
 /** The outcome of a drag, once the threshold has been crossed. */
 export type DragMode = 'paint' | 'pan';
 

@@ -205,6 +205,14 @@ export interface GestureArbiterDeps {
   /** A world gesture began (a left press that armed a snapshot) — the signal
    *  GameScene uses to evaluate the proactive [Tab] nudge on first world input. */
   onWorldInput?: () => void;
+  /**
+   * #237 PR3 — the drag threshold in LOGICAL pixels, scale-tuned for the current
+   * display (see gesture.thresholdLogicalPx). GameScene computes it from the
+   * canvas's CSS width at boot and on resize; the arbiter reads it per move.
+   * Optional: omitted callers (and every existing unit test) fall back to the
+   * fixed DRAG_THRESHOLD_PX, so desktop behavior is unchanged.
+   */
+  getDragThreshold?: () => number;
 }
 
 /** Return the active CameraView for the current view. */
@@ -582,9 +590,11 @@ export class GestureArbiter {
       tracked.y = ev.y;
     }
 
-    // Classify on first crossing of the threshold.
+    // Classify on first crossing of the threshold (#237 PR3: scale-tuned in
+    // logical px when GameScene provides it; fixed DRAG_THRESHOLD_PX otherwise).
     if (this.dragMode === null) {
-      if (!hasCrossedDragThreshold(snap.downX, snap.downY, ev.x, ev.y, DRAG_THRESHOLD_PX)) {
+      const threshold = this.deps.getDragThreshold?.() ?? DRAG_THRESHOLD_PX;
+      if (!hasCrossedDragThreshold(snap.downX, snap.downY, ev.x, ev.y, threshold)) {
         return; // still a potential tap
       }
       this.dragMode = classifyDragMode(snap.tool, snap.view);

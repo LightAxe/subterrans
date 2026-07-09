@@ -237,7 +237,7 @@ import {
   sameTooltipTarget,
   type TooltipTarget,
 } from './tooltips.js';
-import { DEFAULT_LAYOUT, type LayoutContext } from './layout.js';
+import { DEFAULT_LAYOUT, cssScaleX, type LayoutContext } from './layout.js';
 import { buildHudLayout, type HudLayout } from './hud-layout.js';
 import { setViewportSize } from './camera-adapter.js';
 import {
@@ -2834,7 +2834,7 @@ export class UIScene extends Phaser.Scene {
     const canvas = this.game.canvas;
     if (canvas === null) return;
     const canvasRect = canvas.getBoundingClientRect();
-    const scaleX = canvasRect.width / this.layout.w;
+    const scaleX = cssScaleX(canvasRect.width, this.layout); // shared with the #237 drag threshold
     const scaleY = canvasRect.height / this.layout.h;
     const ta = this.surveyTextarea;
     // The textarea is absolutely-positioned and sits in `document.body` or

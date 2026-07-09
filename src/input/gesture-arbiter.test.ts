@@ -113,6 +113,10 @@ interface Harness {
 function makeHarness(
   view: 'surface' | 'underground',
   tool: 'command' | 'dig' | 'chamber',
+  // #237 PR3 — inject a scale-tuned drag threshold. OMITTED by default so the
+  // arbiter exercises its `?? DRAG_THRESHOLD_PX` fallback (as in production before
+  // GameScene wires the dep, and every pre-PR3 test).
+  dragThreshold?: number,
 ): Harness {
   const world = makeWorld();
   const vs = makeViewState(view, tool);
@@ -147,6 +151,7 @@ function makeHarness(
       queueFullPaused.push(p);
     },
   };
+  if (dragThreshold !== undefined) deps.getDragThreshold = () => dragThreshold;
   const arbiter = new GestureArbiter(deps);
   return {
     arbiter,
@@ -1144,5 +1149,33 @@ describe('#237 PR2 — pinch zoom drive', () => {
     h.arbiter.onPointerMove(ev(LEFT_BUTTON, 340, 300, 1)); // 40px from re-snapshot (300) → crosses threshold → pan
     expect(cam.zoom).toBe(zoomedIn); // zoom frozen at the pinch's last value
     expect(panInputState.isPanning).toBe(true); // it resolved as a pan
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #237 PR3 — scale-tuned drag threshold (getDragThreshold dep)
+// ---------------------------------------------------------------------------
+
+describe('#237 PR3 — injected drag threshold', () => {
+  it('defers pan classification until the move crosses the LARGER injected threshold', () => {
+    const h = makeHarness('surface', 'command', 20); // touch-scale threshold, not the 6px default
+    const start = tileCenter(6, 4, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y));
+    // 10px crosses the fixed 6px default but NOT the injected 20px → still a tap.
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 10, start.y));
+    expect(panInputState.isPanning).toBe(false);
+    // Past 20px → now classified as a pan.
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 25, start.y));
+    expect(panInputState.isPanning).toBe(true);
+  });
+
+  it('a tap within the injected threshold still taps (no drag misclassification)', () => {
+    const h = makeHarness('surface', 'command', 20);
+    const p = tileCenter(6, 1, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, p.x, p.y));
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, p.x + 15, p.y)); // 15px < 20 → under threshold
+    h.arbiter.onPointerUp(ev(LEFT_BUTTON, p.x + 15, p.y));
+    expect(panInputState.isPanning).toBe(false);
+    expect(h.world.commandQueue.some((c) => c.type === 'SetRallyPoint')).toBe(true); // acted as a tap
   });
 });
