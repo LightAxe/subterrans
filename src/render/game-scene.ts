@@ -338,6 +338,12 @@ export class GameScene extends Phaser.Scene {
   // #236 PR1 — the culled tile set (visibleTileRange) also depends on the logical
   // viewport, so a future responsive resize must invalidate a cached overlay.
   private readonly lastPheromoneViewport = { w: NaN, h: NaN };
+  // #236 PR3 — gate the O(grid) diffTerrainShadow scan on a sim-tick change, per
+  // active colony (the underground grid mutates only on a tick). Cleared on
+  // session reset. Plus a reused scratch Set for the entrance columns (was a fresh
+  // Set per bakeAndShowTerrain).
+  private readonly lastShadowDiffTick = new Map<number, number>();
+  private readonly entranceColsScratch = new Set<number>();
   private antSprites!: AntSpritePool;
   // Stage 2 (issue #18): the Phaser-bound camera driver. Wraps cameras.main and is
   // driven from the active view's world-pixel CameraView every frame (setZoom +
@@ -609,6 +615,20 @@ export class GameScene extends Phaser.Scene {
     this.pheromoneGfx = this.add.graphics();
     this.pheromoneGfx.setDepth(-5);
     this.antSprites = new AntSpritePool(this);
+    // #236 PR3 — NEAREST-filter the pooled sprite textures (they finished loading in
+    // preload), matching the terrain RT's filter below, so ants / brood / food-cache
+    // / spider stay crisp at high zoom instead of the default LINEAR blur (relevant
+    // when the Phase-5a art lands). Perf-neutral; purely a sampling-quality fix.
+    for (const key of [
+      ANT_TEXTURE_WORKER,
+      ANT_TEXTURE_QUEEN,
+      EGG_TEXTURE,
+      LARVA_TEXTURE,
+      FOOD_CACHE_TEXTURE,
+      SPIDER_TEXTURE,
+    ]) {
+      this.textures.get(key).setFilter(Phaser.Textures.FilterMode.NEAREST);
+    }
     // Stage 2 (issue #18): bind the continuous-zoom camera. cameras.main is now the
     // world→screen projection (driven from the CameraView each frame); roundPixels is
     // disabled inside the controller for smooth sub-pixel pan.
@@ -1118,6 +1138,9 @@ export class GameScene extends Phaser.Scene {
     // force a pheromone-layer redraw next frame rather than trusting a coincidental
     // tick match against the prior session.
     this.lastPheromoneTick = -1;
+    // #236 PR3 — same for the shadow-diff tick gate: a new session's grids differ,
+    // so clear the per-colony cache (the first frame rebakes + re-seeds it anyway).
+    this.lastShadowDiffTick.clear();
     // S6 — reset per-session render-side scratch.
     this.lastProcessedEventTick = -1;
     this.prevQueenCombinedHp = null;
@@ -1962,14 +1985,17 @@ export class GameScene extends Phaser.Scene {
     const baker = this.terrainBaker as unknown as GfxLike;
 
     // Entrance ceiling-gap columns for the viewed underground colony (used by the
-    // shadow-diff + autotile ceiling row).
+    // shadow-diff + autotile ceiling row). #236 PR3 — refill a REUSED scratch Set
+    // rather than allocating one per call. Retention-safe: createTerrainShadow /
+    // diffTerrainShadow read `.has(x)` synchronously into their own arrays and
+    // never store the Set reference (terrain-bake.ts).
     const entranceCols = (): Set<number> => {
-      const set = new Set<number>();
+      this.entranceColsScratch.clear();
       const colony = this.world?.colonies[colonyId];
       if (colony?.entrances) {
-        for (const e of colony.entrances) set.add(e.surfaceTileX);
+        for (const e of colony.entrances) this.entranceColsScratch.add(e.surfaceTileX);
       }
-      return set;
+      return this.entranceColsScratch;
     };
 
     if (entry.needsRebake) {
@@ -1984,16 +2010,25 @@ export class GameScene extends Phaser.Scene {
         entry.rt.draw(this.terrainBaker);
         const grid = this.world.undergroundGrids[colonyId];
         this.terrainCache.markBaked(key, grid ? createTerrainShadow(grid, entranceCols()) : null);
+        // #236 PR3 — a fresh shadow == the grid at this tick, so the next same-tick
+        // diff would find nothing; record the tick so the gate below skips it.
+        this.lastShadowDiffTick.set(colonyId, this.world.tick);
       }
     } else if (!isSurface && entry.shadow !== null) {
       const grid = this.world.undergroundGrids[colonyId];
-      if (grid !== undefined) {
+      // #236 PR3 — the underground grid mutates only on a sim tick (ugSet is
+      // sim-only), so re-diffing at the same tick can't find new dirty tiles. Gate
+      // the O(grid) scan on a per-colony tick change. A toggle-away colony the AI
+      // kept excavating still reconciles on return: the tick advanced while it was
+      // inactive, so tick !== last → the diff runs (R4-2 reconcile-on-activate).
+      if (grid !== undefined && this.world.tick !== this.lastShadowDiffTick.get(colonyId)) {
         const dirty = diffTerrainShadow(entry.shadow, grid, entranceCols());
         if (dirty.size > 0) {
           this.terrainBaker.clear();
           restampUndergroundTiles(baker, this.world, colonyId, dirty);
           entry.rt.draw(this.terrainBaker);
         }
+        this.lastShadowDiffTick.set(colonyId, this.world.tick);
       }
     }
     // Free the off-screen baker's command buffer now — a full bake holds the entire
@@ -2002,8 +2037,9 @@ export class GameScene extends Phaser.Scene {
     // session (Codex P2).
     this.terrainBaker.clear();
 
-    // Show only the active view's RT.
-    for (const k of this.terrainCache.allocatedKeys()) {
+    // Show only the active view's RT. #236 PR3 — iterate the cache keys directly
+    // (no per-frame array allocation from allocatedKeys()).
+    for (const k of this.terrainCache.keys()) {
       const e = this.terrainCache.get(k);
       if (e !== undefined) e.rt.setVisible(k === key);
     }

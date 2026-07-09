@@ -134,9 +134,14 @@ export function visibleTileRange(
  * (worldX, worldY). Mirrors the prior screen cull (one-tile left/top margin, right/
  * bottom at the visible edge), now in world px so it is correct under any zoom.
  * `margin` widens the box for primitives that spill past their tile (entrance mounds,
- * spider sprite).
+ * spider sprite). #236 PR3: exported so draw-underground reuses it (was a verbatim copy).
  */
-function tileInView(worldX: number, worldY: number, rect: WorldRect, margin: number): boolean {
+export function tileInView(
+  worldX: number,
+  worldY: number,
+  rect: WorldRect,
+  margin: number,
+): boolean {
   return (
     worldX >= rect.left - margin &&
     worldX <= rect.right + margin &&
