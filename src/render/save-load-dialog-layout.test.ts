@@ -10,6 +10,7 @@ import {
   DIALOG_BUTTON_H,
   DIALOG_BUTTON_GAP,
   type SaveLoadDialogContext,
+  type DialogItemRect,
 } from './save-load-dialog-layout.js';
 import { DEFAULT_LAYOUT, createLayoutContext } from './layout.js';
 import { CANVAS_W } from './sprites.js';
@@ -232,5 +233,46 @@ describe('itemAt', () => {
     const items = saveLoadDialogItems(baseCtx); // Continue and Delete disabled
     const continueItem = items.find((i) => i.id === 'continue')!;
     expect(itemAt(items, continueItem.rect.x + 5, continueItem.rect.y + 5)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Small-context regression fixtures (#238 PR4). Guard the PR1–3 LayoutContext
+// reflow + the Phase 6 mobile work: at a phone-portrait 360×640 context every
+// clickable rect must stay on-screen and none may overlap. These PASS today
+// (verified in #238) — they exist to fail loudly if a future reflow regresses.
+//
+// Heights below ~490 need genuine reflow (scroll / re-order), NOT proportional
+// row compression (which fails its own no-overlap test at real phone heights —
+// see #238). That reflow is owned by Phase 6.
+// ---------------------------------------------------------------------------
+
+/** True iff rect r lies fully inside the 0..w × 0..h canvas. */
+function within(r: DialogItemRect, w: number, h: number): boolean {
+  return r.x >= 0 && r.y >= 0 && r.x + r.w <= w && r.y + r.h <= h;
+}
+
+/** True iff any two rects overlap (strict — touching edges do not count). */
+function anyOverlap(rects: readonly DialogItemRect[]): boolean {
+  for (let i = 0; i < rects.length; i++) {
+    for (let j = i + 1; j < rects.length; j++) {
+      const a = rects[i]!;
+      const b = rects[j]!;
+      if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) return true;
+    }
+  }
+  return false;
+}
+
+describe('save/load dialog — small-context regression (#238 PR4, 360×640)', () => {
+  const phone = createLayoutContext(360, 640);
+  const rects = saveLoadDialogItemsAt(baseCtx, phone).map((i) => i.rect);
+
+  it('every interactive rect is within the 360×640 canvas', () => {
+    for (const r of rects) expect(within(r, 360, 640)).toBe(true);
+  });
+
+  it('no interactive rects overlap', () => {
+    expect(anyOverlap(rects)).toBe(false);
   });
 });
