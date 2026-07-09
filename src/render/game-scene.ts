@@ -325,6 +325,14 @@ export class GameScene extends Phaser.Scene {
   // pool (e.g. the spider health bar, issue #148). Depth sits just above
   // SPIDER_SPRITE_DEPTH so it clears every in-world sprite.
   private overlayGfx!: Phaser.GameObjects.Graphics;
+  // #236 PR1 — the pheromone overlay on its OWN persistent layer (not the
+  // per-frame-cleared gfx) so it can be cached: the grids mutate only on a sim
+  // tick, so a static detailed view redraws at 20 Hz not 60 fps. Sentinels drive
+  // the cache; reset on session boot/restart/load (next to antFacingCache.reset).
+  private pheromoneGfx!: Phaser.GameObjects.Graphics;
+  private lastPheromoneTick = -1;
+  private readonly lastPheromoneCam = { centerX: NaN, centerY: NaN, zoom: NaN };
+  private lastPheromoneView = '';
   private antSprites!: AntSpritePool;
   // Stage 2 (issue #18): the Phaser-bound camera driver. Wraps cameras.main and is
   // driven from the active view's world-pixel CameraView every frame (setZoom +
@@ -589,6 +597,12 @@ export class GameScene extends Phaser.Scene {
     this.gfx = this.add.graphics();
     this.overlayGfx = this.add.graphics();
     this.overlayGfx.setDepth(SPIDER_SPRITE_DEPTH + 1);
+    // #236 PR1 — pheromone overlay layer. Depth -5: above the terrain RT (-10),
+    // below the dynamic gfx (0) → pheromone under entities, over terrain,
+    // preserving the pre-#236 draw order. Persistent (not cleared each frame) so
+    // updatePheromoneLayer can skip the redraw when nothing changed.
+    this.pheromoneGfx = this.add.graphics();
+    this.pheromoneGfx.setDepth(-5);
     this.antSprites = new AntSpritePool(this);
     // Stage 2 (issue #18): bind the continuous-zoom camera. cameras.main is now the
     // world→screen projection (driven from the CameraView each frame); roundPixels is
@@ -1095,6 +1109,10 @@ export class GameScene extends Phaser.Scene {
     // would lock a freshly-spawned ant into the prior ant's direction until
     // the smoothing relaxes. Clearing here keeps boot visually clean.
     this.antFacingCache.reset();
+    // #236 PR1 — a new session replaces the pheromone grids (and tick resets), so
+    // force a pheromone-layer redraw next frame rather than trusting a coincidental
+    // tick match against the prior session.
+    this.lastPheromoneTick = -1;
     // S6 — reset per-session render-side scratch.
     this.lastProcessedEventTick = -1;
     this.prevQueenCombinedHp = null;
@@ -2133,10 +2151,7 @@ export class GameScene extends Phaser.Scene {
     const showPreview = this.canShowWorldPreview();
     if (this.viewState.activeView === 'surface') {
       this.recordDrawLayer('terrain');
-      if (this.viewState.showPheromoneOverlay) {
-        this.recordDrawLayer('pheromone');
-        drawPheromoneOverlay(gfx, this.world, cam, 'surface');
-      }
+      this.updatePheromoneLayer(cam, 'surface', dotMode); // #236 PR1 — cached persistent layer
       this.recordDrawLayer('entities');
       // Stage 1 controls rework (issue #18): the entrance hover outline. Shown
       // only while the Dig tool is active on the surface and the pointer is on
@@ -2173,10 +2188,7 @@ export class GameScene extends Phaser.Scene {
       if (showPreview) drawGhostDelta(overlayGfx, ghostDelta, 'surface', PLAYER_COLONY_ID);
     } else {
       this.recordDrawLayer('terrain');
-      if (this.viewState.showPheromoneOverlay) {
-        this.recordDrawLayer('pheromone');
-        drawPheromoneOverlay(gfx, this.world, cam, 'underground');
-      }
+      this.updatePheromoneLayer(cam, 'underground', dotMode); // #236 PR1 — cached persistent layer
       this.recordDrawLayer('entities');
       drawUndergroundEntities(
         gfx,
@@ -2252,6 +2264,53 @@ export class GameScene extends Phaser.Scene {
     if (text === null) return;
     const ui = this.scene.get('UIScene') as unknown as UIScenePhase9;
     ui.showCaption(text, this.layout.w / 2, 60, 'autosaveFailed');
+  }
+
+  /**
+   * #236 PR1 — redraw the persistent pheromone layer only when it can have
+   * changed. The grids mutate ONLY on a sim tick, and the culled tile set
+   * (visibleTileRange) is camera-dependent, so a STATIC detailed view redraws at
+   * the 20 Hz tick rate instead of 60 fps; a pan/zoom/view-switch still redraws
+   * (new tiles enter the visible window). In the strategic dot-LOD zoom-out — the
+   * MIN_ZOOM worst case #236 names — the overlay is dropped entirely (it was never
+   * legible there). Output is byte-identical to the old per-frame draw: the layer
+   * is world-space so cameras.main re-projects it, and any change forces a full
+   * clear + redraw.
+   */
+  private updatePheromoneLayer(
+    cam: CameraView,
+    view: 'surface' | 'underground',
+    dotMode: boolean,
+  ): void {
+    // Gate (a) — dot-LOD / toggle-off: no overlay. Clear it and force a redraw
+    // (lastPheromoneTick = -1) for when it next becomes visible.
+    if (dotMode || !this.viewState.showPheromoneOverlay) {
+      this.pheromoneGfx.clear();
+      this.lastPheromoneTick = -1;
+      return;
+    }
+    // The overlay is logically active this frame — record it for the draw-order
+    // telemetry EVERY active frame (the persistent layer sits at depth -5 between
+    // terrain and entities whether or not it redrew), so the e2e trace stays
+    // consistent. Only the drawPheromoneOverlay call below is cache-gated.
+    this.recordDrawLayer('pheromone');
+    // Gate (b) — redraw only on a tick / camera / view change.
+    if (
+      this.world.tick === this.lastPheromoneTick &&
+      cam.centerX === this.lastPheromoneCam.centerX &&
+      cam.centerY === this.lastPheromoneCam.centerY &&
+      cam.zoom === this.lastPheromoneCam.zoom &&
+      view === this.lastPheromoneView
+    ) {
+      return;
+    }
+    this.pheromoneGfx.clear();
+    drawPheromoneOverlay(this.pheromoneGfx as unknown as GfxLike, this.world, cam, view);
+    this.lastPheromoneTick = this.world.tick;
+    this.lastPheromoneCam.centerX = cam.centerX;
+    this.lastPheromoneCam.centerY = cam.centerY;
+    this.lastPheromoneCam.zoom = cam.zoom;
+    this.lastPheromoneView = view;
   }
 
   /**
