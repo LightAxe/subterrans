@@ -1209,4 +1209,14 @@ describe('#237 PR3 — injected drag threshold (touch-gated)', () => {
     h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 10, start.y, 1, false));
     expect(panInputState.isPanning).toBe(true);
   });
+
+  it('TOUCH with getDragThreshold OMITTED falls back to the fixed DRAG_THRESHOLD_PX', () => {
+    const h = makeHarness('surface', 'command'); // no 3rd arg → dep omitted (as in production before wiring)
+    const start = tileCenter(6, 4, h.vs);
+    h.arbiter.onPointerDown(ev(LEFT_BUTTON, start.x, start.y, 1, true)); // TOUCH press
+    // Even a touch gesture uses the fixed 6px when no threshold dep is provided;
+    // a 10px move therefore crosses it and pans.
+    h.arbiter.onPointerMove(ev(LEFT_BUTTON, start.x + 10, start.y, 1, true));
+    expect(panInputState.isPanning).toBe(true);
+  });
 });
