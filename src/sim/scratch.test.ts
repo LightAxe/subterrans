@@ -110,7 +110,23 @@ describe('per-world scratch arena (#231) — object independence (discriminating
     expect(a.motion.detourResult).not.toBe(b.motion.detourResult);
     expect(a.queenIds).not.toBe(b.queenIds);
     expect(a.surfaceMoveCache).not.toBe(b.surfaceMoveCache);
+    expect(a.nurse).not.toBe(b.nurse); // #256 — the migrated nurse-claim stamp
+    expect(a.nurse.usedStamp).not.toBe(b.nurse.usedStamp);
     expect(getScratch(wB)).toBe(b); // same world → same arena
+  });
+
+  it('#256 — a world-B nurse-stamp bump does not advance world A (shared counter would leak)', () => {
+    resetScratchArenas();
+    const nurseA = getScratch(createWorldState(1)).nurse;
+    nurseA.currentStamp = 42;
+    nurseA.usedStamp[3] = 42;
+    // A fresh world's nurse stamp must start at 0 with an all-zero usedStamp —
+    // independent of world A. The pre-#256 module global would show 42 / a set mark.
+    const nurseB = getScratch(createWorldState(2)).nurse;
+    expect(nurseB.currentStamp).toBe(0);
+    expect(nurseB.usedStamp[3]).toBe(0);
+    // World A is untouched by allocating B.
+    expect(nurseA.currentStamp).toBe(42);
   });
 
   it('a world-B motion out-param write does not alias world A (shared buffer would clobber)', () => {
