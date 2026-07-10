@@ -62,7 +62,7 @@ jobs:
       - run: npm run build:lib
 
   e2e:
-    name: e2e (Playwright chromium)
+    name: e2e (Playwright chromium + webkit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -71,5 +71,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      # webkit (#254) runs ONLY the cross-engine-determinism spec (JSC axis); the
+      # rendering/touch specs stay chromium-only. See playwright.config.ts projects.
+      - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:e2e
