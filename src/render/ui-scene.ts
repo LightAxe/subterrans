@@ -162,7 +162,7 @@ import {
   sliderGeometry,
   type SliderDragState,
 } from './triangle-widget.js';
-import { drawMinimap, applyMinimapClick } from './minimap.js';
+import { drawMinimap, bakeMinimapDapple, applyMinimapClick } from './minimap.js';
 import {
   TOOL_ORDER,
   TOOL_LABEL,
@@ -478,6 +478,14 @@ export class UIScene extends Phaser.Scene {
   private lastTooltipView: ViewState['activeView'] | null = null;
   private lastTooltipColonyId: ViewState['activeUndergroundColonyId'] | null = null;
   private gfx!: Phaser.GameObjects.Graphics;
+  // #278 — the STATIC minimap layer (barren-earth base + dapple) baked once into a
+  // RenderTexture behind the per-frame HUD gfx, so the ~16k-tile dapple loop stops
+  // running every frame. `minimapBaker` is an off-display-list Graphics stamped
+  // into the RT; `minimapBakedWorld` tracks which world the RT was baked for so a
+  // restart/load (which assigns a NEW WorldState) triggers a rebake.
+  private minimapRT?: Phaser.GameObjects.RenderTexture;
+  private minimapBaker?: Phaser.GameObjects.Graphics;
+  private minimapBakedWorld?: WorldState;
   private antsText!: Phaser.GameObjects.Text;
   private foodText!: Phaser.GameObjects.Text;
   private queenLabelText!: Phaser.GameObjects.Text;
@@ -575,6 +583,31 @@ export class UIScene extends Phaser.Scene {
     // today; both scenes set it at boot (idempotent — they share DEFAULT_LAYOUT).
     setViewportSize(this.layout.w, this.layout.h);
     this.gfx = this.add.graphics();
+    // #278 — the minimap's static barren-earth base + dapple, baked once into a
+    // RenderTexture behind the per-frame HUD gfx (depth -1 < gfx's 0), so the
+    // ~16k-tile dapple loop no longer runs every frame. Baked lazily in update()
+    // once the world is available (and re-baked on a world swap / WebGL restore).
+    // NOTE (Phase-6 responsive layout): unlike the per-frame HUD draws, which
+    // re-read this.hud.MINIMAP every update(), this RT bakes its position AND its
+    // dapple scale from the layout at create() time. A future reflow that mutates
+    // this.hud must reposition/resize the RT and clear minimapBakedWorld to rebake;
+    // no current runtime path changes the layout after create().
+    const mm = this.hud.MINIMAP;
+    this.minimapRT = this.add.renderTexture(mm.x, mm.y, mm.w, mm.h);
+    this.minimapRT.setOrigin(0, 0).setDepth(-1).setScrollFactor(0);
+    this.minimapRT.texture.setFilter(Phaser.Textures.FilterMode.NEAREST);
+    this.minimapBaker = this.make.graphics({}, false); // off the display list
+    // A WebGL context restore blanks the RT framebuffer — force a rebake next frame.
+    const renderer = this.game.renderer as unknown as Phaser.Events.EventEmitter;
+    const onMinimapRestore = (): void => {
+      this.minimapBakedWorld = undefined;
+    };
+    renderer.on('restorewebgl', onMinimapRestore);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      renderer.off('restorewebgl', onMinimapRestore);
+      this.minimapRT?.destroy();
+      this.minimapBaker?.destroy();
+    });
     this.dragState = createSliderDragState();
     // Stage 3b (#2): seed the in-mem hint-strip visibility from persisted
     // settings so a returning player's "hide legend" choice is honored on boot.
@@ -1047,6 +1080,27 @@ export class UIScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * #278 — (re)bake the static minimap layer into its RenderTexture. Stamps
+   * bakeMinimapDapple (texture-LOCAL coords, origin 0,0) via the off-display-list
+   * baker, then draws the baker into the RT (positioned at the minimap rect). The
+   * baker's command buffer is freed after — a full dapple holds ~2k 1×1 rects.
+   */
+  private rebakeMinimap(world: WorldState): void {
+    if (this.minimapRT === undefined || this.minimapBaker === undefined) return;
+    const mm = this.hud.MINIMAP;
+    this.minimapBaker.clear();
+    bakeMinimapDapple(
+      this.minimapBaker as unknown as import('./draw-surface.js').GfxLike,
+      world,
+      mm.w,
+      mm.h,
+    );
+    this.minimapRT.clear();
+    this.minimapRT.draw(this.minimapBaker);
+    this.minimapBaker.clear();
+  }
+
   update() {
     // Apply any pending show/hide from the previous frame's pointerdown dispatch
     // BEFORE reading the state, so cross-scene race conditions are resolved
@@ -1062,6 +1116,14 @@ export class UIScene extends Phaser.Scene {
     // pre-boot (SavePrompt phase) and on any future world swap between frames.
     const world = this.getWorld();
     if (!world) return;
+
+    // #278 — (re)bake the static minimap layer when the world changes (first boot,
+    // restart, load — each assigns a NEW WorldState) or after a WebGL restore
+    // cleared the tracked world. The ~16k-tile dapple then runs once, not per frame.
+    if (this.minimapBakedWorld !== world) {
+      this.rebakeMinimap(world);
+      this.minimapBakedWorld = world;
+    }
 
     // Auto-dismiss the underground context menu if the player switches away
     // from the underground view (via Tab key, toggle button, or minimap click).

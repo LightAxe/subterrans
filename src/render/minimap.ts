@@ -59,6 +59,40 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+/**
+ * #278 — bake the STATIC minimap layer (barren-earth base + hash-driven dapple)
+ * into a TEXTURE-LOCAL gfx (origin 0,0), sized mmW × mmH. The surface is frozen
+ * post-scenario (sgSet is generation-only), so UIScene bakes this ONCE into a
+ * RenderTexture positioned at the minimap rect instead of redrawing the ~16k-tile
+ * dapple every frame (was an O(world) per-frame pass — #236 debt #2). The dynamic
+ * overlays (food, colony markers, viewport, ants) still draw per frame in
+ * drawMinimap below.
+ *
+ * Pixel-identical to the old inline draw: mm.x/mm.y are integers, so a local dapple
+ * floored at (tx*sx)|0 and placed at the RT's screen anchor (mm.x, mm.y) equals the
+ * old (mm.x + tx*sx)|0 (integer + floor(frac) = floor(integer + frac)).
+ */
+export function bakeMinimapDapple(gfx: GfxLike, world: WorldState, mmW: number, mmH: number): void {
+  const sx = mmW / SURFACE_GRID_WIDTH;
+  const sy = mmH / SURFACE_GRID_HEIGHT;
+  gfx.fillStyle(COLOR_BARREN_EARTH, 1);
+  gfx.fillRect(0, 0, mmW, mmH);
+  const surface = world.surface;
+  if (surface === undefined) return;
+  gfx.fillStyle(COLOR_BARREN_EARTH_DARK, 0.7);
+  const SALT_MINIMAP_DAPPLE = 901;
+  for (let ty = 0; ty < surface.height; ty++) {
+    for (let tx = 0; tx < surface.width; tx++) {
+      // Read the surface tile so a future SurfaceTileState extension can bias
+      // dapple density per tile type without a renderer rewrite.
+      void sgGet(surface, tx, ty);
+      const h = spatialHash(tx, ty, SALT_MINIMAP_DAPPLE);
+      if ((h & 0xff) >= 32) continue; // ~12% coverage
+      gfx.fillRect((tx * sx) | 0, (ty * sy) | 0, 1, 1);
+    }
+  }
+}
+
 export function drawMinimap(
   gfx: GfxLike,
   world: WorldState,
@@ -72,46 +106,9 @@ export function drawMinimap(
   const sx = mm.w / SURFACE_GRID_WIDTH;
   const sy = mm.h / SURFACE_GRID_HEIGHT;
 
-  // Surface terrain (issue #40 reframe — barren-earth-default). Base layer
-  // is the warm tan barren-earth color used by the surface render; a sparse
-  // darker-earth dapple gives the minimap a textured "ant scale" feel
-  // rather than a flat brown rectangle.
-  //
-  // The minimap stays a surface overview per PRD §7a — single colour layer
-  // with a hash-driven dapple, NO multi-tile features (would be too small
-  // to read at 1.25 px/tile) and NO single-tile motifs (same problem).
-  // The intent is "you are looking at a faraway ground", not "every blade
-  // of grass and pebble visible".
-  gfx.fillStyle(COLOR_BARREN_EARTH, 1);
-  gfx.fillRect(mm.x, mm.y, mm.w, mm.h);
-
-  const surface = world.surface;
-  if (surface !== undefined) {
-    // Sparse darker-earth dapple — ~12% of tiles, deterministic per (tx, ty).
-    // Codex P2 fix from PR #41 review (which got squash-merged before this
-    // commit landed): each dapple is a 1×1 pixel dot, NOT a `ceil(scale)+1`
-    // sized cell. With sx = 1.25, drawing 3×3 cells caused each dapple to
-    // overlap ~2 neighboring cells, so 12% of tiles ended up covering ~50%
-    // of the minimap area — darkening the whole map and making colony /
-    // food markers harder to read.
-    gfx.fillStyle(COLOR_BARREN_EARTH_DARK, 0.7);
-    const SALT_MINIMAP_DAPPLE = 901;
-    for (let ty = 0; ty < surface.height; ty++) {
-      for (let tx = 0; tx < surface.width; tx++) {
-        // Read the surface tile so a future SurfaceTileState extension can
-        // bias dapple density per tile type without needing a renderer
-        // rewrite.
-        void sgGet(surface, tx, ty);
-        const h = spatialHash(tx, ty, SALT_MINIMAP_DAPPLE);
-        if ((h & 0xff) >= 32) continue; // ~12% coverage
-        // Floor to integer pixel for crisp rendering — avoids sub-pixel
-        // sampling artifacts on Phaser's WebGL pipeline.
-        const px = (mm.x + tx * sx) | 0;
-        const py = (mm.y + ty * sy) | 0;
-        gfx.fillRect(px, py, 1, 1);
-      }
-    }
-  }
+  // #278 — the STATIC barren-earth base + hash-driven dapple now live on a baked
+  // RenderTexture (bakeMinimapDapple, drawn once by UIScene behind this gfx layer);
+  // this per-frame path draws only the DYNAMIC overlays on top of it.
 
   // Food piles (2x2 pixels per pile)
   for (const pile of world.foodPiles) {
