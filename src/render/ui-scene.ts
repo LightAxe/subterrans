@@ -587,6 +587,11 @@ export class UIScene extends Phaser.Scene {
     // RenderTexture behind the per-frame HUD gfx (depth -1 < gfx's 0), so the
     // ~16k-tile dapple loop no longer runs every frame. Baked lazily in update()
     // once the world is available (and re-baked on a world swap / WebGL restore).
+    // NOTE (Phase-6 responsive layout): unlike the per-frame HUD draws, which
+    // re-read this.hud.MINIMAP every update(), this RT bakes its position AND its
+    // dapple scale from the layout at create() time. A future reflow that mutates
+    // this.hud must reposition/resize the RT and clear minimapBakedWorld to rebake;
+    // no current runtime path changes the layout after create().
     const mm = this.hud.MINIMAP;
     this.minimapRT = this.add.renderTexture(mm.x, mm.y, mm.w, mm.h);
     this.minimapRT.setOrigin(0, 0).setDepth(-1).setScrollFactor(0);
