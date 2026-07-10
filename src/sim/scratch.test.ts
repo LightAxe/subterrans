@@ -115,7 +115,7 @@ describe('per-world scratch arena (#231) — object independence (discriminating
     expect(getScratch(wB)).toBe(b); // same world → same arena
   });
 
-  it('#256 — a world-B nurse-stamp bump does not advance world A (shared counter would leak)', () => {
+  it('#256 — a world-A nurse-stamp bump does not leak into world B (shared counter would)', () => {
     resetScratchArenas();
     const nurseA = getScratch(createWorldState(1)).nurse;
     nurseA.currentStamp = 42;

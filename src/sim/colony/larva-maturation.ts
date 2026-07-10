@@ -16,8 +16,9 @@
 //      workers) — mirrors the promotion logic in tickLifecycleTransitions Loop 2.
 //
 // Hot-path discipline (QC Pass 4 AR-P1-002):
-//   - No per-tick allocations. nurseScratch is allocated once at module load
-//     (Uint32Array, not serialized, not persisted).
+//   - No per-tick allocations. The nurse stamp lives in the per-world scratch
+//     arena (#256; getScratch(world).nurse), allocated once per world on first
+//     use (Uint32Array, not serialized, not persisted).
 //   - Mark-stamp pattern: currentStamp increments once per tick. Claiming a
 //     nurse writes the current stamp into usedStamp[nurseId]. Checking is
 //     `usedStamp[nurseId] === currentStamp`. Wraps at Uint32 max (~4 billion
