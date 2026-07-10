@@ -23,12 +23,8 @@ import {
   computeInterpAlpha,
   type CursorTool,
 } from './game-scene-logic.js';
-import {
-  createViewState,
-  resetViewState,
-  toggleView,
-  UNDERGROUND_INITIAL_CENTER_Y_PX,
-} from './camera.js';
+import { createViewState, resetViewState, toggleView } from './camera.js';
+import { initialUndergroundCenterYPx } from './camera-adapter.js';
 import { resetPaintStrokeState, type PaintStrokeState } from '../input/underground-input.js';
 import {
   panInputState,
@@ -474,7 +470,7 @@ describe('session reset orchestration (bootFresh / bootFromSave precondition)', 
     expect(s.viewState.surfaceCamera.centerX).toBe((PLAYER_START_X + 0.5) * TILE_SIZE_PX);
     expect(s.viewState.surfaceCamera.centerY).toBe((PLAYER_START_Y + 0.5) * TILE_SIZE_PX);
     expect(s.viewState.undergroundCamera.centerX).toBe((PLAYER_START_X + 0.5) * TILE_SIZE_PX);
-    expect(s.viewState.undergroundCamera.centerY).toBe(UNDERGROUND_INITIAL_CENTER_Y_PX);
+    expect(s.viewState.undergroundCamera.centerY).toBe(initialUndergroundCenterYPx());
     expect(s.viewState.undergroundVisited).toBe(false);
     expect(s.paintStroke.active).toBe(false);
     expect(s.paintStroke.lastMarkedTileX).toBe(-1);

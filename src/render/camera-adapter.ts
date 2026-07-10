@@ -57,6 +57,22 @@ export function getViewportHeight(): number {
   return viewportH;
 }
 
+/**
+ * Initial underground-camera CENTER Y (world px) on fresh boot / reset / first
+ * view toggle. `viewportH / 2` places world y=0 (the ceiling / surface-entrance
+ * row) at the very top of the viewport at zoom 1 — the "shaft anchored to the
+ * top" framing. It is also the clamp minimum for the 1024-px-tall underground
+ * world at zoom 1, so the shaft stays anchored as zoom changes.
+ *
+ * #270 — the derivation lives here (the viewport-height authority) rather than in
+ * camera.ts, which no longer needs the CANVAS_H import. Byte-identical to the old
+ * `CANVAS_H / 2` const while the viewport is fixed at CANVAS_H (296); a future
+ * responsive resize now reflows the initial framing for free.
+ */
+export function initialUndergroundCenterYPx(): number {
+  return viewportH / 2;
+}
+
 // ---------------------------------------------------------------------------
 // Zoom limits
 // ---------------------------------------------------------------------------

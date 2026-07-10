@@ -12,14 +12,13 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  UNDERGROUND_INITIAL_CENTER_Y_PX,
   UNDERGROUND_WORLD_PX_H,
   createViewState,
   resetViewState,
   toggleView,
   toggleUndergroundColony,
 } from './camera.js';
-import { DEFAULT_ZOOM, viewWorldHeight } from './camera-adapter.js';
+import { DEFAULT_ZOOM, viewWorldHeight, initialUndergroundCenterYPx } from './camera-adapter.js';
 import { TILE_SIZE_PX, CANVAS_H } from './sprites.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 
@@ -40,12 +39,12 @@ describe('createViewState', () => {
   });
 
   it('undergroundCamera starts X-aligned with the start tile and Y at the shaft-top anchor', () => {
-    // UNDERGROUND_INITIAL_CENTER_Y_PX = CANVAS_H/2 places world y=0 (the ceiling /
-    // surface-entrance row) at the very top of the viewport at zoom 1.
+    // initialUndergroundCenterYPx() = viewportH/2 (= CANVAS_H/2 at the fixed viewport)
+    // places world y=0 (the ceiling / surface-entrance row) at the very top at zoom 1.
     const vs = createViewState(24, 64);
     expect(vs.undergroundCamera.centerX).toBe(tileCenterPx(24));
-    expect(vs.undergroundCamera.centerY).toBe(UNDERGROUND_INITIAL_CENTER_Y_PX);
-    expect(UNDERGROUND_INITIAL_CENTER_Y_PX).toBe(CANVAS_H / 2); // 296
+    expect(vs.undergroundCamera.centerY).toBe(initialUndergroundCenterYPx());
+    expect(initialUndergroundCenterYPx()).toBe(CANVAS_H / 2); // 296
     expect(vs.undergroundCamera.zoom).toBe(DEFAULT_ZOOM);
   });
 
@@ -109,7 +108,7 @@ describe('resetViewState', () => {
     vs.undergroundCamera.zoom = 0.4;
     resetViewState(vs, 24, 64);
     expect(vs.undergroundCamera.centerX).toBe(tileCenterPx(24));
-    expect(vs.undergroundCamera.centerY).toBe(UNDERGROUND_INITIAL_CENTER_Y_PX);
+    expect(vs.undergroundCamera.centerY).toBe(initialUndergroundCenterYPx());
     expect(vs.undergroundCamera.zoom).toBe(DEFAULT_ZOOM);
   });
 
@@ -122,7 +121,7 @@ describe('resetViewState', () => {
     expect(vs.undergroundVisited).toBe(false);
     vs.undergroundCamera.centerY = 5;
     toggleView(vs);
-    expect(vs.undergroundCamera.centerY).toBe(UNDERGROUND_INITIAL_CENTER_Y_PX);
+    expect(vs.undergroundCamera.centerY).toBe(initialUndergroundCenterYPx());
   });
 
   it('preserves the ViewState + camera object identities (mutates in place)', () => {
@@ -164,7 +163,7 @@ describe('toggleView', () => {
       const vs = createViewState(24, 64);
       vs.undergroundCamera.centerY = 900; // a stale value the first-visit anchor must win over
       toggleView(vs);
-      expect(vs.undergroundCamera.centerY).toBe(UNDERGROUND_INITIAL_CENTER_Y_PX);
+      expect(vs.undergroundCamera.centerY).toBe(initialUndergroundCenterYPx());
     });
 
     it('marks undergroundVisited and sets activeView=underground', () => {
