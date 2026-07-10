@@ -15,6 +15,7 @@ import {
   MINIMAP_SCALE_X,
   MINIMAP_SCALE_Y,
   drawMinimap,
+  bakeMinimapDapple,
 } from './minimap.js';
 import type { GfxLike } from './draw-surface.js';
 import type { WorldState } from '../sim/types.js';
@@ -264,60 +265,95 @@ const stubFoodPiles: WorldState['foodPiles'] = [
 ];
 
 describe('drawMinimap smoke test', () => {
-  it('calls fillRect for background, food piles, colonies, and viewport outline', () => {
+  it('calls fillRect for food piles, colonies, and viewport outline (base baked separately)', () => {
     const gfx = new MockGfx();
     const world = makeMinimalWorld({ foodPiles: stubFoodPiles, colonies: stubColonies });
     const vs = createViewState(PLAYER_START_X, PLAYER_START_Y);
     drawMinimap(gfx, world, vs, hud);
 
     const fillRects = gfx.callsOf('fillRect');
-    // Should have at least: 1 background + 1 food pile + 1 colony + 4 viewport outline = 7
-    expect(fillRects.length).toBeGreaterThanOrEqual(7);
+    // #278 — the static base + dapple moved to bakeMinimapDapple, so drawMinimap
+    // now emits only the DYNAMIC overlays: 1 food pile + 1 colony + 4 viewport = 6.
+    expect(fillRects.length).toBeGreaterThanOrEqual(6);
 
-    // First fillRect is the grass background covering the full minimap
-    const bg = fillRects[0]!;
-    expect(bg.args[0]).toBe(hud.MINIMAP.x);
-    expect(bg.args[1]).toBe(hud.MINIMAP.y);
-    expect(bg.args[2]).toBe(hud.MINIMAP.w);
-    expect(bg.args[3]).toBe(hud.MINIMAP.h);
+    // #278 regression guard: drawMinimap must NOT redraw the full-minimap base —
+    // no fillRect should span the whole minimap rect (that's the baked layer's job).
+    const drawsFullBase = fillRects.some(
+      (r) => r.args[2] === hud.MINIMAP.w && r.args[3] === hud.MINIMAP.h,
+    );
+    expect(drawsFullBase).toBe(false);
+
+    // The first overlay is the food pile (2×2 centered on its minimap px).
+    const mm = hud.MINIMAP;
+    const sx = mm.w / SURFACE_GRID_WIDTH;
+    const sy = mm.h / SURFACE_GRID_HEIGHT;
+    const food = fillRects[0]!;
+    expect(food.args[0]).toBeCloseTo(mm.x + 20 * sx - 1, 5);
+    expect(food.args[1]).toBeCloseTo(mm.y + 30 * sy - 1, 5);
   });
 
   it('MINIMAP_SCALE_X and MINIMAP_SCALE_Y equal 1.25 for 128-tile world', () => {
     expect(MINIMAP_SCALE_X).toBeCloseTo(1.25, 5);
     expect(MINIMAP_SCALE_Y).toBeCloseTo(1.25, 5);
   });
+});
 
-  it('renders a surface overview (not a black box) — PRD §7a', () => {
-    // Regression: prior version hardcoded 0x000000 as the minimap background,
-    // so the minimap read as a black debug overlay. The fix uses grass as the
-    // base and overlays dirt tiles from world.surface.
+// ---------------------------------------------------------------------------
+// bakeMinimapDapple — the STATIC minimap layer (#278). UIScene stamps this once
+// into a RenderTexture behind the per-frame overlays instead of redrawing the
+// ~16k-tile dapple every frame. Coords are TEXTURE-LOCAL (origin 0,0).
+// ---------------------------------------------------------------------------
+
+describe('bakeMinimapDapple', () => {
+  it('fills a barren-earth base + darker dapple, never a black box — PRD §7a', () => {
+    // Regression (issue #40): the old minimap hardcoded 0x000000 as its base and
+    // read as a black debug overlay. The baked layer uses barren-earth + a
+    // deterministic darker dapple. Scatter dirt so the per-tile scan is exercised.
     const gfx = new MockGfx();
-    // Scatter a few dirt tiles so we can assert the dirt path fires
     sgSet(stubSurface, 10, 10, SurfaceTileState.Dirt);
     sgSet(stubSurface, 20, 30, SurfaceTileState.Dirt);
     sgSet(stubSurface, 50, 50, SurfaceTileState.Dirt);
 
     const world = makeMinimalWorld({ foodPiles: [], colonies: stubColonies });
-    const vs = createViewState(PLAYER_START_X, PLAYER_START_Y);
-    drawMinimap(gfx, world, vs, hud);
+    bakeMinimapDapple(gfx, world, hud.MINIMAP.w, hud.MINIMAP.h);
 
     const styles = gfx.callsOf('fillStyle');
-    // No black background anywhere.
     const hasBlack = styles.some((c) => c.args[0] === 0x000000);
     expect(hasBlack).toBe(false);
-    // Issue #40 reframe: minimap base is barren-earth, not grass-green. The
-    // surface terrain at large now reads as ant-scale ground, and the
-    // minimap must mirror that so the player's mental model matches.
     const hasEarth = styles.some((c) => c.args[0] === COLOR_BARREN_EARTH);
     expect(hasEarth).toBe(true);
-    // A darker dapple is sprinkled deterministically per tile — gives the
-    // minimap a textured feel rather than a flat brown rectangle.
     const hasDapple = styles.some((c) => c.args[0] === COLOR_BARREN_EARTH_DARK);
     expect(hasDapple).toBe(true);
 
-    // Cleanup so other tests see a clean surface
     sgSet(stubSurface, 10, 10, SurfaceTileState.Grass);
     sgSet(stubSurface, 20, 30, SurfaceTileState.Grass);
     sgSet(stubSurface, 50, 50, SurfaceTileState.Grass);
+  });
+
+  it('bakes in TEXTURE-LOCAL coords: base at (0,0,w,h) and every dapple inside the rect', () => {
+    // The RT is positioned at (mm.x, mm.y), so the bake must use 0-based coords —
+    // NOT mm.x/mm.y offsets — or it would double-offset once drawn into the RT.
+    // This guards the pixel-identity rationale (integer anchor + floored local
+    // dapple == the old mm-anchored inline draw).
+    const gfx = new MockGfx();
+    const world = makeMinimalWorld({ foodPiles: [], colonies: {} });
+    const mmW = hud.MINIMAP.w;
+    const mmH = hud.MINIMAP.h;
+    bakeMinimapDapple(gfx, world, mmW, mmH);
+
+    const fillRects = gfx.callsOf('fillRect');
+    // First fillRect is the full-rect base at the texture origin.
+    const base = fillRects[0]!;
+    expect(base.args).toEqual([0, 0, mmW, mmH]);
+    // Every subsequent dapple pixel is a 1×1 rect strictly inside [0,mmW)×[0,mmH).
+    for (const r of fillRects.slice(1)) {
+      const [x, y, w, h] = r.args as [number, number, number, number];
+      expect(w).toBe(1);
+      expect(h).toBe(1);
+      expect(x).toBeGreaterThanOrEqual(0);
+      expect(x).toBeLessThan(mmW);
+      expect(y).toBeGreaterThanOrEqual(0);
+      expect(y).toBeLessThan(mmH);
+    }
   });
 });
