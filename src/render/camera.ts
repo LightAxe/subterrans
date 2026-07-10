@@ -12,13 +12,14 @@
 // pure adapter, sim world dimensions, and persisted settings only. Fully testable
 // under Node + Vitest.
 
-import { CANVAS_H, TILE_SIZE_PX } from './sprites.js';
+import { TILE_SIZE_PX } from './sprites.js';
 import {
   type CameraView,
   makeCameraView,
   DEFAULT_ZOOM,
   cancelZoomLerp,
   settleEnteringView,
+  initialUndergroundCenterYPx,
 } from './camera-adapter.js';
 import {
   PLAYER_COLONY_ID,
@@ -43,15 +44,6 @@ export const SURFACE_WORLD_PX_H = SURFACE_GRID_HEIGHT * TILE_SIZE_PX;
 export const UNDERGROUND_WORLD_PX_W = UNDERGROUND_GRID_WIDTH * TILE_SIZE_PX;
 /** Underground world height in pixels (64 tiles × 16 = 1024). */
 export const UNDERGROUND_WORLD_PX_H = UNDERGROUND_GRID_HEIGHT * TILE_SIZE_PX;
-
-/**
- * Initial underground-camera CENTER Y (world px) on fresh boot / reset / first
- * view toggle. CANVAS_H/2 places world y=0 (the ceiling / surface-entrance row)
- * at the very top of the viewport at zoom 1 — the same "shaft anchored to the
- * top" framing as before Stage 2. It is also the clamp minimum for the 1024-px-
- * tall underground world at zoom 1, so the shaft stays anchored as zoom changes.
- */
-export const UNDERGROUND_INITIAL_CENTER_Y_PX = CANVAS_H / 2;
 
 /** World-pixel [width, height] for a view. */
 export function worldPxDimensions(view: 'surface' | 'underground'): [number, number] {
@@ -103,7 +95,7 @@ export interface ViewState {
   /**
    * Whether the underground view has been visited at least once.
    * Used for first-visit Y-centering (PRD §7c): undergroundCamera.centerY is set
-   * to UNDERGROUND_INITIAL_CENTER_Y_PX (shaft row near the top) on the FIRST
+   * to initialUndergroundCenterYPx() (shaft row near the top) on the FIRST
    * toggle to underground only.
    */
   undergroundVisited: boolean;
@@ -141,7 +133,7 @@ function tileCenterPx(tile: number): number {
  *
  * surfaceCamera is centered (world px) on the start tile. undergroundCamera is
  * centered horizontally on the starter entrance column and vertically at
- * UNDERGROUND_INITIAL_CENTER_Y_PX so the shaft / surface-entrance row sits near
+ * initialUndergroundCenterYPx() so the shaft / surface-entrance row sits near
  * the top of the viewport. Both start at DEFAULT_ZOOM. undergroundVisited is
  * false; activeView is 'surface'. Each camera is an independent object instance.
  *
@@ -155,7 +147,7 @@ export function createViewState(startTileX: number, startTileY: number): ViewSta
     surfaceCamera: makeCameraView(tileCenterPx(startTileX), tileCenterPx(startTileY), DEFAULT_ZOOM),
     undergroundCamera: makeCameraView(
       tileCenterPx(startTileX),
-      UNDERGROUND_INITIAL_CENTER_Y_PX,
+      initialUndergroundCenterYPx(),
       DEFAULT_ZOOM,
     ),
     undergroundVisited: false,
@@ -190,7 +182,7 @@ export function resetViewState(viewState: ViewState, startTileX: number, startTi
   viewState.surfaceCamera.targetZoom = DEFAULT_ZOOM;
 
   viewState.undergroundCamera.centerX = tileCenterPx(startTileX);
-  viewState.undergroundCamera.centerY = UNDERGROUND_INITIAL_CENTER_Y_PX;
+  viewState.undergroundCamera.centerY = initialUndergroundCenterYPx();
   viewState.undergroundCamera.zoom = DEFAULT_ZOOM;
   viewState.undergroundCamera.targetZoom = DEFAULT_ZOOM;
 
@@ -228,7 +220,7 @@ export function toggleView(viewState: ViewState): void {
     // First-underground-visit centering BEFORE the X-link (independent axes, but
     // spec order): set the shaft-at-top Y on the first visit only.
     if (!viewState.undergroundVisited) {
-      viewState.undergroundCamera.centerY = UNDERGROUND_INITIAL_CENTER_Y_PX;
+      viewState.undergroundCamera.centerY = initialUndergroundCenterYPx();
       viewState.undergroundVisited = true;
     }
     viewState.undergroundCamera.centerX = viewState.surfaceCamera.centerX; // X-link (world px)
