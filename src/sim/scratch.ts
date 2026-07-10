@@ -13,9 +13,10 @@
  * reset semantics, and iteration order are preserved verbatim, so replay stays
  * byte-identical (no simVersion bump).
  *
- * NOT migrated: larva-maturation.ts's `nurseScratch` — a monotonic per-tick STAMP
- * (not a reset buffer), provably byte-safe even when shared; tracked for a
- * per-world move in the Phase-7 follow-up (#256).
+ * #256 — larva-maturation.ts's `nurseScratch` (a monotonic per-tick STAMP, not a
+ * reset buffer) is now in the arena too (`nurse`), completing the migration: no
+ * process-global mutable sim state remains. It was byte-safe even when shared, so
+ * the move is byte-identical — a single world's stamp sequence is unchanged.
  *
  * Layering: this sits at `src/sim/` root (NOT under `src/sim/ant/`), so it stays
  * outside the ant-cycle graph that check-ant-cycles.mjs enforces. Its only
@@ -23,7 +24,7 @@
  */
 import type { WorldState } from './types.js';
 import type { CardinalStep } from './ant/ant-motion.js';
-import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constants.js';
+import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT, MAX_ENTITIES } from './constants.js';
 import { createSurfaceMovementCache, type SurfaceMovementCache } from './surface-features.js';
 
 export interface ScratchArena {
@@ -56,6 +57,14 @@ export interface ScratchArena {
   surfaceMoveCache: SurfaceMovementCache;
   /** ant-motion.ts — cross-module cardinal-step + detour out-params. */
   motion: { cardinalStep: CardinalStep; detourResult: CardinalStep };
+  /**
+   * larva-maturation.ts — per-tick nurse-claim STAMP (#256). NOT a reset-before-use
+   * buffer: `currentStamp` is a monotonic counter bumped once per acceleration pass,
+   * and `usedStamp[nurseId] === currentStamp` marks "claimed this tick". Provably
+   * byte-safe even when shared across worlds (each pass bumps a fresh stamp), but
+   * moved here so no process-global mutable sim state survives (Phase-7 rollback).
+   */
+  nurse: { usedStamp: Uint32Array; currentStamp: number };
 }
 
 // eslint-disable-next-line subterrans/sim-module-state -- sim-cache: per-world scratch arena keyed by WorldState identity; transient, never serialized, recreated per world (same pattern as tick.ts cachesByWorld)
@@ -93,6 +102,9 @@ export function getScratch(world: WorldState): ScratchArena {
       queenIds: new Set(),
       surfaceMoveCache: createSurfaceMovementCache(),
       motion: { cardinalStep: { dx: 0, dy: 0 }, detourResult: { dx: 0, dy: 0 } },
+      // #256 — nurse stamp starts at 0 (matches the old module-global init); the
+      // first acceleration pass bumps it to 1, so no nurse is ever falsely pre-claimed.
+      nurse: { usedStamp: new Uint32Array(MAX_ENTITIES), currentStamp: 0 },
     };
     SCRATCH.set(world, a);
   }

@@ -16,8 +16,9 @@
 //      workers) — mirrors the promotion logic in tickLifecycleTransitions Loop 2.
 //
 // Hot-path discipline (QC Pass 4 AR-P1-002):
-//   - No per-tick allocations. nurseScratch is allocated once at module load
-//     (Uint32Array, not serialized, not persisted).
+//   - No per-tick allocations. The nurse stamp lives in the per-world scratch
+//     arena (#256; getScratch(world).nurse), allocated once per world on first
+//     use (Uint32Array, not serialized, not persisted).
 //   - Mark-stamp pattern: currentStamp increments once per tick. Claiming a
 //     nurse writes the current stamp into usedStamp[nurseId]. Checking is
 //     `usedStamp[nurseId] === currentStamp`. Wraps at Uint32 max (~4 billion
@@ -46,31 +47,21 @@ import {
   WORKER_BASE_SPEED,
 } from '../constants.js';
 import type { AntComponents } from '../ant/ant-store.js';
-import { MAX_ENTITIES } from '../constants.js';
+import { getScratch } from '../scratch.js';
 
 // ---------------------------------------------------------------------------
-// Module-level scratch — allocated once, not serialized, not per-tick.
+// Nurse-claim scratch — the per-tick bookkeeping stamp lives in the per-world
+// ScratchArena (#256; getScratch(world).nurse), NOT a module global, so no
+// process-global mutable sim state survives (Phase-7 rollback / multi-world).
 //
-// Save/load safety: this scratch holds NO inter-tick state. Its only role is
-// to track which nurses have already been claimed as accelerators within the
-// current tick's backward loop. Once tickLarvaMaturation returns, all nurse
-// claims are already reflected in WorldState (ants.age, ants.task, etc.) and
-// the stamp values are stale. On reload from a snapshot, currentStamp resets
-// to 0 and usedStamp is all-zeros; the first post-load tick increments stamp
-// to 1 and correctly sees no nurses pre-claimed — identical to a fresh start.
-//
-// This is the same pattern used throughout ant-system.ts (Issues #67, #69) for
-// hot-path scratch objects: one allocation at module load, stamp-or-fill per tick,
-// never serialized, deterministic within any contiguous run or replay.
+// It holds NO inter-tick state: its only role is to track which nurses have been
+// claimed as accelerators within the current tick's backward loop. Once
+// tickLarvaMaturation returns, every claim is already reflected in WorldState
+// (ants.age, ants.task, …) and the stamp values are stale. A snapshot reload gets
+// a fresh arena (currentStamp 0, usedStamp all-zeros); the first post-load tick
+// bumps the stamp to 1 and correctly sees no nurse pre-claimed — a fresh start.
+// The stamp is never serialized, so the per-world move is byte-identical.
 // ---------------------------------------------------------------------------
-
-// sim-scratch: per-tick nurse bookkeeping, stamp-invalidated each pass; never serialized (object — not lint-enforced).
-const nurseScratch = {
-  /** Per-nurse stamp: nurseScratch.usedStamp[nurseId] === currentStamp means used this tick. */
-  usedStamp: new Uint32Array(MAX_ENTITIES),
-  /** Incremented once per tick before the acceleration pass. Uint32 wrap is safe. */
-  currentStamp: 0,
-};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -89,6 +80,10 @@ export function tickLarvaMaturation(world: WorldState, colony: ColonyRecord): vo
 
   const cap = largestNurseryTileCount(colony);
   if (cap <= 0) return;
+
+  // #256 — per-world nurse-claim stamp (was a module global). Same object shape;
+  // the body below is unchanged.
+  const nurseScratch = getScratch(world).nurse;
 
   // Advance the stamp. Skip 0: usedStamp[] is zero-initialized, so stamp===0
   // would falsely treat every nurse as "used this tick" after a full Uint32
