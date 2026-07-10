@@ -52,6 +52,20 @@ export default defineConfig({
         },
       },
     },
+    {
+      // #254 — WebKit/JSC axis for the cross-engine determinism proof. The
+      // chromium project already covers Node↔V8; the actual Phase-6 target is
+      // iOS Safari / WKWebView, which runs JSC (JavaScriptCore), not V8. Scoped
+      // to ONLY the cross-engine spec — it's pure compute (no canvas/WebGL), so
+      // WebKit-headless is low-flake, and the other specs (which need Chrome
+      // WebGL/touch behavior) must NOT run under WebKit. Kept a distinct project
+      // so a WebKit-only flake is attributable and never masks the chromium proof.
+      name: 'webkit',
+      testMatch: /[\\/]cross-engine-determinism\.spec\.ts$/,
+      use: {
+        ...devices['Desktop Safari'],
+      },
+    },
   ],
   webServer: {
     command: 'npm run dev',

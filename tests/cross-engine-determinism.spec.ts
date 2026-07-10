@@ -6,18 +6,21 @@
  * for the same (seed, script) — and cross-engine byte identity is the single
  * load-bearing assumption of Phase 7 lockstep (and Phase 6 mobile Safari/WebView).
  *
- * SCOPE: this covers the Node(V8) <-> Chromium(V8) axis — transform-vs-loader,
- * embedder, and future V8-version drift. The JSC/WebKit axis (iOS Safari /
- * WKWebView, the actual Phase-6 target) is NOT yet exercised here — tracked as a
- * follow-up (#254); the harness is engine-agnostic, so it only needs a Playwright
- * `webkit` project + a CI browser install.
+ * SCOPE: this runs under BOTH the `chromium` (V8) and `webkit` (JSC) projects,
+ * each comparing its browser hash to the same Node(V8) baseline. So it covers the
+ * transform-vs-loader / embedder / future-V8-drift axis (chromium) AND the JSC
+ * axis (webkit — iOS Safari / WKWebView, the actual Phase-6 target; #254). The
+ * harness is pure compute (no canvas/WebGL), so the `webkit` project is low-flake;
+ * it is scoped to this spec alone in playwright.config.ts and installed alongside
+ * chromium in the CI e2e job.
  *
- * Auto-matched by testMatch:/.*\.spec\.ts/ — runs in the existing e2e job.
+ * Auto-matched by testMatch:/.*\.spec\.ts/ for chromium; the webkit project's
+ * testMatch narrows to this file. Both run in the existing e2e job.
  */
 import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 
-test('Node and headless Chromium produce byte-identical sim state for the canned scenario', async ({
+test('Node and the browser engine produce byte-identical sim state for the canned scenario', async ({
   page,
 }) => {
   // --- Node side: run the canned scenario under bare `node --experimental-strip-types`.
@@ -49,7 +52,7 @@ test('Node and headless Chromium produce byte-identical sim state for the canned
     [seed, ticks] as [number, number],
   );
 
-  expect(browserHash, 'Node hash !== Chromium hash — engine-dependent nondeterminism').toBe(
+  expect(browserHash, 'Node hash !== browser hash — engine-dependent nondeterminism').toBe(
     nodeHash,
   );
 });

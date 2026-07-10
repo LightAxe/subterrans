@@ -10,9 +10,11 @@ name: CI
 #            targets (`npm run build` + `build:lib`) as a smoke gate. The
 #            `verify` command itself is what contributors run locally before
 #            pushing.
-#   e2e    — `npm run test:e2e` (Playwright, chromium headless). The webServer
-#            pins VITE_PLAYTRACE_ENDPOINT empty so the run is deterministic
-#            regardless of a developer's .env.local (see playwright.config.ts).
+#   e2e    — `npm run test:e2e` (Playwright, headless). Chromium runs the full
+#            suite; a webkit project (#254) runs ONLY the cross-engine determinism
+#            spec (the JSC axis). The webServer pins VITE_PLAYTRACE_ENDPOINT empty
+#            so the run is deterministic regardless of a developer's .env.local
+#            (see playwright.config.ts).
 #
 # Coverage (`npm run test:coverage`) is intentionally a LOCAL-ONLY pre-push tool,
 # by design — not a CI gate. The 80% thresholds pass, but v8 instrumentation on a
@@ -62,7 +64,7 @@ jobs:
       - run: npm run build:lib
 
   e2e:
-    name: e2e (Playwright chromium)
+    name: e2e (Playwright chromium + webkit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -71,5 +73,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      # webkit (#254) runs ONLY the cross-engine-determinism spec (JSC axis); the
+      # rendering/touch specs stay chromium-only. See playwright.config.ts projects.
+      - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:e2e
