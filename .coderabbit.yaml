@@ -1,0 +1,109 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit configuration for LightAxe/subterrans.
+#
+# CodeRabbit is the second external PR reviewer alongside Codex (ADR 0010,
+# plan/decisions/0010-dual-reviewer-pr-process.md): two independent AI reviewers
+# with different perspectives catch more of the subtle architectural violations
+# an AI-authored diff can introduce. The open-source plan grants Pro+ features,
+# so custom path instructions and all linters below are available at no cost.
+
+language: en-US
+
+# <= 250 chars. Sets the reviewer's stance; the sim-boundary specifics live in
+# path_instructions below.
+tone_instructions: >-
+  Terse and technical, with a high bar. This is a long-term foundation: favour
+  tight, well-factored code and flag design and maintainability smells, not just
+  bugs, beyond what eslint/prettier/tsc already gate in CI.
+
+reviews:
+  # assertive = the most thorough profile: adds dead-code, null-safety, type,
+  # and design nitpicks on top of bug-finding. Deliberate — we want a tight
+  # codebase now while the foundation is being laid.
+  profile: assertive
+
+  high_level_summary: true
+  poem: false
+
+  # Submit a formal "Changes requested" review state (not just comments) and
+  # auto-approve once the threads are resolved and checks pass. Two reasons:
+  #   1. It marks findings as things that must be resolved, like Codex does.
+  #   2. The resulting APPROVED review state is machine-detectable, so the
+  #      /ship skill can poll it as CodeRabbit's clean verdict (symmetric to
+  #      Codex's 👍). This does NOT grant merge rights or lower any gate:
+  #      merging still requires write access + branch protection (required
+  #      approvals = 0, auto-merge disabled), which this setting never touches.
+  request_changes_workflow: true
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true # re-review on each push
+    drafts: false                 # skip drafts (matches .github/workflows/codex-auto-review.yml)
+
+  # Keep generated / vendored output out of review — saves the file-rate budget
+  # and cuts noise. CodeRabbit ignores common cases by default; these are explicit.
+  path_filters:
+    - "!dist/**"
+    - "!dist-lib/**"
+    - "!coverage/**"
+    - "!test-results/**"
+    - "!package-lock.json"
+
+  # Natural-language, per-path review guidance — this is where CodeRabbit becomes
+  # boundary-aware and earns its keep as the semantic reviewer (ADR 0010).
+  path_instructions:
+    - path: "src/sim/**"
+      instructions: >-
+        Deterministic simulation core — enforce the "Banned in src/sim/" rules
+        from AGENTS.md. In PRODUCTION (non-`*.test.ts`) files, flag as blocking
+        P0: Math.random() (all randomness goes through the seeded Mulberry32 in
+        src/sim/rng.ts); Date / Date.now() / performance.now() / any wall-clock
+        time; floating-point — float literals, the `/` division operator, and
+        Math.sqrt/sin/cos/atan2 (fixed-point integer only, FP_SHIFT=8 /
+        FP_ONE=256, src/sim/fixed.ts); and any Phaser / DOM / browser / Node API
+        import. Simulation ENTITIES must not be classes (no `class Ant` /
+        `class Pheromone`; entities are integer IDs with components in
+        typed-array or Map structure-of-arrays stores) — but non-entity utility
+        classes such as `Rng` are fine. Anything that breaks deterministic
+        replay across runs or JS engines is a P0. Do NOT flag (carve-outs):
+        co-located `*.test.ts` files are exempt from the Node/Phaser/DOM import,
+        wall-clock, and dynamic-`import()` bans (they legitimately import node:*
+        and load modules at runtime for fixtures) — but the fixed-point
+        float/division discipline STILL applies to sim test files (issue #241).
+        And a bare balance-constant retune in src/sim/constants.ts
+        (a numeric-literal change with no new WorldState field, tick-order
+        change, or PRNG draw-count/order change is not tech debt and needs no
+        simVersion bump — ADR-0015). Do flag a genuine save-shape change that is
+        missing a simVersion bump.
+    - path: "src/render/**"
+      instructions: >-
+        Render / Phaser layer. It reads sim state and PRODUCES commands; it must
+        never DIRECTLY write or mutate WorldState or any sim store — a direct
+        sim-store write from outside src/sim/ is a blocker (AGENTS.md). ALLOWED,
+        do not flag: the AI-controller policy lives here
+        (src/render/ai-controller.ts) and legitimately makes gameplay decisions
+        and enqueues SimCommands via world.commandQueue (src/sim/commands.ts).
+        Flag only direct sim-state mutation from render — never command
+        production or gameplay policy. Co-located `*.test.ts` files are EXEMPT:
+        render tests legitimately mutate WorldState/stores to build fixtures
+        (e.g. src/render/ai-controller.test.ts sets ant positions); never flag
+        fixture setup in a test file.
+    - path: "tests/**"
+      instructions: >-
+        End-to-end (Playwright) specs. Flag tests that assert on wall-clock
+        timing or unseeded randomness, or that would be non-deterministic across
+        runs or JS engines; prefer tests that pin exact deterministic outputs.
+    - path: "**/*.test.ts"
+      instructions: >-
+        Vitest unit tests, including the many co-located under src/ (e.g.
+        src/sim/**/*.test.ts and src/render/*.test.ts). Test files legitimately
+        import node:* and mutate WorldState/store fixtures — do not flag those.
+        This is the suite that protects deterministic replay, so DO flag tests
+        that assert on wall-clock timing or unseeded randomness, or that would be
+        non-deterministic across runs or JS engines; prefer pinned deterministic
+        outputs. (Sim test files still keep the fixed-point float/division ban —
+        see the src/sim rule, #241.)
+
+chat:
+  auto_reply: true
