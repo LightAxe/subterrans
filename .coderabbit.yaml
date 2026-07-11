@@ -85,9 +85,17 @@ reviews:
         production or gameplay policy.
     - path: "tests/**"
       instructions: >-
-        Flag tests that assert on wall-clock timing or unseeded randomness, or
-        that would be non-deterministic across runs or JS engines. Prefer tests
-        that pin exact deterministic outputs.
+        End-to-end (Playwright) specs. Flag tests that assert on wall-clock
+        timing or unseeded randomness, or that would be non-deterministic across
+        runs or JS engines; prefer tests that pin exact deterministic outputs.
+    - path: "**/*.test.ts"
+      instructions: >-
+        Vitest unit tests, including the many co-located under src/ (e.g.
+        src/sim/**/*.test.ts and src/sim/ant/*.test.ts). The production
+        sim-boundary bans do NOT apply here — but this is the suite that protects
+        deterministic replay, so flag tests that assert on wall-clock timing or
+        unseeded randomness, or that would be non-deterministic across runs or JS
+        engines; prefer tests that pin exact deterministic outputs.
 
 chat:
   auto_reply: true
