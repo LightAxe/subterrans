@@ -16,6 +16,8 @@ import {
   SURFACE_GRID_WIDTH,
   UNDERGROUND_GRID_HEIGHT,
   UNDERGROUND_GRID_WIDTH,
+  IDLE_MILL_TICK_DIVISOR,
+  SHELTER_COOLDOWN_TICKS,
 } from '../constants.js';
 import type { DigFlowFields } from '../dig-system.js';
 import type { EntranceFlowFields } from '../entrance-flow.js';
@@ -35,7 +37,11 @@ import {
   surfaceGoalDistance,
 } from '../surface-routing.js';
 import { UndergroundTileState, Zone, ugGet } from '../terrain.js';
-import { SIM_VERSION_V33_OCCUPANCY_CENTER, type WorldState } from '../types.js';
+import {
+  SIM_VERSION_V33_OCCUPANCY_CENTER,
+  SIM_VERSION_V34_IDLE_RESERVE_FLEE,
+  type WorldState,
+} from '../types.js';
 import {
   pickInvaderUndergroundStep,
   pickNearestHostileUnderground,
@@ -153,9 +159,20 @@ export function tickAntMovement(
     if (ants.alive[id] !== 1) continue;
     if (queenIds !== null && queenIds.has(id)) continue; // queen moved above
 
-    const task = ants.task[id]!;
+    const task = ants.task[id]! as AntTask;
     const zone = ants.zone[id]!;
     const foodCarrying = ants.foodCarrying[id]!;
+
+    // #209 PR A (V34) — flee/shelter phase (-1 not fleeing / 0 dashing to an
+    // entrance / >0 sheltering underground). Captured once; -1 for pre-V34 worlds
+    // so every flee branch below is inert. Step 15b (tickIdleReserveAndFlee) owns
+    // all writes to this field; movement only reads it to steer.
+    const fleePhase =
+      world.simVersion >= SIM_VERSION_V34_IDLE_RESERVE_FLEE ? ants.fleeShelterUntilTick[id]! : -1;
+    // Sheltering ants HOLD at the entrance shaft they dove into: no movement, no
+    // ascent, no deeper routing — bypass the whole dispatch + zone-transition
+    // block until step 15b clears the shelter (all-clear) or re-arms it.
+    if (fleePhase > 0) continue;
 
     // Issue #27 — carrier wait state holds the ant in place until the wake
     // check in tickForagerActions clears the flag (a chamber became
@@ -264,7 +281,10 @@ export function tickAntMovement(
           task === AntTask.Digging ||
           task === AntTask.Nursing ||
           (task === AntTask.Foraging && foodCarrying > 0) ||
-          (task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.ReturningToNest);
+          (task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.ReturningToNest) ||
+          // #209 PR A (V34) — a dashing fleeing ant (any non-combat task) heads
+          // for the nearest open entrance to dive underground.
+          fleePhase === 0;
       } else {
         // Zone.Underground — underground carriers compute an entrance target
         // whether or not a FoodStorage chamber exists, so the chamber-flow
@@ -372,7 +392,7 @@ export function tickAntMovement(
               tileY,
               DIR_DX[dir]!,
               DIR_DY[dir]!,
-              task as AntTask,
+              task,
               world.simVersion,
               cardinalStep,
             );
@@ -440,7 +460,7 @@ export function tickAntMovement(
               tileY,
               DIR_DX[dir]!,
               DIR_DY[dir]!,
-              task as AntTask,
+              task,
               world.simVersion,
               cardinalStep,
             );
@@ -484,7 +504,10 @@ export function tickAntMovement(
       if (
         !stepped &&
         zone === Zone.Surface &&
-        isHomeBoundForager &&
+        // #209 PR A (V34) — a dashing fleeing ant routes to the nearest open
+        // entrance via the surface BFS field too (it is seeded from every open
+        // entrance), so it steers around features instead of straight-lining.
+        (isHomeBoundForager || fleePhase === 0) &&
         entranceFlowFields !== undefined
       ) {
         const colonyId = ants.colonyId[id]!;
@@ -810,6 +833,35 @@ export function tickAntMovement(
         dx = 0;
         dy = 0;
       }
+    } else if (
+      // Explicit V34 gate: `fleePhase === -1` alone is ALSO true on pre-V34
+      // worlds (fleePhase is hard-coded -1 there), so without this a pre-V34
+      // replay with a surface Idle ant carrying a stray target would step it
+      // (base `main` holds via getTaskDirection) — a byte-identity divergence.
+      // Gate here for parity with step 15b and every other V34 path.
+      world.simVersion >= SIM_VERSION_V34_IDLE_RESERVE_FLEE &&
+      fleePhase === -1 &&
+      zone === Zone.Surface &&
+      task === AntTask.Idle &&
+      ants.targetPosX[id] !== -1
+    ) {
+      // #209 PR A (V34) — idle-reserve milling. Amble toward the entrance-annulus
+      // wander tile set by step 15b (tickIdleReserveAndFlee), throttled to every
+      // IDLE_MILL_TICK_DIVISOR ticks so the reserve saunters rather than darts.
+      // Straight-line cardinal step; the surface soft-cost / detour post-pass
+      // below handles feature avoidance. On off-ticks the ant holds (dx/dy = 0).
+      if (world.tick % IDLE_MILL_TICK_DIVISOR === 0) {
+        const posX = ants.posX[id]!;
+        const posY = ants.posY[id]!;
+        const step = pickCardinalStep(
+          ants,
+          id,
+          (ants.targetPosX[id]! >> FP_SHIFT) - (posX >> FP_SHIFT),
+          (ants.targetPosY[id]! >> FP_SHIFT) - (posY >> FP_SHIFT),
+        );
+        dx = unpackStepDx(step);
+        dy = unpackStepDy(step);
+      }
     } else {
       // Non-forager, non-transitioning: pure direction lookup (no state mutations).
       const dir = getTaskDirection(world, id, digFlowFields, chamberFlowFields);
@@ -967,7 +1019,7 @@ export function tickAntMovement(
         const prevTileY = prevPosY >> FP_SHIFT;
         const newTileX = posX >> FP_SHIFT;
         const newTileY = posY >> FP_SHIFT;
-        const taskAsAntTask = task as AntTask;
+        const taskAsAntTask = task;
         const xCrossed = newTileX !== prevTileX;
         const yCrossed = newTileY !== prevTileY;
         if (xCrossed && yCrossed) {
@@ -1222,7 +1274,12 @@ export function tickAntMovement(
         task === AntTask.Digging ||
         task === AntTask.Nursing ||
         task === AntTask.Fighting ||
-        (task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.CarryingFood);
+        (task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.CarryingFood) ||
+        // #209 PR A (V34) — a dashing fleeing ant descends its own open entrance
+        // regardless of task/subtask (fixes both Idle-can't-descend and
+        // empty-forager-can't-descend for the flee path). The own-open-entrance
+        // predicate below already admits it (isOwnEntrance && entrance.isOpen).
+        fleePhase === 0;
 
       if (needsUnderground) {
         const tileX = posX >> FP_SHIFT;
@@ -1315,6 +1372,13 @@ export function tickAntMovement(
             // surface coordinates don't produce false-positive no-revisit
             // deflections in the underground CarryingFood guard.
             clearRecentTiles(ants, id);
+            // #209 PR A (V34) — a dashing fleeing ant that reaches its shaft
+            // transitions dash → shelter here: hold at the shaft (posY=0) until
+            // this tick, then step 15b re-samples the surface danger ("poke head
+            // out"). Carried food is kept and deposited after the all-clear.
+            if (fleePhase === 0) {
+              ants.fleeShelterUntilTick[id] = world.tick + SHELTER_COOLDOWN_TICKS;
+            }
             descended = true;
             break;
           }
@@ -1327,7 +1391,17 @@ export function tickAntMovement(
       const needsSurface =
         task === AntTask.Idle ||
         task === AntTask.Fighting ||
-        (task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.SearchingFood);
+        (task === AntTask.Foraging &&
+          (ants.subTask[id] === ForagingSubState.SearchingFood ||
+            // #209 PR A (V34) — an EMPTY forager that fled and sheltered can be
+            // ReturningToNest here (over-leash, heading home when it dived). The
+            // flee descent (needsUnderground: fleePhase===0, above) admits ANY
+            // subTask, so the ascent gate must too — otherwise a ReturningToNest
+            // forager emerges from shelter stranded at the shaft (posY=0) with no
+            // recovery: needsTransition (Foraging && foodCarrying===0) routes it
+            // to the shaft but nothing ascends it. Pre-V34 no empty forager ever
+            // descended, so this only fires on the V34 flee path (replay-safe).
+            ants.subTask[id] === ForagingSubState.ReturningToNest));
 
       if (needsSurface) {
         const tileX = posX >> FP_SHIFT;

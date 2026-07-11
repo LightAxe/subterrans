@@ -439,7 +439,21 @@ export const SIM_VERSION_V32_AI_OP_VALIDATION = 32 as const;
  * ascent/descent — are outside #243's scope and unchanged.) MIN_ACCEPTED unchanged.
  */
 export const SIM_VERSION_V33_OCCUPANCY_CENTER = 33 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V33_OCCUPANCY_CENTER;
+
+/**
+ * #209 PR A — surface idle reserve + pheromone-driven flee. Gates the new idle
+ * worker behaviour: surface-milling idle reserve at open entrances (step 15b
+ * `tickIdleReserveAndFlee`), a general flee state (`ants.fleeShelterUntilTick`)
+ * that reads the spider's `DangerTrail` and dashes non-combat surface workers
+ * (idle + foragers, empty or carrying) down the nearest own open entrance to
+ * shelter until the danger decays, and a cross-colony ant-kill danger alarm
+ * seeded on the victim colony's surface DangerTrail. Every mutation path is
+ * gated `simVersion >= V34`, so pre-V34 saves replay byte-identically. The new
+ * `fleeShelterUntilTick` column is optional-on-load (default -1); MIN_ACCEPTED
+ * is UNCHANGED (pre-V34 in-window saves keep loading).
+ */
+export const SIM_VERSION_V34_IDLE_RESERVE_FLEE = 34 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
 
 /**
  * S2 — AI colony state machine states.
@@ -988,6 +1002,10 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   dst.ants.homeGroundBonusHp.set(src.ants.homeGroundBonusHp);
   dst.ants.attackCooldown.set(src.ants.attackCooldown);
   dst.ants.combatOpponentId.set(src.ants.combatOpponentId);
+  // #209 PR A (V34) — flee/shelter phase. Round-trips through the double-buffer
+  // so the render prev-frame and SCEN-06 replay see the same flee state as the
+  // current frame (-1 not fleeing / 0 dashing / >0 sheltering-until-tick).
+  dst.ants.fleeShelterUntilTick.set(src.ants.fleeShelterUntilTick);
 
   // --- colonies: delete stale dst keys; upsert each src colony ---
   // Remove dst colonies that no longer exist in src

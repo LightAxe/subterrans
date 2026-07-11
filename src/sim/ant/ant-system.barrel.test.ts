@@ -24,6 +24,7 @@ const PUBLIC_FUNCTIONS = [
   'tickDigExecution',
   'tickExcursionBoundary',
   'tickForagerActions',
+  'tickIdleReserveAndFlee',
   'tickNurseActions',
   'tickPheromoneDeposit',
   'tickSearchLeash',
@@ -39,7 +40,7 @@ describe('ant-system barrel public API (#212)', () => {
     });
   }
 
-  it('exports EXACTLY the 21 public functions (no accidental widening or narrowing)', () => {
+  it('exports EXACTLY the 22 public functions (no accidental widening or narrowing)', () => {
     const exportedFns = Object.keys(barrel)
       .filter((k) => typeof (barrel as Record<string, unknown>)[k] === 'function')
       .sort();

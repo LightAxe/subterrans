@@ -25,3 +25,35 @@ export interface NestEntrance {
   surfaceTileY: number;
   isOpen: boolean; // true once shaft tiles (y=0, y=1) are both Open
 }
+
+/**
+ * #209 PR A — nearest OPEN entrance to a surface tile, by Manhattan distance
+ * with lower `entranceId` breaking ties. Returns the entrance reference (or
+ * `null` if the colony has no open entrance) — allocation-free (no new object,
+ * returns an element of `entrances`). OPEN-ONLY: unlike the movement/queen
+ * fallbacks that may accept a designated-but-closed shaft for Diggers, a
+ * fleeing/milling worker must never target a closed entrance it cannot descend.
+ * Semantics match the inline surface nearest-open loop in ant-movement.ts.
+ */
+export function pickNearestOpenEntrance(
+  entrances: readonly NestEntrance[],
+  fromTileX: number,
+  fromTileY: number,
+): NestEntrance | null {
+  let best: NestEntrance | null = null;
+  let bestDist = -1;
+  for (let e = 0; e < entrances.length; e++) {
+    const ent = entrances[e]!;
+    if (!ent.isOpen) continue;
+    const dist = Math.abs(ent.surfaceTileX - fromTileX) + Math.abs(ent.surfaceTileY - fromTileY);
+    if (
+      bestDist < 0 ||
+      dist < bestDist ||
+      (dist === bestDist && best !== null && ent.entranceId < best.entranceId)
+    ) {
+      bestDist = dist;
+      best = ent;
+    }
+  }
+  return best;
+}

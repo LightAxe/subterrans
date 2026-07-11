@@ -60,7 +60,7 @@ export const TRANSIENT_WORLD_FIELDS: readonly (keyof WorldState)[] = [
 ];
 
 /**
- * The 35 real `AntComponents` SoA fields covered by `serializeAnts`.
+ * The 36 real `AntComponents` SoA fields covered by `serializeAnts`.
  * `recentTilesX/Y/Head` are persisted via the packed `recentTiles` encoding, so
  * they appear here (real struct fields), NOT `recentTiles` (a serialization key,
  * not a struct field). `pathErr` is NOT here — #243 deleted the runtime field;
@@ -104,6 +104,7 @@ export const SERIALIZED_ANT_SOA_FIELDS: readonly (keyof AntComponents)[] = [
   'homeGroundBonusHp',
   'attackCooldown',
   'combatOpponentId',
+  'fleeShelterUntilTick',
 ];
 
 /** Every `AntComponents` field is persisted today — none deliberately transient. */

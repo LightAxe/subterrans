@@ -14,14 +14,17 @@
 // checkQueenDeath (game-over.ts) reads and clears pendingQueenDeathContexts each tick.
 
 import { Rng } from './rng.js';
-import { AntTask } from './enums.js';
+import { AntTask, PheromoneType } from './enums.js';
 import { makeTileKey } from './tile-key.js';
+import { SIM_VERSION_V34_IDLE_RESERVE_FLEE } from './types.js';
 import type { WorldState, KillerKind, QueenDeathContext } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
 import { emitEvent } from './telemetry.js';
 import { getScratch } from './scratch.js';
+import { pheromoneGridKey } from './pheromone/pheromone-store.js';
+import { depositDangerCross } from './pheromone/danger.js';
 import {
   COMBAT_HP_HOMEGROUND_BONUS,
   COMBAT_DAMAGE_BASE,
@@ -34,6 +37,7 @@ import {
   SPIDER_EDGE_MARGIN_TILES,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
+  KILL_ALARM_DANGER_DEPOSIT,
 } from './constants.js';
 import { isInCohort } from './ai-state.js';
 
@@ -523,6 +527,39 @@ export function killAnt(
     const killerColony = world.colonies[killerColonyId];
     if (killerColony !== undefined) {
       killerColony.killCount += 1;
+    }
+  }
+
+  // #209 PR A (V34) — cross-colony kill alarm. When an ENEMY ant kills one of a
+  // colony's SURFACE adult non-fighter workers, seed a DangerTrail cross on the
+  // VICTIM colony's surface grid at the death tile so nearby reserve/forager
+  // workers flee an active raid (same signal the spider emits). Precise
+  // predicate: `killerColonyId !== null` guards the nullable killer id (a null
+  // killer would otherwise satisfy `!== victimColonyId`); queens, brood
+  // (excluded by workers[] membership), fighter victims (task === Fighting), and
+  // same-colony kills do NOT alarm. Grid-guarded: skip if the victim colony's
+  // surface DangerTrail grid is absent (bare/test worlds).
+  if (
+    world.simVersion >= SIM_VERSION_V34_IDLE_RESERVE_FLEE &&
+    killerKind === 'Ant' &&
+    killerColonyId !== null &&
+    killerColonyId !== victimColonyId &&
+    ants.zone[antIndex] === 0 && // Zone.Surface
+    !isQueenVictim &&
+    ants.task[antIndex] !== AntTask.Fighting &&
+    victimColony !== undefined &&
+    victimColony.workers.includes(antIndex)
+  ) {
+    const dangerKey = pheromoneGridKey(victimColonyId, PheromoneType.DangerTrail, 'surface');
+    const dangerGrid = world.pheromoneGrids[dangerKey];
+    if (dangerGrid !== undefined) {
+      depositDangerCross(
+        dangerGrid,
+        tileX,
+        tileY,
+        KILL_ALARM_DANGER_DEPOSIT,
+        KILL_ALARM_DANGER_DEPOSIT >> 1,
+      );
     }
   }
 }

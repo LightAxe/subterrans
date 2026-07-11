@@ -232,6 +232,25 @@ export interface AntComponents {
    * Set to the opponent's index on windup; reset to -1 on kill or death.
    */
   readonly combatOpponentId: Int32Array;
+  /**
+   * #209 PR A (V34) — general flee/shelter phase for a non-combat surface
+   * worker. A transient MODE layered over the ant's underlying Idle/Foraging
+   * task (NOT a new AntTask), so the ant resumes cleanly when the danger clears:
+   *   -1 = not fleeing (default)
+   *    0 = dashing to the nearest own OPEN entrance (no shelter timer yet)
+   *   >0 = sheltering underground at the entrance shaft until this tick
+   *
+   * Set by the step-15b idle-reserve/flee pass (idle-reserve.ts) on danger
+   * (surface DangerTrail >= FLEE_THRESHOLD) and cleared once the danger decays
+   * ("poke head out"). The V34 movement branch honours it: a dash-phase ant
+   * gets surface→underground descent intent regardless of task; a sheltering
+   * ant holds at the shaft (suppresses ascent + deeper routing).
+   *
+   * Reset to -1 in initAnt. Round-trips through copyWorldState and save/load
+   * (optional-on-load; defaults to -1 on pre-V34 saves). All read/write paths
+   * are gated `simVersion >= V34`, so legacy replays never observe or mutate it.
+   */
+  readonly fleeShelterUntilTick: Int32Array;
 }
 
 /**
@@ -288,6 +307,9 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
   carryingBroodId.fill(-1);
   const carriedBy = new Int32Array(maxEntities);
   carriedBy.fill(-1);
+  // #209 PR A (V34) — flee/shelter phase. -1 = not fleeing (sentinel default).
+  const fleeShelterUntilTick = new Int32Array(maxEntities);
+  fleeShelterUntilTick.fill(-1);
 
   return {
     posX: new Int32Array(maxEntities),
@@ -343,6 +365,8 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
       a.fill(-1);
       return a;
     })(),
+    // #209 PR A (V34) — flee/shelter phase. -1 = not fleeing.
+    fleeShelterUntilTick,
   };
 }
 
@@ -436,6 +460,8 @@ export function initAnt(ants: AntComponents, id: EntityId, spec: InitAntSpec): v
   ants.homeGroundBonusHp[id] = 0;
   ants.attackCooldown[id] = 0;
   ants.combatOpponentId[id] = -1;
+  // #209 PR A (V34) — fresh ant is not fleeing.
+  ants.fleeShelterUntilTick[id] = -1;
 }
 
 // ---------------------------------------------------------------------------
