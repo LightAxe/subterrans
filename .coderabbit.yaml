@@ -55,25 +55,34 @@ reviews:
   path_instructions:
     - path: "src/sim/**"
       instructions: >-
-        Applies to PRODUCTION simulation code only. Co-located test files (any
-        path ending in `.test.ts`) are EXEMPT from the bans below — they
-        legitimately import node:fs / node:path / node:url and other Node APIs
-        for fixtures and may use helper values; never flag those in a test file.
-        For production sim code, flag as a blocking issue ANY: Math.random()
-        (a seeded Mulberry32 PRNG is the only allowed randomness); Date,
-        Date.now(), performance.now(), or other wall-clock time; floating-point
-        arithmetic or float literals (all math is fixed-point integer,
-        FP_SHIFT=8 / FP_ONE=256); and any import of Phaser, the DOM, or
-        browser/Node APIs. Entities are plain data + free functions, never
-        classes. Anything that could break deterministic replay across runs or
-        JS engines is a P0. Also flag a save-shape change that is missing a
-        simVersion bump.
+        Deterministic simulation core — enforce the "Banned in src/sim/" rules
+        from AGENTS.md. In PRODUCTION (non-`*.test.ts`) files, flag as blocking
+        P0: Math.random() (all randomness goes through the seeded Mulberry32 in
+        src/sim/rng.ts); Date / Date.now() / performance.now() / any wall-clock
+        time; floating-point — float literals, the `/` division operator, and
+        Math.sqrt/sin/cos/atan2 (fixed-point integer only, FP_SHIFT=8 /
+        FP_ONE=256, src/sim/fixed.ts); and any Phaser / DOM / browser / Node API
+        import. Simulation ENTITIES must not be classes (no `class Ant` /
+        `class Pheromone`; entities are integer IDs with components in
+        typed-array or Map structure-of-arrays stores) — but non-entity utility
+        classes such as `Rng` are fine. Anything that breaks deterministic
+        replay across runs or JS engines is a P0. Do NOT flag (carve-outs):
+        co-located `*.test.ts` files (they legitimately import node:* for
+        fixtures); and a bare balance-constant retune in src/sim/constants.ts
+        (a numeric-literal change with no new WorldState field, tick-order
+        change, or PRNG draw-count/order change is not tech debt and needs no
+        simVersion bump — ADR-0015). Do flag a genuine save-shape change that is
+        missing a simVersion bump.
     - path: "src/render/**"
       instructions: >-
-        Render / Phaser layer. It may read sim state but must never mutate it,
-        and simulation/gameplay decisions must not live here. Flag sim logic
-        leaking into render, and any place render reaches back into mutable sim
-        state.
+        Render / Phaser layer. It reads sim state and PRODUCES commands; it must
+        never DIRECTLY write or mutate WorldState or any sim store — a direct
+        sim-store write from outside src/sim/ is a blocker (AGENTS.md). ALLOWED,
+        do not flag: the AI-controller policy lives here
+        (src/render/ai-controller.ts) and legitimately makes gameplay decisions
+        and enqueues SimCommands via world.commandQueue (src/sim/commands.ts).
+        Flag only direct sim-state mutation from render — never command
+        production or gameplay policy.
     - path: "tests/**"
       instructions: >-
         Flag tests that assert on wall-clock timing or unseeded randomness, or
