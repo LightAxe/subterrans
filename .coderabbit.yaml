@@ -67,8 +67,11 @@ reviews:
         typed-array or Map structure-of-arrays stores) — but non-entity utility
         classes such as `Rng` are fine. Anything that breaks deterministic
         replay across runs or JS engines is a P0. Do NOT flag (carve-outs):
-        co-located `*.test.ts` files (they legitimately import node:* for
-        fixtures); and a bare balance-constant retune in src/sim/constants.ts
+        co-located `*.test.ts` files are exempt from the Node/Phaser/DOM import,
+        wall-clock, and dynamic-`import()` bans (they legitimately import node:*
+        and load modules at runtime for fixtures) — but the fixed-point
+        float/division discipline STILL applies to sim test files (issue #241).
+        And a bare balance-constant retune in src/sim/constants.ts
         (a numeric-literal change with no new WorldState field, tick-order
         change, or PRNG draw-count/order change is not tech debt and needs no
         simVersion bump — ADR-0015). Do flag a genuine save-shape change that is
@@ -82,7 +85,10 @@ reviews:
         (src/render/ai-controller.ts) and legitimately makes gameplay decisions
         and enqueues SimCommands via world.commandQueue (src/sim/commands.ts).
         Flag only direct sim-state mutation from render — never command
-        production or gameplay policy.
+        production or gameplay policy. Co-located `*.test.ts` files are EXEMPT:
+        render tests legitimately mutate WorldState/stores to build fixtures
+        (e.g. src/render/ai-controller.test.ts sets ant positions); never flag
+        fixture setup in a test file.
     - path: "tests/**"
       instructions: >-
         End-to-end (Playwright) specs. Flag tests that assert on wall-clock
@@ -91,11 +97,13 @@ reviews:
     - path: "**/*.test.ts"
       instructions: >-
         Vitest unit tests, including the many co-located under src/ (e.g.
-        src/sim/**/*.test.ts and src/sim/ant/*.test.ts). The production
-        sim-boundary bans do NOT apply here — but this is the suite that protects
-        deterministic replay, so flag tests that assert on wall-clock timing or
-        unseeded randomness, or that would be non-deterministic across runs or JS
-        engines; prefer tests that pin exact deterministic outputs.
+        src/sim/**/*.test.ts and src/render/*.test.ts). Test files legitimately
+        import node:* and mutate WorldState/store fixtures — do not flag those.
+        This is the suite that protects deterministic replay, so DO flag tests
+        that assert on wall-clock timing or unseeded randomness, or that would be
+        non-deterministic across runs or JS engines; prefer pinned deterministic
+        outputs. (Sim test files still keep the fixed-point float/division ban —
+        see the src/sim rule, #241.)
 
 chat:
   auto_reply: true
