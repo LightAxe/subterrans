@@ -55,15 +55,19 @@ reviews:
   path_instructions:
     - path: "src/sim/**"
       instructions: >-
-        Deterministic simulation boundary — must stay pure. Flag as a blocking
-        issue ANY: Math.random() (a seeded Mulberry32 PRNG is the only allowed
-        randomness); Date, Date.now(), performance.now(), or other wall-clock
-        time; floating-point arithmetic or float literals (all math is
-        fixed-point integer, FP_SHIFT=8 / FP_ONE=256); and any import of Phaser,
-        the DOM, or browser/Node APIs. Entities are plain data + free functions,
-        never classes. Anything that could break deterministic replay across
-        runs or JS engines is a P0. Also flag a save-shape change that is missing
-        a simVersion bump.
+        Applies to PRODUCTION simulation code only. Co-located test files (any
+        path ending in `.test.ts`) are EXEMPT from the bans below — they
+        legitimately import node:fs / node:path / node:url and other Node APIs
+        for fixtures and may use helper values; never flag those in a test file.
+        For production sim code, flag as a blocking issue ANY: Math.random()
+        (a seeded Mulberry32 PRNG is the only allowed randomness); Date,
+        Date.now(), performance.now(), or other wall-clock time; floating-point
+        arithmetic or float literals (all math is fixed-point integer,
+        FP_SHIFT=8 / FP_ONE=256); and any import of Phaser, the DOM, or
+        browser/Node APIs. Entities are plain data + free functions, never
+        classes. Anything that could break deterministic replay across runs or
+        JS engines is a P0. Also flag a save-shape change that is missing a
+        simVersion bump.
     - path: "src/render/**"
       instructions: >-
         Render / Phaser layer. It may read sim state but must never mutate it,
