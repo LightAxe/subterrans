@@ -21,7 +21,7 @@ import type { ColonyId } from '../colony/colony-store.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { phGet, pheromoneGridKey, type PheromoneGrid } from '../pheromone/pheromone-store.js';
-import { pickNearestOpenEntrance, type NestEntrance } from '../colony/entrance.js';
+import { pickOpenEntranceAtColumn, type NestEntrance } from '../colony/entrance.js';
 import { hash32 } from '../hash.js';
 import {
   FLEE_THRESHOLD,
@@ -38,8 +38,8 @@ const ZONE_SURFACE = 0; // Zone.Surface (raw; terrain.ts not imported into this 
 
 // `colony.entrances` is a Phase-3 caller-side extension (createColonyRecord does
 // not set it), so minimal test worlds can leave it undefined. Fall back to this
-// shared empty tuple — pickNearestOpenEntrance then returns null (no milling /
-// no flee target), matching the movement code's `colony.entrances && …` guard.
+// shared empty tuple — the entrance scans then find nothing (no milling / no flee
+// target), matching the movement code's `colony.entrances && …` guard.
 const NO_ENTRANCES = [] as const;
 
 /** Fixed-point centre of tile `t` (matches the sim's tile-centre convention). */
@@ -53,11 +53,10 @@ function tileCenter(t: number): number {
  * instead of being suppressed because its nearest open entrance is dangerous
  * (Codex P2). Returns null when no safe open entrance exists.
  *
- * Inlined scan (NOT a filtered `pickNearestOpenEntrance` call): this runs per
- * worker per tick inside `tickIdleReserveAndFlee`, so it must not allocate a
- * fresh `accept` closure each call (repo hot-loop rule; Codex P2 + CodeRabbit).
- * Same Manhattan-distance / lower-`entranceId` tie-break as
- * `pickNearestOpenEntrance`, with the danger skip folded into the loop.
+ * Inlined scan (NOT a filtered helper call): this runs per worker per tick inside
+ * `tickIdleReserveAndFlee`, so it must not allocate a fresh `accept` closure each
+ * call (repo hot-loop rule; Codex P2 + CodeRabbit). Nearest by Manhattan distance
+ * with lower-`entranceId` tie-break, with the danger skip folded into the loop.
  */
 function pickNearestSafeEntrance(
   entrances: readonly NestEntrance[],
@@ -313,12 +312,16 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
         // phase > 0 UNDERGROUND — sheltering at the shaft. "Poke head out" once
         // the cooldown elapses.
         if (tick >= phase) {
-          // Re-derive the exit by nearest open entrance to the shaft column (the
-          // ant held there; descent preserves posX and the two grids share a
-          // width). No open entrance at all → STAY sheltered (re-arm) rather than
-          // resuming into a stuck-underground state that would read as an active-
-          // but-immobile reserve; it recovers when an entrance reopens.
-          const exit = pickNearestOpenEntrance(entrances, tileX, 0);
+          // Re-derive the exit as the open entrance at the ant's OWN shaft column
+          // (descent preserves posX; the two grids share a width) — the one the
+          // ant will actually ASCEND through, since the ascent matches by
+          // surfaceTileX. Using the Manhattan-nearest entrance instead could
+          // sample a safe entrance in a DIFFERENT column and release the ant up
+          // through its own still-camped column entrance (Codex P2). No open
+          // entrance at the column → STAY sheltered (re-arm): the ant cannot
+          // ascend there anyway, so resuming would strand it as an active-but-
+          // immobile reserve; it recovers when an entrance at its column reopens.
+          const exit = pickOpenEntranceAtColumn(entrances, tileX);
           if (exit === null) {
             ants.fleeShelterUntilTick[id] = tick + SHELTER_COOLDOWN_TICKS;
           } else {

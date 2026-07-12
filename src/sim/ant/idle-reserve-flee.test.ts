@@ -1,6 +1,6 @@
 // idle-reserve-flee.test.ts — #209 PR A (V34): surface idle reserve + flee.
 //
-// Covers pickNearestOpenEntrance, the flee state machine (enter / safe-entrance
+// Covers pickOpenEntranceAtColumn, the flee state machine (enter / safe-entrance
 // gate / dash → shelter → poke-head-out / fallbacks), idle-reserve milling, the
 // cross-colony kill alarm, the V33-vs-V34 byte gate, the copyWorldState
 // round-trip, and the backpressure-untouched regression. Save-format round-trip
@@ -12,7 +12,7 @@ import { tick } from '../tick.js';
 import { copyWorldState, allocateEntityId } from '../types.js';
 import { SIM_VERSION_V33_OCCUPANCY_CENTER, SIM_VERSION_V34_IDLE_RESERVE_FLEE } from '../types.js';
 import type { WorldState } from '../types.js';
-import { pickNearestOpenEntrance, type NestEntrance } from '../colony/entrance.js';
+import { pickOpenEntranceAtColumn, type NestEntrance } from '../colony/entrance.js';
 import { pheromoneGridKey, phSet, phGet } from '../pheromone/pheromone-store.js';
 import { PheromoneType, AntTask, ForagingSubState } from '../enums.js';
 import { Zone } from '../terrain.js';
@@ -90,7 +90,11 @@ function seedDanger(
 }
 
 // ---------------------------------------------------------------------------
-describe('pickNearestOpenEntrance (#209 PR A)', () => {
+describe('pickOpenEntranceAtColumn (#209 PR A)', () => {
+  // Selects the OPEN entrance an ant sheltering at a shaft column ascends through
+  // — the first open entrance with surfaceTileX === column, mirroring the ascent
+  // in ant-movement.ts. NOT nearest-by-distance (that would sample a different
+  // column's entrance the ant never uses — Codex P2).
   const E = (entranceId: number, x: number, y: number, isOpen: boolean): NestEntrance => ({
     entranceId,
     surfaceTileX: x,
@@ -99,29 +103,33 @@ describe('pickNearestOpenEntrance (#209 PR A)', () => {
   });
 
   it('returns null for an empty list', () => {
-    expect(pickNearestOpenEntrance([], 0, 0)).toBeNull();
+    expect(pickOpenEntranceAtColumn([], 5)).toBeNull();
   });
 
-  it('returns null when every entrance is closed (open-only)', () => {
-    expect(pickNearestOpenEntrance([E(0, 1, 1, false), E(1, 2, 2, false)], 0, 0)).toBeNull();
+  it('returns null when the column has no entrance at all', () => {
+    expect(pickOpenEntranceAtColumn([E(0, 1, 0, true), E(1, 9, 3, true)], 5)).toBeNull();
   });
 
-  it('skips a nearer CLOSED entrance in favour of a farther open one', () => {
-    const open = E(1, 20, 0, true);
-    // The (1,0) closed entrance is far nearer, but flee must never target it.
-    expect(pickNearestOpenEntrance([E(0, 1, 0, false), open], 0, 0)).toBe(open);
+  it('returns null when the only entrance at the column is closed (cannot ascend)', () => {
+    expect(pickOpenEntranceAtColumn([E(0, 5, 0, false)], 5)).toBeNull();
   });
 
-  it('picks the nearest open entrance by Manhattan distance', () => {
-    const near = E(0, 3, 0, true);
-    const far = E(1, 10, 0, true);
-    expect(pickNearestOpenEntrance([far, near], 0, 0)).toBe(near);
+  it('returns the OPEN entrance at the column, ignoring other columns', () => {
+    const atCol = E(1, 5, 12, true);
+    // A nearer-by-Manhattan entrance at a DIFFERENT column must be ignored — the
+    // ant ascends only through its own column.
+    expect(pickOpenEntranceAtColumn([E(0, 6, 0, true), atCol], 5)).toBe(atCol);
   });
 
-  it('breaks a distance tie by lower entranceId', () => {
-    const hi = E(5, 4, 0, true); // dist 4 from origin
-    const lo = E(2, 0, 4, true); // dist 4 from origin
-    expect(pickNearestOpenEntrance([hi, lo], 0, 0)).toBe(lo);
+  it('picks the FIRST open entrance at the column (matches ascent order)', () => {
+    const first = E(0, 5, 8, true);
+    const second = E(1, 5, 20, true);
+    expect(pickOpenEntranceAtColumn([first, second], 5)).toBe(first);
+  });
+
+  it('skips a closed entrance at the column in favour of an open one at the same column', () => {
+    const open = E(1, 5, 20, true);
+    expect(pickOpenEntranceAtColumn([E(0, 5, 8, false), open], 5)).toBe(open);
   });
 });
 
@@ -818,6 +826,46 @@ describe('flee — full lifecycle: dash → shelter → poke head out (#209 PR A
     world.tick = 200; // past the cooldown → poke head out fires
     tickIdleReserveAndFlee(world);
     expect(world.ants.fleeShelterUntilTick[id]).toBe(200 + SHELTER_COOLDOWN_TICKS); // re-armed, not -1
+  });
+
+  it('poke-head-out samples the ant’s OWN shaft-column entrance, not a nearer safe one in another column (Codex P2)', () => {
+    // Codex P2: the ascent matches by surfaceTileX, so the poke-head-out must
+    // sample DangerTrail at the entrance in the ant's shaft column — the one it
+    // will actually emerge through. A Manhattan-nearest entrance in a DIFFERENT
+    // column could be safe while the ant's own column entrance is still camped;
+    // releasing on the wrong entrance surfaces the worker straight into danger.
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
+    world.spider = null;
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const own = openEntrance(world, PLAYER_COLONY_ID); // the ant's column (24, 64)
+    // A DIFFERENT-column entrance that is nearer to the shaft mouth (col, 0) by
+    // Manhattan distance but which the ant can never ascend through.
+    colony.entrances.push({
+      entranceId: 99,
+      surfaceTileX: own.surfaceTileX + 2,
+      surfaceTileY: own.surfaceTileY - 40, // much nearer to y=0 → the old buggy pick
+      isOpen: true,
+    });
+    // Shelter an ant at the OWN column; camp only the own-column surface tile,
+    // leaving the other-column entrance clear.
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      own.surfaceTileX,
+      own.surfaceTileY,
+      AntTask.Idle,
+    );
+    world.ants.zone[id] = Zone.Underground;
+    world.ants.posX[id] = center(own.surfaceTileX); // shaft column
+    world.ants.posY[id] = 0;
+    world.ants.fleeShelterUntilTick[id] = 100;
+    seedDanger(world, PLAYER_COLONY_ID, own.surfaceTileX, own.surfaceTileY, 1, FLEE_THRESHOLD * 4);
+    world.tick = 200; // past the cooldown → poke head out fires
+    tickIdleReserveAndFlee(world);
+    // Own column still camped → STAY sheltered (must NOT release off the safe
+    // other-column entrance).
+    expect(world.ants.fleeShelterUntilTick[id]).toBeGreaterThan(world.tick);
   });
 
   it('a ReturningToNest empty forager that sheltered can ascend (not stuck underground)', () => {

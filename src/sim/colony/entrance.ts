@@ -27,38 +27,27 @@ export interface NestEntrance {
 }
 
 /**
- * #209 PR A — nearest OPEN entrance to a surface tile, by Manhattan distance
- * with lower `entranceId` breaking ties. Returns the entrance reference (or
- * `null` if none qualifies) — allocation-free (no new object, returns an element
- * of `entrances`). OPEN-ONLY: unlike the movement/queen fallbacks that may accept
- * a designated-but-closed shaft for Diggers, a fleeing/milling worker must never
- * target a closed entrance it cannot descend. Semantics match the inline surface
- * nearest-open loop in ant-movement.ts.
+ * #209 PR A — the OPEN entrance an ant sheltering at surface column `atTileX`
+ * would ASCEND through: the FIRST open entrance whose `surfaceTileX === atTileX`.
+ * Returns the entrance reference (or `null` if the column has no open entrance).
+ * Allocation-free (returns an element of `entrances`, no new object).
  *
- * DANGER-unaware by design: the flee path needs the nearest *safe* entrance, but
- * that scan is inlined in `idle-reserve.ts` (`pickNearestSafeEntrance`) to stay
- * allocation-free in the per-worker hot loop rather than passing a predicate
- * here — so this helper deliberately has no filter parameter.
+ * Column-match, NOT nearest-by-distance, and this is load-bearing: a sheltering
+ * ant only knows its shaft COLUMN, and the ascent in ant-movement.ts matches by
+ * `surfaceTileX === tileX` (first open entrance in `entrances` order) and emerges
+ * at that entrance's `surfaceTileY`. This helper mirrors that selection exactly,
+ * so the poke-head-out samples DangerTrail at the entrance the ant will really
+ * ascend through. Sampling a Manhattan-nearest entrance in a DIFFERENT column
+ * could clear the shelter timer off a safe entrance the ant never uses, sending
+ * it back up through its own still-camped column entrance (#209 PR A, Codex P2).
  */
-export function pickNearestOpenEntrance(
+export function pickOpenEntranceAtColumn(
   entrances: readonly NestEntrance[],
-  fromTileX: number,
-  fromTileY: number,
+  atTileX: number,
 ): NestEntrance | null {
-  let best: NestEntrance | null = null;
-  let bestDist = -1;
   for (let e = 0; e < entrances.length; e++) {
     const ent = entrances[e]!;
-    if (!ent.isOpen) continue;
-    const dist = Math.abs(ent.surfaceTileX - fromTileX) + Math.abs(ent.surfaceTileY - fromTileY);
-    if (
-      bestDist < 0 ||
-      dist < bestDist ||
-      (dist === bestDist && best !== null && ent.entranceId < best.entranceId)
-    ) {
-      bestDist = dist;
-      best = ent;
-    }
+    if (ent.isOpen && ent.surfaceTileX === atTileX) return ent;
   }
-  return best;
+  return null;
 }
