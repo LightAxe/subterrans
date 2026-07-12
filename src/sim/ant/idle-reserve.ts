@@ -73,15 +73,19 @@ function pickNearestSafeEntrance(
  *
  * Routing is a HYBRID so the P2 safe-entrance fix doesn't cost obstacle-aware
  * routing in the common case:
- *   - If the nearest OPEN entrance is itself the safe one (single-entrance
- *     colonies, or the nearest open happens to be clear) → leave targetPosX/Y = -1
- *     so the movement routes via the obstacle-aware multi-source surface BFS.
- *   - Only when the nearest open entrance is CAMPED but a farther one is clear →
- *     write the safe entrance's tile so the movement flee-dash straight-lines
- *     there, skipping the BFS (which would otherwise pull toward the camped
- *     nearer entrance — Codex P2). Straight-line is the fallback precisely because
- *     it lacks obstacle avoidance; using it only in the multi-entrance case keeps
- *     the single-entrance economy (REQ-C1) on the BFS path.
+ *   - If NO open entrance is dangerous (single-entrance colonies while fleeing —
+ *     they only flee when their one entrance is safe — and multi-entrance colonies
+ *     with no camp) → leave targetPosX/Y = -1 so the movement routes via the
+ *     obstacle-aware multi-source surface BFS. Every BFS destination is provably
+ *     safe here, so the danger-UNAWARE BFS cannot misroute into a camp.
+ *   - If SOME open entrance IS dangerous (a camp exists) → write the chosen safe
+ *     entrance's tile so the movement flee-dash STRAIGHT-LINES there. The BFS is
+ *     seeded from every open entrance (incl. the camped one) and routes by
+ *     obstacle distance, so it could pull the worker to the camp even when the
+ *     Manhattan-nearest entrance is safe (Codex P2); straight-line is danger-safe
+ *     but obstacle-blind, so it is used ONLY when a camp is present. Single-
+ *     entrance colonies never hit this branch (they hold if camped), keeping the
+ *     REQ-C1 economy on the BFS path.
  */
 function setFleeTarget(
   world: WorldState,
@@ -93,12 +97,19 @@ function setFleeTarget(
 ): boolean {
   const safe = pickNearestSafeEntrance(entrances, tileX, tileY, dangerGrid);
   if (safe === null) return false;
-  const nearestOpen = pickNearestOpenEntrance(entrances, tileX, tileY);
-  if (safe === nearestOpen) {
-    world.ants.targetPosX[id] = -1; // nearest open is safe → BFS routing
+  let anyDangerousEntrance = false;
+  for (let e = 0; e < entrances.length; e++) {
+    const ent = entrances[e]!;
+    if (ent.isOpen && entranceDanger(dangerGrid, ent) >= FLEE_THRESHOLD) {
+      anyDangerousEntrance = true;
+      break;
+    }
+  }
+  if (!anyDangerousEntrance) {
+    world.ants.targetPosX[id] = -1; // no camp → obstacle-aware BFS is danger-safe
     world.ants.targetPosY[id] = -1;
   } else {
-    world.ants.targetPosX[id] = tileCenter(safe.surfaceTileX); // straight-line to the far safe exit
+    world.ants.targetPosX[id] = tileCenter(safe.surfaceTileX); // camp present → straight-line to safe
     world.ants.targetPosY[id] = tileCenter(safe.surfaceTileY);
   }
   return true;
@@ -200,6 +211,12 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
             !setFleeTarget(world, id, entrances, tileX, tileY, dangerGrid)
           ) {
             ants.fleeShelterUntilTick[id] = -1;
+            // Clear any explicit straight-line flee target: otherwise movement
+            // (later this tick, now phase -1) still sees it — an Idle worker would
+            // mill toward it and a forager would follow it as a normal target
+            // instead of resuming/holding (Codex P2).
+            ants.targetPosX[id] = -1;
+            ants.targetPosY[id] = -1;
           }
         } else {
           // Underground but still phase 0 — defensive (the descent branch

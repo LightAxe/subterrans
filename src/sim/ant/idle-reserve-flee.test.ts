@@ -184,7 +184,81 @@ describe('flee — enter / safe-entrance gate (#209 PR A)', () => {
     );
     tickIdleReserveAndFlee(world);
     expect(world.ants.fleeShelterUntilTick[id]).toBe(0); // fled (not suppressed)
-    expect(world.ants.targetPosY[id]! >> FP_SHIFT).toBe(far.surfaceTileY); // toward the SAFE far exit
+    expect(world.ants.targetPosY[id]! >> FP_SHIFT).toBe(far.surfaceTileY); // straight-lines to the SAFE far exit
+  });
+
+  it('routes via BFS (no explicit target) when no entrance is camped — even multi-entrance (Codex P2)', () => {
+    // Codex P2 follow-up: the multi-source BFS is danger-UNAWARE, so it may only be
+    // used when NO open entrance is camped (every BFS destination is then safe).
+    // Danger on the worker's tile alone, both entrances clear → flee via BFS
+    // (targetPosX stays -1), preserving obstacle-aware routing.
+    const world = createScenario(SEED);
+    world.spider = null;
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const near = openEntrance(world, PLAYER_COLONY_ID);
+    colony.entrances.push({
+      entranceId: 99,
+      surfaceTileX: near.surfaceTileX,
+      surfaceTileY: near.surfaceTileY + 10,
+      isOpen: true,
+    });
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      near.surfaceTileX,
+      near.surfaceTileY + 2,
+      AntTask.Idle,
+    );
+    seedDanger(
+      world,
+      PLAYER_COLONY_ID,
+      near.surfaceTileX,
+      near.surfaceTileY + 2,
+      0,
+      FLEE_THRESHOLD * 4,
+    );
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(0); // fled
+    expect(world.ants.targetPosX[id]).toBe(-1); // no camp → BFS routing, no explicit target
+  });
+
+  it('aborting a dash clears the stale straight-line flee target (Codex P2)', () => {
+    // Codex P2 follow-up: on abort, the explicit target must be cleared too, or
+    // movement (same tick, now phase -1) still follows it.
+    const world = createScenario(SEED);
+    world.spider = null;
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const near = openEntrance(world, PLAYER_COLONY_ID);
+    colony.entrances.push({
+      entranceId: 99,
+      surfaceTileX: near.surfaceTileX,
+      surfaceTileY: near.surfaceTileY + 10,
+      isOpen: true,
+    });
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      near.surfaceTileX,
+      near.surfaceTileY + 2,
+      AntTask.Idle,
+    );
+    // Camp the near entrance → explicit straight-line target to the far one.
+    seedDanger(
+      world,
+      PLAYER_COLONY_ID,
+      near.surfaceTileX,
+      near.surfaceTileY,
+      2,
+      FLEE_THRESHOLD * 4,
+    );
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(0);
+    expect(world.ants.targetPosX[id]).not.toBe(-1); // explicit straight-line target
+    // All-clear → the dash aborts and the stale target is cleared.
+    seedDanger(world, PLAYER_COLONY_ID, near.surfaceTileX, near.surfaceTileY, 4, 0);
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1); // aborted
+    expect(world.ants.targetPosX[id]).toBe(-1); // stale target cleared
   });
 
   it('does NOT flee when the only open entrance is itself dangerous (spider camping it)', () => {
