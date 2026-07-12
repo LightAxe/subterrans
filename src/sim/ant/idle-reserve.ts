@@ -16,12 +16,16 @@
 // a hash of (tick-bucket ^ antId) — no world.rngState draw.
 
 import type { WorldState } from '../types.js';
-import { SIM_VERSION_V34_IDLE_RESERVE_FLEE } from '../types.js';
+import {
+  SIM_VERSION_V34_IDLE_RESERVE_FLEE,
+  SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
+} from '../types.js';
 import type { ColonyId } from '../colony/colony-store.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { phGet, pheromoneGridKey, type PheromoneGrid } from '../pheromone/pheromone-store.js';
 import { pickOpenEntranceAtColumn, type NestEntrance } from '../colony/entrance.js';
+import type { UndergroundGrid } from '../terrain.js';
 import { hash32 } from '../hash.js';
 import {
   FLEE_THRESHOLD,
@@ -32,9 +36,15 @@ import {
   SURFACE_GRID_HEIGHT,
   SPIDER_SCATTER_RADIUS_TILES,
 } from '../constants.js';
-import { canEnterSurfaceTile } from './ant-motion.js';
+import { canEnterSurfaceTile, canEnterUndergroundTile } from './ant-motion.js';
 
 const ZONE_SURFACE = 0; // Zone.Surface (raw; terrain.ts not imported into this leaf-ish behavior)
+
+// #209 PR C — the 4 cardinal directions (N, E, S, W) for the underground idle
+// wander. Cardinal-only (no diagonals) — matches the movement `pickCardinalStep`
+// and avoids any corner-cut passability question.
+const WANDER_DX = [0, 1, 0, -1] as const;
+const WANDER_DY = [-1, 0, 1, 0] as const;
 
 // `colony.entrances` is a Phase-3 caller-side extension (createColonyRecord does
 // not set it), so minimal test worlds can leave it undefined. Fall back to this
@@ -45,6 +55,133 @@ const NO_ENTRANCES = [] as const;
 /** Fixed-point centre of tile `t` (matches the sim's tile-centre convention). */
 function tileCenter(t: number): number {
   return (t << FP_SHIFT) + (FP_ONE >> 1);
+}
+
+/**
+ * #209 PR C — true iff tile `(x, y)` is inside a CHAMBER FOOTPRINT of the ant's own
+ * colony. Chamber footprints are occupancy-EXEMPT (`resolveSameColonyOccupancy` via
+ * `isOccupancyExempt`), so a wander confined to them causes zero occupancy contention
+ * with productive ants (the mechanism behind the ~44% economy drag the confinement
+ * fixes). Keyed on `ants.colonyId[id]` to mirror `isOccupancyExempt` EXACTLY (the grid
+ * is keyed on `currentGridColonyId` for passability; equal for an Idle worker today).
+ * Missing colony (bare/test world) → not in a chamber (hold), mirroring the guard in
+ * `isOccupancyExempt`.
+ */
+function isInOwnChamber(world: WorldState, id: number, x: number, y: number): boolean {
+  const colony = world.colonies[world.ants.colonyId[id]! as unknown as ColonyId];
+  if (colony === undefined) return false;
+  const chambers = colony.chambers;
+  for (let c = 0; c < chambers.length; c++) {
+    const ch = chambers[c]!;
+    const bx = ch.posX >> FP_SHIFT;
+    const by = ch.posY >> FP_SHIFT;
+    if (x >= bx && x < bx + ch.width && y >= by && y < by + ch.height) return true;
+  }
+  return false;
+}
+
+/**
+ * #209 PR C — true iff the ant's existing `targetPosX/Y` is a valid underground
+ * wander target to PRESERVE this tick: set, on a NON-shaft (`tileY !== 0`) tile
+ * that is the ant's current tile or exactly one cardinal step away, still enterable,
+ * AND inside a chamber footprint (so every wander move stays chamber→chamber =
+ * occupancy-exempt). This is the ownership + drift + shaft + confinement guard in one:
+ * it rejects a stale DISTANT target from a prior task (`targetPosX/Y` is shared and not
+ * universally cleared on task transitions), a stale shaft-row target, a target whose
+ * tile went Solid/Marked mid-window, and a target that drifted out of the chamber.
+ */
+function keepLocalWanderTarget(
+  world: WorldState,
+  id: number,
+  tileX: number,
+  tileY: number,
+  grid: UndergroundGrid,
+): boolean {
+  const ants = world.ants;
+  const tpx = ants.targetPosX[id]!;
+  if (tpx === -1) return false;
+  const tx = tpx >> FP_SHIFT;
+  const ty = ants.targetPosY[id]! >> FP_SHIFT;
+  if (ty === 0) return false; // never preserve a shaft-row target (must ascend, not wander)
+  // Current tile (0,0) or exactly one cardinal step (Manhattan ≤ 1; diagonals = 2 rejected).
+  if (Math.abs(tx - tileX) + Math.abs(ty - tileY) > 1) return false;
+  if (!canEnterUndergroundTile(grid, tx, ty, AntTask.Idle)) return false;
+  return isInOwnChamber(world, id, tx, ty);
+}
+
+/**
+ * #209 PR C (V35) — advance an idle UNDERGROUND worker's one-tile wander so a
+ * saturated-colony surplus de-clumps instead of freezing in a motionless blob.
+ * The ant steps toward a hash-chosen enterable CARDINAL neighbour, re-picked once
+ * per retarget bucket and held when reached — local (always reachable),
+ * drift-free, no RNG draw. Reuses `targetPosX/Y` (no new save column); the
+ * movement branch consumes + revalidates it.
+ *
+ * Invariants:
+ *  - Grid = `undergroundGrids[currentGridColonyId]` — the grid the ant occupies
+ *    and ascends in (NOT `colonyId`). Missing grid → clear + return.
+ *  - **Shaft row ⇒ ALWAYS clear + ascend:** an idle ant AT the shaft (`tileY 0`)
+ *    unconditionally has its target cleared so it takes the V34 defensive
+ *    Idle-ascent to the surface reserve, not be captured (a fresh-pick / preserved
+ *    target at row 0 would let the ascent gate suppress the ascent). No preserve
+ *    exception: a chamber wanderer never reaches the shaft (chambers exclude row 0)
+ *    and an exempt chamber resident is never occupancy-shifted onto it, so the only
+ *    row-0 target would be a stale one whose step onto the non-exempt `(x,1)` shaft
+ *    tile would re-introduce occupancy contention.
+ *  - **Chamber confinement:** the ant's CURRENT tile and every wander target must be
+ *    inside a chamber footprint (occupancy-EXEMPT). Moving idle ants through
+ *    non-exempt tiles bumps productive foragers/diggers via the occupancy resolver
+ *    (a ~44% economy drag); confined to exempt chamber tiles the motion is free and
+ *    de-clumps exactly the #209 chamber cluster. Idle ants outside a chamber hold.
+ *  - **Drift-free:** re-pick only at a retarget-bucket boundary; mid-window keep
+ *    the target only if it is still a valid LOCAL non-shaft in-chamber step.
+ */
+function setUndergroundWanderStep(
+  world: WorldState,
+  id: number,
+  tileX: number,
+  tileY: number,
+): void {
+  const ants = world.ants;
+  const grid = world.undergroundGrids[ants.currentGridColonyId[id]!];
+  if (grid === undefined) {
+    ants.targetPosX[id] = -1;
+    ants.targetPosY[id] = -1;
+    return;
+  }
+
+  // Shaft row → ALWAYS clear so the V34 defensive Idle-ascent surfaces it (no
+  // preserve: any row-0 target is stale and would step onto the non-exempt shaft).
+  // Not in a chamber (tunnel / non-exempt open area) → clear + hold: moving there
+  // would bump productive ants via the occupancy resolver.
+  if (tileY === 0 || !isInOwnChamber(world, id, tileX, tileY)) {
+    ants.targetPosX[id] = -1;
+    ants.targetPosY[id] = -1;
+    return;
+  }
+
+  // Mid-window: preserve a still-valid local, non-shaft, enterable, IN-CHAMBER step
+  // (drift-free + rejects stale distant cross-task targets, and keeps every move
+  // chamber→chamber). Parenthesize the mask-AND: `===` binds tighter than `&`.
+  const atBoundary = (world.tick & ((1 << IDLE_MILL_RETARGET_SHIFT) - 1)) === 0;
+  if (!atBoundary && keepLocalWanderTarget(world, id, tileX, tileY, grid)) return;
+
+  // Fresh pick: hash-rotate the 4 cardinals, take the first in-bounds, non-shaft,
+  // enterable, IN-CHAMBER neighbour. None qualifies → clear (deterministic hold).
+  const r = hash32((world.tick >> IDLE_MILL_RETARGET_SHIFT) ^ id) & 3;
+  for (let k = 0; k < 4; k++) {
+    const dir = (r + k) & 3;
+    const nx = tileX + WANDER_DX[dir]!;
+    const ny = tileY + WANDER_DY[dir]!;
+    if (ny === 0) continue; // never target the shaft row
+    if (!canEnterUndergroundTile(grid, nx, ny, AntTask.Idle)) continue;
+    if (!isInOwnChamber(world, id, nx, ny)) continue; // confine to occupancy-exempt tiles
+    ants.targetPosX[id] = tileCenter(nx);
+    ants.targetPosY[id] = tileCenter(ny);
+    return;
+  }
+  ants.targetPosX[id] = -1;
+  ants.targetPosY[id] = -1;
 }
 
 /**
@@ -199,9 +336,22 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
       }
 
       if (phase === -1) {
-        // Not fleeing. Only surface, non-combat workers (idle or forager)
-        // participate; Digging/Nursing/Fighting keep their own movement.
-        if (zone !== ZONE_SURFACE) continue;
+        // Not fleeing. Surface non-combat workers (idle or forager) mill/flee
+        // below; underground IDLE workers wander (#209 PR C, V35).
+        if (zone !== ZONE_SURFACE) {
+          // Underground, not fleeing. V35: an idle underground worker de-clumps
+          // via a one-tile wander. Underground NON-Idle workers keep the bare
+          // `continue` — they must NOT fall through to the surface danger read
+          // below (that would sample the SURFACE DangerTrail at underground
+          // coordinates and could spuriously flee).
+          if (
+            world.simVersion >= SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER &&
+            task === AntTask.Idle
+          ) {
+            setUndergroundWanderStep(world, id, tileX, tileY);
+          }
+          continue;
+        }
         if (task !== AntTask.Idle && task !== AntTask.Foraging) continue;
         const danger = dangerGrid !== undefined ? phGet(dangerGrid, tileX, tileY) : 0;
         if (danger >= FLEE_THRESHOLD) {
@@ -331,8 +481,24 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
               dangerGrid !== undefined
                 ? phGet(dangerGrid, exit.surfaceTileX, exit.surfaceTileY)
                 : 0;
-            ants.fleeShelterUntilTick[id] =
-              surfaceDanger < FLEE_THRESHOLD ? -1 : tick + SHELTER_COOLDOWN_TICKS;
+            if (surfaceDanger < FLEE_THRESHOLD) {
+              ants.fleeShelterUntilTick[id] = -1; // all-clear → resume (ascend + mill)
+              // #209 PR C (V35) — clear the stale camped-entrance SURFACE flee
+              // target that survived descent + shelter. On this release tick the
+              // phase>0 branch runs (not the phase===-1 wander sanitizer), so
+              // movement's V35 underground-idle-wander branch would otherwise
+              // consume the stale surface tile as an underground destination and
+              // the V35 ascent gate would suppress the V34 resume-ascent —
+              // capturing the released reserve underground. V35-GATED: the clear
+              // mutates SERIALIZED targetPosX/Y, so doing it pre-V35 would diverge
+              // a V34 replay's state hash even though no V34 branch reads it here.
+              if (world.simVersion >= SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER) {
+                ants.targetPosX[id] = -1;
+                ants.targetPosY[id] = -1;
+              }
+            } else {
+              ants.fleeShelterUntilTick[id] = tick + SHELTER_COOLDOWN_TICKS; // re-arm
+            }
           }
         }
       }

@@ -48,9 +48,11 @@ function seedDanger(
 }
 
 describe('#209 PR A — fleeShelterUntilTick save column', () => {
-  it('LATEST_SIM_VERSION is V34', () => {
-    expect(LATEST_SIM_VERSION).toBe(SIM_VERSION_V34_IDLE_RESERVE_FLEE);
-    expect(createScenario(42).simVersion).toBe(SIM_VERSION_V34_IDLE_RESERVE_FLEE);
+  it('the flee column ships from V34 onward (LATEST is at least V34)', () => {
+    // The flee feature landed in V34; later versions (e.g. PR C's V35) keep it.
+    // Version-agnostic so a later LATEST bump doesn't spuriously fail this PR A test.
+    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V34_IDLE_RESERVE_FLEE);
+    expect(createScenario(42).simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V34_IDLE_RESERVE_FLEE);
   });
 
   it('round-trips distinct flee/shelter phases through serialize→deserialize', () => {

@@ -40,6 +40,7 @@ import { UndergroundTileState, Zone, ugGet } from '../terrain.js';
 import {
   SIM_VERSION_V33_OCCUPANCY_CENTER,
   SIM_VERSION_V34_IDLE_RESERVE_FLEE,
+  SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
   type WorldState,
 } from '../types.js';
 import {
@@ -892,6 +893,45 @@ export function tickAntMovement(
         dx = unpackStepDx(step);
         dy = unpackStepDy(step);
       }
+    } else if (
+      // #209 PR C (V35) — underground idle-reserve wander. Same explicit-gate
+      // reasoning as the V34 surface mill above: `fleePhase === -1` is true on
+      // pre-V35 worlds too, so the simVersion gate stops a pre-V35 replay with a
+      // stray target on an idle underground ant from stepping (base holds via
+      // getTaskDirection → (0,0)) — a byte-identity divergence. Step 15b
+      // (setUndergroundWanderStep) owns the target write.
+      world.simVersion >= SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER &&
+      fleePhase === -1 &&
+      zone === Zone.Underground &&
+      task === AntTask.Idle &&
+      ants.targetPosX[id] !== -1
+    ) {
+      // Revalidate the target before stepping: a Digger may have Marked/dug it
+      // during the retarget window. No longer enterable (or grid gone) → clear
+      // and hold, never retry a stale/blocked target. Also re-assert the target is
+      // occupancy-EXEMPT (in a chamber footprint) — step 15b already confines the
+      // wander there, but re-checking here makes the "no non-exempt idle movement"
+      // guarantee STRUCTURAL rather than resting on the step-15b→step-16 tick-order
+      // invariant (a future task=Idle write in that window would otherwise leak an
+      // unconfined step and re-introduce the occupancy drag). Else amble one cardinal
+      // step toward it, throttled to a saunter like the surface mill.
+      const wanderGrid = world.undergroundGrids[ants.currentGridColonyId[id]!];
+      const wtx = ants.targetPosX[id]! >> FP_SHIFT;
+      const wty = ants.targetPosY[id]! >> FP_SHIFT;
+      if (
+        wanderGrid === undefined ||
+        !canEnterUndergroundTile(wanderGrid, wtx, wty, task) ||
+        !isOccupancyExempt(world, ants.colonyId[id]!, Zone.Underground, wtx, wty)
+      ) {
+        ants.targetPosX[id] = -1;
+        ants.targetPosY[id] = -1;
+      } else if (world.tick % IDLE_MILL_TICK_DIVISOR === 0) {
+        const posX = ants.posX[id]!;
+        const posY = ants.posY[id]!;
+        const step = pickCardinalStep(ants, id, wtx - (posX >> FP_SHIFT), wty - (posY >> FP_SHIFT));
+        dx = unpackStepDx(step);
+        dy = unpackStepDy(step);
+      }
     } else {
       // Non-forager, non-transitioning: pure direction lookup (no state mutations).
       const dir = getTaskDirection(world, id, digFlowFields, chamberFlowFields);
@@ -1433,7 +1473,17 @@ export function tickAntMovement(
       // Idle kept as defensive allowance: a post-deposit ant still at an entrance tile transits
       // immediately rather than lingering underground until step-10a reassigns it next tick.
       const needsSurface =
-        task === AntTask.Idle ||
+        (task === AntTask.Idle &&
+          // #209 PR C (V35) — suppress the defensive Idle-ascent for a WANDERING
+          // idle underground worker (`targetPosX !== -1`), so an occupancy-shift
+          // onto a shaft tile can't pump it up. An idle worker that SHOULD surface
+          // (post-deposit / post-shelter) has no target here — step 15b never
+          // fresh-picks at the shaft row, and the shelter-release clears it — so it
+          // still ascends. Pre-V35: unconditional (base behaviour, replay-safe).
+          !(
+            world.simVersion >= SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER &&
+            ants.targetPosX[id] !== -1
+          )) ||
         task === AntTask.Fighting ||
         (task === AntTask.Foraging &&
           (ants.subTask[id] === ForagingSubState.SearchingFood ||
