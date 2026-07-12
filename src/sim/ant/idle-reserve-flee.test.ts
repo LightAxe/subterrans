@@ -28,7 +28,7 @@ import {
   WORKER_LIFESPAN_TICKS,
   COMBAT_HP_BASE,
 } from '../constants.js';
-import { initAnt } from './ant-store.js';
+import { initAnt, pushRecentTile } from './ant-store.js';
 import { killAnt } from '../combat.js';
 import { colonyForageBackpressure } from '../colony/colony-system.js';
 import { tickIdleReserveAndFlee } from './idle-reserve.js';
@@ -344,6 +344,65 @@ describe('flee — enter / safe-entrance gate (#209 PR A)', () => {
 });
 
 // ---------------------------------------------------------------------------
+describe('flee — no-revisit bypass (Codex P2)', () => {
+  // A fleeing SearchingFood forager's step toward shelter must NOT be diverted by
+  // the generic recent-tiles anti-backtrack filter (returning toward the entrance
+  // commonly steps onto just-vacated tiles). The bypass is gated to an active V34
+  // surface flee, so ordinary foraging anti-oscillation is unchanged.
+
+  /** Set up a SearchingFood forager 2 tiles below `ent`, with the entrance-ward tile recent. */
+  function setupForager(world: WorldState, ent: NestEntrance): number {
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX,
+      ent.surfaceTileY + 2,
+      AntTask.Foraging,
+    );
+    world.ants.subTask[id] = ForagingSubState.SearchingFood;
+    world.ants.speed[id] = FP_ONE; // whole-tile step so a crossing is observable
+    // The immediately entrance-ward tile is recently visited.
+    pushRecentTile(world.ants, id, ent.surfaceTileX, ent.surfaceTileY + 1);
+    return id;
+  }
+
+  it('a fleeing SearchingFood forager steps toward shelter despite the recent tile (explicit-target route)', () => {
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = setupForager(world, ent);
+    // Explicit-target flee dash straight at the entrance (the multi-entrance
+    // camped-nearest route writes exactly this).
+    world.ants.fleeShelterUntilTick[id] = 0;
+    world.ants.targetPosX[id] = center(ent.surfaceTileX);
+    world.ants.targetPosY[id] = center(ent.surfaceTileY);
+    const startTileY = world.ants.posY[id]! >> FP_SHIFT;
+    tickAntMovement(world, new Rng(1), createDigFlowFields());
+    // Without the bypass the no-revisit filter would divert the step sideways
+    // (tileY unchanged); with it the ant steps onto the recent entrance-ward tile.
+    expect(world.ants.posY[id]! >> FP_SHIFT).toBeLessThan(startTileY);
+  });
+
+  it('a NON-fleeing SearchingFood forager is unaffected — the bypass is pinned to flee (V33 gate)', () => {
+    // Same explicit setup but pre-V34: fleePhase is inert, so the flee-dash never
+    // runs and bypassRecentTiles === targetedStep (false here). The ant does NOT
+    // get the emergency straight-line-to-shelter treatment.
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V33_OCCUPANCY_CENTER;
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = setupForager(world, ent);
+    world.ants.fleeShelterUntilTick[id] = 0; // inert at V33
+    const startTileY = world.ants.posY[id]! >> FP_SHIFT;
+    tickAntMovement(world, new Rng(1), createDigFlowFields());
+    // No V34 flee dash → the ant forages normally and does NOT beeline toward the
+    // entrance (tileY does not decrease); the emergency bypass is V34-flee-gated.
+    expect(world.ants.posY[id]! >> FP_SHIFT).not.toBeLessThan(startTileY);
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe('flee — full lifecycle: dash → shelter → poke head out (#209 PR A)', () => {
   it('flees to the entrance, shelters underground, then resumes on all-clear', () => {
     const world = createScenario(SEED);
@@ -395,6 +454,24 @@ describe('flee — full lifecycle: dash → shelter → poke head out (#209 PR A
       if (world.ants.fleeShelterUntilTick[id] === -1) resumed = true;
     }
     expect(resumed).toBe(true);
+  });
+
+  it('a sheltering worker with NO open entrance stays sheltered (does not resume into a stuck state)', () => {
+    // Advisory (b): if all entrances closed while sheltering, "poke head out" must
+    // NOT resume (which would surface the ant to the allocator as a mobile-but-
+    // immobile reserve) — re-arm the cooldown instead; it recovers when an
+    // entrance reopens.
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
+    world.spider = null;
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    for (const e of colony.entrances) e.isOpen = false; // no open entrance
+    const id = spawnWorker(world, PLAYER_COLONY_ID, 40, 20, AntTask.Idle);
+    world.ants.zone[id] = Zone.Underground;
+    world.ants.fleeShelterUntilTick[id] = 100; // sheltering until tick 100
+    world.tick = 200; // past the cooldown → poke head out fires
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(200 + SHELTER_COOLDOWN_TICKS); // re-armed, not -1
   });
 
   it('a ReturningToNest empty forager that sheltered can ascend (not stuck underground)', () => {
@@ -546,6 +623,25 @@ describe('idle-reserve milling (#209 PR A)', () => {
     for (const e of world.colonies[PLAYER_COLONY_ID]!.entrances) e.isOpen = false;
     tickIdleReserveAndFlee(world);
     expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+  });
+
+  it('milling preserves the spider-scatter target when inside the reticle radius (advisory a)', () => {
+    // Advisory (a): step 15b runs after spider-scatter (step 13e). An idle worker
+    // within SPIDER_SCATTER_RADIUS_TILES of the reticle must keep the away-target
+    // scatter wrote, not have it overwritten by a mill-toward-entrance target.
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
+    world.spider = null;
+    const id = spawnWorker(world, PLAYER_COLONY_ID, 40, 60, AntTask.Idle);
+    // Simulate step 13e having written an away-from-reticle target for this worker.
+    const scatterX = center(45);
+    const scatterY = center(60);
+    world.ants.targetPosX[id] = scatterX;
+    world.ants.targetPosY[id] = scatterY;
+    world.scatterReticleTile = { x: 40, y: 60 }; // reticle on the worker's tile
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.targetPosX[id]).toBe(scatterX); // scatter target preserved
+    expect(world.ants.targetPosY[id]).toBe(scatterY);
   });
 
   it('no open entrance → idle worker stays put (no mill target, no pour-out)', () => {

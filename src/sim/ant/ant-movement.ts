@@ -918,8 +918,22 @@ export function tickAntMovement(
     // targeted pile's path distance shrank by 1, so it stays eligible and the
     // SELECTED pile's path distance strictly decreases every scent-targeted tick
     // (a monotone potential), regardless of which pile wins reselection.
+    // #209 PR A (V34) — an ACTIVE surface flee dash bypasses the recent-tiles
+    // no-revisit filter (this block) AND the diagonal per-axis revert below, for
+    // the same reason a path-aware `targetedStep` does: the flee route is a
+    // deliberate emergency path to shelter, and returning toward the safe entrance
+    // commonly steps onto just-vacated tiles — the generic SearchingFood
+    // anti-backtrack would otherwise veer the fleeing forager AWAY from shelter
+    // (Codex P2). Gated to V34 + dash phase + surface, so ordinary foraging
+    // anti-oscillation is unchanged and pre-V34 replays stay byte-identical; the
+    // generic no-revisit rule itself is NOT broadened.
+    const bypassRecentTiles =
+      targetedStep ||
+      (world.simVersion >= SIM_VERSION_V34_IDLE_RESERVE_FLEE &&
+        fleePhase === 0 &&
+        zone === Zone.Surface);
     if (
-      !targetedStep &&
+      !bypassRecentTiles &&
       zone === Zone.Surface &&
       task === AntTask.Foraging &&
       ants.subTask[id] === ForagingSubState.SearchingFood &&
@@ -1131,10 +1145,10 @@ export function tickAntMovement(
         const destPassable = canEnterSurfaceTile(world, newTileX, newTileY);
         const passXOnly =
           canEnterSurfaceTile(world, newTileX, prevTileY) &&
-          (targetedStep || !isRecentTile(ants, id, newTileX, prevTileY));
+          (bypassRecentTiles || !isRecentTile(ants, id, newTileX, prevTileY));
         const passYOnly =
           canEnterSurfaceTile(world, prevTileX, newTileY) &&
-          (targetedStep || !isRecentTile(ants, id, prevTileX, newTileY));
+          (bypassRecentTiles || !isRecentTile(ants, id, prevTileX, newTileY));
         if (destPassable && (passXOnly || passYOnly)) {
           // Diagonal allowed.
         } else if (passXOnly) {

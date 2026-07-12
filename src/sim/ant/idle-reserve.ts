@@ -30,6 +30,7 @@ import {
   IDLE_MILL_RETARGET_SHIFT,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
+  SPIDER_SCATTER_RADIUS_TILES,
 } from '../constants.js';
 import { canEnterSurfaceTile } from './ant-motion.js';
 
@@ -226,14 +227,25 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
         }
       } else {
         // phase > 0 — sheltering underground at the shaft. "Poke head out" once
-        // the cooldown elapses: sample the surface DangerTrail directly above the
-        // shaft and resume if it has decayed, else re-arm another cooldown.
+        // the cooldown elapses.
         if (tick >= phase) {
-          const surfaceDanger = dangerAboveShaft(dangerGrid, entrances, tileX);
-          if (surfaceDanger < FLEE_THRESHOLD) {
-            ants.fleeShelterUntilTick[id] = -1; // all clear → resume task
+          // Re-derive the exit by nearest open entrance to the shaft column (the
+          // ant held there; descent preserves posX and the two grids share a
+          // width). No open entrance at all → STAY sheltered (re-arm) rather than
+          // resuming into a stuck-underground state that would read as an active-
+          // but-immobile reserve; it recovers when an entrance reopens.
+          const exit = pickNearestOpenEntrance(entrances, tileX, 0);
+          if (exit === null) {
+            ants.fleeShelterUntilTick[id] = tick + SHELTER_COOLDOWN_TICKS;
           } else {
-            ants.fleeShelterUntilTick[id] = tick + SHELTER_COOLDOWN_TICKS; // re-arm
+            // Sample the surface DangerTrail above the exit: resume if it has
+            // decayed below the threshold, else re-arm another cooldown.
+            const surfaceDanger =
+              dangerGrid !== undefined
+                ? phGet(dangerGrid, exit.surfaceTileX, exit.surfaceTileY)
+                : 0;
+            ants.fleeShelterUntilTick[id] =
+              surfaceDanger < FLEE_THRESHOLD ? -1 : tick + SHELTER_COOLDOWN_TICKS;
           }
         }
       }
@@ -257,6 +269,18 @@ function setMillTarget(
   dangerGrid: PheromoneGrid | undefined,
 ): void {
   const ants = world.ants;
+  // Step 15b runs AFTER spider-scatter (tick step 13e), which writes an
+  // away-from-reticle target for surface non-fighters within
+  // SPIDER_SCATTER_RADIUS_TILES of world.scatterReticleTile. Milling must NOT
+  // clobber that safety target: the scatter reticle is the spider's HUNT TARGET,
+  // which can differ from the current DangerTrail (danger 0 on the worker's own
+  // tile, so it would otherwise mill toward the incoming threat). Preserve the
+  // scatter target when the worker is inside the reticle radius.
+  const reticle = world.scatterReticleTile;
+  if (reticle !== null) {
+    const manh = Math.abs(tileX - reticle.x) + Math.abs(tileY - reticle.y);
+    if (manh <= SPIDER_SCATTER_RADIUS_TILES) return;
+  }
   // Mill around the nearest SAFE open entrance — symmetric with the flee-entry
   // pick. Never mill TOWARD a camped entrance: the spider's DangerTrail is a tight
   // 5-tile cross (radius 1, no diffusion), so an idle worker at radius 2-3 reads
@@ -296,27 +320,5 @@ function setMillTarget(
 /** DangerTrail at an entrance's surface tile (0 if no grid). Guards the flee gate. */
 function entranceDanger(dangerGrid: PheromoneGrid | undefined, ent: NestEntrance): number {
   if (dangerGrid === undefined) return 0;
-  return phGet(dangerGrid, ent.surfaceTileX, ent.surfaceTileY);
-}
-
-/**
- * Danger on the surface above a sheltering ant's shaft — the "poke head out"
- * sample. The ant held at the shaft (underground tileX === the entrance
- * surfaceTileX, since descent preserves posX and the two grids share a width),
- * so the entrance is re-derived by nearest open entrance to that column — no
- * stored entrance id needed. Using the NEAREST open entrance (not an exact
- * column match) tolerates a same-colony-occupancy nudge off the shaft tile and a
- * shaft entrance that closed mid-shelter (the ant emerges via the next open
- * one). No open entrance at all → 0 (stop sheltering; the ant is stuck
- * underground regardless of phase). 0 danger grid → 0.
- */
-function dangerAboveShaft(
-  dangerGrid: PheromoneGrid | undefined,
-  entrances: readonly NestEntrance[],
-  shaftTileX: number,
-): number {
-  if (dangerGrid === undefined) return 0;
-  const ent = pickNearestOpenEntrance(entrances, shaftTileX, 0);
-  if (ent === null) return 0;
   return phGet(dangerGrid, ent.surfaceTileX, ent.surfaceTileY);
 }
