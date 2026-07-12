@@ -41,6 +41,69 @@ const ZONE_SURFACE = 0; // Zone.Surface (raw; terrain.ts not imported into this 
 // no flee target), matching the movement code's `colony.entrances && …` guard.
 const NO_ENTRANCES = [] as const;
 
+/** Fixed-point centre of tile `t` (matches the sim's tile-centre convention). */
+function tileCenter(t: number): number {
+  return (t << FP_SHIFT) + (FP_ONE >> 1);
+}
+
+/**
+ * Nearest OPEN entrance whose surface tile is SAFE (DangerTrail < FLEE_THRESHOLD).
+ * Skipping camped entrances is what lets a worker flee to a farther clear exit
+ * instead of being suppressed because its nearest open entrance is dangerous
+ * (Codex P2). Returns null when no safe open entrance exists.
+ */
+function pickNearestSafeEntrance(
+  entrances: readonly NestEntrance[],
+  tileX: number,
+  tileY: number,
+  dangerGrid: PheromoneGrid | undefined,
+): NestEntrance | null {
+  return pickNearestOpenEntrance(
+    entrances,
+    tileX,
+    tileY,
+    (ent) => entranceDanger(dangerGrid, ent) < FLEE_THRESHOLD,
+  );
+}
+
+/**
+ * Point a fleeing worker at a SAFE entrance and choose its routing. Returns true
+ * if a safe open entrance exists (the caller sets phase 0), false if none does
+ * (the caller holds).
+ *
+ * Routing is a HYBRID so the P2 safe-entrance fix doesn't cost obstacle-aware
+ * routing in the common case:
+ *   - If the nearest OPEN entrance is itself the safe one (single-entrance
+ *     colonies, or the nearest open happens to be clear) → leave targetPosX/Y = -1
+ *     so the movement routes via the obstacle-aware multi-source surface BFS.
+ *   - Only when the nearest open entrance is CAMPED but a farther one is clear →
+ *     write the safe entrance's tile so the movement flee-dash straight-lines
+ *     there, skipping the BFS (which would otherwise pull toward the camped
+ *     nearer entrance — Codex P2). Straight-line is the fallback precisely because
+ *     it lacks obstacle avoidance; using it only in the multi-entrance case keeps
+ *     the single-entrance economy (REQ-C1) on the BFS path.
+ */
+function setFleeTarget(
+  world: WorldState,
+  id: number,
+  entrances: readonly NestEntrance[],
+  tileX: number,
+  tileY: number,
+  dangerGrid: PheromoneGrid | undefined,
+): boolean {
+  const safe = pickNearestSafeEntrance(entrances, tileX, tileY, dangerGrid);
+  if (safe === null) return false;
+  const nearestOpen = pickNearestOpenEntrance(entrances, tileX, tileY);
+  if (safe === nearestOpen) {
+    world.ants.targetPosX[id] = -1; // nearest open is safe → BFS routing
+    world.ants.targetPosY[id] = -1;
+  } else {
+    world.ants.targetPosX[id] = tileCenter(safe.surfaceTileX); // straight-line to the far safe exit
+    world.ants.targetPosY[id] = tileCenter(safe.surfaceTileY);
+  }
+  return true;
+}
+
 /**
  * Step 15b — surface idle-reserve milling + general pheromone-driven flee.
  *
@@ -99,28 +162,23 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
         if (task !== AntTask.Idle && task !== AntTask.Foraging) continue;
         const danger = dangerGrid !== undefined ? phGet(dangerGrid, tileX, tileY) : 0;
         if (danger >= FLEE_THRESHOLD) {
-          // Enter flee — but only toward a SAFE open entrance. If the nearest open
-          // entrance is itself dangerous (the spider is camping it), dashing there
-          // runs the worker straight into the threat; instead don't flee and let
-          // the existing spider-scatter (tick step 13e) push it away. Fixes the
-          // "flee toward the spider" edge that otherwise feeds a spider camped on a
-          // colony's only entrance (marginal AI colonies starve — REQ-C1). No safe
-          // entrance at all → stay put (deterministic no-open-entrance fallback).
-          const target = pickNearestOpenEntrance(entrances, tileX, tileY);
-          if (target !== null && entranceDanger(dangerGrid, target) < FLEE_THRESHOLD) {
-            ants.fleeShelterUntilTick[id] = 0; // dashing; movement routes to entrance
+          // Flee toward the nearest SAFE open entrance (skipping camped ones): a
+          // camped nearest entrance must NOT suppress fleeing when a farther clear
+          // entrance exists (Codex P2). setFleeTarget also picks the routing
+          // (BFS vs straight-line) — see its doc.
+          if (setFleeTarget(world, id, entrances, tileX, tileY, dangerGrid)) {
+            ants.fleeShelterUntilTick[id] = 0; // dashing toward the safe entrance
+          } else {
+            // No safe/open entrance → HOLD (clear any stale mill target). This
+            // holds an IDLE worker (the V34 mill branch needs a non-(-1) target,
+            // so it falls through to getTaskDirection → (0,0)). A FORAGING worker
+            // does NOT hold — it keeps its own foraging dispatch (SearchingFood
+            // wanders outward, away from the nest); freezing it would just make it
+            // stationary bait, so letting it keep working is the deliberate v1
+            // choice. (Foragers-hold refinement is v2.)
+            ants.targetPosX[id] = -1;
+            ants.targetPosY[id] = -1;
           }
-          // Whether we dash (safe entrance found) or don't (no safe/open entrance),
-          // drop any stale mill target. This makes an IDLE worker HOLD: the V34
-          // mill branch (ant-movement.ts) needs a non-(-1) target, so with it
-          // cleared an Idle ant falls through to getTaskDirection → (0,0). A
-          // FORAGING worker does NOT hold — it keeps its own foraging dispatch
-          // (SearchingFood wanders outward, away from the nest); freezing it in
-          // place would just make it stationary bait, so letting it keep working
-          // is the deliberate v1 choice. It flees properly once its own tile trips
-          // the gate or a safe entrance opens. (Foragers-hold refinement is v2.)
-          ants.targetPosX[id] = -1;
-          ants.targetPosY[id] = -1;
           continue;
         }
         // No danger → milling. Only Idle workers mill; surface foragers keep
@@ -132,15 +190,14 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
         // Dashing toward an entrance.
         if (zone === ZONE_SURFACE) {
           const danger = dangerGrid !== undefined ? phGet(dangerGrid, tileX, tileY) : 0;
-          // Abort the dash if the immediate danger has passed, OR no open entrance
-          // remains (target closed mid-flight), OR the nearest open entrance turned
-          // dangerous (spider moved onto it) — never keep dashing into the threat.
-          // Resume the underlying task next tick.
-          const target = pickNearestOpenEntrance(entrances, tileX, tileY);
+          // Abort the dash if the immediate danger has passed, OR no SAFE open
+          // entrance remains (target closed / went dangerous mid-flight) — never
+          // keep dashing into the threat; resume the underlying task next tick.
+          // Otherwise re-point at the CURRENT nearest safe entrance + routing (it
+          // can change as the danger field shifts or the worker moves).
           if (
             danger < FLEE_THRESHOLD ||
-            target === null ||
-            entranceDanger(dangerGrid, target) >= FLEE_THRESHOLD
+            !setFleeTarget(world, id, entrances, tileX, tileY, dangerGrid)
           ) {
             ants.fleeShelterUntilTick[id] = -1;
           }
@@ -183,21 +240,15 @@ function setMillTarget(
   dangerGrid: PheromoneGrid | undefined,
 ): void {
   const ants = world.ants;
-  const ent = pickNearestOpenEntrance(entrances, tileX, tileY);
+  // Mill around the nearest SAFE open entrance — symmetric with the flee-entry
+  // pick. Never mill TOWARD a camped entrance: the spider's DangerTrail is a tight
+  // 5-tile cross (radius 1, no diffusion), so an idle worker at radius 2-3 reads
+  // danger 0 on its OWN tile and would otherwise keep ambling toward the threat,
+  // clustering next to it before the per-tile flee gate trips (REQ-C1); it would
+  // also OVERWRITE the away-target spider-scatter (tick step 13e) just wrote. No
+  // safe open entrance → clear the target and hold in place.
+  const ent = pickNearestSafeEntrance(entrances, tileX, tileY, dangerGrid);
   if (ent === null) {
-    ants.targetPosX[id] = -1;
-    ants.targetPosY[id] = -1;
-    return;
-  }
-  // Symmetric with the flee-entry guard (line ~110): never mill TOWARD a
-  // dangerous entrance. The spider's DangerTrail is a tight 5-tile cross (radius
-  // 1, no diffusion), so an idle worker at radius 2-3 reads danger 0 on its OWN
-  // tile and would otherwise keep ambling toward a camped entrance — clustering
-  // next to the threat before the per-tile flee gate ever trips (REQ-C1). It
-  // would also OVERWRITE the away-target spider-scatter (tick step 13e) just
-  // wrote. Clear the target and hold in place instead (matches the flee-hold
-  // path's clear at line ~120).
-  if (entranceDanger(dangerGrid, ent) >= FLEE_THRESHOLD) {
     ants.targetPosX[id] = -1;
     ants.targetPosY[id] = -1;
     return;

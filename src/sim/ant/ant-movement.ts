@@ -282,8 +282,11 @@ export function tickAntMovement(
           task === AntTask.Nursing ||
           (task === AntTask.Foraging && foodCarrying > 0) ||
           (task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.ReturningToNest) ||
-          // #209 PR A (V34) — a dashing fleeing ant (any non-combat task) heads
-          // for the nearest open entrance to dive underground.
+          // #209 PR A (V34) — a dashing fleeing ant routing via the BFS
+          // (targetPosX === -1: its nearest open entrance is safe) computes an
+          // entrance target here. A fleeing ant with an explicit targetPosX (the
+          // multi-entrance camped-nearest case) is instead handled by the
+          // flee-dash branch below and ignores this target.
           fleePhase === 0;
       } else {
         // Zone.Underground — underground carriers compute an entrance target
@@ -353,7 +356,29 @@ export function tickAntMovement(
       }
     }
 
-    if (chamberTargetX !== -1 && !chamberFoodUnreachable) {
+    if (fleePhase === 0 && zone === Zone.Surface && ants.targetPosX[id] !== -1) {
+      // #209 PR A (V34) — flee dash, straight-line variant. Only fleeing ants with
+      // an EXPLICIT safe-entrance target (step 15b's multi-entrance camped-nearest
+      // case) land here; they steer STRAIGHT-LINE toward that safe tile rather than
+      // the multi-source surface BFS, which would route toward the nearer camped
+      // entrance (Codex P2). Fleeing ants whose nearest open entrance is already
+      // safe (targetPosX===-1) fall through to the obstacle-aware BFS entrance path
+      // below — that's the common/single-entrance case (REQ-C1). The zone-transition
+      // descent (needsUnderground: fleePhase===0) dives the ant on arrival. Takes
+      // precedence over every task dispatch so a fleeing carrier/forager routes to
+      // safety rather than to a deposit/search target.
+      const ftx = ants.targetPosX[id]!;
+      const posX = ants.posX[id]!;
+      const posY = ants.posY[id]!;
+      const step = pickCardinalStep(
+        ants,
+        id,
+        (ftx >> FP_SHIFT) - (posX >> FP_SHIFT),
+        (ants.targetPosY[id]! >> FP_SHIFT) - (posY >> FP_SHIFT),
+      );
+      dx = unpackStepDx(step);
+      dy = unpackStepDy(step);
+    } else if (chamberTargetX !== -1 && !chamberFoodUnreachable) {
       // PRD §4d: underground carrying forager routes to a FoodStorage Open
       // tile. Prefer the food flow-field when available — straight-line
       // steering walks through Solid dirt on bent tunnels (see the
@@ -504,9 +529,11 @@ export function tickAntMovement(
       if (
         !stepped &&
         zone === Zone.Surface &&
-        // #209 PR A (V34) — a dashing fleeing ant routes to the nearest open
-        // entrance via the surface BFS field too (it is seeded from every open
-        // entrance), so it steers around features instead of straight-lining.
+        // A fleeing ant on the BFS path (fleePhase===0 with targetPosX===-1: its
+        // nearest open entrance is safe) uses this obstacle-aware multi-source
+        // surface BFS. A fleeing ant with an explicit safe-entrance target
+        // (targetPosX!==-1, the multi-entrance camped-nearest case) is handled by
+        // the flee-dash branch above and never reaches here (#209 PR A, Codex P2).
         (isHomeBoundForager || fleePhase === 0) &&
         entranceFlowFields !== undefined
       ) {

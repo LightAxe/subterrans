@@ -151,6 +151,42 @@ describe('flee — enter / safe-entrance gate (#209 PR A)', () => {
     expect(world.ants.fleeShelterUntilTick[id]).not.toBe(-1);
   });
 
+  it('flees to a FARTHER SAFE entrance when the nearest open entrance is camped (Codex P2)', () => {
+    // Codex P2: a camped nearest entrance must not suppress fleeing when a farther
+    // clear entrance exists — the worker routes to the safe one.
+    const world = createScenario(SEED);
+    world.spider = null;
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const near = openEntrance(world, PLAYER_COLONY_ID);
+    const far: NestEntrance = {
+      entranceId: 99,
+      surfaceTileX: near.surfaceTileX,
+      surfaceTileY: near.surfaceTileY + 10,
+      isOpen: true,
+    };
+    colony.entrances.push(far);
+    // Worker just past the near entrance; danger blankets the near entrance AND
+    // the worker, but the far entrance stays clear.
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      near.surfaceTileX,
+      near.surfaceTileY + 2,
+      AntTask.Idle,
+    );
+    seedDanger(
+      world,
+      PLAYER_COLONY_ID,
+      near.surfaceTileX,
+      near.surfaceTileY,
+      2,
+      FLEE_THRESHOLD * 4,
+    );
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(0); // fled (not suppressed)
+    expect(world.ants.targetPosY[id]! >> FP_SHIFT).toBe(far.surfaceTileY); // toward the SAFE far exit
+  });
+
   it('does NOT flee when the only open entrance is itself dangerous (spider camping it)', () => {
     const world = createScenario(SEED);
     world.spider = null;
