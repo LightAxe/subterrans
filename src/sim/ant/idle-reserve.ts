@@ -20,7 +20,7 @@ import {
   SIM_VERSION_V34_IDLE_RESERVE_FLEE,
   SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
 } from '../types.js';
-import type { ColonyId } from '../colony/colony-store.js';
+import { isInChamberFootprint, type ColonyId } from '../colony/colony-store.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { phGet, pheromoneGridKey, type PheromoneGrid } from '../pheromone/pheromone-store.js';
@@ -36,15 +36,9 @@ import {
   SURFACE_GRID_HEIGHT,
   SPIDER_SCATTER_RADIUS_TILES,
 } from '../constants.js';
-import { canEnterSurfaceTile, canEnterUndergroundTile } from './ant-motion.js';
+import { canEnterSurfaceTile, canEnterUndergroundTile, DIR_DX, DIR_DY } from './ant-motion.js';
 
 const ZONE_SURFACE = 0; // Zone.Surface (raw; terrain.ts not imported into this leaf-ish behavior)
-
-// #209 PR C — the 4 cardinal directions (N, E, S, W) for the underground idle
-// wander. Cardinal-only (no diagonals) — matches the movement `pickCardinalStep`
-// and avoids any corner-cut passability question.
-const WANDER_DX = [0, 1, 0, -1] as const;
-const WANDER_DY = [-1, 0, 1, 0] as const;
 
 // `colony.entrances` is a Phase-3 caller-side extension (createColonyRecord does
 // not set it), so minimal test worlds can leave it undefined. Fall back to this
@@ -69,15 +63,8 @@ function tileCenter(t: number): number {
  */
 function isInOwnChamber(world: WorldState, id: number, x: number, y: number): boolean {
   const colony = world.colonies[world.ants.colonyId[id]! as unknown as ColonyId];
-  if (colony === undefined) return false;
-  const chambers = colony.chambers;
-  for (let c = 0; c < chambers.length; c++) {
-    const ch = chambers[c]!;
-    const bx = ch.posX >> FP_SHIFT;
-    const by = ch.posY >> FP_SHIFT;
-    if (x >= bx && x < bx + ch.width && y >= by && y < by + ch.height) return true;
-  }
-  return false;
+  if (colony === undefined) return false; // bare/test world — mirrors isOccupancyExempt's guard
+  return isInChamberFootprint(colony, x, y);
 }
 
 /**
@@ -171,8 +158,8 @@ function setUndergroundWanderStep(
   const r = hash32((world.tick >> IDLE_MILL_RETARGET_SHIFT) ^ id) & 3;
   for (let k = 0; k < 4; k++) {
     const dir = (r + k) & 3;
-    const nx = tileX + WANDER_DX[dir]!;
-    const ny = tileY + WANDER_DY[dir]!;
+    const nx = tileX + DIR_DX[dir]!;
+    const ny = tileY + DIR_DY[dir]!;
     if (ny === 0) continue; // never target the shaft row
     if (!canEnterUndergroundTile(grid, nx, ny, AntTask.Idle)) continue;
     if (!isInOwnChamber(world, id, nx, ny)) continue; // confine to occupancy-exempt tiles

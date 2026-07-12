@@ -7,6 +7,7 @@
 // arena (#231).
 import type { ChamberFlowFields } from '../chamber-flow.js';
 import { isFoodChamberDepositable } from '../colony/colony-system.js';
+import { isInChamberFootprint } from '../colony/colony-store.js';
 import {
   SEARCH_LEASH_MAX_WAVE,
   SEARCH_PAUSE_BASE_TICKS,
@@ -1725,14 +1726,7 @@ function isOccupancyExempt(
   const colony = world.colonies[colonyId];
   if (!colony) return false;
 
-  for (let c = 0; c < colony.chambers.length; c++) {
-    const chamber = colony.chambers[c]!;
-    const bx = chamber.posX >> FP_SHIFT;
-    const by = chamber.posY >> FP_SHIFT;
-    if (tileX >= bx && tileX < bx + chamber.width && tileY >= by && tileY < by + chamber.height) {
-      return true;
-    }
-  }
+  if (isInChamberFootprint(colony, tileX, tileY)) return true;
 
   if (colony.entrances) {
     for (let e = 0; e < colony.entrances.length; e++) {
