@@ -1294,13 +1294,15 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       const id = colony.workers[i]!;
       if (world.ants.alive[id] !== 1) continue;
       if (world.ants.task[id] !== AntTask.Idle) continue;
-      // #209 (V34) — skip a sheltering-underground reserve worker
-      // (fleeShelterUntilTick > 0). It is Idle-by-task but frozen at its shaft by
-      // the flee state machine (ant-movement.ts:175 skips its movement, and no
-      // task change resets the shelter timer), so reassigning it to fight/nurse/dig
-      // would count it as an active worker that never moves for the whole threat
-      // window. Leave it in reserve; it resumes on the all-clear. The field is -1
-      // pre-V34, so this is a no-op for pre-V34 replays.
+      // #209 (V34) — skip a reserve worker on a timed flee HOLD
+      // (fleeShelterUntilTick > 0). For the Idle workers this step collects that
+      // is always an underground shelterer (the surface hold is homebound
+      // foragers only, never Idle): Idle-by-task but frozen at its shaft by the
+      // flee state machine (movement skips its movement, and no task change
+      // resets the timer), so reassigning it to fight/nurse/dig would count it as
+      // an active worker that never moves for the whole threat window. Leave it
+      // in reserve; it resumes on the all-clear. The field is -1 pre-V34, so this
+      // is a no-op for pre-V34 replays.
       if (world.ants.fleeShelterUntilTick[id]! > 0) continue;
       eligible.push(id);
     }

@@ -163,15 +163,18 @@ export function tickAntMovement(
     const zone = ants.zone[id]!;
     const foodCarrying = ants.foodCarrying[id]!;
 
-    // #209 PR A (V34) — flee/shelter phase (-1 not fleeing / 0 dashing to an
-    // entrance / >0 sheltering underground). Captured once; -1 for pre-V34 worlds
-    // so every flee branch below is inert. Step 15b (tickIdleReserveAndFlee) owns
-    // all writes to this field; movement only reads it to steer.
+    // #209 PR A (V34) — flee/hold phase (-1 not fleeing / 0 dashing to an
+    // entrance / >0 a timed HOLD: underground = sheltering at the shaft, surface
+    // = a homebound forager with no safe entrance held in place). Captured once;
+    // -1 for pre-V34 worlds so every flee branch below is inert. Step 15b
+    // (tickIdleReserveAndFlee) owns all writes; movement only reads it to steer.
     const fleePhase =
       world.simVersion >= SIM_VERSION_V34_IDLE_RESERVE_FLEE ? ants.fleeShelterUntilTick[id]! : -1;
-    // Sheltering ants HOLD at the entrance shaft they dove into: no movement, no
-    // ascent, no deeper routing — bypass the whole dispatch + zone-transition
-    // block until step 15b clears the shelter (all-clear) or re-arms it.
+    // Any hold (>0, either zone) FREEZES the ant: no movement, no ascent, no
+    // deeper routing — bypass the whole dispatch + zone-transition block until
+    // step 15b clears it (all-clear / safe route) or re-arms it. Sheltering ants
+    // hold at the shaft they dove into; held homebound foragers hold on the
+    // surface at the danger boundary.
     if (fleePhase > 0) continue;
 
     // Issue #27 — carrier wait state holds the ant in place until the wake

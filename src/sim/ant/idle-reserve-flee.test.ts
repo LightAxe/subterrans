@@ -344,6 +344,352 @@ describe('flee — enter / safe-entrance gate (#209 PR A)', () => {
 });
 
 // ---------------------------------------------------------------------------
+describe('flee — homebound-forager surface hold (#209 PR A, Codex P2)', () => {
+  // A homebound forager (carrying food / ReturningToNest) with NO safe entrance
+  // must NOT be handed back to the normal danger-unaware dispatcher (which routes
+  // it into a camped sole entrance). It holds in place — fleeShelterUntilTick > 0
+  // on the SURFACE (zone disambiguates it from underground sheltering) — and
+  // re-evaluates each tick until an entrance clears (dash) or it stops being
+  // homebound (release).
+
+  const HOMEBOUND = [
+    { label: 'CarryingFood', subTask: ForagingSubState.CarryingFood, food: FP_ONE },
+    { label: 'ReturningToNest (empty)', subTask: ForagingSubState.ReturningToNest, food: 0 },
+  ] as const;
+
+  for (const v of HOMEBOUND) {
+    it(`holds a ${v.label} forager in place when every entrance is dangerous (direct step 15b)`, () => {
+      const world = createScenario(SEED);
+      world.simVersion = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
+      world.spider = null;
+      const ent = openEntrance(world, PLAYER_COLONY_ID);
+      const id = spawnWorker(
+        world,
+        PLAYER_COLONY_ID,
+        ent.surfaceTileX + 2,
+        ent.surfaceTileY,
+        AntTask.Foraging,
+      );
+      world.ants.subTask[id] = v.subTask;
+      world.ants.foodCarrying[id] = v.food;
+      world.ants.speed[id] = FP_ONE;
+      // Danger blankets the worker AND the sole open entrance → no safe entrance.
+      seedDanger(
+        world,
+        PLAYER_COLONY_ID,
+        ent.surfaceTileX,
+        ent.surfaceTileY,
+        3,
+        FLEE_THRESHOLD * 4,
+      );
+      const startX = world.ants.posX[id]!;
+      const startY = world.ants.posY[id]!;
+      tickIdleReserveAndFlee(world);
+      expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0); // surface hold, not -1
+      expect(world.ants.zone[id]).toBe(Zone.Surface);
+      // Movement then FREEZES it (fleePhase > 0): no step into the camped entrance.
+      tickAntMovement(world, new Rng(1), createDigFlowFields());
+      expect(world.ants.posX[id]).toBe(startX);
+      expect(world.ants.posY[id]).toBe(startY);
+    });
+  }
+
+  it('the hold survives a full tick for a CarryingFood forager (step-order guard)', () => {
+    // Codex round 1: the excursion boundary runs before step 15b and can flip an
+    // empty ReturningToNest ant to SearchingFood if food signals exist. A
+    // CarryingFood carrier (foodCarrying > 0) is stable across a whole tick, so
+    // use it to prove the hold is not defeated by step ordering. No food signals
+    // are seeded, so nothing pulls the carrier off its homebound state.
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 2,
+      ent.surfaceTileY,
+      AntTask.Foraging,
+    );
+    world.ants.subTask[id] = ForagingSubState.CarryingFood;
+    world.ants.foodCarrying[id] = FP_ONE;
+    world.ants.speed[id] = FP_ONE;
+    const startX = world.ants.posX[id]!;
+    const startY = world.ants.posY[id]!;
+    // Re-seed danger each tick (it decays) so the entrance stays camped.
+    for (let t = 0; t < 3; t++) {
+      seedDanger(
+        world,
+        PLAYER_COLONY_ID,
+        ent.surfaceTileX,
+        ent.surfaceTileY,
+        3,
+        FLEE_THRESHOLD * 8,
+      );
+      tick(world, []);
+    }
+    expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0); // still held
+    expect(world.ants.zone[id]).toBe(Zone.Surface); // never walked into the entrance
+    expect(world.ants.posX[id]).toBe(startX);
+    expect(world.ants.posY[id]).toBe(startY);
+  });
+
+  it('a phase-0 homebound dasher whose OWN tile is safe but last entrance went dangerous enters the hold (not -1)', () => {
+    // The behavioral delta vs the old code: with the dasher's own tile decayed
+    // below threshold and no safe entrance left, the old non-homebound path
+    // released to -1 (handing it back to the camped-entrance dispatcher); the
+    // homebound path must instead drop into the surface hold.
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 2,
+      ent.surfaceTileY,
+      AntTask.Foraging,
+    );
+    world.ants.subTask[id] = ForagingSubState.ReturningToNest;
+    world.ants.fleeShelterUntilTick[id] = 0; // already dashing
+    // Camp the entrance (radius 1) but leave the worker's own tile (+2) SAFE.
+    seedDanger(world, PLAYER_COLONY_ID, ent.surfaceTileX, ent.surfaceTileY, 1, FLEE_THRESHOLD * 4);
+    expect(
+      phGet(
+        world.pheromoneGrids[
+          pheromoneGridKey(PLAYER_COLONY_ID, PheromoneType.DangerTrail, 'surface')
+        ]!,
+        ent.surfaceTileX + 2,
+        ent.surfaceTileY,
+      ),
+    ).toBeLessThan(FLEE_THRESHOLD); // own tile safe
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBeGreaterThan(0); // held, not released to -1
+  });
+
+  it('re-arms while unsafe, then dashes toward the entrance once it clears', () => {
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 2,
+      ent.surfaceTileY,
+      AntTask.Foraging,
+    );
+    world.ants.subTask[id] = ForagingSubState.ReturningToNest;
+    world.ants.speed[id] = FP_ONE;
+    // Camp worker + entrance → enter the hold.
+    seedDanger(world, PLAYER_COLONY_ID, ent.surfaceTileX, ent.surfaceTileY, 3, FLEE_THRESHOLD * 4);
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0);
+    // Next tick, still camped → re-arm (stays > 0).
+    world.tick += 1;
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0);
+    // Clear the danger → the entrance is safe → transition to a dash (phase 0).
+    seedDanger(world, PLAYER_COLONY_ID, ent.surfaceTileX, ent.surfaceTileY, 3, 0);
+    world.tick += 1;
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(0); // dashing
+    // Movement steps it TOWARD the selected safe entrance (Manhattan distance drops).
+    const distBefore =
+      Math.abs((world.ants.posX[id]! >> FP_SHIFT) - ent.surfaceTileX) +
+      Math.abs((world.ants.posY[id]! >> FP_SHIFT) - ent.surfaceTileY);
+    tickAntMovement(world, new Rng(1), createDigFlowFields());
+    const distAfter =
+      Math.abs((world.ants.posX[id]! >> FP_SHIFT) - ent.surfaceTileX) +
+      Math.abs((world.ants.posY[id]! >> FP_SHIFT) - ent.surfaceTileY);
+    expect(distAfter).toBeLessThan(distBefore);
+  });
+
+  it('a surface-held worker that flips to SearchingFood releases to -1 (no longer homebound)', () => {
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 2,
+      ent.surfaceTileY,
+      AntTask.Foraging,
+    );
+    world.ants.subTask[id] = ForagingSubState.ReturningToNest;
+    seedDanger(world, PLAYER_COLONY_ID, ent.surfaceTileX, ent.surfaceTileY, 3, FLEE_THRESHOLD * 4);
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0); // held
+    // The forager stops heading home (breakout back to searching).
+    world.ants.subTask[id] = ForagingSubState.SearchingFood;
+    world.tick += 1;
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1); // released
+  });
+
+  it('a SearchingFood forager with no safe entrance is NOT held — it keeps foraging (v1 exception)', () => {
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 2,
+      ent.surfaceTileY,
+      AntTask.Foraging,
+    );
+    world.ants.subTask[id] = ForagingSubState.SearchingFood; // outward, not homebound
+    world.ants.foodCarrying[id] = 0;
+    seedDanger(world, PLAYER_COLONY_ID, ent.surfaceTileX, ent.surfaceTileY, 3, FLEE_THRESHOLD * 4);
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1); // no hold; keeps its own dispatch
+  });
+
+  it('the suppressed-flee path PRESERVES a SearchingFood forager’s spider-scatter target (ship-review advisory)', () => {
+    // A SearchingFood forager (not homebound) on a danger tile with no safe
+    // entrance must NOT have its target cleared: step 13e (spider scatter) may
+    // have written an away-from-reticle target this tick, and clearing it would
+    // revert the forager to scent-wander back toward the threat. Only Idle
+    // workers get the target cleared (they need -1 to hold). Symmetric with
+    // setMillTarget's reticle-preservation guard.
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const forager = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 2,
+      ent.surfaceTileY,
+      AntTask.Foraging,
+    );
+    world.ants.subTask[forager] = ForagingSubState.SearchingFood;
+    world.ants.foodCarrying[forager] = 0;
+    // Simulate step 13e having written an away-from-reticle scatter target.
+    const scatterX = center(ent.surfaceTileX + 6);
+    const scatterY = center(ent.surfaceTileY);
+    world.ants.targetPosX[forager] = scatterX;
+    world.ants.targetPosY[forager] = scatterY;
+    // Danger blankets the worker AND the sole entrance → suppressed flee.
+    seedDanger(world, PLAYER_COLONY_ID, ent.surfaceTileX, ent.surfaceTileY, 3, FLEE_THRESHOLD * 4);
+    // An Idle worker in the SAME situation, to prove the asymmetry.
+    const idle = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 1,
+      ent.surfaceTileY,
+      AntTask.Idle,
+    );
+    world.ants.targetPosX[idle] = center(ent.surfaceTileX + 6);
+    world.ants.targetPosY[idle] = center(ent.surfaceTileY);
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[forager]).toBe(-1); // not held
+    expect(world.ants.targetPosX[forager]).toBe(scatterX); // scatter target preserved
+    expect(world.ants.targetPosY[forager]).toBe(scatterY);
+    expect(world.ants.targetPosX[idle]).toBe(-1); // Idle worker's target IS cleared (holds)
+  });
+
+  it('a phase-0 homebound dasher whose own tile danger decays STAYS dashing (entrance still safe)', () => {
+    // Entrance safety — not the worker's own tile — governs a homebound dasher.
+    // With its own tile safe AND a safe entrance present, the old non-homebound
+    // path would have released to -1; the homebound path keeps dashing (phase 0)
+    // so normal routing can't re-aim it at a camped entrance.
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 2,
+      ent.surfaceTileY,
+      AntTask.Foraging,
+    );
+    world.ants.subTask[id] = ForagingSubState.ReturningToNest;
+    world.ants.fleeShelterUntilTick[id] = 0; // dashing
+    // No danger anywhere: own tile safe, entrance safe.
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(0); // still dashing, NOT released to -1
+  });
+
+  it('a held homebound forager reassigned to Fighting abandons the hold (top guard)', () => {
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 2,
+      ent.surfaceTileY,
+      AntTask.Foraging,
+    );
+    world.ants.subTask[id] = ForagingSubState.ReturningToNest;
+    seedDanger(world, PLAYER_COLONY_ID, ent.surfaceTileX, ent.surfaceTileY, 3, FLEE_THRESHOLD * 4);
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0); // held
+    world.ants.task[id] = AntTask.Fighting; // allocator recruited it
+    world.tick += 1;
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1); // hold abandoned; free to fight
+  });
+
+  it('descends at an INTERMEDIATE own open entrance en route and shelters (intentional; Codex round 2)', () => {
+    // A phase-0 dasher with an explicit farther-safe target that crosses a
+    // DIFFERENT own open entrance descends THERE — descent is not gated to the
+    // selected target. This is correct: the spider threat is surface-only, so an
+    // earlier shaft is a strictly safer exit. The poke-head-out then re-arms
+    // while the surface above the shaft stays dangerous, rather than resuming.
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
+    world.spider = null;
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const near = openEntrance(world, PLAYER_COLONY_ID); // the intermediate entrance (real shaft)
+    const far: NestEntrance = {
+      entranceId: 99,
+      surfaceTileX: near.surfaceTileX,
+      surfaceTileY: near.surfaceTileY + 10, // the "selected safe" target, farther along +Y
+      isOpen: true,
+    };
+    colony.entrances.push(far);
+    // Worker ONE tile before `near` on the straight-line path to `far`, so a
+    // single dash step lands it ON the intermediate entrance and the post-move
+    // descent fires there (descent uses the ant's own column shaft, which `near`
+    // genuinely owns — `far` shares the column purely to keep the dash collinear).
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      near.surfaceTileX,
+      near.surfaceTileY - 1,
+      AntTask.Foraging,
+    );
+    world.ants.subTask[id] = ForagingSubState.ReturningToNest;
+    world.ants.speed[id] = FP_ONE; // whole-tile step → lands exactly on `near`
+    world.ants.fleeShelterUntilTick[id] = 0;
+    world.ants.targetPosX[id] = center(far.surfaceTileX);
+    world.ants.targetPosY[id] = center(far.surfaceTileY);
+    tickAntMovement(world, new Rng(1), createDigFlowFields());
+    expect(world.ants.zone[id]).toBe(Zone.Underground); // descended at the intermediate shaft
+    const shelterUntil = world.ants.fleeShelterUntilTick[id];
+    expect(shelterUntil).toBeGreaterThan(0); // now sheltering, not still dashing
+    // Surface above the shaft stays dangerous → poke head out re-arms, not -1.
+    seedDanger(
+      world,
+      PLAYER_COLONY_ID,
+      near.surfaceTileX,
+      near.surfaceTileY,
+      1,
+      FLEE_THRESHOLD * 4,
+    );
+    world.tick = shelterUntil + 1; // past the cooldown
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBeGreaterThan(world.tick); // re-armed
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe('flee — no-revisit bypass (Codex P2)', () => {
   // A fleeing SearchingFood forager's step toward shelter must NOT be diverted by
   // the generic recent-tiles anti-backtrack filter (returning toward the entrance

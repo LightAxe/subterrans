@@ -35,23 +35,21 @@ export interface NestEntrance {
  * target a closed entrance it cannot descend. Semantics match the inline surface
  * nearest-open loop in ant-movement.ts.
  *
- * Optional `accept` further filters open entrances — flee uses it to skip
- * DANGEROUS entrances so it routes to the nearest *safe* exit rather than the
- * nearest open one (#209 PR A, Codex P2): a camped nearest entrance no longer
- * suppresses fleeing when a farther clear entrance exists.
+ * DANGER-unaware by design: the flee path needs the nearest *safe* entrance, but
+ * that scan is inlined in `idle-reserve.ts` (`pickNearestSafeEntrance`) to stay
+ * allocation-free in the per-worker hot loop rather than passing a predicate
+ * here — so this helper deliberately has no filter parameter.
  */
 export function pickNearestOpenEntrance(
   entrances: readonly NestEntrance[],
   fromTileX: number,
   fromTileY: number,
-  accept?: (ent: NestEntrance) => boolean,
 ): NestEntrance | null {
   let best: NestEntrance | null = null;
   let bestDist = -1;
   for (let e = 0; e < entrances.length; e++) {
     const ent = entrances[e]!;
     if (!ent.isOpen) continue;
-    if (accept !== undefined && !accept(ent)) continue;
     const dist = Math.abs(ent.surfaceTileX - fromTileX) + Math.abs(ent.surfaceTileY - fromTileY);
     if (
       bestDist < 0 ||

@@ -238,13 +238,18 @@ export interface AntComponents {
    * task (NOT a new AntTask), so the ant resumes cleanly when the danger clears:
    *   -1 = not fleeing (default)
    *    0 = dashing to the nearest own OPEN entrance (no shelter timer yet)
-   *   >0 = sheltering underground at the entrance shaft until this tick
+   *   >0 = timed HOLD until this tick; `zone` disambiguates which kind:
+   *        Underground = sheltering at the entrance shaft (poke head out on
+   *        expiry); Surface = a homebound forager (carrying food / ReturningToNest)
+   *        with no SAFE entrance, held in place one tick at a time so normal
+   *        routing can't walk it into a camped entrance (re-evaluated each tick).
    *
    * Set by the step-15b idle-reserve/flee pass (idle-reserve.ts) on danger
    * (surface DangerTrail >= FLEE_THRESHOLD) and cleared once the danger decays
-   * ("poke head out"). The V34 movement branch honours it: a dash-phase ant
-   * gets surface→underground descent intent regardless of task; a sheltering
-   * ant holds at the shaft (suppresses ascent + deeper routing).
+   * ("poke head out") or the worker reaches/regains a safe route. The V34
+   * movement branch honours it: a dash-phase ant gets surface→underground
+   * descent intent regardless of task; any hold (`>0`, either zone) freezes the
+   * ant (suppresses movement, ascent, and deeper routing).
    *
    * Reset to -1 in initAnt. Round-trips through copyWorldState and save/load
    * (optional-on-load; defaults to -1 on pre-V34 saves). All read/write paths
