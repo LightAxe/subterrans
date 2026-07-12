@@ -239,6 +239,62 @@ export const PHEROMONE_FLOOR_V14 = 128;
 /** PRD §9c — Maximum pheromone value a cell can hold (cap). */
 export const PHEROMONE_CAP = 65280;
 
+// ---------------------------------------------------------------------------
+// #209 PR A (V34) — surface idle reserve + pheromone-driven flee
+// ---------------------------------------------------------------------------
+
+/**
+ * DangerTrail intensity at/above which a non-combat surface worker (idle or
+ * forager) flees for the nearest own open entrance. Calibrated against the
+ * spider's danger deposit (SPIDER_DANGER_DEPOSIT=1280 center, 640 neighbor,
+ * DANGER_DECAY_FP=10): a worker on a tile the spider currently occupies or is
+ * adjacent to (>= 640) trips this immediately, while a decayed trail the spider
+ * left several tiles / ~20 ticks behind falls below it (no false alarm). 512 =
+ * 2 × FP_ONE. Balance-sensitive — UAT-tunable; the flee unit tests assert the
+ * behaviour at an explicitly-seeded danger value, not this exact number.
+ */
+export const FLEE_THRESHOLD = 512;
+
+/**
+ * Ticks a fleeing worker shelters underground at the entrance shaft before it
+ * "pokes its head out" — re-samples the surface DangerTrail above the shaft and
+ * either resumes (danger decayed below FLEE_THRESHOLD) or re-arms another
+ * cooldown. 100 ticks ≈ 5 s at the 20 Hz sim rate. UAT-tunable.
+ */
+export const SHELTER_COOLDOWN_TICKS = 100;
+
+/**
+ * Chebyshev radius of the entrance annulus an idle-reserve worker mills within,
+ * around its nearest own open entrance. The exact entrance tile (offset 0,0) is
+ * excluded (the spider hunt-counts it) — workers wander the ring 1..radius.
+ */
+export const IDLE_MILL_RADIUS = 3;
+
+/**
+ * Idle-mill retarget window as a bit shift: a worker re-rolls its wander tile
+ * every `1 << IDLE_MILL_RETARGET_SHIFT` = 64 ticks via `hash32(bucket ^ antId)`
+ * (no RNG draw). MUST stay a shift (power-of-two window) for the integer
+ * `tick >> SHIFT` bucket.
+ */
+export const IDLE_MILL_RETARGET_SHIFT = 6;
+
+/**
+ * Idle-mill amble throttle: a milling worker only steps toward its wander tile
+ * on ticks where `tick % IDLE_MILL_TICK_DIVISOR === 0`, so the reserve ambles
+ * rather than darts. Purely cosmetic pacing; deterministic.
+ */
+export const IDLE_MILL_TICK_DIVISOR = 4;
+
+/**
+ * #209 PR A (V34) — danger-alarm deposit when a cross-colony enemy ant kills a
+ * surface adult non-fighter worker. Seeds a 5-tile DangerTrail cross (this
+ * center, half at each neighbor) on the VICTIM colony's surface grid at the
+ * death tile, so nearby workers flee an active raid. A one-shot pulse (unlike
+ * the spider's per-tick reseed) matched to SPIDER_DANGER_DEPOSIT so a single
+ * FLEE_THRESHOLD governs both danger sources.
+ */
+export const KILL_ALARM_DANGER_DEPOSIT = 1280;
+
 /**
  * PRD §9c — Food-trail pheromone deposited per forager step. Legacy value
  * (v13 and earlier). 512 = 2 × FP_ONE.

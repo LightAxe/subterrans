@@ -232,6 +232,30 @@ export interface AntComponents {
    * Set to the opponent's index on windup; reset to -1 on kill or death.
    */
   readonly combatOpponentId: Int32Array;
+  /**
+   * #209 PR A (V34) — general flee/shelter phase for a non-combat surface
+   * worker. A transient MODE layered over the ant's underlying Idle/Foraging
+   * task (NOT a new AntTask), so the ant resumes cleanly when the danger clears:
+   *   -1 = not fleeing (default)
+   *    0 = dashing to the nearest own OPEN entrance (no shelter timer yet)
+   *   >0 = timed HOLD until this tick; `zone` disambiguates which kind:
+   *        Underground = sheltering at the entrance shaft (poke head out on
+   *        expiry); Surface = a homebound forager (carrying food / ReturningToNest)
+   *        with no SAFE entrance, held in place one tick at a time so normal
+   *        routing can't walk it into a camped entrance (re-evaluated each tick).
+   *
+   * Set by the step-15b idle-reserve/flee pass (idle-reserve.ts) on danger
+   * (surface DangerTrail >= FLEE_THRESHOLD) and cleared once the danger decays
+   * ("poke head out") or the worker reaches/regains a safe route. The V34
+   * movement branch honours it: a dash-phase ant gets surface→underground
+   * descent intent regardless of task; any hold (`>0`, either zone) freezes the
+   * ant (suppresses movement, ascent, and deeper routing).
+   *
+   * Reset to -1 in initAnt. Round-trips through copyWorldState and save/load
+   * (optional-on-load; defaults to -1 on pre-V34 saves). All read/write paths
+   * are gated `simVersion >= V34`, so legacy replays never observe or mutate it.
+   */
+  readonly fleeShelterUntilTick: Int32Array;
 }
 
 /**
@@ -288,6 +312,9 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
   carryingBroodId.fill(-1);
   const carriedBy = new Int32Array(maxEntities);
   carriedBy.fill(-1);
+  // #209 PR A (V34) — flee/shelter phase. -1 = not fleeing (sentinel default).
+  const fleeShelterUntilTick = new Int32Array(maxEntities);
+  fleeShelterUntilTick.fill(-1);
 
   return {
     posX: new Int32Array(maxEntities),
@@ -343,6 +370,8 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
       a.fill(-1);
       return a;
     })(),
+    // #209 PR A (V34) — flee/shelter phase. -1 = not fleeing.
+    fleeShelterUntilTick,
   };
 }
 
@@ -436,6 +465,8 @@ export function initAnt(ants: AntComponents, id: EntityId, spec: InitAntSpec): v
   ants.homeGroundBonusHp[id] = 0;
   ants.attackCooldown[id] = 0;
   ants.combatOpponentId[id] = -1;
+  // #209 PR A (V34) — fresh ant is not fleeing.
+  ants.fleeShelterUntilTick[id] = -1;
 }
 
 // ---------------------------------------------------------------------------

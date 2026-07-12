@@ -478,6 +478,11 @@ interface SerializedAnts {
   homeGroundBonusHp: number[];
   attackCooldown: number[];
   combatOpponentId: number[];
+  // #209 PR A (V34) — flee/shelter phase column. OPTIONAL on load: a pre-V34
+  // in-window save (MIN_ACCEPTED..V33) predates the field, so it is absent and
+  // deserializeAnts leaves the createAntComponents -1 default in place. Always
+  // emitted by serializeAnts on V34+ saves.
+  fleeShelterUntilTick?: number[];
 }
 
 interface SerializedColony {
@@ -787,6 +792,8 @@ function serializeAnts(a: AntComponents, nextEntityId: number): SerializedAnts {
     homeGroundBonusHp: Array.from(a.homeGroundBonusHp),
     attackCooldown: Array.from(a.attackCooldown),
     combatOpponentId: Array.from(a.combatOpponentId),
+    // #209 PR A (V34) — flee/shelter phase (-1 / 0 / >0).
+    fleeShelterUntilTick: Array.from(a.fleeShelterUntilTick),
   };
 }
 
@@ -1146,6 +1153,25 @@ function validateAntColumns(saved: SerializedAnts, capacity: number): void {
       }
     }
   }
+
+  // #209 PR A (V34) — fleeShelterUntilTick is OPTIONAL-on-load: a pre-V34
+  // in-window save (MIN_ACCEPTED..V33) predates the column, so `undefined` is
+  // valid and means "default -1 for every ant" (deserializeAnts skips the copy).
+  // Only validate when the save actually carries the column. Values: -1 (not
+  // fleeing), 0 (dashing), or any tick >= 0 (sheltering-until).
+  const flee = saved.fleeShelterUntilTick;
+  if (flee !== undefined) {
+    if (!Array.isArray(flee)) {
+      throw new Error(`Invalid ants.fleeShelterUntilTick: expected a number[]`);
+    }
+    const n = Math.min(flee.length, capacity);
+    for (let i = 0; i < n; i++) {
+      const v = flee[i] as unknown;
+      if (typeof v !== 'number' || !(v === -1 || (Number.isInteger(v) && v >= 0))) {
+        throw new Error(`Invalid ants.fleeShelterUntilTick[${i}]: ${String(v)}`);
+      }
+    }
+  }
 }
 
 function deserializeAnts(
@@ -1192,6 +1218,11 @@ function deserializeAnts(
   copyIntoInt32(a.homeGroundBonusHp, saved.homeGroundBonusHp);
   copyIntoInt32(a.attackCooldown, saved.attackCooldown);
   copyIntoInt32(a.combatOpponentId, saved.combatOpponentId);
+  // #209 PR A (V34) — optional-on-load flee/shelter phase. Absent on pre-V34
+  // saves → the createAntComponents -1 fill (all "not fleeing") stands.
+  if (saved.fleeShelterUntilTick !== undefined) {
+    copyIntoInt32(a.fleeShelterUntilTick, saved.fleeShelterUntilTick);
+  }
   return a;
 }
 

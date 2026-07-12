@@ -16,7 +16,7 @@
 import { describe, it, expect } from 'vitest';
 import { createScenario } from './scenario.js';
 import { tick } from './tick.js';
-import { allocateEntityId } from './types.js';
+import { allocateEntityId, SIM_VERSION_V33_OCCUPANCY_CENTER } from './types.js';
 import type { WorldState, SpiderState } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask, ForagingSubState } from './enums.js';
@@ -197,6 +197,15 @@ describe('pre-descent gate — #165 rampaging spider blockade at an entrance', (
 
   it('blockade resolves — the held carrier is caught (damaged or killed) by the spider', () => {
     const world = createScenario(SEED);
+    // Pin to V33: this documents the pre-flee #165 lethality of an ISOLATED
+    // carrier held on a spider-camped entrance. Under V34 (#209 PR A) idle-reserve
+    // workers mill/flee TO their open entrances, so in this pathological setup
+    // (spider parked ON the only entrance) a lower-index colony worker congregates
+    // on the tile and becomes the spider's single-target combat partner, shielding
+    // the manually-spawned carrier. The V34 flee behaviour is covered in
+    // idle-reserve-flee.test.ts; the #165 GATE itself (no descent past the spider)
+    // still holds at V34 — see the sibling test above, which is not pinned.
+    world.simVersion = SIM_VERSION_V33_OCCUPANCY_CENTER;
     world.spider = rampagingSpiderAt(PLAYER_START_X, PLAYER_START_Y, PLAYER_COLONY_ID);
 
     const carrierId = spawnCarrierOnPlayerEntrance(world);

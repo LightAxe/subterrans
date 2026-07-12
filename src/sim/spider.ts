@@ -4,7 +4,9 @@
 
 import type { WorldState, SpiderState } from './types.js';
 import { emitEvent } from './telemetry.js';
-import { phGet, phSet, pheromoneKeySuffix } from './pheromone/pheromone-store.js';
+import { pheromoneKeySuffix } from './pheromone/pheromone-store.js';
+import { depositDangerCross } from './pheromone/danger.js';
+import { hash32 } from './hash.js';
 import { AntTask, PheromoneType } from './enums.js';
 import { tierIndex } from './ai-state.js';
 import { getScratch } from './scratch.js';
@@ -31,7 +33,6 @@ import {
   SPIDER_FEED_HEAL_INTERVAL_TICKS,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
-  PHEROMONE_CAP,
   SPIDER_EDGE_MARGIN_TILES,
 } from './constants.js';
 import { SIM_VERSION_V31_SPIDER_TERRAIN, SIM_VERSION_V32_AI_OP_VALIDATION } from './types.js';
@@ -319,19 +320,11 @@ function findNearestEntrance(
  * Score = foodStored + workerCount * 10. The richer colony is favored 60/40
  * using a deterministic hash of (terrainSeed ^ rampageStartTick) so the
  * result looks organic but is fully replay-safe. No world.rngState draws.
+ *
+ * `hash32` (the Murmur3 finalizer shared by rampage/meander/feed-away targeting)
+ * moved to hash.ts (#209 PR A) so the idle-reserve wander can reuse it; the
+ * arithmetic is unchanged, so the spider's replay identity is byte-identical.
  */
-/**
- * Murmur3 32-bit finalizer over a single integer seed. Good avalanche,
- * deterministic, no rngState draw. Shared by pickRampageTarget, the V23 meander
- * target, and the V23 feed-away direction. Returns an unsigned 32-bit int.
- */
-function hash32(x: number): number {
-  let h = Math.imul(x | 0, 2654435761) >>> 0;
-  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
-  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
-  return (h ^ (h >>> 16)) >>> 0;
-}
-
 function pickRampageTarget(world: WorldState, spider: SpiderState): number {
   const candidates: Array<{ colonyId: number; score: number }> = [];
   for (const key in world.colonies) {
@@ -561,40 +554,16 @@ function seedDangerPheromone(world: WorldState, spider: SpiderState): void {
   const tileY = spider.posY >> FP_SHIFT;
   const center = SPIDER_DANGER_DEPOSIT;
   const nb = SPIDER_DANGER_DEPOSIT >> 1;
-  const w = SURFACE_GRID_WIDTH;
-  const h = SURFACE_GRID_HEIGHT;
 
-  // Deposit in both colonies' surface DangerTrail grids.
-  // Unrolled 5-cell cross to avoid per-tick array allocation (AGENTS.md hot-loop rule).
+  // Deposit in both colonies' surface DangerTrail grids. The 5-cell cross is the
+  // shared depositDangerCross helper (#209 PR A) — byte-identical to the former
+  // explicitly-guarded unroll (phGet/phSet are bounds-safe, so off-grid arms are
+  // no-ops), allocation-free.
   for (const colonyKey in world.pheromoneGrids) {
     if (!Object.hasOwn(world.pheromoneGrids, colonyKey)) continue;
     if (!colonyKey.endsWith(SURFACE_DANGER_SUFFIX)) continue;
     const grid = world.pheromoneGrids[colonyKey]!;
-    // center (spider is always within surface bounds)
-    {
-      const v = phGet(grid, tileX, tileY) + center;
-      phSet(grid, tileX, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v);
-    }
-    // north
-    if (tileY > 0) {
-      const v = phGet(grid, tileX, tileY - 1) + nb;
-      phSet(grid, tileX, tileY - 1, v > PHEROMONE_CAP ? PHEROMONE_CAP : v);
-    }
-    // south
-    if (tileY < h - 1) {
-      const v = phGet(grid, tileX, tileY + 1) + nb;
-      phSet(grid, tileX, tileY + 1, v > PHEROMONE_CAP ? PHEROMONE_CAP : v);
-    }
-    // west
-    if (tileX > 0) {
-      const v = phGet(grid, tileX - 1, tileY) + nb;
-      phSet(grid, tileX - 1, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v);
-    }
-    // east
-    if (tileX < w - 1) {
-      const v = phGet(grid, tileX + 1, tileY) + nb;
-      phSet(grid, tileX + 1, tileY, v > PHEROMONE_CAP ? PHEROMONE_CAP : v);
-    }
+    depositDangerCross(grid, tileX, tileY, center, nb);
   }
 }
 

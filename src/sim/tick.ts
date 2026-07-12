@@ -58,6 +58,7 @@ import {
   tickExcursionBoundary,
   routeForagerPriority,
   updateFightAntTargets,
+  tickIdleReserveAndFlee,
 } from './ant/ant-system.js';
 import { findEmbeddedByTightening } from './underground-occupancy.js';
 import { tickPheromoneDecay } from './pheromone/pheromone-system.js';
@@ -195,6 +196,7 @@ void (undefined as unknown as PendingChamber);
  * 13.  routeForagerPriority — route SearchingFood foragers to marked piles (NEW in Phase 7)
  * 14.  Pheromone deposit
  * 15.  Pheromone decay
+ * 15b. tickIdleReserveAndFlee — surface idle-reserve milling + pheromone-driven flee (#209 PR A, V34)
  * 16.  Movement (zone-aware, extended in Phase 7 with DigFlowFields for pure direction reads)
  * 16b. tickForagerActions — forager pickup (surface) + deposit (underground) (Phase 9 playability fix)
  * 16c. tickNurseActions — nurse arrival→Feeding→Idle state machine (09 reproduction-gate memo: finite nursing)
@@ -1291,7 +1293,18 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     for (let i = 0; i < colony.workers.length; i++) {
       const id = colony.workers[i]!;
       if (world.ants.alive[id] !== 1) continue;
-      if (world.ants.task[id] === AntTask.Idle) eligible.push(id);
+      if (world.ants.task[id] !== AntTask.Idle) continue;
+      // #209 (V34) — skip a reserve worker on a timed flee HOLD
+      // (fleeShelterUntilTick > 0). For the Idle workers this step collects that
+      // is always an underground shelterer (the surface hold is homebound
+      // foragers only, never Idle): Idle-by-task but frozen at its shaft by the
+      // flee state machine (movement skips its movement, and no task change
+      // resets the timer), so reassigning it to fight/nurse/dig would count it as
+      // an active worker that never moves for the whole threat window. Leave it
+      // in reserve; it resumes on the all-clear. The field is -1 pre-V34, so this
+      // is a no-op for pre-V34 replays.
+      if (world.ants.fleeShelterUntilTick[id]! > 0) continue;
+      eligible.push(id);
     }
     // Sort ascending by EntityId — "lowest-EntityId first" per PRD §7c (deterministic per SCEN-06).
     eligible.sort((a, b) => a - b);
@@ -1480,10 +1493,10 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     const pheromoneType = decodePheromoneKeyType(gridKey);
     // V14+: slower food-trail decay (PHEROMONE_DECAY_FP_V14=2 vs legacy 5).
     // DangerTrail decays at DANGER_DECAY_FP; the spider deposits it every tick
-    // (spider.ts seedDangerPheromone) and the render overlay draws it, but NO
-    // ant reads it for routing today — danger avoidance is Phase 5b work and will
-    // be a NEW RNG-consuming, simVersion-gated behavior, not an activation of
-    // existing plumbing.
+    // (spider.ts seedDangerPheromone) and the cross-colony kill alarm deposits a
+    // one-shot pulse (combat.ts killAnt). Since V34 (#209 PR A) non-combat surface
+    // workers READ it for routing at step 15b (tickIdleReserveAndFlee) to flee —
+    // a simVersion-gated behavior, no RNG draw.
     // V14+ floor is raised to 128 to match the decayFp=2 arithmetic stall
     // point (decayFp=2 gives 0 decay for values < 128); prevents zombie trails.
     let decayRate: number;
@@ -1496,6 +1509,16 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     }
     tickPheromoneDecay(grid, decayRate, decayFloor);
   }
+
+  // ---------------------------------------------------------------------------
+  // Step 15b: Idle reserve + flee (#209 PR A, V34) — surface idle-worker milling
+  //           at open entrances and a general pheromone-driven flee. Runs AFTER
+  //           pheromone decay (step 15) so danger reads are post-decay, and
+  //           BEFORE movement (step 16) so its flee/mill target writes take
+  //           precedence over routeForagerPriority (step 13) for fleeing ants.
+  //           Inert below V34 (early return) — no pre-V34 replay divergence.
+  // ---------------------------------------------------------------------------
+  tickIdleReserveAndFlee(world);
 
   // ---------------------------------------------------------------------------
   // Step 16: Movement (zone-aware; DigFlowFields passed for pure direction reads only).
