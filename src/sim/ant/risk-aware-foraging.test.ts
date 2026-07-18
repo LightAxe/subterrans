@@ -17,6 +17,7 @@ import {
   createWorldState,
   allocateEntityId,
   SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
+  SIM_VERSION_V36_RISK_AWARE_FORAGING,
   type WorldState,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
@@ -74,6 +75,29 @@ describe('A1 (a) sampleForagingDirection danger penalty', () => {
 });
 
 // ---------------------------------------------------------------------------
+// RNG draw-count — danger flips the sampler branch (the real V36 vs V35 delta)
+// ---------------------------------------------------------------------------
+
+describe('A1 sampler RNG draw-count', () => {
+  it('danger dropping a strong trail into the weak-trail band consumes RNG the legacy path does not', () => {
+    const food = createPheromoneGrid(10, 10);
+    phSet(food, 6, 5, 500); // strong (≥ 128) → layer 1 → 0 RNG draws
+    const danger = createPheromoneGrid(10, 10);
+    phSet(danger, 6, 5, 400); // net 100: weak (0 < net < 128) → layer 2 → consumes RNG
+
+    const rngV35 = new Rng(999);
+    sampleForagingDirection(food, 5, 5, rngV35); // no danger grid (V35 / legacy): layer 1, 0 draws
+    const rngV36 = new Rng(999);
+    sampleForagingDirection(food, 5, 5, rngV36, -1, -1, danger); // V36: layer 2, ≥ 1 draw
+
+    // Same seed, but the danger path consumed RNG the legacy path did not — the
+    // streams have diverged. This is the PRNG draw-count change the world-level
+    // replay tests (determinism.test.ts) then prove stays deterministic.
+    expect(rngV35.nextInt(1_000_000)).not.toBe(rngV36.nextInt(1_000_000));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // (b)/(c) hasNearbyPheromoneSignal mirror + V35 gate, via tickExcursionBoundary
 // ---------------------------------------------------------------------------
 
@@ -85,7 +109,7 @@ describe('A1 (a) sampleForagingDirection danger penalty', () => {
  */
 function setupPastLeashForager(
   simVersion: number,
-  poison: boolean,
+  dangerValue: number,
 ): { world: WorldState; antId: number } {
   const world = createWorldState(42, MAX_TEST_ENTITIES);
   world.simVersion = simVersion;
@@ -119,31 +143,42 @@ function setupPastLeashForager(
   const dangerGrid = createPheromoneGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
   world.pheromoneGrids[pheromoneGridKey(COLONY_ID, PheromoneType.DangerTrail, 'surface')] =
     dangerGrid;
-  if (poison) phSet(dangerGrid, foodTileX, antTileY, 1000); // net 0 — fully cancels the trail.
+  if (dangerValue > 0) phSet(dangerGrid, foodTileX, antTileY, dangerValue);
 
   return { world, antId };
 }
 
 describe('A1 (b) boundary mirror at V36', () => {
-  it('a fully-poisoned trail no longer holds a past-leash forager → ReturningToNest', () => {
-    const { world, antId } = setupPastLeashForager(35 + 1 /* V36 */, true);
+  it('a trail poisoned beyond recovery (danger ≫ food) stops holding a past-leash forager → ReturningToNest', () => {
+    // food 1000, danger 2000 → net < 0 even after the danger-decay alignment.
+    const { world, antId } = setupPastLeashForager(SIM_VERSION_V36_RISK_AWARE_FORAGING, 2000);
     tickExcursionBoundary(world);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.ReturningToNest);
   });
 
   it('control: a CLEAN trail still holds the forager → stays SearchingFood', () => {
-    const { world, antId } = setupPastLeashForager(35 + 1 /* V36 */, false);
+    const { world, antId } = setupPastLeashForager(SIM_VERSION_V36_RISK_AWARE_FORAGING, 0);
+    tickExcursionBoundary(world);
+    expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
+  });
+
+  it('decay-aligned: danger == food is NOT cancelled here (food decays slower → usable) → stays SearchingFood', () => {
+    // Raw danger 1000 would cancel food 1000, but the sampler reads them one decay
+    // step later where food > danger (danger decays faster). The boundary decays the
+    // danger term forward to agree with the sampler, so it must NOT flip the ant home
+    // for a trail that will be usable next tick (Codex P2 fix).
+    const { world, antId } = setupPastLeashForager(SIM_VERSION_V36_RISK_AWARE_FORAGING, 1000);
     tickExcursionBoundary(world);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
   });
 });
 
 describe('A1 (c) V35 gate regression — danger grid never consulted pre-V36', () => {
-  it('the SAME poisoned trail is ignored at V35: forager stays SearchingFood (byte-identical to clean)', () => {
-    const { world, antId } = setupPastLeashForager(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER, true);
+  it('a danger ≫ food trail is ignored at V35: forager stays SearchingFood (byte-identical to clean)', () => {
+    const { world, antId } = setupPastLeashForager(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER, 2000);
     tickExcursionBoundary(world);
-    // At V35 the danger grid is not passed, so the poisoned trail still counts
-    // as signal — exactly the pre-V36 behaviour.
+    // At V35 the danger grid is not passed, so even a heavily-poisoned trail still
+    // counts as signal — exactly the pre-V36 behaviour.
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
   });
 });

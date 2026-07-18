@@ -8,6 +8,7 @@ import type { ChamberRecord, ColonyRecord } from '../colony/colony-store.js';
 import { colonyHasNoDepositTarget, isFoodChamberDepositable } from '../colony/colony-system.js';
 import {
   BASE_FOOD_STORAGE_CAPACITY,
+  DANGER_DECAY_FP,
   DANGER_ROUTE_AVOID_THRESHOLD,
   DANGER_ROUTE_WEIGHT_FP,
   EXCURSION_HEADING_JITTER_TICKS,
@@ -632,7 +633,16 @@ export function chooseExcursionDirection(
       const lhy = turnDir === 0 ? -hx : hx;
       const nx = tileX + lhx;
       const ny = tileY + lhy;
-      if (nx >= 0 && nx < SURFACE_GRID_WIDTH && ny >= 0 && ny < SURFACE_GRID_HEIGHT) {
+      const inBounds = nx >= 0 && nx < SURFACE_GRID_WIDTH && ny >= 0 && ny < SURFACE_GRID_HEIGHT;
+      // A1 (V36): don't wobble INTO a moderate-danger tile the committed-heading
+      // danger-steer below would avoid — keeps the wander's danger-avoidance
+      // uniform across the turn / keep / wobble branches. Danger read only, no RNG
+      // (the 3 draws above are already spent); undefined pre-V36 (or danger-free)
+      // = the legacy bounds-only behaviour.
+      const laterallySafe =
+        inBounds &&
+        (dangerGrid === undefined || phGet(dangerGrid, nx, ny) < DANGER_ROUTE_AVOID_THRESHOLD);
+      if (laterallySafe) {
         // Persist the (unchanged) heading and reset ticks — the NEXT turn-check
         // fires after another MIN+jitter run along the original heading.
         ants.searchHeadingX[antId] = hx;
@@ -640,7 +650,8 @@ export function chooseExcursionDirection(
         ants.searchHeadingTicks[antId] = EXCURSION_HEADING_MIN_TICKS + jitter;
         return { dx: lhx, dy: lhy };
       }
-      // Lateral would step off-grid → fall through to keep-heading branch.
+      // Lateral would step off-grid, or (V36) into a moderate-danger tile → fall
+      // through to keep-heading branch.
       ticks = EXCURSION_HEADING_MIN_TICKS + jitter;
     } else {
       // Keep heading, reset the turn-check clock.
@@ -777,7 +788,19 @@ function hasNearbyPheromoneSignal(
       const rawSignal = phGet(grid, sx, sy);
       if (rawSignal > 0) {
         if (dangerGrid === undefined) return true;
-        const penalty = Math.imul(phGet(dangerGrid, sx, sy), DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT;
+        // The sampler reads danger POST-decay (step 15) at movement (step 16);
+        // this boundary runs pre-decay (step 9c) and DangerTrail decays faster
+        // than FoodTrail, so the RAW danger here would cancel a signal the sampler
+        // will find usable — a premature ReturningToNest flip. Evaluate one
+        // danger-decay step forward so the danger term matches the sampler's
+        // post-decay view. (The < PHEROMONE_FLOOR snap in tickPheromoneDecay is
+        // immaterial here: it only zeroes sub-64 danger, whose penalty is already
+        // negligible against a real trail. Food is left pre-decay — its slow-decay
+        // skew is the pre-existing boundary behaviour, and it keeps clean-trail
+        // V36 flips identical to V35.)
+        const dRaw = phGet(dangerGrid, sx, sy);
+        const dangerDecayed = dRaw - ((dRaw * DANGER_DECAY_FP) >> FP_SHIFT);
+        const penalty = Math.imul(dangerDecayed, DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT;
         if (rawSignal - penalty > 0) return true;
       }
     }

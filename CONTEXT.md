@@ -129,8 +129,12 @@ _Avoid_: stockpile, reserve.
 
 **Pheromone**:
 A scalar field on a grid (`PheromoneType`). **FoodTrail** is the layer ants read to
-bias foraging routes; **DangerTrail** is laid by the spider and decays, but is
-**not** read by ant movement — it's a danger signal, not a routing input.
+bias foraging routes; **DangerTrail** is laid by the spider (and the V34 cross-colony
+kill alarm) and decays. Since **A1 (simVersion V36)** DangerTrail is also a *routing*
+input: SearchingFood foragers penalize a candidate step's FoodTrail by that cell's
+DangerTrail (`sampleForagingDirection`) and softly steer wandering routes away from it,
+gated so pre-V36 replays never consult it. (Lethal-proximity danger is handled
+separately by the V34 flee, not routing.)
 _Avoid_: trail (ambiguous on its own); **marker** (= the player's mark). **scent**
 is a *different* mechanism (see below) — never a synonym for pheromone.
 
