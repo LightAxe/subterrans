@@ -12,7 +12,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { sampleForagingDirection } from '../pheromone/pheromone-system.js';
-import { chooseExcursionDirection, tickExcursionBoundary } from './ant-system.js';
+import { chooseExcursionDirection, tickExcursionBoundary, tickAntMovement } from './ant-system.js';
 import {
   createWorldState,
   allocateEntityId,
@@ -21,7 +21,7 @@ import {
   type WorldState,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
-import { initAnt } from './ant-store.js';
+import { initAnt, pushRecentTile } from './ant-store.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
 import { createPheromoneGrid, phSet, pheromoneGridKey } from '../pheromone/pheromone-store.js';
 import { Rng } from '../rng.js';
@@ -32,6 +32,9 @@ import {
   DANGER_ROUTE_AVOID_THRESHOLD,
 } from '../constants.js';
 import { FP_SHIFT } from '../fixed.js';
+import { createDigFlowFields } from '../dig-system.js';
+import { createEntranceFlowFields } from '../entrance-flow.js';
+import { createChamberFlowFields } from '../chamber-flow.js';
 
 const COLONY_ID = 1;
 const MAX_TEST_ENTITIES = 64;
@@ -227,5 +230,81 @@ describe('A1 (d) chooseExcursionDirection danger-steer', () => {
     const { world, antId } = setupWanderer();
     const dir = chooseExcursionDirection(world, antId, new Rng(3)); // no danger grid
     expect(dir).toEqual({ dx: 1, dy: 0 }); // east — unchanged.
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (e) no-revisit alternate selection is danger-aware at V36 (Codex round 2) —
+// the downstream recent-tiles swap must not undo the sampler's safe choice.
+// ---------------------------------------------------------------------------
+
+describe('A1 (e) no-revisit alternate is danger-aware at V36', () => {
+  // A wandering SearchingFood forager at (10,10) committed east; the east tile
+  // (11,10) is a recent tile, so the no-revisit swap fires. In ALT order the
+  // first fresh alternate is North (10,9); we make North a spider-wake tile and
+  // leave NE (11,9) clean. Legacy takes North (no +x); V36 skips it for NE (+x).
+  function setup(simVersion: number): { world: WorldState; antId: number; x0: number } {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = simVersion;
+    const colony = createColonyRecord(COLONY_ID, 0);
+    colony.entrances = [
+      { entranceId: allocateEntityId(world), surfaceTileX: 0, surfaceTileY: 0, isOpen: true },
+    ];
+    world.colonies[COLONY_ID] = colony;
+
+    const TX = 10;
+    const TY = 10;
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId: COLONY_ID,
+      posX: TX << FP_SHIFT,
+      posY: TY << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
+    });
+    // Committed east heading with time on the clock → the wander returns east
+    // (empty FoodTrail grid + no food piles → sampler returns {0,0}).
+    world.ants.searchHeadingX[antId] = 1;
+    world.ants.searchHeadingY[antId] = 0;
+    world.ants.searchHeadingTicks[antId] = 5;
+    world.ants.searchPrevTileX[antId] = -1;
+    world.ants.searchPrevTileY[antId] = -1;
+
+    world.pheromoneGrids[pheromoneGridKey(COLONY_ID, PheromoneType.FoodTrail, 'surface')] =
+      createPheromoneGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
+
+    // The proposed east tile (11,10) is recent → triggers the no-revisit swap.
+    pushRecentTile(world.ants, antId, TX + 1, TY);
+
+    // North (10,9) — the first fresh alternate — is dangerous; NE (11,9) is clean.
+    // (East itself stays clean so the excursion-steer keeps the heading.)
+    const danger = createPheromoneGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
+    phSet(danger, TX, TY - 1, DANGER_ROUTE_AVOID_THRESHOLD + 100);
+    world.pheromoneGrids[pheromoneGridKey(COLONY_ID, PheromoneType.DangerTrail, 'surface')] =
+      danger;
+
+    return { world, antId, x0: world.ants.posX[antId]! };
+  }
+
+  function move(world: WorldState): void {
+    tickAntMovement(
+      world,
+      new Rng(1),
+      createDigFlowFields(),
+      createEntranceFlowFields(),
+      createChamberFlowFields(),
+    );
+  }
+
+  it('V36 skips the dangerous North alternate for clean NE (gains an east component)', () => {
+    const { world, antId, x0 } = setup(SIM_VERSION_V36_RISK_AWARE_FORAGING);
+    move(world);
+    expect(world.ants.posX[antId]! > x0).toBe(true); // NE has +x; North does not.
+  });
+
+  it('V35 control: takes the first fresh alternate North — no east component (danger ignored)', () => {
+    const { world, antId, x0 } = setup(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER);
+    move(world);
+    expect(world.ants.posX[antId]!).toBe(x0);
   });
 });

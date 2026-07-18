@@ -9,6 +9,7 @@ import type { ChamberFlowFields } from '../chamber-flow.js';
 import { isFoodChamberDepositable } from '../colony/colony-system.js';
 import { isInChamberFootprint } from '../colony/colony-store.js';
 import {
+  DANGER_ROUTE_AVOID_THRESHOLD,
   SEARCH_LEASH_MAX_WAVE,
   SEARCH_PAUSE_BASE_TICKS,
   SEARCH_PAUSE_JITTER_TICKS,
@@ -24,7 +25,7 @@ import type { DigFlowFields } from '../dig-system.js';
 import type { EntranceFlowFields } from '../entrance-flow.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
-import { pheromoneGridKey } from '../pheromone/pheromone-store.js';
+import { phGet, pheromoneGridKey } from '../pheromone/pheromone-store.js';
 import { sampleForagingDirection } from '../pheromone/pheromone-system.js';
 import { Rng } from '../rng.js';
 import {
@@ -1002,7 +1003,23 @@ export function tickAntMovement(
         // SW, W, NW) — fixed and deterministic, the same neighbor sweep the
         // queen overlap resolver uses, so the alternate-pick is easy to
         // reason about across the codebase.
+        // A1 (V36): among the fresh, in-bounds alternates prefer the FIRST that is
+        // also below DANGER_ROUTE_AVOID_THRESHOLD, so this no-revisit swap cannot
+        // undo the sampler's danger-aware choice by stepping onto a spider-wake
+        // tile (Codex). Freshness + bounds stay the HARD filter; danger is a soft
+        // preference with a first-fresh fallback. Gated + danger read only (no RNG);
+        // undefined pre-V36 (or danger-free) = the legacy first-fresh pick, so V35
+        // replays stay byte-identical.
+        const noRevisitDangerGrid =
+          world.simVersion >= SIM_VERSION_V36_RISK_AWARE_FORAGING
+            ? world.pheromoneGrids[
+                pheromoneGridKey(ants.colonyId[id]!, PheromoneType.DangerTrail, 'surface')
+              ]
+            : undefined;
         let found = false;
+        let fallbackAx = 0;
+        let fallbackAy = 0;
+        let foundFallback = false;
         for (let i = 0; i < ALT_DX.length; i++) {
           const ax = ALT_DX[i]!;
           const ay = ALT_DY[i]!;
@@ -1015,10 +1032,30 @@ export function tickAntMovement(
           if (candX < 0 || candX >= SURFACE_GRID_WIDTH || candY < 0 || candY >= SURFACE_GRID_HEIGHT)
             continue;
           if (isRecentTile(ants, id, candX, candY)) continue;
+          // Fresh + in-bounds alternate — the hard requirement is met.
+          if (!foundFallback) {
+            fallbackAx = ax;
+            fallbackAy = ay;
+            foundFallback = true;
+          }
+          if (
+            noRevisitDangerGrid !== undefined &&
+            phGet(noRevisitDangerGrid, candX, candY) >= DANGER_ROUTE_AVOID_THRESHOLD
+          ) {
+            continue; // dangerous — keep scanning for a safe fresh alternate.
+          }
           dx = ax;
           dy = ay;
           found = true;
           break;
+        }
+        if (!found && foundFallback) {
+          // Every fresh alternate was dangerous — take the first fresh one anyway
+          // (freshness is the hard requirement; the V34 flee backstops any tile at
+          // or above FLEE_THRESHOLD on the next tick).
+          dx = fallbackAx;
+          dy = fallbackAy;
+          found = true;
         }
         if (!found) {
           dx = 0;
