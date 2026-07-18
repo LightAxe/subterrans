@@ -29,6 +29,7 @@ import {
   PHEROMONE_FLOOR,
   EXPLORE_RATE_PERCENT,
   DANGER_ROUTE_WEIGHT_FP,
+  DANGER_ROUTE_AVOID_THRESHOLD,
 } from '../constants.js';
 // PHEROMONE_FLOOR is the default floor used in tickPheromoneDecay's signature.
 // Callers may pass PHEROMONE_FLOOR_V14 for V14+ food-trail grids.
@@ -329,10 +330,19 @@ export function sampleForagingDirection(
   if (reStrength > 0) {
     const absX = reDx < 0 ? -reDx : reDx;
     const absY = reDy < 0 ? -reDy : reDy;
-    if (absX >= absY) {
-      return { dx: reDx > 0 ? 1 : -1, dy: 0 };
+    const sdx = absX >= absY ? (reDx > 0 ? 1 : -1) : 0;
+    const sdy = absX >= absY ? 0 : reDy > 0 ? 1 : -1;
+    // A1 (V36): the reacquire TARGET cell was danger-penalized, but the actual
+    // first step toward it can be a different, dangerous tile. Don't step into a
+    // spider-wake tile to chase a remote trail — fall through to wander (which is
+    // danger-steered) instead (Codex). undefined dangerGrid = the legacy step.
+    if (
+      dangerGrid !== undefined &&
+      phGet(dangerGrid, tileX + sdx, tileY + sdy) >= DANGER_ROUTE_AVOID_THRESHOLD
+    ) {
+      return { dx: 0, dy: 0 };
     }
-    return { dx: 0, dy: reDy > 0 ? 1 : -1 };
+    return { dx: sdx, dy: sdy };
   }
 
   // No trail within REACQUIRE_RADIUS — caller falls through to wander.

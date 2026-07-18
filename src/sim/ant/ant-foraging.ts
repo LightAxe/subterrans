@@ -799,7 +799,7 @@ function hasNearbyPheromoneSignal(
         // skew is the pre-existing boundary behaviour, and it keeps clean-trail
         // V36 flips identical to V35.)
         const dRaw = phGet(dangerGrid, sx, sy);
-        const dangerDecayed = dRaw - ((dRaw * DANGER_DECAY_FP) >> FP_SHIFT);
+        const dangerDecayed = dRaw - (Math.imul(dRaw, DANGER_DECAY_FP) >> FP_SHIFT);
         const penalty = Math.imul(dangerDecayed, DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT;
         if (rawSignal - penalty > 0) return true;
       }
@@ -866,6 +866,19 @@ function colonyHasPriorityPile(world: WorldState, colonyId: number): boolean {
 export function tickExcursionBoundary(world: WorldState): void {
   const ants = world.ants;
 
+  // A1 (V36): resolve each colony's surface DangerTrail grid ONCE (few colonies)
+  // so the per-ant mirror lookup below doesn't build a pheromoneGridKey string per
+  // ant per tick (mirrors the tickAntMovement cache; AGENTS.md hot-loop rule).
+  // Empty pre-V36 → the gated read sees undefined and V35 replays stay byte-identical.
+  const surfaceDangerByColony: (PheromoneGrid | undefined)[] = [];
+  if (world.simVersion >= SIM_VERSION_V36_RISK_AWARE_FORAGING) {
+    for (const cidKey of Object.keys(world.colonies)) {
+      const cid = Number(cidKey);
+      surfaceDangerByColony[cid] =
+        world.pheromoneGrids[pheromoneGridKey(cid, PheromoneType.DangerTrail, 'surface')];
+    }
+  }
+
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1) continue;
     if (ants.task[id] !== AntTask.Foraging) continue;
@@ -903,10 +916,7 @@ export function tickExcursionBoundary(world: WorldState): void {
         // is fully cancelled by DangerTrail does not count as "signal" — otherwise
         // an over-leash forager lingers SearchingFood next to danger the sampler
         // would refuse to route into. Gated: undefined pre-V36 = legacy scan.
-        const dangerGrid =
-          world.simVersion >= SIM_VERSION_V36_RISK_AWARE_FORAGING
-            ? world.pheromoneGrids[pheromoneGridKey(colonyId, PheromoneType.DangerTrail, 'surface')]
-            : undefined;
+        const dangerGrid = surfaceDangerByColony[colonyId];
         // 09 follow-up issue 2: skip the ant's prev tile so its own just-left
         // trail doesn't count as "signal" and trap it in ReturningToNest
         // purgatory. Sentinels (-1,-1) are treated as "no prev" by the helper.

@@ -1177,27 +1177,33 @@ describe('A1 (V36) risk-aware foraging — replay determinism', () => {
     }
   }
 
-  function run(simVersion: number): string {
+  function run(simVersion: number): WorldState {
     const world = createScenario(SEED);
     world.simVersion = simVersion;
     depositSurfaceDanger(world, DANGER);
     for (let t = 0; t < TICKS; t++) tick(world, []);
-    return serializeWorldState(world);
+    return world;
   }
 
   it('V36 with danger routing active replays byte-identically (same seed → same state)', () => {
-    expect(run(SIM_VERSION_V36_RISK_AWARE_FORAGING)).toBe(run(SIM_VERSION_V36_RISK_AWARE_FORAGING));
-  });
-
-  it('V35 with the same danger replays byte-identically (gated-off legacy path)', () => {
-    expect(run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER)).toBe(
-      run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER),
+    expect(serializeWorldState(run(SIM_VERSION_V36_RISK_AWARE_FORAGING))).toBe(
+      serializeWorldState(run(SIM_VERSION_V36_RISK_AWARE_FORAGING)),
     );
   });
 
-  it('V36 diverges from V35 under the same danger — the gate is live (RNG stream changes)', () => {
-    expect(run(SIM_VERSION_V36_RISK_AWARE_FORAGING)).not.toBe(
-      run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER),
+  it('V35 with the same danger replays byte-identically (gated-off legacy path)', () => {
+    expect(serializeWorldState(run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER))).toBe(
+      serializeWorldState(run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER)),
+    );
+  });
+
+  it('V36 diverges from V35 under the same danger — behavioral (rngState, not simVersion)', () => {
+    // Compare rngState, NOT the full serialization: serializeWorldState includes the
+    // simVersion field (36 vs 35), so a full-string compare would pass even if the
+    // gated behavior were inactive (CodeRabbit). rngState diverges only when the
+    // danger penalty actually flips a sampler RNG branch during the run.
+    expect(run(SIM_VERSION_V36_RISK_AWARE_FORAGING).rngState).not.toBe(
+      run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER).rngState,
     );
   });
 });

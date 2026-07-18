@@ -25,7 +25,7 @@ import type { DigFlowFields } from '../dig-system.js';
 import type { EntranceFlowFields } from '../entrance-flow.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
-import { phGet, pheromoneGridKey } from '../pheromone/pheromone-store.js';
+import { phGet, pheromoneGridKey, type PheromoneGrid } from '../pheromone/pheromone-store.js';
 import { sampleForagingDirection } from '../pheromone/pheromone-system.js';
 import { Rng } from '../rng.js';
 import {
@@ -158,6 +158,21 @@ export function tickAntMovement(
   // all moves and zone transitions are committed, so every collision
   // (mobile-into-mobile, mobile-into-stationary, pre-existing stationary
   // duplicate) is visible at resolution time.
+
+  // A1 (V36): resolve each colony's surface DangerTrail grid ONCE per tick (there
+  // are only a couple of colonies) so the per-ant risk-aware routing lookups in the
+  // loop below (sampler / no-revisit / obstacle detour) index by colonyId instead of
+  // building a `pheromoneGridKey` template string per ant per tick — the AGENTS.md
+  // hot-loop allocation rule (Codex P1). Left empty (all undefined) pre-V36, so the
+  // gated reads see `undefined` and V35 replays stay byte-identical.
+  const surfaceDangerByColony: (PheromoneGrid | undefined)[] = [];
+  if (world.simVersion >= SIM_VERSION_V36_RISK_AWARE_FORAGING) {
+    for (const cidKey of Object.keys(world.colonies)) {
+      const cid = Number(cidKey);
+      surfaceDangerByColony[cid] =
+        world.pheromoneGrids[pheromoneGridKey(cid, PheromoneType.DangerTrail, 'surface')];
+    }
+  }
 
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1) continue;
@@ -705,12 +720,7 @@ export function tickAntMovement(
           // sampler and the wander edge-bounce so SearchingFood foragers prefer
           // safer routes. Gated AND surface-only — undefined otherwise, which is
           // the byte-identical legacy path.
-          const dangerGrid =
-            zone === Zone.Surface && world.simVersion >= SIM_VERSION_V36_RISK_AWARE_FORAGING
-              ? world.pheromoneGrids[
-                  pheromoneGridKey(colonyId, PheromoneType.DangerTrail, 'surface')
-                ]
-              : undefined;
+          const dangerGrid = zone === Zone.Surface ? surfaceDangerByColony[colonyId] : undefined;
           const key = pheromoneGridKey(colonyId, PheromoneType.FoodTrail, 'surface');
           const grid = world.pheromoneGrids[key];
           if (grid) {
@@ -1010,12 +1020,7 @@ export function tickAntMovement(
         // preference with a first-fresh fallback. Gated + danger read only (no RNG);
         // undefined pre-V36 (or danger-free) = the legacy first-fresh pick, so V35
         // replays stay byte-identical.
-        const noRevisitDangerGrid =
-          world.simVersion >= SIM_VERSION_V36_RISK_AWARE_FORAGING
-            ? world.pheromoneGrids[
-                pheromoneGridKey(ants.colonyId[id]!, PheromoneType.DangerTrail, 'surface')
-              ]
-            : undefined;
+        const noRevisitDangerGrid = surfaceDangerByColony[ants.colonyId[id]!];
         let found = false;
         let fallbackAx = 0;
         let fallbackAy = 0;
@@ -1262,12 +1267,8 @@ export function tickAntMovement(
         // tile (Codex). Scoped + gated — undefined for the queen / other tasks /
         // pre-V36, so their detours (and V35 replays) stay byte-identical.
         const detourDangerGrid =
-          world.simVersion >= SIM_VERSION_V36_RISK_AWARE_FORAGING &&
-          task === AntTask.Foraging &&
-          ants.subTask[id] === ForagingSubState.SearchingFood
-            ? world.pheromoneGrids[
-                pheromoneGridKey(ants.colonyId[id]!, PheromoneType.DangerTrail, 'surface')
-              ]
+          task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.SearchingFood
+            ? surfaceDangerByColony[ants.colonyId[id]!]
             : undefined;
         const detour = pickSurfaceDetour(world, prevTileX, prevTileY, dx, dy, id, detourDangerGrid);
         if (detour.dx !== 0 || detour.dy !== 0) {

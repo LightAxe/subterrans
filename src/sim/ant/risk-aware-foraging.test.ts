@@ -88,15 +88,28 @@ describe('A1 sampler RNG draw-count', () => {
     const danger = createPheromoneGrid(10, 10);
     phSet(danger, 6, 5, 400); // net 100: weak (0 < net < 128) → layer 2 → consumes RNG
 
-    const rngV35 = new Rng(999);
-    sampleForagingDirection(food, 5, 5, rngV35); // no danger grid (V35 / legacy): layer 1, 0 draws
-    const rngV36 = new Rng(999);
-    sampleForagingDirection(food, 5, 5, rngV36, -1, -1, danger); // V36: layer 2, ≥ 1 draw
+    // Count nextInt() calls via a duck-typed wrapper around a real seeded Rng, so
+    // we pin the EXACT draw count (not just "the streams diverged" — that would pass
+    // even if V36 over-consumed the RNG). CodeRabbit.
+    const countingRng = (seed: number): { rng: Rng; draws: () => number } => {
+      const base = new Rng(seed);
+      let n = 0;
+      const rng = {
+        nextInt: (max: number) => {
+          n++;
+          return base.nextInt(max);
+        },
+      } as unknown as Rng;
+      return { rng, draws: () => n };
+    };
 
-    // Same seed, but the danger path consumed RNG the legacy path did not — the
-    // streams have diverged. This is the PRNG draw-count change the world-level
-    // replay tests (determinism.test.ts) then prove stays deterministic.
-    expect(rngV35.nextInt(1_000_000)).not.toBe(rngV36.nextInt(1_000_000));
+    const v35 = countingRng(999);
+    sampleForagingDirection(food, 5, 5, v35.rng); // legacy: strong trail → layer 1
+    expect(v35.draws()).toBe(0); // strong-trail branch consumes ZERO draws
+
+    const v36 = countingRng(999);
+    sampleForagingDirection(food, 5, 5, v36.rng, -1, -1, danger); // V36: weak trail → layer 2
+    expect(v36.draws()).toBe(1); // exactly the single explore-roll draw (no explore branch this seed)
   });
 });
 
@@ -243,7 +256,12 @@ describe('A1 (e) no-revisit alternate is danger-aware at V36', () => {
   // (11,10) is a recent tile, so the no-revisit swap fires. In ALT order the
   // first fresh alternate is North (10,9); we make North a spider-wake tile and
   // leave NE (11,9) clean. Legacy takes North (no +x); V36 skips it for NE (+x).
-  function setup(simVersion: number): { world: WorldState; antId: number; x0: number } {
+  function setup(simVersion: number): {
+    world: WorldState;
+    antId: number;
+    x0: number;
+    y0: number;
+  } {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     world.simVersion = simVersion;
     const colony = createColonyRecord(COLONY_ID, 0);
@@ -283,7 +301,7 @@ describe('A1 (e) no-revisit alternate is danger-aware at V36', () => {
     world.pheromoneGrids[pheromoneGridKey(COLONY_ID, PheromoneType.DangerTrail, 'surface')] =
       danger;
 
-    return { world, antId, x0: world.ants.posX[antId]! };
+    return { world, antId, x0: world.ants.posX[antId]!, y0: world.ants.posY[antId]! };
   }
 
   function move(world: WorldState): void {
@@ -296,15 +314,17 @@ describe('A1 (e) no-revisit alternate is danger-aware at V36', () => {
     );
   }
 
-  it('V36 skips the dangerous North alternate for clean NE (gains an east component)', () => {
-    const { world, antId, x0 } = setup(SIM_VERSION_V36_RISK_AWARE_FORAGING);
+  it('V36 skips the dangerous North alternate for clean NE (moves +x and −y)', () => {
+    const { world, antId, x0, y0 } = setup(SIM_VERSION_V36_RISK_AWARE_FORAGING);
     move(world);
-    expect(world.ants.posX[antId]! > x0).toBe(true); // NE has +x; North does not.
+    expect(world.ants.posX[antId]! > x0).toBe(true); // NE: east component
+    expect(world.ants.posY[antId]! < y0).toBe(true); // NE: north component
   });
 
-  it('V35 control: takes the first fresh alternate North — no east component (danger ignored)', () => {
-    const { world, antId, x0 } = setup(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER);
+  it('V35 control: takes the first fresh alternate North — only −y, no +x (danger ignored)', () => {
+    const { world, antId, x0, y0 } = setup(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER);
     move(world);
-    expect(world.ants.posX[antId]!).toBe(x0);
+    expect(world.ants.posX[antId]!).toBe(x0); // North: no east component
+    expect(world.ants.posY[antId]! < y0).toBe(true); // North: north component
   });
 });

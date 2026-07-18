@@ -134,7 +134,7 @@ kill alarm) and decays. Since **A1 (simVersion V36)** DangerTrail is also a *rou
 input: SearchingFood foragers penalize a candidate step's FoodTrail by that cell's
 DangerTrail (`sampleForagingDirection`) and softly steer wandering routes away from it,
 gated so pre-V36 replays never consult it. (Lethal-proximity danger is handled
-separately by the V34 flee, not routing.)
+separately by the V34 flee behavior, not routing.)
 _Avoid_: trail (ambiguous on its own); **marker** (= the player's mark). **scent**
 is a *different* mechanism (see below) — never a synonym for pheromone.
 
