@@ -87,7 +87,7 @@ Subterrans is licensed under the **GNU Affero General Public License v3.0 or lat
 
 In plain English: you can use, modify, and redistribute Subterrans freely, but any derivative work must be licensed under the same terms, and if you run a modified version as a network service, you must share your modifications with the users of that service. Your surrounding website, infrastructure, and account systems are not derivative works and are not covered.
 
-Additionally, **everyone** is granted the **Subterrans App Store Exception** — an AGPL section 7 additional permission that lets anyone build and distribute Subterrans through app stores and similar platforms (Apple App Store, Google Play, Steam, console storefronts, etc.) whose terms would otherwise conflict with the AGPL, so long as the complete source stays available under the AGPL through an unrestricted channel. See [LICENSE-EXCEPTIONS.md](LICENSE-EXCEPTIONS.md). This keeps Subterrans fully open source while allowing you (or anyone) to ship store binaries.
+Subterrans additionally grants the **Subterrans App Store Exception**, an AGPL section 7 additional permission that lets anyone distribute the project through app stores whose terms would otherwise conflict with the AGPL, while it stays fully open source. See [LICENSE-EXCEPTIONS.md](LICENSE-EXCEPTIONS.md) for the exact grant, conditions, and scope.
 
 ## Acknowledgements
 
