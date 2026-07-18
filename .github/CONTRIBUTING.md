@@ -4,7 +4,7 @@ Thanks for your interest! Subterrans is a spiritual successor to SimAnt (1991), 
 
 ## License & Inbound=Outbound
 
-Subterrans is licensed under **AGPL-3.0-or-later** (see [LICENSE](../LICENSE)). By submitting a contribution you agree it is licensed under the same terms. We do not require a CLA — your copyright stays yours, we just need the AGPL license to the project.
+Subterrans is licensed under **AGPL-3.0-or-later** plus the **Subterrans App Store Exception** (v1.0 or, at your option, any later version the project publishes — see [LICENSE-EXCEPTIONS.md](../LICENSE-EXCEPTIONS.md)). By submitting a contribution you agree it is licensed under those same terms, and you certify that you have the right to license it that way (e.g. it's your own work, or you have permission — don't paste in code from another project unless its license is compatible **and** carries an equivalent app-store permission). We do not require a CLA — your copyright stays yours; we just need the AGPL license, plus the exception so anyone can ship store builds.
 
 If you can't accept AGPL terms for your employer or other reason, please don't submit code changes; issue reports and documentation corrections are still welcome.
 
