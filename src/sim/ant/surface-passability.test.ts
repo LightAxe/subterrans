@@ -29,6 +29,12 @@ import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { Rng } from '../rng.js';
 import { createDigFlowFields } from '../dig-system.js';
 import { createColonyRecord } from '../colony/colony-store.js';
+import { createPheromoneGrid, phSet, phGet } from '../pheromone/pheromone-store.js';
+import {
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
+  DANGER_ROUTE_AVOID_THRESHOLD,
+} from '../constants.js';
 
 // Helper: scan a region looking for a tile whose movement effect matches the
 // requested predicate. Returns the first matching tile, or null.
@@ -663,5 +669,62 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     // Speed=1 halved would be 0; clamped to 1. So the ant moves at least
     // 1 sub-pixel per tick (the minimum quantum). NOT stuck.
     expect(endPosX).not.toBe(startPosX);
+  });
+});
+
+describe('pickSurfaceDetour — A1 (V36) danger preference', () => {
+  it('steers a blocked-step detour away from a poisoned tile toward a clean one', () => {
+    const world = createWorldState(42);
+
+    // Find a HardBlock whose west approach tile (px,py) is walkable AND has ≥ 2
+    // walkable compass neighbours — so a poisoned detour pick has a clean
+    // alternative to fall to (avoids the degenerate "only one exit" case).
+    const NB = [
+      [0, -1],
+      [1, -1],
+      [1, 1],
+      [0, 1],
+      [-1, 1],
+      [-1, 0],
+      [-1, -1],
+    ] as const;
+    let bx = -1;
+    let by = -1;
+    outer: for (let y = 1; y < 79; y++) {
+      for (let x = 1; x < 79; x++) {
+        if (canEnterSurfaceTile(world, x, y)) continue; // walkable → not a block
+        const px = x - 1;
+        const py = y;
+        if (!canEnterSurfaceTile(world, px, py)) continue; // ant tile must be walkable
+        let open = 0;
+        for (const [ax, ay] of NB) if (canEnterSurfaceTile(world, px + ax, py + ay)) open++;
+        if (open >= 2) {
+          bx = x;
+          by = y;
+          break outer;
+        }
+      }
+    }
+    expect(bx).toBeGreaterThanOrEqual(0);
+    const px = bx - 1;
+    const py = by;
+
+    // Baseline (no danger grid). detourResult is a SHARED scratch object — capture
+    // the values immediately before the next call overwrites them.
+    const base = pickSurfaceDetour(world, px, py, 1, 0);
+    const bDx = base.dx;
+    const bDy = base.dy;
+    expect(bDx !== 0 || bDy !== 0).toBe(true); // a real detour exists
+
+    // Poison exactly the tile the baseline picked; a fresh danger-aware call must
+    // route elsewhere (and to a tile that is not itself a spider-wake tile).
+    const danger = createPheromoneGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
+    phSet(danger, px + bDx, py + bDy, DANGER_ROUTE_AVOID_THRESHOLD + 100);
+    const avoided = pickSurfaceDetour(world, px, py, 1, 0, -1, danger);
+    const aDx = avoided.dx;
+    const aDy = avoided.dy;
+
+    expect(aDx !== bDx || aDy !== bDy).toBe(true); // rerouted off the poisoned tile
+    expect(phGet(danger, px + aDx, py + aDy) < DANGER_ROUTE_AVOID_THRESHOLD).toBe(true); // to a clean tile
   });
 });

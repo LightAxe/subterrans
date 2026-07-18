@@ -1257,7 +1257,19 @@ export function tickAntMovement(
         blocked = true;
       }
       if (blocked) {
-        const detour = pickSurfaceDetour(world, prevTileX, prevTileY, dx, dy, id);
+        // A1 (V36): make the obstacle detour danger-aware for surface SearchingFood
+        // foragers so a blocked risk-aware step isn't snapped into a spider-wake
+        // tile (Codex). Scoped + gated — undefined for the queen / other tasks /
+        // pre-V36, so their detours (and V35 replays) stay byte-identical.
+        const detourDangerGrid =
+          world.simVersion >= SIM_VERSION_V36_RISK_AWARE_FORAGING &&
+          task === AntTask.Foraging &&
+          ants.subTask[id] === ForagingSubState.SearchingFood
+            ? world.pheromoneGrids[
+                pheromoneGridKey(ants.colonyId[id]!, PheromoneType.DangerTrail, 'surface')
+              ]
+            : undefined;
+        const detour = pickSurfaceDetour(world, prevTileX, prevTileY, dx, dy, id, detourDangerGrid);
         if (detour.dx !== 0 || detour.dy !== 0) {
           // Snap-to-tile-boundary instead of `prev + detour * speed`.
           // Ants at half-speed (e.g. base WORKER_BASE_SPEED = 128 = ½ tile/

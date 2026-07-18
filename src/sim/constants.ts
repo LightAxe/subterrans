@@ -278,6 +278,17 @@ export const DANGER_ROUTE_WEIGHT_FP = 256; // 1.0 in fixed-point
 export const DANGER_ROUTE_AVOID_THRESHOLD = 256;
 
 /**
+ * A1 (V36) — score penalty added to a surface obstacle-detour candidate
+ * (`pickSurfaceDetour`) whose tile's DangerTrail is ≥ DANGER_ROUTE_AVOID_THRESHOLD,
+ * so a wall detour deprioritizes the spider-wake tiles the sampler was avoiding.
+ * A SOFT preference, not a hard filter: it dominates the neighbour-Manhattan score
+ * spread (so a clean detour beats a dangerous one) but stays BELOW the pocket-escape
+ * penalty (1000) so escaping a HardBlock pocket still wins over avoiding one
+ * flee-backstopped tick of danger. UAT-tunable.
+ */
+export const DANGER_DETOUR_PENALTY = 500;
+
+/**
  * Ticks a fleeing worker shelters underground at the entrance shaft before it
  * "pokes its head out" — re-samples the surface DangerTrail above the shaft and
  * either resumes (danger decayed below FLEE_THRESHOLD) or re-arms another
