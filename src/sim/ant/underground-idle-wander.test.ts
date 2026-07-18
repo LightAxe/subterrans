@@ -334,9 +334,11 @@ describe('underground idle wander — byte gate + round-trip (#209 PR C)', () =>
     expect(world.ants.posX[id] !== px || world.ants.posY[id] !== center(6)).toBe(true);
   });
 
-  it('LATEST_SIM_VERSION is V35 and new scenarios start there', () => {
-    expect(LATEST_SIM_VERSION).toBe(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER);
-    expect(createScenario(42).simVersion).toBe(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER);
+  it('new scenarios start at LATEST_SIM_VERSION (PR C V35 is no longer the latest — A1 V36 supersedes it)', () => {
+    // A1 (V36) bumped LATEST past this PR's V35. The durable invariant is that a
+    // fresh scenario tracks LATEST_SIM_VERSION; V35 stays a sticky in-window gate.
+    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER);
+    expect(createScenario(42).simVersion).toBe(LATEST_SIM_VERSION);
   });
 
   it('targetPosX/Y wander target round-trips through copyWorldState (no new column)', () => {

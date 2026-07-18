@@ -8,6 +8,8 @@ import type { ChamberRecord, ColonyRecord } from '../colony/colony-store.js';
 import { colonyHasNoDepositTarget, isFoodChamberDepositable } from '../colony/colony-system.js';
 import {
   BASE_FOOD_STORAGE_CAPACITY,
+  DANGER_ROUTE_AVOID_THRESHOLD,
+  DANGER_ROUTE_WEIGHT_FP,
   EXCURSION_HEADING_JITTER_TICKS,
   EXCURSION_HEADING_MIN_TICKS,
   EXCURSION_TURN_PERCENT,
@@ -29,7 +31,7 @@ import { phGet, pheromoneGridKey, type PheromoneGrid } from '../pheromone/pherom
 import { Rng } from '../rng.js';
 import { SURFACE_GOAL_UNREACHED, surfaceGoalDistance } from '../surface-routing.js';
 import { Zone } from '../terrain.js';
-import type { WorldState } from '../types.js';
+import { SIM_VERSION_V36_RISK_AWARE_FORAGING, type WorldState } from '../types.js';
 import { clearRecentTiles } from './ant-store.js';
 
 /**
@@ -501,12 +503,17 @@ export function routeForagerPriority(world: WorldState): void {
  * @param world  WorldState (reads ants and colonies, writes heading fields).
  * @param antId  Entity ID of the searching forager.
  * @param rng    Deterministic world Rng.
+ * @param dangerGrid  Optional surface DangerTrail grid (A1 / V36). When provided,
+ *   the world-edge bounce softly steers the heading away from tiles whose danger
+ *   is ≥ DANGER_ROUTE_AVOID_THRESHOLD (bounds stay the hard filter). `undefined`
+ *   (pre-V36, gated at the call site) = byte-identical legacy bounce.
  * @returns      Cardinal direction vector { dx, dy } with |dx| + |dy| === 1.
  */
 export function chooseExcursionDirection(
   world: WorldState,
   antId: number,
   rng: Rng,
+  dangerGrid?: PheromoneGrid,
 ): { dx: number; dy: number } {
   const ants = world.ants;
 
@@ -647,14 +654,51 @@ export function chooseExcursionDirection(
   // grid, rotate it 90° right deterministically until we find a valid one.
   // Cardinal-only movement on a rectangular grid always has at least two
   // valid options, so this converges in ≤ 3 rotations.
+  //
+  // A1 (V36) risk-aware wander: when a surface DangerTrail grid is provided,
+  // among the in-bounds rotations prefer the FIRST whose next tile's danger is
+  // below DANGER_ROUTE_AVOID_THRESHOLD (soft steer away from the spider's wake).
+  // Bounds stay the HARD filter — if every in-bounds rotation is dangerous, fall
+  // back to the first in-bounds rotation (never an off-grid heading). Gated:
+  // dangerGrid is passed only at simVersion >= V36, and with danger==0 everywhere
+  // the safe pick collapses to the first in-bounds rotation, so pre-V36 (and
+  // danger-free) wanderers are byte-identical. No RNG consumed here.
+  let fallbackHx = hx;
+  let fallbackHy = hy;
+  let foundFallback = false;
+  let safeHx = 0;
+  let safeHy = 0;
+  let foundSafe = false;
+  let rotHx = hx;
+  let rotHy = hy;
   for (let attempts = 0; attempts < 4; attempts++) {
-    const nx = tileX + hx;
-    const ny = tileY + hy;
-    if (nx >= 0 && nx < SURFACE_GRID_WIDTH && ny >= 0 && ny < SURFACE_GRID_HEIGHT) break;
-    const nhx = -hy;
-    const nhy = hx;
-    hx = nhx;
-    hy = nhy;
+    const nx = tileX + rotHx;
+    const ny = tileY + rotHy;
+    if (nx >= 0 && nx < SURFACE_GRID_WIDTH && ny >= 0 && ny < SURFACE_GRID_HEIGHT) {
+      if (!foundFallback) {
+        fallbackHx = rotHx;
+        fallbackHy = rotHy;
+        foundFallback = true;
+      }
+      if (dangerGrid === undefined) break; // legacy: first in-bounds rotation wins.
+      if (!foundSafe && phGet(dangerGrid, nx, ny) < DANGER_ROUTE_AVOID_THRESHOLD) {
+        safeHx = rotHx;
+        safeHy = rotHy;
+        foundSafe = true;
+      }
+      if (foundSafe) break;
+    }
+    const nhx = -rotHy;
+    const nhy = rotHx;
+    rotHx = nhx;
+    rotHy = nhy;
+  }
+  if (foundSafe) {
+    hx = safeHx;
+    hy = safeHy;
+  } else if (foundFallback) {
+    hx = fallbackHx;
+    hy = fallbackHy;
   }
 
   ants.searchHeadingX[antId] = hx;
@@ -694,6 +738,13 @@ const SIGNAL_PHEROMONE_RADIUS = 3;
  *
  * Pass prevTileX = prevTileY = -1 when the ant has no prev tile; the
  * function then behaves as a plain nonzero-within-radius scan.
+ *
+ * A1 (V36) danger mirror: when `dangerGrid` is provided, a cell only counts as
+ * signal if its FoodTrail survives the same penalty the sampler applies
+ * (`raw − (Math.imul(danger, DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT) > 0`). This
+ * keeps the "true ⇒ sampleForagingDirection returns non-zero" invariant intact
+ * under the penalty. `undefined` (pre-V36, gated at the call site) = the legacy
+ * raw-nonzero scan, byte-identical.
  */
 function hasNearbyPheromoneSignal(
   grid: PheromoneGrid,
@@ -701,6 +752,7 @@ function hasNearbyPheromoneSignal(
   tileY: number,
   prevTileX: number = -1,
   prevTileY: number = -1,
+  dangerGrid?: PheromoneGrid,
 ): boolean {
   const hasPrev = prevTileX >= 0 && prevTileY >= 0;
   for (let dy = -SIGNAL_PHEROMONE_RADIUS; dy <= SIGNAL_PHEROMONE_RADIUS; dy++) {
@@ -722,7 +774,12 @@ function hasNearbyPheromoneSignal(
         const stepY = absX >= absY ? 0 : dy > 0 ? 1 : dy < 0 ? -1 : 0;
         if (tileX + stepX === prevTileX && tileY + stepY === prevTileY) continue;
       }
-      if (phGet(grid, sx, sy) > 0) return true;
+      const rawSignal = phGet(grid, sx, sy);
+      if (rawSignal > 0) {
+        if (dangerGrid === undefined) return true;
+        const penalty = Math.imul(phGet(dangerGrid, sx, sy), DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT;
+        if (rawSignal - penalty > 0) return true;
+      }
     }
   }
   return false;
@@ -819,6 +876,14 @@ export function tickExcursionBoundary(world: WorldState): void {
       const key = pheromoneGridKey(colonyId, PheromoneType.FoodTrail, 'surface');
       const grid = world.pheromoneGrids[key];
       if (grid) {
+        // A1 (V36): mirror the sampler's danger penalty so a cell whose FoodTrail
+        // is fully cancelled by DangerTrail does not count as "signal" — otherwise
+        // an over-leash forager lingers SearchingFood next to danger the sampler
+        // would refuse to route into. Gated: undefined pre-V36 = legacy scan.
+        const dangerGrid =
+          world.simVersion >= SIM_VERSION_V36_RISK_AWARE_FORAGING
+            ? world.pheromoneGrids[pheromoneGridKey(colonyId, PheromoneType.DangerTrail, 'surface')]
+            : undefined;
         // 09 follow-up issue 2: skip the ant's prev tile so its own just-left
         // trail doesn't count as "signal" and trap it in ReturningToNest
         // purgatory. Sentinels (-1,-1) are treated as "no prev" by the helper.
@@ -828,6 +893,7 @@ export function tickExcursionBoundary(world: WorldState): void {
           tileY,
           ants.searchPrevTileX[id],
           ants.searchPrevTileY[id],
+          dangerGrid,
         );
       }
     }

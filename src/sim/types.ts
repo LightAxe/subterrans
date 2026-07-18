@@ -467,7 +467,21 @@ export const SIM_VERSION_V34_IDLE_RESERVE_FLEE = 34 as const;
  * saves replay byte-identically. MIN_ACCEPTED unchanged.
  */
 export const SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER = 35 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
+
+/**
+ * A1 — risk-aware foraging routes. SearchingFood foragers penalize a candidate
+ * step's FoodTrail score by the DangerTrail at that cell (`net = food −
+ * (Math.imul(danger, DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT)`, clamped ≥ 0), and a
+ * wandering forager's excursion edge-bounce softly steers away from tiles whose
+ * danger is ≥ DANGER_ROUTE_AVOID_THRESHOLD. Soft bias, not a wall — lethal danger
+ * stays the V34 flee (FLEE_THRESHOLD). The surface DangerTrail grid is threaded
+ * into `sampleForagingDirection`, `hasNearbyPheromoneSignal`, and
+ * `chooseExcursionDirection` ONLY when `simVersion >= V36` (undefined otherwise),
+ * so pre-V36 saves replay byte-identically. No new save column; MIN_ACCEPTED is
+ * UNCHANGED.
+ */
+export const SIM_VERSION_V36_RISK_AWARE_FORAGING = 36 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V36_RISK_AWARE_FORAGING;
 
 /**
  * S2 — AI colony state machine states.

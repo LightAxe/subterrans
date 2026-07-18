@@ -6,10 +6,14 @@
 //   tickPheromoneDecay      — PRD §5c: O(grid.data.length) sweep; floor-snap prevents zombie trails (PHER-04/PHER-07)
 //   sampleForagingDirection — 09 memo: pheromone-first reacquisition sampler for SearchingFood foragers
 //
-// DangerTrail note (#242): deposits come from spider.ts seedDangerPheromone
-// (inline, spider-calibrated magnitudes); NO sim code READS DangerTrail — ant
-// danger-avoidance is Phase 5b (a NEW RNG-consuming, simVersion-gated behavior,
-// not an activation of existing plumbing).
+// DangerTrail note (#242, updated for A1 / simVersion V36): deposits come from
+// spider.ts seedDangerPheromone (inline, spider-calibrated magnitudes) and the
+// V34 cross-colony kill alarm (combat.ts). Since A1, the surface DangerTrail grid
+// IS read for routing: sampleForagingDirection (via the penalizedStrength helper
+// below), hasNearbyPheromoneSignal, and chooseExcursionDirection penalize/steer
+// candidate steps by their danger. Gated at the call sites so pre-V36 replays
+// never consult it (dangerGrid === undefined = byte-identical legacy path). The
+// penalty is fixed-point (Math.imul >> FP_SHIFT) and consumes NO additional RNG.
 //
 // MUST NOT use: Math.floor, Math.round, division (/), Date, performance, setTimeout, Math.random.
 // All fixed-point operations use >>  and Math.imul.
@@ -24,6 +28,7 @@ import {
   PHEROMONE_CAP,
   PHEROMONE_FLOOR,
   EXPLORE_RATE_PERCENT,
+  DANGER_ROUTE_WEIGHT_FP,
 } from '../constants.js';
 // PHEROMONE_FLOOR is the default floor used in tickPheromoneDecay's signature.
 // Callers may pass PHEROMONE_FLOOR_V14 for V14+ food-trail grids.
@@ -171,6 +176,25 @@ const TRAIL_STRONG_THRESHOLD = 128;
 const REACQUIRE_RADIUS = 3;
 
 /**
+ * A1 (V36) — apply the DangerTrail penalty to a candidate cell's FoodTrail
+ * strength: `net = food − (Math.imul(danger, DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT)`,
+ * clamped ≥ 0. When `dangerGrid` is undefined (pre-V36; gated at the call site)
+ * or the food strength is already 0, the raw strength is returned unchanged — the
+ * byte-identical legacy path. `Math.imul` per this module's fixed-point rule.
+ */
+function penalizedStrength(
+  foodStrength: number,
+  dangerGrid: PheromoneGrid | undefined,
+  x: number,
+  y: number,
+): number {
+  if (dangerGrid === undefined || foodStrength <= 0) return foodStrength;
+  const penalty = Math.imul(phGet(dangerGrid, x, y), DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT;
+  const net = foodStrength - penalty;
+  return net > 0 ? net : 0;
+}
+
+/**
  * Return the direction a SearchingFood forager should move based on the
  * pheromone gradient at (tileX, tileY), with stronger trail commitment and
  * wider reacquisition than a plain 4-neighbor sample.
@@ -196,6 +220,13 @@ const REACQUIRE_RADIUS = 3;
  * @param rng         Deterministic world Rng.
  * @param prevTileX   Tile X the ant occupied last tick (-1 = none).
  * @param prevTileY   Tile Y the ant occupied last tick (-1 = none).
+ * @param dangerGrid  Optional surface DangerTrail grid (A1 / V36). When provided,
+ *   each candidate cell's FoodTrail strength is penalized by its danger
+ *   (`net = food − (Math.imul(danger, DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT)`,
+ *   clamped ≥ 0), so foragers prefer safer routes — a SOFT bias, not a wall.
+ *   `undefined` (pre-V36, gated at the call site) = byte-identical legacy
+ *   behaviour. `hasNearbyPheromoneSignal` MUST be passed the same grid so its
+ *   "true ⇒ non-zero pick" invariant still holds under the penalty.
  */
 export function sampleForagingDirection(
   grid: PheromoneGrid,
@@ -204,6 +235,7 @@ export function sampleForagingDirection(
   rng: Rng,
   prevTileX: number = -1,
   prevTileY: number = -1,
+  dangerGrid?: PheromoneGrid,
 ): { dx: number; dy: number } {
   const hasPrev = prevTileX >= 0 && prevTileY >= 0;
 
@@ -219,7 +251,7 @@ export function sampleForagingDirection(
     const dir = DIRS[d]!;
     const nx = tileX + dir.dx;
     const ny = tileY + dir.dy;
-    const s = phGet(grid, nx, ny);
+    const s = penalizedStrength(phGet(grid, nx, ny), dangerGrid, nx, ny);
     if (hasPrev && nx === prevTileX && ny === prevTileY) {
       if (s > prevNeighborStrength) prevNeighborStrength = s;
       continue;
@@ -281,7 +313,9 @@ export function sampleForagingDirection(
         const stepY = absX >= absY ? 0 : dy > 0 ? 1 : dy < 0 ? -1 : 0;
         if (tileX + stepX === prevTileX && tileY + stepY === prevTileY) continue;
       }
-      const s = phGet(grid, sx, sy);
+      const raw = phGet(grid, sx, sy);
+      if (raw === 0) continue;
+      const s = penalizedStrength(raw, dangerGrid, sx, sy);
       if (s === 0) continue;
       if (s > reStrength || (s === reStrength && dist < reDist)) {
         reStrength = s;

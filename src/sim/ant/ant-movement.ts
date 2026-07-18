@@ -42,6 +42,7 @@ import {
   SIM_VERSION_V33_OCCUPANCY_CENTER,
   SIM_VERSION_V34_IDLE_RESERVE_FLEE,
   SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
+  SIM_VERSION_V36_RISK_AWARE_FORAGING,
   type WorldState,
 } from '../types.js';
 import {
@@ -699,6 +700,16 @@ export function tickAntMovement(
           dy = unpackStepDy(step);
           targetedStep = true;
         } else {
+          // A1 (V36): the ant's own surface DangerTrail grid, threaded into the
+          // sampler and the wander edge-bounce so SearchingFood foragers prefer
+          // safer routes. Gated AND surface-only — undefined otherwise, which is
+          // the byte-identical legacy path.
+          const dangerGrid =
+            zone === Zone.Surface && world.simVersion >= SIM_VERSION_V36_RISK_AWARE_FORAGING
+              ? world.pheromoneGrids[
+                  pheromoneGridKey(colonyId, PheromoneType.DangerTrail, 'surface')
+                ]
+              : undefined;
           const key = pheromoneGridKey(colonyId, PheromoneType.FoodTrail, 'surface');
           const grid = world.pheromoneGrids[key];
           if (grid) {
@@ -718,19 +729,20 @@ export function tickAntMovement(
               rng,
               ants.searchPrevTileX[id],
               ants.searchPrevTileY[id],
+              dangerGrid,
             );
             if (dir.dx !== 0 || dir.dy !== 0) {
               dx = dir.dx;
               dy = dir.dy;
             } else {
-              const wander = chooseExcursionDirection(world, id, rng);
+              const wander = chooseExcursionDirection(world, id, rng, dangerGrid);
               dx = wander.dx;
               dy = wander.dy;
             }
           } else {
             // No pheromone grid (scenario-dependent presence) — still wander
             // so the forager is not pinned at the entrance.
-            const wander = chooseExcursionDirection(world, id, rng);
+            const wander = chooseExcursionDirection(world, id, rng, dangerGrid);
             dx = wander.dx;
             dy = wander.dy;
           }

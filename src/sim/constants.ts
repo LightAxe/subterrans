@@ -256,6 +256,28 @@ export const PHEROMONE_CAP = 65280;
 export const FLEE_THRESHOLD = 512;
 
 /**
+ * A1 (V36) risk-aware foraging — fixed-point weight applied to a candidate
+ * step's DangerTrail when a SearchingFood forager scores it:
+ * `net = foodTrail − (Math.imul(danger, DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT)`,
+ * clamped ≥ 0. 256 = 1.0 (danger subtracts one-for-one from food-trail strength).
+ * A SOFT penalty only — lethal danger is handled separately by the V34 flee at
+ * FLEE_THRESHOLD. Balance-sensitive UAT knob (see the A1 AI-economy seed-sweep);
+ * the danger-routing tests assert behaviour at explicitly-seeded values, not this
+ * exact number.
+ */
+export const DANGER_ROUTE_WEIGHT_FP = 256; // 1.0 in fixed-point
+
+/**
+ * A1 (V36) — danger level at/above which a wandering forager's excursion
+ * edge-bounce prefers to rotate AWAY from a tile (soft steer; bounds stay the
+ * hard filter, so a fully-surrounded-by-danger ant still takes the first
+ * in-bounds rotation rather than an off-grid heading). 256 = half of
+ * FLEE_THRESHOLD (512), so recently-walked-by-spider tiles repel wandering
+ * routes without tripping the flee. UAT-tunable.
+ */
+export const DANGER_ROUTE_AVOID_THRESHOLD = 256;
+
+/**
  * Ticks a fleeing worker shelters underground at the entrance shaft before it
  * "pokes its head out" — re-samples the surface DangerTrail above the shaft and
  * either resumes (danger decayed below FLEE_THRESHOLD) or re-arms another
