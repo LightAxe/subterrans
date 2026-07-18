@@ -453,7 +453,21 @@ export const SIM_VERSION_V33_OCCUPANCY_CENTER = 33 as const;
  * is UNCHANGED (pre-V34 in-window saves keep loading).
  */
 export const SIM_VERSION_V34_IDLE_RESERVE_FLEE = 34 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
+
+/**
+ * #209 PR C — underground idle-reserve wander. Idle UNDERGROUND workers (which
+ * PR A's surface-only milling left holding motionless) take a gentle
+ * deterministic one-tile wander toward a hash-chosen enterable cardinal
+ * neighbour (re-picked per retarget bucket, held when reached, confined to
+ * non-shaft enterable tiles), so a food-saturated colony's surplus de-clumps
+ * instead of freezing in a motionless blob. A pure movement layer — reuses
+ * `targetPosX/Y` (no new save column), no allocation/backpressure change. Idle
+ * ants at the shaft row ascend to the surface reserve instead of being captured
+ * underground. Every mutation path is gated `simVersion >= V35`, so pre-V35
+ * saves replay byte-identically. MIN_ACCEPTED unchanged.
+ */
+export const SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER = 35 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
 
 /**
  * S2 — AI colony state machine states.

@@ -19,6 +19,7 @@ import {
   RECONCILE_INTERVAL_TICKS,
   QUEEN_EGG_INTERVAL_BASE_TICKS,
 } from '../constants.js';
+import { FP_SHIFT } from '../fixed.js';
 
 // ---------------------------------------------------------------------------
 // ColonyId — controller-agnostic integer alias (PRD §2 line 234)
@@ -77,6 +78,25 @@ export interface ChamberRecord {
   posY: number;
   width: number;
   height: number;
+}
+
+/**
+ * True iff tile `(tileX, tileY)` lies inside any of `colony`'s chamber footprints.
+ * Half-open bounds `[bx, bx+width) × [by, by+height)` with `posX/posY` decoded from
+ * fixed-point. Shared by `isOccupancyExempt` (the occupancy resolver's exempt-tile
+ * test) and the #209 PR C underground idle wander's chamber confinement, so the two
+ * "is this tile in a chamber" checks can never drift apart (a determinism-relevant
+ * footgun if duplicated — CodeRabbit).
+ */
+export function isInChamberFootprint(colony: ColonyRecord, tileX: number, tileY: number): boolean {
+  const chambers = colony.chambers;
+  for (let c = 0; c < chambers.length; c++) {
+    const ch = chambers[c]!;
+    const bx = ch.posX >> FP_SHIFT;
+    const by = ch.posY >> FP_SHIFT;
+    if (tileX >= bx && tileX < bx + ch.width && tileY >= by && tileY < by + ch.height) return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
