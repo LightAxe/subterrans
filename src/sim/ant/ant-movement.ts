@@ -1203,13 +1203,13 @@ export function tickAntMovement(
         // reverted straight into a spider-wake tile (Codex P2). Prefer a danger-safe
         // revert; if the only available revert(s) land on danger, fall through to the
         // now-danger-aware pickSurfaceDetour (blocked) rather than step in. Scoped to
-        // surface SearchingFood foragers + gated — undefined danger grid (queen / other
-        // tasks / pre-V36) makes both `*RevertDanger` false, so the branch order below
+        // surface SearchingFood foragers; no explicit simVersion check — the same
+        // convention as the other three surfaceDangerByColony consumers (sampler /
+        // no-revisit / detour): the array is empty pre-V36, so the lookup returns
+        // undefined there, both `*RevertDanger` are false, and the branch order below
         // collapses to the legacy passX-first pick, byte-identical.
         const axisDangerGrid =
-          world.simVersion >= SIM_VERSION_V36_RISK_AWARE_FORAGING &&
-          task === AntTask.Foraging &&
-          ants.subTask[id] === ForagingSubState.SearchingFood
+          task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.SearchingFood
             ? surfaceDangerByColony[ants.colonyId[id]!]
             : undefined;
         const xRevertDanger =

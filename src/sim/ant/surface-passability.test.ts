@@ -743,13 +743,14 @@ describe('tickAntMovement — A1 (V36) danger-aware blocked-diagonal per-axis re
   // poisoned revert must be avoided (routed to the danger-aware detour) rather than
   // stepped onto; V35 (danger-blind) reverts straight in.
   //
-  // Geometry (seed-scanned): a HardBlock H at (hx,hy) with a WALKABLE tile to its
-  // west (hx-1,hy) and south-west (hx-1,hy+1). Ant sits at SW-of-H = (hx-1,hy+1); then
-  // NE = H (blocked diagonal destination) and North = (hx-1,hy) is the per-axis Y
-  // revert we poison. (East, tx+1, is made recent so passXOnly is false and the guard
-  // is forced onto the Y axis.)
+  // Geometry (seed-scanned): a HardBlock H at (hx,hy). Ant sits at SW-of-H = (hx-1,hy+1);
+  // then NE = H (blocked diagonal destination) and North = (hx-1,hy) is the per-axis Y
+  // revert we poison. (East, tx+1, is made recent so passXOnly is false and the guard is
+  // forced onto the Y axis.) We also require a WALKABLE South tile (hx-1,hy+2) so the
+  // danger-aware detour has a clean escape and the V36 ant provably MOVES off its tile
+  // rather than merely holding — letting the assertion confirm the detour was taken.
   function findGeometry(): { seed: number; tx: number; ty: number } | null {
-    for (let seed = 1; seed < 200; seed++) {
+    for (let seed = 1; seed < 300; seed++) {
       const world = createWorldState(seed);
       for (let hy = 3; hy < 70; hy++) {
         for (let hx = 3; hx < 70; hx++) {
@@ -758,6 +759,7 @@ describe('tickAntMovement — A1 (V36) danger-aware blocked-diagonal per-axis re
           const ty = hy + 1;
           if (!canEnterSurfaceTile(world, tx, ty)) continue; // ant tile walkable
           if (!canEnterSurfaceTile(world, tx, ty - 1)) continue; // North revert walkable
+          if (!canEnterSurfaceTile(world, tx, ty + 1)) continue; // South escape for the detour
           return { seed, tx, ty };
         }
       }
@@ -765,7 +767,13 @@ describe('tickAntMovement — A1 (V36) danger-aware blocked-diagonal per-axis re
     return null;
   }
 
-  function run(simVersion: number): { tx: number; ty: number; endX: number; endY: number } {
+  function run(simVersion: number): {
+    tx: number;
+    ty: number;
+    endX: number;
+    endY: number;
+    endDanger: number;
+  } {
     const g = findGeometry();
     expect(g).not.toBeNull();
     const { seed, tx, ty } = g!;
@@ -804,21 +812,26 @@ describe('tickAntMovement — A1 (V36) danger-aware blocked-diagonal per-axis re
     world.pheromoneGrids[pheromoneGridKey(1, PheromoneType.DangerTrail, 'surface')] = danger;
 
     tickAntMovement(world, new Rng(2), createDigFlowFields());
-    return {
-      tx,
-      ty,
-      endX: world.ants.posX[id]! >> FP_SHIFT,
-      endY: world.ants.posY[id]! >> FP_SHIFT,
-    };
+    const endX = world.ants.posX[id]! >> FP_SHIFT;
+    const endY = world.ants.posY[id]! >> FP_SHIFT;
+    return { tx, ty, endX, endY, endDanger: phGet(danger, endX, endY) };
   }
 
-  it('V36 does NOT revert onto the poisoned North tile (routes to the danger-aware detour)', () => {
+  it('V36 detours to a danger-safe tile — moves off its tile, not onto the poisoned North', () => {
     const r = run(SIM_VERSION_V36_RISK_AWARE_FORAGING);
+    // Not the poisoned Y-axis revert…
     expect(r.endX === r.tx && r.endY === r.ty - 1).toBe(false);
+    // …and not the X-axis revert onto East either (East is recent → passXOnly is false).
+    expect(r.endX === r.tx + 1 && r.endY === r.ty).toBe(false);
+    // Actually MOVED (a danger-aware detour, not a stay-in-place hold)…
+    expect(r.endX !== r.tx || r.endY !== r.ty).toBe(true);
+    // …to a danger-safe tile (below the avoid threshold).
+    expect(r.endDanger).toBeLessThan(DANGER_ROUTE_AVOID_THRESHOLD);
   });
 
-  it('V35 control: danger-blind — reverts straight onto North', () => {
+  it('V35 control: danger-blind — reverts straight onto the poisoned North', () => {
     const r = run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER);
     expect(r.endX === r.tx && r.endY === r.ty - 1).toBe(true);
+    expect(r.endDanger).toBeGreaterThanOrEqual(DANGER_ROUTE_AVOID_THRESHOLD); // stepped into danger
   });
 });
