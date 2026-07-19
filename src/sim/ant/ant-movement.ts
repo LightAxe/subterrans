@@ -1176,6 +1176,11 @@ export function tickAntMovement(
       const xCrossed = newTileX !== prevTileX;
       const yCrossed = newTileY !== prevTileY;
       let blocked = false;
+      // Both danger-grid consumers below (the per-axis revert and the blocked detour)
+      // gate on the same predicate — hoist it once (CodeRabbit). Empty
+      // surfaceDangerByColony pre-V36 keeps the grid undefined there, byte-identical.
+      const isSurfaceSearchingForager =
+        task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.SearchingFood;
       if (xCrossed && yCrossed) {
         // Diagonal step. Three checks: destination tile passable, both
         // intermediate cardinals passable. Recent-tiles consult on the
@@ -1208,10 +1213,9 @@ export function tickAntMovement(
         // no-revisit / detour): the array is empty pre-V36, so the lookup returns
         // undefined there, both `*RevertDanger` are false, and the branch order below
         // collapses to the legacy passX-first pick, byte-identical.
-        const axisDangerGrid =
-          task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.SearchingFood
-            ? surfaceDangerByColony[ants.colonyId[id]!]
-            : undefined;
+        const axisDangerGrid = isSurfaceSearchingForager
+          ? surfaceDangerByColony[ants.colonyId[id]!]
+          : undefined;
         const xRevertDanger =
           axisDangerGrid !== undefined &&
           phGet(axisDangerGrid, newTileX, prevTileY) >= DANGER_ROUTE_AVOID_THRESHOLD;
@@ -1242,10 +1246,9 @@ export function tickAntMovement(
         // foragers so a blocked risk-aware step isn't snapped into a spider-wake
         // tile (Codex). Scoped + gated — undefined for the queen / other tasks /
         // pre-V36, so their detours (and V35 replays) stay byte-identical.
-        const detourDangerGrid =
-          task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.SearchingFood
-            ? surfaceDangerByColony[ants.colonyId[id]!]
-            : undefined;
+        const detourDangerGrid = isSurfaceSearchingForager
+          ? surfaceDangerByColony[ants.colonyId[id]!]
+          : undefined;
         const detour = pickSurfaceDetour(world, prevTileX, prevTileY, dx, dy, id, detourDangerGrid);
         if (detour.dx !== 0 || detour.dy !== 0) {
           // Snap-to-tile-boundary instead of `prev + detour * speed`.
