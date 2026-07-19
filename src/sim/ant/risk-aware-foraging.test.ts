@@ -48,6 +48,15 @@ import { createChamberFlowFields } from '../chamber-flow.js';
 const COLONY_ID = 1;
 const MAX_TEST_ENTITIES = 64;
 
+// A deterministic Rng stub that returns a scripted queue of values from `nextInt`
+// (ignoring `max`), for tests that must force a specific branch by pinning the exact
+// draw sequence. Callers are responsible for keeping every value within its draw's
+// legal range so it stays a faithful stand-in for a real Rng.
+const scriptRng = (vals: number[]): Rng => {
+  let i = 0;
+  return { nextInt: () => vals[i++]! } as unknown as Rng;
+};
+
 // ---------------------------------------------------------------------------
 // (a) sampleForagingDirection — danger penalty on the RNG-free scoring layers
 // ---------------------------------------------------------------------------
@@ -132,11 +141,6 @@ describe('A1 sampler Layer-2 explore honors danger', () => {
   // roll firing and rolling idx 0 = Up (DIRS order up/down/left/right). Up is a
   // spider-wake tile; V36 must fall through to the exploit pick (East) instead of
   // exploring into Up, while the legacy (no danger grid) path takes Up unconditionally.
-  const scriptRng = (vals: number[]): Rng => {
-    let i = 0;
-    return { nextInt: () => vals[i++]! } as unknown as Rng;
-  };
-
   it('a random-explore roll onto a poisoned neighbor falls through to the exploit pick', () => {
     const food = createPheromoneGrid(10, 10);
     phSet(food, 6, 5, 100); // East: weak trail → Layer 2 (0 < 100 < 128)
@@ -240,6 +244,71 @@ describe('A1 (d) chooseExcursionDirection danger-steer', () => {
     const { world, antId } = setupWanderer();
     const dir = chooseExcursionDirection(world, antId, new Rng(3)); // no danger grid
     expect(dir).toEqual({ dx: 1, dy: 0 }); // east — unchanged.
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (d2) chooseExcursionDirection — the lateral WOBBLE danger-guard (Codex P1).
+// Distinct from (d), which uses searchHeadingTicks=5 and exercises the world-edge
+// bounce. Here the turn-check must FIRE (searchHeadingTicks=0) and the RNG must roll
+// into the wobble band, so this forces the wobble branch specifically.
+// ---------------------------------------------------------------------------
+
+describe('A1 (d2) chooseExcursionDirection wobble danger-guard', () => {
+  // scriptRng (module-level) feeds the 3 draws chooseExcursionDirection makes up front —
+  // turnRoll (nextInt 100), turnDir (nextInt 2), jitter (nextInt 8).
+  // Committed EAST heading with the turn-check due (ticks=0). turnRoll=90 is in the
+  // wobble band [100 - EXCURSION_WOBBLE_PERCENT(20), 100) = [80,100) and above the
+  // hard-turn band [0,25); turnDir=0 (left) makes the lateral wobble NORTH
+  // ((lhx,lhy) = (hy,-hx) = (0,-1)). jitter=3 only sets the reset ticks.
+  function setupWanderer(): { world: WorldState; antId: number } {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.colonies[COLONY_ID] = createColonyRecord(COLONY_ID, 0);
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId: COLONY_ID,
+      posX: 10 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
+    });
+    world.ants.searchHeadingX[antId] = 1; // committed East
+    world.ants.searchHeadingY[antId] = 0;
+    world.ants.searchHeadingTicks[antId] = 0; // turn-check fires this tick
+    return { world, antId };
+  }
+
+  it('rejects a wobble into a dangerous lateral tile → keeps the committed heading (East)', () => {
+    const { world, antId } = setupWanderer();
+    const danger = createPheromoneGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
+    // North (10,9) — the lateral wobble target — is a spider-wake tile; East (11,10),
+    // the committed heading, is clean so the fall-through edge-bounce keeps it.
+    phSet(danger, 10, 9, DANGER_ROUTE_AVOID_THRESHOLD + 100);
+    const dir = chooseExcursionDirection(world, antId, scriptRng([90, 0, 3]), danger);
+    expect(dir).toEqual({ dx: 1, dy: 0 }); // East — the wobble was rejected.
+    // The committed East heading survived the tick. On its own this doesn't exclude a
+    // hard turn (the edge-bounce would rotate a hard-left back to East here anyway) —
+    // the wobble-vs-hard-turn discrimination lives in the clean-lateral controls below,
+    // where a hard turn would store North and fail `searchHeadingX === 1`.
+    expect(world.ants.searchHeadingX[antId]).toBe(1);
+    expect(world.ants.searchHeadingY[antId]).toBe(0);
+  });
+
+  it('control: a CLEAN lateral tile → the wobble step is taken (North), heading preserved', () => {
+    const { world, antId } = setupWanderer();
+    const danger = createPheromoneGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT); // empty
+    const dir = chooseExcursionDirection(world, antId, scriptRng([90, 0, 3]), danger);
+    expect(dir).toEqual({ dx: 0, dy: -1 }); // North — clean wobble STEP…
+    expect(world.ants.searchHeadingX[antId]).toBe(1); // …but the committed heading stays East.
+    expect(world.ants.searchHeadingY[antId]).toBe(0);
+  });
+
+  it('WITHOUT the danger grid (legacy) the wobble is taken (bounds-only guard)', () => {
+    const { world, antId } = setupWanderer();
+    const dir = chooseExcursionDirection(world, antId, scriptRng([90, 0, 3])); // no danger grid
+    expect(dir).toEqual({ dx: 0, dy: -1 }); // North — legacy bounds-only wobble.
+    expect(world.ants.searchHeadingX[antId]).toBe(1);
+    expect(world.ants.searchHeadingY[antId]).toBe(0);
   });
 });
 
