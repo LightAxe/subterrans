@@ -114,12 +114,16 @@ export function recordFoodPileDepletion(world: WorldState, pileIndex: number): v
 /** A2 — victim kinds that yield corpse food (one row per kind; centipede etc. slot in later). */
 export type CorpseKind = 'worker' | 'fighter' | 'queen' | 'spider';
 
-const CORPSE_YIELD: Record<CorpseKind, number> = {
+// `as const` (not a mutable `Record<...>`) — module-level sim state must be immutable
+// so a stray mutation can't leak across worlds/save-load and make replay depend on
+// process history (AGENTS.md ECS convention; Codex P1). Exhaustiveness over CorpseKind
+// is still enforced at the `corpseYield` access below.
+const CORPSE_YIELD = {
   worker: CORPSE_PICKUPS_WORKER,
   fighter: CORPSE_PICKUPS_FIGHTER,
   queen: CORPSE_PICKUPS_QUEEN,
   spider: CORPSE_PICKUPS_SPIDER,
-};
+} as const;
 
 /** A2 — fixed corpse-food yield (pickup-charges) for a victim kind. Never RNG-drawn. */
 export function corpseYield(kind: CorpseKind): number {
