@@ -18,6 +18,7 @@
 import { describe, it, expect } from 'vitest';
 import { sampleForagingDirection } from '../pheromone/pheromone-system.js';
 import { chooseExcursionDirection, tickAntMovement } from './ant-system.js';
+import { pickNoRevisitSurfaceAlternate } from './ant-foraging.js';
 import {
   createWorldState,
   allocateEntityId,
@@ -31,6 +32,7 @@ import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
 import {
   createPheromoneGrid,
   phSet,
+  phGet,
   pheromoneGridKey,
   type PheromoneGrid,
 } from '../pheromone/pheromone-store.js';
@@ -313,6 +315,55 @@ describe('A1 (d2) chooseExcursionDirection wobble danger-guard', () => {
 });
 
 // ---------------------------------------------------------------------------
+// (d3) no-revisit DIAGONAL alternate danger-checks its intermediate tiles (Codex
+// P2). A half-speed / off-centre ant taking a diagonal crosses only one axis this
+// tick (and the blocked-diagonal per-axis revert lands there too), so a diagonal is
+// safe only when its destination AND both cardinal intermediates are clean.
+// ---------------------------------------------------------------------------
+
+describe('A1 (d3) no-revisit diagonal alternate checks intermediate tiles', () => {
+  // Ant at (10,10), proposed step East (11,10) is recent → the swap scan fires. North
+  // (10,9) is recent too, so the scan reaches the NE diagonal (11,9). NE's X-axis
+  // intermediate is East (11,10): poisoning it must reject NE for a safe cardinal;
+  // leaving it clean lets NE through (destination + both intermediates all clean).
+  function setup(poisonEastIntermediate: boolean): {
+    world: WorldState;
+    antId: number;
+    danger: PheromoneGrid;
+  } {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.colonies[COLONY_ID] = createColonyRecord(COLONY_ID, 0);
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId: COLONY_ID,
+      posX: 10 << FP_SHIFT,
+      posY: 10 << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
+    });
+    pushRecentTile(world.ants, antId, 11, 10); // proposed East → the swap scan fires
+    pushRecentTile(world.ants, antId, 10, 9); // North recent → the scan reaches NE
+    const danger = createPheromoneGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
+    if (poisonEastIntermediate) phSet(danger, 11, 10, DANGER_ROUTE_AVOID_THRESHOLD + 100);
+    return { world, antId, danger };
+  }
+
+  it('rejects a clean-destination diagonal whose intermediate tile is a spider-wake tile', () => {
+    const { world, antId, danger } = setup(true);
+    const out = { dx: 0, dy: 0 };
+    pickNoRevisitSurfaceAlternate(world.ants, antId, 1, 0, danger, out);
+    expect(out).toEqual({ dx: 0, dy: 1 }); // South — NE skipped (dangerous East intermediate).
+  });
+
+  it('control: takes the diagonal when its destination and both intermediates are clean', () => {
+    const { world, antId, danger } = setup(false);
+    const out = { dx: 0, dy: 0 };
+    pickNoRevisitSurfaceAlternate(world.ants, antId, 1, 0, danger, out);
+    expect(out).toEqual({ dx: 1, dy: -1 }); // NE — nothing on the crossing is dangerous.
+  });
+});
+
+// ---------------------------------------------------------------------------
 // (e) no-revisit alternate selection is danger-aware at V36 (Codex round 2) —
 // the downstream recent-tiles swap must not undo the sampler's safe choice.
 // ---------------------------------------------------------------------------
@@ -327,6 +378,7 @@ describe('A1 (e) no-revisit alternate is danger-aware at V36', () => {
     antId: number;
     x0: number;
     y0: number;
+    danger: PheromoneGrid;
   } {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     world.simVersion = simVersion;
@@ -367,7 +419,7 @@ describe('A1 (e) no-revisit alternate is danger-aware at V36', () => {
     world.pheromoneGrids[pheromoneGridKey(COLONY_ID, PheromoneType.DangerTrail, 'surface')] =
       danger;
 
-    return { world, antId, x0: world.ants.posX[antId]!, y0: world.ants.posY[antId]! };
+    return { world, antId, x0: world.ants.posX[antId]!, y0: world.ants.posY[antId]!, danger };
   }
 
   function move(world: WorldState): void {
@@ -380,11 +432,20 @@ describe('A1 (e) no-revisit alternate is danger-aware at V36', () => {
     );
   }
 
-  it('V36 skips the dangerous North alternate for clean NE (moves +x and −y)', () => {
-    const { world, antId, x0, y0 } = setup(SIM_VERSION_V36_RISK_AWARE_FORAGING);
+  it('V36 avoids the poisoned North AND the NE approach whose intermediate is that tile → ends danger-safe', () => {
+    // North (10,9) is poisoned. The old dest-only check picked NE (11,9); the diagonal
+    // intermediate check now ALSO rejects NE, because a partial diagonal crossing could
+    // land on North (NE's Y-intermediate). The swap therefore takes a fully-safe fresh
+    // alternate (destination + both intermediates clean), so the ant ends off the wake.
+    const { world, antId, x0, y0, danger } = setup(SIM_VERSION_V36_RISK_AWARE_FORAGING);
     move(world);
-    expect(world.ants.posX[antId]! > x0).toBe(true); // NE: east component
-    expect(world.ants.posY[antId]! < y0).toBe(true); // NE: north component
+    // Liveness: the ant actually moved this tick (sub-tile drift toward the safe
+    // alternate at the default half-tile worker speed) — it did not freeze in place.
+    expect(world.ants.posX[antId]! !== x0 || world.ants.posY[antId]! !== y0).toBe(true);
+    const ex = world.ants.posX[antId]! >> FP_SHIFT;
+    const ey = world.ants.posY[antId]! >> FP_SHIFT;
+    expect(ex === 10 && ey === 9).toBe(false); // not the poisoned North (10,9)
+    expect(phGet(danger, ex, ey)).toBeLessThan(DANGER_ROUTE_AVOID_THRESHOLD); // danger-safe tile
   });
 
   it('V35 control: takes the first fresh alternate North — only −y, no +x (danger ignored)', () => {

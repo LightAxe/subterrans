@@ -777,11 +777,24 @@ export function pickNoRevisitSurfaceAlternate(
       fallbackAy = ay;
       foundFallback = true;
     }
+    // Danger check. For a DIAGONAL alternate the tile actually entered this tick may
+    // be a cardinal INTERMEDIATE, not the diagonal destination: a half-speed / off-
+    // centre ant crosses only one axis per tick, and the downstream blocked-diagonal
+    // per-axis revert can drop it onto (candX, tileY) or (tileX, candY) too. So a
+    // diagonal alternate counts as danger-safe only when its destination AND both
+    // intermediate tiles are below the threshold — otherwise the swap could smuggle
+    // the ant onto a spider-wake tile via a partial crossing (Codex). Cardinal
+    // alternates (one axis zero) only gate on the single destination. Danger read
+    // only; undefined pre-V36 (or danger-free) = no check, byte-identical.
     if (
       dangerGrid !== undefined &&
-      phGet(dangerGrid, candX, candY) >= DANGER_ROUTE_AVOID_THRESHOLD
+      (phGet(dangerGrid, candX, candY) >= DANGER_ROUTE_AVOID_THRESHOLD ||
+        (ax !== 0 &&
+          ay !== 0 &&
+          (phGet(dangerGrid, candX, tileY) >= DANGER_ROUTE_AVOID_THRESHOLD ||
+            phGet(dangerGrid, tileX, candY) >= DANGER_ROUTE_AVOID_THRESHOLD)))
     ) {
-      continue; // dangerous — keep scanning for a safe fresh alternate.
+      continue; // dangerous (destination or a diagonal intermediate) — keep scanning.
     }
     out.dx = ax;
     out.dy = ay;
