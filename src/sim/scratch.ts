@@ -56,8 +56,11 @@ export interface ScratchArena {
   queenIds: Set<number>;
   /** ant-movement.ts — per-tick surface-movement effect cache (reset each tick). */
   surfaceMoveCache: SurfaceMovementCache;
-  /** ant-motion.ts — cross-module cardinal-step + detour out-params. */
-  motion: { cardinalStep: CardinalStep; detourResult: CardinalStep };
+  /**
+   * ant-motion.ts — cross-module cardinal-step + detour out-params, plus the
+   * ant-foraging.ts no-revisit alternate out-param (pickNoRevisitSurfaceAlternate).
+   */
+  motion: { cardinalStep: CardinalStep; detourResult: CardinalStep; noRevisitAlt: CardinalStep };
   /**
    * ant-movement.ts — per-tick colonyId→surface DangerTrail grid cache (A1/V36).
    * Reset (`length = 0`) then repopulated once per tick so the per-ant risk-aware
@@ -111,7 +114,11 @@ export function getScratch(world: WorldState): ScratchArena {
       tickIdle: [],
       queenIds: new Set(),
       surfaceMoveCache: createSurfaceMovementCache(),
-      motion: { cardinalStep: { dx: 0, dy: 0 }, detourResult: { dx: 0, dy: 0 } },
+      motion: {
+        cardinalStep: { dx: 0, dy: 0 },
+        detourResult: { dx: 0, dy: 0 },
+        noRevisitAlt: { dx: 0, dy: 0 },
+      },
       // A1 (V36) — empty; ant-movement.ts resets length + repopulates per tick.
       surfaceDangerByColony: [],
       // #256 — nurse stamp starts at 0 (matches the old module-global init); the

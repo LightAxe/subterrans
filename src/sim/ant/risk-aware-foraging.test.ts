@@ -28,7 +28,12 @@ import {
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt, pushRecentTile } from './ant-store.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
-import { createPheromoneGrid, phSet, pheromoneGridKey } from '../pheromone/pheromone-store.js';
+import {
+  createPheromoneGrid,
+  phSet,
+  pheromoneGridKey,
+  type PheromoneGrid,
+} from '../pheromone/pheromone-store.js';
 import { Rng } from '../rng.js';
 import {
   SURFACE_GRID_WIDTH,
@@ -114,6 +119,45 @@ describe('A1 sampler RNG draw-count', () => {
     const v36 = countingRng(999);
     sampleForagingDirection(food, 5, 5, v36.rng, -1, -1, danger); // V36: weak trail → layer 2
     expect(v36.draws()).toBe(1); // exactly the single explore-roll draw (no explore branch this seed)
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Layer-3 reacquisition — a remote FoodTrail whose major-axis first step is a
+// spider-wake tile must NOT be chased: the sampler returns {0,0} so the caller
+// falls through to the danger-steered wander (round-3 C1; Codex P1 test-gap).
+// ---------------------------------------------------------------------------
+
+describe('A1 sampler Layer-3 danger-blocked reacquisition', () => {
+  // Ant at (5,5) with no immediate-neighbor trail and one remote FoodTrail target
+  // 3 tiles east at (8,5) — inside REACQUIRE_RADIUS (=3), so Layer 3 selects it.
+  // Its major-axis first step is East, onto (6,5) — the tile the danger check reads.
+  function setup(): { food: PheromoneGrid; danger: PheromoneGrid } {
+    const food = createPheromoneGrid(10, 10);
+    const danger = createPheromoneGrid(10, 10);
+    phSet(food, 8, 5, 500); // remote reacquire target; penalized strength > 0
+    return { food, danger };
+  }
+
+  it('a dangerous first step toward the remote trail yields {0,0} (→ wander)', () => {
+    const { food, danger } = setup();
+    // Poison ONLY the first-step tile (6,5); the target (8,5) stays clean so the
+    // reacquire scan still selects it, but the step toward it is vetoed.
+    phSet(danger, 6, 5, DANGER_ROUTE_AVOID_THRESHOLD);
+    const dir = sampleForagingDirection(food, 5, 5, new Rng(1), -1, -1, danger);
+    expect(dir).toEqual({ dx: 0, dy: 0 });
+  });
+
+  it('control: a CLEAN first step reacquires the remote trail (steps East)', () => {
+    const { food, danger } = setup(); // danger grid present but 0 at the first step
+    const dir = sampleForagingDirection(food, 5, 5, new Rng(1), -1, -1, danger);
+    expect(dir).toEqual({ dx: 1, dy: 0 });
+  });
+
+  it('WITHOUT the danger grid (legacy path) the same first step is taken', () => {
+    const { food } = setup();
+    const dir = sampleForagingDirection(food, 5, 5, new Rng(1)); // no danger grid
+    expect(dir).toEqual({ dx: 1, dy: 0 });
   });
 });
 

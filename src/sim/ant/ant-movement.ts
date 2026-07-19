@@ -9,7 +9,6 @@ import type { ChamberFlowFields } from '../chamber-flow.js';
 import { isFoodChamberDepositable } from '../colony/colony-system.js';
 import { isInChamberFootprint } from '../colony/colony-store.js';
 import {
-  DANGER_ROUTE_AVOID_THRESHOLD,
   SEARCH_LEASH_MAX_WAVE,
   SEARCH_PAUSE_BASE_TICKS,
   SEARCH_PAUSE_JITTER_TICKS,
@@ -25,7 +24,7 @@ import type { DigFlowFields } from '../dig-system.js';
 import type { EntranceFlowFields } from '../entrance-flow.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
-import { phGet, pheromoneGridKey } from '../pheromone/pheromone-store.js';
+import { pheromoneGridKey } from '../pheromone/pheromone-store.js';
 import { sampleForagingDirection } from '../pheromone/pheromone-system.js';
 import { Rng } from '../rng.js';
 import {
@@ -50,11 +49,13 @@ import {
   pickInvaderUndergroundStep,
   pickNearestHostileUnderground,
 } from './ant-combat-targeting.js';
-import { chooseExcursionDirection, findReachableScentPile } from './ant-foraging.js';
+import {
+  chooseExcursionDirection,
+  findReachableScentPile,
+  pickNoRevisitSurfaceAlternate,
+} from './ant-foraging.js';
 import { getScratch } from '../scratch.js';
 import {
-  ALT_DX,
-  ALT_DY,
   DIR_DX,
   DIR_DY,
   canEnterSurfaceTile,
@@ -142,6 +143,9 @@ export function tickAntMovement(
   // #231 — hoist the diagonalizeFlowStep out-param once (arena object identity is
   // stable per world); the underground flow-follow branches below pass it and read dx/dy.
   const cardinalStep = arena.motion.cardinalStep;
+  // Out-param for the Layer-1 no-revisit alternate selection (pickNoRevisitSurfaceAlternate),
+  // hoisted for the same reason — no per-ant allocation in the movement loop.
+  const noRevisitAlt = arena.motion.noRevisitAlt;
 
   // P1 queen-relocation: queens have their own movement path (route to Queen
   // chamber). They must be skipped in the main loop below so the default
@@ -968,17 +972,12 @@ export function tickAntMovement(
       dy = dir.dy;
     }
 
-    // Issue #42 fix #3 — surface SearchingFood no-revisit filter. v6+ only.
-    // If the proposed step lands on a tile in the ant's recent-tiles ring
-    // buffer, scan the 8-connected alternates in a fixed order and pick the
-    // first one that is BOTH not in the buffer AND inside the surface grid.
-    // The bounds check matters at the map edge (e.g. an ant at y=0 whose
-    // proposed step is in the buffer must not pick N — that would clamp
-    // back to the same tile, no tile-cross occurs, the buffer doesn't
-    // advance, and the ant stalls indefinitely with valid in-bounds
-    // alternates still available). If every neighbor is filtered, pause
-    // (dx=dy=0); the buffer-push gate (only on actual tile crossings) keeps
-    // pause ticks from polluting history.
+    // Issue #42 fix #3 — surface SearchingFood no-revisit filter (Layer-1 policy in
+    // ant-foraging.ts: pickNoRevisitSurfaceAlternate). If the proposed step lands on a
+    // recent tile the helper swaps in a fresh, in-bounds alternate — preferring
+    // (A1/V36) one below the danger threshold — or pauses (0,0); see its docstring for
+    // the mechanics + danger preference. The orchestrator only decides WHETHER the
+    // filter applies (the bypass rule below) and threads the danger grid + out-param.
     //
     // PR 5 Fix-A — a path-aware priority/scent step (`targetedStep`) is BYPASSED:
     // it is wall-avoiding and strictly decreases goal-field distance every tick,
@@ -1011,67 +1010,12 @@ export function tickAntMovement(
       ants.subTask[id] === ForagingSubState.SearchingFood &&
       (dx !== 0 || dy !== 0)
     ) {
-      const tileX = ants.posX[id]! >> FP_SHIFT;
-      const tileY = ants.posY[id]! >> FP_SHIFT;
-      if (isRecentTile(ants, id, tileX + dx, tileY + dy)) {
-        // Try 8 cardinals/diagonals in N-clockwise order (N, NE, E, SE, S,
-        // SW, W, NW) — fixed and deterministic, the same neighbor sweep the
-        // queen overlap resolver uses, so the alternate-pick is easy to
-        // reason about across the codebase.
-        // A1 (V36): among the fresh, in-bounds alternates prefer the FIRST that is
-        // also below DANGER_ROUTE_AVOID_THRESHOLD, so this no-revisit swap cannot
-        // undo the sampler's danger-aware choice by stepping onto a spider-wake
-        // tile (Codex). Freshness + bounds stay the HARD filter; danger is a soft
-        // preference with a first-fresh fallback. Gated + danger read only (no RNG);
-        // undefined pre-V36 (or danger-free) = the legacy first-fresh pick, so V35
-        // replays stay byte-identical.
-        const noRevisitDangerGrid = surfaceDangerByColony[ants.colonyId[id]!];
-        let found = false;
-        let fallbackAx = 0;
-        let fallbackAy = 0;
-        let foundFallback = false;
-        for (let i = 0; i < ALT_DX.length; i++) {
-          const ax = ALT_DX[i]!;
-          const ay = ALT_DY[i]!;
-          if (ax === dx && ay === dy) continue; // already-rejected proposal
-          const candX = tileX + ax;
-          const candY = tileY + ay;
-          // Bounds check — out-of-grid alternates clamp to a no-op step
-          // and would stall the ant at the map edge. Reject before they
-          // can be picked.
-          if (candX < 0 || candX >= SURFACE_GRID_WIDTH || candY < 0 || candY >= SURFACE_GRID_HEIGHT)
-            continue;
-          if (isRecentTile(ants, id, candX, candY)) continue;
-          // Fresh + in-bounds alternate — the hard requirement is met.
-          if (!foundFallback) {
-            fallbackAx = ax;
-            fallbackAy = ay;
-            foundFallback = true;
-          }
-          if (
-            noRevisitDangerGrid !== undefined &&
-            phGet(noRevisitDangerGrid, candX, candY) >= DANGER_ROUTE_AVOID_THRESHOLD
-          ) {
-            continue; // dangerous — keep scanning for a safe fresh alternate.
-          }
-          dx = ax;
-          dy = ay;
-          found = true;
-          break;
-        }
-        if (!found && foundFallback) {
-          // Every fresh alternate was dangerous — take the first fresh one anyway
-          // (freshness is the hard requirement; the V34 flee backstops any tile at
-          // or above FLEE_THRESHOLD on the next tick).
-          dx = fallbackAx;
-          dy = fallbackAy;
-          found = true;
-        }
-        if (!found) {
-          dx = 0;
-          dy = 0;
-        }
-      }
+      // A1 (V36): the ant's colony surface DangerTrail grid (undefined pre-V36 /
+      // danger-free → the legacy first-fresh pick, byte-identical).
+      const noRevisitDangerGrid = surfaceDangerByColony[ants.colonyId[id]!];
+      pickNoRevisitSurfaceAlternate(ants, id, dx, dy, noRevisitDangerGrid, noRevisitAlt);
+      dx = noRevisitAlt.dx;
+      dy = noRevisitAlt.dy;
     }
 
     // S0a / issue #120 — V14+ underground CarryingFood no-revisit filter.

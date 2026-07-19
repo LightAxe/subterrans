@@ -31,7 +31,8 @@ import { Rng } from '../rng.js';
 import { SURFACE_GOAL_UNREACHED, surfaceGoalDistance } from '../surface-routing.js';
 import { Zone } from '../terrain.js';
 import type { WorldState } from '../types.js';
-import { clearRecentTiles } from './ant-store.js';
+import { ALT_DX, ALT_DY, type CardinalStep } from './ant-motion.js';
+import { clearRecentTiles, isRecentTile } from './ant-store.js';
 
 /**
  * Attempt to pick up food from a pile into an ant's carry inventory.
@@ -715,6 +716,87 @@ export function chooseExcursionDirection(
   ants.searchHeadingTicks[antId] = ticks;
 
   return { dx: hx, dy: hy };
+}
+
+/**
+ * Issue #42 fix #3 no-revisit alternate selection for surface SearchingFood
+ * foragers, plus the A1 (V36) danger preference. This is Layer-1 movement policy
+ * consumed by the tickAntMovement orchestrator (AGENTS.md ant-layering: behavior
+ * lives in a Layer-1 module, not bolted onto the Layer-2 orchestrator).
+ *
+ * Given a proposed surface step (dx, dy), writes the resolved step into `out`:
+ *   - If the destination tile (tileX+dx, tileY+dy) is NOT in the ant's recent-tiles
+ *     ring buffer, the proposed step passes through unchanged.
+ *   - If it IS recent, scan the 8-connected alternates in fixed N-clockwise ALT
+ *     order (the same neighbor sweep the queen overlap resolver uses) and take the
+ *     FIRST that is BOTH fresh (not in the buffer) AND in-bounds. The bounds check
+ *     matters at the map edge — an off-grid alternate would clamp back onto the same
+ *     tile, never cross, and stall the ant with valid alternates still available.
+ *     If every alternate is filtered, write {0,0} (pause); the buffer only advances
+ *     on real tile crossings, so pause ticks don't pollute history.
+ *
+ * A1 (V36): among the fresh, in-bounds alternates prefer the FIRST whose tile danger
+ * is below DANGER_ROUTE_AVOID_THRESHOLD, so the no-revisit swap cannot undo the
+ * sampler's danger-aware choice by stepping onto a spider-wake tile. Freshness +
+ * bounds stay the HARD filter; danger is a soft preference with a first-fresh
+ * fallback (heavy danger ≥ FLEE_THRESHOLD is backstopped by the V34 flee next tick).
+ * Danger read-only, no RNG. `dangerGrid === undefined` (pre-V36 / danger-free)
+ * reproduces the legacy first-fresh pick byte-identically. No allocation — writes
+ * the caller's `out` (a scratch CardinalStep), per the hot-loop rule.
+ */
+export function pickNoRevisitSurfaceAlternate(
+  ants: WorldState['ants'],
+  antId: number,
+  dx: number,
+  dy: number,
+  dangerGrid: PheromoneGrid | undefined,
+  out: CardinalStep,
+): void {
+  const tileX = ants.posX[antId]! >> FP_SHIFT;
+  const tileY = ants.posY[antId]! >> FP_SHIFT;
+  if (!isRecentTile(ants, antId, tileX + dx, tileY + dy)) {
+    out.dx = dx;
+    out.dy = dy;
+    return;
+  }
+  let fallbackAx = 0;
+  let fallbackAy = 0;
+  let foundFallback = false;
+  for (let i = 0; i < ALT_DX.length; i++) {
+    const ax = ALT_DX[i]!;
+    const ay = ALT_DY[i]!;
+    if (ax === dx && ay === dy) continue; // already-rejected proposal
+    const candX = tileX + ax;
+    const candY = tileY + ay;
+    if (candX < 0 || candX >= SURFACE_GRID_WIDTH || candY < 0 || candY >= SURFACE_GRID_HEIGHT)
+      continue;
+    if (isRecentTile(ants, antId, candX, candY)) continue;
+    // Fresh + in-bounds alternate — the hard requirement is met.
+    if (!foundFallback) {
+      fallbackAx = ax;
+      fallbackAy = ay;
+      foundFallback = true;
+    }
+    if (
+      dangerGrid !== undefined &&
+      phGet(dangerGrid, candX, candY) >= DANGER_ROUTE_AVOID_THRESHOLD
+    ) {
+      continue; // dangerous — keep scanning for a safe fresh alternate.
+    }
+    out.dx = ax;
+    out.dy = ay;
+    return;
+  }
+  if (foundFallback) {
+    // Every fresh alternate was dangerous — take the first fresh one anyway
+    // (freshness is the hard requirement; the V34 flee backstops any tile at or
+    // above FLEE_THRESHOLD on the next tick).
+    out.dx = fallbackAx;
+    out.dy = fallbackAy;
+    return;
+  }
+  out.dx = 0;
+  out.dy = 0;
 }
 
 /**
