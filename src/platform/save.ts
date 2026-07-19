@@ -12,7 +12,11 @@
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
 import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
-import { LATEST_SIM_VERSION, SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS } from '../sim/types.js';
+import {
+  LATEST_SIM_VERSION,
+  SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS,
+  SIM_VERSION_V37_CORPSE_FOOD,
+} from '../sim/types.js';
 import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/constants.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
 import {
@@ -38,7 +42,7 @@ import { createPheromoneGrid } from '../sim/pheromone/pheromone-store.js';
 import type { DepletionRecord, FoodPile, FoodPileId } from '../sim/food.js';
 import {
   MAX_ENTITIES,
-  FOOD_PILE_COUNT,
+  FOOD_PILE_HARD_CAP,
   FOOD_PILE_INITIAL_PICKUPS_MIN,
   FOOD_PILE_INITIAL_PICKUPS_MAX,
   FOOD_PILE_SOFT_CEILING,
@@ -219,7 +223,9 @@ function isInt32(value: unknown): value is number {
 const MAX_COLONIES_LOAD = 16; // current LIVE_COLONY_COUNT = 2.
 const MAX_PHEROMONE_GRID_KEYS = 16; // current = 8 (2 colonies × 2 types × 2 zones).
 const MAX_PENDING_CHAMBERS = 256; // few per colony in normal play.
-const MAX_FOOD_PILES = FOOD_PILE_COUNT * 4; // issue #109.
+// #109 food-pile hard cap — A2 relocated it to `constants.ts` as the shared
+// `FOOD_PILE_HARD_CAP` so the sim's `spawnCorpseFood` can bound the pile array
+// without importing `platform/`; both layers now reference the one constant.
 
 /** Issue #99 — verify a serialized grid object matches the canonical
  *  dimensions and has an array-like data field. Width/height are PRD-locked
@@ -349,7 +355,7 @@ function validatePendingChamber(pc: unknown, label: string): void {
 }
 
 /** Issue #109 + #112 — foodPile validator. */
-function validateFoodPile(p: unknown, label: string): void {
+function validateFoodPile(p: unknown, label: string, simVersion: number): void {
   if (p === null || typeof p !== 'object') {
     throw new Error(`Invalid ${label}: not an object`);
   }
@@ -368,16 +374,24 @@ function validateFoodPile(p: unknown, label: string): void {
   if (!isTileCoord(fp.tileY, SURFACE_GRID_HEIGHT)) {
     throw new Error(`Invalid ${label}.tileY: ${String(fp.tileY)}`);
   }
-  // Issue #112 — pickup-charge fields.
-  // pickupsInitial: integer in [FOOD_PILE_INITIAL_PICKUPS_MIN, MAX]. The
-  // runtime spawner and `pickupsForSeed` both produce values in that closed
-  // range, so any save with `pickupsInitial < MIN` represents a state the
-  // sim cannot generate (either tampered, or a back-port from a build with
-  // looser constants — neither survives the contract).
+  // A2 (V37) — isCorpse is an optional boolean; validate the type if present.
+  // Corpse-ness is only HONORED for V37+ saves (`effectiveCorpse` below), so a
+  // pre-V37 blob carrying `isCorpse: true` can't unlock the lowered pickup floor —
+  // its 1-charge pile still fails the [MIN,MAX] contract and is rejected.
+  if (fp.isCorpse !== undefined && typeof fp.isCorpse !== 'boolean') {
+    throw new Error(`Invalid ${label}.isCorpse: ${String(fp.isCorpse)}`);
+  }
+  const effectiveCorpse = simVersion >= SIM_VERSION_V37_CORPSE_FOOD && fp.isCorpse === true;
+  // Issue #112 / A2 — pickup-charge fields.
+  // pickupsInitial: integer in [floor, MAX]. Natural + scenario piles (and every
+  // pre-V37 pile) originate at [FOOD_PILE_INITIAL_PICKUPS_MIN, MAX], so a 1-charge
+  // NATURAL pile is a state the sim cannot generate. Only a V37+ CORPSE pile may
+  // start as low as 1 (worker/fighter corpse) — floor drops to 1 for those alone.
+  const pickupsFloor = effectiveCorpse ? 1 : FOOD_PILE_INITIAL_PICKUPS_MIN;
   if (
     typeof fp.pickupsInitial !== 'number' ||
     !Number.isInteger(fp.pickupsInitial) ||
-    fp.pickupsInitial < FOOD_PILE_INITIAL_PICKUPS_MIN ||
+    fp.pickupsInitial < pickupsFloor ||
     fp.pickupsInitial > FOOD_PILE_INITIAL_PICKUPS_MAX
   ) {
     throw new Error(`Invalid ${label}.pickupsInitial: ${String(fp.pickupsInitial)}`);
@@ -1697,14 +1711,14 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   if (!Array.isArray(s.foodPiles)) {
     throw new Error('Invalid foodPiles: not an array');
   }
-  if (s.foodPiles.length > MAX_FOOD_PILES) {
-    throw new Error(`foodPiles length ${s.foodPiles.length} exceeds cap ${MAX_FOOD_PILES}`);
+  if (s.foodPiles.length > FOOD_PILE_HARD_CAP) {
+    throw new Error(`foodPiles length ${s.foodPiles.length} exceeds cap ${FOOD_PILE_HARD_CAP}`);
   }
   const seenFoodIds = new Set<number>();
   const seenFoodTiles = new Set<number>();
   for (let i = 0; i < s.foodPiles.length; i++) {
     const fp = s.foodPiles[i]!;
-    validateFoodPile(fp, `foodPiles[${i}]`);
+    validateFoodPile(fp, `foodPiles[${i}]`, validatedSimVersion);
     if (seenFoodIds.has(fp.foodPileId)) {
       throw new Error(`Duplicate foodPiles[${i}].foodPileId: ${fp.foodPileId}`);
     }
@@ -1781,7 +1795,24 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     surfaceGoalFields: null,
     surfaceGoalBfsScratch: null,
     undergroundGrids,
-    foodPiles: s.foodPiles.map((p) => ({ ...p })),
+    foodPiles: s.foodPiles.map((p) => {
+      // A2 (V37) — reconstruct explicitly rather than spreading `{ ...p }`: an
+      // absent isCorpse must resolve to "natural", and a { ...p } spread would pass
+      // it through as `undefined` on some code paths (Codex). Honor isCorpse ONLY
+      // for V37+ saves (a pre-V37 blob can't smuggle a corpse flag), and keep it
+      // ABSENT for natural piles so pre-V37 saves round-trip byte-identically.
+      const pile: FoodPile = {
+        foodPileId: p.foodPileId,
+        tileX: p.tileX,
+        tileY: p.tileY,
+        pickupsRemaining: p.pickupsRemaining,
+        pickupsInitial: p.pickupsInitial,
+      };
+      if (validatedSimVersion >= SIM_VERSION_V37_CORPSE_FOOD && p.isCorpse === true) {
+        pile.isCorpse = true;
+      }
+      return pile;
+    }),
     recentlyDepletedFood: validatedRecentlyDepleted.map((r) => ({ ...r })),
     pendingChambers,
     events: [],

@@ -26,7 +26,7 @@ export const SURFACE_GOAL_UNREACHED = -1;
 /** Bound on the per-world goal-field cache. Distinct live targets (food piles +
  *  priority tiles) are few (~tens), but depleted/respawned piles' fields are
  *  never invalidated and linger, so the distinct-key set grows slowly over a long
- *  game. The cap sits well ABOVE the realistic live-target count (MAX_FOOD_PILES
+ *  game. The cap sits well ABOVE the realistic live-target count (FOOD_PILE_HARD_CAP
  *  = 60 + a couple priority tiles) so the active working set is never cleared
  *  mid-use. On overflow the whole cache is cleared; the next ticks rebuild only
  *  the handful of CURRENTLY-targeted fields (a re-request caches on first touch,

@@ -205,6 +205,51 @@ describe('WorldState', () => {
       expect(dst.terrainSeed).toBe(src.terrainSeed);
     });
 
+    it('A2: foodPile isCorpse flag copies faithfully across a reused dst slot (set + clear)', () => {
+      // Clear direction: a natural src pile reusing a slot that held a corpse must
+      // NOT retain the stale isCorpse (Object.assign never deletes keys — types.ts).
+      const src = createWorldState(1);
+      const dst = createWorldState(2);
+      dst.foodPiles.push({
+        foodPileId: 5,
+        tileX: 3,
+        tileY: 3,
+        pickupsRemaining: 1,
+        pickupsInitial: 1,
+        isCorpse: true,
+      });
+      src.foodPiles.push({
+        foodPileId: 5,
+        tileX: 3,
+        tileY: 3,
+        pickupsRemaining: 30,
+        pickupsInitial: 30,
+      });
+      copyWorldState(src, dst);
+      expect(dst.foodPiles[0]!.isCorpse).toBeUndefined();
+
+      // Set direction: a corpse src pile sets the flag on a formerly-natural dst slot.
+      const src2 = createWorldState(1);
+      const dst2 = createWorldState(2);
+      dst2.foodPiles.push({
+        foodPileId: 6,
+        tileX: 4,
+        tileY: 4,
+        pickupsRemaining: 30,
+        pickupsInitial: 30,
+      });
+      src2.foodPiles.push({
+        foodPileId: 6,
+        tileX: 4,
+        tileY: 4,
+        pickupsRemaining: 8,
+        pickupsInitial: 8,
+        isCorpse: true,
+      });
+      copyWorldState(src2, dst2);
+      expect(dst2.foodPiles[0]!.isCorpse).toBe(true);
+    });
+
     describe('AntComponents', () => {
       let src: ReturnType<typeof createWorldState>;
       let dst: ReturnType<typeof createWorldState>;

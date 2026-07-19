@@ -26,7 +26,7 @@
 
 import type { WorldState } from './types.js';
 import type { FoodPile, FoodPileId } from './food.js';
-import { allocateEntityId, INVALID_ENTITY_ID } from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V37_CORPSE_FOOD } from './types.js';
 import { isSurfaceTileInComponent } from './surface-features.js';
 import { sgGet, SurfaceTileState } from './terrain.js';
 import { Rng } from './rng.js';
@@ -40,9 +40,14 @@ import {
   FOOD_PILE_INITIAL_PICKUPS_MAX,
   FOOD_PILE_SPAWN_INTERVAL_TICKS,
   FOOD_PILE_SOFT_CEILING,
+  FOOD_PILE_HARD_CAP,
   FOOD_PILE_RECENT_DEPLETION_TICKS,
   FOOD_PILE_TERRAIN_GRASS_WEIGHT,
   FOOD_PILE_TERRAIN_OTHER_WEIGHT,
+  CORPSE_PICKUPS_WORKER,
+  CORPSE_PICKUPS_FIGHTER,
+  CORPSE_PICKUPS_QUEEN,
+  CORPSE_PICKUPS_SPIDER,
 } from './constants.js';
 
 // ---------------------------------------------------------------------------
@@ -70,15 +75,23 @@ export function recordFoodPileDepletion(world: WorldState, pileIndex: number): v
   const pile = world.foodPiles[pileIndex];
   if (!pile) return;
 
-  // Append-time cap — drop oldest before push if at capacity.
-  if (world.recentlyDepletedFood.length >= FOOD_PILE_SOFT_CEILING) {
-    world.recentlyDepletedFood.shift();
+  // A2 (V37) — no-barren: a depleting CORPSE pile does NOT seed the natural-spawn
+  // cooldown (recentlyDepletedFood), so consumed battlefield food doesn't suppress
+  // natural regrowth on that tile. Natural piles still record as before. Gated on
+  // V37 (skipping the append changes future natural-spawn positions → a determinism-
+  // affecting change; pre-V37 always records). Priority pointers below clear either way.
+  const skipBarren = world.simVersion >= SIM_VERSION_V37_CORPSE_FOOD && pile.isCorpse === true;
+  if (!skipBarren) {
+    // Append-time cap — drop oldest before push if at capacity.
+    if (world.recentlyDepletedFood.length >= FOOD_PILE_SOFT_CEILING) {
+      world.recentlyDepletedFood.shift();
+    }
+    world.recentlyDepletedFood.push({
+      tick: world.tick,
+      tileX: pile.tileX,
+      tileY: pile.tileY,
+    });
   }
-  world.recentlyDepletedFood.push({
-    tick: world.tick,
-    tileX: pile.tileX,
-    tileY: pile.tileY,
-  });
 
   // Clear stale priority pointers — any colony that designated this pile must
   // reset to null so a forager doesn't try to route to a foodPileId that no
@@ -92,6 +105,88 @@ export function recordFoodPileDepletion(world: WorldState, pileIndex: number): v
       colony.priorityFoodPileId = null;
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// spawnCorpseFood — A2 battlefield scavenging (V37)
+// ---------------------------------------------------------------------------
+
+/** A2 — victim kinds that yield corpse food (one row per kind; centipede etc. slot in later). */
+export type CorpseKind = 'worker' | 'fighter' | 'queen' | 'spider';
+
+const CORPSE_YIELD: Record<CorpseKind, number> = {
+  worker: CORPSE_PICKUPS_WORKER,
+  fighter: CORPSE_PICKUPS_FIGHTER,
+  queen: CORPSE_PICKUPS_QUEEN,
+  spider: CORPSE_PICKUPS_SPIDER,
+};
+
+/** A2 — fixed corpse-food yield (pickup-charges) for a victim kind. Never RNG-drawn. */
+export function corpseYield(kind: CorpseKind): number {
+  return CORPSE_YIELD[kind];
+}
+
+/**
+ * A2 (V37) — drop `pickups` charges of corpse food at surface tile (tileX, tileY).
+ * Callers (combat.ts `killAnt`, spider.ts death path) MUST gate on
+ * `simVersion >= SIM_VERSION_V37_CORPSE_FOOD` before calling — this helper itself
+ * is version-agnostic, but a call advances the entity-ID counter (replay-divergent),
+ * so the gate lives at each call site alongside its own drop predicate.
+ *
+ * Top-up-on-occupied-tile is a CORRECTNESS requirement, not just a yield
+ * optimization: `deserializeWorldState` hard-rejects two piles sharing a tile (or a
+ * duplicate foodPileId), so dropping a second pile on an occupied tile would make
+ * the save unloadable. We therefore scan ALL piles for a tile match and top up in
+ * place — clamping both charge fields to FOOD_PILE_INITIAL_PICKUPS_MAX to preserve
+ * the `pickupsRemaining <= pickupsInitial <= MAX` save invariant — and leave the
+ * matched pile's `isCorpse` UNCHANGED (fixed at birth: a corpse topping up a natural
+ * pile keeps it natural). Only when no pile occupies the tile do we allocate a NEW
+ * corpse pile (`isCorpse: true`), and only while `foodPiles.length` is below the
+ * shared hard cap (top-ups are always allowed — they add no pile). Entity-ID
+ * exhaustion degrades to a silent skip, exactly like `tickFoodPileSpawn`.
+ *
+ * Fixed `pickups` → no RNG draw; allocation advances only `world.nextEntityId`.
+ */
+export function spawnCorpseFood(
+  world: WorldState,
+  tileX: number,
+  tileY: number,
+  pickups: number,
+): void {
+  for (let i = 0; i < world.foodPiles.length; i++) {
+    const pile = world.foodPiles[i]!;
+    if (pile.tileX === tileX && pile.tileY === tileY) {
+      pile.pickupsInitial = Math.min(pile.pickupsInitial + pickups, FOOD_PILE_INITIAL_PICKUPS_MAX);
+      // Clamp remaining to the (possibly-clamped) initial so the save invariant holds.
+      pile.pickupsRemaining = Math.min(pile.pickupsRemaining + pickups, pile.pickupsInitial);
+      return;
+    }
+  }
+
+  // No pile on the tile — allocate a new corpse pile. Bound autosave size: skip a
+  // NEW pile once TOTAL piles hit the shared hard cap (deserializer rejects over-cap).
+  if (world.foodPiles.length >= FOOD_PILE_HARD_CAP) return;
+  // A NEW pile may only land on a walkable tile in the single connected surface
+  // component. The deserializer's validateSurfaceConnectivity throws on any
+  // off-component foodPile tile, so a corpse dropped where an entity died on a
+  // passable-but-off-component (or OOB) tile would make the save permanently
+  // unloadable. Mirrors the natural spawner's placement guard (also covers OOB
+  // via its bounds check). Guard before allocating so we don't burn an entity ID.
+  if (!isSurfaceTileInComponent(world, tileX, tileY)) return;
+  const newId = allocateEntityId(world);
+  if (newId === INVALID_ENTITY_ID) return; // entity-ID exhaustion — silent skip.
+  // Defensive clamp, symmetric with the top-up branch: today the max yield is 100
+  // (spider) ≤ MAX, but a future corpse-yield constant > MAX would otherwise mint a
+  // pile with pickupsInitial > MAX that `validateFoodPile` rejects on load.
+  const initial = Math.min(pickups, FOOD_PILE_INITIAL_PICKUPS_MAX);
+  world.foodPiles.push({
+    foodPileId: newId,
+    tileX,
+    tileY,
+    pickupsRemaining: initial,
+    pickupsInitial: initial,
+    isCorpse: true,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -136,9 +231,27 @@ export function tickFoodPileSpawn(world: WorldState, rng: Rng): void {
   if (world.tick <= 0) return;
   if (world.tick % FOOD_PILE_SPAWN_INTERVAL_TICKS !== 0) return;
 
-  // Soft-ceiling gate — skip silently when at or above the soft cap. Hard cap
-  // (MAX_FOOD_PILES = 60 from #109) sits at 2× this; we never approach it.
-  if (world.foodPiles.length >= FOOD_PILE_SOFT_CEILING) return;
+  // Soft-ceiling gate — skip silently when at or above the soft cap.
+  if (world.simVersion >= SIM_VERSION_V37_CORPSE_FOOD) {
+    // A2 (V37) — corpse piles are EXEMPT from the natural-spawn soft ceiling, so a
+    // corpse-littered war doesn't starve natural regrowth: count non-corpse piles
+    // only. But the exemption breaks the old "hard cap 60 is 2×, we never approach
+    // it" assumption — naturals-only would let the spawner append natural piles on
+    // top of up-to-HARD_CAP corpse piles, pushing foodPiles.length past the hard cap
+    // so deserializeWorldState hard-rejects the save. The HARD_CAP backstop below is
+    // therefore MANDATORY, not optional (Codex). Both clauses are V37-gated so pre-V37
+    // replays byte-identically on the legacy total-count path.
+    if (world.foodPiles.length >= FOOD_PILE_HARD_CAP) return;
+    let naturalCount = 0;
+    for (let i = 0; i < world.foodPiles.length; i++) {
+      if (!world.foodPiles[i]!.isCorpse) naturalCount++;
+    }
+    if (naturalCount >= FOOD_PILE_SOFT_CEILING) return;
+  } else {
+    // Pre-V37 legacy: total-count soft ceiling (total ≤ 30 < HARD_CAP, so it never
+    // nears the hard cap). Hard cap (= 60 from #109) sits at 2×; never approached.
+    if (world.foodPiles.length >= FOOD_PILE_SOFT_CEILING) return;
+  }
 
   // Spawn-time prune of stale recentlyDepletedFood entries. Append-time cap
   // bounds the array; this prune drops entries by age so an old entry doesn't

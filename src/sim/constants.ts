@@ -535,7 +535,7 @@ export const FOOD_PILE_SPAWN_INTERVAL_TICKS = 1800;
 /**
  * Issue #112 — Soft ceiling on `world.foodPiles.length`. When at-or-above
  * this, the spawn step skips silently. Sits at FOOD_PILE_COUNT × 2 = 30,
- * comfortably under the validator hard cap MAX_FOOD_PILES = 60 (issue #109).
+ * comfortably under the shared hard cap FOOD_PILE_HARD_CAP = 60 (issue #109).
  */
 export const FOOD_PILE_SOFT_CEILING = FOOD_PILE_COUNT * 2;
 
@@ -561,6 +561,31 @@ export const FOOD_PILE_TERRAIN_GRASS_WEIGHT = 4;
 
 /** Issue #112 — Non-grass placement weight (see FOOD_PILE_TERRAIN_GRASS_WEIGHT). */
 export const FOOD_PILE_TERRAIN_OTHER_WEIGHT = 1;
+
+/**
+ * A2 — hard cap on `world.foodPiles.length` (shared sim/save constant). Relocated
+ * from `save.ts`'s private `MAX_FOOD_PILES` so the corpse-food spawner
+ * (`spawnCorpseFood`) can bound the pile array without importing `platform/` (a
+ * sim→platform boundary violation). `deserializeWorldState` references the SAME
+ * constant on load, so the runtime cap and the load-time cap can never diverge.
+ * `FOOD_PILE_COUNT × 4 = 60`, 2× the FOOD_PILE_SOFT_CEILING natural-spawn throttle.
+ */
+export const FOOD_PILE_HARD_CAP = FOOD_PILE_COUNT * 4;
+
+/**
+ * A2 — corpse-food yields (pickup-charges), by victim kind. Fixed constants,
+ * NEVER RNG-drawn: this is the single most important determinism property of
+ * battlefield scavenging — a drop advances only the entity-ID counter, so every
+ * drop site is gated `simVersion >= SIM_VERSION_V37_CORPSE_FOOD`. worker/fighter
+ * each yield 1 (a lone battlefield morsel; a real battle's kills top up the same
+ * tile toward FOOD_PILE_INITIAL_PICKUPS_MAX); the queen's 8 is forward-compat only
+ * (queen death ends the match today, so it is deterministic-but-inert); the
+ * spider's 100 is a genuine scavenging bonanza when a colony brings it down.
+ */
+export const CORPSE_PICKUPS_WORKER = 1;
+export const CORPSE_PICKUPS_FIGHTER = 1;
+export const CORPSE_PICKUPS_QUEEN = 8;
+export const CORPSE_PICKUPS_SPIDER = 100;
 
 // ---------------------------------------------------------------------------
 // Phase 7: Surface Scatter
