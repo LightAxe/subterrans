@@ -835,3 +835,77 @@ describe('tickAntMovement — A1 (V36) danger-aware blocked-diagonal per-axis re
     expect(r.endDanger).toBeGreaterThanOrEqual(DANGER_ROUTE_AVOID_THRESHOLD); // stepped into danger
   });
 });
+
+describe('resolveSameColonyOccupancy — A1 (V36) danger-aware displacement (Codex P2)', () => {
+  // Two same-colony SearchingFood foragers pinned on the SAME surface tile (both PAUSED
+  // so neither moves this tick) collide; the resolver bumps the higher-id one. DIR order
+  // is N,E,S,W, so the legacy resolver takes North first. Poison North and leave East
+  // clean: at V36 the bump must skip North for the clean East; at V35 (danger-blind) it
+  // takes the first-passable North — straight into the spider wake.
+  function findTile(): { seed: number; tx: number; ty: number } | null {
+    for (let seed = 1; seed < 300; seed++) {
+      const world = createWorldState(seed);
+      for (let ty = 4; ty < 70; ty++) {
+        for (let tx = 4; tx < 70; tx++) {
+          if (!canEnterSurfaceTile(world, tx, ty)) continue; // shared tile walkable
+          if (!canEnterSurfaceTile(world, tx, ty - 1)) continue; // North (legacy pick) walkable
+          if (!canEnterSurfaceTile(world, tx + 1, ty)) continue; // East (danger-safe pick) walkable
+          return { seed, tx, ty };
+        }
+      }
+    }
+    return null;
+  }
+
+  function run(simVersion: number): { tx: number; ty: number; bx: number; by: number } {
+    const g = findTile();
+    expect(g).not.toBeNull();
+    const { seed, tx, ty } = g!;
+    const world = createWorldState(seed);
+    world.simVersion = simVersion;
+    world.colonies[1] = createColonyRecord(1, 0);
+
+    const spawnPaused = (): number => {
+      const id = allocateEntityId(world);
+      initAnt(world.ants, id, {
+        colonyId: 1,
+        posX: (tx << FP_SHIFT) + (FP_ONE >> 1),
+        posY: (ty << FP_SHIFT) + (FP_ONE >> 1),
+        task: AntTask.Foraging,
+        subTask: ForagingSubState.SearchingFood,
+        zone: Zone.Surface,
+      });
+      world.ants.speed[id] = FP_ONE;
+      world.ants.targetPosX[id] = -1;
+      world.ants.targetPosY[id] = -1;
+      world.ants.searchPauseTicks[id] = 5; // hold in place — no movement this tick
+      return id;
+    };
+    const aId = spawnPaused(); // lower id — claims the shared tile
+    const bId = spawnPaused(); // higher id — the one the resolver bumps
+    expect(aId).toBeLessThan(bId);
+
+    const danger = createPheromoneGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
+    phSet(danger, tx, ty - 1, DANGER_ROUTE_AVOID_THRESHOLD + 100); // North is a spider-wake tile
+    world.pheromoneGrids[pheromoneGridKey(1, PheromoneType.DangerTrail, 'surface')] = danger;
+
+    tickAntMovement(world, new Rng(1), createDigFlowFields());
+    return {
+      tx,
+      ty,
+      bx: world.ants.posX[bId]! >> FP_SHIFT,
+      by: world.ants.posY[bId]! >> FP_SHIFT,
+    };
+  }
+
+  it('V36 bumps the collided forager to the clean East tile, not the poisoned North', () => {
+    const r = run(SIM_VERSION_V36_RISK_AWARE_FORAGING);
+    expect(r.bx === r.tx + 1 && r.by === r.ty).toBe(true); // East — danger-safe displacement
+    expect(r.bx === r.tx && r.by === r.ty - 1).toBe(false); // not the poisoned North
+  });
+
+  it('V35 control: danger-blind — bumps to the first-passable North (into danger)', () => {
+    const r = run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER);
+    expect(r.bx === r.tx && r.by === r.ty - 1).toBe(true); // North — legacy first-passable
+  });
+});

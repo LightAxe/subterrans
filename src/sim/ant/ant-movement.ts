@@ -1635,7 +1635,8 @@ function resolveSameColonyOccupancy(world: WorldState): void {
   // negligible vs. the prior `new Map()` + GC churn. Same observable
   // behavior — Map iteration order is insertion order, which we don't
   // rely on (lookups are key-based).
-  const occupancy = getScratch(world).movementOccupancy;
+  const arena = getScratch(world);
+  const occupancy = arena.movementOccupancy;
   occupancy.clear();
 
   for (let id = 0; id < world.nextEntityId; id++) {
@@ -1697,43 +1698,75 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     const task = ants.task[id]! as AntTask;
     const underground =
       zone === Zone.Underground ? world.undergroundGrids[rawGridColonyId] : undefined;
+    // A1 (V36): a surface SearchingFood forager's danger-aware route can be undone by
+    // this displacement post-pass bumping it onto a spider-wake tile after the sampler /
+    // no-revisit / detour checks already ran (Codex P2). Do a danger-safe-first pass,
+    // then fall back to the legacy first-passable pass so a displacement still always
+    // happens. displaceDangerGrid is the colony's surface DangerTrail grid from the
+    // per-tick arena cache tickAntMovement already populated this tick; undefined for the
+    // queen / other tasks / underground / pre-V36 (empty cache) — so the safe pass is
+    // skipped and the legacy first-passable pick is byte-identical.
+    const displaceDangerGrid =
+      zone === Zone.Surface &&
+      task === AntTask.Foraging &&
+      ants.subTask[id] === ForagingSubState.SearchingFood
+        ? arena.surfaceDangerByColony[colonyId]
+        : undefined;
     let shifted = false;
-    for (let d = 0; d < 4; d++) {
-      const nx = tileX + DIR_DX[d]!;
-      const ny = tileY + DIR_DY[d]!;
-      if (zone === Zone.Underground) {
-        if (nx < 0 || nx >= UNDERGROUND_GRID_WIDTH) continue;
-        if (ny < 0 || ny >= UNDERGROUND_GRID_HEIGHT) continue;
-        if (underground && !canEnterUndergroundTile(underground, nx, ny, task)) continue;
-      } else {
-        if (nx < 0 || nx >= SURFACE_GRID_WIDTH) continue;
-        if (ny < 0 || ny >= SURFACE_GRID_HEIGHT) continue;
-        // Don't bump a same-colony collision into a HardBlock tile.
-        if (!canEnterSurfaceTile(world, nx, ny)) continue;
-      }
-      // Exempt adjacent tiles are always "free" — we shift into them and do
-      // not claim them (keeping them open for further stacking).
-      if (isOccupancyExempt(world, colonyId, zone, nx, ny)) {
+    for (let attempt = 0; attempt < 2 && !shifted; attempt++) {
+      // attempt 0 = danger-safe-only; skipped entirely when there is no danger grid, so
+      // the legacy path goes straight to the attempt-1 first-passable pass (no behaviour
+      // change). No claims are made on a passless attempt-0, so attempt 1 starts clean.
+      if (attempt === 0 && displaceDangerGrid === undefined) continue;
+      for (let d = 0; d < 4; d++) {
+        const nx = tileX + DIR_DX[d]!;
+        const ny = tileY + DIR_DY[d]!;
+        if (zone === Zone.Underground) {
+          if (nx < 0 || nx >= UNDERGROUND_GRID_WIDTH) continue;
+          if (ny < 0 || ny >= UNDERGROUND_GRID_HEIGHT) continue;
+          if (underground && !canEnterUndergroundTile(underground, nx, ny, task)) continue;
+        } else {
+          if (nx < 0 || nx >= SURFACE_GRID_WIDTH) continue;
+          if (ny < 0 || ny >= SURFACE_GRID_HEIGHT) continue;
+          // Don't bump a same-colony collision into a HardBlock tile.
+          if (!canEnterSurfaceTile(world, nx, ny)) continue;
+        }
+        // Danger-safe pass (attempt 0): skip a spider-wake tile so the displacement
+        // prefers a clean neighbour. attempt 1 takes it anyway if every neighbour is
+        // dangerous, so a bump still happens — bounded, since a >= FLEE_THRESHOLD tile
+        // is caught by the V34 flee on the next tick. This danger skip runs BEFORE the
+        // exempt check below, so at V36 a clean neighbour is deliberately preferred over
+        // a dangerous exempt one; legacy (attempt 1) keeps the original exempt-first order.
+        if (
+          attempt === 0 &&
+          displaceDangerGrid !== undefined &&
+          phGet(displaceDangerGrid, nx, ny) >= DANGER_ROUTE_AVOID_THRESHOLD
+        )
+          continue;
+        // Exempt adjacent tiles are always "free" — we shift into them and do
+        // not claim them (keeping them open for further stacking).
+        if (isOccupancyExempt(world, colonyId, zone, nx, ny)) {
+          tileX = nx;
+          tileY = ny;
+          ants.posX[id] = (tileX << FP_SHIFT) + occupancyCenterOffset;
+          ants.posY[id] = (tileY << FP_SHIFT) + occupancyCenterOffset;
+          shifted = true;
+          break;
+        }
+        // Issue #61 — same key layout as the primary key above. Issue #108
+        // (v13+): mirror the same gridByte mask so adjacent-tile lookup keys
+        // match the primary lookup. Pre-v13 used `rawGridColonyId` here too;
+        // safe because pre-v13 occupancy resolution never crosses zones.
+        const adjKey = (gridByte << 23) | (colonyId << 16) | (zone << 15) | (ny << 7) | nx;
+        if (occupancy.has(adjKey)) continue;
         tileX = nx;
         tileY = ny;
         ants.posX[id] = (tileX << FP_SHIFT) + occupancyCenterOffset;
         ants.posY[id] = (tileY << FP_SHIFT) + occupancyCenterOffset;
+        occupancy.set(adjKey, id);
         shifted = true;
         break;
       }
-      // Issue #61 — same key layout as the primary key above. Issue #108
-      // (v13+): mirror the same gridByte mask so adjacent-tile lookup keys
-      // match the primary lookup. Pre-v13 used `rawGridColonyId` here too;
-      // safe because pre-v13 occupancy resolution never crosses zones.
-      const adjKey = (gridByte << 23) | (colonyId << 16) | (zone << 15) | (ny << 7) | nx;
-      if (occupancy.has(adjKey)) continue;
-      tileX = nx;
-      tileY = ny;
-      ants.posX[id] = (tileX << FP_SHIFT) + occupancyCenterOffset;
-      ants.posY[id] = (tileY << FP_SHIFT) + occupancyCenterOffset;
-      occupancy.set(adjKey, id);
-      shifted = true;
-      break;
     }
     // If no shift found, forced overlap — rare. Leave the ant at the original
     // tile; do not pollute the occupancy map (the lower-id claimant remains
