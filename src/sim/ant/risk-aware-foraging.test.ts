@@ -1,18 +1,23 @@
 // risk-aware-foraging.test.ts — A1 (simVersion V36) risk-aware foraging.
 //
-// Covers the four A1 surfaces:
-//   (a) sampleForagingDirection danger penalty — RNG-free scoring layers.
-//   (b) hasNearbyPheromoneSignal mirror via tickExcursionBoundary at V36.
-//   (c) V35 gate regression — the danger grid is never consulted pre-V36.
+// Covers the A1 routing surfaces:
+//   (a) sampleForagingDirection danger penalty — RNG-free scoring layers, plus
+//       the RNG draw-count delta danger introduces when it drops a strong trail
+//       into the weak-trail band.
 //   (d) chooseExcursionDirection danger-steer (world-edge bounce) at V36.
+//   (e) no-revisit alternate selection is danger-aware at V36.
 //
 // The danger penalty is `net = food − (Math.imul(danger, DANGER_ROUTE_WEIGHT_FP)
 // >> FP_SHIFT)`, clamped ≥ 0. With DANGER_ROUTE_WEIGHT_FP = 256 (1.0) an equal
 // danger value fully cancels a food-trail cell (net = 0).
+//
+// The excursion-boundary danger mirror is intentionally absent (Option B) — the
+// boundary scan is danger-blind; see hasNearbyPheromoneSignal. V35-gate coverage
+// lives in determinism.test.ts (V36-vs-V35 rngState) and the (e) V35 control.
 
 import { describe, it, expect } from 'vitest';
 import { sampleForagingDirection } from '../pheromone/pheromone-system.js';
-import { chooseExcursionDirection, tickExcursionBoundary, tickAntMovement } from './ant-system.js';
+import { chooseExcursionDirection, tickAntMovement } from './ant-system.js';
 import {
   createWorldState,
   allocateEntityId,
@@ -28,7 +33,6 @@ import { Rng } from '../rng.js';
 import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
-  SEARCH_LEASH_RADII,
   DANGER_ROUTE_AVOID_THRESHOLD,
 } from '../constants.js';
 import { FP_SHIFT } from '../fixed.js';
@@ -110,92 +114,6 @@ describe('A1 sampler RNG draw-count', () => {
     const v36 = countingRng(999);
     sampleForagingDirection(food, 5, 5, v36.rng, -1, -1, danger); // V36: weak trail → layer 2
     expect(v36.draws()).toBe(1); // exactly the single explore-roll draw (no explore branch this seed)
-  });
-});
-
-// ---------------------------------------------------------------------------
-// (b)/(c) hasNearbyPheromoneSignal mirror + V35 gate, via tickExcursionBoundary
-// ---------------------------------------------------------------------------
-
-/**
- * A SearchingFood forager parked one tile PAST its leash radius, with a food
- * trail 2 tiles away (inside the SIGNAL_PHEROMONE_RADIUS=3 scan). Whether it
- * flips to ReturningToNest depends entirely on whether that trail still counts
- * as "signal" once the danger mirror is applied.
- */
-function setupPastLeashForager(
-  simVersion: number,
-  dangerValue: number,
-): { world: WorldState; antId: number } {
-  const world = createWorldState(42, MAX_TEST_ENTITIES);
-  world.simVersion = simVersion;
-  const colony = createColonyRecord(COLONY_ID, 0);
-  colony.entrances = [
-    { entranceId: allocateEntityId(world), surfaceTileX: 0, surfaceTileY: 0, isOpen: true },
-  ];
-  world.colonies[COLONY_ID] = colony;
-
-  const base = SEARCH_LEASH_RADII[0]!;
-  const antTileX = base + 1; // one tile past the wave-0 leash from entrance (0,0)
-  const antTileY = 0;
-  const antId = allocateEntityId(world);
-  initAnt(world.ants, antId, {
-    colonyId: COLONY_ID,
-    posX: antTileX << FP_SHIFT,
-    posY: antTileY << FP_SHIFT,
-    task: AntTask.Foraging,
-    subTask: ForagingSubState.SearchingFood,
-  });
-  world.ants.searchWave[antId] = 0;
-  world.ants.searchPrevTileX[antId] = -1;
-  world.ants.searchPrevTileY[antId] = -1;
-
-  // Food trail 2 tiles east of the ant (within the radius-3 signal scan).
-  const foodTileX = antTileX + 2;
-  const foodGrid = createPheromoneGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
-  world.pheromoneGrids[pheromoneGridKey(COLONY_ID, PheromoneType.FoodTrail, 'surface')] = foodGrid;
-  phSet(foodGrid, foodTileX, antTileY, 1000);
-
-  const dangerGrid = createPheromoneGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
-  world.pheromoneGrids[pheromoneGridKey(COLONY_ID, PheromoneType.DangerTrail, 'surface')] =
-    dangerGrid;
-  if (dangerValue > 0) phSet(dangerGrid, foodTileX, antTileY, dangerValue);
-
-  return { world, antId };
-}
-
-describe('A1 (b) boundary mirror at V36', () => {
-  it('a trail poisoned beyond recovery (danger ≫ food) stops holding a past-leash forager → ReturningToNest', () => {
-    // food 1000, danger 2000 → net < 0 even after the danger-decay alignment.
-    const { world, antId } = setupPastLeashForager(SIM_VERSION_V36_RISK_AWARE_FORAGING, 2000);
-    tickExcursionBoundary(world);
-    expect(world.ants.subTask[antId]).toBe(ForagingSubState.ReturningToNest);
-  });
-
-  it('control: a CLEAN trail still holds the forager → stays SearchingFood', () => {
-    const { world, antId } = setupPastLeashForager(SIM_VERSION_V36_RISK_AWARE_FORAGING, 0);
-    tickExcursionBoundary(world);
-    expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
-  });
-
-  it('decay-aligned: danger == food is NOT cancelled here (food decays slower → usable) → stays SearchingFood', () => {
-    // Raw danger 1000 would cancel food 1000, but the sampler reads them one decay
-    // step later where food > danger (danger decays faster). The boundary decays the
-    // danger term forward to agree with the sampler, so it must NOT flip the ant home
-    // for a trail that will be usable next tick (Codex P2 fix).
-    const { world, antId } = setupPastLeashForager(SIM_VERSION_V36_RISK_AWARE_FORAGING, 1000);
-    tickExcursionBoundary(world);
-    expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
-  });
-});
-
-describe('A1 (c) V35 gate regression — danger grid never consulted pre-V36', () => {
-  it('a danger ≫ food trail is ignored at V35: forager stays SearchingFood (byte-identical to clean)', () => {
-    const { world, antId } = setupPastLeashForager(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER, 2000);
-    tickExcursionBoundary(world);
-    // At V35 the danger grid is not passed, so even a heavily-poisoned trail still
-    // counts as signal — exactly the pre-V36 behaviour.
-    expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
   });
 });
 

@@ -8,9 +8,7 @@ import type { ChamberRecord, ColonyRecord } from '../colony/colony-store.js';
 import { colonyHasNoDepositTarget, isFoodChamberDepositable } from '../colony/colony-system.js';
 import {
   BASE_FOOD_STORAGE_CAPACITY,
-  DANGER_DECAY_FP,
   DANGER_ROUTE_AVOID_THRESHOLD,
-  DANGER_ROUTE_WEIGHT_FP,
   EXCURSION_HEADING_JITTER_TICKS,
   EXCURSION_HEADING_MIN_TICKS,
   EXCURSION_TURN_PERCENT,
@@ -32,7 +30,7 @@ import { phGet, pheromoneGridKey, type PheromoneGrid } from '../pheromone/pherom
 import { Rng } from '../rng.js';
 import { SURFACE_GOAL_UNREACHED, surfaceGoalDistance } from '../surface-routing.js';
 import { Zone } from '../terrain.js';
-import { SIM_VERSION_V36_RISK_AWARE_FORAGING, type WorldState } from '../types.js';
+import type { WorldState } from '../types.js';
 import { clearRecentTiles } from './ant-store.js';
 
 /**
@@ -721,11 +719,20 @@ export function chooseExcursionDirection(
 
 /**
  * Manhattan radius scanned around a forager for an "any pheromone present"
- * signal. Mirrors REACQUIRE_RADIUS in pheromone-system.ts — if this scan
- * returns true, sampleForagingDirection is guaranteed to return a non-zero
- * direction, so we must not flip the ant into ReturningToNest (or keep it
- * there). Kept as a local constant to avoid widening pheromone-system's
- * public surface for what is otherwise an internal implementation detail.
+ * signal. Mirrors REACQUIRE_RADIUS in pheromone-system.ts — a raw FoodTrail hit
+ * within this radius means the sampler can follow it, so we must not flip the ant
+ * into ReturningToNest (or keep it there).
+ *
+ * V36 caveat (A1, Option B): the sampler gained DangerTrail awareness (a food
+ * penalty plus a reacquire first-step danger check) that this scan deliberately
+ * does NOT mirror — see hasNearbyPheromoneSignal. So at V36 the "scan true ⇒
+ * sampler non-zero" implication is no longer absolute: a danger-poisoned or
+ * danger-blocked trail can make this scan return true while the sampler returns
+ * {0,0}, holding a past-leash forager SearchingFood for a few ticks rather than
+ * sending it home. That linger is bounded and accepted (see hasNearbyPheromoneSignal).
+ *
+ * Kept as a local constant to avoid widening pheromone-system's public surface
+ * for what is otherwise an internal implementation detail.
  */
 const SIGNAL_PHEROMONE_RADIUS = 3;
 
@@ -750,12 +757,17 @@ const SIGNAL_PHEROMONE_RADIUS = 3;
  * Pass prevTileX = prevTileY = -1 when the ant has no prev tile; the
  * function then behaves as a plain nonzero-within-radius scan.
  *
- * A1 (V36) danger mirror: when `dangerGrid` is provided, a cell only counts as
- * signal if its FoodTrail survives the same penalty the sampler applies
- * (`raw − (Math.imul(danger, DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT) > 0`). This
- * keeps the "true ⇒ sampleForagingDirection returns non-zero" invariant intact
- * under the penalty. `undefined` (pre-V36, gated at the call site) = the legacy
- * raw-nonzero scan, byte-identical.
+ * A1 (V36) — deliberately danger-BLIND (Option B): this scan does NOT apply the
+ * sampler's DangerTrail penalty or its reacquire first-step danger check. A danger
+ * mirror here has to predict, at step 9c (pre-decay), exactly what the sampler will
+ * see at step 16 (post-decay) — and FoodTrail/DangerTrail decay at different rates,
+ * so every attempt to keep the two in sync produced a fresh review finding. The
+ * cost of staying blind is bounded: a past-leash forager next to a danger-poisoned
+ * or danger-blocked trail is held SearchingFood for a few ticks (this returns true
+ * while the sampler returns {0,0}), then A1's excursion danger-steer walks it off
+ * the trail's ~3-tile radius and the boundary sends it home; heavy danger
+ * (≥ FLEE_THRESHOLD) is caught by the V34 flee, and DangerTrail decays every tick.
+ * Do NOT re-add a danger term here — the brief linger is the accepted tradeoff.
  */
 function hasNearbyPheromoneSignal(
   grid: PheromoneGrid,
@@ -763,7 +775,6 @@ function hasNearbyPheromoneSignal(
   tileY: number,
   prevTileX: number = -1,
   prevTileY: number = -1,
-  dangerGrid?: PheromoneGrid,
 ): boolean {
   const hasPrev = prevTileX >= 0 && prevTileY >= 0;
   for (let dy = -SIGNAL_PHEROMONE_RADIUS; dy <= SIGNAL_PHEROMONE_RADIUS; dy++) {
@@ -785,24 +796,7 @@ function hasNearbyPheromoneSignal(
         const stepY = absX >= absY ? 0 : dy > 0 ? 1 : dy < 0 ? -1 : 0;
         if (tileX + stepX === prevTileX && tileY + stepY === prevTileY) continue;
       }
-      const rawSignal = phGet(grid, sx, sy);
-      if (rawSignal > 0) {
-        if (dangerGrid === undefined) return true;
-        // The sampler reads danger POST-decay (step 15) at movement (step 16);
-        // this boundary runs pre-decay (step 9c) and DangerTrail decays faster
-        // than FoodTrail, so the RAW danger here would cancel a signal the sampler
-        // will find usable — a premature ReturningToNest flip. Evaluate one
-        // danger-decay step forward so the danger term matches the sampler's
-        // post-decay view. (The < PHEROMONE_FLOOR snap in tickPheromoneDecay is
-        // immaterial here: it only zeroes sub-64 danger, whose penalty is already
-        // negligible against a real trail. Food is left pre-decay — its slow-decay
-        // skew is the pre-existing boundary behaviour, and it keeps clean-trail
-        // V36 flips identical to V35.)
-        const dRaw = phGet(dangerGrid, sx, sy);
-        const dangerDecayed = dRaw - (Math.imul(dRaw, DANGER_DECAY_FP) >> FP_SHIFT);
-        const penalty = Math.imul(dangerDecayed, DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT;
-        if (rawSignal - penalty > 0) return true;
-      }
+      if (phGet(grid, sx, sy) > 0) return true;
     }
   }
   return false;
@@ -866,19 +860,6 @@ function colonyHasPriorityPile(world: WorldState, colonyId: number): boolean {
 export function tickExcursionBoundary(world: WorldState): void {
   const ants = world.ants;
 
-  // A1 (V36): resolve each colony's surface DangerTrail grid ONCE (few colonies)
-  // so the per-ant mirror lookup below doesn't build a pheromoneGridKey string per
-  // ant per tick (mirrors the tickAntMovement cache; AGENTS.md hot-loop rule).
-  // Empty pre-V36 → the gated read sees undefined and V35 replays stay byte-identical.
-  const surfaceDangerByColony: (PheromoneGrid | undefined)[] = [];
-  if (world.simVersion >= SIM_VERSION_V36_RISK_AWARE_FORAGING) {
-    for (const cidKey of Object.keys(world.colonies)) {
-      const cid = Number(cidKey);
-      surfaceDangerByColony[cid] =
-        world.pheromoneGrids[pheromoneGridKey(cid, PheromoneType.DangerTrail, 'surface')];
-    }
-  }
-
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1) continue;
     if (ants.task[id] !== AntTask.Foraging) continue;
@@ -912,11 +893,6 @@ export function tickExcursionBoundary(world: WorldState): void {
       const key = pheromoneGridKey(colonyId, PheromoneType.FoodTrail, 'surface');
       const grid = world.pheromoneGrids[key];
       if (grid) {
-        // A1 (V36): mirror the sampler's danger penalty so a cell whose FoodTrail
-        // is fully cancelled by DangerTrail does not count as "signal" — otherwise
-        // an over-leash forager lingers SearchingFood next to danger the sampler
-        // would refuse to route into. Gated: undefined pre-V36 = legacy scan.
-        const dangerGrid = surfaceDangerByColony[colonyId];
         // 09 follow-up issue 2: skip the ant's prev tile so its own just-left
         // trail doesn't count as "signal" and trap it in ReturningToNest
         // purgatory. Sentinels (-1,-1) are treated as "no prev" by the helper.
@@ -926,7 +902,6 @@ export function tickExcursionBoundary(world: WorldState): void {
           tileY,
           ants.searchPrevTileX[id],
           ants.searchPrevTileY[id],
-          dangerGrid,
         );
       }
     }

@@ -25,7 +25,7 @@ import type { DigFlowFields } from '../dig-system.js';
 import type { EntranceFlowFields } from '../entrance-flow.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
-import { phGet, pheromoneGridKey, type PheromoneGrid } from '../pheromone/pheromone-store.js';
+import { phGet, pheromoneGridKey } from '../pheromone/pheromone-store.js';
 import { sampleForagingDirection } from '../pheromone/pheromone-system.js';
 import { Rng } from '../rng.js';
 import {
@@ -163,11 +163,16 @@ export function tickAntMovement(
   // are only a couple of colonies) so the per-ant risk-aware routing lookups in the
   // loop below (sampler / no-revisit / obstacle detour) index by colonyId instead of
   // building a `pheromoneGridKey` template string per ant per tick — the AGENTS.md
-  // hot-loop allocation rule (Codex P1). Left empty (all undefined) pre-V36, so the
-  // gated reads see `undefined` and V35 replays stay byte-identical.
-  const surfaceDangerByColony: (PheromoneGrid | undefined)[] = [];
+  // hot-loop allocation rule (Codex P1). The colonyId→grid array lives on the
+  // per-world scratch arena (#231 pattern): reset its length and repopulate in place
+  // so nothing allocates per tick — neither the array nor an `Object.keys` snapshot
+  // (for-in walks the colony keys directly). Left empty (all undefined) pre-V36, so
+  // the gated reads see `undefined` and V35 replays stay byte-identical.
+  const surfaceDangerByColony = arena.surfaceDangerByColony;
+  surfaceDangerByColony.length = 0;
   if (world.simVersion >= SIM_VERSION_V36_RISK_AWARE_FORAGING) {
-    for (const cidKey of Object.keys(world.colonies)) {
+    for (const cidKey in world.colonies) {
+      if (!Object.hasOwn(world.colonies, cidKey)) continue;
       const cid = Number(cidKey);
       surfaceDangerByColony[cid] =
         world.pheromoneGrids[pheromoneGridKey(cid, PheromoneType.DangerTrail, 'surface')];
