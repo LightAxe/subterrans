@@ -280,7 +280,19 @@ export function sampleForagingDirection(
     if (rng.nextInt(100) < EXPLORE_RATE_PERCENT) {
       const idx = rng.nextInt(4);
       const dir = DIRS[idx]!;
-      return { dx: dir.dx, dy: dir.dy };
+      // A1 (V36): the random explore step must not walk into a tile the danger
+      // scoring just rejected. If the rolled cardinal is a spider-wake tile, fall
+      // through to the (danger-penalized) exploit pick rather than explore into
+      // danger. BOTH RNG draws (the roll + idx) are still consumed above, so replay
+      // determinism holds regardless of the branch; undefined dangerGrid (pre-V36)
+      // takes the rolled direction unconditionally, byte-identical to the legacy
+      // random explore.
+      if (
+        dangerGrid === undefined ||
+        phGet(dangerGrid, tileX + dir.dx, tileY + dir.dy) < DANGER_ROUTE_AVOID_THRESHOLD
+      ) {
+        return { dx: dir.dx, dy: dir.dy };
+      }
     }
     return { dx: bestDx, dy: bestDy };
   }

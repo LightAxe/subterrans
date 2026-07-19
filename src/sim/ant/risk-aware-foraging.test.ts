@@ -123,6 +123,41 @@ describe('A1 sampler RNG draw-count', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Layer-2 exploration honors danger — the 10% random-explore roll must not step
+// into a poisoned neighbor the scoring just rejected (Codex P2). Same RNG draws.
+// ---------------------------------------------------------------------------
+
+describe('A1 sampler Layer-2 explore honors danger', () => {
+  // A weak East trail (penalized 100, in the 1..127 band → Layer 2) with the explore
+  // roll firing and rolling idx 0 = Up (DIRS order up/down/left/right). Up is a
+  // spider-wake tile; V36 must fall through to the exploit pick (East) instead of
+  // exploring into Up, while the legacy (no danger grid) path takes Up unconditionally.
+  const scriptRng = (vals: number[]): Rng => {
+    let i = 0;
+    return { nextInt: () => vals[i++]! } as unknown as Rng;
+  };
+
+  it('a random-explore roll onto a poisoned neighbor falls through to the exploit pick', () => {
+    const food = createPheromoneGrid(10, 10);
+    phSet(food, 6, 5, 100); // East: weak trail → Layer 2 (0 < 100 < 128)
+    const danger = createPheromoneGrid(10, 10);
+    phSet(danger, 5, 4, DANGER_ROUTE_AVOID_THRESHOLD + 100); // Up (5,4) is a spider-wake tile
+
+    // Explore fires (5 < EXPLORE_RATE_PERCENT=10), idx 0 → Up. V36: Up poisoned →
+    // fall through to the exploit direction (East).
+    const dir = sampleForagingDirection(food, 5, 5, scriptRng([5, 0]), -1, -1, danger);
+    expect(dir).toEqual({ dx: 1, dy: 0 });
+  });
+
+  it('control: WITHOUT the danger grid (legacy) the explore roll takes the rolled Up direction', () => {
+    const food = createPheromoneGrid(10, 10);
+    phSet(food, 6, 5, 100);
+    const dir = sampleForagingDirection(food, 5, 5, scriptRng([5, 0])); // no danger grid
+    expect(dir).toEqual({ dx: 0, dy: -1 }); // Up — legacy random explore, unchanged
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Layer-3 reacquisition — a remote FoodTrail whose major-axis first step is a
 // spider-wake tile must NOT be chased: the sampler returns {0,0} so the caller
 // falls through to the danger-steered wander (round-3 C1; Codex P1 test-gap).
