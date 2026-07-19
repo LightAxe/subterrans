@@ -19,17 +19,24 @@ import {
   createWorldState,
   allocateEntityId,
   SIM_VERSION_V7_SURFACE_PASSABILITY,
+  SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
+  SIM_VERSION_V36_RISK_AWARE_FORAGING,
 } from '../types.js';
 import { initAnt, pushRecentTile } from './ant-store.js';
 import { canEnterSurfaceTile, pickSurfaceDetour, tickAntMovement } from './ant-system.js';
 import { surfaceFeatureAt, SurfaceMovementEffect } from '../surface-features.js';
-import { AntTask, ForagingSubState } from '../enums.js';
+import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
 import { Zone } from '../terrain.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { Rng } from '../rng.js';
 import { createDigFlowFields } from '../dig-system.js';
 import { createColonyRecord } from '../colony/colony-store.js';
-import { createPheromoneGrid, phSet, phGet } from '../pheromone/pheromone-store.js';
+import {
+  createPheromoneGrid,
+  phSet,
+  phGet,
+  pheromoneGridKey,
+} from '../pheromone/pheromone-store.js';
 import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
@@ -726,5 +733,92 @@ describe('pickSurfaceDetour — A1 (V36) danger preference', () => {
 
     expect(aDx !== bDx || aDy !== bDy).toBe(true); // rerouted off the poisoned tile
     expect(phGet(danger, px + aDx, py + aDy) < DANGER_ROUTE_AVOID_THRESHOLD).toBe(true); // to a clean tile
+  });
+});
+
+describe('tickAntMovement — A1 (V36) danger-aware blocked-diagonal per-axis revert (Codex P2)', () => {
+  // Repro: the no-revisit scan can select a diagonal alternate whose DESTINATION is
+  // danger-safe, but if that destination is a HardBlock the surface passability guard
+  // reverts per-axis onto a cardinal tile the scan never danger-checked. At V36 a
+  // poisoned revert must be avoided (routed to the danger-aware detour) rather than
+  // stepped onto; V35 (danger-blind) reverts straight in.
+  //
+  // Geometry (seed-scanned): a HardBlock H at (hx,hy) with a WALKABLE tile to its
+  // west (hx-1,hy) and south-west (hx-1,hy+1). Ant sits at SW-of-H = (hx-1,hy+1); then
+  // NE = H (blocked diagonal destination) and North = (hx-1,hy) is the per-axis Y
+  // revert we poison. (East, tx+1, is made recent so passXOnly is false and the guard
+  // is forced onto the Y axis.)
+  function findGeometry(): { seed: number; tx: number; ty: number } | null {
+    for (let seed = 1; seed < 200; seed++) {
+      const world = createWorldState(seed);
+      for (let hy = 3; hy < 70; hy++) {
+        for (let hx = 3; hx < 70; hx++) {
+          if (canEnterSurfaceTile(world, hx, hy)) continue; // H must be a HardBlock
+          const tx = hx - 1;
+          const ty = hy + 1;
+          if (!canEnterSurfaceTile(world, tx, ty)) continue; // ant tile walkable
+          if (!canEnterSurfaceTile(world, tx, ty - 1)) continue; // North revert walkable
+          return { seed, tx, ty };
+        }
+      }
+    }
+    return null;
+  }
+
+  function run(simVersion: number): { tx: number; ty: number; endX: number; endY: number } {
+    const g = findGeometry();
+    expect(g).not.toBeNull();
+    const { seed, tx, ty } = g!;
+    const world = createWorldState(seed);
+    world.simVersion = simVersion;
+    const colony = createColonyRecord(1, 0);
+    colony.entrances = [{ entranceId: 0, surfaceTileX: tx, surfaceTileY: ty, isOpen: true }];
+    world.colonies[1] = colony;
+
+    const id = allocateEntityId(world);
+    initAnt(world.ants, id, {
+      colonyId: 1,
+      posX: tx << FP_SHIFT,
+      posY: ty << FP_SHIFT,
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
+      zone: Zone.Surface,
+    });
+    world.ants.speed[id] = FP_ONE;
+    // Committed EAST heading → the wander proposes East (empty FoodTrail + no piles →
+    // sampler returns {0,0} → wander returns the committed heading).
+    world.ants.searchHeadingX[id] = 1;
+    world.ants.searchHeadingY[id] = 0;
+    world.ants.searchHeadingTicks[id] = 5;
+    world.ants.searchPrevTileX[id] = -1;
+    world.ants.searchPrevTileY[id] = -1;
+    // East (the proposed step) is recent → the no-revisit swap fires.
+    pushRecentTile(world.ants, id, tx + 1, ty);
+
+    world.pheromoneGrids[pheromoneGridKey(1, PheromoneType.FoodTrail, 'surface')] =
+      createPheromoneGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
+    const danger = createPheromoneGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
+    // Poison North (the Y-axis revert). NE (the diagonal destination) stays clean so
+    // the no-revisit scan selects it; the HardBlock there forces the per-axis revert.
+    phSet(danger, tx, ty - 1, DANGER_ROUTE_AVOID_THRESHOLD + 100);
+    world.pheromoneGrids[pheromoneGridKey(1, PheromoneType.DangerTrail, 'surface')] = danger;
+
+    tickAntMovement(world, new Rng(2), createDigFlowFields());
+    return {
+      tx,
+      ty,
+      endX: world.ants.posX[id]! >> FP_SHIFT,
+      endY: world.ants.posY[id]! >> FP_SHIFT,
+    };
+  }
+
+  it('V36 does NOT revert onto the poisoned North tile (routes to the danger-aware detour)', () => {
+    const r = run(SIM_VERSION_V36_RISK_AWARE_FORAGING);
+    expect(r.endX === r.tx && r.endY === r.ty - 1).toBe(false);
+  });
+
+  it('V35 control: danger-blind — reverts straight onto North', () => {
+    const r = run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER);
+    expect(r.endX === r.tx && r.endY === r.ty - 1).toBe(true);
   });
 });

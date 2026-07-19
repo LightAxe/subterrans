@@ -9,6 +9,7 @@ import type { ChamberFlowFields } from '../chamber-flow.js';
 import { isFoodChamberDepositable } from '../colony/colony-system.js';
 import { isInChamberFootprint } from '../colony/colony-store.js';
 import {
+  DANGER_ROUTE_AVOID_THRESHOLD,
   SEARCH_LEASH_MAX_WAVE,
   SEARCH_PAUSE_BASE_TICKS,
   SEARCH_PAUSE_JITTER_TICKS,
@@ -24,7 +25,7 @@ import type { DigFlowFields } from '../dig-system.js';
 import type { EntranceFlowFields } from '../entrance-flow.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
-import { pheromoneGridKey } from '../pheromone/pheromone-store.js';
+import { phGet, pheromoneGridKey } from '../pheromone/pheromone-store.js';
 import { sampleForagingDirection } from '../pheromone/pheromone-system.js';
 import { Rng } from '../rng.js';
 import {
@@ -1196,12 +1197,38 @@ export function tickAntMovement(
         const passYOnly =
           canEnterSurfaceTile(world, prevTileX, newTileY) &&
           (bypassRecentTiles || !isRecentTile(ants, id, prevTileX, newTileY));
+        // A1 (V36): when a blocked diagonal reverts per-axis, the surviving cardinal
+        // is the tile the ant actually steps onto — but the no-revisit scan only
+        // danger-checked the diagonal DESTINATION, so a danger-safe diagonal could be
+        // reverted straight into a spider-wake tile (Codex P2). Prefer a danger-safe
+        // revert; if the only available revert(s) land on danger, fall through to the
+        // now-danger-aware pickSurfaceDetour (blocked) rather than step in. Scoped to
+        // surface SearchingFood foragers + gated — undefined danger grid (queen / other
+        // tasks / pre-V36) makes both `*RevertDanger` false, so the branch order below
+        // collapses to the legacy passX-first pick, byte-identical.
+        const axisDangerGrid =
+          world.simVersion >= SIM_VERSION_V36_RISK_AWARE_FORAGING &&
+          task === AntTask.Foraging &&
+          ants.subTask[id] === ForagingSubState.SearchingFood
+            ? surfaceDangerByColony[ants.colonyId[id]!]
+            : undefined;
+        const xRevertDanger =
+          axisDangerGrid !== undefined &&
+          phGet(axisDangerGrid, newTileX, prevTileY) >= DANGER_ROUTE_AVOID_THRESHOLD;
+        const yRevertDanger =
+          axisDangerGrid !== undefined &&
+          phGet(axisDangerGrid, prevTileX, newTileY) >= DANGER_ROUTE_AVOID_THRESHOLD;
         if (destPassable && (passXOnly || passYOnly)) {
           // Diagonal allowed.
-        } else if (passXOnly) {
-          posY = prevPosY;
-        } else if (passYOnly) {
-          posX = prevPosX;
+        } else if (passXOnly && !xRevertDanger) {
+          posY = prevPosY; // X-only revert (danger-safe / legacy).
+        } else if (passYOnly && !yRevertDanger) {
+          posX = prevPosX; // Y-only revert (danger-safe / legacy).
+        } else if (passXOnly || passYOnly) {
+          // A per-axis revert exists but every available one lands on danger (V36
+          // SearchingFood only — legacy never reaches here, the two branches above
+          // always fire first). Prefer the danger-aware detour over a spider-wake step.
+          blocked = true;
         } else {
           blocked = true;
         }
