@@ -475,10 +475,10 @@ export const SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER = 35 as const;
  * wandering forager's excursion edge-bounce softly steers away from tiles whose
  * danger is ≥ DANGER_ROUTE_AVOID_THRESHOLD. Soft bias, not a wall — lethal danger
  * stays the V34 flee (FLEE_THRESHOLD). The surface DangerTrail grid is threaded
- * into `sampleForagingDirection`, `hasNearbyPheromoneSignal`, and
- * `chooseExcursionDirection` ONLY when `simVersion >= V36` (undefined otherwise),
- * so pre-V36 saves replay byte-identically. No new save column; MIN_ACCEPTED is
- * UNCHANGED.
+ * into `sampleForagingDirection` and `chooseExcursionDirection` ONLY when
+ * `simVersion >= V36` (undefined otherwise), so pre-V36 saves replay byte-
+ * identically. The excursion-boundary leash scan `hasNearbyPheromoneSignal` stays
+ * danger-blind (Option B). No new save column; MIN_ACCEPTED is UNCHANGED.
  */
 export const SIM_VERSION_V36_RISK_AWARE_FORAGING = 36 as const;
 export const LATEST_SIM_VERSION = SIM_VERSION_V36_RISK_AWARE_FORAGING;

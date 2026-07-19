@@ -10,8 +10,10 @@
 // spider.ts seedDangerPheromone (inline, spider-calibrated magnitudes) and the
 // V34 cross-colony kill alarm (combat.ts). Since A1, the surface DangerTrail grid
 // IS read for routing: sampleForagingDirection (via the penalizedStrength helper
-// below), hasNearbyPheromoneSignal, and chooseExcursionDirection penalize/steer
-// candidate steps by their danger. Gated at the call sites so pre-V36 replays
+// below) and chooseExcursionDirection penalize/steer candidate steps by their
+// danger. (The excursion-boundary leash scan hasNearbyPheromoneSignal is
+// deliberately danger-blind — Option B; see ant-foraging.ts.) Gated at the call
+// sites so pre-V36 replays
 // never consult it (dangerGrid === undefined = byte-identical legacy path). The
 // penalty is fixed-point (Math.imul >> FP_SHIFT) and consumes NO additional RNG.
 //
@@ -226,8 +228,12 @@ function penalizedStrength(
  *   (`net = food − (Math.imul(danger, DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT)`,
  *   clamped ≥ 0), so foragers prefer safer routes — a SOFT bias, not a wall.
  *   `undefined` (pre-V36, gated at the call site) = byte-identical legacy
- *   behaviour. `hasNearbyPheromoneSignal` MUST be passed the same grid so its
- *   "true ⇒ non-zero pick" invariant still holds under the penalty.
+ *   behaviour. NOTE (Option B): the excursion-boundary leash check
+ *   `hasNearbyPheromoneSignal` is deliberately danger-BLIND — it is NOT passed this
+ *   grid — so a danger-poisoned or danger-blocked trail can register as leash
+ *   "signal" there while this sampler returns {0,0}. That over-leash linger is
+ *   bounded and accepted (see hasNearbyPheromoneSignal); the leash decision does
+ *   NOT mirror V36 routing.
  */
 export function sampleForagingDirection(
   grid: PheromoneGrid,
