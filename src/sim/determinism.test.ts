@@ -15,10 +15,17 @@ import {
   SIM_VERSION_V20_SPIDER,
   SIM_VERSION_V23_SPIDER_AGGRO,
   SIM_VERSION_V32_AI_OP_VALIDATION,
+  SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
+  SIM_VERSION_V36_RISK_AWARE_FORAGING,
 } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
-import { createPheromoneGrid, phGet, pheromoneGridKey } from './pheromone/pheromone-store.js';
+import {
+  createPheromoneGrid,
+  phGet,
+  phSet,
+  pheromoneGridKey,
+} from './pheromone/pheromone-store.js';
 import { AntTask, PheromoneType, ForagingSubState, ChamberType } from './enums.js';
 import {
   WORKER_LIFESPAN_TICKS,
@@ -32,6 +39,8 @@ import {
   SPIDER_HUNGER_THRESHOLD_TICKS,
   SPIDER_GRACE_TICKS,
   SPIDER_HP_FULL,
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
 } from './constants.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
 import { Zone, UndergroundTileState, ugSet } from './terrain.js';
@@ -1139,5 +1148,62 @@ describe('SCEN-06: StartAIOperation V32 gate replay (#226)', () => {
     const aiB = b.aiState.find((x) => x.colonyId === ENEMY_COLONY_ID)!;
     expect(aiA.state).toBe(aiB.state);
     expect(aiA.operationKind).toBe(aiB.operationKind);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A1 (V36) risk-aware foraging — replay determinism across the danger-induced
+// PRNG-branch transition (Codex P1). The danger penalty flips sampleForagingDirection
+// between its zero-draw strong-trail branch and the RNG-consuming weak/wander branch,
+// so the PRNG draw count changes under V36. AGENTS.md requires such a change to ship
+// with a deterministic-replay test: same seed + inputs → byte-identical result.
+// ---------------------------------------------------------------------------
+
+describe('A1 (V36) risk-aware foraging — replay determinism', () => {
+  const SEED = 20260718;
+  const TICKS = 120;
+  // Below FLEE_THRESHOLD (512) so surface foragers route-penalize rather than
+  // flee underground (V34) — keeping the A1 surface sampler actually exercised.
+  const DANGER = 400;
+
+  function depositSurfaceDanger(world: WorldState, value: number): void {
+    for (const cidStr of Object.keys(world.colonies)) {
+      const cid = Number(cidStr);
+      const g = world.pheromoneGrids[pheromoneGridKey(cid, PheromoneType.DangerTrail, 'surface')];
+      if (!g) continue;
+      for (let y = 0; y < SURFACE_GRID_HEIGHT; y++) {
+        for (let x = 0; x < SURFACE_GRID_WIDTH; x++) phSet(g, x, y, value);
+      }
+    }
+  }
+
+  function run(simVersion: number): WorldState {
+    const world = createScenario(SEED);
+    world.simVersion = simVersion;
+    depositSurfaceDanger(world, DANGER);
+    for (let t = 0; t < TICKS; t++) tick(world, []);
+    return world;
+  }
+
+  it('V36 with danger routing active replays byte-identically (same seed → same state)', () => {
+    expect(serializeWorldState(run(SIM_VERSION_V36_RISK_AWARE_FORAGING))).toBe(
+      serializeWorldState(run(SIM_VERSION_V36_RISK_AWARE_FORAGING)),
+    );
+  });
+
+  it('V35 with the same danger replays byte-identically (gated-off legacy path)', () => {
+    expect(serializeWorldState(run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER))).toBe(
+      serializeWorldState(run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER)),
+    );
+  });
+
+  it('V36 diverges from V35 under the same danger — behavioral (rngState, not simVersion)', () => {
+    // Compare rngState, NOT the full serialization: serializeWorldState includes the
+    // simVersion field (36 vs 35), so a full-string compare would pass even if the
+    // gated behavior were inactive (CodeRabbit). rngState diverges only when the
+    // danger penalty actually flips a sampler RNG branch during the run.
+    expect(run(SIM_VERSION_V36_RISK_AWARE_FORAGING).rngState).not.toBe(
+      run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER).rngState,
+    );
   });
 });

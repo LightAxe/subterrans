@@ -6,10 +6,16 @@
 //   tickPheromoneDecay      — PRD §5c: O(grid.data.length) sweep; floor-snap prevents zombie trails (PHER-04/PHER-07)
 //   sampleForagingDirection — 09 memo: pheromone-first reacquisition sampler for SearchingFood foragers
 //
-// DangerTrail note (#242): deposits come from spider.ts seedDangerPheromone
-// (inline, spider-calibrated magnitudes); NO sim code READS DangerTrail — ant
-// danger-avoidance is Phase 5b (a NEW RNG-consuming, simVersion-gated behavior,
-// not an activation of existing plumbing).
+// DangerTrail note (#242, updated for A1 / simVersion V36): deposits come from
+// spider.ts seedDangerPheromone (inline, spider-calibrated magnitudes) and the
+// V34 cross-colony kill alarm (combat.ts). Since A1, the surface DangerTrail grid
+// IS read for routing: sampleForagingDirection (via the penalizedStrength helper
+// below) and chooseExcursionDirection penalize/steer candidate steps by their
+// danger. (The excursion-boundary leash scan hasNearbyPheromoneSignal is
+// deliberately danger-blind — Option B; see ant-foraging.ts.) Gated at the call
+// sites so pre-V36 replays
+// never consult it (dangerGrid === undefined = byte-identical legacy path). The
+// penalty is fixed-point (Math.imul >> FP_SHIFT) and consumes NO additional RNG.
 //
 // MUST NOT use: Math.floor, Math.round, division (/), Date, performance, setTimeout, Math.random.
 // All fixed-point operations use >>  and Math.imul.
@@ -24,6 +30,8 @@ import {
   PHEROMONE_CAP,
   PHEROMONE_FLOOR,
   EXPLORE_RATE_PERCENT,
+  DANGER_ROUTE_WEIGHT_FP,
+  DANGER_ROUTE_AVOID_THRESHOLD,
 } from '../constants.js';
 // PHEROMONE_FLOOR is the default floor used in tickPheromoneDecay's signature.
 // Callers may pass PHEROMONE_FLOOR_V14 for V14+ food-trail grids.
@@ -171,6 +179,25 @@ const TRAIL_STRONG_THRESHOLD = 128;
 const REACQUIRE_RADIUS = 3;
 
 /**
+ * A1 (V36) — apply the DangerTrail penalty to a candidate cell's FoodTrail
+ * strength: `net = food − (Math.imul(danger, DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT)`,
+ * clamped ≥ 0. When `dangerGrid` is undefined (pre-V36; gated at the call site)
+ * or the food strength is already 0, the raw strength is returned unchanged — the
+ * byte-identical legacy path. `Math.imul` per this module's fixed-point rule.
+ */
+function penalizedStrength(
+  foodStrength: number,
+  dangerGrid: PheromoneGrid | undefined,
+  x: number,
+  y: number,
+): number {
+  if (dangerGrid === undefined || foodStrength <= 0) return foodStrength;
+  const penalty = Math.imul(phGet(dangerGrid, x, y), DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT;
+  const net = foodStrength - penalty;
+  return net > 0 ? net : 0;
+}
+
+/**
  * Return the direction a SearchingFood forager should move based on the
  * pheromone gradient at (tileX, tileY), with stronger trail commitment and
  * wider reacquisition than a plain 4-neighbor sample.
@@ -196,6 +223,17 @@ const REACQUIRE_RADIUS = 3;
  * @param rng         Deterministic world Rng.
  * @param prevTileX   Tile X the ant occupied last tick (-1 = none).
  * @param prevTileY   Tile Y the ant occupied last tick (-1 = none).
+ * @param dangerGrid  Optional surface DangerTrail grid (A1 / V36). When provided,
+ *   each candidate cell's FoodTrail strength is penalized by its danger
+ *   (`net = food − (Math.imul(danger, DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT)`,
+ *   clamped ≥ 0), so foragers prefer safer routes — a SOFT bias, not a wall.
+ *   `undefined` (pre-V36, gated at the call site) = byte-identical legacy
+ *   behaviour. NOTE (Option B): the excursion-boundary leash check
+ *   `hasNearbyPheromoneSignal` is deliberately danger-BLIND — it is NOT passed this
+ *   grid — so a danger-poisoned or danger-blocked trail can register as leash
+ *   "signal" there while this sampler returns {0,0}. That over-leash linger is
+ *   bounded and accepted (see hasNearbyPheromoneSignal); the leash decision does
+ *   NOT mirror V36 routing.
  */
 export function sampleForagingDirection(
   grid: PheromoneGrid,
@@ -204,6 +242,7 @@ export function sampleForagingDirection(
   rng: Rng,
   prevTileX: number = -1,
   prevTileY: number = -1,
+  dangerGrid?: PheromoneGrid,
 ): { dx: number; dy: number } {
   const hasPrev = prevTileX >= 0 && prevTileY >= 0;
 
@@ -219,7 +258,7 @@ export function sampleForagingDirection(
     const dir = DIRS[d]!;
     const nx = tileX + dir.dx;
     const ny = tileY + dir.dy;
-    const s = phGet(grid, nx, ny);
+    const s = penalizedStrength(phGet(grid, nx, ny), dangerGrid, nx, ny);
     if (hasPrev && nx === prevTileX && ny === prevTileY) {
       if (s > prevNeighborStrength) prevNeighborStrength = s;
       continue;
@@ -241,7 +280,19 @@ export function sampleForagingDirection(
     if (rng.nextInt(100) < EXPLORE_RATE_PERCENT) {
       const idx = rng.nextInt(4);
       const dir = DIRS[idx]!;
-      return { dx: dir.dx, dy: dir.dy };
+      // A1 (V36): the random explore step must not walk into a tile the danger
+      // scoring just rejected. If the rolled cardinal is a spider-wake tile, fall
+      // through to the (danger-penalized) exploit pick rather than explore into
+      // danger. BOTH RNG draws (the roll + idx) are still consumed above, so replay
+      // determinism holds regardless of the branch; undefined dangerGrid (pre-V36)
+      // takes the rolled direction unconditionally, byte-identical to the legacy
+      // random explore.
+      if (
+        dangerGrid === undefined ||
+        phGet(dangerGrid, tileX + dir.dx, tileY + dir.dy) < DANGER_ROUTE_AVOID_THRESHOLD
+      ) {
+        return { dx: dir.dx, dy: dir.dy };
+      }
     }
     return { dx: bestDx, dy: bestDy };
   }
@@ -281,7 +332,9 @@ export function sampleForagingDirection(
         const stepY = absX >= absY ? 0 : dy > 0 ? 1 : dy < 0 ? -1 : 0;
         if (tileX + stepX === prevTileX && tileY + stepY === prevTileY) continue;
       }
-      const s = phGet(grid, sx, sy);
+      const raw = phGet(grid, sx, sy);
+      if (raw === 0) continue;
+      const s = penalizedStrength(raw, dangerGrid, sx, sy);
       if (s === 0) continue;
       if (s > reStrength || (s === reStrength && dist < reDist)) {
         reStrength = s;
@@ -295,10 +348,19 @@ export function sampleForagingDirection(
   if (reStrength > 0) {
     const absX = reDx < 0 ? -reDx : reDx;
     const absY = reDy < 0 ? -reDy : reDy;
-    if (absX >= absY) {
-      return { dx: reDx > 0 ? 1 : -1, dy: 0 };
+    const sdx = absX >= absY ? (reDx > 0 ? 1 : -1) : 0;
+    const sdy = absX >= absY ? 0 : reDy > 0 ? 1 : -1;
+    // A1 (V36): the reacquire TARGET cell was danger-penalized, but the actual
+    // first step toward it can be a different, dangerous tile. Don't step into a
+    // spider-wake tile to chase a remote trail — fall through to wander (which is
+    // danger-steered) instead (Codex). undefined dangerGrid = the legacy step.
+    if (
+      dangerGrid !== undefined &&
+      phGet(dangerGrid, tileX + sdx, tileY + sdy) >= DANGER_ROUTE_AVOID_THRESHOLD
+    ) {
+      return { dx: 0, dy: 0 };
     }
-    return { dx: 0, dy: reDy > 0 ? 1 : -1 };
+    return { dx: sdx, dy: sdy };
   }
 
   // No trail within REACQUIRE_RADIUS — caller falls through to wander.

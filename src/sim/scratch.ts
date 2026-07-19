@@ -24,6 +24,7 @@
  */
 import type { WorldState } from './types.js';
 import type { CardinalStep } from './ant/ant-motion.js';
+import type { PheromoneGrid } from './pheromone/pheromone-store.js';
 import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT, MAX_ENTITIES } from './constants.js';
 import { createSurfaceMovementCache, type SurfaceMovementCache } from './surface-features.js';
 
@@ -55,8 +56,20 @@ export interface ScratchArena {
   queenIds: Set<number>;
   /** ant-movement.ts — per-tick surface-movement effect cache (reset each tick). */
   surfaceMoveCache: SurfaceMovementCache;
-  /** ant-motion.ts — cross-module cardinal-step + detour out-params. */
-  motion: { cardinalStep: CardinalStep; detourResult: CardinalStep };
+  /**
+   * ant-motion.ts — cross-module cardinal-step + detour out-params, plus the
+   * ant-foraging.ts no-revisit alternate out-param (pickNoRevisitSurfaceAlternate).
+   */
+  motion: { cardinalStep: CardinalStep; detourResult: CardinalStep; noRevisitAlt: CardinalStep };
+  /**
+   * ant-movement.ts — per-tick colonyId→surface DangerTrail grid cache (A1/V36).
+   * Reset (`length = 0`) then repopulated once per tick so the per-ant risk-aware
+   * routing lookups (sampler / no-revisit / obstacle detour) index by colonyId
+   * instead of building a `pheromoneGridKey` string per ant per tick (AGENTS.md
+   * hot-loop rule). Left empty (all undefined) pre-V36, so V35 replays are
+   * byte-identical. Transient scratch — never serialized.
+   */
+  surfaceDangerByColony: (PheromoneGrid | undefined)[];
   /**
    * larva-maturation.ts — per-tick nurse-claim STAMP (#256). NOT a reset-before-use
    * buffer: `currentStamp` is a monotonic counter bumped once per acceleration pass,
@@ -101,7 +114,13 @@ export function getScratch(world: WorldState): ScratchArena {
       tickIdle: [],
       queenIds: new Set(),
       surfaceMoveCache: createSurfaceMovementCache(),
-      motion: { cardinalStep: { dx: 0, dy: 0 }, detourResult: { dx: 0, dy: 0 } },
+      motion: {
+        cardinalStep: { dx: 0, dy: 0 },
+        detourResult: { dx: 0, dy: 0 },
+        noRevisitAlt: { dx: 0, dy: 0 },
+      },
+      // A1 (V36) — empty; ant-movement.ts resets length + repopulates per tick.
+      surfaceDangerByColony: [],
       // #256 — nurse stamp starts at 0 (matches the old module-global init); the
       // first acceleration pass bumps it to 1, so no nurse is ever falsely pre-claimed.
       nurse: { usedStamp: new Uint32Array(MAX_ENTITIES), currentStamp: 0 },

@@ -8,6 +8,7 @@ import type { ChamberRecord, ColonyRecord } from '../colony/colony-store.js';
 import { colonyHasNoDepositTarget, isFoodChamberDepositable } from '../colony/colony-system.js';
 import {
   BASE_FOOD_STORAGE_CAPACITY,
+  DANGER_ROUTE_AVOID_THRESHOLD,
   EXCURSION_HEADING_JITTER_TICKS,
   EXCURSION_HEADING_MIN_TICKS,
   EXCURSION_TURN_PERCENT,
@@ -30,7 +31,8 @@ import { Rng } from '../rng.js';
 import { SURFACE_GOAL_UNREACHED, surfaceGoalDistance } from '../surface-routing.js';
 import { Zone } from '../terrain.js';
 import type { WorldState } from '../types.js';
-import { clearRecentTiles } from './ant-store.js';
+import { ALT_DX, ALT_DY, type CardinalStep } from './ant-motion.js';
+import { clearRecentTiles, isRecentTile } from './ant-store.js';
 
 /**
  * Attempt to pick up food from a pile into an ant's carry inventory.
@@ -501,12 +503,17 @@ export function routeForagerPriority(world: WorldState): void {
  * @param world  WorldState (reads ants and colonies, writes heading fields).
  * @param antId  Entity ID of the searching forager.
  * @param rng    Deterministic world Rng.
+ * @param dangerGrid  Optional surface DangerTrail grid (A1 / V36). When provided,
+ *   the world-edge bounce softly steers the heading away from tiles whose danger
+ *   is ≥ DANGER_ROUTE_AVOID_THRESHOLD (bounds stay the hard filter). `undefined`
+ *   (pre-V36, gated at the call site) = byte-identical legacy bounce.
  * @returns      Cardinal direction vector { dx, dy } with |dx| + |dy| === 1.
  */
 export function chooseExcursionDirection(
   world: WorldState,
   antId: number,
   rng: Rng,
+  dangerGrid?: PheromoneGrid,
 ): { dx: number; dy: number } {
   const ants = world.ants;
 
@@ -625,7 +632,16 @@ export function chooseExcursionDirection(
       const lhy = turnDir === 0 ? -hx : hx;
       const nx = tileX + lhx;
       const ny = tileY + lhy;
-      if (nx >= 0 && nx < SURFACE_GRID_WIDTH && ny >= 0 && ny < SURFACE_GRID_HEIGHT) {
+      const inBounds = nx >= 0 && nx < SURFACE_GRID_WIDTH && ny >= 0 && ny < SURFACE_GRID_HEIGHT;
+      // A1 (V36): don't wobble INTO a moderate-danger tile the committed-heading
+      // danger-steer below would avoid — keeps the wander's danger-avoidance
+      // uniform across the turn / keep / wobble branches. Danger read only, no RNG
+      // (the 3 draws above are already spent); undefined pre-V36 (or danger-free)
+      // = the legacy bounds-only behaviour.
+      const laterallySafe =
+        inBounds &&
+        (dangerGrid === undefined || phGet(dangerGrid, nx, ny) < DANGER_ROUTE_AVOID_THRESHOLD);
+      if (laterallySafe) {
         // Persist the (unchanged) heading and reset ticks — the NEXT turn-check
         // fires after another MIN+jitter run along the original heading.
         ants.searchHeadingX[antId] = hx;
@@ -633,7 +649,8 @@ export function chooseExcursionDirection(
         ants.searchHeadingTicks[antId] = EXCURSION_HEADING_MIN_TICKS + jitter;
         return { dx: lhx, dy: lhy };
       }
-      // Lateral would step off-grid → fall through to keep-heading branch.
+      // Lateral would step off-grid, or (V36) into a moderate-danger tile → fall
+      // through to keep-heading branch.
       ticks = EXCURSION_HEADING_MIN_TICKS + jitter;
     } else {
       // Keep heading, reset the turn-check clock.
@@ -647,14 +664,51 @@ export function chooseExcursionDirection(
   // grid, rotate it 90° right deterministically until we find a valid one.
   // Cardinal-only movement on a rectangular grid always has at least two
   // valid options, so this converges in ≤ 3 rotations.
+  //
+  // A1 (V36) risk-aware wander: when a surface DangerTrail grid is provided,
+  // among the in-bounds rotations prefer the FIRST whose next tile's danger is
+  // below DANGER_ROUTE_AVOID_THRESHOLD (soft steer away from the spider's wake).
+  // Bounds stay the HARD filter — if every in-bounds rotation is dangerous, fall
+  // back to the first in-bounds rotation (never an off-grid heading). Gated:
+  // dangerGrid is passed only at simVersion >= V36, and with danger==0 everywhere
+  // the safe pick collapses to the first in-bounds rotation, so pre-V36 (and
+  // danger-free) wanderers are byte-identical. No RNG consumed here.
+  let fallbackHx = hx;
+  let fallbackHy = hy;
+  let foundFallback = false;
+  let safeHx = 0;
+  let safeHy = 0;
+  let foundSafe = false;
+  let rotHx = hx;
+  let rotHy = hy;
   for (let attempts = 0; attempts < 4; attempts++) {
-    const nx = tileX + hx;
-    const ny = tileY + hy;
-    if (nx >= 0 && nx < SURFACE_GRID_WIDTH && ny >= 0 && ny < SURFACE_GRID_HEIGHT) break;
-    const nhx = -hy;
-    const nhy = hx;
-    hx = nhx;
-    hy = nhy;
+    const nx = tileX + rotHx;
+    const ny = tileY + rotHy;
+    if (nx >= 0 && nx < SURFACE_GRID_WIDTH && ny >= 0 && ny < SURFACE_GRID_HEIGHT) {
+      if (!foundFallback) {
+        fallbackHx = rotHx;
+        fallbackHy = rotHy;
+        foundFallback = true;
+      }
+      if (dangerGrid === undefined) break; // legacy: first in-bounds rotation wins.
+      if (!foundSafe && phGet(dangerGrid, nx, ny) < DANGER_ROUTE_AVOID_THRESHOLD) {
+        safeHx = rotHx;
+        safeHy = rotHy;
+        foundSafe = true;
+      }
+      if (foundSafe) break;
+    }
+    const nhx = -rotHy;
+    const nhy = rotHx;
+    rotHx = nhx;
+    rotHy = nhy;
+  }
+  if (foundSafe) {
+    hx = safeHx;
+    hy = safeHy;
+  } else if (foundFallback) {
+    hx = fallbackHx;
+    hy = fallbackHy;
   }
 
   ants.searchHeadingX[antId] = hx;
@@ -665,12 +719,115 @@ export function chooseExcursionDirection(
 }
 
 /**
+ * Issue #42 fix #3 no-revisit alternate selection for surface SearchingFood
+ * foragers, plus the A1 (V36) danger preference. This is Layer-1 movement policy
+ * consumed by the tickAntMovement orchestrator (AGENTS.md ant-layering: behavior
+ * lives in a Layer-1 module, not bolted onto the Layer-2 orchestrator).
+ *
+ * Given a proposed surface step (dx, dy), writes the resolved step into `out`:
+ *   - If the destination tile (tileX+dx, tileY+dy) is NOT in the ant's recent-tiles
+ *     ring buffer, the proposed step passes through unchanged.
+ *   - If it IS recent, scan the 8-connected alternates in fixed N-clockwise ALT
+ *     order (the same neighbor sweep the queen overlap resolver uses) and take the
+ *     FIRST that is BOTH fresh (not in the buffer) AND in-bounds. The bounds check
+ *     matters at the map edge — an off-grid alternate would clamp back onto the same
+ *     tile, never cross, and stall the ant with valid alternates still available.
+ *     If every alternate is filtered, write {0,0} (pause); the buffer only advances
+ *     on real tile crossings, so pause ticks don't pollute history.
+ *
+ * A1 (V36): among the fresh, in-bounds alternates prefer the FIRST whose tile danger
+ * is below DANGER_ROUTE_AVOID_THRESHOLD, so the no-revisit swap cannot undo the
+ * sampler's danger-aware choice by stepping onto a spider-wake tile. Freshness +
+ * bounds stay the HARD filter; danger is a soft preference with a first-fresh
+ * fallback (heavy danger ≥ FLEE_THRESHOLD is backstopped by the V34 flee next tick).
+ * Danger read-only, no RNG. `dangerGrid === undefined` (pre-V36 / danger-free)
+ * reproduces the legacy first-fresh pick byte-identically. No allocation — writes
+ * the caller's `out` (a scratch CardinalStep), per the hot-loop rule.
+ */
+export function pickNoRevisitSurfaceAlternate(
+  ants: WorldState['ants'],
+  antId: number,
+  dx: number,
+  dy: number,
+  dangerGrid: PheromoneGrid | undefined,
+  out: CardinalStep,
+): void {
+  const tileX = ants.posX[antId]! >> FP_SHIFT;
+  const tileY = ants.posY[antId]! >> FP_SHIFT;
+  if (!isRecentTile(ants, antId, tileX + dx, tileY + dy)) {
+    out.dx = dx;
+    out.dy = dy;
+    return;
+  }
+  let fallbackAx = 0;
+  let fallbackAy = 0;
+  let foundFallback = false;
+  for (let i = 0; i < ALT_DX.length; i++) {
+    const ax = ALT_DX[i]!;
+    const ay = ALT_DY[i]!;
+    if (ax === dx && ay === dy) continue; // already-rejected proposal
+    const candX = tileX + ax;
+    const candY = tileY + ay;
+    if (candX < 0 || candX >= SURFACE_GRID_WIDTH || candY < 0 || candY >= SURFACE_GRID_HEIGHT)
+      continue;
+    if (isRecentTile(ants, antId, candX, candY)) continue;
+    // Fresh + in-bounds alternate — the hard requirement is met.
+    if (!foundFallback) {
+      fallbackAx = ax;
+      fallbackAy = ay;
+      foundFallback = true;
+    }
+    // Danger check. For a DIAGONAL alternate the tile actually entered this tick may
+    // be a cardinal INTERMEDIATE, not the diagonal destination: a half-speed / off-
+    // centre ant crosses only one axis per tick, and the downstream blocked-diagonal
+    // per-axis revert can drop it onto (candX, tileY) or (tileX, candY) too. So a
+    // diagonal alternate counts as danger-safe only when its destination AND both
+    // intermediate tiles are below the threshold — otherwise the swap could smuggle
+    // the ant onto a spider-wake tile via a partial crossing (Codex). Cardinal
+    // alternates (one axis zero) only gate on the single destination. Danger read
+    // only; undefined pre-V36 (or danger-free) = no check, byte-identical.
+    if (
+      dangerGrid !== undefined &&
+      (phGet(dangerGrid, candX, candY) >= DANGER_ROUTE_AVOID_THRESHOLD ||
+        (ax !== 0 &&
+          ay !== 0 &&
+          (phGet(dangerGrid, candX, tileY) >= DANGER_ROUTE_AVOID_THRESHOLD ||
+            phGet(dangerGrid, tileX, candY) >= DANGER_ROUTE_AVOID_THRESHOLD)))
+    ) {
+      continue; // dangerous (destination or a diagonal intermediate) — keep scanning.
+    }
+    out.dx = ax;
+    out.dy = ay;
+    return;
+  }
+  if (foundFallback) {
+    // Every fresh alternate was dangerous — take the first fresh one anyway
+    // (freshness is the hard requirement; the V34 flee backstops any tile at or
+    // above FLEE_THRESHOLD on the next tick).
+    out.dx = fallbackAx;
+    out.dy = fallbackAy;
+    return;
+  }
+  out.dx = 0;
+  out.dy = 0;
+}
+
+/**
  * Manhattan radius scanned around a forager for an "any pheromone present"
- * signal. Mirrors REACQUIRE_RADIUS in pheromone-system.ts — if this scan
- * returns true, sampleForagingDirection is guaranteed to return a non-zero
- * direction, so we must not flip the ant into ReturningToNest (or keep it
- * there). Kept as a local constant to avoid widening pheromone-system's
- * public surface for what is otherwise an internal implementation detail.
+ * signal. Mirrors REACQUIRE_RADIUS in pheromone-system.ts — a raw FoodTrail hit
+ * within this radius means the sampler can follow it, so we must not flip the ant
+ * into ReturningToNest (or keep it there).
+ *
+ * V36 caveat (A1, Option B): the sampler gained DangerTrail awareness (a food
+ * penalty plus a reacquire first-step danger check) that this scan deliberately
+ * does NOT mirror — see hasNearbyPheromoneSignal. So at V36 the "scan true ⇒
+ * sampler non-zero" implication is no longer absolute: a danger-poisoned or
+ * danger-blocked trail can make this scan return true while the sampler returns
+ * {0,0}, holding a past-leash forager SearchingFood for a few ticks rather than
+ * sending it home. That linger is bounded and accepted (see hasNearbyPheromoneSignal).
+ *
+ * Kept as a local constant to avoid widening pheromone-system's public surface
+ * for what is otherwise an internal implementation detail.
  */
 const SIGNAL_PHEROMONE_RADIUS = 3;
 
@@ -694,6 +851,18 @@ const SIGNAL_PHEROMONE_RADIUS = 3;
  *
  * Pass prevTileX = prevTileY = -1 when the ant has no prev tile; the
  * function then behaves as a plain nonzero-within-radius scan.
+ *
+ * A1 (V36) — deliberately danger-BLIND (Option B): this scan does NOT apply the
+ * sampler's DangerTrail penalty or its reacquire first-step danger check. A danger
+ * mirror here has to predict, at step 9c (pre-decay), exactly what the sampler will
+ * see at step 16 (post-decay) — and FoodTrail/DangerTrail decay at different rates,
+ * so every attempt to keep the two in sync produced a fresh review finding. The
+ * cost of staying blind is bounded: a past-leash forager next to a danger-poisoned
+ * or danger-blocked trail is held SearchingFood for a few ticks (this returns true
+ * while the sampler returns {0,0}), then A1's excursion danger-steer walks it off
+ * the trail's ~3-tile radius and the boundary sends it home; heavy danger
+ * (≥ FLEE_THRESHOLD) is caught by the V34 flee, and DangerTrail decays every tick.
+ * Do NOT re-add a danger term here — the brief linger is the accepted tradeoff.
  */
 function hasNearbyPheromoneSignal(
   grid: PheromoneGrid,

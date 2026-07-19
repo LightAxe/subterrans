@@ -12,7 +12,13 @@ import type { AntComponents } from './ant-store.js';
 import { isRecentTile } from './ant-store.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
 import { AntTask, DiggingSubState, NursingSubState, ChamberType } from '../enums.js';
-import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from '../constants.js';
+import {
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
+  DANGER_ROUTE_AVOID_THRESHOLD,
+  DANGER_DETOUR_PENALTY,
+} from '../constants.js';
+import { phGet, type PheromoneGrid } from '../pheromone/pheromone-store.js';
 import { getScratch } from '../scratch.js';
 import { FP_SHIFT } from '../fixed.js';
 import type { DigFlowFields } from '../dig-system.js';
@@ -368,6 +374,16 @@ export function pickSurfaceDetour(
    * unit tests that don't have an ant-id context.
    */
   antId: number = -1,
+  /**
+   * Optional surface DangerTrail grid (A1 / V36). When provided, a candidate
+   * tile whose danger is ≥ DANGER_ROUTE_AVOID_THRESHOLD takes a
+   * DANGER_DETOUR_PENALTY score hit, so a wall detour softly prefers a clean tile
+   * over the spider-wake tile the sampler was avoiding (a dangerous tile still
+   * beats no detour, and pocket-escape still wins). Danger read only, no RNG.
+   * Passed only by the surface SearchingFood-forager call site at simVersion >=
+   * V36; `undefined` (queen / pre-V36 / danger-free) = byte-identical legacy pick.
+   */
+  dangerGrid?: PheromoneGrid,
 ): { dx: number; dy: number } {
   // Intended destination tile (where the ant wanted to be).
   const targetX = prevTileX + intendedDx;
@@ -456,6 +472,15 @@ export function pickSurfaceDetour(
         // Real pocket: dominate Manhattan differences in this 128x128 grid.
         score += 1000;
       }
+    }
+    // A1 (V36): deprioritize a detour into a moderate-danger tile so the wall
+    // detour doesn't undo the sampler's danger avoidance (Codex). Soft penalty —
+    // dominates the neighbour-Manhattan spread (clean detour beats a dangerous one)
+    // but stays below the pocket penalty so pocket-escape still wins over avoiding
+    // one flee-backstopped tick. Gated at the caller; danger read only, no RNG;
+    // undefined = byte-identical.
+    if (dangerGrid !== undefined && phGet(dangerGrid, cx, cy) >= DANGER_ROUTE_AVOID_THRESHOLD) {
+      score += DANGER_DETOUR_PENALTY;
     }
     // Recent-tiles preference (not a hard filter): a Foraging ant whose
     // direct path is blocked otherwise oscillates between the blocked

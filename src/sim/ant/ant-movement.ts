@@ -9,6 +9,7 @@ import type { ChamberFlowFields } from '../chamber-flow.js';
 import { isFoodChamberDepositable } from '../colony/colony-system.js';
 import { isInChamberFootprint } from '../colony/colony-store.js';
 import {
+  DANGER_ROUTE_AVOID_THRESHOLD,
   SEARCH_LEASH_MAX_WAVE,
   SEARCH_PAUSE_BASE_TICKS,
   SEARCH_PAUSE_JITTER_TICKS,
@@ -24,7 +25,7 @@ import type { DigFlowFields } from '../dig-system.js';
 import type { EntranceFlowFields } from '../entrance-flow.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
-import { pheromoneGridKey } from '../pheromone/pheromone-store.js';
+import { phGet, pheromoneGridKey } from '../pheromone/pheromone-store.js';
 import { sampleForagingDirection } from '../pheromone/pheromone-system.js';
 import { Rng } from '../rng.js';
 import {
@@ -42,17 +43,20 @@ import {
   SIM_VERSION_V33_OCCUPANCY_CENTER,
   SIM_VERSION_V34_IDLE_RESERVE_FLEE,
   SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
+  SIM_VERSION_V36_RISK_AWARE_FORAGING,
   type WorldState,
 } from '../types.js';
 import {
   pickInvaderUndergroundStep,
   pickNearestHostileUnderground,
 } from './ant-combat-targeting.js';
-import { chooseExcursionDirection, findReachableScentPile } from './ant-foraging.js';
+import {
+  chooseExcursionDirection,
+  findReachableScentPile,
+  pickNoRevisitSurfaceAlternate,
+} from './ant-foraging.js';
 import { getScratch } from '../scratch.js';
 import {
-  ALT_DX,
-  ALT_DY,
   DIR_DX,
   DIR_DY,
   canEnterSurfaceTile,
@@ -140,6 +144,9 @@ export function tickAntMovement(
   // #231 — hoist the diagonalizeFlowStep out-param once (arena object identity is
   // stable per world); the underground flow-follow branches below pass it and read dx/dy.
   const cardinalStep = arena.motion.cardinalStep;
+  // Out-param for the Layer-1 no-revisit alternate selection (pickNoRevisitSurfaceAlternate),
+  // hoisted for the same reason — no per-ant allocation in the movement loop.
+  const noRevisitAlt = arena.motion.noRevisitAlt;
 
   // P1 queen-relocation: queens have their own movement path (route to Queen
   // chamber). They must be skipped in the main loop below so the default
@@ -156,6 +163,26 @@ export function tickAntMovement(
   // all moves and zone transitions are committed, so every collision
   // (mobile-into-mobile, mobile-into-stationary, pre-existing stationary
   // duplicate) is visible at resolution time.
+
+  // A1 (V36): resolve each colony's surface DangerTrail grid ONCE per tick (there
+  // are only a couple of colonies) so the per-ant risk-aware routing lookups in the
+  // loop below (sampler / no-revisit / obstacle detour) index by colonyId instead of
+  // building a `pheromoneGridKey` template string per ant per tick — the AGENTS.md
+  // hot-loop allocation rule (Codex P1). The colonyId→grid array lives on the
+  // per-world scratch arena (#231 pattern): reset its length and repopulate in place
+  // so nothing allocates per tick — neither the array nor an `Object.keys` snapshot
+  // (for-in walks the colony keys directly). Left empty (all undefined) pre-V36, so
+  // the gated reads see `undefined` and V35 replays stay byte-identical.
+  const surfaceDangerByColony = arena.surfaceDangerByColony;
+  surfaceDangerByColony.length = 0;
+  if (world.simVersion >= SIM_VERSION_V36_RISK_AWARE_FORAGING) {
+    for (const cidKey in world.colonies) {
+      if (!Object.hasOwn(world.colonies, cidKey)) continue;
+      const cid = Number(cidKey);
+      surfaceDangerByColony[cid] =
+        world.pheromoneGrids[pheromoneGridKey(cid, PheromoneType.DangerTrail, 'surface')];
+    }
+  }
 
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1) continue;
@@ -699,6 +726,11 @@ export function tickAntMovement(
           dy = unpackStepDy(step);
           targetedStep = true;
         } else {
+          // A1 (V36): the ant's own surface DangerTrail grid, threaded into the
+          // sampler and the wander edge-bounce so SearchingFood foragers prefer
+          // safer routes. Gated AND surface-only — undefined otherwise, which is
+          // the byte-identical legacy path.
+          const dangerGrid = zone === Zone.Surface ? surfaceDangerByColony[colonyId] : undefined;
           const key = pheromoneGridKey(colonyId, PheromoneType.FoodTrail, 'surface');
           const grid = world.pheromoneGrids[key];
           if (grid) {
@@ -718,19 +750,20 @@ export function tickAntMovement(
               rng,
               ants.searchPrevTileX[id],
               ants.searchPrevTileY[id],
+              dangerGrid,
             );
             if (dir.dx !== 0 || dir.dy !== 0) {
               dx = dir.dx;
               dy = dir.dy;
             } else {
-              const wander = chooseExcursionDirection(world, id, rng);
+              const wander = chooseExcursionDirection(world, id, rng, dangerGrid);
               dx = wander.dx;
               dy = wander.dy;
             }
           } else {
             // No pheromone grid (scenario-dependent presence) — still wander
             // so the forager is not pinned at the entrance.
-            const wander = chooseExcursionDirection(world, id, rng);
+            const wander = chooseExcursionDirection(world, id, rng, dangerGrid);
             dx = wander.dx;
             dy = wander.dy;
           }
@@ -940,17 +973,12 @@ export function tickAntMovement(
       dy = dir.dy;
     }
 
-    // Issue #42 fix #3 — surface SearchingFood no-revisit filter. v6+ only.
-    // If the proposed step lands on a tile in the ant's recent-tiles ring
-    // buffer, scan the 8-connected alternates in a fixed order and pick the
-    // first one that is BOTH not in the buffer AND inside the surface grid.
-    // The bounds check matters at the map edge (e.g. an ant at y=0 whose
-    // proposed step is in the buffer must not pick N — that would clamp
-    // back to the same tile, no tile-cross occurs, the buffer doesn't
-    // advance, and the ant stalls indefinitely with valid in-bounds
-    // alternates still available). If every neighbor is filtered, pause
-    // (dx=dy=0); the buffer-push gate (only on actual tile crossings) keeps
-    // pause ticks from polluting history.
+    // Issue #42 fix #3 — surface SearchingFood no-revisit filter (Layer-1 policy in
+    // ant-foraging.ts: pickNoRevisitSurfaceAlternate). If the proposed step lands on a
+    // recent tile the helper swaps in a fresh, in-bounds alternate — preferring
+    // (A1/V36) one below the danger threshold — or pauses (0,0); see its docstring for
+    // the mechanics + danger preference. The orchestrator only decides WHETHER the
+    // filter applies (the bypass rule below) and threads the danger grid + out-param.
     //
     // PR 5 Fix-A — a path-aware priority/scent step (`targetedStep`) is BYPASSED:
     // it is wall-avoiding and strictly decreases goal-field distance every tick,
@@ -983,36 +1011,12 @@ export function tickAntMovement(
       ants.subTask[id] === ForagingSubState.SearchingFood &&
       (dx !== 0 || dy !== 0)
     ) {
-      const tileX = ants.posX[id]! >> FP_SHIFT;
-      const tileY = ants.posY[id]! >> FP_SHIFT;
-      if (isRecentTile(ants, id, tileX + dx, tileY + dy)) {
-        // Try 8 cardinals/diagonals in N-clockwise order (N, NE, E, SE, S,
-        // SW, W, NW) — fixed and deterministic, the same neighbor sweep the
-        // queen overlap resolver uses, so the alternate-pick is easy to
-        // reason about across the codebase.
-        let found = false;
-        for (let i = 0; i < ALT_DX.length; i++) {
-          const ax = ALT_DX[i]!;
-          const ay = ALT_DY[i]!;
-          if (ax === dx && ay === dy) continue; // already-rejected proposal
-          const candX = tileX + ax;
-          const candY = tileY + ay;
-          // Bounds check — out-of-grid alternates clamp to a no-op step
-          // and would stall the ant at the map edge. Reject before they
-          // can be picked.
-          if (candX < 0 || candX >= SURFACE_GRID_WIDTH || candY < 0 || candY >= SURFACE_GRID_HEIGHT)
-            continue;
-          if (isRecentTile(ants, id, candX, candY)) continue;
-          dx = ax;
-          dy = ay;
-          found = true;
-          break;
-        }
-        if (!found) {
-          dx = 0;
-          dy = 0;
-        }
-      }
+      // A1 (V36): the ant's colony surface DangerTrail grid (undefined pre-V36 /
+      // danger-free → the legacy first-fresh pick, byte-identical).
+      const noRevisitDangerGrid = surfaceDangerByColony[ants.colonyId[id]!];
+      pickNoRevisitSurfaceAlternate(ants, id, dx, dy, noRevisitDangerGrid, noRevisitAlt);
+      dx = noRevisitAlt.dx;
+      dy = noRevisitAlt.dy;
     }
 
     // S0a / issue #120 — V14+ underground CarryingFood no-revisit filter.
@@ -1172,6 +1176,11 @@ export function tickAntMovement(
       const xCrossed = newTileX !== prevTileX;
       const yCrossed = newTileY !== prevTileY;
       let blocked = false;
+      // Both danger-grid consumers below (the per-axis revert and the blocked detour)
+      // gate on the same predicate — hoist it once (CodeRabbit). Empty
+      // surfaceDangerByColony pre-V36 keeps the grid undefined there, byte-identical.
+      const isSurfaceSearchingForager =
+        task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.SearchingFood;
       if (xCrossed && yCrossed) {
         // Diagonal step. Three checks: destination tile passable, both
         // intermediate cardinals passable. Recent-tiles consult on the
@@ -1193,12 +1202,37 @@ export function tickAntMovement(
         const passYOnly =
           canEnterSurfaceTile(world, prevTileX, newTileY) &&
           (bypassRecentTiles || !isRecentTile(ants, id, prevTileX, newTileY));
+        // A1 (V36): when a blocked diagonal reverts per-axis, the surviving cardinal
+        // is the tile the ant actually steps onto — but the no-revisit scan only
+        // danger-checked the diagonal DESTINATION, so a danger-safe diagonal could be
+        // reverted straight into a spider-wake tile (Codex P2). Prefer a danger-safe
+        // revert; if the only available revert(s) land on danger, fall through to the
+        // now-danger-aware pickSurfaceDetour (blocked) rather than step in. Scoped to
+        // surface SearchingFood foragers; no explicit simVersion check — the same
+        // convention as the other three surfaceDangerByColony consumers (sampler /
+        // no-revisit / detour): the array is empty pre-V36, so the lookup returns
+        // undefined there, both `*RevertDanger` are false, and the branch order below
+        // collapses to the legacy passX-first pick, byte-identical.
+        const axisDangerGrid = isSurfaceSearchingForager
+          ? surfaceDangerByColony[ants.colonyId[id]!]
+          : undefined;
+        const xRevertDanger =
+          axisDangerGrid !== undefined &&
+          phGet(axisDangerGrid, newTileX, prevTileY) >= DANGER_ROUTE_AVOID_THRESHOLD;
+        const yRevertDanger =
+          axisDangerGrid !== undefined &&
+          phGet(axisDangerGrid, prevTileX, newTileY) >= DANGER_ROUTE_AVOID_THRESHOLD;
         if (destPassable && (passXOnly || passYOnly)) {
           // Diagonal allowed.
-        } else if (passXOnly) {
-          posY = prevPosY;
-        } else if (passYOnly) {
-          posX = prevPosX;
+        } else if (passXOnly && !xRevertDanger) {
+          posY = prevPosY; // X-only revert (danger-safe / legacy).
+        } else if (passYOnly && !yRevertDanger) {
+          posX = prevPosX; // Y-only revert (danger-safe / legacy).
+        } else if (passXOnly || passYOnly) {
+          // A per-axis revert exists but every available one lands on danger (V36
+          // SearchingFood only — legacy never reaches here, the two branches above
+          // always fire first). Prefer the danger-aware detour over a spider-wake step.
+          blocked = true;
         } else {
           blocked = true;
         }
@@ -1208,7 +1242,14 @@ export function tickAntMovement(
         blocked = true;
       }
       if (blocked) {
-        const detour = pickSurfaceDetour(world, prevTileX, prevTileY, dx, dy, id);
+        // A1 (V36): make the obstacle detour danger-aware for surface SearchingFood
+        // foragers so a blocked risk-aware step isn't snapped into a spider-wake
+        // tile (Codex). Scoped + gated — undefined for the queen / other tasks /
+        // pre-V36, so their detours (and V35 replays) stay byte-identical.
+        const detourDangerGrid = isSurfaceSearchingForager
+          ? surfaceDangerByColony[ants.colonyId[id]!]
+          : undefined;
+        const detour = pickSurfaceDetour(world, prevTileX, prevTileY, dx, dy, id, detourDangerGrid);
         if (detour.dx !== 0 || detour.dy !== 0) {
           // Snap-to-tile-boundary instead of `prev + detour * speed`.
           // Ants at half-speed (e.g. base WORKER_BASE_SPEED = 128 = ½ tile/
@@ -1594,7 +1635,8 @@ function resolveSameColonyOccupancy(world: WorldState): void {
   // negligible vs. the prior `new Map()` + GC churn. Same observable
   // behavior — Map iteration order is insertion order, which we don't
   // rely on (lookups are key-based).
-  const occupancy = getScratch(world).movementOccupancy;
+  const arena = getScratch(world);
+  const occupancy = arena.movementOccupancy;
   occupancy.clear();
 
   for (let id = 0; id < world.nextEntityId; id++) {
@@ -1656,43 +1698,75 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     const task = ants.task[id]! as AntTask;
     const underground =
       zone === Zone.Underground ? world.undergroundGrids[rawGridColonyId] : undefined;
+    // A1 (V36): a surface SearchingFood forager's danger-aware route can be undone by
+    // this displacement post-pass bumping it onto a spider-wake tile after the sampler /
+    // no-revisit / detour checks already ran (Codex P2). Do a danger-safe-first pass,
+    // then fall back to the legacy first-passable pass so a displacement still always
+    // happens. displaceDangerGrid is the colony's surface DangerTrail grid from the
+    // per-tick arena cache tickAntMovement already populated this tick; undefined for the
+    // queen / other tasks / underground / pre-V36 (empty cache) — so the safe pass is
+    // skipped and the legacy first-passable pick is byte-identical.
+    const displaceDangerGrid =
+      zone === Zone.Surface &&
+      task === AntTask.Foraging &&
+      ants.subTask[id] === ForagingSubState.SearchingFood
+        ? arena.surfaceDangerByColony[colonyId]
+        : undefined;
     let shifted = false;
-    for (let d = 0; d < 4; d++) {
-      const nx = tileX + DIR_DX[d]!;
-      const ny = tileY + DIR_DY[d]!;
-      if (zone === Zone.Underground) {
-        if (nx < 0 || nx >= UNDERGROUND_GRID_WIDTH) continue;
-        if (ny < 0 || ny >= UNDERGROUND_GRID_HEIGHT) continue;
-        if (underground && !canEnterUndergroundTile(underground, nx, ny, task)) continue;
-      } else {
-        if (nx < 0 || nx >= SURFACE_GRID_WIDTH) continue;
-        if (ny < 0 || ny >= SURFACE_GRID_HEIGHT) continue;
-        // Don't bump a same-colony collision into a HardBlock tile.
-        if (!canEnterSurfaceTile(world, nx, ny)) continue;
-      }
-      // Exempt adjacent tiles are always "free" — we shift into them and do
-      // not claim them (keeping them open for further stacking).
-      if (isOccupancyExempt(world, colonyId, zone, nx, ny)) {
+    for (let attempt = 0; attempt < 2 && !shifted; attempt++) {
+      // attempt 0 = danger-safe-only; skipped entirely when there is no danger grid, so
+      // the legacy path goes straight to the attempt-1 first-passable pass (no behaviour
+      // change). No claims are made on a passless attempt-0, so attempt 1 starts clean.
+      if (attempt === 0 && displaceDangerGrid === undefined) continue;
+      for (let d = 0; d < 4; d++) {
+        const nx = tileX + DIR_DX[d]!;
+        const ny = tileY + DIR_DY[d]!;
+        if (zone === Zone.Underground) {
+          if (nx < 0 || nx >= UNDERGROUND_GRID_WIDTH) continue;
+          if (ny < 0 || ny >= UNDERGROUND_GRID_HEIGHT) continue;
+          if (underground && !canEnterUndergroundTile(underground, nx, ny, task)) continue;
+        } else {
+          if (nx < 0 || nx >= SURFACE_GRID_WIDTH) continue;
+          if (ny < 0 || ny >= SURFACE_GRID_HEIGHT) continue;
+          // Don't bump a same-colony collision into a HardBlock tile.
+          if (!canEnterSurfaceTile(world, nx, ny)) continue;
+        }
+        // Danger-safe pass (attempt 0): skip a spider-wake tile so the displacement
+        // prefers a clean neighbour. attempt 1 takes it anyway if every neighbour is
+        // dangerous, so a bump still happens — bounded, since a >= FLEE_THRESHOLD tile
+        // is caught by the V34 flee on the next tick. This danger skip runs BEFORE the
+        // exempt check below, so at V36 a clean neighbour is deliberately preferred over
+        // a dangerous exempt one; legacy (attempt 1) keeps the original exempt-first order.
+        if (
+          attempt === 0 &&
+          displaceDangerGrid !== undefined &&
+          phGet(displaceDangerGrid, nx, ny) >= DANGER_ROUTE_AVOID_THRESHOLD
+        )
+          continue;
+        // Exempt adjacent tiles are always "free" — we shift into them and do
+        // not claim them (keeping them open for further stacking).
+        if (isOccupancyExempt(world, colonyId, zone, nx, ny)) {
+          tileX = nx;
+          tileY = ny;
+          ants.posX[id] = (tileX << FP_SHIFT) + occupancyCenterOffset;
+          ants.posY[id] = (tileY << FP_SHIFT) + occupancyCenterOffset;
+          shifted = true;
+          break;
+        }
+        // Issue #61 — same key layout as the primary key above. Issue #108
+        // (v13+): mirror the same gridByte mask so adjacent-tile lookup keys
+        // match the primary lookup. Pre-v13 used `rawGridColonyId` here too;
+        // safe because pre-v13 occupancy resolution never crosses zones.
+        const adjKey = (gridByte << 23) | (colonyId << 16) | (zone << 15) | (ny << 7) | nx;
+        if (occupancy.has(adjKey)) continue;
         tileX = nx;
         tileY = ny;
         ants.posX[id] = (tileX << FP_SHIFT) + occupancyCenterOffset;
         ants.posY[id] = (tileY << FP_SHIFT) + occupancyCenterOffset;
+        occupancy.set(adjKey, id);
         shifted = true;
         break;
       }
-      // Issue #61 — same key layout as the primary key above. Issue #108
-      // (v13+): mirror the same gridByte mask so adjacent-tile lookup keys
-      // match the primary lookup. Pre-v13 used `rawGridColonyId` here too;
-      // safe because pre-v13 occupancy resolution never crosses zones.
-      const adjKey = (gridByte << 23) | (colonyId << 16) | (zone << 15) | (ny << 7) | nx;
-      if (occupancy.has(adjKey)) continue;
-      tileX = nx;
-      tileY = ny;
-      ants.posX[id] = (tileX << FP_SHIFT) + occupancyCenterOffset;
-      ants.posY[id] = (tileY << FP_SHIFT) + occupancyCenterOffset;
-      occupancy.set(adjKey, id);
-      shifted = true;
-      break;
     }
     // If no shift found, forced overlap — rare. Leave the ant at the original
     // tile; do not pollute the occupancy map (the lower-id claimant remains
