@@ -35,7 +35,12 @@ import {
   SURFACE_GRID_HEIGHT,
   SPIDER_EDGE_MARGIN_TILES,
 } from './constants.js';
-import { SIM_VERSION_V31_SPIDER_TERRAIN, SIM_VERSION_V32_AI_OP_VALIDATION } from './types.js';
+import {
+  SIM_VERSION_V31_SPIDER_TERRAIN,
+  SIM_VERSION_V32_AI_OP_VALIDATION,
+  SIM_VERSION_V37_CORPSE_FOOD,
+} from './types.js';
+import { spawnCorpseFood, corpseYield } from './food-system.js';
 import { FP_SHIFT } from './fixed.js';
 import { surfaceMovementAt, SurfaceMovementEffect } from './surface-features.js';
 import { ensureSurfaceGoalField, SURFACE_GOAL_UNREACHED } from './surface-routing.js';
@@ -690,6 +695,23 @@ export function tickSpider(world: WorldState): void {
         emitSpiderHuntEnd(world, 'swarm_retreat', 0);
       }
     }
+    // A2 (V37) — the spider's own death drops a large corpse-food cache at its
+    // (stationary) tile, so bringing the spider down rewards the colony with a
+    // forageable bonanza. Gated `simVersion >= V37` (byte-identical pre-V37: no
+    // ID-counter advance, no food-pile mutation). Dropped BEFORE `world.spider =
+    // null` so `spider.posX/posY` are still readable. If the spider died on a
+    // passable-but-off-component tile (it navigates by the looser `isSpiderPassable`
+    // rule), `spawnCorpseFood`'s placement guard skips the drop rather than minting a
+    // pile that would make the save unloadable — the rare bonanza is simply forgone.
+    if (world.simVersion >= SIM_VERSION_V37_CORPSE_FOOD) {
+      spawnCorpseFood(
+        world,
+        spider.posX >> FP_SHIFT,
+        spider.posY >> FP_SHIFT,
+        corpseYield('spider'),
+      );
+    }
+
     clearSpiderPairingSentinels(world);
     world.spider = null;
     world.spiderPriorityColonyId = null;

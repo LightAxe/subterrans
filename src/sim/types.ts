@@ -481,7 +481,22 @@ export const SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER = 35 as const;
  * danger-blind (Option B). No new save column; MIN_ACCEPTED is UNCHANGED.
  */
 export const SIM_VERSION_V36_RISK_AWARE_FORAGING = 36 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V36_RISK_AWARE_FORAGING;
+
+/**
+ * A2 — battlefield scavenging / corpse food. A surface combat death drops
+ * forageable "corpse food" (an ordinary `FoodPile`): an enemy-ant kill drops a
+ * 1-charge worker/fighter pile (queen = 8, forward-compat/inert today), and the
+ * spider's own death drops a 100-charge pile at its tile. Fixed yields, never
+ * RNG-drawn — a drop advances only the entity-ID counter, which is exactly why
+ * every A2 effect is gated `simVersion >= V37` (pre-V37 replays byte-identically,
+ * consuming no IDs and touching no food piles). The new optional `FoodPile.isCorpse`
+ * flag (present only on corpse piles at V37+) exempts corpse piles from the
+ * natural-spawn soft ceiling and from the depletion "barren" cooldown, and lowers
+ * the save-validator pickup floor to 1 for corpse piles only. No MIN_ACCEPTED raise
+ * (no save wipe); natural piles carry no new column, so pre-V37 saves are unchanged.
+ */
+export const SIM_VERSION_V37_CORPSE_FOOD = 37 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V37_CORPSE_FOOD;
 
 /**
  * S2 — AI colony state machine states.
@@ -1215,6 +1230,13 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   for (let i = 0; i < src.foodPiles.length; i++) {
     if (i < dst.foodPiles.length) {
       Object.assign(dst.foodPiles[i]!, src.foodPiles[i]!);
+      // Object.assign copies src's own keys but never DELETES keys already on
+      // the reused dst slot. isCorpse is optional/absent on natural piles, so a
+      // reused slot that previously held a corpse pile (isCorpse:true) would
+      // retain a stale flag when the src pile now at this index is natural.
+      // Clear it so the copy stays a faithful clone (mirrors the deserializer's
+      // explicit reconstruction in save.ts).
+      if (src.foodPiles[i]!.isCorpse === undefined) delete dst.foodPiles[i]!.isCorpse;
     } else {
       dst.foodPiles.push(Object.assign({}, src.foodPiles[i]!));
     }

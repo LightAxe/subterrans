@@ -50,6 +50,21 @@ export interface FoodPile {
    * appearing depleted from birth.
    */
   pickupsInitial: number;
+
+  /**
+   * A2 (V37) — battlefield-scavenging provenance. `true` marks a pile dropped by
+   * a surface combat death (`spawnCorpseFood`); natural + scenario-seeded piles
+   * leave it **absent** (so pre-V37 saves are byte-identical and existing pile
+   * literals need no change). Optional-on-load: `deserializeWorldState` honors it
+   * only for V37+ saves (a pre-V37 blob can't smuggle a corpse flag). Read it as
+   * `isCorpse === true` (corpse) / `!isCorpse` (natural), so an absent value is
+   * treated as natural — the safe default (counts against the natural-spawn soft
+   * ceiling and records the depletion "barren" cooldown). Fixed at birth: a corpse
+   * topping up a natural pile leaves the flag unchanged (the pile stays natural).
+   *
+   * Sim-only in v1 — the renderer ignores it (corpse food draws as a normal pile).
+   */
+  isCorpse?: boolean;
 }
 
 // ---------------------------------------------------------------------------

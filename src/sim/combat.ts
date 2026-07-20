@@ -16,8 +16,9 @@
 import { Rng } from './rng.js';
 import { AntTask, PheromoneType } from './enums.js';
 import { makeTileKey } from './tile-key.js';
-import { SIM_VERSION_V34_IDLE_RESERVE_FLEE } from './types.js';
+import { SIM_VERSION_V34_IDLE_RESERVE_FLEE, SIM_VERSION_V37_CORPSE_FOOD } from './types.js';
 import type { WorldState, KillerKind, QueenDeathContext } from './types.js';
+import { spawnCorpseFood, corpseYield, type CorpseKind } from './food-system.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
@@ -560,6 +561,40 @@ export function killAnt(
         KILL_ALARM_DANGER_DEPOSIT,
         KILL_ALARM_DANGER_DEPOSIT >> 1,
       );
+    }
+  }
+
+  // A2 (V37) — battlefield scavenging: an ant killed by an ENEMY ANT on the
+  // SURFACE drops forageable corpse food at its (stationary) death tile. Predicate
+  // mirrors the V34 kill-alarm's `killerColonyId !== null` and adds `killerId !==
+  // null` so a synthetic `killAnt(world, v, cid, null, 'Ant')` (a colony but no real
+  // killer entity) drops nothing; production ant kills always pass both non-null
+  // (`killAnt(world, antB, cidA, antA, 'Ant')`). Spider kills (killerKind 'Spider',
+  // null killer) and underground deaths never drop. Classify the victim explicitly —
+  // queen → fighter → worker → else no drop (brood / unknown roles yield nothing).
+  // Gated `simVersion >= V37` so pre-V37 replays byte-identically (no ID-counter
+  // advance, no food-pile mutation). The victim is dead + stationary, so its tile is
+  // unambiguous — no "checked-tile ≠ landed-tile" ambiguity.
+  if (
+    world.simVersion >= SIM_VERSION_V37_CORPSE_FOOD &&
+    killerKind === 'Ant' &&
+    killerColonyId !== null &&
+    killerColonyId !== victimColonyId && // enemy kill only (matches the V34 alarm predicate above)
+    killerId !== null &&
+    ants.zone[antIndex] === 0 // Zone.Surface
+  ) {
+    let corpseKind: CorpseKind | null = null;
+    if (isQueenVictim) {
+      // Forward-compat only: queen death ends the match today, so this morsel is
+      // never retrievable — deterministic but inert. Kept for the multi-queen future.
+      corpseKind = 'queen';
+    } else if (ants.task[antIndex] === AntTask.Fighting) {
+      corpseKind = 'fighter';
+    } else if (victimColony !== undefined && victimColony.workers.includes(antIndex)) {
+      corpseKind = 'worker';
+    }
+    if (corpseKind !== null) {
+      spawnCorpseFood(world, tileX, tileY, corpseYield(corpseKind));
     }
   }
 }
