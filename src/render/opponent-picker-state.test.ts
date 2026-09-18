@@ -60,6 +60,37 @@ describe('createOpponentPickerState', () => {
     expect(s.text).toBe(AGGRESSIVE);
   });
 
+  it('falls back to the separately-remembered orders when the preference is rules', () => {
+    // settings.jevOrders exists precisely because `{ kind: 'rules' }` cannot
+    // carry the text: one round against the Standard AI must not blank the box.
+    const s = createOpponentPickerState({
+      saved: DEFAULT_OPPONENT,
+      savedOrders: 'hold the line',
+      jevAvailable: true,
+    });
+    expect(s.kind).toBe('rules');
+    expect(s.text).toBe('hold the line');
+    expect(toConfig(toggleKind(s, 'jev'))).toEqual({ kind: 'jev', orders: 'hold the line' });
+  });
+
+  it('prefers a jev preference over the remembered orders (it is self-describing)', () => {
+    const s = createOpponentPickerState({
+      saved: jevOpponent(AGGRESSIVE),
+      savedOrders: 'stale text',
+      jevAvailable: true,
+    });
+    expect(s.text).toBe(AGGRESSIVE);
+  });
+
+  it('caps over-long remembered orders too', () => {
+    const s = createOpponentPickerState({
+      saved: DEFAULT_OPPONENT,
+      savedOrders: 'q'.repeat(5000),
+      jevAvailable: true,
+    });
+    expect(s.text).toHaveLength(JEV_ORDERS_MAX_LENGTH);
+  });
+
   it('caps over-long persisted orders (hand-edited localStorage)', () => {
     // settings.ts validates the SHAPE only; the cap is the render layer's job.
     const tampered = { kind: 'jev', orders: 'z'.repeat(5000) } as const;
@@ -147,6 +178,21 @@ describe('editText', () => {
   it('caps at JEV_ORDERS_MAX_LENGTH', () => {
     const s = editText(toggleKind(available(), 'jev'), 'x'.repeat(JEV_ORDERS_MAX_LENGTH + 250));
     expect(s.text).toHaveLength(JEV_ORDERS_MAX_LENGTH);
+  });
+
+  it('returns the SAME state object when the text did not change', () => {
+    // A value-less `input` event (IME composition end, some autofill paths) must
+    // not silently drop a preset highlight the player never touched.
+    const preset = selectPreset(toggleKind(available(), 'jev'), 'turtle');
+    expect(editText(preset, preset.text)).toBe(preset);
+    expect(editText(preset, preset.text).presetId).toBe('turtle');
+  });
+
+  it('still un-highlights when an over-long paste truncates to the same text', () => {
+    const long = editText(toggleKind(available(), 'jev'), 'y'.repeat(JEV_ORDERS_MAX_LENGTH));
+    const again = editText(selectPreset(long, 'turtle'), 'y'.repeat(JEV_ORDERS_MAX_LENGTH + 99));
+    expect(again.presetId).toBeNull();
+    expect(again.text).toHaveLength(JEV_ORDERS_MAX_LENGTH);
   });
 
   it('accepts an empty edit (clearing the field)', () => {
