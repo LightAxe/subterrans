@@ -591,8 +591,8 @@ export class GameScene extends Phaser.Scene {
    *  to rules when the feature is off — see `effectiveOpponent`). */
   private currentOpponent: OpponentConfig = DEFAULT_OPPONENT;
   /**
-   * Seam for the opponent-picker UI a later workstream adds: set this before a
-   * new-game path runs and the next `bootFresh` uses it. Null = the default
+   * The opponent-picker's choice: W3's difficulty-select overlay writes it before
+   * a new-game path runs, and the next `bootFresh` uses it. Null = the default
    * (rule-based) opponent. Deliberately NOT cleared by `resetSessionState` — it
    * is a lobby choice that outlives a round, like the difficulty selection.
    */
@@ -1479,8 +1479,10 @@ export class GameScene extends Phaser.Scene {
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     uiScene.showDifficultySelectOverlay({
       initialDifficulty: loadSettings().difficulty,
-      onStart: (d) => {
+      ...this.difficultySelectSeed(),
+      onStart: (d, opponent) => {
         this.rememberDifficulty(d);
+        this.applyOpponentChoice(opponent);
         this.bootFresh(d, this.nextOpponent());
         if (preserveFutureSave) {
           // Set after bootFresh — resetSessionState clears the flag.
@@ -1566,13 +1568,50 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * The opponent the next NEW game should use. Today this is always the
-   * default (rule-based) opponent, because nothing sets `pendingOpponent` yet;
-   * the opponent-picker UI workstream sets it from the lobby and every new-game
-   * path picks it up here without further changes.
+   * The opponent the next NEW game should use — `pendingOpponent` as written by
+   * the difficulty-select overlay's picker (W3), falling back to the rule-based
+   * AI when nothing set it (a boot path that never showed the overlay).
    */
   private nextOpponent(): OpponentConfig {
     return this.pendingOpponent ?? DEFAULT_OPPONENT;
+  }
+
+  /**
+   * Everything a new-game path must do with the overlay's opponent choice:
+   * arm the `pendingOpponent` seam `bootFresh` reads through `nextOpponent()`,
+   * and persist the preference so the NEXT overlay pre-selects it. The write is
+   * read-modify-write against the live settings blob (never a partial overwrite)
+   * and is best-effort — saveSettings swallows quota / private-mode failures.
+   *
+   * One exception: on a build with NO proxy endpoint the picker can only ever
+   * commit `rules`, so writing that would silently erase a Jev preference (and
+   * its standing-orders text) that the player set on a build that HAS the
+   * endpoint — the overlay literally told them "(unavailable in this build)", it
+   * must not also forget their choice. The stored value is meaningless on such a
+   * build anyway, since nothing else can be selected there.
+   */
+  private applyOpponentChoice(opponent: OpponentConfig): void {
+    this.pendingOpponent = opponent;
+    if (opponent.kind === 'rules' && !this.isJevAvailable()) return;
+    const persisted = loadSettings();
+    persisted.opponent = opponent;
+    saveSettings(persisted);
+  }
+
+  /** Callback payload shared by every path that opens the difficulty overlay, so
+   *  the picker is seeded identically on first boot, New Game and restart.
+   *
+   *  The in-memory `pendingOpponent` wins over the persisted value, mirroring the
+   *  pheromone/hint toggles (Codex round-6 P2): where localStorage writes are
+   *  blocked (private mode, quota) saveSettings is a silent no-op and loadSettings
+   *  would hand back the DEFAULT on the next open — throwing away a choice the
+   *  player made two minutes ago. Falls back to storage on the first overlay of
+   *  the session, which is exactly what the preference is for. */
+  private difficultySelectSeed(): { jevAvailable: boolean; initialOpponent: OpponentConfig } {
+    return {
+      jevAvailable: this.isJevAvailable(),
+      initialOpponent: this.pendingOpponent ?? loadSettings().opponent,
+    };
   }
 
   /**
@@ -2208,8 +2247,10 @@ export class GameScene extends Phaser.Scene {
     this.gamePhase = GamePhase.SavePrompt; // prevent update() from ticking the old world during overlay
     uiScene.showDifficultySelectOverlay({
       initialDifficulty: loadSettings().difficulty,
-      onStart: (d) => {
+      ...this.difficultySelectSeed(),
+      onStart: (d, opponent) => {
         this.rememberDifficulty(d);
+        this.applyOpponentChoice(opponent);
         this.bootFresh(d, this.nextOpponent());
         if (wasSuspended) {
           this.autosaveSuspended = true;

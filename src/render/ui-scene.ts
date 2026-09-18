@@ -92,12 +92,22 @@ declare global {
 
 /** #304 — the new-game screen's contract with GameScene. */
 export interface DifficultySelectCallbacks {
-  /** Fired ONLY by the Start button or Enter, with the selected tier. Clicking
-   *  a difficulty row never fires this — it just moves the selection. */
-  onStart: (d: Difficulty) => void;
+  /** Fired ONLY by the Start button or Enter, with the selected tier and the
+   *  OpponentConfig the opponent picker resolved to (Jev opponent beta).
+   *  Clicking a difficulty row never fires this — it just moves the selection.
+   *  The screen is already closed by the time it fires. */
+  onStart: (d: Difficulty, opponent: OpponentConfig) => void;
   /** Row pre-selected when the screen opens: the player's persisted last-used
    *  tier (settings.difficulty). Defaults to Normal. */
   initialDifficulty?: Difficulty;
+  /** False (the default) hides the opponent section entirely and pins the
+   *  choice to the rule-based AI. GameScene passes `isJevAvailable()` — i.e.
+   *  whether a proxy endpoint is configured. */
+  jevAvailable?: boolean;
+  /** The player's persisted opponent preference (settings.opponent), used to
+   *  pre-select the opponent row, the preset highlight and the free text.
+   *  Defaults to the rule-based AI. */
+  initialOpponent?: OpponentConfig;
 }
 
 /** Single publisher for window.__phase9_ui (Playwright observability). Merges a
@@ -204,6 +214,15 @@ const DIFFICULTY_NAME_COLORS: Readonly<Record<Difficulty, string>> = {
   Normal: '#8ecbff',
   Hard: '#ff8a8a',
 };
+// Jev opponent (beta) — the new-game screen's opponent picker. Every transition
+// runs through the pure opponent-picker-state module so the behavior is
+// unit-tested without a scene; the scene only owns the Phaser objects.
+import { DEFAULT_OPPONENT, type OpponentConfig } from './opponent-config.js';
+import {
+  createOpponentPickerState,
+  toConfig,
+  type OpponentPickerState,
+} from './opponent-picker-state.js';
 
 /** True when a keyboard event was typed into an editable DOM element — a text
  *  field, textarea, select, or contenteditable. Phaser's keyboard plugin listens
@@ -594,6 +613,13 @@ export class UIScene extends Phaser.Scene {
   /** Geometry of the open new-game screen, cached at render time for the
    *  scene-level hit-test (mirrors pauseMenuVisibleItems). Null when closed. */
   private newGameGeo: NewGameScreenLayout | null = null;
+  /** Jev opponent (beta) — the opponent picker's pure state (which opponent is
+   *  selected, the standing orders). Seeded from the persisted preference on
+   *  show; `toConfig` of it is what Start commits alongside the difficulty. */
+  private opponentPicker: OpponentPickerState = createOpponentPickerState({
+    saved: DEFAULT_OPPONENT,
+    jevAvailable: false,
+  });
   // Issue #116 — pause menu overlay state. Empty group means "not visible";
   // page tracks which sub-screen is currently rendered. callbacks/saveLoadEnabled
   // are captured at show time so we can re-render on page navigation without
@@ -2063,6 +2089,14 @@ export class UIScene extends Phaser.Scene {
     this.difficultySelectCallbacks = callbacks;
     this.selectedDifficulty = callbacks.initialDifficulty ?? 'Normal';
     setSelectedDifficulty(this.selectedDifficulty);
+    // Seed the opponent picker from the player's persisted preference. A `jev`
+    // preference on a build with no proxy endpoint is downgraded here, mirroring
+    // GameScene's boot-time effectiveOpponent downgrade, so the screen never
+    // offers what can't run.
+    this.opponentPicker = createOpponentPickerState({
+      saved: callbacks.initialOpponent ?? DEFAULT_OPPONENT,
+      jevAvailable: callbacks.jevAvailable ?? false,
+    });
     this.renderDifficultySelectOverlay();
   }
 
@@ -2087,8 +2121,11 @@ export class UIScene extends Phaser.Scene {
     if (!this.isDifficultySelectVisible()) return;
     const cb = this.difficultySelectCallbacks;
     const difficulty = this.selectedDifficulty;
+    // Freeze the opponent BEFORE hiding: hide nulls the callbacks and tears the
+    // picker's DOM textarea down.
+    const opponent = toConfig(this.opponentPicker);
     this.hideDifficultySelectOverlay();
-    cb?.onStart(difficulty);
+    cb?.onStart(difficulty, opponent);
   }
 
   /** Move the selection to `next` and redraw. Never starts the round. */
@@ -2990,7 +3027,7 @@ export class UIScene extends Phaser.Scene {
     }
 
     // Free-text rect background (the actual editable surface is a DOM
-    // textarea positioned over the canvas below — see ensureSurveyTextarea).
+    // textarea positioned over the canvas below — see ensureSurveyDomInputs).
     const ft = surveyFreeTextRect(this.layout);
     const ftBg = this.add.rectangle(ft.x + ft.w / 2, ft.y + ft.h / 2, ft.w, ft.h, 0x222222, 1);
     ftBg.setDepth(41);
@@ -3159,97 +3196,52 @@ export class UIScene extends Phaser.Scene {
 
   /** Mount the overlay's DOM inputs over the canvas: a `<textarea>` at
    *  surveyFreeTextRect for free text, and (#303) an `<input type="email">` at
-   *  surveyEmailInputRect. Created once per overlay open and torn down in
+   *  surveyEmailInputRect. Both come from the shared overlay-field factories, so
+   *  the survey and the W3 opponent picker style and wire their DOM text entry
+   *  identically. Created once per overlay open and torn down in
    *  removeSurveyDomInputs. Positions are recomputed each render so a canvas
    *  resize between renders is handled correctly. */
   private ensureSurveyDomInputs(): void {
-    if (typeof document === 'undefined') return; // headless Vitest path
-    const canvas = this.game.canvas;
-    if (canvas === null) return;
-    // Append to the canvas's parent so embedded-in-shadow-DOM hosts
-    // (the library-mode embed on the website may eventually mount
-    // inside a custom element) keep the inputs inside the same
-    // stacking context as the canvas. Fall back to document.body only
-    // when the canvas has no parent yet (defensive — shouldn't happen
-    // after Phaser's create()).
-    const parent = canvas.parentElement ?? document.body;
     if (this.surveyTextarea === null) {
-      const ta = document.createElement('textarea');
-      ta.placeholder = 'What stood out? (optional)';
-      ta.maxLength = PLAYTRACE_FREE_TEXT_MAX;
-      ta.style.position = 'absolute';
-      ta.style.zIndex = '1000';
-      ta.style.background = '#222222';
-      ta.style.color = '#ffffff';
-      ta.style.border = '1px solid #444444';
-      ta.style.fontFamily = 'monospace';
-      ta.style.fontSize = '13px';
-      ta.style.padding = '6px';
-      ta.style.resize = 'none';
-      // Without border-box the 6px padding and 1px border are ADDED to the
-      // height set from surveyFreeTextRect, so the element renders 14px taller
-      // than the rect it is supposed to occupy. That was merely tight before
-      // #303 (a 100px rect rendered 114px, clearing the checkbox row by 6px);
-      // once #303 shrank the rect to 68px to make room for the email row, the
-      // overflow painted straight over the email label at SURVEY_EMAIL_LABEL_Y.
-      // Matching the email input's box-sizing makes the rendered box equal the
-      // reserved rect, which is what every layout assertion assumes.
-      ta.style.boxSizing = 'border-box';
-      ta.addEventListener('input', () => {
-        this.surveyState.freeText = truncateFreeText(ta.value);
+      const ta = this.createOverlayTextarea({
+        placeholder: 'What stood out? (optional)',
+        maxLength: PLAYTRACE_FREE_TEXT_MAX,
+        onInput: (value) => {
+          this.surveyState.freeText = truncateFreeText(value);
+        },
       });
-      // Phaser's KeyboardManager listens on window (bubble phase) and calls
-      // preventDefault() for any key in its captures list — which includes
-      // WASD and Space by default. stopPropagation prevents the keydown from
-      // reaching Phaser so the textarea receives every character normally.
-      ta.addEventListener('keydown', (e) => {
-        if (e.key !== 'Escape') e.stopPropagation();
-      });
-      parent.appendChild(ta);
+      if (ta === null) return; // headless Vitest path / pre-canvas
       this.surveyTextarea = ta;
     }
     if (this.surveyEmailInput === null) {
-      const el = document.createElement('input');
-      el.type = 'email';
-      el.autocomplete = 'email';
-      el.placeholder = 'you@example.com';
-      // The field's visible label is Phaser text painted on the canvas, which
-      // assistive tech cannot see at all — to a screen reader this input would
-      // otherwise be an unlabelled box asking for an email address. Reuse the
-      // same string, which already carries both the purpose limitation and the
-      // 90-day retention, so the accessible name cannot drift from the drawn
-      // one. aria-label rather than aria-describedby: one attribute, no extra
-      // DOM node and no lifecycle to tear down.
-      el.setAttribute('aria-label', SURVEY_EMAIL_LABEL);
-      // The cap is applied in three places — here, in rememberSurveyEmail, and
-      // again when settings load — but this is the one that acts before the
-      // player commits: sanitizeSurveyEmail DROPS an over-long address rather
-      // than truncating it, so without maxLength a long paste would be accepted
-      // by the form and then silently discarded at submit time. Note the browser
-      // truncates the paste rather than rejecting it, so an address longer than
-      // the RFC limit still ends up altered — it just ends up altered visibly.
-      el.maxLength = PLAYTRACE_EMAIL_MAX;
-      // Prefill from the remembered address (surveyState.email was seeded from
-      // settings in showSurveyOverlay).
-      el.value = this.surveyState.email;
-      el.style.position = 'absolute';
-      el.style.zIndex = '1000';
-      el.style.background = '#222222';
-      el.style.color = '#ffffff';
-      el.style.border = '1px solid #444444';
-      el.style.fontFamily = 'monospace';
-      el.style.fontSize = '13px';
-      el.style.padding = '2px 6px';
-      el.style.boxSizing = 'border-box';
-      el.addEventListener('input', () => {
-        this.surveyState.email = el.value;
+      const el = this.createOverlayInput({
+        type: 'email',
+        autocomplete: 'email',
+        placeholder: 'you@example.com',
+        // The field's visible label is Phaser text painted on the canvas, which
+        // assistive tech cannot see at all — to a screen reader this input would
+        // otherwise be an unlabelled box asking for an email address. Reuse the
+        // same string, which already carries both the purpose limitation and the
+        // 90-day retention, so the accessible name cannot drift from the drawn
+        // one. aria-label rather than aria-describedby: one attribute, no extra
+        // DOM node and no lifecycle to tear down.
+        ariaLabel: SURVEY_EMAIL_LABEL,
+        // The cap is applied in three places — here, in rememberSurveyEmail, and
+        // again when settings load — but this is the one that acts before the
+        // player commits: sanitizeSurveyEmail DROPS an over-long address rather
+        // than truncating it, so without maxLength a long paste would be accepted
+        // by the form and then silently discarded at submit time. Note the browser
+        // truncates the paste rather than rejecting it, so an address longer than
+        // the RFC limit still ends up altered — it just ends up altered visibly.
+        maxLength: PLAYTRACE_EMAIL_MAX,
+        // Prefill from the remembered address (surveyState.email was seeded from
+        // settings in showSurveyOverlay).
+        value: this.surveyState.email,
+        onInput: (value) => {
+          this.surveyState.email = value;
+        },
       });
-      // Same rationale as the textarea: Phaser's window-level KeyboardManager
-      // preventDefaults WASD/Space, which would eat characters typed here.
-      el.addEventListener('keydown', (e) => {
-        if (e.key !== 'Escape') e.stopPropagation();
-      });
-      parent.appendChild(el);
+      if (el === null) return; // headless Vitest path / pre-canvas
       this.surveyEmailInput = el;
     }
     // Bind the resize handler once per overlay open so a window-resize
@@ -3264,17 +3256,129 @@ export class UIScene extends Phaser.Scene {
 
   private positionSurveyDomInputs(): void {
     if (this.surveyTextarea !== null) {
-      this.positionSurveyElement(this.surveyTextarea, surveyFreeTextRect(this.layout));
+      this.positionDomOverRect(this.surveyTextarea, surveyFreeTextRect(this.layout));
     }
     if (this.surveyEmailInput !== null) {
-      this.positionSurveyElement(this.surveyEmailInput, surveyEmailInputRect(this.layout));
+      this.positionDomOverRect(this.surveyEmailInput, surveyEmailInputRect(this.layout));
     }
   }
 
-  /** Place one absolutely-positioned overlay element over a canvas-local rect.
-   *  Shared by the free-text textarea and the #303 email input — both sit in
-   *  the same stacking context and need the same coordinate-space conversion. */
-  private positionSurveyElement(
+  /**
+   * Shared styling + wiring for every DOM-over-canvas text field: the survey's
+   * free-text box and its #303 email row, and the W3 opponent picker's
+   * standing-orders box. They are real DOM elements because Phaser ships no
+   * text-input primitive, and rolling one over the canvas from keyboard events
+   * would mean reimplementing caret, selection, IME composition, paste and
+   * accessibility. Geometry is not set here — positionDomOverRect owns it.
+   */
+  private mountOverlayField(
+    el: HTMLTextAreaElement | HTMLInputElement,
+    parent: HTMLElement,
+    opts: { placeholder: string; maxLength: number; onInput: (value: string) => void },
+  ): void {
+    el.placeholder = opts.placeholder;
+    el.maxLength = opts.maxLength;
+    el.style.position = 'absolute';
+    el.style.zIndex = '1000';
+    // Without this the UA's content-box sizing adds the padding + border on TOP
+    // of the width/height positionDomOverRect assigns, so the element overflows
+    // the rect it is supposed to fill by ~14px in each axis. That is not
+    // cosmetic: with #303's shorter free-text rect a content-box textarea
+    // rendered 82px tall in a 68px rect and painted straight over the email
+    // label below it, and the same overflow would let the opponent picker's
+    // textarea cover the "n/300" counter beneath it.
+    el.style.boxSizing = 'border-box';
+    el.style.background = '#222222';
+    el.style.color = '#ffffff';
+    el.style.border = '1px solid #444444';
+    el.style.fontFamily = 'monospace';
+    el.style.fontSize = '13px';
+    // Bound through an HTMLElement-typed alias: TypeScript cannot instantiate a
+    // generic signature through a union receiver, so addEventListener on
+    // `HTMLTextAreaElement | HTMLInputElement` would fall back to the untyped
+    // (Event) overload and lose `e.key`.
+    const node: HTMLElement = el;
+    node.addEventListener('input', () => opts.onInput(el.value));
+    // Phaser's KeyboardManager listens on window (bubble phase) and calls
+    // preventDefault() for any key in its captures list — which includes
+    // WASD and Space by default. stopPropagation prevents the keydown from
+    // reaching Phaser so the field receives every character normally.
+    node.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') e.stopPropagation();
+    });
+    parent.appendChild(el);
+  }
+
+  /**
+   * Where overlay fields are attached: the canvas's parent, so embedded-in-
+   * shadow-DOM hosts (the library-mode embed on the website may eventually
+   * mount inside a custom element) keep the field inside the same stacking
+   * context as the canvas. Falls back to document.body only when the canvas has
+   * no parent yet (defensive — shouldn't happen after Phaser's create()).
+   * Returns null in a headless (Vitest) context or before the canvas exists;
+   * callers treat that as "no editable surface this frame".
+   */
+  private overlayFieldParent(): HTMLElement | null {
+    if (typeof document === 'undefined') return null; // headless Vitest path
+    const canvas = this.game.canvas;
+    if (canvas === null) return null;
+    return canvas.parentElement ?? document.body;
+  }
+
+  /** A multi-line overlay field: the survey's free-text box and the opponent
+   *  picker's standing orders. Roomier padding than the single-line variant, and
+   *  the drag-to-resize grip is suppressed because the rect it fills is owned by
+   *  the layout module, not by the player. */
+  private createOverlayTextarea(opts: {
+    placeholder: string;
+    maxLength: number;
+    onInput: (value: string) => void;
+  }): HTMLTextAreaElement | null {
+    const parent = this.overlayFieldParent();
+    if (parent === null) return null;
+    const ta = document.createElement('textarea');
+    ta.style.padding = '6px';
+    ta.style.resize = 'none';
+    this.mountOverlayField(ta, parent, opts);
+    return ta;
+  }
+
+  /** The single-line variant: an `<input>` of the given type — today only the
+   *  survey's optional email row (#303), which needs `type=email` for the
+   *  on-screen keyboard and `autocomplete` so the browser can offer a saved
+   *  address. `value` prefills the box from persisted state before it is
+   *  attached, so the first paint already shows the remembered address. */
+  private createOverlayInput(opts: {
+    type: 'email';
+    autocomplete: AutoFill;
+    placeholder: string;
+    maxLength: number;
+    value: string;
+    /** Accessible name — the drawn label is canvas text a screen reader never sees. */
+    ariaLabel: string;
+    onInput: (value: string) => void;
+  }): HTMLInputElement | null {
+    const parent = this.overlayFieldParent();
+    if (parent === null) return null;
+    const el = document.createElement('input');
+    el.type = opts.type;
+    el.autocomplete = opts.autocomplete;
+    el.setAttribute('aria-label', opts.ariaLabel);
+    el.value = opts.value;
+    el.style.padding = '2px 6px';
+    this.mountOverlayField(el, parent, {
+      placeholder: opts.placeholder,
+      maxLength: opts.maxLength,
+      onInput: opts.onInput,
+    });
+    return el;
+  }
+
+  /**
+   * Align an absolutely-positioned DOM element with a canvas-local rect, in CSS
+   * pixels. Shared by every DOM-over-canvas overlay affordance.
+   */
+  private positionDomOverRect(
     el: HTMLElement,
     rect: { x: number; y: number; w: number; h: number },
   ): void {
@@ -3284,7 +3388,7 @@ export class UIScene extends Phaser.Scene {
     const scaleX = cssScaleX(canvasRect.width, this.layout); // shared with the #237 drag threshold
     const scaleY = canvasRect.height / this.layout.h;
     // The element is absolutely-positioned and sits in `document.body` or
-    // in `canvas.parentElement` (see ensureSurveyDomInputs). For an
+    // in `canvas.parentElement` (see mountOverlayField). For an
     // absolutely-positioned element, the `left`/`top` values are measured
     // against the nearest positioned ancestor (i.e. the same offsetParent
     // resolution the browser uses). We compute the canvas's position in
@@ -3299,7 +3403,6 @@ export class UIScene extends Phaser.Scene {
     let originX = 0;
     let originY = 0;
     if (offsetParent !== null) {
-      const opRect = offsetParent.getBoundingClientRect();
       // Bounding-client-rect deltas use viewport coordinates; add the
       // offsetParent's scrollLeft/Top so a scrolled overflow container
       // (rare for the game canvas, but defensible) is handled too.
@@ -3309,8 +3412,9 @@ export class UIScene extends Phaser.Scene {
       // border-box rect, but absolutely-positioned children's left/top
       // are measured from the parent's PADDING-box (i.e. inside the
       // border). Without this, an embedder whose canvas wrapper has a
-      // non-zero CSS border would see the textarea shift by the border
+      // non-zero CSS border would see the element shift by the border
       // width. (Codex round-3 review follow-up.)
+      const opRect = offsetParent.getBoundingClientRect();
       originX = canvasRect.left - opRect.left - offsetParent.clientLeft + offsetParent.scrollLeft;
       originY = canvasRect.top - opRect.top - offsetParent.clientTop + offsetParent.scrollTop;
     } else {
