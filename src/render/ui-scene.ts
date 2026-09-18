@@ -162,7 +162,12 @@ export {
 // W3 — opponent picker (Jev opponent beta). The overlay owns only the Phaser
 // objects + the DOM <textarea>; every transition runs through the pure state
 // module so the behavior is unit-tested without a scene.
-import { DEFAULT_OPPONENT, type OpponentConfig } from './opponent-config.js';
+import {
+  DEFAULT_OPPONENT,
+  formatOpponentStatusLabel,
+  type OpponentConfig,
+  type OpponentStatus,
+} from './opponent-config.js';
 import { JEV_ORDERS_MAX_LENGTH, JEV_ORDERS_PRESETS } from './jev-orders.js';
 import {
   createOpponentPickerState,
@@ -408,6 +413,12 @@ const STATS_ROW1_Y = DEFAULT_STATS.y + HUD_STATS_LAYOUT.row1YOffset;
 const STATS_ROW2_Y = DEFAULT_STATS.y + HUD_STATS_LAYOUT.row2YOffset;
 const STATS_TEXT_X = DEFAULT_STATS.x + HUD_STATS_LAYOUT.leftTextInset;
 
+/** W3 — minimum gap between two refreshes of the Jev-opponent HUD label. The
+ *  underlying beat counters advance on the order of seconds, so anything finer
+ *  just churns a Phaser Text. Time-based, not frame-based, so the cadence is the
+ *  same at 30 fps and 144 fps. */
+const OPPONENT_STATUS_REFRESH_MS = 1000;
+
 export class UIScene extends Phaser.Scene {
   /**
    * Issue #213 — the LayoutContext seam. All HUD/overlay geometry derives from
@@ -521,6 +532,13 @@ export class UIScene extends Phaser.Scene {
   // Updated at the end of each update() when the menu is visible.
   private contextMenuVisibleItems: readonly ContextMenuItem[] = CONTEXT_MENU_ITEMS;
   private antActivityText!: Phaser.GameObjects.Text;
+  // W3 — the Jev-opponent HUD label (hud.OPPONENT_STATUS). Hidden whenever the
+  // rule-based AI is driving; refreshed at most once a second (see update()).
+  private opponentStatusText!: Phaser.GameObjects.Text;
+  private getOpponentStatusFn: (() => OpponentStatus) | null = null;
+  /** Wall-clock (Phaser scene time) at which the opponent label may refresh
+   *  again. 0 = refresh on the next frame. */
+  private opponentStatusNextMs = 0;
   private dragState!: SliderDragState;
 
   // Phase 9 Plan 06 — overlay groups (null = overlay not currently shown)
@@ -601,6 +619,9 @@ export class UIScene extends Phaser.Scene {
     onMinimapNav?: () => void;
     isPaused?: () => boolean;
     getSpeedMultiplier?: () => 1 | 2 | 4;
+    // W3 — live opponent state for the HUD label. Optional so non-GameScene
+    // consumers (tests, harnesses) need not supply it; absent = no label.
+    getOpponentStatus?: () => OpponentStatus;
   }) {
     this.viewState = data.viewState;
     this.getWorld = data.getWorld;
@@ -612,6 +633,7 @@ export class UIScene extends Phaser.Scene {
     this.onMinimapNav = data.onMinimapNav ?? null;
     this.isPausedFn = data.isPaused ?? null;
     this.getSpeedMultiplierFn = data.getSpeedMultiplier ?? null;
+    this.getOpponentStatusFn = data.getOpponentStatus ?? null;
   }
 
   create() {
@@ -796,6 +818,21 @@ export class UIScene extends Phaser.Scene {
     this.antActivityText.setScrollFactor(0);
     this.antActivityText.setVisible(false);
     this.antActivityText.setDepth(11);
+
+    // W3 — Jev-opponent status label. Right-anchored (origin 1,0) at the right
+    // edge of hud.OPPONENT_STATUS so the text grows leftwards into the empty top
+    // strip instead of running under the save icon. Created hidden: a round
+    // against the rule-based AI never shows it.
+    this.opponentStatusText = this.add.text(
+      this.hud.OPPONENT_STATUS.x + this.hud.OPPONENT_STATUS.w,
+      this.hud.OPPONENT_STATUS.y,
+      '',
+      { color: '#9fb4c7', fontSize: '10px', fontFamily: 'monospace' },
+    );
+    this.opponentStatusText.setOrigin(1, 0);
+    this.opponentStatusText.setScrollFactor(0);
+    this.opponentStatusText.setVisible(false);
+    this.opponentStatusText.setDepth(11);
 
     // UIScene is the single owner of Esc. Precedence (close topmost UI first):
     //   1. Save/Load dialog visible → close + onBack (returns to pause menu)
@@ -1122,6 +1159,31 @@ export class UIScene extends Phaser.Scene {
   }
 
   /**
+   * W3 — refresh the Jev-opponent HUD label. Throttled to at most once a second:
+   * the underlying counters only move on a decision beat (seconds apart), and the
+   * label is a status readout, not a live gauge — re-laying out a Phaser Text
+   * every frame for it would be pure waste. Hidden entirely while the rule-based
+   * AI drives the enemy colony (formatOpponentStatusLabel returns null), so the
+   * default experience gains no HUD chrome at all.
+   */
+  private renderOpponentStatus(time: number): void {
+    if (time < this.opponentStatusNextMs) return;
+    this.opponentStatusNextMs = time + OPPONENT_STATUS_REFRESH_MS;
+    const get = this.getOpponentStatusFn;
+    if (get === null) {
+      this.opponentStatusText.setVisible(false);
+      return;
+    }
+    const label = formatOpponentStatusLabel(get());
+    if (label === null) {
+      this.opponentStatusText.setVisible(false);
+      return;
+    }
+    this.opponentStatusText.setText(label);
+    this.opponentStatusText.setVisible(true);
+  }
+
+  /**
    * #278 — (re)bake the static minimap layer into its RenderTexture. Stamps
    * bakeMinimapDapple (texture-LOCAL coords, origin 0,0) via the off-display-list
    * baker, then draws the baker into the RT (positioned at the minimap rect). The
@@ -1142,7 +1204,7 @@ export class UIScene extends Phaser.Scene {
     this.minimapBaker.clear();
   }
 
-  update() {
+  update(time: number) {
     // Apply any pending show/hide from the previous frame's pointerdown dispatch
     // BEFORE reading the state, so cross-scene race conditions are resolved
     // deterministically at the frame boundary. Hide runs first so if both are
@@ -1321,6 +1383,7 @@ export class UIScene extends Phaser.Scene {
     this.renderToolPalette();
     this.renderHintStrip();
     this.renderSpeedWidget();
+    this.renderOpponentStatus(time);
 
     // Ant-activity popup — live refresh when visible. Drawn before the
     // context menu so a visible chamber menu stays on top (the underground
