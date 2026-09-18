@@ -46,6 +46,23 @@ export interface MountOptions {
    * blocked until the server adds the appropriate CORS headers).
    */
   playtraceEndpoint?: string;
+
+  /**
+   * Override the endpoint URL for the Jev opponent proxy — the same-origin
+   * receiver that holds the TypeSafe API key and forwards `{ state, questions }`
+   * to the Jev model. When set to a non-empty string, a round can be played
+   * against the Jev opponent instead of the rule-based AI controller.
+   *
+   * Default: the build-time `VITE_JEV_ENDPOINT` env var, or `''` if unset. The
+   * empty-string convention mirrors `playtraceEndpoint`: a missing env var
+   * (typical for local dev and the open-source build) disables the feature
+   * entirely — the enemy colony is always the rule-based AI, no network
+   * traffic, and a save that asks for Jev falls back to rules silently.
+   *
+   * Must be same-origin (`npm run dev` proxies `/api` for local work); a
+   * cross-origin value is blocked until that deployment adds CORS headers.
+   */
+  jevEndpoint?: string;
 }
 
 export interface MountedGame {
@@ -105,6 +122,11 @@ export function mount(target: HTMLElement, options?: MountOptions): MountedGame 
     (import.meta.env.VITE_PLAYTRACE_ENDPOINT as string | undefined) ??
     '';
   const playtraceEndpoint = playtraceEndpointRaw.trim();
+  // Jev opponent proxy endpoint — same resolution order and same empty-string
+  // "feature off" convention as playtraceEndpoint above.
+  const jevEndpointRaw =
+    options?.jevEndpoint ?? (import.meta.env.VITE_JEV_ENDPOINT as string | undefined) ?? '';
+  const jevEndpoint = jevEndpointRaw.trim();
 
   const config: Phaser.Types.Core.GameConfig = {
     type: Phaser.AUTO,
@@ -133,6 +155,7 @@ export function mount(target: HTMLElement, options?: MountOptions): MountedGame 
       preBoot: (game) => {
         game.registry.set('assetsBase', assetsBase);
         game.registry.set('playtraceEndpoint', playtraceEndpoint);
+        game.registry.set('jevEndpoint', jevEndpoint);
       },
     },
   };

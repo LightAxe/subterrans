@@ -34,6 +34,11 @@ import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { NestEntrance } from '../sim/colony/entrance.js';
 import type { PendingChamber } from '../sim/colony/chamber.js';
 import type { SimCommand } from '../sim/commands.js';
+// TYPE-ONLY import (erased at build time): the envelope records which opponent
+// policy a round was started with, and that vocabulary is owned by the render
+// layer. No runtime platform → render dependency is created — the structural
+// validator below is deliberately local, next to the other envelope validators.
+import type { OpponentConfig } from '../render/opponent-config.js';
 import { getStorageDriver } from './storage.js';
 import type { SurfaceGrid, UndergroundGrid } from '../sim/terrain.js';
 import { createSurfaceGrid, createUndergroundGrid } from '../sim/terrain.js';
@@ -214,6 +219,25 @@ function isInt32(value: unknown): value is number {
     value >= -0x80000000 &&
     value <= 0x7fffffff
   );
+}
+
+/** Hard cap on the persisted standing-orders string. Mirrors
+ *  `JEV_ORDERS_MAX_LENGTH` in render/jev-orders.ts; duplicated (not imported) to
+ *  keep platform/ free of a runtime dependency on render/. */
+const MAX_OPPONENT_ORDERS_LENGTH = 300;
+
+/** Structural validator for the OPTIONAL `opponent` envelope field. Accepts only
+ *  the two shapes render/opponent-config.ts can produce. Unlike `seed`, a bad
+ *  value here does NOT throw: the field is a round preference, not replay truth,
+ *  so `parseSaveFile` drops it and the round loads as the default rule-based
+ *  opponent rather than bricking an otherwise-valid save. */
+function isOpponentEnvelopeField(value: unknown): value is OpponentConfig {
+  if (typeof value !== 'object' || value === null) return false;
+  const kind = (value as { kind?: unknown }).kind;
+  if (kind === 'rules') return true;
+  if (kind !== 'jev') return false;
+  const orders = (value as { orders?: unknown }).orders;
+  return typeof orders === 'string' && orders.length <= MAX_OPPONENT_ORDERS_LENGTH;
 }
 
 /** Cap on how many entries each top-level Object map may carry on load.
@@ -635,6 +659,15 @@ export interface SaveFile {
    * falls back to 0 ("unknown") for the dialog when the field is absent.
    */
   readonly savedAtMs?: number;
+  /**
+   * Which opponent policy the round was started with (render/opponent-config.ts).
+   * OPTIONAL and additive: every envelope written before the Jev opponent
+   * existed omits it, and absent means the rule-based AI controller. Not part of
+   * replay truth — `(seed, inputLog)` already contains every command the
+   * opponent issued, whichever policy produced them — so a malformed value is
+   * dropped on parse rather than failing the load.
+   */
+  readonly opponent?: OpponentConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -1873,7 +1906,12 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
 // Envelope + localStorage API
 // ---------------------------------------------------------------------------
 
-function buildSaveFile(seed: number, inputLog: readonly SimCommand[], world: WorldState): SaveFile {
+function buildSaveFile(
+  seed: number,
+  inputLog: readonly SimCommand[],
+  world: WorldState,
+  opponent?: OpponentConfig,
+): SaveFile {
   return {
     version: SAVE_FORMAT_VERSION,
     seed: seed | 0,
@@ -1884,6 +1922,10 @@ function buildSaveFile(seed: number, inputLog: readonly SimCommand[], world: Wor
     // header rule list). Determinism unaffected: SCEN-06 replay is keyed on
     // (seed, inputLog) and never reads this field.
     savedAtMs: Date.now(),
+    // Omitted entirely when the caller doesn't pass one (a test, or any
+    // non-GameScene writer), so such an envelope keeps the exact pre-feature
+    // shape. GameScene always passes what actually drove the round.
+    ...(opponent === undefined ? {} : { opponent }),
   };
 }
 
@@ -1917,6 +1959,13 @@ export function parseSaveFile(raw: string): SaveFile {
   // autosave restores a proper inputLog from that point.
   if (!Array.isArray(file.inputLog)) {
     (file as { inputLog: SimCommand[] }).inputLog = [];
+  }
+  // Optional `opponent` field: absent → the default rule-based opponent. A
+  // present-but-malformed value is DROPPED rather than thrown on (see
+  // isOpponentEnvelopeField) so a tampered preference can't cost a player their
+  // whole save. Downstream (`bootFromSave`) reads `loaded.opponent ?? default`.
+  if (file.opponent !== undefined && !isOpponentEnvelopeField(file.opponent)) {
+    delete (file as { opponent?: OpponentConfig }).opponent;
   }
   return file;
 }
@@ -2003,9 +2052,10 @@ export async function manualSave(
   seed: number,
   inputLog: readonly SimCommand[],
   world: WorldState,
+  opponent?: OpponentConfig,
 ): Promise<boolean> {
   try {
-    const envelope = buildSaveFile(seed, inputLog, world);
+    const envelope = buildSaveFile(seed, inputLog, world, opponent);
     await getStorageDriver().set(SAVE_KEY, JSON.stringify(envelope));
     return true;
   } catch {
@@ -2210,10 +2260,11 @@ export async function tickAutosave(
   lastSaveMs: number,
   nowMs: number,
   onPersistFailure?: () => void,
+  opponent?: OpponentConfig,
 ): Promise<number> {
   if (nowMs - lastSaveMs < AUTOSAVE_INTERVAL_MS) return lastSaveMs;
   try {
-    const envelope = buildSaveFile(seed, inputLog, world);
+    const envelope = buildSaveFile(seed, inputLog, world, opponent);
     await getStorageDriver().set(SAVE_KEY, JSON.stringify(envelope));
     return nowMs;
   } catch {
