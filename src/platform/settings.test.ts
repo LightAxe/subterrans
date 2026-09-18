@@ -184,6 +184,34 @@ describe('loadSettings', () => {
     expect(loadSettings().opponent).toEqual({ kind: 'jev', orders: long });
   });
 
+  it('defaults jevOrders to the empty string', () => {
+    expect(loadSettings().jevOrders).toBe('');
+  });
+
+  it('round-trips jevOrders independently of the opponent kind', () => {
+    // The point of the separate field: the `rules` arm of OpponentConfig has
+    // nowhere to carry the text, so picking Standard AI must not erase it.
+    saveSettings(mk({ opponent: { kind: 'rules' }, jevOrders: 'hold the line' }));
+    const loaded = loadSettings();
+    expect(loaded.opponent).toEqual({ kind: 'rules' });
+    expect(loaded.jevOrders).toBe('hold the line');
+  });
+
+  it('replaces a wrong-typed jevOrders with the default', () => {
+    for (const jevOrders of [null, 42, {}, ['a']]) {
+      localStorage.setItem(
+        SETTINGS_KEY,
+        JSON.stringify({
+          version: SETTINGS_VERSION,
+          settings: { hintStripVisible: false, jevOrders },
+        }),
+      );
+      const loaded = loadSettings();
+      expect(loaded.jevOrders).toBe('');
+      expect(loaded.hintStripVisible).toBe(false); // sibling survived
+    }
+  });
+
   it('hands out a fresh opponent object per load (no shared default reference)', () => {
     const a = loadSettings();
     const b = loadSettings();

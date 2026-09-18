@@ -42,6 +42,13 @@ export interface Settings {
    *  never sees it, and a `jev` preference on a build without the proxy endpoint
    *  is downgraded to the rule-based AI at boot. Default `{ kind: 'rules' }`. */
   opponent: OpponentConfig;
+  /** W3 — the last standing-orders text the player wrote, kept SEPARATELY from
+   *  `opponent` on purpose. The `rules` arm of OpponentConfig has nowhere to put
+   *  it, so persisting only `opponent` would throw a 300-character hand-written
+   *  order away the moment the player starts one round against the Standard AI.
+   *  Written whenever a Jev round starts; never cleared by choosing Standard AI.
+   *  `''` (the default) means "no remembered text". Render-only. */
+  jevOrders: string;
 }
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
@@ -49,6 +56,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   hintStripVisible: true,
   firstUseHints: {},
   opponent: { kind: 'rules' },
+  jevOrders: '',
 };
 
 interface SettingsEnvelope {
@@ -133,6 +141,7 @@ export function loadSettings(): Settings {
     opponent: isOpponentSetting(s.opponent)
       ? cloneOpponent(s.opponent)
       : cloneOpponent(DEFAULT_SETTINGS.opponent),
+    jevOrders: typeof s.jevOrders === 'string' ? s.jevOrders : DEFAULT_SETTINGS.jevOrders,
   };
 }
 

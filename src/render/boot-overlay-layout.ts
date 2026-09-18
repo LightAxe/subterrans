@@ -69,17 +69,22 @@ export const DIFFICULTY_TITLE_Y = 56;
 export const DIFFICULTY_SUBTITLE_Y = 92;
 export const DIFFICULTY_HINT_Y = 114;
 
-/** Width of the opponent section's content column, centered on the canvas. The
- *  textarea and the preset row both span it, so the section reads as one block. */
+/** Design width of the opponent section's content column, centered on the canvas.
+ *  The textarea and the preset row both span it, so the section reads as one
+ *  block. A layout narrower than this shrinks the column instead of overflowing —
+ *  see {@link contentW}. */
 const PICKER_CONTENT_W = 520;
 
-/** Opponent-kind toggle pair ("Standard AI" / "Jev (beta)"). */
-const KIND_BUTTON_W = 170;
+/** Opponent-kind toggle pair ("Standard AI" / "Jev (beta)"). The width is a
+ *  maximum: a narrow column shrinks the pair rather than running off the edge. */
+const KIND_BUTTON_MAX_W = 170;
 const KIND_BUTTON_H = 34;
 const KIND_BUTTON_GAP = 12;
 
-/** Standing-orders preset buttons (Balanced / Aggressive / Turtle / Economy). */
-const PRESET_BUTTON_W = 124;
+/** Standing-orders preset buttons (Balanced / Aggressive / Turtle / Economy).
+ *  Their width is DERIVED — the row always spans the content column exactly — so
+ *  adding a preset re-divides the same span instead of overflowing it. At
+ *  800x592 with four presets this evaluates to 124. */
 const PRESET_BUTTON_H = 28;
 const PRESET_BUTTON_GAP = 8;
 
@@ -93,9 +98,26 @@ const ORDERS_TEXTAREA_Y = 344;
 const ORDERS_TEXTAREA_H = 104;
 const ORDERS_FOOTER_Y = 454;
 
-/** Left edge of the centered content column. */
-function contentX(layout: LayoutContext): number {
-  return (layout.w - PICKER_CONTENT_W) / 2;
+/**
+ * Canvas height the fully-expanded section (Jev selected, standing orders shown)
+ * needs in order to fit, footer line included. The rows are a top-anchored stack
+ * of fixed offsets, so a SHORTER canvas clips the footer rather than reflowing —
+ * compressing the stack is responsive work this seam deliberately defers (#213 /
+ * Phase 6). Pinned against `DEFAULT_LAYOUT.h` by a test so the shipping canvas
+ * can never drift under it unnoticed.
+ */
+export const OPPONENT_PICKER_MIN_H = ORDERS_FOOTER_Y + 14;
+
+/** Left edge of a `width`-wide row centered on the canvas, clamped so a layout
+ *  narrower than the row starts at the left edge instead of running off it. */
+function centeredX(width: number, layout: LayoutContext): number {
+  return Math.max(0, (layout.w - width) / 2);
+}
+
+/** Width of the content column for this layout — the design width, or the whole
+ *  canvas when it is narrower. Keeps every rect inside `layout.w` at any size. */
+function contentW(layout: LayoutContext): number {
+  return Math.min(PICKER_CONTENT_W, layout.w);
 }
 
 /** Every rect / anchor the opponent section of the overlay draws. `presetCount`
@@ -126,35 +148,40 @@ export function opponentPickerLayout(
   layout: LayoutContext,
   presetCount: number,
 ): OpponentPickerLayout {
-  const left = contentX(layout);
-  const kindRowW = 2 * KIND_BUTTON_W + KIND_BUTTON_GAP;
-  const kindStartX = (layout.w - kindRowW) / 2;
-  const presetRowW =
-    presetCount > 0 ? presetCount * PRESET_BUTTON_W + (presetCount - 1) * PRESET_BUTTON_GAP : 0;
-  const presetStartX = (layout.w - presetRowW) / 2;
+  const width = contentW(layout);
+  const left = centeredX(width, layout);
+
+  // Kind pair: the design width unless the column is too narrow for two of them.
+  const kindW = Math.min(KIND_BUTTON_MAX_W, (width - KIND_BUTTON_GAP) / 2);
+  const kindStartX = centeredX(2 * kindW + KIND_BUTTON_GAP, layout);
+
+  // Preset row: divide the content column evenly, so N presets always span it.
+  const presetW =
+    presetCount > 0 ? (width - (presetCount - 1) * PRESET_BUTTON_GAP) / presetCount : 0;
   const presetButtons: BootOverlayRect[] = [];
   for (let i = 0; i < presetCount; i++) {
     presetButtons.push({
-      x: presetStartX + i * (PRESET_BUTTON_W + PRESET_BUTTON_GAP),
+      x: left + i * (presetW + PRESET_BUTTON_GAP),
       y: ORDERS_PRESET_ROW_Y,
-      w: PRESET_BUTTON_W,
+      w: presetW,
       h: PRESET_BUTTON_H,
     });
   }
+
   return {
     kindLabel: { x: left, y: KIND_LABEL_Y },
-    rulesButton: { x: kindStartX, y: KIND_ROW_Y, w: KIND_BUTTON_W, h: KIND_BUTTON_H },
+    rulesButton: { x: kindStartX, y: KIND_ROW_Y, w: kindW, h: KIND_BUTTON_H },
     jevButton: {
-      x: kindStartX + KIND_BUTTON_W + KIND_BUTTON_GAP,
+      x: kindStartX + kindW + KIND_BUTTON_GAP,
       y: KIND_ROW_Y,
-      w: KIND_BUTTON_W,
+      w: kindW,
       h: KIND_BUTTON_H,
     },
     unavailableNote: { x: layout.w / 2, y: UNAVAILABLE_NOTE_Y },
     ordersLabel: { x: left, y: ORDERS_LABEL_Y },
     presetButtons,
-    textarea: { x: left, y: ORDERS_TEXTAREA_Y, w: PICKER_CONTENT_W, h: ORDERS_TEXTAREA_H },
-    counter: { x: left + PICKER_CONTENT_W, y: ORDERS_FOOTER_Y },
+    textarea: { x: left, y: ORDERS_TEXTAREA_Y, w: width, h: ORDERS_TEXTAREA_H },
+    counter: { x: left + width, y: ORDERS_FOOTER_Y },
     hint: { x: left, y: ORDERS_FOOTER_Y },
   };
 }

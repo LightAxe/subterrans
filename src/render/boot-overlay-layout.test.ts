@@ -19,6 +19,7 @@ import {
   DIFFICULTY_TITLE_Y,
   DIFFICULTY_SUBTITLE_Y,
   DIFFICULTY_HINT_Y,
+  OPPONENT_PICKER_MIN_H,
   opponentPickerLayout,
   type BootOverlayRect,
 } from './boot-overlay-layout.js';
@@ -190,6 +191,43 @@ describe('W3 opponentPickerLayout', () => {
       expect(r.x + r.w).toBeLessThanOrEqual(wide.w);
       expect(r.y + r.h).toBeLessThanOrEqual(wide.h);
     }
+  });
+
+  it('fits every rect inside a canvas NARROWER than the design column', () => {
+    // The shipping canvas is 800 wide, but the seam has to hold: a narrow layout
+    // shrinks the content column and the buttons instead of overflowing it.
+    for (const w of [520, 480, 360, 320]) {
+      const narrow = createLayoutContext(w, 700);
+      for (const r of allPickerRects(narrow)) {
+        expect(r.x).toBeGreaterThanOrEqual(0);
+        expect(r.w).toBeGreaterThan(0);
+        expect(r.x + r.w).toBeLessThanOrEqual(w);
+      }
+      const geo = opponentPickerLayout(narrow, PRESET_COUNT);
+      expect(geo.counter.x).toBeLessThanOrEqual(w);
+      expect(geo.kindLabel.x).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('spans the preset row across the content column whatever the preset count', () => {
+    for (const count of [1, 2, 3, 4, 6]) {
+      const geo = opponentPickerLayout(DEFAULT_LAYOUT, count);
+      const first = geo.presetButtons[0]!;
+      const last = geo.presetButtons[count - 1]!;
+      expect(first.x).toBe(geo.textarea.x);
+      expect(last.x + last.w).toBeCloseTo(geo.textarea.x + geo.textarea.w, 6);
+      for (const r of geo.presetButtons) expect(r.w).toBeGreaterThan(0);
+    }
+  });
+
+  it('declares a minimum canvas height the shipping canvas satisfies', () => {
+    // The rows are a top-anchored stack of fixed offsets; a shorter canvas would
+    // clip the footer rather than reflow (deferred to #213 / Phase 6). Pin it so
+    // the shipping canvas can never drift under the requirement unnoticed.
+    expect(OPPONENT_PICKER_MIN_H).toBeLessThanOrEqual(DEFAULT_LAYOUT.h);
+    const geo = opponentPickerLayout(DEFAULT_LAYOUT, PRESET_COUNT);
+    expect(geo.counter.y).toBeLessThan(OPPONENT_PICKER_MIN_H);
+    expect(geo.textarea.y + geo.textarea.h).toBeLessThanOrEqual(OPPONENT_PICKER_MIN_H);
   });
 
   it('degenerates safely when asked for zero presets', () => {

@@ -2014,6 +2014,7 @@ export class UIScene extends Phaser.Scene {
     // effectiveOpponent downgrade, so the overlay never offers what can't run.
     this.opponentPicker = createOpponentPickerState({
       saved: callbacks.initialOpponent ?? DEFAULT_OPPONENT,
+      savedOrders: callbacks.initialOrders,
       jevAvailable: callbacks.jevAvailable ?? false,
     });
     this.renderDifficultySelectOverlay();
@@ -2067,16 +2068,21 @@ export class UIScene extends Phaser.Scene {
     this.difficultySelectGroup.push(subtitle);
 
     // The difficulty buttons both configure AND start, and the opponent section
-    // sits below them — say so, or a player never scrolls their eyes down.
-    const hint = this.add.text(
-      W / 2,
-      DIFFICULTY_HINT_Y,
-      'Set the opponent below first — picking a difficulty starts the game.',
-      { fontSize: '11px', fontFamily: 'monospace', color: '#8a8a8a' },
-    );
-    hint.setOrigin(0.5);
-    hint.setDepth(21);
-    this.difficultySelectGroup.push(hint);
+    // sits below them — say so, or a player never scrolls their eyes down. Only
+    // worth saying on a build that can actually offer a choice: with no proxy
+    // endpoint the section below is one disabled button, and pointing at it
+    // would be a worse first impression than saying nothing.
+    if (this.opponentPicker.jevAvailable) {
+      const hint = this.add.text(
+        W / 2,
+        DIFFICULTY_HINT_Y,
+        'Set the opponent below first — picking a difficulty starts the game.',
+        { fontSize: '11px', fontFamily: 'monospace', color: '#8a8a8a' },
+      );
+      hint.setOrigin(0.5);
+      hint.setDepth(21);
+      this.difficultySelectGroup.push(hint);
+    }
 
     this.addDifficultyButton('Easy', 'Slower AI', DIFFICULTY_EASY_RECT, 0x226622, 'Easy');
     this.addDifficultyButton('Normal', 'Balanced', DIFFICULTY_NORMAL_RECT, 0x224466, 'Normal');
@@ -3461,4 +3467,8 @@ export interface DifficultySelectCallbacks {
   /** The player's persisted opponent preference, used to pre-select the toggle,
    *  the preset highlight and the free text. Defaults to the rule-based AI. */
   initialOpponent?: OpponentConfig;
+  /** The player's last standing-orders text (settings.jevOrders), used only when
+   *  `initialOpponent` is `rules` — that arm cannot carry the text itself, so
+   *  without this a round against the Standard AI would blank the box. */
+  initialOrders?: string;
 }
