@@ -22,8 +22,22 @@ describe('buildHudLayout', () => {
       VIEW_TOGGLE: { x: 632, y: 396, w: 80, h: 24 },
       UNDERGROUND_COLONY_TOGGLE: { x: 632, y: 372, w: 112, h: 22 },
       SAVE_ICON: { x: 772, y: 8, w: 20, h: 20 },
+      // W3 — added after the legacy table; every other zone is unchanged.
+      OPPONENT_STATUS: { x: 504, y: 10, w: 260, h: 14 },
     };
     expect(buildHudLayout(DEFAULT_LAYOUT)).toEqual(EXPECTED);
+  });
+
+  it('keeps the opponent-status label clear of the STATS row and the save icon', () => {
+    const hud = buildHudLayout(DEFAULT_LAYOUT);
+    const label = hud.OPPONENT_STATUS;
+    // Right-anchored: sits entirely left of the save icon...
+    expect(label.x + label.w).toBeLessThanOrEqual(hud.SAVE_ICON.x);
+    // ...and entirely right of the stats row.
+    expect(label.x).toBeGreaterThanOrEqual(hud.STATS.x + hud.STATS.w);
+    // ...and inside the canvas.
+    expect(label.x).toBeGreaterThanOrEqual(0);
+    expect(label.y + label.h).toBeLessThanOrEqual(DEFAULT_LAYOUT.h);
   });
 
   it('reflows right/bottom-anchored zones with the layout size', () => {
@@ -31,6 +45,7 @@ describe('buildHudLayout', () => {
     expect(hud.MINIMAP.x).toBe(832); // 1000 - 168
     expect(hud.MINIMAP.y).toBe(532); // 700 - 168
     expect(hud.SAVE_ICON.x).toBe(972); // 1000 - 28
+    expect(hud.OPPONENT_STATUS.x).toBe(704); // 1000 - 296
     expect(hud.SPEED.x).toBe(420); // 1000/2 - 80
     expect(hud.TRIANGLE.y).toBe(640); // 700 - 60
     // Top-left-anchored zones are size-independent.

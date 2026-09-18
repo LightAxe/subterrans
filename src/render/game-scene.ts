@@ -46,7 +46,7 @@ import { loadSettings, saveSettings } from '../platform/settings.js';
 import { runAIController } from './ai-controller.js';
 import { JevEnemyController } from './jev-enemy-controller.js';
 import { createJevClient } from './jev-client.js';
-import { DEFAULT_OPPONENT, type OpponentConfig } from './opponent-config.js';
+import { DEFAULT_OPPONENT, type OpponentConfig, type OpponentStatus } from './opponent-config.js';
 import { buildDebugSnapshot } from '../platform/debug-snapshot.js';
 import { downloadDebugSnapshot } from './debug-snapshot-download.js';
 import { submitPlaytrace, type PlaytraceSurvey } from './playtrace-upload.js';
@@ -999,6 +999,9 @@ export class GameScene extends Phaser.Scene {
       },
       isPaused: () => isPausedByAny(this.pauseReasons),
       getSpeedMultiplier: () => this.speedMultiplier,
+      // W3 — live opponent state for the HUD label. UIScene throttles the read to
+      // once a second; it stays hidden entirely for the rule-based AI.
+      getOpponentStatus: () => this.getOpponentStatus(),
     });
     this.scene.bringToTop('UIScene');
 
@@ -1635,13 +1638,7 @@ export class GameScene extends Phaser.Scene {
    * rule-based AI, 'jev' while the Jev opponent is driving, and 'fallback' once
    * three consecutive beats failed and the rule-based AI took over mid-round.
    */
-  getOpponentStatus(): {
-    kind: OpponentConfig['kind'];
-    status: 'rules' | 'jev' | 'fallback';
-    beats: number;
-    failedBeats: number;
-    lastLatencyMs: number | null;
-  } {
+  getOpponentStatus(): OpponentStatus {
     let beats = 0;
     let failedBeats = 0;
     let lastLatencyMs: number | null = null;
