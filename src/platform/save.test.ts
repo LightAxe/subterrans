@@ -38,6 +38,7 @@ import {
 } from '../sim/constants.js';
 import type { SimCommand } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
+import { DEFAULT_OPPONENT, jevOpponent } from '../render/opponent-config.js';
 import { ChamberType } from '../sim/enums.js';
 import { pheromoneKeyIsSurface } from '../sim/pheromone/pheromone-store.js';
 
@@ -801,6 +802,102 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       localStorage.setItem(SAVE_KEY, '{ bad }');
       expect(await loadSave()).toBeNull();
     });
+    // --- OPTIONAL `opponent` field (Jev opponent beta) ---------------------
+    // Additive and non-replay-bearing: (seed, inputLog) already contains every
+    // command the opponent issued. Absent = the rule-based AI.
+    it('round-trips a jev opponent with its standing orders', async () => {
+      const w = createScenario(42);
+      const opponent = jevOpponent('Strike early and keep striking.');
+      expect(await manualSave(42, [], w, opponent)).toBe(true);
+      const loaded = await loadSave();
+      expect(loaded!.opponent).toEqual(opponent);
+    });
+
+    it('round-trips the rules opponent explicitly', async () => {
+      const w = createScenario(42);
+      expect(await manualSave(42, [], w, DEFAULT_OPPONENT)).toBe(true);
+      expect((await loadSave())!.opponent).toEqual({ kind: 'rules' });
+    });
+
+    it('omits the field entirely when no opponent is passed (pre-feature shape)', async () => {
+      const w = createScenario(42);
+      expect(await manualSave(42, [], w)).toBe(true);
+      const raw = JSON.parse(localStorage.getItem(SAVE_KEY)!) as Record<string, unknown>;
+      expect('opponent' in raw).toBe(false);
+      expect((await loadSave())!.opponent).toBeUndefined();
+    });
+
+    it('loads an envelope written before the field existed', async () => {
+      const w = createScenario(42);
+      localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          version: SAVE_FORMAT_VERSION,
+          seed: 42,
+          inputLog: [],
+          snapshot: serializeWorldState(w),
+        } satisfies SaveFile),
+      );
+      const loaded = await loadSave();
+      expect(loaded).not.toBeNull();
+      expect(loaded!.opponent).toBeUndefined();
+    });
+
+    it('tickAutosave carries the opponent through', async () => {
+      const w = createScenario(42);
+      const opponent = jevOpponent('turtle up');
+      await tickAutosave(42, [], w, 0, AUTOSAVE_INTERVAL_MS + 1, undefined, opponent);
+      expect((await loadSave())!.opponent).toEqual(opponent);
+    });
+
+    it('DROPS a malformed opponent instead of failing the load (it is a preference, not replay truth)', async () => {
+      const w = createScenario(42);
+      const snapshot = serializeWorldState(w);
+      const bad: unknown[] = [
+        'jev',
+        42,
+        null,
+        [],
+        {},
+        { kind: 'llm' },
+        { kind: 'jev' },
+        { kind: 'jev', orders: 7 },
+        { kind: 'jev', orders: 'x'.repeat(301) },
+      ];
+      for (const opponent of bad) {
+        localStorage.setItem(
+          SAVE_KEY,
+          JSON.stringify({
+            version: SAVE_FORMAT_VERSION,
+            seed: 42,
+            inputLog: [],
+            snapshot,
+            opponent,
+          }),
+        );
+        const loaded = await loadSave();
+        expect(loaded).not.toBeNull();
+        expect(loaded!.opponent).toBeUndefined();
+        expect(loaded!.seed).toBe(42);
+      }
+    });
+
+    it('a tampered opponent still classifies as compatible', async () => {
+      const w = createScenario(42);
+      localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          version: SAVE_FORMAT_VERSION,
+          seed: 42,
+          inputLog: [],
+          snapshot: serializeWorldState(w),
+          opponent: { kind: 'wat' },
+        }),
+      );
+      await expect(classifySaveCompatibility()).resolves.toBe('compatible');
+      expect(parseSaveFile(localStorage.getItem(SAVE_KEY)!).opponent).toBeUndefined();
+    });
+
     it('deleteSave removes the key and does not throw on missing', async () => {
       localStorage.setItem(
         SAVE_KEY,
