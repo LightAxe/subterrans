@@ -77,7 +77,13 @@ export default defineConfig({
     // empty makes the suite match the open-source default everywhere. Set via
     // `env` (not a `VAR= cmd` command prefix) so it works on Windows too — a
     // POSIX-style prefix is parsed as part of the command by cmd/PowerShell.
-    env: { VITE_PLAYTRACE_ENDPOINT: '' },
+    // VITE_JEV_ENDPOINT is pinned empty for the same reason (W3): a developer's
+    // .env.local would otherwise enable the Jev opponent, and the difficulty
+    // overlay grows a standing-orders section when it is available — a layout
+    // difference between that machine and CI. The difficulty buttons themselves
+    // don't move either way, but pinning keeps the suite matching the
+    // open-source default everywhere, exactly like the playtrace pin above.
+    env: { VITE_PLAYTRACE_ENDPOINT: '', VITE_JEV_ENDPOINT: '' },
     port: 5173,
     // Always launch our own server (never reuse). Reuse would silently skip the
     // `env` pin above when a dev already has `npm run dev` running on :5173 with
