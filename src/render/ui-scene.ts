@@ -108,6 +108,10 @@ export interface DifficultySelectCallbacks {
    *  pre-select the opponent row, the preset highlight and the free text.
    *  Defaults to the rule-based AI. */
   initialOpponent?: OpponentConfig;
+  /** The player's last standing-orders text (settings.jevOrders), used only when
+   *  `initialOpponent` is `rules` — that arm cannot carry the text itself, so
+   *  without this a round against the Standard AI would blank the box. */
+  initialOrders?: string;
 }
 
 /** Single publisher for window.__phase9_ui (Playwright observability). Merges a
@@ -2158,6 +2162,7 @@ export class UIScene extends Phaser.Scene {
     // offers what can't run.
     this.opponentPicker = createOpponentPickerState({
       saved: callbacks.initialOpponent ?? DEFAULT_OPPONENT,
+      savedOrders: callbacks.initialOrders,
       jevAvailable: callbacks.jevAvailable ?? false,
     });
     this.renderDifficultySelectOverlay();

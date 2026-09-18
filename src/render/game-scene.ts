@@ -597,6 +597,14 @@ export class GameScene extends Phaser.Scene {
    * is a lobby choice that outlives a round, like the difficulty selection.
    */
   private pendingOpponent: OpponentConfig | null = null;
+  /**
+   * The standing-orders text the player last committed this session, kept beside
+   * `pendingOpponent` for the same reason settings.jevOrders exists: a `rules`
+   * choice has nowhere to carry it, and the next overlay must still open with the
+   * text the player wrote. Null = nothing chosen yet this session (fall back to
+   * the persisted value).
+   */
+  private pendingOrders: string | null = null;
   /** One controller per AI colony while the Jev opponent is active; empty otherwise. */
   private readonly jevControllers: Map<ColonyId, JevEnemyController> = new Map();
 
@@ -1586,34 +1594,48 @@ export class GameScene extends Phaser.Scene {
    * read-modify-write against the live settings blob (never a partial overwrite)
    * and is best-effort — saveSettings swallows quota / private-mode failures.
    *
-   * One exception: on a build with NO proxy endpoint the picker can only ever
-   * commit `rules`, so writing that would silently erase a Jev preference (and
-   * its standing-orders text) that the player set on a build that HAS the
-   * endpoint — the overlay literally told them "(unavailable in this build)", it
-   * must not also forget their choice. The stored value is meaningless on such a
-   * build anyway, since nothing else can be selected there.
+   * Two things it deliberately does NOT do:
+   *
+   *   - It never writes a forced `rules` choice on a build with NO proxy
+   *     endpoint. The picker can only ever commit `rules` there, so writing it
+   *     would erase a Jev preference the player set on a build that HAS the
+   *     endpoint — the overlay literally told them "(unavailable in this build)",
+   *     it must not also forget their choice. The stored value is meaningless on
+   *     such a build anyway, since nothing else can be selected.
+   *   - It never clears `jevOrders`. Choosing the Standard AI stores
+   *     `{ kind: 'rules' }`, whose union arm has nowhere to carry the orders
+   *     text; persisting the text separately is what keeps one round against the
+   *     Standard AI from throwing away 300 hand-written characters.
    */
   private applyOpponentChoice(opponent: OpponentConfig): void {
     this.pendingOpponent = opponent;
+    if (opponent.kind === 'jev') this.pendingOrders = opponent.orders;
     if (opponent.kind === 'rules' && !this.isJevAvailable()) return;
     const persisted = loadSettings();
     persisted.opponent = opponent;
+    if (opponent.kind === 'jev') persisted.jevOrders = opponent.orders;
     saveSettings(persisted);
   }
 
   /** Callback payload shared by every path that opens the difficulty overlay, so
    *  the picker is seeded identically on first boot, New Game and restart.
    *
-   *  The in-memory `pendingOpponent` wins over the persisted value, mirroring the
-   *  pheromone/hint toggles (Codex round-6 P2): where localStorage writes are
-   *  blocked (private mode, quota) saveSettings is a silent no-op and loadSettings
-   *  would hand back the DEFAULT on the next open — throwing away a choice the
-   *  player made two minutes ago. Falls back to storage on the first overlay of
-   *  the session, which is exactly what the preference is for. */
-  private difficultySelectSeed(): { jevAvailable: boolean; initialOpponent: OpponentConfig } {
+   *  The in-memory `pendingOpponent` / `pendingOrders` win over the persisted
+   *  values, mirroring the pheromone/hint toggles (Codex round-6 P2): where
+   *  localStorage writes are blocked (private mode, quota) saveSettings is a
+   *  silent no-op and loadSettings would hand back the DEFAULT on the next open —
+   *  throwing away a choice the player made two minutes ago. Falls back to storage
+   *  on the first overlay of the session, which is exactly what it is for. */
+  private difficultySelectSeed(): {
+    jevAvailable: boolean;
+    initialOpponent: OpponentConfig;
+    initialOrders: string;
+  } {
+    const persisted = loadSettings();
     return {
       jevAvailable: this.isJevAvailable(),
-      initialOpponent: this.pendingOpponent ?? loadSettings().opponent,
+      initialOpponent: this.pendingOpponent ?? persisted.opponent,
+      initialOrders: this.pendingOrders ?? persisted.jevOrders,
     };
   }
 

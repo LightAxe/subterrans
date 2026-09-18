@@ -51,13 +51,21 @@ function presetMatching(text: string): JevOrdersPresetId | null {
  * here — the same downgrade GameScene.effectiveOpponent applies at boot — while
  * the remembered orders text is kept so the choice survives a build that has the
  * endpoint again. Over-long persisted text (hand-edited localStorage) is capped.
+ *
+ * `savedOrders` (settings.jevOrders) is the remembered free text for a preference
+ * whose `kind` is `rules`: the `rules` arm of OpponentConfig has nowhere to carry
+ * it, so without this a player who runs one round against the Standard AI would
+ * come back to an empty box. It is only consulted when `saved` is `rules`; a
+ * `jev` preference is self-describing and always wins.
  */
 export function createOpponentPickerState(args: {
   saved: OpponentConfig;
+  savedOrders?: string;
   jevAvailable: boolean;
 }): OpponentPickerState {
   const { saved, jevAvailable } = args;
-  const text = saved.kind === 'jev' ? saved.orders.slice(0, JEV_ORDERS_MAX_LENGTH) : '';
+  const raw = saved.kind === 'jev' ? saved.orders : (args.savedOrders ?? '');
+  const text = raw.slice(0, JEV_ORDERS_MAX_LENGTH);
   return {
     kind: saved.kind === 'jev' && jevAvailable ? 'jev' : 'rules',
     presetId: presetMatching(text),
@@ -93,9 +101,15 @@ export function selectPreset(
  * Accept a free-text edit. The text is capped at JEV_ORDERS_MAX_LENGTH (the DOM
  * textarea enforces the same cap, so this is the belt to its braces) and every
  * preset is un-highlighted — the orders are now the player's own.
+ *
+ * An edit that does not change the text returns the SAME state object, so a
+ * value-less `input` event (IME composition end, some autofill paths) can't
+ * silently drop a preset highlight the player never touched.
  */
 export function editText(state: OpponentPickerState, raw: string): OpponentPickerState {
-  return { ...state, presetId: null, text: raw.slice(0, JEV_ORDERS_MAX_LENGTH) };
+  const text = raw.slice(0, JEV_ORDERS_MAX_LENGTH);
+  if (text === state.text) return state;
+  return { ...state, presetId: null, text };
 }
 
 /**
