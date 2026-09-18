@@ -132,6 +132,25 @@ export default defineConfig({
   server: {
     port: 5173,
     open: false,
+    /**
+     * Dev-only passthrough to the deployed site for API endpoints whose
+     * receiver lives in the website's Lambda stack, so they can be exercised
+     * on localhost without standing that stack up locally:
+     *
+     *     VITE_JEV_ENDPOINT=/api/jev npm run dev
+     *
+     * Ordering note: `playtraceMockPlugin` registers its middleware directly
+     * inside `configureServer`, and Vite installs those BEFORE its internal
+     * middlewares (the proxy among them). So `POST /api/playtrace` still hits
+     * the local mock and everything else under `/api` is proxied. Production
+     * builds are unaffected — `server` config applies to the dev server only.
+     */
+    proxy: {
+      '/api': {
+        target: 'https://subterrans.com',
+        changeOrigin: true,
+      },
+    },
   },
   build: {
     target: 'es2022',
