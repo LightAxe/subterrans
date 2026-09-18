@@ -21,9 +21,11 @@ const SAVE_KEY = 'subterrans:save:v3';
 // Pick "Normal" on the Choose Difficulty overlay (S5; shown before every new
 // game) until the game reaches Playing (activeOverlay === 'none'). The overlay
 // reports activeOverlay 'save-prompt', so poll-click Normal; the loop exits the
-// moment we reach Playing. Use after a fresh-boot reload (no save). Safe only
-// when no real Continue/New Game SavePrompt is up — Normal's rect overlaps the
-// SavePrompt Continue button.
+// moment we reach Playing. Use after a fresh-boot reload (no save): with a real
+// Continue/New Game SavePrompt up the loop would never reach 'none'. (W3 moved
+// the difficulty row to y=136, so Normal's rect no longer overlaps the
+// SavePrompt's Continue button — a stray click there now hits nothing instead of
+// pressing Continue. The precondition stands; only the failure mode changed.)
 async function settleToPlaying(page: Page): Promise<void> {
   const canvas = page.locator('canvas').first();
   // Wait until UIScene.create() has published the hook. Until then
@@ -138,8 +140,10 @@ async function getActiveOverlay(page: Page): Promise<ActiveOverlay | '<undefined
 // 'difficulty-select' for the fresh-boot overlay vs 'save-prompt' for a real
 // Continue/New Game prompt. Pinning bootScreen === 'difficulty-select' keeps the
 // "no SavePrompt on fresh boot" contract honest — a regression that showed a real
-// SavePrompt would otherwise pass silently (settleToPlaying's Normal-click rect
-// overlaps the SavePrompt Continue button and would still drive to 'none').
+// SavePrompt would otherwise pass silently, since nothing else in the assertion
+// distinguishes the two overlays. (Before W3 moved the difficulty row to y=136 it
+// was worse still: settleToPlaying's Normal-click rect overlapped the SavePrompt
+// Continue button and would have driven such a regression to 'none' anyway.)
 async function expectFreshBootDifficultyOverlay(page: Page): Promise<void> {
   await expect
     .poll(

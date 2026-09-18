@@ -68,7 +68,10 @@ async function bootGame(page: Page): Promise<void> {
 // (and never over-clicks into the game, since it exits on 'none'). Use this after
 // any reload that expects a fresh Playing state. Requires no real Continue/New
 // Game SavePrompt to be up (clear the save first, or dismiss the prompt before
-// calling) — Normal's rect overlaps the SavePrompt's Continue button.
+// calling): the loop would otherwise poll to its timeout. (W3 moved the
+// difficulty row to y=136, so Normal's rect no longer overlaps the SavePrompt's
+// Continue button — a stray click there now hits nothing rather than pressing
+// Continue. The precondition stands; only the failure mode changed.)
 async function settleToPlaying(page: Page): Promise<void> {
   await expect
     .poll(
