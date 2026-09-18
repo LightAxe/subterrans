@@ -28,6 +28,10 @@ import { noteRampageThreat, type RampageCaptionState } from './recurring-caption
  *      before that tick, on the threat as that tick's rampage shelter saw it (an
  *      entrance it opened, by a spider it then moved out of reach);
  *   3. the prevState snapshot for render interpolation.
+ *
+ * `runAI` drives one AI colony's controller for the tick; it defaults to the rules
+ * AI (runAIController). The Jev opponent passes a dispatcher that routes the seat
+ * it drives to its own controller.
  */
 export function beforeSimTick(
   world: WorldState,
@@ -35,8 +39,9 @@ export function beforeSimTick(
   rampageCaption: RampageCaptionState,
   viewerColonyId: ColonyId,
   prevState: WorldState,
+  runAI: (world: WorldState, colonyId: ColonyId) => void = runAIController,
 ): void {
-  for (const aiCid of aiColonyIds) runAIController(world, aiCid);
+  for (const aiCid of aiColonyIds) runAI(world, aiCid);
   noteRampageThreat(rampageCaption, world, viewerColonyId, prevState);
   copyWorldState(world, prevState);
 }
