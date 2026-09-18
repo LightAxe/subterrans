@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_OPPONENT,
+  formatOpponentStatusLabel,
   isOpponentConfig,
   jevOpponent,
   type OpponentConfig,
@@ -55,5 +56,45 @@ describe('isOpponentConfig', () => {
     if (!isOpponentConfig(raw)) throw new Error('expected a valid config');
     const cfg: OpponentConfig = raw;
     expect(cfg.kind === 'jev' && cfg.orders).toBe('hold the line');
+  });
+});
+
+describe('formatOpponentStatusLabel', () => {
+  const base = { kind: 'jev', beats: 12, failedBeats: 0, lastLatencyMs: 130 } as const;
+
+  it('renders nothing for the rule-based AI (no HUD chrome by default)', () => {
+    expect(
+      formatOpponentStatusLabel({
+        kind: 'rules',
+        status: 'rules',
+        beats: 0,
+        failedBeats: 0,
+        lastLatencyMs: null,
+      }),
+    ).toBeNull();
+  });
+
+  it('renders beat count + last latency while Jev is driving', () => {
+    expect(formatOpponentStatusLabel({ ...base, status: 'jev' })).toBe(
+      'Opponent: Jev · beat 12 · 130 ms',
+    );
+  });
+
+  it('omits the latency until the first beat completes', () => {
+    expect(
+      formatOpponentStatusLabel({ ...base, status: 'jev', beats: 0, lastLatencyMs: null }),
+    ).toBe('Opponent: Jev · beat 0');
+  });
+
+  it('rounds a fractional latency to whole milliseconds', () => {
+    expect(formatOpponentStatusLabel({ ...base, status: 'jev', lastLatencyMs: 129.6 })).toBe(
+      'Opponent: Jev · beat 12 · 130 ms',
+    );
+  });
+
+  it('reports the mid-round handover once Jev has given up', () => {
+    expect(formatOpponentStatusLabel({ ...base, status: 'fallback', failedBeats: 3 })).toBe(
+      'Opponent: Jev → Standard AI (fallback)',
+    );
   });
 });
