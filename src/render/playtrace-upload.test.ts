@@ -28,6 +28,7 @@ import {
 import { GameOutcome } from '../sim/game-over.js';
 import { createWorldState } from '../sim/types.js';
 import * as debugSnapshot from '../platform/debug-snapshot.js';
+import { DEFAULT_OPPONENT, jevOpponent } from './opponent-config.js';
 
 const MAX_TEST_ENTITIES = 16;
 
@@ -92,6 +93,32 @@ describe('buildPlaytraceEnvelope', () => {
     input.world.simVersion = 42;
     const env = buildPlaytraceEnvelope(input, null);
     expect(env.simVersion).toBe(42);
+  });
+
+  // Jev opponent — ADDITIVE optional field; PLAYTRACE_SCHEMA_VERSION is
+  // deliberately NOT bumped (the receiver stores the raw envelope).
+  it('omits `opponent` when the caller does not supply one', () => {
+    const env = buildPlaytraceEnvelope(makeInput(), null);
+    expect(env.opponent).toBeUndefined();
+    expect(env.schemaVersion).toBe(PLAYTRACE_SCHEMA_VERSION);
+  });
+
+  it('carries the jev opponent and its standing orders', () => {
+    const opponent = jevOpponent('Strike early and keep striking.');
+    const env = buildPlaytraceEnvelope(makeInput({ opponent }), null);
+    expect(env.opponent).toEqual({ kind: 'jev', orders: 'Strike early and keep striking.' });
+  });
+
+  it('carries the rules opponent with empty orders', () => {
+    const env = buildPlaytraceEnvelope(makeInput({ opponent: DEFAULT_OPPONENT }), null);
+    expect(env.opponent).toEqual({ kind: 'rules', orders: '' });
+  });
+
+  it('survives the survey-only downgrade (it is attached before snapshot shaping)', () => {
+    const opponent = jevOpponent('turtle up');
+    const env = buildPlaytraceEnvelope(makeInput({ opponent, includeSnapshot: false }), null);
+    expect(env.snapshot).toBeNull();
+    expect(env.opponent).toEqual({ kind: 'jev', orders: 'turtle up' });
   });
 });
 
