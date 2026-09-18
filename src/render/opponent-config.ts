@@ -40,3 +40,38 @@ export function isOpponentConfig(value: unknown): value is OpponentConfig {
   const orders = (value as { orders?: unknown }).orders;
   return typeof orders === 'string';
 }
+
+/**
+ * Live opponent state for the HUD label and telemetry, as reported by
+ * `GameScene.getOpponentStatus()`. `status` is the *effective* driver of the
+ * enemy colony right now, which can differ from `kind`: a round started as `jev`
+ * reports `status: 'fallback'` once the controller gave up and the rule-based AI
+ * took over mid-round, and a `jev` preference on a build with no endpoint reports
+ * `status: 'rules'`.
+ */
+export interface OpponentStatus {
+  readonly kind: OpponentConfig['kind'];
+  readonly status: 'rules' | 'jev' | 'fallback';
+  /** Completed decision beats across every Jev-driven AI colony this round. */
+  readonly beats: number;
+  /** Failed beats (timeout / bad response) across the same controllers. */
+  readonly failedBeats: number;
+  /** Round-trip of the most recent beat, or null before the first one lands. */
+  readonly lastLatencyMs: number | null;
+}
+
+/**
+ * The small monospace HUD label for `status`, or null when there is nothing to
+ * say (the rule-based AI is the historical default — it gets no label, so the
+ * HUD stays clean for every player who never opts into the beta).
+ *
+ *   jev       → "Opponent: Jev · beat 12 · 130 ms"  (latency omitted until the
+ *                first beat completes)
+ *   fallback  → "Opponent: Jev → Standard AI (fallback)"
+ */
+export function formatOpponentStatusLabel(status: OpponentStatus): string | null {
+  if (status.status === 'rules') return null;
+  if (status.status === 'fallback') return 'Opponent: Jev → Standard AI (fallback)';
+  const latency = status.lastLatencyMs === null ? '' : ` · ${Math.round(status.lastLatencyMs)} ms`;
+  return `Opponent: Jev · beat ${status.beats}${latency}`;
+}
