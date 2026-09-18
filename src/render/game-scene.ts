@@ -1508,20 +1508,26 @@ export class GameScene extends Phaser.Scene {
    * Live opponent state for a HUD label / telemetry. `status` is 'rules' for the
    * rule-based AI, 'jev' while the Jev opponent is driving, and 'fallback' once
    * three consecutive beats failed and the rule-based AI took over mid-round.
+   * `probe` is the most advanced readiness-probe state across controllers (ok >
+   * failed > pending > null) — see JevEnemyController's header comment.
    */
   getOpponentStatus(): OpponentStatus {
     let beats = 0;
     let failedBeats = 0;
     let lastLatencyMs: number | null = null;
     let anyFallback = false;
+    let probe: OpponentStatus['probe'] = null;
+    const probeRank = (p: OpponentStatus['probe']): number =>
+      p === 'ok' ? 3 : p === 'failed' ? 2 : p === 'pending' ? 1 : 0;
     for (const c of this.jevControllers.values()) {
       beats += c.beats;
       failedBeats += c.failedBeats;
       if (c.lastLatencyMs !== null) lastLatencyMs = c.lastLatencyMs;
       if (c.status === 'fallback') anyFallback = true;
+      if (probeRank(c.probe) > probeRank(probe)) probe = c.probe;
     }
     const status = this.jevControllers.size === 0 ? 'rules' : anyFallback ? 'fallback' : 'jev';
-    return { kind: this.currentOpponent.kind, status, beats, failedBeats, lastLatencyMs };
+    return { kind: this.currentOpponent.kind, status, beats, failedBeats, lastLatencyMs, probe };
   }
 
   /**

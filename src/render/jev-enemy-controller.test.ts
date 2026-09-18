@@ -10,7 +10,7 @@ import type { SimCommand } from '../sim/commands.js';
 import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import type { JevAnswerMap, JevQuestionMap } from './jev-encode.js';
-import type { JevAskResult, JevClient } from './jev-client.js';
+import { assertRequestValid, type JevAskResult, type JevClient } from './jev-client.js';
 import type { Seats } from './jev-types.js';
 import { JevCommandLedger } from './jev-commands.js';
 import { createJevOpeningState, isHandoffComplete, runJevOpeningTick } from './jev-opening.js';
@@ -152,15 +152,19 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('JevEnemyController — opening phase', () => {
-  it('is inert before handoff: no beats, only opening commands, no rule-based AI', async () => {
-    const client = new ScriptedClient(() => new Error('must not be asked during the opening'));
+  it('takes no decision-shaped action before handoff beyond the one-time readiness probe', async () => {
+    // The probe succeeds on its first (and only) attempt, so this exercises the
+    // "opening is otherwise inert" invariant with the probe folded in: still no
+    // beats, still only opening commands, still no rule-based AI.
+    const client = new ScriptedClient(scripted({}));
     const ctl = new JevEnemyController({ seats: SEATS, client, orders: '' });
     const world = createScenario(SEED, 'Normal');
     const log: IssuedRecord[] = [];
 
     await step(world, ctl, BEAT * 5 + 1, log);
 
-    expect(client.calls).toBe(0);
+    expect(client.calls).toBe(1);
+    expect(ctl.probe).toBe('ok');
     expect(ctl.phase).toBe('opening');
     expect(ctl.beats).toBe(0);
     expect(vi.mocked(runAIController)).not.toHaveBeenCalled();
@@ -184,6 +188,111 @@ describe('JevEnemyController — opening phase', () => {
   });
 });
 
+describe('JevEnemyController — readiness probe', () => {
+  it('fires on tick 0 in the documented shape, and only once when it succeeds', async () => {
+    const client = new ScriptedClient(scripted({}));
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '' });
+    const world = createScenario(SEED, 'Normal');
+
+    expect(ctl.probe).toBeNull();
+    await step(world, ctl, 1);
+
+    expect(client.calls).toBe(1);
+    expect(client.lastState).toEqual({ probe: 'ping' });
+    expect(client.lastQuestions).toEqual({
+      ready: { type: 'noul', instructions: 'Reply yes.', criteria: { true: 'yes', false: 'no' } },
+    });
+    // The exact shape the task calls out as required to pass the proxy's
+    // strict validation (only type/instructions/criteria, ids matching
+    // JEV_ID_PATTERN).
+    expect(() => assertRequestValid(client.lastState!, client.lastQuestions!)).not.toThrow();
+    expect(ctl.probe).toBe('ok');
+    expect(ctl.beats).toBe(0);
+
+    // Well past several beat boundaries with no further requests: one success
+    // is enough for the round.
+    await step(world, ctl, BEAT * 3);
+    expect(client.calls).toBe(1);
+    expect(ctl.beats).toBe(0);
+    expect(ctl.phase).toBe('opening');
+  });
+
+  it('repeats every beatTicks while it keeps failing, counting each as a failed beat', async () => {
+    const client = new ScriptedClient(() => new Error('dead endpoint'));
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '' });
+    const world = createScenario(SEED, 'Normal');
+
+    await step(world, ctl, 1); // tick 0
+    expect(client.calls).toBe(1);
+    expect(ctl.probe).toBe('failed');
+    expect(ctl.failedBeats).toBe(1);
+
+    await step(world, ctl, BEAT - 1); // ticks 1..BEAT-1: not aligned, no repeat yet
+    expect(client.calls).toBe(1);
+
+    await step(world, ctl, 1); // tick BEAT: second probe
+    expect(client.calls).toBe(2);
+    expect(ctl.probe).toBe('failed');
+    expect(ctl.failedBeats).toBe(2);
+
+    await step(world, ctl, BEAT); // tick 2*BEAT: third probe
+    expect(client.calls).toBe(3);
+    expect(ctl.failedBeats).toBe(3);
+
+    // Never a real beat and never a decision, no matter how many probes fired.
+    expect(ctl.beats).toBe(0);
+  });
+
+  it('flips to the rule-based AI after three failed probes, well before handoff', async () => {
+    const onFallback = vi.fn();
+    const client = new ScriptedClient(() => new Error('dead endpoint'));
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '', onFallback });
+    const world = createScenario(SEED, 'Normal');
+
+    // Three probes land at tick 0, BEAT and 2*BEAT — three failures, but the
+    // flip itself is a tick-seam decision, not something the promise handler
+    // does (same rule as a normal beat failure).
+    await step(world, ctl, BEAT * 2 + 1);
+    expect(client.calls).toBe(3);
+    expect(ctl.failedBeats).toBe(3);
+    expect(ctl.status).toBe('jev');
+    expect(onFallback).not.toHaveBeenCalled();
+    expect(vi.mocked(runAIController)).not.toHaveBeenCalled();
+    expect(ctl.handoffTick).toBeNull();
+
+    await step(world, ctl, 1);
+    expect(ctl.status).toBe('fallback');
+    expect(onFallback).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runAIController)).toHaveBeenCalled();
+    expect(vi.mocked(runAIController).mock.calls[0]![1]).toBe(ENEMY_COLONY_ID);
+    expect(ctl.beats).toBe(0);
+    expect(ctl.phase).toBe('opening'); // handoff was never reached
+  });
+
+  it('never applies a decision from a probe, even with a client primed to answer beat questions', async () => {
+    const client = new ScriptedClient(scripted({ ratio: 'military', posture: 'assault' }));
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '' });
+    const world = createScenario(SEED, 'Normal');
+    const log: IssuedRecord[] = [];
+
+    await step(world, ctl, BEAT + 1, log);
+    expect(ctl.probe).toBe('ok');
+    expect(client.calls).toBe(1);
+    expect(ctl.beats).toBe(0);
+
+    // Only the opening's own commands were issued — nothing resembling the
+    // "military"/"assault" answers the client would give to a REAL beat's
+    // questions (the probe only ever asks `ready`, so decodeAnswers is never
+    // even invoked for it).
+    const types = new Set(log.map((r) => r.cmd.type));
+    for (const t of types) {
+      expect(['SetBehaviorRatio', 'MarkDigTile', 'PlaceChamber', 'DesignateEntrance']).toContain(t);
+    }
+    expect(world.colonies[ENEMY_COLONY_ID]!.targetRatio).toEqual({ forage: 7, fight: 3 });
+    expect(world.colonies[ENEMY_COLONY_ID]!.rallyPoint).toBeNull();
+  });
+});
+
 describe('JevEnemyController — live phase', () => {
   it('detects the live phase from a resumed world and asks on the beat boundary', async () => {
     const client = new ScriptedClient(scripted({ ratio: 'military' }));
@@ -191,16 +300,19 @@ describe('JevEnemyController — live phase', () => {
     const world = handoffWorld();
 
     // A controller constructed fresh against a mid-round world (the bootFromSave
-    // path) starts in 'opening' and flips on its very first tick seam.
+    // path) starts in 'opening' and flips on its very first tick seam. That same
+    // first seam also fires the one-time readiness probe (call 1).
     expect(ctl.phase).toBe('opening');
     stepOnce(world, ctl);
     expect(ctl.phase).toBe('live');
     expect(ctl.handoffTick).not.toBeNull();
+    expect(client.calls).toBe(1);
 
     await alignToBeat(world, ctl);
-    expect(client.calls).toBe(0);
-    stepOnce(world, ctl); // this tick IS a beat boundary
+    expect(ctl.probe).toBe('ok');
     expect(client.calls).toBe(1);
+    stepOnce(world, ctl); // this tick IS a beat boundary
+    expect(client.calls).toBe(2);
     expect(ctl.beats).toBe(1);
   });
 
@@ -210,12 +322,12 @@ describe('JevEnemyController — live phase', () => {
     const world = handoffWorld();
     const colony = world.colonies[ENEMY_COLONY_ID]!;
 
-    stepOnce(world, ctl);
+    stepOnce(world, ctl); // call 1: the readiness probe
     await alignToBeat(world, ctl);
 
     // Beat tick: the request goes out, but nothing is queued from it.
     ctl.onBeforeTick(world);
-    expect(client.calls).toBe(1);
+    expect(client.calls).toBe(2);
     expect(world.commandQueue.some((c) => c.type === 'SetBehaviorRatio')).toBe(false);
     tick(world, world.commandQueue.splice(0));
     await settleClient();
@@ -357,28 +469,37 @@ describe('JevEnemyController — live phase', () => {
 
   it('does not overlap requests — a beat while one is in flight is skipped', async () => {
     let release: (() => void) | null = null;
+    let calls = 0;
     const client: JevClient = {
-      calls: 0,
       ask(): Promise<JevAskResult> {
-        (client as unknown as { calls: number }).calls += 1;
+        calls += 1;
+        // The readiness probe (call 1) resolves immediately so it doesn't mask
+        // the in-flight BEAT this test is actually about; only the second call
+        // onward hangs until release() is invoked.
+        if (calls === 1) {
+          return Promise.resolve({ answers: {}, usage: null, model: 'probe', latencyMs: 1 });
+        }
         return new Promise<JevAskResult>((resolve) => {
           release = () => resolve({ answers: {}, usage: null, model: 'slow', latencyMs: 1 });
         });
       },
-    } as JevClient & { calls: number };
+    };
     const ctl = new JevEnemyController({ seats: SEATS, client, orders: '' });
     const world = handoffWorld();
 
-    stepOnce(world, ctl);
+    stepOnce(world, ctl); // call 1: the probe
     await alignToBeat(world, ctl);
+    expect(ctl.probe).toBe('ok');
+    expect(calls).toBe(1);
+
     await step(world, ctl, BEAT * 3 + 1); // three beat boundaries pass
-    expect((client as unknown as { calls: number }).calls).toBe(1);
+    expect(calls).toBe(2); // only the first boundary's beat got sent; it never resolved
     expect(ctl.beats).toBe(1);
 
     release!();
     await settleClient();
     await step(world, ctl, BEAT + 1);
-    expect((client as unknown as { calls: number }).calls).toBe(2);
+    expect(calls).toBe(3);
   });
 });
 
@@ -389,21 +510,21 @@ describe('JevEnemyController — failure policy', () => {
     const ctl = new JevEnemyController({ seats: SEATS, client, orders: '', onFallback });
     const world = handoffWorld();
 
+    // Call 1 is the mandatory readiness probe; this world is already past
+    // handoff, so it fails too and counts as the first of the three failures.
     stepOnce(world, ctl);
     await alignToBeat(world, ctl);
-
-    // Two beat boundaries (T and T+BEAT) — two failures, still on Jev.
-    await step(world, ctl, BEAT + 1);
-    expect(ctl.failedBeats).toBe(2);
+    expect(ctl.probe).toBe('failed');
+    expect(ctl.failedBeats).toBe(1);
     expect(ctl.status).toBe('jev');
-    expect(onFallback).not.toHaveBeenCalled();
-    expect(vi.mocked(runAIController)).not.toHaveBeenCalled();
 
-    // Third boundary: the third failure lands, but the status flip is a tick-seam
-    // decision, not something the promise handler does.
-    await step(world, ctl, BEAT);
+    // Two more beat boundaries (T and T+BEAT) — three failures total, still on
+    // Jev: the status flip is a tick-seam decision, not something the promise
+    // handler does.
+    await step(world, ctl, BEAT + 1);
     expect(ctl.failedBeats).toBe(3);
     expect(ctl.status).toBe('jev');
+    expect(onFallback).not.toHaveBeenCalled();
     expect(vi.mocked(runAIController)).not.toHaveBeenCalled();
 
     await step(world, ctl, 1);
@@ -423,18 +544,21 @@ describe('JevEnemyController — failure policy', () => {
 
   it('a success resets the consecutive-failure streak', async () => {
     const onFallback = vi.fn();
-    // Fail, fail, succeed, fail, fail — never three in a row.
+    // Call 0 is the readiness probe — succeeds trivially, so it doesn't add to
+    // the streak. Of the five real beats that follow (calls 1-5): fail, fail,
+    // succeed, fail, fail — never three in a row.
     const client = new ScriptedClient((q, n) =>
-      n === 2 ? scripted({})(q) : new Error('transient'),
+      n === 0 || n === 3 ? scripted({})(q) : new Error('transient'),
     );
     const ctl = new JevEnemyController({ seats: SEATS, client, orders: '', onFallback });
     const world = handoffWorld();
 
     stepOnce(world, ctl);
     await alignToBeat(world, ctl);
+    expect(ctl.probe).toBe('ok');
     await step(world, ctl, BEAT * 4 + 1); // five beat boundaries
 
-    expect(client.calls).toBe(5);
+    expect(client.calls).toBe(6);
     expect(ctl.failedBeats).toBe(4);
     expect(ctl.status).toBe('jev');
     expect(onFallback).not.toHaveBeenCalled();
