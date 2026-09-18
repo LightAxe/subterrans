@@ -25,6 +25,17 @@
 // controller never touches `world.aiState`, so the rule-based state machine has
 // been quietly advancing in tick.ts the whole time and is ready to drive.
 //
+// Readiness probe: without one, the first request of any kind is the first live
+// beat at handoff — 3-4 real minutes in, far too late to notice a dead
+// endpoint. So the very first `onBeforeTick` call fires one lightweight probe
+// (a single yes/no question whose answer is never read), and — while still in
+// the opening — it repeats every `beatTicks` ticks until one succeeds, then
+// stops (normal beats take over at handoff as before). A probe failure counts
+// as a failed beat through the same `consecutiveFailures` counter as a real
+// beat, so a dead endpoint now falls back to the rule-based AI ~15 s into the
+// round instead of after handoff. A probe never stashes a decision and never
+// counts toward `beats`.
+//
 // Wall-clock (`performance.now`, via the client's latency measurement) is fine
 // here — this is the render layer. It would be a hard block in src/sim/.
 
@@ -42,7 +53,7 @@ import { ChamberType } from '../sim/enums.js';
 import { AI_DIG_INTERVAL, AI_DIG_MARK_BUDGET, runAIController } from './ai-controller.js';
 import { JevCommandLedger } from './jev-commands.js';
 import { buildCandidates, computeFacts, digFrontier } from './jev-candidates.js';
-import { decodeAnswers, encodeBeat } from './jev-encode.js';
+import { decodeAnswers, encodeBeat, type JevQuestionMap } from './jev-encode.js';
 import {
   createJevOpeningState,
   isHandoffComplete,
@@ -62,8 +73,26 @@ import type {
 
 /** Ticks between model beats. 100 ticks = 5 s at the fixed 20 Hz timestep. */
 export const JEV_DEFAULT_BEAT_TICKS = 100;
-/** Consecutive failed beats before the rule-based AI takes over for the round. */
+/**
+ * Consecutive failed beats before the rule-based AI takes over for the round.
+ * A failed readiness probe counts as one, same as a failed real beat.
+ */
 export const JEV_MAX_CONSECUTIVE_FAILURES = 3;
+
+/**
+ * Readiness-probe payload: state carries no facts, and the one question is
+ * shaped to pass the proxy's strict validation (only type/instructions/
+ * criteria; ids matching `JEV_ID_PATTERN`). The answer is never read — only
+ * whether the request itself succeeds matters.
+ */
+const JEV_PROBE_STATE: Record<string, unknown> = { probe: 'ping' };
+const JEV_PROBE_QUESTIONS: JevQuestionMap = {
+  ready: {
+    type: 'noul',
+    instructions: 'Reply yes.',
+    criteria: { true: 'yes', false: 'no' },
+  },
+};
 
 export type JevControllerStatus = 'jev' | 'fallback';
 
@@ -97,6 +126,12 @@ export class JevEnemyController {
   /** Answers that were missing / mistyped / not a live candidate (diagnostic). */
   invalidAnswers = 0;
   lastLatencyMs: number | null = null;
+  /**
+   * Readiness probe state: null until the first `onBeforeTick` ever sends one,
+   * 'pending' while it's in flight, then 'ok' or 'failed'. Once 'ok', no more
+   * probes are sent for the round.
+   */
+  probe: 'pending' | 'ok' | 'failed' | null = null;
   digDirection: DigDirection = 'hold';
   currentPosture: PostureKey = 'recall';
 
@@ -144,6 +179,21 @@ export class JevEnemyController {
       // mid-round exactly where tick.ts has been advancing it.
       runAIController(world, this.seats.mySeat);
       return;
+    }
+
+    // Readiness probe: the first onBeforeTick call ever sends one regardless of
+    // phase; while still in the opening it repeats on the beat cadence until
+    // one succeeds, then stops (see the file header for why).
+    if (!this.inFlight) {
+      if (this.probe === null) {
+        this.startProbe();
+      } else if (
+        this.phase === 'opening' &&
+        this.probe !== 'ok' &&
+        world.tick % this.beatTicks === 0
+      ) {
+        this.startProbe();
+      }
     }
 
     // Phase is derived from the world, not from a tick counter — a controller
@@ -215,6 +265,32 @@ export class JevEnemyController {
         },
         () => {
           // Any rejection — non-200, timeout, network, non-JSON body — is one failed beat.
+          this.recordFailedBeat();
+        },
+      )
+      .finally(() => {
+        this.inFlight = false;
+      });
+  }
+
+  /**
+   * Fire the one-off readiness probe. Reuses the exact in-flight/failure path
+   * a real beat uses — a rejection is one failed beat — but it never decodes
+   * an answer, never stashes a Decision, and never counts toward `beats`.
+   */
+  private startProbe(): void {
+    this.probe = 'pending';
+    this.inFlight = true;
+    void this.client
+      .ask(JEV_PROBE_STATE, JEV_PROBE_QUESTIONS)
+      .then(
+        (res) => {
+          this.probe = 'ok';
+          this.lastLatencyMs = res.latencyMs;
+          this.consecutiveFailures = 0;
+        },
+        () => {
+          this.probe = 'failed';
           this.recordFailedBeat();
         },
       )

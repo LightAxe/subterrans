@@ -54,10 +54,19 @@ export interface OpponentStatus {
   readonly status: 'rules' | 'jev' | 'fallback';
   /** Completed decision beats across every Jev-driven AI colony this round. */
   readonly beats: number;
-  /** Failed beats (timeout / bad response) across the same controllers. */
+  /** Failed beats (timeout / bad response) across the same controllers — a failed readiness probe counts as one. */
   readonly failedBeats: number;
-  /** Round-trip of the most recent beat, or null before the first one lands. */
+  /** Round-trip of the most recent beat (or successful probe), or null before either lands. */
   readonly lastLatencyMs: number | null;
+  /**
+   * Readiness-probe state ahead of the first real beat (see
+   * JevEnemyController's header comment): null before any controller has sent
+   * one, 'pending' while one is in flight, 'ok' once one has succeeded, or
+   * 'failed' after an unsuccessful attempt with no success yet. Aggregated
+   * across controllers as the most advanced state seen (ok > failed > pending
+   * > null).
+   */
+  readonly probe: 'pending' | 'ok' | 'failed' | null;
 }
 
 /**
@@ -67,11 +76,19 @@ export interface OpponentStatus {
  *
  *   jev       → "Opponent: Jev · beat 12 · 130 ms"  (latency omitted until the
  *                first beat completes)
+ *   jev       → "Opponent: Jev · opening · 130 ms"  (before the first beat,
+ *                once a readiness probe has confirmed the endpoint is alive)
+ *   jev       → "Opponent: Jev · connecting…"        (before the first beat,
+ *                while no probe has succeeded yet)
  *   fallback  → "Opponent: Jev → Standard AI (fallback)"
  */
 export function formatOpponentStatusLabel(status: OpponentStatus): string | null {
   if (status.status === 'rules') return null;
   if (status.status === 'fallback') return 'Opponent: Jev → Standard AI (fallback)';
   const latency = status.lastLatencyMs === null ? '' : ` · ${Math.round(status.lastLatencyMs)} ms`;
+  if (status.beats === 0) {
+    if (status.probe === 'ok') return `Opponent: Jev · opening${latency}`;
+    if (status.probe === 'pending' || status.probe === null) return 'Opponent: Jev · connecting…';
+  }
   return `Opponent: Jev · beat ${status.beats}${latency}`;
 }

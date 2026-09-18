@@ -60,7 +60,13 @@ describe('isOpponentConfig', () => {
 });
 
 describe('formatOpponentStatusLabel', () => {
-  const base = { kind: 'jev', beats: 12, failedBeats: 0, lastLatencyMs: 130 } as const;
+  const base = {
+    kind: 'jev',
+    beats: 12,
+    failedBeats: 0,
+    lastLatencyMs: 130,
+    probe: 'ok',
+  } as const;
 
   it('renders nothing for the rule-based AI (no HUD chrome by default)', () => {
     expect(
@@ -70,6 +76,7 @@ describe('formatOpponentStatusLabel', () => {
         beats: 0,
         failedBeats: 0,
         lastLatencyMs: null,
+        probe: null,
       }),
     ).toBeNull();
   });
@@ -80,9 +87,15 @@ describe('formatOpponentStatusLabel', () => {
     );
   });
 
-  it('omits the latency until the first beat completes', () => {
+  it('omits the latency until the first beat completes (probe already failed, no opening/connecting text)', () => {
     expect(
-      formatOpponentStatusLabel({ ...base, status: 'jev', beats: 0, lastLatencyMs: null }),
+      formatOpponentStatusLabel({
+        ...base,
+        status: 'jev',
+        beats: 0,
+        lastLatencyMs: null,
+        probe: 'failed',
+      }),
     ).toBe('Opponent: Jev · beat 0');
   });
 
@@ -95,6 +108,54 @@ describe('formatOpponentStatusLabel', () => {
   it('reports the mid-round handover once Jev has given up', () => {
     expect(formatOpponentStatusLabel({ ...base, status: 'fallback', failedBeats: 3 })).toBe(
       'Opponent: Jev → Standard AI (fallback)',
+    );
+  });
+
+  it('shows "opening" + latency before the first beat once the probe has succeeded', () => {
+    expect(formatOpponentStatusLabel({ ...base, status: 'jev', beats: 0, probe: 'ok' })).toBe(
+      'Opponent: Jev · opening · 130 ms',
+    );
+  });
+
+  it('shows "connecting…" before the first beat while the probe is pending', () => {
+    expect(
+      formatOpponentStatusLabel({
+        ...base,
+        status: 'jev',
+        beats: 0,
+        probe: 'pending',
+        lastLatencyMs: null,
+      }),
+    ).toBe('Opponent: Jev · connecting…');
+  });
+
+  it('shows "connecting…" before the first beat when no probe has been sent yet', () => {
+    expect(
+      formatOpponentStatusLabel({
+        ...base,
+        status: 'jev',
+        beats: 0,
+        probe: null,
+        lastLatencyMs: null,
+      }),
+    ).toBe('Opponent: Jev · connecting…');
+  });
+
+  it('falls back to the plain "beat 0" form when the probe has failed', () => {
+    expect(
+      formatOpponentStatusLabel({
+        ...base,
+        status: 'jev',
+        beats: 0,
+        probe: 'failed',
+        lastLatencyMs: null,
+      }),
+    ).toBe('Opponent: Jev · beat 0');
+  });
+
+  it('ignores probe state once real beats have started', () => {
+    expect(formatOpponentStatusLabel({ ...base, status: 'jev', beats: 3, probe: 'failed' })).toBe(
+      'Opponent: Jev · beat 3 · 130 ms',
     );
   });
 });
