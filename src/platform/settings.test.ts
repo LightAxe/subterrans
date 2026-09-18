@@ -117,6 +117,88 @@ describe('loadSettings', () => {
     expect(loadSettings().firstUseHints).toEqual({});
   });
 
+  // ---------------------------------------------------------------------------
+  // W3 — opponent preference (Jev opponent beta)
+  // ---------------------------------------------------------------------------
+
+  it('defaults the opponent to the rule-based AI', () => {
+    expect(loadSettings().opponent).toEqual({ kind: 'rules' });
+  });
+
+  it('round-trips a jev opponent preference including the free text', () => {
+    const next = mk({ opponent: { kind: 'jev', orders: 'press the entrance' } });
+    saveSettings(next);
+    expect(loadSettings()).toEqual(next);
+  });
+
+  it('round-trips a jev preference with empty orders (the `balanced` preset)', () => {
+    saveSettings(mk({ opponent: { kind: 'jev', orders: '' } }));
+    expect(loadSettings().opponent).toEqual({ kind: 'jev', orders: '' });
+  });
+
+  it('fills the opponent default for a blob written before W3 (no version bump)', () => {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        version: SETTINGS_VERSION,
+        settings: { pheromoneOverlay: false, hintStripVisible: true, firstUseHints: {} },
+      }),
+    );
+    expect(loadSettings()).toEqual(mk({ pheromoneOverlay: false }));
+  });
+
+  it('replaces a malformed opponent with the default but keeps valid siblings', () => {
+    const malformed: unknown[] = [
+      null,
+      'jev',
+      42,
+      [],
+      {},
+      { kind: 'random' },
+      { kind: 'jev' }, // orders missing
+      { kind: 'jev', orders: 7 }, // orders wrong type
+      { kind: 'rules', orders: 'ignored' }, // extra key is fine — still `rules`
+    ];
+    for (const opponent of malformed) {
+      localStorage.setItem(
+        SETTINGS_KEY,
+        JSON.stringify({
+          version: SETTINGS_VERSION,
+          settings: { hintStripVisible: false, opponent },
+        }),
+      );
+      const loaded = loadSettings();
+      expect(loaded.opponent).toEqual({ kind: 'rules' });
+      expect(loaded.hintStripVisible).toBe(false); // sibling survived
+    }
+  });
+
+  it('accepts an over-long orders string (the render layer owns the length cap)', () => {
+    // Mirrors save.ts: the envelope/settings validator checks SHAPE only, so a
+    // tampered blob can't brick the file; jevOpponent / the picker cap the text
+    // before it reaches the wire.
+    const long = 'z'.repeat(5000);
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        version: SETTINGS_VERSION,
+        settings: { opponent: { kind: 'jev', orders: long } },
+      }),
+    );
+    expect(loadSettings().opponent).toEqual({ kind: 'jev', orders: long });
+  });
+
+  it('hands out a fresh opponent object per load (no shared default reference)', () => {
+    const a = loadSettings();
+    const b = loadSettings();
+    expect(a.opponent).not.toBe(b.opponent);
+    expect(a.opponent).not.toBe(DEFAULT_SETTINGS.opponent);
+    // Mutating a load must not poison the module-level default.
+    (a.opponent as { kind: string }).kind = 'jev';
+    expect(loadSettings().opponent).toEqual({ kind: 'rules' });
+    expect(DEFAULT_SETTINGS.opponent).toEqual({ kind: 'rules' });
+  });
+
   it('ignores unknown extra keys in the settings object', () => {
     localStorage.setItem(
       SETTINGS_KEY,
