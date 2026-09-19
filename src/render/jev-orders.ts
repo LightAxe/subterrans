@@ -32,19 +32,23 @@ export const JEV_ORDERS_PRESETS: readonly JevOrdersPreset[] = [
   {
     id: 'balanced',
     label: 'Balanced',
-    // Tuned default (2026-09-19 sweep, 6 texts × 20 seeds): 10/20 wins, median survival
-    // 9,128 ticks, 12.6 workers at end — vs 4/20 / 6,454 / 3.4 with no orders at all.
+    // Tuned default. Jev-vs-Jev round-robin (2026-09-19, 8 texts × 6 seeds × both seats,
+    // 336 matches): 75.0% win rate (Wilson 64.8–83.0), no losing matchup, 40% of its wins
+    // by queen kill — a long build followed by a decisive assault.
     text:
-      'Survival first: keep our food stores rising. Keep most workers foraging the nearest pile, ' +
-      'keep a small guard on our entrance, dig only when stores are high, and never send fighters ' +
-      'away from home.',
+      'Spend the early game entirely on food and growth with fighters at home. Once our colony ' +
+      'is large and stores are high, switch to mostly fighters and assault the opponent ' +
+      'entrance until their queen is dead.',
   },
   {
     id: 'aggressive',
     label: 'Aggressive',
+    // Tournament #2 (63.1%): assaults in ~70% of matches — constant pressure. The old
+    // 'strike early, accept losses' text finished last (28.6%, zero queen kills): it starved.
     text:
-      'Strike early and keep striking. Accept losses. Keep pressure on the opponent entrance ' +
-      'whenever we have any fighters to send; favor fight over forage.',
+      'Build a strong economy and a small guard. Watch the opponent: whenever they are weaker ' +
+      'than us or their fighters are away, assault their entrance with everything; otherwise ' +
+      'stay home and grow.',
   },
   {
     id: 'turtle',
@@ -56,9 +60,11 @@ export const JEV_ORDERS_PRESETS: readonly JevOrdersPreset[] = [
   {
     id: 'economy',
     label: 'Economy',
+    // Survival-sweep winner (10/20 vs the rule-based AI, median 9,128 ticks); never assaults.
     text:
-      'Maximize colony growth and stored food. Keep almost everyone foraging and digging. ' +
-      'Fight only when we are attacked or the spider threatens our entrance.',
+      'Survival first: keep our food stores rising. Keep most workers foraging the nearest ' +
+      'pile, keep a small guard on our entrance, dig only when stores are high, and never send ' +
+      'fighters away from home.',
   },
 ];
 

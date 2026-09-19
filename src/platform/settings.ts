@@ -62,9 +62,9 @@ export interface Settings {
  *  cross-checks this literal against the render-layer original so the two
  *  cannot drift apart silently. */
 const DEFAULT_JEV_ORDERS =
-  'Survival first: keep our food stores rising. Keep most workers foraging the nearest pile, ' +
-  'keep a small guard on our entrance, dig only when stores are high, and never send fighters ' +
-  'away from home.';
+  'Spend the early game entirely on food and growth with fighters at home. Once our colony ' +
+  'is large and stores are high, switch to mostly fighters and assault the opponent ' +
+  'entrance until their queen is dead.';
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
   pheromoneOverlay: true,
