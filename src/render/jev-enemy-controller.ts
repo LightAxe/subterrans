@@ -7,8 +7,8 @@
 //                     until Queen + Nursery + first FoodStorage are built.
 //   phase 'live'    — every AI_DIG_INTERVAL ticks, mark frontier tiles in the
 //                     direction Jev last chose; every `beatTicks` ticks, fire ONE
-//                     request describing the world in words and asking for the
-//                     next set of orders.
+//                     request describing the world in words. The proxy builds the
+//                     beat's questions from that state and answers them.
 //
 // The one structural rule: `onBeforeTick` is synchronous (the game loop's seam
 // is), so the request is fire-and-forget. Its result is stashed by the promise
@@ -27,14 +27,16 @@
 //
 // Readiness probe: without one, the first request of any kind is the first live
 // beat at handoff — 3-4 real minutes in, far too late to notice a dead
-// endpoint. So the very first `onBeforeTick` call fires one lightweight probe
-// (a single yes/no question whose answer is never read), and — while still in
-// the opening — it repeats every `beatTicks` ticks until one succeeds, then
-// stops (normal beats take over at handoff as before). A probe failure counts
-// as a failed beat through the same `consecutiveFailures` counter as a real
-// beat, so a dead endpoint now falls back to the rule-based AI ~15 s into the
-// round instead of after handoff. A probe never stashes a decision and never
-// counts toward `beats`.
+// endpoint. So the very first `onBeforeTick` call mints the proxy session — the
+// cheapest request there is, and one the round needs anyway — and, while still
+// in the opening, repeats every `beatTicks` ticks until one succeeds, then stops
+// (normal beats take over at handoff as before). A failed mint counts as a
+// failed beat through the same `consecutiveFailures` counter as a real beat, so
+// a dead endpoint now falls back to the rule-based AI ~15 s into the round
+// instead of after handoff. A probe never stashes a decision and never counts
+// toward `beats`; the session it leaves behind is the one the first real beat
+// uses, and the client re-mints on its own once that session expires or the
+// proxy retires it.
 //
 // Wall-clock (`performance.now`, via the client's latency measurement) is fine
 // here — this is the render layer. It would be a hard block in src/sim/.
@@ -53,7 +55,7 @@ import { ChamberType } from '../sim/enums.js';
 import { AI_DIG_INTERVAL, AI_DIG_MARK_BUDGET, runAIController } from './ai-controller.js';
 import { JevCommandLedger } from './jev-commands.js';
 import { buildCandidates, computeFacts, digFrontier } from './jev-candidates.js';
-import { decodeAnswers, encodeBeat, type JevQuestionMap } from './jev-encode.js';
+import { decodeAnswers, encodeBeat } from './jev-encode.js';
 import {
   createJevOpeningState,
   isHandoffComplete,
@@ -78,21 +80,6 @@ export const JEV_DEFAULT_BEAT_TICKS = 100;
  * A failed readiness probe counts as one, same as a failed real beat.
  */
 export const JEV_MAX_CONSECUTIVE_FAILURES = 3;
-
-/**
- * Readiness-probe payload: state carries no facts, and the one question is
- * shaped to pass the proxy's strict validation (only type/instructions/
- * criteria; ids matching `JEV_ID_PATTERN`). The answer is never read — only
- * whether the request itself succeeds matters.
- */
-const JEV_PROBE_STATE: Record<string, unknown> = { probe: 'ping' };
-const JEV_PROBE_QUESTIONS: JevQuestionMap = {
-  ready: {
-    type: 'noul',
-    instructions: 'Reply yes.',
-    criteria: { true: 'yes', false: 'no' },
-  },
-};
 
 export type JevControllerStatus = 'jev' | 'fallback';
 
@@ -181,9 +168,9 @@ export class JevEnemyController {
       return;
     }
 
-    // Readiness probe: the first onBeforeTick call ever sends one regardless of
-    // phase; while still in the opening it repeats on the beat cadence until
-    // one succeeds, then stops (see the file header for why).
+    // Readiness probe (a session mint): the first onBeforeTick call ever sends
+    // one regardless of phase; while still in the opening it repeats on the beat
+    // cadence until one succeeds, then stops (see the file header for why).
     if (!this.inFlight) {
       if (this.probe === null) {
         this.startProbe();
@@ -248,7 +235,7 @@ export class JevEnemyController {
     this.beats += 1;
     this.inFlight = true;
     void this.client
-      .ask(enc.state, enc.questions)
+      .beat(enc.state)
       .then(
         (res) => {
           // `res.answers` came off the wire: decoding it must not be able to
@@ -274,15 +261,16 @@ export class JevEnemyController {
   }
 
   /**
-   * Fire the one-off readiness probe. Reuses the exact in-flight/failure path
-   * a real beat uses — a rejection is one failed beat — but it never decodes
-   * an answer, never stashes a Decision, and never counts toward `beats`.
+   * Fire the one-off readiness probe: mint the proxy session. Reuses the exact
+   * in-flight/failure path a real beat uses — a rejection is one failed beat —
+   * but it never decodes an answer, never stashes a Decision, and never counts
+   * toward `beats`.
    */
   private startProbe(): void {
     this.probe = 'pending';
     this.inFlight = true;
     void this.client
-      .ask(JEV_PROBE_STATE, JEV_PROBE_QUESTIONS)
+      .mintSession()
       .then(
         (res) => {
           this.probe = 'ok';
