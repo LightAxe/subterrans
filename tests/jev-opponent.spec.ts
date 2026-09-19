@@ -139,8 +139,12 @@ test.describe('W3 — opponent picker with the Jev endpoint configured', () => {
     const textarea = page.locator('textarea');
     await expect(textarea).toHaveCount(1);
 
-    // Default preset is `balanced` — deliberately the EMPTY orders string.
-    await expect(textarea).toHaveValue('');
+    // Default preset is `balanced` — pre-filled with its tuned (non-empty) text
+    // for a fresh player (no saved preference), from settings.ts's default.
+    const balancedIndex = JEV_ORDERS_PRESETS.findIndex((p) => p.id === 'balanced');
+    expect(balancedIndex).toBeGreaterThanOrEqual(0);
+    const balanced = JEV_ORDERS_PRESETS[balancedIndex]!.text;
+    await expect(textarea).toHaveValue(balanced);
 
     // Picking a preset overwrites the field with that preset's shipped text.
     const aggressiveIndex = JEV_ORDERS_PRESETS.findIndex((p) => p.id === 'aggressive');
@@ -178,10 +182,12 @@ test.describe('W3 — opponent picker with the Jev endpoint configured', () => {
     await bootToPicker(page);
 
     // Write some orders and start a Jev round so the preference is persisted.
+    // The box is pre-filled with the `balanced` default text (a fresh player),
+    // so `fill` (clear + set, dispatching a real `input` event) replaces it
+    // wholesale rather than typing into the middle of the existing text.
     await clickRect(page, OPPONENT_JEV_RECT);
     const textarea = page.locator('textarea');
-    await textarea.click();
-    await page.keyboard.type('Hold the line.');
+    await textarea.fill('Hold the line.');
     await clickRect(page, DIFFICULTY_NORMAL_RECT);
     await expect
       .poll(() => storedSettings(page).then((s) => s.jevOrders), { timeout: 15_000 })

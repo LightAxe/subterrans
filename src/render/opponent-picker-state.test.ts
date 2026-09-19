@@ -23,6 +23,7 @@ function available(saved = DEFAULT_OPPONENT): OpponentPickerState {
 }
 
 const AGGRESSIVE = ordersTextForPreset('aggressive');
+const BALANCED = ordersTextForPreset('balanced');
 
 describe('createOpponentPickerState', () => {
   it('defaults to the rule-based AI with no orders', () => {
@@ -39,9 +40,27 @@ describe('createOpponentPickerState', () => {
     expect(s.presetId).toBe('aggressive');
   });
 
-  it('re-highlights `balanced` for an empty orders string (the empty preset)', () => {
+  it('highlights no preset for an empty orders string (no standing orders at all)', () => {
+    // Every preset now carries non-empty text, so an empty orders string is a
+    // separate, deliberate state — not `balanced` — and lights nothing up.
     const s = available(jevOpponent(''));
+    expect(s.presetId).toBeNull();
+    expect(s.text).toBe('');
+  });
+
+  it('highlights `balanced` when seeded with its tuned text (a fresh player)', () => {
+    // platform/settings.ts's DEFAULT_SETTINGS.jevOrders is the `balanced` text,
+    // so a genuinely fresh player (no saved preference) is seeded via
+    // `savedOrders` with exactly this string — this is what makes `balanced`
+    // the default the player actually sees pre-selected.
+    const s = createOpponentPickerState({
+      saved: DEFAULT_OPPONENT,
+      savedOrders: BALANCED,
+      jevAvailable: true,
+    });
+    expect(s.kind).toBe('rules');
     expect(s.presetId).toBe('balanced');
+    expect(s.text).toBe(BALANCED);
   });
 
   it('marks freehand orders as custom (no preset highlighted)', () => {
@@ -147,10 +166,11 @@ describe('selectPreset', () => {
     expect(preset.text).toBe(AGGRESSIVE);
   });
 
-  it('selects `balanced` as the empty-orders preset', () => {
+  it('selects `balanced` as a tuned, non-empty preset like any other', () => {
     const s = selectPreset(toggleKind(available(), 'jev'), 'balanced');
-    expect(s.text).toBe('');
-    expect(toConfig(s)).toEqual({ kind: 'jev', orders: '' });
+    expect(s.text).toBe(BALANCED);
+    expect(s.text).not.toBe('');
+    expect(toConfig(s)).toEqual({ kind: 'jev', orders: BALANCED });
   });
 
   it('handles every shipped preset', () => {
