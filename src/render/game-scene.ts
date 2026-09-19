@@ -565,8 +565,9 @@ export class GameScene extends Phaser.Scene {
   // Jev opponent (beta) — the enemy colony driven by TypeSafe's Jev model
   // through a same-origin proxy instead of the rule-based AI controller.
   // `jevEndpoint` comes from the registry (main.ts, VITE_JEV_ENDPOINT or
-  // MountOptions.jevEndpoint); empty string = feature off, exactly like the
-  // playtrace endpoint above.
+  // MountOptions.jevEndpoint) and is the BASE path of that proxy — the client
+  // POSTs to `<base>/session` and `<base>/beat`. Empty string = feature off,
+  // exactly like the playtrace endpoint above.
   private jevEndpoint: string = '';
   /** What is actually driving the enemy colony this round (already downgraded
    *  to rules when the feature is off — see `effectiveOpponent`). */
@@ -1541,14 +1542,16 @@ export class GameScene extends Phaser.Scene {
     this.jevControllers.clear();
     const opponent = this.currentOpponent;
     if (opponent.kind !== 'jev' || this.jevEndpoint === '') return;
-    // One client (one endpoint, one timeout policy) shared by every seat.
-    const client = createJevClient({ endpoint: this.jevEndpoint });
     for (const aiCid of this.aiColonyIds) {
       this.jevControllers.set(
         aiCid,
         new JevEnemyController({
           seats: { mySeat: aiCid, opponentSeat: PLAYER_COLONY_ID },
-          client,
+          // One client per seat: a client owns ONE proxy session, and a session
+          // carries a token, an expiry and a beat budget. Sharing one across
+          // seats would have two controllers spending — and silently re-minting
+          // — each other's.
+          client: createJevClient({ base: this.jevEndpoint }),
           orders: opponent.orders,
           onFallback: () => this.notifyJevFallback(),
         }),
