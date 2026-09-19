@@ -137,6 +137,10 @@ export default defineConfig({
      *
      *     VITE_JEV_ENDPOINT=/api/jev npm run dev
      *
+     * VITE_JEV_ENDPOINT is a BASE path: the client POSTs to `<base>/session`
+     * and `<base>/beat`, both of which fall under the `/api` prefix proxied
+     * below.
+     *
      * Ordering note: `playtraceMockPlugin` registers its middleware directly
      * inside `configureServer`, and Vite installs those BEFORE its internal
      * middlewares (the proxy among them). So `POST /api/playtrace` still hits
