@@ -11,6 +11,11 @@ import {
 // Cross-layer import in a TEST only: the point is to prove the two constants
 // agree. Production platform/ code must not import from render/.
 import { PLAYTRACE_EMAIL_MAX } from '../render/playtrace-upload.js';
+// Cross-layer import — TEST ONLY (same pattern as save.test.ts importing
+// render/opponent-config.js). settings.ts duplicates the `balanced` text as a
+// local literal (DEFAULT_JEV_ORDERS) to keep platform/ free of a runtime
+// dependency on render/; this import lets a test below catch the two drifting.
+import { ordersTextForPreset } from '../render/jev-orders.js';
 
 // jsdom provides a real localStorage in the test environment (test-setup.ts
 // mounts it). Each test resets the namespace key to ensure isolation.
@@ -131,7 +136,9 @@ describe('loadSettings', () => {
     expect(loadSettings()).toEqual(next);
   });
 
-  it('round-trips a jev preference with empty orders (the `balanced` preset)', () => {
+  it('round-trips a jev preference with empty orders (no standing orders at all)', () => {
+    // Empty orders remain a legal, distinct state — reached by clearing the
+    // text box — even though `balanced` itself is no longer empty.
     saveSettings(mk({ opponent: { kind: 'jev', orders: '' } }));
     expect(loadSettings().opponent).toEqual({ kind: 'jev', orders: '' });
   });
@@ -188,8 +195,16 @@ describe('loadSettings', () => {
     expect(loadSettings().opponent).toEqual({ kind: 'jev', orders: long });
   });
 
-  it('defaults jevOrders to the empty string', () => {
-    expect(loadSettings().jevOrders).toBe('');
+  it("defaults jevOrders to the balanced preset's tuned (non-empty) text", () => {
+    expect(loadSettings().jevOrders).toBe(DEFAULT_SETTINGS.jevOrders);
+    expect(loadSettings().jevOrders.length).toBeGreaterThan(0);
+  });
+
+  it('keeps DEFAULT_SETTINGS.jevOrders in sync with the render-layer balanced text', () => {
+    // settings.ts duplicates this string (a runtime platform→render import isn't
+    // allowed here — see the import comment at the top of this file); this test
+    // is the tripwire that catches the two drifting apart.
+    expect(DEFAULT_SETTINGS.jevOrders).toBe(ordersTextForPreset('balanced'));
   });
 
   it('round-trips jevOrders independently of the opponent kind', () => {
@@ -211,7 +226,7 @@ describe('loadSettings', () => {
         }),
       );
       const loaded = loadSettings();
-      expect(loaded.jevOrders).toBe('');
+      expect(loaded.jevOrders).toBe(DEFAULT_SETTINGS.jevOrders);
       expect(loaded.hintStripVisible).toBe(false); // sibling survived
     }
   });
