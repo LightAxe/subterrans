@@ -544,7 +544,56 @@ export const SIM_VERSION_V37_CORPSE_FOOD = 37 as const;
  * no tick-order change. MIN_ACCEPTED is UNCHANGED (no save wipe).
  */
 export const SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH = 38 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH;
+
+/**
+ * Spider target-selection seat-bias fix. Every spider tie-break that previously
+ * resolved on ascending colony id / ascending entity id handed the win to colony 1
+ * (the starting cohort's ants hold the lower entity ids colony by colony), so in a
+ * fully passive two-colony
+ * game colony 1's queen died first 55.25% of the time (800 runs — 400 seeds x both
+ * nest geometries, z = +2.97, p = 0.003) — a structural seat advantage, not emergent
+ * play. With `world.spider = null` no queen dies at all; the map is symmetric and
+ * swapping the nests' positions does not move the bias, so the channel is the id
+ * ordering itself. Deterministic `hash32` keys (never a `world.rngState` draw — these
+ * selectors are documented as making none) replace it:
+ *
+ *   1. `pickRampageTarget` (spider.ts) orders an exact score tie by a PER-COLONY key
+ *      `hash32(terrainSeed ^ tick ^ SPIDER_TIEBREAK_SALT ^ colonyId)` instead of
+ *      ascending colony id — so neither seat is structurally the "richer" colony the
+ *      60/40 weighting then favors. The SCORE is untouched
+ *      (`colony.foodStored + workerCount * 10`); because the pool pegs at
+ *      BASE_FOOD_STORAGE_CAPACITY, ~36% of picks are exact ties, which is why the
+ *      tiebreak mattered so much. Scoring on `colonyFoodTotal` (pool + FoodStorage
+ *      chambers) was considered and DEFERRED to its own change: it is a no-op in the
+ *      passive sweeps that measured this bias, and in a real game it would swamp the
+ *      `workerCount * 10` term — a balance change needing an AI-economy sweep, not a
+ *      tie fix.
+ *   2. `findChaseTarget` / `findNearestAttackingFighter` (spider.ts) break an EQUAL
+ *      Manhattan distance on the lower `hash32(terrainSeed ^ tick ^ antId)` instead
+ *      of the lower ant id. Strict `<` on distance is unchanged — only exact ties move.
+ *   3. `resolveSpiderCombatOnTile` (combat.ts) ranks the ants on the spider's tile by
+ *      (Fighting first, then lower `hash32(terrainSeed ^ antId)`) instead of
+ *      (Fighting first, then lowest tile slot), for both `activeAntIdx` and
+ *      `swarmRetaliationTarget` — one substituted term, nothing else changed. The key
+ *      is deliberately tick-FREE and the rule deliberately UNCONDITIONAL (not
+ *      restricted to mixed-colony tiles): a spider-ant pairing
+ *      (`combatOpponentId === -2` + windup) spans many ticks, so either a per-tick key
+ *      or a rule that switched on the tile's colony composition would re-target
+ *      mid-engagement and reset the spider's windup. As it stands the displacement
+ *      rule is the same shape as pre-V39 — an arriving ant displaces the incumbent iff
+ *      it ranks higher — so the expected churn is the same.
+ *
+ * Every mutation path is gated `simVersion >= V39`, so pre-V39 saves replay
+ * byte-identically. Verified cross-build, not merely by inspection: the pre-change and
+ * post-change trees were each run from `createScenario` with `world.simVersion` pinned
+ * and their serialized `WorldState` hashed at 1 000-tick checkpoints (the harness used
+ * for this is not committed; `scripts/analyze-snapshot.ts` performs the same
+ * serialize-and-compare against a recorded snapshot). Identical at every pinned
+ * version from 30 (= MIN_ACCEPTED) through 38, up to 25 seeds x 12 000 ticks each.
+ * No new WorldState/save field; MIN_ACCEPTED is UNCHANGED.
+ */
+export const SIM_VERSION_V39_SPIDER_TIEBREAK = 39 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V39_SPIDER_TIEBREAK;
 
 /**
  * S2 — AI colony state machine states.

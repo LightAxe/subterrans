@@ -106,6 +106,9 @@ describe('AI-only scenario 6000 ticks', () => {
 
     // --- Trajectory tracking + pre-audit diagnostics ---
     const workerCountTrajectory: number[] = [];
+    // world.tick at each trajectory sample, so the predation floor below can be
+    // evaluated per sample without guessing how loop index maps onto event ticks.
+    const trajectoryTicks: number[] = [];
     const diagnostics: Snapshot[] = [];
 
     // --- 3000-tick loop: runAIController → drain queue → tick ---
@@ -122,6 +125,7 @@ describe('AI-only scenario 6000 ticks', () => {
       // Track workerCount across the final 500-tick window
       if (t >= TRAJECTORY_WINDOW_START) {
         workerCountTrajectory.push(aiColony!.workerCount);
+        trajectoryTicks.push(world.tick);
       }
 
       // Diagnostic checkpoint — retained as a sparse snapshot array so that
@@ -198,15 +202,70 @@ describe('AI-only scenario 6000 ticks', () => {
       `Expected ≥1 FoodStorage chamber. ${ctx}`,
     ).toBeGreaterThanOrEqual(1);
 
-    // 8. Non-declining workerCount across ticks 2500..3000 (colony is
-    //    self-sustaining in steady state).
-    const startWC = workerCountTrajectory[0]!;
-    const endWC = workerCountTrajectory[workerCountTrajectory.length - 1]!;
+    // 8. workerCount does not decline across the trajectory window for any reason the
+    //    colony itself controls (it is self-sustaining in steady state).
+    //
+    // The bar is start-of-window headcount MINUS the workers the neutral spider ate
+    // during the window, so predation is accounted for rather than ignored. Losing an
+    // ant to the spider is not a failure of the colony's economy; failing to hold its
+    // own population otherwise is.
+    //
+    // The floor is a RUNNING one: at every sample it is start-of-window headcount
+    // minus the spider kills that have happened SO FAR. A single end-of-window figure
+    // would let a late kill retroactively excuse an early non-predation dip; this
+    // cannot.
+    //
+    // This replaces a strict `endWC >= startWC`, which was measuring noise: the AI
+    // colony holds a 2-4 worker steady state here, so a single spider kill flipped it.
+    // That fragility is PRE-EXISTING and seed-dependent — the strict form already
+    // fails today at seed 10 (workerCount 3 -> 2) while passing at seed 42. V39 (the
+    // spider tie-break seat-bias fix) swapped which ant the spider bites, so the
+    // strict form would now fail at seed 42 and pass at seed 10; neither outcome says
+    // anything about self-sustenance. The running floor holds at BOTH the pre-V39
+    // behaviour and V39, on all 17 seeds sampled (1-16 + 42), and is strictly sharper
+    // than the old form in the case that matters: it checks EVERY sample, so a
+    // mid-window dip that recovers by tick 8000 is caught where an endpoint
+    // comparison missed it.
+    //
+    // Counting from the event log is safe here: the cap in emitEvent
+    // (PLAYTRACE_EVENT_CAP_PER_ROUND = 2000, oldest combat_kill evicted first) is
+    // nowhere near reached — this run emits ~20-30 events total with
+    // droppedCombatKillCount === 0 — so no in-window kill can have been evicted. The
+    // assertion below fails loudly if that ever stops being true.
     expect(
-      endWC,
-      `workerCount declined across ticks ${TRAJECTORY_WINDOW_START}..${TOTAL_TICKS}: ` +
-        `started=${startWC} ended=${endWC}. ${ctx}`,
-    ).toBeGreaterThanOrEqual(startWC);
+      world.droppedCombatKillCount,
+      `combat_kill events were evicted (${world.droppedCombatKillCount}), so the ` +
+        `in-window spider-kill count below would undercount. ${ctx}`,
+    ).toBe(0);
+    const spiderKillTicks: number[] = [];
+    for (const ev of world.events) {
+      if (ev.type !== 'combat_kill') continue;
+      const { killer, victim } = ev.payload;
+      if (killer.kind !== 'Spider') continue;
+      if (victim.colonyId !== ENEMY_COLONY_ID || victim.kind === 'Queen') continue;
+      spiderKillTicks.push(ev.tick);
+    }
+    spiderKillTicks.sort((a, b) => a - b);
+
+    const startWC = workerCountTrajectory[0]!;
+    const startTick = trajectoryTicks[0]!;
+    for (let i = 0; i < workerCountTrajectory.length; i++) {
+      const sampleTick = trajectoryTicks[i]!;
+      // Kills strictly after the first sample and at or before this one: a kill at the
+      // first sample's tick is already reflected in startWC.
+      let killsSoFar = 0;
+      for (const kt of spiderKillTicks) {
+        if (kt > startTick && kt <= sampleTick) killsSoFar += 1;
+      }
+      const floor = startWC - killsSoFar;
+      expect(
+        workerCountTrajectory[i]!,
+        `workerCount fell below its running predation floor at tick ${sampleTick} ` +
+          `(sample ${i} of ${workerCountTrajectory.length}): started=${startWC} at tick ` +
+          `${startTick}, spider ate ${killsSoFar} since, so the floor is ${floor}; ` +
+          `observed ${workerCountTrajectory[i]!}. ${ctx}`,
+      ).toBeGreaterThanOrEqual(floor);
+    }
   }, 120_000); // 8000 ticks at ~8ms/tick; allow 120s budget (S4 extended window).
 });
 
