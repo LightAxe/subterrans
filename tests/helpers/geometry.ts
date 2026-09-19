@@ -16,6 +16,8 @@ import {
   type SaveLoadDialogContext,
 } from '../../src/render/save-load-dialog-layout.js';
 import { buildHudLayout } from '../../src/render/hud-layout.js';
+import { opponentPickerLayout } from '../../src/render/boot-overlay-layout.js';
+import { JEV_ORDERS_PRESETS } from '../../src/render/jev-orders.js';
 
 export interface Rect {
   x: number;
@@ -71,3 +73,17 @@ export {
   SAVE_PROMPT_NEW_GAME_RECT,
   DIFFICULTY_NORMAL_RECT,
 } from '../../src/render/boot-overlay-layout.js';
+
+// W3 — opponent picker rects, evaluated from the same pure layout module the
+// overlay draws from, so the Jev spec clicks the real buttons without inlining a
+// single pixel (check-e2e-geometry.sh forbids that, and #186 is why).
+const picker = opponentPickerLayout(DEFAULT_LAYOUT, JEV_ORDERS_PRESETS.length);
+/** "Standard AI" / "Jev (beta)" toggle buttons on the difficulty overlay. */
+export const OPPONENT_RULES_RECT: Rect = picker.rulesButton;
+export const OPPONENT_JEV_RECT: Rect = picker.jevButton;
+/** Standing-orders preset buttons, index-aligned with JEV_ORDERS_PRESETS. */
+export const OPPONENT_PRESET_RECTS: readonly Rect[] = picker.presetButtons;
+/** The free-text rect the DOM <textarea> is positioned over. */
+export const OPPONENT_TEXTAREA_RECT: Rect = picker.textarea;
+/** Preset ids/labels, so the spec asserts against the shipped text, not a copy. */
+export { JEV_ORDERS_PRESETS } from '../../src/render/jev-orders.js';

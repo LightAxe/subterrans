@@ -44,6 +44,9 @@ import {
 import { deserializeWorldState } from '../platform/save.js';
 import { loadSettings, saveSettings } from '../platform/settings.js';
 import { runAIController, resetAIControllerCache } from './ai-controller.js';
+import { JevEnemyController } from './jev-enemy-controller.js';
+import { createJevClient } from './jev-client.js';
+import { DEFAULT_OPPONENT, type OpponentConfig, type OpponentStatus } from './opponent-config.js';
 import { buildDebugSnapshot } from '../platform/debug-snapshot.js';
 import { downloadDebugSnapshot } from './debug-snapshot-download.js';
 import { submitPlaytrace, type PlaytraceSurvey } from './playtrace-upload.js';
@@ -250,8 +253,14 @@ interface UIScenePhase9 {
   }): void;
   hideSurveyOverlay(): void;
   // S5 — difficulty select overlay. Shown before every new game.
+  // W3 — it now also carries the opponent picker, so onSelect reports the chosen
+  // OpponentConfig alongside the difficulty and the overlay is told whether the
+  // Jev opponent can be offered at all + which preference to pre-select.
   showDifficultySelectOverlay(callbacks: {
-    onSelect: (d: 'Easy' | 'Normal' | 'Hard') => void;
+    onSelect: (d: 'Easy' | 'Normal' | 'Hard', opponent: OpponentConfig) => void;
+    jevAvailable?: boolean;
+    initialOpponent?: OpponentConfig;
+    initialOrders?: string;
   }): void;
   hideDifficultySelectOverlay(): void;
   // S6 — first-occurrence caption overlay (light onboarding). Optional captionKey
@@ -275,6 +284,7 @@ interface UIScenePhase9 {
   flashPausedQueueFull?(paused: boolean): void;
 }
 import type { SimCommand } from '../sim/commands.js';
+import type { ColonyId } from '../sim/colony/colony-store.js';
 
 // Re-export GamePhase for Plan 07 and other consumers
 export { GamePhase, decideBootMode, deriveAIColonyIds, appendInputLog, generateFreshSeed };
@@ -552,6 +562,34 @@ export class GameScene extends Phaser.Scene {
   private playtraceEndpoint: string = '';
   private playtraceSessionId: string = '';
 
+  // Jev opponent (beta) — the enemy colony driven by TypeSafe's Jev model
+  // through a same-origin proxy instead of the rule-based AI controller.
+  // `jevEndpoint` comes from the registry (main.ts, VITE_JEV_ENDPOINT or
+  // MountOptions.jevEndpoint) and is the BASE path of that proxy — the client
+  // POSTs to `<base>/session` and `<base>/beat`. Empty string = feature off,
+  // exactly like the playtrace endpoint above.
+  private jevEndpoint: string = '';
+  /** What is actually driving the enemy colony this round (already downgraded
+   *  to rules when the feature is off — see `effectiveOpponent`). */
+  private currentOpponent: OpponentConfig = DEFAULT_OPPONENT;
+  /**
+   * The opponent-picker's choice: W3's difficulty-select overlay writes it before
+   * a new-game path runs, and the next `bootFresh` uses it. Null = the default
+   * (rule-based) opponent. Deliberately NOT cleared by `resetSessionState` — it
+   * is a lobby choice that outlives a round, like the difficulty selection.
+   */
+  private pendingOpponent: OpponentConfig | null = null;
+  /**
+   * The standing-orders text the player last committed this session, kept beside
+   * `pendingOpponent` for the same reason settings.jevOrders exists: a `rules`
+   * choice has nowhere to carry it, and the next overlay must still open with the
+   * text the player wrote. Null = nothing chosen yet this session (fall back to
+   * the persisted value).
+   */
+  private pendingOrders: string | null = null;
+  /** One controller per AI colony while the Jev opponent is active; empty otherwise. */
+  private readonly jevControllers: Map<ColonyId, JevEnemyController> = new Map();
+
   constructor() {
     super({ key: 'GameScene' });
   }
@@ -678,6 +716,10 @@ export class GameScene extends Phaser.Scene {
     // is treated as feature-off here too. main.ts normalizes at the
     // boundary; this is defense-in-depth for the registry value.
     this.playtraceEndpoint = typeof endpointRaw === 'string' ? endpointRaw.trim() : '';
+    // Jev opponent proxy endpoint — same registry convention, same defensive
+    // "any non-string means feature off" treatment.
+    const jevEndpointRaw: unknown = this.registry.get('jevEndpoint');
+    this.jevEndpoint = typeof jevEndpointRaw === 'string' ? jevEndpointRaw.trim() : '';
 
     // Input registration — keyboard is GameScene-only (Pitfall 2).
     this.cursors = this.input.keyboard!.createCursorKeys();
@@ -887,6 +929,9 @@ export class GameScene extends Phaser.Scene {
       },
       isPaused: () => isPausedByAny(this.pauseReasons),
       getSpeedMultiplier: () => this.speedMultiplier,
+      // W3 — live opponent state for the HUD label. UIScene throttles the read to
+      // once a second; it stays hidden entirely for the rule-based AI.
+      getOpponentStatus: () => this.getOpponentStatus(),
     });
     this.scene.bringToTop('UIScene');
 
@@ -1128,6 +1173,10 @@ export class GameScene extends Phaser.Scene {
     // doesn't suppress the first-tick SyncAIState, which would cause inputLog to diverge
     // from a fresh-page replay of the same save.
     resetAIControllerCache();
+    // Jev opponent controllers are per-round (they hold beat cadence, phase and
+    // failure counters). finishBoot rebuilds them for the new world; a stale one
+    // would keep marking dig tiles for a colony that no longer exists.
+    this.jevControllers.clear();
     // Render-only ant-facing smoothing: same rationale as the flow-field
     // caches. The AntFacingCache is keyed by ant id, and the new session
     // reuses ids 0..N from scratch — a stale heading from the prior session
@@ -1335,9 +1384,13 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private bootFresh(difficulty: 'Easy' | 'Normal' | 'Hard' = 'Normal'): void {
+  private bootFresh(
+    difficulty: 'Easy' | 'Normal' | 'Hard' = 'Normal',
+    opponent: OpponentConfig = DEFAULT_OPPONENT,
+  ): void {
     this.resetSessionState();
     this.currentDifficulty = difficulty;
+    this.currentOpponent = this.effectiveOpponent(opponent);
     // W1: seed formula — Date.now() is ~1.7e12, exceeds int32. Bitmask-clamp to positive int32.
     // Bitwise ops truncate to int32; 0x7fffffff mask ensures sign bit is clear.
     const seed = generateFreshSeed(Date.now());
@@ -1363,14 +1416,157 @@ export class GameScene extends Phaser.Scene {
     this.gamePhase = GamePhase.SavePrompt;
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     uiScene.showDifficultySelectOverlay({
-      onSelect: (d) => {
-        this.bootFresh(d);
+      ...this.difficultySelectSeed(),
+      onSelect: (d, opponent) => {
+        this.applyOpponentChoice(opponent);
+        this.bootFresh(d, this.nextOpponent());
         if (preserveFutureSave) {
           // Set after bootFresh — resetSessionState clears the flag.
           this.autosaveSuspended = true;
         }
       },
     });
+  }
+
+  /**
+   * The opponent the next NEW game should use — `pendingOpponent` as written by
+   * the difficulty-select overlay's picker (W3), falling back to the rule-based
+   * AI when nothing set it (a boot path that never showed the overlay).
+   */
+  private nextOpponent(): OpponentConfig {
+    return this.pendingOpponent ?? DEFAULT_OPPONENT;
+  }
+
+  /**
+   * Everything a new-game path must do with the overlay's opponent choice:
+   * arm the `pendingOpponent` seam `bootFresh` reads through `nextOpponent()`,
+   * and persist the preference so the NEXT overlay pre-selects it. The write is
+   * read-modify-write against the live settings blob (never a partial overwrite)
+   * and is best-effort — saveSettings swallows quota / private-mode failures.
+   *
+   * Two things it deliberately does NOT do:
+   *
+   *   - It never writes a forced `rules` choice on a build with NO proxy
+   *     endpoint. The picker can only ever commit `rules` there, so writing it
+   *     would erase a Jev preference the player set on a build that HAS the
+   *     endpoint — the overlay literally told them "(unavailable in this build)",
+   *     it must not also forget their choice. The stored value is meaningless on
+   *     such a build anyway, since nothing else can be selected.
+   *   - It never clears `jevOrders`. Choosing the Standard AI stores
+   *     `{ kind: 'rules' }`, whose union arm has nowhere to carry the orders
+   *     text; persisting the text separately is what keeps one round against the
+   *     Standard AI from throwing away 300 hand-written characters.
+   */
+  private applyOpponentChoice(opponent: OpponentConfig): void {
+    this.pendingOpponent = opponent;
+    if (opponent.kind === 'jev') this.pendingOrders = opponent.orders;
+    if (opponent.kind === 'rules' && !this.isJevAvailable()) return;
+    const persisted = loadSettings();
+    persisted.opponent = opponent;
+    if (opponent.kind === 'jev') persisted.jevOrders = opponent.orders;
+    saveSettings(persisted);
+  }
+
+  /** Callback payload shared by every path that opens the difficulty overlay, so
+   *  the picker is seeded identically on first boot, New Game and restart.
+   *
+   *  The in-memory `pendingOpponent` / `pendingOrders` win over the persisted
+   *  values, mirroring the pheromone/hint toggles (Codex round-6 P2): where
+   *  localStorage writes are blocked (private mode, quota) saveSettings is a
+   *  silent no-op and loadSettings would hand back the DEFAULT on the next open —
+   *  throwing away a choice the player made two minutes ago. Falls back to storage
+   *  on the first overlay of the session, which is exactly what it is for. */
+  private difficultySelectSeed(): {
+    jevAvailable: boolean;
+    initialOpponent: OpponentConfig;
+    initialOrders: string;
+  } {
+    const persisted = loadSettings();
+    return {
+      jevAvailable: this.isJevAvailable(),
+      initialOpponent: this.pendingOpponent ?? persisted.opponent,
+      initialOrders: this.pendingOrders ?? persisted.jevOrders,
+    };
+  }
+
+  /**
+   * Downgrade a requested opponent to what can actually run. Asking for the Jev
+   * opponent with no endpoint configured (open-source build, missing env var, a
+   * save carried over from a build that had it) silently plays the rule-based
+   * AI rather than failing the boot — the endpoint is the feature flag.
+   */
+  private effectiveOpponent(requested: OpponentConfig): OpponentConfig {
+    if (requested.kind === 'jev' && this.jevEndpoint === '') return DEFAULT_OPPONENT;
+    return requested;
+  }
+
+  /** True when the Jev opponent can be offered at all (proxy endpoint configured). */
+  isJevAvailable(): boolean {
+    return this.jevEndpoint !== '';
+  }
+
+  /**
+   * Live opponent state for a HUD label / telemetry. `status` is 'rules' for the
+   * rule-based AI, 'jev' while the Jev opponent is driving, and 'fallback' once
+   * three consecutive beats failed and the rule-based AI took over mid-round.
+   * `probe` is the most advanced readiness-probe state across controllers (ok >
+   * failed > pending > null) — see JevEnemyController's header comment.
+   */
+  getOpponentStatus(): OpponentStatus {
+    let beats = 0;
+    let failedBeats = 0;
+    let lastLatencyMs: number | null = null;
+    let anyFallback = false;
+    let probe: OpponentStatus['probe'] = null;
+    const probeRank = (p: OpponentStatus['probe']): number =>
+      p === 'ok' ? 3 : p === 'failed' ? 2 : p === 'pending' ? 1 : 0;
+    for (const c of this.jevControllers.values()) {
+      beats += c.beats;
+      failedBeats += c.failedBeats;
+      if (c.lastLatencyMs !== null) lastLatencyMs = c.lastLatencyMs;
+      if (c.status === 'fallback') anyFallback = true;
+      if (probeRank(c.probe) > probeRank(probe)) probe = c.probe;
+    }
+    const status = this.jevControllers.size === 0 ? 'rules' : anyFallback ? 'fallback' : 'jev';
+    return { kind: this.currentOpponent.kind, status, beats, failedBeats, lastLatencyMs, probe };
+  }
+
+  /**
+   * Build the per-AI-colony controllers for `currentOpponent`. Called from
+   * finishBoot, after `aiColonyIds` is derived and after `resetSessionState`
+   * cleared the previous round's controllers. A `rules` opponent (or a `jev`
+   * one that got downgraded because the endpoint is empty) leaves the map empty
+   * and the loop keeps calling `runAIController`.
+   */
+  private createOpponentControllers(): void {
+    this.jevControllers.clear();
+    const opponent = this.currentOpponent;
+    if (opponent.kind !== 'jev' || this.jevEndpoint === '') return;
+    for (const aiCid of this.aiColonyIds) {
+      this.jevControllers.set(
+        aiCid,
+        new JevEnemyController({
+          seats: { mySeat: aiCid, opponentSeat: PLAYER_COLONY_ID },
+          // One client per seat: a client owns ONE proxy session, and a session
+          // carries a token, an expiry and a beat budget. Sharing one across
+          // seats would have two controllers spending — and silently re-minting
+          // — each other's.
+          client: createJevClient({ base: this.jevEndpoint }),
+          orders: opponent.orders,
+          onFallback: () => this.notifyJevFallback(),
+        }),
+      );
+    }
+  }
+
+  /** Caption shown once when the Jev opponent gives up and the rule-based AI takes over. */
+  private notifyJevFallback(): void {
+    const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9 | null;
+    uiScene?.showCaption(
+      'Jev is unavailable — the standard AI has taken over',
+      this.layout.w / 2,
+      60,
+    );
   }
 
   private async bootFromSave(): Promise<void> {
@@ -1430,6 +1626,12 @@ export class GameScene extends Phaser.Scene {
     this.currentSeed = loaded.seed;
     this.world = nextWorld;
     this.currentDifficulty = nextWorld.difficulty; // S5 — restore difficulty from save
+    // Restore the opponent the round was started with. Absent (every pre-feature
+    // envelope) means the rule-based AI; a `jev` preference with no endpoint
+    // configured is downgraded to rules here, silently. The controller detects
+    // its own phase from the loaded world (opening vs live), so a mid-round
+    // resume does not restart the opening.
+    this.currentOpponent = this.effectiveOpponent(loaded.opponent ?? DEFAULT_OPPONENT);
     this.resumedFromSave = true;
     // Seed the render event cursor from the saved world so the first render
     // frame after resume doesn't replay historical events as new and re-fire
@@ -1466,12 +1668,18 @@ export class GameScene extends Phaser.Scene {
     // B1: world.colonies is a PLAIN OBJECT per ADR-0006.
     // Use Object.keys — NEVER .keys()/.entries()/.get() (those are Map APIs).
     this.aiColonyIds = deriveAIColonyIds(this.world, PLAYER_COLONY_ID);
+    this.createOpponentControllers();
 
     this.gameLoop = createGameLoop(tick, this.world, {
       onBeforeTick: (w) => {
-        // Run AI for all AI colonies FIRST (AI commands enqueued before drain)
+        // Run AI for all AI colonies FIRST (AI commands enqueued before drain).
+        // The Jev opponent replaces runAIController for a colony when it is
+        // driving that seat; it falls back to runAIController itself if the
+        // proxy stops answering, so this dispatch never has to change.
         for (const aiCid of this.aiColonyIds) {
-          runAIController(w, aiCid);
+          const jev = this.jevControllers.get(aiCid);
+          if (jev !== undefined) jev.onBeforeTick(w);
+          else runAIController(w, aiCid);
         }
         // Then snapshot prevState for render interpolation
         copyWorldState(w, this.prevState);
@@ -1694,6 +1902,7 @@ export class GameScene extends Phaser.Scene {
             seed,
             inputLog: inputLogCopy,
             resumedFromSave: this.resumedFromSave,
+            opponent: this.currentOpponent,
             survey: {
               rating: survey.rating,
               freeText: survey.freeText,
@@ -1904,7 +2113,12 @@ export class GameScene extends Phaser.Scene {
         // preserved bytes. Surface as a failed save so the player gets a
         // flash and can recover via Delete / a newer-build reload.
         if (this.autosaveSuspended) return false;
-        const ok = await manualSave(this.currentSeed, this.inputLog, this.world);
+        const ok = await manualSave(
+          this.currentSeed,
+          this.inputLog,
+          this.world,
+          this.currentOpponent,
+        );
         // Round-2 review: bump the autosave cooldown so the next autosave
         // window doesn't fire seconds later and overwrite the manual save's
         // timestamp. The dialog's "Saved 15:32" line otherwise jumps to
@@ -1955,8 +2169,10 @@ export class GameScene extends Phaser.Scene {
     // bootFresh is invoked inside the callback so wasSuspended is captured.
     this.gamePhase = GamePhase.SavePrompt; // prevent update() from ticking the old world during overlay
     uiScene.showDifficultySelectOverlay({
-      onSelect: (d) => {
-        this.bootFresh(d);
+      ...this.difficultySelectSeed(),
+      onSelect: (d, opponent) => {
+        this.applyOpponentChoice(opponent);
+        this.bootFresh(d, this.nextOpponent());
         if (wasSuspended) {
           this.autosaveSuspended = true;
         }
@@ -2277,6 +2493,7 @@ export class GameScene extends Phaser.Scene {
         this.lastAutosaveMs,
         time,
         () => this.notifyAutosaveFailed(),
+        this.currentOpponent,
       )
         .then((next) => {
           this.lastAutosaveMs = next;

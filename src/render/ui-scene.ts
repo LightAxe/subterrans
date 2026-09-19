@@ -145,6 +145,11 @@ import {
   DIFFICULTY_EASY_RECT,
   DIFFICULTY_NORMAL_RECT,
   DIFFICULTY_HARD_RECT,
+  DIFFICULTY_TITLE_Y,
+  DIFFICULTY_SUBTITLE_Y,
+  DIFFICULTY_HINT_Y,
+  opponentPickerLayout,
+  type BootOverlayRect,
 } from './boot-overlay-layout.js';
 export {
   SAVE_PROMPT_CONTINUE_RECT,
@@ -154,6 +159,26 @@ export {
   DIFFICULTY_NORMAL_RECT,
   DIFFICULTY_HARD_RECT,
 };
+// W3 — opponent picker (Jev opponent beta). The overlay owns only the Phaser
+// objects + the DOM <textarea>; every transition runs through the pure state
+// module so the behavior is unit-tested without a scene.
+import {
+  DEFAULT_OPPONENT,
+  formatOpponentStatusLabel,
+  type OpponentConfig,
+  type OpponentStatus,
+} from './opponent-config.js';
+import { JEV_ORDERS_MAX_LENGTH, JEV_ORDERS_PRESETS, normalizeOrders } from './jev-orders.js';
+import {
+  createOpponentPickerState,
+  editText,
+  formatOrdersCounter,
+  isPresetSelected,
+  selectPreset,
+  toConfig,
+  toggleKind,
+  type OpponentPickerState,
+} from './opponent-picker-state.js';
 import {
   createSliderDragState,
   drawSlider,
@@ -388,6 +413,12 @@ const STATS_ROW1_Y = DEFAULT_STATS.y + HUD_STATS_LAYOUT.row1YOffset;
 const STATS_ROW2_Y = DEFAULT_STATS.y + HUD_STATS_LAYOUT.row2YOffset;
 const STATS_TEXT_X = DEFAULT_STATS.x + HUD_STATS_LAYOUT.leftTextInset;
 
+/** W3 — minimum gap between two refreshes of the Jev-opponent HUD label. The
+ *  underlying beat counters advance on the order of seconds, so anything finer
+ *  just churns a Phaser Text. Time-based, not frame-based, so the cadence is the
+ *  same at 30 fps and 144 fps. */
+const OPPONENT_STATUS_REFRESH_MS = 1000;
+
 export class UIScene extends Phaser.Scene {
   /**
    * Issue #213 — the LayoutContext seam. All HUD/overlay geometry derives from
@@ -501,12 +532,36 @@ export class UIScene extends Phaser.Scene {
   // Updated at the end of each update() when the menu is visible.
   private contextMenuVisibleItems: readonly ContextMenuItem[] = CONTEXT_MENU_ITEMS;
   private antActivityText!: Phaser.GameObjects.Text;
+  // W3 — the Jev-opponent HUD label (hud.OPPONENT_STATUS). Hidden whenever the
+  // rule-based AI is driving; refreshed at most once a second (see update()).
+  private opponentStatusText!: Phaser.GameObjects.Text;
+  private getOpponentStatusFn: (() => OpponentStatus) | null = null;
+  /** Wall-clock (Phaser scene time) at which the opponent label may refresh
+   *  again. 0 = refresh on the next frame. */
+  private opponentStatusNextMs = 0;
   private dragState!: SliderDragState;
 
   // Phase 9 Plan 06 — overlay groups (null = overlay not currently shown)
   private gameOverGroup: Phaser.GameObjects.GameObject[] = [];
   private savePromptGroup: Phaser.GameObjects.GameObject[] = [];
   private difficultySelectGroup: Phaser.GameObjects.GameObject[] = [];
+  // W3 — difficulty-select overlay state. The overlay is re-rendered in place on
+  // every opponent-picker interaction (same pattern as the survey overlay), so
+  // the callbacks are captured at show time and the picker state lives here.
+  private difficultySelectCallbacks: DifficultySelectCallbacks | null = null;
+  private opponentPicker: OpponentPickerState = createOpponentPickerState({
+    saved: DEFAULT_OPPONENT,
+    jevAvailable: false,
+  });
+  /** The live "n/300" counter Text, kept out of the destroy/rebuild path of a
+   *  keystroke so typing only rewrites one label instead of the whole overlay. */
+  private opponentCounterText: Phaser.GameObjects.Text | null = null;
+  /** DOM <textarea> overlaid on the standing-orders rect. NOT part of
+   *  difficultySelectGroup (Phaser can't destroy it) — torn down explicitly. */
+  private opponentTextarea: HTMLTextAreaElement | null = null;
+  /** Bound resize handler, kept on the instance so add/removeEventListener see
+   *  the same reference (mirrors surveyResizeHandler). */
+  private opponentResizeHandler: (() => void) | null = null;
   // Issue #116 — pause menu overlay state. Empty group means "not visible";
   // page tracks which sub-screen is currently rendered. callbacks/saveLoadEnabled
   // are captured at show time so we can re-render on page navigation without
@@ -564,6 +619,9 @@ export class UIScene extends Phaser.Scene {
     onMinimapNav?: () => void;
     isPaused?: () => boolean;
     getSpeedMultiplier?: () => 1 | 2 | 4;
+    // W3 — live opponent state for the HUD label. Optional so non-GameScene
+    // consumers (tests, harnesses) need not supply it; absent = no label.
+    getOpponentStatus?: () => OpponentStatus;
   }) {
     this.viewState = data.viewState;
     this.getWorld = data.getWorld;
@@ -575,6 +633,7 @@ export class UIScene extends Phaser.Scene {
     this.onMinimapNav = data.onMinimapNav ?? null;
     this.isPausedFn = data.isPaused ?? null;
     this.getSpeedMultiplierFn = data.getSpeedMultiplier ?? null;
+    this.getOpponentStatusFn = data.getOpponentStatus ?? null;
   }
 
   create() {
@@ -759,6 +818,21 @@ export class UIScene extends Phaser.Scene {
     this.antActivityText.setScrollFactor(0);
     this.antActivityText.setVisible(false);
     this.antActivityText.setDepth(11);
+
+    // W3 — Jev-opponent status label. Right-anchored (origin 1,0) at the right
+    // edge of hud.OPPONENT_STATUS so the text grows leftwards into the empty top
+    // strip instead of running under the save icon. Created hidden: a round
+    // against the rule-based AI never shows it.
+    this.opponentStatusText = this.add.text(
+      this.hud.OPPONENT_STATUS.x + this.hud.OPPONENT_STATUS.w,
+      this.hud.OPPONENT_STATUS.y,
+      '',
+      { color: '#9fb4c7', fontSize: '10px', fontFamily: 'monospace' },
+    );
+    this.opponentStatusText.setOrigin(1, 0);
+    this.opponentStatusText.setScrollFactor(0);
+    this.opponentStatusText.setVisible(false);
+    this.opponentStatusText.setDepth(11);
 
     // UIScene is the single owner of Esc. Precedence (close topmost UI first):
     //   1. Save/Load dialog visible → close + onBack (returns to pause menu)
@@ -1044,6 +1118,10 @@ export class UIScene extends Phaser.Scene {
       this.hideSaveLoadDialogOverlay();
       this.hidePauseMenuOverlay();
       this.hideSurveyOverlay();
+      // W3 — the difficulty overlay owns a DOM <textarea> + a window resize
+      // listener once the Jev opponent is selected, so it must be torn down on
+      // shutdown/destroy exactly like the survey overlay's.
+      this.hideDifficultySelectOverlay();
       hideAntActivityPanel();
       setActiveOverlay('none');
     };
@@ -1081,6 +1159,31 @@ export class UIScene extends Phaser.Scene {
   }
 
   /**
+   * W3 — refresh the Jev-opponent HUD label. Throttled to at most once a second:
+   * the underlying counters only move on a decision beat (seconds apart), and the
+   * label is a status readout, not a live gauge — re-laying out a Phaser Text
+   * every frame for it would be pure waste. Hidden entirely while the rule-based
+   * AI drives the enemy colony (formatOpponentStatusLabel returns null), so the
+   * default experience gains no HUD chrome at all.
+   */
+  private renderOpponentStatus(time: number): void {
+    if (time < this.opponentStatusNextMs) return;
+    this.opponentStatusNextMs = time + OPPONENT_STATUS_REFRESH_MS;
+    const get = this.getOpponentStatusFn;
+    if (get === null) {
+      this.opponentStatusText.setVisible(false);
+      return;
+    }
+    const label = formatOpponentStatusLabel(get());
+    if (label === null) {
+      this.opponentStatusText.setVisible(false);
+      return;
+    }
+    this.opponentStatusText.setText(label);
+    this.opponentStatusText.setVisible(true);
+  }
+
+  /**
    * #278 — (re)bake the static minimap layer into its RenderTexture. Stamps
    * bakeMinimapDapple (texture-LOCAL coords, origin 0,0) via the off-display-list
    * baker, then draws the baker into the RT (positioned at the minimap rect). The
@@ -1101,7 +1204,7 @@ export class UIScene extends Phaser.Scene {
     this.minimapBaker.clear();
   }
 
-  update() {
+  update(time: number) {
     // Apply any pending show/hide from the previous frame's pointerdown dispatch
     // BEFORE reading the state, so cross-scene race conditions are resolved
     // deterministically at the frame boundary. Hide runs first so if both are
@@ -1280,6 +1383,7 @@ export class UIScene extends Phaser.Scene {
     this.renderToolPalette();
     this.renderHintStrip();
     this.renderSpeedWidget();
+    this.renderOpponentStatus(time);
 
     // Ant-activity popup — live refresh when visible. Drawn before the
     // context menu so a visible chamber menu stays on top (the underground
@@ -1879,35 +1983,79 @@ export class UIScene extends Phaser.Scene {
   }
 
   // ---------------------------------------------------------------------------
-  // S5 — Difficulty select overlay
+  // S5 — Difficulty select overlay  (+ W3 opponent picker)
   //
-  // Shown before every new game. Player chooses Easy / Normal / Hard; the
-  // choice is passed to createScenario via the onSelect callback. No cancel
-  // button — the player must choose before the world is created.
+  // Shown before every new game, including restart. The three difficulty buttons
+  // are the START action: clicking one closes the overlay and boots that
+  // difficulty against whatever opponent is configured in the section below them.
+  //
+  // W3 added that section: a "Standard AI" / "Jev (beta)" toggle and, when Jev is
+  // selected, the standing-orders presets plus an editable free-text field. The
+  // free-text field is a real DOM <textarea> positioned over the canvas — the
+  // same approach (and the same reasoning: caret, selection, IME, paste and
+  // accessibility are the browser's job) the survey overlay already uses, sharing
+  // its create/position helpers. Deliberately NOT a Phaser DOM GameObject, so
+  // `dom.createContainer` stays off in the Phaser config and the element lives in
+  // the canvas's own stacking context (shadow-DOM embeds keep working).
+  //
+  // Every picker interaction re-renders the overlay in place (destroy + rebuild
+  // the Phaser group), exactly like the survey overlay. The textarea is NOT part
+  // of that group, so a re-render never steals focus or resets the caret.
+  //
+  // All decision logic — which toggle is lit, which preset is highlighted, what
+  // the commit produces — lives in the pure opponent-picker-state module.
   // ---------------------------------------------------------------------------
 
-  public showDifficultySelectOverlay(callbacks: {
-    onSelect: (d: 'Easy' | 'Normal' | 'Hard') => void;
-  }): void {
+  public showDifficultySelectOverlay(callbacks: DifficultySelectCallbacks): void {
     this.hideDifficultySelectOverlay();
+    this.difficultySelectCallbacks = callbacks;
+    // Seed from the player's persisted preference. A `jev` preference on a build
+    // with no proxy endpoint is downgraded here, mirroring GameScene's boot-time
+    // effectiveOpponent downgrade, so the overlay never offers what can't run.
+    this.opponentPicker = createOpponentPickerState({
+      saved: callbacks.initialOpponent ?? DEFAULT_OPPONENT,
+      savedOrders: callbacks.initialOrders,
+      jevAvailable: callbacks.jevAvailable ?? false,
+    });
+    this.renderDifficultySelectOverlay();
+  }
+
+  public hideDifficultySelectOverlay(): void {
+    for (const obj of this.difficultySelectGroup) obj.destroy();
+    this.difficultySelectGroup = [];
+    this.difficultySelectCallbacks = null;
+    this.opponentCounterText = null;
+    this.removeOpponentTextarea();
+    this.recomputeActiveOverlay();
+  }
+
+  /** Render (or re-render) the overlay in place. Called on show and after every
+   *  opponent-picker interaction so the highlight, the counter and the
+   *  standing-orders section reflect the latest state. */
+  private renderDifficultySelectOverlay(): void {
+    for (const obj of this.difficultySelectGroup) obj.destroy();
+    this.difficultySelectGroup = [];
+    this.opponentCounterText = null;
 
     const { w: W, h: H } = this.layout;
 
     const bg = this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.75);
     bg.setInteractive();
     bg.setDepth(20);
+    this.difficultySelectGroup.push(bg);
 
-    const title = this.add.text(W / 2, H / 2 - 100, 'Choose Difficulty', {
+    const title = this.add.text(W / 2, DIFFICULTY_TITLE_Y, 'Choose Difficulty', {
       fontSize: '28px',
       fontFamily: 'monospace',
       color: '#ffffff',
     });
     title.setOrigin(0.5);
     title.setDepth(21);
+    this.difficultySelectGroup.push(title);
 
     const subtitle = this.add.text(
       W / 2,
-      H / 2 - 60,
+      DIFFICULTY_SUBTITLE_Y,
       "Affects the enemy colony's aggression and reproduction rate.",
       {
         fontSize: '13px',
@@ -1917,65 +2065,300 @@ export class UIScene extends Phaser.Scene {
     );
     subtitle.setOrigin(0.5);
     subtitle.setDepth(21);
+    this.difficultySelectGroup.push(subtitle);
 
-    const makeButton = (
-      label: string,
-      desc: string,
-      rect: { x: number; y: number; w: number; h: number },
-      color: number,
-      difficulty: 'Easy' | 'Normal' | 'Hard',
-    ): Phaser.GameObjects.GameObject[] => {
-      const btnBg = this.add.rectangle(
-        rect.x + rect.w / 2,
-        rect.y + rect.h / 2,
-        rect.w,
-        rect.h,
-        color,
-        1,
+    // The difficulty buttons both configure AND start, and the opponent section
+    // sits below them — say so, or a player never scrolls their eyes down. Only
+    // worth saying on a build that can actually offer a choice: with no proxy
+    // endpoint the section below is one disabled button, and pointing at it
+    // would be a worse first impression than saying nothing.
+    if (this.opponentPicker.jevAvailable) {
+      const hint = this.add.text(
+        W / 2,
+        DIFFICULTY_HINT_Y,
+        'Set the opponent below first — picking a difficulty starts the game.',
+        { fontSize: '11px', fontFamily: 'monospace', color: '#8a8a8a' },
       );
-      btnBg.setInteractive();
-      btnBg.setDepth(21);
-      btnBg.on('pointerdown', () => {
-        this.hideDifficultySelectOverlay();
-        callbacks.onSelect(difficulty);
-      });
+      hint.setOrigin(0.5);
+      hint.setDepth(21);
+      this.difficultySelectGroup.push(hint);
+    }
 
-      const btnLabel = this.add.text(rect.x + rect.w / 2, rect.y + 12, label, {
-        fontSize: '15px',
-        fontFamily: 'monospace',
-        color: '#ffffff',
-      });
-      btnLabel.setOrigin(0.5, 0);
-      btnLabel.setDepth(22);
+    this.addDifficultyButton('Easy', 'Slower AI', DIFFICULTY_EASY_RECT, 0x226622, 'Easy');
+    this.addDifficultyButton('Normal', 'Balanced', DIFFICULTY_NORMAL_RECT, 0x224466, 'Normal');
+    this.addDifficultyButton('Hard', 'Faster AI', DIFFICULTY_HARD_RECT, 0x662222, 'Hard');
 
-      const btnDesc = this.add.text(rect.x + rect.w / 2, rect.y + 28, desc, {
-        fontSize: '10px',
-        fontFamily: 'monospace',
-        color: '#cccccc',
-        wordWrap: { width: rect.w - 8 },
-      });
-      btnDesc.setOrigin(0.5, 0);
-      btnDesc.setDepth(22);
+    this.renderOpponentPicker();
 
-      return [btnBg, btnLabel, btnDesc];
-    };
-
-    const easyR = DIFFICULTY_EASY_RECT;
-    const normR = DIFFICULTY_NORMAL_RECT;
-    const hardR = DIFFICULTY_HARD_RECT;
-
-    const easyObjs = makeButton('Easy', 'Slower AI', easyR, 0x226622, 'Easy');
-    const normObjs = makeButton('Normal', 'Balanced', normR, 0x224466, 'Normal');
-    const hardObjs = makeButton('Hard', 'Faster AI', hardR, 0x662222, 'Hard');
-
-    this.difficultySelectGroup = [bg, title, subtitle, ...easyObjs, ...normObjs, ...hardObjs];
     this.recomputeActiveOverlay();
   }
 
-  public hideDifficultySelectOverlay(): void {
-    for (const obj of this.difficultySelectGroup) obj.destroy();
-    this.difficultySelectGroup = [];
-    this.recomputeActiveOverlay();
+  /** One difficulty button: label + one-line description, and the click that
+   *  commits the whole overlay (difficulty + the configured opponent). */
+  private addDifficultyButton(
+    label: string,
+    desc: string,
+    rect: BootOverlayRect,
+    color: number,
+    difficulty: 'Easy' | 'Normal' | 'Hard',
+  ): void {
+    const btnBg = this.add.rectangle(
+      rect.x + rect.w / 2,
+      rect.y + rect.h / 2,
+      rect.w,
+      rect.h,
+      color,
+      1,
+    );
+    btnBg.setInteractive();
+    btnBg.setDepth(21);
+    btnBg.on('pointerdown', () => {
+      // Read the callbacks and freeze the opponent BEFORE hiding: hide clears
+      // both the callbacks field and the picker's DOM textarea.
+      const cb = this.difficultySelectCallbacks;
+      const opponent = toConfig(this.opponentPicker);
+      this.hideDifficultySelectOverlay();
+      cb?.onSelect(difficulty, opponent);
+    });
+    this.difficultySelectGroup.push(btnBg);
+
+    const btnLabel = this.add.text(rect.x + rect.w / 2, rect.y + 12, label, {
+      fontSize: '15px',
+      fontFamily: 'monospace',
+      color: '#ffffff',
+    });
+    btnLabel.setOrigin(0.5, 0);
+    btnLabel.setDepth(22);
+    this.difficultySelectGroup.push(btnLabel);
+
+    const btnDesc = this.add.text(rect.x + rect.w / 2, rect.y + 28, desc, {
+      fontSize: '10px',
+      fontFamily: 'monospace',
+      color: '#cccccc',
+      wordWrap: { width: rect.w - 8 },
+    });
+    btnDesc.setOrigin(0.5, 0);
+    btnDesc.setDepth(22);
+    this.difficultySelectGroup.push(btnDesc);
+  }
+
+  /** W3 — the opponent section below the difficulty row. */
+  private renderOpponentPicker(): void {
+    const picker = this.opponentPicker;
+    const geo = opponentPickerLayout(this.layout, JEV_ORDERS_PRESETS.length);
+
+    const kindLabel = this.add.text(geo.kindLabel.x, geo.kindLabel.y, 'Opponent:', {
+      fontSize: '12px',
+      fontFamily: 'monospace',
+      color: '#cccccc',
+    });
+    kindLabel.setOrigin(0, 0);
+    kindLabel.setDepth(21);
+    this.difficultySelectGroup.push(kindLabel);
+
+    this.addPickerToggle({
+      rect: geo.rulesButton,
+      label: 'Standard AI',
+      selected: picker.kind === 'rules',
+      enabled: true,
+      fontSize: '13px',
+      onPick: () => this.applyPickerState(toggleKind(this.opponentPicker, 'rules')),
+    });
+    this.addPickerToggle({
+      rect: geo.jevButton,
+      label: 'Jev (beta)',
+      selected: picker.kind === 'jev',
+      enabled: picker.jevAvailable,
+      fontSize: '13px',
+      onPick: () => this.applyPickerState(toggleKind(this.opponentPicker, 'jev')),
+    });
+
+    if (picker.kind !== 'jev') {
+      // Standard AI (or a build with no proxy endpoint): no standing orders, and
+      // no stray DOM element left hanging over the canvas.
+      this.removeOpponentTextarea();
+      if (!picker.jevAvailable) {
+        const note = this.add.text(
+          geo.unavailableNote.x,
+          geo.unavailableNote.y,
+          '(unavailable in this build)',
+          { fontSize: '11px', fontFamily: 'monospace', color: '#777777' },
+        );
+        note.setOrigin(0.5, 0);
+        note.setDepth(21);
+        this.difficultySelectGroup.push(note);
+      }
+      return;
+    }
+
+    const ordersLabel = this.add.text(geo.ordersLabel.x, geo.ordersLabel.y, 'Standing orders', {
+      fontSize: '12px',
+      fontFamily: 'monospace',
+      color: '#cccccc',
+    });
+    ordersLabel.setOrigin(0, 0);
+    ordersLabel.setDepth(21);
+    this.difficultySelectGroup.push(ordersLabel);
+
+    JEV_ORDERS_PRESETS.forEach((preset, i) => {
+      const rect = geo.presetButtons[i];
+      if (rect === undefined) return; // geometry is built from this same length
+      this.addPickerToggle({
+        rect,
+        label: preset.label,
+        selected: isPresetSelected(picker, preset.id),
+        enabled: true,
+        fontSize: '11px',
+        onPick: () => this.applyPickerState(selectPreset(this.opponentPicker, preset.id)),
+      });
+    });
+
+    // Free-text rect background. The editable surface is the DOM textarea
+    // positioned over it — see ensureOpponentTextarea.
+    const ta = geo.textarea;
+    const taBg = this.add.rectangle(ta.x + ta.w / 2, ta.y + ta.h / 2, ta.w, ta.h, 0x222222, 1);
+    taBg.setDepth(21);
+    this.difficultySelectGroup.push(taBg);
+    this.ensureOpponentTextarea();
+
+    // Three mutually exclusive states: a highlighted preset; custom (non-empty)
+    // text with none highlighted; or the text cleared to empty, which sends no
+    // `standing_orders` field at all rather than being "custom" with nothing in
+    // it. No preset's text can normalize to empty (jev-orders.ts), so these
+    // never overlap.
+    let hintText: string;
+    if (picker.presetId !== null) {
+      hintText = 'Preset orders — edit the text to make them custom.';
+    } else if (normalizeOrders(picker.text) === '') {
+      hintText = 'No standing orders — Jev decides on its own.';
+    } else {
+      hintText = 'Custom orders — Jev follows these above everything else.';
+    }
+    const editHint = this.add.text(geo.hint.x, geo.hint.y, hintText, {
+      fontSize: '10px',
+      fontFamily: 'monospace',
+      color: '#8a8a8a',
+    });
+    editHint.setOrigin(0, 0);
+    editHint.setDepth(21);
+    this.difficultySelectGroup.push(editHint);
+
+    const counter = this.add.text(geo.counter.x, geo.counter.y, formatOrdersCounter(picker), {
+      fontSize: '10px',
+      fontFamily: 'monospace',
+      color: '#8a8a8a',
+    });
+    counter.setOrigin(1, 0);
+    counter.setDepth(21);
+    this.difficultySelectGroup.push(counter);
+    this.opponentCounterText = counter;
+  }
+
+  /** A two-state picker button (opponent kind or standing-orders preset).
+   *  `enabled: false` renders it dimmed and wires no handler. */
+  private addPickerToggle(opts: {
+    rect: BootOverlayRect;
+    label: string;
+    selected: boolean;
+    enabled: boolean;
+    fontSize: string;
+    onPick: () => void;
+  }): void {
+    const { rect, selected, enabled } = opts;
+    const fill = !enabled ? 0x262626 : selected ? 0x2f6f4f : 0x3a3a3a;
+    const box = this.add.rectangle(
+      rect.x + rect.w / 2,
+      rect.y + rect.h / 2,
+      rect.w,
+      rect.h,
+      fill,
+      1,
+    );
+    if (selected) box.setStrokeStyle(2, 0x7fd4a8, 1);
+    box.setDepth(21);
+    if (enabled) {
+      box.setInteractive();
+      box.on('pointerdown', opts.onPick);
+    }
+    this.difficultySelectGroup.push(box);
+
+    const label = this.add.text(rect.x + rect.w / 2, rect.y + rect.h / 2, opts.label, {
+      fontSize: opts.fontSize,
+      fontFamily: 'monospace',
+      color: !enabled ? '#666666' : selected ? '#ffffff' : '#bbbbbb',
+    });
+    label.setOrigin(0.5);
+    label.setDepth(22);
+    this.difficultySelectGroup.push(label);
+  }
+
+  /** Commit a picker transition and redraw. No-op when the pure transition
+   *  returned the same state object (e.g. re-clicking the lit toggle). */
+  private applyPickerState(next: OpponentPickerState): void {
+    if (next === this.opponentPicker) return;
+    this.opponentPicker = next;
+    this.renderDifficultySelectOverlay();
+  }
+
+  /** Free-text edit from the DOM textarea. Rebuilds the overlay only when the
+   *  preset highlight actually flips (preset → custom, once per edit session);
+   *  otherwise just rewrites the "n/300" counter, so typing doesn't churn ~30
+   *  Phaser objects per keystroke. Safe either way: the textarea lives outside
+   *  difficultySelectGroup, so a rebuild can't disturb focus or the caret. */
+  private onOpponentOrdersInput(value: string): void {
+    const next = editText(this.opponentPicker, value);
+    const presetChanged = next.presetId !== this.opponentPicker.presetId;
+    this.opponentPicker = next;
+    if (presetChanged) {
+      this.renderDifficultySelectOverlay();
+      return;
+    }
+    this.opponentCounterText?.setText(formatOrdersCounter(next));
+  }
+
+  /** Mount (once) and align the standing-orders <textarea> over its rect. The
+   *  value is pushed from state only when it differs, so selecting a preset
+   *  overwrites the field while ordinary typing never fights the caret. */
+  private ensureOpponentTextarea(): void {
+    if (this.opponentTextarea === null) {
+      const ta = this.createOverlayTextarea({
+        placeholder: 'Tell Jev how to play (optional)',
+        maxLength: JEV_ORDERS_MAX_LENGTH,
+        onInput: (value) => this.onOpponentOrdersInput(value),
+      });
+      if (ta === null) return; // headless Vitest / pre-canvas
+      this.opponentTextarea = ta;
+    }
+    if (this.opponentTextarea.value !== this.opponentPicker.text) {
+      this.opponentTextarea.value = this.opponentPicker.text;
+    }
+    if (this.opponentResizeHandler === null && typeof window !== 'undefined') {
+      this.opponentResizeHandler = () => this.positionOpponentTextarea();
+      window.addEventListener('resize', this.opponentResizeHandler);
+    }
+    this.positionOpponentTextarea();
+  }
+
+  private positionOpponentTextarea(): void {
+    if (this.opponentTextarea === null) return;
+    this.positionDomOverRect(
+      this.opponentTextarea,
+      opponentPickerLayout(this.layout, JEV_ORDERS_PRESETS.length).textarea,
+    );
+  }
+
+  /** Tear down the standing-orders textarea + its resize listener. Idempotent;
+   *  called on hide, on scene shutdown/destroy, and whenever the picker leaves
+   *  the Jev branch. */
+  private removeOpponentTextarea(): void {
+    if (this.opponentTextarea !== null) {
+      this.opponentTextarea.remove();
+      this.opponentTextarea = null;
+    }
+    if (this.opponentResizeHandler !== null && typeof window !== 'undefined') {
+      window.removeEventListener('resize', this.opponentResizeHandler);
+      this.opponentResizeHandler = null;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -2845,40 +3228,15 @@ export class UIScene extends Phaser.Scene {
    *  hideSurveyOverlay. Position is recomputed each render so a canvas
    *  resize between renders is handled correctly. */
   private ensureSurveyTextarea(): void {
-    if (typeof document === 'undefined') return; // headless Vitest path
-    const canvas = this.game.canvas;
-    if (canvas === null) return;
     if (this.surveyTextarea === null) {
-      const ta = document.createElement('textarea');
-      ta.placeholder = 'What stood out? (optional)';
-      ta.maxLength = PLAYTRACE_FREE_TEXT_MAX;
-      ta.style.position = 'absolute';
-      ta.style.zIndex = '1000';
-      ta.style.background = '#222222';
-      ta.style.color = '#ffffff';
-      ta.style.border = '1px solid #444444';
-      ta.style.fontFamily = 'monospace';
-      ta.style.fontSize = '13px';
-      ta.style.padding = '6px';
-      ta.style.resize = 'none';
-      ta.addEventListener('input', () => {
-        this.surveyState.freeText = truncateFreeText(ta.value);
+      const ta = this.createOverlayTextarea({
+        placeholder: 'What stood out? (optional)',
+        maxLength: PLAYTRACE_FREE_TEXT_MAX,
+        onInput: (value) => {
+          this.surveyState.freeText = truncateFreeText(value);
+        },
       });
-      // Phaser's KeyboardManager listens on window (bubble phase) and calls
-      // preventDefault() for any key in its captures list — which includes
-      // WASD and Space by default. stopPropagation prevents the keydown from
-      // reaching Phaser so the textarea receives every character normally.
-      ta.addEventListener('keydown', (e) => {
-        if (e.key !== 'Escape') e.stopPropagation();
-      });
-      // Append to the canvas's parent so embedded-in-shadow-DOM hosts
-      // (the library-mode embed on the website may eventually mount
-      // inside a custom element) keep the textarea inside the same
-      // stacking context as the canvas. Fall back to document.body only
-      // when the canvas has no parent yet (defensive — shouldn't happen
-      // after Phaser's create()).
-      const parent = canvas.parentElement ?? document.body;
-      parent.appendChild(ta);
+      if (ta === null) return; // headless Vitest path / pre-canvas
       this.surveyTextarea = ta;
     }
     // Bind the resize handler once per overlay open so a window-resize
@@ -2893,29 +3251,91 @@ export class UIScene extends Phaser.Scene {
 
   private positionSurveyTextarea(): void {
     if (this.surveyTextarea === null) return;
+    this.positionDomOverRect(this.surveyTextarea, surveyFreeTextRect(this.layout));
+  }
+
+  /**
+   * Create a <textarea> styled to sit over the canvas, wire its input + keydown
+   * handlers, and attach it next to the canvas. Shared by the survey overlay and
+   * the W3 opponent picker — both need native text entry, and Phaser ships no
+   * text-input primitive; rolling one over the canvas from keyboard events would
+   * mean reimplementing caret, selection, IME composition, paste and
+   * accessibility. Returns null in a headless (Vitest) context or before the
+   * canvas exists; callers treat that as "no editable surface this frame".
+   */
+  private createOverlayTextarea(opts: {
+    placeholder: string;
+    maxLength: number;
+    onInput: (value: string) => void;
+  }): HTMLTextAreaElement | null {
+    if (typeof document === 'undefined') return null; // headless Vitest path
+    const canvas = this.game.canvas;
+    if (canvas === null) return null;
+    const ta = document.createElement('textarea');
+    ta.placeholder = opts.placeholder;
+    ta.maxLength = opts.maxLength;
+    ta.style.position = 'absolute';
+    ta.style.zIndex = '1000';
+    // Without this the UA's content-box sizing adds the padding + border on TOP
+    // of the width/height positionDomOverRect assigns, so the element overflows
+    // the rect it is supposed to fill by 14px in each axis — enough for the
+    // opponent picker's textarea to cover the "n/300" counter line beneath it.
+    ta.style.boxSizing = 'border-box';
+    ta.style.background = '#222222';
+    ta.style.color = '#ffffff';
+    ta.style.border = '1px solid #444444';
+    ta.style.fontFamily = 'monospace';
+    ta.style.fontSize = '13px';
+    ta.style.padding = '6px';
+    ta.style.resize = 'none';
+    ta.addEventListener('input', () => opts.onInput(ta.value));
+    // Phaser's KeyboardManager listens on window (bubble phase) and calls
+    // preventDefault() for any key in its captures list — which includes
+    // WASD and Space by default. stopPropagation prevents the keydown from
+    // reaching Phaser so the textarea receives every character normally.
+    ta.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') e.stopPropagation();
+    });
+    // Append to the canvas's parent so embedded-in-shadow-DOM hosts
+    // (the library-mode embed on the website may eventually mount
+    // inside a custom element) keep the textarea inside the same
+    // stacking context as the canvas. Fall back to document.body only
+    // when the canvas has no parent yet (defensive — shouldn't happen
+    // after Phaser's create()).
+    const parent = canvas.parentElement ?? document.body;
+    parent.appendChild(ta);
+    return ta;
+  }
+
+  /**
+   * Align an absolutely-positioned DOM element with a canvas-local rect, in CSS
+   * pixels. Shared by every DOM-over-canvas overlay affordance.
+   */
+  private positionDomOverRect(
+    el: HTMLElement,
+    rect: { x: number; y: number; w: number; h: number },
+  ): void {
     const canvas = this.game.canvas;
     if (canvas === null) return;
     const canvasRect = canvas.getBoundingClientRect();
     const scaleX = cssScaleX(canvasRect.width, this.layout); // shared with the #237 drag threshold
     const scaleY = canvasRect.height / this.layout.h;
-    const ta = this.surveyTextarea;
-    // The textarea is absolutely-positioned and sits in `document.body` or
-    // in `canvas.parentElement` (see ensureSurveyTextarea). For an
+    // The element is absolutely-positioned and sits in `document.body` or
+    // in `canvas.parentElement` (see createOverlayTextarea). For an
     // absolutely-positioned element, the `left`/`top` values are measured
     // against the nearest positioned ancestor (i.e. the same offsetParent
     // resolution the browser uses). We compute the canvas's position in
     // that same coordinate space by taking the bounding-rect delta against
-    // the textarea's own offsetParent — which is guaranteed to be the
+    // the element's own offsetParent — which is guaranteed to be the
     // coordinate space `left`/`top` are interpreted in. This survives a
     // scrolled page, an embedder whose canvas-parent isn't positioned, and
     // shadow-DOM hosts. Codex P1 (round 3) — earlier `canvas.offsetLeft`
     // approach landed in the wrong coordinate space when canvas.parentElement
     // wasn't a positioned ancestor; the textarea drifted off-canvas.
-    const offsetParent = ta.offsetParent as HTMLElement | null;
+    const offsetParent = el.offsetParent as HTMLElement | null;
     let originX = 0;
     let originY = 0;
     if (offsetParent !== null) {
-      const opRect = offsetParent.getBoundingClientRect();
       // Bounding-client-rect deltas use viewport coordinates; add the
       // offsetParent's scrollLeft/Top so a scrolled overflow container
       // (rare for the game canvas, but defensible) is handled too.
@@ -2925,23 +3345,23 @@ export class UIScene extends Phaser.Scene {
       // border-box rect, but absolutely-positioned children's left/top
       // are measured from the parent's PADDING-box (i.e. inside the
       // border). Without this, an embedder whose canvas wrapper has a
-      // non-zero CSS border would see the textarea shift by the border
+      // non-zero CSS border would see the element shift by the border
       // width. (Codex round-3 review follow-up.)
+      const opRect = offsetParent.getBoundingClientRect();
       originX = canvasRect.left - opRect.left - offsetParent.clientLeft + offsetParent.scrollLeft;
       originY = canvasRect.top - opRect.top - offsetParent.clientTop + offsetParent.scrollTop;
     } else {
-      // Textarea is positioned relative to the viewport (e.g. when its
+      // Element is positioned relative to the viewport (e.g. when its
       // offsetParent is the initial containing block / document.body
       // with no positioned ancestor in between). Fall back to viewport
       // coordinates from canvasRect directly.
       originX = canvasRect.left;
       originY = canvasRect.top;
     }
-    const ft = surveyFreeTextRect(this.layout);
-    ta.style.left = `${originX + ft.x * scaleX}px`;
-    ta.style.top = `${originY + ft.y * scaleY}px`;
-    ta.style.width = `${ft.w * scaleX}px`;
-    ta.style.height = `${ft.h * scaleY}px`;
+    el.style.left = `${originX + rect.x * scaleX}px`;
+    el.style.top = `${originY + rect.y * scaleY}px`;
+    el.style.width = `${rect.w * scaleX}px`;
+    el.style.height = `${rect.h * scaleY}px`;
   }
 
   /** Dispatch a click on the survey overlay. Called from the pointerdown
@@ -3035,4 +3455,29 @@ export interface SurveyOverlayCallbacks {
   /** Player chose Retry from the confirmation screen (same seed). The
    *  overlay is already closed by the time this fires. */
   onRetry(): void;
+}
+
+/**
+ * W3 — what the difficulty-select overlay is shown with. `onSelect` is the START
+ * action: it fires once the player clicks a difficulty button, carrying both the
+ * difficulty and the OpponentConfig the picker resolved to. The overlay is
+ * already closed by the time it fires.
+ *
+ * `jevAvailable` and `initialOpponent` are optional so a caller that doesn't care
+ * about the beta (a test harness) can keep passing only `onSelect`: the defaults
+ * are "Jev unavailable" and "rule-based AI", i.e. the pre-W3 behavior.
+ */
+export interface DifficultySelectCallbacks {
+  onSelect: (d: 'Easy' | 'Normal' | 'Hard', opponent: OpponentConfig) => void;
+  /** False (the default) renders the Jev toggle disabled with an "(unavailable
+   *  in this build)" note and pins the choice to the rule-based AI. GameScene
+   *  passes `isJevAvailable()` — i.e. whether a proxy endpoint is configured. */
+  jevAvailable?: boolean;
+  /** The player's persisted opponent preference, used to pre-select the toggle,
+   *  the preset highlight and the free text. Defaults to the rule-based AI. */
+  initialOpponent?: OpponentConfig;
+  /** The player's last standing-orders text (settings.jevOrders), used only when
+   *  `initialOpponent` is `rules` — that arm cannot carry the text itself, so
+   *  without this a round against the Standard AI would blank the box. */
+  initialOrders?: string;
 }

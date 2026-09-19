@@ -33,6 +33,7 @@ import type { SimEvent } from '../sim/telemetry.js';
 import { buildDebugSnapshot, type DebugSnapshot } from '../platform/debug-snapshot.js';
 import { GameOutcome } from '../sim/game-over.js';
 import { buildPlaytraceSummary, type PlaytraceSummary } from './summary-builder.js';
+import type { OpponentConfig } from './opponent-config.js';
 
 // Build-time-injected by vite.config.ts / vite.lib.config.ts `define`. The
 // ambient declaration keeps the playtrace module self-contained — no
@@ -100,6 +101,10 @@ export interface PlaytraceSubmissionInput {
    *  game. Causes summary.eventsCoverage to be 'since_load' instead of
    *  'full_round', flagging that events before the save tick are missing. */
   resumedFromSave: boolean;
+  /** Which opponent policy drove the enemy colony this round (rule-based AI or
+   *  the Jev opponent, plus its standing orders). Optional and additive — when
+   *  omitted the envelope carries no `opponent` field at all. */
+  opponent?: OpponentConfig;
 }
 
 /** Result of a submission attempt. The caller surfaces a toast based on
@@ -144,6 +149,11 @@ export interface PlaytraceEnvelope {
   // Present only when snapshot is non-null (survey-only uploads omit both).
   events?: SimEvent[];
   summary?: PlaytraceSummary;
+  /** Which opponent drove the enemy colony. ADDITIVE optional field — it does
+   *  NOT bump PLAYTRACE_SCHEMA_VERSION: the receiving Lambda stores the raw
+   *  envelope, so an unknown extra key costs nothing and older readers that
+   *  ignore it still see a valid v2 envelope. Absent = the rule-based AI. */
+  opponent?: { kind: 'rules' | 'jev'; orders: string };
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +248,16 @@ export function buildPlaytraceEnvelope(
     },
     snapshot,
   };
+
+  // Opponent policy — attached on EVERY submission (survey-only included): it
+  // is one small object and it is the primary join key for "did the Jev
+  // opponent feel different?" analysis.
+  if (input.opponent !== undefined) {
+    envelope.opponent = {
+      kind: input.opponent.kind,
+      orders: input.opponent.kind === 'jev' ? input.opponent.orders : '',
+    };
+  }
 
   // Attach events + summary only when a snapshot is present (spec: survey-only
   // uploads omit both fields entirely).
