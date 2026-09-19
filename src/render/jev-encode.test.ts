@@ -160,6 +160,17 @@ describe('encodeBeat', () => {
       expect(id).toMatch(JEV_ID_PATTERN);
       for (const key of Object.keys(q.criteria)) expect(key).toMatch(JEV_ID_PATTERN);
     }
+    // v2: the proxy derives its questions from the candidate keys, so those are
+    // the ids that actually go over the wire and have to pass its validation.
+    const candidates = enc.state.candidates as Record<string, unknown>;
+    expect(Object.keys(candidates).length).toBeLessThanOrEqual(JEV_MAX_QUESTIONS);
+    for (const [id, group] of Object.entries(candidates)) {
+      expect(id).toMatch(JEV_ID_PATTERN);
+      if (typeof group === 'string') continue; // yes/no question
+      for (const key of Object.keys(group as Record<string, string>)) {
+        expect(key).toMatch(JEV_ID_PATTERN);
+      }
+    }
   });
 
   it('omits unavailable dig directions from candidates AND from the question', () => {
@@ -236,6 +247,24 @@ describe('decodeAnswers', () => {
     expect(decision.spiderPriority).toBeNull();
     expect(decision.expandStorage).toBeNull();
     expect(invalid).toEqual(['posture']);
+  });
+
+  it('accepts the ratio answer under the candidate id the proxy builds its question from', () => {
+    // The proxy names each question after the `state.candidates` key it came
+    // from, so the split of workers answers as `fight_ratio` while this module's
+    // own question map calls it `ratio`. Both have to decode.
+    const answers: JevAnswerMap = {
+      fight_ratio: {
+        type: 'choice',
+        choice: 'military',
+        confidence: 0.9,
+        probabilities: { military: 0.9 },
+      },
+    };
+    const { decision, invalid } = decodeAnswers(answers, cands, facts);
+    expect(decision.ratio).toBe('military');
+    expect(invalid).not.toContain('ratio');
+    expect(invalid).not.toContain('fight_ratio');
   });
 
   it('never picks an unavailable dig direction, even if asked to', () => {
