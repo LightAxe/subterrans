@@ -20,9 +20,21 @@ import type { Seats } from './jev-types.js';
 import { JevCommandLedger } from './jev-commands.js';
 import { createJevOpeningState, isHandoffComplete, runJevOpeningTick } from './jev-opening.js';
 
+/** Every tile of every pending footprint `colonyId` owns, as "x,y" keys. */
+function pendingFootprintTiles(world: WorldState, colonyId: number): Set<string> {
+  const out = new Set<string>();
+  for (const p of Object.values(world.pendingChambers)) {
+    if (p.colonyId !== colonyId) continue;
+    for (let dy = 0; dy < p.height; dy++) {
+      for (let dx = 0; dx < p.width; dx++) out.add(`${p.anchorTileX + dx},${p.anchorTileY + dy}`);
+    }
+  }
+  return out;
+}
+
 // The fallback path must be the REAL import, observed. Everything else the
-// opening uses (aiInitialSetup / aiDigHeuristic / aiChamberPlacement, the
-// AI_DIG_* constants) passes through untouched.
+// opening and the cadence executor use (aiInitialSetup, the AI_DIG_* constants)
+// passes through untouched.
 vi.mock('./ai-controller.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./ai-controller.js')>();
   return { ...actual, runAIController: vi.fn(actual.runAIController) };
@@ -156,7 +168,14 @@ async function alignToBeat(
 }
 
 /**
- * The opening is ~4k ticks of real simulation, so it runs ONCE for the file and
+ * The live-phase fixture: a world whose nest is not merely planned but fully
+ * EXCAVATED (`isHandoffComplete`, the stricter of jev-opening's two predicates).
+ * The controller itself hands off far earlier than this — on `isOpeningPlanned`,
+ * within a couple of ticks — but the live phase is where frontier digs, storage
+ * expansion and rally points live, and those want a real nest under them rather
+ * than a field of pending footprints.
+ *
+ * It is a few hundred ticks of real simulation, so it runs ONCE for the file and
  * each test gets a clone. #227 precedent: the build carries an explicit generous
  * timeout so the local coverage gate passes under v8 instrumentation, while the
  * default 5s stays the tripwire for every individual test below.
@@ -168,18 +187,43 @@ beforeAll(() => {
   const ledger = new JevCommandLedger();
   const st = createJevOpeningState();
   while (!isHandoffComplete(built, ENEMY_COLONY_ID)) {
-    if (built.tick >= 8000) throw new Error('no handoff by tick 8000');
+    if (built.tick >= 8000) throw new Error('nest not excavated by tick 8000');
     runJevOpeningTick(built, ENEMY_COLONY_ID, ledger, st);
     tick(built, built.commandQueue.splice(0));
   }
   handoffTemplate = built;
 }, 120_000);
 
-/** A fresh, independently-mutable copy of the post-handoff world. */
+/** A fresh, independently-mutable copy of the fully-excavated world. */
 function handoffWorld(): WorldState {
   const clone = createScenario(SEED, 'Normal');
   copyWorldState(handoffTemplate, clone);
   return clone;
+}
+
+/**
+ * A world the opening can never finish planning, so the controller stays in
+ * 'opening' for as long as a test needs it to.
+ *
+ * The colony's one entrance is moved off the side of the grid. The whole plan
+ * hangs off the entrance column, so `computeNestPlan` returns null: nothing is
+ * marked, nothing is placed, and `isOpeningPlanned` never becomes true.
+ * `aiInitialSetup` does not rescue it either, because the colony still HAS an
+ * entrance.
+ *
+ * Synthetic on purpose, and worth being honest about WHY it is needed: the
+ * probe's repeat-on-the-beat-cadence branch only runs while the phase is
+ * 'opening', and a real opening is now over on tick 2 — long before the first
+ * beat boundary. So in a real round the probe fires once, at tick 0, and the
+ * retry branch never runs. These tests still pin its behavior, but a world has
+ * to be bent to reach it. If the branch is ever deliberately retired, these
+ * three tests and this fixture go with it.
+ */
+function unplannableWorld(): WorldState {
+  const world = createScenario(SEED, 'Normal');
+  const grid = world.undergroundGrids[ENEMY_COLONY_ID]!;
+  world.colonies[ENEMY_COLONY_ID]!.entrances[0]!.surfaceTileX = grid.width + 4;
+  return world;
 }
 
 beforeEach(() => {
@@ -190,13 +234,63 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('JevEnemyController — opening phase', () => {
-  it('takes no decision-shaped action before handoff beyond the one-time readiness probe', async () => {
-    // The probe (a session mint) succeeds on its first and only attempt, so this
-    // exercises the "opening is otherwise inert" invariant with the probe folded
-    // in: still no beats, still only opening commands, still no rule-based AI.
+  it('plans the nest and hands off within a handful of ticks, issuing only opening commands', async () => {
     const client = new ScriptedClient(scripted());
     const ctl = new JevEnemyController({ seats: SEATS, client, orders: '' });
     const world = createScenario(SEED, 'Normal');
+    const log: IssuedRecord[] = [];
+
+    await step(world, ctl, 6, log);
+
+    expect(ctl.phase).toBe('live');
+    expect(ctl.handoffTick).not.toBeNull();
+    expect(ctl.handoffTick!).toBeLessThanOrEqual(5);
+    // The whole nest is committed — three chambers, none of them excavated yet.
+    const colony = world.colonies[ENEMY_COLONY_ID]!;
+    expect(
+      Object.values(world.pendingChambers).filter((p) => p.colonyId === ENEMY_COLONY_ID),
+    ).toHaveLength(3);
+    expect(colony.chambers).toHaveLength(0);
+    // Nothing but opening-shaped commands, and nothing rejected.
+    expect(log.length).toBeGreaterThan(0);
+    const types = new Set(log.map((r) => r.cmd.type));
+    for (const t of types) {
+      expect(['SetBehaviorRatio', 'MarkDigTile', 'PlaceChamber', 'DesignateEntrance']).toContain(t);
+    }
+    ctl.ledger.settle(world);
+    expect(ctl.ledger.counts.rejected).toBe(0);
+    // The opening's behavior ratio is applied, seat-correctly.
+    expect(colony.targetRatio).toEqual({ forage: 7, fight: 3 });
+    // Handoff is not a beat: the probe is still the only request sent.
+    expect(client.mints).toBe(1);
+    expect(client.calls).toBe(0);
+    expect(vi.mocked(runAIController)).not.toHaveBeenCalled();
+  });
+
+  it('fires the first beat on the first beat boundary after handoff', async () => {
+    const client = new ScriptedClient(scripted());
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '' });
+    const world = createScenario(SEED, 'Normal');
+
+    // Handoff lands inside the first beat window, so nothing is asked until the
+    // boundary itself — and then exactly one beat.
+    await step(world, ctl, BEAT);
+    expect(ctl.phase).toBe('live');
+    expect(client.calls).toBe(0);
+    expect(world.tick).toBe(BEAT);
+
+    await step(world, ctl, 1);
+    expect(client.calls).toBe(1);
+    expect(ctl.beats).toBe(1);
+  });
+
+  it('takes no decision-shaped action while the opening is unfinished, beyond the probe', async () => {
+    // The probe (a session mint) succeeds on its first and only attempt, so this
+    // exercises the "opening is otherwise inert" invariant with the probe folded
+    // in: still no beats, still no rule-based AI.
+    const client = new ScriptedClient(scripted());
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '' });
+    const world = unplannableWorld();
     const log: IssuedRecord[] = [];
 
     await step(world, ctl, BEAT * 5 + 1, log);
@@ -206,13 +300,14 @@ describe('JevEnemyController — opening phase', () => {
     expect(ctl.probe).toBe('ok');
     expect(ctl.phase).toBe('opening');
     expect(ctl.beats).toBe(0);
+    expect(ctl.handoffTick).toBeNull();
     expect(vi.mocked(runAIController)).not.toHaveBeenCalled();
+    // With no plannable column the planner's ONE remaining job is the opening
+    // ratio, and it still does it seat-correctly. Asserting the exact set (not
+    // "every type is in the allowlist") keeps this from passing vacuously if the
+    // fixture ever stops producing commands at all.
     expect(log.length).toBeGreaterThan(0);
-    const types = new Set(log.map((r) => r.cmd.type));
-    for (const t of types) {
-      expect(['SetBehaviorRatio', 'MarkDigTile', 'PlaceChamber', 'DesignateEntrance']).toContain(t);
-    }
-    // The opening's behavior ratio is applied, seat-correctly.
+    expect(new Set(log.map((r) => r.cmd.type))).toEqual(new Set(['SetBehaviorRatio']));
     expect(world.colonies[ENEMY_COLONY_ID]!.targetRatio).toEqual({ forage: 7, fight: 3 });
   });
 
@@ -245,19 +340,19 @@ describe('JevEnemyController — readiness probe', () => {
     expect(ctl.beats).toBe(0);
     expect(ctl.lastLatencyMs).toBe(7);
 
-    // Well past several beat boundaries with no further requests: one success
-    // is enough for the round.
+    // Well past several beat boundaries: one success is enough for the round, so
+    // the mint is never repeated even though real beats are now going out.
     await step(world, ctl, BEAT * 3);
     expect(client.mints).toBe(1);
-    expect(client.calls).toBe(0);
-    expect(ctl.beats).toBe(0);
-    expect(ctl.phase).toBe('opening');
+    expect(client.calls).toBeGreaterThan(0);
   });
 
   it('repeats every beatTicks while it keeps failing, counting each as a failed beat', async () => {
     const client = deadClient();
     const ctl = new JevEnemyController({ seats: SEATS, client, orders: '' });
-    const world = createScenario(SEED, 'Normal');
+    // The repeat cadence only applies while the opening is unfinished, which on
+    // a normal world is two ticks — so this needs a world that never gets there.
+    const world = unplannableWorld();
 
     await step(world, ctl, 1); // tick 0
     expect(client.mints).toBe(1);
@@ -285,7 +380,7 @@ describe('JevEnemyController — readiness probe', () => {
     const onFallback = vi.fn();
     const client = deadClient();
     const ctl = new JevEnemyController({ seats: SEATS, client, orders: '', onFallback });
-    const world = createScenario(SEED, 'Normal');
+    const world = unplannableWorld();
 
     // Three probes land at tick 0, BEAT and 2*BEAT — three failures, but the
     // flip itself is a tick-seam decision, not something the promise handler
@@ -310,7 +405,7 @@ describe('JevEnemyController — readiness probe', () => {
   it('never applies a decision from a probe, even with a client primed to answer beats', async () => {
     const client = new ScriptedClient(scripted({ fight_ratio: 'military', posture: 'assault' }));
     const ctl = new JevEnemyController({ seats: SEATS, client, orders: '' });
-    const world = createScenario(SEED, 'Normal');
+    const world = unplannableWorld();
     const log: IssuedRecord[] = [];
 
     await step(world, ctl, BEAT + 1, log);
@@ -356,6 +451,52 @@ describe('JevEnemyController — live phase', () => {
     expect(ctl.beats).toBe(1);
     // The state a real beat sends passes the client's own pre-flight guard.
     expect(() => assertRequestValid(client.lastState!)).not.toThrow();
+  });
+
+  it('holds the dig direction at handoff so the one digger finishes the planned nest', async () => {
+    const client = new ScriptedClient(scripted());
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '' });
+    const world = createScenario(SEED, 'Normal');
+    const log: IssuedRecord[] = [];
+
+    // Handoff leaves three unexcavated chambers behind; until Jev says otherwise
+    // the cadence executor must not queue a frontier that competes for the
+    // colony's single digger.
+    await step(world, ctl, AI_DIG_INTERVAL * 2, log);
+    expect(ctl.phase).toBe('live');
+    expect(ctl.digDirection).toBe('hold');
+    const afterHandoff = log.filter(
+      (r) => r.cmd.type === 'MarkDigTile' && r.tick > ctl.handoffTick!,
+    );
+    expect(afterHandoff).toHaveLength(0);
+  });
+
+  it('never marks a frontier tile inside one of its own pending chamber footprints', async () => {
+    // The live phase now runs alongside an unexcavated nest, so the two dig
+    // paths overlap in time for the first time. They still cannot collide:
+    // PlaceChamber flipped every footprint tile to Marked and digFrontier only
+    // ever returns Solid tiles. Pin it, because the day digFrontier widens is
+    // the day the nest starts getting re-marked out from under the digger.
+    const client = new ScriptedClient(
+      scripted({ dig: 'deeper', posture: 'recall', fight_ratio: 'economy' }),
+    );
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '' });
+    const world = createScenario(SEED, 'Normal');
+    const log: IssuedRecord[] = [];
+
+    await step(world, ctl, 6, log);
+    const footprint = pendingFootprintTiles(world, ENEMY_COLONY_ID);
+    expect(footprint.size).toBe(5 * 3 + 4 * 3 + 4 * 3);
+
+    await step(world, ctl, BEAT * 3, log);
+    expect(ctl.digDirection).toBe('deeper');
+    const marks = log.filter((r) => r.cmd.type === 'MarkDigTile');
+    expect(marks.filter((r) => r.tick > ctl.handoffTick!).length).toBeGreaterThan(0);
+    for (const r of marks) {
+      if (r.cmd.type !== 'MarkDigTile') continue;
+      expect(footprint.has(`${r.cmd.tileX},${r.cmd.tileY}`)).toBe(false);
+    }
+    expect(ctl.ledger.counts.rejected).toBe(0);
   });
 
   it('does not apply inside the promise — the decision lands on the NEXT tick seam', async () => {
