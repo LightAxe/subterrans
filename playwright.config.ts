@@ -118,11 +118,13 @@ export default defineConfig({
       // no E2E coverage at all, since ui-scene.ts is excluded from the unit
       // coverage gate.
       //
-      // The endpoint points at a path that does not exist AND is not under
-      // `/api` — vite.config proxies `/api` to the deployed site, and an E2E run
-      // must never reach it. Flipping the feature flag is the whole job; every
-      // decision beat then fails locally and the controller falls back to the
-      // rule-based AI, which is a code path worth exercising anyway.
+      // The endpoint is the BASE path of the proxy (the client POSTs to
+      // `<base>/session` and `<base>/beat`), and it points at a path that does
+      // not exist AND is not under `/api` — vite.config proxies `/api` to the
+      // deployed site, and an E2E run must never reach it. Flipping the feature
+      // flag is the whole job; the controller's first request (the session mint)
+      // then 404s locally, three failures in it fall back to the rule-based AI,
+      // and that is a code path worth exercising anyway.
       command: 'npm run dev -- --port 5174 --strictPort',
       env: { VITE_PLAYTRACE_ENDPOINT: '', VITE_JEV_ENDPOINT: '/e2e-jev-stub-not-a-real-endpoint' },
       port: 5174,
