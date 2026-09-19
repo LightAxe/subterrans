@@ -572,10 +572,18 @@ const warTicks = results
   .sort((a, b) => a - b);
 const peakWorkers = results.map((r) => r.peakEnemyWorkers).sort((a, b) => a - b);
 // #297 signature as a share of each seed's measured window, so it is comparable
-// across seeds that ended at different ticks.
+// across seeds that ended at different ticks. Kept as RAW percentages: rounding
+// each seed before taking the median lets a true median just over the threshold
+// round down and pass (e.g. 4.4% -> 4%), which is precisely the failure the
+// threshold exists to catch (CodeRabbit). Rounding happens only when printing.
 const heldShares = results
-  .map((r) => (r.heldWindow === 0 ? 0 : Math.round((r.heldTicks * 100) / r.heldWindow)))
+  .map((r) => (r.heldWindow === 0 ? 0 : (r.heldTicks * 100) / r.heldWindow))
   .sort((a, b) => a - b);
+const heldShareMedian = median(heldShares);
+const heldShareMax = heldShares[heldShares.length - 1];
+/** One decimal, trailing ".0" trimmed — display only; never fed back to a check. */
+const fmtShare = (v: number | undefined): string =>
+  v === undefined || Number.isNaN(v) ? '-' : `${Number(v.toFixed(1))}`;
 
 console.log('');
 console.log('Aggregate:');
@@ -600,7 +608,7 @@ console.log(
 console.log(`  Invading reached: ${invaded}/${SEEDS} (${pct(invaded, SEEDS)})`);
 console.log(
   `  Frozen-forager share (ticks with >=1 homebound forager held / ticks queen alive): ` +
-    `median=${median(heldShares)}%  max=${heldShares[heldShares.length - 1] ?? '-'}%  ` +
+    `median=${fmtShare(heldShareMedian)}%  max=${fmtShare(heldShareMax)}%  ` +
     `peak food frozen outside: ${Math.max(0, ...results.map((r) => r.peakHeldFood))} fp`,
 );
 console.log(`  Enemy queen death causes: ${tally(results.map((r) => r.enemyDeathCause))}`);
@@ -622,6 +630,10 @@ const MIN_WARFOOTING_PCT = 70;
  *
  *   main (cde6aa4, the bug)  median  9.5%   max 15%
  *   fixed                    median  0%     max  1%
+ *
+ * (Those two rows were measured under the earlier ROUNDED share; the raw-share
+ * switch below moves them only in the decimals — the fixed median reads 0.2%
+ * rather than 0% — so 4 still sits well between the populations.)
  *
  * 4% sits between them with room for seed noise. An earlier draft used 10%, which
  * main PASSES — that number came from a different computation (share of a fixed
@@ -656,8 +668,8 @@ const checks: ReadonlyArray<Check> = [
   ],
   [
     'Frozen-forager share (median)',
-    median(heldShares) <= MAX_FROZEN_FORAGER_SHARE_PCT,
-    `${median(heldShares)}% (<=${MAX_FROZEN_FORAGER_SHARE_PCT}%)`,
+    heldShareMedian <= MAX_FROZEN_FORAGER_SHARE_PCT,
+    `${fmtShare(heldShareMedian)}% (<=${MAX_FROZEN_FORAGER_SHARE_PCT}%)`,
   ],
 ];
 

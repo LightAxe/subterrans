@@ -235,9 +235,9 @@ function releaseOnLocalAllClear(
  * blockaded door does not count as a doorstep and the ant keeps the V34 hold
  * until the camper moves.
  *
- * `isDescentBlocked` is called rather than re-implemented so the two can never
- * drift. `isOwnEntrance = true` + `AntTask.Foraging` reduces it to the #165
- * spider arm by construction (the #164 arm needs a FOREIGN Fighter).
+ * "ENTERABLE" is judged across ALL open doors, not just the near one, because the
+ * released forager's route is chosen by a BFS this function cannot predict — see
+ * the body for why that makes the difference between sound and merely likely.
  *
  * Inlined scan for the same reason as `pickNearestSafeEntrance`: it runs per
  * worker per tick and must not allocate (repo hot-loop rule). A colony holds at
@@ -250,19 +250,54 @@ function onEnterableDoorstep(
   tileX: number,
   tileY: number,
 ): boolean {
+  // Two conditions, and the second is the load-bearing one.
+  //
+  // (1) SOME open door is within the radius — measured to the nearest, which is
+  //     equivalent (a Manhattan-nearest door outside the radius means they all
+  //     are). Lowest-`entranceId` tie-break, matching `pickNearestSafeEntrance`.
+  //
+  // (2) NO open door is blockaded. This is what makes the release sound rather
+  //     than merely likely-safe. A released forager is routed by NORMAL homebound
+  //     routing — ant-movement.ts's multi-source surface entrance BFS, seeded
+  //     from every open door and expanded by OBSTACLE distance — so we cannot
+  //     predict from here which door it will actually reach: a HardBlock between
+  //     the ant and its Manhattan-nearest door can make a farther door the closer
+  //     one by path. Qualifying one door therefore proves nothing about the door
+  //     the ant walks to. Requiring every open door to be enterable removes the
+  //     question: whichever one the BFS picks, the ant can get in.
+  //
+  //     Cheap: only a RAMPAGING spider blockades an own entrance, and it occupies
+  //     one tile, so at most one door is ever blocked, and a colony holds at most
+  //     MAX_ENTRANCES_PER_COLONY = 4. Allocation-free, ≤4 calls per held worker.
+  //
+  // Releasing into a door the ant provably cannot enter is pure loss (it is
+  // pinned on the surface by `isDescentBlocked` and the camper is held in place
+  // to bite it), so when any door is blockaded the ant keeps the V34 hold. Never
+  // worse than V34; strictly better than releasing blind.
+  let best: NestEntrance | null = null;
+  let bestDist = -1;
   for (let e = 0; e < entrances.length; e++) {
     const ent = entrances[e]!;
     if (!ent.isOpen) continue;
-    const dist = Math.abs(ent.surfaceTileX - tileX) + Math.abs(ent.surfaceTileY - tileY);
-    if (dist > FLEE_HOMEBOUND_PUSH_THROUGH_TILES) continue;
+    // `isDescentBlocked` is called rather than re-implemented so the two can
+    // never drift. `isOwnEntrance = true` + `AntTask.Foraging` reduces it to the
+    // #165 spider arm by construction (the #164 arm needs a FOREIGN Fighter).
     if (
       isDescentBlocked(world, AntTask.Foraging, true, colony, ent.surfaceTileX, ent.surfaceTileY)
     ) {
-      continue;
+      return false; // some door the BFS might pick is impassable — hold
     }
-    return true;
+    const dist = Math.abs(ent.surfaceTileX - tileX) + Math.abs(ent.surfaceTileY - tileY);
+    if (
+      bestDist < 0 ||
+      dist < bestDist ||
+      (dist === bestDist && best !== null && ent.entranceId < best.entranceId)
+    ) {
+      bestDist = dist;
+      best = ent;
+    }
   }
-  return false;
+  return best !== null && bestDist <= FLEE_HOMEBOUND_PUSH_THROUGH_TILES;
 }
 
 /**

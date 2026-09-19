@@ -776,6 +776,117 @@ describe('flee — homebound-forager doorstep push-through (#297, V38)', () => {
     expect(world.ants.posY[id]).toBe(startY);
   });
 
+  // -------------------------------------------------------------------------
+  // Multi-entrance routing soundness (Codex P2 / CodeRabbit). Releasing on "SOME
+  // door within the radius is enterable" is unsound, because the released forager
+  // is routed by ant-movement's multi-source entrance BFS, which expands by
+  // OBSTACLE distance, so the door it reaches need not be the one that satisfied
+  // the predicate. The predicate therefore requires EVERY open door to be
+  // enterable. The AI never builds a second entrance today, but a human can.
+  // -------------------------------------------------------------------------
+
+  /** Add an extra open entrance `offset` tiles east of the scenario one. */
+  function addOpenEntrance(world: WorldState, from: NestEntrance, offset: number): NestEntrance {
+    const ent: NestEntrance = {
+      entranceId: allocateEntityId(world),
+      surfaceTileX: from.surfaceTileX + offset,
+      surfaceTileY: from.surfaceTileY,
+      isOpen: true,
+    };
+    world.colonies[PLAYER_COLONY_ID]!.entrances.push(ent);
+    return ent;
+  }
+
+  /** Park a Rampaging spider (the #165 blockade) on `ent`'s tile. */
+  function blockade(world: WorldState, ent: NestEntrance): void {
+    const spider = world.spider!;
+    spider.state = 'Rampaging';
+    spider.rampageTargetColonyId = PLAYER_COLONY_ID;
+    spider.posX = center(ent.surfaceTileX);
+    spider.posY = center(ent.surfaceTileY);
+  }
+
+  it('NEAREST door blockaded + a farther enterable one → HELD, not released into the blockade', () => {
+    // The unsound-predicate case: blockaded at 2 tiles, enterable at 6. Judging
+    // "any enterable door in range" would release, and the BFS would then walk the
+    // carrier into the blockaded door at 2 and feed it to the camper.
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH;
+    const near = openEntrance(world, PLAYER_COLONY_ID);
+    const far = addOpenEntrance(world, near, 8);
+    const id = spawnCarrier(world, near, 2); // 2 from `near`, 6 from `far`
+    blockade(world, near);
+    // Danger over the carrier AND both doors, so no SAFE door exists and the hold
+    // is the only alternative to the push.
+    seedDanger(
+      world,
+      PLAYER_COLONY_ID,
+      near.surfaceTileX + 4,
+      near.surfaceTileY,
+      8,
+      FLEE_THRESHOLD * 8,
+    );
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0); // held
+    // Pin the PRECONDITION rather than re-asserting a literal: the far door must
+    // genuinely be open and inside the doorstep radius, or this test would pass
+    // for the wrong reason — and would silently stop discriminating if
+    // FLEE_HOMEBOUND_PUSH_THROUGH_TILES ever shrank below that distance.
+    const carrierX = near.surfaceTileX + 2;
+    expect(far.isOpen).toBe(true);
+    expect(
+      Math.abs(far.surfaceTileX - carrierX) + Math.abs(far.surfaceTileY - near.surfaceTileY),
+    ).toBeLessThanOrEqual(FLEE_HOMEBOUND_PUSH_THROUGH_TILES);
+  });
+
+  it('a FARTHER blockaded door also suppresses the push, and the release returns once it lifts', () => {
+    // Mirror: enterable at 2, blockaded at 6. The push is suppressed anyway —
+    // deliberately. The released carrier is routed by an obstacle-distance BFS
+    // this predicate cannot predict, so "the near door is fine" does not prove
+    // the ant walks to the near door; a HardBlock between them can make the far,
+    // blockaded door the closer one by path. Requiring EVERY open door to be
+    // enterable is what makes the release sound instead of merely likely-safe.
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH;
+    const near = openEntrance(world, PLAYER_COLONY_ID);
+    const far = addOpenEntrance(world, near, 8);
+    const id = spawnCarrier(world, near, 2);
+    blockade(world, far); // the FAR door is the blockaded one this time
+    seedDanger(
+      world,
+      PLAYER_COLONY_ID,
+      near.surfaceTileX + 4,
+      near.surfaceTileY,
+      8,
+      FLEE_THRESHOLD * 8,
+    );
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0); // suppressed
+
+    // Camper leaves Rampaging → no door is blockaded → the push returns and the
+    // carrier reaches a door and descends (its shaft is the excavated near one).
+    let descended = false;
+    for (let t = 0; t < 200; t++) {
+      world.spider!.state = 'Patrolling';
+      seedDanger(
+        world,
+        PLAYER_COLONY_ID,
+        near.surfaceTileX + 4,
+        near.surfaceTileY,
+        8,
+        FLEE_THRESHOLD * 8,
+      );
+      tick(world, []);
+      if (world.ants.alive[id] !== 1) break;
+      if (world.ants.zone[id] === Zone.Underground) {
+        descended = true;
+        break;
+      }
+    }
+    expect(world.ants.alive[id]).toBe(1);
+    expect(descended).toBe(true); // got in once no door was blockaded
+  });
+
   it('a CLOSED entrance does not count as a doorstep, even at distance 2', () => {
     // `onEnterableDoorstep` skips `!ent.isOpen`: an unexcavated shaft is not a way
     // in, so a carrier standing next to one is not on its doorstep and must keep
