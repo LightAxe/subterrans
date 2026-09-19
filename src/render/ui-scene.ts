@@ -168,7 +168,7 @@ import {
   type OpponentConfig,
   type OpponentStatus,
 } from './opponent-config.js';
-import { JEV_ORDERS_MAX_LENGTH, JEV_ORDERS_PRESETS } from './jev-orders.js';
+import { JEV_ORDERS_MAX_LENGTH, JEV_ORDERS_PRESETS, normalizeOrders } from './jev-orders.js';
 import {
   createOpponentPickerState,
   editText,
@@ -2221,10 +2221,19 @@ export class UIScene extends Phaser.Scene {
     this.difficultySelectGroup.push(taBg);
     this.ensureOpponentTextarea();
 
-    const hintText =
-      picker.presetId === null
-        ? 'Custom orders — Jev follows these above everything else.'
-        : 'Preset orders — edit the text to make them custom.';
+    // Three mutually exclusive states: a highlighted preset; custom (non-empty)
+    // text with none highlighted; or the text cleared to empty, which sends no
+    // `standing_orders` field at all rather than being "custom" with nothing in
+    // it. No preset's text can normalize to empty (jev-orders.ts), so these
+    // never overlap.
+    let hintText: string;
+    if (picker.presetId !== null) {
+      hintText = 'Preset orders — edit the text to make them custom.';
+    } else if (normalizeOrders(picker.text) === '') {
+      hintText = 'No standing orders — Jev decides on its own.';
+    } else {
+      hintText = 'Custom orders — Jev follows these above everything else.';
+    }
     const editHint = this.add.text(geo.hint.x, geo.hint.y, hintText, {
       fontSize: '10px',
       fontFamily: 'monospace',
