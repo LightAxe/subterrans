@@ -282,12 +282,128 @@ export function digFrontier(
   return out;
 }
 
-/** Mirrors tick.ts PlaceChamber gates; returns the most "spread out" legal anchor. */
+/** A footprint a new chamber of ours must not overlap (a completed chamber or a pending one). */
+export interface ChamberBox {
+  readonly x: number;
+  readonly y: number;
+  readonly w: number;
+  readonly h: number;
+}
+
+/** Every footprint `colonyId` already owns — completed chambers first, then pending ones. */
+export function chamberFootprints(world: WorldState, colonyId: ColonyId): ChamberBox[] {
+  const colony = world.colonies[colonyId];
+  if (!colony) return [];
+  const boxes: ChamberBox[] = colony.chambers.map((c) => ({
+    x: c.posX >> FP_SHIFT,
+    y: c.posY >> FP_SHIFT,
+    w: c.width,
+    h: c.height,
+  }));
+  for (const key in world.pendingChambers) {
+    if (!Object.hasOwn(world.pendingChambers, key)) continue;
+    const p = world.pendingChambers[key]!;
+    if (p.colonyId !== colonyId) continue;
+    boxes.push({ x: p.anchorTileX, y: p.anchorTileY, w: p.width, h: p.height });
+  }
+  return boxes;
+}
+
+/**
+ * Would tick.ts accept `PlaceChamber` at exactly this anchor, right now?
+ *
+ * Mirrors the v5+ gates in the `PlaceChamber` handler for ONE concrete anchor:
+ * grid bounds and the ceiling row, no duplicate pendingChambers key, no overlap
+ * with a footprint we already own, no `BeingDug` tile inside the footprint, and
+ * the reachability BFS — approximated, exactly as `findReachableChamberSpot`
+ * has always approximated it, by "some footprint tile is in (or 4-adjacent to)
+ * the entrance-rooted non-Solid component". That is a *sufficient* condition for
+ * `isFootprintReachableAfterDigs`: the BFS traverses Open / Marked / BeingDug
+ * plus the footprint's own tiles, so a footprint touching the component is
+ * always reached.
+ *
+ * NOT checked here, because it is type policy rather than geometry: Queen
+ * uniqueness. Callers that can place a Queen must gate on it themselves.
+ *
+ * `comp` and `boxes` are injectable so a caller testing many anchors computes
+ * them once.
+ */
+export function isChamberAnchorPlaceable(
+  world: WorldState,
+  colonyId: ColonyId,
+  chamberType: ChamberType,
+  anchorX: number,
+  anchorY: number,
+  comp: UndergroundComponent | null = undergroundComponent(world, colonyId),
+  boxes: readonly ChamberBox[] = chamberFootprints(world, colonyId),
+): boolean {
+  const grid = world.undergroundGrids[colonyId];
+  if (!grid || comp === null) return false;
+  const dims = CHAMBER_DIMENSIONS[chamberType];
+  const gridW = grid.width;
+  const gridH = grid.height;
+  if (!Number.isInteger(anchorX) || !Number.isInteger(anchorY)) return false;
+  if (anchorX < 0 || anchorX > gridW - dims.width) return false;
+  if (anchorY <= UNDERGROUND_CEILING_ROW_Y || anchorY > gridH - dims.height) return false;
+  if (Object.hasOwn(world.pendingChambers, `${colonyId}:${anchorX}:${anchorY}`)) return false;
+  for (const b of boxes) {
+    if (
+      anchorX < b.x + b.w &&
+      anchorX + dims.width > b.x &&
+      anchorY < b.y + b.h &&
+      anchorY + dims.height > b.y
+    ) {
+      return false;
+    }
+  }
+  let reachable = false;
+  for (let dy = 0; dy < dims.height; dy++) {
+    for (let dx = 0; dx < dims.width; dx++) {
+      const tx = anchorX + dx;
+      const ty = anchorY + dy;
+      if (ugGet(grid, tx, ty) === UndergroundTileState.BeingDug) return false;
+      if (
+        !reachable &&
+        (inComponent(comp, tx, ty) ||
+          inComponent(comp, tx, ty - 1) ||
+          inComponent(comp, tx + 1, ty) ||
+          inComponent(comp, tx, ty + 1) ||
+          inComponent(comp, tx - 1, ty))
+      ) {
+        reachable = true;
+      }
+    }
+  }
+  return reachable;
+}
+
+/**
+ * Component membership for one tile. A plain function rather than a per-call
+ * closure: `findReachableChamberSpot` runs this predicate over every anchor in
+ * the nest neighbourhood, and a closure per anchor is thousands of needless
+ * allocations per search.
+ */
+function inComponent(comp: UndergroundComponent, x: number, y: number): boolean {
+  return (
+    x >= 0 && y >= 0 && x < comp.width && y < comp.height && comp.mask[y * comp.width + x] === 1
+  );
+}
+
+/**
+ * Mirrors tick.ts PlaceChamber gates; returns the most "spread out" legal anchor.
+ *
+ * `boxes` defaults to the footprints the colony owns right now. A caller placing
+ * several chambers inside ONE tick seam must pass its own list including the
+ * ones it has already queued — `world.pendingChambers` does not know about a
+ * PlaceChamber that has not been through `tick()` yet, and two anchors chosen
+ * off the same stale world would be free to overlap.
+ */
 export function findReachableChamberSpot(
   world: WorldState,
   colonyId: ColonyId,
   chamberType: ChamberType,
   comp: UndergroundComponent | null = undergroundComponent(world, colonyId),
+  boxes: readonly ChamberBox[] = chamberFootprints(world, colonyId),
 ): Tile | null {
   const grid = world.undergroundGrids[colonyId];
   const colony = world.colonies[colonyId];
@@ -295,18 +411,6 @@ export function findReachableChamberSpot(
   const dims = CHAMBER_DIMENSIONS[chamberType];
   const gridW = grid.width;
   const gridH = grid.height;
-  const pendings = Object.values(world.pendingChambers).filter((p) => p.colonyId === colonyId);
-  const boxes: { x: number; y: number; w: number; h: number }[] = [
-    ...colony.chambers.map((c) => ({
-      x: c.posX >> FP_SHIFT,
-      y: c.posY >> FP_SHIFT,
-      w: c.width,
-      h: c.height,
-    })),
-    ...pendings.map((p) => ({ x: p.anchorTileX, y: p.anchorTileY, w: p.width, h: p.height })),
-  ];
-  const inComp = (x: number, y: number): boolean =>
-    x >= 0 && y >= 0 && x < gridW && y < gridH && comp.mask[y * gridW + x] === 1;
   let best: Tile | null = null;
   let bestScore = -Infinity;
   const ay0 = Math.max(UNDERGROUND_CEILING_ROW_Y + 1, comp.minY - 6);
@@ -315,37 +419,7 @@ export function findReachableChamberSpot(
   const ax1 = Math.min(gridW - dims.width, comp.maxX + 8);
   for (let ay = ay0; ay <= ay1; ay++) {
     for (let ax = ax0; ax <= ax1; ax++) {
-      if (Object.hasOwn(world.pendingChambers, `${colonyId}:${ax}:${ay}`)) continue;
-      let bad = false;
-      for (const b of boxes) {
-        if (ax < b.x + b.w && ax + dims.width > b.x && ay < b.y + b.h && ay + dims.height > b.y) {
-          bad = true;
-          break;
-        }
-      }
-      if (bad) continue;
-      let reachable = false;
-      for (let dy = 0; dy < dims.height && !bad; dy++) {
-        for (let dx = 0; dx < dims.width; dx++) {
-          const tx = ax + dx;
-          const ty = ay + dy;
-          if (ugGet(grid, tx, ty) === UndergroundTileState.BeingDug) {
-            bad = true;
-            break;
-          }
-          if (
-            !reachable &&
-            (inComp(tx, ty) ||
-              inComp(tx, ty - 1) ||
-              inComp(tx + 1, ty) ||
-              inComp(tx, ty + 1) ||
-              inComp(tx - 1, ty))
-          ) {
-            reachable = true;
-          }
-        }
-      }
-      if (bad || !reachable) continue;
+      if (!isChamberAnchorPlaceable(world, colonyId, chamberType, ax, ay, comp, boxes)) continue;
       // Spread score: distance to the nearest existing box center (larger = better).
       let score = Infinity;
       const cxA = ax + dims.width / 2;
