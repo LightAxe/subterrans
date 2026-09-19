@@ -39,6 +39,7 @@ import {
   SIM_VERSION_V31_SPIDER_TERRAIN,
   SIM_VERSION_V32_AI_OP_VALIDATION,
   SIM_VERSION_V37_CORPSE_FOOD,
+  SIM_VERSION_V39_SPIDER_TIEBREAK,
 } from './types.js';
 import { spawnCorpseFood, corpseYield } from './food-system.js';
 import { FP_SHIFT } from './fixed.js';
@@ -55,6 +56,17 @@ const _huntKeyShiftCheck: 128 = SURFACE_GRID_WIDTH; // fails to compile if SURFA
 // of two; the compile-time assertion below fails if the constant drifts.
 const SPIDER_MEANDER_RETARGET_SHIFT = 7; // SPIDER_MEANDER_RETARGET_TICKS = 128 = 2^7
 const _meanderRetargetCheck: 128 = SPIDER_MEANDER_RETARGET_TICKS; // fails to compile if != 128
+
+// V39 seat-bias tie-break salt: an arbitrary fixed nothing-up-my-sleeve bit pattern
+// XOR'd into pickRampageTarget's per-colony tie keys so they are drawn from a
+// different point of the hash space than its own 60/40 richer-colony draw
+// `hash32(terrainSeed ^ rampageStartTick)`, evaluated on the same tick a rampage
+// starts. This is hygiene, NOT a fix for a measured defect: `h % 100 < 60` is in fact
+// independent of the low bits of `h` (100 is even, so each parity class contributes
+// exactly 30 of its 50 residues below 60), and a 500-seed sweep found salted and
+// unsalted keys equally fair. Kept because it costs nothing and removes the need to
+// re-derive that argument if either consumer's arithmetic ever changes.
+const SPIDER_TIEBREAK_SALT = 0x5bf03635;
 
 // ---------------------------------------------------------------------------
 // #231 — findHuntTarget's hunt histogram (SURFACE_GRID_WIDTH*HEIGHT tiles) + its
@@ -149,10 +161,25 @@ function findHuntTarget(
 // ---------------------------------------------------------------------------
 
 /**
+ * V39 seat-bias tie coin for an ant: the ordering key that replaces "lower entity id
+ * wins" on an exact distance tie. The starting cohort's ants hold the lower entity ids
+ * colony by colony, so an id tie-break is a structural seat advantage; `hash32` of
+ * (terrainSeed ^ tick ^ antId) is uncorrelated with colony membership and, being a
+ * pure function of WorldState, costs no `world.rngState` draw (these selectors are
+ * documented as making none). Recomputed per tick so a repeated tie between the same
+ * two ants does not always resolve the same way.
+ */
+function antTieKey(world: WorldState, antId: number): number {
+  return hash32(world.terrainSeed ^ world.tick ^ antId);
+}
+
+/**
  * Find the nearest live surface ant (any caste; queens excluded) within
  * SPIDER_CHASE_TRIGGER_RADIUS of the spider. Returns the ant entity id, or -1 if
- * none qualify. Manhattan distance; ties broken by ascending ant id (lower id wins),
- * matching the deterministic SoA iteration order. No allocation.
+ * none qualify. Manhattan distance; pre-V39 ties are broken by ascending ant id
+ * (lower id wins), matching the deterministic SoA iteration order. V39+ breaks an
+ * exact distance tie on the lower `antTieKey` instead (strict `<` on distance is
+ * unchanged — a genuinely nearer ant still always wins). No allocation.
  */
 function findChaseTarget(world: WorldState, spider: SpiderState): number {
   const spiderTileX = spider.posX >> FP_SHIFT;
@@ -172,8 +199,10 @@ function findChaseTarget(world: WorldState, spider: SpiderState): number {
 
   const { ants } = world;
   const antCount = ants.alive.length;
+  const v39 = world.simVersion >= SIM_VERSION_V39_SPIDER_TIEBREAK;
   let bestId = -1;
   let bestDist = r + 1; // must be <= r to qualify
+  let bestKey = 0; // V39 only; meaningless until bestId >= 0
   for (let i = 0; i < antCount; i++) {
     if (ants.alive[i] !== 1) continue;
     if (ants.zone[i] !== 0) continue; // surface only
@@ -187,7 +216,18 @@ function findChaseTarget(world: WorldState, spider: SpiderState): number {
     if (dist < bestDist) {
       bestDist = dist;
       bestId = i;
-    } // strict < ⇒ lower id wins on tie
+      if (v39) bestKey = antTieKey(world, i);
+    } // strict < ⇒ pre-V39 lower id wins on tie
+    else if (v39 && dist === bestDist) {
+      // V39: exact tie → lower coin wins instead of lower id. `bestDist` starts at
+      // r + 1 and every candidate here has dist <= r, so this branch is unreachable
+      // before the first assignment above (bestKey is always initialized).
+      const key = antTieKey(world, i);
+      if (key < bestKey) {
+        bestId = i;
+        bestKey = key;
+      }
+    }
   }
   return bestId;
 }
@@ -233,8 +273,9 @@ function isSurfaceAntOnTile(world: WorldState, tileX: number, tileY: number): bo
  * SPIDER_DEFENSE_TRIGGER_RADIUS of the spider. Returns the ant entity id, or -1.
  * Used to make an attacked spider stop meandering/camping and actively engage its
  * attackers (a Chasing spider moves at 2× ant speed, so it reliably closes). Same
- * deterministic Manhattan + ascending-id-tiebreak contract as findChaseTarget; no
- * allocation. Queens are never AntTask.Fighting, so no queen exclusion is needed.
+ * deterministic Manhattan + tie-break contract as findChaseTarget (pre-V39 ascending
+ * id; V39+ lower `antTieKey` coin); no allocation. Queens are never AntTask.Fighting,
+ * so no queen exclusion is needed.
  */
 function findNearestAttackingFighter(world: WorldState, spider: SpiderState): number {
   const spiderTileX = spider.posX >> FP_SHIFT;
@@ -243,8 +284,10 @@ function findNearestAttackingFighter(world: WorldState, spider: SpiderState): nu
 
   const { ants } = world;
   const antCount = ants.alive.length;
+  const v39 = world.simVersion >= SIM_VERSION_V39_SPIDER_TIEBREAK;
   let bestId = -1;
   let bestDist = r + 1;
+  let bestKey = 0; // V39 only; meaningless until bestId >= 0
   for (let i = 0; i < antCount; i++) {
     if (ants.alive[i] !== 1) continue;
     if (ants.zone[i] !== 0) continue; // surface only
@@ -258,7 +301,16 @@ function findNearestAttackingFighter(world: WorldState, spider: SpiderState): nu
     if (dist < bestDist) {
       bestDist = dist;
       bestId = i;
-    } // strict < ⇒ lower id wins on tie
+      if (v39) bestKey = antTieKey(world, i);
+    } // strict < ⇒ pre-V39 lower id wins on tie
+    else if (v39 && dist === bestDist) {
+      // V39: exact tie → lower coin wins instead of lower id (see findChaseTarget).
+      const key = antTieKey(world, i);
+      if (key < bestKey) {
+        bestId = i;
+        bestKey = key;
+      }
+    }
   }
   return bestId;
 }
@@ -322,28 +374,67 @@ function findNearestEntrance(
 
 /**
  * Pick which colony the spider rampages on this cycle.
- * Score = foodStored + workerCount * 10. The richer colony is favored 60/40
- * using a deterministic hash of (terrainSeed ^ rampageStartTick) so the
- * result looks organic but is fully replay-safe. No world.rngState draws.
+ *
+ * Score = `colony.foodStored` + workerCount * 10, UNCHANGED at V39. The entrance pool
+ * pegs at BASE_FOOD_STORAGE_CAPACITY once a colony is fed, so the two colonies' scores
+ * land on an exact tie in ~36% of picks (1 199 of 3 343 across an 800-run passive
+ * sweep) — and the old ascending-colonyId tiebreak handed every one of those to
+ * colony 1, which the 60/40 weighting below turned into a measurable seat advantage.
+ * V39 fixes the TIEBREAK; it deliberately does not touch the score.
+ *
+ * Considered and deferred: scoring on `colonyFoodTotal` (pool + FoodStorage chambers)
+ * instead, so "richer" reads the real stockpile. It is a no-op in the passive sweeps
+ * that measured this bias (passive colonies never build chambers), but in a real game
+ * one full FoodStorage (FOOD_CHAMBER_CAPACITY 5120, vs a 2048 pool cap) would swamp
+ * the `workerCount * 10` term and move the spider's target from "most populous colony"
+ * to "wealthiest colony". That is a balance change, not a tie fix, and belongs in its
+ * own change measured with an AI-economy sweep.
+ *
+ * The richer colony is favored 60/40 using a deterministic hash of
+ * (terrainSeed ^ rampageStartTick) so the result looks organic but is fully
+ * replay-safe. On an EXACT score tie, V39+ orders the tied candidates by a
+ * deterministic PER-COLONY key instead of by colony id, so neither seat is
+ * structurally the "richer" one. No world.rngState draws in either path.
  *
  * `hash32` (the Murmur3 finalizer shared by rampage/meander/feed-away targeting)
  * moved to hash.ts (#209 PR A) so the idle-reserve wander can reuse it; the
  * arithmetic is unchanged, so the spider's replay identity is byte-identical.
  */
 function pickRampageTarget(world: WorldState, spider: SpiderState): number {
-  const candidates: Array<{ colonyId: number; score: number }> = [];
+  const v39 = world.simVersion >= SIM_VERSION_V39_SPIDER_TIEBREAK;
+  const candidates: Array<{ colonyId: number; score: number; tieKey: number }> = [];
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
     const cid = Number(key);
     if (cid <= 0) continue; // skip NEUTRAL_COLONY_ID
     const col = world.colonies[key as unknown as import('./colony/colony-store.js').ColonyId];
     if (col === undefined) continue;
-    candidates.push({ colonyId: cid, score: col.foodStored + col.workerCount * 10 });
+    candidates.push({
+      colonyId: cid,
+      score: col.foodStored + col.workerCount * 10,
+      // Per-candidate, not a single order-reversing coin. A coin that only chose
+      // ascending-vs-descending colonyId would still be biased for THREE or more tied
+      // colonies — the only reachable orders are [1,2,3] and [3,2,1], which hands the
+      // middle colony 40% of the picks against 30% each for the outer two. A key per
+      // colony makes every permutation of a tied group reachable and equally likely.
+      tieKey: v39 ? hash32(world.terrainSeed ^ world.tick ^ SPIDER_TIEBREAK_SALT ^ cid) : 0,
+    });
   }
   if (candidates.length === 0) return -1;
   if (candidates.length === 1) return candidates[0]!.colonyId;
-  // Richest first; ascending colonyId tiebreak for determinism.
-  candidates.sort((a, b) => b.score - a.score || a.colonyId - b.colonyId);
+  if (v39) {
+    // Richest first; exact ties ordered by tieKey. The keys are computed once, above,
+    // so the comparator is a fixed lexicographic order on (-score, tieKey, colonyId) —
+    // consistent and transitive, and independent of the engine's sort stability. (A
+    // coin drawn per COMPARISON would be intransitive and implementation-dependent.)
+    // The trailing colonyId term is unreachable — hash32 is a bijection on int32 and
+    // the two inputs differ only in `cid`, so distinct colonies cannot collide — and is
+    // kept only so the order is visibly total by inspection.
+    candidates.sort((a, b) => b.score - a.score || a.tieKey - b.tieKey || a.colonyId - b.colonyId);
+  } else {
+    // Richest first; ascending colonyId tiebreak for determinism.
+    candidates.sort((a, b) => b.score - a.score || a.colonyId - b.colonyId);
+  }
   // Murmur3 finalizer seeded by terrainSeed ^ rampageStartTick — good avalanche,
   // deterministic, no rngState draw.
   const h = hash32(world.terrainSeed ^ spider.rampageStartTick);
