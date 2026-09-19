@@ -8,11 +8,12 @@
 // own dev server (port 5174, see playwright.config.ts `webServer[1]`) with the
 // endpoint set, which is what makes the picker's interactive path reachable.
 //
-// The endpoint deliberately points at a path that does NOT exist and is NOT
-// under `/api` (which vite.config proxies to the deployed site): the point is to
-// flip `isJevAvailable()`, not to talk to the model. Every decision beat fails
-// against it, the controller falls back to the rule-based AI after three, and no
-// request leaves the machine.
+// The endpoint is the proxy's BASE path (the client POSTs to `<base>/session`
+// and `<base>/beat`) and deliberately points at a path that does NOT exist and
+// is NOT under `/api` (which vite.config proxies to the deployed site): the
+// point is to flip `isJevAvailable()`, not to talk to the model. The session
+// mint 404s, the controller falls back to the rule-based AI after three
+// failures, and no request leaves the machine.
 //
 // What this spec is for, and why unit tests cannot replace it: `ui-scene.ts` is
 // excluded from the coverage gate because it is a Phaser scene, and the riskiest
