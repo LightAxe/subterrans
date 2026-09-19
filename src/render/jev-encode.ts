@@ -7,9 +7,13 @@
 // regression here is silent and expensive, so `containsDigits` is asserted in
 // tests against both the state and the questions.
 //
-// Wire contract (the same-origin proxy): ids and option keys must match
-// JEV_ID_PATTERN, at most JEV_MAX_QUESTIONS questions per request, and the
-// serialized state must stay under JEV_MAX_STATE_BYTES.
+// Wire contract (the same-origin proxy, v2): only the STATE goes over the wire.
+// The proxy is schema-locked and builds the questions itself, one per key under
+// `state.candidates`, so those keys must match JEV_ID_PATTERN, there must be at
+// most JEV_MAX_QUESTIONS of them, and the serialized state must stay under
+// JEV_MAX_STATE_BYTES. `buildQuestions` still produces the local question map:
+// it is the canonical description of what the proxy will ask (and what the
+// digit-free assertions and the token estimate are checked against).
 
 import type {
   BucketMode,
@@ -50,9 +54,9 @@ export type JevAnswer =
   | { readonly type: 'noul'; readonly noul: number };
 export type JevAnswerMap = Readonly<Record<string, JevAnswer>>;
 
-/** Question ids and choice keys accepted by the proxy. */
+/** Question ids and choice keys accepted by the proxy — i.e. `state.candidates` keys. */
 export const JEV_ID_PATTERN = /^[a-z][a-z0-9_]{0,40}$/;
-/** Maximum questions the proxy accepts in one request. */
+/** Maximum questions the proxy will build for one beat (= candidate groups). */
 export const JEV_MAX_QUESTIONS = 12;
 /** Maximum serialized-state size the proxy accepts, in bytes. */
 export const JEV_MAX_STATE_BYTES = 16 * 1024;
@@ -189,7 +193,14 @@ function ratioKeyFor(r: { forage: number; fight: number }): RatioKey | 'custom' 
 // ---------------------------------------------------------------------------
 
 export interface EncodedBeat {
+  /** The ONLY half that goes over the wire (jev-client.ts `beat()`). */
   readonly state: Record<string, unknown>;
+  /**
+   * What the proxy will ask, derived locally from the same candidates. Not sent
+   * — the proxy builds its own from `state.candidates` — but kept as the
+   * readable statement of the contract and as the other half of the token
+   * estimate below.
+   */
   readonly questions: JevQuestionMap;
   readonly estimatedTokens: number;
 }
@@ -397,20 +408,33 @@ export interface Decoded {
   readonly invalid: readonly string[];
 }
 
+/**
+ * Ids the split-of-workers answer can arrive under. The proxy builds one
+ * question per key of `state.candidates`, so it names that question after the
+ * candidate group — `fight_ratio` — while the question map above (and every
+ * fixture written against it) calls the same question `ratio`. Accept either;
+ * the first entry is the canonical id reported in `invalid`.
+ */
+const RATIO_ANSWER_IDS = ['ratio', 'fight_ratio'] as const;
+
 export function decodeAnswers(
   answers: JevAnswerMap,
   cands: CandidateSet,
   facts: RawFacts,
 ): Decoded {
   const invalid: string[] = [];
-  const pick = <K extends string>(id: string, valid: readonly K[], fallback: K): K => {
-    const a = answers[id];
+  const pick = <K extends string>(
+    ids: readonly [string, ...string[]],
+    valid: readonly K[],
+    fallback: K,
+  ): K => {
+    const a = ids.map((id) => answers[id]).find((found) => found !== undefined);
     if (a === undefined || a.type !== 'choice') {
-      invalid.push(id);
+      invalid.push(ids[0]);
       return fallback;
     }
     if ((valid as readonly string[]).includes(a.choice)) return a.choice as K;
-    invalid.push(id);
+    invalid.push(ids[0]);
     return fallback;
   };
   const noul = (id: string, offered: boolean): boolean | null => {
@@ -425,22 +449,22 @@ export function decodeAnswers(
   const currentRatio = ratioKeyFor(facts.currentRatio);
   const decision: Decision = {
     ratio: pick<RatioKey>(
-      'ratio',
+      RATIO_ANSWER_IDS,
       Object.keys(cands.ratio) as RatioKey[],
       currentRatio === 'custom' ? 'economy' : currentRatio,
     ),
     posture: pick<PostureKey>(
-      'posture',
+      ['posture'],
       Object.keys(cands.posture) as PostureKey[],
       facts.currentPosture in cands.posture ? facts.currentPosture : 'recall',
     ),
     dig: pick<DigDirection>(
-      'dig',
+      ['dig'],
       (Object.keys(cands.dig) as DigDirection[]).filter((d) => cands.dig[d].available),
       'hold',
     ),
     foodPriority: pick<FoodPriorityKey>(
-      'food_priority',
+      ['food_priority'],
       Object.keys(cands.foodPriority) as FoodPriorityKey[],
       'none',
     ),
