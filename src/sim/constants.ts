@@ -256,6 +256,52 @@ export const PHEROMONE_CAP = 65280;
 export const FLEE_THRESHOLD = 512;
 
 /**
+ * #297 (V38) — "doorstep" radius in Manhattan tiles. A HOMEBOUND forager
+ * (carrying food OR ReturningToNest — see below on why it is not restricted to
+ * laden ants) this close to one of its own OPEN and ENTERABLE entrances stops
+ * waiting for a *safe* entrance and pushes through the danger on normal routing,
+ * instead of taking V34's surface hold.
+ *
+ * Why a bound is needed at all: the V34 hold only fires when EVERY open entrance
+ * of the colony reads ≥ FLEE_THRESHOLD, and it re-arms itself every tick. Both
+ * scenario colonies start with exactly one entrance and the rule-based AI never
+ * builds a second, so a spider that keeps returning to that one door holds its
+ * DangerTrail at the deposit/decay equilibrium (SPIDER_DANGER_DEPOSIT 1280 against
+ * DANGER_DECAY_FP 10 ≈ 32 768, i.e. 64× this threshold) for as long as it stays.
+ * A single rampage is leashed by SPIDER_RAMPAGE_MAX_TICKS (1200), and a camper
+ * also leaves via the chase-divert — but the hold, designed as a one-tick "wait
+ * for a safer door", re-arms for the whole episode. MEASURED on `main`, longest
+ * CONTIGUOUS stretch of the AI entrance reading ≥ this threshold over 10 seeds,
+ * counting only ticks while the queen was still ALIVE: median 1 197.5 ticks, max
+ * 1 635 — about one rampage leash plus its ~100-tick decay tail, and ~4×
+ * STARVATION_GRACE_TICKS. That is the window in which colony income is zero and
+ * the queen starves with thousands of fp of carried stores parked outside (#297).
+ *
+ * Why 8: the carriers that deadlock sit 1–4 tiles from the entrance (they are
+ * only in the hold because the spider's danger cross reaches their tile, and the
+ * spider is on the door). 8 covers that band with headroom while still leaving
+ * the V34 hold in charge of the genuinely long walk home across a raid — the
+ * case Codex's P2 review of #209 was protecting. Balance-sensitive UAT knob; the
+ * V38 tests assert the behaviour at explicit distances, not this exact number.
+ *
+ * Radius measured, not asserted. The sweep was run BEFORE the local-all-clear
+ * exit landed, so its absolute numbers are that intermediate build's (queen@12k
+ * 83.3% for all of 3, 4 and 8 — the shipped configuration scores 86.7%); what it
+ * establishes is the RELATIVE ordering, which is a tie on every headline, with 8
+ * leaving the fewest workers frozen (median share 1% vs 2.5% at 3 and 3.5% at 4).
+ * Hence 8. Re-sweep if the radius ever becomes load-bearing on its own.
+ *
+ * Caveat when retuning: this is a MANHATTAN radius, while the route the carrier
+ * is released to is the obstacle-aware entrance BFS, which can detour AWAY from
+ * the entrance around a boulder. A carrier released at the edge of the band can
+ * therefore step out of it and re-arm the hold mid-detour. That is bounded rather
+ * than sticky because the V38 local-all-clear exit releases it again as soon as
+ * its own tile is safe; widening this radius much past the danger cross's reach
+ * would trade that for pushing ants through genuinely long dangerous walks.
+ */
+export const FLEE_HOMEBOUND_PUSH_THROUGH_TILES = 8;
+
+/**
  * A1 (V36) risk-aware foraging — fixed-point weight applied to a candidate
  * step's DangerTrail when a SearchingFood forager scores it:
  * `net = foodTrail − (Math.imul(danger, DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT)`,
@@ -955,7 +1001,7 @@ export const SPIDER_TERRITORY_RADIUS_TILES = 24 as const;
 
 /** S3 — Brood kills in a single rampage before spider exits to Feeding. */
 export const SPIDER_RAMPAGE_KILL_QUOTA = 2 as const;
-export const SPIDER_RAMPAGE_MAX_TICKS = 1200 as const; // timeout if no kills after ~20s
+export const SPIDER_RAMPAGE_MAX_TICKS = 1200 as const; // timeout if no kills after 60s (1200 ticks @ 20Hz)
 
 /** S3 — HP threshold below which spider retreats. */
 export const SPIDER_RAMPAGE_RETREAT_HP = 20 as const;
