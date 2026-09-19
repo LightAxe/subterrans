@@ -10,7 +10,12 @@ import { describe, it, expect } from 'vitest';
 import { createScenario } from '../scenario.js';
 import { tick } from '../tick.js';
 import { copyWorldState, allocateEntityId } from '../types.js';
-import { SIM_VERSION_V33_OCCUPANCY_CENTER, SIM_VERSION_V34_IDLE_RESERVE_FLEE } from '../types.js';
+import {
+  SIM_VERSION_V33_OCCUPANCY_CENTER,
+  SIM_VERSION_V34_IDLE_RESERVE_FLEE,
+  SIM_VERSION_V37_CORPSE_FOOD,
+  SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH,
+} from '../types.js';
 import type { WorldState } from '../types.js';
 import { pickOpenEntranceAtColumn, type NestEntrance } from '../colony/entrance.js';
 import { pheromoneGridKey, phSet, phGet } from '../pheromone/pheromone-store.js';
@@ -19,6 +24,7 @@ import { Zone } from '../terrain.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import {
   FLEE_THRESHOLD,
+  FLEE_HOMEBOUND_PUSH_THROUGH_TILES,
   SHELTER_COOLDOWN_TICKS,
   IDLE_MILL_RADIUS,
   KILL_ALARM_DANGER_DEPOSIT,
@@ -694,6 +700,356 @@ describe('flee — homebound-forager surface hold (#209 PR A, Codex P2)', () => 
     world.tick = shelterUntil + 1; // past the cooldown
     tickIdleReserveAndFlee(world);
     expect(world.ants.fleeShelterUntilTick[id]).toBeGreaterThan(world.tick); // re-armed
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('flee — homebound-forager doorstep push-through (#297, V38)', () => {
+  // V34's homebound surface hold re-arms itself every tick for as long as EVERY
+  // open entrance reads >= FLEE_THRESHOLD. Both scenario colonies own exactly one
+  // entrance, so a spider camping it pegs that tile's DangerTrail indefinitely and
+  // the hold never ends: carriers freeze a few tiles from home, colony income goes
+  // to exactly zero, and the queen starves (#297). V38 bounds the hold by distance
+  // — a homebound forager within FLEE_HOMEBOUND_PUSH_THROUGH_TILES of one of its
+  // own OPEN entrances stops waiting and makes the final dash.
+
+  /** Camp the colony's sole entrance (and a halo around it) with lethal danger. */
+  function campEntrance(world: WorldState, ent: NestEntrance, radius: number): void {
+    seedDanger(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX,
+      ent.surfaceTileY,
+      radius,
+      FLEE_THRESHOLD * 8,
+    );
+  }
+
+  /** A homebound CarryingFood forager `offset` tiles east of the sole entrance. */
+  function spawnCarrier(world: WorldState, ent: NestEntrance, offset: number): number {
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + offset,
+      ent.surfaceTileY,
+      AntTask.Foraging,
+    );
+    world.ants.subTask[id] = ForagingSubState.CarryingFood;
+    world.ants.foodCarrying[id] = FP_ONE;
+    world.ants.speed[id] = FP_ONE;
+    return id;
+  }
+
+  it('a carrier ON the doorstep is NOT held — it pushes through (V38)', () => {
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH;
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = spawnCarrier(world, ent, 2);
+    campEntrance(world, ent, 4);
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1); // no hold
+    // Movement is free to close the last tiles home (fleePhase > 0 would freeze it).
+    const before =
+      Math.abs((world.ants.posX[id]! >> FP_SHIFT) - ent.surfaceTileX) +
+      Math.abs((world.ants.posY[id]! >> FP_SHIFT) - ent.surfaceTileY);
+    tickAntMovement(world, new Rng(1), createDigFlowFields());
+    const after =
+      Math.abs((world.ants.posX[id]! >> FP_SHIFT) - ent.surfaceTileX) +
+      Math.abs((world.ants.posY[id]! >> FP_SHIFT) - ent.surfaceTileY);
+    expect(after).toBeLessThan(before);
+  });
+
+  it('the SAME carrier at V37 still takes the unbounded V34 hold (old-side pin)', () => {
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V37_CORPSE_FOOD;
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = spawnCarrier(world, ent, 2);
+    campEntrance(world, ent, 4);
+    const startX = world.ants.posX[id]!;
+    const startY = world.ants.posY[id]!;
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0); // held, as before
+    tickAntMovement(world, new Rng(1), createDigFlowFields());
+    expect(world.ants.posX[id]).toBe(startX);
+    expect(world.ants.posY[id]).toBe(startY);
+  });
+
+  it('a CLOSED entrance does not count as a doorstep, even at distance 2', () => {
+    // `onEnterableDoorstep` skips `!ent.isOpen`: an unexcavated shaft is not a way
+    // in, so a carrier standing next to one is not on its doorstep and must keep
+    // the V34 hold rather than walk to a door that cannot admit it.
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH;
+    world.spider = null;
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const open = openEntrance(world, PLAYER_COLONY_ID);
+    // A CLOSED entrance 2 tiles away, and move the only OPEN one far out of range.
+    colony.entrances.push({
+      entranceId: allocateEntityId(world),
+      surfaceTileX: open.surfaceTileX + 2,
+      surfaceTileY: open.surfaceTileY,
+      isOpen: false,
+    });
+    open.surfaceTileX += FLEE_HOMEBOUND_PUSH_THROUGH_TILES + 4;
+    const id = spawnCarrier(world, open, -(FLEE_HOMEBOUND_PUSH_THROUGH_TILES + 2)); // next to the CLOSED one
+    // Danger over the carrier and over every entrance → hold arms, no safe door.
+    seedDanger(
+      world,
+      PLAYER_COLONY_ID,
+      open.surfaceTileX - FLEE_HOMEBOUND_PUSH_THROUGH_TILES,
+      open.surfaceTileY,
+      FLEE_HOMEBOUND_PUSH_THROUGH_TILES + 6,
+      FLEE_THRESHOLD * 8,
+    );
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0); // held
+  });
+
+  it('a carrier BEYOND the doorstep radius still holds at V38 (Codex P2 intent preserved)', () => {
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH;
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const far = FLEE_HOMEBOUND_PUSH_THROUGH_TILES + 3;
+    const id = spawnCarrier(world, ent, far);
+    // Danger must cover BOTH the carrier's own tile (to arm the flee) and the
+    // entrance (so no safe entrance exists) — hence the wide halo.
+    campEntrance(world, ent, far + 1);
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0); // still held
+  });
+
+  it('a phase-0 dasher BEYOND the doorstep whose own tile is safe releases at V38 (all-clear arm)', () => {
+    // V38 twin of the V34-pinned "phase-0 homebound dasher whose OWN tile is safe
+    // but last entrance went dangerous enters the hold" case. Same shape, carrier
+    // outside the doorstep radius so `doorstepPush` is false and ONLY the
+    // local-all-clear arm at the dasher site can release it.
+    const build = (simVersion: number): number => {
+      const world = createScenario(SEED);
+      world.simVersion = simVersion;
+      world.spider = null;
+      const ent = openEntrance(world, PLAYER_COLONY_ID);
+      const id = spawnCarrier(world, ent, FLEE_HOMEBOUND_PUSH_THROUGH_TILES + 4);
+      world.ants.fleeShelterUntilTick[id] = 0; // mid-dash
+      // Door dangerous, carrier's OWN tile clear.
+      campEntrance(world, ent, 3);
+      tickIdleReserveAndFlee(world);
+      return world.ants.fleeShelterUntilTick[id];
+    };
+    expect(build(SIM_VERSION_V37_CORPSE_FOOD)).toBeGreaterThan(0); // V34: drops into the hold
+    expect(build(SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH)).toBe(-1); // V38: released
+  });
+
+  it('an already-held carrier releases once it is on the doorstep (hold re-arm site)', () => {
+    const world = createScenario(SEED);
+    // Enter the hold under V37 semantics, then let a V38 build re-evaluate it —
+    // the re-arm site must release rather than extend the hold forever.
+    world.simVersion = SIM_VERSION_V37_CORPSE_FOOD;
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = spawnCarrier(world, ent, 2);
+    campEntrance(world, ent, 4);
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0);
+    world.simVersion = SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH;
+    world.tick += 1;
+    campEntrance(world, ent, 4); // still camped
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1); // released, not re-armed
+    expect(world.ants.targetPosX[id]).toBe(-1); // stale flee target cleared
+    expect(world.ants.targetPosY[id]).toBe(-1);
+  });
+
+  it('a phase-0 doorstep dasher that loses its last safe entrance releases instead of holding', () => {
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH;
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = spawnCarrier(world, ent, 2);
+    world.ants.fleeShelterUntilTick[id] = 0; // mid-dash
+    campEntrance(world, ent, 4); // its door just went dangerous
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1); // pushes through, no hold
+  });
+
+  it('does NOT push through a door a RAMPAGING spider is blockading (real spider entity; danger field seeded)', () => {
+    // The one case where pushing through is pure loss: `isDescentBlocked` (#165)
+    // pins ANY descender on the surface while a Rampaging spider occupies the
+    // entrance tile, and the rampage state machine deliberately holds that camper
+    // there while a surface ant stands on it so the bite lands. Measured on the
+    // committed-but-unguarded version: 12/12 seeds walked in and were eaten.
+    // The SPIDER is the real entity here; the DangerTrail is still seeded by hand
+    // so the hold arms on a known value rather than on spider deposit timing.
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = spawnCarrier(world, ent, 2); // well inside the doorstep radius
+    const spider = world.spider!;
+    spider.state = 'Rampaging';
+    spider.rampageTargetColonyId = PLAYER_COLONY_ID;
+    spider.posX = center(ent.surfaceTileX);
+    spider.posY = center(ent.surfaceTileY);
+    campEntrance(world, ent, 4);
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0); // holds, does not walk in
+
+    // Hold it for real ticks so "did not walk into the bite tile" is a conclusion
+    // about the whole pipeline (movement + spider combat), not one step-15b call.
+    const startX = world.ants.posX[id]!;
+    for (let t = 0; t < 40; t++) {
+      spider.state = 'Rampaging';
+      spider.posX = center(ent.surfaceTileX);
+      spider.posY = center(ent.surfaceTileY);
+      campEntrance(world, ent, 4);
+      tick(world, []);
+    }
+    expect(world.ants.alive[id]).toBe(1); // never fed to the camper
+    expect(world.ants.posX[id]).toBe(startX); // never stepped toward the door
+
+    // Same ant, same danger, spider HUNTING at the door instead of Rampaging: #165
+    // scopes the blockade to Rampaging on purpose, so descent is possible and the
+    // doorstep push resumes. (Hunting is the telegraph phase — dangerous, but not a
+    // blockade.)
+    spider.state = 'Hunting';
+    world.tick += 1;
+    campEntrance(world, ent, 4);
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1); // pushes through
+  });
+
+  it('a HUNTING spider at the door does not blockade — the carrier descends and banks', () => {
+    // The positive half of the blockade guard, driven to its end state: with a
+    // non-Rampaging spider the released carrier actually gets underground and
+    // deposits, rather than being pinned on the entrance tile.
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = spawnCarrier(world, ent, 2);
+    const spider = world.spider!;
+    spider.state = 'Hunting';
+    spider.posX = center(ent.surfaceTileX);
+    spider.posY = center(ent.surfaceTileY);
+    let banked = false;
+    for (let t = 0; t < 300; t++) {
+      spider.state = 'Hunting'; // keep it off the Rampaging blockade path
+      spider.posX = center(ent.surfaceTileX);
+      spider.posY = center(ent.surfaceTileY);
+      campEntrance(world, ent, 4);
+      tick(world, []);
+      if (world.ants.alive[id] !== 1) break;
+      if (world.ants.foodCarrying[id] === 0) {
+        banked = true;
+        break;
+      }
+    }
+    expect(banked).toBe(true);
+  });
+
+  it('an EMPTY ReturningToNest forager pushes through too — homebound, not merely laden', () => {
+    // Deliberate and measured. Restricting the push to `foodCarrying > 0` reads
+    // safer ("don't risk an ant with nothing to bank") but is worse on every
+    // headline: 30 seeds Normal, laden-only vs homebound = queen@12k 83.3% vs
+    // 86.7%, queen@24k 76.7% vs 86.7%, WarFooting 83.3% vs 86.7%. A frozen empty
+    // forager is a DISABLED worker — it banks nothing AND forages nothing and
+    // never re-enters the allocator; released, it gets home and goes back to work.
+    const world = createScenario(SEED);
+    world.simVersion = SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH;
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 2,
+      ent.surfaceTileY,
+      AntTask.Foraging,
+    );
+    world.ants.subTask[id] = ForagingSubState.ReturningToNest;
+    world.ants.foodCarrying[id] = 0; // homebound but EMPTY
+    campEntrance(world, ent, 4);
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1); // released, like a carrier
+
+    // A SearchingFood forager (outward-bound, not homebound) is still untouched —
+    // the V34 exception, unchanged.
+    const outbound = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 2,
+      ent.surfaceTileY + 1,
+      AntTask.Foraging,
+    );
+    world.ants.subTask[outbound] = ForagingSubState.SearchingFood;
+    world.ants.foodCarrying[outbound] = 0;
+    world.tick += 1;
+    campEntrance(world, ent, 4);
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[outbound]).toBe(-1); // never held either
+  });
+
+  it('releases a carrier whose OWN tile has decayed clear, even far from home (V38)', () => {
+    // The V34 re-arm site keyed on entrance safety alone and never re-read local
+    // danger, so a carrier that armed the hold on a one-shot pulse (a spider
+    // walking past, a kill alarm) stayed frozen for as long as ANY door stayed
+    // camped — standing in zero danger, holding food, unable to move. Because the
+    // hold freezes movement it could never walk to the doorstep band either, so
+    // the distance bound alone could not rescue it.
+    const far = FLEE_HOMEBOUND_PUSH_THROUGH_TILES + 4;
+    const run = (simVersion: number): number => {
+      const world = createScenario(SEED);
+      world.simVersion = simVersion;
+      world.spider = null;
+      const ent = openEntrance(world, PLAYER_COLONY_ID);
+      const id = spawnCarrier(world, ent, far);
+      // One-shot pulse on the carrier's own tile + a permanently camped door.
+      seedDanger(
+        world,
+        PLAYER_COLONY_ID,
+        ent.surfaceTileX + far,
+        ent.surfaceTileY,
+        1,
+        FLEE_THRESHOLD * 4,
+      );
+      campEntrance(world, ent, 3);
+      tickIdleReserveAndFlee(world);
+      expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0); // held, correctly
+      // The pulse decays; the door stays camped.
+      seedDanger(world, PLAYER_COLONY_ID, ent.surfaceTileX + far, ent.surfaceTileY, 1, 0);
+      campEntrance(world, ent, 3);
+      world.tick += 1;
+      world.ants.fleeShelterUntilTick[id] = world.tick; // elapse → re-eval fires
+      tickIdleReserveAndFlee(world);
+      return world.ants.fleeShelterUntilTick[id];
+    };
+    expect(run(SIM_VERSION_V37_CORPSE_FOOD)).toBeGreaterThan(0); // V34: frozen in the clear
+    expect(run(SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH)).toBe(-1); // V38: released
+  });
+
+  it('#297 regression: a carrier at a camped sole entrance banks its load (V38) or never does (V37)', () => {
+    // The end-to-end shape of the bug: a laden carrier two tiles from a
+    // permanently camped sole entrance. Pre-V38 the hold re-arms every tick and
+    // the ant never gets home — colony food income is exactly zero for as long as
+    // the camp lasts, which is what starved the AI queen in #297. At V38 it walks
+    // in and deposits. Asserted on THAT carrier (foodCarrying → 0 and it is
+    // underground), not on a colony total the other starting workers also move.
+    const banksWithin = (simVersion: number, ticks: number): boolean => {
+      const world = createScenario(SEED);
+      world.simVersion = simVersion;
+      world.spider = null;
+      const ent = openEntrance(world, PLAYER_COLONY_ID);
+      const id = spawnCarrier(world, ent, 2);
+      for (let t = 0; t < ticks; t++) {
+        // Re-seed every tick: this is what a spider standing on the tile does.
+        campEntrance(world, ent, 4);
+        tick(world, []);
+        if (world.ants.alive[id] !== 1) return false;
+        if (world.ants.foodCarrying[id] === 0) return true;
+      }
+      return false;
+    };
+    expect(banksWithin(SIM_VERSION_V37_CORPSE_FOOD, 600)).toBe(false); // frozen forever
+    expect(banksWithin(SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH, 600)).toBe(true);
   });
 });
 

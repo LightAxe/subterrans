@@ -8,8 +8,10 @@
 // dispatch) is why the flee state machine stays legible and testable.
 //
 // The whole pass is inert below V34 (early return), so pre-V34 saves replay
-// byte-identically. Reads are grid-guarded — a bare/test world with no
-// DangerTrail grid sees danger = 0 everywhere (no flee, plain milling).
+// byte-identically. The V38 doorstep push-through and local-all-clear release
+// (#297) are gated the same way, inside the per-worker loop. Reads are
+// grid-guarded — a bare/test world with no DangerTrail grid sees danger = 0
+// everywhere (no flee, plain milling).
 //
 // Determinism: flee/mill decisions are pure functions of the serialized
 // pheromone grids, ant positions, and `fleeShelterUntilTick`. The mill wander is
@@ -19,8 +21,9 @@ import type { WorldState } from '../types.js';
 import {
   SIM_VERSION_V34_IDLE_RESERVE_FLEE,
   SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
+  SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH,
 } from '../types.js';
-import { isInChamberFootprint, type ColonyId } from '../colony/colony-store.js';
+import { isInChamberFootprint, type ColonyId, type ColonyRecord } from '../colony/colony-store.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { phGet, pheromoneGridKey, type PheromoneGrid } from '../pheromone/pheromone-store.js';
@@ -35,8 +38,15 @@ import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
   SPIDER_SCATTER_RADIUS_TILES,
+  FLEE_HOMEBOUND_PUSH_THROUGH_TILES,
 } from '../constants.js';
-import { canEnterSurfaceTile, canEnterUndergroundTile, DIR_DX, DIR_DY } from './ant-motion.js';
+import {
+  canEnterSurfaceTile,
+  canEnterUndergroundTile,
+  isDescentBlocked,
+  DIR_DX,
+  DIR_DY,
+} from './ant-motion.js';
 
 const ZONE_SURFACE = 0; // Zone.Surface (raw; terrain.ts not imported into this leaf-ish behavior)
 
@@ -172,6 +182,90 @@ function setUndergroundWanderStep(
 }
 
 /**
+ * #297 (V38) — LOCAL ALL-CLEAR exit from the homebound surface hold: true when the
+ * held worker's OWN tile has decayed below FLEE_THRESHOLD.
+ *
+ * V34 armed the hold on the worker's own-tile danger but then re-armed it on
+ * ENTRANCE safety alone, never re-reading where the worker actually stands. A
+ * carrier that armed the hold on a one-shot pulse — a spider walking past, or a
+ * cross-colony kill alarm (`KILL_ALARM_DANGER_DEPOSIT`, which has no leash at all)
+ * — therefore stayed frozen for as long as ANY door stayed camped, standing in
+ * zero danger, holding food the colony could never bank. And because the hold
+ * freezes movement, such a worker could never walk into the doorstep band either,
+ * so the doorstep exit alone could not reach it.
+ *
+ * Releasing a worker that is not in danger is the bound this hold was missing: if
+ * it walks back into the threat the phase -1 entry branch re-arms the hold, so the
+ * behaviour is bounded by the THREAT rather than unbounded in time. Applied at
+ * BOTH hold sites (entry-from-dash and re-arm) so the outcome never depends on
+ * which site evaluated the worker.
+ */
+function releaseOnLocalAllClear(
+  world: WorldState,
+  dangerGrid: PheromoneGrid | undefined,
+  tileX: number,
+  tileY: number,
+): boolean {
+  if (world.simVersion < SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH) return false;
+  const danger = dangerGrid !== undefined ? phGet(dangerGrid, tileX, tileY) : 0;
+  return danger < FLEE_THRESHOLD;
+}
+
+/**
+ * #297 (V38) — true when a homebound forager is on its own DOORSTEP: within
+ * FLEE_HOMEBOUND_PUSH_THROUGH_TILES Manhattan tiles of an own entrance that is
+ * both OPEN and actually ENTERABLE. Such a carrier pushes through the danger on
+ * normal routing instead of taking V34's hold; see
+ * SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH.
+ *
+ * OPEN, not safe: safety is exactly what has failed wherever this is consulted
+ * (the hold only arms when every open entrance reads >= FLEE_THRESHOLD), so
+ * requiring safety here would make the predicate constantly false.
+ *
+ * ENTERABLE is the load-bearing half. `isDescentBlocked` (#165) pins ANY
+ * descender on the surface while a RAMPAGING spider occupies the entrance tile,
+ * and the rampage state machine deliberately holds that camper in place exactly
+ * while a surface ant stands there so the tile-coincident bite lands. Releasing
+ * a carrier toward such a door therefore does not get it home — it walks onto
+ * the bite tile, cannot descend, and is eaten. Measured in a real camp (spider
+ * set Rampaging once, the sim's own state machine running, carrier 2 tiles out,
+ * 12 seeds): WITHOUT this guard 12/12 carriers died; WITH it 12/12 banked their
+ * load, versus 11/12 under the plain V34 hold. Pushing through DANGER is the
+ * point; pushing into a blockade you provably cannot pass is pure loss, so a
+ * blockaded door does not count as a doorstep and the ant keeps the V34 hold
+ * until the camper moves.
+ *
+ * `isDescentBlocked` is called rather than re-implemented so the two can never
+ * drift. `isOwnEntrance = true` + `AntTask.Foraging` reduces it to the #165
+ * spider arm by construction (the #164 arm needs a FOREIGN Fighter).
+ *
+ * Inlined scan for the same reason as `pickNearestSafeEntrance`: it runs per
+ * worker per tick and must not allocate (repo hot-loop rule). A colony holds at
+ * most MAX_ENTRANCES_PER_COLONY = 4 entrances, so the loop is trivially bounded.
+ */
+function onEnterableDoorstep(
+  world: WorldState,
+  colony: ColonyRecord,
+  entrances: readonly NestEntrance[],
+  tileX: number,
+  tileY: number,
+): boolean {
+  for (let e = 0; e < entrances.length; e++) {
+    const ent = entrances[e]!;
+    if (!ent.isOpen) continue;
+    const dist = Math.abs(ent.surfaceTileX - tileX) + Math.abs(ent.surfaceTileY - tileY);
+    if (dist > FLEE_HOMEBOUND_PUSH_THROUGH_TILES) continue;
+    if (
+      isDescentBlocked(world, AntTask.Foraging, true, colony, ent.surfaceTileX, ent.surfaceTileY)
+    ) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
  * Nearest OPEN entrance whose surface tile is SAFE (DangerTrail < FLEE_THRESHOLD).
  * Skipping camped entrances is what lets a worker flee to a farther clear exit
  * instead of being suppressed because its nearest open entrance is dangerous
@@ -273,6 +367,17 @@ function setFleeTarget(
  *                     above the shaft has decayed, else re-arm the cooldown
  *   >0 surface      → re-check each tick: dash (0) once a safe entrance appears,
  *                     release (-1) if no longer homebound, else re-arm the hold
+ *
+ * #297 (V38) adds the two exits the surface hold was missing, so it is bounded by
+ * the THREAT rather than unbounded in time:
+ *   - doorstep — the carrier is within FLEE_HOMEBOUND_PUSH_THROUGH_TILES of an own
+ *     entrance that is open AND enterable (`onEnterableDoorstep`); it pushes
+ *     through the danger rather than starving the colony three tiles out.
+ *   - local all-clear — the re-arm site re-reads the carrier's OWN tile and
+ *     releases it once that has decayed below FLEE_THRESHOLD. V34 keyed on
+ *     entrance safety alone, so a carrier could stay frozen in zero danger
+ *     indefinitely (and, being frozen, could never reach the doorstep band).
+ * See SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH.
  */
 export function tickIdleReserveAndFlee(world: WorldState): void {
   if (world.simVersion < SIM_VERSION_V34_IDLE_RESERVE_FLEE) return;
@@ -307,6 +412,34 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
       const isHomeboundForager =
         task === AntTask.Foraging &&
         (ants.foodCarrying[id]! > 0 || ants.subTask[id]! === ForagingSubState.ReturningToNest);
+      // #297 (V38) — doorstep push-through. Computed once per worker and read by
+      // all three hold sites below (entry, dasher-loses-its-door, hold re-arm) so
+      // they can never disagree about whether this carrier waits or runs. Inert
+      // below V38, so pre-V38 replays keep the unbounded V34 hold byte-for-byte.
+      // `zone === ZONE_SURFACE` first: every read site below is inside a
+      // surface-only branch, but an UNDERGROUND carrier's (tileX, tileY) are
+      // underground-grid coordinates, and comparing those against
+      // `ent.surfaceTileX/Y` is meaningless (a carrier at the shaft row would
+      // measure `dist = surfaceTileY` and often score a spurious `true`). Gate it
+      // here so the value is never wrong rather than merely never read, and so
+      // the scan is skipped for the colony's largest ant population.
+      const doorstepPush =
+        world.simVersion >= SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH &&
+        zone === ZONE_SURFACE &&
+        // HOMEBOUND, not merely laden. Restricting the push to `foodCarrying > 0`
+        // is the intuitive call — "don't risk an ant that has nothing to bank" —
+        // and it MEASURES WORSE: 30 seeds, Normal, laden-only vs homebound gives
+        // queen@12k 83.3% vs 86.7%, queen@24k 76.7% vs 86.7%, WarFooting 83.3% vs
+        // 86.7%. The mechanism: an EMPTY ReturningToNest forager frozen out here
+        // is a DISABLED FORAGER. It never descends (movement's `needsUnderground`
+        // admits Foraging only at subTask CarryingFood, or fleePhase === 0), and
+        // it is still bite-able where it stands. Released, it walks to the
+        // entrance tile, flips to SearchingFood with its wave bumped, and starts a
+        // fresh excursion — which is the colony's next load of food. Frozen, it
+        // does none of that. The bite risk is the same either way; only the upside
+        // differs, and the upside is real.
+        isHomeboundForager &&
+        onEnterableDoorstep(world, colony, entrances, tileX, tileY);
 
       // A fleeing/sheltering worker the allocator reassigned AWAY from its reserve
       // task (Idle/Foraging) — e.g. recruited to Fighting/Nursing/Digging during
@@ -348,14 +481,23 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
           // (BFS vs straight-line) — see its doc.
           if (setFleeTarget(world, id, entrances, tileX, tileY, dangerGrid)) {
             ants.fleeShelterUntilTick[id] = 0; // dashing toward the safe entrance
-          } else if (isHomeboundForager) {
+          } else if (isHomeboundForager && !doorstepPush) {
             // No safe entrance, but this forager is heading HOME (carrying food /
-            // ReturningToNest). Normal movement would route it to the nearest
-            // OPEN — possibly camped — entrance without the safe filter, walking
-            // it into the threat (Codex P2). Instead HOLD it in place for one
-            // tick: clear the target and set a positive surface timer. Movement
-            // skips every fleePhase > 0, so it freezes here and re-evaluates next
-            // tick (the phase>0 surface branch), dashing once an entrance clears.
+            // ReturningToNest) and is still far from any of its own doors.
+            // Normal movement would route it to the nearest OPEN — possibly
+            // camped — entrance without the safe filter, walking it the whole way
+            // into the threat (Codex P2). Instead HOLD it in place for one tick:
+            // clear the target and set a positive surface timer. Movement skips
+            // every fleePhase > 0, so it freezes here and re-evaluates next tick
+            // (the phase>0 surface branch), dashing once an entrance clears.
+            //
+            // #297 (V38): a carrier already ON its doorstep takes the `else`
+            // (no hold) and pushes through — waiting there is what starved the
+            // colony. A Rampaging camper does eventually leave (the chase-divert,
+            // or SPIDER_RAMPAGE_MAX_TICKS), but the camp outlasts
+            // STARVATION_GRACE_TICKS several times over: measured on `main`, the
+            // longest contiguous camp while the queen was still alive runs a
+            // median 1 197.5 ticks and up to 1 635, ~4× the 300-tick grace.
             ants.targetPosX[id] = -1;
             ants.targetPosY[id] = -1;
             ants.fleeShelterUntilTick[id] = tick + 1;
@@ -387,17 +529,26 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
         if (zone === ZONE_SURFACE) {
           if (isHomeboundForager) {
             // Homebound dasher: entrance SAFETY — not the worker's own tile —
-            // governs it. Do NOT release just because local danger decayed:
-            // normal routing would immediately re-aim it at a still-camped
-            // entrance (Codex P2). Keep dashing while a safe entrance exists
-            // (refresh routing each tick); if the last safe entrance is lost,
-            // drop into the surface timed hold rather than back to normal
-            // routing. It leaves flee only by reaching a shaft (descent →
+            // governs the DASH. Keep dashing while a safe entrance exists
+            // (refresh routing each tick); do not hand it back to normal routing
+            // merely because local danger decayed, which would re-aim it at a
+            // still-camped entrance (Codex P2). If the last safe entrance is
+            // lost, it drops into the surface timed hold — except, since V38, on
+            // its own doorstep or when its own tile is clear AND no safe entrance
+            // exists, where holding is the worse of the two evils (see below).
+            // Otherwise it leaves flee only by reaching a shaft (descent →
             // shelter, in movement) or being reassigned off Foraging (top guard).
             if (!setFleeTarget(world, id, entrances, tileX, tileY, dangerGrid)) {
               ants.targetPosX[id] = -1;
               ants.targetPosY[id] = -1;
-              ants.fleeShelterUntilTick[id] = tick + 1;
+              // #297 (V38) — the SAME two exits the phase>0 re-arm site uses, so a
+              // carrier's fate never depends on which site happened to evaluate it:
+              // release to normal routing on the doorstep, or when its own tile is
+              // not actually dangerous; otherwise drop into the timed hold.
+              ants.fleeShelterUntilTick[id] =
+                doorstepPush || releaseOnLocalAllClear(world, dangerGrid, tileX, tileY)
+                  ? -1
+                  : tick + 1;
             }
           } else {
             const danger = dangerGrid !== undefined ? phGet(dangerGrid, tileX, tileY) : 0;
@@ -440,6 +591,29 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
           } else if (setFleeTarget(world, id, entrances, tileX, tileY, dangerGrid)) {
             // A safe entrance appeared → dash toward it.
             ants.fleeShelterUntilTick[id] = 0;
+          } else if (doorstepPush || releaseOnLocalAllClear(world, dangerGrid, tileX, tileY)) {
+            // #297 (V38) — two ways to stop waiting, both handed back to normal
+            // homebound routing by clearing the target:
+            //
+            //  (a) doorstepPush — home is within reach through an enterable door:
+            //      make the final dash rather than starve three tiles out.
+            //
+            //  (b) the ant's OWN tile has decayed below FLEE_THRESHOLD. This site
+            //      previously re-armed on entrance safety ALONE and never
+            //      re-read local danger, so a carrier that armed the hold on a
+            //      one-shot pulse (a spider walking past, a kill alarm) stayed
+            //      frozen for as long as ANY door stayed camped — standing in
+            //      zero danger, unable to move, holding food the colony could
+            //      never bank. Because the hold freezes movement it could not
+            //      even walk toward the doorstep band, so (a) alone could never
+            //      rescue it. Releasing an ant that is not actually in danger is
+            //      the bound this hold was missing; if it walks back into the
+            //      threat the phase -1 entry branch re-arms the hold, so the
+            //      behaviour stays bounded by the threat rather than unbounded
+            //      in time.
+            ants.fleeShelterUntilTick[id] = -1;
+            ants.targetPosX[id] = -1;
+            ants.targetPosY[id] = -1;
           } else {
             // Still no safe entrance → re-arm the hold for another tick.
             ants.fleeShelterUntilTick[id] = tick + 1;
