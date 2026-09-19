@@ -11,8 +11,13 @@
 // Two rules the overlay depends on:
 //   1. Picking a preset OVERWRITES the free text with that preset's text.
 //   2. Editing the free text un-highlights every preset (the choice is "custom").
-// A `balanced` preset is the empty string, which is the "send no standing_orders
-// field at all" convention documented in jev-orders.ts.
+// Every preset (including `balanced`, the default) carries non-empty tuned text
+// — see jev-orders.ts. The empty string is a SEPARATE state, "no standing orders
+// at all" (send no `standing_orders` field), reached only by clearing the text
+// box; presetMatching below highlights no preset for it, since no preset's text
+// normalizes to empty. A fresh player (no saved preference) is seeded with the
+// `balanced` text by the caller — see createOpponentPickerState's doc — which is
+// what makes `balanced` the default the player actually sees.
 
 import { DEFAULT_OPPONENT, jevOpponent, type OpponentConfig } from './opponent-config.js';
 import {
@@ -26,7 +31,9 @@ import {
 export interface OpponentPickerState {
   /** Which opponent the player currently has selected. */
   readonly kind: OpponentConfig['kind'];
-  /** Highlighted preset, or null when the free text has been edited ("custom"). */
+  /** Highlighted preset, or null when the free text is "custom" — edited away
+   *  from any preset's text, or cleared to empty ("no standing orders at all"
+   *  is not the `balanced` preset; it highlights nothing). */
   readonly presetId: JevOrdersPresetId | null;
   /** Live free-text contents. Capped at JEV_ORDERS_MAX_LENGTH but NOT otherwise
    *  normalized — the player must be able to type a trailing space. Trimming /
@@ -57,6 +64,13 @@ function presetMatching(text: string): JevOrdersPresetId | null {
  * it, so without this a player who runs one round against the Standard AI would
  * come back to an empty box. It is only consulted when `saved` is `rules`; a
  * `jev` preference is self-describing and always wins.
+ *
+ * This function has no opinion on defaults — an omitted `savedOrders` falls back
+ * to `''` right here. `balanced` becomes the DEFAULT a fresh player actually sees
+ * because platform/settings.ts's `DEFAULT_SETTINGS.jevOrders` is the `balanced`
+ * text (not `''`), and every real caller (GameScene.difficultySelectSeed) always
+ * passes a defined string sourced from there. presetMatching then highlights
+ * `balanced` naturally, the same way it would for any other preset text.
  */
 export function createOpponentPickerState(args: {
   saved: OpponentConfig;

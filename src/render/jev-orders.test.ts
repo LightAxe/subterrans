@@ -2,6 +2,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  DEFAULT_ORDERS_TEXT,
   JEV_ORDERS_MAX_LENGTH,
   JEV_ORDERS_PRESETS,
   normalizeOrders,
@@ -18,20 +19,21 @@ describe('JEV_ORDERS_PRESETS', () => {
     ]);
   });
 
-  it('balanced is the empty preset (no standing_orders field is sent)', () => {
-    expect(JEV_ORDERS_PRESETS.find((p) => p.id === 'balanced')!.text).toBe('');
-  });
-
-  it('every non-balanced preset has a non-empty label and text within the cap', () => {
+  it('every preset — including balanced — has a non-empty label and text within the cap', () => {
     for (const preset of JEV_ORDERS_PRESETS) {
       expect(preset.label.length).toBeGreaterThan(0);
-      if (preset.id === 'balanced') continue;
       expect(preset.text.length).toBeGreaterThan(0);
       expect(preset.text.length).toBeLessThanOrEqual(JEV_ORDERS_MAX_LENGTH);
       // Presets must survive normalization unchanged, or the text the player
       // sees in the picker would differ from the text Jev receives.
       expect(normalizeOrders(preset.text)).toBe(preset.text);
     }
+  });
+
+  it('an empty standing-orders string is a separate state, not a preset', () => {
+    // "No standing orders at all" is reached by clearing the text box; it does
+    // not belong to `balanced` or to any other preset (jev-orders.ts header).
+    for (const preset of JEV_ORDERS_PRESETS) expect(preset.text).not.toBe('');
   });
 });
 
@@ -50,7 +52,7 @@ describe('normalizeOrders', () => {
     expect(normalizeOrders(padded).length).toBe(JEV_ORDERS_MAX_LENGTH);
   });
 
-  it('maps a whitespace-only string to the empty (balanced) orders', () => {
+  it('maps a whitespace-only string to the empty string (no standing orders)', () => {
     expect(normalizeOrders('   \n\t ')).toBe('');
   });
 });
@@ -60,8 +62,20 @@ describe('ordersTextForPreset', () => {
     expect(ordersTextForPreset('aggressive')).toContain('Strike early');
   });
 
-  it('returns empty (= balanced) for balanced and for an unknown id', () => {
-    expect(ordersTextForPreset('balanced')).toBe('');
+  it("returns balanced's own tuned (non-empty) text for 'balanced'", () => {
+    const text = ordersTextForPreset('balanced');
+    expect(text).not.toBe('');
+    expect(text).toBe(JEV_ORDERS_PRESETS.find((p) => p.id === 'balanced')!.text);
+  });
+
+  it('returns empty for an unknown id (a defensive fallback, not a preset)', () => {
     expect(ordersTextForPreset('not-a-preset')).toBe('');
+  });
+});
+
+describe('DEFAULT_ORDERS_TEXT', () => {
+  it("equals balanced's tuned text and is non-empty", () => {
+    expect(DEFAULT_ORDERS_TEXT).toBe(ordersTextForPreset('balanced'));
+    expect(DEFAULT_ORDERS_TEXT.length).toBeGreaterThan(0);
   });
 });

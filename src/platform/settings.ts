@@ -61,7 +61,12 @@ export interface Settings {
    *  it, so persisting only `opponent` would throw a 300-character hand-written
    *  order away the moment the player starts one round against the Standard AI.
    *  Written whenever a Jev round starts; never cleared by choosing Standard AI.
-   *  `''` (the default) means "no remembered text". Render-only. */
+   *  Defaults to the `balanced` preset's tuned text (DEFAULT_JEV_ORDERS below),
+   *  so a fresh player's first look at the standing-orders box shows tuned
+   *  orders, not a blank one. `''` remains meaningful on its own terms: it is
+   *  what a player gets back after explicitly clearing the box, and means "no
+   *  standing orders at all" (jevOpponent('') sends no `standing_orders` field).
+   *  Render-only. */
   jevOrders: string;
 }
 
@@ -73,6 +78,16 @@ export interface Settings {
  *  cannot drift — same arrangement as save.ts's MAX_OPPONENT_ORDERS_LENGTH. */
 export const SURVEY_EMAIL_MAX = 254;
 
+/** The `balanced` preset's text (render/jev-orders.ts's `DEFAULT_ORDERS_TEXT`),
+ *  duplicated — not imported — to keep platform/ free of a runtime dependency on
+ *  render/ (mirrors `MAX_OPPONENT_ORDERS_LENGTH` in save.ts). settings.test.ts
+ *  cross-checks this literal against the render-layer original so the two
+ *  cannot drift apart silently. */
+const DEFAULT_JEV_ORDERS =
+  'Survival first: keep our food stores rising. Keep most workers foraging the nearest pile, ' +
+  'keep a small guard on our entrance, dig only when stores are high, and never send fighters ' +
+  'away from home.';
+
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
   pheromoneOverlay: true,
   hintStripVisible: true,
@@ -80,7 +95,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   surveyEmail: '',
   difficulty: 'Normal',
   opponent: { kind: 'rules' },
-  jevOrders: '',
+  jevOrders: DEFAULT_JEV_ORDERS,
 };
 
 interface SettingsEnvelope {
