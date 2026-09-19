@@ -27,6 +27,7 @@ the Phase 4 WorldState reshape unless another issue owns them.
 | AI targets PLAYER_COLONY_ID only | `ai-state.ts:150-154,276-280,549`, `ai-controller.ts:780-791,867-878` | two-colony logic | none | Phase 4 reshape |
 | Underground input hardcodes PLAYER_COLONY_ID (~10 sites) | `underground-input.ts` (cf. `surface-input.ts:354,449`) | two-colony logic | none | Phase 4 reshape |
 | Input world dims branch on constants | `gesture-arbiter.ts:206-210`, `camera-input.ts:194` | constant-bounds (input) | none | Phase 4 reshape |
+| Jev opening nest rows (spine to 13, Queen anchor 11, upper chambers 4) | `render/jev-opening.ts` (`JEV_QUEEN_ANCHOR_ROW` / `JEV_UPPER_CHAMBER_ROW`) | constant-bounds (render) | clamped to `grid.height`; an anchor that does not fit degrades to `findReachableChamberSpot` | Phase 4 reshape |
 | SpiderState 28-field singleton mirrored 3× | types iface / `copyWorldState` / `save.ts` | predator model | none | Phase 4 reshape (5b) |
 
 ## Guard pattern

@@ -3,12 +3,24 @@
 // rule-based ai-controller.ts.
 //
 // Shape of one round:
-//   phase 'opening' — replay the rule-based AI's own opening (jev-opening.ts)
-//                     until Queen + Nursery + first FoodStorage are built.
+//   phase 'opening' — run the code-owned nest planner (jev-opening.ts) until
+//                     Queen + Nursery + first FoodStorage are PLACED. That is a
+//                     couple of ticks, not a couple of thousand: the chambers
+//                     are committed as pending and the colony's one digger
+//                     excavates them in the background, right through the live
+//                     phase. Handing off on "placed" rather than "built" is what
+//                     gives Jev the opening minutes of the round instead of
+//                     making it watch a build order play itself out.
 //   phase 'live'    — every AI_DIG_INTERVAL ticks, mark frontier tiles in the
 //                     direction Jev last chose; every `beatTicks` ticks, fire ONE
 //                     request describing the world in words. The proxy builds the
 //                     beat's questions from that state and answers them.
+//                     `digDirection` starts at 'hold' precisely so the one
+//                     digger finishes the planned nest before Jev spends it on a
+//                     frontier; Jev can change that on any beat. Frontier marks
+//                     can never collide with a pending footprint either way:
+//                     `digFrontier` only returns Solid tiles and PlaceChamber
+//                     already flipped every footprint tile to Marked.
 //
 // The one structural rule: `onBeforeTick` is synchronous (the game loop's seam
 // is), so the request is fire-and-forget. Its result is stashed by the promise
@@ -58,7 +70,7 @@ import { buildCandidates, computeFacts, digFrontier } from './jev-candidates.js'
 import { decodeAnswers, encodeBeat } from './jev-encode.js';
 import {
   createJevOpeningState,
-  isHandoffComplete,
+  isOpeningPlanned,
   runJevOpeningTick,
   type JevOpeningState,
 } from './jev-opening.js';
@@ -119,6 +131,12 @@ export class JevEnemyController {
    * probes are sent for the round.
    */
   probe: 'pending' | 'ok' | 'failed' | null = null;
+  /**
+   * 'hold' until Jev's first beat says otherwise. The opening hands off with the
+   * nest merely PLACED, so at handoff the colony's single digger still has the
+   * whole planned nest in front of it — the default keeps the cadence executor
+   * from marking a frontier that would compete with it for that digger.
+   */
   digDirection: DigDirection = 'hold';
   currentPosture: PostureKey = 'recall';
 
@@ -186,7 +204,7 @@ export class JevEnemyController {
     // Phase is derived from the world, not from a tick counter — a controller
     // created by bootFromSave lands in the right phase for the loaded save.
     if (this.phase === 'opening') {
-      if (isHandoffComplete(world, this.seats.mySeat)) {
+      if (isOpeningPlanned(world, this.seats.mySeat)) {
         this.phase = 'live';
         this.handoffTick = world.tick;
       } else {
