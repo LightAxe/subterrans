@@ -48,10 +48,11 @@ export interface MountOptions {
   playtraceEndpoint?: string;
 
   /**
-   * Override the endpoint URL for the Jev opponent proxy — the same-origin
-   * receiver that holds the TypeSafe API key and forwards `{ state, questions }`
-   * to the Jev model. When set to a non-empty string, a round can be played
-   * against the Jev opponent instead of the rule-based AI controller.
+   * Override the BASE URL of the Jev opponent proxy — the same-origin receiver
+   * that holds the TypeSafe API key, owns the prompt and forwards to the Jev
+   * model. The game POSTs to `<base>/session` (mint a session) and
+   * `<base>/beat` (one decision). When set to a non-empty string, a round can be
+   * played against the Jev opponent instead of the rule-based AI controller.
    *
    * Default: the build-time `VITE_JEV_ENDPOINT` env var, or `''` if unset. The
    * empty-string convention mirrors `playtraceEndpoint`: a missing env var
