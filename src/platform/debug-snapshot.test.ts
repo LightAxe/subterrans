@@ -408,8 +408,24 @@ describe('buildDebugSnapshot — envelope + filtering', () => {
     expect(Array.isArray(snap.antTrace)).toBe(true);
   });
 
-  it('DEBUG_SNAPSHOT_VERSION is bumped to 2 for the self-describing guide', () => {
-    expect(DEBUG_SNAPSHOT_VERSION).toBe(2);
+  it('DEBUG_SNAPSHOT_VERSION is 3 — v2 added the guide, v3 the per-command drainTick', () => {
+    expect(DEBUG_SNAPSHOT_VERSION).toBe(3);
+  });
+
+  it('preserves the recorded drainTick on every copied inputLog command (#296)', () => {
+    // buildDebugSnapshot shallow-copies each command; the batch boundaries the
+    // platform loop stamped must survive that copy or a downloaded snapshot
+    // replays via the derived fallback instead of the recorded truth.
+    const { world } = setupWorldWithColony(COLONY_ID);
+    const log = [
+      { type: 'NoOp' as const, issuedAtTick: 4, origin: 'player' as const, drainTick: 4 },
+      { type: 'NoOp' as const, issuedAtTick: 4, origin: 'sim' as const, drainTick: 5 },
+    ];
+    const snap = buildDebugSnapshot(world, 1234, log);
+    expect(snap.inputLog.map((c) => c.drainTick)).toEqual([4, 5]);
+    // Shallow copy, not the same object — mutating the live log must not reach
+    // the exported payload.
+    expect(snap.inputLog[0]).not.toBe(log[0]);
   });
 
   it('skips dead ants in the trace', () => {

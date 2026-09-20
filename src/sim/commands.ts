@@ -21,6 +21,15 @@ export interface SimCommandBase {
    *  forever (old inputLogs must keep loading) and non-readonly (only pushCommand
    *  writes it, post-construction). */
   origin?: CommandOrigin;
+  /** #296 — the tick on which the platform loop drained this command out of the
+   *  queue, i.e. the tick `tick()` actually received it. Stamped by
+   *  `stampDrainTicks` at the single drain site, so a recorded inputLog carries
+   *  the batch boundaries the sim saw rather than forcing a replay to guess them
+   *  from `issuedAtTick` (which is one tick early for sim self-emits). Pure
+   *  metadata like `origin`: no handler branches on it, replay ignores it, no
+   *  simVersion bump. ABSENT on logs recorded before this existed — see
+   *  src/platform/input-log-replay.ts for the fallback. */
+  drainTick?: number;
 }
 
 export interface NoOpCommand extends SimCommandBase {
