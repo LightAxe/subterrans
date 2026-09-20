@@ -19,6 +19,7 @@ import {
   SIM_VERSION_V36_RISK_AWARE_FORAGING,
   SIM_VERSION_V37_CORPSE_FOOD,
   SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH,
+  SIM_VERSION_V39_SPIDER_TIEBREAK,
 } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
@@ -1276,4 +1277,79 @@ describe('#297 (V38) homebound-forager doorstep push-through — replay determin
     const b = run(SIM_VERSION_V37_CORPSE_FOOD);
     expect(Array.from(a.ants.posX)).not.toEqual(Array.from(b.ants.posX));
   });
+});
+
+// ---------------------------------------------------------------------------
+// V39 — spider seat-bias tie-breaks: the pre-V39 path is untouched, and the V39 path
+// is live.
+//
+// The V39 keys replace ascending-id tie-breaks in pickRampageTarget, findChaseTarget,
+// findNearestAttackingFighter and resolveSpiderCombatOnTile. Two obligations:
+//   (a) a save pinned below V39 keeps replaying under the OLD rule, and
+//   (b) the new rule actually changes a real scenario, measured against V38 (V39's
+//       immediate predecessor) so the divergence cannot be the #297 doorstep change.
+//
+// SCOPE NOTE on (a): a single build can only prove it did not introduce
+// NON-determinism at V37 — that is the same-build self-compare below, and it is all
+// this file can assert. Proving the pre-V39 stream is unchanged RELATIVE TO THE
+// PRE-CHANGE BUILD is a cross-build claim no in-repo test makes: note that
+// `src/platform/byte-gate.test.ts` does NOT cover it either — it pins nothing and runs
+// at whatever LATEST_SIM_VERSION is, so it cannot compare a pinned older version
+// across builds. The claim was checked out-of-band instead, with a throwaway harness
+// that runs `createScenario` + `tick` on each tree with `world.simVersion` pinned and
+// hashes the serialized WorldState (via world-hash.ts) at 1 000-tick checkpoints.
+// Result: byte-identical at every pinned version from 30 (= MIN_ACCEPTED) through 38,
+// up to 25 seeds x 12 000 ticks each; the pinned-38 arm was compared against this
+// branch's own base (the #297 V38 branch), not against main.
+// The pinned OLD-rule unit assertions live in spider-tiebreak.test.ts.
+//
+// Both arms run fully passive (`aiState = []`, no commands) so the only thing that can
+// move is the simulation itself. The spider is dormant for the start-of-match grace
+// window and only ties occasionally afterwards, so divergence needs a few thousand
+// ticks — hence the seed sweep rather than one pinned seed/tick pair.
+// ---------------------------------------------------------------------------
+
+describe('SCEN-06: pre-V39 replay determinism under V39 code', () => {
+  const TICKS = 3000;
+
+  function runPassive(seed: number, simVersion: number): WorldState {
+    const world = createScenario(seed, 'Normal');
+    world.aiState = [];
+    world.simVersion = simVersion; // sticky, exactly as a loaded save arrives
+    for (let t = 0; t < TICKS; t++) {
+      if (tick(world, []) !== 0) break;
+    }
+    return world;
+  }
+
+  it('a V37-pinned world replays byte-identically across two independent runs', () => {
+    expect(serializeWorldState(runPassive(2, SIM_VERSION_V37_CORPSE_FOOD))).toBe(
+      serializeWorldState(runPassive(2, SIM_VERSION_V37_CORPSE_FOOD)),
+    );
+  }, 60_000);
+
+  it('V39 diverges from its IMMEDIATE predecessor V38 on at least one seed (the gate is live)', () => {
+    // Compared against V38, not V37: V39 implies V38, so a V37 baseline would also
+    // carry the #297 doorstep change and a divergence could be entirely that. Pinning
+    // the low side at V38 makes any difference attributable to the V39 tie-breaks
+    // alone.
+    //
+    // Compare rngState, NOT the full serialization: the serialized string carries the
+    // simVersion field itself (38 vs 39), so a full-string compare would pass even
+    // with the gated behaviour inert. rngState moves only once a different spider
+    // target has actually changed who lives, forages and draws from the PRNG.
+    //
+    // If a future balance retune makes every seed here agree, this fails as a false
+    // alarm — re-point it at a seed that still diverges rather than deleting it. The
+    // per-selector liveness proofs are the fast ones in spider-tiebreak.test.ts. Seed
+    // 21 is listed first as the earliest known divergence (rngState at tick ~2794);
+    // 8, 19, 22 and 24 also diverge inside the 3000-tick budget. `.some`
+    // short-circuits, so the usual cost is 2 sims, not 10.
+    const diverged = [21, 8, 19, 22, 24].some(
+      (seed) =>
+        runPassive(seed, SIM_VERSION_V39_SPIDER_TIEBREAK).rngState !==
+        runPassive(seed, SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH).rngState,
+    );
+    expect(diverged).toBe(true);
+  }, 120_000);
 });
