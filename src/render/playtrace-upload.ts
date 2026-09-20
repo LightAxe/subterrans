@@ -11,7 +11,7 @@
 //     world.simVersion (read by the caller, not us).
 //   - One outbound POST per submission. Body is gzipped JSON; framing matches
 //     the contract verbatim (Content-Type: application/octet-stream,
-//     Content-Encoding: gzip, X-Schema-Version: 1).
+//     Content-Encoding: gzip, X-Schema-Version: PLAYTRACE_SCHEMA_VERSION).
 //   - Client cap: gzipped body ≤ 5 MB. Downgrade fallback rebuilds the
 //     snapshot with antTrace omitted, then with inputLog omitted, then
 //     submits survey-only (snapshot: null).
@@ -41,8 +41,10 @@ declare const __APP_VERSION__: string;
 
 /** Wire-level schema version. Bumped on any breaking change to the envelope
  *  shape. Mirrored in the `X-Schema-Version` header so the server can reject
- *  unknown versions without paying the cost of decompressing the body. */
-export const PLAYTRACE_SCHEMA_VERSION = 2 as const;
+ *  unknown versions without paying the cost of decompressing the body.
+ *
+ *  v3 (#294): adds the always-present `difficulty` tier. */
+export const PLAYTRACE_SCHEMA_VERSION = 3 as const;
 
 /** Hard ceiling on the gzipped body. Defense-in-depth — the server also
  *  enforces this and returns 413. Picked to fit comfortably inside the
@@ -128,12 +130,20 @@ export type RoundEndReason = 'QueenDeath' | 'TimeoutTiebreak' | 'StalemateTiebre
  *  v2 additions: events, summary, roundEndReason.
  *  - events + summary are omitted on survey-only submissions (snapshot: null).
  *  - roundEndReason is always present but may be null (quit from pause menu,
- *    or a game-over without a detectable queen-death event). */
+ *    or a game-over without a detectable queen-death event).
+ *
+ *  v3 addition: difficulty. Present on EVERY submission, survey-only included —
+ *  survey-only is the common case and is precisely where the tier cannot be
+ *  recovered from a snapshot (#294). */
 export interface PlaytraceEnvelope {
   sessionId: string;
   schemaVersion: typeof PLAYTRACE_SCHEMA_VERSION;
   gameVersion: string;
   simVersion: number;
+  /** v3 (#294) — the tier the round was played on, read off `world.difficulty`
+   *  at submission time. Balance feedback ("too easy") is uninterpretable
+   *  without it. schemaVersion 1/2 records will never carry it. */
+  difficulty: 'Easy' | 'Normal' | 'Hard';
   seed: number;
   tick: number;
   outcome: 'Victory' | 'Defeat' | 'MutualDestruction';
@@ -226,6 +236,7 @@ export function buildPlaytraceEnvelope(
     schemaVersion: PLAYTRACE_SCHEMA_VERSION,
     gameVersion: __APP_VERSION__,
     simVersion: input.world.simVersion,
+    difficulty: input.world.difficulty,
     seed: input.seed,
     tick: input.world.tick,
     outcome: outcomeToWire(input.outcome),

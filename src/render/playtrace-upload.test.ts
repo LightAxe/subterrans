@@ -93,6 +93,31 @@ describe('buildPlaytraceEnvelope', () => {
     const env = buildPlaytraceEnvelope(input, null);
     expect(env.simVersion).toBe(42);
   });
+
+  // #294 — balance feedback is uninterpretable without the tier, and the
+  // survey-only path (snapshot === null) is both the common case and the one
+  // where the tier cannot be recovered from the payload afterwards.
+  it('records world.difficulty on a snapshot-bearing submission', () => {
+    const input = makeInput();
+    input.world.difficulty = 'Hard';
+    const env = buildPlaytraceEnvelope(input, null);
+    expect(env.difficulty).toBe('Hard');
+  });
+
+  it.each(['Easy', 'Normal', 'Hard'] as const)(
+    'records difficulty=%s on a survey-only submission too',
+    (tier) => {
+      const input = makeInput({ includeSnapshot: false });
+      input.world.difficulty = tier;
+      const env = buildPlaytraceEnvelope(input, null);
+      expect(env.snapshot).toBeNull();
+      expect(env.difficulty).toBe(tier);
+    },
+  );
+
+  it('is at schemaVersion 3 — the bump that introduced difficulty (#294)', () => {
+    expect(PLAYTRACE_SCHEMA_VERSION).toBe(3);
+  });
 });
 
 describe('submitPlaytrace — feature flag gating', () => {
@@ -141,11 +166,34 @@ describe('submitPlaytrace — wire framing', () => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
       expect(headers['Content-Type']).toBe('application/octet-stream');
       expect(headers['Content-Encoding']).toBe('gzip');
-      expect(headers['X-Schema-Version']).toBe('2');
+      expect(headers['X-Schema-Version']).toBe('3');
       // Body should be a Blob of non-zero size — the gzipped envelope.
       const body = init?.body as Blob;
       expect(body).toBeInstanceOf(Blob);
       expect(body.size).toBeGreaterThan(0);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  // #294 — end-to-end proof that the tier survives gzip on the survey-only
+  // path (the path that carries no snapshot to recover it from).
+  it('carries difficulty in the gzipped survey-only body', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ accepted: true }), { status: 202 }));
+    try {
+      const input = makeInput({ includeSnapshot: false });
+      input.world.difficulty = 'Easy';
+      await submitPlaytrace(input);
+      const body = fetchSpy.mock.calls[0]![1]!.body as Blob;
+      const json = await new Response(
+        body.stream().pipeThrough(new DecompressionStream('gzip')),
+      ).json();
+      const envelope = json as { difficulty: string; snapshot: unknown; schemaVersion: number };
+      expect(envelope.difficulty).toBe('Easy');
+      expect(envelope.snapshot).toBeNull();
+      expect(envelope.schemaVersion).toBe(3);
     } finally {
       fetchSpy.mockRestore();
     }

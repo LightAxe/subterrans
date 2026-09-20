@@ -87,6 +87,7 @@ const playtraceMockPlugin = (): Plugin => ({
             console.log(
               `[playtrace-mock] received: sessionId=${envelope['sessionId'] ?? '?'} ` +
                 `outcome=${envelope['outcome'] ?? '?'} ` +
+                `difficulty=${envelope['difficulty'] ?? '?'} ` +
                 `gzippedBytes=${raw.length} ` +
                 `rating=${survey?.['rating'] ?? '?'} ` +
                 `brokenFlag=${survey?.['brokenFlag'] ?? '?'} ` +
