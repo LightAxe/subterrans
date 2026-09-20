@@ -211,9 +211,9 @@ describe('AI-only scenario 6000 ticks', () => {
     // own population otherwise is.
     //
     // The floor is a RUNNING one: at every sample it is start-of-window headcount
-    // minus the spider kills that have happened SO FAR. A single end-of-window figure
-    // would let a late kill retroactively excuse an early non-predation dip; this
-    // cannot.
+    // minus the spider kills reflected in workerCount SO FAR (see the offset note at
+    // the loop below). A single end-of-window figure would let a late kill
+    // retroactively excuse an early non-predation dip; this cannot.
     //
     // This replaces a strict `endWC >= startWC`, which was measuring noise: the AI
     // colony holds a 2-4 worker steady state here, so a single spider kill flipped it.
@@ -251,18 +251,33 @@ describe('AI-only scenario 6000 ticks', () => {
     const startTick = trajectoryTicks[0]!;
     for (let i = 0; i < workerCountTrajectory.length; i++) {
       const sampleTick = trajectoryTicks[i]!;
-      // Kills strictly after the first sample and at or before this one: a kill at the
-      // first sample's tick is already reflected in startWC.
+      // Two one-tick offsets sit between a combat_kill event and the workerCount a
+      // sample reads, so a kill stamped K first shows up in the sample stamped K + 2:
+      //   - tick() stamps combat_kill with the tick being simulated (killAnt, Step 17)
+      //     and increments world.tick only at its end (Step 19), while each sample
+      //     reads world.tick AFTER tick() returns — so the call that emitted K is the
+      //     one whose sample is stamped K + 1.
+      //   - killAnt never touches colony.workers/workerCount (it only zeroes
+      //     ants.alive); the decrement is done by tickDeathCleanup at Step 5 (or by
+      //     tickReconcile at Step 2 on a recount tick — same call either way), which
+      //     runs BEFORE Step 17 within one call, so it lands in the NEXT call — the
+      //     sample stamped K + 2.
+      // The (start, sample] window therefore applies to the tick at which a kill is
+      // REFLECTED in workerCount, not to its event tick: a kill reflected at or before
+      // the baseline sample is already in startWC; one reflected at or before this
+      // sample lowers the floor.
       let killsSoFar = 0;
       for (const kt of spiderKillTicks) {
-        if (kt > startTick && kt <= sampleTick) killsSoFar += 1;
+        const reflectedAt = kt + 2;
+        if (reflectedAt > startTick && reflectedAt <= sampleTick) killsSoFar += 1;
       }
       const floor = startWC - killsSoFar;
       expect(
         workerCountTrajectory[i]!,
         `workerCount fell below its running predation floor at tick ${sampleTick} ` +
           `(sample ${i} of ${workerCountTrajectory.length}): started=${startWC} at tick ` +
-          `${startTick}, spider ate ${killsSoFar} since, so the floor is ${floor}; ` +
+          `${startTick}, spider kills reflected in workerCount since then: ` +
+          `${killsSoFar}, so the floor is ${floor}; ` +
           `observed ${workerCountTrajectory[i]!}. ${ctx}`,
       ).toBeGreaterThanOrEqual(floor);
     }
