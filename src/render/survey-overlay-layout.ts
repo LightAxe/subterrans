@@ -204,12 +204,13 @@ export function surveySkipButtonRect(layout: LayoutContext): SurveyRect {
   };
 }
 
-/** Label for the snapshot checkbox while it is OPT-IN (unticked by default).
- *  "diagnostic snapshot" is fine for a box the player deliberately reaches for. */
+/** Label for the snapshot checkbox when it is OPT-IN (unticked by default —
+ *  the pre-#295 state, kept so the constant can be flipped back). "diagnostic
+ *  snapshot" is fine for a box the player deliberately reaches for. */
 export const SURVEY_UPLOAD_LABEL_OPT_IN = 'Upload diagnostic snapshot to help us debug';
 
-/** Label for the same checkbox if PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT is flipped
- *  to true (#295). A box that is already ticked has to say plainly what is going
+/** Label for the same checkbox now that PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT is
+ *  true (#295). A box that is already ticked has to say plainly what is going
  *  to be sent — silently uploading a world snapshot by default is a different
  *  social contract from an opt-in box, even though the payload is only game
  *  state. UIScene picks between the two off that constant. */

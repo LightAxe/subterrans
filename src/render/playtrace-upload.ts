@@ -529,7 +529,7 @@ async function buildPayloadWithDowngrade(input: PlaytraceSubmissionInput): Promi
 }
 
 /** Build a survey-only payload directly, skipping the snapshot construction.
- *  Used when the player did not opt in to upload. Same world-capture
+ *  Used when the player unticked the replay-data box. Same world-capture
  *  property as the downgrade path: the envelope is built in this function's
  *  synchronous prefix before the first await.
  *
