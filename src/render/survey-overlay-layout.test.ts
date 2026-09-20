@@ -134,9 +134,10 @@ describe('consent disclosure', () => {
     // unconditional — it goes to the edge on every submission, survey-only
     // included — so only the optional half needs the hedge.
     const lower = SURVEY_CONSENT_DISCLOSURE.toLowerCase();
-    expect(lower).toMatch(/replay data/);
-    expect(lower).toMatch(/email/);
-    expect(lower).toMatch(/only if|if you (enter|include)/);
+    // The hedge must govern BOTH optional payloads: "replay data and your email
+    // only if …". A line that hedges only the email ("…the replay data, plus your
+    // email if you enter one") still claims the replay data is always sent.
+    expect(lower).toMatch(/replay data and (your )?email only if/);
   });
 
   it('fits the two-line allowance the layout leaves above the button row', () => {
