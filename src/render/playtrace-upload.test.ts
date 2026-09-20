@@ -25,6 +25,7 @@ import {
   PLAYTRACE_FREE_TEXT_MAX,
   PLAYTRACE_EMAIL_MAX,
   PLAYTRACE_SCHEMA_VERSION,
+  PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT,
   type PlaytraceSubmissionInput,
 } from './playtrace-upload.js';
 import { GameOutcome } from '../sim/game-over.js';
@@ -178,6 +179,17 @@ describe('buildPlaytraceEnvelope', () => {
 
   it('is at schemaVersion 3 — the bump that introduced difficulty (#294)', () => {
     expect(PLAYTRACE_SCHEMA_VERSION).toBe(3);
+  });
+});
+
+describe('PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT — issue #295', () => {
+  it('is still false: the flip is a product decision, not a measurement one', () => {
+    // Measurement says size is a non-issue (largest full envelope at the
+    // 24,000-tick match timeout: 27.4 KB gzipped, 0.5% of the 5 MB cap — see
+    // scripts/measure-playtrace-size.ts). This assertion exists so flipping the
+    // default is a deliberate edit with a failing test in front of it, not
+    // something that drifts in.
+    expect(PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT).toBe(false);
   });
 });
 

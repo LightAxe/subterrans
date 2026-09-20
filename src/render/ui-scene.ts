@@ -272,6 +272,8 @@ import {
   SURVEY_UPLOAD_CHECKBOX_RECT,
   SURVEY_CONSENT_TEXT_Y,
   SURVEY_CONSENT_DISCLOSURE,
+  SURVEY_UPLOAD_LABEL_OPT_IN,
+  SURVEY_UPLOAD_LABEL_DEFAULT_ON,
   surveySubmitButtonRect,
   surveySkipButtonRect,
   SURVEY_CHECKBOX_LABEL_GAP,
@@ -282,6 +284,7 @@ import {
 import {
   PLAYTRACE_FREE_TEXT_MAX,
   PLAYTRACE_EMAIL_MAX,
+  PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT,
   truncateFreeText,
   type PlaytraceSurvey,
 } from './playtrace-upload.js';
@@ -2548,7 +2551,7 @@ export class UIScene extends Phaser.Scene {
     freeText: '',
     email: '',
     brokenFlag: false,
-    includeSnapshot: false,
+    includeSnapshot: PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT,
     quitFromPauseMenu: false,
     showConfirmation: false,
     confirmedSubmit: false,
@@ -2576,7 +2579,8 @@ export class UIScene extends Phaser.Scene {
       // player doesn't retype it. Never leaves the machine except on submit.
       email: loadSettings().surveyEmail,
       brokenFlag: false,
-      includeSnapshot: false,
+      // #295 — one constant drives both the default and the checkbox copy.
+      includeSnapshot: PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT,
       quitFromPauseMenu: callbacks.quitFromPauseMenu,
       showConfirmation: false,
       confirmedSubmit: false,
@@ -2752,7 +2756,9 @@ export class UIScene extends Phaser.Scene {
     this.drawCheckboxRow(
       SURVEY_UPLOAD_CHECKBOX_RECT,
       this.surveyState.includeSnapshot,
-      'Upload diagnostic snapshot to help us debug',
+      PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT
+        ? SURVEY_UPLOAD_LABEL_DEFAULT_ON
+        : SURVEY_UPLOAD_LABEL_OPT_IN,
     );
 
     // Consent disclosure — only meaningful when the upload checkbox is

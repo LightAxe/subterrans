@@ -55,6 +55,32 @@ export const PLAYTRACE_MAX_GZIPPED_BYTES = 5 * 1024 * 1024;
  *  client-side so the server doesn't need to truncate. */
 export const PLAYTRACE_FREE_TEXT_MAX = 2000;
 
+/**
+ * Issue #295 — default for the survey's "include a snapshot" checkbox.
+ *
+ * It ships `false`, so a report carries the survey and nothing else unless the
+ * player ticks the box. Opt-in rate was 0 of 2, which is the expected outcome
+ * for an unticked box at the end of a round, and it is why #293 — the first
+ * substantive external playtest report — arrived with a seed and a sentence.
+ *
+ * The size question that blocked the flip is now answered. `scripts/measure-
+ * playtrace-size.ts` runs real headless matches and gzips the four payloads the
+ * downgrade chain would produce. At the 24,000-tick match timeout the largest
+ * FULL envelope was 27.4 KB against a passive player and 26.1 KB with BOTH
+ * colonies AI-driven (`--both-ai`, the upper-bound arm: twice the live ants and
+ * a real player inputLog). Either way that is ~0.5% of
+ * PLAYTRACE_MAX_GZIPPED_BYTES and the downgrade chain never fired. The world
+ * snapshot dominates and barely grows with colony size, so size is not the
+ * reason to keep this off.
+ *
+ * Flipping to `true` is the entire behaviour change: UIScene seeds the checkbox
+ * from this constant and swaps the label to SURVEY_UPLOAD_LABEL_DEFAULT_ON,
+ * which states plainly what is being sent. Deliberately typed `boolean` (not
+ * inferred as `false`) so neither branch reads as dead code. Left OFF pending
+ * the trust/optics call, which is Rob's, not the measurement's.
+ */
+export const PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT: boolean = false;
+
 /** Optional-email cap (#303). 254 is the RFC 5321 maximum forward-path length,
  *  so nothing longer can be a real address. Unlike the free text, an over-long
  *  value is DROPPED rather than truncated: truncating would manufacture a

@@ -69,7 +69,7 @@ export const SURVEY_RATING_BUTTON_GAP = 12;
 export const SURVEY_FREE_TEXT_Y = SURVEY_RATING_ROW_Y + SURVEY_RATING_BUTTON_H + 30;
 export const SURVEY_FREE_TEXT_H = 68;
 
-/** Free-text input rect — a single-line affordance. DOM input element is
+/** Free-text input rect — the multi-line feedback box. A DOM <textarea> is
  *  positioned over this rect at runtime by UIScene. Width spans the panel
  *  (canvas-relative), so this is derived from the LayoutContext. */
 export function surveyFreeTextRect(layout: LayoutContext): SurveyRect {
@@ -110,8 +110,9 @@ export function surveyEmailInputRect(layout: LayoutContext): SurveyRect {
   };
 }
 
-/** Checkbox row constants — used by both the "Report as broken" and
- *  "Upload diagnostic snapshot" rows. */
+/** Checkbox row constants — used by both the "Report as broken" row and the
+ *  snapshot row (whose label is SURVEY_UPLOAD_LABEL_OPT_IN or
+ *  SURVEY_UPLOAD_LABEL_DEFAULT_ON, picked by UIScene). */
 export const SURVEY_CHECKBOX_SIZE = 20;
 export const SURVEY_CHECKBOX_LABEL_GAP = 12;
 
@@ -201,6 +202,18 @@ export function surveySkipButtonRect(layout: LayoutContext): SurveyRect {
     h: BUTTON_H,
   };
 }
+
+/** Label for the snapshot checkbox while it is OPT-IN (unticked by default).
+ *  "diagnostic snapshot" is fine for a box the player deliberately reaches for. */
+export const SURVEY_UPLOAD_LABEL_OPT_IN = 'Upload diagnostic snapshot to help us debug';
+
+/** Label for the same checkbox if PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT is flipped
+ *  to true (#295). A box that is already ticked has to say plainly what is going
+ *  to be sent — silently uploading a world snapshot by default is a different
+ *  social contract from an opt-in box, even though the payload is only game
+ *  state. UIScene picks between the two off that constant. */
+export const SURVEY_UPLOAD_LABEL_DEFAULT_ON =
+  'Include replay data with this report (game state only — no personal data)';
 
 /** Consent disclosure text. ADR 0013 §"Privacy" requires the overlay to
  *  warn the player that an upload leaks client IP + User-Agent at the edge.

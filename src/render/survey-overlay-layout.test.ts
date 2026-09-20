@@ -20,6 +20,8 @@ import {
   SURVEY_UPLOAD_CHECKBOX_RECT,
   SURVEY_CONSENT_DISCLOSURE,
   SURVEY_EMAIL_LABEL,
+  SURVEY_UPLOAD_LABEL_OPT_IN,
+  SURVEY_UPLOAD_LABEL_DEFAULT_ON,
   type SurveyRect,
 } from './survey-overlay-layout.js';
 import { DEFAULT_LAYOUT, createLayoutContext } from './layout.js';
@@ -154,6 +156,20 @@ describe('optional email row — issue #303', () => {
     // "optional" and the follow-up-only purpose are the promise being made.
     expect(SURVEY_EMAIL_LABEL.toLowerCase()).toContain('optional');
     expect(SURVEY_EMAIL_LABEL.toLowerCase()).toMatch(/follow up|follow-up/);
+  });
+});
+
+describe('snapshot checkbox copy — issue #295', () => {
+  it('the default-on wording names what is sent and that it holds no personal data', () => {
+    // If the checkbox ever ships pre-ticked, this string is the entire consent
+    // the player gets before a world snapshot leaves their machine. Both halves
+    // of that promise are asserted so the copy cannot be quietly weakened.
+    expect(SURVEY_UPLOAD_LABEL_DEFAULT_ON.toLowerCase()).toContain('replay data');
+    expect(SURVEY_UPLOAD_LABEL_DEFAULT_ON.toLowerCase()).toContain('no personal data');
+  });
+
+  it('the two labels are distinct — the opt-in wording is not reused when pre-ticked', () => {
+    expect(SURVEY_UPLOAD_LABEL_OPT_IN).not.toBe(SURVEY_UPLOAD_LABEL_DEFAULT_ON);
   });
 });
 
