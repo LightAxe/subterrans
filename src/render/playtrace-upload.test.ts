@@ -185,14 +185,15 @@ describe('buildPlaytraceEnvelope', () => {
 });
 
 describe('PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT — issue #295', () => {
-  it('is still false: the flip is a product decision, not a measurement one', () => {
-    // Measurement says size is a non-issue (largest full envelope at round end
+  it('is on: replay data ships by default (decided 2026-09-20 after measurement)', () => {
+    // Measurement said size is a non-issue (largest full envelope at round end
     // across both arms: 25.9 KB gzipped, 0.5% of the 5 MB cap — see
-    // scripts/measure-playtrace-size.ts). It does NOT answer the trust/optics
-    // question #295 raises separately, which is the owner's call. This assertion
-    // exists so flipping the default is a deliberate edit with a failing test in
-    // front of it, not something that drifts in.
-    expect(PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT).toBe(false);
+    // scripts/measure-playtrace-size.ts); the trust/optics question #295 raised
+    // separately was decided by the owner in favour of default-on with the
+    // plain-language label. This assertion exists so turning it back off is a
+    // deliberate edit with a failing test in front of it, not something that
+    // drifts in.
+    expect(PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT).toBe(true);
   });
 });
 

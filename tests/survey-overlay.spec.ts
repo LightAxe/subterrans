@@ -1,5 +1,5 @@
 // survey-overlay.spec.ts — end-to-end proof of the v3 playtrace survey overlay
-// (#294 difficulty, #295 opt-in replay data, #303 optional email).
+// (#294 difficulty, #295 default-on replay data, #303 optional email).
 //
 // Why this spec needs a fixture page
 // ---------------------------------
@@ -34,12 +34,14 @@ import {
   SURVEY_EMAIL_LABEL,
   SURVEY_EMAIL_LABEL_Y,
   SURVEY_UPLOAD_LABEL_DEFAULT_ON,
+  SURVEY_UPLOAD_LABEL_OPT_IN,
   surveyEmailInputRect,
   surveyFreeTextRect,
   surveyRatingButtons,
   surveySubmitButtonRect,
   surveyUploadRowHitRect,
 } from '../src/render/survey-overlay-layout.js';
+import { PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT } from '../src/render/playtrace-upload.js';
 import { SETTINGS_KEY } from '../src/platform/settings.js';
 
 const FIXTURE = '/tests/fixtures/playtrace-on.html';
@@ -209,14 +211,16 @@ test.describe('End-of-game survey overlay — v3 playtrace envelope', () => {
     // rule as the consent disclosure) and drawn onto the canvas by UIScene, so
     // it is asserted at its source of truth.
     expect(SURVEY_EMAIL_LABEL).toBe(
-      'Email (optional) — only used to follow up on this report',
+      'Email (optional) — only used to reply about this report; deleted with it after 90 days',
     );
-    // Asserted on the constant, not the canvas: this label is only DRAWN once
-    // PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT flips to true. Pinning the wording now
-    // means the consent copy is reviewed before it can ever ship pre-ticked.
+    // The upload row's label is picked off PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT:
+    // a box that ships ticked has to say plainly what is being sent, which is a
+    // different social contract from an opt-in box. Both strings are pinned so
+    // neither can ship re-worded, and the constant says which one is drawn.
     expect(SURVEY_UPLOAD_LABEL_DEFAULT_ON).toBe(
       'Include replay data with this report (game state only — no personal data)',
     );
+    expect(SURVEY_UPLOAD_LABEL_OPT_IN).toBe('Upload diagnostic snapshot to help us debug');
 
     // Positioned over the canvas: the fixture pins the mount box to the logical
     // 800×592, so CSS px map 1:1 to canvas-local px and the DOM rect must land
@@ -240,21 +244,23 @@ test.describe('End-of-game survey overlay — v3 playtrace envelope', () => {
     await expect(email).toBeFocused();
   });
 
-  // Regression guard for a defect #303 introduced and this spec caught.
+  // REGRESSION GUARD for a defect this spec caught in UAT.
   //
-  // The free-text <textarea> is styled with `padding: 6px` + `border: 1px`.
-  // positionSurveyElement writes the reserved rect into style.width/height, so
-  // without `box-sizing: border-box` the rendered border-box came out 14px
-  // wider and taller than surveyFreeTextRect — 654×82 against a reserved
-  // 640×68. That overflow was invisible before #303 (a 100-tall box rendered
-  // 114 and the next row started 6px further down), but #303 shrank the box to
-  // 68 and put SURVEY_EMAIL_LABEL 4px underneath it, so the opaque #222222
-  // textarea painted straight over the purpose-limitation copy: rendered bottom
-  // 261+82 = 343 against a label baseline of 333.
+  // positionSurveyElement writes the reserved rect straight into
+  // style.width/height, so a survey DOM input only lands on its rect if it is
+  // `box-sizing: border-box`. The free-text <textarea> carries `padding: 6px`
+  // + `border: 1px`, and while it was missing that declaration its BORDER-BOX
+  // measured 654×82 against a reserved 640×68 — 14px over in both axes.
   //
-  // ensureSurveyDomInputs now sets boxSizing on the textarea, matching the
-  // email input. This asserts the rendered box equals the reserved rect, which
-  // is the assumption every other layout assertion in this file rests on.
+  // Before #303 the overflow was invisible (the box was 100 tall → 114
+  // rendered, and the next row started 6px further down). #303 shrank the box
+  // to 68 and put SURVEY_EMAIL_LABEL 4px underneath it, at which point the
+  // opaque #222222 textarea painted over the label: rendered bottom
+  // 261+82 = 343 against SURVEY_EMAIL_LABEL_Y = 333, hiding the purpose-
+  // limitation copy apart from a sliver of its descenders.
+  //
+  // Assert the rendered box, not the style declaration — that is the only form
+  // of the check that survives someone adding padding to either element later.
   test('#303 — the shrunken free-text box must not paint over the email label', async ({
     page,
   }) => {
@@ -280,12 +286,10 @@ test.describe('End-of-game survey overlay — v3 playtrace envelope', () => {
     await openSurveyFromPauseMenu(page);
 
     await page.locator(EMAIL_INPUT).fill('  Player@Example.com  ');
-    // Tick the replay-data box: PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT is still
-    // false (#295 is measured but the trust/optics call has not been made), so
-    // a snapshot only ships when the player opts in. If that default is ever
-    // flipped, this click becomes an UNtick and the assertion below flips too —
-    // which is exactly the kind of change that should not pass silently.
-    await clickCanvasRect(page, UPLOAD_ROW_RECT);
+    // Touch nothing else: the replay-data box carries whatever
+    // PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT says, so the snapshot assertion below
+    // reads off the same constant. #295's flip is then a one-constant change
+    // with a real E2E behind it, in either direction.
     await submitSurvey(page, 4);
 
     await expect.poll(() => captured.length, { timeout: 15_000 }).toBe(1);
@@ -295,7 +299,7 @@ test.describe('End-of-game survey overlay — v3 playtrace envelope', () => {
     expect(env.quitFromPauseMenu).toBe(true);
     expect(env.survey.rating).toBe(4);
     expect(env.survey.email).toBe('Player@Example.com');
-    expect(env.snapshot).not.toBeNull();
+    expect(env.snapshot === null).toBe(!PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT);
   });
 
   test('#294 — the difficulty tier on the wire follows the chosen tier', async ({ page }) => {
@@ -339,19 +343,20 @@ test.describe('End-of-game survey overlay — v3 playtrace envelope', () => {
     expect(survey.rating).toBe(2);
   });
 
-  test('#295 — leaving the replay-data box alone sends snapshot: null', async ({ page }) => {
+  test('#295 — one click on the replay-data row inverts the shipped default', async ({ page }) => {
     const captured = installUploadCapture(page);
     await bootFixture(page, 'Normal');
     await openSurveyFromPauseMenu(page);
 
-    // Touch nothing: the box ships unticked, so an untouched submission carries
-    // the survey and no snapshot. This is the behaviour #295 exists to question
-    // — 0 of 2 real submissions opted in — and pinning it here means flipping
-    // the default has a failing E2E in front of it, not just a unit assertion.
+    // A SINGLE click on the row, which is what makes this a real check on the
+    // default: if the box ships ticked the click unticks it (snapshot: null),
+    // and if it ships unticked the click ticks it (snapshot present). Either
+    // way the outcome must be the opposite of the untouched submission above.
+    await clickCanvasRect(page, UPLOAD_ROW_RECT);
     await submitSurvey(page, 1);
 
     await expect.poll(() => captured.length, { timeout: 15_000 }).toBe(1);
-    expect(captured[0]!.snapshot).toBeNull();
+    expect(captured[0]!.snapshot === null).toBe(PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT);
   });
 
   test('#303 — a submitted address is remembered and prefills the next survey', async ({
@@ -377,10 +382,7 @@ test.describe('End-of-game survey overlay — v3 playtrace envelope', () => {
     await bootFixture(page, 'Normal');
     await openSurveyFromPauseMenu(page);
 
-    const before = await page.evaluate(
-      (key) => localStorage.getItem(key),
-      SETTINGS_KEY,
-    );
+    const before = await page.evaluate((key) => localStorage.getItem(key), SETTINGS_KEY);
     const speedBefore = await page.evaluate(
       () => (window as { __phase9_ui?: { speedMultiplier?: number } }).__phase9_ui?.speedMultiplier,
     );

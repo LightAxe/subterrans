@@ -77,13 +77,12 @@ export const PLAYTRACE_FREE_TEXT_MAX = 2000;
  * Flipping to `true` is the entire behaviour change: UIScene seeds the checkbox
  * from this constant and swaps the label to SURVEY_UPLOAD_LABEL_DEFAULT_ON,
  * which states plainly what is being sent. Deliberately typed `boolean` (not
- * inferred as `false`) so neither branch reads as dead code. Left OFF pending
- * the trust/optics call, which is Rob's, not the measurement's: #295 lists
- * "silently uploading a world snapshot by default is a different social
- * contract" as a question separate from size, and measuring the size does not
- * answer it.
+ * inferred as `true`) so neither branch reads as dead code. Flipped ON on
+ * 2026-09-20 — Rob's call on #295 once the measurement above came in: size is a
+ * non-issue, the box stays visible and untickable, and the snapshot carries game
+ * state only (ADR 0013 §Privacy), which the default-on label says outright.
  */
-export const PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT: boolean = false;
+export const PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT: boolean = true;
 
 /** Optional-email cap (#303). 254 is the RFC 5321 maximum forward-path length,
  *  so nothing longer can be a real address. Unlike the free text, an over-long

@@ -155,7 +155,10 @@ describe('optional email row — issue #303', () => {
     // Same reasoning as the consent-disclosure test: the wording may drift but
     // "optional" and the follow-up-only purpose are the promise being made.
     expect(SURVEY_EMAIL_LABEL.toLowerCase()).toContain('optional');
-    expect(SURVEY_EMAIL_LABEL.toLowerCase()).toMatch(/follow up|follow-up/);
+    expect(SURVEY_EMAIL_LABEL.toLowerCase()).toMatch(/follow up|follow-up|reply/);
+    // ...and the retention promise (ADR 0013 amendment 2026-09-20: the address is
+    // deleted with the rest of the submission by the 90-day lifecycle rule).
+    expect(SURVEY_EMAIL_LABEL).toMatch(/90 days/);
   });
 });
 
