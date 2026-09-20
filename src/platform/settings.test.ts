@@ -5,6 +5,7 @@ import {
   DEFAULT_SETTINGS,
   SETTINGS_KEY,
   SETTINGS_VERSION,
+  SURVEY_EMAIL_MAX,
   type Settings,
 } from './settings.js';
 
@@ -139,5 +140,59 @@ describe('saveSettings', () => {
     saveSettings(mk({ pheromoneOverlay: true }));
     saveSettings(mk({ pheromoneOverlay: false }));
     expect(loadSettings()).toEqual(mk({ pheromoneOverlay: false }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #303 — remembered survey email
+// ---------------------------------------------------------------------------
+
+describe('surveyEmail (#303)', () => {
+  it('defaults to the empty string (no remembered address)', () => {
+    expect(loadSettings().surveyEmail).toBe('');
+  });
+
+  it('round-trips a saved address', () => {
+    saveSettings(mk({ surveyEmail: 'player@example.com' }));
+    expect(loadSettings().surveyEmail).toBe('player@example.com');
+  });
+
+  it('loads a pre-#303 settings blob without wiping its other fields', () => {
+    // The additive-key contract: SETTINGS_VERSION was deliberately NOT bumped,
+    // because a bump invalidates the whole blob and a missing key already falls
+    // back to its default. This pins that behaviour.
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        version: SETTINGS_VERSION,
+        settings: {
+          pheromoneOverlay: false,
+          hintStripVisible: false,
+          firstUseHints: { pan: true },
+        },
+      }),
+    );
+    const loaded = loadSettings();
+    expect(loaded.surveyEmail).toBe('');
+    expect(loaded.pheromoneOverlay).toBe(false);
+    expect(loaded.hintStripVisible).toBe(false);
+    expect(loaded.firstUseHints).toEqual({ pan: true });
+  });
+
+  it('falls back to the default when the stored value is not a string', () => {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ version: SETTINGS_VERSION, settings: { surveyEmail: 42 } }),
+    );
+    expect(loadSettings().surveyEmail).toBe('');
+  });
+
+  it('truncates an over-long stored value instead of growing unbounded', () => {
+    const huge = 'x'.repeat(SURVEY_EMAIL_MAX + 100);
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ version: SETTINGS_VERSION, settings: { surveyEmail: huge } }),
+    );
+    expect(loadSettings().surveyEmail).toHaveLength(SURVEY_EMAIL_MAX);
   });
 });

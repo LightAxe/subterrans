@@ -55,6 +55,13 @@ export const PLAYTRACE_MAX_GZIPPED_BYTES = 5 * 1024 * 1024;
  *  client-side so the server doesn't need to truncate. */
 export const PLAYTRACE_FREE_TEXT_MAX = 2000;
 
+/** Optional-email cap (#303). 254 is the RFC 5321 maximum forward-path length,
+ *  so nothing longer can be a real address. Unlike the free text, an over-long
+ *  value is DROPPED rather than truncated: truncating would manufacture a
+ *  plausible-looking address belonging to somebody else, and the field is
+ *  optional, so dropping costs nothing. */
+export const PLAYTRACE_EMAIL_MAX = 254;
+
 /** Survey contents collected by the overlay. Mirrors the wire envelope's
  *  `survey` object 1:1 — keep these in sync if the contract changes. */
 export interface PlaytraceSurvey {
@@ -66,6 +73,11 @@ export interface PlaytraceSurvey {
   /** "Report as broken" flag — orthogonal to the rating so a 5-star "great
    *  game but X is broken" report is expressible. */
   brokenFlag: boolean;
+  /** #303 — optional contact address, so a report that needs a follow-up
+   *  question can get one. ABSENT (not `''`, not `null`) when the player left
+   *  the field empty or typed something that isn't shaped like an address:
+   *  see {@link sanitizeSurveyEmail}. Never blocks a submission. */
+  email?: string;
 }
 
 /** Inputs the caller (game-scene) supplies to issue a submission. The module
@@ -205,6 +217,48 @@ export function truncateFreeText(s: string): string {
   return trimmed.slice(0, PLAYTRACE_FREE_TEXT_MAX);
 }
 
+/**
+ * Sanitize the optional email (#303). Returns `undefined` — meaning "omit the
+ * field entirely" — for anything that isn't plausibly an address, so a typo is
+ * silently dropped instead of blocking the submission or surfacing an error
+ * the player has no reason to care about.
+ *
+ * The shape check is deliberately loose: exactly one `@`, no whitespace
+ * anywhere, and a non-empty local part and domain. A stricter client-side
+ * pattern would silently discard the valid-but-unusual addresses it fails to
+ * recognize, and the only cost of letting an odd one through is one bounced
+ * follow-up. Anything longer than {@link PLAYTRACE_EMAIL_MAX} is dropped, not
+ * truncated.
+ *
+ * Exported so the overlay and the platform settings layer apply the same rule.
+ */
+export function sanitizeSurveyEmail(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed === '') return undefined;
+  if (trimmed.length > PLAYTRACE_EMAIL_MAX) return undefined;
+  if (/\s/.test(trimmed)) return undefined;
+  const at = trimmed.indexOf('@');
+  // indexOf === lastIndexOf rejects both zero and two-or-more '@'.
+  if (at <= 0 || at !== trimmed.lastIndexOf('@')) return undefined;
+  if (at === trimmed.length - 1) return undefined;
+  return trimmed;
+}
+
+/** Assemble the wire `survey` object: free text truncated, email sanitized to
+ *  present-or-absent. Kept separate from the envelope literal so both the
+ *  truncation and the omit-on-invalid rule live in one place. */
+function buildWireSurvey(survey: PlaytraceSurvey): PlaytraceSurvey {
+  const wire: PlaytraceSurvey = {
+    rating: survey.rating,
+    freeText: truncateFreeText(survey.freeText),
+    brokenFlag: survey.brokenFlag,
+  };
+  const email = sanitizeSurveyEmail(survey.email);
+  if (email !== undefined) wire.email = email;
+  return wire;
+}
+
 /** Build a fully-typed envelope from the submission input + a pre-built
  *  snapshot (or null for survey-only). Pure — no fetch, no compression.
  *  Exported for the downgrade-fallback unit test. */
@@ -242,11 +296,7 @@ export function buildPlaytraceEnvelope(
     outcome: outcomeToWire(input.outcome),
     roundEndReason,
     quitFromPauseMenu: input.quitFromPauseMenu,
-    survey: {
-      rating: input.survey.rating,
-      freeText: truncateFreeText(input.survey.freeText),
-      brokenFlag: input.survey.brokenFlag,
-    },
+    survey: buildWireSurvey(input.survey),
     snapshot,
   };
 

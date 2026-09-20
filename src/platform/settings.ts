@@ -30,12 +30,26 @@ export interface Settings {
    *  (NOT a Set, which JSON.stringify flattens to `{}` — Codex R1#4). A hint is
    *  marked here only once it actually begins displaying (Codex R1#9). Render-only. */
   firstUseHints: Record<string, boolean>;
+  /** Issue #303 — last address typed into the end-of-game survey's optional
+   *  email field, so a returning player doesn't retype it. LOCAL ONLY: it is
+   *  never read by the sim and leaves the machine only when the player submits
+   *  a survey. `''` means "no remembered address". Stored as typed (trimmed +
+   *  capped) rather than only-when-valid, so the box round-trips what the
+   *  player last saw and a typo stays visible instead of being silently
+   *  dropped and forgotten. */
+  surveyEmail: string;
 }
+
+/** Cap on the remembered address. Matches the wire cap in playtrace-upload.ts
+ *  (RFC 5321 max path length) — duplicated rather than imported because
+ *  src/platform must not depend on src/render. */
+export const SURVEY_EMAIL_MAX = 254;
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
   pheromoneOverlay: true,
   hintStripVisible: true,
   firstUseHints: {},
+  surveyEmail: '',
 };
 
 interface SettingsEnvelope {
@@ -91,7 +105,20 @@ export function loadSettings(): Settings {
         ? s.hintStripVisible
         : DEFAULT_SETTINGS.hintStripVisible,
     firstUseHints: sanitizeFirstUseHints(s.firstUseHints),
+    surveyEmail: sanitizeSurveyEmail(s.surveyEmail),
   };
+}
+
+/** Coerce an unknown blob into a storable email string: a non-string (missing /
+ *  corrupt) yields the default `''`, and an over-long value is truncated to
+ *  SURVEY_EMAIL_MAX rather than rejected, so a settings blob hand-edited to a
+ *  huge string can't grow without bound across load/save cycles. No format
+ *  validation here — that belongs at the wire boundary (playtrace-upload.ts),
+ *  and rejecting a half-typed address at load time would lose the player's
+ *  work for no benefit. */
+function sanitizeSurveyEmail(raw: unknown): string {
+  if (typeof raw !== 'string') return DEFAULT_SETTINGS.surveyEmail;
+  return raw.length <= SURVEY_EMAIL_MAX ? raw : raw.slice(0, SURVEY_EMAIL_MAX);
 }
 
 /** Coerce an unknown blob into a clean Record<string, boolean>: keep only own

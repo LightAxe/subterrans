@@ -1698,6 +1698,9 @@ export class GameScene extends Phaser.Scene {
               rating: survey.rating,
               freeText: survey.freeText,
               brokenFlag: survey.brokenFlag,
+              // #303 — optional, raw as typed. submitPlaytrace omits it from
+              // the envelope when it is empty or not address-shaped.
+              email: survey.email,
             },
           });
         }

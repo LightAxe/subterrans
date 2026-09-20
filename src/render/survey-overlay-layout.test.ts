@@ -15,9 +15,11 @@ import {
   surveyFreeTextRect,
   surveyBrokenRowHitRect,
   surveyUploadRowHitRect,
+  surveyEmailInputRect,
   SURVEY_BROKEN_CHECKBOX_RECT,
   SURVEY_UPLOAD_CHECKBOX_RECT,
   SURVEY_CONSENT_DISCLOSURE,
+  SURVEY_EMAIL_LABEL,
   type SurveyRect,
 } from './survey-overlay-layout.js';
 import { DEFAULT_LAYOUT, createLayoutContext } from './layout.js';
@@ -34,6 +36,7 @@ const surveyConfirmationHitTest = (px: number, py: number) =>
 const SURVEY_SUBMIT_BUTTON_RECT = surveySubmitButtonRect(L);
 const SURVEY_SKIP_BUTTON_RECT = surveySkipButtonRect(L);
 const SURVEY_FREE_TEXT_RECT = surveyFreeTextRect(L);
+const SURVEY_EMAIL_INPUT_RECT = surveyEmailInputRect(L);
 
 describe('surveyRatingButtons', () => {
   it('emits exactly five buttons numbered 1..5 in order', () => {
@@ -98,6 +101,12 @@ describe('surveyHitTest — disjoint targets', () => {
     });
   });
 
+  it('returns email on the email input rect (#303)', () => {
+    expect(surveyHitTest(SURVEY_EMAIL_INPUT_RECT.x + 5, SURVEY_EMAIL_INPUT_RECT.y + 5)).toEqual({
+      kind: 'email',
+    });
+  });
+
   it('returns null on the panel background', () => {
     // A point in the title gap above the rating buttons should not hit
     // any interactive element.
@@ -113,6 +122,38 @@ describe('consent disclosure', () => {
     // the PR until the copy is fixed.
     expect(SURVEY_CONSENT_DISCLOSURE.toLowerCase()).toMatch(/ip/);
     expect(SURVEY_CONSENT_DISCLOSURE.toLowerCase()).toMatch(/browser|user[- ]agent|ua/);
+  });
+});
+
+describe('optional email row — issue #303', () => {
+  it('sits between the free-text box and the "report as broken" row', () => {
+    const ft = SURVEY_FREE_TEXT_RECT;
+    expect(SURVEY_EMAIL_INPUT_RECT.y).toBeGreaterThanOrEqual(ft.y + ft.h);
+    expect(SURVEY_EMAIL_INPUT_RECT.y + SURVEY_EMAIL_INPUT_RECT.h).toBeLessThanOrEqual(
+      SURVEY_BROKEN_CHECKBOX_RECT.y,
+    );
+  });
+
+  it('spans the panel width like the other full-width rows', () => {
+    const wide = createLayoutContext(1000, 700);
+    expect(surveyEmailInputRect(wide).w).toBe(wide.w - 160);
+  });
+
+  it('did not move any row below it (the 32px came out of the textarea)', () => {
+    // #303 shrank SURVEY_FREE_TEXT_H from 100 to 68 and spent the freed space
+    // on the email row, so the checkbox rows, consent text and button row keep
+    // the Y values they had before the email field existed. Pinning the
+    // pre-#303 constants here makes an accidental downward shift — which would
+    // push the button row off the 592-tall canvas — a test failure.
+    expect(SURVEY_BROKEN_CHECKBOX_RECT.y).toBe(381);
+    expect(SURVEY_UPLOAD_CHECKBOX_RECT.y).toBe(417);
+  });
+
+  it('labels the field optional and states the purpose limitation', () => {
+    // Same reasoning as the consent-disclosure test: the wording may drift but
+    // "optional" and the follow-up-only purpose are the promise being made.
+    expect(SURVEY_EMAIL_LABEL.toLowerCase()).toContain('optional');
+    expect(SURVEY_EMAIL_LABEL.toLowerCase()).toMatch(/follow up|follow-up/);
   });
 });
 
@@ -192,6 +233,7 @@ describe('survey overlay — small-context regression (#238 PR4, 360×640)', () 
   const rects: SurveyRect[] = [
     ...surveyRatingButtonsAt(phone).map((b) => b.rect),
     surveyFreeTextRect(phone),
+    surveyEmailInputRect(phone),
     surveyBrokenRowHitRect(phone),
     surveyUploadRowHitRect(phone),
     surveySubmitButtonRect(phone),
