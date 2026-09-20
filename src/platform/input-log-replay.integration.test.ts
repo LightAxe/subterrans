@@ -29,13 +29,18 @@ import { tick } from '../sim/tick.js';
 import { pushCommand, type SimCommand } from '../sim/commands.js';
 import { AntTask } from '../sim/enums.js';
 import { ENEMY_COLONY_ID } from '../sim/constants.js';
-import { hashWorldState } from '../platform/world-hash.js';
-import {
-  stampDrainTicks,
-  indexByDrainTick,
-  indexByIssuedAtTick,
-} from '../platform/input-log-replay.js';
+import { hashWorldState } from './world-hash.js';
+import { stampDrainTicks, indexByDrainTick } from './input-log-replay.js';
 import type { WorldState } from '../sim/types.js';
+
+/** The pre-#296 grouping: every command applied at its `issuedAtTick`. Lives
+ *  here, not in the production module, because nothing but this test may ever
+ *  use it — it is the bug, kept only so the assertions below can show it. */
+function indexByIssuedAtTick(log: readonly SimCommand[]): SimCommand[][] {
+  const byTick: SimCommand[][] = [];
+  for (const cmd of log) (byTick[cmd.issuedAtTick] ??= []).push(cmd);
+  return byTick;
+}
 
 const SEED = 7;
 const TICKS = 40;
@@ -169,6 +174,7 @@ describe('inputLog replay — drain batches vs issuedAtTick (#296)', () => {
   let byDrainBatch: string[];
   let byIssuedAt: string[];
   let byDerivedFallback: string[];
+  let byPreProvenance: string[];
   beforeAll(() => {
     live = runLive();
     byDrainBatch = replay(indexByDrainTick(live.inputLog));
@@ -181,6 +187,13 @@ describe('inputLog replay — drain batches vs issuedAtTick (#296)', () => {
       return rest as SimCommand;
     });
     byDerivedFallback = replay(indexByDrainTick(legacy));
+    // And a pre-#230 log: no drainTick AND no origin, so there is nothing left
+    // to derive from. This one is EXPECTED to diverge — see the test below.
+    const preProvenance = live.inputLog.map((c) => {
+      const { drainTick: _d, origin: _o, ...rest } = c;
+      return rest as SimCommand;
+    });
+    byPreProvenance = replay(indexByDrainTick(preProvenance));
   }, 120_000);
 
   it('the scenario actually contains a sim self-emit drained a tick after it was issued', () => {
@@ -218,5 +231,16 @@ describe('inputLog replay — drain batches vs issuedAtTick (#296)', () => {
 
   it('falls back correctly when drainTick is absent (pre-#296 recorded log)', () => {
     expect(byDerivedFallback).toEqual(live.hashes);
+  });
+
+  it('still diverges on a pre-#230 log with no provenance at all', () => {
+    // Documented limitation, not an oversight: with neither `drainTick` nor
+    // `origin` there is no way to tell a sim-emitted ClearRallyPoint from a
+    // player-issued one, and guessing by command type would mis-place the
+    // player's. Such a log is left exactly where it was — which means it still
+    // fails the byte-compare, same as before #296. Pinned so the fallback's
+    // reach is never overstated.
+    expect(byPreProvenance).not.toEqual(live.hashes);
+    expect(byPreProvenance).toEqual(byIssuedAt);
   });
 });

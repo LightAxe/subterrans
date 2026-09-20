@@ -40,9 +40,12 @@ export interface Settings {
   surveyEmail: string;
 }
 
-/** Cap on the remembered address. Matches the wire cap in playtrace-upload.ts
- *  (RFC 5321 max path length) — duplicated rather than imported because
- *  src/platform must not depend on src/render. */
+/** Cap on the remembered address (RFC 5321 max forward-path length). The wire
+ *  boundary enforces the same number as PLAYTRACE_EMAIL_MAX; the two are
+ *  duplicated rather than shared because platform/ must not import from render/,
+ *  and pulling a wire constant DOWN into platform/ would put the playtrace
+ *  contract in the wrong layer. settings.test.ts asserts they are equal so they
+ *  cannot drift — same arrangement as save.ts's MAX_OPPONENT_ORDERS_LENGTH. */
 export const SURVEY_EMAIL_MAX = 254;
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
@@ -105,18 +108,23 @@ export function loadSettings(): Settings {
         ? s.hintStripVisible
         : DEFAULT_SETTINGS.hintStripVisible,
     firstUseHints: sanitizeFirstUseHints(s.firstUseHints),
-    surveyEmail: sanitizeSurveyEmail(s.surveyEmail),
+    surveyEmail: clampStoredSurveyEmail(s.surveyEmail),
   };
 }
 
 /** Coerce an unknown blob into a storable email string: a non-string (missing /
- *  corrupt) yields the default `''`, and an over-long value is truncated to
+ *  corrupt) yields the default `''`, and an over-long value is TRUNCATED to
  *  SURVEY_EMAIL_MAX rather than rejected, so a settings blob hand-edited to a
- *  huge string can't grow without bound across load/save cycles. No format
- *  validation here — that belongs at the wire boundary (playtrace-upload.ts),
- *  and rejecting a half-typed address at load time would lose the player's
- *  work for no benefit. */
-function sanitizeSurveyEmail(raw: unknown): string {
+ *  huge string can't grow without bound across load/save cycles.
+ *
+ *  Deliberately NOT named `sanitizeSurveyEmail`: playtrace-upload.ts has a
+ *  function by that name with the opposite failure semantics (it DROPS an
+ *  over-long or malformed address instead of truncating it), and the two modules
+ *  sit one import apart. This one only clamps storage; it does no format
+ *  validation at all, because rejecting a half-typed address at load time would
+ *  throw away the player's work for no benefit. Validation belongs at the wire
+ *  boundary, where dropping is the safe answer. */
+function clampStoredSurveyEmail(raw: unknown): string {
   if (typeof raw !== 'string') return DEFAULT_SETTINGS.surveyEmail;
   return raw.length <= SURVEY_EMAIL_MAX ? raw : raw.slice(0, SURVEY_EMAIL_MAX);
 }

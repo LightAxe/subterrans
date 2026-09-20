@@ -8,6 +8,9 @@ import {
   SURVEY_EMAIL_MAX,
   type Settings,
 } from './settings.js';
+// Cross-layer import in a TEST only: the point is to prove the two constants
+// agree. Production platform/ code must not import from render/.
+import { PLAYTRACE_EMAIL_MAX } from '../render/playtrace-upload.js';
 
 // jsdom provides a real localStorage in the test environment (test-setup.ts
 // mounts it). Each test resets the namespace key to ensure isolation.
@@ -185,6 +188,14 @@ describe('surveyEmail (#303)', () => {
       JSON.stringify({ version: SETTINGS_VERSION, settings: { surveyEmail: 42 } }),
     );
     expect(loadSettings().surveyEmail).toBe('');
+  });
+
+  it('caps at the same length the wire boundary does', () => {
+    // SURVEY_EMAIL_MAX and PLAYTRACE_EMAIL_MAX are deliberately separate
+    // constants (platform/ must not import from render/), so this is the only
+    // thing stopping them drifting. If they diverge, a remembered address could
+    // be stored at a length the envelope then silently drops.
+    expect(SURVEY_EMAIL_MAX).toBe(PLAYTRACE_EMAIL_MAX);
   });
 
   it('truncates an over-long stored value instead of growing unbounded', () => {

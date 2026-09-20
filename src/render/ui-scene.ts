@@ -2917,6 +2917,15 @@ export class UIScene extends Phaser.Scene {
       ta.style.fontSize = '13px';
       ta.style.padding = '6px';
       ta.style.resize = 'none';
+      // Without border-box the 6px padding and 1px border are ADDED to the
+      // height set from surveyFreeTextRect, so the element renders 14px taller
+      // than the rect it is supposed to occupy. That was merely tight before
+      // #303 (a 100px rect rendered 114px, clearing the checkbox row by 6px);
+      // once #303 shrank the rect to 68px to make room for the email row, the
+      // overflow painted straight over the email label at SURVEY_EMAIL_LABEL_Y.
+      // Matching the email input's box-sizing makes the rendered box equal the
+      // reserved rect, which is what every layout assertion assumes.
+      ta.style.boxSizing = 'border-box';
       ta.addEventListener('input', () => {
         this.surveyState.freeText = truncateFreeText(ta.value);
       });
@@ -2935,10 +2944,13 @@ export class UIScene extends Phaser.Scene {
       el.type = 'email';
       el.autocomplete = 'email';
       el.placeholder = 'you@example.com';
-      // maxLength is the ONLY place the 254-char cap is enforced against the
-      // player: sanitizeSurveyEmail drops an over-long value rather than
-      // truncating it, so without this a long paste would be silently thrown
-      // away at submit time instead of being visibly refused here.
+      // The cap is applied in three places — here, in rememberSurveyEmail, and
+      // again when settings load — but this is the one that acts before the
+      // player commits: sanitizeSurveyEmail DROPS an over-long address rather
+      // than truncating it, so without maxLength a long paste would be accepted
+      // by the form and then silently discarded at submit time. Note the browser
+      // truncates the paste rather than rejecting it, so an address longer than
+      // the RFC limit still ends up altered — it just ends up altered visibly.
       el.maxLength = PLAYTRACE_EMAIL_MAX;
       // Prefill from the remembered address (surveyState.email was seeded from
       // settings in showSurveyOverlay).

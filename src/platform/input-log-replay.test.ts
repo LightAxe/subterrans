@@ -8,11 +8,18 @@ import {
   stampDrainTicks,
   drainTickOf,
   indexByDrainTick,
-  indexByIssuedAtTick,
   summarizeDrainTickSource,
   SIM_SELF_EMIT_DRAIN_LAG,
 } from './input-log-replay.js';
 import type { SimCommand, CommandOrigin } from '../sim/commands.js';
+
+/** The pre-#296 grouping, local to this test — see the note in
+ *  input-log-replay.integration.test.ts. */
+function indexByIssuedAtTick(log: readonly SimCommand[]): SimCommand[][] {
+  const byTick: SimCommand[][] = [];
+  for (const cmd of log) (byTick[cmd.issuedAtTick] ??= []).push(cmd);
+  return byTick;
+}
 
 /** A minimal command carrying only the fields the batching rules read. */
 function cmd(issuedAtTick: number, origin?: CommandOrigin, drainTick?: number): SimCommand {
@@ -76,6 +83,27 @@ describe('drainTickOf', () => {
       drainTick: 'nope',
     } as unknown as SimCommand;
     expect(drainTickOf(worse)).toBe(11);
+  });
+
+  it('rejects an impossible drainTick rather than indexing off the end', () => {
+    // A negative drainTick would land at byTick[-1] — a string property, not an
+    // array index — so the command would silently vanish from the replay and
+    // the analyzer would blame determinism instead of the corrupt file.
+    expect(drainTickOf(cmd(10, 'player', -1))).toBe(10);
+    // Drained before it was issued is impossible by construction.
+    expect(drainTickOf(cmd(10, 'player', 9))).toBe(10);
+    expect(drainTickOf(cmd(10, 'sim', 4))).toBe(11);
+    // Equal is legitimate (player/AI input), and so is later (sim self-emit).
+    expect(drainTickOf(cmd(10, 'player', 10))).toBe(10);
+    expect(drainTickOf(cmd(10, 'sim', 11))).toBe(11);
+  });
+
+  it('keeps a corrupt stamp out of the "recorded" count', () => {
+    expect(summarizeDrainTickSource([cmd(10, 'sim', -1)])).toEqual({
+      recorded: 0,
+      derivedSelfEmit: 1,
+      derivedAtIssue: 0,
+    });
   });
 });
 

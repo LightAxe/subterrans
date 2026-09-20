@@ -28,6 +28,7 @@ import {
   type StorageDriver,
 } from './storage.js';
 import { createScenario } from '../sim/scenario.js';
+import { stampDrainTicks, indexByDrainTick } from './input-log-replay.js';
 import { tick } from '../sim/tick.js';
 import {
   PLAYER_COLONY_ID,
@@ -940,11 +941,15 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         },
       ];
 
-      // Play 50 ticks while appending each tick's commands to inputLog (render-layer pattern)
+      // Play 50 ticks while appending each tick's commands to inputLog (render-layer
+      // pattern). #296: stamp the drain tick exactly as createGameLoop does, so the
+      // saved log carries the batch boundaries the sim actually saw.
       const original = createScenario(seed);
       const inputLog: SimCommand[] = [];
       for (let t = 0; t < 50; t++) {
-        const cmds = schedule[t] ?? [];
+        const cmds = original.commandQueue.splice(0);
+        cmds.push(...(schedule[t] ?? []));
+        stampDrainTicks(cmds, original.tick);
         inputLog.push(...cmds);
         tick(original, cmds);
       }
@@ -954,14 +959,19 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const loaded = (await loadSave())!;
       expect(loaded.seed).toBe(seed);
 
-      // Replay inputLog against a fresh scenario — use issuedAtTick to schedule
+      // Replay inputLog against a fresh scenario. #296: group by the tick each
+      // command was DRAINED on, not the tick it was ISSUED on — the two differ by
+      // one for anything the sim pushes for itself — and discard the self-emits the
+      // replay regenerates, since the recorded batches already contain them. This
+      // 50-tick schedule is too short for the AI to reach Probing, so the old
+      // issuedAtTick grouping also passed here; it is aligned with the rest of the
+      // tree so this canonical SCEN-06 test cannot teach the wrong pattern.
       const replay = createScenario(loaded.seed);
-      const byTick: SimCommand[][] = [];
-      for (const cmd of loaded.inputLog) {
-        const t = cmd.issuedAtTick;
-        (byTick[t] ??= []).push(cmd);
+      const byTick = indexByDrainTick(loaded.inputLog);
+      for (let t = 0; t < 50; t++) {
+        replay.commandQueue.splice(0);
+        tick(replay, byTick[t] ?? []);
       }
-      for (let t = 0; t < 50; t++) tick(replay, byTick[t] ?? []);
 
       expect(JSON.stringify(serializeWorldState(replay))).toBe(
         JSON.stringify(serializeWorldState(original)),

@@ -64,20 +64,24 @@ export const PLAYTRACE_FREE_TEXT_MAX = 2000;
  * substantive external playtest report — arrived with a seed and a sentence.
  *
  * The size question that blocked the flip is now answered. `scripts/measure-
- * playtrace-size.ts` runs real headless matches and gzips the four payloads the
- * downgrade chain would produce. At the 24,000-tick match timeout the largest
- * FULL envelope was 27.4 KB against a passive player and 26.1 KB with BOTH
- * colonies AI-driven (`--both-ai`, the upper-bound arm: twice the live ants and
- * a real player inputLog). Either way that is ~0.5% of
- * PLAYTRACE_MAX_GZIPPED_BYTES and the downgrade chain never fired. The world
- * snapshot dominates and barely grows with colony size, so size is not the
- * reason to keep this off.
+ * playtrace-size.ts` runs real headless matches, stops at the terminal outcome
+ * (the only tick a submission is ever built at) and gzips the four payloads the
+ * downgrade chain would produce. Across 5 seeds per arm the largest FULL
+ * envelope AT ROUND END was 24.1 KB against a passive player and 25.9 KB with
+ * BOTH colonies AI-driven (`--both-ai`, the upper-bound arm: twice the live ants
+ * and a real player inputLog). That is ~0.5% of PLAYTRACE_MAX_GZIPPED_BYTES, and
+ * the downgrade chain never fired at any checkpoint. The world snapshot
+ * dominates and barely grows with colony size, so size is not the reason to keep
+ * this off.
  *
  * Flipping to `true` is the entire behaviour change: UIScene seeds the checkbox
  * from this constant and swaps the label to SURVEY_UPLOAD_LABEL_DEFAULT_ON,
  * which states plainly what is being sent. Deliberately typed `boolean` (not
  * inferred as `false`) so neither branch reads as dead code. Left OFF pending
- * the trust/optics call, which is Rob's, not the measurement's.
+ * the trust/optics call, which is Rob's, not the measurement's: #295 lists
+ * "silently uploading a world snapshot by default is a different social
+ * contract" as a question separate from size, and measuring the size does not
+ * answer it.
  */
 export const PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT: boolean = false;
 

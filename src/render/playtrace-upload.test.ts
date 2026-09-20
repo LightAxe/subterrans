@@ -144,7 +144,9 @@ describe('buildPlaytraceEnvelope', () => {
   it('records world.difficulty on a snapshot-bearing submission', () => {
     const input = makeInput();
     input.world.difficulty = 'Hard';
-    const env = buildPlaytraceEnvelope(input, null);
+    const snapshot = debugSnapshot.buildDebugSnapshot(input.world, input.seed, input.inputLog);
+    const env = buildPlaytraceEnvelope(input, snapshot);
+    expect(env.snapshot).not.toBeNull();
     expect(env.difficulty).toBe('Hard');
   });
 
@@ -184,11 +186,12 @@ describe('buildPlaytraceEnvelope', () => {
 
 describe('PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT — issue #295', () => {
   it('is still false: the flip is a product decision, not a measurement one', () => {
-    // Measurement says size is a non-issue (largest full envelope at the
-    // 24,000-tick match timeout: 27.4 KB gzipped, 0.5% of the 5 MB cap — see
-    // scripts/measure-playtrace-size.ts). This assertion exists so flipping the
-    // default is a deliberate edit with a failing test in front of it, not
-    // something that drifts in.
+    // Measurement says size is a non-issue (largest full envelope at round end
+    // across both arms: 25.9 KB gzipped, 0.5% of the 5 MB cap — see
+    // scripts/measure-playtrace-size.ts). It does NOT answer the trust/optics
+    // question #295 raises separately, which is the owner's call. This assertion
+    // exists so flipping the default is a deliberate edit with a failing test in
+    // front of it, not something that drifts in.
     expect(PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT).toBe(false);
   });
 });

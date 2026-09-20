@@ -293,7 +293,12 @@ describe('GameLoopOpts Phase 9 seams', () => {
       w.tick += 1;
       return GameOutcome.None;
     };
-    const drained: SimCommand[] = [];
+    // Snapshot drainTick INSIDE the onAfterDrain callback, not after update()
+    // returns. game-loop.ts promises the stamp lands "before anything observes
+    // them"; reading the field off retained references afterwards would pass
+    // even if the stamp were moved to after onAfterDrain, so it would not test
+    // the stated invariant. These are copies taken at observation time.
+    const observed: { issuedAtTick: number; drainTick: number | undefined }[] = [];
     const loop = createGameLoop(advancingTick, world, {
       onBeforeTick: (w) => {
         // Queue one command per tick, stamped with the current tick — the slot
@@ -301,14 +306,16 @@ describe('GameLoopOpts Phase 9 seams', () => {
         w.commandQueue.push(makeNoOp(w.tick));
       },
       onAfterDrain: (cmds) => {
-        for (const c of cmds) drained.push(c);
+        for (const c of cmds) {
+          observed.push({ issuedAtTick: c.issuedAtTick, drainTick: c.drainTick });
+        }
       },
     });
 
     loop.update(MS_PER_TICK * 3);
 
-    expect(drained.map((c) => c.issuedAtTick)).toEqual([0, 1, 2]);
-    expect(drained.map((c) => c.drainTick)).toEqual([0, 1, 2]);
+    expect(observed.map((c) => c.issuedAtTick)).toEqual([0, 1, 2]);
+    expect(observed.map((c) => c.drainTick)).toEqual([0, 1, 2]);
   });
 
   it('stamps a command queued DURING a tick with the following tick (sim self-emit)', () => {
@@ -322,19 +329,22 @@ describe('GameLoopOpts Phase 9 seams', () => {
       w.tick += 1;
       return GameOutcome.None;
     };
-    const drained: SimCommand[] = [];
+    // Again snapshotted at observation time — see the test above.
+    const observed: { issuedAtTick: number; drainTick: number | undefined }[] = [];
     const loop = createGameLoop(selfEmittingTick, world, {
       onAfterDrain: (cmds) => {
-        for (const c of cmds) drained.push(c);
+        for (const c of cmds) {
+          observed.push({ issuedAtTick: c.issuedAtTick, drainTick: c.drainTick });
+        }
       },
     });
 
     loop.update(MS_PER_TICK * 3);
 
-    expect(drained.length).toBe(1);
-    expect(drained[0]!.issuedAtTick).toBe(0);
+    expect(observed.length).toBe(1);
+    expect(observed[0]!.issuedAtTick).toBe(0);
     // The whole point of #296: these two differ.
-    expect(drained[0]!.drainTick).toBe(1);
+    expect(observed[0]!.drainTick).toBe(1);
   });
 
   it('onTickOutcome does NOT fire when tickFn returns None', () => {

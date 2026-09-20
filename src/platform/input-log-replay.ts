@@ -28,9 +28,18 @@
 //      at `issuedAtTick`. This is exact for every log produced by a #230-or-
 //      later build. A command with NO `origin` at all predates that too, and
 //      there is no way to tell a sim-emitted `ClearRallyPoint` from a
-//      player-issued one, so those keep the historical `issuedAtTick`
-//      behaviour rather than guessing — an old log replays exactly as well as
-//      it did before, never worse.
+//      player-issued one, so those keep the historical `issuedAtTick` placement
+//      rather than guessing.
+//
+//      Be precise about what that buys: a provenance-less log is NOT rescued.
+//      Its self-emits still land a tick early, so a capture taken after the
+//      first probe still fails the byte-compare — it is simply no worse placed
+//      than before. (It is not bit-identical to the old analyzer either: the
+//      replay loop now also discards the regenerated queue, so the early
+//      command is applied once rather than twice. Both runs diverge; the new
+//      one diverges more cleanly.) The provenance-less case is pinned by a test
+//      in input-log-replay.integration.test.ts so this stays an understood
+//      limitation rather than a surprise.
 //
 // The other half of a correct replay lives at the call site and cannot be done
 // here: the replaying world REGENERATES its own sim self-emits, so the replay
@@ -53,13 +62,44 @@ export const SIM_SELF_EMIT_DRAIN_LAG = 1;
  * commands — `inputLog`, the debug snapshot, the save file — carries the
  * boundaries verbatim.
  *
- * Mutates in place (the commands have just left the queue and are owned by the
- * batch), matching `pushCommand`'s in-place `origin` stamp: no allocation on a
- * per-tick path. `drainTick` is metadata — no tick handler reads it, so replay
- * ignores it and it needs no `simVersion` bump.
+ * Mutates the command objects in place (they have just left the queue and are
+ * owned by the batch), matching `pushCommand`'s in-place `origin` stamp: no
+ * allocation on a per-tick path. The parameter is a mutable `SimCommand[]`
+ * rather than `readonly` precisely because that is what this does — TypeScript's
+ * `readonly` only freezes the array shape, not the elements, so it would have
+ * advertised the opposite of the truth.
+ *
+ * Aliasing note: `onBeforeTick` runs `copyWorldState(w, prevState)`, whose
+ * `commandQueue` copy is a shallow `.slice()` (src/sim/types.ts), so at stamp
+ * time these same objects are also referenced from `prevState.commandQueue`.
+ * That is harmless — `prevState` is render-interpolation scratch that is never
+ * serialized, hashed or replayed — but it does mean this writes to an object
+ * reachable from a WorldState. It is inside the platform loop's sanctioned
+ * commandQueue-drain seam; flagged here so it is not rediscovered as a surprise.
+ *
+ * `drainTick` is metadata: no tick handler reads it, so replay ignores it and it
+ * needs no `simVersion` bump.
  */
-export function stampDrainTicks(cmds: readonly SimCommand[], drainTick: number): void {
+export function stampDrainTicks(cmds: SimCommand[], drainTick: number): void {
   for (const c of cmds) c.drainTick = drainTick;
+}
+
+/**
+ * Is `cmd.drainTick` a usable recorded stamp? Shared by every reader so the
+ * acceptance rule cannot drift between them.
+ *
+ * Rejects a non-integer, a negative tick, and — the case that actually bites —
+ * a `drainTick` EARLIER than `issuedAtTick`, which is impossible by construction
+ * (a command cannot be drained before it was pushed). Without the range check a
+ * corrupt `drainTick` of -1 would land at `byTick[-1]`, which JavaScript stores
+ * as a string property rather than an array index: the command would vanish from
+ * the replay and the analyzer would report a SCEN-06 determinism regression
+ * instead of "your snapshot is corrupt". Falling back to the derived rule turns
+ * that into a replay that is merely as good as a pre-#296 log's.
+ */
+function hasUsableDrainTick(cmd: SimCommand): boolean {
+  const d = cmd.drainTick;
+  return typeof d === 'number' && Number.isInteger(d) && d >= 0 && d >= cmd.issuedAtTick;
 }
 
 /**
@@ -68,9 +108,7 @@ export function stampDrainTicks(cmds: readonly SimCommand[], drainTick: number):
  * See the module header for why an `origin`-less command keeps `issuedAtTick`.
  */
 export function drainTickOf(cmd: SimCommand): number {
-  if (typeof cmd.drainTick === 'number' && Number.isInteger(cmd.drainTick)) {
-    return cmd.drainTick;
-  }
+  if (hasUsableDrainTick(cmd)) return cmd.drainTick!;
   return cmd.origin === 'sim' ? cmd.issuedAtTick + SIM_SELF_EMIT_DRAIN_LAG : cmd.issuedAtTick;
 }
 
@@ -90,7 +128,7 @@ export interface DrainTickSource {
 export function summarizeDrainTickSource(log: readonly SimCommand[]): DrainTickSource {
   const out: DrainTickSource = { recorded: 0, derivedSelfEmit: 0, derivedAtIssue: 0 };
   for (const c of log) {
-    if (typeof c.drainTick === 'number' && Number.isInteger(c.drainTick)) out.recorded++;
+    if (hasUsableDrainTick(c)) out.recorded++;
     else if (c.origin === 'sim') out.derivedSelfEmit++;
     else out.derivedAtIssue++;
   }
@@ -118,20 +156,6 @@ export function indexByDrainTick(log: readonly SimCommand[]): SimCommand[][] {
   for (const cmd of log) {
     const t = drainTickOf(cmd);
     (byTick[t] ??= []).push(cmd);
-  }
-  return byTick;
-}
-
-/**
- * The pre-#296 grouping: every command applied at its `issuedAtTick`. Kept —
- * and exported — ONLY so the regression test can demonstrate that it diverges
- * from the live run on a log containing sim self-emits. Production replay paths
- * must use {@link indexByDrainTick}.
- */
-export function indexByIssuedAtTick(log: readonly SimCommand[]): SimCommand[][] {
-  const byTick: SimCommand[][] = [];
-  for (const cmd of log) {
-    (byTick[cmd.issuedAtTick] ??= []).push(cmd);
   }
   return byTick;
 }

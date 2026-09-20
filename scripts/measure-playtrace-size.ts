@@ -75,6 +75,7 @@ const { buildPlaytraceEnvelope, gzipString, PLAYTRACE_MAX_GZIPPED_BYTES } =
   await import('../src/render/playtrace-upload.js');
 const { GameOutcome } = await import('../src/sim/game-over.js');
 const { isAlive } = await import('../src/sim/ant/ant-store.js');
+const { stampDrainTicks } = await import('../src/platform/input-log-replay.js');
 
 import type { WorldState } from '../src/sim/types.js';
 import type { SimCommand } from '../src/sim/commands.js';
@@ -134,6 +135,9 @@ interface Checkpoint extends StageSizes {
   liveAnts: number;
   inputLogLength: number;
   eventCount: number;
+  /** True when this row is the round's actual end (a terminal GameOutcome),
+   *  which is the only tick a real submission is ever built at. */
+  atRoundEnd: boolean;
 }
 
 function liveAntCount(world: WorldState): number {
@@ -208,6 +212,24 @@ for (let seed = 1; seed <= SEEDS; seed++) {
   const inputLog: SimCommand[] = [];
   const simOriginDrains: { drainTick: number; issuedAtTick: number; type: string }[] = [];
   const checkpointSet = new Set(CHECKPOINTS);
+  let roundEndTick: number | null = null;
+  let roundEndOutcome: number = GameOutcome.None;
+
+  const record = async (atRoundEnd: boolean): Promise<void> => {
+    const sizes = await measure(world, seed, inputLog);
+    rows.push({
+      seed,
+      tick: world.tick,
+      liveAnts: liveAntCount(world),
+      inputLogLength: inputLog.length,
+      eventCount: world.events.length,
+      atRoundEnd,
+      ...sizes,
+    });
+    process.stdout.write(
+      `  seed ${seed} @ ${world.tick}: measured${atRoundEnd ? ' (round end)' : ''}\n`,
+    );
+  };
 
   for (let t = 0; t < maxTick; t++) {
     runAIController(world, ENEMY_COLONY_ID);
@@ -218,29 +240,39 @@ for (let seed = 1; seed <= SEEDS; seed++) {
     if (BOTH_AI) runAIController(world, PLAYER_COLONY_ID);
     const drainTick = world.tick;
     const cmds = world.commandQueue.splice(0);
+    // #296 — stamp exactly as createGameLoop does, so the measured inputLog has
+    // the same shape as one a real session would upload. Without this the bytes
+    // reported here would be of a payload the game no longer produces.
+    stampDrainTicks(cmds, drainTick);
     for (const c of cmds) {
       inputLog.push(c);
       if (c.origin === 'sim') {
         simOriginDrains.push({ drainTick, issuedAtTick: c.issuedAtTick, type: c.type });
       }
     }
-    tick(world, cmds);
-    if (checkpointSet.has(world.tick)) {
-      const sizes = await measure(world, seed, inputLog);
-      rows.push({
-        seed,
-        tick: world.tick,
-        liveAnts: liveAntCount(world),
-        inputLogLength: inputLog.length,
-        eventCount: world.events.length,
-        ...sizes,
-      });
-      process.stdout.write(`  seed ${seed} @ ${world.tick}: measured\n`);
+    const outcome = tick(world, cmds);
+    if (checkpointSet.has(world.tick)) await record(false);
+    // Stop at the terminal outcome. Ticking past game-over would keep measuring
+    // a world whose colonies have collapsed — a SMALLER antTrace than the round
+    // that actually ended — and the survey only ever fires here, so this is the
+    // one tick a real submission is built at.
+    if (outcome !== GameOutcome.None) {
+      if (!checkpointSet.has(world.tick)) await record(true);
+      else rows[rows.length - 1]!.atRoundEnd = true;
+      roundEndTick = world.tick;
+      roundEndOutcome = outcome;
+      break;
     }
   }
 
+  if (roundEndTick !== null) {
+    console.log(
+      `  seed ${seed}: round ended at tick ${roundEndTick} (outcome ${roundEndOutcome}) — ` +
+        `later checkpoints skipped`,
+    );
+  }
   if (simOriginDrains.length === 0) {
-    console.log(`  seed ${seed}: no sim-origin self-emits in ${maxTick} ticks`);
+    console.log(`  seed ${seed}: no sim-origin self-emits before tick ${world.tick}`);
   } else {
     const late = simOriginDrains.filter((d) => d.drainTick > d.issuedAtTick).length;
     console.log(
@@ -280,11 +312,16 @@ for (const r of rows) {
       fmtBytes(r.noAntTrace).padStart(10),
       fmtBytes(r.noAntTraceNoInputLog).padStart(10),
       fmtBytes(r.surveyOnly).padStart(9),
+      r.atRoundEnd ? '  <- round end' : '',
     ].join('  '),
   );
 }
 
 console.log('');
+if (rows.length === 0) {
+  console.error('No checkpoints were reached — every round ended before the first one.');
+  process.exit(1);
+}
 const worstFull = rows.reduce((a, b) => (b.full > a.full ? b : a), rows[0]!);
 console.log(
   `Largest full envelope: ${fmtBytes(worstFull.full)} (${pct(worstFull.full)} of the ${fmtBytes(
