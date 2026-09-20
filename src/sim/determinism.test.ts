@@ -17,6 +17,8 @@ import {
   SIM_VERSION_V32_AI_OP_VALIDATION,
   SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
   SIM_VERSION_V36_RISK_AWARE_FORAGING,
+  SIM_VERSION_V37_CORPSE_FOOD,
+  SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH,
 } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
@@ -41,6 +43,7 @@ import {
   SPIDER_HP_FULL,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
+  FLEE_THRESHOLD,
 } from './constants.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
 import { Zone, UndergroundTileState, ugSet } from './terrain.js';
@@ -1205,5 +1208,72 @@ describe('A1 (V36) risk-aware foraging — replay determinism', () => {
     expect(run(SIM_VERSION_V36_RISK_AWARE_FORAGING).rngState).not.toBe(
       run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER).rngState,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #297 (V38) homebound-forager doorstep push-through — replay determinism across the
+// behavioral transition. V38 releases carriers that V34 froze, so they resume
+// movement, deposit, and re-enter the allocator; that changes which ants take
+// which branches for the rest of the run. AGENTS.md requires a gated behavior
+// change to ship with a deterministic-replay test.
+// ---------------------------------------------------------------------------
+
+describe('#297 (V38) homebound-forager doorstep push-through — replay determinism', () => {
+  const SEED = 20260918;
+  const TICKS = 400;
+
+  /**
+   * Camp EVERY colony's sole entrance every tick, which is the condition that
+   * arms the V34 homebound hold (and, at V38, the doorstep release). Re-seeded
+   * per tick because DangerTrail decays.
+   */
+  function campAllEntrances(world: WorldState): void {
+    for (const cidStr of Object.keys(world.colonies)) {
+      const cid = Number(cidStr);
+      const colony = world.colonies[cid];
+      if (colony === undefined) continue;
+      const g = world.pheromoneGrids[pheromoneGridKey(cid, PheromoneType.DangerTrail, 'surface')];
+      if (!g) continue;
+      for (const ent of colony.entrances) {
+        for (let dy = -3; dy <= 3; dy++) {
+          for (let dx = -3; dx <= 3; dx++) {
+            phSet(g, ent.surfaceTileX + dx, ent.surfaceTileY + dy, FLEE_THRESHOLD * 8);
+          }
+        }
+      }
+    }
+  }
+
+  function run(simVersion: number): WorldState {
+    const world = createScenario(SEED);
+    world.simVersion = simVersion;
+    world.spider = null; // isolate the flee machine from spider RNG
+    for (let t = 0; t < TICKS; t++) {
+      campAllEntrances(world);
+      tick(world, []);
+    }
+    return world;
+  }
+
+  it('V38 with the doorstep release active replays byte-identically', () => {
+    expect(serializeWorldState(run(SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH))).toBe(
+      serializeWorldState(run(SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH)),
+    );
+  });
+
+  it('V37 under the same camp replays byte-identically (gated-off legacy hold)', () => {
+    expect(serializeWorldState(run(SIM_VERSION_V37_CORPSE_FOOD))).toBe(
+      serializeWorldState(run(SIM_VERSION_V37_CORPSE_FOOD)),
+    );
+  });
+
+  it('V38 diverges from V37 under the same camp — behavioral, not just the version field', () => {
+    // Compare ant positions rather than the full serialization: that string carries
+    // the simVersion field itself (38 vs 37), so a whole-string compare would pass
+    // even with the gated behavior inert (the V36 test makes the same point).
+    const a = run(SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH);
+    const b = run(SIM_VERSION_V37_CORPSE_FOOD);
+    expect(Array.from(a.ants.posX)).not.toEqual(Array.from(b.ants.posX));
   });
 });

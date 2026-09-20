@@ -496,7 +496,55 @@ export const SIM_VERSION_V36_RISK_AWARE_FORAGING = 36 as const;
  * (no save wipe); natural piles carry no new column, so pre-V37 saves are unchanged.
  */
 export const SIM_VERSION_V37_CORPSE_FOOD = 37 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V37_CORPSE_FOOD;
+
+/**
+ * #297 — homebound-forager doorstep push-through. V34's homebound surface HOLD
+ * (`tickIdleReserveAndFlee`) parks a carrier in place whenever *every* open
+ * entrance of its colony reads ≥ FLEE_THRESHOLD, and re-arms that hold every
+ * tick for as long as that stays true. For a ONE-ENTRANCE colony — which is what
+ * both scenario colonies are, and what the rule-based AI never grows out of — a
+ * spider that keeps returning to the door holds the entrance DangerTrail at its
+ * deposit/decay equilibrium (SPIDER_DANGER_DEPOSIT 1280 re-deposited every tick
+ * against DANGER_DECAY_FP 10 settles near 32 768, 64× FLEE_THRESHOLD) for as long
+ * as it stays. A single rampage is leashed by SPIDER_RAMPAGE_MAX_TICKS (1200) and
+ * a camper also leaves via the chase-divert, but the hold re-arms for the whole
+ * episode — and the episode is long: the longest CONTIGUOUS stretch above the
+ * threshold at the AI entrance, over 10 seeds and counting only ticks while the
+ * queen was ALIVE, is median 1 197.5 ticks / max 1 635 — about one rampage leash
+ * plus its ~100-tick decay tail, and ~4× STARVATION_GRACE_TICKS. Across a match
+ * the AI colony spent 2 300–4 100 of its first 12 000 ticks with at least one
+ * homebound forager frozen, banked food on only 58–85 ticks, and lost its queen
+ * on 25/30 Normal seeds.
+ *
+ * The predation itself is not the drain: across 8 dying seeds the colony lost only
+ * 2–5 workers out of 11–21 alive in that window, but banked food on just 58–85
+ * ticks. The hold is what converts a handful of kills into a total income
+ * stoppage.
+ *
+ * V38 gives the hold the two exits it was missing:
+ *
+ *  1. DOORSTEP — a homebound forager within `FLEE_HOMEBOUND_PUSH_THROUGH_TILES`
+ *     of one of its own OPEN and ENTERABLE entrances stops waiting for a safe
+ *     door and makes the final dash through the danger (normal routing).
+ *     "Enterable" excludes a door a RAMPAGING spider is blockading
+ *     (`isDescentBlocked`, #165): there the ant provably cannot descend and the
+ *     camper is deliberately pinned to bite it, so pushing through is pure loss
+ *     and the V34 hold still applies.
+ *  2. LOCAL ALL-CLEAR — the surface re-arm site now re-reads the ant's OWN tile.
+ *     It previously keyed on entrance safety alone, so a carrier that armed the
+ *     hold on a one-shot pulse stayed frozen in zero danger for as long as any
+ *     door stayed camped, unable even to walk into the doorstep band.
+ *
+ * Carriers that are genuinely in danger and far from home keep the V34 hold, so
+ * the Codex P2 intent behind it — "do not walk a laden ant across a raid into a
+ * camped entrance" — still governs the long walk.
+ *
+ * Every behavioural site is gated `simVersion >= V38`, so pre-V38 saves replay
+ * byte-identically. No new save column, no `WorldState` field, no PRNG draw and
+ * no tick-order change. MIN_ACCEPTED is UNCHANGED (no save wipe).
+ */
+export const SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH = 38 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH;
 
 /**
  * S2 — AI colony state machine states.

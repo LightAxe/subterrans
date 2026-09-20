@@ -24,6 +24,7 @@ import { FP_SHIFT, FP_ONE } from '../sim/fixed.js';
 import { pheromoneGridKey, phSet } from '../sim/pheromone/pheromone-store.js';
 import {
   FLEE_THRESHOLD,
+  FLEE_HOMEBOUND_PUSH_THROUGH_TILES,
   PLAYER_COLONY_ID,
   WORKER_BASE_SPEED,
   WORKER_LIFESPAN_TICKS,
@@ -104,9 +105,13 @@ describe('#209 PR A — fleeShelterUntilTick save column', () => {
     const colony = w.colonies[PLAYER_COLONY_ID]!;
     const ent = colony.entrances.find((e) => e.isOpen)!;
     const id = allocateEntityId(w);
+    // #297 (V38): park the carrier BEYOND the doorstep radius. This test is about
+    // the save column's zone-disambiguated `>0` encoding surviving a round-trip
+    // and the restored machine re-arming the hold — not about the V38
+    // push-through, which would (correctly) release a doorstep carrier instead.
     initAnt(w.ants, id, {
       colonyId: PLAYER_COLONY_ID,
-      posX: center(ent.surfaceTileX + 2),
+      posX: center(ent.surfaceTileX + FLEE_HOMEBOUND_PUSH_THROUGH_TILES + 3),
       posY: center(ent.surfaceTileY),
       task: AntTask.Foraging,
       subTask: ForagingSubState.ReturningToNest,
@@ -123,13 +128,19 @@ describe('#209 PR A — fleeShelterUntilTick save column', () => {
     expect(restored.ants.zone[id]).toBe(Zone.Surface);
 
     // While the sole entrance stays camped, the restored machine re-arms the hold.
-    seedDanger(restored, ent.surfaceTileX, ent.surfaceTileY, 3, FLEE_THRESHOLD * 4);
+    // The danger square must be wide enough to cover the CARRIER's own tile too:
+    // since #297 (V38) the re-arm site releases a carrier whose own tile has
+    // decayed below FLEE_THRESHOLD, so a carrier standing in the clear would
+    // (correctly) be let go rather than re-armed, and this would stop testing the
+    // hold. A carrier genuinely in danger with every door camped still holds.
+    const carrierOffset = FLEE_HOMEBOUND_PUSH_THROUGH_TILES + 3;
+    seedDanger(restored, ent.surfaceTileX, ent.surfaceTileY, carrierOffset + 1, FLEE_THRESHOLD * 4);
     restored.ants.fleeShelterUntilTick[id] = restored.tick; // elapse the timer → re-eval fires
     tickIdleReserveAndFlee(restored);
     expect(restored.ants.fleeShelterUntilTick[id]).toBeGreaterThan(restored.tick); // re-armed, still held
 
     // Clear the danger → the entrance is safe → the hold resumes into a dash.
-    seedDanger(restored, ent.surfaceTileX, ent.surfaceTileY, 3, 0);
+    seedDanger(restored, ent.surfaceTileX, ent.surfaceTileY, carrierOffset + 1, 0);
     restored.ants.fleeShelterUntilTick[id] = restored.tick; // elapse again
     tickIdleReserveAndFlee(restored);
     expect(restored.ants.fleeShelterUntilTick[id]).toBe(0); // dashing

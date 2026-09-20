@@ -134,7 +134,11 @@ kill alarm) and decays. Since **A1 (simVersion V36)** DangerTrail is also a *rou
 input: SearchingFood foragers penalize a candidate step's FoodTrail by that cell's
 DangerTrail (`sampleForagingDirection`) and softly steer wandering routes away from it,
 gated so pre-V36 replays never consult it. (Lethal-proximity danger is handled
-separately by the V34 flee behavior, not routing.)
+separately by the V34 flee behavior, not routing — and since **#297 (simVersion
+V38)** that flee's homebound hold is bounded by the threat rather than by time: a
+homebound forager is released once its own tile has decayed clear, or once it is within
+`FLEE_HOMEBOUND_PUSH_THROUGH_TILES` of an own entrance that is open and not
+spider-blockaded, so a camped door starves no colony.)
 _Avoid_: trail (ambiguous on its own); **marker** (= the player's mark). **scent**
 is a *different* mechanism (see below) — never a synonym for pheromone.
 

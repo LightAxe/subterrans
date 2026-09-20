@@ -33,6 +33,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check src/ eslint-rules/",
     "check:cycles": "node scripts/check-ant-cycles.mjs",
+    "check:ai-economy": "node --experimental-strip-types scripts/check-ai-economy.ts",
     "verify": "npm run format:check && npm run lint && npm run typecheck && npm run lint:types && bash scripts/check-sim-boundary.sh && bash scripts/check-asset-paths.sh && bash scripts/check-e2e-geometry.sh && bash scripts/check-layout-discipline.sh && npm run check:cycles && npm run test"
   },
   "dependencies": {
