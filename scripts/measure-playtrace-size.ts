@@ -1,11 +1,13 @@
 // scripts/measure-playtrace-size.ts
 // Issue #295 — how big is a playtrace envelope, really?
 //
-// `includeSnapshot` defaults to false, so playtest reports arrive with a seed
-// and a sentence. #295 asks whether to flip that default, and the open question
-// blocking the decision is size: the one snapshot we have is 7 KB gzipped for a
-// 1,196-tick round, while a real round runs to the 24,000-tick match timeout,
-// and both `antTrace` and `inputLog` grow with duration.
+// `includeSnapshot` defaulted to false until #295 flipped it (2026-09-20), so
+// playtest reports arrived with a seed and a sentence. The open question that
+// blocked the flip was size: the one snapshot we had was 7 KB gzipped for a
+// 1,196-tick round, while a real round can run to the 24,000-tick match timeout,
+// and both `antTrace` and `inputLog` grow with duration. This harness produced
+// the numbers the decision was made on; keep it runnable so a future change to
+// the snapshot shape can be re-measured the same way.
 //
 // This harness answers that by running a real matchup headlessly — by default
 // the same `runAIController(world, ENEMY_COLONY_ID)`-against-a-passive-player

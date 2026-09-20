@@ -7,12 +7,13 @@
 // forked from the live session at the first Probing→WarFooting transition.
 //
 // This test drives an AI probe, records the drain batches the way the platform
-// loop does, and replays the same log three ways: grouped by the recorded
-// drainTick, grouped by issuedAtTick (the pre-#296 behaviour), and grouped by
-// the derived fallback used for logs that predate drainTick. The first and third
-// must reproduce the live run's per-tick hashWorldState exactly; the second must
-// not. Mutation-checked — reverting indexByDrainTick to the issuedAtTick
-// grouping fails three of the five assertions below.
+// loop does, and replays the same log four ways: grouped by the recorded
+// drainTick, grouped by issuedAtTick (the pre-#296 behaviour), grouped by the
+// derived fallback used for logs that predate drainTick, and with no provenance
+// at all (pre-#230 logs, which genuinely cannot be rescued). The first and third
+// must reproduce the live run's per-tick hashWorldState exactly; the second and
+// fourth must not. Mutation-checked — reverting indexByDrainTick to the
+// issuedAtTick grouping fails three of the six assertions below.
 //
 // Why a forced probe instead of a real long match: the earliest sim self-emit in
 // an unattended AI-vs-passive match lands around tick 13,500 (measured across

@@ -1,6 +1,6 @@
 // input-log-replay.test.ts — issue #296 unit coverage for the batch-boundary
 // recovery rules. The end-to-end proof (live run vs replay, byte-for-byte)
-// lives in src/render/input-log-replay.integration.test.ts; this file pins the
+// lives in src/platform/input-log-replay.integration.test.ts; this file pins the
 // individual rules so a failure there is easy to localize.
 
 import { describe, it, expect } from 'vitest';

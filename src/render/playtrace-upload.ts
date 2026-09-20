@@ -58,9 +58,10 @@ export const PLAYTRACE_FREE_TEXT_MAX = 2000;
 /**
  * Issue #295 — default for the survey's "include a snapshot" checkbox.
  *
- * It ships `false`, so a report carries the survey and nothing else unless the
- * player ticks the box. Opt-in rate was 0 of 2, which is the expected outcome
- * for an unticked box at the end of a round, and it is why #293 — the first
+ * It shipped `false` until 2026-09-20, so a report carried the survey and
+ * nothing else unless the player ticked the box. Opt-in rate was 0 of 2, which
+ * is the expected outcome for an unticked box at the end of a round, and it is
+ * why #293 — the first
  * substantive external playtest report — arrived with a seed and a sentence.
  *
  * The size question that blocked the flip is now answered. `scripts/measure-
@@ -262,7 +263,10 @@ export function truncateFreeText(s: string): string {
  * Exported so the overlay and the platform settings layer apply the same rule.
  */
 export function sanitizeSurveyEmail(raw: string | undefined): string | undefined {
-  if (raw === undefined) return undefined;
+  // Type-guarded rather than `=== undefined`: a stray null/number from an
+  // untyped caller must cost the optional field, never the whole submission
+  // (ADR 0013 — a bad optional email is dropped, not a 400 and not a throw).
+  if (typeof raw !== 'string') return undefined;
   const trimmed = raw.trim();
   if (trimmed === '') return undefined;
   if (trimmed.length > PLAYTRACE_EMAIL_MAX) return undefined;

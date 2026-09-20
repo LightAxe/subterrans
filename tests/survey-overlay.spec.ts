@@ -211,7 +211,7 @@ test.describe('End-of-game survey overlay — v3 playtrace envelope', () => {
     // rule as the consent disclosure) and drawn onto the canvas by UIScene, so
     // it is asserted at its source of truth.
     expect(SURVEY_EMAIL_LABEL).toBe(
-      'Email (optional) — only used to reply about this report; deleted with it after 90 days',
+      'Email (optional) — only used to reply about this report; deleted after 90 days',
     );
     // The upload row's label is picked off PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT:
     // a box that ships ticked has to say plainly what is being sent, which is a

@@ -166,14 +166,14 @@ CI (`.github/workflows/ci.yml`) runs `verify` (the full Vitest suite, un-instrum
 In-game, `F9` downloads a debug snapshot (`subterrans-debug-seed<seed>-tick<tick>.json` — seed, tick, full input log, world snapshot, per-ant trace). To analyze one offline:
 
 ```bash
-node --experimental-transform-types scripts/analyze-snapshot.ts <snapshot.json>
+node --experimental-strip-types scripts/analyze-snapshot.ts <snapshot.json>
 ```
 
 The CLI replays the recorded inputLog from seed and byte-compares the result against the captured snapshot (a free SCEN-06 determinism check — exits 1 on regression), then reports tile-occupancy clusters, underground ants stuck on non-Open tiles, and stationary / oscillating ants from a per-ant motion history sampled during replay. Each motion group is annotated with its dominant `(task, subTask)` so a real bug stands out from expected stuck cases. See PR #121 for the design notes.
 
 ## Playtrace upload (issue #122 / ADR 0013)
 
-End-of-game survey overlay with an opt-in debug-snapshot upload. **Disabled by default** — the survey overlay and the pause menu's "Quit & feedback" row are hidden when the `VITE_PLAYTRACE_ENDPOINT` env var is unset or empty, and `npm run build` produces a bundle with the feature off.
+End-of-game survey overlay with a replay-data upload that ships ticked (opt-out, #295 — measured at ≤ 26 KB gzipped per round by `npm run measure:playtrace-size`) and an optional contact email (#303). The envelope is `schemaVersion` 3 (adds `difficulty` and `survey.email`); F9 snapshots are `DEBUG_SNAPSHOT_VERSION` 3, which stamps a per-command `drainTick` so a replay regroups commands by the batch the sim actually drained (#296, `src/platform/input-log-replay.ts`). **Disabled by default** — the survey overlay and the pause menu's "Quit & feedback" row are hidden when the `VITE_PLAYTRACE_ENDPOINT` env var is unset or empty, and `npm run build` produces a bundle with the feature off.
 
 To exercise the upload flow on localhost without standing up the website's Lambda + S3 stack:
 

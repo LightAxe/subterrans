@@ -96,7 +96,7 @@ export const SURVEY_EMAIL_INPUT_Y = SURVEY_EMAIL_LABEL_Y + 14;
  *  {@link SURVEY_CONSENT_DISCLOSURE}: the purpose limitation is a privacy
  *  promise, so it changes only via this module. */
 export const SURVEY_EMAIL_LABEL =
-  'Email (optional) — only used to reply about this report; deleted with it after 90 days';
+  'Email (optional) — only used to reply about this report; deleted after 90 days';
 
 /** Email input rect — a single-line affordance. The DOM <input type="email">
  *  is positioned over this rect at runtime by UIScene, exactly the way the
@@ -221,7 +221,7 @@ export const SURVEY_UPLOAD_LABEL_DEFAULT_ON =
  *  Centralized here so the wording is reviewable and only changes via this
  *  module (matching the same approach for the contract's wire shape). */
 export const SURVEY_CONSENT_DISCLOSURE =
-  'Uploading sends your IP and browser version with the replay data — and your email, if you enter one.';
+  'Uploading sends your IP and browser version with the replay data, plus your email if you enter one.';
 
 // ---------------------------------------------------------------------------
 // Rating buttons — five rects across, centered, indexed 1..5 left→right
