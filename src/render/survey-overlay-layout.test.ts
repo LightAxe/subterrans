@@ -125,6 +125,26 @@ describe('consent disclosure', () => {
     expect(SURVEY_CONSENT_DISCLOSURE.toLowerCase()).toMatch(/ip/);
     expect(SURVEY_CONSENT_DISCLOSURE.toLowerCase()).toMatch(/browser|user[- ]agent|ua/);
   });
+
+  it('marks the replay data and the email as conditional, not as always sent', () => {
+    // The line is drawn whether or not either payload is selected. An unticked
+    // box sends `snapshot: null` and an empty/malformed address is omitted
+    // entirely, so copy that flatly claims both are uploaded over-states what
+    // leaves the machine for most submissions. The IP/browser half IS
+    // unconditional — it goes to the edge on every submission, survey-only
+    // included — so only the optional half needs the hedge.
+    const lower = SURVEY_CONSENT_DISCLOSURE.toLowerCase();
+    expect(lower).toMatch(/replay data/);
+    expect(lower).toMatch(/email/);
+    expect(lower).toMatch(/only if|if you (enter|include)/);
+  });
+
+  it('fits the two-line allowance the layout leaves above the button row', () => {
+    // SURVEY_CONSENT_TEXT_Y to the button row is roughly two 11px lines. The
+    // character budget is the cheap proxy the copy has to stay inside; a longer
+    // string wraps to three and collides with Submit/Skip.
+    expect(SURVEY_CONSENT_DISCLOSURE.length).toBeLessThanOrEqual(100);
+  });
 });
 
 describe('optional email row — issue #303', () => {

@@ -2761,10 +2761,11 @@ export class UIScene extends Phaser.Scene {
         : SURVEY_UPLOAD_LABEL_OPT_IN,
     );
 
-    // Consent disclosure — only meaningful when the upload checkbox is
-    // ticked, but always rendered so the player sees the privacy
-    // implication BEFORE deciding to tick. ADR 0013 §"Privacy" requires
-    // the overlay to disclose IP + UA leakage at the edge.
+    // Consent disclosure — always rendered, and now accurate whether or not
+    // the optional payloads are included: the IP/browser half applies to every
+    // submission, the replay-data and email halves are explicitly conditional.
+    // ADR 0013 §"Privacy" requires the overlay to disclose IP + UA leakage at
+    // the edge, and the player must see it BEFORE deciding what to send.
     const consent = this.add.text(
       SURVEY_BROKEN_CHECKBOX_RECT.x + SURVEY_BROKEN_CHECKBOX_RECT.w + SURVEY_CHECKBOX_LABEL_GAP,
       SURVEY_CONSENT_TEXT_Y,
@@ -2944,6 +2945,14 @@ export class UIScene extends Phaser.Scene {
       el.type = 'email';
       el.autocomplete = 'email';
       el.placeholder = 'you@example.com';
+      // The field's visible label is Phaser text painted on the canvas, which
+      // assistive tech cannot see at all — to a screen reader this input would
+      // otherwise be an unlabelled box asking for an email address. Reuse the
+      // same string, which already carries both the purpose limitation and the
+      // 90-day retention, so the accessible name cannot drift from the drawn
+      // one. aria-label rather than aria-describedby: one attribute, no extra
+      // DOM node and no lifecycle to tear down.
+      el.setAttribute('aria-label', SURVEY_EMAIL_LABEL);
       // The cap is applied in three places — here, in rememberSurveyEmail, and
       // again when settings load — but this is the one that acts before the
       // player commits: sanitizeSurveyEmail DROPS an over-long address rather

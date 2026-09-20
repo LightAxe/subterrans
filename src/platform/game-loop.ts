@@ -13,8 +13,7 @@
 //   Spiral-of-death clamp = getMsPerTick() × MAX_CATCHUP_TICKS (dynamic, honors variable speed).
 import type { WorldState } from '../sim/types.js';
 import { GameOutcome } from '../sim/game-over.js';
-import type { SimCommand } from '../sim/commands.js';
-import { stampDrainTicks } from './input-log-replay.js';
+import { stampDrainTick, type SimCommand } from '../sim/commands.js';
 
 export const MS_PER_TICK = 50;
 export const MAX_CATCHUP_TICKS = 5;
@@ -78,8 +77,11 @@ export function createGameLoop(tickFn: TickFn, world: WorldState, opts?: GameLoo
         // anything observes them. This is the only drain site, so a command that
         // reaches inputLog (or a save file, or a playtrace snapshot) always
         // carries the tick the sim received it on — which is one LATER than
-        // issuedAtTick for sim self-emits.
-        stampDrainTicks(cmds, world.tick);
+        // issuedAtTick for sim self-emits. The write itself belongs to the sim
+        // layer (command metadata is sim-owned, and a drained command is still
+        // aliased from prevState.commandQueue), so it goes through the
+        // sanctioned sim-side helper rather than being done here.
+        stampDrainTick(cmds, world.tick);
         onAfterDrain?.(cmds); // Phase 9: inputLog seam
         const outcome = tickFn(world, cmds);
         accumulatorMs -= msPerTick;

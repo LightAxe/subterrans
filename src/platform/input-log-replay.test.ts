@@ -1,11 +1,12 @@
 // input-log-replay.test.ts — issue #296 unit coverage for the batch-boundary
-// recovery rules. The end-to-end proof (live run vs replay, byte-for-byte)
-// lives in src/platform/input-log-replay.integration.test.ts; this file pins the
-// individual rules so a failure there is easy to localize.
+// recovery rules this module READS. The stamp that WRITES them is a sim-layer
+// operation (`stampDrainTick`, src/sim/commands.ts) and is covered beside
+// `pushCommand` in src/sim/commands.test.ts. The end-to-end proof (live run vs
+// replay, byte-for-byte) lives in input-log-replay.integration.test.ts; this
+// file pins the individual rules so a failure there is easy to localize.
 
 import { describe, it, expect } from 'vitest';
 import {
-  stampDrainTicks,
   drainTickOf,
   indexByDrainTick,
   summarizeDrainTickSource,
@@ -28,27 +29,6 @@ function cmd(issuedAtTick: number, origin?: CommandOrigin, drainTick?: number): 
   if (drainTick !== undefined) c.drainTick = drainTick;
   return c;
 }
-
-describe('stampDrainTicks', () => {
-  it('stamps every command in the batch with the drain tick', () => {
-    const batch = [cmd(3), cmd(3, 'player'), cmd(2, 'sim')];
-    stampDrainTicks(batch, 7);
-    expect(batch.map((c) => c.drainTick)).toEqual([7, 7, 7]);
-  });
-
-  it('overwrites a stale stamp rather than preserving it', () => {
-    // A command can only be drained once, so a pre-existing stamp on a command
-    // coming out of the queue means something re-queued it; the live drain is
-    // the authority either way.
-    const batch = [cmd(1, 'player', 99)];
-    stampDrainTicks(batch, 4);
-    expect(batch[0]!.drainTick).toBe(4);
-  });
-
-  it('is a no-op on an empty batch (drained nothing this tick)', () => {
-    expect(() => stampDrainTicks([], 5)).not.toThrow();
-  });
-});
 
 describe('drainTickOf', () => {
   it('prefers the recorded drainTick over anything derivable', () => {

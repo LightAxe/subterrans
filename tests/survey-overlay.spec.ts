@@ -204,6 +204,9 @@ test.describe('End-of-game survey overlay — v3 playtrace envelope', () => {
     await expect(email).toHaveAttribute('autocomplete', 'email');
     await expect(email).toHaveAttribute('maxlength', '254');
     await expect(email).toHaveAttribute('placeholder', 'you@example.com');
+    // The visible label is Phaser text on the canvas, invisible to assistive
+    // tech — without this the field is an unlabelled box asking for an email.
+    await expect(email).toHaveAttribute('aria-label', SURVEY_EMAIL_LABEL);
     // Prefill is empty on a machine with no remembered address.
     await expect(email).toHaveValue('');
 

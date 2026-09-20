@@ -76,20 +76,37 @@ const { buildPlaytraceSummary } = await import('../src/render/summary-builder.js
 const { buildPlaytraceEnvelope, gzipString, PLAYTRACE_MAX_GZIPPED_BYTES } =
   await import('../src/render/playtrace-upload.js');
 const { GameOutcome } = await import('../src/sim/game-over.js');
+const { outcomeToWire } = await import('../src/render/playtrace-upload.js');
 const { isAlive } = await import('../src/sim/ant/ant-store.js');
-const { stampDrainTicks } = await import('../src/platform/input-log-replay.js');
+const { stampDrainTick } = await import('../src/sim/commands.js');
 
 import type { WorldState } from '../src/sim/types.js';
+import type { GameOutcome as GameOutcomeValue } from '../src/sim/game-over.js';
 import type { SimCommand } from '../src/sim/commands.js';
 import type { PlaytraceSubmissionInput } from '../src/render/playtrace-upload.js';
 
+/** Exit 2 with a message. A measurement harness that silently substitutes a
+ *  default for a typo'd flag reports numbers for a run nobody asked for, which
+ *  is worse than not running at all — these figures get quoted as authoritative
+ *  (see PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT's docstring). */
+function bail(msg: string): never {
+  console.error(msg);
+  process.exit(2);
+}
+
+/** Parse `--name=<number>`. A PRESENT-but-unparseable value is fatal; only an
+ *  absent flag falls back. */
 function parseNumArg(name: string, fallback: number): number {
   const prefix = `--${name}=`;
   for (const a of process.argv.slice(2)) {
-    if (a.startsWith(prefix)) {
-      const n = Number(a.slice(prefix.length));
-      if (Number.isFinite(n)) return n;
+    if (!a.startsWith(prefix)) continue;
+    const raw = a.slice(prefix.length);
+    const n = Number(raw);
+    // Number('') is 0 and Number(' ') is 0, so reject blank explicitly.
+    if (raw.trim() === '' || !Number.isFinite(n)) {
+      bail(`--${name}=${raw} is not a number.`);
     }
+    return n;
   }
   return fallback;
 }
@@ -105,23 +122,28 @@ function parseStrArg(name: string, fallback: string): string {
 const BOTH_AI = process.argv.slice(2).includes('--both-ai');
 const SEEDS = parseNumArg('seeds', 3);
 const DIFFICULTY = parseStrArg('difficulty', 'Normal') as 'Easy' | 'Normal' | 'Hard';
-const CHECKPOINTS = parseStrArg('checkpoints', `6000,12000,${MATCH_TIMEOUT_TICKS}`)
+// EVERY token must be a positive integer tick. Dropping the bad ones (the old
+// `.filter`) turned `--checkpoints=6000,abc` into a silent single-checkpoint
+// run, and `--checkpoints=abc` into the default three.
+const CHECKPOINT_TOKENS = parseStrArg('checkpoints', `6000,12000,${MATCH_TIMEOUT_TICKS}`)
   .split(',')
-  .map((s) => Number(s.trim()))
-  .filter((n) => Number.isInteger(n) && n > 0)
-  .sort((a, b) => a - b);
+  .map((tok) => tok.trim());
+const CHECKPOINTS = CHECKPOINT_TOKENS.map((tok) => {
+  const n = Number(tok);
+  if (tok === '' || !Number.isInteger(n) || n <= 0) {
+    bail(`--checkpoints: "${tok}" is not a positive integer tick.`);
+  }
+  return n;
+}).sort((a, b) => a - b);
 
 if (!Number.isInteger(SEEDS) || SEEDS < 1) {
-  console.error(`--seeds=${SEEDS} must be an integer >= 1.`);
-  process.exit(2);
+  bail(`--seeds=${SEEDS} must be an integer >= 1.`);
 }
 if (DIFFICULTY !== 'Easy' && DIFFICULTY !== 'Normal' && DIFFICULTY !== 'Hard') {
-  console.error(`Unknown --difficulty=${DIFFICULTY}; expected Easy|Normal|Hard.`);
-  process.exit(2);
+  bail(`Unknown --difficulty=${DIFFICULTY}; expected Easy|Normal|Hard.`);
 }
 if (CHECKPOINTS.length === 0) {
-  console.error('--checkpoints must list at least one positive integer tick.');
-  process.exit(2);
+  bail('--checkpoints must list at least one positive integer tick.');
 }
 
 interface StageSizes {
@@ -142,6 +164,19 @@ interface Checkpoint extends StageSizes {
   atRoundEnd: boolean;
 }
 
+/** The outcomes a real submission can carry. `GameOutcome.None` is not one of
+ *  them — `outcomeToWire` throws on it, because the survey only opens on a
+ *  terminal outcome — so a mid-round checkpoint has to borrow a stand-in. */
+type TerminalOutcome = Exclude<GameOutcomeValue, typeof GameOutcome.None>;
+
+/** Stand-in for the checkpoint rows, which are snapshots of a round still in
+ *  progress and so have no outcome of their own. Defeat is the common real
+ *  case; the choice is cosmetic here — `outcome` appears in the envelope as one
+ *  short string and moves the gzipped size by a byte or two — but it must be a
+ *  terminal value or the envelope build throws. Terminal rows use the outcome
+ *  `tick()` actually returned. */
+const CHECKPOINT_PLACEHOLDER_OUTCOME: TerminalOutcome = GameOutcome.Defeat;
+
 function liveAntCount(world: WorldState): number {
   let n = 0;
   for (let id = 0; id < world.nextEntityId; id++) if (isAlive(world.ants, id)) n++;
@@ -158,11 +193,13 @@ async function measure(
   world: WorldState,
   seed: number,
   inputLog: SimCommand[],
+  outcome: TerminalOutcome,
 ): Promise<StageSizes> {
+  const wireOutcome = outcomeToWire(outcome);
   const input: PlaytraceSubmissionInput = {
     endpoint: '/api/playtrace',
     sessionId: '00000000-0000-4000-8000-000000000000',
-    outcome: GameOutcome.Defeat,
+    outcome,
     quitFromPauseMenu: false,
     includeSnapshot: true,
     world,
@@ -172,7 +209,7 @@ async function measure(
     resumedFromSave: false,
   };
   const events = world.events.slice();
-  const summary = buildPlaytraceSummary(world, false, 'Defeat');
+  const summary = buildPlaytraceSummary(world, false, wireOutcome);
   const snap = buildDebugSnapshot(world, seed, inputLog);
   const full = buildPlaytraceEnvelope(input, snap, events, summary);
   const { events: _ev, summary: _sm, ...surveyOnlyBase } = full;
@@ -215,10 +252,10 @@ for (let seed = 1; seed <= SEEDS; seed++) {
   const simOriginDrains: { drainTick: number; issuedAtTick: number; type: string }[] = [];
   const checkpointSet = new Set(CHECKPOINTS);
   let roundEndTick: number | null = null;
-  let roundEndOutcome: number = GameOutcome.None;
+  let roundEndOutcome: GameOutcomeValue = GameOutcome.None;
 
-  const record = async (atRoundEnd: boolean): Promise<void> => {
-    const sizes = await measure(world, seed, inputLog);
+  const record = async (atRoundEnd: boolean, outcome: TerminalOutcome): Promise<void> => {
+    const sizes = await measure(world, seed, inputLog, outcome);
     rows.push({
       seed,
       tick: world.tick,
@@ -245,7 +282,7 @@ for (let seed = 1; seed <= SEEDS; seed++) {
     // #296 — stamp exactly as createGameLoop does, so the measured inputLog has
     // the same shape as one a real session would upload. Without this the bytes
     // reported here would be of a payload the game no longer produces.
-    stampDrainTicks(cmds, drainTick);
+    stampDrainTick(cmds, drainTick);
     for (const c of cmds) {
       inputLog.push(c);
       if (c.origin === 'sim') {
@@ -253,14 +290,18 @@ for (let seed = 1; seed <= SEEDS; seed++) {
       }
     }
     const outcome = tick(world, cmds);
-    if (checkpointSet.has(world.tick)) await record(false);
+    if (checkpointSet.has(world.tick) && outcome === GameOutcome.None) {
+      await record(false, CHECKPOINT_PLACEHOLDER_OUTCOME);
+    }
     // Stop at the terminal outcome. Ticking past game-over would keep measuring
     // a world whose colonies have collapsed — a SMALLER antTrace than the round
     // that actually ended — and the survey only ever fires here, so this is the
     // one tick a real submission is built at.
     if (outcome !== GameOutcome.None) {
-      if (!checkpointSet.has(world.tick)) await record(true);
-      else rows[rows.length - 1]!.atRoundEnd = true;
+      // A tick that is BOTH a checkpoint and the round's end is recorded once,
+      // here, with the real outcome — the checkpoint branch above deliberately
+      // skips it so the row is not written twice with a placeholder.
+      await record(true, outcome);
       roundEndTick = world.tick;
       roundEndOutcome = outcome;
       break;
@@ -269,8 +310,8 @@ for (let seed = 1; seed <= SEEDS; seed++) {
 
   if (roundEndTick !== null) {
     console.log(
-      `  seed ${seed}: round ended at tick ${roundEndTick} (outcome ${roundEndOutcome}) — ` +
-        `later checkpoints skipped`,
+      `  seed ${seed}: round ended at tick ${roundEndTick} ` +
+        `(${outcomeToWire(roundEndOutcome as TerminalOutcome)}) — later checkpoints skipped`,
     );
   }
   if (simOriginDrains.length === 0) {

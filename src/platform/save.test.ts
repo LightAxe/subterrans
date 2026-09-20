@@ -28,7 +28,8 @@ import {
   type StorageDriver,
 } from './storage.js';
 import { createScenario } from '../sim/scenario.js';
-import { stampDrainTicks, indexByDrainTick } from './input-log-replay.js';
+import { indexByDrainTick } from './input-log-replay.js';
+import { stampDrainTick } from '../sim/commands.js';
 import { tick } from '../sim/tick.js';
 import {
   PLAYER_COLONY_ID,
@@ -949,7 +950,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       for (let t = 0; t < 50; t++) {
         const cmds = original.commandQueue.splice(0);
         cmds.push(...(schedule[t] ?? []));
-        stampDrainTicks(cmds, original.tick);
+        stampDrainTick(cmds, original.tick);
         inputLog.push(...cmds);
         tick(original, cmds);
       }

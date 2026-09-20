@@ -12,6 +12,7 @@ import {
   type ClearRallyPointCommand,
   MAX_COMMANDS_PER_TICK,
   pushCommand,
+  stampDrainTick,
 } from './commands.js';
 import { ChamberType } from './enums.js';
 import { createWorldState } from './types.js';
@@ -388,6 +389,57 @@ describe('SimCommand', () => {
       // SimCommand and apply unchanged — no handler branches on origin.
       const legacy: SimCommand = { type: 'NoOp', issuedAtTick: 0 };
       expect(legacy.origin).toBeUndefined();
+    });
+  });
+
+  describe('stampDrainTick — drain-side metadata stamp (#296)', () => {
+    // The twin of pushCommand's origin stamp: pushCommand marks a command on
+    // the way INTO the queue, this marks the batch on the way OUT. Both live in
+    // the sim layer because command metadata is sim-owned — a drained command
+    // is still aliased from prevState.commandQueue, so platform/ writing to it
+    // would cross the FNDN-07 boundary (Codex P1 on PR #305).
+    it('stamps every command in the batch with the drain tick', () => {
+      const batch: SimCommand[] = [
+        { type: 'NoOp', issuedAtTick: 3 },
+        { type: 'NoOp', issuedAtTick: 3, origin: 'player' },
+        { type: 'NoOp', issuedAtTick: 2, origin: 'sim' },
+      ];
+      stampDrainTick(batch, 7);
+      expect(batch.map((c) => c.drainTick)).toEqual([7, 7, 7]);
+    });
+
+    it('overwrites a stale stamp rather than preserving it', () => {
+      // A command can only be drained once, so a pre-existing stamp on a command
+      // coming out of the queue means something re-queued it; the live drain is
+      // the authority either way.
+      const batch: SimCommand[] = [
+        { type: 'NoOp', issuedAtTick: 1, origin: 'player', drainTick: 99 },
+      ];
+      stampDrainTick(batch, 4);
+      expect(batch[0]!.drainTick).toBe(4);
+    });
+
+    it('is a no-op on an empty batch (drained nothing this tick)', () => {
+      expect(() => stampDrainTick([], 5)).not.toThrow();
+    });
+
+    it('accepts a readonly batch — it mutates the elements, not the array', () => {
+      const batch: readonly SimCommand[] = [{ type: 'NoOp', issuedAtTick: 0 }];
+      stampDrainTick(batch, 2);
+      expect(batch[0]!.drainTick).toBe(2);
+      expect(batch).toHaveLength(1);
+    });
+
+    it('never touches a command still sitting in the queue', () => {
+      // Why the stamp can never reach serialized state: serializeWorldState
+      // writes world.commandQueue, and a command in the queue has by definition
+      // not been drained yet.
+      const world = createWorldState(3);
+      pushCommand(world, { type: 'NoOp', issuedAtTick: 0 }, 'player');
+      const drained = world.commandQueue.splice(0);
+      stampDrainTick(drained, 1);
+      expect(drained[0]!.drainTick).toBe(1);
+      expect(world.commandQueue).toHaveLength(0);
     });
   });
 

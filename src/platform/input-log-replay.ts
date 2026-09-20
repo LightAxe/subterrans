@@ -16,12 +16,16 @@
 //
 // Two mechanisms, in priority order:
 //
-//   1. RECORDED (exact by construction). {@link stampDrainTicks} writes
-//      `drainTick` onto every command at the one sanctioned drain site
-//      (`createGameLoop`), so the log carries the boundaries the sim actually
-//      saw. Being a field on the command, it rides along through `inputLog`
-//      into the debug snapshot, the playtrace envelope and the save file with
-//      no extra plumbing — exactly the way `origin` does (#230).
+//   1. RECORDED (exact by construction). `stampDrainTick` (src/sim/commands.ts,
+//      next to `pushCommand`) writes `drainTick` onto every command at the one
+//      sanctioned drain site (`createGameLoop`), so the log carries the
+//      boundaries the sim actually saw. Being a field on the command, it rides
+//      along through `inputLog` into the debug snapshot, the playtrace envelope
+//      and the save file with no extra plumbing — exactly the way `origin` does
+//      (#230). The stamp itself is a SIM-layer operation: a drained command is
+//      still a simulation object (aliased from `prevState.commandQueue`), so
+//      writing to it from here would cross the platform boundary. This module
+//      only READS the field.
 //
 //   2. DERIVED (fallback for logs recorded before this existed). A command
 //      stamped `origin: 'sim'` was drained at `issuedAtTick + 1`; anything else
@@ -54,35 +58,6 @@ import type { SimCommand } from '../sim/commands.js';
  *  loop drains once per tick unconditionally, so a command pushed during tick T
  *  is always picked up at the start of tick T+1 — never later. */
 export const SIM_SELF_EMIT_DRAIN_LAG = 1;
-
-/**
- * Stamp the tick at which this batch was drained onto every command in it.
- * Called by `createGameLoop` immediately after `commandQueue.splice(0)` and
- * before anything else observes the batch, so every consumer of the drained
- * commands — `inputLog`, the debug snapshot, the save file — carries the
- * boundaries verbatim.
- *
- * Mutates the command objects in place (they have just left the queue and are
- * owned by the batch), matching `pushCommand`'s in-place `origin` stamp: no
- * allocation on a per-tick path. The parameter is a mutable `SimCommand[]`
- * rather than `readonly` precisely because that is what this does — TypeScript's
- * `readonly` only freezes the array shape, not the elements, so it would have
- * advertised the opposite of the truth.
- *
- * Aliasing note: `onBeforeTick` runs `copyWorldState(w, prevState)`, whose
- * `commandQueue` copy is a shallow `.slice()` (src/sim/types.ts), so at stamp
- * time these same objects are also referenced from `prevState.commandQueue`.
- * That is harmless — `prevState` is render-interpolation scratch that is never
- * serialized, hashed or replayed — but it does mean this writes to an object
- * reachable from a WorldState. It is inside the platform loop's sanctioned
- * commandQueue-drain seam; flagged here so it is not rediscovered as a surprise.
- *
- * `drainTick` is metadata: no tick handler reads it, so replay ignores it and it
- * needs no `simVersion` bump.
- */
-export function stampDrainTicks(cmds: SimCommand[], drainTick: number): void {
-  for (const c of cmds) c.drainTick = drainTick;
-}
 
 /**
  * Is `cmd.drainTick` a usable recorded stamp? Shared by every reader so the

@@ -27,11 +27,11 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createScenario } from '../sim/scenario.js';
 import { tick } from '../sim/tick.js';
-import { pushCommand, type SimCommand } from '../sim/commands.js';
+import { pushCommand, stampDrainTick, type SimCommand } from '../sim/commands.js';
 import { AntTask } from '../sim/enums.js';
 import { ENEMY_COLONY_ID } from '../sim/constants.js';
 import { hashWorldState } from './world-hash.js';
-import { stampDrainTicks, indexByDrainTick } from './input-log-replay.js';
+import { indexByDrainTick } from './input-log-replay.js';
 import type { WorldState } from '../sim/types.js';
 
 /** The pre-#296 grouping: every command applied at its `issuedAtTick`. Lives
@@ -143,7 +143,7 @@ function runLive(): LiveRun {
   for (let t = 0; t < TICKS; t++) {
     driveAI(world); // onBeforeTick slot
     const cmds = world.commandQueue.splice(0);
-    stampDrainTicks(cmds, world.tick); // what createGameLoop does
+    stampDrainTick(cmds, world.tick); // what createGameLoop does
     for (const c of cmds) inputLog.push(structuredClone(c));
     tick(world, cmds);
     hashes.push(hashWorldState(world));

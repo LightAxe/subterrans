@@ -217,12 +217,24 @@ export const SURVEY_UPLOAD_LABEL_OPT_IN = 'Upload diagnostic snapshot to help us
 export const SURVEY_UPLOAD_LABEL_DEFAULT_ON =
   'Include replay data with this report (game state only — no personal data)';
 
-/** Consent disclosure text. ADR 0013 §"Privacy" requires the overlay to
- *  warn the player that an upload leaks client IP + User-Agent at the edge.
+/** Consent disclosure text. ADR 0013 §"Privacy" requires the overlay to warn
+ *  the player that an upload leaks client IP + User-Agent at the edge.
  *  Centralized here so the wording is reviewable and only changes via this
- *  module (matching the same approach for the contract's wire shape). */
+ *  module (matching the same approach for the contract's wire shape).
+ *
+ *  The sentence is split deliberately. IP and browser version go to the edge on
+ *  EVERY submission — survey-only included — so that half is unconditional. The
+ *  replay data and the email are each opt-in (an unticked box sends
+ *  `snapshot: null`; an empty or malformed address is omitted entirely), and
+ *  this line is drawn whether or not either is selected, so claiming both are
+ *  sent would over-state what leaves the machine for most submissions.
+ *
+ *  Sized for the two-line allowance the layout leaves between
+ *  SURVEY_CONSENT_TEXT_Y and the button row: at 11px monospace this wraps to
+ *  two lines inside the 640px wrap width at 800 wide. Keep it under ~100
+ *  characters. */
 export const SURVEY_CONSENT_DISCLOSURE =
-  'Uploading sends your IP and browser version with the replay data, plus your email if you enter one.';
+  'Uploading sends your IP and browser version — replay data and your email only if you include them.';
 
 // ---------------------------------------------------------------------------
 // Rating buttons — five rects across, centered, indexed 1..5 left→right

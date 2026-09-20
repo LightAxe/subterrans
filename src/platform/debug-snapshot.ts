@@ -381,7 +381,11 @@ export function buildDebugGuide(): DebugGuide {
       'deserializeWorldState(); replaying `inputLog` from `seed` reproduces this ' +
       "exact state at `tick` — group the log by each command's `drainTick` (NOT " +
       '`issuedAtTick`, which is one tick early for sim self-emits) and discard the ' +
-      "replaying world's own regenerated commandQueue each tick. `antTrace` holds derived per-ant diagnostics not " +
+      "replaying world's own regenerated commandQueue each tick. EXCEPT for " +
+      '`snapshot.commandQueue`: input queued after the last drain was never handed ' +
+      'to tick(), so it is not in `inputLog` and a replay cannot reproduce it — ' +
+      'compare every other field and exclude the queue, which is what ' +
+      'scripts/analyze-snapshot.ts does. `antTrace` holds derived per-ant diagnostics not ' +
       'present in the raw SoA arrays. This `guide` is a static legend emitted ' +
       'once per dump — use its sub-keys to interpret every antTrace field ' +
       'without opening source.',
