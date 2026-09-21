@@ -40,7 +40,7 @@ vi.mock('./ai-controller.js', async (importOriginal) => {
   return { ...actual, runAIController: vi.fn(actual.runAIController) };
 });
 
-import { AI_DIG_INTERVAL, resetAIControllerCache, runAIController } from './ai-controller.js';
+import { AI_DIG_INTERVAL, runAIController } from './ai-controller.js';
 import { JEV_DEFAULT_BEAT_TICKS, JevEnemyController } from './jev-enemy-controller.js';
 
 const SEED = 1;
@@ -182,7 +182,6 @@ async function alignToBeat(
  */
 let handoffTemplate!: WorldState;
 beforeAll(() => {
-  resetAIControllerCache();
   const built = createScenario(SEED, 'Normal');
   const ledger = new JevCommandLedger();
   const st = createJevOpeningState();
@@ -228,7 +227,6 @@ function unplannableWorld(): WorldState {
 
 beforeEach(() => {
   vi.mocked(runAIController).mockClear();
-  resetAIControllerCache();
 });
 
 // ---------------------------------------------------------------------------
