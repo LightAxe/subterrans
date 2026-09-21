@@ -166,6 +166,19 @@ describe('selectPreset', () => {
     expect(preset.text).toBe(AGGRESSIVE);
   });
 
+  it('re-selecting the lit preset (text unedited) returns the same state object', () => {
+    // The overlay skips its destroy/rebuild on identity, so a re-click of the
+    // lit preset must not allocate — but an EDITED text restores the preset's
+    // text and does allocate.
+    const lit = selectPreset(toggleKind(available(), 'jev'), 'turtle');
+    expect(selectPreset(lit, 'turtle')).toBe(lit);
+    const edited = editText(lit, `${lit.text} and dig`);
+    const restored = selectPreset(edited, 'turtle');
+    expect(restored).not.toBe(edited);
+    expect(restored.presetId).toBe('turtle');
+    expect(restored.text).toBe(ordersTextForPreset('turtle'));
+  });
+
   it('selects `balanced` as a tuned, non-empty preset like any other', () => {
     const s = selectPreset(toggleKind(available(), 'jev'), 'balanced');
     expect(s.text).toBe(BALANCED);
