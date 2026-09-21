@@ -319,9 +319,8 @@ test.describe('Phase 09.1 Chunk 2 — enemy underground toggle', () => {
     await page.waitForTimeout(300);
 
     // Focus the canvas so key events land on the window listener Phaser
-    // registered. Without this, Tab occasionally fails to fire JustDown
-    // when running the full e2e suite (cross-suite state from the preceding
-    // SavePrompt tests can leave focus outside the canvas subtree).
+    // registered (a click outside the canvas subtree would leave focus where
+    // the preceding SavePrompt tests put it).
     const box = await canvas.boundingBox();
     if (!box) throw new Error('canvas has no bounding box');
     // Click the canvas CENTER, not the top-left: (box.x+10, box.y+10) lands
@@ -335,9 +334,12 @@ test.describe('Phase 09.1 Chunk 2 — enemy underground toggle', () => {
     await page.waitForTimeout(100);
 
     // Enter the underground view. Tab edge-triggers the view toggle per
-    // Phase 08-04 decision (JustDown). Poll the hook for the label going
-    // truthy as a proxy for "UIScene has run at least one update frame
-    // since boot", then press Tab.
+    // Phase 08-04 decision (keydown-TAB with event.repeat ignored — #306: the
+    // old JustDown poll dropped a press whose down+up shared a frame, which is
+    // exactly what page.keyboard.press sends). Poll the hook for the label
+    // going truthy as a proxy for "UIScene has run at least one update frame
+    // since boot", then press Tab and assert the VIEW flipped — the label
+    // reads "Your Colony" on the surface too, so it cannot prove that.
     await expect
       .poll(
         async () => {
@@ -354,8 +356,15 @@ test.describe('Phase 09.1 Chunk 2 — enemy underground toggle', () => {
         { timeout: 5_000 },
       )
       .toBe('Your Colony');
+    const readView = async (): Promise<string | undefined> => {
+      return page.evaluate(() => {
+        const w = window as unknown as { __phase9_ui?: { activeView?: string } };
+        return w.__phase9_ui?.activeView;
+      });
+    };
+    await expect.poll(readView, { timeout: 5_000 }).toBe('surface');
     await page.keyboard.press('Tab');
-    await page.waitForTimeout(300);
+    await expect.poll(readView, { timeout: 5_000 }).toBe('underground');
 
     // Read the HUD label via the __phase9_ui hook. Plan 09.1-02 Task 2
     // extends the hook with `activeUndergroundLabel: 'Your Colony' | 'Enemy Colony'`
@@ -378,5 +387,133 @@ test.describe('Phase 09.1 Chunk 2 — enemy underground toggle', () => {
     await expect.poll(readLabel, { timeout: 5_000 }).toBe('Your Colony');
 
     expect(consoleErrors, consoleErrors.join('\n')).toHaveLength(0);
+  });
+
+  test('#306 — a Tab whose keydown and keyup land in the same frame still toggles the view', async ({
+    page,
+  }) => {
+    // The old implementation polled Phaser.Input.Keyboard.JustDown(tab) in
+    // update(). Phaser processes key events synchronously at DOM dispatch and
+    // Key.onUp clears `_justDown`, so a press whose keydown and keyup both
+    // arrived before the next frame — a fast tap across a frame hitch, or
+    // exactly what page.keyboard.press sends — was already "up" when update()
+    // polled, and was dropped. Dispatching both events synchronously makes
+    // the same-frame case deterministic instead of a ~1-in-N flake: this test
+    // fails against the JustDown poll every time and passes with the
+    // keydown-TAB listener.
+    await clearSave(page);
+    await page.reload();
+    const canvas = page.locator('canvas').first();
+    await canvas.waitFor({ state: 'attached', timeout: 10_000 });
+    await settleToPlaying(page);
+
+    const readView = async (): Promise<string | undefined> => {
+      return page.evaluate(() => {
+        const w = window as unknown as { __phase9_ui?: { activeView?: string } };
+        return w.__phase9_ui?.activeView;
+      });
+    };
+    const readLabel = async (): Promise<string | undefined> => {
+      return page.evaluate(() => {
+        const w = window as unknown as { __phase9_ui?: { activeUndergroundLabel?: string } };
+        return w.__phase9_ui?.activeUndergroundLabel;
+      });
+    };
+    // The hook publishing 'surface' proves UIScene has run at least one frame
+    // in Playing — no fixed sleep needed. Then focus the canvas (centre: clear
+    // of every HUD zone).
+    await expect.poll(readView, { timeout: 5_000 }).toBe('surface');
+    const box = await canvas.boundingBox();
+    if (!box) throw new Error('canvas has no bounding box');
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+
+    await page.evaluate(() => {
+      const init = { key: 'Tab', code: 'Tab', keyCode: 9, bubbles: true, cancelable: true };
+      window.dispatchEvent(new KeyboardEvent('keydown', init));
+      window.dispatchEvent(new KeyboardEvent('keyup', init));
+    });
+    await expect.poll(readView, { timeout: 5_000 }).toBe('underground');
+
+    // A held key toggles exactly once. Two separate checks, each with an EVEN
+    // toggle count on failure so parity cannot mask a double-toggle:
+    //  (a) OS auto-repeat: the repeat keydown arrives in a LATER frame (two
+    //      rAFs, so Phaser's POST_STEP has cleared its event queue) carrying
+    //      `repeat: true` and must be ignored — one keydown, one repeat.
+    //  (b) A burst within ONE frame — keydown, repeat keydown, keyup, each a
+    //      separate dispatch so Phaser re-walks its still-uncleared queue on
+    //      every one. Without a Key object the plugin re-emits the ORIGINAL
+    //      keydown (repeat: false) on the keyup walk and the view toggles
+    //      TWICE — back where it started, which is what this asserts against.
+    //      The Key object makes Phaser stamp every re-walked keydown as a
+    //      repeat while the key is down, and the identity dedupe drops any
+    //      re-walk that slips past it, so it toggles exactly once.
+    //  (c) The window the Key cannot cover — keydown, keyup, then ANOTHER key's
+    //      keydown in the same frame: Tab's keyup has reset the Key, so the
+    //      re-walked original keydown arrives with repeat: false. Identity
+    //      dedupe (a WeakSet of handled events) must drop it: exactly one
+    //      toggle, and the X that followed lands in the new view.
+    // Synthetic events get DISTINCT, deterministic timeStamps (Chromium
+    // coarsens the constructor's clock, and Phaser's duplicate bailout compares
+    // code + timeStamp + type — identical stamps would hide the re-walk).
+    const twoFrames = () =>
+      page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+      );
+    await page.evaluate(() => {
+      const init = { key: 'Tab', code: 'Tab', keyCode: 9, bubbles: true, cancelable: true };
+      window.dispatchEvent(new KeyboardEvent('keydown', init));
+    });
+    await expect.poll(readView, { timeout: 5_000 }).toBe('surface');
+    await twoFrames();
+    await page.evaluate(() => {
+      const init = { key: 'Tab', code: 'Tab', keyCode: 9, bubbles: true, cancelable: true };
+      window.dispatchEvent(new KeyboardEvent('keydown', { ...init, repeat: true }));
+    });
+    await twoFrames();
+    expect(await readView()).toBe('surface');
+    await page.evaluate(() => {
+      const init = { key: 'Tab', code: 'Tab', keyCode: 9, bubbles: true, cancelable: true };
+      window.dispatchEvent(new KeyboardEvent('keyup', init));
+    });
+    await twoFrames();
+
+    await page.evaluate(() => {
+      const init = { key: 'Tab', code: 'Tab', keyCode: 9, bubbles: true, cancelable: true };
+      const stamped = (type: string, extra: KeyboardEventInit, ts: number): KeyboardEvent => {
+        const ev = new KeyboardEvent(type, { ...init, ...extra });
+        Object.defineProperty(ev, 'timeStamp', { value: ts });
+        return ev;
+      };
+      const base = performance.now() + 1000;
+      window.dispatchEvent(stamped('keydown', {}, base));
+      window.dispatchEvent(stamped('keydown', { repeat: true }, base + 1));
+      window.dispatchEvent(stamped('keyup', {}, base + 2));
+    });
+    await twoFrames();
+    expect(await readView()).toBe('underground');
+
+    // (c) keydown, keyup, then X's keydown in the same task, from underground:
+    // Tab must toggle exactly once (→ surface) — the re-walked Tab keydown after
+    // the keyup is the same event object and must be ignored. X is underground-
+    // only and the view is now surface, so the label must NOT flip.
+    await twoFrames();
+    await page.evaluate(() => {
+      const stamped = (type: string, init: KeyboardEventInit, ts: number): KeyboardEvent => {
+        const ev = new KeyboardEvent(type, { bubbles: true, cancelable: true, ...init });
+        Object.defineProperty(ev, 'timeStamp', { value: ts });
+        return ev;
+      };
+      const base = performance.now() + 2000;
+      window.dispatchEvent(stamped('keydown', { key: 'Tab', code: 'Tab', keyCode: 9 }, base));
+      window.dispatchEvent(stamped('keyup', { key: 'Tab', code: 'Tab', keyCode: 9 }, base + 1));
+      window.dispatchEvent(stamped('keydown', { key: 'x', code: 'KeyX', keyCode: 88 }, base + 2));
+      window.dispatchEvent(stamped('keyup', { key: 'x', code: 'KeyX', keyCode: 88 }, base + 3));
+    });
+    await twoFrames();
+    expect(await readView()).toBe('surface');
+    expect(await readLabel()).toBe('Your Colony');
   });
 });

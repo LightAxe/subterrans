@@ -73,6 +73,10 @@ declare global {
     __phase9_ui?: {
       activeOverlay: ActiveOverlay;
       activeUndergroundLabel?: ActiveUndergroundLabel;
+      // #306 — which view is showing, so a test can assert that Tab actually
+      // switched views instead of inferring it from a label that reads
+      // "Your Colony" on the surface too.
+      activeView?: 'surface' | 'underground';
       bootScreen?: BootScreen;
       // Issue #193 — live game speed (1×/2×/4×), so Playwright can assert the
       // speed-cycle control by value instead of pixel-diffing the rendered label.
@@ -98,6 +102,8 @@ function publishPhase9(patch: Partial<NonNullable<Window['__phase9_ui']>>): void
   };
   const undergroundLabel = patch.activeUndergroundLabel ?? prev?.activeUndergroundLabel;
   if (undergroundLabel !== undefined) next.activeUndergroundLabel = undergroundLabel;
+  const view = patch.activeView ?? prev?.activeView;
+  if (view !== undefined) next.activeView = view;
   const boot = patch.bootScreen ?? prev?.bootScreen;
   if (boot !== undefined) next.bootScreen = boot;
   const speed = patch.speedMultiplier ?? prev?.speedMultiplier;
@@ -110,10 +116,14 @@ function setActiveOverlay(next: ActiveOverlay): void {
   publishPhase9({ activeOverlay: next });
 }
 
-/** Publishes the current underground colony label for Playwright observability.
- *  Called every UIScene.update() frame. Preserves the other published fields. */
-function setActiveUndergroundLabel(next: ActiveUndergroundLabel): void {
-  publishPhase9({ activeUndergroundLabel: next });
+/** Publishes the current underground colony label and the showing view for
+ *  Playwright observability. Called every UIScene.update() frame. Preserves the
+ *  other published fields. */
+function setActiveUndergroundLabel(
+  next: ActiveUndergroundLabel,
+  view: 'surface' | 'underground',
+): void {
+  publishPhase9({ activeUndergroundLabel: next, activeView: view });
 }
 
 /** Publishes which boot overlay is up so Playwright can distinguish the fresh-boot
@@ -1281,7 +1291,7 @@ export class UIScene extends Phaser.Scene {
     this.undergroundLabelText.setVisible(undergroundShowing);
     // Expose regardless of visibility so tests can assert the underlying
     // toggle state even if the surface view is active. Cheap string write.
-    setActiveUndergroundLabel(undergroundLabel);
+    setActiveUndergroundLabel(undergroundLabel, this.viewState.activeView);
 
     // Stage 1 controls rework (issue #18) — tool palette + hint strip + speed.
     this.renderToolPalette();

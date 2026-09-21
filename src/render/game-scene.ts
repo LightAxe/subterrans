@@ -376,11 +376,15 @@ export class GameScene extends Phaser.Scene {
     S: Phaser.Input.Keyboard.Key;
     D: Phaser.Input.Keyboard.Key;
   };
-  private tabKey!: Phaser.Input.Keyboard.Key;
   private dragState!: { isDragging: boolean; lastX: number; lastY: number; active: boolean };
   // Stage 1 controls rework (issue #18) — the single left-button gesture arbiter
   // replaces the old surface/underground pointer listener sets.
   private arbiter!: GestureArbiter;
+  /** #306 — DOM keydown events Tab has already acted on. Phaser re-walks its
+   *  event queue on every dispatch until POST_STEP and can emit the SAME event
+   *  object again (once Tab's keyup has reset the Key, so `event.repeat` no
+   *  longer catches it); identity dedupe makes the handler idempotent per event. */
+  private readonly handledTabEvents = new WeakSet<KeyboardEvent>();
   // Stage 3a (issue #18): the projected world (live queue folded) — single source of
   // truth for underground tap/menu decisions AND feedforward/ghosts. Lazy + memoized.
   private readonly projection = new CommandProjection();
@@ -682,9 +686,14 @@ export class GameScene extends Phaser.Scene {
     // Input registration — keyboard is GameScene-only (Pitfall 2).
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.wasd = this.input.keyboard!.addKeys('W,A,S,D') as typeof this.wasd;
-    this.tabKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.TAB);
-    // Prevent Tab from moving focus to browser UI:
-    this.input.keyboard!.addCapture('TAB');
+    // Tab: same idiom as Space below — a real Key object (the second arg also
+    // adds the global capture, so Tab never moves browser focus). While Tab is
+    // held the Key makes Phaser stamp `repeat = key.isDown` on every further
+    // keydown, so re-walked or auto-repeated keydowns never even reach the
+    // keydown-TAB listener (next to X, below); `handledTabEvents` covers the
+    // post-keyup re-walk the Key cannot. We only need it to exist in the
+    // plugin's key map, so we don't retain the ref.
+    this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.TAB, true);
     this.input.mouse!.disableContextMenu();
 
     // Stage 1 controls rework (issue #18): Space is now the pause toggle, not a
@@ -804,8 +813,8 @@ export class GameScene extends Phaser.Scene {
     // P/F9/speed-multiplier pattern above — the keyboard-plugin event bus
     // handles edge-trigger semantics for us (one keydown event per press),
     // avoiding the key-repeat DoS that Phase 08-04 guarded against for
-    // Tab via JustDown. Gated on Playing so a paused player doesn't Resume
-    // into a surprise camera flip onto the enemy nest.
+    // Tab (now `event.repeat`, below). Gated on Playing so a paused player
+    // doesn't Resume into a surprise camera flip onto the enemy nest.
     this.input.keyboard!.on('keydown-X', () => {
       if (!this.canAcceptWorldHotkey()) return;
       if (this.viewState.activeView !== 'underground') return;
@@ -815,13 +824,52 @@ export class GameScene extends Phaser.Scene {
       // change. Otherwise a same-frame keydown-X batched before a queued
       // pointerup would dispatch the tap onto the now-live colony's grid at a
       // tile picked while inspecting the OTHER colony (the down-time snapshot's
-      // colony is bypassed in dispatchTap; reconcileContext only covers the
-      // cross-frame case).
-      this.arbiter.cancelGesture();
+      // colony is bypassed in dispatchTap). Reconcile rather than just cancel
+      // so the arbiter's fingerprint is refreshed now: a pointerdown landing
+      // before the next update() otherwise starts a gesture that update()'s
+      // reconcile cancels as stale (#306, same fix as Tab).
+      this.arbiter.reconcileContext();
       // Clear stale glow entries from the previous colony grid — tile keys are
       // not scoped to a colony, so entries from one grid must not bleed into
       // the other when the view switches.
       this.undergroundGlowFrames.clear();
+    });
+
+    // Tab toggles surface <-> underground. Event-based like X/P/speed rather
+    // than polling JustDown in update() (#306). Phaser processes key events
+    // synchronously at DOM dispatch (KeyboardManager.onKeyDown → the plugin
+    // re-walks its queue, which is only cleared at POST_STEP), and Key.onUp
+    // clears `_justDown` — so a press whose keydown AND keyup both arrived
+    // before the next frame (a fast tap across a frame hitch, or a synthetic
+    // press) was already "up" by the time update() polled, and the toggle was
+    // silently dropped. The keydown event fires at dispatch, before that can
+    // happen. `event.repeat` — OS auto-repeat, plus Phaser's own `key.isDown`
+    // stamp on re-walked/held keydowns thanks to the Key object registered
+    // above — keeps the Phase 08-04 edge-trigger semantics: one toggle per
+    // press, however long Tab is held. The one window the Key cannot cover —
+    // a same-frame burst of [Tab down, Tab up, OTHER key down], where the
+    // plugin re-walks Tab's keydown once more AFTER its keyup reset the Key —
+    // is closed by `handledTabEvents`: the re-walk hands us the same event
+    // object, so identity dedupe drops it. Same gate as every other world
+    // hotkey.
+    this.input.keyboard!.on('keydown-TAB', (event: KeyboardEvent) => {
+      if (this.handledTabEvents.has(event)) return;
+      this.handledTabEvents.add(event);
+      if (event.repeat) return;
+      if (!this.canAcceptWorldHotkey()) return;
+      toggleView(this.viewState);
+      // The toggle happens at dispatch time, not inside update() next to the
+      // per-frame reconcileContext(), so a pointer event in the same task can
+      // otherwise land in the new view under the arbiter's stale fingerprint —
+      // and a pointerdown arriving before the next update() would start a
+      // legitimate gesture that update()'s reconcile then cancels as "stale".
+      // Reconcile synchronously: cancels any in-flight gesture under the old
+      // context AND refreshes the fingerprint, so the first click after Tab
+      // survives.
+      this.arbiter.reconcileContext();
+      // Stage 3b (#3): Tab is a world input. Evaluate the [Tab] nudge AFTER the
+      // toggle so a Tab first-input has set undergroundVisited and self-suppresses.
+      this.noteWorldInput();
     });
 
     // 09 excursion-foraging follow-up — F9 exports a debug snapshot JSON
@@ -2074,16 +2122,11 @@ export class GameScene extends Phaser.Scene {
     // via canAcceptWorldHotkey() below; this only governs the pan.
     const keyboardPanActive = canArbiterPan(this.isModalOpen());
 
-    // Tab toggles view (JustDown handles key-press edge, not held). Stage 1
-    // controls rework (issue #18): Tab now goes through canAcceptWorldHotkey so a
-    // Tab behind the Esc pause menu can no longer slip a view change underneath
-    // it (Codex R4-4 — previously Tab polled even while Paused).
-    if (Phaser.Input.Keyboard.JustDown(this.tabKey) && this.canAcceptWorldHotkey()) {
-      toggleView(this.viewState);
-      // Stage 3b (#3): Tab is a world input. Evaluate the [Tab] nudge AFTER the
-      // toggle so a Tab first-input has set undergroundVisited and self-suppresses.
-      this.noteWorldInput();
-    }
+    // Tab (view toggle) is handled by the keydown-TAB listener in create() —
+    // it runs synchronously at DOM dispatch, between frames, so a Tab is already
+    // reflected in viewState (and any in-flight gesture cancelled) by the time
+    // the transition detection below runs. Still gated through
+    // canAcceptWorldHotkey (Codex R4-4).
 
     // Stage 1: detect tool/view/colony transitions (incl. keyboard-driven ones
     // between pointer events) and cancel any in-flight gesture under the old
