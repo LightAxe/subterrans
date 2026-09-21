@@ -14,11 +14,20 @@
 // dev-only window.__phase9_test.getRoundDifficulty() for the running round.
 
 import { test, expect, type Page } from '@playwright/test';
-import { DIFFICULTY_ROW_RECTS, NEW_GAME_START_RECT } from './helpers/geometry.js';
+import {
+  DIALOG_SAVE_NOW_RECT,
+  DIFFICULTY_ROW_RECTS,
+  GAME_OVER_RESTART_RECT,
+  NEW_GAME_START_RECT,
+  SAVE_LOAD_ROW_RECT,
+  SAVE_PROMPT_NEW_GAME_RECT,
+  type Rect,
+} from './helpers/geometry.js';
 import {
   activeOverlay,
   activeView,
   bootScreen,
+  clickCanvasPoint,
   clickCanvasRect,
   selectedDifficulty,
   settleToPlaying,
@@ -72,6 +81,47 @@ async function storedDifficulty(page: Page): Promise<string | null> {
     const d = env.settings?.difficulty;
     return typeof d === 'string' ? d : null;
   }, SETTINGS_KEY);
+}
+
+/** Centre of the band where `button` overlaps `row` vertically, at the
+ *  button's horizontal centre — i.e. a click on the button that would ALSO be
+ *  a click on that row, were the row up. Throws if they don't overlap, since
+ *  the replay regression this pins needs the overlap to exist at all. */
+function overlapPoint(button: Rect, row: Rect): { x: number; y: number } {
+  const top = Math.max(button.y, row.y);
+  const bottom = Math.min(button.y + button.h, row.y + row.h);
+  if (bottom <= top) {
+    throw new Error('the button and the row no longer overlap — re-evaluate this test');
+  }
+  return { x: button.x + button.w / 2, y: (top + bottom) / 2 };
+}
+
+/** Save the running round through the pause menu's Save Now (a REAL,
+ *  current-format save), then reload onto the Continue/New Game SavePrompt. */
+async function saveAndReloadToSavePrompt(page: Page): Promise<void> {
+  await page.keyboard.press('Escape');
+  await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('pause-menu');
+  await clickCanvasRect(page, SAVE_LOAD_ROW_RECT);
+  await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('save-load');
+  await page.evaluate((key) => localStorage.removeItem(key as string), SAVE_KEY);
+  await clickCanvasRect(page, DIALOG_SAVE_NOW_RECT);
+  await page.waitForFunction((key) => localStorage.getItem(key as string) !== null, SAVE_KEY, {
+    timeout: 5_000,
+  });
+  await page.reload();
+  await page.locator('canvas').first().waitFor({ state: 'attached' });
+  await expect.poll(() => bootScreen(page), { timeout: 15_000 }).toBe('save-prompt');
+}
+
+/** After a click that OPENS the new-game screen, the screen must come up on
+ *  the persisted tier and STAY there — the opening click must not be replayed
+ *  onto the freshly built rows. */
+async function expectScreenOpensOn(page: Page, tier: 'Easy' | 'Normal' | 'Hard'): Promise<void> {
+  await expect.poll(() => bootScreen(page), { timeout: 10_000 }).toBe('difficulty-select');
+  await expect.poll(() => selectedDifficulty(page), { timeout: 5_000 }).toBe(tier);
+  await page.waitForTimeout(400);
+  expect(await selectedDifficulty(page)).toBe(tier);
+  expect(await bootScreen(page)).toBe('difficulty-select');
 }
 
 /** Poll-click a row until the screen reports it selected (a click that lands
@@ -203,6 +253,61 @@ test.describe('#304 new-game screen — options first, Start last', () => {
     await clickCanvasRect(page, NEW_GAME_START_RECT);
     await expect.poll(() => activeOverlay(page), { timeout: 10_000 }).toBe('none');
     expect(await roundDifficulty(page)).toBe('Hard');
+  });
+
+  // Regression (#304 re-review): the rows are hit-tested in the scene-level
+  // pointerdown handler. A click that OPENS the screen from a previous overlay
+  // (SavePrompt "New Game", GameOver "Restart") used to open it mid-dispatch
+  // and then be hit-tested against the new rows by the same handler — and
+  // both buttons sit inside the Hard/Normal row bands, so a persisted Easy
+  // came up as Hard or Normal. All three boot overlays now dispatch through
+  // the scene-level handler, which returns after the opening branch.
+  test('SavePrompt "New Game" clicked inside the Hard and Normal row bands opens on the persisted Easy', async ({
+    page,
+  }) => {
+    await bootToNewGameScreen(page);
+    await settleToPlaying(page, 'Easy'); // persists Easy
+    expect(await storedDifficulty(page)).toBe('Easy');
+
+    // Lower part of New Game — the pixels the Hard row would own.
+    await saveAndReloadToSavePrompt(page);
+    await clickCanvasPoint(
+      page,
+      overlapPoint(SAVE_PROMPT_NEW_GAME_RECT, DIFFICULTY_ROW_RECTS.Hard),
+    );
+    await expectScreenOpensOn(page, 'Easy');
+
+    // Upper part of New Game — the pixels the Normal row would own.
+    await settleToPlaying(page, 'Easy');
+    await saveAndReloadToSavePrompt(page);
+    await clickCanvasPoint(
+      page,
+      overlapPoint(SAVE_PROMPT_NEW_GAME_RECT, DIFFICULTY_ROW_RECTS.Normal),
+    );
+    await expectScreenOpensOn(page, 'Easy');
+  });
+
+  test('GameOver "Restart" (inside the Hard row band) opens on the persisted Easy', async ({
+    page,
+  }) => {
+    await bootToNewGameScreen(page);
+    await settleToPlaying(page, 'Easy');
+    // Reach game over deterministically through the dev-only seam — the same
+    // render-side transition a terminal tick outcome takes, sim untouched.
+    await page.evaluate(() => {
+      const t = (window as unknown as { __phase9_test?: { forceGameOver?: () => void } })
+        .__phase9_test;
+      if (!t?.forceGameOver) throw new Error('__phase9_test.forceGameOver not installed');
+      t.forceGameOver();
+    });
+    await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('game-over');
+
+    await clickCanvasPoint(page, overlapPoint(GAME_OVER_RESTART_RECT, DIFFICULTY_ROW_RECTS.Hard));
+    await expectScreenOpensOn(page, 'Easy');
+    // And the screen still works normally afterwards: Start boots Easy.
+    await clickCanvasRect(page, NEW_GAME_START_RECT);
+    await expect.poll(() => activeOverlay(page), { timeout: 10_000 }).toBe('none');
+    expect(await roundDifficulty(page)).toBe('Easy');
   });
 
   test('a stored tier the build does not know falls back to Normal', async ({ page }) => {

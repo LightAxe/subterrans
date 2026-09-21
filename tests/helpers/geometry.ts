@@ -71,6 +71,7 @@ export const VIEW_TOGGLE_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).VIEW_TOGGLE
 export {
   SAVE_PROMPT_CONTINUE_RECT,
   SAVE_PROMPT_NEW_GAME_RECT,
+  GAME_OVER_RESTART_RECT,
 } from '../../src/render/boot-overlay-layout.js';
 
 // #304 — the new-game screen: three radio-style difficulty rows and the single

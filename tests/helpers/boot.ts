@@ -31,6 +31,13 @@ export async function clickCanvasRect(page: Page, rect: Rect): Promise<void> {
   await page.mouse.click(box.x + rect.x + rect.w / 2, box.y + rect.y + rect.h / 2);
 }
 
+/** Click an exact canvas-local point (for off-centre clicks inside a rect). */
+export async function clickCanvasPoint(page: Page, pt: { x: number; y: number }): Promise<void> {
+  const box = await page.locator('canvas').first().boundingBox();
+  if (!box) throw new Error('canvas has no bounding box');
+  await page.mouse.click(box.x + pt.x, box.y + pt.y);
+}
+
 /** Single-finger tap on the center of a canvas-local rect (a real touch
  *  pointer — needs a project with hasTouch, e.g. chromium-touch). */
 export async function tapCanvasRect(page: Page, rect: Rect): Promise<void> {

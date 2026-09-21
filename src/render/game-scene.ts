@@ -305,6 +305,11 @@ declare global {
        *  screen spec prove Start booted the selected tier, not just that the
        *  selection moved. Read-only sim access, dev-build only. */
       getRoundDifficulty(): string | undefined;
+      /** #304 — drive the render-side game-over transition (the exact path a
+       *  terminal tick outcome takes: phase → GameOver, loop paused, GameOver
+       *  overlay up) WITHOUT touching the sim, so a spec can reach the Restart
+       *  button deterministically. No-op unless Playing. Dev-build only. */
+      forceGameOver(): void;
     };
   }
 }
@@ -538,6 +543,9 @@ export class GameScene extends Phaser.Scene {
       getDrawOrder: (): string[] => [...this.drawOrder],
       getRoundDifficulty: (): string | undefined =>
         this.world === undefined ? undefined : this.world.difficulty,
+      forceGameOver: (): void => {
+        if (this.gamePhase === GamePhase.Playing) this.enterGameOver(GameOutcome.Defeat);
+      },
       getActiveZoom: (): number =>
         (this.viewState.activeView === 'surface'
           ? this.viewState.surfaceCamera
@@ -1440,6 +1448,70 @@ export class GameScene extends Phaser.Scene {
     saveSettings(persisted);
   }
 
+  /**
+   * The render-side game-over transition, on a terminal tick outcome (Victory /
+   * Defeat / MutualDestruction): phase → GameOver, loop paused, in-flight
+   * gestures dropped, the death cause and narrative extracted, and either the
+   * survey (playtrace on) or the GameOver overlay shown. Extracted from the
+   * game loop's onTickOutcome callback verbatim (#304) so the dev-only
+   * __phase9_test.forceGameOver() seam can drive the exact same path.
+   */
+  private enterGameOver(outcome: GameOutcome): void {
+    this.currentOutcome = outcome;
+    this.gamePhase = GamePhase.GameOver;
+    // W2: first-class pause via Plan 06 Task 1 API — no setMsPerTick(Infinity)
+    this.gameLoop.pause();
+    // Issue #129 — clear any in-flight pan/drag/gesture so it doesn't leak
+    // into the GameOver overlay state (the middle-button drag-pan handlers
+    // are independent of processCameraInput and otherwise fire unguarded; the
+    // gesture arbiter must also abandon any pending tap/paint/pan).
+    this.arbiter.cancelGesture();
+    resetPanInputState();
+    resetDragState(this.dragState);
+
+    // Extract death cause from the first queen_death event emitted this tick.
+    // Forward scan: player is added to diedThisTick first, so the player's event
+    // comes before enemy events — Defeat gives the player's cause, Victory gives
+    // the enemy's. Tick filter prevents stale events from earlier ticks matching.
+    // world.tick was incremented at step 19 (tick.ts) after checkQueenDeath (step 18),
+    // so the queen_death event carries world.tick - 1.
+    const deathTick = (this.world?.tick ?? 1) - 1;
+    const evts = this.world?.events ?? [];
+    let cause: import('./ui-scene-logic.js').QueenDeathCause = null;
+    for (let i = 0; i < evts.length; i++) {
+      const ev = evts[i];
+      if (ev && ev.type === 'queen_death' && ev.tick === deathTick) {
+        cause = ev.payload.cause;
+        break;
+      }
+    }
+    this.currentCause = cause;
+
+    // S6: build narrative for the loss screen.
+    const outcomeLabel: GameOutcomeLabel | undefined =
+      outcome === GameOutcome.Victory
+        ? 'Victory'
+        : outcome === GameOutcome.Defeat
+          ? 'Defeat'
+          : outcome === GameOutcome.MutualDestruction
+            ? 'MutualDestruction'
+            : undefined;
+    const summary = buildPlaytraceSummary(this.world, this.resumedFromSave, outcomeLabel);
+    const narrativeSeed = summary.outcomeAttribution.narrativeSeed;
+
+    const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
+    // Issue #122 — when the playtrace feature is enabled, the survey
+    // overlay replaces the bare game-over panel at end-of-game. Skip
+    // from the survey transitions to restart, matching the prior UX.
+    // When the feature is off, fall back to the original game-over
+    // overlay so the open-source build's behavior is unchanged.
+    if (this.playtraceEndpoint !== '') {
+      this.openSurveyOverlay(false /* quitFromPauseMenu */);
+    } else {
+      uiScene.showGameOverOverlay(outcome, cause, () => this.restartGame(), narrativeSeed);
+    }
+  }
+
   private async bootFromSave(): Promise<void> {
     const loaded = await loadSave();
     if (loaded === null) {
@@ -1582,61 +1654,7 @@ export class GameScene extends Phaser.Scene {
           }
         }
       },
-      onTickOutcome: (outcome) => {
-        this.currentOutcome = outcome;
-        this.gamePhase = GamePhase.GameOver;
-        // W2: first-class pause via Plan 06 Task 1 API — no setMsPerTick(Infinity)
-        this.gameLoop.pause();
-        // Issue #129 — clear any in-flight pan/drag/gesture so it doesn't leak
-        // into the GameOver overlay state (the middle-button drag-pan handlers
-        // are independent of processCameraInput and otherwise fire unguarded; the
-        // gesture arbiter must also abandon any pending tap/paint/pan).
-        this.arbiter.cancelGesture();
-        resetPanInputState();
-        resetDragState(this.dragState);
-
-        // Extract death cause from the first queen_death event emitted this tick.
-        // Forward scan: player is added to diedThisTick first, so the player's event
-        // comes before enemy events — Defeat gives the player's cause, Victory gives
-        // the enemy's. Tick filter prevents stale events from earlier ticks matching.
-        // world.tick was incremented at step 19 (tick.ts) after checkQueenDeath (step 18),
-        // so the queen_death event carries world.tick - 1.
-        const deathTick = (this.world?.tick ?? 1) - 1;
-        const evts = this.world?.events ?? [];
-        let cause: import('./ui-scene-logic.js').QueenDeathCause = null;
-        for (let i = 0; i < evts.length; i++) {
-          const ev = evts[i];
-          if (ev && ev.type === 'queen_death' && ev.tick === deathTick) {
-            cause = ev.payload.cause;
-            break;
-          }
-        }
-        this.currentCause = cause;
-
-        // S6: build narrative for the loss screen.
-        const outcomeLabel: GameOutcomeLabel | undefined =
-          outcome === GameOutcome.Victory
-            ? 'Victory'
-            : outcome === GameOutcome.Defeat
-              ? 'Defeat'
-              : outcome === GameOutcome.MutualDestruction
-                ? 'MutualDestruction'
-                : undefined;
-        const summary = buildPlaytraceSummary(this.world, this.resumedFromSave, outcomeLabel);
-        const narrativeSeed = summary.outcomeAttribution.narrativeSeed;
-
-        const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
-        // Issue #122 — when the playtrace feature is enabled, the survey
-        // overlay replaces the bare game-over panel at end-of-game. Skip
-        // from the survey transitions to restart, matching the prior UX.
-        // When the feature is off, fall back to the original game-over
-        // overlay so the open-source build's behavior is unchanged.
-        if (this.playtraceEndpoint !== '') {
-          this.openSurveyOverlay(false /* quitFromPauseMenu */);
-        } else {
-          uiScene.showGameOverOverlay(outcome, cause, () => this.restartGame(), narrativeSeed);
-        }
-      },
+      onTickOutcome: (outcome) => this.enterGameOver(outcome),
       getMsPerTick: () => MS_PER_TICK / this.speedMultiplier,
     });
 

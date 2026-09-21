@@ -575,6 +575,12 @@ export class UIScene extends Phaser.Scene {
   // Phase 9 Plan 06 — overlay groups (null = overlay not currently shown)
   private gameOverGroup: Phaser.GameObjects.GameObject[] = [];
   private savePromptGroup: Phaser.GameObjects.GameObject[] = [];
+  // #304 — callbacks of the open GameOver / SavePrompt overlays, captured at
+  // show time for the scene-level dispatch (single-dispatcher rule: the boot
+  // overlays' buttons carry no per-object pointerdown handlers). Null when
+  // the overlay is closed.
+  private gameOverOnRestart: (() => void) | null = null;
+  private savePromptCallbacks: { onContinue: () => void; onNewGame: () => void } | null = null;
   private difficultySelectGroup: Phaser.GameObjects.GameObject[] = [];
   // #304 — new-game screen state: the GameScene callbacks for the open screen
   // (null when closed) and the currently selected difficulty row.
@@ -943,22 +949,34 @@ export class UIScene extends Phaser.Scene {
         return;
       }
 
-      // #304 — the new-game screen absorbs every click, and dispatches ONLY
-      // here, under the pause menu's rule above: its rows and Start button
-      // carry no per-object pointerdown handlers. Phaser fires object-level
-      // handlers BEFORE this scene-level one, so a Start handler that hid the
-      // screen would let the very same dispatch reach this point with the
-      // screen already gone and fall through to the HUD chain beneath the
-      // scrim (at Start's centre — the speed/pause widget once the Jev
-      // opponent section pushes Start down). Hit-test the cached geometry,
-      // act, and return whether or not anything was hit.
+      // #304 — the three boot overlays (GameOver, SavePrompt, the new-game
+      // screen) absorb every click and dispatch ONLY here, under the pause
+      // menu's rule above: none of their buttons carries a per-object
+      // pointerdown handler. Two reasons, both about Phaser firing object-level
+      // handlers BEFORE this scene-level one for the same pointer:
+      //   1. a Start handler that hid the new-game screen would let the same
+      //      dispatch reach this point with the screen gone and fall through
+      //      to the HUD chain beneath the scrim (the speed/pause widget once
+      //      the Jev opponent section pushes Start down);
+      //   2. a Restart / New Game handler that OPENED the new-game screen
+      //      mid-dispatch would then have this handler hit-test the same click
+      //      against the freshly built rows — the Restart button sits inside
+      //      the Hard row, so every restart silently selected Hard.
+      // Precedence mirrors recomputeActiveOverlay (game-over > save-prompt >
+      // new-game). Each branch acts and returns whether or not it hit a button,
+      // so an opening click can never reach the screen it opened.
+      if (this.gameOverGroup.length > 0) {
+        this.dispatchGameOverClick(pointer.x, pointer.y);
+        return;
+      }
+      if (this.savePromptGroup.length > 0) {
+        this.dispatchSavePromptClick(pointer.x, pointer.y);
+        return;
+      }
       if (this.isDifficultySelectVisible()) {
         this.dispatchNewGameClick(pointer.x, pointer.y);
         return;
       }
-      // A real Continue/New Game SavePrompt absorbs every click too (its two
-      // buttons dispatch through their own handlers, as before #304).
-      if (this.savePromptGroup.length > 0) return;
 
       // Context menu takes precedence when visible. A click inside selects an
       // item; a click anywhere else dismisses the menu AND falls through so
@@ -1468,6 +1486,7 @@ export class UIScene extends Phaser.Scene {
     narrativeSeed?: string | null,
   ): void {
     this.hideGameOverOverlay(); // clear any prior instance first
+    this.gameOverOnRestart = onRestart;
 
     const { w: W, h: H } = this.layout;
 
@@ -1515,7 +1534,9 @@ export class UIScene extends Phaser.Scene {
     subtitle.setOrigin(0.5);
     subtitle.setDepth(21);
 
-    // Restart button
+    // Restart button. setInteractive() only for the pointer hit / cursor —
+    // NO pointerdown handler: dispatch is the scene-level handler's
+    // (dispatchGameOverClick), see the single-dispatcher note in create().
     const btnR = GAME_OVER_RESTART_RECT;
     const btnBg = this.add.rectangle(
       btnR.x + btnR.w / 2,
@@ -1527,9 +1548,6 @@ export class UIScene extends Phaser.Scene {
     );
     btnBg.setInteractive();
     btnBg.setDepth(21);
-    btnBg.on('pointerdown', () => {
-      onRestart();
-    });
 
     const btnLabel = this.add.text(btnR.x + btnR.w / 2, btnR.y + btnR.h / 2, 'Restart', {
       fontSize: '16px',
@@ -1797,7 +1815,16 @@ export class UIScene extends Phaser.Scene {
   public hideGameOverOverlay(): void {
     for (const obj of this.gameOverGroup) obj.destroy();
     this.gameOverGroup = [];
+    this.gameOverOnRestart = null;
     this.recomputeActiveOverlay();
+  }
+
+  /** The GameOver overlay's ONLY click dispatch (scene-level handler): Restart
+   *  fires the captured callback (restartGame hides this overlay itself, as
+   *  before); anything else is absorbed. */
+  private dispatchGameOverClick(px: number, py: number): void {
+    if (!this.isInsideRect(px, py, GAME_OVER_RESTART_RECT)) return;
+    this.gameOverOnRestart?.();
   }
 
   // ---------------------------------------------------------------------------
@@ -1899,6 +1926,7 @@ export class UIScene extends Phaser.Scene {
 
   public showSavePromptOverlay(callbacks: { onContinue: () => void; onNewGame: () => void }): void {
     this.hideSavePromptOverlay(); // clear any prior instance first
+    this.savePromptCallbacks = callbacks;
 
     const { w: W, h: H } = this.layout;
 
@@ -1928,7 +1956,10 @@ export class UIScene extends Phaser.Scene {
     subtitle.setOrigin(0.5);
     subtitle.setDepth(21);
 
-    // Continue button
+    // Continue / New Game buttons. setInteractive() only for the pointer hit
+    // and cursor — NO pointerdown handlers: dispatch is the scene-level
+    // handler's (dispatchSavePromptClick), see the single-dispatcher note in
+    // create().
     const contR = SAVE_PROMPT_CONTINUE_RECT;
     const contBg = this.add.rectangle(
       contR.x + contR.w / 2,
@@ -1940,10 +1971,6 @@ export class UIScene extends Phaser.Scene {
     );
     contBg.setInteractive();
     contBg.setDepth(21);
-    contBg.on('pointerdown', () => {
-      this.hideSavePromptOverlay();
-      callbacks.onContinue();
-    });
 
     const contLabel = this.add.text(contR.x + contR.w / 2, contR.y + contR.h / 2, 'Continue', {
       fontSize: '16px',
@@ -1965,10 +1992,6 @@ export class UIScene extends Phaser.Scene {
     );
     ngBg.setInteractive();
     ngBg.setDepth(21);
-    ngBg.on('pointerdown', () => {
-      this.hideSavePromptOverlay();
-      callbacks.onNewGame();
-    });
 
     const ngLabel = this.add.text(ngR.x + ngR.w / 2, ngR.y + ngR.h / 2, 'New Game', {
       fontSize: '16px',
@@ -1985,7 +2008,24 @@ export class UIScene extends Phaser.Scene {
   public hideSavePromptOverlay(): void {
     for (const obj of this.savePromptGroup) obj.destroy();
     this.savePromptGroup = [];
+    this.savePromptCallbacks = null;
     this.recomputeActiveOverlay();
+  }
+
+  /** The SavePrompt's ONLY click dispatch (scene-level handler): Continue /
+   *  New Game hide the prompt and fire the captured callback (read BEFORE
+   *  hiding, which nulls it); anything else is absorbed. */
+  private dispatchSavePromptClick(px: number, py: number): void {
+    const cb = this.savePromptCallbacks;
+    if (this.isInsideRect(px, py, SAVE_PROMPT_CONTINUE_RECT)) {
+      this.hideSavePromptOverlay();
+      cb?.onContinue();
+      return;
+    }
+    if (this.isInsideRect(px, py, SAVE_PROMPT_NEW_GAME_RECT)) {
+      this.hideSavePromptOverlay();
+      cb?.onNewGame();
+    }
   }
 
   // ---------------------------------------------------------------------------
