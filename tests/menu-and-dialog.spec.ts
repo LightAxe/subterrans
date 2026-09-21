@@ -328,8 +328,10 @@ test.describe('Issue #115 — Save/Load dialog reachable from pause menu', () =>
     // Boot lands on SavePrompt — click Continue to enter Playing.
     await clickCanvasRect(page, SAVE_PROMPT_CONTINUE_RECT);
     await page.waitForTimeout(150);
-    // (Continue may fall back to bootFresh on the synthetic envelope, which then
-    // shows the new-game screen — settleToPlaying drives either path to Playing.)
+    // (Continue falls back to a direct bootFresh on the synthetic envelope —
+    // straight to Playing on the persisted tier, no new-game screen (#304) —
+    // so settleToPlaying just observes 'none' here; it would also drive the
+    // screen if a future envelope took that path.)
     await settleToPlaying(page);
 
     // Re-populate the save (Continue may have triggered an autosave that

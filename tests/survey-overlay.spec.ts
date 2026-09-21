@@ -336,8 +336,8 @@ test.describe('End-of-game survey overlay — v3 playtrace envelope', () => {
     await expect.poll(() => captured.length, { timeout: 15_000 }).toBe(1);
     expect(captured[0]!.survey.email).toBe('returning@example.com');
 
-    // Reload (settings survive; the save is cleared so we land on Choose
-    // Difficulty again) and reopen the survey.
+    // Reload (settings survive; the save is cleared so we land on the new-game
+    // screen again) and reopen the survey.
     await bootFixture(page, 'Normal', { keepSettings: true });
     await openSurveyFromPauseMenu(page);
     await expect(page.locator(EMAIL_INPUT)).toHaveValue('returning@example.com');

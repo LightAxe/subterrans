@@ -184,6 +184,7 @@ import {
   newGameScreenLayout,
   type BootOverlayRect,
   type Difficulty,
+  type NewGameScreenLayout,
 } from './boot-overlay-layout.js';
 export { SAVE_PROMPT_CONTINUE_RECT, SAVE_PROMPT_NEW_GAME_RECT, GAME_OVER_RESTART_RECT };
 import {
@@ -203,6 +204,18 @@ const DIFFICULTY_NAME_COLORS: Readonly<Record<Difficulty, string>> = {
   Normal: '#8ecbff',
   Hard: '#ff8a8a',
 };
+
+/** True when a keyboard event was typed into an editable DOM element — a text
+ *  field, textarea, select, or contenteditable. Phaser's keyboard plugin listens
+ *  on `window`, so a keystroke in ANY input on the page reaches it; the library
+ *  build mounts the game inline in the website page, where a host-page form
+ *  must keep its Enter (#304). */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+}
 import {
   createSliderDragState,
   drawSlider,
@@ -567,6 +580,9 @@ export class UIScene extends Phaser.Scene {
   // (null when closed) and the currently selected difficulty row.
   private difficultySelectCallbacks: DifficultySelectCallbacks | null = null;
   private selectedDifficulty: Difficulty = 'Normal';
+  /** Geometry of the open new-game screen, cached at render time for the
+   *  scene-level hit-test (mirrors pauseMenuVisibleItems). Null when closed. */
+  private newGameGeo: NewGameScreenLayout | null = null;
   // Issue #116 — pause menu overlay state. Empty group means "not visible";
   // page tracks which sub-screen is currently rendered. callbacks/saveLoadEnabled
   // are captured at show time so we can re-render on page navigation without
@@ -877,7 +893,10 @@ export class UIScene extends Phaser.Scene {
     // stop propagation themselves, so this never sees their keystrokes.
     const enterKey = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER, false);
     if (enterKey) {
-      enterKey.on('down', () => {
+      enterKey.on('down', (_key: Phaser.Input.Keyboard.Key, event: KeyboardEvent) => {
+        // An Enter typed into a host-page input / textarea / contenteditable
+        // (the website embed) is that element's newline or submit, not ours.
+        if (isEditableTarget(event.target)) return;
         if (this.isDifficultySelectVisible()) this.commitNewGame();
       });
     }
@@ -924,12 +943,22 @@ export class UIScene extends Phaser.Scene {
         return;
       }
 
-      // #304 — the boot overlays (the new-game screen, a Continue/New Game
-      // SavePrompt) absorb every click too. Their buttons fire their own Phaser
-      // interactive handlers; without this guard a click on, say, the Hard
-      // row's description also fell through to the HUD chain beneath the scrim
-      // (that row overlaps the underground-colony toggle's hit-zone).
-      if (this.isDifficultySelectVisible() || this.savePromptGroup.length > 0) return;
+      // #304 — the new-game screen absorbs every click, and dispatches ONLY
+      // here, under the pause menu's rule above: its rows and Start button
+      // carry no per-object pointerdown handlers. Phaser fires object-level
+      // handlers BEFORE this scene-level one, so a Start handler that hid the
+      // screen would let the very same dispatch reach this point with the
+      // screen already gone and fall through to the HUD chain beneath the
+      // scrim (at Start's centre — the speed/pause widget once the Jev
+      // opponent section pushes Start down). Hit-test the cached geometry,
+      // act, and return whether or not anything was hit.
+      if (this.isDifficultySelectVisible()) {
+        this.dispatchNewGameClick(pointer.x, pointer.y);
+        return;
+      }
+      // A real Continue/New Game SavePrompt absorbs every click too (its two
+      // buttons dispatch through their own handlers, as before #304).
+      if (this.savePromptGroup.length > 0) return;
 
       // Context menu takes precedence when visible. A click inside selects an
       // item; a click anywhere else dismisses the menu AND falls through so
@@ -1988,6 +2017,7 @@ export class UIScene extends Phaser.Scene {
     for (const obj of this.difficultySelectGroup) obj.destroy();
     this.difficultySelectGroup = [];
     this.difficultySelectCallbacks = null;
+    this.newGameGeo = null;
     this.recomputeActiveOverlay();
   }
 
@@ -2016,12 +2046,32 @@ export class UIScene extends Phaser.Scene {
     this.renderDifficultySelectOverlay();
   }
 
+  /** The new-game screen's ONLY click dispatch (called from the scene-level
+   *  pointerdown handler while the screen is up): Start commits, a row selects,
+   *  anything else — the scrim, the title — is absorbed. Same shape as
+   *  pauseMenuItemAt → dispatchPauseMenuItem. */
+  private dispatchNewGameClick(px: number, py: number): void {
+    const geo = this.newGameGeo;
+    if (geo === null) return;
+    if (this.isInsideRect(px, py, geo.startButton)) {
+      this.commitNewGame();
+      return;
+    }
+    for (const tier of DIFFICULTY_TIERS) {
+      if (this.isInsideRect(px, py, geo.difficultyRows[tier])) {
+        this.selectDifficulty(tier);
+        return;
+      }
+    }
+  }
+
   private renderDifficultySelectOverlay(): void {
     for (const obj of this.difficultySelectGroup) obj.destroy();
     this.difficultySelectGroup = [];
 
     const { w: W, h: H } = this.layout;
     const geo = newGameScreenLayout(this.layout);
+    this.newGameGeo = geo;
     const group = this.difficultySelectGroup;
 
     const bg = this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.75);
@@ -2059,13 +2109,14 @@ export class UIScene extends Phaser.Scene {
 
     for (const tier of DIFFICULTY_TIERS) this.addDifficultyRow(tier, geo.difficultyRows[tier]);
 
-    // The one and only start control.
+    // The one and only start control. setInteractive() only so the rectangle
+    // absorbs the pointer hit and draws the input cursor — NO pointerdown
+    // handler here; dispatch is the scene-level handler's (see create()).
     const sb = geo.startButton;
     const startBg = this.add.rectangle(sb.x + sb.w / 2, sb.y + sb.h / 2, sb.w, sb.h, 0x226622, 1);
     startBg.setStrokeStyle(2, 0x5fbf5f);
     startBg.setInteractive();
     startBg.setDepth(21);
-    startBg.on('pointerdown', () => this.commitNewGame());
     group.push(startBg);
 
     const startLabel = this.add.text(sb.x + sb.w / 2, sb.y + sb.h / 2, NEW_GAME_START_LABEL, {
@@ -2092,7 +2143,9 @@ export class UIScene extends Phaser.Scene {
   /** One radio-style difficulty row: a drawn radio glyph (a ring, filled when
    *  selected — drawn rather than a text glyph so it can't depend on font
    *  coverage), the tinted tier name, and the plain-language description of
-   *  what the tier changes. Clicking anywhere on the row selects it. */
+   *  what the tier changes. A click anywhere on the row selects it — hit-tested
+   *  by the scene-level handler (dispatchNewGameClick), not a per-object
+   *  handler; setInteractive() is only for the pointer hit and the cursor. */
   private addDifficultyRow(tier: Difficulty, rect: BootOverlayRect): void {
     const group = this.difficultySelectGroup;
     const selected = tier === this.selectedDifficulty;
@@ -2109,7 +2162,6 @@ export class UIScene extends Phaser.Scene {
     rowBg.setStrokeStyle(2, selected ? 0xe8e8e8 : 0x3a3a3a);
     rowBg.setInteractive();
     rowBg.setDepth(21);
-    rowBg.on('pointerdown', () => this.selectDifficulty(tier));
     group.push(rowBg);
 
     const ring = this.add.circle(inner.radio.x, inner.radio.y, DIFFICULTY_ROW_RADIO_R);

@@ -1,5 +1,6 @@
 import { test, expect, type ConsoleMessage } from '@playwright/test';
 import { VIEW_TOGGLE_RECT } from './helpers/geometry.js';
+import { activeView, clickCanvasRect, settleToPlaying } from './helpers/boot.js';
 
 const errorFilter = (msg: ConsoleMessage) => msg.type() === 'error';
 
@@ -85,14 +86,19 @@ test.describe('Phase 8 smoke — boot, toggle, pan', () => {
     await page.goto('/');
     const canvas = page.locator('canvas').first();
     await canvas.waitFor({ state: 'attached' });
-    await page.waitForTimeout(300);
+    // #304 — the boot overlays now absorb every click, so the HUD toggle only
+    // works once a round is running: clear any save (no SavePrompt), start a
+    // round through the new-game screen, THEN toggle — and assert the view
+    // actually flipped, so this screenshot can't silently capture the surface.
+    await page.evaluate(() => localStorage.removeItem('subterrans:save:v3'));
+    await page.reload();
+    await canvas.waitFor({ state: 'attached' });
+    await settleToPlaying(page);
 
     // Click the VIEW_TOGGLE HUD button (more reliable than Tab keyboard — no
     // focus dependency). Rect from geometry.ts (#240) — no inline pixels.
-    const box = await canvas.boundingBox();
-    if (!box) throw new Error('canvas has no bounding box');
-    const r = VIEW_TOGGLE_RECT;
-    await page.mouse.click(box.x + r.x + r.w / 2, box.y + r.y + r.h / 2);
+    await clickCanvasRect(page, VIEW_TOGGLE_RECT);
+    await expect.poll(() => activeView(page), { timeout: 5_000 }).toBe('underground');
     await page.waitForTimeout(300);
 
     await page.screenshot({

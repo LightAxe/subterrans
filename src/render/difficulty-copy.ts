@@ -13,8 +13,9 @@
 //   - the AI queen's egg interval          QUEEN_EGG_INTERVAL_DIFFICULTY_NUMERATOR
 //   - the fighter count for WarFooting     AI_WARFOOTING_FIGHTER_THRESHOLD
 //   - the fighter count for Invading       AI_INVADING_FIGHTER_THRESHOLD
-//   - how soon after eating the spider     SPIDER_HUNGER_THRESHOLD_TICKS
-//     becomes Hungry and hunts again
+//   - how soon after a meal the spider     SPIDER_HUNGER_THRESHOLD_TICKS
+//     becomes Hungry and hunts again (the clock runs only outside Feeding,
+//     i.e. from the END of the meal — spider.ts hunger accrual)
 // (AI_RECOVERY_DURATION_TICKS and SPIDER_HUNGER_MAX_TICKS are per-tier too, but
 // the former is identical at every tier and the latter is only read by the
 // render layer, as the spider hunger bar's denominator — neither is a
@@ -54,8 +55,9 @@ export function eggIntervalPercent(tier: Difficulty): number {
   return Math.round(((numerator - EGG_INTERVAL_DENOMINATOR) / EGG_INTERVAL_DENOMINATOR) * 100);
 }
 
-/** Seconds after its last meal before the spider becomes Hungry at `tier`
- *  (SPIDER_HUNGER_THRESHOLD_TICKS at the fixed 20 Hz tick rate). */
+/** Seconds after a meal ends before the spider becomes Hungry at `tier`
+ *  (SPIDER_HUNGER_THRESHOLD_TICKS at the fixed 20 Hz tick rate; hungerTicks
+ *  accrues only while the spider is not Feeding). */
 export function spiderHungerSeconds(tier: Difficulty): number {
   return (SPIDER_HUNGER_THRESHOLD_TICKS[tierIndex(tier)] * MS_PER_TICK) / 1000;
 }
@@ -71,6 +73,6 @@ export function difficultyDescription(tier: Difficulty): string {
         ? `Enemy queen waits ${-pct}% less between eggs.`
         : 'The reference tuning.';
   const army = `Enemy needs ${AI_WARFOOTING_FIGHTER_THRESHOLD[t]} fighters to arm, ${AI_INVADING_FIGHTER_THRESHOLD[t]} to invade.`;
-  const spider = `Spider hunts ${spiderHungerSeconds(tier)} s after eating.`;
+  const spider = `Spider gets hungry ${spiderHungerSeconds(tier)} s after a meal.`;
   return `${eggs} ${army} ${spider}`;
 }

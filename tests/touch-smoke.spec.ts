@@ -35,8 +35,10 @@ async function bootToPlaying(page: Page): Promise<void> {
   await page.evaluate(() => localStorage.removeItem('subterrans:save:v3'));
   await page.reload();
   await page.locator('canvas').first().waitFor({ state: 'attached' });
-  // #304 — select Normal and press Start on the new-game screen (shared helper).
-  await settleToPlaying(page);
+  // #304 — select Normal and press Start on the new-game screen with real
+  // single-finger TAPS (page.touchscreen), so the touch path through the
+  // scene-level dispatch is pinned, not just the mouse one.
+  await settleToPlaying(page, 'Normal', { via: 'touch' });
 }
 
 test('two-finger spread pinch-zooms the camera in', async ({ page }) => {

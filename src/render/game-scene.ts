@@ -1389,7 +1389,7 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private bootFresh(difficulty: 'Easy' | 'Normal' | 'Hard' = 'Normal'): void {
+  private bootFresh(difficulty: 'Easy' | 'Normal' | 'Hard'): void {
     this.resetSessionState();
     this.currentDifficulty = difficulty;
     // W1: seed formula — Date.now() is ~1.7e12, exceeds int32. Bitmask-clamp to positive int32.
@@ -1443,9 +1443,11 @@ export class GameScene extends Phaser.Scene {
   private async bootFromSave(): Promise<void> {
     const loaded = await loadSave();
     if (loaded === null) {
-      // Corrupt save: fall through to fresh (bootFresh runs its own reset)
+      // Corrupt save: fall through to fresh (bootFresh runs its own reset).
+      // No new-game screen on this path (the player already chose Continue);
+      // the persisted last-used tier applies (#304), not a hard-coded Normal.
       await deleteSave();
-      this.bootFresh();
+      this.bootFresh(loadSettings().difficulty);
       return;
     }
     // Reset BEFORE restoring so the new session starts from a clean slate,
@@ -1476,8 +1478,10 @@ export class GameScene extends Phaser.Scene {
     try {
       nextWorld = deserializeWorldState(loaded.snapshot);
     } catch (err) {
+      // Every fallback below boots fresh on the persisted last-used tier
+      // (#304) — no new-game screen, since the player already chose Continue.
       if (err instanceof FutureSimVersionError) {
-        this.bootFresh();
+        this.bootFresh(loadSettings().difficulty);
         // Set after bootFresh — resetSessionState clears the flag.
         this.autosaveSuspended = true;
         return;
@@ -1486,12 +1490,12 @@ export class GameScene extends Phaser.Scene {
         // Pre-V22 save — no migration path; discard and start fresh.
         console.error(err.message);
         await deleteSave();
-        this.bootFresh();
+        this.bootFresh(loadSettings().difficulty);
         return;
       }
       // Genuine corruption: discard so we don't loop the user.
       await deleteSave();
-      this.bootFresh();
+      this.bootFresh(loadSettings().difficulty);
       return;
     }
     this.currentSeed = loaded.seed;

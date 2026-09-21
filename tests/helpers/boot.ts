@@ -31,6 +31,14 @@ export async function clickCanvasRect(page: Page, rect: Rect): Promise<void> {
   await page.mouse.click(box.x + rect.x + rect.w / 2, box.y + rect.y + rect.h / 2);
 }
 
+/** Single-finger tap on the center of a canvas-local rect (a real touch
+ *  pointer — needs a project with hasTouch, e.g. chromium-touch). */
+export async function tapCanvasRect(page: Page, rect: Rect): Promise<void> {
+  const box = await page.locator('canvas').first().boundingBox();
+  if (!box) throw new Error('canvas has no bounding box');
+  await page.touchscreen.tap(box.x + rect.x + rect.w / 2, box.y + rect.y + rect.h / 2);
+}
+
 /** Raw activeOverlay read. Returns '<undefined>' (NOT 'none') before the hook
  *  has been published, so a still-booting page can't pass as Playing. */
 export async function activeOverlay(page: Page): Promise<string> {
@@ -46,6 +54,15 @@ export async function bootScreen(page: Page): Promise<string> {
   return await page.evaluate(() => {
     const ui = (window as { __phase9_ui?: { bootScreen?: string } }).__phase9_ui;
     return ui?.bootScreen ?? '<undefined>';
+  });
+}
+
+/** Which view is showing ('surface' | 'underground'), published every frame
+ *  once the game is running; '<undefined>' before then. */
+export async function activeView(page: Page): Promise<string> {
+  return await page.evaluate(() => {
+    const ui = (window as { __phase9_ui?: { activeView?: string } }).__phase9_ui;
+    return ui?.activeView ?? '<undefined>';
   });
 }
 
@@ -76,11 +93,16 @@ export async function waitForUiHook(page: Page): Promise<void> {
  * over-clicks into the game. Requires no real Continue/New Game SavePrompt to
  * be up (clear the save first, or dismiss the prompt before calling) — the
  * Normal row overlaps the SavePrompt's Continue button.
+ *
+ * `via: 'touch'` drives the same two steps with single-finger taps (a real
+ * touch pointer; chromium-touch project) so the touch path is pinned too.
  */
 export async function settleToPlaying(
   page: Page,
   difficulty: Difficulty = 'Normal',
+  opts: { via?: 'mouse' | 'touch' } = {},
 ): Promise<void> {
+  const press = opts.via === 'touch' ? tapCanvasRect : clickCanvasRect;
   await waitForUiHook(page);
   // Don't mistake the pre-overlay frame for Playing: the hook's activeOverlay
   // DEFAULTS to 'none' on its first publish, before any boot overlay has been
@@ -104,9 +126,9 @@ export async function settleToPlaying(
       async () => {
         if ((await activeOverlay(page)) === 'none') return 'none';
         if ((await selectedDifficulty(page)) === difficulty) {
-          await clickCanvasRect(page, NEW_GAME_START_RECT);
+          await press(page, NEW_GAME_START_RECT);
         } else {
-          await clickCanvasRect(page, DIFFICULTY_ROW_RECTS[difficulty]);
+          await press(page, DIFFICULTY_ROW_RECTS[difficulty]);
         }
         return activeOverlay(page);
       },

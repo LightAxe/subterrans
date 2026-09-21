@@ -115,8 +115,8 @@ async function expectFreshBootDifficultyOverlay(page: Page): Promise<void> {
 // Continue/New Game SavePrompt (a compatible save exists), NOT the fresh-boot
 // new-game screen — both report activeOverlay 'save-prompt', so the
 // bootScreen discriminator is what makes this honest. Without it, a SCEN-04 test
-// whose seeded save failed to load would silently fall through to Choose
-// Difficulty and still "see" save-prompt (the #192 masking bug).
+// whose seeded save failed to load would silently fall through to the new-game
+// screen and still "see" save-prompt (the #192 masking bug).
 async function expectBootSavePrompt(page: Page): Promise<void> {
   await expect
     .poll(
@@ -210,6 +210,14 @@ test.describe('Phase 9 — SCEN-04 save-prompt flow', () => {
     // fresh-boot fall-through.
     await expect.poll(() => getActiveOverlay(page), { timeout: 5_000 }).toBe('save-prompt');
     await expectBootSavePrompt(page);
+
+    // #304 — Enter is the new-game screen's start key ONLY. On a real
+    // Continue/New Game SavePrompt it must do nothing: no Continue, no New
+    // Game, the prompt still up.
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(400);
+    await expectBootSavePrompt(page);
+    expect(await getActiveOverlay(page)).toBe('save-prompt');
 
     // SavePrompt buttons are canvas-drawn — click Continue by canvas-relative rect.
     await clickCanvasRect(page, SAVE_PROMPT_CONTINUE_RECT);

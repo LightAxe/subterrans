@@ -17,6 +17,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { DIFFICULTY_ROW_RECTS, NEW_GAME_START_RECT } from './helpers/geometry.js';
 import {
   activeOverlay,
+  activeView,
   bootScreen,
   clickCanvasRect,
   selectedDifficulty,
@@ -53,6 +54,13 @@ async function roundDifficulty(page: Page): Promise<string | undefined> {
     if (!t?.getRoundDifficulty) throw new Error('__phase9_test.getRoundDifficulty not installed');
     return t.getRoundDifficulty();
   });
+}
+
+/** The live speed multiplier published by GameScene (1 after any boot). */
+async function speedMultiplier(page: Page): Promise<number | undefined> {
+  return await page.evaluate(
+    () => (window as { __phase9_ui?: { speedMultiplier?: number } }).__phase9_ui?.speedMultiplier,
+  );
 }
 
 /** The persisted settings.difficulty, or null when no settings blob exists. */
@@ -101,6 +109,53 @@ test.describe('#304 new-game screen — options first, Start last', () => {
     await expect.poll(() => activeOverlay(page), { timeout: 10_000 }).toBe('none');
     expect(await bootScreen(page)).toBe('none');
     expect(await roundDifficulty(page)).toBe('Hard');
+
+    // Regression guard: the Start click must be absorbed by the screen. If it
+    // fell through to the HUD chain beneath the scrim (a per-object handler
+    // that hid the screen before the scene-level dispatch ran), the same
+    // click would land on whatever HUD widget sits under Start — the speed
+    // widget once the opponent section pushes Start down — so nothing else
+    // may have fired: speed still 1×, surface view, no overlay.
+    await page.waitForTimeout(400);
+    expect(await speedMultiplier(page)).toBe(1);
+    expect(await activeView(page)).toBe('surface');
+    expect(await activeOverlay(page)).toBe('none');
+  });
+
+  test('Enter typed into a host-page input does not start the round (website embed)', async ({
+    page,
+  }) => {
+    await bootToNewGameScreen(page);
+    await expect.poll(() => selectedDifficulty(page), { timeout: 5_000 }).toBe('Normal');
+    // The library build mounts the game inline in the website page; a form
+    // field there must keep its Enter. Simulate one: inject an <input>, focus
+    // it, press Enter — the keydown still bubbles to Phaser's window listener.
+    await page.evaluate(() => {
+      const input = document.createElement('input');
+      input.id = 'host-page-input';
+      document.body.appendChild(input);
+      input.focus();
+    });
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(400);
+    expect(await bootScreen(page)).toBe('difficulty-select');
+    expect(await roundDifficulty(page)).toBeUndefined();
+
+    // Focus back on the game (a row click — the selected row, so no change)
+    // and Enter starts as usual.
+    await page.evaluate(() => document.getElementById('host-page-input')?.remove());
+    await selectRow(page, 'Normal');
+    await expect
+      .poll(
+        async () => {
+          if ((await activeOverlay(page)) === 'none') return 'none';
+          await page.keyboard.press('Enter');
+          return activeOverlay(page);
+        },
+        { timeout: 10_000 },
+      )
+      .toBe('none');
+    expect(await roundDifficulty(page)).toBe('Normal');
   });
 
   test('Enter starts the round on the current selection', async ({ page }) => {
