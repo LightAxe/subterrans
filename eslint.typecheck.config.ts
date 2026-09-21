@@ -7,6 +7,10 @@
 // latency per save). This config builds the program once and is gated only in
 // `npm run lint:types`, `npm run verify`, and CI — where latency is fine.
 //
+// Covers src/**/*.ts and scripts/**/*.ts. projectService auto-discovers
+// scripts/tsconfig.json for files under scripts/ with no extra `project`
+// wiring, and the added type-check cost is small (~0.3s on this repo).
+//
 // Scope note: this config intentionally does NOT re-enable the sim-safety
 // rules (Phaser/wall-clock/float bans, mutation guard, sim-module-state) —
 // eslint.config.ts owns those and owns disable-directive usage reporting. We
@@ -21,7 +25,7 @@ import simModuleState from './eslint-rules/sim-module-state.js';
 
 export default [
   {
-    files: ['src/**/*.ts'],
+    files: ['src/**/*.ts', 'scripts/**/*.ts'],
     languageOptions: {
       parser: tsParser,
       parserOptions: {

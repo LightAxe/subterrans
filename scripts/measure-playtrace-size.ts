@@ -121,7 +121,7 @@ function parseStrArg(name: string, fallback: string): string {
 
 const BOTH_AI = process.argv.slice(2).includes('--both-ai');
 const SEEDS = parseNumArg('seeds', 3);
-const DIFFICULTY = parseStrArg('difficulty', 'Normal') as 'Easy' | 'Normal' | 'Hard';
+const DIFFICULTY_ARG = parseStrArg('difficulty', 'Normal');
 // EVERY token must be a positive integer tick. Dropping the bad ones (the old
 // `.filter`) turned `--checkpoints=6000,abc` into a silent single-checkpoint
 // run, and `--checkpoints=abc` into the default three.
@@ -139,9 +139,10 @@ const CHECKPOINTS = CHECKPOINT_TOKENS.map((tok) => {
 if (!Number.isInteger(SEEDS) || SEEDS < 1) {
   bail(`--seeds=${SEEDS} must be an integer >= 1.`);
 }
-if (DIFFICULTY !== 'Easy' && DIFFICULTY !== 'Normal' && DIFFICULTY !== 'Hard') {
-  bail(`Unknown --difficulty=${DIFFICULTY}; expected Easy|Normal|Hard.`);
+if (DIFFICULTY_ARG !== 'Easy' && DIFFICULTY_ARG !== 'Normal' && DIFFICULTY_ARG !== 'Hard') {
+  bail(`Unknown --difficulty=${DIFFICULTY_ARG}; expected Easy|Normal|Hard.`);
 }
+const DIFFICULTY: 'Easy' | 'Normal' | 'Hard' = DIFFICULTY_ARG;
 if (CHECKPOINTS.length === 0) {
   bail('--checkpoints must list at least one positive integer tick.');
 }

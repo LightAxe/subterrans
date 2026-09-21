@@ -91,7 +91,7 @@ function parseStrArg(name: string, fallback: string): string {
 
 const SEEDS = parseNumArg('seeds', 30);
 const TICKS = parseNumArg('ticks', MATCH_TIMEOUT_TICKS);
-const DIFFICULTY = parseStrArg('difficulty', 'Normal') as 'Easy' | 'Normal' | 'Hard';
+const DIFFICULTY_ARG = parseStrArg('difficulty', 'Normal');
 const REPORT_ONLY = process.argv.slice(2).includes('--report-only');
 const TRACE_SEEDS = new Set(
   parseStrArg('trace', '')
@@ -111,10 +111,11 @@ if (!Number.isInteger(TICKS) || TICKS < 1) {
   console.error(`--ticks=${TICKS} must be an integer >= 1.`);
   process.exit(2);
 }
-if (DIFFICULTY !== 'Easy' && DIFFICULTY !== 'Normal' && DIFFICULTY !== 'Hard') {
-  console.error(`Unknown --difficulty=${DIFFICULTY}; expected Easy|Normal|Hard.`);
+if (DIFFICULTY_ARG !== 'Easy' && DIFFICULTY_ARG !== 'Normal' && DIFFICULTY_ARG !== 'Hard') {
+  console.error(`Unknown --difficulty=${DIFFICULTY_ARG}; expected Easy|Normal|Hard.`);
   process.exit(2);
 }
+const DIFFICULTY: 'Easy' | 'Normal' | 'Hard' = DIFFICULTY_ARG;
 
 /** Ordering used to report the "highest" AI state a seed ever reached. */
 const AI_STATE_RANK: Record<AIState, number> = {
