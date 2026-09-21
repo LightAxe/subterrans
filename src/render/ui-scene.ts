@@ -62,10 +62,11 @@ export type ActiveOverlay =
 export type ActiveUndergroundLabel = 'Your Colony' | 'Enemy Colony';
 
 // Distinguishes the two boot overlays that both report activeOverlay
-// 'save-prompt': the fresh-boot "Choose Difficulty" overlay vs a real
-// Continue/New Game SavePrompt. Without this, a Playwright test cannot tell a
-// fresh boot (Choose Difficulty) from a wrongly-shown SavePrompt, since the
-// activeOverlay HUD state is reused for both. 'none' when neither is up.
+// 'save-prompt': the fresh-boot new-game screen (#304; the S5 "Choose
+// Difficulty" overlay before it — the 'difficulty-select' value is kept) vs a
+// real Continue/New Game SavePrompt. Without this, a Playwright test cannot tell
+// a fresh boot from a wrongly-shown SavePrompt, since the activeOverlay HUD
+// state is reused for both. 'none' when neither is up.
 export type BootScreen = 'none' | 'save-prompt' | 'difficulty-select';
 
 declare global {
@@ -81,8 +82,22 @@ declare global {
       // Issue #193 — live game speed (1×/2×/4×), so Playwright can assert the
       // speed-cycle control by value instead of pixel-diffing the rendered label.
       speedMultiplier?: SpeedMultiplier;
+      // #304 — the difficulty row currently selected on the new-game screen, so
+      // Playwright can assert that a row click moves the selection WITHOUT
+      // starting the round, and that the screen reopens on the persisted tier.
+      selectedDifficulty?: Difficulty;
     };
   }
+}
+
+/** #304 — the new-game screen's contract with GameScene. */
+export interface DifficultySelectCallbacks {
+  /** Fired ONLY by the Start button or Enter, with the selected tier. Clicking
+   *  a difficulty row never fires this — it just moves the selection. */
+  onStart: (d: Difficulty) => void;
+  /** Row pre-selected when the screen opens: the player's persisted last-used
+   *  tier (settings.difficulty). Defaults to Normal. */
+  initialDifficulty?: Difficulty;
 }
 
 /** Single publisher for window.__phase9_ui (Playwright observability). Merges a
@@ -108,6 +123,8 @@ function publishPhase9(patch: Partial<NonNullable<Window['__phase9_ui']>>): void
   if (boot !== undefined) next.bootScreen = boot;
   const speed = patch.speedMultiplier ?? prev?.speedMultiplier;
   if (speed !== undefined) next.speedMultiplier = speed;
+  const selected = patch.selectedDifficulty ?? prev?.selectedDifficulty;
+  if (selected !== undefined) next.selectedDifficulty = selected;
   window.__phase9_ui = next;
 }
 
@@ -127,10 +144,16 @@ function setActiveUndergroundLabel(
 }
 
 /** Publishes which boot overlay is up so Playwright can distinguish the fresh-boot
- *  "Choose Difficulty" overlay from a real Continue/New Game SavePrompt — both
- *  report activeOverlay 'save-prompt'. Preserves the other published fields. */
+ *  new-game screen from a real Continue/New Game SavePrompt — both report
+ *  activeOverlay 'save-prompt'. Preserves the other published fields. */
 function setBootScreen(next: BootScreen): void {
   publishPhase9({ bootScreen: next });
+}
+
+/** Publishes the new-game screen's selected difficulty row (#304) so Playwright
+ *  can tell "selected" from "started". Preserves the other published fields. */
+function setSelectedDifficulty(next: Difficulty): void {
+  publishPhase9({ selectedDifficulty: next });
 }
 
 /** Publishes the live speed multiplier (1×/2×/4×) so Playwright can assert the
@@ -142,27 +165,43 @@ export function publishSpeedMultiplier(next: SpeedMultiplier): void {
 }
 
 // ---------------------------------------------------------------------------
-// Boot-overlay button rects — moved to boot-overlay-layout.ts (#240)
+// Boot-overlay geometry — lives in boot-overlay-layout.ts (#240 / #304)
 // ---------------------------------------------------------------------------
 // The canvas-local rects live in the Phaser-free boot-overlay-layout.ts so the
 // Playwright specs (which crash if they import this Phaser-touching module) can
 // import them from one source of truth. Imported here for this scene's own
-// draw/hit use AND re-exported to preserve the public surface documented at top.
+// draw/hit use; the legacy SavePrompt/GameOver rects are ALSO re-exported to
+// preserve the public surface documented at top. The new-game screen (#304)
+// is a layout FUNCTION of the LayoutContext, consumed by tests through
+// tests/helpers/geometry.ts rather than re-exported here.
 import {
   SAVE_PROMPT_CONTINUE_RECT,
   SAVE_PROMPT_NEW_GAME_RECT,
   GAME_OVER_RESTART_RECT,
-  DIFFICULTY_EASY_RECT,
-  DIFFICULTY_NORMAL_RECT,
-  DIFFICULTY_HARD_RECT,
+  DIFFICULTY_TIERS,
+  DIFFICULTY_ROW_RADIO_R,
+  difficultyRowInner,
+  newGameScreenLayout,
+  type BootOverlayRect,
+  type Difficulty,
 } from './boot-overlay-layout.js';
-export {
-  SAVE_PROMPT_CONTINUE_RECT,
-  SAVE_PROMPT_NEW_GAME_RECT,
-  GAME_OVER_RESTART_RECT,
-  DIFFICULTY_EASY_RECT,
-  DIFFICULTY_NORMAL_RECT,
-  DIFFICULTY_HARD_RECT,
+export { SAVE_PROMPT_CONTINUE_RECT, SAVE_PROMPT_NEW_GAME_RECT, GAME_OVER_RESTART_RECT };
+import {
+  NEW_GAME_DIFFICULTY_CAPTION,
+  NEW_GAME_START_HINT,
+  NEW_GAME_START_LABEL,
+  NEW_GAME_SUBTITLE,
+  NEW_GAME_TITLE,
+  difficultyDescription,
+} from './difficulty-copy.js';
+
+/** Tier-name tint on the new-game screen (#304) — the same green / blue / red
+ *  the old Easy / Normal / Hard buttons carried, kept as the one splash of
+ *  colour so the rows still read as a scale at a glance. */
+const DIFFICULTY_NAME_COLORS: Readonly<Record<Difficulty, string>> = {
+  Easy: '#7fd37f',
+  Normal: '#8ecbff',
+  Hard: '#ff8a8a',
 };
 import {
   createSliderDragState,
@@ -524,6 +563,10 @@ export class UIScene extends Phaser.Scene {
   private gameOverGroup: Phaser.GameObjects.GameObject[] = [];
   private savePromptGroup: Phaser.GameObjects.GameObject[] = [];
   private difficultySelectGroup: Phaser.GameObjects.GameObject[] = [];
+  // #304 — new-game screen state: the GameScene callbacks for the open screen
+  // (null when closed) and the currently selected difficulty row.
+  private difficultySelectCallbacks: DifficultySelectCallbacks | null = null;
+  private selectedDifficulty: Difficulty = 'Normal';
   // Issue #116 — pause menu overlay state. Empty group means "not visible";
   // page tracks which sub-screen is currently rendered. callbacks/saveLoadEnabled
   // are captured at show time so we can re-render on page navigation without
@@ -826,6 +869,19 @@ export class UIScene extends Phaser.Scene {
       });
     }
 
+    // #304 — Enter starts the round from the new-game screen, exactly what the
+    // Start button does. Scoped to that screen only: on a Continue/New Game
+    // SavePrompt or any other overlay Enter does nothing. enableCapture=false
+    // so the plugin doesn't preventDefault Enter page-wide (a DOM field on an
+    // embedding page keeps its newline); the survey's textarea / email input
+    // stop propagation themselves, so this never sees their keystrokes.
+    const enterKey = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER, false);
+    if (enterKey) {
+      enterKey.on('down', () => {
+        if (this.isDifficultySelectVisible()) this.commitNewGame();
+      });
+    }
+
     // Pointer events for HUD interactions.
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       // Issue #122 — survey overlay takes top priority. Once it's open the
@@ -867,6 +923,13 @@ export class UIScene extends Phaser.Scene {
         }
         return;
       }
+
+      // #304 — the boot overlays (the new-game screen, a Continue/New Game
+      // SavePrompt) absorb every click too. Their buttons fire their own Phaser
+      // interactive handlers; without this guard a click on, say, the Hard
+      // row's description also fell through to the HUD chain beneath the scrim
+      // (that row overlaps the underground-colony toggle's hit-zone).
+      if (this.isDifficultySelectVisible() || this.savePromptGroup.length > 0) return;
 
       // Context menu takes precedence when visible. A click inside selects an
       // item; a click anywhere else dismisses the menu AND falls through so
@@ -1058,6 +1121,7 @@ export class UIScene extends Phaser.Scene {
       this.cancelTooltip(); // Stage 3b (#5): no timer/Text may outlive the scene.
       this.hideGameOverOverlay();
       this.hideSavePromptOverlay();
+      this.hideDifficultySelectOverlay();
       this.hideSaveLoadDialogOverlay();
       this.hidePauseMenuOverlay();
       this.hideSurveyOverlay();
@@ -1896,103 +1960,192 @@ export class UIScene extends Phaser.Scene {
   }
 
   // ---------------------------------------------------------------------------
-  // S5 — Difficulty select overlay
+  // #304 — New-game screen (the S5 "Choose Difficulty" overlay, reworked)
   //
-  // Shown before every new game. Player chooses Easy / Normal / Hard; the
-  // choice is passed to createScenario via the onSelect callback. No cancel
-  // button — the player must choose before the world is created.
+  // Shown before every new game, including restart. Options first, one Start
+  // button last: the three difficulty rows are radio-style — clicking one only
+  // moves the selection — and ONLY the Start button (or Enter) commits the
+  // choice and boots. No cancel: the player must start before a world exists.
+  //
+  // Geometry is the section stack in boot-overlay-layout.ts, which leaves an
+  // empty "opponent" slot between Difficulty and Start; the Jev opponent picker
+  // (PR #298) fills that slot by passing the height it needs.
+  //
+  // Every row click re-renders the screen in place (destroy + rebuild the
+  // Phaser group) — the survey overlay's shape — so the selected state is drawn
+  // from one field rather than toggled object by object.
   // ---------------------------------------------------------------------------
 
-  public showDifficultySelectOverlay(callbacks: {
-    onSelect: (d: 'Easy' | 'Normal' | 'Hard') => void;
-  }): void {
+  public showDifficultySelectOverlay(callbacks: DifficultySelectCallbacks): void {
     this.hideDifficultySelectOverlay();
+    this.difficultySelectCallbacks = callbacks;
+    this.selectedDifficulty = callbacks.initialDifficulty ?? 'Normal';
+    setSelectedDifficulty(this.selectedDifficulty);
+    this.renderDifficultySelectOverlay();
+  }
+
+  public hideDifficultySelectOverlay(): void {
+    for (const obj of this.difficultySelectGroup) obj.destroy();
+    this.difficultySelectGroup = [];
+    this.difficultySelectCallbacks = null;
+    this.recomputeActiveOverlay();
+  }
+
+  /** True while the new-game screen is up — the Enter key's gate. */
+  private isDifficultySelectVisible(): boolean {
+    return this.difficultySelectGroup.length > 0;
+  }
+
+  /** Commit the current selection: close the screen and start the round. The
+   *  callbacks are read BEFORE hiding (hide nulls them), and a second commit in
+   *  the same frame — Enter and a Start click racing — is a no-op because the
+   *  first already emptied the group. */
+  private commitNewGame(): void {
+    if (!this.isDifficultySelectVisible()) return;
+    const cb = this.difficultySelectCallbacks;
+    const difficulty = this.selectedDifficulty;
+    this.hideDifficultySelectOverlay();
+    cb?.onStart(difficulty);
+  }
+
+  /** Move the selection to `next` and redraw. Never starts the round. */
+  private selectDifficulty(next: Difficulty): void {
+    if (next === this.selectedDifficulty) return;
+    this.selectedDifficulty = next;
+    setSelectedDifficulty(next);
+    this.renderDifficultySelectOverlay();
+  }
+
+  private renderDifficultySelectOverlay(): void {
+    for (const obj of this.difficultySelectGroup) obj.destroy();
+    this.difficultySelectGroup = [];
 
     const { w: W, h: H } = this.layout;
+    const geo = newGameScreenLayout(this.layout);
+    const group = this.difficultySelectGroup;
 
     const bg = this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.75);
     bg.setInteractive();
     bg.setDepth(20);
+    group.push(bg);
 
-    const title = this.add.text(W / 2, H / 2 - 100, 'Choose Difficulty', {
+    const title = this.add.text(geo.title.x, geo.title.y, NEW_GAME_TITLE, {
       fontSize: '28px',
       fontFamily: 'monospace',
       color: '#ffffff',
     });
     title.setOrigin(0.5);
     title.setDepth(21);
+    group.push(title);
 
-    const subtitle = this.add.text(
-      W / 2,
-      H / 2 - 60,
-      "Affects the enemy colony's aggression and reproduction rate.",
-      {
-        fontSize: '13px',
-        fontFamily: 'monospace',
-        color: '#aaaaaa',
-      },
-    );
+    const subtitle = this.add.text(geo.subtitle.x, geo.subtitle.y, NEW_GAME_SUBTITLE, {
+      fontSize: '12px',
+      fontFamily: 'monospace',
+      color: '#aaaaaa',
+    });
     subtitle.setOrigin(0.5);
     subtitle.setDepth(21);
+    group.push(subtitle);
 
-    const makeButton = (
-      label: string,
-      desc: string,
-      rect: { x: number; y: number; w: number; h: number },
-      color: number,
-      difficulty: 'Easy' | 'Normal' | 'Hard',
-    ): Phaser.GameObjects.GameObject[] => {
-      const btnBg = this.add.rectangle(
-        rect.x + rect.w / 2,
-        rect.y + rect.h / 2,
-        rect.w,
-        rect.h,
-        color,
-        1,
-      );
-      btnBg.setInteractive();
-      btnBg.setDepth(21);
-      btnBg.on('pointerdown', () => {
-        this.hideDifficultySelectOverlay();
-        callbacks.onSelect(difficulty);
-      });
+    const caption = this.add.text(
+      geo.difficultyCaption.x,
+      geo.difficultyCaption.y,
+      NEW_GAME_DIFFICULTY_CAPTION,
+      { fontSize: '13px', fontFamily: 'monospace', color: '#8a8a8a' },
+    );
+    caption.setOrigin(0, 0);
+    caption.setDepth(21);
+    group.push(caption);
 
-      const btnLabel = this.add.text(rect.x + rect.w / 2, rect.y + 12, label, {
-        fontSize: '15px',
-        fontFamily: 'monospace',
-        color: '#ffffff',
-      });
-      btnLabel.setOrigin(0.5, 0);
-      btnLabel.setDepth(22);
+    for (const tier of DIFFICULTY_TIERS) this.addDifficultyRow(tier, geo.difficultyRows[tier]);
 
-      const btnDesc = this.add.text(rect.x + rect.w / 2, rect.y + 28, desc, {
-        fontSize: '10px',
-        fontFamily: 'monospace',
-        color: '#cccccc',
-        wordWrap: { width: rect.w - 8 },
-      });
-      btnDesc.setOrigin(0.5, 0);
-      btnDesc.setDepth(22);
+    // The one and only start control.
+    const sb = geo.startButton;
+    const startBg = this.add.rectangle(sb.x + sb.w / 2, sb.y + sb.h / 2, sb.w, sb.h, 0x226622, 1);
+    startBg.setStrokeStyle(2, 0x5fbf5f);
+    startBg.setInteractive();
+    startBg.setDepth(21);
+    startBg.on('pointerdown', () => this.commitNewGame());
+    group.push(startBg);
 
-      return [btnBg, btnLabel, btnDesc];
-    };
+    const startLabel = this.add.text(sb.x + sb.w / 2, sb.y + sb.h / 2, NEW_GAME_START_LABEL, {
+      fontSize: '18px',
+      fontFamily: 'monospace',
+      color: '#ffffff',
+    });
+    startLabel.setOrigin(0.5);
+    startLabel.setDepth(22);
+    group.push(startLabel);
 
-    const easyR = DIFFICULTY_EASY_RECT;
-    const normR = DIFFICULTY_NORMAL_RECT;
-    const hardR = DIFFICULTY_HARD_RECT;
+    const hint = this.add.text(geo.startHint.x, geo.startHint.y, NEW_GAME_START_HINT, {
+      fontSize: '11px',
+      fontFamily: 'monospace',
+      color: '#8a8a8a',
+    });
+    hint.setOrigin(0.5);
+    hint.setDepth(21);
+    group.push(hint);
 
-    const easyObjs = makeButton('Easy', 'Slower AI', easyR, 0x226622, 'Easy');
-    const normObjs = makeButton('Normal', 'Balanced', normR, 0x224466, 'Normal');
-    const hardObjs = makeButton('Hard', 'Faster AI', hardR, 0x662222, 'Hard');
-
-    this.difficultySelectGroup = [bg, title, subtitle, ...easyObjs, ...normObjs, ...hardObjs];
     this.recomputeActiveOverlay();
   }
 
-  public hideDifficultySelectOverlay(): void {
-    for (const obj of this.difficultySelectGroup) obj.destroy();
-    this.difficultySelectGroup = [];
-    this.recomputeActiveOverlay();
+  /** One radio-style difficulty row: a drawn radio glyph (a ring, filled when
+   *  selected — drawn rather than a text glyph so it can't depend on font
+   *  coverage), the tinted tier name, and the plain-language description of
+   *  what the tier changes. Clicking anywhere on the row selects it. */
+  private addDifficultyRow(tier: Difficulty, rect: BootOverlayRect): void {
+    const group = this.difficultySelectGroup;
+    const selected = tier === this.selectedDifficulty;
+    const inner = difficultyRowInner(rect);
+
+    const rowBg = this.add.rectangle(
+      rect.x + rect.w / 2,
+      rect.y + rect.h / 2,
+      rect.w,
+      rect.h,
+      selected ? 0x2b3f55 : 0x1c1c1c,
+      1,
+    );
+    rowBg.setStrokeStyle(2, selected ? 0xe8e8e8 : 0x3a3a3a);
+    rowBg.setInteractive();
+    rowBg.setDepth(21);
+    rowBg.on('pointerdown', () => this.selectDifficulty(tier));
+    group.push(rowBg);
+
+    const ring = this.add.circle(inner.radio.x, inner.radio.y, DIFFICULTY_ROW_RADIO_R);
+    ring.setStrokeStyle(2, selected ? 0xffffff : 0x777777);
+    ring.setDepth(22);
+    group.push(ring);
+    if (selected) {
+      const dot = this.add.circle(
+        inner.radio.x,
+        inner.radio.y,
+        DIFFICULTY_ROW_RADIO_R - 3,
+        0xffffff,
+        1,
+      );
+      dot.setDepth(22);
+      group.push(dot);
+    }
+
+    const name = this.add.text(inner.name.x, inner.name.y, tier, {
+      fontSize: '16px',
+      fontFamily: 'monospace',
+      color: DIFFICULTY_NAME_COLORS[tier],
+    });
+    name.setOrigin(0, 0.5);
+    name.setDepth(22);
+    group.push(name);
+
+    const desc = this.add.text(inner.desc.x, inner.desc.y, difficultyDescription(tier), {
+      fontSize: '12px',
+      fontFamily: 'monospace',
+      color: selected ? '#e6e6e6' : '#a8a8a8',
+      wordWrap: { width: inner.desc.w },
+    });
+    desc.setOrigin(0, 0.5);
+    desc.setDepth(22);
+    group.push(desc);
   }
 
   // ---------------------------------------------------------------------------
@@ -2511,7 +2664,7 @@ export class UIScene extends Phaser.Scene {
 
     // bootScreen discriminates the two overlays that share activeOverlay
     // 'save-prompt' (a real Continue/New Game SavePrompt vs the fresh-boot
-    // Choose Difficulty overlay) so Playwright can verify the "no SavePrompt on
+    // new-game screen) so Playwright can verify the "no SavePrompt on
     // fresh boot" contract. 'none' once neither boot overlay is on screen.
     if (this.savePromptGroup.length > 0) setBootScreen('save-prompt');
     else if (this.difficultySelectGroup.length > 0) setBootScreen('difficulty-select');

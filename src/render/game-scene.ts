@@ -105,7 +105,7 @@ import {
   restampUndergroundTiles,
 } from './draw-underground.js';
 import { drawPheromoneOverlay } from './draw-pheromone.js';
-import { publishSpeedMultiplier } from './ui-scene.js';
+import { publishSpeedMultiplier, type DifficultySelectCallbacks } from './ui-scene.js';
 import { AntFacingCache } from './ant-facing-cache.js';
 import {
   ANT_TEXTURE_QUEEN,
@@ -249,10 +249,9 @@ interface UIScenePhase9 {
     onRetry(): void;
   }): void;
   hideSurveyOverlay(): void;
-  // S5 — difficulty select overlay. Shown before every new game.
-  showDifficultySelectOverlay(callbacks: {
-    onSelect: (d: 'Easy' | 'Normal' | 'Hard') => void;
-  }): void;
+  // S5 / #304 — the new-game screen. Shown before every new game; only its
+  // Start button (or Enter) fires onStart — picking a difficulty row does not.
+  showDifficultySelectOverlay(callbacks: DifficultySelectCallbacks): void;
   hideDifficultySelectOverlay(): void;
   // S6 — first-occurrence caption overlay (light onboarding). Optional captionKey
   // (Stage 3b #3) lets a dropped one-shot caption un-mark its trigger so it re-fires.
@@ -301,6 +300,11 @@ declare global {
        *  (touch-smoke.spec.ts): reads viewState, mutates nothing, crosses no
        *  sim/render boundary. Dev-build only. */
       getActiveZoom(): number;
+      /** #304 — the difficulty tier the RUNNING round was created with (reads
+       *  world.difficulty; undefined before the first boot). Lets the new-game
+       *  screen spec prove Start booted the selected tier, not just that the
+       *  selection moved. Read-only sim access, dev-build only. */
+      getRoundDifficulty(): string | undefined;
     };
   }
 }
@@ -532,6 +536,8 @@ export class GameScene extends Phaser.Scene {
     if (!import.meta.env.DEV || typeof window === 'undefined') return;
     window.__phase9_test = {
       getDrawOrder: (): string[] => [...this.drawOrder],
+      getRoundDifficulty: (): string | undefined =>
+        this.world === undefined ? undefined : this.world.difficulty,
       getActiveZoom: (): number =>
         (this.viewState.activeView === 'surface'
           ? this.viewState.surfaceCamera
@@ -1411,7 +1417,9 @@ export class GameScene extends Phaser.Scene {
     this.gamePhase = GamePhase.SavePrompt;
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     uiScene.showDifficultySelectOverlay({
-      onSelect: (d) => {
+      initialDifficulty: loadSettings().difficulty,
+      onStart: (d) => {
+        this.rememberDifficulty(d);
         this.bootFresh(d);
         if (preserveFutureSave) {
           // Set after bootFresh — resetSessionState clears the flag.
@@ -1419,6 +1427,17 @@ export class GameScene extends Phaser.Scene {
         }
       },
     });
+  }
+
+  /** #304 — persist the tier the player just started on, so the new-game
+   *  screen comes back with that row selected next time. Read-modify-write of
+   *  the settings blob (the pheromone toggle's shape); best-effort in degraded
+   *  storage — saveSettings swallows quota / private-mode errors, and the
+   *  screen then simply reopens on the default. */
+  private rememberDifficulty(d: 'Easy' | 'Normal' | 'Hard'): void {
+    const persisted = loadSettings();
+    persisted.difficulty = d;
+    saveSettings(persisted);
   }
 
   private async bootFromSave(): Promise<void> {
@@ -2003,11 +2022,13 @@ export class GameScene extends Phaser.Scene {
     this.currentCause = null;
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     uiScene.hideGameOverOverlay();
-    // S5: show difficulty selector before creating the new world.
+    // S5 / #304: show the new-game screen before creating the new world.
     // bootFresh is invoked inside the callback so wasSuspended is captured.
     this.gamePhase = GamePhase.SavePrompt; // prevent update() from ticking the old world during overlay
     uiScene.showDifficultySelectOverlay({
-      onSelect: (d) => {
+      initialDifficulty: loadSettings().difficulty,
+      onStart: (d) => {
+        this.rememberDifficulty(d);
         this.bootFresh(d);
         if (wasSuspended) {
           this.autosaveSuspended = true;
