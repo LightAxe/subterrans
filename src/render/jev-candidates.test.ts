@@ -12,7 +12,7 @@ import { ChamberType } from '../sim/enums.js';
 import { UndergroundTileState, ugGet } from '../sim/terrain.js';
 import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
 import { isSurfaceTileInComponent } from '../sim/surface-features.js';
-import { runAIController, resetAIControllerCache } from './ai-controller.js';
+import { runAIController } from './ai-controller.js';
 import { JevCommandLedger } from './jev-commands.js';
 import { createJevOpeningState, isHandoffComplete, runJevOpeningTick } from './jev-opening.js';
 import {
@@ -37,7 +37,6 @@ const SEED = 1;
 
 /** Build a world past the opening handoff for the player seat (rule-based enemy running). */
 function buildHandoffWorld(maxTicks = 8000): WorldState {
-  resetAIControllerCache();
   const world = createScenario(SEED, 'Normal');
   const ledger = new JevCommandLedger();
   const st = createJevOpeningState();
