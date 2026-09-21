@@ -18,7 +18,9 @@
 // The new-game screen (#304) below follows the current discipline instead: every
 // canvas-RELATIVE value (the column's horizontal centering, the stack's vertical
 // centering) derives from `layout.w` / `layout.h`; canvas-INDEPENDENT sizes (row
-// heights, gaps, the button size) stay plain constants.
+// heights, gaps, the button size) stay plain constants. The opponent section at
+// the bottom of this file (Jev opponent beta, #304 items 3–4) is laid out INSIDE
+// the slot the stack hands back, so it inherits that discipline for free.
 
 import type { LayoutContext } from './layout.js';
 import type { WorldState } from '../sim/types.js';
@@ -154,18 +156,26 @@ export function newGameColumnW(layout: LayoutContext): number {
   return Math.max(0, Math.min(NEW_GAME_COLUMN_MAX_W, layout.w - 2 * NEW_GAME_COLUMN_MIN_INSET));
 }
 
-/** Inner anchors of a difficulty row, derived purely from its rect. */
-export function difficultyRowInner(row: BootOverlayRect): DifficultyRowInner {
+/** Inner anchors of a radio-style row (radio glyph, name, description column),
+ *  derived purely from its rect; `descX` is where the description column starts,
+ *  measured from the row's left edge. Shared by the difficulty rows and the
+ *  opponent rows, which differ only in that offset and in their height. */
+function radioRowInner(row: BootOverlayRect, descX: number): DifficultyRowInner {
   const midY = row.y + row.h / 2;
   return {
     radio: { x: row.x + DIFFICULTY_ROW_RADIO_X, y: midY },
     name: { x: row.x + DIFFICULTY_ROW_NAME_X, y: midY },
     desc: {
-      x: row.x + DIFFICULTY_ROW_DESC_X,
+      x: row.x + descX,
       y: midY,
-      w: Math.max(0, row.w - DIFFICULTY_ROW_DESC_X - DIFFICULTY_ROW_PAD_RIGHT),
+      w: Math.max(0, row.w - descX - DIFFICULTY_ROW_PAD_RIGHT),
     },
   };
+}
+
+/** Inner anchors of a difficulty row, derived purely from its rect. */
+export function difficultyRowInner(row: BootOverlayRect): DifficultyRowInner {
+  return radioRowInner(row, DIFFICULTY_ROW_DESC_X);
 }
 
 /** Height of the difficulty section (caption + rows). */
@@ -242,4 +252,186 @@ export function newGameScreenLayout(
     startButton: { x: centerX - startW / 2, y: y.start, w: startW, h: NEW_GAME_START_H },
     startHint: { x: centerX, y: y.start + NEW_GAME_START_H + NEW_GAME_START_HINT_H / 2 },
   };
+}
+
+// ---------------------------------------------------------------------------
+// #304 items 3–4 (Jev opponent beta) — the opponent section
+//
+// Fills the `opponent` slot of the stack above on a build whose Jev proxy
+// endpoint is configured. Top to bottom:
+//
+//   caption   "Opponent" (the Difficulty caption's twin)
+//   rows      two radio-style rows — "Standard AI" / "Jev (beta)" — each with a
+//             ONE-line description (single line by design; the rows are shorter
+//             than the two-line difficulty rows)
+//   jev       ONLY while the Jev row is selected: a caption line ("Custom
+//             instructions for Jev, your opponent", with the n/300 counter
+//             right after it), the standing-orders preset buttons spanning the
+//             column, and the free-text rect a DOM <textarea> is positioned over.
+//
+// The section's height therefore depends on the picker's state. A caller asks
+// `opponentSectionH` for it, passes that as `opponentSectionH` to
+// newGameScreenLayout (the stack re-centres around the taller section), and
+// then lays the section out inside the `opponentSlot` that comes back with
+// `opponentSectionLayout` — or uses `newGameScreenWithOpponent`, which does
+// both. A build with NO endpoint has no section at all (height 0, layout
+// null): the screen is then exactly main's, pixel for pixel.
+//
+// Height budget: main's stack is 366 px tall. Keeping NEW_GAME_STACK_MIN_TOP
+// clear at BOTH ends of the shipping 592 px canvas leaves
+// 592 − 2·8 − 366 − NEW_GAME_SECTION_GAP = 190 px for the fully expanded
+// section, and the constants below sum to exactly that (a test pins it). The
+// textarea is the compromise: 46 px shows two lines of a preset's three, and
+// the box scrolls — a taller box would push the stack off the canvas.
+// ---------------------------------------------------------------------------
+
+/** The opponent vocabulary as the screen offers it (OpponentConfig['kind']
+ *  in render/opponent-config.ts; re-declared here so this module stays free of
+ *  the orders/config imports and Phaser-free consumers need only this file). */
+export type OpponentKind = 'rules' | 'jev';
+
+/** Row order on the screen, top to bottom. */
+export const OPPONENT_KINDS: readonly OpponentKind[] = ['rules', 'jev'] as const;
+
+/** Opponent rows: one line of 14 px name + 12 px description, so shorter than
+ *  the two-line difficulty rows. The radio glyph and the name share the
+ *  difficulty rows' offsets; the description column starts further right
+ *  because "Standard AI" is wider than any tier name. */
+export const OPPONENT_ROW_H = 30;
+export const OPPONENT_ROW_GAP = 6;
+export const OPPONENT_ROW_DESC_X = 146;
+
+/** Jev options (drawn only while the Jev row is selected), measured down from
+ *  the last opponent row: a gap, the caption line, the preset row, a gap, the
+ *  free-text rect. Presets divide the column evenly with JEV_PRESET_GAP between
+ *  them, so adding a preset re-divides the same span instead of overflowing. */
+export const JEV_OPTIONS_GAP = 8;
+export const JEV_OPTIONS_CAPTION_H = 18;
+/** Gap between the caption's rendered text and the n/300 counter on the same
+ *  line. The counter follows the caption (a render-time measure of the drawn
+ *  text) rather than sitting at the column's right edge, where it would land
+ *  on the HUD's view-toggle button showing through the translucent scrim. */
+export const JEV_COUNTER_GAP = 12;
+export const JEV_PRESET_H = 24;
+export const JEV_PRESET_GAP = 8;
+export const JEV_PRESET_ROW_GAP = 6;
+export const JEV_TEXTAREA_H = 46;
+
+/** What decides the section's shape. */
+export interface OpponentSectionOptions {
+  /** False on a build with no Jev proxy endpoint: no section at all. */
+  jevAvailable: boolean;
+  /** True while the Jev row is selected: the Jev options are laid out too. */
+  jevSelected: boolean;
+  /** `JEV_ORDERS_PRESETS.length`, passed in so this module stays free of the
+   *  orders vocabulary (and so the row re-divides if a preset is ever added). */
+  presetCount: number;
+}
+
+/** The Jev options block (present only while the Jev row is selected). */
+export interface JevOptionsLayout {
+  /** "Custom instructions for Jev, your opponent". Text origin (0, 0). The
+   *  n/300 counter follows it on the same line, JEV_COUNTER_GAP after the
+   *  drawn caption's width (measured at render time). */
+  caption: BootOverlayPoint;
+  /** Preset buttons, index-aligned with JEV_ORDERS_PRESETS, spanning the column. */
+  presetButtons: BootOverlayRect[];
+  /** Free-text rect. A DOM <textarea> is positioned over it at runtime. */
+  textarea: BootOverlayRect;
+}
+
+/** Every rect / anchor the opponent section draws, inside its slot. */
+export interface OpponentSectionLayout {
+  /** "Opponent" caption. Origin (0, 0), at the column's left edge. */
+  caption: BootOverlayPoint;
+  /** The two radio-style rows, keyed by kind. Each spans the column. */
+  rows: Record<OpponentKind, BootOverlayRect>;
+  /** The Jev options, or null while the Standard AI row is selected. */
+  jev: JevOptionsLayout | null;
+}
+
+function opponentRowsH(): number {
+  const n = OPPONENT_KINDS.length;
+  return n * OPPONENT_ROW_H + (n - 1) * OPPONENT_ROW_GAP;
+}
+
+function jevOptionsH(): number {
+  return (
+    JEV_OPTIONS_GAP + JEV_OPTIONS_CAPTION_H + JEV_PRESET_H + JEV_PRESET_ROW_GAP + JEV_TEXTAREA_H
+  );
+}
+
+/** Height the opponent section needs for `opts` — what to pass as
+ *  `opponentSectionH` to newGameScreenLayout. 0 when Jev is unavailable, so the
+ *  stack omits the slot entirely (no phantom gap). */
+export function opponentSectionH(opts: OpponentSectionOptions): number {
+  if (!opts.jevAvailable) return 0;
+  return NEW_GAME_CAPTION_H + opponentRowsH() + (opts.jevSelected ? jevOptionsH() : 0);
+}
+
+/** Inner anchors of an opponent row, derived purely from its rect. */
+export function opponentRowInner(row: BootOverlayRect): DifficultyRowInner {
+  return radioRowInner(row, OPPONENT_ROW_DESC_X);
+}
+
+/** Lay the opponent section out inside `slot` (the `opponentSlot` of a
+ *  newGameScreenLayout computed with `opponentSectionH(opts)`). Null when Jev
+ *  is unavailable — there is no section to draw. Every value is relative to the
+ *  slot, so the section moves with the stack and never learns the canvas size. */
+export function opponentSectionLayout(
+  slot: BootOverlayRect,
+  opts: OpponentSectionOptions,
+): OpponentSectionLayout | null {
+  if (!opts.jevAvailable) return null;
+  const rowsTop = slot.y + NEW_GAME_CAPTION_H;
+  const rows = {} as Record<OpponentKind, BootOverlayRect>;
+  OPPONENT_KINDS.forEach((kind, i) => {
+    rows[kind] = {
+      x: slot.x,
+      y: rowsTop + i * (OPPONENT_ROW_H + OPPONENT_ROW_GAP),
+      w: slot.w,
+      h: OPPONENT_ROW_H,
+    };
+  });
+
+  let jev: JevOptionsLayout | null = null;
+  if (opts.jevSelected) {
+    const captionY = rowsTop + opponentRowsH() + JEV_OPTIONS_GAP;
+    const presetsY = captionY + JEV_OPTIONS_CAPTION_H;
+    const n = Math.max(0, opts.presetCount);
+    const presetW = n > 0 ? Math.max(0, (slot.w - (n - 1) * JEV_PRESET_GAP) / n) : 0;
+    const presetButtons: BootOverlayRect[] = [];
+    for (let i = 0; i < n; i++) {
+      presetButtons.push({
+        x: slot.x + i * (presetW + JEV_PRESET_GAP),
+        y: presetsY,
+        w: presetW,
+        h: JEV_PRESET_H,
+      });
+    }
+    jev = {
+      caption: { x: slot.x, y: captionY },
+      presetButtons,
+      textarea: {
+        x: slot.x,
+        y: presetsY + JEV_PRESET_H + JEV_PRESET_ROW_GAP,
+        w: slot.w,
+        h: JEV_TEXTAREA_H,
+      },
+    };
+  }
+
+  return { caption: { x: slot.x, y: slot.y }, rows, jev };
+}
+
+/** The whole screen for a Jev-capable build in one call: the stack sized for
+ *  the section `opts` describes, plus the section laid out in its slot (null
+ *  when Jev is unavailable — the stack is then main's, unchanged). The single
+ *  entry point ui-scene.ts draws from and tests/helpers/geometry.ts clicks by. */
+export function newGameScreenWithOpponent(
+  layout: LayoutContext,
+  opts: OpponentSectionOptions,
+): { screen: NewGameScreenLayout; opponent: OpponentSectionLayout | null } {
+  const screen = newGameScreenLayout(layout, { opponentSectionH: opponentSectionH(opts) });
+  return { screen, opponent: opponentSectionLayout(screen.opponentSlot, opts) };
 }
