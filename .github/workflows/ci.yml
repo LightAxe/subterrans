@@ -3,10 +3,11 @@ name: CI
 # Automated gate for the game code. Runs on every PR targeting main and on
 # pushes to main.
 #
-#   verify — `npm run verify` (prettier --check src/ eslint-rules/, eslint,
-#            tsc --noEmit, the type-aware lint:types layer, the sim-boundary,
-#            asset-path, e2e-geometry, and ant-cycle grep/parse guards, and the
-#            full Vitest unit/integration suite), then compiles both production
+#   verify — `npm run verify` (prettier --check src/ eslint-rules/ scripts/,
+#            eslint, tsc --noEmit + tsc -p scripts/tsconfig.json, the type-aware
+#            lint:types layer, the sim-boundary, asset-path, e2e-geometry,
+#            layout-discipline, and ant-cycle grep/parse guards, and the full
+#            Vitest unit/integration suite), then compiles both production
 #            targets (`npm run build` + `build:lib`) as a smoke gate. The
 #            `verify` command itself is what contributors run locally before
 #            pushing.

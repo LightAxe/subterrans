@@ -1,7 +1,7 @@
 // scripts/analyze-snapshot.ts
 // Post-mortem analyzer for downloaded debug snapshots.
 //
-// Run: node --experimental-transform-types scripts/analyze-snapshot.ts <snapshot.json>
+// Run: node --experimental-strip-types scripts/analyze-snapshot.ts <snapshot.json>
 //
 // What it does, in order:
 //   1. Loads the JSON debug snapshot envelope.
@@ -20,15 +20,17 @@
 //      oscillating ants (≤3 unique tiles across the whole window) using the
 //      motion history collected during replay.
 //
-// --transform-types (not --strip-types) because src/platform/save.ts uses
-// constructor parameter properties (`constructor(public expected: number)`)
-// which strip-types rejects. The .js→.ts resolve hook below mirrors
-// scripts/run-sim.ts so the loader can find sim sources during dynamic import.
+// The .js→.ts resolve hook below mirrors scripts/run-sim.ts so the loader can
+// find sim sources during dynamic import. (--strip-types is enough: the
+// constructor parameter properties that once forced --transform-types were
+// removed in #229.)
 
 import { register } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+// Type-only: erased by type stripping, so it is not hoisted above register().
+import type { SimCommand } from '../src/sim/commands.js';
 
 register(
   'data:text/javascript,' +
@@ -50,9 +52,8 @@ const { Zone, UndergroundTileState, ugGet } = await import('../src/sim/terrain.j
 const { FP_SHIFT } = await import('../src/sim/fixed.js');
 const { AntTask, ForagingSubState } = await import('../src/sim/enums.js');
 const { serializeWorldState, deserializeWorldState } = await import('../src/platform/save.js');
-const { indexByDrainTick, summarizeDrainTickSource } = await import(
-  '../src/platform/input-log-replay.js'
-);
+const { indexByDrainTick, summarizeDrainTickSource } =
+  await import('../src/platform/input-log-replay.js');
 
 const ANT_TASK_NAME: Record<number, string> = {
   [AntTask.Idle]: 'Idle',
@@ -89,7 +90,7 @@ const OSCILLATION_MAX_UNIQUE = 3;
 const argPath = process.argv[2];
 if (!argPath) {
   console.error(
-    'Usage: node --experimental-transform-types scripts/analyze-snapshot.ts <snapshot.json>',
+    'Usage: node --experimental-strip-types scripts/analyze-snapshot.ts <snapshot.json>',
   );
   process.exit(2);
 }
@@ -119,7 +120,7 @@ const debug = parsed as {
   version: number;
   seed: number;
   tick: number;
-  inputLog: Parameters<typeof indexByDrainTick>[0];
+  inputLog: readonly SimCommand[];
   snapshot: Parameters<typeof deserializeWorldState>[0];
 };
 // Number.isInteger rejects NaN, ±Infinity, and fractional values — important
@@ -130,10 +131,15 @@ if (!Number.isInteger(debug.tick) || debug.tick < 0)
   bail(`"tick" must be a non-negative integer (got ${String(debug.tick)})`);
 if (!Array.isArray(debug.inputLog)) bail('missing or non-array "inputLog"');
 if (!debug.snapshot || typeof debug.snapshot !== 'object') bail('missing "snapshot"');
+// Array.isArray narrows `debug.inputLog` (a readonly SimCommand[]) to `any[]` —
+// a known TS limitation (isArray's signature is `arg is any[]`). Re-assert the
+// real element type once, here, instead of letting `any` leak into every
+// downstream `debug.inputLog` use below.
+const inputLog = debug.inputLog as readonly SimCommand[];
 
 console.log(`Snapshot: ${snapPath}`);
 console.log(
-  `  seed=${debug.seed}  tick=${debug.tick}  inputLog=${debug.inputLog.length} cmds  version=${debug.version}`,
+  `  seed=${debug.seed}  tick=${debug.tick}  inputLog=${inputLog.length} cmds  version=${debug.version}`,
 );
 console.log('');
 
@@ -167,17 +173,17 @@ if (
 // pushed for itself they differ by one, and applying it early forks the replay.
 // indexByDrainTick prefers the recorded `drainTick` and falls back to the
 // origin-derived rule for snapshots taken before that field existed.
-for (let i = 0; i < debug.inputLog.length; i++) {
-  const cmd = debug.inputLog[i];
+for (let i = 0; i < inputLog.length; i++) {
+  const cmd: SimCommand | undefined = inputLog[i];
   if (!cmd || typeof cmd !== 'object') bail(`inputLog[${i}] is not an object`);
   const t = (cmd as { issuedAtTick: unknown }).issuedAtTick;
   if (typeof t !== 'number' || !Number.isInteger(t) || t < 0) {
     bail(`inputLog[${i}].issuedAtTick is missing or invalid (got ${String(t)})`);
   }
 }
-const byTick = indexByDrainTick(debug.inputLog);
-const drainSource = summarizeDrainTickSource(debug.inputLog);
-if (debug.inputLog.length > 0) {
+const byTick = indexByDrainTick(inputLog);
+const drainSource = summarizeDrainTickSource(inputLog);
+if (inputLog.length > 0) {
   console.log(
     `  drain batches: ${drainSource.recorded} recorded, ` +
       `${drainSource.derivedSelfEmit} derived from origin='sim' (+1 tick), ` +
@@ -245,7 +251,7 @@ const replayElapsedMs = Date.now() - replayStart;
 // Exclude commandQueue from the byte-equality check to avoid false-positive
 // SCEN-06 failures from that capture timing.
 function stripCommandQueue(s: typeof debug.snapshot): unknown {
-  const { commandQueue: _cq, ...rest } = s as Record<string, unknown>;
+  const { commandQueue: _cq, ...rest } = s as unknown as Record<string, unknown>;
   return rest;
 }
 const replaySerialized = serializeWorldState(replay);

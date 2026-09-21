@@ -27,5 +27,5 @@ register(
 );
 
 // Dynamic import runs after hook registration — the .js paths inside run-canned resolve correctly.
-const { runCannedHash, CE_SEED, CE_TICKS } = await import('../tests/cross-engine/run-canned.ts');
+const { runCannedHash, CE_SEED, CE_TICKS } = await import('../tests/cross-engine/run-canned.js');
 console.log(`${CE_SEED} ${CE_TICKS} ${runCannedHash(CE_SEED, CE_TICKS)}`);
