@@ -1,7 +1,7 @@
 // scripts/analyze-snapshot.ts
 // Post-mortem analyzer for downloaded debug snapshots.
 //
-// Run: node --experimental-transform-types scripts/analyze-snapshot.ts <snapshot.json>
+// Run: node --experimental-strip-types scripts/analyze-snapshot.ts <snapshot.json>
 //
 // What it does, in order:
 //   1. Loads the JSON debug snapshot envelope.
@@ -20,15 +20,16 @@
 //      oscillating ants (≤3 unique tiles across the whole window) using the
 //      motion history collected during replay.
 //
-// --transform-types (not --strip-types) because src/platform/save.ts uses
-// constructor parameter properties (`constructor(public expected: number)`)
-// which strip-types rejects. The .js→.ts resolve hook below mirrors
-// scripts/run-sim.ts so the loader can find sim sources during dynamic import.
+// The .js→.ts resolve hook below mirrors scripts/run-sim.ts so the loader can
+// find sim sources during dynamic import. (--strip-types is enough: the
+// constructor parameter properties that once forced --transform-types were
+// removed in #229.)
 
 import { register } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+// Type-only: erased by type stripping, so it is not hoisted above register().
 import type { SimCommand } from '../src/sim/commands.js';
 
 register(
@@ -89,7 +90,7 @@ const OSCILLATION_MAX_UNIQUE = 3;
 const argPath = process.argv[2];
 if (!argPath) {
   console.error(
-    'Usage: node --experimental-transform-types scripts/analyze-snapshot.ts <snapshot.json>',
+    'Usage: node --experimental-strip-types scripts/analyze-snapshot.ts <snapshot.json>',
   );
   process.exit(2);
 }

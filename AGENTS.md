@@ -154,7 +154,7 @@ npm run format         # Prettier-format the tree (format:check is the verify ga
 npm run lint           # Fast ESLint (sim-safety + base rules)
 npm run lint:types     # Type-aware ESLint (recommended-type-checked) — slower
 npm run test           # Run Vitest (fast local loop)
-npm run verify         # Full gate: format:check + lint + typecheck + lint:types + sim-boundary + asset-path + e2e-geometry + ant-cycle guards + tests
+npm run verify         # Full gate: format:check + lint + typecheck + typecheck:scripts + lint:types + sim-boundary + asset-path + e2e-geometry + layout-discipline + ant-cycle guards + tests
 npm run test:coverage  # Run Vitest with v8 coverage + 80% gate (run before pushing)
 npm run test:e2e       # Run Playwright
 ```
