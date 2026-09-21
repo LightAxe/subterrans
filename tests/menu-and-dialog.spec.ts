@@ -16,7 +16,6 @@ import { test, expect, type Page } from '@playwright/test';
 // save-load-dialog-layout.ts / ui-scene.ts — a layout change updates the helper,
 // specs never touch pixels. (Phaser-free imports; the Node runner stays happy.)
 import {
-  DIFFICULTY_NORMAL_RECT,
   SAVE_LOAD_ROW_RECT,
   SETTINGS_ROW_RECT,
   PHEROMONE_TOGGLE_RECT,
@@ -26,26 +25,22 @@ import {
   SAVE_PROMPT_CONTINUE_RECT,
   centerOf,
 } from './helpers/geometry.js';
-
-async function clickCanvasRect(
-  page: Page,
-  rect: { x: number; y: number; w: number; h: number },
-): Promise<void> {
-  const box = await page.locator('canvas').first().boundingBox();
-  if (!box) throw new Error('canvas has no bounding box');
-  await page.mouse.click(box.x + rect.x + rect.w / 2, box.y + rect.y + rect.h / 2);
-}
+// #304 — the new-game screen is two steps (pick a difficulty row, press Start);
+// the shared helper drives it so every spec boots the same way, and the
+// observability reads (activeOverlay / bootScreen) come from the same place.
+import { activeOverlay, bootScreen, clickCanvasRect, settleToPlaying } from './helpers/boot.js';
 
 // Boot to a clean Playing state (activeOverlay === 'none').
 //
 // Why this isn't just `removeItem + reload + wait('none')` (the original helper,
-// the root cause of issue #186): S5 added a "Choose Difficulty" overlay shown
-// before every new game. It reuses the SavePrompt phase, so it reports
-// `activeOverlay === 'save-prompt'` the whole time and only clears to 'none'
-// once a difficulty is chosen. The old helper waited for 'none' without ever
-// picking one, so it timed out. (No autosave race is involved — boot screens
-// don't run the game loop, so the cleared save stays cleared across the reload,
-// and no Continue/New Game SavePrompt appears.) Fix: select Normal, then settle.
+// the root cause of issue #186): S5 added a "Choose Difficulty" overlay — now the
+// #304 new-game screen — shown before every new game. It reuses the SavePrompt
+// phase, so it reports `activeOverlay === 'save-prompt'` the whole time and only
+// clears to 'none' once a round is started. The old helper waited for 'none'
+// without ever starting one, so it timed out. (No autosave race is involved —
+// boot screens don't run the game loop, so the cleared save stays cleared across
+// the reload, and no Continue/New Game SavePrompt appears.) Fix: settleToPlaying
+// (select Normal, press Start).
 async function bootGame(page: Page): Promise<void> {
   await page.goto('/');
   await page.locator('canvas').first().waitFor({ state: 'attached' });
@@ -53,51 +48,12 @@ async function bootGame(page: Page): Promise<void> {
   await page.waitForFunction(
     () => typeof (window as { __phase9_ui?: unknown }).__phase9_ui !== 'undefined',
   );
-  // Clear any prior save so the reload boots a fresh game (Choose Difficulty),
-  // not a Continue/New Game SavePrompt.
+  // Clear any prior save so the reload boots a fresh game (the new-game
+  // screen), not a Continue/New Game SavePrompt.
   await page.evaluate(() => localStorage.removeItem('subterrans:save:v3'));
   await page.reload();
   await page.locator('canvas').first().waitFor({ state: 'attached' });
   await settleToPlaying(page);
-}
-
-// Drive any post-reload boot to Playing (activeOverlay === 'none'). The S5
-// "Choose Difficulty" overlay reports 'save-prompt' until a difficulty is chosen,
-// so poll-click Normal until we reach Playing. A click that lands before the
-// buttons are interactive simply retries; the loop stops the moment we hit 'none'
-// (and never over-clicks into the game, since it exits on 'none'). Use this after
-// any reload that expects a fresh Playing state. Requires no real Continue/New
-// Game SavePrompt to be up (clear the save first, or dismiss the prompt before
-// calling) — Normal's rect overlaps the SavePrompt's Continue button.
-async function settleToPlaying(page: Page): Promise<void> {
-  await expect
-    .poll(
-      async () => {
-        if ((await activeOverlay(page)) === 'none') return 'none';
-        await clickCanvasRect(page, DIFFICULTY_NORMAL_RECT);
-        return activeOverlay(page);
-      },
-      { timeout: 15_000 },
-    )
-    .toBe('none');
-}
-
-async function activeOverlay(page: Page): Promise<string> {
-  return await page.evaluate(() => {
-    const ui = (window as { __phase9_ui?: { activeOverlay: string } }).__phase9_ui;
-    return ui?.activeOverlay ?? '<undefined>';
-  });
-}
-
-// The fresh-boot "Choose Difficulty" overlay and a real Continue/New Game
-// SavePrompt both report activeOverlay 'save-prompt'; __phase9_ui.bootScreen is
-// the discriminator ('difficulty-select' vs 'save-prompt'). Returns '<undefined>'
-// when the hook hasn't published yet so callers can poll for the value they want.
-async function bootScreen(page: Page): Promise<string> {
-  return await page.evaluate(() => {
-    const ui = (window as { __phase9_ui?: { bootScreen?: string } }).__phase9_ui;
-    return ui?.bootScreen ?? '<undefined>';
-  });
 }
 
 // Issue #193 — the live game speed (1/2/4) published on __phase9_ui by GameScene.
@@ -373,8 +329,7 @@ test.describe('Issue #115 — Save/Load dialog reachable from pause menu', () =>
     await clickCanvasRect(page, SAVE_PROMPT_CONTINUE_RECT);
     await page.waitForTimeout(150);
     // (Continue may fall back to bootFresh on the synthetic envelope, which then
-    // shows the Choose Difficulty overlay — settleToPlaying drives either path to
-    // Playing.)
+    // shows the new-game screen — settleToPlaying drives either path to Playing.)
     await settleToPlaying(page);
 
     // Re-populate the save (Continue may have triggered an autosave that
@@ -598,7 +553,7 @@ test.describe('Issue #196 — future-build save survives a fresh boot (Save Now 
   // A save written by a NEWER build (snapshot.simVersion > this build's
   // LATEST_SIM_VERSION) is recoverable: the bytes are intact and a newer build
   // can load them. On THIS (older) build the save is incompatible, so boot routes
-  // to a FRESH game ("Choose Difficulty") rather than a Continue/New Game prompt
+  // to a FRESH game (the new-game screen) rather than a Continue/New Game prompt
   // — but the preserved bytes MUST survive: neither autosave nor "Save Now" may
   // overwrite them, so the player can recover by reloading on the newer build.
   //
@@ -654,7 +609,7 @@ test.describe('Issue #196 — future-build save survives a fresh boot (Save Now 
     });
 
     // 3) Reload. The future-build save is incompatible on this build, so boot
-    //    routes to a FRESH game — "Choose Difficulty", NOT a Continue/New Game
+    //    routes to a FRESH game — the new-game screen, NOT a Continue/New Game
     //    SavePrompt. bootScreen discriminates the two (both report activeOverlay
     //    'save-prompt'); pin 'difficulty-select' so a regression that wrongly
     //    showed a real Continue prompt (and let Continue silently lose the save)
@@ -673,7 +628,7 @@ test.describe('Issue #196 — future-build save survives a fresh boot (Save Now 
       }),
     ).toBe(99999);
 
-    // 4) Pick a difficulty → bootFresh → autosaveSuspended = true (issue #196).
+    // 4) Start a round → bootFresh → autosaveSuspended = true (issue #196).
     await settleToPlaying(page);
 
     // Snapshot the preserved bytes now the fresh game is running. (If autosave
@@ -752,7 +707,7 @@ test.describe('Issue #196 — future-build save survives a fresh boot (Save Now 
     await page.reload();
     await page.locator('canvas').first().waitFor({ state: 'attached' });
     await expect.poll(() => bootScreen(page), { timeout: 10_000 }).toBe('difficulty-select');
-    await settleToPlaying(page); // pick difficulty → autosaveSuspended = true
+    await settleToPlaying(page); // Start a round → autosaveSuspended = true
 
     // Open pause → Save/Load. The future-build save is still in storage and
     // shows as incompatible; Delete is enabled.
