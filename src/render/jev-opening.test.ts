@@ -25,7 +25,7 @@ import { UndergroundTileState, ugGet, ugSet } from '../sim/terrain.js';
 import type { PendingChamber } from '../sim/colony/chamber.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
-import { runAIController, resetAIControllerCache } from './ai-controller.js';
+import { runAIController } from './ai-controller.js';
 import { JevCommandLedger } from './jev-commands.js';
 import {
   JEV_OPENING_RATIO,
@@ -82,7 +82,6 @@ beforeAll(() => {
 
 /** Play the opening for the player seat against a rule-based enemy, recording everything. */
 function runOpening(seed = SEED, maxTicks = MAX_TICKS): OpeningRun {
-  resetAIControllerCache();
   const world = createScenario(seed, 'Normal');
   const ledger = new JevCommandLedger();
   const st = createJevOpeningState();
