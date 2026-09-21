@@ -21,8 +21,11 @@ import {
   outcomeToWire,
   truncateFreeText,
   cancelInFlightUpload,
+  sanitizeSurveyEmail,
   PLAYTRACE_FREE_TEXT_MAX,
+  PLAYTRACE_EMAIL_MAX,
   PLAYTRACE_SCHEMA_VERSION,
+  PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT,
   type PlaytraceSubmissionInput,
 } from './playtrace-upload.js';
 import { GameOutcome } from '../sim/game-over.js';
@@ -76,6 +79,47 @@ describe('truncateFreeText', () => {
   });
 });
 
+// #303 — the whole contract of the optional email is "never block a submission":
+// anything that isn't plausibly an address becomes ABSENT, silently.
+describe('sanitizeSurveyEmail', () => {
+  it('keeps a plausible address, trimmed', () => {
+    expect(sanitizeSurveyEmail('  player@example.com  ')).toBe('player@example.com');
+  });
+
+  it('accepts unusual-but-legal shapes rather than over-validating', () => {
+    // A stricter client-side pattern would silently drop these. Letting one
+    // odd address through costs a bounced follow-up; rejecting a real one
+    // costs the contact entirely.
+    expect(sanitizeSurveyEmail('a@b')).toBe('a@b');
+    expect(sanitizeSurveyEmail("o'brien+tag@sub.domain.co.uk")).toBe(
+      "o'brien+tag@sub.domain.co.uk",
+    );
+  });
+
+  it.each([
+    ['undefined', undefined],
+    ['empty', ''],
+    ['whitespace only', '   '],
+    ['no @', 'player.example.com'],
+    ['two @', 'a@b@c'],
+    ['nothing before @', '@example.com'],
+    ['nothing after @', 'player@'],
+    ['internal space', 'pla yer@example.com'],
+    ['tab', 'player@exa\tmple.com'],
+  ])('drops %s (field omitted, submission unaffected)', (_label, value) => {
+    expect(sanitizeSurveyEmail(value)).toBeUndefined();
+  });
+
+  it('drops an over-long value rather than truncating it to someone else', () => {
+    const local = 'a'.repeat(PLAYTRACE_EMAIL_MAX);
+    expect(sanitizeSurveyEmail(`${local}@example.com`)).toBeUndefined();
+    // Exactly at the cap is fine.
+    const atCap = `${'a'.repeat(PLAYTRACE_EMAIL_MAX - '@example.com'.length)}@example.com`;
+    expect(atCap).toHaveLength(PLAYTRACE_EMAIL_MAX);
+    expect(sanitizeSurveyEmail(atCap)).toBe(atCap);
+  });
+});
+
 describe('buildPlaytraceEnvelope', () => {
   it('produces a wire envelope with the contracted fields', () => {
     const input = makeInput();
@@ -92,6 +136,64 @@ describe('buildPlaytraceEnvelope', () => {
     input.world.simVersion = 42;
     const env = buildPlaytraceEnvelope(input, null);
     expect(env.simVersion).toBe(42);
+  });
+
+  // #294 — balance feedback is uninterpretable without the tier, and the
+  // survey-only path (snapshot === null) is both the common case and the one
+  // where the tier cannot be recovered from the payload afterwards.
+  it('records world.difficulty on a snapshot-bearing submission', () => {
+    const input = makeInput();
+    input.world.difficulty = 'Hard';
+    const snapshot = debugSnapshot.buildDebugSnapshot(input.world, input.seed, input.inputLog);
+    const env = buildPlaytraceEnvelope(input, snapshot);
+    expect(env.snapshot).not.toBeNull();
+    expect(env.difficulty).toBe('Hard');
+  });
+
+  it.each(['Easy', 'Normal', 'Hard'] as const)(
+    'records difficulty=%s on a survey-only submission too',
+    (tier) => {
+      const input = makeInput({ includeSnapshot: false });
+      input.world.difficulty = tier;
+      const env = buildPlaytraceEnvelope(input, null);
+      expect(env.snapshot).toBeNull();
+      expect(env.difficulty).toBe(tier);
+    },
+  );
+
+  it('carries a valid email on the survey object (#303)', () => {
+    const input = makeInput({
+      survey: { rating: 4, freeText: 'x', brokenFlag: false, email: ' Player@Example.com ' },
+    });
+    expect(buildPlaytraceEnvelope(input, null).survey.email).toBe('Player@Example.com');
+  });
+
+  it('omits the email key entirely when it is empty or malformed (#303)', () => {
+    for (const email of [undefined, '', '   ', 'not-an-address']) {
+      const input = makeInput({ survey: { rating: 4, freeText: 'x', brokenFlag: false, email } });
+      const env = buildPlaytraceEnvelope(input, null);
+      // `in` rather than `=== undefined`: the contract is an absent KEY, so the
+      // JSON has no `email` at all, not `"email": null`.
+      expect('email' in env.survey).toBe(false);
+      expect(env.survey.rating).toBe(4);
+    }
+  });
+
+  it('is at schemaVersion 3 — the bump that introduced difficulty (#294)', () => {
+    expect(PLAYTRACE_SCHEMA_VERSION).toBe(3);
+  });
+});
+
+describe('PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT — issue #295', () => {
+  it('is on: replay data ships by default (decided 2026-09-20 after measurement)', () => {
+    // Measurement said size is a non-issue (largest full envelope at round end
+    // across both arms: 25.9 KB gzipped, 0.5% of the 5 MB cap — see
+    // scripts/measure-playtrace-size.ts); the trust/optics question #295 raised
+    // separately was decided by the owner in favour of default-on with the
+    // plain-language label. This assertion exists so turning it back off is a
+    // deliberate edit with a failing test in front of it, not something that
+    // drifts in.
+    expect(PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT).toBe(true);
   });
 });
 
@@ -141,11 +243,34 @@ describe('submitPlaytrace — wire framing', () => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
       expect(headers['Content-Type']).toBe('application/octet-stream');
       expect(headers['Content-Encoding']).toBe('gzip');
-      expect(headers['X-Schema-Version']).toBe('2');
+      expect(headers['X-Schema-Version']).toBe('3');
       // Body should be a Blob of non-zero size — the gzipped envelope.
       const body = init?.body as Blob;
       expect(body).toBeInstanceOf(Blob);
       expect(body.size).toBeGreaterThan(0);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  // #294 — end-to-end proof that the tier survives gzip on the survey-only
+  // path (the path that carries no snapshot to recover it from).
+  it('carries difficulty in the gzipped survey-only body', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ accepted: true }), { status: 202 }));
+    try {
+      const input = makeInput({ includeSnapshot: false });
+      input.world.difficulty = 'Easy';
+      await submitPlaytrace(input);
+      const body = fetchSpy.mock.calls[0]![1]!.body as Blob;
+      const json = await new Response(
+        body.stream().pipeThrough(new DecompressionStream('gzip')),
+      ).json();
+      const envelope = json as { difficulty: string; snapshot: unknown; schemaVersion: number };
+      expect(envelope.difficulty).toBe('Easy');
+      expect(envelope.snapshot).toBeNull();
+      expect(envelope.schemaVersion).toBe(3);
     } finally {
       fetchSpy.mockRestore();
     }

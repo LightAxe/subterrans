@@ -21,6 +21,18 @@ export interface SimCommandBase {
    *  forever (old inputLogs must keep loading) and non-readonly (only pushCommand
    *  writes it, post-construction). */
   origin?: CommandOrigin;
+  /** #296 — the tick on which the platform loop drained this command out of the
+   *  queue, i.e. the tick `tick()` actually received it. Written by
+   *  {@link stampDrainTick}, the drain-side twin of the push-side `origin` stamp
+   *  above: `pushCommand` marks a command on the way INTO the queue,
+   *  `stampDrainTick` marks the batch on the way OUT, and both live here because
+   *  command metadata is only ever written from `src/sim/`. A recorded inputLog
+   *  therefore carries the batch boundaries the sim saw, instead of forcing a
+   *  replay to guess them from `issuedAtTick` (which is one tick early for sim
+   *  self-emits). Pure metadata like `origin`: no handler branches on it, replay
+   *  ignores it, no simVersion bump. ABSENT on logs recorded before this
+   *  existed — see src/platform/input-log-replay.ts for the fallback. */
+  drainTick?: number;
 }
 
 export interface NoOpCommand extends SimCommandBase {
@@ -170,4 +182,34 @@ export function pushCommand(world: WorldState, cmd: SimCommand, origin: CommandO
   // eslint-disable-next-line no-restricted-syntax -- the single sanctioned commandQueue.push chokepoint (#230)
   world.commandQueue.push(cmd);
   return true;
+}
+
+/**
+ * #296 — the drain-side twin of {@link pushCommand}'s `origin` stamp. Records,
+ * on every command in a just-drained batch, the tick the simulation actually
+ * received it on.
+ *
+ * It lives here rather than in the platform loop that calls it because command
+ * METADATA is sim-owned: `pushCommand` is the only sanctioned writer on the way
+ * into the queue, and this is the only sanctioned writer on the way out. A
+ * drained command is still a simulation object — it is aliased from
+ * `prevState.commandQueue`, since `copyWorldState` copies the queue with a
+ * shallow `.slice()` — so `src/platform/` writing to it would be a boundary
+ * violation (AGENTS.md: platform "must not mutate WorldState or any nested
+ * simulation store"). Exposing the operation here keeps the caller honest and
+ * the write inside `src/sim/`.
+ *
+ * Same properties as `origin`, for the same reason: pure metadata, no tick
+ * handler branches on it, it never reaches serialized state (a command sitting
+ * in `commandQueue` has by definition not been drained, so the stamp cannot
+ * appear in a snapshot's queue), replay ignores it, and it needs no
+ * `simVersion` bump.
+ *
+ * The ARRAY is not modified — only each element's `drainTick` field is — so a
+ * `readonly` batch is accepted and the platform loop can hand over the result
+ * of `commandQueue.splice(0)` directly. In-place like the `origin` stamp: no
+ * allocation on a per-tick path.
+ */
+export function stampDrainTick(cmds: readonly SimCommand[], drainTick: number): void {
+  for (const c of cmds) c.drainTick = drainTick;
 }

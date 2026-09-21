@@ -1,7 +1,8 @@
 // Phase 5 scope: fixed 20Hz accumulator (MS_PER_TICK = 50 constant).
 // Phase 8 wires onBeforeTick = copyWorldState; getMsPerTick/getIsPaused remain Phase 9 seams.
 // Phase 9 scope: getMsPerTick/SpeedLevel + getIsPaused/pause wired at render/input entry points.
-// Platform loop owns the only non-sim write path (world.commandQueue drain).
+// Platform loop owns the only non-sim write path (world.commandQueue drain) and,
+// since #296, stamps each drained command with the tick it was drained on.
 // FNDN-07 enforcement: ESLint nonSimMutationGuard + scripts/check-sim-boundary.sh (Plan 01).
 // The Readonly<WorldState> Pattern 1b seam is Phase 8 scope (render/input entry points).
 //
@@ -12,7 +13,7 @@
 //   Spiral-of-death clamp = getMsPerTick() × MAX_CATCHUP_TICKS (dynamic, honors variable speed).
 import type { WorldState } from '../sim/types.js';
 import { GameOutcome } from '../sim/game-over.js';
-import type { SimCommand } from '../sim/commands.js';
+import { stampDrainTick, type SimCommand } from '../sim/commands.js';
 
 export const MS_PER_TICK = 50;
 export const MAX_CATCHUP_TICKS = 5;
@@ -72,6 +73,15 @@ export function createGameLoop(tickFn: TickFn, world: WorldState, opts?: GameLoo
       while (accumulatorMs >= msPerTick) {
         onBeforeTick?.(world); // Phase 8: copyWorldState seam
         const cmds = world.commandQueue.splice(0);
+        // #296: record the batch boundary on the commands themselves, before
+        // anything observes them. This is the only drain site, so a command that
+        // reaches inputLog (or a save file, or a playtrace snapshot) always
+        // carries the tick the sim received it on — which is one LATER than
+        // issuedAtTick for sim self-emits. The write itself belongs to the sim
+        // layer (command metadata is sim-owned, and a drained command is still
+        // aliased from prevState.commandQueue), so it goes through the
+        // sanctioned sim-side helper rather than being done here.
+        stampDrainTick(cmds, world.tick);
         onAfterDrain?.(cmds); // Phase 9: inputLog seam
         const outcome = tickFn(world, cmds);
         accumulatorMs -= msPerTick;

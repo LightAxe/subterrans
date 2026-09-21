@@ -11,7 +11,7 @@
 //     world.simVersion (read by the caller, not us).
 //   - One outbound POST per submission. Body is gzipped JSON; framing matches
 //     the contract verbatim (Content-Type: application/octet-stream,
-//     Content-Encoding: gzip, X-Schema-Version: 1).
+//     Content-Encoding: gzip, X-Schema-Version: PLAYTRACE_SCHEMA_VERSION).
 //   - Client cap: gzipped body ≤ 5 MB. Downgrade fallback rebuilds the
 //     snapshot with antTrace omitted, then with inputLog omitted, then
 //     submits survey-only (snapshot: null).
@@ -41,8 +41,10 @@ declare const __APP_VERSION__: string;
 
 /** Wire-level schema version. Bumped on any breaking change to the envelope
  *  shape. Mirrored in the `X-Schema-Version` header so the server can reject
- *  unknown versions without paying the cost of decompressing the body. */
-export const PLAYTRACE_SCHEMA_VERSION = 2 as const;
+ *  unknown versions without paying the cost of decompressing the body.
+ *
+ *  v3 (#294): adds the always-present `difficulty` tier. */
+export const PLAYTRACE_SCHEMA_VERSION = 3 as const;
 
 /** Hard ceiling on the gzipped body. Defense-in-depth — the server also
  *  enforces this and returns 413. Picked to fit comfortably inside the
@@ -52,6 +54,43 @@ export const PLAYTRACE_MAX_GZIPPED_BYTES = 5 * 1024 * 1024;
 /** Free-text survey field cap (per ADR §"Decision → Wire shape"). Enforced
  *  client-side so the server doesn't need to truncate. */
 export const PLAYTRACE_FREE_TEXT_MAX = 2000;
+
+/**
+ * Issue #295 — default for the survey's "include a snapshot" checkbox.
+ *
+ * It shipped `false` until 2026-09-20, so a report carried the survey and
+ * nothing else unless the player ticked the box. Opt-in rate was 0 of 2, which
+ * is the expected outcome for an unticked box at the end of a round, and it is
+ * why #293 — the first
+ * substantive external playtest report — arrived with a seed and a sentence.
+ *
+ * The size question that blocked the flip is now answered. `scripts/measure-
+ * playtrace-size.ts` runs real headless matches, stops at the terminal outcome
+ * (the only tick a submission is ever built at) and gzips the four payloads the
+ * downgrade chain would produce. Across 5 seeds per arm the largest FULL
+ * envelope AT ROUND END was 24.1 KB against a passive player and 25.9 KB with
+ * BOTH colonies AI-driven (`--both-ai`, the upper-bound arm: twice the live ants
+ * and a real player inputLog). That is ~0.5% of PLAYTRACE_MAX_GZIPPED_BYTES, and
+ * the downgrade chain never fired at any checkpoint. The world snapshot
+ * dominates and barely grows with colony size, so size is not the reason to keep
+ * this off.
+ *
+ * Flipping to `true` is the entire behaviour change: UIScene seeds the checkbox
+ * from this constant and swaps the label to SURVEY_UPLOAD_LABEL_DEFAULT_ON,
+ * which states plainly what is being sent. Deliberately typed `boolean` (not
+ * inferred as `true`) so neither branch reads as dead code. Flipped ON on
+ * 2026-09-20 — Rob's call on #295 once the measurement above came in: size is a
+ * non-issue, the box stays visible and untickable, and the snapshot carries game
+ * state only (ADR 0013 §Privacy), which the default-on label says outright.
+ */
+export const PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT: boolean = true;
+
+/** Optional-email cap (#303). 254 is the RFC 5321 maximum forward-path length,
+ *  so nothing longer can be a real address. Unlike the free text, an over-long
+ *  value is DROPPED rather than truncated: truncating would manufacture a
+ *  plausible-looking address belonging to somebody else, and the field is
+ *  optional, so dropping costs nothing. */
+export const PLAYTRACE_EMAIL_MAX = 254;
 
 /** Survey contents collected by the overlay. Mirrors the wire envelope's
  *  `survey` object 1:1 — keep these in sync if the contract changes. */
@@ -64,6 +103,11 @@ export interface PlaytraceSurvey {
   /** "Report as broken" flag — orthogonal to the rating so a 5-star "great
    *  game but X is broken" report is expressible. */
   brokenFlag: boolean;
+  /** #303 — optional contact address, so a report that needs a follow-up
+   *  question can get one. ABSENT (not `''`, not `null`) when the player left
+   *  the field empty or typed something that isn't shaped like an address:
+   *  see {@link sanitizeSurveyEmail}. Never blocks a submission. */
+  email?: string;
 }
 
 /** Inputs the caller (game-scene) supplies to issue a submission. The module
@@ -128,12 +172,20 @@ export type RoundEndReason = 'QueenDeath' | 'TimeoutTiebreak' | 'StalemateTiebre
  *  v2 additions: events, summary, roundEndReason.
  *  - events + summary are omitted on survey-only submissions (snapshot: null).
  *  - roundEndReason is always present but may be null (quit from pause menu,
- *    or a game-over without a detectable queen-death event). */
+ *    or a game-over without a detectable queen-death event).
+ *
+ *  v3 addition: difficulty. Present on EVERY submission, survey-only included —
+ *  survey-only is the common case and is precisely where the tier cannot be
+ *  recovered from a snapshot (#294). */
 export interface PlaytraceEnvelope {
   sessionId: string;
   schemaVersion: typeof PLAYTRACE_SCHEMA_VERSION;
   gameVersion: string;
   simVersion: number;
+  /** v3 (#294) — the tier the round was played on, read off `world.difficulty`
+   *  at submission time. Balance feedback ("too easy") is uninterpretable
+   *  without it. schemaVersion 1/2 records will never carry it. */
+  difficulty: 'Easy' | 'Normal' | 'Hard';
   seed: number;
   tick: number;
   outcome: 'Victory' | 'Defeat' | 'MutualDestruction';
@@ -195,6 +247,51 @@ export function truncateFreeText(s: string): string {
   return trimmed.slice(0, PLAYTRACE_FREE_TEXT_MAX);
 }
 
+/**
+ * Sanitize the optional email (#303). Returns `undefined` — meaning "omit the
+ * field entirely" — for anything that isn't plausibly an address, so a typo is
+ * silently dropped instead of blocking the submission or surfacing an error
+ * the player has no reason to care about.
+ *
+ * The shape check is deliberately loose: exactly one `@`, no whitespace
+ * anywhere, and a non-empty local part and domain. A stricter client-side
+ * pattern would silently discard the valid-but-unusual addresses it fails to
+ * recognize, and the only cost of letting an odd one through is one bounced
+ * follow-up. Anything longer than {@link PLAYTRACE_EMAIL_MAX} is dropped, not
+ * truncated.
+ *
+ * Exported so the overlay and the platform settings layer apply the same rule.
+ */
+export function sanitizeSurveyEmail(raw: string | undefined): string | undefined {
+  // Type-guarded rather than `=== undefined`: a stray null/number from an
+  // untyped caller must cost the optional field, never the whole submission
+  // (ADR 0013 — a bad optional email is dropped, not a 400 and not a throw).
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  if (trimmed === '') return undefined;
+  if (trimmed.length > PLAYTRACE_EMAIL_MAX) return undefined;
+  if (/\s/.test(trimmed)) return undefined;
+  const at = trimmed.indexOf('@');
+  // indexOf === lastIndexOf rejects both zero and two-or-more '@'.
+  if (at <= 0 || at !== trimmed.lastIndexOf('@')) return undefined;
+  if (at === trimmed.length - 1) return undefined;
+  return trimmed;
+}
+
+/** Assemble the wire `survey` object: free text truncated, email sanitized to
+ *  present-or-absent. Kept separate from the envelope literal so both the
+ *  truncation and the omit-on-invalid rule live in one place. */
+function buildWireSurvey(survey: PlaytraceSurvey): PlaytraceSurvey {
+  const wire: PlaytraceSurvey = {
+    rating: survey.rating,
+    freeText: truncateFreeText(survey.freeText),
+    brokenFlag: survey.brokenFlag,
+  };
+  const email = sanitizeSurveyEmail(survey.email);
+  if (email !== undefined) wire.email = email;
+  return wire;
+}
+
 /** Build a fully-typed envelope from the submission input + a pre-built
  *  snapshot (or null for survey-only). Pure — no fetch, no compression.
  *  Exported for the downgrade-fallback unit test. */
@@ -226,16 +323,13 @@ export function buildPlaytraceEnvelope(
     schemaVersion: PLAYTRACE_SCHEMA_VERSION,
     gameVersion: __APP_VERSION__,
     simVersion: input.world.simVersion,
+    difficulty: input.world.difficulty,
     seed: input.seed,
     tick: input.world.tick,
     outcome: outcomeToWire(input.outcome),
     roundEndReason,
     quitFromPauseMenu: input.quitFromPauseMenu,
-    survey: {
-      rating: input.survey.rating,
-      freeText: truncateFreeText(input.survey.freeText),
-      brokenFlag: input.survey.brokenFlag,
-    },
+    survey: buildWireSurvey(input.survey),
     snapshot,
   };
 
@@ -435,7 +529,7 @@ async function buildPayloadWithDowngrade(input: PlaytraceSubmissionInput): Promi
 }
 
 /** Build a survey-only payload directly, skipping the snapshot construction.
- *  Used when the player did not opt in to upload. Same world-capture
+ *  Used when the player unticked the replay-data box. Same world-capture
  *  property as the downgrade path: the envelope is built in this function's
  *  synchronous prefix before the first await.
  *

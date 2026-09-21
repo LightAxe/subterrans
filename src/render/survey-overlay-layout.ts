@@ -12,6 +12,8 @@
 //   Free-text:          single-line edit affordance (full editing happens
 //                       via a DOM input — see ui-scene.ts; this layout
 //                       reserves the rect)
+//   Email row:          optional address (#303) — label + a DOM <input> rect,
+//                       same reserve-the-rect arrangement as the free text
 //   "Report as broken" checkbox row
 //   "Upload diagnostic snapshot" checkbox row + consent disclosure text
 //   Buttons:            [ Submit ] [ Skip ]
@@ -56,13 +58,18 @@ export const SURVEY_RATING_BUTTON_W = 56;
 export const SURVEY_RATING_BUTTON_H = 56;
 export const SURVEY_RATING_BUTTON_GAP = 12;
 
-/** Free-text affordance anchors. Y/H are canvas-INDEPENDENT (the checkbox rows
- *  anchor off them); only the WIDTH spans the panel, so the rect itself is a
- *  function of the LayoutContext — see {@link surveyFreeTextRect}. */
+/** Free-text affordance anchors. Y/H are canvas-INDEPENDENT (the email row and
+ *  the checkbox rows anchor off them); only the WIDTH spans the panel, so the
+ *  rect itself is a function of the LayoutContext — see {@link surveyFreeTextRect}.
+ *
+ *  #303 shrank H from 100 to 68 to make room for the optional-email row below
+ *  it. The 32 px come out of the textarea rather than out of the rows beneath,
+ *  so every anchor from SURVEY_BROKEN_CHECKBOX_Y down keeps the exact Y it had
+ *  before — the overlay still fits the 592-tall canvas with the same slack. */
 export const SURVEY_FREE_TEXT_Y = SURVEY_RATING_ROW_Y + SURVEY_RATING_BUTTON_H + 30;
-export const SURVEY_FREE_TEXT_H = 100;
+export const SURVEY_FREE_TEXT_H = 68;
 
-/** Free-text input rect — a single-line affordance. DOM input element is
+/** Free-text input rect — the multi-line feedback box. A DOM <textarea> is
  *  positioned over this rect at runtime by UIScene. Width spans the panel
  *  (canvas-relative), so this is derived from the LayoutContext. */
 export function surveyFreeTextRect(layout: LayoutContext): SurveyRect {
@@ -74,12 +81,45 @@ export function surveyFreeTextRect(layout: LayoutContext): SurveyRect {
   };
 }
 
-/** Checkbox row constants — used by both the "Report as broken" and
- *  "Upload diagnostic snapshot" rows. */
+// ---------------------------------------------------------------------------
+// Optional email row (#303)
+// ---------------------------------------------------------------------------
+
+/** Label above the email input. Canvas-INDEPENDENT anchor; the label itself is
+ *  word-wrapped to the panel width by UIScene. */
+export const SURVEY_EMAIL_LABEL_Y = SURVEY_FREE_TEXT_Y + SURVEY_FREE_TEXT_H + 4;
+/** Single-line input height, and its Y below the label. Both canvas-independent. */
+export const SURVEY_EMAIL_INPUT_H = 24;
+export const SURVEY_EMAIL_INPUT_Y = SURVEY_EMAIL_LABEL_Y + 14;
+
+/** Copy for the email row. Centralized here for the same reason as
+ *  {@link SURVEY_CONSENT_DISCLOSURE}: the purpose limitation is a privacy
+ *  promise, so it changes only via this module. */
+export const SURVEY_EMAIL_LABEL =
+  'Email (optional) — only used to reply about this report; deleted after 90 days';
+
+/** Email input rect — a single-line affordance. The DOM <input type="email">
+ *  is positioned over this rect at runtime by UIScene, exactly the way the
+ *  free-text <textarea> is. Width spans the panel, so this derives from the
+ *  LayoutContext. */
+export function surveyEmailInputRect(layout: LayoutContext): SurveyRect {
+  return {
+    x: PANEL_INSET_X,
+    y: SURVEY_EMAIL_INPUT_Y,
+    w: layout.w - 2 * PANEL_INSET_X,
+    h: SURVEY_EMAIL_INPUT_H,
+  };
+}
+
+/** Checkbox row constants — used by both the "Report as broken" row and the
+ *  snapshot row (whose label is SURVEY_UPLOAD_LABEL_OPT_IN or
+ *  SURVEY_UPLOAD_LABEL_DEFAULT_ON, picked by UIScene). */
 export const SURVEY_CHECKBOX_SIZE = 20;
 export const SURVEY_CHECKBOX_LABEL_GAP = 12;
 
-export const SURVEY_BROKEN_CHECKBOX_Y = SURVEY_FREE_TEXT_Y + SURVEY_FREE_TEXT_H + 20;
+/** Anchored off the email row (#303). The arithmetic is chosen so this still
+ *  evaluates to the pre-#303 value — everything below it is unmoved. */
+export const SURVEY_BROKEN_CHECKBOX_Y = SURVEY_EMAIL_INPUT_Y + SURVEY_EMAIL_INPUT_H + 10;
 export const SURVEY_UPLOAD_CHECKBOX_Y = SURVEY_BROKEN_CHECKBOX_Y + SURVEY_CHECKBOX_SIZE + 16;
 /** Two-line consent disclosure sits below the upload checkbox, indented to
  *  align with the label text. */
@@ -164,12 +204,37 @@ export function surveySkipButtonRect(layout: LayoutContext): SurveyRect {
   };
 }
 
-/** Consent disclosure text. ADR 0013 §"Privacy" requires the overlay to
- *  warn the player that an upload leaks client IP + User-Agent at the edge.
+/** Label for the snapshot checkbox when it is OPT-IN (unticked by default —
+ *  the pre-#295 state, kept so the constant can be flipped back). "diagnostic
+ *  snapshot" is fine for a box the player deliberately reaches for. */
+export const SURVEY_UPLOAD_LABEL_OPT_IN = 'Upload diagnostic snapshot to help us debug';
+
+/** Label for the same checkbox now that PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT is
+ *  true (#295). A box that is already ticked has to say plainly what is going
+ *  to be sent — silently uploading a world snapshot by default is a different
+ *  social contract from an opt-in box, even though the payload is only game
+ *  state. UIScene picks between the two off that constant. */
+export const SURVEY_UPLOAD_LABEL_DEFAULT_ON =
+  'Include replay data with this report (game state only — no personal data)';
+
+/** Consent disclosure text. ADR 0013 §"Privacy" requires the overlay to warn
+ *  the player that an upload leaks client IP + User-Agent at the edge.
  *  Centralized here so the wording is reviewable and only changes via this
- *  module (matching the same approach for the contract's wire shape). */
+ *  module (matching the same approach for the contract's wire shape).
+ *
+ *  The sentence is split deliberately. IP and browser version go to the edge on
+ *  EVERY submission — survey-only included — so that half is unconditional. The
+ *  replay data and the email are each opt-in (an unticked box sends
+ *  `snapshot: null`; an empty or malformed address is omitted entirely), and
+ *  this line is drawn whether or not either is selected, so claiming both are
+ *  sent would over-state what leaves the machine for most submissions.
+ *
+ *  Sized for the two-line allowance the layout leaves between
+ *  SURVEY_CONSENT_TEXT_Y and the button row: at 11px monospace this wraps to
+ *  two lines inside the 640px wrap width at 800 wide. Keep it under ~100
+ *  characters. */
 export const SURVEY_CONSENT_DISCLOSURE =
-  'Uploading sends your IP and browser version to the server alongside the diagnostic snapshot.';
+  'Uploading sends your IP and browser version — replay data and your email only if you include them.';
 
 // ---------------------------------------------------------------------------
 // Rating buttons — five rects across, centered, indexed 1..5 left→right
@@ -216,6 +281,7 @@ export type SurveyHitTarget =
   | { kind: 'submit' }
   | { kind: 'skip' }
   | { kind: 'free-text' }
+  | { kind: 'email' }
   | null;
 
 /** Topmost interactive element under the pointer, or null on background.
@@ -227,6 +293,7 @@ export function surveyHitTest(px: number, py: number, layout: LayoutContext): Su
   if (pointInRect(px, py, surveyBrokenRowHitRect(layout))) return { kind: 'broken-checkbox' };
   if (pointInRect(px, py, surveyUploadRowHitRect(layout))) return { kind: 'upload-checkbox' };
   if (pointInRect(px, py, surveyFreeTextRect(layout))) return { kind: 'free-text' };
+  if (pointInRect(px, py, surveyEmailInputRect(layout))) return { kind: 'email' };
   for (const btn of surveyRatingButtons(layout)) {
     if (pointInRect(px, py, btn.rect)) {
       return { kind: 'rating', rating: btn.rating };

@@ -7,9 +7,13 @@
 //   1. Loads the JSON debug snapshot envelope.
 //   2. Replays from seed: createScenario(seed) → tick() through the captured
 //      inputLog up to snapshot.tick, then byte-compares serialized state.
-//      A divergence here is a SCEN-06 regression. During replay, every
-//      SAMPLE_INTERVAL_TICKS the analyzer snapshots each live ant's
-//      (zone, tileX, tileY, task, subTask) into a sliding window.
+//      A divergence here is a SCEN-06 regression. The log is regrouped into the
+//      DRAIN batches the sim actually saw (#296 — `issuedAtTick` is one tick
+//      early for sim self-emits) and the replaying world's own regenerated
+//      commandQueue is discarded each tick, since the recorded batches already
+//      contain those self-emits. During replay, every SAMPLE_INTERVAL_TICKS the
+//      analyzer snapshots each live ant's (zone, tileX, tileY, task, subTask)
+//      into a sliding window.
 //   3. Reports tile-occupancy clusters (≥THRESHOLD ants on one tile).
 //   4. Reports underground ants standing on non-Open tiles (stuck-in-dirt).
 //   5. Reports stationary ants (most-visited tile dominates the window) and
@@ -46,6 +50,9 @@ const { Zone, UndergroundTileState, ugGet } = await import('../src/sim/terrain.j
 const { FP_SHIFT } = await import('../src/sim/fixed.js');
 const { AntTask, ForagingSubState } = await import('../src/sim/enums.js');
 const { serializeWorldState, deserializeWorldState } = await import('../src/platform/save.js');
+const { indexByDrainTick, summarizeDrainTickSource } = await import(
+  '../src/platform/input-log-replay.js'
+);
 
 const ANT_TASK_NAME: Record<number, string> = {
   [AntTask.Idle]: 'Idle',
@@ -112,7 +119,7 @@ const debug = parsed as {
   version: number;
   seed: number;
   tick: number;
-  inputLog: { issuedAtTick: number }[];
+  inputLog: Parameters<typeof indexByDrainTick>[0];
   snapshot: Parameters<typeof deserializeWorldState>[0];
 };
 // Number.isInteger rejects NaN, ±Infinity, and fractional values — important
@@ -155,7 +162,11 @@ if (
   );
 }
 
-const byTick: (typeof debug.inputLog)[] = [];
+// #296 — regroup by the tick each command was DRAINED on, not the tick it was
+// issued on. For player/AI input the two are the same; for a command the sim
+// pushed for itself they differ by one, and applying it early forks the replay.
+// indexByDrainTick prefers the recorded `drainTick` and falls back to the
+// origin-derived rule for snapshots taken before that field existed.
 for (let i = 0; i < debug.inputLog.length; i++) {
   const cmd = debug.inputLog[i];
   if (!cmd || typeof cmd !== 'object') bail(`inputLog[${i}] is not an object`);
@@ -163,7 +174,15 @@ for (let i = 0; i < debug.inputLog.length; i++) {
   if (typeof t !== 'number' || !Number.isInteger(t) || t < 0) {
     bail(`inputLog[${i}].issuedAtTick is missing or invalid (got ${String(t)})`);
   }
-  (byTick[t] ??= []).push(cmd as { issuedAtTick: number });
+}
+const byTick = indexByDrainTick(debug.inputLog);
+const drainSource = summarizeDrainTickSource(debug.inputLog);
+if (debug.inputLog.length > 0) {
+  console.log(
+    `  drain batches: ${drainSource.recorded} recorded, ` +
+      `${drainSource.derivedSelfEmit} derived from origin='sim' (+1 tick), ` +
+      `${drainSource.derivedAtIssue} at issuedAtTick`,
+  );
 }
 
 interface Sample {
@@ -204,6 +223,11 @@ function sampleAnts(): void {
 }
 
 for (let t = 0; t < debug.tick; t++) {
+  // #296 — discard the self-emits this replay regenerated. The recorded batch
+  // for tick t already contains the ones the live run drained here, so keeping
+  // the regenerated copies would both double-apply them a tick later and leave
+  // them sitting in commandQueue (which is part of the serialized state).
+  replay.commandQueue.splice(0);
   // Cast: SimCommand union vs the loose object type we read from JSON.
   // Replay determinism is the contract being checked; if commands are
   // malformed the tick will throw and the analyzer surfaces that.
@@ -215,11 +239,11 @@ const replayElapsedMs = Date.now() - replayStart;
 
 // commandQueue is preserved in serializeWorldState output (save.ts Pitfall 7
 // — F9 / autosave can fire between ticks, capturing pending input that has
-// been queued but not yet drained). The replay path only processes commands
-// that already exist in inputLog (drained on past ticks), so replay's
-// commandQueue is always empty at the end. Exclude commandQueue from the
-// byte-equality check to avoid false-positive SCEN-06 failures when capture
-// timing happens to catch staged input.
+// been queued but not yet drained). The replay's final queue holds whatever the
+// last tick regenerated, which need not match what the live session had staged
+// when the snapshot was taken (a player may have clicked after the last drain).
+// Exclude commandQueue from the byte-equality check to avoid false-positive
+// SCEN-06 failures from that capture timing.
 function stripCommandQueue(s: typeof debug.snapshot): unknown {
   const { commandQueue: _cq, ...rest } = s as Record<string, unknown>;
   return rest;

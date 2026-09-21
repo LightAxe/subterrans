@@ -265,10 +265,15 @@ import {
   SURVEY_TITLE_Y,
   SURVEY_RATING_ROW_Y,
   surveyFreeTextRect,
+  surveyEmailInputRect,
+  SURVEY_EMAIL_LABEL,
+  SURVEY_EMAIL_LABEL_Y,
   SURVEY_BROKEN_CHECKBOX_RECT,
   SURVEY_UPLOAD_CHECKBOX_RECT,
   SURVEY_CONSENT_TEXT_Y,
   SURVEY_CONSENT_DISCLOSURE,
+  SURVEY_UPLOAD_LABEL_OPT_IN,
+  SURVEY_UPLOAD_LABEL_DEFAULT_ON,
   surveySubmitButtonRect,
   surveySkipButtonRect,
   SURVEY_CHECKBOX_LABEL_GAP,
@@ -278,6 +283,8 @@ import {
 } from './survey-overlay-layout.js';
 import {
   PLAYTRACE_FREE_TEXT_MAX,
+  PLAYTRACE_EMAIL_MAX,
+  PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT,
   truncateFreeText,
   type PlaytraceSurvey,
 } from './playtrace-upload.js';
@@ -2515,8 +2522,11 @@ export class UIScene extends Phaser.Scene {
   // primitive; rolling one over the canvas via keyboard events would
   // require us to reimplement caret, selection, IME composition, paste, and
   // accessibility. Anchoring a real `<textarea>` over the canvas defers all
-  // of that to the browser. The textarea is removed in hideSurveyOverlay
-  // (cleanup is also wired into the scene shutdown handler).
+  // of that to the browser. The same applies to the optional email row
+  // (#303), which mounts an `<input type="email" autocomplete="email">` over
+  // SURVEY_EMAIL_INPUT_RECT. Both elements share one lifecycle: created in
+  // ensureSurveyDomInputs on show, repositioned by the window-resize handler,
+  // and removed in removeSurveyDomInputs on hide / confirmation / shutdown.
   // ---------------------------------------------------------------------------
 
   private surveyGroup: Phaser.GameObjects.GameObject[] = [];
@@ -2524,6 +2534,11 @@ export class UIScene extends Phaser.Scene {
   private surveyState: {
     rating: 0 | 1 | 2 | 3 | 4 | 5;
     freeText: string;
+    /** #303 — raw contents of the optional email box, exactly as typed. The
+     *  present/absent decision is made once, at the wire boundary
+     *  (sanitizeSurveyEmail in playtrace-upload.ts); the overlay never
+     *  validates and never blocks a submission on it. */
+    email: string;
     brokenFlag: boolean;
     includeSnapshot: boolean;
     quitFromPauseMenu: boolean;
@@ -2534,8 +2549,9 @@ export class UIScene extends Phaser.Scene {
   } = {
     rating: 0,
     freeText: '',
+    email: '',
     brokenFlag: false,
-    includeSnapshot: false,
+    includeSnapshot: PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT,
     quitFromPauseMenu: false,
     showConfirmation: false,
     confirmedSubmit: false,
@@ -2543,11 +2559,14 @@ export class UIScene extends Phaser.Scene {
     cause: null,
   };
   private surveyTextarea: HTMLTextAreaElement | null = null;
+  /** #303 — DOM `<input type="email">` overlaid on SURVEY_EMAIL_INPUT_RECT.
+   *  Same lifecycle as surveyTextarea. */
+  private surveyEmailInput: HTMLInputElement | null = null;
   /** Bound handler kept on the instance so addEventListener / removeEventListener
    *  observe the same function reference. Window resize while the survey is
-   *  open repositions the DOM textarea over the canvas; without this the
-   *  textarea drifts off-canvas after a layout change (sidebar collapse,
-   *  devtools open, mobile orientation flip). */
+   *  open repositions the DOM inputs over the canvas; without this they
+   *  drift off-canvas after a layout change (sidebar collapse, devtools open,
+   *  mobile orientation flip). */
   private surveyResizeHandler: (() => void) | null = null;
 
   public showSurveyOverlay(callbacks: SurveyOverlayCallbacks): void {
@@ -2556,8 +2575,12 @@ export class UIScene extends Phaser.Scene {
     this.surveyState = {
       rating: 0,
       freeText: '',
+      // #303 — prefill from the locally remembered address so a returning
+      // player doesn't retype it. Never leaves the machine except on submit.
+      email: loadSettings().surveyEmail,
       brokenFlag: false,
-      includeSnapshot: false,
+      // #295 — one constant drives both the default and the checkbox copy.
+      includeSnapshot: PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT,
       quitFromPauseMenu: callbacks.quitFromPauseMenu,
       showConfirmation: false,
       confirmedSubmit: false,
@@ -2572,15 +2595,28 @@ export class UIScene extends Phaser.Scene {
     for (const obj of this.surveyGroup) obj.destroy();
     this.surveyGroup = [];
     this.surveyCallbacks = null;
+    this.removeSurveyDomInputs();
+    this.recomputeActiveOverlay();
+  }
+
+  /** Tear down the overlay's DOM inputs and the resize listener that keeps them
+   *  aligned. Idempotent — called from hideSurveyOverlay, from the
+   *  form → confirmation transition (the inputs are not Phaser objects, so
+   *  destroying surveyGroup does not remove them), and from the scene
+   *  shutdown/destroy handlers via hideSurveyOverlay. */
+  private removeSurveyDomInputs(): void {
     if (this.surveyTextarea !== null) {
       this.surveyTextarea.remove();
       this.surveyTextarea = null;
+    }
+    if (this.surveyEmailInput !== null) {
+      this.surveyEmailInput.remove();
+      this.surveyEmailInput = null;
     }
     if (this.surveyResizeHandler !== null && typeof window !== 'undefined') {
       window.removeEventListener('resize', this.surveyResizeHandler);
       this.surveyResizeHandler = null;
     }
-    this.recomputeActiveOverlay();
   }
 
   public isSurveyVisible(): boolean {
@@ -2596,16 +2632,9 @@ export class UIScene extends Phaser.Scene {
     this.surveyGroup = [];
 
     if (this.surveyState.showConfirmation) {
-      // Tear down the DOM textarea before the confirmation screen replaces the
-      // form — it is not part of surveyGroup and must be removed explicitly.
-      if (this.surveyTextarea !== null) {
-        this.surveyTextarea.remove();
-        this.surveyTextarea = null;
-      }
-      if (this.surveyResizeHandler !== null && typeof window !== 'undefined') {
-        window.removeEventListener('resize', this.surveyResizeHandler);
-        this.surveyResizeHandler = null;
-      }
+      // Tear down the DOM inputs before the confirmation screen replaces the
+      // form — they are not part of surveyGroup and must be removed explicitly.
+      this.removeSurveyDomInputs();
       this.renderSurveyConfirmation();
       return;
     }
@@ -2698,7 +2727,24 @@ export class UIScene extends Phaser.Scene {
     const ftBg = this.add.rectangle(ft.x + ft.w / 2, ft.y + ft.h / 2, ft.w, ft.h, 0x222222, 1);
     ftBg.setDepth(41);
     this.surveyGroup.push(ftBg);
-    this.ensureSurveyTextarea();
+
+    // #303 — optional email row: a label and a second DOM-backed rect. The
+    // label states the purpose limitation; the copy lives in the layout module
+    // so it is reviewable in one place (same rule as the consent disclosure).
+    const emailLabel = this.add.text(ft.x, SURVEY_EMAIL_LABEL_Y, SURVEY_EMAIL_LABEL, {
+      fontSize: '11px',
+      fontFamily: 'monospace',
+      color: '#aaaaaa',
+      wordWrap: { width: ft.w },
+    });
+    emailLabel.setDepth(42);
+    this.surveyGroup.push(emailLabel);
+    const em = surveyEmailInputRect(this.layout);
+    const emBg = this.add.rectangle(em.x + em.w / 2, em.y + em.h / 2, em.w, em.h, 0x222222, 1);
+    emBg.setDepth(41);
+    this.surveyGroup.push(emBg);
+
+    this.ensureSurveyDomInputs();
 
     // Checkbox rows. Each row is a small square + label; the row's full
     // horizontal span is treated as the click target via surveyHitTest.
@@ -2710,13 +2756,16 @@ export class UIScene extends Phaser.Scene {
     this.drawCheckboxRow(
       SURVEY_UPLOAD_CHECKBOX_RECT,
       this.surveyState.includeSnapshot,
-      'Upload diagnostic snapshot to help us debug',
+      PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT
+        ? SURVEY_UPLOAD_LABEL_DEFAULT_ON
+        : SURVEY_UPLOAD_LABEL_OPT_IN,
     );
 
-    // Consent disclosure — only meaningful when the upload checkbox is
-    // ticked, but always rendered so the player sees the privacy
-    // implication BEFORE deciding to tick. ADR 0013 §"Privacy" requires
-    // the overlay to disclose IP + UA leakage at the edge.
+    // Consent disclosure — always rendered, and now accurate whether or not
+    // the optional payloads are included: the IP/browser half applies to every
+    // submission, the replay-data and email halves are explicitly conditional.
+    // ADR 0013 §"Privacy" requires the overlay to disclose IP + UA leakage at
+    // the edge, and the player must see it BEFORE deciding what to send.
     const consent = this.add.text(
       SURVEY_BROKEN_CHECKBOX_RECT.x + SURVEY_BROKEN_CHECKBOX_RECT.w + SURVEY_CHECKBOX_LABEL_GAP,
       SURVEY_CONSENT_TEXT_Y,
@@ -2840,14 +2889,22 @@ export class UIScene extends Phaser.Scene {
     this.surveyGroup.push(text);
   }
 
-  /** Mount a <textarea> over the canvas at SURVEY_FREE_TEXT_RECT for free-
-   *  text input. Created once per overlay open and torn down in
-   *  hideSurveyOverlay. Position is recomputed each render so a canvas
+  /** Mount the overlay's DOM inputs over the canvas: a `<textarea>` at
+   *  surveyFreeTextRect for free text, and (#303) an `<input type="email">` at
+   *  surveyEmailInputRect. Created once per overlay open and torn down in
+   *  removeSurveyDomInputs. Positions are recomputed each render so a canvas
    *  resize between renders is handled correctly. */
-  private ensureSurveyTextarea(): void {
+  private ensureSurveyDomInputs(): void {
     if (typeof document === 'undefined') return; // headless Vitest path
     const canvas = this.game.canvas;
     if (canvas === null) return;
+    // Append to the canvas's parent so embedded-in-shadow-DOM hosts
+    // (the library-mode embed on the website may eventually mount
+    // inside a custom element) keep the inputs inside the same
+    // stacking context as the canvas. Fall back to document.body only
+    // when the canvas has no parent yet (defensive — shouldn't happen
+    // after Phaser's create()).
+    const parent = canvas.parentElement ?? document.body;
     if (this.surveyTextarea === null) {
       const ta = document.createElement('textarea');
       ta.placeholder = 'What stood out? (optional)';
@@ -2861,6 +2918,15 @@ export class UIScene extends Phaser.Scene {
       ta.style.fontSize = '13px';
       ta.style.padding = '6px';
       ta.style.resize = 'none';
+      // Without border-box the 6px padding and 1px border are ADDED to the
+      // height set from surveyFreeTextRect, so the element renders 14px taller
+      // than the rect it is supposed to occupy. That was merely tight before
+      // #303 (a 100px rect rendered 114px, clearing the checkbox row by 6px);
+      // once #303 shrank the rect to 68px to make room for the email row, the
+      // overflow painted straight over the email label at SURVEY_EMAIL_LABEL_Y.
+      // Matching the email input's box-sizing makes the rendered box equal the
+      // reserved rect, which is what every layout assertion assumes.
+      ta.style.boxSizing = 'border-box';
       ta.addEventListener('input', () => {
         this.surveyState.freeText = truncateFreeText(ta.value);
       });
@@ -2871,47 +2937,97 @@ export class UIScene extends Phaser.Scene {
       ta.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') e.stopPropagation();
       });
-      // Append to the canvas's parent so embedded-in-shadow-DOM hosts
-      // (the library-mode embed on the website may eventually mount
-      // inside a custom element) keep the textarea inside the same
-      // stacking context as the canvas. Fall back to document.body only
-      // when the canvas has no parent yet (defensive — shouldn't happen
-      // after Phaser's create()).
-      const parent = canvas.parentElement ?? document.body;
       parent.appendChild(ta);
       this.surveyTextarea = ta;
     }
+    if (this.surveyEmailInput === null) {
+      const el = document.createElement('input');
+      el.type = 'email';
+      el.autocomplete = 'email';
+      el.placeholder = 'you@example.com';
+      // The field's visible label is Phaser text painted on the canvas, which
+      // assistive tech cannot see at all — to a screen reader this input would
+      // otherwise be an unlabelled box asking for an email address. Reuse the
+      // same string, which already carries both the purpose limitation and the
+      // 90-day retention, so the accessible name cannot drift from the drawn
+      // one. aria-label rather than aria-describedby: one attribute, no extra
+      // DOM node and no lifecycle to tear down.
+      el.setAttribute('aria-label', SURVEY_EMAIL_LABEL);
+      // The cap is applied in three places — here, in rememberSurveyEmail, and
+      // again when settings load — but this is the one that acts before the
+      // player commits: sanitizeSurveyEmail DROPS an over-long address rather
+      // than truncating it, so without maxLength a long paste would be accepted
+      // by the form and then silently discarded at submit time. Note the browser
+      // truncates the paste rather than rejecting it, so an address longer than
+      // the RFC limit still ends up altered — it just ends up altered visibly.
+      el.maxLength = PLAYTRACE_EMAIL_MAX;
+      // Prefill from the remembered address (surveyState.email was seeded from
+      // settings in showSurveyOverlay).
+      el.value = this.surveyState.email;
+      el.style.position = 'absolute';
+      el.style.zIndex = '1000';
+      el.style.background = '#222222';
+      el.style.color = '#ffffff';
+      el.style.border = '1px solid #444444';
+      el.style.fontFamily = 'monospace';
+      el.style.fontSize = '13px';
+      el.style.padding = '2px 6px';
+      el.style.boxSizing = 'border-box';
+      el.addEventListener('input', () => {
+        this.surveyState.email = el.value;
+      });
+      // Same rationale as the textarea: Phaser's window-level KeyboardManager
+      // preventDefaults WASD/Space, which would eat characters typed here.
+      el.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') e.stopPropagation();
+      });
+      parent.appendChild(el);
+      this.surveyEmailInput = el;
+    }
     // Bind the resize handler once per overlay open so a window-resize
     // mid-overlay (devtools open, sidebar toggle, mobile rotate) keeps the
-    // textarea aligned with the canvas. Removed in hideSurveyOverlay.
+    // inputs aligned with the canvas. Removed in removeSurveyDomInputs.
     if (this.surveyResizeHandler === null && typeof window !== 'undefined') {
-      this.surveyResizeHandler = () => this.positionSurveyTextarea();
+      this.surveyResizeHandler = () => this.positionSurveyDomInputs();
       window.addEventListener('resize', this.surveyResizeHandler);
     }
-    this.positionSurveyTextarea();
+    this.positionSurveyDomInputs();
   }
 
-  private positionSurveyTextarea(): void {
-    if (this.surveyTextarea === null) return;
+  private positionSurveyDomInputs(): void {
+    if (this.surveyTextarea !== null) {
+      this.positionSurveyElement(this.surveyTextarea, surveyFreeTextRect(this.layout));
+    }
+    if (this.surveyEmailInput !== null) {
+      this.positionSurveyElement(this.surveyEmailInput, surveyEmailInputRect(this.layout));
+    }
+  }
+
+  /** Place one absolutely-positioned overlay element over a canvas-local rect.
+   *  Shared by the free-text textarea and the #303 email input — both sit in
+   *  the same stacking context and need the same coordinate-space conversion. */
+  private positionSurveyElement(
+    el: HTMLElement,
+    rect: { x: number; y: number; w: number; h: number },
+  ): void {
     const canvas = this.game.canvas;
     if (canvas === null) return;
     const canvasRect = canvas.getBoundingClientRect();
     const scaleX = cssScaleX(canvasRect.width, this.layout); // shared with the #237 drag threshold
     const scaleY = canvasRect.height / this.layout.h;
-    const ta = this.surveyTextarea;
-    // The textarea is absolutely-positioned and sits in `document.body` or
-    // in `canvas.parentElement` (see ensureSurveyTextarea). For an
+    // The element is absolutely-positioned and sits in `document.body` or
+    // in `canvas.parentElement` (see ensureSurveyDomInputs). For an
     // absolutely-positioned element, the `left`/`top` values are measured
     // against the nearest positioned ancestor (i.e. the same offsetParent
     // resolution the browser uses). We compute the canvas's position in
     // that same coordinate space by taking the bounding-rect delta against
-    // the textarea's own offsetParent — which is guaranteed to be the
+    // the element's own offsetParent — which is guaranteed to be the
     // coordinate space `left`/`top` are interpreted in. This survives a
     // scrolled page, an embedder whose canvas-parent isn't positioned, and
     // shadow-DOM hosts. Codex P1 (round 3) — earlier `canvas.offsetLeft`
     // approach landed in the wrong coordinate space when canvas.parentElement
     // wasn't a positioned ancestor; the textarea drifted off-canvas.
-    const offsetParent = ta.offsetParent as HTMLElement | null;
+    const offsetParent = el.offsetParent as HTMLElement | null;
     let originX = 0;
     let originY = 0;
     if (offsetParent !== null) {
@@ -2930,18 +3046,32 @@ export class UIScene extends Phaser.Scene {
       originX = canvasRect.left - opRect.left - offsetParent.clientLeft + offsetParent.scrollLeft;
       originY = canvasRect.top - opRect.top - offsetParent.clientTop + offsetParent.scrollTop;
     } else {
-      // Textarea is positioned relative to the viewport (e.g. when its
+      // The element is positioned relative to the viewport (e.g. when its
       // offsetParent is the initial containing block / document.body
       // with no positioned ancestor in between). Fall back to viewport
       // coordinates from canvasRect directly.
       originX = canvasRect.left;
       originY = canvasRect.top;
     }
-    const ft = surveyFreeTextRect(this.layout);
-    ta.style.left = `${originX + ft.x * scaleX}px`;
-    ta.style.top = `${originY + ft.y * scaleY}px`;
-    ta.style.width = `${ft.w * scaleX}px`;
-    ta.style.height = `${ft.h * scaleY}px`;
+    el.style.left = `${originX + rect.x * scaleX}px`;
+    el.style.top = `${originY + rect.y * scaleY}px`;
+    el.style.width = `${rect.w * scaleX}px`;
+    el.style.height = `${rect.h * scaleY}px`;
+  }
+
+  /** #303 — persist the address for next time, trimmed and capped. Stored as
+   *  typed (a typo is kept, not silently discarded) so the player sees the same
+   *  string next round and can correct it; the wire boundary decides separately
+   *  whether it is shaped well enough to send. Read-modify-write against
+   *  loadSettings() rather than a cached object, matching the pause menu's
+   *  toggles: in degraded storage (private mode, quota) saveSettings is a no-op
+   *  and the next load returns defaults, so a cached copy would drift. */
+  private rememberSurveyEmail(): void {
+    const value = this.surveyState.email.trim().slice(0, PLAYTRACE_EMAIL_MAX);
+    const persisted = loadSettings();
+    if (persisted.surveyEmail === value) return;
+    persisted.surveyEmail = value;
+    saveSettings(persisted);
   }
 
   /** Dispatch a click on the survey overlay. Called from the pointerdown
@@ -2980,15 +3110,22 @@ export class UIScene extends Phaser.Scene {
         // immediately without a second click.
         this.surveyTextarea?.focus();
         return;
+      case 'email':
+        this.surveyEmailInput?.focus();
+        return;
       case 'submit': {
         if (this.surveyState.rating === 0) return; // disabled — defensive
         const cb = this.surveyCallbacks;
         const result: PlaytraceSurvey & { includeSnapshot: boolean } = {
           rating: this.surveyState.rating,
           freeText: this.surveyState.freeText,
+          // Raw as typed. playtrace-upload.ts decides present-vs-absent; an
+          // empty or malformed value must never block this submit.
+          email: this.surveyState.email,
           brokenFlag: this.surveyState.brokenFlag,
           includeSnapshot: this.surveyState.includeSnapshot,
         };
+        this.rememberSurveyEmail();
         // Issue #131 — fire the upload callback immediately, then transition
         // to the confirmation screen instead of closing the overlay. The
         // player chooses New Game or Retry from the confirmation screen.

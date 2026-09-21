@@ -30,12 +30,29 @@ export interface Settings {
    *  (NOT a Set, which JSON.stringify flattens to `{}` — Codex R1#4). A hint is
    *  marked here only once it actually begins displaying (Codex R1#9). Render-only. */
   firstUseHints: Record<string, boolean>;
+  /** Issue #303 — last address typed into the end-of-game survey's optional
+   *  email field, so a returning player doesn't retype it. LOCAL ONLY: it is
+   *  never read by the sim and leaves the machine only when the player submits
+   *  a survey. `''` means "no remembered address". Stored as typed (trimmed +
+   *  capped) rather than only-when-valid, so the box round-trips what the
+   *  player last saw and a typo stays visible instead of being silently
+   *  dropped and forgotten. */
+  surveyEmail: string;
 }
+
+/** Cap on the remembered address (RFC 5321 max forward-path length). The wire
+ *  boundary enforces the same number as PLAYTRACE_EMAIL_MAX; the two are
+ *  duplicated rather than shared because platform/ must not import from render/,
+ *  and pulling a wire constant DOWN into platform/ would put the playtrace
+ *  contract in the wrong layer. settings.test.ts asserts they are equal so they
+ *  cannot drift — same arrangement as save.ts's MAX_OPPONENT_ORDERS_LENGTH. */
+export const SURVEY_EMAIL_MAX = 254;
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
   pheromoneOverlay: true,
   hintStripVisible: true,
   firstUseHints: {},
+  surveyEmail: '',
 };
 
 interface SettingsEnvelope {
@@ -91,7 +108,25 @@ export function loadSettings(): Settings {
         ? s.hintStripVisible
         : DEFAULT_SETTINGS.hintStripVisible,
     firstUseHints: sanitizeFirstUseHints(s.firstUseHints),
+    surveyEmail: clampStoredSurveyEmail(s.surveyEmail),
   };
+}
+
+/** Coerce an unknown blob into a storable email string: a non-string (missing /
+ *  corrupt) yields the default `''`, and an over-long value is TRUNCATED to
+ *  SURVEY_EMAIL_MAX rather than rejected, so a settings blob hand-edited to a
+ *  huge string can't grow without bound across load/save cycles.
+ *
+ *  Deliberately NOT named `sanitizeSurveyEmail`: playtrace-upload.ts has a
+ *  function by that name with the opposite failure semantics (it DROPS an
+ *  over-long or malformed address instead of truncating it), and the two modules
+ *  sit one import apart. This one only clamps storage; it does no format
+ *  validation at all, because rejecting a half-typed address at load time would
+ *  throw away the player's work for no benefit. Validation belongs at the wire
+ *  boundary, where dropping is the safe answer. */
+function clampStoredSurveyEmail(raw: unknown): string {
+  if (typeof raw !== 'string') return DEFAULT_SETTINGS.surveyEmail;
+  return raw.length <= SURVEY_EMAIL_MAX ? raw : raw.slice(0, SURVEY_EMAIL_MAX);
 }
 
 /** Coerce an unknown blob into a clean Record<string, boolean>: keep only own

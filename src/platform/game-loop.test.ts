@@ -276,6 +276,77 @@ describe('GameLoopOpts Phase 9 seams', () => {
     expect(world.commandQueue.length).toBe(0);
   });
 
+  // #296 — the drain site is the only place that knows which tick a command was
+  // actually handed to tick() on, so it stamps that onto the command. Everything
+  // downstream (inputLog → save file → debug snapshot → playtrace envelope)
+  // inherits the batch boundaries for free.
+  it('stamps each drained command with the tick it was drained on', () => {
+    const world = createWorldState(42);
+    // A tickFn that advances world.tick the way the real one does, so the three
+    // batches below are drained on three different ticks.
+    const advancingTick = (w: WorldState): (typeof GameOutcome)[keyof typeof GameOutcome] => {
+      // This stub stands in for src/sim/tick.ts, whose last step is exactly this
+      // write (tick.ts step 19). The FNDN-07 tripwire fires because the file
+      // lives outside src/sim; the disable follows the same precedent as the
+      // deliberate `w.tick = N` writes in save.test.ts.
+      // eslint-disable-next-line no-restricted-syntax
+      w.tick += 1;
+      return GameOutcome.None;
+    };
+    // Snapshot drainTick INSIDE the onAfterDrain callback, not after update()
+    // returns. game-loop.ts promises the stamp lands "before anything observes
+    // them"; reading the field off retained references afterwards would pass
+    // even if the stamp were moved to after onAfterDrain, so it would not test
+    // the stated invariant. These are copies taken at observation time.
+    const observed: { issuedAtTick: number; drainTick: number | undefined }[] = [];
+    const loop = createGameLoop(advancingTick, world, {
+      onBeforeTick: (w) => {
+        // Queue one command per tick, stamped with the current tick — the slot
+        // runAIController occupies, i.e. before the drain.
+        w.commandQueue.push(makeNoOp(w.tick));
+      },
+      onAfterDrain: (cmds) => {
+        for (const c of cmds) {
+          observed.push({ issuedAtTick: c.issuedAtTick, drainTick: c.drainTick });
+        }
+      },
+    });
+
+    loop.update(MS_PER_TICK * 3);
+
+    expect(observed.map((c) => c.issuedAtTick)).toEqual([0, 1, 2]);
+    expect(observed.map((c) => c.drainTick)).toEqual([0, 1, 2]);
+  });
+
+  it('stamps a command queued DURING a tick with the following tick (sim self-emit)', () => {
+    const world = createWorldState(42);
+    // Mimics advanceAIState: the sim pushes a command from inside tick T, so it
+    // is stamped issuedAtTick=T but is not drained until T+1.
+    const selfEmittingTick = (w: WorldState): (typeof GameOutcome)[keyof typeof GameOutcome] => {
+      if (w.tick === 0) w.commandQueue.push(makeNoOp(w.tick));
+      // See advancingTick above — stub for tick.ts's own world.tick increment.
+      // eslint-disable-next-line no-restricted-syntax
+      w.tick += 1;
+      return GameOutcome.None;
+    };
+    // Again snapshotted at observation time — see the test above.
+    const observed: { issuedAtTick: number; drainTick: number | undefined }[] = [];
+    const loop = createGameLoop(selfEmittingTick, world, {
+      onAfterDrain: (cmds) => {
+        for (const c of cmds) {
+          observed.push({ issuedAtTick: c.issuedAtTick, drainTick: c.drainTick });
+        }
+      },
+    });
+
+    loop.update(MS_PER_TICK * 3);
+
+    expect(observed.length).toBe(1);
+    expect(observed[0]!.issuedAtTick).toBe(0);
+    // The whole point of #296: these two differ.
+    expect(observed[0]!.drainTick).toBe(1);
+  });
+
   it('onTickOutcome does NOT fire when tickFn returns None', () => {
     const world = createWorldState(42);
     const { fn } = makeSpyTick(); // always returns None

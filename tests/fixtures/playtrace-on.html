@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Subterrans — playtrace ON (e2e fixture)</title>
+    <style>
+      body {
+        margin: 0;
+        background: #000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+      }
+      #game {
+        width: 800px;
+        height: 592px;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      E2E fixture for the end-of-game survey overlay (#122 / #294 / #295 / #303).
+
+      playwright.config.ts deliberately pins VITE_PLAYTRACE_ENDPOINT='' for the
+      whole suite so the pause menu keeps its open-source 4-row shape and the
+      coordinate-based menu specs stay deterministic. The survey overlay is
+      feature-gated on that same value, so it can never appear on '/'.
+
+      mount()'s `playtraceEndpoint` option is the supported per-embedder
+      override (see MountOptions in src/main.ts), so this fixture turns the
+      feature ON for one page only, at the dev server's built-in mock endpoint
+      (`playtraceMockPlugin` in vite.config.ts). Everything else — canvas size,
+      mount target, page chrome — is byte-identical to index.html so canvas-
+      local layout rects map 1:1 to CSS pixels.
+    -->
+    <div id="game"></div>
+    <script type="module">
+      import { mount } from '/src/main.ts';
+      mount(document.getElementById('game'), { playtraceEndpoint: '/api/playtrace' });
+    </script>
+  </body>
+</html>

@@ -27,7 +27,12 @@ import { FP_SHIFT, FP_ONE } from '../sim/fixed.js';
 import { pheromoneGridKey, phGet } from '../sim/pheromone/pheromone-store.js';
 import { serializeWorldState, type SerializedWorldState } from './save.js';
 
-export const DEBUG_SNAPSHOT_VERSION = 2 as const;
+/** Envelope version. 2 added the self-describing `guide`; 3 (#296) added the
+ *  per-command `drainTick` inside `inputLog`, which is what makes a replay
+ *  reproduce the recorded run exactly. Purely additive — a v1/v2 snapshot still
+ *  loads and still replays, just via the derived batch boundaries (see
+ *  src/platform/input-log-replay.ts). */
+export const DEBUG_SNAPSHOT_VERSION = 3 as const;
 
 /** Manhattan radius of the food-trail pheromone sample captured per ant.
  *  Matches SIGNAL_PHEROMONE_RADIUS used by hasNearbyPheromoneSignal so the
@@ -374,7 +379,13 @@ export function buildDebugGuide(): DebugGuide {
     about:
       'F9 debug snapshot. `snapshot` is a SerializedWorldState restorable via ' +
       'deserializeWorldState(); replaying `inputLog` from `seed` reproduces this ' +
-      'exact state at `tick`. `antTrace` holds derived per-ant diagnostics not ' +
+      "exact state at `tick` — group the log by each command's `drainTick` (NOT " +
+      '`issuedAtTick`, which is one tick early for sim self-emits) and discard the ' +
+      "replaying world's own regenerated commandQueue each tick. EXCEPT for " +
+      '`snapshot.commandQueue`: input queued after the last drain was never handed ' +
+      'to tick(), so it is not in `inputLog` and a replay cannot reproduce it — ' +
+      'compare every other field and exclude the queue, which is what ' +
+      'scripts/analyze-snapshot.ts does. `antTrace` holds derived per-ant diagnostics not ' +
       'present in the raw SoA arrays. This `guide` is a static legend emitted ' +
       'once per dump — use its sub-keys to interpret every antTrace field ' +
       'without opening source.',

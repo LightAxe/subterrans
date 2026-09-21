@@ -5,8 +5,12 @@ import {
   DEFAULT_SETTINGS,
   SETTINGS_KEY,
   SETTINGS_VERSION,
+  SURVEY_EMAIL_MAX,
   type Settings,
 } from './settings.js';
+// Cross-layer import in a TEST only: the point is to prove the two constants
+// agree. Production platform/ code must not import from render/.
+import { PLAYTRACE_EMAIL_MAX } from '../render/playtrace-upload.js';
 
 // jsdom provides a real localStorage in the test environment (test-setup.ts
 // mounts it). Each test resets the namespace key to ensure isolation.
@@ -139,5 +143,67 @@ describe('saveSettings', () => {
     saveSettings(mk({ pheromoneOverlay: true }));
     saveSettings(mk({ pheromoneOverlay: false }));
     expect(loadSettings()).toEqual(mk({ pheromoneOverlay: false }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #303 — remembered survey email
+// ---------------------------------------------------------------------------
+
+describe('surveyEmail (#303)', () => {
+  it('defaults to the empty string (no remembered address)', () => {
+    expect(loadSettings().surveyEmail).toBe('');
+  });
+
+  it('round-trips a saved address', () => {
+    saveSettings(mk({ surveyEmail: 'player@example.com' }));
+    expect(loadSettings().surveyEmail).toBe('player@example.com');
+  });
+
+  it('loads a pre-#303 settings blob without wiping its other fields', () => {
+    // The additive-key contract: SETTINGS_VERSION was deliberately NOT bumped,
+    // because a bump invalidates the whole blob and a missing key already falls
+    // back to its default. This pins that behaviour.
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        version: SETTINGS_VERSION,
+        settings: {
+          pheromoneOverlay: false,
+          hintStripVisible: false,
+          firstUseHints: { pan: true },
+        },
+      }),
+    );
+    const loaded = loadSettings();
+    expect(loaded.surveyEmail).toBe('');
+    expect(loaded.pheromoneOverlay).toBe(false);
+    expect(loaded.hintStripVisible).toBe(false);
+    expect(loaded.firstUseHints).toEqual({ pan: true });
+  });
+
+  it('falls back to the default when the stored value is not a string', () => {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ version: SETTINGS_VERSION, settings: { surveyEmail: 42 } }),
+    );
+    expect(loadSettings().surveyEmail).toBe('');
+  });
+
+  it('caps at the same length the wire boundary does', () => {
+    // SURVEY_EMAIL_MAX and PLAYTRACE_EMAIL_MAX are deliberately separate
+    // constants (platform/ must not import from render/), so this is the only
+    // thing stopping them drifting. If they diverge, a remembered address could
+    // be stored at a length the envelope then silently drops.
+    expect(SURVEY_EMAIL_MAX).toBe(PLAYTRACE_EMAIL_MAX);
+  });
+
+  it('truncates an over-long stored value instead of growing unbounded', () => {
+    const huge = 'x'.repeat(SURVEY_EMAIL_MAX + 100);
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ version: SETTINGS_VERSION, settings: { surveyEmail: huge } }),
+    );
+    expect(loadSettings().surveyEmail).toHaveLength(SURVEY_EMAIL_MAX);
   });
 });

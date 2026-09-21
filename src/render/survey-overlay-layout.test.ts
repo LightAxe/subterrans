@@ -15,9 +15,13 @@ import {
   surveyFreeTextRect,
   surveyBrokenRowHitRect,
   surveyUploadRowHitRect,
+  surveyEmailInputRect,
   SURVEY_BROKEN_CHECKBOX_RECT,
   SURVEY_UPLOAD_CHECKBOX_RECT,
   SURVEY_CONSENT_DISCLOSURE,
+  SURVEY_EMAIL_LABEL,
+  SURVEY_UPLOAD_LABEL_OPT_IN,
+  SURVEY_UPLOAD_LABEL_DEFAULT_ON,
   type SurveyRect,
 } from './survey-overlay-layout.js';
 import { DEFAULT_LAYOUT, createLayoutContext } from './layout.js';
@@ -34,6 +38,7 @@ const surveyConfirmationHitTest = (px: number, py: number) =>
 const SURVEY_SUBMIT_BUTTON_RECT = surveySubmitButtonRect(L);
 const SURVEY_SKIP_BUTTON_RECT = surveySkipButtonRect(L);
 const SURVEY_FREE_TEXT_RECT = surveyFreeTextRect(L);
+const SURVEY_EMAIL_INPUT_RECT = surveyEmailInputRect(L);
 
 describe('surveyRatingButtons', () => {
   it('emits exactly five buttons numbered 1..5 in order', () => {
@@ -98,6 +103,12 @@ describe('surveyHitTest — disjoint targets', () => {
     });
   });
 
+  it('returns email on the email input rect (#303)', () => {
+    expect(surveyHitTest(SURVEY_EMAIL_INPUT_RECT.x + 5, SURVEY_EMAIL_INPUT_RECT.y + 5)).toEqual({
+      kind: 'email',
+    });
+  });
+
   it('returns null on the panel background', () => {
     // A point in the title gap above the rating buttons should not hit
     // any interactive element.
@@ -113,6 +124,76 @@ describe('consent disclosure', () => {
     // the PR until the copy is fixed.
     expect(SURVEY_CONSENT_DISCLOSURE.toLowerCase()).toMatch(/ip/);
     expect(SURVEY_CONSENT_DISCLOSURE.toLowerCase()).toMatch(/browser|user[- ]agent|ua/);
+  });
+
+  it('marks the replay data and the email as conditional, not as always sent', () => {
+    // The line is drawn whether or not either payload is selected. An unticked
+    // box sends `snapshot: null` and an empty/malformed address is omitted
+    // entirely, so copy that flatly claims both are uploaded over-states what
+    // leaves the machine for most submissions. The IP/browser half IS
+    // unconditional — it goes to the edge on every submission, survey-only
+    // included — so only the optional half needs the hedge.
+    const lower = SURVEY_CONSENT_DISCLOSURE.toLowerCase();
+    // The hedge must govern BOTH optional payloads: "replay data and your email
+    // only if …". A line that hedges only the email ("…the replay data, plus your
+    // email if you enter one") still claims the replay data is always sent.
+    expect(lower).toMatch(/replay data and (your )?email only if/);
+  });
+
+  it('fits the two-line allowance the layout leaves above the button row', () => {
+    // SURVEY_CONSENT_TEXT_Y to the button row is roughly two 11px lines. The
+    // character budget is the cheap proxy the copy has to stay inside; a longer
+    // string wraps to three and collides with Submit/Skip.
+    expect(SURVEY_CONSENT_DISCLOSURE.length).toBeLessThanOrEqual(100);
+  });
+});
+
+describe('optional email row — issue #303', () => {
+  it('sits between the free-text box and the "report as broken" row', () => {
+    const ft = SURVEY_FREE_TEXT_RECT;
+    expect(SURVEY_EMAIL_INPUT_RECT.y).toBeGreaterThanOrEqual(ft.y + ft.h);
+    expect(SURVEY_EMAIL_INPUT_RECT.y + SURVEY_EMAIL_INPUT_RECT.h).toBeLessThanOrEqual(
+      SURVEY_BROKEN_CHECKBOX_RECT.y,
+    );
+  });
+
+  it('spans the panel width like the other full-width rows', () => {
+    const wide = createLayoutContext(1000, 700);
+    expect(surveyEmailInputRect(wide).w).toBe(wide.w - 160);
+  });
+
+  it('did not move any row below it (the 32px came out of the textarea)', () => {
+    // #303 shrank SURVEY_FREE_TEXT_H from 100 to 68 and spent the freed space
+    // on the email row, so the checkbox rows, consent text and button row keep
+    // the Y values they had before the email field existed. Pinning the
+    // pre-#303 constants here makes an accidental downward shift — which would
+    // push the button row off the 592-tall canvas — a test failure.
+    expect(SURVEY_BROKEN_CHECKBOX_RECT.y).toBe(381);
+    expect(SURVEY_UPLOAD_CHECKBOX_RECT.y).toBe(417);
+  });
+
+  it('labels the field optional and states the purpose limitation', () => {
+    // Same reasoning as the consent-disclosure test: the wording may drift but
+    // "optional" and the follow-up-only purpose are the promise being made.
+    expect(SURVEY_EMAIL_LABEL.toLowerCase()).toContain('optional');
+    expect(SURVEY_EMAIL_LABEL.toLowerCase()).toMatch(/follow up|follow-up|reply/);
+    // ...and the retention promise (ADR 0013 amendment 2026-09-20: the address is
+    // deleted with the rest of the submission by the 90-day lifecycle rule).
+    expect(SURVEY_EMAIL_LABEL).toMatch(/90 days/);
+  });
+});
+
+describe('snapshot checkbox copy — issue #295', () => {
+  it('the default-on wording names what is sent and that it holds no personal data', () => {
+    // If the checkbox ever ships pre-ticked, this string is the entire consent
+    // the player gets before a world snapshot leaves their machine. Both halves
+    // of that promise are asserted so the copy cannot be quietly weakened.
+    expect(SURVEY_UPLOAD_LABEL_DEFAULT_ON.toLowerCase()).toContain('replay data');
+    expect(SURVEY_UPLOAD_LABEL_DEFAULT_ON.toLowerCase()).toContain('no personal data');
+  });
+
+  it('the two labels are distinct — the opt-in wording is not reused when pre-ticked', () => {
+    expect(SURVEY_UPLOAD_LABEL_OPT_IN).not.toBe(SURVEY_UPLOAD_LABEL_DEFAULT_ON);
   });
 });
 
@@ -192,6 +273,7 @@ describe('survey overlay — small-context regression (#238 PR4, 360×640)', () 
   const rects: SurveyRect[] = [
     ...surveyRatingButtonsAt(phone).map((b) => b.rect),
     surveyFreeTextRect(phone),
+    surveyEmailInputRect(phone),
     surveyBrokenRowHitRect(phone),
     surveyUploadRowHitRect(phone),
     surveySubmitButtonRect(phone),

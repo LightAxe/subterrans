@@ -1631,7 +1631,8 @@ export class GameScene extends Phaser.Scene {
   /** Issue #122 — open the survey overlay. Called at end-of-game (when
    *  the feature flag is on; falls back to game-over overlay otherwise)
    *  and from the pause menu's "Quit & feedback" entry. The survey
-   *  collects rating / free-text / brokenFlag / upload opt-in, then dispatches
+   *  collects rating / free-text / optional email / brokenFlag / the replay-data
+   *  toggle (ticked by default, #295), then dispatches
    *  the upload and transitions to a confirmation screen with New Game / Retry.
    *  Issue #131: onSkip replaced by onNewGame + onRetry from the confirmation. */
   private openSurveyOverlay(quitFromPauseMenu: boolean): void {
@@ -1698,6 +1699,9 @@ export class GameScene extends Phaser.Scene {
               rating: survey.rating,
               freeText: survey.freeText,
               brokenFlag: survey.brokenFlag,
+              // #303 — optional, raw as typed. submitPlaytrace omits it from
+              // the envelope when it is empty or not address-shaped.
+              email: survey.email,
             },
           });
         }
