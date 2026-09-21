@@ -14,6 +14,8 @@
 // for settings the bump should be vanishingly rare since defaults can usually
 // substitute for unknown keys).
 
+import type { WorldState } from '../sim/types.js';
+
 export const SETTINGS_KEY = 'subterrans:settings:v1' as const;
 export const SETTINGS_VERSION = 1 as const;
 
@@ -38,6 +40,11 @@ export interface Settings {
    *  player last saw and a typo stays visible instead of being silently
    *  dropped and forgotten. */
   surveyEmail: string;
+  /** Issue #304 — the difficulty tier the player last STARTED a round on, so
+   *  the new-game screen comes back with that row selected. Default Normal.
+   *  Render-only: the tier a round actually runs at lives on WorldState and
+   *  round-trips through the save; this is just the screen's initial selection. */
+  difficulty: WorldState['difficulty'];
 }
 
 /** Cap on the remembered address (RFC 5321 max forward-path length). The wire
@@ -53,6 +60,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   hintStripVisible: true,
   firstUseHints: {},
   surveyEmail: '',
+  difficulty: 'Normal',
 };
 
 interface SettingsEnvelope {
@@ -109,7 +117,16 @@ export function loadSettings(): Settings {
         : DEFAULT_SETTINGS.hintStripVisible,
     firstUseHints: sanitizeFirstUseHints(s.firstUseHints),
     surveyEmail: clampStoredSurveyEmail(s.surveyEmail),
+    difficulty: isDifficulty(s.difficulty) ? s.difficulty : DEFAULT_SETTINGS.difficulty,
   };
+}
+
+/** Type guard for the stored difficulty tier: exactly one of the three tier
+ *  names the sim accepts (CONTEXT.md → "Difficulty"). Anything else — a missing
+ *  key on a pre-#304 blob, a hand-edited string, a number — falls back to the
+ *  default rather than reaching createScenario as an unknown tier. */
+function isDifficulty(raw: unknown): raw is WorldState['difficulty'] {
+  return raw === 'Easy' || raw === 'Normal' || raw === 'Hard';
 }
 
 /** Coerce an unknown blob into a storable email string: a non-string (missing /

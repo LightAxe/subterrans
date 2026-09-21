@@ -105,7 +105,7 @@ import {
   restampUndergroundTiles,
 } from './draw-underground.js';
 import { drawPheromoneOverlay } from './draw-pheromone.js';
-import { publishSpeedMultiplier } from './ui-scene.js';
+import { publishSpeedMultiplier, type DifficultySelectCallbacks } from './ui-scene.js';
 import { AntFacingCache } from './ant-facing-cache.js';
 import {
   ANT_TEXTURE_QUEEN,
@@ -249,10 +249,9 @@ interface UIScenePhase9 {
     onRetry(): void;
   }): void;
   hideSurveyOverlay(): void;
-  // S5 — difficulty select overlay. Shown before every new game.
-  showDifficultySelectOverlay(callbacks: {
-    onSelect: (d: 'Easy' | 'Normal' | 'Hard') => void;
-  }): void;
+  // S5 / #304 — the new-game screen. Shown before every new game; only its
+  // Start button (or Enter) fires onStart — picking a difficulty row does not.
+  showDifficultySelectOverlay(callbacks: DifficultySelectCallbacks): void;
   hideDifficultySelectOverlay(): void;
   // S6 — first-occurrence caption overlay (light onboarding). Optional captionKey
   // (Stage 3b #3) lets a dropped one-shot caption un-mark its trigger so it re-fires.
@@ -301,6 +300,16 @@ declare global {
        *  (touch-smoke.spec.ts): reads viewState, mutates nothing, crosses no
        *  sim/render boundary. Dev-build only. */
       getActiveZoom(): number;
+      /** #304 — the difficulty tier the RUNNING round was created with (reads
+       *  world.difficulty; undefined before the first boot). Lets the new-game
+       *  screen spec prove Start booted the selected tier, not just that the
+       *  selection moved. Read-only sim access, dev-build only. */
+      getRoundDifficulty(): string | undefined;
+      /** #304 — drive the render-side game-over transition (the exact path a
+       *  terminal tick outcome takes: phase → GameOver, loop paused, GameOver
+       *  overlay up) WITHOUT touching the sim, so a spec can reach the Restart
+       *  button deterministically. No-op unless Playing. Dev-build only. */
+      forceGameOver(): void;
     };
   }
 }
@@ -532,6 +541,11 @@ export class GameScene extends Phaser.Scene {
     if (!import.meta.env.DEV || typeof window === 'undefined') return;
     window.__phase9_test = {
       getDrawOrder: (): string[] => [...this.drawOrder],
+      getRoundDifficulty: (): string | undefined =>
+        this.world === undefined ? undefined : this.world.difficulty,
+      forceGameOver: (): void => {
+        if (this.gamePhase === GamePhase.Playing) this.enterGameOver(GameOutcome.Defeat);
+      },
       getActiveZoom: (): number =>
         (this.viewState.activeView === 'surface'
           ? this.viewState.surfaceCamera
@@ -1383,7 +1397,7 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private bootFresh(difficulty: 'Easy' | 'Normal' | 'Hard' = 'Normal'): void {
+  private bootFresh(difficulty: 'Easy' | 'Normal' | 'Hard'): void {
     this.resetSessionState();
     this.currentDifficulty = difficulty;
     // W1: seed formula — Date.now() is ~1.7e12, exceeds int32. Bitmask-clamp to positive int32.
@@ -1411,7 +1425,9 @@ export class GameScene extends Phaser.Scene {
     this.gamePhase = GamePhase.SavePrompt;
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     uiScene.showDifficultySelectOverlay({
-      onSelect: (d) => {
+      initialDifficulty: loadSettings().difficulty,
+      onStart: (d) => {
+        this.rememberDifficulty(d);
         this.bootFresh(d);
         if (preserveFutureSave) {
           // Set after bootFresh — resetSessionState clears the flag.
@@ -1421,12 +1437,89 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  /** #304 — persist the tier the player just started on, so the new-game
+   *  screen comes back with that row selected next time. Read-modify-write of
+   *  the settings blob (the pheromone toggle's shape); best-effort in degraded
+   *  storage — saveSettings swallows quota / private-mode errors, and the
+   *  screen then simply reopens on the default. */
+  private rememberDifficulty(d: 'Easy' | 'Normal' | 'Hard'): void {
+    const persisted = loadSettings();
+    persisted.difficulty = d;
+    saveSettings(persisted);
+  }
+
+  /**
+   * The render-side game-over transition, on a terminal tick outcome (Victory /
+   * Defeat / MutualDestruction): phase → GameOver, loop paused, in-flight
+   * gestures dropped, the death cause and narrative extracted, and either the
+   * survey (playtrace on) or the GameOver overlay shown. Extracted from the
+   * game loop's onTickOutcome callback verbatim (#304) so the dev-only
+   * __phase9_test.forceGameOver() seam can drive the exact same path.
+   */
+  private enterGameOver(outcome: GameOutcome): void {
+    this.currentOutcome = outcome;
+    this.gamePhase = GamePhase.GameOver;
+    // W2: first-class pause via Plan 06 Task 1 API — no setMsPerTick(Infinity)
+    this.gameLoop.pause();
+    // Issue #129 — clear any in-flight pan/drag/gesture so it doesn't leak
+    // into the GameOver overlay state (the middle-button drag-pan handlers
+    // are independent of processCameraInput and otherwise fire unguarded; the
+    // gesture arbiter must also abandon any pending tap/paint/pan).
+    this.arbiter.cancelGesture();
+    resetPanInputState();
+    resetDragState(this.dragState);
+
+    // Extract death cause from the first queen_death event emitted this tick.
+    // Forward scan: player is added to diedThisTick first, so the player's event
+    // comes before enemy events — Defeat gives the player's cause, Victory gives
+    // the enemy's. Tick filter prevents stale events from earlier ticks matching.
+    // world.tick was incremented at step 19 (tick.ts) after checkQueenDeath (step 18),
+    // so the queen_death event carries world.tick - 1.
+    const deathTick = (this.world?.tick ?? 1) - 1;
+    const evts = this.world?.events ?? [];
+    let cause: import('./ui-scene-logic.js').QueenDeathCause = null;
+    for (let i = 0; i < evts.length; i++) {
+      const ev = evts[i];
+      if (ev && ev.type === 'queen_death' && ev.tick === deathTick) {
+        cause = ev.payload.cause;
+        break;
+      }
+    }
+    this.currentCause = cause;
+
+    // S6: build narrative for the loss screen.
+    const outcomeLabel: GameOutcomeLabel | undefined =
+      outcome === GameOutcome.Victory
+        ? 'Victory'
+        : outcome === GameOutcome.Defeat
+          ? 'Defeat'
+          : outcome === GameOutcome.MutualDestruction
+            ? 'MutualDestruction'
+            : undefined;
+    const summary = buildPlaytraceSummary(this.world, this.resumedFromSave, outcomeLabel);
+    const narrativeSeed = summary.outcomeAttribution.narrativeSeed;
+
+    const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
+    // Issue #122 — when the playtrace feature is enabled, the survey
+    // overlay replaces the bare game-over panel at end-of-game. Skip
+    // from the survey transitions to restart, matching the prior UX.
+    // When the feature is off, fall back to the original game-over
+    // overlay so the open-source build's behavior is unchanged.
+    if (this.playtraceEndpoint !== '') {
+      this.openSurveyOverlay(false /* quitFromPauseMenu */);
+    } else {
+      uiScene.showGameOverOverlay(outcome, cause, () => this.restartGame(), narrativeSeed);
+    }
+  }
+
   private async bootFromSave(): Promise<void> {
     const loaded = await loadSave();
     if (loaded === null) {
-      // Corrupt save: fall through to fresh (bootFresh runs its own reset)
+      // Corrupt save: fall through to fresh (bootFresh runs its own reset).
+      // No new-game screen on this path (the player already chose Continue);
+      // the persisted last-used tier applies (#304), not a hard-coded Normal.
       await deleteSave();
-      this.bootFresh();
+      this.bootFresh(loadSettings().difficulty);
       return;
     }
     // Reset BEFORE restoring so the new session starts from a clean slate,
@@ -1457,8 +1550,10 @@ export class GameScene extends Phaser.Scene {
     try {
       nextWorld = deserializeWorldState(loaded.snapshot);
     } catch (err) {
+      // Every fallback below boots fresh on the persisted last-used tier
+      // (#304) — no new-game screen, since the player already chose Continue.
       if (err instanceof FutureSimVersionError) {
-        this.bootFresh();
+        this.bootFresh(loadSettings().difficulty);
         // Set after bootFresh — resetSessionState clears the flag.
         this.autosaveSuspended = true;
         return;
@@ -1467,12 +1562,12 @@ export class GameScene extends Phaser.Scene {
         // Pre-V22 save — no migration path; discard and start fresh.
         console.error(err.message);
         await deleteSave();
-        this.bootFresh();
+        this.bootFresh(loadSettings().difficulty);
         return;
       }
       // Genuine corruption: discard so we don't loop the user.
       await deleteSave();
-      this.bootFresh();
+      this.bootFresh(loadSettings().difficulty);
       return;
     }
     this.currentSeed = loaded.seed;
@@ -1559,61 +1654,7 @@ export class GameScene extends Phaser.Scene {
           }
         }
       },
-      onTickOutcome: (outcome) => {
-        this.currentOutcome = outcome;
-        this.gamePhase = GamePhase.GameOver;
-        // W2: first-class pause via Plan 06 Task 1 API — no setMsPerTick(Infinity)
-        this.gameLoop.pause();
-        // Issue #129 — clear any in-flight pan/drag/gesture so it doesn't leak
-        // into the GameOver overlay state (the middle-button drag-pan handlers
-        // are independent of processCameraInput and otherwise fire unguarded; the
-        // gesture arbiter must also abandon any pending tap/paint/pan).
-        this.arbiter.cancelGesture();
-        resetPanInputState();
-        resetDragState(this.dragState);
-
-        // Extract death cause from the first queen_death event emitted this tick.
-        // Forward scan: player is added to diedThisTick first, so the player's event
-        // comes before enemy events — Defeat gives the player's cause, Victory gives
-        // the enemy's. Tick filter prevents stale events from earlier ticks matching.
-        // world.tick was incremented at step 19 (tick.ts) after checkQueenDeath (step 18),
-        // so the queen_death event carries world.tick - 1.
-        const deathTick = (this.world?.tick ?? 1) - 1;
-        const evts = this.world?.events ?? [];
-        let cause: import('./ui-scene-logic.js').QueenDeathCause = null;
-        for (let i = 0; i < evts.length; i++) {
-          const ev = evts[i];
-          if (ev && ev.type === 'queen_death' && ev.tick === deathTick) {
-            cause = ev.payload.cause;
-            break;
-          }
-        }
-        this.currentCause = cause;
-
-        // S6: build narrative for the loss screen.
-        const outcomeLabel: GameOutcomeLabel | undefined =
-          outcome === GameOutcome.Victory
-            ? 'Victory'
-            : outcome === GameOutcome.Defeat
-              ? 'Defeat'
-              : outcome === GameOutcome.MutualDestruction
-                ? 'MutualDestruction'
-                : undefined;
-        const summary = buildPlaytraceSummary(this.world, this.resumedFromSave, outcomeLabel);
-        const narrativeSeed = summary.outcomeAttribution.narrativeSeed;
-
-        const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
-        // Issue #122 — when the playtrace feature is enabled, the survey
-        // overlay replaces the bare game-over panel at end-of-game. Skip
-        // from the survey transitions to restart, matching the prior UX.
-        // When the feature is off, fall back to the original game-over
-        // overlay so the open-source build's behavior is unchanged.
-        if (this.playtraceEndpoint !== '') {
-          this.openSurveyOverlay(false /* quitFromPauseMenu */);
-        } else {
-          uiScene.showGameOverOverlay(outcome, cause, () => this.restartGame(), narrativeSeed);
-        }
-      },
+      onTickOutcome: (outcome) => this.enterGameOver(outcome),
       getMsPerTick: () => MS_PER_TICK / this.speedMultiplier,
     });
 
@@ -2003,11 +2044,13 @@ export class GameScene extends Phaser.Scene {
     this.currentCause = null;
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     uiScene.hideGameOverOverlay();
-    // S5: show difficulty selector before creating the new world.
+    // S5 / #304: show the new-game screen before creating the new world.
     // bootFresh is invoked inside the callback so wasSuspended is captured.
     this.gamePhase = GamePhase.SavePrompt; // prevent update() from ticking the old world during overlay
     uiScene.showDifficultySelectOverlay({
-      onSelect: (d) => {
+      initialDifficulty: loadSettings().difficulty,
+      onStart: (d) => {
+        this.rememberDifficulty(d);
         this.bootFresh(d);
         if (wasSuspended) {
           this.autosaveSuspended = true;

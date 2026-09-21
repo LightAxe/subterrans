@@ -13,7 +13,7 @@
 // sim/render boundary.
 
 import { test, expect, type Page } from '@playwright/test';
-import { DIFFICULTY_NORMAL_RECT, centerOf } from './helpers/geometry.js';
+import { activeOverlay, settleToPlaying } from './helpers/boot.js';
 
 /** The active camera's live zoom, via the dev-build observability hook. */
 async function getZoom(page: Page): Promise<number> {
@@ -23,14 +23,6 @@ async function getZoom(page: Page): Promise<number> {
     if (!t?.getActiveZoom) throw new Error('__phase9_test.getActiveZoom not installed');
     return t.getActiveZoom();
   });
-}
-
-async function activeOverlay(page: Page): Promise<string> {
-  return await page.evaluate(
-    () =>
-      (window as unknown as { __phase9_ui?: { activeOverlay?: string } }).__phase9_ui
-        ?.activeOverlay ?? '<undefined>',
-  );
 }
 
 /** Boot to a clean Playing state (mirrors menu-and-dialog.spec.ts's bootGame). */
@@ -43,20 +35,10 @@ async function bootToPlaying(page: Page): Promise<void> {
   await page.evaluate(() => localStorage.removeItem('subterrans:save:v3'));
   await page.reload();
   await page.locator('canvas').first().waitFor({ state: 'attached' });
-  // Poll-click "Normal" until the Choose-Difficulty overlay clears to Playing.
-  const box = await page.locator('canvas').first().boundingBox();
-  if (!box) throw new Error('canvas has no bounding box');
-  const norm = centerOf(DIFFICULTY_NORMAL_RECT);
-  await expect
-    .poll(
-      async () => {
-        if ((await activeOverlay(page)) === 'none') return 'none';
-        await page.mouse.click(box.x + norm.x, box.y + norm.y);
-        return activeOverlay(page);
-      },
-      { timeout: 15_000 },
-    )
-    .toBe('none');
+  // #304 — select Normal and press Start on the new-game screen with real
+  // single-finger TAPS (page.touchscreen), so the touch path through the
+  // scene-level dispatch is pinned, not just the mouse one.
+  await settleToPlaying(page, 'Normal', { via: 'touch' });
 }
 
 test('two-finger spread pinch-zooms the camera in', async ({ page }) => {

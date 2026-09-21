@@ -6,9 +6,10 @@
 //
 // Importing ui-scene.ts (Phaser) would crash the Node runner, but these modules
 // don't touch Phaser: layout.ts→sprites.ts (zero imports), pause-menu-layout.ts /
-// save-load-dialog-layout.ts (type-only cross-imports), boot-overlay-layout.ts and
-// sprites.ts (zero imports), and hud-layout.ts (#238 — type-only import of
-// LayoutContext; the VIEW_TOGGLE rect now comes from buildHudLayout).
+// save-load-dialog-layout.ts (type-only cross-imports), boot-overlay-layout.ts
+// (#304 — type-only imports of LayoutContext and the sim's WorldState, erased at
+// runtime), sprites.ts (zero imports), and hud-layout.ts (#238 — type-only import
+// of LayoutContext; the VIEW_TOGGLE rect now comes from buildHudLayout).
 import { DEFAULT_LAYOUT } from '../../src/render/layout.js';
 import { pauseMenuItems, type PauseMenuRenderContext } from '../../src/render/pause-menu-layout.js';
 import {
@@ -16,6 +17,7 @@ import {
   type SaveLoadDialogContext,
 } from '../../src/render/save-load-dialog-layout.js';
 import { buildHudLayout } from '../../src/render/hud-layout.js';
+import { newGameScreenLayout, type Difficulty } from '../../src/render/boot-overlay-layout.js';
 
 export interface Rect {
   x: number;
@@ -69,5 +71,16 @@ export const VIEW_TOGGLE_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).VIEW_TOGGLE
 export {
   SAVE_PROMPT_CONTINUE_RECT,
   SAVE_PROMPT_NEW_GAME_RECT,
-  DIFFICULTY_NORMAL_RECT,
+  GAME_OVER_RESTART_RECT,
 } from '../../src/render/boot-overlay-layout.js';
+
+// #304 — the new-game screen: three radio-style difficulty rows and the single
+// Start button, evaluated from the same pure layout function the overlay draws
+// from. Clicking a row only moves the selection; Start (or Enter) begins the
+// round — see tests/helpers/boot.ts for the shared drive-to-Playing helper.
+const newGame = newGameScreenLayout(DEFAULT_LAYOUT);
+/** Difficulty rows keyed by tier. */
+export const DIFFICULTY_ROW_RECTS: Readonly<Record<Difficulty, Rect>> = newGame.difficultyRows;
+/** The "Start game" button. */
+export const NEW_GAME_START_RECT: Rect = newGame.startButton;
+export type { Difficulty };

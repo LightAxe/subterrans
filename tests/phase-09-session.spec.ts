@@ -10,57 +10,15 @@ import { test, expect, type ConsoleMessage, type Page } from '@playwright/test';
 import {
   SAVE_PROMPT_CONTINUE_RECT,
   SAVE_PROMPT_NEW_GAME_RECT,
-  DIFFICULTY_NORMAL_RECT,
   SAVE_LOAD_ROW_RECT,
   DIALOG_SAVE_NOW_RECT,
 } from './helpers/geometry.js';
+// #304 — the new-game screen is two steps (pick a difficulty row, press Start);
+// the shared helper drives it so every spec boots the same way.
+import { clickCanvasRect, settleToPlaying } from './helpers/boot.js';
 
 const errorFilter = (msg: ConsoleMessage) => msg.type() === 'error';
 const SAVE_KEY = 'subterrans:save:v3';
-
-// Pick "Normal" on the Choose Difficulty overlay (S5; shown before every new
-// game) until the game reaches Playing (activeOverlay === 'none'). The overlay
-// reports activeOverlay 'save-prompt', so poll-click Normal; the loop exits the
-// moment we reach Playing. Use after a fresh-boot reload (no save). Safe only
-// when no real Continue/New Game SavePrompt is up — Normal's rect overlaps the
-// SavePrompt Continue button.
-async function settleToPlaying(page: Page): Promise<void> {
-  const canvas = page.locator('canvas').first();
-  // Wait until UIScene.create() has published the hook. Until then
-  // getActiveOverlay() returns '<undefined>' (NOT 'none'), so without this
-  // guard the very first poll could read the absent hook, see a non-'none'
-  // value, and the loop would never exit early on a still-booting page — but
-  // more importantly the '<undefined>' sentinel keeps the loop from treating
-  // an unpublished hook as a settled (Playing) game (vacuous pass).
-  await page.waitForFunction(
-    () => typeof (window as { __phase9_ui?: unknown }).__phase9_ui !== 'undefined',
-    undefined,
-    { timeout: 15_000 },
-  );
-  await expect
-    .poll(
-      async () => {
-        if ((await getActiveOverlay(page)) === 'none') return 'none';
-        const box = await canvas.boundingBox();
-        if (box) {
-          const r = DIFFICULTY_NORMAL_RECT;
-          await page.mouse.click(box.x + r.x + r.w / 2, box.y + r.y + r.h / 2);
-        }
-        return getActiveOverlay(page);
-      },
-      { timeout: 15_000 },
-    )
-    .toBe('none');
-}
-
-async function clickCanvasRect(
-  page: Page,
-  rect: { x: number; y: number; w: number; h: number },
-): Promise<void> {
-  const box = await page.locator('canvas').first().boundingBox();
-  if (!box) throw new Error('canvas has no bounding box');
-  await page.mouse.click(box.x + rect.x + rect.w / 2, box.y + rect.y + rect.h / 2);
-}
 
 // Raw activeOverlay read (returns the full string, incl. 'pause-menu'/'save-load'
 // which the narrow ActiveOverlay type below doesn't enumerate).
@@ -130,7 +88,7 @@ async function getActiveOverlay(page: Page): Promise<ActiveOverlay | '<undefined
   }) as Promise<ActiveOverlay | '<undefined>'>;
 }
 
-// Assert the boot reached the "Choose Difficulty" overlay (S5) and NOT a real
+// Assert the boot reached the new-game screen (S5 / #304) and NOT a real
 // Continue/New Game SavePrompt. Both overlays report activeOverlay ===
 // 'save-prompt' (ui-scene.ts reuses that HUD state for DifficultySelect), so the
 // reported activeOverlay alone cannot tell them apart. The __phase9_ui.bootScreen
@@ -138,7 +96,7 @@ async function getActiveOverlay(page: Page): Promise<ActiveOverlay | '<undefined
 // 'difficulty-select' for the fresh-boot overlay vs 'save-prompt' for a real
 // Continue/New Game prompt. Pinning bootScreen === 'difficulty-select' keeps the
 // "no SavePrompt on fresh boot" contract honest — a regression that showed a real
-// SavePrompt would otherwise pass silently (settleToPlaying's Normal-click rect
+// SavePrompt would otherwise pass silently (settleToPlaying's Normal-row rect
 // overlaps the SavePrompt Continue button and would still drive to 'none').
 async function expectFreshBootDifficultyOverlay(page: Page): Promise<void> {
   await expect
@@ -155,10 +113,10 @@ async function expectFreshBootDifficultyOverlay(page: Page): Promise<void> {
 
 // Inverse of expectFreshBootDifficultyOverlay: assert the boot reached a REAL
 // Continue/New Game SavePrompt (a compatible save exists), NOT the fresh-boot
-// Choose Difficulty overlay — both report activeOverlay 'save-prompt', so the
+// new-game screen — both report activeOverlay 'save-prompt', so the
 // bootScreen discriminator is what makes this honest. Without it, a SCEN-04 test
-// whose seeded save failed to load would silently fall through to Choose
-// Difficulty and still "see" save-prompt (the #192 masking bug).
+// whose seeded save failed to load would silently fall through to the new-game
+// screen and still "see" save-prompt (the #192 masking bug).
 async function expectBootSavePrompt(page: Page): Promise<void> {
   await expect
     .poll(
@@ -194,9 +152,9 @@ test.describe('Phase 9 — SCEN-01 fresh boot', () => {
     await canvas.waitFor({ state: 'attached', timeout: 10_000 });
     await expect(canvas).toBeVisible();
 
-    // No leftover save → fresh boot opens "Choose Difficulty" (S5), not a
-    // Continue/New Game SavePrompt. Verify the overlay is DifficultySelect (the
-    // "no SavePrompt on fresh boot" contract) before selecting a difficulty.
+    // No leftover save → fresh boot opens the new-game screen (S5 / #304), not
+    // a Continue/New Game SavePrompt. Verify the overlay is DifficultySelect
+    // (the "no SavePrompt on fresh boot" contract) before starting a round.
     await expectFreshBootDifficultyOverlay(page);
     await settleToPlaying(page);
 
@@ -215,8 +173,8 @@ test.describe('Phase 9 — SCEN-01 fresh boot', () => {
     await canvas.waitFor({ state: 'attached', timeout: 10_000 });
     await expect(canvas).toBeVisible();
     // Malformed JSON → loadSave returns null → hasSave() false → fresh boot
-    // (Choose Difficulty, not a SavePrompt). Verify the overlay is DifficultySelect
-    // before selecting a difficulty to reach Playing.
+    // (the new-game screen, not a SavePrompt). Verify the overlay is
+    // DifficultySelect before starting a round to reach Playing.
     await expectFreshBootDifficultyOverlay(page);
     await settleToPlaying(page);
   });
@@ -225,7 +183,7 @@ test.describe('Phase 9 — SCEN-01 fresh boot', () => {
 // SCEN-04 exercises the boot SavePrompt against a REAL, current-format save
 // captured via seedRealSave() (Save Now on a live game) — the prior
 // hand-crafted MINIMAL_SAVE_FIXTURE was a stale v1 envelope the v3 deserializer
-// rejected, so it produced no loadable save (the boot showed Choose Difficulty,
+// rejected, so it produced no loadable save (the boot showed the new-game screen,
 // which also reports activeOverlay 'save-prompt', masking the failure). Fixed
 // per #192.
 test.describe('Phase 9 — SCEN-04 save-prompt flow', () => {
@@ -246,12 +204,20 @@ test.describe('Phase 9 — SCEN-04 save-prompt flow', () => {
     await page.reload();
 
     // A real, compatible save exists → boot shows the Continue/New Game SavePrompt.
-    // Assert bootScreen too: both this and Choose Difficulty report activeOverlay
+    // Assert bootScreen too: both this and the new-game screen report activeOverlay
     // 'save-prompt', so bootScreen === 'save-prompt' is what proves it's the REAL
     // prompt (the boot accepted hasSave() && !hasIncompatibleSave()), not a
     // fresh-boot fall-through.
     await expect.poll(() => getActiveOverlay(page), { timeout: 5_000 }).toBe('save-prompt');
     await expectBootSavePrompt(page);
+
+    // #304 — Enter is the new-game screen's start key ONLY. On a real
+    // Continue/New Game SavePrompt it must do nothing: no Continue, no New
+    // Game, the prompt still up.
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(400);
+    await expectBootSavePrompt(page);
+    expect(await getActiveOverlay(page)).toBe('save-prompt');
 
     // SavePrompt buttons are canvas-drawn — click Continue by canvas-relative rect.
     await clickCanvasRect(page, SAVE_PROMPT_CONTINUE_RECT);
@@ -267,12 +233,12 @@ test.describe('Phase 9 — SCEN-04 save-prompt flow', () => {
     await page.reload();
 
     await expect.poll(() => getActiveOverlay(page), { timeout: 5_000 }).toBe('save-prompt');
-    await expectBootSavePrompt(page); // real Continue/New Game prompt, not Choose Difficulty
+    await expectBootSavePrompt(page); // real Continue/New Game prompt, not the new-game screen
 
     await clickCanvasRect(page, SAVE_PROMPT_NEW_GAME_RECT);
 
-    // New Game deletes the save (deleteSave) then opens Choose Difficulty (S5);
-    // selecting a difficulty boots fresh into Playing.
+    // New Game deletes the save (deleteSave) then opens the new-game screen
+    // (S5 / #304); Start boots fresh into Playing.
     await settleToPlaying(page);
     const stored = await page.evaluate(
       (key) => window.localStorage.getItem(key as string),
@@ -313,7 +279,7 @@ test.describe('Phase 09.1 Chunk 2 — enemy underground toggle', () => {
     await page.reload();
     const canvas = page.locator('canvas').first();
     await canvas.waitFor({ state: 'attached', timeout: 10_000 });
-    // Fresh boot opens Choose Difficulty (S5); select a difficulty to reach
+    // Fresh boot opens the new-game screen (S5 / #304); Start a round to reach
     // Playing before exercising the Tab/X keybinds.
     await settleToPlaying(page);
     await page.waitForTimeout(300);

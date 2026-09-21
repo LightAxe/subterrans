@@ -207,3 +207,53 @@ describe('surveyEmail (#303)', () => {
     expect(loadSettings().surveyEmail).toHaveLength(SURVEY_EMAIL_MAX);
   });
 });
+
+describe('difficulty (#304)', () => {
+  it('defaults to Normal', () => {
+    expect(DEFAULT_SETTINGS.difficulty).toBe('Normal');
+    expect(loadSettings().difficulty).toBe('Normal');
+  });
+
+  it('round-trips each tier', () => {
+    for (const tier of ['Easy', 'Normal', 'Hard'] as const) {
+      saveSettings(mk({ difficulty: tier }));
+      expect(loadSettings().difficulty).toBe(tier);
+    }
+  });
+
+  it('loads a pre-#304 settings blob (no difficulty key) as Normal without wiping its other fields', () => {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        version: SETTINGS_VERSION,
+        settings: {
+          pheromoneOverlay: false,
+          hintStripVisible: false,
+          firstUseHints: { a: true },
+          surveyEmail: 'player@example.com',
+        },
+      }),
+    );
+    const loaded = loadSettings();
+    expect(loaded.difficulty).toBe('Normal');
+    expect(loaded.pheromoneOverlay).toBe(false);
+    expect(loaded.hintStripVisible).toBe(false);
+    expect(loaded.firstUseHints).toEqual({ a: true });
+    expect(loaded.surveyEmail).toBe('player@example.com');
+  });
+
+  it('falls back to Normal when the stored value is not a tier name, keeping valid siblings', () => {
+    for (const bad of ['easy', 'Impossible', 1, null, { tier: 'Hard' }]) {
+      localStorage.setItem(
+        SETTINGS_KEY,
+        JSON.stringify({
+          version: SETTINGS_VERSION,
+          settings: { difficulty: bad, pheromoneOverlay: false },
+        }),
+      );
+      const loaded = loadSettings();
+      expect(loaded.difficulty, JSON.stringify(bad)).toBe('Normal');
+      expect(loaded.pheromoneOverlay).toBe(false);
+    }
+  });
+});

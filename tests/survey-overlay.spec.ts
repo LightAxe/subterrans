@@ -25,11 +25,11 @@ import { gunzipSync } from 'node:zlib';
 
 import { DEFAULT_LAYOUT } from '../src/render/layout.js';
 import { pauseMenuItems, type PauseMenuRenderContext } from '../src/render/pause-menu-layout.js';
-import {
-  DIFFICULTY_EASY_RECT,
-  DIFFICULTY_HARD_RECT,
-  DIFFICULTY_NORMAL_RECT,
-} from '../src/render/boot-overlay-layout.js';
+// #304 — the new-game screen is two steps (pick a difficulty row, press Start);
+// the shared helper drives it on the requested tier, and the canvas-click /
+// observability helpers come from the same place as every other spec's.
+import { activeOverlay, clickCanvasRect, settleToPlaying } from './helpers/boot.js';
+import type { Difficulty, Rect } from './helpers/geometry.js';
 import {
   SURVEY_EMAIL_LABEL,
   SURVEY_EMAIL_LABEL_Y,
@@ -54,21 +54,12 @@ const EMAIL_INPUT = 'input[type="email"]';
  *  neither of which belongs in the Playwright Node runner. */
 const EXPECTED_SCHEMA_VERSION = 3;
 
-type Rect = { x: number; y: number; w: number; h: number };
-type Difficulty = 'Easy' | 'Normal' | 'Hard';
-
 // Rects the survey needs, evaluated once at the default (800×592) layout.
 const EMAIL_RECT = surveyEmailInputRect(DEFAULT_LAYOUT);
 const FREE_TEXT_RECT = surveyFreeTextRect(DEFAULT_LAYOUT);
 const SUBMIT_RECT = surveySubmitButtonRect(DEFAULT_LAYOUT);
 const UPLOAD_ROW_RECT = surveyUploadRowHitRect(DEFAULT_LAYOUT);
 const RATING_RECTS = surveyRatingButtons(DEFAULT_LAYOUT);
-
-const DIFFICULTY_RECTS: Record<Difficulty, Rect> = {
-  Easy: DIFFICULTY_EASY_RECT,
-  Normal: DIFFICULTY_NORMAL_RECT,
-  Hard: DIFFICULTY_HARD_RECT,
-};
 
 // The pause menu with the playtrace feature ON — five rows, "Quit & feedback"
 // last. Only quitAndSurveyEnabled moves the rects (it changes the row count);
@@ -88,39 +79,10 @@ function ratingRect(rating: 1 | 2 | 3 | 4 | 5): Rect {
   return RATING_RECTS.find((b) => b.rating === rating)!.rect;
 }
 
-async function clickCanvasRect(page: Page, rect: Rect): Promise<void> {
-  const box = await page.locator('canvas').first().boundingBox();
-  if (!box) throw new Error('canvas has no bounding box');
-  await page.mouse.click(box.x + rect.x + rect.w / 2, box.y + rect.y + rect.h / 2);
-}
-
-async function activeOverlay(page: Page): Promise<string> {
-  return await page.evaluate(() => {
-    const ui = (window as { __phase9_ui?: { activeOverlay: string } }).__phase9_ui;
-    return ui?.activeOverlay ?? '<undefined>';
-  });
-}
-
-/** Drive the fresh-boot "Choose Difficulty" overlay to Playing on the given
- *  tier. Same poll-click shape as menu-and-dialog.spec.ts's settleToPlaying —
- *  a click that lands before the buttons are interactive simply retries. */
-async function settleToPlaying(page: Page, difficulty: Difficulty): Promise<void> {
-  await expect
-    .poll(
-      async () => {
-        if ((await activeOverlay(page)) === 'none') return 'none';
-        await clickCanvasRect(page, DIFFICULTY_RECTS[difficulty]);
-        return activeOverlay(page);
-      },
-      { timeout: 20_000 },
-    )
-    .toBe('none');
-}
-
 /** Boot the playtrace-on fixture to a clean Playing state on `difficulty`.
  *  `keepSettings` preserves subterrans:settings:v1 across the reload, which is
  *  what the #303 prefill check needs (the save key is always cleared so the
- *  reload lands on Choose Difficulty, never a Continue/New Game SavePrompt). */
+ *  reload lands on the new-game screen, never a Continue/New Game SavePrompt). */
 async function bootFixture(
   page: Page,
   difficulty: Difficulty,
@@ -190,7 +152,7 @@ async function submitSurvey(page: Page, rating: 1 | 2 | 3 | 4 | 5): Promise<void
 }
 
 test.describe('End-of-game survey overlay — v3 playtrace envelope', () => {
-  // A full boot (assets + Choose Difficulty + a live world) plus the pause-menu
+  // A full boot (assets + the new-game screen + a live world) plus the pause-menu
   // path runs well past the suite's 30s default on a cold dev server.
   test.describe.configure({ timeout: 90_000 });
 
@@ -374,8 +336,8 @@ test.describe('End-of-game survey overlay — v3 playtrace envelope', () => {
     await expect.poll(() => captured.length, { timeout: 15_000 }).toBe(1);
     expect(captured[0]!.survey.email).toBe('returning@example.com');
 
-    // Reload (settings survive; the save is cleared so we land on Choose
-    // Difficulty again) and reopen the survey.
+    // Reload (settings survive; the save is cleared so we land on the new-game
+    // screen again) and reopen the survey.
     await bootFixture(page, 'Normal', { keepSettings: true });
     await openSurveyFromPauseMenu(page);
     await expect(page.locator(EMAIL_INPUT)).toHaveValue('returning@example.com');
