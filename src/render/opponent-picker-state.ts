@@ -103,12 +103,16 @@ export function toggleKind(
   return { ...state, kind: next };
 }
 
-/** Highlight a preset and overwrite the free text with its (normalized) text. */
+/** Highlight a preset and overwrite the free text with its (normalized) text.
+ *  Re-clicking the lit preset (its text unedited) returns the SAME state
+ *  object, so the overlay's identity check skips a needless rebuild. */
 export function selectPreset(
   state: OpponentPickerState,
   id: JevOrdersPresetId,
 ): OpponentPickerState {
-  return { ...state, presetId: id, text: ordersTextForPreset(id) };
+  const text = ordersTextForPreset(id);
+  if (state.presetId === id && state.text === text) return state;
+  return { ...state, presetId: id, text };
 }
 
 /**

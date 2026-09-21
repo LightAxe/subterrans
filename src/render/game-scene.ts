@@ -314,6 +314,11 @@ declare global {
        *  screen spec prove Start booted the selected tier, not just that the
        *  selection moved. Read-only sim access, dev-build only. */
       getRoundDifficulty(): string | undefined;
+      /** Jev opponent (beta) — the opponent kind ('rules' | 'jev') the RUNNING
+       *  round was created with, after the no-endpoint downgrade (undefined
+       *  before the first boot). Lets the picker spec prove Start booted the
+       *  selected opponent. Render-side state only, dev-build only. */
+      getRoundOpponent(): string | undefined;
       /** #304 — drive the render-side game-over transition (the exact path a
        *  terminal tick outcome takes: phase → GameOver, loop paused, GameOver
        *  overlay up) WITHOUT touching the sim, so a spec can reach the Restart
@@ -553,6 +558,8 @@ export class GameScene extends Phaser.Scene {
       getDrawOrder: (): string[] => [...this.drawOrder],
       getRoundDifficulty: (): string | undefined =>
         this.world === undefined ? undefined : this.world.difficulty,
+      getRoundOpponent: (): string | undefined =>
+        this.world === undefined ? undefined : this.currentOpponent.kind,
       forceGameOver: (): void => {
         if (this.gamePhase === GamePhase.Playing) this.enterGameOver(GameOutcome.Defeat);
       },

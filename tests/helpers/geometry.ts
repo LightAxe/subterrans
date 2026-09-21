@@ -8,8 +8,10 @@
 // don't touch Phaser: layout.ts→sprites.ts (zero imports), pause-menu-layout.ts /
 // save-load-dialog-layout.ts (type-only cross-imports), boot-overlay-layout.ts
 // (#304 — type-only imports of LayoutContext and the sim's WorldState, erased at
-// runtime), sprites.ts (zero imports), and hud-layout.ts (#238 — type-only import
-// of LayoutContext; the VIEW_TOGGLE rect now comes from buildHudLayout).
+// runtime), sprites.ts (zero imports), hud-layout.ts (#238 — type-only import
+// of LayoutContext; the VIEW_TOGGLE rect now comes from buildHudLayout), and
+// jev-orders.ts (Jev opponent beta — zero imports; the preset count sizes the
+// new-game screen's opponent section).
 import { DEFAULT_LAYOUT } from '../../src/render/layout.js';
 import { pauseMenuItems, type PauseMenuRenderContext } from '../../src/render/pause-menu-layout.js';
 import {
@@ -17,7 +19,13 @@ import {
   type SaveLoadDialogContext,
 } from '../../src/render/save-load-dialog-layout.js';
 import { buildHudLayout } from '../../src/render/hud-layout.js';
-import { newGameScreenLayout, type Difficulty } from '../../src/render/boot-overlay-layout.js';
+import {
+  newGameScreenLayout,
+  newGameScreenWithOpponent,
+  type Difficulty,
+  type OpponentKind,
+} from '../../src/render/boot-overlay-layout.js';
+import { JEV_ORDERS_PRESETS } from '../../src/render/jev-orders.js';
 
 export interface Rect {
   x: number;
@@ -84,3 +92,49 @@ export const DIFFICULTY_ROW_RECTS: Readonly<Record<Difficulty, Rect>> = newGame.
 /** The "Start game" button. */
 export const NEW_GAME_START_RECT: Rect = newGame.startButton;
 export type { Difficulty };
+
+// Jev opponent beta (#304 items 3–4) — the same screen on a build whose Jev
+// endpoint is configured (the chromium-jev project), where an opponent section
+// sits between the difficulty rows and Start. Its height follows the picker —
+// caption + two rows with the Standard AI selected, plus the Jev options (preset
+// buttons, free-text rect) once Jev is — and the stack re-centres around it, so
+// the difficulty rows and Start are NOT where the plain-build rects above put
+// them. Two rect sets, one per picker state, evaluated from the same pure layout
+// function ui-scene.ts draws from; a spec clicks the set for the state the
+// screen is in.
+export interface JevBuildNewGameRects {
+  difficultyRows: Readonly<Record<Difficulty, Rect>>;
+  startButton: Rect;
+  /** "Standard AI" / "Jev (beta)" radio rows, keyed by kind. */
+  opponentRows: Readonly<Record<OpponentKind, Rect>>;
+  /** The Jev options — present only in the Jev-selected set. */
+  jev: { presetButtons: readonly Rect[]; textarea: Rect } | null;
+}
+
+function jevBuildRects(jevSelected: boolean): JevBuildNewGameRects {
+  const { screen, opponent } = newGameScreenWithOpponent(DEFAULT_LAYOUT, {
+    jevAvailable: true,
+    jevSelected,
+    presetCount: JEV_ORDERS_PRESETS.length,
+  });
+  if (opponent === null) throw new Error('jevAvailable: true must yield an opponent section');
+  return {
+    difficultyRows: screen.difficultyRows,
+    startButton: screen.startButton,
+    opponentRows: opponent.rows,
+    jev:
+      opponent.jev === null
+        ? null
+        : { presetButtons: opponent.jev.presetButtons, textarea: opponent.jev.textarea },
+  };
+}
+
+/** The Jev-capable screen with the Standard AI row selected (how it opens on
+ *  a fresh player). */
+export const JEV_BUILD_RULES_SELECTED: JevBuildNewGameRects = jevBuildRects(false);
+/** The Jev-capable screen with the Jev row selected — the Jev options are up
+ *  and everything else has moved. */
+export const JEV_BUILD_JEV_SELECTED: JevBuildNewGameRects = jevBuildRects(true);
+/** Preset ids/labels/text, so the spec asserts against the shipped text, not a copy. */
+export { JEV_ORDERS_PRESETS };
+export type { OpponentKind };

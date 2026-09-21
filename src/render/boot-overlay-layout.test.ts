@@ -33,8 +33,25 @@ import {
   difficultyRowInner,
   newGameColumnW,
   newGameScreenLayout,
+  OPPONENT_KINDS,
+  OPPONENT_ROW_H,
+  OPPONENT_ROW_GAP,
+  OPPONENT_ROW_DESC_X,
+  JEV_OPTIONS_GAP,
+  JEV_OPTIONS_CAPTION_H,
+  JEV_COUNTER_GAP,
+  JEV_PRESET_H,
+  JEV_PRESET_GAP,
+  JEV_PRESET_ROW_GAP,
+  JEV_TEXTAREA_H,
+  newGameScreenWithOpponent,
+  opponentRowInner,
+  opponentSectionH,
+  opponentSectionLayout,
   type BootOverlayRect,
+  type OpponentSectionOptions,
 } from './boot-overlay-layout.js';
+import { JEV_ORDERS_PRESETS } from './jev-orders.js';
 import { DEFAULT_LAYOUT, createLayoutContext } from './layout.js';
 import { pauseMenuItems, type PauseMenuRenderContext } from './pause-menu-layout.js';
 import { saveLoadDialogItems, type SaveLoadDialogContext } from './save-load-dialog-layout.js';
@@ -210,5 +227,191 @@ describe('#240 layout functions equal the specs’ former inline literals', () =
 
   it('HUD view-toggle button', () => {
     expect(buildHudLayout(DEFAULT_LAYOUT).VIEW_TOGGLE).toEqual({ x: 632, y: 396, w: 80, h: 24 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Jev opponent beta (#304 items 3–4) — the opponent section in the slot
+// ---------------------------------------------------------------------------
+
+const PRESET_COUNT = JEV_ORDERS_PRESETS.length;
+const RULES: OpponentSectionOptions = {
+  jevAvailable: true,
+  jevSelected: false,
+  presetCount: PRESET_COUNT,
+};
+const JEV: OpponentSectionOptions = { ...RULES, jevSelected: true };
+const NONE: OpponentSectionOptions = { ...RULES, jevAvailable: false };
+
+describe('opponent section — no Jev endpoint', () => {
+  it('has no height and no layout, so the screen is exactly main’s', () => {
+    expect(opponentSectionH(NONE)).toBe(0);
+    expect(opponentSectionH({ ...NONE, jevSelected: true })).toBe(0);
+    const { screen, opponent } = newGameScreenWithOpponent(DEFAULT_LAYOUT, NONE);
+    expect(opponent).toBeNull();
+    expect(screen).toEqual(newGameScreenLayout(DEFAULT_LAYOUT));
+  });
+});
+
+describe('opponent section — Standard AI selected (collapsed)', () => {
+  const { screen, opponent } = newGameScreenWithOpponent(DEFAULT_LAYOUT, RULES);
+  const geo = opponent!;
+
+  it('is a caption plus the two rows, filling the slot exactly', () => {
+    const rowsH = 2 * OPPONENT_ROW_H + OPPONENT_ROW_GAP;
+    expect(opponentSectionH(RULES)).toBe(NEW_GAME_CAPTION_H + rowsH);
+    expect(screen.opponentSlot.h).toBe(opponentSectionH(RULES));
+    expect(geo.caption).toEqual({ x: screen.opponentSlot.x, y: screen.opponentSlot.y });
+    expect(geo.rows.rules.y).toBe(screen.opponentSlot.y + NEW_GAME_CAPTION_H);
+    expect(geo.rows.jev.y).toBe(geo.rows.rules.y + OPPONENT_ROW_H + OPPONENT_ROW_GAP);
+    const last = geo.rows.jev;
+    expect(last.y + last.h).toBe(screen.opponentSlot.y + screen.opponentSlot.h);
+    expect(geo.jev).toBeNull();
+  });
+
+  it('rows span the column, in OPPONENT_KINDS order, between Difficulty and Start', () => {
+    for (const kind of OPPONENT_KINDS) {
+      expect(geo.rows[kind].x).toBe(screen.difficultyRows.Hard.x);
+      expect(geo.rows[kind].w).toBe(screen.difficultyRows.Hard.w);
+      expect(geo.rows[kind].h).toBe(OPPONENT_ROW_H);
+      expect(overlaps(geo.rows[kind], screen.difficultyRows.Hard)).toBe(false);
+      expect(overlaps(geo.rows[kind], screen.startButton)).toBe(false);
+    }
+    const rowsBottom = screen.difficultyRows.Hard.y + screen.difficultyRows.Hard.h;
+    expect(geo.rows.rules.y).toBeGreaterThan(rowsBottom);
+    expect(geo.rows.jev.y + geo.rows.jev.h).toBeLessThan(screen.startButton.y);
+    expect(overlaps(geo.rows.rules, geo.rows.jev)).toBe(false);
+  });
+
+  it('row inner anchors: radio, name, then a wider-offset description column', () => {
+    const inner = opponentRowInner(geo.rows.jev);
+    const difficulty = difficultyRowInner(screen.difficultyRows.Hard);
+    expect(inner.radio.x).toBe(difficulty.radio.x);
+    expect(inner.name.x).toBe(difficulty.name.x);
+    expect(inner.radio.y).toBe(geo.rows.jev.y + geo.rows.jev.h / 2);
+    expect(inner.desc.x).toBe(geo.rows.jev.x + OPPONENT_ROW_DESC_X);
+    expect(inner.desc.x).toBeGreaterThan(difficulty.desc.x);
+    expect(inner.desc.w).toBe(geo.rows.jev.w - OPPONENT_ROW_DESC_X - DIFFICULTY_ROW_PAD_RIGHT);
+  });
+
+  it('still centres the stack (it is not at the top clamp)', () => {
+    expect(screen.stack.y).toBeGreaterThan(NEW_GAME_STACK_MIN_TOP);
+    expect(screen.stack.y).toBeCloseTo((DEFAULT_LAYOUT.h - screen.stack.h) / 2, 6);
+  });
+});
+
+describe('opponent section — Jev selected (expanded)', () => {
+  const { screen, opponent } = newGameScreenWithOpponent(DEFAULT_LAYOUT, JEV);
+  const geo = opponent!;
+  const jev = geo.jev!;
+
+  it('adds the Jev options below the rows and still fills the slot exactly', () => {
+    const optionsH =
+      JEV_OPTIONS_GAP + JEV_OPTIONS_CAPTION_H + JEV_PRESET_H + JEV_PRESET_ROW_GAP + JEV_TEXTAREA_H;
+    expect(opponentSectionH(JEV)).toBe(opponentSectionH(RULES) + optionsH);
+    expect(screen.opponentSlot.h).toBe(opponentSectionH(JEV));
+    expect(jev.caption).toEqual({
+      x: screen.opponentSlot.x,
+      y: geo.rows.jev.y + geo.rows.jev.h + JEV_OPTIONS_GAP,
+    });
+    expect(JEV_COUNTER_GAP).toBeGreaterThan(0);
+    expect(jev.presetButtons[0]!.y).toBe(jev.caption.y + JEV_OPTIONS_CAPTION_H);
+    expect(jev.textarea.y).toBe(jev.presetButtons[0]!.y + JEV_PRESET_H + JEV_PRESET_ROW_GAP);
+    expect(jev.textarea.y + jev.textarea.h).toBe(screen.opponentSlot.y + screen.opponentSlot.h);
+    // The rows themselves are where the collapsed layout put them, relative to the slot.
+    const collapsed = newGameScreenWithOpponent(DEFAULT_LAYOUT, RULES);
+    expect(geo.rows.rules.y - screen.opponentSlot.y).toBe(
+      collapsed.opponent!.rows.rules.y - collapsed.screen.opponentSlot.y,
+    );
+  });
+
+  it('fits the shipping canvas with the top inset clear at BOTH ends (the 190 px budget)', () => {
+    expect(opponentSectionH(JEV)).toBe(190);
+    expect(screen.stack.y).toBeGreaterThanOrEqual(NEW_GAME_STACK_MIN_TOP);
+    expect(screen.stack.y + screen.stack.h).toBeLessThanOrEqual(
+      DEFAULT_LAYOUT.h - NEW_GAME_STACK_MIN_TOP,
+    );
+    // ...and the last thing drawn (the Start hint) is inside the canvas.
+    expect(screen.startHint.y + NEW_GAME_START_HINT_H / 2).toBeLessThanOrEqual(DEFAULT_LAYOUT.h);
+  });
+
+  it('presets divide the column evenly, one per preset, spanning it exactly', () => {
+    expect(jev.presetButtons).toHaveLength(PRESET_COUNT);
+    expect(PRESET_COUNT).toBe(4); // Balanced / Aggressive / Turtle / Economy
+    const first = jev.presetButtons[0]!;
+    const last = jev.presetButtons[PRESET_COUNT - 1]!;
+    expect(first.x).toBe(jev.textarea.x);
+    expect(last.x + last.w).toBeCloseTo(jev.textarea.x + jev.textarea.w, 6);
+    for (let i = 1; i < PRESET_COUNT; i++) {
+      const prev = jev.presetButtons[i - 1]!;
+      const cur = jev.presetButtons[i]!;
+      expect(cur.x).toBeCloseTo(prev.x + prev.w + JEV_PRESET_GAP, 6);
+      expect(cur.w).toBe(prev.w);
+      expect(overlaps(prev, cur)).toBe(false);
+    }
+    // Any preset count re-divides the same span.
+    for (const count of [1, 2, 3, 6]) {
+      const g = opponentSectionLayout(screen.opponentSlot, { ...JEV, presetCount: count });
+      const buttons = g!.jev!.presetButtons;
+      expect(buttons).toHaveLength(count);
+      expect(buttons[count - 1]!.x + buttons[count - 1]!.w).toBeCloseTo(
+        jev.textarea.x + jev.textarea.w,
+        6,
+      );
+    }
+    expect(
+      opponentSectionLayout(screen.opponentSlot, { ...JEV, presetCount: 0 })!.jev!.presetButtons,
+    ).toEqual([]);
+  });
+
+  it('nothing in the section overlaps anything else on the screen', () => {
+    const rects: BootOverlayRect[] = [
+      ...DIFFICULTY_TIERS.map((t) => screen.difficultyRows[t]),
+      ...OPPONENT_KINDS.map((k) => geo.rows[k]),
+      ...jev.presetButtons,
+      jev.textarea,
+      screen.startButton,
+    ];
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        expect(overlaps(rects[i]!, rects[j]!), `${i} vs ${j}`).toBe(false);
+      }
+    }
+    // Reading order top to bottom: difficulty rows, opponent rows, options, Start.
+    expect(geo.rows.rules.y).toBeGreaterThan(screen.difficultyRows.Hard.y);
+    expect(jev.textarea.y).toBeGreaterThan(geo.rows.jev.y);
+    expect(screen.startButton.y).toBeGreaterThan(jev.textarea.y + jev.textarea.h);
+  });
+
+  it('the difficulty rows and Start move (the stack re-centres) between the two states', () => {
+    const collapsed = newGameScreenWithOpponent(DEFAULT_LAYOUT, RULES).screen;
+    const grew = opponentSectionH(JEV) - opponentSectionH(RULES);
+    expect(grew).toBeGreaterThan(0);
+    // Everything above the section moves up; Start moves down. This is what
+    // tests/helpers/geometry.ts exports two rect sets for.
+    expect(screen.difficultyRows.Normal.y).toBeLessThan(collapsed.difficultyRows.Normal.y);
+    expect(screen.startButton.y).toBeGreaterThan(collapsed.startButton.y);
+  });
+
+  it('reflows with the LayoutContext instead of a baked canvas size', () => {
+    const wide = createLayoutContext(1200, 900);
+    const w = newGameScreenWithOpponent(wide, JEV);
+    expect(w.opponent!.rows.jev.x).toBe(w.screen.difficultyRows.Hard.x);
+    expect(w.opponent!.jev!.textarea.x + w.opponent!.jev!.textarea.w / 2).toBe(600);
+    expect(w.screen.stack.y).toBe((900 - w.screen.stack.h) / 2);
+    for (const narrowW of [520, 480, 360, 320]) {
+      const narrow = createLayoutContext(narrowW, 700);
+      const n = newGameScreenWithOpponent(narrow, JEV);
+      const all = [
+        ...OPPONENT_KINDS.map((k) => n.opponent!.rows[k]),
+        ...n.opponent!.jev!.presetButtons,
+        n.opponent!.jev!.textarea,
+      ];
+      for (const r of all) {
+        expect(r.x).toBeGreaterThanOrEqual(0);
+        expect(r.w).toBeGreaterThan(0);
+        expect(r.x + r.w).toBeLessThanOrEqual(narrowW);
+      }
+    }
   });
 });
