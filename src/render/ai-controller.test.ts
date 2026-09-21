@@ -155,9 +155,8 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       // tick=1: aiInitialSetup no-ops (post-conditions met), aiDigHeuristic
       // no-ops (1%40≠0), aiChamberPlacement: no queen chamber → tries to find
       // open spot (all Solid → null), aiEntranceDesignation: has entrances → skip.
-      // SyncAIState is pushed every V17 tick for replay determinism — exclude from check.
-      const nonSyncCmds = world.commandQueue.filter((c) => c.type !== 'SyncAIState');
-      expect(nonSyncCmds).toHaveLength(0);
+      // #258 retired the SyncAIState echo, so nothing at all may be queued here.
+      expect(world.commandQueue).toHaveLength(0);
     });
   });
 

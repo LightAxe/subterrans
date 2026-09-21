@@ -19,7 +19,8 @@
 // an unattended AI-vs-passive match lands around tick 13,500 (measured across
 // seeds by scripts/measure-playtrace-size.ts), which is far too slow for the
 // unit suite. The transition exercised here is the same one — the enemy colony
-// is put into Probing through the ordinary SyncAIState command path, its empty
+// is put into Probing through the SyncAIState command path (which tick.ts still
+// applies for logs recorded before #258 retired the echo), its empty
 // cohort makes advanceAIState take the documented "zero-cohort → allDead"
 // branch, and that branch emits ClearRallyPoint at tick step 18b — it is just
 // reached in a handful of ticks instead of thousands.
@@ -84,8 +85,9 @@ function makeScenario(): WorldState {
  * an EMPTY cohort: `_checkProbingToWarFooting` calls that the "zero-cohort case
  * → allDead=true, recovers immediately" and ends the probe on the very next
  * tick, which is what keeps this test at tens of ticks instead of the 600-tick
- * probe timeout. SyncAIState is the command runAIController already pushes
- * every tick to mirror its state into the sim, so this is the real path.
+ * probe timeout. runAIController no longer emits SyncAIState (#258 retired the
+ * echo), but tick.ts still applies it for logs recorded before that, so it
+ * remains a supported way to seed the state.
  */
 function driveAI(world: WorldState): void {
   if (world.tick !== PROBE_START_TICK) return;

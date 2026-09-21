@@ -43,7 +43,7 @@ import {
 } from '../platform/save.js';
 import { deserializeWorldState } from '../platform/save.js';
 import { loadSettings, saveSettings } from '../platform/settings.js';
-import { runAIController, resetAIControllerCache } from './ai-controller.js';
+import { runAIController } from './ai-controller.js';
 import { buildDebugSnapshot } from '../platform/debug-snapshot.js';
 import { downloadDebugSnapshot } from './debug-snapshot-download.js';
 import { submitPlaytrace, type PlaytraceSurvey } from './playtrace-upload.js';
@@ -1171,11 +1171,6 @@ export class GameScene extends Phaser.Scene {
     // required for cross-world correctness. Kept as an explicit teardown that
     // drops the retired session's cache eagerly rather than waiting for GC.
     resetFlowFieldCaches();
-    // SyncAIState change-detection cache: must be cleared alongside flow-field caches so an
-    // in-session bootFromSave whose loaded aiState matches the stale prior-session cache
-    // doesn't suppress the first-tick SyncAIState, which would cause inputLog to diverge
-    // from a fresh-page replay of the same save.
-    resetAIControllerCache();
     // Render-only ant-facing smoothing: same rationale as the flow-field
     // caches. The AntFacingCache is keyed by ant id, and the new session
     // reuses ids 0..N from scratch — a stale heading from the prior session

@@ -256,7 +256,9 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
   // Step 1: Process commands (FIFO cap — PRD §5; indexed loop, no allocation)
   //         Extended in Phase 7 with real handlers for all 7 SimCommand variants.
   // SyncAIState pre-pass: applied before the cap so replay determinism is
-  // preserved even on high-command-count ticks (>64 commands in queue).
+  // preserved even on high-command-count ticks (>64 commands in queue). Nothing
+  // emits SyncAIState any more (#258 retired the render-side echo); the pre-pass
+  // stays so inputLogs recorded before that still replay byte-identically.
   // ---------------------------------------------------------------------------
   for (let i = 0; i < commands.length; i++) {
     if (commands[i]!.type === 'SyncAIState') {
