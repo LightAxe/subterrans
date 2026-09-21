@@ -102,11 +102,14 @@ export interface ClearRallyPointCommand extends SimCommandBase {
 }
 
 /**
- * S2 / V17 — snapshot of one AIStateRecord pushed to commandQueue by runAIController
- * every tick in the V17 path. tick() applies it so the snapshot analyzer's replay-only
- * path (which never calls runAIController) produces bit-identical world.aiState.
- * operationFighterIds is serialized as number[] (JSON-safe; reconstructed as Int32Array
- * in the handler).
+ * S2 / V17 — snapshot of one AIStateRecord. runAIController used to push one whenever a
+ * field changed so the snapshot analyzer's tick()-only replay could reproduce
+ * world.aiState. #258 retired that emission: advanceAIState, the StartAIOperation
+ * handler and the combat death counters reproduce it unaided (pinned by
+ * src/render/ai-controller-replay-parity.integration.test.ts). The variant and the
+ * tick.ts pre-pass applier stay so inputLogs recorded before the retirement still
+ * replay byte-identically. operationFighterIds is serialized as number[] (JSON-safe;
+ * reconstructed as Int32Array in the handler).
  */
 export interface SyncAIStateCommand extends SimCommandBase {
   readonly type: 'SyncAIState';

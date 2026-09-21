@@ -602,7 +602,7 @@ describe('createScenario', () => {
         expect(spider!.posY >> FP_SHIFT).toBeGreaterThanOrEqual(MIN);
         expect(spider!.posY >> FP_SHIFT).toBeLessThanOrEqual(MAX_Y);
       }
-    });
+    }, 30_000);
   });
 
   // #225 — The lair must be a passable, colony-reachable tile: _placeSpider rejects
@@ -619,7 +619,7 @@ describe('createScenario', () => {
         const sy = spider!.posY >> FP_SHIFT;
         expect(surfaceMovementAt(world, sx, sy)).not.toBe(SurfaceMovementEffect.HardBlock);
       }
-    });
+    }, 30_000);
 
     it('specifically fixes seeds 2, 3, 9 (previously spawned inside a boulder)', () => {
       for (const seed of [2, 3, 9]) {

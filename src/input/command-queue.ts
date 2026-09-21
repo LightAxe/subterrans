@@ -42,7 +42,9 @@ import type { WorldState } from '../sim/types.js';
  * Count the non-Sync commands already queued. Mirrors tick.ts's accounting:
  * `SyncAIState` is applied in an uncapped pre-pass and excluded from the cap,
  * so it must not count against the paused budget here either (otherwise a
- * pending AI sync would shave one slot off the player's allowance).
+ * pending AI sync would shave one slot off the player's allowance). Nothing
+ * emits SyncAIState since #258 retired the echo; the exclusion is kept so this
+ * stays an exact mirror of tick.ts, which still applies it for old logs.
  */
 function countNonSyncQueued(queue: readonly SimCommand[]): number {
   let n = 0;

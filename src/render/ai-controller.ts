@@ -11,7 +11,6 @@ import type {
   PlaceChamberCommand,
   DesignateEntranceCommand,
   SetBehaviorRatioCommand,
-  SyncAIStateCommand,
 } from '../sim/commands.js';
 import { pushCommand } from '../sim/commands.js';
 import { ChamberType } from '../sim/enums.js';
@@ -128,9 +127,10 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
   // Sync behavior ratio to state.
   _syncBehaviorRatioToAIState(world, aiColonyId, colony);
 
-  // Push SyncAIState so the snapshot-analyzer replay path (which calls tick() only,
-  // never runAIController) can reproduce world.aiState bit-identically.
-  _pushSyncAIState(world, aiColonyId);
+  // No SyncAIState echo here any more (#258). A tick()-only replay (the snapshot
+  // analyzer) reproduces world.aiState from the sim alone — advanceAIState, the
+  // StartAIOperation handler and the combat death counters — as pinned by
+  // ai-controller-replay-parity.integration.test.ts.
 
   aiDigHeuristic(world, colony);
   aiChamberPlacement(world, colony);
@@ -553,102 +553,6 @@ const AI_STATE_RATIOS: Record<string, { forage: number; fight: number }> = {
   Invading: { forage: 2, fight: 8 },
   Recovery: { forage: 6, fight: 4 },
 };
-
-interface _SyncSnapshot {
-  state: string;
-  enteredTick: number;
-  probeCount: number;
-  lastProbeEndTick: number;
-  invasionStartTick: number;
-  invasionRallyTileX: number;
-  invasionRallyTileY: number;
-  recoveryEndTick: number;
-  operationKind: string;
-  operationStartTick: number;
-  operationTargetTileX: number;
-  operationTargetTileY: number;
-  operationFighterCount: number;
-  operationStartFighterCount: number;
-  operationAttackerDeaths: number;
-  operationDefenderDeaths: number;
-}
-const _syncCache = new Map<ColonyId, _SyncSnapshot>();
-
-export function resetAIControllerCache(): void {
-  _syncCache.clear();
-}
-
-/** Push a SyncAIState command so replay-only paths reproduce world.aiState bit-identically.
- *  Only emits when at least one scalar field changed since the last emission. */
-function _pushSyncAIState(world: WorldState, aiColonyId: ColonyId): void {
-  const rec = world.aiState.find((r) => r.colonyId === aiColonyId);
-  if (rec === undefined) return;
-
-  const cached = _syncCache.get(aiColonyId);
-  const changed =
-    cached === undefined ||
-    cached.state !== rec.state ||
-    cached.enteredTick !== rec.enteredTick ||
-    cached.probeCount !== rec.probeCount ||
-    cached.lastProbeEndTick !== rec.lastProbeEndTick ||
-    cached.invasionStartTick !== rec.invasionStartTick ||
-    cached.invasionRallyTileX !== rec.invasionRallyTileX ||
-    cached.invasionRallyTileY !== rec.invasionRallyTileY ||
-    cached.recoveryEndTick !== rec.recoveryEndTick ||
-    cached.operationKind !== rec.operationKind ||
-    cached.operationStartTick !== rec.operationStartTick ||
-    cached.operationTargetTileX !== rec.operationTargetTileX ||
-    cached.operationTargetTileY !== rec.operationTargetTileY ||
-    cached.operationFighterCount !== rec.operationFighterCount ||
-    cached.operationStartFighterCount !== rec.operationStartFighterCount ||
-    cached.operationAttackerDeaths !== rec.operationAttackerDeaths ||
-    cached.operationDefenderDeaths !== rec.operationDefenderDeaths;
-
-  if (!changed) return;
-
-  _syncCache.set(aiColonyId, {
-    state: rec.state,
-    enteredTick: rec.enteredTick,
-    probeCount: rec.probeCount,
-    lastProbeEndTick: rec.lastProbeEndTick,
-    invasionStartTick: rec.invasionStartTick,
-    invasionRallyTileX: rec.invasionRallyTileX,
-    invasionRallyTileY: rec.invasionRallyTileY,
-    recoveryEndTick: rec.recoveryEndTick,
-    operationKind: rec.operationKind,
-    operationStartTick: rec.operationStartTick,
-    operationTargetTileX: rec.operationTargetTileX,
-    operationTargetTileY: rec.operationTargetTileY,
-    operationFighterCount: rec.operationFighterCount,
-    operationStartFighterCount: rec.operationStartFighterCount,
-    operationAttackerDeaths: rec.operationAttackerDeaths,
-    operationDefenderDeaths: rec.operationDefenderDeaths,
-  });
-
-  const cmd: SyncAIStateCommand = {
-    type: 'SyncAIState',
-    colonyId: aiColonyId,
-    issuedAtTick: world.tick,
-    state: rec.state,
-    enteredTick: rec.enteredTick,
-    probeCount: rec.probeCount,
-    lastProbeEndTick: rec.lastProbeEndTick,
-    invasionStartTick: rec.invasionStartTick,
-    invasionRallyTileX: rec.invasionRallyTileX,
-    invasionRallyTileY: rec.invasionRallyTileY,
-    recoveryEndTick: rec.recoveryEndTick,
-    operationKind: rec.operationKind,
-    operationStartTick: rec.operationStartTick,
-    operationTargetTileX: rec.operationTargetTileX,
-    operationTargetTileY: rec.operationTargetTileY,
-    operationFighterIds: Array.from(rec.operationFighterIds),
-    operationFighterCount: rec.operationFighterCount,
-    operationStartFighterCount: rec.operationStartFighterCount,
-    operationAttackerDeaths: rec.operationAttackerDeaths,
-    operationDefenderDeaths: rec.operationDefenderDeaths,
-  };
-  pushCommand(world, cmd, 'ai');
-}
 
 /** Sync the AI colony behavior ratio to its current state. */
 function _syncBehaviorRatioToAIState(

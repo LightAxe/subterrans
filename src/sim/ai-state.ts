@@ -545,7 +545,8 @@ export function setAIRallyOperation(
     aiState.enteredTick = world.tick;
     // Preserve invasionStartTick set by _checkWarFootingToInvading (tick T) so that both
     // the pre-cohort and cohort timeout paths share a single budget from invasion entry.
-    // Only overwrite if it was somehow not set (e.g., SyncAIState-restored state).
+    // Only overwrite if it was somehow not set (e.g., state restored by a SyncAIState
+    // command replayed from an inputLog recorded before #258 retired that echo).
     if (aiState.invasionStartTick === 0) aiState.invasionStartTick = world.tick;
 
     emitEvent(world, {
