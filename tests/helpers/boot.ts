@@ -15,6 +15,9 @@
 //                       report activeOverlay 'save-prompt', so this is the
 //                       discriminator
 //   selectedDifficulty  the row currently selected on the new-game screen
+//   selectedOpponent    the opponent row currently selected on the new-game
+//                       screen (Jev opponent beta; 'rules' on a build with no
+//                       Jev endpoint, where no opponent section is drawn)
 
 import { expect, type Page } from '@playwright/test';
 import {
@@ -82,6 +85,15 @@ export async function selectedDifficulty(page: Page): Promise<string> {
   });
 }
 
+/** The opponent row currently selected on the new-game screen ('rules' |
+ *  'jev'), or '<undefined>' before the screen has published one. */
+export async function selectedOpponent(page: Page): Promise<string> {
+  return await page.evaluate(() => {
+    const ui = (window as { __phase9_ui?: { selectedOpponent?: string } }).__phase9_ui;
+    return ui?.selectedOpponent ?? '<undefined>';
+  });
+}
+
 /** Wait until UIScene.create() has published the observability hook. */
 export async function waitForUiHook(page: Page): Promise<void> {
   await page.waitForFunction(
@@ -103,6 +115,12 @@ export async function waitForUiHook(page: Page): Promise<void> {
  *
  * `via: 'touch'` drives the same two steps with single-finger taps (a real
  * touch pointer; chromium-touch project) so the touch path is pinned too.
+ *
+ * PLAIN-build geometry only (DIFFICULTY_ROW_RECTS / NEW_GAME_START_RECT): on
+ * the chromium-jev project the screen carries the opponent section and the
+ * stack re-centres, so these rects land elsewhere (the plain Start centre
+ * sits inside the "Jev (beta)" row). Drive that project with the
+ * JEV_BUILD_* rect sets from geometry.ts, as tests/jev-opponent.spec.ts does.
  */
 export async function settleToPlaying(
   page: Page,
