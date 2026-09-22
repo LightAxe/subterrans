@@ -80,6 +80,48 @@ export function pickFighterTargetEntrance(
   return bestOpen ?? bestClosed;
 }
 
+/**
+ * V40 (#299) — small-colony fighter stand-down. Nothing in the sim ever demotes a
+ * Fighting ant (step 10a reassigns Idle ants only; fighters hold ground), so a
+ * colony that collapses to 1-2 workers while they are Fighting keeps zero foragers
+ * and starves — the render-side survival policy can only steer NEW assignments
+ * through the ratio. Called from the step-8 allocation checkpoint only when the
+ * colony is below NURSE_MIN_WORKERS living workers (tick.ts gates it to V40+ via
+ * `nurseMinWorkersFor`, so pre-V40 worlds never reach here). Releases fighters in
+ * EXCESS of `computedAllocation.fight` — never the ones the ratio still asks for,
+ * so a fight-heavy ratio at 2 workers does not churn Idle→Fighting→Idle each tick.
+ * A fighter inside a FOREIGN underground grid (an invader) is never released here:
+ * only Fighters may be in a foreign grid (REQ-C3c descent gate), and a forager's
+ * movement routes by its HOME entrance field at those coordinates — which would
+ * strand it. It keeps Fighting, the rally-clear recall walks it out, and the
+ * checkpoint (which runs every tick below the floor) releases it once it is home
+ * or on the surface. `colony.workers` array order; no RNG. A released ant is Idle
+ * for step 10a THIS tick, which promotes it into whatever the ratio needs
+ * (forage, under the AI's survival ratio).
+ */
+export function releaseSurplusFightersBelowFloor(
+  world: WorldState,
+  colony: { workers: number[]; computedAllocation: { fight: number } },
+): void {
+  const ants = world.ants;
+  let fighting = 0;
+  for (let i = 0; i < colony.workers.length; i++) {
+    const id = colony.workers[i]!;
+    if (ants.alive[id] === 1 && ants.task[id] === AntTask.Fighting) fighting += 1;
+  }
+  let surplus = fighting - colony.computedAllocation.fight;
+  for (let i = 0; i < colony.workers.length && surplus > 0; i++) {
+    const id = colony.workers[i]!;
+    if (ants.alive[id] !== 1 || ants.task[id] !== AntTask.Fighting) continue;
+    if (ants.zone[id] === Zone.Underground && ants.currentGridColonyId[id] !== ants.colonyId[id]) {
+      continue; // invader inside a foreign nest: walks home as a Fighter first
+    }
+    ants.task[id] = AntTask.Idle;
+    ants.subTask[id] = 0;
+    surplus -= 1;
+  }
+}
+
 export function updateFightAntTargets(world: WorldState): void {
   const { ants } = world;
 

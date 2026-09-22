@@ -26,13 +26,14 @@ export {
   chooseExcursionDirection,
   tickExcursionBoundary,
 } from './ant-foraging.js';
-export { tickNurseActions } from './ant-nursing.js';
+export { tickNurseActions, releaseExcessNurses } from './ant-nursing.js';
 export { tickSearchLeash, tickDigExecution } from './ant-dig.js';
 export { tickPheromoneDeposit } from './ant-pheromone.js';
 export {
   updateFightAntTargets,
   pickNearestHostileUnderground,
   pickInvaderUndergroundStep,
+  releaseSurplusFightersBelowFloor,
 } from './ant-combat-targeting.js';
 export { tickAntMovement } from './ant-movement.js';
 export { tickIdleReserveAndFlee } from './idle-reserve.js';

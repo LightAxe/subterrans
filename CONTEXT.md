@@ -53,6 +53,7 @@ _Avoid_: team, faction; **nest** (nest = the dug-out physical area, not the colo
 
 **Queen**:
 The single egg-laying ant per colony. Her death is that colony's loss condition.
+Since **#299 (simVersion V40)** her tile never displaces a same-colony worker.
 _Avoid_: mother.
 
 **Worker**:
@@ -64,16 +65,21 @@ _Avoid_: drone, unit; do **not** treat forager/fighter/nurse/digger as distinct 
 
 **Forager**:
 A worker on the `Foraging` task. Its `ForagingSubState` is `SearchingFood`,
-`CarryingFood`, or `ReturningToNest` (three states — not a strict two-step).
+`CarryingFood`, or `ReturningToNest` (three states — not a strict two-step). Since
+**#299 (simVersion V40)** a searching forager boxed in by its own recent-tiles memory
+is released (one revisit) instead of pausing forever.
 _Avoid_: gatherer, harvester, scout.
 
 **Fighter**:
-A worker on the `Fighting` task.
+A worker on the `Fighting` task. Since **#299 (simVersion V40)** a colony below
+`NURSE_MIN_WORKERS` living workers stands down fighters beyond its ratio's allocation
+(one inside a foreign nest walks home as a fighter first).
 _Avoid_: soldier, warrior.
 
 **Nurse**:
 A worker on the `Nursing` task, tending brood at the Nursery (auto-allocated, not
-set by the player).
+set by the player). Since **#299 (simVersion V40)** a colony below
+`NURSE_MIN_WORKERS` living workers assigns no nurses and releases the ones it has.
 _Avoid_: caretaker.
 
 **Digger**:

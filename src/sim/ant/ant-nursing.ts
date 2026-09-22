@@ -239,6 +239,49 @@ export function tickNurseActions(world: WorldState, chamberFlowFields?: ChamberF
  * brood on a Solid/Marked tile (theoretically impossible — defensive
  * only) would be counted as claimable but never seeded → strand.
  */
+/**
+ * V40 (#299) — release the nurses a colony below NURSE_MIN_WORKERS living workers can
+ * no longer afford. The allocation floor only lowers `computedAllocation.nurse`; step
+ * 10a reassigns Idle ants only, and a nurse left Attending keeps its dwell for up to
+ * NURSE_ATTEND_DWELL_TICKS (a carrier until it deposits) — exactly the ticks a 1-2
+ * worker colony needs every worker foraging. Called from the step-8 allocation
+ * checkpoint when the floor has zeroed the nurse count (tick.ts gates it to V40+ via
+ * `nurseMinWorkersFor`, so pre-V40 worlds never reach here and keep their nurses,
+ * tick order and PRNG draws byte-for-byte).
+ *
+ *   - Attending / MovingToBrood / Feeding-without-a-carry → Idle now, cleared exactly
+ *     as tickNurseActions' own releases clear (subTask 0, dwell counter 0); step 10a
+ *     reassigns the ant this same tick.
+ *   - A carrier (Feeding with a live brood in the carry slot) is left alone: it
+ *     finishes its deposit first — never strand brood mid-tunnel — and
+ *     depositCarriedBrood hands it to Attending or Idle, so the next checkpoint
+ *     releases it.
+ *
+ * Deterministic: iterates `colony.workers` in array order; no RNG.
+ */
+export function releaseExcessNurses(world: WorldState, colony: ColonyRecord): void {
+  const ants = world.ants;
+  for (let i = 0; i < colony.workers.length; i++) {
+    const id = colony.workers[i]!;
+    if (ants.alive[id] !== 1) continue;
+    if (ants.task[id] !== AntTask.Nursing) continue;
+    if (
+      ants.subTask[id] === NursingSubState.Feeding &&
+      ants.carryingBroodId[id]! !== -1 &&
+      ants.alive[ants.carryingBroodId[id]!] === 1
+    ) {
+      continue; // carrier: deposit first (tickNurseActions), released at the next checkpoint
+    }
+    ants.task[id] = AntTask.Idle;
+    ants.subTask[id] = 0;
+    ants.searchPauseTicks[id] = 0;
+    // A Feeding nurse whose carried brood already died (tickFoodConsumption clears
+    // no carry pointers) is released like any other nurse — drop its stale forward
+    // pointer exactly as tickNurseActions' dead-brood release does.
+    ants.carryingBroodId[id] = -1;
+  }
+}
+
 function colonyHasClaimableBrood(world: WorldState, colony: ColonyRecord): boolean {
   const ants = world.ants;
   const underground = world.undergroundGrids[colony.colonyId];

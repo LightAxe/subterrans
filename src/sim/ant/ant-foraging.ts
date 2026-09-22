@@ -751,6 +751,7 @@ export function pickNoRevisitSurfaceAlternate(
   dy: number,
   dangerGrid: PheromoneGrid | undefined,
   out: CardinalStep,
+  releaseWhenBoxed = false,
 ): void {
   const tileX = ants.posX[antId]! >> FP_SHIFT;
   const tileY = ants.posY[antId]! >> FP_SHIFT;
@@ -806,6 +807,28 @@ export function pickNoRevisitSurfaceAlternate(
     // above FLEE_THRESHOLD on the next tick).
     out.dx = fallbackAx;
     out.dy = fallbackAy;
+    return;
+  }
+  // V40 (#299): boxed in — every in-bounds neighbour is in the ring buffer. The
+  // buffer only advances on real tile crossings, so the legacy {0,0} pause here is
+  // PERMANENT: the ant never crosses a tile, the buffer never changes, and the same
+  // {0,0} is chosen every tick until some other state change clears the buffer
+  // (measured: foragers frozen 3 400-4 100 ticks at a map edge and in open ground
+  // on the #297 AI-economy seeds, each one a dead forager the colony still counts).
+  // Release instead: forget the history and take the proposed step. A proposal
+  // reaches this path because it was rejected as RECENT, and a recent tile is one
+  // the ant actually moved into — so it is in-bounds, with one corner case: the
+  // ring's unfilled slots hold the (-1,-1) sentinel, which an off-map proposal from
+  // tile (0,0) toward (-1,-1) also matches. That release is an off-grid step the
+  // movement clamp turns into a one-tick no-op; the ring is cleared all the same, so
+  // the next tick proceeds normally. One tile of revisit is the price of moving
+  // again; the refilled buffer resumes the anti-oscillation rule on the next
+  // crossing. Gated at the call site (simVersion >= V40): pre-V40 callers never
+  // pass `releaseWhenBoxed`, so their pause stays byte-identical.
+  if (releaseWhenBoxed) {
+    clearRecentTiles(ants, antId);
+    out.dx = dx;
+    out.dy = dy;
     return;
   }
   out.dx = 0;

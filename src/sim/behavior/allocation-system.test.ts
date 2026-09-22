@@ -18,6 +18,14 @@
 
 import { describe, it, expect } from 'vitest';
 import { computeNurseCount, allocateWorkers } from './allocation-system.js';
+import { NURSE_MIN_WORKERS } from '../constants.js';
+import { nurseMinWorkersFor } from '../colony/colony-system.js';
+import {
+  createWorldState,
+  LATEST_SIM_VERSION,
+  SIM_VERSION_V39_SPIDER_TIEBREAK,
+  SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
+} from '../types.js';
 
 // ---------------------------------------------------------------------------
 // computeNurseCount
@@ -287,5 +295,83 @@ describe('allocateWorkers — sum invariant', () => {
       const sum = result.nurse + result.forage + result.fight;
       expect(sum).toBe(workerCount);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V40 (#299) — nurse carve-out living-worker floor (`nurseMinWorkers`)
+// ---------------------------------------------------------------------------
+
+describe('computeNurseCount — V40 living-worker floor', () => {
+  const FLOOR = NURSE_MIN_WORKERS; // 3 at V40+; call sites pass 0 pre-V40
+
+  it('1 worker, heavy brood: legacy (floor 0) carves the only worker out; V40 floor returns 0', () => {
+    expect(computeNurseCount(6, 1, true)).toBe(1);
+    expect(computeNurseCount(6, 1, true, 0)).toBe(1);
+    expect(computeNurseCount(6, 1, true, FLOOR)).toBe(0);
+  });
+
+  it('2 workers, heavy brood: legacy carves 1 of 2; V40 floor returns 0', () => {
+    expect(computeNurseCount(6, 2, true)).toBe(1);
+    expect(computeNurseCount(6, 2, true, FLOOR)).toBe(0);
+  });
+
+  it('3 workers (at the floor): existing behaviour — floor(6/3)=2 capped at ceil(3/4)=1 → 1', () => {
+    expect(computeNurseCount(6, 3, true, FLOOR)).toBe(1);
+    expect(computeNurseCount(6, 3, true, FLOOR)).toBe(computeNurseCount(6, 3, true));
+  });
+
+  it('above the floor the value is unchanged across the cap table', () => {
+    for (let workers = FLOOR; workers <= 12; workers++) {
+      expect(computeNurseCount(30, workers, true, FLOOR)).toBe(
+        computeNurseCount(30, workers, true),
+      );
+    }
+  });
+
+  it('the floor never creates nurses: zero brood / no nursery stay 0', () => {
+    expect(computeNurseCount(0, 2, true, FLOOR)).toBe(0);
+    expect(computeNurseCount(6, 2, false, FLOOR)).toBe(0);
+  });
+});
+
+describe('allocateWorkers — V40 living-worker floor threads through', () => {
+  const FLOOR = NURSE_MIN_WORKERS;
+
+  it('2 workers, brood 6, all-forage: legacy 1 nurse + 1 forager; V40 floor 0 nurses + 2 foragers', () => {
+    const legacy = allocateWorkers(2, 6, { forage: 10, fight: 0 }, true);
+    expect(legacy).toEqual({ nurse: 1, forage: 1, dig: 0, fight: 0 });
+    const v40 = allocateWorkers(2, 6, { forage: 10, fight: 0 }, true, FLOOR);
+    expect(v40).toEqual({ nurse: 0, forage: 2, dig: 0, fight: 0 });
+  });
+
+  it('1 worker, brood 6, AI ratio 7:3: legacy 1 nurse + 0 foragers; V40 floor the worker forages', () => {
+    expect(allocateWorkers(1, 6, { forage: 7, fight: 3 }, true)).toEqual({
+      nurse: 1,
+      forage: 0,
+      dig: 0,
+      fight: 0,
+    });
+    expect(allocateWorkers(1, 6, { forage: 7, fight: 3 }, true, FLOOR)).toEqual({
+      nurse: 0,
+      forage: 1,
+      dig: 0,
+      fight: 0,
+    });
+  });
+
+  it('3 workers, brood 6, AI ratio 7:3: identical with and without the floor', () => {
+    expect(allocateWorkers(3, 6, { forage: 7, fight: 3 }, true, FLOOR)).toEqual(
+      allocateWorkers(3, 6, { forage: 7, fight: 3 }, true),
+    );
+  });
+
+  it('nurseMinWorkersFor: 0 below V40, NURSE_MIN_WORKERS at V40+', () => {
+    const world = createWorldState(1);
+    world.simVersion = SIM_VERSION_V39_SPIDER_TIEBREAK;
+    expect(nurseMinWorkersFor(world)).toBe(0);
+    world.simVersion = SIM_VERSION_V40_SMALL_COLONY_SURVIVAL;
+    expect(nurseMinWorkersFor(world)).toBe(NURSE_MIN_WORKERS);
+    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
   });
 });

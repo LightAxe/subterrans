@@ -396,6 +396,16 @@ export const EXPLORE_RATE_PERCENT = 10;
 
 /** PRD §9c — Ratio of foragers assigned as nurses: 1 nurse per NURSE_RATIO foragers. */
 export const NURSE_RATIO = 3;
+/**
+ * V40 (#299) — Living-worker floor for the nurse carve-out. Below this headcount
+ * `computeNurseCount` returns 0 and every worker is available to forage/dig/fight:
+ * the ceil(workers/4) cap otherwise makes the ONLY worker of a 1-worker colony (or
+ * one of two) a nurse the moment brood >= NURSE_RATIO, and nursing only accelerates
+ * larvae that a starving queen cannot feed — traced on the #297 AI-economy seeds
+ * (Hard 12 and 20: the last worker nursed while the queen starved). Applied at
+ * simVersion >= V40 via the call sites in tick.ts / colony-system.ts; pre-V40 passes 0.
+ */
+export const NURSE_MIN_WORKERS = 3;
 
 // ---------------------------------------------------------------------------
 // Entity budget (PRD §9c)
