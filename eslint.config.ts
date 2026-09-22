@@ -2,12 +2,15 @@
 // ESLint 10 flat config with per-directory overrides for the Subterrans sim/render boundary.
 // Source: RESEARCH.md Pattern 1, lines 180–316 — verified against ESLint 10 + @typescript-eslint 8 docs.
 //
-// Three config objects, applied in order:
-//   1. baseConfig         — baseline TS rules for all src/**/*.ts, bench/**/*.ts, scripts/**/*.ts
-//                            AND tests/**/*.ts (the Playwright specs + helpers, #308)
+// Seven config objects, applied in order (later ones win for the files they match):
+//   1. baseConfig         — baseline TS rules for all src/**/*.ts, bench/**/*.ts, scripts/**/*.ts,
+//                            tests/**/*.ts (the Playwright specs + helpers, #308), the root
+//                            tooling configs (`*.ts`) and eslint-rules/**/*.{ts,js} (#314)
 //   2. simSafetyConfig    — PRD §6 Rule Sets 1 & 2: Phaser ban, wall-clock ban, float+division ban (src/sim/** only)
 //   3. nonSimMutationGuard — FNDN-07 tripwire: catches obvious direct writes to WorldState fields
 //                            from src/render/, src/input/, src/platform/
+//   4-7. simModuleStateConfig, simTestImportOverride, nonSimTestCommandQueueOverride,
+//        rootSrcCommandQueueBan — see each object's comment below.
 //
 // NOTE: The nonSimMutationGuard is a TRIPWIRE — it catches shallow top-level field assignments.
 // Nested writes (world.ants.alive[id] = 0) are NOT caught here; they are caught by
@@ -17,9 +20,30 @@ import tseslint from '@typescript-eslint/eslint-plugin';
 import tsParser from '@typescript-eslint/parser';
 import simModuleState from './eslint-rules/sim-module-state.js';
 
-/** Rules applied to ALL TypeScript source files */
+/** `tseslint.configs` is an index signature, so under `noUncheckedIndexedAccess`
+ *  a preset lookup is `T | undefined`. Fail loudly rather than spread `undefined`
+ *  (which would silently drop every baseline rule). */
+function presetRules(name: string): NonNullable<(typeof tseslint.configs)[string]['rules']> {
+  const preset = tseslint.configs[name];
+  if (preset === undefined || preset.rules === undefined) {
+    throw new Error(`eslint.config.ts: @typescript-eslint preset "${name}" not found`);
+  }
+  return preset.rules;
+}
+
+/** Rules applied to ALL TypeScript source files — and to the root tooling configs
+ *  (`*.ts` matches root-level files only: `*` does not cross `/`) plus the custom
+ *  ESLint rule + its contract tests in eslint-rules/ (#314). */
 const baseConfig = {
-  files: ['src/**/*.ts', 'bench/**/*.ts', 'scripts/**/*.ts', 'tests/**/*.ts'],
+  files: [
+    'src/**/*.ts',
+    'bench/**/*.ts',
+    'scripts/**/*.ts',
+    'tests/**/*.ts',
+    '*.ts',
+    'eslint-rules/**/*.ts',
+    'eslint-rules/**/*.js',
+  ],
   languageOptions: {
     parser: tsParser,
     ecmaVersion: 2022,
@@ -28,7 +52,7 @@ const baseConfig = {
   plugins: { '@typescript-eslint': tseslint },
   rules: {
     // Baseline TS rules (non-type-checked — no project overhead)
-    ...tseslint.configs.recommended.rules,
+    ...presetRules('recommended'),
     // Allow _-prefixed identifiers to signal intentionally unused args/vars.
     '@typescript-eslint/no-unused-vars': [
       'error',
@@ -231,8 +255,9 @@ const nonSimMutationGuard = {
 /** Determinism guard (issue #211) — module-level mutable state in src/sim must be
  *  `as const` (immutable arrays) or carry an explicit `subterrans/sim-module-state`
  *  disable with a sim-scratch/sim-cache/sim-memo reason. The rule + its test live in
- *  eslint-rules/ (outside src/) so the tooling stays out of the app bundle and this
- *  very lint scope. Test files are exempt — their throwaway fixtures aren't sim state. */
+ *  eslint-rules/ (outside src/) so the tooling stays out of the app bundle and out of
+ *  this config object's own src/sim/** scope (baseConfig does lint them, #314). Test
+ *  files are exempt — their throwaway fixtures aren't sim state. */
 const simModuleStateConfig = {
   files: ['src/sim/**/*.ts'],
   ignores: ['src/sim/**/*.test.ts'],

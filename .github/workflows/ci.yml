@@ -4,12 +4,13 @@ name: CI
 # pushes to main.
 #
 #   verify — `npm run verify` (prettier --check over the tree, eslint over
-#            src/ scripts/ tests/ bench/, tsc --noEmit for src/ plus the
-#            scripts/, tests/ and bench/ tsconfigs, the type-aware lint:types
-#            layer, the sim-boundary, asset-path, e2e-geometry,
-#            layout-discipline, and ant-cycle grep/parse guards, and the full
-#            Vitest unit/integration suite), then compiles both production
-#            targets (`npm run build` + `build:lib`) as a smoke gate. The
+#            src/ scripts/ tests/ bench/ eslint-rules/ and the root configs,
+#            tsc --noEmit for src/ plus the scripts/, tests/, bench/ and
+#            root-tooling tsconfigs, the type-aware lint:types layer, the
+#            sim-boundary, asset-path, e2e-geometry, layout-discipline, and
+#            ant-cycle grep/parse guards, and the full Vitest unit/integration
+#            suite), then compiles both production targets (`npm run build` +
+#            `build:lib`) as a smoke gate. The
 #            `verify` command itself is what contributors run locally before
 #            pushing.
 #   e2e    — `npm run test:e2e` (Playwright, headless). Chromium runs the full

@@ -27,9 +27,9 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src/ scripts/ tests/ bench/",
-    "lint:fix": "eslint src/ scripts/ tests/ bench/ --fix",
-    "lint:types": "eslint --config eslint.typecheck.config.ts src/ scripts/ tests/ bench/",
+    "lint": "eslint src/ scripts/ tests/ bench/ eslint-rules/ *.ts",
+    "lint:fix": "eslint src/ scripts/ tests/ bench/ eslint-rules/ *.ts --fix",
+    "lint:types": "eslint --config eslint.typecheck.config.ts src/ scripts/ tests/ bench/ eslint-rules/ *.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check:cycles": "node --experimental-strip-types scripts/check-ant-cycles.ts",
@@ -38,7 +38,8 @@
     "typecheck:scripts": "tsc -p scripts/tsconfig.json",
     "typecheck:tests": "tsc -p tests/tsconfig.json",
     "typecheck:bench": "tsc -p bench/tsconfig.json",
-    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run typecheck:scripts && npm run typecheck:tests && npm run typecheck:bench && npm run lint:types && bash scripts/check-sim-boundary.sh && bash scripts/check-asset-paths.sh && bash scripts/check-e2e-geometry.sh && bash scripts/check-layout-discipline.sh && npm run check:cycles && npm run test"
+    "typecheck:tooling": "tsc -p tsconfig.tooling.json",
+    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run typecheck:scripts && npm run typecheck:tests && npm run typecheck:bench && npm run typecheck:tooling && npm run lint:types && bash scripts/check-sim-boundary.sh && bash scripts/check-asset-paths.sh && bash scripts/check-e2e-geometry.sh && bash scripts/check-layout-discipline.sh && npm run check:cycles && npm run test"
   },
   "dependencies": {
     "phaser": "^3.90.0"

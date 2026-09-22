@@ -3,6 +3,16 @@ import { gunzipSync } from 'node:zlib';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { appVersion } from './scripts/version.js';
 
+/** Render one decoded JSON field for the one-line summary: primitives verbatim,
+ *  `?` when absent, JSON for anything structured (never "[object Object]"). The
+ *  input is JSON.parse output, so these four branches are exhaustive. */
+const show = (v: unknown): string => {
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if (v === undefined || v === null) return '?';
+  return JSON.stringify(v);
+};
+
 /**
  * Issue #122 — dev-server mock for the playtrace upload endpoint.
  *
@@ -51,7 +61,6 @@ const playtraceMockPlugin = (): Plugin => ({
           if (received > MAX_MOCK_BODY) {
             if (!oversized) {
               oversized = true;
-              // eslint-disable-next-line no-console
               console.warn(`[playtrace-mock] body exceeded ${MAX_MOCK_BODY} bytes — discarding`);
               res.statusCode = 413;
               res.end('Payload Too Large');
@@ -78,19 +87,17 @@ const playtraceMockPlugin = (): Plugin => ({
               parseError = err instanceof Error ? err.message : String(err);
             }
             const survey = envelope['survey'] as Record<string, unknown> | undefined;
-            const freeText =
-              typeof survey?.['freeText'] === 'string' ? (survey['freeText'] as string) : '';
+            const freeText = typeof survey?.['freeText'] === 'string' ? survey['freeText'] : '';
             const freeTextPreview = freeText.length > 80 ? `${freeText.slice(0, 80)}…` : freeText;
             // One-line summary keeps the dev-server log readable. The full
             // envelope is also logged below for offline inspection.
-            // eslint-disable-next-line no-console
             console.log(
-              `[playtrace-mock] received: sessionId=${envelope['sessionId'] ?? '?'} ` +
-                `outcome=${envelope['outcome'] ?? '?'} ` +
-                `difficulty=${envelope['difficulty'] ?? '?'} ` +
+              `[playtrace-mock] received: sessionId=${show(envelope['sessionId'])} ` +
+                `outcome=${show(envelope['outcome'])} ` +
+                `difficulty=${show(envelope['difficulty'])} ` +
                 `gzippedBytes=${raw.length} ` +
-                `rating=${survey?.['rating'] ?? '?'} ` +
-                `brokenFlag=${survey?.['brokenFlag'] ?? '?'} ` +
+                `rating=${show(survey?.['rating'])} ` +
+                `brokenFlag=${show(survey?.['brokenFlag'])} ` +
                 `hasEmail=${typeof survey?.['email'] === 'string'} ` +
                 `hasSnapshot=${envelope['snapshot'] !== null} ` +
                 `freeText=${JSON.stringify(freeTextPreview)}` +
@@ -99,7 +106,6 @@ const playtraceMockPlugin = (): Plugin => ({
             // Full envelope dump (without the snapshot payload — the snapshot
             // is large and noisy in the terminal; if you need it, change
             // `null` → the actual snapshot block).
-            // eslint-disable-next-line no-console
             console.log(
               '[playtrace-mock] envelope:',
               JSON.stringify(
@@ -113,7 +119,6 @@ const playtraceMockPlugin = (): Plugin => ({
             res.setHeader('Content-Type', 'application/json');
             res.end(JSON.stringify({ accepted: true, sessionId: envelope['sessionId'] ?? null }));
           } catch (err) {
-            // eslint-disable-next-line no-console
             console.error('[playtrace-mock] handler error:', err);
             res.statusCode = 500;
             res.end('mock middleware error');
