@@ -36,13 +36,13 @@ const manifestPlugin = (): Plugin => ({
     const entries = Object.values(bundle).filter(
       (chunk) => 'isEntry' in chunk && chunk.isEntry === true,
     );
-    if (entries.length !== 1) {
+    const entry = entries[0];
+    if (entries.length !== 1 || entry === undefined) {
       throw new Error(
         `subterrans-lib-manifest: expected exactly 1 entry chunk, found ${entries.length}. ` +
           `Library build assumes a single ESM entry — check vite.lib.config.ts lib.entry.`,
       );
     }
-    const entry = entries[0];
     const dir = options.dir ?? 'dist-lib';
     writeFileSync(
       join(dir, 'manifest.json'),
@@ -78,15 +78,20 @@ const dtsPlugin = (): Plugin => ({
  *  `import.meta.env` resolves) but forces declaration-only emit. */
 function generateMainDts(): string {
   const SRC = 'src/main.ts';
-  const configPath = ts.findConfigFile('.', ts.sys.fileExists, 'tsconfig.json');
+  const configPath = ts.findConfigFile('.', (f) => ts.sys.fileExists(f), 'tsconfig.json');
   if (configPath === undefined) {
     throw new Error('subterrans-lib-dts: tsconfig.json not found in cwd');
   }
-  const { config, error } = ts.readConfigFile(configPath, ts.sys.readFile);
-  if (error !== undefined) {
-    throw new Error(`subterrans-lib-dts: failed to read tsconfig.json: ${error.messageText}`);
+  const configFile = ts.readConfigFile(configPath, (f) => ts.sys.readFile(f));
+  if (configFile.error !== undefined) {
+    throw new Error(
+      `subterrans-lib-dts: failed to read tsconfig.json: ` +
+        ts.flattenDiagnosticMessageText(configFile.error.messageText, '\n'),
+    );
   }
-  const parsed = ts.parseJsonConfigFileContent(config, ts.sys, dirname(configPath));
+  // `config` is `any` by the compiler API's own signature (raw parsed JSON) — hand it
+  // straight to the parser, which takes `any` too, without a typed detour.
+  const parsed = ts.parseJsonConfigFileContent(configFile.config, ts.sys, dirname(configPath));
   const program = ts.createProgram({
     rootNames: [SRC],
     options: {
@@ -116,7 +121,7 @@ function generateMainDts(): string {
   if (diagnostics.length > 0) {
     const formatted = ts.formatDiagnosticsWithColorAndContext(diagnostics, {
       getCanonicalFileName: (f) => f,
-      getCurrentDirectory: ts.sys.getCurrentDirectory,
+      getCurrentDirectory: () => ts.sys.getCurrentDirectory(),
       getNewLine: () => ts.sys.newLine,
     });
     throw new Error(
