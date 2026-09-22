@@ -10,27 +10,20 @@
 //   - Home-ground damage bonus: COMBAT_DAMAGE_HOMEGROUND on own grid (underground only).
 //   - Home-ground HP buffer: homeGroundBonusHp depletes before hp.
 //
-// killAnt now emits combat_kill and writes pendingQueenDeathContexts when victim is queen.
+// Kills route through ant-death.ts `killAnt` (#289): combat_kill event, queen-death
+// context, operation counters, killCount, V34 alarm and V37 corpse drop live there.
 // checkQueenDeath (game-over.ts) reads and clears pendingQueenDeathContexts each tick.
 
 import { Rng } from './rng.js';
-import { AntTask, PheromoneType } from './enums.js';
+import { AntTask } from './enums.js';
 import { makeTileKey } from './tile-key.js';
-import {
-  SIM_VERSION_V34_IDLE_RESERVE_FLEE,
-  SIM_VERSION_V37_CORPSE_FOOD,
-  SIM_VERSION_V39_SPIDER_TIEBREAK,
-} from './types.js';
-import type { WorldState, KillerKind, QueenDeathContext } from './types.js';
+import { SIM_VERSION_V39_SPIDER_TIEBREAK } from './types.js';
+import type { WorldState } from './types.js';
 import { hash32 } from './hash.js';
-import { spawnCorpseFood, corpseYield, type CorpseKind } from './food-system.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
-import { emitEvent } from './telemetry.js';
 import { getScratch } from './scratch.js';
-import { pheromoneGridKey } from './pheromone/pheromone-store.js';
-import { depositDangerCross } from './pheromone/danger.js';
 import {
   COMBAT_HP_HOMEGROUND_BONUS,
   COMBAT_DAMAGE_BASE,
@@ -43,9 +36,8 @@ import {
   SPIDER_EDGE_MARGIN_TILES,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
-  KILL_ALARM_DANGER_DEPOSIT,
 } from './constants.js';
-import { isInCohort } from './ai-state.js';
+import { killAnt } from './ant-death.js';
 
 // ---------------------------------------------------------------------------
 // Per-tick combat-sweep scratch (no-alloc rule, AGENTS.md hot-loop section).
@@ -409,199 +401,6 @@ function resolveCombatOnTile_v16(
   // bonus is preserved for home-ground survivors and zeroed for off-home ones.
   if (bDies && !aDies) ants.combatOpponentId[antA] = -1;
   if (aDies && !bDies) ants.combatOpponentId[antB] = -1;
-}
-
-// ---------------------------------------------------------------------------
-// killAnt — single write path for ant death
-// ---------------------------------------------------------------------------
-
-/**
- * Kill ant at `antIndex`. Emits a combat_kill event (S1). Writes
- * pendingQueenDeathContexts if the victim is a queen (read by checkQueenDeath
- * later the same tick to fill in queen_death cause). Increments killer killCount.
- *
- * killerColonyId: colony that made the kill (null for environmental kills).
- * killerId: entity slot of the killing ant (null for non-ant kills).
- * killerKind: 'Ant' in S1/S2; 'Spider' in S5; 'Environment' reserved.
- *
- * Issue #107 (v13+) — atomically clears bidirectional carry pointers.
- */
-export function killAnt(
-  world: WorldState,
-  antIndex: number,
-  killerColonyId: ColonyId | null,
-  killerId: number | null,
-  killerKind: KillerKind,
-): void {
-  const ants = world.ants;
-  const carrying = ants.carryingBroodId[antIndex]!;
-  if (carrying !== -1) {
-    ants.carriedBy[carrying] = -1;
-    ants.carryingBroodId[antIndex] = -1;
-  }
-  const carrier = ants.carriedBy[antIndex]!;
-  if (carrier !== -1) {
-    ants.carryingBroodId[carrier] = -1;
-    ants.carriedBy[antIndex] = -1;
-  }
-
-  const victimColonyId = ants.colonyId[antIndex]!;
-  const tileX = ants.posX[antIndex]! >> FP_SHIFT;
-  const tileY = ants.posY[antIndex]! >> FP_SHIFT;
-  const currentGridColonyId = ants.currentGridColonyId[antIndex]!;
-
-  // Emit combat_kill event and write queen death context.
-  const victimColony = world.colonies[victimColonyId];
-  const isQueenVictim = victimColony !== undefined && antIndex === victimColony.queenEntityId;
-
-  // #235 — a death may remove a reclaimable brood seed (brood killed) OR orphan a
-  // carried brood (a carrier died — carry pointers cleared just above at :427-435),
-  // both of which change the pickup/deposit field seed set. Over-triggering on
-  // worker/fighter deaths is deliberate (correct + simple; deaths are rare vs the
-  // every-tick recompute this gate replaces).
-  if (victimColony !== undefined) victimColony.broodFieldDirty = true;
-
-  // combat_kill is only emitted for Ant/Spider kills; Environment is reserved (no event).
-  if (killerKind !== 'Environment') {
-    emitEvent(world, {
-      tick: world.tick,
-      type: 'combat_kill',
-      payload: {
-        killer: { kind: killerKind, id: killerId, colonyId: killerColonyId },
-        victim: {
-          // Queen victims use kind 'Queen' so analytics can filter without re-deriving role.
-          kind: isQueenVictim ? 'Queen' : 'Ant',
-          id: antIndex,
-          colonyId: victimColonyId,
-        },
-        location: {
-          x: tileX,
-          y: tileY,
-          grid: ants.zone[antIndex] === 0 ? 'surface' : 'underground',
-        },
-      },
-    });
-  }
-
-  // Write queen death context regardless of killerKind so checkQueenDeath can
-  // fill in the cause field for queen_death events from any kill source.
-  if (isQueenVictim) {
-    const ctx: QueenDeathContext = {
-      tile: { x: tileX, y: tileY },
-      currentGridColonyId,
-      killerColonyId,
-      killerId,
-      killerKind,
-    };
-    world.pendingQueenDeathContexts[victimColonyId] = ctx;
-  }
-
-  ants.alive[antIndex] = 0;
-  // Reset combat state so replacement ants wind up fresh.
-  ants.attackCooldown[antIndex] = 0;
-  ants.combatOpponentId[antIndex] = -1;
-
-  // S2 — increment operation death counters if an active operation is running.
-  // QC Pass 4 AR-P1-001: precise predicates using committed-cohort lookup.
-  // CLNY-08: no direct PLAYER_COLONY_ID / ENEMY_COLONY_ID equality branching.
-  // Instead, iterate world.aiState to find any active operation that involves this kill.
-  for (let _ai = 0; _ai < world.aiState.length; _ai++) {
-    const enemyAI = world.aiState[_ai]!;
-    if (enemyAI.operationKind === 'None') continue;
-    const aiColId = enemyAI.colonyId;
-    const victimColId = ants.colonyId[antIndex]!;
-    // operationAttackerDeaths: victim is a committed-cohort AI fighter.
-    if (
-      victimColId === aiColId &&
-      isInCohort(antIndex, enemyAI.operationFighterIds, enemyAI.operationFighterCount)
-    ) {
-      enemyAI.operationAttackerDeaths += 1;
-    }
-    // operationDefenderDeaths: victim is a non-AI ant (defender) killed by a committed-cohort AI fighter.
-    if (
-      victimColId !== aiColId &&
-      killerKind === 'Ant' &&
-      killerColonyId === aiColId &&
-      killerId !== null &&
-      isInCohort(killerId, enemyAI.operationFighterIds, enemyAI.operationFighterCount)
-    ) {
-      enemyAI.operationDefenderDeaths += 1;
-    }
-  }
-
-  if (killerColonyId !== null && killerColonyId !== 0) {
-    const killerColony = world.colonies[killerColonyId];
-    if (killerColony !== undefined) {
-      killerColony.killCount += 1;
-    }
-  }
-
-  // #209 PR A (V34) — cross-colony kill alarm. When an ENEMY ant kills one of a
-  // colony's SURFACE adult non-fighter workers, seed a DangerTrail cross on the
-  // VICTIM colony's surface grid at the death tile so nearby reserve/forager
-  // workers flee an active raid (same signal the spider emits). Precise
-  // predicate: `killerColonyId !== null` guards the nullable killer id (a null
-  // killer would otherwise satisfy `!== victimColonyId`); queens, brood
-  // (excluded by workers[] membership), fighter victims (task === Fighting), and
-  // same-colony kills do NOT alarm. Grid-guarded: skip if the victim colony's
-  // surface DangerTrail grid is absent (bare/test worlds).
-  if (
-    world.simVersion >= SIM_VERSION_V34_IDLE_RESERVE_FLEE &&
-    killerKind === 'Ant' &&
-    killerColonyId !== null &&
-    killerColonyId !== victimColonyId &&
-    ants.zone[antIndex] === 0 && // Zone.Surface
-    !isQueenVictim &&
-    ants.task[antIndex] !== AntTask.Fighting &&
-    victimColony !== undefined &&
-    victimColony.workers.includes(antIndex)
-  ) {
-    const dangerKey = pheromoneGridKey(victimColonyId, PheromoneType.DangerTrail, 'surface');
-    const dangerGrid = world.pheromoneGrids[dangerKey];
-    if (dangerGrid !== undefined) {
-      depositDangerCross(
-        dangerGrid,
-        tileX,
-        tileY,
-        KILL_ALARM_DANGER_DEPOSIT,
-        KILL_ALARM_DANGER_DEPOSIT >> 1,
-      );
-    }
-  }
-
-  // A2 (V37) — battlefield scavenging: an ant killed by an ENEMY ANT on the
-  // SURFACE drops forageable corpse food at its (stationary) death tile. Predicate
-  // mirrors the V34 kill-alarm's `killerColonyId !== null` and adds `killerId !==
-  // null` so a synthetic `killAnt(world, v, cid, null, 'Ant')` (a colony but no real
-  // killer entity) drops nothing; production ant kills always pass both non-null
-  // (`killAnt(world, antB, cidA, antA, 'Ant')`). Spider kills (killerKind 'Spider',
-  // null killer) and underground deaths never drop. Classify the victim explicitly —
-  // queen → fighter → worker → else no drop (brood / unknown roles yield nothing).
-  // Gated `simVersion >= V37` so pre-V37 replays byte-identically (no ID-counter
-  // advance, no food-pile mutation). The victim is dead + stationary, so its tile is
-  // unambiguous — no "checked-tile ≠ landed-tile" ambiguity.
-  if (
-    world.simVersion >= SIM_VERSION_V37_CORPSE_FOOD &&
-    killerKind === 'Ant' &&
-    killerColonyId !== null &&
-    killerColonyId !== victimColonyId && // enemy kill only (matches the V34 alarm predicate above)
-    killerId !== null &&
-    ants.zone[antIndex] === 0 // Zone.Surface
-  ) {
-    let corpseKind: CorpseKind | null = null;
-    if (isQueenVictim) {
-      // Forward-compat only: queen death ends the match today, so this morsel is
-      // never retrievable — deterministic but inert. Kept for the multi-queen future.
-      corpseKind = 'queen';
-    } else if (ants.task[antIndex] === AntTask.Fighting) {
-      corpseKind = 'fighter';
-    } else if (victimColony !== undefined && victimColony.workers.includes(antIndex)) {
-      corpseKind = 'worker';
-    }
-    if (corpseKind !== null) {
-      spawnCorpseFood(world, tileX, tileY, corpseYield(corpseKind));
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------

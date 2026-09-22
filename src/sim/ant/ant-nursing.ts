@@ -35,8 +35,8 @@ export function tickNurseActions(world: WorldState, chamberFlowFields?: ChamberF
     //
     // Substate semantics under v10:
     //   MovingToBrood (0) — heading toward a brood pickup tile via the
-    //     `nursing` chamber-flow field (re-seeded each tick from Queen
-    //     Open tiles AND uncarried-brood-entity tiles outside Nursery).
+    //     `nursing` chamber-flow field (seeded from uncarried-brood-entity
+    //     tiles outside Nursery and only those; rebuilt when broodFieldDirty).
     //     On arrival at a tile that holds an alive uncarried brood,
     //     claim it: set carryingBroodId/carriedBy, flip to Feeding.
     //   Feeding (1) — "carrying brood." The carrier syncs the brood's
@@ -189,10 +189,10 @@ export function tickNurseActions(world: WorldState, chamberFlowFields?: ChamberF
 
     // Defensive: if the brood was carried by a now-dead carrier
     // (orphan reclaim path), null out the dead carrier's carryingBroodId
-    // slot so the both-ends-of-the-pointer invariant holds. killAnt
-    // intentionally leaves carry slots set so the brood stays at the
-    // death tile until reclaim; the cleanup happens here when we
-    // overwrite the brood's carriedBy below.
+    // slot so the both-ends-of-the-pointer invariant holds. despawnAnt
+    // (ant-death.ts) clears both ends on every kill and, from V41, on
+    // every death, so this only fires for a pre-V41 save or a hand-built
+    // fixture; the brood's carriedBy is overwritten below either way.
     const oldCarrier = ants.carriedBy[broodId]!;
     if (oldCarrier !== -1 && ants.alive[oldCarrier] !== 1) {
       ants.carryingBroodId[oldCarrier] = -1;
@@ -275,9 +275,12 @@ export function releaseExcessNurses(world: WorldState, colony: ColonyRecord): vo
     ants.task[id] = AntTask.Idle;
     ants.subTask[id] = 0;
     ants.searchPauseTicks[id] = 0;
-    // A Feeding nurse whose carried brood already died (tickFoodConsumption clears
-    // no carry pointers) is released like any other nurse — drop its stale forward
-    // pointer exactly as tickNurseActions' dead-brood release does.
+    // A Feeding nurse whose carried brood already died is released like any other
+    // nurse — drop its forward pointer exactly as tickNurseActions' dead-brood
+    // release does. (Pre-V41 tickFoodConsumption left the pointer stale; from V41
+    // despawnAnt has already cleared it. Both versions land here, failing a different
+    // clause of the skip above: the `carryingBroodId !== -1` one at V41, the
+    // `alive[...] === 1` one before.)
     ants.carryingBroodId[id] = -1;
   }
 }

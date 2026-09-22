@@ -1,6 +1,6 @@
 // Phase 5 scope: outcome enum only. checkQueenDeath is Phase 9 scope — see Phase 4 PRD §5a.
 // S0b: emits queen_death SimEvent on first detection (cause: null for pre-V16 saves).
-// S1: reads pendingQueenDeathContexts (written by killAnt) to fill in cause=InvasionKill.
+// S1: reads pendingQueenDeathContexts (written by despawnAnt, ant-death.ts) to fill in cause=InvasionKill.
 // S2: two-pass loop for MutualDestruction; reads aiState for aiStateAtTime; full inferCause.
 // S5 (V22): checkTiebreaks — Timeout (both queens survive to MATCH_TIMEOUT_TICKS) and
 //           Stalemate (all surface food gone + both colonies below STALEMATE_FOOD_THRESHOLD_FP).

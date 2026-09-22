@@ -39,7 +39,7 @@
 // Qualification wants a death on at least one side, not both. Against a passive
 // player the cohort reaches the queen before losing anyone — no candidate
 // records an attacker death inside the real window — and both counters are
-// written by the same block in killAnt (src/sim/combat.ts): the fact the replay
+// written by the same block in despawnAnt (src/sim/ant-death.ts): the fact the replay
 // has to reproduce is that combat wrote to aiState while an operation was
 // running, and either counter shows it.
 //

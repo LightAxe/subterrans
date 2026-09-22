@@ -35,7 +35,7 @@ import {
   COMBAT_HP_BASE,
 } from '../constants.js';
 import { initAnt, pushRecentTile } from './ant-store.js';
-import { killAnt } from '../combat.js';
+import { killAnt } from '../ant-death.js';
 import { colonyForageBackpressure } from '../colony/colony-system.js';
 import { tickIdleReserveAndFlee } from './idle-reserve.js';
 import { tickAntMovement } from './ant-movement.js';

@@ -253,11 +253,11 @@ describe('AI-only scenario 6000 ticks', () => {
       const sampleTick = trajectoryTicks[i]!;
       // Two one-tick offsets sit between a combat_kill event and the workerCount a
       // sample reads, so a kill stamped K first shows up in the sample stamped K + 2:
-      //   - tick() stamps combat_kill with the tick being simulated (killAnt, Step 17)
+      //   - tick() stamps combat_kill with the tick being simulated (despawnAnt, Step 17)
       //     and increments world.tick only at its end (Step 19), while each sample
       //     reads world.tick AFTER tick() returns — so the call that emitted K is the
       //     one whose sample is stamped K + 1.
-      //   - killAnt never touches colony.workers/workerCount (it only zeroes
+      //   - despawnAnt never touches colony.workers/workerCount (it only zeroes
       //     ants.alive); the decrement is done by tickDeathCleanup at Step 5 (or by
       //     tickReconcile at Step 2 on a recount tick — same call either way), which
       //     runs BEFORE Step 17 within one call, so it lands in the NEXT call — the

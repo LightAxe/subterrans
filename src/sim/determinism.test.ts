@@ -21,6 +21,7 @@ import {
   SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH,
   SIM_VERSION_V39_SPIDER_TIEBREAK,
   SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
+  SIM_VERSION_V41_DEATH_CHOKEPOINT,
 } from './types.js';
 import { initAnt, pushRecentTile } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
@@ -30,7 +31,7 @@ import {
   phSet,
   pheromoneGridKey,
 } from './pheromone/pheromone-store.js';
-import { AntTask, PheromoneType, ForagingSubState, ChamberType } from './enums.js';
+import { AntTask, PheromoneType, ForagingSubState, ChamberType, NursingSubState } from './enums.js';
 import {
   WORKER_LIFESPAN_TICKS,
   WORKER_BASE_SPEED,
@@ -48,7 +49,7 @@ import {
   FLEE_THRESHOLD,
 } from './constants.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
-import { Zone, UndergroundTileState, ugSet } from './terrain.js';
+import { Zone, UndergroundTileState, ugSet, createUndergroundGrid } from './terrain.js';
 import type { WorldState } from './types.js';
 import type { SimCommand } from './commands.js';
 import type { ColonyId } from './colony/colony-store.js';
@@ -1439,5 +1440,246 @@ describe('SCEN-06: pre-V40 replay determinism under V40 code', () => {
     expect(foragerTile(runBoxed(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL))).not.toBe(
       `${TILE},${TILE}`,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V41 — single ant-death chokepoint (#289): the pre-V41 path is untouched, and the
+// V41 path is live.
+//
+// Same two obligations as SCEN-06 for V39/V40 above: (a) a save pinned below V41
+// keeps replaying under the OLD rule (same-build self-compare — see the scope note
+// on the V39 block for why a single build can assert no more than that), and (b) the
+// new rule actually changes a real run, measured against V40, V41's immediate
+// predecessor.
+//
+// Liveness scenario: a nurse carrying a larva that starves at step 3
+// (tickFoodConsumption, colony food 0 and the larva's grace timer at 1). The clear is
+// bidirectional (#107), so it has TWO observable effects, one on each end of the
+// pointer pair:
+//
+//   - On the DEAD larva, `carriedBy`. Pre-V41 the inline site flipped `alive = 0` and
+//     flagged `broodFieldDirty`, and nothing else on the ant slot, so the corpse keeps
+//     pointing at its carrier forever — step 16c's
+//     dead-brood release clears the carrier's forward pointer but deliberately leaves
+//     the back pointer on the corpse. Inert (nothing reads a dead slot's pointers) but
+//     serialized: dead slots round-trip through saves, which is exactly why the old
+//     bytes had to be preserved below the gate.
+//   - On the LIVE carrier, `carryingBroodId`, and this one is NOT inert. Step 16
+//     (tickAntMovement → ant-motion.ts `v10Carrying`) picks the nurse's flow field by
+//     `subTask === Feeding && carryingBroodId !== -1`: `nurseDeposit` when carrying,
+//     `nursing` when not. The carrier only drops the dead brood at step 16c, AFTER
+//     movement, so clearing the pointer at step 3 drops the nurse off the
+//     `nurseDeposit` field a tick early — it no longer carries a corpse toward the
+//     Nursery. Where it goes instead depends on the `nursing` pickup field, which
+//     seeds from RECLAIMABLE BROOD TILES ONLY (chamber-flow.ts computeNursingPickupField
+//     — Queen-tile seeding is the removed "Seed (1)"). That is an intended V41
+//     behaviour change, pinned by the second test below.
+//
+// Both are driven through tick(), not despawnAnt directly, so the gate is exercised at
+// the real call sites; the per-cause unit pins (both sides of the gate) live in
+// ant-death.test.ts.
+// ---------------------------------------------------------------------------
+
+describe('SCEN-06: pre-V41 replay determinism under V41 code', () => {
+  const TICKS = 3; // death lands on tick 1; two more ticks let the nurse react
+
+  function runStarvingCarrier(simVersion: number): WorldState {
+    const world = createWorldState(42);
+    world.simVersion = simVersion; // sticky, exactly as a loaded save arrives
+    const queenId = allocateEntityId(world);
+    initAnt(world.ants, queenId, {
+      colonyId: 1,
+      posX: 40 << FP_SHIFT,
+      posY: 40 << FP_SHIFT,
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: 0,
+      lifespan: WORKER_LIFESPAN_TICKS,
+    });
+    const colony = createColonyRecord(1, queenId);
+    colony.foodStored = 0; // nothing to feed the larva with
+    colony.queenStarvationTimer = STARVATION_GRACE_TICKS; // she outlives the run
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    colony.foodFlowFieldDirty = false;
+    world.colonies[1] = colony;
+
+    // Nurse and larva are deliberately NOT in colony.workers: step 8 then never
+    // reassigns the nurse, so the only thing that touches the carry pair is the
+    // death at step 3 and the nurse's own step-16c release.
+    const nurseId = allocateEntityId(world);
+    initAnt(world.ants, nurseId, {
+      colonyId: 1,
+      posX: (10 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (10 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Nursing,
+      subTask: NursingSubState.Feeding,
+      speed: WORKER_BASE_SPEED,
+      lifespan: WORKER_LIFESPAN_TICKS,
+      zone: Zone.Underground,
+    });
+    const larvaId = allocateEntityId(world);
+    initAnt(world.ants, larvaId, {
+      colonyId: 1,
+      posX: (10 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (10 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: 0,
+      lifespan: WORKER_LIFESPAN_TICKS,
+      zone: Zone.Underground,
+    });
+    colony.larvae.push(larvaId);
+    colony.larvaeCount = 1;
+    world.ants.carryingBroodId[nurseId] = larvaId;
+    world.ants.carriedBy[larvaId] = nurseId;
+    world.ants.starvationTimer[larvaId] = 1; // dies on the first unfed tick
+
+    for (let t = 0; t < TICKS; t++) tick(world, []);
+    return world;
+  }
+
+  /** Back pointer on the dead larva (entity 2; 0 = queen, 1 = nurse). */
+  function deadLarvaCarriedBy(world: WorldState): number {
+    return world.ants.carriedBy[2]!;
+  }
+
+  it('a V40-pinned world replays byte-identically across two independent runs', () => {
+    expect(serializeWorldState(runStarvingCarrier(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL))).toBe(
+      serializeWorldState(runStarvingCarrier(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL)),
+    );
+  });
+
+  it('V41 diverges from its IMMEDIATE predecessor V40 (the gate is live): the dead larva keeps a stale carriedBy only below V41', () => {
+    // Compare the field, NOT the full serialization: the serialized string carries
+    // the simVersion field itself (40 vs 41), so a full-string compare would pass
+    // even with the gated behaviour inert.
+    const v40 = runStarvingCarrier(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
+    const v41 = runStarvingCarrier(SIM_VERSION_V41_DEATH_CHOKEPOINT);
+    expect(v40.ants.alive[2]).toBe(0); // the larva really did starve on both sides
+    expect(v41.ants.alive[2]).toBe(0);
+    expect(deadLarvaCarriedBy(v40)).toBe(1); // stale back pointer at the carrier
+    expect(deadLarvaCarriedBy(v41)).toBe(-1); // cleared atomically by despawnAnt
+    // The live nurse ends up released either way (at step 3 for V41, step 16c for V40).
+    expect(v40.ants.carryingBroodId[1]).toBe(-1);
+    expect(v41.ants.carryingBroodId[1]).toBe(-1);
+  });
+
+  // The second, NOT-inert end of the same clear. Needs real chamber topology: a
+  // carrier mid-tunnel whose `nurseDeposit` field routes east to the Nursery, while
+  // the `nursing` pickup field has no seed at all once its only brood dies (it seeds
+  // reclaimable brood tiles and nothing else). So dropping off `nurseDeposit` a tick
+  // early is visible as the nurse NOT taking that step. The Queen chamber is here
+  // only to make the colony well-formed; it seeds neither field.
+  function runMidTunnelCarrier(simVersion: number): WorldState {
+    const world = createWorldState(7, 256);
+    world.simVersion = simVersion;
+    const underground = createUndergroundGrid(20, 20);
+    world.undergroundGrids[1] = underground;
+
+    // Queen chamber (2,2)-(4,4), Nursery (12,2)-(14,4), tunnel along y = 3.
+    for (let dy = 0; dy < 3; dy++)
+      for (let dx = 0; dx < 3; dx++) ugSet(underground, 2 + dx, 2 + dy, UndergroundTileState.Open);
+    for (let dy = 0; dy < 3; dy++)
+      for (let dx = 0; dx < 3; dx++) ugSet(underground, 12 + dx, 2 + dy, UndergroundTileState.Open);
+    for (let x = 4; x <= 12; x++) ugSet(underground, x, 3, UndergroundTileState.Open);
+
+    const queenId = allocateEntityId(world);
+    initAnt(world.ants, queenId, {
+      colonyId: 1,
+      posX: 3 << FP_SHIFT,
+      posY: 3 << FP_SHIFT,
+      task: AntTask.Idle,
+      speed: 0,
+      lifespan: WORKER_LIFESPAN_TICKS,
+      zone: Zone.Underground,
+    });
+    const colony = createColonyRecord(1, queenId);
+    colony.foodStored = 0; // nothing to feed the larva with
+    colony.queenStarvationTimer = STARVATION_GRACE_TICKS; // she outlives the run
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    colony.foodFlowFieldDirty = false;
+    colony.broodFieldDirty = true; // step 9 builds the nursing/nurseDeposit fields
+    world.colonies[1] = colony;
+    colony.chambers.push({
+      chamberId: 1,
+      chamberType: ChamberType.Queen,
+      foodStored: 0,
+      posX: 2 << FP_SHIFT,
+      posY: 2 << FP_SHIFT,
+      width: 3,
+      height: 3,
+    });
+    colony.chambers.push({
+      chamberId: 2,
+      chamberType: ChamberType.Nursery,
+      foodStored: 0,
+      posX: 12 << FP_SHIFT,
+      posY: 2 << FP_SHIFT,
+      width: 3,
+      height: 3,
+    });
+
+    // Carrier mid-tunnel, mid-carry. Deliberately NOT in colony.workers, so step 8
+    // never reassigns it and the only things that touch it are the death at step 3,
+    // movement at step 16 and the dead-brood release at step 16c.
+    const nurseId = allocateEntityId(world);
+    initAnt(world.ants, nurseId, {
+      colonyId: 1,
+      posX: (8 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (3 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Nursing,
+      subTask: NursingSubState.Feeding,
+      speed: WORKER_BASE_SPEED,
+      lifespan: WORKER_LIFESPAN_TICKS,
+      zone: Zone.Underground,
+    });
+    const larvaId = allocateEntityId(world);
+    initAnt(world.ants, larvaId, {
+      colonyId: 1,
+      posX: (8 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (3 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle,
+      speed: 0,
+      lifespan: WORKER_LIFESPAN_TICKS,
+      zone: Zone.Underground,
+    });
+    colony.larvae.push(larvaId);
+    colony.larvaeCount = 1;
+    world.ants.carryingBroodId[nurseId] = larvaId;
+    world.ants.carriedBy[larvaId] = nurseId;
+    world.ants.starvationTimer[larvaId] = 1; // dies on the first unfed tick
+
+    tick(world, []);
+    return world;
+  }
+
+  it('V41 re-routes the bereaved carrier on the death tick: no more `nurseDeposit` step with a corpse', () => {
+    const v40 = runMidTunnelCarrier(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
+    const v41 = runMidTunnelCarrier(SIM_VERSION_V41_DEATH_CHOKEPOINT);
+    // Entity 1 is the carrier (0 = queen, 2 = larva).
+    expect(v40.ants.alive[2]).toBe(0); // the larva starved on both sides
+    expect(v41.ants.alive[2]).toBe(0);
+    const START = (8 << FP_SHIFT) + (FP_ONE >> 1);
+    // Below V41 the stale forward pointer survives step 16, so the nurse takes one
+    // more `nurseDeposit` step east — carrying a corpse toward the Nursery.
+    //
+    // At V41 the pointer is already -1, so step 16 selects the `nursing` pickup field
+    // instead. In THIS fixture the colony's only brood is the larva that just died,
+    // and a dead brood does not seed (isBroodReclaimable requires alive === 1), so
+    // that field has no seeds at all — every tile is -2 and ant-motion's unreachable
+    // failsafe holds the nurse still. With other reclaimable brood present it would
+    // step toward that brood instead; what V41 guarantees either way is that it does
+    // NOT take the `nurseDeposit` step. Both end Idle: step 16c releases the carry
+    // either way, one tick's movement apart.
+    expect(v40.ants.posX[1]).toBe(START + (FP_ONE >> 1));
+    expect(v41.ants.posX[1]).toBe(START);
+    expect(v41.ants.posY[1]).toBe(v40.ants.posY[1]);
+    expect(v40.ants.task[1]).toBe(AntTask.Idle);
+    expect(v41.ants.task[1]).toBe(AntTask.Idle);
   });
 });

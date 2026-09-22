@@ -179,7 +179,8 @@ export interface ColonyRecord {
    *                            joins the seed/exclusion set; needed for the all-Open
    *                            PlaceChamber path where no tile-flip dirties step 9)
    *    - ant-nursing.ts        nurse pickup (carriedBy set) + depositCarriedBrood
-   *    - combat.ts killAnt     brood death AND carrier-death orphan
+   *    - ant-death.ts despawnAnt  brood death AND carrier-death orphan (#289: every
+   *                            death from V41; before, kills plus the inline sites)
    *  NOT triggers (output-identical): carried-brood per-tick position sync (carried
    *  brood is excluded by isBroodReclaimable); tickDeathCleanup swap-remove of an
    *  already-dead brood. The swap-remove DOES reorder the surviving seeds (same
@@ -188,11 +189,11 @@ export interface ColonyRecord {
    *  step-9 following the reorder: starvation death flags at step 3 → cleanup reorders
    *  at step 5 → step 9 (same tick) recomputes; combat/spider death flags at step 17
    *  → the flag persists to T+1 where step-5 cleanup reorders and T+1 step 9 consumes
-   *  it. (killAnt itself never touches eggs[]/larvae[], only alive + carry pointers.) */
+   *  it. (despawnAnt itself never touches eggs[]/larvae[], only alive + carry pointers.) */
   broodFieldDirty: boolean;
 
   /** Phase 9 / CMBT-06/07 / PRD §1a — cumulative count of enemies killed by this colony's ants.
-   *  Incremented inside combat.killAnt (Plan 02) when ants from this colony win a combat round.
+   *  Incremented inside ant-death.ts despawnAnt (Plan 02) when ants from this colony win a combat round.
    *  Initialized to 0 in createColonyRecord. Round-trips through copyWorldState + save. */
   killCount: number;
 

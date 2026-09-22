@@ -18,7 +18,7 @@
 // double as byte-identical-replay guards (nothing spawns, nothing is counted differently).
 
 import { describe, it, expect } from 'vitest';
-import { killAnt } from './combat.js';
+import { killAnt } from './ant-death.js';
 import { tickSpider } from './spider.js';
 import {
   spawnCorpseFood,

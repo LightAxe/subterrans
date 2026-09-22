@@ -115,3 +115,31 @@ if [[ -n "$FILEWIDE_HITS" ]]; then
   exit 1
 fi
 echo "file-wide-disable guard: clean."
+
+# Issue #289 — single ant-death chokepoint. Every production ant death must go
+# through `despawnAnt` (src/sim/ant-death.ts); a death written anywhere else silently
+# skips the on-death cleanup and hooks (carry pointers, queen-death context, corpse
+# food, operation counters). Match the write shape `<expr>.alive[<index>] = 0` in
+# src/ outside test files, and allow it only in ant-death.ts. Test files are exempt —
+# fixtures flip `alive` to stage dead slots.
+#
+# SCOPE HONESTY (same posture as the FNDN-07 pattern above): this is a single-line
+# textual guard on the LITERAL shape, not a semantic one. It catches the write with or
+# without spaces, with a computed index (`alive[i + 1] = 0`) and anywhere under src/.
+# It does NOT catch a write split across lines, a nested-bracket index
+# (`alive[ids[0]!] = 0`), an aliased array (`const a = w.ants.alive; a[id] = 0`), or a
+# named constant (`alive[id] = DEAD`). It also matches the shape inside a COMMENT, so
+# prose quoting the old code in a non-test file under src/ trips it — write it as
+# `alive[…]` in prose. The guard is a tripwire against the obvious regression (someone
+# re-adding an inline death at a fourth site), not a proof; the real contract is the
+# despawnAnt signature and the V41 note.
+DEATH_HITS=$(grep -rnE '\.alive\[[^]]*\][[:space:]]*=[[:space:]]*0([^0-9]|$)' src --include='*.ts' --exclude='*.test.ts' | grep -v '^src/sim/ant-death\.ts:' || true)
+if [[ -n "$DEATH_HITS" ]]; then
+  echo "Ant death outside the despawnAnt chokepoint (issue #289):"
+  echo "$DEATH_HITS"
+  echo ""
+  echo "Route the death through despawnAnt(world, id, { cause }) in src/sim/ant-death.ts"
+  echo "instead of writing alive[id] = 0 directly."
+  exit 1
+fi
+echo "ant-death chokepoint guard: clean."

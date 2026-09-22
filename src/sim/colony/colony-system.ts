@@ -48,6 +48,7 @@ import { allocateWorkers } from '../behavior/allocation-system.js';
 import { ugGet, ugSet, UndergroundTileState } from '../terrain.js';
 import { findEmbeddedByTightening } from '../underground-occupancy.js';
 import { FP_SHIFT } from '../fixed.js';
+import { despawnAnt } from '../ant-death.js';
 
 // ---------------------------------------------------------------------------
 // withdrawFood / colonyFoodTotal — chamber-authoritative food withdrawal (issue #15)
@@ -340,7 +341,7 @@ export function tickFoodConsumption(world: WorldState, colony: ColonyRecord): vo
     } else {
       colony.queenStarvationTimer -= 1;
       if (colony.queenStarvationTimer <= 0) {
-        ants.alive[queenId] = 0;
+        despawnAnt(world, queenId, { cause: 'starvation' });
       }
     }
   }
@@ -356,8 +357,7 @@ export function tickFoodConsumption(world: WorldState, colony: ColonyRecord): vo
       const timer = ants.starvationTimer[id]! - 1;
       ants.starvationTimer[id] = timer;
       if (timer <= 0) {
-        ants.alive[id] = 0;
-        colony.broodFieldDirty = true; // #235 — a larva (reclaimable seed) died
+        despawnAnt(world, id, { cause: 'starvation' }); // #235 broodFieldDirty is set inside
       }
     }
   }

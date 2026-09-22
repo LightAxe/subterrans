@@ -1233,7 +1233,7 @@ describe('#293 survival mode', () => {
   });
 
   it('counts the live roster, not workerCount: a third worker killed this tick puts the colony in mode at once', () => {
-    // killAnt only clears `alive`; tickDeathCleanup decrements workerCount at step 5
+    // despawnAnt only clears `alive`; tickDeathCleanup decrements workerCount at step 5
     // of the NEXT tick, and the controller runs before that. On a cadence tick the
     // stale count would otherwise let aiDigHeuristic emit marks that stand until the
     // next cadence.

@@ -191,7 +191,7 @@ export const AI_SURVIVAL_CANCEL_BUDGET = 16 as const;
  *     re-entering cancels them again at the same cadence.
  */
 export function aiSurvivalMode(world: WorldState, colony: ColonyRecord): boolean {
-  // Count the LIVE roster, not colony.workerCount: killAnt only clears `alive`, and
+  // Count the LIVE roster, not colony.workerCount: despawnAnt only clears `alive`, and
   // workerCount is decremented by tickDeathCleanup at step 5 of the FOLLOWING tick,
   // while this controller runs before that tick — so a colony that just fell from 3
   // to 2 would read as 3 for one tick, and if that tick is an AI_DIG_INTERVAL

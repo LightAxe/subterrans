@@ -160,10 +160,12 @@ export function diagonalizeFlowStep(
  *   Direction=-1 (ant is ON the Marked tile) → return {0,0} so the ant holds
  *   position until step 10 claims the tile next tick.
  * Dig workers in Excavating: return {0,0} (stationary while digging).
- * Nursing ants: read the nursing chamber flow-field (seeded from Queen+Nursery
- *   Open tiles). -1 (on chamber tile) → {0,0} so tickNurseActions can flip
- *   subTask=Feeding. -2 (no tunnel connection) → {0,0} as a deterministic
- *   failsafe. When no cache is supplied (legacy test harnesses) falls back to
+ * Nursing ants: read the `nursing` pickup field (reclaimable-brood tiles outside
+ *   Nursery) when empty-handed, or the Nursery-only `nurseDeposit` field when
+ *   carrying. -1 (on a source tile of the selected field) → {0,0} so
+ *   tickNurseActions can flip subTask=Feeding. -2 (no tunnel connection, or a
+ *   field with no sources at all) → {0,0} as a deterministic failsafe. When no
+ *   cache is supplied (legacy test harnesses) falls back to
  *   Manhattan steering.
  * Fighting ants: {0,0} here — rally steering lives in tickAntMovement so the
  *   fighter can consume ants.targetPosX/Y (written by updateFightAntTargets)
@@ -174,8 +176,8 @@ export function diagonalizeFlowStep(
  * @param antId              Entity ID of the ant.
  * @param digFlowFields      Per-colony flow-field cache (dig targets).
  * @param chamberFlowFields  Optional per-colony chamber flow-field cache. When
- *                           provided, nurses consume the `nursing` field
- *                           instead of Manhattan steering.
+ *                           provided, nurses consume the `nursing` /
+ *                           `nurseDeposit` fields instead of Manhattan steering.
  * @returns                  Direction vector {dx, dy}.
  */
 export function getTaskDirection(
@@ -230,9 +232,12 @@ export function getTaskDirection(
     const colonyId = ants.colonyId[antId]!;
     const gridColonyId = ants.currentGridColonyId[antId]!;
 
-    // Prefer the nursing flow-field. Seeded from Open tiles inside every
-    // Queen/Nursery chamber footprint, so the nurse routes through tunnels
-    // instead of straight-line stepping into Solid dirt on bends. See the
+    // Prefer the nursing flow-field, so the nurse routes through tunnels instead
+    // of straight-line stepping into Solid dirt on bends. (The "Open tiles inside
+    // every Queen/Nursery chamber footprint" seeding this once described is the
+    // PRE-v10 legacy one. MIN_ACCEPTED_SIM_VERSION is >= v10, and tick.ts's second
+    // loop overwrites the buffer with computeNursingPickupField every time it
+    // rebuilds, so no live world reaches this reader with the legacy seeding.) See the
     // seed-920076605 debug snapshot: ant 19 at (14,16) targeted Nursery
     // (13,9) and straight-line steering picked (14,15) = Solid every tick.
     //
@@ -240,7 +245,9 @@ export function getTaskDirection(
     // via the Nursery-only `nurseDeposit` field instead. Detection: subTask
     // === Feeding AND carryingBroodId set. The empty-handed pickup phase
     // (subTask = MovingToBrood) keeps using the `nursing` field, which v10
-    // re-seeds to Queen tiles + uncarried-brood tiles outside Nursery.
+    // re-seeds to uncarried-brood tiles outside Nursery and nothing else — so
+    // with no reclaimable brood it is entirely unreachable (-2) and the
+    // failsafe below holds the ant still.
     if (chamberFlowFields !== undefined) {
       const v10Carrying =
         ants.subTask[antId] === NursingSubState.Feeding && ants.carryingBroodId[antId] !== -1;
@@ -254,7 +261,8 @@ export function getTaskDirection(
         const dir = flowField[tileY * underground.width + tileX];
         if (dir === undefined) return { dx: 0, dy: 0 };
         if (dir === -1) {
-          // On a Queen/Nursery chamber tile — hold. tickNurseActions flips
+          // On a source tile of the selected field (a brood tile for `nursing`,
+          // a Nursery tile for `nurseDeposit`) — hold. tickNurseActions flips
           // subTask to Feeding this same tick (it runs at step 16c after
           // tickAntMovement at step 16) and to Idle next tick.
           return { dx: 0, dy: 0 };

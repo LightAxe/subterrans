@@ -12,7 +12,7 @@ import { buildHudLayout } from './hud-layout.js';
 import { DEFAULT_LAYOUT } from './layout.js';
 import { createWorldState, allocateEntityId } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
-import { initAnt, killAnt } from '../sim/ant/ant-store.js';
+import { initAnt } from '../sim/ant/ant-store.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import {
@@ -127,7 +127,7 @@ describe('computeAntActivity — capable count', () => {
   it('capableAnts excludes the queen when queen dead', () => {
     const { world, colony, queenId } = setupWorld();
     spawnWorker(world, colony, AntTask.Idle, 0);
-    killAnt(world.ants, queenId);
+    world.ants.alive[queenId] = 0; // HUD fixture: stage a dead slot, not a sim death
     const a = computeAntActivity(world, colony);
     expect(a.capableAnts).toBe(1);
     expect(a.queenAlive).toBe(false);
@@ -149,7 +149,7 @@ describe('computeAntActivity — dead-worker filtering', () => {
     const { world, colony } = setupWorld();
     const alive = spawnWorker(world, colony, AntTask.Foraging, ForagingSubState.SearchingFood);
     const dead = spawnWorker(world, colony, AntTask.Foraging, ForagingSubState.SearchingFood);
-    killAnt(world.ants, dead);
+    world.ants.alive[dead] = 0; // HUD fixture: stage a dead slot, not a sim death
     expect(alive).not.toBe(dead);
     const a = computeAntActivity(world, colony);
     expect(a.foraging.searching).toBe(1);
@@ -187,7 +187,7 @@ describe('formatAntActivityLines', () => {
 
   it('reports Queen: dead when the queen is gone', () => {
     const { world, colony, queenId } = setupWorld();
-    killAnt(world.ants, queenId);
+    world.ants.alive[queenId] = 0; // HUD fixture: stage a dead slot, not a sim death
     const a = computeAntActivity(world, colony);
     expect(formatAntActivityLines(a).join('\n')).toContain('Queen: dead');
   });
