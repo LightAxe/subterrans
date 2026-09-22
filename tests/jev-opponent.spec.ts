@@ -230,6 +230,9 @@ test.describe('Jev opponent beta — the opponent section of the new-game screen
     await textarea.focus();
     await page.keyboard.press('Enter');
     await page.waitForTimeout(500);
+    // The keystroke landed in the box as a newline, so the first half is not
+    // merely "nothing happened".
+    await expect(textarea).toHaveValue(/\n/);
     expect(await bootScreen(page)).toBe('difficulty-select');
     expect(await roundOpponent(page)).toBeUndefined();
 

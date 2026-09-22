@@ -1596,6 +1596,17 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
+   * The opponent a no-screen boot (the save-recovery fallbacks) should use: the
+   * choice armed by an earlier screen this session, else the persisted preference,
+   * so a tester whose save fails to load keeps the opponent they picked rather than
+   * silently getting the rule-based AI. `bootFresh` still downgrades a Jev request
+   * to rules when the build has no endpoint.
+   */
+  private persistedOpponent(): OpponentConfig {
+    return this.pendingOpponent ?? loadSettings().opponent;
+  }
+
+  /**
    * Everything a new-game path must do with the overlay's opponent choice:
    * arm the `pendingOpponent` seam `bootFresh` reads through `nextOpponent()`,
    * and persist the preference so the NEXT overlay pre-selects it. The write is
@@ -1734,7 +1745,7 @@ export class GameScene extends Phaser.Scene {
       // No new-game screen on this path (the player already chose Continue);
       // the persisted last-used tier applies (#304), not a hard-coded Normal.
       await deleteSave();
-      this.bootFresh(loadSettings().difficulty);
+      this.bootFresh(loadSettings().difficulty, this.persistedOpponent());
       return;
     }
     // Reset BEFORE restoring so the new session starts from a clean slate,
@@ -1768,7 +1779,7 @@ export class GameScene extends Phaser.Scene {
       // Every fallback below boots fresh on the persisted last-used tier
       // (#304) — no new-game screen, since the player already chose Continue.
       if (err instanceof FutureSimVersionError) {
-        this.bootFresh(loadSettings().difficulty);
+        this.bootFresh(loadSettings().difficulty, this.persistedOpponent());
         // Set after bootFresh — resetSessionState clears the flag.
         this.autosaveSuspended = true;
         return;
@@ -1777,12 +1788,12 @@ export class GameScene extends Phaser.Scene {
         // Pre-V22 save — no migration path; discard and start fresh.
         console.error(err.message);
         await deleteSave();
-        this.bootFresh(loadSettings().difficulty);
+        this.bootFresh(loadSettings().difficulty, this.persistedOpponent());
         return;
       }
       // Genuine corruption: discard so we don't loop the user.
       await deleteSave();
-      this.bootFresh(loadSettings().difficulty);
+      this.bootFresh(loadSettings().difficulty, this.persistedOpponent());
       return;
     }
     this.currentSeed = loaded.seed;
