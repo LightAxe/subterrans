@@ -525,6 +525,8 @@ interface SerializedColony {
   broodFieldDirty?: boolean; // #235 — optional: absent on pre-#235 saves (deserialize defaults false)
   killCount: number;
   priorityFoodPileId: FoodPileId | null;
+  /** C1 (V42) — colony alarm stance. Absent on pre-V42 saves → false on load. */
+  alarmActive?: boolean;
   eggIntervalNumerator: number;
 }
 
@@ -838,6 +840,7 @@ function serializeColony(c: ColonyRecord): SerializedColony {
     broodFieldDirty: c.broodFieldDirty, // #235
     killCount: c.killCount,
     priorityFoodPileId: c.priorityFoodPileId,
+    alarmActive: c.alarmActive,
     eggIntervalNumerator: c.eggIntervalNumerator,
   };
 }
@@ -1298,6 +1301,9 @@ function deserializeColony(s: SerializedColony): ColonyRecord {
   c.broodFieldDirty = s.broodFieldDirty ?? false; // #235 — absent on pre-#235 saves; tick-1 firstDigCompute forces recompute regardless
   c.killCount = s.killCount;
   c.priorityFoodPileId = s.priorityFoodPileId;
+  // C1 (V42) — absent on pre-V42 saves, and a tampered non-boolean must not
+  // smuggle a truthy value into a sim branch: coerce anything else to false.
+  c.alarmActive = s.alarmActive === true;
   c.queenLastEggTick = s.queenLastEggTick;
   // Valid difficulty numerators are 3, 4, 5. Reject any out-of-range value (tampered save or future compat).
   c.eggIntervalNumerator =

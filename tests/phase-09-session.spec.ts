@@ -500,6 +500,7 @@ test.describe('Phase 09.1 Chunk 2 — enemy underground toggle', () => {
     const X: Key = { key: 'x', code: 'KeyX', keyCode: 88 };
     const SPACE: Key = { key: ' ', code: 'Space', keyCode: 32 };
     const ESC: Key = { key: 'Escape', code: 'Escape', keyCode: 27 };
+    const R: Key = { key: 'r', code: 'KeyR', keyCode: 82 };
 
     const twoFrames = (page: Page) =>
       page.evaluate(
@@ -601,6 +602,49 @@ test.describe('Phase 09.1 Chunk 2 — enemy underground toggle', () => {
       expect(await readPaused()).toBe(true);
       await press(page, SPACE);
       await expect.poll(readPaused, { timeout: 5_000 }).toBe(false);
+    });
+
+    test('R (C1 colony alarm) — counts ACCEPTED presses, not end state', async ({ page }) => {
+      await boot(page);
+      // End state cannot pin this one. SetColonyAlarm carries an ABSOLUTE
+      // `active`, computed from state that cannot change between two handler
+      // calls inside a single task — so a duplicated call is idempotent and the
+      // alarm lands in the same place whether the guards fire or not. (That is
+      // exactly why the first version of this test passed with both guards
+      // deleted.) Assert the dispatch COUNT instead, via the DEV hook.
+      const accepts = () =>
+        page.evaluate(() => {
+          const w = window as unknown as {
+            __phase9_test?: { alarmHotkeyAccepts?: () => number };
+          };
+          return w.__phase9_test?.alarmHotkeyAccepts?.() ?? -1;
+        });
+      expect(await accepts()).toBe(0);
+
+      await press(page, R);
+      await expect.poll(accepts, { timeout: 5_000 }).toBe(1);
+
+      // The #311 shape: two presses' worth of events, one of which is re-walked.
+      // Deduped → 2 more accepts. Un-deduped → 3.
+      await rewalkBurst(page, R);
+      await expect.poll(accepts, { timeout: 5_000 }).toBe(3);
+
+      // Auto-repeat (a held key) must add nothing: this suite's dispatch helper
+      // sends repeat:false, so the repeat guard needs its own explicit event.
+      await page.evaluate(() => {
+        const ev = new KeyboardEvent('keydown', {
+          key: 'r',
+          code: 'KeyR',
+          keyCode: 82,
+          repeat: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(ev, 'timeStamp', { value: performance.now() + 90_000 });
+        window.dispatchEvent(ev);
+      });
+      await twoFrames(page);
+      expect(await accepts()).toBe(3);
     });
 
     test("Esc (UIScene Key 'down' handler) — the pause menu", async ({ page }) => {

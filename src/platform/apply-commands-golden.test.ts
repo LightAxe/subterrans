@@ -19,7 +19,7 @@
 // are reduced to a stable SHA-1 so a divergence pin-points the subsystem without
 // bloating the .snap; small command-mutated fields stay readable.
 //
-// Matrix: every one of the 12 SimCommand variants, invalid payloads, an unknown
+// Matrix: every one of the 13 SimCommand variants, invalid payloads, an unknown
 // variant, the SyncAIState uncapped pre-pass, and interleaved Sync/non-Sync
 // batches > MAX_COMMANDS_PER_TICK.
 
@@ -323,6 +323,58 @@ describe('applyCommands golden differential (byte-identity of the extraction)', 
           fighterIds: [],
           issuedAtTick: TICK,
         },
+      ]),
+    ).toMatchSnapshot();
+  });
+
+  // Split deliberately: a single sound-then-all-clear case would snapshot
+  // `alarmActive: false` at both ends, which cannot tell "toggled on and back"
+  // from "never applied at all". The first case leaves the flag SET so the
+  // snapshot pins the command actually landing.
+  it('SetColonyAlarm — sound (flag ends set)', () => {
+    expect(
+      run([
+        {
+          type: 'SetColonyAlarm',
+          colonyId: PLAYER_COLONY_ID,
+          active: true,
+          issuedAtTick: TICK,
+        },
+      ]),
+    ).toMatchSnapshot();
+  });
+
+  it('SetColonyAlarm — sound then all-clear (flag ends cleared)', () => {
+    expect(
+      run([
+        {
+          type: 'SetColonyAlarm',
+          colonyId: PLAYER_COLONY_ID,
+          active: true,
+          issuedAtTick: TICK,
+        },
+        {
+          type: 'SetColonyAlarm',
+          colonyId: PLAYER_COLONY_ID,
+          active: false,
+          issuedAtTick: TICK,
+        },
+      ]),
+    ).toMatchSnapshot();
+  });
+
+  it('SetColonyAlarm — invalid payloads leave the flag alone', () => {
+    expect(
+      run([
+        // Non-boolean `active`, unknown colony, and a non-positive id.
+        {
+          type: 'SetColonyAlarm',
+          colonyId: PLAYER_COLONY_ID,
+          active: 1,
+          issuedAtTick: TICK,
+        } as unknown as SimCommand,
+        { type: 'SetColonyAlarm', colonyId: 9999, active: true, issuedAtTick: TICK },
+        { type: 'SetColonyAlarm', colonyId: 0, active: true, issuedAtTick: TICK },
       ]),
     ).toMatchSnapshot();
   });

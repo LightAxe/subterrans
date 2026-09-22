@@ -22,6 +22,7 @@ import {
   SIM_VERSION_V39_SPIDER_TIEBREAK,
   SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
   SIM_VERSION_V41_DEATH_CHOKEPOINT,
+  SIM_VERSION_V42_COLONY_ALARM,
 } from './types.js';
 import { initAnt, pushRecentTile } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
@@ -89,6 +90,7 @@ function serializeWorldState(w: WorldState): string {
             colonyId: c.colonyId,
             queenEntityId: c.queenEntityId,
             queenStarvationTimer: c.queenStarvationTimer,
+            alarmActive: c.alarmActive, // C1 — a new PERSISTED colony column
             foodStored: c.foodStored,
             workerCount: c.workerCount,
             eggCount: c.eggCount,
@@ -1682,4 +1684,78 @@ describe('SCEN-06: pre-V41 replay determinism under V41 code', () => {
     expect(v40.ants.task[1]).toBe(AntTask.Idle);
     expect(v41.ants.task[1]).toBe(AntTask.Idle);
   });
+});
+
+// ---------------------------------------------------------------------------
+// V42 — colony alarm (C1): the pre-V42 path is untouched, and the V42 path is live.
+//
+// Same two obligations as SCEN-06 for V39/V40/V41 above: (a) a save pinned below
+// V42 keeps replaying under the OLD rule (same-build self-compare — see the scope
+// note on the V39 block for why a single build can assert no more than that), and
+// (b) the new rule actually changes a real run, measured against V41, V42's
+// immediate predecessor.
+//
+// Liveness scenario: a colony on a PERFECTLY QUIET map (danger zeroed around the
+// entrance) with `alarmActive` set directly on the record. Below V42 nothing reads
+// that field, so the surface idle reserve mills as usual; at V42 the four gated
+// reads answer "dangerous" and the reserve pours underground. Driven through
+// tick(), not tickIdleReserveAndFlee, so the gate is exercised at the real call
+// site. The per-site pins (all four, each with its own failing mutation) live in
+// ant/idle-reserve-flee.test.ts.
+//
+// Note the field is set directly here rather than through SetColonyAlarm: tick()
+// drops that command below V42 by design, so the command path cannot be used to
+// build the V41 arm of the comparison.
+// ---------------------------------------------------------------------------
+
+describe('SCEN-06: pre-V42 replay determinism under V42 code', () => {
+  const TICKS = 25;
+
+  function runAlarmed(simVersion: number): WorldState {
+    const world = createScenario(7, 'Normal');
+    world.spider = null; // the alarm, not a predator, is the only thing that can move anyone
+    world.aiState = [];
+    world.simVersion = simVersion; // sticky, exactly as a loaded save arrives
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const ent = colony.entrances.find((e) => e.isOpen)!;
+    // Zero the danger field around the door so no real threat can confound this.
+    const grid =
+      world.pheromoneGrids[
+        pheromoneGridKey(PLAYER_COLONY_ID, PheromoneType.DangerTrail, 'surface')
+      ]!;
+    for (let dy = -6; dy <= 6; dy++) {
+      for (let dx = -6; dx <= 6; dx++) {
+        phSet(grid, ent.surfaceTileX + dx, ent.surfaceTileY + dy, 0);
+      }
+    }
+    colony.alarmActive = true;
+    for (let t = 0; t < TICKS; t++) tick(world, []);
+    return world;
+  }
+
+  /** Surface workers of the player colony still milling above ground. */
+  function surfaceWorkers(world: WorldState): number {
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    let n = 0;
+    for (const id of colony.workers) {
+      if (world.ants.alive[id] === 1 && world.ants.zone[id] === 0) n += 1;
+    }
+    return n;
+  }
+
+  it('a V41-pinned world replays byte-identically across two independent runs', () => {
+    expect(serializeWorldState(runAlarmed(SIM_VERSION_V41_DEATH_CHOKEPOINT))).toBe(
+      serializeWorldState(runAlarmed(SIM_VERSION_V41_DEATH_CHOKEPOINT)),
+    );
+  }, 30_000);
+
+  it('V42 diverges from its IMMEDIATE predecessor V41 (the gate is live): the alarm empties the surface only at V42', () => {
+    // Compare the surface population, NOT the full serialization: the serialized
+    // string carries the simVersion field itself (41 vs 42), so a full-string
+    // compare would pass even with the gated behaviour inert.
+    const v41 = surfaceWorkers(runAlarmed(SIM_VERSION_V41_DEATH_CHOKEPOINT));
+    const v42 = surfaceWorkers(runAlarmed(SIM_VERSION_V42_COLONY_ALARM));
+    expect(v41).toBeGreaterThan(0); // pre-V42 the alarm field is inert — they mill on
+    expect(v42).toBeLessThan(v41); // at V42 they head for the door
+  }, 30_000);
 });

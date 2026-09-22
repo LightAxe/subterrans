@@ -1,6 +1,11 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V32_AI_OP_VALIDATION } from './types.js';
+import {
+  allocateEntityId,
+  INVALID_ENTITY_ID,
+  SIM_VERSION_V32_AI_OP_VALIDATION,
+  SIM_VERSION_V42_COLONY_ALARM,
+} from './types.js';
 import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
@@ -883,8 +888,21 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         world.spiderPriorityColonyId = world.spider !== null ? cmd.colonyId : null;
         break;
       }
+      case 'SetColonyAlarm': {
+        // C1 (V42) — gate the WRITE, not just the reads: a pre-V42 world must not
+        // be able to carry a true `alarmActive` at all, so a replay pinned below
+        // V42 stays byte-identical even if a newer inputLog is fed to it.
+        if (world.simVersion < SIM_VERSION_V42_COLONY_ALARM) break;
+        // Validate payload — save/replay objects are not schema-checked upstream.
+        if (typeof cmd.active !== 'boolean') break;
+        if (!Number.isInteger(cmd.colonyId) || cmd.colonyId <= 0) break;
+        const alarmColony = world.colonies[cmd.colonyId];
+        if (alarmColony === undefined) break;
+        alarmColony.alarmActive = cmd.active;
+        break;
+      }
       default: {
-        // Exhaustive narrowing — SimCommand is a 12-variant union (S3 adds MarkSpiderPriority).
+        // Exhaustive narrowing — SimCommand is a 13-variant union (C1 adds SetColonyAlarm).
         // Silent-drop unknowns per PRD §5. Do NOT throw, do NOT log (wall-clock-adjacent).
         const _exhaustive: never = cmd;
         void _exhaustive;
@@ -1321,6 +1339,9 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     //     post-excavation for Digging, post-feed for Nursing) describe the action-system transitions
     //     that PUT an ant into AntTask.Idle — NOT sub-state predicates against the current task.
     //     AntTask.Fighting not eligible in Phase 6 — no combat resolution yet (Phase 9 scope).
+    // C1 (V42) — read once: while the alarm sounds this colony reassigns nobody.
+    const alarmRecallActive =
+      world.simVersion >= SIM_VERSION_V42_COLONY_ALARM && colony.alarmActive === true;
     const eligible = getScratch(world).tickIdle;
     eligible.length = 0;
     for (let i = 0; i < colony.workers.length; i++) {
@@ -1337,6 +1358,15 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       // in reserve; it resumes on the all-clear. The field is -1 pre-V34, so this
       // is a no-op for pre-V34 replays.
       if (world.ants.fleeShelterUntilTick[id]! > 0) continue;
+      // C1 (V42) — an alarmed colony recruits NOBODY. The timer check above only
+      // covers workers that are ALREADY sheltering, and this step runs at 10a,
+      // five steps before tickIdleReserveAndFlee (15b) gets to start them
+      // fleeing. So on the tick the alarm is sounded an Idle surface worker was
+      // drafted to fight/nurse/dig FIRST, failed 15b's Idle/Foraging filter, and
+      // never sheltered at all — sounding the alarm with unmet fight demand sent
+      // workers OUT instead of pulling them in, and nothing ever recalled them
+      // (Codex P1). The alarm is the colony-wide override, so it wins here.
+      if (alarmRecallActive) continue;
       eligible.push(id);
     }
     // Sort ascending by EntityId — "lowest-EntityId first" per PRD §7c (deterministic per SCEN-06).

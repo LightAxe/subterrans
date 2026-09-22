@@ -22,6 +22,7 @@ import {
   SIM_VERSION_V34_IDLE_RESERVE_FLEE,
   SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
   SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH,
+  SIM_VERSION_V42_COLONY_ALARM,
 } from '../types.js';
 import { isInChamberFootprint, type ColonyId, type ColonyRecord } from '../colony/colony-store.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
@@ -205,8 +206,14 @@ function releaseOnLocalAllClear(
   dangerGrid: PheromoneGrid | undefined,
   tileX: number,
   tileY: number,
+  alarmed: boolean,
 ): boolean {
   if (world.simVersion < SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH) return false;
+  // C1 (V42) — the alarm is a standing "stay in" order, so a held carrier is
+  // never released by local quiet while it is sounding. The doorstep push is
+  // deliberately NOT suppressed at the call sites: finishing the last step
+  // through an enterable door IS going inside, which is what the alarm wants.
+  if (alarmed) return false;
   const danger = dangerGrid !== undefined ? phGet(dangerGrid, tileX, tileY) : 0;
   return danger < FLEE_THRESHOLD;
 }
@@ -428,6 +435,15 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
     // allocate pheromoneGrids). Never call phGet on undefined.
     const dangerKey = pheromoneGridKey(colony.colonyId, PheromoneType.DangerTrail, 'surface');
     const dangerGrid = world.pheromoneGrids[dangerKey];
+    // C1 (V42) — colony alarm. Read once per colony: while it is sounding, the
+    // four own-tile/own-exit danger reads below all behave as "dangerous", which
+    // routes every surface civilian down the existing V34 flee path. The
+    // ENTRANCE-safety reads (setFleeTarget → pickNearestSafeEntrance,
+    // entranceDanger) are deliberately untouched, so the alarm never TARGETS a
+    // camped door — a fully-camped colony holds instead. The chosen target is
+    // safe; the straight-line path to it is not checked (pre-existing V34
+    // behaviour — see the V42 note in types.ts).
+    const alarmed = world.simVersion >= SIM_VERSION_V42_COLONY_ALARM && colony.alarmActive === true;
     const workers = colony.workers;
 
     for (let w = 0; w < workers.length; w++) {
@@ -509,7 +525,7 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
         }
         if (task !== AntTask.Idle && task !== AntTask.Foraging) continue;
         const danger = dangerGrid !== undefined ? phGet(dangerGrid, tileX, tileY) : 0;
-        if (danger >= FLEE_THRESHOLD) {
+        if (alarmed || danger >= FLEE_THRESHOLD) {
           // Flee toward the nearest SAFE open entrance (skipping camped ones): a
           // camped nearest entrance must NOT suppress fleeing when a farther clear
           // entrance exists (Codex P2). setFleeTarget also picks the routing
@@ -581,7 +597,7 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
               // release to normal routing on the doorstep, or when its own tile is
               // not actually dangerous; otherwise drop into the timed hold.
               ants.fleeShelterUntilTick[id] =
-                doorstepPush || releaseOnLocalAllClear(world, dangerGrid, tileX, tileY)
+                doorstepPush || releaseOnLocalAllClear(world, dangerGrid, tileX, tileY, alarmed)
                   ? -1
                   : tick + 1;
             }
@@ -594,7 +610,7 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
             // re-point at the CURRENT nearest safe entrance + routing (it can
             // change as the danger field shifts or the worker moves).
             if (
-              danger < FLEE_THRESHOLD ||
+              (!alarmed && danger < FLEE_THRESHOLD) ||
               !setFleeTarget(world, id, entrances, tileX, tileY, dangerGrid)
             ) {
               ants.fleeShelterUntilTick[id] = -1;
@@ -626,7 +642,10 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
           } else if (setFleeTarget(world, id, entrances, tileX, tileY, dangerGrid)) {
             // A safe entrance appeared → dash toward it.
             ants.fleeShelterUntilTick[id] = 0;
-          } else if (doorstepPush || releaseOnLocalAllClear(world, dangerGrid, tileX, tileY)) {
+          } else if (
+            doorstepPush ||
+            releaseOnLocalAllClear(world, dangerGrid, tileX, tileY, alarmed)
+          ) {
             // #297 (V38) — two ways to stop waiting, both handed back to normal
             // homebound routing by clearing the target:
             //
@@ -677,7 +696,7 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
               dangerGrid !== undefined
                 ? phGet(dangerGrid, exit.surfaceTileX, exit.surfaceTileY)
                 : 0;
-            if (surfaceDanger < FLEE_THRESHOLD) {
+            if (!alarmed && surfaceDanger < FLEE_THRESHOLD) {
               ants.fleeShelterUntilTick[id] = -1; // all-clear → resume (ascend + mill)
               // #209 PR C (V35) — clear the stale camped-entrance SURFACE flee
               // target that survived descent + shelter. On this release tick the

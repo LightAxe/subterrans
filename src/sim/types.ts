@@ -680,7 +680,48 @@ export const SIM_VERSION_V40_SMALL_COLONY_SURVIVAL = 40 as const;
  * ant-death.test.ts. MIN_ACCEPTED is UNCHANGED.
  */
 export const SIM_VERSION_V41_DEATH_CHOKEPOINT = 41 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V41_DEATH_CHOKEPOINT;
+
+/**
+ * C1 — colony alarm ("recall to nest"). A player-sounded, colony-wide stance:
+ * while `ColonyRecord.alarmActive` is set, every surface civilian of that colony
+ * behaves as if its own tile were dangerous and pours underground through the
+ * V34 flee machinery, staying sheltered until the all-clear.
+ *
+ * Implemented as one extra disjunct at four of the five DangerTrail reads in
+ * ant/idle-reserve.ts — the flee trigger, the non-homebound dash abort, the
+ * underground poke-out resume, and the local-all-clear hold release. The fifth,
+ * `entranceDanger` (via pickNearestSafeEntrance / setFleeTarget), deliberately
+ * keeps reading REAL danger, so the alarm never TARGETS a camped door. Under a
+ * full camp it therefore holds the two classes that CAN hold — idle workers
+ * (target cleared) and homebound carriers (timed surface hold) — rather than
+ * feeding them to the spider. A SearchingFood forager still wanders outward: it
+ * keeps its own foraging dispatch by design (see the comment at that branch),
+ * because freezing it would only make it stationary bait.
+ *
+ * Narrow claim, deliberately: it is the target that is safe, not the path. When
+ * a camp exists setFleeTarget writes the safe entrance tile and movement
+ * straight-lines to it, danger-blind en route, so a worker on the far side of a
+ * camped door still walks over it. The alarm amplifies that pre-existing V34
+ * behaviour by sending civilians the danger field would have left milling.
+ *
+ * What the alarm costs the player is the point of the lever: sheltering workers
+ * are skipped by step-10a allocation, so an alarmed colony neither forages nor
+ * can recruit those workers as fighters. Safety versus income, one toggle, no
+ * per-ant control.
+ *
+ * New serialized field `ColonyRecord.alarmActive`, defaulting false and absent
+ * from older saves (`?? false`), plus a new `SetColonyAlarm` command that tick()
+ * ignores below V42. Every new read is behind `simVersion >= V42`, so a pre-V42
+ * save replays byte-identically: the field cannot become true there, and no
+ * branch consults it. No `world.rngState` draw (the flee path uses hash32), no
+ * tick-order change, no new entity-ID advance. MIN_ACCEPTED is UNCHANGED.
+ *
+ * Scope note: the AI does NOT get the alarm in this pass — `runAIController`
+ * never issues the command, so an AI colony's `alarmActive` stays false. Giving
+ * the enemy the stance is a separate balance question.
+ */
+export const SIM_VERSION_V42_COLONY_ALARM = 42 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V42_COLONY_ALARM;
 
 /**
  * S2 — AI colony state machine states.
@@ -1259,6 +1300,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
       fresh.broodFieldDirty = false; // #235
       fresh.killCount = 0;
       fresh.priorityFoodPileId = null;
+      fresh.alarmActive = false;
     }
     const d = dst.colonies[colonyId]!;
 
@@ -1275,6 +1317,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     d.reconcileCountdown = s.reconcileCountdown;
     d.killCount = s.killCount;
     d.priorityFoodPileId = s.priorityFoodPileId;
+    d.alarmActive = s.alarmActive;
     d.queenLastEggTick = s.queenLastEggTick;
     d.eggIntervalNumerator = s.eggIntervalNumerator;
 

@@ -131,9 +131,11 @@ function center(rect: { x: number; y: number; w: number; h: number }): [number, 
 // ---------------------------------------------------------------------------
 
 describe('isPointerOverHUD', () => {
-  it('masks STATS / TRIANGLE / MINIMAP / VIEW_TOGGLE', () => {
+  it('masks STATS / TRIANGLE / MINIMAP / VIEW_TOGGLE / ALARM_TOGGLE', () => {
     const vs = makeViewState('surface');
-    for (const rect of [hud.STATS, hud.TRIANGLE, hud.MINIMAP, hud.VIEW_TOGGLE]) {
+    // ALARM_TOGGLE (C1) masks on BOTH views and regardless of simVersion — an
+    // unmasked strip would route clicks to the world as dig/command orders.
+    for (const rect of [hud.STATS, hud.TRIANGLE, hud.MINIMAP, hud.VIEW_TOGGLE, hud.ALARM_TOGGLE]) {
       const [x, y] = center(rect);
       expect(isPointerOverHUD(x, y, hud, vs)).toBe(true);
     }

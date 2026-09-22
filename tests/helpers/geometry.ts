@@ -65,6 +65,8 @@ export const DIALOG_DELETE_RECT: Rect = dialogItems[2]!.rect;
 
 /** HUD view-toggle button (surface ↔ underground). */
 export const VIEW_TOGGLE_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).VIEW_TOGGLE;
+/** C1 — colony alarm toggle, drawn on both views. */
+export const ALARM_TOGGLE_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).ALARM_TOGGLE;
 
 // Boot-overlay rects re-exported from the Phaser-free module (the same source
 // ui-scene.ts uses), so specs import their click targets from one place.

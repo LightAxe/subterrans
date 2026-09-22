@@ -206,6 +206,14 @@ export interface ColonyRecord {
    *  Initialized to null in createColonyRecord. Round-trips through copyWorldState + save. */
   priorityFoodPileId: FoodPileId | null;
 
+  /** C1 (V42) — colony alarm / "recall to nest" stance. While true, every SURFACE
+   *  civilian (Idle or Foraging) of this colony flees underground as though its own
+   *  tile were dangerous, and sheltering workers do not poke out. Entrance-safety
+   *  checks keep reading real DangerTrail, so the alarm never routes a worker into a
+   *  camped door. Player-set via the SetColonyAlarm command; the AI never sets it.
+   *  Read only when `simVersion >= SIM_VERSION_V42_COLONY_ALARM`. */
+  alarmActive: boolean;
+
   /** S4 V21+ — world tick at which the queen most recently laid an egg.
    *  Used by tickQueenEggProduction to enforce the selected interval as elapsed
    *  ticks since the last lay, not a global modulo (which misfires when the
@@ -279,6 +287,7 @@ export function createColonyRecord(colonyId: ColonyId, queenEntityId: EntityId):
     reconcileCountdown: RECONCILE_INTERVAL_TICKS,
     killCount: 0,
     priorityFoodPileId: null,
+    alarmActive: false,
     queenLastEggTick: -QUEEN_EGG_INTERVAL_BASE_TICKS,
     eggIntervalNumerator: 4, // Normal = identity (set per-colony in createScenario for difficulty tiers)
   } as unknown as ColonyRecord;

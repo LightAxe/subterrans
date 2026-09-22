@@ -223,6 +223,7 @@ const stubColonies: WorldState['colonies'] = {
     colonyId: PLAYER_COLONY_ID,
     queenEntityId: 0,
     entrances: [],
+    alarmActive: false,
     workerCount: 3,
     foodStored: 0,
     queenStarvationTimer: 100,

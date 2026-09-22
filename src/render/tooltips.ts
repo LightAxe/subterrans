@@ -31,6 +31,7 @@ export type TooltipTarget =
   | { kind: 'tool'; tool: ToolId; enabled: boolean; anchor: TooltipRect }
   | { kind: 'speed'; control: SpeedControl; anchor: TooltipRect }
   | { kind: 'view-toggle'; anchor: TooltipRect }
+  | { kind: 'alarm-toggle'; anchor: TooltipRect }
   | { kind: 'colony-toggle'; anchor: TooltipRect }
   | { kind: 'slider'; anchor: TooltipRect }
   | { kind: 'stats'; anchor: TooltipRect };
@@ -51,9 +52,18 @@ export function tooltipTargetAt(
   py: number,
   view: 'surface' | 'underground',
   hud: HudLayout,
+  /** C1 — false on a pre-V42 save, where the alarm button is hidden. Without it
+   *  the zone would still pop a tooltip promising a feature that does not exist,
+   *  over a control that is not drawn. Same shape as the `view` gate below.
+   *  REQUIRED, deliberately: a default would silently opt any future caller back
+   *  into exactly that bug. */
+  alarmEnabled: boolean,
 ): TooltipTarget | null {
   if (inRect(px, py, hud.STATS)) return { kind: 'stats', anchor: hud.STATS };
   if (inRect(px, py, hud.VIEW_TOGGLE)) return { kind: 'view-toggle', anchor: hud.VIEW_TOGGLE };
+  if (alarmEnabled && inRect(px, py, hud.ALARM_TOGGLE)) {
+    return { kind: 'alarm-toggle', anchor: hud.ALARM_TOGGLE };
+  }
   if (view === 'underground' && inRect(px, py, hud.UNDERGROUND_COLONY_TOGGLE)) {
     return { kind: 'colony-toggle', anchor: hud.UNDERGROUND_COLONY_TOGGLE };
   }
@@ -108,6 +118,12 @@ export function tooltipTextFor(target: TooltipTarget): string {
       return `Switch surface / underground view ${glyphFor('VIEW_SWITCH', 'keyboard')}`;
     case 'colony-toggle':
       return `Switch which colony you're viewing ${glyphFor('COLONY_TOGGLE', 'keyboard')}`;
+    case 'alarm-toggle':
+      // Names BOTH halves of the cost, not just the effect: a sheltering worker
+      // is skipped by step-10a allocation, so it neither forages NOR can be
+      // recruited as a fighter. The second half is the surprising one — a player
+      // who sounds the alarm and then drags the Forage/Fight slider gets nothing.
+      return `Recall foragers and idle workers to the nest ${glyphFor('ALARM_TOGGLE', 'keyboard')} — they stop foraging, and cannot be recruited as fighters, until the all-clear`;
     case 'slider':
       return 'Forage ↔ Fight — drag to balance workers between foraging and fighting';
     case 'stats':

@@ -215,6 +215,16 @@ The player's forage↔fight split for workers.
 _Avoid_: allocation (**allocation** = the *computed* per-task worker counts the sim
 derives from the ratio — not the same thing).
 
+**Colony alarm** / **all-clear** (`SetColonyAlarm`, `ColonyRecord.alarmActive`):
+The player's recall-to-nest stance. While the alarm sounds, every SURFACE civilian
+of that colony flees underground as though its own tile were dangerous and stays
+sheltered; the all-clear ends it. Sheltering workers are skipped by allocation, so
+an alarmed colony neither forages nor can recruit those workers as fighters.
+_Avoid_: **kill alarm** — that is the unrelated V34 signal a cross-colony kill
+deposits on the DangerTrail grid (`KILL_ALARM_DANGER_DEPOSIT`), which the sim
+raises by itself and the player never touches. Say "colony alarm" for the stance
+and "kill alarm" for the pheromone pulse; never bare "alarm" where both could read.
+
 ## AI & difficulty
 
 **AI colony / enemy**:
