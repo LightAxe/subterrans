@@ -38,7 +38,14 @@ function exitCode(cmd: string, args: string[], cwd: string): number {
 let fx: string;
 beforeEach(() => {
   fx = mkdtempSync(join(tmpdir(), 'guard-fixture-'));
-  for (const d of ['src/render', 'src/input', 'src/platform', 'src/sim', 'src/sim/ant']) {
+  for (const d of [
+    'src/render',
+    'src/input',
+    'src/platform',
+    'src/sim',
+    'src/sim/ant',
+    'src/sim/colony',
+  ]) {
     mkdirSync(join(fx, d), { recursive: true });
   }
 });
@@ -70,7 +77,55 @@ describe('check-sim-boundary.sh (#241 contract)', () => {
       'src/sim/ok.ts',
       '// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch: reset per tick\nexport const scratch = new Map();\n',
     );
-    // no mutation, no bare disable -> all four stages clean
+    // no mutation, no bare disable -> all stages clean
+    expect(exitCode('bash', [script('check-sim-boundary.sh')], fx)).toBe(0);
+  });
+
+  it('fails on an ant death written outside the despawnAnt chokepoint (#289)', () => {
+    write(
+      'src/sim/colony/bad.ts',
+      'export function f(ants: { alive: Uint8Array }, id: number) {\n  ants.alive[id] = 0;\n}\n',
+    );
+    expect(exitCode('bash', [script('check-sim-boundary.sh')], fx)).not.toBe(0);
+  });
+
+  it('documented limits: four write shapes slip past, and the shape inside a comment trips it', () => {
+    // Both are consequences of a single-line textual guard (see the SCOPE HONESTY
+    // block in the script). Pinned so a future tightening is a deliberate change with
+    // a failing test, not a silent one.
+    write(
+      'src/sim/aliased.ts',
+      'export function f(w: { ants: { alive: Uint8Array } }, id: number) {\n  const a = w.ants.alive;\n  a[id] = 0;\n}\n',
+    );
+    write(
+      'src/sim/nested.ts',
+      'export const f = (a: any, ids: number[]) => {\n  a.alive[ids[0]!] = 0;\n};\n',
+    );
+    write(
+      'src/sim/named.ts',
+      'const DEAD = 0;\nexport const f = (a: any, id: number) => {\n  a.alive[id] = DEAD;\n};\n',
+    );
+    write(
+      'src/sim/multiline.ts',
+      'export const f = (a: any, id: number) => {\n  a.alive[\n    id\n  ] = 0;\n};\n',
+    );
+    expect(exitCode('bash', [script('check-sim-boundary.sh')], fx)).toBe(0); // all four MISSED
+    write(
+      'src/sim/prose.ts',
+      '// Historically this site did ants.alive[id] = 0 inline.\nexport const x = 1;\n',
+    );
+    expect(exitCode('bash', [script('check-sim-boundary.sh')], fx)).not.toBe(0); // FALSE POSITIVE
+  });
+
+  it('passes the same write inside src/sim/ant-death.ts, and in any test file', () => {
+    write(
+      'src/sim/ant-death.ts',
+      'export function despawnAnt(ants: { alive: Uint8Array }, id: number) {\n  ants.alive[id] = 0;\n}\n',
+    );
+    write(
+      'src/sim/fixture.test.ts',
+      'export const stage = (a: Uint8Array) => {\n  a.alive[3] = 0;\n};\n',
+    );
     expect(exitCode('bash', [script('check-sim-boundary.sh')], fx)).toBe(0);
   });
 });

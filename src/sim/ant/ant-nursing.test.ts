@@ -339,8 +339,9 @@ describe('chamber-flow nurseDeposit field (#17 phase 1)', () => {
 
 // ---------------------------------------------------------------------------
 // Issue #17 Phase 1 — nursing PICKUP field. Seeds from uncarried-brood
-// entity tiles outside Nursery only. The chamber-flow recompute under v10+
-// runs this every tick (brood positions move with carriers).
+// entity tiles outside Nursery only. tick.ts step 9 rebuilds it whenever
+// broodFieldDirty is set (#235; it formerly ran every tick, because brood
+// positions move with carriers).
 // ---------------------------------------------------------------------------
 
 describe('chamber-flow nursing pickup field (#17 phase 1)', () => {

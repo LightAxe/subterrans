@@ -22,7 +22,7 @@ import { ChamberType, AntTask } from './enums.js';
 import { FP_SHIFT } from './fixed.js';
 import { LARVA_MATURE_TICKS, FOOD_CHAMBER_CAPACITY, EGG_HATCH_TICKS } from './constants.js';
 import { tick, __getChamberFlowFieldsForTest } from './tick.js';
-import { killAnt } from './combat.js';
+import { killAnt } from './ant-death.js';
 import { tickFoodConsumption, checkPendingChambers } from './colony/colony-system.js';
 import { tickLifecycleTransitions } from './colony/lifecycle-system.js';
 // eslint-disable-next-line no-restricted-imports -- #235 differential proof needs the platform serializer (telemetry.test.ts:8 pattern)

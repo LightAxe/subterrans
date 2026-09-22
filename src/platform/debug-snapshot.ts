@@ -64,7 +64,8 @@ export const MOVEMENT_SOURCES = {
     'Underground CarryingFood routing to a FoodStorage chamber via the chamber flow-field.',
   'underground-exit':
     'Underground SearchingFood routing back to the surface via the entrance flow-field (surface scent/pheromone probes do not apply underground).',
-  'nursing-chamber': 'Nursing ant routing to the Queen/Nursery chamber via the chamber flow-field.',
+  'nursing-chamber':
+    'Nursing ant routing via a chamber flow-field — to a brood tile when empty-handed, to the Nursery when carrying.',
   rally:
     'Fighting ant moving to colony.rallyPoint (surface) or, underground, to an entrance as transit toward the rally.',
   task: 'Non-forager fallback (Digging/Idle), or a Nursing ant whose colony has no Queen/Nursery chamber.',

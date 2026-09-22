@@ -20,7 +20,7 @@ import type { HudStats } from './hud-stats.js';
 import { createWorldState } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
 import { allocateEntityId } from '../sim/types.js';
-import { initAnt, killAnt } from '../sim/ant/ant-store.js';
+import { initAnt } from '../sim/ant/ant-store.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { AntTask, ChamberType } from '../sim/enums.js';
@@ -73,7 +73,7 @@ describe('computeHudStats', () => {
     colony.workerCount = 4;
     colony.eggCount = 1;
     colony.larvaeCount = 0;
-    killAnt(world.ants, queenId);
+    world.ants.alive[queenId] = 0; // HUD fixture: stage a dead slot, not a sim death
     const s = computeHudStats(world, colony);
     expect(s.antCount).toBe(4);
     expect(s.queenAlive).toBe(false);
@@ -151,7 +151,7 @@ describe('computeHudStats', () => {
   it('queenHealthPct = 0 when queen is dead, even if timer > 0', () => {
     const { world, colony, queenId } = setupWorld();
     colony.queenStarvationTimer = STARVATION_GRACE_TICKS;
-    killAnt(world.ants, queenId);
+    world.ants.alive[queenId] = 0; // HUD fixture: stage a dead slot, not a sim death
     expect(computeHudStats(world, colony).queenHealthPct).toBe(0);
   });
 });

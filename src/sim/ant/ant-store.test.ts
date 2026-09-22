@@ -4,7 +4,7 @@
 // All tests run synchronously in < 10ms — no async, no allocations after setup.
 
 import { describe, it, expect } from 'vitest';
-import { createAntComponents, initAnt, killAnt, isAlive } from './ant-store.js';
+import { createAntComponents, initAnt, isAlive } from './ant-store.js';
 import { AntTask, ForagingSubState } from '../enums.js';
 import { MAX_ENTITIES, WORKER_BASE_SPEED, WORKER_LIFESPAN_TICKS } from '../constants.js';
 
@@ -134,31 +134,10 @@ describe('ant-store', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // 7. killAnt — flips alive, leaves other fields untouched
-  // ---------------------------------------------------------------------------
-
-  it('killAnt flips alive[id] to 0 and leaves other fields untouched', () => {
-    const ants = createAntComponents(16);
-    const id = 2;
-    initAnt(ants, id, { colonyId: 1, posX: 42, posY: 99 });
-    // Advance age to a non-zero value for the "untouched" check
-    ants.age[id] = 5;
-
-    killAnt(ants, id);
-
-    expect(ants.alive[id]).toBe(0);
-    // Other fields survive
-    expect(ants.posX[id]).toBe(42);
-    expect(ants.posY[id]).toBe(99);
-    expect(ants.age[id]).toBe(5);
-    expect(ants.colonyId[id]).toBe(1);
-  });
-
-  // ---------------------------------------------------------------------------
   // 8. isAlive — mirrors alive field
   // ---------------------------------------------------------------------------
 
-  it('isAlive returns true for initialized ant, false after killAnt, false for uninitialized slot', () => {
+  it('isAlive returns true for initialized ant, false once the slot is marked dead, false for uninitialized slot', () => {
     const ants = createAntComponents(16);
     const id = 10;
 
@@ -169,8 +148,9 @@ describe('ant-store', () => {
     initAnt(ants, id, { colonyId: 1, posX: 0, posY: 0 });
     expect(isAlive(ants, id)).toBe(true);
 
-    // After kill
-    killAnt(ants, id);
+    // After death (every production death goes through despawnAnt, #289; the
+    // store-level fact under test is just that isAlive mirrors the flag)
+    ants.alive[id] = 0;
     expect(isAlive(ants, id)).toBe(false);
   });
 
@@ -330,7 +310,7 @@ describe('ant-store', () => {
     expect(ants.currentGridColonyId[id]).toBe(1);
   });
 
-  it('killAnt then initAnt on the same slot produces currentGridColonyId matching the new colonyId (slot recycle hygiene)', () => {
+  it('a dead slot re-initialised by initAnt gets currentGridColonyId matching the new colonyId (slot recycle hygiene)', () => {
     const ants = createAntComponents(16);
     const id = 9;
 
@@ -338,8 +318,8 @@ describe('ant-store', () => {
     initAnt(ants, id, { colonyId: 1, posX: 0, posY: 0 });
     expect(ants.currentGridColonyId[id]).toBe(1);
 
-    // Kill and recycle as colony 0.
-    killAnt(ants, id);
+    // Mark dead and recycle as colony 0.
+    ants.alive[id] = 0;
     initAnt(ants, id, { colonyId: 0, posX: 0, posY: 0 });
 
     expect(ants.currentGridColonyId[id]).toBe(0);
@@ -363,20 +343,5 @@ describe('ant-store', () => {
     initAnt(ants, id, { colonyId: 1, posX: 0, posY: 0 });
     expect(ants.carryingBroodId[id]).toBe(-1);
     expect(ants.carriedBy[id]).toBe(-1);
-  });
-
-  it('killAnt does NOT clear carryingBroodId or carriedBy (death-drop behaviour: brood stays carried-by-id until next nurse claim)', () => {
-    const ants = createAntComponents(16);
-    const nurseId = 4;
-    const broodId = 7;
-    initAnt(ants, nurseId, { colonyId: 1, posX: 0, posY: 0 });
-    initAnt(ants, broodId, { colonyId: 1, posX: 0, posY: 0 });
-    ants.carryingBroodId[nurseId] = broodId;
-    ants.carriedBy[broodId] = nurseId;
-    killAnt(ants, nurseId);
-    // Death cleanup is up to the runtime (tickNurseActions / death sweep) —
-    // killAnt itself is O(1) and only zeroes `alive`.
-    expect(ants.carryingBroodId[nurseId]).toBe(broodId);
-    expect(ants.carriedBy[broodId]).toBe(nurseId);
   });
 });

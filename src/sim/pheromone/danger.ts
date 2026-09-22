@@ -2,7 +2,7 @@
 //
 // The 5-tile cross deposit (center + N/S/E/W) that the spider seeds every
 // surface tick (spider.ts seedDangerPheromone) is now also used by the
-// cross-colony ant-kill alarm (combat.ts killAnt), so the primitive is factored
+// cross-colony ant-kill alarm (ant-death.ts despawnAnt), so the primitive is factored
 // here to keep the two writers byte-identical.
 //
 // MUST NOT import Phaser, DOM, or any non-leaf module. phGet/phSet are the

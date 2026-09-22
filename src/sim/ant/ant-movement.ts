@@ -112,7 +112,8 @@ void _OCC_UNDERGROUND_WIDTH_IS_128;
  * @param chamberFlowFields   Optional per-colony chamber flow-field cache. When
  *                            provided, underground carrying foragers consume the
  *                            `food` field (FoodStorage target) and Nursing ants
- *                            consume the `nursing` field (Queen/Nursery target)
+ *                            consume the `nursing` / `nurseDeposit` fields
+ *                            (brood-pickup and Nursery targets)
  *                            instead of straight-line chamber steering. Tests that
  *                            don't exercise underground chamber routing may omit it.
  */

@@ -6,10 +6,12 @@
 //   - food         : seeded from Open tiles inside FoodStorage chambers.
 //                    Consumed by Underground carrying foragers routing to deposit.
 //   - nursing      : pre-v10: seeded from Open tiles inside Queen OR Nursery
-//                    chambers. v10+: re-seeded from Queen Open tiles AND any
-//                    uncarried-brood-entity tile outside Nursery (the
-//                    "pickup" field; tickNurseActions handles the v10
-//                    re-seed via the same compute function).
+//                    chambers. v10+: re-seeded from reclaimable-brood tiles
+//                    outside Nursery and ONLY those (the "pickup" field,
+//                    computeNursingPickupField below — Queen-tile seeding is
+//                    the removed "Seed (1)", see its comment). tick.ts step 9
+//                    is the only caller; it rebuilds when broodFieldDirty and
+//                    overwrites whatever the legacy seeding left here.
 //                    Consumed by Nursing ants routing to brood pickup.
 //   - queen        : seeded from Open tiles inside Queen chambers only.
 //                    Consumed by the queen entity when routing from her current

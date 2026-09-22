@@ -65,7 +65,7 @@ import type { SimEvent } from './telemetry.js';
 /** S1 — Who killed an ant. 'Environment' reserved for future hazards (S5+). */
 export type KillerKind = 'Ant' | 'Spider' | 'Environment';
 
-/** S1 — Context written by killAnt when a queen dies; read+cleared by checkQueenDeath same tick. */
+/** S1 — Context written by despawnAnt (ant-death.ts) when a queen dies; read+cleared by checkQueenDeath same tick. */
 export interface QueenDeathContext {
   tile: { x: number; y: number };
   currentGridColonyId: ColonyId;
@@ -624,7 +624,63 @@ export const SIM_VERSION_V39_SPIDER_TIEBREAK = 39 as const;
  * measured neutral on both AI-economy gates while lowering peak workers, and dropped.)
  */
 export const SIM_VERSION_V40_SMALL_COLONY_SURVIVAL = 40 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V40_SMALL_COLONY_SURVIVAL;
+
+/**
+ * #289 — single ant-death chokepoint. Every production ant death now routes through
+ * `despawnAnt` (ant-death.ts): combat and spider kills (formerly combat.ts
+ * `killAnt`, now the `killAnt` sugar there), queen and larva starvation
+ * (colony-system.ts tickFoodConsumption) and the worker lifespan check
+ * (lifecycle-system.ts). The kill path is unchanged at every version. The non-kill
+ * sites used to flip `alive = 0` inline with a subset of the cleanup; from V41 they
+ * get the full one — bidirectional carry-pointer clear, combat-state reset,
+ * `broodFieldDirty` (the starving-queen site never flagged it), and a queen-death
+ * context with killerKind 'Environment', which checkQueenDeath infers as
+ * 'Starvation' exactly as it did from a missing context. Two other reads in
+ * game-over.ts switch branch on the context existing, and both coincide: the
+ * queen_death `location` now comes from `ctx.tile` (captured at step 3) instead
+ * of her posX/posY read at step 18, which agree because a dead ant never moves;
+ * and the `aiStateAtTime` lookup now runs instead of being skipped, but compares
+ * each `aiState[i].colonyId` against a null `killerColonyId`, so it never matches
+ * and still yields null.
+ *
+ * What actually changes at V41, most visible first:
+ *
+ *   1. LIVE — a bereaved carrier drops off the `nurseDeposit` field one tick
+ *      earlier. The carry-pointer clear is bidirectional (#107), so a larva dying
+ *      at step 3 also clears its LIVE carrier's
+ *      `carryingBroodId`. Step 16 (ant-motion.ts `v10Carrying`) picks the nurse's flow
+ *      field by `subTask === Feeding && carryingBroodId !== -1`, and the carrier
+ *      otherwise only drops a dead brood at step 16c, AFTER movement. So below V41 the
+ *      nurse takes one more `nurseDeposit` step carrying a corpse toward the Nursery;
+ *      at V41 it falls through to the `nursing` field for that tick. Both end Idle.
+ *   2. INERT BUT SERIALIZED — the dead slot's own `carriedBy`, `attackCooldown`,
+ *      `combatOpponentId`, and (when the dying ant was the carrier) its own
+ *      `carryingBroodId`. Nothing reads a dead slot, but saves serialise dead slots,
+ *      which is the whole reason the old bytes had to be preserved below the gate.
+ *   2b. INERT, ON A LIVE SLOT — the mirror of 1 at the other death site. When the
+ *      CARRIER dies (lifespan, step 7) the same bidirectional clear lands on the live
+ *      brood's `carriedBy`. Inert because every reader treats carried-by-a-dead-ant as
+ *      uncarried already (isBroodReclaimable, and the nursing/occupancy/render readers
+ *      that go through it), and doubly dormant while WORKER_LIFESPAN_TICKS is
+ *      INT32_MAX. Pinned on both sides of the gate in ant-death.test.ts.
+ *   3. INERT — the starving queen's `broodFieldDirty`. Over-triggering that flag is
+ *      output-identical by construction; chamber-flow-gating.test.ts pins
+ *      gated ≡ recompute-every-tick. It is serialized, but step 9 consumes and clears
+ *      it the same tick for any colony with an underground grid, so only a grid-less
+ *      colony (test fixtures) could carry the extra `true` into a save.
+ *   4. DORMANT — the S2 operation death counters. A committed-cohort fighter that
+ *      starved or aged out now counts as an attacker loss, which no adult can do today
+ *      (WORKER_FOOD_PER_TICK is 0, WORKER_LIFESPAN_TICKS is INT32_MAX). It becomes
+ *      live, intentionally, if Phase 7+ adds worker upkeep or a real lifespan.
+ *
+ * No WorldState/save field, no `world.rngState` draw, no tick-order change; the only
+ * ID-counter advance (the V37 corpse drop) stays kill-only. Same-build self-compare +
+ * two V41-vs-V40 liveness proofs (1 and 2 above) in determinism.test.ts; both sides of
+ * the gate pinned in
+ * ant-death.test.ts. MIN_ACCEPTED is UNCHANGED.
+ */
+export const SIM_VERSION_V41_DEATH_CHOKEPOINT = 41 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V41_DEATH_CHOKEPOINT;
 
 /**
  * S2 — AI colony state machine states.
@@ -888,8 +944,9 @@ export interface WorldState {
   droppedCommandOverflowCount: number;
 
   /**
-   * S1 — transient per-colony queen-kill context. Written by combat.killAnt when
-   * a queen dies; read and cleared by checkQueenDeath later the same tick.
+   * S1 — transient per-colony queen-kill context. Written by despawnAnt
+   * (ant-death.ts) when a queen dies — any cause from V41, kills only before —
+   * read and cleared by checkQueenDeath later the same tick.
    * Index by victim colonyId. Empty array between ticks.
    */
   pendingQueenDeathContexts: (QueenDeathContext | null)[];

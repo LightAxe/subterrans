@@ -132,7 +132,7 @@ export function corpseYield(kind: CorpseKind): number {
 
 /**
  * A2 (V37) — drop `pickups` charges of corpse food at surface tile (tileX, tileY).
- * Callers (combat.ts `killAnt`, spider.ts death path) MUST gate on
+ * Callers (ant-death.ts `despawnAnt`, spider.ts death path) MUST gate on
  * `simVersion >= SIM_VERSION_V37_CORPSE_FOOD` before calling — this helper itself
  * is version-agnostic, but a call advances the entity-ID counter (replay-divergent),
  * so the gate lives at each call site alongside its own drop predicate.

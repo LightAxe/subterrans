@@ -23,7 +23,7 @@ import {
   NORMAL_TIER_INDEX,
   tierIndex,
 } from './ai-state.js';
-import { killAnt } from './combat.js';
+import { killAnt } from './ant-death.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import type { ColonyId } from './colony/colony-store.js';

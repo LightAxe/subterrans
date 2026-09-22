@@ -1105,11 +1105,14 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     if (topologyDirty) colony.broodFieldDirty = true;
   }
 
-  // Issue #17 Phase 1 — under v10+, the `nursing` chamber-flow field is
-  // re-seeded from Queen Open tiles AND any uncarried-brood-entity tile
-  // outside Nursery (the v10 pickup field). Overwrites the buffer that the
-  // dirty-gated block above filled with the legacy NURSING_CHAMBER_TYPES
-  // seeding — pre-v10 worlds keep the legacy seeding (Queen+Nursery).
+  // Issue #17 Phase 1 — the `nursing` chamber-flow field is re-seeded from
+  // reclaimable-brood tiles outside Nursery, and ONLY those (the pickup field;
+  // Queen-tile seeding was the removed "Seed (1)" — see
+  // computeNursingPickupField in chamber-flow.ts). This is ungated: the block
+  // below shares the `underground` guard with the legacy NURSING_CHAMBER_TYPES
+  // seeding above, and that seeding only runs when topologyDirty, which also
+  // sets broodFieldDirty just above — so the legacy buffer is always overwritten
+  // in this same step and is never read.
   //
   // #235 — formerly recomputed EVERY tick "because brood positions move with
   // their carriers". But CARRIED brood is excluded from both fields by
@@ -1524,7 +1527,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // V14+: slower food-trail decay (PHEROMONE_DECAY_FP_V14=2 vs legacy 5).
     // DangerTrail decays at DANGER_DECAY_FP; the spider deposits it every tick
     // (spider.ts seedDangerPheromone) and the cross-colony kill alarm deposits a
-    // one-shot pulse (combat.ts killAnt). Since V34 (#209 PR A) non-combat surface
+    // one-shot pulse (ant-death.ts despawnAnt). Since V34 (#209 PR A) non-combat surface
     // workers READ it for routing at step 15b (tickIdleReserveAndFlee) to flee —
     // a simVersion-gated behavior, no RNG draw.
     // V14+ floor is raised to 128 to match the decayFp=2 arithmetic stall

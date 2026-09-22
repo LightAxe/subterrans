@@ -149,8 +149,8 @@ export interface AntComponents {
    *
    * Uint8Array: a single bit-state field, +1 byte per entity.
    *
-   * Reset to 0 in initAnt. NOT cleared by killAnt (which only zeros
-   * `alive`); the stale flag is never observed because every per-ant loop
+   * Reset to 0 in initAnt. NOT cleared by despawnAnt (ant-death.ts, which
+   * leaves it untouched); the stale flag is never observed because every per-ant loop
    * gates on `alive[id] === 1` before reading task/subTask/waitingDeposit.
    * Entity IDs are monotonic (PRD §3 — no recycling), so the only paths
    * that reach this slot's storage again are inert reads guarded by the
@@ -193,10 +193,11 @@ export interface AntComponents {
    * carry slot clears and the brood is deposited via the same `pickId %
    * openCount` spread that pre-v10 `transportBroodToNursery` used.
    *
-   * Reset to -1 in initAnt. NOT cleared by killAnt — death cleanup leaves
-   * the brood at the carrier's last-synced tile so the next nurse picks it
-   * up via the v10 `nursing` flow-field (which seeds from Queen Open tiles
-   * AND any uncarried-brood tile outside Nursery).
+   * Reset to -1 in initAnt. Cleared by despawnAnt (ant-death.ts) on either
+   * end's death (#107; every cause from V41, kills only before) — the orphaned
+   * brood stays at the carrier's last-synced tile so the next nurse picks it
+   * up via the v10 `nursing` flow-field (which seeds from uncarried-brood tiles
+   * outside Nursery, and only those).
    *
    * Round-trips through copyWorldState and save/load (optional field;
    * defaults to all-(-1) on pre-v10 saves, which matches the v10+
@@ -508,20 +509,6 @@ export function clearRecentTiles(ants: AntComponents, id: EntityId): void {
     ants.recentTilesY[base + s] = RECENT_TILES_SENTINEL;
   }
   ants.recentTilesHead[id] = 0;
-}
-
-/**
- * Mark entity `id` as dead. O(1) — no array mutation, no swap-remove.
- * The colony-bucket system (Plan 03) handles slot reuse.
- *
- * TEST-ONLY today: every PRODUCTION kill routes through combat.ts `killAnt`
- * (the 5-arg version), which also sets `colony.broodFieldDirty` (#235) so the
- * nursing pickup/deposit fields rebuild when a brood dies or a carrier is orphaned.
- * This bare helper does NOT flag it — do NOT route a brood/carrier death through it
- * from production code, or the gated field would go stale.
- */
-export function killAnt(ants: AntComponents, id: EntityId): void {
-  ants.alive[id] = 0;
 }
 
 /**

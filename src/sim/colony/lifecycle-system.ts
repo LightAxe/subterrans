@@ -19,6 +19,7 @@
 import type { WorldState } from '../types.js';
 import { allocateEntityId, INVALID_ENTITY_ID } from '../types.js';
 import { initAnt } from '../ant/ant-store.js';
+import { despawnAnt } from '../ant-death.js';
 import type { ColonyRecord } from './colony-store.js';
 import { AntTask, ChamberType } from '../enums.js';
 import { hasCompletedChamber, colonyFoodTotal } from './colony-system.js';
@@ -406,8 +407,8 @@ export function tickLifecycleTransitions(world: WorldState, colony: ColonyRecord
 
     // Lifespan check — effectively disabled in Phase 6 (WORKER_LIFESPAN_TICKS = 0x7FFFFFFF)
     if (workerAge >= ants.lifespan[id]!) {
-      ants.alive[id] = 0;
-      colony.broodFieldDirty = true; // #235 — defensive: a dying worker could be carrying brood (orphan)
+      // #235 broodFieldDirty is set inside (a dying worker could be carrying brood).
+      despawnAnt(world, id, { cause: 'lifespan' });
       // Note: dead workers are removed on the NEXT tick's backwards iteration pass
       // (the worker remains in colony.workers until then — Plan 09 death cleanup
       // will handle immediate removal once implemented)

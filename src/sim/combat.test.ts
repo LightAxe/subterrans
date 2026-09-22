@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { detectAndResolveCombat, killAnt } from './combat.js';
+import { detectAndResolveCombat } from './combat.js';
+import { killAnt } from './ant-death.js';
 import {
   createWorldState,
   allocateEntityId,
@@ -189,7 +190,7 @@ describe('detectAndResolveCombat (V15 coin-flip path)', () => {
   });
 });
 
-describe('killAnt', () => {
+describe('killAnt (ant-death.ts kill sugar)', () => {
   it('zeroes alive flag on victim', () => {
     const { world, cid1, cid2 } = makeWorldWith2Colonies();
     const v = spawnAnt(world, cid1, 5, 7, Zone.Surface);
@@ -219,10 +220,10 @@ describe('killAnt', () => {
     const v = spawnAnt(world, cid1, 5, 7, Zone.Surface);
     expect(world.colonies[cid1]!.workers).toContain(v);
     killAnt(world, v, cid2, null, 'Ant');
-    // Combat.killAnt intentionally does NOT cleanup the roster. The alive=0 flag is enough;
+    // despawnAnt intentionally does NOT cleanup the roster. The alive=0 flag is enough;
     // tickDeathCleanup (colony-system.ts:165) handles the roster next tick.
     expect(world.colonies[cid1]!.workers).toContain(v);
-    expect(world.colonies[cid1]!.workerCount).toBe(1); // unchanged by combat.killAnt
+    expect(world.colonies[cid1]!.workerCount).toBe(1); // unchanged by the death itself
   });
 
   // ---------------------------------------------------------------------
