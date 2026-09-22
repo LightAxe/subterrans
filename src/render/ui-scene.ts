@@ -379,6 +379,7 @@ import {
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import type { SetBehaviorRatioCommand, PlaceChamberCommand } from '../sim/commands.js';
 import { enqueueCommand } from '../input/command-queue.js';
+import { KeyEventDedupe } from './key-event-dedupe.js';
 import type { CommandFeedforward } from './command-feedforward.js';
 
 // ---------------------------------------------------------------------------
@@ -497,6 +498,10 @@ export class UIScene extends Phaser.Scene {
   // call sites (none today, but kept for safety) can still launch UIScene
   // without it; without the callback Esc on a clean canvas is a no-op.
   private onEscape: (() => void) | null = null;
+  /** #311 — identity dedupe for the Esc / Enter Key 'down' handlers: Phaser's
+   *  same-frame queue re-walk re-fires a Key's 'down' with the SAME DOM event
+   *  once its keyup has reset the Key (see key-event-dedupe.ts). */
+  private readonly keyEvents = new KeyEventDedupe();
   // Stage 1 controls rework (issue #18) — gated, GameScene-owned callbacks for
   // the tool palette + speed widget, and a paused-state accessor for the
   // enqueueCommand cap on chamber/behavior commands.
@@ -852,9 +857,16 @@ export class UIScene extends Phaser.Scene {
     // existed when GameScene also bound keydown-ESC: GameScene opened the
     // menu, then UIScene's escKey handler immediately closed it on the same
     // press, leaving __phase9_ui.activeOverlay stuck at "none".
+    //
+    // #311 — the Key's 'down' fires again for the SAME DOM event when Phaser
+    // re-walks its per-frame queue after this key's keyup: a same-frame
+    // [Esc down, Esc up, other key down] opened AND closed the menu on one
+    // press, and a fast double-tap ([up1, down2, up2] in one frame) closed and
+    // reopened it, leaving the menu open. The identity dedupe drops the re-walk.
     const escKey = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
     if (escKey) {
-      escKey.on('down', () => {
+      escKey.on('down', (_key: Phaser.Input.Keyboard.Key, event: KeyboardEvent) => {
+        if (!this.keyEvents.claim(event)) return;
         // Issue #131 — Esc on the survey form is equivalent to Skip (transitions
         // to the New Game/Retry confirmation). Esc on the confirmation screen
         // defaults to New Game so the player always has a keyboard escape hatch.
@@ -900,6 +912,7 @@ export class UIScene extends Phaser.Scene {
     const enterKey = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER, false);
     if (enterKey) {
       enterKey.on('down', (_key: Phaser.Input.Keyboard.Key, event: KeyboardEvent) => {
+        if (!this.keyEvents.claim(event)) return; // #311 — same-frame queue re-walk
         // An Enter typed into a host-page input / textarea / contenteditable
         // (the website embed) is that element's newline or submit, not ours.
         if (isEditableTarget(event.target)) return;
