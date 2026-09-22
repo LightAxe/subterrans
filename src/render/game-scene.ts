@@ -203,6 +203,7 @@ import {
 import { ChamberType } from '../sim/enums.js';
 import { DEFAULT_LAYOUT, cssScaleX } from './layout.js';
 import { buildHudLayout } from './hud-layout.js';
+import { KeyEventDedupe } from './key-event-dedupe.js';
 // UIScenePhase9 — subset of UIScene public API added in Plan 06 Task 3.
 // Typed here to avoid circular imports; UIScene implements these methods.
 interface UIScenePhase9 {
@@ -300,6 +301,10 @@ declare global {
        *  (touch-smoke.spec.ts): reads viewState, mutates nothing, crosses no
        *  sim/render boundary. Dev-build only. */
       getActiveZoom(): number;
+      /** True while any pause reason ('user' Space, 'menu', …) holds the loop.
+       *  Render-side observability for the #311 same-frame Space burst e2e:
+       *  reads pauseReasons, mutates nothing, crosses no boundary. */
+      isPaused(): boolean;
       /** #304 — the difficulty tier the RUNNING round was created with (reads
        *  world.difficulty; undefined before the first boot). Lets the new-game
        *  screen spec prove Start booted the selected tier, not just that the
@@ -389,11 +394,12 @@ export class GameScene extends Phaser.Scene {
   // Stage 1 controls rework (issue #18) — the single left-button gesture arbiter
   // replaces the old surface/underground pointer listener sets.
   private arbiter!: GestureArbiter;
-  /** #306 — DOM keydown events Tab has already acted on. Phaser re-walks its
-   *  event queue on every dispatch until POST_STEP and can emit the SAME event
-   *  object again (once Tab's keyup has reset the Key, so `event.repeat` no
-   *  longer catches it); identity dedupe makes the handler idempotent per event. */
-  private readonly handledTabEvents = new WeakSet<KeyboardEvent>();
+  /** #306 / #311 — DOM keydown events a hotkey handler has already acted on.
+   *  Phaser re-walks its event queue on every dispatch until POST_STEP and can
+   *  emit the SAME event object again (once the key's keyup has reset its Key,
+   *  so `event.repeat` no longer catches it); identity dedupe makes every
+   *  keydown handler in create() idempotent per event. See key-event-dedupe.ts. */
+  private readonly keyEvents = new KeyEventDedupe();
   // Stage 3a (issue #18): the projected world (live queue folded) — single source of
   // truth for underground tap/menu decisions AND feedforward/ghosts. Lazy + memoized.
   private readonly projection = new CommandProjection();
@@ -551,6 +557,7 @@ export class GameScene extends Phaser.Scene {
           ? this.viewState.surfaceCamera
           : this.viewState.undergroundCamera
         ).zoom,
+      isPaused: (): boolean => isPausedByAny(this.pauseReasons),
     };
   }
 
@@ -704,7 +711,7 @@ export class GameScene extends Phaser.Scene {
     // adds the global capture, so Tab never moves browser focus). While Tab is
     // held the Key makes Phaser stamp `repeat = key.isDown` on every further
     // keydown, so re-walked or auto-repeated keydowns never even reach the
-    // keydown-TAB listener (next to X, below); `handledTabEvents` covers the
+    // keydown-TAB listener (next to X, below); `keyEvents.claim` covers the
     // post-keyup re-walk the Key cannot. We only need it to exist in the
     // plugin's key map, so we don't retain the ref.
     this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.TAB, true);
@@ -769,10 +776,16 @@ export class GameScene extends Phaser.Scene {
     // Stage 1 controls rework (issue #18) — tool palette hotkeys. 1/2/4 no
     // longer set speed (freed for tools): 1→Command, 2→Dig, 3→Chamber. All
     // gated through canAcceptWorldHotkey (selectTool enforces the gate + the
-    // Chamber-is-underground-only rule).
-    this.input.keyboard!.on('keydown-ONE', () => this.selectTool('command'));
-    this.input.keyboard!.on('keydown-TWO', () => this.selectTool('dig'));
-    this.input.keyboard!.on('keydown-THREE', () => this.selectTool('chamber'));
+    // Chamber-is-underground-only rule). Deduped like every hotkey (#311): a
+    // re-walked `1` after a same-frame palette click would otherwise snap the
+    // tool back and cancel the gesture the click started.
+    const toolKey = (tool: ToolId) => (ev: KeyboardEvent) => {
+      if (!this.keyEvents.claim(ev)) return;
+      this.selectTool(tool);
+    };
+    this.input.keyboard!.on('keydown-ONE', toolKey('command'));
+    this.input.keyboard!.on('keydown-TWO', toolKey('dig'));
+    this.input.keyboard!.on('keydown-THREE', toolKey('chamber'));
 
     // Speed step keys: top-row '='/'+' (keycode 187) and numpad-add step UP;
     // top-row '-' (keycode 189) and numpad-subtract step DOWN, among {1,2,4}.
@@ -780,6 +793,7 @@ export class GameScene extends Phaser.Scene {
     // (Codex R1-13/R4-3). Gated like the other world hotkeys; speed changes
     // never touch pause reasons (Codex R2-11).
     const stepSpeedKey = (dir: 1 | -1) => (ev: KeyboardEvent) => {
+      if (!this.keyEvents.claim(ev)) return; // #311 — same-frame queue re-walk
       if (ev.ctrlKey || ev.metaKey) return;
       if (!this.canAcceptWorldHotkey()) return;
       this.stepSpeed(dir);
@@ -793,9 +807,11 @@ export class GameScene extends Phaser.Scene {
     // registered above makes Phaser de-dupe OS auto-repeat on this event). The
     // event.repeat guard is belt-and-suspenders so a held Space can never strobe
     // the pause on/off. Gated through canAcceptWorldHotkey so a Space behind a
-    // modal/menu can't flip the pause reason underneath it.
+    // modal/menu can't flip the pause reason underneath it. The identity dedupe
+    // (#311) closes the one window the Key cannot: a same-frame [down, up, down]
+    // burst re-walks the first keydown AFTER the keyup reset the Key.
     this.input.keyboard!.on('keydown-SPACE', (ev: KeyboardEvent) => {
-      if (ev.repeat) return;
+      if (!this.keyEvents.claim(ev) || ev.repeat) return;
       if (!this.canAcceptWorldHotkey()) return;
       this.toggleUserPause();
     });
@@ -812,7 +828,12 @@ export class GameScene extends Phaser.Scene {
     // press and we'd recompute `!true = false` every time — the toggle gets
     // stuck OFF. ViewState is the authoritative in-mem source; persist is
     // best-effort and survives reload only when storage cooperates.
-    this.input.keyboard!.on('keydown-P', () => {
+    //
+    // #311 — edge-triggered like Space/Tab: `event.repeat` drops OS auto-repeat
+    // (a held P used to strobe the overlay) and the identity dedupe drops the
+    // same-frame queue re-walk that fired a fast double-tap ON-OFF-ON (#306).
+    this.input.keyboard!.on('keydown-P', (event: KeyboardEvent) => {
+      if (!this.keyEvents.claim(event) || event.repeat) return;
       if (!this.canAcceptWorldHotkey()) return;
       const next = !this.viewState.showPheromoneOverlay;
       this.viewState.showPheromoneOverlay = next;
@@ -824,12 +845,13 @@ export class GameScene extends Phaser.Scene {
     // 09.1 Chunk 2 — X toggles the active underground colony view. Only
     // flips when activeView === 'underground'; inert on the surface view
     // (the HUD label is also hidden there). Event-based to match the
-    // P/F9/speed-multiplier pattern above — the keyboard-plugin event bus
-    // handles edge-trigger semantics for us (one keydown event per press),
-    // avoiding the key-repeat DoS that Phase 08-04 guarded against for
-    // Tab (now `event.repeat`, below). Gated on Playing so a paused player
+    // P/F9/speed-multiplier pattern above; edge-triggered the same way as
+    // P (#311): `event.repeat` drops OS auto-repeat (the key-repeat DoS that
+    // Phase 08-04 guarded against for Tab) and the identity dedupe drops the
+    // same-frame queue re-walk. Gated on Playing so a paused player
     // doesn't Resume into a surprise camera flip onto the enemy nest.
-    this.input.keyboard!.on('keydown-X', () => {
+    this.input.keyboard!.on('keydown-X', (event: KeyboardEvent) => {
+      if (!this.keyEvents.claim(event) || event.repeat) return;
       if (!this.canAcceptWorldHotkey()) return;
       if (this.viewState.activeView !== 'underground') return;
       toggleUndergroundColony(this.viewState);
@@ -863,13 +885,11 @@ export class GameScene extends Phaser.Scene {
     // press, however long Tab is held. The one window the Key cannot cover —
     // a same-frame burst of [Tab down, Tab up, OTHER key down], where the
     // plugin re-walks Tab's keydown once more AFTER its keyup reset the Key —
-    // is closed by `handledTabEvents`: the re-walk hands us the same event
-    // object, so identity dedupe drops it. Same gate as every other world
-    // hotkey.
+    // is closed by `keyEvents.claim` (#311 applies it to every hotkey): the
+    // re-walk hands us the same event object, so identity dedupe drops it.
+    // Same gate as every other world hotkey.
     this.input.keyboard!.on('keydown-TAB', (event: KeyboardEvent) => {
-      if (this.handledTabEvents.has(event)) return;
-      this.handledTabEvents.add(event);
-      if (event.repeat) return;
+      if (!this.keyEvents.claim(event) || event.repeat) return;
       if (!this.canAcceptWorldHotkey()) return;
       toggleView(this.viewState);
       // The toggle happens at dispatch time, not inside update() next to the
@@ -891,7 +911,10 @@ export class GameScene extends Phaser.Scene {
     // can attach the full repro state to a bug report. No sim mutation, no
     // wall-clock in src/sim — the payload builder lives in src/platform and
     // the DOM download sits in src/render.
-    this.input.keyboard!.on('keydown-F9', () => {
+    // Edge-triggered (#311): one download per press — neither the same-frame
+    // queue re-walk nor OS auto-repeat may trigger another.
+    this.input.keyboard!.on('keydown-F9', (event: KeyboardEvent) => {
+      if (!this.keyEvents.claim(event) || event.repeat) return;
       if (this.world === undefined) return; // pre-boot guard
       const snap = buildDebugSnapshot(this.world, this.currentSeed, this.inputLog);
       downloadDebugSnapshot(snap);

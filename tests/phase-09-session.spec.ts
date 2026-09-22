@@ -16,6 +16,7 @@ import {
 // #304 — the new-game screen is two steps (pick a difficulty row, press Start);
 // the shared helper drives it so every spec boots the same way.
 import { clickCanvasRect, settleToPlaying } from './helpers/boot.js';
+import { SETTINGS_KEY } from '../src/platform/settings.js';
 
 const errorFilter = (msg: ConsoleMessage) => msg.type() === 'error';
 const SAVE_KEY = 'subterrans:save:v3';
@@ -478,5 +479,141 @@ test.describe('Phase 09.1 Chunk 2 — enemy underground toggle', () => {
     await twoFrames();
     expect(await readView()).toBe('surface');
     expect(await readLabel()).toBe('Your Colony');
+  });
+
+  // #311 — Phaser re-walks its whole per-frame key queue on every DOM key event
+  // and skips only an exact repeat of the event it processed last. The shape
+  // seen in the wild (issue #311's trace): press #1's keydown lands in one
+  // frame; its keyup and ALL of press #2 land in the next — [up1, down2, up2].
+  // The walk on up2 sees down2 again (prev = up1, not a duplicate) and re-emits
+  // it: the SAME event object, `repeat: false`, and a Key object cannot help
+  // because up1 already reset it. Un-deduped handlers therefore run THREE times
+  // for two presses — with or without a Key object — where deduped ones run
+  // twice. Each leg below: one synthetic press moves the state, then the
+  // re-walk shape must leave it exactly there (two calls). Three would flip it
+  // back, so parity cannot mask the bug; a mutation run (claim always true)
+  // fails all four legs. Distinct timeStamps defeat Phaser's duplicate bailout
+  // the same way the Tab test above does.
+  test.describe('#311 — same-frame keyup/keydown re-walk fires each hotkey once per press', () => {
+    type Key = { key: string; code: string; keyCode: number };
+    const P: Key = { key: 'p', code: 'KeyP', keyCode: 80 };
+    const X: Key = { key: 'x', code: 'KeyX', keyCode: 88 };
+    const SPACE: Key = { key: ' ', code: 'Space', keyCode: 32 };
+    const ESC: Key = { key: 'Escape', code: 'Escape', keyCode: 27 };
+
+    const twoFrames = (page: Page) =>
+      page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+      );
+    // Dispatch `types` for `k` in ONE task with distinct, deterministic
+    // timeStamps (past every real event's, and past the previous call's).
+    const dispatch = (page: Page, k: Key, types: ('keydown' | 'keyup')[]) =>
+      page.evaluate(
+        ({ k, types }) => {
+          const base = performance.now() + 60_000;
+          types.forEach((type, i) => {
+            const ev = new KeyboardEvent(type, { ...k, bubbles: true, cancelable: true });
+            Object.defineProperty(ev, 'timeStamp', { value: base + i });
+            window.dispatchEvent(ev);
+          });
+        },
+        { k, types },
+      );
+    // One press: keydown + keyup in one task. Exactly one handler call either
+    // way — Phaser's own bailout skips the re-walked keydown right after it.
+    const press = (page: Page, k: Key) => dispatch(page, k, ['keydown', 'keyup']);
+    // The #311 shape: keydown alone (its frame ends), then [up1, down2, up2]
+    // in one task. Deduped: two calls. Un-deduped: three.
+    const rewalkBurst = async (page: Page, k: Key) => {
+      await dispatch(page, k, ['keydown']);
+      await twoFrames(page);
+      await dispatch(page, k, ['keyup', 'keydown', 'keyup']);
+      await twoFrames(page);
+    };
+    const boot = async (page: Page) => {
+      await clearSave(page);
+      await page.reload();
+      const canvas = page.locator('canvas').first();
+      await canvas.waitFor({ state: 'attached', timeout: 10_000 });
+      await settleToPlaying(page);
+      const readView = () =>
+        page.evaluate(() => {
+          const w = window as unknown as { __phase9_ui?: { activeView?: string } };
+          return w.__phase9_ui?.activeView;
+        });
+      await expect.poll(readView, { timeout: 5_000 }).toBe('surface');
+      const box = await canvas.boundingBox();
+      if (!box) throw new Error('canvas has no bounding box');
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      return { readView };
+    };
+
+    test('P (keydown-P, no Key object) — the persisted pheromone flag', async ({ page }) => {
+      await boot(page);
+      // The P handler persists every flip; null = never written = the default.
+      const readPheromone = () =>
+        page.evaluate((key) => {
+          const raw = localStorage.getItem(key);
+          if (raw === null) return true;
+          const parsed = JSON.parse(raw) as { settings?: { pheromoneOverlay?: boolean } };
+          return parsed.settings?.pheromoneOverlay ?? true;
+        }, SETTINGS_KEY);
+      const start = await readPheromone();
+      await press(page, P);
+      await expect.poll(readPheromone, { timeout: 5_000 }).toBe(!start);
+      await twoFrames(page);
+      await rewalkBurst(page, P);
+      expect(await readPheromone()).toBe(!start);
+    });
+
+    test('X (keydown-X, no Key object) — the underground colony label', async ({ page }) => {
+      const { readView } = await boot(page);
+      const readLabel = () =>
+        page.evaluate(() => {
+          const w = window as unknown as { __phase9_ui?: { activeUndergroundLabel?: string } };
+          return w.__phase9_ui?.activeUndergroundLabel;
+        });
+      await page.keyboard.press('Tab');
+      await expect.poll(readView, { timeout: 5_000 }).toBe('underground');
+      await expect.poll(readLabel, { timeout: 5_000 }).toBe('Your Colony');
+      await press(page, X);
+      await expect.poll(readLabel, { timeout: 5_000 }).toBe('Enemy Colony');
+      await twoFrames(page);
+      await rewalkBurst(page, X);
+      expect(await readLabel()).toBe('Enemy Colony');
+    });
+
+    test('Space (Key object + event.repeat, the #306 shape) — the user pause', async ({ page }) => {
+      await boot(page);
+      const readPaused = () =>
+        page.evaluate(() => {
+          const w = window as unknown as { __phase9_test?: { isPaused?: () => boolean } };
+          return w.__phase9_test?.isPaused?.();
+        });
+      expect(await readPaused()).toBe(false);
+      await press(page, SPACE);
+      await expect.poll(readPaused, { timeout: 5_000 }).toBe(true);
+      await twoFrames(page);
+      await rewalkBurst(page, SPACE);
+      expect(await readPaused()).toBe(true);
+      await press(page, SPACE);
+      await expect.poll(readPaused, { timeout: 5_000 }).toBe(false);
+    });
+
+    test("Esc (UIScene Key 'down' handler) — the pause menu", async ({ page }) => {
+      await boot(page);
+      const readOverlay = () => rawOverlay(page);
+      await press(page, ESC);
+      await expect.poll(readOverlay, { timeout: 5_000 }).toBe('pause-menu');
+      await twoFrames(page);
+      // Two presses must close and reopen the menu — never close, open, close.
+      await rewalkBurst(page, ESC);
+      expect(await readOverlay()).toBe('pause-menu');
+      await press(page, ESC);
+      await expect.poll(readOverlay, { timeout: 5_000 }).toBe('none');
+    });
   });
 });
