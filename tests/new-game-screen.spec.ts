@@ -103,9 +103,9 @@ async function saveAndReloadToSavePrompt(page: Page): Promise<void> {
   await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('pause-menu');
   await clickCanvasRect(page, SAVE_LOAD_ROW_RECT);
   await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('save-load');
-  await page.evaluate((key) => localStorage.removeItem(key as string), SAVE_KEY);
+  await page.evaluate((key) => localStorage.removeItem(key), SAVE_KEY);
   await clickCanvasRect(page, DIALOG_SAVE_NOW_RECT);
-  await page.waitForFunction((key) => localStorage.getItem(key as string) !== null, SAVE_KEY, {
+  await page.waitForFunction((key) => localStorage.getItem(key) !== null, SAVE_KEY, {
     timeout: 5_000,
   });
   await page.reload();

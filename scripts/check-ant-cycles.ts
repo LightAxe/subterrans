@@ -1,5 +1,4 @@
-#!/usr/bin/env node
-// scripts/check-ant-cycles.mjs
+// scripts/check-ant-cycles.ts
 // #212: enforce the layered, ACYCLIC module graph for src/sim/ant/.
 //
 // Parses static `import/export … from './x.js'` (incl. multi-line forms), dynamic
@@ -17,7 +16,8 @@
 //
 // PLAN.md #212 layering: Layer 0 `ant-motion` (leaf) <- behaviors <- `ant-movement`
 // (orchestrator) <- `ant-system` (barrel). Exit 0 clean; exit 1 with a diagnostic.
-// No network, no deps — runs in `npm run verify`.
+// No network, no deps — runs in `npm run verify` (`node --experimental-strip-types`, the
+// same runner as check-ai-economy.ts; a .ts so the scripts/ gates typecheck + lint it, #308).
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 
@@ -32,10 +32,10 @@ const fileset = new Set(files);
 // Strip block + line comments so a `from './x.js'` mention inside a comment is not
 // mistaken for a real import edge, then strip pure type-only import statements (which
 // produce no runtime edge).
-function stripComments(s) {
+function stripComments(s: string): string {
   return s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 }
-function stripTypeOnly(s) {
+function stripTypeOnly(s: string): string {
   return (
     s
       // type-only IMPORTS — braced, default, namespace
@@ -63,21 +63,21 @@ const DYNAMIC_RE = new RegExp(
 );
 const SIDEEFFECT_RE = new RegExp(`^\\s*import\\s+['"]${SIB}([A-Za-z0-9_-]+)(?:\\.js)?['"]`, 'gm');
 
-const graph = new Map(files.map((f) => [f, new Set()]));
-const barrelImporters = [];
+const graph = new Map<string, Set<string>>(files.map((f) => [f, new Set<string>()]));
+const barrelImporters: string[] = [];
 
 for (const mod of files) {
   const src = stripTypeOnly(stripComments(readFileSync(join(DIR, mod + '.ts'), 'utf8')));
   for (const RE of [STATIC_RE, DYNAMIC_RE, SIDEEFFECT_RE]) {
     RE.lastIndex = 0;
-    let m;
+    let m: RegExpExecArray | null;
     while ((m = RE.exec(src))) {
       const target = m[1];
-      if (!fileset.has(target)) continue; // only intra-ant sibling modules
+      if (target === undefined || !fileset.has(target)) continue; // only intra-ant sibling modules
       if (target === BARREL && mod !== BARREL) {
         barrelImporters.push(`${mod}.ts imports the barrel ./${BARREL}.js`);
       }
-      graph.get(mod).add(target);
+      graph.get(mod)!.add(target);
     }
   }
 }
@@ -87,7 +87,8 @@ for (const mod of files) {
 // behaviors <- Layer 2 orchestrator (ant-movement) <- barrel (ant-system). A new
 // sub-module defaults to 'behavior' (the strictest rule); update this map deliberately
 // when introducing a new leaf or orchestrator.
-const layerOf = (mod) =>
+type Layer = 'leaf' | 'behavior' | 'orchestrator' | 'barrel';
+const layerOf = (mod: string): Layer =>
   mod === 'ant-system'
     ? 'barrel'
     : mod === 'ant-movement'
@@ -95,13 +96,13 @@ const layerOf = (mod) =>
       : mod === 'ant-motion' || mod === 'ant-store'
         ? 'leaf'
         : 'behavior';
-const ALLOWED = {
+const ALLOWED: Record<Layer, Set<Layer>> = {
   leaf: new Set(['leaf']),
   behavior: new Set(['leaf']),
   orchestrator: new Set(['leaf', 'behavior']),
   barrel: new Set(['leaf', 'behavior', 'orchestrator']),
 };
-const layerViolations = [];
+const layerViolations: string[] = [];
 for (const [mod, targets] of graph) {
   const from = layerOf(mod);
   for (const t of targets) {
@@ -118,13 +119,13 @@ for (const [mod, targets] of graph) {
 const WHITE = 0;
 const GRAY = 1;
 const BLACK = 2;
-const color = new Map(files.map((f) => [f, WHITE]));
-const stack = [];
-const cycles = [];
-function dfs(u) {
+const color = new Map<string, number>(files.map((f) => [f, WHITE]));
+const stack: string[] = [];
+const cycles: string[] = [];
+function dfs(u: string): void {
   color.set(u, GRAY);
   stack.push(u);
-  for (const v of graph.get(u)) {
+  for (const v of graph.get(u)!) {
     if (color.get(v) === GRAY) {
       cycles.push([...stack.slice(stack.indexOf(v)), v].join(' -> '));
     } else if (color.get(v) === WHITE) {

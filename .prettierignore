@@ -17,3 +17,9 @@ public/
 
 # Lockfiles are generated; leave them as the tool writes them.
 package-lock.json
+
+# Prose docs (AGENTS.md, ARCHITECTURE.md, CONTEXT.md, README.md, docs/…). Prettier's
+# markdown pass only rewrites emphasis markers and table padding in hand-edited
+# text, so the gate covers code + config, not prose (#308). `format`/`format:check`
+# both run over `.`, so this file is the single source of what is gated.
+*.md

@@ -1,5 +1,5 @@
 import { defineConfig } from 'vitest/config';
-import { appVersion } from './scripts/version.mjs';
+import { appVersion } from './scripts/version.js';
 
 export default defineConfig({
   define: {

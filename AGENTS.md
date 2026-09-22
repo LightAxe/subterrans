@@ -24,7 +24,7 @@ src/
 public/assets/sprites/  # Real sprite SVGs, served by Vite (referenced via BASE_URL/assetsBase).
 assets/       # Empty .gitkeep placeholders (sprites/ audio/ fonts/); real sprites live in public/assets/sprites/, audio is roadmap Phase 5a.
 tests/        # Playwright E2E specs (*.spec.ts).
-scripts/      # Guard + tooling scripts (check-sim-boundary.sh, check-ant-cycles.mjs, check-asset-paths.sh, check-e2e-geometry.sh, …).
+scripts/      # Guard + tooling scripts (check-sim-boundary.sh, check-ant-cycles.ts, check-asset-paths.sh, check-e2e-geometry.sh, …).
 eslint-rules/ # Custom ESLint rules (sim-module-state, …) + their Vitest contract tests.
 bench/        # Micro-benchmarks.
 docs/         # Contributor docs (currently an empty placeholder).
@@ -120,7 +120,7 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 - Entities are integer IDs (`EntityId = number`). Do not introduce `class Ant`, `class Pheromone`, or other entity classes — components live in typed-array stores (`Int32Array`, `Uint8Array`) or `Map<EntityId, T>`, not on instances.
 - Systems are pure functions over component stores. Module-level mutable state in `src/sim/` (array, `Map`/`Set`, typed array, or reassignable `let`) is a determinism footgun — it does not survive save/load or replay and diverges peers under lockstep. The `subterrans/sim-module-state` ESLint rule (issue #211) enforces it: every such binding must be an immutable `as const` lookup **or** carry `// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch:/sim-cache:/sim-memo: <why it is reset/safe>`. **Enforcement boundary:** the rule catches array/collection/`let` shapes and forces a reviewable acknowledgement at the declaration site — it does **not** verify reset-per-tick correctness, and it does **not** catch factory-`CallExpression` returns (`const X = makeBuffer()`) or plain mutable objects (`const X = {}`); those carry a plain `// sim-scratch:` marker comment and remain a manual review item. Block any new module-level mutable that is neither `as const` nor explicitly justified.
 - New components should follow the structure-of-arrays pattern already used in `src/sim/ant/`, `src/sim/colony/`, `src/sim/pheromone/`. Flag array-of-structs designs unless the PR explains why SoA is impractical for that data.
-- **Ant subsystem layering (issue #212).** `src/sim/ant/` is split into cohesive sub-modules along a strict **acyclic** dependency graph: Layer 0 `ant-motion.ts` + `ant-store.ts` (stepping / passability / geometry primitives + the shared per-call scratch buffers, and the SoA ant store), Layer 1 behaviors (`ant-foraging`, `ant-nursing`, `ant-queens`, `ant-combat-targeting`, `ant-dig`, `ant-pheromone`), and Layer 2 `ant-movement.ts` (the `tickAntMovement` orchestrator + occupancy). `ant-system.ts` is a thin **named re-export barrel** — the single public import path for consumers (`tick.ts`, tests). **New ant behavior goes in a new `src/sim/ant/*.ts` sub-module — do not regrow `ant-system.ts` (kept a barrel) or bolt unrelated behavior onto `ant-movement.ts`.** A behavior sub-module may depend only on Layer 0, never on another behavior or the orchestrator; `scripts/check-ant-cycles.mjs` (run in `verify`) enforces the no-cycle / no-barrel-import rule, and `ant-system.barrel.test.ts` pins the public surface so a dropped re-export fails CI.
+- **Ant subsystem layering (issue #212).** `src/sim/ant/` is split into cohesive sub-modules along a strict **acyclic** dependency graph: Layer 0 `ant-motion.ts` + `ant-store.ts` (stepping / passability / geometry primitives + the shared per-call scratch buffers, and the SoA ant store), Layer 1 behaviors (`ant-foraging`, `ant-nursing`, `ant-queens`, `ant-combat-targeting`, `ant-dig`, `ant-pheromone`), and Layer 2 `ant-movement.ts` (the `tickAntMovement` orchestrator + occupancy). `ant-system.ts` is a thin **named re-export barrel** — the single public import path for consumers (`tick.ts`, tests). **New ant behavior goes in a new `src/sim/ant/*.ts` sub-module — do not regrow `ant-system.ts` (kept a barrel) or bolt unrelated behavior onto `ant-movement.ts`.** A behavior sub-module may depend only on Layer 0, never on another behavior or the orchestrator; `scripts/check-ant-cycles.ts` (run in `verify`) enforces the no-cycle / no-barrel-import rule, and `ant-system.barrel.test.ts` pins the public surface so a dropped re-export fails CI.
 
 ### Hot-loop performance
 
@@ -150,11 +150,11 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 ```bash
 npm install
 npm run dev            # Start dev server
-npm run format         # Prettier-format the tree (format:check is the verify gate)
+npm run format         # Prettier-format the tree (format:check is the verify gate; .prettierignore is the scope)
 npm run lint           # Fast ESLint (sim-safety + base rules)
 npm run lint:types     # Type-aware ESLint (recommended-type-checked) — slower
 npm run test           # Run Vitest (fast local loop)
-npm run verify         # Full gate: format:check + lint + typecheck + typecheck:scripts + lint:types + sim-boundary + asset-path + e2e-geometry + layout-discipline + ant-cycle guards + tests
+npm run verify         # Full gate: format:check + lint + typecheck + typecheck:scripts/tests/bench + lint:types + sim-boundary + asset-path + e2e-geometry + layout-discipline + ant-cycle guards + tests
 npm run test:coverage  # Run Vitest with v8 coverage + 80% gate (run before pushing)
 npm run test:e2e       # Run Playwright
 ```

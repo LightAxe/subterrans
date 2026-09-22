@@ -7,9 +7,10 @@
 // latency per save). This config builds the program once and is gated only in
 // `npm run lint:types`, `npm run verify`, and CI — where latency is fine.
 //
-// Covers src/**/*.ts and scripts/**/*.ts. projectService auto-discovers
-// scripts/tsconfig.json for files under scripts/ with no extra `project`
-// wiring, and the added type-check cost is small (~0.3s on this repo).
+// Covers src/, scripts/, tests/ and bench/ (*.ts). projectService auto-discovers
+// the per-directory scripts/tsconfig.json, tests/tsconfig.json and
+// bench/tsconfig.json with no extra `project` wiring (#301, #308), and the
+// added type-check cost is small.
 //
 // Scope note: this config intentionally does NOT re-enable the sim-safety
 // rules (Phaser/wall-clock/float bans, mutation guard, sim-module-state) —
@@ -25,7 +26,7 @@ import simModuleState from './eslint-rules/sim-module-state.js';
 
 export default [
   {
-    files: ['src/**/*.ts', 'scripts/**/*.ts'],
+    files: ['src/**/*.ts', 'scripts/**/*.ts', 'tests/**/*.ts', 'bench/**/*.ts'],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
@@ -58,8 +59,10 @@ export default [
     // awaiting). Enforcing the `any`-flow and async-shape rules here would mean
     // contorting fixtures for no shipped-code benefit. The genuine bug-catchers
     // (no-floating-promises, no-misused-promises, await-thenable) stay ON
-    // everywhere — only the low-value-in-tests rules are relaxed.
-    files: ['src/**/*.test.ts'],
+    // everywhere — only the low-value-in-tests rules are relaxed. The
+    // Playwright specs get the same treatment (#308); tests/helpers/ and
+    // tests/cross-engine/ are shared code and stay under the full rule set.
+    files: ['src/**/*.test.ts', 'tests/**/*.spec.ts'],
     rules: {
       '@typescript-eslint/no-unsafe-assignment': 'off',
       '@typescript-eslint/no-unsafe-member-access': 'off',

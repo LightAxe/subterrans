@@ -240,10 +240,7 @@ test.describe('Phase 9 — SCEN-04 save-prompt flow', () => {
     // New Game deletes the save (deleteSave) then opens the new-game screen
     // (S5 / #304); Start boots fresh into Playing.
     await settleToPlaying(page);
-    const stored = await page.evaluate(
-      (key) => window.localStorage.getItem(key as string),
-      SAVE_KEY,
-    );
+    const stored = await page.evaluate((key) => window.localStorage.getItem(key), SAVE_KEY);
     expect(stored).toBeNull();
     await expect(page.locator('canvas').first()).toBeVisible();
   });
@@ -339,7 +336,7 @@ test.describe('Phase 09.1 Chunk 2 — enemy underground toggle', () => {
       return page.evaluate(() => {
         const w = window as unknown as { __phase9_ui?: { activeUndergroundLabel?: string } };
         return w.__phase9_ui?.activeUndergroundLabel;
-      }) as Promise<string | undefined>;
+      });
     };
 
     await expect.poll(readLabel, { timeout: 5_000 }).toBe('Your Colony');

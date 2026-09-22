@@ -1,7 +1,7 @@
 import { defineConfig, type Plugin } from 'vite';
 import { gunzipSync } from 'node:zlib';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { appVersion } from './scripts/version.mjs';
+import { appVersion } from './scripts/version.js';
 
 /**
  * Issue #122 — dev-server mock for the playtrace upload endpoint.
