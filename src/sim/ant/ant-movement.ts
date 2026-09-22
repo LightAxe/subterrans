@@ -44,6 +44,7 @@ import {
   SIM_VERSION_V34_IDLE_RESERVE_FLEE,
   SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
   SIM_VERSION_V36_RISK_AWARE_FORAGING,
+  SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
   type WorldState,
 } from '../types.js';
 import {
@@ -1014,7 +1015,17 @@ export function tickAntMovement(
       // A1 (V36): the ant's colony surface DangerTrail grid (undefined pre-V36 /
       // danger-free → the legacy first-fresh pick, byte-identical).
       const noRevisitDangerGrid = surfaceDangerByColony[ants.colonyId[id]!];
-      pickNoRevisitSurfaceAlternate(ants, id, dx, dy, noRevisitDangerGrid, noRevisitAlt);
+      // V40 (#299): release a boxed-in searcher instead of pausing it forever (see
+      // pickNoRevisitSurfaceAlternate). Pre-V40 keeps the permanent pause.
+      pickNoRevisitSurfaceAlternate(
+        ants,
+        id,
+        dx,
+        dy,
+        noRevisitDangerGrid,
+        noRevisitAlt,
+        world.simVersion >= SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
+      );
       dx = noRevisitAlt.dx;
       dy = noRevisitAlt.dy;
     }
@@ -1653,6 +1664,20 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     if (carrierId !== -1 && ants.alive[carrierId] === 1) continue;
 
     const colonyId = ants.colonyId[id]!;
+    // V40 (#299): the queen never contests a tile. She is the lowest id in her
+    // colony and stands still for thousands of ticks (on the surface beside the
+    // entrance until her chamber completes, then in it), so any worker whose route
+    // crosses her tile is bumped off every tick — and a searcher bumped back onto
+    // the exempt entrance tile re-takes the same trail-following step next tick,
+    // a livelock measured at 1 600-3 000 ticks per forager on the #297 seeds (two
+    // foragers of a 3-worker colony frozen on the doorstep while its queen starved).
+    // Stacking on the queen is already allowed inside chamber footprints; allow it
+    // everywhere. Gated so pre-V40 replays keep the bump byte-for-byte.
+    if (
+      world.simVersion >= SIM_VERSION_V40_SMALL_COLONY_SURVIVAL &&
+      world.colonies[colonyId]?.queenEntityId === id
+    )
+      continue;
     const zone = ants.zone[id]!;
     // Issue #61 — include `gridColonyId` in the occupancy key so cross-grid
     // ants (Phase 09.1 Chunk 3+4 fighter invaders with currentGridColonyId !==

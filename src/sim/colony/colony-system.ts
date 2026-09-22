@@ -26,7 +26,11 @@
 // No Math.floor, no floats, no division operator.
 
 import type { WorldState } from '../types.js';
-import { allocateEntityId, INVALID_ENTITY_ID } from '../types.js';
+import {
+  allocateEntityId,
+  INVALID_ENTITY_ID,
+  SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
+} from '../types.js';
 import type { ChamberRecord, ColonyRecord } from './colony-store.js';
 import type { ColonyId } from './colony-store.js';
 import {
@@ -37,6 +41,7 @@ import {
   FOOD_CHAMBER_CAPACITY,
   FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP,
   BASE_FOOD_STORAGE_CAPACITY,
+  NURSE_MIN_WORKERS,
 } from '../constants.js';
 import { ChamberType } from '../enums.js';
 import { allocateWorkers } from '../behavior/allocation-system.js';
@@ -305,6 +310,14 @@ export function largestNurseryTileCount(colony: ColonyRecord): number {
 // ---------------------------------------------------------------------------
 
 /**
+ * V40 (#299) — the living-worker floor for the nurse carve-out, by simVersion.
+ * Pre-V40 worlds pass 0 (no floor), so their allocation is byte-identical.
+ */
+export function nurseMinWorkersFor(world: WorldState): number {
+  return world.simVersion >= SIM_VERSION_V40_SMALL_COLONY_SURVIVAL ? NURSE_MIN_WORKERS : 0;
+}
+
+/**
  * Feed queen and each live larva from the colony food pool.
  *
  * PRD §4c lines 1052-1085 verbatim implementation.
@@ -511,7 +524,13 @@ export function tickReconcile(world: WorldState, colony: ColonyRecord): void {
   // 09 reproduction-gate memo: nursing requires a completed Nursery chamber).
   const brood = colony.eggCount + colony.larvaeCount;
   const hasNursery = hasCompletedChamber(colony, ChamberType.Nursery);
-  const alloc = allocateWorkers(colony.workerCount, brood, colony.targetRatio, hasNursery);
+  const alloc = allocateWorkers(
+    colony.workerCount,
+    brood,
+    colony.targetRatio,
+    hasNursery,
+    nurseMinWorkersFor(world),
+  );
   colony.computedAllocation.nurse = alloc.nurse;
   colony.computedAllocation.forage = alloc.forage;
   colony.computedAllocation.dig = alloc.dig;

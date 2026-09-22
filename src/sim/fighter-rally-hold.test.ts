@@ -89,6 +89,10 @@ function buildRallyWorld(
   colony.rallyPoint = { tileX: rallyTileX, tileY: rallyTileY };
   colony.digFlowFieldDirty = false;
   colony.foodStored = 100000; // ample — no starvation during the run
+  // V40 (#299): a 1-2 worker colony stands down fighters the ratio does not ask
+  // for; this harness IS its fighters, so ask for all of them.
+  colony.targetRatio.forage = 0;
+  colony.targetRatio.fight = 10;
   world.colonies[COLONY_ID] = colony;
 
   const fighterIds: number[] = [];

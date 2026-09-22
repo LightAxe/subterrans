@@ -6,6 +6,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { tick, resetFlowFieldCaches } from './tick.js';
+import { releaseExcessNurses } from './ant/ant-system.js';
 import {
   createWorldState,
   allocateEntityId,
@@ -15,6 +16,8 @@ import {
   SIM_VERSION_V8_LEASH_HYSTERESIS,
   SIM_VERSION_V9_CANCEL_DROPS_PENDING,
   SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
+  SIM_VERSION_V39_SPIDER_TIEBREAK,
+  SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
   LATEST_SIM_VERSION,
 } from './types.js';
 import { GameOutcome } from './game-over.js';
@@ -37,7 +40,7 @@ import {
   NursingSubState,
 } from './enums.js';
 import type { WorldState } from './types.js';
-import type { ColonyId } from './colony/colony-store.js';
+import type { ColonyId, ColonyRecord } from './colony/colony-store.js';
 import {
   QUEEN_FOOD_PER_TICK,
   STARVATION_GRACE_TICKS,
@@ -45,7 +48,7 @@ import {
   FOOD_TRAIL_DEPOSIT_V14,
   PHEROMONE_CAP,
 } from './constants.js';
-import { FP_SHIFT } from './fixed.js';
+import { FP_SHIFT, FP_ONE } from './fixed.js';
 
 // ---------------------------------------------------------------------------
 // Test harness helpers
@@ -200,6 +203,370 @@ describe('Step 1: command processing', () => {
     expect(world.colonies[colonyId]!.computedAllocation.forage).toBe(0);
     expect(world.colonies[colonyId]!.computedAllocation.dig).toBe(0);
     expect(world.colonies[colonyId]!.computedAllocation.fight).toBe(10);
+  });
+
+  // V40 (#299): the nurse carve-out has a living-worker floor at the real call
+  // sites (SetBehaviorRatio CTRL-04 pass + step 8). 2 workers + brood + Nursery:
+  // V39 carves one nurse out of two; V40 sends both foraging.
+  it('V40 (#299): 2 workers + brood + Nursery — nurse at V39, no nurse at V40 (call-site gate)', () => {
+    function run(simVersion: number): { nurse: number; forage: number } {
+      const built = makeWorldWithColony();
+      const w = built.world;
+      const cid = built.colonyId;
+      w.simVersion = simVersion;
+      const colony = w.colonies[cid]!;
+      colony.chambers.push({
+        chamberId: 9002,
+        chamberType: ChamberType.Nursery,
+        foodStored: 0,
+        posX: 0,
+        posY: 0,
+        width: 2,
+        height: 2,
+      });
+      for (let i = 0; i < 6; i++) {
+        const eid = allocateEntityId(w);
+        initAnt(w.ants, eid, {
+          colonyId: cid,
+          posX: 100,
+          posY: 100,
+          task: AntTask.Idle,
+          subTask: 0,
+          speed: 0,
+        });
+        w.ants.age[eid] = 0; // will not hatch in 1 tick
+        colony.eggs.push(eid);
+        colony.eggCount += 1;
+      }
+      for (let i = 0; i < 2; i++) {
+        const wid = allocateEntityId(w);
+        initAnt(w.ants, wid, {
+          colonyId: cid,
+          posX: 100,
+          posY: 100,
+          task: AntTask.Idle,
+          subTask: 0,
+        });
+        colony.workers.push(wid);
+        colony.workerCount += 1;
+      }
+      const cmd: SimCommand = {
+        type: 'SetBehaviorRatio',
+        colonyId: cid,
+        ratio: { forage: 10, fight: 0 },
+        issuedAtTick: 0,
+      };
+      tick(w, [cmd]);
+      return { nurse: colony.computedAllocation.nurse, forage: colony.computedAllocation.forage };
+    }
+    expect(run(SIM_VERSION_V39_SPIDER_TIEBREAK)).toEqual({ nurse: 1, forage: 1 });
+    expect(run(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL)).toEqual({ nurse: 0, forage: 2 });
+    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
+  });
+
+  // V40 (#299) — excess-nurse release at the step-8 checkpoint. A colony at 3 workers
+  // with a nurse Attending in the Nursery loses a worker: the floor zeroes the nurse
+  // count, and the Attending nurse must be Idle for step 10a THIS tick (it would
+  // otherwise dwell up to NURSE_ATTEND_DWELL_TICKS). A carrier deposits first.
+  describe('V40 (#299) excess-nurse release below NURSE_MIN_WORKERS', () => {
+    function nurseryWorld(
+      simVersion: number,
+      opts: { larvaeOutside?: number; larvaeCount?: number } = {},
+    ): {
+      w: WorldState;
+      colony: ColonyRecord;
+      idle: number[];
+      nurse: number;
+      larvae: number[];
+    } {
+      const built = makeWorldWithColony();
+      const w = built.world;
+      const cid = built.colonyId;
+      w.simVersion = simVersion;
+      const colony = w.colonies[cid]!;
+      colony.entrances = [];
+      colony.rallyPoint = null;
+      colony.digFlowFieldDirty = true;
+      colony.broodFieldDirty = true;
+      // Underground grid with the Nursery footprint (2..3, 3..4) and a brood tile
+      // (6,6) Open, so the step-9 chamber flow fields seed a deposit source on the
+      // Nursery tiles and a carrier standing there deposits at step 16c.
+      const ug = createUndergroundGrid(UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT);
+      for (let ty = 3; ty <= 4; ty++) {
+        for (let tx = 2; tx <= 3; tx++) ugSet(ug, tx, ty, UndergroundTileState.Open);
+      }
+      ugSet(ug, 6, 6, UndergroundTileState.Open);
+      w.undergroundGrids[cid] = ug;
+      colony.chambers.push({
+        chamberId: 9003,
+        chamberType: ChamberType.Nursery,
+        foodStored: 0,
+        posX: 2 << FP_SHIFT,
+        posY: 3 << FP_SHIFT,
+        width: 2,
+        height: 2,
+      });
+      const larvae: number[] = [];
+      const larvaeCount = opts.larvaeCount ?? 6;
+      const larvaeOutside = opts.larvaeOutside ?? 0;
+      for (let i = 0; i < larvaeCount; i++) {
+        // The first `larvaeOutside` larvae sit on the brood tile (6,6) outside the
+        // Nursery; the rest inside it at (3,4).
+        const outside = i < larvaeOutside;
+        const lx = outside ? 6 : 3;
+        const ly = outside ? 6 : 4;
+        const lid = allocateEntityId(w);
+        initAnt(w.ants, lid, {
+          colonyId: cid,
+          posX: (lx << FP_SHIFT) + (FP_ONE >> 1),
+          posY: (ly << FP_SHIFT) + (FP_ONE >> 1),
+          task: AntTask.Idle,
+          subTask: 0,
+          speed: 0,
+        });
+        w.ants.zone[lid] = 1;
+        colony.larvae.push(lid);
+        colony.larvaeCount += 1;
+        larvae.push(lid);
+      }
+      const idle: number[] = [];
+      for (let i = 0; i < 2; i++) {
+        const wid = allocateEntityId(w);
+        initAnt(w.ants, wid, {
+          colonyId: cid,
+          posX: 100,
+          posY: 100,
+          task: AntTask.Idle,
+          subTask: 0,
+        });
+        colony.workers.push(wid);
+        colony.workerCount += 1;
+        idle.push(wid);
+      }
+      const nurse = allocateEntityId(w);
+      initAnt(w.ants, nurse, {
+        colonyId: cid,
+        posX: (2 << FP_SHIFT) + (FP_ONE >> 1),
+        posY: (3 << FP_SHIFT) + (FP_ONE >> 1),
+        task: AntTask.Nursing,
+        subTask: NursingSubState.Attending,
+      });
+      w.ants.zone[nurse] = 1;
+      w.ants.searchPauseTicks[nurse] = 100; // mid-dwell (NURSE_ATTEND_DWELL_TICKS = 600)
+      colony.workers.push(nurse);
+      colony.workerCount += 1;
+      colony.targetRatio.forage = 10;
+      colony.targetRatio.fight = 0;
+      return { w, colony, idle, nurse, larvae };
+    }
+
+    it('V40: the Attending nurse is released the same tick the head count drops to 2, and reassigned', () => {
+      const { w, colony, idle, nurse } = nurseryWorld(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
+      // Warm tick at 3 workers: nurse = ceil(3/4) = 1, the Attending nurse stays.
+      tick(w, []);
+      expect(colony.computedAllocation.nurse).toBe(1);
+      expect(w.ants.task[nurse]).toBe(AntTask.Nursing);
+      expect(w.ants.subTask[nurse]).toBe(NursingSubState.Attending);
+      // A worker dies. Step 5 of the next tick drops workerCount to 2, step 8 zeroes
+      // the nurse count, the release makes the nurse Idle, step 10a reassigns it.
+      w.ants.alive[idle[0]!] = 0;
+      tick(w, []);
+      expect(colony.workerCount).toBe(2);
+      expect(colony.computedAllocation.nurse).toBe(0);
+      expect(w.ants.task[nurse]).not.toBe(AntTask.Nursing);
+      expect(w.ants.task[nurse]).toBe(AntTask.Foraging); // forage-only ratio, no backpressure
+      expect(w.ants.searchPauseTicks[nurse]).toBe(0);
+    });
+
+    it('V39 (pinned): the same death leaves the Attending nurse dwelling — pre-V40 is untouched', () => {
+      const { w, colony, idle, nurse } = nurseryWorld(SIM_VERSION_V39_SPIDER_TIEBREAK);
+      tick(w, []);
+      w.ants.alive[idle[0]!] = 0;
+      tick(w, []);
+      expect(colony.workerCount).toBe(2);
+      expect(colony.computedAllocation.nurse).toBe(1); // ceil(2/4) = 1 still carved pre-V40
+      expect(w.ants.task[nurse]).toBe(AntTask.Nursing);
+      expect(w.ants.subTask[nurse]).toBe(NursingSubState.Attending);
+      expect(w.ants.searchPauseTicks[nurse]).toBe(102);
+    });
+
+    it('V40: a carrier is not released mid-carry — it deposits first, then goes Idle at the next checkpoint', () => {
+      // Exactly ONE larva sits outside the Nursery and it is the one in the carry
+      // slot, so after the deposit no claimable brood remains outside and
+      // depositCarriedBrood hands the nurse to Attending (not Idle): tick 2's
+      // reassignment below can then only come from the checkpoint release.
+      const { w, colony, idle, nurse, larvae } = nurseryWorld(
+        SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
+        { larvaeOutside: 1 },
+      );
+      const brood = larvae[0]!;
+      w.ants.subTask[nurse] = NursingSubState.Feeding;
+      w.ants.searchPauseTicks[nurse] = 0;
+      w.ants.carryingBroodId[nurse] = brood;
+      w.ants.carriedBy[brood] = nurse;
+      w.ants.alive[idle[0]!] = 0;
+      // Tick 1: head count drops to 2 at step 5; the checkpoint skips the carrier;
+      // step 16c deposits the brood (carrier on a Nursery tile) and clears the carry.
+      tick(w, []);
+      expect(colony.workerCount).toBe(2);
+      expect(colony.computedAllocation.nurse).toBe(0);
+      expect(w.ants.carryingBroodId[nurse]).toBe(-1);
+      expect(w.ants.carriedBy[brood]).toBe(-1);
+      const bx = w.ants.posX[brood]! >> FP_SHIFT; // landed inside the 2x2 Nursery
+      const by = w.ants.posY[brood]! >> FP_SHIFT;
+      expect(bx).toBeGreaterThanOrEqual(2);
+      expect(bx).toBeLessThan(4);
+      expect(by).toBeGreaterThanOrEqual(3);
+      expect(by).toBeLessThan(5);
+      // depositCarriedBrood handed it to Attending (no claimable brood left outside).
+      expect(w.ants.task[nurse]).toBe(AntTask.Nursing);
+      expect(w.ants.subTask[nurse]).toBe(NursingSubState.Attending);
+      // Tick 2: the checkpoint releases it and step 10a puts it to work.
+      tick(w, []);
+      expect(w.ants.task[nurse]).toBe(AntTask.Foraging);
+      expect(w.ants.carryingBroodId[nurse]).toBe(-1);
+    });
+
+    it('V39 (pinned): a zero-nurse allocation at V39 never releases a dwelling nurse — the release gate is version-bound', () => {
+      // Two larvae: (2 / NURSE_RATIO) | 0 = 0 nurses at EVERY version, so
+      // computedAllocation.nurse is 0 at V39 as well and only the simVersion clause
+      // of the checkpoint keeps the release out of a pre-V40 world.
+      const run = (simVersion: number) => {
+        const { w, colony, idle, nurse } = nurseryWorld(simVersion, { larvaeCount: 2 });
+        tick(w, []);
+        expect(colony.computedAllocation.nurse).toBe(0);
+        expect(w.ants.subTask[nurse]).toBe(NursingSubState.Attending);
+        w.ants.alive[idle[0]!] = 0;
+        tick(w, []);
+        expect(colony.workerCount).toBe(2);
+        expect(colony.computedAllocation.nurse).toBe(0);
+        return { task: w.ants.task[nurse], dwell: w.ants.searchPauseTicks[nurse] };
+      };
+      expect(run(SIM_VERSION_V39_SPIDER_TIEBREAK)).toEqual({ task: AntTask.Nursing, dwell: 102 });
+      expect(run(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL)).toEqual({
+        task: AntTask.Foraging,
+        dwell: 0,
+      });
+    });
+
+    it('V40: surplus fighters stand down below the floor and forage the same tick; V39 pinned: they hold ground', () => {
+      // Nothing in the sim demotes a Fighting ant, so a colony that collapses to 2
+      // workers while both are fighting would keep zero foragers.
+      const run = (simVersion: number) => {
+        const built = makeWorldWithColony();
+        const w = built.world;
+        const cid = built.colonyId;
+        w.simVersion = simVersion;
+        const colony = w.colonies[cid]!;
+        colony.targetRatio.forage = 10;
+        colony.targetRatio.fight = 0;
+        const fighters: number[] = [];
+        for (let i = 0; i < 2; i++) {
+          const id = allocateEntityId(w);
+          initAnt(w.ants, id, {
+            colonyId: cid,
+            posX: 100,
+            posY: 100,
+            task: AntTask.Fighting,
+            subTask: FightingSubState.MovingToRally,
+          });
+          colony.workers.push(id);
+          colony.workerCount += 1;
+          fighters.push(id);
+        }
+        const idle = allocateEntityId(w);
+        initAnt(w.ants, idle, {
+          colonyId: cid,
+          posX: 100,
+          posY: 100,
+          task: AntTask.Idle,
+          subTask: 0,
+        });
+        colony.workers.push(idle);
+        colony.workerCount += 1;
+        // Warm tick at 3 workers: above the floor, fighters hold ground at every version.
+        tick(w, []);
+        expect(w.ants.task[fighters[0]!]).toBe(AntTask.Fighting);
+        expect(w.ants.task[fighters[1]!]).toBe(AntTask.Fighting);
+        w.ants.alive[idle] = 0;
+        tick(w, []);
+        expect(colony.workerCount).toBe(2);
+        return [w.ants.task[fighters[0]!], w.ants.task[fighters[1]!]];
+      };
+      expect(run(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL)).toEqual([
+        AntTask.Foraging,
+        AntTask.Foraging,
+      ]);
+      expect(run(SIM_VERSION_V39_SPIDER_TIEBREAK)).toEqual([AntTask.Fighting, AntTask.Fighting]);
+    });
+
+    it('V40: only fighters in EXCESS of the allocation stand down (a fight-heavy ratio at 2 workers keeps its one fighter)', () => {
+      const built = makeWorldWithColony();
+      const w = built.world;
+      const cid = built.colonyId;
+      w.simVersion = SIM_VERSION_V40_SMALL_COLONY_SURVIVAL;
+      const colony = w.colonies[cid]!;
+      colony.targetRatio.forage = 3;
+      colony.targetRatio.fight = 7; // available 2 → fight = (2*7/10)|0 = 1
+      const fighters: number[] = [];
+      for (let i = 0; i < 2; i++) {
+        const id = allocateEntityId(w);
+        initAnt(w.ants, id, {
+          colonyId: cid,
+          posX: 100,
+          posY: 100,
+          task: AntTask.Fighting,
+          subTask: FightingSubState.MovingToRally,
+        });
+        colony.workers.push(id);
+        colony.workerCount += 1;
+        fighters.push(id);
+      }
+      tick(w, []);
+      expect(colony.computedAllocation.fight).toBe(1);
+      const tasks = [w.ants.task[fighters[0]!], w.ants.task[fighters[1]!]];
+      expect(tasks.filter((t) => t === AntTask.Fighting)).toHaveLength(1);
+      expect(tasks.filter((t) => t === AntTask.Foraging)).toHaveLength(1);
+      // Steady: no churn on the next tick.
+      tick(w, []);
+      expect([w.ants.task[fighters[0]!], w.ants.task[fighters[1]!]]).toEqual(tasks);
+    });
+
+    it('V40: releaseExcessNurses itself skips a live carrier and releases every other nurse substate', () => {
+      const { w, colony, nurse, larvae } = nurseryWorld(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
+      const brood = larvae[0]!;
+      w.ants.subTask[nurse] = NursingSubState.Feeding;
+      w.ants.carryingBroodId[nurse] = brood;
+      w.ants.carriedBy[brood] = nurse;
+      releaseExcessNurses(w, colony);
+      expect(w.ants.task[nurse]).toBe(AntTask.Nursing); // carrier kept
+      w.ants.carryingBroodId[nurse] = -1;
+      w.ants.carriedBy[brood] = -1;
+      for (const sub of [
+        NursingSubState.Attending,
+        NursingSubState.MovingToBrood,
+        NursingSubState.Feeding,
+      ]) {
+        w.ants.task[nurse] = AntTask.Nursing;
+        w.ants.subTask[nurse] = sub;
+        w.ants.searchPauseTicks[nurse] = 7;
+        releaseExcessNurses(w, colony);
+        expect(w.ants.task[nurse]).toBe(AntTask.Idle);
+        expect(w.ants.subTask[nurse]).toBe(0);
+        expect(w.ants.searchPauseTicks[nurse]).toBe(0);
+      }
+      // A Feeding "carrier" whose brood already died (starved mid-carry: no carry
+      // pointers cleared) is not a live carrier — released, stale pointer dropped.
+      const dead = larvae[1]!;
+      w.ants.alive[dead] = 0;
+      w.ants.task[nurse] = AntTask.Nursing;
+      w.ants.subTask[nurse] = NursingSubState.Feeding;
+      w.ants.carryingBroodId[nurse] = dead;
+      w.ants.carriedBy[dead] = nurse;
+      releaseExcessNurses(w, colony);
+      expect(w.ants.task[nurse]).toBe(AntTask.Idle);
+      expect(w.ants.carryingBroodId[nurse]).toBe(-1);
+    });
   });
 
   // Test 4: SetBehaviorRatio rejects negative weights
@@ -4006,6 +4373,12 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     // is already in the Nursery, so colonyHasClaimableBrood=false and the
     // nurse transitions to Feeding (V10+ always-on behavior).
     const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
+    // V40 (#299): no nurse carve-out below NURSE_MIN_WORKERS living workers, so at
+    // LATEST this 1-2 worker colony has no nurse to protect. Pin the pre-V40 world:
+    // the carve/dig contract under test (dig never pre-empts a nurse) is unchanged
+    // there. LATEST coverage of the same invariant is the 4-worker variant below
+    // (nurse = ceil(4/4) = 1 is still carved at V40).
+    world.simVersion = SIM_VERSION_V39_SPIDER_TIEBREAK;
     const colony = world.colonies[colonyId]!;
     const underground = world.undergroundGrids[colonyId]!;
 
@@ -4063,6 +4436,192 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     expect(world.ants.subTask[wid]).toBe(NursingSubState.Feeding); // brood in Nursery → no claimable brood → Feeding
   });
 
+  it('V40 (#299) counterpart of WR-06: below NURSE_MIN_WORKERS the only worker is not a nurse', () => {
+    // Same shape as WR-06 (1 worker, 30 larvae in the Nursery, Marked tile
+    // reachable) at LATEST: the living-worker floor returns no nurse, so the
+    // worker is free for the ratio roles / auto-dig instead of starving the
+    // colony as its sole nurse. Both computedAllocation and the ant's task agree.
+    const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
+    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
+    const colony = world.colonies[colonyId]!;
+    colony.workerCount = 1;
+    const wid = allocateEntityId(world);
+    initAnt(world.ants, wid, {
+      colonyId,
+      posX: 24 << FP_SHIFT,
+      posY: 1 << FP_SHIFT,
+      task: AntTask.Idle,
+      subTask: 0,
+    });
+    world.ants.zone[wid] = 1;
+    colony.workers.push(wid);
+    for (let e = 0; e < 30; e++) {
+      const lid = allocateEntityId(world);
+      initAnt(world.ants, lid, {
+        colonyId,
+        posX: 100,
+        posY: 100,
+        task: AntTask.Idle,
+        subTask: 0,
+        speed: 0,
+      });
+      colony.larvae.push(lid);
+      colony.larvaeCount += 1;
+    }
+    colony.chambers.push({
+      chamberId: 9101,
+      chamberType: ChamberType.Nursery,
+      foodStored: 0,
+      posX: 0,
+      posY: 0,
+      width: 2,
+      height: 2,
+    });
+    colony.targetRatio.forage = 10;
+    colony.targetRatio.fight = 0;
+    tick(world, []);
+    expect(colony.computedAllocation.nurse).toBe(0);
+    expect(colony.nurseCount).toBe(0);
+    expect(world.ants.task[wid]).not.toBe(AntTask.Nursing);
+  });
+
+  it('V40 (#299) LATEST variant of WR-06 at 4 workers: the carved nurse is not pre-empted by auto-dig', () => {
+    // At LATEST a 4-worker brood-heavy colony still carves nurse = ceil(4/4) = 1
+    // (the floor is NURSE_MIN_WORKERS = 3). With ratio forage-only the other three
+    // are forage share; auto-dig carves its digger from THAT share, never from the
+    // nurse: dig 1 is carved from the forage share (computedAllocation keeps the
+    // canonical forage 3; the carve is local), and exactly one ant ends up Nursing.
+    const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
+    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
+    const colony = world.colonies[colonyId]!;
+    const underground = world.undergroundGrids[colonyId]!;
+    colony.workerCount = 4;
+    const wids: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      const wid = allocateEntityId(world);
+      initAnt(world.ants, wid, {
+        colonyId,
+        posX: 24 << FP_SHIFT,
+        posY: 1 << FP_SHIFT,
+        task: AntTask.Idle,
+        subTask: 0,
+      });
+      world.ants.zone[wid] = 1;
+      colony.workers.push(wid);
+      wids.push(wid);
+    }
+    for (let e = 0; e < 30; e++) {
+      const lid = allocateEntityId(world);
+      initAnt(world.ants, lid, {
+        colonyId,
+        posX: 100,
+        posY: 100,
+        task: AntTask.Idle,
+        subTask: 0,
+        speed: 0,
+      });
+      colony.larvae.push(lid);
+      colony.larvaeCount += 1;
+    }
+    colony.chambers.push({
+      chamberId: 9102,
+      chamberType: ChamberType.Nursery,
+      foodStored: 0,
+      posX: 0,
+      posY: 0,
+      width: 2,
+      height: 2,
+    });
+    colony.targetRatio.forage = 10;
+    colony.targetRatio.fight = 0;
+    const cmd: SimCommand = { type: 'MarkDigTile', colonyId, tileX: 25, tileY: 1, issuedAtTick: 0 };
+    tick(world, [cmd]);
+    expect(colony.computedAllocation.nurse).toBe(1);
+    expect(colony.computedAllocation.dig).toBe(1);
+    expect(colony.computedAllocation.forage).toBe(3); // canonical post-allocation; the dig carve is local
+    // Still Marked after one tick: the digger was assigned (MovingToTile) and is en
+    // route; excavation flips the tile only on arrival. The task census below is the
+    // proof that the dig went ahead instead of waiting on the nurse.
+    expect(ugGet(underground, 25, 1)).toBe(UndergroundTileState.Marked);
+    const tasks = wids.map((wid) => world.ants.task[wid]);
+    expect(tasks.filter((t) => t === AntTask.Nursing)).toHaveLength(1);
+    expect(tasks.filter((t) => t === AntTask.Digging)).toHaveLength(1);
+    expect(tasks.filter((t) => t === AntTask.Foraging)).toHaveLength(2);
+  });
+
+  it('V40 (#299) LATEST variant of WR-07 at 4 workers: dig slot reserved while a digger is active, nurse still carved', () => {
+    // One worker mid-excavation, three Idle: allocation {nurse 1, forage 3}; WR-07
+    // holds digDemand = 1 while actualDig > 0, so the forage share yields the
+    // reserved slot and the idle ants split 1 nurse + 2 foragers — the nurse is not
+    // lost to Foraging for the duration of the dig.
+    const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
+    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
+    const colony = world.colonies[colonyId]!;
+    const underground = world.undergroundGrids[colonyId]!;
+    colony.workerCount = 4;
+    const widDigger = allocateEntityId(world);
+    initAnt(world.ants, widDigger, {
+      colonyId,
+      posX: 25 << FP_SHIFT,
+      posY: 1 << FP_SHIFT,
+      task: AntTask.Digging,
+      subTask: DiggingSubState.Excavating,
+    });
+    world.ants.zone[widDigger] = 1;
+    world.ants.digTileX[widDigger] = 25;
+    world.ants.digTileY[widDigger] = 1;
+    world.ants.digTicksRemaining[widDigger] = 10;
+    underground.data[1 * UNDERGROUND_GRID_WIDTH + 25] = UndergroundTileState.BeingDug;
+    colony.workers.push(widDigger);
+    colony.digFlowFieldDirty = true;
+    const idle: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const wid = allocateEntityId(world);
+      initAnt(world.ants, wid, {
+        colonyId,
+        posX: 24 << FP_SHIFT,
+        posY: 1 << FP_SHIFT,
+        task: AntTask.Idle,
+        subTask: 0,
+      });
+      world.ants.zone[wid] = 1;
+      colony.workers.push(wid);
+      idle.push(wid);
+    }
+    for (let e = 0; e < 30; e++) {
+      const lid = allocateEntityId(world);
+      initAnt(world.ants, lid, {
+        colonyId,
+        posX: 100,
+        posY: 100,
+        task: AntTask.Idle,
+        subTask: 0,
+        speed: 0,
+      });
+      colony.larvae.push(lid);
+      colony.larvaeCount += 1;
+    }
+    colony.chambers.push({
+      chamberId: 9202,
+      chamberType: ChamberType.Nursery,
+      foodStored: 0,
+      posX: 0,
+      posY: 0,
+      width: 2,
+      height: 2,
+    });
+    colony.targetRatio.forage = 10;
+    colony.targetRatio.fight = 0;
+    tick(world, []);
+    expect(world.ants.task[widDigger]).toBe(AntTask.Digging);
+    expect(world.ants.digTicksRemaining[widDigger]).toBe(9);
+    expect(colony.computedAllocation.nurse).toBe(1);
+    expect(colony.computedAllocation.dig).toBe(1); // slot reserved while the digger is active
+    expect(colony.computedAllocation.forage).toBe(3); // canonical post-allocation; the carve is local
+    const tasks = idle.map((wid) => world.ants.task[wid]);
+    expect(tasks.filter((t) => t === AntTask.Nursing)).toHaveLength(1);
+    expect(tasks.filter((t) => t === AntTask.Foraging)).toHaveLength(2);
+  });
   it('Test 7 (WR-08): slider-to-fight (forage:0, no brood) → dig carves from fight, issue #13 honored', () => {
     // When the player slams the 1-D slider all the way to Fight ({forage:0,
     // fight:10}) with no brood, allocation = {nurse:0, forage:0, dig:0,
@@ -4273,6 +4832,11 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     // forage→fight rule; its job is to lock in the "never carve from nurse"
     // floor so a future contributor doesn't extend the fallback chain.
     const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
+    // V40 (#299): the all-nurse colony (a single worker pinned to nurse by the
+    // ceil(1/4) cap) is unreachable at LATEST — no nurse is carved below
+    // NURSE_MIN_WORKERS — so this "never carve from nurse" floor is pinned pre-V40;
+    // at V40 the analogous floor is exercised by the 4-worker WR-06/WR-07 variants.
+    world.simVersion = SIM_VERSION_V39_SPIDER_TIEBREAK;
     const colony = world.colonies[colonyId]!;
     const underground = world.undergroundGrids[colonyId]!;
 
@@ -4340,6 +4904,12 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     // All 30 larvae sit at tile (0,0) inside the Nursery footprint — brood
     // already in Nursery, so colonyHasClaimableBrood=false → nurse goes to Feeding.
     const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
+    // V40 (#299): no nurse carve-out below NURSE_MIN_WORKERS living workers, so at
+    // LATEST this 1-2 worker colony has no nurse to protect. Pin the pre-V40 world:
+    // the carve/dig contract under test (dig never pre-empts a nurse) is unchanged
+    // there. LATEST coverage of the same invariant is the 4-worker WR-07 variant above
+    // (nurse = ceil(4/4) = 1 is still carved at V40).
+    world.simVersion = SIM_VERSION_V39_SPIDER_TIEBREAK;
     const colony = world.colonies[colonyId]!;
     const underground = world.undergroundGrids[colonyId]!;
 

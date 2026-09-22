@@ -593,7 +593,38 @@ export const SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH = 38 as const;
  * No new WorldState/save field; MIN_ACCEPTED is UNCHANGED.
  */
 export const SIM_VERSION_V39_SPIDER_TIEBREAK = 39 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V39_SPIDER_TIEBREAK;
+
+/**
+ * #299 / #293 — small-colony survival. Tracing every AI-queen starvation on the
+ * #297 AI-economy seeds showed the same shape: the spider camps the colony's single
+ * entrance and takes one worker per rampage; the survivors are then either frozen
+ * by a movement livelock or pulled off foraging. Three gated changes:
+ *
+ *   1. No-revisit box-in release (`pickNoRevisitSurfaceAlternate`). When every
+ *      in-bounds neighbour of a surface SearchingFood forager is in its recent-tiles
+ *      ring, the legacy answer is a {0,0} pause — and because the ring only advances
+ *      on a real crossing, that pause was PERMANENT (foragers frozen 3 400-4 100 ticks
+ *      at a map edge and in open ground). V40 clears the ring and takes the step.
+ *   2. The queen is exempt from same-colony occupancy (`resolveSameColonyOccupancy`).
+ *      She stands still for thousands of ticks beside the entrance until her chamber
+ *      completes, so a searcher whose trail crossed her tile was bumped back onto the
+ *      exempt entrance tile every tick and re-took the same step next tick — a
+ *      livelock of 1 600-3 000 ticks per forager.
+ *   3. No nurse carve-out below NURSE_MIN_WORKERS living workers (`computeNurseCount`
+ *      via `nurseMinWorkersFor`). The ceil(workers/4) cap made the last worker of a
+ *      1-worker colony a nurse the moment brood >= NURSE_RATIO, so it nursed larvae
+ *      the starving queen could not feed instead of foraging.
+ *
+ * None of the three adds a WorldState/save field, draws from `world.rngState`, or
+ * changes tick order; all are gated `simVersion >= V40`, so pre-V40 saves replay
+ * byte-identically (same-build self-compare + V40-vs-V39 liveness in
+ * determinism.test.ts; both sides of each gate pinned in ant-movement.test.ts and
+ * allocation-system.test.ts). MIN_ACCEPTED is UNCHANGED. (#299 was opened on a
+ * brood-cap hypothesis — cap live brood by living workers — which was implemented,
+ * measured neutral on both AI-economy gates while lowering peak workers, and dropped.)
+ */
+export const SIM_VERSION_V40_SMALL_COLONY_SURVIVAL = 40 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V40_SMALL_COLONY_SURVIVAL;
 
 /**
  * S2 — AI colony state machine states.

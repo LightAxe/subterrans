@@ -11,9 +11,12 @@ import {
   SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX,
   SIM_VERSION_V32_AI_OP_VALIDATION,
   SIM_VERSION_V33_OCCUPANCY_CENTER,
+  SIM_VERSION_V39_SPIDER_TIEBREAK,
+  SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
-import { initAnt, RECENT_TILES_LEN, isRecentTile } from './ant-store.js';
+import { initAnt, RECENT_TILES_LEN, isRecentTile, pushRecentTile } from './ant-store.js';
+import { pickNoRevisitSurfaceAlternate } from './ant-foraging.js';
 import {
   AntTask,
   ForagingSubState,
@@ -113,6 +116,12 @@ function setupWorldWithUnderground(
   const world = createWorldState(42, MAX_TEST_ENTITIES);
   const colonyId = COLONY_ID;
   const colony = createColonyRecord(colonyId, 0);
+  // Reserve entity 0 as the colony's nominal queen (createColonyRecord above names
+  // it queenEntityId). V40 (#299) exempts the queen from same-colony occupancy, so
+  // the workers these tests spawn must not reuse her id — otherwise the "lower-id
+  // worker" of an occupancy test would silently be the queen and never contest.
+  // The slot stays dead (no initAnt): it claims nothing and counts for nothing.
+  allocateEntityId(world);
   colony.entrances = [];
   colony.rallyPoint = null;
   colony.digFlowFieldDirty = false;
@@ -2140,6 +2149,8 @@ describe('tickAntMovement — same-colony occupancy enforcement', () => {
     // duplicate: lower-id keeps, higher-id shifts to adjacent.
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
+    // Reserve entity 0 as the nominal queen — see setupWorldWithUnderground (V40).
+    allocateEntityId(world);
     colony.entrances = [];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
@@ -2773,5 +2784,174 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     // Stale surface coords must no longer appear as recent after the V14 clear
     expect(isRecentTile(world.ants, antId, 3, 3)).toBe(false);
     expect(isRecentTile(world.ants, antId, 4, 4)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V40 (#299) — stuck-forager releases. Two livelocks measured on the #297
+// AI-economy seeds, each freezing a surface SearchingFood forager for thousands
+// of ticks while its colony still counted it as a forager:
+//   (1) no-revisit box-in: every in-bounds neighbour is in the recent-tiles ring,
+//       pickNoRevisitSurfaceAlternate answers {0,0}, and because the ring only
+//       advances on a real crossing the same answer repeats forever;
+//   (2) queen bump: a searcher stepping onto the (stationary) queen's tile is
+//       displaced by the same-colony occupancy pass back onto the exempt entrance
+//       tile, then takes the same trail-following step next tick.
+// Both sides of each gate are pinned here.
+// ---------------------------------------------------------------------------
+
+describe('V40 (#299) — stuck-forager releases', () => {
+  const NEIGHBOURS: ReadonlyArray<readonly [number, number]> = [
+    [0, -1],
+    [1, -1],
+    [1, 0],
+    [1, 1],
+    [0, 1],
+    [-1, 1],
+    [-1, 0],
+    [-1, -1],
+  ];
+
+  function boxIn(world: WorldState, antId: number, tileX: number, tileY: number): void {
+    for (const [dx, dy] of NEIGHBOURS) pushRecentTile(world.ants, antId, tileX + dx, tileY + dy);
+    for (const [dx, dy] of NEIGHBOURS) {
+      expect(isRecentTile(world.ants, antId, tileX + dx, tileY + dy)).toBe(true);
+    }
+  }
+
+  it('boxed in: legacy answers {0,0} and leaves the ring alone; releaseWhenBoxed takes the proposed step and clears it', () => {
+    const { world, antId } = setupForagerWorld(10 << FP_SHIFT, 10 << FP_SHIFT);
+    boxIn(world, antId, 10, 10);
+    const out = { dx: 0, dy: 0 };
+    pickNoRevisitSurfaceAlternate(world.ants, antId, 0, 1, undefined, out);
+    expect(out).toEqual({ dx: 0, dy: 0 });
+    expect(isRecentTile(world.ants, antId, 10, 11)).toBe(true);
+
+    pickNoRevisitSurfaceAlternate(world.ants, antId, 0, 1, undefined, out, true);
+    expect(out).toEqual({ dx: 0, dy: 1 });
+    for (const [dx, dy] of NEIGHBOURS) {
+      expect(isRecentTile(world.ants, antId, 10 + dx, 10 + dy)).toBe(false);
+    }
+  });
+
+  it('boxed in at the map edge (only five neighbours exist): legacy pauses, release takes the recent proposal', () => {
+    const edgeX = SURFACE_GRID_WIDTH - 1;
+    const { world, antId } = setupForagerWorld(edgeX << FP_SHIFT, 10 << FP_SHIFT);
+    // Only the five in-bounds neighbours can ever be recent; the ring is boxed.
+    for (const [dx, dy] of NEIGHBOURS) {
+      if (edgeX + dx < SURFACE_GRID_WIDTH) pushRecentTile(world.ants, antId, edgeX + dx, 10 + dy);
+    }
+    const out = { dx: 0, dy: 0 };
+    pickNoRevisitSurfaceAlternate(world.ants, antId, 0, 1, undefined, out);
+    expect(out).toEqual({ dx: 0, dy: 0 });
+    pickNoRevisitSurfaceAlternate(world.ants, antId, 0, 1, undefined, out, true);
+    expect(out).toEqual({ dx: 0, dy: 1 });
+    expect(isRecentTile(world.ants, antId, edgeX, 11)).toBe(false);
+  });
+
+  it('not boxed in (one fresh neighbour): the flag changes nothing', () => {
+    const { world, antId } = setupForagerWorld(10 << FP_SHIFT, 10 << FP_SHIFT);
+    for (const [dx, dy] of NEIGHBOURS) {
+      if (!(dx === -1 && dy === 0)) pushRecentTile(world.ants, antId, 10 + dx, 10 + dy);
+    }
+    const legacy = { dx: 0, dy: 0 };
+    const v40 = { dx: 0, dy: 0 };
+    pickNoRevisitSurfaceAlternate(world.ants, antId, 0, 1, undefined, legacy);
+    pickNoRevisitSurfaceAlternate(world.ants, antId, 0, 1, undefined, v40, true);
+    expect(legacy).toEqual({ dx: -1, dy: 0 });
+    expect(v40).toEqual(legacy);
+    // The ring is not cleared on the non-boxed path.
+    expect(isRecentTile(world.ants, antId, 10, 11)).toBe(true);
+  });
+
+  function runBoxedSearcher(simVersion: number, ticks: number): boolean {
+    const { world, antId } = setupForagerWorld(
+      (10 << FP_SHIFT) + (FP_ONE >> 1),
+      (10 << FP_SHIFT) + (FP_ONE >> 1),
+    );
+    setupSurfaceGrid(world); // no trail anywhere → the wander picks the step
+    world.simVersion = simVersion;
+    boxIn(world, antId, 10, 10);
+    const digFlowFields = createDigFlowFields();
+    const rng = new Rng(42);
+    let moved = false;
+    for (let t = 0; t < ticks; t++) {
+      tickAntMovement(world, rng, digFlowFields);
+      const tx = world.ants.posX[antId]! >> FP_SHIFT;
+      const ty = world.ants.posY[antId]! >> FP_SHIFT;
+      if (tx !== 10 || ty !== 10) moved = true;
+    }
+    return moved;
+  }
+
+  it('tickAntMovement: a boxed-in surface searcher never leaves its tile at V39 and does at V40', () => {
+    // 60 ticks is far past the longest possible search pause (base 5 + jitter 5).
+    expect(runBoxedSearcher(SIM_VERSION_V39_SPIDER_TIEBREAK, 60)).toBe(false);
+    expect(runBoxedSearcher(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL, 60)).toBe(true);
+  });
+
+  function queenAndWorkerOnOneTile(simVersion: number): {
+    world: WorldState;
+    queenId: number;
+    workerId: number;
+  } {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = simVersion;
+    const queenId = allocateEntityId(world);
+    initAnt(world.ants, queenId, {
+      colonyId: COLONY_ID,
+      posX: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (5 << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle,
+      subTask: 0,
+      zone: Zone.Surface,
+    });
+    world.ants.speed[queenId] = 0;
+    const colony = createColonyRecord(COLONY_ID, queenId);
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    world.colonies[COLONY_ID] = colony;
+    const workerId = holdingWorker(world, 5, 5);
+    return { world, queenId, workerId };
+  }
+
+  function holdingWorker(world: WorldState, tileX: number, tileY: number): number {
+    const id = allocateEntityId(world);
+    initAnt(world.ants, id, {
+      colonyId: COLONY_ID,
+      posX: tileX << FP_SHIFT,
+      posY: tileY << FP_SHIFT,
+      task: AntTask.Fighting,
+      subTask: 0,
+      zone: Zone.Surface,
+    });
+    world.ants.speed[id] = FP_ONE;
+    // targetPosX/Y default to -1 → the Fighting branch holds dx=dy=0.
+    return id;
+  }
+
+  it("occupancy: a worker on the queen's tile is bumped off at V39 and may stack on her at V40", () => {
+    const v39 = queenAndWorkerOnOneTile(SIM_VERSION_V39_SPIDER_TIEBREAK);
+    tickAntMovement(v39.world, new Rng(42), createDigFlowFields());
+    expect(v39.world.ants.posX[v39.workerId]! >> FP_SHIFT).toBe(5);
+    expect(v39.world.ants.posY[v39.workerId]! >> FP_SHIFT).toBe(4); // N is the first shift
+    expect(v39.world.ants.posY[v39.queenId]! >> FP_SHIFT).toBe(5); // the queen never moves
+
+    const v40 = queenAndWorkerOnOneTile(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
+    tickAntMovement(v40.world, new Rng(42), createDigFlowFields());
+    expect(v40.world.ants.posX[v40.workerId]! >> FP_SHIFT).toBe(5);
+    expect(v40.world.ants.posY[v40.workerId]! >> FP_SHIFT).toBe(5);
+    expect(v40.world.ants.posY[v40.queenId]! >> FP_SHIFT).toBe(5);
+  });
+
+  it("occupancy at V40: two workers on the queen's tile still contest each other (only the queen is exempt)", () => {
+    const { world, workerId } = queenAndWorkerOnOneTile(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
+    const secondId = holdingWorker(world, 5, 5);
+    expect(secondId).toBeGreaterThan(workerId);
+    tickAntMovement(world, new Rng(42), createDigFlowFields());
+    expect(world.ants.posY[workerId]! >> FP_SHIFT).toBe(5); // lower id keeps the tile
+    expect(world.ants.posX[secondId]! >> FP_SHIFT).toBe(5);
+    expect(world.ants.posY[secondId]! >> FP_SHIFT).toBe(4); // higher id is shifted N
   });
 });

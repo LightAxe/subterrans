@@ -20,8 +20,9 @@ import {
   SIM_VERSION_V37_CORPSE_FOOD,
   SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH,
   SIM_VERSION_V39_SPIDER_TIEBREAK,
+  SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
 } from './types.js';
-import { initAnt } from './ant/ant-store.js';
+import { initAnt, pushRecentTile } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import {
   createPheromoneGrid,
@@ -1352,4 +1353,91 @@ describe('SCEN-06: pre-V39 replay determinism under V39 code', () => {
     );
     expect(diverged).toBe(true);
   }, 120_000);
+});
+
+// ---------------------------------------------------------------------------
+// V40 — small-colony survival (#299): the pre-V40 path is untouched, and the V40
+// path is live.
+//
+// Same two obligations as SCEN-06 for V39 above: (a) a save pinned below V40 keeps
+// replaying under the OLD rule (same-build self-compare — see the scope note on the
+// V39 block for why a single build can assert no more than that), and (b) the new
+// rule actually changes a real run, measured against V39, V40's immediate
+// predecessor, so the difference is attributable to V40 alone.
+//
+// Liveness scenario: a surface SearchingFood forager boxed in by its own
+// recent-tiles ring (every neighbour recent). Pre-V40 the no-revisit filter answers
+// {0,0} every tick and the ring never advances, so the ant never leaves its tile;
+// V40 releases it. Driven through tick(), not tickAntMovement, so the gate is
+// exercised at the real call site. The per-rule unit pins (both sides of every
+// gate) live in ant-movement.test.ts and allocation-system.test.ts.
+// ---------------------------------------------------------------------------
+
+describe('SCEN-06: pre-V40 replay determinism under V40 code', () => {
+  const TICKS = 60; // far past the longest search pause (base 5 + jitter 5)
+  const TILE = 10;
+
+  function runBoxed(simVersion: number): WorldState {
+    const world = createWorldState(42);
+    world.simVersion = simVersion; // sticky, exactly as a loaded save arrives
+    const queenId = allocateEntityId(world);
+    initAnt(world.ants, queenId, {
+      colonyId: 1,
+      posX: 40 << FP_SHIFT,
+      posY: 40 << FP_SHIFT,
+      task: AntTask.Idle,
+      subTask: 0,
+      speed: 0,
+      lifespan: WORKER_LIFESPAN_TICKS,
+    });
+    const colony = createColonyRecord(1, queenId);
+    colony.foodStored = 2048;
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    colony.foodFlowFieldDirty = false;
+    world.colonies[1] = colony;
+    world.pheromoneGrids[pheromoneGridKey(1, PheromoneType.FoodTrail, 'surface')] =
+      createPheromoneGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
+    // The forager is deliberately NOT in colony.workers: step 9 then never
+    // reassigns it, so the only thing that can move it is the search step.
+    const antId = allocateEntityId(world);
+    initAnt(world.ants, antId, {
+      colonyId: 1,
+      posX: (TILE << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (TILE << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.SearchingFood,
+      speed: WORKER_BASE_SPEED,
+      lifespan: WORKER_LIFESPAN_TICKS,
+    });
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx !== 0 || dy !== 0) pushRecentTile(world.ants, antId, TILE + dx, TILE + dy);
+      }
+    }
+    for (let t = 0; t < TICKS; t++) tick(world, []);
+    return world;
+  }
+
+  function foragerTile(world: WorldState): string {
+    // Entity 1 is the forager (entity 0 the queen) in runBoxed.
+    return `${world.ants.posX[1]! >> FP_SHIFT},${world.ants.posY[1]! >> FP_SHIFT}`;
+  }
+
+  it('a V39-pinned world replays byte-identically across two independent runs', () => {
+    expect(serializeWorldState(runBoxed(SIM_VERSION_V39_SPIDER_TIEBREAK))).toBe(
+      serializeWorldState(runBoxed(SIM_VERSION_V39_SPIDER_TIEBREAK)),
+    );
+  });
+
+  it('V40 diverges from its IMMEDIATE predecessor V39 (the gate is live): the boxed forager moves only at V40', () => {
+    // Compare the forager's tile, NOT the full serialization: the serialized string
+    // carries the simVersion field itself (39 vs 40), so a full-string compare would
+    // pass even with the gated behaviour inert.
+    expect(foragerTile(runBoxed(SIM_VERSION_V39_SPIDER_TIEBREAK))).toBe(`${TILE},${TILE}`);
+    expect(foragerTile(runBoxed(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL))).not.toBe(
+      `${TILE},${TILE}`,
+    );
+  });
 });

@@ -45,6 +45,7 @@ import {
   isFoodChamberDepositable,
   colonyForageBackpressure,
   colonyFoodTotal,
+  nurseMinWorkersFor,
 } from './colony/colony-system.js';
 import { tickQueenEggProduction, tickLifecycleTransitions } from './colony/lifecycle-system.js';
 import { tickLarvaMaturation } from './colony/larva-maturation.js';
@@ -54,6 +55,8 @@ import {
   tickDigExecution,
   tickForagerActions,
   tickNurseActions,
+  releaseExcessNurses,
+  releaseSurplusFightersBelowFloor,
   tickSearchLeash,
   tickExcursionBoundary,
   routeForagerPriority,
@@ -375,7 +378,13 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         // overwrites colony.computedAllocation.dig later in this same tick when need.dig > 0.
         const brood0 = colony.eggCount + colony.larvaeCount;
         const hasNursery0 = hasCompletedChamber(colony, ChamberType.Nursery);
-        const alloc0 = allocateWorkers(colony.workerCount, brood0, colony.targetRatio, hasNursery0);
+        const alloc0 = allocateWorkers(
+          colony.workerCount,
+          brood0,
+          colony.targetRatio,
+          hasNursery0,
+          nurseMinWorkersFor(world),
+        );
         colony.computedAllocation.nurse = alloc0.nurse;
         colony.computedAllocation.forage = alloc0.forage;
         colony.computedAllocation.dig = alloc0.dig;
@@ -939,7 +948,13 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // Step 8: Behavior allocation (re-run after lifecycle; handles new matures + deaths from step 7)
     const brood8 = colony.eggCount + colony.larvaeCount;
     const hasNursery8 = hasCompletedChamber(colony, ChamberType.Nursery);
-    const alloc8 = allocateWorkers(colony.workerCount, brood8, colony.targetRatio, hasNursery8);
+    const alloc8 = allocateWorkers(
+      colony.workerCount,
+      brood8,
+      colony.targetRatio,
+      hasNursery8,
+      nurseMinWorkersFor(world),
+    );
     colony.computedAllocation.nurse = alloc8.nurse;
     colony.computedAllocation.forage = alloc8.forage;
     colony.computedAllocation.dig = alloc8.dig;
@@ -954,6 +969,19 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       colony.computedAllocation.nurse -= 1;
       colony.computedAllocation.forage = 1;
       colony.nurseCount -= 1;
+    }
+    // V40 (#299): the living-worker floor has zeroed the nurse count — release the
+    // nurses already in Attending / on their way (a carrier deposits first) so they
+    // are Idle for step 10a THIS tick instead of dwelling for up to
+    // NURSE_ATTEND_DWELL_TICKS while the queen starves. `nurseMinWorkersFor` is 0
+    // below V40, so `workerCount < 0` never holds there: pre-V40 worlds keep their
+    // nurses, tick order and PRNG draws unchanged.
+    if (colony.workerCount < nurseMinWorkersFor(world)) {
+      if (colony.computedAllocation.nurse === 0) releaseExcessNurses(world, colony);
+      // Same floor, same tick: fighters the ratio no longer asks for stand down
+      // (nothing else in the sim ever demotes a Fighting ant), so a collapsed
+      // colony whose survivors were fighting gets its foragers back at step 10a.
+      releaseSurplusFightersBelowFloor(world, colony);
     }
   }
 
