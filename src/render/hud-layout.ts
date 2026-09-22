@@ -27,6 +27,11 @@ export interface HudLayout {
   VIEW_TOGGLE: HudRect;
   UNDERGROUND_COLONY_TOGGLE: HudRect;
   SAVE_ICON: HudRect;
+  /** W3 — the Jev-opponent status label (hidden entirely for the rule-based AI).
+   *  Top-right strip, right-anchored so the text grows leftwards into the empty
+   *  band between STATS and SAVE_ICON rather than under either of them. The
+   *  Text is drawn with origin (1, 0) at this rect's RIGHT edge. */
+  OPPONENT_STATUS: HudRect;
 }
 
 /**
@@ -47,5 +52,6 @@ export function buildHudLayout(layout: LayoutContext): HudLayout {
     VIEW_TOGGLE: { x: w - 168, y: h - 196, w: 80, h: 24 },
     UNDERGROUND_COLONY_TOGGLE: { x: w - 168, y: h - 220, w: 112, h: 22 },
     SAVE_ICON: { x: w - 28, y: 8, w: 20, h: 20 },
+    OPPONENT_STATUS: { x: w - 296, y: 10, w: 260, h: 14 },
   };
 }

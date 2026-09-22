@@ -15,6 +15,11 @@
 // substitute for unknown keys).
 
 import type { WorldState } from '../sim/types.js';
+// TYPE-ONLY import (erased at build time), mirroring save.ts: the opponent
+// vocabulary is owned by the render layer, and platform/ must not gain a runtime
+// dependency on it. The structural validator below is deliberately LOCAL, next to
+// the other field validators, for exactly that reason.
+import type { OpponentConfig } from '../render/opponent-config.js';
 
 export const SETTINGS_KEY = 'subterrans:settings:v1' as const;
 export const SETTINGS_VERSION = 1 as const;
@@ -45,6 +50,24 @@ export interface Settings {
    *  Render-only: the tier a round actually runs at lives on WorldState and
    *  round-trips through the save; this is just the screen's initial selection. */
   difficulty: WorldState['difficulty'];
+  /** W3 (Jev opponent beta) — the opponent the difficulty-select overlay
+   *  pre-selects for the next new game, including the Jev standing-orders free
+   *  text. Written when the player starts a round. Render-only: the simulation
+   *  never sees it, and a `jev` preference on a build without the proxy endpoint
+   *  is downgraded to the rule-based AI at boot. Default `{ kind: 'rules' }`. */
+  opponent: OpponentConfig;
+  /** W3 — the last standing-orders text the player wrote, kept SEPARATELY from
+   *  `opponent` on purpose. The `rules` arm of OpponentConfig has nowhere to put
+   *  it, so persisting only `opponent` would throw a 300-character hand-written
+   *  order away the moment the player starts one round against the Standard AI.
+   *  Written whenever a Jev round starts; never cleared by choosing Standard AI.
+   *  Defaults to the `balanced` preset's tuned text (DEFAULT_JEV_ORDERS below),
+   *  so a fresh player's first look at the standing-orders box shows tuned
+   *  orders, not a blank one. `''` remains meaningful on its own terms: it is
+   *  what a player gets back after explicitly clearing the box, and means "no
+   *  standing orders at all" (jevOpponent('') sends no `standing_orders` field).
+   *  Render-only. */
+  jevOrders: string;
 }
 
 /** Cap on the remembered address (RFC 5321 max forward-path length). The wire
@@ -55,12 +78,24 @@ export interface Settings {
  *  cannot drift — same arrangement as save.ts's MAX_OPPONENT_ORDERS_LENGTH. */
 export const SURVEY_EMAIL_MAX = 254;
 
+/** The `balanced` preset's text (render/jev-orders.ts's `DEFAULT_ORDERS_TEXT`),
+ *  duplicated — not imported — to keep platform/ free of a runtime dependency on
+ *  render/ (mirrors `MAX_OPPONENT_ORDERS_LENGTH` in save.ts). settings.test.ts
+ *  cross-checks this literal against the render-layer original so the two
+ *  cannot drift apart silently. */
+const DEFAULT_JEV_ORDERS =
+  'Spend the early game entirely on food and growth with fighters at home. Once our colony ' +
+  'is large and stores are high, switch to mostly fighters and assault the opponent ' +
+  'entrance until their queen is dead.';
+
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
   pheromoneOverlay: true,
   hintStripVisible: true,
   firstUseHints: {},
   surveyEmail: '',
   difficulty: 'Normal',
+  opponent: { kind: 'rules' },
+  jevOrders: DEFAULT_JEV_ORDERS,
 };
 
 interface SettingsEnvelope {
@@ -73,7 +108,33 @@ interface SettingsEnvelope {
  *  so a caller that mutates it (markFirstUseHintShown) would poison the module-
  *  level default for every later load. This deep-copies the mutable field. */
 function freshDefaults(): Settings {
-  return { ...DEFAULT_SETTINGS, firstUseHints: { ...DEFAULT_SETTINGS.firstUseHints } };
+  return {
+    ...DEFAULT_SETTINGS,
+    firstUseHints: { ...DEFAULT_SETTINGS.firstUseHints },
+    opponent: cloneOpponent(DEFAULT_SETTINGS.opponent),
+  };
+}
+
+/** Copy an OpponentConfig field-by-field. Same reason as firstUseHints above: the
+ *  default is a module-level object, and handing callers a shared reference is a
+ *  footgun waiting for the first caller that decides to mutate it. Written as an
+ *  explicit branch rather than a spread so the discriminated union survives. */
+function cloneOpponent(value: OpponentConfig): OpponentConfig {
+  return value.kind === 'jev' ? { kind: 'jev', orders: value.orders } : { kind: 'rules' };
+}
+
+/** Structural validator for the `opponent` field, deliberately local (see the
+ *  type-only import note at the top). Accepts only the two shapes
+ *  render/opponent-config.ts can produce; anything else falls back to the
+ *  default. The orders string is NOT length-capped here — the render layer
+ *  normalizes and caps it (`jevOpponent` / `createOpponentPickerState`) before it
+ *  can reach the wire, exactly as save.ts's envelope validator does. */
+function isOpponentSetting(value: unknown): value is OpponentConfig {
+  if (value === null || typeof value !== 'object') return false;
+  const kind = (value as { kind?: unknown }).kind;
+  if (kind === 'rules') return true;
+  if (kind !== 'jev') return false;
+  return typeof (value as { orders?: unknown }).orders === 'string';
 }
 
 /** Load settings from localStorage. Returns DEFAULT_SETTINGS if missing,
@@ -118,6 +179,10 @@ export function loadSettings(): Settings {
     firstUseHints: sanitizeFirstUseHints(s.firstUseHints),
     surveyEmail: clampStoredSurveyEmail(s.surveyEmail),
     difficulty: isDifficulty(s.difficulty) ? s.difficulty : DEFAULT_SETTINGS.difficulty,
+    opponent: isOpponentSetting(s.opponent)
+      ? cloneOpponent(s.opponent)
+      : cloneOpponent(DEFAULT_SETTINGS.opponent),
+    jevOrders: typeof s.jevOrders === 'string' ? s.jevOrders : DEFAULT_SETTINGS.jevOrders,
   };
 }
 
