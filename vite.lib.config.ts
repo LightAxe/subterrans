@@ -22,7 +22,7 @@ import { defineConfig, type Plugin } from 'vite';
 import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import ts from 'typescript';
-import { appVersion } from './scripts/version.mjs';
+import { appVersion } from './scripts/version.js';
 
 /** Emit dist-lib/manifest.json after the bundle is written, so the website
  *  deploy can read `entry` and inject the right hashed <script src=…>.

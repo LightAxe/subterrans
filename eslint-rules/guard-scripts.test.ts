@@ -1,6 +1,6 @@
 // code/eslint-rules/guard-scripts.test.ts
 // Executable contract for the three architecture guard SCRIPTS (issue #241).
-// check-sim-boundary.sh / check-asset-paths.sh / check-ant-cycles.mjs are the
+// check-sim-boundary.sh / check-asset-paths.sh / check-ant-cycles.ts are the
 // grep/parse backstops that only ever report "clean" — a regex regression would
 // silently turn a red gate green with no visible symptom. This drives each guard
 // against known-bad fixtures (must fail) and the real tree (must pass).
@@ -91,22 +91,24 @@ describe('check-asset-paths.sh (#241 contract)', () => {
   });
 });
 
-describe('check-ant-cycles.mjs (#241 contract)', () => {
+describe('check-ant-cycles.ts (#241 contract)', () => {
   const node = process.execPath;
+  // Same runner as `npm run check:cycles` (package.json) — a .ts since #308.
+  const run = ['--experimental-strip-types', script('check-ant-cycles.ts')];
 
   it('passes on the real ant/ tree', () => {
-    expect(exitCode(node, [script('check-ant-cycles.mjs')], REPO_ROOT)).toBe(0);
+    expect(exitCode(node, run, REPO_ROOT)).toBe(0);
   });
 
   it('fails on an import cycle among ant sub-modules', () => {
     write('src/sim/ant/a.ts', "import './b.js';\nexport const a = 1;\n");
     write('src/sim/ant/b.ts', "import './a.js';\nexport const b = 1;\n");
-    expect(exitCode(node, [script('check-ant-cycles.mjs')], fx)).not.toBe(0);
+    expect(exitCode(node, run, fx)).not.toBe(0);
   });
 
   it('fails when a sub-module imports the barrel', () => {
     write('src/sim/ant/ant-system.ts', 'export const b = 1;\n');
     write('src/sim/ant/leaf.ts', "import './ant-system.js';\nexport const l = 1;\n");
-    expect(exitCode(node, [script('check-ant-cycles.mjs')], fx)).not.toBe(0);
+    expect(exitCode(node, run, fx)).not.toBe(0);
   });
 });

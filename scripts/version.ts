@@ -1,4 +1,4 @@
-// scripts/version.mjs
+// scripts/version.ts
 // Single source of truth for the __APP_VERSION__ build define shared by
 // vite.config.ts, vite.lib.config.ts and vitest.config.ts (#122, #239).
 //
@@ -16,8 +16,10 @@ import { execSync } from 'node:child_process';
  * checkout, whose .git is a gitdir-pointer file — rev-parse resolves the
  * submodule HEAD there.
  */
-export function appVersion() {
-  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+export function appVersion(): string {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    version: string;
+  };
   try {
     const sha = execSync('git rev-parse --short HEAD', {
       stdio: ['ignore', 'pipe', 'ignore'],

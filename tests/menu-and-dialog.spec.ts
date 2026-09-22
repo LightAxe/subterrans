@@ -431,23 +431,30 @@ test.describe('Round-6 (Codex P2) — pheromone toggle survives degraded storage
 
     // Pheromone toggle is index 0 on the Settings sub-page (Stage 3b: 5 rows).
     const toggleClickPos = centerOf(PHEROMONE_TOGGLE_RECT);
+    // `clip` is a page.screenshot option (Locator.screenshot has none — the old
+    // locator form type-checked only because tests/ sat outside the tsc gate,
+    // #308 — and silently captured the whole canvas), so offset the canvas-local
+    // label rect by the canvas's page position, as clickCanvasRect does.
+    const canvas = page.locator('canvas').first();
+    const box = await canvas.boundingBox();
+    if (!box) throw new Error('canvas has no bounding box');
     const labelClip = {
-      x: toggleClickPos.x - 60,
-      y: toggleClickPos.y - 8,
+      x: box.x + toggleClickPos.x - 60,
+      y: box.y + toggleClickPos.y - 8,
       width: 120,
       height: 16,
     };
 
     // Sample 1: initial state.
-    const before = await page.locator('canvas').first().screenshot({ clip: labelClip });
+    const before = await page.screenshot({ clip: labelClip });
     // Click toggle → flip to OFF in-mem (saveSettings drops the write silently).
-    await page.locator('canvas').first().click({ position: toggleClickPos });
+    await canvas.click({ position: toggleClickPos });
     await page.waitForTimeout(120);
-    const afterOne = await page.locator('canvas').first().screenshot({ clip: labelClip });
+    const afterOne = await page.screenshot({ clip: labelClip });
     // Click again → flip back to ON.
-    await page.locator('canvas').first().click({ position: toggleClickPos });
+    await canvas.click({ position: toggleClickPos });
     await page.waitForTimeout(120);
-    const afterTwo = await page.locator('canvas').first().screenshot({ clip: labelClip });
+    const afterTwo = await page.screenshot({ clip: labelClip });
 
     // Pre-fix (degraded storage + loadSettings-derived flip): every click
     // recomputes from DEFAULT_SETTINGS = {pheromoneOverlay: true}, so the

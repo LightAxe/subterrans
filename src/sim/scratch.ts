@@ -19,7 +19,7 @@
  * the move is byte-identical — a single world's stamp sequence is unchanged.
  *
  * Layering: this sits at `src/sim/` root (NOT under `src/sim/ant/`), so it stays
- * outside the ant-cycle graph that check-ant-cycles.mjs enforces. Its only
+ * outside the ant-cycle graph that check-ant-cycles.ts enforces. Its only
  * ant-facing dependency is `import type { CardinalStep }` (erased at runtime).
  */
 import type { WorldState } from './types.js';

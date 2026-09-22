@@ -19,7 +19,7 @@ git clone https://github.com/LightAxe/subterrans.git
 cd subterrans
 npm install
 npm run dev        # launches Vite dev server
-npm run verify     # format:check + lint + typecheck + typecheck:scripts + lint:types + sim-boundary + asset-path + e2e-geometry + layout-discipline + ant-cycle + tests
+npm run verify     # format:check + lint + typecheck + typecheck:scripts/tests/bench + lint:types + sim-boundary + asset-path + e2e-geometry + layout-discipline + ant-cycle + tests
 ```
 
 Requirements:
@@ -32,10 +32,10 @@ Useful scripts:
 - `npm test` — Vitest unit/integration suite
 - `npm run test:watch` — Vitest in watch mode
 - `npm run test:e2e` — Playwright browser tests
-- `npm run typecheck` / `npm run typecheck:scripts` — TypeScript in noEmit mode for `src/` and for `scripts/` (`scripts/tsconfig.json`)
-- `npm run lint` / `npm run lint:fix` — fast ESLint (sim-safety + base rules)
+- `npm run typecheck` / `npm run typecheck:scripts` / `npm run typecheck:tests` / `npm run typecheck:bench` — TypeScript in noEmit mode for `src/`, `scripts/`, `tests/` and `bench/` (the last three each carry their own `tsconfig.json`)
+- `npm run lint` / `npm run lint:fix` — fast ESLint (sim-safety + base rules) over `src/`, `scripts/`, `tests/` and `bench/`
 - `npm run lint:types` — type-aware ESLint (`recommended-type-checked`); slower, runs the TS program
-- `npm run format` / `npm run format:check` — Prettier (write / check); `format:check` is scoped to `src/`, `eslint-rules/` and `scripts/` and runs inside `verify`
+- `npm run format` / `npm run format:check` — Prettier (write / check) over the whole tree minus `.prettierignore` (assets, generated output, and the prose `*.md` docs); `format:check` runs inside `verify`
 
 ## Finding Something to Work On
 

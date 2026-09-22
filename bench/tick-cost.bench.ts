@@ -43,7 +43,7 @@ function ticksPerSec(label: string, buildScript: () => SimCommand[][]): void {
   for (let t = 0; t < TICKS; t++) tick(world, script[t] ?? []);
   const elapsedMs = performance.now() - start;
   const tps = TICKS / (elapsedMs / 1000);
-  // eslint-disable-next-line no-console -- bench output is the deliverable
+  // Bench output is the deliverable (no no-console rule applies here).
   console.log(
     `[tick-cost] ${label.padEnd(16)} ${tps.toFixed(0).padStart(8)} ticks/sec  (${elapsedMs.toFixed(1)}ms / ${TICKS} ticks)`,
   );
@@ -189,7 +189,6 @@ describe('step-9 brood-field gate win (#235 — informational)', () => {
     const gated = timeBroodColony(false);
     const forced = timeBroodColony(true);
     const speedup = ((gated - forced) / forced) * 100;
-    // eslint-disable-next-line no-console -- bench output is the deliverable
     console.log(
       `[tick-cost] brood gated=${gated.toFixed(0)} forced=${forced.toFixed(0)} ticks/sec  (gate saves ${speedup.toFixed(1)}%)`,
     );
