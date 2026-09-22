@@ -5,8 +5,10 @@
 // (GameScene's onBeforeTick calls runAIController only for non-player colonyIds).
 
 import type { WorldState } from '../sim/types.js';
+import { SIM_VERSION_V40_SMALL_COLONY_SURVIVAL } from '../sim/types.js';
 import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
 import type {
+  CancelDigMarkCommand,
   MarkDigTileCommand,
   PlaceChamberCommand,
   DesignateEntranceCommand,
@@ -25,6 +27,7 @@ import {
   AI_PROBE_FIGHTER_COUNT,
   AI_PROBE_FALLBACK_RADIUS_TILES,
   AI_MAX_OPERATION_FIGHTERS,
+  QUEEN_EGG_FOOD_THRESHOLD,
 } from '../sim/constants.js';
 import { colonyFoodTotal } from '../sim/colony/colony-system.js';
 import { aiFighterCount } from '../sim/ai-state.js';
@@ -124,17 +127,115 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
       aiProbeTick(world, aiColonyId);
     }
   }
-  // Sync behavior ratio to state.
-  _syncBehaviorRatioToAIState(world, aiColonyId, colony);
+  // Survival policy (see aiSurvivalMode), decided once per call so the ratio sync
+  // and the dig branch below agree. Sticky-version gated (AGENTS.md #228 posture):
+  // a continued pre-V40 save keeps the AI policy its world was saved under — the
+  // policy drives the sim through commands, so it is an algorithm change, not a
+  // render-only tweak.
+  const survival =
+    world.simVersion >= SIM_VERSION_V40_SMALL_COLONY_SURVIVAL && aiSurvivalMode(world, colony);
+
+  // Sync behavior ratio to state — or, in survival mode, to forage-only so step
+  // 10a promotes every released nurse/fighter into foraging and never back into
+  // a fighter slot the state ratio would otherwise carve.
+  _syncBehaviorRatioToAIState(world, aiColonyId, colony, survival);
 
   // No SyncAIState echo here any more (#258). A tick()-only replay (the snapshot
   // analyzer) reproduces world.aiState from the sim alone — advanceAIState, the
   // StartAIOperation handler and the combat death counters — as pinned by
   // ai-controller-replay-parity.integration.test.ts.
 
-  aiDigHeuristic(world, colony);
-  aiChamberPlacement(world, colony);
+  // #293 survival mode: a colony down to AI_SURVIVAL_MAX_WORKERS living workers with
+  // a low larder stops digging and building so every worker it has left can forage
+  // (auto-dig otherwise takes the Idle pool first — traced on the #297 AI-economy
+  // seeds, where the last worker of a starving colony was a digger).
+  if (survival) {
+    aiSurvivalCancelMarks(world, colony);
+  } else {
+    aiDigHeuristic(world, colony);
+    aiChamberPlacement(world, colony);
+  }
   aiEntranceDesignation(world, colony);
+}
+
+// ---------------------------------------------------------------------------
+// #293 — survival mode (render-side policy; no simVersion, nothing in WorldState)
+// ---------------------------------------------------------------------------
+
+/** In survival mode at or below this many living workers (with a low larder). */
+export const AI_SURVIVAL_MAX_WORKERS = 2 as const;
+/**
+ * Larder bound for survival mode, in multiples of QUEEN_EGG_FOOD_THRESHOLD: a colony
+ * at or below AI_SURVIVAL_MAX_WORKERS is in mode while colonyFoodTotal is below this
+ * many times the threshold. Set above 1x so a 1-2 worker colony with no Queen chamber
+ * yet (which cannot lay — Gate 4/5 — and so cannot grow its way out) still gets a
+ * stretch of undisturbed foraging past the egg threshold before it resumes digging.
+ */
+export const AI_SURVIVAL_FOOD_MULTIPLIER = 2 as const;
+/** CancelDigMark commands issued per AI_DIG_INTERVAL tick while in survival mode (64-cap headroom). */
+export const AI_SURVIVAL_CANCEL_BUDGET = 16 as const;
+
+/**
+ * Survival mode is a PURE function of sim state — no render-side memory:
+ *   in mode iff living workers (colony.workers with alive === 1) <= AI_SURVIVAL_MAX_WORKERS
+ *            AND colonyFoodTotal < QUEEN_EGG_FOOD_THRESHOLD x AI_SURVIVAL_FOOD_MULTIPLIER.
+ * So a save made in any state loads to the same decision (Codex P2 on the memory
+ * version: a colony saved in mode with a part-recovered larder loaded out of it), and
+ * a driver that runs many worlds in one process needs no reset. Consequences:
+ *   - it cannot fire during the normal opening: the starting cohort is 3 workers,
+ *     above AI_SURVIVAL_MAX_WORKERS; a 3-worker colony always digs, as in the opening;
+ *   - the only possible churn is a colony flipping across the rule's edges (a
+ *     2-worker larder crossing 2x the threshold, or a 2<->3 worker maturation or
+ *     death), which is bounded by the AI_SURVIVAL_CANCEL_BUDGET cadence: leaving
+ *     mode re-marks at most AI_DIG_MARK_BUDGET tiles per AI_DIG_INTERVAL and
+ *     re-entering cancels them again at the same cadence.
+ */
+export function aiSurvivalMode(world: WorldState, colony: ColonyRecord): boolean {
+  // Count the LIVE roster, not colony.workerCount: killAnt only clears `alive`, and
+  // workerCount is decremented by tickDeathCleanup at step 5 of the FOLLOWING tick,
+  // while this controller runs before that tick — so a colony that just fell from 3
+  // to 2 would read as 3 for one tick, and if that tick is an AI_DIG_INTERVAL
+  // boundary it would emit marks that stay until the next cadence (Codex P2). Read
+  // only; no allocation.
+  let living = 0;
+  const workers = colony.workers;
+  for (let i = 0; i < workers.length; i++) {
+    if (world.ants.alive[workers[i]!] === 1) living += 1;
+  }
+  return (
+    living <= AI_SURVIVAL_MAX_WORKERS &&
+    colonyFoodTotal(colony) < QUEEN_EGG_FOOD_THRESHOLD * AI_SURVIVAL_FOOD_MULTIPLIER
+  );
+}
+
+/**
+ * While in survival mode, cancel outstanding dig marks on the AI_DIG_INTERVAL cadence,
+ * AI_SURVIVAL_CANCEL_BUDGET per cadence tick, scanning the grid in row-major order.
+ * Only `Marked` tiles are cancellable (the sim drops a CancelDigMark on any other
+ * state); a BeingDug tile finishes under its digger. A mark inside a PENDING chamber
+ * footprint cancels that whole pending chamber (the sim's transactional
+ * chamber-cancel), so the colony's in-progress chamber placements are dropped with
+ * their marks and re-placed by aiChamberPlacement once the mode exits.
+ */
+function aiSurvivalCancelMarks(world: WorldState, colony: ColonyRecord): void {
+  if (world.tick % AI_DIG_INTERVAL !== 0) return;
+  const grid = world.undergroundGrids[colony.colonyId];
+  if (grid === undefined) return;
+  let budget = AI_SURVIVAL_CANCEL_BUDGET;
+  for (let ty = 0; ty < grid.height && budget > 0; ty++) {
+    for (let tx = 0; tx < grid.width && budget > 0; tx++) {
+      if (ugGet(grid, tx, ty) !== UndergroundTileState.Marked) continue;
+      const cmd: CancelDigMarkCommand = {
+        type: 'CancelDigMark',
+        colonyId: colony.colonyId,
+        tileX: tx,
+        tileY: ty,
+        issuedAtTick: world.tick,
+      };
+      pushCommand(world, cmd, 'ai');
+      budget -= 1;
+    }
+  }
 }
 
 /**
@@ -555,10 +656,14 @@ const AI_STATE_RATIOS: Record<string, { forage: number; fight: number }> = {
 };
 
 /** Sync the AI colony behavior ratio to its current state. */
+/** Forage-only ratio pushed while the colony is in survival mode. */
+export const AI_SURVIVAL_RATIO = { forage: 10, fight: 0 } as const;
+
 function _syncBehaviorRatioToAIState(
   world: WorldState,
   aiColonyId: ColonyId,
   colony: ColonyRecord,
+  survival = false,
 ): void {
   // Get current aiState
   let currentState = 'Peacetime';
@@ -568,7 +673,9 @@ function _syncBehaviorRatioToAIState(
       break;
     }
   }
-  const targetRatio = AI_STATE_RATIOS[currentState] ?? AI_BEHAVIOR_RATIO;
+  const targetRatio = survival
+    ? AI_SURVIVAL_RATIO
+    : (AI_STATE_RATIOS[currentState] ?? AI_BEHAVIOR_RATIO);
   if (
     colony.targetRatio.forage !== targetRatio.forage ||
     colony.targetRatio.fight !== targetRatio.fight

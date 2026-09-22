@@ -21,9 +21,19 @@ import {
   AI_FOOD_STORAGE_THRESHOLD,
   AI_NURSERY_THRESHOLD,
   AI_BEHAVIOR_RATIO,
+  AI_SURVIVAL_MAX_WORKERS,
+  AI_SURVIVAL_FOOD_MULTIPLIER,
+  AI_SURVIVAL_CANCEL_BUDGET,
+  aiSurvivalMode,
+  AI_SURVIVAL_RATIO,
 } from './ai-controller.js';
 
-import { createWorldState } from '../sim/types.js';
+import {
+  createWorldState,
+  allocateEntityId,
+  SIM_VERSION_V39_SPIDER_TIEBREAK,
+} from '../sim/types.js';
+import { initAnt } from '../sim/ant/ant-store.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { ColonyRecord, ChamberRecord } from '../sim/colony/colony-store.js';
 import { createUndergroundGrid, ugSet, UndergroundTileState } from '../sim/terrain.js';
@@ -32,8 +42,10 @@ import { AntTask, ChamberType } from '../sim/enums.js';
 import type { WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { createScenario } from '../sim/scenario.js';
+import { createDefaultAIStateRecord } from '../sim/ai-state.js';
 import { tick } from '../sim/tick.js';
-import { ENEMY_COLONY_ID } from '../sim/constants.js';
+import { serializeWorldState, deserializeWorldState } from '../platform/save.js';
+import { ENEMY_COLONY_ID, QUEEN_EGG_FOOD_THRESHOLD, STARTING_WORKERS } from '../sim/constants.js';
 
 // ---------------------------------------------------------------------------
 // World builder helpers
@@ -131,7 +143,10 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
 
     it('calls all four heuristics for a live AI colony on tick 0', () => {
       const world = makeWorld(0);
-      addColony(world, 2 as ColonyId, 0);
+      const colony = addColony(world, 2 as ColonyId, 0);
+      // A bare 0-worker colony with an empty larder is (correctly) in survival
+      // mode; give it a healthy larder so this exercises the ordinary wiring.
+      colony.foodStored = QUEEN_EGG_FOOD_THRESHOLD * 2;
       setQueenPos(world, 0, 10, 5);
       addUndergroundGrid(world, 2 as ColonyId);
       // tick 0 fires aiInitialSetup (2 cmds) + aiDigHeuristic (tick%40=0 → no chambers → 0)
@@ -149,6 +164,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       // AI ratio AND having an entrance means setup is complete.
       colony.targetRatio.forage = AI_BEHAVIOR_RATIO.forage;
       colony.targetRatio.fight = AI_BEHAVIOR_RATIO.fight;
+      colony.foodStored = QUEEN_EGG_FOOD_THRESHOLD * 2; // not in survival mode (see above)
       setQueenPos(world, 0, 10, 5);
       addUndergroundGrid(world, 2 as ColonyId);
       runAIController(world, 2 as ColonyId);
@@ -1038,6 +1054,304 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const src = readFileSync(join(__dirname, 'ai-controller.ts'), 'utf8');
       expect(src).not.toMatch(/PLAYER_COLONY_ID\s*===/);
       expect(src).not.toMatch(/if\s*\([^)]*\bisPlayer\b/);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #293 — survival mode (render-side, no simVersion, no memory)
+// ---------------------------------------------------------------------------
+
+describe('#293 survival mode', () => {
+  const AI = 2 as ColonyId;
+  const FOOD_BOUND = QUEEN_EGG_FOOD_THRESHOLD * AI_SURVIVAL_FOOD_MULTIPLIER;
+
+  /**
+   * A developed AI colony on a dig-cadence tick: completed Queen chamber in a sea of
+   * Solid (so aiDigHeuristic marks its perimeter when allowed), initial-setup
+   * post-conditions met (entrance + AI ratio, so no setup commands), `marked` extra
+   * Marked tiles outstanding, and the given headcount / larder.
+   */
+  function survivalWorld(
+    workers: number,
+    food: number,
+    marked = 0,
+    tickAt: number = AI_DIG_INTERVAL,
+  ): { world: WorldState; colony: ColonyRecord } {
+    const world = makeWorld(tickAt);
+    const colony = addColony(world, AI, 0);
+    setQueenPos(world, 0, 10, 5);
+    addUndergroundGrid(world, AI);
+    colony.entrances = [{ entranceId: 1, surfaceTileX: 10, surfaceTileY: 0, isOpen: true }];
+    colony.targetRatio.forage = AI_BEHAVIOR_RATIO.forage;
+    colony.targetRatio.fight = AI_BEHAVIOR_RATIO.fight;
+    colony.chambers.push(makeChamber(ChamberType.Queen, 20, 20));
+    // Live roster: survival mode counts colony.workers entries with alive === 1, so
+    // spawn real worker ants (workerCount is kept in step for the sim's own readers).
+    for (let i = 0; i < workers; i++) spawnWorker(world, colony);
+    colony.foodStored = food;
+    const grid = world.undergroundGrids[AI]!;
+    for (let i = 0; i < marked; i++) {
+      ugSet(grid, 40 + (i % 8), 40 + Math.floor(i / 8), UndergroundTileState.Marked);
+    }
+    return { world, colony };
+  }
+
+  function spawnWorker(world: WorldState, colony: ColonyRecord): number {
+    const id = allocateEntityId(world);
+    initAnt(world.ants, id, {
+      colonyId: colony.colonyId,
+      posX: 10 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      task: AntTask.Idle,
+      subTask: 0,
+    });
+    colony.workers.push(id);
+    colony.workerCount += 1;
+    return id;
+  }
+
+  function counts(world: WorldState): { mark: number; place: number; cancel: number } {
+    let mark = 0;
+    let place = 0;
+    let cancel = 0;
+    for (const c of world.commandQueue) {
+      if (c.type === 'MarkDigTile') mark++;
+      else if (c.type === 'PlaceChamber') place++;
+      else if (c.type === 'CancelDigMark') cancel++;
+    }
+    return { mark, place, cancel };
+  }
+
+  /** Run the controller again on the same world (same tick), reading only this call's commands. */
+  function runAgain(world: WorldState): { mark: number; place: number; cancel: number } {
+    world.commandQueue.splice(0);
+    runAIController(world, AI);
+    return counts(world);
+  }
+
+  it('constants: the worker bound is below the starting cohort; the larder bound is above the egg threshold', () => {
+    expect(AI_SURVIVAL_MAX_WORKERS).toBeLessThan(STARTING_WORKERS);
+    expect(AI_SURVIVAL_FOOD_MULTIPLIER).toBeGreaterThan(1);
+  });
+
+  it('survival mode overrides the state ratio to forage-only, and the state ratio returns once out of mode', () => {
+    const { world, colony } = survivalWorld(
+      AI_SURVIVAL_MAX_WORKERS,
+      QUEEN_EGG_FOOD_THRESHOLD - 1,
+      0,
+    );
+    const rec = createDefaultAIStateRecord(AI);
+    rec.state = 'WarFooting';
+    world.aiState.push(rec);
+    runAIController(world, AI);
+    const pushed = world.commandQueue.filter((c) => c.type === 'SetBehaviorRatio') as Array<{
+      ratio: { forage: number; fight: number };
+    }>;
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]!.ratio).toEqual({
+      forage: AI_SURVIVAL_RATIO.forage,
+      fight: AI_SURVIVAL_RATIO.fight,
+    });
+    // Apply it, recover the larder: the WarFooting ratio comes back.
+    colony.targetRatio.forage = AI_SURVIVAL_RATIO.forage;
+    colony.targetRatio.fight = AI_SURVIVAL_RATIO.fight;
+    colony.foodStored = FOOD_BOUND;
+    world.commandQueue.splice(0);
+    runAIController(world, AI);
+    const back = world.commandQueue.filter((c) => c.type === 'SetBehaviorRatio') as Array<{
+      ratio: { forage: number; fight: number };
+    }>;
+    expect(back).toHaveLength(1);
+    expect(back[0]!.ratio).toEqual({ forage: 3, fight: 7 });
+  });
+
+  it('sticky version: a continued pre-V40 world never enters survival mode, whatever its state', () => {
+    const { world, colony } = survivalWorld(
+      AI_SURVIVAL_MAX_WORKERS,
+      QUEEN_EGG_FOOD_THRESHOLD - 1,
+      3,
+    );
+    world.simVersion = SIM_VERSION_V39_SPIDER_TIEBREAK;
+    expect(aiSurvivalMode(world, colony)).toBe(true); // the rule itself would fire...
+    runAIController(world, AI);
+    const c = counts(world); // ...but the V39 world keeps the legacy dig/chamber policy
+    expect(c.cancel).toBe(0);
+    expect(c.mark).toBeGreaterThan(0);
+  });
+
+  it('cannot fire during the normal opening: 3 workers with an empty larder still digs', () => {
+    const { world, colony } = survivalWorld(STARTING_WORKERS, 0, 3);
+    expect(aiSurvivalMode(world, colony)).toBe(false);
+    runAIController(world, AI);
+    const c = counts(world);
+    expect(c.mark).toBeGreaterThan(0);
+    expect(c.cancel).toBe(0);
+  });
+
+  it('a 3-worker colony always digs, whatever its larder (there is no held state to keep it in mode)', () => {
+    for (const food of [0, QUEEN_EGG_FOOD_THRESHOLD, FOOD_BOUND - 1, FOOD_BOUND]) {
+      const { world, colony } = survivalWorld(STARTING_WORKERS, food, 2);
+      expect(aiSurvivalMode(world, colony)).toBe(false);
+      runAIController(world, AI);
+      expect(counts(world).mark).toBeGreaterThan(0);
+      expect(counts(world).cancel).toBe(0);
+    }
+  });
+
+  it('in mode at 2 workers below the larder bound: no MarkDigTile / PlaceChamber, outstanding marks cancelled', () => {
+    const { world } = survivalWorld(AI_SURVIVAL_MAX_WORKERS, QUEEN_EGG_FOOD_THRESHOLD - 1, 3);
+    runAIController(world, AI);
+    const c = counts(world);
+    expect(c.mark).toBe(0);
+    expect(c.place).toBe(0);
+    expect(c.cancel).toBe(3);
+    const cancelled = world.commandQueue
+      .filter((cmd) => cmd.type === 'CancelDigMark')
+      .map((cmd) => `${(cmd as { tileX: number }).tileX},${(cmd as { tileY: number }).tileY}`);
+    expect(cancelled).toEqual(['40,40', '41,40', '42,40']);
+  });
+
+  it('in mode at 2 workers with the larder between 1x and 2x the egg threshold; out at exactly 2x', () => {
+    const mid = survivalWorld(AI_SURVIVAL_MAX_WORKERS, FOOD_BOUND - 1, 2);
+    expect(aiSurvivalMode(mid.world, mid.colony)).toBe(true);
+    runAIController(mid.world, AI);
+    expect(counts(mid.world).mark).toBe(0);
+    expect(counts(mid.world).cancel).toBe(2);
+    const at = survivalWorld(AI_SURVIVAL_MAX_WORKERS, FOOD_BOUND, 2);
+    expect(aiSurvivalMode(at.world, at.colony)).toBe(false);
+    runAIController(at.world, AI);
+    expect(counts(at.world).mark).toBeGreaterThan(0);
+    expect(counts(at.world).cancel).toBe(0);
+  });
+
+  it('in mode at 1 and 0 workers with an empty larder', () => {
+    for (const workers of [1, 0]) {
+      const { world, colony } = survivalWorld(workers, 0);
+      expect(aiSurvivalMode(world, colony)).toBe(true);
+    }
+  });
+
+  it('counts the live roster, not workerCount: a third worker killed this tick puts the colony in mode at once', () => {
+    // killAnt only clears `alive`; tickDeathCleanup decrements workerCount at step 5
+    // of the NEXT tick, and the controller runs before that. On a cadence tick the
+    // stale count would otherwise let aiDigHeuristic emit marks that stand until the
+    // next cadence.
+    const { world, colony } = survivalWorld(STARTING_WORKERS, 0, 3);
+    world.ants.alive[colony.workers[2]!] = 0; // killed this tick; workerCount still 3
+    expect(colony.workerCount).toBe(STARTING_WORKERS);
+    expect(aiSurvivalMode(world, colony)).toBe(true);
+    runAIController(world, AI);
+    const c = counts(world);
+    expect(c.mark).toBe(0);
+    expect(c.place).toBe(0);
+    expect(c.cancel).toBe(3);
+  });
+
+  it('cancels at most AI_SURVIVAL_CANCEL_BUDGET marks per cadence tick, and none off-cadence', () => {
+    const { world } = survivalWorld(AI_SURVIVAL_MAX_WORKERS, 0, AI_SURVIVAL_CANCEL_BUDGET + 4);
+    runAIController(world, AI);
+    expect(counts(world).cancel).toBe(AI_SURVIVAL_CANCEL_BUDGET);
+    // Off-cadence: a colony in mode on tick 41 issues no marks and cancels nothing.
+    const off = survivalWorld(AI_SURVIVAL_MAX_WORKERS, 0, 3, AI_DIG_INTERVAL + 1);
+    runAIController(off.world, AI);
+    expect(aiSurvivalMode(off.world, off.colony)).toBe(true);
+    expect(counts(off.world).cancel).toBe(0);
+    expect(counts(off.world).mark).toBe(0);
+  });
+
+  it('is a pure function of the colony: the same state gives the same decision whatever came before', () => {
+    const { world, colony } = survivalWorld(AI_SURVIVAL_MAX_WORKERS, 0);
+    runAIController(world, AI);
+    expect(counts(world).mark).toBe(0);
+    // Larder crosses the bound: digging resumes at once (no held flag).
+    colony.foodStored = FOOD_BOUND;
+    expect(aiSurvivalMode(world, colony)).toBe(false);
+    expect(runAgain(world).mark).toBeGreaterThan(0);
+    // Drops back below: in mode again at once.
+    colony.foodStored = 0;
+    expect(aiSurvivalMode(world, colony)).toBe(true);
+    expect(runAgain(world).mark).toBe(0);
+    // Grows to 3 workers with a low larder: out, and stays out regardless of history.
+    spawnWorker(world, colony);
+    expect(aiSurvivalMode(world, colony)).toBe(false);
+    expect(runAgain(world).mark).toBeGreaterThan(0);
+  });
+
+  it('is keyed only on the colony passed in: the player colony is judged on its own state', () => {
+    const { world, colony } = survivalWorld(AI_SURVIVAL_MAX_WORKERS, 0);
+    expect(aiSurvivalMode(world, colony)).toBe(true);
+    const player = addColony(world, 1 as ColonyId, 0);
+    for (let i = 0; i < 20; i++) spawnWorker(world, player);
+    player.foodStored = 0;
+    expect(aiSurvivalMode(world, player)).toBe(false);
+    expect(aiSurvivalMode(world, colony)).toBe(true);
+  });
+
+  describe('save round trip (src/platform/save.ts) yields the same decision on the loaded world', () => {
+    /**
+     * A real scenario world with the enemy colony forced into the given state (the
+     * spare starting workers are killed so the serialized headcount matches the
+     * live ants), serialized and deserialized through the platform save path, then
+     * both worlds are asked the same question at the same tick.
+     */
+    function roundTrip(
+      workers: number,
+      food: number,
+    ): {
+      live: WorldState;
+      loaded: WorldState;
+    } {
+      const live = createScenario(4242);
+      const colony = live.colonies[ENEMY_COLONY_ID]!;
+      const spare = colony.workers.slice(workers);
+      for (const wid of spare) live.ants.alive[wid] = 0;
+      colony.workers.length = workers;
+      colony.workerCount = workers;
+      colony.foodStored = food;
+      for (const ch of colony.chambers) ch.foodStored = 0;
+      const loaded = deserializeWorldState(JSON.parse(JSON.stringify(serializeWorldState(live))));
+      return { live, loaded };
+    }
+
+    function decisionAndCommands(world: WorldState): {
+      mode: boolean;
+      mark: number;
+      place: number;
+      cancel: number;
+    } {
+      const colony = world.colonies[ENEMY_COLONY_ID]!;
+      const mode = aiSurvivalMode(world, colony);
+      world.commandQueue.splice(0);
+      runAIController(world, ENEMY_COLONY_ID);
+      return { mode, ...counts(world) };
+    }
+
+    it('2 workers, low larder: in mode live and in mode after loading', () => {
+      const { live, loaded } = roundTrip(AI_SURVIVAL_MAX_WORKERS, QUEEN_EGG_FOOD_THRESHOLD - 1);
+      const a = decisionAndCommands(live);
+      const b = decisionAndCommands(loaded);
+      expect(a.mode).toBe(true);
+      expect(b).toEqual(a);
+    });
+
+    it('3 workers, larder between 1x and 2x the threshold: out of mode live and after loading', () => {
+      // The state Codex flagged for the memory version: a colony that had been in
+      // mode at 2 workers, recovered to 3 with a part-recovered larder, was still
+      // held in mode live but loaded out of it. With no memory both agree.
+      const { live, loaded } = roundTrip(STARTING_WORKERS, QUEEN_EGG_FOOD_THRESHOLD + 100);
+      const a = decisionAndCommands(live);
+      const b = decisionAndCommands(loaded);
+      expect(a.mode).toBe(false);
+      expect(b).toEqual(a);
+    });
+
+    it('2 workers, larder between 1x and 2x the threshold: in mode live and after loading', () => {
+      const { live, loaded } = roundTrip(AI_SURVIVAL_MAX_WORKERS, QUEEN_EGG_FOOD_THRESHOLD + 100);
+      const a = decisionAndCommands(live);
+      const b = decisionAndCommands(loaded);
+      expect(a.mode).toBe(true);
+      expect(b).toEqual(a);
     });
   });
 });
