@@ -1966,6 +1966,16 @@ describe('C1 (V42) — colony alarm', () => {
       // At V42 nobody is drafted, so 15b still sees them as civilians to recall.
       // Below V42 the alarm is inert and the draft proceeds as it always did.
       expect(drafted.length === 0).toBe(shouldRecall);
+      // ...and they are actually RECALLED, not merely left Idle. The original bug
+      // was that drafted workers were never recalled at all; a change that kept
+      // them Idle but skipped the 15b flee would satisfy the draft check above
+      // and still leave them outside. Every one must be on the flee path —
+      // dashing (0) or already sheltered (> 0) — never still at -1. (CodeRabbit)
+      if (shouldRecall) {
+        for (const id of surface) {
+          expect(world.ants.fleeShelterUntilTick[id]).not.toBe(-1);
+        }
+      }
     }
   });
 
