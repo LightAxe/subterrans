@@ -7,6 +7,11 @@
 // `ants.targetPosX/Y`. Keeping every decision here (and out of the movement
 // dispatch) is why the flee state machine stays legible and testable.
 //
+// One hook runs INSIDE step 16 rather than at 15b: holdAlarmedCivilianAtShaft
+// (C1, V42), which movement's ascent calls so the colony alarm can keep a
+// civilian from climbing out. It writes the same flee column this pass owns, so
+// the decision lives here with the rest of the alarm and shelter logic.
+//
 // The whole pass is inert below V34 (early return), so pre-V34 saves replay
 // byte-identically. The V38 doorstep push-through and local-all-clear release
 // (#297) are gated the same way, inside the per-worker loop. Reads are
@@ -389,6 +394,61 @@ function setFleeTarget(
     world.ants.targetPosX[id] = tileCenter(safe.surfaceTileX); // camp present → straight-line to safe
     world.ants.targetPosY[id] = tileCenter(safe.surfaceTileY);
   }
+  return true;
+}
+
+/**
+ * C1 (V42) — the colony alarm's hold at the shaft. Called by movement's ascent
+ * (ant-movement.ts, the only production underground → surface write) from INSIDE
+ * its matching-open-entrance branch, for an ant that would otherwise climb out.
+ * Returns true if the alarm holds it; the caller then skips the ascent.
+ *
+ * That ascent admits an Idle worker with no target and any SearchingFood /
+ * ReturningToNest forager, and never consulted the alarm. Under the alarm those
+ * are an Idle worker at the shaft row (a post-deposit ant at a chamberless shaft
+ * pool, a V35 wander clear at row 0, a matured larva or dropped carrier) and any
+ * forager that was STILL searching or returning underground when the alarm
+ * sounded — a one-shot population, because a full deposit sets task=Idle and
+ * step 10a's alarm gate stops re-promotion. Each climbed out: with a safe door
+ * step 15b recalled it next tick, and under a full camp it was never recalled at
+ * all (Codex P2).
+ *
+ * A held ant is turned into a SHELTERER, exactly as a dashing flee ant is on
+ * descent, rather than merely skipped — so it leaves through this module's
+ * poke-out, which re-reads REAL danger at the exit. A bare skip released held
+ * ants on the player's all-clear alone, and a held forager could climb straight
+ * onto a spider-camped door the tick the alarm was cleared.
+ *
+ * Why the caller must only ask from inside the matching-entrance branch: the
+ * poke-out re-arms any shelterer whose column has no open entrance, indefinitely,
+ * until one opens there — so sheltering an ant that could not have ascended
+ * anyway would strand it.
+ *
+ * Adults only: brood are alive Idle entities with no target and pass the ascent
+ * too, but tickIdleReserveAndFlee walks only colony.workers and maturation does
+ * not reset the flee column, so a brood shelterer would mature into a worker
+ * already held. Brood spawn at speed 0 and both promotion sites set
+ * WORKER_BASE_SPEED, so speed separates them exactly (and excludes the queen).
+ *
+ * Own colony AND own grid: the stance belongs to the colony that sounded it, and
+ * a player ant sheltered inside the ENEMY nest would poke out against its own
+ * colony's entrances, find none at that column, and be held there. Fighters are
+ * not civilians and keep movement's existing rule.
+ */
+export function holdAlarmedCivilianAtShaft(
+  world: WorldState,
+  id: number,
+  inOwnGrid: boolean,
+): boolean {
+  if (world.simVersion < SIM_VERSION_V42_COLONY_ALARM) return false;
+  if (!inOwnGrid) return false;
+  const ants = world.ants;
+  const task = ants.task[id]!;
+  if (task !== AntTask.Idle && task !== AntTask.Foraging) return false;
+  if (ants.speed[id]! <= 0) return false; // brood (and the queen)
+  const colony = world.colonies[ants.colonyId[id]!];
+  if (colony?.alarmActive !== true) return false;
+  ants.fleeShelterUntilTick[id] = world.tick + SHELTER_COOLDOWN_TICKS;
   return true;
 }
 

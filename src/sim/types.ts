@@ -701,7 +701,8 @@ export const SIM_VERSION_V41_DEATH_CHOKEPOINT = 41 as const;
  *      only skipped ants ALREADY sheltering, so on the tick the alarm sounded an
  *      Idle surface worker was drafted to fight first, failed 15b's civilian
  *      filter, and was never recalled at all.
- *   3. NO ASCENT (step 16, ant/ant-movement.ts) — the only production ascent
+ *   3. NO ASCENT (step 16) — the only production ascent (ant/ant-movement.ts)
+ *      asks holdAlarmedCivilianAtShaft (ant/idle-reserve.ts); that ascent
  *      admits an Idle worker with no target and any SearchingFood /
  *      ReturningToNest forager. Under the alarm those are an Idle worker at the
  *      shaft row (post-deposit at a chamberless shaft pool, a V35 wander clear,
