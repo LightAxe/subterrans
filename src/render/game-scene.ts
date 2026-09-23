@@ -154,6 +154,9 @@ import {
   isPointerOverHUD,
   panInputState,
 } from '../input/camera-input.js';
+import { enqueueCommand } from '../input/command-queue.js';
+import { SIM_VERSION_V42_COLONY_ALARM } from '../sim/types.js';
+import type { SimCommand } from '../sim/commands.js';
 import { registerGestureArbiter, type GestureArbiter } from '../input/gesture-arbiter.js';
 import { thresholdLogicalPx, DRAG_THRESHOLD_PX } from '../input/gesture.js';
 import { CommandProjection } from './command-projection.js';
@@ -274,7 +277,6 @@ interface UIScenePhase9 {
   // Optional so other UIScene consumers (tests) need not implement it.
   flashPausedQueueFull?(paused: boolean): void;
 }
-import type { SimCommand } from '../sim/commands.js';
 
 // Re-export GamePhase for Plan 07 and other consumers
 export { GamePhase, decideBootMode, deriveAIColonyIds, appendInputLog, generateFreshSeed };
@@ -296,6 +298,14 @@ declare global {
        *  sim state, crossing the sim/render boundary). Empty until the first
        *  frame renders. Issue #193. */
       getDrawOrder(): string[];
+      /** C1 — how many R presses reached the alarm dispatch after the #311
+       *  dedupe and the auto-repeat guard. The only way to pin those guards:
+       *  SetColonyAlarm is idempotent within a task, so end state cannot. */
+      alarmHotkeyAccepts?(): number;
+      /** Live `world.tick`. Lets a test wait for the command queue to DRAIN
+       *  deterministically instead of sleeping — a sleep whose expected value
+       *  equals the pre-drain value fails open on a loaded machine. */
+      getTick?(): number;
       /** Return the ACTIVE camera's current zoom (surface or underground per the
        *  active view). Render-side observability for the #237 pinch-zoom e2e
        *  (touch-smoke.spec.ts): reads viewState, mutates nothing, crosses no
@@ -384,6 +394,16 @@ export class GameScene extends Phaser.Scene {
   // so a recycled ant id never inherits a stale heading across sessions.
   private readonly antFacingCache: AntFacingCache = new AntFacingCache();
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
+  /** C1 — count of R presses that passed the dedupe + repeat guards, read
+   *  through __phase9_test.alarmHotkeyAccepts(). Reset per session so a spec
+   *  that restarts mid-run reads a fresh baseline.
+   *
+   *  Every WRITE and the reader are `import.meta.env.DEV`-gated, so the
+   *  production library build keeps only this field's `= 0` initialiser — a
+   *  class field cannot be tree-shaken, but nothing ever updates or reads it
+   *  there. Same shape as recordDrawLayer, which minifies to an empty body. */
+  private alarmHotkeyAccepts = 0;
+
   private wasd!: {
     W: Phaser.Input.Keyboard.Key;
     A: Phaser.Input.Keyboard.Key;
@@ -558,6 +578,8 @@ export class GameScene extends Phaser.Scene {
           : this.viewState.undergroundCamera
         ).zoom,
       isPaused: (): boolean => isPausedByAny(this.pauseReasons),
+      alarmHotkeyAccepts: (): number => this.alarmHotkeyAccepts,
+      getTick: (): number => this.world?.tick ?? -1,
     };
   }
 
@@ -850,6 +872,56 @@ export class GameScene extends Phaser.Scene {
     // Phase 08-04 guarded against for Tab) and the identity dedupe drops the
     // same-frame queue re-walk. Gated on Playing so a paused player
     // doesn't Resume into a surprise camera flip onto the enemy nest.
+    // C1 — colony alarm ("recall to nest"). Mirrors the HUD button in UIScene;
+    // both route through enqueueCommand so the one-shot command obeys the queue
+    // cap. Dedupe + repeat guard per #311: holding R must not spam the queue.
+    //
+    // R, not A: A is WASD pan-left (camera-input.ts reads `wasd.A.isDown` every
+    // frame), so binding the alarm there would sound it every time the player
+    // panned left. R also reads as "recall", which is what the stance does.
+    this.input.keyboard!.on('keydown-R', (event: KeyboardEvent) => {
+      if (!this.keyEvents.claim(event) || event.repeat) return;
+      // Cmd+R / Ctrl+R is browser reload — let it through rather than flipping a
+      // persisted stance on the way out (same guard as stepSpeedKey, R1-13/R4-3).
+      if (event.ctrlKey || event.metaKey) return;
+      if (!this.canAcceptWorldHotkey()) return;
+      const world = this.world;
+      if (world === undefined) return;
+      // C1 — the alarm is V42-gated in tick(), so on a continued V30..V41 save
+      // the command would be dropped silently. Bail here too, so the hotkey and
+      // the (hidden) button agree about being unavailable.
+      if (world.simVersion < SIM_VERSION_V42_COLONY_ALARM) return;
+      // Toggle against the PROJECTED colony (live + queued), not the live one.
+      // A bare user pause leaves hotkeyPhase() === 'playing', so R is accepted
+      // while paused — and there the loop is a no-op, the queue never drains and
+      // the live flag is frozen, so two presses would both read `false` and
+      // re-sound the alarm while the button's label already said "All clear".
+      // Same fix as UIScene.toggleColonyAlarm; the two controls must agree.
+      const colony =
+        this.projection.get(world).colonies[PLAYER_COLONY_ID] ?? world.colonies[PLAYER_COLONY_ID];
+      if (colony === undefined) return;
+      // DEV-only: count ACCEPTED presses so a Playwright test can pin the #311
+      // dedupe and the auto-repeat guard by CALL COUNT. Asserting end state
+      // cannot work here — SetColonyAlarm carries an ABSOLUTE `active` computed
+      // from state that cannot change between two calls in one task, so a
+      // duplicated call is idempotent and invisible in the result.
+      // `import.meta.env.DEV` is statically replaced, so this write is dropped
+      // from the production library build (same pattern as recordDrawLayer).
+      if (import.meta.env.DEV) this.alarmHotkeyAccepts += 1;
+      const paused = isPausedByAny(this.pauseReasons);
+      const ok = enqueueCommand(
+        world,
+        {
+          type: 'SetColonyAlarm',
+          colonyId: PLAYER_COLONY_ID,
+          active: !colony.alarmActive,
+          issuedAtTick: world.tick,
+        },
+        paused,
+      );
+      if (!ok) this.getUIScene()?.flashPausedQueueFull?.(paused);
+    });
+
     this.input.keyboard!.on('keydown-X', (event: KeyboardEvent) => {
       if (!this.keyEvents.claim(event) || event.repeat) return;
       if (!this.canAcceptWorldHotkey()) return;
@@ -1180,6 +1252,9 @@ export class GameScene extends Phaser.Scene {
    */
   private resetSessionState(): void {
     resetInputLog(this.inputLog);
+    // C1 — fresh baseline for a spec that restarts mid-run. DEV-gated like the
+    // increment, so neither write survives the production library build.
+    if (import.meta.env.DEV) this.alarmHotkeyAccepts = 0;
     resetViewState(this.viewState, PLAYER_START_X, PLAYER_START_Y);
     // Stage 1 controls rework (issue #18): abandon any in-flight gesture and
     // clear the whole pause-reason set so a new game can't inherit a stuck

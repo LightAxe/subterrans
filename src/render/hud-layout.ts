@@ -26,6 +26,8 @@ export interface HudLayout {
   MINIMAP: HudRect;
   VIEW_TOGGLE: HudRect;
   UNDERGROUND_COLONY_TOGGLE: HudRect;
+  /** C1 — colony alarm toggle. Sits above the colony toggle in the right column. */
+  ALARM_TOGGLE: HudRect;
   SAVE_ICON: HudRect;
 }
 
@@ -46,6 +48,7 @@ export function buildHudLayout(layout: LayoutContext): HudLayout {
     MINIMAP: { x: w - 168, y: h - 168, w: 160, h: 160 },
     VIEW_TOGGLE: { x: w - 168, y: h - 196, w: 80, h: 24 },
     UNDERGROUND_COLONY_TOGGLE: { x: w - 168, y: h - 220, w: 112, h: 22 },
+    ALARM_TOGGLE: { x: w - 168, y: h - 246, w: 112, h: 22 },
     SAVE_ICON: { x: w - 28, y: 8, w: 20, h: 20 },
   };
 }

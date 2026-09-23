@@ -86,8 +86,12 @@ function combatKills(world: WorldState) {
 }
 
 describe('#289 despawnAnt — non-kill deaths from V41 get the full cleanup', () => {
-  it('LATEST is V41', () => {
-    expect(LATEST_SIM_VERSION).toBe(SIM_VERSION_V41_DEATH_CHOKEPOINT);
+  it('V41 sits directly above V40, and both are inside the accepted window', () => {
+    // Deliberately NOT `LATEST === V41`: that pins a value every later gate moves,
+    // and version-policy.test.ts already guards MIN_ACCEPTED < LATEST. What this
+    // file needs is that the gate it exercises is ordered after its predecessor.
+    expect(SIM_VERSION_V41_DEATH_CHOKEPOINT).toBe(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL + 1);
+    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V41_DEATH_CHOKEPOINT);
   });
 
   it('starvation of a carried larva: clears both carry pointers, resets combat state, flags broodFieldDirty, no event / context / corpse', () => {

@@ -82,6 +82,9 @@ declare global {
       // Issue #193 — live game speed (1×/2×/4×), so Playwright can assert the
       // speed-cycle control by value instead of pixel-diffing the rendered label.
       speedMultiplier?: SpeedMultiplier;
+      // C1 — whether the player colony's alarm is sounding, so an e2e test can
+      // assert the toggle by value rather than by button pixels.
+      alarmActive?: boolean;
       // #304 — the difficulty row currently selected on the new-game screen, so
       // Playwright can assert that a row click moves the selection WITHOUT
       // starting the round, and that the screen reopens on the persisted tier.
@@ -125,6 +128,8 @@ function publishPhase9(patch: Partial<NonNullable<Window['__phase9_ui']>>): void
   if (speed !== undefined) next.speedMultiplier = speed;
   const selected = patch.selectedDifficulty ?? prev?.selectedDifficulty;
   if (selected !== undefined) next.selectedDifficulty = selected;
+  const alarm = patch.alarmActive ?? prev?.alarmActive;
+  if (alarm !== undefined) next.alarmActive = alarm;
   window.__phase9_ui = next;
 }
 
@@ -141,6 +146,12 @@ function setActiveUndergroundLabel(
   view: 'surface' | 'underground',
 ): void {
   publishPhase9({ activeUndergroundLabel: next, activeView: view });
+}
+
+/** Publishes the player colony's alarm state (C1) every UIScene.update() frame.
+ *  Preserves the other published fields. */
+function setAlarmActive(next: boolean): void {
+  publishPhase9({ alarmActive: next });
 }
 
 /** Publishes which boot overlay is up so Playwright can distinguish the fresh-boot
@@ -377,7 +388,13 @@ import {
   type SaveInfo,
 } from '../platform/save.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
-import type { SetBehaviorRatioCommand, PlaceChamberCommand } from '../sim/commands.js';
+import type {
+  SetBehaviorRatioCommand,
+  PlaceChamberCommand,
+  SetColonyAlarmCommand,
+} from '../sim/commands.js';
+import { SIM_VERSION_V42_COLONY_ALARM } from '../sim/types.js';
+import { glyphFor } from './input-glyphs.js';
 import { enqueueCommand } from '../input/command-queue.js';
 import { KeyEventDedupe } from './key-event-dedupe.js';
 import type { CommandFeedforward } from './command-feedforward.js';
@@ -565,6 +582,14 @@ export class UIScene extends Phaser.Scene {
   private queenLabelText!: Phaser.GameObjects.Text;
   private triangleLabels!: Phaser.GameObjects.Text[];
   private viewToggleText!: Phaser.GameObjects.Text;
+  /** C1 — colony alarm toggle label; text + tint follow colony.alarmActive. */
+  private alarmToggleText!: Phaser.GameObjects.Text;
+  /** C1 — last background applied to alarmToggleText. Phaser's setText returns
+   *  early on an unchanged string, but setBackgroundColor always calls through to
+   *  updateText(): measureText + clearRect + fillText + canvasToTexture. Calling
+   *  it every frame re-rasterized the label forever; this latches it so the work
+   *  happens only on an actual state change. */
+  private alarmToggleBg: string | null = null;
   // Phase 09.1 Chunk 2 — underground colony label. Visible only when
   // viewState.activeView === 'underground'. Reads 'Your Colony' vs
   // 'Enemy Colony' from viewState.activeUndergroundColonyId each frame.
@@ -763,6 +788,36 @@ export class UIScene extends Phaser.Scene {
     );
     this.viewToggleText.setPadding(4);
     this.viewToggleText.setScrollFactor(0);
+
+    // C1 — colony alarm toggle. Drawn on BOTH views (a raid you need to react to
+    // is usually visible on the surface, but the decision is colony-wide), so
+    // unlike the colony toggle it has no visibility gate.
+    // +1, not +5: the Text paints its own background, and at 12px Courier the
+    // glyph box is ~20.3px tall inside a 22px rect. A +5 offset put the pill's
+    // bottom ~3.3px BELOW hud.ALARM_TOGGLE, and that band is in no HUD zone — a
+    // click there falls through as a world click and issues a dig/command order,
+    // the same failure the label shortening fixed horizontally.
+    this.alarmToggleText = this.add.text(
+      // The rect ORIGIN, not an inset point. setFixedSize below sizes the painted
+      // background to the full rect, so an offset origin would push that
+      // background past the rect by exactly the offset — which is the same
+      // click-fall-through band this is meant to close (Codex P2).
+      this.hud.ALARM_TOGGLE.x,
+      this.hud.ALARM_TOGGLE.y,
+      // Initial text only; update() rewrites it from the glyph table each frame.
+      'Alarm',
+      { color: '#ffffff', fontSize: '12px', backgroundColor: '#333333' },
+    );
+    // Inset the GLYPHS inside the fixed box instead of moving the box.
+    this.alarmToggleText.setPadding(4, 4, 4, 4);
+    // Pin the Text to the click rect. The Text paints its own background, and a
+    // pill wider or taller than hud.ALARM_TOGGLE spills into a band no HUD zone
+    // masks — a click there falls through as a world click and issues a
+    // dig/command order. Two review rounds found that bug (once horizontally at
+    // ~51px, once vertically at ~3.3px) and the fix was font-metric dependent
+    // both times; a fixed size makes it a property of the layout instead.
+    this.alarmToggleText.setFixedSize(this.hud.ALARM_TOGGLE.w, this.hud.ALARM_TOGGLE.h);
+    this.alarmToggleText.setScrollFactor(0);
 
     // Phase 09.1 Chunk 2 + issue #14 — underground colony toggle button.
     // Sits above VIEW_TOGGLE (hud.UNDERGROUND_COLONY_TOGGLE) so the two
@@ -1098,7 +1153,16 @@ export class UIScene extends Phaser.Scene {
           // the panel and drops the palette/speed dispatch.
           this.isInsideRect(pointer.x, pointer.y, this.hud.TOOLS) ||
           this.isInsideRect(pointer.x, pointer.y, this.hud.HINTS) ||
-          this.isInsideRect(pointer.x, pointer.y, this.hud.SPEED);
+          this.isInsideRect(pointer.x, pointer.y, this.hud.SPEED) ||
+          // C1 — same reason as the colony toggle above: without this entry a
+          // click on the alarm while the ant-activity panel is up is classified
+          // as a world click, dismissing the panel and DROPPING the alarm
+          // dispatch. Note this covers the BUTTON only: the R hotkey is still
+          // suppressed while the panel is up, because canAcceptWorldHotkey gates
+          // every world hotkey on antActivityPanelVisible. Exempting the alarm
+          // from that policy is a deliberate follow-up, not something to special
+          // -case here.
+          this.isInsideRect(pointer.x, pointer.y, this.hud.ALARM_TOGGLE);
         if (!overHud) {
           // Click on the world — dismiss and consume. `return` prevents
           // any further UIScene handling; the deferred hide prevents the
@@ -1116,6 +1180,13 @@ export class UIScene extends Phaser.Scene {
       // View toggle button
       if (this.isInsideRect(pointer.x, pointer.y, this.hud.VIEW_TOGGLE)) {
         toggleView(this.viewState);
+        return;
+      }
+      // C1 — colony alarm toggle. One-shot command like SetBehaviorRatio: it
+      // does not re-emit, so a drop at the queue cap is a real loss and gets the
+      // queue-full hint either way (paused or not).
+      if (this.isInsideRect(pointer.x, pointer.y, this.hud.ALARM_TOGGLE)) {
+        this.toggleColonyAlarm();
         return;
       }
       // Issue #14 — underground colony toggle button. Mirrors the X
@@ -1411,6 +1482,64 @@ export class UIScene extends Phaser.Scene {
         this.hud.UNDERGROUND_COLONY_TOGGLE.h,
       );
     }
+    // C1 — colony alarm button.
+    //
+    // V42-gated: tick() drops SetColonyAlarm below V42, so on a continued
+    // V30..V41 save the control would be drawn, clickable and tooltipped while
+    // doing nothing. Below V42 the button is hidden, the hotkey bails, and
+    // tooltipTargetAt is told not to offer a tooltip for the zone.
+    //
+    // The click MASK stays on regardless — a deliberate deviation from the
+    // HINTS / colony-toggle precedent in camera-input.ts, which unmask their
+    // zones when hidden. Rationale there: a freed band should not be dead. Here
+    // the freed band would instead route clicks to the WORLD, turning a click on
+    // blank HUD chrome into a dig/command order. An inert strip is the lesser
+    // harm. See the note at the zone list in camera-input.ts.
+    //
+    // Reads the PROJECTED colony, not the live one. While paused the game loop
+    // is a no-op, so the queue never drains and the live flag is frozen: a
+    // paused click would read the same stale value every time, give no visual
+    // feedback, and enqueue the SAME `active` twice — two clicks the player
+    // reads as on-then-off would leave the alarm ON. The projected world aliases
+    // the live colony when the queue is empty, so this is the same value when
+    // unpaused. (Same class as effectiveSpiderPriority / effectiveRallyState.)
+    const alarmSupported = world.simVersion >= SIM_VERSION_V42_COLONY_ALARM;
+    const alarmGlyph = glyphFor('ALARM_TOGGLE', 'keyboard');
+    const projectedAlarmColony = this.getProjectedWorld().colonies[PLAYER_COLONY_ID];
+    // Two DIFFERENT reads on purpose:
+    //   alarmOn  — PROJECTED (live + queued). Drives the button, so a paused
+    //              click gives immediate feedback and the next click inverts the
+    //              QUEUED value instead of re-sending a stale live one.
+    //   alarmLive — LIVE sim state. Drives the e2e hook, so a Playwright test
+    //              that asserts on it is pinning that tick() APPLIED the
+    //              command, not merely that it reached the queue. Publishing the
+    //              projected value here would make both alarm specs pass on a
+    //              paused world where the sim never ran.
+    const alarmOn = (projectedAlarmColony ?? colony)?.alarmActive === true;
+    const alarmLive = colony?.alarmActive === true;
+    if (alarmSupported) {
+      this.gfx.fillStyle(alarmOn ? 0x7a1f1f : 0x333333, 1);
+      this.gfx.fillRect(
+        this.hud.ALARM_TOGGLE.x,
+        this.hud.ALARM_TOGGLE.y,
+        this.hud.ALARM_TOGGLE.w,
+        this.hud.ALARM_TOGGLE.h,
+      );
+    }
+    // Both labels must FIT hud.ALARM_TOGGLE (112px): the Text carries its own
+    // backgroundColor, so anything wider paints a pill outside the click rect and
+    // outside isPointerOverHUD — a click on what looks like the button would fall
+    // through as a world click and issue a dig/command order. At 12px Courier
+    // 'All clear [R]' is ~102px with padding; 'ALARM — all clear [R]' was ~159px.
+    this.alarmToggleText.setText(alarmOn ? `All clear ${alarmGlyph}` : `Alarm ${alarmGlyph}`);
+    const alarmBg = alarmOn ? '#7a1f1f' : '#333333';
+    if (alarmBg !== this.alarmToggleBg) {
+      this.alarmToggleText.setBackgroundColor(alarmBg);
+      this.alarmToggleBg = alarmBg;
+    }
+    this.alarmToggleText.setVisible(alarmSupported);
+    setAlarmActive(alarmLive);
+
     this.undergroundLabelText.setText(`${undergroundLabel} (X)`);
     this.undergroundLabelText.setVisible(undergroundShowing);
     // Expose regardless of visibility so tests can assert the underlying
@@ -1715,7 +1844,13 @@ export class UIScene extends Phaser.Scene {
       this.cancelTooltip();
       return;
     }
-    const target = tooltipTargetAt(pointer.x, pointer.y, this.viewState.activeView, this.hud);
+    const target = tooltipTargetAt(
+      pointer.x,
+      pointer.y,
+      this.viewState.activeView,
+      this.hud,
+      (this.getWorld()?.simVersion ?? 0) >= SIM_VERSION_V42_COLONY_ALARM,
+    );
     if (sameTooltipTarget(target, this.hoverTarget)) return; // unchanged — let timers run
     this.hoverTarget = target;
     this.clearTooltipShowTimer();
@@ -1928,6 +2063,30 @@ export class UIScene extends Phaser.Scene {
    * (paused → "resume to continue"; running → "try again") and is recorded so
    * renderHintStrip shows the right one for the whole flash window (Fix 3).
    */
+  /** C1 — flip the player colony's alarm through the command queue. Reads the
+   *  PROJECTED flag (live colony + queued commands) so the button stays a true
+   *  toggle while paused, when the queue does not drain and the live flag is
+   *  frozen. */
+  private toggleColonyAlarm(): void {
+    const world = this.getWorld();
+    if (world === undefined) return;
+    // Inert below V42 (tick() drops the command); the button is hidden there.
+    if (world.simVersion < SIM_VERSION_V42_COLONY_ALARM) return;
+    // Toggle against the PROJECTED colony so a second click while paused
+    // inverts the QUEUED value rather than re-sending the stale live one.
+    const colony =
+      this.getProjectedWorld().colonies[PLAYER_COLONY_ID] ?? world.colonies[PLAYER_COLONY_ID];
+    if (colony === undefined) return;
+    const cmd: SetColonyAlarmCommand = {
+      type: 'SetColonyAlarm',
+      colonyId: PLAYER_COLONY_ID,
+      active: !colony.alarmActive,
+      issuedAtTick: world.tick,
+    };
+    const paused = this.isPausedFn ? this.isPausedFn() : false;
+    if (!enqueueCommand(world, cmd, paused)) this.flashPausedQueueFull(paused);
+  }
+
   public flashPausedQueueFull(paused: boolean): void {
     this.pausedQueueFullUntilMs = this.time.now + PAUSED_QUEUE_FULL_HINT_MS;
     this.pausedQueueFullWasPaused = paused;

@@ -24,6 +24,7 @@
 //   keydown-TAB   → toggleView()             ⇒ VIEW_SWITCH       [Tab]
 //   keydown-X     → toggleUndergroundColony()⇒ COLONY_TOGGLE     [X]
 //   keydown-P     → toggle pheromone overlay ⇒ PHEROMONE_TOGGLE  [P]
+//   keydown-R     → toggle colony alarm      ⇒ ALARM_TOGGLE      [R]
 //   speed-widget click (1×/2×/4×)            ⇒ SET_SPEED_1/2/4   1× 2× 4×
 //   left-drag (Command/Dig-surface/Chamber)  ⇒ PAN               Drag
 //   mouse wheel                              ⇒ ZOOM              Scroll
@@ -58,6 +59,7 @@ export type ActionId =
   | 'VIEW_SWITCH'
   | 'COLONY_TOGGLE'
   | 'PHEROMONE_TOGGLE'
+  | 'ALARM_TOGGLE'
   // Camera (affordance-less gestures — the #3 first-use hints)
   | 'PAN'
   | 'ZOOM'
@@ -93,6 +95,7 @@ export const GLYPHS: Readonly<Record<ActionId, Partial<Record<Device, string>>>>
   VIEW_SWITCH: { keyboard: '[Tab]' },
   COLONY_TOGGLE: { keyboard: '[X]' },
   PHEROMONE_TOGGLE: { keyboard: '[P]' },
+  ALARM_TOGGLE: { keyboard: '[R]' },
   PAN: { mouse: 'Drag' },
   ZOOM: { mouse: 'Scroll' },
   DIG_MARK: { mouse: 'Click' },

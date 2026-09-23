@@ -56,6 +56,12 @@ describe('glyphFor — exact canonical glyphs', () => {
       expect(devices.length, `${a} should have exactly one glyph`).toBe(1);
     }
     // Guard the table size so an accidental drop/add trips the test.
-    expect(actions.length).toBe(22);
+    // 23 since C1 added ALARM_TOGGLE [R].
+    expect(actions.length).toBe(23);
+    // C1 — pin the VALUE too, not just the count. The alarm button label and its
+    // tooltip both compose through glyphFor, so a wrong glyph here makes the UI
+    // advertise a key the handler is not bound to, at identical string width —
+    // no layout or size test would notice.
+    expect(GLYPHS.ALARM_TOGGLE.keyboard).toBe('[R]');
   });
 });

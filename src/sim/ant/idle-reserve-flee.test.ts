@@ -15,6 +15,8 @@ import {
   SIM_VERSION_V34_IDLE_RESERVE_FLEE,
   SIM_VERSION_V37_CORPSE_FOOD,
   SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH,
+  SIM_VERSION_V41_DEATH_CHOKEPOINT,
+  SIM_VERSION_V42_COLONY_ALARM,
 } from '../types.js';
 import type { WorldState } from '../types.js';
 import { pickOpenEntranceAtColumn, type NestEntrance } from '../colony/entrance.js';
@@ -1696,5 +1698,528 @@ describe('backpressure regression — allocation untouched (#209 PR A)', () => {
     // Whatever backpressure was, step 15b did not flip idle workers into Foraging
     // via the allocation path — the reserve stays idle-or-milling, re-assignable.
     expect(colonyForageBackpressure(colony)).toBe(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C1 (V42) — colony alarm / "recall to nest".
+//
+// The alarm makes four of idle-reserve's five DangerTrail reads answer
+// "dangerous" regardless of the grid. The fifth — entrance safety — keeps
+// reading the real field, which is what stops the alarm marching workers into a
+// camped door. Every test here runs with a ZERO danger grid, so anything that
+// moves is the alarm and nothing else.
+// ---------------------------------------------------------------------------
+
+describe('C1 (V42) — colony alarm', () => {
+  /** A scenario world with no spider and a guaranteed-clean danger field. */
+  function quietWorld(simVersion: number): { world: WorldState; ent: NestEntrance } {
+    const world = createScenario(SEED);
+    world.spider = null;
+    world.simVersion = simVersion; // sticky, exactly as a loaded save arrives
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    seedDanger(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX,
+      ent.surfaceTileY,
+      IDLE_MILL_RADIUS + 4,
+      0,
+    );
+    return { world, ent };
+  }
+
+  it('an idle surface worker flees on a QUIET map when the alarm sounds — and does not below V42', () => {
+    for (const [version, shouldFlee] of [
+      [SIM_VERSION_V41_DEATH_CHOKEPOINT, false],
+      [SIM_VERSION_V42_COLONY_ALARM, true],
+    ] as const) {
+      const { world, ent } = quietWorld(version);
+      const id = spawnWorker(
+        world,
+        PLAYER_COLONY_ID,
+        ent.surfaceTileX + 2,
+        ent.surfaceTileY,
+        AntTask.Idle,
+      );
+      world.colonies[PLAYER_COLONY_ID]!.alarmActive = true;
+      tickIdleReserveAndFlee(world);
+      // phase 0 = dashing for an entrance; -1 = not fleeing (milling as usual).
+      expect(world.ants.fleeShelterUntilTick[id]).toBe(shouldFlee ? 0 : -1);
+    }
+  });
+
+  it('drives the full dash → descend → shelter path with no danger anywhere', () => {
+    const { world, ent } = quietWorld(SIM_VERSION_V42_COLONY_ALARM);
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 2,
+      ent.surfaceTileY,
+      AntTask.Idle,
+    );
+    world.colonies[PLAYER_COLONY_ID]!.alarmActive = true;
+    let sheltered = false;
+    for (let t = 0; t < 40 && !sheltered; t++) {
+      tick(world, []);
+      if (world.ants.zone[id] === Zone.Underground && world.ants.fleeShelterUntilTick[id]! > 0) {
+        sheltered = true;
+      }
+    }
+    expect(sheltered).toBe(true);
+  });
+
+  it('holds a sheltering worker underground past the cooldown, and the all-clear releases it', () => {
+    const { world, ent } = quietWorld(SIM_VERSION_V42_COLONY_ALARM);
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 2,
+      ent.surfaceTileY,
+      AntTask.Idle,
+    );
+    colony.alarmActive = true;
+    for (let t = 0; t < 40 && world.ants.fleeShelterUntilTick[id]! <= 0; t++) tick(world, []);
+    expect(world.ants.zone[id]).toBe(Zone.Underground);
+
+    // Well past the poke-out cooldown: still sheltered, because the alarm — not
+    // the (zero) danger field — is what is holding it.
+    for (let t = 0; t < SHELTER_COOLDOWN_TICKS * 2 + 20; t++) tick(world, []);
+    expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0);
+
+    // All-clear → the existing poke-out path releases it.
+    colony.alarmActive = false;
+    let resumed = false;
+    for (let t = 0; t < SHELTER_COOLDOWN_TICKS * 2 + 40 && !resumed; t++) {
+      tick(world, []);
+      if (world.ants.fleeShelterUntilTick[id] === -1) resumed = true;
+    }
+    expect(resumed).toBe(true);
+  });
+
+  it('never dashes into a camped door: with every entrance dangerous the worker holds instead', () => {
+    const { world } = quietWorld(SIM_VERSION_V42_COLONY_ALARM);
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    // Camp EVERY open entrance, leaving the worker's own tile clear.
+    for (const e of colony.entrances) {
+      if (e.isOpen) {
+        seedDanger(world, PLAYER_COLONY_ID, e.surfaceTileX, e.surfaceTileY, 0, FLEE_THRESHOLD * 8);
+      }
+    }
+    const far = colony.entrances.find((e) => e.isOpen)!;
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      far.surfaceTileX + 4,
+      far.surfaceTileY + 3,
+      AntTask.Idle,
+    );
+    colony.alarmActive = true;
+    tickIdleReserveAndFlee(world);
+    // Not dashing (no safe door) — the idle-hold path cleared its target instead.
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+    expect(world.ants.targetPosX[id]).toBe(-1);
+    expect(world.ants.targetPosY[id]).toBe(-1);
+  });
+
+  it('keeps a non-homebound dasher dashing: a quiet tile does not abort the run for the door', () => {
+    // The dash-abort site. A non-homebound dasher normally gives up the moment its
+    // own tile reads quiet; under alarm the quiet is exactly the state it is
+    // supposed to keep running through.
+    const { world, ent } = quietWorld(SIM_VERSION_V42_COLONY_ALARM);
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 3,
+      ent.surfaceTileY,
+      AntTask.Idle,
+    );
+    world.colonies[PLAYER_COLONY_ID]!.alarmActive = true;
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(0); // dashing
+    // Second pass with the map still perfectly quiet: it must STILL be dashing.
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(0);
+  });
+
+  it('never pokes its head out while the alarm sounds: the sheltered worker stays underground', () => {
+    // The poke-out site. Asserted on the ZONE, not the timer: a worker that
+    // resumes and immediately re-flees would cycle the timer back above 0 and
+    // hide the bug, but it cannot surface without being seen here.
+    const { world, ent } = quietWorld(SIM_VERSION_V42_COLONY_ALARM);
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 2,
+      ent.surfaceTileY,
+      AntTask.Idle,
+    );
+    colony.alarmActive = true;
+    for (let t = 0; t < 40 && world.ants.zone[id] !== Zone.Underground; t++) tick(world, []);
+    expect(world.ants.zone[id]).toBe(Zone.Underground);
+
+    let surfacedAgain = false;
+    for (let t = 0; t < SHELTER_COOLDOWN_TICKS * 3; t++) {
+      tick(world, []);
+      if (world.ants.zone[id] === Zone.Surface) surfacedAgain = true;
+    }
+    expect(surfacedAgain).toBe(false);
+  });
+
+  it('keeps a held homebound carrier held: the alarm outranks the V38 local-all-clear release', () => {
+    // The fifth alarm-sensitive site. A carrier that armed the surface hold
+    // (every door camped, not on a doorstep) is normally released the moment its
+    // OWN tile is quiet (V38's releaseOnLocalAllClear). Under alarm it must stay
+    // put: "get inside" does not mean "wander off because it is calm here".
+    for (const alarm of [false, true]) {
+      const world = createScenario(SEED);
+      world.spider = null;
+      world.simVersion = SIM_VERSION_V42_COLONY_ALARM;
+      const colony = world.colonies[PLAYER_COLONY_ID]!;
+      const ent = openEntrance(world, PLAYER_COLONY_ID);
+
+      // A homebound carrier far enough out that the doorstep push cannot apply.
+      const offset = FLEE_HOMEBOUND_PUSH_THROUGH_TILES + 3;
+      const id = spawnWorker(
+        world,
+        PLAYER_COLONY_ID,
+        ent.surfaceTileX + offset,
+        ent.surfaceTileY,
+        AntTask.Foraging,
+      );
+      world.ants.subTask[id] = ForagingSubState.CarryingFood;
+      world.ants.foodCarrying[id] = FP_ONE;
+
+      // Camp the door AND pulse the carrier's own tile, so the hold arms for the
+      // ordinary V34 reason on both arms of this loop.
+      seedDanger(
+        world,
+        PLAYER_COLONY_ID,
+        ent.surfaceTileX,
+        ent.surfaceTileY,
+        1,
+        FLEE_THRESHOLD * 8,
+      );
+      seedDanger(
+        world,
+        PLAYER_COLONY_ID,
+        ent.surfaceTileX + offset,
+        ent.surfaceTileY,
+        0,
+        FLEE_THRESHOLD * 8,
+      );
+      colony.alarmActive = alarm;
+
+      tickIdleReserveAndFlee(world); // arms the hold (no safe door, not on doorstep)
+      expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0);
+
+      // The pulse passes — the carrier now stands in zero danger with the door
+      // still camped. This is exactly the #297 shape V38's release was added for.
+      seedDanger(world, PLAYER_COLONY_ID, ent.surfaceTileX + offset, ent.surfaceTileY, 0, 0);
+      world.tick += 1; // the +1 timer makes the re-arm site evaluate next tick
+      tickIdleReserveAndFlee(world);
+
+      // Without the alarm the quiet own-tile releases it; with the alarm it holds.
+      expect(world.ants.fleeShelterUntilTick[id]! > 0).toBe(alarm);
+    }
+  });
+
+  it('an alarmed colony recruits NOBODY: sounding it with fight demand pulls workers in, not out', () => {
+    // Codex P1. Step 10a (task assignment) runs five steps BEFORE 15b
+    // (tickIdleReserveAndFlee). Without the allocation gate, an Idle surface
+    // worker was drafted to Fighting on the very tick the alarm sounded, then
+    // failed 15b's Idle/Foraging filter and never sheltered — so the alarm sent
+    // workers OUT to fight and nothing ever recalled them. The V34 timer check
+    // at 10a does not cover this: it only skips workers ALREADY sheltering.
+    for (const [version, shouldRecall] of [
+      [SIM_VERSION_V41_DEATH_CHOKEPOINT, false],
+      [SIM_VERSION_V42_COLONY_ALARM, true],
+    ] as const) {
+      const world = createScenario(SEED, 'Normal');
+      world.spider = null;
+      world.simVersion = version;
+      const colony = world.colonies[PLAYER_COLONY_ID]!;
+      colony.targetRatio = { forage: 10, fight: 0 };
+      for (let t = 0; t < 30; t++) tick(world, []);
+
+      // Every surface worker Idle, none fleeing — the state the alarm acts on.
+      const surface = colony.workers.filter(
+        (id) => world.ants.alive[id] === 1 && world.ants.zone[id] === Zone.Surface,
+      );
+      expect(surface.length).toBeGreaterThan(0);
+      for (const id of surface) {
+        world.ants.task[id] = AntTask.Idle;
+        world.ants.subTask[id] = 0;
+        world.ants.fleeShelterUntilTick[id] = -1;
+      }
+
+      // Demand fighters AND sound the alarm on the same tick — the race.
+      colony.targetRatio = { forage: 0, fight: 10 };
+      colony.alarmActive = true;
+      tick(world, []);
+
+      const drafted = surface.filter(
+        (id) => world.ants.task[id] !== AntTask.Idle && world.ants.task[id] !== AntTask.Foraging,
+      );
+      // At V42 nobody is drafted, so 15b still sees them as civilians to recall.
+      // Below V42 the alarm is inert and the draft proceeds as it always did.
+      expect(drafted.length === 0).toBe(shouldRecall);
+      // ...and they are actually RECALLED, not merely left Idle. The original bug
+      // was that drafted workers were never recalled at all; a change that kept
+      // them Idle but skipped the 15b flee would satisfy the draft check above
+      // and still leave them outside. Every one must be on the flee path —
+      // dashing (0) or already sheltered (> 0) — never still at -1. (CodeRabbit)
+      if (shouldRecall) {
+        for (const id of surface) {
+          expect(world.ants.fleeShelterUntilTick[id]).not.toBe(-1);
+        }
+      }
+    }
+  });
+
+  // Codex P2 on #321. The only production ascent (ant-movement.ts, underground →
+  // surface at row 0) admits an Idle worker with no target and any SearchingFood /
+  // ReturningToNest forager, and never consulted the alarm — each climbed out and
+  // stood exposed for a tick before 15b recalled it. The fix turns such an ant into
+  // a SHELTERER at the shaft, so it leaves through 15b's danger-checked poke-out.
+  describe('alarm hold at the shaft (C1, Codex P2)', () => {
+    const SHAFT_CLASSES = [
+      ['Idle', AntTask.Idle, 0],
+      ['SearchingFood', AntTask.Foraging, ForagingSubState.SearchingFood],
+      ['ReturningToNest', AntTask.Foraging, ForagingSubState.ReturningToNest],
+    ] as const;
+
+    /** One civilian parked at the shaft row of the player's open entrance. */
+    function parkAtShaft(world: WorldState, tileX: number, task: number, sub: number): number {
+      const id = allocateEntityId(world);
+      initAnt(world.ants, id, {
+        colonyId: PLAYER_COLONY_ID,
+        posX: center(tileX),
+        posY: 0, // the shaft row, exactly where descent parks an ant
+        task,
+        subTask: sub,
+        speed: WORKER_BASE_SPEED,
+        lifespan: WORKER_LIFESPAN_TICKS,
+        hp: COMBAT_HP_BASE,
+        zone: Zone.Underground,
+      });
+      world.ants.fleeShelterUntilTick[id] = -1; // not sheltering yet
+      const colony = world.colonies[PLAYER_COLONY_ID]!;
+      colony.workers.push(id);
+      colony.workerCount += 1;
+      return id;
+    }
+
+    for (const [name, task, sub] of SHAFT_CLASSES) {
+      it(`${name}: held and sheltered at V42, climbs out below it`, () => {
+        for (const [version, shouldHold] of [
+          [SIM_VERSION_V41_DEATH_CHOKEPOINT, false],
+          [SIM_VERSION_V42_COLONY_ALARM, true],
+        ] as const) {
+          const { world, ent } = quietWorld(version);
+          const id = parkAtShaft(world, ent.surfaceTileX, task, sub);
+          world.colonies[PLAYER_COLONY_ID]!.alarmActive = true;
+          tick(world, []);
+          expect(world.ants.zone[id] === Zone.Underground).toBe(shouldHold);
+          // Held means SHELTERING, not merely skipped — that is what routes the
+          // release through the danger-checked poke-out.
+          if (shouldHold) expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0);
+        }
+      });
+    }
+
+    it('releases on the all-clear only once the door is actually safe', () => {
+      // The reason held ants are sheltered rather than just skipped. A bare skip
+      // released them on the player's all-clear alone: on a spider-camped door a
+      // held forager climbed straight onto the camp the tick the alarm cleared.
+      const { world, ent } = quietWorld(SIM_VERSION_V42_COLONY_ALARM);
+      const colony = world.colonies[PLAYER_COLONY_ID]!;
+      const id = parkAtShaft(
+        world,
+        ent.surfaceTileX,
+        AntTask.Foraging,
+        ForagingSubState.SearchingFood,
+      );
+      colony.alarmActive = true;
+      tick(world, []);
+      expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0);
+
+      // All-clear, but the door is camped: it must stay down.
+      colony.alarmActive = false;
+      for (let t = 0; t < SHELTER_COOLDOWN_TICKS * 2 + 20; t++) {
+        seedDanger(
+          world,
+          PLAYER_COLONY_ID,
+          ent.surfaceTileX,
+          ent.surfaceTileY,
+          0,
+          FLEE_THRESHOLD * 8,
+        );
+        tick(world, []);
+        expect(world.ants.zone[id]).toBe(Zone.Underground);
+      }
+
+      // Camp lifts: it pokes out and climbs.
+      seedDanger(
+        world,
+        PLAYER_COLONY_ID,
+        ent.surfaceTileX,
+        ent.surfaceTileY,
+        IDLE_MILL_RADIUS + 4,
+        0,
+      );
+      let surfaced = false;
+      for (let t = 0; t < SHELTER_COOLDOWN_TICKS * 2 + 20 && !surfaced; t++) {
+        tick(world, []);
+        if (world.ants.zone[id] === Zone.Surface) surfaced = true;
+      }
+      expect(surfaced).toBe(true);
+    });
+
+    it('does NOT shelter brood at the shaft (nothing would ever release it)', () => {
+      // Brood are alive Idle entities with no target, so they pass the ascent's
+      // needsSurface too. But 15b walks only colony.workers, and maturation does
+      // not reset the flee column, so a brood shelterer would mature into a
+      // worker already held — at a nursery column with no open entrance, where
+      // the poke-out re-arms it indefinitely. Brood spawn at speed 0.
+      const { world, ent } = quietWorld(SIM_VERSION_V42_COLONY_ALARM);
+      const colony = world.colonies[PLAYER_COLONY_ID]!;
+      const id = parkAtShaft(world, ent.surfaceTileX, AntTask.Idle, 0);
+      world.ants.speed[id] = 0; // brood
+      colony.workers.splice(colony.workers.indexOf(id), 1);
+      colony.workerCount -= 1;
+      colony.larvae.push(id);
+      colony.larvaeCount += 1;
+      colony.alarmActive = true;
+      tick(world, []);
+      expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+    });
+
+    it('does NOT hold a civilian standing in a FOREIGN nest — it is free to leave', () => {
+      // The stance belongs to the colony that sounded it, and a player ant inside
+      // the ENEMY grid must not be sheltered there: its poke-out would look up
+      // its OWN colony's entrances at that column, find none, and hold it
+      // indefinitely inside the enemy nest.
+      const { world } = quietWorld(SIM_VERSION_V42_COLONY_ALARM);
+      const enemyEnt = openEntrance(world, ENEMY_COLONY_ID);
+      const id = parkAtShaft(world, enemyEnt.surfaceTileX, AntTask.Idle, 0);
+      world.ants.currentGridColonyId[id] = ENEMY_COLONY_ID; // standing in the enemy grid
+      world.colonies[PLAYER_COLONY_ID]!.alarmActive = true;
+      tick(world, []);
+      expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+      expect(world.ants.zone[id]).toBe(Zone.Surface); // it climbed out through the enemy door
+    });
+
+    it('does NOT shelter an ant at a row-0 column with no open entrance (it would be stranded forever)', () => {
+      // 15b's poke-out re-arms any shelterer whose column has no open entrance,
+      // so converting one there would hold it permanently — even after the
+      // all-clear. Such an ant could never have ascended anyway, so the alarm has
+      // nothing to do for it and must leave it alone.
+      const { world, ent } = quietWorld(SIM_VERSION_V42_COLONY_ALARM);
+      const colony = world.colonies[PLAYER_COLONY_ID]!;
+      const noDoorX = ent.surfaceTileX + 7;
+      expect(colony.entrances.some((e) => e.isOpen && e.surfaceTileX === noDoorX)).toBe(false);
+      const id = parkAtShaft(world, noDoorX, AntTask.Idle, 0);
+      colony.alarmActive = true;
+      tick(world, []);
+      expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+    });
+  });
+
+  it('is per-colony: sounding the player alarm leaves the enemy colony alone', () => {
+    const { world } = quietWorld(SIM_VERSION_V42_COLONY_ALARM);
+    const enemyEnt = openEntrance(world, ENEMY_COLONY_ID);
+    seedDanger(
+      world,
+      ENEMY_COLONY_ID,
+      enemyEnt.surfaceTileX,
+      enemyEnt.surfaceTileY,
+      IDLE_MILL_RADIUS + 4,
+      0,
+    );
+    const enemyId = spawnWorker(
+      world,
+      ENEMY_COLONY_ID,
+      enemyEnt.surfaceTileX + 2,
+      enemyEnt.surfaceTileY,
+      AntTask.Idle,
+    );
+    world.colonies[PLAYER_COLONY_ID]!.alarmActive = true;
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[enemyId]).toBe(-1);
+  });
+});
+
+describe('C1 (V42) — SetColonyAlarm command', () => {
+  it('sets and clears the flag through tick()', () => {
+    const world = createScenario(SEED);
+    world.spider = null;
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    expect(colony.alarmActive).toBe(false);
+    tick(world, [
+      {
+        type: 'SetColonyAlarm',
+        colonyId: PLAYER_COLONY_ID,
+        active: true,
+        issuedAtTick: world.tick,
+      },
+    ]);
+    expect(colony.alarmActive).toBe(true);
+    tick(world, [
+      {
+        type: 'SetColonyAlarm',
+        colonyId: PLAYER_COLONY_ID,
+        active: false,
+        issuedAtTick: world.tick,
+      },
+    ]);
+    expect(colony.alarmActive).toBe(false);
+  });
+
+  it('is ignored below V42, so a pinned replay cannot be perturbed by a newer inputLog', () => {
+    const world = createScenario(SEED);
+    world.spider = null;
+    world.simVersion = SIM_VERSION_V41_DEATH_CHOKEPOINT;
+    tick(world, [
+      {
+        type: 'SetColonyAlarm',
+        colonyId: PLAYER_COLONY_ID,
+        active: true,
+        issuedAtTick: world.tick,
+      },
+    ]);
+    expect(world.colonies[PLAYER_COLONY_ID]!.alarmActive).toBe(false);
+  });
+
+  it('rejects a malformed payload rather than coercing it', () => {
+    const world = createScenario(SEED);
+    world.spider = null;
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const bad = [
+      // Non-boolean `active` (a tampered or hand-rolled save/replay object).
+      { type: 'SetColonyAlarm', colonyId: PLAYER_COLONY_ID, active: 1, issuedAtTick: 0 },
+      // Nonexistent / invalid colony ids.
+      { type: 'SetColonyAlarm', colonyId: 9999, active: true, issuedAtTick: 0 },
+      { type: 'SetColonyAlarm', colonyId: 0, active: true, issuedAtTick: 0 },
+      { type: 'SetColonyAlarm', colonyId: -1, active: true, issuedAtTick: 0 },
+      // Non-integer and NaN colony ids. Built via Number(), not a float literal:
+      // FNDN-02 bans float literals everywhere under src/sim, tests included.
+      { type: 'SetColonyAlarm', colonyId: Number('1.5'), active: true, issuedAtTick: 0 },
+      { type: 'SetColonyAlarm', colonyId: Number.NaN, active: true, issuedAtTick: 0 },
+    ] as unknown as Parameters<typeof tick>[1];
+    tick(world, bad);
+    expect(colony.alarmActive).toBe(false);
+  });
+
+  it('round-trips through copyWorldState', () => {
+    const world = createScenario(SEED);
+    world.spider = null;
+    world.colonies[PLAYER_COLONY_ID]!.alarmActive = true;
+    const dst = createScenario(SEED);
+    copyWorldState(world, dst);
+    expect(dst.colonies[PLAYER_COLONY_ID]!.alarmActive).toBe(true);
+    expect(dst.colonies[ENEMY_COLONY_ID]!.alarmActive).toBe(false);
   });
 });

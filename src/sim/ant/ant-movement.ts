@@ -1,7 +1,8 @@
 // src/sim/ant/ant-movement.ts
 // #212 Layer 2 (orchestrator): tickAntMovement — the per-ant movement tick (PRD §8a
 // step 16) — plus same-colony occupancy resolution. Sits ABOVE the behavior modules:
-// depends on Layer-0 ant-motion AND Layer-1 behaviors (foraging/queens/combat). Nothing
+// depends on Layer-0 ant-motion AND Layer-1 behaviors (foraging/queens/combat/
+// idle-reserve — the last for the C1 alarm's shaft hold at the ascent). Nothing
 // in ant/ depends on it; tick.ts is its sole production caller. Owns SURFACE_MOVE_CACHE
 // (reset each tick); its same-colony occupancy Map now lives on the per-world scratch
 // arena (#231).
@@ -71,6 +72,7 @@ import {
   unpackStepDy,
 } from './ant-motion.js';
 import { collectAliveQueenIds, moveQueens } from './ant-queens.js';
+import { holdAlarmedCivilianAtShaft } from './idle-reserve.js';
 import { clearRecentTiles, isRecentTile, pushRecentTile } from './ant-store.js';
 
 // #231 — the per-tick surface-movement cache (issue #67, ~16 KB Uint8Array) now
@@ -1594,6 +1596,10 @@ export function tickAntMovement(
               for (let e = 0; e < colony.entrances.length; e++) {
                 const entrance = colony.entrances[e]!;
                 if (entrance.isOpen && entrance.surfaceTileX === tileX) {
+                  // C1 (V42) — an alarmed colony keeps its civilians in: shelter
+                  // at the shaft instead of ascending. Policy lives in
+                  // idle-reserve.ts with the rest of the alarm (#212 layering).
+                  if (holdAlarmedCivilianAtShaft(world, id, inOwnGrid)) break;
                   ants.zone[id] = Zone.Surface;
                   ants.posY[id] = entrance.surfaceTileY << FP_SHIFT;
                   // Restore the surface invariant. For ants in their own
