@@ -43,6 +43,7 @@ import {
   SIM_VERSION_V33_OCCUPANCY_CENTER,
   SIM_VERSION_V34_IDLE_RESERVE_FLEE,
   SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
+  SIM_VERSION_V42_COLONY_ALARM,
   SIM_VERSION_V36_RISK_AWARE_FORAGING,
   SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
   type WorldState,
@@ -1586,6 +1587,45 @@ export function tickAntMovement(
           const ownColonyForAscent = world.colonies[ants.colonyId[id]!];
           const isRecallingFromForeign =
             !inOwnGrid && ownColonyForAscent != null && ownColonyForAscent.rallyPoint == null;
+          // C1 (V42) — an alarmed colony's civilians stay IN. This is the only
+          // production ascent, and it admits an Idle worker with no target and any
+          // SearchingFood / ReturningToNest forager without consulting the alarm.
+          // Under the alarm those are: an Idle worker at the shaft row with no
+          // target (a post-deposit ant at a chamberless shaft pool, a V35 wander
+          // clear at row 0, a matured larva or dropped carrier), and any forager
+          // that was STILL SearchingFood / ReturningToNest underground when the
+          // alarm sounded — a one-shot population, because a full deposit sets
+          // task=Idle and step 10a's alarm gate stops re-promotion. Each climbed
+          // out; with a safe door 15b recalled it next tick, and under a full camp
+          // it was never recalled at all (Codex P2).
+          //
+          // Held ants are turned into SHELTERERS rather than just skipped, so they
+          // leave the way every other shelterer does: through 15b's poke-out, which
+          // re-reads REAL danger at the exit. A bare skip released them on the
+          // player's all-clear alone, and a held forager could climb straight onto
+          // a spider-camped door the tick the alarm was cleared. The conversion is
+          // done INSIDE the matching-entrance branch below, never before it: a
+          // shelterer whose column has no open entrance is re-armed by the poke-out
+          // indefinitely, until an entrance opens there — so sheltering an ant that
+          // could not have ascended anyway would strand it.
+          //
+          // Own colony AND own grid: the stance belongs to the colony that sounded
+          // it, and a civilian standing in a FOREIGN nest should be free to leave
+          // it, not held there. Fighters keep their existing rule.
+          const alarmHoldsCivilian =
+            world.simVersion >= SIM_VERSION_V42_COLONY_ALARM &&
+            (task === AntTask.Idle || task === AntTask.Foraging) &&
+            // Adults only. Brood (eggs, larvae) are alive Idle entities with no
+            // target, so they pass needsSurface too — but 15b walks only
+            // colony.workers, so nothing would ever service a brood shelterer,
+            // and maturation does not reset the column: the new worker would
+            // start life as a shelterer at a column with no open entrance and be
+            // held indefinitely. Brood spawn at speed 0 and both promotion sites
+            // set WORKER_BASE_SPEED, so speed separates them exactly (and also
+            // excludes the queen, who is speed 0 and never a civilian here).
+            ants.speed[id]! > 0 &&
+            inOwnGrid &&
+            ownColonyForAscent?.alarmActive === true;
           const skipAscent = task === AntTask.Fighting && !inOwnGrid && !isRecallingFromForeign;
           if (!skipAscent) {
             const lookupColonyId = ants.currentGridColonyId[id]!;
@@ -1594,6 +1634,12 @@ export function tickAntMovement(
               for (let e = 0; e < colony.entrances.length; e++) {
                 const entrance = colony.entrances[e]!;
                 if (entrance.isOpen && entrance.surfaceTileX === tileX) {
+                  if (alarmHoldsCivilian) {
+                    // Shelter at the shaft, exactly as a dashing flee ant does on
+                    // descent (the V34 branch above), instead of ascending.
+                    ants.fleeShelterUntilTick[id] = world.tick + SHELTER_COOLDOWN_TICKS;
+                    break;
+                  }
                   ants.zone[id] = Zone.Surface;
                   ants.posY[id] = entrance.surfaceTileY << FP_SHIFT;
                   // Restore the surface invariant. For ants in their own

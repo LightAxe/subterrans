@@ -119,9 +119,9 @@ export function tooltipTextFor(target: TooltipTarget): string {
     case 'colony-toggle':
       return `Switch which colony you're viewing ${glyphFor('COLONY_TOGGLE', 'keyboard')}`;
     case 'alarm-toggle':
-      // Names BOTH halves of the cost, not just the effect: a sheltering worker
-      // is skipped by step-10a allocation, so it neither forages NOR can be
-      // recruited as a fighter. The second half is the surprising one — a player
+      // Names BOTH halves of the cost, not just the effect: while the alarm
+      // sounds, step 10a reassigns none of the colony's Idle workers, so they
+      // neither go foraging NOR can be recruited as fighters. The second half is the surprising one — a player
       // who sounds the alarm and then drags the Forage/Fight slider gets nothing.
       return `Recall foragers and idle workers to the nest ${glyphFor('ALARM_TOGGLE', 'keyboard')} — they stop foraging, and cannot be recruited as fighters, until the all-clear`;
     case 'slider':
