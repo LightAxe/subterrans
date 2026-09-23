@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { Linter } from 'eslint';
 import tsParser from '@typescript-eslint/parser';
-import rule from './sim-module-state.js';
+import rule from './sim-module-state.ts';
 
 const linter = new Linter({ configType: 'flat' });
 

@@ -5,7 +5,7 @@
 // Seven config objects, applied in order (later ones win for the files they match):
 //   1. baseConfig         — baseline TS rules for all src/**/*.ts, bench/**/*.ts, scripts/**/*.ts,
 //                            tests/**/*.ts (the Playwright specs + helpers, #308), the root
-//                            tooling configs (`*.ts`) and eslint-rules/**/*.{ts,js} (#314)
+//                            tooling configs (`*.ts`) and eslint-rules/**/*.ts (#314, #317)
 //   2. simSafetyConfig    — PRD §6 Rule Sets 1 & 2: Phaser ban, wall-clock ban, float+division ban (src/sim/** only)
 //   3. nonSimMutationGuard — FNDN-07 tripwire: catches obvious direct writes to WorldState fields
 //                            from src/render/, src/input/, src/platform/
@@ -18,7 +18,7 @@
 
 import tseslint from '@typescript-eslint/eslint-plugin';
 import tsParser from '@typescript-eslint/parser';
-import simModuleState from './eslint-rules/sim-module-state.js';
+import simModuleState from './eslint-rules/sim-module-state.ts';
 
 /** `tseslint.configs` is an index signature, so under `noUncheckedIndexedAccess`
  *  a preset lookup is `T | undefined`. Fail loudly rather than spread `undefined`
@@ -42,7 +42,6 @@ const baseConfig = {
     'tests/**/*.ts',
     '*.ts',
     'eslint-rules/**/*.ts',
-    'eslint-rules/**/*.js',
   ],
   languageOptions: {
     parser: tsParser,

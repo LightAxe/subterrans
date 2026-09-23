@@ -1,4 +1,4 @@
-// code/eslint-rules/sim-module-state.js
+// code/eslint-rules/sim-module-state.ts
 // Custom ESLint rule: subterrans/sim-module-state  (issue #211)
 //
 // Flags PERSISTENT MODULE-LEVEL mutable state in src/sim/ so it cannot land silently
@@ -62,8 +62,14 @@
 // reference to the unbound `Map.prototype.get` — JS methods are not auto-bound) or
 // `const n = new Set().size` (a primitive). Neither keeps a live collection.
 
+import type { Rule } from 'eslint';
+// AST_NODE_TYPES is a runtime import (not type-only): the type-aware lint layer's
+// `no-unsafe-enum-comparison` rule requires `node.type` (an `AST_NODE_TYPES` string enum)
+// to be compared against the enum member, not a bare string literal.
+import { AST_NODE_TYPES, type TSESTree } from '@typescript-eslint/types';
+
 /** `new`-expression callees that produce a mutable collection. */
-const COLLECTION_CONSTRUCTORS = new Set([
+const COLLECTION_CONSTRUCTORS: ReadonlySet<string> = new Set([
   'Array',
   'Map',
   'Set',
@@ -83,30 +89,38 @@ const COLLECTION_CONSTRUCTORS = new Set([
 ]);
 
 /** Global namespace objects a collection ctor may be qualified by. */
-const GLOBAL_OBJECTS = new Set(['globalThis', 'window', 'self', 'global']);
+const GLOBAL_OBJECTS: ReadonlySet<string> = new Set(['globalThis', 'window', 'self', 'global']);
 
-/** True for `expr as const` / `<const>expr`. */
-function isConstAssertion(node) {
-  if (!node || (node.type !== 'TSAsExpression' && node.type !== 'TSTypeAssertion')) return false;
+/** True for `expr as const` / `<const>expr`. A plain boolean, not a type guard: it is
+ *  false for assertion nodes too (`x as number[]`), so a guard would mis-narrow the
+ *  false branch. Callers narrow on `node.type` themselves. */
+function isConstAssertion(node: TSESTree.Node | null | undefined): boolean {
+  if (
+    !node ||
+    (node.type !== AST_NODE_TYPES.TSAsExpression && node.type !== AST_NODE_TYPES.TSTypeAssertion)
+  )
+    return false;
   const ann = node.typeAnnotation;
-  return (
+  return Boolean(
     ann &&
-    ann.type === 'TSTypeReference' &&
+    ann.type === AST_NODE_TYPES.TSTypeReference &&
     ann.typeName &&
-    ann.typeName.type === 'Identifier' &&
-    ann.typeName.name === 'const'
+    ann.typeName.type === AST_NODE_TYPES.Identifier &&
+    ann.typeName.name === 'const',
   );
 }
 
 /** Peel `as X` / `<X>` / `satisfies X` / non-null `!` wrappers off an expression. */
-function peelAssertions(node) {
+function peelAssertions(node: TSESTree.Node): TSESTree.Node;
+function peelAssertions(node: TSESTree.Node | null | undefined): TSESTree.Node | null | undefined;
+function peelAssertions(node: TSESTree.Node | null | undefined): TSESTree.Node | null | undefined {
   let cur = node;
   while (
     cur &&
-    (cur.type === 'TSAsExpression' ||
-      cur.type === 'TSSatisfiesExpression' ||
-      cur.type === 'TSTypeAssertion' ||
-      cur.type === 'TSNonNullExpression')
+    (cur.type === AST_NODE_TYPES.TSAsExpression ||
+      cur.type === AST_NODE_TYPES.TSSatisfiesExpression ||
+      cur.type === AST_NODE_TYPES.TSTypeAssertion ||
+      cur.type === AST_NODE_TYPES.TSNonNullExpression)
   ) {
     cur = cur.expression;
   }
@@ -114,9 +128,11 @@ function peelAssertions(node) {
 }
 
 /** Peel only `satisfies X` wrappers (type-preserving — never affects mutability). */
-function peelSatisfies(node) {
+function peelSatisfies(node: TSESTree.Node): TSESTree.Node;
+function peelSatisfies(node: TSESTree.Node | null | undefined): TSESTree.Node | null | undefined;
+function peelSatisfies(node: TSESTree.Node | null | undefined): TSESTree.Node | null | undefined {
   let cur = node;
-  while (cur && cur.type === 'TSSatisfiesExpression') cur = cur.expression;
+  while (cur && cur.type === AST_NODE_TYPES.TSSatisfiesExpression) cur = cur.expression;
   return cur;
 }
 
@@ -126,11 +142,17 @@ function peelSatisfies(node) {
  * `[...] satisfies T as const` (satisfies is type-preserving in either position). A
  * mutating outer assertion (`as number[]`, `as unknown as const`) leaves it mutable.
  */
-function isExemptAsConstArray(init) {
+function isExemptAsConstArray(init: TSESTree.Node): boolean {
   const outer = peelSatisfies(init);
-  if (!isConstAssertion(outer)) return false;
+  if (
+    (outer.type !== AST_NODE_TYPES.TSAsExpression &&
+      outer.type !== AST_NODE_TYPES.TSTypeAssertion) ||
+    !isConstAssertion(outer)
+  ) {
+    return false;
+  }
   const inner = peelSatisfies(outer.expression);
-  if (!inner || inner.type !== 'ArrayExpression') return false;
+  if (!inner || inner.type !== AST_NODE_TYPES.ArrayExpression) return false;
   // `as const` makes nested array/object/primitive literals deeply readonly, but it does
   // NOT immutabilize a live collection instance — `[new Map()] as const` still allows
   // `x[0].set(...)`. So an as-const array is exempt only if it holds no collection ctor.
@@ -139,32 +161,32 @@ function isExemptAsConstArray(init) {
 
 /** True when an expression contains a live `new <collection>()` — recursing array/object
  *  literals, conditional/logical branches, and `Object.freeze`/`Object.seal` wrappers. */
-function containsCollectionCtor(node) {
+function containsCollectionCtor(node: TSESTree.Node | null | undefined): boolean {
   if (!node) return false;
   const frozen = objectFreezeArg(node);
   if (frozen) return containsCollectionCtor(frozen);
   const base = unwrapToBase(node);
   if (!base) return false;
   if (isCollectionConstructor(base)) return true;
-  if (base.type === 'ConditionalExpression') {
+  if (base.type === AST_NODE_TYPES.ConditionalExpression) {
     return containsCollectionCtor(base.consequent) || containsCollectionCtor(base.alternate);
   }
-  if (base.type === 'LogicalExpression') {
+  if (base.type === AST_NODE_TYPES.LogicalExpression) {
     return containsCollectionCtor(base.left) || containsCollectionCtor(base.right);
   }
-  if (base.type === 'ArrayExpression') {
+  if (base.type === AST_NODE_TYPES.ArrayExpression) {
     return base.elements.some((el) => {
       if (!el) return false;
       // A spread of an inline literal (`[...[new Map()]]`) still carries its elements in.
-      if (el.type === 'SpreadElement') return containsCollectionCtor(el.argument);
+      if (el.type === AST_NODE_TYPES.SpreadElement) return containsCollectionCtor(el.argument);
       return containsCollectionCtor(el);
     });
   }
-  if (base.type === 'ObjectExpression') {
+  if (base.type === AST_NODE_TYPES.ObjectExpression) {
     return base.properties.some(
       (p) =>
-        (p.type === 'Property' && containsCollectionCtor(p.value)) ||
-        (p.type === 'SpreadElement' && containsCollectionCtor(p.argument)),
+        (p.type === AST_NODE_TYPES.Property && containsCollectionCtor(p.value)) ||
+        (p.type === AST_NODE_TYPES.SpreadElement && containsCollectionCtor(p.argument)),
     );
   }
   return false;
@@ -175,7 +197,9 @@ function containsCollectionCtor(node) {
  * expression, so `new Int32Array(n).fill(-1)` / `([1] as const).slice()` / `new Map()!`
  * resolve to their array-literal or `new <collection>()` root.
  */
-function unwrapToBase(node) {
+function unwrapToBase(node: TSESTree.Node): TSESTree.Node;
+function unwrapToBase(node: TSESTree.Node | null | undefined): TSESTree.Node | null | undefined;
+function unwrapToBase(node: TSESTree.Node | null | undefined): TSESTree.Node | null | undefined {
   let cur = node;
   let changed = true;
   while (cur && changed) {
@@ -186,15 +210,15 @@ function unwrapToBase(node) {
       changed = true;
     }
     // Optional chains (`x?.m()`, `x?.m`) wrap the whole chain in a ChainExpression.
-    if (cur && cur.type === 'ChainExpression') {
+    if (cur && cur.type === AST_NODE_TYPES.ChainExpression) {
       cur = cur.expression;
       changed = true;
     }
     if (
       cur &&
-      cur.type === 'CallExpression' &&
+      cur.type === AST_NODE_TYPES.CallExpression &&
       cur.callee &&
-      cur.callee.type === 'MemberExpression'
+      cur.callee.type === AST_NODE_TYPES.MemberExpression
     ) {
       cur = cur.callee.object;
       changed = true;
@@ -208,62 +232,78 @@ function unwrapToBase(node) {
  * (`new globalThis.Map()`), or with the callee itself wrapped in type/non-null
  * assertions (`new (Map as any)()`, `new (Set!)()`).
  */
-function isCollectionConstructor(node) {
-  if (!node || node.type !== 'NewExpression' || !node.callee) return false;
+function isCollectionConstructor(node: TSESTree.Node | null | undefined): boolean {
+  if (!node || node.type !== AST_NODE_TYPES.NewExpression || !node.callee) return false;
   const c = peelAssertions(node.callee);
   if (!c) return false;
-  if (c.type === 'Identifier') return COLLECTION_CONSTRUCTORS.has(c.name);
-  return (
-    c.type === 'MemberExpression' &&
+  if (c.type === AST_NODE_TYPES.Identifier) return COLLECTION_CONSTRUCTORS.has(c.name);
+  return Boolean(
+    c.type === AST_NODE_TYPES.MemberExpression &&
     !c.computed &&
     c.object &&
-    c.object.type === 'Identifier' &&
+    c.object.type === AST_NODE_TYPES.Identifier &&
     GLOBAL_OBJECTS.has(c.object.name) &&
     c.property &&
-    c.property.type === 'Identifier' &&
-    COLLECTION_CONSTRUCTORS.has(c.property.name)
+    c.property.type === AST_NODE_TYPES.Identifier &&
+    COLLECTION_CONSTRUCTORS.has(c.property.name),
   );
 }
 
 /** Name of the collection ctor (callee peeled of assertions), bare or qualified. */
-function collectionCtorName(node) {
+function collectionCtorName(node: TSESTree.NewExpression): string {
   const c = peelAssertions(node.callee);
-  return c.type === 'Identifier' ? c.name : c.property.name;
+  if (c.type === AST_NODE_TYPES.Identifier) return c.name;
+  if (
+    c.type === AST_NODE_TYPES.MemberExpression &&
+    !c.computed &&
+    c.property.type === AST_NODE_TYPES.Identifier
+  ) {
+    return c.property.name;
+  }
+  // Unreachable: the sole caller (findMutable) calls this only after
+  // isCollectionConstructor(node) returned true, which guarantees an Identifier callee or
+  // a non-computed member with an Identifier property. Throw rather than invent a name.
+  throw new Error(`collectionCtorName: unexpected non-collection callee node type ${c.type}`);
 }
 
 /** If `node` is `Object.freeze(arg)` / `Object.seal(arg)`, return `arg`; else null. */
-function objectFreezeArg(node) {
+function objectFreezeArg(node: TSESTree.Node | null | undefined): TSESTree.Node | null {
   const peeled = peelAssertions(node);
   if (
     peeled &&
-    peeled.type === 'CallExpression' &&
+    peeled.type === AST_NODE_TYPES.CallExpression &&
     peeled.callee &&
-    peeled.callee.type === 'MemberExpression' &&
+    peeled.callee.type === AST_NODE_TYPES.MemberExpression &&
     !peeled.callee.computed &&
     peeled.callee.object &&
-    peeled.callee.object.type === 'Identifier' &&
+    peeled.callee.object.type === AST_NODE_TYPES.Identifier &&
     peeled.callee.object.name === 'Object' &&
     peeled.callee.property &&
-    peeled.callee.property.type === 'Identifier' &&
+    peeled.callee.property.type === AST_NODE_TYPES.Identifier &&
     (peeled.callee.property.name === 'freeze' || peeled.callee.property.name === 'seal') &&
     peeled.arguments.length > 0
   ) {
-    return peeled.arguments[0];
+    // `arguments.length > 0` was just checked above; under noUncheckedIndexedAccess the
+    // index access is still typed as possibly-undefined, so re-check rather than assert.
+    const arg = peeled.arguments[0];
+    if (!arg) return null;
+    return arg;
   }
   return null;
 }
 
 /** True if a value is a non-primitive (mutable) structure — array/object literal or
  *  collection ctor (recursing conditional/logical branches). */
-function isNonPrimitiveValue(node) {
+function isNonPrimitiveValue(node: TSESTree.Node | null | undefined): boolean {
   const base = unwrapToBase(node);
   if (!base) return false;
   if (isCollectionConstructor(base)) return true;
-  if (base.type === 'ArrayExpression' || base.type === 'ObjectExpression') return true;
-  if (base.type === 'ConditionalExpression') {
+  if (base.type === AST_NODE_TYPES.ArrayExpression || base.type === AST_NODE_TYPES.ObjectExpression)
+    return true;
+  if (base.type === AST_NODE_TYPES.ConditionalExpression) {
     return isNonPrimitiveValue(base.consequent) || isNonPrimitiveValue(base.alternate);
   }
-  if (base.type === 'LogicalExpression') {
+  if (base.type === AST_NODE_TYPES.LogicalExpression) {
     return isNonPrimitiveValue(base.left) || isNonPrimitiveValue(base.right);
   }
   return false;
@@ -272,34 +312,38 @@ function isNonPrimitiveValue(node) {
 /** True if shallow-freezing `node` (Object.freeze/seal) leaves nested mutable state — the
  *  freeze locks only the top level. `Object.freeze([1, 2])` is immutable; `[[1]]`,
  *  `[new Map()]`, `{ a: [1] }`, and `new Map()` are not. */
-function shallowFreezeLeavesMutable(node) {
+function shallowFreezeLeavesMutable(node: TSESTree.Node | null | undefined): boolean {
   const base = unwrapToBase(node);
   if (!base) return false;
   if (isCollectionConstructor(base)) return true;
-  if (base.type === 'ConditionalExpression') {
+  if (base.type === AST_NODE_TYPES.ConditionalExpression) {
     return (
       shallowFreezeLeavesMutable(base.consequent) || shallowFreezeLeavesMutable(base.alternate)
     );
   }
-  if (base.type === 'LogicalExpression') {
+  if (base.type === AST_NODE_TYPES.LogicalExpression) {
     return shallowFreezeLeavesMutable(base.left) || shallowFreezeLeavesMutable(base.right);
   }
-  if (base.type === 'ArrayExpression') {
+  if (base.type === AST_NODE_TYPES.ArrayExpression) {
     return base.elements.some((el) => {
       if (!el) return false;
-      if (el.type === 'SpreadElement') return isNonPrimitiveValue(el.argument);
+      if (el.type === AST_NODE_TYPES.SpreadElement) return isNonPrimitiveValue(el.argument);
       return isNonPrimitiveValue(el);
     });
   }
-  if (base.type === 'ObjectExpression') {
+  if (base.type === AST_NODE_TYPES.ObjectExpression) {
     return base.properties.some(
       (p) =>
-        (p.type === 'Property' && isNonPrimitiveValue(p.value)) ||
-        (p.type === 'SpreadElement' && isNonPrimitiveValue(p.argument)),
+        (p.type === AST_NODE_TYPES.Property && isNonPrimitiveValue(p.value)) ||
+        (p.type === AST_NODE_TYPES.SpreadElement && isNonPrimitiveValue(p.argument)),
     );
   }
   return false;
 }
+
+/** Persistent-mutable-state classification for a `const` initializer / `export default`
+ *  declaration, returned by `findMutable`. */
+type MutableFinding = { kind: 'array' } | { kind: 'collection'; ctor: string } | { kind: 'frozen' };
 
 /**
  * Classify an initializer as yielding persistent mutable state. Recurses through
@@ -307,7 +351,7 @@ function shallowFreezeLeavesMutable(node) {
  * that yields a mutable array/collection makes the binding a hazard. Returns
  * `{ kind: 'array' }` | `{ kind: 'collection', ctor }` | `{ kind: 'frozen' }` | null.
  */
-function findMutable(node) {
+function findMutable(node: TSESTree.Node | null | undefined): MutableFinding | null {
   if (!node) return null;
   // `Object.freeze(x)` / `Object.seal(x)` is SHALLOW: a primitive array/object becomes
   // immutable (safe), but a Map/Set/typed-array inside stays mutable (`.set()` still works).
@@ -319,19 +363,24 @@ function findMutable(node) {
   // reaches the branch recursion below rather than falling through as non-mutable.
   const base = unwrapToBase(node);
   if (!base) return null;
-  if (base.type === 'ConditionalExpression') {
+  if (base.type === AST_NODE_TYPES.ConditionalExpression) {
     return findMutable(base.consequent) || findMutable(base.alternate);
   }
-  if (base.type === 'LogicalExpression') {
+  if (base.type === AST_NODE_TYPES.LogicalExpression) {
     return findMutable(base.left) || findMutable(base.right);
   }
-  if (base.type === 'ArrayExpression') return isExemptAsConstArray(node) ? null : { kind: 'array' };
-  if (isCollectionConstructor(base)) return { kind: 'collection', ctor: collectionCtorName(base) };
+  if (base.type === AST_NODE_TYPES.ArrayExpression)
+    return isExemptAsConstArray(node) ? null : { kind: 'array' };
+  // A plain boolean, not a type guard (it is false for `new RegExp()` too), so narrow
+  // on the node type here before handing `base` to collectionCtorName.
+  if (base.type === AST_NODE_TYPES.NewExpression && isCollectionConstructor(base)) {
+    return { kind: 'collection', ctor: collectionCtorName(base) };
+  }
   return null;
 }
 
 /** True when an expression value yields a mutable array/collection (used by destructuring). */
-function isMutableCollectionValue(node) {
+function isMutableCollectionValue(node: TSESTree.Node | null | undefined): boolean {
   return findMutable(node) !== null;
 }
 
@@ -342,46 +391,54 @@ function isMutableCollectionValue(node) {
  * object-property name; rest/computed/nested patterns and non-literal RHS are not traced
  * (documented gaps). `const [a, b] = [1, 2]` (primitives) is correctly not matched.
  */
-function destructuringBindsMutable(pattern, init) {
-  if (pattern.type === 'ArrayPattern') {
+function destructuringBindsMutable(
+  pattern: TSESTree.ArrayPattern | TSESTree.ObjectPattern,
+  init: TSESTree.Expression,
+): boolean {
+  if (pattern.type === AST_NODE_TYPES.ArrayPattern) {
     // An array rest element collects into a FRESH mutable Array — always persistent
     // mutable state, regardless of RHS shape (`const [...r] = xs`, `const [a, ...r] = …`).
-    if (pattern.elements.some((el) => el && el.type === 'RestElement')) return true;
+    if (pattern.elements.some((el) => el && el.type === AST_NODE_TYPES.RestElement)) return true;
     // A default (`[buf = new Int32Array()]`) can materialize the mutable value itself,
     // independent of the RHS — check it regardless of RHS shape.
     for (const el of pattern.elements) {
-      if (el && el.type === 'AssignmentPattern' && isMutableCollectionValue(el.right)) return true;
+      if (el && el.type === AST_NODE_TYPES.AssignmentPattern && isMutableCollectionValue(el.right))
+        return true;
     }
     const base = unwrapToBase(init);
-    if (base && base.type === 'ArrayExpression') {
+    if (base && base.type === AST_NODE_TYPES.ArrayExpression) {
       for (let i = 0; i < pattern.elements.length; i++) {
         if (!pattern.elements[i]) continue; // hole
         const rel = base.elements[i];
-        if (rel && rel.type !== 'SpreadElement' && isMutableCollectionValue(rel)) return true;
+        if (rel && rel.type !== AST_NODE_TYPES.SpreadElement && isMutableCollectionValue(rel))
+          return true;
       }
     }
     return false;
   }
-  if (pattern.type === 'ObjectPattern') {
+  if (pattern.type === AST_NODE_TYPES.ObjectPattern) {
     // Defaults (`{ m = new Map() }`) materialize a value independent of the RHS.
     for (const pprop of pattern.properties) {
       if (
-        pprop.type === 'Property' &&
+        pprop.type === AST_NODE_TYPES.Property &&
         pprop.value &&
-        pprop.value.type === 'AssignmentPattern' &&
+        pprop.value.type === AST_NODE_TYPES.AssignmentPattern &&
         isMutableCollectionValue(pprop.value.right)
       ) {
         return true;
       }
     }
     const base = unwrapToBase(init);
-    if (base && base.type === 'ObjectExpression') {
+    if (base && base.type === AST_NODE_TYPES.ObjectExpression) {
       for (const pprop of pattern.properties) {
         // Object rest (`{ ...r }`) binds a plain object — covered by the object gap, not here.
-        if (pprop.type !== 'Property') continue;
+        if (pprop.type !== AST_NODE_TYPES.Property) continue;
         const key = objKeyName(pprop);
         if (key == null) continue; // unresolvable computed key — documented gap
-        const rprop = base.properties.find((p) => p.type === 'Property' && objKeyName(p) === key);
+        const rprop = base.properties.find(
+          (p): p is TSESTree.Property =>
+            p.type === AST_NODE_TYPES.Property && objKeyName(p) === key,
+        );
         if (rprop && isMutableCollectionValue(rprop.value)) return true;
       }
     }
@@ -391,11 +448,11 @@ function destructuringBindsMutable(pattern, init) {
 }
 
 /** Resolve a property's static key (Identifier or string/number literal, incl. computed); null if dynamic. */
-function objKeyName(prop) {
-  if (prop.type !== 'Property' || !prop.key) return null;
-  if (!prop.computed && prop.key.type === 'Identifier') return prop.key.name;
+function objKeyName(prop: TSESTree.Property): string | null {
+  if (prop.type !== AST_NODE_TYPES.Property || !prop.key) return null;
+  if (!prop.computed && prop.key.type === AST_NODE_TYPES.Identifier) return prop.key.name;
   if (
-    prop.key.type === 'Literal' &&
+    prop.key.type === AST_NODE_TYPES.Literal &&
     (typeof prop.key.value === 'string' || typeof prop.key.value === 'number')
   ) {
     return String(prop.key.value);
@@ -408,14 +465,24 @@ function objKeyName(prop) {
  * `Program` or `TSModuleBlock` body (plain or `export`ed). Block/loop/function-nested
  * declarations are scoped to one-time execution and return false.
  */
-function isModuleScope(declaration) {
-  let parent = declaration.parent;
-  if (parent && parent.type === 'ExportNamedDeclaration') parent = parent.parent;
-  return Boolean(parent) && (parent.type === 'Program' || parent.type === 'TSModuleBlock');
+function isModuleScope(declaration: TSESTree.VariableDeclaration): boolean {
+  let parent: TSESTree.Node = declaration.parent;
+  if (parent && parent.type === AST_NODE_TYPES.ExportNamedDeclaration) parent = parent.parent;
+  return (
+    Boolean(parent) &&
+    (parent.type === AST_NODE_TYPES.Program || parent.type === AST_NODE_TYPES.TSModuleBlock)
+  );
 }
 
-/** @type {import('eslint').Rule.RuleModule} */
-export default {
+/** The five violation kinds this rule reports. */
+type SimModuleStateMessageId =
+  | 'mutableLet'
+  | 'mutableArray'
+  | 'mutableCollection'
+  | 'mutableDestructure'
+  | 'mutableFrozen';
+
+const rule: Rule.RuleModule = {
   meta: {
     type: 'problem',
     docs: {
@@ -434,11 +501,25 @@ export default {
         'Module-level destructuring binds a mutable array/collection into a persistent local. Bind it directly (with `as const` if immutable) or add `// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch:/sim-cache:/sim-memo: <why it is reset/safe>`.',
       mutableFrozen:
         '`Object.freeze(...)` is shallow — a `Map`/`Set`/typed-array inside it stays mutable in src/sim (`.set()`/`.add()` still work). Add `// eslint-disable-next-line subterrans/sim-module-state -- sim-scratch:/sim-cache:/sim-memo: <why>`, or freeze a structure that holds no live collection.',
-    },
+    } satisfies Record<SimModuleStateMessageId, string>,
   },
   create(context) {
+    /** Report a TSESTree node against this rule's context — ESLint core's `context.report`
+     *  wants a `Rule.Node` (estree-shaped); the parser is @typescript-eslint/parser, so
+     *  every node it hands us at runtime IS a TSESTree node underneath. */
+    function report(
+      node: TSESTree.Node,
+      messageId: SimModuleStateMessageId,
+      data?: Record<string, string>,
+    ): void {
+      context.report({ node: node as unknown as Rule.Node, messageId, data });
+    }
+
     return {
-      VariableDeclaration(node) {
+      VariableDeclaration(estreeNode) {
+        // The configured parser is @typescript-eslint/parser, so the runtime node IS a
+        // TSESTree node — ESLint core's types simply don't model TS syntax (e.g. `declare`).
+        const node = estreeNode as unknown as TSESTree.VariableDeclaration;
         if (node.declare) return; // ambient `declare const/let` — no runtime state
         if (!isModuleScope(node)) return;
 
@@ -446,19 +527,22 @@ export default {
           // Destructuring: the RHS literal isn't retained as one binding, but an element
           // bound into a local can be a live collection (`const [buf] = [new Int32Array()]`).
           // Inspect the matched element/property rather than skipping wholesale.
-          if (decl.id.type === 'ArrayPattern' || decl.id.type === 'ObjectPattern') {
+          if (
+            decl.id.type === AST_NODE_TYPES.ArrayPattern ||
+            decl.id.type === AST_NODE_TYPES.ObjectPattern
+          ) {
             if (node.kind === 'let' || node.kind === 'var') {
               // Destructured `let`/`var` bindings are reassignable module state too.
-              context.report({ node: decl, messageId: 'mutableLet' });
+              report(decl, 'mutableLet');
             } else if (decl.init && destructuringBindsMutable(decl.id, decl.init)) {
-              context.report({ node: decl, messageId: 'mutableDestructure' });
+              report(decl, 'mutableDestructure');
             }
             continue;
           }
 
           if (node.kind === 'let' || node.kind === 'var') {
             // `var` is reassignable module state too (and hoisted) — treat it like `let`.
-            context.report({ node: decl, messageId: 'mutableLet' });
+            report(decl, 'mutableLet');
             continue;
           }
           if (node.kind !== 'const') continue; // ignore `using` / `await using`
@@ -468,29 +552,29 @@ export default {
           // recursing through conditional/logical branches) as a mutable array/collection.
           const found = findMutable(decl.init);
           if (found && found.kind === 'array') {
-            context.report({ node: decl, messageId: 'mutableArray' });
+            report(decl, 'mutableArray');
           } else if (found && found.kind === 'collection') {
-            context.report({
-              node: decl,
-              messageId: 'mutableCollection',
-              data: { ctor: found.ctor },
-            });
+            report(decl, 'mutableCollection', { ctor: found.ctor });
           } else if (found && found.kind === 'frozen') {
-            context.report({ node: decl, messageId: 'mutableFrozen' });
+            report(decl, 'mutableFrozen');
           }
         }
       },
-      ExportDefaultDeclaration(node) {
+      ExportDefaultDeclaration(estreeNode) {
+        // Same boundary cast as above: the parser guarantees a TSESTree node at runtime.
+        const node = estreeNode as unknown as TSESTree.ExportDefaultDeclaration;
         // `export default new Map()` / `[1, 2]` caches a mutable module-level singleton.
         const found = findMutable(node.declaration);
         if (found && found.kind === 'array') {
-          context.report({ node, messageId: 'mutableArray' });
+          report(node, 'mutableArray');
         } else if (found && found.kind === 'collection') {
-          context.report({ node, messageId: 'mutableCollection', data: { ctor: found.ctor } });
+          report(node, 'mutableCollection', { ctor: found.ctor });
         } else if (found && found.kind === 'frozen') {
-          context.report({ node, messageId: 'mutableFrozen' });
+          report(node, 'mutableFrozen');
         }
       },
     };
   },
 };
+
+export default rule;

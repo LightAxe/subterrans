@@ -48,7 +48,7 @@ Useful scripts:
 | `npm run test:e2e`  | Playwright browser tests                                     |
 | `npm run typecheck` | TypeScript in `--noEmit` mode                                |
 | `npm run lint`      | ESLint                                                       |
-| `npm run verify`    | Format check + lint + typecheck (src + scripts + tests + bench + root tooling configs + the eslint-rules/ contract tests) + type-aware lint + sim-boundary/asset-path/e2e-geometry/layout-discipline/ant-cycle guards + unit tests (CI's verify job; e2e is a separate job) |
+| `npm run verify`    | Format check + lint + typecheck (src + scripts + tests + bench + root tooling configs + eslint-rules/, the rule modules and their contract tests) + type-aware lint + sim-boundary/asset-path/e2e-geometry/layout-discipline/ant-cycle guards + unit tests (CI's verify job; e2e is a separate job) |
 
 ---
 
