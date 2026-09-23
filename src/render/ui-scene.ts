@@ -246,6 +246,7 @@ import {
   speedControlAt,
   hintTextFor,
   queueFullHint,
+  type HudButtonGeometry,
 } from './hud-controls.js';
 import {
   contextMenuState,
@@ -311,7 +312,7 @@ import {
   type TooltipTarget,
 } from './tooltips.js';
 import { DEFAULT_LAYOUT, cssScaleX, type LayoutContext } from './layout.js';
-import { buildHudLayout, type HudLayout } from './hud-layout.js';
+import { buildHudLayout, type HudLayout, type HudRect } from './hud-layout.js';
 import { setViewportSize } from './camera-adapter.js';
 import {
   pauseMenuItems,
@@ -379,6 +380,9 @@ const PAUSED_QUEUE_FULL_HINT_MS = 1500;
  *  before it disappears. UAT-tunable (Rob). */
 const TOOLTIP_SHOW_DELAY_MS = 400;
 const TOOLTIP_HIDE_GRACE_MS = 1500;
+/** #320 — font size of the right-column toggle labels (view / colony / alarm).
+ *  The column's 128px width in hud-layout.ts is sized to this. */
+const HUD_TOGGLE_FONT_PX = 12;
 import { loadSettings, saveSettings } from '../platform/settings.js';
 import {
   classifySaveCompatibility,
@@ -569,6 +573,13 @@ export class UIScene extends Phaser.Scene {
   private lastTooltipView: ViewState['activeView'] | null = null;
   private lastTooltipColonyId: ViewState['activeUndergroundColonyId'] | null = null;
   private gfx!: Phaser.GameObjects.Graphics;
+  /** #320 review — the underground chamber menu's stripes, on their own layer at
+   *  depth 9: above every HUD label (depth 0-5, which the shared depth-0 `gfx`
+   *  sits UNDER, since the labels are created after it) and below the menu's own
+   *  depth-10 labels. The click handler gives an open menu priority, so the menu
+   *  must also be what is drawn on top — in the shared `gfx` a toggle label
+   *  painted over the menu while the click went to the menu row beneath it. */
+  private contextMenuGfx!: Phaser.GameObjects.Graphics;
   // #278 — the STATIC minimap layer (barren-earth base + dapple) baked once into a
   // RenderTexture behind the per-frame HUD gfx, so the ~16k-tile dapple loop stops
   // running every frame. `minimapBaker` is an off-display-list Graphics stamped
@@ -582,14 +593,9 @@ export class UIScene extends Phaser.Scene {
   private queenLabelText!: Phaser.GameObjects.Text;
   private triangleLabels!: Phaser.GameObjects.Text[];
   private viewToggleText!: Phaser.GameObjects.Text;
-  /** C1 — colony alarm toggle label; text + tint follow colony.alarmActive. */
+  /** C1 — colony alarm toggle label; its text follows colony.alarmActive (the red
+   *  "on" background is the gfx fill of hud.ALARM_TOGGLE, drawn in update()). */
   private alarmToggleText!: Phaser.GameObjects.Text;
-  /** C1 — last background applied to alarmToggleText. Phaser's setText returns
-   *  early on an unchanged string, but setBackgroundColor always calls through to
-   *  updateText(): measureText + clearRect + fillText + canvasToTexture. Calling
-   *  it every frame re-rasterized the label forever; this latches it so the work
-   *  happens only on an actual state change. */
-  private alarmToggleBg: string | null = null;
   // Phase 09.1 Chunk 2 — underground colony label. Visible only when
   // viewState.activeView === 'underground'. Reads 'Your Colony' vs
   // 'Enemy Colony' from viewState.activeUndergroundColonyId each frame.
@@ -695,6 +701,8 @@ export class UIScene extends Phaser.Scene {
     // today; both scenes set it at boot (idempotent — they share DEFAULT_LAYOUT).
     setViewportSize(this.layout.w, this.layout.h);
     this.gfx = this.add.graphics();
+    this.contextMenuGfx = this.add.graphics();
+    this.contextMenuGfx.setDepth(9);
     // #278 — the minimap's static barren-earth base + dapple, baked once into a
     // RenderTexture behind the per-frame HUD gfx (depth -1 < gfx's 0), so the
     // ~16k-tile dapple loop no longer runs every frame. Baked lazily in update()
@@ -779,45 +787,15 @@ export class UIScene extends Phaser.Scene {
       label.setScrollFactor(0);
     }
 
-    // View toggle button label — text updated per-frame.
-    this.viewToggleText = this.add.text(
-      this.hud.VIEW_TOGGLE.x + 4,
-      this.hud.VIEW_TOGGLE.y + 6,
-      'Underground >',
-      { color: '#ffffff', fontSize: '12px', backgroundColor: '#333333' },
-    );
-    this.viewToggleText.setPadding(4);
-    this.viewToggleText.setScrollFactor(0);
+    // The three right-column toggles. Each label is pinned to its click rect by
+    // addHudToggleLabel (#320); the texts here are initial values only —
+    // update() rewrites all three every frame.
+    this.viewToggleText = this.addHudToggleLabel(this.hud.VIEW_TOGGLE, 'Underground >');
 
     // C1 — colony alarm toggle. Drawn on BOTH views (a raid you need to react to
     // is usually visible on the surface, but the decision is colony-wide), so
     // unlike the colony toggle it has no visibility gate.
-    // +1, not +5: the Text paints its own background, and at 12px Courier the
-    // glyph box is ~20.3px tall inside a 22px rect. A +5 offset put the pill's
-    // bottom ~3.3px BELOW hud.ALARM_TOGGLE, and that band is in no HUD zone — a
-    // click there falls through as a world click and issues a dig/command order,
-    // the same failure the label shortening fixed horizontally.
-    this.alarmToggleText = this.add.text(
-      // The rect ORIGIN, not an inset point. setFixedSize below sizes the painted
-      // background to the full rect, so an offset origin would push that
-      // background past the rect by exactly the offset — which is the same
-      // click-fall-through band this is meant to close (Codex P2).
-      this.hud.ALARM_TOGGLE.x,
-      this.hud.ALARM_TOGGLE.y,
-      // Initial text only; update() rewrites it from the glyph table each frame.
-      'Alarm',
-      { color: '#ffffff', fontSize: '12px', backgroundColor: '#333333' },
-    );
-    // Inset the GLYPHS inside the fixed box instead of moving the box.
-    this.alarmToggleText.setPadding(4, 4, 4, 4);
-    // Pin the Text to the click rect. The Text paints its own background, and a
-    // pill wider or taller than hud.ALARM_TOGGLE spills into a band no HUD zone
-    // masks — a click there falls through as a world click and issues a
-    // dig/command order. Two review rounds found that bug (once horizontally at
-    // ~51px, once vertically at ~3.3px) and the fix was font-metric dependent
-    // both times; a fixed size makes it a property of the layout instead.
-    this.alarmToggleText.setFixedSize(this.hud.ALARM_TOGGLE.w, this.hud.ALARM_TOGGLE.h);
-    this.alarmToggleText.setScrollFactor(0);
+    this.alarmToggleText = this.addHudToggleLabel(this.hud.ALARM_TOGGLE, 'Alarm');
 
     // Phase 09.1 Chunk 2 + issue #14 — underground colony toggle button.
     // Sits above VIEW_TOGGLE (hud.UNDERGROUND_COLONY_TOGGLE) so the two
@@ -827,16 +805,13 @@ export class UIScene extends Phaser.Scene {
     //
     // Issue #14 made this a CLICKABLE button (was a passive label) — the
     // X keybind alone left invasion undiscoverable. Click + key both
-    // dispatch toggleUndergroundColony. The "(X)" hint surfaces the key
-    // for keyboard players. Background matches VIEW_TOGGLE styling so the
-    // two read as a stacked pair of toggle buttons.
-    this.undergroundLabelText = this.add.text(
-      this.hud.UNDERGROUND_COLONY_TOGGLE.x + 4,
-      this.hud.UNDERGROUND_COLONY_TOGGLE.y + 4,
-      'Your Colony (X)',
-      { color: '#ffffff', fontSize: '12px' },
+    // dispatch toggleUndergroundColony. The [X] glyph surfaces the key for
+    // keyboard players. Styled like VIEW_TOGGLE so the two read as a stacked
+    // pair of toggle buttons.
+    this.undergroundLabelText = this.addHudToggleLabel(
+      this.hud.UNDERGROUND_COLONY_TOGGLE,
+      'Your Colony',
     );
-    this.undergroundLabelText.setScrollFactor(0);
     this.undergroundLabelText.setVisible(false);
 
     // Stage 1 controls rework (issue #18) — tool palette (hud.TOOLS), hint strip
@@ -1293,6 +1268,90 @@ export class UIScene extends Phaser.Scene {
   }
 
   /**
+   * #320 — a right-column HUD toggle's label, pinned to its click rect.
+   *
+   * The view label used to paint its own background pill (the alarm label's
+   * was already pinned by setFixedSize in C1), and Phaser sizes such a pill by
+   * the TEXT, not by the HudLayout rect the click handler hit-tests and
+   * isPointerOverHUD masks. A label wider or taller than its rect therefore
+   * painted into a band no HUD zone covers, and a click on what looked like the
+   * button fell through as a WORLD click that issued a dig/command order —
+   * VIEW_TOGGLE shipped 26px over. Now:
+   *   - the button's background is only the per-frame gfx fillRect of the rect
+   *     itself (update()); the label is transparent;
+   *   - setFixedSize pins the label's box to the rect, so glyphs that don't fit
+   *     are clipped at the rect's edge instead of drawn past it. The Text sits
+   *     at the rect ORIGIN — a fixed-size box drawn from an inset point
+   *     overhangs by exactly the inset (Codex P2 on the C1 alarm button);
+   *   - padding insets the glyphs inside that box: 4px at the sides, and a top
+   *     inset that roughly centres the 12px line in the rect's height.
+   * The hud-button-geometry e2e spec measures every label variant against its
+   * rect in the real renderer, so a label that no longer fits fails there.
+   */
+  private addHudToggleLabel(rect: HudRect, initialText: string): Phaser.GameObjects.Text {
+    const t = this.add.text(rect.x, rect.y, initialText, {
+      color: '#ffffff',
+      fontSize: `${HUD_TOGGLE_FONT_PX}px`,
+    });
+    t.setPadding(4, Math.floor((rect.h - HUD_TOGGLE_FONT_PX) / 2), 4, 0);
+    t.setFixedSize(rect.w, rect.h);
+    t.setScrollFactor(0);
+    return t;
+  }
+
+  /**
+   * #320 — Dev/E2E-only observability: every HUD button label's painted box and
+   * content extent, beside the click rect that owns it (see HudButtonGeometry).
+   * Read through window.__phase9_test.getHudButtonGeometry(). Measures with the
+   * label's own canvas context, re-synced to its font first — the same call
+   * Phaser's updateText makes before it draws. Returns [] outside Dev builds.
+   */
+  hudButtonGeometry(): HudButtonGeometry[] {
+    if (!import.meta.env.DEV) return [];
+    const labels: Array<{ id: string; text: Phaser.GameObjects.Text | undefined; rect: HudRect }> =
+      [
+        { id: 'view-toggle', text: this.viewToggleText, rect: this.hud.VIEW_TOGGLE },
+        { id: 'alarm-toggle', text: this.alarmToggleText, rect: this.hud.ALARM_TOGGLE },
+        {
+          id: 'colony-toggle',
+          text: this.undergroundLabelText,
+          rect: this.hud.UNDERGROUND_COLONY_TOGGLE,
+        },
+        ...TOOL_ORDER.map((tool, i) => ({
+          id: `tool:${tool}`,
+          text: this.toolButtonTexts[i],
+          rect: toolButtonRect(i, this.hud.TOOLS),
+        })),
+        ...SPEED_CONTROL_ORDER.map((control, i) => ({
+          id: `speed:${control}`,
+          text: this.speedControlTexts[i],
+          rect: speedControlRect(i, this.hud.SPEED),
+        })),
+      ];
+    const out: HudButtonGeometry[] = [];
+    for (const { id, text: t, rect } of labels) {
+      if (t === undefined) continue;
+      const b = t.getBounds();
+      t.style.syncFont(t.canvas, t.context);
+      const glyphW = t.context.measureText(t.text).width;
+      const glyphH = t.getTextMetrics().fontSize;
+      const pad = t.padding;
+      out.push({
+        id,
+        text: t.text,
+        visible: t.visible,
+        rect: { x: rect.x, y: rect.y, w: rect.w, h: rect.h },
+        painted: { x: b.x, y: b.y, w: b.width, h: b.height },
+        content: {
+          w: (pad.left ?? 0) + glyphW + (pad.right ?? 0),
+          h: (pad.top ?? 0) + glyphH + (pad.bottom ?? 0),
+        },
+      });
+    }
+    return out;
+  }
+
+  /**
    * #278 — (re)bake the static minimap layer into its RenderTexture. Stamps
    * bakeMinimapDapple (texture-LOCAL coords, origin 0,0) via the off-display-list
    * baker, then draws the baker into the RT (positioned at the minimap rect). The
@@ -1323,6 +1382,7 @@ export class UIScene extends Phaser.Scene {
     applyPendingContextMenuShow();
     applyPendingAntActivityPanelHide();
     this.gfx.clear();
+    this.contextMenuGfx.clear();
 
     // Pull the live world each frame via the lazy getter. Returns undefined
     // pre-boot (SavePrompt phase) and on any future world swap between frames.
@@ -1467,13 +1527,13 @@ export class UIScene extends Phaser.Scene {
     // reducer in camera.ts. The Playwright label feed
     // (window.__phase9_ui.activeUndergroundLabel) keeps the bare data
     // string ('Your Colony' / 'Enemy Colony') so existing tests don't have
-    // to know about the (X) hint affordance the button now renders.
+    // to know about the [X] key glyph the button now renders.
     const undergroundLabel: ActiveUndergroundLabel =
       this.viewState.activeUndergroundColonyId === ENEMY_COLONY_ID ? 'Enemy Colony' : 'Your Colony';
     const undergroundShowing = this.viewState.activeView === 'underground';
     if (undergroundShowing) {
-      // Draw the toggle background as a Graphics fill (matches VIEW_TOGGLE
-      // pattern below) so the click zone reads as a button.
+      // Draw the toggle background as a Graphics fill of the click rect (the
+      // VIEW_TOGGLE pattern above) so the click zone reads as a button.
       this.gfx.fillStyle(0x333333, 1);
       this.gfx.fillRect(
         this.hud.UNDERGROUND_COLONY_TOGGLE.x,
@@ -1526,21 +1586,16 @@ export class UIScene extends Phaser.Scene {
         this.hud.ALARM_TOGGLE.h,
       );
     }
-    // Both labels must FIT hud.ALARM_TOGGLE (112px): the Text carries its own
-    // backgroundColor, so anything wider paints a pill outside the click rect and
-    // outside isPointerOverHUD — a click on what looks like the button would fall
-    // through as a world click and issue a dig/command order. At 12px Courier
-    // 'All clear [R]' is ~102px with padding; 'ALARM — all clear [R]' was ~159px.
+    // Both labels must fit hud.ALARM_TOGGLE: the label is pinned to the rect
+    // (addHudToggleLabel), so a longer one is clipped rather than spilled.
+    // tests/hud-button-geometry.spec.ts measures both in the real renderer.
     this.alarmToggleText.setText(alarmOn ? `All clear ${alarmGlyph}` : `Alarm ${alarmGlyph}`);
-    const alarmBg = alarmOn ? '#7a1f1f' : '#333333';
-    if (alarmBg !== this.alarmToggleBg) {
-      this.alarmToggleText.setBackgroundColor(alarmBg);
-      this.alarmToggleBg = alarmBg;
-    }
     this.alarmToggleText.setVisible(alarmSupported);
     setAlarmActive(alarmLive);
 
-    this.undergroundLabelText.setText(`${undergroundLabel} (X)`);
+    this.undergroundLabelText.setText(
+      `${undergroundLabel} ${glyphFor('COLONY_TOGGLE', 'keyboard')}`,
+    );
     this.undergroundLabelText.setVisible(undergroundShowing);
     // Expose regardless of visibility so tests can assert the underlying
     // toggle state even if the surface view is active. Cheap string write.
@@ -1551,10 +1606,11 @@ export class UIScene extends Phaser.Scene {
     this.renderHintStrip();
     this.renderSpeedWidget();
 
-    // Ant-activity popup — live refresh when visible. Drawn before the
-    // context menu so a visible chamber menu stays on top (the underground
-    // right-click menu is transient and should never be occluded by a
-    // non-essential overlay).
+    // Ant-activity popup — live refresh when visible. Its background is in the
+    // depth-0 gfx and its text at depth 11, so the chamber menu's depth-9 layer
+    // would sit above the panel's background but below its text; in practice the
+    // two are never open together (isPointerOverHUD masks the whole canvas while
+    // the panel is up, and a click on STATS dismisses the menu).
     if (antActivityPanelState.visible && colony) {
       const activity = computeAntActivity(world, colony);
       const body = formatAntActivityLines(activity).join('\n');
@@ -1573,7 +1629,9 @@ export class UIScene extends Phaser.Scene {
       this.antActivityText.setVisible(false);
     }
 
-    // Context menu (drawn last so it appears on top of other HUD elements).
+    // Context menu — its stripes go on their own depth-9 layer (contextMenuGfx)
+    // so the menu is drawn above every HUD label, matching the click handler,
+    // which gives an open menu priority.
     // Filter the choice list against colony state each frame so the player
     // never sees a disabled Queen option once the colony already owns or has
     // queued a Queen chamber.
@@ -1591,7 +1649,7 @@ export class UIScene extends Phaser.Scene {
       const items = visibleContextMenuItems(projColony, projWorld);
       this.contextMenuVisibleItems = items;
       drawContextMenuGeometry(
-        this.gfx as unknown as import('./draw-surface.js').GfxLike,
+        this.contextMenuGfx as unknown as import('./draw-surface.js').GfxLike,
         contextMenuState.screenX,
         contextMenuState.screenY,
         items,
@@ -1841,6 +1899,21 @@ export class UIScene extends Phaser.Scene {
   private updateTooltipHover(pointer: Phaser.Input.Pointer): void {
     // No tooltips while dragging, over the ant-activity popup, or under a modal.
     if (pointer.isDown || this.anyOverlayOpen() || antActivityPanelState.visible) {
+      this.cancelTooltip();
+      return;
+    }
+    // #320 review — an open chamber menu is drawn over (and takes the clicks
+    // of) any HUD control beneath it, so don't tooltip the covered control.
+    if (
+      contextMenuState.visible &&
+      isInsideContextMenu(
+        pointer.x,
+        pointer.y,
+        contextMenuState.screenX,
+        contextMenuState.screenY,
+        this.contextMenuVisibleItems,
+      )
+    ) {
       this.cancelTooltip();
       return;
     }

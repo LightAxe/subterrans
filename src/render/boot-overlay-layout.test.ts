@@ -208,7 +208,8 @@ describe('#240 layout functions equal the specs’ former inline literals', () =
     expect(dlg[2]!.rect).toEqual({ x: 260, y: 264, w: 280, h: 36 });
   });
 
-  it('HUD view-toggle button', () => {
-    expect(buildHudLayout(DEFAULT_LAYOUT).VIEW_TOGGLE).toEqual({ x: 632, y: 396, w: 80, h: 24 });
+  it('HUD view-toggle button (#320 widened it past the old 80px literal)', () => {
+    // The click the specs aim at is its centre, which moved from x 672 to 696.
+    expect(buildHudLayout(DEFAULT_LAYOUT).VIEW_TOGGLE).toEqual({ x: 632, y: 396, w: 128, h: 24 });
   });
 });

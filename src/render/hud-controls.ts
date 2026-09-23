@@ -178,3 +178,28 @@ export const RUNNING_QUEUE_FULL_HINT = 'Too many commands at once — try again'
 export function queueFullHint(paused: boolean): string {
   return paused ? PAUSED_QUEUE_FULL_HINT : RUNNING_QUEUE_FULL_HINT;
 }
+
+// ---------------------------------------------------------------------------
+// #320 — HUD button label geometry (Dev/E2E observability contract)
+// ---------------------------------------------------------------------------
+
+/**
+ * One HUD button label measured in the running game: the click rect that owns
+ * it, the box its Text actually paints, and the extent its content needs to show
+ * unclipped. Produced by UIScene.hudButtonGeometry() and read by
+ * tests/hud-button-geometry.spec.ts through window.__phase9_test (Dev builds
+ * only). Pure data — no Phaser types — so the spec can import it type-only.
+ */
+export interface HudButtonGeometry {
+  /** 'view-toggle' | 'alarm-toggle' | 'colony-toggle' | 'tool:<id>' | 'speed:<control>'. */
+  id: string;
+  /** The label as currently rendered. */
+  text: string;
+  visible: boolean;
+  /** The click rect — what the click handler hit-tests and isPointerOverHUD masks. */
+  rect: { x: number; y: number; w: number; h: number };
+  /** The box the Text paints (its background, when it has one). */
+  painted: { x: number; y: number; w: number; h: number };
+  /** Padding plus the measured glyph run: what the label needs to show unclipped. */
+  content: { w: number; h: number };
+}
