@@ -104,7 +104,7 @@ describe('HUD zone layout', () => {
     expect(hud.TRIANGLE.x + hud.TRIANGLE.w).toBeLessThanOrEqual(128);
   });
 
-  it('HUD zone exact coordinates match PRD §6b', () => {
+  it('HUD zone exact coordinates (PRD §6b positions; #320 toggle widths)', () => {
     expect(hud.STATS).toMatchObject({ x: 8, y: 8, w: 200, h: 24 });
     // Phase 10 / issue #13 follow-up: TRIANGLE shrunk from 120×120 to 120×44
     // when the widget collapsed from a 3-vertex triangle to a 1-D slider.
@@ -112,9 +112,11 @@ describe('HUD zone layout', () => {
     // pixel anchors are undisturbed.
     expect(hud.TRIANGLE).toMatchObject({ x: 8, y: 532, w: 120, h: 44 });
     expect(hud.MINIMAP).toMatchObject({ x: 632, y: 424, w: 160, h: 160 });
-    expect(hud.VIEW_TOGGLE).toMatchObject({ x: 632, y: 396, w: 80, h: 24 });
+    // #320 widened both toggles to 128 (from 80 / 112) so their labels fit the
+    // click rect; positions are the PRD's.
+    expect(hud.VIEW_TOGGLE).toMatchObject({ x: 632, y: 396, w: 128, h: 24 });
     // Issue #14: colony-toggle button stacked just above VIEW_TOGGLE.
-    expect(hud.UNDERGROUND_COLONY_TOGGLE).toMatchObject({ x: 632, y: 372, w: 112, h: 22 });
+    expect(hud.UNDERGROUND_COLONY_TOGGLE).toMatchObject({ x: 632, y: 372, w: 128, h: 22 });
     expect(hud.SPEED).toMatchObject({ x: 320, y: 552, w: 160, h: 32 });
     expect(hud.SAVE_ICON).toMatchObject({ x: 772, y: 8, w: 20, h: 20 });
   });

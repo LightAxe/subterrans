@@ -206,6 +206,7 @@ import {
 import { ChamberType } from '../sim/enums.js';
 import { DEFAULT_LAYOUT, cssScaleX } from './layout.js';
 import { buildHudLayout } from './hud-layout.js';
+import type { HudButtonGeometry } from './hud-controls.js';
 import { KeyEventDedupe } from './key-event-dedupe.js';
 // UIScenePhase9 — subset of UIScene public API added in Plan 06 Task 3.
 // Typed here to avoid circular imports; UIScene implements these methods.
@@ -276,6 +277,8 @@ interface UIScenePhase9 {
   // paused → "resume to continue"; running → "try again" (transient burst).
   // Optional so other UIScene consumers (tests) need not implement it.
   flashPausedQueueFull?(paused: boolean): void;
+  // #320 — Dev/E2E observability for __phase9_test.getHudButtonGeometry().
+  hudButtonGeometry?(): HudButtonGeometry[];
 }
 
 // Re-export GamePhase for Plan 07 and other consumers
@@ -306,6 +309,18 @@ declare global {
        *  deterministically instead of sleeping — a sleep whose expected value
        *  equals the pre-drain value fails open on a loaded machine. */
       getTick?(): number;
+      /** #320 — every HUD button label's painted box and content extent beside
+       *  the click rect that owns it (UIScene.hudButtonGeometry), so a spec can
+       *  assert in the real renderer that no label paints outside its click
+       *  rect or is clipped by it. Render-side only; empty before UIScene runs. */
+      getHudButtonGeometry?(): HudButtonGeometry[];
+      /** #320 review — the RGBA bytes of a w×h area of the rendered canvas (row
+       *  major, 4 per pixel), captured after the next frame. Lets a spec assert
+       *  what is actually drawn ON TOP at a point (e.g. an open chamber menu over
+       *  a HUD toggle), which no game-object query can answer. Works on both the
+       *  Canvas and WebGL renderers (Phaser's snapshotArea). Calls are queued, so
+       *  overlapping requests each resolve in turn. Dev-build only. */
+      sampleArea?(x: number, y: number, w: number, h: number): Promise<number[]>;
       /** Return the ACTIVE camera's current zoom (surface or underground per the
        *  active view). Render-side observability for the #237 pinch-zoom e2e
        *  (touch-smoke.spec.ts): reads viewState, mutates nothing, crosses no
@@ -565,6 +580,10 @@ export class GameScene extends Phaser.Scene {
    *  library builds (Playwright runs the Vite dev server, where DEV is true). */
   private installTestHooks(): void {
     if (!import.meta.env.DEV || typeof window === 'undefined') return;
+    // sampleArea requests are chained: Phaser holds ONE pending snapshot per
+    // frame, so a second request before the next render would replace the first
+    // and leave its promise unsettled forever.
+    let sampleChain: Promise<unknown> = Promise.resolve();
     window.__phase9_test = {
       getDrawOrder: (): string[] => [...this.drawOrder],
       getRoundDifficulty: (): string | undefined =>
@@ -580,6 +599,50 @@ export class GameScene extends Phaser.Scene {
       isPaused: (): boolean => isPausedByAny(this.pauseReasons),
       alarmHotkeyAccepts: (): number => this.alarmHotkeyAccepts,
       getTick: (): number => this.world?.tick ?? -1,
+      getHudButtonGeometry: (): HudButtonGeometry[] =>
+        this.getUIScene()?.hudButtonGeometry?.() ?? [],
+      sampleArea: (x: number, y: number, w: number, h: number): Promise<number[]> => {
+        // Reject bad sizes up front: on WebGL a zero-size snapshot throws inside
+        // Phaser's postRender, before our callback runs, so the promise would
+        // never settle and the queue behind it would hang.
+        if (!Number.isInteger(w) || !Number.isInteger(h) || w <= 0 || h <= 0) {
+          return Promise.reject(new Error(`sampleArea: bad size ${w}x${h}`));
+        }
+        const sample = sampleChain.then(
+          () =>
+            new Promise<number[]>((resolve, reject) => {
+              this.game.renderer.snapshotArea(x, y, w, h, (snap) => {
+                // Runs from an image onload, outside the executor: catch here
+                // so a throw rejects instead of leaving the promise pending.
+                try {
+                  if (!(snap instanceof HTMLImageElement)) {
+                    reject(new Error('sampleArea: expected an image snapshot'));
+                    return;
+                  }
+                  const c = document.createElement('canvas');
+                  c.width = w;
+                  c.height = h;
+                  const ctx = c.getContext('2d');
+                  if (ctx === null) {
+                    reject(new Error('sampleArea: no 2d context'));
+                    return;
+                  }
+                  ctx.drawImage(snap, 0, 0);
+                  resolve(Array.from(ctx.getImageData(0, 0, w, h).data));
+                } catch (err) {
+                  reject(err instanceof Error ? err : new Error(String(err)));
+                }
+              });
+            }),
+        );
+        // A rejected sample must not wedge every later one behind it, and the
+        // chain should not keep the last pixel array alive.
+        sampleChain = sample.then(
+          () => undefined,
+          () => undefined,
+        );
+        return sample;
+      },
     };
   }
 

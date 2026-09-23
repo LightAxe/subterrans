@@ -8,8 +8,10 @@
 // don't touch Phaser: layout.ts→sprites.ts (zero imports), pause-menu-layout.ts /
 // save-load-dialog-layout.ts (type-only cross-imports), boot-overlay-layout.ts
 // (#304 — type-only imports of LayoutContext and the sim's WorldState, erased at
-// runtime), sprites.ts (zero imports), and hud-layout.ts (#238 — type-only import
-// of LayoutContext; the VIEW_TOGGLE rect now comes from buildHudLayout).
+// runtime), sprites.ts (zero imports), hud-layout.ts (#238 — type-only import
+// of LayoutContext; the VIEW_TOGGLE rect now comes from buildHudLayout), and
+// hud-controls.ts (#320 — its only runtime import is input-glyphs.ts, which has
+// none).
 import { DEFAULT_LAYOUT } from '../../src/render/layout.js';
 import { pauseMenuItems, type PauseMenuRenderContext } from '../../src/render/pause-menu-layout.js';
 import {
@@ -17,6 +19,7 @@ import {
   type SaveLoadDialogContext,
 } from '../../src/render/save-load-dialog-layout.js';
 import { buildHudLayout } from '../../src/render/hud-layout.js';
+import { TOOL_ORDER, toolButtonRect } from '../../src/render/hud-controls.js';
 import { newGameScreenLayout, type Difficulty } from '../../src/render/boot-overlay-layout.js';
 
 export interface Rect {
@@ -67,6 +70,12 @@ export const DIALOG_DELETE_RECT: Rect = dialogItems[2]!.rect;
 export const VIEW_TOGGLE_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).VIEW_TOGGLE;
 /** C1 — colony alarm toggle, drawn on both views. */
 export const ALARM_TOGGLE_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).ALARM_TOGGLE;
+/** Underground colony toggle ("Your Colony [X]"), drawn on the underground view only. */
+export const COLONY_TOGGLE_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).UNDERGROUND_COLONY_TOGGLE;
+/** The tool palette's three buttons (Command / Dig / Chamber), left to right. */
+export const TOOL_BUTTON_RECTS: readonly Rect[] = TOOL_ORDER.map((_, i) =>
+  toolButtonRect(i, buildHudLayout(DEFAULT_LAYOUT).TOOLS),
+);
 
 // Boot-overlay rects re-exported from the Phaser-free module (the same source
 // ui-scene.ts uses), so specs import their click targets from one place.
