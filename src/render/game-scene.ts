@@ -318,8 +318,9 @@ declare global {
        *  major, 4 per pixel), captured after the next frame. Lets a spec assert
        *  what is actually drawn ON TOP at a point (e.g. an open chamber menu over
        *  a HUD toggle), which no game-object query can answer. Works on both the
-       *  Canvas and WebGL renderers (Phaser's snapshotArea). Calls are queued, so
-       *  overlapping requests each resolve in turn. Dev-build only. */
+       *  Canvas and WebGL renderers (Phaser's snapshotArea). Valid calls are
+       *  queued and settle in FIFO order; an area that is not a positive-size
+       *  integer rect inside the canvas rejects at once. Dev-build only. */
       sampleArea?(x: number, y: number, w: number, h: number): Promise<number[]>;
       /** Return the ACTIVE camera's current zoom (surface or underground per the
        *  active view). Render-side observability for the #237 pinch-zoom e2e
@@ -602,11 +603,23 @@ export class GameScene extends Phaser.Scene {
       getHudButtonGeometry: (): HudButtonGeometry[] =>
         this.getUIScene()?.hudButtonGeometry?.() ?? [],
       sampleArea: (x: number, y: number, w: number, h: number): Promise<number[]> => {
-        // Reject bad sizes up front: on WebGL a zero-size snapshot throws inside
-        // Phaser's postRender, before our callback runs, so the promise would
-        // never settle and the queue behind it would hang.
-        if (!Number.isInteger(w) || !Number.isInteger(h) || w <= 0 || h <= 0) {
-          return Promise.reject(new Error(`sampleArea: bad size ${w}x${h}`));
+        // Reject a bad area up front. On WebGL an empty or huge area throws
+        // inside Phaser's postRender before our callback runs, which hangs this
+        // promise, the queue behind it, and the game loop. An area running off
+        // the canvas does not throw: it silently reads transparent black. And
+        // Phaser mirrors negative x/y (Math.abs), sampling the wrong pixels.
+        const cw = this.game.canvas.width;
+        const ch = this.game.canvas.height;
+        if (
+          ![x, y, w, h].every(Number.isInteger) ||
+          w <= 0 ||
+          h <= 0 ||
+          x < 0 ||
+          y < 0 ||
+          x + w > cw ||
+          y + h > ch
+        ) {
+          return Promise.reject(new Error(`sampleArea: bad area ${x},${y} ${w}x${h}`));
         }
         const sample = sampleChain.then(
           () =>

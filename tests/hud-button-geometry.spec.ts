@@ -13,7 +13,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import type { HudButtonGeometry } from '../src/render/hud-controls.js';
-import { CONTEXT_MENU } from '../src/render/context-menu-layout.js';
+import { CONTEXT_MENU, CONTEXT_MENU_ITEMS } from '../src/render/context-menu-layout.js';
 import { activeView, settleToPlaying, waitForUiHook } from './helpers/boot.js';
 import { COLONY_TOGGLE_RECT, TOOL_BUTTON_RECTS } from './helpers/geometry.js';
 
@@ -127,10 +127,6 @@ async function expectMenuDrawnOver(
   expect(probe.y + probe.h).toBeLessThanOrEqual(anchor.y + CONTEXT_MENU.ITEM_HEIGHT - 2);
   expect(probe.x + probe.w).toBeLessThanOrEqual(anchor.x + CONTEXT_MENU.WIDTH - 2);
 
-  // Reference pixel: the first row's label-free left edge. Sampled BEFORE the
-  // right-click (terrain), then polled until it turns into the row's stripe —
-  // the signal that the menu is up.
-  const refBefore = await sampleArea(page, anchor.x + 4, anchor.y + 12, 1, 1);
   const before = await sampleArea(page, probe.x, probe.y, probe.w, probe.h);
   // The probe must actually contain label ink before the menu opens, or the
   // test is vacuous: a plain button background turning into plain stripe would
@@ -143,27 +139,38 @@ async function expectMenuDrawnOver(
   const canvasBox = await page.locator('canvas').first().boundingBox();
   if (!canvasBox) throw new Error('canvas has no bounding box');
   await page.mouse.click(canvasBox.x + anchor.x, canvasBox.y + anchor.y, { button: 'right' });
-  let stripe: number[] = refBefore;
+  // The menu is up once the first row's label-free left edge shows one of the
+  // menu's own stripe colours. Matching the known colours (rather than "the
+  // pixel changed") keeps the signal independent of the unseeded terrain under
+  // the anchor; which row-0 item shows depends on colony state, hence the set.
+  const stripeColours = new Set(
+    CONTEXT_MENU_ITEMS.map((item) =>
+      [
+        (item.stripeColor >> 16) & 0xff,
+        (item.stripeColor >> 8) & 0xff,
+        item.stripeColor & 0xff,
+      ].join(','),
+    ),
+  );
+  let want = '';
   await expect
     .poll(
       async () => {
-        stripe = await sampleArea(page, anchor.x + 4, anchor.y + 12, 1, 1);
-        return stripe.join(',');
+        want = (await sampleArea(page, anchor.x + 4, anchor.y + 12, 1, 1)).slice(0, 3).join(',');
+        return want;
       },
       { message: 'the chamber menu never opened at the probe anchor' },
     )
-    .not.toBe(refBefore.join(','));
+    // A matcher that prints the colour it saw when it times out.
+    .toMatch(new RegExp(`^(${[...stripeColours].join('|')})$`));
 
   const after = await sampleArea(page, probe.x, probe.y, probe.w, probe.h);
-  const want = stripe.slice(0, 3).join(',');
   const offStripe: string[] = [];
   for (let i = 0; i < after.length; i += 4) {
     const px = after.slice(i, i + 3).join(',');
     if (px !== want) offStripe.push(`(${(i / 4) % probe.w},${Math.floor(i / 4 / probe.w)})=${px}`);
   }
   expect(offStripe, `probe pixels not the menu stripe ${want}`).toEqual([]);
-  // And the probe really changed when the menu opened (it covered the label).
-  expect(after.join(',')).not.toBe(before.join(','));
 }
 
 test.describe('#320 — HUD button labels stay inside their click rects', () => {
