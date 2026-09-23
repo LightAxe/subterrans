@@ -5,8 +5,7 @@
     "rootDir": ".",
     "lib": ["ES2022"],
     "types": ["node"],
-    "allowJs": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["./*.ts", "./eslint-rules/**/*.ts", "./eslint-rules/**/*.js"]
+  "include": ["./*.ts", "./eslint-rules/**/*.ts"]
 }

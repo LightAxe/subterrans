@@ -32,7 +32,7 @@ Useful scripts:
 - `npm test` — Vitest unit/integration suite
 - `npm run test:watch` — Vitest in watch mode
 - `npm run test:e2e` — Playwright browser tests
-- `npm run typecheck` / `npm run typecheck:scripts` / `npm run typecheck:tests` / `npm run typecheck:bench` / `npm run typecheck:tooling` — TypeScript in noEmit mode for `src/`, `scripts/`, `tests/` and `bench/` (the last three each carry their own `tsconfig.json`) and, via the root `tsconfig.tooling.json`, the root `*.ts` tooling configs (Vite/Vitest/Playwright/ESLint) plus the `eslint-rules/` contract tests; the JSDoc-typed rule module `eslint-rules/sim-module-state.js` is included through `allowJs` so its importers resolve its types, but is not itself type-checked (`checkJs` is off — tracked in #317)
+- `npm run typecheck` / `npm run typecheck:scripts` / `npm run typecheck:tests` / `npm run typecheck:bench` / `npm run typecheck:tooling` — TypeScript in noEmit mode for `src/`, `scripts/`, `tests/` and `bench/` (the last three each carry their own `tsconfig.json`) and, via the root `tsconfig.tooling.json`, the root `*.ts` tooling configs (Vite/Vitest/Playwright/ESLint) plus `eslint-rules/` — the rule modules (e.g. `sim-module-state.ts`) and their contract tests are all type-checked
 - `npm run lint` / `npm run lint:fix` — fast ESLint (sim-safety + base rules) over `src/`, `scripts/`, `tests/`, `bench/`, `eslint-rules/` and the root `*.ts` configs
 - `npm run lint:types` — type-aware ESLint (`recommended-type-checked`); slower, runs the TS program
 - `npm run format` / `npm run format:check` — Prettier (write / check) over the whole tree minus `.prettierignore` (assets, generated output, and the prose `*.md` docs); `format:check` runs inside `verify`

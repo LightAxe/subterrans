@@ -26,7 +26,7 @@
 // instead of erroring as "Definition for rule … was not found".
 import tseslint from '@typescript-eslint/eslint-plugin';
 import tsParser from '@typescript-eslint/parser';
-import simModuleState from './eslint-rules/sim-module-state.js';
+import simModuleState from './eslint-rules/sim-module-state.ts';
 
 /** `tseslint.configs` is an index signature, so under `noUncheckedIndexedAccess`
  *  a preset lookup is `T | undefined`. Fail loudly rather than spread `undefined`
@@ -72,8 +72,9 @@ export default [
     rules,
   },
   {
-    // #314 — root tooling configs (`*.ts` matches root-level files only) and the
-    // custom ESLint rule's contract tests. Same rule set; the TS program is the
+    // #314 — root tooling configs (`*.ts` matches root-level files only) and
+    // eslint-rules/: the custom rule module itself (#317, since it became .ts) and
+    // its contract tests. Same rule set; the TS program is the
     // dedicated tsconfig.tooling.json (also what `npm run typecheck:tooling` runs).
     files: ['*.ts', 'eslint-rules/**/*.ts'],
     languageOptions: {
