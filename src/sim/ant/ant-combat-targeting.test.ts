@@ -14,12 +14,15 @@ import {
   SIM_VERSION_V17_COMBAT_AGGRO,
   SIM_VERSION_V23_SPIDER_AGGRO,
   SIM_VERSION_V42_COLONY_ALARM,
+  SIM_VERSION_V44_TUNNEL_DEFENCE,
+  SIM_VERSION_V45_SENTRY_RING_PASSABLE,
 } from '../types.js';
 import { SurfaceMovementEffect } from '../surface-features.js';
 import { SURFACE_GRID_WIDTH } from '../constants.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt } from './ant-store.js';
 import { getScratch } from '../scratch.js';
+import { sentryPassesThroughFriends } from './ant-combat-targeting.js';
 import { AntTask, FightingSubState } from '../enums.js';
 import { FIGHT_AGGRO_RADIUS, SPIDER_HP_FULL, SPIDER_HUNT_INTERVAL_TICKS } from '../constants.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
@@ -1039,8 +1042,9 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     expect(new Set(ids.map((id) => targetTile(world, id).join(','))).size).toBe(7);
   });
 
-  it('more sentries than stable posts wrap around onto them from slot 0', () => {
+  it('pre-V45: more sentries than stable posts wrap around onto them from slot 0', () => {
     const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V44_TUNNEL_DEFENCE; // V45 adds an outer ring
     colony.entrances.push({
       entranceId: 2,
       surfaceTileX: ENT_X + 3,
@@ -1054,6 +1058,81 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     expect(targetTile(world, ids[7]!)).toEqual(targetTile(world, ids[0]!));
     const firstSeven = new Set(ids.slice(0, 7).map((id) => targetTile(world, id).join(',')));
     expect(new Set(ids.map((id) => targetTile(world, id).join(',')))).toEqual(firstSeven);
+  });
+
+  it('V45: past the inner ring, sentries take an outer ring of posts in sight of the door', () => {
+    const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V45_SENTRY_RING_PASSABLE;
+    const inner = 4 * (FIGHT_AGGRO_RADIUS - 1);
+    const outer = 4 * FIGHT_AGGRO_RADIUS;
+    const ids = Array.from({ length: inner + outer + 1 }, () =>
+      addFighter(world, colony, ENT_X + 6, ENT_Y),
+    );
+    updateFightAntTargets(world);
+    const tiles = ids.map((id) => targetTile(world, id));
+    const dist = tiles.map(([x, y]) => manhattan(x, y, ENT_X, ENT_Y));
+    expect(dist.slice(0, inner).every((d) => d === FIGHT_AGGRO_RADIUS - 1)).toBe(true);
+    expect(dist.slice(inner, inner + outer).every((d) => d === FIGHT_AGGRO_RADIUS)).toBe(true);
+    // Every one of the first inner + outer has a post of its own; the next wraps to slot 0.
+    const own = new Set(tiles.slice(0, inner + outer).map((t) => t.join(',')));
+    expect(own.size).toBe(inner + outer);
+    expect(tiles[inner + outer]).toEqual(tiles[0]);
+  });
+
+  it('V45: a holder bound for an outer post keeps holding only within one tile inside that ring', () => {
+    const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V45_SENTRY_RING_PASSABLE;
+    const inner = 4 * (FIGHT_AGGRO_RADIUS - 1);
+    const ids = Array.from({ length: inner + 1 }, () =>
+      addFighter(world, colony, ENT_X + 6, ENT_Y),
+    );
+    updateFightAntTargets(world);
+    const id = ids[inner]!; // the first sentry on the outer ring
+    const [px, py] = targetTile(world, id);
+    expect(manhattan(px, py, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS);
+    // Two tiles in from its post, toward the door: 2 from the door, inside the
+    // inner ring. A holder there walks back out rather than holding.
+    let x = -1;
+    let y = -1;
+    for (let dx = -2; dx <= 2 && x < 0; dx++) {
+      for (let dy = -2; dy <= 2 && x < 0; dy++) {
+        if (
+          manhattan(px + dx, py + dy, px, py) === 2 &&
+          manhattan(px + dx, py + dy, ENT_X, ENT_Y) === FIGHT_AGGRO_RADIUS - 2
+        ) {
+          x = px + dx;
+          y = py + dy;
+        }
+      }
+    }
+    expect(x).toBeGreaterThanOrEqual(0);
+    world.ants.posX[id] = (x << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[id] = (y << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.subTask[id] = FightingSubState.Holding;
+    world.ants.targetPosX[id] = -1;
+    world.ants.targetPosY[id] = -1;
+    updateFightAntTargets(world);
+    expect(targetTile(world, id)).toEqual([px, py]);
+  });
+
+  it('V45: only a sentry HOLDING its post passes through friends while holding', () => {
+    const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V45_SENTRY_RING_PASSABLE;
+    const id = addFighter(world, colony, ENT_X + 3, ENT_Y);
+    world.ants.subTask[id] = FightingSubState.Holding;
+    world.ants.targetPosX[id] = -1;
+    expect(sentryPassesThroughFriends(world, id)).toBe(true);
+    // Target -1 but not Holding (newly promoted, say): it claims its tile.
+    world.ants.subTask[id] = FightingSubState.MovingToRally;
+    expect(sentryPassesThroughFriends(world, id)).toBe(false);
+    // Holding recorded but a target set: not holding.
+    world.ants.subTask[id] = FightingSubState.Holding;
+    world.ants.targetPosX[id] = (ENT_X << FP_SHIFT) + (FP_ONE >> 1);
+    expect(sentryPassesThroughFriends(world, id)).toBe(false);
+    // Pre-V45 a holder claims its tile.
+    world.ants.targetPosX[id] = -1;
+    world.simVersion = SIM_VERSION_V44_TUNNEL_DEFENCE;
+    expect(sentryPassesThroughFriends(world, id)).toBe(false);
   });
 
   it('holds near its post only on the ring or outside it: nearer the door it walks on out', () => {

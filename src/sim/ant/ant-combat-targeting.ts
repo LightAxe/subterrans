@@ -9,6 +9,7 @@ import { Zone, type UndergroundGrid } from '../terrain.js';
 import {
   SIM_VERSION_V43_FIGHTER_SENTRIES,
   SIM_VERSION_V44_TUNNEL_DEFENCE,
+  SIM_VERSION_V45_SENTRY_RING_PASSABLE,
   type WorldState,
 } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
@@ -26,6 +27,9 @@ const RALLY_HOLD_RADIUS_TILES = 2;
 // sentry sees an enemy standing ON the entrance tile. It also lies inside the
 // entrance's guaranteed-clear halo (SURFACE_ROOT_CLEARANCE_RADIUS, Chebyshev 3).
 const SENTRY_POST_RING_RADIUS = FIGHT_AGGRO_RADIUS - 1;
+// V45 (#327) — the outer ring of posts, for sentries past the inner ring's count:
+// ON the sight radius, so these sentries still see the entrance tile.
+const SENTRY_OUTER_RING_RADIUS = FIGHT_AGGRO_RADIUS;
 // A sentry within this many tiles of its post holds in place — the same
 // anti-jitter role RALLY_HOLD_RADIUS_TILES plays for a rally (same-colony
 // occupancy displacement bumps a doubled-up sentry onto a neighbouring tile).
@@ -41,8 +45,10 @@ const SENTRY_HOLD = 2; // holding its post
 const SENTRY_NO_POST = 3; // its entrance has no post
 // A sentry spots the spider at the same range it sees anything else.
 const SENTRY_SPIDER_WATCH_RADIUS = FIGHT_AGGRO_RADIUS;
-// A sentry within this of its door is AT the door: on its post, on a hold tile, or
-// nearer the door than that (a sentry that has just climbed out stands ON it).
+// A sentry within this of its door is AT the door: on an inner post, on one of its
+// hold tiles, or nearer the door than that (a sentry that has just climbed out
+// stands ON it). An outer post (V45) is at this distance itself; its hold tiles lie
+// just outside.
 const SENTRY_DOOR_AREA_RADIUS = SENTRY_POST_RING_RADIUS + SENTRY_HOLD_RADIUS_TILES;
 // A sentry guards the area its door's ring of posts watches: everything within
 // this of the door (sight 4 past the door area). It chases an enemy only inside
@@ -54,10 +60,12 @@ const SENTRY_DOOR_AREA_RADIUS = SENTRY_POST_RING_RADIUS + SENTRY_HOLD_RADIUS_TIL
 // stranded more fighters against multi-tile obstacles than the old route did.
 const SENTRY_GUARD_RADIUS = FIGHT_AGGRO_RADIUS + SENTRY_DOOR_AREA_RADIUS;
 // While the spider is within this of a door, sentries at that door take cover.
-// Past it, no post — nor any of its ±1 hold tiles — is within the spider watch
-// radius, so a sentry coming back out to its post does not walk straight back into
-// sight and turn round: the door-relative test gives cover the hysteresis a purely
-// ant-relative "sees it" test lacked.
+// Past it, no inner post — nor any of its ±1 hold tiles — is within the spider
+// watch radius, so a sentry coming back out to its post does not walk straight back
+// into sight and turn round: the door-relative test gives cover the hysteresis a
+// purely ant-relative "sees it" test lacked. (An outer post's outward hold tile can
+// be in sight of a spider just past this radius; the sentry then walks in and holds
+// on the post itself, out of its sight, so it does not bounce either: measured.)
 const SENTRY_COVER_DOOR_RADIUS = SENTRY_SPIDER_WATCH_RADIUS + SENTRY_DOOR_AREA_RADIUS;
 // A sentry sheltering below a door climbs back out only once the spider is past
 // this radius of it: two tiles beyond the cover radius. The spider steps one tile a
@@ -201,8 +209,19 @@ export function sentryPassesThroughFriends(world: WorldState, id: number): boole
   // Not under spider priority: step 10d retargets those fighters onto the spider
   // after step 10c flagged them, and let through they all stacked on its tile.
   if (!isSentry(world, id)) return false;
+  if (world.ants.zone[id] !== Zone.Surface) return false;
+  // V45 (#327): a sentry HOLDING its post does not claim its tile either, so
+  // workers walk through the sentry ring. Claiming it, a ring of returned
+  // fighters bumped every forager back and the colony starved at its own door.
+  if (
+    world.simVersion >= SIM_VERSION_V45_SENTRY_RING_PASSABLE &&
+    world.ants.subTask[id] === FightingSubState.Holding &&
+    // Holding is only ever written with target -1; kept as a guard.
+    world.ants.targetPosX[id] === -1
+  )
+    return true;
   const moving = getScratch(world).antTargeting.sentryMoving;
-  return id < moving.length && moving[id] === 1 && world.ants.zone[id] === Zone.Surface;
+  return id < moving.length && moving[id] === 1;
 }
 
 /**
@@ -734,10 +753,32 @@ function listSentryPosts(
   entranceTiles: readonly number[],
   out: number[],
 ): void {
-  const r = SENTRY_POST_RING_RADIUS;
+  addSentryRingPosts(world, entrance, entrances, entranceTiles, SENTRY_POST_RING_RADIUS, out);
+  // V45 (#327): an outer ring of posts one tile farther out, still in sight of the
+  // entrance, taken once the inner ring is full, so a big garrison (fighters home
+  // from an invasion) spreads out instead of stacking several to a post.
+  if (world.simVersion >= SIM_VERSION_V45_SENTRY_RING_PASSABLE) {
+    addSentryRingPosts(world, entrance, entrances, entranceTiles, SENTRY_OUTER_RING_RADIUS, out);
+  }
+}
+
+/**
+ * Append the qualifying posts of the ring at Manhattan distance `r` round
+ * `entrance` to `out`, in spread order (see listSentryPosts): the stable ones, or
+ * if that ring has none, any clear of entrances.
+ */
+function addSentryRingPosts(
+  world: WorldState,
+  entrance: FighterEntrance,
+  entrances: ReadonlyArray<FighterEntrance>,
+  entranceTiles: readonly number[],
+  r: number,
+  out: number[],
+): void {
   const ringSize = 4 * r;
   const stride = 2 * r - 1;
-  for (let pass = 0; pass < 2 && out.length === 0; pass++) {
+  const before = out.length;
+  for (let pass = 0; pass < 2 && out.length === before; pass++) {
     for (let k = 0; k < ringSize; k++) {
       const idx = (k * stride) % ringSize;
       const px = entrance.surfaceTileX + sentryRingOffsetX(idx, r);
@@ -759,7 +800,8 @@ function listSentryPosts(
  * per pass into `postsByEntrance`), so a door's first `count` sentries take
  * distinct posts — skipping to the next ring tile instead collapsed a run of
  * rejected tiles' slots onto one post, and sentries queued for it froze on the
- * door; past `count`, sentries share posts. It starts holding (target -1) within
+ * door; past `count`, sentries share posts. (From V45 the list also holds an
+ * outer ring, so that takes about 28 sentries.) It starts holding (target -1) within
  * SENTRY_HOLD_RADIUS_TILES of the post, but only on the ring or outside it, never
  * nearer the door. Once holding, it keeps holding within
  * SENTRY_KEEP_HOLD_RADIUS_TILES of the post and at most one tile inside the ring:
@@ -810,11 +852,15 @@ function routeToSentryPost(
   const px = posts[k]!;
   const py = posts[k + 1]!;
   const postDist = Math.abs(antTileX - px) + Math.abs(antTileY - py);
+  // The post's own ring: it holds only on that ring or outside it. (Inner posts all
+  // lie SENTRY_POST_RING_RADIUS out; from V45 an outer post lies one farther, and
+  // measured from the inner ring a sentry bound for it stopped a tile short.)
+  const ring = Math.abs(px - entranceX) + Math.abs(py - entranceY);
   const holding = wasHolding && ants.targetPosX[id] === -1;
   if (
     holding
-      ? postDist <= SENTRY_KEEP_HOLD_RADIUS_TILES && doorDist >= SENTRY_POST_RING_RADIUS - 1
-      : postDist <= SENTRY_HOLD_RADIUS_TILES && doorDist >= SENTRY_POST_RING_RADIUS
+      ? postDist <= SENTRY_KEEP_HOLD_RADIUS_TILES && doorDist >= ring - 1
+      : postDist <= SENTRY_HOLD_RADIUS_TILES && doorDist >= ring
   ) {
     ants.targetPosX[id] = -1;
     ants.targetPosY[id] = -1;

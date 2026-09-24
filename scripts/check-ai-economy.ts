@@ -596,6 +596,23 @@ console.log(
   `  Player queen alive @12k: ${playerAlive12k}/${SEEDS} (${pct(playerAlive12k, SEEDS)})  ` +
     `@24k: ${playerAlive24k}/${SEEDS} (${pct(playerAlive24k, SEEDS)})`,
 );
+// #327 — the harness plays on past game over (it never reads tick()'s
+// GameOutcome), so an AI queen that starves AFTER the passive player's queen has
+// already died is counted like one that lost a live match. Split them: only a
+// death while the player queen still lived happened in a real match.
+const enemyDeathsLive = results.filter(
+  (r) =>
+    r.enemyDeathTick !== null &&
+    (r.playerDeathTick === null || r.enemyDeathTick <= r.playerDeathTick),
+).length;
+const enemyDeathsAfterGameOver = results.filter(
+  (r) =>
+    r.enemyDeathTick !== null && r.playerDeathTick !== null && r.enemyDeathTick > r.playerDeathTick,
+).length;
+console.log(
+  `  Enemy queen deaths while the match was live: ${enemyDeathsLive}/${SEEDS}  ` +
+    `after the player queen had died: ${enemyDeathsAfterGameOver}/${SEEDS}`,
+);
 console.log(
   `  Enemy queen death tick: median=${median(deathTicks)} ` +
     `min=${deathTicks[0] ?? '-'} max=${deathTicks[deathTicks.length - 1] ?? '-'} (n=${deathTicks.length})`,
