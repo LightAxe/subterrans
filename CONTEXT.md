@@ -78,11 +78,11 @@ _Avoid_: soldier, warrior.
 
 **Sentry** (simVersion V43, #323):
 A fighter with no orders — its colony has no rally point. It guards its colony's
-nearest open entrance: it holds a post on the surface a few tiles from the door,
-within sight of it, chases any enemy ant it sees near the door, and ducks down its
+nearest open entrance: it holds a post on the surface a few tiles from the entrance,
+within sight of it, chases any enemy ant it sees near the entrance, and ducks down its
 own shaft when the spider comes, climbing back out once the spider is well away
-from the door (unless its colony has sent its fighters at the spider). Far from
-the door, it walks home. With no orders it never goes down another colony's
+from the entrance (unless its colony has sent its fighters at the spider). Far from
+the entrance, it walks home. With no orders it never goes down another colony's
 entrance.
 _Avoid_: **defender** for this; a rally on the colony's own entrance sends
 fighters down into the nest instead.

@@ -20,7 +20,7 @@ import { SURFACE_GRID_WIDTH } from '../constants.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt } from './ant-store.js';
 import { getScratch } from '../scratch.js';
-import { AntTask } from '../enums.js';
+import { AntTask, FightingSubState } from '../enums.js';
 import { FIGHT_AGGRO_RADIUS, SPIDER_HP_FULL, SPIDER_HUNT_INTERVAL_TICKS } from '../constants.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import { Zone, UndergroundTileState, ugSet, createUndergroundGrid } from '../terrain.js';
@@ -1173,6 +1173,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
       const id = addFighter(world, colony, x, y);
       world.ants.targetPosX[id] = -1; // already holding
       world.ants.targetPosY[id] = -1;
+      world.ants.subTask[id] = FightingSubState.Holding;
       updateFightAntTargets(world);
       expect(world.ants.targetPosX[id]).toBe(-1);
 
@@ -1182,6 +1183,47 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
       updateFightAntTargets(walker.world);
       expect(targetTile(walker.world, w)).toEqual([ENT_X, ENT_Y - R]);
     }
+  });
+
+  it('a fighter with no target that was not holding its post starts holding only by the start rule', () => {
+    // Newly promoted fighters have no target too; only a sentry recorded as
+    // Holding gets the wider keep-hold area.
+    const R = FIGHT_AGGRO_RADIUS - 1;
+    const { world, colony } = sentryWorld();
+    const id = addFighter(world, colony, ENT_X, ENT_Y - R + 1); // a tile inside the ring
+    world.ants.targetPosX[id] = -1;
+    world.ants.targetPosY[id] = -1;
+    world.ants.subTask[id] = FightingSubState.MovingToRally;
+    updateFightAntTargets(world);
+    expect(targetTile(world, id)).toEqual([ENT_X, ENT_Y - R]);
+    expect(world.ants.subTask[id]).toBe(FightingSubState.MovingToRally);
+  });
+
+  it('a sentry held at a rally near its post, once the rally is cleared, walks to its post', () => {
+    const R = FIGHT_AGGRO_RADIUS - 1;
+    const { world, colony } = sentryWorld();
+    const id = addFighter(world, colony, ENT_X, ENT_Y - R);
+    updateFightAntTargets(world);
+    expect(world.ants.subTask[id]).toBe(FightingSubState.Holding);
+    // A rally two tiles off the post, with the sentry standing on it: it stops
+    // there under orders, and is no longer holding its post.
+    world.ants.posX[id] = ((ENT_X + 2) << FP_SHIFT) + (FP_ONE >> 1);
+    colony.rallyPoint = { tileX: ENT_X + 2, tileY: ENT_Y - R };
+    updateFightAntTargets(world);
+    expect(world.ants.targetPosX[id]).toBe(-1);
+    expect(world.ants.subTask[id]).toBe(FightingSubState.MovingToRally);
+    colony.rallyPoint = null;
+    updateFightAntTargets(world);
+    expect(targetTile(world, id)).toEqual([ENT_X, ENT_Y - R]);
+  });
+
+  it('records a sentry that stops at its post as Holding', () => {
+    const R = FIGHT_AGGRO_RADIUS - 1;
+    const { world, colony } = sentryWorld();
+    const id = addFighter(world, colony, ENT_X, ENT_Y - R);
+    updateFightAntTargets(world);
+    expect(world.ants.targetPosX[id]).toBe(-1);
+    expect(world.ants.subTask[id]).toBe(FightingSubState.Holding);
   });
 
   it('a holding sentry pushed past the keep-hold area walks back to its post', () => {
@@ -1194,6 +1236,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
       const id = addFighter(world, colony, x, y);
       world.ants.targetPosX[id] = -1;
       world.ants.targetPosY[id] = -1;
+      world.ants.subTask[id] = FightingSubState.Holding;
       updateFightAntTargets(world);
       expect(targetTile(world, id)).toEqual([ENT_X, ENT_Y - R]);
     }

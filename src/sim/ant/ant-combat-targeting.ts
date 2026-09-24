@@ -3,7 +3,7 @@
 // search. Depends only on Layer-0 ant-motion primitives (+ sibling sim modules);
 // only the orchestrator calls these. Owns the INV_BFS_* scratch arrays.
 import { ENTRANCE_SHAFT_DEPTH, FIGHT_AGGRO_RADIUS } from '../constants.js';
-import { AntTask } from '../enums.js';
+import { AntTask, FightingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import { Zone, type UndergroundGrid } from '../terrain.js';
 import { SIM_VERSION_V43_FIGHTER_SENTRIES, type WorldState } from '../types.js';
@@ -29,6 +29,11 @@ const SENTRY_HOLD_RADIUS_TILES = 1;
 // displacement moves an ant one tile, so a holder bumped off its hold tile lands
 // inside this radius and stays put instead of walking back onto the taken tile.
 const SENTRY_KEEP_HOLD_RADIUS_TILES = SENTRY_HOLD_RADIUS_TILES + 1;
+// What routeToSentryPost did with a sentry.
+const SENTRY_HOME = 0; // walking home to its entrance, from outside the guard area
+const SENTRY_TO_POST = 1; // walking to its post
+const SENTRY_HOLD = 2; // holding its post
+const SENTRY_NO_POST = 3; // its entrance has no post
 // A sentry spots the spider at the same range it sees anything else.
 const SENTRY_SPIDER_WATCH_RADIUS = FIGHT_AGGRO_RADIUS;
 // A sentry within this of its door is AT the door: on its post, on a hold tile, or
@@ -443,7 +448,11 @@ function listSentryPosts(
  * post, or one stopped on a tile a neighbour holds), and without the wider radius
  * it walked back onto the taken tile and was bumped off again every tick. (A
  * sentry walking to its post is never bumped: see sentryPassesThroughFriends.)
- * Returns false if the door has no post (see listSentryPosts).
+ * Holding is recorded as FightingSubState.Holding, so a fighter that merely
+ * starts with no target (newly promoted, or stopped at a rally since cleared)
+ * isn't taken for one already holding its post. Returns what it did: SENTRY_HOME,
+ * SENTRY_TO_POST, SENTRY_HOLD, or SENTRY_NO_POST if the entrance has no post (see
+ * listSentryPosts).
  */
 function routeToSentryPost(
   world: WorldState,
@@ -453,7 +462,9 @@ function routeToSentryPost(
   slot: number,
   entranceTiles: readonly number[],
   postsByEntrance: Map<number, number[]>,
-): boolean {
+  postsBuilt: Set<number>,
+  wasHolding: boolean,
+): number {
   const ants = world.ants;
   const entranceX = entrance.surfaceTileX;
   const entranceY = entrance.surfaceTileY;
@@ -463,20 +474,24 @@ function routeToSentryPost(
   if (doorDist > SENTRY_GUARD_RADIUS) {
     ants.targetPosX[id] = (entranceX << FP_SHIFT) + (FP_ONE >> 1);
     ants.targetPosY[id] = (entranceY << FP_SHIFT) + (FP_ONE >> 1);
-    return true;
+    return SENTRY_HOME;
   }
   let posts = postsByEntrance.get(entrance.entranceId);
   if (posts === undefined) {
     posts = [];
-    listSentryPosts(world, entrance, entrances, entranceTiles, posts);
     postsByEntrance.set(entrance.entranceId, posts);
   }
-  if (posts.length === 0) return false;
+  if (!postsBuilt.has(entrance.entranceId)) {
+    posts.length = 0;
+    listSentryPosts(world, entrance, entrances, entranceTiles, posts);
+    postsBuilt.add(entrance.entranceId);
+  }
+  if (posts.length === 0) return SENTRY_NO_POST;
   const k = (slot % (posts.length >> 1)) << 1;
   const px = posts[k]!;
   const py = posts[k + 1]!;
   const postDist = Math.abs(antTileX - px) + Math.abs(antTileY - py);
-  const holding = ants.targetPosX[id] === -1;
+  const holding = wasHolding && ants.targetPosX[id] === -1;
   if (
     holding
       ? postDist <= SENTRY_KEEP_HOLD_RADIUS_TILES && doorDist >= SENTRY_POST_RING_RADIUS - 1
@@ -484,11 +499,12 @@ function routeToSentryPost(
   ) {
     ants.targetPosX[id] = -1;
     ants.targetPosY[id] = -1;
-  } else {
-    ants.targetPosX[id] = (px << FP_SHIFT) + (FP_ONE >> 1);
-    ants.targetPosY[id] = (py << FP_SHIFT) + (FP_ONE >> 1);
+    ants.subTask[id] = FightingSubState.Holding;
+    return SENTRY_HOLD;
   }
-  return true;
+  ants.targetPosX[id] = (px << FP_SHIFT) + (FP_ONE >> 1);
+  ants.targetPosY[id] = (py << FP_SHIFT) + (FP_ONE >> 1);
+  return SENTRY_TO_POST;
 }
 
 /**
@@ -671,9 +687,12 @@ export function updateFightAntTargets(world: WorldState): void {
   let entranceTiles: number[] | null = null;
   // entranceId → that door's sentry posts (listSentryPosts), built on first use.
   let postsByEntrance: Map<number, number[]> | null = null;
+  let postsBuilt: Set<number> | null = null;
   if (sentries) {
-    postsByEntrance = new Map<number, number[]>();
     const scratch = getScratch(world).antTargeting;
+    postsByEntrance = scratch.sentryPosts;
+    postsBuilt = scratch.sentryPostsBuilt;
+    postsBuilt.clear();
     if (scratch.sentrySlot.length < ants.alive.length) {
       scratch.sentrySlot = new Int32Array(ants.alive.length);
     }
@@ -694,8 +713,10 @@ export function updateFightAntTargets(world: WorldState): void {
         entranceTiles.push(ents[e]!.surfaceTileX, ents[e]!.surfaceTileY);
       }
     }
-    // colonyId → entranceId → the next rank at that entrance.
-    const nextRank: Record<number, Record<number, number>> = {};
+    // entranceId → the next rank at that entrance. (An entrance belongs to one
+    // colony, and a fighter only binds to its own colony's entrances.)
+    const nextRank = scratch.sentryNextRank;
+    nextRank.clear();
     for (let wid = 0; wid < ants.alive.length; wid++) {
       if (ants.alive[wid] !== 1 || ants.task[wid] !== AntTask.Fighting) continue;
       const cid = ants.colonyId[wid]!;
@@ -713,10 +734,9 @@ export function updateFightAntTargets(world: WorldState): void {
         e = pickFighterTargetEntrance(ents, tileX, tileY);
       }
       if (e === null || !e.isOpen) continue;
-      const perEntrance = (nextRank[cid] ??= {});
-      const rank = perEntrance[e.entranceId] ?? 0;
+      const rank = nextRank.get(e.entranceId) ?? 0;
       sentrySlot[wid] = rank;
-      perEntrance[e.entranceId] = rank + 1;
+      nextRank.set(e.entranceId, rank + 1);
     }
   }
 
@@ -727,6 +747,12 @@ export function updateFightAntTargets(world: WorldState): void {
     const colonyId = ants.colonyId[id]!;
     const colony = world.colonies[colonyId as unknown as keyof typeof world.colonies];
     if (colony === undefined) continue;
+    // V43: Holding is only ever this pass's verdict. Clear it up front, so every
+    // other branch (rally, invader, closed-entrance wait, cover, chase) leaves the
+    // fighter not holding, and a sentry held at a rally that is then cleared
+    // doesn't pass for one still holding its post.
+    const wasHolding = sentrySlot !== null && ants.subTask[id] === FightingSubState.Holding;
+    if (wasHolding) ants.subTask[id] = FightingSubState.MovingToRally;
 
     const rp = colony.rallyPoint;
 
@@ -789,31 +815,26 @@ export function updateFightAntTargets(world: WorldState): void {
           ) {
             continue;
           }
-          if (
-            !routeToSentryPost(
-              world,
-              id,
-              e,
-              entrances,
-              sentrySlot[id]!,
-              entranceTiles!,
-              postsByEntrance!,
-            )
-          ) {
+          const routed = routeToSentryPost(
+            world,
+            id,
+            e,
+            entrances,
+            sentrySlot[id]!,
+            entranceTiles!,
+            postsByEntrance!,
+            postsBuilt!,
+            wasHolding,
+          );
+          if (routed === SENTRY_NO_POST) {
             // No walkable ring tile clear of entrances: hold in place rather than
             // fall back to the entrance tile.
             ants.targetPosX[id] = -1;
             ants.targetPosY[id] = -1;
           }
-          // Walking to its post (not home to the door from outside the guard area,
-          // where it takes the ordinary bumps round obstacles like any ant).
-          if (
-            ants.targetPosX[id] !== -1 &&
-            (ants.targetPosX[id]! >> FP_SHIFT !== e.surfaceTileX ||
-              ants.targetPosY[id]! >> FP_SHIFT !== e.surfaceTileY)
-          ) {
-            sentryMoving![id] = 1;
-          }
+          // Walking to its post passes through friends; walking home from outside
+          // the guard area it takes the ordinary bumps round obstacles, like any ant.
+          if (routed === SENTRY_TO_POST) sentryMoving![id] = 1;
           continue;
         }
       }

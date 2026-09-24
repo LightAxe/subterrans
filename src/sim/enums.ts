@@ -59,12 +59,15 @@ export type NursingSubState = (typeof NursingSubState)[keyof typeof NursingSubSt
 
 // ---------------------------------------------------------------------------
 // FightingSubState — sub-state for ants with AntTask.Fighting (PRD §1 lines 91-93)
-// 2 members — both fully defined at Phase 2 scope; do NOT reduce to a singleton
+// 2 members fully defined at Phase 2 scope (do NOT reduce to a singleton), plus
+// Holding (V43, #323)
 // ---------------------------------------------------------------------------
 
 export const FightingSubState = {
   MovingToRally: 0, // PRD §1 line 92
   Engaging: 1, // PRD §1 line 93 — both members canonical at Phase 2 scope
+  // V43 (#323): a sentry holding its post (written only by V43 sentry routing).
+  Holding: 2,
 } as const;
 export type FightingSubState = (typeof FightingSubState)[keyof typeof FightingSubState];
 

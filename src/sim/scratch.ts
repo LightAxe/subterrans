@@ -57,6 +57,13 @@ export interface ScratchArena {
      *  cover or to its post this tick, read by step 16's occupancy pass. Cleared at
      *  the start of each updateFightAntTargets pass. */
     sentryMoving: Uint8Array;
+    /** V43 (#323) — entranceId → that entrance's sentry posts (listSentryPosts),
+     *  arrays reused across passes; `sentryPostsBuilt` holds the entrances whose
+     *  list was rebuilt this pass. */
+    sentryPosts: Map<number, number[]>;
+    sentryPostsBuilt: Set<number>;
+    /** V43 (#323) — entranceId → the next sentry rank there. */
+    sentryNextRank: Map<number, number>;
   };
   /** ant-movement.ts — same-colony occupancy resolution map. */
   movementOccupancy: Map<number, number>;
@@ -122,6 +129,9 @@ export function getScratch(world: WorldState): ScratchArena {
         sentrySlot: new Int32Array(0),
         sentryEntranceTiles: [],
         sentryMoving: new Uint8Array(0),
+        sentryPosts: new Map(),
+        sentryPostsBuilt: new Set(),
+        sentryNextRank: new Map(),
       },
       movementOccupancy: new Map(),
       tickIdle: [],

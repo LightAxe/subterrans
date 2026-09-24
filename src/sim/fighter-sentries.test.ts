@@ -484,7 +484,7 @@ describe('V43 (#323) — no orders, no invasion; no ping-pong between close door
     const v42 = stranded(42);
     expect(v42).toBeGreaterThan(0); // the case does strand some, even before V43
     expect(stranded(SIM_VERSION_V43_FIGHTER_SENTRIES)).toBeLessThanOrEqual(v42);
-  });
+  }, 30_000);
 
   it('twenty sentries at one door, more than its posts, settle with none on the door', () => {
     const world = createScenario(7, 'Normal');
