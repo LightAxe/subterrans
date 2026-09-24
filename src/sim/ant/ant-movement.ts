@@ -55,6 +55,9 @@ import {
   fighterBarredFromOwnShaft,
   sentryHoldsBelow,
   sentryPassesThroughFriends,
+  fighterDefendsTunnels,
+  defenderPassesThroughFriends,
+  defenderUndergroundStep,
 } from './ant-combat-targeting.js';
 import {
   chooseExcursionDirection,
@@ -342,7 +345,8 @@ export function tickAntMovement(
         const inOwnGrid = ants.currentGridColonyId[id] === ants.colonyId[id];
         needsTransition =
           (task === AntTask.Foraging && foodCarrying === 0) ||
-          (task === AntTask.Fighting && inOwnGrid) ||
+          // V44 (#325): a tunnel defender stays below.
+          (task === AntTask.Fighting && inOwnGrid && !fighterDefendsTunnels(world, id)) ||
           (task === AntTask.Foraging && foodCarrying > 0);
       }
 
@@ -874,6 +878,15 @@ export function tickAntMovement(
             haveTarget = true;
           }
           // hostile === null → idle fallback: dx=dy=0 (haveTarget stays false)
+        }
+      } else if (fighterDefendsTunnels(world, id)) {
+        // V44 (#325) — a tunnel defender steps through its own tunnels (BFS)
+        // toward the invader or post step 10c chose.
+        if (ants.targetPosX[id] !== -1) {
+          const step = defenderUndergroundStep(world, id);
+          rawDx = unpackStepDx(step) * FP_ONE;
+          rawDy = unpackStepDy(step) * FP_ONE;
+          haveTarget = true;
         }
       } else {
         const targetX = ants.targetPosX[id]!;
@@ -1617,6 +1630,8 @@ export function tickAntMovement(
                   // at the shaft instead of ascending. Policy lives in
                   // idle-reserve.ts with the rest of the alarm (#212 layering).
                   if (holdAlarmedCivilianAtShaft(world, id, inOwnGrid)) break;
+                  // V44 (#325) — a tunnel defender stays below.
+                  if (fighterDefendsTunnels(world, id)) break;
                   // V43 (#323) — a sentry sheltering from the spider stays below
                   // until the spider is out of range of this door.
                   if (
@@ -1737,8 +1752,9 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     let tileY = ants.posY[id]! >> FP_SHIFT;
 
     if (isOccupancyExempt(world, colonyId, zone, tileX, tileY)) continue;
-    // V43 (#323): a sentry on the move neither claims a tile nor is bumped.
-    if (sentryPassesThroughFriends(world, id)) continue;
+    // V43 (#323) / V44 (#325): a sentry walking to its post, or a tunnel defender
+    // holding or walking to its post, neither claims a tile nor is bumped.
+    if (sentryPassesThroughFriends(world, id) || defenderPassesThroughFriends(world, id)) continue;
 
     // Issue #108 (v13+) — zero the gridColonyId portion of the key when
     // zone === Surface. Mirrors combat tile-key encoding (tile-key.ts:56);

@@ -840,7 +840,53 @@ export const SIM_VERSION_V42_COLONY_ALARM = 42 as const;
  * so a pre-V43 save replays byte-identically. MIN_ACCEPTED is UNCHANGED.
  */
 export const SIM_VERSION_V43_FIGHTER_SENTRIES = 43 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V43_FIGHTER_SENTRIES;
+
+/**
+ * V44 (#325) — a rally on the colony's OWN open entrance means "defend the nest
+ * from inside".
+ *
+ * Before V44 fighters sent there went down the shaft (the Plan 09.1-03 defensive
+ * descent) and, the next tick, underground movement routed every own-grid fighter
+ * back to its entrance: they climbed straight back out, a zone flip on every
+ * fighter-tick.
+ *
+ * From V44 a fighter whose colony's rally point is on one of its own open
+ * entrances is a TUNNEL DEFENDER (unless the colony has sent its fighters at the
+ * spider, which overrides it, as it does for sentries). It walks to that entrance
+ * and goes down, and below, in the part of its nest that entrance's shaft
+ * reaches, it stays (it neither routes to an entrance nor climbs out). A fighter
+ * below in a part not joined to that shaft (a second entrance's fresh shaft, say)
+ * climbs out and walks round, as before V44; without that, moving the rally from
+ * such a shaft to the main one stranded the fighters below it for good. There:
+ *   1. it goes after the nearest enemy ant it can reach anywhere in its colony's
+ *      tunnels (no radius, as invaders hunt), stepping through them by BFS
+ *      (pickInvaderUndergroundStep). "Can reach" is the part of the nest a BFS
+ *      from the top of the defended shaft reaches: an invader in a shaft not yet
+ *      joined to the nest doesn't pull every defender off its post to stand
+ *      against rock;
+ *   2. with no such invader, it holds a TUNNEL POST: the tiles that BFS reaches
+ *      first, in N/E/S/W order, leaving the top ENTRANCE_SHAFT_DEPTH + 1 rows of
+ *      every own entrance's shaft column clear. A defender takes post (rank mod
+ *      count), its rank being its place in entity-id order among its colony's
+ *      fighters outside foreign grids (on the surface too), so the posts spread
+ *      one per tile along the first tunnel.
+ * A defender holding its post or walking to it takes no part in the same-colony
+ * occupancy pass: it neither claims a tile nor is bumped. The posts fill the
+ * tunnels at the foot of the shaft, the way every worker comes and goes; holders
+ * claiming their tiles bumped foragers back every tick (the V40 queen livelock),
+ * trapped them below and starved the queen. A defender chasing an invader is
+ * bumped like any ant.
+ * Moving the rally point off the colony's own open entrances, or clearing it, makes
+ * them ordinary fighters again: they climb out and go to the new rally point, or
+ * take sentry posts. (Moved to another of its own open entrances, they stay
+ * defenders and take posts below that one.)
+ *
+ * No new serialized field, no command, no world.rngState draw, no entity-ID
+ * advance, no tick-order change: every new read is behind `simVersion >= V44`,
+ * so a pre-V44 save replays byte-identically. MIN_ACCEPTED is UNCHANGED.
+ */
+export const SIM_VERSION_V44_TUNNEL_DEFENCE = 44 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V44_TUNNEL_DEFENCE;
 
 /**
  * S2 — AI colony state machine states.

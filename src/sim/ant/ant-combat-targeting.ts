@@ -6,7 +6,12 @@ import { ENTRANCE_SHAFT_DEPTH, FIGHT_AGGRO_RADIUS } from '../constants.js';
 import { AntTask, FightingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import { Zone, type UndergroundGrid } from '../terrain.js';
-import { SIM_VERSION_V43_FIGHTER_SENTRIES, type WorldState } from '../types.js';
+import {
+  SIM_VERSION_V43_FIGHTER_SENTRIES,
+  SIM_VERSION_V44_TUNNEL_DEFENCE,
+  type WorldState,
+} from '../types.js';
+import type { ColonyRecord } from '../colony/colony-store.js';
 import { isSurfaceTileInComponent } from '../surface-features.js';
 import { getScratch } from '../scratch.js';
 import { DIR_DX, DIR_DY, canEnterUndergroundTile, packStep } from './ant-motion.js';
@@ -336,6 +341,299 @@ type FighterEntrance = {
   surfaceTileY: number;
   isOpen: boolean;
 };
+
+/**
+ * V44 (#325) — the colony's own OPEN entrance its rally point is on, or null.
+ * A rally there makes its fighters tunnel defenders — unless the colony has sent
+ * its fighters at the spider (MarkSpiderPriority), which overrides it, as it does
+ * for sentries.
+ */
+function defendedEntrance(world: WorldState, colony: ColonyRecord): FighterEntrance | null {
+  if (world.simVersion < SIM_VERSION_V44_TUNNEL_DEFENCE) return null;
+  // Sent at the spider (step 10d), its fighters come out to fight it instead.
+  if (world.spiderPriorityColonyId === colony.colonyId) return null;
+  const rp = colony.rallyPoint;
+  const ents = colony.entrances;
+  if (rp == null || ents == null) return null;
+  for (let e = 0; e < ents.length; e++) {
+    const ent = ents[e]!;
+    if (ent.isOpen && ent.surfaceTileX === rp.tileX && ent.surfaceTileY === rp.tileY) return ent;
+  }
+  return null;
+}
+
+/**
+ * V44 (#325) — fighter `id` is a TUNNEL DEFENDER below ground in its own nest:
+ * its colony's rally point is on one of its own open entrances, and it stands in
+ * the part of the nest that entrance's shaft reaches. It stays below (no routing
+ * to an entrance, no climbing out) until the rally moves or clears. Reads the
+ * reach step 10c's survey stamped this tick (surveyDefendedNests).
+ */
+export function fighterDefendsTunnels(world: WorldState, id: number): boolean {
+  if (world.simVersion < SIM_VERSION_V44_TUNNEL_DEFENCE) return false;
+  const ants = world.ants;
+  if (ants.task[id] !== AntTask.Fighting || ants.zone[id] !== Zone.Underground) return false;
+  const colonyId = ants.colonyId[id]!;
+  if (ants.currentGridColonyId[id] !== colonyId) return false;
+  const colony = world.colonies[colonyId];
+  if (colony === undefined) return false;
+  const defended = defendedEntrance(world, colony);
+  if (defended === null) return false;
+  // Only where the defended shaft reaches (this tick's survey, step 10c): a
+  // fighter in a part of the nest not joined to it climbs out and walks round.
+  const reach = getScratch(world).antTargeting.defenderReach.get(colonyId);
+  const grid = world.undergroundGrids[colonyId];
+  if (reach === undefined || grid === undefined || reach.entranceId !== defended.entranceId) {
+    return false;
+  }
+  const tx = ants.posX[id]! >> FP_SHIFT;
+  const ty = ants.posY[id]! >> FP_SHIFT;
+  if (tx < 0 || tx >= grid.width || ty < 0 || ty >= grid.height) return false;
+  return reach.cells[ty * grid.width + tx] === reach.stamp;
+}
+
+/**
+ * V44 (#325) — tunnel defender `id` takes no part in step 16's same-colony
+ * occupancy pass while it holds its post or walks to it (step 10c flagged it):
+ * it neither claims a tile nor is bumped. Posts fill the tunnels at the foot of
+ * the shaft, the way every worker comes and goes; a holder claiming its tile
+ * bumped foragers back off it every tick (the V40 queen livelock), trapped them
+ * below and starved the queen. A walker bumped back off a holder's tile in a
+ * one-tile tunnel never reached a post beyond it. (A defender chasing an invader
+ * is bumped like any ant.)
+ */
+export function defenderPassesThroughFriends(world: WorldState, id: number): boolean {
+  if (!fighterDefendsTunnels(world, id)) return false;
+  if (world.ants.targetPosX[id] === -1) return true;
+  const moving = getScratch(world).antTargeting.sentryMoving;
+  return id < moving.length && moving[id] === 1;
+}
+
+/**
+ * V44 (#325) — the step tunnel defender `id` takes this tick toward its target
+ * (an invader or its post, in its own grid's coordinates; written by step 10c),
+ * through passable tunnel by BFS. (0, 0) if it has no target or none is reachable.
+ */
+export function defenderUndergroundStep(world: WorldState, id: number): number {
+  const ants = world.ants;
+  const grid = world.undergroundGrids[ants.colonyId[id]!];
+  if (grid === undefined || ants.targetPosX[id] === -1) return packStep(0, 0);
+  return pickInvaderUndergroundStep(
+    grid,
+    ants.posX[id]! >> FP_SHIFT,
+    ants.posY[id]! >> FP_SHIFT,
+    ants.targetPosX[id]! >> FP_SHIFT,
+    ants.targetPosY[id]! >> FP_SHIFT,
+    getScratch(world),
+  );
+}
+
+/** Grow the per-world invader-BFS buffers to `cells`, keeping every cell -1. */
+function ensureInvBfs(scratch: ScratchArena, cells: number): void {
+  const at = scratch.antTargeting;
+  if (at.invBfsDist.length < cells) {
+    at.invBfsDist = new Int32Array(cells);
+    at.invBfsDist.fill(-1);
+    at.invBfsQX = new Int32Array(cells);
+    at.invBfsQY = new Int32Array(cells);
+  }
+}
+
+/**
+ * V44 (#325) — the part of `colony`'s own nest reachable from the top of
+ * `entrance`'s shaft: a BFS through tiles passable to a fighter, in N/E/S/W
+ * order. Fills `posts` with up to `n` tunnel posts — the tiles it reaches first,
+ * leaving the top ENTRANCE_SHAFT_DEPTH + 1 rows of every own entrance's shaft
+ * column clear so ants still get in and out — and stamps every reached cell of
+ * `reach` with `stamp`. Uses the invader-BFS scratch queue; nothing else of it.
+ */
+function surveyDefendedNest(
+  world: WorldState,
+  grid: UndergroundGrid,
+  entrance: FighterEntrance,
+  entrances: ReadonlyArray<FighterEntrance>,
+  n: number,
+  posts: number[],
+  reach: Int32Array,
+  stamp: number,
+): void {
+  const width = grid.width;
+  const x0 = entrance.surfaceTileX;
+  if (x0 < 0 || x0 >= width || grid.height <= 0) return;
+  if (!canEnterUndergroundTile(grid, x0, 0, AntTask.Fighting)) return;
+  const scratch = getScratch(world);
+  ensureInvBfs(scratch, width * grid.height);
+  const at = scratch.antTargeting;
+  const qx = at.invBfsQX;
+  const qy = at.invBfsQY;
+  reach[x0] = stamp;
+  qx[0] = x0;
+  qy[0] = 0;
+  let head = 0;
+  let tail = 1;
+  while (head < tail) {
+    const cx = qx[head]!;
+    const cy = qy[head]!;
+    head++;
+    if (posts.length < n << 1 && !isOwnShaftTop(entrances, cx, cy)) posts.push(cx, cy);
+    for (let i = 0; i < DIR_DX.length; i++) {
+      const nx = cx + DIR_DX[i]!;
+      const ny = cy + DIR_DY[i]!;
+      if (!canEnterUndergroundTile(grid, nx, ny, AntTask.Fighting)) continue;
+      const ncell = ny * width + nx;
+      if (reach[ncell] === stamp) continue;
+      reach[ncell] = stamp;
+      qx[tail] = nx;
+      qy[tail] = ny;
+      tail++;
+    }
+  }
+}
+
+/**
+ * V44 (#325) — step 10c, after ranking: survey each defended nest once for this
+ * pass (surveyDefendedNest), for the `nextRank` defenders ranked at its entrance.
+ * Its posts go in `postsByEntrance` under -1 - entranceId (apart from the sentry
+ * posts), marked in `postsBuilt`; its reach in the colony's `defenderReach`
+ * record, read by fighterDefendsTunnels in this tick's step 16 too.
+ */
+function surveyDefendedNests(
+  world: WorldState,
+  nextRank: Map<number, number>,
+  postsByEntrance: Map<number, number[]>,
+  postsBuilt: Set<number>,
+): void {
+  const reachByColony = getScratch(world).antTargeting.defenderReach;
+  for (const cidKey in world.colonies) {
+    if (!Object.hasOwn(world.colonies, cidKey)) continue;
+    const col = world.colonies[cidKey as unknown as keyof typeof world.colonies];
+    if (col === undefined || col.entrances == null) continue;
+    const defended = defendedEntrance(world, col);
+    const grid = world.undergroundGrids[col.colonyId];
+    if (defended === null || grid === undefined) continue;
+    const cells = grid.width * grid.height;
+    let reach = reachByColony.get(col.colonyId);
+    if (reach === undefined || reach.cells.length < cells) {
+      reach = { cells: new Int32Array(cells), stamp: 0, entranceId: -1 };
+      reachByColony.set(col.colonyId, reach);
+    }
+    reach.stamp += 1;
+    reach.entranceId = defended.entranceId;
+    const key = -1 - defended.entranceId;
+    let posts = postsByEntrance.get(key);
+    if (posts === undefined) {
+      posts = [];
+      postsByEntrance.set(key, posts);
+    }
+    posts.length = 0;
+    const n = nextRank.get(defended.entranceId) ?? 0;
+    surveyDefendedNest(world, grid, defended, col.entrances, n, posts, reach.cells, reach.stamp);
+    postsBuilt.add(key);
+  }
+}
+
+/** (x, y) is in the top ENTRANCE_SHAFT_DEPTH + 1 rows of an own open entrance's shaft. */
+function isOwnShaftTop(entrances: ReadonlyArray<FighterEntrance>, x: number, y: number): boolean {
+  if (y > ENTRANCE_SHAFT_DEPTH) return false;
+  for (let e = 0; e < entrances.length; e++) {
+    const ent = entrances[e]!;
+    if (ent.isOpen && ent.surfaceTileX === x) return true;
+  }
+  return false;
+}
+
+/**
+ * V44 (#325) — the nearest (Manhattan; lower id on a tie) enemy ant below ground
+ * in colony `colonyId`'s grid whose tile is stamped `stamp` in `reach` — one the
+ * defenders can get to — or -1.
+ */
+function nearestReachableInvader(
+  world: WorldState,
+  id: number,
+  colonyId: number,
+  grid: UndergroundGrid,
+  reach: Int32Array,
+  stamp: number,
+): number {
+  const ants = world.ants;
+  const selfX = ants.posX[id]! >> FP_SHIFT;
+  const selfY = ants.posY[id]! >> FP_SHIFT;
+  let best = -1;
+  let bestDist = -1;
+  for (let other = 0; other < ants.alive.length; other++) {
+    if (ants.alive[other] !== 1) continue;
+    if (ants.zone[other] !== Zone.Underground) continue;
+    if (ants.currentGridColonyId[other] !== colonyId) continue;
+    if (ants.colonyId[other] === colonyId) continue;
+    const tx = ants.posX[other]! >> FP_SHIFT;
+    const ty = ants.posY[other]! >> FP_SHIFT;
+    if (tx < 0 || tx >= grid.width || ty < 0 || ty >= grid.height) continue;
+    if (reach[ty * grid.width + tx] !== stamp) continue;
+    const d = Math.abs(tx - selfX) + Math.abs(ty - selfY);
+    if (bestDist < 0 || d < bestDist) {
+      bestDist = d;
+      best = other;
+    }
+  }
+  return best;
+}
+
+/**
+ * V44 (#325) — step-10c routing for tunnel defender `id` below ground in its own
+ * nest, defending `entrance`: after the nearest invader it can reach (any enemy
+ * ant in the part of the nest joined to the defended shaft, however deep), else
+ * to its tunnel post (entry `slot` mod count of the entrance's post list, from
+ * this pass's survey, surveyDefendedNests), holding (target -1) on it. A defender
+ * walking to its post is flagged in `moving` (see defenderPassesThroughFriends).
+ */
+function routeTunnelDefender(
+  world: WorldState,
+  id: number,
+  entrance: FighterEntrance,
+  slot: number,
+  postsByEntrance: Map<number, number[]>,
+  moving: Uint8Array,
+): void {
+  const ants = world.ants;
+  const colonyId = ants.colonyId[id]!;
+  const grid = world.undergroundGrids[colonyId];
+  if (grid === undefined) {
+    ants.targetPosX[id] = -1;
+    ants.targetPosY[id] = -1;
+    return;
+  }
+  const at = getScratch(world).antTargeting;
+  const reach = at.defenderReach.get(colonyId);
+  // Surveyed this pass (surveyDefendedNests), keyed apart from the sentry posts.
+  const posts = postsByEntrance.get(-1 - entrance.entranceId);
+  if (reach === undefined || posts === undefined) {
+    ants.targetPosX[id] = -1;
+    ants.targetPosY[id] = -1;
+    return;
+  }
+  const invader = nearestReachableInvader(world, id, colonyId, grid, reach.cells, reach.stamp);
+  if (invader !== -1) {
+    ants.targetPosX[id] = ants.posX[invader]!;
+    ants.targetPosY[id] = ants.posY[invader]!;
+    return;
+  }
+  if (posts.length === 0) {
+    ants.targetPosX[id] = -1;
+    ants.targetPosY[id] = -1;
+    return;
+  }
+  const k = (slot % (posts.length >> 1)) << 1;
+  const px = posts[k]!;
+  const py = posts[k + 1]!;
+  if (ants.posX[id]! >> FP_SHIFT === px && ants.posY[id]! >> FP_SHIFT === py) {
+    ants.targetPosX[id] = -1;
+    ants.targetPosY[id] = -1;
+    return;
+  }
+  ants.targetPosX[id] = (px << FP_SHIFT) + (FP_ONE >> 1);
+  ants.targetPosY[id] = (py << FP_SHIFT) + (FP_ONE >> 1);
+  moving[id] = 1;
+}
 
 /**
  * V43 (#323) — the open entrance a fighter below ground in its OWN nest, at
@@ -721,7 +1019,18 @@ export function updateFightAntTargets(world: WorldState): void {
       if (ants.alive[wid] !== 1 || ants.task[wid] !== AntTask.Fighting) continue;
       const cid = ants.colonyId[wid]!;
       const col = world.colonies[cid];
-      if (!col || col.rallyPoint != null || col.entrances == null) continue;
+      if (!col || col.entrances == null) continue;
+      // V44 (#325) — tunnel defenders rank at the entrance they defend: every
+      // fighter of the colony outside foreign grids, in entity-id order.
+      const defended = defendedEntrance(world, col);
+      if (defended !== null) {
+        if (ants.zone[wid] === Zone.Underground && ants.currentGridColonyId[wid] !== cid) continue;
+        const rank = nextRank.get(defended.entranceId) ?? 0;
+        sentrySlot[wid] = rank;
+        nextRank.set(defended.entranceId, rank + 1);
+        continue;
+      }
+      if (col.rallyPoint != null) continue;
       const ents = col.entrances;
       if (ents.length === 0) continue;
       const tileX = ants.posX[wid]! >> FP_SHIFT;
@@ -738,6 +1047,8 @@ export function updateFightAntTargets(world: WorldState): void {
       sentrySlot[wid] = rank;
       nextRank.set(e.entranceId, rank + 1);
     }
+    // V44 (#325) — the defended nests' posts and reach, for step 10c and 16.
+    surveyDefendedNests(world, nextRank, postsByEntrance, postsBuilt);
   }
 
   for (let id = 0; id < ants.alive.length; id++) {
@@ -772,6 +1083,21 @@ export function updateFightAntTargets(world: WorldState): void {
       // Always clear stale targets — tickAntMovement computes the correct direction.
       ants.targetPosX[id] = -1;
       ants.targetPosY[id] = -1;
+      continue;
+    }
+
+    // V44 (#325) — below ground in its own nest, where its rally entrance's shaft
+    // reaches: a tunnel defender. (On the surface, or cut off below, it walks to
+    // that entrance and goes down, by the routing below.)
+    if (sentrySlot !== null && fighterDefendsTunnels(world, id)) {
+      routeTunnelDefender(
+        world,
+        id,
+        defendedEntrance(world, colony)!,
+        sentrySlot[id]!,
+        postsByEntrance!,
+        sentryMoving!,
+      );
       continue;
     }
 
