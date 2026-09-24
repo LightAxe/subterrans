@@ -112,7 +112,7 @@ describe('NursingSubState discriminants (PRD §1)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// FightingSubState (PRD §1 lines 91-93) — 2 members, both canonical at Phase 2
+// FightingSubState (PRD §1 lines 91-93) — 2 members canonical at Phase 2, + Holding (V43)
 // ---------------------------------------------------------------------------
 
 describe('FightingSubState discriminants (PRD §1)', () => {
@@ -120,12 +120,16 @@ describe('FightingSubState discriminants (PRD §1)', () => {
     expect(FightingSubState.MovingToRally).toBe(0);
   });
 
+  it('FightingSubState.Holding === 2 (V43 #323 sentry holding its post)', () => {
+    expect(FightingSubState.Holding).toBe(2);
+  });
+
   it('FightingSubState.Engaging === 1 (PRD §1 line 93 — NOT a placeholder)', () => {
     expect(FightingSubState.Engaging).toBe(1);
   });
 
-  it('FightingSubState has exactly 2 members (regression guard — was not singleton Engaged=0)', () => {
-    expect(Object.keys(FightingSubState).length).toBe(2);
+  it('FightingSubState has exactly 3 members (regression guard — was not singleton Engaged=0; Holding added in V43)', () => {
+    expect(Object.keys(FightingSubState).length).toBe(3);
   });
 });
 

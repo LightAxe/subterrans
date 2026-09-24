@@ -76,6 +76,17 @@ A worker on the `Fighting` task. Since **#299 (simVersion V40)** a colony below
 (one inside a foreign nest walks home as a fighter first).
 _Avoid_: soldier, warrior.
 
+**Sentry** (simVersion V43, #323):
+A fighter with no orders — its colony has no rally point. It guards its colony's
+nearest open entrance: it holds a post on the surface a few tiles from the entrance,
+within sight of it, chases any enemy ant it sees near the entrance, and ducks down its
+own shaft when the spider comes, climbing back out once the spider is well away
+from the entrance (unless its colony has sent its fighters at the spider). Far from
+the entrance, it walks home. With no orders it never goes down another colony's
+entrance.
+_Avoid_: **defender** for this; a rally on the colony's own entrance sends
+fighters down into the nest instead.
+
 **Nurse**:
 A worker on the `Nursing` task, tending brood at the Nursery (auto-allocated, not
 set by the player). Since **#299 (simVersion V40)** a colony below

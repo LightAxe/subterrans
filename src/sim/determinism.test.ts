@@ -23,6 +23,7 @@ import {
   SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
   SIM_VERSION_V41_DEATH_CHOKEPOINT,
   SIM_VERSION_V42_COLONY_ALARM,
+  SIM_VERSION_V43_FIGHTER_SENTRIES,
 } from './types.js';
 import { initAnt, pushRecentTile } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
@@ -1757,5 +1758,79 @@ describe('SCEN-06: pre-V42 replay determinism under V42 code', () => {
     const v42 = surfaceWorkers(runAlarmed(SIM_VERSION_V42_COLONY_ALARM));
     expect(v41).toBeGreaterThan(0); // pre-V42 the alarm field is inert — they mill on
     expect(v42).toBeLessThan(v41); // at V42 they head for the door
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// V43 — fighter sentries (#323): the pre-V43 path is untouched, and the V43 path
+// is live.
+//
+// Same two obligations as the blocks above: (a) a save pinned below V43 keeps
+// replaying under the OLD rule (same-build self-compare), and (b) the new rule
+// changes a real run, measured against V42, V43's immediate predecessor.
+//
+// Liveness scenario: two player fighters with NO rally point, standing on the
+// colony's open entrance, spider removed so only the door rules act. Below V43
+// the targeting sends them onto the entrance tile and the descent block drops
+// them in, so they bounce between the zones every tick; at V43 they walk to
+// sentry posts and never go down. Driven through tick(), so step 10c (targeting)
+// and step 16 (descent) are exercised at their real call sites. The per-rule
+// pins live in fighter-sentries.test.ts and ant/ant-combat-targeting.test.ts.
+// ---------------------------------------------------------------------------
+
+describe('SCEN-06: pre-V43 replay determinism under V43 code', () => {
+  const TICKS = 30;
+
+  function runIdleFighters(simVersion: number): { world: WorldState; flips: number } {
+    const world = createScenario(7, 'Normal');
+    world.spider = null;
+    world.aiState = [];
+    world.simVersion = simVersion; // sticky, exactly as a loaded save arrives
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const ent = colony.entrances.find((e) => e.isOpen)!;
+    const ids: number[] = [];
+    for (let i = 0; i < 2; i++) {
+      const id = allocateEntityId(world);
+      initAnt(world.ants, id, {
+        colonyId: PLAYER_COLONY_ID,
+        posX: (ent.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1),
+        posY: (ent.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1),
+        task: AntTask.Fighting,
+        subTask: 0,
+        speed: WORKER_BASE_SPEED,
+        zone: Zone.Surface,
+      });
+      colony.workers.push(id);
+      colony.workerCount += 1;
+      ids.push(id);
+    }
+    colony.targetRatio.fight = 5; // keep the V40 stand-down from demoting them
+    let flips = 0;
+    const last = ids.map((id) => world.ants.zone[id]!);
+    for (let t = 0; t < TICKS; t++) {
+      tick(world, []);
+      ids.forEach((id, k) => {
+        const z = world.ants.zone[id]!;
+        if (z !== last[k]) flips += 1;
+        last[k] = z;
+      });
+    }
+    return { world, flips };
+  }
+
+  it('a V42-pinned world replays byte-identically across two independent runs', () => {
+    expect(serializeWorldState(runIdleFighters(SIM_VERSION_V42_COLONY_ALARM).world)).toBe(
+      serializeWorldState(runIdleFighters(SIM_VERSION_V42_COLONY_ALARM).world),
+    );
+  }, 30_000);
+
+  it('V43 diverges from its IMMEDIATE predecessor V42 (the gate is live): idle fighters stop bouncing only at V43', () => {
+    // Compare the zone flips, NOT the full serialization: the serialized string
+    // carries the simVersion field itself (42 vs 43), so a full-string compare
+    // would pass even with the gated behaviour inert.
+    const v42 = runIdleFighters(SIM_VERSION_V42_COLONY_ALARM).flips;
+    const v43 = runIdleFighters(SIM_VERSION_V43_FIGHTER_SENTRIES).flips;
+    expect(v42).toBeGreaterThanOrEqual(40); // two fighters, ~every tick
+    expect(v43).toBe(0);
   }, 30_000);
 });
