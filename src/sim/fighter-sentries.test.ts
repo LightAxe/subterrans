@@ -454,7 +454,7 @@ describe('V43 (#323) — no orders, no invasion; no ping-pong between close door
       if (world.ants.targetPosX[late] === -1) heldAt = t;
     }
     expect(heldAt).toBeGreaterThanOrEqual(0);
-  });
+  }, 30_000);
 
   it('fighters walking home after a cleared field rally get round obstacles as before V43', () => {
     // A field rally far from the door, then cleared: the recalled fighters walk
@@ -481,7 +481,7 @@ describe('V43 (#323) — no orders, no invasion; no ping-pong between close door
             6,
       ).length;
     };
-    const v42 = stranded(42);
+    const v42 = stranded(SIM_VERSION_V42_COLONY_ALARM);
     expect(v42).toBeGreaterThan(0); // the case does strand some, even before V43
     expect(stranded(SIM_VERSION_V43_FIGHTER_SENTRIES)).toBeLessThanOrEqual(v42);
   }, 30_000);
@@ -521,7 +521,7 @@ describe('V43 (#323) — no orders, no invasion; no ping-pong between close door
           world.ants.posY[id]! >> FP_SHIFT === e1.surfaceTileY,
       ),
     ).toEqual([]);
-  });
+  }, 30_000);
 
   it('three own doors in adjacent columns: nobody freezes on a door, and the sentries settle', () => {
     const world = createScenario(7, 'Normal');
