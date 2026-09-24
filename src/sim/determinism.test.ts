@@ -24,6 +24,7 @@ import {
   SIM_VERSION_V41_DEATH_CHOKEPOINT,
   SIM_VERSION_V42_COLONY_ALARM,
   SIM_VERSION_V43_FIGHTER_SENTRIES,
+  SIM_VERSION_V44_TUNNEL_DEFENCE,
 } from './types.js';
 import { initAnt, pushRecentTile } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
@@ -1832,5 +1833,77 @@ describe('SCEN-06: pre-V43 replay determinism under V43 code', () => {
     const v43 = runIdleFighters(SIM_VERSION_V43_FIGHTER_SENTRIES).flips;
     expect(v42).toBeGreaterThanOrEqual(40); // two fighters, ~every tick
     expect(v43).toBe(0);
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// V44 — tunnel defence (#325): the pre-V44 path is untouched, and the V44 path
+// is live.
+//
+// Same two obligations: (a) a save pinned below V44 keeps replaying under the OLD
+// rule (same-build self-compare), and (b) the new rule changes a real run,
+// measured against V43, V44's immediate predecessor.
+//
+// Liveness scenario: two player fighters standing on the colony's open entrance
+// with the rally point ON that entrance, spider removed. Below V44 they go down
+// and are routed straight back up, a zone flip on nearly every tick; at V44 they
+// go down once and stay below. Driven through tick(), so step 10c and step 16
+// are exercised at their real call sites. The per-rule pins live in
+// tunnel-defence.test.ts.
+// ---------------------------------------------------------------------------
+
+describe('SCEN-06: pre-V44 replay determinism under V44 code', () => {
+  const TICKS = 30;
+
+  function runDefenders(simVersion: number): { world: WorldState; flips: number } {
+    const world = createScenario(7, 'Normal');
+    world.spider = null;
+    world.aiState = [];
+    world.simVersion = simVersion; // sticky, exactly as a loaded save arrives
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const ent = colony.entrances.find((e) => e.isOpen)!;
+    const ids: number[] = [];
+    for (let i = 0; i < 2; i++) {
+      const id = allocateEntityId(world);
+      initAnt(world.ants, id, {
+        colonyId: PLAYER_COLONY_ID,
+        posX: (ent.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1),
+        posY: (ent.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1),
+        task: AntTask.Fighting,
+        subTask: 0,
+        speed: WORKER_BASE_SPEED,
+        zone: Zone.Surface,
+      });
+      colony.workers.push(id);
+      colony.workerCount += 1;
+      ids.push(id);
+    }
+    colony.targetRatio.fight = 5; // keep the V40 stand-down from demoting them
+    colony.rallyPoint = { tileX: ent.surfaceTileX, tileY: ent.surfaceTileY };
+    let flips = 0;
+    const last = ids.map((id) => world.ants.zone[id]!);
+    for (let t = 0; t < TICKS; t++) {
+      tick(world, []);
+      ids.forEach((id, k) => {
+        const z = world.ants.zone[id]!;
+        if (z !== last[k]) flips += 1;
+        last[k] = z;
+      });
+    }
+    return { world, flips };
+  }
+
+  it('a V43-pinned world replays byte-identically across two independent runs', () => {
+    expect(serializeWorldState(runDefenders(SIM_VERSION_V43_FIGHTER_SENTRIES).world)).toBe(
+      serializeWorldState(runDefenders(SIM_VERSION_V43_FIGHTER_SENTRIES).world),
+    );
+  }, 30_000);
+
+  it('V44 diverges from its IMMEDIATE predecessor V43 (the gate is live): fighters rallied on their own entrance stop bouncing only at V44', () => {
+    // Compare the zone flips, NOT the full serialization (it carries simVersion).
+    const v43 = runDefenders(SIM_VERSION_V43_FIGHTER_SENTRIES).flips;
+    const v44 = runDefenders(SIM_VERSION_V44_TUNNEL_DEFENCE).flips;
+    expect(v43).toBeGreaterThanOrEqual(40); // two fighters, ~every tick
+    expect(v44).toBe(2); // each goes down once
   }, 30_000);
 });

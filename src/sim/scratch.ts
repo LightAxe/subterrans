@@ -42,28 +42,41 @@ export interface ScratchArena {
     huntDirty: number[];
     nearestEntrance: { x: number; y: number; colonyId: number };
   };
-  /** ant-combat-targeting.ts — invader underground BFS buffers (touched-cell restore). */
+  /** ant-combat-targeting.ts — underground BFS buffers (touched-cell restore) for
+   *  the invader step; from V44 (#325) the nest survey (surveyDefendedNests)
+   *  borrows the QX/QY queue, marking cells in its own defenderReach instead. */
   antTargeting: {
     invBfsDist: Int32Array;
     invBfsQX: Int32Array;
     invBfsQY: Int32Array;
-    /** V43 (#323) — per-entity sentry slot (rank at its entrance), written every
-     *  tick for the fighters it is read for, before any read. */
+    /** V43 (#323) — per-entity sentry slot (rank at its entrance; from V44 (#325)
+     *  also a tunnel defender's rank), written every tick for the fighters it is
+     *  read for, before any read. */
     sentrySlot: Int32Array;
     /** V43 (#323) — every colony's entrance tiles as [x0, y0, x1, y1, …], refilled
      *  at the start of each updateFightAntTargets pass for the sentry post filter. */
     sentryEntranceTiles: number[];
-    /** V43 (#323) — per-entity: 1 if step 10c's sentry branch sent this ant into
-     *  cover or to its post this tick, read by step 16's occupancy pass. Cleared at
-     *  the start of each updateFightAntTargets pass. */
+    /** V43 (#323) — per-entity: 1 if step 10c sent this sentry into cover or to
+     *  its post this tick, or (V44, #325) this tunnel defender to its tunnel post;
+     *  read by step 16's occupancy pass. Cleared at the start of each
+     *  updateFightAntTargets pass. */
     sentryMoving: Uint8Array;
     /** V43 (#323) — entranceId → that entrance's sentry posts (listSentryPosts),
-     *  arrays reused across passes; `sentryPostsBuilt` holds the entrances whose
-     *  list was rebuilt this pass. */
+     *  and (V44, #325) -1 - entranceId → its tunnel posts (surveyDefendedNests);
+     *  arrays reused across passes. `sentryPostsBuilt` holds the keys whose list
+     *  was rebuilt this pass. */
     sentryPosts: Map<number, number[]>;
     sentryPostsBuilt: Set<number>;
-    /** V43 (#323) — entranceId → the next sentry rank there. */
+    /** V43 (#323) — entranceId → the next sentry (or, V44, defender) rank there. */
     sentryNextRank: Map<number, number>;
+    /** V44 (#325) — colonyId → the cells of its grid reachable from the shaft of
+     *  `entranceId`, the entrance it defends, marked with this tick's `stamp`, and
+     *  the `invaders` (enemy ant ids, id order) standing on them
+     *  (surveyDefendedNests, step 10c; the cells are read again at step 16). */
+    defenderReach: Map<
+      number,
+      { cells: Int32Array; stamp: number; entranceId: number; invaders: number[] }
+    >;
   };
   /** ant-movement.ts — same-colony occupancy resolution map. */
   movementOccupancy: Map<number, number>;
@@ -132,6 +145,7 @@ export function getScratch(world: WorldState): ScratchArena {
         sentryPosts: new Map(),
         sentryPostsBuilt: new Set(),
         sentryNextRank: new Map(),
+        defenderReach: new Map(),
       },
       movementOccupancy: new Map(),
       tickIdle: [],

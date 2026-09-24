@@ -84,8 +84,17 @@ own shaft when the spider comes, climbing back out once the spider is well away
 from the entrance (unless its colony has sent its fighters at the spider). Far from
 the entrance, it walks home. With no orders it never goes down another colony's
 entrance.
-_Avoid_: **defender** for this; a rally on the colony's own entrance sends
-fighters down into the nest instead.
+_Avoid_: **defender** for this; a rally on the colony's own entrance makes
+fighters **tunnel defenders** instead.
+
+**Tunnel defender** (simVersion V44, #325):
+A fighter whose colony's rally point is on one of the colony's own open
+entrances (unless the colony has sent its fighters at the spider). It goes down
+that entrance and defends the nest from inside: it goes after any enemy ant in
+the tunnels joined to that entrance, however deep, and otherwise waits at a post
+in the tunnels just below the entrance. Moving the rally point off the colony's
+own entrances, or clearing it, brings it back out.
+_Avoid_: **guard**, **garrison**.
 
 **Nurse**:
 A worker on the `Nursing` task, tending brood at the Nursery (auto-allocated, not
