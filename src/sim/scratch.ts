@@ -70,9 +70,13 @@ export interface ScratchArena {
     /** V43 (#323) — entranceId → the next sentry (or, V44, defender) rank there. */
     sentryNextRank: Map<number, number>;
     /** V44 (#325) — colonyId → the cells of its grid reachable from the shaft of
-     *  `entranceId`, the entrance it defends, marked with this tick's `stamp`
-     *  (surveyDefendedNests, step 10c; read again at step 16). */
-    defenderReach: Map<number, { cells: Int32Array; stamp: number; entranceId: number }>;
+     *  `entranceId`, the entrance it defends, marked with this tick's `stamp`, and
+     *  the `invaders` (enemy ant ids, id order) standing on them
+     *  (surveyDefendedNests, step 10c; the cells are read again at step 16). */
+    defenderReach: Map<
+      number,
+      { cells: Int32Array; stamp: number; entranceId: number; invaders: number[] }
+    >;
   };
   /** ant-movement.ts — same-colony occupancy resolution map. */
   movementOccupancy: Map<number, number>;

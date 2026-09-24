@@ -514,7 +514,7 @@ function surveyDefendedNests(
     const cells = grid.width * grid.height;
     let reach = reachByColony.get(col.colonyId);
     if (reach === undefined || reach.cells.length < cells) {
-      reach = { cells: new Int32Array(cells), stamp: 0, entranceId: -1 };
+      reach = { cells: new Int32Array(cells), stamp: 0, entranceId: -1, invaders: [] };
       reachByColony.set(col.colonyId, reach);
     }
     reach.stamp += 1;
@@ -528,6 +528,8 @@ function surveyDefendedNests(
     posts.length = 0;
     const n = nextRank.get(defended.entranceId) ?? 0;
     surveyDefendedNest(world, grid, defended, col.entrances, n, posts, reach.cells, reach.stamp);
+    reach.invaders.length = 0;
+    listReachableInvaders(world, col.colonyId, grid, reach.cells, reach.stamp, reach.invaders);
     postsBuilt.add(key);
   }
 }
@@ -543,23 +545,20 @@ function isOwnShaftTop(entrances: ReadonlyArray<FighterEntrance>, x: number, y: 
 }
 
 /**
- * V44 (#325) — the nearest (Manhattan; lower id on a tie) enemy ant below ground
- * in colony `colonyId`'s grid whose tile is stamped `stamp` in `reach` — one the
- * defenders can get to — or -1.
+ * V44 (#325) — fill `out`, in id order, with the enemy ants below ground in
+ * colony `colonyId`'s grid on a tile stamped `stamp` in `reach`: the invaders its
+ * defenders can get to. One scan per defended colony per pass; nothing moves
+ * during step 10c, so it holds for every defender routed after it.
  */
-function nearestReachableInvader(
+function listReachableInvaders(
   world: WorldState,
-  id: number,
   colonyId: number,
   grid: UndergroundGrid,
   reach: Int32Array,
   stamp: number,
-): number {
+  out: number[],
+): void {
   const ants = world.ants;
-  const selfX = ants.posX[id]! >> FP_SHIFT;
-  const selfY = ants.posY[id]! >> FP_SHIFT;
-  let best = -1;
-  let bestDist = -1;
   for (let other = 0; other < ants.alive.length; other++) {
     if (ants.alive[other] !== 1) continue;
     if (ants.zone[other] !== Zone.Underground) continue;
@@ -569,7 +568,29 @@ function nearestReachableInvader(
     const ty = ants.posY[other]! >> FP_SHIFT;
     if (tx < 0 || tx >= grid.width || ty < 0 || ty >= grid.height) continue;
     if (reach[ty * grid.width + tx] !== stamp) continue;
-    const d = Math.abs(tx - selfX) + Math.abs(ty - selfY);
+    out.push(other);
+  }
+}
+
+/**
+ * V44 (#325) — the nearest (Manhattan; lower id on a tie) of `invaders` (in id
+ * order, from listReachableInvaders) to ant `id`, or -1 if there are none.
+ */
+function nearestReachableInvader(
+  world: WorldState,
+  id: number,
+  invaders: readonly number[],
+): number {
+  const ants = world.ants;
+  const selfX = ants.posX[id]! >> FP_SHIFT;
+  const selfY = ants.posY[id]! >> FP_SHIFT;
+  let best = -1;
+  let bestDist = -1;
+  for (let i = 0; i < invaders.length; i++) {
+    const other = invaders[i]!;
+    const d =
+      Math.abs((ants.posX[other]! >> FP_SHIFT) - selfX) +
+      Math.abs((ants.posY[other]! >> FP_SHIFT) - selfY);
     if (bestDist < 0 || d < bestDist) {
       bestDist = d;
       best = other;
@@ -611,7 +632,7 @@ function routeTunnelDefender(
     ants.targetPosY[id] = -1;
     return;
   }
-  const invader = nearestReachableInvader(world, id, colonyId, grid, reach.cells, reach.stamp);
+  const invader = nearestReachableInvader(world, id, reach.invaders);
   if (invader !== -1) {
     ants.targetPosX[id] = ants.posX[invader]!;
     ants.targetPosY[id] = ants.posY[invader]!;
