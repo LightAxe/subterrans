@@ -2,17 +2,494 @@
 // #212 Layer 1 (behavior): hostile/invader target selection + the inverted-BFS step
 // search. Depends only on Layer-0 ant-motion primitives (+ sibling sim modules);
 // only the orchestrator calls these. Owns the INV_BFS_* scratch arrays.
-import { FIGHT_AGGRO_RADIUS } from '../constants.js';
+import { ENTRANCE_SHAFT_DEPTH, FIGHT_AGGRO_RADIUS } from '../constants.js';
 import { AntTask } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import { Zone, type UndergroundGrid } from '../terrain.js';
-import type { WorldState } from '../types.js';
+import { SIM_VERSION_V43_FIGHTER_SENTRIES, type WorldState } from '../types.js';
+import { isSurfaceTileInComponent } from '../surface-features.js';
+import { getScratch } from '../scratch.js';
 import { DIR_DX, DIR_DY, canEnterUndergroundTile, packStep } from './ant-motion.js';
 import type { AntComponents } from './ant-store.js';
 import type { ScratchArena } from '../scratch.js';
 
 // #212: RALLY_HOLD_RADIUS_TILES lives with its sole consumer (fighter rally hold).
 const RALLY_HOLD_RADIUS_TILES = 2;
+
+// V43 (#323) — sentry posts for fighters with no rally point. The ring sits one
+// tile inside the fighters' sight (FIGHT_AGGRO_RADIUS) of the door, so every
+// sentry sees an enemy standing ON the entrance tile. It also lies inside the
+// entrance's guaranteed-clear halo (SURFACE_ROOT_CLEARANCE_RADIUS, Chebyshev 3).
+const SENTRY_POST_RING_RADIUS = FIGHT_AGGRO_RADIUS - 1;
+// A sentry within this many tiles of its post holds in place — the same
+// anti-jitter role RALLY_HOLD_RADIUS_TILES plays for a rally (same-colony
+// occupancy displacement bumps a doubled-up sentry onto a neighbouring tile).
+const SENTRY_HOLD_RADIUS_TILES = 1;
+// A sentry already holding keeps holding within this of its post. Occupancy
+// displacement moves an ant one tile, so a holder bumped off its hold tile lands
+// inside this radius and stays put instead of walking back onto the taken tile.
+const SENTRY_KEEP_HOLD_RADIUS_TILES = SENTRY_HOLD_RADIUS_TILES + 1;
+// A sentry spots the spider at the same range it sees anything else.
+const SENTRY_SPIDER_WATCH_RADIUS = FIGHT_AGGRO_RADIUS;
+// A sentry within this of its door is AT the door: on its post, on a hold tile, or
+// nearer the door than that (a sentry that has just climbed out stands ON it).
+const SENTRY_DOOR_AREA_RADIUS = SENTRY_POST_RING_RADIUS + SENTRY_HOLD_RADIUS_TILES;
+// A sentry guards the area its door's ring of posts watches: everything within
+// this of the door (sight 4 past the door area). It chases an enemy only inside
+// it, and from farther out it walks to the door itself, as idle fighters did
+// before V43, taking its post once
+// inside. Without the first, one passing forager could lure a sentry across the
+// map, and recalled invaders fought on at the enemy's door instead of coming home.
+// Without the second, steering straight at an off-row post from across the map
+// stranded more fighters against multi-tile obstacles than the old route did.
+const SENTRY_GUARD_RADIUS = FIGHT_AGGRO_RADIUS + SENTRY_DOOR_AREA_RADIUS;
+// While the spider is within this of a door, sentries at that door take cover.
+// Past it, no post — nor any of its ±1 hold tiles — is within the spider watch
+// radius, so a sentry coming back out to its post does not walk straight back into
+// sight and turn round: the door-relative test gives cover the hysteresis a purely
+// ant-relative "sees it" test lacked.
+const SENTRY_COVER_DOOR_RADIUS = SENTRY_SPIDER_WATCH_RADIUS + SENTRY_DOOR_AREA_RADIUS;
+// A sentry sheltering below a door climbs back out only once the spider is past
+// this radius of it: two tiles beyond the cover radius. The spider steps one tile a
+// tick (V31+), so a spider pacing across the cover radius can neither send a
+// sentry that just climbed out straight back down nor let one that just went down
+// straight back out. With one shared threshold it bounced them every tick.
+const SENTRY_ALL_CLEAR_RADIUS = SENTRY_COVER_DOOR_RADIUS + 2;
+
+/** The enemy colonies a surface fighter scans (workers + queen, no copies). */
+type AggroColony = { cid: number; workers: readonly number[]; queenEntityId: number };
+
+/** V43 (#323) — (tileX, tileY) lies inside the guard area of the sentry door at
+ *  (doorX, doorY). Always true for doorX < 0: a scan with no door to guard. */
+function inGuardArea(tileX: number, tileY: number, doorX: number, doorY: number): boolean {
+  return doorX < 0 || Math.abs(tileX - doorX) + Math.abs(tileY - doorY) <= SENTRY_GUARD_RADIUS;
+}
+
+/**
+ * Point a SURFACE fighter at the nearest hostile it can see — an enemy ant
+ * (worker or queen) or the spider within FIGHT_AGGRO_RADIUS Manhattan tiles of
+ * it — and return true; return false (target untouched) if none is in sight.
+ * A closer enemy ant beats the spider (strict <); a closer spider beats a
+ * farther ant. Shared by rallied fighters (V17 ants / V23 spider) and, from V43,
+ * sentries (#323), which pass their door as (guardDoorX, guardDoorY): a sentry
+ * chases only enemy ants inside its guard area (within SENTRY_GUARD_RADIUS of the
+ * door), and never the spider, which it takes cover from instead. Allocation-free.
+ */
+function targetNearestHostileInSight(
+  world: WorldState,
+  id: number,
+  colonyId: number,
+  currentGridColonyId: number,
+  aggroEnemyColonies: readonly AggroColony[],
+  guardDoorX = -1,
+  guardDoorY = -1,
+): boolean {
+  const ants = world.ants;
+  const aggroZone = ants.zone[id];
+  const aggroTileX = ants.posX[id]! >> FP_SHIFT;
+  const aggroTileY = ants.posY[id]! >> FP_SHIFT;
+  let nearestEnemy = -1;
+  let nearestEnemyDist = FIGHT_AGGRO_RADIUS + 1;
+  // Scan enemy colony workers + queen directly (no array copies, no per-fighter allocs).
+  // Indexed loops: for…of here ran this hot scan ~1.9× slower on V8.
+  for (let c = 0; c < aggroEnemyColonies.length; c++) {
+    const ec = aggroEnemyColonies[c]!;
+    if (ec.cid === colonyId) continue;
+    const workers = ec.workers;
+    for (let w = 0; w < workers.length; w++) {
+      const eid = workers[w]!;
+      if (ants.alive[eid] !== 1) continue;
+      if (ants.zone[eid] !== aggroZone) continue;
+      // Underground grids are disjoint spaces — reject candidates in a different grid.
+      if (aggroZone === Zone.Underground && ants.currentGridColonyId[eid] !== currentGridColonyId)
+        continue;
+      const eTileX = ants.posX[eid]! >> FP_SHIFT;
+      const eTileY = ants.posY[eid]! >> FP_SHIFT;
+      const dist = Math.abs(eTileX - aggroTileX) + Math.abs(eTileY - aggroTileY);
+      if (
+        dist <= FIGHT_AGGRO_RADIUS &&
+        dist < nearestEnemyDist &&
+        inGuardArea(eTileX, eTileY, guardDoorX, guardDoorY)
+      ) {
+        nearestEnemyDist = dist;
+        nearestEnemy = eid;
+      }
+    }
+    const qid = ec.queenEntityId;
+    if (
+      qid >= 0 &&
+      ants.alive[qid] === 1 &&
+      ants.zone[qid] === aggroZone &&
+      (aggroZone !== Zone.Underground || ants.currentGridColonyId[qid] === currentGridColonyId)
+    ) {
+      const qTileX = ants.posX[qid]! >> FP_SHIFT;
+      const qTileY = ants.posY[qid]! >> FP_SHIFT;
+      const dist = Math.abs(qTileX - aggroTileX) + Math.abs(qTileY - aggroTileY);
+      if (
+        dist <= FIGHT_AGGRO_RADIUS &&
+        dist < nearestEnemyDist &&
+        inGuardArea(qTileX, qTileY, guardDoorX, guardDoorY)
+      ) {
+        nearestEnemyDist = dist;
+        nearestEnemy = qid;
+      }
+    }
+  }
+  // V23 (#147): the spider is one more candidate in the same nearest-hostile scan
+  // (surface-only — callers gate this to Zone.Surface). A closer enemy ant wins
+  // (strict <); a closer spider wins over a farther ant. Routing the fighter onto
+  // the spider's tile is enough — the widened spider-combat gate resolves the damage.
+  // The spider is targetable in ANY state: fighters may pursue a Feeding spider to
+  // interrupt its heal (tickSpiderV23 forfeits the heal once a fighter is adjacent).
+  if (guardDoorX < 0 && world.spider !== null) {
+    const spTileX = world.spider.posX >> FP_SHIFT;
+    const spTileY = world.spider.posY >> FP_SHIFT;
+    const dist = Math.abs(spTileX - aggroTileX) + Math.abs(spTileY - aggroTileY);
+    if (dist <= FIGHT_AGGRO_RADIUS && dist < nearestEnemyDist) {
+      ants.targetPosX[id] = world.spider.posX;
+      ants.targetPosY[id] = world.spider.posY;
+      return true;
+    }
+  }
+  if (nearestEnemy >= 0) {
+    ants.targetPosX[id] = ants.posX[nearestEnemy]!;
+    ants.targetPosY[id] = ants.posY[nearestEnemy]!;
+    return true;
+  }
+  return false;
+}
+
+/** Manhattan tile distance from the spider to (tileX, tileY); Infinity if there is
+ *  no spider. */
+function spiderDistance(world: WorldState, tileX: number, tileY: number): number {
+  if (world.spider === null) return Number.POSITIVE_INFINITY;
+  return (
+    Math.abs((world.spider.posX >> FP_SHIFT) - tileX) +
+    Math.abs((world.spider.posY >> FP_SHIFT) - tileY)
+  );
+}
+
+/** V43 (#323) — `id` is a Fighter whose colony has no rally point: it has no orders. */
+function hasNoOrders(world: WorldState, id: number): boolean {
+  if (world.simVersion < SIM_VERSION_V43_FIGHTER_SENTRIES) return false;
+  if (world.ants.task[id] !== AntTask.Fighting) return false;
+  const colony = world.colonies[world.ants.colonyId[id]!];
+  return colony !== undefined && colony.rallyPoint == null;
+}
+
+/**
+ * V43 (#323) — sentry `id` is on the move among the posts round its door: step
+ * 10c's sentry branch sent it this tick into cover or to its post. The same-colony
+ * occupancy pass lets it through tiles its colony's ants hold instead of bumping
+ * it. (Walking home from outside the guard area, or chasing, it is bumped like
+ * any ant: those bumps are what slide it round obstacles, and without them more
+ * fighters stranded in the field after a rally was cleared.) Sentries hold posts all round their
+ * door, and one bumped back off a holder's tile every tick, on its way to a post
+ * on the far side, froze there.
+ */
+export function sentryPassesThroughFriends(world: WorldState, id: number): boolean {
+  // Not under spider priority: step 10d retargets those fighters onto the spider
+  // after step 10c flagged them, and let through they all stacked on its tile.
+  if (!isSentry(world, id)) return false;
+  const moving = getScratch(world).antTargeting.sentryMoving;
+  return id < moving.length && moving[id] === 1 && world.ants.zone[id] === Zone.Surface;
+}
+
+/**
+ * V43 (#323) — `id` is a SENTRY: a fighter with no orders, whose colony has not
+ * sent its fighters at the spider. Under spider priority (step 10d retargets
+ * surface fighters onto the spider) fighters must not take cover from it or
+ * stay below while it is near: that is exactly when they were told to fight it.
+ */
+function isSentry(world: WorldState, id: number): boolean {
+  if (!hasNoOrders(world, id)) return false;
+  return world.spiderPriorityColonyId !== world.ants.colonyId[id];
+}
+
+/**
+ * V43 (#323) — sentry `id`, bound for the door at (entranceX, entranceY), takes
+ * cover from the spider: it sees the spider (within SENTRY_SPIDER_WATCH_RADIUS),
+ * or it is at its door while the spider is within SENTRY_COVER_DOOR_RADIUS of
+ * it. It then heads for the door (updateFightAntTargets) and may go down it
+ * (fighterBarredFromOwnShaft). The door-relative half keeps it heading in —
+ * rather than pacing between post and door — once the spider is near.
+ */
+export function sentryTakesCover(
+  world: WorldState,
+  id: number,
+  entranceX: number,
+  entranceY: number,
+): boolean {
+  if (!isSentry(world, id)) return false;
+  const ants = world.ants;
+  const ax = ants.posX[id]! >> FP_SHIFT;
+  const ay = ants.posY[id]! >> FP_SHIFT;
+  if (spiderDistance(world, ax, ay) <= SENTRY_SPIDER_WATCH_RADIUS) return true;
+  const atDoor = Math.abs(ax - entranceX) + Math.abs(ay - entranceY) <= SENTRY_DOOR_AREA_RADIUS;
+  return atDoor && spiderDistance(world, entranceX, entranceY) <= SENTRY_COVER_DOOR_RADIUS;
+}
+
+/**
+ * V43 (#323) — a sentry sheltering in its OWN nest stays below while the spider is
+ * within SENTRY_ALL_CLEAR_RADIUS of the door it would climb out of: two tiles past
+ * the radius that sends sentries at the door down, so it comes back out only once
+ * the spider could not send it straight back in. Called from the ascent block in
+ * tickAntMovement; true means skip this ascent.
+ */
+export function sentryHoldsBelow(
+  world: WorldState,
+  id: number,
+  inOwnGrid: boolean,
+  entranceX: number,
+  entranceY: number,
+): boolean {
+  if (!inOwnGrid || !isSentry(world, id)) return false;
+  return spiderDistance(world, entranceX, entranceY) <= SENTRY_ALL_CLEAR_RADIUS;
+}
+
+/**
+ * V43 (#323) — the own-shaft rule, for tickAntMovement's descent block: true bars
+ * Fighter `id` from going down its OWN open entrance. A fighter goes down its
+ * own shaft only when its colony's rally point is on that entrance (the Plan
+ * 09.1-03 defensive descent) or, as a sentry, to take cover from the spider. A
+ * sentry, or a fighter crossing its door on the way to a surface rally, walks
+ * over it — dropping in just meant climbing straight back out next tick.
+ */
+export function fighterBarredFromOwnShaft(
+  world: WorldState,
+  id: number,
+  ownColony: { rallyPoint: { tileX: number; tileY: number } | null },
+  entranceX: number,
+  entranceY: number,
+): boolean {
+  if (world.simVersion < SIM_VERSION_V43_FIGHTER_SENTRIES) return false;
+  if (world.ants.task[id] !== AntTask.Fighting) return false;
+  const rp = ownColony.rallyPoint;
+  if (rp != null && rp.tileX === entranceX && rp.tileY === entranceY) return false;
+  return !sentryTakesCover(world, id, entranceX, entranceY);
+}
+
+/**
+ * V43 (#323) — the foreign-shaft rule, for tickAntMovement's descent block: true
+ * bars Fighter `id` from going down a FOREIGN open entrance. Invading needs
+ * orders: a fighter with no rally point — a sentry that chased an enemy onto its
+ * door, or a recalled invader surfacing at the door it just left — stays out.
+ */
+export function fighterBarredFromForeignShaft(world: WorldState, id: number): boolean {
+  return hasNoOrders(world, id);
+}
+
+/**
+ * V43 (#323) — ring offset of index `i` on the ring at Manhattan distance `r`:
+ * index 0 is due north and the ring runs clockwise (N → E → S → W). Written
+ * with subtraction instead of division (the src/sim division ban).
+ */
+function sentryRingOffsetX(i: number, r: number): number {
+  let d = i;
+  let side = 0;
+  while (d >= r) {
+    d -= r;
+    side += 1;
+  }
+  if (side === 0) return d;
+  if (side === 1) return r - d;
+  if (side === 2) return -d;
+  return -r + d;
+}
+function sentryRingOffsetY(i: number, r: number): number {
+  let d = i;
+  let side = 0;
+  while (d >= r) {
+    d -= r;
+    side += 1;
+  }
+  if (side === 0) return -r + d;
+  if (side === 1) return d;
+  if (side === 2) return r - d;
+  return -d;
+}
+
+/** True iff (tileX, tileY) is an entrance tile of ANY colony, open or closed.
+ *  `entranceTiles` is the flat [x0, y0, x1, y1, …] list updateFightAntTargets
+ *  fills once per pass. A post whose hold area touches a doorway would park its
+ *  sentry in the traffic in and out of a nest. */
+function isAnyEntranceTile(
+  entranceTiles: readonly number[],
+  tileX: number,
+  tileY: number,
+): boolean {
+  for (let i = 0; i < entranceTiles.length; i += 2) {
+    if (entranceTiles[i] === tileX && entranceTiles[i + 1] === tileY) return true;
+  }
+  return false;
+}
+
+/** The entrance shape pickFighterTargetEntrance works over. */
+type FighterEntrance = {
+  entranceId: number;
+  surfaceTileX: number;
+  surfaceTileY: number;
+  isOpen: boolean;
+};
+
+/**
+ * V43 (#323) — the open entrance a fighter below ground in its OWN nest, at
+ * (tileX, tileY), will climb out of, where that is certain: the colony's only open
+ * entrance, or else the shaft it stands in (that shaft's column, in its top
+ * ENTRANCE_SHAFT_DEPTH rows, where a sheltering sentry waits; lower entranceId if
+ * two share the column). Null otherwise: deeper in the tunnels the entrance flow
+ * field picks the shaft, so such a fighter is ranked once it surfaces.
+ * (pickFighterTargetEntrance would measure its depth against the doors' surface
+ * rows.)
+ */
+function shaftOfFighterBelow(
+  entrances: ReadonlyArray<FighterEntrance>,
+  tileX: number,
+  tileY: number,
+): FighterEntrance | null {
+  let openCount = 0;
+  let lastOpen: FighterEntrance | null = null;
+  let inShaft: FighterEntrance | null = null;
+  for (let e = 0; e < entrances.length; e++) {
+    const ent = entrances[e]!;
+    if (!ent.isOpen) continue;
+    openCount += 1;
+    lastOpen = ent;
+    if (
+      ent.surfaceTileX === tileX &&
+      tileY < ENTRANCE_SHAFT_DEPTH &&
+      (inShaft === null || ent.entranceId < inShaft.entranceId)
+    ) {
+      inShaft = ent;
+    }
+  }
+  return openCount === 1 ? lastOpen : inShaft;
+}
+
+/**
+ * V43 (#323) — true iff no tile of the hold area of a post at (px, py) (the post
+ * and its four neighbours, SENTRY_HOLD_RADIUS_TILES = 1) is ANY colony's entrance
+ * and, when `stable`, a sentry anywhere in it would still be bound for `entrance`.
+ * With two open entrances close together, a post on one's ring can be nearer the
+ * other: the sentry then re-binds every tick and ping-pongs between the two rings.
+ */
+function sentryHoldAreaQualifies(
+  entranceTiles: readonly number[],
+  px: number,
+  py: number,
+  entrance: FighterEntrance,
+  entrances: ReadonlyArray<FighterEntrance>,
+  stable: boolean,
+): boolean {
+  for (let n = 0; n < 5; n++) {
+    const tx = n === 1 ? px + 1 : n === 2 ? px - 1 : px;
+    const ty = n === 3 ? py + 1 : n === 4 ? py - 1 : py;
+    if (isAnyEntranceTile(entranceTiles, tx, ty)) return false;
+    if (stable && pickFighterTargetEntrance(entrances, tx, ty) !== entrance) return false;
+  }
+  return true;
+}
+
+/**
+ * V43 (#323) — fill `out` with the sentry posts of `entrance`, as a flat
+ * [x0, y0, x1, y1, …] list in spread order: ring index k·(2R−1) mod 4R for
+ * k = 0, 1, 2, …, a stride coprime with the ring size 4R, so consecutive slots
+ * land around the door rather than bunching. Only walkable ring tiles whose hold
+ * area qualifies (sentryHoldAreaQualifies) are kept: the stable ones, or, if the
+ * door has none (other own doors crowding its ring, as with three in adjacent
+ * columns), any clear of entrances, and a sentry sent to one of those usually
+ * walks out of the crowded spot and re-binds to a neighbouring door. Empty only
+ * if no ring tile is walkable and clear of entrances: every legal entrance's ring
+ * lies inside its guaranteed-clear halo (SURFACE_ROOT_CLEARANCE_RADIUS), so that
+ * takes a door beside every ring tile.
+ */
+function listSentryPosts(
+  world: WorldState,
+  entrance: FighterEntrance,
+  entrances: ReadonlyArray<FighterEntrance>,
+  entranceTiles: readonly number[],
+  out: number[],
+): void {
+  const r = SENTRY_POST_RING_RADIUS;
+  const ringSize = 4 * r;
+  const stride = 2 * r - 1;
+  for (let pass = 0; pass < 2 && out.length === 0; pass++) {
+    for (let k = 0; k < ringSize; k++) {
+      const idx = (k * stride) % ringSize;
+      const px = entrance.surfaceTileX + sentryRingOffsetX(idx, r);
+      const py = entrance.surfaceTileY + sentryRingOffsetY(idx, r);
+      if (!isSurfaceTileInComponent(world, px, py)) continue;
+      if (!sentryHoldAreaQualifies(entranceTiles, px, py, entrance, entrances, pass === 0)) {
+        continue;
+      }
+      out.push(px, py);
+    }
+  }
+}
+
+/**
+ * V43 (#323) — route sentry `id` holding `slot` to its post around the entrance
+ * `entrance`. Outside its guard area (SENTRY_GUARD_RADIUS) it walks to the door
+ * itself, the route home idle fighters took before V43. Inside, its post is entry
+ * `slot` mod count of the door's post list (listSentryPosts, built once per door
+ * per pass into `postsByEntrance`), so a door's first `count` sentries take
+ * distinct posts — skipping to the next ring tile instead collapsed a run of
+ * rejected tiles' slots onto one post, and sentries queued for it froze on the
+ * door; past `count`, sentries share posts. It starts holding (target -1) within
+ * SENTRY_HOLD_RADIUS_TILES of the post, but only on the ring or outside it, never
+ * nearer the door. Once holding, it keeps holding within
+ * SENTRY_KEEP_HOLD_RADIUS_TILES of the post and at most one tile inside the ring:
+ * same-colony occupancy displacement bumps a holder one tile (a sentry sharing a
+ * post, or one stopped on a tile a neighbour holds), and without the wider radius
+ * it walked back onto the taken tile and was bumped off again every tick. (A
+ * sentry walking to its post is never bumped: see sentryPassesThroughFriends.)
+ * Returns false if the door has no post (see listSentryPosts).
+ */
+function routeToSentryPost(
+  world: WorldState,
+  id: number,
+  entrance: FighterEntrance,
+  entrances: ReadonlyArray<FighterEntrance>,
+  slot: number,
+  entranceTiles: readonly number[],
+  postsByEntrance: Map<number, number[]>,
+): boolean {
+  const ants = world.ants;
+  const entranceX = entrance.surfaceTileX;
+  const entranceY = entrance.surfaceTileY;
+  const antTileX = ants.posX[id]! >> FP_SHIFT;
+  const antTileY = ants.posY[id]! >> FP_SHIFT;
+  const doorDist = Math.abs(antTileX - entranceX) + Math.abs(antTileY - entranceY);
+  if (doorDist > SENTRY_GUARD_RADIUS) {
+    ants.targetPosX[id] = (entranceX << FP_SHIFT) + (FP_ONE >> 1);
+    ants.targetPosY[id] = (entranceY << FP_SHIFT) + (FP_ONE >> 1);
+    return true;
+  }
+  let posts = postsByEntrance.get(entrance.entranceId);
+  if (posts === undefined) {
+    posts = [];
+    listSentryPosts(world, entrance, entrances, entranceTiles, posts);
+    postsByEntrance.set(entrance.entranceId, posts);
+  }
+  if (posts.length === 0) return false;
+  const k = (slot % (posts.length >> 1)) << 1;
+  const px = posts[k]!;
+  const py = posts[k + 1]!;
+  const postDist = Math.abs(antTileX - px) + Math.abs(antTileY - py);
+  const holding = ants.targetPosX[id] === -1;
+  if (
+    holding
+      ? postDist <= SENTRY_KEEP_HOLD_RADIUS_TILES && doorDist >= SENTRY_POST_RING_RADIUS - 1
+      : postDist <= SENTRY_HOLD_RADIUS_TILES && doorDist >= SENTRY_POST_RING_RADIUS
+  ) {
+    ants.targetPosX[id] = -1;
+    ants.targetPosY[id] = -1;
+  } else {
+    ants.targetPosX[id] = (px << FP_SHIFT) + (FP_ONE >> 1);
+    ants.targetPosY[id] = (py << FP_SHIFT) + (FP_ONE >> 1);
+  }
+  return true;
+}
 
 /**
  * Phase 9 / SURF-04 — route AntTask.Fighting ants to their colony's rallyPoint.
@@ -164,7 +641,6 @@ export function updateFightAntTargets(world: WorldState): void {
 
   // Precompute enemy colony refs for V17 aggro scan — iterate workers+queen directly
   // (no array copies; queen checked separately to avoid spreading the workers list).
-  type AggroColony = { cid: number; workers: readonly number[]; queenEntityId: number };
   const aggroEnemyColonies: AggroColony[] = [];
   for (const cidKey in world.colonies) {
     if (!Object.hasOwn(world.colonies, cidKey)) continue;
@@ -175,6 +651,73 @@ export function updateFightAntTargets(world: WorldState): void {
         workers: col.workers,
         queenEntityId: col.queenEntityId,
       });
+  }
+
+  // V43 (#323) — sentry slots. Each fighter of a colony with no rally point is
+  // ranked, in entity-id order, among that colony's fighters bound for the same
+  // entrance, so posts fill the ring in a stable order. Entity ids, not
+  // colony.workers: removing a dead worker swaps the last worker into its place,
+  // so ranking by that list let any worker's death reshuffle every post. (A
+  // sentry's own death still moves up the sentries ranked after it.) On the
+  // surface a fighter is bound for the entrance it would pick itself
+  // (pickFighterTargetEntrance); sheltering in its own nest, for the shaft it will
+  // climb out of, so it keeps its slot and the sentries outside keep their posts.
+  // Fighters inside a FOREIGN grid (recalled invaders) are left out; they rank
+  // once they surface, and then walk home. Only the ranks of fighters bound for an
+  // OPEN entrance are read below.
+  const sentries = world.simVersion >= SIM_VERSION_V43_FIGHTER_SENTRIES;
+  let sentrySlot: Int32Array | null = null;
+  let sentryMoving: Uint8Array | null = null;
+  let entranceTiles: number[] | null = null;
+  // entranceId → that door's sentry posts (listSentryPosts), built on first use.
+  let postsByEntrance: Map<number, number[]> | null = null;
+  if (sentries) {
+    postsByEntrance = new Map<number, number[]>();
+    const scratch = getScratch(world).antTargeting;
+    if (scratch.sentrySlot.length < ants.alive.length) {
+      scratch.sentrySlot = new Int32Array(ants.alive.length);
+    }
+    sentrySlot = scratch.sentrySlot;
+    if (scratch.sentryMoving.length < ants.alive.length) {
+      scratch.sentryMoving = new Uint8Array(ants.alive.length);
+    }
+    sentryMoving = scratch.sentryMoving;
+    sentryMoving.fill(0);
+    entranceTiles = scratch.sentryEntranceTiles;
+    entranceTiles.length = 0;
+    for (const cidKey in world.colonies) {
+      if (!Object.hasOwn(world.colonies, cidKey)) continue;
+      const c = world.colonies[cidKey as unknown as keyof typeof world.colonies];
+      const ents = c?.entrances;
+      if (ents == null) continue;
+      for (let e = 0; e < ents.length; e++) {
+        entranceTiles.push(ents[e]!.surfaceTileX, ents[e]!.surfaceTileY);
+      }
+    }
+    // colonyId → entranceId → the next rank at that entrance.
+    const nextRank: Record<number, Record<number, number>> = {};
+    for (let wid = 0; wid < ants.alive.length; wid++) {
+      if (ants.alive[wid] !== 1 || ants.task[wid] !== AntTask.Fighting) continue;
+      const cid = ants.colonyId[wid]!;
+      const col = world.colonies[cid];
+      if (!col || col.rallyPoint != null || col.entrances == null) continue;
+      const ents = col.entrances;
+      if (ents.length === 0) continue;
+      const tileX = ants.posX[wid]! >> FP_SHIFT;
+      const tileY = ants.posY[wid]! >> FP_SHIFT;
+      let e: FighterEntrance | null;
+      if (ants.zone[wid] === Zone.Underground) {
+        if (ants.currentGridColonyId[wid] !== cid) continue;
+        e = shaftOfFighterBelow(ents, tileX, tileY);
+      } else {
+        e = pickFighterTargetEntrance(ents, tileX, tileY);
+      }
+      if (e === null || !e.isOpen) continue;
+      const perEntrance = (nextRank[cid] ??= {});
+      const rank = perEntrance[e.entranceId] ?? 0;
+      sentrySlot[wid] = rank;
+      perEntrance[e.entranceId] = rank + 1;
+    }
   }
 
   for (let id = 0; id < ants.alive.length; id++) {
@@ -208,6 +751,72 @@ export function updateFightAntTargets(world: WorldState): void {
 
     // No rally point (null or uninitialized): fall back to first entrance (idle-at-nest).
     if (rp == null) {
+      // V43 (#323) — on the surface, bound for an OPEN entrance: a SENTRY. Take
+      // cover from the spider (head for the door), else chase an enemy in sight
+      // inside the guard area, else walk home or take the post. It never holds on
+      // the entrance tile: parked there, pre-V43 idle fighters bounced down and up
+      // the shaft every tick. Underground (own grid) or with only closed entrances,
+      // fall through to the pre-V43 routing: climb out / wait at the shaft.
+      if (sentrySlot !== null && ants.zone[id] === Zone.Surface && hasEntrances) {
+        const e = pickFighterTargetEntrance(
+          entrances,
+          ants.posX[id]! >> FP_SHIFT,
+          ants.posY[id]! >> FP_SHIFT,
+        );
+        if (e !== null && e.isOpen) {
+          // Take cover from the spider: head for the door (the descent block
+          // lets a sentry taking cover down its own shaft).
+          if (sentryTakesCover(world, id, e.surfaceTileX, e.surfaceTileY)) {
+            ants.targetPosX[id] = (e.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1);
+            ants.targetPosY[id] = (e.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1);
+            sentryMoving![id] = 1;
+            continue;
+          }
+          // Otherwise chase an enemy ANT it can see inside its guard area — never
+          // the spider. (With the watch radius equal to the sight radius, cover
+          // above already caught a spider in sight; the door argument keeps that
+          // true if the two are ever tuned apart.)
+          if (
+            targetNearestHostileInSight(
+              world,
+              id,
+              colonyId,
+              currentGridColonyId,
+              aggroEnemyColonies,
+              e.surfaceTileX,
+              e.surfaceTileY,
+            )
+          ) {
+            continue;
+          }
+          if (
+            !routeToSentryPost(
+              world,
+              id,
+              e,
+              entrances,
+              sentrySlot[id]!,
+              entranceTiles!,
+              postsByEntrance!,
+            )
+          ) {
+            // No walkable ring tile clear of entrances: hold in place rather than
+            // fall back to the entrance tile.
+            ants.targetPosX[id] = -1;
+            ants.targetPosY[id] = -1;
+          }
+          // Walking to its post (not home to the door from outside the guard area,
+          // where it takes the ordinary bumps round obstacles like any ant).
+          if (
+            ants.targetPosX[id] !== -1 &&
+            (ants.targetPosX[id]! >> FP_SHIFT !== e.surfaceTileX ||
+              ants.targetPosY[id]! >> FP_SHIFT !== e.surfaceTileY)
+          ) {
+            sentryMoving![id] = 1;
+          }
+          continue;
+        }
+      }
       if (hasEntrances) {
         // Issue #62 (v12+) — pick nearest open entrance, fallback to nearest
         // closed if none open (fighters stack near soon-to-open shafts).
@@ -259,71 +868,9 @@ export function updateFightAntTargets(world: WorldState): void {
     // must walk to the exact tile so the descent trigger fires, whether it's an
     // invasion into an enemy grid or a defensive descent into their own grid.
     if (ants.zone[id] === Zone.Surface && !rallyOnEntrance[colony.colonyId]) {
-      const aggroZone = ants.zone[id];
-      const aggroTileX = ants.posX[id]! >> FP_SHIFT;
-      const aggroTileY = ants.posY[id]! >> FP_SHIFT;
-      let nearestEnemy = -1;
-      let nearestEnemyDist = FIGHT_AGGRO_RADIUS + 1;
-      // Scan enemy colony workers + queen directly (no array copies, no per-fighter allocs).
-      for (const ec of aggroEnemyColonies) {
-        if (ec.cid === colonyId) continue;
-        for (const eid of ec.workers) {
-          if (ants.alive[eid] !== 1) continue;
-          if (ants.zone[eid] !== aggroZone) continue;
-          // Underground grids are disjoint spaces — reject candidates in a different grid.
-          if (
-            aggroZone === Zone.Underground &&
-            ants.currentGridColonyId[eid] !== currentGridColonyId
-          )
-            continue;
-          const eTileX = ants.posX[eid]! >> FP_SHIFT;
-          const eTileY = ants.posY[eid]! >> FP_SHIFT;
-          const dist = Math.abs(eTileX - aggroTileX) + Math.abs(eTileY - aggroTileY);
-          if (dist <= FIGHT_AGGRO_RADIUS && dist < nearestEnemyDist) {
-            nearestEnemyDist = dist;
-            nearestEnemy = eid;
-          }
-        }
-        const qid = ec.queenEntityId;
-        if (
-          qid >= 0 &&
-          ants.alive[qid] === 1 &&
-          ants.zone[qid] === aggroZone &&
-          (aggroZone !== Zone.Underground || ants.currentGridColonyId[qid] === currentGridColonyId)
-        ) {
-          const qTileX = ants.posX[qid]! >> FP_SHIFT;
-          const qTileY = ants.posY[qid]! >> FP_SHIFT;
-          const dist = Math.abs(qTileX - aggroTileX) + Math.abs(qTileY - aggroTileY);
-          if (dist <= FIGHT_AGGRO_RADIUS && dist < nearestEnemyDist) {
-            nearestEnemyDist = dist;
-            nearestEnemy = qid;
-          }
-        }
-      }
-      // V23 (#147): the spider is one more candidate in the same nearest-hostile scan
-      // (surface-only — this block is already gated to Zone.Surface). A closer enemy ant
-      // wins (strict <); a closer spider wins over a farther ant. Routing the fighter onto
-      // the spider's tile is enough — the widened spider-combat gate resolves the damage.
-      // The spider is targetable in ANY state: fighters may pursue a Feeding spider to
-      // interrupt its heal (tickSpiderV23 forfeits the heal once a fighter is adjacent).
-      let nearestIsSpider = false;
-      if (world.spider !== null) {
-        const spTileX = world.spider.posX >> FP_SHIFT;
-        const spTileY = world.spider.posY >> FP_SHIFT;
-        const dist = Math.abs(spTileX - aggroTileX) + Math.abs(spTileY - aggroTileY);
-        if (dist <= FIGHT_AGGRO_RADIUS && dist < nearestEnemyDist) {
-          nearestEnemyDist = dist;
-          nearestIsSpider = true;
-        }
-      }
-      if (nearestIsSpider) {
-        ants.targetPosX[id] = world.spider!.posX;
-        ants.targetPosY[id] = world.spider!.posY;
-        continue;
-      }
-      if (nearestEnemy >= 0) {
-        ants.targetPosX[id] = ants.posX[nearestEnemy]!;
-        ants.targetPosY[id] = ants.posY[nearestEnemy]!;
+      if (
+        targetNearestHostileInSight(world, id, colonyId, currentGridColonyId, aggroEnemyColonies)
+      ) {
         continue;
       }
     }

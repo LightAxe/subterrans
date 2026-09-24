@@ -51,6 +51,10 @@ import {
 import {
   pickInvaderUndergroundStep,
   pickNearestHostileUnderground,
+  fighterBarredFromForeignShaft,
+  fighterBarredFromOwnShaft,
+  sentryHoldsBelow,
+  sentryPassesThroughFriends,
 } from './ant-combat-targeting.js';
 import {
   chooseExcursionDirection,
@@ -1466,10 +1470,23 @@ export function tickAntMovement(
               // any other descent-intent task on an open entrance.
               const canDescend = entrance.isOpen || task === AntTask.Digging;
               if (!canDescend) continue;
-            } else if (!isFightingForeigner) {
+              // V43 (#323) — the own-shaft rule (ant-combat-targeting.ts).
+              if (
+                fighterBarredFromOwnShaft(
+                  world,
+                  id,
+                  colony,
+                  entrance.surfaceTileX,
+                  entrance.surfaceTileY,
+                )
+              ) {
+                continue;
+              }
+            } else if (!isFightingForeigner || fighterBarredFromForeignShaft(world, id)) {
               // Foreign entrance but not a Fighting invader — descent-intent
               // gate rejects (REQ-C3c). Non-Fighting foreign ants stay on
-              // the surface.
+              // the surface. V43 (#323): invading also needs orders — a
+              // fighter with no rally point stays out (ant-combat-targeting.ts).
               continue;
             }
 
@@ -1600,6 +1617,19 @@ export function tickAntMovement(
                   // at the shaft instead of ascending. Policy lives in
                   // idle-reserve.ts with the rest of the alarm (#212 layering).
                   if (holdAlarmedCivilianAtShaft(world, id, inOwnGrid)) break;
+                  // V43 (#323) — a sentry sheltering from the spider stays below
+                  // until the spider is out of range of this door.
+                  if (
+                    sentryHoldsBelow(
+                      world,
+                      id,
+                      inOwnGrid,
+                      entrance.surfaceTileX,
+                      entrance.surfaceTileY,
+                    )
+                  ) {
+                    break;
+                  }
                   ants.zone[id] = Zone.Surface;
                   ants.posY[id] = entrance.surfaceTileY << FP_SHIFT;
                   // Restore the surface invariant. For ants in their own
@@ -1707,6 +1737,8 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     let tileY = ants.posY[id]! >> FP_SHIFT;
 
     if (isOccupancyExempt(world, colonyId, zone, tileX, tileY)) continue;
+    // V43 (#323): a sentry on the move neither claims a tile nor is bumped.
+    if (sentryPassesThroughFriends(world, id)) continue;
 
     // Issue #108 (v13+) — zero the gridColonyId portion of the key when
     // zone === Surface. Mirrors combat tile-key encoding (tile-key.ts:56);

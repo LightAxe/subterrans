@@ -750,7 +750,95 @@ export const SIM_VERSION_V41_DEATH_CHOKEPOINT = 41 as const;
  * the enemy the stance is a separate balance question.
  */
 export const SIM_VERSION_V42_COLONY_ALARM = 42 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V42_COLONY_ALARM;
+
+/**
+ * V43 (#323) — idle fighters become SENTRIES instead of bouncing at the door.
+ *
+ * Before V43 a Fighter whose colony had no rally point was routed to its
+ * nearest open entrance's EXACT surface tile (`updateFightAntTargets`, step 10c).
+ * Standing there, the descent block (step 16, ant-movement.ts) sent it down its
+ * own shaft; underground in its own grid, `needsTransition` routed it straight
+ * back up, and the ascent put it back on the entrance tile — every tick, forever.
+ * A probe on main measured a zone flip on ~98% of fighter-ticks.
+ *
+ * From V43 a Fighter with no rally point is a SENTRY of its colony's nearest
+ * OPEN entrance (unless its colony has spider priority on: step 10d is then
+ * sending its fighters AT the spider, so none of the cover rules below apply).
+ * On the surface a sentry, in priority order:
+ *   1. TAKES COVER — heads for its door, and may go down its own shaft — when it
+ *      sees the spider (within FIGHT_AGGRO_RADIUS = 4 of it), or when it is AT
+ *      its door (within 4 of it: on its post, a hold tile, or nearer) while the
+ *      spider is within 8 of the door. The door-relative half keeps it heading in
+ *      instead of pacing between post and door while the spider lingers just out
+ *      of sight;
+ *   2. CHASES the nearest enemy ANT (worker or queen) within FIGHT_AGGRO_RADIUS of
+ *      it and inside its GUARD AREA — within 8 of its door, what it can see from
+ *      its post or a hold tile — but never the spider. The rallied fighters' sight
+ *      scan, which the no-rally branch used to skip entirely. The guard area stops
+ *      a passing enemy luring a sentry off, and lets recalled invaders walk home
+ *      past the enemy's door instead of fighting on there;
+ *   3. otherwise, from outside its guard area, walks to the door itself (the
+ *      pre-V43 route home, which strands fewer fighters against multi-tile
+ *      obstacles than steering straight at a post); inside it, walks to (and holds
+ *      within 1 tile of) a SENTRY POST: a tile on the ring at Manhattan distance
+ *      FIGHT_AGGRO_RADIUS - 1 around the door, so every sentry can see an enemy
+ *      standing on it. Each door's posts are its qualifying ring tiles, listed in
+ *      an order that spreads them around the ring; a sentry takes entry (rank mod
+ *      count), its rank being its place in entity-id order among its colony's
+ *      fighters bound for that door, so a door's first `count` sentries hold
+ *      distinct posts. A fighter below ground counts at a door only where its exit
+ *      is certain: in the top rows of that door's shaft (where a sheltering sentry
+ *      waits), or anywhere in a nest with a single open door; deeper in a
+ *      many-door nest it takes a slot once it surfaces. The ring sits inside the
+ *      entrance's guaranteed-clear halo (SURFACE_ROOT_CLEARANCE_RADIUS). A ring
+ *      tile qualifies if it is on the walkable surface component, no tile of its
+ *      hold area is an entrance tile, and a sentry anywhere in its hold area would
+ *      still be nearest THIS door — without that last rule, two open entrances a
+ *      few tiles apart made sentries re-bind between their rings every tick. If no
+ *      ring tile passes (other own doors crowding it, as with three in adjacent
+ *      columns), the last rule is dropped: the sentry walks out and usually
+ *      re-binds to a neighbouring door. Past a door's post count, sentries share
+ *      posts. A sentry starts holding only on the ring or outside it, never nearer
+ *      the door; once holding, it keeps holding within 2 of its post and at most a
+ *      tile inside the ring, so a holder bumped one tile by same-colony occupancy
+ *      displacement (two sharing a post) stays put instead of walking back onto
+ *      the taken tile every tick. And a sentry step 10c sends into cover or to
+ *      its post passes through tiles its colony's ants hold in step 16's
+ *      occupancy pass: sentries hold posts all round the door, and one bumped back
+ *      off a holder's tile every tick froze on its way to a far-side post. (Walking
+ *      home or chasing, it is bumped like any ant; those bumps slide it round
+ *      obstacles.)
+ * A sentry sheltering in its own nest stays below (the ascent is skipped) while
+ * the spider is within 10 of the door: the cover radius 8 — 4 (watch) + 3 (post
+ * ring) + 1 (hold), so no post or hold tile is in the spider's watch — plus two
+ * tiles of hysteresis. The spider steps one tile a tick, so a spider pacing across
+ * the cover radius can't bounce sentries down and up the shaft (with one shared
+ * threshold it did, every tick). If its colony has no open entrance, a fighter
+ * with no rally point still waits at the nearest closed shaft.
+ *
+ * And from V43 a Fighter descends its OWN open entrance only when its colony's
+ * rally point is on that entrance (the Plan 09.1-03 defensive descent) or, as a
+ * sentry, to take cover; and a Fighter with NO rally point never descends a
+ * FOREIGN entrance — invading needs orders (a sentry that chased an enemy onto
+ * its door, or a recalled invader surfacing at the door it just left, stays
+ * out). A fighter crossing its own door on the way to a surface rally walks over
+ * the shaft instead of dropping in and popping straight back out. (A rally on the
+ * colony's own entrance still bounces; #325 turns it into a tunnel defence.)
+ *
+ * Balance note, measured: the bounce was an accidental DECOY. Bouncing idle
+ * fighters kept a camping spider tied up at the AI's door (~27% of its time
+ * within 6 tiles of it), where it wasted time on ants that kept vanishing
+ * underground. With sentries the spider roams and kills more efficiently: over
+ * 200 seeds of check:ai-economy the enemy queen is alive at tick 12k in 174 and
+ * at 24k in 120 (main: 186 and 186). The owner chose to ship the fix and rebalance
+ * deliberately in a follow-up (#327).
+ *
+ * No new serialized field, no command, no world.rngState draw, no entity-ID
+ * advance, no tick-order change: every new read is behind `simVersion >= V43`,
+ * so a pre-V43 save replays byte-identically. MIN_ACCEPTED is UNCHANGED.
+ */
+export const SIM_VERSION_V43_FIGHTER_SENTRIES = 43 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V43_FIGHTER_SENTRIES;
 
 /**
  * S2 — AI colony state machine states.

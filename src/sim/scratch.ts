@@ -47,6 +47,16 @@ export interface ScratchArena {
     invBfsDist: Int32Array;
     invBfsQX: Int32Array;
     invBfsQY: Int32Array;
+    /** V43 (#323) — per-entity sentry slot (rank at its entrance), written every
+     *  tick for the fighters it is read for, before any read. */
+    sentrySlot: Int32Array;
+    /** V43 (#323) — every colony's entrance tiles as [x0, y0, x1, y1, …], refilled
+     *  at the start of each updateFightAntTargets pass for the sentry post filter. */
+    sentryEntranceTiles: number[];
+    /** V43 (#323) — per-entity: 1 if step 10c's sentry branch sent this ant into
+     *  cover or to its post this tick, read by step 16's occupancy pass. Cleared at
+     *  the start of each updateFightAntTargets pass. */
+    sentryMoving: Uint8Array;
   };
   /** ant-movement.ts — same-colony occupancy resolution map. */
   movementOccupancy: Map<number, number>;
@@ -109,6 +119,9 @@ export function getScratch(world: WorldState): ScratchArena {
         invBfsDist: new Int32Array(0),
         invBfsQX: new Int32Array(0),
         invBfsQY: new Int32Array(0),
+        sentrySlot: new Int32Array(0),
+        sentryEntranceTiles: [],
+        sentryMoving: new Uint8Array(0),
       },
       movementOccupancy: new Map(),
       tickIdle: [],
