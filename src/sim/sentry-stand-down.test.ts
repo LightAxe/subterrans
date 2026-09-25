@@ -228,6 +228,73 @@ describe('standDownSurplusSentries (V47, #332)', () => {
     expect(tasks(w, ids)).toEqual([AntTask.Fighting, AntTask.Idle, AntTask.Idle]);
   });
 
+  it('an enemy off the row counts by Manhattan distance too', () => {
+    const { world: w, colony } = world();
+    const ids = [0, 1, 2].map(() => addFighter(w, colony)); // all at (43,40)
+    const other = createColonyRecord(2, -1);
+    w.colonies[2] = other;
+    const enemy = addFighter(w, other);
+    w.ants.posX[enemy] = (45 << FP_SHIFT) + (FP_ONE >> 1); // (45,43): 2 + 3 = 5
+    w.ants.posY[enemy] = (43 << FP_SHIFT) + (FP_ONE >> 1);
+    colony.computedAllocation.fight = 0;
+    standDownSurplusSentries(w, colony);
+    expect(tasks(w, ids)).toEqual([AntTask.Fighting, AntTask.Fighting, AntTask.Fighting]);
+    w.ants.posY[enemy] = (44 << FP_SHIFT) + (FP_ONE >> 1); // (45,44): 6
+    standDownSurplusSentries(w, colony);
+    expect(tasks(w, ids)).toEqual([AntTask.Fighting, AntTask.Idle, AntTask.Idle]);
+  });
+
+  it('an enemy 5 away in any direction blocks the release; 6 away does not', () => {
+    const offsets5 = [
+      [5, 0],
+      [-5, 0],
+      [0, 5],
+      [0, -5],
+      [2, 3],
+      [-2, 3],
+      [2, -3],
+      [-2, -3],
+    ] as const;
+    for (const [dx, dy] of offsets5) {
+      for (const far of [false, true]) {
+        const { world: w, colony } = world();
+        const ids = [0, 1].map(() => addFighter(w, colony)); // at (43,40)
+        const other = createColonyRecord(2, -1);
+        w.colonies[2] = other;
+        const enemy = addFighter(w, other);
+        const ex = 43 + dx + (far ? Math.sign(dx) || 0 : 0);
+        const ey = 40 + dy + (far && dx === 0 ? Math.sign(dy) : 0);
+        w.ants.posX[enemy] = (ex << FP_SHIFT) + (FP_ONE >> 1);
+        w.ants.posY[enemy] = (ey << FP_SHIFT) + (FP_ONE >> 1);
+        colony.computedAllocation.fight = 0; // one over: one can go
+        standDownSurplusSentries(w, colony);
+        expect([dx, dy, far, tasks(w, ids)]).toEqual([
+          dx,
+          dy,
+          far,
+          far ? [AntTask.Fighting, AntTask.Idle] : [AntTask.Fighting, AntTask.Fighting],
+        ]);
+      }
+    }
+  });
+
+  it('an enemy by the west edge does not block tiles at the east end of the row above', () => {
+    const { world: w, colony } = world();
+    const ids = [0, 1].map(() => addFighter(w, colony));
+    for (const id of ids) {
+      w.ants.posX[id] = (127 << FP_SHIFT) + (FP_ONE >> 1);
+      w.ants.posY[id] = (39 << FP_SHIFT) + (FP_ONE >> 1);
+    }
+    const other = createColonyRecord(2, -1);
+    w.colonies[2] = other;
+    const enemy = addFighter(w, other);
+    w.ants.posX[enemy] = (0 << FP_SHIFT) + (FP_ONE >> 1);
+    w.ants.posY[enemy] = (40 << FP_SHIFT) + (FP_ONE >> 1);
+    colony.computedAllocation.fight = 0;
+    standDownSurplusSentries(w, colony);
+    expect(tasks(w, ids)).toEqual([AntTask.Fighting, AntTask.Idle]);
+  });
+
   it('ignores dead fighters in the surplus count', () => {
     const { world: w, colony } = world();
     const ids = [0, 1, 2].map(() => addFighter(w, colony));
