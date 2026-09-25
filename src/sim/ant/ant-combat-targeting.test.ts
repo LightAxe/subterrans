@@ -1115,6 +1115,42 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     expect(targetTile(world, id)).toEqual([px, py]);
   });
 
+  it('V45: a sentry bound for an outer post does not hold beyond sight of the door', () => {
+    const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V45_SENTRY_RING_PASSABLE;
+    const inner = 4 * (FIGHT_AGGRO_RADIUS - 1);
+    const ids = Array.from({ length: inner + 1 }, () =>
+      addFighter(world, colony, ENT_X + 6, ENT_Y),
+    );
+    updateFightAntTargets(world);
+    const id = ids[inner]!; // the first sentry on the outer ring
+    const [px, py] = targetTile(world, id);
+    // Its post's outward neighbour: one tile from the post, one past sight of the door.
+    let x = -1;
+    let y = -1;
+    for (const [dx, dy] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      if (manhattan(px + dx, py + dy, ENT_X, ENT_Y) === FIGHT_AGGRO_RADIUS + 1) {
+        x = px + dx;
+        y = py + dy;
+      }
+    }
+    expect(x).toBeGreaterThanOrEqual(0);
+    world.ants.posX[id] = (x << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[id] = (y << FP_SHIFT) + (FP_ONE >> 1);
+    updateFightAntTargets(world); // walking in: does not start holding there
+    expect(targetTile(world, id)).toEqual([px, py]);
+    world.ants.subTask[id] = FightingSubState.Holding; // nor keep holding there
+    world.ants.targetPosX[id] = -1;
+    world.ants.targetPosY[id] = -1;
+    updateFightAntTargets(world);
+    expect(targetTile(world, id)).toEqual([px, py]);
+  });
+
   it('V45: only a sentry HOLDING its post passes through friends while holding', () => {
     const { world, colony } = sentryWorld();
     world.simVersion = SIM_VERSION_V45_SENTRY_RING_PASSABLE;
@@ -1249,6 +1285,13 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
       [ENT_X + 1, ENT_Y - R - 1], // two tiles off the post, outside the ring
     ] as const) {
       const { world, colony } = sentryWorld();
+      // The second tile is 5 from the door: from V45 no sentry holds beyond sight of
+      // its door (see the V45 sight test), so that case is pinned below V45.
+      const version =
+        manhattan(x, y, ENT_X, ENT_Y) > FIGHT_AGGRO_RADIUS
+          ? SIM_VERSION_V44_TUNNEL_DEFENCE
+          : SIM_VERSION_V45_SENTRY_RING_PASSABLE;
+      world.simVersion = version;
       const id = addFighter(world, colony, x, y);
       world.ants.targetPosX[id] = -1; // already holding
       world.ants.targetPosY[id] = -1;
@@ -1257,6 +1300,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
       expect(world.ants.targetPosX[id]).toBe(-1);
 
       const walker = sentryWorld();
+      walker.world.simVersion = version;
       const w = addFighter(walker.world, walker.colony, x, y);
       walker.world.ants.targetPosX[w] = (ENT_X << FP_SHIFT) + (FP_ONE >> 1); // on its way
       updateFightAntTargets(walker.world);

@@ -857,10 +857,16 @@ function routeToSentryPost(
   // measured from the inner ring a sentry bound for it stopped a tile short.)
   const ring = Math.abs(px - entranceX) + Math.abs(py - entranceY);
   const holding = wasHolding && ants.targetPosX[id] === -1;
+  // V45 (#327): and never beyond sight of the entrance. Inner posts' hold tiles are
+  // all in sight; an outer post's outward neighbour is not, and a sentry holding
+  // there could not see an enemy standing on the entrance.
+  const inSight =
+    world.simVersion < SIM_VERSION_V45_SENTRY_RING_PASSABLE || doorDist <= FIGHT_AGGRO_RADIUS;
   if (
-    holding
+    inSight &&
+    (holding
       ? postDist <= SENTRY_KEEP_HOLD_RADIUS_TILES && doorDist >= ring - 1
-      : postDist <= SENTRY_HOLD_RADIUS_TILES && doorDist >= ring
+      : postDist <= SENTRY_HOLD_RADIUS_TILES && doorDist >= ring)
   ) {
     ants.targetPosX[id] = -1;
     ants.targetPosY[id] = -1;
