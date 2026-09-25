@@ -16,6 +16,8 @@ import {
   SIM_VERSION_V44_TUNNEL_DEFENCE,
   SIM_VERSION_V45_SENTRY_RING_PASSABLE,
   SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE,
+  SIM_VERSION_V47_SENTRY_STAND_DOWN,
+  SIM_VERSION_V48_SENTRY_WALK_HOME,
 } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask, FightingSubState, ForagingSubState } from './enums.js';
@@ -773,5 +775,74 @@ describe('V46 (#328) — sentries at entrances close together settle', () => {
     expect(
       crowdedEntrances(SIM_VERSION_V45_SENTRY_RING_PASSABLE, 30, 100, LAYOUTS[0]!),
     ).toBeGreaterThan(0);
+  }, 30_000);
+});
+
+describe('V48 (#333) — a sentry behind an obstacle gets home', () => {
+  /** Seed 7's map has a multi-tile obstacle at x18–23, y70–72. With entrances at
+   *  the root (24,64) and (28,65), (21,66), (23,63), a sentry dropped just south
+   *  of it is 7–9 tiles from its entrance. Returns, over ticks 400–600: target
+   *  changes, tile changes, and whether it ends holding a post. */
+  function behindTheObstacle(
+    simVersion: number,
+    sx: number,
+    sy: number,
+  ): { targetChanges: number; moves: number; holding: boolean } {
+    const { world, ids, ent } = fightersOnTheDoor(simVersion, 1);
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    expect(ent).toEqual({ x: 24, y: 64 });
+    for (const [x, y] of [
+      [28, 65],
+      [21, 66],
+      [23, 63],
+    ] as const) {
+      colony.entrances.push({
+        entranceId: allocateEntityId(world),
+        surfaceTileX: x,
+        surfaceTileY: y,
+        isOpen: true,
+      });
+    }
+    const id = ids[0]!;
+    world.ants.posX[id] = (sx << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[id] = (sy << FP_SHIFT) + (FP_ONE >> 1);
+    let targetChanges = 0;
+    let moves = 0;
+    let lastTarget = '';
+    let lastTile = '';
+    for (let t = 0; t < 600; t++) {
+      tick(world, []);
+      const target = `${world.ants.targetPosX[id]},${world.ants.targetPosY[id]}`;
+      const tile = `${world.ants.posX[id] >> FP_SHIFT},${world.ants.posY[id] >> FP_SHIFT}`;
+      if (t > 400) {
+        if (target !== lastTarget) targetChanges++;
+        if (tile !== lastTile) moves++;
+      }
+      lastTarget = target;
+      lastTile = tile;
+    }
+    const holding =
+      world.ants.subTask[id] === FightingSubState.Holding && world.ants.targetPosX[id] === -1;
+    return { targetChanges, moves, holding };
+  }
+
+  it('V48: it walks round the obstacle and holds a post', () => {
+    for (const [sx, sy] of [
+      [19, 73],
+      [21, 74],
+      [22, 74],
+    ] as const) {
+      expect(behindTheObstacle(SIM_VERSION_V48_SENTRY_WALK_HOME, sx, sy)).toEqual({
+        targetChanges: 0,
+        moves: 0,
+        holding: true,
+      });
+    }
+  }, 30_000);
+
+  it('V47 (pinned): it flips between walking home and walking to its post, every tick', () => {
+    const r = behindTheObstacle(SIM_VERSION_V47_SENTRY_STAND_DOWN, 19, 73);
+    expect(r.holding).toBe(false);
+    expect(r.targetChanges).toBeGreaterThan(100);
   }, 30_000);
 });

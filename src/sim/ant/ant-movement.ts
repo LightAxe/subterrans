@@ -57,6 +57,7 @@ import {
   sentryPassesThroughFriends,
   fighterDefendsTunnels,
   defenderPassesThroughFriends,
+  sentryWalksHome,
   defenderUndergroundStep,
 } from './ant-combat-targeting.js';
 import {
@@ -898,7 +899,36 @@ export function tickAntMovement(
         }
       }
 
-      if (haveTarget) {
+      // #333 (V48) — a sentry walking home steps by the surface entrance flow
+      // field (obstacle-aware), as a homebound forager does. At an entrance
+      // tile (-1) or off the field (-2) it keeps the straight-line step.
+      let fieldStepped = false;
+      if (
+        haveTarget &&
+        zone === Zone.Surface &&
+        entranceFlowFields !== undefined &&
+        sentryWalksHome(world, id)
+      ) {
+        const surfaceField = entranceFlowFields.surface[ants.colonyId[id]!];
+        const tileX = posX >> FP_SHIFT;
+        const tileY = posY >> FP_SHIFT;
+        if (
+          surfaceField &&
+          tileX >= 0 &&
+          tileX < SURFACE_GRID_WIDTH &&
+          tileY >= 0 &&
+          tileY < SURFACE_GRID_HEIGHT
+        ) {
+          const sDir = surfaceField[tileY * SURFACE_GRID_WIDTH + tileX]!;
+          if (sDir >= 0 && sDir < 4) {
+            dx = DIR_DX[sDir]!;
+            dy = DIR_DY[sDir]!;
+            fieldStepped = true;
+          }
+        }
+      }
+
+      if (haveTarget && !fieldStepped) {
         // Codex coord-scale fix: rawDx/rawDy were FP-space (target − pos, both
         // fp). Recompute as tile-space so the same-tile hold (absDx/absDy === 0
         // in pickCardinalStep) is decided in tile units, matching the queen and
@@ -911,7 +941,7 @@ export function tickAntMovement(
         const step = pickCardinalStep(ants, id, targetTileX - tileX, targetTileY - tileY);
         dx = unpackStepDx(step);
         dy = unpackStepDy(step);
-      } else {
+      } else if (!fieldStepped) {
         // No target and no entrance fallback — hold. updateFightAntTargets
         // writes targetPosX/Y whenever rallyPoint or entrances exist, so this
         // is only reached when a fighter has neither rally nor entrance
