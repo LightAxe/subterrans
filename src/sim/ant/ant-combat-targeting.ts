@@ -902,8 +902,10 @@ function sentryPostOwner(
  * to the entrance that owns that post (sentryPostOwner; every post has exactly
  * one) if it is inside that entrance's guard area. (Binding every shared post to
  * the lowest-id entrance instead drained a crowded garrison onto one entrance.)
- * Anything else — no post, or walking home, taking cover or chasing — binds to its
- * nearest entrance, as before. No new state.
+ * Anything else — no post, or walking home, taking cover or chasing (recorded as
+ * FightingSubState.Engaging, since a chase target is an enemy's position and may
+ * lie on another entrance's post) — binds to its nearest entrance, as before. No
+ * new state.
  */
 function sentryEntrance(
   world: WorldState,
@@ -918,17 +920,23 @@ function sentryEntrance(
 ): FighterEntrance | null {
   const nearest = pickFighterTargetEntrance(entrances, tileX, tileY);
   if (world.simVersion < SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE) return nearest;
+  // A chasing sentry's target is the enemy it chases, not a post.
+  if (world.ants.subTask[id] === FightingSubState.Engaging) return nearest;
   const tx = world.ants.targetPosX[id]!;
-  let postX: number;
-  let postY: number;
+  let owner: FighterEntrance | null = null;
   if (tx !== -1) {
-    postX = tx >> FP_SHIFT;
-    postY = world.ants.targetPosY[id]! >> FP_SHIFT;
+    owner = sentryPostOwner(
+      world,
+      tx >> FP_SHIFT,
+      world.ants.targetPosY[id]! >> FP_SHIFT,
+      entrances,
+      entranceTiles,
+    );
   } else if (holding) {
-    // The post nearest where it stands (first in entrance, then post order).
+    // The post nearest where it stands (first in entrance, then post order). An
+    // entrance's post list holds only the posts it owns, so that entrance is the
+    // post's owner.
     let bestDist = SENTRY_KEEP_HOLD_RADIUS_TILES + 1;
-    postX = -1;
-    postY = -1;
     for (let i = 0; i < entrances.length; i++) {
       const e = entrances[i]!;
       if (!e.isOpen) continue;
@@ -944,16 +952,11 @@ function sentryEntrance(
         const d = Math.abs(posts[k]! - tileX) + Math.abs(posts[k + 1]! - tileY);
         if (d < bestDist) {
           bestDist = d;
-          postX = posts[k]!;
-          postY = posts[k + 1]!;
+          owner = e;
         }
       }
     }
-    if (postX === -1) return nearest;
-  } else {
-    return nearest;
   }
-  const owner = sentryPostOwner(world, postX, postY, entrances, entranceTiles);
   if (
     owner !== null &&
     Math.abs(tileX - owner.surfaceTileX) + Math.abs(tileY - owner.surfaceTileY) <=
@@ -1376,6 +1379,14 @@ export function updateFightAntTargets(world: WorldState): void {
           wasHolding,
         );
         if (e !== null && e.isOpen) {
+          // #328 (V46): Engaging marks a target that is an enemy, not a post
+          // (sentryEntrance reads it); every other route clears it.
+          if (
+            world.simVersion >= SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE &&
+            ants.subTask[id] === FightingSubState.Engaging
+          ) {
+            ants.subTask[id] = FightingSubState.MovingToRally;
+          }
           // Take cover from the spider: head for the door (the descent block
           // lets a sentry taking cover down its own shaft).
           if (sentryTakesCover(world, id, e.surfaceTileX, e.surfaceTileY)) {
@@ -1399,6 +1410,9 @@ export function updateFightAntTargets(world: WorldState): void {
               e.surfaceTileY,
             )
           ) {
+            if (world.simVersion >= SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE) {
+              ants.subTask[id] = FightingSubState.Engaging;
+            }
             continue;
           }
           const routed = routeToSentryPost(

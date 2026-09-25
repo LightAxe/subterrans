@@ -1253,6 +1253,46 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     }
   });
 
+  it("V46: a sentry chasing an enemy on another entrance's post does not re-bind to it", () => {
+    const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
+    colony.entrances.push({
+      entranceId: 2,
+      surfaceTileX: ENT_X + 6,
+      surfaceTileY: ENT_Y,
+      isOpen: true,
+    });
+    const enemy = enemyColony(world);
+    // Build entrance 2's posts with a probe sentry beside it.
+    const probe = addFighter(world, colony, ENT_X + 9, ENT_Y);
+    updateFightAntTargets(world);
+    world.ants.alive[probe] = 0;
+    const far = getScratch(world).antTargeting.sentryPosts.get(2)!;
+    // A sentry of entrance 1, and an enemy on one of entrance 2's posts in its sight.
+    // Level with both entrances (a tie binds to the lower id, 1).
+    const id = addFighter(world, colony, ENT_X + 3, ENT_Y);
+    let px = -1;
+    let py = -1;
+    for (let k = 0; k < far.length; k += 2) {
+      if (manhattan(far[k]!, far[k + 1]!, ENT_X + 3, ENT_Y) <= FIGHT_AGGRO_RADIUS) {
+        px = far[k]!;
+        py = far[k + 1]!;
+        break;
+      }
+    }
+    expect(px).toBeGreaterThanOrEqual(0);
+    const foe = addFighter(world, enemy, px, py);
+    updateFightAntTargets(world);
+    expect(targetTile(world, id)).toEqual([px, py]); // chasing it
+    // The enemy dies: the sentry goes back to entrance 1's post, not entrance 2's.
+    world.ants.alive[foe] = 0;
+    updateFightAntTargets(world);
+    // …and no longer counts as chasing, so its binding follows its post again.
+    expect(world.ants.subTask[id]).toBe(FightingSubState.MovingToRally);
+    const [tx, ty] = targetTile(world, id);
+    expect(manhattan(tx, ty, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS - 1);
+  });
+
   it('V46: a sentry is never held by a ring tile of a CLOSED entrance', () => {
     const { world, colony } = sentryWorld();
     world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;

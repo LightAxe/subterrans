@@ -65,7 +65,9 @@ export type NursingSubState = (typeof NursingSubState)[keyof typeof NursingSubSt
 
 export const FightingSubState = {
   MovingToRally: 0, // PRD §1 line 92
-  Engaging: 1, // PRD §1 line 93 — both members canonical at Phase 2 scope
+  // PRD §1 line 93. #328 (V46): a sentry chasing an enemy (written only by V46+
+  // sentry routing), so its target is not read as its post.
+  Engaging: 1,
   // V43 (#323): a sentry holding its post (written only by V43 sentry routing).
   Holding: 2,
 } as const;
