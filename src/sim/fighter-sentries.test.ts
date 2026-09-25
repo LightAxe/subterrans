@@ -13,9 +13,11 @@ import {
   allocateEntityId,
   SIM_VERSION_V42_COLONY_ALARM,
   SIM_VERSION_V43_FIGHTER_SENTRIES,
+  SIM_VERSION_V44_TUNNEL_DEFENCE,
+  SIM_VERSION_V45_SENTRY_RING_PASSABLE,
 } from './types.js';
 import { initAnt } from './ant/ant-store.js';
-import { AntTask, FightingSubState } from './enums.js';
+import { AntTask, FightingSubState, ForagingSubState } from './enums.js';
 import { Zone } from './terrain.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
 import {
@@ -563,5 +565,59 @@ describe('V43 (#323) — no orders, no invasion; no ping-pong between close door
     }
     expect(moves).toBe(0);
     expect(ids.filter(onADoor)).toEqual([]);
+  });
+});
+
+describe('V45 (#327) — workers walk through the sentry ring', () => {
+  /** Ticks for a laden forager to get below, starting `dx` tiles east of an entrance
+   *  that `n` settled sentries surround; -1 if it never does within `limit`. */
+  function carrierThroughRing(simVersion: number, n: number, dx: number, limit: number): number {
+    const { world, ent } = fightersOnTheDoor(simVersion, n);
+    for (let t = 0; t < 300; t++) tick(world, []); // the sentries take their posts
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const id = allocateEntityId(world); // highest id: every holder outranks it
+    initAnt(world.ants, id, {
+      colonyId: PLAYER_COLONY_ID,
+      posX: ((ent.x + dx) << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (ent.y << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Foraging,
+      subTask: ForagingSubState.CarryingFood,
+      speed: WORKER_BASE_SPEED,
+      lifespan: WORKER_LIFESPAN_TICKS,
+      zone: Zone.Surface,
+    });
+    world.ants.foodCarrying[id] = FP_ONE;
+    colony.workers.push(id);
+    colony.workerCount += 1;
+    for (let t = 1; t <= limit; t++) {
+      tick(world, []);
+      if (world.ants.zone[id] === Zone.Underground) return t;
+    }
+    return -1;
+  }
+
+  it('twenty-four sentries settle one to a tile, on the inner and outer rings, none on the door', () => {
+    const { world, ids, ent } = fightersOnTheDoor(SIM_VERSION_V45_SENTRY_RING_PASSABLE, 24);
+    for (let t = 0; t < 400; t++) tick(world, []);
+    const tiles = new Set<string>();
+    const rings = new Map<number, number>();
+    for (const id of ids) {
+      const x = world.ants.posX[id]! >> FP_SHIFT;
+      const y = world.ants.posY[id]! >> FP_SHIFT;
+      expect(world.ants.zone[id]).toBe(Zone.Surface);
+      const d = Math.abs(x - ent.x) + Math.abs(y - ent.y);
+      rings.set(d, (rings.get(d) ?? 0) + 1);
+      tiles.add(`${x},${y}`);
+    }
+    expect(tiles.size).toBe(24);
+    expect(Object.fromEntries(rings)).toEqual({ 3: 12, 4: 12 });
+  });
+
+  it('a laden forager crosses a ring of holding sentries and goes down', () => {
+    expect(carrierThroughRing(SIM_VERSION_V45_SENTRY_RING_PASSABLE, 20, 6, 200)).toBeGreaterThan(0);
+  });
+
+  it('pre-V45: the same ring bumps it back and it never gets in', () => {
+    expect(carrierThroughRing(SIM_VERSION_V44_TUNNEL_DEFENCE, 20, 6, 200)).toBe(-1);
   });
 });

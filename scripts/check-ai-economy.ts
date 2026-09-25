@@ -57,6 +57,7 @@ register(
 
 const { createScenario } = await import('../src/sim/scenario.js');
 const { tick } = await import('../src/sim/tick.js');
+const { GameOutcome } = await import('../src/sim/game-over.js');
 const { PLAYER_COLONY_ID, ENEMY_COLONY_ID, MATCH_TIMEOUT_TICKS } =
   await import('../src/sim/constants.js');
 const { runAIController } = await import('../src/render/ai-controller.js');
@@ -142,6 +143,9 @@ interface SeedResult {
   playerAliveAt12k: boolean | null;
   playerAliveAt24k: boolean | null;
   playerDeathTick: number | null;
+  /** #327 — first tick tick() reported a GameOutcome other than None (the match
+   *  ended: a queen died, a stalemate, or the timeout); null if it never ended. */
+  matchEndTick: number | null;
   /** Why each queen died — 'Starvation' | 'Killed' | '-' (see queenDeathCause). */
   enemyDeathCause: string;
   playerDeathCause: string;
@@ -344,6 +348,7 @@ function runSeed(seed: number): SeedResult {
     playerAliveAt12k: null,
     playerAliveAt24k: null,
     playerDeathTick: null,
+    matchEndTick: null,
     enemyDeathCause: '-',
     playerDeathCause: '-',
     peakEnemyWorkers: 0,
@@ -375,7 +380,8 @@ function runSeed(seed: number): SeedResult {
 
   for (let t = 0; t < TICKS; t++) {
     runAIController(world, ENEMY_COLONY_ID);
-    tick(world, world.commandQueue.splice(0));
+    const outcome = tick(world, world.commandQueue.splice(0));
+    if (outcome !== GameOutcome.None && res.matchEndTick === null) res.matchEndTick = world.tick;
 
     const enemyQueenAlive = isAlive(world.ants, enemy.queenEntityId);
     const playerQueenAlive = isAlive(world.ants, player.queenEntityId);
@@ -595,6 +601,22 @@ console.log(
 console.log(
   `  Player queen alive @12k: ${playerAlive12k}/${SEEDS} (${pct(playerAlive12k, SEEDS)})  ` +
     `@24k: ${playerAlive24k}/${SEEDS} (${pct(playerAlive24k, SEEDS)})`,
+);
+// #327 — the harness plays on past game over, so an AI queen that starves AFTER
+// the match ended (the passive player's queen already dead, a stalemate, or the
+// timeout under a longer --ticks) is counted like one that lost a live match.
+// Split them by the tick tick() first reported an outcome: a death on that tick
+// is what ended the match, so it counts as live.
+const enemyDeathsLive = results.filter(
+  (r) =>
+    r.enemyDeathTick !== null && (r.matchEndTick === null || r.enemyDeathTick <= r.matchEndTick),
+).length;
+const enemyDeathsAfterGameOver = results.filter(
+  (r) => r.enemyDeathTick !== null && r.matchEndTick !== null && r.enemyDeathTick > r.matchEndTick,
+).length;
+console.log(
+  `  Enemy queen deaths while the match was live: ${enemyDeathsLive}/${SEEDS}  ` +
+    `after the match had ended: ${enemyDeathsAfterGameOver}/${SEEDS}`,
 );
 console.log(
   `  Enemy queen death tick: median=${median(deathTicks)} ` +

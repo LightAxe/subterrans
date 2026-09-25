@@ -886,7 +886,32 @@ export const SIM_VERSION_V43_FIGHTER_SENTRIES = 43 as const;
  * so a pre-V44 save replays byte-identically. MIN_ACCEPTED is UNCHANGED.
  */
 export const SIM_VERSION_V44_TUNNEL_DEFENCE = 44 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V44_TUNNEL_DEFENCE;
+
+/**
+ * #327 — V45 workers walk through the sentry ring.
+ *
+ * V43 sentries hold posts on a ring round their entrance, and a holding sentry
+ * claimed its tile in the same-colony occupancy pass, so any higher-id ant
+ * stepping onto it was bumped back. After an invasion the AI's surviving
+ * fighters (a war ratio makes most of the colony fighters, and fighters never
+ * become workers again) came home and filled the ring solid; laden foragers
+ * could not cross it, income stopped and the queen starved at her own door.
+ * That, not the lost spider decoy, is most of the AI's post-V43 starvation.
+ *
+ * From V45 a sentry holding its post neither claims its tile nor is bumped, as
+ * a V44 tunnel defender holding its post already did, so ants pass through the
+ * ring. Because holders are no longer bumped apart, sentries sharing a post
+ * would stand on one tile; so from V45 each entrance also has an OUTER ring of
+ * posts at FIGHT_AGGRO_RADIUS (still in sight of the entrance tile), taken once
+ * the inner ring is full. About 28 sentries get a post each; past that they
+ * share one and stack on it.
+ *
+ * No new serialized field, no command, no world.rngState draw, no entity-ID
+ * advance, no tick-order change: the one new read is behind `simVersion >= V45`,
+ * so a pre-V45 save replays byte-identically. MIN_ACCEPTED is UNCHANGED.
+ */
+export const SIM_VERSION_V45_SENTRY_RING_PASSABLE = 45 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V45_SENTRY_RING_PASSABLE;
 
 /**
  * S2 — AI colony state machine states.
