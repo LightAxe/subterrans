@@ -36,5 +36,6 @@ export {
   releaseSurplusFightersBelowFloor,
   sentryPassesThroughFriends,
 } from './ant-combat-targeting.js';
+export { standDownSurplusSentries } from './sentry-stand-down.js';
 export { tickAntMovement } from './ant-movement.js';
 export { tickIdleReserveAndFlee } from './idle-reserve.js';

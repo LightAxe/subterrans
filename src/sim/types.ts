@@ -935,7 +935,32 @@ export const SIM_VERSION_V45_SENTRY_RING_PASSABLE = 45 as const;
  * so a pre-V46 save replays byte-identically. MIN_ACCEPTED is UNCHANGED.
  */
 export const SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE = 46 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
+
+/**
+ * #332 — V47 surplus sentries stand down.
+ *
+ * Step 10a only ever promotes Idle ants, so nothing turned a fighter back into a
+ * worker (V40's stand-down only fires below the small-colony floor). A war ratio
+ * makes most of a colony fighters — an AI invasion runs at 2:8 — and they stayed
+ * fighters for the rest of the game: after the first invasion the AI kept ~28
+ * sentries at its door through Recovery and Peacetime, doing nothing for the
+ * economy.
+ *
+ * From V47, at the step-8 allocation checkpoint, a colony with more fighters than
+ * its ratio allocates (more than one over) releases all but one of the surplus to
+ * Idle — only SENTRIES that are
+ * holding their post (no rally point, no spider priority, not alarmed, on the
+ * surface, settled), highest entity id first so lower-ranked sentries keep their
+ * posts. Step 10a promotes them the same tick. Fighters under orders (a rally,
+ * the spider, tunnel defence, an invasion) and sentries chasing or taking cover
+ * are never released.
+ *
+ * No new serialized field, no command, no world.rngState draw, no entity-ID
+ * advance, no tick-order change: the new pass is behind `simVersion >= V47`, so a
+ * pre-V47 save replays byte-identically. MIN_ACCEPTED is UNCHANGED.
+ */
+export const SIM_VERSION_V47_SENTRY_STAND_DOWN = 47 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V47_SENTRY_STAND_DOWN;
 
 /**
  * S2 — AI colony state machine states.
