@@ -143,6 +143,7 @@ describe('standDownSurplusSentries (V47, #332)', () => {
     w.colonies[2] = other;
     const mine = [0, 1, 2].map(() => addFighter(w, colony));
     const theirs = [0, 1, 2].map(() => addFighter(w, other)); // higher ids, no surplus of their own
+    for (const id of theirs) w.ants.posX[id] = (80 << FP_SHIFT) + (FP_ONE >> 1); // at their own entrance
     other.computedAllocation.fight = 3;
     colony.computedAllocation.fight = 0; // two of mine can go
     standDownSurplusSentries(w, colony);
@@ -170,6 +171,61 @@ describe('standDownSurplusSentries (V47, #332)', () => {
     colony.computedAllocation.fight = 1; // three alive: one goes
     standDownSurplusSentries(w, colony);
     expect(tasks(w, ids.slice(0, 3))).toEqual([AntTask.Fighting, AntTask.Fighting, AntTask.Idle]);
+  });
+
+  it('keeps a holder at its post when an enemy ant it is about to chase is near', () => {
+    const { world: w, colony } = world();
+    const ids = [0, 1, 2, 3].map(() => addFighter(w, colony)); // all at (43,40)
+    const other = createColonyRecord(2, -1);
+    w.colonies[2] = other;
+    const enemy = addFighter(w, other); // an enemy ant on the surface
+    w.ants.posX[enemy] = (48 << FP_SHIFT) + (FP_ONE >> 1); // 5 tiles away: sight + one step
+    colony.computedAllocation.fight = 0;
+    standDownSurplusSentries(w, colony);
+    expect(tasks(w, ids)).toEqual([
+      AntTask.Fighting,
+      AntTask.Fighting,
+      AntTask.Fighting,
+      AntTask.Fighting,
+    ]);
+    w.ants.posX[enemy] = (49 << FP_SHIFT) + (FP_ONE >> 1); // 6 tiles: out of reach
+    const below = addFighter(w, other, { zone: Zone.Underground }); // right under them, but below ground
+    expect(w.ants.posX[below]).toBe(w.ants.posX[ids[0]!]);
+    standDownSurplusSentries(w, colony);
+    expect(tasks(w, ids)).toEqual([AntTask.Fighting, AntTask.Idle, AntTask.Idle, AntTask.Idle]);
+  });
+
+  it('keeps a holder at its post while the spider is near enough to send it into cover', () => {
+    const { world: w, colony } = world();
+    const ids = [0, 1, 2].map(() => addFighter(w, colony)); // all at (43,40)
+    const spider = createScenario(1).spider!; // any spider; only its position matters here
+    spider.posX = (55 << FP_SHIFT) + (FP_ONE >> 1); // 12 away
+    spider.posY = (40 << FP_SHIFT) + (FP_ONE >> 1);
+    w.spider = spider;
+    colony.computedAllocation.fight = 0;
+    standDownSurplusSentries(w, colony);
+    expect(tasks(w, ids)).toEqual([AntTask.Fighting, AntTask.Fighting, AntTask.Fighting]);
+    spider.posX = (56 << FP_SHIFT) + (FP_ONE >> 1); // 13 away
+    standDownSurplusSentries(w, colony);
+    expect(tasks(w, ids)).toEqual([AntTask.Fighting, AntTask.Idle, AntTask.Idle]);
+  });
+
+  it('ignores dead enemy slots, and reads enemy tiles as (x, y) pairs', () => {
+    const { world: w, colony } = world();
+    const ids = [0, 1, 2].map(() => addFighter(w, colony)); // all at (43,40)
+    const other = createColonyRecord(2, -1);
+    w.colonies[2] = other;
+    const dead = addFighter(w, other); // right on them, but dead
+    w.ants.alive[dead] = 0;
+    const far = addFighter(w, other); // at (60, 43): a (y, x) cross pair would read (43, 60)
+    w.ants.posX[far] = (60 << FP_SHIFT) + (FP_ONE >> 1);
+    w.ants.posY[far] = (43 << FP_SHIFT) + (FP_ONE >> 1);
+    const far2 = addFighter(w, other); // at (40, 70): with the next pair, (43, 40)
+    w.ants.posX[far2] = (40 << FP_SHIFT) + (FP_ONE >> 1);
+    w.ants.posY[far2] = (70 << FP_SHIFT) + (FP_ONE >> 1);
+    colony.computedAllocation.fight = 0;
+    standDownSurplusSentries(w, colony);
+    expect(tasks(w, ids)).toEqual([AntTask.Fighting, AntTask.Idle, AntTask.Idle]);
   });
 
   it('ignores dead fighters in the surplus count', () => {

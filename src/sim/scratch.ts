@@ -67,6 +67,9 @@ export interface ScratchArena {
      *  was rebuilt this pass. */
     sentryPosts: Map<number, number[]>;
     sentryPostsBuilt: Set<number>;
+    /** #332 (V47) — enemy ants' surface tiles (x, y pairs), gathered once per
+     *  standDownSurplusSentries call that has a surplus to release. */
+    standDownHostiles: number[];
     /** #328 (V46) — entranceId → every ring tile listSentryPosts accepts for that
      *  entrance, before posts are given to one owner each (`sentryPosts` then keeps
      *  only the ones it owns). `sentryRawPostsBuilt`: keys rebuilt this pass. */
@@ -149,6 +152,7 @@ export function getScratch(world: WorldState): ScratchArena {
         sentryMoving: new Uint8Array(0),
         sentryPosts: new Map(),
         sentryPostsBuilt: new Set(),
+        standDownHostiles: [],
         sentryRawPosts: new Map(),
         sentryRawPostsBuilt: new Set(),
         sentryNextRank: new Map(),
