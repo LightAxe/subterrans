@@ -970,19 +970,17 @@ export const SIM_VERSION_V47_SENTRY_STAND_DOWN = 47 as const;
  * guard edge, flipped every tick: at 9 tiles the step home slid it along the
  * obstacle to 8, and at 8 the step to its post slid it back to 9.
  *
- * From V48:
- *   - a sentry walking home steps by its colony's surface entrance flow field
- *     (the obstacle-aware field homebound foragers already use, #63), so it gets
- *     round obstacles;
- *   - once walking home (its target is its entrance's tile and it wasn't holding
- *     a post), it keeps walking home until it is inside the entrance's door area
- *     (SENTRY_DOOR_AREA_RADIUS, 4 tiles), and only then heads for its post.
+ * From V48 a sentry that is not holding its post walks home until it is inside
+ * the entrance's door area (SENTRY_DOOR_AREA_RADIUS, 4 tiles), not just inside
+ * the guard area, and only then heads for its post; and walking home it steps by
+ * its colony's surface entrance flow field (the obstacle-aware field homebound
+ * foragers already use, #63), so it gets round obstacles. A sentry holding its
+ * post keeps holding it wherever the hold rules allow.
  *
- * No new serialized field (the walk is read from the serialized target; the
- * same-tick step-16 marker is scratch), no command, no world.rngState draw, no
- * entity-ID advance, no tick-order change: the rules are behind
- * `simVersion >= V48`, so a pre-V48 save replays byte-identically. MIN_ACCEPTED
- * is UNCHANGED.
+ * No new serialized field (the step-16 walk-home marker is same-tick scratch),
+ * no command, no world.rngState draw, no entity-ID advance, no tick-order
+ * change: the rules are behind `simVersion >= V48`, so a pre-V48 save replays
+ * byte-identically. MIN_ACCEPTED is UNCHANGED.
  */
 export const SIM_VERSION_V48_SENTRY_WALK_HOME = 48 as const;
 export const LATEST_SIM_VERSION = SIM_VERSION_V48_SENTRY_WALK_HOME;
