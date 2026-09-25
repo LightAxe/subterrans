@@ -15,6 +15,7 @@ import {
   SIM_VERSION_V43_FIGHTER_SENTRIES,
   SIM_VERSION_V44_TUNNEL_DEFENCE,
   SIM_VERSION_V45_SENTRY_RING_PASSABLE,
+  SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE,
 } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask, FightingSubState, ForagingSubState } from './enums.js';
@@ -620,4 +621,126 @@ describe('V45 (#327) — workers walk through the sentry ring', () => {
   it('pre-V45: the same ring bumps it back and it never gets in', () => {
     expect(carrierThroughRing(SIM_VERSION_V44_TUNNEL_DEFENCE, 20, 6, 200)).toBe(-1);
   });
+});
+
+describe('V46 (#328) — sentries at entrances close together settle', () => {
+  /** Three own open entrances within a few tiles, sharing ring tiles as posts, and
+   *  `n` sentries. Returns how many sentries change tile on some tick of the last
+   *  `watch` ticks (checked every tick: a ping-pong has period 2). */
+  function crowdedEntrances(
+    simVersion: number,
+    n: number,
+    watch: number,
+    offsets: ReadonlyArray<readonly [number, number]>,
+  ): number {
+    const { world, ids, ent } = fightersOnTheDoor(simVersion, n);
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    for (const [dx, dy] of offsets) {
+      colony.entrances.push({
+        entranceId: allocateEntityId(world),
+        surfaceTileX: ent.x + dx,
+        surfaceTileY: ent.y + dy,
+        isOpen: true,
+      });
+    }
+    // Start them spread over the three entrances, as a garrison coming home would.
+    const doors = colony.entrances.filter((e) => e.isOpen);
+    ids.forEach((id, k) => {
+      const d = doors[k % doors.length]!;
+      world.ants.posX[id] = (d.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1);
+      world.ants.posY[id] = (d.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1);
+    });
+    for (let t = 0; t < 600; t++) tick(world, []);
+    const moved = new Set<number>();
+    const last = ids.map((id) => `${world.ants.posX[id]},${world.ants.posY[id]}`);
+    for (let t = 0; t < watch; t++) {
+      tick(world, []);
+      ids.forEach((id, k) => {
+        const now = `${world.ants.posX[id]},${world.ants.posY[id]}`;
+        if (now !== last[k]) moved.add(id);
+        last[k] = now;
+      });
+    }
+    return moved.size;
+  }
+
+  // In the first layout entrances share posts, and sentries turned round every
+  // tick before V46; the second settles only if a sentry HOLDING a post nearer
+  // another entrance stays bound to its own; the third only if every post has one
+  // owner.
+  const LAYOUTS: ReadonlyArray<ReadonlyArray<readonly [number, number]>> = [
+    [
+      [1, -1],
+      [2, -4],
+    ],
+    [
+      [-1, 0],
+      [2, 1],
+    ],
+    // Four entrances (the most a colony may have) listing the same ring tiles: an
+    // entrance that handed out a post another owned sent sentries back and forth
+    // between the two.
+    [
+      [-3, 0],
+      [1, 0],
+      [2, 0],
+    ],
+  ];
+
+  it('no sentry keeps moving once settled', () => {
+    for (const layout of LAYOUTS) {
+      expect(crowdedEntrances(SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE, 30, 100, layout)).toBe(0);
+    }
+  }, 30_000);
+
+  it('a garrison at four close entrances spreads over all of them, one sentry to a tile', () => {
+    const { world, ids, ent } = fightersOnTheDoor(SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE, 30);
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    for (const [dx, dy] of [
+      [2, -1],
+      [1, -4],
+      [4, 0],
+    ] as const) {
+      colony.entrances.push({
+        entranceId: allocateEntityId(world),
+        surfaceTileX: ent.x + dx,
+        surfaceTileY: ent.y + dy,
+        isOpen: true,
+      });
+    }
+    const doors = colony.entrances.filter((e) => e.isOpen);
+    ids.forEach((id, k) => {
+      const d = doors[k % doors.length]!;
+      world.ants.posX[id] = (d.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1);
+      world.ants.posY[id] = (d.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1);
+    });
+    for (let t = 0; t < 600; t++) tick(world, []);
+    const tiles = new Set<string>();
+    const nearDoor = doors.map(() => 0);
+    for (const id of ids) {
+      const x = world.ants.posX[id]! >> FP_SHIFT;
+      const y = world.ants.posY[id]! >> FP_SHIFT;
+      tiles.add(`${x},${y}`);
+      let best = 0;
+      doors.forEach((d, i) => {
+        const b = doors[best]!;
+        if (
+          Math.abs(d.surfaceTileX - x) + Math.abs(d.surfaceTileY - y) <
+          Math.abs(b.surfaceTileX - x) + Math.abs(b.surfaceTileY - y)
+        )
+          best = i;
+      });
+      nearDoor[best] = nearDoor[best]! + 1;
+    }
+    // Binding every shared post to the lowest-id entrance instead stacked sentries
+    // three to a tile and left the east entrance with two.
+    expect(tiles.size).toBe(ids.length);
+    expect(nearDoor[3]).toBeGreaterThanOrEqual(5);
+  }, 30_000);
+
+  it('pre-V46: sentries at the first layout turn round every tick', () => {
+    expect(
+      crowdedEntrances(SIM_VERSION_V45_SENTRY_RING_PASSABLE, 30, 100, LAYOUTS[0]!),
+    ).toBeGreaterThan(0);
+  }, 30_000);
 });
