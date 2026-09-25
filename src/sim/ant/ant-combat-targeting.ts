@@ -897,15 +897,15 @@ function sentryPostOwner(
  * after it: sentries turned round every tick forever.
  *
  * From V46 the binding follows the sentry's POST, which does not move as it steps:
- * walking, its target (serialized); holding (it held last pass, target -1), the
+ * walking to it (ToPost), its target (serialized); holding (it held last pass, target -1), the
  * post nearest where it stands within SENTRY_KEEP_HOLD_RADIUS_TILES. It is bound
  * to the entrance that owns that post (sentryPostOwner; every post has exactly
  * one) if it is inside that entrance's guard area. (Binding every shared post to
  * the lowest-id entrance instead drained a crowded garrison onto one entrance.)
- * Anything else — no post, or walking home, taking cover or chasing (recorded as
- * FightingSubState.Engaging, since a chase target is an enemy's position and may
- * lie on another entrance's post) — binds to its nearest entrance, as before. No
- * new state.
+ * Anything else — walking home, taking cover, chasing, or a target the spider
+ * override or a rally left — binds to its nearest entrance, as before: only a
+ * target sentry routing set as the post (FightingSubState.ToPost, `previous` =
+ * last pass's sub-state) is read as one. No new field.
  */
 function sentryEntrance(
   world: WorldState,
@@ -916,15 +916,15 @@ function sentryEntrance(
   entranceTiles: readonly number[],
   postsByEntrance: Map<number, number[]>,
   postsBuilt: Set<number>,
-  holding: boolean,
+  previous: number,
 ): FighterEntrance | null {
   const nearest = pickFighterTargetEntrance(entrances, tileX, tileY);
   if (world.simVersion < SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE) return nearest;
-  // A chasing sentry's target is the enemy it chases, not a post.
-  if (world.ants.subTask[id] === FightingSubState.Engaging) return nearest;
   const tx = world.ants.targetPosX[id]!;
   let owner: FighterEntrance | null = null;
-  if (tx !== -1) {
+  // Only a target sentry routing set as its post (ToPost) is read as one: a chase,
+  // a rally or the spider override can leave any tile, a post included, as target.
+  if (previous === FightingSubState.ToPost && tx !== -1) {
     owner = sentryPostOwner(
       world,
       tx >> FP_SHIFT,
@@ -932,7 +932,7 @@ function sentryEntrance(
       entrances,
       entranceTiles,
     );
-  } else if (holding) {
+  } else if (previous === FightingSubState.Holding && tx === -1) {
     // The post nearest where it stands (first in entrance, then post order). An
     // entrance's post list holds only the posts it owns, so that entrance is the
     // post's owner.
@@ -1296,7 +1296,7 @@ export function updateFightAntTargets(world: WorldState): void {
           entranceTiles,
           postsByEntrance,
           postsBuilt,
-          ants.subTask[wid] === FightingSubState.Holding,
+          ants.subTask[wid]!,
         );
       }
       if (e === null || !e.isOpen) continue;
@@ -1319,8 +1319,13 @@ export function updateFightAntTargets(world: WorldState): void {
     // other branch (rally, invader, closed-entrance wait, cover, chase) leaves the
     // fighter not holding, and a sentry held at a rally that is then cleared
     // doesn't pass for one still holding its post.
-    const wasHolding = sentrySlot !== null && ants.subTask[id] === FightingSubState.Holding;
+    const previousSubTask = ants.subTask[id]!;
+    const wasHolding = sentrySlot !== null && previousSubTask === FightingSubState.Holding;
     if (wasHolding) ants.subTask[id] = FightingSubState.MovingToRally;
+    // #328 (V46): ToPost is this pass's verdict too (only V46 routing writes it).
+    if (previousSubTask === FightingSubState.ToPost) {
+      ants.subTask[id] = FightingSubState.MovingToRally;
+    }
 
     const rp = colony.rallyPoint;
 
@@ -1376,17 +1381,9 @@ export function updateFightAntTargets(world: WorldState): void {
           entranceTiles!,
           postsByEntrance!,
           postsBuilt!,
-          wasHolding,
+          previousSubTask,
         );
         if (e !== null && e.isOpen) {
-          // #328 (V46): Engaging marks a target that is an enemy, not a post
-          // (sentryEntrance reads it); every other route clears it.
-          if (
-            world.simVersion >= SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE &&
-            ants.subTask[id] === FightingSubState.Engaging
-          ) {
-            ants.subTask[id] = FightingSubState.MovingToRally;
-          }
           // Take cover from the spider: head for the door (the descent block
           // lets a sentry taking cover down its own shaft).
           if (sentryTakesCover(world, id, e.surfaceTileX, e.surfaceTileY)) {
@@ -1410,9 +1407,6 @@ export function updateFightAntTargets(world: WorldState): void {
               e.surfaceTileY,
             )
           ) {
-            if (world.simVersion >= SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE) {
-              ants.subTask[id] = FightingSubState.Engaging;
-            }
             continue;
           }
           const routed = routeToSentryPost(
@@ -1434,7 +1428,13 @@ export function updateFightAntTargets(world: WorldState): void {
           }
           // Walking to its post passes through friends; walking home from outside
           // the guard area it takes the ordinary bumps round obstacles, like any ant.
-          if (routed === SENTRY_TO_POST) sentryMoving![id] = 1;
+          if (routed === SENTRY_TO_POST) {
+            sentryMoving![id] = 1;
+            // #328 (V46): its target is its post (sentryEntrance reads this).
+            if (world.simVersion >= SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE) {
+              ants.subTask[id] = FightingSubState.ToPost;
+            }
+          }
           continue;
         }
       }

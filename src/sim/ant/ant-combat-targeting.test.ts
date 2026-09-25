@@ -1215,9 +1215,11 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     return null;
   }
 
+  /** Walking to (x, y) as its post, as sentry routing leaves it (ToPost). */
   function walkTo(world: WorldState, id: number, [x, y]: readonly [number, number]): void {
     world.ants.targetPosX[id] = (x << FP_SHIFT) + (FP_ONE >> 1);
     world.ants.targetPosY[id] = (y << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.subTask[id] = FightingSubState.ToPost;
   }
 
   it("V46: a sentry walking to a post two entrances share is bound to the post's own entrance", () => {
@@ -1287,8 +1289,59 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     // The enemy dies: the sentry goes back to entrance 1's post, not entrance 2's.
     world.ants.alive[foe] = 0;
     updateFightAntTargets(world);
-    // …and no longer counts as chasing, so its binding follows its post again.
-    expect(world.ants.subTask[id]).toBe(FightingSubState.MovingToRally);
+    // …and is walking to its post again, so its binding follows that post.
+    expect(world.ants.subTask[id]).toBe(FightingSubState.ToPost);
+    const [tx, ty] = targetTile(world, id);
+    expect(manhattan(tx, ty, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS - 1);
+  });
+
+  it("V46: a target a rally or the spider left on another entrance's post does not re-bind a sentry", () => {
+    const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
+    colony.entrances.push({
+      entranceId: 2,
+      surfaceTileX: ENT_X + 6,
+      surfaceTileY: ENT_Y,
+      isOpen: true,
+    });
+    const probe = addFighter(world, colony, ENT_X + 9, ENT_Y);
+    updateFightAntTargets(world);
+    world.ants.alive[probe] = 0;
+    const far = getScratch(world).antTargeting.sentryPosts.get(2)!;
+    const id = addFighter(world, colony, ENT_X + 3, ENT_Y); // level: binds to 1
+    // Its target is one of entrance 2's posts, but not one sentry routing set
+    // (no ToPost): what the spider override or a cleared rally leaves behind.
+    world.ants.targetPosX[id] = (far[0]! << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.targetPosY[id] = (far[1]! << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.subTask[id] = FightingSubState.MovingToRally;
+    updateFightAntTargets(world);
+    const [tx, ty] = targetTile(world, id);
+    expect(manhattan(tx, ty, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS - 1); // entrance 1's post
+  });
+
+  it('V46: a rally clears the walking-to-post mark, so a cleared rally does not re-bind the sentry', () => {
+    const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
+    colony.entrances.push({
+      entranceId: 2,
+      surfaceTileX: ENT_X + 6,
+      surfaceTileY: ENT_Y,
+      isOpen: true,
+    });
+    const probe = addFighter(world, colony, ENT_X + 9, ENT_Y);
+    const id = addFighter(world, colony, ENT_X + 3, ENT_Y - 5); // level: binds to 1
+    updateFightAntTargets(world);
+    world.ants.alive[probe] = 0;
+    expect(world.ants.subTask[id]).toBe(FightingSubState.ToPost);
+    // A rally on one of entrance 2's posts: the sentry's target is that tile now.
+    const far = getScratch(world).antTargeting.sentryPosts.get(2)!;
+    colony.rallyPoint = { tileX: far[0]!, tileY: far[1]! };
+    updateFightAntTargets(world);
+    expect(targetTile(world, id)).toEqual([far[0], far[1]]);
+    expect(world.ants.subTask[id]).not.toBe(FightingSubState.ToPost);
+    // Rally cleared: back to entrance 1's post, not entrance 2's.
+    colony.rallyPoint = null;
+    updateFightAntTargets(world);
     const [tx, ty] = targetTile(world, id);
     expect(manhattan(tx, ty, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS - 1);
   });
@@ -1508,7 +1561,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     world.ants.subTask[id] = FightingSubState.MovingToRally;
     updateFightAntTargets(world);
     expect(targetTile(world, id)).toEqual([ENT_X, ENT_Y - R]);
-    expect(world.ants.subTask[id]).toBe(FightingSubState.MovingToRally);
+    expect(world.ants.subTask[id]).toBe(FightingSubState.ToPost); // walking, not holding
   });
 
   it('a sentry held at a rally near its post, once the rally is cleared, walks to its post', () => {

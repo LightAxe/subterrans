@@ -2579,7 +2579,7 @@ exports[`applyCommands golden differential (byte-identity of the extraction) > S
     },
   ],
   "hashes": {
-    "ants": "d7da0d3432da83ae07c7d807b79439fadc543bca",
+    "ants": "19eda523673522a3ee0672a27f713fb50278b5b6",
     "bakedSurfaceEffect": "db2458391bcfc8799839754ebf9f6ead70e3bd0b",
     "pheromoneGrids": "3658e62b00683bcb893620ab2f8bab9ca020b0cb",
     "surface": "a3582799dd0540e32b8f75ef76d3968cbf2a833c",

@@ -738,6 +738,37 @@ describe('V46 (#328) — sentries at entrances close together settle', () => {
     expect(nearDoor[3]).toBeGreaterThanOrEqual(5);
   }, 30_000);
 
+  it('the spider override clears the walking-to-post mark', () => {
+    const world = createScenario(7, 'Normal');
+    world.aiState = [];
+    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const e = colony.entrances.find((en) => en.isOpen)!;
+    const id = allocateEntityId(world);
+    initAnt(world.ants, id, {
+      colonyId: PLAYER_COLONY_ID,
+      posX: ((e.surfaceTileX + 6) << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (e.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Fighting,
+      subTask: FightingSubState.MovingToRally,
+      speed: WORKER_BASE_SPEED,
+      lifespan: WORKER_LIFESPAN_TICKS,
+      zone: Zone.Surface,
+    });
+    colony.workers.push(id);
+    colony.workerCount += 1;
+    colony.targetRatio.fight = 5;
+    // The spider well away from the entrance, so nothing takes cover.
+    world.spider!.posX = (e.surfaceTileX + 30) << FP_SHIFT;
+    world.spider!.posY = e.surfaceTileY << FP_SHIFT;
+    tick(world, []);
+    expect(world.ants.subTask[id]).toBe(FightingSubState.ToPost);
+    // Sent at the spider: its target is the spider now, and no longer a post.
+    world.spiderPriorityColonyId = PLAYER_COLONY_ID;
+    tick(world, []);
+    expect(world.ants.subTask[id]).not.toBe(FightingSubState.ToPost);
+  });
+
   it('pre-V46: sentries at the first layout turn round every tick', () => {
     expect(
       crowdedEntrances(SIM_VERSION_V45_SENTRY_RING_PASSABLE, 30, 100, LAYOUTS[0]!),

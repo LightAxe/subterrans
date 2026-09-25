@@ -1126,7 +1126,8 @@ function validateAntColumns(saved: SerializedAnts, capacity: number): void {
     ['posY', saved.posY, posFp],
     ['colonyId', saved.colonyId, byte],
     ['task', saved.task, enumMax(4)],
-    ['subTask', saved.subTask, enumMax(2)],
+    // 3 = FightingSubState.ToPost (#328, V46), the largest sub-state of any task.
+    ['subTask', saved.subTask, enumMax(3)],
     ['speed', saved.speed, finiteInt],
     ['foodCarrying', saved.foodCarrying, finiteInt],
     ['starvationTimer', saved.starvationTimer, finiteInt],
