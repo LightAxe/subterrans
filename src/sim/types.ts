@@ -911,7 +911,31 @@ export const SIM_VERSION_V44_TUNNEL_DEFENCE = 44 as const;
  * so a pre-V45 save replays byte-identically. MIN_ACCEPTED is UNCHANGED.
  */
 export const SIM_VERSION_V45_SENTRY_RING_PASSABLE = 45 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V45_SENTRY_RING_PASSABLE;
+
+/**
+ * #328 — V46 a sentry walking to its post keeps its entrance.
+ *
+ * A V43 sentry re-picked its entrance from its own tile every tick. The stable-post
+ * filter only guarantees a post's HOLD AREA is bound to its own entrance, so in rare
+ * layouts (about 1 in 500 random two- or three-entrance layouts) the first
+ * half-tile of a step toward the post landed on a tile nearer another own entrance
+ * whose post lay back the other way, and the sentry turned round every tick forever.
+ *
+ * From V46 a surface sentry's binding follows its POST, which does not move as it
+ * steps: walking, its target (already serialized); holding, the post nearest
+ * where it stands. It is bound to that post's own entrance (the one nearest the
+ * post) when that entrance lists the post and the sentry is inside its guard
+ * area; where entrances share a post, to the lowest-id one that lists it; with no
+ * post (walking home, taking cover, chasing), to its nearest entrance as before.
+ * (Binding every shared post to the lowest id settled too, but drained a crowded
+ * garrison onto one entrance and stacked sentries on its posts.)
+ *
+ * No new serialized field, no command, no world.rngState draw, no entity-ID
+ * advance, no tick-order change: the one new read is behind `simVersion >= V46`,
+ * so a pre-V46 save replays byte-identically. MIN_ACCEPTED is UNCHANGED.
+ */
+export const SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE = 46 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
 
 /**
  * S2 — AI colony state machine states.

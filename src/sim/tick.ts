@@ -1478,6 +1478,10 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       if (ants.zone[sid] !== 0) continue; // surface only; underground fighters surface first
       ants.targetPosX[sid] = (spTileX << FP_SHIFT) + (FP_ONE >> 1);
       ants.targetPosY[sid] = (spTileY << FP_SHIFT) + (FP_ONE >> 1);
+      // #328 (V46): the target is the spider now, not a sentry post.
+      if (ants.subTask[sid] === FightingSubState.ToPost) {
+        ants.subTask[sid] = FightingSubState.MovingToRally;
+      }
     }
   }
 

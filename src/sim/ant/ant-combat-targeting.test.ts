@@ -17,6 +17,7 @@ import {
   SIM_VERSION_V42_COLONY_ALARM,
   SIM_VERSION_V44_TUNNEL_DEFENCE,
   SIM_VERSION_V45_SENTRY_RING_PASSABLE,
+  SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE,
 } from '../types.js';
 import { SurfaceMovementEffect } from '../surface-features.js';
 import { SURFACE_GRID_WIDTH } from '../constants.js';
@@ -1151,6 +1152,247 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     expect(targetTile(world, id)).toEqual([px, py]);
   });
 
+  // Three entrances this close leave no stable post, and the fallback posts of
+  // entrances 1 and 2 overlap. Returns the world, the colony and both post lists.
+  function crowdedPosts(
+    second: readonly [number, number],
+    third: readonly [number, number],
+  ): {
+    world: WorldState;
+    colony: ColonyRecord;
+    posts: Map<number, number[]>;
+    raw: Map<number, number[]>;
+  } {
+    const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
+    colony.entrances.push(
+      {
+        entranceId: 2,
+        surfaceTileX: ENT_X + second[0],
+        surfaceTileY: ENT_Y + second[1],
+        isOpen: true,
+      },
+      {
+        entranceId: 3,
+        surfaceTileX: ENT_X + third[0],
+        surfaceTileY: ENT_Y + third[1],
+        isOpen: true,
+      },
+    );
+    // Probe sentries around every entrance, so the first pass builds every post list.
+    const probes: number[] = [];
+    for (const e of colony.entrances) {
+      for (const [dx, dy] of [
+        [-5, 0],
+        [5, 0],
+        [0, 5],
+        [0, -5],
+      ] as const) {
+        probes.push(addFighter(world, colony, e.surfaceTileX + dx, e.surfaceTileY + dy));
+      }
+    }
+    updateFightAntTargets(world);
+    for (const p of probes) world.ants.alive[p] = 0;
+    const scratch = getScratch(world).antTargeting;
+    return { world, colony, posts: scratch.sentryPosts, raw: scratch.sentryRawPosts };
+  }
+
+  /** A post both lists share, no farther from (ox, oy) than from (px, py). */
+  function sharedPost(
+    a: number[],
+    b: number[],
+    [ox, oy]: readonly [number, number],
+    [px, py]: readonly [number, number],
+  ): [number, number] | null {
+    for (let i = 0; i < b.length; i += 2) {
+      for (let j = 0; j < a.length; j += 2) {
+        if (a[j] !== b[i] || a[j + 1] !== b[i + 1]) continue;
+        if (manhattan(b[i]!, b[i + 1]!, ox, oy) <= manhattan(b[i]!, b[i + 1]!, px, py)) {
+          return [b[i]!, b[i + 1]!];
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Walking to (x, y) as its post, as sentry routing leaves it (ToPost). */
+  function walkTo(world: WorldState, id: number, [x, y]: readonly [number, number]): void {
+    world.ants.targetPosX[id] = (x << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.targetPosY[id] = (y << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.subTask[id] = FightingSubState.ToPost;
+  }
+
+  it("V46: a sentry walking to a post two entrances share is bound to the post's own entrance", () => {
+    // Its own entrance is the one nearest the POST (a tie to the lower id), not the
+    // sentry. Here entrance 1, though the sentry stands nearer entrance 2.
+    {
+      const { world, colony, posts, raw } = crowdedPosts([1, -1], [2, -4]);
+      const [a, b] = [posts.get(1)!, posts.get(2)!];
+      // A ring tile both entrances accept; entrance 1 owns it (ties go to the lower id).
+      const shared = sharedPost(raw.get(1)!, raw.get(2)!, [ENT_X, ENT_Y], [ENT_X + 1, ENT_Y - 1]);
+      expect(shared).not.toBeNull();
+      expect([a[0], a[1]]).not.toEqual([b[0], b[1]]);
+      const id = addFighter(world, colony, ENT_X + 3, ENT_Y - 1); // nearer entrance 2
+      walkTo(world, id, shared!);
+      updateFightAntTargets(world);
+      expect(targetTile(world, id)).toEqual([a[0], a[1]]); // entrance 1's first post
+    }
+    // Here entrance 3 — not the lowest id that lists the post — though the sentry
+    // stands nearer entrance 1.
+    {
+      const { world, colony, posts, raw } = crowdedPosts([-1, 0], [2, 1]);
+      const [a, c] = [posts.get(1)!, posts.get(3)!];
+      const shared = sharedPost(raw.get(1)!, raw.get(3)!, [ENT_X + 2, ENT_Y + 1], [ENT_X, ENT_Y]);
+      expect(shared).not.toBeNull();
+      expect(manhattan(shared![0], shared![1], ENT_X + 2, ENT_Y + 1)).toBeLessThan(
+        manhattan(shared![0], shared![1], ENT_X, ENT_Y),
+      );
+      expect([a[0], a[1]]).not.toEqual([c[0], c[1]]);
+      const id = addFighter(world, colony, ENT_X + 1, ENT_Y - 3); // nearer entrance 1
+      walkTo(world, id, shared!);
+      updateFightAntTargets(world);
+      expect(targetTile(world, id)).toEqual([c[0], c[1]]); // entrance 3's first post
+    }
+  });
+
+  it("V46: a sentry chasing an enemy on another entrance's post does not re-bind to it", () => {
+    const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
+    colony.entrances.push({
+      entranceId: 2,
+      surfaceTileX: ENT_X + 6,
+      surfaceTileY: ENT_Y,
+      isOpen: true,
+    });
+    const enemy = enemyColony(world);
+    // Build entrance 2's posts with a probe sentry beside it.
+    const probe = addFighter(world, colony, ENT_X + 9, ENT_Y);
+    updateFightAntTargets(world);
+    world.ants.alive[probe] = 0;
+    const far = getScratch(world).antTargeting.sentryPosts.get(2)!;
+    // A sentry of entrance 1, and an enemy on one of entrance 2's posts in its sight.
+    // Level with both entrances (a tie binds to the lower id, 1).
+    const id = addFighter(world, colony, ENT_X + 3, ENT_Y);
+    let px = -1;
+    let py = -1;
+    for (let k = 0; k < far.length; k += 2) {
+      if (manhattan(far[k]!, far[k + 1]!, ENT_X + 3, ENT_Y) <= FIGHT_AGGRO_RADIUS) {
+        px = far[k]!;
+        py = far[k + 1]!;
+        break;
+      }
+    }
+    expect(px).toBeGreaterThanOrEqual(0);
+    const foe = addFighter(world, enemy, px, py);
+    updateFightAntTargets(world);
+    expect(targetTile(world, id)).toEqual([px, py]); // chasing it
+    // The enemy dies: the sentry goes back to entrance 1's post, not entrance 2's.
+    world.ants.alive[foe] = 0;
+    updateFightAntTargets(world);
+    // …and is walking to its post again, so its binding follows that post.
+    expect(world.ants.subTask[id]).toBe(FightingSubState.ToPost);
+    const [tx, ty] = targetTile(world, id);
+    expect(manhattan(tx, ty, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS - 1);
+  });
+
+  it("V46: a target a rally or the spider left on another entrance's post does not re-bind a sentry", () => {
+    const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
+    colony.entrances.push({
+      entranceId: 2,
+      surfaceTileX: ENT_X + 6,
+      surfaceTileY: ENT_Y,
+      isOpen: true,
+    });
+    const probe = addFighter(world, colony, ENT_X + 9, ENT_Y);
+    updateFightAntTargets(world);
+    world.ants.alive[probe] = 0;
+    const far = getScratch(world).antTargeting.sentryPosts.get(2)!;
+    const id = addFighter(world, colony, ENT_X + 3, ENT_Y); // level: binds to 1
+    // Its target is one of entrance 2's posts, but not one sentry routing set
+    // (no ToPost): what the spider override or a cleared rally leaves behind.
+    world.ants.targetPosX[id] = (far[0]! << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.targetPosY[id] = (far[1]! << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.subTask[id] = FightingSubState.MovingToRally;
+    updateFightAntTargets(world);
+    const [tx, ty] = targetTile(world, id);
+    expect(manhattan(tx, ty, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS - 1); // entrance 1's post
+  });
+
+  it('V46: a rally clears the walking-to-post mark, so a cleared rally does not re-bind the sentry', () => {
+    const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
+    colony.entrances.push({
+      entranceId: 2,
+      surfaceTileX: ENT_X + 6,
+      surfaceTileY: ENT_Y,
+      isOpen: true,
+    });
+    const probe = addFighter(world, colony, ENT_X + 9, ENT_Y);
+    const id = addFighter(world, colony, ENT_X + 3, ENT_Y - 5); // level: binds to 1
+    updateFightAntTargets(world);
+    world.ants.alive[probe] = 0;
+    expect(world.ants.subTask[id]).toBe(FightingSubState.ToPost);
+    // A rally on one of entrance 2's posts: the sentry's target is that tile now.
+    const far = getScratch(world).antTargeting.sentryPosts.get(2)!;
+    colony.rallyPoint = { tileX: far[0]!, tileY: far[1]! };
+    updateFightAntTargets(world);
+    expect(targetTile(world, id)).toEqual([far[0], far[1]]);
+    expect(world.ants.subTask[id]).not.toBe(FightingSubState.ToPost);
+    // Rally cleared: back to entrance 1's post, not entrance 2's.
+    colony.rallyPoint = null;
+    updateFightAntTargets(world);
+    const [tx, ty] = targetTile(world, id);
+    expect(manhattan(tx, ty, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS - 1);
+  });
+
+  it('V46: a sentry is never held by a ring tile of a CLOSED entrance', () => {
+    const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
+    // Entrance 1 is closed (and the lower id); entrance 2, six tiles east, is open.
+    colony.entrances[0]!.isOpen = false;
+    colony.entrances.push({
+      entranceId: 2,
+      surfaceTileX: ENT_X + 6,
+      surfaceTileY: ENT_Y,
+      isOpen: true,
+    });
+    const id = addFighter(world, colony, ENT_X + 4, ENT_Y); // nearer entrance 2
+    // Walking to the closed entrance's north ring tile.
+    world.ants.targetPosX[id] = (ENT_X << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.targetPosY[id] = ((ENT_Y - (FIGHT_AGGRO_RADIUS - 1)) << FP_SHIFT) + (FP_ONE >> 1);
+    updateFightAntTargets(world);
+    // A sentry of the open entrance: one of its posts, not its door tile.
+    const [tx, ty] = targetTile(world, id);
+    expect(manhattan(tx, ty, ENT_X + 6, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS - 1);
+  });
+
+  it('V46: a sentry is not held by a post of an entrance whose guard area it has left', () => {
+    const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
+    colony.entrances.push({
+      entranceId: 2,
+      surfaceTileX: ENT_X + 20,
+      surfaceTileY: ENT_Y,
+      isOpen: true,
+    });
+    const id = addFighter(world, colony, ENT_X + 5, ENT_Y); // near entrance 1, 15 from 2
+    updateFightAntTargets(world);
+    const far = getScratch(world).antTargeting.sentryPosts.get(2);
+    // Entrance 2's posts are built only if something binds to it; build them by
+    // placing a probe sentry there once.
+    const probe = addFighter(world, colony, ENT_X + 23, ENT_Y);
+    updateFightAntTargets(world);
+    const b = far ?? getScratch(world).antTargeting.sentryPosts.get(2)!;
+    world.ants.alive[probe] = 0;
+    world.ants.targetPosX[id] = (b[0]! << FP_SHIFT) + (FP_ONE >> 1); // a post of entrance 2
+    world.ants.targetPosY[id] = (b[1]! << FP_SHIFT) + (FP_ONE >> 1);
+    updateFightAntTargets(world);
+    const [tx, ty] = targetTile(world, id);
+    // Bound to entrance 1, its nearest: one of entrance 1's posts, not entrance 2's door.
+    expect(manhattan(tx, ty, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS - 1);
+  });
+
   it('V45: only a sentry HOLDING its post passes through friends while holding', () => {
     const { world, colony } = sentryWorld();
     world.simVersion = SIM_VERSION_V45_SENTRY_RING_PASSABLE;
@@ -1319,7 +1561,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     world.ants.subTask[id] = FightingSubState.MovingToRally;
     updateFightAntTargets(world);
     expect(targetTile(world, id)).toEqual([ENT_X, ENT_Y - R]);
-    expect(world.ants.subTask[id]).toBe(FightingSubState.MovingToRally);
+    expect(world.ants.subTask[id]).toBe(FightingSubState.ToPost); // walking, not holding
   });
 
   it('a sentry held at a rally near its post, once the rally is cleared, walks to its post', () => {

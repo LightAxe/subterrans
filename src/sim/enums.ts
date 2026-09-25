@@ -68,6 +68,10 @@ export const FightingSubState = {
   Engaging: 1, // PRD §1 line 93 — both members canonical at Phase 2 scope
   // V43 (#323): a sentry holding its post (written only by V43 sentry routing).
   Holding: 2,
+  // #328 (V46): a sentry walking to its post, so its target IS its post (written
+  // only by V46 sentry routing; every other route, and the spider override, clear
+  // it). A chase, a rally or the spider can leave any tile as a target.
+  ToPost: 3,
 } as const;
 export type FightingSubState = (typeof FightingSubState)[keyof typeof FightingSubState];
 

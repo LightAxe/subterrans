@@ -124,12 +124,16 @@ describe('FightingSubState discriminants (PRD §1)', () => {
     expect(FightingSubState.Holding).toBe(2);
   });
 
+  it('FightingSubState.ToPost === 3 (V46 #328 sentry walking to its post)', () => {
+    expect(FightingSubState.ToPost).toBe(3);
+  });
+
   it('FightingSubState.Engaging === 1 (PRD §1 line 93 — NOT a placeholder)', () => {
     expect(FightingSubState.Engaging).toBe(1);
   });
 
-  it('FightingSubState has exactly 3 members (regression guard — was not singleton Engaged=0; Holding added in V43)', () => {
-    expect(Object.keys(FightingSubState).length).toBe(3);
+  it('FightingSubState has exactly 4 members (regression guard — was not singleton Engaged=0; Holding added in V43, ToPost in V46)', () => {
+    expect(Object.keys(FightingSubState).length).toBe(4);
   });
 });
 
