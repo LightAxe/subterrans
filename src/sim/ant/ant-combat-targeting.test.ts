@@ -7,6 +7,7 @@ import {
   unpackStepDy,
   updateFightAntTargets,
   pickInvaderUndergroundStep,
+  sentryPassesThroughFriends,
 } from './ant-system.js';
 import {
   createWorldState,
@@ -22,7 +23,6 @@ import { SURFACE_GRID_WIDTH } from '../constants.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt } from './ant-store.js';
 import { getScratch } from '../scratch.js';
-import { sentryPassesThroughFriends } from './ant-combat-targeting.js';
 import { AntTask, FightingSubState } from '../enums.js';
 import { FIGHT_AGGRO_RADIUS, SPIDER_HP_FULL, SPIDER_HUNT_INTERVAL_TICKS } from '../constants.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
