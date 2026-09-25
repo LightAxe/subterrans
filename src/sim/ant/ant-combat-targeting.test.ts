@@ -18,6 +18,8 @@ import {
   SIM_VERSION_V44_TUNNEL_DEFENCE,
   SIM_VERSION_V45_SENTRY_RING_PASSABLE,
   SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE,
+  SIM_VERSION_V47_SENTRY_STAND_DOWN,
+  SIM_VERSION_V48_SENTRY_WALK_HOME,
 } from '../types.js';
 import { SurfaceMovementEffect } from '../surface-features.js';
 import { SURFACE_GRID_WIDTH } from '../constants.js';
@@ -521,8 +523,12 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
   const ENT_X = 40;
   const ENT_Y = 40;
 
+  /** Pinned to V47: these tests route sentries 5–8 tiles out straight to their
+   *  posts, the rule V48 (#333) replaced with walking home to the door area first.
+   *  The V48 tests below set the version back. */
   function sentryWorld(): { world: WorldState; colony: ColonyRecord } {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = SIM_VERSION_V47_SENTRY_STAND_DOWN;
     const colony = createColonyRecord(COLONY_ID, 0);
     colony.entrances = [{ entranceId: 1, surfaceTileX: ENT_X, surfaceTileY: ENT_Y, isOpen: true }];
     colony.rallyPoint = null;
@@ -667,8 +673,9 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     expect(world.ants.targetPosX[id]).toBe(world.ants.posX[q]);
   });
 
-  it('beyond its guard area walks to the door itself (the pre-V43 route home), and takes its post inside it', () => {
+  it('pre-V48 (pinned V47): beyond its guard area walks to the door itself (the pre-V43 route home), and takes its post inside it', () => {
     const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V47_SENTRY_STAND_DOWN; // V48 (#333) finishes the walk home
     const id = addFighter(world, colony, ENT_X + GUARD_RADIUS + 1, ENT_Y);
     updateFightAntTargets(world);
     expect(targetTile(world, id)).toEqual([ENT_X, ENT_Y]);
@@ -1617,12 +1624,14 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     expect(moving[holder]).toBe(0);
     expect(moving[walker]).toBe(1);
 
-    // Walking home from outside the guard area is not.
+    // Walking home from outside the guard area does not pass through friends:
+    // from V48 (#333) it is marked 2, for step 16's flow-field step, not 1.
     const home = sentryWorld();
     const far = addFighter(home.world, home.colony, ENT_X + 12, ENT_Y);
     updateFightAntTargets(home.world);
     expect(targetTile(home.world, far)).toEqual([ENT_X, ENT_Y]);
-    expect(getScratch(home.world).antTargeting.sentryMoving[far]).toBe(0);
+    expect(getScratch(home.world).antTargeting.sentryMoving[far]).toBe(0); // V47; V48 marks 2
+    expect(sentryPassesThroughFriends(home.world, far)).toBe(false);
 
     // Into cover counts as moving; after an enemy does not.
     const cover = sentryWorld();
@@ -1708,6 +1717,57 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     updateFightAntTargets(world);
     expect(world.ants.targetPosX[id]).toBe(-1);
     expect(world.ants.targetPosY[id]).toBe(-1);
+  });
+
+  it('V48 (#333): a sentry not holding its post walks home until it is in the door area, then takes its post', () => {
+    const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V48_SENTRY_WALK_HOME;
+    const id = addFighter(world, colony, ENT_X + 6, ENT_Y + 1); // 7 out: inside the guard area
+    updateFightAntTargets(world);
+    expect(targetTile(world, id)).toEqual([ENT_X, ENT_Y]);
+    expect(getScratch(world).antTargeting.sentryMoving[id]).toBe(2); // steps by the flow field
+    world.ants.posX[id] = ((ENT_X + 5) << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[id] = (ENT_Y << FP_SHIFT) + (FP_ONE >> 1);
+    updateFightAntTargets(world);
+    expect(targetTile(world, id)).toEqual([ENT_X, ENT_Y]); // 5 out: still walking home
+    world.ants.posX[id] = ((ENT_X + 4) << FP_SHIFT) + (FP_ONE >> 1);
+    updateFightAntTargets(world);
+    const [tx, ty] = targetTile(world, id); // 4 out: in the door area, it takes its post
+    expect(manhattan(tx, ty, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS - 1);
+  });
+
+  it('V48 (#333): a holder bumped 5 from the door walks straight back to its post, not home', () => {
+    const { world, colony } = sentryWorld();
+    world.simVersion = SIM_VERSION_V48_SENTRY_WALK_HOME;
+    // Thirteen sentries: the thirteenth takes an outer post, 4 from the door.
+    const ids = Array.from({ length: 13 }, () => addFighter(world, colony, ENT_X + 2, ENT_Y + 2));
+    updateFightAntTargets(world);
+    const id = ids[12]!;
+    const [px, py] = targetTile(world, id);
+    expect(manhattan(px, py, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS);
+    world.ants.posX[id] = (px << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[id] = (py << FP_SHIFT) + (FP_ONE >> 1);
+    updateFightAntTargets(world);
+    expect(world.ants.subTask[id]).toBe(FightingSubState.Holding);
+    // Bumped one tile straight outward: 5 from the door.
+    const ox = px > ENT_X ? 1 : px < ENT_X ? -1 : 0;
+    const oy = ox === 0 ? (py > ENT_Y ? 1 : -1) : 0;
+    world.ants.posX[id] = ((px + ox) << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[id] = ((py + oy) << FP_SHIFT) + (FP_ONE >> 1);
+    expect(manhattan(px + ox, py + oy, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS + 1);
+    // Beyond sight of the entrance it may not hold there (V45); it was holding, so
+    // it walks straight back to its post, not home to the door area.
+    updateFightAntTargets(world);
+    expect(targetTile(world, id)).toEqual([px, py]);
+  });
+
+  it('pre-V48 (pinned V47): a sentry inside the guard area heads straight for its post', () => {
+    const { world, colony } = sentryWorld();
+    const id = addFighter(world, colony, ENT_X + 6, ENT_Y + 1);
+    world.ants.targetPosX[id] = (ENT_X << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.targetPosY[id] = (ENT_Y << FP_SHIFT) + (FP_ONE >> 1);
+    updateFightAntTargets(world);
+    expect(targetTile(world, id)).not.toEqual([ENT_X, ENT_Y]);
   });
 
   it('rebuilds the entrance-tile list every pass instead of appending to it', () => {

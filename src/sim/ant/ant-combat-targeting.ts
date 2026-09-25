@@ -11,6 +11,7 @@ import {
   SIM_VERSION_V44_TUNNEL_DEFENCE,
   SIM_VERSION_V45_SENTRY_RING_PASSABLE,
   SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE,
+  SIM_VERSION_V48_SENTRY_WALK_HOME,
   type WorldState,
 } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
@@ -40,7 +41,9 @@ const SENTRY_HOLD_RADIUS_TILES = 1;
 // inside this radius and stays put instead of walking back onto the taken tile.
 const SENTRY_KEEP_HOLD_RADIUS_TILES = SENTRY_HOLD_RADIUS_TILES + 1;
 // What routeToSentryPost did with a sentry.
-const SENTRY_HOME = 0; // walking home to its entrance, from outside the guard area
+const SENTRY_HOME = 0; // walking home to its entrance (outside the guard area; from V48 until the door area)
+/** #333 (V48) — `sentryMoving` value for a sentry walking home (1 = passes through friends). */
+const SENTRY_MOVING_HOME = 2;
 const SENTRY_TO_POST = 1; // walking to its post
 const SENTRY_HOLD = 2; // holding its post
 const SENTRY_NO_POST = 3; // its entrance has no post
@@ -200,7 +203,7 @@ function hasNoOrders(world: WorldState, id: number): boolean {
  * V43 (#323) — sentry `id` is on the move among the posts round its door: step
  * 10c's sentry branch sent it this tick into cover or to its post. The same-colony
  * occupancy pass lets it through tiles its colony's ants hold instead of bumping
- * it. (Walking home from outside the guard area, or chasing, it is bumped like
+ * it. (Walking home, or chasing, it is bumped like
  * any ant: those bumps are what slide it round obstacles, and without them more
  * fighters stranded in the field after a rally was cleared.) Sentries hold posts all round their
  * door, and one bumped back off a holder's tile every tick, on its way to a post
@@ -427,6 +430,19 @@ export function defenderPassesThroughFriends(world: WorldState, id: number): boo
   if (world.ants.targetPosX[id] === -1) return true;
   const moving = getScratch(world).antTargeting.sentryMoving;
   return id < moving.length && moving[id] === 1;
+}
+
+/**
+ * #333 (V48) — step 10c sent sentry `id` home to its entrance this tick (it is
+ * outside its entrance's door area and not holding its post). Step 16 steps it by the colony's surface entrance flow
+ * field, which routes round obstacles; the straight-line step pinned it behind
+ * one. (Read in the same tick it is written: the flag is scratch, rebuilt by
+ * every 10c pass.)
+ */
+export function sentryWalksHome(world: WorldState, id: number): boolean {
+  if (!isSentry(world, id)) return false;
+  const moving = getScratch(world).antTargeting.sentryMoving;
+  return id < moving.length && moving[id] === SENTRY_MOVING_HOME;
 }
 
 /**
@@ -970,7 +986,9 @@ function sentryEntrance(
 /**
  * V43 (#323) — route sentry `id` holding `slot` to its post around the entrance
  * `entrance`. Outside its guard area (SENTRY_GUARD_RADIUS) it walks to the door
- * itself, the route home idle fighters took before V43. Inside, its post is entry
+ * itself, the route home idle fighters took before V43; from V48 (#333) a sentry
+ * not holding its post walks home until it is in the door area
+ * (SENTRY_DOOR_AREA_RADIUS), stepping by the surface flow field. Inside, its post is entry
  * `slot` mod count of the door's post list (listSentryPosts, built once per door
  * per pass into `postsByEntrance`), so a door's first `count` sentries take
  * distinct posts — skipping to the next ring tile instead collapsed a run of
@@ -1007,9 +1025,17 @@ function routeToSentryPost(
   const antTileX = ants.posX[id]! >> FP_SHIFT;
   const antTileY = ants.posY[id]! >> FP_SHIFT;
   const doorDist = Math.abs(antTileX - entranceX) + Math.abs(antTileY - entranceY);
-  if (doorDist > SENTRY_GUARD_RADIUS) {
-    ants.targetPosX[id] = (entranceX << FP_SHIFT) + (FP_ONE >> 1);
-    ants.targetPosY[id] = (entranceY << FP_SHIFT) + (FP_ONE >> 1);
+  const doorFpX = (entranceX << FP_SHIFT) + (FP_ONE >> 1);
+  const doorFpY = (entranceY << FP_SHIFT) + (FP_ONE >> 1);
+  // #333 (V48): a sentry not holding its post walks home until it is in the
+  // entrance's door area, not just inside the guard area, and only then heads for
+  // its post. Walking home steps by the obstacle-aware surface flow field (step
+  // 16); the straight-line step to a post pinned a sentry behind an obstacle, and
+  // at the guard edge the two straight-line walks undid each other every tick.
+  const walkingHome = world.simVersion >= SIM_VERSION_V48_SENTRY_WALK_HOME && !wasHolding;
+  if (doorDist > SENTRY_GUARD_RADIUS || (walkingHome && doorDist > SENTRY_DOOR_AREA_RADIUS)) {
+    ants.targetPosX[id] = doorFpX;
+    ants.targetPosY[id] = doorFpY;
     return SENTRY_HOME;
   }
   const posts = sentryPostsOf(
@@ -1426,8 +1452,13 @@ export function updateFightAntTargets(world: WorldState): void {
             ants.targetPosX[id] = -1;
             ants.targetPosY[id] = -1;
           }
-          // Walking to its post passes through friends; walking home from outside
-          // the guard area it takes the ordinary bumps round obstacles, like any ant.
+          // Walking to its post passes through friends; walking home it takes the
+          // ordinary bumps round obstacles, like any ant.
+          // #333 (V48): a sentry walking home is marked 2 (not a pass-through
+          // value), so step 16 steps it by the surface entrance flow field.
+          if (routed === SENTRY_HOME && world.simVersion >= SIM_VERSION_V48_SENTRY_WALK_HOME) {
+            sentryMoving![id] = SENTRY_MOVING_HOME;
+          }
           if (routed === SENTRY_TO_POST) {
             sentryMoving![id] = 1;
             // #328 (V46): its target is its post (sentryEntrance reads this).
