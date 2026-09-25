@@ -1186,23 +1186,16 @@ export function standDownSurplusSentries(world: WorldState, colony: ColonyRecord
     const id = colony.workers[i]!;
     if (ants.alive[id] === 1 && ants.task[id] === AntTask.Fighting) surplus += 1;
   }
-  // Highest id first: pick the largest remaining holder each round (surplus is
-  // small and only non-zero after a war ratio eases).
-  let below = Number.POSITIVE_INFINITY;
-  while (surplus > 0) {
-    let pick = -1;
-    for (let i = 0; i < colony.workers.length; i++) {
-      const id = colony.workers[i]!;
-      if (id >= below || id <= pick) continue;
-      if (ants.alive[id] !== 1 || ants.task[id] !== AntTask.Fighting) continue;
-      if (ants.zone[id] !== Zone.Surface) continue;
-      if (ants.subTask[id] !== FightingSubState.Holding || ants.targetPosX[id] !== -1) continue;
-      pick = id;
-    }
-    if (pick === -1) return;
-    ants.task[pick] = AntTask.Idle;
-    ants.subTask[pick] = 0;
-    below = pick;
+  // Highest id first, in one descending pass over the entity arrays (never a
+  // rescan per released ant). A sentry already paired in combat (an ant opponent,
+  // or -2 for the spider's windup) is not settled, whatever its last Holding verdict.
+  for (let id = ants.alive.length - 1; id >= 0 && surplus > 0; id--) {
+    if (ants.alive[id] !== 1 || ants.colonyId[id] !== colony.colonyId) continue;
+    if (ants.task[id] !== AntTask.Fighting || ants.zone[id] !== Zone.Surface) continue;
+    if (ants.subTask[id] !== FightingSubState.Holding || ants.targetPosX[id] !== -1) continue;
+    if (ants.combatOpponentId[id] !== -1) continue;
+    ants.task[id] = AntTask.Idle;
+    ants.subTask[id] = 0;
     surplus -= 1;
   }
 }

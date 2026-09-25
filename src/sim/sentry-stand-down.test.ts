@@ -125,6 +125,53 @@ describe('standDownSurplusSentries (V47, #332)', () => {
     expect(tasks(w, fresh)).toEqual([AntTask.Fighting, AntTask.Fighting]);
   });
 
+  it('does not release a holder already paired in combat (an ant, or the spider windup)', () => {
+    const { world: w, colony } = world();
+    const ids = [0, 1, 2, 3].map(() => addFighter(w, colony));
+    w.ants.combatOpponentId[ids[3]!] = 50; // paired with an enemy ant
+    w.ants.combatOpponentId[ids[2]!] = -2; // the spider is winding up on it
+    colony.computedAllocation.fight = 0; // three over: two could go
+    standDownSurplusSentries(w, colony);
+    expect(tasks(w, ids)).toEqual([AntTask.Idle, AntTask.Idle, AntTask.Fighting, AntTask.Fighting]);
+  });
+
+  it("releases only its own colony's sentries", () => {
+    const { world: w, colony } = world();
+    const other = createColonyRecord(2, -1);
+    other.entrances = [{ entranceId: 2, surfaceTileX: 80, surfaceTileY: 40, isOpen: true }];
+    other.rallyPoint = null;
+    w.colonies[2] = other;
+    const mine = [0, 1, 2].map(() => addFighter(w, colony));
+    const theirs = [0, 1, 2].map(() => addFighter(w, other)); // higher ids, no surplus of their own
+    other.computedAllocation.fight = 3;
+    colony.computedAllocation.fight = 0; // two of mine can go
+    standDownSurplusSentries(w, colony);
+    expect(tasks(w, mine)).toEqual([AntTask.Fighting, AntTask.Idle, AntTask.Idle]);
+    expect(tasks(w, theirs)).toEqual([AntTask.Fighting, AntTask.Fighting, AntTask.Fighting]);
+  });
+
+  it('never takes a homebound forager (sub-state 2, no target) for a holder', () => {
+    const { world: w, colony } = world();
+    const fighters = [0, 1].map(() =>
+      addFighter(w, colony, { subTask: FightingSubState.MovingToRally, target: 44 << FP_SHIFT }),
+    );
+    const forager = addFighter(w, colony); // Holding === ReturningToNest === 2
+    w.ants.task[forager] = AntTask.Foraging;
+    colony.computedAllocation.fight = 0;
+    standDownSurplusSentries(w, colony);
+    expect(w.ants.task[forager]).toBe(AntTask.Foraging);
+    expect(tasks(w, fighters)).toEqual([AntTask.Fighting, AntTask.Fighting]);
+  });
+
+  it('skips a dead holder and releases the highest live one', () => {
+    const { world: w, colony } = world();
+    const ids = [0, 1, 2, 3].map(() => addFighter(w, colony));
+    w.ants.alive[ids[3]!] = 0;
+    colony.computedAllocation.fight = 1; // three alive: one goes
+    standDownSurplusSentries(w, colony);
+    expect(tasks(w, ids.slice(0, 3))).toEqual([AntTask.Fighting, AntTask.Fighting, AntTask.Idle]);
+  });
+
   it('ignores dead fighters in the surplus count', () => {
     const { world: w, colony } = world();
     const ids = [0, 1, 2].map(() => addFighter(w, colony));
