@@ -62,6 +62,7 @@ import {
   tickNurseActions,
   releaseExcessNurses,
   releaseSurplusFightersBelowFloor,
+  standDownSurplusSentries,
   tickSearchLeash,
   tickExcursionBoundary,
   routeForagerPriority,
@@ -1001,6 +1002,8 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       // colony whose survivors were fighting gets its foragers back at step 10a.
       releaseSurplusFightersBelowFloor(world, colony);
     }
+    // #332 (V47) — at any size, sentries the ratio no longer asks for stand down.
+    standDownSurplusSentries(world, colony);
   }
 
   // Step 5 extension: dead-digger tile reversion (global pass, after per-colony death cleanup)

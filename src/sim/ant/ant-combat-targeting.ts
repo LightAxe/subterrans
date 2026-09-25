@@ -11,6 +11,7 @@ import {
   SIM_VERSION_V44_TUNNEL_DEFENCE,
   SIM_VERSION_V45_SENTRY_RING_PASSABLE,
   SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE,
+  SIM_VERSION_V47_SENTRY_STAND_DOWN,
   type WorldState,
 } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
@@ -1155,6 +1156,53 @@ export function releaseSurplusFightersBelowFloor(
     }
     ants.task[id] = AntTask.Idle;
     ants.subTask[id] = 0;
+    surplus -= 1;
+  }
+}
+
+/**
+ * #332 (V47) — release `colony`'s surplus SENTRIES to Idle: while it has more
+ * than one fighter over `computedAllocation.fight`, sentries holding their post
+ * stand down (all but one of the surplus), highest entity id first. Nothing
+ * else in the sim turns a fighter back into a worker, so a war ratio left most of
+ * a colony fighters for good. Only settled
+ * sentries go: a colony with a rally point, sent at the spider or sounding its
+ * alarm releases nobody, and a sentry chasing, taking cover or walking is left
+ * alone, as is a fighter waiting where its entrance offers no post (never
+ * Holding). Called from the step-8 allocation checkpoint (tick.ts); a released ant
+ * is Idle for step 10a THIS tick. Holding is last pass's verdict (step 10c clears
+ * and resets it), so this reads it before 10c runs.
+ */
+export function standDownSurplusSentries(world: WorldState, colony: ColonyRecord): void {
+  if (world.simVersion < SIM_VERSION_V47_SENTRY_STAND_DOWN) return;
+  if (colony.rallyPoint != null) return;
+  if (colony.alarmActive === true) return;
+  if (world.spiderPriorityColonyId === colony.colonyId) return;
+  const ants = world.ants;
+  // One spare fighter is kept: the allocation wobbles by ±1 as the nurse carve and
+  // worker count move, and releasing on every dip would swap sentries out and back.
+  let surplus = -colony.computedAllocation.fight - 1;
+  for (let i = 0; i < colony.workers.length; i++) {
+    const id = colony.workers[i]!;
+    if (ants.alive[id] === 1 && ants.task[id] === AntTask.Fighting) surplus += 1;
+  }
+  // Highest id first: pick the largest remaining holder each round (surplus is
+  // small and only non-zero after a war ratio eases).
+  let below = Number.POSITIVE_INFINITY;
+  while (surplus > 0) {
+    let pick = -1;
+    for (let i = 0; i < colony.workers.length; i++) {
+      const id = colony.workers[i]!;
+      if (id >= below || id <= pick) continue;
+      if (ants.alive[id] !== 1 || ants.task[id] !== AntTask.Fighting) continue;
+      if (ants.zone[id] !== Zone.Surface) continue;
+      if (ants.subTask[id] !== FightingSubState.Holding || ants.targetPosX[id] !== -1) continue;
+      pick = id;
+    }
+    if (pick === -1) return;
+    ants.task[pick] = AntTask.Idle;
+    ants.subTask[pick] = 0;
+    below = pick;
     surplus -= 1;
   }
 }

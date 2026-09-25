@@ -29,6 +29,7 @@ const PUBLIC_FUNCTIONS = [
   'releaseExcessNurses', // V40 (#299) — step-8 excess-nurse release consumed by tick.ts
   'releaseSurplusFightersBelowFloor', // V40 (#299) — step-8 small-colony fighter stand-down consumed by tick.ts
   'sentryPassesThroughFriends', // V45 (#327) — occupancy pass-through rule, pinned by its unit test
+  'standDownSurplusSentries', // V47 (#332) — step-8 surplus-sentry stand-down consumed by tick.ts
   'tickPheromoneDeposit',
   'tickSearchLeash',
   'unpackStepDx',
@@ -43,7 +44,7 @@ describe('ant-system barrel public API (#212)', () => {
     });
   }
 
-  it('exports EXACTLY the 25 public functions (no accidental widening or narrowing)', () => {
+  it('exports EXACTLY the 26 public functions (no accidental widening or narrowing)', () => {
     const exportedFns = Object.keys(barrel)
       .filter((k) => typeof (barrel as Record<string, unknown>)[k] === 'function')
       .sort();

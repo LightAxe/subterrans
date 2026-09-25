@@ -35,6 +35,7 @@ export {
   pickInvaderUndergroundStep,
   releaseSurplusFightersBelowFloor,
   sentryPassesThroughFriends,
+  standDownSurplusSentries,
 } from './ant-combat-targeting.js';
 export { tickAntMovement } from './ant-movement.js';
 export { tickIdleReserveAndFlee } from './idle-reserve.js';
