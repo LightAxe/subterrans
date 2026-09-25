@@ -17,6 +17,8 @@ import {
   SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH,
   SIM_VERSION_V41_DEATH_CHOKEPOINT,
   SIM_VERSION_V42_COLONY_ALARM,
+  SIM_VERSION_V48_SENTRY_WALK_HOME,
+  SIM_VERSION_V49_ALARM_MUSTER,
 } from '../types.js';
 import type { WorldState } from '../types.js';
 import { pickOpenEntranceAtColumn, type NestEntrance } from '../colony/entrance.js';
@@ -40,6 +42,7 @@ import { initAnt, pushRecentTile } from './ant-store.js';
 import { killAnt } from '../ant-death.js';
 import { colonyForageBackpressure } from '../colony/colony-system.js';
 import { tickIdleReserveAndFlee } from './idle-reserve.js';
+import { tickExcursionBoundary } from './ant-system.js';
 import { tickAntMovement } from './ant-movement.js';
 import { createDigFlowFields } from '../dig-system.js';
 import { Rng } from '../rng.js';
@@ -2222,4 +2225,129 @@ describe('C1 (V42) — SetColonyAlarm command', () => {
     expect(dst.colonies[PLAYER_COLONY_ID]!.alarmActive).toBe(true);
     expect(dst.colonies[ENEMY_COLONY_ID]!.alarmActive).toBe(false);
   });
+});
+
+// ---------------------------------------------------------------------------
+describe('V49 (#322) — the alarm musters civilians home under a full camp', () => {
+  /** A spider-free scenario world whose only open entrance is camped: danger at
+   *  8× the flee threshold on it and its 8 neighbours, zero elsewhere near home. */
+  function campedWorld(simVersion: number): { world: WorldState; ent: NestEntrance } {
+    const world = createScenario(SEED);
+    world.spider = null;
+    world.simVersion = simVersion;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    seedDanger(world, PLAYER_COLONY_ID, ent.surfaceTileX, ent.surfaceTileY, 30, 0);
+    seedDanger(world, PLAYER_COLONY_ID, ent.surfaceTileX, ent.surfaceTileY, 1, FLEE_THRESHOLD * 8);
+    world.colonies[PLAYER_COLONY_ID]!.alarmActive = true;
+    return { world, ent };
+  }
+
+  function returningForager(world: WorldState, x: number, y: number): number {
+    const id = spawnWorker(world, PLAYER_COLONY_ID, x, y, AntTask.Foraging);
+    world.ants.subTask[id] = ForagingSubState.ReturningToNest;
+    return id;
+  }
+
+  it('a homebound forager far out on a quiet tile walks home instead of freezing (V48 froze it)', () => {
+    for (const [version, frozen] of [
+      [SIM_VERSION_V48_SENTRY_WALK_HOME, true],
+      [SIM_VERSION_V49_ALARM_MUSTER, false],
+    ] as const) {
+      const { world, ent } = campedWorld(version);
+      const id = returningForager(world, ent.surfaceTileX + 20, ent.surfaceTileY);
+      tickIdleReserveAndFlee(world);
+      expect([version, world.ants.fleeShelterUntilTick[id]! > 0]).toEqual([version, frozen]);
+    }
+  });
+
+  it('at the edge of the danger (its own tile reads it) it holds and waits', () => {
+    const { world, ent } = campedWorld(SIM_VERSION_V49_ALARM_MUSTER);
+    // 20 tiles out, clear of the doorstep band, on a tile that reads danger.
+    const x = ent.surfaceTileX + 20;
+    seedDanger(world, PLAYER_COLONY_ID, x, ent.surfaceTileY, 0, FLEE_THRESHOLD);
+    const id = returningForager(world, x, ent.surfaceTileY);
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0);
+  });
+
+  it('a held forager whose tile goes quiet is released under the alarm from V49 (re-armed at V48)', () => {
+    for (const [version, held] of [
+      [SIM_VERSION_V48_SENTRY_WALK_HOME, true],
+      [SIM_VERSION_V49_ALARM_MUSTER, false],
+    ] as const) {
+      const { world, ent } = campedWorld(version);
+      const id = returningForager(world, ent.surfaceTileX + 20, ent.surfaceTileY);
+      world.ants.fleeShelterUntilTick[id] = world.tick; // held, due for re-evaluation
+      tickIdleReserveAndFlee(world);
+      expect([version, world.ants.fleeShelterUntilTick[id] > 0]).toEqual([version, held]);
+    }
+  });
+
+  it('a searching forager turns homebound at step 9c while the alarm sounds, and a returning one never breaks out', () => {
+    for (const [version, turned] of [
+      [SIM_VERSION_V48_SENTRY_WALK_HOME, false],
+      [SIM_VERSION_V49_ALARM_MUSTER, true],
+    ] as const) {
+      const { world, ent } = campedWorld(version);
+      const id = spawnWorker(
+        world,
+        PLAYER_COLONY_ID,
+        ent.surfaceTileX + 5,
+        ent.surfaceTileY,
+        AntTask.Foraging,
+      );
+      world.ants.subTask[id] = ForagingSubState.SearchingFood;
+      tickExcursionBoundary(world);
+      expect([version, world.ants.subTask[id]]).toEqual([
+        version,
+        turned ? ForagingSubState.ReturningToNest : ForagingSubState.SearchingFood,
+      ]);
+    }
+  });
+
+  it('through tick(): under a full camp every civilian ends up home, none frozen out in the open (V48 froze some)', () => {
+    for (const [version, allHome] of [
+      [SIM_VERSION_V48_SENTRY_WALK_HOME, false],
+      [SIM_VERSION_V49_ALARM_MUSTER, true],
+    ] as const) {
+      const world = createScenario(1);
+      world.simVersion = version;
+      const colony = world.colonies[PLAYER_COLONY_ID]!;
+      for (let t = 0; t < 800; t++) tick(world, []);
+      colony.alarmActive = true;
+      const ent = openEntrance(world, PLAYER_COLONY_ID);
+      for (let t = 0; t < 600; t++) {
+        seedDanger(
+          world,
+          PLAYER_COLONY_ID,
+          ent.surfaceTileX,
+          ent.surfaceTileY,
+          1,
+          FLEE_THRESHOLD * 8,
+        );
+        tick(world, []);
+      }
+      const outFar = colony.workers.filter(
+        (id) =>
+          world.ants.alive[id] === 1 &&
+          world.ants.zone[id] === Zone.Surface &&
+          (world.ants.task[id] === AntTask.Foraging || world.ants.task[id] === AntTask.Idle) &&
+          Math.abs((world.ants.posX[id]! >> FP_SHIFT) - ent.surfaceTileX) +
+            Math.abs((world.ants.posY[id]! >> FP_SHIFT) - ent.surfaceTileY) >
+            FLEE_HOMEBOUND_PUSH_THROUGH_TILES,
+      ).length;
+      expect([version, outFar === 0]).toEqual([version, allHome]);
+      if (allHome) {
+        // Home means underground: none left on the entrance tile, turned round to
+        // search again instead of going in.
+        const onSurface = colony.workers.filter(
+          (id) =>
+            world.ants.alive[id] === 1 &&
+            world.ants.zone[id] === Zone.Surface &&
+            (world.ants.task[id] === AntTask.Foraging || world.ants.task[id] === AntTask.Idle),
+        ).length;
+        expect(onSurface).toBe(0);
+      }
+    }
+  }, 30_000);
 });

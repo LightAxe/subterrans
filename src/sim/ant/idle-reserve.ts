@@ -28,6 +28,7 @@ import {
   SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
   SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH,
   SIM_VERSION_V42_COLONY_ALARM,
+  SIM_VERSION_V49_ALARM_MUSTER,
 } from '../types.js';
 import { isInChamberFootprint, type ColonyId, type ColonyRecord } from '../colony/colony-store.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
@@ -218,7 +219,10 @@ function releaseOnLocalAllClear(
   // never released by local quiet while it is sounding. The doorstep push is
   // deliberately NOT suppressed at the call sites: finishing the last step
   // through an enterable door IS going inside, which is what the alarm wants.
-  if (alarmed) return false;
+  // #322 (V49) — but that froze carriers far from home for the whole alarm
+  // under a full camp; from V49 local quiet releases them again, and they walk
+  // home to wait at the edge of the danger (see the V49 note in types.ts).
+  if (alarmed && world.simVersion < SIM_VERSION_V49_ALARM_MUSTER) return false;
   const danger = dangerGrid !== undefined ? phGet(dangerGrid, tileX, tileY) : 0;
   return danger < FLEE_THRESHOLD;
 }
@@ -504,6 +508,8 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
     // safe; the straight-line path to it is not checked (pre-existing V34
     // behaviour — see the V42 note in types.ts).
     const alarmed = world.simVersion >= SIM_VERSION_V42_COLONY_ALARM && colony.alarmActive === true;
+    // #322 (V49) — the alarm musters civilians home instead of freezing them.
+    const mustering = alarmed && world.simVersion >= SIM_VERSION_V49_ALARM_MUSTER;
     const workers = colony.workers;
 
     for (let w = 0; w < workers.length; w++) {
@@ -592,7 +598,14 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
           // (BFS vs straight-line) — see its doc.
           if (setFleeTarget(world, id, entrances, tileX, tileY, dangerGrid)) {
             ants.fleeShelterUntilTick[id] = 0; // dashing toward the safe entrance
-          } else if (isHomeboundForager && !doorstepPush) {
+          } else if (
+            isHomeboundForager &&
+            !doorstepPush &&
+            // #322 (V49): under the alarm, hold only where this tile reads real
+            // danger; elsewhere walk home on normal routing and wait at the edge
+            // of the danger by the entrance.
+            !(mustering && danger < FLEE_THRESHOLD)
+          ) {
             // No safe entrance, but this forager is heading HOME (carrying food /
             // ReturningToNest) and is still far from any of its own doors.
             // Normal movement would route it to the nearest OPEN — possibly

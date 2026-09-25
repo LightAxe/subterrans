@@ -30,7 +30,7 @@ import { phGet, pheromoneGridKey, type PheromoneGrid } from '../pheromone/pherom
 import { Rng } from '../rng.js';
 import { SURFACE_GOAL_UNREACHED, surfaceGoalDistance } from '../surface-routing.js';
 import { Zone } from '../terrain.js';
-import type { WorldState } from '../types.js';
+import { SIM_VERSION_V49_ALARM_MUSTER, type WorldState } from '../types.js';
 import { ALT_DX, ALT_DY, type CardinalStep } from './ant-motion.js';
 import { clearRecentTiles, isRecentTile } from './ant-store.js';
 
@@ -989,6 +989,23 @@ export function tickExcursionBoundary(world: WorldState): void {
     const colonyId = ants.colonyId[id]!;
     const colony = world.colonies[colonyId];
     if (!colony || !colony.entrances || colony.entrances.length === 0) continue;
+
+    // #322 (V49) — while the colony alarm sounds, foragers muster home: a
+    // returning forager never breaks out to search, and a searching one turns
+    // homebound at once.
+    if (world.simVersion >= SIM_VERSION_V49_ALARM_MUSTER && colony.alarmActive === true) {
+      if (sub === ForagingSubState.SearchingFood) {
+        ants.subTask[id] = ForagingSubState.ReturningToNest;
+        ants.searchHeadingX[id] = 0;
+        ants.searchHeadingY[id] = 0;
+        ants.searchHeadingTicks[id] = 0;
+        ants.searchPrevTileX[id] = -1;
+        ants.searchPrevTileY[id] = -1;
+        ants.searchPauseTicks[id] = 0;
+        clearRecentTiles(ants, id);
+      }
+      continue;
+    }
 
     const tileX = ants.posX[id]! >> FP_SHIFT;
     const tileY = ants.posY[id]! >> FP_SHIFT;

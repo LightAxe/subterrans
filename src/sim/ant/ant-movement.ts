@@ -47,6 +47,7 @@ import {
   SIM_VERSION_V36_RISK_AWARE_FORAGING,
   SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
   type WorldState,
+  SIM_VERSION_V49_ALARM_MUSTER,
 } from '../types.js';
 import {
   pickInvaderUndergroundStep,
@@ -1419,7 +1420,16 @@ export function tickAntMovement(
       // surface, flips back to SearchingFood, bumps its wave counter (capped
       // at SEARCH_LEASH_MAX_WAVE), and clears the heading so the next
       // excursion re-derives an outward direction from the entrance.
-      if (task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.ReturningToNest) {
+      // #322 (V49): not under the colony alarm — a returning forager then goes in
+      // (descent below) instead of starting a new excursion from the entrance.
+      if (
+        task === AntTask.Foraging &&
+        ants.subTask[id] === ForagingSubState.ReturningToNest &&
+        !(
+          world.simVersion >= SIM_VERSION_V49_ALARM_MUSTER &&
+          world.colonies[ants.colonyId[id]!]?.alarmActive === true
+        )
+      ) {
         const tileXR = posX >> FP_SHIFT;
         const tileYR = posY >> FP_SHIFT;
         const colonyIdR = ants.colonyId[id]!;
@@ -1462,6 +1472,12 @@ export function tickAntMovement(
         task === AntTask.Nursing ||
         task === AntTask.Fighting ||
         (task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.CarryingFood) ||
+        // #322 (V49) — under the colony alarm a returning (empty) forager goes in
+        // too, instead of turning round at the entrance to search again.
+        (task === AntTask.Foraging &&
+          ants.subTask[id] === ForagingSubState.ReturningToNest &&
+          world.simVersion >= SIM_VERSION_V49_ALARM_MUSTER &&
+          world.colonies[ants.colonyId[id]!]?.alarmActive === true) ||
         // #209 PR A (V34) — a dashing fleeing ant descends its own open entrance
         // regardless of task/subtask (fixes both Idle-can't-descend and
         // empty-forager-can't-descend for the flee path). The own-open-entrance
