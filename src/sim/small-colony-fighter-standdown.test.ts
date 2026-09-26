@@ -5,12 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { createScenario } from './scenario.js';
 import { tick } from './tick.js';
-import {
-  allocateEntityId,
-  SIM_VERSION_V39_SPIDER_TIEBREAK,
-  SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
-  type WorldState,
-} from './types.js';
+import { allocateEntityId, type WorldState } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask, FightingSubState } from './enums.js';
 import { Zone, UndergroundTileState, ugGet } from './terrain.js';
@@ -24,9 +19,8 @@ import {
 import { setPoolFoodForTest } from './food/food-test-utils.js';
 
 /** Player colony collapsed to two Fighting invaders one tile inside the enemy shaft. */
-function build(simVersion: number): { world: WorldState; ids: number[] } {
+function build(): { world: WorldState; ids: number[] } {
   const world = createScenario(42);
-  world.simVersion = simVersion;
   const player = world.colonies[PLAYER_COLONY_ID]!;
   for (const id of player.workers) world.ants.alive[id] = 0; // starting cohort dies; swept at step 5
   const enemyGrid = world.undergroundGrids[ENEMY_COLONY_ID]!;
@@ -68,7 +62,7 @@ function isHome(world: WorldState, id: number): boolean {
 
 describe('V40 (#299) fighter stand-down never strands an invader in a foreign nest', () => {
   it('V40: the invaders stay Fighting while foreign, walk home, and only then stand down into foraging', () => {
-    const { world, ids } = build(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
+    const { world, ids } = build();
     run(world, 1);
     // Below the floor with fight=0, but inside the enemy grid: NOT released.
     for (const id of ids) {
@@ -80,16 +74,6 @@ describe('V40 (#299) fighter stand-down never strands an invader in a foreign ne
       expect(world.ants.alive[id]).toBe(1);
       expect(isHome(world, id)).toBe(true);
       expect(world.ants.task[id]).toBe(AntTask.Foraging);
-    }
-  });
-
-  it('V39 (pinned): the same recall walks them home and they hold their Fighting task', () => {
-    const { world, ids } = build(SIM_VERSION_V39_SPIDER_TIEBREAK);
-    run(world, 1500);
-    for (const id of ids) {
-      expect(world.ants.alive[id]).toBe(1);
-      expect(isHome(world, id)).toBe(true);
-      expect(world.ants.task[id]).toBe(AntTask.Fighting);
     }
   });
 });

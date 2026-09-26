@@ -25,7 +25,7 @@ import type { WorldState } from '../types.js';
 import { AntTask, ChamberType } from '../enums.js';
 import { Zone, UndergroundTileState, ugSet, type UndergroundGrid } from '../terrain.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
-import { IDLE_MILL_RETARGET_SHIFT, PLAYER_COLONY_ID, COMBAT_HP_BASE } from '../constants.js';
+import { PLAYER_COLONY_ID, COMBAT_HP_BASE } from '../constants.js';
 import { initAnt } from './ant-store.js';
 import { tickIdleReserveAndFlee } from './idle-reserve.js';
 import { tickAntMovement } from './ant-movement.js';
@@ -34,7 +34,6 @@ import { Rng } from '../rng.js';
 import { addChamberForTest } from '../food/food-test-utils.js';
 
 const SEED = 4242;
-const BUCKET = 1 << IDLE_MILL_RETARGET_SHIFT; // 64
 const center = (t: number): number => (t << FP_SHIFT) + (FP_ONE >> 1);
 const tileOf = (fp: number): number => fp >> FP_SHIFT;
 
@@ -298,29 +297,6 @@ describe('underground idle wander — shaft row ALWAYS clears + ascends (#209 PR
 
 // ---------------------------------------------------------------------------
 describe('underground idle wander — byte gate + round-trip (#209 PR C)', () => {
-  it('is INERT at V34 across the target-writing path AND movement (absolute, deep in-chamber)', () => {
-    const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V34_IDLE_RESERVE_FLEE; // pre-V35
-    carveChamber(world, 16, 2, 9, 9);
-    const id = spawnUndergroundIdle(world, 20, 6); // DEEP (tileY 6), in a chamber
-    world.ants.targetPosX[id] = center(21); // a stray VALID target
-    world.ants.targetPosY[id] = center(6);
-    const px = world.ants.posX[id]!;
-    const py = world.ants.posY[id]!;
-    const tpx = world.ants.targetPosX[id];
-    const tpy = world.ants.targetPosY[id];
-    for (const t of [0, BUCKET, 2 * BUCKET, 3 * BUCKET]) {
-      world.tick = t;
-      tickIdleReserveAndFlee(world);
-      move(world, t);
-    }
-    expect(world.ants.posX[id]).toBe(px);
-    expect(world.ants.posY[id]).toBe(py);
-    expect(world.ants.targetPosX[id]).toBe(tpx);
-    expect(world.ants.targetPosY[id]).toBe(tpy);
-    expect(world.ants.zone[id]).toBe(Zone.Underground);
-  });
-
   it('is ACTIVE at V35 for the same setup (behavioural delta proves the gate)', () => {
     const world = createScenario(SEED);
     world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;

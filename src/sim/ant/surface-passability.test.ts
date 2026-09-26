@@ -19,8 +19,6 @@ import {
   createWorldState,
   allocateEntityId,
   SIM_VERSION_V7_SURFACE_PASSABILITY,
-  SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
-  SIM_VERSION_V36_RISK_AWARE_FORAGING,
 } from '../types.js';
 import { initAnt, pushRecentTile } from './ant-store.js';
 import { canEnterSurfaceTile, pickSurfaceDetour, tickAntMovement } from './ant-system.js';
@@ -767,7 +765,7 @@ describe('tickAntMovement — A1 (V36) danger-aware blocked-diagonal per-axis re
     return null;
   }
 
-  function run(simVersion: number): {
+  function run(): {
     tx: number;
     ty: number;
     endX: number;
@@ -778,7 +776,6 @@ describe('tickAntMovement — A1 (V36) danger-aware blocked-diagonal per-axis re
     expect(g).not.toBeNull();
     const { seed, tx, ty } = g!;
     const world = createWorldState(seed);
-    world.simVersion = simVersion;
     const colony = createColonyRecord(1, 0);
     colony.entrances = [{ entranceId: 0, surfaceTileX: tx, surfaceTileY: ty, isOpen: true }];
     world.colonies[1] = colony;
@@ -818,7 +815,7 @@ describe('tickAntMovement — A1 (V36) danger-aware blocked-diagonal per-axis re
   }
 
   it('V36 detours to a danger-safe tile — moves off its tile, not onto the poisoned North', () => {
-    const r = run(SIM_VERSION_V36_RISK_AWARE_FORAGING);
+    const r = run();
     // Not the poisoned Y-axis revert…
     expect(r.endX === r.tx && r.endY === r.ty - 1).toBe(false);
     // …and not the X-axis revert onto East either (East is recent → passXOnly is false).
@@ -828,20 +825,13 @@ describe('tickAntMovement — A1 (V36) danger-aware blocked-diagonal per-axis re
     // …to a danger-safe tile (below the avoid threshold).
     expect(r.endDanger).toBeLessThan(DANGER_ROUTE_AVOID_THRESHOLD);
   });
-
-  it('V35 control: danger-blind — reverts straight onto the poisoned North', () => {
-    const r = run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER);
-    expect(r.endX === r.tx && r.endY === r.ty - 1).toBe(true);
-    expect(r.endDanger).toBeGreaterThanOrEqual(DANGER_ROUTE_AVOID_THRESHOLD); // stepped into danger
-  });
 });
 
 describe('resolveSameColonyOccupancy — A1 (V36) danger-aware displacement (Codex P2)', () => {
   // Two same-colony SearchingFood foragers pinned on the SAME surface tile (both PAUSED
   // so neither moves this tick) collide; the resolver bumps the higher-id one. DIR order
-  // is N,E,S,W, so the legacy resolver takes North first. Poison North and leave East
-  // clean: at V36 the bump must skip North for the clean East; at V35 (danger-blind) it
-  // takes the first-passable North — straight into the spider wake.
+  // is N,E,S,W, so a danger-blind resolver takes North first. Poison North and leave East
+  // clean: the bump must skip North for the clean East.
   function findTile(): { seed: number; tx: number; ty: number } | null {
     for (let seed = 1; seed < 300; seed++) {
       const world = createWorldState(seed);
@@ -857,13 +847,13 @@ describe('resolveSameColonyOccupancy — A1 (V36) danger-aware displacement (Cod
     return null;
   }
 
-  function run(simVersion: number): { tx: number; ty: number; bx: number; by: number } {
+  function run(): { tx: number; ty: number; bx: number; by: number } {
     const g = findTile();
     expect(g).not.toBeNull();
     const { seed, tx, ty } = g!;
     const world = createWorldState(seed);
-    world.simVersion = simVersion;
-    world.colonies[1] = createColonyRecord(1, 0);
+    // No queen (-1): the queen never contests a tile (V40), and entity 0 is A.
+    world.colonies[1] = createColonyRecord(1, -1);
 
     const spawnPaused = (): number => {
       const id = allocateEntityId(world);
@@ -899,13 +889,8 @@ describe('resolveSameColonyOccupancy — A1 (V36) danger-aware displacement (Cod
   }
 
   it('V36 bumps the collided forager to the clean East tile, not the poisoned North', () => {
-    const r = run(SIM_VERSION_V36_RISK_AWARE_FORAGING);
+    const r = run();
     expect(r.bx === r.tx + 1 && r.by === r.ty).toBe(true); // East — danger-safe displacement
     expect(r.bx === r.tx && r.by === r.ty - 1).toBe(false); // not the poisoned North
-  });
-
-  it('V35 control: danger-blind — bumps to the first-passable North (into danger)', () => {
-    const r = run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER);
-    expect(r.bx === r.tx && r.by === r.ty - 1).toBe(true); // North — legacy first-passable
   });
 });

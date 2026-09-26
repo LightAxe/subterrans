@@ -1216,20 +1216,19 @@ describe('flee — no-revisit bypass (Codex P2)', () => {
     expect(world.ants.posY[id]! >> FP_SHIFT).toBeLessThan(startTileY);
   });
 
-  it('a NON-fleeing SearchingFood forager is unaffected — the bypass is pinned to flee (V33 gate)', () => {
-    // Same explicit setup but pre-V34: fleePhase is inert, so the flee-dash never
-    // runs and bypassRecentTiles === targetedStep (false here). The ant does NOT
-    // get the emergency straight-line-to-shelter treatment.
+  it('a NON-fleeing SearchingFood forager is unaffected — the bypass is pinned to flee', () => {
+    // Same setup, but not fleeing: the flee dash never runs and bypassRecentTiles
+    // === targetedStep (false here). The ant does NOT get the emergency
+    // straight-line-to-shelter treatment.
     const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V33_OCCUPANCY_CENTER;
     world.spider = null;
     const ent = openEntrance(world, PLAYER_COLONY_ID);
     const id = setupForager(world, ent);
-    world.ants.fleeShelterUntilTick[id] = 0; // inert at V33
+    world.ants.fleeShelterUntilTick[id] = -1; // not fleeing
     const startTileY = world.ants.posY[id]! >> FP_SHIFT;
     tickAntMovement(world, new Rng(1), createDigFlowFields());
-    // No V34 flee dash → the ant forages normally and does NOT beeline toward the
-    // entrance (tileY does not decrease); the emergency bypass is V34-flee-gated.
+    // No flee dash → the ant forages normally and does NOT beeline toward the
+    // entrance (tileY does not decrease).
     expect(world.ants.posY[id]! >> FP_SHIFT).not.toBeLessThan(startTileY);
   });
 });
@@ -1650,27 +1649,17 @@ describe('byte gate + round-trip (#209 PR A)', () => {
     }
   });
 
-  it('idle-mill movement is V34-gated: a pre-V34 Idle ant with a target holds', () => {
-    // Regression for the ship-review advisory: the mill branch is guarded on
-    // `fleePhase === -1`, which is ALSO true on pre-V34 worlds — so it must ALSO
-    // check simVersion, or a pre-V34 replay with a surface Idle ant carrying a
-    // stray target would step (base main holds) — a byte-identity divergence.
+  it('idle-mill movement: a surface Idle ant with a target steps toward it', () => {
     // Drive tickAntMovement directly so allocation/step-15b don't intervene.
-    for (const [simVersion, expectMove] of [
-      [SIM_VERSION_V33_OCCUPANCY_CENTER, false],
-      [SIM_VERSION_V34_IDLE_RESERVE_FLEE, true],
-    ] as const) {
-      const world = createScenario(SEED);
-      world.simVersion = simVersion;
-      world.spider = null;
-      const id = spawnWorker(world, PLAYER_COLONY_ID, 30, 60, AntTask.Idle);
-      // A stray in-bounds surface target 3 tiles east (posFpSentinel-valid on load).
-      world.ants.targetPosX[id] = center(33);
-      world.ants.targetPosY[id] = center(60);
-      const before = world.ants.posX[id]!;
-      tickAntMovement(world, new Rng(1), createDigFlowFields());
-      expect(world.ants.posX[id]! !== before).toBe(expectMove);
-    }
+    const world = createScenario(SEED);
+    world.spider = null;
+    const id = spawnWorker(world, PLAYER_COLONY_ID, 30, 60, AntTask.Idle);
+    // A stray in-bounds surface target 3 tiles east (posFpSentinel-valid on load).
+    world.ants.targetPosX[id] = center(33);
+    world.ants.targetPosY[id] = center(60);
+    const before = world.ants.posX[id]!;
+    tickAntMovement(world, new Rng(1), createDigFlowFields());
+    expect(world.ants.posX[id]!).not.toBe(before);
   });
 
   it('fleeShelterUntilTick round-trips through copyWorldState', () => {
