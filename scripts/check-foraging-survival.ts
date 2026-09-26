@@ -41,6 +41,7 @@ const { createScenario } = await import('../src/sim/scenario.js');
 const { tick } = await import('../src/sim/tick.js');
 const { PLAYER_COLONY_ID, ENEMY_COLONY_ID } = await import('../src/sim/constants.js');
 const { isAlive } = await import('../src/sim/ant/ant-store.js');
+const { colonyFoodTotal } = await import('../src/sim/food/food-api.js');
 
 function parseArg(name: string, fallback: number): number {
   const prefix = `--${name}=`;
@@ -70,14 +71,16 @@ function runSeed(seed: number): SeedResult {
   const world = createScenario(seed);
   let playerFirst: number | null = null;
   let enemyFirst: number | null = null;
-  let prevPlayer = world.colonies[PLAYER_COLONY_ID]!.foodStored;
-  let prevEnemy = world.colonies[ENEMY_COLONY_ID]!.foodStored;
+  // #290 PR 1 — track the colony TOTAL (pool + FoodStorage chambers). Pre-fix
+  // this read only the entrance pool, so a first deposit into a chamber was missed.
+  let prevPlayer = colonyFoodTotal(world, world.colonies[PLAYER_COLONY_ID]!);
+  let prevEnemy = colonyFoodTotal(world, world.colonies[ENEMY_COLONY_ID]!);
 
   for (let t = 0; t < TICKS; t++) {
     const cmds = world.commandQueue.splice(0);
     tick(world, cmds);
-    const pf = world.colonies[PLAYER_COLONY_ID]!.foodStored;
-    const ef = world.colonies[ENEMY_COLONY_ID]!.foodStored;
+    const pf = colonyFoodTotal(world, world.colonies[PLAYER_COLONY_ID]!);
+    const ef = colonyFoodTotal(world, world.colonies[ENEMY_COLONY_ID]!);
     if (playerFirst === null && pf > prevPlayer) playerFirst = t;
     if (enemyFirst === null && ef > prevEnemy) enemyFirst = t;
     prevPlayer = pf;
@@ -92,8 +95,8 @@ function runSeed(seed: number): SeedResult {
     enemyAlive: isAlive(world.ants, enemyColony.queenEntityId),
     playerFirstDeposit: playerFirst,
     enemyFirstDeposit: enemyFirst,
-    playerFoodStored: playerColony.foodStored,
-    enemyFoodStored: enemyColony.foodStored,
+    playerFoodStored: colonyFoodTotal(world, playerColony),
+    enemyFoodStored: colonyFoodTotal(world, enemyColony),
   };
 }
 

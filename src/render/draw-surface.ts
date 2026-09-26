@@ -58,7 +58,7 @@ import {
   ANT_DOT_SCREEN_PX,
 } from './camera-adapter.js';
 import { SPIDER_SPRITE_HEIGHT, SPIDER_SPRITE_WIDTH } from './ant-sprite-layer.js';
-import { SPIDER_HUNGER_MAX_TICKS, SPIDER_HP_FULL } from '../sim/constants.js';
+import { SPIDER_HUNGER_THRESHOLD_TICKS, SPIDER_HP_FULL } from '../sim/constants.js';
 import {
   pileAmountFp,
   pileCount,
@@ -488,8 +488,11 @@ export function drawSurfaceEntities(
       spiderWorldY > rect.top - SPIDER_SPRITE_HEIGHT &&
       spiderWorldY < rect.bottom + SPIDER_SPRITE_HEIGHT
     ) {
+      // D9 (#290): the ring fills over the sim's REAL hungry threshold
+      // (SPIDER_HUNGER_THRESHOLD_TICKS, spider.ts), so it saturates exactly when
+      // the spider turns Hungry and starts hunting again.
       const hungerFraction = Math.min(
-        curr.spider.hungerTicks / SPIDER_HUNGER_MAX_TICKS[tierIndex(curr.difficulty)],
+        curr.spider.hungerTicks / SPIDER_HUNGER_THRESHOLD_TICKS[tierIndex(curr.difficulty)],
         1,
       );
       // S6: linear tint gradient pale (#ffeecc) → deep red (#cc2020) by hungerFraction.

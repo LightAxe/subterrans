@@ -14,7 +14,7 @@
 //     could forage or dig). A separate brood indicator can be added later if
 //     the information is worth restoring.
 //   - Food stored = "current/capacity" in human units (09 HUD clarity pass).
-//     current  = foodStored   >> FP_SHIFT
+//     current  = colonyFoodTotal(world, colony) >> FP_SHIFT (pool + FoodStorage chambers)
 //     capacity = colonyFoodCapacity(colony) >> FP_SHIFT
 //     Capacity grows as FoodStorage chambers complete, so the label doubles
 //     as feedback for "did my new chamber take effect yet?".

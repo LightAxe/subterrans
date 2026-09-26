@@ -55,6 +55,7 @@ import {
   PLAYER_COLONY_ID,
 } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
+import { ChamberType } from '../sim/enums.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import {
   validateSurfaceConnectivity,
@@ -2121,12 +2122,32 @@ export interface SaveInfo {
   tick: number;
   /** Player colony's living worker count, or 0 when the field is missing. */
   playerWorkers: number;
-  /** Player colony's stored-food count in HUMAN units (post `>> FP_SHIFT`). */
+  /** Player colony's TOTAL stored food (entrance pool + every FoodStorage
+   *  chamber — the same aggregate the HUD shows) in HUMAN units (post
+   *  `>> FP_SHIFT`). */
   playerFoodStored: number;
   /** Wall-clock timestamp (Date.now() epoch ms) when the envelope was last
    *  written. 0 if the field is absent from a pre-issue-#115 envelope —
    *  callers should treat 0 as "unknown" rather than "1970-01-01." */
   savedAtMs: number;
+}
+
+/** A non-negative finite number from a raw snapshot field, else 0. */
+function savedFoodFp(raw: unknown): number {
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : 0;
+}
+
+/** Sum of FoodStorage chambers' stock in a raw snapshot `chambers` array (0 if malformed). */
+function savedChamberFoodFp(raw: unknown): number {
+  if (!Array.isArray(raw)) return 0;
+  let total = 0;
+  for (const ch of raw as unknown[]) {
+    if (ch === null || typeof ch !== 'object') continue;
+    const rec = ch as { chamberType?: unknown; foodStored?: unknown };
+    if (rec.chamberType !== ChamberType.FoodStorage) continue;
+    total += savedFoodFp(rec.foodStored);
+  }
+  return total;
 }
 
 /** Issue #115 — extract the dialog's summary fields without a full
@@ -2156,7 +2177,10 @@ export async function getSaveInfo(): Promise<SaveInfo | null> {
   const snapshot = file.snapshot as unknown;
   if (snapshot === null || typeof snapshot !== 'object') return null;
   const colonies = (snapshot as { colonies?: unknown }).colonies as
-    | Record<string, { foodStored?: unknown; workerCount?: unknown } | undefined>
+    | Record<
+        string,
+        { foodStored?: unknown; workerCount?: unknown; chambers?: unknown } | undefined
+      >
     | undefined;
   const playerKey = String(PLAYER_COLONY_ID);
   // colonies may be undefined / null / a non-object on a malformed envelope;
@@ -2165,11 +2189,12 @@ export async function getSaveInfo(): Promise<SaveInfo | null> {
     colonies !== undefined && colonies !== null && typeof colonies === 'object'
       ? colonies[playerKey]
       : undefined;
-  // foodStored is fixed-point; convert to whole-food units for display.
-  // Right-shift on a non-number short-circuits cleanly via the ?? fallback.
-  const foodFpRaw = playerColony?.foodStored;
-  const foodFp =
-    typeof foodFpRaw === 'number' && Number.isFinite(foodFpRaw) && foodFpRaw >= 0 ? foodFpRaw : 0;
+  // #290 PR 1 — report the colony's TOTAL stored food (entrance pool + every
+  // FoodStorage chamber's stock), the same aggregate the HUD shows; pre-fix the
+  // dialog showed only the entrance pool. Read straight off the serialized
+  // snapshot (no deserialize), so malformed fields count as 0. Values are
+  // fixed-point; converted to whole-food units below.
+  const foodFp = savedFoodFp(playerColony?.foodStored) + savedChamberFoodFp(playerColony?.chambers);
   const workerCountRaw = playerColony?.workerCount;
   const playerWorkers =
     typeof workerCountRaw === 'number' && Number.isFinite(workerCountRaw) && workerCountRaw >= 0

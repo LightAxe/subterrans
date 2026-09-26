@@ -1,6 +1,8 @@
 // ant-store.ts — PRD §1 Structure-of-Arrays (SoA) ant component storage.
 //
-// 22 parallel TypedArray fields indexed by EntityId — one slot per entity.
+// Parallel TypedArray fields indexed by EntityId — one slot per entity (the full
+// list is the AntComponents interface below; the layout table here covers the
+// original PRD fields and early additions, not every later one).
 // Mostly Int32Array; Phase 09.1 Chunk 0 adds currentGridColonyId as Uint8Array
 // (grid-of-occupancy byte, see field JSDoc below).
 // All arrays are allocated once in createAntComponents and NEVER reallocated
@@ -13,7 +15,10 @@
 //   subTask              — sub-state discriminant (ForagingSubState, NursingSubState, etc.)
 //   speed                — movement speed in fixed-point units per tick
 //   foodCarrying         — food units currently carried (fixed-point)
-//   starvationTimer      — ticks since last fed (0 = not starving)
+//   starvationTimer      — larva starvation COUNTDOWN: STARVATION_GRACE_TICKS after a
+//                          successful meal, −1 per failed meal, death at 0 (the queen
+//                          uses colony.queenStarvationTimer; a worker's value is
+//                          written at maturation but never read)
 //   age                  — ticks alive
 //   alive                — 1 = alive, 0 = dead/unused slot
 //   lifespan             — ticks until natural death (WORKER_LIFESPAN_TICKS = INT32_MAX)

@@ -968,15 +968,18 @@ export const SPIDER_FEEDING_TICKS = 600 as const;
 /**
  * S3 — Ticks between hunt cycles (Patrolling → Hunting gate).
  * 1200 ticks = 60 sim-seconds. NOT tier-scaled (RC-P0-006 — axis B scales
- * only SPIDER_HUNGER_MAX_TICKS; hunt cadence stays constant across difficulties).
+ * only the spider's hunger threshold, SPIDER_HUNGER_THRESHOLD_TICKS; hunt cadence
+ * stays constant across difficulties).
  */
 export const SPIDER_HUNT_INTERVAL_TICKS = 1200 as const;
 
 /**
- * S3 — Maximum hunger ticks before Patrolling → Rampaging transition.
- * Tier triplet [Easy, Normal, Hard]: 2700 / 1800 / 1350 ticks.
- * Only SPIDER_HUNGER_MAX_TICKS is tier-scaled (per D-33 / M6 Axis B World Pressure).
- * Constant-ordering invariant: each element must exceed SPIDER_HUNT_INTERVAL_TICKS (1200).
+ * S3 legacy — DEAD in the sim and in render. It was the pre-V23 "hunger before
+ * Rampaging" cap; the sim's real threshold is SPIDER_HUNGER_THRESHOLD_TICKS
+ * (V23, spider.ts), and the render hunger ring now divides by that too (#290 D9).
+ * Kept only because spider / spider-tiebreak / determinism tests still use it as a
+ * "well past hungry" fixture value; delete it once those tests stop importing it
+ * (#290 PR 3). Tier triplet [Easy, Normal, Hard]: 2700 / 1800 / 1350 ticks.
  */
 export const SPIDER_HUNGER_MAX_TICKS = [2700, 1800, 1350] as const;
 
