@@ -229,7 +229,10 @@ function initColony(
   colony.broodFieldDirty = false; // #235
   // #290 PR 2 — the entrance pool is a food-store record at the start column's
   // shaft top (where pool deposits happen); it starts empty.
-  createColonyPool(world, colony, startX, 0);
+  if (!createColonyPool(world, colony, startX, 0)) {
+    // Unreachable: FOOD_STORE_CAPACITY reserves a pool slot per colony.
+    throw new Error(`createScenario: food store full creating colony ${colonyId}'s pool`);
+  }
   depositIntoPool(world, colony, STARTING_FOOD); // STARTING_FOOD < BASE cap
 
   // Phase 9 playability: seed each colony with one pre-excavated open entrance
