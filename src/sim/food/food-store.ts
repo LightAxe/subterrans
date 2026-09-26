@@ -82,7 +82,8 @@ export interface FoodStore {
 }
 
 // surfacePileAt stores slot + 1 in an Int16Array, so FOOD_STORE_CAPACITY must stay
-// below 0x7fff (food-store.test.ts asserts it).
+// ≤ 32766: a compile-time tripwire in constants.ts pins it (food-store.test.ts
+// also asserts it).
 
 /** A fresh, empty store (every slot free). */
 export function createFoodStore(): FoodStore {

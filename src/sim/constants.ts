@@ -739,9 +739,20 @@ export const FOOD_STORAGE_CHAMBERS_PER_COLONY_BOUND = 672;
  * store can therefore never fill in a world the save loader accepts; the
  * "store full" refusals in PlaceChamber / checkPendingChambers are defensive.
  */
-// structural — derived; sizes the food store columns.
-export const FOOD_STORE_CAPACITY =
-  FOOD_PILE_HARD_CAP + MAX_COLONIES * (1 + FOOD_STORAGE_CHAMBERS_PER_COLONY_BOUND);
+// structural — derived; sizes the food store columns. A literal, not the
+// expression FOOD_PILE_HARD_CAP + MAX_COLONIES × (1 + FOOD_STORAGE_CHAMBERS_PER_COLONY_BOUND):
+// TypeScript cannot type-check arithmetic, so only a literal can carry the
+// compile-time bound below. `food-store.test.ts` asserts it equals that
+// expression, so an input that drifts fails the suite (never an overflow: a
+// stale literal only under-sizes the store, whose full-store refusals are safe).
+export const FOOD_STORE_CAPACITY = 1406;
+
+// Compile-time tripwire: `surfacePileAt` stores slot + 1 in an Int16Array, so the
+// capacity must stay ≤ 32766. Raising FOOD_STORE_CAPACITY fails the build here;
+// update this pin only after checking the new value is ≤ 32766 (or widening
+// `surfacePileAt`). docs/phase-4-preflight.md.
+const _FOOD_STORE_CAPACITY_FITS_INT16_TILE_INDEX: 1406 = FOOD_STORE_CAPACITY;
+void _FOOD_STORE_CAPACITY_FITS_INT16_TILE_INDEX;
 
 // Compile-time tripwires: FOOD_STORAGE_CHAMBERS_PER_COLONY_BOUND is hand-derived
 // from these values. If one changes, the build fails here — re-derive the bound
