@@ -215,6 +215,23 @@ _Avoid_: range, vision.
 HP / damage / cooldown resolution on contested tiles (ant vs ant, ant vs spider).
 _Avoid_: battle; **fight** (fight = the task / behavior-ratio term, not the resolver).
 
+**Raid / looting / hauling** (simVersion V52, #290):
+Fighters **steal food** from an enemy's FoodStorage chambers. A **raid** is
+automatic: a colony's fighters rallied on an enemy entrance go down it, and below
+ground each one **loots** (`FightingSubState.Looting`) when nothing hostile — an
+enemy worker or the queen, not brood — is within a few tiles of it by tunnel and a
+FoodStorage chamber there holds food it can reach. It takes one load from the
+chamber's **stock** and **hauls** it (`Hauling`): out of the enemy nest, home
+across the surface, down its own entrance, into its own FoodStorage chamber (or
+pool), then back to its rally point. A hostile in reach is fought first; once the
+chambers are empty the fighters go for the queen. The entrance **pool** is never
+raided. A hauler that dies drops its load (on the surface as a food pile; in the
+enemy nest into that colony's pool). Every "may this fighter loot?" rule lives in
+one predicate (`fighterMayLoot`, `src/sim/ant/ant-raid.ts`), so an explicit raid
+order would change only that.
+_Avoid_: **raid** for an AI `Probe` (a probe is a small attack, below); **plunder**,
+**pillage**, **steal order**.
+
 **Spider behavior state** (`SpiderBehaviorState`):
 The spider's state machine: `Patrolling`, `Hunting`, `Chasing`, `Striking`,
 `Feeding`, `Rampaging`, `Retreating`.
@@ -281,9 +298,10 @@ The enemy's strategic phase. Transitions: `Peacetime → WarFooting`; then
 _Avoid_: mode.
 
 **Probe / invasion**:
-The two AI operation **kinds** — `Probe` (a small raid) vs `Invasion` (a full
+The two AI operation **kinds** — `Probe` (a small attack) vs `Invasion` (a full
 committed attack); while one runs, the colony is in the corresponding AI state
-`Probing` / `Invading`.
+`Probing` / `Invading`. Both rally the AI's fighters on the player's entrance, so
+from V52 both **raid** the player's FoodStorage chambers (see **Raid**).
 _Avoid_: "attack" used alone (ambiguous); don't conflate the operation kind
 (`Probe`/`Invasion`) with the AI state (`Probing`/`Invading`).
 
