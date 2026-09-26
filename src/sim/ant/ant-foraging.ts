@@ -1082,7 +1082,9 @@ export function tickExcursionBoundary(world: WorldState): void {
           if (d < bestDist) bestDist = d;
         }
         let wave = ants.searchWave[id]!;
-        if (wave < 0) wave = 0;
+        // #322 (V49): a negative wave was parked by an alarm recall; judge the
+        // breakout by the wave it will get back. (Pre-V49 no wave is negative.)
+        if (wave < 0) wave = -wave - 1;
         if (wave > SEARCH_LEASH_MAX_WAVE) wave = SEARCH_LEASH_MAX_WAVE;
         const radius = SEARCH_LEASH_RADII[wave]!;
         if (bestDist > radius - LEASH_HYSTERESIS_TILES) continue;

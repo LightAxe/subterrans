@@ -587,35 +587,21 @@ export function tickAntMovement(
         (isHomeBoundForager || fleePhase === 0) &&
         entranceFlowFields !== undefined
       ) {
-        const colonyId = ants.colonyId[id]!;
-        const surfaceField = entranceFlowFields.surface[colonyId];
-        if (surfaceField) {
-          const tileX = posX >> FP_SHIFT;
-          const tileY = posY >> FP_SHIFT;
-          if (
-            tileX >= 0 &&
-            tileX < SURFACE_GRID_WIDTH &&
-            tileY >= 0 &&
-            tileY < SURFACE_GRID_HEIGHT
-          ) {
-            const sIdx = tileY * SURFACE_GRID_WIDTH + tileX;
-            const sDir = surfaceField[sIdx]!;
-            if (sDir === -1) {
-              // Source tile — at the entrance. Hold so the zone-transition
-              // block below promotes to Underground.
-              dx = 0;
-              dy = 0;
-              stepped = true;
-            } else if (sDir >= 0 && sDir < 4) {
-              dx = DIR_DX[sDir]!;
-              dy = DIR_DY[sDir]!;
-              stepped = true;
-            }
-            // sDir === -2 (unreachable) → fall through to straight-line below.
-            // Shouldn't happen in practice (entrance always reachable from any
-            // walkable surface tile in a connected map), but defensive.
-          }
+        const sDir = surfaceEntranceFieldDir(entranceFlowFields, ants.colonyId[id]!, posX, posY);
+        if (sDir === -1) {
+          // Source tile — at the entrance. Hold so the zone-transition
+          // block below promotes to Underground.
+          dx = 0;
+          dy = 0;
+          stepped = true;
+        } else if (sDir >= 0 && sDir < 4) {
+          dx = DIR_DX[sDir]!;
+          dy = DIR_DY[sDir]!;
+          stepped = true;
         }
+        // sDir === -2 (unreachable, or no field) → fall through to straight-line
+        // below. Shouldn't happen in practice (entrance always reachable from any
+        // walkable surface tile in a connected map), but defensive.
       }
 
       if (!stepped) {
@@ -914,22 +900,11 @@ export function tickAntMovement(
         entranceFlowFields !== undefined &&
         sentryWalksHome(world, id)
       ) {
-        const surfaceField = entranceFlowFields.surface[ants.colonyId[id]!];
-        const tileX = posX >> FP_SHIFT;
-        const tileY = posY >> FP_SHIFT;
-        if (
-          surfaceField &&
-          tileX >= 0 &&
-          tileX < SURFACE_GRID_WIDTH &&
-          tileY >= 0 &&
-          tileY < SURFACE_GRID_HEIGHT
-        ) {
-          const sDir = surfaceField[tileY * SURFACE_GRID_WIDTH + tileX]!;
-          if (sDir >= 0 && sDir < 4) {
-            dx = DIR_DX[sDir]!;
-            dy = DIR_DY[sDir]!;
-            fieldStepped = true;
-          }
+        const sDir = surfaceEntranceFieldDir(entranceFlowFields, ants.colonyId[id]!, posX, posY);
+        if (sDir >= 0 && sDir < 4) {
+          dx = DIR_DX[sDir]!;
+          dy = DIR_DY[sDir]!;
+          fieldStepped = true;
         }
       }
 
@@ -976,22 +951,16 @@ export function tickAntMovement(
       // forager does; off the field it keeps the straight-line step.
       let musterStepped = false;
       if (entranceFlowFields !== undefined && idleMustersHome(world, id)) {
-        const surfaceField = entranceFlowFields.surface[ants.colonyId[id]!];
-        const tileX = ants.posX[id]! >> FP_SHIFT;
-        const tileY = ants.posY[id]! >> FP_SHIFT;
-        if (
-          surfaceField &&
-          tileX >= 0 &&
-          tileX < SURFACE_GRID_WIDTH &&
-          tileY >= 0 &&
-          tileY < SURFACE_GRID_HEIGHT
-        ) {
-          const sDir = surfaceField[tileY * SURFACE_GRID_WIDTH + tileX]!;
-          if (sDir >= 0 && sDir < 4) {
-            dx = DIR_DX[sDir]!;
-            dy = DIR_DY[sDir]!;
-            musterStepped = true;
-          }
+        const sDir = surfaceEntranceFieldDir(
+          entranceFlowFields,
+          ants.colonyId[id]!,
+          ants.posX[id]!,
+          ants.posY[id]!,
+        );
+        if (sDir >= 0 && sDir < 4) {
+          dx = DIR_DX[sDir]!;
+          dy = DIR_DY[sDir]!;
+          musterStepped = true;
         }
       }
       if (!musterStepped && world.tick % IDLE_MILL_TICK_DIVISOR === 0) {
@@ -1762,6 +1731,27 @@ export function tickAntMovement(
 // deposit food, nurse brood, excavate, or pick up. Exempt tiles never enter
 // the occupancy map.
 // ---------------------------------------------------------------------------
+/**
+ * The colony's surface entrance flow-field direction at a surface position:
+ * 0..3 = a cardinal step toward the nearest open entrance (DIR_DX/DIR_DY),
+ * -1 = on an entrance tile (the field's source), -2 = off the field, or no field.
+ */
+function surfaceEntranceFieldDir(
+  entranceFlowFields: EntranceFlowFields,
+  colonyId: number,
+  posX: number,
+  posY: number,
+): number {
+  const surfaceField = entranceFlowFields.surface[colonyId];
+  if (!surfaceField) return -2;
+  const tileX = posX >> FP_SHIFT;
+  const tileY = posY >> FP_SHIFT;
+  if (tileX < 0 || tileX >= SURFACE_GRID_WIDTH || tileY < 0 || tileY >= SURFACE_GRID_HEIGHT) {
+    return -2;
+  }
+  return surfaceField[tileY * SURFACE_GRID_WIDTH + tileX]!;
+}
+
 function resolveSameColonyOccupancy(world: WorldState): void {
   const ants = world.ants;
   // V33 (#243): park a shifted ant at tile CENTER, like every other position

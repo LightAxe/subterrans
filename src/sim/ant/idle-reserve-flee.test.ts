@@ -2361,6 +2361,24 @@ describe('V49 (#322) — the alarm musters civilians home under a full camp', ()
     },
   );
 
+  it('after the all-clear a parked forager breaks out on an ambient trail by the wave it will get back', () => {
+    const world = createScenario(SEED);
+    world.spider = null;
+    world.simVersion = SIM_VERSION_V49_ALARM_MUSTER;
+    const ent = openEntrance(world, PLAYER_COLONY_ID); // alarm off
+    // 40 tiles out: inside wave 3's breakout boundary, well outside wave 0's.
+    const x = ent.surfaceTileX + 40;
+    const id = returningForager(world, x, ent.surfaceTileY);
+    world.ants.searchWave[id] = -4; // wave 3, parked by an alarm recall
+    const grid =
+      world.pheromoneGrids[pheromoneGridKey(PLAYER_COLONY_ID, PheromoneType.FoodTrail, 'surface')]!;
+    for (let dy = -2; dy <= 2; dy++)
+      for (let dx = -2; dx <= 2; dx++) phSet(grid, x + dx, ent.surfaceTileY + dy, 1000);
+    tickExcursionBoundary(world);
+    expect(world.ants.subTask[id]).toBe(ForagingSubState.SearchingFood);
+    expect(world.ants.searchWave[id]).toBe(3);
+  });
+
   it('a parked wave is restored exactly when the recalled forager reaches its entrance', () => {
     const world = createScenario(SEED);
     world.spider = null;
