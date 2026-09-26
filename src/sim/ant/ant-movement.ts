@@ -620,14 +620,11 @@ export function tickAntMovement(
       //       roll only runs for SearchingFood — CarryingFood and
       //       ReturningToNest are reachability-driven and shouldn't pause.
       //
-      // Determinism gating (codex follow-up): the entire pause block is
-      // gated on simVersion >= V4 because the RNG pulls below didn't exist
-      // pre-v4. A pre-v4 save replaying through this path must NOT consume
-      // those rolls or its rng.state diverges from the original record.
-      // Sticky simVersion on load (types.ts) keeps v3 saves on the no-pause
-      // path forever; new worlds (LATEST_SIM_VERSION = v4) get the feature.
+      // Determinism: the roll below is a world-RNG pull on every surface
+      // SearchingFood tick, so any change to when it runs changes rng.state
+      // (the pause shipped in V4; its gate was reaped once MIN passed V4).
       //
-      // Throughput impact (v4 only): ~12% of search time paused with the
+      // Throughput impact: ~12% of search time paused with the
       // default constants (probability 1/50, duration 5-9 ticks). Tuned to
       // stay inside the ±15% throughput band acceptance criterion.
       if (ants.subTask[id] === ForagingSubState.SearchingFood && zone === Zone.Surface) {
@@ -722,8 +719,8 @@ export function tickAntMovement(
         } else {
           // A1 (V36): the ant's own surface DangerTrail grid, threaded into the
           // sampler and the wander edge-bounce so SearchingFood foragers prefer
-          // safer routes. Gated AND surface-only — undefined otherwise, which is
-          // the byte-identical legacy path.
+          // safer routes. Surface-only — undefined underground, where the sampler
+          // and wander ignore danger.
           const dangerGrid = zone === Zone.Surface ? surfaceDangerByColony[colonyId] : undefined;
           const key = pheromoneGridKey(colonyId, PheromoneType.FoodTrail, 'surface');
           const grid = world.pheromoneGrids[key];
