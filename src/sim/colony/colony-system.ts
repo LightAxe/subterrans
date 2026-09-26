@@ -387,6 +387,9 @@ export function checkPendingChambers(world: WorldState): void {
       colony.chambers.push({
         chamberId,
         chamberType: pc.chamberType,
+        // The record type still requires the field; createChamberStock below owns
+        // the chamber's stock. TODO(#290 PR 2): removed with the field when the
+        // located food store replaces it (the stock moves to ChamberRecord.foodSlot).
         foodStored: 0,
         posX: pc.anchorTileX << FP_SHIFT,
         posY: pc.anchorTileY << FP_SHIFT,
