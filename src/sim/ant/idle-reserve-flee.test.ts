@@ -23,12 +23,14 @@ import {
 import type { WorldState } from '../types.js';
 import { pickOpenEntranceAtColumn, type NestEntrance } from '../colony/entrance.js';
 import { pheromoneGridKey, phSet, phGet } from '../pheromone/pheromone-store.js';
-import { PheromoneType, AntTask, ForagingSubState } from '../enums.js';
+import { PheromoneType, AntTask, ForagingSubState, ChamberType } from '../enums.js';
 import { Zone } from '../terrain.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import {
   FLEE_THRESHOLD,
   FLEE_HOMEBOUND_PUSH_THROUGH_TILES,
+  BASE_FOOD_STORAGE_CAPACITY,
+  FOOD_CHAMBER_CAPACITY,
   SHELTER_COOLDOWN_TICKS,
   IDLE_MILL_RADIUS,
   KILL_ALARM_DANGER_DEPOSIT,
@@ -42,7 +44,7 @@ import { initAnt, pushRecentTile } from './ant-store.js';
 import { killAnt } from '../ant-death.js';
 import { colonyForageBackpressure } from '../colony/colony-system.js';
 import { tickIdleReserveAndFlee } from './idle-reserve.js';
-import { tickExcursionBoundary } from './ant-system.js';
+import { tickExcursionBoundary, tickSearchLeash } from './ant-system.js';
 import { tickAntMovement } from './ant-movement.js';
 import { createDigFlowFields } from '../dig-system.js';
 import { Rng } from '../rng.js';
@@ -2375,6 +2377,98 @@ describe('V49 (#322) — the alarm musters civilians home under a full camp', ()
     tick(world, []);
     expect(world.ants.subTask[id]).toBe(ForagingSubState.SearchingFood);
     expect(world.ants.searchWave[id]).toBe(2);
+  });
+
+  it.each(['over-leash', 'backpressure'] as const)(
+    'a searcher step 9b would demote (%s) is not demoted to Idle while the alarm sounds, so it is recalled home',
+    (reason) => {
+      for (const [version, demoted] of [
+        [SIM_VERSION_V48_SENTRY_WALK_HOME, true],
+        [SIM_VERSION_V49_ALARM_MUSTER, false],
+      ] as const) {
+        const { world, ent } = campedWorld(version);
+        const colony = world.colonies[PLAYER_COLONY_ID]!;
+        if (reason === 'over-leash') {
+          // Over-foraged with dig demand arms the step-9b leash; 40 tiles out is past wave 0's radius.
+          colony.taskCensus.forage = 5;
+          colony.computedAllocation.forage = 0;
+          colony.computedAllocation.dig = 3;
+        } else {
+          // Nowhere to deposit: pool at cap and the only FoodStorage chamber full.
+          colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
+          colony.chambers.push({
+            chamberType: ChamberType.FoodStorage,
+            foodStored: FOOD_CHAMBER_CAPACITY,
+          } as never);
+        }
+        const id = spawnWorker(
+          world,
+          PLAYER_COLONY_ID,
+          ent.surfaceTileX + 40,
+          ent.surfaceTileY,
+          AntTask.Foraging,
+        );
+        world.ants.subTask[id] = ForagingSubState.SearchingFood;
+        world.ants.searchWave[id] = 0;
+        tickSearchLeash(world);
+        expect([version, world.ants.task[id]]).toEqual([
+          version,
+          demoted ? AntTask.Idle : AntTask.Foraging,
+        ]);
+        if (!demoted) {
+          tickExcursionBoundary(world);
+          expect(world.ants.subTask[id]).toBe(ForagingSubState.ReturningToNest);
+        }
+      }
+    },
+  );
+
+  it('an idle worker far out on a quiet tile walks toward home and stops just outside the doorstep (V48 held it in place)', () => {
+    for (const [version, walks] of [
+      [SIM_VERSION_V48_SENTRY_WALK_HOME, false],
+      [SIM_VERSION_V49_ALARM_MUSTER, true],
+    ] as const) {
+      const { world, ent } = campedWorld(version);
+      const far = spawnWorker(
+        world,
+        PLAYER_COLONY_ID,
+        ent.surfaceTileX + 30,
+        ent.surfaceTileY,
+        AntTask.Idle,
+      );
+      const near = spawnWorker(
+        world,
+        PLAYER_COLONY_ID,
+        ent.surfaceTileX + FLEE_HOMEBOUND_PUSH_THROUGH_TILES,
+        ent.surfaceTileY,
+        AntTask.Idle,
+      );
+      tickIdleReserveAndFlee(world);
+      expect([version, world.ants.targetPosX[far]! >> FP_SHIFT]).toEqual([
+        version,
+        walks ? ent.surfaceTileX : -1,
+      ]);
+      // Inside the doorstep it waits (no target), leaving the carriers' lane clear.
+      expect([version, world.ants.targetPosX[near]]).toEqual([version, -1]);
+      // Out in the field on a tile that reads real danger, it holds too.
+      const exposed = spawnWorker(
+        world,
+        PLAYER_COLONY_ID,
+        ent.surfaceTileX + 20,
+        ent.surfaceTileY,
+        AntTask.Idle,
+      );
+      seedDanger(
+        world,
+        PLAYER_COLONY_ID,
+        ent.surfaceTileX + 20,
+        ent.surfaceTileY,
+        0,
+        FLEE_THRESHOLD * 8,
+      );
+      tickIdleReserveAndFlee(world);
+      expect([version, world.ants.targetPosX[exposed]]).toEqual([version, -1]);
+    }
   });
 
   it('through tick(): under a full camp every civilian ends up home, none frozen out in the open (V48 froze some)', () => {

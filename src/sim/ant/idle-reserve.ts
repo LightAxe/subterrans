@@ -629,11 +629,18 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
             ants.targetPosY[id] = -1;
             ants.fleeShelterUntilTick[id] = tick + 1;
           } else if (task === AntTask.Idle) {
-            // No safe/open entrance and NOT homebound → an IDLE worker HOLDS:
-            // clear its (stale mill) target so the V34 mill branch falls through
-            // to getTaskDirection → (0,0) and it stays put.
-            ants.targetPosX[id] = -1;
-            ants.targetPosY[id] = -1;
+            if (mustering && danger < FLEE_THRESHOLD) {
+              // #322 (V49): under the alarm an idle worker on a quiet tile walks
+              // home too, and waits at the edge of the danger by the entrance
+              // (it holds, below, once its own tile reads real danger).
+              setMusterTarget(world, id, entrances, tileX, tileY);
+            } else {
+              // No safe/open entrance and NOT homebound → an IDLE worker HOLDS:
+              // clear its (stale mill) target so the V34 mill branch falls through
+              // to getTaskDirection → (0,0) and it stays put.
+              ants.targetPosX[id] = -1;
+              ants.targetPosY[id] = -1;
+            }
           }
           // else: a SearchingFood forager (not homebound, not Idle). It does NOT
           // hold — it keeps its own foraging dispatch (wanders outward, away from
@@ -859,6 +866,49 @@ function setMillTarget(
   }
   ants.targetPosX[id] = (tx << FP_SHIFT) + (FP_ONE >> 1);
   ants.targetPosY[id] = (ty << FP_SHIFT) + (FP_ONE >> 1);
+}
+
+/**
+ * #322 (V49): an idle worker mustering home under the alarm with no safe
+ * entrance heads for its nearest own open entrance and waits just outside the
+ * doorstep (or earlier, where its own tile reads real danger). Once an entrance
+ * reads safe, the ordinary recall dashes it in. Like milling, it keeps a spider-scatter target inside the reticle
+ * radius. No open entrance → clear the target and hold in place.
+ */
+function setMusterTarget(
+  world: WorldState,
+  id: number,
+  entrances: readonly NestEntrance[],
+  tileX: number,
+  tileY: number,
+): void {
+  const ants = world.ants;
+  const reticle = world.scatterReticleTile;
+  if (reticle !== null) {
+    const manh = Math.abs(tileX - reticle.x) + Math.abs(tileY - reticle.y);
+    if (manh <= SPIDER_SCATTER_RADIUS_TILES) return;
+  }
+  let best: NestEntrance | null = null;
+  let bestDist = 0;
+  for (let e = 0; e < entrances.length; e++) {
+    const ent = entrances[e]!;
+    if (!ent.isOpen) continue;
+    const d = Math.abs(tileX - ent.surfaceTileX) + Math.abs(tileY - ent.surfaceTileY);
+    if (best === null || d < bestDist) {
+      best = ent;
+      bestDist = d;
+    }
+  }
+  // Wait just outside the doorstep (the lane homebound carriers push through,
+  // FLEE_HOMEBOUND_PUSH_THROUGH_TILES): idle workers queued on the approach would
+  // otherwise bump carriers off it. Measured: carriers home 74/80 → 79/80.
+  if (best === null || bestDist <= FLEE_HOMEBOUND_PUSH_THROUGH_TILES) {
+    ants.targetPosX[id] = -1;
+    ants.targetPosY[id] = -1;
+    return;
+  }
+  ants.targetPosX[id] = (best.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1);
+  ants.targetPosY[id] = (best.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1);
 }
 
 /** DangerTrail at an entrance's surface tile (0 if no grid). Guards the flee gate. */

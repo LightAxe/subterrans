@@ -1003,7 +1003,14 @@ export const SIM_VERSION_V48_SENTRY_WALK_HOME = 48 as const;
  *   - V38's local all-clear release applies again to a held forager;
  *   - a searching forager turns homebound (step 9c), and a returning one never
  *     breaks out to search again;
- *   - a returning forager descends its own open entrance, as a carrier does.
+ *   - a returning forager descends its own open entrance, as a carrier does;
+ *   - step 9b does not demote a searcher to Idle (9c recalls it instead);
+ *   - an idle worker on a quiet tile walks toward its nearest open entrance and
+ *     waits just outside the doorstep (FLEE_HOMEBOUND_PUSH_THROUGH_TILES), so
+ *     the lane carriers push through stays clear.
+ * A recalled searcher's leash wave is parked as -(wave + 1) and restored exactly
+ * when it reaches home or turns back to searching, so a recall never counts as a
+ * failed search.
  * With a safe entrance, the alarm still recalls everyone through it, and only
  * switching the alarm off lets sheltered civilians back out (unchanged).
  *

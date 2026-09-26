@@ -7,7 +7,7 @@ import type { DigFlowFields } from '../dig-system.js';
 import { AntTask, DiggingSubState, ForagingSubState } from '../enums.js';
 import { FP_SHIFT } from '../fixed.js';
 import { UndergroundTileState, Zone, ugSet } from '../terrain.js';
-import type { WorldState } from '../types.js';
+import { SIM_VERSION_V49_ALARM_MUSTER, type WorldState } from '../types.js';
 import { clearRecentTiles } from './ant-store.js';
 
 /**
@@ -84,6 +84,10 @@ export function tickSearchLeash(world: WorldState): void {
 
     const colony = world.colonies[colonyId];
     if (!colony || !colony.entrances || colony.entrances.length === 0) continue;
+    // #322 (V49): while the colony alarm sounds, step 9c recalls the searcher
+    // home instead. Demoting it to Idle here would leave it standing wherever it
+    // is (an alarmed Idle civilian with no safe entrance holds in place).
+    if (world.simVersion >= SIM_VERSION_V49_ALARM_MUSTER && colony.alarmActive === true) continue;
 
     const tileX = ants.posX[id]! >> FP_SHIFT;
     const tileY = ants.posY[id]! >> FP_SHIFT;
