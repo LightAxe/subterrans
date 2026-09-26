@@ -28,6 +28,7 @@ describe('checkAndTrigger — first occurrence', () => {
       'spider',
       'foodMark',
       'rally',
+      'rallyRaid',
       'spiderPriority',
       'aiInvading',
       'spiderRampage',
@@ -41,6 +42,13 @@ describe('checkAndTrigger — first occurrence', () => {
       expect(result, `key="${key}" should return text on first call`).not.toBeNull();
       expect(typeof result).toBe('string');
     }
+  });
+
+  it('"rallyRaid" (#290 PR 6) tells the player the fighters will raid, and is its own one-shot', () => {
+    expect(checkAndTrigger('rally')).toBe('Fighters will converge here.');
+    // The generic rally caption having shown does not suppress the raid variant.
+    expect(checkAndTrigger('rallyRaid')).toMatch(/raid its larder/);
+    expect(checkAndTrigger('rallyRaid')).toBeNull();
   });
 
   it('returns the expected text for "dig"', () => {

@@ -13,6 +13,7 @@ export type CaptionKey =
   | 'spider'
   | 'foodMark'
   | 'rally'
+  | 'rallyRaid'
   | 'spiderPriority'
   | 'aiInvading'
   | 'spiderRampage'
@@ -26,6 +27,8 @@ const CAPTION_TEXTS: Record<CaptionKey, string> = {
   spider: 'A spider is hunting your ants. Use fighters to protect your queen.',
   foodMark: 'Your foragers will prioritize this pile.',
   rally: 'Fighters will converge here.',
+  // #290 PR 6: the rally is on an enemy's open entrance (raid-captions.ts).
+  rallyRaid: 'Fighters will attack this nest and raid its larder when it is unguarded.',
   spiderPriority: 'Your fighters are engaging the spider.',
   aiInvading: 'The enemy is attacking your hive.',
   spiderRampage: 'The spider has gone hungry and is hunting on the surface.',
@@ -85,7 +88,7 @@ export function checkAndTrigger(key: CaptionKey, textOverride?: string): string 
 // lives here rather than at the call site.
 //
 // Captions that are driven by world-state polling or input commands (dig,
-// chamber, spider, foodMark, rally, spiderPriority, queenDamage,
+// chamber, spider, foodMark, rally, rallyRaid, spiderPriority, queenDamage,
 // queenStarvation) are NOT events — they keep using checkAndTrigger directly.
 
 // Recurring alerts re-fire their caption on EVERY occurrence of the event

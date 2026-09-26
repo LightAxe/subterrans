@@ -560,6 +560,11 @@ export class UIScene extends Phaser.Scene {
   // NOT relaunched on restart, so captionState would otherwise leak a prior-round
   // caption — incl. falsely marking a first-use hint shown; ship-review R1#1/#3).
   private activeCaptionText: Phaser.GameObjects.Text | null = null;
+  // #290 PR 6 — Dev/E2E-only: the text of every caption that began displaying this
+  // round, oldest first (read via __phase9_test.getCaptionsShown()). A caption
+  // fades in 1.5 s, too fast to catch by polling the live Text. Written only
+  // under import.meta.env.DEV; cleared with the caption queue each round.
+  private captionsShownLog: string[] = [];
   // Stage 3b (#5) — tooltip hover state machine. hoverTarget is the widget the
   // cursor is over (null = none); the show timer fires after a dwell delay, the
   // hide timer is the mouse-out grace. tooltipText is the live Phaser Text.
@@ -1771,13 +1776,16 @@ export class UIScene extends Phaser.Scene {
   // overflow would stay marked 'already shown' yet never display, losing it for
   // the session. Passing the key lets enqueueCaption un-mark it on drop so it
   // re-fires. Omit for recurring captions (they don't dedup on `triggered`).
+  //
+  // Returns false iff the queue dropped the caption on overflow (it never shows):
+  // a recurring caption's caller uses that to not start its throttle (#290 PR 6).
   public showCaption(
     text: string,
     screenX: number,
     screenY: number,
     captionKey?: CaptionKey,
-  ): void {
-    this.enqueueCaption({ text, x: screenX, y: screenY, source: 'event', captionKey });
+  ): boolean {
+    return this.enqueueCaption({ text, x: screenX, y: screenY, source: 'event', captionKey });
   }
 
   /**
@@ -1794,16 +1802,19 @@ export class UIScene extends Phaser.Scene {
   /** Admit a caption through the shared policy; begin it now if the queue was
    *  idle, else it is queued/coalesced/dropped per caption-queue.ts. A dropped
    *  one-shot event caption (carrying a captionKey) is un-marked so it re-fires
-   *  next occurrence — it never displayed, mirroring mark-on-display for hints. */
-  private enqueueCaption(req: CaptionRequest): void {
+   *  next occurrence — it never displayed, mirroring mark-on-display for hints.
+   *  Returns false iff the request was dropped. */
+  private enqueueCaption(req: CaptionRequest): boolean {
     const result = admitCaption(this.captionState, req);
     if (result.begin) this.beginCaption(result.begin);
     if (result.dropped?.captionKey !== undefined) untrigger(result.dropped.captionKey);
+    return result.dropped === undefined;
   }
 
   /** Render a caption Text + run its fade tween. Marks a first-use hint shown the
    *  moment it begins (Codex R1#9). On finish, promotes any pending caption. */
   private beginCaption(req: CaptionRequest): void {
+    if (import.meta.env.DEV) this.captionsShownLog.push(req.text);
     if (req.source === 'first-use' && req.hintId !== undefined) {
       markFirstUseHintShown(req.hintId as HintFirstUseId);
     }
@@ -1870,6 +1881,13 @@ export class UIScene extends Phaser.Scene {
     }
     this.captionState = createCaptionQueueState();
     this.hintYieldUntilMs = 0;
+    this.captionsShownLog = [];
+  }
+
+  /** #290 PR 6 — Dev/E2E-only: captions begun this round (see captionsShownLog).
+   *  Read through window.__phase9_test.getCaptionsShown(); [] outside Dev builds. */
+  captionsShown(): string[] {
+    return import.meta.env.DEV ? [...this.captionsShownLog] : [];
   }
 
   /** Promote a queued caption once the active one has fully faded. */
