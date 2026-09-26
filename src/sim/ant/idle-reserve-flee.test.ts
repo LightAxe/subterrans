@@ -1216,6 +1216,24 @@ describe('flee — no-revisit bypass (Codex P2)', () => {
     expect(world.ants.posY[id]! >> FP_SHIFT).toBeLessThan(startTileY);
   });
 
+  it('the flee dash steps ONTO the recent entrance-ward tile itself, not a fresh neighbour of it', () => {
+    // Pins the bypass exactly: without it the no-revisit filter swaps the recent
+    // tile (x, y+1) for a fresh alternate, which can still be entrance-ward (a
+    // diagonal) but is never that tile.
+    const world = createScenario(SEED);
+    world.spider = null;
+    const ent = openEntrance(world, PLAYER_COLONY_ID);
+    const id = setupForager(world, ent);
+    world.ants.fleeShelterUntilTick[id] = 0;
+    world.ants.targetPosX[id] = center(ent.surfaceTileX);
+    world.ants.targetPosY[id] = center(ent.surfaceTileY);
+    tickAntMovement(world, new Rng(1), createDigFlowFields());
+    expect([world.ants.posX[id]! >> FP_SHIFT, world.ants.posY[id]! >> FP_SHIFT]).toEqual([
+      ent.surfaceTileX,
+      ent.surfaceTileY + 1,
+    ]);
+  });
+
   it('a NON-fleeing SearchingFood forager is unaffected — the bypass is pinned to flee', () => {
     // Same setup, but not fleeing: the flee dash never runs and bypassRecentTiles
     // === targetedStep (false here). The ant does NOT get the emergency

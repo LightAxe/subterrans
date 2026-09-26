@@ -296,6 +296,32 @@ describe('underground idle wander — shaft row ALWAYS clears + ascends (#209 PR
 });
 
 // ---------------------------------------------------------------------------
+describe('underground idle wander — a wandering worker is not pumped up the shaft (#209 PR C)', () => {
+  it('an idle worker on the shaft top WITH a wander target stays below; without one it ascends', () => {
+    for (const [withTarget, expectZone] of [
+      [true, Zone.Underground],
+      [false, Zone.Surface],
+    ] as const) {
+      const world = createScenario(SEED);
+      world.tick = 1; // off the mill divisor: the wanderer holds, so only the ascent rule acts
+      const ent = world.colonies[PLAYER_COLONY_ID]!.entrances.find((e) => e.isOpen)!;
+      const ex = ent.surfaceTileX;
+      carveOpen(ug(world), ex, 0, ex, 2); // the shaft
+      carveChamber(world, ex - 1, 1, 3, 2); // a chamber just below the shaft top
+      // An occupancy shift can land a wanderer on the shaft top (tileY 0) with its
+      // in-chamber target still set; the defensive Idle-ascent must not take it up.
+      const id = spawnUndergroundIdle(world, ex, 0);
+      if (withTarget) {
+        world.ants.targetPosX[id] = center(ex);
+        world.ants.targetPosY[id] = center(1);
+      }
+      move(world, 1);
+      expect([withTarget, world.ants.zone[id]]).toEqual([withTarget, expectZone]);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe('underground idle wander — byte gate + round-trip (#209 PR C)', () => {
   it('is ACTIVE at V35 for the same setup (behavioural delta proves the gate)', () => {
     const world = createScenario(SEED);
