@@ -20,7 +20,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { ChamberType } from '../enums.js';
-import { STARVATION_GRACE_TICKS, RECONCILE_INTERVAL_TICKS } from '../constants.js';
+import { RECONCILE_INTERVAL_TICKS } from '../constants.js';
 import { createColonyRecord, createColonyStore, type ChamberRecord } from './colony-store.js';
 
 describe('createColonyRecord', () => {
@@ -28,12 +28,14 @@ describe('createColonyRecord', () => {
     const r = createColonyRecord(1, 42);
     expect(r.colonyId).toBe(1);
     expect(r.queenEntityId).toBe(42);
-    expect(r.foodStored).toBe(0);
+    expect(r.poolSlot).toBe(-1);
     expect(r.workerCount).toBe(0);
     expect(r.eggCount).toBe(0);
     expect(r.larvaeCount).toBe(0);
     expect(r.nurseCount).toBe(0);
-    expect(r.queenStarvationTimer).toBe(STARVATION_GRACE_TICKS); // 100
+    expect(r.foodRaidedFp).toBe(0);
+    expect(r.foodLostToRaidsFp).toBe(0);
+    expect(r.raidTrips).toBe(0);
     expect(r.reconcileCountdown).toBe(RECONCILE_INTERVAL_TICKS); // 100
     expect(r.defeated).toBe(false);
   });
@@ -92,11 +94,13 @@ describe('createColonyRecord', () => {
     expect('idleCount' in r).toBe(false);
   });
 
-  it('(11) ColonyRecord Phase 2 factory returns 22 fields (17 Phase 2 + killCount + priorityFoodPileId + queenLastEggTick + eggIntervalNumerator + alarmActive; Phase 3 extensions are undefined until caller assigns)', () => {
+  it('(11) ColonyRecord Phase 2 factory returns 24 fields (17 Phase 2 + killCount + priorityFoodPileId + queenLastEggTick + eggIntervalNumerator + alarmActive + #290 foodRaidedFp/foodLostToRaidsFp/raidTrips; Phase 3 extensions are undefined until caller assigns)', () => {
     const r = createColonyRecord(1, 0);
     // 17 Phase 2 + Phase 9 killCount + Phase 9 priorityFoodPileId + S4 queenLastEggTick
-    // + S5 eggIntervalNumerator + C1 alarmActive
-    expect(Object.keys(r).length).toBe(22);
+    // + S5 eggIntervalNumerator + C1 alarmActive + #290 foodRaidedFp/foodLostToRaidsFp/raidTrips
+    // (foodStored -> poolSlot is a 1-for-1 swap already counted in the 17; queenStarvationTimer
+    // was removed with no replacement field)
+    expect(Object.keys(r).length).toBe(24);
   });
 
   it('createColonyRecord initializes alarmActive to false (C1 — the alarm is opt-in)', () => {
@@ -164,7 +168,7 @@ describe('Phase 3 PRD §2a caller-side init contract', () => {
     a.chambers.push({
       chamberId: 1,
       chamberType: 0,
-      foodStored: 0,
+      foodSlot: -1,
       posX: 0,
       posY: 0,
       width: 5,
@@ -204,7 +208,7 @@ describe('ChamberRecord', () => {
     const chamber: ChamberRecord = {
       chamberId: 1,
       chamberType: ChamberType.FoodStorage,
-      foodStored: 0,
+      foodSlot: -1,
       posX: 512,
       posY: 256,
       width: 3,
@@ -212,7 +216,7 @@ describe('ChamberRecord', () => {
     };
     expect(typeof chamber.chamberId).toBe('number');
     expect(typeof chamber.chamberType).toBe('number');
-    expect(typeof chamber.foodStored).toBe('number');
+    expect(typeof chamber.foodSlot).toBe('number');
     expect(typeof chamber.posX).toBe('number');
     expect(typeof chamber.posY).toBe('number');
     expect(typeof chamber.width).toBe('number');

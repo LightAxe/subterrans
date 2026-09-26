@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { createWorldState, type WorldState } from './types.js';
 import { createColonyRecord } from './colony/colony-store.js';
+import { addPileForTest } from './food/food-test-utils.js';
 import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constants.js';
 import {
   surfaceFeatureAt,
@@ -206,7 +207,7 @@ describe('surfaceFeatureAt — STATIC terrain (PR 4): no dynamic suppression', (
     expect(found).not.toBeNull();
 
     const withPile = createWorldState(seed);
-    withPile.foodPiles.push({
+    addPileForTest(withPile, {
       foodPileId: 0,
       tileX: found!.x,
       tileY: found!.y,

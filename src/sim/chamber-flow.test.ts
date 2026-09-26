@@ -16,6 +16,7 @@ import { createWorldState, allocateEntityId } from './types.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import type { ChamberRecord, ColonyRecord } from './colony/colony-store.js';
 import { initAnt } from './ant/ant-store.js';
+import { addChamberForTest } from './food/food-test-utils.js';
 import { AntTask, ChamberType } from './enums.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
 import { Zone, UndergroundTileState, ugSet, createUndergroundGrid } from './terrain.js';
@@ -54,25 +55,22 @@ function setup(): Setup {
   for (let y = 4; y <= 6; y++) {
     for (let x = 5; x <= 40; x++) ugSet(underground, x, y, UndergroundTileState.Open);
   }
-  const A: ChamberRecord = {
+  const A = addChamberForTest(world, colony, {
     chamberId: 10,
     chamberType: ChamberType.Nursery,
-    foodStored: 0,
     posX: 10 << FP_SHIFT,
     posY: 4 << FP_SHIFT,
     width: 4,
     height: 3,
-  };
-  const B: ChamberRecord = {
+  });
+  const B = addChamberForTest(world, colony, {
     chamberId: 11,
     chamberType: ChamberType.Nursery,
-    foodStored: 0,
     posX: 30 << FP_SHIFT,
     posY: 4 << FP_SHIFT,
     width: 4,
     height: 3,
-  };
-  colony.chambers.push(A, B);
+  });
   return {
     world,
     colony,

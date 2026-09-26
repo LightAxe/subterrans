@@ -7,7 +7,7 @@
 // that handed colony 1 the losing end of every tie — measurably (colony 1's queen
 // died first in 55.25% of 800 passive runs, z = +2.97). V39 replaces each id ordering
 // with a deterministic hash32 key, and changes nothing else — in particular the
-// rampage SCORE stays `foodStored + workerCount * 10`.
+// rampage SCORE stays `colonyPoolFood + workerCount * 10`.
 //
 // These tests pin BOTH sides of every gate: the V39 coin behaviour AND the pre-V39
 // id behaviour a save inside the acceptance window still replays under.
@@ -27,7 +27,8 @@ import { initAnt } from './ant/ant-store.js';
 import { AntTask, ChamberType, PheromoneType } from './enums.js';
 import { createPheromoneGrid, pheromoneGridKey } from './pheromone/pheromone-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
-import type { ColonyId, ChamberRecord } from './colony/colony-store.js';
+import type { ColonyId, ColonyRecord } from './colony/colony-store.js';
+import { setPoolFoodForTest, addChamberForTest, type TestChamber } from './food/food-test-utils.js';
 import {
   SPIDER_HP_FULL,
   SPIDER_HUNT_INTERVAL_TICKS,
@@ -141,16 +142,25 @@ function spawnAnt(
   return id;
 }
 
-function foodChamber(chamberId: number, foodStored: number): ChamberRecord {
+function foodChamberLiteral(chamberId: number): TestChamber {
   return {
     chamberId,
     chamberType: ChamberType.FoodStorage,
-    foodStored,
     posX: 10 << FP_SHIFT,
     posY: 10 << FP_SHIFT,
     width: 2,
     height: 2,
   };
+}
+
+/** Push a FoodStorage chamber holding `stockFp` onto `colony.chambers`. */
+function addFoodChamber(
+  world: WorldState,
+  colony: ColonyRecord,
+  chamberId: number,
+  stockFp: number,
+): void {
+  addChamberForTest(world, colony, foodChamberLiteral(chamberId), stockFp);
 }
 
 /** Mirror of spider.ts's private 60/40 richer-colony draw. */
@@ -208,7 +218,7 @@ describe('pickRampageTarget — V39 seat-bias fix', () => {
   function tiedWorld(seed: number, simVersion: number): WorldState {
     const world = makeWorld(seed, simVersion);
     for (const cid of [C1, C2]) {
-      world.colonies[cid]!.foodStored = 4096;
+      setPoolFoodForTest(world, world.colonies[cid]!, 4096);
       world.colonies[cid]!.workerCount = 7;
     }
     return world;
@@ -265,9 +275,9 @@ describe('pickRampageTarget — V39 seat-bias fix', () => {
     // V39, exactly as at PRE_V39.
     function build(simVersion: number): WorldState {
       const world = makeWorld(7, simVersion);
-      world.colonies[C1]!.foodStored = 4096;
-      world.colonies[C2]!.foodStored = 1024;
-      world.colonies[C2]!.chambers = [foodChamber(900, 8192)]; // ignored by the score
+      setPoolFoodForTest(world, world.colonies[C1]!, 4096);
+      setPoolFoodForTest(world, world.colonies[C2]!, 1024);
+      addFoodChamber(world, world.colonies[C2]!, 900, 8192); // ignored by the score
       return world;
     }
     const v39 = build(SIM_VERSION_V39_SPIDER_TIEBREAK);
@@ -281,8 +291,8 @@ describe('pickRampageTarget — V39 seat-bias fix', () => {
 
   it('V39: a genuine score gap still decides the order (the key only breaks exact ties)', () => {
     const world = makeWorld(11, SIM_VERSION_V39_SPIDER_TIEBREAK);
-    world.colonies[C1]!.foodStored = 64;
-    world.colonies[C2]!.foodStored = 9999;
+    setPoolFoodForTest(world, world.colonies[C1]!, 64);
+    setPoolFoodForTest(world, world.colonies[C2]!, 9999);
     for (const t of TICKS) {
       const expected = favorsIndexZero(world, t) ? ENEMY_COLONY_ID : PLAYER_COLONY_ID;
       expect(rampageTargetAtTick(world, t)).toBe(expected);
@@ -295,10 +305,10 @@ describe('pickRampageTarget — V39 seat-bias fix', () => {
     // ~36% of picks tie. Pin that V39 leaves it doing that job. Chambers differ here
     // and must not matter.
     const world = makeWorld(13, SIM_VERSION_V39_SPIDER_TIEBREAK);
-    world.colonies[C1]!.foodStored = 2048;
-    world.colonies[C1]!.chambers = [foodChamber(901, 3072)]; // ignored by the score
-    world.colonies[C2]!.foodStored = 2048;
-    world.colonies[C2]!.chambers = [foodChamber(902, 4096)]; // ignored by the score
+    setPoolFoodForTest(world, world.colonies[C1]!, 2048);
+    addFoodChamber(world, world.colonies[C1]!, 901, 3072); // ignored by the score
+    setPoolFoodForTest(world, world.colonies[C2]!, 2048);
+    addFoodChamber(world, world.colonies[C2]!, 902, 4096); // ignored by the score
     world.colonies[C1]!.workerCount = 3;
     world.colonies[C2]!.workerCount = 30; // + 300 → colony 2 scores higher
     for (const t of TICKS) {
@@ -328,7 +338,7 @@ describe('pickRampageTarget — V39 seat-bias fix', () => {
     colony3.digFlowFieldDirty = false;
     world.colonies[C3] = colony3;
     for (const cid of [C1, C2, C3]) {
-      world.colonies[cid]!.foodStored = 4096;
+      setPoolFoodForTest(world, world.colonies[cid]!, 4096);
       world.colonies[cid]!.workerCount = 7;
     }
 

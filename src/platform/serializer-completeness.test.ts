@@ -20,6 +20,8 @@ import {
   TRANSIENT_WORLD_FIELDS,
   SERIALIZED_ANT_SOA_FIELDS,
   TRANSIENT_ANT_FIELDS,
+  FOOD_STORE_SERIALIZED_FIELDS,
+  FOOD_STORE_TRANSIENT_FIELDS,
 } from './save-schema.js';
 
 // Ring fields persisted via the packed `recentTiles` key rather than as themselves.
@@ -97,5 +99,30 @@ describe('serializer completeness (#229) — serializer tie', () => {
     const restored = deserializeWorldState(serializeWorldState(createScenario(1337)));
     const missing = (SERIALIZED_WORLD_FIELDS as readonly string[]).filter((f) => !(f in restored));
     expect(missing).toEqual([]);
+  });
+});
+
+describe('serializer completeness — #290 PR 2 food store', () => {
+  it('every FoodStore field is serialized xor deliberately transient', () => {
+    const liveKeys = new Set(Object.keys(createWorldState(1337).food));
+    const listed = [
+      ...(FOOD_STORE_SERIALIZED_FIELDS as readonly string[]),
+      ...(FOOD_STORE_TRANSIENT_FIELDS as readonly string[]),
+    ];
+    expect(new Set(listed).size).toBe(listed.length); // disjoint
+    const unlisted = [...liveKeys].filter((k) => !listed.includes(k));
+    const stale = listed.filter((k) => !liveKeys.has(k));
+    expect({ unlisted, stale }).toEqual({ unlisted: [], stale: [] });
+  });
+
+  it('serializeFoodStore emits every serialized field (pileCount as the pileOrder length)', () => {
+    const food = serializeWorldState(createScenario(1337)).food as unknown as Record<
+      string,
+      unknown
+    >;
+    const expected = (FOOD_STORE_SERIALIZED_FIELDS as readonly string[]).filter(
+      (f) => f !== 'pileCount',
+    );
+    expect(Object.keys(food).sort()).toEqual([...expected].sort());
   });
 });

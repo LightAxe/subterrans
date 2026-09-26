@@ -22,7 +22,9 @@ import {
   handleSurfaceCommandTap,
   handleSurfaceDigTap,
 } from './surface-input.js';
+import { createWorldState } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
+import { addPileForTest, type TestPile } from '../sim/food/food-test-utils.js';
 import type { ViewState } from '../render/camera.js';
 import { CommandFeedforward } from '../render/command-feedforward.js';
 import { createScenario } from '../sim/scenario.js';
@@ -75,7 +77,7 @@ function tileCenterToScreen(tileX: number, tileY: number, vs: ViewState) {
 function makeWorld(
   overrides: {
     tick?: number;
-    foodPiles?: WorldState['foodPiles'];
+    piles?: readonly TestPile[];
     colonies?: WorldState['colonies'];
     spider?: WorldState['spider'];
     spiderPriorityColonyId?: WorldState['spiderPriorityColonyId'];
@@ -84,7 +86,12 @@ function makeWorld(
 ): WorldState {
   const sw = SURFACE_GRID_WIDTH;
   const sh = SURFACE_GRID_HEIGHT;
-  return {
+  // Base off a real WorldState (for its located food store, `world.food`) rather
+  // than hand-building the storage shape — food-api-guard.test.ts pins storage
+  // access to the facade / test-utils, so this stub only overrides the fields the
+  // surface-input tests actually stub out.
+  const world = {
+    ...createWorldState(0),
     tick: overrides.tick ?? 0,
     rngState: 0,
     nextEntityId: 0,
@@ -98,11 +105,12 @@ function makeWorld(
     bakedSurfaceEffect: new Uint8Array(sw * sh),
     surfaceComponentMask: null,
     undergroundGrids: {},
-    foodPiles: overrides.foodPiles ?? [],
     pendingChambers: {},
     spider: overrides.spider ?? null,
     spiderPriorityColonyId: overrides.spiderPriorityColonyId ?? null,
   } as unknown as WorldState;
+  for (const p of overrides.piles ?? []) addPileForTest(world, p);
+  return world;
 }
 
 function makeColony(
@@ -158,7 +166,7 @@ function ff(): CommandFeedforward {
 describe('findFoodPileAt', () => {
   it('returns the pile at the tile, or null', () => {
     const world = makeWorld({
-      foodPiles: [{ foodPileId: 1, tileX: 5, tileY: 2, pickupsRemaining: 9, pickupsInitial: 9 }],
+      piles: [{ foodPileId: 1, tileX: 5, tileY: 2, pickupsRemaining: 9, pickupsInitial: 9 }],
     });
     expect(findFoodPileAt(world, 5, 2)?.foodId).toBe(1);
     expect(findFoodPileAt(world, 6, 2)).toBeNull();
@@ -168,7 +176,7 @@ describe('findFoodPileAt', () => {
 describe('isEmptySurfaceTile', () => {
   it('false on a food pile / entrance / out-of-bounds; true on bare ground', () => {
     const world = makeWorld({
-      foodPiles: [{ foodPileId: 1, tileX: 5, tileY: 2, pickupsRemaining: 9, pickupsInitial: 9 }],
+      piles: [{ foodPileId: 1, tileX: 5, tileY: 2, pickupsRemaining: 9, pickupsInitial: 9 }],
       colonies: {
         [PLAYER_COLONY_ID]: makeColony({ entrances: [{ surfaceTileX: 7, surfaceTileY: 2 }] }),
       },
@@ -198,7 +206,7 @@ describe('isForeignColonyEntrance', () => {
 describe('isValidEntranceTarget', () => {
   it('true on fully-walkable empty ground, false on a food pile', () => {
     const world = makeWorld({
-      foodPiles: [{ foodPileId: 1, tileX: 5, tileY: 2, pickupsRemaining: 9, pickupsInitial: 9 }],
+      piles: [{ foodPileId: 1, tileX: 5, tileY: 2, pickupsRemaining: 9, pickupsInitial: 9 }],
     });
     expect(isValidEntranceTarget(world, 20, 2)).toBe(true);
     expect(isValidEntranceTarget(world, 5, 2)).toBe(false);
@@ -257,7 +265,7 @@ describe('handleSurfaceCommandTap priority', () => {
 
   it('2. food pile → MarkFoodPile (when no spider hit)', () => {
     const world = makeWorld({
-      foodPiles: [{ foodPileId: 1, tileX: 5, tileY: 2, pickupsRemaining: 9, pickupsInitial: 9 }],
+      piles: [{ foodPileId: 1, tileX: 5, tileY: 2, pickupsRemaining: 9, pickupsInitial: 9 }],
     });
     handleSurfaceCommandTap(world, 5, 2, false, false);
     expect((lastCmd(world) as { type: string }).type).toBe('MarkFoodPile');
@@ -489,7 +497,7 @@ describe('handleSurfaceDigTap', () => {
     const world = realWorld();
     // Drop a food pile on an otherwise-valid target; the sim's DesignateEntrance gate rejects it,
     // so feedforward.willTakeEffect is false and nothing enqueues.
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 999,
       tileX: 2,
       tileY: 2,

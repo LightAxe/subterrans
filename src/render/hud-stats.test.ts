@@ -30,6 +30,12 @@ import {
   FOOD_CHAMBER_CAPACITY,
 } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
+import { QUEEN_HUNGER } from '../sim/hunger.js';
+import {
+  setPoolFoodForTest,
+  setMealsUntilStarvationForTest,
+  addChamberForTest,
+} from '../sim/food/food-test-utils.js';
 
 function setupWorld(): { world: WorldState; colony: ColonyRecord; queenId: number } {
   const world = createWorldState(64);
@@ -81,7 +87,7 @@ describe('computeHudStats', () => {
 
   it('foodDisplay converts from fixed-point to human units', () => {
     const { world, colony } = setupWorld();
-    colony.foodStored = 10 << FP_SHIFT;
+    setPoolFoodForTest(world, colony, 10 << FP_SHIFT);
     const s = computeHudStats(world, colony);
     expect(s.foodDisplay).toBe(10);
   });
@@ -99,19 +105,17 @@ describe('computeHudStats', () => {
     const { world, colony } = setupWorld();
     // Two completed FoodStorage chambers → capacity = BASE + 2 × CHAMBER.
     // Matches colonyFoodCapacity source-of-truth (sim/colony/colony-system).
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 9001,
       chamberType: ChamberType.FoodStorage,
-      foodStored: 0,
       posX: 0,
       posY: 0,
       width: 3,
       height: 3,
     });
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 9002,
       chamberType: ChamberType.FoodStorage,
-      foodStored: 0,
       posX: 10,
       posY: 10,
       width: 3,
@@ -123,34 +127,39 @@ describe('computeHudStats', () => {
   });
 
   it('queenHealthPct = 100 at full grace', () => {
-    const { world, colony } = setupWorld();
-    colony.queenStarvationTimer = STARVATION_GRACE_TICKS;
+    const { world, colony, queenId } = setupWorld();
+    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, STARVATION_GRACE_TICKS);
     expect(computeHudStats(world, colony).queenHealthPct).toBe(100);
   });
 
   it('queenHealthPct scales linearly', () => {
-    const { world, colony } = setupWorld();
-    colony.queenStarvationTimer = Math.floor(STARVATION_GRACE_TICKS / 2);
+    const { world, colony, queenId } = setupWorld();
+    setMealsUntilStarvationForTest(
+      world,
+      queenId,
+      QUEEN_HUNGER,
+      Math.floor(STARVATION_GRACE_TICKS / 2),
+    );
     expect(computeHudStats(world, colony).queenHealthPct).toBe(50);
   });
 
   it('queenHealthPct = 0 when timer at or below 0', () => {
-    const { world, colony } = setupWorld();
-    colony.queenStarvationTimer = 0;
+    const { world, colony, queenId } = setupWorld();
+    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, 0);
     expect(computeHudStats(world, colony).queenHealthPct).toBe(0);
-    colony.queenStarvationTimer = -50;
+    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, -50);
     expect(computeHudStats(world, colony).queenHealthPct).toBe(0);
   });
 
   it('queenHealthPct clamps to 100 when timer above grace', () => {
-    const { world, colony } = setupWorld();
-    colony.queenStarvationTimer = STARVATION_GRACE_TICKS * 5;
+    const { world, colony, queenId } = setupWorld();
+    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, STARVATION_GRACE_TICKS * 5);
     expect(computeHudStats(world, colony).queenHealthPct).toBe(100);
   });
 
   it('queenHealthPct = 0 when queen is dead, even if timer > 0', () => {
     const { world, colony, queenId } = setupWorld();
-    colony.queenStarvationTimer = STARVATION_GRACE_TICKS;
+    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, STARVATION_GRACE_TICKS);
     world.ants.alive[queenId] = 0; // HUD fixture: stage a dead slot, not a sim death
     expect(computeHudStats(world, colony).queenHealthPct).toBe(0);
   });

@@ -1,4 +1,4 @@
-// food-projection.test.ts — #290 PR 1 food-equivalence projection (smoke + contract).
+// food-projection.test.ts — #290 food-equivalence projection (smoke + contract).
 import { describe, it, expect } from 'vitest';
 import {
   PROJECTION_STRIPPED_ANT_KEYS,
@@ -21,6 +21,12 @@ import {
   pileSlotAt,
   withdrawFood,
 } from '../sim/food/food-api.js';
+import {
+  setColonyFoodForTest,
+  setMealsUntilStarvationForTest,
+} from '../sim/food/food-test-utils.js';
+import { LARVA_HUNGER } from '../sim/hunger.js';
+import { serializeWorldState } from './save.js';
 
 interface Projection {
   snapshot: Record<string, unknown> & {
@@ -49,11 +55,12 @@ describe('#290 food projection', () => {
       tick(a, []);
       tick(b, []);
     }
-    const before = a.foodPiles.length;
+    const before = pileCount(a);
+    const snapBefore = JSON.stringify(serializeWorldState(a));
     expect(projectForEquivalence(a)).toBe(projectForEquivalence(b));
     expect(hashFoodProjection(a)).toBe(hashFoodProjection(b));
-    expect(a.foodPiles.length).toBe(before);
-    expect(typeof a.colonies[PLAYER_COLONY_ID]!.foodStored).toBe('number');
+    expect(pileCount(a)).toBe(before);
+    expect(JSON.stringify(serializeWorldState(a))).toBe(snapBefore);
   });
 
   it('strips every storage-shaped key and re-reads food through the facade', () => {
@@ -87,7 +94,7 @@ describe('#290 food projection', () => {
     expect(h2).not.toBe(h1);
     depositIntoPool(world, colony, 10);
     expect(hashFoodProjection(world)).toBe(h1); // back to the same food state
-    colony.queenStarvationTimer -= 1;
+    world.ants.lastMealTick[colony.queenEntityId]! -= 1; // one more missed meal
     expect(hashFoodProjection(world)).not.toBe(h1);
   });
 
@@ -97,12 +104,27 @@ describe('#290 food projection', () => {
     expect(hungerProjection(world, colony.queenEntityId)).toBe(STARVATION_GRACE_TICKS);
     const worker = colony.workers[0]!;
     expect(hungerProjection(world, worker)).toBeNull();
-    // A synthetic larva membership is picked up with its own timer.
+    // A synthetic larva membership is picked up with its own clock.
     colony.larvae.push(worker);
-    world.ants.starvationTimer[worker] = 42;
+    setMealsUntilStarvationForTest(world, worker, LARVA_HUNGER, 42);
     expect(hungerProjection(world, worker)).toBe(42);
     world.ants.alive[worker] = 0;
     expect(hungerProjection(world, worker)).toBeNull();
     expect(parse(world).hunger.some(([id]) => id === colony.queenEntityId)).toBe(true);
+  });
+});
+
+describe('#290 PR 2 — hungerProjection reproduces the pre-V50 countdown', () => {
+  it('queen: 300 at world creation, 300 while fed, −1 per missed meal', () => {
+    const world = createScenario(15);
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const q = colony.queenEntityId;
+    expect(hungerProjection(world, q)).toBe(STARVATION_GRACE_TICKS); // tick 0, before any meal
+    tick(world, []);
+    expect(hungerProjection(world, q)).toBe(STARVATION_GRACE_TICKS); // fed at tick 0
+    setColonyFoodForTest(world, colony, 0);
+    tick(world, []);
+    tick(world, []);
+    expect(hungerProjection(world, q)).toBe(STARVATION_GRACE_TICKS - 2); // two missed meals
   });
 });

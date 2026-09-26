@@ -24,6 +24,7 @@ import {
 } from './ai-state.js';
 import { killAnt } from './ant-death.js';
 import { colonyFoodCapacity } from './food/food-api.js';
+import { setPoolFoodForTest } from './food/food-test-utils.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import type { ColonyId } from './colony/colony-store.js';
@@ -53,7 +54,6 @@ function makeMinimalWorld(): WorldState {
   playerColony.rallyPoint = null;
   playerColony.digFlowFieldDirty = false;
   playerColony.foodFlowFieldDirty = false;
-  playerColony.foodStored = 1000;
   playerColony.workerCount = 5;
   world.colonies[PLAYER_COLONY_ID as ColonyId] = playerColony;
 
@@ -62,13 +62,15 @@ function makeMinimalWorld(): WorldState {
   enemyColony.rallyPoint = null;
   enemyColony.digFlowFieldDirty = false;
   enemyColony.foodFlowFieldDirty = false;
-  enemyColony.foodStored = 2000;
   enemyColony.workerCount = 10;
   world.colonies[ENEMY_COLONY_ID as ColonyId] = enemyColony;
 
   // Initialize ants for queen slots
   initAnt(world.ants, 0, { colonyId: PLAYER_COLONY_ID, posX: 0, posY: 0, task: AntTask.Idle });
   initAnt(world.ants, 1, { colonyId: ENEMY_COLONY_ID, posX: 0, posY: 0, task: AntTask.Idle });
+
+  setPoolFoodForTest(world, playerColony, 1000);
+  setPoolFoodForTest(world, enemyColony, 2000);
 
   // Initialize aiState
   world.aiState = [createDefaultAIStateRecord(ENEMY_COLONY_ID as ColonyId)];
@@ -168,8 +170,10 @@ describe('advanceAIState — Peacetime → WarFooting (CF-P1-010)', () => {
     spawnFighters(world, ENEMY_COLONY_ID, minFighters, 10);
     // Set food: enough for 50% threshold
     const cap = colonyFoodCapacity(world.colonies[ENEMY_COLONY_ID as ColonyId]!);
-    world.colonies[ENEMY_COLONY_ID as ColonyId]!.foodStored = Math.ceil(
-      (cap * AI_WARFOOTING_FOOD_FRAC_PCT) / 100, // eslint-disable-line no-restricted-syntax
+    setPoolFoodForTest(
+      world,
+      world.colonies[ENEMY_COLONY_ID as ColonyId]!,
+      Math.ceil((cap * AI_WARFOOTING_FOOD_FRAC_PCT) / 100), // eslint-disable-line no-restricted-syntax
     );
 
     // Player: low workers — NOT frontage ready
@@ -187,8 +191,10 @@ describe('advanceAIState — Peacetime → WarFooting (CF-P1-010)', () => {
     const minFighters = AI_WARFOOTING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX];
     spawnFighters(world, ENEMY_COLONY_ID, minFighters, 10);
     const cap = colonyFoodCapacity(world.colonies[ENEMY_COLONY_ID as ColonyId]!);
-    world.colonies[ENEMY_COLONY_ID as ColonyId]!.foodStored = Math.ceil(
-      (cap * AI_WARFOOTING_FOOD_FRAC_PCT) / 100, // eslint-disable-line no-restricted-syntax
+    setPoolFoodForTest(
+      world,
+      world.colonies[ENEMY_COLONY_ID as ColonyId]!,
+      Math.ceil((cap * AI_WARFOOTING_FOOD_FRAC_PCT) / 100), // eslint-disable-line no-restricted-syntax
     );
 
     // Player: many workers, satisfying frontage hook
@@ -212,8 +218,10 @@ describe('advanceAIState — Peacetime → WarFooting (CF-P1-010)', () => {
     const minFighters = AI_WARFOOTING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX];
     spawnFighters(world, ENEMY_COLONY_ID, minFighters - 1, 10); // one short
     const cap = colonyFoodCapacity(world.colonies[ENEMY_COLONY_ID as ColonyId]!);
-    world.colonies[ENEMY_COLONY_ID as ColonyId]!.foodStored = Math.ceil(
-      (cap * AI_WARFOOTING_FOOD_FRAC_PCT) / 100, // eslint-disable-line no-restricted-syntax
+    setPoolFoodForTest(
+      world,
+      world.colonies[ENEMY_COLONY_ID as ColonyId]!,
+      Math.ceil((cap * AI_WARFOOTING_FOOD_FRAC_PCT) / 100), // eslint-disable-line no-restricted-syntax
     );
 
     // Player: large enough to trigger frontage
@@ -230,7 +238,7 @@ describe('advanceAIState — Peacetime → WarFooting (CF-P1-010)', () => {
     // AI: enough fighters but NOT enough food
     const minFighters = AI_WARFOOTING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX];
     spawnFighters(world, ENEMY_COLONY_ID, minFighters + 2, 10);
-    world.colonies[ENEMY_COLONY_ID as ColonyId]!.foodStored = 0; // no food
+    setPoolFoodForTest(world, world.colonies[ENEMY_COLONY_ID as ColonyId]!, 0); // no food
 
     const aiState = advanceAIState(world, ENEMY_COLONY_ID as ColonyId);
     expect(aiState.state).toBe('Peacetime');

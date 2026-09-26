@@ -132,8 +132,13 @@ describe('FightingSubState discriminants (PRD §1)', () => {
     expect(FightingSubState.Engaging).toBe(1);
   });
 
-  it('FightingSubState has exactly 4 members (regression guard — was not singleton Engaged=0; Holding added in V43, ToPost in V46)', () => {
-    expect(Object.keys(FightingSubState).length).toBe(4);
+  it('FightingSubState has exactly 6 members (regression guard — was not singleton Engaged=0; Holding added in V43, ToPost in V46, Looting/Hauling reserved in V50)', () => {
+    expect(Object.keys(FightingSubState).length).toBe(6);
+  });
+
+  it('FightingSubState.Looting === 4 and Hauling === 5 (#290 PR 2 — reserved for raiding, append-only)', () => {
+    expect(FightingSubState.Looting).toBe(4);
+    expect(FightingSubState.Hauling).toBe(5);
   });
 });
 

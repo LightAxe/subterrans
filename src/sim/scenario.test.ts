@@ -18,6 +18,15 @@ import { FP_SHIFT } from './fixed.js';
 import { UndergroundTileState, ugGet } from './terrain.js';
 import { surfaceMovementAt, SurfaceMovementEffect } from './surface-features.js';
 import {
+  colonyFoodTotal,
+  colonyPoolFood,
+  pileCount,
+  pileSlotAt,
+  pileTileX,
+  pileTileY,
+} from './food/food-api.js';
+import { pilesForTest } from './food/food-test-utils.js';
+import {
   PLAYER_COLONY_ID,
   ENEMY_COLONY_ID,
   PLAYER_START_X,
@@ -113,8 +122,8 @@ describe('createScenario', () => {
 
     it('each colony has foodStored === STARTING_FOOD', () => {
       const world = createScenario(42);
-      expect(world.colonies[PLAYER_COLONY_ID]!.foodStored).toBe(STARTING_FOOD);
-      expect(world.colonies[ENEMY_COLONY_ID]!.foodStored).toBe(STARTING_FOOD);
+      expect(colonyPoolFood(world, world.colonies[PLAYER_COLONY_ID]!)).toBe(STARTING_FOOD);
+      expect(colonyPoolFood(world, world.colonies[ENEMY_COLONY_ID]!)).toBe(STARTING_FOOD);
     });
   });
 
@@ -126,18 +135,18 @@ describe('createScenario', () => {
     it('places FOOD_PILE_COUNT food piles (or fewer if rejection exhausted)', () => {
       const world = createScenario(42);
       // With 1000 attempts and 15 piles on 128×128 grid, seed 42 should reach 15
-      expect(world.foodPiles.length).toBeLessThanOrEqual(FOOD_PILE_COUNT);
-      expect(world.foodPiles.length).toBeGreaterThan(0);
+      expect(pileCount(world)).toBeLessThanOrEqual(FOOD_PILE_COUNT);
+      expect(pileCount(world)).toBeGreaterThan(0);
     });
 
     it('places exactly FOOD_PILE_COUNT piles for seed 42', () => {
       const world = createScenario(42);
-      expect(world.foodPiles.length).toBe(FOOD_PILE_COUNT);
+      expect(pileCount(world)).toBe(FOOD_PILE_COUNT);
     });
 
     it('no two food piles are within FOOD_PILE_MIN_SEPARATION of each other', () => {
       const world = createScenario(42);
-      const piles = world.foodPiles;
+      const piles = pilesForTest(world);
       for (let i = 0; i < piles.length; i++) {
         for (let j = i + 1; j < piles.length; j++) {
           const dist =
@@ -150,7 +159,7 @@ describe('createScenario', () => {
 
     it('no food pile is within FOOD_PILE_MIN_COLONY_DISTANCE of player start', () => {
       const world = createScenario(42);
-      for (const pile of world.foodPiles) {
+      for (const pile of pilesForTest(world)) {
         const dist = Math.abs(pile.tileX - PLAYER_START_X) + Math.abs(pile.tileY - PLAYER_START_Y);
         expect(dist).toBeGreaterThanOrEqual(FOOD_PILE_MIN_COLONY_DISTANCE);
       }
@@ -158,7 +167,7 @@ describe('createScenario', () => {
 
     it('no food pile is within FOOD_PILE_MIN_COLONY_DISTANCE of enemy start', () => {
       const world = createScenario(42);
-      for (const pile of world.foodPiles) {
+      for (const pile of pilesForTest(world)) {
         const dist = Math.abs(pile.tileX - ENEMY_START_X) + Math.abs(pile.tileY - ENEMY_START_Y);
         expect(dist).toBeGreaterThanOrEqual(FOOD_PILE_MIN_COLONY_DISTANCE);
       }
@@ -212,8 +221,8 @@ describe('createScenario', () => {
   describe('SURF-02: food piles are static/infinite', () => {
     it('FoodPile has no quantity field — existence means infinite food', () => {
       const world = createScenario(42);
-      expect(world.foodPiles.length).toBeGreaterThan(0);
-      const pile = world.foodPiles[0]!;
+      expect(pileCount(world)).toBeGreaterThan(0);
+      const pile = pilesForTest(world)[0]!;
       // Should have exactly the four canonical fields; no quantity
       expect(Object.prototype.hasOwnProperty.call(pile, 'foodPileId')).toBe(true);
       expect(Object.prototype.hasOwnProperty.call(pile, 'tileX')).toBe(true);
@@ -358,10 +367,14 @@ describe('createScenario', () => {
     it('two calls with seed 42 produce identical food pile coordinates', () => {
       const world1 = createScenario(42);
       const world2 = createScenario(42);
-      expect(world1.foodPiles.length).toBe(world2.foodPiles.length);
-      for (let i = 0; i < world1.foodPiles.length; i++) {
-        expect(world1.foodPiles[i]!.tileX).toBe(world2.foodPiles[i]!.tileX);
-        expect(world1.foodPiles[i]!.tileY).toBe(world2.foodPiles[i]!.tileY);
+      expect(pileCount(world1)).toBe(pileCount(world2));
+      for (let i = 0; i < pileCount(world1); i++) {
+        expect(pileTileX(world1, pileSlotAt(world1, i))).toBe(
+          pileTileX(world2, pileSlotAt(world2, i)),
+        );
+        expect(pileTileY(world1, pileSlotAt(world1, i))).toBe(
+          pileTileY(world2, pileSlotAt(world2, i)),
+        );
       }
     });
 
@@ -570,8 +583,7 @@ describe('createScenario', () => {
             workersCarrying += 1;
           }
         }
-        const chamberFood = colony.chambers.reduce((s, c) => s + c.foodStored, 0);
-        const evidence = colony.foodStored > 0 || chamberFood > 0 || workersCarrying > 0;
+        const evidence = colonyFoodTotal(world, colony) > 0 || workersCarrying > 0;
         expect(evidence).toBe(true);
       }
     });

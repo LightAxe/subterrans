@@ -45,8 +45,35 @@ import { createEntranceFlowFields } from '../entrance-flow.js';
 import { createChamberFlowFields } from '../chamber-flow.js';
 import type { WorldState } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
-import type { FoodPile } from '../food.js';
-import { pushTestPile } from '../food/food-test-utils.js';
+import {
+  colonyPoolFood,
+  chamberStock,
+  pileAmountFp,
+  pileCount,
+  pileSlotById,
+} from '../food/food-api.js';
+import {
+  addPileForTest,
+  pushTestPile,
+  setPoolFoodForTest,
+  ensureColonyPoolForTest,
+  setChamberStockForTest,
+  addChamberForTest,
+  type TestChamber,
+  type TestPile,
+} from '../food/food-test-utils.js';
+
+/** log2(FOOD_PICKUP_AMOUNT) — mirrors food-api.ts's PICKUP_SHIFT (guarded there). */
+const PICKUP_SHIFT = 9;
+
+/** Live pile size in whole pickups (post-mutation reader; the food store, not a snapshot). */
+function remainingPickups(world: WorldState, slot: number): number {
+  return pileAmountFp(world, slot) >> PICKUP_SHIFT;
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -99,7 +126,7 @@ function setupSurfaceGrid(world: WorldState, colonyId = COLONY_ID) {
 describe('antPickupFood', () => {
   it('1. normal pickup — transfers FOOD_PICKUP_AMOUNT, drains one charge, transitions to CarryingFood', () => {
     const { world, antId } = setupForagerWorld();
-    const { slot, pile } = pushTestPile(world, 50);
+    const { slot } = pushTestPile(world, 50);
     world.ants.foodCarrying[antId] = 0;
     world.ants.subTask[antId] = ForagingSubState.SearchingFood;
 
@@ -109,7 +136,7 @@ describe('antPickupFood', () => {
     expect(world.ants.foodCarrying[antId]).toBe(FOOD_PICKUP_AMOUNT);
     // Issue #112 — pickup-charge counter drains by FOOD_PILE_PICKUP_DRAIN (=1)
     // independently of the food quantity transferred.
-    expect(pile.pickupsRemaining).toBe(49);
+    expect(remainingPickups(world, slot)).toBe(49);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood);
   });
 
@@ -117,14 +144,14 @@ describe('antPickupFood', () => {
     const { world, antId } = setupForagerWorld();
     world.ants.foodCarrying[antId] = 600; // 424 remaining capacity (WORKER_CARRY_CAPACITY=1024)
     world.ants.subTask[antId] = ForagingSubState.SearchingFood;
-    const { slot, pile } = pushTestPile(world, 50);
+    const { slot } = pushTestPile(world, 50);
 
     const transferred = antPickupFood(world, antId, slot);
 
     const expectedTransfer = WORKER_CARRY_CAPACITY - 600; // 424
     expect(transferred).toBe(expectedTransfer);
     expect(world.ants.foodCarrying[antId]).toBe(WORKER_CARRY_CAPACITY); // full
-    expect(pile.pickupsRemaining).toBe(49); // one charge drained
+    expect(remainingPickups(world, slot)).toBe(49); // one charge drained
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood);
   });
 
@@ -132,7 +159,10 @@ describe('antPickupFood', () => {
     const { world, antId } = setupForagerWorld();
     world.ants.foodCarrying[antId] = 0;
     world.ants.subTask[antId] = ForagingSubState.SearchingFood;
-    const { slot, pile } = pushTestPile(world, 1); // last charge
+    const {
+      slot,
+      pile: { foodPileId },
+    } = pushTestPile(world, 1); // last charge
 
     const transferred = antPickupFood(world, antId, slot);
 
@@ -141,9 +171,8 @@ describe('antPickupFood', () => {
     // drainPile records the depletion and removes the emptied pile.
     expect(transferred).toBe(FOOD_PICKUP_AMOUNT);
     expect(world.ants.foodCarrying[antId]).toBe(FOOD_PICKUP_AMOUNT);
-    expect(pile.pickupsRemaining).toBe(0);
-    expect(world.foodPiles.includes(pile)).toBe(false);
-    expect(world.foodPiles.length).toBe(slot); // it was the last pile; now gone
+    expect(pileSlotById(world, foodPileId)).toBe(-1);
+    expect(pileCount(world)).toBe(0); // it was the last pile; now gone
     const last = world.recentlyDepletedFood[world.recentlyDepletedFood.length - 1]!;
     expect(last.tick).toBe(world.tick); // depletion recorded this tick
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood);
@@ -153,13 +182,13 @@ describe('antPickupFood', () => {
     const { world, antId } = setupForagerWorld();
     world.ants.foodCarrying[antId] = WORKER_CARRY_CAPACITY; // already full
     world.ants.subTask[antId] = ForagingSubState.SearchingFood;
-    const { slot, pile } = pushTestPile(world, 50);
+    const { slot } = pushTestPile(world, 50);
 
     const transferred = antPickupFood(world, antId, slot);
 
     expect(transferred).toBe(0);
     expect(world.ants.foodCarrying[antId]).toBe(WORKER_CARRY_CAPACITY); // unchanged
-    expect(pile.pickupsRemaining).toBe(50); // no drain on zero-transfer
+    expect(remainingPickups(world, slot)).toBe(50); // no drain on zero-transfer
     // Critical: no transition — subTask must NOT be flipped on zero transfer
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
   });
@@ -168,13 +197,13 @@ describe('antPickupFood', () => {
     const { world, antId } = setupForagerWorld();
     world.ants.foodCarrying[antId] = 0;
     world.ants.subTask[antId] = ForagingSubState.SearchingFood;
-    const { slot, pile } = pushTestPile(world, 0); // already exhausted
+    const { slot } = pushTestPile(world, 0); // already exhausted
 
     const transferred = antPickupFood(world, antId, slot);
 
     expect(transferred).toBe(0);
     expect(world.ants.foodCarrying[antId]).toBe(0);
-    expect(pile.pickupsRemaining).toBe(0); // no underflow on exhausted pile
+    expect(remainingPickups(world, slot)).toBe(0); // no underflow on exhausted pile
     // Critical: subTask must NOT flip on zero-transfer
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
   });
@@ -190,11 +219,11 @@ describe('antDepositFood', () => {
     world.ants.foodCarrying[antId] = 500;
     world.ants.task[antId] = AntTask.Foraging;
     world.ants.subTask[antId] = ForagingSubState.CarryingFood;
-    colony.foodStored = 0;
+    setPoolFoodForTest(world, colony, 0);
 
     antDepositFood(world, colony, antId);
 
-    expect(colony.foodStored).toBe(500);
+    expect(colonyPoolFood(world, colony)).toBe(500);
     expect(world.ants.foodCarrying[antId]).toBe(0);
     // Idle-checkpoint per PRD §4c + §7c as revised by Errata E-01:
     expect(world.ants.task[antId]).toBe(AntTask.Idle);
@@ -206,12 +235,12 @@ describe('antDepositFood', () => {
     world.ants.foodCarrying[antId] = 0;
     world.ants.task[antId] = AntTask.Foraging;
     world.ants.subTask[antId] = ForagingSubState.CarryingFood;
-    colony.foodStored = 100;
+    setPoolFoodForTest(world, colony, 100);
 
     antDepositFood(world, colony, antId);
 
     // Full no-op: nothing changes
-    expect(colony.foodStored).toBe(100);
+    expect(colonyPoolFood(world, colony)).toBe(100);
     expect(world.ants.foodCarrying[antId]).toBe(0);
     expect(world.ants.task[antId]).toBe(AntTask.Foraging); // NOT flipped to Idle
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood); // NOT cleared
@@ -224,12 +253,12 @@ describe('antDepositFood', () => {
     world.ants.task[antId] = AntTask.Foraging;
     world.ants.subTask[antId] = ForagingSubState.CarryingFood;
     // No chambers → capacity = BASE. Start at capacity.
-    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
+    setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY);
 
     antDepositFood(world, colony, antId);
 
     // Nothing deposited; all food retained by the ant.
-    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
+    expect(colonyPoolFood(world, colony)).toBe(BASE_FOOD_STORAGE_CAPACITY);
     expect(world.ants.foodCarrying[antId]).toBe(512);
     // Ant remains in deposit-seeking state for next-tick retry
     expect(world.ants.task[antId]).toBe(AntTask.Foraging);
@@ -242,12 +271,12 @@ describe('antDepositFood', () => {
     world.ants.task[antId] = AntTask.Foraging;
     world.ants.subTask[antId] = ForagingSubState.CarryingFood;
     // No chambers. capacity = BASE. 10fp of headroom.
-    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY - 10;
+    setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY - 10);
 
     antDepositFood(world, colony, antId);
 
     // Exactly 10fp fit; 502fp remain on the ant.
-    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
+    expect(colonyPoolFood(world, colony)).toBe(BASE_FOOD_STORAGE_CAPACITY);
     expect(world.ants.foodCarrying[antId]).toBe(502);
     // Ant holds its carrying state so step 16b re-routes next tick.
     expect(world.ants.task[antId]).toBe(AntTask.Foraging);
@@ -260,10 +289,9 @@ describe('antDepositFood', () => {
     world.ants.foodCarrying[antId] = 512;
     world.ants.task[antId] = AntTask.Foraging;
     world.ants.subTask[antId] = ForagingSubState.CarryingFood;
-    colony.chambers.push({
+    const ch = addChamberForTest(world, colony, {
       chamberId: 100,
       chamberType: ChamberType.FoodStorage,
-      foodStored: 0,
       posX: 0,
       posY: 0,
       width: 3,
@@ -272,13 +300,13 @@ describe('antDepositFood', () => {
     // Pool is already at BASE; further pool deposits would be impossible. The
     // chamber-authoritative path lets the ant deposit anyway because the
     // chamber has its own bucket.
-    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
+    setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY);
 
     antDepositFood(world, colony, antId);
 
     // Issue #15: chamber gets the deposit; entrance pool is untouched.
-    expect(colony.chambers[0]!.foodStored).toBe(512);
-    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
+    expect(chamberStock(world, ch)).toBe(512);
+    expect(colonyPoolFood(world, colony)).toBe(BASE_FOOD_STORAGE_CAPACITY);
     expect(world.ants.foodCarrying[antId]).toBe(0);
     expect(world.ants.task[antId]).toBe(AntTask.Idle);
     expect(world.ants.subTask[antId]).toBe(0);
@@ -291,22 +319,26 @@ describe('antDepositFood', () => {
     world.ants.subTask[antId] = ForagingSubState.CarryingFood;
     // Chamber at cap — antDepositFood must skip it (issue #15: full chambers
     // are not deposit targets).
-    colony.chambers.push({
-      chamberId: 100,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: FOOD_CHAMBER_CAPACITY,
-      posX: 0,
-      posY: 0,
-      width: 3,
-      height: 3,
-    });
+    const ch = addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 100,
+        chamberType: ChamberType.FoodStorage,
+        posX: 0,
+        posY: 0,
+        width: 3,
+        height: 3,
+      },
+      FOOD_CHAMBER_CAPACITY,
+    );
     // Pool also at cap → no fallback room either.
-    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
+    setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY);
 
     antDepositFood(world, colony, antId);
 
-    expect(colony.chambers[0]!.foodStored).toBe(FOOD_CHAMBER_CAPACITY);
-    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
+    expect(chamberStock(world, ch)).toBe(FOOD_CHAMBER_CAPACITY);
+    expect(colonyPoolFood(world, colony)).toBe(BASE_FOOD_STORAGE_CAPACITY);
     expect(world.ants.foodCarrying[antId]).toBe(512);
     expect(world.ants.task[antId]).toBe(AntTask.Foraging);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood);
@@ -322,7 +354,7 @@ describe('CLNY-06 forage cycle — Phase 6 SC 6 integration', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
     world.colonies[COLONY_ID] = colony;
-    colony.foodStored = 0;
+    setPoolFoodForTest(world, colony, 0);
 
     // Set up ant at a known tile
     const tileX = 10;
@@ -340,7 +372,7 @@ describe('CLNY-06 forage cycle — Phase 6 SC 6 integration', () => {
     const { grid } = setupSurfaceGrid(world);
 
     // Synthetic food pile (Phase 6 headless — no FoodPile entity needed)
-    const { slot, pile } = pushTestPile(world, 50);
+    const { slot } = pushTestPile(world, 50);
 
     // --- Tick 0: pickup ---
     const transferred = antPickupFood(world, antId, slot);
@@ -348,7 +380,7 @@ describe('CLNY-06 forage cycle — Phase 6 SC 6 integration', () => {
     expect(transferred).toBe(FOOD_PICKUP_AMOUNT); // 512
     expect(world.ants.foodCarrying[antId]).toBe(FOOD_PICKUP_AMOUNT);
     // Issue #112 — pickup-charge counter drains by 1 per pickup
-    expect(pile.pickupsRemaining).toBe(49);
+    expect(remainingPickups(world, slot)).toBe(49);
     // antPickupFood owns the subTask transition per PRD §4c L1103
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood);
 
@@ -368,7 +400,7 @@ describe('CLNY-06 forage cycle — Phase 6 SC 6 integration', () => {
     antDepositFood(world, colony, antId);
 
     // Phase 6 SC 6 closure: food transferred to colony pool
-    expect(colony.foodStored).toBe(FOOD_PICKUP_AMOUNT); // 512
+    expect(colonyPoolFood(world, colony)).toBe(FOOD_PICKUP_AMOUNT); // 512
     expect(world.ants.foodCarrying[antId]).toBe(0);
 
     // Idle-checkpoint per PRD §4c + §7c as revised by Errata E-01:
@@ -384,7 +416,7 @@ describe('CLNY-06 forage cycle — Phase 6 SC 6 integration', () => {
 // ---------------------------------------------------------------------------
 
 describe('routeForagerPriority', () => {
-  function makePile(id: number, tileX: number, tileY: number): FoodPile {
+  function makePile(id: number, tileX: number, tileY: number): TestPile {
     return { foodPileId: id, tileX, tileY, pickupsRemaining: 50, pickupsInitial: 50 };
   }
 
@@ -397,8 +429,8 @@ describe('routeForagerPriority', () => {
     colony.priorityFoodPileId = null;
     world.colonies[COLONY_ID] = colony;
 
-    world.foodPiles.push(makePile(1, 10, 10));
-    world.foodPiles.push(makePile(2, 20, 20));
+    addPileForTest(world, makePile(1, 10, 10));
+    addPileForTest(world, makePile(2, 20, 20));
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -425,7 +457,7 @@ describe('routeForagerPriority', () => {
     colony.priorityFoodPileId = 1;
     world.colonies[COLONY_ID] = colony;
 
-    world.foodPiles.push(makePile(1, 15, 20));
+    addPileForTest(world, makePile(1, 15, 20));
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -458,8 +490,8 @@ describe('routeForagerPriority', () => {
     world.colonies[COLONY_ID] = colony;
 
     // Ant at (5,5); pile 10 is far (10,5), pile 20 is close (6,5).
-    world.foodPiles.push(makePile(10, 10, 5));
-    world.foodPiles.push(makePile(20, 6, 5));
+    addPileForTest(world, makePile(10, 10, 5));
+    addPileForTest(world, makePile(20, 6, 5));
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -487,7 +519,7 @@ describe('routeForagerPriority', () => {
     colony.priorityFoodPileId = 1;
     world.colonies[COLONY_ID] = colony;
 
-    world.foodPiles.push(makePile(1, 10, 10));
+    addPileForTest(world, makePile(1, 10, 10));
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -530,7 +562,7 @@ describe('routeForagerPriority', () => {
     colonyB.priorityFoodPileId = null;
     world.colonies[COLONY_B] = colonyB;
 
-    world.foodPiles.push(makePile(1, 15, 20));
+    addPileForTest(world, makePile(1, 15, 20));
 
     const antA = allocateEntityId(world);
     initAnt(world.ants, antA, {
@@ -571,7 +603,7 @@ describe('routeForagerPriority', () => {
     colony.priorityFoodPileId = 999; // no such pile
     world.colonies[COLONY_ID] = colony;
 
-    world.foodPiles.push(makePile(1, 10, 10));
+    addPileForTest(world, makePile(1, 10, 10));
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -601,21 +633,23 @@ describe('routeForagerPriority', () => {
 // ---------------------------------------------------------------------------
 
 describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
-  function makeFoodStorageChamber(
+  function addFoodStorageChamber(
+    world: WorldState,
+    colony: ColonyRecord,
     id: number,
     stored: number,
     posTileX: number,
     posTileY: number,
   ): ColonyRecord['chambers'][number] {
-    return {
+    const chamber: TestChamber = {
       chamberId: id,
       chamberType: ChamberType.FoodStorage,
-      foodStored: stored,
       posX: posTileX << FP_SHIFT,
       posY: posTileY << FP_SHIFT,
       width: 4,
       height: 3,
     };
+    return addChamberForTest(world, colony, chamber, stored);
   }
 
   it('14. ant inside FoodStorage footprint → deposit writes ONLY chamber.foodStored; entrance pool untouched', () => {
@@ -625,8 +659,8 @@ describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     colony.foodFlowFieldDirty = false;
-    colony.chambers.push(makeFoodStorageChamber(1, 0, 0, 0));
-    colony.foodStored = 0;
+    const ch = addFoodStorageChamber(world, colony, 1, 0, 0, 0);
+    setPoolFoodForTest(world, colony, 0);
     world.colonies[COLONY_ID] = colony;
 
     const antId = allocateEntityId(world);
@@ -642,8 +676,8 @@ describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
     antDepositFood(world, colony, antId);
 
     // Chamber receives all 500; entrance pool untouched.
-    expect(colony.chambers[0]!.foodStored).toBe(500);
-    expect(colony.foodStored).toBe(0);
+    expect(chamberStock(world, ch)).toBe(500);
+    expect(colonyPoolFood(world, colony)).toBe(0);
     expect(world.ants.foodCarrying[antId]).toBe(0);
     expect(world.ants.task[antId]).toBe(AntTask.Idle);
     // Chamber not yet full → no flow-field re-seed signal needed.
@@ -658,7 +692,7 @@ describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
     colony.digFlowFieldDirty = false;
     colony.foodFlowFieldDirty = false;
     // No chambers → capacity = BASE_FOOD_STORAGE_CAPACITY (entrance pool only).
-    colony.foodStored = 0;
+    setPoolFoodForTest(world, colony, 0);
     world.colonies[COLONY_ID] = colony;
 
     const antId = allocateEntityId(world);
@@ -673,7 +707,7 @@ describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
 
     antDepositFood(world, colony, antId);
 
-    expect(colony.foodStored).toBe(512);
+    expect(colonyPoolFood(world, colony)).toBe(512);
     expect(world.ants.foodCarrying[antId]).toBe(0);
     expect(world.ants.task[antId]).toBe(AntTask.Idle);
   });
@@ -687,9 +721,9 @@ describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
     colony.foodFlowFieldDirty = false;
     // Two chambers in different parts of the grid. Ant only stands in chamber[0].
     // chamber[0] starts with 1234 stored, so headroom = 5120-1234 = 3886.
-    colony.chambers.push(makeFoodStorageChamber(1, 1234, 0, 0));
-    colony.chambers.push(makeFoodStorageChamber(2, 0, 8, 8));
-    colony.foodStored = 0;
+    const ch0 = addFoodStorageChamber(world, colony, 1, 1234, 0, 0);
+    const ch1 = addFoodStorageChamber(world, colony, 2, 0, 8, 8);
+    setPoolFoodForTest(world, colony, 0);
     world.colonies[COLONY_ID] = colony;
 
     const antId = allocateEntityId(world);
@@ -708,9 +742,9 @@ describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
     // chamber[0] reaches FOOD_CHAMBER_CAPACITY; chamber[1] is untouched (no ant
     // visit). Issue #15: the OLD bug was redistributing the pool across
     // chambers without a visit — this test guards against regression.
-    expect(colony.chambers[0]!.foodStored).toBe(FOOD_CHAMBER_CAPACITY);
-    expect(colony.chambers[1]!.foodStored).toBe(0);
-    expect(colony.foodStored).toBe(0);
+    expect(chamberStock(world, ch0)).toBe(FOOD_CHAMBER_CAPACITY);
+    expect(chamberStock(world, ch1)).toBe(0);
+    expect(colonyPoolFood(world, colony)).toBe(0);
     expect(world.ants.foodCarrying[antId]).toBe(0);
     expect(world.ants.task[antId]).toBe(AntTask.Idle);
     // Full↔not-full boundary crossed → flow-field must re-seed next tick.
@@ -725,9 +759,9 @@ describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
     colony.digFlowFieldDirty = false;
     colony.foodFlowFieldDirty = false;
     // Two chambers, both far from the ant's tile.
-    colony.chambers.push(makeFoodStorageChamber(1, 0, 8, 8));
-    colony.chambers.push(makeFoodStorageChamber(2, 0, 16, 8));
-    colony.foodStored = 0;
+    const ch0 = addFoodStorageChamber(world, colony, 1, 0, 8, 8);
+    const ch1 = addFoodStorageChamber(world, colony, 2, 0, 16, 8);
+    setPoolFoodForTest(world, colony, 0);
     world.colonies[COLONY_ID] = colony;
 
     const antId = allocateEntityId(world);
@@ -743,10 +777,10 @@ describe('antDepositFood — chamber-authoritative deposit (issue #15)', () => {
     antDepositFood(world, colony, antId);
 
     // Distant chambers must NOT receive any food — that's the bug we fixed.
-    expect(colony.chambers[0]!.foodStored).toBe(0);
-    expect(colony.chambers[1]!.foodStored).toBe(0);
+    expect(chamberStock(world, ch0)).toBe(0);
+    expect(chamberStock(world, ch1)).toBe(0);
     // Fallback pool gets the deposit.
-    expect(colony.foodStored).toBe(1000);
+    expect(colonyPoolFood(world, colony)).toBe(1000);
   });
 });
 
@@ -763,7 +797,7 @@ describe('tickForagerActions', () => {
     colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
 
-    world.foodPiles.push({
+    const pileSlot = addPileForTest(world, {
       foodPileId: 1,
       tileX: 12,
       tileY: 8,
@@ -787,7 +821,7 @@ describe('tickForagerActions', () => {
     expect(world.ants.foodCarrying[antId]).toBe(FOOD_PICKUP_AMOUNT);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood);
     // Issue #112 — pile drained one charge.
-    expect(world.foodPiles[0]!.pickupsRemaining).toBe(49);
+    expect(remainingPickups(world, pileSlot)).toBe(49);
   });
 
   it('issue #112 — final-charge pickup splices pile out and records depletion', () => {
@@ -799,7 +833,7 @@ describe('tickForagerActions', () => {
     colony.priorityFoodPileId = 1; // mark this pile as priority
     world.colonies[COLONY_ID] = colony;
 
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 1,
       tileX: 12,
       tileY: 8,
@@ -823,7 +857,7 @@ describe('tickForagerActions', () => {
     // Ant carried away one full transfer.
     expect(world.ants.foodCarrying[antId]).toBe(FOOD_PICKUP_AMOUNT);
     // Pile spliced out of the array.
-    expect(world.foodPiles.length).toBe(0);
+    expect(pileCount(world)).toBe(0);
     // Recorded in recentlyDepletedFood with the right tile.
     expect(world.recentlyDepletedFood.length).toBe(1);
     expect(world.recentlyDepletedFood[0]).toMatchObject({ tileX: 12, tileY: 8 });
@@ -839,7 +873,7 @@ describe('tickForagerActions', () => {
     colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
 
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 1,
       tileX: 12,
       tileY: 8,
@@ -864,23 +898,23 @@ describe('tickForagerActions', () => {
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
   });
 
-  it('underground CarryingFood ant on a FoodStorage chamber tile → deposits to chamber.foodStored and flips to Idle', () => {
+  it('underground CarryingFood ant on a FoodStorage chamber tile → deposits to the chamber stock and flips to Idle', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
     colony.entrances = [];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     colony.foodFlowFieldDirty = false;
-    colony.chambers.push({
+    const ch = addChamberForTest(world, colony, {
       chamberId: 1,
       chamberType: ChamberType.FoodStorage,
-      foodStored: 0,
       posX: 0,
       posY: 0,
       width: 4,
       height: 3,
     });
     world.colonies[COLONY_ID] = colony;
+    ensureColonyPoolForTest(world, colony); // an empty pool the deposit must NOT reach
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -896,8 +930,8 @@ describe('tickForagerActions', () => {
     tickForagerActions(world);
 
     // Issue #15: deposit lands in chamber.foodStored, NOT the entrance pool.
-    expect(colony.chambers[0]!.foodStored).toBe(500);
-    expect(colony.foodStored).toBe(0);
+    expect(chamberStock(world, ch)).toBe(500);
+    expect(colonyPoolFood(world, colony)).toBe(0);
     expect(world.ants.foodCarrying[antId]).toBe(0);
     expect(world.ants.task[antId]).toBe(AntTask.Idle);
   });
@@ -910,6 +944,9 @@ describe('tickForagerActions', () => {
     colony.digFlowFieldDirty = false;
     // No FoodStorage chamber — fallback path.
     world.colonies[COLONY_ID] = colony;
+    // #290 PR 2: a hand-built colony has no pool by default; give it one so
+    // the fallback deposit has somewhere to land (createScenario always does).
+    ensureColonyPoolForTest(world, colony);
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -924,7 +961,7 @@ describe('tickForagerActions', () => {
 
     tickForagerActions(world);
 
-    expect(colony.foodStored).toBe(300);
+    expect(colonyPoolFood(world, colony)).toBe(300);
     expect(world.ants.foodCarrying[antId]).toBe(0);
     expect(world.ants.task[antId]).toBe(AntTask.Idle);
   });
@@ -936,6 +973,8 @@ describe('tickForagerActions', () => {
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
+    // A real (empty) pool, so a missing gate would show up as a deposit.
+    ensureColonyPoolForTest(world, colony);
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -950,7 +989,7 @@ describe('tickForagerActions', () => {
 
     tickForagerActions(world);
 
-    expect(colony.foodStored).toBe(0);
+    expect(colonyPoolFood(world, colony)).toBe(0);
     expect(world.ants.foodCarrying[antId]).toBe(300); // still carrying
     expect(world.ants.task[antId]).toBe(AntTask.Foraging); // not flipped
   });
@@ -962,6 +1001,8 @@ describe('tickForagerActions', () => {
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     world.colonies[COLONY_ID] = colony;
+    // A real (empty) pool, so a missing gate would show up as a deposit.
+    ensureColonyPoolForTest(world, colony);
 
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -976,7 +1017,7 @@ describe('tickForagerActions', () => {
 
     tickForagerActions(world);
 
-    expect(colony.foodStored).toBe(0);
+    expect(colonyPoolFood(world, colony)).toBe(0);
     expect(world.ants.foodCarrying[antId]).toBe(300);
     expect(world.ants.task[antId]).toBe(AntTask.Foraging);
   });
@@ -1003,6 +1044,7 @@ describe('issue #27 — carrier WaitingToDeposit', () => {
     world: WorldState;
     colony: ColonyRecord;
     antId: number;
+    chamber: ColonyRecord['chambers'][number];
   } {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
     const colony = createColonyRecord(COLONY_ID, 0);
@@ -1010,15 +1052,19 @@ describe('issue #27 — carrier WaitingToDeposit', () => {
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     colony.foodFlowFieldDirty = false;
-    colony.chambers.push({
-      chamberId: 1,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: FOOD_CHAMBER_CAPACITY, // saturated
-      posX: 0,
-      posY: 0,
-      width: 3,
-      height: 3,
-    });
+    const chamber = addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 1,
+        chamberType: ChamberType.FoodStorage,
+        posX: 0,
+        posY: 0,
+        width: 3,
+        height: 3,
+      },
+      FOOD_CHAMBER_CAPACITY, // saturated
+    );
     world.colonies[COLONY_ID] = colony;
 
     const antId = allocateEntityId(world);
@@ -1033,8 +1079,8 @@ describe('issue #27 — carrier WaitingToDeposit', () => {
     world.ants.foodCarrying[antId] = 512;
 
     // Pool also at cap → fallback also has no headroom.
-    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
-    return { world, colony, antId };
+    setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY);
+    return { world, colony, antId, chamber };
   }
 
   it('1. wait entry — entrance fallback with pool at cap sets waitingDeposit=1', () => {
@@ -1063,12 +1109,12 @@ describe('issue #27 — carrier WaitingToDeposit', () => {
   });
 
   it('3. wake on chamber depositable — drain a chamber below saturation, tickForagerActions wakes', () => {
-    const { world, colony, antId } = setupSaturatedColony();
+    const { world, colony, antId, chamber } = setupSaturatedColony();
     world.ants.waitingDeposit[antId] = 1;
 
     // Drain the chamber across the saturation threshold so it becomes depositable.
     // CAPACITY=5120, HYST=512, so depositable ⇔ stored ≤ 4608.
-    colony.chambers[0]!.foodStored = 4000;
+    setChamberStockForTest(world, colony, chamber, 4000);
 
     tickForagerActions(world);
 
@@ -1080,7 +1126,7 @@ describe('issue #27 — carrier WaitingToDeposit', () => {
     world.ants.waitingDeposit[antId] = 1;
 
     // Chamber stays saturated; only the entrance pool drains.
-    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY - 100;
+    setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY - 100);
 
     tickForagerActions(world);
 
@@ -1090,7 +1136,7 @@ describe('issue #27 — carrier WaitingToDeposit', () => {
     // (412 fp) — so on v6 the ant ends the tick BACK in wait. On v5 the
     // ant ends the tick out-of-wait. The pool drain + carry-down assertions
     // hold under both versions.
-    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
+    expect(colonyPoolFood(world, colony)).toBe(BASE_FOOD_STORAGE_CAPACITY);
     expect(world.ants.foodCarrying[antId]).toBe(412);
     if (world.simVersion >= 6) {
       expect(world.ants.waitingDeposit[antId]).toBe(1); // re-enters wait on partial fill
@@ -1116,12 +1162,12 @@ describe('issue #27 — carrier WaitingToDeposit', () => {
   });
 
   it('6. full deposit clears wait flag (defense in depth — wait should never coexist with Idle)', () => {
-    const { world, colony, antId } = setupSaturatedColony();
+    const { world, colony, antId, chamber } = setupSaturatedColony();
     // Pre-seed wait (synthetic — antDepositFood won't both enter and exit
     // wait in the same call, but if a slot is reused the flag must zero).
     world.ants.waitingDeposit[antId] = 1;
     // Make the chamber depositable so antDepositFood succeeds.
-    colony.chambers[0]!.foodStored = 0;
+    setChamberStockForTest(world, colony, chamber, 0);
     // Move ant into chamber footprint so chamber path is taken.
     world.ants.posX[antId] = 1 << FP_SHIFT;
     world.ants.posY[antId] = 1 << FP_SHIFT;
@@ -1502,8 +1548,8 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
       tileY: 0,
       pickupsRemaining: 50,
       pickupsInitial: 50,
-    } as FoodPile;
-    world.foodPiles.push(pile);
+    };
+    addPileForTest(world, pile);
     colony.priorityFoodPileId = pile.foodPileId;
     tickExcursionBoundary(world);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
@@ -1513,7 +1559,7 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
     const base = SEARCH_LEASH_RADII[0]!;
     const { world, antId } = baseSetup(base + 2, 0);
     // Pile within FOOD_SCENT_RADIUS (=15) of the ant — scent lookup returns non-null.
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 1,
       tileX: base + 5,
       tileY: 0,
@@ -1556,8 +1602,8 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
       tileY: 0,
       pickupsRemaining: 50,
       pickupsInitial: 50,
-    } as FoodPile;
-    world.foodPiles.push(pile);
+    };
+    addPileForTest(world, pile);
     colony.priorityFoodPileId = pile.foodPileId;
     tickExcursionBoundary(world);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
@@ -1569,7 +1615,7 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
   it('ReturningToNest + nearby scent pile → flips back to SearchingFood', () => {
     const { world, antId } = baseSetup(10, 10);
     world.ants.subTask[antId] = ForagingSubState.ReturningToNest;
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 1,
       tileX: 12,
       tileY: 10,
@@ -1693,8 +1739,8 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
       tileY: 0,
       pickupsRemaining: 50,
       pickupsInitial: 50,
-    } as FoodPile;
-    world.foodPiles.push(pile);
+    };
+    addPileForTest(world, pile);
     colony.priorityFoodPileId = pile.foodPileId;
     tickExcursionBoundary(world);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.SearchingFood);
@@ -1993,7 +2039,7 @@ describe('SearchingFood pause cadence (issue #35)', () => {
     world.ants.foodCarrying[antId] = 200;
     world.ants.subTask[antId] = ForagingSubState.CarryingFood;
     const colony = world.colonies[COLONY_ID]!;
-    colony.foodStored = 0;
+    setPoolFoodForTest(world, colony, 0);
     antDepositFood(world, colony, antId);
     expect(world.ants.searchPauseTicks[antId]).toBe(0);
   });
@@ -2084,7 +2130,7 @@ describe('issue #42 — partial-deposit wait gate (v6)', () => {
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     colony.foodFlowFieldDirty = false;
-    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY - 100; // 100 fp headroom
+    setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY - 100); // 100 fp headroom
     world.colonies[COLONY_ID] = colony;
 
     const antId = allocateEntityId(world);
@@ -2101,7 +2147,7 @@ describe('issue #42 — partial-deposit wait gate (v6)', () => {
     antDepositFood(world, colony, antId);
 
     // Pool at cap, 400 leftover, ant entered wait.
-    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
+    expect(colonyPoolFood(world, colony)).toBe(BASE_FOOD_STORAGE_CAPACITY);
     expect(world.ants.foodCarrying[antId]).toBe(400);
     expect(world.ants.waitingDeposit[antId]).toBe(1);
   });
@@ -2120,16 +2166,20 @@ describe('issue #42 — demote SearchingFood when no deposit target (v6)', () =>
     colony.entrances = [{ entranceId: 1, surfaceTileX: 0, surfaceTileY: 0, isOpen: true }];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
-    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
-    colony.chambers.push({
-      chamberId: 1,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: FOOD_CHAMBER_CAPACITY, // saturated → not depositable
-      posX: 0,
-      posY: 0,
-      width: 3,
-      height: 3,
-    });
+    setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY);
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 1,
+        chamberType: ChamberType.FoodStorage,
+        posX: 0,
+        posY: 0,
+        width: 3,
+        height: 3,
+      },
+      FOOD_CHAMBER_CAPACITY, // saturated → not depositable
+    );
     world.colonies[COLONY_ID] = colony;
 
     const antId = allocateEntityId(world);
@@ -2156,13 +2206,12 @@ describe('issue #42 — demote SearchingFood when no deposit target (v6)', () =>
     colony.entrances = [{ entranceId: 1, surfaceTileX: 0, surfaceTileY: 0, isOpen: true }];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
-    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
+    setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY);
     // A FoodStorage chamber with headroom — gives the forager a deposit
     // target, so the noDeposit gate must NOT fire.
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 1,
       chamberType: ChamberType.FoodStorage,
-      foodStored: 0,
       posX: 0,
       posY: 0,
       width: 3,
@@ -2200,7 +2249,7 @@ describe('issue #42 — surface SearchingFood no-revisit rule (v6)', () => {
     colony.digFlowFieldDirty = false;
     // Below cap so the v6 noDeposit demote doesn't fire and pre-empt the
     // movement filter under test.
-    colony.foodStored = 0;
+    setPoolFoodForTest(world, colony, 0);
     world.colonies[COLONY_ID] = colony;
     // Surface grid + empty pheromone state are correct defaults from
     // createWorldState; nothing else to seed for a no-pheromone wander.

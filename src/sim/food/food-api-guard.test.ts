@@ -1,9 +1,12 @@
-// food-api-guard.test.ts — #290 PR 1: food STORAGE is touched only through the facade.
+// food-api-guard.test.ts — #290: food STORAGE is touched only through the facade.
 //
 // Parses every non-test .ts file under src/, scripts/ and bench/ with the TypeScript
-// compiler API and reports any syntactic reference to the food-storage fields
-// `foodPiles` / `foodStored` (world.foodPiles, ColonyRecord.foodStored,
-// ChamberRecord.foodStored), wherever it sits:
+// compiler API and reports any syntactic reference to food storage. Since PR 2
+// (V50) that is the located food store `world.food` (a `.food` member access on a
+// world, or any `.food.<store column>`), its links `ColonyRecord.poolSlot` /
+// `ChamberRecord.foodSlot`, and its `pileOrder` / `surfacePileAt` columns; the
+// pre-V50 fields `foodPiles` / `foodStored` stay listed so a reintroduction fails.
+// For the names in NAMES, every reference kind is reported, wherever it sits:
 //   - member access          x.foodStored, x?.foodPiles
 //   - element access         x['foodStored'], x[`foodPiles`]
 //   - destructuring          const { foodStored } = c; multi-line patterns; renames;
@@ -46,7 +49,47 @@ import ts from 'typescript';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url)); // repo root (code/)
 const SCAN_DIRS = ['src', 'scripts', 'bench'];
-const NAMES: ReadonlySet<string> = new Set(['foodPiles', 'foodStored']);
+// Storage names flagged in every reference kind: the store's links and its
+// distinctive ordering columns, plus the pre-V50 storage fields (a reintroduction
+// fails). The store itself, `world.food`, is too common a word for that
+// (`chamberFlowFields.food`, a script's `out.food`): see isStoreAccess.
+const NAMES: ReadonlySet<string> = new Set([
+  'poolSlot',
+  'foodSlot',
+  'pileOrder',
+  'surfacePileAt',
+  'foodPiles',
+  'foodStored',
+]);
+/** FoodStore columns: `<x>.food.<column>` is a store access whatever `<x>` is. */
+const STORE_COLUMNS: ReadonlySet<string> = new Set([
+  'kind',
+  'owner',
+  'zone',
+  'grid',
+  'tileX',
+  'tileY',
+  'amountFp',
+  'initialFp',
+  'foodId',
+  'flags',
+  'pileOrder',
+  'pileCount',
+  'surfacePileAt',
+]);
+
+/**
+ * `x.food` is the located food store when `x` reads as a world (world, w,
+ * nextWorld, this.world, src/dst in copyWorldState …) or when a store column is
+ * read off it (`anything.food.amountFp`).
+ */
+function isStoreAccess(node: ts.PropertyAccessExpression): boolean {
+  if (node.name.text !== 'food') return false;
+  const obj = node.expression.getText().replace(/\s+/g, '');
+  if (/(^|\.)(world|w|src|dst|nextWorld|[a-z]*World)$/.test(obj)) return true;
+  const parent = node.parent;
+  return ts.isPropertyAccessExpression(parent) && STORE_COLUMNS.has(parent.name.text);
+}
 const ANY = '*';
 
 type RefKind =
@@ -70,31 +113,29 @@ const STR: readonly RefKind[] = ['string literal']; // key-name lists
  * constructor (a member access) still fails.
  */
 const ALLOWED: Readonly<Record<string, Readonly<Record<string, readonly RefKind[] | '*'>>>> = {
-  // The facade and its test-only setter own the storage.
+  // The facade, the store module and the test-only setters own the storage.
   'src/sim/food/food-api.ts': { [ANY]: ANY },
+  'src/sim/food/food-store.ts': { [ANY]: ANY },
   'src/sim/food/food-test-utils.ts': { [ANY]: ANY },
-  // WorldState construction (literal) and cloning (field copies).
-  'src/sim/types.ts': { createWorldState: KEY, copyWorldState: ANY },
-  // Record constructors: the record type still declares the field until PR 2.
+  // WorldState cloning (store columns + record links).
+  'src/sim/types.ts': { copyWorldState: ANY },
+  // Record constructors: the fresh record's unlinked pool / stock (−1).
   'src/sim/colony/colony-store.ts': { createColonyRecord: KEY },
   'src/sim/colony/colony-system.ts': { checkPendingChambers: KEY },
   // Save serializer / validators own the on-disk shape.
   'src/platform/save.ts': {
     validateChamberRecord: ANY,
+    validateFoodStore: ANY,
+    serializeFoodStore: ANY,
     serializeColony: ANY,
-    serializeWorldState: ANY,
     validateColonyScalars: ANY,
     deserializeColony: ANY,
-    deserializeWorldState: ANY,
-    // The save-dialog summary reads the raw snapshot JSON, not a WorldState.
-    getSaveInfo: READ,
-    savedChamberFoodFp: READ,
+    // Hands `world.food` to serializeFoodStore.
+    serializeWorldState: READ,
   },
   'src/platform/save-schema.ts': { '<module>': STR },
   // The projection strips the storage-shaped keys from a serialized COPY by name.
   'src/platform/food-projection.ts': { '<module>': STR },
-  // Bench fixture: chamber record literals.
-  'bench/tick-cost.bench.ts': { buildBroodColony: KEY },
 };
 
 /** Whether `ref` in `file` is allowed; returns the allow-list key it used, or null. */
@@ -191,7 +232,7 @@ function findStorageRefs(source: string, fileName = 'x.ts'): StorageRef[] {
   };
   const claimed = new Set<ts.Node>(); // string nodes already reported via a parent
   const visit = (node: ts.Node): void => {
-    if (ts.isPropertyAccessExpression(node) && NAMES.has(node.name.text)) {
+    if (ts.isPropertyAccessExpression(node) && (NAMES.has(node.name.text) || isStoreAccess(node))) {
       hit(node, 'member access');
     } else if (ts.isElementAccessExpression(node)) {
       const k = stringLikeText(node.argumentExpression);
@@ -304,6 +345,7 @@ describe('#290 food facade guard', () => {
       ],
       ['src/sim/colony/colony-store.ts', 'function createColonyRecord(c) { c.foodStored = 5; }'],
       ['bench/tick-cost.bench.ts', 'function buildBroodColony(c) { const { foodStored } = c; }'],
+      ['bench/tick-cost.bench.ts', 'function buildBroodColony(c) { return c.foodSlot; }'],
       ['src/platform/save.ts', "function getSaveInfo(c) { return Reflect.get(c, 'foodStored'); }"],
       // KEY covers construction literals only, never a merge into a live record.
       [
@@ -319,6 +361,7 @@ describe('#290 food facade guard', () => {
         'function createColonyRecord(c) { c = { ...c, foodStored: 9 }; return c; }',
       ],
       ['bench/tick-cost.bench.ts', 'function buildBroodColony(c) { ({ foodStored: c.x } = c); }'],
+      ['src/platform/save.ts', 'function getSaveInfo(w) { return w.food.amountFp[0]; }'],
     ];
     for (const [file, src] of cases) {
       const refs = findStorageRefs(src, file);
@@ -391,6 +434,15 @@ describe('#290 food facade guard', () => {
       ],
       ['computed literal key', "function f(c) { Object.assign(c, { ['foodStored']: 0 }); }"],
       ['spread-then-key', 'function f(c) { return { ...c, foodStored: 0 }; }'],
+      // #290 PR 2 — the located store and its links.
+      ['world.food', 'function f(world) { return world.food; }'],
+      ['store column', 'function f(w) { return w.food.amountFp[3]; }'],
+      ['column off any .food', 'function f(x) { return x.y.food.kind[0]; }'],
+      ['this.world.food', 'function f() { return this.world.food; }'],
+      ['pool link', 'function f(c) { return c.poolSlot; }'],
+      ['stock link', 'function f(ch) { ch.foodSlot = 3; }'],
+      ['pile order', 'function f(s) { return s.pileOrder[0]; }'],
+      ['tile index', 'function f(s) { return s.surfacePileAt; }'],
     ];
     const missed = shapes.filter(([, src]) => findStorageRefs(src).length === 0).map(([n]) => n);
     expect(missed).toEqual([]);
@@ -403,6 +455,8 @@ describe('#290 food facade guard', () => {
       "type T = { 'foodStored': number };",
       'function f(c) { return c.foodStoredTotal + c.myFoodPiles; }',
       "const s = 'the foodStored field';",
+      // `.food` that is not the store: chamber flow fields, a script's tally.
+      'function f(chamberFlowFields, out) { return chamberFlowFields.food[1] + out.food; }',
     ];
     expect(clean.flatMap((src) => findStorageRefs(src))).toEqual([]);
   });

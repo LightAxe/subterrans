@@ -35,6 +35,7 @@ import {
   SPIDER_HUNGER_THRESHOLD_TICKS,
 } from '../sim/constants.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
+import { addPileForTest } from '../sim/food/food-test-utils.js';
 import { AntFacingCache } from './ant-facing-cache.js';
 import {
   TILE_SIZE_PX,
@@ -360,14 +361,14 @@ describe('drawSurfaceEntities', () => {
     playerColony.digFlowFieldDirty = false;
     playerColony.priorityFoodPileId = 1;
     world.colonies[PLAYER_COLONY_ID] = playerColony;
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 1,
       tileX: 5,
       tileY: 5,
       pickupsRemaining: 50,
       pickupsInitial: 50,
     });
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 2,
       tileX: 6,
       tileY: 5,
@@ -387,14 +388,14 @@ describe('drawSurfaceEntities', () => {
     playerColony.digFlowFieldDirty = false;
     playerColony.priorityFoodPileId = 1;
     world.colonies[PLAYER_COLONY_ID] = playerColony;
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 1,
       tileX: 5,
       tileY: 5,
       pickupsRemaining: 50,
       pickupsInitial: 50,
     });
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 2,
       tileX: 6,
       tileY: 5,
@@ -427,7 +428,7 @@ describe('drawSurfaceEntities', () => {
     enemyColony.priorityFoodPileId = 1;
     world.colonies[PLAYER_COLONY_ID] = playerColony;
     world.colonies[enemyColonyId] = enemyColony;
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 1,
       tileX: 5,
       tileY: 5,
@@ -1544,7 +1545,7 @@ describe('drawSurface', () => {
     const gfx = new MockGfx();
     const sprites = new MockAntSprites();
     const world = createWorldState(1);
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 1,
       tileX: 5,
       tileY: 5,

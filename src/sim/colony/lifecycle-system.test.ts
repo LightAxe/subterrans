@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import { tickQueenEggProduction, tickLifecycleTransitions } from './lifecycle-system.js';
 import { createWorldState } from '../types.js';
 import { createColonyRecord } from './colony-store.js';
+import { setPoolFoodForTest } from '../food/food-test-utils.js';
 import { initAnt } from '../ant/ant-store.js';
 import { AntTask, ChamberType } from '../enums.js';
 import { Zone, createUndergroundGrid, ugSet, UndergroundTileState } from '../terrain.js';
@@ -20,7 +21,6 @@ import {
   EGG_HATCH_TICKS,
   LARVA_MATURE_TICKS,
   WORKER_BASE_SPEED,
-  STARVATION_GRACE_TICKS,
 } from '../constants.js';
 import type { WorldState } from '../types.js';
 import type { ColonyRecord } from './colony-store.js';
@@ -64,7 +64,7 @@ function setupWorldWithQueen(
   });
 
   const colony = createColonyRecord(COLONY_ID, queenId);
-  colony.foodStored = foodStored;
+  setPoolFoodForTest(world, colony, foodStored);
   // Gate 6 (seed936214196-tick2401): tickQueenEggProduction requires the
   // queen to be Underground AND inside a Queen chamber footprint. For tests
   // that include a Queen chamber, size it around the queen's tile so the
@@ -79,7 +79,7 @@ function setupWorldWithQueen(
     colony.chambers.push({
       chamberId: 1000 + i,
       chamberType: chambers[i]!.chamberType,
-      foodStored: 0,
+      foodSlot: -1,
       posX: isQueen ? queenTileX << FP_SHIFT : 0,
       posY: isQueen ? queenTileY << FP_SHIFT : 0,
       width: 2,
@@ -523,36 +523,36 @@ describe('tickLifecycleTransitions — CLNY-03 larva mature', () => {
 // ---------------------------------------------------------------------------
 
 describe('tickLifecycleTransitions — starvation timer reset on promotion', () => {
-  it('15. egg→larva promotion resets starvationTimer to STARVATION_GRACE_TICKS', () => {
+  it('15. egg→larva promotion resets the hunger clock (lastMealTick = world.tick)', () => {
     const { world, colony } = setupWorldWithQueen();
 
     const eggId = world.nextEntityId++;
     initAnt(world.ants, eggId, { colonyId: COLONY_ID, posX: 0, posY: 0 });
     world.ants.age[eggId] = EGG_HATCH_TICKS - 1; // one tick to hatch
-    world.ants.starvationTimer[eggId] = 0; // worst case — should be reset
+    world.ants.lastMealTick[eggId] = world.tick - 1000; // worst case — should be reset
     colony.eggs.push(eggId);
     colony.eggCount = 1;
 
     tickLifecycleTransitions(world, colony);
 
     expect(colony.larvae).toContain(eggId);
-    expect(world.ants.starvationTimer[eggId]).toBe(STARVATION_GRACE_TICKS);
+    expect(world.ants.lastMealTick[eggId]).toBe(world.tick);
   });
 
-  it('16. larva→worker promotion resets starvationTimer to STARVATION_GRACE_TICKS', () => {
+  it('16. larva→worker promotion resets the hunger clock (lastMealTick = world.tick)', () => {
     const { world, colony } = setupWorldWithQueen();
 
     const larvaId = world.nextEntityId++;
     initAnt(world.ants, larvaId, { colonyId: COLONY_ID, posX: 0, posY: 0 });
     world.ants.age[larvaId] = LARVA_MATURE_TICKS - 1; // one tick to mature
-    world.ants.starvationTimer[larvaId] = 5; // low timer — should be reset
+    world.ants.lastMealTick[larvaId] = world.tick - 5; // low — should be reset
     colony.larvae.push(larvaId);
     colony.larvaeCount = 1;
 
     tickLifecycleTransitions(world, colony);
 
     expect(colony.workers).toContain(larvaId);
-    expect(world.ants.starvationTimer[larvaId]).toBe(STARVATION_GRACE_TICKS);
+    expect(world.ants.lastMealTick[larvaId]).toBe(world.tick);
   });
 });
 
@@ -733,7 +733,7 @@ describe('tickLifecycleTransitions — brood-aging gate (09 reproduction-gate me
     colony.chambers.push({
       chamberId: 2001,
       chamberType: ChamberType.Nursery,
-      foodStored: 0,
+      foodSlot: -1,
       posX: 0,
       posY: 0,
       width: 2,

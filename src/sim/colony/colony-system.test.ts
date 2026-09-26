@@ -8,7 +8,7 @@
 //   CLNY-05:                    larva starvation + stay-alive-when-fed
 //   tickDeathCleanup:           dead worker swap-remove, queen death sets defeated, all-bucket cleanup
 //   tickReconcile:              countdown decrement, recount on zero, drift-correction (CLNY-07 SC 7)
-//   CLNY-07 integration:        steady-state foodStored decrement per tick
+//   CLNY-07 integration:        steady-state pool decrement per tick
 //   checkPendingChambers:       chamber promotion, partial excavation stays, multiple pending
 //   checkEntranceCompletion:    shaft-open detection, partial shaft stays, idempotent, multi-entrance
 //   tickDeadDiggerCleanup:      BeingDug revert, no-claim skip, Open tile skip, tickDeathCleanup isolation
@@ -24,7 +24,21 @@ import {
   tickDeadDiggerCleanup,
 } from './colony-system.js';
 import { createWorldState } from '../types.js';
-import { colonyFoodCapacity, colonyFoodTotal, withdrawFood } from '../food/food-api.js';
+import {
+  chamberStock,
+  colonyFoodCapacity,
+  colonyFoodTotal,
+  colonyPoolFood,
+  withdrawFood,
+} from '../food/food-api.js';
+import {
+  addChamberForTest,
+  setColonyFoodForTest,
+  setMealsUntilStarvationForTest,
+  setPoolFoodForTest,
+} from '../food/food-test-utils.js';
+import { LARVA_HUNGER, mealsUntilStarvation, QUEEN_HUNGER } from '../hunger.js';
+import { createScenario } from '../scenario.js';
 import { createColonyRecord } from './colony-store.js';
 import { initAnt } from '../ant/ant-store.js';
 import { AntTask, ChamberType } from '../enums.js';
@@ -36,6 +50,7 @@ import {
   FOOD_CHAMBER_CAPACITY,
   FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP,
   BASE_FOOD_STORAGE_CAPACITY,
+  PLAYER_COLONY_ID,
 } from '../constants.js';
 import { createUndergroundGrid, ugSet, UndergroundTileState } from '../terrain.js';
 import { FP_SHIFT } from '../fixed.js';
@@ -53,7 +68,7 @@ const MAX_TEST_ENTITIES = 128;
  * Create a fresh world + colony with a live queen at entity 0.
  * The queen entity is allocated as entity 0; colony.queenEntityId = 0.
  */
-function setupWorldWithQueen(foodStored = 1000): { world: WorldState; colony: ColonyRecord } {
+function setupWorldWithQueen(poolFp = 1000): { world: WorldState; colony: ColonyRecord } {
   const world = createWorldState(42, MAX_TEST_ENTITIES);
 
   const queenId = world.nextEntityId; // 0
@@ -67,10 +82,23 @@ function setupWorldWithQueen(foodStored = 1000): { world: WorldState; colony: Co
   });
 
   const colony = createColonyRecord(COLONY_ID, queenId);
-  colony.foodStored = foodStored;
+  setPoolFoodForTest(world, colony, poolFp);
   world.colonies[COLONY_ID] = colony;
+  // The queen starts "just fed" (createScenario does the same at tick 0).
+  setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, STARVATION_GRACE_TICKS);
 
   return { world, colony };
+}
+
+/** Step 3 of one tick: the colony's meals, then the tick advances (as tick() does). */
+function consume(world: WorldState, colony: ColonyRecord): void {
+  tickFoodConsumption(world, colony);
+  world.tick += 1;
+}
+
+/** The queen's meals-until-starvation (the pre-V50 queenStarvationTimer), between ticks. */
+function queenMeals(world: WorldState, colony: ColonyRecord): number {
+  return mealsUntilStarvation(world, colony.queenEntityId, QUEEN_HUNGER);
 }
 
 /**
@@ -87,8 +115,8 @@ function addLarva(world: WorldState, colony: ColonyRecord): number {
     posY: 256,
     task: AntTask.Idle,
   });
-  // Initialize starvation timer to GRACE value (same as queen default)
-  world.ants.starvationTimer[id] = STARVATION_GRACE_TICKS;
+  // Start its hunger clock "just fed" (as hatching does)
+  setMealsUntilStarvationForTest(world, id, LARVA_HUNGER, STARVATION_GRACE_TICKS);
 
   colony.larvae.push(id);
   colony.larvaeCount += 1;
@@ -143,25 +171,25 @@ function addEgg(world: WorldState, colony: ColonyRecord): number {
 // ---------------------------------------------------------------------------
 
 describe('withdrawFood', () => {
-  it('1. success — returns true and decrements foodStored', () => {
+  it('1. success — returns true and decrements the pool', () => {
     const { world, colony } = setupWorldWithQueen(100);
     const result = withdrawFood(world, colony, 50);
     expect(result).toBe(true);
-    expect(colony.foodStored).toBe(50);
+    expect(colonyPoolFood(world, colony)).toBe(50);
   });
 
-  it('2. insufficient — returns false, foodStored unchanged', () => {
+  it('2. insufficient — returns false, pool unchanged', () => {
     const { world, colony } = setupWorldWithQueen(10);
     const result = withdrawFood(world, colony, 50);
     expect(result).toBe(false);
-    expect(colony.foodStored).toBe(10);
+    expect(colonyPoolFood(world, colony)).toBe(10);
   });
 
-  it('3. exact amount — returns true, foodStored reaches 0', () => {
+  it('3. exact amount — returns true, pool reaches 0', () => {
     const { world, colony } = setupWorldWithQueen(50);
     const result = withdrawFood(world, colony, 50);
     expect(result).toBe(true);
-    expect(colony.foodStored).toBe(0);
+    expect(colonyPoolFood(world, colony)).toBe(0);
   });
 
   // Issue #15 — drain-order contract: chambers in array order first, then the
@@ -170,36 +198,44 @@ describe('withdrawFood', () => {
   // A future refactor that flips the order would silently regress.
   it('drains chambers before the entrance pool (issue #15)', () => {
     const { world, colony } = setupWorldWithQueen(100);
-    colony.chambers.push({
-      chamberId: 1,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: 200,
-      posX: 0,
-      posY: 0,
-      width: 1,
-      height: 1,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 1,
+        chamberType: ChamberType.FoodStorage,
+        posX: 0,
+        posY: 0,
+        width: 1,
+        height: 1,
+      },
+      200,
+    );
     const result = withdrawFood(world, colony, 50);
     expect(result).toBe(true);
-    expect(colony.chambers[0]!.foodStored).toBe(150); // chamber drained
-    expect(colony.foodStored).toBe(100); // pool untouched
+    expect(chamberStock(world, colony.chambers[0]!)).toBe(150); // chamber drained
+    expect(colonyPoolFood(world, colony)).toBe(100); // pool untouched
   });
 
   it('drains the entrance pool only after every chamber is empty (issue #15)', () => {
     const { world, colony } = setupWorldWithQueen(100);
-    colony.chambers.push({
-      chamberId: 1,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: 30,
-      posX: 0,
-      posY: 0,
-      width: 1,
-      height: 1,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 1,
+        chamberType: ChamberType.FoodStorage,
+        posX: 0,
+        posY: 0,
+        width: 1,
+        height: 1,
+      },
+      30,
+    );
     const result = withdrawFood(world, colony, 50);
     expect(result).toBe(true);
-    expect(colony.chambers[0]!.foodStored).toBe(0); // chamber drained first
-    expect(colony.foodStored).toBe(80); // remaining 20 from pool
+    expect(chamberStock(world, colony.chambers[0]!)).toBe(0); // chamber drained first
+    expect(colonyPoolFood(world, colony)).toBe(80); // remaining 20 from pool
   });
 
   it('sets foodFlowFieldDirty only on saturated→depositable transitions (issue #15 follow-up)', () => {
@@ -213,26 +249,34 @@ describe('withdrawFood', () => {
     const { world, colony } = setupWorldWithQueen(0);
     // Chamber 0: full → still saturated after small drains until we reach
     // the depositable threshold (free space >= HYST).
-    colony.chambers.push({
-      chamberId: 1,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: FOOD_CHAMBER_CAPACITY,
-      posX: 0,
-      posY: 0,
-      width: 1,
-      height: 1,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 1,
+        chamberType: ChamberType.FoodStorage,
+        posX: 0,
+        posY: 0,
+        width: 1,
+        height: 1,
+      },
+      FOOD_CHAMBER_CAPACITY,
+    );
     // Chamber 1: starts depositable (free space > HYST) — drains within the
     // depositable band must NOT fire dirty.
-    colony.chambers.push({
-      chamberId: 2,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: 100,
-      posX: 0,
-      posY: 0,
-      width: 1,
-      height: 1,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 2,
+        chamberType: ChamberType.FoodStorage,
+        posX: 0,
+        posY: 0,
+        width: 1,
+        height: 1,
+      },
+      100,
+    );
     colony.foodFlowFieldDirty = false;
 
     // Tiny drain from chamber 0 — saturated → still saturated (free space < HYST).
@@ -263,8 +307,8 @@ describe('withdrawFood', () => {
     colony.foodFlowFieldDirty = false;
     expect(withdrawFood(world, colony, 4707)).toBe(true);
     expect(colony.foodFlowFieldDirty).toBe(false);
-    expect(colony.chambers[0]!.foodStored).toBe(0);
-    expect(colony.chambers[1]!.foodStored).toBe(0);
+    expect(chamberStock(world, colony.chambers[0]!)).toBe(0);
+    expect(chamberStock(world, colony.chambers[1]!)).toBe(0);
   });
 });
 
@@ -274,7 +318,7 @@ describe('withdrawFood', () => {
 // colonyFoodTotal is the canonical "total stored food" reader post-#15.
 // HUD displays, AI thresholds, and forager-economy code all read it. A
 // regression that drops the chamber-summing branch (e.g. reverting it to
-// `return colony.foodStored` alone) would silently break every consumer.
+// `return colonyPoolFood(...)` alone) would silently break every consumer.
 // These tests guard against that by exercising both contributions.
 // ---------------------------------------------------------------------------
 
@@ -286,62 +330,82 @@ describe('colonyFoodTotal — issue #15', () => {
 
   it('includes FoodStorage chamber food in the total', () => {
     const { world, colony } = setupWorldWithQueen(0);
-    colony.chambers.push({
-      chamberId: 1,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: 200,
-      posX: 0,
-      posY: 0,
-      width: 1,
-      height: 1,
-    });
-    colony.chambers.push({
-      chamberId: 2,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: 50,
-      posX: 0,
-      posY: 0,
-      width: 1,
-      height: 1,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 1,
+        chamberType: ChamberType.FoodStorage,
+        posX: 0,
+        posY: 0,
+        width: 1,
+        height: 1,
+      },
+      200,
+    );
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 2,
+        chamberType: ChamberType.FoodStorage,
+        posX: 0,
+        posY: 0,
+        width: 1,
+        height: 1,
+      },
+      50,
+    );
     expect(colonyFoodTotal(world, colony)).toBe(250);
   });
 
   it('sums entrance pool + every FoodStorage chamber', () => {
     const { world, colony } = setupWorldWithQueen(100);
-    colony.chambers.push({
-      chamberId: 1,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: 200,
-      posX: 0,
-      posY: 0,
-      width: 1,
-      height: 1,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 1,
+        chamberType: ChamberType.FoodStorage,
+        posX: 0,
+        posY: 0,
+        width: 1,
+        height: 1,
+      },
+      200,
+    );
     expect(colonyFoodTotal(world, colony)).toBe(300);
   });
 
   it('excludes non-FoodStorage chamber types from the total', () => {
     const { world, colony } = setupWorldWithQueen(100);
-    // A non-FoodStorage chamber's foodStored is meaningless — must not contribute.
-    colony.chambers.push({
-      chamberId: 1,
-      chamberType: ChamberType.Queen,
-      foodStored: 999,
-      posX: 0,
-      posY: 0,
-      width: 1,
-      height: 1,
-    });
-    colony.chambers.push({
-      chamberId: 2,
-      chamberType: ChamberType.Nursery,
-      foodStored: 999,
-      posX: 0,
-      posY: 0,
-      width: 1,
-      height: 1,
-    });
+    // A non-FoodStorage chamber has no food stock — it must not contribute.
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 1,
+        chamberType: ChamberType.Queen,
+        posX: 0,
+        posY: 0,
+        width: 1,
+        height: 1,
+      },
+      999,
+    );
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 2,
+        chamberType: ChamberType.Nursery,
+        posX: 0,
+        posY: 0,
+        width: 1,
+        height: 1,
+      },
+      999,
+    );
     expect(colonyFoodTotal(world, colony)).toBe(100);
   });
 });
@@ -351,66 +415,76 @@ describe('colonyFoodTotal — issue #15', () => {
 // ---------------------------------------------------------------------------
 
 describe('tickFoodConsumption', () => {
-  it('4. queen fed — decrements foodStored by QUEEN_FOOD_PER_TICK, resets timer to GRACE', () => {
+  it('4. queen fed — decrements the pool by QUEEN_FOOD_PER_TICK, resets her clock to this tick', () => {
     const { world, colony } = setupWorldWithQueen(1000);
-    colony.queenStarvationTimer = 50; // below grace — should be reset on feed
+    setMealsUntilStarvationForTest(world, colony.queenEntityId, QUEEN_HUNGER, 50); // hungry
 
-    tickFoodConsumption(world, colony);
+    consume(world, colony);
 
-    expect(colony.foodStored).toBe(1000 - QUEEN_FOOD_PER_TICK);
-    expect(colony.queenStarvationTimer).toBe(STARVATION_GRACE_TICKS);
+    expect(colonyPoolFood(world, colony)).toBe(1000 - QUEEN_FOOD_PER_TICK);
+    expect(world.ants.lastMealTick[colony.queenEntityId]).toBe(world.tick - 1); // fed on that tick
+    expect(queenMeals(world, colony)).toBe(STARVATION_GRACE_TICKS); // pre-V50 timer: reset
     expect(world.ants.alive[colony.queenEntityId]).toBe(1); // still alive
   });
 
-  it('5. queen not fed (empty pool) — foodStored stays 0, timer NOT reset', () => {
+  it('5. queen not fed (empty pool) — pool stays 0, clock NOT reset', () => {
     const { world, colony } = setupWorldWithQueen(0);
-    colony.queenStarvationTimer = 50;
+    setMealsUntilStarvationForTest(world, colony.queenEntityId, QUEEN_HUNGER, 50);
 
-    tickFoodConsumption(world, colony);
+    consume(world, colony);
 
-    expect(colony.foodStored).toBe(0);
-    expect(colony.queenStarvationTimer).toBe(49); // decremented by 1, not reset
+    expect(colonyPoolFood(world, colony)).toBe(0);
+    expect(queenMeals(world, colony)).toBe(49); // one meal missed, not reset
     expect(world.ants.alive[colony.queenEntityId]).toBe(1); // still alive (50 > 0)
   });
 
-  it('6. larva fed — resets starvationTimer to GRACE', () => {
+  it('6. larva fed — resets its clock', () => {
     const { world, colony } = setupWorldWithQueen(1000);
     const larvaId = addLarva(world, colony);
-    world.ants.starvationTimer[larvaId] = 50; // below grace
+    setMealsUntilStarvationForTest(world, larvaId, LARVA_HUNGER, 50); // hungry
 
-    tickFoodConsumption(world, colony);
+    consume(world, colony);
 
     // Queen consumed QUEEN_FOOD_PER_TICK first, then larva consumed LARVA_FOOD_PER_TICK
-    expect(colony.foodStored).toBe(1000 - QUEEN_FOOD_PER_TICK - LARVA_FOOD_PER_TICK);
-    expect(world.ants.starvationTimer[larvaId]).toBe(STARVATION_GRACE_TICKS); // reset on feed
+    expect(colonyPoolFood(world, colony)).toBe(1000 - QUEEN_FOOD_PER_TICK - LARVA_FOOD_PER_TICK);
+    expect(mealsUntilStarvation(world, larvaId, LARVA_HUNGER)).toBe(STARVATION_GRACE_TICKS);
     expect(world.ants.alive[larvaId]).toBe(1);
   });
 
   it('7. queen-priority — queen fed first; larvae starve when pool exactly covers queen only', () => {
-    // foodStored = 2 = exactly one queen meal; QUEEN_FOOD_PER_TICK=2, LARVA_FOOD_PER_TICK=1
+    // pool = 2 = exactly one queen meal; QUEEN_FOOD_PER_TICK=2, LARVA_FOOD_PER_TICK=1
     const { world, colony } = setupWorldWithQueen(QUEEN_FOOD_PER_TICK);
     const larvaId1 = addLarva(world, colony);
     const larvaId2 = addLarva(world, colony);
     const larvaId3 = addLarva(world, colony);
 
-    // Give larvae high timers so they survive one unfed tick
-    world.ants.starvationTimer[larvaId1] = 50;
-    world.ants.starvationTimer[larvaId2] = 50;
-    world.ants.starvationTimer[larvaId3] = 50;
+    // Give larvae 50 meals of slack so they survive one unfed tick
+    setMealsUntilStarvationForTest(world, larvaId1, LARVA_HUNGER, 50);
+    setMealsUntilStarvationForTest(world, larvaId2, LARVA_HUNGER, 50);
+    setMealsUntilStarvationForTest(world, larvaId3, LARVA_HUNGER, 50);
 
-    tickFoodConsumption(world, colony);
+    consume(world, colony);
 
-    // Queen was fed — timer reset
-    expect(colony.queenStarvationTimer).toBe(STARVATION_GRACE_TICKS);
-    expect(colony.foodStored).toBe(0); // pool exhausted by queen
-    // All larvae unfed — timers decremented by 1
-    expect(world.ants.starvationTimer[larvaId1]).toBe(49);
-    expect(world.ants.starvationTimer[larvaId2]).toBe(49);
-    expect(world.ants.starvationTimer[larvaId3]).toBe(49);
-    // Larvae not yet dead (timers still > 0)
+    // Queen was fed — clock reset
+    expect(queenMeals(world, colony)).toBe(STARVATION_GRACE_TICKS);
+    expect(colonyPoolFood(world, colony)).toBe(0); // pool exhausted by queen
+    // All larvae unfed — one meal missed each
+    expect(mealsUntilStarvation(world, larvaId1, LARVA_HUNGER)).toBe(49);
+    expect(mealsUntilStarvation(world, larvaId2, LARVA_HUNGER)).toBe(49);
+    expect(mealsUntilStarvation(world, larvaId3, LARVA_HUNGER)).toBe(49);
+    // Larvae not yet dead (clocks below starve-after)
     expect(world.ants.alive[larvaId1]).toBe(1);
     expect(world.ants.alive[larvaId2]).toBe(1);
     expect(world.ants.alive[larvaId3]).toBe(1);
+  });
+
+  it('a meal that is not yet due is not attempted (meal interval)', () => {
+    // Every current profile has interval 1, so a clock already at this tick (the
+    // ant ate this tick) skips the meal: no draw, no death check.
+    const { world, colony } = setupWorldWithQueen(1000);
+    world.ants.lastMealTick[colony.queenEntityId] = world.tick;
+    tickFoodConsumption(world, colony);
+    expect(colonyPoolFood(world, colony)).toBe(1000);
   });
 });
 
@@ -421,52 +495,81 @@ describe('tickFoodConsumption', () => {
 describe('tickFoodConsumption — CLNY-04 queen starvation cascade', () => {
   it('8. queen dies after exactly STARVATION_GRACE_TICKS unfed ticks', () => {
     const { world, colony } = setupWorldWithQueen(0); // empty pool
-    colony.queenStarvationTimer = STARVATION_GRACE_TICKS;
+    setMealsUntilStarvationForTest(
+      world,
+      colony.queenEntityId,
+      QUEEN_HUNGER,
+      STARVATION_GRACE_TICKS,
+    );
 
     // STARVATION_GRACE_TICKS - 1 calls should not kill the queen
     for (let i = 0; i < STARVATION_GRACE_TICKS - 1; i++) {
       tickFoodConsumption(world, colony);
       // Also call the no-op for realistic dispatch order (verifies it doesn't affect state)
       tickStarvationCheck(world, colony);
+      world.tick += 1;
       expect(world.ants.alive[colony.queenEntityId]).toBe(1);
     }
 
-    // The STARVATION_GRACE_TICKS-th tick: timer reaches 0 → queen dies
-    tickFoodConsumption(world, colony);
+    // The STARVATION_GRACE_TICKS-th tick: meals-until-starvation reaches 0 → queen dies
+    consume(world, colony);
     expect(world.ants.alive[colony.queenEntityId]).toBe(0);
-    expect(colony.queenStarvationTimer).toBeLessThanOrEqual(0);
+    expect(queenMeals(world, colony)).toBeLessThanOrEqual(0);
   });
 
-  it('9. queen stays alive when fed — timer pinned at GRACE (no separate decrement)', () => {
+  it('9. queen stays alive when fed — clock pinned at "just ate" (no separate decrement)', () => {
     const { world, colony } = setupWorldWithQueen(10_000); // ample food
 
     for (let i = 0; i < 200; i++) {
-      tickFoodConsumption(world, colony);
-      // Timer must always be reset to STARVATION_GRACE_TICKS (not drifting downward)
-      expect(colony.queenStarvationTimer).toBe(STARVATION_GRACE_TICKS);
+      consume(world, colony);
+      // Must always be reset (not drifting downward)
+      expect(queenMeals(world, colony)).toBe(STARVATION_GRACE_TICKS);
     }
     expect(world.ants.alive[colony.queenEntityId]).toBe(1);
   });
 
   it('10. tickStarvationCheck is a no-op — isolation test (regression guard)', () => {
     // Regression guard: if an unconditional decrement were ever added to
-    // tickStarvationCheck, timers would drift even without consumption.
+    // tickStarvationCheck, clocks would drift even without consumption.
     const { world, colony } = setupWorldWithQueen(0);
     const larvaId = addLarva(world, colony);
 
-    colony.queenStarvationTimer = 50;
-    world.ants.starvationTimer[larvaId] = 50;
+    setMealsUntilStarvationForTest(world, colony.queenEntityId, QUEEN_HUNGER, 50);
+    setMealsUntilStarvationForTest(world, larvaId, LARVA_HUNGER, 50);
+    const queenClock = world.ants.lastMealTick[colony.queenEntityId];
+    const larvaClock = world.ants.lastMealTick[larvaId];
 
     // Call tickStarvationCheck 1000 times in isolation (no consumption calls)
     for (let i = 0; i < 1000; i++) {
       tickStarvationCheck(world, colony);
     }
 
-    // Timers must be unchanged — the function must be a true no-op
-    expect(colony.queenStarvationTimer).toBe(50);
-    expect(world.ants.starvationTimer[larvaId]).toBe(50);
+    // Clocks must be unchanged — the function must be a true no-op
+    expect(world.ants.lastMealTick[colony.queenEntityId]).toBe(queenClock);
+    expect(world.ants.lastMealTick[larvaId]).toBe(larvaClock);
+    expect(queenMeals(world, colony)).toBe(50);
+    expect(mealsUntilStarvation(world, larvaId, LARVA_HUNGER)).toBe(50);
     expect(world.ants.alive[colony.queenEntityId]).toBe(1);
     expect(world.ants.alive[larvaId]).toBe(1);
+  });
+
+  it('#288 off-by-one pin: a scenario queen that is never fed dies on tick 299', () => {
+    // createScenario starts her clock at lastMealTick = −1 ("fed before tick 0"),
+    // exactly the pre-V50 countdown start of 300: her first failed meal is tick 0,
+    // and the 300th (tick 299) kills her.
+    const world = createScenario(7, 'Normal');
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const q = colony.queenEntityId;
+    expect(world.ants.lastMealTick[q]).toBe(-1);
+    expect(queenMeals(world, colony)).toBe(STARVATION_GRACE_TICKS);
+    setColonyFoodForTest(world, colony, 0);
+    for (let t = 0; t < STARVATION_GRACE_TICKS - 1; t++) {
+      consume(world, colony);
+      expect(world.ants.alive[q], `tick ${t}`).toBe(1);
+    }
+    expect(world.tick).toBe(STARVATION_GRACE_TICKS - 1);
+    consume(world, colony); // tick 299
+    expect(world.ants.alive[q]).toBe(0);
   });
 });
 
@@ -475,32 +578,51 @@ describe('tickFoodConsumption — CLNY-04 queen starvation cascade', () => {
 // ---------------------------------------------------------------------------
 
 describe('tickFoodConsumption — CLNY-05 larva starvation', () => {
-  it('11. larva dies after 100 unfed ticks (STARVATION_GRACE_TICKS)', () => {
+  it('11. larva dies after STARVATION_GRACE_TICKS unfed ticks', () => {
     const { world, colony } = setupWorldWithQueen(0); // empty pool
     const larvaId = addLarva(world, colony);
-    world.ants.starvationTimer[larvaId] = STARVATION_GRACE_TICKS;
+    setMealsUntilStarvationForTest(world, larvaId, LARVA_HUNGER, STARVATION_GRACE_TICKS);
 
     // STARVATION_GRACE_TICKS - 1 iterations — still alive
     for (let i = 0; i < STARVATION_GRACE_TICKS - 1; i++) {
-      tickFoodConsumption(world, colony);
+      consume(world, colony);
       expect(world.ants.alive[larvaId]).toBe(1);
     }
 
-    // Final tick — timer reaches 0 → larva dies
-    tickFoodConsumption(world, colony);
+    // Final tick — meals-until-starvation reaches 0 → larva dies
+    consume(world, colony);
     expect(world.ants.alive[larvaId]).toBe(0);
   });
 
-  it('12. larva stays alive when fed — timer stays at GRACE', () => {
+  it('#288 off-by-one pin: a larva hatched on tick h and never fed dies on tick h + 300', () => {
+    // Hatching (step 7) runs after the tick's consumption (step 3) and sets
+    // lastMealTick = h: its first meal is tick h + 1 — the pre-V50 timer started
+    // at 300 at the hatch and hit 0 on the 300th failed meal, tick h + 300.
+    const { world, colony } = setupWorldWithQueen(0);
+    world.tick = 1000; // h
+    const larvaId = addLarva(world, colony);
+    world.ants.lastMealTick[larvaId] = world.tick; // as tickLifecycleTransitions sets it
+    world.tick += 1; // end of tick h
+    expect(mealsUntilStarvation(world, larvaId, LARVA_HUNGER)).toBe(STARVATION_GRACE_TICKS);
+    while (world.tick < 1000 + STARVATION_GRACE_TICKS) {
+      consume(world, colony);
+      expect(world.ants.alive[larvaId], `tick ${world.tick - 1}`).toBe(1);
+    }
+    expect(world.tick).toBe(1000 + STARVATION_GRACE_TICKS);
+    consume(world, colony); // tick h + 300
+    expect(world.ants.alive[larvaId]).toBe(0);
+  });
+
+  it('12. larva stays alive when fed — clock stays at "just ate"', () => {
     const { world, colony } = setupWorldWithQueen(10_000);
     const larvaId = addLarva(world, colony);
 
     for (let i = 0; i < 100; i++) {
-      tickFoodConsumption(world, colony);
+      consume(world, colony);
     }
 
     expect(world.ants.alive[larvaId]).toBe(1);
-    expect(world.ants.starvationTimer[larvaId]).toBe(STARVATION_GRACE_TICKS);
+    expect(mealsUntilStarvation(world, larvaId, LARVA_HUNGER)).toBe(STARVATION_GRACE_TICKS);
   });
 });
 
@@ -585,11 +707,10 @@ describe('colonyFoodCapacity', () => {
   });
 
   it('base + 1× FoodStorage chamber → BASE + 1 × FOOD_CHAMBER_CAPACITY', () => {
-    const { colony } = setupWorldWithQueen();
-    colony.chambers.push({
+    const { world, colony } = setupWorldWithQueen();
+    addChamberForTest(world, colony, {
       chamberId: 100,
       chamberType: ChamberType.FoodStorage,
-      foodStored: 0,
       posX: 0,
       posY: 0,
       width: 3,
@@ -599,52 +720,44 @@ describe('colonyFoodCapacity', () => {
   });
 
   it('base + 2× FoodStorage chamber → BASE + 2 × FOOD_CHAMBER_CAPACITY', () => {
-    const { colony } = setupWorldWithQueen();
-    colony.chambers.push(
-      {
-        chamberId: 100,
-        chamberType: ChamberType.FoodStorage,
-        foodStored: 0,
-        posX: 0,
-        posY: 0,
-        width: 3,
-        height: 3,
-      },
-      {
-        chamberId: 101,
-        chamberType: ChamberType.FoodStorage,
-        foodStored: 0,
-        posX: 4,
-        posY: 0,
-        width: 3,
-        height: 3,
-      },
-    );
+    const { world, colony } = setupWorldWithQueen();
+    addChamberForTest(world, colony, {
+      chamberId: 100,
+      chamberType: ChamberType.FoodStorage,
+      posX: 0,
+      posY: 0,
+      width: 3,
+      height: 3,
+    });
+    addChamberForTest(world, colony, {
+      chamberId: 101,
+      chamberType: ChamberType.FoodStorage,
+      posX: 4,
+      posY: 0,
+      width: 3,
+      height: 3,
+    });
     expect(colonyFoodCapacity(colony)).toBe(BASE_FOOD_STORAGE_CAPACITY + 2 * FOOD_CHAMBER_CAPACITY);
   });
 
   it('Queen / Nursery chambers do NOT contribute to capacity', () => {
-    const { colony } = setupWorldWithQueen();
-    colony.chambers.push(
-      {
-        chamberId: 100,
-        chamberType: ChamberType.Queen,
-        foodStored: 0,
-        posX: 0,
-        posY: 0,
-        width: 5,
-        height: 3,
-      },
-      {
-        chamberId: 101,
-        chamberType: ChamberType.Nursery,
-        foodStored: 0,
-        posX: 8,
-        posY: 0,
-        width: 4,
-        height: 3,
-      },
-    );
+    const { world, colony } = setupWorldWithQueen();
+    addChamberForTest(world, colony, {
+      chamberId: 100,
+      chamberType: ChamberType.Queen,
+      posX: 0,
+      posY: 0,
+      width: 5,
+      height: 3,
+    });
+    addChamberForTest(world, colony, {
+      chamberId: 101,
+      chamberType: ChamberType.Nursery,
+      posX: 8,
+      posY: 0,
+      width: 4,
+      height: 3,
+    });
     expect(colonyFoodCapacity(colony)).toBe(BASE_FOOD_STORAGE_CAPACITY);
   });
 
@@ -735,126 +848,129 @@ describe('tickReconcile', () => {
     expect(colony.nurseCount).toBe(colony.computedAllocation.nurse);
   });
 
-  it('20. reconcile clamps negative foodStored to 0', () => {
+  it('20. reconcile clamps a negative pool to 0', () => {
     const { world, colony } = setupWorldWithQueen();
-    colony.foodStored = -50; // artificially drifted negative
+    setPoolFoodForTest(world, colony, -50); // artificially drifted negative
     colony.reconcileCountdown = 1;
     tickReconcile(world, colony);
-    expect(colony.foodStored).toBe(0);
+    expect(colonyPoolFood(world, colony)).toBe(0);
   });
 
-  it('20a. reconcile clamps foodStored over capacity down to colonyFoodCapacity (no chambers)', () => {
+  it('20a. reconcile clamps a pool over capacity down to colonyFoodCapacity (no chambers)', () => {
     const { world, colony } = setupWorldWithQueen();
-    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY + 500; // simulated overshoot
+    setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY + 500); // simulated overshoot
     colony.reconcileCountdown = 1;
     tickReconcile(world, colony);
-    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
+    expect(colonyPoolFood(world, colony)).toBe(BASE_FOOD_STORAGE_CAPACITY);
   });
 
-  it('20b. reconcile clamps the entrance pool to BASE and each chamber.foodStored to FOOD_CHAMBER_CAPACITY independently (issue #15)', () => {
+  it('20b. reconcile clamps the entrance pool to BASE and each chamber stock to FOOD_CHAMBER_CAPACITY independently (issue #15)', () => {
     const { world, colony } = setupWorldWithQueen();
-    // Issue #15: chamber.foodStored is per-chamber authoritative; the entrance
-    // pool (`colony.foodStored`) caps at BASE alone — chambers are NOT a
+    // Issue #15: a chamber's stock is per-chamber authoritative; the entrance
+    // pool caps at BASE alone — chambers are NOT a
     // capacity extension of the pool. Reconcile defensively clamps each side.
-    colony.chambers.push({
-      chamberId: 100,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: FOOD_CHAMBER_CAPACITY + 200,
-      posX: 0,
-      posY: 0,
-      width: 3,
-      height: 3,
-    });
-    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY + 1000; // pool overshoot
-    colony.reconcileCountdown = 1;
-    tickReconcile(world, colony);
-    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
-    expect(colony.chambers[0]!.foodStored).toBe(FOOD_CHAMBER_CAPACITY);
-  });
-
-  it('20c. reconcile does NOT inflate foodStored when under capacity', () => {
-    const { world, colony } = setupWorldWithQueen(1000);
-    colony.reconcileCountdown = 1;
-    tickReconcile(world, colony);
-    expect(colony.foodStored).toBe(1000);
-  });
-
-  it('20d. reconcile does NOT interfere with food consumption — consumption still decrements foodStored', () => {
-    const { world, colony } = setupWorldWithQueen(1000);
-    // Force reconcile to run then consume on the same tick via the per-colony contract
-    colony.reconcileCountdown = 1;
-    tickReconcile(world, colony);
-    expect(colony.foodStored).toBe(1000); // no-op for a colony below cap
-    tickFoodConsumption(world, colony);
-    expect(colony.foodStored).toBe(1000 - QUEEN_FOOD_PER_TICK);
-  });
-
-  it('22. reconcile NEVER redistributes the entrance pool across chambers (issue #15 regression)', () => {
-    // Pre-#15 the pool projected over N chambers, magically filling any chamber
-    // an ant had never visited. The post-#15 contract: chamber.foodStored is
-    // independent — it grows only when an ant deposits inside that chamber's
-    // footprint. Reconcile is forbidden from moving food across boundaries.
-    const { world, colony } = setupWorldWithQueen(8000);
-    colony.chambers.push(
+    addChamberForTest(
+      world,
+      colony,
       {
         chamberId: 100,
         chamberType: ChamberType.FoodStorage,
-        foodStored: 0,
         posX: 0,
         posY: 0,
         width: 3,
         height: 3,
       },
-      {
-        chamberId: 101,
-        chamberType: ChamberType.Nursery,
-        foodStored: 0,
-        posX: 4,
-        posY: 0,
-        width: 3,
-        height: 3,
-      },
-      {
-        chamberId: 102,
-        chamberType: ChamberType.FoodStorage,
-        foodStored: 0,
-        posX: 8,
-        posY: 0,
-        width: 3,
-        height: 3,
-      },
+      FOOD_CHAMBER_CAPACITY + 200,
     );
+    setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY + 1000); // pool overshoot
+    colony.reconcileCountdown = 1;
+    tickReconcile(world, colony);
+    expect(colonyPoolFood(world, colony)).toBe(BASE_FOOD_STORAGE_CAPACITY);
+    expect(chamberStock(world, colony.chambers[0]!)).toBe(FOOD_CHAMBER_CAPACITY);
+  });
+
+  it('20c. reconcile does NOT inflate the pool when under capacity', () => {
+    const { world, colony } = setupWorldWithQueen(1000);
+    colony.reconcileCountdown = 1;
+    tickReconcile(world, colony);
+    expect(colonyPoolFood(world, colony)).toBe(1000);
+  });
+
+  it('20d. reconcile does NOT interfere with food consumption — consumption still decrements the pool', () => {
+    const { world, colony } = setupWorldWithQueen(1000);
+    // Force reconcile to run then consume on the same tick via the per-colony contract
+    colony.reconcileCountdown = 1;
+    tickReconcile(world, colony);
+    expect(colonyPoolFood(world, colony)).toBe(1000); // no-op for a colony below cap
+    tickFoodConsumption(world, colony);
+    expect(colonyPoolFood(world, colony)).toBe(1000 - QUEEN_FOOD_PER_TICK);
+  });
+
+  it('22. reconcile NEVER redistributes the entrance pool across chambers (issue #15 regression)', () => {
+    // Pre-#15 the pool projected over N chambers, magically filling any chamber
+    // an ant had never visited. The post-#15 contract: a chamber's stock is
+    // independent — it grows only when an ant deposits inside that chamber's
+    // footprint. Reconcile is forbidden from moving food across boundaries.
+    const { world, colony } = setupWorldWithQueen(8000);
+    addChamberForTest(world, colony, {
+      chamberId: 100,
+      chamberType: ChamberType.FoodStorage,
+      posX: 0,
+      posY: 0,
+      width: 3,
+      height: 3,
+    });
+    addChamberForTest(world, colony, {
+      chamberId: 101,
+      chamberType: ChamberType.Nursery,
+      posX: 4,
+      posY: 0,
+      width: 3,
+      height: 3,
+    });
+    addChamberForTest(world, colony, {
+      chamberId: 102,
+      chamberType: ChamberType.FoodStorage,
+      posX: 8,
+      posY: 0,
+      width: 3,
+      height: 3,
+    });
 
     colony.reconcileCountdown = 1;
     tickReconcile(world, colony);
 
     // No ant deposits happened → all FoodStorage chambers stay at 0.
-    expect(colony.chambers[0]!.foodStored).toBe(0);
-    expect(colony.chambers[1]!.foodStored).toBe(0);
-    expect(colony.chambers[2]!.foodStored).toBe(0);
+    expect(chamberStock(world, colony.chambers[0]!)).toBe(0);
+    expect(chamberStock(world, colony.chambers[1]!)).toBe(0);
+    expect(chamberStock(world, colony.chambers[2]!)).toBe(0);
     // Entrance pool clamps to BASE (8000 > BASE = 2048).
-    expect(colony.foodStored).toBe(BASE_FOOD_STORAGE_CAPACITY);
+    expect(colonyPoolFood(world, colony)).toBe(BASE_FOOD_STORAGE_CAPACITY);
   });
 
   it('23. reconcile defensively clamps a per-chamber overshoot down to FOOD_CHAMBER_CAPACITY (issue #15)', () => {
     // The deposit + withdraw paths cap at source, but reconcile is the safety
     // net for any drift. Direct chamber overshoot is clamped here.
     const { world, colony } = setupWorldWithQueen(0);
-    colony.chambers.push({
-      chamberId: 100,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: FOOD_CHAMBER_CAPACITY + 12345, // simulated drift
-      posX: 0,
-      posY: 0,
-      width: 3,
-      height: 3,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 100,
+        chamberType: ChamberType.FoodStorage, // simulated drift
+        posX: 0,
+        posY: 0,
+        width: 3,
+        height: 3,
+      },
+      FOOD_CHAMBER_CAPACITY + 12345,
+    );
 
     colony.reconcileCountdown = 1;
     tickReconcile(world, colony);
 
-    expect(colony.chambers[0]!.foodStored).toBe(FOOD_CHAMBER_CAPACITY);
-    expect(colony.foodStored).toBe(0);
+    expect(chamberStock(world, colony.chambers[0]!)).toBe(FOOD_CHAMBER_CAPACITY);
+    expect(colonyPoolFood(world, colony)).toBe(0);
   });
 });
 
@@ -863,7 +979,7 @@ describe('tickReconcile', () => {
 // ---------------------------------------------------------------------------
 
 describe('CLNY-07 cached fields — integration', () => {
-  it('21. steady-state foodStored decrements by QUEEN_FOOD_PER_TICK + larvaeCount * LARVA_FOOD_PER_TICK per tick', () => {
+  it('21. steady-state pool decrements by QUEEN_FOOD_PER_TICK + larvaeCount * LARVA_FOOD_PER_TICK per tick', () => {
     const { world, colony } = setupWorldWithQueen(10_000);
     const larvaCount = 3;
     for (let i = 0; i < larvaCount; i++) {
@@ -871,11 +987,11 @@ describe('CLNY-07 cached fields — integration', () => {
     }
 
     const expectedDecrement = QUEEN_FOOD_PER_TICK + larvaCount * LARVA_FOOD_PER_TICK;
-    const initialFood = colony.foodStored;
+    const initialFood = colonyPoolFood(world, colony);
 
     for (let tick = 1; tick <= 10; tick++) {
-      tickFoodConsumption(world, colony);
-      expect(colony.foodStored).toBe(initialFood - tick * expectedDecrement);
+      consume(world, colony);
+      expect(colonyPoolFood(world, colony)).toBe(initialFood - tick * expectedDecrement);
     }
 
     // All entities still alive (ample food)
@@ -957,7 +1073,8 @@ describe('checkPendingChambers', () => {
     const ch = colony.chambers[0]!;
     expect(ch.chamberId).toBe(entityIdBefore); // allocateEntityId returns pre-increment value
     expect(ch.chamberType).toBe(ChamberType.Nursery);
-    expect(ch.foodStored).toBe(0);
+    expect(ch.foodSlot).toBe(-1); // a Nursery has no food stock
+    expect(chamberStock(world, ch)).toBe(0);
     // posX/posY are fixed-point (anchorTile << FP_SHIFT)
     expect(ch.posX).toBe(3 << FP_SHIFT);
     expect(ch.posY).toBe(4 << FP_SHIFT);

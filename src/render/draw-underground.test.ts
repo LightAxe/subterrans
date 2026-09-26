@@ -45,6 +45,7 @@ import {
 } from './sprites.js';
 import { COLOR_ROCK_BASE, COLOR_FLOOR_BASE, COLOR_BARREN_EARTH } from './terrain-atlas.js';
 import { FOOD_CHAMBER_CAPACITY } from '../sim/constants.js';
+import { addChamberForTest, setPoolFoodForTest } from '../sim/food/food-test-utils.js';
 import { makeCameraView, type CameraView } from './camera-adapter.js';
 import { AntFacingCache } from './ant-facing-cache.js';
 
@@ -418,7 +419,7 @@ describe('drawUndergroundEntities', () => {
     const chamber: ChamberRecord = {
       chamberId: 1,
       chamberType: ChamberType.Queen,
-      foodStored: 0,
+      foodSlot: -1,
       posX: 5 << FP_SHIFT,
       posY: 10 << FP_SHIFT,
       width: queenDims.width,
@@ -462,7 +463,7 @@ describe('drawUndergroundEntities', () => {
     const chamber: ChamberRecord = {
       chamberId: 2,
       chamberType: ChamberType.Queen,
-      foodStored: 0,
+      foodSlot: -1,
       posX: 5 << FP_SHIFT,
       posY: 10 << FP_SHIFT,
       width: queenDims.width,
@@ -517,7 +518,7 @@ describe('drawUndergroundEntities', () => {
     const chamber: ChamberRecord = {
       chamberId: 3,
       chamberType: ChamberType.Nursery,
-      foodStored: 0,
+      foodSlot: -1,
       posX: 5 << FP_SHIFT,
       posY: 10 << FP_SHIFT,
       width: dims.width,
@@ -593,7 +594,7 @@ describe('drawUndergroundEntities', () => {
     const chamber: ChamberRecord = {
       chamberId: 42,
       chamberType: ChamberType.Queen,
-      foodStored: 0,
+      foodSlot: -1,
       posX: 5 << FP_SHIFT,
       posY: 10 << FP_SHIFT,
       width: queenDims.width,
@@ -738,18 +739,17 @@ describe('drawUndergroundEntities', () => {
 
   it('FoodStorage chamber with colony.foodStored=0 draws NO food-cache sprites', () => {
     const foodDims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage];
-    world.colonies[PLAYER_COLONY_ID]!.foodStored = 0;
-    world.colonies[PLAYER_COLONY_ID]!.chambers = [
-      {
-        chamberId: 9,
-        chamberType: ChamberType.FoodStorage,
-        foodStored: 0,
-        posX: 5 << FP_SHIFT,
-        posY: 5 << FP_SHIFT,
-        width: foodDims.width,
-        height: foodDims.height,
-      },
-    ];
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    setPoolFoodForTest(world, colony, 0);
+    colony.chambers = [];
+    addChamberForTest(world, colony, {
+      chamberId: 9,
+      chamberType: ChamberType.FoodStorage,
+      posX: 5 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      width: foodDims.width,
+      height: foodDims.height,
+    });
 
     const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
@@ -766,17 +766,21 @@ describe('drawUndergroundEntities', () => {
     const foodDims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage];
     const totalTiles = foodDims.width * foodDims.height;
     // Issue #15: chamber.foodStored is the authoritative per-chamber stockpile.
-    world.colonies[PLAYER_COLONY_ID]!.chambers = [
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    colony.chambers = [];
+    addChamberForTest(
+      world,
+      colony,
       {
         chamberId: 10,
         chamberType: ChamberType.FoodStorage,
-        foodStored: Math.floor(FOOD_CHAMBER_CAPACITY / 2),
         posX: 5 << FP_SHIFT,
         posY: 5 << FP_SHIFT,
         width: foodDims.width,
         height: foodDims.height,
       },
-    ];
+      Math.floor(FOOD_CHAMBER_CAPACITY / 2),
+    );
 
     const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
@@ -791,17 +795,21 @@ describe('drawUndergroundEntities', () => {
 
   it('FoodStorage full → food-cache sprite per tile, bottom row included', () => {
     const foodDims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage];
-    world.colonies[PLAYER_COLONY_ID]!.chambers = [
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    colony.chambers = [];
+    addChamberForTest(
+      world,
+      colony,
       {
         chamberId: 11,
         chamberType: ChamberType.FoodStorage,
-        foodStored: FOOD_CHAMBER_CAPACITY,
         posX: 5 << FP_SHIFT,
         posY: 5 << FP_SHIFT,
         width: foodDims.width,
         height: foodDims.height,
       },
-    ];
+      FOOD_CHAMBER_CAPACITY,
+    );
 
     const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
@@ -837,18 +845,22 @@ describe('drawUndergroundEntities', () => {
     const totalTiles = foodDims.width * foodDims.height;
     // Set the entrance pool full just to confirm it does NOT bleed into the
     // chamber visual — the bug we fixed.
-    world.colonies[PLAYER_COLONY_ID]!.foodStored = 9999;
-    world.colonies[PLAYER_COLONY_ID]!.chambers = [
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    setPoolFoodForTest(world, colony, 9999);
+    colony.chambers = [];
+    addChamberForTest(
+      world,
+      colony,
       {
         chamberId: 12,
         chamberType: ChamberType.FoodStorage,
-        foodStored: FOOD_CHAMBER_CAPACITY, // full per chamber.foodStored
         posX: 5 << FP_SHIFT,
         posY: 5 << FP_SHIFT,
         width: foodDims.width,
         height: foodDims.height,
       },
-    ];
+      FOOD_CHAMBER_CAPACITY, // full per chamber's stock
+    );
 
     const cam = makeCamera(5, 5);
     drawUndergroundEntities(gfx, sprites, world, world, 0, cam);
@@ -862,38 +874,49 @@ describe('drawUndergroundEntities', () => {
     const foodDims = CHAMBER_DIMENSIONS[ChamberType.FoodStorage];
     const capa = FOOD_CHAMBER_CAPACITY;
     const colony = createColonyRecord(PLAYER_COLONY_ID, 999);
-    colony.chambers = [
+    const world = createWorldState(1);
+    colony.chambers = [];
+    addChamberForTest(
+      world,
+      colony,
       {
         chamberId: 1,
         chamberType: ChamberType.FoodStorage,
-        foodStored: capa,
         posX: 0,
         posY: 0,
         width: foodDims.width,
         height: foodDims.height,
       },
+      capa,
+    );
+    addChamberForTest(
+      world,
+      colony,
       {
         chamberId: 2,
         chamberType: ChamberType.FoodStorage,
-        foodStored: Math.floor(capa / 2),
         posX: 0,
         posY: 0,
         width: foodDims.width,
         height: foodDims.height,
       },
+      Math.floor(capa / 2),
+    );
+    addChamberForTest(
+      world,
+      colony,
       {
         chamberId: 3,
         chamberType: ChamberType.FoodStorage,
-        foodStored: 0,
         posX: 0,
         posY: 0,
         width: foodDims.width,
         height: foodDims.height,
       },
-    ];
+      0,
+    );
     // Entrance pool is irrelevant to the per-chamber readout.
-    colony.foodStored = 12345;
-    const world = createWorldState(1);
+    setPoolFoodForTest(world, colony, 12345);
 
     expect(projectFoodStorageFill(world, colony, 1)).toBe(capa);
     expect(projectFoodStorageFill(world, colony, 2)).toBe(Math.floor(capa / 2));

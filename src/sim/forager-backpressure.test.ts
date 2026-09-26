@@ -12,7 +12,17 @@ import { createWorldState, allocateEntityId } from './types.js';
 import { SIM_VERSION_V27_FORAGE_BACKPRESSURE } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord, type ColonyId } from './colony/colony-store.js';
-import { colonyHasNoDepositTarget, colonyForageBackpressure } from './food/food-api.js';
+import {
+  colonyHasNoDepositTarget,
+  colonyForageBackpressure,
+  colonyPoolFood,
+  chamberStock,
+} from './food/food-api.js';
+import {
+  setPoolFoodForTest,
+  setChamberStockForTest,
+  addChamberForTest,
+} from './food/food-test-utils.js';
 import { AntTask, ChamberType } from './enums.js';
 import {
   BASE_FOOD_STORAGE_CAPACITY,
@@ -81,17 +91,21 @@ function buildSaturatedWorld(opts: SaturatedOpts): {
   // Forage-only ratio so step 8 allocates every (non-nurse) worker to forage.
   colony.targetRatio = { forage: 10, fight: 0 };
 
-  colony.foodStored = opts.poolFill ?? BASE_FOOD_STORAGE_CAPACITY;
+  setPoolFoodForTest(world, colony, opts.poolFill ?? BASE_FOOD_STORAGE_CAPACITY);
   if (!opts.noChamber) {
-    colony.chambers.push({
-      chamberId: 100,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: opts.chamberFill ?? FOOD_CHAMBER_CAPACITY,
-      posX: 0,
-      posY: 0,
-      width: 3,
-      height: 3,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 100,
+        chamberType: ChamberType.FoodStorage,
+        posX: 0,
+        posY: 0,
+        width: 3,
+        height: 3,
+      },
+      opts.chamberFill ?? FOOD_CHAMBER_CAPACITY,
+    );
   }
 
   return { world, colonyId: 1 as ColonyId, idleIds };
@@ -137,7 +151,7 @@ describe('#126 V27 forager storage backpressure', () => {
       expect(foragerCount(world, idleIds)).toBe(0); // suppressed
 
       // Free a chamber slot → deposit target exists again.
-      colony.chambers[0]!.foodStored = 0;
+      setChamberStockForTest(world, colony, colony.chambers[0]!, 0);
       expect(colonyHasNoDepositTarget(world, colony)).toBe(false);
       tick(world, []);
 
@@ -153,7 +167,7 @@ describe('#126 V27 forager storage backpressure', () => {
       expect(foragerCount(world, idleIds)).toBe(0); // suppressed
 
       // Drain the pool to full carry-headroom → the pool is a deposit target again.
-      colony.foodStored = 0;
+      setPoolFoodForTest(world, colony, 0);
       expect(colonyHasNoDepositTarget(world, colony)).toBe(false);
       tick(world, []);
 
@@ -236,8 +250,8 @@ describe('#126 V27 forager storage backpressure', () => {
       return JSON.stringify({
         tick: w.tick,
         rngState: w.rngState,
-        foodStored: c.foodStored,
-        chambers: c.chambers.map((ch) => ch.foodStored),
+        foodStored: colonyPoolFood(w, c),
+        chambers: c.chambers.map((ch) => chamberStock(w, ch)),
         computedAllocation: c.computedAllocation,
         taskCensus: c.taskCensus,
         ants,

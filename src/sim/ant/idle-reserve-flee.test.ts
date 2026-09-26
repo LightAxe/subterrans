@@ -44,6 +44,7 @@ import {
 import { initAnt, pushRecentTile } from './ant-store.js';
 import { killAnt } from '../ant-death.js';
 import { colonyForageBackpressure } from '../food/food-api.js';
+import { addChamberForTest, addPileForTest, setPoolFoodForTest } from '../food/food-test-utils.js';
 import { tickIdleReserveAndFlee } from './idle-reserve.js';
 import { tickExcursionBoundary, tickSearchLeash } from './ant-system.js';
 import { tickAntMovement } from './ant-movement.js';
@@ -2347,7 +2348,7 @@ describe('V49 (#322) — the alarm musters civilians home under a full camp', ()
       // back to searching, which restores the wave exactly.
       colony.alarmActive = false;
       const foodPileId = 9001;
-      world.foodPiles.push({
+      addPileForTest(world, {
         foodPileId,
         tileX: ent.surfaceTileX + 7,
         tileY: ent.surfaceTileY,
@@ -2414,11 +2415,15 @@ describe('V49 (#322) — the alarm musters civilians home under a full camp', ()
           colony.computedAllocation.dig = 3;
         } else {
           // Nowhere to deposit: pool at cap and the only FoodStorage chamber full.
-          colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
-          colony.chambers.push({
-            chamberType: ChamberType.FoodStorage,
-            foodStored: FOOD_CHAMBER_CAPACITY,
-          } as never);
+          setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY);
+          addChamberForTest(
+            world,
+            colony,
+            {
+              chamberType: ChamberType.FoodStorage,
+            } as never,
+            FOOD_CHAMBER_CAPACITY,
+          );
         }
         const id = spawnWorker(
           world,

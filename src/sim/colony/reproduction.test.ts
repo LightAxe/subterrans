@@ -18,6 +18,7 @@ import {
   SIM_VERSION_V22_DIFFICULTY,
 } from '../types.js';
 import { createColonyRecord } from './colony-store.js';
+import { setPoolFoodForTest } from '../food/food-test-utils.js';
 import { initAnt } from '../ant/ant-store.js';
 import { AntTask, ChamberType, NursingSubState } from '../enums.js';
 import { Zone, createUndergroundGrid, ugSet, UndergroundTileState } from '../terrain.js';
@@ -75,13 +76,13 @@ function setupColony(
   world.ants.zone[queenId] = Zone.Underground;
 
   const colony = createColonyRecord(COLONY_ID, queenId);
-  colony.foodStored = foodStored;
+  setPoolFoodForTest(world, colony, foodStored);
 
   // Queen chamber sized around the queen's tile.
   colony.chambers.push({
     chamberId: 100,
     chamberType: ChamberType.Queen,
-    foodStored: 0,
+    foodSlot: -1,
     posX: QUEEN_TILE_X << FP_SHIFT,
     posY: QUEEN_TILE_Y << FP_SHIFT,
     width: 2,
@@ -91,7 +92,7 @@ function setupColony(
   colony.chambers.push({
     chamberId: 101,
     chamberType: ChamberType.Nursery,
-    foodStored: 0,
+    foodSlot: -1,
     posX: 0,
     posY: 0,
     width: 4,
@@ -433,8 +434,8 @@ describe('D-29 WarFooting — reproduction speed advantage', () => {
 
     for (let t = 1; t < MAX_TICKS; t++) {
       // Pin food so the surplus tier stays constant across the run.
-      colonyA.foodStored = LEAN_FOOD;
-      colonyB.foodStored = RICH_FOOD_10X;
+      setPoolFoodForTest(worldA, colonyA, LEAN_FOOD);
+      setPoolFoodForTest(worldB, colonyB, RICH_FOOD_10X);
 
       worldA.tick = t;
       worldB.tick = t;
@@ -488,12 +489,12 @@ describe('V22 difficulty brood modifier — AI egg interval', () => {
     world.ants.zone[queenId] = Zone.Underground;
 
     const colony = createColonyRecord(AI_COLONY_ID as ColonyId, queenId);
-    colony.foodStored = foodStored;
+    setPoolFoodForTest(world, colony, foodStored);
     colony.queenLastEggTick = 0; // prevent default -300 from firing early
     colony.chambers.push({
       chamberId: 200,
       chamberType: ChamberType.Queen,
-      foodStored: 0,
+      foodSlot: -1,
       posX: QUEEN_TILE_X << FP_SHIFT,
       posY: QUEEN_TILE_Y << FP_SHIFT,
       width: 2,
@@ -502,7 +503,7 @@ describe('V22 difficulty brood modifier — AI egg interval', () => {
     colony.chambers.push({
       chamberId: 201,
       chamberType: ChamberType.Nursery,
-      foodStored: 0,
+      foodSlot: -1,
       posX: 0,
       posY: 0,
       width: 4,

@@ -12,6 +12,7 @@ import {
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt } from './ant-store.js';
+import { addChamberForTest } from '../food/food-test-utils.js';
 import { AntTask, ForagingSubState, NursingSubState, ChamberType } from '../enums.js';
 import { Rng } from '../rng.js';
 import { UNDERGROUND_GRID_WIDTH, UNDERGROUND_GRID_HEIGHT } from '../constants.js';
@@ -102,10 +103,9 @@ describe('tickNurseActions', () => {
     initAnt(world.ants, queenId, { colonyId: COLONY_ID, posX: 0, posY: 0, speed: 0 });
     const colony = createColonyRecord(COLONY_ID, queenId);
     world.colonies[COLONY_ID] = colony;
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 100,
       chamberType: params.chamberType ?? ChamberType.Nursery,
-      foodStored: 0,
       posX: params.chamberTileX << FP_SHIFT,
       posY: params.chamberTileY << FP_SHIFT,
       width: params.chamberWidth ?? 2,
@@ -230,17 +230,16 @@ describe('chamber-flow nurseDeposit field (#17 phase 1)', () => {
    * source/-1 marker — only Nursery tiles do.
    */
   it('seeds from Nursery Open tiles only — Queen Open tiles are NOT sources', () => {
-    const { underground, colony, colonyId } = setupWorldWithUnderground(16, 16);
+    const { world, underground, colony, colonyId } = setupWorldWithUnderground(16, 16);
     // Nursery (2x2) at (6,6).
     for (let dy = 0; dy < 2; dy++) {
       for (let dx = 0; dx < 2; dx++) {
         ugSet(underground, 6 + dx, 6 + dy, UndergroundTileState.Open);
       }
     }
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 1,
       chamberType: ChamberType.Nursery,
-      foodStored: 0,
       posX: 6 << FP_SHIFT,
       posY: 6 << FP_SHIFT,
       width: 2,
@@ -252,10 +251,9 @@ describe('chamber-flow nurseDeposit field (#17 phase 1)', () => {
         ugSet(underground, 10 + dx, 3 + dy, UndergroundTileState.Open);
       }
     }
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 2,
       chamberType: ChamberType.Queen,
-      foodStored: 0,
       posX: 10 << FP_SHIFT,
       posY: 3 << FP_SHIFT,
       width: 2,
@@ -298,7 +296,7 @@ describe('chamber-flow nurseDeposit field (#17 phase 1)', () => {
   });
 
   it('with no Nursery chamber, every reachable tile is unreachable (-2) — there is nothing to seed', () => {
-    const { underground, colony, colonyId } = setupWorldWithUnderground(16, 16);
+    const { world, underground, colony, colonyId } = setupWorldWithUnderground(16, 16);
     // Open a small region but NO Nursery chamber.
     for (let dy = 0; dy < 3; dy++) {
       for (let dx = 0; dx < 3; dx++) {
@@ -306,10 +304,9 @@ describe('chamber-flow nurseDeposit field (#17 phase 1)', () => {
       }
     }
     // Push a Queen chamber so we prove only the type filter matters.
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 1,
       chamberType: ChamberType.Queen,
-      foodStored: 0,
       posX: 5 << FP_SHIFT,
       posY: 5 << FP_SHIFT,
       width: 2,
@@ -361,10 +358,9 @@ describe('chamber-flow nursing pickup field (#17 phase 1)', () => {
         ugSet(underground, 30 + dx, 8 + dy, UndergroundTileState.Open);
       }
     }
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 1,
       chamberType: ChamberType.Queen,
-      foodStored: 0,
       posX: 30 << FP_SHIFT,
       posY: 8 << FP_SHIFT,
       width: 5,
@@ -473,11 +469,9 @@ describe('chamber-flow nursing pickup field (#17 phase 1)', () => {
     // be on a Queen/Nursery tile (allocateWorkers should produce
     // nurseCount=0 in this case, so it's only a defensive concern).
     const { world, underground, colony, colonyId } = setupWorldWithUnderground(16, 16);
-    void world;
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 1,
       chamberType: ChamberType.Queen,
-      foodStored: 0,
       posX: 5 << FP_SHIFT,
       posY: 5 << FP_SHIFT,
       width: 2,
@@ -538,10 +532,9 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     const colony = createColonyRecord(COLONY_ID, queenId);
     world.colonies[COLONY_ID] = colony;
     // Queen chamber so the brood is in a "natural" location.
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 1,
       chamberType: ChamberType.Queen,
-      foodStored: 0,
       posX: 5 << FP_SHIFT,
       posY: 5 << FP_SHIFT,
       width: 2,
@@ -550,10 +543,9 @@ describe('tickNurseActions — v10+ pickup (#17 phase 1.3)', () => {
     // Nursery chamber — required for v10 pickup gate. Empty space (no
     // Open tiles needed for these unit tests; the gate just requires
     // hasCompletedChamber to return true).
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 2,
       chamberType: ChamberType.Nursery,
-      foodStored: 0,
       posX: 12 << FP_SHIFT,
       posY: 12 << FP_SHIFT,
       width: 2,
@@ -849,10 +841,9 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     // queen's chamber per the design, so the test setup needs one for
     // pickup-source tile detection (isInsideQueenChamber). 2×2 anchored at
     // (broodTileX, broodTileY) so the brood always sits inside.
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 0,
       chamberType: ChamberType.Queen,
-      foodStored: 0,
       posX: opts.broodTileX << FP_SHIFT,
       posY: opts.broodTileY << FP_SHIFT,
       width: 2,
@@ -860,10 +851,9 @@ describe('tickNurseActions — v10+ carry + deposit (#17 phase 1.4)', () => {
     });
 
     if (!opts.omitNursery) {
-      colony.chambers.push({
+      addChamberForTest(world, colony, {
         chamberId: 1,
         chamberType: ChamberType.Nursery,
-        foodStored: 0,
         posX: opts.nurseryTileX << FP_SHIFT,
         posY: opts.nurseryTileY << FP_SHIFT,
         width: opts.nurseryWidth ?? 2,
@@ -1221,10 +1211,9 @@ describe('tickLifecycleTransitions — v10 larva→worker drops carry (#17 phase
     initAnt(world.ants, queenId, { colonyId: COLONY_ID, posX: 0, posY: 0, speed: 0 });
     const colony = createColonyRecord(COLONY_ID, queenId);
     world.colonies[COLONY_ID] = colony;
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 1,
       chamberType: ChamberType.Nursery,
-      foodStored: 0,
       posX: 10 << FP_SHIFT,
       posY: 10 << FP_SHIFT,
       width: 2,
@@ -1293,10 +1282,9 @@ describe('tickLifecycleTransitions — v10 larva→worker drops carry (#17 phase
     initAnt(world.ants, queenId, { colonyId: COLONY_ID, posX: 0, posY: 0, speed: 0 });
     const colony = createColonyRecord(COLONY_ID, queenId);
     world.colonies[COLONY_ID] = colony;
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 1,
       chamberType: ChamberType.Nursery,
-      foodStored: 0,
       posX: 10 << FP_SHIFT,
       posY: 10 << FP_SHIFT,
       width: 2,
@@ -1372,25 +1360,22 @@ describe('Nursery brood deposit — capacity-aware spread, real pipeline (#173, 
     for (let y = 4; y <= 6; y++) {
       for (let x = 5; x <= 40; x++) ugSet(underground, x, y, UndergroundTileState.Open);
     }
-    const A: ChamberRecord = {
+    const A = addChamberForTest(world, colony, {
       chamberId: 10,
       chamberType: ChamberType.Nursery,
-      foodStored: 0,
       posX: 10 << FP_SHIFT,
       posY: 4 << FP_SHIFT,
       width: 4,
       height: 3,
-    };
-    const B: ChamberRecord = {
+    });
+    const B = addChamberForTest(world, colony, {
       chamberId: 11,
       chamberType: ChamberType.Nursery,
-      foodStored: 0,
       posX: 30 << FP_SHIFT,
       posY: 4 << FP_SHIFT,
       width: 4,
       height: 3,
-    };
-    colony.chambers.push(A, B);
+    });
     return { world, colony, underground, A, B };
   }
 

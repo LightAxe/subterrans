@@ -29,8 +29,8 @@ describe('ant-store', () => {
     expect(ants.speed.length).toBe(8192);
     expect(ants.foodCarrying).toBeInstanceOf(Int32Array);
     expect(ants.foodCarrying.length).toBe(8192);
-    expect(ants.starvationTimer).toBeInstanceOf(Int32Array);
-    expect(ants.starvationTimer.length).toBe(8192);
+    expect(ants.lastMealTick).toBeInstanceOf(Int32Array);
+    expect(ants.lastMealTick.length).toBe(8192);
     expect(ants.age).toBeInstanceOf(Int32Array);
     expect(ants.age.length).toBe(8192);
     expect(ants.alive).toBeInstanceOf(Int32Array);
@@ -107,7 +107,7 @@ describe('ant-store', () => {
     expect(ants.alive[id]).toBe(1);
     expect(ants.age[id]).toBe(0);
     expect(ants.foodCarrying[id]).toBe(0);
-    expect(ants.starvationTimer[id]).toBe(0);
+    expect(ants.lastMealTick[id]).toBe(-1); // #288: default "fed before tick 0"
   });
 
   // ---------------------------------------------------------------------------
@@ -193,7 +193,7 @@ describe('ant-store', () => {
       'subTask',
       'speed',
       'foodCarrying',
-      'starvationTimer',
+      'lastMealTick',
       'age',
       'alive',
       'lifespan',
