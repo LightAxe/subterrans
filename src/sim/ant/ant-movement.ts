@@ -1626,7 +1626,8 @@ export function tickAntMovement(
             // forager emerges from shelter stranded at the shaft (posY=0) with no
             // recovery: needsTransition (Foraging && foodCarrying===0) routes it
             // to the shaft but nothing ascends it. Pre-V34 no empty forager ever
-            // descended, so this only fires on the V34 flee path (replay-safe).
+            // descended, so this only fires on the V34 flee path (and, from V49,
+            // #322, the alarm muster's descent) (replay-safe).
             ants.subTask[id] === ForagingSubState.ReturningToNest));
 
       if (needsSurface) {

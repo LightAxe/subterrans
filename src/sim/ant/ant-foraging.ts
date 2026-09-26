@@ -996,6 +996,10 @@ export function tickExcursionBoundary(world: WorldState): void {
     if (world.simVersion >= SIM_VERSION_V49_ALARM_MUSTER && colony.alarmActive === true) {
       if (sub === ForagingSubState.SearchingFood) {
         ants.subTask[id] = ForagingSubState.ReturningToNest;
+        // Recalled, not a failed search: the entrance-arrival flip after the
+        // all-clear bumps the leash wave, so step it back first. (-1 is safe:
+        // every reader clamps a negative wave to 0, and the bump restores it.)
+        ants.searchWave[id] = ants.searchWave[id]! - 1;
         ants.searchHeadingX[id] = 0;
         ants.searchHeadingY[id] = 0;
         ants.searchHeadingTicks[id] = 0;

@@ -412,8 +412,9 @@ function setFleeTarget(
  * are an Idle worker at the shaft row (a post-deposit ant at a chamberless shaft
  * pool, a V35 wander clear at row 0, a matured larva or dropped carrier) and any
  * forager that was STILL searching or returning underground when the alarm
- * sounded — a one-shot population, because a full deposit sets task=Idle and
- * step 10a's alarm gate stops re-promotion. Each climbed out: with a safe door
+ * sounded — a one-shot population before V49, because a full deposit sets
+ * task=Idle and step 10a's alarm gate stops re-promotion. (From V49, #322, every
+ * forager the alarm musters home descends and is held here: the normal case.) Each climbed out: with a safe door
  * step 15b recalled it next tick, and under a full camp it was never recalled at
  * all (Codex P2).
  *
@@ -504,7 +505,8 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
     // routes every surface civilian down the existing V34 flee path. The
     // ENTRANCE-safety reads (setFleeTarget → pickNearestSafeEntrance,
     // entranceDanger) are deliberately untouched, so the alarm never TARGETS a
-    // camped door — a fully-camped colony holds instead. The chosen target is
+    // camped door — a fully-camped colony holds instead (from V49, #322, walks
+    // home and waits at the edge of the danger). The chosen target is
     // safe; the straight-line path to it is not checked (pre-existing V34
     // behaviour — see the V42 note in types.ts).
     const alarmed = world.simVersion >= SIM_VERSION_V42_COLONY_ALARM && colony.alarmActive === true;
@@ -549,7 +551,8 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
         // queen@12k 83.3% vs 86.7%, queen@24k 76.7% vs 86.7%, WarFooting 83.3% vs
         // 86.7%. The mechanism: an EMPTY ReturningToNest forager frozen out here
         // is a DISABLED FORAGER. It never descends (movement's `needsUnderground`
-        // admits Foraging only at subTask CarryingFood, or fleePhase === 0), and
+        // admits Foraging only at subTask CarryingFood, or fleePhase === 0; from
+        // V49, #322, also a returning forager under the alarm), and
         // it is still bite-able where it stands. Released, it walks to the
         // entrance tile, flips to SearchingFood with its wave bumped, and starts a
         // fresh excursion — which is the colony's next load of food. Frozen, it

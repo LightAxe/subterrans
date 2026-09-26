@@ -2297,11 +2297,23 @@ describe('V49 (#322) — the alarm musters civilians home under a full camp', ()
         AntTask.Foraging,
       );
       world.ants.subTask[id] = ForagingSubState.SearchingFood;
+      world.ants.searchWave[id] = 1;
+      world.ants.searchHeadingX[id] = 1;
+      world.ants.searchHeadingTicks[id] = 9;
+      world.ants.searchPauseTicks[id] = 3;
       tickExcursionBoundary(world);
       expect([version, world.ants.subTask[id]]).toEqual([
         version,
         turned ? ForagingSubState.ReturningToNest : ForagingSubState.SearchingFood,
       ]);
+      if (turned) {
+        // A fresh return leg (as step 9c's own leash flip), and the leash wave
+        // stepped back so the arrival bump after the all-clear leaves it at 1.
+        expect(world.ants.searchHeadingX[id]).toBe(0);
+        expect(world.ants.searchHeadingTicks[id]).toBe(0);
+        expect(world.ants.searchPauseTicks[id]).toBe(0);
+        expect(world.ants.searchWave[id]).toBe(0);
+      }
     }
   });
 
