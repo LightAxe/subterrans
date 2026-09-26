@@ -264,7 +264,7 @@ export function fighterMayLoot(world: WorldState, colony: ColonyRecord, id: numb
 export function updateRaiders(world: WorldState): void {
   if (world.simVersion < SIM_VERSION_V52_RAIDING) return;
   const ants = world.ants;
-  for (let id = 0; id < ants.alive.length; id++) {
+  for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1 || ants.task[id] !== AntTask.Fighting) continue;
     const colonyId = ants.colonyId[id]!;
     const colony = world.colonies[colonyId];
