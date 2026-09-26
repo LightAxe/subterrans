@@ -907,12 +907,24 @@ export function tickAntMovement(
         } else {
           // V52 (#290 PR 5): step 10e aimed a raider stopped by a hostile in reach
           // at THAT hostile (target set only by 10e; step 10c clears an invader's
-          // target every tick, so below V52 it is always -1 here).
-          const hostile =
-            ants.targetPosX[id] !== -1
-              ? { targetX: ants.targetPosX[id]!, targetY: ants.targetPosY[id]! }
-              : pickNearestHostileUnderground(ants, id, gridColonyId);
-          if (hostile !== null) {
+          // target every tick, so below V52 it is always -1 here). Scalars, not an
+          // object literal: this runs per fighter per tick (hot-loop rule).
+          let haveHostile = false;
+          let hostileX = 0;
+          let hostileY = 0;
+          if (ants.targetPosX[id] !== -1) {
+            haveHostile = true;
+            hostileX = ants.targetPosX[id]!;
+            hostileY = ants.targetPosY[id]!;
+          } else {
+            const nearest = pickNearestHostileUnderground(ants, id, gridColonyId);
+            if (nearest !== null) {
+              haveHostile = true;
+              hostileX = nearest.targetX;
+              hostileY = nearest.targetY;
+            }
+          }
+          if (haveHostile) {
             const invUnderground = world.undergroundGrids[gridColonyId];
             if (invUnderground) {
               // Wall-aware greedy step — avoids freezing against solid
@@ -921,8 +933,8 @@ export function tickAntMovement(
               // shared pickCardinalStep block does the FP→step conversion.
               const tileX = posX >> FP_SHIFT;
               const tileY = posY >> FP_SHIFT;
-              const tTileX = hostile.targetX >> FP_SHIFT;
-              const tTileY = hostile.targetY >> FP_SHIFT;
+              const tTileX = hostileX >> FP_SHIFT;
+              const tTileY = hostileY >> FP_SHIFT;
               const step = pickInvaderUndergroundStep(
                 invUnderground,
                 tileX,
@@ -934,12 +946,12 @@ export function tickAntMovement(
               rawDx = unpackStepDx(step) * FP_ONE;
               rawDy = unpackStepDy(step) * FP_ONE;
             } else {
-              rawDx = hostile.targetX - posX;
-              rawDy = hostile.targetY - posY;
+              rawDx = hostileX - posX;
+              rawDy = hostileY - posY;
             }
             haveTarget = true;
           }
-          // hostile === null → idle fallback: dx=dy=0 (haveTarget stays false)
+          // no hostile → idle fallback: dx=dy=0 (haveTarget stays false)
         }
       } else if (fighterDefendsTunnels(world, id)) {
         // V44 (#325) — a tunnel defender steps through its own tunnels (BFS)
