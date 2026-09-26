@@ -33,7 +33,12 @@
 // nothing here writes Looting / Hauling, so every read of them is inert.
 import type { ColonyRecord } from '../colony/colony-store.js';
 import { computeStockFlowField } from '../chamber-flow.js';
-import { RAID_CARRY_FP, RAID_ENGAGE_RADIUS_TILES } from '../constants.js';
+import {
+  RAID_CARRY_FP,
+  RAID_ENGAGE_RADIUS_TILES,
+  RAID_LOOT_START_STOCK_FP,
+  RAID_START_CLEAR_RADIUS_TILES,
+} from '../constants.js';
 import { AntTask, ChamberType, FightingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import {
@@ -45,7 +50,7 @@ import {
   topUpOrSpawnCorpsePile,
 } from '../food/food-api.js';
 import { fighterIsHungry } from '../hunger.js';
-import { getScratch, RAID_REACH_WINDOW_SIDE } from '../scratch.js';
+import { getScratch, RAID_REACH_WINDOW_RADIUS, RAID_REACH_WINDOW_SIDE } from '../scratch.js';
 import { Zone } from '../terrain.js';
 import { SIM_VERSION_V52_RAIDING, type WorldState } from '../types.js';
 import { DIR_DX, DIR_DY, canEnterUndergroundTile } from './ant-motion.js';
@@ -76,33 +81,36 @@ function rallyOnEntranceOf(colony: ColonyRecord, gridColony: ColonyRecord): bool
 
 /**
  * The stock flow field of colony `gridColonyId`'s nest for THIS tick (toward its
- * FoodStorage chambers holding food; computeStockFlowField), computed on first use
+ * FoodStorage chambers holding food — with `start`, only those holding
+ * RAID_LOOT_START_STOCK_FP; computeStockFlowField), computed on first use
  * in a tick and reused for the rest of it. Null if the nest or colony is missing.
  * Step 10e computes it for every nest a raider stands in, before anything that
  * tick could change a stock or a tile it reads (steps 11–15 move no food and dig
  * nothing; the loot step 16e runs after movement), so step 16 reads the same field.
  */
-function stockFieldFor(world: WorldState, gridColonyId: number): Int32Array | null {
+function stockFieldFor(world: WorldState, gridColonyId: number, start: boolean): Int32Array | null {
   const raid = getScratch(world).raid;
+  const key = gridColonyId * 2 + (start ? 1 : 0);
   const grid = world.undergroundGrids[gridColonyId];
   const gridColony = world.colonies[gridColonyId];
   if (grid === undefined || gridColony === undefined) return null;
   const cells = grid.width * grid.height;
-  let field = raid.stockField.get(gridColonyId);
+  let field = raid.stockField.get(key);
   if (
     field !== undefined &&
     field.length === cells &&
-    raid.stockFieldTick.get(gridColonyId) === world.tick
+    raid.stockFieldTick.get(key) === world.tick
   ) {
     return field;
   }
   if (field === undefined || field.length !== cells) {
     field = new Int32Array(cells);
-    raid.stockField.set(gridColonyId, field);
+    raid.stockField.set(key, field);
   }
   if (raid.queue.length < cells) raid.queue = new Int32Array(cells);
-  computeStockFlowField(world, grid, gridColony.chambers, field, raid.queue);
-  raid.stockFieldTick.set(gridColonyId, world.tick);
+  const min = start ? RAID_LOOT_START_STOCK_FP : 1;
+  computeStockFlowField(world, grid, gridColony.chambers, field, raid.queue, min);
+  raid.stockFieldTick.set(key, world.tick);
   return field;
 }
 
@@ -112,9 +120,15 @@ function stockFieldFor(world: WorldState, gridColonyId: number): Int32Array | nu
  * food, -1 already on one, -2 none reachable (or no field).
  */
 export function looterStepDir(world: WorldState, id: number): number {
+  return stockStepDir(world, id, false);
+}
+
+/** The step (as looterStepDir) on the any-food field, or with `start` the one
+ *  seeded only from chambers holding RAID_LOOT_START_STOCK_FP. */
+function stockStepDir(world: WorldState, id: number, start: boolean): number {
   const ants = world.ants;
   const gridColonyId = ants.currentGridColonyId[id]!;
-  const field = stockFieldFor(world, gridColonyId);
+  const field = stockFieldFor(world, gridColonyId, start);
   const grid = world.undergroundGrids[gridColonyId];
   if (field === null || grid === undefined) return -2;
   const tx = ants.posX[id]! >> FP_SHIFT;
@@ -126,18 +140,17 @@ export function looterStepDir(world: WorldState, id: number): number {
 /**
  * A hostile — an adult of another colony (a worker, fighter or nurse, or a queen;
  * brood does not count) — stands below ground in nest `gridColonyId` within
- * RAID_ENGAGE_RADIUS_TILES PATH tiles of raider `id`: reached by a BFS through
+ * `R` PATH tiles of raider `id` (at most RAID_REACH_WINDOW_RADIUS): reached by a BFS through
  * tiles a fighter can enter, bounded to that radius. A cheap Manhattan pass runs
  * first (path distance is never shorter), so the BFS runs only with a candidate
  * near. Returns that hostile (the nearest by path; the first found on a tie), or
  * -1 if none is in reach. Allocation-free (scratch window).
  */
-function hostileInReach(world: WorldState, id: number, gridColonyId: number): number {
+function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: number): number {
   const ants = world.ants;
   const self = ants.colonyId[id]!;
   const tx = ants.posX[id]! >> FP_SHIFT;
   const ty = ants.posY[id]! >> FP_SHIFT;
-  const R = RAID_ENGAGE_RADIUS_TILES;
 
   // Pass 1 — any hostile within Manhattan R?
   let near = -1;
@@ -158,7 +171,8 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number): nu
   }
   if (near < 0) return -1;
 
-  // Pass 2 — bounded BFS over the (2R+1)² window centred on the raider.
+  // Pass 2 — bounded BFS (depth R) over the (2W+1)² window centred on the raider.
+  const W = RAID_REACH_WINDOW_RADIUS;
   const grid = world.undergroundGrids[gridColonyId];
   if (grid === undefined) return near; // defensive: no grid to path through, call it in reach
   const raid = getScratch(world).raid;
@@ -171,9 +185,9 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number): nu
     raid.reachCurrent = 0;
   }
   const stamp = (raid.reachCurrent += 1);
-  const ox = tx - R;
-  const oy = ty - R;
-  const start = R * S + R;
+  const ox = tx - W;
+  const oy = ty - W;
+  const start = W * S + W;
   stampArr[start] = stamp;
   dist[start] = 0;
   q[0] = start;
@@ -242,6 +256,9 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number): nu
  *     stock flow field; the entrance pool is never raided, D3);
  *   - no hostile (enemy worker or queen) within RAID_ENGAGE_RADIUS_TILES path
  *     tiles (combat first; with the larder empty it hunts the queen, D10).
+ * With hysteresis: to START (it is not Looting yet) the chamber must hold
+ * RAID_LOOT_START_STOCK_FP and nothing hostile may be within
+ * RAID_START_CLEAR_RADIUS_TILES; so the answer depends on its current sub-state.
  */
 export function fighterMayLoot(world: WorldState, colony: ColonyRecord, id: number): boolean {
   return lootVerdict(world, colony, id) === LOOT;
@@ -270,9 +287,14 @@ function lootVerdict(world: WorldState, colony: ColonyRecord, id: number): numbe
   if (gridColony === undefined || !rallyOnEntranceOf(colony, gridColony)) return NOT_A_RAIDER;
   if (ants.foodCarrying[id] !== 0 || ants.combatOpponentId[id] !== -1) return NOT_A_RAIDER;
   if (fighterIsHungry(world, id)) return NOT_A_RAIDER;
-  const dir = looterStepDir(world, id);
+  // Hysteresis: a fighter not yet looting starts only for a reachable chamber
+  // holding a full load and with nothing hostile within the wider start radius;
+  // one looting keeps on while any food is reachable and nothing is in reach.
+  const looting = ants.subTask[id] === FightingSubState.Looting;
+  const dir = stockStepDir(world, id, !looting);
   if (dir < -1) return NOT_A_RAIDER;
-  const blocker = hostileInReach(world, id, gridColonyId);
+  const radius = looting ? RAID_ENGAGE_RADIUS_TILES : RAID_START_CLEAR_RADIUS_TILES;
+  const blocker = hostileInReach(world, id, gridColonyId, radius);
   return blocker >= 0 ? blocker : LOOT;
 }
 

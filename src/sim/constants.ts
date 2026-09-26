@@ -982,6 +982,25 @@ export const RAID_ENGAGE_RADIUS_TILES = FIGHT_AGGRO_RADIUS;
  *  per trip: one full carry, as a forager's. */
 export const RAID_CARRY_FP = WORKER_CARRY_CAPACITY;
 
+/**
+ * #290 PR 5 (V52) — raid hysteresis, so a raider does not flip between looting and
+ * fighting every few ticks. A fighter STARTS looting only when a reachable
+ * FoodStorage chamber holds at least this much (one full load): a larder the
+ * victim's foragers refill a pickup at a time does not pull fighters hunting the
+ * queen (D10) back to it. Once looting it keeps on while any reachable chamber
+ * holds food.
+ */
+export const RAID_LOOT_START_STOCK_FP = RAID_CARRY_FP;
+
+/**
+ * #290 PR 5 (V52) — the other half of the hysteresis: a fighter STARTS looting
+ * only with no hostile within this many path tiles (two more than
+ * RAID_ENGAGE_RADIUS_TILES); once looting it stops only for a hostile within
+ * RAID_ENGAGE_RADIUS_TILES. A hostile pacing at the edge of reach no longer
+ * toggles it every tick.
+ */
+export const RAID_START_CLEAR_RADIUS_TILES = RAID_ENGAGE_RADIUS_TILES + 2;
+
 /** Damage dealt per strike by a non-fighter ant (worker / forager / nurse) defending itself.
  *  25% of COMBAT_DAMAGE_BASE — non-fighters can fight back but weakly. */
 export const COMBAT_DAMAGE_WORKER = 1 as const;

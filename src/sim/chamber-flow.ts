@@ -180,7 +180,8 @@ export function computeFoodChamberFlowField(
 
 /**
  * #290 PR 5 (V52) — the STOCK flow field of one nest: toward the nearest Open tile
- * of a FoodStorage chamber that holds food (`chamberStock > 0`), for raiders
+ * of a FoodStorage chamber holding at least `minStockFp` (default 1: any food;
+ * ant-raid.ts also asks for RAID_LOOT_START_STOCK_FP), for raiders
  * looting it. Unlike the food field it seeds FULL chambers too — exactly the ones
  * worth raiding — and skips empty ones. -1 on a seed tile, 0..3 the step toward
  * one, -2 unreachable. Seed order is chamber order × row-major footprint; BFS
@@ -192,6 +193,7 @@ export function computeStockFlowField(
   chambers: ReadonlyArray<ChamberRecord>,
   out: Int32Array,
   queue: Int32Array,
+  minStockFp = 1,
 ): void {
   const { data, width, height } = underground;
   out.fill(-2);
@@ -199,7 +201,7 @@ export function computeStockFlowField(
   for (let c = 0; c < chambers.length; c++) {
     const chamber = chambers[c]!;
     if (chamber.chamberType !== ChamberType.FoodStorage) continue;
-    if (chamberStock(world, chamber) <= 0) continue;
+    if (chamberStock(world, chamber) < minStockFp) continue;
     const baseX = chamber.posX >> FP_SHIFT;
     const baseY = chamber.posY >> FP_SHIFT;
     for (let ty = 0; ty < chamber.height; ty++) {

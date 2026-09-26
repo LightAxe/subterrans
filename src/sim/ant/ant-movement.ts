@@ -1925,6 +1925,10 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     // like any ant, one leaving a crowded rally stepped onto a tile a fed friend
     // held and was pushed back every tick, until it starved a tile from open ground.
     if (fighterWalksHomeToEat(world, id)) continue;
+    // V52 (#290 PR 5): nor does a raider hauling loot home. Bumped like any ant, one
+    // climbing a one-wide enemy shaft behind its own idle invaders was pushed back
+    // off their tiles every tick and never got out. (Only V52 writes Hauling.)
+    if (fighterIsHauling(world, id)) continue;
 
     // Issue #108 (v13+) — zero the gridColonyId portion of the key when
     // zone === Surface. Mirrors combat tile-key encoding (tile-key.ts:56);
