@@ -31,8 +31,8 @@ export interface FoodPile {
   /**
    * Issue #112 — Pickup-charges remaining on this pile. Each successful
    * `antPickupFood` call decrements by FOOD_PILE_PICKUP_DRAIN. When this
-   * hits 0 the pile is spliced out of `world.foodPiles` and recorded in
-   * `world.recentlyDepletedFood`. Live piles always have `pickupsRemaining > 0`
+   * hits 0 the facade's `drainPile` (food/food-api.ts) records it in
+   * `world.recentlyDepletedFood` and removes the pile. Live piles always have `pickupsRemaining > 0`
    * (the validator rejects 0 in saved piles).
    *
    * Distinct from the fixed-point food *quantity* transferred per pickup

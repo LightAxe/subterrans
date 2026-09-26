@@ -22,6 +22,7 @@
 // `surfaceMovementAt(world, tileX, tileY)` for passability + step cost.
 
 import type { WorldState } from './types.js';
+import { pileCount, pileSlotAt, pileTileX, pileTileY } from './food/food-api.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -931,8 +932,10 @@ export function validateSurfaceConnectivity(world: WorldState): boolean {
       }
     }
   }
-  for (const pile of world.foodPiles) {
-    if (!inMask(pile.tileX, pile.tileY)) return false;
+  const nPiles = pileCount(world);
+  for (let o = 0; o < nPiles; o++) {
+    const slot = pileSlotAt(world, o);
+    if (!inMask(pileTileX(world, slot), pileTileY(world, slot))) return false;
   }
   return true;
 }

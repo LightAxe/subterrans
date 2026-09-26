@@ -17,7 +17,7 @@ import type { WorldState, AIState } from './types.js';
 import type { ColonyId, ColonyRecord } from './colony/colony-store.js';
 import { emitEvent } from './telemetry.js';
 import { FP_SHIFT } from './fixed.js';
-import { colonyFoodTotal } from './colony/colony-system.js';
+import { colonyFoodTotal, pileCount } from './food/food-api.js';
 import { MATCH_TIMEOUT_TICKS, STALEMATE_FOOD_THRESHOLD_FP } from './constants.js';
 
 /**
@@ -191,12 +191,12 @@ export function checkQueenDeath(world: WorldState, playerColonyId?: ColonyId): G
 
 /**
  * Colony food total including food currently carried by living ants.
- * `colonyFoodTotal` (colony-system) covers stored+chamber food but not in-transit food,
+ * `colonyFoodTotal` (food-api) covers stored+chamber food but not in-transit food,
  * which must be counted to avoid triggering a false stalemate on the tick the last
  * pile is collected (foragers may carry enough food for the colony to recover).
  */
 function colonyFoodWithCarried(world: WorldState, colony: ColonyRecord): number {
-  let total = colonyFoodTotal(colony);
+  let total = colonyFoodTotal(world, colony);
   const cid = colony.colonyId;
   for (let id = 0; id < world.ants.alive.length; id++) {
     if (world.ants.alive[id] === 1 && world.ants.colonyId[id] === cid) {
@@ -272,7 +272,7 @@ export function checkTiebreaks(world: WorldState, playerColonyId: ColonyId): Gam
 
   // --- Stalemate: no food on the map AND both colonies starving (including carried food) ---
   if (
-    world.foodPiles.length === 0 &&
+    pileCount(world) === 0 &&
     colonyFoodWithCarried(world, playerColony) < STALEMATE_FOOD_THRESHOLD_FP &&
     colonyFoodWithCarried(world, aiColony) < STALEMATE_FOOD_THRESHOLD_FP
   ) {

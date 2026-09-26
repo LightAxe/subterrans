@@ -20,12 +20,8 @@
 import { describe, it, expect } from 'vitest';
 import { killAnt } from './ant-death.js';
 import { tickSpider } from './spider.js';
-import {
-  spawnCorpseFood,
-  corpseYield,
-  recordFoodPileDepletion,
-  tickFoodPileSpawn,
-} from './food-system.js';
+import { spawnCorpseFood, corpseYield, tickFoodPileSpawn } from './food-system.js';
+import { recordFoodPileDepletion } from './food/food-api.js';
 import { tickForagerActions } from './ant/ant-foraging.js';
 import {
   createWorldState,

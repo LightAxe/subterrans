@@ -4,7 +4,8 @@
 // ant-motion (+ sibling sim modules); no other behavior module depends on it.
 import { hasReachableNonFullNursery, type ChamberFlowFields } from '../chamber-flow.js';
 import type { ChamberRecord, ColonyRecord } from '../colony/colony-store.js';
-import { colonyFoodTotal, hasCompletedChamber } from '../colony/colony-system.js';
+import { hasCompletedChamber } from '../colony/colony-system.js';
+import { colonyFoodTotal } from '../food/food-api.js';
 import { NURSE_ATTEND_DWELL_TICKS } from '../constants.js';
 import { AntTask, ChamberType, NursingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
@@ -121,7 +122,7 @@ export function tickNurseActions(world: WorldState, chamberFlowFields?: ChamberF
     if (subTask === NursingSubState.Attending) {
       const colonyId = ants.colonyId[id]!;
       const colony = world.colonies[colonyId];
-      const starving = colony !== undefined && colonyFoodTotal(colony) === 0;
+      const starving = colony !== undefined && colonyFoodTotal(world, colony) === 0;
       ants.searchPauseTicks[id] = ants.searchPauseTicks[id]! + 1;
       if (starving || ants.searchPauseTicks[id]! >= NURSE_ATTEND_DWELL_TICKS) {
         ants.task[id] = AntTask.Idle;

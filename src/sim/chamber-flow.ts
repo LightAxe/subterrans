@@ -40,6 +40,7 @@ import { ChamberType } from './enums.js';
 import type { ColonyId, ChamberRecord } from './colony/colony-store.js';
 import { UndergroundTileState } from './terrain.js';
 import type { UndergroundGrid } from './terrain.js';
+import type { WorldState } from './types.js';
 import { FP_SHIFT } from './fixed.js';
 import type { AntComponents } from './ant/ant-store.js';
 import { isBroodReclaimable } from './ant/ant-store.js';
@@ -148,7 +149,11 @@ export function ensureChamberFlowFields(
  * @param chamberFilter  Optional per-chamber predicate (issue #15) — only
  *                       chambers returning true are seeded. Used by the food
  *                       field to exclude FoodStorage chambers at capacity so
- *                       carriers redirect to non-full chambers.
+ *                       carriers redirect to non-full chambers. Takes the world
+ *                       so it can read food through the facade (#290).
+ * @param filterWorld    The world passed to `chamberFilter`; required whenever
+ *                       a filter is given (a plain argument, not a closure, so
+ *                       step 9 allocates nothing).
  */
 export function computeChamberFlowField(
   underground: UndergroundGrid,
@@ -156,7 +161,8 @@ export function computeChamberFlowField(
   chamberTypes: ReadonlyArray<ChamberType>,
   out: Int32Array,
   queue: Int32Array,
-  chamberFilter?: (chamber: ChamberRecord) => boolean,
+  chamberFilter?: (world: WorldState, chamber: ChamberRecord) => boolean,
+  filterWorld?: WorldState,
 ): void {
   const { data, width, height } = underground;
 
@@ -175,7 +181,7 @@ export function computeChamberFlowField(
       }
     }
     if (!matches) continue;
-    if (chamberFilter !== undefined && !chamberFilter(chamber)) continue;
+    if (chamberFilter !== undefined && !chamberFilter(filterWorld!, chamber)) continue;
 
     const baseX = chamber.posX >> FP_SHIFT;
     const baseY = chamber.posY >> FP_SHIFT;

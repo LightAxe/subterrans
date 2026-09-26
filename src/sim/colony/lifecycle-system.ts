@@ -22,7 +22,8 @@ import { initAnt } from '../ant/ant-store.js';
 import { despawnAnt } from '../ant-death.js';
 import type { ColonyRecord } from './colony-store.js';
 import { AntTask, ChamberType } from '../enums.js';
-import { hasCompletedChamber, colonyFoodTotal } from './colony-system.js';
+import { hasCompletedChamber } from './colony-system.js';
+import { colonyFoodTotal } from '../food/food-api.js';
 import { Zone, ugGet, UndergroundTileState } from '../terrain.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import {
@@ -94,8 +95,8 @@ import {
 // extreme stockpiles cannot overflow or round incorrectly.
 // ---------------------------------------------------------------------------
 
-function eggIntervalForColony(colony: ColonyRecord): number {
-  const foodTotal = colonyFoodTotal(colony);
+function eggIntervalForColony(world: WorldState, colony: ColonyRecord): number {
+  const foodTotal = colonyFoodTotal(world, colony);
   if (foodTotal < QUEEN_EGG_FOOD_THRESHOLD) return QUEEN_EGG_INTERVAL_DISABLED;
   const mouthsRaw = colony.workerCount + colony.larvaeCount + colony.eggCount + 1; // +1 queen
   const mouths = Math.max(mouthsRaw, COLONY_SIZE_FLOOR);
@@ -109,7 +110,7 @@ function eggIntervalForColony(colony: ColonyRecord): number {
 
 export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord): void {
   // Gate 1: tick-modulo interval (surplus-scaled).
-  let eggInterval = eggIntervalForColony(colony);
+  let eggInterval = eggIntervalForColony(world, colony);
   if (eggInterval < 0) return; // QUEEN_EGG_INTERVAL_DISABLED sentinel
   // Apply per-colony brood-interval numerator (set in createScenario from difficulty tier).
   // Integer-only: (interval * numerator) >> 2; numerator=4 is identity. Hard floor: MIN_EGG_INTERVAL_TICKS.
@@ -123,7 +124,7 @@ export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord):
   // every FoodStorage chamber.foodStored). Pre-#15 this read colony.foodStored
   // as the single pool; post-#15 colony.foodStored is only the entrance-shaft
   // pool, so a colony whose entire stash lives in chambers would never lay.
-  if (colonyFoodTotal(colony) < QUEEN_EGG_FOOD_THRESHOLD) return;
+  if (colonyFoodTotal(world, colony) < QUEEN_EGG_FOOD_THRESHOLD) return;
 
   // Gate 3: queen alive
   if (world.ants.alive[colony.queenEntityId] !== 1) return;

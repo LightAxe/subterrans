@@ -42,6 +42,7 @@ import {
   SIM_VERSION_V39_SPIDER_TIEBREAK,
 } from './types.js';
 import { spawnCorpseFood, corpseYield } from './food-system.js';
+import { colonyPoolFood } from './food/food-api.js';
 import { FP_SHIFT } from './fixed.js';
 import { surfaceMovementAt, SurfaceMovementEffect } from './surface-features.js';
 import { ensureSurfaceGoalField, SURFACE_GOAL_UNREACHED } from './surface-routing.js';
@@ -375,7 +376,7 @@ function findNearestEntrance(
 /**
  * Pick which colony the spider rampages on this cycle.
  *
- * Score = `colony.foodStored` + workerCount * 10, UNCHANGED at V39. The entrance pool
+ * Score = the entrance pool (`colonyPoolFood`) + workerCount * 10, UNCHANGED at V39. The entrance pool
  * pegs at BASE_FOOD_STORAGE_CAPACITY once a colony is fed, so the two colonies' scores
  * land on an exact tie in ~36% of picks (1 199 of 3 343 across an 800-run passive
  * sweep) — and the old ascending-colonyId tiebreak handed every one of those to
@@ -411,7 +412,7 @@ function pickRampageTarget(world: WorldState, spider: SpiderState): number {
     if (col === undefined) continue;
     candidates.push({
       colonyId: cid,
-      score: col.foodStored + col.workerCount * 10,
+      score: colonyPoolFood(world, col) + col.workerCount * 10,
       // Per-candidate, not a single order-reversing coin. A coin that only chose
       // ascending-vs-descending colonyId would still be biased for THREE or more tied
       // colonies — the only reachable orders are [1,2,3] and [3,2,1], which hands the

@@ -20,7 +20,7 @@ import { createScenario } from './scenario.js';
 import { tick } from './tick.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from './constants.js';
 import { isAlive } from './ant/ant-store.js';
-import { colonyFoodTotal } from './colony/colony-system.js';
+import { colonyFoodTotal } from './food/food-api.js';
 
 interface SeedStats {
   playerQueenAlive: boolean;
@@ -43,15 +43,15 @@ function runSeed(seed: number, maxTicks: number): SeedStats {
   // deposit grew the pool. Post-#15 only chamberless-fallback deposits
   // grow the pool, so a pool-only detector goes silent the moment the
   // first ant reaches a chamber.
-  let prevPlayerFood = colonyFoodTotal(world.colonies[PLAYER_COLONY_ID]!);
-  let prevEnemyFood = colonyFoodTotal(world.colonies[ENEMY_COLONY_ID]!);
+  let prevPlayerFood = colonyFoodTotal(world, world.colonies[PLAYER_COLONY_ID]!);
+  let prevEnemyFood = colonyFoodTotal(world, world.colonies[ENEMY_COLONY_ID]!);
 
   for (let t = 0; t < maxTicks; t++) {
     const cmds = world.commandQueue.splice(0);
     tick(world, cmds);
 
-    const playerFood = colonyFoodTotal(world.colonies[PLAYER_COLONY_ID]!);
-    const enemyFood = colonyFoodTotal(world.colonies[ENEMY_COLONY_ID]!);
+    const playerFood = colonyFoodTotal(world, world.colonies[PLAYER_COLONY_ID]!);
+    const enemyFood = colonyFoodTotal(world, world.colonies[ENEMY_COLONY_ID]!);
 
     if (playerFirstDepositTick === null && playerFood > prevPlayerFood) {
       playerFirstDepositTick = t;
@@ -69,8 +69,8 @@ function runSeed(seed: number, maxTicks: number): SeedStats {
   return {
     playerQueenAlive: isAlive(world.ants, playerColony.queenEntityId),
     enemyQueenAlive: isAlive(world.ants, enemyColony.queenEntityId),
-    playerFoodStored: colonyFoodTotal(playerColony),
-    enemyFoodStored: colonyFoodTotal(enemyColony),
+    playerFoodStored: colonyFoodTotal(world, playerColony),
+    enemyFoodStored: colonyFoodTotal(world, enemyColony),
     playerFirstDepositTick,
     enemyFirstDepositTick,
   };

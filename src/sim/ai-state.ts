@@ -13,8 +13,9 @@ import type { WorldState, AIStateRecord } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { ClearRallyPointCommand } from './commands.js';
 import { pushCommand } from './commands.js';
+import { colonyFoodCapacity, colonyFoodTotal } from './food/food-api.js';
 import { emitEvent } from './telemetry.js';
-import { AntTask, ChamberType } from './enums.js';
+import { AntTask } from './enums.js';
 import { Zone } from './terrain.js';
 import {
   PLAYER_COLONY_ID,
@@ -33,7 +34,6 @@ import {
   AI_RECOVERY_DURATION_TICKS,
   AI_MAX_OPERATION_FIGHTERS,
   BASE_FOOD_STORAGE_CAPACITY,
-  FOOD_CHAMBER_CAPACITY,
 } from './constants.js';
 
 // QC Pass 4 AR-P0-001: Normal-only tier index. Used for pre-V22 saves; V22+ uses tierIndex(world.difficulty).
@@ -125,28 +125,20 @@ export function aiWorkerCount(world: WorldState, aiColonyId: ColonyId): number {
   return colony.workerCount;
 }
 
-/** Total food stored by the AI colony (entrance pool + food chambers). */
-export function aiFoodStored(world: WorldState, aiColonyId: ColonyId): number {
+/**
+ * The AI colony's stored food and storage capacity, read through the food facade
+ * (`colonyFoodTotal` / `colonyFoodCapacity`). A missing colony reads 0 food and
+ * the base capacity. Feeds the WarFooting (50 %) and Invading (70 %) food-fraction
+ * gates and the `ai_state_transition` trigger values.
+ */
+function aiFoodTotal(world: WorldState, aiColonyId: ColonyId): number {
   const colony = world.colonies[aiColonyId];
-  if (colony === undefined) return 0;
-  let total = colony.foodStored;
-  for (let i = 0; i < colony.chambers.length; i++) {
-    const ch = colony.chambers[i]!;
-    if (ch.chamberType === ChamberType.FoodStorage) total += ch.foodStored;
-  }
-  return total;
+  return colony === undefined ? 0 : colonyFoodTotal(world, colony);
 }
 
-/** Total food storage capacity of the AI colony (base + food chambers). */
-export function aiFoodCapacity(world: WorldState, aiColonyId: ColonyId): number {
+function aiFoodCap(world: WorldState, aiColonyId: ColonyId): number {
   const colony = world.colonies[aiColonyId];
-  if (colony === undefined) return BASE_FOOD_STORAGE_CAPACITY;
-  let capacity = BASE_FOOD_STORAGE_CAPACITY;
-  for (let i = 0; i < colony.chambers.length; i++) {
-    const ch = colony.chambers[i]!;
-    if (ch.chamberType === ChamberType.FoodStorage) capacity += FOOD_CHAMBER_CAPACITY;
-  }
-  return capacity;
+  return colony === undefined ? BASE_FOOD_STORAGE_CAPACITY : colonyFoodCapacity(colony);
 }
 
 /** Player colony worker count. */
@@ -234,8 +226,8 @@ export function advanceAIState(world: WorldState, aiColonyId: ColonyId): AIState
   if (aiState.state !== prevState) {
     // Emit ai_state_transition structural event.
     const fighters = aiFighterCount(world, aiColonyId);
-    const foodStored = aiFoodStored(world, aiColonyId);
-    const foodCap = aiFoodCapacity(world, aiColonyId);
+    const foodStored = aiFoodTotal(world, aiColonyId);
+    const foodCap = aiFoodCap(world, aiColonyId);
     emitEvent(world, {
       tick: world.tick,
       type: 'ai_state_transition',
@@ -266,8 +258,8 @@ function _tryTransitionPeacetimeToWarFooting(
   aiState: AIStateRecord,
 ): void {
   const fighters = aiFighterCount(world, aiColonyId);
-  const foodStored = aiFoodStored(world, aiColonyId);
-  const foodCap = aiFoodCapacity(world, aiColonyId);
+  const foodStored = aiFoodTotal(world, aiColonyId);
+  const foodCap = aiFoodCap(world, aiColonyId);
 
   // CF-P1-010: aiReady AND (ageReady OR frontageReady)
   const aiReady =
@@ -295,8 +287,8 @@ function _checkWarFootingToInvading(
   aiState: AIStateRecord,
 ): boolean {
   const fighters = aiFighterCount(world, aiColonyId);
-  const foodStored = aiFoodStored(world, aiColonyId);
-  const foodCap = aiFoodCapacity(world, aiColonyId);
+  const foodStored = aiFoodTotal(world, aiColonyId);
+  const foodCap = aiFoodCap(world, aiColonyId);
 
   if (
     fighters >= AI_INVADING_FIGHTER_THRESHOLD[tierIndex(world.difficulty)] &&
@@ -520,8 +512,8 @@ export function setAIRallyOperation(
     // (_tryTransitionWarFootingToProbing mutates no state), so this function emits
     // the ai_state_transition event directly.
     const fighters = aiFighterCount(world, aiColonyId);
-    const foodStored = aiFoodStored(world, aiColonyId);
-    const foodCap = aiFoodCapacity(world, aiColonyId);
+    const foodStored = aiFoodTotal(world, aiColonyId);
+    const foodCap = aiFoodCap(world, aiColonyId);
     emitEvent(world, {
       tick: world.tick,
       type: 'ai_state_transition',

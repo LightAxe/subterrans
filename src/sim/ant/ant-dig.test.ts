@@ -14,6 +14,22 @@ import { createDigFlowFields, computeDigFlowField } from '../dig-system.js';
 import type { WorldState } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
 
+/** #290 PR 1 — push a synthetic pile (test-only direct storage write) and return its slot. */
+function pushTestPile(
+  world: WorldState,
+  pickupsRemaining: number,
+): { slot: number; pile: WorldState['foodPiles'][number] } {
+  const pile = {
+    foodPileId: 90_000 + world.foodPiles.length,
+    tileX: 0,
+    tileY: 0,
+    pickupsRemaining,
+    pickupsInitial: pickupsRemaining > 0 ? pickupsRemaining : 1,
+  };
+  world.foodPiles.push(pile);
+  return { slot: world.foodPiles.length - 1, pile };
+}
+
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
@@ -443,8 +459,8 @@ describe('tickSearchLeash (09 digger-reassignment memo)', () => {
   it('antPickupFood resets searchWave to 0 on a successful pickup', () => {
     const { world, antId } = setupLeashWorld(10, 0);
     world.ants.searchWave[antId] = SEARCH_LEASH_MAX_WAVE;
-    const pile = { pickupsRemaining: 50 };
-    const transferred = antPickupFood(world.ants, antId, pile);
+    const { slot } = pushTestPile(world, 50);
+    const transferred = antPickupFood(world, antId, slot);
     expect(transferred).toBeGreaterThan(0);
     expect(world.ants.searchWave[antId]).toBe(0);
   });
@@ -453,7 +469,7 @@ describe('tickSearchLeash (09 digger-reassignment memo)', () => {
     const { world, antId } = setupLeashWorld(10, 0);
     world.ants.searchWave[antId] = 2;
     // Empty pile → zero transfer → no CarryingFood transition and no wave reset.
-    const transferred = antPickupFood(world.ants, antId, { pickupsRemaining: 0 });
+    const transferred = antPickupFood(world, antId, pushTestPile(world, 0).slot);
     expect(transferred).toBe(0);
     expect(world.ants.searchWave[antId]).toBe(2);
   });

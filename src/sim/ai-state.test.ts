@@ -18,12 +18,12 @@ import {
   endAIRallyOperation,
   getAIStateForColony,
   isInCohort,
-  aiFoodCapacity,
   createDefaultAIStateRecord,
   NORMAL_TIER_INDEX,
   tierIndex,
 } from './ai-state.js';
 import { killAnt } from './ant-death.js';
+import { colonyFoodCapacity } from './food/food-api.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import type { ColonyId } from './colony/colony-store.js';
@@ -167,7 +167,7 @@ describe('advanceAIState — Peacetime → WarFooting (CF-P1-010)', () => {
     const minFighters = AI_WARFOOTING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX];
     spawnFighters(world, ENEMY_COLONY_ID, minFighters, 10);
     // Set food: enough for 50% threshold
-    const cap = aiFoodCapacity(world, ENEMY_COLONY_ID as ColonyId);
+    const cap = colonyFoodCapacity(world.colonies[ENEMY_COLONY_ID as ColonyId]!);
     world.colonies[ENEMY_COLONY_ID as ColonyId]!.foodStored = Math.ceil(
       (cap * AI_WARFOOTING_FOOD_FRAC_PCT) / 100, // eslint-disable-line no-restricted-syntax
     );
@@ -186,7 +186,7 @@ describe('advanceAIState — Peacetime → WarFooting (CF-P1-010)', () => {
     // AI: enough fighters + enough food
     const minFighters = AI_WARFOOTING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX];
     spawnFighters(world, ENEMY_COLONY_ID, minFighters, 10);
-    const cap = aiFoodCapacity(world, ENEMY_COLONY_ID as ColonyId);
+    const cap = colonyFoodCapacity(world.colonies[ENEMY_COLONY_ID as ColonyId]!);
     world.colonies[ENEMY_COLONY_ID as ColonyId]!.foodStored = Math.ceil(
       (cap * AI_WARFOOTING_FOOD_FRAC_PCT) / 100, // eslint-disable-line no-restricted-syntax
     );
@@ -211,7 +211,7 @@ describe('advanceAIState — Peacetime → WarFooting (CF-P1-010)', () => {
     // AI: NOT enough fighters
     const minFighters = AI_WARFOOTING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX];
     spawnFighters(world, ENEMY_COLONY_ID, minFighters - 1, 10); // one short
-    const cap = aiFoodCapacity(world, ENEMY_COLONY_ID as ColonyId);
+    const cap = colonyFoodCapacity(world.colonies[ENEMY_COLONY_ID as ColonyId]!);
     world.colonies[ENEMY_COLONY_ID as ColonyId]!.foodStored = Math.ceil(
       (cap * AI_WARFOOTING_FOOD_FRAC_PCT) / 100, // eslint-disable-line no-restricted-syntax
     );

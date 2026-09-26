@@ -7,7 +7,7 @@
 // (reset each tick); its same-colony occupancy Map now lives on the per-world scratch
 // arena (#231).
 import type { ChamberFlowFields } from '../chamber-flow.js';
-import { isFoodChamberDepositable } from '../colony/colony-system.js';
+import { isFoodChamberDepositable, pileAtTile } from '../food/food-api.js';
 import { isInChamberFootprint } from '../colony/colony-store.js';
 import {
   DANGER_ROUTE_AVOID_THRESHOLD,
@@ -285,7 +285,7 @@ export function tickAntMovement(
           // (test harnesses) — both paths must agree on which chambers are
           // valid deposit targets, otherwise the fallback would route a
           // carrier into a saturated chamber it would refuse to deposit into.
-          if (!isFoodChamberDepositable(chamber)) continue;
+          if (!isFoodChamberDepositable(world, chamber)) continue;
           const baseX = chamber.posX >> FP_SHIFT;
           const baseY = chamber.posY >> FP_SHIFT;
           for (let ty = 0; ty < chamber.height; ty++) {
@@ -392,11 +392,13 @@ export function tickAntMovement(
     // selection can consume it as a guard.
     let chamberFoodUnreachable = false;
     if (chamberTargetX !== -1 && chamberFlowFields !== undefined) {
-      // colonyId keys the own-colony food flow-field; gridColonyId keys the
-      // occupied grid (Phase 09.1 Chunk 0). Today both identical.
-      const colonyId = ants.colonyId[id]!;
+      // The food flow-field is indexed by the grid the ant OCCUPIES
+      // (currentGridColonyId), the same grid its tile index is taken in. Only
+      // own-grid carriers reach this line today (foragers never enter a foreign
+      // grid), so this equals ants.colonyId; keying by grid keeps the field and
+      // the tile index in one coordinate space (#290 raid-hazard fix).
       const gridColonyId = ants.currentGridColonyId[id]!;
-      const flowField = chamberFlowFields.food[colonyId];
+      const flowField = chamberFlowFields.food[gridColonyId];
       const underground = world.undergroundGrids[gridColonyId];
       if (flowField && underground) {
         const tileX = ants.posX[id]! >> FP_SHIFT;
@@ -438,11 +440,11 @@ export function tickAntMovement(
       const posY = ants.posY[id]!;
       let stepped = false;
       if (chamberFlowFields !== undefined) {
-        // colonyId keys own-colony food flow-field; gridColonyId keys the
-        // occupied grid (Phase 09.1 Chunk 0). Today both identical.
-        const colonyId = ants.colonyId[id]!;
+        // Field keyed by the occupied grid, like the tile index (see the
+        // chamberFoodUnreachable peek above; equal to ants.colonyId for every
+        // ant that reaches this branch today).
         const gridColonyId = ants.currentGridColonyId[id]!;
-        const flowField = chamberFlowFields.food[colonyId];
+        const flowField = chamberFlowFields.food[gridColonyId];
         const underground = world.undergroundGrids[gridColonyId];
         if (flowField && underground) {
           const tileX = posX >> FP_SHIFT;
@@ -505,13 +507,13 @@ export function tickAntMovement(
       // missing (shouldn't happen at step 16 — step 9 seeds lazily).
       let stepped = false;
       if (zone === Zone.Underground && entranceFlowFields !== undefined) {
-        // colonyId keys the own-colony entrance flow-field (an ant always
-        // routes to its OWN colony's entrances — invaders exit via their own
-        // entrance, not the enemy's). gridColonyId keys the occupied grid
-        // (Phase 09.1 Chunk 0). Today both identical.
-        const colonyId = ants.colonyId[id]!;
+        // The entrance flow-field is keyed by the grid the ant OCCUPIES
+        // (currentGridColonyId), the same grid its tile index is taken in. Only
+        // own-grid ants reach this branch underground today (foragers, and
+        // Fighters only when inOwnGrid — see needsTransition above), so this
+        // equals ants.colonyId (#290 raid-hazard fix).
         const gridColonyId = ants.currentGridColonyId[id]!;
-        const flowField = entranceFlowFields.fields[colonyId];
+        const flowField = entranceFlowFields.fields[gridColonyId];
         const underground = world.undergroundGrids[gridColonyId];
         if (flowField && underground) {
           const tileX = posX >> FP_SHIFT;
@@ -1963,10 +1965,7 @@ function isOccupancyExempt(
   }
 
   if (zone === Zone.Surface) {
-    for (let p = 0; p < world.foodPiles.length; p++) {
-      const pile = world.foodPiles[p]!;
-      if (pile.tileX === tileX && pile.tileY === tileY) return true;
-    }
+    if (pileAtTile(world, tileX, tileY) >= 0) return true;
   }
 
   return false;
