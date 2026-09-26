@@ -367,6 +367,33 @@ describe('D11 — a hungry invader climbs out of the enemy nest', () => {
     return { world, id, shaftX: ent.surfaceTileX };
   }
 
+  it('climbs out of a U-bend tunnel (wall-aware route, not a straight line at the shaft)', () => {
+    const { world, id, shaftX } = invader(FIGHTER_WALK_HOME_HUNGER_TICKS + 10);
+    const enemy = world.colonies[ENEMY_COLONY_ID]!;
+    for (const w of enemy.workers) world.ants.alive[w] = 0; // test-only removal
+    enemy.workers.length = 0;
+    enemy.workerCount = 0;
+    const far = distantTile(world, 60);
+    world.ants.posX[enemy.queenEntityId] = (far.x << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[enemy.queenEntityId] = (far.y << FP_SHIFT) + (FP_ONE >> 1);
+    // A U-bend: the shaft (shaftX, 0..1) runs down to y 8, east 6 tiles, and back
+    // up to y 3, where the invader stands. Every step toward the shaft top is
+    // rock: it has to walk AWAY from the exit (down) first.
+    const grid = world.undergroundGrids[ENEMY_COLONY_ID]!;
+    for (let y = 1; y <= 8; y++) ugSet(grid, shaftX, y, UndergroundTileState.Open);
+    for (let x = shaftX; x <= shaftX + 6; x++) ugSet(grid, x, 8, UndergroundTileState.Open);
+    for (let y = 3; y <= 8; y++) ugSet(grid, shaftX + 6, y, UndergroundTileState.Open);
+    world.ants.posX[id] = ((shaftX + 6) << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[id] = (3 << FP_SHIFT) + (FP_ONE >> 1);
+    let surfacedAt = -1;
+    for (let t = 0; t < 600 && surfacedAt < 0; t++) {
+      tick(world, []);
+      expect(world.ants.alive[id]).toBe(1);
+      if (world.ants.zone[id] === Zone.Surface) surfacedAt = t;
+    }
+    expect(surfacedAt).toBeGreaterThanOrEqual(0);
+  });
+
   it('with no hostile near, it climbs out, crosses home and eats', () => {
     const { world, id } = invader(FIGHTER_WALK_HOME_HUNGER_TICKS + 10);
     // Clear the enemy doorstep (its starting workers and queen stand on the door

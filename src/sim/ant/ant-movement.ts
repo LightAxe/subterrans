@@ -826,8 +826,27 @@ export function tickAntMovement(
                 bestIsOpen = candidate.isOpen;
               }
             }
-            rawDx = (bestEnt.surfaceTileX << FP_SHIFT) - posX;
-            rawDy = -posY; // target underground Y=0 (entrance row)
+            const exitGrid = world.undergroundGrids[gridColonyId];
+            if (exitGrid !== undefined && fighterWalksHomeToEat(world, id)) {
+              // V51 (#290 PR 4, D11): a hungry invader walks out by the
+              // wall-aware BFS step to the shaft top, as an active invader steps
+              // toward a hostile, so a bend in the tunnel cannot pin it until it
+              // starves. (The plain recall below keeps its straight-line step:
+              // pre-V51 behaviour is unchanged.)
+              const step = pickInvaderUndergroundStep(
+                exitGrid,
+                posX >> FP_SHIFT,
+                posY >> FP_SHIFT,
+                bestEnt.surfaceTileX,
+                0,
+                getScratch(world),
+              );
+              rawDx = unpackStepDx(step) * FP_ONE;
+              rawDy = unpackStepDy(step) * FP_ONE;
+            } else {
+              rawDx = (bestEnt.surfaceTileX << FP_SHIFT) - posX;
+              rawDy = -posY; // target underground Y=0 (entrance row)
+            }
             haveTarget = true;
           }
           // else: no enemy entrance → hold (dx=dy=0 fallback)
