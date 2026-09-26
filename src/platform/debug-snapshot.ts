@@ -12,6 +12,7 @@
 // pure data extraction and is safely testable headlessly.
 
 import type { WorldState } from '../sim/types.js';
+import { pileCount, pileSlotAt, pileTileX, pileTileY } from '../sim/food/food-api.js';
 import type { SimCommand } from '../sim/commands.js';
 import {
   AntTask,
@@ -195,11 +196,12 @@ function samplePheromoneDiamond(
 }
 
 /** Does a food pile exist within DEBUG_SCENT_RADIUS Manhattan of (tileX,tileY)?
- *  Read-only scan over world.foodPiles — no RNG, no allocation beyond the bool. */
+ *  Read-only scan through the food facade — no RNG, no allocation beyond the bool. */
 function hasNearbyScentPile(world: WorldState, tileX: number, tileY: number): boolean {
-  for (let p = 0; p < world.foodPiles.length; p++) {
-    const pile = world.foodPiles[p]!;
-    const d = Math.abs(tileX - pile.tileX) + Math.abs(tileY - pile.tileY);
+  const nPiles = pileCount(world);
+  for (let o = 0; o < nPiles; o++) {
+    const slot = pileSlotAt(world, o);
+    const d = Math.abs(tileX - pileTileX(world, slot)) + Math.abs(tileY - pileTileY(world, slot));
     if (d <= DEBUG_SCENT_RADIUS) return true;
   }
   return false;

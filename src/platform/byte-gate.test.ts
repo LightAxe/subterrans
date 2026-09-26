@@ -19,11 +19,20 @@
 //
 // Proof obligation: same scenarios ⇒ byte-identical serialized WorldState (incl.
 // rngState — the RNG-pull-reorder detector) at every checkpoint and at the end.
+//
+// #290 — BYTE_GATE_PROJECTION=1 hashes the food-equivalence projection
+// (`food-projection.ts`: the snapshot minus food-storage-shaped keys, plus the food
+// state read through the facade) instead of the raw snapshot. Use it when a PR
+// changes the food storage SHAPE but must keep behaviour: capture with
+// BYTE_GATE_PROJECTION=1 on the base commit, verify with it on the branch. A
+// baseline captured in one mode cannot be verified in the other.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { tick } from '../sim/tick.js';
 import { createScenario } from '../sim/scenario.js';
 import { hashWorldState } from './world-hash.js';
+import { hashFoodProjection } from './food-projection.js';
+import type { WorldState } from '../sim/types.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import type { SimCommand } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
@@ -32,6 +41,8 @@ const MODE = process.env.BYTE_GATE_MODE; // 'capture' | 'verify' | undefined
 const FILE = process.env.BYTE_GATE_FILE ?? '';
 const CHECKPOINT_EVERY = 25; // hash cadence for first-divergence localization
 const PC = PLAYER_COLONY_ID as ColonyId;
+const PROJECTION = process.env.BYTE_GATE_PROJECTION === '1';
+const hashFor: (world: WorldState) => string = PROJECTION ? hashFoodProjection : hashWorldState;
 
 // #229 — fnv1a + hashWorldState moved to world-hash.ts (shared with the
 // cross-engine determinism proof); imported above.
@@ -118,9 +129,9 @@ function runScenario(scn: Scenario): ScenarioResult {
   const checkpoints: Array<[number, string]> = [];
   for (let t = 0; t < scn.ticks; t++) {
     tick(world, scn.commands[t] ?? []);
-    if ((t + 1) % CHECKPOINT_EVERY === 0) checkpoints.push([t + 1, hashWorldState(world)]);
+    if ((t + 1) % CHECKPOINT_EVERY === 0) checkpoints.push([t + 1, hashFor(world)]);
   }
-  return { final: hashWorldState(world), checkpoints };
+  return { final: hashFor(world), checkpoints };
 }
 
 function firstDivergentTick(a: ScenarioResult, b: ScenarioResult): number {
@@ -137,9 +148,10 @@ describe.skipIf(!MODE)('byte-gate: cross-build determinism (#212 split)', () => 
     const results: Record<string, ScenarioResult> = {};
     for (const scn of SCENARIOS) results[scn.name] = runScenario(scn);
 
+    const hashMode = PROJECTION ? 'projection' : 'snapshot';
     if (MODE === 'capture') {
-      writeFileSync(FILE, JSON.stringify(results));
-      console.log(`[byte-gate] CAPTURED ${SCENARIOS.length} baselines -> ${FILE}`);
+      writeFileSync(FILE, JSON.stringify({ hashMode, results }));
+      console.log(`[byte-gate] CAPTURED ${SCENARIOS.length} ${hashMode} baselines -> ${FILE}`);
       for (const scn of SCENARIOS) {
         console.log(`  ${scn.name}: final=${results[scn.name]!.final} (${scn.ticks} ticks)`);
       }
@@ -147,8 +159,15 @@ describe.skipIf(!MODE)('byte-gate: cross-build determinism (#212 split)', () => 
     }
 
     // verify
-    const baseline: Record<string, ScenarioResult> = JSON.parse(readFileSync(FILE, 'utf8'));
-    console.log(`[byte-gate] VERIFY against baseline ${FILE}`);
+    const parsed = JSON.parse(readFileSync(FILE, 'utf8')) as Record<string, unknown>;
+    // Pre-#290 baselines are the bare results map (always snapshot mode).
+    const wrapped = typeof parsed['hashMode'] === 'string';
+    const baseMode = wrapped ? String(parsed['hashMode']) : 'snapshot';
+    const baseline = (wrapped ? parsed['results'] : parsed) as Record<string, ScenarioResult>;
+    if (baseMode !== hashMode) {
+      throw new Error(`baseline was captured in ${baseMode} mode; this run is ${hashMode} mode`);
+    }
+    console.log(`[byte-gate] VERIFY (${hashMode}) against baseline ${FILE}`);
     let allPass = true;
     for (const scn of SCENARIOS) {
       const got = results[scn.name]!;
