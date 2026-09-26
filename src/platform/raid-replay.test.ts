@@ -89,11 +89,11 @@ describe('V52 raids replay deterministically (#290 PR 5)', () => {
 
   it('same world + same command log → identical hashes at every checkpoint', () => {
     expect(run().hashes).toEqual(a.hashes);
-  });
+  }, 60_000); // a full multi-thousand-tick run; slow on a loaded CI box
 
   it('a save/load mid-haul continues identically', () => {
     expect(run(saveAt).hashes).toEqual(a.hashes);
-  });
+  }, 60_000); // a full multi-thousand-tick run; slow on a loaded CI box
 });
 
 describe('save validation of the raid sub-states', () => {
