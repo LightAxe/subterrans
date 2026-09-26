@@ -17,6 +17,8 @@
 //   - enemy food-total trajectory (peak, tick of peak, first tick at zero)
 //   - the same queen-survival number for the passive player, as a sanity arm
 //     (the retune must not make a do-nothing player immortal)
+//   - worker/fighter starvation deaths per colony (#290 PR 4, V51: workers and
+//     fighters eat) — the enemy's counted while its queen lives
 //
 // Acceptance targets, asserted with an exit code:
 //   - enemy queen alive at tick 12 000 on >= 80% of seeds
@@ -64,7 +66,8 @@ const { runAIController } = await import('../src/render/ai-controller.js');
 const { colonyFoodTotal, forEachPile, pileCount } = await import('../src/sim/food/food-api.js');
 const { ChamberType, AntTask, PheromoneType } = await import('../src/sim/enums.js');
 const { isAlive } = await import('../src/sim/ant/ant-store.js');
-const { mealsUntilStarvation, QUEEN_HUNGER } = await import('../src/sim/hunger.js');
+const { mealsUntilStarvation, QUEEN_HUNGER, workerHungerProfile } =
+  await import('../src/sim/hunger.js');
 const { getAIStateForColony } = await import('../src/sim/ai-state.js');
 const { pheromoneGridKey, phGet } = await import('../src/sim/pheromone/pheromone-store.js');
 const { Zone } = await import('../src/sim/terrain.js');
@@ -165,6 +168,12 @@ interface SeedResult {
   heldWindow: number;
   /** Most food (fp) held by those frozen foragers at once. */
   peakHeldFood: number;
+  /** #290 PR 4 — enemy workers (fighters included) that starved while the enemy
+   *  queen lived, and how many of them were fighters. */
+  enemyWorkersStarved: number;
+  enemyFightersStarved: number;
+  /** The passive player's workers that starved (any time before the run ended). */
+  playerWorkersStarved: number;
 }
 
 /** Tick at which Queen + Nursery + FoodStorage are all COMPLETED for a colony. */
@@ -321,6 +330,17 @@ function queenDeathCause(world: WorldState, colony: ColonyRecord): string {
     : 'Killed';
 }
 
+/**
+ * #290 PR 4 — did worker `id`, found dead right after a tick, starve? From V51
+ * every live worker's clock stays below its starve-after (a failed meal at it is
+ * fatal the same tick), so a dead worker whose meals-until-starvation reads 0 or
+ * less starved and anything else was killed — the queenDeathCause argument,
+ * with the kind (worker / fighter) read from its task at death.
+ */
+function workerStarved(world: WorldState, id: number): boolean {
+  return mealsUntilStarvation(world, id, workerHungerProfile(world, id)) <= 0;
+}
+
 /** Total surface pile charges within `radius` Manhattan tiles of a colony entrance. */
 function pileChargesNear(world: WorldState, colonyId: number, radius: number): number {
   const colony = world.colonies[colonyId];
@@ -367,7 +387,14 @@ function runSeed(seed: number): SeedResult {
     heldTicks: 0,
     heldWindow: 0,
     peakHeldFood: 0,
+    enemyWorkersStarved: 0,
+    enemyFightersStarved: 0,
+    playerWorkersStarved: 0,
   };
+  // Worker ids live before each tick (step 5 swap-removes the dead from
+  // colony.workers the same tick), reused across ticks.
+  const enemyBefore: number[] = [];
+  const playerBefore: number[] = [];
 
   const frozenSample: FrozenSample = { count: 0, food: 0 };
   let prevEnemyFood = colonyFoodTotal(world, enemy);
@@ -384,7 +411,25 @@ function runSeed(seed: number): SeedResult {
 
   for (let t = 0; t < TICKS; t++) {
     runAIController(world, ENEMY_COLONY_ID);
+    const enemyQueenAliveBefore = isAlive(world.ants, enemy.queenEntityId);
+    enemyBefore.length = 0;
+    for (const id of enemy.workers) if (isAlive(world.ants, id)) enemyBefore.push(id);
+    playerBefore.length = 0;
+    for (const id of player.workers) if (isAlive(world.ants, id)) playerBefore.push(id);
     const outcome = tick(world, world.commandQueue.splice(0));
+    // Counted if the enemy queen was alive going into the tick. (Step 3 feeds
+    // her first, so a worker counted here may, rarely, share its tick with her
+    // own starvation.)
+    if (enemyQueenAliveBefore) {
+      for (const id of enemyBefore) {
+        if (isAlive(world.ants, id) || !workerStarved(world, id)) continue;
+        res.enemyWorkersStarved += 1;
+        if (world.ants.task[id] === AntTask.Fighting) res.enemyFightersStarved += 1;
+      }
+    }
+    for (const id of playerBefore) {
+      if (!isAlive(world.ants, id) && workerStarved(world, id)) res.playerWorkersStarved += 1;
+    }
     if (outcome !== GameOutcome.None && res.matchEndTick === null) res.matchEndTick = world.tick;
 
     const enemyQueenAlive = isAlive(world.ants, enemy.queenEntityId);
@@ -544,7 +589,7 @@ console.log('== #297 AI-economy gate (rule-based enemy vs passive player) ==');
 console.log(`Seeds: ${SEEDS}  Difficulty: ${DIFFICULTY}  Ticks: ${TICKS}  Elapsed: ${elapsed}s`);
 console.log('');
 console.log(
-  'seed | enemyQ@12k @24k death cause | peakW | opening | aiState(first!=Peace) | invading | foodPeak@tick | food0 | playerQ death cause',
+  'seed | enemyQ@12k @24k death cause | peakW | opening | aiState(first!=Peace) | invading | foodPeak@tick | food0 | playerQ death cause | wStarved e(fighters)/p',
 );
 for (const r of results) {
   console.log(
@@ -557,7 +602,8 @@ for (const r of results) {
       `${String(r.invadingTick ?? '-').padStart(8)} | ` +
       `${String(r.foodPeak).padStart(6)}@${String(r.foodPeakTick).padStart(6)} | ` +
       `${String(r.foodFirstZeroTick ?? '-').padStart(6)} | ` +
-      `${String(r.playerDeathTick ?? '-').padStart(6)} ${r.playerDeathCause}`,
+      `${String(r.playerDeathTick ?? '-').padStart(6)} ${r.playerDeathCause.padEnd(10)} | ` +
+      `${r.enemyWorkersStarved}(${r.enemyFightersStarved})/${r.playerWorkersStarved}`,
   );
 }
 
@@ -642,6 +688,22 @@ console.log(`  Enemy queen death causes: ${tally(results.map((r) => r.enemyDeath
 console.log(`  Player queen death causes: ${tally(results.map((r) => r.playerDeathCause))}`);
 console.log(
   `  Peak enemy workers: median=${median(peakWorkers)} min=${peakWorkers[0]} max=${peakWorkers[peakWorkers.length - 1]}`,
+);
+// #290 PR 4 — worker/fighter starvation deaths per seed (target ~0 for a live
+// colony outside a famine; the passive player's colony starves by design).
+const sortedCol = (f: (r: SeedResult) => number): number[] => results.map(f).sort((a, b) => a - b);
+const eStarved = sortedCol((r) => r.enemyWorkersStarved);
+const eFStarved = sortedCol((r) => r.enemyFightersStarved);
+const pStarved = sortedCol((r) => r.playerWorkersStarved);
+const seedsWith = (xs: number[]): number => xs.filter((x) => x > 0).length;
+console.log(
+  `  Worker/fighter starvation deaths per seed (enemy, queen alive): median=${median(eStarved)} ` +
+    `max=${eStarved[eStarved.length - 1]} seeds>0=${seedsWith(eStarved)}  ` +
+    `of which fighters: median=${median(eFStarved)} max=${eFStarved[eFStarved.length - 1]}`,
+);
+console.log(
+  `  Worker/fighter starvation deaths per seed (passive player): median=${median(pStarved)} ` +
+    `max=${pStarved[pStarved.length - 1]} seeds>0=${seedsWith(pStarved)}`,
 );
 
 // ---------------------------------------------------------------------------
