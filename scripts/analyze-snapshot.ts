@@ -51,7 +51,8 @@ const { tick } = await import('../src/sim/tick.js');
 const { Zone, UndergroundTileState, ugGet } = await import('../src/sim/terrain.js');
 const { FP_SHIFT } = await import('../src/sim/fixed.js');
 const { AntTask, ForagingSubState } = await import('../src/sim/enums.js');
-const { serializeWorldState, deserializeWorldState } = await import('../src/platform/save.js');
+const { serializeWorldState, deserializeWorldState, MIN_ACCEPTED_SIM_VERSION, OldSimVersionError } =
+  await import('../src/platform/save.js');
 const { indexByDrainTick, summarizeDrainTickSource } =
   await import('../src/platform/input-log-replay.js');
 
@@ -142,6 +143,25 @@ console.log(
   `  seed=${debug.seed}  tick=${debug.tick}  inputLog=${inputLog.length} cmds  version=${debug.version}`,
 );
 console.log('');
+
+// #290 PR 2 — a snapshot older than this build's acceptance window (every capture
+// before the V50 located-food save wipe) can be neither loaded nor replayed here:
+// its state shape predates the food store. Say so instead of crashing on load.
+function explainPreWindowSnapshot(got: unknown): never {
+  console.error(
+    `[analyze-snapshot] This snapshot was captured on simVersion ${String(got)}, below this ` +
+      `build's minimum (${MIN_ACCEPTED_SIM_VERSION}); its saved state cannot be loaded here.\n` +
+      `  Check out a commit from before the #290 located-food save wipe (V50; the last ` +
+      `pre-wipe build is main before #290 PR 2 merged) and analyze it there.`,
+  );
+  process.exit(2);
+}
+{
+  const v = (debug.snapshot as { simVersion?: unknown }).simVersion;
+  if (typeof v === 'number' && Number.isInteger(v) && v < MIN_ACCEPTED_SIM_VERSION) {
+    explainPreWindowSnapshot(v);
+  }
+}
 
 // --- 1. Replay-from-seed byte-equality check (SCEN-06) -----------------------
 
@@ -283,7 +303,14 @@ console.log('');
 
 // --- 2. Analysis is run against the CAPTURED snapshot ------------------------
 
-const world = deserializeWorldState(debug.snapshot);
+const world = (() => {
+  try {
+    return deserializeWorldState(debug.snapshot);
+  } catch (e) {
+    if (e instanceof OldSimVersionError) explainPreWindowSnapshot(e.got);
+    throw e;
+  }
+})();
 const ants = world.ants;
 
 let liveCount = 0;

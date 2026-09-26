@@ -16,6 +16,7 @@
  */
 import type { WorldState } from '../sim/types.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
+import type { FoodStore } from '../sim/food/food-store.js';
 
 /**
  * The 22 real `WorldState` fields `serializeWorldState` emits (save.ts:958-1010).
@@ -35,7 +36,7 @@ export const SERIALIZED_WORLD_FIELDS: readonly (keyof WorldState)[] = [
   'surface',
   'bakedSurfaceEffect',
   'undergroundGrids',
-  'foodPiles',
+  'food',
   'recentlyDepletedFood',
   'pendingChambers',
   'droppedCombatKillCount',
@@ -76,7 +77,7 @@ export const SERIALIZED_ANT_SOA_FIELDS: readonly (keyof AntComponents)[] = [
   'subTask',
   'speed',
   'foodCarrying',
-  'starvationTimer',
+  'lastMealTick',
   'age',
   'alive',
   'lifespan',
@@ -109,3 +110,27 @@ export const SERIALIZED_ANT_SOA_FIELDS: readonly (keyof AntComponents)[] = [
 
 /** Every `AntComponents` field is persisted today — none deliberately transient. */
 export const TRANSIENT_ANT_FIELDS: readonly (keyof AntComponents)[] = [];
+
+/**
+ * #290 PR 2 — the `FoodStore` (`world.food`) fields `serializeFoodStore` emits.
+ * `pileCount` is carried as the length of the serialized `pileOrder`.
+ */
+export const FOOD_STORE_SERIALIZED_FIELDS: readonly (keyof FoodStore)[] = [
+  'kind',
+  'owner',
+  'zone',
+  'grid',
+  'tileX',
+  'tileY',
+  'amountFp',
+  'initialFp',
+  'foodId',
+  'flags',
+  'pileOrder',
+  'pileCount',
+];
+
+/** `FoodStore` fields deliberately not serialized. */
+export const FOOD_STORE_TRANSIENT_FIELDS: readonly (keyof FoodStore)[] = [
+  'surfacePileAt', // DERIVED tile → pile index, rebuilt on load (rebuildSurfacePileAt)
+];
