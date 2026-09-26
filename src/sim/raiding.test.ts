@@ -22,7 +22,14 @@ import { despawnAnt } from './ant-death.js';
 import { AntTask, FightingSubState, ForagingSubState, PheromoneType } from './enums.js';
 import { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
-import { chamberStock, colonyPoolFood, pileAtTile, pileAmountFp } from './food/food-api.js';
+import {
+  chamberStock,
+  colonyPoolFood,
+  pileAmountFp,
+  pileAtTile,
+  pileCount,
+  topUpOrSpawnCorpsePile,
+} from './food/food-api.js';
 import { setChamberStockForTest, setPoolFoodForTest } from './food/food-test-utils.js';
 import { phGet, pheromoneGridKey } from './pheromone/pheromone-store.js';
 import { isSurfaceTileInComponent } from './surface-features.js';
@@ -470,6 +477,33 @@ describe('a hauler that dies drops its load (V52, D13)', () => {
     expect(slot).toBeGreaterThanOrEqual(0);
     expect(pileAmountFp(w, slot)).toBe(FOOD_PICKUP_AMOUNT); // 1000 fp → 1 whole pickup
     expect(w.ants.foodCarrying[id]).toBe(0);
+  });
+
+  it('on the surface under one whole pickup: no pile at all (save round-trip: raid-replay.test.ts)', () => {
+    const r = raidWorld();
+    const w = r.world;
+    let x = 60;
+    while (!isSurfaceTileInComponent(w, x, 40) || pileAtTile(w, x, 40) >= 0) x += 1;
+    const id = laden(r, x, 40, null, FOOD_PICKUP_AMOUNT - 1);
+    const piles = pileCount(w);
+    const nextId = w.nextEntityId;
+    despawnAnt(w, id, { cause: 'starvation' });
+    expect(pileAtTile(w, x, 40)).toBe(-1);
+    expect(pileCount(w)).toBe(piles);
+    expect(w.nextEntityId).toBe(nextId); // no entity id burnt on a pile never made
+  });
+
+  it('a sub-pickup drop onto an existing pile leaves it untouched (no zero top-up)', () => {
+    const r = raidWorld();
+    const w = r.world;
+    let x = 60;
+    while (!isSurfaceTileInComponent(w, x, 41) || pileAtTile(w, x, 41) >= 0) x += 1;
+    topUpOrSpawnCorpsePile(w, x, 41, FOOD_PICKUP_AMOUNT);
+    const slot = pileAtTile(w, x, 41);
+    topUpOrSpawnCorpsePile(w, x, 41, FOOD_PICKUP_AMOUNT - 1);
+    expect(pileAmountFp(w, slot)).toBe(FOOD_PICKUP_AMOUNT);
+    topUpOrSpawnCorpsePile(w, x + 1, 41, 0);
+    expect(pileAtTile(w, x + 1, 41)).toBe(-1);
   });
 
   it('in the enemy nest: into the victim’s pool (capped), and the stolen counters give it back', () => {

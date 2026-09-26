@@ -14,7 +14,10 @@ import { tick } from '../sim/tick.js';
 import type { SimCommand } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { AntTask, FightingSubState } from '../sim/enums.js';
-import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
+import { PLAYER_COLONY_ID, ENEMY_COLONY_ID, FOOD_PICKUP_AMOUNT } from '../sim/constants.js';
+import { despawnAnt } from '../sim/ant-death.js';
+import { pileAtTile, pileCount } from '../sim/food/food-api.js';
+import { isSurfaceTileInComponent } from '../sim/surface-features.js';
 import { SIM_VERSION_V51_UNIFIED_HUNGER, type WorldState } from '../sim/types.js';
 import { addFighter, raidWorld } from '../sim/raid-test-utils.js';
 import { hashWorldState } from './world-hash.js';
@@ -137,5 +140,30 @@ describe('save validation of the raid sub-states', () => {
     const { s, id } = savedMidHaul();
     const w = deserializeWorldState(s);
     expect([PLAYER_COLONY_ID, ENEMY_COLONY_ID]).toContain(w.ants.currentGridColonyId[id]);
+  });
+});
+
+describe('a sub-pickup hauler load dropped on the surface (Codex P1)', () => {
+  it('makes no zero-sized pile, so the world still saves and loads', () => {
+    const r = raidWorld();
+    const w = r.world;
+    let x = 60;
+    while (!isSurfaceTileInComponent(w, x, 40) || pileAtTile(w, x, 40) >= 0) x += 1;
+    const id = addFighter(w, PLAYER_COLONY_ID, x, 40, null);
+    w.ants.subTask[id] = FightingSubState.Hauling;
+    w.ants.foodCarrying[id] = FOOD_PICKUP_AMOUNT - 32; // a partial take, part eaten
+    despawnAnt(w, id, { cause: 'starvation' });
+    expect(pileAtTile(w, x, 40)).toBe(-1);
+    const loaded = deserializeWorldState(
+      JSON.parse(JSON.stringify(serializeWorldState(w))) as SerializedWorldState,
+    );
+    expect(pileCount(loaded)).toBe(pileCount(w));
+    // And one tick on, it saves again.
+    tick(loaded, []);
+    expect(() =>
+      deserializeWorldState(
+        JSON.parse(JSON.stringify(serializeWorldState(loaded))) as SerializedWorldState,
+      ),
+    ).not.toThrow();
   });
 });
