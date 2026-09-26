@@ -42,6 +42,9 @@
 //     reach sim state.
 //   - Computed names built at run time ('food' + 'Stored', template expressions)
 //     are not recognised.
+//   - The bare string 'food' is not reported (too common a word), so
+//     Reflect.get(world, 'food') or world[k] with k = 'food' pass; only the
+//     named storage fields are caught as bare strings.
 
 import { describe, it, expect } from 'vitest';
 import { readdirSync, statSync } from 'node:fs';
