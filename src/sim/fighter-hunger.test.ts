@@ -394,6 +394,42 @@ describe('D11 — a hungry invader climbs out of the enemy nest', () => {
     expect(surfacedAt).toBeGreaterThanOrEqual(0);
   });
 
+  it('ignores a nearer open stub shaft that does not join the nest, and climbs out the real one', () => {
+    const { world, id, shaftX } = invader(FIGHTER_WALK_HOME_HUNGER_TICKS + 10);
+    const enemy = world.colonies[ENEMY_COLONY_ID]!;
+    for (const w of enemy.workers) world.ants.alive[w] = 0; // test-only removal
+    enemy.workers.length = 0;
+    enemy.workerCount = 0;
+    const far = distantTile(world, 60);
+    world.ants.posX[enemy.queenEntityId] = (far.x << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[enemy.queenEntityId] = (far.y << FP_SHIFT) + (FP_ONE >> 1);
+    // The U-bend of the previous test…
+    const grid = world.undergroundGrids[ENEMY_COLONY_ID]!;
+    for (let y = 1; y <= 8; y++) ugSet(grid, shaftX, y, UndergroundTileState.Open);
+    for (let x = shaftX; x <= shaftX + 6; x++) ugSet(grid, x, 8, UndergroundTileState.Open);
+    for (let y = 3; y <= 8; y++) ugSet(grid, shaftX + 6, y, UndergroundTileState.Open);
+    // …plus an "open" entrance two columns east whose 2-tile shaft joins nothing:
+    // nearer to the invader than the real exit, and unreachable.
+    ugSet(grid, shaftX + 8, 0, UndergroundTileState.Open);
+    ugSet(grid, shaftX + 8, 1, UndergroundTileState.Open);
+    enemy.entrances.push({
+      entranceId: 99,
+      surfaceTileX: shaftX + 8,
+      surfaceTileY: enemy.entrances[0]!.surfaceTileY,
+      isOpen: true,
+    });
+    world.ants.posX[id] = ((shaftX + 6) << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[id] = (3 << FP_SHIFT) + (FP_ONE >> 1);
+    let surfacedAt = -1;
+    for (let t = 0; t < 600 && surfacedAt < 0; t++) {
+      tick(world, []);
+      expect(world.ants.alive[id]).toBe(1);
+      if (world.ants.zone[id] === Zone.Surface) surfacedAt = t;
+    }
+    expect(surfacedAt).toBeGreaterThanOrEqual(0);
+    expect(world.ants.posX[id] >> FP_SHIFT).toBe(shaftX); // out of the real shaft
+  });
+
   it('with no hostile near, it climbs out, crosses home and eats', () => {
     const { world, id } = invader(FIGHTER_WALK_HOME_HUNGER_TICKS + 10);
     // Clear the enemy doorstep (its starting workers and queen stand on the door

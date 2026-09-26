@@ -39,7 +39,7 @@ import {
   stepTowardReachable,
   surfaceGoalDistance,
 } from '../surface-routing.js';
-import { UndergroundTileState, Zone, ugGet } from '../terrain.js';
+import { UndergroundTileState, Zone, ugGet, type UndergroundGrid } from '../terrain.js';
 import type { WorldState } from '../types.js';
 import {
   pickInvaderUndergroundStep,
@@ -70,6 +70,7 @@ import {
   isDescentBlocked,
   pickCardinalStep,
   pickSurfaceDetour,
+  packStep,
   unpackStepDx,
   unpackStepDy,
 } from './ant-motion.js';
@@ -829,17 +830,18 @@ export function tickAntMovement(
             const exitGrid = world.undergroundGrids[gridColonyId];
             if (exitGrid !== undefined && fighterWalksHomeToEat(world, id)) {
               // V51 (#290 PR 4, D11): a hungry invader walks out by the
-              // wall-aware BFS step to the shaft top, as an active invader steps
-              // toward a hostile, so a bend in the tunnel cannot pin it until it
-              // starves. (The plain recall below keeps its straight-line step:
-              // pre-V51 behaviour is unchanged.)
-              const step = pickInvaderUndergroundStep(
+              // wall-aware BFS step (hungryExitStep), toward the first OPEN
+              // entrance of this nest it can actually reach, so neither a bend
+              // in the tunnel nor a nearer, unconnected stub shaft can pin it
+              // until it starves. (The plain recall below keeps its
+              // straight-line step at the nearest entrance: pre-V51 behaviour
+              // is unchanged.)
+              const step = hungryExitStep(
+                world,
                 exitGrid,
+                fEnts,
                 posX >> FP_SHIFT,
                 posY >> FP_SHIFT,
-                bestEnt.surfaceTileX,
-                0,
-                getScratch(world),
               );
               rawDx = unpackStepDx(step) * FP_ONE;
               rawDy = unpackStepDy(step) * FP_ONE;
@@ -1710,6 +1712,47 @@ export function tickAntMovement(
 // deposit food, nurse brood, excavate, or pick up. Exempt tiles never enter
 // the occupancy map.
 // ---------------------------------------------------------------------------
+/**
+ * V51 (#290 PR 4, D11) — the step a hungry invader at (tileX, tileY) in a foreign
+ * nest takes toward an exit: the nest's OPEN entrances in the recall order
+ * (nearest by |dx| + y, ties to the lower index), the first one whose shaft top
+ * (column, y 0) the wall-aware BFS (pickInvaderUndergroundStep) can reach. An
+ * "open" entrance only needs its top two shaft tiles dug, so a nearer stub need
+ * not join the nest. Standing on a shaft top it holds (step 0,0) and the ascent
+ * block lifts it out. No reachable exit: hold. At most one BFS per open entrance
+ * (MAX_ENTRANCES_PER_COLONY = 4), each bounded by the ant's connected tunnels;
+ * no allocation (a bit mask of the entrances tried).
+ */
+function hungryExitStep(
+  world: WorldState,
+  grid: UndergroundGrid,
+  ents: ReadonlyArray<{ surfaceTileX: number; isOpen: boolean }>,
+  tileX: number,
+  tileY: number,
+): number {
+  let tried = 0;
+  for (let round = 0; round < ents.length; round++) {
+    let pick = -1;
+    let pickDist = 0;
+    for (let e = 0; e < ents.length; e++) {
+      if ((tried & (1 << e)) !== 0 || !ents[e]!.isOpen) continue;
+      const dx = ents[e]!.surfaceTileX - tileX;
+      const dist = (dx < 0 ? -dx : dx) + tileY;
+      if (pick < 0 || dist < pickDist) {
+        pick = e;
+        pickDist = dist;
+      }
+    }
+    if (pick < 0) break;
+    tried |= 1 << pick;
+    const ex = ents[pick]!.surfaceTileX;
+    if (tileX === ex && tileY === 0) return packStep(0, 0);
+    const step = pickInvaderUndergroundStep(grid, tileX, tileY, ex, 0, getScratch(world));
+    if (unpackStepDx(step) !== 0 || unpackStepDy(step) !== 0) return step;
+  }
+  return packStep(0, 0);
+}
+
 /**
  * The colony's surface entrance flow-field direction at a surface position:
  * 0..3 = a cardinal step toward the nearest open entrance (DIR_DX/DIR_DY),
