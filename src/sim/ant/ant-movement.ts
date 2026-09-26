@@ -47,6 +47,7 @@ import {
   SIM_VERSION_V36_RISK_AWARE_FORAGING,
   SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
   type WorldState,
+  SIM_VERSION_V49_ALARM_MUSTER,
 } from '../types.js';
 import {
   pickInvaderUndergroundStep,
@@ -80,7 +81,11 @@ import {
   unpackStepDy,
 } from './ant-motion.js';
 import { collectAliveQueenIds, moveQueens } from './ant-queens.js';
-import { holdAlarmedCivilianAtShaft } from './idle-reserve.js';
+import {
+  holdAlarmedCivilianAtShaft,
+  idleMusterPassesThroughFriends,
+  idleMustersHome,
+} from './idle-reserve.js';
 import { clearRecentTiles, isRecentTile, pushRecentTile } from './ant-store.js';
 
 // #231 — the per-tick surface-movement cache (issue #67, ~16 KB Uint8Array) now
@@ -582,35 +587,21 @@ export function tickAntMovement(
         (isHomeBoundForager || fleePhase === 0) &&
         entranceFlowFields !== undefined
       ) {
-        const colonyId = ants.colonyId[id]!;
-        const surfaceField = entranceFlowFields.surface[colonyId];
-        if (surfaceField) {
-          const tileX = posX >> FP_SHIFT;
-          const tileY = posY >> FP_SHIFT;
-          if (
-            tileX >= 0 &&
-            tileX < SURFACE_GRID_WIDTH &&
-            tileY >= 0 &&
-            tileY < SURFACE_GRID_HEIGHT
-          ) {
-            const sIdx = tileY * SURFACE_GRID_WIDTH + tileX;
-            const sDir = surfaceField[sIdx]!;
-            if (sDir === -1) {
-              // Source tile — at the entrance. Hold so the zone-transition
-              // block below promotes to Underground.
-              dx = 0;
-              dy = 0;
-              stepped = true;
-            } else if (sDir >= 0 && sDir < 4) {
-              dx = DIR_DX[sDir]!;
-              dy = DIR_DY[sDir]!;
-              stepped = true;
-            }
-            // sDir === -2 (unreachable) → fall through to straight-line below.
-            // Shouldn't happen in practice (entrance always reachable from any
-            // walkable surface tile in a connected map), but defensive.
-          }
+        const sDir = surfaceEntranceFieldDir(entranceFlowFields, ants.colonyId[id]!, posX, posY);
+        if (sDir === -1) {
+          // Source tile — at the entrance. Hold so the zone-transition
+          // block below promotes to Underground.
+          dx = 0;
+          dy = 0;
+          stepped = true;
+        } else if (sDir >= 0 && sDir < 4) {
+          dx = DIR_DX[sDir]!;
+          dy = DIR_DY[sDir]!;
+          stepped = true;
         }
+        // sDir === -2 (unreachable, or no field) → fall through to straight-line
+        // below. Shouldn't happen in practice (entrance always reachable from any
+        // walkable surface tile in a connected map), but defensive.
       }
 
       if (!stepped) {
@@ -909,22 +900,11 @@ export function tickAntMovement(
         entranceFlowFields !== undefined &&
         sentryWalksHome(world, id)
       ) {
-        const surfaceField = entranceFlowFields.surface[ants.colonyId[id]!];
-        const tileX = posX >> FP_SHIFT;
-        const tileY = posY >> FP_SHIFT;
-        if (
-          surfaceField &&
-          tileX >= 0 &&
-          tileX < SURFACE_GRID_WIDTH &&
-          tileY >= 0 &&
-          tileY < SURFACE_GRID_HEIGHT
-        ) {
-          const sDir = surfaceField[tileY * SURFACE_GRID_WIDTH + tileX]!;
-          if (sDir >= 0 && sDir < 4) {
-            dx = DIR_DX[sDir]!;
-            dy = DIR_DY[sDir]!;
-            fieldStepped = true;
-          }
+        const sDir = surfaceEntranceFieldDir(entranceFlowFields, ants.colonyId[id]!, posX, posY);
+        if (sDir >= 0 && sDir < 4) {
+          dx = DIR_DX[sDir]!;
+          dy = DIR_DY[sDir]!;
+          fieldStepped = true;
         }
       }
 
@@ -966,7 +946,24 @@ export function tickAntMovement(
       // IDLE_MILL_TICK_DIVISOR ticks so the reserve saunters rather than darts.
       // Straight-line cardinal step; the surface soft-cost / detour post-pass
       // below handles feature avoidance. On off-ticks the ant holds (dx/dy = 0).
-      if (world.tick % IDLE_MILL_TICK_DIVISOR === 0) {
+      // #322 (V49): an idle worker mustering home under the alarm walks every
+      // tick by the surface entrance flow field (obstacle-aware), as a homebound
+      // forager does; off the field it keeps the straight-line step.
+      let musterStepped = false;
+      if (entranceFlowFields !== undefined && idleMustersHome(world, id)) {
+        const sDir = surfaceEntranceFieldDir(
+          entranceFlowFields,
+          ants.colonyId[id]!,
+          ants.posX[id]!,
+          ants.posY[id]!,
+        );
+        if (sDir >= 0 && sDir < 4) {
+          dx = DIR_DX[sDir]!;
+          dy = DIR_DY[sDir]!;
+          musterStepped = true;
+        }
+      }
+      if (!musterStepped && world.tick % IDLE_MILL_TICK_DIVISOR === 0) {
         const posX = ants.posX[id]!;
         const posY = ants.posY[id]!;
         const step = pickCardinalStep(
@@ -1419,7 +1416,16 @@ export function tickAntMovement(
       // surface, flips back to SearchingFood, bumps its wave counter (capped
       // at SEARCH_LEASH_MAX_WAVE), and clears the heading so the next
       // excursion re-derives an outward direction from the entrance.
-      if (task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.ReturningToNest) {
+      // #322 (V49): not under the colony alarm — a returning forager then goes in
+      // (descent below) instead of starting a new excursion from the entrance.
+      if (
+        task === AntTask.Foraging &&
+        ants.subTask[id] === ForagingSubState.ReturningToNest &&
+        !(
+          world.simVersion >= SIM_VERSION_V49_ALARM_MUSTER &&
+          world.colonies[ants.colonyId[id]!]?.alarmActive === true
+        )
+      ) {
         const tileXR = posX >> FP_SHIFT;
         const tileYR = posY >> FP_SHIFT;
         const colonyIdR = ants.colonyId[id]!;
@@ -1430,7 +1436,9 @@ export function tickAntMovement(
             if (ent.surfaceTileX === tileXR && ent.surfaceTileY === tileYR) {
               ants.subTask[id] = ForagingSubState.SearchingFood;
               const curWave = ants.searchWave[id]!;
-              const nextWave = curWave + 1;
+              // #322 (V49): a negative wave was parked by an alarm recall —
+              // restore it exactly; coming home when recalled isn't a failed search.
+              const nextWave = curWave < 0 ? -curWave - 1 : curWave + 1;
               ants.searchWave[id] =
                 nextWave > SEARCH_LEASH_MAX_WAVE ? SEARCH_LEASH_MAX_WAVE : nextWave;
               ants.searchHeadingX[id] = 0;
@@ -1462,6 +1470,12 @@ export function tickAntMovement(
         task === AntTask.Nursing ||
         task === AntTask.Fighting ||
         (task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.CarryingFood) ||
+        // #322 (V49) — under the colony alarm a returning (empty) forager goes in
+        // too, instead of turning round at the entrance to search again.
+        (task === AntTask.Foraging &&
+          ants.subTask[id] === ForagingSubState.ReturningToNest &&
+          world.simVersion >= SIM_VERSION_V49_ALARM_MUSTER &&
+          world.colonies[ants.colonyId[id]!]?.alarmActive === true) ||
         // #209 PR A (V34) — a dashing fleeing ant descends its own open entrance
         // regardless of task/subtask (fixes both Idle-can't-descend and
         // empty-forager-can't-descend for the flee path). The own-open-entrance
@@ -1610,7 +1624,8 @@ export function tickAntMovement(
             // forager emerges from shelter stranded at the shaft (posY=0) with no
             // recovery: needsTransition (Foraging && foodCarrying===0) routes it
             // to the shaft but nothing ascends it. Pre-V34 no empty forager ever
-            // descended, so this only fires on the V34 flee path (replay-safe).
+            // descended, so this only fires on the V34 flee path (and, from V49,
+            // #322, the alarm muster's descent) (replay-safe).
             ants.subTask[id] === ForagingSubState.ReturningToNest));
 
       if (needsSurface) {
@@ -1716,6 +1731,27 @@ export function tickAntMovement(
 // deposit food, nurse brood, excavate, or pick up. Exempt tiles never enter
 // the occupancy map.
 // ---------------------------------------------------------------------------
+/**
+ * The colony's surface entrance flow-field direction at a surface position:
+ * 0..3 = a cardinal step toward the nearest open entrance (DIR_DX/DIR_DY),
+ * -1 = on an entrance tile (the field's source), -2 = off the field, or no field.
+ */
+function surfaceEntranceFieldDir(
+  entranceFlowFields: EntranceFlowFields,
+  colonyId: number,
+  posX: number,
+  posY: number,
+): number {
+  const surfaceField = entranceFlowFields.surface[colonyId];
+  if (!surfaceField) return -2;
+  const tileX = posX >> FP_SHIFT;
+  const tileY = posY >> FP_SHIFT;
+  if (tileX < 0 || tileX >= SURFACE_GRID_WIDTH || tileY < 0 || tileY >= SURFACE_GRID_HEIGHT) {
+    return -2;
+  }
+  return surfaceField[tileY * SURFACE_GRID_WIDTH + tileX]!;
+}
+
 function resolveSameColonyOccupancy(world: WorldState): void {
   const ants = world.ants;
   // V33 (#243): park a shifted ant at tile CENTER, like every other position
@@ -1785,6 +1821,8 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     // V43 (#323) / V44 (#325): a sentry walking to its post, or a tunnel defender
     // holding or walking to its post, neither claims a tile nor is bumped.
     if (sentryPassesThroughFriends(world, id) || defenderPassesThroughFriends(world, id)) continue;
+    // #322 (V49): nor does an idle worker mustering home under the alarm.
+    if (idleMusterPassesThroughFriends(world, id)) continue;
 
     // Issue #108 (v13+) — zero the gridColonyId portion of the key when
     // zone === Surface. Mirrors combat tile-key encoding (tile-key.ts:56);

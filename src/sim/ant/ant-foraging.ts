@@ -30,7 +30,7 @@ import { phGet, pheromoneGridKey, type PheromoneGrid } from '../pheromone/pherom
 import { Rng } from '../rng.js';
 import { SURFACE_GOAL_UNREACHED, surfaceGoalDistance } from '../surface-routing.js';
 import { Zone } from '../terrain.js';
-import type { WorldState } from '../types.js';
+import { SIM_VERSION_V49_ALARM_MUSTER, type WorldState } from '../types.js';
 import { ALT_DX, ALT_DY, type CardinalStep } from './ant-motion.js';
 import { clearRecentTiles, isRecentTile } from './ant-store.js';
 
@@ -990,6 +990,29 @@ export function tickExcursionBoundary(world: WorldState): void {
     const colony = world.colonies[colonyId];
     if (!colony || !colony.entrances || colony.entrances.length === 0) continue;
 
+    // #322 (V49) — while the colony alarm sounds, foragers muster home: a
+    // returning forager never breaks out to search, and a searching one turns
+    // homebound at once.
+    if (world.simVersion >= SIM_VERSION_V49_ALARM_MUSTER && colony.alarmActive === true) {
+      if (sub === ForagingSubState.SearchingFood) {
+        ants.subTask[id] = ForagingSubState.ReturningToNest;
+        // Recalled, not a failed search: park the wave as -(wave + 1) so the
+        // return home (arrival flip) or a breakout back to searching restores it
+        // exactly, with no failed-search bump. Every reader clamps a negative
+        // wave to 0, and a wave already parked stays parked.
+        const wave = ants.searchWave[id]!;
+        if (wave >= 0) ants.searchWave[id] = -(wave + 1);
+        ants.searchHeadingX[id] = 0;
+        ants.searchHeadingY[id] = 0;
+        ants.searchHeadingTicks[id] = 0;
+        ants.searchPrevTileX[id] = -1;
+        ants.searchPrevTileY[id] = -1;
+        ants.searchPauseTicks[id] = 0;
+        clearRecentTiles(ants, id);
+      }
+      continue;
+    }
+
     const tileX = ants.posX[id]! >> FP_SHIFT;
     const tileY = ants.posY[id]! >> FP_SHIFT;
 
@@ -1059,13 +1082,18 @@ export function tickExcursionBoundary(world: WorldState): void {
           if (d < bestDist) bestDist = d;
         }
         let wave = ants.searchWave[id]!;
-        if (wave < 0) wave = 0;
+        // #322 (V49): a negative wave was parked by an alarm recall; judge the
+        // breakout by the wave it will get back. (Pre-V49 no wave is negative.)
+        if (wave < 0) wave = -wave - 1;
         if (wave > SEARCH_LEASH_MAX_WAVE) wave = SEARCH_LEASH_MAX_WAVE;
         const radius = SEARCH_LEASH_RADII[wave]!;
         if (bestDist > radius - LEASH_HYSTERESIS_TILES) continue;
       }
 
       ants.subTask[id] = ForagingSubState.SearchingFood;
+      // #322 (V49): restore a wave an alarm recall parked (a negative wave only
+      // ever comes from it) — this breakout is not a failed search.
+      if (ants.searchWave[id]! < 0) ants.searchWave[id] = -ants.searchWave[id]! - 1;
       ants.searchHeadingX[id] = 0;
       ants.searchHeadingY[id] = 0;
       ants.searchHeadingTicks[id] = 0;

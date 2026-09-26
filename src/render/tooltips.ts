@@ -123,7 +123,7 @@ export function tooltipTextFor(target: TooltipTarget): string {
       // sounds, step 10a reassigns none of the colony's Idle workers, so they
       // neither go foraging NOR can be recruited as fighters. The second half is the surprising one — a player
       // who sounds the alarm and then drags the Forage/Fight slider gets nothing.
-      return `Recall foragers and idle workers to the nest ${glyphFor('ALARM_TOGGLE', 'keyboard')} — they stop foraging, and cannot be recruited as fighters, until the all-clear`;
+      return `Recall foragers and idle workers to the nest ${glyphFor('ALARM_TOGGLE', 'keyboard')} — they wait by a blocked entrance, and can't forage or be recruited as fighters until the all-clear`;
     case 'slider':
       return 'Forage ↔ Fight — drag to balance workers between foraging and fighting';
     case 'stats':

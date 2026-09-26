@@ -724,7 +724,9 @@ export const SIM_VERSION_V41_DEATH_CHOKEPOINT = 41 as const;
  * (target cleared) and homebound carriers (timed surface hold) — rather than
  * feeding them to the spider. A SearchingFood forager still wanders outward: it
  * keeps its own foraging dispatch by design (see the comment at that branch),
- * because freezing it would only make it stationary bait.
+ * because freezing it would only make it stationary bait. (#322, V49: that froze
+ * foragers far from home for the whole alarm; from V49 they muster home and wait
+ * at the edge of the danger instead — see the V49 note.)
  *
  * Narrow claim, deliberately: it is the target that is safe, not the path. When
  * a camp exists setFleeTarget writes the safe entrance tile and movement
@@ -983,7 +985,42 @@ export const SIM_VERSION_V47_SENTRY_STAND_DOWN = 47 as const;
  * byte-identically. MIN_ACCEPTED is UNCHANGED.
  */
 export const SIM_VERSION_V48_SENTRY_WALK_HOME = 48 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V48_SENTRY_WALK_HOME;
+
+/**
+ * #322 — V49 the colony alarm musters its civilians home.
+ *
+ * With the alarm on and every own entrance camped, V42 froze each homebound
+ * forager wherever it stood, for as long as the alarm lasted: the alarm read
+ * every tile as dangerous and also switched off V38's local all-clear release.
+ * A searching forager kept searching out to its leash, then turned homebound and
+ * froze out there too, often 30–55 tiles from home.
+ *
+ * From V49, while the alarm is on:
+ *   - a homebound forager with no safe entrance holds only where its OWN tile
+ *     reads real danger (FLEE_THRESHOLD); elsewhere it walks home on normal
+ *     routing, so it waits at the edge of the danger by its entrance and enters
+ *     as soon as the entrance clears;
+ *   - V38's local all-clear release applies again to a held forager;
+ *   - a searching forager turns homebound (step 9c), and a returning one never
+ *     breaks out to search again;
+ *   - a returning forager descends its own open entrance, as a carrier does;
+ *   - step 9b does not demote a searcher to Idle (9c recalls it instead);
+ *   - an idle worker on a quiet tile walks toward its nearest open entrance by
+ *     the surface entrance flow field (round obstacles) and waits just outside
+ *     the doorstep (FLEE_HOMEBOUND_PUSH_THROUGH_TILES); mustering idle workers
+ *     neither claim a tile nor are bumped, so they never block a carrier.
+ * A recalled searcher's leash wave is parked as -(wave + 1) and restored exactly
+ * when it reaches home or turns back to searching, so a recall never counts as a
+ * failed search.
+ * With a safe entrance, the alarm still recalls everyone through it, and only
+ * switching the alarm off lets sheltered civilians back out (unchanged).
+ *
+ * No new serialized field, no command, no world.rngState draw, no entity-ID
+ * advance, no tick-order change: the rules are behind `simVersion >= V49`, so a
+ * pre-V49 save replays byte-identically. MIN_ACCEPTED is UNCHANGED.
+ */
+export const SIM_VERSION_V49_ALARM_MUSTER = 49 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V49_ALARM_MUSTER;
 
 /**
  * S2 — AI colony state machine states.

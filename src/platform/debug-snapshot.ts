@@ -431,7 +431,7 @@ export function buildDebugGuide(): DebugGuide {
       'tileX / tileY': 'tile coordinates already decoded from posX/posY (see fixedPoint)',
       foodCarrying: 'units of food the ant is currently carrying',
       'searchWave / searchHeadingX / searchHeadingY / searchHeadingTicks':
-        'excursion-search state: wave index, current heading vector, and ticks left on this heading',
+        'excursion-search state: wave index (negative = parked by an alarm recall, -(wave + 1); restored on return), current heading vector, and ticks left on this heading',
       nearbyPheromoneRadius: `Manhattan radius of the nearbyPheromone sample (echoes ${r})`,
       movementSource: 'inferred routing decision for this tick — see movementSource',
     },

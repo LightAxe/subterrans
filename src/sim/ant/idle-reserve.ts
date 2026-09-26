@@ -28,6 +28,7 @@ import {
   SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
   SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH,
   SIM_VERSION_V42_COLONY_ALARM,
+  SIM_VERSION_V49_ALARM_MUSTER,
 } from '../types.js';
 import { isInChamberFootprint, type ColonyId, type ColonyRecord } from '../colony/colony-store.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
@@ -218,7 +219,10 @@ function releaseOnLocalAllClear(
   // never released by local quiet while it is sounding. The doorstep push is
   // deliberately NOT suppressed at the call sites: finishing the last step
   // through an enterable door IS going inside, which is what the alarm wants.
-  if (alarmed) return false;
+  // #322 (V49) — but that froze carriers far from home for the whole alarm
+  // under a full camp; from V49 local quiet releases them again, and they walk
+  // home to wait at the edge of the danger (see the V49 note in types.ts).
+  if (alarmed && world.simVersion < SIM_VERSION_V49_ALARM_MUSTER) return false;
   const danger = dangerGrid !== undefined ? phGet(dangerGrid, tileX, tileY) : 0;
   return danger < FLEE_THRESHOLD;
 }
@@ -408,8 +412,9 @@ function setFleeTarget(
  * are an Idle worker at the shaft row (a post-deposit ant at a chamberless shaft
  * pool, a V35 wander clear at row 0, a matured larva or dropped carrier) and any
  * forager that was STILL searching or returning underground when the alarm
- * sounded — a one-shot population, because a full deposit sets task=Idle and
- * step 10a's alarm gate stops re-promotion. Each climbed out: with a safe door
+ * sounded — a one-shot population before V49, because a full deposit sets
+ * task=Idle and step 10a's alarm gate stops re-promotion. (From V49, #322, every
+ * forager the alarm musters home descends and is held here: the normal case.) Each climbed out: with a safe door
  * step 15b recalled it next tick, and under a full camp it was never recalled at
  * all (Codex P2).
  *
@@ -500,10 +505,13 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
     // routes every surface civilian down the existing V34 flee path. The
     // ENTRANCE-safety reads (setFleeTarget → pickNearestSafeEntrance,
     // entranceDanger) are deliberately untouched, so the alarm never TARGETS a
-    // camped door — a fully-camped colony holds instead. The chosen target is
+    // camped door — a fully-camped colony holds instead (from V49, #322, walks
+    // home and waits at the edge of the danger). The chosen target is
     // safe; the straight-line path to it is not checked (pre-existing V34
     // behaviour — see the V42 note in types.ts).
     const alarmed = world.simVersion >= SIM_VERSION_V42_COLONY_ALARM && colony.alarmActive === true;
+    // #322 (V49) — the alarm musters civilians home instead of freezing them.
+    const mustering = alarmed && world.simVersion >= SIM_VERSION_V49_ALARM_MUSTER;
     const workers = colony.workers;
 
     for (let w = 0; w < workers.length; w++) {
@@ -543,7 +551,8 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
         // queen@12k 83.3% vs 86.7%, queen@24k 76.7% vs 86.7%, WarFooting 83.3% vs
         // 86.7%. The mechanism: an EMPTY ReturningToNest forager frozen out here
         // is a DISABLED FORAGER. It never descends (movement's `needsUnderground`
-        // admits Foraging only at subTask CarryingFood, or fleePhase === 0), and
+        // admits Foraging only at subTask CarryingFood, or fleePhase === 0; from
+        // V49, #322, also a returning forager under the alarm), and
         // it is still bite-able where it stands. Released, it walks to the
         // entrance tile, flips to SearchingFood with its wave bumped, and starts a
         // fresh excursion — which is the colony's next load of food. Frozen, it
@@ -592,7 +601,14 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
           // (BFS vs straight-line) — see its doc.
           if (setFleeTarget(world, id, entrances, tileX, tileY, dangerGrid)) {
             ants.fleeShelterUntilTick[id] = 0; // dashing toward the safe entrance
-          } else if (isHomeboundForager && !doorstepPush) {
+          } else if (
+            isHomeboundForager &&
+            !doorstepPush &&
+            // #322 (V49): under the alarm, hold only where this tile reads real
+            // danger; elsewhere walk home on normal routing and wait at the edge
+            // of the danger by the entrance.
+            !(mustering && danger < FLEE_THRESHOLD)
+          ) {
             // No safe entrance, but this forager is heading HOME (carrying food /
             // ReturningToNest) and is still far from any of its own doors.
             // Normal movement would route it to the nearest OPEN — possibly
@@ -613,11 +629,18 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
             ants.targetPosY[id] = -1;
             ants.fleeShelterUntilTick[id] = tick + 1;
           } else if (task === AntTask.Idle) {
-            // No safe/open entrance and NOT homebound → an IDLE worker HOLDS:
-            // clear its (stale mill) target so the V34 mill branch falls through
-            // to getTaskDirection → (0,0) and it stays put.
-            ants.targetPosX[id] = -1;
-            ants.targetPosY[id] = -1;
+            if (mustering && danger < FLEE_THRESHOLD) {
+              // #322 (V49): under the alarm an idle worker on a quiet tile walks
+              // home too, and waits at the edge of the danger by the entrance
+              // (it holds, below, once its own tile reads real danger).
+              setMusterTarget(world, id, entrances, tileX, tileY);
+            } else {
+              // No safe/open entrance and NOT homebound → an IDLE worker HOLDS:
+              // clear its (stale mill) target so the V34 mill branch falls through
+              // to getTaskDirection → (0,0) and it stays put.
+              ants.targetPosX[id] = -1;
+              ants.targetPosY[id] = -1;
+            }
           }
           // else: a SearchingFood forager (not homebound, not Idle). It does NOT
           // hold — it keeps its own foraging dispatch (wanders outward, away from
@@ -843,6 +866,85 @@ function setMillTarget(
   }
   ants.targetPosX[id] = (tx << FP_SHIFT) + (FP_ONE >> 1);
   ants.targetPosY[id] = (ty << FP_SHIFT) + (FP_ONE >> 1);
+}
+
+/**
+ * #322 (V49): an idle worker mustering home under the alarm with no safe
+ * entrance heads for its nearest own open entrance and waits just outside the
+ * doorstep (or earlier, where its own tile reads real danger). Once an entrance
+ * reads safe, the ordinary recall dashes it in. Like milling, it keeps a spider-scatter target inside the reticle
+ * radius. No open entrance → clear the target and hold in place.
+ */
+function setMusterTarget(
+  world: WorldState,
+  id: number,
+  entrances: readonly NestEntrance[],
+  tileX: number,
+  tileY: number,
+): void {
+  const ants = world.ants;
+  const reticle = world.scatterReticleTile;
+  if (reticle !== null) {
+    const manh = Math.abs(tileX - reticle.x) + Math.abs(tileY - reticle.y);
+    if (manh <= SPIDER_SCATTER_RADIUS_TILES) return;
+  }
+  let best: NestEntrance | null = null;
+  let bestDist = 0;
+  for (let e = 0; e < entrances.length; e++) {
+    const ent = entrances[e]!;
+    if (!ent.isOpen) continue;
+    const d = Math.abs(tileX - ent.surfaceTileX) + Math.abs(tileY - ent.surfaceTileY);
+    if (best === null || d < bestDist) {
+      best = ent;
+      bestDist = d;
+    }
+  }
+  // Wait just outside the doorstep (the lane homebound carriers push through,
+  // FLEE_HOMEBOUND_PUSH_THROUGH_TILES): idle workers queued on the approach would
+  // otherwise bump carriers off it. Measured: carriers home 74/80 → 79/80.
+  if (best === null || bestDist <= FLEE_HOMEBOUND_PUSH_THROUGH_TILES) {
+    ants.targetPosX[id] = -1;
+    ants.targetPosY[id] = -1;
+    return;
+  }
+  ants.targetPosX[id] = (best.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1);
+  ants.targetPosY[id] = (best.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1);
+}
+
+/**
+ * #322 (V49): an idle surface worker mustering home under its colony's alarm
+ * (not fleeing: step 15b found no safe entrance). It neither claims a tile nor
+ * is bumped in the same-colony occupancy pass, so idle workers waiting outside
+ * the doorstep never block the carriers' approach lane.
+ */
+export function idleMusterPassesThroughFriends(world: WorldState, id: number): boolean {
+  if (world.simVersion < SIM_VERSION_V49_ALARM_MUSTER) return false;
+  const ants = world.ants;
+  if (ants.task[id] !== AntTask.Idle || ants.zone[id] !== ZONE_SURFACE) return false;
+  if (ants.fleeShelterUntilTick[id] !== -1) return false;
+  return world.colonies[ants.colonyId[id]!]?.alarmActive === true;
+}
+
+/**
+ * #322 (V49): an idle worker walking home to muster — its target is one of its
+ * own open entrance tiles (setMusterTarget) — steps by the colony's surface
+ * entrance flow field, as a homebound forager does, so it gets round obstacles.
+ * A spider-scatter target is never an entrance tile, so it keeps its own step.
+ */
+export function idleMustersHome(world: WorldState, id: number): boolean {
+  if (!idleMusterPassesThroughFriends(world, id)) return false;
+  const ants = world.ants;
+  const tx = ants.targetPosX[id]!;
+  if (tx === -1) return false;
+  const colony = world.colonies[ants.colonyId[id]!];
+  if (!colony || !colony.entrances) return false;
+  const tileX = tx >> FP_SHIFT;
+  const tileY = ants.targetPosY[id]! >> FP_SHIFT;
+  for (let e = 0; e < colony.entrances.length; e++) {
+    const ent = colony.entrances[e]!;
+    if (ent.isOpen && ent.surfaceTileX === tileX && ent.surfaceTileY === tileY) return true;
+  }
+  return false;
 }
 
 /** DangerTrail at an entrance's surface tile (0 if no grid). Guards the flee gate. */
