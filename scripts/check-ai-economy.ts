@@ -77,8 +77,10 @@ const { GameOutcome } = await import('../src/sim/game-over.js');
 const { PLAYER_COLONY_ID, ENEMY_COLONY_ID, MATCH_TIMEOUT_TICKS, FOOD_PICKUP_AMOUNT } =
   await import('../src/sim/constants.js');
 const { runAIController } = await import('../src/render/ai-controller.js');
-const { colonyFoodTotal, forEachPile, pileCount } = await import('../src/sim/food/food-api.js');
-const { ChamberType, AntTask, PheromoneType } = await import('../src/sim/enums.js');
+const { colonyFoodTotal, colonyHasNoDepositTarget, forEachPile, pileCount } =
+  await import('../src/sim/food/food-api.js');
+const { ChamberType, AntTask, FightingSubState, PheromoneType } =
+  await import('../src/sim/enums.js');
 const { isAlive } = await import('../src/sim/ant/ant-store.js');
 const { mealsUntilStarvation, QUEEN_HUNGER, workerHungerProfile } =
   await import('../src/sim/hunger.js');
@@ -221,6 +223,15 @@ interface SeedResult {
   enemyRaidTrips: number;
   playerRaidedFp: number;
   playerRaidTrips: number;
+  /** Hauls deposited by the LAST tick run (play continues after the match ends). */
+  enemyRaidTripsRunEnd: number;
+  playerRaidTripsRunEnd: number;
+  /** At match end: laden haulers still out (not yet deposited), and how many of
+   *  them were already home, parked because every store was full. */
+  enemyHaulersOut: number;
+  enemyHaulersParked: number;
+  playerHaulersOut: number;
+  playerHaulersParked: number;
   /** Times each colony's AI entered Invading (the player's only under --both-ai). */
   enemyInvasions: number;
   playerInvasions: number;
@@ -444,6 +455,12 @@ function runSeed(seed: number): SeedResult {
     enemyRaidTrips: 0,
     playerRaidedFp: 0,
     playerRaidTrips: 0,
+    enemyRaidTripsRunEnd: 0,
+    playerRaidTripsRunEnd: 0,
+    enemyHaulersOut: 0,
+    enemyHaulersParked: 0,
+    playerHaulersOut: 0,
+    playerHaulersParked: 0,
     enemyInvasions: 0,
     playerInvasions: 0,
   };
@@ -453,6 +470,23 @@ function runSeed(seed: number): SeedResult {
     res.enemyRaidTrips = enemy.raidTrips;
     res.playerRaidedFp = player.foodRaidedFp;
     res.playerRaidTrips = player.raidTrips;
+    const a = world.ants;
+    for (let id = 0; id < world.nextEntityId; id++) {
+      if (a.alive[id] !== 1 || a.task[id] !== AntTask.Fighting) continue;
+      if (a.subTask[id] !== FightingSubState.Hauling || a.foodCarrying[id]! <= 0) continue;
+      const own = world.colonies[a.colonyId[id]!]!;
+      const parked =
+        a.zone[id] === Zone.Underground &&
+        a.currentGridColonyId[id] === a.colonyId[id] &&
+        colonyHasNoDepositTarget(world, own);
+      if (own === enemy) {
+        res.enemyHaulersOut += 1;
+        if (parked) res.enemyHaulersParked += 1;
+      } else if (own === player) {
+        res.playerHaulersOut += 1;
+        if (parked) res.playerHaulersParked += 1;
+      }
+    }
   };
   let prevEnemyState: AIState = 'Peacetime';
   let prevPlayerState: AIState = 'Peacetime';
@@ -614,6 +648,8 @@ function runSeed(seed: number): SeedResult {
   }
 
   if (!raidsRecorded) recordRaids();
+  res.enemyRaidTripsRunEnd = enemy.raidTrips;
+  res.playerRaidTripsRunEnd = player.raidTrips;
 
   // Seeds that ended before a checkpoint report the liveness at the end instead.
   if (res.enemyAliveAt12k === null && TICKS >= CHECKPOINT_12K) {
@@ -803,13 +839,16 @@ console.log(
 // ended (or at the last tick), so post-game-over play does not inflate them.
 console.log('');
 console.log(
-  'seed | matchEnd | raided fp e/p | hauls e/p | invasions e/p   (raid rows; e = enemy, p = player)',
+  'seed | matchEnd | raided fp e/p | hauls e/p | invasions e/p | hauls@runEnd e/p | ' +
+    'haulers out@matchEnd e/p (parked home, stores full)   (raid rows; e = enemy, p = player)',
 );
 for (const r of results) {
   console.log(
     `${String(r.seed).padStart(4)} R| ${String(r.matchEndTick ?? '-').padStart(6)} | ` +
       `${r.enemyRaidedFp}/${r.playerRaidedFp} | ${r.enemyRaidTrips}/${r.playerRaidTrips} | ` +
-      `${r.enemyInvasions}/${r.playerInvasions}`,
+      `${r.enemyInvasions}/${r.playerInvasions} | ` +
+      `${r.enemyRaidTripsRunEnd}/${r.playerRaidTripsRunEnd} | ` +
+      `${r.enemyHaulersOut}(${r.enemyHaulersParked})/${r.playerHaulersOut}(${r.playerHaulersParked})`,
   );
 }
 const raidSeeds = results.filter((r) => r.enemyRaidedFp > 0 || r.playerRaidedFp > 0).length;
@@ -822,6 +861,16 @@ console.log(
     `max=${totalRaided[totalRaided.length - 1]} fp  ` +
     `total enemy=${sumOf((r) => r.enemyRaidedFp)} fp in ${sumOf((r) => r.enemyRaidTrips)} hauls, ` +
     `${PLAYER_LABEL}=${sumOf((r) => r.playerRaidedFp)} fp in ${sumOf((r) => r.playerRaidTrips)} hauls`,
+);
+console.log(
+  `  Hauls deposited by match end: enemy ${sumOf((r) => r.enemyRaidTrips)}, ` +
+    `${PLAYER_LABEL} ${sumOf((r) => r.playerRaidTrips)}; by the last tick run: enemy ` +
+    `${sumOf((r) => r.enemyRaidTripsRunEnd)}, ${PLAYER_LABEL} ` +
+    `${sumOf((r) => r.playerRaidTripsRunEnd)}. Laden haulers still out at match end: ` +
+    `enemy ${sumOf((r) => r.enemyHaulersOut)} (${sumOf((r) => r.enemyHaulersParked)} home, ` +
+    `parked: every store full), ${PLAYER_LABEL} ${sumOf((r) => r.playerHaulersOut)} ` +
+    `(${sumOf((r) => r.playerHaulersParked)}). A match usually ends mid-haul, so ` +
+    `"food stolen" counts loads not yet home.`,
 );
 console.log(
   `  Invasions launched: enemy ${sumOf((r) => r.enemyInvasions)}, ${PLAYER_LABEL} ` +
