@@ -26,8 +26,8 @@ import { createWorldState } from '../sim/types.js';
 import { ugSet, UndergroundTileState, createUndergroundGrid } from '../sim/terrain.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { FP_SHIFT } from '../sim/fixed.js';
-import { PLAYER_COLONY_ID } from '../sim/constants.js';
-import { ChamberType } from '../sim/enums.js';
+import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
+import { AntTask, ChamberType, FightingSubState, ForagingSubState } from '../sim/enums.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { ChamberRecord } from '../sim/colony/colony-store.js';
@@ -1319,5 +1319,54 @@ describe('HUD-05 compliance — draw-underground.ts source', () => {
   it('delegates ant drawing to the AntSpriteLayer interface', () => {
     expect(src).toMatch(/AntSpriteLayer/);
     expect(src).toMatch(/sprites\.drawAnt\(/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #290 PR 6 — carried-food crumb underground: a laden ant in the viewed nest is
+// drawn with `carrying: true` whatever its task or colony (a raider hauling out
+// of the player's larder shows its loot too); an empty-handed one is not.
+// ---------------------------------------------------------------------------
+
+describe('drawUndergroundEntities — carried food (#290 PR 6)', () => {
+  function nestWithAnt(colonyId: number, task: number, subTask: number, load: number): WorldState {
+    const w = makeWorldWithUnderground();
+    for (let x = 0; x < 10; x++) {
+      for (let y = 0; y < 10; y++)
+        ugSet(w.undergroundGrids[PLAYER_COLONY_ID]!, x, y, UndergroundTileState.Open);
+    }
+    initAnt(w.ants, 0, {
+      colonyId,
+      posX: (5 << FP_SHIFT) + 128,
+      posY: (5 << FP_SHIFT) + 128,
+      zone: 1,
+      task,
+      subTask,
+    });
+    w.ants.currentGridColonyId[0] = PLAYER_COLONY_ID;
+    w.ants.foodCarrying[0] = load;
+    return w;
+  }
+
+  function drawn(w: WorldState): AntSpriteDrawOptions {
+    const sprites = new MockAntSprites();
+    drawUndergroundEntities(new MockGfx(), sprites, w, w, 0, makeCamera(5, 5), PLAYER_COLONY_ID);
+    expect(sprites.calls.length).toBe(1);
+    return sprites.calls[0]!;
+  }
+
+  it('a forager bringing food down draws the crumb', () => {
+    const w = nestWithAnt(PLAYER_COLONY_ID, AntTask.Foraging, ForagingSubState.CarryingFood, 1024);
+    expect(drawn(w).carrying).toBe(true);
+  });
+
+  it("an enemy raider hauling out of the player's nest draws the crumb", () => {
+    const w = nestWithAnt(ENEMY_COLONY_ID, AntTask.Fighting, FightingSubState.Hauling, 1024);
+    expect(drawn(w).carrying).toBe(true);
+  });
+
+  it('an empty-handed looter draws no crumb', () => {
+    const w = nestWithAnt(ENEMY_COLONY_ID, AntTask.Fighting, FightingSubState.Looting, 0);
+    expect(drawn(w).carrying).toBe(false);
   });
 });

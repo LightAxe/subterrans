@@ -7,6 +7,8 @@
 // (AntSpritePool) lives in ant-sprite-pool.ts; tests use a recording mock.
 // Keeps the draw-* modules Phaser-free.
 
+import { COLOR_FOOD_PILE_NORMAL } from './sprites.js';
+
 export type AntSpriteKind = 'worker' | 'queen';
 
 export interface AntSpriteDrawOptions {
@@ -29,6 +31,13 @@ export interface AntSpriteDrawOptions {
   /** S1 — uniform scale multiplier. 1.0 = natural size; >1 = larger sprite.
    *  Used to render fighter ants slightly larger than workers. */
   scale?: number;
+  /**
+   * #290 PR 6 — the ant is carrying food (`ants.foodCarrying[id] > 0`): the pool
+   * draws a small food crumb at its head (CARRIED_FOOD_*), above the ant. Keyed
+   * on the load alone, not the task, so a forager bringing food home and a
+   * fighter hauling raided food look the same. Omit (or false) for no crumb.
+   */
+  carrying?: boolean;
 }
 
 /** Static (non-moving) entities drawn through the same sprite pool. */
@@ -112,3 +121,34 @@ export const LARVA_SPRITE_WIDTH = 12;
 export const LARVA_SPRITE_HEIGHT = 10;
 export const FOOD_CACHE_SPRITE_WIDTH = 16;
 export const FOOD_CACHE_SPRITE_HEIGHT = 16;
+
+// #290 PR 6 — the carried-food crumb (AntSpriteDrawOptions.carrying). It reuses the
+// food-cache texture shrunk to about 6 px and tinted the surface food-pile green
+// (the HUD food colour), so a laden ant reads as "has food" at a glance. It sits
+// over the head (the SVGs face -x, so the offset is along the rotated -x axis,
+// scaled with the ant) and stays inside the ant's own footprint, so the
+// underground containment of the ant (sprite-containment.ts) also keeps the crumb
+// off a Solid neighbour.
+export const CARRIED_FOOD_SCALE = 0.4;
+/** Crumb centre, in px ahead of the ant centre at scale 1 (half-way to the head tip). */
+export const CARRIED_FOOD_HEAD_OFFSET_PX = WORKER_SPRITE_WIDTH / 4;
+/** The surface food-pile green (sprites.ts), which the HUD food count uses too. */
+export const CARRIED_FOOD_TINT = COLOR_FOOD_PILE_NORMAL;
+
+/**
+ * Centre of the carried-food crumb for an ant drawn at (x, y) with `rotation` and
+ * `scale` (AntSpriteDrawOptions). Pure, so the placement is unit-testable without
+ * Phaser; `out` is filled and returned (no allocation per ant).
+ */
+export function carriedFoodPosition(
+  x: number,
+  y: number,
+  rotation: number,
+  scale: number,
+  out: { x: number; y: number },
+): { x: number; y: number } {
+  const off = CARRIED_FOOD_HEAD_OFFSET_PX * scale;
+  out.x = x - Math.cos(rotation) * off;
+  out.y = y - Math.sin(rotation) * off;
+  return out;
+}

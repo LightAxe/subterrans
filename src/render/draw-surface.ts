@@ -97,6 +97,7 @@ const scratchAntOpts: AntSpriteDrawOptions = {
   tint: 0,
   rotation: 0,
   scale: 1,
+  carrying: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -479,6 +480,8 @@ export function drawSurfaceEntities(
     scratchAntOpts.rotation = rotation;
     // S1: fighters render slightly larger.
     scratchAntOpts.scale = isFighter && !isQueen ? 1.25 : 1.0;
+    // #290 PR 6: a laden ant (forager or raid hauler alike) carries a food crumb.
+    scratchAntOpts.carrying = curr.ants.foodCarrying[id]! > 0;
     sprites.drawAnt(scratchAntOpts);
   }
 
