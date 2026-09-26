@@ -430,6 +430,44 @@ describe('D11 — a hungry invader climbs out of the enemy nest', () => {
     expect(world.ants.posX[id] >> FP_SHIFT).toBe(shaftX); // out of the real shaft
   });
 
+  it('never takes a closed entrance as its exit, even one whose shaft is dug below its top tile', () => {
+    const { world, id, shaftX } = invader(FIGHTER_WALK_HOME_HUNGER_TICKS + 10);
+    const enemy = world.colonies[ENEMY_COLONY_ID]!;
+    for (const w of enemy.workers) world.ants.alive[w] = 0; // test-only removal
+    enemy.workers.length = 0;
+    enemy.workerCount = 0;
+    const far = distantTile(world, 60);
+    world.ants.posX[enemy.queenEntityId] = (far.x << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[enemy.queenEntityId] = (far.y << FP_SHIFT) + (FP_ONE >> 1);
+    // The U-bend again…
+    const grid = world.undergroundGrids[ENEMY_COLONY_ID]!;
+    for (let y = 1; y <= 8; y++) ugSet(grid, shaftX, y, UndergroundTileState.Open);
+    for (let x = shaftX; x <= shaftX + 6; x++) ugSet(grid, x, 8, UndergroundTileState.Open);
+    for (let y = 3; y <= 8; y++) ugSet(grid, shaftX + 6, y, UndergroundTileState.Open);
+    // …plus a CLOSED entrance two columns east, dug from inside: y 1..3 open and
+    // joined to the invader's tunnel, but its top tile (y 0) still Marked. It is
+    // nearer than the real exit, and reachable up to y 1, where it would be stuck.
+    ugSet(grid, shaftX + 8, 0, UndergroundTileState.Marked);
+    for (let y = 1; y <= 3; y++) ugSet(grid, shaftX + 8, y, UndergroundTileState.Open);
+    ugSet(grid, shaftX + 7, 3, UndergroundTileState.Open);
+    enemy.entrances.push({
+      entranceId: 99,
+      surfaceTileX: shaftX + 8,
+      surfaceTileY: enemy.entrances[0]!.surfaceTileY,
+      isOpen: false,
+    });
+    world.ants.posX[id] = ((shaftX + 6) << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[id] = (3 << FP_SHIFT) + (FP_ONE >> 1);
+    let surfacedAt = -1;
+    for (let t = 0; t < 600 && surfacedAt < 0; t++) {
+      tick(world, []);
+      expect(world.ants.alive[id]).toBe(1);
+      if (world.ants.zone[id] === Zone.Surface) surfacedAt = t;
+    }
+    expect(surfacedAt).toBeGreaterThanOrEqual(0);
+    expect(world.ants.posX[id] >> FP_SHIFT).toBe(shaftX); // out of the real, open shaft
+  });
+
   it('with no hostile near, it climbs out, crosses home and eats', () => {
     const { world, id } = invader(FIGHTER_WALK_HOME_HUNGER_TICKS + 10);
     // Clear the enemy doorstep (its starting workers and queen stand on the door
