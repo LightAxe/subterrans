@@ -129,9 +129,10 @@ export function looterStepDir(world: WorldState, id: number): number {
  * RAID_ENGAGE_RADIUS_TILES PATH tiles of raider `id`: reached by a BFS through
  * tiles a fighter can enter, bounded to that radius. A cheap Manhattan pass runs
  * first (path distance is never shorter), so the BFS runs only with a candidate
- * near. Allocation-free (scratch window).
+ * near. Returns that hostile (the nearest by path; the first found on a tie), or
+ * -1 if none is in reach. Allocation-free (scratch window).
  */
-function hostileInReach(world: WorldState, id: number, gridColonyId: number): boolean {
+function hostileInReach(world: WorldState, id: number, gridColonyId: number): number {
   const ants = world.ants;
   const self = ants.colonyId[id]!;
   const tx = ants.posX[id]! >> FP_SHIFT;
@@ -139,27 +140,27 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number): bo
   const R = RAID_ENGAGE_RADIUS_TILES;
 
   // Pass 1 — any hostile within Manhattan R?
-  let near = false;
+  let near = -1;
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
     const c = world.colonies[key as unknown as keyof typeof world.colonies]!;
     if (c.colonyId === self) continue;
-    for (let w = -1; w < c.workers.length && !near; w++) {
+    for (let w = -1; w < c.workers.length && near < 0; w++) {
       const o = w < 0 ? c.queenEntityId : c.workers[w]!;
       if (o < 0 || ants.alive[o] !== 1) continue;
       if (ants.zone[o] !== Zone.Underground || ants.currentGridColonyId[o] !== gridColonyId)
         continue;
       const dx = (ants.posX[o]! >> FP_SHIFT) - tx;
       const dy = (ants.posY[o]! >> FP_SHIFT) - ty;
-      if ((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) <= R) near = true;
+      if ((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) <= R) near = o;
     }
-    if (near) break;
+    if (near >= 0) break;
   }
-  if (!near) return false;
+  if (near < 0) return -1;
 
   // Pass 2 — bounded BFS over the (2R+1)² window centred on the raider.
   const grid = world.undergroundGrids[gridColonyId];
-  if (grid === undefined) return true; // defensive: no grid to path through, call it in reach
+  if (grid === undefined) return near; // defensive: no grid to path through, call it in reach
   const raid = getScratch(world).raid;
   const S = RAID_REACH_WINDOW_SIDE;
   const stampArr = raid.reachStamp;
@@ -203,7 +204,9 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number): bo
     }
   }
 
-  // Pass 3 — is any hostile on a reached cell?
+  // Pass 3 — the hostile on a reached cell nearest by path (first found on a tie).
+  let best = -1;
+  let bestDist = R + 1;
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
     const c = world.colonies[key as unknown as keyof typeof world.colonies]!;
@@ -216,10 +219,14 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number): bo
       const wx = (ants.posX[o]! >> FP_SHIFT) - ox;
       const wy = (ants.posY[o]! >> FP_SHIFT) - oy;
       if (wx < 0 || wy < 0 || wx >= S || wy >= S) continue;
-      if (stampArr[wy * S + wx] === stamp) return true;
+      const cell = wy * S + wx;
+      if (stampArr[cell] === stamp && dist[cell]! < bestDist) {
+        bestDist = dist[cell]!;
+        best = o;
+      }
     }
   }
-  return false;
+  return best;
 }
 
 /**
@@ -237,18 +244,36 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number): bo
  *     tiles (combat first; with the larder empty it hunts the queen, D10).
  */
 export function fighterMayLoot(world: WorldState, colony: ColonyRecord, id: number): boolean {
-  if (world.simVersion < SIM_VERSION_V52_RAIDING) return false;
+  return lootVerdict(world, colony, id) === LOOT;
+}
+
+/** lootVerdict: may loot. */
+const LOOT = -1;
+/** lootVerdict: not a raider this tick (any condition but a hostile in reach fails). */
+const NOT_A_RAIDER = -2;
+
+/**
+ * fighterMayLoot, with the reason: LOOT, NOT_A_RAIDER, or — when every condition
+ * holds but a hostile is in reach — that hostile's id (step 10e sends the fighter
+ * at it, so it closes on what stopped it instead of turning to another hostile
+ * and stepping back out of reach: a loot/hunt flip-flop).
+ */
+function lootVerdict(world: WorldState, colony: ColonyRecord, id: number): number {
+  if (world.simVersion < SIM_VERSION_V52_RAIDING) return NOT_A_RAIDER;
   const ants = world.ants;
-  if (ants.task[id] !== AntTask.Fighting || ants.zone[id] !== Zone.Underground) return false;
+  if (ants.task[id] !== AntTask.Fighting || ants.zone[id] !== Zone.Underground) {
+    return NOT_A_RAIDER;
+  }
   const gridColonyId = ants.currentGridColonyId[id]!;
-  if (gridColonyId === ants.colonyId[id]) return false;
+  if (gridColonyId === ants.colonyId[id]) return NOT_A_RAIDER;
   const gridColony = world.colonies[gridColonyId];
-  if (gridColony === undefined || !rallyOnEntranceOf(colony, gridColony)) return false;
-  if (ants.foodCarrying[id] !== 0 || ants.combatOpponentId[id] !== -1) return false;
-  if (fighterIsHungry(world, id)) return false;
+  if (gridColony === undefined || !rallyOnEntranceOf(colony, gridColony)) return NOT_A_RAIDER;
+  if (ants.foodCarrying[id] !== 0 || ants.combatOpponentId[id] !== -1) return NOT_A_RAIDER;
+  if (fighterIsHungry(world, id)) return NOT_A_RAIDER;
   const dir = looterStepDir(world, id);
-  if (dir < -1) return false;
-  return !hostileInReach(world, id, gridColonyId);
+  if (dir < -1) return NOT_A_RAIDER;
+  const blocker = hostileInReach(world, id, gridColonyId);
+  return blocker >= 0 ? blocker : LOOT;
 }
 
 /**
@@ -259,11 +284,16 @@ export function fighterMayLoot(world: WorldState, colony: ColonyRecord, id: numb
  *     target (step 16 routes it by the entrance and food fields);
  *   - a fighter in a foreign nest loots this tick iff `fighterMayLoot`; one that
  *     no longer may (a hostile came into reach, the larder emptied, the rally
- *     moved) drops back to MovingToRally and fights or leaves as before.
+ *     moved) drops back to MovingToRally and fights or leaves as before — at the
+ *     hostile in reach that stopped it, when that was the reason.
  */
 export function updateRaiders(world: WorldState): void {
   if (world.simVersion < SIM_VERSION_V52_RAIDING) return;
   const ants = world.ants;
+  // The stock field is recomputed this step whatever a between-ticks caller (a
+  // fighterMayLoot query from render or tooling) may have cached: steps 3 and 10b
+  // can have moved food or dug since.
+  getScratch(world).raid.stockFieldTick.clear();
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1 || ants.task[id] !== AntTask.Fighting) continue;
     const colonyId = ants.colonyId[id]!;
@@ -280,12 +310,19 @@ export function updateRaiders(world: WorldState): void {
       if (ants.zone[id] === Zone.Surface) pointAtNearestOpenEntrance(world, colony, id);
       continue;
     }
-    if (fighterMayLoot(world, colony, id)) {
+    const verdict = lootVerdict(world, colony, id);
+    if (verdict === LOOT) {
       ants.subTask[id] = FightingSubState.Looting;
       ants.targetPosX[id] = -1;
       ants.targetPosY[id] = -1;
-    } else if (sub === FightingSubState.Looting) {
-      ants.subTask[id] = FightingSubState.MovingToRally;
+      continue;
+    }
+    if (sub === FightingSubState.Looting) ants.subTask[id] = FightingSubState.MovingToRally;
+    if (verdict >= 0) {
+      // A hostile in reach stopped it: go at THAT one (step 16's invader hunt
+      // follows this target; without one it takes the nearest hostile in the nest).
+      ants.targetPosX[id] = ants.posX[verdict]!;
+      ants.targetPosY[id] = ants.posY[verdict]!;
     }
   }
 }
@@ -408,7 +445,11 @@ export function tickRaidActions(world: WorldState): void {
  *   - below ground in a FOREIGN nest (the victim's), into that colony's pool
  *     (capped; the rest is lost), and the food handed back comes off the raider
  *     colony's `foodRaidedFp` and the victim's `foodLostToRaidsFp`;
- *   - below ground in its own nest, into its own pool (capped).
+ *   - below ground in its own nest, as a deposit where it stands (a depositable
+ *     FoodStorage chamber under it, else the pool; capped).
+ * Not handled (known limits): a hauler home with every store full parks at its
+ * shaft until the queen makes room (as a forager carrier does); a hauler whose
+ * colony has no open entrance holds until one opens or it has eaten its load.
  * Only a fighter carries food (a hauler; `foodCarrying > 0`), so a forager's
  * load is untouched (it is still lost on death). Called by despawnAnt
  * (ant-death.ts) at the ant's death tile. Returns true if it handled a load.
@@ -430,7 +471,12 @@ export function dropHaulerLoad(world: WorldState, id: number): boolean {
   const gridColonyId = ants.currentGridColonyId[id]!;
   const home = world.colonies[gridColonyId];
   if (home === undefined) return true;
-  const back = depositIntoPool(world, home, load);
+  // In the enemy nest, the victim's pool (D13); at home, where it stands (a
+  // depositable FoodStorage chamber, else the pool — as its deposit would have).
+  const back =
+    gridColonyId !== colonyId
+      ? depositIntoPool(world, home, load)
+      : load - depositCarriedFood(world, home, tx, ty, load);
   if (gridColonyId !== colonyId && back > 0) {
     const raider = world.colonies[colonyId];
     if (raider !== undefined) {

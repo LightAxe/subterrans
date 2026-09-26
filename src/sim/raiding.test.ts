@@ -584,3 +584,65 @@ describe('hauling edge cases (V52)', () => {
     expect(getScratch(w).antTargeting.sentrySlot[sentry]).toBe(0);
   });
 });
+
+describe('review follow-ups (V52)', () => {
+  it('a raider stopped by a hostile in reach goes at THAT hostile, not the nearest one elsewhere', () => {
+    const r = raidWorld();
+    const w = r.world;
+    const grid = w.undergroundGrids[E]!;
+    // A pocket just below the raider holds the queen: 2 Manhattan tiles away,
+    // but 20+ path tiles (sealed off here entirely).
+    carve(grid, 100, 8, 100, 9);
+    const q = r.enemy.queenEntityId;
+    w.ants.posX[q] = centre(100);
+    w.ants.posY[q] = centre(8);
+    const id = raiderInEnemyNest(r, 100);
+    const blocker = addEnemyWorker(w, 96, 6); // 4 path tiles west, toward the larder
+    updateFightAntTargets(w);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).not.toBe(FightingSubState.Looting);
+    expect(w.ants.targetPosX[id]).toBe(w.ants.posX[blocker]);
+    // It closes on the blocker over the next ticks instead of flip-flopping.
+    const d = (): number => Math.abs(tileOf(w, id).x - tileOf(w, blocker).x);
+    const d0 = d();
+    run(w, 12);
+    expect(d()).toBeLessThan(d0);
+  });
+
+  it('a between-ticks fighterMayLoot query cannot freeze the next tick’s stock field', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    const id = raiderInEnemyNest(r);
+    expect(fighterMayLoot(w, r.player, id)).toBe(true); // caches a field now
+    setChamberStockForTest(w, r.enemy, r.enemyLarder, 0); // larder emptied before the tick
+    tick(w, []);
+    expect(w.ants.subTask[id]).not.toBe(FightingSubState.Looting);
+  });
+
+  it('a hauler dying in its own FoodStorage chamber stores the load there when the pool is full', () => {
+    const r = raidWorld();
+    const w = r.world;
+    setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY);
+    const id = addFighter(w, P, 36, 6, P);
+    w.ants.subTask[id] = FightingSubState.Hauling;
+    w.ants.foodCarrying[id] = 900;
+    despawnAnt(w, id, { cause: 'starvation' });
+    expect(chamberStock(w, r.playerLarder)).toBe(900);
+  });
+
+  it('a hauler dying on the surface leaves the stolen counters as they were', () => {
+    const r = raidWorld();
+    const w = r.world;
+    r.player.foodRaidedFp = 1024;
+    r.enemy.foodLostToRaidsFp = 1024;
+    let x = 60;
+    while (!isSurfaceTileInComponent(w, x, 40) || pileAtTile(w, x, 40) >= 0) x += 1;
+    const id = addFighter(w, P, x, 40, null);
+    w.ants.subTask[id] = FightingSubState.Hauling;
+    w.ants.foodCarrying[id] = 1024;
+    despawnAnt(w, id, { cause: 'starvation' });
+    expect(pileAmountFp(w, pileAtTile(w, x, 40))).toBe(1024);
+    expect(r.player.foodRaidedFp).toBe(1024);
+    expect(r.enemy.foodLostToRaidsFp).toBe(1024);
+  });
+});
