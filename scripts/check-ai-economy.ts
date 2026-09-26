@@ -84,7 +84,7 @@ const { ChamberType, AntTask, FightingSubState, PheromoneType } =
 const { isAlive } = await import('../src/sim/ant/ant-store.js');
 const { mealsUntilStarvation, QUEEN_HUNGER, workerHungerProfile } =
   await import('../src/sim/hunger.js');
-const { getAIStateForColony } = await import('../src/sim/ai-state.js');
+const { createDefaultAIStateRecord, getAIStateForColony } = await import('../src/sim/ai-state.js');
 const { pheromoneGridKey, phGet } = await import('../src/sim/pheromone/pheromone-store.js');
 const { Zone } = await import('../src/sim/terrain.js');
 
@@ -420,6 +420,13 @@ function pileChargesNear(world: WorldState, colonyId: number, radius: number): n
 
 function runSeed(seed: number): SeedResult {
   const world = createScenario(seed, DIFFICULTY);
+  // --both-ai: createScenario gives only the enemy an AI state record, and without
+  // one the controller keeps the player colony in Peacetime (no WarFooting, no
+  // probes or invasions — so no raids by the player). Give it a default record,
+  // as the Jev opponent harness does for its colony.
+  if (BOTH_AI && getAIStateForColony(world, PLAYER_COLONY_ID) === null) {
+    world.aiState.push(createDefaultAIStateRecord(PLAYER_COLONY_ID));
+  }
   const trace = TRACE_SEEDS.has(seed);
 
   const enemy = world.colonies[ENEMY_COLONY_ID]!;
