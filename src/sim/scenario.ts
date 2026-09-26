@@ -21,6 +21,15 @@ import {
 } from './terrain.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
+import {
+  depositIntoPool,
+  livePileTiles,
+  pileCount,
+  pileSlotAt,
+  pileTileX,
+  pileTileY,
+  spawnPile,
+} from './food/food-api.js';
 import { createPheromoneGrid, pheromoneGridKey } from './pheromone/pheromone-store.js';
 import {
   bakeStaticTerrain,
@@ -41,6 +50,7 @@ import {
   ENEMY_START_X,
   ENEMY_START_Y,
   STARTING_FOOD,
+  FOOD_PICKUP_AMOUNT,
   STARTING_WORKERS,
   FOOD_PILE_COUNT,
   FOOD_PILE_MIN_COLONY_DISTANCE,
@@ -68,7 +78,7 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * Populate world.foodPiles via rejection sampling.
+ * Populate the surface pile store via rejection sampling.
  *
  * Constraints (PRD §6b):
  *   - Each pile must be >= FOOD_PILE_MIN_COLONY_DISTANCE (8) Manhattan tiles
@@ -96,7 +106,7 @@ function generateFoodPiles(world: WorldState, rng: Rng): void {
 
   for (
     let attempt = 0;
-    attempt < FOOD_PILE_MAX_ATTEMPTS && world.foodPiles.length < FOOD_PILE_COUNT;
+    attempt < FOOD_PILE_MAX_ATTEMPTS && pileCount(world) < FOOD_PILE_COUNT;
     attempt++
   ) {
     const tileX = rng.nextRange(0, SURFACE_GRID_WIDTH - 1);
@@ -120,8 +130,13 @@ function generateFoodPiles(world: WorldState, rng: Rng): void {
 
     // Reject if too close to any existing pile (Manhattan distance)
     let tooCloseToExisting = false;
-    for (const pile of world.foodPiles) {
-      if (Math.abs(tileX - pile.tileX) + Math.abs(tileY - pile.tileY) < FOOD_PILE_MIN_SEPARATION) {
+    const nPiles = pileCount(world);
+    for (let o = 0; o < nPiles; o++) {
+      const slot = pileSlotAt(world, o);
+      if (
+        Math.abs(tileX - pileTileX(world, slot)) + Math.abs(tileY - pileTileY(world, slot)) <
+        FOOD_PILE_MIN_SEPARATION
+      ) {
         tooCloseToExisting = true;
         break;
       }
@@ -139,13 +154,7 @@ function generateFoodPiles(world: WorldState, rng: Rng): void {
     const newId = allocateEntityId(world);
     const pickups = pickupsForSeed(world.terrainSeed, newId);
 
-    world.foodPiles.push({
-      foodPileId: newId,
-      tileX,
-      tileY,
-      pickupsRemaining: pickups,
-      pickupsInitial: pickups,
-    });
+    spawnPile(world, newId, tileX, tileY, pickups * FOOD_PICKUP_AMOUNT, 0);
   }
 }
 
@@ -214,12 +223,12 @@ function initColony(
   colony.digFlowFieldDirty = false;
   colony.foodFlowFieldDirty = false;
   colony.broodFieldDirty = false; // #235
-  colony.foodStored = STARTING_FOOD;
+  depositIntoPool(world, colony, STARTING_FOOD); // pool starts empty; STARTING_FOOD < BASE cap
 
   // Phase 9 playability: seed each colony with one pre-excavated open entrance
   // at the colony's start column so the forage loop closes on tick 0.
   // Without this, STARTING_WORKERS foragers can pick up food on the surface
-  // but have no route underground to deposit — colony.foodStored never grows,
+  // but have no route underground to deposit — the entrance pool never grows,
   // the queen starves in a few hundred ticks, and the player cannot recover
   // until they manually designate + excavate a shaft. (Phase 10 CTRL-06:
   // digging is now auto-assigned whenever Marked tiles exist and an ant is
@@ -443,7 +452,7 @@ export function createScenario(
   // so the entrance IS the root) and every food pile must sit in the single
   // walkable component the bake constructed. A regression in the bake/corridor
   // logic fails loudly here instead of shipping a stranded world.
-  if (!validateSurfaceConnectivity(world)) {
+  if (!validateSurfaceConnectivity(world, livePileTiles(world))) {
     throw new Error(
       'createScenario: surface connectivity invariant violated after bakeStaticTerrain (an entrance or food pile is not in the single walkable component)',
     );

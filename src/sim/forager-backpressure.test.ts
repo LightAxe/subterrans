@@ -12,7 +12,7 @@ import { createWorldState, allocateEntityId } from './types.js';
 import { SIM_VERSION_V27_FORAGE_BACKPRESSURE } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord, type ColonyId } from './colony/colony-store.js';
-import { colonyHasNoDepositTarget, colonyForageBackpressure } from './colony/colony-system.js';
+import { colonyHasNoDepositTarget, colonyForageBackpressure } from './food/food-api.js';
 import { AntTask, ChamberType } from './enums.js';
 import {
   BASE_FOOD_STORAGE_CAPACITY,
@@ -117,7 +117,7 @@ describe('#126 V27 forager storage backpressure', () => {
         simVersion: SIM_VERSION_V27_FORAGE_BACKPRESSURE,
       });
       const colony = world.colonies[colonyId]!;
-      expect(colonyHasNoDepositTarget(colony)).toBe(true);
+      expect(colonyHasNoDepositTarget(world, colony)).toBe(true);
 
       tick(world, []);
 
@@ -138,7 +138,7 @@ describe('#126 V27 forager storage backpressure', () => {
 
       // Free a chamber slot → deposit target exists again.
       colony.chambers[0]!.foodStored = 0;
-      expect(colonyHasNoDepositTarget(colony)).toBe(false);
+      expect(colonyHasNoDepositTarget(world, colony)).toBe(false);
       tick(world, []);
 
       expect(foragerCount(world, idleIds)).toBeGreaterThan(0);
@@ -154,7 +154,7 @@ describe('#126 V27 forager storage backpressure', () => {
 
       // Drain the pool to full carry-headroom → the pool is a deposit target again.
       colony.foodStored = 0;
-      expect(colonyHasNoDepositTarget(colony)).toBe(false);
+      expect(colonyHasNoDepositTarget(world, colony)).toBe(false);
       tick(world, []);
 
       expect(foragerCount(world, idleIds)).toBeGreaterThan(0);
@@ -194,9 +194,9 @@ describe('#126 V27 forager storage backpressure', () => {
       const colony = world.colonies[colonyId]!;
 
       // The pool is full → carriers WOULD park (no deposit target)...
-      expect(colonyHasNoDepositTarget(colony)).toBe(true);
+      expect(colonyHasNoDepositTarget(world, colony)).toBe(true);
       // ...but promotion/demotion backpressure is NOT applied to a chamberless colony.
-      expect(colonyForageBackpressure(colony)).toBe(false);
+      expect(colonyForageBackpressure(world, colony)).toBe(false);
 
       tick(world, []);
       expect(foragerCount(world, idleIds)).toBeGreaterThan(0); // idle ants still promoted
@@ -252,7 +252,7 @@ describe('#126 V27 forager storage backpressure', () => {
         tick(b.world, []);
       }
       // Suppression actually exercised the whole window (chamber still full-ish).
-      expect(colonyHasNoDepositTarget(a.world.colonies[1]!)).toBe(true);
+      expect(colonyHasNoDepositTarget(a.world, a.world.colonies[1]!)).toBe(true);
       expect(serialize(a.world)).toBe(serialize(b.world));
     });
   });

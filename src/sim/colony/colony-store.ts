@@ -253,7 +253,7 @@ export interface ColonyRecord {
 //   - computedAllocation: {nurse:0, forage:0, dig:0, fight:0} (fresh object)
 //   - taskCensus:         {nurse:0, forage:0, dig:0, fight:0} (fresh object)
 //   - defeated: false
-//   - queenStarvationTimer: STARVATION_GRACE_TICKS (100)
+//   - queenStarvationTimer: STARVATION_GRACE_TICKS (300)
 //   - reconcileCountdown:   RECONCILE_INTERVAL_TICKS (100)
 //
 // Each call returns independent objects — mutations on one colony do not

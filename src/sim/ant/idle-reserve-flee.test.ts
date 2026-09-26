@@ -43,7 +43,7 @@ import {
 } from '../constants.js';
 import { initAnt, pushRecentTile } from './ant-store.js';
 import { killAnt } from '../ant-death.js';
-import { colonyForageBackpressure } from '../colony/colony-system.js';
+import { colonyForageBackpressure } from '../food/food-api.js';
 import { tickIdleReserveAndFlee } from './idle-reserve.js';
 import { tickExcursionBoundary, tickSearchLeash } from './ant-system.js';
 import { tickAntMovement } from './ant-movement.js';
@@ -1699,11 +1699,11 @@ describe('backpressure regression — allocation untouched (#209 PR A)', () => {
         AntTask.Idle,
       );
     }
-    const before = colonyForageBackpressure(colony);
+    const before = colonyForageBackpressure(world, colony);
     for (let t = 0; t < 30; t++) tick(world, []);
     // Whatever backpressure was, step 15b did not flip idle workers into Foraging
     // via the allocation path — the reserve stays idle-or-milling, re-assignable.
-    expect(colonyForageBackpressure(colony)).toBe(before);
+    expect(colonyForageBackpressure(world, colony)).toBe(before);
   });
 });
 

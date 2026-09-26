@@ -1,7 +1,7 @@
 // src/sim/ant/ant-dig.ts
 // #212 Layer 1 (behavior): search-leash dig assignment + dig execution. Tick steps
 // invoked by tick.ts; depend only on Layer-0 ant-motion (+ sibling sim modules).
-import { colonyForageBackpressure } from '../colony/colony-system.js';
+import { colonyForageBackpressure } from '../food/food-api.js';
 import { DIG_TICKS_PER_TILE, SEARCH_LEASH_MAX_WAVE, SEARCH_LEASH_RADII } from '../constants.js';
 import type { DigFlowFields } from '../dig-system.js';
 import { AntTask, DiggingSubState, ForagingSubState } from '../enums.js';
@@ -68,7 +68,7 @@ export function tickSearchLeash(world: WorldState): void {
     // idle-promotion suppression (colony-system.ts) so a forager is never
     // re-promoted into a state this leash would immediately demote. Scoped to
     // colonies that own a FoodStorage chamber (the mature-colony pile-up of #126).
-    forageBackpressure[colony.colonyId] = colonyForageBackpressure(colony);
+    forageBackpressure[colony.colonyId] = colonyForageBackpressure(world, colony);
   }
 
   for (let id = 0; id < world.nextEntityId; id++) {

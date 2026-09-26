@@ -5,15 +5,27 @@
 // Depends only on Layer-0 ant-motion (+ sibling sim modules). Owns FOOD_SCENT_RADIUS
 // and SIGNAL_PHEROMONE_RADIUS (their sole consumers live here).
 import type { ChamberRecord, ColonyRecord } from '../colony/colony-store.js';
-import { colonyHasNoDepositTarget, isFoodChamberDepositable } from '../colony/colony-system.js';
 import {
-  BASE_FOOD_STORAGE_CAPACITY,
+  colonyHasNoDepositTarget,
+  depositIntoChamber,
+  depositIntoPool,
+  drainPile,
+  isFoodChamberDepositable,
+  pileAmountFp,
+  pileAtTile,
+  pileCount,
+  pileFoodId,
+  pileSlotAt,
+  pileSlotById,
+  pileTileX,
+  pileTileY,
+} from '../food/food-api.js';
+import {
   DANGER_ROUTE_AVOID_THRESHOLD,
   EXCURSION_HEADING_JITTER_TICKS,
   EXCURSION_HEADING_MIN_TICKS,
   EXCURSION_TURN_PERCENT,
   EXCURSION_WOBBLE_PERCENT,
-  FOOD_CHAMBER_CAPACITY,
   FOOD_PICKUP_AMOUNT,
   FOOD_PILE_PICKUP_DRAIN,
   LEASH_HYSTERESIS_TILES,
@@ -25,7 +37,6 @@ import {
 } from '../constants.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
-import { recordFoodPileDepletion } from '../food-system.js';
 import { phGet, pheromoneGridKey, type PheromoneGrid } from '../pheromone/pheromone-store.js';
 import { Rng } from '../rng.js';
 import { SURFACE_GOAL_UNREACHED, surfaceGoalDistance } from '../surface-routing.js';
@@ -35,43 +46,36 @@ import { ALT_DX, ALT_DY, type CardinalStep } from './ant-motion.js';
 import { clearRecentTiles, isRecentTile } from './ant-store.js';
 
 /**
- * Attempt to pick up food from a pile into an ant's carry inventory.
+ * Attempt to pick up food from the pile in `slot` into an ant's carry inventory.
  *
- * Transfers `min(remaining_capacity, FOOD_PICKUP_AMOUNT)` from the pile to the
- * ant when `pile.pickupsRemaining > 0`. Decrements `pile.pickupsRemaining` by
- * `FOOD_PILE_PICKUP_DRAIN` on every successful transfer. On a nonzero transfer,
- * internally transitions the ant to ForagingSubState.CarryingFood per PRD §4c L1103
- * (caller does NOT flip subTask separately).
+ * Transfers `min(remaining_capacity, FOOD_PICKUP_AMOUNT)` to the ant when the pile
+ * has food, and drains `FOOD_PILE_PICKUP_DRAIN` pickups from the pile on every
+ * successful transfer (`drainPile`, which records and removes the pile when it
+ * empties — `slot` is invalid afterwards). On a nonzero transfer, internally
+ * transitions the ant to ForagingSubState.CarryingFood per PRD §4c L1103 (caller
+ * does NOT flip subTask separately).
  *
- * Pile depletion (`pickupsRemaining` reaching 0) is signaled to the caller by
- * inspecting the field after the call; the caller is responsible for splicing
- * the pile out of `world.foodPiles` and recording it in `recentlyDepletedFood`.
- *
- * @param ants   Ant components SoA.
+ * @param world  WorldState (ants + the pile store).
  * @param antId  Entity ID of the forager.
- * @param pile   Food source with a mutable `pickupsRemaining` field.
+ * @param slot   Pile slot (`pileAtTile` / `pileSlotAt`).
  * @returns      Amount transferred (0 means no pickup — no transition occurred).
  */
-export function antPickupFood(
-  ants: WorldState['ants'],
-  antId: number,
-  pile: { pickupsRemaining: number },
-): number {
+export function antPickupFood(world: WorldState, antId: number, slot: number): number {
+  const ants = world.ants;
   const carried = ants.foodCarrying[antId]!;
   const capacity = WORKER_CARRY_CAPACITY - carried;
 
   if (capacity <= 0) return 0; // already at capacity — no pickup, no transition (PRD §4c L1097)
-  if (pile.pickupsRemaining <= 0) return 0; // pile exhausted — no pickup, no transition
+  if (pileAmountFp(world, slot) <= 0) return 0; // pile exhausted — no pickup, no transition
 
   const transfer = capacity < FOOD_PICKUP_AMOUNT ? capacity : FOOD_PICKUP_AMOUNT;
 
   ants.foodCarrying[antId] = carried + transfer;
 
-  // Issue #112 — drain one pickup-charge per successful pickup. Charge counter
-  // is independent of food quantity transferred; FOOD_PILE_PICKUP_DRAIN keeps
-  // the drain rate as a tunable balance lever.
-  pile.pickupsRemaining -= FOOD_PILE_PICKUP_DRAIN;
-  if (pile.pickupsRemaining < 0) pile.pickupsRemaining = 0; // clamp (defensive)
+  // Issue #112 — drain one pickup-charge per successful pickup. The pile drain is
+  // independent of the quantity transferred; FOOD_PILE_PICKUP_DRAIN keeps the
+  // drain rate as a tunable balance lever. Removes the pile when it empties.
+  drainPile(world, slot, FOOD_PILE_PICKUP_DRAIN * FOOD_PICKUP_AMOUNT);
 
   // PRD §4c L1103: transition to CarryingFood (food-trail pheromone deposit rule activates)
   ants.subTask[antId] = ForagingSubState.CarryingFood;
@@ -111,12 +115,12 @@ export function antPickupFood(
  *
  * Chamber path: if the ant's tile lies inside a non-full FoodStorage
  * chamber footprint, deposit up to that chamber's remaining capacity
- * (FOOD_CHAMBER_CAPACITY - chamber.foodStored). If the chamber transitions
- * full as a result, mark colony.foodFlowFieldDirty so step 9 re-seeds the
- * food flow-field excluding the now-full chamber on the next tick.
+ * (`depositIntoChamber`). If the chamber transitions full as a result, it marks
+ * colony.foodFlowFieldDirty so step 9 re-seeds the food flow-field excluding the
+ * now-full chamber on the next tick.
  *
- * Fallback path: if no FoodStorage chamber footprint matches, deposit into
- * colony.foodStored up to BASE_FOOD_STORAGE_CAPACITY. This is the chamberless
+ * Fallback path: if no FoodStorage chamber footprint matches, deposit into the
+ * entrance pool up to BASE_FOOD_STORAGE_CAPACITY (`depositIntoPool`). This is the chamberless
  * early-game path AND the entrance-shaft top deposit site
  * `tickForagerActions` (b) routes to when chambers are full or absent.
  *
@@ -130,7 +134,7 @@ export function antPickupFood(
  * Early-returns if foodCarrying === 0 (no-op; no task transition occurs).
  *
  * @param world    WorldState (reads ants, writes ants.foodCarrying, task, subTask).
- * @param colony   ColonyRecord (writes chamber.foodStored OR colony.foodStored;
+ * @param colony   ColonyRecord (deposits into its chamber stock OR entrance pool;
  *                 may set colony.foodFlowFieldDirty when a chamber fills).
  * @param antId    Entity ID of the depositing forager.
  */
@@ -153,7 +157,7 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
   let chamber: ChamberRecord | null = null;
   for (let c = 0; c < colony.chambers.length; c++) {
     const ch = colony.chambers[c]!;
-    if (!isFoodChamberDepositable(ch)) continue;
+    if (!isFoodChamberDepositable(world, ch)) continue;
     const baseX = ch.posX >> FP_SHIFT;
     const baseY = ch.posY >> FP_SHIFT;
     if (tileX >= baseX && tileX < baseX + ch.width && tileY >= baseY && tileY < baseY + ch.height) {
@@ -170,13 +174,7 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
     // re-seed the food flow-field next tick so other carriers redirect to
     // a remaining depositable chamber. This boundary check matches the
     // BFS seed filter in tick.ts step 9, keeping the routing invariant.
-    const space = FOOD_CHAMBER_CAPACITY - chamber.foodStored;
-    const toChamber = remaining < space ? remaining : space;
-    chamber.foodStored += toChamber;
-    remaining -= toChamber;
-    if (!isFoodChamberDepositable(chamber)) {
-      colony.foodFlowFieldDirty = true;
-    }
+    remaining -= depositIntoChamber(world, colony, chamber, remaining);
     // Issue #68 (v12+) — fall through to the entrance-pool path for any
     // leftover food after a partial chamber deposit. Pre-v12 the chamber
     // path silently swallowed the leftover (ant walked away with the
@@ -191,10 +189,7 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
   // entrance pool before forcing wait-state.
   if (remaining > 0) {
     // Fallback — entrance-shaft / chamberless pool. Cap at BASE.
-    const space = BASE_FOOD_STORAGE_CAPACITY - colony.foodStored;
-    const toPool = remaining < space ? remaining : space > 0 ? space : 0;
-    colony.foodStored += toPool;
-    remaining -= toPool;
+    remaining -= depositIntoPool(world, colony, remaining);
 
     // Issue #27 — carrier wait state. Enter wait when there is no chamber-
     // depositable target AND the ant still has leftover food after the
@@ -220,7 +215,7 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
     if (enterWait) {
       let anyChamberDepositable = false;
       for (let c = 0; c < colony.chambers.length; c++) {
-        if (isFoodChamberDepositable(colony.chambers[c]!)) {
+        if (isFoodChamberDepositable(world, colony.chambers[c]!)) {
           anyChamberDepositable = true;
           break;
         }
@@ -290,7 +285,7 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
  *
  * Deterministic: iterates ant entity IDs ascending. No Math.random. No allocations.
  *
- * @param world  WorldState (reads/writes ants, foodPiles, colonies, undergroundGrids).
+ * @param world  WorldState (reads/writes ants, the pile store, colonies, undergroundGrids).
  */
 export function tickForagerActions(world: WorldState): void {
   const ants = world.ants;
@@ -314,23 +309,13 @@ export function tickForagerActions(world: WorldState): void {
       // drop free food the ant is literally standing on.
       const tileX = ants.posX[id]! >> FP_SHIFT;
       const tileY = ants.posY[id]! >> FP_SHIFT;
-      for (let p = 0; p < world.foodPiles.length; p++) {
-        const pile = world.foodPiles[p]!;
-        if (pile.tileX !== tileX || pile.tileY !== tileY) continue;
-        // Issue #112 — pile is now finite. antPickupFood transfers food and
-        // drains a pickup-charge; we splice the pile + record the depletion
-        // here when its charges hit zero so the spawn step (16d) can avoid
-        // re-placing on the same neighbourhood while pheromones decay.
-        antPickupFood(ants, id, pile); // may transition subTask to CarryingFood
-        if (pile.pickupsRemaining <= 0) {
-          recordFoodPileDepletion(world, p);
-          // Splice (not swap-pop) so the tile-key uniqueness invariant on
-          // `world.foodPiles` is preserved. The unconditional `break` below
-          // exits this inner pile-scan loop immediately, so no further index
-          // bookkeeping is needed — index management is trivial here.
-          world.foodPiles.splice(p, 1);
-        }
-        break;
+      const slot = pileAtTile(world, tileX, tileY);
+      if (slot >= 0) {
+        // Issue #112 — piles are finite. antPickupFood transfers food and drains a
+        // pickup; the facade records the depletion and removes the pile when it
+        // empties, so the spawn step (16d) avoids re-placing on the same
+        // neighbourhood while pheromones decay.
+        antPickupFood(world, id, slot); // may transition subTask to CarryingFood
       }
       continue;
     }
@@ -361,7 +346,7 @@ export function tickForagerActions(world: WorldState): void {
       // Iteration cost: O(chambers) only for ants currently in wait — the
       // common case (no carriers in wait) skips this block entirely.
       if (ants.waitingDeposit[id] === 1) {
-        if (!colonyHasNoDepositTarget(colony)) {
+        if (!colonyHasNoDepositTarget(world, colony)) {
           ants.waitingDeposit[id] = 0;
           // Fall through to normal deposit handling. The ant didn't move this
           // tick (tickAntMovement skipped it), so it's at the same entrance
@@ -387,7 +372,7 @@ export function tickForagerActions(world: WorldState): void {
       let depositSite = false;
       for (let c = 0; c < colony.chambers.length; c++) {
         const chamber = colony.chambers[c]!;
-        if (!isFoodChamberDepositable(chamber)) continue;
+        if (!isFoodChamberDepositable(world, chamber)) continue;
         const baseX = chamber.posX >> FP_SHIFT;
         const baseY = chamber.posY >> FP_SHIFT;
         if (
@@ -431,13 +416,13 @@ export function tickForagerActions(world: WorldState): void {
  *     so the ant falls through to the pheromone gradient.
  *   - Else set targetPosX/Y to the priority pile's tile center.
  *
- * @param world  WorldState (reads ants, colonies, foodPiles; writes ants.targetPosX/Y).
+ * @param world  WorldState (reads ants, colonies, the pile store; writes ants.targetPosX/Y).
  */
 export function routeForagerPriority(world: WorldState): void {
   const ants = world.ants;
 
   // Pre-resolve per-colony priority pile coords (indexed by colonyId) so the
-  // ant loop doesn't re-scan foodPiles per entity. Built only for colonies
+  // ant loop doesn't re-scan the piles per entity. Built only for colonies
   // whose priorityFoodPileId points at an extant pile — a stale id (pile
   // removed mid-game) is treated as "no priority" for this tick.
   //
@@ -448,26 +433,23 @@ export function routeForagerPriority(world: WorldState): void {
     if (!Object.hasOwn(world.colonies, key)) continue;
     const colony = world.colonies[key as unknown as number]!;
     if (colony.priorityFoodPileId === null) continue;
-    for (let p = 0; p < world.foodPiles.length; p++) {
-      const pile = world.foodPiles[p]!;
-      if (pile.foodPileId === colony.priorityFoodPileId) {
-        // Issue #70 — tile-center, not tile-corner. All target-coord
-        // writers in the sim use `(tileX << FP_SHIFT) + (FP_ONE >> 1)`
-        // for tile-center semantics (matches updateFightAntTargets,
-        // SetRallyPoint, etc.). Pre-fix used corner coords.
-        //
-        // Codex P1 follow-up: gate behind V12 even though movement is
-        // observably identical. The targetPos values themselves differ
-        // (corner=N×256, center=N×256+128) and round-trip through saves,
-        // so a v11 snapshot loaded by v12 code would write tile-center
-        // where the saved bytes had tile-corner — breaking SCEN-06
-        // byte-identity for any save with priority foragers active.
-        priorityTargets[colony.colonyId] = {
-          targetX: (pile.tileX << FP_SHIFT) + (FP_ONE >> 1),
-          targetY: (pile.tileY << FP_SHIFT) + (FP_ONE >> 1),
-        };
-        break;
-      }
+    const slot = pileSlotById(world, colony.priorityFoodPileId);
+    if (slot >= 0) {
+      // Issue #70 — tile-center, not tile-corner. All target-coord
+      // writers in the sim use `(tileX << FP_SHIFT) + (FP_ONE >> 1)`
+      // for tile-center semantics (matches updateFightAntTargets,
+      // SetRallyPoint, etc.). Pre-fix used corner coords.
+      //
+      // Codex P1 follow-up: gate behind V12 even though movement is
+      // observably identical. The targetPos values themselves differ
+      // (corner=N×256, center=N×256+128) and round-trip through saves,
+      // so a v11 snapshot loaded by v12 code would write tile-center
+      // where the saved bytes had tile-corner — breaking SCEN-06
+      // byte-identity for any save with priority foragers active.
+      priorityTargets[colony.colonyId] = {
+        targetX: (pileTileX(world, slot) << FP_SHIFT) + (FP_ONE >> 1),
+        targetY: (pileTileY(world, slot) << FP_SHIFT) + (FP_ONE >> 1),
+      };
     }
   }
 
@@ -930,11 +912,7 @@ function hasNearbyPheromoneSignal(
 function colonyHasPriorityPile(world: WorldState, colonyId: number): boolean {
   const colony = world.colonies[colonyId];
   if (!colony || colony.priorityFoodPileId === null) return false;
-  const pileId = colony.priorityFoodPileId;
-  for (let p = 0; p < world.foodPiles.length; p++) {
-    if (world.foodPiles[p]!.foodPileId === pileId) return true;
-  }
-  return false;
+  return pileSlotById(world, colony.priorityFoodPileId) >= 0;
 }
 
 /**
@@ -972,7 +950,7 @@ function colonyHasPriorityPile(world: WorldState, colonyId: number): boolean {
  * Surface zone-transition block). An ant that picks up food en route via
  * tickForagerActions bypasses ReturningToNest entirely and resets wave to 0.
  *
- * @param world  WorldState (reads ants, colonies, foodPiles, pheromoneGrids;
+ * @param world  WorldState (reads ants, colonies, the pile store, pheromoneGrids;
  *               writes ants.subTask, searchHeadingX/Y/Ticks).
  */
 export function tickExcursionBoundary(world: WorldState): void {
@@ -1190,22 +1168,22 @@ export function findReachableScentPile(
   let bestId = -1;
   let bestX = 0;
   let bestY = 0;
-  for (let p = 0; p < world.foodPiles.length; p++) {
-    const pile = world.foodPiles[p]!;
-    const manhattan = Math.abs(pile.tileX - tileX) + Math.abs(pile.tileY - tileY);
+  const nPiles = pileCount(world);
+  for (let o = 0; o < nPiles; o++) {
+    const slot = pileSlotAt(world, o);
+    const px = pileTileX(world, slot);
+    const py = pileTileY(world, slot);
+    const pid = pileFoodId(world, slot);
+    const manhattan = Math.abs(px - tileX) + Math.abs(py - tileY);
     if (manhattan > FOOD_SCENT_RADIUS) continue; // cheap pre-filter (pathDist >= manhattan)
-    const pathDist = surfaceGoalDistance(world, tileX, tileY, pile.tileX, pile.tileY);
+    const pathDist = surfaceGoalDistance(world, tileX, tileY, px, py);
     if (pathDist === SURFACE_GOAL_UNREACHED) continue; // walled off from this ant
     if (pathDist > FOOD_SCENT_RADIUS) continue; // eligibility gates on PATH distance (see doc)
-    if (
-      bestId === -1 ||
-      pathDist < bestDist ||
-      (pathDist === bestDist && pile.foodPileId < bestId)
-    ) {
+    if (bestId === -1 || pathDist < bestDist || (pathDist === bestDist && pid < bestId)) {
       bestDist = pathDist;
-      bestId = pile.foodPileId;
-      bestX = pile.tileX;
-      bestY = pile.tileY;
+      bestId = pid;
+      bestX = px;
+      bestY = py;
     }
   }
   if (bestId === -1) return null;

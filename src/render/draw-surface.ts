@@ -58,7 +58,16 @@ import {
   ANT_DOT_SCREEN_PX,
 } from './camera-adapter.js';
 import { SPIDER_SPRITE_HEIGHT, SPIDER_SPRITE_WIDTH } from './ant-sprite-layer.js';
-import { SPIDER_HUNGER_MAX_TICKS, SPIDER_HP_FULL } from '../sim/constants.js';
+import { SPIDER_HUNGER_THRESHOLD_TICKS, SPIDER_HP_FULL } from '../sim/constants.js';
+import {
+  pileAmountFp,
+  pileCount,
+  pileFoodId,
+  pileInitialFp,
+  pileSlotAt,
+  pileTileX,
+  pileTileY,
+} from '../sim/food/food-api.js';
 import { tierIndex } from '../sim/ai-state.js';
 
 // ---------------------------------------------------------------------------
@@ -192,6 +201,19 @@ export function drawSurfaceTerrain(
 // ---------------------------------------------------------------------------
 
 /**
+ * D9 (#290) — the spider hunger ring / tint fraction in [0, 1]: `hungerTicks` over
+ * the sim's REAL hungry threshold for the tier (SPIDER_HUNGER_THRESHOLD_TICKS,
+ * spider.ts), so the ring saturates exactly when the spider turns Hungry and starts
+ * hunting again. Render-only float math.
+ */
+export function spiderHungerFraction(
+  hungerTicks: number,
+  difficulty: WorldState['difficulty'],
+): number {
+  return Math.min(hungerTicks / SPIDER_HUNGER_THRESHOLD_TICKS[tierIndex(difficulty)], 1);
+}
+
+/**
  * Draw food piles, entrance holes, and ants (workers + queens) on the surface, in
  * WORLD pixels (the main camera projects them).
  *
@@ -232,7 +254,7 @@ export function drawSurfaceEntities(
 
   // --- Food piles ---
   // Issue #112 shrink buckets: each pile renders one of 4 sizes based on
-  // pickupsRemaining / pickupsInitial.
+  // amountFp / initialFp (food left vs the pile's size at birth).
   const playerColony = curr.colonies[PLAYER_COLONY_ID];
   // Stage 3a (ship-review LOW): draw-surface renders ONLY the committed food mark. The queued food
   // state (a toggle/re-direct) is shown entirely by the ghost overlay — a proto-blue pendingFoodMark
@@ -241,17 +263,19 @@ export function drawSurfaceEntities(
   // committed tint (indistinguishable from committed), so food preview lives only in the overlay.
   const playerPriorityPileId = playerColony ? playerColony.priorityFoodPileId : null;
   const baseRadius = TILE_SIZE_PX / 2 - 2;
-  for (const pile of curr.foodPiles) {
-    const wx = pile.tileX * TILE_SIZE_PX;
-    const wy = pile.tileY * TILE_SIZE_PX;
+  const nPiles = pileCount(curr);
+  for (let o = 0; o < nPiles; o++) {
+    const slot = pileSlotAt(curr, o);
+    const wx = pileTileX(curr, slot) * TILE_SIZE_PX;
+    const wy = pileTileY(curr, slot) * TILE_SIZE_PX;
     if (!tileInView(wx, wy, rect, TILE_SIZE_PX)) continue;
     const isPlayerMarked =
-      playerPriorityPileId !== null && pile.foodPileId === playerPriorityPileId;
+      playerPriorityPileId !== null && pileFoodId(curr, slot) === playerPriorityPileId;
     const color = isPlayerMarked ? COLOR_FOOD_PILE_MARKED : COLOR_FOOD_PILE_NORMAL;
     const cx = wx + TILE_SIZE_PX / 2;
     const cy = wy + TILE_SIZE_PX / 2;
     // Shrink-bucket radius: percent-remaining buckets in [>75%, >50%, >25%, >0%].
-    const pct = pile.pickupsRemaining / pile.pickupsInitial;
+    const pct = pileAmountFp(curr, slot) / pileInitialFp(curr, slot);
     let r = baseRadius;
     if (pct <= 0.75) r = baseRadius - 2;
     if (pct <= 0.5) r = baseRadius - 4;
@@ -477,10 +501,7 @@ export function drawSurfaceEntities(
       spiderWorldY > rect.top - SPIDER_SPRITE_HEIGHT &&
       spiderWorldY < rect.bottom + SPIDER_SPRITE_HEIGHT
     ) {
-      const hungerFraction = Math.min(
-        curr.spider.hungerTicks / SPIDER_HUNGER_MAX_TICKS[tierIndex(curr.difficulty)],
-        1,
-      );
+      const hungerFraction = spiderHungerFraction(curr.spider.hungerTicks, curr.difficulty);
       // S6: linear tint gradient pale (#ffeecc) → deep red (#cc2020) by hungerFraction.
       const tint = lerpColor(0xffeecc, 0xcc2020, hungerFraction);
 

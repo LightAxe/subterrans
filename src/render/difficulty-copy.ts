@@ -16,10 +16,10 @@
 //   - how soon after a meal the spider     SPIDER_HUNGER_THRESHOLD_TICKS
 //     becomes Hungry and hunts again (the clock runs only outside Feeding,
 //     i.e. from the END of the meal — spider.ts hunger accrual)
-// (AI_RECOVERY_DURATION_TICKS and SPIDER_HUNGER_MAX_TICKS are per-tier too, but
-// the former is identical at every tier and the latter is only read by the
-// render layer, as the spider hunger bar's denominator — neither is a
-// differentiator a player picks a tier for, so neither is in the line.)
+// (AI_RECOVERY_DURATION_TICKS is per-tier too, but identical at every tier, so it
+// is not a differentiator a player picks a tier for and is not in the line. The
+// spider hunger ring's denominator is SPIDER_HUNGER_THRESHOLD_TICKS itself, the
+// same knob listed above; SPIDER_HUNGER_MAX_TICKS is dead outside tests.)
 //
 // The fighter counts are NECESSARY, not sufficient — WarFooting and Invading
 // also want a food-stock fraction and a minimum age (ai-state.ts) — so the line

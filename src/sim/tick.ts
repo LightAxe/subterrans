@@ -47,11 +47,14 @@ import {
   checkPendingChambers,
   checkEntranceCompletion,
   hasCompletedChamber,
-  isFoodChamberDepositable,
-  colonyForageBackpressure,
-  colonyFoodTotal,
   nurseMinWorkersFor,
 } from './colony/colony-system.js';
+import {
+  colonyFoodTotal,
+  colonyForageBackpressure,
+  pileAtTile,
+  pileFoodId,
+} from './food/food-api.js';
 import { tickQueenEggProduction, tickLifecycleTransitions } from './colony/lifecycle-system.js';
 import { tickLarvaMaturation } from './colony/larva-maturation.js';
 import {
@@ -85,6 +88,7 @@ import {
 import type { EntranceFlowFields } from './entrance-flow.js';
 import {
   computeChamberFlowField,
+  computeFoodChamberFlowField,
   computeNursingPickupField,
   computeNurseryDepositField,
   ensureChamberFlowFields,
@@ -443,14 +447,9 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         // case was safe by luck; codify the boundary regardless.
         if (!isTileCoord(cmd.tileX, SURFACE_GRID_WIDTH)) break;
         if (!isTileCoord(cmd.tileY, SURFACE_GRID_HEIGHT)) break;
-        let matched: FoodPileId | null = null;
-        for (const pile of world.foodPiles) {
-          if (pile.tileX === cmd.tileX && pile.tileY === cmd.tileY) {
-            matched = pile.foodPileId;
-            break;
-          }
-        }
-        if (matched === null) break;
+        const pileSlot = pileAtTile(world, cmd.tileX, cmd.tileY);
+        if (pileSlot < 0) break;
+        const matched: FoodPileId = pileFoodId(world, pileSlot);
         colony.priorityFoodPileId = colony.priorityFoodPileId === matched ? null : matched;
         break;
       }
@@ -761,17 +760,7 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
           if (duplicateColumn) break;
         }
         // Food-pile collision (PRD §3g — commands are authoritative)
-        {
-          let onFoodPile = false;
-          for (let p = 0; p < world.foodPiles.length; p++) {
-            const pile = world.foodPiles[p]!;
-            if (pile.tileX === cmd.surfaceTileX && pile.tileY === cmd.surfaceTileY) {
-              onFoodPile = true;
-              break;
-            }
-          }
-          if (onFoodPile) break;
-        }
+        if (pileAtTile(world, cmd.surfaceTileX, cmd.surfaceTileY) >= 0) break;
         // Colony rally-point collision
         if (
           colony4.rallyPoint !== null &&
@@ -984,7 +973,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // colony isn't starvation-locked. This covers the small-colony case where
     // computeNurseCount's ceil(workers/4) cap assigns the only worker as a
     // nurse, leaving zero foragers regardless of food level.
-    if (alloc8.forage === 0 && alloc8.nurse > 0 && colonyFoodTotal(colony) === 0) {
+    if (alloc8.forage === 0 && alloc8.nurse > 0 && colonyFoodTotal(world, colony) === 0) {
       colony.computedAllocation.nurse -= 1;
       colony.computedAllocation.forage = 1;
       colony.nurseCount -= 1;
@@ -1080,19 +1069,19 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // body runs; the individual computes below are gated.
     const chamberBufs = ensureChamberFlowFields(chamberFlowFields, colony.colonyId, gridSize);
     if (topologyDirty || colony.foodFlowFieldDirty) {
-      computeChamberFlowField(
+      // Issue #15 follow-up: saturated chambers (free space <
+      // FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP) must not seed the BFS — otherwise a
+      // carrier mid-traversal across a near-full chamber gets pinned by the
+      // queen-drain-then-redeposit oscillation. computeFoodChamberFlowField
+      // filters with `isFoodChamberDepositable`, the predicate the deposit path
+      // uses, so seed exclusion and deposit refusal stay in lockstep.
+      computeFoodChamberFlowField(
+        world,
         underground,
         colony.chambers,
         FOOD_CHAMBER_TYPES,
         chamberBufs.food,
         chamberBufs.queue,
-        // Issue #15 follow-up: saturated chambers (free space <
-        // FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP) must not seed the BFS — otherwise
-        // a carrier mid-traversal across a near-full chamber gets pinned by
-        // the queen-drain-then-redeposit oscillation. Shared with the deposit
-        // path in ant-system.ts via `isFoodChamberDepositable`, so seed
-        // exclusion and deposit refusal stay in lockstep.
-        isFoodChamberDepositable,
       );
     }
     if (topologyDirty) {
@@ -1399,7 +1388,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // renderer/HUD/autosave still read the canonical allocation and forage
     // promotion resumes once a chamber frees or the queen drains the pool.
     // #247 — V27 forage-backpressure unconditional (MIN=V30)
-    if (needForage > 0 && colonyForageBackpressure(colony)) {
+    if (needForage > 0 && colonyForageBackpressure(world, colony)) {
       needForage = 0;
     }
 

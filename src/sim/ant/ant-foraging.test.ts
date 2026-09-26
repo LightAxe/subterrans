@@ -46,10 +46,7 @@ import { createChamberFlowFields } from '../chamber-flow.js';
 import type { WorldState } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
 import type { FoodPile } from '../food.js';
-
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
+import { pushTestPile } from '../food/food-test-utils.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -102,11 +99,11 @@ function setupSurfaceGrid(world: WorldState, colonyId = COLONY_ID) {
 describe('antPickupFood', () => {
   it('1. normal pickup — transfers FOOD_PICKUP_AMOUNT, drains one charge, transitions to CarryingFood', () => {
     const { world, antId } = setupForagerWorld();
-    const pile = { pickupsRemaining: 50 };
+    const { slot, pile } = pushTestPile(world, 50);
     world.ants.foodCarrying[antId] = 0;
     world.ants.subTask[antId] = ForagingSubState.SearchingFood;
 
-    const transferred = antPickupFood(world.ants, antId, pile);
+    const transferred = antPickupFood(world, antId, slot);
 
     expect(transferred).toBe(FOOD_PICKUP_AMOUNT); // 512
     expect(world.ants.foodCarrying[antId]).toBe(FOOD_PICKUP_AMOUNT);
@@ -120,9 +117,9 @@ describe('antPickupFood', () => {
     const { world, antId } = setupForagerWorld();
     world.ants.foodCarrying[antId] = 600; // 424 remaining capacity (WORKER_CARRY_CAPACITY=1024)
     world.ants.subTask[antId] = ForagingSubState.SearchingFood;
-    const pile = { pickupsRemaining: 50 };
+    const { slot, pile } = pushTestPile(world, 50);
 
-    const transferred = antPickupFood(world.ants, antId, pile);
+    const transferred = antPickupFood(world, antId, slot);
 
     const expectedTransfer = WORKER_CARRY_CAPACITY - 600; // 424
     expect(transferred).toBe(expectedTransfer);
@@ -135,16 +132,20 @@ describe('antPickupFood', () => {
     const { world, antId } = setupForagerWorld();
     world.ants.foodCarrying[antId] = 0;
     world.ants.subTask[antId] = ForagingSubState.SearchingFood;
-    const pile = { pickupsRemaining: 1 }; // last charge
+    const { slot, pile } = pushTestPile(world, 1); // last charge
 
-    const transferred = antPickupFood(world.ants, antId, pile);
+    const transferred = antPickupFood(world, antId, slot);
 
     // Issue #112: charge counter is not a quantity — full FOOD_PICKUP_AMOUNT
-    // is transferred even on the final charge. Pile drains to 0; caller is
-    // responsible for splicing it.
+    // is transferred even on the final charge. #290 PR 1: the facade's
+    // drainPile records the depletion and removes the emptied pile.
     expect(transferred).toBe(FOOD_PICKUP_AMOUNT);
     expect(world.ants.foodCarrying[antId]).toBe(FOOD_PICKUP_AMOUNT);
     expect(pile.pickupsRemaining).toBe(0);
+    expect(world.foodPiles.includes(pile)).toBe(false);
+    expect(world.foodPiles.length).toBe(slot); // it was the last pile; now gone
+    const last = world.recentlyDepletedFood[world.recentlyDepletedFood.length - 1]!;
+    expect(last.tick).toBe(world.tick); // depletion recorded this tick
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.CarryingFood);
   });
 
@@ -152,9 +153,9 @@ describe('antPickupFood', () => {
     const { world, antId } = setupForagerWorld();
     world.ants.foodCarrying[antId] = WORKER_CARRY_CAPACITY; // already full
     world.ants.subTask[antId] = ForagingSubState.SearchingFood;
-    const pile = { pickupsRemaining: 50 };
+    const { slot, pile } = pushTestPile(world, 50);
 
-    const transferred = antPickupFood(world.ants, antId, pile);
+    const transferred = antPickupFood(world, antId, slot);
 
     expect(transferred).toBe(0);
     expect(world.ants.foodCarrying[antId]).toBe(WORKER_CARRY_CAPACITY); // unchanged
@@ -167,9 +168,9 @@ describe('antPickupFood', () => {
     const { world, antId } = setupForagerWorld();
     world.ants.foodCarrying[antId] = 0;
     world.ants.subTask[antId] = ForagingSubState.SearchingFood;
-    const pile = { pickupsRemaining: 0 }; // already exhausted
+    const { slot, pile } = pushTestPile(world, 0); // already exhausted
 
-    const transferred = antPickupFood(world.ants, antId, pile);
+    const transferred = antPickupFood(world, antId, slot);
 
     expect(transferred).toBe(0);
     expect(world.ants.foodCarrying[antId]).toBe(0);
@@ -339,10 +340,10 @@ describe('CLNY-06 forage cycle — Phase 6 SC 6 integration', () => {
     const { grid } = setupSurfaceGrid(world);
 
     // Synthetic food pile (Phase 6 headless — no FoodPile entity needed)
-    const pile = { pickupsRemaining: 50 };
+    const { slot, pile } = pushTestPile(world, 50);
 
     // --- Tick 0: pickup ---
-    const transferred = antPickupFood(world.ants, antId, pile);
+    const transferred = antPickupFood(world, antId, slot);
 
     expect(transferred).toBe(FOOD_PICKUP_AMOUNT); // 512
     expect(world.ants.foodCarrying[antId]).toBe(FOOD_PICKUP_AMOUNT);
@@ -1982,7 +1983,7 @@ describe('SearchingFood pause cadence (issue #35)', () => {
     world.ants.searchPauseTicks[antId] = 8;
     world.ants.foodCarrying[antId] = 0;
     // Synthetic pickup — antPickupFood should clear the pause counter.
-    antPickupFood(world.ants, antId, { pickupsRemaining: 50 });
+    antPickupFood(world, antId, pushTestPile(world, 50).slot);
     expect(world.ants.searchPauseTicks[antId]).toBe(0);
   });
 
@@ -2273,7 +2274,7 @@ describe('issue #42 — surface SearchingFood no-revisit rule (v6)', () => {
 
     // Trigger pickup directly with a synthetic pile object — antPickupFood
     // is the state-mutation API that flips subTask and clears search state.
-    antPickupFood(world.ants, antId, { pickupsRemaining: 50 });
+    antPickupFood(world, antId, pushTestPile(world, 50).slot);
 
     // Every slot back to the SENTINEL value (-1).
     for (let s = 0; s < RECENT_TILES_LEN; s++) {

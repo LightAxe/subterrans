@@ -58,10 +58,10 @@ register(
 const { createScenario } = await import('../src/sim/scenario.js');
 const { tick } = await import('../src/sim/tick.js');
 const { GameOutcome } = await import('../src/sim/game-over.js');
-const { PLAYER_COLONY_ID, ENEMY_COLONY_ID, MATCH_TIMEOUT_TICKS } =
+const { PLAYER_COLONY_ID, ENEMY_COLONY_ID, MATCH_TIMEOUT_TICKS, FOOD_PICKUP_AMOUNT } =
   await import('../src/sim/constants.js');
 const { runAIController } = await import('../src/render/ai-controller.js');
-const { colonyFoodTotal } = await import('../src/sim/colony/colony-system.js');
+const { colonyFoodTotal, forEachPile, pileCount } = await import('../src/sim/food/food-api.js');
 const { ChamberType, AntTask, PheromoneType } = await import('../src/sim/enums.js');
 const { isAlive } = await import('../src/sim/ant/ant-store.js');
 const { getAIStateForColony } = await import('../src/sim/ai-state.js');
@@ -322,14 +322,14 @@ function pileChargesNear(world: WorldState, colonyId: number, radius: number): n
   const colony = world.colonies[colonyId];
   if (colony === undefined || colony.entrances.length === 0) return 0;
   let total = 0;
-  for (const pile of world.foodPiles) {
+  forEachPile(world, (pile) => {
     let best = Number.POSITIVE_INFINITY;
     for (const e of colony.entrances) {
-      const d = Math.abs(pile.tileX - e.surfaceTileX) + Math.abs(pile.tileY - e.surfaceTileY);
+      const d = Math.abs(pile.x - e.surfaceTileX) + Math.abs(pile.y - e.surfaceTileY);
       if (d < best) best = d;
     }
-    if (best <= radius) total += pile.pickupsRemaining;
-  }
+    if (best <= radius) total += pile.amountFp / FOOD_PICKUP_AMOUNT; // charges
+  });
   return total;
 }
 
@@ -366,7 +366,7 @@ function runSeed(seed: number): SeedResult {
   };
 
   const frozenSample: FrozenSample = { count: 0, food: 0 };
-  let prevEnemyFood = colonyFoodTotal(enemy);
+  let prevEnemyFood = colonyFoodTotal(world, enemy);
   let depositedSinceTrace = 0;
   let consumedSinceTrace = 0;
 
@@ -413,7 +413,7 @@ function runSeed(seed: number): SeedResult {
       if (frozenSample.food > res.peakHeldFood) res.peakHeldFood = frozenSample.food;
     }
 
-    const food = colonyFoodTotal(enemy);
+    const food = colonyFoodTotal(world, enemy);
     const delta = food - prevEnemyFood;
     if (delta > 0) depositedSinceTrace += delta;
     else consumedSinceTrace -= delta;
@@ -470,7 +470,7 @@ function runSeed(seed: number): SeedResult {
           `held=${c.heldCarriers}(${c.heldFood}fp) ` +
           `dngr@ent=${entranceDanger(world, ENEMY_COLONY_ID)} ` +
           `piles40=${pileChargesNear(world, ENEMY_COLONY_ID, 40)} ` +
-          `allPiles=${world.foodPiles.length}` +
+          `allPiles=${pileCount(world)}` +
           (enemyQueenAlive ? '' : ' QUEEN-DEAD'),
       );
       depositedSinceTrace = 0;

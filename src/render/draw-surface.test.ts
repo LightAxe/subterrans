@@ -13,6 +13,7 @@ import {
   drawSurfaceEntities,
   drawSurface,
   visibleTileRange,
+  spiderHungerFraction,
 } from './draw-surface.js';
 import type { GfxLike } from './draw-surface.js';
 import type {
@@ -27,7 +28,12 @@ import { createWorldState } from '../sim/types.js';
 import { sgSet, SurfaceTileState } from '../sim/terrain.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { FP_SHIFT } from '../sim/fixed.js';
-import { PLAYER_COLONY_ID, ENEMY_COLONY_ID, SPIDER_HP_FULL } from '../sim/constants.js';
+import {
+  PLAYER_COLONY_ID,
+  ENEMY_COLONY_ID,
+  SPIDER_HP_FULL,
+  SPIDER_HUNGER_THRESHOLD_TICKS,
+} from '../sim/constants.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import { AntFacingCache } from './ant-facing-cache.js';
 import {
@@ -1577,5 +1583,34 @@ describe('HUD-05 compliance — draw-surface.ts source', () => {
   it('delegates ant drawing to the AntSpriteLayer interface', () => {
     expect(src).toMatch(/AntSpriteLayer/);
     expect(src).toMatch(/sprites\.drawAnt\(/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D9 (#290) — spider hunger ring denominator
+// ---------------------------------------------------------------------------
+
+describe('spiderHungerFraction (D9 #290)', () => {
+  const tiers = [
+    ['Easy', 0],
+    ['Normal', 1],
+    ['Hard', 2],
+  ] as const;
+
+  it.each(tiers)(
+    '%s: fills over SPIDER_HUNGER_THRESHOLD_TICKS[tier], saturating at the threshold',
+    (d, i) => {
+      const threshold = SPIDER_HUNGER_THRESHOLD_TICKS[i];
+      expect(spiderHungerFraction(0, d)).toBe(0);
+      expect(spiderHungerFraction(threshold >> 1, d)).toBeCloseTo((threshold >> 1) / threshold, 12);
+      expect(spiderHungerFraction(threshold - 1, d)).toBeLessThan(1);
+      expect(spiderHungerFraction(threshold, d)).toBe(1); // hungry ⇔ full ring
+      expect(spiderHungerFraction(threshold * 3, d)).toBe(1);
+    },
+  );
+
+  it('tiers have distinct thresholds, so a wrong-tier denominator fails the pins above', () => {
+    const [easy, normal, hard] = SPIDER_HUNGER_THRESHOLD_TICKS;
+    expect(new Set([easy, normal, hard]).size).toBe(3);
   });
 });

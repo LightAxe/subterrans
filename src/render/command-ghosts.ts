@@ -15,6 +15,7 @@
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import { UndergroundTileState, ugGet } from '../sim/terrain.js';
 import type { WorldState } from '../sim/types.js';
+import { pileSlotById, pileTileX, pileTileY } from '../sim/food/food-api.js';
 
 /** Shape of a `world.pendingChambers` value (derived; avoids a cross-module type import). */
 type PendingChamber = NonNullable<WorldState['pendingChambers'][string]>;
@@ -179,19 +180,15 @@ export function computeGhostDelta(world: WorldState, projection: WorldState): Gh
   let pendingFoodMark: TileRef | null = null;
   let foodMarkCleared: TileRef | null = null;
   if (pFood !== null && pFood !== wFood) {
-    for (const pile of projection.foodPiles) {
-      if (pile.foodPileId === pFood) {
-        pendingFoodMark = { tileX: pile.tileX, tileY: pile.tileY };
-        break;
-      }
+    const slot = pileSlotById(projection, pFood);
+    if (slot >= 0) {
+      pendingFoodMark = { tileX: pileTileX(projection, slot), tileY: pileTileY(projection, slot) };
     }
   }
   if (wFood !== null && wFood !== pFood) {
-    for (const pile of world.foodPiles) {
-      if (pile.foodPileId === wFood) {
-        foodMarkCleared = { tileX: pile.tileX, tileY: pile.tileY };
-        break;
-      }
+    const slot = pileSlotById(world, wFood);
+    if (slot >= 0) {
+      foodMarkCleared = { tileX: pileTileX(world, slot), tileY: pileTileY(world, slot) };
     }
   }
 

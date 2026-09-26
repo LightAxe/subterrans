@@ -41,6 +41,7 @@ import {
 import type { SimCommand } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { ChamberType } from '../sim/enums.js';
+import { colonyFoodTotal } from '../sim/food/food-api.js';
 import { pheromoneKeyIsSurface } from '../sim/pheromone/pheromone-store.js';
 
 describe('save.ts (SCEN-04 + SCEN-06)', () => {
@@ -2203,9 +2204,53 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // hatched workers yet at tick 0). Match against the live colony.
       const playerColony = world.colonies[PLAYER_COLONY_ID]!;
       expect(info!.playerWorkers).toBe(playerColony.workerCount);
-      // playerFoodStored is reported in human units (foodStored >> FP_SHIFT).
+      // playerFoodStored is the colony TOTAL (colonyFoodTotal) in human units.
       const FP_SHIFT = 8;
-      expect(info!.playerFoodStored).toBe(playerColony.foodStored >> FP_SHIFT);
+      expect(info!.playerFoodStored).toBe(colonyFoodTotal(world, playerColony) >> FP_SHIFT);
+    });
+
+    it('#290 — reports the aggregate (pool + FoodStorage chambers), matching the HUD', async () => {
+      const world = createScenario(42);
+      const playerColony = world.colonies[PLAYER_COLONY_ID]!;
+      // Two FoodStorage chambers with stock, plus a Nursery whose (always-zero in
+      // play) field is set nonzero and must not be counted.
+      playerColony.chambers.push(
+        {
+          chamberId: 9001,
+          chamberType: ChamberType.FoodStorage,
+          foodStored: 5 << 8,
+          posX: 2 << 8,
+          posY: 2 << 8,
+          width: 4,
+          height: 3,
+        },
+        {
+          chamberId: 9002,
+          chamberType: ChamberType.FoodStorage,
+          foodStored: 3 << 8,
+          posX: 8 << 8,
+          posY: 2 << 8,
+          width: 4,
+          height: 3,
+        },
+        {
+          // A non-FoodStorage chamber never holds food in play; a nonzero value
+          // here (tampered / hypothetical) must NOT be counted.
+          chamberId: 9003,
+          chamberType: ChamberType.Nursery,
+          foodStored: 7 << 8,
+          posX: 14 << 8,
+          posY: 2 << 8,
+          width: 4,
+          height: 3,
+        },
+      );
+      await manualSave(42, [], world);
+      const info = await getSaveInfo();
+      const FP_SHIFT = 8;
+      expect(info!.playerFoodStored).toBe(colonyFoodTotal(world, playerColony) >> FP_SHIFT);
+      // Pool (STARTING_FOOD = 1280 fp = 5) + 5 + 3.
+      expect(info!.playerFoodStored).toBe(13);
     });
 
     it('returns the wall-clock savedAtMs from the envelope (issue #115)', async () => {

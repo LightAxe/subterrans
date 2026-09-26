@@ -25,7 +25,7 @@ import { tick } from '../tick.js';
 import { PheromoneType } from '../enums.js';
 import { pheromoneGridKey, phGet, phSet } from './pheromone-store.js';
 import { PLAYER_COLONY_ID, PHEROMONE_CAP } from '../constants.js';
-import { recordFoodPileDepletion } from '../food-system.js';
+import { recordFoodPileDepletion } from '../food/food-api.js';
 
 describe('issue #112 — food-trail decays naturally after pile depletion', () => {
   it('after pile vanishes and carriers clear, trail at the tile reaches 0 within decay budget', () => {

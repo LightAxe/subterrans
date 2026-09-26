@@ -20,6 +20,7 @@ import type { WorldState } from '../src/sim/types.js';
 import { createColonyRecord } from '../src/sim/colony/colony-store.js';
 import type { ColonyId } from '../src/sim/colony/colony-store.js';
 import { initAnt } from '../src/sim/ant/ant-store.js';
+import { setColonyFoodForTest } from '../src/sim/food/food-test-utils.js';
 import { createUndergroundGrid, ugSet, UndergroundTileState, Zone } from '../src/sim/terrain.js';
 import { ChamberType, AntTask } from '../src/sim/enums.js';
 import { FP_SHIFT } from '../src/sim/fixed.js';
@@ -114,7 +115,7 @@ function buildBroodColony(): WorldState {
   c.digFlowFieldDirty = false;
   c.foodFlowFieldDirty = false;
   c.broodFieldDirty = false;
-  c.foodStored = 500_000;
+  setColonyFoodForTest(world, c, 500_000); // over the pool cap on purpose: the queen never starves
   world.colonies[BROOD_CID] = c;
   c.chambers.push({
     chamberId: 1,

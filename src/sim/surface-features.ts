@@ -894,8 +894,15 @@ export function isSurfaceTileInComponent(world: WorldState, tileX: number, tileY
  * root; a colony with `entrances === undefined` contributes nothing and is
  * skipped.) Returns true iff the invariant holds. Called at world-gen
  * (`createScenario`) and on save load (`deserializeWorldState`).
+ *
+ * `pileTiles` is every live food pile's surface tile — the caller reads it through
+ * the food facade (`livePileTiles`), so this module does not depend on the food
+ * store (#290: keeps food-api → surface-features one-way).
  */
-export function validateSurfaceConnectivity(world: WorldState): boolean {
+export function validateSurfaceConnectivity(
+  world: WorldState,
+  pileTiles: ReadonlyArray<readonly [number, number]>,
+): boolean {
   const mask = ensureSurfaceComponentMask(world);
   const inMask = (x: number, y: number): boolean =>
     x >= 0 &&
@@ -931,8 +938,8 @@ export function validateSurfaceConnectivity(world: WorldState): boolean {
       }
     }
   }
-  for (const pile of world.foodPiles) {
-    if (!inMask(pile.tileX, pile.tileY)) return false;
+  for (const [x, y] of pileTiles) {
+    if (!inMask(x, y)) return false;
   }
   return true;
 }

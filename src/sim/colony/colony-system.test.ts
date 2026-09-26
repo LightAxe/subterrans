@@ -15,9 +15,6 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  withdrawFood,
-  colonyFoodTotal,
-  colonyFoodCapacity,
   tickFoodConsumption,
   tickStarvationCheck,
   tickDeathCleanup,
@@ -27,6 +24,7 @@ import {
   tickDeadDiggerCleanup,
 } from './colony-system.js';
 import { createWorldState } from '../types.js';
+import { colonyFoodCapacity, colonyFoodTotal, withdrawFood } from '../food/food-api.js';
 import { createColonyRecord } from './colony-store.js';
 import { initAnt } from '../ant/ant-store.js';
 import { AntTask, ChamberType } from '../enums.js';
@@ -146,22 +144,22 @@ function addEgg(world: WorldState, colony: ColonyRecord): number {
 
 describe('withdrawFood', () => {
   it('1. success — returns true and decrements foodStored', () => {
-    const { colony } = setupWorldWithQueen(100);
-    const result = withdrawFood(colony, 50);
+    const { world, colony } = setupWorldWithQueen(100);
+    const result = withdrawFood(world, colony, 50);
     expect(result).toBe(true);
     expect(colony.foodStored).toBe(50);
   });
 
   it('2. insufficient — returns false, foodStored unchanged', () => {
-    const { colony } = setupWorldWithQueen(10);
-    const result = withdrawFood(colony, 50);
+    const { world, colony } = setupWorldWithQueen(10);
+    const result = withdrawFood(world, colony, 50);
     expect(result).toBe(false);
     expect(colony.foodStored).toBe(10);
   });
 
   it('3. exact amount — returns true, foodStored reaches 0', () => {
-    const { colony } = setupWorldWithQueen(50);
-    const result = withdrawFood(colony, 50);
+    const { world, colony } = setupWorldWithQueen(50);
+    const result = withdrawFood(world, colony, 50);
     expect(result).toBe(true);
     expect(colony.foodStored).toBe(0);
   });
@@ -171,7 +169,7 @@ describe('withdrawFood', () => {
   // emptying before the pool so the dirty-flag / re-seed cadence is stable.
   // A future refactor that flips the order would silently regress.
   it('drains chambers before the entrance pool (issue #15)', () => {
-    const { colony } = setupWorldWithQueen(100);
+    const { world, colony } = setupWorldWithQueen(100);
     colony.chambers.push({
       chamberId: 1,
       chamberType: ChamberType.FoodStorage,
@@ -181,14 +179,14 @@ describe('withdrawFood', () => {
       width: 1,
       height: 1,
     });
-    const result = withdrawFood(colony, 50);
+    const result = withdrawFood(world, colony, 50);
     expect(result).toBe(true);
     expect(colony.chambers[0]!.foodStored).toBe(150); // chamber drained
     expect(colony.foodStored).toBe(100); // pool untouched
   });
 
   it('drains the entrance pool only after every chamber is empty (issue #15)', () => {
-    const { colony } = setupWorldWithQueen(100);
+    const { world, colony } = setupWorldWithQueen(100);
     colony.chambers.push({
       chamberId: 1,
       chamberType: ChamberType.FoodStorage,
@@ -198,7 +196,7 @@ describe('withdrawFood', () => {
       width: 1,
       height: 1,
     });
-    const result = withdrawFood(colony, 50);
+    const result = withdrawFood(world, colony, 50);
     expect(result).toBe(true);
     expect(colony.chambers[0]!.foodStored).toBe(0); // chamber drained first
     expect(colony.foodStored).toBe(80); // remaining 20 from pool
@@ -212,7 +210,7 @@ describe('withdrawFood', () => {
     // a single QUEEN_FOOD_PER_TICK=2 drain and pins carriers mid-traversal
     // (see /tmp/stuck-dump.json — seed 1294596103 tick 1876).
     const HYST = FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP;
-    const { colony } = setupWorldWithQueen(0);
+    const { world, colony } = setupWorldWithQueen(0);
     // Chamber 0: full → still saturated after small drains until we reach
     // the depositable threshold (free space >= HYST).
     colony.chambers.push({
@@ -239,17 +237,17 @@ describe('withdrawFood', () => {
 
     // Tiny drain from chamber 0 — saturated → still saturated (free space < HYST).
     // Must NOT fire dirty (this is the queen-drain oscillation case).
-    withdrawFood(colony, 1);
+    withdrawFood(world, colony, 1);
     expect(colony.foodFlowFieldDirty).toBe(false);
 
     // Drain enough to cross the saturation boundary — saturated → depositable.
     // Chamber 0 now has free space == HYST. Must fire dirty.
-    withdrawFood(colony, HYST - 1);
+    withdrawFood(world, colony, HYST - 1);
     expect(colony.foodFlowFieldDirty).toBe(true);
 
     // Reset. Further drain in the depositable band — must NOT re-fire.
     colony.foodFlowFieldDirty = false;
-    withdrawFood(colony, 1);
+    withdrawFood(world, colony, 1);
     expect(colony.foodFlowFieldDirty).toBe(false);
 
     // Drain across both chambers within the depositable band — must NOT fire.
@@ -263,7 +261,7 @@ describe('withdrawFood', () => {
     // early-return — assertion would pass vacuously without exercising the
     // drain loop.)
     colony.foodFlowFieldDirty = false;
-    expect(withdrawFood(colony, 4707)).toBe(true);
+    expect(withdrawFood(world, colony, 4707)).toBe(true);
     expect(colony.foodFlowFieldDirty).toBe(false);
     expect(colony.chambers[0]!.foodStored).toBe(0);
     expect(colony.chambers[1]!.foodStored).toBe(0);
@@ -282,12 +280,12 @@ describe('withdrawFood', () => {
 
 describe('colonyFoodTotal — issue #15', () => {
   it('sums entrance pool only when no chambers exist', () => {
-    const { colony } = setupWorldWithQueen(123);
-    expect(colonyFoodTotal(colony)).toBe(123);
+    const { world, colony } = setupWorldWithQueen(123);
+    expect(colonyFoodTotal(world, colony)).toBe(123);
   });
 
   it('includes FoodStorage chamber food in the total', () => {
-    const { colony } = setupWorldWithQueen(0);
+    const { world, colony } = setupWorldWithQueen(0);
     colony.chambers.push({
       chamberId: 1,
       chamberType: ChamberType.FoodStorage,
@@ -306,11 +304,11 @@ describe('colonyFoodTotal — issue #15', () => {
       width: 1,
       height: 1,
     });
-    expect(colonyFoodTotal(colony)).toBe(250);
+    expect(colonyFoodTotal(world, colony)).toBe(250);
   });
 
   it('sums entrance pool + every FoodStorage chamber', () => {
-    const { colony } = setupWorldWithQueen(100);
+    const { world, colony } = setupWorldWithQueen(100);
     colony.chambers.push({
       chamberId: 1,
       chamberType: ChamberType.FoodStorage,
@@ -320,11 +318,11 @@ describe('colonyFoodTotal — issue #15', () => {
       width: 1,
       height: 1,
     });
-    expect(colonyFoodTotal(colony)).toBe(300);
+    expect(colonyFoodTotal(world, colony)).toBe(300);
   });
 
   it('excludes non-FoodStorage chamber types from the total', () => {
-    const { colony } = setupWorldWithQueen(100);
+    const { world, colony } = setupWorldWithQueen(100);
     // A non-FoodStorage chamber's foodStored is meaningless — must not contribute.
     colony.chambers.push({
       chamberId: 1,
@@ -344,7 +342,7 @@ describe('colonyFoodTotal — issue #15', () => {
       width: 1,
       height: 1,
     });
-    expect(colonyFoodTotal(colony)).toBe(100);
+    expect(colonyFoodTotal(world, colony)).toBe(100);
   });
 });
 

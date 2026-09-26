@@ -160,7 +160,7 @@ describe('findFoodPileAt', () => {
     const world = makeWorld({
       foodPiles: [{ foodPileId: 1, tileX: 5, tileY: 2, pickupsRemaining: 9, pickupsInitial: 9 }],
     });
-    expect(findFoodPileAt(world, 5, 2)?.foodPileId).toBe(1);
+    expect(findFoodPileAt(world, 5, 2)?.foodId).toBe(1);
     expect(findFoodPileAt(world, 6, 2)).toBeNull();
   });
 });

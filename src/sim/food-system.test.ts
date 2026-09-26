@@ -11,7 +11,8 @@
 import { describe, it, expect } from 'vitest';
 import { createScenario } from './scenario.js';
 import { tick } from './tick.js';
-import { recordFoodPileDepletion, tickFoodPileSpawn } from './food-system.js';
+import { tickFoodPileSpawn } from './food-system.js';
+import { recordFoodPileDepletion } from './food/food-api.js';
 import { Rng } from './rng.js';
 import {
   PLAYER_COLONY_ID,

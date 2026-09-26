@@ -893,12 +893,13 @@ describe('drawUndergroundEntities', () => {
     ];
     // Entrance pool is irrelevant to the per-chamber readout.
     colony.foodStored = 12345;
+    const world = createWorldState(1);
 
-    expect(projectFoodStorageFill(colony, 1)).toBe(capa);
-    expect(projectFoodStorageFill(colony, 2)).toBe(Math.floor(capa / 2));
-    expect(projectFoodStorageFill(colony, 3)).toBe(0);
+    expect(projectFoodStorageFill(world, colony, 1)).toBe(capa);
+    expect(projectFoodStorageFill(world, colony, 2)).toBe(Math.floor(capa / 2));
+    expect(projectFoodStorageFill(world, colony, 3)).toBe(0);
     // Unknown chamber id → 0.
-    expect(projectFoodStorageFill(colony, 99)).toBe(0);
+    expect(projectFoodStorageFill(world, colony, 99)).toBe(0);
   });
 
   it('draws larvae via sprites.drawStatic (kind=larva) from brood entity position', () => {

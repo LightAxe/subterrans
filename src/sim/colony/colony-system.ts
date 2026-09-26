@@ -1,7 +1,6 @@
 // colony-system.ts — PRD §4c food economy, starvation, death cleanup, reconcile
 //
-// Implements eight exported tick-step functions:
-//   withdrawFood             — chamberless food withdrawal helper (PRD §4c)
+// Implements seven exported tick-step functions:
 //   tickFoodConsumption      — PRD §8a steps 3 AND 4 combined (CLNY-04, CLNY-05)
 //   tickStarvationCheck      — Phase 6 intentional no-op (PRD §8a step 4 slot)
 //   tickDeathCleanup         — swap-remove dead entities from colony buckets (PRD §4b step 5)
@@ -31,18 +30,16 @@ import {
   INVALID_ENTITY_ID,
   SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
 } from '../types.js';
-import type { ChamberRecord, ColonyRecord } from './colony-store.js';
+import type { ColonyRecord } from './colony-store.js';
 import type { ColonyId } from './colony-store.js';
 import {
   QUEEN_FOOD_PER_TICK,
   LARVA_FOOD_PER_TICK,
   STARVATION_GRACE_TICKS,
   RECONCILE_INTERVAL_TICKS,
-  FOOD_CHAMBER_CAPACITY,
-  FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP,
-  BASE_FOOD_STORAGE_CAPACITY,
   NURSE_MIN_WORKERS,
 } from '../constants.js';
+import { clampColonyFoodStores, createChamberStock, withdrawFood } from '../food/food-api.js';
 import { ChamberType } from '../enums.js';
 import { allocateWorkers } from '../behavior/allocation-system.js';
 import { ugGet, ugSet, UndergroundTileState } from '../terrain.js';
@@ -50,212 +47,12 @@ import { findEmbeddedByTightening } from '../underground-occupancy.js';
 import { FP_SHIFT } from '../fixed.js';
 import { despawnAnt } from '../ant-death.js';
 
-// ---------------------------------------------------------------------------
-// withdrawFood / colonyFoodTotal — chamber-authoritative food withdrawal (issue #15)
-//
-// Pre-issue-#15 the colony had a single `foodStored` pool that `tickReconcile`
-// projected across FoodStorage chambers. Foragers wrote the pool; once the
-// pool exceeded one chamber's slice, the SECOND chamber appeared full at the
-// next reconcile even though no ant had ever visited it. Players saw food
-// "magically appear" in distant rooms.
-//
-// New model: chamber.foodStored is the authoritative store for each
-// FoodStorage chamber. colony.foodStored persists as the entrance-shaft /
-// chamberless-fallback pool — used by the Phase 6 deposit-at-entrance path
-// (when no FoodStorage chamber exists, or when a forager deposits at the
-// entrance shaft top per `tickForagerActions` (b)) and seeded by scenarios
-// via STARTING_FOOD. Capacity contract: chambers cap at FOOD_CHAMBER_CAPACITY
-// each; the entrance pool caps at BASE_FOOD_STORAGE_CAPACITY. Total capacity
-// is unchanged: BASE + N × FOOD_CHAMBER_CAPACITY.
-//
-// Withdraw drains chambers in colony.chambers array order first, then the
-// entrance pool. Order matters for determinism — never sort.
-// ---------------------------------------------------------------------------
-
-/**
- * Total stored food across the colony: entrance pool + every FoodStorage
- * chamber. Use this for HUD displays, AI thresholds, and any code that
- * previously read `colony.foodStored` as the colony total.
- *
- * Reading `colony.foodStored` directly post-#15 yields ONLY the
- * entrance-shaft pool, which is rarely what callers want.
- */
-export function colonyFoodTotal(colony: ColonyRecord): number {
-  let total = colony.foodStored;
-  for (let i = 0; i < colony.chambers.length; i++) {
-    const ch = colony.chambers[i]!;
-    if (ch.chamberType === ChamberType.FoodStorage) total += ch.foodStored;
-  }
-  return total;
-}
-
-/**
- * Issue #15 follow-up — single-source-of-truth predicate for "is this chamber
- * an active deposit destination?" Used by:
- *   - chamber-flow-field BFS seeding (tick.ts step 9)
- *   - tickForagerActions step 16b deposit-site test
- *   - antDepositFood chamber match
- *   - tickAntMovement Manhattan fallback chamberTargetX selection
- *
- * Saturated (free space < FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP) chambers are
- * EXCLUDED from all four sites in lockstep. This is what prevents the
- * queen-drain-then-redeposit oscillation that pinned carriers on full-chamber
- * tiles in seed-1294596103 tick-1876 (see the constant docs).
- *
- * Non-FoodStorage chambers always return false — the loops upstream already
- * filter on chamberType, but this keeps the predicate self-contained so a
- * single misuse can't accidentally treat a Queen/Nursery chamber as a food
- * deposit target.
- */
-export function isFoodChamberDepositable(chamber: ChamberRecord): boolean {
-  if (chamber.chamberType !== ChamberType.FoodStorage) return false;
-  return FOOD_CHAMBER_CAPACITY - chamber.foodStored >= FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP;
-}
-
-/**
- * True when the colony has genuinely nowhere to deposit foraged food: the
- * entrance pool is at capacity AND no FoodStorage chamber is depositable. This
- * is the shared "no deposit target" predicate behind the issue-#42 fix-#2
- * SearchingFood demotion (`tickSearchLeash`), the issue-#126 step-10a
- * idle-promotion backpressure (both via `colonyForageBackpressure`), and the
- * issue-#27 carrier wait-wake gate (`tickForagerActions`).
- *
- * Strict at-cap, version-independent: a carrier deposits the instant the pool
- * has any headroom, so a chamberless colony's entrance pool stays pegged at cap
- * as the queen nibbles it (rather than visibly draining ~2 food before a carrier
- * tops it back off). The carry-headroom hysteresis a prior revision added here
- * was reverted — #126's actual fix is the chamber-scoped backpressure below, and
- * the pool hysteresis only regressed the chamberless larder feel without adding
- * value (chambered colonies drain their chambers first, so the pool stays at cap
- * anyway).
- *
- * Pure read of `colony.foodStored` + `colony.chambers`; no mutation, no RNG.
- */
-export function colonyHasNoDepositTarget(colony: ColonyRecord): boolean {
-  if (colony.foodStored < BASE_FOOD_STORAGE_CAPACITY) return false;
-  for (let c = 0; c < colony.chambers.length; c++) {
-    if (isFoodChamberDepositable(colony.chambers[c]!)) return false;
-  }
-  return true;
-}
-
-/**
- * Whether to apply FORAGER backpressure — suppress idle→Foraging promotion
- * (#126 step 10a) and demote over-leashed searchers (#42 fix-#2,
- * `tickSearchLeash`). True only when the colony both has nowhere to deposit
- * (`colonyHasNoDepositTarget`) AND is "developed" — i.e. it actually owns at
- * least one FoodStorage chamber.
- *
- * The chamber requirement is V27-scoped (#126): the mass entrance pile-up the
- * issue describes ("hundreds of ants") only forms in a MATURE colony whose pool
- * AND FoodStorage chambers are all saturated. A chamberless early-game colony is
- * small and should keep foraging into its entrance pool — backpressuring it just
- * idles its foragers while the larder slowly drains. (Its CARRIERS still park
- * via the universal #27 wait-wake gate, which keys on `colonyHasNoDepositTarget`
- * directly — so a full chamberless pool stays topped off without dispatching new
- * foragers needlessly.)
- */
-export function colonyForageBackpressure(colony: ColonyRecord): boolean {
-  if (!colonyHasNoDepositTarget(colony)) return false;
-  for (let c = 0; c < colony.chambers.length; c++) {
-    if (colony.chambers[c]!.chamberType === ChamberType.FoodStorage) return true;
-  }
-  return false;
-}
-
-/**
- * Attempt to withdraw `amount` food. All-or-nothing: returns false (no
- * partial withdrawal) if the colony's combined stored food is below `amount`.
- *
- * Drain order: the FoodStorage chamber with the highest fill level first; on
- * ties, lowest array index wins. Then the entrance-shaft pool. Draining
- * fullest-first reduces flow-field re-seed thrash when many chambers cluster
- * near saturation — it concentrates the saturated→depositable crossing on one
- * chamber at a time instead of cycling through several (closes issue #27).
- *
- * Issue #15 follow-up — flow-field dirty: fires only when a chamber crosses
- * the saturation→depositable boundary (per isFoodChamberDepositable), not
- * on every cap → cap-N drain. A QUEEN_FOOD_PER_TICK=2 nibble of a full
- * chamber must NOT mark the field dirty — otherwise step 9 re-seeds the
- * still-saturated chamber every tick and carriers on its footprint pin in
- * the oscillation cycle described in the FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP
- * constant docs.
- */
-export function withdrawFood(colony: ColonyRecord, amount: number): boolean {
-  if (colonyFoodTotal(colony) < amount) return false;
-
-  let remaining = amount;
-  // Drain fullest-first, array-index tie-break. Outer `while` re-scans on
-  // each iteration; in steady state both production callers (queen 2 fp,
-  // larva 1 fp) terminate after iteration 1 because the fullest chamber
-  // holds far more than the drain amount. Theoretical worst case (tiny
-  // dribbles across many chambers) is O(N²) but does not arise in any
-  // current call path. If a future caller drains an amount that may exceed
-  // several chambers' holdings, replace this with a single-pass merge over
-  // a pre-sorted view.
-  while (remaining > 0) {
-    let pickIdx = -1;
-    let pickFill = -1;
-    for (let i = 0; i < colony.chambers.length; i++) {
-      const ch = colony.chambers[i]!;
-      if (ch.chamberType !== ChamberType.FoodStorage) continue;
-      if (ch.foodStored <= 0) continue;
-      if (ch.foodStored > pickFill) {
-        pickFill = ch.foodStored;
-        pickIdx = i;
-      }
-    }
-    if (pickIdx < 0) break; // no chamber has food
-
-    const ch = colony.chambers[pickIdx]!;
-    const wasDepositable = isFoodChamberDepositable(ch);
-    const take = ch.foodStored < remaining ? ch.foodStored : remaining;
-    ch.foodStored -= take;
-    remaining -= take;
-    // `wasDepositable` is recomputed each outer iteration; the dirty
-    // fire is naturally idempotent across the saturation crossing —
-    // once a chamber is depositable, subsequent picks that still drain
-    // it observe wasDepositable=true and skip the dirty write.
-    if (!wasDepositable && isFoodChamberDepositable(ch)) {
-      colony.foodFlowFieldDirty = true;
-    }
-  }
-
-  if (remaining > 0) {
-    colony.foodStored -= remaining;
-  }
-  return true;
-}
-
-// ---------------------------------------------------------------------------
-// colonyFoodCapacity — 09 backlog memo: BASE + N × FOOD_CHAMBER_CAPACITY
-//
-// Returns the colony's TOTAL food-storage capacity (entrance pool + every
-// FoodStorage chamber). Compare against `colonyFoodTotal(colony)`, not
-// `colony.foodStored` alone — post-#15, `colony.foodStored` caps at BASE
-// (the entrance pool only) while each FoodStorage chamber caps at
-// FOOD_CHAMBER_CAPACITY. N counts only COMPLETED FoodStorage chambers
-// (entries in colony.chambers). Pending FoodStorage chambers do NOT
-// contribute — capacity grows only when the chamber is fully excavated
-// and promoted by checkPendingChambers.
-// ---------------------------------------------------------------------------
-
-/**
- * Total colony food-storage capacity (fp): BASE + N × FOOD_CHAMBER_CAPACITY,
- * where N is the number of completed FoodStorage chambers in colony.chambers.
- * Post-#15 this is the cap for `colonyFoodTotal(colony)` (pool + chambers),
- * not for `colony.foodStored` (which caps at BASE alone).
- *
- * Pending FoodStorage chambers (world.pendingChambers) do NOT contribute —
- * promotion happens in checkPendingChambers once excavation completes.
- */
-export function colonyFoodCapacity(colony: ColonyRecord): number {
-  let n = 0;
-  for (let i = 0; i < colony.chambers.length; i++) {
-    if (colony.chambers[i]!.chamberType === ChamberType.FoodStorage) n += 1;
-  }
-  return BASE_FOOD_STORAGE_CAPACITY + n * FOOD_CHAMBER_CAPACITY;
-}
+// Food storage (the entrance pool, FoodStorage chamber stock and the surface
+// piles) lives behind the food facade, `../food/food-api.ts`: `withdrawFood`,
+// `colonyFoodTotal`, `colonyFoodCapacity`, `isFoodChamberDepositable`,
+// `colonyHasNoDepositTarget` and `colonyForageBackpressure` moved there (#290
+// PR 1). This module calls it for the queen/larva draw, the reconcile clamp and
+// chamber-stock creation.
 
 // ---------------------------------------------------------------------------
 // hasCompletedChamber — generic "colony has chamber of this type" query.
@@ -336,7 +133,7 @@ export function tickFoodConsumption(world: WorldState, colony: ColonyRecord): vo
   // Queen (CLNY-04) — reset on success, decrement + death-check on fail.
   const queenId = colony.queenEntityId;
   if (ants.alive[queenId] === 1) {
-    if (withdrawFood(colony, QUEEN_FOOD_PER_TICK)) {
+    if (withdrawFood(world, colony, QUEEN_FOOD_PER_TICK)) {
       colony.queenStarvationTimer = STARVATION_GRACE_TICKS;
     } else {
       colony.queenStarvationTimer -= 1;
@@ -350,7 +147,7 @@ export function tickFoodConsumption(world: WorldState, colony: ColonyRecord): vo
   for (let i = 0; i < colony.larvae.length; i++) {
     const id = colony.larvae[i]!;
     if (ants.alive[id] !== 1) continue;
-    if (withdrawFood(colony, LARVA_FOOD_PER_TICK)) {
+    if (withdrawFood(world, colony, LARVA_FOOD_PER_TICK)) {
       ants.starvationTimer[id] = STARVATION_GRACE_TICKS;
     } else {
       // Non-null assertion: id is a valid entity index, bounds verified by colony.larvae membership.
@@ -452,9 +249,9 @@ export function tickDeathCleanup(world: WorldState, colony: ColonyRecord): void 
  * The recount pass (PRD §2) filters alive===1 entities in each bucket and
  * corrects eggCount, larvaeCount, workerCount. Doubles as a cleanup pass —
  * dead slots found during recount are swap-removed from the bucket.
- * Issue #15: also clamps `colony.foodStored` to [0, BASE_FOOD_STORAGE_CAPACITY]
- * and each FoodStorage chamber's `foodStored` to [0, FOOD_CHAMBER_CAPACITY] —
- * defensive only; the deposit/withdraw paths cap at their own sources.
+ * Issue #15: also clamps the entrance pool to [0, BASE_FOOD_STORAGE_CAPACITY]
+ * and each FoodStorage chamber's stock to [0, FOOD_CHAMBER_CAPACITY]
+ * (`clampColonyFoodStores`) — defensive only; deposit/withdraw cap at their sources.
  * NEVER redistributes food across chambers (that was the pre-#15 magic-fill bug).
  * Resets reconcileCountdown to RECONCILE_INTERVAL_TICKS after recount.
  *
@@ -504,21 +301,10 @@ export function tickReconcile(world: WorldState, colony: ColonyRecord): void {
   }
   colony.workerCount = workerCount;
 
-  // Food validation (issue #15 — chamber-authoritative model):
-  // chamber.foodStored is authoritative per FoodStorage chamber; colony.foodStored
-  // is the entrance-shaft fallback pool. Deposits + withdraws clamp at their
-  // sources, so reconcile is a defensive backstop against drift. NEVER redistribute
-  // across chambers — that was the old magic-fill bug fixed in #15.
-  if (colony.foodStored < 0) colony.foodStored = 0;
-  if (colony.foodStored > BASE_FOOD_STORAGE_CAPACITY) {
-    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
-  }
-  for (let i = 0; i < colony.chambers.length; i++) {
-    const ch = colony.chambers[i]!;
-    if (ch.chamberType !== ChamberType.FoodStorage) continue;
-    if (ch.foodStored < 0) ch.foodStored = 0;
-    if (ch.foodStored > FOOD_CHAMBER_CAPACITY) ch.foodStored = FOOD_CHAMBER_CAPACITY;
-  }
+  // Food validation (issue #15 — chamber-authoritative model): a defensive clamp
+  // of the pool and each FoodStorage chamber's stock. Deposits + withdraws cap at
+  // their sources; this never redistributes across chambers (the #15 magic-fill bug).
+  clampColonyFoodStores(world, colony);
 
   // Recompute allocation with corrected counts (PRD §2 reconcile contract +
   // 09 reproduction-gate memo: nursing requires a completed Nursery chamber).
@@ -601,12 +387,16 @@ export function checkPendingChambers(world: WorldState): void {
       colony.chambers.push({
         chamberId,
         chamberType: pc.chamberType,
+        // The record type still requires the field; createChamberStock below owns
+        // the chamber's stock. TODO(#290 PR 2): removed with the field when the
+        // located food store replaces it (the stock moves to ChamberRecord.foodSlot).
         foodStored: 0,
         posX: pc.anchorTileX << FP_SHIFT,
         posY: pc.anchorTileY << FP_SHIFT,
         width: pc.width,
         height: pc.height,
       });
+      createChamberStock(world, colony, colony.chambers[colony.chambers.length - 1]!);
       // #235 — a new chamber changes the pickup/deposit field seed sets (a Nursery
       // enters the deposit seeds + pickup's inside-Nursery exclusion). The normal
       // dug-to-completion path is covered by the completing tile-flip's

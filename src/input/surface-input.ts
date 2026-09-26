@@ -26,7 +26,7 @@
 import type { WorldState } from '../sim/types.js';
 import type { ViewState } from '../render/camera.js';
 import { screenToWorld } from '../render/camera-adapter.js';
-import type { FoodPile } from '../sim/food.js';
+import { pileAtTile, pileRender, type PileView } from '../sim/food/food-api.js';
 import type {
   MarkFoodPileCommand,
   DesignateEntranceCommand,
@@ -67,9 +67,7 @@ export function isEmptySurfaceTile(world: WorldState, tileX: number, tileY: numb
   if (tileX >= world.surface.width || tileY >= world.surface.height) return false;
 
   // Check not a food pile
-  for (const pile of world.foodPiles) {
-    if (pile.tileX === tileX && pile.tileY === tileY) return false;
-  }
+  if (pileAtTile(world, tileX, tileY) >= 0) return false;
 
   // Check not a colony entrance — iterate colonies via Object.keys (ADR-0006)
   for (const key of Object.keys(world.colonies)) {
@@ -159,18 +157,16 @@ export function isForeignColonyEntrance(
 }
 
 // ---------------------------------------------------------------------------
-// findFoodPileAt — O(n) scan over world.foodPiles
+// findFoodPileAt — pile lookup by tile through the food facade
 // ---------------------------------------------------------------------------
 
 /**
- * Returns the FoodPile at (tileX, tileY) or null if none.
+ * Returns a read-only view of the pile at (tileX, tileY), or null if none.
  * Called by handleSurfaceCommandTap when no spider was hit.
  */
-export function findFoodPileAt(world: WorldState, tileX: number, tileY: number): FoodPile | null {
-  for (const pile of world.foodPiles) {
-    if (pile.tileX === tileX && pile.tileY === tileY) return pile;
-  }
-  return null;
+export function findFoodPileAt(world: WorldState, tileX: number, tileY: number): PileView | null {
+  const slot = pileAtTile(world, tileX, tileY);
+  return slot >= 0 ? pileRender(world, slot) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -377,8 +373,8 @@ export function handleSurfaceCommandTap(
     const cmd: MarkFoodPileCommand = {
       type: 'MarkFoodPile',
       colonyId: playerColonyId,
-      tileX: pile.tileX,
-      tileY: pile.tileY,
+      tileX: pile.x,
+      tileY: pile.y,
       issuedAtTick: world.tick,
     };
     return !enqueueCommand(world, cmd, isPaused);

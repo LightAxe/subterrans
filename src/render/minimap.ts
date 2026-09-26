@@ -29,6 +29,7 @@ import { isAlive } from '../sim/ant/ant-store.js';
 import { sgGet } from '../sim/terrain.js';
 import { spatialHash } from './terrain-noise.js';
 import type { WorldState } from '../sim/types.js';
+import { pileCount, pileSlotAt, pileTileX, pileTileY } from '../sim/food/food-api.js';
 import type { ViewState } from './camera.js';
 import {
   SURFACE_WORLD_PX_W,
@@ -111,9 +112,11 @@ export function drawMinimap(
   // this per-frame path draws only the DYNAMIC overlays on top of it.
 
   // Food piles (2x2 pixels per pile)
-  for (const pile of world.foodPiles) {
-    const px = mm.x + pile.tileX * sx;
-    const py = mm.y + pile.tileY * sy;
+  const nPiles = pileCount(world);
+  for (let o = 0; o < nPiles; o++) {
+    const slot = pileSlotAt(world, o);
+    const px = mm.x + pileTileX(world, slot) * sx;
+    const py = mm.y + pileTileY(world, slot) * sy;
     gfx.fillStyle(COLOR_FOOD_PILE_NORMAL, 1);
     gfx.fillRect(px - 1, py - 1, 2, 2);
   }
