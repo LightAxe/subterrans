@@ -29,6 +29,7 @@ import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import {
   FLEE_THRESHOLD,
   FLEE_HOMEBOUND_PUSH_THROUGH_TILES,
+  IDLE_MILL_TICK_DIVISOR,
   BASE_FOOD_STORAGE_CAPACITY,
   FOOD_CHAMBER_CAPACITY,
   SHELTER_COOLDOWN_TICKS,
@@ -2470,6 +2471,74 @@ describe('V49 (#322) — the alarm musters civilians home under a full camp', ()
       expect([version, world.ants.targetPosX[exposed]]).toEqual([version, -1]);
     }
   });
+
+  it('through tick(): an idle worker mustering home walks every tick, not at the mill saunter', () => {
+    const { world, ent } = campedWorld(SIM_VERSION_V49_ALARM_MUSTER);
+    // Start on a mill off-tick so a throttled mill step would not move it.
+    while (world.tick % IDLE_MILL_TICK_DIVISOR === IDLE_MILL_TICK_DIVISOR - 1) tick(world, []);
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 25,
+      ent.surfaceTileY,
+      AntTask.Idle,
+    );
+    let moves = 0;
+    let lastX = world.ants.posX[id]!;
+    let lastY = world.ants.posY[id]!;
+    for (let t = 0; t < 2 * IDLE_MILL_TICK_DIVISOR; t++) {
+      tick(world, []);
+      if (world.ants.posX[id] !== lastX || world.ants.posY[id] !== lastY) moves++;
+      lastX = world.ants.posX[id]!;
+      lastY = world.ants.posY[id]!;
+    }
+    // A throttled mill step moves at most twice in 2 × IDLE_MILL_TICK_DIVISOR ticks.
+    expect(moves).toBeGreaterThan(3);
+  });
+
+  it.each([3, 7])(
+    'through tick(): a carrier gets past idle workers queued on its approach lane (seed %i)',
+    (seed) => {
+      const world = createScenario(seed);
+      world.spider = null;
+      world.simVersion = SIM_VERSION_V49_ALARM_MUSTER;
+      const ent = openEntrance(world, PLAYER_COLONY_ID);
+      world.colonies[PLAYER_COLONY_ID]!.alarmActive = true;
+      const camp = (): void =>
+        seedDanger(
+          world,
+          PLAYER_COLONY_ID,
+          ent.surfaceTileX,
+          ent.surfaceTileY,
+          1,
+          FLEE_THRESHOLD * 8,
+        );
+      camp();
+      // Idle workers queued three deep across the northern approach, from the doorstep edge out.
+      const D = FLEE_HOMEBOUND_PUSH_THROUGH_TILES;
+      for (let k = 0; k < 3; k++) {
+        for (let s = -1; s <= 1; s++)
+          spawnWorker(
+            world,
+            PLAYER_COLONY_ID,
+            ent.surfaceTileX + s,
+            ent.surfaceTileY - D - k,
+            AntTask.Idle,
+          );
+      }
+      const carrier = returningForager(world, ent.surfaceTileX, ent.surfaceTileY - D - 6);
+      let crossed = false;
+      for (let t = 0; t < 200 && !crossed; t++) {
+        camp();
+        tick(world, []);
+        const d =
+          Math.abs((world.ants.posX[carrier]! >> FP_SHIFT) - ent.surfaceTileX) +
+          Math.abs((world.ants.posY[carrier]! >> FP_SHIFT) - ent.surfaceTileY);
+        if (world.ants.zone[carrier] !== Zone.Surface || d < D) crossed = true;
+      }
+      expect(crossed).toBe(true);
+    },
+  );
 
   it('through tick(): under a full camp every civilian ends up home, none frozen out in the open (V48 froze some)', () => {
     for (const [version, allHome] of [

@@ -911,6 +911,42 @@ function setMusterTarget(
   ants.targetPosY[id] = (best.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1);
 }
 
+/**
+ * #322 (V49): an idle surface worker mustering home under its colony's alarm
+ * (not fleeing: step 15b found no safe entrance). It neither claims a tile nor
+ * is bumped in the same-colony occupancy pass, so idle workers waiting outside
+ * the doorstep never block the carriers' approach lane.
+ */
+export function idleMusterPassesThroughFriends(world: WorldState, id: number): boolean {
+  if (world.simVersion < SIM_VERSION_V49_ALARM_MUSTER) return false;
+  const ants = world.ants;
+  if (ants.task[id] !== AntTask.Idle || ants.zone[id] !== ZONE_SURFACE) return false;
+  if (ants.fleeShelterUntilTick[id] !== -1) return false;
+  return world.colonies[ants.colonyId[id]!]?.alarmActive === true;
+}
+
+/**
+ * #322 (V49): an idle worker walking home to muster — its target is one of its
+ * own open entrance tiles (setMusterTarget) — steps by the colony's surface
+ * entrance flow field, as a homebound forager does, so it gets round obstacles.
+ * A spider-scatter target is never an entrance tile, so it keeps its own step.
+ */
+export function idleMustersHome(world: WorldState, id: number): boolean {
+  if (!idleMusterPassesThroughFriends(world, id)) return false;
+  const ants = world.ants;
+  const tx = ants.targetPosX[id]!;
+  if (tx === -1) return false;
+  const colony = world.colonies[ants.colonyId[id]!];
+  if (!colony || !colony.entrances) return false;
+  const tileX = tx >> FP_SHIFT;
+  const tileY = ants.targetPosY[id]! >> FP_SHIFT;
+  for (let e = 0; e < colony.entrances.length; e++) {
+    const ent = colony.entrances[e]!;
+    if (ent.isOpen && ent.surfaceTileX === tileX && ent.surfaceTileY === tileY) return true;
+  }
+  return false;
+}
+
 /** DangerTrail at an entrance's surface tile (0 if no grid). Guards the flee gate. */
 function entranceDanger(dangerGrid: PheromoneGrid | undefined, ent: NestEntrance): number {
   if (dangerGrid === undefined) return 0;

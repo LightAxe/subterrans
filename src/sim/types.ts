@@ -1005,9 +1005,10 @@ export const SIM_VERSION_V48_SENTRY_WALK_HOME = 48 as const;
  *     breaks out to search again;
  *   - a returning forager descends its own open entrance, as a carrier does;
  *   - step 9b does not demote a searcher to Idle (9c recalls it instead);
- *   - an idle worker on a quiet tile walks toward its nearest open entrance and
- *     waits just outside the doorstep (FLEE_HOMEBOUND_PUSH_THROUGH_TILES), so
- *     the lane carriers push through stays clear.
+ *   - an idle worker on a quiet tile walks toward its nearest open entrance by
+ *     the surface entrance flow field (round obstacles) and waits just outside
+ *     the doorstep (FLEE_HOMEBOUND_PUSH_THROUGH_TILES); mustering idle workers
+ *     neither claim a tile nor are bumped, so they never block a carrier.
  * A recalled searcher's leash wave is parked as -(wave + 1) and restored exactly
  * when it reaches home or turns back to searching, so a recall never counts as a
  * failed search.

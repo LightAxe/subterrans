@@ -81,7 +81,11 @@ import {
   unpackStepDy,
 } from './ant-motion.js';
 import { collectAliveQueenIds, moveQueens } from './ant-queens.js';
-import { holdAlarmedCivilianAtShaft } from './idle-reserve.js';
+import {
+  holdAlarmedCivilianAtShaft,
+  idleMusterPassesThroughFriends,
+  idleMustersHome,
+} from './idle-reserve.js';
 import { clearRecentTiles, isRecentTile, pushRecentTile } from './ant-store.js';
 
 // #231 — the per-tick surface-movement cache (issue #67, ~16 KB Uint8Array) now
@@ -967,7 +971,30 @@ export function tickAntMovement(
       // IDLE_MILL_TICK_DIVISOR ticks so the reserve saunters rather than darts.
       // Straight-line cardinal step; the surface soft-cost / detour post-pass
       // below handles feature avoidance. On off-ticks the ant holds (dx/dy = 0).
-      if (world.tick % IDLE_MILL_TICK_DIVISOR === 0) {
+      // #322 (V49): an idle worker mustering home under the alarm walks every
+      // tick by the surface entrance flow field (obstacle-aware), as a homebound
+      // forager does; off the field it keeps the straight-line step.
+      let musterStepped = false;
+      if (entranceFlowFields !== undefined && idleMustersHome(world, id)) {
+        const surfaceField = entranceFlowFields.surface[ants.colonyId[id]!];
+        const tileX = ants.posX[id]! >> FP_SHIFT;
+        const tileY = ants.posY[id]! >> FP_SHIFT;
+        if (
+          surfaceField &&
+          tileX >= 0 &&
+          tileX < SURFACE_GRID_WIDTH &&
+          tileY >= 0 &&
+          tileY < SURFACE_GRID_HEIGHT
+        ) {
+          const sDir = surfaceField[tileY * SURFACE_GRID_WIDTH + tileX]!;
+          if (sDir >= 0 && sDir < 4) {
+            dx = DIR_DX[sDir]!;
+            dy = DIR_DY[sDir]!;
+            musterStepped = true;
+          }
+        }
+      }
+      if (!musterStepped && world.tick % IDLE_MILL_TICK_DIVISOR === 0) {
         const posX = ants.posX[id]!;
         const posY = ants.posY[id]!;
         const step = pickCardinalStep(
@@ -1804,6 +1831,8 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     // V43 (#323) / V44 (#325): a sentry walking to its post, or a tunnel defender
     // holding or walking to its post, neither claims a tile nor is bumped.
     if (sentryPassesThroughFriends(world, id) || defenderPassesThroughFriends(world, id)) continue;
+    // #322 (V49): nor does an idle worker mustering home under the alarm.
+    if (idleMusterPassesThroughFriends(world, id)) continue;
 
     // Issue #108 (v13+) — zero the gridColonyId portion of the key when
     // zone === Surface. Mirrors combat tile-key encoding (tile-key.ts:56);
