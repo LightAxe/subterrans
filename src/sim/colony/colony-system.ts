@@ -19,7 +19,9 @@
 //     reset to STARVATION_GRACE_TICKS and decremented per failed meal — the same
 //     death tick.
 //   Both branches share the same if/else — the else IS step 4.
-//   Workers and fighters do not eat yet (#290 PR 4) — no worker consumption loop.
+//   Workers and fighters eat from V51 (#290 PR 4), after the queen and larvae —
+//   at home from the stores (above a queen reserve), away from their own load
+//   (feedWorkerOrStarve).
 //
 // tickStarvationCheck is a named step slot for forward compatibility only.
 // Phase 7+ may introduce non-food starvation sources (environmental hazards).
@@ -33,18 +35,32 @@ import {
   allocateEntityId,
   INVALID_ENTITY_ID,
   SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
+  SIM_VERSION_V51_UNIFIED_HUNGER,
 } from '../types.js';
 import type { ColonyRecord } from './colony-store.js';
 import type { ColonyId } from './colony-store.js';
-import { RECONCILE_INTERVAL_TICKS, NURSE_MIN_WORKERS } from '../constants.js';
+import {
+  RECONCILE_INTERVAL_TICKS,
+  NURSE_MIN_WORKERS,
+  QUEEN_MEAL_RESERVE_FP,
+} from '../constants.js';
 import {
   clampColonyFoodStores,
+  colonyFoodTotal,
   createChamberStock,
   foodStoreHasFreeSlot,
   withdrawFood,
 } from '../food/food-api.js';
-import { LARVA_HUNGER, QUEEN_HUNGER, ticksSinceMeal, type HungerProfile } from '../hunger.js';
-import { ChamberType } from '../enums.js';
+import {
+  antIsAtHome,
+  LARVA_HUNGER,
+  QUEEN_HUNGER,
+  ticksSinceMeal,
+  workerHungerProfile,
+  type HungerProfile,
+} from '../hunger.js';
+import { AntTask, ChamberType } from '../enums.js';
+import { resetCarrierToIdle } from '../ant/ant-store.js';
 import { allocateWorkers } from '../behavior/allocation-system.js';
 import { ugGet, ugSet, UndergroundTileState } from '../terrain.js';
 import { findEmbeddedByTightening } from '../underground-occupancy.js';
@@ -107,8 +123,8 @@ export function largestNurseryTileCount(colony: ColonyRecord): number {
 // Step 3 (feed):          meal due + withdrawFood success → lastMealTick = world.tick
 // Step 4 (starve-on-fail): withdrawFood failure → kill once ticks since meal ≥ starve-after
 //
-// Queen processed first (CLNY-04); larvae processed in order (CLNY-05).
-// Workers and fighters: no meals until #290 PR 4 → skipped entirely.
+// Queen processed first (CLNY-04); larvae processed in order (CLNY-05); then,
+// from V51, workers and fighters in `colony.workers` order (#288).
 // ---------------------------------------------------------------------------
 
 /**
@@ -146,13 +162,63 @@ function feedOrStarve(
 }
 
 /**
- * Feed queen and each live larva from the colony food stores.
+ * One worker's or fighter's meal (#288, V51). Its profile is read now
+ * (`workerHungerProfile`: FIGHTER_HUNGER while Fighting, else WORKER_HUNGER).
+ * When a meal is due:
+ *   - AT HOME (`antIsAtHome`) it draws `mealFp` from the colony stores, unless
+ *     that would leave them below QUEEN_MEAL_RESERVE_FP: the queen eats first,
+ *     so in a famine workers go hungry before she does;
+ *   - AWAY and carrying food — or at home when the stores cannot spare a meal —
+ *     it eats `min(mealFp, load)` from its load (carried rations); a forager
+ *     that eats its last bite goes Idle, as after a full deposit;
+ *   - otherwise (empty-handed, away or unfed at home) it cannot eat.
+ * A meal it could not have at or past its starve-after kills it (`despawnAnt`,
+ * 'starvation'; no corpse food — only kills drop food, V37).
+ */
+function feedWorkerOrStarve(world: WorldState, colony: ColonyRecord, id: number): void {
+  const ants = world.ants;
+  const profile = workerHungerProfile(world, id);
+  const sinceMeal = ticksSinceMeal(world, id);
+  if (sinceMeal < profile.mealIntervalTicks) return;
+  const meal = profile.mealFp;
+  if (
+    antIsAtHome(world, id) &&
+    colonyFoodTotal(world, colony) - meal >= QUEEN_MEAL_RESERVE_FP &&
+    withdrawFood(world, colony, meal)
+  ) {
+    ants.lastMealTick[id] = world.tick;
+    return;
+  }
+  // Away — or at home when the stores cannot spare a meal — an ant carrying
+  // food eats from its load rather than starve holding it.
+  const load = ants.foodCarrying[id]!;
+  if (load > 0) {
+    ants.lastMealTick[id] = world.tick;
+    if (load > meal) {
+      ants.foodCarrying[id] = load - meal;
+      return;
+    }
+    // It ate its last bite (a partial meal counts as a meal): like a full
+    // deposit (antDepositFood's E-01 idle checkpoint), the empty carrier goes
+    // Idle for step 10a with a clean excursion state.
+    ants.foodCarrying[id] = 0;
+    if (ants.task[id] === AntTask.Foraging) resetCarrierToIdle(ants, id);
+    return;
+  }
+  if (sinceMeal >= profile.starveAfterTicks) {
+    despawnAnt(world, id, { cause: 'starvation' });
+  }
+}
+
+/**
+ * Feed the queen, each live larva and (from V51) each live worker from the colony
+ * food stores.
  *
  * PRD §4c lines 1052-1085, re-expressed on the per-kind hunger profiles (#288):
  * queen first (CLNY-04, QUEEN_HUNGER), then each live larva in `colony.larvae`
- * order (CLNY-05, LARVA_HUNGER). See `feedOrStarve`.
- *
- * Workers and fighters: no worker loop until #290 PR 4.
+ * order (CLNY-05, LARVA_HUNGER), then from V51 each live worker and fighter in
+ * `colony.workers` order (WORKER_HUNGER / FIGHTER_HUNGER). See `feedOrStarve`
+ * and `feedWorkerOrStarve`.
  */
 export function tickFoodConsumption(world: WorldState, colony: ColonyRecord): void {
   const ants = world.ants;
@@ -168,7 +234,15 @@ export function tickFoodConsumption(world: WorldState, colony: ColonyRecord): vo
     feedOrStarve(world, colony, id, LARVA_HUNGER);
   }
 
-  // Workers and fighters eat from #290 PR 4 (a V51-gated loop here).
+  // Workers and fighters (V51, #290 PR 4) — after the queen and larvae, so the
+  // colony feeds the queen first. A V50 world never runs this loop.
+  if (world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER) {
+    for (let i = 0; i < colony.workers.length; i++) {
+      const id = colony.workers[i]!;
+      if (ants.alive[id] !== 1) continue;
+      feedWorkerOrStarve(world, colony, id);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

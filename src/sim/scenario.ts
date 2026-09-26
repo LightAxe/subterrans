@@ -270,7 +270,9 @@ function initColony(
       posX: startX << FP_SHIFT,
       posY: startY << FP_SHIFT,
       task: AntTask.Idle,
-      lastMealTick: world.tick,
+      // #290 PR 4 (V51): fed on the tick before the first, like the queen, so a
+      // tick-0 snapshot's clocks lie in the between-ticks window the save checks.
+      lastMealTick: world.tick - 1,
     });
     colony.workers.push(workerId);
     colony.workerCount += 1;

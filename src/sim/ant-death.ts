@@ -1,8 +1,8 @@
 // ant-death.ts — the single ant-death chokepoint (#289).
 //
 // Every production ant death routes through `despawnAnt`: combat and spider kills
-// (combat.ts, via the `killAnt` sugar below), queen and larva starvation
-// (colony-system.ts tickFoodConsumption) and the worker lifespan check
+// (combat.ts, via the `killAnt` sugar below), starvation (colony-system.ts
+// tickFoodConsumption: queen and larva, and from V51 worker/fighter) and the worker lifespan check
 // (lifecycle-system.ts). Before #289 only the kills had a write path — `killAnt`
 // lived in combat.ts — while the starvation and lifespan sites flipped `alive = 0`
 // inline with their own subset of the cleanup, so an on-death hook (corpse food,
@@ -184,10 +184,9 @@ export function despawnAnt(world: WorldState, antIndex: number, death: AntDeath)
 
   // 6. S2 — increment operation death counters if an active operation is running.
   // From V41 a non-kill death reaches this too: a committed-cohort fighter that
-  // starved or aged out is a lost attacker like any other. No adult can do either
-  // today (WORKER_FOOD_PER_TICK 0, WORKER_LIFESPAN_TICKS INT32_MAX), so this is
-  // reachable only by a Phase 7+ upkeep/lifespan change — which is when it should
-  // start counting.
+  // starved or aged out is a lost attacker like any other. From V51 (#290 PR 4)
+  // workers and fighters eat and can starve, so this counts them; no adult ages
+  // out (WORKER_LIFESPAN_TICKS is INT32_MAX).
   // QC Pass 4 AR-P1-001: precise predicates using committed-cohort lookup.
   // CLNY-08: no direct PLAYER_COLONY_ID / ENEMY_COLONY_ID equality branching.
   // Instead, iterate world.aiState to find any active operation that involves this death.
