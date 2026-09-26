@@ -1562,6 +1562,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       w.tick = 0x7fffffff;
       for (const c of Object.values(w.colonies)) {
         setMealsUntilStarvationForTest(w, c.queenEntityId, QUEEN_HUNGER, 300);
+        for (const id of c.workers) w.ants.lastMealTick[id] = w.tick - 1; // V51 worker clocks
       }
       const s = serializeWorldState(w);
       expect(deserializeWorldState(s).tick).toBe(0x7fffffff);
