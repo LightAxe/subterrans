@@ -221,6 +221,22 @@ describe('tickFoodConsumption — worker meals (V51)', () => {
     expect(colonyFoodTotal(world, colony)).toBe(2000 - QUEEN_FOOD_PER_TICK);
   });
 
+  it('a load of exactly one meal is its last bite: empty, and Idle', () => {
+    const { world, colony } = setup(2000);
+    const id = addWorker(
+      world,
+      colony,
+      { kind: 'surface', x: DOOR_X + 40, y: DOOR_Y },
+      WORKER_MEAL_INTERVAL_TICKS,
+      AntTask.Foraging,
+    );
+    world.ants.subTask[id] = ForagingSubState.CarryingFood;
+    world.ants.foodCarrying[id] = WORKER_MEAL_FP;
+    consume(world, colony);
+    expect(world.ants.foodCarrying[id]).toBe(0);
+    expect(world.ants.task[id]).toBe(AntTask.Idle);
+  });
+
   it('a carrier that eats its last bite away from home goes Idle, like a full deposit', () => {
     const { world, colony } = setup(2000);
     const id = addWorker(

@@ -190,6 +190,53 @@ describe('D11 — a hungry fighter at a distant rally walks home, eats and retur
     expect(sawDiagonal).toBe(0);
   });
 
+  it('leaves a CROWDED corner rally: fed friends holding the tiles round it do not bump it back', () => {
+    // Seed 15, a rally in the map's north-east corner with a fed fighter on
+    // each of the 9 walkable tiles within 2 of it. Bumped by the same-colony occupancy pass, the
+    // hungry walker (the highest id) was pushed back onto the rally every tick and
+    // starved there (reviewer's probe: seed 15, rally (125,2)); walking home to
+    // eat it passes through friends, as V43 sentries and V49 musterers do.
+    const world = createScenario(15, 'Normal');
+    world.spider = null;
+    world.aiState = [];
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    setPoolFoodForTest(world, colony, 2000);
+    const rally = { x: 125, y: 2 };
+    expect(isSurfaceTileInComponent(world, rally.x, rally.y)).toBe(true);
+    colony.rallyPoint = { tileX: rally.x, tileY: rally.y };
+    let friends = 0;
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        if (Math.abs(dx) + Math.abs(dy) > 2) continue;
+        if (!isSurfaceTileInComponent(world, rally.x + dx, rally.y + dy)) continue;
+        addFighter(world, rally.x + dx, rally.y + dy, 0);
+        friends++;
+      }
+    }
+    expect(friends).toBe(9);
+    const id = addFighter(world, rally.x, rally.y, FIGHTER_WALK_HOME_HUNGER_TICKS);
+    const lastBefore = world.ants.lastMealTick[id]!;
+    for (let t = 0; t < 1300 && world.ants.lastMealTick[id] === lastBefore; t++) {
+      tick(world, []);
+      expect(world.ants.alive[id]).toBe(1);
+    }
+    expect(world.ants.lastMealTick[id]).not.toBe(lastBefore); // it got home and ate
+  }, 30_000);
+
+  it('a hungry surface fighter of a tunnel-defence colony (rally on its own door) goes in, not waits', () => {
+    const world = quietWorld();
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const door = playerDoor(world);
+    colony.rallyPoint = { tileX: door.x, tileY: door.y };
+    const id = addFighter(world, door.x + 3, door.y, FIGHTER_WALK_HOME_HUNGER_TICKS + 10);
+    setPoolFoodForTest(world, colony, 0); // unfed at home
+    updateFightAntTargets(world);
+    expect(fighterWalksHomeToEat(world, id)).toBe(false);
+    // Ordinary tunnel-defence routing: onto its own door to go down, not a hold.
+    expect(world.ants.targetPosX[id]! >> FP_SHIFT).toBe(door.x);
+    expect(world.ants.targetPosY[id]! >> FP_SHIFT).toBe(door.y);
+  });
+
   it('a fed fighter at the same rally stays put', () => {
     const world = quietWorld();
     const colony = world.colonies[PLAYER_COLONY_ID]!;
@@ -419,6 +466,37 @@ describe('D11 — a hungry invader climbs out of the enemy nest', () => {
     updateFightAntTargets(world);
     expect(fighterWalksHomeToEat(world, id)).toBe(false);
     world.ants.combatOpponentId[id] = -1;
+    updateFightAntTargets(world);
+    expect(fighterWalksHomeToEat(world, id)).toBe(true);
+  });
+
+  it('cohort-mates beside it, or an enemy in another grid or on the surface, do not keep it', () => {
+    const { world, id, shaftX } = invader(FIGHTER_WALK_HOME_HUNGER_TICKS + 10);
+    // A fed cohort-mate (own colony) one tile away in the same foreign nest.
+    const mate = addFighter(world, shaftX, 0, 0);
+    world.ants.zone[mate] = Zone.Underground;
+    world.ants.currentGridColonyId[mate] = ENEMY_COLONY_ID;
+    world.ants.posY[mate] = (1 << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posX[mate] = ((shaftX + 1) << FP_SHIFT) + (FP_ONE >> 1);
+    // Enemy ants at the same coordinates but not in this grid: one on the
+    // surface, one below ground in the PLAYER's nest.
+    const enemy = world.colonies[ENEMY_COLONY_ID]!;
+    for (const [zone, grid] of [
+      [Zone.Surface, ENEMY_COLONY_ID],
+      [Zone.Underground, PLAYER_COLONY_ID],
+    ] as const) {
+      const eid = allocateEntityId(world);
+      initAnt(world.ants, eid, {
+        colonyId: ENEMY_COLONY_ID,
+        posX: (shaftX << FP_SHIFT) + (FP_ONE >> 1),
+        posY: (2 << FP_SHIFT) + (FP_ONE >> 1),
+        task: AntTask.Idle,
+        zone,
+      });
+      world.ants.currentGridColonyId[eid] = grid;
+      enemy.workers.push(eid);
+      enemy.workerCount += 1;
+    }
     updateFightAntTargets(world);
     expect(fighterWalksHomeToEat(world, id)).toBe(true);
   });
