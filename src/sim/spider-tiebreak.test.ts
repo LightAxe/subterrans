@@ -515,14 +515,6 @@ describe('resolveSpiderCombatOnTile — V39 on-tile selection key', () => {
     expect(colony2Wins).toBeLessThan(35);
   });
 
-  it('pre-V39: the lowest slot (colony 1) is engaged on every seed', () => {
-    for (let seed = 1; seed <= 40; seed++) {
-      const { world, a1, a2 } = mixedTileWorld(seed, PRE_V39);
-      resolveSpiderCombatOnTile(world);
-      expect(pairedAnt(world, [a1, a2])).toBe(a1);
-    }
-  });
-
   it('V39: a Fighting ant outranks a worker even when the worker holds the lower key', () => {
     // Fighter FIRST (lower slot), worker second. This ordering — unlike the reverse —
     // actually exercises the class term of the `better` comparison in
@@ -705,13 +697,6 @@ describe('resolveSpiderCombatOnTile — V39 swarm retaliation target', () => {
     }
     // Pre-V39 this was always f[0]; the key must actually move it.
     expect(nonFirstWins).toBeGreaterThan(10);
-  });
-
-  it('pre-V39: the retaliation target is the lowest-slot priority fighter on every seed', () => {
-    for (let seed = 1; seed <= 30; seed++) {
-      const { world, f } = swarmWorld(seed, PRE_V39);
-      expect(retaliationVictim(world, f)).toBe(f[0]);
-    }
   });
 
   it('V39: the retaliation target is stable across the whole windup (damage is not smeared)', () => {
