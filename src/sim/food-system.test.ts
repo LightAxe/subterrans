@@ -12,7 +12,17 @@ import { describe, it, expect } from 'vitest';
 import { createScenario } from './scenario.js';
 import { tick } from './tick.js';
 import { tickFoodPileSpawn } from './food-system.js';
-import { recordFoodPileDepletion } from './food/food-api.js';
+import {
+  recordFoodPileDepletion,
+  pileCount,
+  pileSlotAt,
+  pileFoodId,
+  pileTileX,
+  pileTileY,
+  pileAmountFp,
+  pileInitialFp,
+} from './food/food-api.js';
+import { clearPilesForTest, pilesForTest, setPilesForTest } from './food/food-test-utils.js';
 import { Rng } from './rng.js';
 import {
   PLAYER_COLONY_ID,
@@ -26,6 +36,7 @@ import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
   MAX_ENTITIES,
+  FOOD_PICKUP_AMOUNT,
 } from './constants.js';
 
 // ---------------------------------------------------------------------------
@@ -35,13 +46,13 @@ import {
 describe('recordFoodPileDepletion', () => {
   it('appends a depletion record and clears matching colony.priorityFoodPileId', () => {
     const world = createScenario(42);
-    const target = world.foodPiles[0]!;
-    const targetTile = { tileX: target.tileX, tileY: target.tileY };
+    const targetSlot = pileSlotAt(world, 0);
+    const targetTile = { tileX: pileTileX(world, targetSlot), tileY: pileTileY(world, targetSlot) };
 
     // Designate it as the player colony's priority pile.
-    world.colonies[PLAYER_COLONY_ID]!.priorityFoodPileId = target.foodPileId;
+    world.colonies[PLAYER_COLONY_ID]!.priorityFoodPileId = pileFoodId(world, targetSlot);
 
-    recordFoodPileDepletion(world, 0);
+    recordFoodPileDepletion(world, targetSlot);
 
     // Record was appended.
     expect(world.recentlyDepletedFood.length).toBe(1);
@@ -66,7 +77,7 @@ describe('recordFoodPileDepletion', () => {
     expect(firstTickBefore).toBe(0);
 
     // Trigger one more append — oldest should be shifted off.
-    recordFoodPileDepletion(world, 0);
+    recordFoodPileDepletion(world, pileSlotAt(world, 0));
 
     expect(world.recentlyDepletedFood.length).toBe(FOOD_PILE_SOFT_CEILING);
     expect(world.recentlyDepletedFood[0]!.tick).not.toBe(firstTickBefore); // oldest dropped
@@ -74,12 +85,12 @@ describe('recordFoodPileDepletion', () => {
 
   it('does not clear priorityFoodPileId for unrelated piles', () => {
     const world = createScenario(42);
-    const otherPile = world.foodPiles[1]!;
-    world.colonies[PLAYER_COLONY_ID]!.priorityFoodPileId = otherPile.foodPileId;
+    const otherSlot = pileSlotAt(world, 1);
+    world.colonies[PLAYER_COLONY_ID]!.priorityFoodPileId = pileFoodId(world, otherSlot);
 
-    recordFoodPileDepletion(world, 0); // depletes pile at index 0, not the marked one
+    recordFoodPileDepletion(world, pileSlotAt(world, 0)); // depletes pile at index 0, not the marked one
 
-    expect(world.colonies[PLAYER_COLONY_ID]!.priorityFoodPileId).toBe(otherPile.foodPileId);
+    expect(world.colonies[PLAYER_COLONY_ID]!.priorityFoodPileId).toBe(pileFoodId(world, otherSlot));
   });
 });
 
@@ -90,31 +101,31 @@ describe('recordFoodPileDepletion', () => {
 describe('tickFoodPileSpawn — gating', () => {
   it('does not spawn at tick 0 even though 0 % INTERVAL === 0', () => {
     const world = createScenario(42);
-    const beforeCount = world.foodPiles.length;
+    const beforeCount = pileCount(world);
     expect(world.tick).toBe(0);
 
     tickFoodPileSpawn(world, new Rng(world.rngState));
 
-    expect(world.foodPiles.length).toBe(beforeCount);
+    expect(pileCount(world)).toBe(beforeCount);
   });
 
   it('does not spawn off-cycle (tick not divisible by interval)', () => {
     const world = createScenario(42);
-    const beforeCount = world.foodPiles.length;
+    const beforeCount = pileCount(world);
     world.tick = FOOD_PILE_SPAWN_INTERVAL_TICKS + 1; // off cycle by 1
 
     tickFoodPileSpawn(world, new Rng(world.rngState));
 
-    expect(world.foodPiles.length).toBe(beforeCount);
+    expect(pileCount(world)).toBe(beforeCount);
   });
 
   it('places a pile at tick == FOOD_PILE_SPAWN_INTERVAL_TICKS in an empty world', () => {
-    // Empty `foodPiles` removes any "too close to existing pile" rejection;
+    // Empty pile store removes any "too close to existing pile" rejection;
     // `createScenario(42)` provides colonies (so the spawn step has somewhere
     // to anchor distance checks). Across a wide RNG window, the rejection-
     // sampling loop reliably finds a passable tile in 1000 attempts.
     const world = createScenario(42);
-    world.foodPiles = [];
+    clearPilesForTest(world);
     const beforeCount = 0;
     world.tick = FOOD_PILE_SPAWN_INTERVAL_TICKS;
 
@@ -122,7 +133,7 @@ describe('tickFoodPileSpawn — gating', () => {
 
     // Strict: at least one new pile MUST land — anything weaker can't
     // distinguish a working spawner from a silently-broken one.
-    expect(world.foodPiles.length).toBe(beforeCount + 1);
+    expect(pileCount(world)).toBe(beforeCount + 1);
   });
 
   it('places at least one pile across multiple seeds at the spawn-cycle boundary', () => {
@@ -132,10 +143,10 @@ describe('tickFoodPileSpawn — gating', () => {
     let placements = 0;
     for (const seed of [1, 7, 13, 21, 42, 99, 100, 1234]) {
       const world = createScenario(seed);
-      world.foodPiles = [];
+      clearPilesForTest(world);
       world.tick = FOOD_PILE_SPAWN_INTERVAL_TICKS;
       tickFoodPileSpawn(world, new Rng(world.rngState));
-      placements += world.foodPiles.length;
+      placements += pileCount(world);
     }
     expect(placements).toBeGreaterThan(0);
   });
@@ -144,24 +155,26 @@ describe('tickFoodPileSpawn — gating', () => {
     const world = createScenario(42);
     // Clear scenario-seeded piles so the synthetic inflation below cannot
     // collide on tile keys with the deterministic scenario placements.
-    world.foodPiles = [];
+    clearPilesForTest(world);
     // Inflate to soft ceiling with synthetic piles at non-colliding tiles.
     // tileX = 100 + i is well outside the scenario placement range.
-    while (world.foodPiles.length < FOOD_PILE_SOFT_CEILING) {
-      world.foodPiles.push({
-        foodPileId: 9000 + world.foodPiles.length,
-        tileX: 100 + world.foodPiles.length,
+    const piles = [];
+    while (piles.length < FOOD_PILE_SOFT_CEILING) {
+      piles.push({
+        foodPileId: 9000 + piles.length,
+        tileX: 100 + piles.length,
         tileY: 0,
         pickupsRemaining: 50,
         pickupsInitial: 50,
       });
     }
-    expect(world.foodPiles.length).toBe(FOOD_PILE_SOFT_CEILING);
+    setPilesForTest(world, piles);
+    expect(pileCount(world)).toBe(FOOD_PILE_SOFT_CEILING);
     world.tick = FOOD_PILE_SPAWN_INTERVAL_TICKS;
 
     tickFoodPileSpawn(world, new Rng(world.rngState));
 
-    expect(world.foodPiles.length).toBe(FOOD_PILE_SOFT_CEILING); // no growth
+    expect(pileCount(world)).toBe(FOOD_PILE_SOFT_CEILING); // no growth
   });
 });
 
@@ -173,12 +186,13 @@ describe('tickFoodPileSpawn — placement constraints', () => {
   it('respects MIN_SEPARATION from existing piles', () => {
     const world = createScenario(42);
     world.tick = FOOD_PILE_SPAWN_INTERVAL_TICKS;
-    const before = world.foodPiles.map((p) => ({ tileX: p.tileX, tileY: p.tileY }));
+    const before = pilesForTest(world).map((p) => ({ tileX: p.tileX, tileY: p.tileY }));
 
     tickFoodPileSpawn(world, new Rng(world.rngState));
 
-    if (world.foodPiles.length === before.length + 1) {
-      const placed = world.foodPiles[world.foodPiles.length - 1]!;
+    if (pileCount(world) === before.length + 1) {
+      const placedSlot = pileSlotAt(world, pileCount(world) - 1);
+      const placed = { tileX: pileTileX(world, placedSlot), tileY: pileTileY(world, placedSlot) };
       for (const existing of before) {
         const dist =
           Math.abs(placed.tileX - existing.tileX) + Math.abs(placed.tileY - existing.tileY);
@@ -193,12 +207,13 @@ describe('tickFoodPileSpawn — placement constraints', () => {
     const player = world.colonies[PLAYER_COLONY_ID]!;
     // Add a rally point manually so the test exercises that code path too.
     player.rallyPoint = { tileX: 60, tileY: 60 };
-    const beforeLen = world.foodPiles.length;
+    const beforeLen = pileCount(world);
 
     tickFoodPileSpawn(world, new Rng(world.rngState));
 
-    if (world.foodPiles.length === beforeLen + 1) {
-      const placed = world.foodPiles[world.foodPiles.length - 1]!;
+    if (pileCount(world) === beforeLen + 1) {
+      const placedSlot = pileSlotAt(world, pileCount(world) - 1);
+      const placed = { tileX: pileTileX(world, placedSlot), tileY: pileTileY(world, placedSlot) };
       // Check distance to all entrances + rally points across all colonies.
       for (const colony of Object.values(world.colonies)) {
         for (const e of colony.entrances ?? []) {
@@ -220,7 +235,7 @@ describe('tickFoodPileSpawn — placement constraints', () => {
     const world = createScenario(42);
     world.tick = FOOD_PILE_SPAWN_INTERVAL_TICKS;
     // Carve out the entire surface from existing piles for a clearer test.
-    world.foodPiles = [];
+    clearPilesForTest(world);
     // Mark a wide swath of tiles as recently depleted.
     for (let x = 0; x < SURFACE_GRID_WIDTH; x += FOOD_PILE_MIN_SEPARATION + 2) {
       for (let y = 0; y < SURFACE_GRID_HEIGHT; y += FOOD_PILE_MIN_SEPARATION + 2) {
@@ -232,8 +247,9 @@ describe('tickFoodPileSpawn — placement constraints', () => {
     tickFoodPileSpawn(world, new Rng(world.rngState));
 
     // If a pile placed, it must be >= MIN_SEPARATION from every fresh recent entry.
-    if (world.foodPiles.length === 1) {
-      const placed = world.foodPiles[0]!;
+    if (pileCount(world) === 1) {
+      const placedSlot = pileSlotAt(world, 0);
+      const placed = { tileX: pileTileX(world, placedSlot), tileY: pileTileY(world, placedSlot) };
       for (const r of world.recentlyDepletedFood) {
         const age = world.tick - r.tick;
         if (age > FOOD_PILE_RECENT_DEPLETION_TICKS) continue; // pruned/stale
@@ -263,15 +279,17 @@ describe('tickFoodPileSpawn — placement constraints', () => {
   it('initial pickups land within [MIN, MAX] for spawned piles', () => {
     const world = createScenario(42);
     world.tick = FOOD_PILE_SPAWN_INTERVAL_TICKS;
-    const beforeLen = world.foodPiles.length;
+    const beforeLen = pileCount(world);
 
     tickFoodPileSpawn(world, new Rng(world.rngState));
 
-    if (world.foodPiles.length === beforeLen + 1) {
-      const placed = world.foodPiles[world.foodPiles.length - 1]!;
-      expect(placed.pickupsRemaining).toBeGreaterThanOrEqual(FOOD_PILE_INITIAL_PICKUPS_MIN);
-      expect(placed.pickupsRemaining).toBeLessThanOrEqual(FOOD_PILE_INITIAL_PICKUPS_MAX);
-      expect(placed.pickupsRemaining).toBe(placed.pickupsInitial);
+    if (pileCount(world) === beforeLen + 1) {
+      const placedSlot = pileSlotAt(world, pileCount(world) - 1);
+      const remaining = pileAmountFp(world, placedSlot);
+      const initial = pileInitialFp(world, placedSlot);
+      expect(remaining).toBeGreaterThanOrEqual(FOOD_PILE_INITIAL_PICKUPS_MIN * FOOD_PICKUP_AMOUNT);
+      expect(remaining).toBeLessThanOrEqual(FOOD_PILE_INITIAL_PICKUPS_MAX * FOOD_PICKUP_AMOUNT);
+      expect(remaining).toBe(initial);
     }
   });
 });
@@ -291,12 +309,13 @@ describe('tickFoodPileSpawn — determinism', () => {
     tickFoodPileSpawn(a, new Rng(a.rngState));
     tickFoodPileSpawn(b, new Rng(b.rngState));
 
-    expect(a.foodPiles.length).toBe(b.foodPiles.length);
-    if (a.foodPiles.length > 0 && a.foodPiles.length === b.foodPiles.length) {
-      const last = a.foodPiles.length - 1;
-      expect(a.foodPiles[last]!.tileX).toBe(b.foodPiles[last]!.tileX);
-      expect(a.foodPiles[last]!.tileY).toBe(b.foodPiles[last]!.tileY);
-      expect(a.foodPiles[last]!.pickupsInitial).toBe(b.foodPiles[last]!.pickupsInitial);
+    expect(pileCount(a)).toBe(pileCount(b));
+    if (pileCount(a) > 0 && pileCount(a) === pileCount(b)) {
+      const lastA = pileSlotAt(a, pileCount(a) - 1);
+      const lastB = pileSlotAt(b, pileCount(b) - 1);
+      expect(pileTileX(a, lastA)).toBe(pileTileX(b, lastB));
+      expect(pileTileY(a, lastA)).toBe(pileTileY(b, lastB));
+      expect(pileInitialFp(a, lastA)).toBe(pileInitialFp(b, lastB));
     }
   });
 });
@@ -311,13 +330,13 @@ describe('tickFoodPileSpawn — entity-ID exhaustion', () => {
     // Force the allocator to be exhausted.
     world.nextEntityId = MAX_ENTITIES;
     world.tick = FOOD_PILE_SPAWN_INTERVAL_TICKS;
-    const beforeLen = world.foodPiles.length;
+    const beforeLen = pileCount(world);
 
     expect(() => tickFoodPileSpawn(world, new Rng(world.rngState))).not.toThrow();
 
     // No new pile and the counter stayed pinned (allocateEntityId leaves it
     // unchanged when at cap per #59).
-    expect(world.foodPiles.length).toBe(beforeLen);
+    expect(pileCount(world)).toBe(beforeLen);
     expect(world.nextEntityId).toBe(MAX_ENTITIES);
   });
 });
@@ -329,11 +348,11 @@ describe('tickFoodPileSpawn — entity-ID exhaustion', () => {
 describe('tickFoodPileSpawn — integration via tick()', () => {
   it('off-cycle ticks: direct call leaves foodPiles unchanged at every sampled tick', () => {
     // Unit-style isolation of the gate: at any tick that's not a multiple
-    // of FOOD_PILE_SPAWN_INTERVAL_TICKS, foodPiles.length must be EXACTLY
+    // of FOOD_PILE_SPAWN_INTERVAL_TICKS, pile count must be EXACTLY
     // unchanged. Sampling several off-cycle values defends against a
     // regression that mis-implements the modulo gate.
     const world = createScenario(42);
-    world.foodPiles = []; // start empty so any spawn would be a +1 we'd see
+    clearPilesForTest(world); // start empty so any spawn would be a +1 we'd see
     for (const t of [
       1,
       100,
@@ -345,7 +364,7 @@ describe('tickFoodPileSpawn — integration via tick()', () => {
     ]) {
       world.tick = t;
       tickFoodPileSpawn(world, new Rng(world.rngState));
-      expect(world.foodPiles.length).toBe(0); // strict: no growth
+      expect(pileCount(world)).toBe(0); // strict: no growth
     }
   });
 
@@ -359,13 +378,13 @@ describe('tickFoodPileSpawn — integration via tick()', () => {
     // tick is when step 16d sees world.tick === FOOD_PILE_SPAWN_INTERVAL_TICKS,
     // which happens on the (INTERVAL + 1)th tick() call.
     const world = createScenario(42);
-    world.foodPiles = []; // empty so the only growth path is a successful spawn
+    clearPilesForTest(world); // empty so the only growth path is a successful spawn
     for (let t = 0; t < FOOD_PILE_SPAWN_INTERVAL_TICKS + 1; t++) {
       tick(world, []);
     }
     // After INTERVAL+1 ticks, the spawn step has had exactly one opportunity
     // (at world.tick === INTERVAL). >= 1 keeps the test forgiving of a future
     // spawn-rate bump that fires more often.
-    expect(world.foodPiles.length).toBeGreaterThanOrEqual(1);
+    expect(pileCount(world)).toBeGreaterThanOrEqual(1);
   });
 });

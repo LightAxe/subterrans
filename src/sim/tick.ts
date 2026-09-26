@@ -52,6 +52,7 @@ import {
 import {
   colonyFoodTotal,
   colonyForageBackpressure,
+  foodStoreHasFreeSlot,
   pileAtTile,
   pileFoodId,
 } from './food/food-api.js';
@@ -585,6 +586,13 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
           }
           if (hasQueen) break;
         }
+        // #290 PR 2 (owner decision D12: no player-visible chamber cap) — a
+        // FoodStorage chamber needs a food-store slot for its stock. The store is
+        // sized to the physical limit (FOOD_STORE_CAPACITY: no two footprints of a
+        // colony overlap, so at most FOOD_STORAGE_CHAMBERS_PER_COLONY_BOUND fit), so
+        // this refusal is unreachable; it keeps a full store from ever being asked
+        // for a stock at promotion.
+        if (cmd.chamberType === ChamberType.FoodStorage && !foodStoreHasFreeSlot(world)) break;
         // (c) Anchor tile state.
         //   pre-v5: must be Open (the legacy tunnel-end gate).
         //   v5+: Open OR Solid OR Marked. BeingDug remains rejected by gate
@@ -940,7 +948,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // Step 3: Food consumption (feeds queen and larvae from colony pool)
     tickFoodConsumption(world, colony);
 
-    // Step 4: Starvation check (Phase 6 no-op slot — decrement-on-fail is inline in step 3)
+    // Step 4: Starvation check (no-op slot — the starve-on-failed-meal check is inline in step 3)
     tickStarvationCheck(world, colony);
 
     // Step 5: Death cleanup (swap-remove dead entities; sets colony.defeated if queen dead)

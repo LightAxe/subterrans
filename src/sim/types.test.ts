@@ -9,8 +9,34 @@ import {
 import { createColonyRecord } from './colony/colony-store.js';
 import { createPheromoneGrid, phGet, phSet } from './pheromone/pheromone-store.js';
 import { createUndergroundGrid } from './terrain.js';
-import { MAX_ENTITIES, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constants.js';
+import {
+  MAX_ENTITIES,
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
+  FOOD_PICKUP_AMOUNT,
+} from './constants.js';
 import { RECENT_TILES_LEN } from './ant/ant-store.js';
+import { ChamberType } from './enums.js';
+import {
+  pileCount,
+  pileAtTile,
+  pileSlotAt,
+  pileIsCorpse,
+  pileTileX,
+  pileTileY,
+  pileAmountFp,
+  pileInitialFp,
+  colonyPoolFood,
+  chamberStock,
+} from './food/food-api.js';
+import {
+  addPileForTest,
+  setPilesForTest,
+  setPileChargesForTest,
+  setPoolFoodForTest,
+  setChamberStockForTest,
+  addChamberForTest,
+} from './food/food-test-utils.js';
 
 describe('WorldState', () => {
   describe('createWorldState', () => {
@@ -49,7 +75,7 @@ describe('WorldState', () => {
       expect(keys).toContain('pheromoneGrids');
       expect(keys).toContain('surface');
       expect(keys).toContain('undergroundGrids');
-      expect(keys).toContain('foodPiles');
+      expect(keys).toContain('food');
       expect(keys).toContain('recentlyDepletedFood'); // issue #112
       expect(keys).toContain('pendingChambers');
       expect(keys).toContain('events'); // S0b
@@ -100,7 +126,7 @@ describe('WorldState', () => {
         'subTask',
         'speed',
         'foodCarrying',
-        'starvationTimer',
+        'lastMealTick',
         'age',
         'alive',
         'lifespan',
@@ -144,10 +170,9 @@ describe('WorldState', () => {
       expect(Object.keys(world.undergroundGrids).length).toBe(0);
     });
 
-    it('Phase 7 init: foodPiles is empty array []', () => {
+    it('Phase 7 init: the located food store starts with no piles', () => {
       const world = createWorldState(42);
-      expect(Array.isArray(world.foodPiles)).toBe(true);
-      expect(world.foodPiles.length).toBe(0);
+      expect(pileCount(world)).toBe(0);
     });
 
     it('Phase 7 init: pendingChambers is empty Record {}', () => {
@@ -205,12 +230,12 @@ describe('WorldState', () => {
       expect(dst.terrainSeed).toBe(src.terrainSeed);
     });
 
-    it('A2: foodPile isCorpse flag copies faithfully across a reused dst slot (set + clear)', () => {
+    it('A2: pile isCorpse flag copies faithfully across a reused dst slot (set + clear)', () => {
       // Clear direction: a natural src pile reusing a slot that held a corpse must
-      // NOT retain the stale isCorpse (Object.assign never deletes keys — types.ts).
+      // NOT retain the stale isCorpse flag.
       const src = createWorldState(1);
       const dst = createWorldState(2);
-      dst.foodPiles.push({
+      addPileForTest(dst, {
         foodPileId: 5,
         tileX: 3,
         tileY: 3,
@@ -218,7 +243,7 @@ describe('WorldState', () => {
         pickupsInitial: 1,
         isCorpse: true,
       });
-      src.foodPiles.push({
+      addPileForTest(src, {
         foodPileId: 5,
         tileX: 3,
         tileY: 3,
@@ -226,19 +251,19 @@ describe('WorldState', () => {
         pickupsInitial: 30,
       });
       copyWorldState(src, dst);
-      expect(dst.foodPiles[0]!.isCorpse).toBeUndefined();
+      expect(pileIsCorpse(dst, pileSlotAt(dst, 0))).toBe(false);
 
       // Set direction: a corpse src pile sets the flag on a formerly-natural dst slot.
       const src2 = createWorldState(1);
       const dst2 = createWorldState(2);
-      dst2.foodPiles.push({
+      addPileForTest(dst2, {
         foodPileId: 6,
         tileX: 4,
         tileY: 4,
         pickupsRemaining: 30,
         pickupsInitial: 30,
       });
-      src2.foodPiles.push({
+      addPileForTest(src2, {
         foodPileId: 6,
         tileX: 4,
         tileY: 4,
@@ -247,7 +272,62 @@ describe('WorldState', () => {
         isCorpse: true,
       });
       copyWorldState(src2, dst2);
-      expect(dst2.foodPiles[0]!.isCorpse).toBe(true);
+      expect(pileIsCorpse(dst2, pileSlotAt(dst2, 0))).toBe(true);
+    });
+
+    it('the food store round-trips through copyWorldState: piles, pool, chamber stock and pileAtTile agree on dst, and dst is independent of src afterwards', () => {
+      const src = createWorldState(1);
+      const dst = createWorldState(2);
+
+      const colony = createColonyRecord(1, 0);
+      colony.entrances = [];
+      colony.rallyPoint = null;
+      colony.digFlowFieldDirty = false;
+      src.colonies[1] = colony;
+      setPoolFoodForTest(src, colony, 5000);
+      const ch = addChamberForTest(
+        src,
+        colony,
+        {
+          chamberId: 1,
+          chamberType: ChamberType.FoodStorage,
+          posX: 0,
+          posY: 0,
+          width: 2,
+          height: 2,
+        },
+        2000,
+      );
+      addPileForTest(src, {
+        foodPileId: 9,
+        tileX: 7,
+        tileY: 7,
+        pickupsRemaining: 4,
+        pickupsInitial: 4,
+      });
+
+      copyWorldState(src, dst);
+
+      expect(pileCount(dst)).toBe(pileCount(src));
+      expect(pileAtTile(dst, 7, 7)).toBe(pileAtTile(src, 7, 7));
+      expect(pileAtTile(dst, 7, 7)).not.toBe(-1);
+      expect(colonyPoolFood(dst, colony)).toBe(5000);
+      expect(chamberStock(dst, ch)).toBe(2000);
+
+      // dst is independent of src: further src mutation must not leak into dst.
+      setPoolFoodForTest(src, colony, 999);
+      setChamberStockForTest(src, colony, ch, 111);
+      addPileForTest(src, {
+        foodPileId: 10,
+        tileX: 8,
+        tileY: 8,
+        pickupsRemaining: 1,
+        pickupsInitial: 1,
+      });
+      expect(colonyPoolFood(dst, colony)).toBe(5000);
+      expect(chamberStock(dst, ch)).toBe(2000);
+      expect(pileCount(dst)).not.toBe(pileCount(src));
+      expect(pileAtTile(dst, 8, 8)).toBe(-1);
     });
 
     describe('AntComponents', () => {
@@ -443,10 +523,10 @@ describe('WorldState', () => {
         src.colonies[1].entrances = [];
         src.colonies[1].rallyPoint = null;
         src.colonies[1].digFlowFieldDirty = false;
-        src.colonies[1].foodStored = 500;
+        setPoolFoodForTest(src, src.colonies[1], 500);
         copyWorldState(src, dst);
         expect(dst.colonies[1]).toBeDefined();
-        expect(dst.colonies[1]!.foodStored).toBe(500);
+        expect(colonyPoolFood(dst, dst.colonies[1]!)).toBe(500);
         expect(dst.colonies[1]!.queenEntityId).toBe(42);
       });
 
@@ -591,8 +671,8 @@ describe('WorldState', () => {
         expect(dst.undergroundGrids[1]).toBeUndefined();
       });
 
-      it('foodPiles: add pile to src, copy, verify dst has it', () => {
-        src.foodPiles.push({
+      it('pile store: add pile to src, copy, verify dst has it', () => {
+        addPileForTest(src, {
           foodPileId: 1,
           tileX: 10,
           tileY: 20,
@@ -600,20 +680,21 @@ describe('WorldState', () => {
           pickupsInitial: 50,
         });
         copyWorldState(src, dst);
-        expect(dst.foodPiles.length).toBe(1);
-        expect(dst.foodPiles[0]!.tileX).toBe(10);
-        expect(dst.foodPiles[0]!.tileY).toBe(20);
+        expect(pileCount(dst)).toBe(1);
+        const slot = pileSlotAt(dst, 0);
+        expect(pileTileX(dst, slot)).toBe(10);
+        expect(pileTileY(dst, slot)).toBe(20);
       });
 
-      it('foodPiles: shrink src array, copy, verify dst shrinks', () => {
-        src.foodPiles.push({
+      it('pile store: shrink src piles, copy, verify dst shrinks', () => {
+        addPileForTest(src, {
           foodPileId: 1,
           tileX: 1,
           tileY: 1,
           pickupsRemaining: 50,
           pickupsInitial: 50,
         });
-        src.foodPiles.push({
+        addPileForTest(src, {
           foodPileId: 2,
           tileX: 2,
           tileY: 2,
@@ -621,14 +702,16 @@ describe('WorldState', () => {
           pickupsInitial: 50,
         });
         copyWorldState(src, dst);
-        expect(dst.foodPiles.length).toBe(2);
-        src.foodPiles.pop();
+        expect(pileCount(dst)).toBe(2);
+        setPilesForTest(src, [
+          { foodPileId: 1, tileX: 1, tileY: 1, pickupsRemaining: 50, pickupsInitial: 50 },
+        ]);
         copyWorldState(src, dst);
-        expect(dst.foodPiles.length).toBe(1);
+        expect(pileCount(dst)).toBe(1);
       });
 
-      it('issue #112: foodPile pickup-charge fields round-trip via copyWorldState', () => {
-        src.foodPiles.push({
+      it('issue #112: pile pickup-charge fields round-trip via copyWorldState', () => {
+        addPileForTest(src, {
           foodPileId: 1,
           tileX: 5,
           tileY: 5,
@@ -636,11 +719,12 @@ describe('WorldState', () => {
           pickupsInitial: 99,
         });
         copyWorldState(src, dst);
-        expect(dst.foodPiles[0]!.pickupsRemaining).toBe(42);
-        expect(dst.foodPiles[0]!.pickupsInitial).toBe(99);
+        const dstSlot = pileSlotAt(dst, 0);
+        expect(pileAmountFp(dst, dstSlot)).toBe(42 * FOOD_PICKUP_AMOUNT);
+        expect(pileInitialFp(dst, dstSlot)).toBe(99 * FOOD_PICKUP_AMOUNT);
         // Independence — mutating src after copy must not bleed into dst.
-        src.foodPiles[0]!.pickupsRemaining = 1;
-        expect(dst.foodPiles[0]!.pickupsRemaining).toBe(42);
+        setPileChargesForTest(src, pileSlotAt(src, 0), 1);
+        expect(pileAmountFp(dst, dstSlot)).toBe(42 * FOOD_PICKUP_AMOUNT);
       });
 
       it('issue #112: recentlyDepletedFood: add entries to src, copy, verify dst has them', () => {

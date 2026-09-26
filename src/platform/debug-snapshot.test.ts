@@ -32,6 +32,7 @@ import { Zone } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { createPheromoneGrid, phSet, pheromoneGridKey } from '../sim/pheromone/pheromone-store.js';
 import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT, FOOD_TRAIL_DEPOSIT } from '../sim/constants.js';
+import { addPileForTest } from '../sim/food/food-test-utils.js';
 
 const COLONY_ID = 1;
 const OTHER_COLONY_ID = 2;
@@ -317,7 +318,7 @@ describe('buildAntTrace — movement source inference', () => {
   it('SearchingFood + food pile within scent radius → "scent"', () => {
     const { world, antId } = makeAnt(ForagingSubState.SearchingFood);
     // Pile 5 tiles away (well within DEBUG_SCENT_RADIUS = 15).
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 1,
       tileX: 25,
       tileY: 20,
@@ -343,7 +344,7 @@ describe('buildAntTrace — movement source inference', () => {
     const { world, antId } = makeAnt(ForagingSubState.SearchingFood);
     world.ants.targetPosX[antId] = 30 << FP_SHIFT;
     world.ants.targetPosY[antId] = 30 << FP_SHIFT;
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 1,
       tileX: 25,
       tileY: 20,
@@ -357,7 +358,7 @@ describe('buildAntTrace — movement source inference', () => {
 
   it('scent overrides pheromone (decision order preserved)', () => {
     const { world, antId } = makeAnt(ForagingSubState.SearchingFood);
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 1,
       tileX: 25,
       tileY: 20,
@@ -375,7 +376,7 @@ describe('buildAntTrace — movement source inference', () => {
     const { world, antId } = makeAnt(ForagingSubState.SearchingFood, Zone.Underground);
     // Populate the surface grid with a nearby pile + pheromone — if the
     // classifier incorrectly ran the surface cascade, one of these would win.
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 1,
       tileX: 25,
       tileY: 20,

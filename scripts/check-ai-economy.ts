@@ -64,6 +64,7 @@ const { runAIController } = await import('../src/render/ai-controller.js');
 const { colonyFoodTotal, forEachPile, pileCount } = await import('../src/sim/food/food-api.js');
 const { ChamberType, AntTask, PheromoneType } = await import('../src/sim/enums.js');
 const { isAlive } = await import('../src/sim/ant/ant-store.js');
+const { mealsUntilStarvation, QUEEN_HUNGER } = await import('../src/sim/hunger.js');
 const { getAIStateForColony } = await import('../src/sim/ai-state.js');
 const { pheromoneGridKey, phGet } = await import('../src/sim/pheromone/pheromone-store.js');
 const { Zone } = await import('../src/sim/terrain.js');
@@ -304,17 +305,20 @@ function entranceDanger(world: WorldState, colonyId: number): number {
  * both sides is the bug this harness exists to catch; a kill means the v3.0
  * combat loop actually fired.
  *
- * Read from `queenStarvationTimer` rather than the `queen_death` telemetry
+ * Read from the queen's hunger clock rather than the `queen_death` telemetry
  * event: the event carries no colonyId, and `world.events` is a capped ring
  * (PLAYTRACE_EVENT_CAP_PER_ROUND) that a full 24 000-tick match overflows, so
- * late queen deaths are simply missing from it. The timer is exact —
- * `tickFoodConsumption` only kills the queen after decrementing it to <= 0, and
- * any successful feed resets it to STARVATION_GRACE_TICKS — so a non-positive
- * timer at the death tick means starvation and anything else means she was
- * killed.
+ * late queen deaths are simply missing from it. The clock is exact —
+ * `tickFoodConsumption` only kills the queen on a failed meal once ticks since
+ * her last meal reach QUEEN_STARVE_AFTER_TICKS, and every successful meal resets
+ * `lastMealTick` — so, read right after the death tick, a meals-until-starvation
+ * of 0 or less means starvation and anything else means she was killed.
+ * (Pre-V50 this read the equivalent `colony.queenStarvationTimer <= 0`.)
  */
-function queenDeathCause(colony: ColonyRecord): string {
-  return colony.queenStarvationTimer <= 0 ? 'Starvation' : 'Killed';
+function queenDeathCause(world: WorldState, colony: ColonyRecord): string {
+  return mealsUntilStarvation(world, colony.queenEntityId, QUEEN_HUNGER) <= 0
+    ? 'Starvation'
+    : 'Killed';
 }
 
 /** Total surface pile charges within `radius` Manhattan tiles of a colony entrance. */
@@ -387,11 +391,11 @@ function runSeed(seed: number): SeedResult {
     const playerQueenAlive = isAlive(world.ants, player.queenEntityId);
     if (!enemyQueenAlive && res.enemyDeathTick === null) {
       res.enemyDeathTick = world.tick;
-      res.enemyDeathCause = queenDeathCause(enemy);
+      res.enemyDeathCause = queenDeathCause(world, enemy);
     }
     if (!playerQueenAlive && res.playerDeathTick === null) {
       res.playerDeathTick = world.tick;
-      res.playerDeathCause = queenDeathCause(player);
+      res.playerDeathCause = queenDeathCause(world, player);
     }
 
     if (enemyQueenAlive) {

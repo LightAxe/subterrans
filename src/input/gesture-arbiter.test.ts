@@ -37,6 +37,7 @@ import { makeCameraView, worldToScreen } from '../render/camera-adapter.js';
 import { TILE_SIZE_PX } from '../render/sprites.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 import { DRAG_THRESHOLD_PX } from './gesture.js';
+import { clearPilesForTest } from '../sim/food/food-test-utils.js';
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -71,7 +72,7 @@ function makeViewState(
 function makeWorld(): WorldState {
   const world = createScenario(12345, 'Normal');
   world.spider = null; // controlled surface: no spider sprite under any Command tap
-  world.foodPiles = []; // controlled surface: no pile under a rally/dig tap
+  clearPilesForTest(world); // controlled surface: no pile under a rally/dig tap
   return world;
 }
 

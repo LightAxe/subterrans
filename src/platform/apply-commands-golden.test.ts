@@ -60,7 +60,7 @@ function golden(world: WorldState): unknown {
     // readable command-mutated state:
     colonies: s.colonies,
     pendingChambers: s.pendingChambers,
-    foodPiles: s.foodPiles,
+    food: s.food, // #290 PR 2 — the located food store (piles, pools, stocks)
     recentlyDepletedFood: s.recentlyDepletedFood,
     spider: s.spider,
     spiderPriorityColonyId: s.spiderPriorityColonyId,

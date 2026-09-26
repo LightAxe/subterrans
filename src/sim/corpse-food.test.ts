@@ -21,7 +21,13 @@ import { describe, it, expect } from 'vitest';
 import { killAnt } from './ant-death.js';
 import { tickSpider } from './spider.js';
 import { spawnCorpseFood, corpseYield, tickFoodPileSpawn } from './food-system.js';
-import { recordFoodPileDepletion } from './food/food-api.js';
+import { recordFoodPileDepletion, pileCount } from './food/food-api.js';
+import {
+  addPileForTest,
+  clearPilesForTest,
+  pilesForTest,
+  type TestPile,
+} from './food/food-test-utils.js';
 import { tickForagerActions } from './ant/ant-foraging.js';
 import {
   createWorldState,
@@ -180,6 +186,11 @@ function placeSpider(
   return spider;
 }
 
+/** Find the (single, tile-unique) pile at (x, y) in the pre-V50 pickup-charge shape, if any. */
+function findPile(world: WorldState, x: number, y: number): TestPile | undefined {
+  return pilesForTest(world).find((p) => p.tileX === x && p.tileY === y);
+}
+
 /** First `n` walkable-component tiles (row-major) — for save round-trips (load checks reachability). */
 function walkableTiles(world: WorldState, n: number): Array<{ x: number; y: number }> {
   const out: Array<{ x: number; y: number }> = [];
@@ -208,8 +219,8 @@ describe('spawnCorpseFood', () => {
   it('creates a new corpse pile on an empty tile', () => {
     const world = createWorldState(42);
     spawnCorpseFood(world, 4, 4, 5);
-    expect(world.foodPiles).toHaveLength(1);
-    expect(world.foodPiles[0]).toMatchObject({
+    expect(pileCount(world)).toBe(1);
+    expect(pilesForTest(world)[0]).toMatchObject({
       tileX: 4,
       tileY: 4,
       pickupsRemaining: 5,
@@ -223,7 +234,7 @@ describe('spawnCorpseFood', () => {
     // load, so spawnCorpseFood must skip such a tile (a dying spider can reach one via
     // terrain-blind movement). Find an off-component tile in a real scenario world.
     const world = createScenario(42);
-    world.foodPiles = [];
+    clearPilesForTest(world);
     let off: { x: number; y: number } | null = null;
     for (let y = 0; y < SURFACE_GRID_HEIGHT && !off; y++) {
       for (let x = 0; x < SURFACE_GRID_WIDTH && !off; x++) {
@@ -233,13 +244,13 @@ describe('spawnCorpseFood', () => {
     expect(off).not.toBeNull();
     const idBefore = world.nextEntityId;
     spawnCorpseFood(world, off!.x, off!.y, CORPSE_PICKUPS_SPIDER);
-    expect(world.foodPiles).toHaveLength(0); // skipped — would otherwise brick the save
+    expect(pileCount(world)).toBe(0); // skipped — would otherwise brick the save
     expect(world.nextEntityId).toBe(idBefore); // and no entity ID was burned
   });
 
   it('tops up an existing pile instead of adding a second (tile-uniqueness); isCorpse fixed at birth', () => {
     const world = createWorldState(42);
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 1,
       tileX: 4,
       tileY: 4,
@@ -247,15 +258,16 @@ describe('spawnCorpseFood', () => {
       pickupsInitial: 30,
     });
     spawnCorpseFood(world, 4, 4, 10);
-    expect(world.foodPiles).toHaveLength(1); // no second pile on the tile
-    expect(world.foodPiles[0]!.pickupsInitial).toBe(40);
-    expect(world.foodPiles[0]!.pickupsRemaining).toBe(40);
-    expect(world.foodPiles[0]!.isCorpse).toBeUndefined(); // a corpse topping up a natural pile stays natural
+    expect(pileCount(world)).toBe(1); // no second pile on the tile
+    const pile = pilesForTest(world)[0]!;
+    expect(pile.pickupsInitial).toBe(40);
+    expect(pile.pickupsRemaining).toBe(40);
+    expect(pile.isCorpse).toBeUndefined(); // a corpse topping up a natural pile stays natural
   });
 
   it('clamps a top-up to FOOD_PILE_INITIAL_PICKUPS_MAX', () => {
     const world = createWorldState(42);
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 1,
       tileX: 4,
       tileY: 4,
@@ -263,14 +275,15 @@ describe('spawnCorpseFood', () => {
       pickupsInitial: 140,
     });
     spawnCorpseFood(world, 4, 4, 100);
-    expect(world.foodPiles[0]!.pickupsInitial).toBe(FOOD_PILE_INITIAL_PICKUPS_MAX); // clamp 240 -> 150
-    expect(world.foodPiles[0]!.pickupsRemaining).toBe(FOOD_PILE_INITIAL_PICKUPS_MAX); // min(200, 150)
+    const pile = pilesForTest(world)[0]!;
+    expect(pile.pickupsInitial).toBe(FOOD_PILE_INITIAL_PICKUPS_MAX); // clamp 240 -> 150
+    expect(pile.pickupsRemaining).toBe(FOOD_PILE_INITIAL_PICKUPS_MAX); // min(200, 150)
   });
 
   it('skips a NEW pile at the hard cap but still allows top-ups', () => {
     const world = createWorldState(42);
     for (let i = 0; i < FOOD_PILE_HARD_CAP; i++) {
-      world.foodPiles.push({
+      addPileForTest(world, {
         foodPileId: 1 + i,
         tileX: i,
         tileY: 0,
@@ -280,20 +293,20 @@ describe('spawnCorpseFood', () => {
       });
     }
     spawnCorpseFood(world, 500, 500, 5); // new tile -> blocked by hard cap
-    expect(world.foodPiles).toHaveLength(FOOD_PILE_HARD_CAP);
+    expect(pileCount(world)).toBe(FOOD_PILE_HARD_CAP);
     spawnCorpseFood(world, 0, 0, 5); // existing tile (0,0) -> top-up allowed
-    expect(world.foodPiles).toHaveLength(FOOD_PILE_HARD_CAP);
-    expect(world.foodPiles[0]!.pickupsInitial).toBe(6);
+    expect(pileCount(world)).toBe(FOOD_PILE_HARD_CAP);
+    expect(pilesForTest(world)[0]!.pickupsInitial).toBe(6);
   });
 
   it('degrades to a silent skip on entity-ID exhaustion; top-ups still succeed', () => {
     const world = createWorldState(42);
     world.nextEntityId = MAX_ENTITIES; // exhausted
     spawnCorpseFood(world, 4, 4, 5); // new pile needs an ID -> skipped
-    expect(world.foodPiles).toHaveLength(0);
+    expect(pileCount(world)).toBe(0);
     expect(world.nextEntityId).toBe(MAX_ENTITIES); // unchanged
 
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 7,
       tileX: 4,
       tileY: 4,
@@ -302,7 +315,7 @@ describe('spawnCorpseFood', () => {
       isCorpse: true,
     });
     spawnCorpseFood(world, 4, 4, 5); // top-up needs no ID
-    expect(world.foodPiles[0]!.pickupsInitial).toBe(7);
+    expect(pilesForTest(world)[0]!.pickupsInitial).toBe(7);
     expect(world.nextEntityId).toBe(MAX_ENTITIES);
   });
 });
@@ -317,7 +330,7 @@ describe('killAnt corpse drop (V37)', () => {
     const victim = spawnWorker(world, cid1, 5, 7);
     const killer = spawnWorker(world, cid2, 6, 7);
     killAnt(world, victim, cid2, killer, 'Ant');
-    const pile = world.foodPiles.find((p) => p.tileX === 5 && p.tileY === 7);
+    const pile = findPile(world, 5, 7);
     expect(pile).toBeDefined();
     expect(pile!.pickupsInitial).toBe(CORPSE_PICKUPS_WORKER);
     expect(pile!.isCorpse).toBe(true);
@@ -328,7 +341,7 @@ describe('killAnt corpse drop (V37)', () => {
     const victim = spawnFighter(world, cid1, 8, 9);
     const killer = spawnWorker(world, cid2, 9, 9);
     killAnt(world, victim, cid2, killer, 'Ant');
-    const pile = world.foodPiles.find((p) => p.tileX === 8 && p.tileY === 9);
+    const pile = findPile(world, 8, 9);
     expect(pile?.pickupsInitial).toBe(CORPSE_PICKUPS_FIGHTER);
     expect(pile?.isCorpse).toBe(true);
   });
@@ -342,7 +355,7 @@ describe('killAnt corpse drop (V37)', () => {
     world.ants.posY[queen2] = (7 << FP_SHIFT) + (FP_ONE >> 1);
     const killer = spawnWorker(world, cid1, 6, 7);
     killAnt(world, queen2, cid1, killer, 'Ant'); // queen2 now at tile (5,7)
-    const pile = world.foodPiles.find((p) => p.tileX === 5 && p.tileY === 7);
+    const pile = findPile(world, 5, 7);
     expect(pile?.pickupsInitial).toBe(CORPSE_PICKUPS_QUEEN);
     expect(pile?.isCorpse).toBe(true);
   });
@@ -351,7 +364,7 @@ describe('killAnt corpse drop (V37)', () => {
     const { world, cid1 } = makeWorld2(SIM_VERSION_V37_CORPSE_FOOD);
     const victim = spawnWorker(world, cid1, 5, 7);
     killAnt(world, victim, null, null, 'Spider');
-    expect(world.foodPiles).toHaveLength(0);
+    expect(pileCount(world)).toBe(0);
   });
 
   it('does NOT drop for an underground death', () => {
@@ -360,21 +373,21 @@ describe('killAnt corpse drop (V37)', () => {
     world.ants.zone[victim] = Zone.Underground;
     const killer = spawnWorker(world, cid2, 6, 7);
     killAnt(world, victim, cid2, killer, 'Ant');
-    expect(world.foodPiles).toHaveLength(0);
+    expect(pileCount(world)).toBe(0);
   });
 
   it('does NOT drop when killerColonyId is null', () => {
     const { world, cid1 } = makeWorld2(SIM_VERSION_V37_CORPSE_FOOD);
     const victim = spawnWorker(world, cid1, 5, 7);
     killAnt(world, victim, null, 5, 'Ant');
-    expect(world.foodPiles).toHaveLength(0);
+    expect(pileCount(world)).toBe(0);
   });
 
   it('does NOT drop for a synthetic non-null-colony/null-id kill (killerId === null)', () => {
     const { world, cid1, cid2 } = makeWorld2(SIM_VERSION_V37_CORPSE_FOOD);
     const victim = spawnWorker(world, cid1, 5, 7);
     killAnt(world, victim, cid2, null, 'Ant'); // the exact synthetic case Codex flagged
-    expect(world.foodPiles).toHaveLength(0);
+    expect(pileCount(world)).toBe(0);
   });
 
   it('does NOT drop for a non-member victim (not worker/fighter/queen — e.g. brood-like)', () => {
@@ -392,7 +405,7 @@ describe('killAnt corpse drop (V37)', () => {
     });
     const killer = spawnWorker(world, cid2, 6, 7);
     killAnt(world, stray, cid2, killer, 'Ant');
-    expect(world.foodPiles).toHaveLength(0);
+    expect(pileCount(world)).toBe(0);
   });
 
   it('pre-V37 (V36): a surface enemy-ant worker kill drops NOTHING (byte-identical legacy)', () => {
@@ -401,7 +414,7 @@ describe('killAnt corpse drop (V37)', () => {
     const killer = spawnWorker(world, cid2, 6, 7);
     const nextIdBefore = world.nextEntityId;
     killAnt(world, victim, cid2, killer, 'Ant');
-    expect(world.foodPiles).toHaveLength(0);
+    expect(pileCount(world)).toBe(0);
     expect(world.nextEntityId).toBe(nextIdBefore); // no ID-counter advance -> replay-safe
   });
 });
@@ -418,7 +431,7 @@ describe('spider-death corpse drop', () => {
     spider.hp = 0; // combat brought it down this tick
     tickSpider(world);
     expect(world.spider).toBeNull();
-    const pile = world.foodPiles.find((p) => p.tileX === 10 && p.tileY === 12);
+    const pile = findPile(world, 10, 12);
     expect(pile?.pickupsInitial).toBe(CORPSE_PICKUPS_SPIDER);
     expect(pile?.isCorpse).toBe(true);
   });
@@ -430,7 +443,7 @@ describe('spider-death corpse drop', () => {
     spider.hp = 0;
     tickSpider(world);
     expect(world.spider).toBeNull();
-    expect(world.foodPiles).toHaveLength(0);
+    expect(pileCount(world)).toBe(0);
   });
 });
 
@@ -440,9 +453,9 @@ describe('spider-death corpse drop', () => {
 
 describe('tickFoodPileSpawn — soft-ceiling exemption (V37) + hard-cap backstop', () => {
   function fillPiles(world: WorldState, n: number, corpse: boolean): void {
-    world.foodPiles = [];
+    clearPilesForTest(world);
     for (let i = 0; i < n; i++) {
-      world.foodPiles.push({
+      addPileForTest(world, {
         foodPileId: 9000 + i,
         tileX: 100, // off to the side of the spawn area; distinct rows
         tileY: i,
@@ -458,7 +471,7 @@ describe('tickFoodPileSpawn — soft-ceiling exemption (V37) + hard-cap backstop
     fillPiles(world, FOOD_PILE_SOFT_CEILING, true);
     world.tick = FOOD_PILE_SPAWN_INTERVAL_TICKS;
     tickFoodPileSpawn(world, new Rng(world.rngState));
-    expect(world.foodPiles.length).toBe(FOOD_PILE_SOFT_CEILING + 1); // naturalCount was 0 -> placed
+    expect(pileCount(world)).toBe(FOOD_PILE_SOFT_CEILING + 1); // naturalCount was 0 -> placed
   });
 
   it('V37: natural piles DO count against the soft ceiling — spawn throttled', () => {
@@ -466,7 +479,7 @@ describe('tickFoodPileSpawn — soft-ceiling exemption (V37) + hard-cap backstop
     fillPiles(world, FOOD_PILE_SOFT_CEILING, false);
     world.tick = FOOD_PILE_SPAWN_INTERVAL_TICKS;
     tickFoodPileSpawn(world, new Rng(world.rngState));
-    expect(world.foodPiles.length).toBe(FOOD_PILE_SOFT_CEILING); // throttled
+    expect(pileCount(world)).toBe(FOOD_PILE_SOFT_CEILING); // throttled
   });
 
   it('pre-V37 (V36): counts TOTAL piles, ignoring isCorpse (gate)', () => {
@@ -475,14 +488,14 @@ describe('tickFoodPileSpawn — soft-ceiling exemption (V37) + hard-cap backstop
     fillPiles(world, FOOD_PILE_SOFT_CEILING, true); // corpse-flagged, but legacy ignores the flag
     world.tick = FOOD_PILE_SPAWN_INTERVAL_TICKS;
     tickFoodPileSpawn(world, new Rng(world.rngState));
-    expect(world.foodPiles.length).toBe(FOOD_PILE_SOFT_CEILING); // legacy total-count throttle
+    expect(pileCount(world)).toBe(FOOD_PILE_SOFT_CEILING); // legacy total-count throttle
   });
 
   it('hard-cap backstop: the spawner never pushes past FOOD_PILE_HARD_CAP even with naturalCount 0', () => {
     const world = createScenario(42);
-    world.foodPiles = [];
+    clearPilesForTest(world);
     for (let i = 0; i < FOOD_PILE_HARD_CAP; i++) {
-      world.foodPiles.push({
+      addPileForTest(world, {
         foodPileId: 1000 + i,
         tileX: 100,
         tileY: i,
@@ -493,7 +506,7 @@ describe('tickFoodPileSpawn — soft-ceiling exemption (V37) + hard-cap backstop
     }
     world.tick = FOOD_PILE_SPAWN_INTERVAL_TICKS;
     tickFoodPileSpawn(world, new Rng(world.rngState));
-    expect(world.foodPiles.length).toBe(FOOD_PILE_HARD_CAP); // naturalCount 0 but hard cap holds
+    expect(pileCount(world)).toBe(FOOD_PILE_HARD_CAP); // naturalCount 0 but hard cap holds
   });
 });
 
@@ -504,7 +517,7 @@ describe('tickFoodPileSpawn — soft-ceiling exemption (V37) + hard-cap backstop
 describe('no-barren (corpse depletion does not seed the natural-spawn cooldown)', () => {
   it('V37: a depleting corpse pile is NOT recorded in recentlyDepletedFood', () => {
     const world = createWorldState(42);
-    world.foodPiles.push({
+    const slot = addPileForTest(world, {
       foodPileId: 7,
       tileX: 4,
       tileY: 4,
@@ -512,20 +525,20 @@ describe('no-barren (corpse depletion does not seed the natural-spawn cooldown)'
       pickupsInitial: 1,
       isCorpse: true,
     });
-    recordFoodPileDepletion(world, 0);
+    recordFoodPileDepletion(world, slot);
     expect(world.recentlyDepletedFood).toHaveLength(0);
   });
 
   it('V37: a depleting NATURAL pile IS recorded', () => {
     const world = createWorldState(42);
-    world.foodPiles.push({
+    const slot = addPileForTest(world, {
       foodPileId: 7,
       tileX: 4,
       tileY: 4,
       pickupsRemaining: 0,
       pickupsInitial: 30,
     });
-    recordFoodPileDepletion(world, 0);
+    recordFoodPileDepletion(world, slot);
     expect(world.recentlyDepletedFood).toHaveLength(1);
     expect(world.recentlyDepletedFood[0]).toMatchObject({ tileX: 4, tileY: 4 });
   });
@@ -533,7 +546,7 @@ describe('no-barren (corpse depletion does not seed the natural-spawn cooldown)'
   it('pre-V37 (V36): a corpse-flagged pile is recorded regardless (gate)', () => {
     const world = createWorldState(42);
     world.simVersion = SIM_VERSION_V36_RISK_AWARE_FORAGING;
-    world.foodPiles.push({
+    const slot = addPileForTest(world, {
       foodPileId: 7,
       tileX: 4,
       tileY: 4,
@@ -541,13 +554,13 @@ describe('no-barren (corpse depletion does not seed the natural-spawn cooldown)'
       pickupsInitial: 1,
       isCorpse: true,
     });
-    recordFoodPileDepletion(world, 0);
+    recordFoodPileDepletion(world, slot);
     expect(world.recentlyDepletedFood).toHaveLength(1);
   });
 
   it('V37: corpse depletion still clears a colony priority pointer', () => {
     const { world, cid1 } = makeWorld2(SIM_VERSION_V37_CORPSE_FOOD);
-    world.foodPiles.push({
+    const slot = addPileForTest(world, {
       foodPileId: 77,
       tileX: 4,
       tileY: 4,
@@ -556,7 +569,7 @@ describe('no-barren (corpse depletion does not seed the natural-spawn cooldown)'
       isCorpse: true,
     });
     world.colonies[cid1]!.priorityFoodPileId = 77;
-    recordFoodPileDepletion(world, world.foodPiles.length - 1);
+    recordFoodPileDepletion(world, slot);
     expect(world.colonies[cid1]!.priorityFoodPileId).toBeNull();
     expect(world.recentlyDepletedFood).toHaveLength(0); // still no-barren
   });
@@ -569,7 +582,7 @@ describe('no-barren (corpse depletion does not seed the natural-spawn cooldown)'
 describe('integration: forager retrieves corpse food', () => {
   it('a SearchingFood forager standing on corpse food picks it up on the following forager step', () => {
     const world = createScenario(42); // V37
-    world.foodPiles = [];
+    clearPilesForTest(world);
     const tile = walkableTiles(world, 1)[0]!;
     // Tick order: corpse food is written at combat (step 17); a forager standing there
     // retrieves it at the forager step (16b) the NEXT tick. Model that: drop, then run
@@ -589,7 +602,7 @@ describe('integration: forager retrieves corpse food', () => {
     tickForagerActions(world);
     expect(world.ants.subTask[forager]).toBe(ForagingSubState.CarryingFood);
     expect(world.ants.foodCarrying[forager]).toBeGreaterThan(0);
-    const pile = world.foodPiles.find((p) => p.tileX === tile.x && p.tileY === tile.y);
+    const pile = findPile(world, tile.x, tile.y);
     expect(pile?.pickupsRemaining).toBe(CORPSE_PICKUPS_SPIDER - 1); // one charge drained
   });
 });

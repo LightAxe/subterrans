@@ -7,6 +7,7 @@ import { AntTask } from './enums.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { WorldState } from './types.js';
 import { MATCH_TIMEOUT_TICKS, STALEMATE_FOOD_THRESHOLD_FP } from './constants.js';
+import { setPoolFoodForTest, setPilesForTest } from './food/food-test-utils.js';
 
 function makeWorldWith2Colonies(): { world: WorldState; queen1: number; queen2: number } {
   const world = createWorldState(42);
@@ -140,10 +141,10 @@ function makeV22WorldWith2Colonies(
   world.simVersion = SIM_VERSION_V22_DIFFICULTY;
   world.difficulty = 'Normal';
   // Default food pile prevents spurious stalemate in tests that only check other conditions.
-  // Stalemate tests explicitly set world.foodPiles = [] to override this.
-  world.foodPiles = [
+  // Stalemate tests explicitly clear the piles to override this.
+  setPilesForTest(world, [
     { foodPileId: 1, tileX: 10, tileY: 10, pickupsRemaining: 1, pickupsInitial: 1 },
-  ];
+  ]);
 
   const queen1 = allocateEntityId(world);
   initAnt(world.ants, queen1, {
@@ -243,34 +244,34 @@ describe('checkTiebreaks (S5 V22)', () => {
   describe('Stalemate tiebreak', () => {
     it('returns None when food piles remain on the map', () => {
       const { world } = makeV22WorldWith2Colonies();
-      world.foodPiles = [
+      setPilesForTest(world, [
         { foodPileId: 99, tileX: 5, tileY: 5, pickupsRemaining: 1, pickupsInitial: 1 },
-      ];
+      ]);
       // both colonies below threshold
       expect(checkTiebreaks(world, 1 as ColonyId)).toBe(GameOutcome.None);
     });
 
     it('returns None when one colony has food above threshold', () => {
       const { world } = makeV22WorldWith2Colonies();
-      world.foodPiles = [];
-      world.colonies[1]!.foodStored = STALEMATE_FOOD_THRESHOLD_FP + 100;
-      world.colonies[2]!.foodStored = 0;
+      setPilesForTest(world, []);
+      setPoolFoodForTest(world, world.colonies[1]!, STALEMATE_FOOD_THRESHOLD_FP + 100);
+      setPoolFoodForTest(world, world.colonies[2]!, 0);
       expect(checkTiebreaks(world, 1 as ColonyId)).toBe(GameOutcome.None);
     });
 
     it('returns MutualDestruction when food depleted and both colonies starving', () => {
       const { world } = makeV22WorldWith2Colonies();
-      world.foodPiles = [];
-      world.colonies[1]!.foodStored = 0;
-      world.colonies[2]!.foodStored = 0;
+      setPilesForTest(world, []);
+      setPoolFoodForTest(world, world.colonies[1]!, 0);
+      setPoolFoodForTest(world, world.colonies[2]!, 0);
       expect(checkTiebreaks(world, 1 as ColonyId)).toBe(GameOutcome.MutualDestruction);
     });
 
     it('emits a round_end event with reason StalemateTiebreak', () => {
       const { world } = makeV22WorldWith2Colonies();
-      world.foodPiles = [];
-      world.colonies[1]!.foodStored = 0;
-      world.colonies[2]!.foodStored = 0;
+      setPilesForTest(world, []);
+      setPoolFoodForTest(world, world.colonies[1]!, 0);
+      setPoolFoodForTest(world, world.colonies[2]!, 0);
       checkTiebreaks(world, 1 as ColonyId);
       const ev = world.events.find((e) => e.type === 'round_end');
       expect(ev).toBeDefined();
@@ -282,9 +283,9 @@ describe('checkTiebreaks (S5 V22)', () => {
     it('timeout takes priority over stalemate when both conditions are met', () => {
       const { world } = makeV22WorldWith2Colonies();
       world.tick = MATCH_TIMEOUT_TICKS;
-      world.foodPiles = [];
-      world.colonies[1]!.foodStored = 0;
-      world.colonies[2]!.foodStored = 0;
+      setPilesForTest(world, []);
+      setPoolFoodForTest(world, world.colonies[1]!, 0);
+      setPoolFoodForTest(world, world.colonies[2]!, 0);
       checkTiebreaks(world, 1 as ColonyId);
       const ev = world.events.find((e) => e.type === 'round_end');
       if (ev && ev.type === 'round_end') {

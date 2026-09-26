@@ -35,7 +35,7 @@ import {
 } from '../sim/types.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
-import type { ColonyRecord, ChamberRecord } from '../sim/colony/colony-store.js';
+import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { createUndergroundGrid, ugSet, UndergroundTileState } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { AntTask, ChamberType } from '../sim/enums.js';
@@ -46,6 +46,13 @@ import { createDefaultAIStateRecord } from '../sim/ai-state.js';
 import { tick } from '../sim/tick.js';
 import { serializeWorldState, deserializeWorldState } from '../platform/save.js';
 import { ENEMY_COLONY_ID, QUEEN_EGG_FOOD_THRESHOLD, STARTING_WORKERS } from '../sim/constants.js';
+import { colonyFoodTotal } from '../sim/food/food-api.js';
+import {
+  addChamberForTest,
+  setPoolFoodForTest,
+  setChamberStockForTest,
+  type TestChamber,
+} from '../sim/food/food-test-utils.js';
 
 // ---------------------------------------------------------------------------
 // World builder helpers
@@ -95,11 +102,10 @@ function makeChamber(
   tileY: number,
   width = 3,
   height = 3,
-): ChamberRecord {
+): TestChamber {
   return {
     chamberId: 99,
     chamberType,
-    foodStored: 0,
     posX: tileX << FP_SHIFT,
     posY: tileY << FP_SHIFT,
     width,
@@ -146,7 +152,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       // A bare 0-worker colony with an empty larder is (correctly) in survival
       // mode; give it a healthy larder so this exercises the ordinary wiring.
-      colony.foodStored = QUEEN_EGG_FOOD_THRESHOLD * 2;
+      setPoolFoodForTest(world, colony, QUEEN_EGG_FOOD_THRESHOLD * 2);
       setQueenPos(world, 0, 10, 5);
       addUndergroundGrid(world, 2 as ColonyId);
       // tick 0 fires aiInitialSetup (2 cmds) + aiDigHeuristic (tick%40=0 → no chambers → 0)
@@ -164,7 +170,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       // AI ratio AND having an entrance means setup is complete.
       colony.targetRatio.forage = AI_BEHAVIOR_RATIO.forage;
       colony.targetRatio.fight = AI_BEHAVIOR_RATIO.fight;
-      colony.foodStored = QUEEN_EGG_FOOD_THRESHOLD * 2; // not in survival mode (see above)
+      setPoolFoodForTest(world, colony, QUEEN_EGG_FOOD_THRESHOLD * 2); // not in survival mode (see above)
       setQueenPos(world, 0, 10, 5);
       addUndergroundGrid(world, 2 as ColonyId);
       runAIController(world, 2 as ColonyId);
@@ -250,7 +256,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       // Place one chamber in a sea of Solid tiles
-      colony.chambers.push(makeChamber(ChamberType.Queen, 20, 20));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 20, 20));
       // Mark adjacent tiles as Open (to avoid immediate push); but we want Solid neighbors
       // The grid starts all Solid, so neighbors of chamber will be Solid → pushable
       aiDigHeuristic(world, colony);
@@ -268,7 +274,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       addUndergroundGrid(world, 2 as ColonyId);
       // Add many chambers to ensure many potential dig targets
       for (let i = 5; i < 30; i += 4) {
-        colony.chambers.push(makeChamber(ChamberType.Queen, i, 20, 1, 1));
+        addChamberForTest(world, colony, makeChamber(ChamberType.Queen, i, 20, 1, 1));
       }
       aiDigHeuristic(world, colony);
       const digCmds = world.commandQueue.filter((c) => c.type === 'MarkDigTile');
@@ -281,7 +287,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       addUndergroundGrid(world, 2 as ColonyId);
       const grid = world.undergroundGrids[2 as ColonyId]!;
       // Place chamber at (10,10); mark all neighbors Open
-      colony.chambers.push(makeChamber(ChamberType.Queen, 10, 10, 1, 1));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, 10, 1, 1));
       ugSet(grid, 10, 9, UndergroundTileState.Open); // N
       ugSet(grid, 11, 10, UndergroundTileState.Open); // E
       ugSet(grid, 10, 11, UndergroundTileState.Open); // S
@@ -303,7 +309,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       // Single-tile chamber at (10, 1) — top border lands on ty=0 = ceiling.
-      colony.chambers.push(makeChamber(ChamberType.Queen, 10, 1, 1, 1));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, 1, 1, 1));
       aiDigHeuristic(world, colony);
       const digCmds = world.commandQueue.filter((c) => c.type === 'MarkDigTile');
       // Some marks fired (E/W/S neighbors are valid), but NONE on the ceiling row.
@@ -317,7 +323,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const world = makeWorld(AI_DIG_INTERVAL);
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
-      colony.chambers.push(makeChamber(ChamberType.Queen, 10, 10, 1, 1));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, 10, 1, 1));
       aiDigHeuristic(world, colony);
       const digCmds = world.commandQueue.filter((c) => c.type === 'MarkDigTile');
       expect(digCmds.length).toBeGreaterThan(0);
@@ -333,8 +339,8 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
         const world = makeWorld(AI_DIG_INTERVAL);
         const colony = addColony(world, 2 as ColonyId, 0);
         addUndergroundGrid(world, 2 as ColonyId);
-        colony.chambers.push(makeChamber(ChamberType.Queen, 15, 15, 2, 2));
-        colony.chambers.push(makeChamber(ChamberType.Nursery, 20, 10, 2, 2));
+        addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 15, 15, 2, 2));
+        addChamberForTest(world, colony, makeChamber(ChamberType.Nursery, 20, 10, 2, 2));
         aiDigHeuristic(world, colony);
         return world.commandQueue;
       }
@@ -372,9 +378,9 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
-      colony.foodStored = AI_FOOD_STORAGE_THRESHOLD;
+      setPoolFoodForTest(world, colony, AI_FOOD_STORAGE_THRESHOLD);
       // Add a Queen chamber so that branch is skipped
-      colony.chambers.push(makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
       // Open tile for FoodStorage
       const grid = world.undergroundGrids[2 as ColonyId]!;
       ugSet(grid, 10, 5, UndergroundTileState.Open);
@@ -391,9 +397,9 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
-      colony.foodStored = AI_FOOD_STORAGE_THRESHOLD - 1;
-      colony.chambers.push(makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
-      colony.chambers.push(makeChamber(ChamberType.FoodStorage, 10, 5));
+      setPoolFoodForTest(world, colony, AI_FOOD_STORAGE_THRESHOLD - 1);
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 10, 5));
       const grid = world.undergroundGrids[2 as ColonyId]!;
       ugSet(grid, 10, 5, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
@@ -412,7 +418,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       setQueenPos(world, 0, 10, 10);
       colony.eggCount = 6;
       colony.larvaeCount = 6; // 12 total >= AI_NURSERY_THRESHOLD
-      colony.chambers.push(makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
       const grid = world.undergroundGrids[2 as ColonyId]!;
       ugSet(grid, 10, 7, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
@@ -429,9 +435,9 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
-      colony.chambers.push(makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
-      colony.chambers.push(makeChamber(ChamberType.FoodStorage, 10, 5));
-      colony.chambers.push(makeChamber(ChamberType.Nursery, 10, 7));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 10, 5));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Nursery, 10, 7));
       aiChamberPlacement(world, colony);
       const chamberCmds = world.commandQueue.filter((c) => c.type === 'PlaceChamber');
       expect(chamberCmds).toHaveLength(0);
@@ -461,7 +467,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const world = makeWorld(10);
       const colony = addColony(world, 2 as ColonyId, 0);
       // Add a chamber near surface (tileY <= 3)
-      colony.chambers.push(makeChamber(ChamberType.Queen, 15, 2));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 15, 2));
       aiEntranceDesignation(world, colony);
       const entranceCmd = world.commandQueue.find((c) => c.type === 'DesignateEntrance');
       expect(entranceCmd).toBeDefined();
@@ -476,7 +482,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const world = makeWorld(10);
       const colony = addColony(world, 2 as ColonyId, 0);
       colony.entrances = [{ entranceId: 1, surfaceTileX: 15, surfaceTileY: 0, isOpen: true }];
-      colony.chambers.push(makeChamber(ChamberType.Queen, 15, 2));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 15, 2));
       aiEntranceDesignation(world, colony);
       expect(world.commandQueue).toHaveLength(0);
     });
@@ -485,7 +491,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const world = makeWorld(10);
       const colony = addColony(world, 2 as ColonyId, 0);
       // Chamber deep underground (tileY = 20, well beyond surfaceEdgeY+2 = 3)
-      colony.chambers.push(makeChamber(ChamberType.Queen, 15, 20));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 15, 20));
       aiEntranceDesignation(world, colony);
       expect(world.commandQueue).toHaveLength(0);
     });
@@ -494,8 +500,8 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const world = makeWorld(0);
       const colony = addColony(world, 2 as ColonyId, 0);
       // Multiple near-surface chambers
-      colony.chambers.push(makeChamber(ChamberType.Queen, 10, 2));
-      colony.chambers.push(makeChamber(ChamberType.Nursery, 20, 1));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, 2));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Nursery, 20, 1));
       aiEntranceDesignation(world, colony);
       const entranceCmds = world.commandQueue.filter((c) => c.type === 'DesignateEntrance');
       expect(entranceCmds).toHaveLength(1);
@@ -508,7 +514,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const world = makeWorld(AI_DIG_INTERVAL);
       const colony = addColony(world, 2 as ColonyId, 0);
       // NO underground grid added
-      colony.chambers.push(makeChamber(ChamberType.Queen, 10, 10, 1, 1));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, 10, 1, 1));
       aiDigHeuristic(world, colony);
       expect(world.commandQueue).toHaveLength(0);
     });
@@ -518,7 +524,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       // Chamber at edge (0,0); N neighbor is (0,-1) — out of bounds
-      colony.chambers.push(makeChamber(ChamberType.Queen, 0, 0, 1, 1));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 0, 0, 1, 1));
       aiDigHeuristic(world, colony);
       // Only E and S neighbors are valid, both Solid → should push commands for in-bounds only
       const digCmds = world.commandQueue.filter((c) => c.type === 'MarkDigTile');
@@ -535,7 +541,11 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       // Chamber at far edge; E and S neighbors would exceed width/height
-      colony.chambers.push(makeChamber(ChamberType.Queen, GRID_W - 1, GRID_H - 1, 1, 1));
+      addChamberForTest(
+        world,
+        colony,
+        makeChamber(ChamberType.Queen, GRID_W - 1, GRID_H - 1, 1, 1),
+      );
       aiDigHeuristic(world, colony);
       const digCmds = world.commandQueue.filter((c) => c.type === 'MarkDigTile');
       for (const cmd of digCmds) {
@@ -550,7 +560,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       // All tiles start Solid; chamber at (10,10)
-      colony.chambers.push(makeChamber(ChamberType.Queen, 10, 10, 1, 1));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, 10, 1, 1));
       aiDigHeuristic(world, colony);
       // Should have pushed commands for Solid neighbors
       const digCmds = world.commandQueue.filter((c) => c.type === 'MarkDigTile');
@@ -562,7 +572,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       const grid = world.undergroundGrids[2 as ColonyId]!;
-      colony.chambers.push(makeChamber(ChamberType.Queen, 10, 10, 1, 1));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, 10, 1, 1));
       // Make all neighbors Open
       ugSet(grid, 10, 9, UndergroundTileState.Open);
       ugSet(grid, 11, 10, UndergroundTileState.Open);
@@ -577,7 +587,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       const grid = world.undergroundGrids[2 as ColonyId]!;
-      colony.chambers.push(makeChamber(ChamberType.Queen, 10, 10, 1, 1));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, 10, 1, 1));
       ugSet(grid, 10, 9, UndergroundTileState.Marked);
       ugSet(grid, 11, 10, UndergroundTileState.Marked);
       ugSet(grid, 10, 11, UndergroundTileState.Marked);
@@ -640,7 +650,11 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const grid = world.undergroundGrids[2 as ColonyId]!;
       // Open tile at exact preferred depth, but occupied by existing chamber
       ugSet(grid, 10, AI_QUEEN_CHAMBER_DEPTH, UndergroundTileState.Open);
-      colony.chambers.push(makeChamber(ChamberType.Nursery, 10, AI_QUEEN_CHAMBER_DEPTH, 1, 1));
+      addChamberForTest(
+        world,
+        colony,
+        makeChamber(ChamberType.Nursery, 10, AI_QUEEN_CHAMBER_DEPTH, 1, 1),
+      );
       // Also provide an alternative open tile
       ugSet(grid, 12, AI_QUEEN_CHAMBER_DEPTH, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
@@ -736,8 +750,8 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       // existing Queen+FS at X≈10) and X=40 (far). Both have valid 4x3
       // footprints that don't overlap any existing chamber. Spread bias
       // should pick X=40.
-      colony.chambers.push(makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
-      colony.chambers.push(makeChamber(ChamberType.FoodStorage, 10, 5));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 10, 5));
       colony.eggCount = 6;
       colony.larvaeCount = 6; // Triggers Nursery via brood threshold.
       ugSet(grid, 14, 7, UndergroundTileState.Open);
@@ -759,7 +773,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
-      colony.foodStored = AI_FOOD_STORAGE_THRESHOLD * 100; // Far above threshold.
+      setPoolFoodForTest(world, colony, AI_FOOD_STORAGE_THRESHOLD * 100); // Far above threshold.
       const grid = world.undergroundGrids[2 as ColonyId]!;
       // Open tile at FS preferredDepth (5). Pre-fix the FS gate fired here
       // immediately; the FS chamber landed and blocked the bootstrap dig
@@ -818,10 +832,10 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
-      colony.foodStored = AI_FOOD_STORAGE_THRESHOLD * 100;
+      setPoolFoodForTest(world, colony, AI_FOOD_STORAGE_THRESHOLD * 100);
       // Queen exists at a deep position; the only FS-eligible Open tile is
       // at Y=20 — way outside the (preferredDepth=5, tolerance=4) gate.
-      colony.chambers.push(makeChamber(ChamberType.Queen, 10, 18));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, 18));
       const grid = world.undergroundGrids[2 as ColonyId]!;
       ugSet(grid, 30, 20, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
@@ -852,8 +866,8 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       // Place A at right edge, B at left edge. Both 1x1 to keep the
       // arithmetic crisp.
       const RIGHT_EDGE = 63; // GRID_W - 1, matches addUndergroundGrid GRID_W=64
-      colony.chambers.push(makeChamber(ChamberType.Queen, RIGHT_EDGE, 5, 1, 1));
-      colony.chambers.push(makeChamber(ChamberType.FoodStorage, 0, 5, 1, 1));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, RIGHT_EDGE, 5, 1, 1));
+      addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 0, 5, 1, 1));
 
       aiDigHeuristic(world, colony);
       const digCmds = world.commandQueue.filter((c) => c.type === 'MarkDigTile') as Array<{
@@ -876,7 +890,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
-      colony.foodStored = AI_FOOD_STORAGE_THRESHOLD * 100;
+      setPoolFoodForTest(world, colony, AI_FOOD_STORAGE_THRESHOLD * 100);
       const grid = world.undergroundGrids[2 as ColonyId]!;
       // Pending Queen blocks the bootstrap-dig gate AND counts as "queen
       // exists" for the FS gate, so FS can place even before the Queen
@@ -913,7 +927,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       addUndergroundGrid(world, AI_COLONY_ID);
       const grid = world.undergroundGrids[AI_COLONY_ID]!;
       ugSet(grid, 10, AI_QUEEN_CHAMBER_DEPTH, UndergroundTileState.Open);
-      aiColony.foodStored = AI_FOOD_STORAGE_THRESHOLD;
+      setPoolFoodForTest(world, aiColony, AI_FOOD_STORAGE_THRESHOLD);
       aiColony.eggCount = AI_NURSERY_THRESHOLD;
       runAIController(world, AI_COLONY_ID);
       expect(world.commandQueue.length).toBeGreaterThan(0);
@@ -937,7 +951,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const beforeTick = world.tick;
       const beforePosX = world.ants.posX[0];
       const beforePosY = world.ants.posY[0];
-      const beforeFoodStored = aiColony.foodStored;
+      const beforeFoodStored = colonyFoodTotal(world, aiColony);
       const beforeWorkerCount = aiColony.workerCount;
       const gridDataSnapshot = new Uint8Array(grid.data);
 
@@ -947,7 +961,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(world.tick).toBe(beforeTick);
       expect(world.ants.posX[0]).toBe(beforePosX);
       expect(world.ants.posY[0]).toBe(beforePosY);
-      expect(aiColony.foodStored).toBe(beforeFoodStored);
+      expect(colonyFoodTotal(world, aiColony)).toBe(beforeFoodStored);
       expect(aiColony.workerCount).toBe(beforeWorkerCount);
       expect(grid.data).toEqual(gridDataSnapshot);
     });
@@ -1085,11 +1099,11 @@ describe('#293 survival mode', () => {
     colony.entrances = [{ entranceId: 1, surfaceTileX: 10, surfaceTileY: 0, isOpen: true }];
     colony.targetRatio.forage = AI_BEHAVIOR_RATIO.forage;
     colony.targetRatio.fight = AI_BEHAVIOR_RATIO.fight;
-    colony.chambers.push(makeChamber(ChamberType.Queen, 20, 20));
+    addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 20, 20));
     // Live roster: survival mode counts colony.workers entries with alive === 1, so
     // spawn real worker ants (workerCount is kept in step for the sim's own readers).
     for (let i = 0; i < workers; i++) spawnWorker(world, colony);
-    colony.foodStored = food;
+    setPoolFoodForTest(world, colony, food);
     const grid = world.undergroundGrids[AI]!;
     for (let i = 0; i < marked; i++) {
       ugSet(grid, 40 + (i % 8), 40 + Math.floor(i / 8), UndergroundTileState.Marked);
@@ -1156,7 +1170,7 @@ describe('#293 survival mode', () => {
     // Apply it, recover the larder: the WarFooting ratio comes back.
     colony.targetRatio.forage = AI_SURVIVAL_RATIO.forage;
     colony.targetRatio.fight = AI_SURVIVAL_RATIO.fight;
-    colony.foodStored = FOOD_BOUND;
+    setPoolFoodForTest(world, colony, FOOD_BOUND);
     world.commandQueue.splice(0);
     runAIController(world, AI);
     const back = world.commandQueue.filter((c) => c.type === 'SetBehaviorRatio') as Array<{
@@ -1265,11 +1279,11 @@ describe('#293 survival mode', () => {
     runAIController(world, AI);
     expect(counts(world).mark).toBe(0);
     // Larder crosses the bound: digging resumes at once (no held flag).
-    colony.foodStored = FOOD_BOUND;
+    setPoolFoodForTest(world, colony, FOOD_BOUND);
     expect(aiSurvivalMode(world, colony)).toBe(false);
     expect(runAgain(world).mark).toBeGreaterThan(0);
     // Drops back below: in mode again at once.
-    colony.foodStored = 0;
+    setPoolFoodForTest(world, colony, 0);
     expect(aiSurvivalMode(world, colony)).toBe(true);
     expect(runAgain(world).mark).toBe(0);
     // Grows to 3 workers with a low larder: out, and stays out regardless of history.
@@ -1283,7 +1297,7 @@ describe('#293 survival mode', () => {
     expect(aiSurvivalMode(world, colony)).toBe(true);
     const player = addColony(world, 1 as ColonyId, 0);
     for (let i = 0; i < 20; i++) spawnWorker(world, player);
-    player.foodStored = 0;
+    setPoolFoodForTest(world, player, 0);
     expect(aiSurvivalMode(world, player)).toBe(false);
     expect(aiSurvivalMode(world, colony)).toBe(true);
   });
@@ -1308,8 +1322,8 @@ describe('#293 survival mode', () => {
       for (const wid of spare) live.ants.alive[wid] = 0;
       colony.workers.length = workers;
       colony.workerCount = workers;
-      colony.foodStored = food;
-      for (const ch of colony.chambers) ch.foodStored = 0;
+      setPoolFoodForTest(live, colony, food);
+      for (const ch of colony.chambers) setChamberStockForTest(live, colony, ch, 0);
       const loaded = deserializeWorldState(JSON.parse(JSON.stringify(serializeWorldState(live))));
       return { live, loaded };
     }

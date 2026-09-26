@@ -25,6 +25,13 @@ import { tick, __getChamberFlowFieldsForTest } from './tick.js';
 import { killAnt } from './ant-death.js';
 import { tickFoodConsumption, checkPendingChambers } from './colony/colony-system.js';
 import { tickLifecycleTransitions } from './colony/lifecycle-system.js';
+import { LARVA_HUNGER } from './hunger.js';
+import {
+  addChamberForTest,
+  setChamberStockForTest,
+  setPoolFoodForTest,
+  setMealsUntilStarvationForTest,
+} from './food/food-test-utils.js';
 // eslint-disable-next-line no-restricted-imports -- #235 differential proof needs the platform serializer (telemetry.test.ts:8 pattern)
 import { serializeWorldState } from '../platform/save.js';
 
@@ -61,12 +68,11 @@ function buildBroodColony(seed: number): WorldState {
   colony.digFlowFieldDirty = false;
   colony.foodFlowFieldDirty = false;
   colony.broodFieldDirty = false;
-  colony.foodStored = 500_000; // plenty — queen lays, larvae feed, no starvation
   world.colonies[COLONY_ID] = colony;
-  colony.chambers.push({
+  setPoolFoodForTest(world, colony, 500_000); // plenty — queen lays, larvae feed, no starvation
+  addChamberForTest(world, colony, {
     chamberId: 1,
     chamberType: ChamberType.Queen,
-    foodStored: 0,
     posX: 2 << FP_SHIFT,
     posY: 2 << FP_SHIFT,
     width: 3,
@@ -76,26 +82,24 @@ function buildBroodColony(seed: number): WorldState {
   // Nursery (3x3 Open) at (12,12).
   for (let dy = 0; dy < 3; dy++)
     for (let dx = 0; dx < 3; dx++) ugSet(underground, 12 + dx, 12 + dy, UndergroundTileState.Open);
-  colony.chambers.push({
+  addChamberForTest(world, colony, {
     chamberId: 2,
     chamberType: ChamberType.Nursery,
-    foodStored: 0,
     posX: 12 << FP_SHIFT,
     posY: 12 << FP_SHIFT,
     width: 3,
     height: 3,
   });
 
-  // FoodStorage (3x3 Open) at (5,6) — its foodStored is toggled across the
+  // FoodStorage (3x3 Open) at (5,6) — its stock is toggled across the
   // isFoodChamberDepositable boundary in the loop to fire foodFlowFieldDirty, so
   // the #235 PR3 food-decouple (food field rebuilds on food OR topology; the other
   // five first-loop fields on topology only) is exercised.
   for (let dy = 0; dy < 3; dy++)
     for (let dx = 0; dx < 3; dx++) ugSet(underground, 5 + dx, 6 + dy, UndergroundTileState.Open);
-  colony.chambers.push({
+  addChamberForTest(world, colony, {
     chamberId: 3,
     chamberType: ChamberType.FoodStorage,
-    foodStored: 0,
     posX: 5 << FP_SHIFT,
     posY: 6 << FP_SHIFT,
     width: 3,
@@ -212,8 +216,8 @@ describe('chamber-flow gating (#235) — gated ≡ force-recompute-every-tick', 
         if (t % 40 === 0) {
           foodFull = !foodFull;
           const fv = foodFull ? FOOD_CHAMBER_CAPACITY : 0;
-          gFood.foodStored = fv;
-          fFood.foodStored = fv;
+          setChamberStockForTest(g, gc, gFood, fv);
+          setChamberStockForTest(f, fc, fFood, fv);
           gc.foodFlowFieldDirty = true;
           fc.foodFlowFieldDirty = true;
         }
@@ -287,9 +291,9 @@ describe('broodFieldDirty triggers (#235) — the two hardest, deterministically
     const ants = world.ants;
     // Call tickFoodConsumption directly (a full tick would clear the flag in
     // step-9's second loop after the death). No food + a 1-tick timer → death.
-    colony.foodStored = 0;
+    setPoolFoodForTest(world, colony, 0);
     const larva = colony.larvae[0]!;
-    ants.starvationTimer[larva] = 1;
+    setMealsUntilStarvationForTest(world, larva, LARVA_HUNGER, 1);
     colony.broodFieldDirty = false;
     tickFoodConsumption(world, colony);
     expect(ants.alive[larva]).toBe(0);

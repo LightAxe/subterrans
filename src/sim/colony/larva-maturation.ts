@@ -43,7 +43,6 @@ import { FP_SHIFT } from '../fixed.js';
 import {
   LARVA_MATURE_TICKS,
   LARVA_MATURE_NURSE_ACCELERATION,
-  STARVATION_GRACE_TICKS,
   WORKER_BASE_SPEED,
 } from '../constants.js';
 import type { AntComponents } from '../ant/ant-store.js';
@@ -138,7 +137,7 @@ export function tickLarvaMaturation(world: WorldState, colony: ColonyRecord): vo
       colony.larvae.pop();
       colony.larvaeCount -= 1;
       ants.age[larvaId] = 0;
-      ants.starvationTimer[larvaId] = STARVATION_GRACE_TICKS;
+      ants.lastMealTick[larvaId] = world.tick; // #288 — a new worker starts fed
       ants.task[larvaId] = AntTask.Idle;
       ants.speed[larvaId] = WORKER_BASE_SPEED;
       colony.workers.push(larvaId);

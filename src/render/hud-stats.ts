@@ -18,7 +18,8 @@
 //     capacity = colonyFoodCapacity(colony) >> FP_SHIFT
 //     Capacity grows as FoodStorage chambers complete, so the label doubles
 //     as feedback for "did my new chamber take effect yet?".
-//   - Queen health = visual bar derived from queenStarvationTimer / STARVATION_GRACE_TICKS
+//   - Queen health = visual bar: meals until starvation / QUEEN_STARVE_AFTER_TICKS
+//     (queenMealsUntilStarvation below; #288 V50 derives it from the hunger clock)
 //     * green  when pct > 50  (healthy)
 //     * yellow when 25 ≤ pct ≤ 50 (moderate)
 //     * red    when pct < 25  (critical)
@@ -35,7 +36,7 @@ import type { WorldState } from '../sim/types.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { isAlive } from '../sim/ant/ant-store.js';
 import { FP_SHIFT } from '../sim/fixed.js';
-import { STARVATION_GRACE_TICKS } from '../sim/constants.js';
+import { QUEEN_HUNGER, mealsUntilStarvation } from '../sim/hunger.js';
 import { colonyFoodCapacity, colonyFoodTotal } from '../sim/food/food-api.js';
 
 export interface HudStats {
@@ -99,12 +100,22 @@ export function computeHudStats(world: WorldState, colony: ColonyRecord): HudSta
 
   let queenHealthPct = 0;
   if (queenAlive) {
-    const raw = colony.queenStarvationTimer / STARVATION_GRACE_TICKS;
+    const raw = queenMealsUntilStarvation(world, colony) / QUEEN_HUNGER.starveAfterTicks;
     const t = raw < 0 ? 0 : raw > 1 ? 1 : raw;
     queenHealthPct = Math.round(t * 100);
   }
 
   return { antCount, foodDisplay, foodCapacity, queenHealthPct, queenAlive };
+}
+
+/**
+ * #288 (V50) — how many more failed meals the colony's queen survives, read
+ * between ticks: QUEEN_STARVE_AFTER_TICKS (300) while she is being fed, one less
+ * per missed meal, 0 when she starves. Below the maximum means at least one meal
+ * has failed. Meaningful only while she is alive.
+ */
+export function queenMealsUntilStarvation(world: WorldState, colony: ColonyRecord): number {
+  return mealsUntilStarvation(world, colony.queenEntityId, QUEEN_HUNGER);
 }
 
 export function formatAntsLabel(s: HudStats): string {

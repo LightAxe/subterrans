@@ -15,6 +15,7 @@ import {
   SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
+import { addChamberForTest } from '../food/food-test-utils.js';
 import { initAnt, RECENT_TILES_LEN, isRecentTile, pushRecentTile } from './ant-store.js';
 import { pickNoRevisitSurfaceAlternate } from './ant-foraging.js';
 import {
@@ -520,10 +521,9 @@ describe('tickAntMovement — underground passability guard', () => {
     const { world, colony, underground } = setupWorldWithUnderground(16, 16);
     ugSet(underground, 5, 5, UndergroundTileState.Open);
     ugSet(underground, 5, 8, UndergroundTileState.Open);
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 1,
       chamberType: ChamberType.Queen,
-      foodStored: 0,
       posX: 5 << FP_SHIFT,
       posY: 8 << FP_SHIFT,
       width: 1,
@@ -560,10 +560,9 @@ describe('tickAntMovement — underground passability guard', () => {
     for (let y = 5; y <= 8; y++) {
       ugSet(underground, 5, y, UndergroundTileState.Open);
     }
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 1,
       chamberType: ChamberType.Queen,
-      foodStored: 0,
       posX: 5 << FP_SHIFT,
       posY: 8 << FP_SHIFT,
       width: 1,
@@ -602,10 +601,9 @@ describe('tickAntMovement — underground passability guard', () => {
         ugSet(underground, 8 + ox, 4 + oy, UndergroundTileState.Open);
       }
     }
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 1,
       chamberType: ChamberType.FoodStorage,
-      foodStored: 0,
       posX: 8 << FP_SHIFT,
       posY: 4 << FP_SHIFT,
       width: 2,
@@ -715,10 +713,9 @@ describe('tickAntMovement — underground passability guard', () => {
     const { world, colony, underground } = setupWorldWithUnderground(4, 4);
     ugSet(underground, 0, 0, UndergroundTileState.Open);
     ugSet(underground, 1, 0, UndergroundTileState.Marked);
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 1,
       chamberType: ChamberType.Queen,
-      foodStored: 0,
       posX: 1 << FP_SHIFT,
       posY: 0,
       width: 1,
@@ -755,10 +752,9 @@ describe('tickAntMovement — underground passability guard', () => {
       ugSet(underground, 5, 7, UndergroundTileState.Open);
       ugSet(underground, 6, 7, UndergroundTileState.Open);
       ugSet(underground, 7, 7, UndergroundTileState.Open);
-      colony.chambers.push({
+      addChamberForTest(world, colony, {
         chamberId: 1,
         chamberType: ChamberType.Queen,
-        foodStored: 0,
         posX: 7 << FP_SHIFT,
         posY: 7 << FP_SHIFT,
         width: 1,
@@ -1217,10 +1213,9 @@ describe('tickAntMovement — underground chamber routing (tunnel-aware)', () =>
     for (let y = 5; y <= 10; y++) ugSet(underground, 10, y, UndergroundTileState.Open);
     for (let x = 5; x <= 10; x++) ugSet(underground, x, 5, UndergroundTileState.Open);
     // Chamber record (posX/posY in fixed-point, width/height in tiles)
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 100,
       chamberType: opts.chamberType,
-      foodStored: 0,
       posX: 5 << FP_SHIFT,
       posY: 5 << FP_SHIFT,
       width: 1,
@@ -1392,10 +1387,9 @@ describe('tickAntMovement — underground chamber routing (tunnel-aware)', () =>
     ugSet(underground, 10, 8, UndergroundTileState.Open);
     // ...tunnel up to entrance (10, 0):
     for (let y = 0; y <= 10; y++) ugSet(underground, 10, y, UndergroundTileState.Open);
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 100,
       chamberType: 2 /* FoodStorage */,
-      foodStored: 0,
       posX: 3 << FP_SHIFT,
       posY: 3 << FP_SHIFT,
       width: 1,
@@ -1440,10 +1434,9 @@ describe('tickAntMovement — underground chamber routing (tunnel-aware)', () =>
     const { world, colony, underground, colonyId } = setupWorldWithUnderground(16, 16);
     ugSet(underground, 3, 3, UndergroundTileState.Open);
     ugSet(underground, 10, 10, UndergroundTileState.Open);
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 100,
       chamberType: 1 /* Nursery */,
-      foodStored: 0,
       posX: 3 << FP_SHIFT,
       posY: 3 << FP_SHIFT,
       width: 1,
@@ -1489,10 +1482,9 @@ describe('tickAntMovement — underground chamber routing (tunnel-aware)', () =>
     // Explicit: (23,8) must be Solid so the straight-line failure mode is reproducible.
     expect(ugGet(underground, 23, 8)).toBe(UndergroundTileState.Solid);
 
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 100,
       chamberType: 2 /* FoodStorage */,
-      foodStored: 0,
       posX: 18 << FP_SHIFT,
       posY: 17 << FP_SHIFT,
       width: 1,
@@ -1561,10 +1553,9 @@ describe('tickAntMovement — v4 diagonal flow-field lift (issue #34)', () => {
     // Horizontal row y=5 from x=5 to x=10 (overlaps at (10,5)).
     for (let x = 5; x <= 10; x++) ugSet(underground, x, 5, UndergroundTileState.Open);
     // FoodStorage chamber at (5,5), 1×1 footprint.
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 100,
       chamberType: ChamberType.FoodStorage,
-      foodStored: 0,
       posX: 5 << FP_SHIFT,
       posY: 5 << FP_SHIFT,
       width: 1,
@@ -2346,10 +2337,9 @@ describe('tickAntMovement — same-colony occupancy enforcement', () => {
     colony.digFlowFieldDirty = false;
     // Chamber footprint over the North neighbour (6,4) — the first tile the resolver
     // tries (DIR order N,E,S,W) — so the shift takes the EXEMPT write pair.
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 1,
       chamberType: ChamberType.FoodStorage,
-      foodStored: 0,
       posX: 6 << FP_SHIFT,
       posY: 4 << FP_SHIFT,
       width: 1,
@@ -2665,10 +2655,9 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
     const colonyId = world.ants.colonyId[antId]!;
     const colony = world.colonies[colonyId]!;
     // Place FoodStorage chamber at (4, 3) to seed the food flow field East.
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 100,
       chamberType: ChamberType.FoodStorage,
-      foodStored: 0,
       posX: 4 << FP_SHIFT,
       posY: 3 << FP_SHIFT,
       width: 1,
@@ -2713,10 +2702,9 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
 
     const colonyId = world.ants.colonyId[antId]!;
     const colony = world.colonies[colonyId]!;
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 101,
       chamberType: ChamberType.FoodStorage,
-      foodStored: 0,
       posX: 4 << FP_SHIFT,
       posY: 3 << FP_SHIFT,
       width: 1,

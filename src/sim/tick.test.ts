@@ -24,6 +24,15 @@ import { GameOutcome } from './game-over.js';
 import type { SimCommand } from './commands.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
+import { colonyPoolFood, chamberStock } from './food/food-api.js';
+import {
+  addChamberForTest,
+  addPileForTest,
+  setMealsUntilStarvationForTest,
+  setPoolFoodForTest,
+  type TestPile,
+} from './food/food-test-utils.js';
+import { QUEEN_HUNGER, mealsUntilStarvation } from './hunger.js';
 import {
   createPheromoneGrid,
   phGet,
@@ -71,7 +80,7 @@ function makeWorldWithColony(seed: number = 42): {
     lifespan: WORKER_LIFESPAN_TICKS,
   });
   world.colonies[1] = createColonyRecord(1, queenId);
-  world.colonies[1].foodStored = 10000;
+  setPoolFoodForTest(world, world.colonies[1], 10000);
   return { world, colonyId: 1 as ColonyId, queenId };
 }
 
@@ -215,15 +224,19 @@ describe('Step 1: command processing', () => {
       const cid = built.colonyId;
       w.simVersion = simVersion;
       const colony = w.colonies[cid]!;
-      colony.chambers.push({
-        chamberId: 9002,
-        chamberType: ChamberType.Nursery,
-        foodStored: 0,
-        posX: 0,
-        posY: 0,
-        width: 2,
-        height: 2,
-      });
+      addChamberForTest(
+        w,
+        colony,
+        {
+          chamberId: 9002,
+          chamberType: ChamberType.Nursery,
+          posX: 0,
+          posY: 0,
+          width: 2,
+          height: 2,
+        },
+        0,
+      );
       for (let i = 0; i < 6; i++) {
         const eid = allocateEntityId(w);
         initAnt(w.ants, eid, {
@@ -297,15 +310,19 @@ describe('Step 1: command processing', () => {
       }
       ugSet(ug, 6, 6, UndergroundTileState.Open);
       w.undergroundGrids[cid] = ug;
-      colony.chambers.push({
-        chamberId: 9003,
-        chamberType: ChamberType.Nursery,
-        foodStored: 0,
-        posX: 2 << FP_SHIFT,
-        posY: 3 << FP_SHIFT,
-        width: 2,
-        height: 2,
-      });
+      addChamberForTest(
+        w,
+        colony,
+        {
+          chamberId: 9003,
+          chamberType: ChamberType.Nursery,
+          posX: 2 << FP_SHIFT,
+          posY: 3 << FP_SHIFT,
+          width: 2,
+          height: 2,
+        },
+        0,
+      );
       const larvae: number[] = [];
       const larvaeCount = opts.larvaeCount ?? 6;
       const larvaeOutside = opts.larvaeOutside ?? 0;
@@ -662,7 +679,7 @@ describe('Step 1: command processing', () => {
   // Test 6: MarkDigTile is silent no-op
   it('Test 6: MarkDigTile is silent no-op — no throw, no colony state change', () => {
     const colony = world.colonies[colonyId]!;
-    const foodBefore = colony.foodStored;
+    const foodBefore = colonyPoolFood(world, colony);
     const cmd: SimCommand = {
       type: 'MarkDigTile',
       colonyId,
@@ -759,17 +776,17 @@ describe('Step ordering observable proofs', () => {
   // Test 11: Step 3 (food consumption) before Step 4 (starvation)
   it('Test 11: food consumption runs before starvation check — fed queen timer resets not decrements', () => {
     const colony = world.colonies[colonyId]!;
-    colony.foodStored = 1000; // plenty of food
-    colony.queenStarvationTimer = 10; // partially expired timer
+    setPoolFoodForTest(world, colony, 1000); // plenty of food
+    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, 10); // partially expired timer
 
     tick(world, []);
 
-    // Queen was fed (foodStored had enough), so timer should reset to STARVATION_GRACE_TICKS
-    // not continue decrementing from 10 → 9
-    expect(colony.queenStarvationTimer).toBe(STARVATION_GRACE_TICKS);
+    // Queen was fed (foodStored had enough), so the between-ticks countdown reads
+    // STARVATION_GRACE_TICKS (a full reset), not 10 continuing to decrement toward 9.
+    expect(mealsUntilStarvation(world, queenId, QUEEN_HUNGER)).toBe(STARVATION_GRACE_TICKS);
     // Food was consumed by exactly QUEEN_FOOD_PER_TICK (from the abundant pool)
-    expect(colony.foodStored).toBeLessThan(1000);
-    expect(colony.foodStored).toBe(1000 - QUEEN_FOOD_PER_TICK);
+    expect(colonyPoolFood(world, colony)).toBeLessThan(1000);
+    expect(colonyPoolFood(world, colony)).toBe(1000 - QUEEN_FOOD_PER_TICK);
   });
 
   // Test 12: Step 5 (death cleanup) before Step 6 (egg production)
@@ -777,7 +794,7 @@ describe('Step ordering observable proofs', () => {
     const colony = world.colonies[colonyId]!;
     // Kill queen manually before tick
     world.ants.alive[queenId] = 0;
-    colony.foodStored = 100000; // plenty of food and threshold met
+    setPoolFoodForTest(world, colony, 100000); // plenty of food and threshold met
     colony.eggCount = 0;
 
     tick(world, []);
@@ -1076,15 +1093,19 @@ describe('Step ordering observable proofs', () => {
       // 09 reproduction-gate memo: nurse carveout requires a completed Nursery.
       // Without this chamber, allocateWorkers returns nurse=0 and the
       // {3,4,0,3} expectation below would collapse to {0,6,0,4}.
-      colony.chambers.push({
-        chamberId: 9001,
-        chamberType: ChamberType.Nursery,
-        foodStored: 0,
-        posX: 0,
-        posY: 0,
-        width: 2,
-        height: 2,
-      });
+      addChamberForTest(
+        w,
+        colony,
+        {
+          chamberId: 9001,
+          chamberType: ChamberType.Nursery,
+          posX: 0,
+          posY: 0,
+          width: 2,
+          height: 2,
+        },
+        0,
+      );
 
       for (let i = 0; i < 10; i++) {
         const wid = allocateEntityId(w);
@@ -1297,15 +1318,19 @@ describe('09 reproduction-gate memo — starvation-shape regression', () => {
       colony.workers.push(wid);
     }
 
-    colony.chambers.push({
-      chamberId: 9000,
-      chamberType: ChamberType.Nursery,
-      foodStored: 0,
-      posX: 0,
-      posY: 0,
-      width: 2,
-      height: 2,
-    });
+    addChamberForTest(
+      w,
+      colony,
+      {
+        chamberId: 9000,
+        chamberType: ChamberType.Nursery,
+        posX: 0,
+        posY: 0,
+        width: 2,
+        height: 2,
+      },
+      0,
+    );
 
     colony.targetRatio.forage = 10;
     colony.targetRatio.fight = 0;
@@ -1411,7 +1436,7 @@ describe('Tick writeback and return', () => {
       speed: 0,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1].foodStored = 10000;
+    setPoolFoodForTest(world, world.colonies[1], 10000);
 
     // Add a forager so movement uses rng
     for (let i = 0; i < 3; i++) {
@@ -1476,7 +1501,7 @@ describe('Multi-colony iteration', () => {
       speed: 0,
     });
     world.colonies[1] = createColonyRecord(1, q1);
-    world.colonies[1].foodStored = 5000;
+    setPoolFoodForTest(world, world.colonies[1], 5000);
 
     // Colony 2
     const q2 = allocateEntityId(world);
@@ -1489,7 +1514,7 @@ describe('Multi-colony iteration', () => {
       speed: 0,
     });
     world.colonies[2] = createColonyRecord(2, q2);
-    world.colonies[2].foodStored = 5000;
+    setPoolFoodForTest(world, world.colonies[2], 5000);
 
     // Add 2 workers to each colony
     for (let i = 0; i < 2; i++) {
@@ -1519,8 +1544,8 @@ describe('Multi-colony iteration', () => {
     tick(world, []);
 
     // Both colonies consumed food (queen fed)
-    expect(world.colonies[1].foodStored).toBe(5000 - QUEEN_FOOD_PER_TICK);
-    expect(world.colonies[2].foodStored).toBe(5000 - QUEEN_FOOD_PER_TICK);
+    expect(colonyPoolFood(world, world.colonies[1])).toBe(5000 - QUEEN_FOOD_PER_TICK);
+    expect(colonyPoolFood(world, world.colonies[2])).toBe(5000 - QUEEN_FOOD_PER_TICK);
     // Both colonies have populated task census
     // (2 mid-cycle foragers each → census forage = 2)
     expect(world.colonies[1].taskCensus.forage).toBe(2);
@@ -1596,7 +1621,6 @@ describe('PHER-02 two-grid integration', () => {
 
 import { createUndergroundGrid, UndergroundTileState, ugGet, ugSet } from './terrain.js';
 import { DiggingSubState } from './enums.js';
-import type { FoodPile } from './food.js';
 import {
   MAX_ENTRANCES_PER_COLONY,
   UNDERGROUND_GRID_WIDTH,
@@ -1624,7 +1648,7 @@ describe('Phase 7: MarkDigTile command processing', () => {
       subTask: 0,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1].foodStored = 10000;
+    setPoolFoodForTest(world, world.colonies[1], 10000);
     // Phase 3 extension fields required by tick.ts
     world.colonies[1].entrances = [];
     world.colonies[1].rallyPoint = null;
@@ -1759,14 +1783,14 @@ describe('Phase 7: MarkDigTile command processing', () => {
   // Test P7-6: MarkFoodPile sets colony.priorityFoodPileId and re-clicking the same pile clears it
   it('Test P7-6: MarkFoodPile sets colony priority on first click, clears on second (toggle off)', () => {
     const { world, colonyId } = makeWorldWithUnderground();
-    const pile: FoodPile = {
+    const pile: TestPile = {
       foodPileId: 0,
       tileX: 20,
       tileY: 30,
       pickupsRemaining: 50,
       pickupsInitial: 50,
     };
-    world.foodPiles.push(pile);
+    addPileForTest(world, pile);
     const colony = world.colonies[colonyId]!;
     expect(colony.priorityFoodPileId).toBeNull();
     const cmd: SimCommand = {
@@ -1786,14 +1810,14 @@ describe('Phase 7: MarkDigTile command processing', () => {
   // Phase 9: selecting a different pile is an EXCLUSIVE redirect, not an additive mark.
   it('MarkFoodPile redirect: clicking a second pile replaces the first (exclusive per colony)', () => {
     const { world, colonyId } = makeWorldWithUnderground();
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 0,
       tileX: 20,
       tileY: 30,
       pickupsRemaining: 50,
       pickupsInitial: 50,
     });
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 1,
       tileX: 40,
       tileY: 50,
@@ -1817,7 +1841,7 @@ describe('Phase 7: MarkDigTile command processing', () => {
       colonyId: colonyB,
       priorityFoodPileId: null,
     };
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 7,
       tileX: 10,
       tileY: 10,
@@ -2244,7 +2268,7 @@ describe('Phase 7: Step ordering tests', () => {
       subTask: 0,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1].foodStored = 10000;
+    setPoolFoodForTest(world, world.colonies[1], 10000);
     world.colonies[1].entrances = [];
     world.colonies[1].rallyPoint = null;
     world.colonies[1].digFlowFieldDirty = false;
@@ -2644,7 +2668,7 @@ describe('Regression: reviewer P1 fixes', () => {
       subTask: 0,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1].foodStored = 10000;
+    setPoolFoodForTest(world, world.colonies[1], 10000);
     world.colonies[1].entrances = [];
     world.colonies[1].rallyPoint = null;
     world.colonies[1].digFlowFieldDirty = false;
@@ -2855,15 +2879,19 @@ describe('Regression: reviewer P1 fixes', () => {
     const underground = world.undergroundGrids[colonyId]!;
     // Seed an existing Queen chamber directly in colony.chambers.
     const colony = world.colonies[colonyId]!;
-    colony.chambers.push({
-      chamberId: 999,
-      chamberType: ChamberType.Queen,
-      foodStored: 0,
-      posX: 5 << FP_SHIFT,
-      posY: 5 << FP_SHIFT,
-      width: 5,
-      height: 3,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 999,
+        chamberType: ChamberType.Queen,
+        posX: 5 << FP_SHIFT,
+        posY: 5 << FP_SHIFT,
+        width: 5,
+        height: 3,
+      },
+      0,
+    );
     underground.data[20 * UNDERGROUND_GRID_WIDTH + 30] = UndergroundTileState.Open;
     const c: SimCommand = {
       type: 'PlaceChamber',
@@ -2952,7 +2980,7 @@ describe('Regression: reviewer P1 fixes', () => {
 
   it('DesignateEntrance rejected: food pile at surface tile', () => {
     const { world, colonyId } = makeWorldWithUnderground();
-    world.foodPiles.push({
+    addPileForTest(world, {
       foodPileId: 0,
       tileX: 50,
       tileY: 0,
@@ -2995,15 +3023,19 @@ describe('Regression: reviewer P1 fixes', () => {
         underground.data[ty * UNDERGROUND_GRID_WIDTH + tx] = UndergroundTileState.Open;
       }
     }
-    colony.chambers.push({
-      chamberId: 7,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: 0,
-      posX: 20 << FP_SHIFT,
-      posY: 10 << FP_SHIFT,
-      width: 4,
-      height: 3,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 7,
+        chamberType: ChamberType.FoodStorage,
+        posX: 20 << FP_SHIFT,
+        posY: 10 << FP_SHIFT,
+        width: 4,
+        height: 3,
+      },
+      0,
+    );
     // Also open a path from ant position to chamber so nothing else interferes
     const antId = allocateEntityId(world);
     initAnt(world.ants, antId, {
@@ -3057,15 +3089,19 @@ describe('Regression: reviewer P1 fixes', () => {
         underground.data[ty * UNDERGROUND_GRID_WIDTH + tx] = UndergroundTileState.Open;
       }
     }
-    colony.chambers.push({
-      chamberId: 9,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: 0,
-      posX: 30 << FP_SHIFT,
-      posY: 10 << FP_SHIFT,
-      width: 4,
-      height: 3,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 9,
+        chamberType: ChamberType.FoodStorage,
+        posX: 30 << FP_SHIFT,
+        posY: 10 << FP_SHIFT,
+        width: 4,
+        height: 3,
+      },
+      0,
+    );
     // Plant a strong surface food-trail gradient to the WEST to prove it's ignored.
     const surfaceGrid = createPheromoneGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
     phSet(surfaceGrid, 5, 10, 9999);
@@ -3137,7 +3173,7 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
       subTask: 0,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1].foodStored = 10000;
+    setPoolFoodForTest(world, world.colonies[1], 10000);
     world.colonies[1].entrances = [
       {
         entranceId: 999,
@@ -3368,7 +3404,7 @@ function makeTwoColonyWorld(): {
     lifespan: WORKER_LIFESPAN_TICKS,
   });
   world.colonies[1] = createColonyRecord(1, playerQueenId);
-  world.colonies[1].foodStored = 100000;
+  setPoolFoodForTest(world, world.colonies[1], 100000);
   world.colonies[1].entrances = [];
   world.colonies[1].rallyPoint = null;
   world.colonies[1].digFlowFieldDirty = false;
@@ -3385,7 +3421,7 @@ function makeTwoColonyWorld(): {
     lifespan: WORKER_LIFESPAN_TICKS,
   });
   world.colonies[2] = createColonyRecord(2, enemyQueenId);
-  world.colonies[2].foodStored = 100000;
+  setPoolFoodForTest(world, world.colonies[2], 100000);
   world.colonies[2].entrances = [];
   world.colonies[2].rallyPoint = null;
   world.colonies[2].digFlowFieldDirty = false;
@@ -3581,7 +3617,7 @@ describe('cross-world flow-field cache isolation', () => {
       lifespan: WORKER_LIFESPAN_TICKS,
     });
     const colony = createColonyRecord(colonyId, queenId);
-    colony.foodStored = 10000;
+    setPoolFoodForTest(world, colony, 10000);
     // digFlowFieldDirty=false deliberately: this is the stale-cache gate.
     colony.digFlowFieldDirty = false;
     // Rally at (rallyTileX, 0) — only used to give updateFightAntTargets a
@@ -3702,19 +3738,23 @@ describe('cross-world flow-field cache isolation', () => {
         lifespan: WORKER_LIFESPAN_TICKS,
       });
       const colony = createColonyRecord(colonyId, queenId);
-      colony.foodStored = 10000;
+      setPoolFoodForTest(world, colony, 10000);
       colony.digFlowFieldDirty = false;
       colony.rallyPoint = null;
       colony.entrances = [{ entranceId: 1, surfaceTileX: 8, surfaceTileY: 5, isOpen: true }];
-      colony.chambers.push({
-        chamberId: 200,
-        chamberType: ChamberType.FoodStorage,
-        foodStored: 0,
-        posX: chamberTileX << FP_SHIFT,
-        posY: 3 << FP_SHIFT,
-        width: 1,
-        height: 1,
-      });
+      addChamberForTest(
+        world,
+        colony,
+        {
+          chamberId: 200,
+          chamberType: ChamberType.FoodStorage,
+          posX: chamberTileX << FP_SHIFT,
+          posY: 3 << FP_SHIFT,
+          width: 1,
+          height: 1,
+        },
+        0,
+      );
       world.colonies[colonyId] = colony;
 
       // Row-3 tunnel fully open for chamber BFS to reach across.
@@ -3794,7 +3834,7 @@ describe('cross-world flow-field cache isolation', () => {
       lifespan: WORKER_LIFESPAN_TICKS,
     });
     const colony = createColonyRecord(colonyId, queenId);
-    colony.foodStored = 0;
+    setPoolFoodForTest(world, colony, 0);
     colony.digFlowFieldDirty = true; // first compute on tick 0
     colony.foodFlowFieldDirty = false;
     colony.rallyPoint = null;
@@ -3808,24 +3848,32 @@ describe('cross-world flow-field cache isolation', () => {
     // exactly capacity when the food flow-field recomputes at step 9. Without
     // this ordering, withdrawFood would dip chamber A below the cap and the
     // BFS would re-seed from the now-not-full chamber, defeating the test.
-    colony.chambers.push({
-      chamberId: 101,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: 100,
-      posX: 14 << FP_SHIFT,
-      posY: 3 << FP_SHIFT,
-      width: 1,
-      height: 1,
-    });
-    colony.chambers.push({
-      chamberId: 100,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: CAP,
-      posX: 2 << FP_SHIFT,
-      posY: 3 << FP_SHIFT,
-      width: 1,
-      height: 1,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 101,
+        chamberType: ChamberType.FoodStorage,
+        posX: 14 << FP_SHIFT,
+        posY: 3 << FP_SHIFT,
+        width: 1,
+        height: 1,
+      },
+      100,
+    );
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 100,
+        chamberType: ChamberType.FoodStorage,
+        posX: 2 << FP_SHIFT,
+        posY: 3 << FP_SHIFT,
+        width: 1,
+        height: 1,
+      },
+      CAP,
+    );
     world.colonies[colonyId] = colony;
 
     const ug = createUndergroundGrid(16, 16);
@@ -3914,31 +3962,39 @@ describe('cross-world flow-field cache isolation', () => {
       lifespan: WORKER_LIFESPAN_TICKS,
     });
     const colony = createColonyRecord(colonyId, queenId);
-    colony.foodStored = 0;
+    setPoolFoodForTest(world, colony, 0);
     colony.digFlowFieldDirty = true; // first compute on tick 0
     colony.foodFlowFieldDirty = false;
     colony.rallyPoint = null;
     colony.entrances = [{ entranceId: 1, surfaceTileX: 8, surfaceTileY: 5, isOpen: true }];
 
     // Chamber A near (col 5) full. Chamber B far (col 14) empty/depositable.
-    colony.chambers.push({
-      chamberId: 100,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: CAP,
-      posX: 5 << FP_SHIFT,
-      posY: 3 << FP_SHIFT,
-      width: 1,
-      height: 1,
-    });
-    colony.chambers.push({
-      chamberId: 101,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: 0,
-      posX: 14 << FP_SHIFT,
-      posY: 3 << FP_SHIFT,
-      width: 1,
-      height: 1,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 100,
+        chamberType: ChamberType.FoodStorage,
+        posX: 5 << FP_SHIFT,
+        posY: 3 << FP_SHIFT,
+        width: 1,
+        height: 1,
+      },
+      CAP,
+    );
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 101,
+        chamberType: ChamberType.FoodStorage,
+        posX: 14 << FP_SHIFT,
+        posY: 3 << FP_SHIFT,
+        width: 1,
+        height: 1,
+      },
+      0,
+    );
     world.colonies[colonyId] = colony;
 
     const ug = createUndergroundGrid(16, 16);
@@ -3971,28 +4027,28 @@ describe('cross-world flow-field cache isolation', () => {
 
     const chamberA = colony.chambers[0]!;
     const chamberB = colony.chambers[1]!;
-    const aBefore = chamberA.foodStored;
+    const aBefore = chamberStock(world, chamberA);
 
     // Drive 60 ticks — the carrier walks 9 tiles at 1 tile/tick to chamber B
     // and deposits its full load. Generous margin for movement quirks.
     let landedInB = false;
     for (let t = 0; t < 60; t++) {
       tick(world, []);
-      if (chamberB.foodStored > 0) {
+      if (chamberStock(world, chamberB) > 0) {
         landedInB = true;
         break;
       }
     }
 
     expect(landedInB).toBe(true);
-    expect(chamberB.foodStored).toBe(carriedFp);
+    expect(chamberStock(world, chamberB)).toBe(carriedFp);
     expect(world.ants.foodCarrying[antId]).toBe(0);
     // Pre-fix the carrier would have leaked all 1024fp INTO A (matching the
-    // queen's drain), driving chamberA.foodStored above aBefore. Post-fix A
+    // queen's drain), driving chamberA's stock above aBefore. Post-fix A
     // never grows — the assertion is `<=` rather than `<` because the loop
     // breaks on the tick the carrier deposits at B, which can be early enough
     // that no queen tick has consumed yet (aBefore == aAfter is legitimate).
-    expect(chamberA.foodStored).toBeLessThanOrEqual(aBefore);
+    expect(chamberStock(world, chamberA)).toBeLessThanOrEqual(aBefore);
 
     resetFlowFieldCaches();
   });
@@ -4407,15 +4463,19 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
       colony.larvae.push(lid);
       colony.larvaeCount += 1;
     }
-    colony.chambers.push({
-      chamberId: 9100,
-      chamberType: ChamberType.Nursery,
-      foodStored: 0,
-      posX: 0,
-      posY: 0,
-      width: 2,
-      height: 2,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 9100,
+        chamberType: ChamberType.Nursery,
+        posX: 0,
+        posY: 0,
+        width: 2,
+        height: 2,
+      },
+      0,
+    );
 
     // t=0 preconditions
     expect(colony.workers.length).toBe(1);
@@ -4468,15 +4528,19 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
       colony.larvae.push(lid);
       colony.larvaeCount += 1;
     }
-    colony.chambers.push({
-      chamberId: 9101,
-      chamberType: ChamberType.Nursery,
-      foodStored: 0,
-      posX: 0,
-      posY: 0,
-      width: 2,
-      height: 2,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 9101,
+        chamberType: ChamberType.Nursery,
+        posX: 0,
+        posY: 0,
+        width: 2,
+        height: 2,
+      },
+      0,
+    );
     colony.targetRatio.forage = 10;
     colony.targetRatio.fight = 0;
     tick(world, []);
@@ -4523,15 +4587,19 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
       colony.larvae.push(lid);
       colony.larvaeCount += 1;
     }
-    colony.chambers.push({
-      chamberId: 9102,
-      chamberType: ChamberType.Nursery,
-      foodStored: 0,
-      posX: 0,
-      posY: 0,
-      width: 2,
-      height: 2,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 9102,
+        chamberType: ChamberType.Nursery,
+        posX: 0,
+        posY: 0,
+        width: 2,
+        height: 2,
+      },
+      0,
+    );
     colony.targetRatio.forage = 10;
     colony.targetRatio.fight = 0;
     const cmd: SimCommand = { type: 'MarkDigTile', colonyId, tileX: 25, tileY: 1, issuedAtTick: 0 };
@@ -4601,15 +4669,19 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
       colony.larvae.push(lid);
       colony.larvaeCount += 1;
     }
-    colony.chambers.push({
-      chamberId: 9202,
-      chamberType: ChamberType.Nursery,
-      foodStored: 0,
-      posX: 0,
-      posY: 0,
-      width: 2,
-      height: 2,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 9202,
+        chamberType: ChamberType.Nursery,
+        posX: 0,
+        posY: 0,
+        width: 2,
+        height: 2,
+      },
+      0,
+    );
     colony.targetRatio.forage = 10;
     colony.targetRatio.fight = 0;
     tick(world, []);
@@ -4866,15 +4938,19 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
       colony.larvae.push(lid);
       colony.larvaeCount += 1;
     }
-    colony.chambers.push({
-      chamberId: 9300,
-      chamberType: ChamberType.Nursery,
-      foodStored: 0,
-      posX: 0,
-      posY: 0,
-      width: 2,
-      height: 2,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 9300,
+        chamberType: ChamberType.Nursery,
+        posX: 0,
+        posY: 0,
+        width: 2,
+        height: 2,
+      },
+      0,
+    );
 
     // Slider-to-fight; combined with the nurse cap this leaves zero ratio
     // budget for any carve — the all-nurse case.
@@ -4958,15 +5034,19 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
       colony.larvae.push(lid);
       colony.larvaeCount += 1;
     }
-    colony.chambers.push({
-      chamberId: 9200,
-      chamberType: ChamberType.Nursery,
-      foodStored: 0,
-      posX: 0,
-      posY: 0,
-      width: 2,
-      height: 2,
-    });
+    addChamberForTest(
+      world,
+      colony,
+      {
+        chamberId: 9200,
+        chamberType: ChamberType.Nursery,
+        posX: 0,
+        posY: 0,
+        width: 2,
+        height: 2,
+      },
+      0,
+    );
 
     colony.targetRatio.forage = 10;
     colony.targetRatio.fight = 0;

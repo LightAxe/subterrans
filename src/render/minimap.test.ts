@@ -18,6 +18,7 @@ import {
   bakeMinimapDapple,
 } from './minimap.js';
 import type { GfxLike } from './draw-surface.js';
+import { createWorldState } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
 import {
   PLAYER_COLONY_ID,
@@ -27,6 +28,8 @@ import {
   SURFACE_GRID_HEIGHT,
 } from '../sim/constants.js';
 import { SurfaceTileState, sgSet } from '../sim/terrain.js';
+import { createColonyRecord, type ColonyRecord } from '../sim/colony/colony-store.js';
+import { addPileForTest, type TestPile } from '../sim/food/food-test-utils.js';
 
 // #238: minimap.ts now takes the built HUD layout; at the default 800×592 layout
 // hud.MINIMAP == the former hud.MINIMAP, so these tests stay byte-identical.
@@ -104,10 +107,15 @@ const stubSurface = {
 } as unknown as WorldState['surface'];
 
 function makeMinimalWorld(overrides?: {
-  foodPiles?: WorldState['foodPiles'];
+  piles?: readonly TestPile[];
   colonies?: WorldState['colonies'];
 }): WorldState {
-  return {
+  // Base off a real WorldState (for its located food store, `world.food`) rather
+  // than hand-building the storage shape — food-api-guard.test.ts pins storage
+  // access to the facade / test-utils, so this stub only overrides the fields the
+  // minimap tests actually stub out.
+  const world = {
+    ...createWorldState(0),
     tick: 0,
     rngState: 0,
     nextEntityId: 0,
@@ -117,9 +125,10 @@ function makeMinimalWorld(overrides?: {
     pheromoneGrids: {},
     surface: stubSurface,
     undergroundGrids: {},
-    foodPiles: overrides?.foodPiles ?? [],
     pendingChambers: {},
   } as unknown as WorldState;
+  for (const p of overrides?.piles ?? []) addPileForTest(world, p);
+  return world;
 }
 
 // ---------------------------------------------------------------------------
@@ -218,57 +227,40 @@ describe('applyMinimapClick', () => {
 // drawMinimap smoke test — checks basic call presence
 // ---------------------------------------------------------------------------
 
+function makeStubColony(): ColonyRecord {
+  const colony = createColonyRecord(PLAYER_COLONY_ID, 0);
+  colony.entrances = [];
+  colony.rallyPoint = null;
+  colony.digFlowFieldDirty = false;
+  colony.alarmActive = false;
+  colony.workerCount = 3;
+  // Phase 10 / CTRL-01' (LOCKED): targetRatio is two-field {forage, fight};
+  // dig is auto-assigned via CTRL-06. Original 100/0/0 was the percentage
+  // convention; preserved here as forage:100/fight:0 (matches D-04 default
+  // "100% forage" semantic). taskCensus + computedAllocation remain 4-field
+  // (WorkerAllocation per D-03).
+  colony.targetRatio = { forage: 100, fight: 0 };
+  return colony;
+}
+
 const stubColonies: WorldState['colonies'] = {
-  [PLAYER_COLONY_ID]: {
-    colonyId: PLAYER_COLONY_ID,
-    queenEntityId: 0,
-    entrances: [],
-    alarmActive: false,
-    workerCount: 3,
-    foodStored: 0,
-    queenStarvationTimer: 100,
-    taskCensus: { nurse: 0, forage: 0, dig: 0, fight: 0 },
-    // Phase 10 / CTRL-01' (LOCKED): targetRatio is two-field {forage, fight};
-    // dig is auto-assigned via CTRL-06. Original 100/0/0 was the percentage
-    // convention; preserved here as forage:100/fight:0 (matches D-04 default
-    // "100% forage" semantic). taskCensus + computedAllocation remain 4-field
-    // (WorkerAllocation per D-03).
-    targetRatio: { forage: 100, fight: 0 },
-    computedAllocation: { nurse: 0, forage: 0, dig: 0, fight: 0 },
-    eggCount: 0,
-    larvaeCount: 0,
-    nurseCount: 0,
-    eggs: [],
-    larvae: [],
-    workers: [],
-    chambers: [],
-    defeated: false,
-    reconcileCountdown: 0,
-    rallyPoint: null,
-    digFlowFieldDirty: false,
-    foodFlowFieldDirty: false,
-    broodFieldDirty: false,
-    killCount: 0,
-    priorityFoodPileId: null,
-    queenLastEggTick: -300,
-    eggIntervalNumerator: 4,
-  } as WorldState['colonies'][number],
+  [PLAYER_COLONY_ID]: makeStubColony(),
 };
 
-const stubFoodPiles: WorldState['foodPiles'] = [
+const stubPiles: TestPile[] = [
   {
     foodPileId: 1,
     tileX: 20,
     tileY: 30,
     pickupsRemaining: 50,
     pickupsInitial: 50,
-  } as WorldState['foodPiles'][0],
+  },
 ];
 
 describe('drawMinimap smoke test', () => {
   it('calls fillRect for food piles, colonies, and viewport outline (base baked separately)', () => {
     const gfx = new MockGfx();
-    const world = makeMinimalWorld({ foodPiles: stubFoodPiles, colonies: stubColonies });
+    const world = makeMinimalWorld({ piles: stubPiles, colonies: stubColonies });
     const vs = createViewState(PLAYER_START_X, PLAYER_START_Y);
     drawMinimap(gfx, world, vs, hud);
 
@@ -315,7 +307,7 @@ describe('bakeMinimapDapple', () => {
     sgSet(stubSurface, 20, 30, SurfaceTileState.Dirt);
     sgSet(stubSurface, 50, 50, SurfaceTileState.Dirt);
 
-    const world = makeMinimalWorld({ foodPiles: [], colonies: stubColonies });
+    const world = makeMinimalWorld({ piles: [], colonies: stubColonies });
     bakeMinimapDapple(gfx, world, hud.MINIMAP.w, hud.MINIMAP.h);
 
     const styles = gfx.callsOf('fillStyle');
@@ -337,7 +329,7 @@ describe('bakeMinimapDapple', () => {
     // This guards the pixel-identity rationale (integer anchor + floored local
     // dapple == the old mm-anchored inline draw).
     const gfx = new MockGfx();
-    const world = makeMinimalWorld({ foodPiles: [], colonies: {} });
+    const world = makeMinimalWorld({ piles: [], colonies: {} });
     const mmW = hud.MINIMAP.w;
     const mmH = hud.MINIMAP.h;
     bakeMinimapDapple(gfx, world, mmW, mmH);

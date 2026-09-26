@@ -19,6 +19,7 @@ import {
 } from '../chamber-flow.js';
 import type { WorldState } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
+import { addChamberForTest } from '../food/food-test-utils.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -99,10 +100,9 @@ describe('tickAntMovement — P1 queen relocation', () => {
     colony.queenEntityId = queenId;
 
     if (params.addQueenChamber) {
-      colony.chambers.push({
+      addChamberForTest(world, colony, {
         chamberId: 500,
         chamberType: ChamberType.Queen,
-        foodStored: 0,
         posX: (params.queenChamberTileX ?? 2) << FP_SHIFT,
         posY: (params.queenChamberTileY ?? 2) << FP_SHIFT,
         width: params.queenChamberWidth ?? 2,

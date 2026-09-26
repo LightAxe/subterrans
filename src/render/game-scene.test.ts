@@ -59,7 +59,7 @@ function makeWorldWithColonies(coloniesObj: Record<number, object>): WorldState 
       subTask: new Int32Array(0),
       speed: new Int32Array(0),
       foodCarrying: new Int32Array(0),
-      starvationTimer: new Int32Array(0),
+      lastMealTick: new Int32Array(0),
       age: new Int32Array(0),
       alive: new Int32Array(0),
       lifespan: new Int32Array(0),
@@ -74,7 +74,6 @@ function makeWorldWithColonies(coloniesObj: Record<number, object>): WorldState 
     pheromoneGrids: {},
     surface: { data: new Uint8Array(0), width: 0, height: 0 },
     undergroundGrids: {},
-    foodPiles: [],
     pendingChambers: {},
   } as unknown as WorldState;
 }

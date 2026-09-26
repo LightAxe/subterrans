@@ -29,6 +29,7 @@ import { createScenario } from './scenario.js';
 import { createWorldState, allocateEntityId } from './types.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import { initAnt } from './ant/ant-store.js';
+import { setPoolFoodForTest } from './food/food-test-utils.js';
 import { AntTask, FightingSubState } from './enums.js';
 import { Zone } from './terrain.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
@@ -88,7 +89,7 @@ function buildRallyWorld(
   colony.entrances = [];
   colony.rallyPoint = { tileX: rallyTileX, tileY: rallyTileY };
   colony.digFlowFieldDirty = false;
-  colony.foodStored = 100000; // ample — no starvation during the run
+  setPoolFoodForTest(world, colony, 100000); // ample — no starvation during the run
   // V40 (#299): a 1-2 worker colony stands down fighters the ratio does not ask
   // for; this harness IS its fighters, so ask for all of them.
   colony.targetRatio.forage = 0;

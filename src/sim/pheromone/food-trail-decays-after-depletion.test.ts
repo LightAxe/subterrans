@@ -25,14 +25,22 @@ import { tick } from '../tick.js';
 import { PheromoneType } from '../enums.js';
 import { pheromoneGridKey, phGet, phSet } from './pheromone-store.js';
 import { PLAYER_COLONY_ID, PHEROMONE_CAP } from '../constants.js';
-import { recordFoodPileDepletion } from '../food/food-api.js';
+import {
+  drainPile,
+  pileAmountFp,
+  pileCount,
+  pileSlotAt,
+  pileTileX,
+  pileTileY,
+} from '../food/food-api.js';
+import { setPileChargesForTest } from '../food/food-test-utils.js';
 
 describe('issue #112 — food-trail decays naturally after pile depletion', () => {
   it('after pile vanishes and carriers clear, trail at the tile reaches 0 within decay budget', () => {
     const world = createScenario(42);
-    const target = world.foodPiles[0]!;
-    const tileX = target.tileX;
-    const tileY = target.tileY;
+    const targetSlot = pileSlotAt(world, 0);
+    const tileX = pileTileX(world, targetSlot);
+    const tileY = pileTileY(world, targetSlot);
     const trailKey = pheromoneGridKey(PLAYER_COLONY_ID, PheromoneType.FoodTrail, 'surface');
 
     // Manually prime the surface food-trail at the target tile to PHEROMONE_CAP.
@@ -42,10 +50,9 @@ describe('issue #112 — food-trail decays naturally after pile depletion', () =
     phSet(grid, tileX, tileY, PHEROMONE_CAP);
     expect(phGet(grid, tileX, tileY)).toBe(PHEROMONE_CAP);
 
-    // Vanish the pile in-place (simulate the splice + record path that
+    // Vanish the pile in-place (simulate the record + removal path that
     // tickForagerActions performs on the final pickup).
-    recordFoodPileDepletion(world, 0);
-    world.foodPiles.splice(0, 1);
+    drainPile(world, targetSlot, pileAmountFp(world, targetSlot));
 
     // Suppress carriers from re-flooding the trail: drop every ant in the
     // colony so no deposits occur during the decay window. (We're testing the
@@ -90,9 +97,8 @@ describe('issue #112 — food-trail decays naturally after pile depletion', () =
 
       // Lower every pile's charge count to 2 so depletion happens within the
       // first round of foraging trips rather than after thousands of ticks.
-      for (const p of world.foodPiles) {
-        p.pickupsRemaining = 2;
-        p.pickupsInitial = 2;
+      for (let o = 0; o < pileCount(world); o++) {
+        setPileChargesForTest(world, pileSlotAt(world, o), 2, 2);
       }
 
       const DEPLETION_BUDGET_TICKS = 5000;

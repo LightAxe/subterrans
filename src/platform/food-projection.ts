@@ -34,6 +34,7 @@ import {
   pileTileX,
   pileTileY,
 } from '../sim/food/food-api.js';
+import { LARVA_HUNGER, mealsUntilStarvation, QUEEN_HUNGER } from '../sim/hunger.js';
 import { serializeWorldState } from './save.js';
 import { fnv1a } from './world-hash.js';
 
@@ -68,17 +69,19 @@ export const PROJECTION_STRIPPED_ANT_KEYS: readonly string[] = [
 
 /**
  * Ticks until starvation for an ant whose hunger the sim tracks today (the
- * queen and larvae), or `null` for every other ant. The value is today's
+ * queen and larvae), or `null` for every other ant. The value is the pre-V50
  * countdown: STARVATION_GRACE_TICKS right after a successful meal, minus one per
- * failed meal; the ant dies when a failed meal takes it to 0. PR 2 must return
- * the same number from its `lastMealTick` clock.
+ * failed meal; the ant dies when a failed meal takes it to 0. Since V50 (#290 PR
+ * 2) it is derived from the count-up clock `ants.lastMealTick`
+ * (`mealsUntilStarvation`), which must give the same number the PR 1 build read
+ * off `queenStarvationTimer` / `starvationTimer`.
  */
 export function hungerProjection(world: WorldState, id: number): number | null {
   const ants = world.ants;
   if (ants.alive[id] !== 1) return null;
   for (const colony of Object.values(world.colonies)) {
-    if (colony.queenEntityId === id) return colony.queenStarvationTimer;
-    if (colony.larvae.includes(id)) return ants.starvationTimer[id]!;
+    if (colony.queenEntityId === id) return mealsUntilStarvation(world, id, QUEEN_HUNGER);
+    if (colony.larvae.includes(id)) return mealsUntilStarvation(world, id, LARVA_HUNGER);
   }
   return null;
 }

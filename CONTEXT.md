@@ -149,8 +149,12 @@ Connected `Open` underground tiles linking entrances and chambers.
 _Avoid_: corridor, hallway, path.
 
 **Pool** (entrance pool):
-A colony's entrance-level food buffer (`colony.foodStored`, capped at
-`BASE_FOOD_STORAGE_CAPACITY`) — distinct from per-chamber `FoodStorage`.
+A colony's entrance-level food buffer, capped at `BASE_FOOD_STORAGE_CAPACITY` —
+distinct from a FoodStorage chamber's **stock**. Since simVersion V50 (#290) both
+are records in the **food store** (`world.food`, `src/sim/food/food-store.ts`): the
+pool is a `Pool` record (`colony.poolSlot`), a chamber's stock a `Stock` record
+(`chamber.foodSlot`), and surface **food piles** are `Pile` records. Read and
+write them only through the food facade (`src/sim/food/food-api.ts`).
 _Avoid_: stockpile, reserve.
 
 ## Foraging & pheromones
@@ -175,7 +179,7 @@ Direct detection of nearby food — a distinct movement source from pheromone tr
 (the `'scent'` source in ant routing / debug snapshots).
 _Avoid_: using "scent" to mean pheromone.
 
-**Food pile** (`FoodPile`):
+**Food pile** (a `Pile` record in the food store):
 A finite surface food source foragers harvest. When its pickups run out the pile is
 **removed**; new piles spawn elsewhere over time (the same pile does not regenerate).
 _Avoid_: food node, resource, deposit.

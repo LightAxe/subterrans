@@ -21,6 +21,7 @@ import { AntTask, NursingSubState } from './enums.js';
 import { FP_SHIFT } from './fixed.js';
 import { WORKER_BASE_SPEED, WORKER_LIFESPAN_TICKS } from './constants.js';
 import { checkQueenDeath, GameOutcome } from './game-over.js';
+import { pileCount } from './food/food-api.js';
 import type { WorldState } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 
@@ -105,7 +106,7 @@ describe('#289 despawnAnt — non-kill deaths from V41 get the full cleanup', ()
     expect(colony.broodFieldDirty).toBe(true);
     expect(combatKills(world)).toHaveLength(0);
     expect(world.pendingQueenDeathContexts[CID] ?? null).toBeNull();
-    expect(world.foodPiles).toHaveLength(0);
+    expect(pileCount(world)).toBe(0);
     expect(colony.killCount).toBe(0);
   });
 

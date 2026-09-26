@@ -12,6 +12,7 @@ import { applyCommands } from '../sim/tick.js';
 import type { SimCommand } from '../sim/commands.js';
 import type { WorldState } from '../sim/types.js';
 import type { NestEntrance } from '../sim/colony/entrance.js';
+import { addPileForTest } from '../sim/food/food-test-utils.js';
 
 function world(): WorldState {
   return createScenario(0x3a90d, 'Normal');
@@ -104,7 +105,7 @@ describe('computeGhostDelta', () => {
   it('queued player MarkFoodPile → pendingFoodMark resolves to that pile tile', () => {
     const w = world();
     // Unique high id + a tile no seeded pile occupies (scenario seeds ids 0..14).
-    w.foodPiles.push({
+    addPileForTest(w, {
       foodPileId: 9001,
       tileX: 40,
       tileY: 50,
@@ -125,7 +126,7 @@ describe('computeGhostDelta', () => {
 
   it('enemy MarkFoodPile → no player food-mark ghost', () => {
     const w = world();
-    w.foodPiles.push({
+    addPileForTest(w, {
       foodPileId: 9002,
       tileX: 41,
       tileY: 51,
@@ -145,7 +146,7 @@ describe('computeGhostDelta', () => {
 
   it('queued MarkFoodPile toggling the committed pile off → foodMarkCleared, no pendingFoodMark', () => {
     const w = world();
-    w.foodPiles.push({
+    addPileForTest(w, {
       foodPileId: 9003,
       tileX: 42,
       tileY: 52,
@@ -171,14 +172,14 @@ describe('computeGhostDelta', () => {
 
   it('queued MarkFoodPile redirecting to another pile → pendingFoodMark (new) + foodMarkCleared (old)', () => {
     const w = world();
-    w.foodPiles.push({
+    addPileForTest(w, {
       foodPileId: 9004,
       tileX: 43,
       tileY: 53,
       pickupsRemaining: 5,
       pickupsInitial: 5,
     });
-    w.foodPiles.push({
+    addPileForTest(w, {
       foodPileId: 9005,
       tileX: 44,
       tileY: 54,

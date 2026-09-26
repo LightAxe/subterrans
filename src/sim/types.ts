@@ -4,7 +4,8 @@
 // Phase 5 scope: four fields (tick, rngState, nextEntityId, commandQueue).
 // Phase 6 adds ants (AntComponents), colonies (Record<ColonyId, ColonyRecord>),
 // pheromoneGrids (Record<string, PheromoneGrid>).
-// Phase 7 adds terrain (surface, undergroundGrids), foodPiles, pendingChambers.
+// Phase 7 adds terrain (surface, undergroundGrids), food piles, pendingChambers.
+// #290 PR 2 (V50) replaces the food piles with the located food store (`food`).
 import type { SimCommand } from './commands.js';
 import type { AntComponents } from './ant/ant-store.js';
 import { createAntComponents } from './ant/ant-store.js';
@@ -14,7 +15,9 @@ import type { PheromoneGrid } from './pheromone/pheromone-store.js';
 import { createPheromoneGrid } from './pheromone/pheromone-store.js';
 import type { SurfaceGrid, UndergroundGrid } from './terrain.js';
 import { createSurfaceGrid, createUndergroundGrid } from './terrain.js';
-import type { DepletionRecord, FoodPile } from './food.js';
+import type { DepletionRecord } from './food.js';
+import type { FoodStore } from './food/food-store.js';
+import { copyFoodStore, createFoodStore } from './food/food-store.js';
 import type { PendingChamber } from './colony/chamber.js';
 import { MAX_ENTITIES, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constants.js';
 // PR 4 — runtime import for the procedural terrain bake. surface-features.ts
@@ -1020,7 +1023,33 @@ export const SIM_VERSION_V48_SENTRY_WALK_HOME = 48 as const;
  * pre-V49 save replays byte-identically. MIN_ACCEPTED is UNCHANGED.
  */
 export const SIM_VERSION_V49_ALARM_MUSTER = 49 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V49_ALARM_MUSTER;
+
+/**
+ * #290 PR 2 — V50 the located food store and the count-up hunger clock.
+ *
+ * Storage swap, no behaviour change, and a DELIBERATE save wipe (MIN_ACCEPTED is
+ * raised to V50; see DELIBERATE_WINDOW_BREAK_AT in platform/save.ts):
+ *   - `world.foodPiles` (an array of pile objects), `ColonyRecord.foodStored` (the
+ *     entrance pool) and `ChamberRecord.foodStored` (FoodStorage stock) become one
+ *     structure-of-arrays table, `world.food` (src/sim/food/food-store.ts): one
+ *     slot per Pile / Pool / Stock record, all quantities in fp, linked by
+ *     `ColonyRecord.poolSlot` and `ChamberRecord.foodSlot`. Callers use the food
+ *     facade (food/food-api.ts) unchanged.
+ *   - `ants.starvationTimer` (a larva countdown) and `colony.queenStarvationTimer`
+ *     become one count-up clock, `ants.lastMealTick` (src/sim/hunger.ts), with a
+ *     hunger profile per kind. The queen and larva profiles reproduce the old
+ *     countdown's death tick exactly.
+ *   - Pre-declared for #290 PRs 4–6, all 0 / unused here: the three raid counters
+ *     on ColonyRecord (`foodRaidedFp`, `foodLostToRaidsFp`, `raidTrips`) and
+ *     FightingSubState Looting / Hauling.
+ * A pre-V50 snapshot cannot be loaded into the new shape without a format
+ * transform, which ADR-0014 forbids, hence the wipe (owner decision on #290,
+ * 2026-09-25). Same RNG draws, same entity-id advance, same tick order: the
+ * food-equivalence projection (platform/food-projection.ts) is identical to the
+ * pre-V50 build's at every checkpoint of the byte-gate scenarios.
+ */
+export const SIM_VERSION_V50_LOCATED_FOOD = 50 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V50_LOCATED_FOOD;
 
 /**
  * S2 — AI colony state machine states.
@@ -1253,7 +1282,13 @@ export interface WorldState {
   surfaceGoalBfsScratch: Int32Array | null;
 
   undergroundGrids: Record<ColonyId, UndergroundGrid>; // per-colony underground (UNDR-08)
-  foodPiles: FoodPile[]; // surface food sources (SURF-02 + issue #112 depletion/respawn)
+  /**
+   * #290 PR 2 (V50) — the located food store: every surface pile, colony entrance
+   * pool and FoodStorage chamber stock, one SoA slot each (src/sim/food/
+   * food-store.ts). Read and written only through the food facade
+   * (food/food-api.ts). Serialized except its derived `surfacePileAt` index.
+   */
+  food: FoodStore;
 
   /**
    * Issue #112 — Bounded record of recently-depleted food-pile tiles, used by
@@ -1351,7 +1386,7 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
     surfaceGoalFields: null,
     surfaceGoalBfsScratch: null,
     undergroundGrids: {},
-    foodPiles: [],
+    food: createFoodStore(),
     recentlyDepletedFood: [], // issue #112 — empty until first depletion
     pendingChambers: {}, // empty Record; PlaceChamberCommand creates entries
     // S0b — telemetry fields.
@@ -1519,7 +1554,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   dst.ants.subTask.set(src.ants.subTask);
   dst.ants.speed.set(src.ants.speed);
   dst.ants.foodCarrying.set(src.ants.foodCarrying);
-  dst.ants.starvationTimer.set(src.ants.starvationTimer);
+  dst.ants.lastMealTick.set(src.ants.lastMealTick);
   dst.ants.age.set(src.ants.age);
   dst.ants.alive.set(src.ants.alive);
   dst.ants.lifespan.set(src.ants.lifespan);
@@ -1606,8 +1641,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     // Scalar fields — direct assignment
     d.colonyId = s.colonyId;
     d.queenEntityId = s.queenEntityId;
-    d.queenStarvationTimer = s.queenStarvationTimer;
-    d.foodStored = s.foodStored;
+    d.poolSlot = s.poolSlot;
     d.workerCount = s.workerCount;
     d.eggCount = s.eggCount;
     d.larvaeCount = s.larvaeCount;
@@ -1615,6 +1649,9 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     d.defeated = s.defeated;
     d.reconcileCountdown = s.reconcileCountdown;
     d.killCount = s.killCount;
+    d.foodRaidedFp = s.foodRaidedFp;
+    d.foodLostToRaidsFp = s.foodLostToRaidsFp;
+    d.raidTrips = s.raidTrips;
     d.priorityFoodPileId = s.priorityFoodPileId;
     d.alarmActive = s.alarmActive;
     d.queenLastEggTick = s.queenLastEggTick;
@@ -1751,23 +1788,9 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     dst.undergroundGrids[colonyId]!.data.set(srcGrid.data);
   }
 
-  // --- Phase 7: foodPiles — length-adjust + field-by-field copy (reuse objects in steady state) ---
-  // Issue #112: Object.assign copies the new pickupsRemaining/pickupsInitial fields automatically.
-  while (dst.foodPiles.length > src.foodPiles.length) dst.foodPiles.pop();
-  for (let i = 0; i < src.foodPiles.length; i++) {
-    if (i < dst.foodPiles.length) {
-      Object.assign(dst.foodPiles[i]!, src.foodPiles[i]!);
-      // Object.assign copies src's own keys but never DELETES keys already on
-      // the reused dst slot. isCorpse is optional/absent on natural piles, so a
-      // reused slot that previously held a corpse pile (isCorpse:true) would
-      // retain a stale flag when the src pile now at this index is natural.
-      // Clear it so the copy stays a faithful clone (mirrors the deserializer's
-      // explicit reconstruction in save.ts).
-      if (src.foodPiles[i]!.isCorpse === undefined) delete dst.foodPiles[i]!.isCorpse;
-    } else {
-      dst.foodPiles.push(Object.assign({}, src.foodPiles[i]!));
-    }
-  }
+  // --- #290 PR 2: the food store — TypedArray.set per column (zero allocation),
+  // including the derived surfacePileAt index (cheaper to copy than rebuild).
+  copyFoodStore(src.food, dst.food);
 
   // --- Issue #112: recentlyDepletedFood — length-adjust + field-by-field copy ---
   while (dst.recentlyDepletedFood.length > src.recentlyDepletedFood.length)

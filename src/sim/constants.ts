@@ -150,6 +150,26 @@ export const LARVA_FOOD_PER_TICK = 1;
 /** PRD §9c — Food units consumed by a worker per tick (workers self-forage). */
 export const WORKER_FOOD_PER_TICK = 0;
 
+// #288 / #290 PR 2 (V50) — per-kind hunger profiles (see src/sim/hunger.ts).
+// A meal is attempted once ticks-since-meal reaches the interval; an ant that
+// fails a meal dies once ticks-since-meal reaches starve-after. The queen and
+// larva rows reproduce the pre-V50 per-tick draw and 300-tick countdown exactly.
+// Workers and fighters get rows when they start eating (#290 PR 4).
+
+/** Queen: tries to eat every tick. */
+export const QUEEN_MEAL_INTERVAL_TICKS = 1;
+/** Queen: fp per meal (= QUEEN_FOOD_PER_TICK). */
+export const QUEEN_MEAL_FP = QUEEN_FOOD_PER_TICK;
+/** Queen: dies when a meal fails this many ticks after her last meal. */
+export const QUEEN_STARVE_AFTER_TICKS = STARVATION_GRACE_TICKS;
+
+/** Larva: tries to eat every tick. */
+export const LARVA_MEAL_INTERVAL_TICKS = 1;
+/** Larva: fp per meal (= LARVA_FOOD_PER_TICK). */
+export const LARVA_MEAL_FP = LARVA_FOOD_PER_TICK;
+/** Larva: dies when a meal fails this many ticks after its last meal. */
+export const LARVA_STARVE_AFTER_TICKS = STARVATION_GRACE_TICKS;
+
 /** PRD §9c — Maximum food units (fp) a worker can carry. 1024 = 4 × FP_ONE. */
 export const WORKER_CARRY_CAPACITY = 1024; // 4 × FP_ONE
 
@@ -559,7 +579,8 @@ export const FOOD_PILE_MAX_ATTEMPTS = 1000;
 /**
  * Issue #112 — Lower bound for the number of pickup-charges a freshly-spawned
  * (or scenario-seeded) food pile carries. Each successful `antPickupFood` call
- * decrements `pickupsRemaining` by `FOOD_PILE_PICKUP_DRAIN`; pile vanishes at 0.
+ * drains FOOD_PILE_PICKUP_DRAIN charges (FOOD_PICKUP_AMOUNT fp each since V50's
+ * food store); the pile vanishes at 0.
  *
  * Pickup-charges are NOT the same as fixed-point food units transferred to the
  * ant — that quantity stays bound to FOOD_PICKUP_AMOUNT. Charges control pile
@@ -575,7 +596,7 @@ export const FOOD_PILE_INITIAL_PICKUPS_MIN = 20;
 export const FOOD_PILE_INITIAL_PICKUPS_MAX = 150;
 
 /**
- * Issue #112 — Charges drained from `pile.pickupsRemaining` per successful
+ * Issue #112 — Charges drained from a pile per successful
  * `antPickupFood` call. Default is 1 (one pickup = one charge consumed).
  */
 export const FOOD_PILE_PICKUP_DRAIN = 1;
@@ -671,6 +692,81 @@ export const CHAMBER_FOOD_WIDTH = 4;
 
 /** Phase 7 PRD §2d — FoodStorage chamber tile height. */
 export const CHAMBER_FOOD_HEIGHT = 3;
+
+// ---------------------------------------------------------------------------
+// #290 PR 2 (V50) — located food store capacity
+//
+// The food store (`src/sim/food/food-store.ts`) is a fixed-capacity SoA table
+// holding every surface pile, every colony's entrance pool and every FoodStorage
+// chamber's stock. Its capacity is derived from PHYSICAL limits, not from a
+// gameplay rule (owner decision D12 on #290: no player-visible chamber cap):
+//   - piles:  FOOD_PILE_HARD_CAP (every pile spawner already stops there);
+//   - pools:  one per colony;
+//   - stocks: the most FoodStorage chambers one underground grid could ever hold.
+//     PlaceChamber rejects a footprint that overlaps any completed or pending
+//     chamber of the same colony, and never lets a footprint touch the ceiling
+//     row (UNDERGROUND_CEILING_ROW_Y = 0). So every FoodStorage footprint
+//     (CHAMBER_FOOD_WIDTH × CHAMBER_FOOD_HEIGHT = 12 tiles) is disjoint and lies
+//     in the 128 × 63 rows below the ceiling: at most ⌊128 × 63 / 12⌋ = 672 of
+//     them, completed and pending together.
+// `food-store.test.ts` re-derives the bound from the grid and footprint
+// constants, and the typed-const tripwires below fail the build if a constant
+// it is derived from drifts (entrance-flow.ts pattern; docs/phase-4-preflight.md).
+// ---------------------------------------------------------------------------
+
+/**
+ * #290 PR 2 — colonies a world can hold (the player plus one AI today). Sizes
+ * the food store (one pool + a stock bound per colony); the save loader rejects
+ * a world with more. Phase 4 (multi-colony) raises it — see
+ * docs/phase-4-preflight.md.
+ */
+// structural — must not drift without re-deriving FOOD_STORE_CAPACITY.
+export const MAX_COLONIES = 2;
+
+/**
+ * #290 PR 2 — the most FoodStorage chambers one colony's underground grid can
+ * physically hold: ⌊UNDERGROUND_GRID_WIDTH × (UNDERGROUND_GRID_HEIGHT − 1) /
+ * (CHAMBER_FOOD_WIDTH × CHAMBER_FOOD_HEIGHT)⌋ = ⌊128 × 63 / 12⌋ = 672. Not a
+ * gameplay cap: no command ever checks it (a literal because sim code has no `/`;
+ * `food-store.test.ts` re-derives it).
+ */
+// structural — derived from the grid and footprint constants (guards below).
+export const FOOD_STORAGE_CHAMBERS_PER_COLONY_BOUND = 672;
+
+/**
+ * #290 PR 2 — slots in the food store: every live pile, one pool per colony and
+ * the physical FoodStorage bound per colony. 60 + 2 × (1 + 672) = 1406. The
+ * store can therefore never fill in a world the save loader accepts; the
+ * "store full" refusals in PlaceChamber / checkPendingChambers are defensive.
+ */
+// structural — derived; sizes the food store columns. A literal, not the
+// expression FOOD_PILE_HARD_CAP + MAX_COLONIES × (1 + FOOD_STORAGE_CHAMBERS_PER_COLONY_BOUND):
+// TypeScript cannot type-check arithmetic, so only a literal can carry the
+// compile-time bound below. `food-store.test.ts` asserts it equals that
+// expression, so an input that drifts fails the suite (never an overflow: a
+// stale literal only under-sizes the store, whose full-store refusals are safe).
+export const FOOD_STORE_CAPACITY = 1406;
+
+// Compile-time tripwire: `surfacePileAt` stores slot + 1 in an Int16Array, so the
+// capacity must stay ≤ 32766. Raising FOOD_STORE_CAPACITY fails the build here;
+// update this pin only after checking the new value is ≤ 32766 (or widening
+// `surfacePileAt`). docs/phase-4-preflight.md.
+const _FOOD_STORE_CAPACITY_FITS_INT16_TILE_INDEX: 1406 = FOOD_STORE_CAPACITY;
+void _FOOD_STORE_CAPACITY_FITS_INT16_TILE_INDEX;
+
+// Compile-time tripwires: FOOD_STORAGE_CHAMBERS_PER_COLONY_BOUND is hand-derived
+// from these values. If one changes, the build fails here — re-derive the bound
+// (and re-check `food-store.test.ts`) before updating the literal.
+const _FOOD_BOUND_UG_WIDTH_IS_128: 128 = UNDERGROUND_GRID_WIDTH;
+const _FOOD_BOUND_UG_HEIGHT_IS_64: 64 = UNDERGROUND_GRID_HEIGHT;
+const _FOOD_BOUND_CEILING_ROW_IS_0: 0 = UNDERGROUND_CEILING_ROW_Y;
+const _FOOD_BOUND_FOOD_WIDTH_IS_4: 4 = CHAMBER_FOOD_WIDTH;
+const _FOOD_BOUND_FOOD_HEIGHT_IS_3: 3 = CHAMBER_FOOD_HEIGHT;
+void _FOOD_BOUND_UG_WIDTH_IS_128;
+void _FOOD_BOUND_UG_HEIGHT_IS_64;
+void _FOOD_BOUND_CEILING_ROW_IS_0;
+void _FOOD_BOUND_FOOD_WIDTH_IS_4;
+void _FOOD_BOUND_FOOD_HEIGHT_IS_3;
 
 // ---------------------------------------------------------------------------
 // Phase 9 SearchingFood leash (09 digger-reassignment memo)

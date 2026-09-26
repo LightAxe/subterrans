@@ -21,6 +21,7 @@ import {
   ENEMY_START_X,
   WORKER_BASE_SPEED,
 } from './constants.js';
+import { setPoolFoodForTest } from './food/food-test-utils.js';
 
 /** Player colony collapsed to two Fighting invaders one tile inside the enemy shaft. */
 function build(simVersion: number): { world: WorldState; ids: number[] } {
@@ -50,7 +51,7 @@ function build(simVersion: number): { world: WorldState; ids: number[] } {
   player.rallyPoint = null; // recalled
   player.targetRatio.forage = 10;
   player.targetRatio.fight = 0; // the ratio asks for no fighters at all
-  player.foodStored = 10000;
+  setPoolFoodForTest(world, player, 10000);
   return { world, ids };
 }
 

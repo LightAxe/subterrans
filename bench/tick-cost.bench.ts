@@ -20,7 +20,7 @@ import type { WorldState } from '../src/sim/types.js';
 import { createColonyRecord } from '../src/sim/colony/colony-store.js';
 import type { ColonyId } from '../src/sim/colony/colony-store.js';
 import { initAnt } from '../src/sim/ant/ant-store.js';
-import { setColonyFoodForTest } from '../src/sim/food/food-test-utils.js';
+import { addChamberForTest, setColonyFoodForTest } from '../src/sim/food/food-test-utils.js';
 import { createUndergroundGrid, ugSet, UndergroundTileState, Zone } from '../src/sim/terrain.js';
 import { ChamberType, AntTask } from '../src/sim/enums.js';
 import { FP_SHIFT } from '../src/sim/fixed.js';
@@ -117,10 +117,9 @@ function buildBroodColony(): WorldState {
   c.broodFieldDirty = false;
   setColonyFoodForTest(world, c, 500_000); // over the pool cap on purpose: the queen never starves
   world.colonies[BROOD_CID] = c;
-  c.chambers.push({
+  addChamberForTest(world, c, {
     chamberId: 1,
     chamberType: ChamberType.Queen,
-    foodStored: 0,
     posX: 2 << FP_SHIFT,
     posY: 2 << FP_SHIFT,
     width: 3,
@@ -128,10 +127,9 @@ function buildBroodColony(): WorldState {
   });
   for (let dy = 0; dy < 3; dy++)
     for (let dx = 0; dx < 3; dx++) ugSet(ug, 12 + dx, 12 + dy, UndergroundTileState.Open);
-  c.chambers.push({
+  addChamberForTest(world, c, {
     chamberId: 2,
     chamberType: ChamberType.Nursery,
-    foodStored: 0,
     posX: 12 << FP_SHIFT,
     posY: 12 << FP_SHIFT,
     width: 3,

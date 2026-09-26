@@ -13,9 +13,10 @@ import {
   visibleContextMenuItems,
 } from './context-menu-layout.js';
 import { ChamberType } from '../sim/enums.js';
-import { createColonyRecord, type ChamberRecord } from '../sim/colony/colony-store.js';
+import { createColonyRecord } from '../sim/colony/colony-store.js';
 import { createWorldState, type WorldState } from '../sim/types.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
+import { addChamberForTest, type TestChamber } from '../sim/food/food-test-utils.js';
 import type { GfxLike } from './draw-surface.js';
 
 interface GfxCall {
@@ -54,11 +55,10 @@ class MockGfx implements GfxLike {
 
 // Test fixtures --------------------------------------------------------------
 
-function makeQueenChamber(): ChamberRecord {
+function makeQueenChamber(): TestChamber {
   return {
     chamberId: 1,
     chamberType: ChamberType.Queen,
-    foodStored: 0,
     posX: 0,
     posY: 0,
     width: 5,
@@ -214,7 +214,7 @@ describe('visibleContextMenuItems', () => {
   it('drops Queen when a completed Queen chamber exists', () => {
     const world = makeWorld();
     const colony = createColonyRecord(PLAYER_COLONY_ID, 0);
-    colony.chambers.push(makeQueenChamber());
+    addChamberForTest(world, colony, makeQueenChamber());
     world.colonies[PLAYER_COLONY_ID] = colony;
     const items = visibleContextMenuItems(colony, world);
     expect(items.length).toBe(2);
@@ -256,26 +256,22 @@ describe('visibleContextMenuItems', () => {
   it('multiple FoodStorage chambers do NOT remove the FoodStorage option', () => {
     const world = makeWorld();
     const colony = createColonyRecord(PLAYER_COLONY_ID, 0);
-    colony.chambers.push(
-      {
-        chamberId: 2,
-        chamberType: ChamberType.FoodStorage,
-        foodStored: 0,
-        posX: 0,
-        posY: 0,
-        width: 4,
-        height: 3,
-      },
-      {
-        chamberId: 3,
-        chamberType: ChamberType.FoodStorage,
-        foodStored: 0,
-        posX: 0,
-        posY: 0,
-        width: 4,
-        height: 3,
-      },
-    );
+    addChamberForTest(world, colony, {
+      chamberId: 2,
+      chamberType: ChamberType.FoodStorage,
+      posX: 0,
+      posY: 0,
+      width: 4,
+      height: 3,
+    });
+    addChamberForTest(world, colony, {
+      chamberId: 3,
+      chamberType: ChamberType.FoodStorage,
+      posX: 0,
+      posY: 0,
+      width: 4,
+      height: 3,
+    });
     world.colonies[PLAYER_COLONY_ID] = colony;
     const items = visibleContextMenuItems(colony, world);
     expect(items.map((i) => i.chamberType)).toContain(ChamberType.FoodStorage);
@@ -285,10 +281,9 @@ describe('visibleContextMenuItems', () => {
   it('Nursery unchanged: still present regardless of nursery state (policy undecided)', () => {
     const world = makeWorld();
     const colony = createColonyRecord(PLAYER_COLONY_ID, 0);
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 4,
       chamberType: ChamberType.Nursery,
-      foodStored: 0,
       posX: 0,
       posY: 0,
       width: 4,

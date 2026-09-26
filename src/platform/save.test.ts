@@ -17,6 +17,7 @@ import {
   parseSaveFile,
   FutureSimVersionError,
   OldSimVersionError,
+  MIN_ACCEPTED_SIM_VERSION,
   SaveVersionMismatchError,
   unpackBakedSurfaceEffect,
   type SaveFile,
@@ -41,7 +42,26 @@ import {
 import type { SimCommand } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { ChamberType } from '../sim/enums.js';
-import { colonyFoodTotal } from '../sim/food/food-api.js';
+import {
+  chamberStock,
+  colonyFoodTotal,
+  colonyPoolFood,
+  drainPile,
+  pileAtTile,
+  pileCount,
+  pileFoodId,
+  pileSlotAt,
+  pileTileX,
+  pileTileY,
+} from '../sim/food/food-api.js';
+import {
+  addChamberForTest,
+  pilesForTest,
+  setMealsUntilStarvationForTest,
+  setPoolFoodForTest,
+} from '../sim/food/food-test-utils.js';
+import { QUEEN_HUNGER } from '../sim/hunger.js';
+import { SIM_VERSION_V50_LOCATED_FOOD } from '../sim/types.js';
 import { pheromoneKeyIsSurface } from '../sim/pheromone/pheromone-store.js';
 
 describe('save.ts (SCEN-04 + SCEN-06)', () => {
@@ -74,7 +94,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         'subTask',
         'speed',
         'foodCarrying',
-        'starvationTimer',
+        'lastMealTick',
         'age',
         'alive',
         'lifespan',
@@ -196,9 +216,14 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         (s.ants as { zone: unknown }).zone = 5;
       });
     });
-    it('colony scalar: negative foodStored is rejected', () => {
+    it('colony scalar: negative poolSlot is rejected', () => {
       rejects((s) => {
-        s.colonies[PKEY]!.foodStored = -1;
+        s.colonies[PKEY]!.poolSlot = -1;
+      });
+    });
+    it('colony scalar: a negative raid counter is rejected', () => {
+      rejects((s) => {
+        s.colonies[PKEY]!.foodRaidedFp = -1;
       });
     });
     it('colony scalar: workerCount above MAX_ENTITIES is rejected', () => {
@@ -318,7 +343,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // the save envelope, Continue/autosave silently drops the player's
       // selected food target.
       const w = createScenario(42);
-      const pileId = w.foodPiles[0]!.foodPileId;
+      const pileId = pileFoodId(w, pileSlotAt(w, 0));
       w.colonies[PLAYER_COLONY_ID]!.priorityFoodPileId = pileId;
       const w2 = deserializeWorldState(serializeWorldState(w));
       expect(w2.colonies[PLAYER_COLONY_ID]!.priorityFoodPileId).toBe(pileId);
@@ -336,40 +361,26 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.colonies[PLAYER_COLONY_ID]!.foodFlowFieldDirty).toBe(true);
     });
 
-    it('round-trips per-chamber chamber.foodStored independently (issue #15)', () => {
+    it('round-trips each FoodStorage chamber stock independently (issue #15)', () => {
       // Issue #15 regression: under the old pool-only model, save + reload
-      // would re-derive chamber.foodStored from colony.foodStored at the next
-      // reconcile, hiding any per-chamber drift. Post-#15, chamber.foodStored
-      // is authoritative — the save MUST faithfully preserve each chamber's
+      // would re-derive a chamber's food from the pool at the next reconcile,
+      // hiding any per-chamber drift. Post-#15 a chamber's stock is
+      // authoritative — the save MUST faithfully preserve each chamber's
       // contents, including disparate values across chambers.
       const w = createScenario(42);
       const colony = w.colonies[PLAYER_COLONY_ID]!;
       // Canonical FoodStorage dims: 4×3 (CHAMBER_DIMENSIONS[FoodStorage]).
       // Issue #101 boundary validator now enforces these.
-      colony.chambers.push({
-        chamberId: 999,
-        chamberType: ChamberType.FoodStorage,
-        foodStored: 1234,
-        posX: 10 << 8,
-        posY: 5 << 8,
-        width: 4,
-        height: 3,
-      });
-      colony.chambers.push({
-        chamberId: 998,
-        chamberType: ChamberType.FoodStorage,
-        foodStored: 4321,
-        posX: 16 << 8,
-        posY: 5 << 8,
-        width: 4,
-        height: 3,
-      });
+      const base = { chamberType: ChamberType.FoodStorage, posY: 5 << 8, width: 4, height: 3 };
+      addChamberForTest(w, colony, { ...base, chamberId: 999, posX: 10 << 8 }, 1234);
+      addChamberForTest(w, colony, { ...base, chamberId: 998, posX: 16 << 8 }, 4321);
       const w2 = deserializeWorldState(serializeWorldState(w));
       const c2 = w2.colonies[PLAYER_COLONY_ID]!;
       const ch1 = c2.chambers.find((c) => c.chamberId === 999)!;
       const ch2 = c2.chambers.find((c) => c.chamberId === 998)!;
-      expect(ch1.foodStored).toBe(1234);
-      expect(ch2.foodStored).toBe(4321);
+      expect(chamberStock(w2, ch1)).toBe(1234);
+      expect(chamberStock(w2, ch2)).toBe(4321);
+      expect(colonyPoolFood(w2, c2)).toBe(colonyPoolFood(w, colony));
     });
     it('round-trips non-zero ants.searchWave through serialize → deserialize (Phase 9 / 09 digger-reassignment memo)', () => {
       // Regression guard: if searchWave is dropped, Continue/autosave silently
@@ -1265,12 +1276,42 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(() => deserializeWorldState(snapshot)).toThrow(FutureSimVersionError);
     });
     it('exact boundary: simVersion = MIN_ACCEPTED - 1 throws OldSimVersionError', () => {
-      // Any simVersion below MIN_ACCEPTED_SIM_VERSION (28 as of PR 4) is rejected
-      // with OldSimVersionError so bootFromSave can handle it appropriately.
+      // Any simVersion below MIN_ACCEPTED_SIM_VERSION is rejected with
+      // OldSimVersionError so bootFromSave can handle it appropriately.
       const snapshot = makeSavedSnapshot((s) => {
-        s.simVersion = 1;
+        s.simVersion = MIN_ACCEPTED_SIM_VERSION - 1;
       });
       expect(() => deserializeWorldState(snapshot)).toThrow(OldSimVersionError);
+      expect(() => deserializeWorldState(makeSavedSnapshot((s) => (s.simVersion = 1)))).toThrow(
+        OldSimVersionError,
+      );
+    });
+    it('#290 PR 2 — the V50 save wipe: every pre-V50 simVersion (V30..V49) is rejected as old', () => {
+      // MIN rose from V30 to V50 with the located food store; the whole old
+      // acceptance window is now below it and reports OldSimVersionError (the
+      // bootFromSave path overwrites such a save instead of loading it).
+      /** MIN_ACCEPTED_SIM_VERSION before the wipe (the old acceptance window's floor). */
+      const PRE_WIPE_MIN_ACCEPTED_SIM_VERSION = 30;
+      expect(MIN_ACCEPTED_SIM_VERSION).toBe(SIM_VERSION_V50_LOCATED_FOOD);
+      for (let v = PRE_WIPE_MIN_ACCEPTED_SIM_VERSION; v < SIM_VERSION_V50_LOCATED_FOOD; v++) {
+        const snapshot = makeSavedSnapshot((s) => {
+          s.simVersion = v;
+        });
+        let err: unknown = null;
+        try {
+          deserializeWorldState(snapshot);
+        } catch (e) {
+          err = e;
+        }
+        expect(err, `simVersion ${v}`).toBeInstanceOf(OldSimVersionError);
+        expect((err as OldSimVersionError).got).toBe(v);
+      }
+      // V50 itself loads.
+      expect(() =>
+        deserializeWorldState(
+          makeSavedSnapshot((s) => (s.simVersion = SIM_VERSION_V50_LOCATED_FOOD)),
+        ),
+      ).not.toThrow();
     });
   });
 
@@ -1505,9 +1546,27 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const w = createScenario(42);
       // eslint-disable-next-line no-restricted-syntax
       w.tick = 1_000_000;
+      // #288 — keep the queens' hunger clocks consistent with the moved tick
+      // (just fed), as a real long session would have them.
+      for (const c of Object.values(w.colonies)) {
+        setMealsUntilStarvationForTest(w, c.queenEntityId, QUEEN_HUNGER, 300);
+      }
       const s = serializeWorldState(w);
       const w2 = deserializeWorldState(s);
       expect(w2.tick).toBe(1_000_000);
+    });
+    it('#290 accepts tick 2^31 − 1 and rejects tick 2^31 (int32 tick domain for Int32 tick columns)', () => {
+      const w = createScenario(42);
+      // eslint-disable-next-line no-restricted-syntax
+      w.tick = 0x7fffffff;
+      for (const c of Object.values(w.colonies)) {
+        setMealsUntilStarvationForTest(w, c.queenEntityId, QUEEN_HUNGER, 300);
+      }
+      const s = serializeWorldState(w);
+      expect(deserializeWorldState(s).tick).toBe(0x7fffffff);
+      // eslint-disable-next-line no-restricted-syntax
+      (s as unknown as { tick: number }).tick = 0x80000000;
+      expect(() => deserializeWorldState(s)).toThrow(/Invalid tick in save/);
     });
 
     // -----------------------------------------------------------------------
@@ -1520,7 +1579,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       w.colonies[PLAYER_COLONY_ID]!.chambers.push({
         chamberId: 100,
         chamberType: ChamberType.Queen,
-        foodStored: 0,
+        foodSlot: -1,
         posX: 10 << 8,
         posY: 5 << 8,
         width: 5,
@@ -1546,11 +1605,11 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       (c0 as { posX: number }).posX = 1_000_000;
       expect(() => deserializeWorldState(s)).toThrow();
     });
-    it('#101 rejects chamber.foodStored: exceeds capacity', () => {
+    it('#101 rejects chamber.foodSlot: not an integer ≥ -1', () => {
       const s = serializeWorldState(scenarioWithChamber());
       const c0 = s.colonies[String(PLAYER_COLONY_ID)]!.chambers[0]!;
-      (c0 as { foodStored: number }).foodStored = 99_999_999;
-      expect(() => deserializeWorldState(s)).toThrow();
+      (c0 as { foodSlot: number }).foodSlot = -2;
+      expect(() => deserializeWorldState(s)).toThrow(/foodSlot/);
     });
     it("#101 rejects chamber dims: don't match canonical CHAMBER_DIMENSIONS", () => {
       const s = serializeWorldState(scenarioWithChamber());
@@ -1604,55 +1663,42 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     });
 
     // -----------------------------------------------------------------------
-    // #109 — foodPiles array validation
+    // #109 — food pile validation (#290 PR 2: the food store)
     // -----------------------------------------------------------------------
-    it('#109 rejects foodPiles: not an array', () => {
+    it('#109 rejects a food store that is not an object', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
-      (s as unknown as { foodPiles: unknown }).foodPiles = 'abc';
-      expect(() => deserializeWorldState(s)).toThrow();
+      (s as unknown as { food: unknown }).food = 'abc';
+      expect(() => deserializeWorldState(s)).toThrow(/food/);
     });
-    it('#109 rejects foodPiles: length exceeds cap', () => {
+    // #109 / #290 PR 2 — pile bounds now live in the food store; the full
+    // tamper matrix is food-store-save.test.ts.
+    it('#109 rejects more piles than FOOD_PILE_HARD_CAP', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
-      const oversized = [];
-      for (let i = 0; i < 1000; i++) {
-        oversized.push({
-          foodPileId: i,
-          tileX: i % 128,
-          tileY: 0,
-          pickupsRemaining: 50,
-          pickupsInitial: 50,
-        });
-      }
-      s.foodPiles = oversized;
-      expect(() => deserializeWorldState(s)).toThrow();
+      // The oversized pile order is rejected before the per-slot checks matter.
+      s.food.pileOrder = Array.from({ length: 1000 }, (_, i) => i);
+      expect(() => deserializeWorldState(s)).toThrow(/pileOrder/);
     });
-    it('#109 rejects foodPile.tileX: out-of-grid', () => {
+    it('#109 rejects a pile tileX off the surface grid', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
-      s.foodPiles = [
-        { foodPileId: 1, tileX: 1_000_000, tileY: 0, pickupsRemaining: 50, pickupsInitial: 50 },
-      ];
-      expect(() => deserializeWorldState(s)).toThrow();
+      s.food.tileX[s.food.pileOrder[0]!] = 1_000_000;
+      expect(() => deserializeWorldState(s)).toThrow(/tileX/);
     });
-    it('#109 rejects foodPiles: duplicate foodPileId', () => {
+    it('#109 rejects two piles with the same foodId', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
-      s.foodPiles = [
-        { foodPileId: 5, tileX: 10, tileY: 10, pickupsRemaining: 50, pickupsInitial: 50 },
-        { foodPileId: 5, tileX: 20, tileY: 20, pickupsRemaining: 50, pickupsInitial: 50 },
-      ];
-      expect(() => deserializeWorldState(s)).toThrow();
+      s.food.foodId[s.food.pileOrder[1]!] = s.food.foodId[s.food.pileOrder[0]!]!;
+      expect(() => deserializeWorldState(s)).toThrow(/Duplicate pile foodId/);
     });
-    it('#109 rejects foodPiles: duplicate tile', () => {
+    it('#109 rejects two piles on the same tile', () => {
       const w = createScenario(42);
       const s = serializeWorldState(w);
-      s.foodPiles = [
-        { foodPileId: 5, tileX: 10, tileY: 10, pickupsRemaining: 50, pickupsInitial: 50 },
-        { foodPileId: 6, tileX: 10, tileY: 10, pickupsRemaining: 50, pickupsInitial: 50 },
-      ];
-      expect(() => deserializeWorldState(s)).toThrow();
+      const [a, b] = [s.food.pileOrder[0]!, s.food.pileOrder[1]!];
+      s.food.tileX[b] = s.food.tileX[a]!;
+      s.food.tileY[b] = s.food.tileY[a]!;
+      expect(() => deserializeWorldState(s)).toThrow(/Duplicate pile tile/);
     });
 
     // -----------------------------------------------------------------------
@@ -1789,22 +1835,16 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(localStorage.getItem('subterrans:save:v2')).toBeNull();
     });
 
-    it('round-trips pickup-charge fields on every food pile', () => {
+    it('round-trips every food pile (id, tile, amount, birth size, corpse flag) in order', () => {
       const w = createScenario(42);
-      const beforeShapes = w.foodPiles.map((p) => ({
-        foodPileId: p.foodPileId,
-        pickupsRemaining: p.pickupsRemaining,
-        pickupsInitial: p.pickupsInitial,
-      }));
+      drainPile(w, pileSlotAt(w, 0), 512); // a partly-eaten pile
+      const before = pilesForTest(w);
       const s = serializeWorldState(w);
       const w2 = deserializeWorldState(s);
-      expect(w2.foodPiles.length).toBe(w.foodPiles.length);
-      for (let i = 0; i < w2.foodPiles.length; i++) {
-        const after = w2.foodPiles[i]!;
-        const before = beforeShapes[i]!;
-        expect(after.foodPileId).toBe(before.foodPileId);
-        expect(after.pickupsRemaining).toBe(before.pickupsRemaining);
-        expect(after.pickupsInitial).toBe(before.pickupsInitial);
+      expect(pilesForTest(w2)).toEqual(before);
+      for (let o = 0; o < pileCount(w2); o++) {
+        const slot = pileSlotAt(w2, o);
+        expect(pileAtTile(w2, pileTileX(w2, slot), pileTileY(w2, slot))).toBe(slot);
       }
     });
 
@@ -1823,40 +1863,33 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.recentlyDepletedFood[1]).toEqual({ tick: 200, tileX: 12, tileY: 18 });
     });
 
-    it('validateFoodPile rejects pickupsRemaining=0 (live piles always have a charge)', () => {
-      const w = createScenario(42);
-      const s = serializeWorldState(w) as unknown as { foodPiles: { pickupsRemaining: number }[] };
-      s.foodPiles[0]!.pickupsRemaining = 0; // tampered value
-      expect(() => deserializeWorldState(s as never)).toThrow(/pickupsRemaining/);
+    // #290 PR 2 — the pile charge checks now run on the food store (fp).
+    it('validateFoodStore rejects an empty live pile (live piles always hold a pickup)', () => {
+      const s = serializeWorldState(createScenario(42));
+      s.food.amountFp[s.food.pileOrder[0]!] = 0; // tampered value
+      expect(() => deserializeWorldState(s)).toThrow(/amountFp/);
     });
 
-    it('validateFoodPile rejects pickupsRemaining > pickupsInitial', () => {
-      const w = createScenario(42);
-      const s = serializeWorldState(w) as unknown as {
-        foodPiles: { pickupsRemaining: number; pickupsInitial: number }[];
-      };
-      s.foodPiles[0]!.pickupsRemaining = s.foodPiles[0]!.pickupsInitial + 1;
-      expect(() => deserializeWorldState(s as never)).toThrow(/pickupsRemaining/);
+    it('validateFoodStore rejects a pile holding more than its birth size', () => {
+      const s = serializeWorldState(createScenario(42));
+      const p = s.food.pileOrder[0]!;
+      s.food.amountFp[p] = s.food.initialFp[p]! + 512;
+      expect(() => deserializeWorldState(s)).toThrow(/amountFp/);
     });
 
-    it('validateFoodPile rejects pickupsInitial=0', () => {
-      const w = createScenario(42);
-      const s = serializeWorldState(w) as unknown as {
-        foodPiles: { pickupsInitial: number; pickupsRemaining: number }[];
-      };
-      s.foodPiles[0]!.pickupsInitial = 0;
-      s.foodPiles[0]!.pickupsRemaining = 0;
-      expect(() => deserializeWorldState(s as never)).toThrow(/pickupsInitial/);
+    it('validateFoodStore rejects a pile with a zero birth size', () => {
+      const s = serializeWorldState(createScenario(42));
+      const p = s.food.pileOrder[0]!;
+      s.food.initialFp[p] = 0;
+      s.food.amountFp[p] = 0;
+      expect(() => deserializeWorldState(s)).toThrow(/initialFp/);
     });
 
-    it('validateFoodPile rejects pickupsInitial above max constant', () => {
-      const w = createScenario(42);
-      const s = serializeWorldState(w) as unknown as {
-        foodPiles: { pickupsInitial: number }[];
-      };
+    it('validateFoodStore rejects a pile birth size above FOOD_PILE_INITIAL_PICKUPS_MAX pickups', () => {
+      const s = serializeWorldState(createScenario(42));
       // FOOD_PILE_INITIAL_PICKUPS_MAX = 150 in constants.ts — pick one above.
-      s.foodPiles[0]!.pickupsInitial = 1000;
-      expect(() => deserializeWorldState(s as never)).toThrow(/pickupsInitial/);
+      s.food.initialFp[s.food.pileOrder[0]!] = 1000 * 512;
+      expect(() => deserializeWorldState(s)).toThrow(/initialFp/);
     });
 
     it('rejects non-array recentlyDepletedFood', () => {
@@ -2212,39 +2245,20 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     it('#290 — reports the aggregate (pool + FoodStorage chambers), matching the HUD', async () => {
       const world = createScenario(42);
       const playerColony = world.colonies[PLAYER_COLONY_ID]!;
-      // Two FoodStorage chambers with stock, plus a Nursery whose (always-zero in
-      // play) field is set nonzero and must not be counted.
-      playerColony.chambers.push(
-        {
-          chamberId: 9001,
-          chamberType: ChamberType.FoodStorage,
-          foodStored: 5 << 8,
-          posX: 2 << 8,
-          posY: 2 << 8,
-          width: 4,
-          height: 3,
-        },
-        {
-          chamberId: 9002,
-          chamberType: ChamberType.FoodStorage,
-          foodStored: 3 << 8,
-          posX: 8 << 8,
-          posY: 2 << 8,
-          width: 4,
-          height: 3,
-        },
-        {
-          // A non-FoodStorage chamber never holds food in play; a nonzero value
-          // here (tampered / hypothetical) must NOT be counted.
-          chamberId: 9003,
-          chamberType: ChamberType.Nursery,
-          foodStored: 7 << 8,
-          posX: 14 << 8,
-          posY: 2 << 8,
-          width: 4,
-          height: 3,
-        },
-      );
+      // Two FoodStorage chambers with stock, plus a Nursery (no stock). The enemy
+      // colony's food must not be counted either.
+      const fs = { chamberType: ChamberType.FoodStorage, posY: 2 << 8, width: 4, height: 3 };
+      addChamberForTest(world, playerColony, { ...fs, chamberId: 9001, posX: 2 << 8 }, 5 << 8);
+      addChamberForTest(world, playerColony, { ...fs, chamberId: 9002, posX: 8 << 8 }, 3 << 8);
+      addChamberForTest(world, playerColony, {
+        chamberId: 9003,
+        chamberType: ChamberType.Nursery,
+        posX: 14 << 8,
+        posY: 2 << 8,
+        width: 4,
+        height: 3,
+      });
+      setPoolFoodForTest(world, world.colonies[ENEMY_COLONY_ID as ColonyId]!, 99 << 8);
       await manualSave(42, [], world);
       const info = await getSaveInfo();
       const FP_SHIFT = 8;

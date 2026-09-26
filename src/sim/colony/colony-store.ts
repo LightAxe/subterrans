@@ -15,7 +15,6 @@ import type { FoodPileId } from '../food.js';
 import type { NestEntrance } from './entrance.js';
 import {
   DEFAULT_BEHAVIOR_RATIO,
-  STARVATION_GRACE_TICKS,
   RECONCILE_INTERVAL_TICKS,
   QUEEN_EGG_INTERVAL_BASE_TICKS,
 } from '../constants.js';
@@ -73,7 +72,13 @@ export interface BehaviorRatio {
 export interface ChamberRecord {
   chamberId: EntityId;
   chamberType: ChamberType;
-  foodStored: number;
+  /**
+   * #290 PR 2 (V50) — slot of this chamber's Stock in the food store
+   * (`world.food`), whose `foodId` is `chamberId`. −1 for every chamber type but
+   * FoodStorage. Set by `createChamberStock` (food-api.ts) at promotion; read only
+   * through the food facade.
+   */
+  foodSlot: number;
   posX: number;
   posY: number;
   width: number;
@@ -104,7 +109,7 @@ export function isInChamberFootprint(colony: ColonyRecord, tileX: number, tileY:
 //
 // 17 Phase 2 fields + 3 Phase 3 extension fields (entrances, rallyPoint, digFlowFieldDirty).
 // Field inventory:
-//   colonyId, queenEntityId, queenStarvationTimer, foodStored,
+//   colonyId, queenEntityId, poolSlot,
 //   workerCount, eggCount, larvaeCount, nurseCount,
 //   eggs, larvae, workers, chambers,
 //   targetRatio, computedAllocation, taskCensus,
@@ -119,8 +124,13 @@ export function isInChamberFootprint(colony: ColonyRecord, tileX: number, tileY:
 export interface ColonyRecord {
   colonyId: ColonyId;
   queenEntityId: EntityId;
-  queenStarvationTimer: number;
-  foodStored: number;
+  /**
+   * #290 PR 2 (V50) — slot of this colony's entrance Pool in the food store
+   * (`world.food`). Set by `createColonyPool` (food-api.ts) when the scenario
+   * builds the colony; −1 only on a hand-built test colony. Read only through the
+   * food facade. (The queen's hunger clock is `ants.lastMealTick[queenEntityId]`.)
+   */
+  poolSlot: number;
   workerCount: number;
   eggCount: number;
   larvaeCount: number;
@@ -206,6 +216,19 @@ export interface ColonyRecord {
    *  Initialized to null in createColonyRecord. Round-trips through copyWorldState + save. */
   priorityFoodPileId: FoodPileId | null;
 
+  /** #290 PR 2 (V50) — food (fp) this colony's fighters have stolen from other
+   *  colonies' FoodStorage chambers. Declared at 0 and serialized now so the raid
+   *  PR (#290 PR 5) adds behaviour only; nothing writes it yet. */
+  foodRaidedFp: number;
+
+  /** #290 PR 2 (V50) — food (fp) stolen from this colony's FoodStorage chambers.
+   *  Declared at 0 for #290 PR 5; nothing writes it yet. */
+  foodLostToRaidsFp: number;
+
+  /** #290 PR 2 (V50) — completed raid deposits by this colony's fighters.
+   *  Declared at 0 for #290 PR 5; nothing writes it yet. */
+  raidTrips: number;
+
   /** C1 (V42) — colony alarm / "recall to nest" stance. While true, every SURFACE
    *  civilian (Idle or Foraging) of this colony flees underground as though its own
    *  tile were dangerous, and sheltering workers do not poke out. Entrance-safety
@@ -247,13 +270,13 @@ export interface ColonyRecord {
 // deserializeColony (save.ts — defaults `foodFlowFieldDirty`/`broodFieldDirty` to false on old saves).
 //
 // Default values (Phase 2 fields):
-//   - foodStored=0, workerCount=0, eggCount=0, larvaeCount=0, nurseCount=0
+//   - poolSlot=-1 (createScenario gives the colony its pool), workerCount=0, eggCount=0, larvaeCount=0, nurseCount=0
 //   - eggs/larvae/workers/chambers: empty arrays (fresh per call)
 //   - targetRatio: spread of DEFAULT_BEHAVIOR_RATIO (independent object per colony)
 //   - computedAllocation: {nurse:0, forage:0, dig:0, fight:0} (fresh object)
 //   - taskCensus:         {nurse:0, forage:0, dig:0, fight:0} (fresh object)
 //   - defeated: false
-//   - queenStarvationTimer: STARVATION_GRACE_TICKS (300)
+//   - foodRaidedFp / foodLostToRaidsFp / raidTrips: 0
 //   - reconcileCountdown:   RECONCILE_INTERVAL_TICKS (100)
 //
 // Each call returns independent objects — mutations on one colony do not
@@ -270,8 +293,7 @@ export function createColonyRecord(colonyId: ColonyId, queenEntityId: EntityId):
   return {
     colonyId,
     queenEntityId,
-    queenStarvationTimer: STARVATION_GRACE_TICKS,
-    foodStored: 0,
+    poolSlot: -1,
     workerCount: 0,
     eggCount: 0,
     larvaeCount: 0,
@@ -286,6 +308,9 @@ export function createColonyRecord(colonyId: ColonyId, queenEntityId: EntityId):
     defeated: false,
     reconcileCountdown: RECONCILE_INTERVAL_TICKS,
     killCount: 0,
+    foodRaidedFp: 0,
+    foodLostToRaidsFp: 0,
+    raidTrips: 0,
     priorityFoodPileId: null,
     alarmActive: false,
     queenLastEggTick: -QUEEN_EGG_INTERVAL_BASE_TICKS,

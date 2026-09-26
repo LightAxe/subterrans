@@ -31,6 +31,7 @@ import { tickIdleReserveAndFlee } from './idle-reserve.js';
 import { tickAntMovement } from './ant-movement.js';
 import { createDigFlowFields } from '../dig-system.js';
 import { Rng } from '../rng.js';
+import { addChamberForTest } from '../food/food-test-utils.js';
 
 const SEED = 4242;
 const BUCKET = 1 << IDLE_MILL_RETARGET_SHIFT; // 64
@@ -55,10 +56,9 @@ function carveOpen(grid: UndergroundGrid, x0: number, y0: number, x1: number, y1
 function carveChamber(world: WorldState, ax: number, ay: number, w: number, h: number): void {
   carveOpen(ug(world), ax, ay, ax + w - 1, ay + h - 1);
   const colony = world.colonies[PLAYER_COLONY_ID]!;
-  colony.chambers.push({
+  addChamberForTest(world, colony, {
     chamberId: 900 + colony.chambers.length,
     chamberType: ChamberType.Nursery,
-    foodStored: 0,
     posX: ax << FP_SHIFT,
     posY: ay << FP_SHIFT,
     width: w,

@@ -12,10 +12,14 @@
 // Key semantic invariant (PRD §4c lines 1052-1085):
 //   tickFoodConsumption IS the concrete implementation of PRD §8a steps 3 AND 4.
 //   Feed success/failure is evaluated inline per entity (queen first, then each live larva).
-//   On success (withdrawFood returns true):  reset starvationTimer to STARVATION_GRACE_TICKS.
-//   On failure (withdrawFood returns false): decrement timer by 1; kill entity when <= 0.
+//   Each ant's hunger clock is `ants.lastMealTick` (#288, V50; src/sim/hunger.ts):
+//   On success (withdrawFood returns true):  lastMealTick = world.tick.
+//   On failure (withdrawFood returns false): kill the ant once ticks since its last
+//     meal reach its profile's starve-after (300). Pre-V50 this was a countdown
+//     reset to STARVATION_GRACE_TICKS and decremented per failed meal — the same
+//     death tick.
 //   Both branches share the same if/else — the else IS step 4.
-//   WORKER_FOOD_PER_TICK=0 in Phase 6 — no worker consumption loop.
+//   Workers and fighters do not eat yet (#290 PR 4) — no worker consumption loop.
 //
 // tickStarvationCheck is a named step slot for forward compatibility only.
 // Phase 7+ may introduce non-food starvation sources (environmental hazards).
@@ -32,14 +36,14 @@ import {
 } from '../types.js';
 import type { ColonyRecord } from './colony-store.js';
 import type { ColonyId } from './colony-store.js';
+import { RECONCILE_INTERVAL_TICKS, NURSE_MIN_WORKERS } from '../constants.js';
 import {
-  QUEEN_FOOD_PER_TICK,
-  LARVA_FOOD_PER_TICK,
-  STARVATION_GRACE_TICKS,
-  RECONCILE_INTERVAL_TICKS,
-  NURSE_MIN_WORKERS,
-} from '../constants.js';
-import { clampColonyFoodStores, createChamberStock, withdrawFood } from '../food/food-api.js';
+  clampColonyFoodStores,
+  createChamberStock,
+  foodStoreHasFreeSlot,
+  withdrawFood,
+} from '../food/food-api.js';
+import { LARVA_HUNGER, QUEEN_HUNGER, ticksSinceMeal, type HungerProfile } from '../hunger.js';
 import { ChamberType } from '../enums.js';
 import { allocateWorkers } from '../behavior/allocation-system.js';
 import { ugGet, ugSet, UndergroundTileState } from '../terrain.js';
@@ -100,11 +104,11 @@ export function largestNurseryTileCount(colony: ColonyRecord): number {
 // tickFoodConsumption — PRD §8a steps 3 AND 4 combined (CLNY-04, CLNY-05)
 //
 // This IS the concrete implementation of steps 3 and 4 evaluated inline per entity.
-// Step 3 (reset-on-feed):    withdrawFood success → reset starvationTimer to STARVATION_GRACE_TICKS
-// Step 4 (decrement-on-fail): withdrawFood failure → decrement timer; kill entity at <= 0
+// Step 3 (feed):          meal due + withdrawFood success → lastMealTick = world.tick
+// Step 4 (starve-on-fail): withdrawFood failure → kill once ticks since meal ≥ starve-after
 //
 // Queen processed first (CLNY-04); larvae processed in order (CLNY-05).
-// Workers: WORKER_FOOD_PER_TICK=0 in Phase 6 → skipped entirely.
+// Workers and fighters: no meals until #290 PR 4 → skipped entirely.
 // ---------------------------------------------------------------------------
 
 /**
@@ -116,68 +120,72 @@ export function nurseMinWorkersFor(world: WorldState): number {
 }
 
 /**
- * Feed queen and each live larva from the colony food pool.
+ * One ant's meal (#288, V50). When a meal is due (ticks since the last one ≥ the
+ * profile's interval), draw `profile.mealFp` from the colony stores: on success
+ * the ant's clock resets to this tick; on failure it dies (`despawnAnt`,
+ * 'starvation') once ticks since its last meal reach `profile.starveAfterTicks`.
  *
- * PRD §4c lines 1052-1085 verbatim implementation.
+ * With interval 1 and starve-after 300 this is exactly the pre-V50 countdown: an
+ * ant fed at tick s fails at s+1 … and dies at s+300, the tick its countdown
+ * (300 − failed meals) reached 0.
+ */
+function feedOrStarve(
+  world: WorldState,
+  colony: ColonyRecord,
+  id: number,
+  profile: HungerProfile,
+): void {
+  const ants = world.ants;
+  const sinceMeal = ticksSinceMeal(world, id);
+  if (sinceMeal < profile.mealIntervalTicks) return;
+  if (withdrawFood(world, colony, profile.mealFp)) {
+    ants.lastMealTick[id] = world.tick;
+  } else if (sinceMeal >= profile.starveAfterTicks) {
+    despawnAnt(world, id, { cause: 'starvation' }); // #235 broodFieldDirty is set inside for a larva
+  }
+}
+
+/**
+ * Feed queen and each live larva from the colony food stores.
  *
- * Queen first (CLNY-04): on success reset queenStarvationTimer to STARVATION_GRACE_TICKS;
- * on failure decrement queenStarvationTimer and kill queen when <= 0.
+ * PRD §4c lines 1052-1085, re-expressed on the per-kind hunger profiles (#288):
+ * queen first (CLNY-04, QUEEN_HUNGER), then each live larva in `colony.larvae`
+ * order (CLNY-05, LARVA_HUNGER). See `feedOrStarve`.
  *
- * Each live larva (CLNY-05): same per-entity contract using ants.starvationTimer[id].
- *
- * Workers: WORKER_FOOD_PER_TICK=0 → no worker loop (Phase 6 scope; Phase 7+ may add one).
+ * Workers and fighters: no worker loop until #290 PR 4.
  */
 export function tickFoodConsumption(world: WorldState, colony: ColonyRecord): void {
   const ants = world.ants;
 
-  // Queen (CLNY-04) — reset on success, decrement + death-check on fail.
+  // Queen (CLNY-04).
   const queenId = colony.queenEntityId;
-  if (ants.alive[queenId] === 1) {
-    if (withdrawFood(world, colony, QUEEN_FOOD_PER_TICK)) {
-      colony.queenStarvationTimer = STARVATION_GRACE_TICKS;
-    } else {
-      colony.queenStarvationTimer -= 1;
-      if (colony.queenStarvationTimer <= 0) {
-        despawnAnt(world, queenId, { cause: 'starvation' });
-      }
-    }
-  }
+  if (ants.alive[queenId] === 1) feedOrStarve(world, colony, queenId, QUEEN_HUNGER);
 
   // Larvae (CLNY-05) — same per-entity contract.
   for (let i = 0; i < colony.larvae.length; i++) {
     const id = colony.larvae[i]!;
     if (ants.alive[id] !== 1) continue;
-    if (withdrawFood(world, colony, LARVA_FOOD_PER_TICK)) {
-      ants.starvationTimer[id] = STARVATION_GRACE_TICKS;
-    } else {
-      // Non-null assertion: id is a valid entity index, bounds verified by colony.larvae membership.
-      const timer = ants.starvationTimer[id]! - 1;
-      ants.starvationTimer[id] = timer;
-      if (timer <= 0) {
-        despawnAnt(world, id, { cause: 'starvation' }); // #235 broodFieldDirty is set inside
-      }
-    }
+    feedOrStarve(world, colony, id, LARVA_HUNGER);
   }
 
-  // Workers: WORKER_FOOD_PER_TICK === 0 in Phase 6 → skip.
-  // Phase 7+ adds worker consumption here, identical pattern to the larva loop above.
+  // Workers and fighters eat from #290 PR 4 (a V51-gated loop here).
 }
 
 // ---------------------------------------------------------------------------
 // tickStarvationCheck — Phase 6 intentional no-op (PRD §8a step 4 slot)
 //
-// PRD §8a step 4's decrement-on-fail + death check is executed inline inside
-// tickFoodConsumption's else-branch. This function is therefore a no-op in Phase 6.
+// PRD §8a step 4's starve-on-failed-meal check is executed inline inside
+// tickFoodConsumption (feedOrStarve). This function is therefore a no-op in Phase 6.
 // The function is kept in the dispatcher as a named step slot for forward compatibility
 // (Phase 7+ may introduce non-food starvation sources such as environmental hazards).
 // ---------------------------------------------------------------------------
 
 /**
- * Phase 6 no-op — PRD §8a step 4 (decrement-on-fail + death check) is executed
- * inline inside tickFoodConsumption's else-branch (PRD §4c, lines 1052-1085).
+ * Phase 6 no-op — PRD §8a step 4 (the death check on a failed meal) is executed
+ * inline inside tickFoodConsumption's feedOrStarve (PRD §4c, lines 1052-1085).
  *
- * Do NOT add an unconditional decrement here — that would double-count step 4
- * and cause a fed queen to drift toward death (regression of PRD semantics).
+ * Do NOT add a second hunger check or clock change here — that would double-count
+ * step 4 and cause a fed queen to drift toward death (regression of PRD semantics).
  *
  * Phase 7+ may introduce non-food starvation sources here (environmental hazards).
  */
@@ -372,6 +380,12 @@ export function checkPendingChambers(world: WorldState): void {
       const colony = world.colonies[pc.colonyId];
       if (!colony) continue;
 
+      // #290 PR 2 — a FoodStorage chamber needs a food-store slot for its stock.
+      // The store is sized so this never fails (FOOD_STORE_CAPACITY); if it ever
+      // did, the chamber stays pending, like the entity-id bail below. Checked
+      // BEFORE allocateEntityId so a bail burns no id.
+      if (pc.chamberType === ChamberType.FoodStorage && !foodStoreHasFreeSlot(world)) continue;
+
       // Issue #59 — bail on entity-id cap. Chamber creation is bounded in
       // practice (low chamber count per colony), so reaching this with the
       // counter at MAX_ENTITIES means the world is structurally saturated.
@@ -387,10 +401,7 @@ export function checkPendingChambers(world: WorldState): void {
       colony.chambers.push({
         chamberId,
         chamberType: pc.chamberType,
-        // The record type still requires the field; createChamberStock below owns
-        // the chamber's stock. TODO(#290 PR 2): removed with the field when the
-        // located food store replaces it (the stock moves to ChamberRecord.foodSlot).
-        foodStored: 0,
+        foodSlot: -1, // createChamberStock links the FoodStorage stock below
         posX: pc.anchorTileX << FP_SHIFT,
         posY: pc.anchorTileY << FP_SHIFT,
         width: pc.width,

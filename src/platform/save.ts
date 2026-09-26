@@ -12,11 +12,7 @@
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
 import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
-import {
-  LATEST_SIM_VERSION,
-  SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS,
-  SIM_VERSION_V37_CORPSE_FOOD,
-} from '../sim/types.js';
+import { LATEST_SIM_VERSION, SIM_VERSION_V50_LOCATED_FOOD } from '../sim/types.js';
 import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/constants.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
 import {
@@ -39,9 +35,20 @@ import type { SurfaceGrid, UndergroundGrid } from '../sim/terrain.js';
 import { createSurfaceGrid, createUndergroundGrid } from '../sim/terrain.js';
 import type { PheromoneGrid } from '../sim/pheromone/pheromone-store.js';
 import { createPheromoneGrid } from '../sim/pheromone/pheromone-store.js';
-import type { DepletionRecord, FoodPile, FoodPileId } from '../sim/food.js';
+import type { DepletionRecord, FoodPileId } from '../sim/food.js';
+import type { FoodStore } from '../sim/food/food-store.js';
+import {
+  createFoodStore,
+  FOOD_FLAG_CORPSE,
+  FoodKind,
+  rebuildSurfacePileAt,
+} from '../sim/food/food-store.js';
 import {
   MAX_ENTITIES,
+  MAX_COLONIES,
+  FOOD_STORAGE_CHAMBERS_PER_COLONY_BOUND,
+  FOOD_STORE_CAPACITY,
+  FOOD_PICKUP_AMOUNT,
   FOOD_PILE_HARD_CAP,
   FOOD_PILE_INITIAL_PICKUPS_MIN,
   FOOD_PILE_INITIAL_PICKUPS_MAX,
@@ -57,6 +64,8 @@ import {
 import { FP_SHIFT } from '../sim/fixed.js';
 import { ChamberType } from '../sim/enums.js';
 import { livePileTiles } from '../sim/food/food-api.js';
+import { Zone } from '../sim/terrain.js';
+import { LARVA_HUNGER, QUEEN_HUNGER } from '../sim/hunger.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import {
   validateSurfaceConnectivity,
@@ -139,11 +148,13 @@ export class FutureSimVersionError extends Error {
   }
 }
 
-// PR 6-sim (posture 2): the underground-embedding guards change descent and
-// underground-mutation behaviour, so a pre-V30 save would replay differently.
-// Raise the floor to reject pre-V30 saves cleanly. (Supersedes the PR 5 V29
-// floor; path-aware-routing + static-terrain reasoning still applies.)
-export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GUARDS;
+// #290 PR 2 (V50) — DELIBERATE save wipe. The located food store replaces the
+// `foodPiles` array and the `foodStored` scalars, and the count-up hunger clock
+// `ants.lastMealTick` replaces `starvationTimer` / `queenStarvationTimer`. Loading a
+// pre-V50 snapshot into the new shape would be a format transform, which ADR-0014
+// forbids, so every pre-V50 save is rejected (owner decision on #290, 2026-09-25).
+// Previous floor: V30 (PR 6-sim's underground-embedding guards).
+export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V50_LOCATED_FOOD;
 
 /**
  * #228 window policy — deliberate-break escape hatch (version-scoped).
@@ -167,13 +178,12 @@ export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V30_UNDERGROUND_EMBEDDING_GU
  *   2. In the NEXT PR that bumps LATEST while leaving MIN behind: set this back to
  *      `null` (the guard test fails until you do). Never leave a stale version here.
  *
- * Now `null`: #225 (V31) is the first behavior PR to bump LATEST past V30 while
- * leaving MIN at V30, re-opening the acceptance window (V30..LATEST), so the
- * deliberate V30 break declared at HEAD is retired per step 2 of the ritual. It
- * stays `null` until some future PR runs the ritual again (raise MIN to LATEST +
- * set this to that LATEST).
+ * Now V50: #290 PR 2 (the located food store) runs the ritual — it raises MIN
+ * to V50 = LATEST (see MIN_ACCEPTED_SIM_VERSION). The next PR that bumps LATEST
+ * while leaving MIN at V50 (#290 PR 4, unified hunger) sets this back to `null`.
+ * (The previous break, V30, was retired by #225 at V31.)
  */
-export const DELIBERATE_WINDOW_BREAK_AT: number | null = null;
+export const DELIBERATE_WINDOW_BREAK_AT: number | null = SIM_VERSION_V50_LOCATED_FOOD;
 
 export class OldSimVersionError extends Error {
   // #229 — explicit field (see SaveVersionMismatchError): strip-only Node compat.
@@ -302,13 +312,9 @@ function validateChamberRecord(ch: unknown, label: string): void {
   ) {
     throw new Error(`Invalid ${label}.posY: ${String(c.posY)}`);
   }
-  if (
-    typeof c.foodStored !== 'number' ||
-    !Number.isInteger(c.foodStored) ||
-    c.foodStored < 0 ||
-    c.foodStored > FOOD_CHAMBER_CAPACITY
-  ) {
-    throw new Error(`Invalid ${label}.foodStored: ${String(c.foodStored)}`);
+  // #290 PR 2 — the stock link; validateFoodStore checks it against the store.
+  if (typeof c.foodSlot !== 'number' || !Number.isInteger(c.foodSlot) || c.foodSlot < -1) {
+    throw new Error(`Invalid ${label}.foodSlot: ${String(c.foodSlot)}`);
   }
 }
 
@@ -356,59 +362,226 @@ function validatePendingChamber(pc: unknown, label: string): void {
   }
 }
 
-/** Issue #109 + #112 — foodPile validator. */
-function validateFoodPile(p: unknown, label: string, simVersion: number): void {
-  if (p === null || typeof p !== 'object') {
-    throw new Error(`Invalid ${label}: not an object`);
+/**
+ * #290 PR 2 (V50) — food-store validator. Rebuilds the store from the serialized
+ * columns and enforces every invariant the sim relies on (see food-store.ts):
+ *  1. each column is a number[] of the same length n ≤ FOOD_STORE_CAPACITY, every
+ *     entry an integer in the column's range;
+ *  2. per slot, by kind:
+ *     - None:  every column 0 (a freed slot is zeroed);
+ *     - Pile:  unowned, on a surface tile, whole pickups, 0 < amount ≤ initial ≤
+ *              FOOD_PILE_INITIAL_PICKUPS_MAX pickups and initial ≥ the
+ *              natural-pile minimum (1 pickup for a corpse pile), an entity id,
+ *              flags ⊆ CORPSE;
+ *     - Pool:  owned by a colony, underground in that colony's grid, 0 ≤ amount ≤
+ *              BASE_FOOD_STORAGE_CAPACITY, foodId −1;
+ *     - Stock: owned by a colony, underground in its grid, 0 ≤ amount ≤
+ *              FOOD_CHAMBER_CAPACITY, foodId = a FoodStorage chamber's id;
+ *  3. at most MAX_COLONIES colonies and FOOD_STORAGE_CHAMBERS_PER_COLONY_BOUND
+ *     FoodStorage chambers per colony (the store is sized for them, so it can
+ *     never fill); each colony's `poolSlot` is a Pool it owns, and no two
+ *     colonies share one;
+ *  4. every FoodStorage chamber's `foodSlot` is a Stock its colony owns with
+ *     foodId = chamberId at the chamber anchor; every other chamber has −1; no
+ *     two chambers share one — and no Pool or Stock is left unlinked;
+ *  5. `pileOrder` lists every Pile slot exactly once (≤ FOOD_PILE_HARD_CAP), and
+ *     pile foodIds and tiles are unique.
+ * Surface connectivity of the piles is checked later against the assembled world.
+ */
+function validateFoodStore(raw: unknown, colonies: Record<ColonyId, ColonyRecord>): FoodStore {
+  if (raw === null || typeof raw !== 'object') {
+    throw new Error('Invalid food: not an object');
   }
-  const fp = p as Partial<FoodPile>;
-  if (
-    typeof fp.foodPileId !== 'number' ||
-    !Number.isInteger(fp.foodPileId) ||
-    fp.foodPileId < 0 ||
-    fp.foodPileId > MAX_ENTITIES
-  ) {
-    throw new Error(`Invalid ${label}.foodPileId: ${String(fp.foodPileId)}`);
+  const r = raw as Partial<Record<keyof SerializedFoodStore, unknown>>;
+  const store = createFoodStore();
+
+  const intIn = (v: unknown, lo: number, hi: number): v is number =>
+    typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi;
+  const kindRaw = r.kind;
+  if (!Array.isArray(kindRaw) || kindRaw.length > FOOD_STORE_CAPACITY) {
+    throw new Error(`Invalid food.kind: not a number[] of length <= ${FOOD_STORE_CAPACITY}`);
   }
-  if (!isTileCoord(fp.tileX, SURFACE_GRID_WIDTH)) {
-    throw new Error(`Invalid ${label}.tileX: ${String(fp.tileX)}`);
+  const n = kindRaw.length;
+  const columns: ReadonlyArray<
+    readonly [keyof SerializedFoodStore, Uint8Array | Int16Array | Int32Array, number, number]
+  > = [
+    ['kind', store.kind, FoodKind.None, FoodKind.Stock],
+    ['owner', store.owner, 0, 255],
+    ['zone', store.zone, 0, 1],
+    ['grid', store.grid, 0, 255],
+    ['tileX', store.tileX, 0, SURFACE_GRID_WIDTH - 1],
+    ['tileY', store.tileY, 0, SURFACE_GRID_HEIGHT - 1],
+    ['amountFp', store.amountFp, 0, 0x7fffffff],
+    ['initialFp', store.initialFp, 0, 0x7fffffff],
+    ['foodId', store.foodId, -1, MAX_ENTITIES],
+    ['flags', store.flags, 0, 255],
+  ];
+  for (const [key, dst, lo, hi] of columns) {
+    const col = r[key];
+    if (!Array.isArray(col) || col.length !== n) {
+      throw new Error(`Invalid food.${key}: not a number[] of length ${n}`);
+    }
+    for (let i = 0; i < n; i++) {
+      const v = col[i] as unknown;
+      if (!intIn(v, lo, hi)) throw new Error(`Invalid food.${key}[${i}]: ${String(v)}`);
+      dst[i] = v;
+    }
   }
-  if (!isTileCoord(fp.tileY, SURFACE_GRID_HEIGHT)) {
-    throw new Error(`Invalid ${label}.tileY: ${String(fp.tileY)}`);
+
+  // 2. Per-slot, per-kind bounds.
+  const pileMinFp = FOOD_PILE_INITIAL_PICKUPS_MIN * FOOD_PICKUP_AMOUNT;
+  const pileMaxFp = FOOD_PILE_INITIAL_PICKUPS_MAX * FOOD_PICKUP_AMOUNT;
+  const pileIds = new Set<number>();
+  const pileTiles = new Set<number>();
+  let pileSlots = 0;
+  for (let i = 0; i < n; i++) {
+    const kind = store.kind[i]!;
+    const label = `food[${i}]`;
+    const amount = store.amountFp[i]!;
+    const initial = store.initialFp[i]!;
+    if (kind === FoodKind.None) {
+      if (
+        store.owner[i] !== 0 ||
+        store.zone[i] !== 0 ||
+        store.grid[i] !== 0 ||
+        store.tileX[i] !== 0 ||
+        store.tileY[i] !== 0 ||
+        amount !== 0 ||
+        initial !== 0 ||
+        store.foodId[i] !== 0 ||
+        store.flags[i] !== 0
+      ) {
+        throw new Error(`Invalid ${label}: a free slot must be all zeros`);
+      }
+      continue;
+    }
+    if (kind === FoodKind.Pile) {
+      pileSlots++;
+      const corpse = (store.flags[i]! & FOOD_FLAG_CORPSE) !== 0;
+      if (store.flags[i] !== (corpse ? FOOD_FLAG_CORPSE : 0)) {
+        throw new Error(`Invalid ${label}.flags: ${store.flags[i]}`);
+      }
+      if (store.owner[i] !== 0 || store.grid[i] !== 0 || store.zone[i] !== Zone.Surface) {
+        throw new Error(`Invalid ${label}: a pile is unowned and on the surface`);
+      }
+      // Whole pickups; a natural pile starts at [MIN, MAX] pickups, a corpse pile
+      // (a combat drop) at as little as 1.
+      const floorFp = corpse ? FOOD_PICKUP_AMOUNT : pileMinFp;
+      if (initial % FOOD_PICKUP_AMOUNT !== 0 || initial < floorFp || initial > pileMaxFp) {
+        throw new Error(`Invalid ${label}.initialFp: ${initial}`);
+      }
+      // Live piles hold at least one pickup (drainPile removes a pile at 0).
+      if (amount % FOOD_PICKUP_AMOUNT !== 0 || amount <= 0 || amount > initial) {
+        throw new Error(`Invalid ${label}.amountFp: ${amount}`);
+      }
+      const id = store.foodId[i]!;
+      if (id < 0) throw new Error(`Invalid ${label}.foodId: ${id}`);
+      if (pileIds.has(id)) throw new Error(`Duplicate pile foodId: ${id}`);
+      pileIds.add(id);
+      const tile = store.tileY[i]! * SURFACE_GRID_WIDTH + store.tileX[i]!;
+      if (pileTiles.has(tile)) {
+        throw new Error(`Duplicate pile tile (${store.tileX[i]}, ${store.tileY[i]})`);
+      }
+      pileTiles.add(tile);
+      continue;
+    }
+    // Pool / Stock: an underground record in its owner's grid.
+    if (
+      store.zone[i] !== Zone.Underground ||
+      store.grid[i] !== store.owner[i] ||
+      colonies[store.owner[i]!] === undefined
+    ) {
+      throw new Error(`Invalid ${label}: a pool / stock lies in its owning colony's grid`);
+    }
+    if (store.tileX[i]! >= UNDERGROUND_GRID_WIDTH || store.tileY[i]! >= UNDERGROUND_GRID_HEIGHT) {
+      throw new Error(`Invalid ${label} tile (${store.tileX[i]}, ${store.tileY[i]})`);
+    }
+    if (initial !== 0 || store.flags[i] !== 0) {
+      throw new Error(`Invalid ${label}: a pool / stock has no initialFp or flags`);
+    }
+    const cap = kind === FoodKind.Pool ? BASE_FOOD_STORAGE_CAPACITY : FOOD_CHAMBER_CAPACITY;
+    if (amount > cap) throw new Error(`Invalid ${label}.amountFp: ${amount} (cap ${cap})`);
+    if (kind === FoodKind.Pool && store.foodId[i] !== -1) {
+      throw new Error(`Invalid ${label}.foodId: ${store.foodId[i]} (a pool has -1)`);
+    }
   }
-  // A2 (V37) — isCorpse is an optional boolean; validate the type if present.
-  // Corpse-ness is only HONORED for V37+ saves (`effectiveCorpse` below), so a
-  // pre-V37 blob carrying `isCorpse: true` can't unlock the lowered pickup floor —
-  // its 1-charge pile still fails the [MIN,MAX] contract and is rejected.
-  if (fp.isCorpse !== undefined && typeof fp.isCorpse !== 'boolean') {
-    throw new Error(`Invalid ${label}.isCorpse: ${String(fp.isCorpse)}`);
+
+  // 3–4. Colony pool and chamber stock links: a bijection onto Pool / Stock slots.
+  const colonyList = Object.values(colonies);
+  if (colonyList.length > MAX_COLONIES) {
+    throw new Error(
+      `Too many colonies for the food store: ${colonyList.length} (max ${MAX_COLONIES})`,
+    );
   }
-  const effectiveCorpse = simVersion >= SIM_VERSION_V37_CORPSE_FOOD && fp.isCorpse === true;
-  // Issue #112 / A2 — pickup-charge fields.
-  // pickupsInitial: integer in [floor, MAX]. Natural + scenario piles (and every
-  // pre-V37 pile) originate at [FOOD_PILE_INITIAL_PICKUPS_MIN, MAX], so a 1-charge
-  // NATURAL pile is a state the sim cannot generate. Only a V37+ CORPSE pile may
-  // start as low as 1 (worker/fighter corpse) — floor drops to 1 for those alone.
-  const pickupsFloor = effectiveCorpse ? 1 : FOOD_PILE_INITIAL_PICKUPS_MIN;
-  if (
-    typeof fp.pickupsInitial !== 'number' ||
-    !Number.isInteger(fp.pickupsInitial) ||
-    fp.pickupsInitial < pickupsFloor ||
-    fp.pickupsInitial > FOOD_PILE_INITIAL_PICKUPS_MAX
-  ) {
-    throw new Error(`Invalid ${label}.pickupsInitial: ${String(fp.pickupsInitial)}`);
+  const linked = new Set<number>();
+  for (const c of colonyList) {
+    const slot = c.poolSlot;
+    if (slot >= n || store.kind[slot] !== FoodKind.Pool || store.owner[slot] !== c.colonyId) {
+      throw new Error(`Invalid colony[${c.colonyId}].poolSlot: ${slot}`);
+    }
+    if (linked.has(slot)) throw new Error(`Shared food slot ${slot}`);
+    linked.add(slot);
+    // The store's capacity assumes at most this many per colony (PlaceChamber's
+    // no-overlap rule makes it physical); a save past it could fill the store.
+    let foodStorage = 0;
+    for (const ch of c.chambers) if (ch.chamberType === ChamberType.FoodStorage) foodStorage++;
+    if (foodStorage > FOOD_STORAGE_CHAMBERS_PER_COLONY_BOUND) {
+      throw new Error(
+        `Too many FoodStorage chambers in colony[${c.colonyId}]: ${foodStorage} ` +
+          `(physical bound ${FOOD_STORAGE_CHAMBERS_PER_COLONY_BOUND})`,
+      );
+    }
+    for (let k = 0; k < c.chambers.length; k++) {
+      const ch = c.chambers[k]!;
+      const label = `colony[${c.colonyId}].chambers[${k}].foodSlot`;
+      if (ch.chamberType !== ChamberType.FoodStorage) {
+        if (ch.foodSlot !== -1)
+          throw new Error(`Invalid ${label}: ${ch.foodSlot} (not FoodStorage)`);
+        continue;
+      }
+      const fs = ch.foodSlot;
+      if (
+        fs < 0 ||
+        fs >= n ||
+        store.kind[fs] !== FoodKind.Stock ||
+        store.owner[fs] !== c.colonyId ||
+        store.foodId[fs] !== ch.chamberId ||
+        store.tileX[fs] !== ch.posX >> FP_SHIFT ||
+        store.tileY[fs] !== ch.posY >> FP_SHIFT
+      ) {
+        throw new Error(`Invalid ${label}: ${fs}`);
+      }
+      if (linked.has(fs)) throw new Error(`Shared food slot ${fs}`);
+      linked.add(fs);
+    }
   }
-  // pickupsRemaining: integer in [1, pickupsInitial]. Live piles always have
-  // at least one charge — the runtime splices at zero so saves should never
-  // observe a 0 here. Above-initial means tampering or accidental re-creation.
-  if (
-    typeof fp.pickupsRemaining !== 'number' ||
-    !Number.isInteger(fp.pickupsRemaining) ||
-    fp.pickupsRemaining <= 0 ||
-    fp.pickupsRemaining > fp.pickupsInitial
-  ) {
-    throw new Error(`Invalid ${label}.pickupsRemaining: ${String(fp.pickupsRemaining)}`);
+  for (let i = 0; i < n; i++) {
+    const kind = store.kind[i]!;
+    if ((kind === FoodKind.Pool || kind === FoodKind.Stock) && !linked.has(i)) {
+      throw new Error(`Invalid food[${i}]: a pool / stock no colony or chamber links to`);
+    }
   }
+
+  // 5. Pile order: every Pile slot exactly once.
+  const order = r.pileOrder;
+  if (!Array.isArray(order) || order.length > FOOD_PILE_HARD_CAP) {
+    throw new Error(`Invalid food.pileOrder: not a number[] of length <= ${FOOD_PILE_HARD_CAP}`);
+  }
+  const seen = new Set<number>();
+  for (let o = 0; o < order.length; o++) {
+    const slot = order[o] as unknown;
+    if (!intIn(slot, 0, n - 1) || store.kind[slot] !== FoodKind.Pile || seen.has(slot)) {
+      throw new Error(`Invalid food.pileOrder[${o}]: ${String(slot)}`);
+    }
+    seen.add(slot);
+    store.pileOrder[o] = slot;
+  }
+  if (order.length !== pileSlots) {
+    throw new Error(`Invalid food.pileOrder: ${order.length} entries for ${pileSlots} piles`);
+  }
+  store.pileCount = order.length;
+  rebuildSurfacePileAt(store);
+  return store;
 }
 
 /**
@@ -451,7 +624,7 @@ interface SerializedAnts {
   subTask: number[];
   speed: number[];
   foodCarrying: number[];
-  starvationTimer: number[];
+  lastMealTick: number[];
   age: number[];
   alive: number[];
   lifespan: number[];
@@ -504,8 +677,7 @@ interface SerializedAnts {
 interface SerializedColony {
   colonyId: ColonyId;
   queenEntityId: EntityId;
-  queenStarvationTimer: number;
-  foodStored: number;
+  poolSlot: number;
   workerCount: number;
   eggCount: number;
   larvaeCount: number;
@@ -526,6 +698,9 @@ interface SerializedColony {
   foodFlowFieldDirty: boolean;
   broodFieldDirty?: boolean; // #235 — optional: absent on pre-#235 saves (deserialize defaults false)
   killCount: number;
+  foodRaidedFp: number;
+  foodLostToRaidsFp: number;
+  raidTrips: number;
   priorityFoodPileId: FoodPileId | null;
   /** C1 (V42) — colony alarm stance. Absent on pre-V42 saves → false on load. */
   alarmActive?: boolean;
@@ -592,6 +767,27 @@ interface SerializedAIStateRecord {
   operationDefenderDeaths: number;
 }
 
+/**
+ * #290 PR 2 (V50) — the located food store (src/sim/food/food-store.ts), one
+ * number[] per column. Columns are truncated to the highest live slot + 1 (slots
+ * past it are free, and a free slot is all zeros), so a save carries a few dozen
+ * entries, not FOOD_STORE_CAPACITY. `pileOrder` holds the live pile slots in
+ * creation order. The derived `surfacePileAt` index is rebuilt on load.
+ */
+interface SerializedFoodStore {
+  kind: number[];
+  owner: number[];
+  zone: number[];
+  grid: number[];
+  tileX: number[];
+  tileY: number[];
+  amountFp: number[];
+  initialFp: number[];
+  foodId: number[];
+  flags: number[];
+  pileOrder: number[];
+}
+
 export interface SerializedWorldState {
   tick: number;
   rngState: number;
@@ -612,7 +808,7 @@ export interface SerializedWorldState {
    */
   bakedSurfaceEffect: string;
   undergroundGrids: Record<string, SerializedGrid>;
-  foodPiles: FoodPile[];
+  food: SerializedFoodStore;
   recentlyDepletedFood: DepletionRecord[];
   pendingChambers: Record<string, PendingChamber>;
   aiState: SerializedAIStateRecord[];
@@ -772,7 +968,7 @@ function serializeAnts(a: AntComponents, nextEntityId: number): SerializedAnts {
     subTask: Array.from(a.subTask),
     speed: Array.from(a.speed),
     foodCarrying: Array.from(a.foodCarrying),
-    starvationTimer: Array.from(a.starvationTimer),
+    lastMealTick: Array.from(a.lastMealTick),
     age: Array.from(a.age),
     alive: Array.from(a.alive),
     lifespan: Array.from(a.lifespan),
@@ -819,8 +1015,7 @@ function serializeColony(c: ColonyRecord): SerializedColony {
   return {
     colonyId: c.colonyId,
     queenEntityId: c.queenEntityId,
-    queenStarvationTimer: c.queenStarvationTimer,
-    foodStored: c.foodStored,
+    poolSlot: c.poolSlot,
     workerCount: c.workerCount,
     eggCount: c.eggCount,
     larvaeCount: c.larvaeCount,
@@ -841,9 +1036,32 @@ function serializeColony(c: ColonyRecord): SerializedColony {
     foodFlowFieldDirty: c.foodFlowFieldDirty,
     broodFieldDirty: c.broodFieldDirty, // #235
     killCount: c.killCount,
+    foodRaidedFp: c.foodRaidedFp,
+    foodLostToRaidsFp: c.foodLostToRaidsFp,
+    raidTrips: c.raidTrips,
     priorityFoodPileId: c.priorityFoodPileId,
     alarmActive: c.alarmActive,
     eggIntervalNumerator: c.eggIntervalNumerator,
+  };
+}
+
+/** #290 PR 2 — the food store's columns up to the highest live slot (see SerializedFoodStore). */
+function serializeFoodStore(f: FoodStore): SerializedFoodStore {
+  let n = f.kind.length;
+  while (n > 0 && f.kind[n - 1] === FoodKind.None) n--;
+  const col = (a: ArrayLike<number>): number[] => Array.from(a).slice(0, n);
+  return {
+    kind: col(f.kind),
+    owner: col(f.owner),
+    zone: col(f.zone),
+    grid: col(f.grid),
+    tileX: col(f.tileX),
+    tileY: col(f.tileY),
+    amountFp: col(f.amountFp),
+    initialFp: col(f.initialFp),
+    foodId: col(f.foodId),
+    flags: col(f.flags),
+    pileOrder: Array.from(f.pileOrder).slice(0, f.pileCount),
   };
 }
 
@@ -1008,7 +1226,7 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
     surface: serializeSurfaceGrid(world.surface),
     bakedSurfaceEffect: packBakedSurfaceEffect(world.bakedSurfaceEffect),
     undergroundGrids: undergroundOut,
-    foodPiles: world.foodPiles.map((p) => ({ ...p })),
+    food: serializeFoodStore(world.food),
     recentlyDepletedFood: world.recentlyDepletedFood.map((r) => ({ ...r })),
     pendingChambers: pendingOut,
     // S0b: persist overflow counters; skip events (transient per design).
@@ -1128,11 +1346,13 @@ function validateAntColumns(saved: SerializedAnts, capacity: number): void {
     ['posY', saved.posY, posFp],
     ['colonyId', saved.colonyId, byte],
     ['task', saved.task, enumMax(4)],
-    // 3 = FightingSubState.ToPost (#328, V46), the largest sub-state of any task.
+    // 3 = FightingSubState.ToPost (#328, V46), the largest sub-state any task
+    // writes. (Looting 4 / Hauling 5 are reserved for the #290 raid PR, which
+    // raises this ceiling when it starts writing them.)
     ['subTask', saved.subTask, enumMax(3)],
     ['speed', saved.speed, finiteInt],
     ['foodCarrying', saved.foodCarrying, finiteInt],
-    ['starvationTimer', saved.starvationTimer, finiteInt],
+    ['lastMealTick', saved.lastMealTick, finiteInt],
     ['age', saved.age, finiteInt],
     ['alive', saved.alive, binary],
     ['lifespan', saved.lifespan, finiteInt],
@@ -1210,7 +1430,7 @@ function deserializeAnts(
   copyIntoInt32(a.subTask, saved.subTask);
   copyIntoInt32(a.speed, saved.speed);
   copyIntoInt32(a.foodCarrying, saved.foodCarrying);
-  copyIntoInt32(a.starvationTimer, saved.starvationTimer);
+  copyIntoInt32(a.lastMealTick, saved.lastMealTick);
   copyIntoInt32(a.age, saved.age);
   copyIntoInt32(a.alive, saved.alive);
   copyIntoInt32(a.lifespan, saved.lifespan);
@@ -1255,10 +1475,15 @@ function deserializeAnts(
 function validateColonyScalars(s: SerializedColony): void {
   const intIn = (v: number, lo: number, hi: number): boolean =>
     Number.isInteger(v) && v >= lo && v <= hi;
-  // Entrance pool + every FoodStorage chamber maxed — a stockpile can't exceed this.
-  const FOOD_CEILING = BASE_FOOD_STORAGE_CAPACITY + MAX_ENTITIES * FOOD_CHAMBER_CAPACITY;
-  if (!intIn(s.foodStored, 0, FOOD_CEILING)) {
-    throw new Error(`Invalid colony.foodStored: ${String(s.foodStored)}`);
+  // #290 PR 2 — the pool link (validateFoodStore checks it against the store)
+  // and the raid counters (declared at 0 until #290 PR 5 writes them).
+  if (!intIn(s.poolSlot, 0, FOOD_STORE_CAPACITY - 1)) {
+    throw new Error(`Invalid colony.poolSlot: ${String(s.poolSlot)}`);
+  }
+  for (const key of ['foodRaidedFp', 'foodLostToRaidsFp', 'raidTrips'] as const) {
+    if (!intIn(s[key], 0, 0x7fffffff)) {
+      throw new Error(`Invalid colony.${key}: ${String(s[key])}`);
+    }
   }
   for (const key of ['workerCount', 'eggCount', 'larvaeCount', 'nurseCount'] as const) {
     if (!intIn(s[key], 0, MAX_ENTITIES)) {
@@ -1282,8 +1507,7 @@ function validateColonyScalars(s: SerializedColony): void {
 function deserializeColony(s: SerializedColony): ColonyRecord {
   validateColonyScalars(s);
   const c = createColonyRecord(s.colonyId, s.queenEntityId);
-  c.queenStarvationTimer = s.queenStarvationTimer;
-  c.foodStored = s.foodStored;
+  c.poolSlot = s.poolSlot;
   c.workerCount = s.workerCount;
   c.eggCount = s.eggCount;
   c.larvaeCount = s.larvaeCount;
@@ -1303,6 +1527,9 @@ function deserializeColony(s: SerializedColony): ColonyRecord {
   c.foodFlowFieldDirty = s.foodFlowFieldDirty;
   c.broodFieldDirty = s.broodFieldDirty ?? false; // #235 — absent on pre-#235 saves; tick-1 firstDigCompute forces recompute regardless
   c.killCount = s.killCount;
+  c.foodRaidedFp = s.foodRaidedFp;
+  c.foodLostToRaidsFp = s.foodLostToRaidsFp;
+  c.raidTrips = s.raidTrips;
   c.priorityFoodPileId = s.priorityFoodPileId;
   // C1 (V42) — absent on pre-V42 saves, and a tampered non-boolean must not
   // smuggle a truthy value into a sim branch: coerce anything else to false.
@@ -1701,10 +1928,16 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     typeof rawTick !== 'number' ||
     !Number.isFinite(rawTick) ||
     !Number.isInteger(rawTick) ||
-    rawTick < 0
+    rawTick < 0 ||
+    rawTick > 0x7fffffff
   ) {
-    throw new Error(`Invalid tick in save: ${String(rawTick)} (require non-negative integer)`);
+    throw new Error(`Invalid tick in save: ${String(rawTick)} (require integer in [0, 2^31 − 1])`);
   }
+  // #290 PR 2 — the tick domain is int32: tick-valued ant columns
+  // (`lastMealTick`, `fleeShelterUntilTick`) are Int32Arrays. 2^31 ticks is
+  // ~3.4 years of play at 20 Hz, and a two-queen match ends at
+  // MATCH_TIMEOUT_TICKS (24 000), so no real world reaches it; the bound keeps a
+  // tampered save from loading into a world whose tick columns would wrap.
   // rngState — same hardening for symmetry. Rng's `state | 0` would coerce
   // NaN/strings to 0 on first use, but boundary validation surfaces tampering
   // explicitly instead of silently snapping.
@@ -1713,31 +1946,10 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     throw new Error(`Invalid rngState in save: ${String(rawRng)} (require integer)`);
   }
 
-  // Issue #109 — foodPiles boundary validation. The runtime scans this array
-  // every frame (draw-surface, minimap) and every tick (command handlers,
-  // ant behavior); an unbounded count converts a load-time anomaly into a
-  // sustained per-frame DoS that survives bootFromSave.
-  if (!Array.isArray(s.foodPiles)) {
-    throw new Error('Invalid foodPiles: not an array');
-  }
-  if (s.foodPiles.length > FOOD_PILE_HARD_CAP) {
-    throw new Error(`foodPiles length ${s.foodPiles.length} exceeds cap ${FOOD_PILE_HARD_CAP}`);
-  }
-  const seenFoodIds = new Set<number>();
-  const seenFoodTiles = new Set<number>();
-  for (let i = 0; i < s.foodPiles.length; i++) {
-    const fp = s.foodPiles[i]!;
-    validateFoodPile(fp, `foodPiles[${i}]`, validatedSimVersion);
-    if (seenFoodIds.has(fp.foodPileId)) {
-      throw new Error(`Duplicate foodPiles[${i}].foodPileId: ${fp.foodPileId}`);
-    }
-    seenFoodIds.add(fp.foodPileId);
-    const tileKey = (fp.tileY << 16) | fp.tileX;
-    if (seenFoodTiles.has(tileKey)) {
-      throw new Error(`Duplicate foodPiles[${i}] tile (${fp.tileX}, ${fp.tileY})`);
-    }
-    seenFoodTiles.add(tileKey);
-  }
+  // #290 PR 2 — the located food store: every invariant of food-store.ts
+  // (per-kind bounds, the colony pool / chamber stock links, pile order, unique
+  // pile tiles). Pile connectivity is checked below with the assembled world.
+  const food = validateFoodStore(s.food, colonies);
 
   // Issue #99 — surface grid shape (single grid, not per-colony).
   validateGridShape(s.surface, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT, 'surface');
@@ -1769,7 +1981,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // PR 4 — decode + validate the baked static-terrain grid. Reject wrong
   // dimensions, malformed base64, or an out-of-range (code 3) movement-effect
   // value before accepting the field (R3-8/R5-2). Connectivity is validated
-  // after the world is assembled (it needs colonies + foodPiles).
+  // after the world is assembled (it needs colonies + food piles).
   const bakedSurfaceEffect = unpackBakedSurfaceEffect(
     (s as { bakedSurfaceEffect?: unknown }).bakedSurfaceEffect as string,
     SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT,
@@ -1804,24 +2016,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     surfaceGoalFields: null,
     surfaceGoalBfsScratch: null,
     undergroundGrids,
-    foodPiles: s.foodPiles.map((p) => {
-      // A2 (V37) — reconstruct explicitly rather than spreading `{ ...p }`: an
-      // absent isCorpse must resolve to "natural", and a { ...p } spread would pass
-      // it through as `undefined` on some code paths (Codex). Honor isCorpse ONLY
-      // for V37+ saves (a pre-V37 blob can't smuggle a corpse flag), and keep it
-      // ABSENT for natural piles so pre-V37 saves round-trip byte-identically.
-      const pile: FoodPile = {
-        foodPileId: p.foodPileId,
-        tileX: p.tileX,
-        tileY: p.tileY,
-        pickupsRemaining: p.pickupsRemaining,
-        pickupsInitial: p.pickupsInitial,
-      };
-      if (validatedSimVersion >= SIM_VERSION_V37_CORPSE_FOOD && p.isCorpse === true) {
-        pile.isCorpse = true;
-      }
-      return pile;
-    }),
+    food,
     recentlyDepletedFood: validatedRecentlyDepleted.map((r) => ({ ...r })),
     pendingChambers,
     events: [],
@@ -1864,6 +2059,30 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // saved food pile and every saved entrance must sit in the single connected
   // walkable component of the baked grid (not just the roots — R3-8/R5-2). A
   // corrupt/old map fails loudly here rather than loading a broken world.
+  // #288 / #290 PR 2 — the hunger clock of every ant that eats (a live queen or
+  // larva) lies in [tick − starve-after, tick − 1] between ticks: it ate at most
+  // starve-after − 1 meals ago (else it would be dead) and not in the future.
+  // Outside that window the ant would never eat again, or never starve.
+  for (const c of Object.values(world.colonies)) {
+    const eaters: Array<[number, number, string]> = [
+      [c.queenEntityId, QUEEN_HUNGER.starveAfterTicks, 'queen'],
+      ...c.larvae.map((id): [number, number, string] => [
+        id,
+        LARVA_HUNGER.starveAfterTicks,
+        'larva',
+      ]),
+    ];
+    for (const [id, starveAfter, what] of eaters) {
+      if (world.ants.alive[id] !== 1) continue;
+      const last = world.ants.lastMealTick[id]!;
+      if (last > world.tick - 1 || last < world.tick - starveAfter) {
+        throw new Error(
+          `Invalid ants.lastMealTick[${id}] (colony ${c.colonyId} ${what}): ${last} at tick ${world.tick}`,
+        );
+      }
+    }
+  }
+
   if (!validateSurfaceConnectivity(world, livePileTiles(world))) {
     throw new Error(
       'Invalid bakedSurfaceEffect: connectivity violated (a food pile or entrance is not in the single walkable component)',
@@ -2133,20 +2352,24 @@ export interface SaveInfo {
   savedAtMs: number;
 }
 
-/** A non-negative finite number from a raw snapshot field, else 0. */
-function savedFoodFp(raw: unknown): number {
-  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : 0;
-}
-
-/** Sum of FoodStorage chambers' stock in a raw snapshot `chambers` array (0 if malformed). */
-function savedChamberFoodFp(raw: unknown): number {
-  if (!Array.isArray(raw)) return 0;
+/**
+ * #290 PR 2 — total stored food (fp) of colony `colonyId` in a raw snapshot's
+ * food store: every Pool / Stock record it owns (the entrance pool plus every
+ * FoodStorage chamber), the aggregate the HUD shows. Malformed input reads 0.
+ */
+function savedColonyFoodFp(rawFood: unknown, colonyId: number): number {
+  if (rawFood === null || typeof rawFood !== 'object') return 0;
+  const f = rawFood as { kind?: unknown; owner?: unknown; amountFp?: unknown };
+  if (!Array.isArray(f.kind) || !Array.isArray(f.owner) || !Array.isArray(f.amountFp)) return 0;
+  const kind = f.kind as unknown[];
+  const owner = f.owner as unknown[];
+  const amount = f.amountFp as unknown[];
   let total = 0;
-  for (const ch of raw as unknown[]) {
-    if (ch === null || typeof ch !== 'object') continue;
-    const rec = ch as { chamberType?: unknown; foodStored?: unknown };
-    if (rec.chamberType !== ChamberType.FoodStorage) continue;
-    total += savedFoodFp(rec.foodStored);
+  for (let i = 0; i < kind.length; i++) {
+    if (kind[i] !== FoodKind.Pool && kind[i] !== FoodKind.Stock) continue;
+    if (owner[i] !== colonyId) continue;
+    const v = amount[i];
+    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) total += v;
   }
   return total;
 }
@@ -2178,10 +2401,7 @@ export async function getSaveInfo(): Promise<SaveInfo | null> {
   const snapshot = file.snapshot as unknown;
   if (snapshot === null || typeof snapshot !== 'object') return null;
   const colonies = (snapshot as { colonies?: unknown }).colonies as
-    | Record<
-        string,
-        { foodStored?: unknown; workerCount?: unknown; chambers?: unknown } | undefined
-      >
+    | Record<string, { workerCount?: unknown } | undefined>
     | undefined;
   const playerKey = String(PLAYER_COLONY_ID);
   // colonies may be undefined / null / a non-object on a malformed envelope;
@@ -2193,9 +2413,9 @@ export async function getSaveInfo(): Promise<SaveInfo | null> {
   // #290 PR 1 — report the colony's TOTAL stored food (entrance pool + every
   // FoodStorage chamber's stock), the same aggregate the HUD shows; pre-fix the
   // dialog showed only the entrance pool. Read straight off the serialized
-  // snapshot (no deserialize), so malformed fields count as 0. Values are
-  // fixed-point; converted to whole-food units below.
-  const foodFp = savedFoodFp(playerColony?.foodStored) + savedChamberFoodFp(playerColony?.chambers);
+  // snapshot's food store (no deserialize), so malformed fields count as 0.
+  // Values are fixed-point; converted to whole-food units below.
+  const foodFp = savedColonyFoodFp((snapshot as { food?: unknown }).food, PLAYER_COLONY_ID);
   const workerCountRaw = playerColony?.workerCount;
   const playerWorkers =
     typeof workerCountRaw === 'number' && Number.isFinite(workerCountRaw) && workerCountRaw >= 0

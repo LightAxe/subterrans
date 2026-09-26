@@ -57,6 +57,15 @@ import type { WorldState } from './types.js';
 import type { SimCommand } from './commands.js';
 import type { ColonyId } from './colony/colony-store.js';
 import { createScenario } from './scenario.js';
+import { chamberStock, colonyPoolFood, pileSlotAt } from './food/food-api.js';
+import {
+  addChamberForTest,
+  assertFoodStoreInvariants,
+  pilesForTest,
+  setMealsUntilStarvationForTest,
+  setPoolFoodForTest,
+} from './food/food-test-utils.js';
+import { LARVA_HUNGER, QUEEN_HUNGER } from './hunger.js';
 // eslint-disable-next-line no-restricted-imports -- #229: this SCEN-06 serializer consumes the canonical serialized-field list from the platform layer (same pattern as telemetry.test.ts:8)
 import { SERIALIZED_ANT_SOA_FIELDS } from '../platform/save-schema.js';
 
@@ -91,9 +100,13 @@ function serializeWorldState(w: WorldState): string {
           acc[k] = {
             colonyId: c.colonyId,
             queenEntityId: c.queenEntityId,
-            queenStarvationTimer: c.queenStarvationTimer,
             alarmActive: c.alarmActive, // C1 — a new PERSISTED colony column
-            foodStored: c.foodStored,
+            poolSlot: c.poolSlot, // #290 PR 2 — pool link
+            poolFood: colonyPoolFood(w, c), // read through the facade
+            chamberStock: c.chambers.map((ch) => chamberStock(w, ch)),
+            foodRaidedFp: c.foodRaidedFp,
+            foodLostToRaidsFp: c.foodLostToRaidsFp,
+            raidTrips: c.raidTrips,
             workerCount: c.workerCount,
             eggCount: c.eggCount,
             larvaeCount: c.larvaeCount,
@@ -140,8 +153,9 @@ function serializeWorldState(w: WorldState): string {
     // PR 4: baked static surface terrain — a divergence in the frozen grid must
     // break byte-identity.
     bakedSurfaceEffect: Array.from(w.bakedSurfaceEffect),
-    // Phase 7: food piles and pending chambers
-    foodPiles: w.foodPiles.map((p) => ({ ...p })),
+    // Phase 7: food piles and pending chambers (#290 PR 2: piles read from the
+    // food store through the test utils, with their store slots)
+    foodPiles: pilesForTest(w).map((p, o) => ({ ...p, slot: pileSlotAt(w, o) })),
     pendingChambers: Object.keys(w.pendingChambers)
       .sort()
       .reduce(
@@ -175,23 +189,27 @@ function buildWorld(seed: number): { world: WorldState; queenId: number; colonyI
     lifespan: WORKER_LIFESPAN_TICKS,
   });
   world.colonies[1] = createColonyRecord(1, queenId);
-  // Issue #15: chamber.foodStored is now per-chamber authoritative. The
+  // Issue #15: a chamber's stock is now per-chamber authoritative. The
   // synthetic 100000fp head-start has to live in chambers, not the entrance
-  // pool — reconcile clamps colony.foodStored to BASE alone so dumping 100000
+  // pool — reconcile clamps the pool to BASE alone so dumping 100000
   // into the pool would collapse to 2048 on the first reconcile and starve
   // the queen well before Test 6's pipeline completes. Spread the head-start
   // across 20 chambers (5000fp each, all under FOOD_CHAMBER_CAPACITY=5120).
-  world.colonies[1].foodStored = 0;
+  setPoolFoodForTest(world, world.colonies[1], 0);
   for (let i = 0; i < 20; i++) {
-    world.colonies[1].chambers.push({
-      chamberId: 1000 + i,
-      chamberType: ChamberType.FoodStorage,
-      foodStored: 5000,
-      posX: 0,
-      posY: 0,
-      width: 3,
-      height: 3,
-    });
+    addChamberForTest(
+      world,
+      world.colonies[1],
+      {
+        chamberId: 1000 + i,
+        chamberType: ChamberType.FoodStorage,
+        posX: 0,
+        posY: 0,
+        width: 3,
+        height: 3,
+      },
+      5000,
+    );
   }
   // 09 reproduction-gate memo: queen egg production requires a completed
   // Queen chamber AND a completed Nursery chamber. Seed both so the lifecycle
@@ -203,19 +221,17 @@ function buildWorld(seed: number): { world: WorldState; queenId: number; colonyI
   // flip her zone to Underground so the pipeline is unblocked without having
   // to simulate relocation via entrances (Test 6 has no entrances or
   // underground grid — it's a behavior-free lifecycle harness).
-  world.colonies[1].chambers.push({
+  addChamberForTest(world, world.colonies[1], {
     chamberId: 1100,
     chamberType: ChamberType.Queen,
-    foodStored: 0,
     posX: 32 << FP_SHIFT,
     posY: 32 << FP_SHIFT,
     width: 2,
     height: 2,
   });
-  world.colonies[1].chambers.push({
+  addChamberForTest(world, world.colonies[1], {
     chamberId: 1101,
     chamberType: ChamberType.Nursery,
-    foodStored: 0,
     posX: 0,
     posY: 0,
     width: 2,
@@ -240,6 +256,7 @@ function runSimulation(
   const { world } = buildWorld(seed);
   for (let t = 0; t < ticks; t++) {
     tick(world, commandsPerTick[t] ?? []);
+    assertFoodStoreInvariants(world);
   }
   return serializeWorldState(world);
 }
@@ -433,8 +450,13 @@ describe('Phase 6 SC 2: starvation cascade', () => {
       lifespan: WORKER_LIFESPAN_TICKS,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1].foodStored = 0; // no food — queen cannot eat
-    world.colonies[1].queenStarvationTimer = STARVATION_GRACE_TICKS; // timer at full grace
+    setPoolFoodForTest(world, world.colonies[1], 0); // no food — queen cannot eat
+    setMealsUntilStarvationForTest(
+      world,
+      world.colonies[1].queenEntityId,
+      QUEEN_HUNGER,
+      STARVATION_GRACE_TICKS,
+    ); // timer at full grace
 
     // Run STARVATION_GRACE_TICKS + 1 ticks — timer decrements by 1 each tick until <= 0 → death
     for (let t = 0; t < STARVATION_GRACE_TICKS + 1; t++) {
@@ -465,7 +487,7 @@ describe('Phase 6 SC 3: pheromone deposit on traversed cells', () => {
       lifespan: WORKER_LIFESPAN_TICKS,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1].foodStored = 100000;
+    setPoolFoodForTest(world, world.colonies[1], 100000);
 
     const workerId = allocateEntityId(world);
     initAnt(world.ants, workerId, {
@@ -511,7 +533,7 @@ describe('Phase 6 SC 4: CTRL-04 one-tick immediate allocation', () => {
       lifespan: WORKER_LIFESPAN_TICKS,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1].foodStored = 100000;
+    setPoolFoodForTest(world, world.colonies[1], 100000);
 
     // Add 10 workers (all Idle — no brood)
     for (let i = 0; i < 10; i++) {
@@ -611,7 +633,7 @@ describe('No-allocation invariant: object identity in steady state', () => {
       lifespan: WORKER_LIFESPAN_TICKS,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
-    world.colonies[1].foodStored = 100000;
+    setPoolFoodForTest(world, world.colonies[1], 100000);
 
     // 10 warm-up ticks to stabilize
     for (let i = 0; i < 10; i++) tick(world, []);
@@ -647,6 +669,7 @@ describe('Phase 9 determinism (SC 5) — two-colony parity', () => {
     for (let i = 0; i < TICKS; i++) {
       tick(worldA, []);
       tick(worldB, []);
+      assertFoodStoreInvariants(worldA);
     }
 
     expect(serializeWorldState(worldA)).toBe(serializeWorldState(worldB));
@@ -665,6 +688,7 @@ describe('Phase 9 determinism (SC 5) — two-colony parity', () => {
     for (let i = 0; i < 500; i++) {
       tick(worldA, []);
       tick(worldB, []);
+      assertFoodStoreInvariants(worldA);
     }
 
     // Sanity: both colonies still present (no freak ENOENT on colony lookup).
@@ -1396,7 +1420,7 @@ describe('SCEN-06: pre-V40 replay determinism under V40 code', () => {
       lifespan: WORKER_LIFESPAN_TICKS,
     });
     const colony = createColonyRecord(1, queenId);
-    colony.foodStored = 2048;
+    setPoolFoodForTest(world, colony, 2048);
     colony.entrances = [];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
@@ -1502,8 +1526,13 @@ describe('SCEN-06: pre-V41 replay determinism under V41 code', () => {
       lifespan: WORKER_LIFESPAN_TICKS,
     });
     const colony = createColonyRecord(1, queenId);
-    colony.foodStored = 0; // nothing to feed the larva with
-    colony.queenStarvationTimer = STARVATION_GRACE_TICKS; // she outlives the run
+    setPoolFoodForTest(world, colony, 0); // nothing to feed the larva with
+    setMealsUntilStarvationForTest(
+      world,
+      colony.queenEntityId,
+      QUEEN_HUNGER,
+      STARVATION_GRACE_TICKS,
+    ); // she outlives the run
     colony.entrances = [];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
@@ -1539,7 +1568,7 @@ describe('SCEN-06: pre-V41 replay determinism under V41 code', () => {
     colony.larvaeCount = 1;
     world.ants.carryingBroodId[nurseId] = larvaId;
     world.ants.carriedBy[larvaId] = nurseId;
-    world.ants.starvationTimer[larvaId] = 1; // dies on the first unfed tick
+    setMealsUntilStarvationForTest(world, larvaId, LARVA_HUNGER, 1); // dies on the first unfed tick
 
     for (let t = 0; t < TICKS; t++) tick(world, []);
     return world;
@@ -1601,27 +1630,30 @@ describe('SCEN-06: pre-V41 replay determinism under V41 code', () => {
       zone: Zone.Underground,
     });
     const colony = createColonyRecord(1, queenId);
-    colony.foodStored = 0; // nothing to feed the larva with
-    colony.queenStarvationTimer = STARVATION_GRACE_TICKS; // she outlives the run
+    setPoolFoodForTest(world, colony, 0); // nothing to feed the larva with
+    setMealsUntilStarvationForTest(
+      world,
+      colony.queenEntityId,
+      QUEEN_HUNGER,
+      STARVATION_GRACE_TICKS,
+    ); // she outlives the run
     colony.entrances = [];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
     colony.foodFlowFieldDirty = false;
     colony.broodFieldDirty = true; // step 9 builds the nursing/nurseDeposit fields
     world.colonies[1] = colony;
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 1,
       chamberType: ChamberType.Queen,
-      foodStored: 0,
       posX: 2 << FP_SHIFT,
       posY: 2 << FP_SHIFT,
       width: 3,
       height: 3,
     });
-    colony.chambers.push({
+    addChamberForTest(world, colony, {
       chamberId: 2,
       chamberType: ChamberType.Nursery,
-      foodStored: 0,
       posX: 12 << FP_SHIFT,
       posY: 2 << FP_SHIFT,
       width: 3,
@@ -1656,7 +1688,7 @@ describe('SCEN-06: pre-V41 replay determinism under V41 code', () => {
     colony.larvaeCount = 1;
     world.ants.carryingBroodId[nurseId] = larvaId;
     world.ants.carriedBy[larvaId] = nurseId;
-    world.ants.starvationTimer[larvaId] = 1; // dies on the first unfed tick
+    setMealsUntilStarvationForTest(world, larvaId, LARVA_HUNGER, 1); // dies on the first unfed tick
 
     tick(world, []);
     return world;

@@ -23,7 +23,6 @@ import {
   SPIDER_CHASE_TRIGGER_RADIUS,
   SPIDER_DEFENSE_TRIGGER_RADIUS,
   SPIDER_CHASE_MAX_TICKS,
-  SPIDER_HUNGER_THRESHOLD_TICKS,
   SPIDER_GRACE_TICKS,
   SPIDER_MEANDER_TICK_DIVISOR,
   SPIDER_MEANDER_RETARGET_TICKS,
@@ -43,6 +42,7 @@ import {
 } from './types.js';
 import { spawnCorpseFood, corpseYield } from './food-system.js';
 import { colonyPoolFood } from './food/food-api.js';
+import { hungerState, SPIDER_HUNGER } from './hunger.js';
 import { FP_SHIFT } from './fixed.js';
 import { surfaceMovementAt, SurfaceMovementEffect } from './surface-features.js';
 import { ensureSurfaceGoalField, SURFACE_GOAL_UNREACHED } from './surface-routing.js';
@@ -1035,7 +1035,9 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
 
   switch (spider.state) {
     case 'Patrolling': {
-      const hungry = !inGrace && spider.hungerTicks >= SPIDER_HUNGER_THRESHOLD_TICKS[tier];
+      // #288 — the shared hunger primitive: hungry once hungerTicks reaches the
+      // tier's SPIDER_HUNGER_THRESHOLD_TICKS (its meal interval; it never starves).
+      const hungry = !inGrace && hungerState(spider.hungerTicks, SPIDER_HUNGER[tier]) !== 'fed';
       if (hungry) {
         // Precedence: (a) opportunistic chase of a lone ant; (b) telegraphed
         // density hunt (when off cooldown and a dense tile exists); (c) camp a

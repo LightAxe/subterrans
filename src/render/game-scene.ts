@@ -208,6 +208,8 @@ import { DEFAULT_LAYOUT, cssScaleX } from './layout.js';
 import { buildHudLayout } from './hud-layout.js';
 import type { HudButtonGeometry } from './hud-controls.js';
 import { KeyEventDedupe } from './key-event-dedupe.js';
+import { isAlive } from '../sim/ant/ant-store.js';
+import { queenMealsUntilStarvation } from './hud-stats.js';
 // UIScenePhase9 — subset of UIScene public API added in Plan 06 Task 3.
 // Typed here to avoid circular imports; UIScene implements these methods.
 interface UIScenePhase9 {
@@ -1526,12 +1528,13 @@ export class GameScene extends Phaser.Scene {
     }
     this.prevQueenCombinedHp = combinedHp;
 
-    // Starvation onset. The timer starts at STARVATION_GRACE_TICKS (300) and
-    // decrements only when the queen fails to eat; < STARVATION_GRACE_TICKS means
+    // Starvation onset. The queen's meals-until-starvation is STARVATION_GRACE_TICKS
+    // (300) while she is fed and drops only when she fails to eat; below it means
     // at least one feeding failed (starvation has actually started).
     if (
       !this.queenStarvationTriggered &&
-      playerColony.queenStarvationTimer < STARVATION_GRACE_TICKS &&
+      isAlive(this.world.ants, playerColony.queenEntityId) &&
+      queenMealsUntilStarvation(this.world, playerColony) < STARVATION_GRACE_TICKS &&
       this.world.tick > QUEEN_DAMAGE_SUPPRESS_TICKS
     ) {
       this.queenStarvationTriggered = true;
@@ -1757,7 +1760,11 @@ export class GameScene extends Phaser.Scene {
     // not fire a spurious flash + onboarding caption for a condition that already
     // started before the save.
     const playerColonyOnLoad = nextWorld.colonies[PLAYER_COLONY_ID];
-    if (playerColonyOnLoad && playerColonyOnLoad.queenStarvationTimer < STARVATION_GRACE_TICKS) {
+    if (
+      playerColonyOnLoad &&
+      isAlive(nextWorld.ants, playerColonyOnLoad.queenEntityId) &&
+      queenMealsUntilStarvation(nextWorld, playerColonyOnLoad) < STARVATION_GRACE_TICKS
+    ) {
       this.queenStarvationTriggered = true;
     }
     // SCEN-06 replay truth: restore inputLog completely so the continued session
