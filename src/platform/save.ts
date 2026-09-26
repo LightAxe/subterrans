@@ -16,6 +16,7 @@ import {
   LATEST_SIM_VERSION,
   SIM_VERSION_V50_LOCATED_FOOD,
   SIM_VERSION_V51_UNIFIED_HUNGER,
+  SIM_VERSION_V52_RAIDING,
 } from '../sim/types.js';
 import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/constants.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
@@ -66,7 +67,7 @@ import {
   PLAYER_COLONY_ID,
 } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
-import { ChamberType } from '../sim/enums.js';
+import { AntTask, ChamberType, FightingSubState } from '../sim/enums.js';
 import { livePileTiles } from '../sim/food/food-api.js';
 import { Zone } from '../sim/terrain.js';
 import { FIGHTER_HUNGER, LARVA_HUNGER, QUEEN_HUNGER, WORKER_HUNGER } from '../sim/hunger.js';
@@ -1350,10 +1351,11 @@ function validateAntColumns(saved: SerializedAnts, capacity: number): void {
     ['posY', saved.posY, posFp],
     ['colonyId', saved.colonyId, byte],
     ['task', saved.task, enumMax(4)],
-    // 3 = FightingSubState.ToPost (#328, V46), the largest sub-state any task
-    // writes. (Looting 4 / Hauling 5 are reserved for the #290 raid PR, which
-    // raises this ceiling when it starts writing them.)
-    ['subTask', saved.subTask, enumMax(3)],
+    // 5 = FightingSubState.Hauling (#290 PR 5, V52), the largest sub-state any
+    // task writes. Looting 4 / Hauling 5 were reserved at V50 and are written from
+    // V52 only: the assembled-world check below rejects them in an older save, and
+    // on a non-fighter.
+    ['subTask', saved.subTask, enumMax(5)],
     ['speed', saved.speed, finiteInt],
     ['foodCarrying', saved.foodCarrying, finiteInt],
     ['lastMealTick', saved.lastMealTick, finiteInt],
@@ -2071,6 +2073,19 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // its task at the check, so one stood down from Fighting since its last meal
   // may be past its current kind's starve-after until step 3 next runs: the
   // window uses the larger of the two.)
+  // #290 PR 5 — the raid sub-states Looting (4) and Hauling (5) exist from V52
+  // only, and only on a fighter. (The column check above admits up to 5.)
+  const raidSubStates = world.simVersion >= SIM_VERSION_V52_RAIDING;
+  for (let id = 0; id < world.ants.alive.length; id++) {
+    const sub = world.ants.subTask[id]!;
+    if (sub < FightingSubState.Looting) continue;
+    if (!raidSubStates || world.ants.task[id] !== AntTask.Fighting) {
+      throw new Error(
+        `Invalid ants.subTask[${id}]: ${sub} (task ${world.ants.task[id]}) at simVersion ${world.simVersion}`,
+      );
+    }
+  }
+
   const workersEat = world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER;
   const workerStarveAfter = Math.max(
     WORKER_HUNGER.starveAfterTicks,

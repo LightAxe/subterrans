@@ -25,7 +25,17 @@
 import type { WorldState } from './types.js';
 import type { CardinalStep } from './ant/ant-motion.js';
 import type { PheromoneGrid } from './pheromone/pheromone-store.js';
-import { SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT, MAX_ENTITIES } from './constants.js';
+import {
+  SURFACE_GRID_WIDTH,
+  SURFACE_GRID_HEIGHT,
+  MAX_ENTITIES,
+  RAID_ENGAGE_RADIUS_TILES,
+} from './constants.js';
+
+/** Side of ant-raid.ts's "hostile in reach" BFS window: 2R + 1 tiles. */
+export const RAID_REACH_WINDOW_SIDE = 2 * RAID_ENGAGE_RADIUS_TILES + 1;
+/** Cells of that window. */
+const RAID_REACH_WINDOW_CELLS = RAID_REACH_WINDOW_SIDE * RAID_REACH_WINDOW_SIDE;
 import { createSurfaceMovementCache, type SurfaceMovementCache } from './surface-features.js';
 
 export interface ScratchArena {
@@ -120,6 +130,24 @@ export interface ScratchArena {
    * moved here so no process-global mutable sim state survives (Phase-7 rollback).
    */
   nurse: { usedStamp: Uint32Array; currentStamp: number };
+  /**
+   * ant-raid.ts (#290 PR 5, V52) — per grid (the colony whose nest it is): the
+   * stock flow field toward its FoodStorage chambers that hold food, and the tick
+   * it was computed on (a field is valid only for that tick: step 10e computes it
+   * for every nest a raider stands in and step 16 reads it back). `queue` is the
+   * BFS queue. `reach*` is the bounded "hostile in reach" BFS over a
+   * (2R+1)² window round the raider: `reachStamp` marks visited cells, `reachDist`
+   * their path distance, `reachQ` the queue (window indices).
+   */
+  raid: {
+    stockField: Map<number, Int32Array>;
+    stockFieldTick: Map<number, number>;
+    queue: Int32Array;
+    reachStamp: Int32Array;
+    reachDist: Int32Array;
+    reachQ: Int32Array;
+    reachCurrent: number;
+  };
 }
 
 // eslint-disable-next-line subterrans/sim-module-state -- sim-cache: per-world scratch arena keyed by WorldState identity; transient, never serialized, recreated per world (same pattern as tick.ts cachesByWorld)
@@ -178,6 +206,15 @@ export function getScratch(world: WorldState): ScratchArena {
       // #256 — nurse stamp starts at 0 (matches the old module-global init); the
       // first acceleration pass bumps it to 1, so no nurse is ever falsely pre-claimed.
       nurse: { usedStamp: new Uint32Array(MAX_ENTITIES), currentStamp: 0 },
+      raid: {
+        stockField: new Map(),
+        stockFieldTick: new Map(),
+        queue: new Int32Array(0),
+        reachStamp: new Int32Array(RAID_REACH_WINDOW_CELLS),
+        reachDist: new Int32Array(RAID_REACH_WINDOW_CELLS),
+        reachQ: new Int32Array(RAID_REACH_WINDOW_CELLS),
+        reachCurrent: 0,
+      },
     };
     SCRATCH.set(world, a);
   }

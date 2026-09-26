@@ -1,7 +1,7 @@
 // src/sim/ant/ant-system.ts
 // #212: thin re-export barrel for the ant subsystem. The implementation lives in
 // cohesive sub-modules (ant-motion / ant-foraging / ant-nursing / ant-queens /
-// ant-combat-targeting / ant-dig / ant-pheromone / ant-movement); this file only
+// ant-combat-targeting / ant-dig / ant-pheromone / ant-raid / ant-movement); this file only
 // re-exports the public API so consumers (tick.ts, harness.ts, tests) keep a single
 // stable import path. Explicit NAMED re-exports — never `export *` — so internal
 // cross-module helpers stay internal.
@@ -40,3 +40,4 @@ export {
 export { standDownSurplusSentries } from './sentry-stand-down.js';
 export { tickAntMovement } from './ant-movement.js';
 export { tickIdleReserveAndFlee } from './idle-reserve.js';
+export { fighterMayLoot, updateRaiders, tickRaidActions } from './ant-raid.js';

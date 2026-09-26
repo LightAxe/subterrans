@@ -128,11 +128,11 @@ describe('tickPheromoneDeposit', () => {
     const posY = tileY << FP_SHIFT;
 
     const ant1 = allocateEntityId(world);
-    initAnt(world.ants, ant1, { colonyId: COLONY_ID, posX, posY });
+    initAnt(world.ants, ant1, { colonyId: COLONY_ID, posX, posY, task: AntTask.Foraging });
     world.ants.foodCarrying[ant1] = 500;
 
     const ant2 = allocateEntityId(world);
-    initAnt(world.ants, ant2, { colonyId: COLONY_ID, posX, posY });
+    initAnt(world.ants, ant2, { colonyId: COLONY_ID, posX, posY, task: AntTask.Foraging });
     world.ants.foodCarrying[ant2] = 500;
 
     tickPheromoneDeposit(world);
