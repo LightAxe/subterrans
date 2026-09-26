@@ -72,6 +72,8 @@ import {
   routeForagerPriority,
   updateFightAntTargets,
   tickIdleReserveAndFlee,
+  updateRaiders,
+  tickRaidActions,
 } from './ant/ant-system.js';
 import { findEmbeddedByTightening } from './underground-occupancy.js';
 import { tickPheromoneDecay } from './pheromone/pheromone-system.js';
@@ -1485,6 +1487,12 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     }
   }
 
+  // Step 10e (V52, #290 PR 5): raids — who loots this tick, and surface haulers'
+  // way home (ant-raid.ts). After 10c/10d, which leave haulers alone; before any
+  // step that moves food or digs, so the stock flow field it computes is still
+  // current at step 16. Inert below V52.
+  updateRaiders(world);
+
   // ---------------------------------------------------------------------------
   // Step 11: checkPendingChambers (NEW in Phase 7)
   //   Promote fully-excavated PendingChambers to ChamberRecords.
@@ -1600,6 +1608,12 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   //           Runs after movement so ants-that-just-arrived this tick act on arrival.
   // ---------------------------------------------------------------------------
   tickForagerActions(world);
+
+  // Step 16e (V52, #290 PR 5): raid arrival actions — a looter in an enemy
+  // FoodStorage chamber takes a load, a hauler home deposits it (ant-raid.ts).
+  // Right after the forager actions: the same arrival-on-the-tile verbs. Numbered
+  // 16e so the existing 16c/16d keep their names. Inert below V52.
+  tickRaidActions(world);
 
   // ---------------------------------------------------------------------------
   // Step 16c: Nurse arrival actions — MovingToBrood → Feeding on chamber tile,

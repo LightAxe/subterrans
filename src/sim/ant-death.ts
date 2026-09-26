@@ -53,6 +53,8 @@ import { pheromoneGridKey } from './pheromone/pheromone-store.js';
 import { depositDangerCross } from './pheromone/danger.js';
 import { KILL_ALARM_DANGER_DEPOSIT } from './constants.js';
 import { isInCohort } from './ai-state.js';
+// #290 PR 5 (V52) — a hauler's load on death (the raid policy owns the rule).
+import { dropHaulerLoad } from './ant/ant-raid.js';
 
 /**
  * How an ant died. `kill` carries the attacker, which the combat_kill event, the
@@ -88,6 +90,7 @@ export type AntDeath =
  *   7. killer colony killCount                                              [kill]
  *   8. V34 cross-colony kill alarm (DangerTrail cross at the death tile)    [kill]
  *   9. V37 corpse food at the death tile                                    [kill]
+ *  10. V52 a hauler's carried loot (dropHaulerLoad, ant-raid.ts)       [any cause]
  */
 export function despawnAnt(world: WorldState, antIndex: number, death: AntDeath): void {
   const ants = world.ants;
@@ -288,6 +291,12 @@ export function despawnAnt(world: WorldState, antIndex: number, death: AntDeath)
       spawnCorpseFood(world, tileX, tileY, corpseYield(corpseKind));
     }
   }
+
+  // 10. #290 PR 5 (V52) — a raider hauling loot drops it, whatever killed it: on
+  // the surface as a corpse pile at the death tile, in the enemy nest into the
+  // victim's pool (owner decision D13), in its own nest into its own pool. Inert
+  // below V52 (only a V52 hauler is a fighter carrying food).
+  dropHaulerLoad(world, antIndex);
 }
 
 /**

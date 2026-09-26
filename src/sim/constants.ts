@@ -969,6 +969,19 @@ export const COMBAT_COOLDOWN_TICKS = 5 as const;
  *  falling back to rally-point routing. Phase 4 PRD §3d. */
 export const FIGHT_AGGRO_RADIUS = 4 as const;
 
+/**
+ * #290 PR 5 (V52) — a raider in an enemy nest loots only while no hostile (enemy
+ * worker or queen) is within this many PATH tiles of it (a BFS through tunnel,
+ * not Manhattan: a hostile behind a wall is not "in reach"). The fighters' sight
+ * radius. Without a radius the enemy queen is always in the grid, so raiders
+ * would never loot (plan §4.1).
+ */
+export const RAID_ENGAGE_RADIUS_TILES = FIGHT_AGGRO_RADIUS;
+
+/** #290 PR 5 (V52) — food (fp) one raider takes from an enemy FoodStorage chamber
+ *  per trip: one full carry, as a forager's. */
+export const RAID_CARRY_FP = WORKER_CARRY_CAPACITY;
+
 /** Damage dealt per strike by a non-fighter ant (worker / forager / nurse) defending itself.
  *  25% of COMBAT_DAMAGE_BASE — non-fighters can fight back but weakly. */
 export const COMBAT_DAMAGE_WORKER = 1 as const;
