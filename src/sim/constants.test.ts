@@ -35,7 +35,6 @@ import {
   UNDERGROUND_GRID_WIDTH,
   WORKER_BASE_SPEED,
   WORKER_CARRY_CAPACITY,
-  WORKER_FOOD_PER_TICK,
   WORKER_LIFESPAN_TICKS,
 } from './constants';
 
@@ -80,10 +79,6 @@ describe('PRD §9c food economy constants', () => {
 
   it('LARVA_FOOD_PER_TICK === 1', () => {
     expect(LARVA_FOOD_PER_TICK).toBe(1);
-  });
-
-  it('WORKER_FOOD_PER_TICK === 0', () => {
-    expect(WORKER_FOOD_PER_TICK).toBe(0);
   });
 
   it('WORKER_CARRY_CAPACITY === 1024 (4 × FP_ONE)', () => {

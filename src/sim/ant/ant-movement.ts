@@ -46,6 +46,7 @@ import {
   pickNearestHostileUnderground,
   fighterBarredFromForeignShaft,
   fighterBarredFromOwnShaft,
+  fighterWalksHomeToEat,
   sentryHoldsBelow,
   sentryPassesThroughFriends,
   fighterDefendsTunnels,
@@ -796,7 +797,10 @@ export function tickAntMovement(
         // so this is unconditional now.) Must stay in lockstep with the ascent
         // `isRecallingFromForeign` / `skipAscent` predicate in the surface-ascent block
         // later in tickAntMovement.
-        const isRecalling = ownColony != null && ownColony.rallyPoint == null;
+        // V51 (#290 PR 4, D11): a hungry invader step 10c sent home to eat leaves
+        // the same way (fighterWalksHomeToEat is false below V51).
+        const isRecalling =
+          (ownColony != null && ownColony.rallyPoint == null) || fighterWalksHomeToEat(world, id);
 
         if (isRecalling) {
           // Recalled invader: navigate toward the nearest foreign entrance exit
@@ -880,12 +884,13 @@ export function tickAntMovement(
       // #333 (V48) — a sentry walking home steps by the surface entrance flow
       // field (obstacle-aware), as a homebound forager does. At an entrance
       // tile (-1) or off the field (-2) it keeps the straight-line step.
+      // V51 (#290 PR 4, D11): so does a hungry fighter walking home to eat.
       let fieldStepped = false;
       if (
         haveTarget &&
         zone === Zone.Surface &&
         entranceFlowFields !== undefined &&
-        sentryWalksHome(world, id)
+        (sentryWalksHome(world, id) || fighterWalksHomeToEat(world, id))
       ) {
         const sDir = surfaceEntranceFieldDir(entranceFlowFields, ants.colonyId[id]!, posX, posY);
         if (sDir >= 0 && sDir < 4) {
@@ -1615,7 +1620,9 @@ export function tickAntMovement(
           // earlier in tickAntMovement.
           const ownColonyForAscent = world.colonies[ants.colonyId[id]!];
           const isRecallingFromForeign =
-            !inOwnGrid && ownColonyForAscent != null && ownColonyForAscent.rallyPoint == null;
+            !inOwnGrid &&
+            ((ownColonyForAscent != null && ownColonyForAscent.rallyPoint == null) ||
+              fighterWalksHomeToEat(world, id));
           const skipAscent = task === AntTask.Fighting && !inOwnGrid && !isRecallingFromForeign;
           if (!skipAscent) {
             const lookupColonyId = ants.currentGridColonyId[id]!;

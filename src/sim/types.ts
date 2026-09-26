@@ -672,9 +672,9 @@ export const SIM_VERSION_V40_SMALL_COLONY_SURVIVAL = 40 as const;
  *      it the same tick for any colony with an underground grid, so only a grid-less
  *      colony (test fixtures) could carry the extra `true` into a save.
  *   4. DORMANT — the S2 operation death counters. A committed-cohort fighter that
- *      starved or aged out now counts as an attacker loss, which no adult can do today
- *      (WORKER_FOOD_PER_TICK is 0, WORKER_LIFESPAN_TICKS is INT32_MAX). It becomes
- *      live, intentionally, if Phase 7+ adds worker upkeep or a real lifespan.
+ *      starved or aged out now counts as an attacker loss, which no adult could do
+ *      at V41 (workers did not eat; WORKER_LIFESPAN_TICKS is INT32_MAX). Live from
+ *      V51 (#290 PR 4), when workers and fighters eat and can starve.
  *
  * No WorldState/save field, no `world.rngState` draw, no tick-order change; the only
  * ID-counter advance (the V37 corpse drop) stays kill-only. Same-build self-compare +
@@ -1049,7 +1049,36 @@ export const SIM_VERSION_V49_ALARM_MUSTER = 49 as const;
  * pre-V50 build's at every checkpoint of the byte-gate scenarios.
  */
 export const SIM_VERSION_V50_LOCATED_FOOD = 50 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V50_LOCATED_FOOD;
+
+/**
+ * #288 / #290 PR 4 — V51 workers and fighters eat.
+ *
+ * Until V51 only the queen and larvae ate. From V51 every worker (fighters
+ * included) has a hunger profile too (WORKER_HUNGER / FIGHTER_HUNGER in
+ * src/sim/hunger.ts, the kind read at the moment of the check):
+ *   - Step 3, after the queen and larvae, walks `colony.workers` in order. A
+ *     worker whose meal is due eats one meal from the colony stores when it is
+ *     AT HOME (underground in its own nest, or on the surface within
+ *     HOME_EAT_RADIUS_TILES of an own open entrance), or from its own load when
+ *     it is away and carrying food. A meal from the stores is skipped when it
+ *     would leave the colony below QUEEN_MEAL_RESERVE_FP: the colony feeds the
+ *     queen first, then larvae, then workers. A worker that misses a meal at or
+ *     past its starve-after dies of starvation (despawnAnt, no corpse food).
+ *   - Owner decision D11: a fighter away from home, empty-handed and hungry
+ *     (FIGHTER_WALK_HOME_HUNGER_TICKS since its last meal) walks home to eat
+ *     (step 10c; step 16 steps it by the surface entrance flow field, and an
+ *     invader in a foreign nest climbs out first), unless it is fighting (an
+ *     enemy in sight) or its colony has sent its fighters at the spider. Once
+ *     it has eaten its ordinary routing takes it back to its rally or post.
+ *     At home and still hungry (the colony could not feed it) it waits there.
+ * No new serialized field (the walk-home marker is same-tick step-10c scratch;
+ * the clock `ants.lastMealTick` was declared at V50), no command, no
+ * world.rngState draw, no entity-ID advance, no tick-order change: the rules are
+ * behind `simVersion >= V51`, so a V50 save replays byte-identically.
+ * MIN_ACCEPTED is UNCHANGED (V50).
+ */
+export const SIM_VERSION_V51_UNIFIED_HUNGER = 51 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V51_UNIFIED_HUNGER;
 
 /**
  * S2 — AI colony state machine states.

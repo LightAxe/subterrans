@@ -17,8 +17,8 @@
 //   foodCarrying         — food units currently carried (fixed-point)
 //   lastMealTick         — hunger clock (#288, V50): the tick of the ant's last
 //                          successful meal; ticks since meal = world.tick −
-//                          lastMealTick (see src/sim/hunger.ts). Read for the queen
-//                          and larvae today; workers and fighters eat from #290 PR 4.
+//                          lastMealTick (see src/sim/hunger.ts). The queen and
+//                          larvae eat from V50; workers and fighters from V51.
 //   age                  — ticks alive
 //   alive                — 1 = alive, 0 = dead/unused slot
 //   lifespan             — ticks until natural death (WORKER_LIFESPAN_TICKS = INT32_MAX)
@@ -526,6 +526,27 @@ export function clearRecentTiles(ants: AntComponents, id: EntityId): void {
     ants.recentTilesY[base + s] = RECENT_TILES_SENTINEL;
   }
   ants.recentTilesHead[id] = 0;
+}
+
+/**
+ * The forager Idle checkpoint (Errata E-01): a carrier whose load is gone — a
+ * full deposit (ant-foraging.ts antDepositFood) or, from V51, eating its last
+ * bite away from home (colony-system.ts) — becomes Idle for step 10a to
+ * reassign, with its excursion state cleared so its next search starts fresh:
+ * outbound heading, prev-tile memory (09 memo), wait state (#27), pause
+ * cadence (#35) and recent-tiles ring (#42).
+ */
+export function resetCarrierToIdle(ants: AntComponents, id: EntityId): void {
+  ants.task[id] = AntTask.Idle;
+  ants.subTask[id] = 0;
+  ants.searchHeadingX[id] = 0;
+  ants.searchHeadingY[id] = 0;
+  ants.searchHeadingTicks[id] = 0;
+  ants.searchPrevTileX[id] = -1;
+  ants.searchPrevTileY[id] = -1;
+  ants.waitingDeposit[id] = 0;
+  ants.searchPauseTicks[id] = 0;
+  clearRecentTiles(ants, id);
 }
 
 /**
