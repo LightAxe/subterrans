@@ -197,7 +197,7 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: 
     const cell = q[head++]!;
     const d = dist[cell]!;
     if (d >= R) continue;
-    // Window cell → (wx, wy) without `/`: rows are S wide, S ≤ 9.
+    // Window cell → (wx, wy) without `/`: rows are S wide (S = 2 × the start radius + 1 = 13).
     let wy = 0;
     let rem = cell;
     while (rem >= S) {
