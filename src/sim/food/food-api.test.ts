@@ -20,6 +20,7 @@ import {
   colonyHasNoDepositTarget,
   colonyPoolFood,
   createChamberStock,
+  depositCarriedFood,
   depositIntoChamber,
   depositIntoPool,
   drainPile,
@@ -40,6 +41,7 @@ import {
   pileTileY,
   recordFoodPileDepletion,
   spawnPile,
+  takeFromStock,
   topUpOrSpawnCorpsePile,
   withdrawFood,
   type PileView,
@@ -337,6 +339,54 @@ describe('food-api — withdraw / deposit / clamp', () => {
 // ---------------------------------------------------------------------------
 // Piles
 // ---------------------------------------------------------------------------
+
+describe('food-api — carried food and raids (#290 PR 5)', () => {
+  it('depositCarriedFood fills the depositable chamber under the tile, then the pool', () => {
+    // Footprint of every test chamber: (0..3, 0..2).
+    const { world, colony, chs } = colonyWorld(BASE_FOOD_STORAGE_CAPACITY - 100, [
+      chamber(1, ChamberType.FoodStorage, FOOD_CHAMBER_CAPACITY - 1000),
+    ]);
+    expect(depositCarriedFood(world, colony, 1, 1, 1050)).toBe(0);
+    expect(chamberStock(world, chs[0]!)).toBe(FOOD_CHAMBER_CAPACITY);
+    expect(colonyPoolFood(world, colony)).toBe(BASE_FOOD_STORAGE_CAPACITY - 50);
+    // Off the footprint: the pool only; the leftover comes back.
+    expect(depositCarriedFood(world, colony, 9, 9, 80)).toBe(30);
+    expect(colonyPoolFood(world, colony)).toBe(BASE_FOOD_STORAGE_CAPACITY);
+  });
+
+  it('depositCarriedFood skips a saturated chamber (the hysteresis band)', () => {
+    const { world, colony, chs } = colonyWorld(0, [
+      chamber(1, ChamberType.FoodStorage, FOOD_CHAMBER_CAPACITY - 1),
+    ]);
+    expect(depositCarriedFood(world, colony, 0, 0, 10)).toBe(0);
+    expect(chamberStock(world, chs[0]!)).toBe(FOOD_CHAMBER_CAPACITY - 1);
+    expect(colonyPoolFood(world, colony)).toBe(10);
+  });
+
+  it('takeFromStock takes at most the stock, only from FoodStorage, and never negative', () => {
+    const { world, colony, chs } = colonyWorld(500, [
+      chamber(1, ChamberType.FoodStorage, 700),
+      chamber(2, ChamberType.Nursery, 0),
+    ]);
+    expect(takeFromStock(world, colony, chs[0]!, 400)).toBe(400);
+    expect(takeFromStock(world, colony, chs[0]!, 400)).toBe(300);
+    expect(takeFromStock(world, colony, chs[0]!, 400)).toBe(0);
+    expect(chamberStock(world, chs[0]!)).toBe(0);
+    expect(takeFromStock(world, colony, chs[1]!, 400)).toBe(0);
+    expect(takeFromStock(world, colony, chs[0]!, -5)).toBe(0);
+    expect(colonyPoolFood(world, colony)).toBe(500); // the pool is never raided
+  });
+
+  it('takeFromStock marks the victim’s food field dirty only on a saturated→depositable crossing', () => {
+    const { world, colony, chs } = colonyWorld(0, [
+      chamber(1, ChamberType.FoodStorage, FOOD_CHAMBER_CAPACITY),
+    ]);
+    takeFromStock(world, colony, chs[0]!, 1);
+    expect(colony.foodFlowFieldDirty).toBe(false);
+    takeFromStock(world, colony, chs[0]!, FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP);
+    expect(colony.foodFlowFieldDirty).toBe(true);
+  });
+});
 
 describe('food-api — piles', () => {
   it('spawnPile appends in order; readers report fp and the corpse flag', () => {

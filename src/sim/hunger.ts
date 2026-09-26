@@ -18,6 +18,7 @@
 // Determinism: integers only, no `/`, no allocation, no module-level mutable state.
 
 import type { EntityId, WorldState } from './types.js';
+import { SIM_VERSION_V51_UNIFIED_HUNGER } from './types.js';
 import { AntTask } from './enums.js';
 import { FP_SHIFT } from './fixed.js';
 import { Zone } from './terrain.js';
@@ -25,6 +26,7 @@ import {
   FIGHTER_MEAL_FP,
   FIGHTER_MEAL_INTERVAL_TICKS,
   FIGHTER_STARVE_AFTER_TICKS,
+  FIGHTER_WALK_HOME_HUNGER_TICKS,
   HOME_EAT_RADIUS_TILES,
   LARVA_MEAL_FP,
   LARVA_MEAL_INTERVAL_TICKS,
@@ -117,6 +119,21 @@ export function antIsAtHome(world: WorldState, id: EntityId): boolean {
     if ((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) <= HOME_EAT_RADIUS_TILES) return true;
   }
   return false;
+}
+
+/**
+ * V51 (#290 PR 4, owner decision D11) — fighter `id` is hungry: past
+ * FIGHTER_WALK_HOME_HUNGER_TICKS since its last meal and empty-handed (an ant
+ * carrying food eats from its load instead). Such a fighter walks home to eat
+ * (ant-combat-targeting.ts) and, from V52, does not loot (ant-raid.ts). Always
+ * false below V51.
+ */
+export function fighterIsHungry(world: WorldState, id: EntityId): boolean {
+  return (
+    world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER &&
+    world.ants.foodCarrying[id] === 0 &&
+    ticksSinceMeal(world, id) >= FIGHTER_WALK_HOME_HUNGER_TICKS
+  );
 }
 
 /** Largest int32 — "never" for a starve-after that must not fire. */

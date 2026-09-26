@@ -24,7 +24,7 @@ import {
 } from '../constants.js';
 import type { DigFlowFields } from '../dig-system.js';
 import type { EntranceFlowFields } from '../entrance-flow.js';
-import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
+import { AntTask, FightingSubState, ForagingSubState, PheromoneType } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import { phGet, pheromoneGridKey } from '../pheromone/pheromone-store.js';
 import { sampleForagingDirection } from '../pheromone/pheromone-system.js';
@@ -40,7 +40,7 @@ import {
   surfaceGoalDistance,
 } from '../surface-routing.js';
 import { UndergroundTileState, Zone, ugGet, type UndergroundGrid } from '../terrain.js';
-import type { WorldState } from '../types.js';
+import { SIM_VERSION_V52_RAIDING, type WorldState } from '../types.js';
 import {
   pickInvaderUndergroundStep,
   pickNearestHostileUnderground,
@@ -81,6 +81,7 @@ import {
   idleMustersHome,
 } from './idle-reserve.js';
 import { clearRecentTiles, isRecentTile, pushRecentTile } from './ant-store.js';
+import { fighterIsHauling, fighterIsLooting, looterStepDir } from './ant-raid.js';
 
 // #231 — the per-tick surface-movement cache (issue #67, ~16 KB Uint8Array) now
 // lives on the per-world scratch arena (getScratch(world).surfaceMoveCache), reset
@@ -253,7 +254,19 @@ export function tickAntMovement(
     // then row-major tile iteration — stable across ticks given stable inputs.
     let chamberTargetX = -1;
     let chamberTargetY = -1;
-    if (zone === Zone.Underground && task === AntTask.Foraging && foodCarrying > 0) {
+    // #290 PR 5 (V52) — a raider hauling loot, back below ground in its OWN nest,
+    // routes to a FoodStorage chamber (else the pool at the shaft top) exactly as
+    // a carrying forager does. (Only V52 ever writes Hauling.)
+    const haulingHome =
+      task === AntTask.Fighting &&
+      ants.subTask[id] === FightingSubState.Hauling &&
+      zone === Zone.Underground &&
+      ants.currentGridColonyId[id] === ants.colonyId[id];
+    if (
+      zone === Zone.Underground &&
+      (task === AntTask.Foraging || haulingHome) &&
+      foodCarrying > 0
+    ) {
       // colonyId keys the OWN-colony record (carriers deposit into their own
       // FoodStorage chambers — foragers never invade). gridColonyId keys the
       // underground grid the ant currently occupies (Phase 09.1 Chunk 0);
@@ -788,8 +801,43 @@ export function tickAntMovement(
       let rawDx = 0;
       let rawDy = 0;
       let haveTarget = false;
+      // Set when dx/dy already hold this tick's step (a flow-field step, or a hold).
+      let fieldStepped = false;
 
-      if (isForeignGridUnderground) {
+      // #290 PR 5 (V52) — a raider in the enemy nest steps by a flow field: a
+      // hauler toward that nest's open shaft (its entrance field; the ascent
+      // block below lets a hauler climb out), a looter toward a FoodStorage
+      // chamber holding food (the stock field, step 10e). On the field's source
+      // tile it holds. Off the field a hauler falls back to the recall route and a
+      // looter to the hostile hunt, as before V52.
+      let raidDir = -2;
+      const hauling = isForeignGridUnderground && fighterIsHauling(world, id);
+      if (hauling && entranceFlowFields !== undefined) {
+        const field = entranceFlowFields.fields[gridColonyId];
+        const grid = world.undergroundGrids[gridColonyId];
+        if (field && grid) {
+          const tx = posX >> FP_SHIFT;
+          const ty = posY >> FP_SHIFT;
+          if (tx >= 0 && ty >= 0 && tx < grid.width && ty < grid.height) {
+            raidDir = field[ty * grid.width + tx]!;
+          }
+        }
+      } else if (isForeignGridUnderground && fighterIsLooting(world, id)) {
+        raidDir = looterStepDir(world, id);
+      }
+      if (raidDir === -1) {
+        dx = 0;
+        dy = 0;
+        fieldStepped = true;
+      } else if (raidDir >= 0 && raidDir < 4) {
+        dx = DIR_DX[raidDir]!;
+        dy = DIR_DY[raidDir]!;
+        fieldStepped = true;
+      }
+
+      if (fieldStepped) {
+        // Stepped above.
+      } else if (isForeignGridUnderground) {
         const ownColony = world.colonies[ownColonyId];
         // null colony is treated as NOT recalled (matches isRecallingFromForeign guard
         // in skipAscent) — missing colony record is a defensive fallback, not a recall.
@@ -801,7 +849,9 @@ export function tickAntMovement(
         // V51 (#290 PR 4, D11): a hungry invader step 10c sent home to eat leaves
         // the same way (fighterWalksHomeToEat is false below V51).
         const isRecalling =
-          (ownColony != null && ownColony.rallyPoint == null) || fighterWalksHomeToEat(world, id);
+          (ownColony != null && ownColony.rallyPoint == null) ||
+          fighterWalksHomeToEat(world, id) ||
+          hauling;
 
         if (isRecalling) {
           // Recalled invader: navigate toward the nearest foreign entrance exit
@@ -828,7 +878,9 @@ export function tickAntMovement(
               }
             }
             const exitGrid = world.undergroundGrids[gridColonyId];
-            if (exitGrid !== undefined && fighterWalksHomeToEat(world, id)) {
+            // V52 (#290 PR 5): a hauler only gets here off its nest's entrance
+            // flow field (above); it takes the same reachable-exit step.
+            if (exitGrid !== undefined && (fighterWalksHomeToEat(world, id) || hauling)) {
               // V51 (#290 PR 4, D11): a hungry invader walks out by the
               // wall-aware BFS step (hungryExitStep), toward the first OPEN
               // entrance of this nest it can actually reach, so neither a bend
@@ -853,8 +905,26 @@ export function tickAntMovement(
           }
           // else: no enemy entrance → hold (dx=dy=0 fallback)
         } else {
-          const hostile = pickNearestHostileUnderground(ants, id, gridColonyId);
-          if (hostile !== null) {
+          // V52 (#290 PR 5): step 10e aimed a raider stopped by a hostile in reach
+          // at THAT hostile (target set only by 10e; step 10c clears an invader's
+          // target every tick, so below V52 it is always -1 here). Scalars, not an
+          // object literal: this runs per fighter per tick (hot-loop rule).
+          let haveHostile = false;
+          let hostileX = 0;
+          let hostileY = 0;
+          if (ants.targetPosX[id] !== -1) {
+            haveHostile = true;
+            hostileX = ants.targetPosX[id]!;
+            hostileY = ants.targetPosY[id]!;
+          } else {
+            const nearest = pickNearestHostileUnderground(ants, id, gridColonyId);
+            if (nearest !== null) {
+              haveHostile = true;
+              hostileX = nearest.targetX;
+              hostileY = nearest.targetY;
+            }
+          }
+          if (haveHostile) {
             const invUnderground = world.undergroundGrids[gridColonyId];
             if (invUnderground) {
               // Wall-aware greedy step — avoids freezing against solid
@@ -863,8 +933,8 @@ export function tickAntMovement(
               // shared pickCardinalStep block does the FP→step conversion.
               const tileX = posX >> FP_SHIFT;
               const tileY = posY >> FP_SHIFT;
-              const tTileX = hostile.targetX >> FP_SHIFT;
-              const tTileY = hostile.targetY >> FP_SHIFT;
+              const tTileX = hostileX >> FP_SHIFT;
+              const tTileY = hostileY >> FP_SHIFT;
               const step = pickInvaderUndergroundStep(
                 invUnderground,
                 tileX,
@@ -876,12 +946,12 @@ export function tickAntMovement(
               rawDx = unpackStepDx(step) * FP_ONE;
               rawDy = unpackStepDy(step) * FP_ONE;
             } else {
-              rawDx = hostile.targetX - posX;
-              rawDy = hostile.targetY - posY;
+              rawDx = hostileX - posX;
+              rawDy = hostileY - posY;
             }
             haveTarget = true;
           }
-          // hostile === null → idle fallback: dx=dy=0 (haveTarget stays false)
+          // no hostile → idle fallback: dx=dy=0 (haveTarget stays false)
         }
       } else if (fighterDefendsTunnels(world, id)) {
         // V44 (#325) — a tunnel defender steps through its own tunnels (BFS)
@@ -906,12 +976,14 @@ export function tickAntMovement(
       // field (obstacle-aware), as a homebound forager does. At an entrance
       // tile (-1) or off the field (-2) it keeps the straight-line step.
       // V51 (#290 PR 4, D11): so does a hungry fighter walking home to eat.
-      let fieldStepped = false;
+      // V52 (#290 PR 5): so does a raider hauling loot home.
       if (
         haveTarget &&
         zone === Zone.Surface &&
         entranceFlowFields !== undefined &&
-        (sentryWalksHome(world, id) || fighterWalksHomeToEat(world, id))
+        (sentryWalksHome(world, id) ||
+          fighterWalksHomeToEat(world, id) ||
+          fighterIsHauling(world, id))
       ) {
         const sDir = surfaceEntranceFieldDir(entranceFlowFields, ants.colonyId[id]!, posX, posY);
         if (sDir >= 0 && sDir < 4) {
@@ -1509,8 +1581,10 @@ export function tickAntMovement(
               // any other descent-intent task on an open entrance.
               const canDescend = entrance.isOpen || task === AntTask.Digging;
               if (!canDescend) continue;
-              // V43 (#323) — the own-shaft rule (ant-combat-targeting.ts).
+              // V43 (#323) — the own-shaft rule (ant-combat-targeting.ts). V52
+              // (#290 PR 5): a raider hauling loot home goes down to deposit it.
               if (
+                !fighterIsHauling(world, id) &&
                 fighterBarredFromOwnShaft(
                   world,
                   id,
@@ -1521,7 +1595,12 @@ export function tickAntMovement(
               ) {
                 continue;
               }
-            } else if (!isFightingForeigner || fighterBarredFromForeignShaft(world, id)) {
+            } else if (
+              !isFightingForeigner ||
+              fighterBarredFromForeignShaft(world, id) ||
+              // V52 (#290 PR 5): a hauler is on its way home, laden.
+              fighterIsHauling(world, id)
+            ) {
               // Foreign entrance but not a Fighting invader — descent-intent
               // gate rejects (REQ-C3c). Non-Fighting foreign ants stay on
               // the surface. V43 (#323): invading also needs orders — a
@@ -1593,7 +1672,9 @@ export function tickAntMovement(
           // fresh-picks at the shaft row, and the shelter-release clears it — so it
           // still ascends.
           ants.targetPosX[id] === -1) ||
-        task === AntTask.Fighting ||
+        // V52 (#290 PR 5): not a raider hauling loot in its own nest — it is on its
+        // way to deposit (like a carrying forager, which never ascends either).
+        (task === AntTask.Fighting && !haulingHome) ||
         (task === AntTask.Foraging &&
           (ants.subTask[id] === ForagingSubState.SearchingFood ||
             // #209 PR A (V34) — an EMPTY forager that fled and sheltered can be
@@ -1644,7 +1725,12 @@ export function tickAntMovement(
             !inOwnGrid &&
             ((ownColonyForAscent != null && ownColonyForAscent.rallyPoint == null) ||
               fighterWalksHomeToEat(world, id));
-          const skipAscent = task === AntTask.Fighting && !inOwnGrid && !isRecallingFromForeign;
+          // V52 (#290 PR 5): a raider hauling loot out of the enemy nest climbs out.
+          const skipAscent =
+            task === AntTask.Fighting &&
+            !inOwnGrid &&
+            !isRecallingFromForeign &&
+            !fighterIsHauling(world, id);
           if (!skipAscent) {
             const lookupColonyId = ants.currentGridColonyId[id]!;
             const colony = world.colonies[lookupColonyId];
@@ -1833,7 +1919,15 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     let tileX = ants.posX[id]! >> FP_SHIFT;
     let tileY = ants.posY[id]! >> FP_SHIFT;
 
-    if (isOccupancyExempt(world, colonyId, zone, tileX, tileY)) continue;
+    // V52 (#290 PR 5): below ground the work sites are those of the NEST the ant
+    // stands in (raiders stacking in an enemy FoodStorage chamber are exempt the
+    // way foragers are at home). Earlier worlds read the ant's own colony's
+    // chambers and shafts at foreign-grid coordinates; kept for replay.
+    const exemptColonyId =
+      zone === Zone.Underground && world.simVersion >= SIM_VERSION_V52_RAIDING
+        ? rawGridColonyId
+        : colonyId;
+    if (isOccupancyExempt(world, exemptColonyId, zone, tileX, tileY)) continue;
     // V43 (#323) / V44 (#325): a sentry walking to its post, or a tunnel defender
     // holding or walking to its post, neither claims a tile nor is bumped.
     if (sentryPassesThroughFriends(world, id) || defenderPassesThroughFriends(world, id)) continue;
@@ -1843,6 +1937,10 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     // like any ant, one leaving a crowded rally stepped onto a tile a fed friend
     // held and was pushed back every tick, until it starved a tile from open ground.
     if (fighterWalksHomeToEat(world, id)) continue;
+    // V52 (#290 PR 5): nor does a raider hauling loot home. Bumped like any ant, one
+    // climbing a one-wide enemy shaft behind its own idle invaders was pushed back
+    // off their tiles every tick and never got out. (Only V52 writes Hauling.)
+    if (fighterIsHauling(world, id)) continue;
 
     // Issue #108 (v13+) — zero the gridColonyId portion of the key when
     // zone === Surface. Mirrors combat tile-key encoding (tile-key.ts:56);
@@ -1913,7 +2011,7 @@ function resolveSameColonyOccupancy(world: WorldState): void {
           continue;
         // Exempt adjacent tiles are always "free" — we shift into them and do
         // not claim them (keeping them open for further stacking).
-        if (isOccupancyExempt(world, colonyId, zone, nx, ny)) {
+        if (isOccupancyExempt(world, exemptColonyId, zone, nx, ny)) {
           tileX = nx;
           tileY = ny;
           ants.posX[id] = (tileX << FP_SHIFT) + occupancyCenterOffset;

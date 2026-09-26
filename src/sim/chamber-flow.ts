@@ -47,7 +47,7 @@ import { isBroodReclaimable } from './ant/ant-store.js';
 // Issue #87 — shared BFS expansion (was a local helper here pre-#87;
 // dig-system.ts and entrance-flow.ts had near-identical inline copies).
 import { bfsExpandSeededField } from './bfs-flow-field.js';
-import { isFoodChamberDepositable } from './food/food-api.js';
+import { chamberStock, isFoodChamberDepositable } from './food/food-api.js';
 
 // 4-cardinal step offsets (N/E/S/W), matching bfs-flow-field.ts' expansion
 // order. Module-scope so the carrier-local flood in hasReachableNonFullNursery
@@ -176,6 +176,48 @@ export function computeFoodChamberFlowField(
   queue: Int32Array,
 ): void {
   seedChamberFlowField(underground, chambers, chamberTypes, out, queue, world);
+}
+
+/**
+ * #290 PR 5 (V52) — the STOCK flow field of one nest: toward the nearest Open tile
+ * of a FoodStorage chamber holding at least `minStockFp` (default 1: any food;
+ * ant-raid.ts also asks for RAID_LOOT_START_STOCK_FP), for raiders
+ * looting it. Unlike the food field it seeds FULL chambers too — exactly the ones
+ * worth raiding — and skips empty ones. -1 on a seed tile, 0..3 the step toward
+ * one, -2 unreachable. Seed order is chamber order × row-major footprint; BFS
+ * order N/E/S/W (deterministic). `out` / `queue` are length W*H scratch.
+ */
+export function computeStockFlowField(
+  world: WorldState,
+  underground: UndergroundGrid,
+  chambers: ReadonlyArray<ChamberRecord>,
+  out: Int32Array,
+  queue: Int32Array,
+  minStockFp = 1,
+): void {
+  const { data, width, height } = underground;
+  out.fill(-2);
+  let tail = 0;
+  for (let c = 0; c < chambers.length; c++) {
+    const chamber = chambers[c]!;
+    if (chamber.chamberType !== ChamberType.FoodStorage) continue;
+    if (chamberStock(world, chamber) < minStockFp) continue;
+    const baseX = chamber.posX >> FP_SHIFT;
+    const baseY = chamber.posY >> FP_SHIFT;
+    for (let ty = 0; ty < chamber.height; ty++) {
+      for (let tx = 0; tx < chamber.width; tx++) {
+        const cx = baseX + tx;
+        const cy = baseY + ty;
+        if (cx < 0 || cx >= width || cy < 0 || cy >= height) continue;
+        const idx = cy * width + cx;
+        if (data[idx] !== UndergroundTileState.Open) continue;
+        if (out[idx] !== -2) continue;
+        out[idx] = -1;
+        queue[tail++] = idx;
+      }
+    }
+  }
+  bfsExpandSeededField(out, queue, tail, data, width, height);
 }
 
 /** Shared body; `foodWorld !== null` seeds only depositable food chambers. */

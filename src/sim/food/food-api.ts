@@ -282,6 +282,72 @@ export function depositIntoPool(world: WorldState, colony: ColonyRecord, amount:
 }
 
 /**
+ * Store `amount` fp of carried food at underground tile (tileX, tileY) of
+ * `colony`'s own nest and return what is left over (0 = all stored). The food
+ * goes into the DEPOSITABLE FoodStorage chamber whose footprint holds the tile
+ * (`isFoodChamberDepositable`, first match in `colony.chambers` order — a
+ * saturated chamber is not a match, so a carrier crossing it cannot dribble its
+ * load in), then any remainder into the entrance pool (issue #68: after a
+ * partial chamber deposit too). Chamber first, pool second, capped at each.
+ *
+ * The one deposit rule for carried food: foragers (`antDepositFood`) and, from
+ * V52, raiders hauling loot home (`tickRaidActions`, #290 PR 5) both use it. The
+ * caller decides WHERE the ant may deposit (a chamber tile or the shaft top) and
+ * what the ant does with a leftover.
+ */
+export function depositCarriedFood(
+  world: WorldState,
+  colony: ColonyRecord,
+  tileX: number,
+  tileY: number,
+  amount: number,
+): number {
+  let chamber: ChamberRecord | null = null;
+  for (let c = 0; c < colony.chambers.length; c++) {
+    const ch = colony.chambers[c]!;
+    if (!isFoodChamberDepositable(world, ch)) continue;
+    const baseX = ch.posX >> FP_SHIFT;
+    const baseY = ch.posY >> FP_SHIFT;
+    if (tileX >= baseX && tileX < baseX + ch.width && tileY >= baseY && tileY < baseY + ch.height) {
+      chamber = ch;
+      break;
+    }
+  }
+  let remaining = amount;
+  if (chamber !== null) remaining -= depositIntoChamber(world, colony, chamber, remaining);
+  if (remaining > 0) remaining -= depositIntoPool(world, colony, remaining);
+  return remaining;
+}
+
+/**
+ * #290 PR 5 (V52) — a raid: take up to `amount` fp out of FoodStorage chamber
+ * `ch`'s stock (never the entrance pool, owner decision D3). Returns the amount
+ * taken, 0 for a chamber with no stock. If the take moves the chamber from the
+ * saturation band back to depositable, marks `colony.foodFlowFieldDirty` (the
+ * victim's), exactly as `withdrawFood` does, so its carriers may deposit there
+ * again.
+ */
+export function takeFromStock(
+  world: WorldState,
+  colony: ColonyRecord,
+  ch: ChamberRecord,
+  amount: number,
+): number {
+  const slot = ch.foodSlot;
+  if (ch.chamberType !== ChamberType.FoodStorage || slot < 0 || amount <= 0) return 0;
+  const amountFp = world.food.amountFp;
+  const have = amountFp[slot]!;
+  const taken = amount < have ? amount : have;
+  if (taken <= 0) return 0;
+  const wasDepositable = isFoodChamberDepositable(world, ch);
+  amountFp[slot] = have - taken;
+  if (!wasDepositable && isFoodChamberDepositable(world, ch)) {
+    colony.foodFlowFieldDirty = true;
+  }
+  return taken;
+}
+
+/**
  * Reconcile backstop (`tickReconcile`): clamp the entrance pool to
  * [0, BASE_FOOD_STORAGE_CAPACITY] and each FoodStorage chamber to
  * [0, FOOD_CHAMBER_CAPACITY]. Defensive only; deposit and withdraw already cap.
@@ -628,6 +694,11 @@ export function topUpOrSpawnCorpsePile(
   amountFp: number,
 ): void {
   const fp = wholePickupsFp(amountFp);
+  // Less than one whole pickup is nothing to drop (#290 PR 5: a hauler's part-eaten
+  // or partial load): never top up by 0 or mint a zero-sized pile, which the save
+  // rejects (a live pile holds at least one pickup). Every earlier caller passes
+  // whole pickups ≥ 1, so this changes nothing for them.
+  if (fp <= 0) return;
   const slot = pileAtTile(world, x, y);
   if (slot >= 0) {
     const store = world.food;

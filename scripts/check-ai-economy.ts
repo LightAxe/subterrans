@@ -19,6 +19,9 @@
 //     (the retune must not make a do-nothing player immortal)
 //   - worker/fighter starvation deaths per colony (#290 PR 4, V51: workers and
 //     fighters eat) — the enemy's counted while its queen lives
+//   - raids (#290 PR 5, V52): food each colony's fighters stole from the other's
+//     FoodStorage chambers, completed hauls, and invasions launched, read from
+//     the ColonyRecord counters when the match ended (or at the last tick)
 //
 // Acceptance targets, asserted with an exit code:
 //   - enemy queen alive at tick 12 000 on >= 80% of seeds
@@ -40,6 +43,13 @@
 //                                   needs, so shards merge exactly
 //                  --trace=1,7,13   per-500-tick economy trace for those seeds
 //                  --report-only    print the verdict but never exit non-zero
+//                  --both-ai        drive the player colony with the same rule-based
+//                                   controller (as measure-playtrace-size.ts does).
+//                                   The passive player never builds a FoodStorage
+//                                   chamber, so the default arm can never see a
+//                                   raid; this arm can. The acceptance checks are
+//                                   calibrated on the passive arm, so --both-ai
+//                                   reports them but never exits non-zero.
 //
 // Runtime: ~30 seeds × 24 000 ticks takes roughly 3–5 minutes on a dev laptop,
 // which is why this is NOT wired into `npm run verify`. Use `npm run check:ai-economy`.
@@ -67,12 +77,14 @@ const { GameOutcome } = await import('../src/sim/game-over.js');
 const { PLAYER_COLONY_ID, ENEMY_COLONY_ID, MATCH_TIMEOUT_TICKS, FOOD_PICKUP_AMOUNT } =
   await import('../src/sim/constants.js');
 const { runAIController } = await import('../src/render/ai-controller.js');
-const { colonyFoodTotal, forEachPile, pileCount } = await import('../src/sim/food/food-api.js');
-const { ChamberType, AntTask, PheromoneType } = await import('../src/sim/enums.js');
+const { colonyFoodTotal, colonyHasNoDepositTarget, forEachPile, pileCount } =
+  await import('../src/sim/food/food-api.js');
+const { ChamberType, AntTask, FightingSubState, PheromoneType } =
+  await import('../src/sim/enums.js');
 const { isAlive } = await import('../src/sim/ant/ant-store.js');
 const { mealsUntilStarvation, QUEEN_HUNGER, workerHungerProfile } =
   await import('../src/sim/hunger.js');
-const { getAIStateForColony } = await import('../src/sim/ai-state.js');
+const { createDefaultAIStateRecord, getAIStateForColony } = await import('../src/sim/ai-state.js');
 const { pheromoneGridKey, phGet } = await import('../src/sim/pheromone/pheromone-store.js');
 const { Zone } = await import('../src/sim/terrain.js');
 
@@ -114,7 +126,10 @@ const SEEDS = parseNumArg('seeds', 30);
 const SEED_START = parseNumArg('seed-start', 0);
 const TICKS = parseNumArg('ticks', MATCH_TIMEOUT_TICKS);
 const DIFFICULTY_ARG = parseStrArg('difficulty', 'Normal');
-const REPORT_ONLY = process.argv.slice(2).includes('--report-only');
+const BOTH_AI = process.argv.slice(2).includes('--both-ai');
+const REPORT_ONLY = BOTH_AI || process.argv.slice(2).includes('--report-only');
+/** The player arm's label in the report. */
+const PLAYER_LABEL = BOTH_AI ? 'player AI' : 'passive player';
 const TRACE_SEEDS = new Set(
   parseStrArg('trace', '')
     .split(',')
@@ -202,6 +217,24 @@ interface SeedResult {
   enemyFightersStarved: number;
   /** The passive player's workers that starved (any time before the run ended). */
   playerWorkersStarved: number;
+  /** #290 PR 5 — raid counters (ColonyRecord) when the match ended, else at the
+   *  last tick: food (fp) each side's fighters stole, and hauls completed. */
+  enemyRaidedFp: number;
+  enemyRaidTrips: number;
+  playerRaidedFp: number;
+  playerRaidTrips: number;
+  /** Hauls deposited by the LAST tick run (play continues after the match ends). */
+  enemyRaidTripsRunEnd: number;
+  playerRaidTripsRunEnd: number;
+  /** At match end: laden haulers still out (not yet deposited), and how many of
+   *  them were already home, parked because every store was full. */
+  enemyHaulersOut: number;
+  enemyHaulersParked: number;
+  playerHaulersOut: number;
+  playerHaulersParked: number;
+  /** Times each colony's AI entered Invading (the player's only under --both-ai). */
+  enemyInvasions: number;
+  playerInvasions: number;
 }
 
 /** Tick at which Queen + Nursery + FoodStorage are all COMPLETED for a colony. */
@@ -387,6 +420,13 @@ function pileChargesNear(world: WorldState, colonyId: number, radius: number): n
 
 function runSeed(seed: number): SeedResult {
   const world = createScenario(seed, DIFFICULTY);
+  // --both-ai: createScenario gives only the enemy an AI state record, and without
+  // one the controller keeps the player colony in Peacetime (no WarFooting, no
+  // probes or invasions — so no raids by the player). Give it a default record,
+  // as the Jev opponent harness does for its colony.
+  if (BOTH_AI && getAIStateForColony(world, PLAYER_COLONY_ID) === null) {
+    world.aiState.push(createDefaultAIStateRecord(PLAYER_COLONY_ID));
+  }
   const trace = TRACE_SEEDS.has(seed);
 
   const enemy = world.colonies[ENEMY_COLONY_ID]!;
@@ -418,7 +458,45 @@ function runSeed(seed: number): SeedResult {
     enemyWorkersStarved: 0,
     enemyFightersStarved: 0,
     playerWorkersStarved: 0,
+    enemyRaidedFp: 0,
+    enemyRaidTrips: 0,
+    playerRaidedFp: 0,
+    playerRaidTrips: 0,
+    enemyRaidTripsRunEnd: 0,
+    playerRaidTripsRunEnd: 0,
+    enemyHaulersOut: 0,
+    enemyHaulersParked: 0,
+    playerHaulersOut: 0,
+    playerHaulersParked: 0,
+    enemyInvasions: 0,
+    playerInvasions: 0,
   };
+  let raidsRecorded = false;
+  const recordRaids = (): void => {
+    res.enemyRaidedFp = enemy.foodRaidedFp;
+    res.enemyRaidTrips = enemy.raidTrips;
+    res.playerRaidedFp = player.foodRaidedFp;
+    res.playerRaidTrips = player.raidTrips;
+    const a = world.ants;
+    for (let id = 0; id < world.nextEntityId; id++) {
+      if (a.alive[id] !== 1 || a.task[id] !== AntTask.Fighting) continue;
+      if (a.subTask[id] !== FightingSubState.Hauling || a.foodCarrying[id]! <= 0) continue;
+      const own = world.colonies[a.colonyId[id]!]!;
+      const parked =
+        a.zone[id] === Zone.Underground &&
+        a.currentGridColonyId[id] === a.colonyId[id] &&
+        colonyHasNoDepositTarget(world, own);
+      if (own === enemy) {
+        res.enemyHaulersOut += 1;
+        if (parked) res.enemyHaulersParked += 1;
+      } else if (own === player) {
+        res.playerHaulersOut += 1;
+        if (parked) res.playerHaulersParked += 1;
+      }
+    }
+  };
+  let prevEnemyState: AIState = 'Peacetime';
+  let prevPlayerState: AIState = 'Peacetime';
   // Worker ids live before each tick (step 5 swap-removes the dead from
   // colony.workers the same tick), reused across ticks.
   const enemyBefore: number[] = [];
@@ -439,6 +517,7 @@ function runSeed(seed: number): SeedResult {
 
   for (let t = 0; t < TICKS; t++) {
     runAIController(world, ENEMY_COLONY_ID);
+    if (BOTH_AI) runAIController(world, PLAYER_COLONY_ID);
     const enemyQueenAliveBefore = isAlive(world.ants, enemy.queenEntityId);
     enemyBefore.length = 0;
     for (const id of enemy.workers) if (isAlive(world.ants, id)) enemyBefore.push(id);
@@ -458,7 +537,11 @@ function runSeed(seed: number): SeedResult {
     for (const id of playerBefore) {
       if (!isAlive(world.ants, id) && workerStarved(world, id)) res.playerWorkersStarved += 1;
     }
-    if (outcome !== GameOutcome.None && res.matchEndTick === null) res.matchEndTick = world.tick;
+    if (outcome !== GameOutcome.None && res.matchEndTick === null) {
+      res.matchEndTick = world.tick;
+      recordRaids();
+      raidsRecorded = true;
+    }
 
     const enemyQueenAlive = isAlive(world.ants, enemy.queenEntityId);
     const playerQueenAlive = isAlive(world.ants, player.queenEntityId);
@@ -505,6 +588,19 @@ function runSeed(seed: number): SeedResult {
     }
 
     const aiRec = getAIStateForColony(world, ENEMY_COLONY_ID);
+    if (res.matchEndTick === null) {
+      if (aiRec !== null) {
+        if (aiRec.state === 'Invading' && prevEnemyState !== 'Invading') res.enemyInvasions += 1;
+        prevEnemyState = aiRec.state;
+      }
+      const playerRec = BOTH_AI ? getAIStateForColony(world, PLAYER_COLONY_ID) : null;
+      if (playerRec !== null) {
+        if (playerRec.state === 'Invading' && prevPlayerState !== 'Invading') {
+          res.playerInvasions += 1;
+        }
+        prevPlayerState = playerRec.state;
+      }
+    }
     if (aiRec !== null) {
       if (AI_STATE_RANK[aiRec.state] > AI_STATE_RANK[res.highestState]) {
         res.highestState = aiRec.state;
@@ -557,6 +653,10 @@ function runSeed(seed: number): SeedResult {
     // Stop early once both queens are gone — nothing left to measure.
     if (!enemyQueenAlive && !playerQueenAlive) break;
   }
+
+  if (!raidsRecorded) recordRaids();
+  res.enemyRaidTripsRunEnd = enemy.raidTrips;
+  res.playerRaidTripsRunEnd = player.raidTrips;
 
   // Seeds that ended before a checkpoint report the liveness at the end instead.
   if (res.enemyAliveAt12k === null && TICKS >= CHECKPOINT_12K) {
@@ -613,7 +713,11 @@ for (let s = 0; s < SEEDS; s++) {
 const elapsed = ((Date.now() - start) / 1000).toFixed(1);
 
 console.log('');
-console.log('== #297 AI-economy gate (rule-based enemy vs passive player) ==');
+console.log(
+  BOTH_AI
+    ? '== #297 AI-economy report (rule-based enemy vs rule-based player AI, --both-ai) =='
+    : '== #297 AI-economy gate (rule-based enemy vs passive player) ==',
+);
 console.log(
   `Seeds: ${SEEDS} (from ${SEED_START})  Difficulty: ${DIFFICULTY}  Ticks: ${TICKS}  Elapsed: ${elapsed}s`,
 );
@@ -734,8 +838,51 @@ console.log(
     `of which fighters: median=${median(eFStarved)} max=${eFStarved[eFStarved.length - 1]}`,
 );
 console.log(
-  `  Worker/fighter starvation deaths per seed (passive player): median=${median(pStarved)} ` +
+  `  Worker/fighter starvation deaths per seed (${PLAYER_LABEL}): median=${median(pStarved)} ` +
     `max=${pStarved[pStarved.length - 1]} seeds>0=${seedsWith(pStarved)}`,
+);
+
+// #290 PR 5 — raids, per seed and in aggregate. Counters are read when the match
+// ended (or at the last tick), so post-game-over play does not inflate them.
+console.log('');
+console.log(
+  'seed | matchEnd | raided fp e/p | hauls e/p | invasions e/p | hauls@runEnd e/p | ' +
+    'haulers out@matchEnd e/p (parked home, stores full)   (raid rows; e = enemy, p = player)',
+);
+for (const r of results) {
+  console.log(
+    `${String(r.seed).padStart(4)} R| ${String(r.matchEndTick ?? '-').padStart(6)} | ` +
+      `${r.enemyRaidedFp}/${r.playerRaidedFp} | ${r.enemyRaidTrips}/${r.playerRaidTrips} | ` +
+      `${r.enemyInvasions}/${r.playerInvasions} | ` +
+      `${r.enemyRaidTripsRunEnd}/${r.playerRaidTripsRunEnd} | ` +
+      `${r.enemyHaulersOut}(${r.enemyHaulersParked})/${r.playerHaulersOut}(${r.playerHaulersParked})`,
+  );
+}
+const raidSeeds = results.filter((r) => r.enemyRaidedFp > 0 || r.playerRaidedFp > 0).length;
+const totalRaided = sortedCol((r) => r.enemyRaidedFp + r.playerRaidedFp);
+const sumOf = (f: (r: SeedResult) => number): number => results.reduce((a, r) => a + f(r), 0);
+const matchEnds = sortedCol((r) => r.matchEndTick ?? TICKS);
+console.log(
+  `  Raids: seeds with any food stolen ${raidSeeds}/${SEEDS} (${pct(raidSeeds, SEEDS)})  ` +
+    `food stolen per seed (both sides) median=${median(totalRaided)} ` +
+    `max=${totalRaided[totalRaided.length - 1]} fp  ` +
+    `total enemy=${sumOf((r) => r.enemyRaidedFp)} fp in ${sumOf((r) => r.enemyRaidTrips)} hauls, ` +
+    `${PLAYER_LABEL}=${sumOf((r) => r.playerRaidedFp)} fp in ${sumOf((r) => r.playerRaidTrips)} hauls`,
+);
+console.log(
+  `  Hauls deposited by match end: enemy ${sumOf((r) => r.enemyRaidTrips)}, ` +
+    `${PLAYER_LABEL} ${sumOf((r) => r.playerRaidTrips)}; by the last tick run: enemy ` +
+    `${sumOf((r) => r.enemyRaidTripsRunEnd)}, ${PLAYER_LABEL} ` +
+    `${sumOf((r) => r.playerRaidTripsRunEnd)}. Laden haulers still out at match end: ` +
+    `enemy ${sumOf((r) => r.enemyHaulersOut)} (${sumOf((r) => r.enemyHaulersParked)} home, ` +
+    `parked: every store full), ${PLAYER_LABEL} ${sumOf((r) => r.playerHaulersOut)} ` +
+    `(${sumOf((r) => r.playerHaulersParked)}). A match usually ends mid-haul, so ` +
+    `"food stolen" counts loads not yet home.`,
+);
+console.log(
+  `  Invasions launched: enemy ${sumOf((r) => r.enemyInvasions)}, ${PLAYER_LABEL} ` +
+    `${sumOf((r) => r.playerInvasions)}  Match length (end tick, else ${TICKS}): ` +
+    `median=${median(matchEnds)} min=${matchEnds[0]} max=${matchEnds[matchEnds.length - 1]}`,
 );
 
 // ---------------------------------------------------------------------------
