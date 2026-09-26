@@ -201,6 +201,19 @@ export function drawSurfaceTerrain(
 // ---------------------------------------------------------------------------
 
 /**
+ * D9 (#290) — the spider hunger ring / tint fraction in [0, 1]: `hungerTicks` over
+ * the sim's REAL hungry threshold for the tier (SPIDER_HUNGER_THRESHOLD_TICKS,
+ * spider.ts), so the ring saturates exactly when the spider turns Hungry and starts
+ * hunting again. Render-only float math.
+ */
+export function spiderHungerFraction(
+  hungerTicks: number,
+  difficulty: WorldState['difficulty'],
+): number {
+  return Math.min(hungerTicks / SPIDER_HUNGER_THRESHOLD_TICKS[tierIndex(difficulty)], 1);
+}
+
+/**
  * Draw food piles, entrance holes, and ants (workers + queens) on the surface, in
  * WORLD pixels (the main camera projects them).
  *
@@ -488,13 +501,7 @@ export function drawSurfaceEntities(
       spiderWorldY > rect.top - SPIDER_SPRITE_HEIGHT &&
       spiderWorldY < rect.bottom + SPIDER_SPRITE_HEIGHT
     ) {
-      // D9 (#290): the ring fills over the sim's REAL hungry threshold
-      // (SPIDER_HUNGER_THRESHOLD_TICKS, spider.ts), so it saturates exactly when
-      // the spider turns Hungry and starts hunting again.
-      const hungerFraction = Math.min(
-        curr.spider.hungerTicks / SPIDER_HUNGER_THRESHOLD_TICKS[tierIndex(curr.difficulty)],
-        1,
-      );
+      const hungerFraction = spiderHungerFraction(curr.spider.hungerTicks, curr.difficulty);
       // S6: linear tint gradient pale (#ffeecc) → deep red (#cc2020) by hungerFraction.
       const tint = lerpColor(0xffeecc, 0xcc2020, hungerFraction);
 

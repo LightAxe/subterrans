@@ -2212,8 +2212,8 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     it('#290 — reports the aggregate (pool + FoodStorage chambers), matching the HUD', async () => {
       const world = createScenario(42);
       const playerColony = world.colonies[PLAYER_COLONY_ID]!;
-      // Two FoodStorage chambers with stock, plus a non-food chamber whose
-      // (always-zero in play) field must not be counted even if tampered.
+      // Two FoodStorage chambers with stock, plus a Nursery whose (always-zero in
+      // play) field is set nonzero and must not be counted.
       playerColony.chambers.push(
         {
           chamberId: 9001,
@@ -2229,6 +2229,17 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
           chamberType: ChamberType.FoodStorage,
           foodStored: 3 << 8,
           posX: 8 << 8,
+          posY: 2 << 8,
+          width: 4,
+          height: 3,
+        },
+        {
+          // A non-FoodStorage chamber never holds food in play; a nonzero value
+          // here (tampered / hypothetical) must NOT be counted.
+          chamberId: 9003,
+          chamberType: ChamberType.Nursery,
+          foodStored: 7 << 8,
+          posX: 14 << 8,
           posY: 2 << 8,
           width: 4,
           height: 3,
