@@ -1290,8 +1290,10 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       // MIN rose from V30 to V50 with the located food store; the whole old
       // acceptance window is now below it and reports OldSimVersionError (the
       // bootFromSave path overwrites such a save instead of loading it).
+      /** MIN_ACCEPTED_SIM_VERSION before the wipe (the old acceptance window's floor). */
+      const PRE_WIPE_MIN_ACCEPTED_SIM_VERSION = 30;
       expect(MIN_ACCEPTED_SIM_VERSION).toBe(SIM_VERSION_V50_LOCATED_FOOD);
-      for (let v = 30; v < SIM_VERSION_V50_LOCATED_FOOD; v++) {
+      for (let v = PRE_WIPE_MIN_ACCEPTED_SIM_VERSION; v < SIM_VERSION_V50_LOCATED_FOOD; v++) {
         const snapshot = makeSavedSnapshot((s) => {
           s.simVersion = v;
         });
@@ -1306,7 +1308,9 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       }
       // V50 itself loads.
       expect(() =>
-        deserializeWorldState(makeSavedSnapshot((s) => (s.simVersion = 50))),
+        deserializeWorldState(
+          makeSavedSnapshot((s) => (s.simVersion = SIM_VERSION_V50_LOCATED_FOOD)),
+        ),
       ).not.toThrow();
     });
   });
@@ -1550,6 +1554,19 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const s = serializeWorldState(w);
       const w2 = deserializeWorldState(s);
       expect(w2.tick).toBe(1_000_000);
+    });
+    it('#290 accepts tick 2^31 − 1 and rejects tick 2^31 (int32 tick domain for Int32 tick columns)', () => {
+      const w = createScenario(42);
+      // eslint-disable-next-line no-restricted-syntax
+      w.tick = 0x7fffffff;
+      for (const c of Object.values(w.colonies)) {
+        setMealsUntilStarvationForTest(w, c.queenEntityId, QUEEN_HUNGER, 300);
+      }
+      const s = serializeWorldState(w);
+      expect(deserializeWorldState(s).tick).toBe(0x7fffffff);
+      // eslint-disable-next-line no-restricted-syntax
+      (s as unknown as { tick: number }).tick = 0x80000000;
+      expect(() => deserializeWorldState(s)).toThrow(/Invalid tick in save/);
     });
 
     // -----------------------------------------------------------------------

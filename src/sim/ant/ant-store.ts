@@ -59,7 +59,11 @@ export interface AntComponents {
   readonly subTask: Int32Array;
   readonly speed: Int32Array;
   readonly foodCarrying: Int32Array;
-  /** #288 / #290 PR 2 (V50) — tick of the last successful meal (see src/sim/hunger.ts). */
+  /**
+   * #288 / #290 PR 2 (V50) — tick of the last successful meal (see src/sim/hunger.ts).
+   * Int32: world.tick stays in int32 range (the save loader rejects tick ≥ 2^31;
+   * ~3.4 years at 20 Hz, far past MATCH_TIMEOUT_TICKS).
+   */
   readonly lastMealTick: Int32Array;
   readonly age: Int32Array;
   readonly alive: Int32Array;
