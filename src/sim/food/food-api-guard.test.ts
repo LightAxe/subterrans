@@ -15,8 +15,9 @@
 // ordinary tokens. Type declarations (`foodStored: number` in an interface or type
 // literal) are declarations, not access, and are not reported.
 //
-// A reference is allowed only inside the named functions listed in ALLOWED below
-// (or anywhere in the facade files). Anything else fails the test with file:line.
+// A reference is allowed only inside the named functions listed in ALLOWED below,
+// and only of the reference kinds listed for that function (or anywhere in the
+// facade files). Anything else fails the test with file:line.
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -29,40 +30,68 @@ const SCAN_DIRS = ['src', 'scripts', 'bench'];
 const NAMES: ReadonlySet<string> = new Set(['foodPiles', 'foodStored']);
 const ANY = '*';
 
+type RefKind =
+  | 'member access'
+  | 'element access'
+  | 'destructuring'
+  | 'object-literal key'
+  | 'string literal';
+
+const KEY: readonly RefKind[] = ['object-literal key']; // record constructors
+const READ: readonly RefKind[] = ['member access']; // raw-JSON readers
+const STR: readonly RefKind[] = ['string literal']; // key-name lists
+
 /**
- * file → enclosing named functions allowed to reference food storage ('*' = whole
- * file). '<module>' is top-level code outside any function.
+ * file → enclosing named function → the reference KINDS it may use ('*' = any).
+ * '<module>' is top-level code outside any function; the function key '*' covers
+ * the whole file. Any-kind access is reserved for the facade, its test setter,
+ * copyWorldState and the save serializers/validators; everything else is pinned
+ * to the one kind it needs, so e.g. a raw `colony.foodStored += 1` inside a record
+ * constructor (a member access) still fails.
  */
-const ALLOWED: Readonly<Record<string, readonly string[]>> = {
+const ALLOWED: Readonly<Record<string, Readonly<Record<string, readonly RefKind[] | '*'>>>> = {
   // The facade and its test-only setter own the storage.
-  'src/sim/food/food-api.ts': [ANY],
-  'src/sim/food/food-test-utils.ts': [ANY],
-  // WorldState construction and cloning.
-  'src/sim/types.ts': ['createWorldState', 'copyWorldState'],
+  'src/sim/food/food-api.ts': { [ANY]: ANY },
+  'src/sim/food/food-test-utils.ts': { [ANY]: ANY },
+  // WorldState construction (literal) and cloning (field copies).
+  'src/sim/types.ts': { createWorldState: KEY, copyWorldState: ANY },
   // Record constructors: the record type still declares the field until PR 2.
-  'src/sim/colony/colony-store.ts': ['createColonyRecord'],
-  'src/sim/colony/colony-system.ts': ['checkPendingChambers'],
-  // Save serializer / validator / dialog summary: they own the on-disk shape.
-  'src/platform/save.ts': [
-    'validateChamberRecord',
-    'serializeColony',
-    'serializeWorldState',
-    'validateColonyScalars',
-    'deserializeColony',
-    'deserializeWorldState',
-    'getSaveInfo',
-    'savedChamberFoodFp',
-  ],
-  'src/platform/save-schema.ts': ['<module>'],
-  // The projection strips the storage-shaped keys from a serialized COPY.
-  'src/platform/food-projection.ts': ['<module>'],
+  'src/sim/colony/colony-store.ts': { createColonyRecord: KEY },
+  'src/sim/colony/colony-system.ts': { checkPendingChambers: KEY },
+  // Save serializer / validators own the on-disk shape.
+  'src/platform/save.ts': {
+    validateChamberRecord: ANY,
+    serializeColony: ANY,
+    serializeWorldState: ANY,
+    validateColonyScalars: ANY,
+    deserializeColony: ANY,
+    deserializeWorldState: ANY,
+    // The save-dialog summary reads the raw snapshot JSON, not a WorldState.
+    getSaveInfo: READ,
+    savedChamberFoodFp: READ,
+  },
+  'src/platform/save-schema.ts': { '<module>': STR },
+  // The projection strips the storage-shaped keys from a serialized COPY by name.
+  'src/platform/food-projection.ts': { '<module>': STR },
   // Bench fixture: chamber record literals.
-  'bench/tick-cost.bench.ts': ['buildBroodColony'],
+  'bench/tick-cost.bench.ts': { buildBroodColony: KEY },
 };
+
+/** Whether `ref` in `file` is allowed; returns the allow-list key it used, or null. */
+function allowedBy(file: string, ref: StorageRef): string | null {
+  const entry = ALLOWED[file];
+  if (entry === undefined) return null;
+  for (const fn of [ref.fn, ANY]) {
+    const kinds = entry[fn];
+    if (kinds === undefined) continue;
+    if (kinds === ANY || kinds.includes(ref.kind)) return `${fn}:${kinds === ANY ? ANY : ref.kind}`;
+  }
+  return null;
+}
 
 interface StorageRef {
   line: number;
-  kind: string;
+  kind: RefKind;
   fn: string;
   text: string;
 }
@@ -100,7 +129,7 @@ function enclosingFunctionName(node: ts.Node): string {
 function findStorageRefs(source: string, fileName = 'x.ts'): StorageRef[] {
   const sf = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const refs: StorageRef[] = [];
-  const hit = (node: ts.Node, kind: string): void => {
+  const hit = (node: ts.Node, kind: RefKind): void => {
     refs.push({
       line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
       kind,
@@ -170,11 +199,11 @@ function scan(): { violations: string[]; allowedUsed: Map<string, Set<string>> }
   for (const d of SCAN_DIRS) {
     for (const file of listTsFiles(join(ROOT, d))) {
       const rel = relative(ROOT, file).split('\\').join('/');
-      const allow = ALLOWED[rel] ?? [];
       for (const r of findStorageRefs(readFileSync(file, 'utf8'), rel)) {
-        if (allow.includes(ANY) || allow.includes(r.fn)) {
+        const by = allowedBy(rel, r);
+        if (by !== null) {
           if (!allowedUsed.has(rel)) allowedUsed.set(rel, new Set());
-          allowedUsed.get(rel)!.add(allow.includes(ANY) ? ANY : r.fn);
+          allowedUsed.get(rel)!.add(by);
         } else {
           violations.push(`${rel}:${r.line} in ${r.fn} (${r.kind}): ${r.text}`);
         }
@@ -191,14 +220,49 @@ describe('#290 food facade guard', () => {
     expect(result.violations).toEqual([]);
   });
 
-  it('every allow-list entry is still needed (keeps the list tight)', () => {
+  it('every allow-list entry (function × kind) is still needed (keeps the list tight)', () => {
     const stale: string[] = [];
     for (const [file, fns] of Object.entries(ALLOWED)) {
-      for (const fn of fns) {
-        if (!result.allowedUsed.get(file)?.has(fn)) stale.push(`${file} → ${fn}`);
+      for (const [fn, kinds] of Object.entries(fns)) {
+        const keys = kinds === ANY ? [`${fn}:${ANY}`] : kinds.map((k) => `${fn}:${k}`);
+        for (const k of keys)
+          if (!result.allowedUsed.get(file)?.has(k)) stale.push(`${file} → ${k}`);
       }
     }
     expect(stale).toEqual([]);
+  });
+
+  it('an allow-listed function may use only its listed reference kinds', () => {
+    // Reviewer repros: a raw write inside a record constructor, and a raw read
+    // hidden at module level of a file allowed only its key-name strings.
+    const cases: Array<[string, string]> = [
+      [
+        'src/sim/colony/colony-system.ts',
+        'function checkPendingChambers(world, colony, ch) {\n' +
+          '  colony.chambers.push({ chamberId: 1, foodStored: 0 });\n' +
+          '  createChamberStock(world, colony, ch);\n' +
+          '  colony.foodStored += 1;\n}',
+      ],
+      [
+        'src/platform/food-projection.ts',
+        'export const sneaky = { read: (w: any) => w.foodPiles.length };',
+      ],
+      ['src/sim/colony/colony-store.ts', 'function createColonyRecord(c) { c.foodStored = 5; }'],
+      ['bench/tick-cost.bench.ts', 'function buildBroodColony(c) { const { foodStored } = c; }'],
+      ['src/platform/save.ts', "function getSaveInfo(c) { return Reflect.get(c, 'foodStored'); }"],
+    ];
+    for (const [file, src] of cases) {
+      const refs = findStorageRefs(src, file);
+      const rejected = refs.filter((r) => allowedBy(file, r) === null);
+      expect(rejected.length, `${file}: ${src}`).toBeGreaterThan(0);
+    }
+    // …while the permitted kind in the same place still passes.
+    const ok = findStorageRefs(
+      'function checkPendingChambers(colony) { colony.chambers.push({ foodStored: 0 }); }',
+      'src/sim/colony/colony-system.ts',
+    );
+    expect(ok.length).toBe(1);
+    expect(ok.every((r) => allowedBy('src/sim/colony/colony-system.ts', r) !== null)).toBe(true);
   });
 
   it('catches every known escaping shape', () => {
