@@ -27,6 +27,7 @@ the Phase 4 WorldState reshape unless another issue owns them.
 | AI targets PLAYER_COLONY_ID only | `ai-state.ts:150-154,276-280,549`, `ai-controller.ts:780-791,867-878` | two-colony logic | none | Phase 4 reshape |
 | Underground input hardcodes PLAYER_COLONY_ID (~10 sites) | `underground-input.ts` (cf. `surface-input.ts:354,449`) | two-colony logic | none | Phase 4 reshape |
 | Input world dims branch on constants | `gesture-arbiter.ts:206-210`, `camera-input.ts:194` | constant-bounds (input) | none | Phase 4 reshape |
+| Food store capacity = piles + MAX_COLONIES × (pool + physical FoodStorage bound) | `constants.ts` (`MAX_COLONIES`, `FOOD_STORAGE_CHAMBERS_PER_COLONY_BOUND`, `FOOD_STORE_CAPACITY`) | capacity / colony count | guard added (typed-const tripwires on the grid + footprint constants; `food-store.test.ts` re-derives the bound; the loader rejects > MAX_COLONIES colonies) | #290 PR 2 |
 | SpiderState 28-field singleton mirrored 3× | types iface / `copyWorldState` / `save.ts` | predator model | none | Phase 4 reshape (5b) |
 
 ## Guard pattern
