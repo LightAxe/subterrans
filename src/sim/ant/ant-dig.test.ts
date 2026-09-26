@@ -13,26 +13,7 @@ import { Zone, UndergroundTileState, ugGet, ugSet, createUndergroundGrid } from 
 import { createDigFlowFields, computeDigFlowField } from '../dig-system.js';
 import type { WorldState } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
-
-/** #290 PR 1 — push a synthetic pile (test-only direct storage write) and return its slot. */
-function pushTestPile(
-  world: WorldState,
-  pickupsRemaining: number,
-): { slot: number; pile: WorldState['foodPiles'][number] } {
-  const pile = {
-    foodPileId: 90_000 + world.foodPiles.length,
-    tileX: 0,
-    tileY: 0,
-    pickupsRemaining,
-    pickupsInitial: pickupsRemaining > 0 ? pickupsRemaining : 1,
-  };
-  world.foodPiles.push(pile);
-  return { slot: world.foodPiles.length - 1, pile };
-}
-
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
+import { pushTestPile } from '../food/food-test-utils.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers

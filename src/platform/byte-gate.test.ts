@@ -41,6 +41,11 @@ import {
   STARVATION_GRACE_TICKS,
   WORKER_BASE_SPEED,
   WORKER_LIFESPAN_TICKS,
+  CORPSE_PICKUPS_FIGHTER,
+  CORPSE_PICKUPS_QUEEN,
+  CORPSE_PICKUPS_SPIDER,
+  CORPSE_PICKUPS_WORKER,
+  FOOD_PICKUP_AMOUNT,
 } from '../sim/constants.js';
 import type { SimCommand } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
@@ -62,6 +67,13 @@ import {
   pileTileY,
 } from '../sim/food/food-api.js';
 import { setColonyFoodForTest } from '../sim/food/food-test-utils.js';
+
+/** Initial size (fp) of a freshly dropped corpse pile, one per corpse kind. */
+const FRESH_CORPSE_PILE_FP: ReadonlySet<number> = new Set(
+  [CORPSE_PICKUPS_WORKER, CORPSE_PICKUPS_FIGHTER, CORPSE_PICKUPS_QUEEN, CORPSE_PICKUPS_SPIDER].map(
+    (n) => n * FOOD_PICKUP_AMOUNT,
+  ),
+);
 
 const MODE = process.env.BYTE_GATE_MODE; // 'capture' | 'verify' | undefined
 const FILE = process.env.BYTE_GATE_FILE ?? '';
@@ -374,8 +386,9 @@ function observe(
     if (q === undefined) {
       if (p.corpse) {
         cov.corpsePilesCreated++;
-        if (p.initialFp !== 512 && p.initialFp !== 8 * 512 && p.initialFp !== 100 * 512)
-          cov.pileTopUps++;
+        // A fresh corpse pile's size is one of the per-kind yields; anything else
+        // means two deaths merged into it within one tick (a top-up).
+        if (!FRESH_CORPSE_PILE_FP.has(p.initialFp)) cov.pileTopUps++;
       } else cov.naturalSpawns++;
     } else if (p.initialFp > q.initialFp) cov.pileTopUps++;
   }
