@@ -40,15 +40,7 @@ import {
   surfaceGoalDistance,
 } from '../surface-routing.js';
 import { UndergroundTileState, Zone, ugGet } from '../terrain.js';
-import {
-  SIM_VERSION_V33_OCCUPANCY_CENTER,
-  SIM_VERSION_V34_IDLE_RESERVE_FLEE,
-  SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
-  SIM_VERSION_V36_RISK_AWARE_FORAGING,
-  SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
-  type WorldState,
-  SIM_VERSION_V49_ALARM_MUSTER,
-} from '../types.js';
+import type { WorldState } from '../types.js';
 import {
   pickInvaderUndergroundStep,
   pickNearestHostileUnderground,
@@ -188,17 +180,14 @@ export function tickAntMovement(
   // hot-loop allocation rule (Codex P1). The colonyId→grid array lives on the
   // per-world scratch arena (#231 pattern): reset its length and repopulate in place
   // so nothing allocates per tick — neither the array nor an `Object.keys` snapshot
-  // (for-in walks the colony keys directly). Left empty (all undefined) pre-V36, so
-  // the gated reads see `undefined` and V35 replays stay byte-identical.
+  // (for-in walks the colony keys directly).
   const surfaceDangerByColony = arena.surfaceDangerByColony;
   surfaceDangerByColony.length = 0;
-  if (world.simVersion >= SIM_VERSION_V36_RISK_AWARE_FORAGING) {
-    for (const cidKey in world.colonies) {
-      if (!Object.hasOwn(world.colonies, cidKey)) continue;
-      const cid = Number(cidKey);
-      surfaceDangerByColony[cid] =
-        world.pheromoneGrids[pheromoneGridKey(cid, PheromoneType.DangerTrail, 'surface')];
-    }
+  for (const cidKey in world.colonies) {
+    if (!Object.hasOwn(world.colonies, cidKey)) continue;
+    const cid = Number(cidKey);
+    surfaceDangerByColony[cid] =
+      world.pheromoneGrids[pheromoneGridKey(cid, PheromoneType.DangerTrail, 'surface')];
   }
 
   for (let id = 0; id < world.nextEntityId; id++) {
@@ -211,11 +200,10 @@ export function tickAntMovement(
 
     // #209 PR A (V34) — flee/hold phase (-1 not fleeing / 0 dashing to an
     // entrance / >0 a timed HOLD: underground = sheltering at the shaft, surface
-    // = a homebound forager with no safe entrance held in place). Captured once;
-    // -1 for pre-V34 worlds so every flee branch below is inert. Step 15b
-    // (tickIdleReserveAndFlee) owns all writes; movement only reads it to steer.
-    const fleePhase =
-      world.simVersion >= SIM_VERSION_V34_IDLE_RESERVE_FLEE ? ants.fleeShelterUntilTick[id]! : -1;
+    // = a homebound forager with no safe entrance held in place). Captured once.
+    // Step 15b (tickIdleReserveAndFlee) owns all writes; movement only reads it to
+    // steer.
+    const fleePhase = ants.fleeShelterUntilTick[id]!;
     // Any hold (>0, either zone) FREEZES the ant: no movement, no ascent, no
     // deeper routing — bypass the whole dispatch + zone-transition block until
     // step 15b clears it (all-clear / safe route) or re-arms it. Sheltering ants
@@ -632,14 +620,11 @@ export function tickAntMovement(
       //       roll only runs for SearchingFood — CarryingFood and
       //       ReturningToNest are reachability-driven and shouldn't pause.
       //
-      // Determinism gating (codex follow-up): the entire pause block is
-      // gated on simVersion >= V4 because the RNG pulls below didn't exist
-      // pre-v4. A pre-v4 save replaying through this path must NOT consume
-      // those rolls or its rng.state diverges from the original record.
-      // Sticky simVersion on load (types.ts) keeps v3 saves on the no-pause
-      // path forever; new worlds (LATEST_SIM_VERSION = v4) get the feature.
+      // Determinism: the roll below is a world-RNG pull on every surface
+      // SearchingFood tick, so any change to when it runs changes rng.state
+      // (the pause shipped in V4; its gate was reaped once MIN passed V4).
       //
-      // Throughput impact (v4 only): ~12% of search time paused with the
+      // Throughput impact: ~12% of search time paused with the
       // default constants (probability 1/50, duration 5-9 ticks). Tuned to
       // stay inside the ±15% throughput band acceptance criterion.
       if (ants.subTask[id] === ForagingSubState.SearchingFood && zone === Zone.Surface) {
@@ -734,8 +719,8 @@ export function tickAntMovement(
         } else {
           // A1 (V36): the ant's own surface DangerTrail grid, threaded into the
           // sampler and the wander edge-bounce so SearchingFood foragers prefer
-          // safer routes. Gated AND surface-only — undefined otherwise, which is
-          // the byte-identical legacy path.
+          // safer routes. Surface-only — undefined underground, where the sampler
+          // and wander ignore danger.
           const dangerGrid = zone === Zone.Surface ? surfaceDangerByColony[colonyId] : undefined;
           const key = pheromoneGridKey(colonyId, PheromoneType.FoodTrail, 'surface');
           const grid = world.pheromoneGrids[key];
@@ -932,12 +917,6 @@ export function tickAntMovement(
         dy = 0;
       }
     } else if (
-      // Explicit V34 gate: `fleePhase === -1` alone is ALSO true on pre-V34
-      // worlds (fleePhase is hard-coded -1 there), so without this a pre-V34
-      // replay with a surface Idle ant carrying a stray target would step it
-      // (base `main` holds via getTaskDirection) — a byte-identity divergence.
-      // Gate here for parity with step 15b and every other V34 path.
-      world.simVersion >= SIM_VERSION_V34_IDLE_RESERVE_FLEE &&
       fleePhase === -1 &&
       zone === Zone.Surface &&
       task === AntTask.Idle &&
@@ -978,13 +957,8 @@ export function tickAntMovement(
         dy = unpackStepDy(step);
       }
     } else if (
-      // #209 PR C (V35) — underground idle-reserve wander. Same explicit-gate
-      // reasoning as the V34 surface mill above: `fleePhase === -1` is true on
-      // pre-V35 worlds too, so the simVersion gate stops a pre-V35 replay with a
-      // stray target on an idle underground ant from stepping (base holds via
-      // getTaskDirection → (0,0)) — a byte-identity divergence. Step 15b
+      // #209 PR C (V35) — underground idle-reserve wander. Step 15b
       // (setUndergroundWanderStep) owns the target write.
-      world.simVersion >= SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER &&
       fleePhase === -1 &&
       zone === Zone.Underground &&
       task === AntTask.Idle &&
@@ -1046,14 +1020,10 @@ export function tickAntMovement(
     // deliberate emergency path to shelter, and returning toward the safe entrance
     // commonly steps onto just-vacated tiles — the generic SearchingFood
     // anti-backtrack would otherwise veer the fleeing forager AWAY from shelter
-    // (Codex P2). Gated to V34 + dash phase + surface, so ordinary foraging
-    // anti-oscillation is unchanged and pre-V34 replays stay byte-identical; the
-    // generic no-revisit rule itself is NOT broadened.
-    const bypassRecentTiles =
-      targetedStep ||
-      (world.simVersion >= SIM_VERSION_V34_IDLE_RESERVE_FLEE &&
-        fleePhase === 0 &&
-        zone === Zone.Surface);
+    // (Codex P2). Limited to the dash phase on the surface, so ordinary foraging
+    // anti-oscillation is unchanged; the generic no-revisit rule itself is NOT
+    // broadened.
+    const bypassRecentTiles = targetedStep || (fleePhase === 0 && zone === Zone.Surface);
     if (
       !bypassRecentTiles &&
       zone === Zone.Surface &&
@@ -1061,20 +1031,12 @@ export function tickAntMovement(
       ants.subTask[id] === ForagingSubState.SearchingFood &&
       (dx !== 0 || dy !== 0)
     ) {
-      // A1 (V36): the ant's colony surface DangerTrail grid (undefined pre-V36 /
-      // danger-free → the legacy first-fresh pick, byte-identical).
+      // A1 (V36): the ant's colony surface DangerTrail grid (undefined when
+      // danger-free → the first-fresh pick).
       const noRevisitDangerGrid = surfaceDangerByColony[ants.colonyId[id]!];
       // V40 (#299): release a boxed-in searcher instead of pausing it forever (see
-      // pickNoRevisitSurfaceAlternate). Pre-V40 keeps the permanent pause.
-      pickNoRevisitSurfaceAlternate(
-        ants,
-        id,
-        dx,
-        dy,
-        noRevisitDangerGrid,
-        noRevisitAlt,
-        world.simVersion >= SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
-      );
+      // pickNoRevisitSurfaceAlternate).
+      pickNoRevisitSurfaceAlternate(ants, id, dx, dy, noRevisitDangerGrid, noRevisitAlt, true);
       dx = noRevisitAlt.dx;
       dy = noRevisitAlt.dy;
     }
@@ -1237,8 +1199,7 @@ export function tickAntMovement(
       const yCrossed = newTileY !== prevTileY;
       let blocked = false;
       // Both danger-grid consumers below (the per-axis revert and the blocked detour)
-      // gate on the same predicate — hoist it once (CodeRabbit). Empty
-      // surfaceDangerByColony pre-V36 keeps the grid undefined there, byte-identical.
+      // gate on the same predicate — hoist it once (CodeRabbit).
       const isSurfaceSearchingForager =
         task === AntTask.Foraging && ants.subTask[id] === ForagingSubState.SearchingFood;
       if (xCrossed && yCrossed) {
@@ -1268,11 +1229,8 @@ export function tickAntMovement(
         // reverted straight into a spider-wake tile (Codex P2). Prefer a danger-safe
         // revert; if the only available revert(s) land on danger, fall through to the
         // now-danger-aware pickSurfaceDetour (blocked) rather than step in. Scoped to
-        // surface SearchingFood foragers; no explicit simVersion check — the same
-        // convention as the other three surfaceDangerByColony consumers (sampler /
-        // no-revisit / detour): the array is empty pre-V36, so the lookup returns
-        // undefined there, both `*RevertDanger` are false, and the branch order below
-        // collapses to the legacy passX-first pick, byte-identical.
+        // surface SearchingFood foragers. With no danger grid both `*RevertDanger`
+        // are false and the branch order below collapses to the passX-first pick.
         const axisDangerGrid = isSurfaceSearchingForager
           ? surfaceDangerByColony[ants.colonyId[id]!]
           : undefined;
@@ -1304,8 +1262,8 @@ export function tickAntMovement(
       if (blocked) {
         // A1 (V36): make the obstacle detour danger-aware for surface SearchingFood
         // foragers so a blocked risk-aware step isn't snapped into a spider-wake
-        // tile (Codex). Scoped + gated — undefined for the queen / other tasks /
-        // pre-V36, so their detours (and V35 replays) stay byte-identical.
+        // tile (Codex). Scoped — undefined for the queen / other tasks, so their
+        // detours are unchanged.
         const detourDangerGrid = isSurfaceSearchingForager
           ? surfaceDangerByColony[ants.colonyId[id]!]
           : undefined;
@@ -1423,10 +1381,7 @@ export function tickAntMovement(
       if (
         task === AntTask.Foraging &&
         ants.subTask[id] === ForagingSubState.ReturningToNest &&
-        !(
-          world.simVersion >= SIM_VERSION_V49_ALARM_MUSTER &&
-          world.colonies[ants.colonyId[id]!]?.alarmActive === true
-        )
+        world.colonies[ants.colonyId[id]!]?.alarmActive !== true
       ) {
         const tileXR = posX >> FP_SHIFT;
         const tileYR = posY >> FP_SHIFT;
@@ -1476,7 +1431,6 @@ export function tickAntMovement(
         // too, instead of turning round at the entrance to search again.
         (task === AntTask.Foraging &&
           ants.subTask[id] === ForagingSubState.ReturningToNest &&
-          world.simVersion >= SIM_VERSION_V49_ALARM_MUSTER &&
           world.colonies[ants.colonyId[id]!]?.alarmActive === true) ||
         // #209 PR A (V34) — a dashing fleeing ant descends its own open entrance
         // regardless of task/subtask (fixes both Idle-can't-descend and
@@ -1611,11 +1565,8 @@ export function tickAntMovement(
           // onto a shaft tile can't pump it up. An idle worker that SHOULD surface
           // (post-deposit / post-shelter) has no target here — step 15b never
           // fresh-picks at the shaft row, and the shelter-release clears it — so it
-          // still ascends. Pre-V35: unconditional (base behaviour, replay-safe).
-          !(
-            world.simVersion >= SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER &&
-            ants.targetPosX[id] !== -1
-          )) ||
+          // still ascends.
+          ants.targetPosX[id] === -1) ||
         task === AntTask.Fighting ||
         (task === AntTask.Foraging &&
           (ants.subTask[id] === ForagingSubState.SearchingFood ||
@@ -1757,10 +1708,8 @@ function surfaceEntranceFieldDir(
 function resolveSameColonyOccupancy(world: WorldState): void {
   const ants = world.ants;
   // V33 (#243): park a shifted ant at tile CENTER, like every other position
-  // writer, instead of the tile corner. `+ 0` is bit-identical to the old corner
-  // write, preserving pre-V33 replay.
-  const occupancyCenterOffset =
-    world.simVersion >= SIM_VERSION_V33_OCCUPANCY_CENTER ? FP_ONE >> 1 : 0;
+  // writer, instead of the tile corner.
+  const occupancyCenterOffset = FP_ONE >> 1;
   // Issue #67 — reuse a module-level Map instead of allocating per tick.
   // Map.clear() is O(n) where n is the size of the previous tick's map;
   // negligible vs. the prior `new Map()` + GC churn. Same observable
@@ -1792,12 +1741,8 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     // a livelock measured at 1 600-3 000 ticks per forager on the #297 seeds (two
     // foragers of a 3-worker colony frozen on the doorstep while its queen starved).
     // Stacking on the queen is already allowed inside chamber footprints; allow it
-    // everywhere. Gated so pre-V40 replays keep the bump byte-for-byte.
-    if (
-      world.simVersion >= SIM_VERSION_V40_SMALL_COLONY_SURVIVAL &&
-      world.colonies[colonyId]?.queenEntityId === id
-    )
-      continue;
+    // everywhere.
+    if (world.colonies[colonyId]?.queenEntityId === id) continue;
     const zone = ants.zone[id]!;
     // Issue #61 — include `gridColonyId` in the occupancy key so cross-grid
     // ants (Phase 09.1 Chunk 3+4 fighter invaders with currentGridColonyId !==
@@ -1854,8 +1799,8 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     // then fall back to the legacy first-passable pass so a displacement still always
     // happens. displaceDangerGrid is the colony's surface DangerTrail grid from the
     // per-tick arena cache tickAntMovement already populated this tick; undefined for the
-    // queen / other tasks / underground / pre-V36 (empty cache) — so the safe pass is
-    // skipped and the legacy first-passable pick is byte-identical.
+    // queen / other tasks / underground — so the safe pass is skipped and the
+    // first-passable pick applies.
     const displaceDangerGrid =
       zone === Zone.Surface &&
       task === AntTask.Foraging &&

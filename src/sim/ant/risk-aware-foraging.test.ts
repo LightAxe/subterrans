@@ -19,13 +19,7 @@ import { describe, it, expect } from 'vitest';
 import { sampleForagingDirection } from '../pheromone/pheromone-system.js';
 import { chooseExcursionDirection, tickAntMovement } from './ant-system.js';
 import { pickNoRevisitSurfaceAlternate } from './ant-foraging.js';
-import {
-  createWorldState,
-  allocateEntityId,
-  SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
-  SIM_VERSION_V36_RISK_AWARE_FORAGING,
-  type WorldState,
-} from '../types.js';
+import { createWorldState, allocateEntityId, type WorldState } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt, pushRecentTile } from './ant-store.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
@@ -372,8 +366,8 @@ describe('A1 (e) no-revisit alternate is danger-aware at V36', () => {
   // A wandering SearchingFood forager at (10,10) committed east; the east tile
   // (11,10) is a recent tile, so the no-revisit swap fires. In ALT order the
   // first fresh alternate is North (10,9); we make North a spider-wake tile and
-  // leave NE (11,9) clean. Legacy takes North (no +x); V36 skips it for NE (+x).
-  function setup(simVersion: number): {
+  // leave NE (11,9) clean. The danger-blind pick would be North (no +x).
+  function setup(): {
     world: WorldState;
     antId: number;
     x0: number;
@@ -381,7 +375,6 @@ describe('A1 (e) no-revisit alternate is danger-aware at V36', () => {
     danger: PheromoneGrid;
   } {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
-    world.simVersion = simVersion;
     const colony = createColonyRecord(COLONY_ID, 0);
     colony.entrances = [
       { entranceId: allocateEntityId(world), surfaceTileX: 0, surfaceTileY: 0, isOpen: true },
@@ -437,7 +430,7 @@ describe('A1 (e) no-revisit alternate is danger-aware at V36', () => {
     // intermediate check now ALSO rejects NE, because a partial diagonal crossing could
     // land on North (NE's Y-intermediate). The swap therefore takes a fully-safe fresh
     // alternate (destination + both intermediates clean), so the ant ends off the wake.
-    const { world, antId, x0, y0, danger } = setup(SIM_VERSION_V36_RISK_AWARE_FORAGING);
+    const { world, antId, x0, y0, danger } = setup();
     move(world);
     // Liveness: the ant actually moved this tick (sub-tile drift toward the safe
     // alternate at the default half-tile worker speed) — it did not freeze in place.
@@ -446,12 +439,5 @@ describe('A1 (e) no-revisit alternate is danger-aware at V36', () => {
     const ey = world.ants.posY[antId]! >> FP_SHIFT;
     expect(ex === 10 && ey === 9).toBe(false); // not the poisoned North (10,9)
     expect(phGet(danger, ex, ey)).toBeLessThan(DANGER_ROUTE_AVOID_THRESHOLD); // danger-safe tile
-  });
-
-  it('V35 control: takes the first fresh alternate North — only −y, no +x (danger ignored)', () => {
-    const { world, antId, x0, y0 } = setup(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER);
-    move(world);
-    expect(world.ants.posX[antId]!).toBe(x0); // North: no east component
-    expect(world.ants.posY[antId]! < y0).toBe(true); // North: north component
   });
 });

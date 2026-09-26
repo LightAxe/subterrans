@@ -5,13 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { standDownSurplusSentries } from './ant/ant-system.js';
 import { createScenario } from './scenario.js';
 import { tick } from './tick.js';
-import {
-  createWorldState,
-  allocateEntityId,
-  SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE,
-  SIM_VERSION_V47_SENTRY_STAND_DOWN,
-  type WorldState,
-} from './types.js';
+import { createWorldState, allocateEntityId, type WorldState } from './types.js';
 import { createColonyRecord, type ColonyRecord } from './colony/colony-store.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask, FightingSubState } from './enums.js';
@@ -21,12 +15,11 @@ import { PLAYER_COLONY_ID, WORKER_BASE_SPEED, WORKER_LIFESPAN_TICKS } from './co
 
 const COLONY_ID = 1;
 
-function world(version: number = SIM_VERSION_V47_SENTRY_STAND_DOWN): {
+function world(): {
   world: WorldState;
   colony: ColonyRecord;
 } {
   const w = createWorldState(42, 64);
-  w.simVersion = version;
   const colony = createColonyRecord(COLONY_ID, -1);
   colony.entrances = [{ entranceId: 1, surfaceTileX: 40, surfaceTileY: 40, isOpen: true }];
   colony.rallyPoint = null;
@@ -325,21 +318,12 @@ describe('standDownSurplusSentries (V47, #332)', () => {
       expect(tasks(w, ids)).toEqual([AntTask.Fighting, AntTask.Fighting, AntTask.Fighting]);
     }
   });
-
-  it('pre-V47 (pinned V46): releases nobody', () => {
-    const { world: w, colony } = world(SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE);
-    const ids = [0, 1, 2].map(() => addFighter(w, colony));
-    colony.computedAllocation.fight = 0;
-    standDownSurplusSentries(w, colony);
-    expect(tasks(w, ids)).toEqual([AntTask.Fighting, AntTask.Fighting, AntTask.Fighting]);
-  });
 });
 
 describe('V47 (#332) through tick(): a war-sized garrison shrinks back to the ratio', () => {
   /** The player colony with 20 extra fighters at its entrance and a peacetime ratio. */
-  function build(version: number): { world: WorldState; colony: ColonyRecord } {
+  function build(): { world: WorldState; colony: ColonyRecord } {
     const w = createScenario(7, 'Normal');
-    w.simVersion = version;
     w.spider = null;
     w.aiState = [];
     const colony = w.colonies[PLAYER_COLONY_ID]!;
@@ -373,18 +357,12 @@ describe('V47 (#332) through tick(): a war-sized garrison shrinks back to the ra
   }
 
   it('V47: once they settle, fighters drop to the allocation and the rest go back to work', () => {
-    const { world: w, colony } = build(SIM_VERSION_V47_SENTRY_STAND_DOWN);
+    const { world: w, colony } = build();
     run(w, 400);
     expect(fighters(w, colony)).toBeLessThanOrEqual(colony.computedAllocation.fight + 1);
     const released = colony.workers.filter(
       (id) => w.ants.alive[id] === 1 && w.ants.task[id] === AntTask.Foraging,
     ).length;
     expect(released).toBeGreaterThan(10);
-  });
-
-  it('V46 (pinned): the same garrison stays fighters', () => {
-    const { world: w, colony } = build(SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE);
-    run(w, 400);
-    expect(fighters(w, colony)).toBeGreaterThanOrEqual(20);
   });
 });

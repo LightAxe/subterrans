@@ -15,18 +15,14 @@ import {
   SIM_VERSION_V20_SPIDER,
   SIM_VERSION_V23_SPIDER_AGGRO,
   SIM_VERSION_V32_AI_OP_VALIDATION,
-  SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
-  SIM_VERSION_V36_RISK_AWARE_FORAGING,
   SIM_VERSION_V37_CORPSE_FOOD,
   SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH,
   SIM_VERSION_V39_SPIDER_TIEBREAK,
   SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
   SIM_VERSION_V41_DEATH_CHOKEPOINT,
   SIM_VERSION_V42_COLONY_ALARM,
-  SIM_VERSION_V43_FIGHTER_SENTRIES,
-  SIM_VERSION_V44_TUNNEL_DEFENCE,
 } from './types.js';
-import { initAnt, pushRecentTile } from './ant/ant-store.js';
+import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import {
   createPheromoneGrid,
@@ -1211,34 +1207,15 @@ describe('A1 (V36) risk-aware foraging — replay determinism', () => {
     }
   }
 
-  function run(simVersion: number): WorldState {
+  function run(): WorldState {
     const world = createScenario(SEED);
-    world.simVersion = simVersion;
     depositSurfaceDanger(world, DANGER);
     for (let t = 0; t < TICKS; t++) tick(world, []);
     return world;
   }
 
-  it('V36 with danger routing active replays byte-identically (same seed → same state)', () => {
-    expect(serializeWorldState(run(SIM_VERSION_V36_RISK_AWARE_FORAGING))).toBe(
-      serializeWorldState(run(SIM_VERSION_V36_RISK_AWARE_FORAGING)),
-    );
-  });
-
-  it('V35 with the same danger replays byte-identically (gated-off legacy path)', () => {
-    expect(serializeWorldState(run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER))).toBe(
-      serializeWorldState(run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER)),
-    );
-  });
-
-  it('V36 diverges from V35 under the same danger — behavioral (rngState, not simVersion)', () => {
-    // Compare rngState, NOT the full serialization: serializeWorldState includes the
-    // simVersion field (36 vs 35), so a full-string compare would pass even if the
-    // gated behavior were inactive (CodeRabbit). rngState diverges only when the
-    // danger penalty actually flips a sampler RNG branch during the run.
-    expect(run(SIM_VERSION_V36_RISK_AWARE_FORAGING).rngState).not.toBe(
-      run(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER).rngState,
-    );
+  it('danger routing active replays byte-identically (same seed → same state)', () => {
+    expect(serializeWorldState(run())).toBe(serializeWorldState(run()));
   });
 });
 
@@ -1385,97 +1362,10 @@ describe('SCEN-06: pre-V39 replay determinism under V39 code', () => {
 });
 
 // ---------------------------------------------------------------------------
-// V40 — small-colony survival (#299): the pre-V40 path is untouched, and the V40
-// path is live.
-//
-// Same two obligations as SCEN-06 for V39 above: (a) a save pinned below V40 keeps
-// replaying under the OLD rule (same-build self-compare — see the scope note on the
-// V39 block for why a single build can assert no more than that), and (b) the new
-// rule actually changes a real run, measured against V39, V40's immediate
-// predecessor, so the difference is attributable to V40 alone.
-//
-// Liveness scenario: a surface SearchingFood forager boxed in by its own
-// recent-tiles ring (every neighbour recent). Pre-V40 the no-revisit filter answers
-// {0,0} every tick and the ring never advances, so the ant never leaves its tile;
-// V40 releases it. Driven through tick(), not tickAntMovement, so the gate is
-// exercised at the real call site. The per-rule unit pins (both sides of every
-// gate) live in ant-movement.test.ts and allocation-system.test.ts.
-// ---------------------------------------------------------------------------
-
-describe('SCEN-06: pre-V40 replay determinism under V40 code', () => {
-  const TICKS = 60; // far past the longest search pause (base 5 + jitter 5)
-  const TILE = 10;
-
-  function runBoxed(simVersion: number): WorldState {
-    const world = createWorldState(42);
-    world.simVersion = simVersion; // sticky, exactly as a loaded save arrives
-    const queenId = allocateEntityId(world);
-    initAnt(world.ants, queenId, {
-      colonyId: 1,
-      posX: 40 << FP_SHIFT,
-      posY: 40 << FP_SHIFT,
-      task: AntTask.Idle,
-      subTask: 0,
-      speed: 0,
-      lifespan: WORKER_LIFESPAN_TICKS,
-    });
-    const colony = createColonyRecord(1, queenId);
-    setPoolFoodForTest(world, colony, 2048);
-    colony.entrances = [];
-    colony.rallyPoint = null;
-    colony.digFlowFieldDirty = false;
-    colony.foodFlowFieldDirty = false;
-    world.colonies[1] = colony;
-    world.pheromoneGrids[pheromoneGridKey(1, PheromoneType.FoodTrail, 'surface')] =
-      createPheromoneGrid(SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT);
-    // The forager is deliberately NOT in colony.workers: step 9 then never
-    // reassigns it, so the only thing that can move it is the search step.
-    const antId = allocateEntityId(world);
-    initAnt(world.ants, antId, {
-      colonyId: 1,
-      posX: (TILE << FP_SHIFT) + (FP_ONE >> 1),
-      posY: (TILE << FP_SHIFT) + (FP_ONE >> 1),
-      task: AntTask.Foraging,
-      subTask: ForagingSubState.SearchingFood,
-      speed: WORKER_BASE_SPEED,
-      lifespan: WORKER_LIFESPAN_TICKS,
-    });
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        if (dx !== 0 || dy !== 0) pushRecentTile(world.ants, antId, TILE + dx, TILE + dy);
-      }
-    }
-    for (let t = 0; t < TICKS; t++) tick(world, []);
-    return world;
-  }
-
-  function foragerTile(world: WorldState): string {
-    // Entity 1 is the forager (entity 0 the queen) in runBoxed.
-    return `${world.ants.posX[1]! >> FP_SHIFT},${world.ants.posY[1]! >> FP_SHIFT}`;
-  }
-
-  it('a V39-pinned world replays byte-identically across two independent runs', () => {
-    expect(serializeWorldState(runBoxed(SIM_VERSION_V39_SPIDER_TIEBREAK))).toBe(
-      serializeWorldState(runBoxed(SIM_VERSION_V39_SPIDER_TIEBREAK)),
-    );
-  });
-
-  it('V40 diverges from its IMMEDIATE predecessor V39 (the gate is live): the boxed forager moves only at V40', () => {
-    // Compare the forager's tile, NOT the full serialization: the serialized string
-    // carries the simVersion field itself (39 vs 40), so a full-string compare would
-    // pass even with the gated behaviour inert.
-    expect(foragerTile(runBoxed(SIM_VERSION_V39_SPIDER_TIEBREAK))).toBe(`${TILE},${TILE}`);
-    expect(foragerTile(runBoxed(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL))).not.toBe(
-      `${TILE},${TILE}`,
-    );
-  });
-});
-
-// ---------------------------------------------------------------------------
 // V41 — single ant-death chokepoint (#289): the pre-V41 path is untouched, and the
 // V41 path is live.
 //
-// Same two obligations as SCEN-06 for V39/V40 above: (a) a save pinned below V41
+// Same two obligations as SCEN-06 for V39 above: (a) a save pinned below V41
 // keeps replaying under the OLD rule (same-build self-compare — see the scope note
 // on the V39 block for why a single build can assert no more than that), and (b) the
 // new rule actually changes a real run, measured against V40, V41's immediate
@@ -1791,151 +1681,5 @@ describe('SCEN-06: pre-V42 replay determinism under V42 code', () => {
     const v42 = surfaceWorkers(runAlarmed(SIM_VERSION_V42_COLONY_ALARM));
     expect(v41).toBeGreaterThan(0); // pre-V42 the alarm field is inert — they mill on
     expect(v42).toBeLessThan(v41); // at V42 they head for the door
-  }, 30_000);
-});
-
-// ---------------------------------------------------------------------------
-// V43 — fighter sentries (#323): the pre-V43 path is untouched, and the V43 path
-// is live.
-//
-// Same two obligations as the blocks above: (a) a save pinned below V43 keeps
-// replaying under the OLD rule (same-build self-compare), and (b) the new rule
-// changes a real run, measured against V42, V43's immediate predecessor.
-//
-// Liveness scenario: two player fighters with NO rally point, standing on the
-// colony's open entrance, spider removed so only the door rules act. Below V43
-// the targeting sends them onto the entrance tile and the descent block drops
-// them in, so they bounce between the zones every tick; at V43 they walk to
-// sentry posts and never go down. Driven through tick(), so step 10c (targeting)
-// and step 16 (descent) are exercised at their real call sites. The per-rule
-// pins live in fighter-sentries.test.ts and ant/ant-combat-targeting.test.ts.
-// ---------------------------------------------------------------------------
-
-describe('SCEN-06: pre-V43 replay determinism under V43 code', () => {
-  const TICKS = 30;
-
-  function runIdleFighters(simVersion: number): { world: WorldState; flips: number } {
-    const world = createScenario(7, 'Normal');
-    world.spider = null;
-    world.aiState = [];
-    world.simVersion = simVersion; // sticky, exactly as a loaded save arrives
-    const colony = world.colonies[PLAYER_COLONY_ID]!;
-    const ent = colony.entrances.find((e) => e.isOpen)!;
-    const ids: number[] = [];
-    for (let i = 0; i < 2; i++) {
-      const id = allocateEntityId(world);
-      initAnt(world.ants, id, {
-        colonyId: PLAYER_COLONY_ID,
-        posX: (ent.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1),
-        posY: (ent.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1),
-        task: AntTask.Fighting,
-        subTask: 0,
-        speed: WORKER_BASE_SPEED,
-        zone: Zone.Surface,
-      });
-      colony.workers.push(id);
-      colony.workerCount += 1;
-      ids.push(id);
-    }
-    colony.targetRatio.fight = 5; // keep the V40 stand-down from demoting them
-    let flips = 0;
-    const last = ids.map((id) => world.ants.zone[id]!);
-    for (let t = 0; t < TICKS; t++) {
-      tick(world, []);
-      ids.forEach((id, k) => {
-        const z = world.ants.zone[id]!;
-        if (z !== last[k]) flips += 1;
-        last[k] = z;
-      });
-    }
-    return { world, flips };
-  }
-
-  it('a V42-pinned world replays byte-identically across two independent runs', () => {
-    expect(serializeWorldState(runIdleFighters(SIM_VERSION_V42_COLONY_ALARM).world)).toBe(
-      serializeWorldState(runIdleFighters(SIM_VERSION_V42_COLONY_ALARM).world),
-    );
-  }, 30_000);
-
-  it('V43 diverges from its IMMEDIATE predecessor V42 (the gate is live): idle fighters stop bouncing only at V43', () => {
-    // Compare the zone flips, NOT the full serialization: the serialized string
-    // carries the simVersion field itself (42 vs 43), so a full-string compare
-    // would pass even with the gated behaviour inert.
-    const v42 = runIdleFighters(SIM_VERSION_V42_COLONY_ALARM).flips;
-    const v43 = runIdleFighters(SIM_VERSION_V43_FIGHTER_SENTRIES).flips;
-    expect(v42).toBeGreaterThanOrEqual(40); // two fighters, ~every tick
-    expect(v43).toBe(0);
-  }, 30_000);
-});
-
-// ---------------------------------------------------------------------------
-// V44 — tunnel defence (#325): the pre-V44 path is untouched, and the V44 path
-// is live.
-//
-// Same two obligations: (a) a save pinned below V44 keeps replaying under the OLD
-// rule (same-build self-compare), and (b) the new rule changes a real run,
-// measured against V43, V44's immediate predecessor.
-//
-// Liveness scenario: two player fighters standing on the colony's open entrance
-// with the rally point ON that entrance, spider removed. Below V44 they go down
-// and are routed straight back up, a zone flip on nearly every tick; at V44 they
-// go down once and stay below. Driven through tick(), so step 10c and step 16
-// are exercised at their real call sites. The per-rule pins live in
-// tunnel-defence.test.ts.
-// ---------------------------------------------------------------------------
-
-describe('SCEN-06: pre-V44 replay determinism under V44 code', () => {
-  const TICKS = 30;
-
-  function runDefenders(simVersion: number): { world: WorldState; flips: number } {
-    const world = createScenario(7, 'Normal');
-    world.spider = null;
-    world.aiState = [];
-    world.simVersion = simVersion; // sticky, exactly as a loaded save arrives
-    const colony = world.colonies[PLAYER_COLONY_ID]!;
-    const ent = colony.entrances.find((e) => e.isOpen)!;
-    const ids: number[] = [];
-    for (let i = 0; i < 2; i++) {
-      const id = allocateEntityId(world);
-      initAnt(world.ants, id, {
-        colonyId: PLAYER_COLONY_ID,
-        posX: (ent.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1),
-        posY: (ent.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1),
-        task: AntTask.Fighting,
-        subTask: 0,
-        speed: WORKER_BASE_SPEED,
-        zone: Zone.Surface,
-      });
-      colony.workers.push(id);
-      colony.workerCount += 1;
-      ids.push(id);
-    }
-    colony.targetRatio.fight = 5; // keep the V40 stand-down from demoting them
-    colony.rallyPoint = { tileX: ent.surfaceTileX, tileY: ent.surfaceTileY };
-    let flips = 0;
-    const last = ids.map((id) => world.ants.zone[id]!);
-    for (let t = 0; t < TICKS; t++) {
-      tick(world, []);
-      ids.forEach((id, k) => {
-        const z = world.ants.zone[id]!;
-        if (z !== last[k]) flips += 1;
-        last[k] = z;
-      });
-    }
-    return { world, flips };
-  }
-
-  it('a V43-pinned world replays byte-identically across two independent runs', () => {
-    expect(serializeWorldState(runDefenders(SIM_VERSION_V43_FIGHTER_SENTRIES).world)).toBe(
-      serializeWorldState(runDefenders(SIM_VERSION_V43_FIGHTER_SENTRIES).world),
-    );
-  }, 30_000);
-
-  it('V44 diverges from its IMMEDIATE predecessor V43 (the gate is live): fighters rallied on their own entrance stop bouncing only at V44', () => {
-    // Compare the zone flips, NOT the full serialization (it carries simVersion).
-    const v43 = runDefenders(SIM_VERSION_V43_FIGHTER_SENTRIES).flips;
-    const v44 = runDefenders(SIM_VERSION_V44_TUNNEL_DEFENCE).flips;
-    expect(v43).toBeGreaterThanOrEqual(40); // two fighters, ~every tick
-    expect(v44).toBe(2); // each goes down once
   }, 30_000);
 });

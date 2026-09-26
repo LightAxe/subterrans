@@ -4,12 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
 import { createScenario } from './scenario.js';
-import {
-  allocateEntityId,
-  createWorldState,
-  SIM_VERSION_V43_FIGHTER_SENTRIES,
-  SIM_VERSION_V44_TUNNEL_DEFENCE,
-} from './types.js';
+import { allocateEntityId, createWorldState } from './types.js';
 import type { WorldState } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { updateFightAntTargets } from './ant/ant-system.js';
@@ -39,12 +34,11 @@ const SHAFT_FOOT = ENTRANCE_SHAFT_DEPTH; // the shaft's top rows and its foot st
 const TUNNEL_END = 14;
 const SURFACE_Y = 30;
 
-function nestWorld(simVersion: number = SIM_VERSION_V44_TUNNEL_DEFENCE): {
+function nestWorld(): {
   world: WorldState;
   colony: ColonyRecord;
 } {
   const world = createWorldState(42, 64);
-  world.simVersion = simVersion;
   const colony = createColonyRecord(COLONY, -1);
   colony.entrances = [
     { entranceId: 1, surfaceTileX: SHAFT_X, surfaceTileY: SURFACE_Y, isOpen: true },
@@ -188,17 +182,12 @@ describe('V44 (#325) — tunnel defenders: targeting', () => {
     ]);
   });
 
-  it('spider priority overrides it: the fighter is routed as it was before V44', () => {
-    const target = (simVersion: number): [number, number] => {
-      const { world, colony } = nestWorld(simVersion);
-      world.spiderPriorityColonyId = COLONY;
-      const id = addFighter(world, colony.colonyId, SHAFT_X + 1, SHAFT_FOOT);
-      updateFightAntTargets(world);
-      return targetTile(world, id);
-    };
-    expect(target(SIM_VERSION_V44_TUNNEL_DEFENCE)).toEqual(
-      target(SIM_VERSION_V43_FIGHTER_SENTRIES),
-    );
+  it('spider priority overrides it: the fighter below is routed up to the rally tile, not to a post', () => {
+    const { world, colony } = nestWorld();
+    world.spiderPriorityColonyId = COLONY;
+    const id = addFighter(world, colony.colonyId, SHAFT_X + 1, SHAFT_FOOT);
+    updateFightAntTargets(world);
+    expect(targetTile(world, id)).toEqual([SHAFT_X, SURFACE_Y]);
   });
 
   it('of two invaders at the same distance, goes after the lower id', () => {
@@ -247,7 +236,7 @@ describe('V44 (#325) — tunnel defenders: targeting', () => {
     expect(world.ants.targetPosY[id]).toBe(-1);
   });
 
-  it('a rally anywhere else, or on a closed own entrance, is not tunnel defence: routed as before V44', () => {
+  it('a rally anywhere else, or on a closed own entrance, is not tunnel defence: routed up to the entrance', () => {
     for (const setRally of [
       (c: ColonyRecord) => {
         c.rallyPoint = { tileX: SHAFT_X + 8, tileY: SURFACE_Y };
@@ -256,24 +245,12 @@ describe('V44 (#325) — tunnel defenders: targeting', () => {
         c.entrances[0]!.isOpen = false;
       },
     ]) {
-      const target = (simVersion: number): [number, number] => {
-        const { world, colony } = nestWorld(simVersion);
-        setRally(colony);
-        const id = addFighter(world, colony.colonyId, SHAFT_X + 1, SHAFT_FOOT);
-        updateFightAntTargets(world);
-        return targetTile(world, id);
-      };
-      expect(target(SIM_VERSION_V44_TUNNEL_DEFENCE)).toEqual(
-        target(SIM_VERSION_V43_FIGHTER_SENTRIES),
-      );
+      const { world, colony } = nestWorld();
+      setRally(colony);
+      const id = addFighter(world, colony.colonyId, SHAFT_X + 1, SHAFT_FOOT);
+      updateFightAntTargets(world);
+      expect(targetTile(world, id)).toEqual([SHAFT_X, SURFACE_Y]);
     }
-  });
-
-  it('pre-V44: a fighter below with the rally on its own entrance is routed to the rally tile, as before', () => {
-    const { world, colony } = nestWorld(SIM_VERSION_V43_FIGHTER_SENTRIES);
-    const id = addFighter(world, colony.colonyId, SHAFT_X + 1, SHAFT_FOOT);
-    updateFightAntTargets(world);
-    expect(targetTile(world, id)).toEqual([SHAFT_X, SURFACE_Y]);
   });
 });
 
@@ -281,14 +258,15 @@ describe('V44 (#325) — tunnel defenders: targeting', () => {
 // Through tick(): the scenario's own nest (early game: just the entrance shaft).
 // ---------------------------------------------------------------------------
 
-function rallyOnOwnEntrance(
-  simVersion: number,
-  n: number,
-): { world: WorldState; colony: ColonyRecord; ids: number[]; ent: { x: number; y: number } } {
+function rallyOnOwnEntrance(n: number): {
+  world: WorldState;
+  colony: ColonyRecord;
+  ids: number[];
+  ent: { x: number; y: number };
+} {
   const world = createScenario(7, 'Normal');
   world.spider = null;
   world.aiState = [];
-  world.simVersion = simVersion;
   const colony = world.colonies[PLAYER_COLONY_ID]!;
   const e = colony.entrances.find((en) => en.isOpen)!;
   const ids: number[] = [];
@@ -328,21 +306,15 @@ function zoneFlips(world: WorldState, ids: readonly number[], ticks: number): nu
 }
 
 describe('V44 (#325) — tunnel defenders: going in and coming out', () => {
-  it('pre-V44: fighters rallied on their own entrance bounce down and up every tick', () => {
-    const { world, ids } = rallyOnOwnEntrance(SIM_VERSION_V43_FIGHTER_SENTRIES, 3);
-    zoneFlips(world, ids, 20);
-    expect(zoneFlips(world, ids, 40)).toBeGreaterThanOrEqual(3 * 30);
-  });
-
   it('V44: they go down once and stay below', () => {
-    const { world, ids } = rallyOnOwnEntrance(SIM_VERSION_V44_TUNNEL_DEFENCE, 3);
+    const { world, ids } = rallyOnOwnEntrance(3);
     expect(zoneFlips(world, ids, 60)).toBe(3);
     expect(ids.every((id) => world.ants.zone[id] === Zone.Underground)).toBe(true);
     expect(zoneFlips(world, ids, 100)).toBe(0);
   });
 
   it('they fight an invader that comes down their shaft, and stay below doing it', () => {
-    const { world, ids, ent } = rallyOnOwnEntrance(SIM_VERSION_V44_TUNNEL_DEFENCE, 3);
+    const { world, ids, ent } = rallyOnOwnEntrance(3);
     zoneFlips(world, ids, 60);
     const enemy = world.colonies[ENEMY_COLONY_ID]!;
     enemy.rallyPoint = { tileX: ent.x, tileY: ent.y }; // it is invading, not recalled
@@ -374,7 +346,7 @@ describe('V44 (#325) — tunnel defenders: going in and coming out', () => {
   });
 
   it('in a one-tile tunnel with a bend, every defender reaches its own post and holds', () => {
-    const { world, colony, ids, ent } = rallyOnOwnEntrance(SIM_VERSION_V44_TUNNEL_DEFENCE, 10);
+    const { world, colony, ids, ent } = rallyOnOwnEntrance(10);
     // Dig down from the shaft to row 3, east to column +4, down to row 6, east to +10.
     const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
     const dig = (x: number, y: number): void => ugSet(grid, x, y, UndergroundTileState.Open);
@@ -397,7 +369,7 @@ describe('V44 (#325) — tunnel defenders: going in and coming out', () => {
   }, 30_000);
 
   it('they find their way to an invader that stays put in a pocket off their tunnels, and kill it', () => {
-    const { world, colony, ids, ent } = rallyOnOwnEntrance(SIM_VERSION_V44_TUNNEL_DEFENCE, 6);
+    const { world, colony, ids, ent } = rallyOnOwnEntrance(6);
     // Down to row 3, east to +4, down to row 10, west to -6, then back UP into a
     // pocket at row 8, where the invader sits: the way to it first goes deeper
     // than it, so steering straight at it stalls against the rock at row 8.
@@ -431,7 +403,7 @@ describe('V44 (#325) — tunnel defenders: going in and coming out', () => {
   }, 30_000);
 
   it('a worker below gets past defenders holding posts in a one-tile tunnel', () => {
-    const { world, colony, ids, ent } = rallyOnOwnEntrance(SIM_VERSION_V44_TUNNEL_DEFENCE, 6);
+    const { world, colony, ids, ent } = rallyOnOwnEntrance(6);
     const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
     for (let y = 0; y <= 3; y++) ugSet(grid, ent.x, y, UndergroundTileState.Open);
     for (let x = ent.x; x <= ent.x + 10; x++) ugSet(grid, x, 3, UndergroundTileState.Open);
@@ -461,7 +433,7 @@ describe('V44 (#325) — tunnel defenders: going in and coming out', () => {
   }, 30_000);
 
   it('spider priority brings defenders out to fight it', () => {
-    const { world, ids, ent } = rallyOnOwnEntrance(SIM_VERSION_V44_TUNNEL_DEFENCE, 3);
+    const { world, ids, ent } = rallyOnOwnEntrance(3);
     zoneFlips(world, ids, 60);
     // A spider far off (priority lasts while it lives), and the order to attack it.
     const spider = createScenario(7, 'Normal').spider!;
@@ -475,7 +447,7 @@ describe('V44 (#325) — tunnel defenders: going in and coming out', () => {
   });
 
   it('fighters below a second entrance not joined to the nest come out and round when the rally moves to the first', () => {
-    const { world, colony, ids, ent } = rallyOnOwnEntrance(SIM_VERSION_V44_TUNNEL_DEFENCE, 4);
+    const { world, colony, ids, ent } = rallyOnOwnEntrance(4);
     // Entrance B, 8 east: a fresh 2-deep shaft, joined to nothing.
     const bx = ent.x + 8;
     const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
@@ -501,7 +473,7 @@ describe('V44 (#325) — tunnel defenders: going in and coming out', () => {
   }, 30_000);
 
   it('both colonies defending their own nests at once each stay below', () => {
-    const { world, ids } = rallyOnOwnEntrance(SIM_VERSION_V44_TUNNEL_DEFENCE, 3);
+    const { world, ids } = rallyOnOwnEntrance(3);
     const enemy = world.colonies[ENEMY_COLONY_ID]!;
     const ee = enemy.entrances.find((en) => en.isOpen)!;
     const theirs: number[] = [];
@@ -530,7 +502,7 @@ describe('V44 (#325) — tunnel defenders: going in and coming out', () => {
   });
 
   it('clearing the rally brings them back out', () => {
-    const { world, colony, ids } = rallyOnOwnEntrance(SIM_VERSION_V44_TUNNEL_DEFENCE, 3);
+    const { world, colony, ids } = rallyOnOwnEntrance(3);
     zoneFlips(world, ids, 60);
     colony.rallyPoint = null;
     zoneFlips(world, ids, 60);
@@ -538,7 +510,7 @@ describe('V44 (#325) — tunnel defenders: going in and coming out', () => {
   });
 
   it('moving the rally elsewhere brings them out and to it', () => {
-    const { world, colony, ids, ent } = rallyOnOwnEntrance(SIM_VERSION_V44_TUNNEL_DEFENCE, 3);
+    const { world, colony, ids, ent } = rallyOnOwnEntrance(3);
     zoneFlips(world, ids, 60);
     colony.rallyPoint = { tileX: ent.x + 8, tileY: ent.y + 3 };
     zoneFlips(world, ids, 200);

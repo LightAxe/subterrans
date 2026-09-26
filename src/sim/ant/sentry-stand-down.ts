@@ -5,7 +5,7 @@ import { FIGHT_AGGRO_RADIUS, SURFACE_GRID_HEIGHT, SURFACE_GRID_WIDTH } from '../
 import { AntTask, FightingSubState } from '../enums.js';
 import { FP_SHIFT } from '../fixed.js';
 import { Zone } from '../terrain.js';
-import { SIM_VERSION_V47_SENTRY_STAND_DOWN, type WorldState } from '../types.js';
+import type { WorldState } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
 import { getScratch } from '../scratch.js';
 
@@ -35,7 +35,6 @@ const STAND_DOWN_SPIDER_RADIUS = FIGHT_AGGRO_RADIUS * 3;
  * A released ant is Idle for step 10a THIS tick.
  */
 export function standDownSurplusSentries(world: WorldState, colony: ColonyRecord): void {
-  if (world.simVersion < SIM_VERSION_V47_SENTRY_STAND_DOWN) return;
   if (colony.rallyPoint != null) return;
   if (colony.alarmActive === true) return;
   if (world.spiderPriorityColonyId === colony.colonyId) return;

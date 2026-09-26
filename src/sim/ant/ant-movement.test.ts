@@ -9,10 +9,6 @@ import {
   SIM_VERSION_V4_DIAGONAL_MOTION,
   SIM_VERSION_V5_CHAMBER_ON_MARKED,
   SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX,
-  SIM_VERSION_V32_AI_OP_VALIDATION,
-  SIM_VERSION_V33_OCCUPANCY_CENTER,
-  SIM_VERSION_V39_SPIDER_TIEBREAK,
-  SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { addChamberForTest } from '../food/food-test-utils.js';
@@ -2291,11 +2287,11 @@ describe('tickAntMovement — same-colony occupancy enforcement', () => {
   // CENTER, not the corner. Two same-colony ants forced onto one tile → the
   // higher-id one shifts; assert the sub-tile offset on both axes and both write
   // pairs (the non-exempt claim and the exempt chamber shift).
-  function collideTwo(simVersion: number): { world: WorldState; bId: number } {
+  function collideTwo(): { world: WorldState; bId: number } {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
-    world.simVersion = simVersion;
     world.bakedSurfaceEffect.fill(0); // all-passable so the shift always finds a tile
-    const colony = createColonyRecord(COLONY_ID, 0);
+    // No queen (-1): the queen never contests a tile (V40), and entity 0 is A.
+    const colony = createColonyRecord(COLONY_ID, -1);
     colony.entrances = [];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
@@ -2307,31 +2303,17 @@ describe('tickAntMovement — same-colony occupancy enforcement', () => {
   }
 
   it('V33: a shifted colliding ant parks at tile CENTER on both axes (non-exempt write)', () => {
-    const { world, bId } = collideTwo(SIM_VERSION_V33_OCCUPANCY_CENTER);
+    const { world, bId } = collideTwo();
     tickAntMovement(world, new Rng(42), createDigFlowFields());
     expect(uniqueTiles(world, COLONY_ID).size).toBe(2); // B was shifted off (6,5)
     expect(world.ants.posX[bId]! & (FP_ONE - 1)).toBe(FP_ONE >> 1);
     expect(world.ants.posY[bId]! & (FP_ONE - 1)).toBe(FP_ONE >> 1);
   });
 
-  it('pre-V33 (V32, LATEST−1): a shifted colliding ant parks at the tile CORNER (offset 0)', () => {
-    // Pin the gate at exactly >= V33 by testing the boundary just below it. A
-    // regression mis-gating at >= V31 or >= V32 would still pass a V30 corner test
-    // (V30 < any mis-gate) yet silently break replay for real V31/V32 saves; V32
-    // here (LATEST−1) catches that. The occupancy resolver is unchanged V30→V32, so
-    // the corner write is identical at V32.
-    const { world, bId } = collideTwo(SIM_VERSION_V32_AI_OP_VALIDATION);
-    tickAntMovement(world, new Rng(42), createDigFlowFields());
-    expect(uniqueTiles(world, COLONY_ID).size).toBe(2);
-    expect(world.ants.posX[bId]! & (FP_ONE - 1)).toBe(0);
-    expect(world.ants.posY[bId]! & (FP_ONE - 1)).toBe(0);
-  });
-
   it('V33: the exempt-tile shift (into a chamber footprint) also parks at tile CENTER', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
-    world.simVersion = SIM_VERSION_V33_OCCUPANCY_CENTER;
     world.bakedSurfaceEffect.fill(0);
-    const colony = createColonyRecord(COLONY_ID, 0);
+    const colony = createColonyRecord(COLONY_ID, -1); // no queen: see collideTwo
     colony.entrances = [];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;
@@ -2785,7 +2767,6 @@ describe('tickAntMovement — V14 underground CarryingFood no-revisit guard', ()
 //   (2) queen bump: a searcher stepping onto the (stationary) queen's tile is
 //       displaced by the same-colony occupancy pass back onto the exempt entrance
 //       tile, then takes the same trail-following step next tick.
-// Both sides of each gate are pinned here.
 // ---------------------------------------------------------------------------
 
 describe('V40 (#299) — stuck-forager releases', () => {
@@ -2852,13 +2833,12 @@ describe('V40 (#299) — stuck-forager releases', () => {
     expect(isRecentTile(world.ants, antId, 10, 11)).toBe(true);
   });
 
-  function runBoxedSearcher(simVersion: number, ticks: number): boolean {
+  function runBoxedSearcher(ticks: number): boolean {
     const { world, antId } = setupForagerWorld(
       (10 << FP_SHIFT) + (FP_ONE >> 1),
       (10 << FP_SHIFT) + (FP_ONE >> 1),
     );
     setupSurfaceGrid(world); // no trail anywhere → the wander picks the step
-    world.simVersion = simVersion;
     boxIn(world, antId, 10, 10);
     const digFlowFields = createDigFlowFields();
     const rng = new Rng(42);
@@ -2872,19 +2852,17 @@ describe('V40 (#299) — stuck-forager releases', () => {
     return moved;
   }
 
-  it('tickAntMovement: a boxed-in surface searcher never leaves its tile at V39 and does at V40', () => {
+  it('tickAntMovement: a boxed-in surface searcher leaves its tile (V40)', () => {
     // 60 ticks is far past the longest possible search pause (base 5 + jitter 5).
-    expect(runBoxedSearcher(SIM_VERSION_V39_SPIDER_TIEBREAK, 60)).toBe(false);
-    expect(runBoxedSearcher(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL, 60)).toBe(true);
+    expect(runBoxedSearcher(60)).toBe(true);
   });
 
-  function queenAndWorkerOnOneTile(simVersion: number): {
+  function queenAndWorkerOnOneTile(): {
     world: WorldState;
     queenId: number;
     workerId: number;
   } {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
-    world.simVersion = simVersion;
     const queenId = allocateEntityId(world);
     initAnt(world.ants, queenId, {
       colonyId: COLONY_ID,
@@ -2919,22 +2897,16 @@ describe('V40 (#299) — stuck-forager releases', () => {
     return id;
   }
 
-  it("occupancy: a worker on the queen's tile is bumped off at V39 and may stack on her at V40", () => {
-    const v39 = queenAndWorkerOnOneTile(SIM_VERSION_V39_SPIDER_TIEBREAK);
-    tickAntMovement(v39.world, new Rng(42), createDigFlowFields());
-    expect(v39.world.ants.posX[v39.workerId]! >> FP_SHIFT).toBe(5);
-    expect(v39.world.ants.posY[v39.workerId]! >> FP_SHIFT).toBe(4); // N is the first shift
-    expect(v39.world.ants.posY[v39.queenId]! >> FP_SHIFT).toBe(5); // the queen never moves
-
-    const v40 = queenAndWorkerOnOneTile(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
+  it("occupancy: a worker on the queen's tile may stack on her (V40)", () => {
+    const v40 = queenAndWorkerOnOneTile();
     tickAntMovement(v40.world, new Rng(42), createDigFlowFields());
     expect(v40.world.ants.posX[v40.workerId]! >> FP_SHIFT).toBe(5);
     expect(v40.world.ants.posY[v40.workerId]! >> FP_SHIFT).toBe(5);
     expect(v40.world.ants.posY[v40.queenId]! >> FP_SHIFT).toBe(5);
   });
 
-  it("occupancy at V40: two workers on the queen's tile still contest each other (only the queen is exempt)", () => {
-    const { world, workerId } = queenAndWorkerOnOneTile(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
+  it("occupancy: two workers on the queen's tile still contest each other (only the queen is exempt)", () => {
+    const { world, workerId } = queenAndWorkerOnOneTile();
     const secondId = holdingWorker(world, 5, 5);
     expect(secondId).toBeGreaterThan(workerId);
     tickAntMovement(world, new Rng(42), createDigFlowFields());

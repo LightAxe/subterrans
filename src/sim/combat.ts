@@ -17,7 +17,6 @@
 import { Rng } from './rng.js';
 import { AntTask } from './enums.js';
 import { makeTileKey } from './tile-key.js';
-import { SIM_VERSION_V39_SPIDER_TIEBREAK } from './types.js';
 import type { WorldState } from './types.js';
 import { hash32 } from './hash.js';
 import type { ColonyId } from './colony/colony-store.js';
@@ -517,9 +516,8 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
   }
 
   // onTile was built by ascending-index scan — already in order; no sort needed.
-  // INVARIANT: contents must remain ascending; the pre-V39 tiebreaks (activeAntIdx,
-  // swarmRetaliationTarget) rely on lowest-slot-index winning, and the V39 key path
-  // below still scans it in a fixed order.
+  // INVARIANT: contents must remain ascending; the V39 key path below scans it in a
+  // fixed order (a key tie keeps the first ant seen).
 
   // V39 seat-bias fix: "lowest slot index wins" is always colony 1's ant (the starting
   // cohort's ants hold the lower entity ids colony by colony), so on a shared tile the
@@ -542,39 +540,26 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
   // "prefer the already-paired ant" criterion would close that, but it would also make
   // the spider strictly more lethal in churny fights — a balance change that does not
   // belong in a tie-break bias fix.
-  const v39 = world.simVersion >= SIM_VERSION_V39_SPIDER_TIEBREAK;
 
   // Prefer AntTask.Fighting ants for the active pair; fall back to any ant.
-  let activeAntIdx = onTile[0]!;
-  let hasFighter = false;
-  if (v39) {
-    let picked = -1;
-    let bestFighter = false;
-    let bestKey = 0;
-    for (const idx of onTile) {
-      const isFighter = ants.task[idx] === AntTask.Fighting;
-      const key = spiderAntTieKey(world, idx);
-      const better = picked < 0 ? true : isFighter !== bestFighter ? isFighter : key < bestKey;
-      if (better) {
-        picked = idx;
-        bestFighter = isFighter;
-        bestKey = key;
-      }
-    }
-    // onTile is non-empty here (early-returned above), so picked >= 0 always.
-    activeAntIdx = picked;
-    // Unchanged meaning — "a Fighting ant is on the tile" — because criterion 1 makes
-    // a fighter outrank every worker, so bestFighter is true iff any fighter is here.
-    hasFighter = bestFighter;
-  } else {
-    for (const idx of onTile) {
-      if (ants.task[idx] === AntTask.Fighting) {
-        activeAntIdx = idx;
-        hasFighter = true;
-        break;
-      }
+  let picked = -1;
+  let bestFighter = false;
+  let bestKey = 0;
+  for (const idx of onTile) {
+    const isFighter = ants.task[idx] === AntTask.Fighting;
+    const key = spiderAntTieKey(world, idx);
+    const better = picked < 0 ? true : isFighter !== bestFighter ? isFighter : key < bestKey;
+    if (better) {
+      picked = idx;
+      bestFighter = isFighter;
+      bestKey = key;
     }
   }
+  // onTile is non-empty here (early-returned above), so picked >= 0 always.
+  const activeAntIdx = picked;
+  // Unchanged meaning — "a Fighting ant is on the tile" — because criterion 1 makes
+  // a fighter outrank every worker, so bestFighter is true iff any fighter is here.
+  const hasFighter = bestFighter;
 
   // Sated meander = self-defense only (Codex P2). Under V23 the combat gate opens
   // for every non-Feeding surface state, including a sated `Patrolling` spider. But
@@ -610,8 +595,8 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
     // Spider retaliates once per tick against a priority-colony fighter.
     // This gives true N-fighter DPS rather than 4× single-fighter approximation.
 
-    // Retaliation target = first priority-colony fighter on tile (pre-V39 lowest slot
-    // index; V39+ lowest spiderAntTieKey). The candidate set is filtered to one
+    // Retaliation target = the priority-colony fighter on tile with the lowest
+    // spiderAntTieKey (V39; pre-V39 took the lowest slot index). The candidate set is filtered to one
     // colony, so this pick is intra-colony and carries no seat bias either way — it
     // moves to the key only to keep it consistent with activeAntIdx above. The key is
     // the same tick-free one, so the retaliation target is stable for as long as the
@@ -627,13 +612,11 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
       // counts as an ongoing engagement that should not reset the spider's windup.
       if (ants.combatOpponentId[idx] === -2) anyVeteranPaired = true;
       if (ants.task[idx] !== AntTask.Fighting || ants.colonyId[idx] !== priorityColonyId) continue;
-      if (v39) {
-        const key = spiderAntTieKey(world, idx);
-        if (swarmRetaliationTarget === -1 || key < bestSwarmKey) {
-          swarmRetaliationTarget = idx;
-          bestSwarmKey = key;
-        }
-      } else if (swarmRetaliationTarget === -1) swarmRetaliationTarget = idx;
+      const key = spiderAntTieKey(world, idx);
+      if (swarmRetaliationTarget === -1 || key < bestSwarmKey) {
+        swarmRetaliationTarget = idx;
+        bestSwarmKey = key;
+      }
     }
     // swarmActive guarantees fighterCount >= SPIDER_SWARM_FIGHTER_THRESHOLD >= 1,
     // so the loop above always finds at least one priority fighter.
