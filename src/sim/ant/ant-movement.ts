@@ -1777,6 +1777,10 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     if (sentryPassesThroughFriends(world, id) || defenderPassesThroughFriends(world, id)) continue;
     // #322 (V49): nor does an idle worker mustering home under the alarm.
     if (idleMusterPassesThroughFriends(world, id)) continue;
+    // V51 (#290 PR 4, D11): nor does a hungry fighter walking home to eat. Bumped
+    // like any ant, one leaving a crowded rally stepped onto a tile a fed friend
+    // held and was pushed back every tick, until it starved a tile from open ground.
+    if (fighterWalksHomeToEat(world, id)) continue;
 
     // Issue #108 (v13+) — zero the gridColonyId portion of the key when
     // zone === Surface. Mirrors combat tile-key encoding (tile-key.ts:56);
