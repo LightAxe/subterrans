@@ -36,6 +36,9 @@ import { isSurfaceTileInComponent } from './surface-features.js';
 import { FIGHTER_HUNGER } from './hunger.js';
 import { computeStockFlowField } from './chamber-flow.js';
 import { getScratch } from './scratch.js';
+import { Rng } from './rng.js';
+import { createDigFlowFields } from './dig-system.js';
+import { tickAntMovement } from './ant/ant-system.js';
 import {
   BASE_FOOD_STORAGE_CAPACITY,
   ENEMY_COLONY_ID,
@@ -828,5 +831,46 @@ describe('second review follow-ups (V52)', () => {
     const id = hauler(r, x, 3, E, RAID_CARRY_FP);
     expect(id).toBeGreaterThan(b2);
     expect(run(w, 60, () => w.ants.zone[id] === Zone.Surface)).toBeGreaterThan(0);
+  });
+});
+
+describe('hauler exit off the entrance flow field (V52, rebased on PR 4’s hungryExitStep)', () => {
+  function uBendHauler(): { r: RaidWorld; id: number } {
+    const r = raidWorld();
+    const w = r.world;
+    const grid = w.undergroundGrids[E]!;
+    // A U-bend: down from (108,6) to row 12, west to (98,12). Straight at the
+    // shaft column from (98,12) runs into rock at (98,11).
+    carve(grid, 108, 6, 108, 12);
+    carve(grid, 98, 12, 108, 12);
+    // A nearer "open" stub entrance that joins nothing (its two shaft tiles only).
+    carve(grid, 96, 0, 96, 1);
+    r.enemy.entrances.push({ entranceId: 9998, surfaceTileX: 96, surfaceTileY: 64, isOpen: true });
+    rallyOn(r.player, r.enemyDoor);
+    const id = addFighter(w, P, 98, 12, E);
+    w.ants.subTask[id] = FightingSubState.Hauling;
+    w.ants.foodCarrying[id] = RAID_CARRY_FP;
+    return { r, id };
+  }
+
+  it('without the entrance field it still gets out (reachable-exit BFS), past the stub', () => {
+    const { r, id } = uBendHauler();
+    const w = r.world;
+    const rng = new Rng(1);
+    const dig = createDigFlowFields();
+    let out = -1;
+    for (let t = 0; t < 200 && out < 0; t++) {
+      tickAntMovement(w, rng, dig); // no entrance / chamber fields: the fallback route
+      if (w.ants.zone[id] === Zone.Surface) out = t;
+    }
+    expect(out).toBeGreaterThanOrEqual(0);
+    expect(tileOf(w, id).x).toBe(r.enemyDoor.x); // by the real shaft, not the stub
+  });
+
+  it('through tick() it climbs out by the entrance flow field, past the stub', () => {
+    const { r, id } = uBendHauler();
+    const w = r.world;
+    expect(run(w, 200, () => w.ants.zone[id] === Zone.Surface)).toBeGreaterThan(0);
+    expect(tileOf(w, id).x).toBe(r.enemyDoor.x);
   });
 });
