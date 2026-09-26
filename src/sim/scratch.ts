@@ -29,11 +29,13 @@ import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
   MAX_ENTITIES,
-  RAID_ENGAGE_RADIUS_TILES,
+  RAID_START_CLEAR_RADIUS_TILES,
 } from './constants.js';
 
-/** Side of ant-raid.ts's "hostile in reach" BFS window: 2R + 1 tiles. */
-export const RAID_REACH_WINDOW_SIDE = 2 * RAID_ENGAGE_RADIUS_TILES + 1;
+/** Half-side of ant-raid.ts's "hostile in reach" BFS window: the larger radius. */
+export const RAID_REACH_WINDOW_RADIUS = RAID_START_CLEAR_RADIUS_TILES;
+/** Side of that window: 2W + 1 tiles. */
+export const RAID_REACH_WINDOW_SIDE = 2 * RAID_REACH_WINDOW_RADIUS + 1;
 /** Cells of that window. */
 const RAID_REACH_WINDOW_CELLS = RAID_REACH_WINDOW_SIDE * RAID_REACH_WINDOW_SIDE;
 import { createSurfaceMovementCache, type SurfaceMovementCache } from './surface-features.js';
@@ -131,9 +133,10 @@ export interface ScratchArena {
    */
   nurse: { usedStamp: Uint32Array; currentStamp: number };
   /**
-   * ant-raid.ts (#290 PR 5, V52) — per grid (the colony whose nest it is): the
-   * stock flow field toward its FoodStorage chambers that hold food, and the tick
-   * it was computed on (a field is valid only for that tick: step 10e computes it
+   * ant-raid.ts (#290 PR 5, V52) — per grid (the colony whose nest it is) and
+   * threshold (key `gridColonyId * 2 + start`: start = 1 seeds only chambers
+   * holding RAID_LOOT_START_STOCK_FP, 0 any food): the stock flow field toward its
+   * FoodStorage chambers, and the tick it was computed on (a field is valid only for that tick: step 10e computes it
    * for every nest a raider stands in and step 16 reads it back). `queue` is the
    * BFS queue. `reach*` is the bounded "hostile in reach" BFS over a
    * (2R+1)² window round the raider: `reachStamp` marks visited cells, `reachDist`
