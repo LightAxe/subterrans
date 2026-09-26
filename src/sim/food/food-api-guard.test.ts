@@ -8,8 +8,14 @@
 //   - element access         x['foodStored'], x[`foodPiles`]
 //   - destructuring          const { foodStored } = c; multi-line patterns; renames;
 //                            for (const { foodStored } of …); function / callback params
-//   - object-literal keys    { foodStored: 0 }, Object.assign(c, { foodStored }),
-//                            ({ foodStored } = c), { ['foodStored']: n }
+//   - object-literal keys    split in two kinds:
+//       'object-literal key'    a key in a CONSTRUCTION literal — the literal is a
+//                               `return` value, a variable initializer, an arrow
+//                               body or a `.push(…)` argument (a new record);
+//       'object-literal merge'  any other literal: Object.assign(c, { foodStored }),
+//                               any literal with a spread ({ ...c, foodStored: 0 }),
+//                               c = { foodStored }, ({ foodStored } = c),
+//                               { ['foodStored']: n } passed anywhere else
 //   - bare string literals   Reflect.get(c, 'foodStored'), const k = 'foodPiles'
 // Comments are not code (the AST ignores them) and strings containing `//` are
 // ordinary tokens. Type declarations (`foodStored: number` in an interface or type
@@ -18,6 +24,19 @@
 // A reference is allowed only inside the named functions listed in ALLOWED below,
 // and only of the reference kinds listed for that function (or anywhere in the
 // facade files). Anything else fails the test with file:line.
+//
+// Known limits (syntactic analysis cannot close them; review covers them):
+//   - Dynamic keys: an element access with a non-literal key — c[k] where k comes
+//     from a variable, a parameter or an exported key list such as
+//     food-projection.ts's PROJECTION_STRIPPED_* arrays — is not reported. Only the
+//     string literal where the key name is written is, and that is allow-listed in
+//     the files that own such lists.
+//   - READ does not tell reads from writes: getSaveInfo / savedChamberFoodFp may
+//     use member access, so an assignment there would pass. They are platform code
+//     over the raw snapshot JSON, not over a WorldState, so a write there cannot
+//     reach sim state.
+//   - Computed names built at run time ('food' + 'Stored', template expressions)
+//     are not recognised.
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -35,9 +54,10 @@ type RefKind =
   | 'element access'
   | 'destructuring'
   | 'object-literal key'
+  | 'object-literal merge'
   | 'string literal';
 
-const KEY: readonly RefKind[] = ['object-literal key']; // record constructors
+const KEY: readonly RefKind[] = ['object-literal key']; // record constructors (construction sites only)
 const READ: readonly RefKind[] = ['member access']; // raw-JSON readers
 const STR: readonly RefKind[] = ['string literal']; // key-name lists
 
@@ -125,6 +145,38 @@ function enclosingFunctionName(node: ts.Node): string {
   return '<module>';
 }
 
+/**
+ * True when an object literal builds a NEW value: it is (through parentheses and
+ * `as` / `satisfies` / `!` wrappers) a `return` value, a variable initializer, an
+ * arrow-function body, or an argument of a `.push(…)` call. False for everything
+ * else, notably Object.assign arguments, any literal that spreads another object
+ * ({ ...c, foodStored }), assignments and destructuring-assignment targets.
+ */
+function isConstructionLiteral(lit: ts.ObjectLiteralExpression): boolean {
+  // A literal that spreads another object is a merge/copy of an existing record.
+  if (lit.properties.some((p) => ts.isSpreadAssignment(p))) return false;
+  let child: ts.Node = lit;
+  let p: ts.Node = lit.parent;
+  while (
+    ts.isParenthesizedExpression(p) ||
+    ts.isAsExpression(p) ||
+    ts.isSatisfiesExpression(p) ||
+    ts.isNonNullExpression(p) ||
+    ts.isTypeAssertionExpression(p)
+  ) {
+    child = p;
+    p = p.parent;
+  }
+  if (ts.isReturnStatement(p)) return true;
+  if (ts.isVariableDeclaration(p) && p.initializer === child) return true;
+  if (ts.isArrowFunction(p) && p.body === child) return true;
+  if (ts.isCallExpression(p) && p.arguments.includes(child as ts.Expression)) {
+    const callee = p.expression;
+    return ts.isPropertyAccessExpression(callee) && callee.name.text === 'push';
+  }
+  return false;
+}
+
 /** Every syntactic reference to a food-storage field in `source`. */
 function findStorageRefs(source: string, fileName = 'x.ts'): StorageRef[] {
   const sf = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -161,7 +213,10 @@ function findStorageRefs(source: string, fileName = 'x.ts'): StorageRef[] {
     ) {
       const k = stringLikeText(node.name);
       if (k !== undefined && NAMES.has(k)) {
-        hit(node, 'object-literal key');
+        hit(
+          node,
+          isConstructionLiteral(node.parent) ? 'object-literal key' : 'object-literal merge',
+        );
         claimed.add(node.name);
         if (ts.isComputedPropertyName(node.name)) claimed.add(node.name.expression);
       }
@@ -250,6 +305,20 @@ describe('#290 food facade guard', () => {
       ['src/sim/colony/colony-store.ts', 'function createColonyRecord(c) { c.foodStored = 5; }'],
       ['bench/tick-cost.bench.ts', 'function buildBroodColony(c) { const { foodStored } = c; }'],
       ['src/platform/save.ts', "function getSaveInfo(c) { return Reflect.get(c, 'foodStored'); }"],
+      // KEY covers construction literals only, never a merge into a live record.
+      [
+        'src/sim/colony/colony-system.ts',
+        'function checkPendingChambers(colony) { Object.assign(colony, { foodStored: 0 }); }',
+      ],
+      [
+        'src/sim/colony/colony-store.ts',
+        'function createColonyRecord(c) { const d = { ...c, foodStored: 9 }; return d; }',
+      ],
+      [
+        'src/sim/colony/colony-store.ts',
+        'function createColonyRecord(c) { c = { ...c, foodStored: 9 }; return c; }',
+      ],
+      ['bench/tick-cost.bench.ts', 'function buildBroodColony(c) { ({ foodStored: c.x } = c); }'],
     ];
     for (const [file, src] of cases) {
       const refs = findStorageRefs(src, file);
@@ -257,12 +326,28 @@ describe('#290 food facade guard', () => {
       expect(rejected.length, `${file}: ${src}`).toBeGreaterThan(0);
     }
     // …while the permitted kind in the same place still passes.
-    const ok = findStorageRefs(
-      'function checkPendingChambers(colony) { colony.chambers.push({ foodStored: 0 }); }',
-      'src/sim/colony/colony-system.ts',
-    );
-    expect(ok.length).toBe(1);
-    expect(ok.every((r) => allowedBy('src/sim/colony/colony-system.ts', r) !== null)).toBe(true);
+    const okCases: Array<[string, string]> = [
+      [
+        'src/sim/colony/colony-system.ts',
+        'function checkPendingChambers(colony) { colony.chambers.push({ foodStored: 0 }); }',
+      ],
+      [
+        'src/sim/colony/colony-store.ts',
+        'function createColonyRecord() { return { foodStored: 0 }; }',
+      ],
+      [
+        'src/sim/colony/colony-store.ts',
+        'function createColonyRecord() { const r = { foodStored: 0 } as R; return r; }',
+      ],
+    ];
+    for (const [file, src] of okCases) {
+      const ok = findStorageRefs(src, file);
+      expect(ok.length, src).toBe(1);
+      expect(
+        ok.every((r) => allowedBy(file, r) !== null),
+        src,
+      ).toBe(true);
+    }
   });
 
   it('catches every known escaping shape', () => {
