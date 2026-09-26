@@ -34,6 +34,10 @@
 //
 // Run: node --experimental-strip-types scripts/check-ai-economy.ts
 //   Optional args: --seeds=N --difficulty=Easy|Normal|Hard --ticks=M
+//                  --seed-start=S   run seeds S..S+N-1 (default 0), so a large
+//                                   run can be sharded across processes; every
+//                                   per-seed row carries what the aggregate
+//                                   needs, so shards merge exactly
 //                  --trace=1,7,13   per-500-tick economy trace for those seeds
 //                  --report-only    print the verdict but never exit non-zero
 //
@@ -95,6 +99,7 @@ function parseStrArg(name: string, fallback: string): string {
 }
 
 const SEEDS = parseNumArg('seeds', 30);
+const SEED_START = parseNumArg('seed-start', 0);
 const TICKS = parseNumArg('ticks', MATCH_TIMEOUT_TICKS);
 const DIFFICULTY_ARG = parseStrArg('difficulty', 'Normal');
 const REPORT_ONLY = process.argv.slice(2).includes('--report-only');
@@ -110,6 +115,10 @@ const TRACE_INTERVAL = parseNumArg('trace-interval', 500);
 
 if (!Number.isInteger(SEEDS) || SEEDS < 1) {
   console.error(`--seeds=${SEEDS} must be an integer >= 1.`);
+  process.exit(2);
+}
+if (!Number.isInteger(SEED_START) || SEED_START < 0) {
+  console.error(`--seed-start=${SEED_START} must be an integer >= 0.`);
   process.exit(2);
 }
 if (!Number.isInteger(TICKS) || TICKS < 1) {
@@ -576,7 +585,7 @@ function pct(n: number, d: number): string {
 const start = Date.now();
 const results: SeedResult[] = [];
 for (let s = 0; s < SEEDS; s++) {
-  results.push(runSeed(s));
+  results.push(runSeed(SEED_START + s));
   if ((s + 1) % 5 === 0) {
     const elapsedS = ((Date.now() - start) / 1000).toFixed(1);
     process.stdout.write(`  ${s + 1}/${SEEDS} seeds done (${elapsedS}s)\n`);
@@ -586,10 +595,12 @@ const elapsed = ((Date.now() - start) / 1000).toFixed(1);
 
 console.log('');
 console.log('== #297 AI-economy gate (rule-based enemy vs passive player) ==');
-console.log(`Seeds: ${SEEDS}  Difficulty: ${DIFFICULTY}  Ticks: ${TICKS}  Elapsed: ${elapsed}s`);
+console.log(
+  `Seeds: ${SEEDS} (from ${SEED_START})  Difficulty: ${DIFFICULTY}  Ticks: ${TICKS}  Elapsed: ${elapsed}s`,
+);
 console.log('');
 console.log(
-  'seed | enemyQ@12k @24k death cause | peakW | opening | aiState(first!=Peace) | invading | foodPeak@tick | food0 | playerQ death cause | wStarved e(fighters)/p',
+  'seed | enemyQ@12k @24k death cause | peakW | opening | aiState(first!=Peace) | invading | foodPeak@tick | food0 | playerQ death cause | wStarved e(fighters)/p | frozen%',
 );
 for (const r of results) {
   console.log(
@@ -603,7 +614,9 @@ for (const r of results) {
       `${String(r.foodPeak).padStart(6)}@${String(r.foodPeakTick).padStart(6)} | ` +
       `${String(r.foodFirstZeroTick ?? '-').padStart(6)} | ` +
       `${String(r.playerDeathTick ?? '-').padStart(6)} ${r.playerDeathCause.padEnd(10)} | ` +
-      `${r.enemyWorkersStarved}(${r.enemyFightersStarved})/${r.playerWorkersStarved}`,
+      `${r.enemyWorkersStarved}(${r.enemyFightersStarved})/${r.playerWorkersStarved} | ` +
+      // Raw share (not rounded): shards are merged by recomputing the median.
+      `${r.heldWindow === 0 ? 0 : (r.heldTicks * 100) / r.heldWindow}`,
   );
 }
 
