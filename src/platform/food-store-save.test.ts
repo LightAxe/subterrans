@@ -9,6 +9,9 @@ import { describe, it, expect } from 'vitest';
 import { serializeWorldState, deserializeWorldState, type SerializedWorldState } from './save.js';
 import { createScenario } from '../sim/scenario.js';
 import { tick } from '../sim/tick.js';
+import { allocateEntityId } from '../sim/types.js';
+import { initAnt } from '../sim/ant/ant-store.js';
+import { LARVA_HUNGER } from '../sim/hunger.js';
 import { spawnCorpseFood } from '../sim/food-system.js';
 import type { WorldState } from '../sim/types.js';
 import { isSurfaceTileInComponent } from '../sim/surface-features.js';
@@ -410,6 +413,33 @@ describe('#290 PR 2 validateFoodStore — tamper matrix', () => {
     // The edges load: fed last tick, or one meal from starving.
     const s = serializeWorldState(w);
     s.ants.lastMealTick[q] = s.tick - 300;
+    expect(() => deserializeWorldState(s)).not.toThrow();
+  });
+
+  it('rejects a live larva whose last meal is in the future or past starve-after', () => {
+    const w = createScenario(42);
+    for (let t = 0; t < 5; t++) tick(w, []);
+    const pc = w.colonies[PC]!;
+    const larva = allocateEntityId(w);
+    initAnt(w.ants, larva, {
+      colonyId: PC,
+      posX: 30 << 8,
+      posY: 6 << 8,
+      zone: 1,
+      lastMealTick: w.tick - 1, // fed on the last tick
+    });
+    pc.larvae.push(larva);
+    pc.larvaeCount += 1;
+    expect(() => deserializeWorldState(serializeWorldState(w))).not.toThrow();
+    rejects(w, (s) => (s.ants.lastMealTick[larva] = s.tick), /lastMealTick.*larva/);
+    const oldest = w.tick - LARVA_HUNGER.starveAfterTicks; // the window's far edge
+    w.ants.lastMealTick[larva] = oldest;
+    expect(() => deserializeWorldState(serializeWorldState(w))).not.toThrow();
+    rejects(w, (s) => (s.ants.lastMealTick[larva] = oldest - 1), /lastMealTick.*larva/);
+    // A DEAD larva's clock is not checked (it stopped when it died).
+    w.ants.alive[larva] = 0;
+    const s = serializeWorldState(w);
+    s.ants.lastMealTick[larva] = s.tick + 1000;
     expect(() => deserializeWorldState(s)).not.toThrow();
   });
 
