@@ -116,6 +116,22 @@ Eggs and larvae collectively — tracked separately from (mature) workers. Lifec
 **egg** → **larva** → worker.
 _Avoid_: babies, young; don't call eggs "larvae".
 
+**Hunger / meal** (#288; workers and fighters from simVersion V51, #290):
+Every ant that eats has a **hunger clock** — the tick of its last **meal**
+(`ants.lastMealTick`; "ticks since meal" counts up) — and a **hunger profile** per
+kind (`src/sim/hunger.ts`): how often a meal is due, how big it is, and how long
+after its last meal a missed meal kills it (**starvation**). The queen and larvae
+eat every tick from the colony's food. A worker (a **fighter** is a worker whose
+task is `Fighting`, read at the moment of the meal) eats a meal from the colony's
+food when it is **at home** — below ground in its own nest, or on the surface near
+one of its own open entrances — or from the food it is carrying when away. The
+colony feeds the queen first, then larvae, then workers: a worker's meal is skipped
+if it would leave the colony's food below the queen's share
+(`QUEEN_MEAL_RESERVE_FP`). A **hungry** fighter away from home and not fighting
+walks home to eat, then goes back to its rally point or post. A starved ant leaves
+no food behind. The spider keeps its own hunger clock and eats only its kills.
+_Avoid_: **upkeep**, **rations** (except for eating from a carried load), **stamina**.
+
 **Spider**:
 The neutral predator. Not a colony — it threatens both colonies. Surface-only.
 _Avoid_: monster, boss; **enemy** (enemy = the AI colony, not the spider).
