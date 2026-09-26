@@ -54,7 +54,7 @@ import { clearFoodSlot, FOOD_FLAG_CORPSE, findFreeFoodSlot, FoodKind } from './f
 export { FOOD_FLAG_CORPSE } from './food-store.js';
 
 /** log2(FOOD_PICKUP_AMOUNT): pile amounts are floored to whole pickups by shifting (no `/`). */
-const PICKUP_SHIFT = 9;
+export const PICKUP_SHIFT = 9;
 // Compile-time guard: fails to typecheck if FOOD_PICKUP_AMOUNT stops being 512
 // (= 1 << PICKUP_SHIFT), which would make the whole-pickup rounding wrong.
 const PICKUP_SHIFT_GUARD: typeof FOOD_PICKUP_AMOUNT = 512;

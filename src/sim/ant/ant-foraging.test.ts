@@ -45,15 +45,10 @@ import { createEntranceFlowFields } from '../entrance-flow.js';
 import { createChamberFlowFields } from '../chamber-flow.js';
 import type { WorldState } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
-import {
-  colonyPoolFood,
-  chamberStock,
-  pileAmountFp,
-  pileCount,
-  pileSlotById,
-} from '../food/food-api.js';
+import { colonyPoolFood, chamberStock, pileCount, pileSlotById } from '../food/food-api.js';
 import {
   addPileForTest,
+  pilePickupsForTest,
   pushTestPile,
   setPoolFoodForTest,
   ensureColonyPoolForTest,
@@ -63,13 +58,8 @@ import {
   type TestPile,
 } from '../food/food-test-utils.js';
 
-/** log2(FOOD_PICKUP_AMOUNT) — mirrors food-api.ts's PICKUP_SHIFT (guarded there). */
-const PICKUP_SHIFT = 9;
-
 /** Live pile size in whole pickups (post-mutation reader; the food store, not a snapshot). */
-function remainingPickups(world: WorldState, slot: number): number {
-  return pileAmountFp(world, slot) >> PICKUP_SHIFT;
-}
+const remainingPickups = pilePickupsForTest;
 
 // ---------------------------------------------------------------------------
 // Test helpers

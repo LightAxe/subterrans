@@ -22,8 +22,14 @@ import {
   SURFACE_GRID_WIDTH,
 } from '../constants.js';
 import type { HungerProfile } from '../hunger.js';
-import { createChamberStock, createColonyPool, FOOD_FLAG_CORPSE } from './food-api.js';
-import { clearFoodSlot, FoodKind, rebuildSurfacePileAt } from './food-store.js';
+import {
+  createChamberStock,
+  createColonyPool,
+  FOOD_FLAG_CORPSE,
+  pileAmountFp,
+  PICKUP_SHIFT,
+} from './food-api.js';
+import { clearFoodSlot, findFreeFoodSlot, FoodKind, rebuildSurfacePileAt } from './food-store.js';
 
 /**
  * Give `colony` a pool if it has none (a hand-built test colony: createColonyRecord
@@ -126,13 +132,7 @@ export interface TestPile {
  */
 export function addPileForTest(world: WorldState, pile: TestPile): number {
   const store = world.food;
-  let slot = -1;
-  for (let s = 0; s < store.kind.length; s++) {
-    if (store.kind[s] === FoodKind.None) {
-      slot = s;
-      break;
-    }
-  }
+  const slot = findFreeFoodSlot(store);
   if (slot < 0) throw new Error('food store full');
   store.kind[slot] = FoodKind.Pile;
   store.tileX[slot] = pile.tileX;
@@ -162,6 +162,11 @@ export function setPilesForTest(world: WorldState, piles: readonly TestPile[]): 
   for (const p of piles) addPileForTest(world, p);
 }
 
+/** A live pile's remaining amount in whole pickups (reads through the facade). */
+export function pilePickupsForTest(world: WorldState, slot: number): number {
+  return pileAmountFp(world, slot) >> PICKUP_SHIFT;
+}
+
 /** Every live pile in creation order, in the pre-V50 (pickup-charge) shape. */
 export function pilesForTest(world: WorldState): TestPile[] {
   const store = world.food;
@@ -172,8 +177,8 @@ export function pilesForTest(world: WorldState): TestPile[] {
       foodPileId: store.foodId[s]!,
       tileX: store.tileX[s]!,
       tileY: store.tileY[s]!,
-      pickupsRemaining: store.amountFp[s]! >> 9,
-      pickupsInitial: store.initialFp[s]! >> 9,
+      pickupsRemaining: store.amountFp[s]! >> PICKUP_SHIFT,
+      pickupsInitial: store.initialFp[s]! >> PICKUP_SHIFT,
     };
     if ((store.flags[s]! & FOOD_FLAG_CORPSE) !== 0) p.isCorpse = true;
     out.push(p);

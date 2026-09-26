@@ -40,6 +40,8 @@ import {
   WORKER_BASE_SPEED,
   WORKER_LIFESPAN_TICKS,
   COMBAT_HP_BASE,
+  CHAMBER_FOOD_WIDTH,
+  CHAMBER_FOOD_HEIGHT,
 } from '../constants.js';
 import { initAnt, pushRecentTile } from './ant-store.js';
 import { killAnt } from '../ant-death.js';
@@ -2420,8 +2422,13 @@ describe('V49 (#322) — the alarm musters civilians home under a full camp', ()
             world,
             colony,
             {
+              chamberId: 90_001,
               chamberType: ChamberType.FoodStorage,
-            } as never,
+              posX: 10 << FP_SHIFT,
+              posY: 10 << FP_SHIFT,
+              width: CHAMBER_FOOD_WIDTH,
+              height: CHAMBER_FOOD_HEIGHT,
+            },
             FOOD_CHAMBER_CAPACITY,
           );
         }
