@@ -905,7 +905,13 @@ export function tickAntMovement(
           }
           // else: no enemy entrance → hold (dx=dy=0 fallback)
         } else {
-          const hostile = pickNearestHostileUnderground(ants, id, gridColonyId);
+          // V52 (#290 PR 5): step 10e aimed a raider stopped by a hostile in reach
+          // at THAT hostile (target set only by 10e; step 10c clears an invader's
+          // target every tick, so below V52 it is always -1 here).
+          const hostile =
+            ants.targetPosX[id] !== -1
+              ? { targetX: ants.targetPosX[id]!, targetY: ants.targetPosY[id]! }
+              : pickNearestHostileUnderground(ants, id, gridColonyId);
           if (hostile !== null) {
             const invUnderground = world.undergroundGrids[gridColonyId];
             if (invUnderground) {
