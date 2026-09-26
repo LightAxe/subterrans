@@ -996,12 +996,12 @@ export function tickExcursionBoundary(world: WorldState): void {
     if (world.simVersion >= SIM_VERSION_V49_ALARM_MUSTER && colony.alarmActive === true) {
       if (sub === ForagingSubState.SearchingFood) {
         ants.subTask[id] = ForagingSubState.ReturningToNest;
-        // Recalled, not a failed search: the entrance-arrival flip after the
-        // all-clear bumps the leash wave, so step it back first. -1 at most
-        // (every reader clamps a negative wave to 0); the arrival bump, or the
-        // breakout below if it turns back to searching first, restores it.
+        // Recalled, not a failed search: park the wave as -(wave + 1) so the
+        // return home (arrival flip) or a breakout back to searching restores it
+        // exactly, with no failed-search bump. Every reader clamps a negative
+        // wave to 0, and a wave already parked stays parked.
         const wave = ants.searchWave[id]!;
-        ants.searchWave[id] = wave > 0 ? wave - 1 : -1;
+        if (wave >= 0) ants.searchWave[id] = -(wave + 1);
         ants.searchHeadingX[id] = 0;
         ants.searchHeadingY[id] = 0;
         ants.searchHeadingTicks[id] = 0;
@@ -1089,9 +1089,9 @@ export function tickExcursionBoundary(world: WorldState): void {
       }
 
       ants.subTask[id] = ForagingSubState.SearchingFood;
-      // #322 (V49): undo an alarm recall's leash step-back (a negative wave only
+      // #322 (V49): restore a wave an alarm recall parked (a negative wave only
       // ever comes from it) — this breakout is not a failed search.
-      if (ants.searchWave[id]! < 0) ants.searchWave[id] = 0;
+      if (ants.searchWave[id]! < 0) ants.searchWave[id] = -ants.searchWave[id]! - 1;
       ants.searchHeadingX[id] = 0;
       ants.searchHeadingY[id] = 0;
       ants.searchHeadingTicks[id] = 0;

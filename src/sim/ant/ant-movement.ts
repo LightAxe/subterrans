@@ -1440,7 +1440,9 @@ export function tickAntMovement(
             if (ent.surfaceTileX === tileXR && ent.surfaceTileY === tileYR) {
               ants.subTask[id] = ForagingSubState.SearchingFood;
               const curWave = ants.searchWave[id]!;
-              const nextWave = curWave + 1;
+              // #322 (V49): a negative wave was parked by an alarm recall —
+              // restore it exactly; coming home when recalled isn't a failed search.
+              const nextWave = curWave < 0 ? -curWave - 1 : curWave + 1;
               ants.searchWave[id] =
                 nextWave > SEARCH_LEASH_MAX_WAVE ? SEARCH_LEASH_MAX_WAVE : nextWave;
               ants.searchHeadingX[id] = 0;
