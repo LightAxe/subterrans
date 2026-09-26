@@ -378,10 +378,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       w.ants.searchWave[0] = 3; // MAX wave
       w.ants.searchWave[1] = 1;
       w.ants.searchWave[2] = 2;
+      w.ants.searchWave[3] = -4; // #322 V49: wave 3 parked by an alarm recall
       const w2 = deserializeWorldState(serializeWorldState(w));
       expect(w2.ants.searchWave[0]).toBe(3);
       expect(w2.ants.searchWave[1]).toBe(1);
       expect(w2.ants.searchWave[2]).toBe(2);
+      expect(w2.ants.searchWave[3]).toBe(-4);
     });
 
     it('Issue #17 Phase 1: round-trips ants.carryingBroodId and carriedBy through serialize → deserialize', () => {
