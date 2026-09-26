@@ -82,9 +82,21 @@ import type { ColonyRecord } from '../src/sim/colony/colony-store.js';
 function parseNumArg(name: string, fallback: number): number {
   const prefix = `--${name}=`;
   for (const a of process.argv.slice(2)) {
+    // A present flag with a missing or non-numeric value is an error, not the
+    // fallback: `--seed-start=abc` silently running from seed 0 would defeat
+    // range sharding.
+    if (a === `--${name}`) {
+      console.error(`--${name} needs a value (--${name}=N).`);
+      process.exit(2);
+    }
     if (a.startsWith(prefix)) {
-      const n = Number(a.slice(prefix.length));
-      if (Number.isFinite(n)) return n;
+      const raw = a.slice(prefix.length).trim();
+      const n = Number(raw);
+      if (raw.length === 0 || !Number.isFinite(n)) {
+        console.error(`--${name}=${raw} is not a number.`);
+        process.exit(2);
+      }
+      return n;
     }
   }
   return fallback;
@@ -117,8 +129,15 @@ if (!Number.isInteger(SEEDS) || SEEDS < 1) {
   console.error(`--seeds=${SEEDS} must be an integer >= 1.`);
   process.exit(2);
 }
-if (!Number.isInteger(SEED_START) || SEED_START < 0) {
-  console.error(`--seed-start=${SEED_START} must be an integer >= 0.`);
+if (!Number.isSafeInteger(SEED_START) || SEED_START < 0) {
+  console.error(`--seed-start=${SEED_START} must be a safe integer >= 0.`);
+  process.exit(2);
+}
+// createWorldState coerces a seed to uint32, so a range crossing 2^32 would
+// alias an earlier seed and report duplicate rows.
+const LAST_SEED = SEED_START + SEEDS - 1;
+if (LAST_SEED >= 2 ** 32) {
+  console.error(`The last seed (${LAST_SEED}) must be less than 2^32.`);
   process.exit(2);
 }
 if (!Number.isInteger(TICKS) || TICKS < 1) {
