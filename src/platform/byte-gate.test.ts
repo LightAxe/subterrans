@@ -151,8 +151,10 @@ function smallestNaturalPile(world: WorldState): { x: number; y: number; id: num
  * Both colonies AI-driven (the player's AI until tick 4000, so it builds Queen +
  * Nursery and lays eggs), plus a scripted player:
  *  - two extra FoodStorage chambers at tick 1-2 (fullest-first withdraw across chambers);
- *  - every 250 ticks, MarkFoodPile the smallest natural pile (foragers deplete it;
- *    the depletion clears the mark, the next mark sets it again);
+ *  - every 250 ticks, MarkFoodPile the smallest natural pile. Foragers empty the
+ *    marked pile and the depletion clears the mark (sc7: ticks ~3196 and ~6701;
+ *    sc4: ~3337 — BYTE_GATE_COVERAGE's `markedPileDepletions`); the next 250-tick
+ *    boundary marks a new one;
  *  - fight-heavy ratio at 2400, then all-fight at 4500 (food shortage: pool drawn
  *    below cap, queen and larvae go hungry);
  *  - rally on the enemy's entrance at 2600 and 5200, cleared at 4400 (surface and
@@ -316,6 +318,7 @@ interface FoodCoverage {
   queenHungryTicks: number;
   larvaHungryTicks: number;
   markChanges: number;
+  markedPileDepletions: number; // the marked pile emptied and its mark was cleared
 }
 
 function newCoverage(): FoodCoverage {
@@ -333,6 +336,7 @@ function newCoverage(): FoodCoverage {
     queenHungryTicks: 0,
     larvaHungryTicks: 0,
     markChanges: 0,
+    markedPileDepletions: 0,
   };
 }
 
@@ -406,6 +410,7 @@ function observe(
   }
   const mark = world.colonies[PC]!.priorityFoodPileId;
   if (mark !== prev.mark) cov.markChanges++;
+  if (prev.mark !== null && mark === null && !now.has(prev.mark)) cov.markedPileDepletions++;
   prev.mark = mark;
 }
 
@@ -479,11 +484,21 @@ describe.skipIf(!MODE)('byte-gate: cross-build determinism (#212 split)', () => 
         console.log(`  BYTE-IDENTICAL: FAIL  ${scn.name} — MISSING from baseline`);
         continue;
       }
-      if (got.final === base.final) {
-        console.log(`  BYTE-IDENTICAL: PASS  ${scn.name} (final=${got.final}, ${scn.ticks} ticks)`);
+      // Every checkpoint must match, not just the final hash: a mid-run divergence
+      // that later re-converges (e.g. a stale pointer overwritten a few ticks on)
+      // is still a behaviour change.
+      const div = firstDivergentTick(got, base);
+      if (
+        got.final === base.final &&
+        div === -1 &&
+        got.checkpoints.length === base.checkpoints.length
+      ) {
+        console.log(
+          `  BYTE-IDENTICAL: PASS  ${scn.name} (final=${got.final}, ${scn.ticks} ticks, ` +
+            `${got.checkpoints.length} checkpoints)`,
+        );
       } else {
         allPass = false;
-        const div = firstDivergentTick(got, base);
         console.log(
           `  BYTE-IDENTICAL: FAIL  ${scn.name} — first divergent checkpoint tick=${div}; ` +
             `final got=${got.final} baseline=${base.final}`,
