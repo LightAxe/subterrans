@@ -6,14 +6,7 @@ import { ENTRANCE_SHAFT_DEPTH, FIGHT_AGGRO_RADIUS } from '../constants.js';
 import { AntTask, FightingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import { Zone, type UndergroundGrid } from '../terrain.js';
-import {
-  SIM_VERSION_V43_FIGHTER_SENTRIES,
-  SIM_VERSION_V44_TUNNEL_DEFENCE,
-  SIM_VERSION_V45_SENTRY_RING_PASSABLE,
-  SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE,
-  SIM_VERSION_V48_SENTRY_WALK_HOME,
-  type WorldState,
-} from '../types.js';
+import type { WorldState } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
 import { isSurfaceTileInComponent } from '../surface-features.js';
 import { getScratch } from '../scratch.js';
@@ -193,7 +186,6 @@ function spiderDistance(world: WorldState, tileX: number, tileY: number): number
 
 /** V43 (#323) — `id` is a Fighter whose colony has no rally point: it has no orders. */
 function hasNoOrders(world: WorldState, id: number): boolean {
-  if (world.simVersion < SIM_VERSION_V43_FIGHTER_SENTRIES) return false;
   if (world.ants.task[id] !== AntTask.Fighting) return false;
   const colony = world.colonies[world.ants.colonyId[id]!];
   return colony !== undefined && colony.rallyPoint == null;
@@ -218,7 +210,6 @@ export function sentryPassesThroughFriends(world: WorldState, id: number): boole
   // workers walk through the sentry ring. Claiming it, a ring of returned
   // fighters bumped every forager back and the colony starved at its own door.
   if (
-    world.simVersion >= SIM_VERSION_V45_SENTRY_RING_PASSABLE &&
     world.ants.subTask[id] === FightingSubState.Holding &&
     // Holding is only ever written with target -1; kept as a guard.
     world.ants.targetPosX[id] === -1
@@ -295,7 +286,6 @@ export function fighterBarredFromOwnShaft(
   entranceX: number,
   entranceY: number,
 ): boolean {
-  if (world.simVersion < SIM_VERSION_V43_FIGHTER_SENTRIES) return false;
   if (world.ants.task[id] !== AntTask.Fighting) return false;
   const rp = ownColony.rallyPoint;
   if (rp != null && rp.tileX === entranceX && rp.tileY === entranceY) return false;
@@ -372,7 +362,6 @@ type FighterEntrance = {
  * for sentries.
  */
 function defendedEntrance(world: WorldState, colony: ColonyRecord): FighterEntrance | null {
-  if (world.simVersion < SIM_VERSION_V44_TUNNEL_DEFENCE) return null;
   // Sent at the spider (step 10d), its fighters come out to fight it instead.
   if (world.spiderPriorityColonyId === colony.colonyId) return null;
   const rp = colony.rallyPoint;
@@ -393,7 +382,6 @@ function defendedEntrance(world: WorldState, colony: ColonyRecord): FighterEntra
  * reach step 10c's survey stamped this tick (surveyDefendedNests).
  */
 export function fighterDefendsTunnels(world: WorldState, id: number): boolean {
-  if (world.simVersion < SIM_VERSION_V44_TUNNEL_DEFENCE) return false;
   const ants = world.ants;
   if (ants.task[id] !== AntTask.Fighting || ants.zone[id] !== Zone.Underground) return false;
   const colonyId = ants.colonyId[id]!;
@@ -774,9 +762,7 @@ function listSentryPosts(
   // V45 (#327): an outer ring of posts one tile farther out, still in sight of the
   // entrance, taken once the inner ring is full, so a big garrison (fighters home
   // from an invasion) spreads out instead of stacking several to a post.
-  if (world.simVersion >= SIM_VERSION_V45_SENTRY_RING_PASSABLE) {
-    addSentryRingPosts(world, entrance, entrances, entranceTiles, SENTRY_OUTER_RING_RADIUS, out);
-  }
+  addSentryRingPosts(world, entrance, entrances, entranceTiles, SENTRY_OUTER_RING_RADIUS, out);
 }
 
 /**
@@ -830,14 +816,10 @@ function sentryPostsOf(
   }
   if (!postsBuilt.has(entrance.entranceId)) {
     posts.length = 0;
-    if (world.simVersion < SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE) {
-      listSentryPosts(world, entrance, entrances, entranceTiles, posts);
-    } else {
-      const raw = rawSentryPostsOf(world, entrance, entrances, entranceTiles);
-      for (let k = 0; k < raw.length; k += 2) {
-        if (sentryPostOwner(world, raw[k]!, raw[k + 1]!, entrances, entranceTiles) === entrance) {
-          posts.push(raw[k]!, raw[k + 1]!);
-        }
+    const raw = rawSentryPostsOf(world, entrance, entrances, entranceTiles);
+    for (let k = 0; k < raw.length; k += 2) {
+      if (sentryPostOwner(world, raw[k]!, raw[k + 1]!, entrances, entranceTiles) === entrance) {
+        posts.push(raw[k]!, raw[k + 1]!);
       }
     }
     postsBuilt.add(entrance.entranceId);
@@ -935,7 +917,6 @@ function sentryEntrance(
   previous: number,
 ): FighterEntrance | null {
   const nearest = pickFighterTargetEntrance(entrances, tileX, tileY);
-  if (world.simVersion < SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE) return nearest;
   const tx = world.ants.targetPosX[id]!;
   let owner: FighterEntrance | null = null;
   // Only a target sentry routing set as its post (ToPost) is read as one: a chase,
@@ -1032,7 +1013,7 @@ function routeToSentryPost(
   // its post. Walking home steps by the obstacle-aware surface flow field (step
   // 16); the straight-line step to a post pinned a sentry behind an obstacle, and
   // at the guard edge the two straight-line walks undid each other every tick.
-  const walkingHome = world.simVersion >= SIM_VERSION_V48_SENTRY_WALK_HOME && !wasHolding;
+  const walkingHome = !wasHolding;
   if (doorDist > SENTRY_GUARD_RADIUS || (walkingHome && doorDist > SENTRY_DOOR_AREA_RADIUS)) {
     ants.targetPosX[id] = doorFpX;
     ants.targetPosY[id] = doorFpY;
@@ -1059,8 +1040,7 @@ function routeToSentryPost(
   // V45 (#327): and never beyond sight of the entrance. Inner posts' hold tiles are
   // all in sight; an outer post's outward neighbour is not, and a sentry holding
   // there could not see an enemy standing on the entrance.
-  const inSight =
-    world.simVersion < SIM_VERSION_V45_SENTRY_RING_PASSABLE || doorDist <= FIGHT_AGGRO_RADIUS;
+  const inSight = doorDist <= FIGHT_AGGRO_RADIUS;
   if (
     inSight &&
     (holding
@@ -1251,88 +1231,80 @@ export function updateFightAntTargets(world: WorldState): void {
   // Fighters inside a FOREIGN grid (recalled invaders) are left out; they rank
   // once they surface, and then walk home. Only the ranks of fighters bound for an
   // OPEN entrance are read below.
-  const sentries = world.simVersion >= SIM_VERSION_V43_FIGHTER_SENTRIES;
-  let sentrySlot: Int32Array | null = null;
-  let sentryMoving: Uint8Array | null = null;
-  let entranceTiles: number[] | null = null;
+  const scratch = getScratch(world).antTargeting;
   // entranceId → that door's sentry posts (listSentryPosts), built on first use.
-  let postsByEntrance: Map<number, number[]> | null = null;
-  let postsBuilt: Set<number> | null = null;
-  if (sentries) {
-    const scratch = getScratch(world).antTargeting;
-    postsByEntrance = scratch.sentryPosts;
-    postsBuilt = scratch.sentryPostsBuilt;
-    postsBuilt.clear();
-    scratch.sentryRawPostsBuilt.clear();
-    if (scratch.sentrySlot.length < ants.alive.length) {
-      scratch.sentrySlot = new Int32Array(ants.alive.length);
-    }
-    sentrySlot = scratch.sentrySlot;
-    if (scratch.sentryMoving.length < ants.alive.length) {
-      scratch.sentryMoving = new Uint8Array(ants.alive.length);
-    }
-    sentryMoving = scratch.sentryMoving;
-    sentryMoving.fill(0);
-    entranceTiles = scratch.sentryEntranceTiles;
-    entranceTiles.length = 0;
-    for (const cidKey in world.colonies) {
-      if (!Object.hasOwn(world.colonies, cidKey)) continue;
-      const c = world.colonies[cidKey as unknown as keyof typeof world.colonies];
-      const ents = c?.entrances;
-      if (ents == null) continue;
-      for (let e = 0; e < ents.length; e++) {
-        entranceTiles.push(ents[e]!.surfaceTileX, ents[e]!.surfaceTileY);
-      }
-    }
-    // entranceId → the next rank at that entrance. (An entrance belongs to one
-    // colony, and a fighter only binds to its own colony's entrances.)
-    const nextRank = scratch.sentryNextRank;
-    nextRank.clear();
-    for (let wid = 0; wid < ants.alive.length; wid++) {
-      if (ants.alive[wid] !== 1 || ants.task[wid] !== AntTask.Fighting) continue;
-      const cid = ants.colonyId[wid]!;
-      const col = world.colonies[cid];
-      if (!col || col.entrances == null) continue;
-      // V44 (#325) — tunnel defenders rank at the entrance they defend: every
-      // fighter of the colony outside foreign grids, in entity-id order.
-      const defended = defendedEntrance(world, col);
-      if (defended !== null) {
-        if (ants.zone[wid] === Zone.Underground && ants.currentGridColonyId[wid] !== cid) continue;
-        const rank = nextRank.get(defended.entranceId) ?? 0;
-        sentrySlot[wid] = rank;
-        nextRank.set(defended.entranceId, rank + 1);
-        continue;
-      }
-      if (col.rallyPoint != null) continue;
-      const ents = col.entrances;
-      if (ents.length === 0) continue;
-      const tileX = ants.posX[wid]! >> FP_SHIFT;
-      const tileY = ants.posY[wid]! >> FP_SHIFT;
-      let e: FighterEntrance | null;
-      if (ants.zone[wid] === Zone.Underground) {
-        if (ants.currentGridColonyId[wid] !== cid) continue;
-        e = shaftOfFighterBelow(ents, tileX, tileY);
-      } else {
-        e = sentryEntrance(
-          world,
-          wid,
-          ents,
-          tileX,
-          tileY,
-          entranceTiles,
-          postsByEntrance,
-          postsBuilt,
-          ants.subTask[wid]!,
-        );
-      }
-      if (e === null || !e.isOpen) continue;
-      const rank = nextRank.get(e.entranceId) ?? 0;
-      sentrySlot[wid] = rank;
-      nextRank.set(e.entranceId, rank + 1);
-    }
-    // V44 (#325) — the defended nests' posts and reach, for step 10c and 16.
-    surveyDefendedNests(world, nextRank, postsByEntrance, postsBuilt);
+  const postsByEntrance = scratch.sentryPosts;
+  const postsBuilt = scratch.sentryPostsBuilt;
+  postsBuilt.clear();
+  scratch.sentryRawPostsBuilt.clear();
+  if (scratch.sentrySlot.length < ants.alive.length) {
+    scratch.sentrySlot = new Int32Array(ants.alive.length);
   }
+  const sentrySlot = scratch.sentrySlot;
+  if (scratch.sentryMoving.length < ants.alive.length) {
+    scratch.sentryMoving = new Uint8Array(ants.alive.length);
+  }
+  const sentryMoving = scratch.sentryMoving;
+  sentryMoving.fill(0);
+  const entranceTiles = scratch.sentryEntranceTiles;
+  entranceTiles.length = 0;
+  for (const cidKey in world.colonies) {
+    if (!Object.hasOwn(world.colonies, cidKey)) continue;
+    const c = world.colonies[cidKey as unknown as keyof typeof world.colonies];
+    const ents = c?.entrances;
+    if (ents == null) continue;
+    for (let e = 0; e < ents.length; e++) {
+      entranceTiles.push(ents[e]!.surfaceTileX, ents[e]!.surfaceTileY);
+    }
+  }
+  // entranceId → the next rank at that entrance. (An entrance belongs to one
+  // colony, and a fighter only binds to its own colony's entrances.)
+  const nextRank = scratch.sentryNextRank;
+  nextRank.clear();
+  for (let wid = 0; wid < ants.alive.length; wid++) {
+    if (ants.alive[wid] !== 1 || ants.task[wid] !== AntTask.Fighting) continue;
+    const cid = ants.colonyId[wid]!;
+    const col = world.colonies[cid];
+    if (!col || col.entrances == null) continue;
+    // V44 (#325) — tunnel defenders rank at the entrance they defend: every
+    // fighter of the colony outside foreign grids, in entity-id order.
+    const defended = defendedEntrance(world, col);
+    if (defended !== null) {
+      if (ants.zone[wid] === Zone.Underground && ants.currentGridColonyId[wid] !== cid) continue;
+      const rank = nextRank.get(defended.entranceId) ?? 0;
+      sentrySlot[wid] = rank;
+      nextRank.set(defended.entranceId, rank + 1);
+      continue;
+    }
+    if (col.rallyPoint != null) continue;
+    const ents = col.entrances;
+    if (ents.length === 0) continue;
+    const tileX = ants.posX[wid]! >> FP_SHIFT;
+    const tileY = ants.posY[wid]! >> FP_SHIFT;
+    let e: FighterEntrance | null;
+    if (ants.zone[wid] === Zone.Underground) {
+      if (ants.currentGridColonyId[wid] !== cid) continue;
+      e = shaftOfFighterBelow(ents, tileX, tileY);
+    } else {
+      e = sentryEntrance(
+        world,
+        wid,
+        ents,
+        tileX,
+        tileY,
+        entranceTiles,
+        postsByEntrance,
+        postsBuilt,
+        ants.subTask[wid]!,
+      );
+    }
+    if (e === null || !e.isOpen) continue;
+    const rank = nextRank.get(e.entranceId) ?? 0;
+    sentrySlot[wid] = rank;
+    nextRank.set(e.entranceId, rank + 1);
+  }
+  // V44 (#325) — the defended nests' posts and reach, for step 10c and 16.
+  surveyDefendedNests(world, nextRank, postsByEntrance, postsBuilt);
 
   for (let id = 0; id < ants.alive.length; id++) {
     if (ants.alive[id] !== 1) continue;
@@ -1346,7 +1318,7 @@ export function updateFightAntTargets(world: WorldState): void {
     // fighter not holding, and a sentry held at a rally that is then cleared
     // doesn't pass for one still holding its post.
     const previousSubTask = ants.subTask[id]!;
-    const wasHolding = sentrySlot !== null && previousSubTask === FightingSubState.Holding;
+    const wasHolding = previousSubTask === FightingSubState.Holding;
     if (wasHolding) ants.subTask[id] = FightingSubState.MovingToRally;
     // #328 (V46): ToPost is this pass's verdict too (only V46 routing writes it).
     if (previousSubTask === FightingSubState.ToPost) {
@@ -1377,14 +1349,14 @@ export function updateFightAntTargets(world: WorldState): void {
     // V44 (#325) — below ground in its own nest, where its rally entrance's shaft
     // reaches: a tunnel defender. (On the surface, or cut off below, it walks to
     // that entrance and goes down, by the routing below.)
-    if (sentrySlot !== null && fighterDefendsTunnels(world, id)) {
+    if (fighterDefendsTunnels(world, id)) {
       routeTunnelDefender(
         world,
         id,
         defendedEntrance(world, colony)!,
         sentrySlot[id]!,
-        postsByEntrance!,
-        sentryMoving!,
+        postsByEntrance,
+        sentryMoving,
       );
       continue;
     }
@@ -1397,16 +1369,16 @@ export function updateFightAntTargets(world: WorldState): void {
       // the entrance tile: parked there, pre-V43 idle fighters bounced down and up
       // the shaft every tick. Underground (own grid) or with only closed entrances,
       // fall through to the pre-V43 routing: climb out / wait at the shaft.
-      if (sentrySlot !== null && ants.zone[id] === Zone.Surface && hasEntrances) {
+      if (ants.zone[id] === Zone.Surface && hasEntrances) {
         const e = sentryEntrance(
           world,
           id,
           entrances,
           ants.posX[id]! >> FP_SHIFT,
           ants.posY[id]! >> FP_SHIFT,
-          entranceTiles!,
-          postsByEntrance!,
-          postsBuilt!,
+          entranceTiles,
+          postsByEntrance,
+          postsBuilt,
           previousSubTask,
         );
         if (e !== null && e.isOpen) {
@@ -1415,7 +1387,7 @@ export function updateFightAntTargets(world: WorldState): void {
           if (sentryTakesCover(world, id, e.surfaceTileX, e.surfaceTileY)) {
             ants.targetPosX[id] = (e.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1);
             ants.targetPosY[id] = (e.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1);
-            sentryMoving![id] = 1;
+            sentryMoving[id] = 1;
             continue;
           }
           // Otherwise chase an enemy ANT it can see inside its guard area — never
@@ -1441,9 +1413,9 @@ export function updateFightAntTargets(world: WorldState): void {
             e,
             entrances,
             sentrySlot[id]!,
-            entranceTiles!,
-            postsByEntrance!,
-            postsBuilt!,
+            entranceTiles,
+            postsByEntrance,
+            postsBuilt,
             wasHolding,
           );
           if (routed === SENTRY_NO_POST) {
@@ -1456,15 +1428,13 @@ export function updateFightAntTargets(world: WorldState): void {
           // ordinary bumps round obstacles, like any ant.
           // #333 (V48): a sentry walking home is marked 2 (not a pass-through
           // value), so step 16 steps it by the surface entrance flow field.
-          if (routed === SENTRY_HOME && world.simVersion >= SIM_VERSION_V48_SENTRY_WALK_HOME) {
-            sentryMoving![id] = SENTRY_MOVING_HOME;
+          if (routed === SENTRY_HOME) {
+            sentryMoving[id] = SENTRY_MOVING_HOME;
           }
           if (routed === SENTRY_TO_POST) {
-            sentryMoving![id] = 1;
+            sentryMoving[id] = 1;
             // #328 (V46): its target is its post (sentryEntrance reads this).
-            if (world.simVersion >= SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE) {
-              ants.subTask[id] = FightingSubState.ToPost;
-            }
+            ants.subTask[id] = FightingSubState.ToPost;
           }
           continue;
         }

@@ -9,16 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
 import { createScenario } from './scenario.js';
-import {
-  allocateEntityId,
-  SIM_VERSION_V42_COLONY_ALARM,
-  SIM_VERSION_V43_FIGHTER_SENTRIES,
-  SIM_VERSION_V44_TUNNEL_DEFENCE,
-  SIM_VERSION_V45_SENTRY_RING_PASSABLE,
-  SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE,
-  SIM_VERSION_V47_SENTRY_STAND_DOWN,
-  SIM_VERSION_V48_SENTRY_WALK_HOME,
-} from './types.js';
+import { allocateEntityId } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask, FightingSubState, ForagingSubState } from './enums.js';
 import { Zone } from './terrain.js';
@@ -33,16 +24,16 @@ import {
 import type { SimCommand } from './commands.js';
 import type { WorldState } from './types.js';
 
-/** A quiet player colony (no spider, no AI) at `simVersion`, with `n` Fighting ants
- *  standing on the surface ON its open entrance tile. */
-function fightersOnTheDoor(
-  simVersion: number,
-  n: number,
-): { world: WorldState; ids: number[]; ent: { x: number; y: number } } {
+/** A quiet player colony (no spider, no AI) with `n` Fighting ants standing on the
+ *  surface ON its open entrance tile. */
+function fightersOnTheDoor(n: number): {
+  world: WorldState;
+  ids: number[];
+  ent: { x: number; y: number };
+} {
   const world = createScenario(7, 'Normal');
   world.spider = null; // nothing to chase or flee: only the door rules act
   world.aiState = [];
-  world.simVersion = simVersion; // sticky, exactly as a loaded save arrives
   const colony = world.colonies[PLAYER_COLONY_ID]!;
   const e = colony.entrances.find((en) => en.isOpen)!;
   const ids: number[] = [];
@@ -62,9 +53,25 @@ function fightersOnTheDoor(
     colony.workerCount += 1;
     ids.push(id);
   }
-  // Keep the V40 small-colony stand-down from demoting them.
-  colony.targetRatio.fight = Math.max(5, n);
+  askForEveryFighter(world);
   return { world, ids, ent: { x: e.surfaceTileX, y: e.surfaceTileY } };
+}
+
+/** Set the player colony's ratio to its living workers' current split, so the
+ *  allocation asks for every Fighting ant: neither the V40 small-colony stand-down
+ *  nor the V47 surplus-sentry stand-down (sentry-stand-down.test.ts) releases any,
+ *  and no other worker is promoted. These tests are about where sentries go. */
+function askForEveryFighter(world: WorldState): void {
+  const colony = world.colonies[PLAYER_COLONY_ID]!;
+  let fight = 0;
+  let other = 0;
+  for (const id of colony.workers) {
+    if (world.ants.alive[id] !== 1) continue;
+    if (world.ants.task[id] === AntTask.Fighting) fight += 1;
+    else other += 1;
+  }
+  colony.targetRatio.forage = other;
+  colony.targetRatio.fight = fight;
 }
 
 /** Tick `ticks` times; return each fighter's number of zone changes. */
@@ -108,19 +115,13 @@ function placeFighters(
     colony.workerCount += 1;
     ids.push(id);
   }
-  colony.targetRatio.fight = Math.max(5, n);
+  askForEveryFighter(world);
   return { ids };
 }
 
 describe('V43 (#323) — idle fighters stand sentry instead of bouncing at the door', () => {
-  it('pre-V43: a no-rally fighter on its own door bounces down and up every tick', () => {
-    const { world, ids } = fightersOnTheDoor(SIM_VERSION_V42_COLONY_ALARM, 1);
-    const [flips] = zoneFlips(world, ids, 40);
-    expect(flips).toBeGreaterThanOrEqual(30); // ~every tick — the #323 bug, kept below V43
-  });
-
   it('V43: no-rally fighters on their own door never go down it, and settle on posts', () => {
-    const { world, ids, ent } = fightersOnTheDoor(SIM_VERSION_V43_FIGHTER_SENTRIES, 4);
+    const { world, ids, ent } = fightersOnTheDoor(4);
     const flips = zoneFlips(world, ids, 120);
     expect(flips).toEqual([0, 0, 0, 0]);
     for (const id of ids) {
@@ -134,7 +135,7 @@ describe('V43 (#323) — idle fighters stand sentry instead of bouncing at the d
   });
 
   it('V43: a rally ON the own entrance still takes a fighter down it (defensive descent kept)', () => {
-    const { world, ids, ent } = fightersOnTheDoor(SIM_VERSION_V43_FIGHTER_SENTRIES, 1);
+    const { world, ids, ent } = fightersOnTheDoor(1);
     world.colonies[PLAYER_COLONY_ID]!.rallyPoint = { tileX: ent.x, tileY: ent.y };
     tick(world, []);
     expect(world.ants.zone[ids[0]!]).toBe(Zone.Underground);
@@ -144,31 +145,26 @@ describe('V43 (#323) — idle fighters stand sentry instead of bouncing at the d
    *  straight path steps onto the entrance tile on the way. (Starting ON the door
    *  would not test the crossing: its first step east takes it off the door
    *  before the descent check runs.) */
-  function crossing(simVersion: number): number {
-    const { world, ids, ent } = fightersOnTheDoor(simVersion, 1);
+  function crossing(): number {
+    const { world, ids, ent } = fightersOnTheDoor(1);
     world.ants.posX[ids[0]!] = ((ent.x - 2) << FP_SHIFT) + (FP_ONE >> 1);
     world.colonies[PLAYER_COLONY_ID]!.rallyPoint = { tileX: ent.x + 8, tileY: ent.y };
     return zoneFlips(world, ids, 30)[0]!;
   }
 
   it('V43: a fighter crossing its own door toward a surface rally walks over it', () => {
-    expect(crossing(SIM_VERSION_V43_FIGHTER_SENTRIES)).toBe(0);
+    expect(crossing()).toBe(0);
   });
 
   it('V43: a fighter crossing its own door toward a rally in the same column walks over it', () => {
     const world = createScenario(7, 'Normal');
     world.spider = null;
     world.aiState = [];
-    world.simVersion = SIM_VERSION_V43_FIGHTER_SENTRIES;
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     const e = colony.entrances.find((en) => en.isOpen)!;
     const { ids } = placeFighters(world, e.surfaceTileX, e.surfaceTileY - 2, 1);
     colony.rallyPoint = { tileX: e.surfaceTileX, tileY: e.surfaceTileY + 3 };
     expect(zoneFlips(world, ids, 30)).toEqual([0]);
-  });
-
-  it('pre-V43: the same crossing drops the fighter into the shaft and back out', () => {
-    expect(crossing(SIM_VERSION_V42_COLONY_ALARM)).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -181,14 +177,13 @@ describe('V43 (#323) — sentries take cover from the spider', () => {
     sp.posY = (ent.y << FP_SHIFT) + (FP_ONE >> 1);
   }
 
-  function sentryWithSpider(simVersion: number = SIM_VERSION_V43_FIGHTER_SENTRIES): {
+  function sentryWithSpider(): {
     world: WorldState;
     id: number;
     ent: { x: number; y: number };
   } {
     const world = createScenario(7, 'Normal');
     world.aiState = [];
-    world.simVersion = simVersion;
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     const e = colony.entrances.find((en) => en.isOpen)!;
     const id = allocateEntityId(world);
@@ -270,12 +265,6 @@ describe('V43 (#323) — sentries take cover from the spider', () => {
     expect(world.ants.zone[id]).toBe(Zone.Underground);
   });
 
-  it('pre-V43: a fighter at the top of its shaft climbs out whatever the spider does', () => {
-    const { world, id, ent } = sentryWithSpider(SIM_VERSION_V42_COLONY_ALARM);
-    shelter(world, id);
-    expect(ticksToSurface(world, id, ent, 5, 3)).toBeGreaterThanOrEqual(0);
-  });
-
   it('stays below only in its OWN nest: a recalled invader climbs out of the enemy shaft past the spider', () => {
     const { world } = sentryWithSpider();
     const enemyEnt = world.colonies[ENEMY_COLONY_ID]!.entrances.find((e) => e.isOpen)!;
@@ -292,7 +281,6 @@ describe('V43 (#323) — sentries take cover from the spider', () => {
   it('under spider priority, fighters sent at the spider do not pass through each other onto its tile', () => {
     const world = createScenario(7, 'Normal');
     world.aiState = [];
-    world.simVersion = SIM_VERSION_V43_FIGHTER_SENTRIES;
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     const e = colony.entrances.find((en) => en.isOpen)!;
     const ids: number[] = [];
@@ -365,7 +353,6 @@ describe('V43 (#323) — no orders, no invasion; no ping-pong between close door
     const world = createScenario(7, 'Normal');
     world.spider = null;
     world.aiState = [];
-    world.simVersion = SIM_VERSION_V43_FIGHTER_SENTRIES;
     const enemyEnt = world.colonies[ENEMY_COLONY_ID]!.entrances.find((e) => e.isOpen)!;
     // Move the enemy queen off her door (the #164 pre-descent gate would hold a
     // foreign fighter up top to fight her instead).
@@ -376,24 +363,10 @@ describe('V43 (#323) — no orders, no invasion; no ping-pong between close door
     expect(world.ants.zone[ids[0]!]).toBe(Zone.Surface);
   });
 
-  it('pre-V43: the same fighter drops into the enemy nest', () => {
-    const world = createScenario(7, 'Normal');
-    world.spider = null;
-    world.aiState = [];
-    world.simVersion = SIM_VERSION_V42_COLONY_ALARM;
-    const enemyEnt = world.colonies[ENEMY_COLONY_ID]!.entrances.find((e) => e.isOpen)!;
-    const q = world.colonies[ENEMY_COLONY_ID]!.queenEntityId;
-    world.ants.posX[q] = (enemyEnt.surfaceTileX + 6) << FP_SHIFT;
-    const { ids } = placeFighters(world, enemyEnt.surfaceTileX, enemyEnt.surfaceTileY, 1);
-    tick(world, []);
-    expect(world.ants.zone[ids[0]!]).toBe(Zone.Underground);
-  });
-
   it('sentries settle when two open entrances sit close together', () => {
     const world = createScenario(7, 'Normal');
     world.spider = null;
     world.aiState = [];
-    world.simVersion = SIM_VERSION_V43_FIGHTER_SENTRIES;
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     const e1 = colony.entrances.find((e) => e.isOpen)!;
     // A second open entrance 3 east: parts of each door's post ring lie nearer
@@ -444,7 +417,6 @@ describe('V43 (#323) — no orders, no invasion; no ping-pong between close door
     const world = createScenario(7, 'Normal');
     world.spider = null;
     world.aiState = [];
-    world.simVersion = SIM_VERSION_V43_FIGHTER_SENTRIES;
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     const e1 = colony.entrances.find((e) => e.isOpen)!;
     placeFighters(world, e1.surfaceTileX, e1.surfaceTileY, 11);
@@ -461,15 +433,14 @@ describe('V43 (#323) — no orders, no invasion; no ping-pong between close door
     expect(heldAt).toBeGreaterThanOrEqual(0);
   }, 30_000);
 
-  it('fighters walking home after a cleared field rally get round obstacles as before V43', () => {
+  it('fighters walking home after a cleared field rally get round obstacles', () => {
     // A field rally far from the door, then cleared: the recalled fighters walk
     // home across the map. Count those still more than 6 from the door after
-    // 1 500 ticks, at V43 and at V42.
-    const stranded = (simVersion: number): number => {
+    // 1 500 ticks.
+    const stranded = (): number => {
       const world = createScenario(6, 'Normal');
       world.spider = null;
       world.aiState = [];
-      world.simVersion = simVersion;
       const colony = world.colonies[PLAYER_COLONY_ID]!;
       const e = colony.entrances.find((en) => en.isOpen)!;
       const { ids } = placeFighters(world, e.surfaceTileX, e.surfaceTileY, 10);
@@ -486,16 +457,14 @@ describe('V43 (#323) — no orders, no invasion; no ping-pong between close door
             6,
       ).length;
     };
-    const v42 = stranded(SIM_VERSION_V42_COLONY_ALARM);
-    expect(v42).toBeGreaterThan(0); // the case does strand some, even before V43
-    expect(stranded(SIM_VERSION_V43_FIGHTER_SENTRIES)).toBeLessThanOrEqual(v42);
+    // Before V43 some stayed stranded; walking home by the flow field (V48) none do.
+    expect(stranded()).toBe(0);
   }, 30_000);
 
-  it('twenty sentries at one door, more than its posts, settle with none on the door', () => {
+  it('twenty sentries at one door settle one to a tile, with none on the door', () => {
     const world = createScenario(7, 'Normal');
     world.spider = null;
     world.aiState = [];
-    world.simVersion = SIM_VERSION_V43_FIGHTER_SENTRIES;
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     const e1 = colony.entrances.find((e) => e.isOpen)!;
     const { ids } = placeFighters(world, e1.surfaceTileX, e1.surfaceTileY, 20);
@@ -514,7 +483,7 @@ describe('V43 (#323) — no orders, no invasion; no ping-pong between close door
     }
     expect(moves).toBe(0);
     expect(ids.filter((id) => world.ants.targetPosX[id] !== -1)).toEqual([]);
-    // Holders still take a tile each: sentries sharing a post stand beside it.
+    // Holders take a tile each.
     const tiles = new Set(
       ids.map((id) => `${world.ants.posX[id]! >> FP_SHIFT},${world.ants.posY[id]! >> FP_SHIFT}`),
     );
@@ -532,7 +501,6 @@ describe('V43 (#323) — no orders, no invasion; no ping-pong between close door
     const world = createScenario(7, 'Normal');
     world.spider = null;
     world.aiState = [];
-    world.simVersion = SIM_VERSION_V43_FIGHTER_SENTRIES;
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     const e1 = colony.entrances.find((e) => e.isOpen)!;
     // The middle door has no stable post: every hold area on its ring reaches a
@@ -574,8 +542,8 @@ describe('V43 (#323) — no orders, no invasion; no ping-pong between close door
 describe('V45 (#327) — workers walk through the sentry ring', () => {
   /** Ticks for a laden forager to get below, starting `dx` tiles east of an entrance
    *  that `n` settled sentries surround; -1 if it never does within `limit`. */
-  function carrierThroughRing(simVersion: number, n: number, dx: number, limit: number): number {
-    const { world, ent } = fightersOnTheDoor(simVersion, n);
+  function carrierThroughRing(n: number, dx: number, limit: number): number {
+    const { world, ent } = fightersOnTheDoor(n);
     for (let t = 0; t < 300; t++) tick(world, []); // the sentries take their posts
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     const id = allocateEntityId(world); // highest id: every holder outranks it
@@ -600,7 +568,7 @@ describe('V45 (#327) — workers walk through the sentry ring', () => {
   }
 
   it('twenty-four sentries settle one to a tile, on the inner and outer rings, none on the door', () => {
-    const { world, ids, ent } = fightersOnTheDoor(SIM_VERSION_V45_SENTRY_RING_PASSABLE, 24);
+    const { world, ids, ent } = fightersOnTheDoor(24);
     for (let t = 0; t < 400; t++) tick(world, []);
     const tiles = new Set<string>();
     const rings = new Map<number, number>();
@@ -617,11 +585,7 @@ describe('V45 (#327) — workers walk through the sentry ring', () => {
   });
 
   it('a laden forager crosses a ring of holding sentries and goes down', () => {
-    expect(carrierThroughRing(SIM_VERSION_V45_SENTRY_RING_PASSABLE, 20, 6, 200)).toBeGreaterThan(0);
-  });
-
-  it('pre-V45: the same ring bumps it back and it never gets in', () => {
-    expect(carrierThroughRing(SIM_VERSION_V44_TUNNEL_DEFENCE, 20, 6, 200)).toBe(-1);
+    expect(carrierThroughRing(20, 6, 200)).toBeGreaterThan(0);
   });
 });
 
@@ -630,12 +594,11 @@ describe('V46 (#328) — sentries at entrances close together settle', () => {
    *  `n` sentries. Returns how many sentries change tile on some tick of the last
    *  `watch` ticks (checked every tick: a ping-pong has period 2). */
   function crowdedEntrances(
-    simVersion: number,
     n: number,
     watch: number,
     offsets: ReadonlyArray<readonly [number, number]>,
   ): number {
-    const { world, ids, ent } = fightersOnTheDoor(simVersion, n);
+    const { world, ids, ent } = fightersOnTheDoor(n);
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     for (const [dx, dy] of offsets) {
       colony.entrances.push({
@@ -691,12 +654,12 @@ describe('V46 (#328) — sentries at entrances close together settle', () => {
 
   it('no sentry keeps moving once settled', () => {
     for (const layout of LAYOUTS) {
-      expect(crowdedEntrances(SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE, 30, 100, layout)).toBe(0);
+      expect(crowdedEntrances(30, 100, layout)).toBe(0);
     }
   }, 30_000);
 
   it('a garrison at four close entrances spreads over all of them, one sentry to a tile', () => {
-    const { world, ids, ent } = fightersOnTheDoor(SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE, 30);
+    const { world, ids, ent } = fightersOnTheDoor(30);
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     for (const [dx, dy] of [
       [2, -1],
@@ -743,13 +706,12 @@ describe('V46 (#328) — sentries at entrances close together settle', () => {
   it('the spider override clears the walking-to-post mark', () => {
     const world = createScenario(7, 'Normal');
     world.aiState = [];
-    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     const e = colony.entrances.find((en) => en.isOpen)!;
     const id = allocateEntityId(world);
     initAnt(world.ants, id, {
       colonyId: PLAYER_COLONY_ID,
-      posX: ((e.surfaceTileX + 6) << FP_SHIFT) + (FP_ONE >> 1),
+      posX: ((e.surfaceTileX + 4) << FP_SHIFT) + (FP_ONE >> 1),
       posY: (e.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1),
       task: AntTask.Fighting,
       subTask: FightingSubState.MovingToRally,
@@ -770,12 +732,6 @@ describe('V46 (#328) — sentries at entrances close together settle', () => {
     tick(world, []);
     expect(world.ants.subTask[id]).not.toBe(FightingSubState.ToPost);
   });
-
-  it('pre-V46: sentries at the first layout turn round every tick', () => {
-    expect(
-      crowdedEntrances(SIM_VERSION_V45_SENTRY_RING_PASSABLE, 30, 100, LAYOUTS[0]!),
-    ).toBeGreaterThan(0);
-  }, 30_000);
 });
 
 describe('V48 (#333) — a sentry behind an obstacle gets home', () => {
@@ -784,11 +740,10 @@ describe('V48 (#333) — a sentry behind an obstacle gets home', () => {
    *  of it is 7–9 tiles from its entrance. Returns, over ticks 400–600: target
    *  changes, tile changes, and whether it ends holding a post. */
   function behindTheObstacle(
-    simVersion: number,
     sx: number,
     sy: number,
   ): { targetChanges: number; moves: number; holding: boolean } {
-    const { world, ids, ent } = fightersOnTheDoor(simVersion, 1);
+    const { world, ids, ent } = fightersOnTheDoor(1);
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     expect(ent).toEqual({ x: 24, y: 64 });
     for (const [x, y] of [
@@ -832,17 +787,11 @@ describe('V48 (#333) — a sentry behind an obstacle gets home', () => {
       [21, 74],
       [22, 74],
     ] as const) {
-      expect(behindTheObstacle(SIM_VERSION_V48_SENTRY_WALK_HOME, sx, sy)).toEqual({
+      expect(behindTheObstacle(sx, sy)).toEqual({
         targetChanges: 0,
         moves: 0,
         holding: true,
       });
     }
-  }, 30_000);
-
-  it('V47 (pinned): it flips between walking home and walking to its post, every tick', () => {
-    const r = behindTheObstacle(SIM_VERSION_V47_SENTRY_STAND_DOWN, 19, 73);
-    expect(r.holding).toBe(false);
-    expect(r.targetChanges).toBeGreaterThan(100);
   }, 30_000);
 });

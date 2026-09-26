@@ -14,12 +14,6 @@ import {
   allocateEntityId,
   SIM_VERSION_V17_COMBAT_AGGRO,
   SIM_VERSION_V23_SPIDER_AGGRO,
-  SIM_VERSION_V42_COLONY_ALARM,
-  SIM_VERSION_V44_TUNNEL_DEFENCE,
-  SIM_VERSION_V45_SENTRY_RING_PASSABLE,
-  SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE,
-  SIM_VERSION_V47_SENTRY_STAND_DOWN,
-  SIM_VERSION_V48_SENTRY_WALK_HOME,
 } from '../types.js';
 import { SurfaceMovementEffect } from '../surface-features.js';
 import { SURFACE_GRID_WIDTH } from '../constants.js';
@@ -164,10 +158,10 @@ describe('updateFightAntTargets', () => {
     expect(world.ants.targetPosY[antId]).toBe(888);
   });
 
-  it('pre-V43: falls back to first entrance (surfaceTileX/surfaceTileY in fp) when rallyPoint is null', () => {
+  it('with no rallyPoint, a fighter far from its door walks home to the first entrance tile (fp)', () => {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
-    // V43 (#323) replaced this with sentry posts; below it, the entrance tile stands.
-    world.simVersion = SIM_VERSION_V42_COLONY_ALARM;
+    // A sentry (V43, #323) beyond its guard area walks home to the door (V48, #333)
+    // before taking a post.
     const colony = createColonyRecord(COLONY_ID, 0);
     colony.entrances = [{ entranceId: 1, surfaceTileX: 5, surfaceTileY: 7, isOpen: true }];
     colony.rallyPoint = null;
@@ -523,12 +517,8 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
   const ENT_X = 40;
   const ENT_Y = 40;
 
-  /** Pinned to V47: these tests route sentries 5–8 tiles out straight to their
-   *  posts, the rule V48 (#333) replaced with walking home to the door area first.
-   *  The V48 tests below set the version back. */
   function sentryWorld(): { world: WorldState; colony: ColonyRecord } {
     const world = createWorldState(42, MAX_TEST_ENTITIES);
-    world.simVersion = SIM_VERSION_V47_SENTRY_STAND_DOWN;
     const colony = createColonyRecord(COLONY_ID, 0);
     colony.entrances = [{ entranceId: 1, surfaceTileX: ENT_X, surfaceTileY: ENT_Y, isOpen: true }];
     colony.rallyPoint = null;
@@ -567,7 +557,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
 
   it('targets a post one tile inside sight of the door, never the entrance tile (the #323 bounce)', () => {
     const { world, colony } = sentryWorld();
-    const id = addFighter(world, colony, ENT_X + 6, ENT_Y);
+    const id = addFighter(world, colony, ENT_X + 4, ENT_Y);
     updateFightAntTargets(world);
     const [tx, ty] = targetTile(world, id);
     expect(manhattan(tx, ty, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS - 1);
@@ -577,7 +567,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
   it('spreads consecutive sentries around the ring instead of stacking them', () => {
     const { world, colony } = sentryWorld();
     // Five: a stride sharing a factor with the ring size (12) repeats by the fifth.
-    const ids = [0, 1, 2, 3, 4].map(() => addFighter(world, colony, ENT_X + 3, ENT_Y + 3));
+    const ids = [0, 1, 2, 3, 4].map(() => addFighter(world, colony, ENT_X, ENT_Y));
     updateFightAntTargets(world);
     const posts = ids.map((id) => targetTile(world, id).join(','));
     expect(new Set(posts).size).toBe(5);
@@ -589,7 +579,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
 
   it('holds (target -1) within one tile of its post', () => {
     const { world, colony } = sentryWorld();
-    const id = addFighter(world, colony, ENT_X + 6, ENT_Y);
+    const id = addFighter(world, colony, ENT_X + 4, ENT_Y);
     updateFightAntTargets(world);
     const [px, py] = targetTile(world, id);
     // Move the sentry onto its post, then next to it: both hold.
@@ -645,7 +635,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     const foe = addFighter(world, enemy, ENT_X + GUARD_RADIUS + 1, ENT_Y);
     updateFightAntTargets(world);
     const [tx, ty] = targetTile(world, id);
-    expect(manhattan(tx, ty, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS - 1); // its post
+    expect([tx, ty]).toEqual([ENT_X, ENT_Y]); // walking home (V48), not lured off
     // On the guard radius: chased.
     world.ants.posX[foe] = ((ENT_X + GUARD_RADIUS) << FP_SHIFT) + (FP_ONE >> 1);
     updateFightAntTargets(world);
@@ -673,21 +663,9 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     expect(world.ants.targetPosX[id]).toBe(world.ants.posX[q]);
   });
 
-  it('pre-V48 (pinned V47): beyond its guard area walks to the door itself (the pre-V43 route home), and takes its post inside it', () => {
-    const { world, colony } = sentryWorld();
-    world.simVersion = SIM_VERSION_V47_SENTRY_STAND_DOWN; // V48 (#333) finishes the walk home
-    const id = addFighter(world, colony, ENT_X + GUARD_RADIUS + 1, ENT_Y);
-    updateFightAntTargets(world);
-    expect(targetTile(world, id)).toEqual([ENT_X, ENT_Y]);
-    world.ants.posX[id] = ((ENT_X + GUARD_RADIUS) << FP_SHIFT) + (FP_ONE >> 1);
-    updateFightAntTargets(world);
-    const [tx, ty] = targetTile(world, id);
-    expect(manhattan(tx, ty, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS - 1);
-  });
-
   it('skips a ring tile that is off the walkable surface component', () => {
     const { world, colony } = sentryWorld();
-    const id = addFighter(world, colony, ENT_X + 6, ENT_Y);
+    const id = addFighter(world, colony, ENT_X + 4, ENT_Y);
     updateFightAntTargets(world);
     const [px, py] = targetTile(world, id);
     // Block that post, invalidate the memoised component mask, retarget.
@@ -738,8 +716,10 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     const id = addFighter(world, colony, ENT_X + 6, ENT_Y);
     placeAggroSpider(world, ENT_X + 6 + FIGHT_AGGRO_RADIUS + 1, ENT_Y); // 5 from it, 11 from the door
     updateFightAntTargets(world);
-    const [tx, ty] = targetTile(world, id);
-    expect(manhattan(tx, ty, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS - 1); // its post
+    // Not taking cover (marked 1): it walks home (V48), marked 2 like any sentry
+    // this far out.
+    expect(targetTile(world, id)).toEqual([ENT_X, ENT_Y]);
+    expect(getScratch(world).antTargeting.sentryMoving[id]).toBe(2);
   });
 
   it('takes cover before chasing: an enemy in sight does not keep it out with the spider in sight too', () => {
@@ -782,9 +762,9 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     // 5 from the door on the far side, inside the cover radius; 10 from the sentry.
     placeAggroSpider(world, ENT_X - 5, ENT_Y);
     updateFightAntTargets(world);
-    const [tx, ty] = targetTile(world, id);
-    expect([tx, ty]).not.toEqual([ENT_X, ENT_Y]);
-    expect(manhattan(tx, ty, ENT_X, ENT_Y)).toBe(FIGHT_AGGRO_RADIUS - 1);
+    // Not taking cover (marked 1): it walks home (V48), marked 2.
+    expect(targetTile(world, id)).toEqual([ENT_X, ENT_Y]);
+    expect(getScratch(world).antTargeting.sentryMoving[id]).toBe(2);
   });
 
   it('measures the spider in Manhattan tiles: off the row it is farther than its larger offset', () => {
@@ -808,8 +788,8 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
 
   it('posts sit well apart: consecutive slots are not neighbours on the ring', () => {
     const { world, colony } = sentryWorld();
-    const a = addFighter(world, colony, ENT_X + 3, ENT_Y + 3);
-    const b = addFighter(world, colony, ENT_X + 3, ENT_Y + 3);
+    const a = addFighter(world, colony, ENT_X, ENT_Y);
+    const b = addFighter(world, colony, ENT_X, ENT_Y);
     updateFightAntTargets(world);
     const [ax, ay] = targetTile(world, a);
     const [bx, by] = targetTile(world, b);
@@ -824,8 +804,8 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
       surfaceTileY: ENT_Y,
       isOpen: true,
     });
-    const nearA = addFighter(world, colony, ENT_X + 2, ENT_Y + 6);
-    const nearB = addFighter(world, colony, ENT_X + 42, ENT_Y + 6);
+    const nearA = addFighter(world, colony, ENT_X + 2, ENT_Y + 2);
+    const nearB = addFighter(world, colony, ENT_X + 42, ENT_Y + 2);
     updateFightAntTargets(world);
     const [ax, ay] = targetTile(world, nearA);
     const [bx, by] = targetTile(world, nearB);
@@ -838,7 +818,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     const { world, colony } = sentryWorld();
     const invader = addFighter(world, colony, 5, 5, Zone.Underground);
     world.ants.currentGridColonyId[invader] = 2; // inside another colony's nest
-    const sentry = addFighter(world, colony, ENT_X + 2, ENT_Y + 6);
+    const sentry = addFighter(world, colony, ENT_X + 2, ENT_Y + 2);
     updateFightAntTargets(world);
     expect(targetTile(world, sentry)).toEqual([ENT_X, ENT_Y - (FIGHT_AGGRO_RADIUS - 1)]);
   });
@@ -858,7 +838,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     other.rallyPoint = null;
     other.digFlowFieldDirty = false;
     world.colonies[2] = other;
-    const id = addFighter(world, colony, ENT_X + 2, ENT_Y + 6);
+    const id = addFighter(world, colony, ENT_X, ENT_Y);
     updateFightAntTargets(world);
     const [tx, ty] = targetTile(world, id);
     expect([tx, ty]).not.toEqual([ENT_X, ENT_Y - (FIGHT_AGGRO_RADIUS - 1)]);
@@ -874,14 +854,14 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     colony.entrances.push({ entranceId: 2, surfaceTileX: bx, surfaceTileY: by, isOpen: true });
     // A lower id than B's sentry, so binding it to B would take B's slot 0.
     addFighter(world, colony, ENT_X, 1, Zone.Underground); // at the top of A's shaft
-    const sentryB = addFighter(world, colony, bx + 1, by + 5);
+    const sentryB = addFighter(world, colony, bx + 1, by + 3);
     updateFightAntTargets(world);
     expect(targetTile(world, sentryB)).toEqual([bx, by - (FIGHT_AGGRO_RADIUS - 1)]); // B's slot 0
   });
 
   it('a sentry going below to shelter does not move the posts of those still outside', () => {
     const { world, colony } = sentryWorld();
-    const ids = [0, 1, 2].map(() => addFighter(world, colony, ENT_X + 3, ENT_Y + 3));
+    const ids = [0, 1, 2].map(() => addFighter(world, colony, ENT_X, ENT_Y));
     updateFightAntTargets(world);
     const before = ids.slice(1).map((id) => targetTile(world, id).join(','));
     // The first (lowest id, slot 0) shelters at the top of the shaft.
@@ -896,7 +876,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     const { world, colony } = sentryWorld();
     const forager = addFighter(world, colony, ENT_X + 20, ENT_Y + 20);
     world.ants.task[forager] = AntTask.Foraging;
-    const ids = [0, 1, 2].map(() => addFighter(world, colony, ENT_X + 3, ENT_Y + 3));
+    const ids = [0, 1, 2].map(() => addFighter(world, colony, ENT_X, ENT_Y));
     updateFightAntTargets(world);
     const before = ids.map((id) => targetTile(world, id).join(','));
     // The forager dies: step 5 removes it by swapping the last worker into its place.
@@ -965,16 +945,16 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
       surfaceTileY: ENT_Y - 9,
       isOpen: true,
     });
-    // P is Manhattan-nearer A (7 vs 8) but column-nearer B (2 vs 4); Q is plainly A's.
-    const p = addFighter(world, colony, ENT_X + 4, ENT_Y - 3);
-    const q = addFighter(world, colony, ENT_X - 2, ENT_Y + 3);
+    // P is Manhattan-nearer A (4 vs 11) but column-nearer B (2 vs 4); Q is plainly A's.
+    const p = addFighter(world, colony, ENT_X + 4, ENT_Y);
+    const q = addFighter(world, colony, ENT_X, ENT_Y);
     updateFightAntTargets(world);
     expect(targetTile(world, p)).not.toEqual(targetTile(world, q)); // two ranks at A
   });
 
   it('a dead fighter holds no rank: when the first of three dies, the others move up a slot', () => {
     const { world, colony } = sentryWorld();
-    const ids = [0, 1, 2].map(() => addFighter(world, colony, ENT_X + 3, ENT_Y + 3));
+    const ids = [0, 1, 2].map(() => addFighter(world, colony, ENT_X, ENT_Y));
     updateFightAntTargets(world);
     const slotPosts = ids.map((id) => targetTile(world, id).join(','));
     world.ants.alive[ids[0]!] = 0; // its task stays Fighting, as despawning leaves it
@@ -986,15 +966,15 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
 
   it('twelve sentries at one door take all twelve ring posts', () => {
     const { world, colony } = sentryWorld();
-    const ids = Array.from({ length: 12 }, () => addFighter(world, colony, ENT_X + 3, ENT_Y + 3));
+    const ids = Array.from({ length: 12 }, () => addFighter(world, colony, ENT_X, ENT_Y));
     updateFightAntTargets(world);
     expect(new Set(ids.map((id) => targetTile(world, id).join(','))).size).toBe(12);
   });
 
   it('the lowest entity id takes slot 0, due north of the door', () => {
     const { world, colony } = sentryWorld();
-    const a = addFighter(world, colony, ENT_X + 3, ENT_Y + 3);
-    addFighter(world, colony, ENT_X + 3, ENT_Y + 3);
+    const a = addFighter(world, colony, ENT_X, ENT_Y);
+    addFighter(world, colony, ENT_X, ENT_Y);
     updateFightAntTargets(world);
     expect(targetTile(world, a)).toEqual([ENT_X, ENT_Y - (FIGHT_AGGRO_RADIUS - 1)]);
   });
@@ -1005,8 +985,8 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     colony.entrances.push({ entranceId: 3, surfaceTileX: cx, surfaceTileY: ENT_Y, isOpen: true });
     // Which shaft it climbs is the entrance flow field's call, not its column's.
     addFighter(world, colony, ENT_X + 5, 5, Zone.Underground);
-    const sa = addFighter(world, colony, ENT_X - 2, ENT_Y + 3);
-    const sc = addFighter(world, colony, cx + 2, ENT_Y + 3);
+    const sa = addFighter(world, colony, ENT_X - 2, ENT_Y + 2);
+    const sc = addFighter(world, colony, cx + 2, ENT_Y + 2);
     updateFightAntTargets(world);
     // Slot 0 (due north) at both doors: the one below took neither.
     expect(targetTile(world, sa)).toEqual([ENT_X, ENT_Y - (FIGHT_AGGRO_RADIUS - 1)]);
@@ -1022,7 +1002,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
       isOpen: true,
     });
     addFighter(world, colony, ENT_X, 5, Zone.Underground); // under A, but deep in the nest
-    const s = addFighter(world, colony, ENT_X - 2, ENT_Y + 3);
+    const s = addFighter(world, colony, ENT_X - 2, ENT_Y + 2);
     updateFightAntTargets(world);
     expect(targetTile(world, s)).toEqual([ENT_X, ENT_Y - (FIGHT_AGGRO_RADIUS - 1)]); // A's slot 0
   });
@@ -1030,7 +1010,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
   it('a fighter anywhere below a one-door nest holds its slot at that door', () => {
     const { world, colony } = sentryWorld();
     addFighter(world, colony, ENT_X + 5, 5, Zone.Underground); // deep, and off the shaft's column
-    const s = addFighter(world, colony, ENT_X - 2, ENT_Y + 3);
+    const s = addFighter(world, colony, ENT_X, ENT_Y);
     updateFightAntTargets(world);
     // The one below took slot 0, so the surface sentry has slot 1.
     expect(targetTile(world, s)).not.toEqual([ENT_X, ENT_Y - (FIGHT_AGGRO_RADIUS - 1)]);
@@ -1045,36 +1025,17 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
       isOpen: true,
     });
     // Door B three east leaves door A seven stable ring tiles.
-    const ids = Array.from({ length: 7 }, () => addFighter(world, colony, ENT_X - 3, ENT_Y + 3));
+    const ids = Array.from({ length: 7 }, () => addFighter(world, colony, ENT_X, ENT_Y));
     updateFightAntTargets(world);
     expect(new Set(ids.map((id) => targetTile(world, id).join(','))).size).toBe(7);
   });
 
-  it('pre-V45: more sentries than stable posts wrap around onto them from slot 0', () => {
-    const { world, colony } = sentryWorld();
-    world.simVersion = SIM_VERSION_V44_TUNNEL_DEFENCE; // V45 adds an outer ring
-    colony.entrances.push({
-      entranceId: 2,
-      surfaceTileX: ENT_X + 3,
-      surfaceTileY: ENT_Y,
-      isOpen: true,
-    });
-    // Seven stable posts at A (door B three east): the eighth sentry shares slot 0's,
-    // and fourteen use those seven and nothing else.
-    const ids = Array.from({ length: 14 }, () => addFighter(world, colony, ENT_X - 3, ENT_Y + 3));
-    updateFightAntTargets(world);
-    expect(targetTile(world, ids[7]!)).toEqual(targetTile(world, ids[0]!));
-    const firstSeven = new Set(ids.slice(0, 7).map((id) => targetTile(world, id).join(',')));
-    expect(new Set(ids.map((id) => targetTile(world, id).join(',')))).toEqual(firstSeven);
-  });
-
   it('V45: past the inner ring, sentries take an outer ring of posts in sight of the door', () => {
     const { world, colony } = sentryWorld();
-    world.simVersion = SIM_VERSION_V45_SENTRY_RING_PASSABLE;
     const inner = 4 * (FIGHT_AGGRO_RADIUS - 1);
     const outer = 4 * FIGHT_AGGRO_RADIUS;
     const ids = Array.from({ length: inner + outer + 1 }, () =>
-      addFighter(world, colony, ENT_X + 6, ENT_Y),
+      addFighter(world, colony, ENT_X, ENT_Y),
     );
     updateFightAntTargets(world);
     const tiles = ids.map((id) => targetTile(world, id));
@@ -1089,11 +1050,8 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
 
   it('V45: a holder bound for an outer post keeps holding only within one tile inside that ring', () => {
     const { world, colony } = sentryWorld();
-    world.simVersion = SIM_VERSION_V45_SENTRY_RING_PASSABLE;
     const inner = 4 * (FIGHT_AGGRO_RADIUS - 1);
-    const ids = Array.from({ length: inner + 1 }, () =>
-      addFighter(world, colony, ENT_X + 6, ENT_Y),
-    );
+    const ids = Array.from({ length: inner + 1 }, () => addFighter(world, colony, ENT_X, ENT_Y));
     updateFightAntTargets(world);
     const id = ids[inner]!; // the first sentry on the outer ring
     const [px, py] = targetTile(world, id);
@@ -1125,11 +1083,8 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
 
   it('V45: a sentry bound for an outer post does not hold beyond sight of the door', () => {
     const { world, colony } = sentryWorld();
-    world.simVersion = SIM_VERSION_V45_SENTRY_RING_PASSABLE;
     const inner = 4 * (FIGHT_AGGRO_RADIUS - 1);
-    const ids = Array.from({ length: inner + 1 }, () =>
-      addFighter(world, colony, ENT_X + 6, ENT_Y),
-    );
+    const ids = Array.from({ length: inner + 1 }, () => addFighter(world, colony, ENT_X, ENT_Y));
     updateFightAntTargets(world);
     const id = ids[inner]!; // the first sentry on the outer ring
     const [px, py] = targetTile(world, id);
@@ -1150,8 +1105,9 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     expect(x).toBeGreaterThanOrEqual(0);
     world.ants.posX[id] = (x << FP_SHIFT) + (FP_ONE >> 1);
     world.ants.posY[id] = (y << FP_SHIFT) + (FP_ONE >> 1);
-    updateFightAntTargets(world); // walking in: does not start holding there
-    expect(targetTile(world, id)).toEqual([px, py]);
+    // Walking in: does not start holding there (5 from the door, it walks home, V48).
+    updateFightAntTargets(world);
+    expect(targetTile(world, id)).toEqual([ENT_X, ENT_Y]);
     world.ants.subTask[id] = FightingSubState.Holding; // nor keep holding there
     world.ants.targetPosX[id] = -1;
     world.ants.targetPosY[id] = -1;
@@ -1171,7 +1127,6 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     raw: Map<number, number[]>;
   } {
     const { world, colony } = sentryWorld();
-    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
     colony.entrances.push(
       {
         entranceId: 2,
@@ -1190,10 +1145,10 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     const probes: number[] = [];
     for (const e of colony.entrances) {
       for (const [dx, dy] of [
-        [-5, 0],
-        [5, 0],
-        [0, 5],
-        [0, -5],
+        [-4, 0],
+        [4, 0],
+        [0, 4],
+        [0, -4],
       ] as const) {
         probes.push(addFighter(world, colony, e.surfaceTileX + dx, e.surfaceTileY + dy));
       }
@@ -1255,7 +1210,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
         manhattan(shared![0], shared![1], ENT_X, ENT_Y),
       );
       expect([a[0], a[1]]).not.toEqual([c[0], c[1]]);
-      const id = addFighter(world, colony, ENT_X + 1, ENT_Y - 3); // nearer entrance 1
+      const id = addFighter(world, colony, ENT_X + 1, ENT_Y - 1); // nearer entrance 1
       walkTo(world, id, shared!);
       updateFightAntTargets(world);
       expect(targetTile(world, id)).toEqual([c[0], c[1]]); // entrance 3's first post
@@ -1264,7 +1219,6 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
 
   it("V46: a sentry chasing an enemy on another entrance's post does not re-bind to it", () => {
     const { world, colony } = sentryWorld();
-    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
     colony.entrances.push({
       entranceId: 2,
       surfaceTileX: ENT_X + 6,
@@ -1304,7 +1258,6 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
 
   it("V46: a target a rally or the spider left on another entrance's post does not re-bind a sentry", () => {
     const { world, colony } = sentryWorld();
-    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
     colony.entrances.push({
       entranceId: 2,
       surfaceTileX: ENT_X + 6,
@@ -1328,7 +1281,6 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
 
   it('V46: a rally clears the walking-to-post mark, so a cleared rally does not re-bind the sentry', () => {
     const { world, colony } = sentryWorld();
-    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
     colony.entrances.push({
       entranceId: 2,
       surfaceTileX: ENT_X + 6,
@@ -1336,7 +1288,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
       isOpen: true,
     });
     const probe = addFighter(world, colony, ENT_X + 9, ENT_Y);
-    const id = addFighter(world, colony, ENT_X + 3, ENT_Y - 5); // level: binds to 1
+    const id = addFighter(world, colony, ENT_X + 3, ENT_Y - 1); // level: binds to 1
     updateFightAntTargets(world);
     world.ants.alive[probe] = 0;
     expect(world.ants.subTask[id]).toBe(FightingSubState.ToPost);
@@ -1355,7 +1307,6 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
 
   it('V46: a sentry is never held by a ring tile of a CLOSED entrance', () => {
     const { world, colony } = sentryWorld();
-    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
     // Entrance 1 is closed (and the lower id); entrance 2, six tiles east, is open.
     colony.entrances[0]!.isOpen = false;
     colony.entrances.push({
@@ -1376,14 +1327,13 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
 
   it('V46: a sentry is not held by a post of an entrance whose guard area it has left', () => {
     const { world, colony } = sentryWorld();
-    world.simVersion = SIM_VERSION_V46_STICKY_SENTRY_ENTRANCE;
     colony.entrances.push({
       entranceId: 2,
       surfaceTileX: ENT_X + 20,
       surfaceTileY: ENT_Y,
       isOpen: true,
     });
-    const id = addFighter(world, colony, ENT_X + 5, ENT_Y); // near entrance 1, 15 from 2
+    const id = addFighter(world, colony, ENT_X + 4, ENT_Y); // near entrance 1, 16 from 2
     updateFightAntTargets(world);
     const far = getScratch(world).antTargeting.sentryPosts.get(2);
     // Entrance 2's posts are built only if something binds to it; build them by
@@ -1402,7 +1352,6 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
 
   it('V45: only a sentry HOLDING its post passes through friends while holding', () => {
     const { world, colony } = sentryWorld();
-    world.simVersion = SIM_VERSION_V45_SENTRY_RING_PASSABLE;
     const id = addFighter(world, colony, ENT_X + 3, ENT_Y);
     world.ants.subTask[id] = FightingSubState.Holding;
     world.ants.targetPosX[id] = -1;
@@ -1414,15 +1363,11 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     world.ants.subTask[id] = FightingSubState.Holding;
     world.ants.targetPosX[id] = (ENT_X << FP_SHIFT) + (FP_ONE >> 1);
     expect(sentryPassesThroughFriends(world, id)).toBe(false);
-    // Pre-V45 a holder claims its tile.
-    world.ants.targetPosX[id] = -1;
-    world.simVersion = SIM_VERSION_V44_TUNNEL_DEFENCE;
-    expect(sentryPassesThroughFriends(world, id)).toBe(false);
   });
 
   it('holds near its post only on the ring or outside it: nearer the door it walks on out', () => {
     const { world, colony } = sentryWorld();
-    const id = addFighter(world, colony, ENT_X + 6, ENT_Y);
+    const id = addFighter(world, colony, ENT_X + 4, ENT_Y);
     updateFightAntTargets(world);
     const [px, py] = targetTile(world, id);
     // Put it one tile inside the ring from its post: within the hold radius, but
@@ -1496,14 +1441,6 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     expect(targetTile(world, id)).not.toEqual([ENT_X, ENT_Y - (FIGHT_AGGRO_RADIUS - 1)]);
   });
 
-  it('pre-V43 worlds keep routing an idle fighter onto the entrance tile', () => {
-    const { world, colony } = sentryWorld();
-    world.simVersion = SIM_VERSION_V42_COLONY_ALARM;
-    const id = addFighter(world, colony, ENT_X + 10, ENT_Y);
-    updateFightAntTargets(world);
-    expect(targetTile(world, id)).toEqual([ENT_X, ENT_Y]);
-  });
-
   it('on an outer hold tile (4 from the door) it is AT its door: a spider it cannot see near the door sends it in', () => {
     const { world, colony } = sentryWorld();
     const id = addFighter(world, colony, ENT_X + 4, ENT_Y); // SENTRY_DOOR_AREA_RADIUS
@@ -1514,7 +1451,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
 
   it('a sentry walking to its post starts holding one tile outside it', () => {
     const { world, colony } = sentryWorld();
-    const id = addFighter(world, colony, ENT_X + 6, ENT_Y);
+    const id = addFighter(world, colony, ENT_X + 4, ENT_Y);
     updateFightAntTargets(world);
     const [px, py] = targetTile(world, id);
     const dx = px > ENT_X ? 1 : px < ENT_X ? -1 : 0;
@@ -1529,18 +1466,10 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
   it('a holding sentry bumped one tile keeps holding; one walking there carries on to its post', () => {
     const R = FIGHT_AGGRO_RADIUS - 1;
     // Slot 0's post is due north on the ring: (ENT_X, ENT_Y - R).
-    for (const [x, y] of [
-      [ENT_X, ENT_Y - R + 1], // one tile inside the ring
-      [ENT_X + 1, ENT_Y - R - 1], // two tiles off the post, outside the ring
-    ] as const) {
+    // One tile inside the ring. (Two tiles off the post outside the ring is 5 from
+    // the door, beyond sight of it, where no sentry holds: see the V45 sight test.)
+    for (const [x, y] of [[ENT_X, ENT_Y - R + 1]] as const) {
       const { world, colony } = sentryWorld();
-      // The second tile is 5 from the door: from V45 no sentry holds beyond sight of
-      // its door (see the V45 sight test), so that case is pinned below V45.
-      const version =
-        manhattan(x, y, ENT_X, ENT_Y) > FIGHT_AGGRO_RADIUS
-          ? SIM_VERSION_V44_TUNNEL_DEFENCE
-          : SIM_VERSION_V45_SENTRY_RING_PASSABLE;
-      world.simVersion = version;
       const id = addFighter(world, colony, x, y);
       world.ants.targetPosX[id] = -1; // already holding
       world.ants.targetPosY[id] = -1;
@@ -1549,7 +1478,6 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
       expect(world.ants.targetPosX[id]).toBe(-1);
 
       const walker = sentryWorld();
-      walker.world.simVersion = version;
       const w = addFighter(walker.world, walker.colony, x, y);
       walker.world.ants.targetPosX[w] = (ENT_X << FP_SHIFT) + (FP_ONE >> 1); // on its way
       updateFightAntTargets(walker.world);
@@ -1577,10 +1505,11 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     const id = addFighter(world, colony, ENT_X, ENT_Y - R);
     updateFightAntTargets(world);
     expect(world.ants.subTask[id]).toBe(FightingSubState.Holding);
-    // A rally two tiles off the post, with the sentry standing on it: it stops
-    // there under orders, and is no longer holding its post.
-    world.ants.posX[id] = ((ENT_X + 2) << FP_SHIFT) + (FP_ONE >> 1);
-    colony.rallyPoint = { tileX: ENT_X + 2, tileY: ENT_Y - R };
+    // A rally two tiles off the post (toward the door, inside the door area), with
+    // the sentry standing on it: it stops there under orders, and is no longer
+    // holding its post.
+    world.ants.posY[id] = ((ENT_Y - R + 2) << FP_SHIFT) + (FP_ONE >> 1);
+    colony.rallyPoint = { tileX: ENT_X, tileY: ENT_Y - R + 2 };
     updateFightAntTargets(world);
     expect(world.ants.targetPosX[id]).toBe(-1);
     expect(world.ants.subTask[id]).toBe(FightingSubState.MovingToRally);
@@ -1618,19 +1547,19 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     const R = FIGHT_AGGRO_RADIUS - 1;
     const { world, colony } = sentryWorld();
     const holder = addFighter(world, colony, ENT_X, ENT_Y - R);
-    const walker = addFighter(world, colony, ENT_X + 6, ENT_Y);
+    const walker = addFighter(world, colony, ENT_X + 4, ENT_Y);
     updateFightAntTargets(world);
     const moving = getScratch(world).antTargeting.sentryMoving;
     expect(moving[holder]).toBe(0);
     expect(moving[walker]).toBe(1);
 
     // Walking home from outside the guard area does not pass through friends:
-    // from V48 (#333) it is marked 2, for step 16's flow-field step, not 1.
+    // it is marked 2 (V48, #333), for step 16's flow-field step, not 1.
     const home = sentryWorld();
     const far = addFighter(home.world, home.colony, ENT_X + 12, ENT_Y);
     updateFightAntTargets(home.world);
     expect(targetTile(home.world, far)).toEqual([ENT_X, ENT_Y]);
-    expect(getScratch(home.world).antTargeting.sentryMoving[far]).toBe(0); // V47; V48 marks 2
+    expect(getScratch(home.world).antTargeting.sentryMoving[far]).toBe(2);
     expect(sentryPassesThroughFriends(home.world, far)).toBe(false);
 
     // Into cover counts as moving; after an enemy does not.
@@ -1659,7 +1588,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     const bx = ENT_X + 10;
     colony.entrances.push({ entranceId: 2, surfaceTileX: bx, surfaceTileY: ENT_Y, isOpen: true });
     addFighter(world, colony, bx, 1, Zone.Underground); // lowest id, top of B's shaft
-    const sb = addFighter(world, colony, bx + 2, ENT_Y + 3);
+    const sb = addFighter(world, colony, bx, ENT_Y);
     updateFightAntTargets(world);
     expect(targetTile(world, sb)).not.toEqual([bx, ENT_Y - R]);
   });
@@ -1670,7 +1599,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     const bx = ENT_X + 10;
     colony.entrances.push({ entranceId: 2, surfaceTileX: bx, surfaceTileY: ENT_Y, isOpen: true });
     addFighter(world, colony, bx, 2, Zone.Underground); // ENTRANCE_SHAFT_DEPTH = 2
-    const sb = addFighter(world, colony, bx + 2, ENT_Y + 3);
+    const sb = addFighter(world, colony, bx, ENT_Y);
     updateFightAntTargets(world);
     expect(targetTile(world, sb)).toEqual([bx, ENT_Y - R]);
   });
@@ -1695,7 +1624,7 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
       other.rallyPoint = null;
       other.digFlowFieldDirty = false;
       world.colonies[2] = other;
-      const id = addFighter(world, colony, ENT_X + 2, ENT_Y + 6);
+      const id = addFighter(world, colony, ENT_X, ENT_Y);
       updateFightAntTargets(world);
       expect(targetTile(world, id)).not.toEqual([ENT_X, ENT_Y - R]);
     }
@@ -1721,7 +1650,6 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
 
   it('V48 (#333): a sentry not holding its post walks home until it is in the door area, then takes its post', () => {
     const { world, colony } = sentryWorld();
-    world.simVersion = SIM_VERSION_V48_SENTRY_WALK_HOME;
     const id = addFighter(world, colony, ENT_X + 6, ENT_Y + 1); // 7 out: inside the guard area
     updateFightAntTargets(world);
     expect(targetTile(world, id)).toEqual([ENT_X, ENT_Y]);
@@ -1738,7 +1666,6 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
 
   it('V48 (#333): a holder bumped 5 from the door walks straight back to its post, not home', () => {
     const { world, colony } = sentryWorld();
-    world.simVersion = SIM_VERSION_V48_SENTRY_WALK_HOME;
     // Thirteen sentries: the thirteenth takes an outer post, 4 from the door.
     const ids = Array.from({ length: 13 }, () => addFighter(world, colony, ENT_X + 2, ENT_Y + 2));
     updateFightAntTargets(world);
@@ -1759,15 +1686,6 @@ describe('updateFightAntTargets — V43 sentries (no rally point)', () => {
     // it walks straight back to its post, not home to the door area.
     updateFightAntTargets(world);
     expect(targetTile(world, id)).toEqual([px, py]);
-  });
-
-  it('pre-V48 (pinned V47): a sentry inside the guard area heads straight for its post', () => {
-    const { world, colony } = sentryWorld();
-    const id = addFighter(world, colony, ENT_X + 6, ENT_Y + 1);
-    world.ants.targetPosX[id] = (ENT_X << FP_SHIFT) + (FP_ONE >> 1);
-    world.ants.targetPosY[id] = (ENT_Y << FP_SHIFT) + (FP_ONE >> 1);
-    updateFightAntTargets(world);
-    expect(targetTile(world, id)).not.toEqual([ENT_X, ENT_Y]);
   });
 
   it('rebuilds the entrance-tile list every pass instead of appending to it', () => {
