@@ -1,0 +1,482 @@
+// raiding.test.ts — #290 PR 5 (V52): automatic fighter raids.
+//
+// Driven through tick() on the raid world (raid-test-utils.ts) so step 10e
+// (updateRaiders: who loots), step 16 (tickAntMovement: the stock / entrance /
+// food flow-field walks, the climb out, the own-shaft descent) and step 16e
+// (tickRaidActions: loot and deposit) run at their real call sites. The predicate
+// and the verbs are also pinned directly.
+
+import { describe, it, expect } from 'vitest';
+import { tick } from './tick.js';
+import { SIM_VERSION_V51_UNIFIED_HUNGER, type WorldState } from './types.js';
+import {
+  fighterMayLoot,
+  releaseSurplusFightersBelowFloor,
+  tickPheromoneDeposit,
+  tickRaidActions,
+  updateFightAntTargets,
+  updateRaiders,
+} from './ant/ant-system.js';
+import { dropHaulerLoad } from './ant/ant-raid.js';
+import { despawnAnt } from './ant-death.js';
+import { AntTask, FightingSubState, ForagingSubState, PheromoneType } from './enums.js';
+import { Zone } from './terrain.js';
+import { FP_SHIFT } from './fixed.js';
+import { chamberStock, colonyPoolFood, pileAtTile, pileAmountFp } from './food/food-api.js';
+import { setChamberStockForTest, setPoolFoodForTest } from './food/food-test-utils.js';
+import { phGet, pheromoneGridKey } from './pheromone/pheromone-store.js';
+import { isSurfaceTileInComponent } from './surface-features.js';
+import { FIGHTER_HUNGER } from './hunger.js';
+import { computeStockFlowField } from './chamber-flow.js';
+import {
+  BASE_FOOD_STORAGE_CAPACITY,
+  ENEMY_COLONY_ID,
+  FIGHTER_WALK_HOME_HUNGER_TICKS,
+  FOOD_CHAMBER_CAPACITY,
+  FOOD_PICKUP_AMOUNT,
+  PLAYER_COLONY_ID,
+  RAID_CARRY_FP,
+  RAID_ENGAGE_RADIUS_TILES,
+} from './constants.js';
+import {
+  addEnemyWorker,
+  addFighter,
+  carve,
+  centre,
+  raidWorld,
+  rallyOn,
+  type RaidWorld,
+} from './raid-test-utils.js';
+
+const E = ENEMY_COLONY_ID;
+const P = PLAYER_COLONY_ID;
+
+function tileOf(world: WorldState, id: number): { x: number; y: number } {
+  return { x: world.ants.posX[id]! >> FP_SHIFT, y: world.ants.posY[id]! >> FP_SHIFT };
+}
+
+/**
+ * Freeze the player's stores for the coming tick: a full pool (so a hauler's whole
+ * load goes to the larder — a hauler, like a forager, tops the pool up at the foot
+ * of its shaft on the way in) and a queen and larvae that are not due a meal (so
+ * nothing is drawn from the larder). Call before each tick.
+ */
+function freezePlayerStores(r: RaidWorld): void {
+  const w = r.world;
+  setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY);
+  w.ants.lastMealTick[r.player.queenEntityId] = w.tick;
+  for (const l of r.player.larvae) w.ants.lastMealTick[l] = w.tick;
+}
+
+/** A player raider standing below ground in the enemy nest at (x, 6), rallied on the enemy door. */
+function raiderInEnemyNest(r: RaidWorld, x = 100): number {
+  rallyOn(r.player, r.enemyDoor);
+  return addFighter(r.world, P, x, 6, E);
+}
+
+function run(world: WorldState, ticks: number, until?: () => boolean, before?: () => void): number {
+  for (let t = 0; t < ticks; t++) {
+    before?.();
+    tick(world, []);
+    if (until?.()) return t + 1;
+  }
+  return -1;
+}
+
+describe('fighterMayLoot — the raid predicate (V52)', () => {
+  it('holds for a rallied, fed, empty-handed fighter in the enemy nest with food in reach of it', () => {
+    const r = raidWorld();
+    const id = raiderInEnemyNest(r);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(true);
+  });
+
+  it('fails without a rally on that nest’s entrance, in its own nest, laden, hungry, or in a duel', () => {
+    const r = raidWorld();
+    const id = raiderInEnemyNest(r);
+    const w = r.world;
+    r.player.rallyPoint = null;
+    expect(fighterMayLoot(w, r.player, id)).toBe(false);
+    rallyOn(r.player, { x: r.enemyDoor.x + 5, y: r.enemyDoor.y }); // near, but not on, the door
+    expect(fighterMayLoot(w, r.player, id)).toBe(false);
+    rallyOn(r.player, r.enemyDoor);
+    expect(fighterMayLoot(w, r.player, id)).toBe(true);
+    w.ants.foodCarrying[id] = 1;
+    expect(fighterMayLoot(w, r.player, id)).toBe(false);
+    w.ants.foodCarrying[id] = 0;
+    w.ants.lastMealTick[id] = w.tick - FIGHTER_WALK_HOME_HUNGER_TICKS;
+    expect(fighterMayLoot(w, r.player, id)).toBe(false); // D11: goes home to eat first
+    w.ants.lastMealTick[id] = w.tick - 1;
+    w.ants.combatOpponentId[id] = 0;
+    expect(fighterMayLoot(w, r.player, id)).toBe(false);
+    w.ants.combatOpponentId[id] = -1;
+    w.ants.currentGridColonyId[id] = P; // in its own nest
+    expect(fighterMayLoot(w, r.player, id)).toBe(false);
+  });
+
+  it('never targets the entrance pool (D3): an empty larder and a full pool is nothing to loot', () => {
+    const r = raidWorld(0);
+    setPoolFoodForTest(r.world, r.enemy, BASE_FOOD_STORAGE_CAPACITY);
+    const id = raiderInEnemyNest(r);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(false);
+    const pool = colonyPoolFood(r.world, r.enemy);
+    let looted = false;
+    for (let t = 0; t < 400; t++) {
+      tick(r.world, []);
+      if (r.world.ants.subTask[id] === FightingSubState.Looting) looted = true;
+      expect(r.world.ants.foodCarrying[id]).toBe(0);
+    }
+    expect(looted).toBe(false);
+    expect(r.player.foodRaidedFp).toBe(0);
+    // The enemy pool only ever feeds the enemy (its queen eats); nothing was stolen.
+    expect(colonyPoolFood(r.world, r.enemy)).toBeLessThanOrEqual(pool);
+    expect(r.enemy.foodLostToRaidsFp).toBe(0);
+  });
+
+  it('a hostile within RAID_ENGAGE_RADIUS_TILES path tiles stops it; one behind a wall does not', () => {
+    const r = raidWorld();
+    const id = raiderInEnemyNest(r, 100);
+    // A dead-end pocket 3 rows up: Manhattan 3, but no path within the radius.
+    carve(r.world.undergroundGrids[E]!, 100, 2, 100, 3);
+    const walled = addEnemyWorker(r.world, 100, 3);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(true);
+    // In the tunnel, RAID_ENGAGE_RADIUS_TILES along it: in reach.
+    const near = addEnemyWorker(r.world, 100 - RAID_ENGAGE_RADIUS_TILES, 6);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(false);
+    // One tile further: out of reach again.
+    r.world.ants.posX[near] = centre(100 - RAID_ENGAGE_RADIUS_TILES - 1);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(true);
+    // The queen counts as a hostile.
+    const q = r.enemy.queenEntityId;
+    r.world.ants.posX[q] = centre(102);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(false);
+    void walled;
+  });
+
+  it('is false in a V51 world, and a V51 world never raids (byte-inert rules)', () => {
+    const r = raidWorld();
+    r.world.simVersion = SIM_VERSION_V51_UNIFIED_HUNGER;
+    const id = raiderInEnemyNest(r);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(false);
+    for (let t = 0; t < 600; t++) {
+      tick(r.world, []);
+      expect(r.world.ants.subTask[id] === FightingSubState.Looting).toBe(false);
+      expect(r.world.ants.subTask[id] === FightingSubState.Hauling).toBe(false);
+      expect(r.world.ants.foodCarrying[id]).toBe(0);
+    }
+    expect(r.player.foodRaidedFp).toBe(0);
+    expect(r.enemy.foodLostToRaidsFp).toBe(0);
+  });
+});
+
+describe('the raid loop through tick() (V52)', () => {
+  it('loots the larder, climbs out, walks home, goes down its own shaft and deposits; then returns', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    const id = raiderInEnemyNest(r);
+    const fullPool = (): void => freezePlayerStores(r);
+
+    // 1. Loot: walks the stock field to the larder and takes one load.
+    const took = run(w, 200, () => w.ants.subTask[id] === FightingSubState.Hauling);
+    expect(took).toBeGreaterThan(0);
+    expect(w.ants.foodCarrying[id]).toBe(RAID_CARRY_FP);
+    // (The enemy queen also eats from her larder, fullest store first.)
+    expect(chamberStock(w, r.enemyLarder)).toBeLessThanOrEqual(3000 - RAID_CARRY_FP);
+    expect(r.player.foodRaidedFp).toBe(RAID_CARRY_FP);
+    expect(r.enemy.foodLostToRaidsFp).toBe(RAID_CARRY_FP);
+    const t = tileOf(w, id);
+    expect(t.x >= 86 && t.x <= 89 && t.y >= 5 && t.y <= 7).toBe(true);
+
+    // 2. Climb out of the enemy nest.
+    expect(run(w, 200, () => w.ants.zone[id] === Zone.Surface)).toBeGreaterThan(0);
+    expect(w.ants.currentGridColonyId[id]).toBe(P);
+    expect(tileOf(w, id)).toEqual(r.enemyDoor);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Hauling);
+
+    // 3. Walk home and go down its own shaft (never back down the enemy's).
+    let wentDownEnemy = false;
+    const home = run(
+      w,
+      1500,
+      () => {
+        if (w.ants.zone[id] === Zone.Underground && w.ants.currentGridColonyId[id] === E) {
+          wentDownEnemy = true;
+        }
+        return w.ants.zone[id] === Zone.Underground;
+      },
+      fullPool,
+    );
+    expect(home).toBeGreaterThan(0);
+    expect(wentDownEnemy).toBe(false);
+    expect(w.ants.currentGridColonyId[id]).toBe(P);
+    expect(tileOf(w, id).x).toBe(r.playerDoor.x);
+
+    // 4. Deposit into its own FoodStorage chamber; the trip counts.
+    const load = w.ants.foodCarrying[id]!;
+    expect(
+      run(w, 200, () => w.ants.subTask[id] !== FightingSubState.Hauling, fullPool),
+    ).toBeGreaterThan(0);
+    expect(w.ants.foodCarrying[id]).toBe(0);
+    expect(chamberStock(w, r.playerLarder)).toBe(load);
+    expect(r.player.raidTrips).toBe(1);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.MovingToRally);
+
+    // 5. Back to the rally: out of its own nest and down the enemy's again.
+    expect(
+      run(
+        w,
+        1500,
+        () => w.ants.zone[id] === Zone.Underground && w.ants.currentGridColonyId[id] === E,
+      ),
+    ).toBeGreaterThan(0);
+  });
+
+  it('once the larder is empty it hunts the queen (D10: loot first, then the queen)', () => {
+    const r = raidWorld(RAID_CARRY_FP); // exactly one load
+    const w = r.world;
+    const a = raiderInEnemyNest(r, 100);
+    const b = addFighter(w, P, 101, 6, E);
+    // Both head for the larder; the first there empties it.
+    run(w, 200, () => chamberStock(w, r.enemyLarder) === 0);
+    expect(chamberStock(w, r.enemyLarder)).toBe(0);
+    const hauler = w.ants.subTask[a] === FightingSubState.Hauling ? a : b;
+    const other = hauler === a ? b : a;
+    expect(w.ants.subTask[hauler]).toBe(FightingSubState.Hauling);
+    // The other no longer loots; it closes on the queen (29 path tiles from the larder).
+    const q = r.enemy.queenEntityId;
+    const d0 = Math.abs(tileOf(w, other).x - tileOf(w, q).x);
+    run(w, 40);
+    expect(w.ants.subTask[other]).not.toBe(FightingSubState.Looting);
+    expect(Math.abs(tileOf(w, other).x - tileOf(w, q).x)).toBeLessThan(d0);
+  });
+
+  it('two raiders on one larder tile take in ascending id order', () => {
+    const r = raidWorld(1500);
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const lo = addFighter(w, P, 88, 6, E);
+    const hi = addFighter(w, P, 88, 6, E);
+    updateRaiders(w);
+    expect(w.ants.subTask[lo]).toBe(FightingSubState.Looting);
+    expect(w.ants.subTask[hi]).toBe(FightingSubState.Looting);
+    tickRaidActions(w);
+    expect(w.ants.foodCarrying[lo]).toBe(RAID_CARRY_FP);
+    expect(w.ants.foodCarrying[hi]).toBe(1500 - RAID_CARRY_FP);
+    expect(chamberStock(w, r.enemyLarder)).toBe(0);
+    expect(r.player.foodRaidedFp).toBe(1500);
+  });
+
+  it('raiders stack on an enemy larder tile (occupancy exempts the nest they stand in)', () => {
+    const r = raidWorld(0); // nothing to take, so they stay put as invaders
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const a = addFighter(w, P, 88, 6, E);
+    const b = addFighter(w, P, 88, 6, E);
+    // Freeze them: hunting targets the queen, so pin speed to 0.
+    w.ants.speed[a] = 0;
+    w.ants.speed[b] = 0;
+    tick(w, []);
+    expect(tileOf(w, a)).toEqual({ x: 88, y: 6 });
+    expect(tileOf(w, b)).toEqual({ x: 88, y: 6 });
+  });
+
+  it('… where a V51 world bumped them apart (it read the raider’s own colony’s chambers)', () => {
+    const r = raidWorld(0);
+    const w = r.world;
+    w.simVersion = SIM_VERSION_V51_UNIFIED_HUNGER;
+    rallyOn(r.player, r.enemyDoor);
+    const a = addFighter(w, P, 88, 6, E);
+    const b = addFighter(w, P, 88, 6, E);
+    w.ants.speed[a] = 0;
+    w.ants.speed[b] = 0;
+    tick(w, []);
+    expect(tileOf(w, a)).toEqual({ x: 88, y: 6 });
+    expect(tileOf(w, b)).not.toEqual({ x: 88, y: 6 });
+  });
+
+  it('a cleared rally mid-haul still gets the food home', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    const id = raiderInEnemyNest(r);
+    run(w, 200, () => w.ants.subTask[id] === FightingSubState.Hauling);
+    r.player.rallyPoint = null;
+    const done = run(w, 2000, () => w.ants.subTask[id] !== FightingSubState.Hauling);
+    expect(done).toBeGreaterThan(0);
+    expect(r.player.raidTrips).toBe(1);
+    expect(chamberStock(w, r.playerLarder)).toBeGreaterThan(0);
+  });
+
+  it('the food is conserved: the victim’s loss = the stolen counters = what reached the store', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    const id = raiderInEnemyNest(r);
+    // Keep it fed, so no meal comes out of the load (pinned separately below), and
+    // the player's pool full, so the haul all goes to its larder.
+    for (let t = 0; t < 3000 && r.player.raidTrips < 1; t++) {
+      w.ants.lastMealTick[id] = w.tick - 1;
+      freezePlayerStores(r);
+      tick(w, []);
+    }
+    expect(r.player.raidTrips).toBe(1);
+    // Checked on the deposit tick itself (step 16e runs after the queens eat).
+    const lost = r.enemy.foodLostToRaidsFp;
+    expect(lost).toBe(RAID_CARRY_FP);
+    expect(r.player.foodRaidedFp).toBe(lost);
+    expect(chamberStock(w, r.playerLarder) + w.ants.foodCarrying[id]!).toBe(lost);
+  });
+
+  it('a hauler whose meal comes due eats it from its load (V51 carried rations)', () => {
+    const r = raidWorld();
+    const w = r.world;
+    // Far from home on the surface, laden, a meal overdue.
+    const id = addFighter(w, P, 64, 30, null);
+    w.ants.subTask[id] = FightingSubState.Hauling;
+    w.ants.foodCarrying[id] = RAID_CARRY_FP;
+    w.ants.lastMealTick[id] = w.tick - FIGHTER_WALK_HOME_HUNGER_TICKS;
+    tick(w, []);
+    expect(w.ants.foodCarrying[id]).toBe(RAID_CARRY_FP - FIGHTER_HUNGER.mealFp);
+    expect(w.ants.lastMealTick[id]).toBe(w.tick - 1);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Hauling);
+  });
+});
+
+describe('a hauler that dies drops its load (V52, D13)', () => {
+  function laden(r: RaidWorld, x: number, y: number, grid: number | null, load: number): number {
+    const id = addFighter(r.world, P, x, y, grid);
+    r.world.ants.subTask[id] = FightingSubState.Hauling;
+    r.world.ants.foodCarrying[id] = load;
+    return id;
+  }
+
+  it('on the surface: a corpse pile of whole pickups at its tile', () => {
+    const r = raidWorld();
+    const w = r.world;
+    let x = 60;
+    while (!isSurfaceTileInComponent(w, x, 40) || pileAtTile(w, x, 40) >= 0) x += 1;
+    const id = laden(r, x, 40, null, 1000);
+    despawnAnt(w, id, { cause: 'starvation' });
+    const slot = pileAtTile(w, x, 40);
+    expect(slot).toBeGreaterThanOrEqual(0);
+    expect(pileAmountFp(w, slot)).toBe(FOOD_PICKUP_AMOUNT); // 1000 fp → 1 whole pickup
+    expect(w.ants.foodCarrying[id]).toBe(0);
+  });
+
+  it('in the enemy nest: into the victim’s pool (capped), and the stolen counters give it back', () => {
+    const r = raidWorld();
+    const w = r.world;
+    setPoolFoodForTest(w, r.enemy, BASE_FOOD_STORAGE_CAPACITY - 300);
+    r.player.foodRaidedFp = 2000;
+    r.enemy.foodLostToRaidsFp = 2000;
+    const id = laden(r, 100, 6, E, 1000);
+    despawnAnt(w, id, { cause: 'kill', killerKind: 'Ant', killerColonyId: E, killerId: null });
+    expect(colonyPoolFood(w, r.enemy)).toBe(BASE_FOOD_STORAGE_CAPACITY);
+    expect(r.player.foodRaidedFp).toBe(1700);
+    expect(r.enemy.foodLostToRaidsFp).toBe(1700);
+  });
+
+  it('in its own nest: into its own pool; the counters are untouched', () => {
+    const r = raidWorld();
+    const w = r.world;
+    setPoolFoodForTest(w, r.player, 0);
+    const id = laden(r, 30, 6, P, 800);
+    despawnAnt(w, id, { cause: 'starvation' });
+    expect(colonyPoolFood(w, r.player)).toBe(800);
+    expect(r.player.foodRaidedFp).toBe(0);
+  });
+
+  it('is inert below V52 and for an empty-handed fighter', () => {
+    const r = raidWorld();
+    const w = r.world;
+    const id = laden(r, 30, 6, P, 800);
+    const latest = w.simVersion;
+    w.simVersion = SIM_VERSION_V51_UNIFIED_HUNGER;
+    expect(dropHaulerLoad(w, id)).toBe(false);
+    expect(w.ants.foodCarrying[id]).toBe(800);
+    w.simVersion = latest;
+    const empty = addFighter(w, P, 31, 6, P);
+    expect(dropHaulerLoad(w, empty)).toBe(false);
+  });
+});
+
+describe('side effects neutralised (V52)', () => {
+  it('a hauler lays no FoodTrail; a forager at the same spot does', () => {
+    const r = raidWorld();
+    const w = r.world;
+    const grid = w.pheromoneGrids[pheromoneGridKey(P, PheromoneType.FoodTrail, 'surface')]!;
+    const x = 64;
+    const y = 30;
+    const id = addFighter(w, P, x, y, null);
+    w.ants.subTask[id] = FightingSubState.Hauling;
+    w.ants.foodCarrying[id] = RAID_CARRY_FP;
+    const before = phGet(grid, x, y);
+    tickPheromoneDeposit(w);
+    expect(phGet(grid, x, y)).toBe(before);
+    w.ants.task[id] = AntTask.Foraging;
+    w.ants.subTask[id] = ForagingSubState.CarryingFood;
+    tickPheromoneDeposit(w);
+    expect(phGet(grid, x, y)).toBeGreaterThan(before);
+  });
+
+  it('step 10c leaves a hauler’s routing to step 10e; the small-colony stand-down never releases one', () => {
+    const r = raidWorld();
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const id = addFighter(w, P, 64, 30, null);
+    w.ants.subTask[id] = FightingSubState.Hauling;
+    w.ants.foodCarrying[id] = RAID_CARRY_FP;
+    w.ants.targetPosX[id] = 12345;
+    updateFightAntTargets(w);
+    expect(w.ants.targetPosX[id]).toBe(12345);
+    updateRaiders(w);
+    expect(w.ants.targetPosX[id]).toBe(centre(r.playerDoor.x));
+    expect(w.ants.targetPosY[id]).toBe(centre(r.playerDoor.y));
+    releaseSurplusFightersBelowFloor(w, {
+      workers: r.player.workers,
+      computedAllocation: { fight: 0 },
+    });
+    expect(w.ants.task[id]).toBe(AntTask.Fighting);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Hauling);
+  });
+
+  it('a hauler that has eaten its whole load goes back to its rally without counting a trip', () => {
+    const r = raidWorld();
+    const w = r.world;
+    const id = addFighter(w, P, 64, 30, null);
+    w.ants.subTask[id] = FightingSubState.Hauling;
+    w.ants.foodCarrying[id] = 0;
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.MovingToRally);
+    expect(r.player.raidTrips).toBe(0);
+  });
+
+  it('a larder emptied under one looter re-routes it on the next tick', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    const id = raiderInEnemyNest(r);
+    run(w, 5);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Looting);
+    setChamberStockForTest(w, r.enemy, r.enemyLarder, 0);
+    tick(w, []);
+    expect(w.ants.subTask[id]).not.toBe(FightingSubState.Looting);
+  });
+});
+
+describe('computeStockFlowField (V52)', () => {
+  it('seeds only FoodStorage chambers holding food — full ones included, empty ones not', () => {
+    const r = raidWorld(FOOD_CHAMBER_CAPACITY); // a FULL larder is still raidable
+    const w = r.world;
+    const grid = w.undergroundGrids[E]!;
+    const out = new Int32Array(grid.width * grid.height);
+    const queue = new Int32Array(grid.width * grid.height);
+    computeStockFlowField(w, grid, r.enemy.chambers, out, queue);
+    const at = (x: number, y: number): number => out[y * grid.width + x]!;
+    expect(at(88, 6)).toBe(-1); // in the larder
+    expect(at(95, 6)).toBe(3); // west, toward it
+    expect(at(118, 6)).toBe(3); // the Queen chamber is not a source
+    expect(at(104, 0)).toBe(2); // down the shaft
+    expect(at(60, 30)).toBe(-2); // solid rock
+    setChamberStockForTest(w, r.enemy, r.enemyLarder, 0);
+    computeStockFlowField(w, grid, r.enemy.chambers, out, queue);
+    expect(at(88, 6)).toBe(-2); // empty: nothing to raid anywhere
+    expect(at(95, 6)).toBe(-2);
+  });
+});
