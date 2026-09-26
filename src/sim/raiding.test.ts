@@ -28,6 +28,7 @@ import { phGet, pheromoneGridKey } from './pheromone/pheromone-store.js';
 import { isSurfaceTileInComponent } from './surface-features.js';
 import { FIGHTER_HUNGER } from './hunger.js';
 import { computeStockFlowField } from './chamber-flow.js';
+import { getScratch } from './scratch.js';
 import {
   BASE_FOOD_STORAGE_CAPACITY,
   ENEMY_COLONY_ID,
@@ -132,24 +133,47 @@ describe('fighterMayLoot — the raid predicate (V52)', () => {
     expect(r.enemy.foodLostToRaidsFp).toBe(0);
   });
 
-  it('a hostile within RAID_ENGAGE_RADIUS_TILES path tiles stops it; one behind a wall does not', () => {
+  it('a hostile exactly RAID_ENGAGE_RADIUS_TILES path tiles away stops it; one tile further does not', () => {
     const r = raidWorld();
     const id = raiderInEnemyNest(r, 100);
-    // A dead-end pocket 3 rows up: Manhattan 3, but no path within the radius.
-    carve(r.world.undergroundGrids[E]!, 100, 2, 100, 3);
-    const walled = addEnemyWorker(r.world, 100, 3);
-    expect(fighterMayLoot(r.world, r.player, id)).toBe(true);
-    // In the tunnel, RAID_ENGAGE_RADIUS_TILES along it: in reach.
+    // In the tunnel, RAID_ENGAGE_RADIUS_TILES along it (path = Manhattan = R): in reach.
     const near = addEnemyWorker(r.world, 100 - RAID_ENGAGE_RADIUS_TILES, 6);
     expect(fighterMayLoot(r.world, r.player, id)).toBe(false);
-    // One tile further: out of reach again.
+    // One tile further: out of reach.
     r.world.ants.posX[near] = centre(100 - RAID_ENGAGE_RADIUS_TILES - 1);
     expect(fighterMayLoot(r.world, r.player, id)).toBe(true);
     // The queen counts as a hostile.
     const q = r.enemy.queenEntityId;
     r.world.ants.posX[q] = centre(102);
     expect(fighterMayLoot(r.world, r.player, id)).toBe(false);
-    void walled;
+  });
+
+  it('reach is by path, not Manhattan: a hostile behind a wall, or round a bend, is out of reach', () => {
+    const r = raidWorld();
+    const grid = r.world.undergroundGrids[E]!;
+    const id = raiderInEnemyNest(r, 100);
+    // A sealed pocket 3 rows up: Manhattan 3, no path at all.
+    carve(grid, 100, 2, 100, 3);
+    const walled = addEnemyWorker(r.world, 100, 3);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(true);
+    // Open a bend to it: (100,6) → (101,6) → (101,5) → (101,4) → (101,3) → (100,3)
+    // is 5 path tiles — still out of reach, though inside the BFS window.
+    carve(grid, 101, 3, 101, 5);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(true);
+    // Move it round the corner to (101,3): 4 path tiles — in reach.
+    r.world.ants.posX[walled] = centre(101);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(false);
+  });
+
+  it('never loots its own nest, even rallied on its own entrance over a stocked larder', () => {
+    const r = raidWorld();
+    const w = r.world;
+    setChamberStockForTest(w, r.player, r.playerLarder, 3000);
+    rallyOn(r.player, r.playerDoor);
+    const id = addFighter(w, P, 36, 6, P);
+    expect(fighterMayLoot(w, r.player, id)).toBe(false);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).not.toBe(FightingSubState.Looting);
   });
 
   it('is false in a V51 world, and a V51 world never raids (byte-inert rules)', () => {
@@ -478,5 +502,85 @@ describe('computeStockFlowField (V52)', () => {
     computeStockFlowField(w, grid, r.enemy.chambers, out, queue);
     expect(at(88, 6)).toBe(-2); // empty: nothing to raid anywhere
     expect(at(95, 6)).toBe(-2);
+  });
+});
+
+describe('hauling edge cases (V52)', () => {
+  function hauler(r: RaidWorld, x: number, y: number, grid: number | null, load: number): number {
+    const id = addFighter(r.world, P, x, y, grid);
+    r.world.ants.subTask[id] = FightingSubState.Hauling;
+    r.world.ants.foodCarrying[id] = load;
+    return id;
+  }
+
+  it('a full deposit ends the haul on that very tick (trip counted, back to the rally)', () => {
+    const r = raidWorld();
+    const w = r.world;
+    const id = hauler(r, 36, 6, P, 700);
+    tickRaidActions(w);
+    expect(chamberStock(w, r.playerLarder)).toBe(700);
+    expect(w.ants.foodCarrying[id]).toBe(0);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.MovingToRally);
+    expect(r.player.raidTrips).toBe(1);
+  });
+
+  it('at the top of its own shaft it tops up the pool (as a forager does), leftover kept', () => {
+    const r = raidWorld();
+    const w = r.world;
+    setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY - 100);
+    const id = hauler(r, r.playerDoor.x, 0, P, 300);
+    tickRaidActions(w);
+    expect(colonyPoolFood(w, r.player)).toBe(BASE_FOOD_STORAGE_CAPACITY);
+    expect(w.ants.foodCarrying[id]).toBe(200);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Hauling);
+    expect(r.player.raidTrips).toBe(0);
+  });
+
+  it('a hauler standing on an enemy entrance never goes back down it', () => {
+    const r = raidWorld();
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const id = hauler(r, r.enemyDoor.x, r.enemyDoor.y, null, RAID_CARRY_FP);
+    w.ants.speed[id] = 0; // stays on the door tile for the descent check
+    tick(w, []);
+    expect(w.ants.zone[id]).toBe(Zone.Surface);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Hauling);
+  });
+
+  it('climbs out of the enemy nest by the entrance flow field, round a bend', () => {
+    const r = raidWorld();
+    const w = r.world;
+    const grid = w.undergroundGrids[E]!;
+    // A U-shaped side passage: down from (108,6) to row 12, west to (98,12).
+    carve(grid, 108, 6, 108, 12);
+    carve(grid, 98, 12, 108, 12);
+    rallyOn(r.player, r.enemyDoor);
+    const id = hauler(r, 98, 12, E, RAID_CARRY_FP);
+    expect(run(w, 200, () => w.ants.zone[id] === Zone.Surface)).toBeGreaterThan(0);
+    expect(tileOf(w, id)).toEqual(r.enemyDoor);
+  });
+
+  it('a hauler in its own nest while its colony defends its tunnels still deposits (pool at the shaft)', () => {
+    const r = raidWorld();
+    const w = r.world;
+    // Larder saturated: only the pool at the shaft top takes food.
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY);
+    setPoolFoodForTest(w, r.player, 0);
+    rallyOn(r.player, r.playerDoor); // tunnel-defence rally (V44)
+    const id = hauler(r, 30, 6, P, 500);
+    const done = run(w, 200, () => w.ants.subTask[id] !== FightingSubState.Hauling);
+    expect(done).toBeGreaterThan(0);
+    expect(r.player.raidTrips).toBe(1);
+  });
+
+  it('a hauler takes no sentry post: the sentries rank as if it were not there', () => {
+    const r = raidWorld();
+    const w = r.world;
+    r.player.rallyPoint = null;
+    const h = hauler(r, r.playerDoor.x + 10, r.playerDoor.y - 10, null, RAID_CARRY_FP);
+    const sentry = addFighter(w, P, r.playerDoor.x + 1, r.playerDoor.y - 1, null);
+    expect(h).toBeLessThan(sentry);
+    updateFightAntTargets(w);
+    expect(getScratch(w).antTargeting.sentrySlot[sentry]).toBe(0);
   });
 });
