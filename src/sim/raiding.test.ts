@@ -38,6 +38,8 @@ import {
   PLAYER_COLONY_ID,
   RAID_CARRY_FP,
   RAID_ENGAGE_RADIUS_TILES,
+  RAID_LOOT_START_STOCK_FP,
+  RAID_START_CLEAR_RADIUS_TILES,
 } from './constants.js';
 import {
   addEnemyWorker,
@@ -133,36 +135,113 @@ describe('fighterMayLoot — the raid predicate (V52)', () => {
     expect(r.enemy.foodLostToRaidsFp).toBe(0);
   });
 
-  it('a hostile exactly RAID_ENGAGE_RADIUS_TILES path tiles away stops it; one tile further does not', () => {
+  it('a LOOTING raider stops for a hostile RAID_ENGAGE_RADIUS_TILES path tiles away, not one further', () => {
     const r = raidWorld();
+    const w = r.world;
     const id = raiderInEnemyNest(r, 100);
+    w.ants.subTask[id] = FightingSubState.Looting;
     // In the tunnel, RAID_ENGAGE_RADIUS_TILES along it (path = Manhattan = R): in reach.
-    const near = addEnemyWorker(r.world, 100 - RAID_ENGAGE_RADIUS_TILES, 6);
-    expect(fighterMayLoot(r.world, r.player, id)).toBe(false);
-    // One tile further: out of reach.
-    r.world.ants.posX[near] = centre(100 - RAID_ENGAGE_RADIUS_TILES - 1);
-    expect(fighterMayLoot(r.world, r.player, id)).toBe(true);
+    const near = addEnemyWorker(w, 100 - RAID_ENGAGE_RADIUS_TILES, 6);
+    expect(fighterMayLoot(w, r.player, id)).toBe(false);
+    // One tile further: out of reach, so it keeps looting.
+    w.ants.posX[near] = centre(100 - RAID_ENGAGE_RADIUS_TILES - 1);
+    expect(fighterMayLoot(w, r.player, id)).toBe(true);
+    // Step 10e drops a blocked looter to MovingToRally and aims it at the blocker.
+    w.ants.posX[near] = centre(100 - RAID_ENGAGE_RADIUS_TILES);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.MovingToRally);
+    expect(w.ants.targetPosX[id]).toBe(w.ants.posX[near]);
     // The queen counts as a hostile.
+    w.ants.posX[near] = centre(60);
+    w.ants.subTask[id] = FightingSubState.Looting;
     const q = r.enemy.queenEntityId;
-    r.world.ants.posX[q] = centre(102);
-    expect(fighterMayLoot(r.world, r.player, id)).toBe(false);
+    w.ants.posX[q] = centre(102);
+    expect(fighterMayLoot(w, r.player, id)).toBe(false);
+  });
+
+  it('a raider not yet looting STARTS only with nothing within RAID_START_CLEAR_RADIUS_TILES', () => {
+    const r = raidWorld();
+    const w = r.world;
+    const id = raiderInEnemyNest(r, 100);
+    const h = addEnemyWorker(w, 100 - RAID_START_CLEAR_RADIUS_TILES, 6);
+    expect(fighterMayLoot(w, r.player, id)).toBe(false);
+    w.ants.posX[h] = centre(100 - RAID_START_CLEAR_RADIUS_TILES - 1);
+    expect(fighterMayLoot(w, r.player, id)).toBe(true);
+  });
+
+  it('no toggling at the reach edge: a hostile pacing between 4 and 6 tiles neither starts nor stops it', () => {
+    const r = raidWorld();
+    const w = r.world;
+    const id = raiderInEnemyNest(r, 100);
+    w.ants.speed[id] = 0; // hold it in place: only the hostile moves
+    const h = addEnemyWorker(w, 94, 6);
+    // Not looting, hostile 6 away: does not start, however the hostile paces 5↔6.
+    for (let t = 0; t < 6; t++) {
+      w.ants.posX[h] = centre(t % 2 === 0 ? 95 : 94);
+      updateRaiders(w);
+      expect(w.ants.subTask[id]).not.toBe(FightingSubState.Looting);
+    }
+    // Looting, hostile 5↔6 away: keeps looting throughout.
+    w.ants.subTask[id] = FightingSubState.Looting;
+    for (let t = 0; t < 6; t++) {
+      w.ants.posX[h] = centre(t % 2 === 0 ? 95 : 94);
+      updateRaiders(w);
+      expect(w.ants.subTask[id]).toBe(FightingSubState.Looting);
+    }
+  });
+
+  it('a trickling larder does not pull a queen-hunter back: it starts again only at a full load', () => {
+    const r = raidWorld(0);
+    const w = r.world;
+    const id = raiderInEnemyNest(r);
+    // A forager's pickup lands in the empty larder: less than a load.
+    setChamberStockForTest(w, r.enemy, r.enemyLarder, RAID_LOOT_START_STOCK_FP - 1);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).not.toBe(FightingSubState.Looting);
+    setChamberStockForTest(w, r.enemy, r.enemyLarder, RAID_LOOT_START_STOCK_FP);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Looting);
+    // Once looting, any food left keeps it on.
+    setChamberStockForTest(w, r.enemy, r.enemyLarder, 1);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Looting);
   });
 
   it('reach is by path, not Manhattan: a hostile behind a wall, or round a bend, is out of reach', () => {
     const r = raidWorld();
-    const grid = r.world.undergroundGrids[E]!;
+    const w = r.world;
+    const grid = w.undergroundGrids[E]!;
     const id = raiderInEnemyNest(r, 100);
+    w.ants.subTask[id] = FightingSubState.Looting; // the 4-tile stay radius
     // A sealed pocket 3 rows up: Manhattan 3, no path at all.
     carve(grid, 100, 2, 100, 3);
-    const walled = addEnemyWorker(r.world, 100, 3);
-    expect(fighterMayLoot(r.world, r.player, id)).toBe(true);
+    const walled = addEnemyWorker(w, 100, 3);
+    expect(fighterMayLoot(w, r.player, id)).toBe(true);
     // Open a bend to it: (100,6) → (101,6) → (101,5) → (101,4) → (101,3) → (100,3)
     // is 5 path tiles — still out of reach, though inside the BFS window.
     carve(grid, 101, 3, 101, 5);
-    expect(fighterMayLoot(r.world, r.player, id)).toBe(true);
+    expect(fighterMayLoot(w, r.player, id)).toBe(true);
     // Move it round the corner to (101,3): 4 path tiles — in reach.
-    r.world.ants.posX[walled] = centre(101);
-    expect(fighterMayLoot(r.world, r.player, id)).toBe(false);
+    w.ants.posX[walled] = centre(101);
+    expect(fighterMayLoot(w, r.player, id)).toBe(false);
+  });
+
+  it('its own colony’s ants are never hostile, however close', () => {
+    const r = raidWorld();
+    const w = r.world;
+    const id = raiderInEnemyNest(r, 100);
+    addFighter(w, P, 100, 6, E);
+    addFighter(w, P, 99, 6, E);
+    expect(fighterMayLoot(w, r.player, id)).toBe(true);
+  });
+
+  it('a rally on a CLOSED enemy entrance does not make it loot', () => {
+    const r = raidWorld();
+    const w = r.world;
+    const id = raiderInEnemyNest(r, 100);
+    const door = r.enemy.entrances.find((e) => e.surfaceTileX === r.enemyDoor.x)!;
+    door.isOpen = false;
+    expect(fighterMayLoot(w, r.player, id)).toBe(false);
   });
 
   it('never loots its own nest, even rallied on its own entrance over a stocked larder', () => {
@@ -259,8 +338,17 @@ describe('the raid loop through tick() (V52)', () => {
     const w = r.world;
     const a = raiderInEnemyNest(r, 100);
     const b = addFighter(w, P, 101, 6, E);
-    // Both head for the larder; the first there empties it.
-    run(w, 200, () => chamberStock(w, r.enemyLarder) === 0);
+    // Both head for the larder; the first there empties it. (The enemy queen is
+    // kept fed meanwhile, so she draws nothing from it.)
+    const q0 = r.enemy.queenEntityId;
+    run(
+      w,
+      200,
+      () => chamberStock(w, r.enemyLarder) === 0,
+      () => {
+        w.ants.lastMealTick[q0] = w.tick;
+      },
+    );
     expect(chamberStock(w, r.enemyLarder)).toBe(0);
     const hauler = w.ants.subTask[a] === FightingSubState.Hauling ? a : b;
     const other = hauler === a ? b : a;
@@ -644,5 +732,67 @@ describe('review follow-ups (V52)', () => {
     expect(pileAmountFp(w, pileAtTile(w, x, 40))).toBe(1024);
     expect(r.player.foodRaidedFp).toBe(1024);
     expect(r.enemy.foodLostToRaidsFp).toBe(1024);
+  });
+});
+
+describe('second review follow-ups (V52)', () => {
+  function hauler(r: RaidWorld, x: number, y: number, grid: number | null, load: number): number {
+    const id = addFighter(r.world, P, x, y, grid);
+    r.world.ants.subTask[id] = FightingSubState.Hauling;
+    r.world.ants.foodCarrying[id] = load;
+    return id;
+  }
+
+  it('a surface hauler heads for an OPEN home entrance, never a closed nearer one', () => {
+    const r = raidWorld();
+    const w = r.world;
+    // A second, closed player entrance much nearer the hauler.
+    r.player.entrances.push({
+      entranceId: 9999,
+      surfaceTileX: 70,
+      surfaceTileY: 40,
+      isOpen: false,
+    } as (typeof r.player.entrances)[number]);
+    const id = hauler(r, 72, 40, null, RAID_CARRY_FP);
+    updateRaiders(w);
+    expect(w.ants.targetPosX[id]).toBe(centre(r.playerDoor.x));
+    expect(w.ants.targetPosY[id]).toBe(centre(r.playerDoor.y));
+  });
+
+  it('a hauler still in the enemy nest never deposits there, not even on a larder tile or its shaft top', () => {
+    const r = raidWorld(0);
+    const w = r.world;
+    setPoolFoodForTest(w, r.enemy, 0);
+    const onLarder = hauler(r, 88, 6, E, 700);
+    const onShaft = hauler(r, r.enemyDoor.x, 0, E, 700);
+    // At the coordinates of its OWN larder and its OWN shaft top, but in the enemy
+    // nest: still not a deposit site (sites are looked up in the nest it is in).
+    const atOwnLarderXY = hauler(r, 36, 6, E, 700);
+    const atOwnShaftXY = hauler(r, r.playerDoor.x, 0, E, 700);
+    setPoolFoodForTest(w, r.player, 0);
+    tickRaidActions(w);
+    expect(w.ants.foodCarrying[onLarder]).toBe(700);
+    expect(w.ants.foodCarrying[onShaft]).toBe(700);
+    expect(w.ants.foodCarrying[atOwnLarderXY]).toBe(700);
+    expect(w.ants.foodCarrying[atOwnShaftXY]).toBe(700);
+    expect(chamberStock(w, r.playerLarder)).toBe(0);
+    expect(colonyPoolFood(w, r.player)).toBe(0);
+    expect(chamberStock(w, r.enemyLarder)).toBe(0);
+    expect(colonyPoolFood(w, r.enemy)).toBe(0);
+  });
+
+  it('a hauler passes through its own idle invaders in a one-wide enemy shaft', () => {
+    const r = raidWorld();
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    // Two lower-id player fighters parked in the shaft above it, frozen.
+    const x = r.enemyDoor.x;
+    const b1 = addFighter(w, P, x, 2, E);
+    const b2 = addFighter(w, P, x, 1, E);
+    w.ants.speed[b1] = 0;
+    w.ants.speed[b2] = 0;
+    const id = hauler(r, x, 3, E, RAID_CARRY_FP);
+    expect(id).toBeGreaterThan(b2);
+    expect(run(w, 60, () => w.ants.zone[id] === Zone.Surface)).toBeGreaterThan(0);
   });
 });
