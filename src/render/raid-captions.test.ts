@@ -58,7 +58,7 @@ describe('nextRaidCaption — counters to captions', () => {
     resetRaidCaptionState(s, w, P);
     w.colonies[P]!.foodLostToRaidsFp += 1024;
     expect(take(s, w)).toBe('raided');
-    expect(RAID_CAPTION_TEXTS.raided).toMatch(/stealing from your food store/);
+    expect(RAID_CAPTION_TEXTS.raided).toMatch(/stealing from your larder/);
   });
 
   it('a load taken by the player → "raiding"; a haul deposited → "hauled"', () => {

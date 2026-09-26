@@ -35,7 +35,7 @@ import type { ColonyId } from '../sim/colony/colony-store.js';
 export type RaidCaptionKind = 'raided' | 'looting' | 'hauled';
 
 export const RAID_CAPTION_TEXTS: Record<RaidCaptionKind, string> = {
-  raided: 'Raiders are stealing from your food store!',
+  raided: 'Raiders are stealing from your larder!',
   looting: 'Your fighters are raiding the enemy larder.',
   hauled: 'Your raiders hauled stolen food home.',
 };

@@ -174,9 +174,9 @@ write them only through the food facade (`src/sim/food/food-api.ts`).
 _Avoid_: stockpile, reserve.
 
 **Food store / stock** (#290):
-The **food store** is where every unit of a colony's food lives (`world.food`):
-one record per entrance **pool**, per FoodStorage chamber and per surface **food
-pile**. A FoodStorage chamber's **stock** is the food held in that chamber; a
+The **food store** is where every unit of food lives (`world.food`): one record
+per colony's entrance **pool**, per FoodStorage chamber and per surface **food
+pile** (piles belong to no colony). A FoodStorage chamber's **stock** is the food held in that chamber; a
 colony's food total is its pool plus its stocks. Food is only ever in the store or
 in an ant's carried load.
 _Avoid_: **food store** for the FoodStorage chamber itself (that is a chamber; its

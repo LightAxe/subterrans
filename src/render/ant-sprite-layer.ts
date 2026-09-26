@@ -123,13 +123,13 @@ export const FOOD_CACHE_SPRITE_WIDTH = 16;
 export const FOOD_CACHE_SPRITE_HEIGHT = 16;
 
 // #290 PR 6 — the carried-food crumb (AntSpriteDrawOptions.carrying). It reuses the
-// food-cache texture shrunk to about 6 px and tinted the surface food-pile green
+// food-cache texture shrunk to 6 px and tinted the surface food-pile green
 // (the HUD food colour), so a laden ant reads as "has food" at a glance. It sits
 // over the head (the SVGs face -x, so the offset is along the rotated -x axis,
 // scaled with the ant) and stays inside the ant's own footprint, so the
 // underground containment of the ant (sprite-containment.ts) also keeps the crumb
 // off a Solid neighbour.
-export const CARRIED_FOOD_SCALE = 0.4;
+export const CARRIED_FOOD_SCALE = 0.375;
 /** Crumb centre, in px ahead of the ant centre at scale 1 (half-way to the head tip). */
 export const CARRIED_FOOD_HEAD_OFFSET_PX = WORKER_SPRITE_WIDTH / 4;
 /** The surface food-pile green (sprites.ts), which the HUD food count uses too. */

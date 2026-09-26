@@ -294,6 +294,8 @@ interface UIScenePhase9 {
   hudButtonGeometry?(): HudButtonGeometry[];
   // #290 PR 6 — Dev/E2E observability for __phase9_test.getCaptionsShown().
   captionsShown?(): string[];
+  // #290 PR 6 — true while the caption queue's single pending slot is empty.
+  captionPendingFree?(): boolean;
 }
 
 // Re-export GamePhase for Plan 07 and other consumers
@@ -360,15 +362,15 @@ declare global {
        *  oldest first (UIScene.captionsShown). A caption is up for 1.5 s, so a
        *  spec asserts on the log rather than racing the live Text. Dev-build only. */
       getCaptionsShown?(): string[];
-      /** #290 PR 6 — the player colony's raid counters (food in fp: stolen by it,
-       *  stolen from it; completed raid hauls) and its food total, read-only, so a
-       *  spec can prove a raid moved food. Null before the first boot. */
       /** #290 PR 6 — issue a player rally on (tileX, tileY) through the exact
        *  enqueue the surface Command tap uses (handleSetRallyPoint): a command, not
        *  a state write, so the drain, the caption hook and the sim all run as for
        *  a real click. Lets a spec rally on an enemy entrance without driving the
        *  camera to it. Returns false if the command was dropped (paused cap). */
       rallyPlayerAt?(tileX: number, tileY: number): boolean;
+      /** #290 PR 6 — the player colony's raid counters (food in fp: stolen by it,
+       *  stolen from it; completed raid hauls) and its food total, read-only, so a
+       *  spec can prove a raid moved food. Null before the first boot. */
       getPlayerRaidStats?(): {
         foodRaidedFp: number;
         foodLostToRaidsFp: number;
@@ -1626,12 +1628,15 @@ export class GameScene extends Phaser.Scene {
     // #290 PR 6 — raid captions (being raided / raiding / a haul home), driven by
     // the player colony's raid counters and throttled per caption (raid-captions.ts).
     // Recurring: no one-shot key.
-    // The cooldown starts only once the queue has taken the caption, so one dropped
-    // on overflow is offered again on the next raid instead of being silenced.
+    // The cooldown starts only once the queue has taken the caption. An owed
+    // caption is offered only while the queue has a free pending slot, so it
+    // never takes that slot from a one-shot caption; it stays owed (up to
+    // RAID_CAPTION_OWED_TICKS) and is retried each frame until then.
     const raidCaption = nextRaidCaption(this.raidCaptions, this.world, PLAYER_COLONY_ID);
     if (
       raidCaption !== null &&
       uiScene &&
+      uiScene.captionPendingFree?.() !== false &&
       uiScene.showCaption(RAID_CAPTION_TEXTS[raidCaption], this.layout.w / 2, 60)
     ) {
       markRaidCaptionShown(this.raidCaptions, this.world, raidCaption);

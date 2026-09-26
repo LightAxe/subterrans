@@ -208,7 +208,7 @@ describe('carriedFoodPosition (#290 PR 6)', () => {
 
   it('the crumb fits within the worker footprint', () => {
     const half = (FOOD_CACHE_SPRITE_WIDTH * CARRIED_FOOD_SCALE) / 2;
-    expect(CARRIED_FOOD_HEAD_OFFSET_PX + half).toBeLessThanOrEqual(WORKER_SPRITE_WIDTH / 2 + 0.5);
+    expect(CARRIED_FOOD_HEAD_OFFSET_PX + half).toBeLessThanOrEqual(WORKER_SPRITE_WIDTH / 2);
     expect(half).toBeLessThanOrEqual(WORKER_SPRITE_HEIGHT / 2);
   });
 });
