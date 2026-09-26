@@ -1546,10 +1546,11 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const w = createScenario(42);
       // eslint-disable-next-line no-restricted-syntax
       w.tick = 1_000_000;
-      // #288 — keep the queens' hunger clocks consistent with the moved tick
-      // (just fed), as a real long session would have them.
+      // #288 — keep the queens' (and, from V51, the workers') hunger clocks
+      // consistent with the moved tick (just fed), as a real long session would.
       for (const c of Object.values(w.colonies)) {
         setMealsUntilStarvationForTest(w, c.queenEntityId, QUEEN_HUNGER, 300);
+        for (const id of c.workers) w.ants.lastMealTick[id] = w.tick - 1;
       }
       const s = serializeWorldState(w);
       const w2 = deserializeWorldState(s);
