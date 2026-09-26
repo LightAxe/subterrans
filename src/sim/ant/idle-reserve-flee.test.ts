@@ -2312,9 +2312,47 @@ describe('V49 (#322) — the alarm musters civilians home under a full camp', ()
         expect(world.ants.searchHeadingX[id]).toBe(0);
         expect(world.ants.searchHeadingTicks[id]).toBe(0);
         expect(world.ants.searchPauseTicks[id]).toBe(0);
+        expect(world.ants.searchPrevTileX[id]).toBe(-1);
         expect(world.ants.searchWave[id]).toBe(0);
       }
     }
+  });
+
+  it('an alarm recall steps the leash wave back at most to -1, and turning back to search restores it', () => {
+    const { world, ent } = campedWorld(SIM_VERSION_V49_ALARM_MUSTER);
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const id = spawnWorker(
+      world,
+      PLAYER_COLONY_ID,
+      ent.surfaceTileX + 5,
+      ent.surfaceTileY,
+      AntTask.Foraging,
+    );
+    world.ants.subTask[id] = ForagingSubState.SearchingFood;
+    world.ants.searchWave[id] = 0;
+    colony.alarmActive = true;
+    tickExcursionBoundary(world); // recalled: 0 -> -1
+    expect(world.ants.subTask[id]).toBe(ForagingSubState.ReturningToNest);
+    expect(world.ants.searchWave[id]).toBe(-1);
+    // A second recall while already homebound can't push it further.
+    world.ants.subTask[id] = ForagingSubState.SearchingFood;
+    tickExcursionBoundary(world);
+    expect(world.ants.searchWave[id]).toBe(-1);
+    // Alarm off before it got home; a priority pile makes the breakout turn it
+    // back to searching, which undoes the step back.
+    colony.alarmActive = false;
+    const foodPileId = 9001;
+    world.foodPiles.push({
+      foodPileId,
+      tileX: ent.surfaceTileX + 7,
+      tileY: ent.surfaceTileY,
+      pickupsRemaining: 5,
+      pickupsInitial: 5,
+    } as never);
+    colony.priorityFoodPileId = foodPileId as never;
+    tickExcursionBoundary(world);
+    expect(world.ants.subTask[id]).toBe(ForagingSubState.SearchingFood);
+    expect(world.ants.searchWave[id]).toBe(0);
   });
 
   it('through tick(): under a full camp every civilian ends up home, none frozen out in the open (V48 froze some)', () => {

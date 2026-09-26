@@ -997,9 +997,11 @@ export function tickExcursionBoundary(world: WorldState): void {
       if (sub === ForagingSubState.SearchingFood) {
         ants.subTask[id] = ForagingSubState.ReturningToNest;
         // Recalled, not a failed search: the entrance-arrival flip after the
-        // all-clear bumps the leash wave, so step it back first. (-1 is safe:
-        // every reader clamps a negative wave to 0, and the bump restores it.)
-        ants.searchWave[id] = ants.searchWave[id]! - 1;
+        // all-clear bumps the leash wave, so step it back first. -1 at most
+        // (every reader clamps a negative wave to 0); the arrival bump, or the
+        // breakout below if it turns back to searching first, restores it.
+        const wave = ants.searchWave[id]!;
+        ants.searchWave[id] = wave > 0 ? wave - 1 : -1;
         ants.searchHeadingX[id] = 0;
         ants.searchHeadingY[id] = 0;
         ants.searchHeadingTicks[id] = 0;
@@ -1087,6 +1089,9 @@ export function tickExcursionBoundary(world: WorldState): void {
       }
 
       ants.subTask[id] = ForagingSubState.SearchingFood;
+      // #322 (V49): undo an alarm recall's leash step-back (a negative wave only
+      // ever comes from it) — this breakout is not a failed search.
+      if (ants.searchWave[id]! < 0) ants.searchWave[id] = 0;
       ants.searchHeadingX[id] = 0;
       ants.searchHeadingY[id] = 0;
       ants.searchHeadingTicks[id] = 0;
