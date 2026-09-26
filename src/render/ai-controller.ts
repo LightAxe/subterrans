@@ -22,6 +22,7 @@ import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import {
   UNDERGROUND_CEILING_ROW_Y,
   PLAYER_COLONY_ID,
+  ENEMY_COLONY_ID,
   ENEMY_START_X,
   AI_PROBE_INTERVAL_TICKS,
   AI_PROBE_FIGHTER_COUNT,
@@ -819,13 +820,25 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId): void {
   // invasionRallyTileX/Y to -1. The re-emit block above is harmless (invasionRallyTileX === -1).
 }
 
+/**
+ * The colony an AI colony probes and invades: the player, or — when the rule-based
+ * controller drives the PLAYER colony (the `check:ai-economy --both-ai` harness,
+ * #290 PR 5) — the enemy. Unchanged for the enemy AI (the only one in play), which
+ * always targets the player; before this the player AI "invaded" its own entrance.
+ */
+function opponentColonyId(aiColonyId: ColonyId): ColonyId {
+  return aiColonyId === PLAYER_COLONY_ID
+    ? (ENEMY_COLONY_ID as ColonyId)
+    : (PLAYER_COLONY_ID as ColonyId);
+}
+
 /** Select probe target (Q3 spec). */
 function _selectProbeTarget(
   world: WorldState,
   aiColonyId: ColonyId,
 ): { tileX: number; tileY: number } | null {
   // Priority 1: closest player-marked food pile by ascending pile ID for ties.
-  const playerColony = world.colonies[PLAYER_COLONY_ID];
+  const playerColony = world.colonies[opponentColonyId(aiColonyId)];
   if (playerColony === undefined) return null;
 
   let bestPile: { tileX: number; tileY: number; id: number; dist: number } | null = null;
@@ -920,7 +933,7 @@ function _selectInvasionEntrance(
   world: WorldState,
   aiState: import('../sim/types.js').AIStateRecord,
 ): import('../sim/colony/entrance.js').NestEntrance | null {
-  const playerColony = world.colonies[PLAYER_COLONY_ID];
+  const playerColony = world.colonies[opponentColonyId(aiState.colonyId)];
   if (playerColony === undefined) return null;
   const openEntrances = playerColony.entrances.filter((e) => e.isOpen);
   if (openEntrances.length === 0) return null;
