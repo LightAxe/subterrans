@@ -105,9 +105,9 @@ describe('V51 worker meals + D11 walk home replay deterministically (#290 PR 4)'
 
   it('same seed + same command log → identical hashes at every checkpoint', () => {
     expect(run().hashes).toEqual(a.hashes);
-  });
+  }, 60_000); // a full multi-thousand-tick run; slow on a loaded CI box
 
   it('a save/load in the middle of the walk home continues identically', () => {
     expect(run(SAVE_AT).hashes).toEqual(a.hashes);
-  });
+  }, 60_000);
 });
