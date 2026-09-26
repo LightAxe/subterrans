@@ -124,8 +124,8 @@ export function spawnCorpseFood(
  * Side effects:
  *   - Prunes `recentlyDepletedFood` of stale entries (older than the recency
  *     window) before sampling, so the recency check operates on a fresh set.
- *   - On a successful placement, allocates an entity ID and pushes the new
- *     `FoodPile`. On entity-ID exhaustion (INVALID_ENTITY_ID), silently skips.
+ *   - On a successful placement, allocates an entity ID and adds the new pile
+ *     (`spawnPile`). On entity-ID exhaustion (INVALID_ENTITY_ID), silently skips.
  *
  * Determinism: every PRNG read goes through the passed `rng` (the tick-shared
  * instance). RNG draws are unconditional in some branches (terrain weighting)

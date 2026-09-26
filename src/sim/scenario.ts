@@ -22,6 +22,7 @@ import {
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import {
+  createColonyPool,
   depositIntoPool,
   livePileTiles,
   pileCount,
@@ -212,6 +213,9 @@ function initColony(
     task: AntTask.Idle,
     lifespan: WORKER_LIFESPAN_TICKS,
     hp: COMBAT_HP_QUEEN,
+    // #288 (V50): "fed on the tick before the first" — her first failed meal
+    // (tick 0) is one tick since her last, exactly the pre-V50 countdown start.
+    lastMealTick: world.tick - 1,
   });
 
   const colony = createColonyRecord(colonyId, queenId);
@@ -223,7 +227,10 @@ function initColony(
   colony.digFlowFieldDirty = false;
   colony.foodFlowFieldDirty = false;
   colony.broodFieldDirty = false; // #235
-  depositIntoPool(world, colony, STARTING_FOOD); // pool starts empty; STARTING_FOOD < BASE cap
+  // #290 PR 2 — the entrance pool is a food-store record at the start column's
+  // shaft top (where pool deposits happen); it starts empty.
+  createColonyPool(world, colony, startX, 0);
+  depositIntoPool(world, colony, STARTING_FOOD); // STARTING_FOOD < BASE cap
 
   // Phase 9 playability: seed each colony with one pre-excavated open entrance
   // at the colony's start column so the forage loop closes on tick 0.
@@ -260,6 +267,7 @@ function initColony(
       posX: startX << FP_SHIFT,
       posY: startY << FP_SHIFT,
       task: AntTask.Idle,
+      lastMealTick: world.tick,
     });
     colony.workers.push(workerId);
     colony.workerCount += 1;

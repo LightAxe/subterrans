@@ -1,32 +1,34 @@
-// src/sim/food/food-api.ts — the food facade (#290 PR 1).
+// src/sim/food/food-api.ts — the food facade (#290).
 //
 // Every reader and writer of food STORAGE goes through this module: the surface
-// piles (`world.foodPiles`), the entrance pool (`ColonyRecord.foodStored`) and the
-// FoodStorage chamber stock (`ChamberRecord.foodStored`). Nothing else in src/
-// touches those three fields, except the save serializer/validator in
-// `platform/save.ts` (which owns the on-disk shape) and the struct declaration +
-// `copyWorldState` in `types.ts`. `food-api-guard.test.ts` enforces that.
+// piles, each colony's entrance pool and each FoodStorage chamber's stock. PR 1
+// introduced it over the old storage (`world.foodPiles`, `foodStored` scalars);
+// PR 2 (V50) swapped the storage underneath for the located food store
+// (`food-store.ts`, `world.food`) without changing a signature, so callers did
+// not change again. Nothing else in src/ touches the store's columns or the
+// `poolSlot` / `foodSlot` links, except the save serializer/validator
+// (`platform/save.ts`) and `copyWorldState` / `createWorldState` in `types.ts`.
+// `food-api-guard.test.ts` enforces that.
 //
-// PR 1 implements the facade over the EXISTING storage. The located-food rewrite
-// (PR 2) swaps the storage for a structure-of-arrays store underneath these same
-// signatures, so callers do not change again. That is why several functions take
-// `world` although today's storage does not need it.
-//
-// Units. Every quantity crossing this API is fixed-point food (fp). A pile stores
-// pickup-charges today; the facade converts: 1 charge = FOOD_PICKUP_AMOUNT fp.
+// Units. Every quantity crossing this API is fixed-point food (fp). A pile holds
+// whole pickups: FOOD_PICKUP_AMOUNT fp each.
 //
 // Pile handles ("slots"). `pileSlotAt(world, i)` maps the i-th pile in creation
-// order to a slot, and the per-pile readers take that slot. Today a slot IS the
-// array index, so a slot is invalidated by any pile removal (`drainPile` emptying
-// a pile). Never hold a slot across a call that can remove a pile.
+// order to its store slot, and the per-pile readers take that slot. A slot is
+// stable for the pile's lifetime and is recycled only after the pile is removed
+// (`drainPile` emptying it).
+//
+// Links. A colony built by `createScenario` or loaded from a save always has a
+// pool (`poolSlot ≥ 0`) and every FoodStorage chamber a stock (`foodSlot ≥ 0`).
+// Hand-built test colonies may lack them (−1): such a colony reads 0 pool food and
+// its pool accepts nothing; such a chamber reads 0 stock and is not depositable.
 //
 // Determinism: integers only, no `/`, no module-level mutable state. The per-tick
 // readers and movers (totals, withdraw/deposit, pile readers, `pileAtTile`) do not
-// allocate. The rare writers allocate exactly as the code they replaced did:
-// `spawnPile` pushes a new pile object, `drainPile` splices, and
-// `recordFoodPileDepletion` pushes a DepletionRecord and walks
-// `Object.values(world.colonies)` (only when a pile empties). `pileRender` and
-// `forEachPile` allocate per call and are for render / input / tooling only.
+// allocate. `recordFoodPileDepletion` pushes a DepletionRecord and walks
+// `Object.values(world.colonies)` (only when a pile empties), exactly as before.
+// `pileRender` and `forEachPile` allocate per call and are for render / input /
+// tooling only.
 
 import type { WorldState } from '../types.js';
 import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V37_CORPSE_FOOD } from '../types.js';
@@ -40,23 +42,31 @@ import {
   FOOD_PILE_HARD_CAP,
   FOOD_PILE_INITIAL_PICKUPS_MAX,
   FOOD_PILE_SOFT_CEILING,
+  SURFACE_GRID_HEIGHT,
+  SURFACE_GRID_WIDTH,
 } from '../constants.js';
 import { ChamberType } from '../enums.js';
+import { FP_SHIFT } from '../fixed.js';
+import { Zone } from '../terrain.js';
 import { isSurfaceTileInComponent } from '../surface-features.js';
+import { clearFoodSlot, FOOD_FLAG_CORPSE, findFreeFoodSlot, FoodKind } from './food-store.js';
 
-// ---------------------------------------------------------------------------
-// Charge ↔ fp conversion (PR 1 only: piles still store charges)
-// ---------------------------------------------------------------------------
+export { FOOD_FLAG_CORPSE } from './food-store.js';
 
-/** log2(FOOD_PICKUP_AMOUNT). Conversion fp → charges is a shift (no `/` in sim). */
+/** log2(FOOD_PICKUP_AMOUNT): pile amounts are floored to whole pickups by shifting (no `/`). */
 const PICKUP_SHIFT = 9;
 // Compile-time guard: fails to typecheck if FOOD_PICKUP_AMOUNT stops being 512
-// (= 1 << PICKUP_SHIFT), which would make the shift conversion wrong.
+// (= 1 << PICKUP_SHIFT), which would make the whole-pickup rounding wrong.
 const PICKUP_SHIFT_GUARD: typeof FOOD_PICKUP_AMOUNT = 512;
 void PICKUP_SHIFT_GUARD;
 
-/** Pile flag bit: the pile was dropped by a combat death (A2, V37). */
-export const FOOD_FLAG_CORPSE = 1;
+/** Largest pile size (fp): FOOD_PILE_INITIAL_PICKUPS_MAX whole pickups. */
+const PILE_MAX_FP = FOOD_PILE_INITIAL_PICKUPS_MAX * FOOD_PICKUP_AMOUNT;
+
+/** Floor `fp` to whole pickups. */
+function wholePickupsFp(fp: number): number {
+  return (fp >> PICKUP_SHIFT) << PICKUP_SHIFT;
+}
 
 // ---------------------------------------------------------------------------
 // Totals and capacity
@@ -75,14 +85,12 @@ export const FOOD_FLAG_CORPSE = 1;
  * chamber's stock. Use this for the HUD, AI thresholds, egg gating, stalemate and
  * anything else that means "how much food does the colony have".
  * `colonyPoolFood` alone is only the entrance pool, which is rarely what a caller
- * wants.
+ * wants. No cached total: a few array reads through the colony's slot links.
  */
 export function colonyFoodTotal(world: WorldState, colony: ColonyRecord): number {
-  void world;
-  let total = colony.foodStored;
+  let total = colonyPoolFood(world, colony);
   for (let i = 0; i < colony.chambers.length; i++) {
-    const ch = colony.chambers[i]!;
-    if (ch.chamberType === ChamberType.FoodStorage) total += ch.foodStored;
+    total += chamberStock(world, colony.chambers[i]!);
   }
   return total;
 }
@@ -106,8 +114,8 @@ export function colonyFoodCapacity(colony: ColonyRecord): number {
  * BASE_FOOD_STORAGE_CAPACITY; only the test/bench setter can push it past that.
  */
 export function colonyPoolFood(world: WorldState, colony: ColonyRecord): number {
-  void world;
-  return colony.foodStored;
+  const slot = colony.poolSlot;
+  return slot < 0 ? 0 : world.food.amountFp[slot]!;
 }
 
 /**
@@ -115,9 +123,9 @@ export function colonyPoolFood(world: WorldState, colony: ColonyRecord): number 
  * other chamber type reads 0.
  */
 export function chamberStock(world: WorldState, ch: ChamberRecord): number {
-  void world;
   if (ch.chamberType !== ChamberType.FoodStorage) return 0;
-  return ch.foodStored;
+  const slot = ch.foodSlot;
+  return slot < 0 ? 0 : world.food.amountFp[slot]!;
 }
 
 /**
@@ -132,9 +140,10 @@ export function chamberStock(world: WorldState, ch: ChamberRecord): number {
  * constant's docs). Non-FoodStorage chambers are never depositable.
  */
 export function isFoodChamberDepositable(world: WorldState, ch: ChamberRecord): boolean {
-  void world;
-  if (ch.chamberType !== ChamberType.FoodStorage) return false;
-  return FOOD_CHAMBER_CAPACITY - ch.foodStored >= FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP;
+  if (ch.chamberType !== ChamberType.FoodStorage || ch.foodSlot < 0) return false;
+  return (
+    FOOD_CHAMBER_CAPACITY - world.food.amountFp[ch.foodSlot]! >= FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP
+  );
 }
 
 /**
@@ -144,10 +153,13 @@ export function isFoodChamberDepositable(world: WorldState, ch: ChamberRecord): 
  * (both via `colonyForageBackpressure`) and by the #27 carrier wait-wake gate.
  *
  * Strict at-cap: a carrier deposits the instant the pool has any headroom, so a
- * chamberless colony's pool stays pegged at cap as the queen nibbles it.
+ * chamberless colony's pool stays pegged at cap as the queen nibbles it. (A
+ * hand-built colony with no pool counts as having a full one.)
  */
 export function colonyHasNoDepositTarget(world: WorldState, colony: ColonyRecord): boolean {
-  if (colony.foodStored < BASE_FOOD_STORAGE_CAPACITY) return false;
+  if (colony.poolSlot >= 0 && colonyPoolFood(world, colony) < BASE_FOOD_STORAGE_CAPACITY) {
+    return false;
+  }
   for (let c = 0; c < colony.chambers.length; c++) {
     if (isFoodChamberDepositable(world, colony.chambers[c]!)) return false;
   }
@@ -188,6 +200,7 @@ export function colonyForageBackpressure(world: WorldState, colony: ColonyRecord
  */
 export function withdrawFood(world: WorldState, colony: ColonyRecord, amount: number): boolean {
   if (colonyFoodTotal(world, colony) < amount) return false;
+  const amountFp = world.food.amountFp;
 
   let remaining = amount;
   // Outer `while` re-scans each iteration. Both production callers (queen 2 fp,
@@ -197,11 +210,10 @@ export function withdrawFood(world: WorldState, colony: ColonyRecord, amount: nu
     let pickIdx = -1;
     let pickFill = -1;
     for (let i = 0; i < colony.chambers.length; i++) {
-      const ch = colony.chambers[i]!;
-      if (ch.chamberType !== ChamberType.FoodStorage) continue;
-      if (ch.foodStored <= 0) continue;
-      if (ch.foodStored > pickFill) {
-        pickFill = ch.foodStored;
+      const fill = chamberStock(world, colony.chambers[i]!);
+      if (fill <= 0) continue;
+      if (fill > pickFill) {
+        pickFill = fill;
         pickIdx = i;
       }
     }
@@ -209,23 +221,25 @@ export function withdrawFood(world: WorldState, colony: ColonyRecord, amount: nu
 
     const ch = colony.chambers[pickIdx]!;
     const wasDepositable = isFoodChamberDepositable(world, ch);
-    const take = ch.foodStored < remaining ? ch.foodStored : remaining;
-    ch.foodStored -= take;
+    const take = pickFill < remaining ? pickFill : remaining;
+    amountFp[ch.foodSlot] = pickFill - take;
     remaining -= take;
     if (!wasDepositable && isFoodChamberDepositable(world, ch)) {
       colony.foodFlowFieldDirty = true;
     }
   }
 
+  // The total covered `amount`, so any remainder is in the pool (poolSlot ≥ 0).
   if (remaining > 0) {
-    colony.foodStored -= remaining;
+    amountFp[colony.poolSlot] = amountFp[colony.poolSlot]! - remaining;
   }
   return true;
 }
 
 /**
  * Deposit up to `amount` fp into one FoodStorage chamber, capped at its free
- * space (FOOD_CHAMBER_CAPACITY − stock). Returns the amount accepted.
+ * space (FOOD_CHAMBER_CAPACITY − stock). Returns the amount accepted (0 for a
+ * chamber without a stock).
  *
  * If the chamber is no longer depositable afterwards (it crossed into the
  * saturation band), marks `colony.foodFlowFieldDirty` so step 9 re-seeds the food
@@ -237,9 +251,12 @@ export function depositIntoChamber(
   ch: ChamberRecord,
   amount: number,
 ): number {
-  const space = FOOD_CHAMBER_CAPACITY - ch.foodStored;
+  const slot = ch.foodSlot;
+  if (ch.chamberType !== ChamberType.FoodStorage || slot < 0) return 0;
+  const amountFp = world.food.amountFp;
+  const space = FOOD_CHAMBER_CAPACITY - amountFp[slot]!;
   const accepted = amount < space ? amount : space;
-  ch.foodStored += accepted;
+  amountFp[slot] = amountFp[slot]! + accepted;
   if (!isFoodChamberDepositable(world, ch)) {
     colony.foodFlowFieldDirty = true;
   }
@@ -251,10 +268,12 @@ export function depositIntoChamber(
  * BASE_FOOD_STORAGE_CAPACITY. Returns the amount accepted (never negative).
  */
 export function depositIntoPool(world: WorldState, colony: ColonyRecord, amount: number): number {
-  void world;
-  const space = BASE_FOOD_STORAGE_CAPACITY - colony.foodStored;
+  const slot = colony.poolSlot;
+  if (slot < 0) return 0;
+  const amountFp = world.food.amountFp;
+  const space = BASE_FOOD_STORAGE_CAPACITY - amountFp[slot]!;
   const accepted = amount < space ? amount : space > 0 ? space : 0;
-  colony.foodStored += accepted;
+  amountFp[slot] = amountFp[slot]! + accepted;
   return accepted;
 }
 
@@ -265,36 +284,86 @@ export function depositIntoPool(world: WorldState, colony: ColonyRecord, amount:
  * NEVER redistributes food across chambers (the pre-#15 magic-fill bug).
  */
 export function clampColonyFoodStores(world: WorldState, colony: ColonyRecord): void {
-  void world;
-  if (colony.foodStored < 0) colony.foodStored = 0;
-  if (colony.foodStored > BASE_FOOD_STORAGE_CAPACITY) {
-    colony.foodStored = BASE_FOOD_STORAGE_CAPACITY;
+  const amountFp = world.food.amountFp;
+  const pool = colony.poolSlot;
+  if (pool >= 0) {
+    if (amountFp[pool]! < 0) amountFp[pool] = 0;
+    if (amountFp[pool]! > BASE_FOOD_STORAGE_CAPACITY) amountFp[pool] = BASE_FOOD_STORAGE_CAPACITY;
   }
   for (let i = 0; i < colony.chambers.length; i++) {
     const ch = colony.chambers[i]!;
-    if (ch.chamberType !== ChamberType.FoodStorage) continue;
-    if (ch.foodStored < 0) ch.foodStored = 0;
-    if (ch.foodStored > FOOD_CHAMBER_CAPACITY) ch.foodStored = FOOD_CHAMBER_CAPACITY;
+    const slot = ch.foodSlot;
+    if (ch.chamberType !== ChamberType.FoodStorage || slot < 0) continue;
+    if (amountFp[slot]! < 0) amountFp[slot] = 0;
+    if (amountFp[slot]! > FOOD_CHAMBER_CAPACITY) amountFp[slot] = FOOD_CHAMBER_CAPACITY;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Chamber lifecycle
+// Colony and chamber lifecycle
 // ---------------------------------------------------------------------------
 
+/** True when the store has a free slot (always, in a world the loader accepts). */
+export function foodStoreHasFreeSlot(world: WorldState): boolean {
+  return findFreeFoodSlot(world.food) >= 0;
+}
+
 /**
- * Give a newly promoted chamber its (empty) food stock. Called by
- * `checkPendingChambers` right after it appends the ChamberRecord. Today the
- * stock is the record's own field, already 0, so this only restates it.
+ * Give a new colony its (empty) entrance pool at underground tile (tileX, tileY)
+ * — the entrance column's shaft top, where pool deposits happen; the location is
+ * informational (nothing routes by it). Sets `colony.poolSlot`. Returns false,
+ * leaving the colony without a pool, only when the store is full. Called by
+ * `createScenario` for every colony.
+ */
+export function createColonyPool(
+  world: WorldState,
+  colony: ColonyRecord,
+  tileX: number,
+  tileY: number,
+): boolean {
+  const store = world.food;
+  const slot = findFreeFoodSlot(store);
+  if (slot < 0) return false;
+  store.kind[slot] = FoodKind.Pool;
+  store.owner[slot] = colony.colonyId;
+  store.zone[slot] = Zone.Underground;
+  store.grid[slot] = colony.colonyId;
+  store.tileX[slot] = tileX;
+  store.tileY[slot] = tileY;
+  store.amountFp[slot] = 0;
+  store.foodId[slot] = -1;
+  colony.poolSlot = slot;
+  return true;
+}
+
+/**
+ * Give a newly promoted chamber its food stock. Called by `checkPendingChambers`
+ * right after it appends the ChamberRecord. A FoodStorage chamber gets an empty
+ * Stock at its anchor tile (`foodSlot` set, the Stock's foodId = chamberId);
+ * every other type gets `foodSlot = −1`. Returns false only when a FoodStorage
+ * chamber finds the store full (the caller checks `foodStoreHasFreeSlot` first,
+ * so this does not happen).
  */
 export function createChamberStock(
   world: WorldState,
   colony: ColonyRecord,
   ch: ChamberRecord,
-): void {
-  void world;
-  void colony;
-  ch.foodStored = 0;
+): boolean {
+  ch.foodSlot = -1;
+  if (ch.chamberType !== ChamberType.FoodStorage) return true;
+  const store = world.food;
+  const slot = findFreeFoodSlot(store);
+  if (slot < 0) return false;
+  store.kind[slot] = FoodKind.Stock;
+  store.owner[slot] = colony.colonyId;
+  store.zone[slot] = Zone.Underground;
+  store.grid[slot] = colony.colonyId;
+  store.tileX[slot] = ch.posX >> FP_SHIFT;
+  store.tileY[slot] = ch.posY >> FP_SHIFT;
+  store.amountFp[slot] = 0;
+  store.foodId[slot] = ch.chamberId;
+  ch.foodSlot = slot;
+  return true;
 }
 
 /**
@@ -302,9 +371,10 @@ export function createChamberStock(
  * chambers are never destroyed today, so nothing calls this yet.
  */
 export function freeChamberStock(world: WorldState, colony: ColonyRecord, ch: ChamberRecord): void {
-  void world;
   void colony;
-  ch.foodStored = 0;
+  if (ch.foodSlot < 0) return;
+  clearFoodSlot(world.food, ch.foodSlot);
+  ch.foodSlot = -1;
 }
 
 // ---------------------------------------------------------------------------
@@ -313,7 +383,7 @@ export function freeChamberStock(world: WorldState, colony: ColonyRecord, ch: Ch
 
 /** Number of live surface piles. */
 export function pileCount(world: WorldState): number {
-  return world.foodPiles.length;
+  return world.food.pileCount;
 }
 
 /**
@@ -322,55 +392,57 @@ export function pileCount(world: WorldState): number {
  * "first pile found" tie-break depends on it).
  */
 export function pileSlotAt(world: WorldState, orderIdx: number): number {
-  void world;
-  return orderIdx;
+  return world.food.pileOrder[orderIdx]!;
 }
 
-/** Slot of the pile on surface tile (x, y), or -1. Tiles are unique among piles. */
+/**
+ * Slot of the pile on surface tile (x, y), or -1 (also for an off-map tile). O(1).
+ * Tiles are unique among piles.
+ */
 export function pileAtTile(world: WorldState, x: number, y: number): number {
-  const piles = world.foodPiles;
-  for (let p = 0; p < piles.length; p++) {
-    const pile = piles[p]!;
-    if (pile.tileX === x && pile.tileY === y) return p;
-  }
-  return -1;
+  // `(x | 0) !== x` also rejects a fractional or NaN coordinate (the pre-V50 scan
+  // matched no pile for those either).
+  if ((x | 0) !== x || (y | 0) !== y) return -1;
+  if (x < 0 || y < 0 || x >= SURFACE_GRID_WIDTH || y >= SURFACE_GRID_HEIGHT) return -1;
+  return world.food.surfacePileAt[y * SURFACE_GRID_WIDTH + x]! - 1;
 }
 
 /** Slot of the pile whose stable id is `foodId`, or -1 if it no longer exists. */
 export function pileSlotById(world: WorldState, foodId: FoodPileId): number {
-  const piles = world.foodPiles;
-  for (let p = 0; p < piles.length; p++) {
-    if (piles[p]!.foodPileId === foodId) return p;
+  const store = world.food;
+  for (let o = 0; o < store.pileCount; o++) {
+    const slot = store.pileOrder[o]!;
+    if (store.foodId[slot] === foodId) return slot;
   }
   return -1;
 }
 
 /** Stable external id of the pile (an entity id; what `priorityFoodPileId` holds). */
 export function pileFoodId(world: WorldState, slot: number): FoodPileId {
-  return world.foodPiles[slot]!.foodPileId;
+  return world.food.foodId[slot]!;
 }
 
 export function pileTileX(world: WorldState, slot: number): number {
-  return world.foodPiles[slot]!.tileX;
+  return world.food.tileX[slot]!;
 }
 
 export function pileTileY(world: WorldState, slot: number): number {
-  return world.foodPiles[slot]!.tileY;
+  return world.food.tileY[slot]!;
 }
 
 /** Food remaining on the pile (fp). Always > 0 for a live pile. */
 export function pileAmountFp(world: WorldState, slot: number): number {
-  return world.foodPiles[slot]!.pickupsRemaining * FOOD_PICKUP_AMOUNT;
+  return world.food.amountFp[slot]!;
 }
 
 /** The pile's size at birth (fp), raised by corpse top-ups. Render shrink denominator. */
 export function pileInitialFp(world: WorldState, slot: number): number {
-  return world.foodPiles[slot]!.pickupsInitial * FOOD_PICKUP_AMOUNT;
+  return world.food.initialFp[slot]!;
 }
 
 /** True for a pile dropped by a combat death (A2, V37). Fixed at birth. */
 export function pileIsCorpse(world: WorldState, slot: number): boolean {
-  return world.foodPiles[slot]!.isCorpse === true;
+  return (world.food.flags[slot]! & FOOD_FLAG_CORPSE) !== 0;
 }
 
 /**
@@ -388,10 +460,10 @@ export function livePileTiles(world: WorldState): Array<[number, number]> {
 
 /** Number of live piles that are NOT corpse piles (the natural-spawn soft ceiling's count). */
 export function naturalPileCount(world: WorldState): number {
-  const piles = world.foodPiles;
+  const store = world.food;
   let n = 0;
-  for (let i = 0; i < piles.length; i++) {
-    if (!piles[i]!.isCorpse) n++;
+  for (let o = 0; o < store.pileCount; o++) {
+    if ((store.flags[store.pileOrder[o]!]! & FOOD_FLAG_CORPSE) === 0) n++;
   }
   return n;
 }
@@ -408,27 +480,30 @@ export function naturalPileCount(world: WorldState): number {
  * A2 (V37): a depleting CORPSE pile does not seed the natural-spawn cooldown, so
  * consumed battlefield food does not suppress natural regrowth on that tile.
  *
- * Does NOT remove the pile. `drainPile` calls this and then removes it.
+ * Does NOT remove the pile. `drainPile` calls this and then removes it. A slot
+ * that holds no pile is ignored.
  */
 export function recordFoodPileDepletion(world: WorldState, slot: number): void {
-  const pile = world.foodPiles[slot];
-  if (!pile) return;
+  const store = world.food;
+  if (slot < 0 || slot >= store.kind.length || store.kind[slot] !== FoodKind.Pile) return;
 
-  const skipBarren = world.simVersion >= SIM_VERSION_V37_CORPSE_FOOD && pile.isCorpse === true;
+  const skipBarren =
+    world.simVersion >= SIM_VERSION_V37_CORPSE_FOOD &&
+    (store.flags[slot]! & FOOD_FLAG_CORPSE) !== 0;
   if (!skipBarren) {
     if (world.recentlyDepletedFood.length >= FOOD_PILE_SOFT_CEILING) {
       world.recentlyDepletedFood.shift();
     }
     world.recentlyDepletedFood.push({
       tick: world.tick,
-      tileX: pile.tileX,
-      tileY: pile.tileY,
+      tileX: store.tileX[slot]!,
+      tileY: store.tileY[slot]!,
     });
   }
 
   // Clear stale priority pointers so a forager doesn't route to a vanished pile
   // and the render highlight doesn't attach to a recycled slot.
-  const depletedId: FoodPileId = pile.foodPileId;
+  const depletedId: FoodPileId = store.foodId[slot]!;
   for (const colony of Object.values(world.colonies)) {
     if (colony.priorityFoodPileId === depletedId) {
       colony.priorityFoodPileId = null;
@@ -437,34 +512,64 @@ export function recordFoodPileDepletion(world: WorldState, slot: number): void {
 }
 
 /**
- * Drain `amountFp` from a pile. `amountFp` MUST be a whole multiple of
- * FOOD_PICKUP_AMOUNT: piles store whole pickups today, and the fp → pickup
- * conversion is a right shift, so any remainder is silently truncated (a
- * sub-pickup amount drains nothing). The only caller, `antPickupFood`, drains
- * FOOD_PILE_PICKUP_DRAIN × FOOD_PICKUP_AMOUNT. (No runtime assertion: src/sim has
- * no dev-assert mechanism, and a throw in the tick would be a behaviour change.)
- * The pile's remaining amount clamps at 0. When the pile
+ * Remove the pile in `slot`: drop it from `pileOrder` preserving the creation
+ * order of the rest (every "first pile found" tie-break, the scent scan and the
+ * MarkFoodPile lookup depend on it), repoint its tile, and free the slot.
+ */
+function removePile(world: WorldState, slot: number): void {
+  const store = world.food;
+  const order = store.pileOrder;
+  let o = 0;
+  while (o < store.pileCount && order[o] !== slot) o++;
+  if (o < store.pileCount) {
+    for (; o + 1 < store.pileCount; o++) order[o] = order[o + 1]!;
+    store.pileCount -= 1;
+    order[store.pileCount] = 0;
+  }
+
+  const tile = store.tileY[slot]! * SURFACE_GRID_WIDTH + store.tileX[slot]!;
+  if (store.surfacePileAt[tile] === slot + 1) {
+    // Tiles are unique among piles, so this finds nothing in every real state;
+    // the scan keeps a (loader-rejected) duplicate resolving to the first pile.
+    let next = 0;
+    for (let k = 0; k < store.pileCount; k++) {
+      const s = order[k]!;
+      if (store.tileY[s]! * SURFACE_GRID_WIDTH + store.tileX[s]! === tile) {
+        next = s + 1;
+        break;
+      }
+    }
+    store.surfacePileAt[tile] = next;
+  }
+  clearFoodSlot(store, slot);
+}
+
+/**
+ * Drain `amountFp` from a pile. Piles hold whole pickups today, so the amount is
+ * floored to a multiple of FOOD_PICKUP_AMOUNT (a sub-pickup amount drains
+ * nothing); the only caller, `antPickupFood`, drains FOOD_PILE_PICKUP_DRAIN ×
+ * FOOD_PICKUP_AMOUNT. The remaining amount clamps at 0. When the pile
  * empties it is recorded (`recordFoodPileDepletion`) and removed, preserving the
  * creation order of the remaining piles. Returns true iff the pile was removed,
- * in which case `slot` and every later slot are invalidated.
+ * in which case `slot` is free (and may be reused by the next spawn).
  */
 export function drainPile(world: WorldState, slot: number, amountFp: number): boolean {
-  const pile = world.foodPiles[slot]!;
-  pile.pickupsRemaining -= amountFp >> PICKUP_SHIFT;
-  if (pile.pickupsRemaining < 0) pile.pickupsRemaining = 0;
-  if (pile.pickupsRemaining > 0) return false;
+  const amounts = world.food.amountFp;
+  let left = amounts[slot]! - wholePickupsFp(amountFp);
+  if (left < 0) left = 0;
+  amounts[slot] = left;
+  if (left > 0) return false;
   recordFoodPileDepletion(world, slot);
-  // Splice (not swap-pop): keeps creation order, which every "first pile found"
-  // tie-break, the scent scan and the MarkFoodPile lookup depend on.
-  world.foodPiles.splice(slot, 1);
+  removePile(world, slot);
   return true;
 }
 
 /**
- * Append a new pile of `amountFp` (whole pickups) on surface tile (x, y) with id
- * `foodId`, which the caller allocated from the shared entity-id counter. `flags`
- * takes FOOD_FLAG_CORPSE. Returns the new slot, or -1 when the pile store is at
- * FOOD_PILE_HARD_CAP (unreachable for today's callers, which gate first).
+ * Add a new pile of `amountFp` (floored to whole pickups) on surface tile (x, y)
+ * with id `foodId`, which the caller allocated from the shared entity-id counter.
+ * It goes last in creation order. `flags` takes FOOD_FLAG_CORPSE. Returns the new
+ * slot, or -1 when the store already holds FOOD_PILE_HARD_CAP piles (unreachable
+ * for today's callers, which gate first).
  *
  * The caller owns every placement rule (tile uniqueness, walkable + in the
  * surface component, spacing, caps).
@@ -477,29 +582,26 @@ export function spawnPile(
   amountFp: number,
   flags: number,
 ): number {
-  if (world.foodPiles.length >= FOOD_PILE_HARD_CAP) return -1;
-  const pickups = amountFp >> PICKUP_SHIFT;
-  // Natural piles leave `isCorpse` ABSENT (not false): the snapshot shape of a
-  // natural pile has no such key.
-  if ((flags & FOOD_FLAG_CORPSE) !== 0) {
-    world.foodPiles.push({
-      foodPileId: foodId,
-      tileX: x,
-      tileY: y,
-      pickupsRemaining: pickups,
-      pickupsInitial: pickups,
-      isCorpse: true,
-    });
-  } else {
-    world.foodPiles.push({
-      foodPileId: foodId,
-      tileX: x,
-      tileY: y,
-      pickupsRemaining: pickups,
-      pickupsInitial: pickups,
-    });
-  }
-  return world.foodPiles.length - 1;
+  const store = world.food;
+  if (store.pileCount >= FOOD_PILE_HARD_CAP) return -1;
+  const slot = findFreeFoodSlot(store);
+  if (slot < 0) return -1;
+  const fp = wholePickupsFp(amountFp);
+  store.kind[slot] = FoodKind.Pile;
+  store.owner[slot] = 0;
+  store.zone[slot] = Zone.Surface;
+  store.grid[slot] = 0;
+  store.tileX[slot] = x;
+  store.tileY[slot] = y;
+  store.amountFp[slot] = fp;
+  store.initialFp[slot] = fp;
+  store.foodId[slot] = foodId;
+  store.flags[slot] = flags & FOOD_FLAG_CORPSE;
+  store.pileOrder[store.pileCount] = slot;
+  store.pileCount += 1;
+  const tile = y * SURFACE_GRID_WIDTH + x;
+  if (store.surfacePileAt[tile] === 0) store.surfacePileAt[tile] = slot + 1;
+  return slot;
 }
 
 /**
@@ -509,11 +611,11 @@ export function spawnPile(
  *
  * Top-up on an occupied tile is a correctness requirement (the save rejects two
  * piles on one tile): the existing pile grows, both its size and its birth size
- * clamped to FOOD_PILE_INITIAL_PICKUPS_MAX, and keeps its corpse flag (a corpse
- * topping up a natural pile leaves it natural). Otherwise a NEW corpse pile is
- * created, only while below FOOD_PILE_HARD_CAP and only on a walkable tile in the
- * surface component (the save's connectivity check would reject anything else).
- * Entity-id exhaustion is a silent skip. No RNG.
+ * clamped to FOOD_PILE_INITIAL_PICKUPS_MAX pickups, and keeps its corpse flag (a
+ * corpse topping up a natural pile leaves it natural). Otherwise a NEW corpse pile
+ * is created, only while below FOOD_PILE_HARD_CAP and only on a walkable tile in
+ * the surface component (the save's connectivity check would reject anything
+ * else). Entity-id exhaustion is a silent skip. No RNG.
  */
 export function topUpOrSpawnCorpsePile(
   world: WorldState,
@@ -521,28 +623,26 @@ export function topUpOrSpawnCorpsePile(
   y: number,
   amountFp: number,
 ): void {
-  const pickups = amountFp >> PICKUP_SHIFT;
+  const fp = wholePickupsFp(amountFp);
   const slot = pileAtTile(world, x, y);
   if (slot >= 0) {
-    const pile = world.foodPiles[slot]!;
-    const grownInitial = pile.pickupsInitial + pickups;
-    pile.pickupsInitial =
-      grownInitial < FOOD_PILE_INITIAL_PICKUPS_MAX ? grownInitial : FOOD_PILE_INITIAL_PICKUPS_MAX;
+    const store = world.food;
+    const grownInitial = store.initialFp[slot]! + fp;
+    const initial = grownInitial < PILE_MAX_FP ? grownInitial : PILE_MAX_FP;
+    store.initialFp[slot] = initial;
     // Clamp remaining to the (possibly clamped) initial so the save invariant holds.
-    const grownRemaining = pile.pickupsRemaining + pickups;
-    pile.pickupsRemaining =
-      grownRemaining < pile.pickupsInitial ? grownRemaining : pile.pickupsInitial;
+    const grownRemaining = store.amountFp[slot]! + fp;
+    store.amountFp[slot] = grownRemaining < initial ? grownRemaining : initial;
     return;
   }
 
-  if (world.foodPiles.length >= FOOD_PILE_HARD_CAP) return;
+  if (pileCount(world) >= FOOD_PILE_HARD_CAP) return;
   // Guard before allocating so an off-component tile doesn't burn an entity id.
   if (!isSurfaceTileInComponent(world, x, y)) return;
   const newId = allocateEntityId(world);
   if (newId === INVALID_ENTITY_ID) return; // entity-id exhaustion — silent skip
   // Defensive clamp, symmetric with the top-up branch.
-  const initial = pickups < FOOD_PILE_INITIAL_PICKUPS_MAX ? pickups : FOOD_PILE_INITIAL_PICKUPS_MAX;
-  spawnPile(world, newId, x, y, initial * FOOD_PICKUP_AMOUNT, FOOD_FLAG_CORPSE);
+  spawnPile(world, newId, x, y, fp < PILE_MAX_FP ? fp : PILE_MAX_FP, FOOD_FLAG_CORPSE);
 }
 
 // ---------------------------------------------------------------------------

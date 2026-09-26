@@ -15,10 +15,10 @@
 //   subTask              — sub-state discriminant (ForagingSubState, NursingSubState, etc.)
 //   speed                — movement speed in fixed-point units per tick
 //   foodCarrying         — food units currently carried (fixed-point)
-//   starvationTimer      — larva starvation COUNTDOWN: STARVATION_GRACE_TICKS after a
-//                          successful meal, −1 per failed meal, death at 0 (the queen
-//                          uses colony.queenStarvationTimer; a worker's value is
-//                          written at maturation but never read)
+//   lastMealTick         — hunger clock (#288, V50): the tick of the ant's last
+//                          successful meal; ticks since meal = world.tick −
+//                          lastMealTick (see src/sim/hunger.ts). Read for the queen
+//                          and larvae today; workers and fighters eat from #290 PR 4.
 //   age                  — ticks alive
 //   alive                — 1 = alive, 0 = dead/unused slot
 //   lifespan             — ticks until natural death (WORKER_LIFESPAN_TICKS = INT32_MAX)
@@ -59,7 +59,8 @@ export interface AntComponents {
   readonly subTask: Int32Array;
   readonly speed: Int32Array;
   readonly foodCarrying: Int32Array;
-  readonly starvationTimer: Int32Array;
+  /** #288 / #290 PR 2 (V50) — tick of the last successful meal (see src/sim/hunger.ts). */
+  readonly lastMealTick: Int32Array;
   readonly age: Int32Array;
   readonly alive: Int32Array;
   readonly lifespan: Int32Array;
@@ -330,7 +331,7 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
     subTask: new Int32Array(maxEntities),
     speed: new Int32Array(maxEntities),
     foodCarrying: new Int32Array(maxEntities),
-    starvationTimer: new Int32Array(maxEntities),
+    lastMealTick: new Int32Array(maxEntities),
     age: new Int32Array(maxEntities),
     alive: new Int32Array(maxEntities),
     lifespan: new Int32Array(maxEntities),
@@ -408,6 +409,13 @@ export interface InitAntSpec {
   zone?: number;
   /** Override initial HP. Defaults to COMBAT_HP_BASE. Use COMBAT_HP_QUEEN for the queen. */
   hp?: number;
+  /**
+   * #288 (V50) — tick of the ant's last meal. Every sim spawn site passes it
+   * (the queen: world.tick − 1, "fed on the tick before"; workers and eggs:
+   * world.tick). Defaults to −1 — "fed before tick 0", the pre-V50 full
+   * countdown for an ant hand-built at tick 0 (tests).
+   */
+  lastMealTick?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -416,7 +424,7 @@ export interface InitAntSpec {
 
 /**
  * Initialize entity slot `id` with the given spec.
- * Sets alive=1, age=0, foodCarrying=0, starvationTimer=0.
+ * Sets alive=1, age=0, foodCarrying=0, lastMealTick=spec.lastMealTick (default −1).
  * Phase 7 fields are reset to their sentinel defaults (zone=0, digTileX=-1, etc.).
  * Calling twice on the same id overwrites (no accumulation).
  */
@@ -436,7 +444,7 @@ export function initAnt(ants: AntComponents, id: EntityId, spec: InitAntSpec): v
   ants.alive[id] = 1;
   ants.age[id] = 0;
   ants.foodCarrying[id] = 0;
-  ants.starvationTimer[id] = 0;
+  ants.lastMealTick[id] = spec.lastMealTick !== undefined ? spec.lastMealTick : -1;
   // Phase 7 fields:
   ants.zone[id] = spec.zone !== undefined ? spec.zone : 0;
   ants.digTileX[id] = -1;

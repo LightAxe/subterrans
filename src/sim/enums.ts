@@ -72,6 +72,11 @@ export const FightingSubState = {
   // only by V46 sentry routing; every other route, and the spider override, clear
   // it). A chase, a rally or the spider can leave any tile as a target.
   ToPost: 3,
+  // #290 PR 2 (V50) — RESERVED for the raid PR (#290 PR 5); nothing writes them
+  // yet. Looting: heading for an enemy FoodStorage stock. Hauling: laden, heading
+  // home. Declared now so the raid PR adds behaviour only (append-only values).
+  Looting: 4,
+  Hauling: 5,
 } as const;
 export type FightingSubState = (typeof FightingSubState)[keyof typeof FightingSubState];
 

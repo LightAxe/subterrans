@@ -39,7 +39,6 @@ import {
   LARVA_MATURE_TICKS,
   WORKER_BASE_SPEED,
   WORKER_LIFESPAN_TICKS,
-  STARVATION_GRACE_TICKS,
   MIN_EGG_INTERVAL_TICKS,
 } from '../constants.js';
 
@@ -50,7 +49,7 @@ import {
 //   1. Tick-modulo gate:  world.tick % QUEEN_EGG_INTERVAL_TICKS !== 0 → return
 //   2. Food threshold:    colonyFoodTotal(colony) < QUEEN_EGG_FOOD_THRESHOLD → return
 //                         (issue #15 — total stash = entrance pool + every
-//                         FoodStorage chamber, NOT colony.foodStored alone)
+//                         FoodStorage chamber, NOT the entrance pool alone)
 //   3. Queen alive:       world.ants.alive[colony.queenEntityId] !== 1 → return
 //   4. Queen chamber:     colony has at least one COMPLETED Queen chamber (09 memo)
 //   5. Nursery chamber:   colony has at least one COMPLETED Nursery chamber (09 memo)
@@ -120,10 +119,9 @@ export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord):
   // tier changes mid-cycle.
   if (world.tick - colony.queenLastEggTick < eggInterval) return;
 
-  // Gate 2: food threshold — issue #15: read TOTAL stockpile (entrance pool +
-  // every FoodStorage chamber.foodStored). Pre-#15 this read colony.foodStored
-  // as the single pool; post-#15 colony.foodStored is only the entrance-shaft
-  // pool, so a colony whose entire stash lives in chambers would never lay.
+  // Gate 2: food threshold — issue #15: read the TOTAL stockpile (entrance pool +
+  // every FoodStorage chamber's stock). The entrance pool alone would miss a
+  // colony whose entire stash lives in chambers, which would then never lay.
   if (colonyFoodTotal(world, colony) < QUEEN_EGG_FOOD_THRESHOLD) return;
 
   // Gate 3: queen alive
@@ -244,6 +242,7 @@ export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord):
     speed: 0, // eggs don't move
     lifespan: WORKER_LIFESPAN_TICKS,
     zone: Zone.Underground, // Gate 6 guarantees queen is Underground
+    lastMealTick: world.tick, // eggs do not eat; hatching resets the clock
   });
 
   colony.eggs.push(eggId);
@@ -319,7 +318,10 @@ export function tickLifecycleTransitions(world: WorldState, colony: ColonyRecord
       colony.eggs.pop();
       colony.eggCount -= 1;
       ants.age[id] = 0; // reset age for larva phase
-      ants.starvationTimer[id] = STARVATION_GRACE_TICKS;
+      // #288 (V50): the larva's hunger clock starts now. Hatching runs after this
+      // tick's consumption step, so its first meal is next tick — one tick after
+      // this "meal", as the pre-V50 countdown's full STARVATION_GRACE_TICKS start.
+      ants.lastMealTick[id] = world.tick;
       colony.larvae.push(id);
       colony.larvaeCount += 1;
       // #235 — the brood stays on the same tile, but the swap-remove from eggs[]
@@ -358,7 +360,7 @@ export function tickLifecycleTransitions(world: WorldState, colony: ColonyRecord
       colony.larvae.pop();
       colony.larvaeCount -= 1;
       ants.age[id] = 0; // reset age for worker phase
-      ants.starvationTimer[id] = STARVATION_GRACE_TICKS;
+      ants.lastMealTick[id] = world.tick; // #288 — a new worker starts fed
       ants.task[id] = AntTask.Idle;
       ants.speed[id] = WORKER_BASE_SPEED;
       colony.workers.push(id);
