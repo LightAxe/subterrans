@@ -320,21 +320,26 @@ describe('food-api — piles', () => {
     expect(pileSlotById(world, 12345)).toBe(-1);
   });
 
-  it('drainPile drains whole pickups and removes an emptied pile, keeping order', () => {
-    const { world, tiles } = emptyPileWorld(3);
-    for (let i = 0; i < 3; i++) spawnPile(world, 80 + i, tiles[i]!.x, tiles[i]!.y, 2 * P, 0);
+  it('drainPile drains whole pickups and removes an emptied pile, keeping creation order', () => {
+    const { world, tiles } = emptyPileWorld(4);
+    for (let i = 0; i < 4; i++) spawnPile(world, 80 + i, tiles[i]!.x, tiles[i]!.y, 2 * P, 0);
     world.colonies[1]!.priorityFoodPileId = 81;
     expect(drainPile(world, 1, P)).toBe(false);
     expect(pileAmountFp(world, 1)).toBe(P);
     const before = world.recentlyDepletedFood.length;
     expect(drainPile(world, 1, P)).toBe(true);
-    expect(pileCount(world)).toBe(2);
-    expect([pileFoodId(world, 0), pileFoodId(world, 1)]).toEqual([80, 82]);
+    // Order-preserving removal: a swap-pop would give [80, 83, 82].
+    const order = (): number[] => {
+      const ids: number[] = [];
+      for (let o = 0; o < pileCount(world); o++) ids.push(pileFoodId(world, pileSlotAt(world, o)));
+      return ids;
+    };
+    expect(order()).toEqual([80, 82, 83]);
     expect(world.recentlyDepletedFood.length).toBe(before + 1);
     expect(world.colonies[1]!.priorityFoodPileId).toBeNull();
     // Over-drain clamps at 0 and removes.
     expect(drainPile(world, 0, 10 * P)).toBe(true);
-    expect(pileCount(world)).toBe(1);
+    expect(order()).toEqual([82, 83]);
   });
 
   it('recordFoodPileDepletion: V37+ corpse piles skip the barren cooldown; the log is capped', () => {

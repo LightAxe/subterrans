@@ -20,8 +20,13 @@
 // array index, so a slot is invalidated by any pile removal (`drainPile` emptying
 // a pile). Never hold a slot across a call that can remove a pile.
 //
-// Determinism: integers only, no `/`, no allocation outside the render-only
-// readers (`pileRender`, `forEachPile`), no module-level mutable state.
+// Determinism: integers only, no `/`, no module-level mutable state. The per-tick
+// readers and movers (totals, withdraw/deposit, pile readers, `pileAtTile`) do not
+// allocate. The rare writers allocate exactly as the code they replaced did:
+// `spawnPile` pushes a new pile object, `drainPile` splices, and
+// `recordFoodPileDepletion` pushes a DepletionRecord and walks
+// `Object.values(world.colonies)` (only when a pile empties). `pileRender` and
+// `forEachPile` allocate per call and are for render / input / tooling only.
 
 import type { WorldState } from '../types.js';
 import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V37_CORPSE_FOOD } from '../types.js';
