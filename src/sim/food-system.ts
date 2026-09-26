@@ -275,6 +275,10 @@ export function tickFoodPileSpawn(world: WorldState, rng: Rng): void {
     const newId = allocateEntityId(world);
     if (newId === INVALID_ENTITY_ID) return;
 
+    // Cannot hit spawnPile's hard-cap refusal (which would burn `newId`): the
+    // V37+ branch returned above when pileCount >= FOOD_PILE_HARD_CAP, and the
+    // pre-V37 branch caps the total at FOOD_PILE_SOFT_CEILING (30) < HARD_CAP
+    // (60). Keep those gates BEFORE allocateEntityId if this is ever reordered.
     spawnPile(world, newId, tileX, tileY, pickups * FOOD_PICKUP_AMOUNT, 0);
     return;
   }

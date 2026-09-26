@@ -373,6 +373,19 @@ export function pileIsCorpse(world: WorldState, slot: number): boolean {
   return world.foodPiles[slot]!.isCorpse === true;
 }
 
+/**
+ * Every live pile's surface tile, in creation order. Allocates; for world-gen and
+ * save-load validation (`validateSurfaceConnectivity`), never the tick.
+ */
+export function livePileTiles(world: WorldState): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (let o = 0; o < pileCount(world); o++) {
+    const s = pileSlotAt(world, o);
+    out.push([pileTileX(world, s), pileTileY(world, s)]);
+  }
+  return out;
+}
+
 /** Number of live piles that are NOT corpse piles (the natural-spawn soft ceiling's count). */
 export function naturalPileCount(world: WorldState): number {
   const piles = world.foodPiles;
@@ -424,8 +437,13 @@ export function recordFoodPileDepletion(world: WorldState, slot: number): void {
 }
 
 /**
- * Drain `amountFp` from a pile (whole pickups: the amount is floored to a
- * multiple of FOOD_PICKUP_AMOUNT; the remainder clamps at 0). When the pile
+ * Drain `amountFp` from a pile. `amountFp` MUST be a whole multiple of
+ * FOOD_PICKUP_AMOUNT: piles store whole pickups today, and the fp → pickup
+ * conversion is a right shift, so any remainder is silently truncated (a
+ * sub-pickup amount drains nothing). The only caller, `antPickupFood`, drains
+ * FOOD_PILE_PICKUP_DRAIN × FOOD_PICKUP_AMOUNT. (No runtime assertion: src/sim has
+ * no dev-assert mechanism, and a throw in the tick would be a behaviour change.)
+ * The pile's remaining amount clamps at 0. When the pile
  * empties it is recorded (`recordFoodPileDepletion`) and removed, preserving the
  * creation order of the remaining piles. Returns true iff the pile was removed,
  * in which case `slot` and every later slot are invalidated.
@@ -507,9 +525,13 @@ export function topUpOrSpawnCorpsePile(
   const slot = pileAtTile(world, x, y);
   if (slot >= 0) {
     const pile = world.foodPiles[slot]!;
-    pile.pickupsInitial = Math.min(pile.pickupsInitial + pickups, FOOD_PILE_INITIAL_PICKUPS_MAX);
+    const grownInitial = pile.pickupsInitial + pickups;
+    pile.pickupsInitial =
+      grownInitial < FOOD_PILE_INITIAL_PICKUPS_MAX ? grownInitial : FOOD_PILE_INITIAL_PICKUPS_MAX;
     // Clamp remaining to the (possibly clamped) initial so the save invariant holds.
-    pile.pickupsRemaining = Math.min(pile.pickupsRemaining + pickups, pile.pickupsInitial);
+    const grownRemaining = pile.pickupsRemaining + pickups;
+    pile.pickupsRemaining =
+      grownRemaining < pile.pickupsInitial ? grownRemaining : pile.pickupsInitial;
     return;
   }
 
@@ -519,7 +541,7 @@ export function topUpOrSpawnCorpsePile(
   const newId = allocateEntityId(world);
   if (newId === INVALID_ENTITY_ID) return; // entity-id exhaustion — silent skip
   // Defensive clamp, symmetric with the top-up branch.
-  const initial = Math.min(pickups, FOOD_PILE_INITIAL_PICKUPS_MAX);
+  const initial = pickups < FOOD_PILE_INITIAL_PICKUPS_MAX ? pickups : FOOD_PILE_INITIAL_PICKUPS_MAX;
   spawnPile(world, newId, x, y, initial * FOOD_PICKUP_AMOUNT, FOOD_FLAG_CORPSE);
 }
 

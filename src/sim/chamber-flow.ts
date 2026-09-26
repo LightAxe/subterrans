@@ -47,6 +47,7 @@ import { isBroodReclaimable } from './ant/ant-store.js';
 // Issue #87 — shared BFS expansion (was a local helper here pre-#87;
 // dig-system.ts and entrance-flow.ts had near-identical inline copies).
 import { bfsExpandSeededField } from './bfs-flow-field.js';
+import { isFoodChamberDepositable } from './food/food-api.js';
 
 // 4-cardinal step offsets (N/E/S/W), matching bfs-flow-field.ts' expansion
 // order. Module-scope so the carrier-local flood in hasReachableNonFullNursery
@@ -130,7 +131,7 @@ export function ensureChamberFlowFields(
 
 /**
  * Multi-source BFS from every Open tile inside any chamber whose type is
- * present in `chamberTypes` AND (optionally) passes `chamberFilter`.
+ * present in `chamberTypes`.
  * Expands through Open and BeingDug tiles. Marked and Solid are walls
  * (same contract as entrance-flow.ts — a non-digger can't traverse Marked).
  *
@@ -146,14 +147,6 @@ export function ensureChamberFlowFields(
  * @param chamberTypes   Types to seed from (e.g. [FoodStorage] or [Queen, Nursery]).
  * @param out            Pre-allocated Int32Array of length W*H. Filled in-place.
  * @param queue          Pre-allocated Int32Array of length W*H for BFS queue.
- * @param chamberFilter  Optional per-chamber predicate (issue #15) — only
- *                       chambers returning true are seeded. Used by the food
- *                       field to exclude FoodStorage chambers at capacity so
- *                       carriers redirect to non-full chambers. Takes the world
- *                       so it can read food through the facade (#290).
- * @param filterWorld    The world passed to `chamberFilter`; required whenever
- *                       a filter is given (a plain argument, not a closure, so
- *                       step 9 allocates nothing).
  */
 export function computeChamberFlowField(
   underground: UndergroundGrid,
@@ -161,8 +154,38 @@ export function computeChamberFlowField(
   chamberTypes: ReadonlyArray<ChamberType>,
   out: Int32Array,
   queue: Int32Array,
-  chamberFilter?: (world: WorldState, chamber: ChamberRecord) => boolean,
-  filterWorld?: WorldState,
+): void {
+  seedChamberFlowField(underground, chambers, chamberTypes, out, queue, null);
+}
+
+/**
+ * The FOOD flow field: `computeChamberFlowField` restricted to chambers that are
+ * depositable (`isFoodChamberDepositable`, issue #15) — FoodStorage chambers in
+ * the saturation band are not seeded, so carriers redirect to non-full chambers
+ * instead of pinning on a near-full one (the queen-drain-then-redeposit
+ * oscillation). The same predicate gates the deposit itself, so seed exclusion
+ * and deposit refusal stay in lockstep. Reads food through the facade, hence
+ * `world` (#290).
+ */
+export function computeFoodChamberFlowField(
+  world: WorldState,
+  underground: UndergroundGrid,
+  chambers: ReadonlyArray<ChamberRecord>,
+  chamberTypes: ReadonlyArray<ChamberType>,
+  out: Int32Array,
+  queue: Int32Array,
+): void {
+  seedChamberFlowField(underground, chambers, chamberTypes, out, queue, world);
+}
+
+/** Shared body; `foodWorld !== null` seeds only depositable food chambers. */
+function seedChamberFlowField(
+  underground: UndergroundGrid,
+  chambers: ReadonlyArray<ChamberRecord>,
+  chamberTypes: ReadonlyArray<ChamberType>,
+  out: Int32Array,
+  queue: Int32Array,
+  foodWorld: WorldState | null,
 ): void {
   const { data, width, height } = underground;
 
@@ -181,7 +204,7 @@ export function computeChamberFlowField(
       }
     }
     if (!matches) continue;
-    if (chamberFilter !== undefined && !chamberFilter(filterWorld!, chamber)) continue;
+    if (foodWorld !== null && !isFoodChamberDepositable(foodWorld, chamber)) continue;
 
     const baseX = chamber.posX >> FP_SHIFT;
     const baseY = chamber.posY >> FP_SHIFT;

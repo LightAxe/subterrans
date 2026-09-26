@@ -52,7 +52,6 @@ import {
 import {
   colonyFoodTotal,
   colonyForageBackpressure,
-  isFoodChamberDepositable,
   pileAtTile,
   pileFoodId,
 } from './food/food-api.js';
@@ -89,6 +88,7 @@ import {
 import type { EntranceFlowFields } from './entrance-flow.js';
 import {
   computeChamberFlowField,
+  computeFoodChamberFlowField,
   computeNursingPickupField,
   computeNurseryDepositField,
   ensureChamberFlowFields,
@@ -1069,20 +1069,19 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // body runs; the individual computes below are gated.
     const chamberBufs = ensureChamberFlowFields(chamberFlowFields, colony.colonyId, gridSize);
     if (topologyDirty || colony.foodFlowFieldDirty) {
-      computeChamberFlowField(
+      // Issue #15 follow-up: saturated chambers (free space <
+      // FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP) must not seed the BFS — otherwise a
+      // carrier mid-traversal across a near-full chamber gets pinned by the
+      // queen-drain-then-redeposit oscillation. computeFoodChamberFlowField
+      // filters with `isFoodChamberDepositable`, the predicate the deposit path
+      // uses, so seed exclusion and deposit refusal stay in lockstep.
+      computeFoodChamberFlowField(
+        world,
         underground,
         colony.chambers,
         FOOD_CHAMBER_TYPES,
         chamberBufs.food,
         chamberBufs.queue,
-        // Issue #15 follow-up: saturated chambers (free space <
-        // FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP) must not seed the BFS — otherwise
-        // a carrier mid-traversal across a near-full chamber gets pinned by
-        // the queen-drain-then-redeposit oscillation. Shared with the deposit
-        // path in ant-system.ts via `isFoodChamberDepositable`, so seed
-        // exclusion and deposit refusal stay in lockstep.
-        isFoodChamberDepositable,
-        world,
       );
     }
     if (topologyDirty) {

@@ -23,6 +23,7 @@ import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import {
   depositIntoPool,
+  livePileTiles,
   pileCount,
   pileSlotAt,
   pileTileX,
@@ -451,7 +452,7 @@ export function createScenario(
   // so the entrance IS the root) and every food pile must sit in the single
   // walkable component the bake constructed. A regression in the bake/corridor
   // logic fails loudly here instead of shipping a stranded world.
-  if (!validateSurfaceConnectivity(world)) {
+  if (!validateSurfaceConnectivity(world, livePileTiles(world))) {
     throw new Error(
       'createScenario: surface connectivity invariant violated after bakeStaticTerrain (an entrance or food pile is not in the single walkable component)',
     );

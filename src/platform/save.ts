@@ -56,6 +56,7 @@ import {
 } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { ChamberType } from '../sim/enums.js';
+import { livePileTiles } from '../sim/food/food-api.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import {
   validateSurfaceConnectivity,
@@ -1863,7 +1864,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // saved food pile and every saved entrance must sit in the single connected
   // walkable component of the baked grid (not just the roots — R3-8/R5-2). A
   // corrupt/old map fails loudly here rather than loading a broken world.
-  if (!validateSurfaceConnectivity(world)) {
+  if (!validateSurfaceConnectivity(world, livePileTiles(world))) {
     throw new Error(
       'Invalid bakedSurfaceEffect: connectivity violated (a food pile or entrance is not in the single walkable component)',
     );
