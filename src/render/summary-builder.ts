@@ -53,6 +53,22 @@ export interface TunableObserved {
   totalInvasions: number;
 }
 
+/**
+ * #290 PR 6 — raid totals per colony at summary time, keyed by colony id (as
+ * `killsByColony`). Read from the ColonyRecord counters, not events: the sim emits
+ * no raid events (the capped event log would lose them over a full match), and
+ * the counters are exact.
+ *   - `foodRaidedFp`       food (fp, 256 = one unit) this colony's raiders took;
+ *   - `foodLostToRaidsFp`  food (fp) raiders took from this colony's stores;
+ *   - `raidTrips`          raid hauls this colony deposited in full.
+ * Both food counters are net of loads a dying hauler handed back to the victim's
+ * pool. Additive: the playtrace Lambda stores `summary` as an opaque subtree, so
+ * this field needs no schemaVersion bump and no server deploy (ADR 0013).
+ */
+export interface RaidAggregate {
+  byColony: Record<string, { foodRaidedFp: number; foodLostToRaidsFp: number; raidTrips: number }>;
+}
+
 export interface EventOverflow {
   totalEmitted: number;
   stored: number;
@@ -65,6 +81,7 @@ export interface PlaytraceSummary {
   outcomeAttribution: OutcomeAttribution;
   combatAggregate: CombatAggregate;
   tunableObserved: TunableObserved;
+  raidAggregate: RaidAggregate;
   eventOverflow: EventOverflow;
   difficulty: 'Easy' | 'Normal' | 'Hard' | null;
   eventsCoverage: 'full_round' | 'since_load' | 'unknown';
@@ -256,6 +273,23 @@ function buildTunableObserved(events: SimEvent[]): TunableObserved {
   };
 }
 
+export function buildRaidAggregate(world: WorldState): RaidAggregate {
+  const byColony: RaidAggregate['byColony'] = {};
+  const ids = Object.keys(world.colonies)
+    .map(Number)
+    .sort((a, b) => a - b);
+  for (const id of ids) {
+    const c = world.colonies[id];
+    if (c === undefined) continue;
+    byColony[String(id)] = {
+      foodRaidedFp: c.foodRaidedFp,
+      foodLostToRaidsFp: c.foodLostToRaidsFp,
+      raidTrips: c.raidTrips,
+    };
+  }
+  return { byColony };
+}
+
 /**
  * Build the PlaytraceSummary for the completed session.
  *
@@ -281,6 +315,7 @@ export function buildPlaytraceSummary(
     outcomeAttribution: buildOutcomeAttribution(events, gameOutcome),
     combatAggregate: buildCombatAggregate(events),
     tunableObserved: buildTunableObserved(events),
+    raidAggregate: buildRaidAggregate(world),
     eventOverflow: {
       totalEmitted,
       stored,
