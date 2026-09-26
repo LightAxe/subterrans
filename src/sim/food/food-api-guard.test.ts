@@ -2,8 +2,10 @@
 //
 // Parses every non-test .ts file under src/, scripts/ and bench/ with the TypeScript
 // compiler API and reports any syntactic reference to food storage. Since PR 2
-// (V50) that is the located food store `world.food` (a `.food` member access on a
-// world, or any `.food.<store column>`), its links `ColonyRecord.poolSlot` /
+// (V50) that is the located food store `world.food` — any `food` member access,
+// `['food']` element access or `{ food }` destructuring whose type is `FoodStore`
+// (or unknown / any: an untyped receiver counts), classified with one
+// type-checked program over the scanned files — its links `ColonyRecord.poolSlot` /
 // `ChamberRecord.foodSlot`, and its `pileOrder` / `surfacePileAt` columns; the
 // pre-V50 fields `foodPiles` / `foodStored` stay listed so a reintroduction fails.
 // For the names in NAMES, every reference kind is reported, wherever it sits:
@@ -42,7 +44,7 @@
 //     are not recognised.
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
@@ -52,7 +54,9 @@ const SCAN_DIRS = ['src', 'scripts', 'bench'];
 // Storage names flagged in every reference kind: the store's links and its
 // distinctive ordering columns, plus the pre-V50 storage fields (a reintroduction
 // fails). The store itself, `world.food`, is too common a word for that
-// (`chamberFlowFields.food`, a script's `out.food`): see isStoreAccess.
+// (`chamberFlowFields.food`, a script's `out.food`): a `food` member access,
+// `['food']` element access or `{ food }` destructuring is decided by TYPE — see
+// isFoodStoreRef.
 const NAMES: ReadonlySet<string> = new Set([
   'poolSlot',
   'foodSlot',
@@ -61,34 +65,50 @@ const NAMES: ReadonlySet<string> = new Set([
   'foodPiles',
   'foodStored',
 ]);
-/** FoodStore columns: `<x>.food.<column>` is a store access whatever `<x>` is. */
-const STORE_COLUMNS: ReadonlySet<string> = new Set([
-  'kind',
-  'owner',
-  'zone',
-  'grid',
-  'tileX',
-  'tileY',
-  'amountFp',
-  'initialFp',
-  'foodId',
-  'flags',
-  'pileOrder',
-  'pileCount',
-  'surfacePileAt',
-]);
 
 /**
- * `x.food` is the located food store when `x` reads as a world (world, w,
- * nextWorld, this.world, src/dst in copyWorldState …) or when a store column is
- * read off it (`anything.food.amountFp`).
+ * A `food` reference (member access, element access or destructuring) is a food
+ * STORE reference unless the type checker proves otherwise: its type is
+ * `FoodStore` (or a union containing it), or it is `any` / `unknown` / an error
+ * type (an untyped or unresolved receiver — e.g. `function a(world) { const {
+ * food } = world }` — counts as the store: conservative). Anything with a known
+ * non-store type (`chamberFlowFields.food: Record<…>`, a script's `out.food:
+ * number`) is not.
  */
-function isStoreAccess(node: ts.PropertyAccessExpression): boolean {
-  if (node.name.text !== 'food') return false;
-  const obj = node.expression.getText().replace(/\s+/g, '');
-  if (/(^|\.)(world|w|src|dst|nextWorld|[a-z]*World)$/.test(obj)) return true;
-  const parent = node.parent;
-  return ts.isPropertyAccessExpression(parent) && STORE_COLUMNS.has(parent.name.text);
+function isFoodStoreRef(checker: ts.TypeChecker | null, node: ts.Node): boolean {
+  if (checker === null) return true;
+  const isStore = (t: ts.Type): boolean => {
+    if ((t.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0) return true;
+    if (t.isUnion()) return t.types.some(isStore);
+    const name = (t.aliasSymbol ?? t.getSymbol())?.getName();
+    return name === 'FoodStore';
+  };
+  return isStore(checker.getTypeAtLocation(node));
+}
+
+/** Compiler options for the guard's type-checked parse (the app tsconfig's resolution). */
+const GUARD_TS_OPTIONS: ts.CompilerOptions = {
+  target: ts.ScriptTarget.ES2022,
+  module: ts.ModuleKind.ESNext,
+  moduleResolution: ts.ModuleResolutionKind.Bundler,
+  strict: true,
+  skipLibCheck: true,
+  noEmit: true,
+  types: [],
+};
+
+/**
+ * A checker over one in-memory file (self-tests). No lib: the snippets only need
+ * the types they declare, and it keeps each program cheap.
+ */
+function snippetProgram(fileName: string, source: string): ts.Program {
+  const opts: ts.CompilerOptions = { ...GUARD_TS_OPTIONS, noLib: true, strict: false };
+  const sf = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const host = ts.createCompilerHost(opts);
+  host.getSourceFile = (name) => (name === fileName ? sf : undefined);
+  host.fileExists = (name) => name === fileName;
+  host.readFile = (name) => (name === fileName ? source : undefined);
+  return ts.createProgram([fileName], opts, host);
 }
 const ANY = '*';
 
@@ -132,6 +152,8 @@ const ALLOWED: Readonly<Record<string, Readonly<Record<string, readonly RefKind[
     deserializeColony: ANY,
     // Hands `world.food` to serializeFoodStore.
     serializeWorldState: READ,
+    // The save-dialog summary reads the raw snapshot JSON's food block.
+    getSaveInfo: READ,
   },
   'src/platform/save-schema.ts': { '<module>': STR },
   // The projection strips the storage-shaped keys from a serialized COPY by name.
@@ -219,8 +241,20 @@ function isConstructionLiteral(lit: ts.ObjectLiteralExpression): boolean {
 }
 
 /** Every syntactic reference to a food-storage field in `source`. */
-function findStorageRefs(source: string, fileName = 'x.ts'): StorageRef[] {
-  const sf = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+function findStorageRefs(
+  source: string,
+  fileName = 'x.ts',
+  typed?: { sf: ts.SourceFile; checker: ts.TypeChecker },
+): StorageRef[] {
+  let sf: ts.SourceFile;
+  let checker: ts.TypeChecker;
+  if (typed !== undefined) {
+    ({ sf, checker } = typed);
+  } else {
+    const program = snippetProgram(fileName, source);
+    sf = program.getSourceFile(fileName)!;
+    checker = program.getTypeChecker();
+  }
   const refs: StorageRef[] = [];
   const hit = (node: ts.Node, kind: RefKind): void => {
     refs.push({
@@ -232,17 +266,27 @@ function findStorageRefs(source: string, fileName = 'x.ts'): StorageRef[] {
   };
   const claimed = new Set<ts.Node>(); // string nodes already reported via a parent
   const visit = (node: ts.Node): void => {
-    if (ts.isPropertyAccessExpression(node) && (NAMES.has(node.name.text) || isStoreAccess(node))) {
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      (NAMES.has(node.name.text) || (node.name.text === 'food' && isFoodStoreRef(checker, node)))
+    ) {
       hit(node, 'member access');
     } else if (ts.isElementAccessExpression(node)) {
       const k = stringLikeText(node.argumentExpression);
-      if (k !== undefined && NAMES.has(k) && !ts.isIdentifier(node.argumentExpression)) {
+      if (
+        k !== undefined &&
+        !ts.isIdentifier(node.argumentExpression) &&
+        (NAMES.has(k) || (k === 'food' && isFoodStoreRef(checker, node)))
+      ) {
         hit(node, 'element access');
         claimed.add(node.argumentExpression);
       }
     } else if (ts.isBindingElement(node)) {
       const k = stringLikeText(node.propertyName ?? node.name);
-      if (k !== undefined && NAMES.has(k)) {
+      if (
+        k !== undefined &&
+        (NAMES.has(k) || (k === 'food' && isFoodStoreRef(checker, node.name)))
+      ) {
         hit(node, 'destructuring');
         if (node.propertyName !== undefined) claimed.add(node.propertyName);
       }
@@ -292,17 +336,21 @@ function listTsFiles(dir: string): string[] {
 function scan(): { violations: string[]; allowedUsed: Map<string, Set<string>> } {
   const violations: string[] = [];
   const allowedUsed = new Map<string, Set<string>>();
-  for (const d of SCAN_DIRS) {
-    for (const file of listTsFiles(join(ROOT, d))) {
-      const rel = relative(ROOT, file).split('\\').join('/');
-      for (const r of findStorageRefs(readFileSync(file, 'utf8'), rel)) {
-        const by = allowedBy(rel, r);
-        if (by !== null) {
-          if (!allowedUsed.has(rel)) allowedUsed.set(rel, new Set());
-          allowedUsed.get(rel)!.add(by);
-        } else {
-          violations.push(`${rel}:${r.line} in ${r.fn} (${r.kind}): ${r.text}`);
-        }
+  const files = SCAN_DIRS.flatMap((d) => listTsFiles(join(ROOT, d)));
+  // One type-checked program over every scanned file, so `food` references are
+  // classified by type (isFoodStoreRef).
+  const program = ts.createProgram(files, GUARD_TS_OPTIONS);
+  const checker = program.getTypeChecker();
+  for (const file of files) {
+    const rel = relative(ROOT, file).split('\\').join('/');
+    const sf = program.getSourceFile(file)!;
+    for (const r of findStorageRefs(sf.text, rel, { sf, checker })) {
+      const by = allowedBy(rel, r);
+      if (by !== null) {
+        if (!allowedUsed.has(rel)) allowedUsed.set(rel, new Set());
+        allowedUsed.get(rel)!.add(by);
+      } else {
+        violations.push(`${rel}:${r.line} in ${r.fn} (${r.kind}): ${r.text}`);
       }
     }
   }
@@ -361,7 +409,13 @@ describe('#290 food facade guard', () => {
         'function createColonyRecord(c) { c = { ...c, foodStored: 9 }; return c; }',
       ],
       ['bench/tick-cost.bench.ts', 'function buildBroodColony(c) { ({ foodStored: c.x } = c); }'],
-      ['src/platform/save.ts', 'function getSaveInfo(w) { return w.food.amountFp[0]; }'],
+      ['src/platform/save.ts', 'function getSaveInfo(w) { const { food } = w; return food; }'],
+      // The reviewer's sneaky module: not allow-listed at all.
+      [
+        'src/sim/sneaky.ts',
+        'export function a(world) { const { food } = world; food.amountFp[0] = 5; }\n' +
+          'export function c(state) { const s = state.food; s.amountFp[1] = 7; }',
+      ],
     ];
     for (const [file, src] of cases) {
       const refs = findStorageRefs(src, file);
@@ -436,6 +490,27 @@ describe('#290 food facade guard', () => {
       ['spread-then-key', 'function f(c) { return { ...c, foodStored: 0 }; }'],
       // #290 PR 2 — the located store and its links.
       ['world.food', 'function f(world) { return world.food; }'],
+      // Reviewer repros (#290 PR 2 L1): any receiver, destructuring, element access.
+      [
+        'destructured food',
+        'export function a(world) { const { food } = world; food.amountFp[0] = 5; }',
+      ],
+      ['renamed destructured food', 'function a(world) { const { food: f } = world; return f; }'],
+      ['element access food', "function b(world) { world['food'].amountFp[3] = 1; }"],
+      [
+        'food off any name',
+        'export function c(state) { const s = state.food; s.amountFp[1] = 7; }',
+      ],
+      [
+        'typed as FoodStore',
+        'interface FoodStore { kind: number[] }\n' +
+          'function d(x: { food: FoodStore }) { return x.food; }',
+      ],
+      [
+        'optional FoodStore',
+        'interface FoodStore { kind: number[] }\n' +
+          'function e(x: { food?: FoodStore }) { return x.food; }',
+      ],
       ['store column', 'function f(w) { return w.food.amountFp[3]; }'],
       ['column off any .food', 'function f(x) { return x.y.food.kind[0]; }'],
       ['this.world.food', 'function f() { return this.world.food; }'],
@@ -456,7 +531,9 @@ describe('#290 food facade guard', () => {
       'function f(c) { return c.foodStoredTotal + c.myFoodPiles; }',
       "const s = 'the foodStored field';",
       // `.food` that is not the store: chamber flow fields, a script's tally.
-      'function f(chamberFlowFields, out) { return chamberFlowFields.food[1] + out.food; }',
+      'function f(chamberFlowFields: { food: { a: number } }, out: { food: number }) {\n' +
+        '  const { food } = out;\n' +
+        "  return chamberFlowFields.food.a + out.food + out['food'] + food;\n}",
     ];
     expect(clean.flatMap((src) => findStorageRefs(src))).toEqual([]);
   });
