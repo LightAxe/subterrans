@@ -29,7 +29,7 @@ import { FP_SHIFT } from '../sim/fixed.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 import type { WorldState } from '../sim/types.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
-import { colonyFoodTotal } from '../sim/colony/colony-system.js';
+import { colonyFoodTotal } from '../sim/food/food-api.js';
 
 // -----------------------------------------------------------------------------
 // Scenario constants
@@ -73,7 +73,7 @@ function snapshotColony(world: WorldState, colony: ColonyRecord): Snapshot {
     // Issue #15: deposits now land in chamber.foodStored, not the pool. The
     // diagnostic snapshot reads colonyFoodTotal so the value reflects the
     // colony's actual stockpile rather than just the entrance-shaft fallback.
-    foodStored: colonyFoodTotal(colony),
+    foodStored: colonyFoodTotal(world, colony),
     eggCount: colony.eggCount,
     larvaeCount: colony.larvaeCount,
     chamberTypes: colony.chambers.map((c) => c.chamberType),
@@ -184,7 +184,7 @@ describe('AI-only scenario 6000 ticks', () => {
     // "did the entrance-shaft fallback fire at least once" — not what this
     // assertion is testing.)
     {
-      const total = colonyFoodTotal(aiColony!);
+      const total = colonyFoodTotal(world, aiColony!);
       expect(total, `AI colony food total is not > 0 (found ${total}). ${ctx}`).toBeGreaterThan(0);
     }
 

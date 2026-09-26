@@ -47,6 +47,7 @@ import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import type { WorldState } from '../sim/types.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { AntTask } from '../sim/enums.js';
+import { chamberStock } from '../sim/food/food-api.js';
 import {
   TILE_SIZE_PX,
   COLOR_MARKED_TILE_OVERLAY,
@@ -179,9 +180,9 @@ function drawOutlineSegment(
 // ---------------------------------------------------------------------------
 // projectFoodStorageFill — per-chamber fill readout
 //
-// Issue #15: ChamberRecord.foodStored is now the authoritative per-chamber
-// stockpile (it grows when an ant deposits inside the chamber footprint, drains
-// when the queen withdraws). Render reads it directly — there is nothing to
+// Issue #15: each FoodStorage chamber's stock is authoritative (it grows when an
+// ant deposits inside the chamber footprint, drains when the queen withdraws).
+// Render reads it through the food facade (`chamberStock`) — there is nothing to
 // "project" anymore, but the function name is preserved so callers don't
 // need to know the model changed.
 // ---------------------------------------------------------------------------
@@ -190,11 +191,15 @@ function drawOutlineSegment(
  * Fill (0..FOOD_CHAMBER_CAPACITY) for the named FoodStorage chamber. Returns 0
  * if chamberId isn't a FoodStorage chamber in this colony.
  */
-export function projectFoodStorageFill(colony: ColonyRecord, chamberId: number): number {
+export function projectFoodStorageFill(
+  world: WorldState,
+  colony: ColonyRecord,
+  chamberId: number,
+): number {
   for (const ch of colony.chambers) {
     if (ch.chamberType !== ChamberType.FoodStorage) continue;
     if (ch.chamberId !== chamberId) continue;
-    const fill = ch.foodStored;
+    const fill = chamberStock(world, ch);
     if (fill <= 0) return 0;
     return fill < FOOD_CHAMBER_CAPACITY ? fill : FOOD_CHAMBER_CAPACITY;
   }
@@ -477,10 +482,10 @@ export function drawUndergroundEntities(
       }
     }
     // FoodStorage fill visualization — per-tile amber food-cache sprites
-    // stacked from the chamber floor upward. Issue #15: ChamberRecord.foodStored
-    // IS the authoritative source — `projectFoodStorageFill` returns it directly,
-    // not a lagging projection of colony.foodStored as before the chamber-
-    // authoritative refactor. Deposits show the moment antDepositFood writes
+    // stacked from the chamber floor upward. Issue #15: the chamber's own stock
+    // IS the authoritative source — `projectFoodStorageFill` returns it directly
+    // (via `chamberStock`), not a lagging projection of the entrance pool as
+    // before the chamber-authoritative refactor. Deposits show the moment antDepositFood writes
     // the chamber, no reconcile lag.
     //
     // Each tile in the chamber footprint can hold one food-cache SVG; the
@@ -489,7 +494,7 @@ export function drawUndergroundEntities(
     // rather than Graphics primitives — draw-underground.ts stays Phaser-free
     // and GameScene's AntSpritePool handles the actual image objects.
     if (chamber.chamberType === ChamberType.FoodStorage) {
-      const projected = projectFoodStorageFill(colony, chamber.chamberId);
+      const projected = projectFoodStorageFill(curr, colony, chamber.chamberId);
       if (projected > 0) {
         const totalTiles = dims.width * dims.height;
         const frac = Math.min(1, projected / FOOD_CHAMBER_CAPACITY);

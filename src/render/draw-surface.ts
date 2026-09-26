@@ -59,6 +59,15 @@ import {
 } from './camera-adapter.js';
 import { SPIDER_SPRITE_HEIGHT, SPIDER_SPRITE_WIDTH } from './ant-sprite-layer.js';
 import { SPIDER_HUNGER_MAX_TICKS, SPIDER_HP_FULL } from '../sim/constants.js';
+import {
+  pileAmountFp,
+  pileCount,
+  pileFoodId,
+  pileInitialFp,
+  pileSlotAt,
+  pileTileX,
+  pileTileY,
+} from '../sim/food/food-api.js';
 import { tierIndex } from '../sim/ai-state.js';
 
 // ---------------------------------------------------------------------------
@@ -232,7 +241,7 @@ export function drawSurfaceEntities(
 
   // --- Food piles ---
   // Issue #112 shrink buckets: each pile renders one of 4 sizes based on
-  // pickupsRemaining / pickupsInitial.
+  // amountFp / initialFp (food left vs the pile's size at birth).
   const playerColony = curr.colonies[PLAYER_COLONY_ID];
   // Stage 3a (ship-review LOW): draw-surface renders ONLY the committed food mark. The queued food
   // state (a toggle/re-direct) is shown entirely by the ghost overlay — a proto-blue pendingFoodMark
@@ -241,17 +250,19 @@ export function drawSurfaceEntities(
   // committed tint (indistinguishable from committed), so food preview lives only in the overlay.
   const playerPriorityPileId = playerColony ? playerColony.priorityFoodPileId : null;
   const baseRadius = TILE_SIZE_PX / 2 - 2;
-  for (const pile of curr.foodPiles) {
-    const wx = pile.tileX * TILE_SIZE_PX;
-    const wy = pile.tileY * TILE_SIZE_PX;
+  const nPiles = pileCount(curr);
+  for (let o = 0; o < nPiles; o++) {
+    const slot = pileSlotAt(curr, o);
+    const wx = pileTileX(curr, slot) * TILE_SIZE_PX;
+    const wy = pileTileY(curr, slot) * TILE_SIZE_PX;
     if (!tileInView(wx, wy, rect, TILE_SIZE_PX)) continue;
     const isPlayerMarked =
-      playerPriorityPileId !== null && pile.foodPileId === playerPriorityPileId;
+      playerPriorityPileId !== null && pileFoodId(curr, slot) === playerPriorityPileId;
     const color = isPlayerMarked ? COLOR_FOOD_PILE_MARKED : COLOR_FOOD_PILE_NORMAL;
     const cx = wx + TILE_SIZE_PX / 2;
     const cy = wy + TILE_SIZE_PX / 2;
     // Shrink-bucket radius: percent-remaining buckets in [>75%, >50%, >25%, >0%].
-    const pct = pile.pickupsRemaining / pile.pickupsInitial;
+    const pct = pileAmountFp(curr, slot) / pileInitialFp(curr, slot);
     let r = baseRadius;
     if (pct <= 0.75) r = baseRadius - 2;
     if (pct <= 0.5) r = baseRadius - 4;

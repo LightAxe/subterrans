@@ -29,7 +29,14 @@ import {
   AI_MAX_OPERATION_FIGHTERS,
   QUEEN_EGG_FOOD_THRESHOLD,
 } from '../sim/constants.js';
-import { colonyFoodTotal } from '../sim/colony/colony-system.js';
+import {
+  colonyFoodTotal,
+  pileCount,
+  pileFoodId,
+  pileSlotAt,
+  pileTileX,
+  pileTileY,
+} from '../sim/food/food-api.js';
 import { aiFighterCount } from '../sim/ai-state.js';
 
 import { AntTask } from '../sim/enums.js';
@@ -204,7 +211,7 @@ export function aiSurvivalMode(world: WorldState, colony: ColonyRecord): boolean
   }
   return (
     living <= AI_SURVIVAL_MAX_WORKERS &&
-    colonyFoodTotal(colony) < QUEEN_EGG_FOOD_THRESHOLD * AI_SURVIVAL_FOOD_MULTIPLIER
+    colonyFoodTotal(world, colony) < QUEEN_EGG_FOOD_THRESHOLD * AI_SURVIVAL_FOOD_MULTIPLIER
   );
 }
 
@@ -540,12 +547,13 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
     }
   }
   // Food storage — if food stockpile crossed threshold and no FoodStorage yet.
-  // Issue #15: read total stash (entrance pool + every chamber.foodStored), not
-  // the chamberless fallback bucket — colony.foodStored alone is now only the
-  // entrance pool, so the AI gate would never fire once the first chamber filled.
+  // Issue #15: read total stash (entrance pool + every FoodStorage chamber's
+  // stock, `colonyFoodTotal`), not the entrance pool alone — the pool is only the
+  // chamberless fallback bucket, so the AI gate would never fire once the first
+  // chamber filled.
   //
   // Issue #33 — also gate on Queen-completed-or-pending. Pre-fix the FS
-  // gate fired on tick 0 (starting foodStored=1280 ≫ threshold=8) and the
+  // gate fired on tick 0 (starting food 1280 ≫ threshold=8) and the
   // FS chamber landed at the entrance shaft floor (Y≈1). That single
   // shallow chamber preempted the bootstrap dig (which only ran while
   // chambers.length === 0) and the Queen never found a deep enough
@@ -566,7 +574,7 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
   // accept additional FS but the AI does not issue them.
   if (
     hasChamberOrPending(world, colony, ChamberType.Queen) &&
-    colonyFoodTotal(colony) >= AI_FOOD_STORAGE_THRESHOLD &&
+    colonyFoodTotal(world, colony) >= AI_FOOD_STORAGE_THRESHOLD &&
     !hasChamberOrPending(world, colony, ChamberType.FoodStorage)
   ) {
     const placement = findOpenChamberSpot(world, colony, 5, ChamberType.FoodStorage); // near-surface storage
@@ -830,29 +838,37 @@ function _selectProbeTarget(
   const aiEntranceY =
     aiCol !== undefined && aiCol.entrances.length > 0 ? aiCol.entrances[0]!.surfaceTileY : 0; // surface row — all current entrances have surfaceTileY=0
 
-  for (const pile of world.foodPiles) {
-    const isMarked = playerColony.priorityFoodPileId === pile.foodPileId;
+  const nPiles = pileCount(world);
+  for (let o = 0; o < nPiles; o++) {
+    const slot = pileSlotAt(world, o);
+    const pileId = pileFoodId(world, slot);
+    const isMarked = playerColony.priorityFoodPileId === pileId;
     if (!isMarked) continue;
-    const dist = Math.abs(pile.tileX - aiEntranceX) + Math.abs(pile.tileY - aiEntranceY);
+    const px = pileTileX(world, slot);
+    const py = pileTileY(world, slot);
+    const dist = Math.abs(px - aiEntranceX) + Math.abs(py - aiEntranceY);
     if (
       bestPile === null ||
       dist < bestPile.dist ||
-      (dist === bestPile.dist && pile.foodPileId < bestPile.id)
+      (dist === bestPile.dist && pileId < bestPile.id)
     ) {
-      bestPile = { tileX: pile.tileX, tileY: pile.tileY, id: pile.foodPileId, dist };
+      bestPile = { tileX: px, tileY: py, id: pileId, dist };
     }
   }
   if (bestPile !== null) return { tileX: bestPile.tileX, tileY: bestPile.tileY };
 
   // Priority 2: closest unmarked surface pile within AI_PROBE_FALLBACK_RADIUS_TILES
   // of any open player entrance.
-  for (const pile of world.foodPiles) {
+  for (let o = 0; o < nPiles; o++) {
+    const slot = pileSlotAt(world, o);
+    const pileId = pileFoodId(world, slot);
+    const px = pileTileX(world, slot);
+    const py = pileTileY(world, slot);
     // Check if within radius of any open player entrance.
     let withinRadius = false;
     for (const entrance of playerColony.entrances) {
       if (!entrance.isOpen) continue;
-      const dist =
-        Math.abs(pile.tileX - entrance.surfaceTileX) + Math.abs(pile.tileY - entrance.surfaceTileY);
+      const dist = Math.abs(px - entrance.surfaceTileX) + Math.abs(py - entrance.surfaceTileY);
       if (dist <= AI_PROBE_FALLBACK_RADIUS_TILES) {
         withinRadius = true;
         break;
@@ -860,13 +876,13 @@ function _selectProbeTarget(
     }
     if (!withinRadius) continue;
     // Pick closest to AI entrance by ascending pile ID for ties.
-    const dist = Math.abs(pile.tileX - aiEntranceX) + Math.abs(pile.tileY - aiEntranceY);
+    const dist = Math.abs(px - aiEntranceX) + Math.abs(py - aiEntranceY);
     if (
       bestPile === null ||
       dist < bestPile.dist ||
-      (dist === bestPile.dist && pile.foodPileId < bestPile.id)
+      (dist === bestPile.dist && pileId < bestPile.id)
     ) {
-      bestPile = { tileX: pile.tileX, tileY: pile.tileY, id: pile.foodPileId, dist };
+      bestPile = { tileX: px, tileY: py, id: pileId, dist };
     }
   }
   return bestPile !== null ? { tileX: bestPile.tileX, tileY: bestPile.tileY } : null;
