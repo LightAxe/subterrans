@@ -486,6 +486,8 @@ export function dropHaulerLoad(world: WorldState, id: number): boolean {
   const tx = ants.posX[id]! >> FP_SHIFT;
   const ty = ants.posY[id]! >> FP_SHIFT;
   if (ants.zone[id] === Zone.Surface) {
+    // Under one whole pickup there is no pile to make and the load is lost: piles
+    // hold whole pickups, and the facade refuses a zero-sized drop.
     topUpOrSpawnCorpsePile(world, tx, ty, load);
     return true;
   }

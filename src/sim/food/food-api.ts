@@ -694,6 +694,11 @@ export function topUpOrSpawnCorpsePile(
   amountFp: number,
 ): void {
   const fp = wholePickupsFp(amountFp);
+  // Less than one whole pickup is nothing to drop (#290 PR 5: a hauler's part-eaten
+  // or partial load): never top up by 0 or mint a zero-sized pile, which the save
+  // rejects (a live pile holds at least one pickup). Every earlier caller passes
+  // whole pickups ≥ 1, so this changes nothing for them.
+  if (fp <= 0) return;
   const slot = pileAtTile(world, x, y);
   if (slot >= 0) {
     const store = world.food;
