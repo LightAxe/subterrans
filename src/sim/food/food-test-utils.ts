@@ -12,7 +12,15 @@ import type { EntityId, WorldState } from '../types.js';
 import type { ChamberRecord, ColonyRecord } from '../colony/colony-store.js';
 import type { FoodPileId } from '../food.js';
 import { ChamberType } from '../enums.js';
-import { FOOD_PICKUP_AMOUNT } from '../constants.js';
+import {
+  BASE_FOOD_STORAGE_CAPACITY,
+  FOOD_CHAMBER_CAPACITY,
+  FOOD_PICKUP_AMOUNT,
+  FOOD_PILE_HARD_CAP,
+  FOOD_PILE_INITIAL_PICKUPS_MAX,
+  FOOD_PILE_INITIAL_PICKUPS_MIN,
+  SURFACE_GRID_WIDTH,
+} from '../constants.js';
 import type { HungerProfile } from '../hunger.js';
 import { createChamberStock, createColonyPool, FOOD_FLAG_CORPSE } from './food-api.js';
 import { clearFoodSlot, FoodKind, rebuildSurfacePileAt } from './food-store.js';
@@ -219,4 +227,143 @@ export function pushTestPile(
     pickupsInitial: pickupsRemaining > 0 ? pickupsRemaining : 1,
   };
   return { slot: addPileForTest(world, pile), pile };
+}
+
+/**
+ * #290 PR 2 (plan §2.1) — assert every located-food-store invariant on a live
+ * world, between ticks. Throws an Error naming the first violation. The sim-side
+ * twin of the loader's `validateFoodStore` (platform/save.ts), run by the
+ * determinism and fuzz tests so a sim path that breaks an invariant fails where
+ * it happens, not at the next load.
+ *  1. every live slot has a known kind and its per-kind bounds; a free slot is all 0;
+ *  2. each colony's `poolSlot` is a Pool it owns (0 ≤ amount ≤ BASE cap), unshared;
+ *  3. Stock slots and FoodStorage chambers are in bijection through
+ *     `foodSlot` / `foodId` (0 ≤ amount ≤ FOOD_CHAMBER_CAPACITY, at the anchor);
+ *     every other chamber has `foodSlot` −1;
+ *  4. `pileOrder[0..pileCount)` lists exactly the Pile slots, no duplicates,
+ *     `pileCount ≤ FOOD_PILE_HARD_CAP`, and the tail of `pileOrder` is zeroed;
+ *  5. `surfacePileAt` agrees with the live piles (first pile in order per tile);
+ *  6. no Pool / Stock slot is live without a link.
+ */
+export function assertFoodStoreInvariants(world: WorldState): void {
+  const store = world.food;
+  const fail = (msg: string): never => {
+    throw new Error(`food store invariant (tick ${world.tick}): ${msg}`);
+  };
+  const n = store.kind.length;
+  let piles = 0;
+  for (let s = 0; s < n; s++) {
+    const kind = store.kind[s]!;
+    const amount = store.amountFp[s]!;
+    const initial = store.initialFp[s]!;
+    if (kind === FoodKind.None) {
+      if (
+        store.owner[s] !== 0 ||
+        store.zone[s] !== 0 ||
+        store.grid[s] !== 0 ||
+        store.tileX[s] !== 0 ||
+        store.tileY[s] !== 0 ||
+        amount !== 0 ||
+        initial !== 0 ||
+        store.foodId[s] !== 0 ||
+        store.flags[s] !== 0
+      ) {
+        fail(`free slot ${s} is not zeroed`);
+      }
+      continue;
+    }
+    if (kind === FoodKind.Pile) {
+      piles++;
+      const corpse = (store.flags[s]! & FOOD_FLAG_CORPSE) !== 0;
+      if (store.flags[s] !== (corpse ? FOOD_FLAG_CORPSE : 0)) fail(`pile ${s} flags`);
+      if (store.owner[s] !== 0 || store.grid[s] !== 0 || store.zone[s] !== 0) {
+        fail(`pile ${s} is not an unowned surface record`);
+      }
+      const floor = corpse
+        ? FOOD_PICKUP_AMOUNT
+        : FOOD_PILE_INITIAL_PICKUPS_MIN * FOOD_PICKUP_AMOUNT;
+      const max = FOOD_PILE_INITIAL_PICKUPS_MAX * FOOD_PICKUP_AMOUNT;
+      if (initial % FOOD_PICKUP_AMOUNT !== 0 || initial < floor || initial > max) {
+        fail(`pile ${s} initialFp ${initial}`);
+      }
+      if (amount % FOOD_PICKUP_AMOUNT !== 0 || amount <= 0 || amount > initial) {
+        fail(`pile ${s} amountFp ${amount}`);
+      }
+      continue;
+    }
+    if (kind !== FoodKind.Pool && kind !== FoodKind.Stock) fail(`slot ${s} kind ${kind}`);
+    if (store.zone[s] !== 1 || store.grid[s] !== store.owner[s]) {
+      fail(`pool/stock ${s} not in its owner's underground grid`);
+    }
+    if (initial !== 0 || store.flags[s] !== 0) fail(`pool/stock ${s} carries pile data`);
+    const cap = kind === FoodKind.Pool ? BASE_FOOD_STORAGE_CAPACITY : FOOD_CHAMBER_CAPACITY;
+    if (amount < 0 || amount > cap) fail(`pool/stock ${s} amountFp ${amount} (cap ${cap})`);
+  }
+
+  // 2, 3, 6 — links.
+  const linked = new Set<number>();
+  for (const c of Object.values(world.colonies)) {
+    const p = c.poolSlot;
+    if (p < 0 || p >= n || store.kind[p] !== FoodKind.Pool || store.owner[p] !== c.colonyId) {
+      fail(`colony ${c.colonyId} poolSlot ${p}`);
+    }
+    if (store.foodId[p] !== -1) fail(`pool ${p} foodId`);
+    if (linked.has(p)) fail(`slot ${p} shared`);
+    linked.add(p);
+    for (const ch of c.chambers) {
+      if (ch.chamberType !== ChamberType.FoodStorage) {
+        if (ch.foodSlot !== -1) fail(`chamber ${ch.chamberId} (not FoodStorage) foodSlot`);
+        continue;
+      }
+      const f = ch.foodSlot;
+      if (
+        f < 0 ||
+        f >= n ||
+        store.kind[f] !== FoodKind.Stock ||
+        store.owner[f] !== c.colonyId ||
+        store.foodId[f] !== ch.chamberId ||
+        store.tileX[f] !== ch.posX >> 8 ||
+        store.tileY[f] !== ch.posY >> 8
+      ) {
+        fail(`chamber ${ch.chamberId} foodSlot ${f}`);
+      }
+      if (linked.has(f)) fail(`slot ${f} shared`);
+      linked.add(f);
+    }
+  }
+  for (let s = 0; s < n; s++) {
+    const k = store.kind[s];
+    if ((k === FoodKind.Pool || k === FoodKind.Stock) && !linked.has(s)) {
+      fail(`pool/stock ${s} is not linked`);
+    }
+  }
+
+  // 4 — pile order.
+  if (store.pileCount !== piles) fail(`pileCount ${store.pileCount} for ${piles} piles`);
+  if (store.pileCount > FOOD_PILE_HARD_CAP) fail(`pileCount ${store.pileCount} over the hard cap`);
+  const seen = new Set<number>();
+  for (let o = 0; o < store.pileOrder.length; o++) {
+    const s = store.pileOrder[o]!;
+    if (o >= store.pileCount) {
+      if (s !== 0) fail(`pileOrder[${o}] past pileCount is ${s}`);
+      continue;
+    }
+    if (s < 0 || s >= n || store.kind[s] !== FoodKind.Pile || seen.has(s)) {
+      fail(`pileOrder[${o}] = ${s}`);
+    }
+    seen.add(s);
+  }
+
+  // 5 — the tile index.
+  const expected = new Map<number, number>();
+  for (let o = 0; o < store.pileCount; o++) {
+    const s = store.pileOrder[o]!;
+    const tile = store.tileY[s]! * SURFACE_GRID_WIDTH + store.tileX[s]!;
+    if (!expected.has(tile)) expected.set(tile, s + 1);
+  }
+  for (let t = 0; t < store.surfacePileAt.length; t++) {
+    const want = expected.get(t) ?? 0;
+    if (store.surfacePileAt[t] !== want)
+      fail(`surfacePileAt[${t}] = ${store.surfacePileAt[t]}, want ${want}`);
+  }
 }

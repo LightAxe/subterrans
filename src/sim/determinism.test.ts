@@ -60,6 +60,7 @@ import { createScenario } from './scenario.js';
 import { chamberStock, colonyPoolFood, pileSlotAt } from './food/food-api.js';
 import {
   addChamberForTest,
+  assertFoodStoreInvariants,
   pilesForTest,
   setMealsUntilStarvationForTest,
   setPoolFoodForTest,
@@ -255,6 +256,7 @@ function runSimulation(
   const { world } = buildWorld(seed);
   for (let t = 0; t < ticks; t++) {
     tick(world, commandsPerTick[t] ?? []);
+    assertFoodStoreInvariants(world);
   }
   return serializeWorldState(world);
 }
@@ -667,6 +669,7 @@ describe('Phase 9 determinism (SC 5) — two-colony parity', () => {
     for (let i = 0; i < TICKS; i++) {
       tick(worldA, []);
       tick(worldB, []);
+      assertFoodStoreInvariants(worldA);
     }
 
     expect(serializeWorldState(worldA)).toBe(serializeWorldState(worldB));
@@ -685,6 +688,7 @@ describe('Phase 9 determinism (SC 5) — two-colony parity', () => {
     for (let i = 0; i < 500; i++) {
       tick(worldA, []);
       tick(worldB, []);
+      assertFoodStoreInvariants(worldA);
     }
 
     // Sanity: both colonies still present (no freak ENOENT on colony lookup).

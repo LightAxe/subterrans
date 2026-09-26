@@ -8,12 +8,17 @@ import { describe, it, expect } from 'vitest';
 import {
   CHAMBER_FOOD_HEIGHT,
   CHAMBER_FOOD_WIDTH,
+  FOOD_CHAMBER_CAPACITY,
   FOOD_PICKUP_AMOUNT,
   FOOD_PILE_HARD_CAP,
+  FOOD_PILE_INITIAL_PICKUPS_MAX,
+  FOOD_PILE_INITIAL_PICKUPS_MIN,
   FOOD_STORAGE_CHAMBERS_PER_COLONY_BOUND,
   FOOD_STORE_CAPACITY,
   MAX_COLONIES,
   PLAYER_COLONY_ID,
+  SURFACE_GRID_HEIGHT,
+  SURFACE_GRID_WIDTH,
   UNDERGROUND_CEILING_ROW_Y,
   UNDERGROUND_GRID_HEIGHT,
   UNDERGROUND_GRID_WIDTH,
@@ -21,7 +26,7 @@ import {
 import { CHAMBER_DIMENSIONS } from '../colony/chamber.js';
 import { ChamberType } from '../enums.js';
 import { createScenario } from '../scenario.js';
-import { copyWorldState, createWorldState, type WorldState } from '../types.js';
+import { allocateEntityId, copyWorldState, createWorldState, type WorldState } from '../types.js';
 import { tick } from '../tick.js';
 import { checkPendingChambers } from '../colony/colony-system.js';
 import { ugSet, UndergroundTileState } from '../terrain.js';
@@ -30,6 +35,8 @@ import {
   chamberStock,
   colonyPoolFood,
   createColonyPool,
+  depositIntoChamber,
+  depositIntoPool,
   drainPile,
   foodStoreHasFreeSlot,
   pileAtTile,
@@ -37,9 +44,17 @@ import {
   pileFoodId,
   pileSlotAt,
   spawnPile,
+  topUpOrSpawnCorpsePile,
+  withdrawFood,
 } from './food-api.js';
 import { createFoodStore, findFreeFoodSlot, FoodKind } from './food-store.js';
-import { clearPilesForTest, pilesForTest, setColonyFoodForTest } from './food-test-utils.js';
+import {
+  addChamberForTest,
+  assertFoodStoreInvariants,
+  clearPilesForTest,
+  pilesForTest,
+  setColonyFoodForTest,
+} from './food-test-utils.js';
 
 const P = FOOD_PICKUP_AMOUNT;
 const PC = PLAYER_COLONY_ID as ColonyId;
@@ -230,5 +245,111 @@ describe('#290 PR 2 — a full store (unreachable in a loadable world) refuses, 
     expect(chamberStock(w, fs)).toBe(0);
     setColonyFoodForTest(w, colony, 0, [123]);
     expect(chamberStock(w, fs)).toBe(123);
+  });
+});
+
+describe('#290 PR 2 — store invariants hold under a seeded facade fuzz (plan §2.1)', () => {
+  // A seeded mix of every facade mutation, interleaved with real ticks, checking
+  // `assertFoodStoreInvariants` after every step. Deterministic (xorshift32).
+  function fuzz(seed: number, steps: number): void {
+    const world = createScenario(seed);
+    let s = seed | 1;
+    const rand = (n: number): number => {
+      s ^= s << 13;
+      s ^= s >>> 17;
+      s ^= s << 5;
+      return (s >>> 0) % n;
+    };
+    const colonies = Object.values(world.colonies);
+    let nextChamberX = 20;
+    for (let step = 0; step < steps; step++) {
+      const colony = colonies[rand(colonies.length)]!;
+      switch (rand(9)) {
+        case 0: {
+          const x = rand(SURFACE_GRID_WIDTH);
+          const y = rand(SURFACE_GRID_HEIGHT);
+          if (pileAtTile(world, x, y) < 0) {
+            const pickups =
+              FOOD_PILE_INITIAL_PICKUPS_MIN +
+              rand(FOOD_PILE_INITIAL_PICKUPS_MAX - FOOD_PILE_INITIAL_PICKUPS_MIN + 1);
+            spawnPile(world, allocateEntityId(world), x, y, pickups * P, 0);
+          }
+          break;
+        }
+        case 1:
+          if (pileCount(world) > 0) {
+            drainPile(world, pileSlotAt(world, rand(pileCount(world))), (1 + rand(4)) * P);
+          }
+          break;
+        case 2:
+          topUpOrSpawnCorpsePile(
+            world,
+            rand(SURFACE_GRID_WIDTH),
+            rand(SURFACE_GRID_HEIGHT),
+            (1 + rand(6)) * P,
+          );
+          break;
+        case 3:
+          depositIntoPool(world, colony, rand(4 * P));
+          break;
+        case 4: {
+          const stores = colony.chambers.filter((c) => c.chamberType === ChamberType.FoodStorage);
+          if (stores.length > 0)
+            depositIntoChamber(world, colony, stores[rand(stores.length)]!, rand(8 * P));
+          break;
+        }
+        case 5:
+          withdrawFood(world, colony, 1 + rand(6 * P));
+          break;
+        case 6:
+          if (nextChamberX < 180 && foodStoreHasFreeSlot(world)) {
+            addChamberForTest(world, colony, {
+              chamberId: allocateEntityId(world),
+              chamberType: rand(2) === 0 ? ChamberType.FoodStorage : ChamberType.Nursery,
+              posX: nextChamberX << 8,
+              posY: 40 << 8,
+              width: CHAMBER_FOOD_WIDTH,
+              height: CHAMBER_FOOD_HEIGHT,
+            });
+            nextChamberX += CHAMBER_FOOD_WIDTH;
+          }
+          break;
+        default:
+          tick(world, []);
+      }
+      assertFoodStoreInvariants(world);
+    }
+  }
+
+  it.each([1, 7, 42, 1337])('seed %i: 3000 steps', (seed) => {
+    fuzz(seed, 3000);
+  });
+
+  it('the checker catches a broken pile index, pool link and stock link', () => {
+    const world = createScenario(3);
+    assertFoodStoreInvariants(world);
+    const a = createScenario(3);
+    a.food.surfacePileAt[
+      a.food.tileY[pileSlotAt(a, 0)]! * SURFACE_GRID_WIDTH + a.food.tileX[pileSlotAt(a, 0)]!
+    ] = 0;
+    expect(() => assertFoodStoreInvariants(a)).toThrow(/surfacePileAt/);
+    const b = createScenario(3);
+    b.colonies[PC]!.poolSlot = -1;
+    expect(() => assertFoodStoreInvariants(b)).toThrow(/poolSlot/);
+    const c = createScenario(3);
+    const ch = addChamberForTest(c, c.colonies[PC]!, {
+      chamberId: allocateEntityId(c),
+      chamberType: ChamberType.FoodStorage,
+      posX: 20 << 8,
+      posY: 40 << 8,
+      width: CHAMBER_FOOD_WIDTH,
+      height: CHAMBER_FOOD_HEIGHT,
+    });
+    assertFoodStoreInvariants(c);
+    c.food.amountFp[ch.foodSlot] = FOOD_CHAMBER_CAPACITY + 1;
+    expect(() => assertFoodStoreInvariants(c)).toThrow(/cap/);
+    c.food.amountFp[ch.foodSlot] = 0;
+    ch.foodSlot = -1;
+    expect(() => assertFoodStoreInvariants(c)).toThrow(/foodSlot/);
   });
 });

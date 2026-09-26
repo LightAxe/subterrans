@@ -74,6 +74,7 @@ import { runAIController } from './ai-controller.js';
 import { createScenario } from '../sim/scenario.js';
 import { tick } from '../sim/tick.js';
 import { GameOutcome } from '../sim/game-over.js';
+import { assertFoodStoreInvariants } from '../sim/food/food-test-utils.js';
 import { stampDrainTick, type SimCommand } from '../sim/commands.js';
 import { ENEMY_COLONY_ID } from '../sim/constants.js';
 import { getAIStateForColony } from '../sim/ai-state.js';
@@ -290,7 +291,10 @@ function runReplay(live: LiveRun, log: readonly SimCommand[]): ReplayRun {
     world.commandQueue.splice(0);
     const outcome = tick(world, byTick[t] ?? []);
     if (outcome !== GameOutcome.None && outcomeTick === null) outcomeTick = world.tick;
-    if (wanted.has(world.tick)) checkpoints.push({ tick: world.tick, json: snapshot(world) });
+    if (wanted.has(world.tick)) {
+      assertFoodStoreInvariants(world);
+      checkpoints.push({ tick: world.tick, json: snapshot(world) });
+    }
   }
   return { checkpoints, outcomeTick };
 }
