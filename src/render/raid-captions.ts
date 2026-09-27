@@ -11,8 +11,9 @@
 //                picked up a load in an enemy nest;
 //   - `hauled`   the player colony's `raidTrips` rose: a hauler put its load
 //                into the player's stores (or, #352 Deny, left it by its door);
-//   - `spoiling` (#352) the player is giving a Spoil order and another colony's
-//                `foodLostToRaidsFp` rose: its fighters destroyed a load.
+//   - `spoiling` (#352) the player is giving a Spoil order and its target's (the
+//                colony whose entrance the rally is on) `foodLostToRaidsFp`
+//                rose: its fighters destroyed a load.
 // A Deny raid's news names the order (raidCaptionText).
 //
 // Each is recurring but throttled: after it shows, the same caption stays quiet
@@ -188,7 +189,6 @@ export function nextRaidCaption(
   return null;
 }
 
-/** #352 — the food (fp) every colony but `colonyId` has lost to raids. */
 /** The colony `colonyId`'s Spoil order is on (owner of the rallied enemy entrance), or null. */
 function spoilTarget(world: WorldState, colonyId: ColonyId): ColonyRecord | null {
   if (activeRaidOrder(world, colonyId) !== RaidType.Spoil) return null;
@@ -197,7 +197,11 @@ function spoilTarget(world: WorldState, colonyId: ColonyId): ColonyRecord | null
   if (ent === null) return null;
   for (const key of Object.keys(world.colonies)) {
     const other = world.colonies[Number(key)];
-    if (other !== undefined && other.colonyId !== colonyId && other.entrances.includes(ent)) {
+    if (
+      other !== undefined &&
+      other.colonyId !== colonyId &&
+      other.entrances?.includes(ent) === true
+    ) {
       return other;
     }
   }
