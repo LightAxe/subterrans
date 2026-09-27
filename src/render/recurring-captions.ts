@@ -26,7 +26,8 @@
 // Pure + Phaser-free: GameScene owns the state and passes its UIScene in.
 
 import type { SpiderBehaviorState, WorldState } from '../sim/types.js';
-import { captionForEvent } from './onboarding-captions.js';
+import type { SimEvent } from '../sim/telemetry.js';
+import { captionForEvent, oneShotKeyForEvent, type CaptionKey } from './onboarding-captions.js';
 
 /** The part of UIScene a recurring caption needs. */
 export interface RecurringCaptionSink {
@@ -110,4 +111,38 @@ export function offerOwedRampageCaption(
   if (!offerRecurringCaption(ui, text, screenX, screenY)) return false;
   state.owedSinceTick = -Infinity;
   return true;
+}
+
+/** The part of UIScene an event caption needs: showCaption with the one-shot key. */
+export interface EventCaptionSink extends RecurringCaptionSink {
+  showCaption(text: string, screenX: number, screenY: number, captionKey?: CaptionKey): boolean;
+}
+
+/**
+ * GameScene's caption handling for one sim event, per the event→caption policy
+ * in onboarding-captions.ts:
+ *   - a one-shot event caption (invasion_start) is shown now, with its key, so
+ *     the queue un-marks and re-fires it if it is dropped;
+ *   - the recurring spider_rampage_start warning is NOT shown here. It is marked
+ *     owed and shown by offerOwedRampageCaption once the queue is idle (#350);
+ *     shown here, it would take the pending slot behind an active caption and
+ *     the next one-shot caption would be dropped.
+ * Other events have no caption. captionForEvent marks a one-shot key even with
+ * no UIScene, as GameScene always has.
+ */
+export function routeEventCaption(
+  ev: SimEvent,
+  rampage: RampageCaptionState,
+  ui: EventCaptionSink | null,
+  screenX: number,
+  screenY: number,
+): void {
+  if (ev.type === 'spider_rampage_start') {
+    noteRampageStart(rampage, ev.tick);
+    return;
+  }
+  const key = oneShotKeyForEvent(ev.type);
+  if (key === null) return;
+  const text = captionForEvent(ev.type);
+  if (text !== null && ui !== null) ui.showCaption(text, screenX, screenY, key);
 }

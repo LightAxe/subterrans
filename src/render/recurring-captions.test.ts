@@ -2,7 +2,7 @@
 // warning, raid news) never take the caption queue's pending slot from a
 // one-shot caption, and the rampage warning is owed until it shows.
 
-import { describe, it, expect } from 'vitest';
+import { beforeEach, describe, it, expect } from 'vitest';
 import {
   admitCaption,
   completeCaption,
@@ -10,7 +10,7 @@ import {
   recurringCaptionMayEnter,
   type CaptionQueueState,
 } from './caption-queue.js';
-import type { CaptionKey } from './onboarding-captions.js';
+import { resetCaptions, triggered, type CaptionKey } from './onboarding-captions.js';
 import {
   RAMPAGE_CAPTION_OWED_TICKS,
   createRampageCaptionState,
@@ -18,9 +18,11 @@ import {
   offerOwedRampageCaption,
   offerRecurringCaption,
   resetRampageCaptionState,
+  routeEventCaption,
   type RecurringCaptionSink,
 } from './recurring-captions.js';
 import type { WorldState } from '../sim/types.js';
+import type { SimEvent } from '../sim/telemetry.js';
 
 const RAMPAGE_TEXT = 'The spider has gone hungry and is hunting on the surface.';
 
@@ -197,5 +199,69 @@ describe('spider-rampage warning (#350)', () => {
     resetRampageCaptionState(s);
     expect(offerOwedRampageCaption(s, at(T0), ui, 0, 0)).toBe(false);
     expect(ui.begun).toEqual([]);
+  });
+});
+
+describe('routeEventCaption — GameScene event captions (#350)', () => {
+  beforeEach(() => resetCaptions());
+
+  const rampageStart = (tick: number): SimEvent =>
+    ({
+      tick,
+      type: 'spider_rampage_start',
+      payload: { lairTile: { x: 0, y: 0 }, hungerTicks: 0 },
+    }) as unknown as SimEvent;
+  const invasionStart = (tick: number): SimEvent =>
+    ({
+      tick,
+      type: 'invasion_start',
+      payload: { colonyId: 1, rallyTile: { x: 0, y: 0, grid: 'surface' }, fighterCount: 3 },
+    }) as unknown as SimEvent;
+  const INVASION_TEXT = 'The enemy is attacking your hive.';
+
+  it('a rampage start behind a busy queue is owed, not queued; the one-shot after it keeps its slot', () => {
+    // One GameScene frame: a caption is showing, the sim emitted a rampage start
+    // and then an invasion (a one-shot) in the same batch.
+    const s = createRampageCaptionState();
+    const ui = new FakeUi();
+    ui.showCaption('rally raid', 0, 0, 'rallyRaid'); // active
+    routeEventCaption(rampageStart(T0), s, ui, 0, 0);
+    routeEventCaption(invasionStart(T0), s, ui, 0, 0);
+    // The one-shot was queued, not dropped, and the rampage text is not queued.
+    expect(ui.droppedKeys).toEqual([]);
+    expect(ui.q.pending?.text).toBe(INVASION_TEXT);
+    expect(ui.q.active?.text).toBe('rally raid');
+    expect(triggered.get('aiInvading')).toBe(true);
+    // Rest of the frame (checkQueenStatusForEffects): still busy, still owed.
+    expect(offerOwedRampageCaption(s, at(T0), ui, 0, 0)).toBe(false);
+    ui.finish(); // the invasion caption shows
+    expect(offerOwedRampageCaption(s, at(T0 + 20), ui, 0, 0)).toBe(false);
+    ui.finish(); // idle
+    expect(offerOwedRampageCaption(s, at(T0 + 40), ui, 0, 0)).toBe(true);
+    expect(ui.begun).toEqual(['rally raid', INVASION_TEXT, RAMPAGE_TEXT]);
+  });
+
+  it('a one-shot event caption carries its key, so a drop un-marks it', () => {
+    const ui = new FakeUi();
+    ui.showCaption('a', 0, 0);
+    ui.showCaption('b', 0, 0); // queue full
+    routeEventCaption(invasionStart(T0), createRampageCaptionState(), ui, 0, 0);
+    expect(ui.droppedKeys).toEqual(['aiInvading']);
+  });
+
+  it('with no UIScene, the rampage is still owed and a one-shot is still marked', () => {
+    const s = createRampageCaptionState();
+    routeEventCaption(rampageStart(T0), s, null, 0, 0);
+    routeEventCaption(invasionStart(T0), s, null, 0, 0);
+    expect(s.owedSinceTick).toBe(T0);
+    expect(triggered.get('aiInvading')).toBe(true);
+  });
+
+  it('events without a caption do nothing', () => {
+    const s = createRampageCaptionState();
+    const ui = new FakeUi();
+    routeEventCaption({ tick: T0, type: 'spider_rampage_end' } as unknown as SimEvent, s, ui, 0, 0);
+    expect(ui.begun).toEqual([]);
+    expect(s.owedSinceTick).toBe(-Infinity);
   });
 });

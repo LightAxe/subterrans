@@ -195,18 +195,12 @@ import {
 } from './raid-captions.js';
 import {
   createRampageCaptionState,
-  noteRampageStart,
   offerOwedRampageCaption,
   offerRecurringCaption,
   resetRampageCaptionState,
+  routeEventCaption,
 } from './recurring-captions.js';
-import {
-  captionForEvent,
-  checkAndTrigger,
-  oneShotKeyForEvent,
-  resetCaptions,
-  type CaptionKey,
-} from './onboarding-captions.js';
+import { checkAndTrigger, resetCaptions, type CaptionKey } from './onboarding-captions.js';
 // Stage 3b controls rework (issue #18, #3) — first-use navigation hints.
 import {
   triggerReactiveHint,
@@ -1502,6 +1496,12 @@ export class GameScene extends Phaser.Scene {
       if (!ev || ev.tick <= this.lastProcessedEventTick) continue;
       if (ev.tick > maxTickSeen) maxTickSeen = ev.tick;
 
+      // The event's caption, if it has one (recurring-captions.ts): a one-shot
+      // shows through the queue now; the recurring spider-rampage warning is only
+      // marked owed (#350) and shown by checkQueenStatusForEffects once the
+      // caption queue is idle, so it never takes a one-shot caption's slot.
+      routeEventCaption(ev, this.rampageCaption, uiScene, this.layout.w / 2, 60);
+
       if (ev.type === 'invasion_start') {
         // Screen-edge flash in the direction of the invasion entrance.
         const playerColony = this.world.colonies[PLAYER_COLONY_ID];
@@ -1521,25 +1521,7 @@ export class GameScene extends Phaser.Scene {
         } else {
           uiScene?.triggerScreenEdgeFlash('right');
         }
-        // Caption #7: AI invasion (one-shot, via the event→caption policy). Pass
-        // the one-shot key so a dropped caption un-marks and re-fires.
-        const captionText = captionForEvent(ev.type);
-        if (captionText && uiScene) {
-          uiScene.showCaption(
-            captionText,
-            this.layout.w / 2,
-            60,
-            oneShotKeyForEvent(ev.type) ?? undefined,
-          );
-        }
-      }
-
-      if (ev.type === 'spider_rampage_start') {
-        // Spider rampage warning, on EVERY rampage (recurring, no one-shot key).
-        // #350: owed here, shown by checkQueenStatusForEffects once the caption
-        // queue is idle (recurring-captions.ts), so it never takes a one-shot
-        // caption's slot.
-        noteRampageStart(this.rampageCaption, ev.tick);
+        // Caption #7 (AI invasion, one-shot) is shown by routeEventCaption above.
       }
 
       if (ev.type === 'ai_state_transition' && ev.payload.to === 'Invading') {
