@@ -46,7 +46,10 @@ import {
   pickNearestHostileUnderground,
   fighterBarredFromForeignShaft,
   fighterBarredFromOwnShaft,
+  colonyRecalledItsFighters,
   fighterWalksHomeToEat,
+  invaderExitsByEntranceField,
+  invaderTakesReachableExit,
   sentryHoldsBelow,
   sentryPassesThroughFriends,
   fighterDefendsTunnels,
@@ -75,10 +78,12 @@ import {
   unpackStepDy,
 } from './ant-motion.js';
 import { collectAliveQueenIds, moveQueens } from './ant-queens.js';
+import { nurseRoutesHomeByEntranceField } from './ant-nursing.js';
 import {
   holdAlarmedCivilianAtShaft,
   idleMusterPassesThroughFriends,
   idleMustersHome,
+  idleWalksHome,
 } from './idle-reserve.js';
 import { clearRecentTiles, isRecentTile, pushRecentTile } from './ant-store.js';
 import { fighterIsHauling, fighterIsLooting, looterStepDir } from './ant-raid.js';
@@ -579,6 +584,9 @@ export function tickAntMovement(
         task === AntTask.Foraging &&
         (subTaskHere === ForagingSubState.CarryingFood ||
           subTaskHere === ForagingSubState.ReturningToNest);
+      // #343 (V55): so does a surface nurse walking to its nest (the policy lives
+      // in ant-nursing: nurseRoutesHomeByEntranceField).
+      const isRoutedNurse = nurseRoutesHomeByEntranceField(world, id);
       if (
         !stepped &&
         zone === Zone.Surface &&
@@ -587,7 +595,7 @@ export function tickAntMovement(
         // surface BFS. A fleeing ant with an explicit safe-entrance target
         // (targetPosX!==-1, the multi-entrance camped-nearest case) is handled by
         // the flee-dash branch above and never reaches here (#209 PR A, Codex P2).
-        (isHomeBoundForager || fleePhase === 0) &&
+        (isHomeBoundForager || fleePhase === 0 || isRoutedNurse) &&
         entranceFlowFields !== undefined
       ) {
         const sDir = surfaceEntranceFieldDir(entranceFlowFields, ants.colonyId[id]!, posX, posY);
@@ -810,7 +818,14 @@ export function tickAntMovement(
       // looter to the hostile hunt, as before V52.
       let raidDir = -2;
       const hauling = isForeignGridUnderground && fighterIsHauling(world, id);
-      if (hauling && entranceFlowFields !== undefined) {
+      // #346 (V55): a recalled invader (its colony's rally cleared) walks out the
+      // same way: by the nest's entrance field, else the reachable-exit BFS below
+      // (the policy lives in ant-combat-targeting: invaderExitsByEntranceField).
+      if (
+        isForeignGridUnderground &&
+        invaderExitsByEntranceField(world, id, hauling) &&
+        entranceFlowFields !== undefined
+      ) {
         const field = entranceFlowFields.fields[gridColonyId];
         const grid = world.undergroundGrids[gridColonyId];
         if (field && grid) {
@@ -836,9 +851,8 @@ export function tickAntMovement(
       if (fieldStepped) {
         // Stepped above.
       } else if (isForeignGridUnderground) {
-        const ownColony = world.colonies[ownColonyId];
-        // null colony is treated as NOT recalled (matches isRecallingFromForeign guard
-        // in skipAscent) — missing colony record is a defensive fallback, not a recall.
+        // colonyRecalledItsFighters (shared with the isRecallingFromForeign guard in
+        // skipAscent): a null colony is NOT recalled — a defensive fallback.
         // V25 (#174): recall keys on the rally point alone — a cleared rally means
         // "come home". (#247: the pre-V25 fight===0 recall branch was reaped — MIN=V30 —
         // so this is unconditional now.) Must stay in lockstep with the ascent
@@ -847,7 +861,7 @@ export function tickAntMovement(
         // V51 (#290 PR 4, D11): a hungry invader step 10c sent home to eat leaves
         // the same way (fighterWalksHomeToEat is false below V51).
         const isRecalling =
-          (ownColony != null && ownColony.rallyPoint == null) ||
+          colonyRecalledItsFighters(world, ownColonyId) ||
           fighterWalksHomeToEat(world, id) ||
           hauling;
 
@@ -878,14 +892,16 @@ export function tickAntMovement(
             const exitGrid = world.undergroundGrids[gridColonyId];
             // V52 (#290 PR 5): a hauler only gets here off its nest's entrance
             // flow field (above); it takes the same reachable-exit step.
-            if (exitGrid !== undefined && (fighterWalksHomeToEat(world, id) || hauling)) {
+            // #346 (V55): so does a recalled invader (rally cleared) off that field.
+            // Which invaders take it: invaderTakesReachableExit.
+            if (exitGrid !== undefined && invaderTakesReachableExit(world, id, hauling)) {
               // V51 (#290 PR 4, D11): a hungry invader walks out by the
               // wall-aware BFS step (hungryExitStep), toward the first OPEN
               // entrance of this nest it can actually reach, so neither a bend
               // in the tunnel nor a nearer, unconnected stub shaft can pin it
-              // until it starves. (The plain recall below keeps its
-              // straight-line step at the nearest entrance: pre-V51 behaviour
-              // is unchanged.)
+              // until it starves. Before V55 a plain recalled invader (fed, not
+              // hauling) took the straight-line step below at the nearest
+              // entrance, and a U-bend in the tunnel pinned it (#346).
               const step = hungryExitStep(
                 world,
                 exitGrid,
@@ -1027,8 +1043,16 @@ export function tickAntMovement(
       // #322 (V49): an idle worker mustering home under the alarm walks every
       // tick by the surface entrance flow field (obstacle-aware), as a homebound
       // forager does; off the field it keeps the straight-line step.
+      // #343 (V55): so does an idle worker walking back from beyond home range
+      // (idleWalksHome), at the idle saunter: on off-ticks it holds, as the mill
+      // does. At home it mills, straight-line, as before.
       let musterStepped = false;
-      if (entranceFlowFields !== undefined && idleMustersHome(world, id)) {
+      const millTick = world.tick % IDLE_MILL_TICK_DIVISOR === 0;
+      if (
+        entranceFlowFields !== undefined &&
+        (idleMustersHome(world, id) ||
+          (millTick && idleWalksHome(world, id, surfaceDangerByColony[ants.colonyId[id]!])))
+      ) {
         const sDir = surfaceEntranceFieldDir(
           entranceFlowFields,
           ants.colonyId[id]!,
@@ -1041,7 +1065,7 @@ export function tickAntMovement(
           musterStepped = true;
         }
       }
-      if (!musterStepped && world.tick % IDLE_MILL_TICK_DIVISOR === 0) {
+      if (!musterStepped && millTick) {
         const posX = ants.posX[id]!;
         const posY = ants.posY[id]!;
         const step = pickCardinalStep(
@@ -1719,10 +1743,9 @@ export function tickAntMovement(
           // MIN=V30 — so this is unconditional now.) Must match the underground
           // recall-navigation `isRecalling` predicate in the recalled-invader block
           // earlier in tickAntMovement.
-          const ownColonyForAscent = world.colonies[ants.colonyId[id]!];
           const isRecallingFromForeign =
             !inOwnGrid &&
-            ((ownColonyForAscent != null && ownColonyForAscent.rallyPoint == null) ||
+            (colonyRecalledItsFighters(world, ants.colonyId[id]!) ||
               fighterWalksHomeToEat(world, id));
           // V52 (#290 PR 5): a raider hauling loot out of the enemy nest climbs out.
           const skipAscent =
@@ -1799,7 +1822,8 @@ export function tickAntMovement(
 // ---------------------------------------------------------------------------
 /**
  * V51 (#290 PR 4, D11) — the step a hungry invader at (tileX, tileY) in a foreign
- * nest takes toward an exit: the nest's OPEN entrances in the recall order
+ * nest takes toward an exit (from V52 also a hauler off its field, from V55 #346
+ * also a recalled invader off it): the nest's OPEN entrances in the recall order
  * (nearest by |dx| + y, ties to the lower index), the first one whose shaft top
  * (column, y 0) the wall-aware BFS (pickInvaderUndergroundStep) can reach. An
  * "open" entrance only needs its top two shaft tiles dug, so a nearer stub need

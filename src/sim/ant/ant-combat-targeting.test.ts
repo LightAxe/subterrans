@@ -10,10 +10,17 @@ import {
   sentryPassesThroughFriends,
 } from './ant-system.js';
 import {
+  invaderExitsByEntranceField,
+  invaderIsRecalledV55,
+  invaderTakesReachableExit,
+} from './ant-combat-targeting.js';
+import {
   createWorldState,
   allocateEntityId,
   SIM_VERSION_V17_COMBAT_AGGRO,
   SIM_VERSION_V23_SPIDER_AGGRO,
+  SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES,
+  SIM_VERSION_V55_ROUTED_HOMING,
 } from '../types.js';
 import { SurfaceMovementEffect } from '../surface-features.js';
 import { SURFACE_GRID_WIDTH } from '../constants.js';
@@ -1790,5 +1797,86 @@ describe('pickInvaderUndergroundStep — wall-aware BFS invader step', () => {
     expect(x).toBe(2);
     expect(y).toBe(1);
     expect(steps).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #346 (V55) — the recalled-invader routing policy (tickAntMovement orchestrates
+// it; the tick-level behaviour is pinned in src/sim/routed-homing.test.ts).
+// ---------------------------------------------------------------------------
+
+describe('#346 (V55) recalled-invader routing policy', () => {
+  const ENEMY = 2;
+
+  /** A fighter of COLONY_ID below ground in ENEMY's nest; its colony's rally cleared. */
+  function setupInvader(simVersion: number): {
+    world: WorldState;
+    id: number;
+    colony: ColonyRecord;
+  } {
+    const world = createWorldState(42, MAX_TEST_ENTITIES);
+    world.simVersion = simVersion;
+    const colony = createColonyRecord(COLONY_ID, 0);
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    world.colonies[COLONY_ID] = colony;
+    const enemy = createColonyRecord(ENEMY, 0);
+    enemy.entrances = [];
+    world.colonies[ENEMY] = enemy;
+    const id = allocateEntityId(world);
+    initAnt(world.ants, id, {
+      colonyId: COLONY_ID,
+      posX: 3 << FP_SHIFT,
+      posY: 4 << FP_SHIFT,
+      task: AntTask.Fighting,
+      subTask: FightingSubState.MovingToRally,
+    });
+    world.ants.zone[id] = Zone.Underground;
+    world.ants.currentGridColonyId[id] = ENEMY;
+    return { world, id, colony };
+  }
+
+  it('invaderIsRecalledV55: true for an invader in a foreign nest whose rally is cleared (V55)', () => {
+    const { world, id } = setupInvader(SIM_VERSION_V55_ROUTED_HOMING);
+    expect(invaderIsRecalledV55(world, id)).toBe(true);
+    expect(invaderExitsByEntranceField(world, id, false)).toBe(true);
+  });
+
+  it('invaderIsRecalledV55: false below V55, with a rally set, at home, on the surface, or with no colony record', () => {
+    const v54 = setupInvader(SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES);
+    expect(invaderIsRecalledV55(v54.world, v54.id)).toBe(false);
+
+    const rallied = setupInvader(SIM_VERSION_V55_ROUTED_HOMING);
+    rallied.colony.rallyPoint = { tileX: 5, tileY: 5 };
+    expect(invaderIsRecalledV55(rallied.world, rallied.id)).toBe(false);
+
+    const home = setupInvader(SIM_VERSION_V55_ROUTED_HOMING);
+    home.world.ants.currentGridColonyId[home.id] = COLONY_ID;
+    expect(invaderIsRecalledV55(home.world, home.id)).toBe(false);
+
+    const surface = setupInvader(SIM_VERSION_V55_ROUTED_HOMING);
+    surface.world.ants.zone[surface.id] = Zone.Surface;
+    expect(invaderIsRecalledV55(surface.world, surface.id)).toBe(false);
+
+    const orphan = setupInvader(SIM_VERSION_V55_ROUTED_HOMING);
+    delete orphan.world.colonies[COLONY_ID];
+    expect(invaderIsRecalledV55(orphan.world, orphan.id)).toBe(false);
+  });
+
+  it('invaderExitsByEntranceField: a hauler always; a rallied or pre-V55 invader not', () => {
+    const v54 = setupInvader(SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES);
+    expect(invaderExitsByEntranceField(v54.world, v54.id, false)).toBe(false);
+    expect(invaderExitsByEntranceField(v54.world, v54.id, true)).toBe(true);
+    const rallied = setupInvader(SIM_VERSION_V55_ROUTED_HOMING);
+    rallied.colony.rallyPoint = { tileX: 5, tileY: 5 };
+    expect(invaderExitsByEntranceField(rallied.world, rallied.id, false)).toBe(false);
+  });
+
+  it('invaderTakesReachableExit: every invader from V55; below it only a hauler (or one sent home to eat)', () => {
+    const v55 = setupInvader(SIM_VERSION_V55_ROUTED_HOMING);
+    expect(invaderTakesReachableExit(v55.world, v55.id, false)).toBe(true);
+    const v54 = setupInvader(SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES);
+    expect(invaderTakesReachableExit(v54.world, v54.id, false)).toBe(false);
+    expect(invaderTakesReachableExit(v54.world, v54.id, true)).toBe(true);
   });
 });
