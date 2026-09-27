@@ -1149,16 +1149,6 @@ export const SPIDER_FEEDING_TICKS = 600 as const;
  */
 export const SPIDER_HUNT_INTERVAL_TICKS = 1200 as const;
 
-/**
- * S3 legacy — DEAD in the sim and in render. It was the pre-V23 "hunger before
- * Rampaging" cap; the sim's real threshold is SPIDER_HUNGER_THRESHOLD_TICKS
- * (V23, spider.ts), and the render hunger ring now divides by that too (#290 D9).
- * Kept only because spider / spider-tiebreak / determinism tests still use it as a
- * "well past hungry" fixture value; delete it once those tests stop importing it
- * (#290 PR 3). Tier triplet [Easy, Normal, Hard]: 2700 / 1800 / 1350 ticks.
- */
-export const SPIDER_HUNGER_MAX_TICKS = [2700, 1800, 1350] as const;
-
 /** S3 — Minimum fighters on spider's tile + priority required to activate swarm bonus. */
 export const SPIDER_SWARM_FIGHTER_THRESHOLD = 6 as const;
 

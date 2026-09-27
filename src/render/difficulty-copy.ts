@@ -19,7 +19,7 @@
 // (AI_RECOVERY_DURATION_TICKS is per-tier too, but identical at every tier, so it
 // is not a differentiator a player picks a tier for and is not in the line. The
 // spider hunger ring's denominator is SPIDER_HUNGER_THRESHOLD_TICKS itself, the
-// same knob listed above; SPIDER_HUNGER_MAX_TICKS is dead outside tests.)
+// same knob listed above.)
 //
 // The fighter counts are NECESSARY, not sufficient — WarFooting and Invading
 // also want a food-stock fraction and a minimum age (ai-state.ts) — so the line

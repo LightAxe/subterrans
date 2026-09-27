@@ -473,7 +473,6 @@ export function tickAntMovement(
               DIR_DX[dir]!,
               DIR_DY[dir]!,
               task,
-              world.simVersion,
               cardinalStep,
             );
             dx = cardinalStep.dx;
@@ -541,7 +540,6 @@ export function tickAntMovement(
               DIR_DX[dir]!,
               DIR_DY[dir]!,
               task,
-              world.simVersion,
               cardinalStep,
             );
             dx = cardinalStep.dx;

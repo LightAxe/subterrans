@@ -121,10 +121,8 @@ export function diagonalizeFlowStep(
   cardDx: number,
   cardDy: number,
   task: AntTask,
-  _simVersion: number,
   out: CardinalStep,
 ): void {
-  void _simVersion;
   out.dx = cardDx;
   out.dy = cardDy;
   const nextX = tileX + cardDx;
@@ -388,8 +386,8 @@ export function pickSurfaceDetour(
    * DANGER_DETOUR_PENALTY score hit, so a wall detour softly prefers a clean tile
    * over the spider-wake tile the sampler was avoiding (a dangerous tile still
    * beats no detour, and pocket-escape still wins). Danger read only, no RNG.
-   * Passed only by the surface SearchingFood-forager call site at simVersion >=
-   * V36; `undefined` (queen / pre-V36 / danger-free) = byte-identical legacy pick.
+   * Passed only by the surface SearchingFood-forager call site (A1, V36);
+   * `undefined` (queen / danger-free) = the plain pick.
    */
   dangerGrid?: PheromoneGrid,
 ): { dx: number; dy: number } {

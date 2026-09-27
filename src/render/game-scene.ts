@@ -156,7 +156,6 @@ import {
 } from '../input/camera-input.js';
 import { enqueueCommand } from '../input/command-queue.js';
 import { handleSetRallyPoint } from '../input/surface-input.js';
-import { SIM_VERSION_V42_COLONY_ALARM } from '../sim/types.js';
 import type { SimCommand } from '../sim/commands.js';
 import { registerGestureArbiter, type GestureArbiter } from '../input/gesture-arbiter.js';
 import { thresholdLogicalPx, DRAG_THRESHOLD_PX } from '../input/gesture.js';
@@ -1024,10 +1023,6 @@ export class GameScene extends Phaser.Scene {
       if (!this.canAcceptWorldHotkey()) return;
       const world = this.world;
       if (world === undefined) return;
-      // C1 — the alarm is V42-gated in tick(), so on a continued V30..V41 save
-      // the command would be dropped silently. Bail here too, so the hotkey and
-      // the (hidden) button agree about being unavailable.
-      if (world.simVersion < SIM_VERSION_V42_COLONY_ALARM) return;
       // Toggle against the PROJECTED colony (live + queued), not the live one.
       // A bare user pause leaves hotkeyPhase() === 'playing', so R is accepted
       // while paused — and there the loop is a no-op, the queue never drains and

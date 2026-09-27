@@ -398,7 +398,6 @@ import type {
   PlaceChamberCommand,
   SetColonyAlarmCommand,
 } from '../sim/commands.js';
-import { SIM_VERSION_V42_COLONY_ALARM } from '../sim/types.js';
 import { glyphFor } from './input-glyphs.js';
 import { enqueueCommand } from '../input/command-queue.js';
 import { KeyEventDedupe } from './key-event-dedupe.js';
@@ -1569,7 +1568,6 @@ export class UIScene extends Phaser.Scene {
     // reads as on-then-off would leave the alarm ON. The projected world aliases
     // the live colony when the queue is empty, so this is the same value when
     // unpaused. (Same class as effectiveSpiderPriority / effectiveRallyState.)
-    const alarmSupported = world.simVersion >= SIM_VERSION_V42_COLONY_ALARM;
     const alarmGlyph = glyphFor('ALARM_TOGGLE', 'keyboard');
     const projectedAlarmColony = this.getProjectedWorld().colonies[PLAYER_COLONY_ID];
     // Two DIFFERENT reads on purpose:
@@ -1583,20 +1581,18 @@ export class UIScene extends Phaser.Scene {
     //              paused world where the sim never ran.
     const alarmOn = (projectedAlarmColony ?? colony)?.alarmActive === true;
     const alarmLive = colony?.alarmActive === true;
-    if (alarmSupported) {
-      this.gfx.fillStyle(alarmOn ? 0x7a1f1f : 0x333333, 1);
-      this.gfx.fillRect(
-        this.hud.ALARM_TOGGLE.x,
-        this.hud.ALARM_TOGGLE.y,
-        this.hud.ALARM_TOGGLE.w,
-        this.hud.ALARM_TOGGLE.h,
-      );
-    }
+    this.gfx.fillStyle(alarmOn ? 0x7a1f1f : 0x333333, 1);
+    this.gfx.fillRect(
+      this.hud.ALARM_TOGGLE.x,
+      this.hud.ALARM_TOGGLE.y,
+      this.hud.ALARM_TOGGLE.w,
+      this.hud.ALARM_TOGGLE.h,
+    );
     // Both labels must fit hud.ALARM_TOGGLE: the label is pinned to the rect
     // (addHudToggleLabel), so a longer one is clipped rather than spilled.
     // tests/hud-button-geometry.spec.ts measures both in the real renderer.
     this.alarmToggleText.setText(alarmOn ? `All clear ${alarmGlyph}` : `Alarm ${alarmGlyph}`);
-    this.alarmToggleText.setVisible(alarmSupported);
+    this.alarmToggleText.setVisible(true);
     setAlarmActive(alarmLive);
 
     this.undergroundLabelText.setText(
@@ -1943,13 +1939,7 @@ export class UIScene extends Phaser.Scene {
       this.cancelTooltip();
       return;
     }
-    const target = tooltipTargetAt(
-      pointer.x,
-      pointer.y,
-      this.viewState.activeView,
-      this.hud,
-      (this.getWorld()?.simVersion ?? 0) >= SIM_VERSION_V42_COLONY_ALARM,
-    );
+    const target = tooltipTargetAt(pointer.x, pointer.y, this.viewState.activeView, this.hud);
     if (sameTooltipTarget(target, this.hoverTarget)) return; // unchanged — let timers run
     this.hoverTarget = target;
     this.clearTooltipShowTimer();
@@ -2169,8 +2159,6 @@ export class UIScene extends Phaser.Scene {
   private toggleColonyAlarm(): void {
     const world = this.getWorld();
     if (world === undefined) return;
-    // Inert below V42 (tick() drops the command); the button is hidden there.
-    if (world.simVersion < SIM_VERSION_V42_COLONY_ALARM) return;
     // Toggle against the PROJECTED colony so a second click while paused
     // inverts the QUEUED value rather than re-sending the stale live one.
     const colony =
