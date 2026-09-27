@@ -169,8 +169,8 @@ function spawnSurfaceWorker(world: WorldState, colonyId: ColonyId, x: number, y:
 }
 
 describe('V54 (#337) — timed-out rampage rotates entrances', () => {
-  it('LATEST is V54', () => {
-    expect(LATEST_SIM_VERSION).toBe(SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES);
+  it('LATEST is V54 or later', () => {
+    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES);
   });
 
   it('a timeout records the camped entrance, and the next rampage camps a different one (pinned)', () => {

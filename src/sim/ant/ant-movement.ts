@@ -40,7 +40,11 @@ import {
   surfaceGoalDistance,
 } from '../surface-routing.js';
 import { UndergroundTileState, Zone, ugGet, type UndergroundGrid } from '../terrain.js';
-import { SIM_VERSION_V52_RAIDING, type WorldState } from '../types.js';
+import {
+  SIM_VERSION_V52_RAIDING,
+  SIM_VERSION_V55_ROUTED_HOMING,
+  type WorldState,
+} from '../types.js';
 import {
   pickInvaderUndergroundStep,
   pickNearestHostileUnderground,
@@ -79,6 +83,7 @@ import {
   holdAlarmedCivilianAtShaft,
   idleMusterPassesThroughFriends,
   idleMustersHome,
+  idleWalksHome,
 } from './idle-reserve.js';
 import { clearRecentTiles, isRecentTile, pushRecentTile } from './ant-store.js';
 import { fighterIsHauling, fighterIsLooting, looterStepDir } from './ant-raid.js';
@@ -579,6 +584,12 @@ export function tickAntMovement(
         task === AntTask.Foraging &&
         (subTaskHere === ForagingSubState.CarryingFood ||
           subTaskHere === ForagingSubState.ReturningToNest);
+      // #343 (V55): so does a surface nurse walking to its nest. Its target is
+      // the nearest OPEN entrance (needsTransition above), the field's own
+      // sources, so the field cannot send it anywhere else; before V55 it stepped
+      // in a straight line and an obstacle in the way pinned it for good.
+      const isRoutedNurse =
+        task === AntTask.Nursing && world.simVersion >= SIM_VERSION_V55_ROUTED_HOMING;
       if (
         !stepped &&
         zone === Zone.Surface &&
@@ -587,7 +598,7 @@ export function tickAntMovement(
         // surface BFS. A fleeing ant with an explicit safe-entrance target
         // (targetPosX!==-1, the multi-entrance camped-nearest case) is handled by
         // the flee-dash branch above and never reaches here (#209 PR A, Codex P2).
-        (isHomeBoundForager || fleePhase === 0) &&
+        (isHomeBoundForager || fleePhase === 0 || isRoutedNurse) &&
         entranceFlowFields !== undefined
       ) {
         const sDir = surfaceEntranceFieldDir(entranceFlowFields, ants.colonyId[id]!, posX, posY);
@@ -878,14 +889,20 @@ export function tickAntMovement(
             const exitGrid = world.undergroundGrids[gridColonyId];
             // V52 (#290 PR 5): a hauler only gets here off its nest's entrance
             // flow field (above); it takes the same reachable-exit step.
-            if (exitGrid !== undefined && (fighterWalksHomeToEat(world, id) || hauling)) {
+            // #346 (V55): so does every recalled invader (rally cleared).
+            if (
+              exitGrid !== undefined &&
+              (fighterWalksHomeToEat(world, id) ||
+                hauling ||
+                world.simVersion >= SIM_VERSION_V55_ROUTED_HOMING)
+            ) {
               // V51 (#290 PR 4, D11): a hungry invader walks out by the
               // wall-aware BFS step (hungryExitStep), toward the first OPEN
               // entrance of this nest it can actually reach, so neither a bend
               // in the tunnel nor a nearer, unconnected stub shaft can pin it
-              // until it starves. (The plain recall below keeps its
-              // straight-line step at the nearest entrance: pre-V51 behaviour
-              // is unchanged.)
+              // until it starves. Before V55 a plain recalled invader (fed, not
+              // hauling) took the straight-line step below at the nearest
+              // entrance, and a U-bend in the tunnel pinned it (#346).
               const step = hungryExitStep(
                 world,
                 exitGrid,
@@ -1027,8 +1044,15 @@ export function tickAntMovement(
       // #322 (V49): an idle worker mustering home under the alarm walks every
       // tick by the surface entrance flow field (obstacle-aware), as a homebound
       // forager does; off the field it keeps the straight-line step.
+      // #343 (V55): so does an idle worker walking back from beyond home range
+      // (idleWalksHome), at the idle saunter: on off-ticks it holds, as the mill
+      // does. At home it mills, straight-line, as before.
       let musterStepped = false;
-      if (entranceFlowFields !== undefined && idleMustersHome(world, id)) {
+      const millTick = world.tick % IDLE_MILL_TICK_DIVISOR === 0;
+      if (
+        entranceFlowFields !== undefined &&
+        (idleMustersHome(world, id) || (millTick && idleWalksHome(world, id)))
+      ) {
         const sDir = surfaceEntranceFieldDir(
           entranceFlowFields,
           ants.colonyId[id]!,
@@ -1041,7 +1065,7 @@ export function tickAntMovement(
           musterStepped = true;
         }
       }
-      if (!musterStepped && world.tick % IDLE_MILL_TICK_DIVISOR === 0) {
+      if (!musterStepped && millTick) {
         const posX = ants.posX[id]!;
         const posY = ants.posY[id]!;
         const step = pickCardinalStep(

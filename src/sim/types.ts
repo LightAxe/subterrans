@@ -1176,7 +1176,31 @@ export const SIM_VERSION_V53_NO_LOOT_WHEN_FULL = 53 as const;
  * stay -1). MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES = 54 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES;
+
+/**
+ * #343 + #346 (V55) — ants walking home route round what is in the way.
+ *
+ * Up to V54 three kinds of walker stepped in a straight line at their goal, so an
+ * obstacle (or a bend) between them and it pinned them for good; since V51
+ * workers eat, and a worker pinned away from home starves. From V55:
+ *   - #343: a surface NURSE walking to its nearest open entrance steps by its
+ *     colony's surface entrance flow field (obstacle-aware), as a homebound
+ *     forager does (and as V48 sentries and V49 musterers do).
+ *   - #343: a surface IDLE worker walking back from beyond home range
+ *     (`idleWalksHome`, idle-reserve.ts: not at home, not fleeing, its colony not
+ *     under the alarm, not dodging the spider's reticle, and no open entrance of
+ *     its colony camped) steps by the same field, at the idle saunter
+ *     (IDLE_MILL_TICK_DIVISOR). At home it mills as before.
+ *   - #346: a RECALLED invader (its colony's rally cleared) inside an enemy nest
+ *     walks out by the wall-aware BFS step (`hungryExitStep`) toward the first
+ *     open entrance of that nest it can reach, as V51 hungry invaders and V52
+ *     haulers already do, instead of a straight line at the nearest shaft.
+ * No new serialized field, command, world.rngState draw, entity-ID advance or
+ * tick-order change. A V54 save replays byte-identically. MIN_ACCEPTED is
+ * UNCHANGED (V50).
+ */
+export const SIM_VERSION_V55_ROUTED_HOMING = 55 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V55_ROUTED_HOMING;
 
 /**
  * S2 — AI colony state machine states.

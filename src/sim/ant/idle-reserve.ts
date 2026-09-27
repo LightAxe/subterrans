@@ -20,7 +20,7 @@
 // pheromone grids, ant positions, and `fleeShelterUntilTick`. The mill wander is
 // a hash of (tick-bucket ^ antId) — no world.rngState draw.
 
-import type { WorldState } from '../types.js';
+import { SIM_VERSION_V55_ROUTED_HOMING, type WorldState } from '../types.js';
 import { isInChamberFootprint, type ColonyId, type ColonyRecord } from '../colony/colony-store.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
@@ -28,6 +28,7 @@ import { phGet, pheromoneGridKey, type PheromoneGrid } from '../pheromone/pherom
 import { pickOpenEntranceAtColumn, type NestEntrance } from '../colony/entrance.js';
 import type { UndergroundGrid } from '../terrain.js';
 import { hash32 } from '../hash.js';
+import { antIsAtHome } from '../hunger.js';
 import {
   FLEE_THRESHOLD,
   SHELTER_COOLDOWN_TICKS,
@@ -914,6 +915,53 @@ export function idleMustersHome(world: WorldState, id: number): boolean {
     if (ent.isOpen && ent.surfaceTileX === tileX && ent.surfaceTileY === tileY) return true;
   }
   return false;
+}
+
+/**
+ * #343 (V55): an idle surface worker walking back from beyond home range steps by
+ * its colony's surface entrance flow field (obstacle-aware), as a homebound
+ * forager, a V48 sentry and a V49 musterer do. Before V55 it stepped in a straight
+ * line at its mill target, so an obstacle between it and home pinned it there,
+ * out of reach of the colony's food, until it starved.
+ *
+ * True only for a worker whose ordinary mill step (targetPosX set by step 15b's
+ * setMillTarget) is taking it home — every one of these holds:
+ *  - Idle, on the surface, not fleeing, with a target;
+ *  - its colony is not under the alarm (a musterer has its own route,
+ *    idleMustersHome);
+ *  - not within the spider's scatter radius (setMillTarget keeps the scatter
+ *    target there, and the ant must keep dodging, not walk home);
+ *  - beyond home range (antIsAtHome false) — at home it mills as before;
+ *  - no open entrance of its colony reads real danger. The field leads to the
+ *    NEAREST open entrance, which may be a camped one the mill avoids
+ *    (setMillTarget aims at the nearest SAFE entrance), so while any entrance is
+ *    camped the worker keeps its straight-line mill step.
+ * Always false below V55.
+ */
+export function idleWalksHome(world: WorldState, id: number): boolean {
+  if (world.simVersion < SIM_VERSION_V55_ROUTED_HOMING) return false;
+  const ants = world.ants;
+  if (ants.task[id] !== AntTask.Idle || ants.zone[id] !== ZONE_SURFACE) return false;
+  if (ants.fleeShelterUntilTick[id] !== -1 || ants.targetPosX[id] === -1) return false;
+  const colonyId = ants.colonyId[id]!;
+  const colony = world.colonies[colonyId as ColonyId];
+  if (colony === undefined || colony.alarmActive === true) return false;
+  const reticle = world.scatterReticleTile;
+  if (reticle !== null) {
+    const manh =
+      Math.abs((ants.posX[id]! >> FP_SHIFT) - reticle.x) +
+      Math.abs((ants.posY[id]! >> FP_SHIFT) - reticle.y);
+    if (manh <= SPIDER_SCATTER_RADIUS_TILES) return false;
+  }
+  if (antIsAtHome(world, id)) return false;
+  const entrances: readonly NestEntrance[] = colony.entrances ?? NO_ENTRANCES;
+  const dangerGrid =
+    world.pheromoneGrids[pheromoneGridKey(colonyId, PheromoneType.DangerTrail, 'surface')];
+  for (let e = 0; e < entrances.length; e++) {
+    const ent = entrances[e]!;
+    if (ent.isOpen && entranceDanger(dangerGrid, ent) >= FLEE_THRESHOLD) return false;
+  }
+  return true;
 }
 
 /** DangerTrail at an entrance's surface tile (0 if no grid). Guards the flee gate. */

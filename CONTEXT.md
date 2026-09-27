@@ -102,6 +102,10 @@ _Avoid_: **guard**, **garrison**.
 A worker on the `Nursing` task, tending brood at the Nursery (auto-allocated, not
 set by the player). Since **#299 (simVersion V40)** a colony below
 `NURSE_MIN_WORKERS` living workers assigns no nurses and releases the ones it has.
+Since **#343 (simVersion V55)** a nurse walking to its nest across the surface, and an
+idle worker walking back from beyond home range, route round obstacles on the colony's
+surface entrance flow field instead of stepping straight at the entrance (an idle
+worker keeps its straight-line step while any of its colony's open entrances is camped).
 _Avoid_: caretaker.
 
 **Digger**:
@@ -291,7 +295,10 @@ _Avoid_: build, construct.
 
 **Rally point** (`SetRallyPoint`):
 A surface location fighters converge on. A rally on an enemy's open entrance sends
-them into that nest, where they fight and **raid** (see **Raid**).
+them into that nest, where they fight and **raid** (see **Raid**). Clearing the rally
+**recalls** them; since **#346 (simVersion V55)** a recalled invader walks out of the
+enemy nest by the wall-aware route to the first open entrance it can reach, so a bend
+in the tunnel no longer pins it.
 _Avoid_: waypoint, muster, target.
 
 **Behavior ratio** (`SetBehaviorRatio`):
