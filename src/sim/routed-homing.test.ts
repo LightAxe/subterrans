@@ -25,6 +25,9 @@ import {
 } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { idleWalksHome } from './ant/idle-reserve.js';
+import { tickAntMovement } from './ant/ant-movement.js';
+import { createDigFlowFields } from './dig-system.js';
+import { Rng } from './rng.js';
 import { antIsAtHome } from './hunger.js';
 import { AntTask, FightingSubState, NursingSubState, PheromoneType } from './enums.js';
 import { Zone, ugSet, UndergroundTileState } from './terrain.js';
@@ -34,6 +37,7 @@ import { pheromoneGridKey, phSet } from './pheromone/pheromone-store.js';
 import { setPoolFoodForTest } from './food/food-test-utils.js';
 import {
   ENEMY_COLONY_ID,
+  FIGHTER_WALK_HOME_HUNGER_TICKS,
   FLEE_THRESHOLD,
   HOME_EAT_RADIUS_TILES,
   IDLE_MILL_TICK_DIVISOR,
@@ -274,10 +278,12 @@ describe('#343 (V55) — an idle worker behind an obstacle walks home', () => {
       (manhattan(IDLE_FROM, { x: 104, y: 64 }) - HOME_EAT_RADIUS_TILES) * IDLE_MILL_TICK_DIVISOR -
         IDLE_MILL_TICK_DIVISOR,
     );
-    // At the edge of home range the first diagonal mill step can cross a tile
-    // boundary on one axis a tick before the other (sub-tile motion), leaving home
-    // range for one tile; the field steps it straight back. Bounded — the mill's
-    // other axis keeps closing — never a sustained in/out oscillation.
+    // Here, at the edge of home range, the first diagonal mill step crosses a tile
+    // boundary on one axis a tick before the other (sub-tile motion) and leaves
+    // home range for one tile; the field steps it straight back, and the mill's
+    // other axis closes on the next mill tick. (Where a mill step is detoured out
+    // of home range by an obstacle inside it, the walker can bounce in and out;
+    // it is at home every other step, so it still eats.)
     expect(r.leftHomeAfter).toBeLessThanOrEqual(2 * IDLE_MILL_TICK_DIVISOR);
     expect(r.endHome).toBe(true);
     expectNoRevisit(r.tiles);
@@ -293,6 +299,17 @@ describe('#343 (V55) — an idle worker behind an obstacle walks home', () => {
   });
 
   describe('idleWalksHome', () => {
+    /** The predicate with the colony's surface DangerTrail grid, as movement passes it. */
+    function walksHome(world: WorldState, id: number): boolean {
+      return idleWalksHome(
+        world,
+        id,
+        world.pheromoneGrids[
+          pheromoneGridKey(ENEMY_COLONY_ID, PheromoneType.DangerTrail, 'surface')
+        ],
+      );
+    }
+
     function idleAt(version: number, x: number, y: number): { world: WorldState; id: number } {
       const world = quietWorld(IDLE_SEED, version, ENEMY_COLONY_ID);
       const id = addWorker(world, ENEMY_COLONY_ID, x, y, AntTask.Idle, 0, 0);
@@ -305,18 +322,18 @@ describe('#343 (V55) — an idle worker behind an obstacle walks home', () => {
     it('true for an idle worker out of home range with its mill target set', () => {
       const { world, id } = idleAt(V55, IDLE_FROM.x, IDLE_FROM.y);
       expect(world.ants.targetPosX[id]).not.toBe(-1);
-      expect(idleWalksHome(world, id)).toBe(true);
+      expect(walksHome(world, id)).toBe(true);
     });
 
     it('false below V55', () => {
       const { world, id } = idleAt(V54, IDLE_FROM.x, IDLE_FROM.y);
-      expect(idleWalksHome(world, id)).toBe(false);
+      expect(walksHome(world, id)).toBe(false);
     });
 
     it('false at home (it mills)', () => {
       const { world, id } = idleAt(V55, 104 + 4, 64);
       expect(antIsAtHome(world, id)).toBe(true);
-      expect(idleWalksHome(world, id)).toBe(false);
+      expect(walksHome(world, id)).toBe(false);
     });
 
     it('false while one of its open entrances is camped (the field may lead there)', () => {
@@ -326,33 +343,33 @@ describe('#343 (V55) — an idle worker behind an obstacle walks home', () => {
           pheromoneGridKey(ENEMY_COLONY_ID, PheromoneType.DangerTrail, 'surface')
         ]!;
       phSet(grid, 104, 64, FLEE_THRESHOLD);
-      expect(idleWalksHome(world, id)).toBe(false);
+      expect(walksHome(world, id)).toBe(false);
       phSet(grid, 104, 64, FLEE_THRESHOLD - 1);
-      expect(idleWalksHome(world, id)).toBe(true);
+      expect(walksHome(world, id)).toBe(true);
     });
 
     it('false inside the spider scatter radius (it keeps dodging)', () => {
       const { world, id } = idleAt(V55, IDLE_FROM.x, IDLE_FROM.y);
       world.scatterReticleTile = { x: IDLE_FROM.x, y: IDLE_FROM.y + 1 };
-      expect(idleWalksHome(world, id)).toBe(false);
+      expect(walksHome(world, id)).toBe(false);
     });
 
     it('false under the colony alarm (the V49 muster routes it)', () => {
       const { world, id } = idleAt(V55, IDLE_FROM.x, IDLE_FROM.y);
       world.colonies[ENEMY_COLONY_ID]!.alarmActive = true;
-      expect(idleWalksHome(world, id)).toBe(false);
+      expect(walksHome(world, id)).toBe(false);
     });
 
     it('false while fleeing, with no target, or when not Idle', () => {
       const { world, id } = idleAt(V55, IDLE_FROM.x, IDLE_FROM.y);
       world.ants.fleeShelterUntilTick[id] = 0;
-      expect(idleWalksHome(world, id)).toBe(false);
+      expect(walksHome(world, id)).toBe(false);
       world.ants.fleeShelterUntilTick[id] = -1;
       world.ants.task[id] = AntTask.Foraging;
-      expect(idleWalksHome(world, id)).toBe(false);
+      expect(walksHome(world, id)).toBe(false);
       world.ants.task[id] = AntTask.Idle;
       world.ants.targetPosX[id] = -1;
-      expect(idleWalksHome(world, id)).toBe(false);
+      expect(walksHome(world, id)).toBe(false);
     });
   });
 });
@@ -414,6 +431,10 @@ describe('#346 (V55) — a recalled invader climbs out of a U-bend in the enemy 
     return { at: -1, tiles };
   }
 
+  it('the invader is fed for the whole run, so the V51 hungry walk-out never rescues it', () => {
+    expect(FIGHTER_WALK_HOME_HUNGER_TICKS).toBeGreaterThan(600);
+  });
+
   it('V54: pinned in the U-bend (the bug)', () => {
     expect(surfaces(V54, 600).at).toBe(-1);
   });
@@ -429,6 +450,57 @@ describe('#346 (V55) — a recalled invader climbs out of a U-bend in the enemy 
     for (let t = 0; t < 600 && world.ants.zone[id] !== Zone.Surface; t++) tick(world, []);
     expect(world.ants.zone[id]).toBe(Zone.Surface);
     expect(world.ants.posX[id]! >> FP_SHIFT).toBe(shaftX);
+  });
+
+  it('V55: ignores a nearer open stub shaft that does not join the nest, and climbs out the real one', () => {
+    const { world, id, shaftX } = recalledInUBend(V55);
+    const enemy = world.colonies[ENEMY_COLONY_ID]!;
+    const grid = world.undergroundGrids[ENEMY_COLONY_ID]!;
+    ugSet(grid, shaftX + 8, 0, UndergroundTileState.Open);
+    ugSet(grid, shaftX + 8, 1, UndergroundTileState.Open);
+    enemy.entrances.push({
+      entranceId: 99,
+      surfaceTileX: shaftX + 8,
+      surfaceTileY: enemy.entrances[0]!.surfaceTileY,
+      isOpen: true,
+    });
+    for (let t = 0; t < 600 && world.ants.zone[id] !== Zone.Surface; t++) tick(world, []);
+    expect(world.ants.zone[id]).toBe(Zone.Surface);
+    expect(world.ants.posX[id]! >> FP_SHIFT).toBe(shaftX);
+  });
+
+  it('V55: on the field it takes the exit nearest by tunnel, not the one nearest as the crow flies', () => {
+    // A second open shaft at shaftX + 14 joined to the invader's tile by a tunnel
+    // east along y 3: 11 steps away by tunnel against the U-bend exit's 19, but
+    // 11 tiles away as the crow flies against the U-bend exit's 9. The nest's
+    // entrance field (a recalled invader's first choice, as a hauler's) takes the
+    // tunnel-nearest; the BFS fallback would take the crow-nearest reachable one.
+    const { world, id, shaftX } = recalledInUBend(V55);
+    const enemy = world.colonies[ENEMY_COLONY_ID]!;
+    const grid = world.undergroundGrids[ENEMY_COLONY_ID]!;
+    for (let x = shaftX + 7; x <= shaftX + 14; x++) ugSet(grid, x, 3, UndergroundTileState.Open);
+    for (let y = 0; y <= 3; y++) ugSet(grid, shaftX + 14, y, UndergroundTileState.Open);
+    enemy.entrances.push({
+      entranceId: 99,
+      surfaceTileX: shaftX + 14,
+      surfaceTileY: enemy.entrances[0]!.surfaceTileY,
+      isOpen: true,
+    });
+    for (let t = 0; t < 600 && world.ants.zone[id] !== Zone.Surface; t++) tick(world, []);
+    expect(world.ants.zone[id]).toBe(Zone.Surface);
+    expect(world.ants.posX[id]! >> FP_SHIFT).toBe(shaftX + 14);
+  });
+
+  it('with no entrance field (movement driven alone) the BFS exit step gets it out at V55, not at V54', () => {
+    for (const version of [V54, V55]) {
+      const { world, id } = recalledInUBend(version);
+      let out = false;
+      for (let t = 0; t < 400 && !out; t++) {
+        tickAntMovement(world, new Rng(1), createDigFlowFields());
+        out = world.ants.zone[id] === Zone.Surface;
+      }
+      expect(out).toBe(version === V55);
+    }
   });
 
   it('with a rally still on the enemy door it is not recalled: it stays below at V55 too', () => {

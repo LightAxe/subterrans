@@ -584,10 +584,11 @@ export function tickAntMovement(
         task === AntTask.Foraging &&
         (subTaskHere === ForagingSubState.CarryingFood ||
           subTaskHere === ForagingSubState.ReturningToNest);
-      // #343 (V55): so does a surface nurse walking to its nest. Its target is
-      // the nearest OPEN entrance (needsTransition above), the field's own
-      // sources, so the field cannot send it anywhere else; before V55 it stepped
-      // in a straight line and an obstacle in the way pinned it for good.
+      // #343 (V55): so does a surface nurse walking to its nest. The field leads
+      // to the nearest OPEN entrance by path (its target above is the nearest by
+      // Manhattan), and a nurse goes down any open entrance of its own, so either
+      // is home. Before V55 it stepped in a straight line and an obstacle in the
+      // way pinned it for good.
       const isRoutedNurse =
         task === AntTask.Nursing && world.simVersion >= SIM_VERSION_V55_ROUTED_HOMING;
       if (
@@ -821,7 +822,13 @@ export function tickAntMovement(
       // looter to the hostile hunt, as before V52.
       let raidDir = -2;
       const hauling = isForeignGridUnderground && fighterIsHauling(world, id);
-      if (hauling && entranceFlowFields !== undefined) {
+      // #346 (V55): a recalled invader (its colony's rally cleared) walks out the
+      // same way: by the nest's entrance field, else the reachable-exit BFS below.
+      const recalledV55 =
+        isForeignGridUnderground &&
+        world.simVersion >= SIM_VERSION_V55_ROUTED_HOMING &&
+        isRecalledByOwnColony(world, ownColonyId);
+      if ((hauling || recalledV55) && entranceFlowFields !== undefined) {
         const field = entranceFlowFields.fields[gridColonyId];
         const grid = world.undergroundGrids[gridColonyId];
         if (field && grid) {
@@ -889,7 +896,7 @@ export function tickAntMovement(
             const exitGrid = world.undergroundGrids[gridColonyId];
             // V52 (#290 PR 5): a hauler only gets here off its nest's entrance
             // flow field (above); it takes the same reachable-exit step.
-            // #346 (V55): so does every recalled invader (rally cleared).
+            // #346 (V55): so does a recalled invader (rally cleared) off that field.
             if (
               exitGrid !== undefined &&
               (fighterWalksHomeToEat(world, id) ||
@@ -1051,7 +1058,8 @@ export function tickAntMovement(
       const millTick = world.tick % IDLE_MILL_TICK_DIVISOR === 0;
       if (
         entranceFlowFields !== undefined &&
-        (idleMustersHome(world, id) || (millTick && idleWalksHome(world, id)))
+        (idleMustersHome(world, id) ||
+          (millTick && idleWalksHome(world, id, surfaceDangerByColony[ants.colonyId[id]!])))
       ) {
         const sDir = surfaceEntranceFieldDir(
           entranceFlowFields,
@@ -1823,7 +1831,8 @@ export function tickAntMovement(
 // ---------------------------------------------------------------------------
 /**
  * V51 (#290 PR 4, D11) — the step a hungry invader at (tileX, tileY) in a foreign
- * nest takes toward an exit: the nest's OPEN entrances in the recall order
+ * nest takes toward an exit (from V52 also a hauler off its field, from V55 #346
+ * also a recalled invader off it): the nest's OPEN entrances in the recall order
  * (nearest by |dx| + y, ties to the lower index), the first one whose shaft top
  * (column, y 0) the wall-aware BFS (pickInvaderUndergroundStep) can reach. An
  * "open" entrance only needs its top two shaft tiles dug, so a nearer stub need
@@ -1860,6 +1869,16 @@ function hungryExitStep(
     if (unpackStepDx(step) !== 0 || unpackStepDy(step) !== 0) return step;
   }
   return packStep(0, 0);
+}
+
+/**
+ * #346 (V55) — colony `colonyId` has recalled its fighters: its rally point is
+ * cleared. A missing colony record is NOT a recall (the recall-navigation and
+ * ascent predicates treat it the same way).
+ */
+function isRecalledByOwnColony(world: WorldState, colonyId: number): boolean {
+  const colony = world.colonies[colonyId];
+  return colony != null && colony.rallyPoint == null;
 }
 
 /**

@@ -60,7 +60,10 @@ _Avoid_: mother.
 Any **mature** non-queen ant (eggs and larvae are *brood*, tracked separately). A
 worker takes on a **task** (`AntTask`: `Idle` / `Foraging` / `Digging` / `Fighting`
 / `Nursing`); "forager", "fighter", "nurse", "digger" name the *current task*, not
-separate castes.
+separate castes. An `Idle` worker on the surface **mills** near its colony's entrance;
+since **#343 (simVersion V55)** one walking back from beyond home range routes round
+obstacles on the colony's surface entrance flow field (it keeps its straight-line step
+while any of its colony's open entrances is camped).
 _Avoid_: drone, unit; do **not** treat forager/fighter/nurse/digger as distinct entity types.
 
 **Forager**:
@@ -102,10 +105,9 @@ _Avoid_: **guard**, **garrison**.
 A worker on the `Nursing` task, tending brood at the Nursery (auto-allocated, not
 set by the player). Since **#299 (simVersion V40)** a colony below
 `NURSE_MIN_WORKERS` living workers assigns no nurses and releases the ones it has.
-Since **#343 (simVersion V55)** a nurse walking to its nest across the surface, and an
-idle worker walking back from beyond home range, route round obstacles on the colony's
-surface entrance flow field instead of stepping straight at the entrance (an idle
-worker keeps its straight-line step while any of its colony's open entrances is camped).
+Since **#343 (simVersion V55)** a nurse walking to its nest across the surface routes
+round obstacles on the colony's surface entrance flow field instead of stepping straight
+at the entrance.
 _Avoid_: caretaker.
 
 **Digger**:

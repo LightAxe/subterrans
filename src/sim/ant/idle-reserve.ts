@@ -935,10 +935,18 @@ export function idleMustersHome(world: WorldState, id: number): boolean {
  *  - no open entrance of its colony reads real danger. The field leads to the
  *    NEAREST open entrance, which may be a camped one the mill avoids
  *    (setMillTarget aims at the nearest SAFE entrance), so while any entrance is
- *    camped the worker keeps its straight-line mill step.
+ *    camped the worker keeps its straight-line mill step (so a far worker behind an
+ *    obstacle can still be pinned for as long as a camp lasts).
+ * `dangerGrid` is the colony's surface DangerTrail grid (undefined = no danger);
+ * the movement loop passes the one it resolved once per tick, so this hot path
+ * builds no grid-key string per ant (AGENTS.md hot-loop rule).
  * Always false below V55.
  */
-export function idleWalksHome(world: WorldState, id: number): boolean {
+export function idleWalksHome(
+  world: WorldState,
+  id: number,
+  dangerGrid: PheromoneGrid | undefined,
+): boolean {
   if (world.simVersion < SIM_VERSION_V55_ROUTED_HOMING) return false;
   const ants = world.ants;
   if (ants.task[id] !== AntTask.Idle || ants.zone[id] !== ZONE_SURFACE) return false;
@@ -955,8 +963,6 @@ export function idleWalksHome(world: WorldState, id: number): boolean {
   }
   if (antIsAtHome(world, id)) return false;
   const entrances: readonly NestEntrance[] = colony.entrances ?? NO_ENTRANCES;
-  const dangerGrid =
-    world.pheromoneGrids[pheromoneGridKey(colonyId, PheromoneType.DangerTrail, 'surface')];
   for (let e = 0; e < entrances.length; e++) {
     const ent = entrances[e]!;
     if (ent.isOpen && entranceDanger(dangerGrid, ent) >= FLEE_THRESHOLD) return false;

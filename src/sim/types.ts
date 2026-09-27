@@ -1192,9 +1192,10 @@ export const SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES = 54 as const;
  *     its colony camped) steps by the same field, at the idle saunter
  *     (IDLE_MILL_TICK_DIVISOR). At home it mills as before.
  *   - #346: a RECALLED invader (its colony's rally cleared) inside an enemy nest
- *     walks out by the wall-aware BFS step (`hungryExitStep`) toward the first
- *     open entrance of that nest it can reach, as V51 hungry invaders and V52
- *     haulers already do, instead of a straight line at the nearest shaft.
+ *     walks out as a V52 hauler does: by that nest's entrance flow field, and off
+ *     it by the wall-aware BFS step (`hungryExitStep`) toward the first open
+ *     entrance of the nest it can reach, instead of a straight line at the
+ *     nearest shaft.
  * No new serialized field, command, world.rngState draw, entity-ID advance or
  * tick-order change. A V54 save replays byte-identically. MIN_ACCEPTED is
  * UNCHANGED (V50).
