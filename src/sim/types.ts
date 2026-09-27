@@ -1120,7 +1120,23 @@ export const SIM_VERSION_V51_UNIFIED_HUNGER = 51 as const;
  * MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V52_RAIDING = 52 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V52_RAIDING;
+
+/**
+ * #290 PR 6b (V53) — owner decision D14: a fighter does not loot while its own
+ * colony has nowhere to store food (`colonyHasNoDepositTarget`: the entrance pool
+ * at capacity and no FoodStorage chamber with room). `fighterMayLoot` fails, so a
+ * raider that has not started does not start, and a Looting raider stops at its
+ * next step-10e decision and hunts as a raider with an empty larder does (D10: the
+ * hostile in reach, else the nearest hostile in the nest, the queen included). A
+ * hauler already carrying keeps hauling home. Every colony, player included (the
+ * sim does not tell an AI from a human, and a full larder gains nothing from
+ * loot either way).
+ * No new serialized field, command, RNG draw, entity-ID advance or tick-order
+ * change: one more condition in the V52 raid predicate. A V52 save replays
+ * byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
+ */
+export const SIM_VERSION_V53_NO_LOOT_WHEN_FULL = 53 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V53_NO_LOOT_WHEN_FULL;
 
 /**
  * S2 — AI colony state machine states.

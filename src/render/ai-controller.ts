@@ -66,10 +66,15 @@ export const AI_NURSERY_THRESHOLD = 12 as const;
 export const AI_EXTRA_FOOD_STORAGE_FULL_PCT = 90 as const;
 
 /**
- * #290 D14 (PR 6b) — most COMPLETED-or-pending FoodStorage chambers the AI will
- * own. A bound on runaway digging, not a gameplay limit (a player may build more).
+ * #290 D14 (PR 6b) — most FoodStorage chambers the AI will own (the extra-storage
+ * rule stops once this many are COMPLETED; at most one more is ever pending). A
+ * bound on runaway digging, not a gameplay limit (a player may build more).
+ * Measured with V53 (no loot with full stores), --both-ai 200 seeds: uncapped, the
+ * AI dug a median of ~9 and up to 29 chambers and its peak workers rose 60 %; a
+ * cap of 3 raised them 31 %; a cap of 2 raised them 15 % and had the lowest share
+ * of laden haulers parked with full stores.
  */
-export const AI_MAX_FOOD_STORAGE_CHAMBERS = 3 as const;
+export const AI_MAX_FOOD_STORAGE_CHAMBERS = 2 as const;
 
 /**
  * Issue #33 — chamber placement depth tolerance (tiles). The findOpenChamberSpot

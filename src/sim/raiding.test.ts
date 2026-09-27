@@ -8,7 +8,11 @@
 
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
-import { SIM_VERSION_V51_UNIFIED_HUNGER, type WorldState } from './types.js';
+import {
+  SIM_VERSION_V51_UNIFIED_HUNGER,
+  SIM_VERSION_V52_RAIDING,
+  type WorldState,
+} from './types.js';
 import {
   fighterMayLoot,
   dropHaulerLoad,
@@ -24,6 +28,7 @@ import { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
 import {
   chamberStock,
+  colonyHasNoDepositTarget,
   colonyPoolFood,
   pileAmountFp,
   pileAtTile,
@@ -43,6 +48,7 @@ import {
   ENEMY_COLONY_ID,
   FIGHTER_WALK_HOME_HUNGER_TICKS,
   FOOD_CHAMBER_CAPACITY,
+  FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP,
   FOOD_PICKUP_AMOUNT,
   PLAYER_COLONY_ID,
   RAID_CARRY_FP,
@@ -856,5 +862,127 @@ describe('hauler exit off the entrance flow field (V52, rebased on PR 4’s hung
     const w = r.world;
     expect(run(w, 200, () => w.ants.zone[id] === Zone.Surface)).toBeGreaterThan(0);
     expect(tileOf(w, id).x).toBe(r.enemyDoor.x);
+  });
+});
+
+describe('no loot while the raider’s own stores are full (V53, D14)', () => {
+  /** Fill the player's pool and larder to capacity and keep its queen and larvae
+   *  from eating, so the stores stay full across ticks. */
+  function fillPlayerStores(r: RaidWorld): void {
+    const w = r.world;
+    setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY);
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY);
+    w.ants.lastMealTick[r.player.queenEntityId] = w.tick;
+    for (const l of r.player.larvae) w.ants.lastMealTick[l] = w.tick;
+  }
+
+  it('a fighter whose colony has nowhere to store food does not start looting', () => {
+    const r = raidWorld();
+    const id = raiderInEnemyNest(r);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(true);
+    fillPlayerStores(r);
+    expect(colonyHasNoDepositTarget(r.world, r.player)).toBe(true);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(false);
+    updateRaiders(r.world);
+    expect(r.world.ants.subTask[id]).not.toBe(FightingSubState.Looting);
+  });
+
+  it('the gate is the forager’s "no deposit target": one pool fp, or a depositable larder, is room', () => {
+    const r = raidWorld();
+    const id = raiderInEnemyNest(r);
+    fillPlayerStores(r);
+    setPoolFoodForTest(r.world, r.player, BASE_FOOD_STORAGE_CAPACITY - 1);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(true);
+    setPoolFoodForTest(r.world, r.player, BASE_FOOD_STORAGE_CAPACITY);
+    // A larder counts as room once it is FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP below cap.
+    const edge = FOOD_CHAMBER_CAPACITY - FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP;
+    setChamberStockForTest(r.world, r.player, r.playerLarder, edge + 1);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(false);
+    setChamberStockForTest(r.world, r.player, r.playerLarder, edge);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(true);
+  });
+
+  it('it hunts instead: never takes loot, and closes on the enemy queen (D10)', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    const id = raiderInEnemyNest(r);
+    const q = r.enemy.queenEntityId;
+    const d0 = Math.abs(tileOf(w, id).x - tileOf(w, q).x);
+    run(w, 40, undefined, () => {
+      fillPlayerStores(r);
+      w.ants.lastMealTick[q] = w.tick; // the enemy queen draws nothing from her larder
+    });
+    expect(w.ants.subTask[id]).not.toBe(FightingSubState.Looting);
+    expect(w.ants.foodCarrying[id]).toBe(0);
+    expect(chamberStock(w, r.enemyLarder)).toBe(3000);
+    expect(r.player.foodRaidedFp).toBe(0);
+    expect(Math.abs(tileOf(w, id).x - tileOf(w, q).x)).toBeLessThan(d0);
+  });
+
+  it('a raider already Looting stops at its next decision when the stores fill', () => {
+    const r = raidWorld();
+    const w = r.world;
+    const id = raiderInEnemyNest(r);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Looting);
+    fillPlayerStores(r);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.MovingToRally);
+  });
+
+  it('room frees → it loots again', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    const id = raiderInEnemyNest(r);
+    fillPlayerStores(r);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).not.toBe(FightingSubState.Looting);
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY - RAID_CARRY_FP);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Looting);
+    expect(run(w, 200, () => w.ants.subTask[id] === FightingSubState.Hauling)).toBeGreaterThan(0);
+    expect(w.ants.foodCarrying[id]).toBe(RAID_CARRY_FP);
+  });
+
+  it('a hauler already carrying keeps hauling home', () => {
+    const r = raidWorld();
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const id = addHauler(w, P, 100, 6, E, RAID_CARRY_FP);
+    fillPlayerStores(r);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Hauling);
+    expect(w.ants.foodCarrying[id]).toBe(RAID_CARRY_FP);
+  });
+
+  it('applies to the enemy colony too: the sim does not tell an AI from a player', () => {
+    const r = raidWorld();
+    const w = r.world;
+    // An enemy raider in the player's nest, which has a stocked larder.
+    setChamberStockForTest(w, r.player, r.playerLarder, 3000);
+    rallyOn(r.enemy, r.playerDoor);
+    const id = addFighter(w, E, 20, 6, P);
+    expect(fighterMayLoot(w, r.enemy, id)).toBe(true);
+    setPoolFoodForTest(w, r.enemy, BASE_FOOD_STORAGE_CAPACITY);
+    setChamberStockForTest(w, r.enemy, r.enemyLarder, FOOD_CHAMBER_CAPACITY);
+    expect(fighterMayLoot(w, r.enemy, id)).toBe(false);
+  });
+
+  it('a V52 world still loots with full stores (pre-V53 unchanged)', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    w.simVersion = SIM_VERSION_V52_RAIDING;
+    const id = raiderInEnemyNest(r);
+    fillPlayerStores(r);
+    expect(fighterMayLoot(w, r.player, id)).toBe(true);
+    expect(
+      run(
+        w,
+        200,
+        () => w.ants.subTask[id] === FightingSubState.Hauling,
+        () => fillPlayerStores(r),
+      ),
+    ).toBeGreaterThan(0);
+    expect(r.player.foodRaidedFp).toBe(RAID_CARRY_FP);
   });
 });

@@ -16,7 +16,7 @@
 // Extension point (plan §4.5). Everything about WHEN a fighter raids lives in
 // `fighterMayLoot`: "rallied on this nest's entrance, nothing hostile within
 // RAID_ENGAGE_RADIUS_TILES path tiles, empty-handed, not hungry, not in a duel,
-// food reachable". An explicit Raid order (e.g. a rally intent) changes only that
+// food reachable, and (V53) room at home to store it". An explicit Raid order (e.g. a rally intent) changes only that
 // predicate — say, to loot even with a hostile in reach. The sub-states
 // (FightingSubState.Looting / Hauling), the routing, the loot and deposit verbs and
 // the counters stay as they are.
@@ -43,6 +43,7 @@ import { AntTask, ChamberType, FightingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import {
   chamberStock,
+  colonyHasNoDepositTarget,
   depositCarriedFood,
   depositIntoPool,
   isFoodChamberDepositable,
@@ -52,7 +53,11 @@ import {
 import { fighterIsHungry } from '../hunger.js';
 import { getScratch, RAID_REACH_WINDOW_RADIUS, RAID_REACH_WINDOW_SIDE } from '../scratch.js';
 import { Zone } from '../terrain.js';
-import { SIM_VERSION_V52_RAIDING, type WorldState } from '../types.js';
+import {
+  SIM_VERSION_V52_RAIDING,
+  SIM_VERSION_V53_NO_LOOT_WHEN_FULL,
+  type WorldState,
+} from '../types.js';
 import { DIR_DX, DIR_DY, canEnterUndergroundTile } from './ant-motion.js';
 
 /** Fighter `id` is hauling loot home (FightingSubState.Hauling; V52 only writes it). */
@@ -245,6 +250,9 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: 
  *     automatic on a rally into an enemy nest);
  *   - it is empty-handed, not in a duel, and not hungry (a hungry fighter walks
  *     home to eat first, D11 — fighterIsHungry);
+ *   - V53+: its own colony has somewhere to store food (not
+ *     `colonyHasNoDepositTarget`, D14). A full larder at home gains nothing from
+ *     loot: the raider hunts instead, and one already Looting stops;
  *   - a FoodStorage chamber of that nest holds food and is reachable from it (the
  *     stock flow field; the entrance pool is never raided, D3);
  *   - no hostile (enemy worker or queen) within RAID_ENGAGE_RADIUS_TILES path
@@ -280,6 +288,12 @@ function lootVerdict(world: WorldState, colony: ColonyRecord, id: number): numbe
   if (gridColony === undefined || !rallyOnEntranceOf(colony, gridColony)) return NOT_A_RAIDER;
   if (ants.foodCarrying[id] !== 0 || ants.combatOpponentId[id] !== -1) return NOT_A_RAIDER;
   if (fighterIsHungry(world, id)) return NOT_A_RAIDER;
+  if (
+    world.simVersion >= SIM_VERSION_V53_NO_LOOT_WHEN_FULL &&
+    colonyHasNoDepositTarget(world, colony)
+  ) {
+    return NOT_A_RAIDER;
+  }
   // Hysteresis: a fighter not yet looting starts only for a reachable chamber
   // holding a full load and with nothing hostile within the wider start radius;
   // one looting keeps on while any food is reachable and nothing is in reach.

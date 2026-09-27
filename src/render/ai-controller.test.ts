@@ -547,15 +547,16 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(aiExtraFoodStorageWanted(world, colony)).toBe(true);
     });
 
-    it('judges fullness against the capacity the completed chambers give', () => {
-      // Two completed FoodStorage: capacity 12 288 fp, 90 % = 11 059.2. A total that
-      // would fill one chamber's colony (7168) is only 58 % here: no third chamber.
+    it('the cap is 2: with two completed FoodStorage chambers it places no third', () => {
+      // Pins the measured choice (#290 PR 6b round 2): an uncapped AI dug a median
+      // of ~9 and up to 29 FoodStorage chambers in --both-ai runs.
+      expect(AI_MAX_FOOD_STORAGE_CHAMBERS).toBe(2);
       const { world, colony } = settledColony(CAP_ONE_CHAMBER);
-      addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 30, 5));
+      const fs2 = addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 30, 5));
+      setChamberStockForTest(world, colony, fs2, FOOD_CHAMBER_CAPACITY);
       expect(aiExtraFoodStorageWanted(world, colony)).toBe(false);
-      const fs2 = colony.chambers[colony.chambers.length - 1]!;
-      setChamberStockForTest(world, colony, fs2, 4000); // 7168 + 4000 = 11 168 fp ≥ 90 %
-      expect(aiExtraFoodStorageWanted(world, colony)).toBe(true);
+      aiChamberPlacement(world, colony);
+      expect(fsCommands(world)).toHaveLength(0);
     });
 
     it('stops at AI_MAX_FOOD_STORAGE_CHAMBERS', () => {
