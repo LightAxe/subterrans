@@ -62,7 +62,7 @@ import {
   topUpOrSpawnCorpsePile,
 } from '../food/food-api.js';
 import { fighterIsHungry } from '../hunger.js';
-import { colonyRaidType } from '../raid-order.js';
+import { colonyRaidType, isAnyEntranceTile } from '../raid-order.js';
 import { isSurfaceTileInComponent } from '../surface-features.js';
 import { getScratch, RAID_REACH_WINDOW_RADIUS, RAID_REACH_WINDOW_SIDE } from '../scratch.js';
 import { Zone } from '../terrain.js';
@@ -593,19 +593,6 @@ function denyHaulerDropsLoad(world: WorldState, colony: ColonyRecord, id: number
   ants.subTask[id] = FightingSubState.MovingToRally;
   colony.raidTrips += 1;
   return true;
-}
-
-/** Surface tile (x, y) is an entrance (open or closed) of any colony. */
-function isAnyEntranceTile(world: WorldState, x: number, y: number): boolean {
-  for (const key in world.colonies) {
-    if (!Object.hasOwn(world.colonies, key)) continue;
-    const ents = world.colonies[key as unknown as keyof typeof world.colonies]!.entrances;
-    if (ents == null) continue;
-    for (let e = 0; e < ents.length; e++) {
-      if (ents[e]!.surfaceTileX === x && ents[e]!.surfaceTileY === y) return true;
-    }
-  }
-  return false;
 }
 
 /** Target (tile centre) the open entrance of `colony` nearest to ant `id`

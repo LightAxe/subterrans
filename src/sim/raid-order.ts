@@ -49,3 +49,16 @@ export function blockadedEntrance(world: WorldState, colony: ColonyRecord): Nest
   if (colonyRaidType(world, colony) !== RaidType.Blockade) return null;
   return rallyEnemyEntrance(world, colony);
 }
+
+/** Surface tile (x, y) is an entrance (open or closed) of any colony. */
+export function isAnyEntranceTile(world: WorldState, x: number, y: number): boolean {
+  for (const key in world.colonies) {
+    if (!Object.hasOwn(world.colonies, key)) continue;
+    const ents = world.colonies[key as unknown as keyof typeof world.colonies]!.entrances;
+    if (ents == null) continue;
+    for (let e = 0; e < ents.length; e++) {
+      if (ents[e]!.surfaceTileX === x && ents[e]!.surfaceTileY === y) return true;
+    }
+  }
+  return false;
+}

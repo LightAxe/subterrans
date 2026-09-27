@@ -194,9 +194,13 @@ export interface ScratchArena {
    * ant-blockade.ts (#352, V60) — `mark[id]` is BLOCKADE_MARK_WALKING or
    * BLOCKADE_MARK_HELD when step 10c left surface fighter `id` for step 10c2 to
    * route (its colony blockades an enemy entrance; HELD = it was holding its post
-   * last tick), else 0; step 10c2 turns it to BLOCKADE_MARK_ROUTED for one it sends
-   * to the entrance round obstacles (read by step 16). Cleared at the start of
-   * each 10c pass. `posts` is the
+   * last tick), else 0; step 10c2 then records what it did with it — ROUTED (to
+   * the entrance), TO_POST, AT_POST, or leaves it for a chase — for step 16, and
+   * step 10d clears it for a colony sent at the spider. Cleared at the start of
+   * each 10c pass. `intruders` is the surface enemy ants within
+   * BLOCKADE_RADIUS_TILES of the entrance being routed (for colony
+   * `intrudersColonyId`), refilled when the pass moves to another entrance or
+   * colony. `posts` is the
    * ring-post list of the entrance being routed (flat [x0, y0, x1, y1, …]),
    * `rank` the next post index per colony; both refilled per 10c2 pass.
    */
@@ -205,6 +209,9 @@ export interface ScratchArena {
     posts: number[];
     postsEntranceId: number;
     rank: Map<number, number>;
+    intruders: number[];
+    intrudersEntranceId: number;
+    intrudersColonyId: number;
   };
 }
 
@@ -215,6 +222,12 @@ export const BLOCKADE_MARK_HELD = 2;
 /** #352 — scratch.blockade.mark, written by step 10c2: it is beyond the leash and
  *  walks to the blockaded entrance round obstacles (ant-blockade.ts). */
 export const BLOCKADE_MARK_ROUTED = 3;
+/** #352 — scratch.blockade.mark, written by step 10c2: it walks to its post round
+ *  obstacles, passing through its colony's ants. */
+export const BLOCKADE_MARK_TO_POST = 4;
+/** #352 — scratch.blockade.mark, written by step 10c2: it holds its post (claims no
+ *  tile, so workers and blockaders on their way pass through). */
+export const BLOCKADE_MARK_AT_POST = 5;
 
 // eslint-disable-next-line subterrans/sim-module-state -- sim-cache: per-world scratch arena keyed by WorldState identity; transient, never serialized, recreated per world (same pattern as FLOW_FIELD_CACHES below)
 let SCRATCH = new WeakMap<WorldState, ScratchArena>();
@@ -303,6 +316,9 @@ export function getScratch(world: WorldState): ScratchArena {
         posts: [],
         postsEntranceId: -1,
         rank: new Map(),
+        intruders: [],
+        intrudersEntranceId: -1,
+        intrudersColonyId: -1,
       },
     };
     SCRATCH.set(world, a);

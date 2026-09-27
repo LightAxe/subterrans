@@ -37,8 +37,15 @@ import {
 } from '../constants.js';
 import { AntTask, FightingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
-import { blockadedEntrance } from '../raid-order.js';
-import { BLOCKADE_MARK_HELD, BLOCKADE_MARK_ROUTED, getScratch } from '../scratch.js';
+import { blockadedEntrance, isAnyEntranceTile } from '../raid-order.js';
+import {
+  BLOCKADE_MARK_AT_POST,
+  BLOCKADE_MARK_HELD,
+  BLOCKADE_MARK_ROUTED,
+  BLOCKADE_MARK_TO_POST,
+  BLOCKADE_MARK_WALKING,
+  getScratch,
+} from '../scratch.js';
 import { isSurfaceTileInComponent } from '../surface-features.js';
 import { Zone } from '../terrain.js';
 import { SIM_VERSION_V60_RAID_ORDERS, type WorldState } from '../types.js';
@@ -80,14 +87,29 @@ export function blockaderLeavesForeignNest(world: WorldState, id: number): boole
 }
 
 /**
- * Step 10c2 sent surface blockader `id` to its blockaded entrance round obstacles
- * this tick (it is beyond BLOCKADE_LEASH_TILES): step 16 steps it down the surface
- * goal field seeded at its target tile (the entrance), not in a straight line —
- * straight at a far entrance, an obstacle in the way pinned it. Same-tick scratch.
+ * Step 10c2 sent surface blockader `id` to a fixed tile this tick — its blockaded
+ * entrance from beyond BLOCKADE_LEASH_TILES, or its post: step 16 steps it down the
+ * surface goal field seeded at its target tile, round obstacles, not in a straight
+ * line (straight at a tile behind an obstacle pinned it). A chase stays straight
+ * (the target moves). Same-tick scratch.
  */
-export function blockaderRoutesToEntrance(world: WorldState, id: number): boolean {
+export function blockaderRoutesToTarget(world: WorldState, id: number): boolean {
   const mark = getScratch(world).blockade.mark;
-  return id < mark.length && mark[id] === BLOCKADE_MARK_ROUTED;
+  if (id >= mark.length) return false;
+  return mark[id] === BLOCKADE_MARK_ROUTED || mark[id] === BLOCKADE_MARK_TO_POST;
+}
+
+/**
+ * The occupancy rule: blockader `id` neither claims a tile nor is bumped while it
+ * walks to its post or holds it. Posts go by rank, not nearness, so one bound for
+ * the far side of the ring crosses the holders' tiles; bumped back off them every
+ * tick it froze there (the sentry freeze V43 fixed the same way), and a holder
+ * claiming its tile would bump the colony's own workers off the ring.
+ */
+export function blockaderPassesThroughFriends(world: WorldState, id: number): boolean {
+  const mark = getScratch(world).blockade.mark;
+  if (id >= mark.length) return false;
+  return mark[id] === BLOCKADE_MARK_TO_POST || mark[id] === BLOCKADE_MARK_AT_POST;
 }
 
 /**
@@ -121,50 +143,47 @@ function buildPosts(world: WorldState, ent: NestEntrance, out: number[]): void {
         const x = ent.surfaceTileX + dx;
         const y = ent.surfaceTileY + dy;
         if (!canEnterSurfaceTile(world, x, y) || !isSurfaceTileInComponent(world, x, y)) continue;
-        if (isEntranceTile(world, x, y)) continue;
+        if (isAnyEntranceTile(world, x, y)) continue;
         out.push(x, y);
       }
     }
   }
 }
 
-/** Surface tile (x, y) is an entrance (open or closed) of any colony. */
-function isEntranceTile(world: WorldState, x: number, y: number): boolean {
-  for (const key in world.colonies) {
-    if (!Object.hasOwn(world.colonies, key)) continue;
-    const ents = world.colonies[key as unknown as keyof typeof world.colonies]!.entrances;
-    if (ents == null) continue;
-    for (let e = 0; e < ents.length; e++) {
-      if (ents[e]!.surfaceTileX === x && ents[e]!.surfaceTileY === y) return true;
-    }
+/**
+ * The surface enemy ants — every live ant of a colony other than `colonyId`
+ * (workers, fighters and the queen) — within BLOCKADE_RADIUS_TILES (Manhattan) of
+ * `ent`, in id order, into `out`. One scan per entrance and colony per pass.
+ */
+function collectIntruders(
+  world: WorldState,
+  colonyId: number,
+  ent: NestEntrance,
+  out: number[],
+): void {
+  out.length = 0;
+  const ants = world.ants;
+  for (let o = 0; o < world.nextEntityId; o++) {
+    if (ants.alive[o] !== 1 || ants.zone[o] !== Zone.Surface) continue;
+    const c = ants.colonyId[o]!;
+    if (c === colonyId || world.colonies[c] === undefined) continue;
+    const ex = (ants.posX[o]! >> FP_SHIFT) - ent.surfaceTileX;
+    const ey = (ants.posY[o]! >> FP_SHIFT) - ent.surfaceTileY;
+    if ((ex < 0 ? -ex : ex) + (ey < 0 ? -ey : ey) <= BLOCKADE_RADIUS_TILES) out.push(o);
   }
-  return false;
 }
 
-/**
- * The enemy ant blockader `id` goes for, or -1: of every live ant of another
- * colony on the surface (workers, fighters and the queen) within
- * BLOCKADE_RADIUS_TILES of the blockaded entrance, the one nearest the blockader
- * (Manhattan; the lower id on a tie). Allocation-free.
- */
-function nearestIntruder(world: WorldState, id: number, ent: NestEntrance): number {
+/** Of `intruders`, the one nearest blockader `id` (Manhattan; lower id on a tie), or -1. */
+function nearestOf(world: WorldState, id: number, intruders: readonly number[]): number {
   const ants = world.ants;
-  const self = ants.colonyId[id]!;
   const ax = ants.posX[id]! >> FP_SHIFT;
   const ay = ants.posY[id]! >> FP_SHIFT;
   let best = -1;
   let bestDist = 0;
-  for (let o = 0; o < ants.alive.length; o++) {
-    if (ants.alive[o] !== 1 || ants.zone[o] !== Zone.Surface) continue;
-    const c = ants.colonyId[o]!;
-    if (c === self || world.colonies[c] === undefined) continue;
-    const ox = ants.posX[o]! >> FP_SHIFT;
-    const oy = ants.posY[o]! >> FP_SHIFT;
-    const ex = ox - ent.surfaceTileX;
-    const ey = oy - ent.surfaceTileY;
-    if ((ex < 0 ? -ex : ex) + (ey < 0 ? -ey : ey) > BLOCKADE_RADIUS_TILES) continue;
-    const dx = ox - ax;
-    const dy = oy - ay;
+  for (let i = 0; i < intruders.length; i++) {
+    const o = intruders[i]!;
+    const dx = (ants.posX[o]! >> FP_SHIFT) - ax;
+    const dy = (ants.posY[o]! >> FP_SHIFT) - ay;
     const d = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
     if (best < 0 || d < bestDist) {
       best = o;
@@ -178,14 +197,16 @@ function nearestIntruder(world: WorldState, id: number, ent: NestEntrance): numb
  * Step 10c2 (V60; after 10c, before the spider priority 10d, which overrides it):
  * route the surface fighters step 10c left to the blockade (`blockade.mark`), in
  * ascending id order. For each, with `ent` its colony's blockaded entrance:
+ *   - in a duel with an enemy ant → stay on it (a fight is never dropped mid-way
+ *     because the foe stepped out of the radius);
  *   - farther than BLOCKADE_LEASH_TILES from `ent` → target `ent`, routed round
- *     obstacles (blockaderRoutesToEntrance);
- *   - an intruder (nearestIntruder) in the radius → target it;
+ *     obstacles (ROUTED);
+ *   - the nearest intruder (collectIntruders) → target it, straight at it;
  *   - else its post: the rank-th post of `ent`'s ring (rank = its order among its
  *     colony's blockaders this pass; past the last post the ring wraps). Within
  *     BLOCKADE_HOLD_RADIUS_TILES of the post (BLOCKADE_KEEP_HOLD_RADIUS_TILES if it
- *     was holding) it holds (Holding, no target), else it walks to the post. With
- *     no post at all it holds where it is.
+ *     was holding) it holds (Holding, no target; AT_POST), else it walks to the
+ *     post routed round obstacles (TO_POST). With no post at all it holds in place.
  */
 export function updateBlockaders(world: WorldState): void {
   if (world.simVersion < SIM_VERSION_V60_RAID_ORDERS) return;
@@ -196,7 +217,9 @@ export function updateBlockaders(world: WorldState): void {
   const rank = scratch.rank;
   rank.clear();
   scratch.postsEntranceId = -1;
-  const n = mark.length < ants.alive.length ? mark.length : ants.alive.length;
+  scratch.intrudersEntranceId = -1;
+  scratch.intrudersColonyId = -1;
+  const n = mark.length < world.nextEntityId ? mark.length : world.nextEntityId;
   for (let id = 0; id < n; id++) {
     const m = mark[id]!;
     if (m === 0) continue;
@@ -208,6 +231,12 @@ export function updateBlockaders(world: WorldState): void {
     const r = rank.get(colonyId) ?? 0;
     rank.set(colonyId, r + 1);
 
+    const foeInDuel = ants.combatOpponentId[id]!;
+    if (foeInDuel >= 0 && ants.alive[foeInDuel] === 1) {
+      ants.targetPosX[id] = ants.posX[foeInDuel]!;
+      ants.targetPosY[id] = ants.posY[foeInDuel]!;
+      continue;
+    }
     const ax = ants.posX[id]! >> FP_SHIFT;
     const ay = ants.posY[id]! >> FP_SHIFT;
     const ex = ax - ent.surfaceTileX;
@@ -220,10 +249,16 @@ export function updateBlockaders(world: WorldState): void {
       mark[id] = BLOCKADE_MARK_ROUTED;
       continue;
     }
-    const foe = nearestIntruder(world, id, ent);
+    if (scratch.intrudersEntranceId !== ent.entranceId || scratch.intrudersColonyId !== colonyId) {
+      collectIntruders(world, colonyId, ent, scratch.intruders);
+      scratch.intrudersEntranceId = ent.entranceId;
+      scratch.intrudersColonyId = colonyId;
+    }
+    const foe = nearestOf(world, id, scratch.intruders);
     if (foe >= 0) {
       ants.targetPosX[id] = ants.posX[foe]!;
       ants.targetPosY[id] = ants.posY[foe]!;
+      mark[id] = BLOCKADE_MARK_WALKING;
       continue;
     }
 
@@ -235,6 +270,7 @@ export function updateBlockaders(world: WorldState): void {
     if (count === 0) {
       ants.targetPosX[id] = -1;
       ants.targetPosY[id] = -1;
+      mark[id] = BLOCKADE_MARK_WALKING;
       continue;
     }
     let slot = r;
@@ -250,9 +286,24 @@ export function updateBlockaders(world: WorldState): void {
       ants.targetPosX[id] = -1;
       ants.targetPosY[id] = -1;
       ants.subTask[id] = FightingSubState.Holding;
+      mark[id] = BLOCKADE_MARK_AT_POST;
       continue;
     }
     ants.targetPosX[id] = (px << FP_SHIFT) + (FP_ONE >> 1);
     ants.targetPosY[id] = (py << FP_SHIFT) + (FP_ONE >> 1);
+    mark[id] = BLOCKADE_MARK_TO_POST;
+  }
+}
+
+/**
+ * Step 10d (the spider priority) retargeted blockader `id` onto the spider: it is
+ * no longer walking to the entrance or a post, nor holding one.
+ */
+export function releaseBlockaderToSpider(world: WorldState, id: number): void {
+  const mark = getScratch(world).blockade.mark;
+  if (id >= mark.length || mark[id] === 0) return;
+  mark[id] = 0;
+  if (world.ants.subTask[id] === FightingSubState.Holding) {
+    world.ants.subTask[id] = FightingSubState.MovingToRally;
   }
 }

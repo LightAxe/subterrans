@@ -94,7 +94,8 @@ import { fighterIsHauling, fighterIsLooting, looterStepDir } from './ant-raid.js
 import {
   blockaderBarredFromShaft,
   blockaderLeavesForeignNest,
-  blockaderRoutesToEntrance,
+  blockaderPassesThroughFriends,
+  blockaderRoutesToTarget,
 } from './ant-blockade.js';
 
 // #231 — the per-tick surface-movement cache (issue #67, ~16 KB Uint8Array) now
@@ -1066,13 +1067,13 @@ export function tickAntMovement(
       // goal field it keeps the straight-line step. (The policy lives in
       // ant-combat-targeting: defenderWalksToEntrance; the step in
       // entrance-routed-step.)
-      // #352 (V60): so does a blockader beyond its leash, walking to the entrance
-      // it blockades (ant-blockade: blockaderRoutesToEntrance).
+      // #352 (V60): so does a blockader walking to the entrance it blockades from
+      // beyond its leash, or to its post (ant-blockade: blockaderRoutesToTarget).
       if (
         haveTarget &&
         !fieldStepped &&
         zone === Zone.Surface &&
-        (defenderWalksToEntrance(world, id) || blockaderRoutesToEntrance(world, id))
+        (defenderWalksToEntrance(world, id) || blockaderRoutesToTarget(world, id))
       ) {
         const step = entranceRoutedStep(
           world,
@@ -2010,7 +2011,9 @@ function claimsNoTile(world: WorldState, id: number): boolean {
   // V52 (#290 PR 5): nor does a raider hauling loot home. Bumped like any ant, one
   // climbing a one-wide enemy shaft behind its own idle invaders was pushed back
   // off their tiles every tick and never got out. (Only V52 writes Hauling.)
-  return fighterIsHauling(world, id);
+  if (fighterIsHauling(world, id)) return true;
+  // #352 (V60): nor does a blockader walking to its post or holding it.
+  return blockaderPassesThroughFriends(world, id);
 }
 
 function resolveSameColonyOccupancy(world: WorldState): void {

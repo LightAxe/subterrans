@@ -19,7 +19,7 @@ import {
   type WorldState,
 } from './types.js';
 import { fighterMayLoot, updateBlockaders, updateRaiders } from './ant/ant-system.js';
-import { blockaderRoutesToEntrance } from './ant/ant-blockade.js';
+import { blockaderPassesThroughFriends, blockaderRoutesToTarget } from './ant/ant-blockade.js';
 import { AntTask, FightingSubState, RaidType } from './enums.js';
 import { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
@@ -656,13 +656,13 @@ describe('Blockade (V60)', () => {
     tick(w, []);
     const t = { x: w.ants.targetPosX[far]! >> FP_SHIFT, y: w.ants.targetPosY[far]! >> FP_SHIFT };
     expect(t).toEqual(d);
-    expect(blockaderRoutesToEntrance(w, far)).toBe(true);
+    expect(blockaderRoutesToTarget(w, far)).toBe(true);
     // Inside the leash the same foe is chased (by tile: its target was set before
     // this tick's movement), in a straight line.
     w.ants.posX[far] = centre(d.x - BLOCKADE_LEASH_TILES + 1);
     tick(w, []);
     expect(w.ants.targetPosX[far]! >> FP_SHIFT).toBe(w.ants.posX[foe]! >> FP_SHIFT);
-    expect(blockaderRoutesToEntrance(w, far)).toBe(false);
+    expect(blockaderRoutesToTarget(w, far)).toBe(false);
   });
 
   it('posts are ranked in id order round the ring (one post each)', () => {
@@ -681,6 +681,89 @@ describe('Blockade (V60)', () => {
       };
       expect(manhattan(t, r.enemyDoor)).toBe(BLOCKADE_POST_RADIUS_TILES);
     }
+  });
+
+  it('walks to its post routed round obstacles and passes through its own ants on the way', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    order(r, RaidType.Blockade);
+    const [id] = blockadersNear(r, 1);
+    tick(w, []);
+    expect(w.ants.subTask[id!]).not.toBe(FightingSubState.Holding);
+    expect(blockaderRoutesToTarget(w, id!)).toBe(true);
+    expect(blockaderPassesThroughFriends(w, id!)).toBe(true);
+    // Holding its post it still claims no tile; chasing a foe it is an ordinary fighter.
+    run(w, 300, () => w.ants.subTask[id!] === FightingSubState.Holding);
+    expect(w.ants.subTask[id!]).toBe(FightingSubState.Holding);
+    expect(blockaderPassesThroughFriends(w, id!)).toBe(true);
+    expect(blockaderRoutesToTarget(w, id!)).toBe(false);
+    addEnemySurfaceAnt(w, r.enemyDoor.x + 2, r.enemyDoor.y + 1);
+    tick(w, []);
+    expect(blockaderPassesThroughFriends(w, id!)).toBe(false);
+    expect(blockaderRoutesToTarget(w, id!)).toBe(false);
+  });
+
+  it('holding its post it claims no tile: its colony’s ant on that tile is not bumped off', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    order(r, RaidType.Blockade);
+    const [id] = blockaders(r, 1);
+    run(w, 300, () => w.ants.subTask[id!] === FightingSubState.Holding);
+    const post = tileOf(w, id!);
+    // A motionless forager of its own on the post (a higher id than the holder).
+    const worker = allocateEntityId(w);
+    initAnt(w.ants, worker, {
+      colonyId: P,
+      posX: centre(post.x),
+      posY: centre(post.y),
+      task: AntTask.Foraging,
+      subTask: 0,
+      speed: 0,
+      zone: Zone.Surface,
+      lastMealTick: w.tick,
+    });
+    r.player.workers.push(worker);
+    r.player.workerCount += 1;
+    tick(w, []);
+    expect(w.ants.subTask[id!]).toBe(FightingSubState.Holding);
+    expect(tileOf(w, worker)).toEqual(post);
+  });
+
+  it('a large blockade fills the ring: every fighter reaches a post and holds it', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    order(r, RaidType.Blockade);
+    const ids = blockaders(r, 12);
+    const held = run(w, 600, () =>
+      ids.every((id) => w.ants.subTask[id] === FightingSubState.Holding),
+    );
+    expect(held).toBeGreaterThan(0);
+    const tiles = new Set(ids.map((id) => `${tileOf(w, id).x},${tileOf(w, id).y}`));
+    expect(tiles.size).toBeGreaterThan(ids.length >> 1);
+    for (const id of ids) {
+      expect(manhattan(tileOf(w, id), r.enemyDoor)).toBeLessThanOrEqual(
+        BLOCKADE_POST_RADIUS_TILES + 3,
+      );
+    }
+  });
+
+  it('in a duel it stays on its foe (the fight is not dropped for a nearer intruder)', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    order(r, RaidType.Blockade);
+    const [id] = blockaders(r, 1);
+    run(w, 300, () => w.ants.subTask[id!] === FightingSubState.Holding);
+    const d = r.enemyDoor;
+    const nearer = addEnemySurfaceAnt(w, d.x + 1, d.y);
+    const duel = addEnemySurfaceAnt(w, d.x + BLOCKADE_RADIUS_TILES + 5, d.y);
+    w.ants.combatOpponentId[id!] = duel;
+    // (Step 10c2 alone, on the mark the last tick's step 10c left it.)
+    expect(getScratch(w).blockade.mark[id!]).not.toBe(0);
+    updateBlockaders(w);
+    expect(w.ants.targetPosX[id!]).toBe(w.ants.posX[duel]);
+    w.ants.combatOpponentId[id!] = -1;
+    updateBlockaders(w);
+    expect(w.ants.targetPosX[id!]).toBe(w.ants.posX[nearer]);
   });
 
   it('is inert below V60 and without the order: step 10c marks nobody and 10c2 routes nobody', () => {
