@@ -65,7 +65,6 @@ import {
 } from '../food/food-api.js';
 import { fighterIsHungry } from '../hunger.js';
 import { colonyRaidType, isAnyEntranceTile } from '../raid-order.js';
-import { isSurfaceTileInComponent } from '../surface-features.js';
 import { getScratch, RAID_REACH_WINDOW_RADIUS, RAID_REACH_WINDOW_SIDE } from '../scratch.js';
 import { Zone } from '../terrain.js';
 import {
