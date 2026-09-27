@@ -146,6 +146,18 @@ export function colonyPoolFood(world: WorldState, colony: ColonyRecord): number 
 }
 
 /**
+ * Column (x) of the colony's entrance pool — the colony's start column, where
+ * `createScenario` placed it at the shaft top (the pool never moves; the surface and
+ * underground grids share x). −1 when the colony has no pool (a hand-built test
+ * colony). Read-only; nothing in the sim routes by it — the render-side AI
+ * controller reads it as its no-entrance probe reference (CLNY-08, #347).
+ */
+export function colonyPoolTileX(world: WorldState, colony: ColonyRecord): number {
+  const slot = colony.poolSlot;
+  return slot < 0 ? -1 : world.food.tileX[slot]!;
+}
+
+/**
  * Food held by one chamber (fp). Only FoodStorage chambers ever hold food; any
  * other chamber type reads 0.
  */
@@ -408,7 +420,8 @@ export function foodStoreHasFreeSlot(world: WorldState): boolean {
 /**
  * Give a new colony its (empty) entrance pool at underground tile (tileX, tileY)
  * — the entrance column's shaft top, where pool deposits happen; the location is
- * informational (nothing routes by it). Sets `colony.poolSlot`. Returns false,
+ * informational (nothing in the sim routes by it; the AI controller reads it via
+ * `colonyPoolTileX`). Sets `colony.poolSlot`. Returns false,
  * leaving the colony without a pool, only when the store is full. Called by
  * `createScenario` for every colony.
  */

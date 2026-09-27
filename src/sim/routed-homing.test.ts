@@ -142,8 +142,8 @@ const IDLE_SEED = 117;
 const IDLE_FROM = { x: 86, y: 86 } as const;
 
 describe('V55 (#343, #346)', () => {
-  it('LATEST is V55', () => {
-    expect(LATEST_SIM_VERSION).toBe(SIM_VERSION_V55_ROUTED_HOMING);
+  it('LATEST is V55 or later', () => {
+    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V55_ROUTED_HOMING);
   });
 });
 

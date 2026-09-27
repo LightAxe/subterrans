@@ -29,6 +29,7 @@ import {
   AI_EXTRA_FOOD_STORAGE_FULL_PCT,
   AI_MAX_FOOD_STORAGE_CHAMBERS,
   aiExtraFoodStorageWanted,
+  aiSelectProbeTarget,
 } from './ai-controller.js';
 
 import { createWorldState, allocateEntityId, SIM_VERSION_V52_RAIDING } from '../sim/types.js';
@@ -47,6 +48,9 @@ import { serializeWorldState, deserializeWorldState } from '../platform/save.js'
 import {
   BASE_FOOD_STORAGE_CAPACITY,
   ENEMY_COLONY_ID,
+  ENEMY_START_X,
+  PLAYER_COLONY_ID,
+  PLAYER_START_X,
   FOOD_CHAMBER_CAPACITY,
   QUEEN_EGG_FOOD_THRESHOLD,
   STARTING_WORKERS,
@@ -56,6 +60,7 @@ import {
   addChamberForTest,
   setPoolFoodForTest,
   setChamberStockForTest,
+  setPilesForTest,
   type TestChamber,
 } from '../sim/food/food-test-utils.js';
 
@@ -1255,17 +1260,63 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
     }, 30_000);
 
     it('CLNY-08 invariant: ai-controller.ts has no PLAYER_COLONY_ID branching', () => {
-      // Source-text scan via fs.readFileSync. Conservative regexes — match any
-      // branch on PLAYER_COLONY_ID (===) or `if (... isPlayer ...)` patterns.
-      // STATE.md Phase 08-03 decision confirms this pattern is supported
-      // (HUD-05 source-scan self-checks; @types/node installed as devDep).
+      // Source-text scan via fs.readFileSync (STATE.md Phase 08-03: HUD-05
+      // source-scan self-checks; @types/node installed as devDep). The controller
+      // must not know which colony it drives: differentiation happens at the
+      // caller. Comments are stripped first so prose may name the constants.
       const __dirname = dirname(fileURLToPath(import.meta.url));
       const src = readFileSync(join(__dirname, 'ai-controller.ts'), 'utf8');
-      expect(src).not.toMatch(/PLAYER_COLONY_ID\s*===/);
-      expect(src).not.toMatch(/if\s*\([^)]*\bisPlayer\b/);
+      const code = clny08StripComments(src);
+      // Any comparison with a colony-ID constant, in EITHER operand order and with
+      // any (in)equality operator — the pre-fix guard only matched
+      // `PLAYER_COLONY_ID ===`, so `aiColonyId === PLAYER_COLONY_ID` slipped by.
+      for (const re of CLNY08_BRANCH_PATTERNS) expect(code).not.toMatch(re);
+      // Stronger: the code does not reference a per-colony identity or start
+      // constant at all (a lookup table keyed on them would dodge the above).
+      expect(code).not.toMatch(CLNY08_COLONY_CONSTANT);
+      expect(code).not.toMatch(/if\s*\([^)]*\bisPlayer\b/);
+    });
+
+    it('CLNY-08 guard self-check: catches both operand orders, !==, and constant references', () => {
+      const cases = [
+        'if (PLAYER_COLONY_ID === id) {}',
+        'if (id === PLAYER_COLONY_ID) {}',
+        'const x = aiColonyId === PLAYER_COLONY_ID ? A : B;',
+        'if (id !== ENEMY_COLONY_ID) {}',
+        'if (ENEMY_COLONY_ID!==id) {}',
+        'if (id == PLAYER_COLONY_ID) {}',
+        'switch (id) { case PLAYER_COLONY_ID: break; }',
+      ];
+      for (const c of cases) {
+        expect(
+          CLNY08_BRANCH_PATTERNS.some((re) => re.test(c)),
+          c,
+        ).toBe(true);
+      }
+      // The exact #347 shape (f7288f2) — caught by both layers.
+      const f7288f2 =
+        'const aiEntranceX = x ? y\n  : aiColonyId === PLAYER_COLONY_ID\n    ? PLAYER_START_X\n    : ENEMY_START_X;';
+      expect(CLNY08_BRANCH_PATTERNS.some((re) => re.test(f7288f2))).toBe(true);
+      expect(f7288f2).toMatch(CLNY08_COLONY_CONSTANT);
+      // Comments are not code.
+      expect(
+        clny08StripComments('// aiColonyId === PLAYER_COLONY_ID\n/* ENEMY_START_X */ x'),
+      ).not.toMatch(CLNY08_COLONY_CONSTANT);
     });
   });
 });
+
+// CLNY-08 source-guard helpers (see the invariant test above).
+const CLNY08_ID = String.raw`\b(?:PLAYER|ENEMY)_COLONY_ID\b`;
+const CLNY08_BRANCH_PATTERNS: RegExp[] = [
+  new RegExp(String.raw`${CLNY08_ID}\s*[!=]==?`),
+  new RegExp(String.raw`[!=]==?\s*${CLNY08_ID}`),
+  new RegExp(String.raw`\bcase\s+${CLNY08_ID}`),
+];
+const CLNY08_COLONY_CONSTANT = /\b(?:PLAYER|ENEMY)_(?:COLONY_ID|START_[XY])\b/;
+function clny08StripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+}
 
 // ---------------------------------------------------------------------------
 // #293 — survival mode (render-side, no simVersion, no memory)
@@ -1548,5 +1599,138 @@ describe('#293 survival mode', () => {
       expect(a.mode).toBe(true);
       expect(b).toEqual(a);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #347 — the probe's reference point is the AI's OWN side when it has no entrance
+// ---------------------------------------------------------------------------
+
+describe("#347 aiSelectProbeTarget — no-entrance fallback uses the AI colony's own start", () => {
+  /**
+   * An AI colony with no entrances of its own measures candidate piles from its
+   * start column. Two unmarked piles sit within AI_PROBE_FALLBACK_RADIUS_TILES of
+   * the opponent's one open entrance at `doorX`: one `near` tiles toward the AI's
+   * home side, one `far` tiles away from it. Measured from the AI's own start the
+   * home-side pile is the closer; measured from the OPPOSITE start (the pre-#347
+   * fallback for a player-colony AI) the away-side pile would be — so the pick
+   * says which side the fallback used.
+   */
+  function world2(aiColonyId: ColonyId): WorldState {
+    const world = createScenario(7, 'Normal');
+    const own = world.colonies[aiColonyId]!;
+    const opp =
+      world.colonies[
+        (aiColonyId === PLAYER_COLONY_ID ? ENEMY_COLONY_ID : PLAYER_COLONY_ID) as ColonyId
+      ]!;
+    own.entrances = [];
+    opp.priorityFoodPileId = null;
+    const doorX = aiColonyId === PLAYER_COLONY_ID ? ENEMY_START_X : PLAYER_START_X;
+    opp.entrances = [{ entranceId: 900, surfaceTileX: doorX, surfaceTileY: 0, isOpen: true }];
+    return world;
+  }
+
+  it('a PLAYER-colony AI measures from PLAYER_START_X (west of the enemy door)', () => {
+    const world = world2(PLAYER_COLONY_ID as ColonyId);
+    // Enemy door at x=104. West pile 94 (toward the player), east pile 110.
+    // From x=24: west 70+5, east 86+5 -> west. From x=104: west 15, east 11 -> east.
+    setPilesForTest(world, [
+      {
+        foodPileId: 501,
+        tileX: ENEMY_START_X - 10,
+        tileY: 5,
+        pickupsRemaining: 5,
+        pickupsInitial: 5,
+      },
+      {
+        foodPileId: 502,
+        tileX: ENEMY_START_X + 6,
+        tileY: 5,
+        pickupsRemaining: 5,
+        pickupsInitial: 5,
+      },
+    ]);
+    expect(aiSelectProbeTarget(world, PLAYER_COLONY_ID as ColonyId)).toEqual({
+      tileX: ENEMY_START_X - 10,
+      tileY: 5,
+    });
+  });
+
+  it('the ENEMY AI (real play) still measures from ENEMY_START_X — unchanged', () => {
+    const world = world2(ENEMY_COLONY_ID as ColonyId);
+    // Player door at x=24. East pile 34 (toward the enemy), west pile 18.
+    // From x=104: east 70+5, west 86+5 -> east.
+    setPilesForTest(world, [
+      {
+        foodPileId: 601,
+        tileX: PLAYER_START_X - 6,
+        tileY: 5,
+        pickupsRemaining: 5,
+        pickupsInitial: 5,
+      },
+      {
+        foodPileId: 602,
+        tileX: PLAYER_START_X + 10,
+        tileY: 5,
+        pickupsRemaining: 5,
+        pickupsInitial: 5,
+      },
+    ]);
+    expect(aiSelectProbeTarget(world, ENEMY_COLONY_ID as ColonyId)).toEqual({
+      tileX: PLAYER_START_X + 10,
+      tileY: 5,
+    });
+  });
+
+  it("reads the reference from the colony's own state, not its ID (CLNY-08)", () => {
+    // Same layout as the PLAYER-colony case, but the player colony's pool sits at
+    // the ENEMY's column: a colony-state fallback now measures from x=104 and picks
+    // the east pile — a colony-ID fallback would still say west.
+    const world = world2(PLAYER_COLONY_ID as ColonyId);
+    const own = world.colonies[PLAYER_COLONY_ID as ColonyId]!;
+    world.food.tileX[own.poolSlot] = ENEMY_START_X;
+    const piles = [
+      {
+        foodPileId: 501,
+        tileX: ENEMY_START_X - 10,
+        tileY: 5,
+        pickupsRemaining: 5,
+        pickupsInitial: 5,
+      },
+      {
+        foodPileId: 502,
+        tileX: ENEMY_START_X + 6,
+        tileY: 5,
+        pickupsRemaining: 5,
+        pickupsInitial: 5,
+      },
+    ];
+    setPilesForTest(world, piles);
+    expect(aiSelectProbeTarget(world, PLAYER_COLONY_ID as ColonyId)).toEqual({
+      tileX: ENEMY_START_X + 6,
+      tileY: 5,
+    });
+    // A pool-less (hand-built) colony falls back to its queen's column. Queen at
+    // x=104 -> east; a 0 fallback or a NaN distance (reading slot -1) would say west.
+    own.poolSlot = -1;
+    world.ants.posX[own.queenEntityId] = ENEMY_START_X << FP_SHIFT;
+    expect(aiSelectProbeTarget(world, PLAYER_COLONY_ID as ColonyId)).toEqual({
+      tileX: ENEMY_START_X + 6,
+      tileY: 5,
+    });
+    // ...and it follows the queen: back at x=24 -> west.
+    world.ants.posX[own.queenEntityId] = PLAYER_START_X << FP_SHIFT;
+    expect(aiSelectProbeTarget(world, PLAYER_COLONY_ID as ColonyId)).toEqual({
+      tileX: ENEMY_START_X - 10,
+      tileY: 5,
+    });
+  });
+
+  it('a real scenario pool sits at each colony start column (fallback == pre-fix values)', () => {
+    const world = createScenario(7, 'Normal');
+    const p = world.colonies[PLAYER_COLONY_ID as ColonyId]!;
+    const e = world.colonies[ENEMY_COLONY_ID as ColonyId]!;
+    expect(world.food.tileX[p.poolSlot]).toBe(PLAYER_START_X);
+    expect(world.food.tileX[e.poolSlot]).toBe(ENEMY_START_X);
   });
 });

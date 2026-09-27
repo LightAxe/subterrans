@@ -9,7 +9,7 @@
 // QC Pass 4 AR-P0-001: S2 V17 ships Normal-only tier reads. S5 V22 gates all
 // NORMAL_TIER_INDEX lookup sites on SIM_VERSION_V22_DIFFICULTY and uses tierIndex(world.difficulty).
 
-import type { WorldState, AIStateRecord } from './types.js';
+import { SIM_VERSION_V56_OPPONENT_FRONTAGE, type WorldState, type AIStateRecord } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { ClearRallyPointCommand } from './commands.js';
 import { pushCommand } from './commands.js';
@@ -148,6 +148,38 @@ export function playerWorkerCount(world: WorldState): number {
   return colony.workerCount;
 }
 
+/**
+ * The colony an AI colony probes, invades and sizes itself against: the
+ * lowest-id colony in `world.colonies` other than its own (integer keys iterate
+ * in ascending order), or null if there is none. In the two-colony match that is
+ * the player for the enemy AI — the only AI in real play — and the enemy for a
+ * player-colony AI (the `check:ai-economy --both-ai` harness, a future AI-vs-AI
+ * mode). Derived by iteration, not by comparing against PLAYER_COLONY_ID /
+ * ENEMY_COLONY_ID, so the sim keeps no player-vs-enemy branch (CLNY-08).
+ */
+export function opponentColonyId(world: WorldState, aiColonyId: ColonyId): ColonyId | null {
+  for (const key in world.colonies) {
+    if (!Object.hasOwn(world.colonies, key)) continue;
+    const cid: ColonyId = Number(key);
+    if (cid !== aiColonyId && world.colonies[cid] !== undefined) return cid;
+  }
+  return null;
+}
+
+/**
+ * #347 — the worker count the frontage trigger compares an AI colony's own
+ * workers with (and the one `ai_state_transition` reports as
+ * `triggerValues.playerWorkerCount`). From V56 the opponent's; before V56 always
+ * the player's, so a player-colony AI compared its workers with itself. Identical
+ * for the enemy AI at every version.
+ */
+export function frontageOpponentWorkerCount(world: WorldState, aiColonyId: ColonyId): number {
+  if (world.simVersion < SIM_VERSION_V56_OPPONENT_FRONTAGE) return playerWorkerCount(world);
+  const opp = opponentColonyId(world, aiColonyId);
+  const colony = opp === null ? undefined : world.colonies[opp];
+  return colony === undefined ? 0 : colony.workerCount;
+}
+
 // ---------------------------------------------------------------------------
 // Cohort-alive-count helper (for operation exit conditions)
 // ---------------------------------------------------------------------------
@@ -185,7 +217,8 @@ function allProbeFightersDone(world: WorldState, aiState: AIStateRecord): boolea
 
 /**
  * Evaluate AI state machine transitions for one tick and mutate world.aiState.
- * Called from tick() at step 18b for every world.aiState record; never called with a player colony.
+ * Called from tick() at step 18b for every world.aiState record. In real play the only record
+ * is the enemy's; the --both-ai harness adds one for the player colony.
  * Returns the (potentially updated) AIStateRecord for the colony.
  */
 export function advanceAIState(world: WorldState, aiColonyId: ColonyId): AIStateRecord {
@@ -239,7 +272,7 @@ export function advanceAIState(world: WorldState, aiColonyId: ColonyId): AIState
           aiFighterCount: fighters,
           aiFoodStored: foodStored,
           aiFoodCap: foodCap,
-          playerWorkerCount: playerWorkerCount(world),
+          playerWorkerCount: frontageOpponentWorkerCount(world, aiColonyId),
         },
       },
     });
@@ -269,10 +302,11 @@ function _tryTransitionPeacetimeToWarFooting(
   const ageReady = world.tick >= AI_WARFOOTING_MIN_TICK;
 
   const aiWorkers = aiWorkerCount(world, aiColonyId);
-  const playerWorkers = playerWorkerCount(world);
+  // #347 (V56): the opponent's workers — the player's for the enemy AI.
+  const opponentWorkers = frontageOpponentWorkerCount(world, aiColonyId);
   const frontageReady =
-    playerWorkers >= AI_FRONTAGE_PLAYER_WORKERS_ABS &&
-    playerWorkers * 100 >= AI_FRONTAGE_PLAYER_WORKERS_RATIO_X100 * aiWorkers;
+    opponentWorkers >= AI_FRONTAGE_PLAYER_WORKERS_ABS &&
+    opponentWorkers * 100 >= AI_FRONTAGE_PLAYER_WORKERS_RATIO_X100 * aiWorkers;
 
   if (aiReady && (ageReady || frontageReady)) {
     aiState.state = 'WarFooting';
@@ -525,7 +559,7 @@ export function setAIRallyOperation(
           aiFighterCount: fighters,
           aiFoodStored: foodStored,
           aiFoodCap: foodCap,
-          playerWorkerCount: playerWorkerCount(world),
+          playerWorkerCount: frontageOpponentWorkerCount(world, aiColonyId),
         },
       },
     });
@@ -548,7 +582,12 @@ export function setAIRallyOperation(
         colonyId: aiColonyId,
         rallyTile: { x: rallyTileX, y: rallyTileY, grid: 'surface' },
         fighterCount: count,
-        targetGrid: PLAYER_COLONY_ID,
+        // #347 — the colony being invaded: the player for the enemy AI (unchanged),
+        // the enemy for a player-colony AI. Ungated: events are transient telemetry
+        // (never saved, never hashed; a replay re-emits them) and nothing in the sim
+        // reads this field back. (No opponent cannot happen in a two-colony match;
+        // the player id is the pre-#347 value.)
+        targetGrid: opponentColonyId(world, aiColonyId) ?? (PLAYER_COLONY_ID as ColonyId),
       },
     });
   }

@@ -27,7 +27,8 @@
 //   - enemy queen alive at tick 12 000 on >= 80% of seeds
 //   - opening completes on >= 90% of seeds
 //   - WarFooting (or later) reached on >= 70% of seeds
-//   - homebound foragers frozen outside by the V34 flee hold on <= 4% of ticks
+//   - homebound foragers frozen outside by the V34 flee hold on <= 4% of the
+//     ticks the enemy queen lived while the match was live (#349)
 //
 // The thresholds are calibrated on NORMAL, which is the default difficulty and
 // the gate `npm run check:ai-economy` runs. They are applied unchanged to
@@ -214,6 +215,11 @@ interface SeedResult {
    *  frozen by the V34 flee hold, and the measured window it is out of. */
   heldTicks: number;
   heldWindow: number;
+  /** #349 — the same, counted only while the match was live (before the first
+   *  tick tick() reported an outcome). The harness plays on past game over; the
+   *  live game does not, so post-match ticks are not something a player sees. */
+  heldTicksInMatch: number;
+  heldWindowInMatch: number;
   /** Most food (fp) held by those frozen foragers at once. */
   peakHeldFood: number;
   /** #290 PR 4 — enemy workers (fighters included) that starved while the enemy
@@ -475,6 +481,8 @@ function runSeed(seed: number): SeedResult {
     foodFirstZeroTick: null,
     heldTicks: 0,
     heldWindow: 0,
+    heldTicksInMatch: 0,
+    heldWindowInMatch: 0,
     peakHeldFood: 0,
     enemyWorkersStarved: 0,
     enemyFightersStarved: 0,
@@ -602,6 +610,13 @@ function runSeed(seed: number): SeedResult {
       sampleFrozenHomebound(world, ENEMY_COLONY_ID, frozenSample);
       if (frozenSample.count > 0) res.heldTicks += 1;
       if (frozenSample.food > res.peakHeldFood) res.peakHeldFood = frozenSample.food;
+      // #349 — the in-match share stops at the first tick with an outcome (as the
+      // stores-full counters above do): after game over the harness keeps ticking,
+      // and ants of a colony whose match is over are not stalls anyone plays.
+      if (res.matchEndTick === null) {
+        res.heldWindowInMatch += 1;
+        if (frozenSample.count > 0) res.heldTicksInMatch += 1;
+      }
     }
 
     const food = colonyFoodTotal(world, enemy);
@@ -756,7 +771,7 @@ console.log(
 );
 console.log('');
 console.log(
-  'seed | enemyQ@12k @24k death cause | peakW | opening | aiState(first!=Peace) | invading | foodPeak@tick | food0 | playerQ death cause | wStarved e(fighters)/p | frozen%',
+  'seed | enemyQ@12k @24k death cause | peakW | opening | aiState(first!=Peace) | invading | foodPeak@tick | food0 | playerQ death cause | wStarved e(fighters)/p | frozen% | frozen% in-match',
 );
 for (const r of results) {
   console.log(
@@ -772,7 +787,8 @@ for (const r of results) {
       `${String(r.playerDeathTick ?? '-').padStart(6)} ${r.playerDeathCause.padEnd(10)} | ` +
       `${r.enemyWorkersStarved}(${r.enemyFightersStarved})/${r.playerWorkersStarved} | ` +
       // Raw share (not rounded): shards are merged by recomputing the median.
-      `${r.heldWindow === 0 ? 0 : (r.heldTicks * 100) / r.heldWindow}`,
+      `${r.heldWindow === 0 ? 0 : (r.heldTicks * 100) / r.heldWindow} | ` +
+      `${r.heldWindowInMatch === 0 ? 0 : (r.heldTicksInMatch * 100) / r.heldWindowInMatch}`,
   );
 }
 
@@ -807,6 +823,12 @@ const heldShares = results
   .sort((a, b) => a - b);
 const heldShareMedian = median(heldShares);
 const heldShareMax = heldShares[heldShares.length - 1];
+// #349 — the in-match share (the acceptance check reads this one).
+const heldSharesInMatch = results
+  .map((r) => (r.heldWindowInMatch === 0 ? 0 : (r.heldTicksInMatch * 100) / r.heldWindowInMatch))
+  .sort((a, b) => a - b);
+const heldShareInMatchMedian = median(heldSharesInMatch);
+const heldShareInMatchMax = heldSharesInMatch[heldSharesInMatch.length - 1];
 /** One decimal, trailing ".0" trimmed — display only; never fed back to a check. */
 const fmtShare = (v: number | undefined): string =>
   v === undefined || Number.isNaN(v) ? '-' : `${Number(v.toFixed(1))}`;
@@ -852,6 +874,10 @@ console.log(
   `  Frozen-forager share (ticks with >=1 homebound forager held / ticks queen alive): ` +
     `median=${fmtShare(heldShareMedian)}%  max=${fmtShare(heldShareMax)}%  ` +
     `peak food frozen outside: ${Math.max(0, ...results.map((r) => r.peakHeldFood))} fp`,
+);
+console.log(
+  `  Frozen-forager share while the match was live (before the first outcome): ` +
+    `median=${fmtShare(heldShareInMatchMedian)}%  max=${fmtShare(heldShareInMatchMax)}%`,
 );
 console.log(`  Enemy queen death causes: ${tally(results.map((r) => r.enemyDeathCause))}`);
 console.log(`  Player queen death causes: ${tally(results.map((r) => r.playerDeathCause))}`);
@@ -952,6 +978,15 @@ const MIN_WARFOOTING_PCT = 70;
  * 12 000-tick window rather than of the queen-alive window, which is shorter on
  * exactly the seeds where the bug bites, and hence 19-34%). Quoting it against
  * this metric would have shipped a check that cannot fail on its own bug.
+ *
+ * #349 — the check reads the IN-MATCH share (the window stops at the first tick
+ * tick() reports an outcome), since the live game stops there and the harness
+ * does not. The whole-run share is still printed alongside it. The 4% threshold
+ * is CARRIED OVER from the whole-run calibration above, not re-measured on the
+ * bug population: the #297 freeze happens while the match is live, so the
+ * in-match share should read at least as high on it, but that is not shown. On
+ * the fixed code (V56 stack, 200 passive Normal seeds) the two read 0.2% whole-run
+ * vs 0.1% in-match (max 1.9%).
  */
 const MAX_FROZEN_FORAGER_SHARE_PCT = 4;
 
@@ -979,9 +1014,9 @@ const checks: ReadonlyArray<Check> = [
     `${pct(warFooting, SEEDS)} (>=${MIN_WARFOOTING_PCT}%)`,
   ],
   [
-    'Frozen-forager share (median)',
-    heldShareMedian <= MAX_FROZEN_FORAGER_SHARE_PCT,
-    `${fmtShare(heldShareMedian)}% (<=${MAX_FROZEN_FORAGER_SHARE_PCT}%)`,
+    'Frozen-forager share, in-match (median)',
+    heldShareInMatchMedian <= MAX_FROZEN_FORAGER_SHARE_PCT,
+    `${fmtShare(heldShareInMatchMedian)}% (<=${MAX_FROZEN_FORAGER_SHARE_PCT}%)`,
   ],
 ];
 

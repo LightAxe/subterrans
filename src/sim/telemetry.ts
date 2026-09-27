@@ -40,6 +40,9 @@ export type SimEvent =
           aiFighterCount: number;
           aiFoodStored: number;
           aiFoodCap: number;
+          /** The worker count the frontage check compares with: the AI's opponent's
+           *  (the player's in real play; the enemy's for a player-colony AI from
+           *  V56, #347). The wire name is kept for the playtrace schema. */
           playerWorkerCount: number;
         };
       };
