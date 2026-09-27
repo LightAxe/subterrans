@@ -1247,7 +1247,26 @@ export const SIM_VERSION_V56_OPPONENT_FRONTAGE = 56 as const;
  * V56 save replays byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V57_ROUTED_TO_ENTRANCE = 57 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V57_ROUTED_TO_ENTRANCE;
+
+/**
+ * #363 (V58) — a STARVING fighter drops the fight to go eat.
+ *
+ * Up to V57 combat came first for a hungry fighter (D11): a duel in progress (the
+ * spider's included), an enemy ant in sight, or its colony's order to fight the
+ * spider kept it from walking home, so a fighter held in an on-and-off fight away
+ * from home could starve there. From V58 a fighter away from home and empty-handed
+ * that is STARVING — FIGHTER_STARVING_TICKS since its last meal, 600 ticks before
+ * it would starve (`fighterIsStarving`) — walks home by the D11 walk-home anyway,
+ * if its colony's stores can feed it (`storesCanSpareMeal`):
+ *   - on the surface, from a duel, past enemy ants it sees, and out from under
+ *     its colony's spider order (step 10d leaves a fighter walking home to eat alone);
+ *   - below ground in an enemy nest, from a duel or with enemies near.
+ * A hungry fighter short of starving still fights first, as before. No new
+ * serialized field, command, world.rngState draw, entity-ID advance or tick-order
+ * change. A V57 save replays byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
+ */
+export const SIM_VERSION_V58_STARVING_FIGHTER_EATS = 58 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V58_STARVING_FIGHTER_EATS;
 
 /**
  * S2 — AI colony state machine states.
