@@ -40,6 +40,8 @@ const PUBLIC_FUNCTIONS = [
   'fighterMayLoot', // V52 (#290 PR 5) — the raid predicate (the explicit-Raid-order extension point)
   'updateRaiders', // V52 (#290 PR 5) — step 10e, consumed by tick.ts
   'tickRaidActions', // V52 (#290 PR 5) — step 16e, consumed by tick.ts
+  'tileSaturatedFor', // V59 (#364) — the saturation rule, pinned by its unit test
+  'invaderHuntStep', // V59 (#364) — the invader hunt step, pinned by its unit test
 ] as const;
 
 describe('ant-system barrel public API (#212)', () => {
@@ -49,7 +51,7 @@ describe('ant-system barrel public API (#212)', () => {
     });
   }
 
-  it('exports EXACTLY the 31 public functions (no accidental widening or narrowing)', () => {
+  it('exports EXACTLY the 33 public functions (no accidental widening or narrowing)', () => {
     const exportedFns = Object.keys(barrel)
       .filter((k) => typeof (barrel as Record<string, unknown>)[k] === 'function')
       .sort();

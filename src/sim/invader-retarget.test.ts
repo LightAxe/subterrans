@@ -21,13 +21,14 @@ import {
 } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import {
+  NO_FREE_HOSTILE,
   fighterMayLoot,
+  invaderHuntStep,
   pickInvaderUndergroundStep,
+  tileSaturatedFor,
   unpackStepDx,
   unpackStepDy,
 } from './ant/ant-system.js';
-import { tileSaturatedFor } from './ant/ant-motion.js';
-import { NO_FREE_HOSTILE, invaderHuntStep } from './ant/invader-retarget.js';
 import { AntTask, FightingSubState } from './enums.js';
 import { Zone, ugSet, UndergroundTileState } from './terrain.js';
 import { FP_ONE, FP_SHIFT } from './fixed.js';
@@ -455,6 +456,27 @@ describe('#364 — full ticks: a pile of invaders spreads over the defenders', (
         }
       });
     }
+  }
+});
+
+describe("#364 — the raid check reads the saturation rule on the raider's own tile too", () => {
+  for (const [label, lower, loots] of [
+    ['a LOWER-id friend holds the duel there: it does not stop it', true, true],
+    ['only a HIGHER-id friend there: the raider is the one paired, so it stops it', false, false],
+  ] as const) {
+    it(label, () => {
+      const r = raidWorld();
+      rallyOn(r.player, r.enemyDoor);
+      const before = lower
+        ? addRaidFighter(r.world, PLAYER_COLONY_ID, 100, 6, ENEMY_COLONY_ID)
+        : -1;
+      const id = addRaidFighter(r.world, PLAYER_COLONY_ID, 100, 6, ENEMY_COLONY_ID);
+      const after = lower ? -1 : addRaidFighter(r.world, PLAYER_COLONY_ID, 100, 6, ENEMY_COLONY_ID);
+      expect(lower ? before < id : after > id).toBe(true);
+      addEnemyWorker(r.world, 100, 6); // on the raider's own tile
+      expect(fighterMayLoot(r.world, r.player, id)).toBe(loots);
+      expect(tileSaturatedFor(r.world, id, ENEMY_COLONY_ID, 100, 6)).toBe(loots);
+    });
   }
 });
 
