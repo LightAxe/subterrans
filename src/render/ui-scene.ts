@@ -295,6 +295,7 @@ import {
   completeCaption,
   clearPendingFirstUse,
   createCaptionQueueState,
+  recurringCaptionMayEnter,
   type CaptionQueueState,
   type CaptionRequest,
 } from './caption-queue.js';
@@ -1887,8 +1888,8 @@ export class UIScene extends Phaser.Scene {
   /** #290 PR 6 — true while the caption queue's pending slot is empty, so a
    *  recurring caption (raid news) can wait instead of taking the slot a one-shot
    *  caption would need. */
-  captionPendingFree(): boolean {
-    return this.captionState.pending === null;
+  captionQueueIdle(): boolean {
+    return recurringCaptionMayEnter(this.captionState);
   }
 
   /** #290 PR 6 — Dev/E2E-only: captions begun this round (see captionsShownLog).

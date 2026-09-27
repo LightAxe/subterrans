@@ -295,7 +295,7 @@ interface UIScenePhase9 {
   // #290 PR 6 — Dev/E2E observability for __phase9_test.getCaptionsShown().
   captionsShown?(): string[];
   // #290 PR 6 — true while the caption queue's single pending slot is empty.
-  captionPendingFree?(): boolean;
+  captionQueueIdle?(): boolean;
 }
 
 // Re-export GamePhase for Plan 07 and other consumers
@@ -1629,14 +1629,16 @@ export class GameScene extends Phaser.Scene {
     // the player colony's raid counters and throttled per caption (raid-captions.ts).
     // Recurring: no one-shot key.
     // The cooldown starts only once the queue has taken the caption. An owed
-    // caption is offered only while the queue has a free pending slot, so it
-    // never takes that slot from a one-shot caption; it stays owed (up to
-    // RAID_CAPTION_OWED_TICKS) and is retried each frame until then.
+    // caption is offered only while the queue is fully idle (nothing showing or
+    // pending). Taking the pending slot behind an active caption would make an
+    // arriving one-shot caption (rallyRaid, queen damage, invasion) get dropped,
+    // so raid news waits instead; it stays owed (up to RAID_CAPTION_OWED_TICKS)
+    // and is retried each frame until then.
     const raidCaption = nextRaidCaption(this.raidCaptions, this.world, PLAYER_COLONY_ID);
     if (
       raidCaption !== null &&
       uiScene &&
-      uiScene.captionPendingFree?.() !== false &&
+      uiScene.captionQueueIdle?.() !== false &&
       uiScene.showCaption(RAID_CAPTION_TEXTS[raidCaption], this.layout.w / 2, 60)
     ) {
       markRaidCaptionShown(this.raidCaptions, this.world, raidCaption);
