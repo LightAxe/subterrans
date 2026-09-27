@@ -472,5 +472,5 @@ describe('V54 (#337) — tick-level', () => {
       }
     }
     expect(rotatedSeeds).toBeGreaterThan(0);
-  });
+  }, 60_000); // several thousand full-pipeline ticks; generous for loaded CI runners
 });

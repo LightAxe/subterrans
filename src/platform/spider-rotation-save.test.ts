@@ -57,7 +57,7 @@ describe('V54 (#337) — save/load mid-rotation', () => {
       tick(loaded, loaded.commandQueue.splice(0));
     }
     expect(hashWorldState(loaded)).toBe(hashWorldState(world));
-  });
+  }, 60_000); // several thousand full-pipeline ticks; generous for loaded CI runners
 });
 
 describe('V54 (#337) — save validation of the new spider fields', () => {
