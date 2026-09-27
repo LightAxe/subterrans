@@ -19,7 +19,7 @@
 //   (14) Phase 2 regression: independent bucket arrays/objects per colony (factory body unchanged guard)
 
 import { describe, it, expect } from 'vitest';
-import { ChamberType } from '../enums.js';
+import { ChamberType, RaidType } from '../enums.js';
 import { RECONCILE_INTERVAL_TICKS } from '../constants.js';
 import { createColonyRecord, createColonyStore, type ChamberRecord } from './colony-store.js';
 
@@ -94,17 +94,22 @@ describe('createColonyRecord', () => {
     expect('idleCount' in r).toBe(false);
   });
 
-  it('(11) ColonyRecord Phase 2 factory returns 24 fields (17 Phase 2 + killCount + priorityFoodPileId + queenLastEggTick + eggIntervalNumerator + alarmActive + #290 foodRaidedFp/foodLostToRaidsFp/raidTrips; Phase 3 extensions are undefined until caller assigns)', () => {
+  it('(11) ColonyRecord Phase 2 factory returns 25 fields (17 Phase 2 + killCount + priorityFoodPileId + queenLastEggTick + eggIntervalNumerator + alarmActive + #290 foodRaidedFp/foodLostToRaidsFp/raidTrips + #352 raidType; Phase 3 extensions are undefined until caller assigns)', () => {
     const r = createColonyRecord(1, 0);
     // 17 Phase 2 + Phase 9 killCount + Phase 9 priorityFoodPileId + S4 queenLastEggTick
     // + S5 eggIntervalNumerator + C1 alarmActive + #290 foodRaidedFp/foodLostToRaidsFp/raidTrips
+    // + #352 raidType
     // (foodStored -> poolSlot is a 1-for-1 swap already counted in the 17; queenStarvationTimer
     // was removed with no replacement field)
-    expect(Object.keys(r).length).toBe(24);
+    expect(Object.keys(r).length).toBe(25);
   });
 
   it('createColonyRecord initializes alarmActive to false (C1 — the alarm is opt-in)', () => {
     expect(createColonyRecord(1, 42).alarmActive).toBe(false);
+  });
+
+  it('createColonyRecord initializes raidType to Loot (#352 — the V53 raid)', () => {
+    expect(createColonyRecord(1, 42).raidType).toBe(RaidType.Loot);
   });
 
   it('createColonyRecord initializes killCount to 0', () => {

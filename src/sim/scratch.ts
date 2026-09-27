@@ -190,7 +190,31 @@ export interface ScratchArena {
     committedFp: Map<number, number>;
     committedTick: number;
   };
+  /**
+   * ant-blockade.ts (#352, V60) — `mark[id]` is BLOCKADE_MARK_WALKING or
+   * BLOCKADE_MARK_HELD when step 10c left surface fighter `id` for step 10c2 to
+   * route (its colony blockades an enemy entrance; HELD = it was holding its post
+   * last tick), else 0; step 10c2 turns it to BLOCKADE_MARK_ROUTED for one it sends
+   * to the entrance round obstacles (read by step 16). Cleared at the start of
+   * each 10c pass. `posts` is the
+   * ring-post list of the entrance being routed (flat [x0, y0, x1, y1, …]),
+   * `rank` the next post index per colony; both refilled per 10c2 pass.
+   */
+  blockade: {
+    mark: Uint8Array;
+    posts: number[];
+    postsEntranceId: number;
+    rank: Map<number, number>;
+  };
 }
+
+/** #352 — scratch.blockade.mark: step 10c left this fighter for step 10c2. */
+export const BLOCKADE_MARK_WALKING = 1;
+/** #352 — scratch.blockade.mark: as WALKING, and it was holding its post last tick. */
+export const BLOCKADE_MARK_HELD = 2;
+/** #352 — scratch.blockade.mark, written by step 10c2: it is beyond the leash and
+ *  walks to the blockaded entrance round obstacles (ant-blockade.ts). */
+export const BLOCKADE_MARK_ROUTED = 3;
 
 // eslint-disable-next-line subterrans/sim-module-state -- sim-cache: per-world scratch arena keyed by WorldState identity; transient, never serialized, recreated per world (same pattern as FLOW_FIELD_CACHES below)
 let SCRATCH = new WeakMap<WorldState, ScratchArena>();
@@ -273,6 +297,12 @@ export function getScratch(world: WorldState): ScratchArena {
         reachCand: [],
         committedFp: new Map(),
         committedTick: -1,
+      },
+      blockade: {
+        mark: new Uint8Array(0),
+        posts: [],
+        postsEntranceId: -1,
+        rank: new Map(),
       },
     };
     SCRATCH.set(world, a);

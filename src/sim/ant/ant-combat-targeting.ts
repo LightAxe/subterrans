@@ -20,7 +20,8 @@ import {
   storesCanSpareMeal,
 } from '../hunger.js';
 import { isSurfaceTileInComponent } from '../surface-features.js';
-import { getScratch } from '../scratch.js';
+import { BLOCKADE_MARK_HELD, BLOCKADE_MARK_WALKING, getScratch } from '../scratch.js';
+import { blockadedEntrance } from '../raid-order.js';
 import { DIR_DX, DIR_DY, canEnterUndergroundTile, packStep } from './ant-motion.js';
 import type { AntComponents } from './ant-store.js';
 import type { ScratchArena } from '../scratch.js';
@@ -1403,6 +1404,13 @@ export function updateFightAntTargets(world: WorldState): void {
   }
   const sentryMoving = scratch.sentryMoving;
   sentryMoving.fill(0);
+  // #352 (V60) — the blockaders this pass leaves for step 10c2 (ant-blockade.ts).
+  const blockade = getScratch(world).blockade;
+  if (blockade.mark.length < ants.alive.length) {
+    blockade.mark = new Uint8Array(ants.alive.length);
+  }
+  const blockadeMark = blockade.mark;
+  blockadeMark.fill(0);
   const entranceTiles = scratch.sentryEntranceTiles;
   entranceTiles.length = 0;
   for (const cidKey in world.colonies) {
@@ -1709,6 +1717,15 @@ export function updateFightAntTargets(world: WorldState): void {
         ants.targetPosX[id] = -1;
         ants.targetPosY[id] = -1;
       }
+      continue;
+    }
+
+    // #352 (V60) — on the surface, a fighter whose colony blockades an enemy
+    // entrance holds a post round it and chases what comes near: step 10c2
+    // (ant-blockade.ts, updateBlockaders) routes it, reading this mark. (A hungry
+    // one away from home was sent to eat above; below ground it climbs out first.)
+    if (ants.zone[id] === Zone.Surface && blockadedEntrance(world, colony) !== null) {
+      blockadeMark[id] = wasHolding ? BLOCKADE_MARK_HELD : BLOCKADE_MARK_WALKING;
       continue;
     }
 

@@ -21,6 +21,15 @@
 // (FightingSubState.Looting / Hauling), the routing, the loot and deposit verbs and
 // the counters stay as they are.
 //
+// Raid orders (#352, V60). The colony's raid type (`colonyRaidType`, raid-order.ts)
+// branches here: lootVerdict lets Loot, Deny and Spoil loot (only Loot minds the
+// room at home, the V53 gates) and never a Blockade or an Assault; a Deny hauler
+// with nowhere to store its load drops it beside its own entrance
+// (denyHaulerDropsLoad, step 10e); a Spoil looter destroys a load in place every
+// SPOIL_TICKS_PER_LOAD ticks instead of taking it (step 16e); an Assault invader
+// is pointed at the enemy queen (assaultQueenOf, step 10e). The Blockade itself is
+// ant-blockade.ts. Below V60 every colony is Loot.
+//
 // Steps. 10e `updateRaiders` (after the fighter routing of 10c/10d) decides who
 // loots this tick and points surface haulers at home; 16 (tickAntMovement) steps
 // looters by the stock field and haulers by the entrance fields; 16e
@@ -38,8 +47,9 @@ import {
   RAID_ENGAGE_RADIUS_TILES,
   RAID_LOOT_START_STOCK_FP,
   RAID_START_CLEAR_RADIUS_TILES,
+  SPOIL_TICKS_PER_LOAD,
 } from '../constants.js';
-import { AntTask, ChamberType, FightingSubState } from '../enums.js';
+import { AntTask, ChamberType, FightingSubState, RaidType } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import {
   chamberStock,
@@ -52,6 +62,8 @@ import {
   topUpOrSpawnCorpsePile,
 } from '../food/food-api.js';
 import { fighterIsHungry } from '../hunger.js';
+import { colonyRaidType } from '../raid-order.js';
+import { isSurfaceTileInComponent } from '../surface-features.js';
 import { getScratch, RAID_REACH_WINDOW_RADIUS, RAID_REACH_WINDOW_SIDE } from '../scratch.js';
 import { Zone } from '../terrain.js';
 import {
@@ -63,6 +75,7 @@ import {
 import {
   DIR_DX,
   DIR_DY,
+  canEnterSurfaceTile,
   canEnterUndergroundTile,
   stampFriendTiles,
   tileSaturated,
@@ -322,6 +335,9 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: 
  * With hysteresis: to START (it is not Looting yet) the chamber must hold
  * RAID_LOOT_START_STOCK_FP and nothing hostile may be within
  * RAID_START_CLEAR_RADIUS_TILES; so the answer depends on its current sub-state.
+ * #352 (V60) — by raid type: Loot as above; Deny and Spoil skip the V53 room
+ * gates (Deny keeps what will not fit by its door, Spoil takes nothing home);
+ * a Blockade or an Assault never loots.
  */
 export function fighterMayLoot(world: WorldState, colony: ColonyRecord, id: number): boolean {
   return lootVerdict(world, colony, id) === LOOT;
@@ -340,6 +356,10 @@ const NOT_A_RAIDER = -2;
  */
 function lootVerdict(world: WorldState, colony: ColonyRecord, id: number): number {
   if (world.simVersion < SIM_VERSION_V52_RAIDING) return NOT_A_RAIDER;
+  // #352 (V60): a Blockade never goes in, and an Assault ignores food (step 10e
+  // sends it at the queen instead); neither loots. Loot, Deny and Spoil do.
+  const raidType = colonyRaidType(world, colony);
+  if (raidType === RaidType.Blockade || raidType === RaidType.Assault) return NOT_A_RAIDER;
   const ants = world.ants;
   if (ants.task[id] !== AntTask.Fighting || ants.zone[id] !== Zone.Underground) {
     return NOT_A_RAIDER;
@@ -351,7 +371,9 @@ function lootVerdict(world: WorldState, colony: ColonyRecord, id: number): numbe
   if (ants.foodCarrying[id] !== 0 || ants.combatOpponentId[id] !== -1) return NOT_A_RAIDER;
   if (fighterIsHungry(world, id)) return NOT_A_RAIDER;
   const looting = ants.subTask[id] === FightingSubState.Looting;
-  if (world.simVersion >= SIM_VERSION_V53_NO_LOOT_WHEN_FULL) {
+  // #352 (V60): only Loot minds the room at home. Deny steals regardless (what
+  // will not fit is dropped by its own entrance) and Spoil brings nothing home.
+  if (world.simVersion >= SIM_VERSION_V53_NO_LOOT_WHEN_FULL && raidType === RaidType.Loot) {
     // Stop: nowhere at all to put food. Start also needs room for a whole load.
     // Both gates must hold to start: with 3+ FoodStorage chambers each can sit
     // under its 512 fp deposit hysteresis while the total free space still holds
@@ -453,7 +475,12 @@ export function updateRaiders(world: WorldState): void {
       }
       ants.targetPosX[id] = -1;
       ants.targetPosY[id] = -1;
-      if (ants.zone[id] === Zone.Surface) pointAtNearestOpenEntrance(world, colony, id);
+      if (ants.zone[id] === Zone.Surface) {
+        // #352 (V60): a Deny hauler at its door with nowhere to store the load
+        // leaves it there as a food pile and goes back (denyHaulerDropsLoad).
+        if (denyHaulerDropsLoad(world, colony, id)) continue;
+        pointAtNearestOpenEntrance(world, colony, id);
+      }
       continue;
     }
     const verdict = lootVerdict(world, colony, id);
@@ -474,11 +501,111 @@ export function updateRaiders(world: WorldState): void {
       // follows this target; without one it takes the nearest hostile in the nest).
       ants.targetPosX[id] = ants.posX[verdict]!;
       ants.targetPosY[id] = ants.posY[verdict]!;
+      continue;
+    }
+    // #352 (V60): an Assault goes for the enemy queen (step 16 steps it there by
+    // the wall-aware invader step, as it does a hunted hostile).
+    const queen = assaultQueenOf(world, colony, id);
+    if (queen >= 0) {
+      ants.targetPosX[id] = ants.posX[queen]!;
+      ants.targetPosY[id] = ants.posY[queen]!;
     }
   }
   // Outside this pass (a between-ticks fighterMayLoot query) the committed food is
   // rebuilt on every call, so it can never be read stale.
   raid.committedTick = -1;
+}
+
+/**
+ * #352 (V60) — the queen fighter `id` of `colony` goes for on an Assault, or -1:
+ * its colony's raid type is Assault, it is below ground in a FOREIGN nest whose
+ * open entrance its colony is rallied on, it is not in a duel (a fight it is in
+ * comes first: with no target, step 16's hunt takes the nearest hostile, which is
+ * the one on its tile), and that nest's queen is alive and below ground in it. A
+ * hungry one step 10c sent home to eat walks out before step 16 reads a target.
+ */
+function assaultQueenOf(world: WorldState, colony: ColonyRecord, id: number): number {
+  if (colonyRaidType(world, colony) !== RaidType.Assault) return -1;
+  const ants = world.ants;
+  if (ants.zone[id] !== Zone.Underground || ants.combatOpponentId[id] !== -1) return -1;
+  const gridColonyId = ants.currentGridColonyId[id]!;
+  if (gridColonyId === ants.colonyId[id]) return -1;
+  const gridColony = world.colonies[gridColonyId];
+  if (gridColony === undefined || !rallyOnEntranceOf(colony, gridColony)) return -1;
+  const q = gridColony.queenEntityId;
+  if (q < 0 || ants.alive[q] !== 1 || ants.zone[q] !== Zone.Underground) return -1;
+  return ants.currentGridColonyId[q] === gridColonyId ? q : -1;
+}
+
+/**
+ * #352 (V60) — Deny: surface hauler `id` of `colony` drops its load beside its
+ * own entrance when the colony cannot store it. It does when its colony's raid
+ * type is Deny, it stands within one tile (Chebyshev) of one of its colony's open
+ * entrances (it walks home by the surface entrance flow field, so it crosses that
+ * ring before it can step onto the shaft and go down), and the room its stores
+ * can take (`colonyDepositableRoom`) is less than its load. The load
+ * becomes a surface food pile on the hauler's tile (`topUpOrSpawnCorpsePile`: whole
+ * pickups, so a part-eaten remainder is lost; a full pile store or an
+ * off-component tile loses it all), or — on an entrance tile, where no pile may
+ * lie — on the first of its N/E/S/W neighbours that is walkable, in the surface
+ * component and not an entrance; with none it keeps its load and walks on. The
+ * trip counts as done (`raidTrips`, as a deposit would) and the hauler goes back
+ * to its rally. Its colony's foragers bring the pile in once there is room.
+ * Returns true if it dropped.
+ */
+function denyHaulerDropsLoad(world: WorldState, colony: ColonyRecord, id: number): boolean {
+  if (colonyRaidType(world, colony) !== RaidType.Deny) return false;
+  const ants = world.ants;
+  const load = ants.foodCarrying[id]!;
+  if (load <= 0) return false;
+  const ents = colony.entrances;
+  if (ents == null) return false;
+  const tx = ants.posX[id]! >> FP_SHIFT;
+  const ty = ants.posY[id]! >> FP_SHIFT;
+  let atDoor = false;
+  for (let e = 0; e < ents.length && !atDoor; e++) {
+    const ent = ents[e]!;
+    if (!ent.isOpen) continue;
+    const ex = ent.surfaceTileX - tx;
+    const ey = ent.surfaceTileY - ty;
+    atDoor = ex >= -1 && ex <= 1 && ey >= -1 && ey <= 1;
+  }
+  if (!atDoor) return false;
+  if (colonyDepositableRoom(world, colony) >= load) return false;
+  let dropX = tx;
+  let dropY = ty;
+  if (isAnyEntranceTile(world, tx, ty)) {
+    dropX = -1;
+    for (let i = 0; i < DIR_DX.length && dropX < 0; i++) {
+      const nx = tx + DIR_DX[i]!;
+      const ny = ty + DIR_DY[i]!;
+      if (!canEnterSurfaceTile(world, nx, ny) || !isSurfaceTileInComponent(world, nx, ny)) {
+        continue;
+      }
+      if (isAnyEntranceTile(world, nx, ny)) continue;
+      dropX = nx;
+      dropY = ny;
+    }
+    if (dropX < 0) return false;
+  }
+  topUpOrSpawnCorpsePile(world, dropX, dropY, load);
+  ants.foodCarrying[id] = 0;
+  ants.subTask[id] = FightingSubState.MovingToRally;
+  colony.raidTrips += 1;
+  return true;
+}
+
+/** Surface tile (x, y) is an entrance (open or closed) of any colony. */
+function isAnyEntranceTile(world: WorldState, x: number, y: number): boolean {
+  for (const key in world.colonies) {
+    if (!Object.hasOwn(world.colonies, key)) continue;
+    const ents = world.colonies[key as unknown as keyof typeof world.colonies]!.entrances;
+    if (ents == null) continue;
+    for (let e = 0; e < ents.length; e++) {
+      if (ents[e]!.surfaceTileX === x && ents[e]!.surfaceTileY === y) return true;
+    }
+  }
+  return false;
 }
 
 /** Target (tile centre) the open entrance of `colony` nearest to ant `id`
@@ -550,10 +677,18 @@ export function tickRaidActions(world: WorldState): void {
       if (gridColonyId === ants.colonyId[id] || ants.foodCarrying[id] !== 0) continue;
       const victim = world.colonies[gridColonyId];
       if (victim === undefined) continue;
+      // #352 (V60): a spoiler destroys a load where it stands every
+      // SPOIL_TICKS_PER_LOAD ticks (its id staggers the beat) and stays Looting.
+      const spoil = colonyRaidType(world, colony) === RaidType.Spoil;
+      if (spoil && (world.tick + id) % SPOIL_TICKS_PER_LOAD !== 0) continue;
       for (let c = 0; c < victim.chambers.length; c++) {
         const ch = victim.chambers[c]!;
         if (ch.chamberType !== ChamberType.FoodStorage || chamberStock(world, ch) <= 0) continue;
         if (!inFootprint(ch, tx, ty)) continue;
+        if (spoil) {
+          victim.foodLostToRaidsFp += takeFromStock(world, victim, ch, RAID_CARRY_FP);
+          break;
+        }
         const taken = takeFromStock(world, victim, ch, RAID_CARRY_FP);
         if (taken > 0) {
           ants.foodCarrying[id] = taken;

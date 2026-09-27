@@ -17,6 +17,7 @@ import {
   SIM_VERSION_V50_LOCATED_FOOD,
   SIM_VERSION_V51_UNIFIED_HUNGER,
   SIM_VERSION_V52_RAIDING,
+  SIM_VERSION_V60_RAID_ORDERS,
 } from '../sim/types.js';
 import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/constants.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
@@ -67,7 +68,7 @@ import {
   PLAYER_COLONY_ID,
 } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
-import { AntTask, ChamberType, FightingSubState } from '../sim/enums.js';
+import { AntTask, ChamberType, FightingSubState, RaidType, isRaidType } from '../sim/enums.js';
 import { livePileTiles } from '../sim/food/food-api.js';
 import { Zone } from '../sim/terrain.js';
 import { FIGHTER_HUNGER, LARVA_HUNGER, QUEEN_HUNGER, WORKER_HUNGER } from '../sim/hunger.js';
@@ -709,6 +710,9 @@ interface SerializedColony {
   priorityFoodPileId: FoodPileId | null;
   /** C1 (V42) — colony alarm stance. Absent on pre-V42 saves → false on load. */
   alarmActive?: boolean;
+  /** #352 (V60) — the rally's raid type (RaidType). Written only when it is not
+   *  Loot, so a pre-V60 save (always Loot) is unchanged; absent → Loot on load. */
+  raidType?: number;
   eggIntervalNumerator: number;
 }
 
@@ -1051,6 +1055,9 @@ function serializeColony(c: ColonyRecord): SerializedColony {
     priorityFoodPileId: c.priorityFoodPileId,
     alarmActive: c.alarmActive,
     eggIntervalNumerator: c.eggIntervalNumerator,
+    // #352 (V60): only a non-Loot raid type is written (a pre-V60 world is always
+    // Loot), so every older save and every Loot colony serializes byte-identically.
+    ...(c.raidType !== RaidType.Loot ? { raidType: c.raidType } : {}),
   };
 }
 
@@ -1544,6 +1551,12 @@ function deserializeColony(s: SerializedColony): ColonyRecord {
   // C1 (V42) — absent on pre-V42 saves, and a tampered non-boolean must not
   // smuggle a truthy value into a sim branch: coerce anything else to false.
   c.alarmActive = s.alarmActive === true;
+  // #352 (V60) — absent = Loot. A present value must be a RaidType other than
+  // Loot (Loot is never written); anything else is a tampered save.
+  if (s.raidType !== undefined && (!isRaidType(s.raidType) || s.raidType === RaidType.Loot)) {
+    throw new Error(`Invalid colony.raidType: ${String(s.raidType)}`);
+  }
+  c.raidType = s.raidType ?? RaidType.Loot;
   c.queenLastEggTick = s.queenLastEggTick;
   // Valid difficulty numerators are 3, 4, 5. Reject any out-of-range value (tampered save or future compat).
   c.eggIntervalNumerator =
@@ -1888,6 +1901,13 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
       throw new Error(`Invalid colonies key: ${cidStr}`);
     }
     colonies[Number(cidStr)] = deserializeColony(sc);
+    // #352 — only a V60+ world ever sets a raid type other than Loot.
+    if (
+      validatedSimVersion < SIM_VERSION_V60_RAID_ORDERS &&
+      colonies[Number(cidStr)]!.raidType !== RaidType.Loot
+    ) {
+      throw new Error(`Invalid colony.raidType before V60: ${String(sc.raidType)}`);
+    }
   }
   const undergroundGrids: Record<ColonyId, UndergroundGrid> = {};
   for (const [cidStr, sg] of Object.entries(s.undergroundGrids)) {

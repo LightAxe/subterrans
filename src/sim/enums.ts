@@ -100,3 +100,31 @@ export const PheromoneType = {
   DangerTrail: 1,
 } as const;
 export type PheromoneType = (typeof PheromoneType)[keyof typeof PheromoneType];
+
+// ---------------------------------------------------------------------------
+// RaidType — #352 (V60): what fighters rallied on an enemy entrance do there.
+// Stored on the colony with its rally (`ColonyRecord.raidType`), set by the
+// SetRallyPoint command's optional `raidType`. Values are serialized: append only.
+// ---------------------------------------------------------------------------
+
+export const RaidType = {
+  /** Steal food while the colony's own stores have room (the V53 raid). */
+  Loot: 0,
+  /** Steal regardless of room; what cannot be stored is dropped by the home entrance. */
+  Deny: 1,
+  /** Destroy the enemy's stored food where it lies. */
+  Spoil: 2,
+  /** Hold a ring round the enemy entrance on the surface and fight all who come near. */
+  Blockade: 3,
+  /** Ignore food and go for the queen. */
+  Assault: 4,
+} as const;
+export type RaidType = (typeof RaidType)[keyof typeof RaidType];
+
+/** #352 — the RaidType values, in order (the save and the command validate against it). */
+export const RAID_TYPE_COUNT = 5;
+
+/** #352 — `v` is a RaidType value (an integer in [0, RAID_TYPE_COUNT)). */
+export function isRaidType(v: unknown): v is RaidType {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < RAID_TYPE_COUNT;
+}

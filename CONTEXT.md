@@ -267,9 +267,28 @@ enemy nest into that colony's pool). Every "may this fighter loot?" rule lives i
 one predicate (`fighterMayLoot`, `src/sim/ant/ant-raid.ts`), so an explicit raid
 order would change only that. The player sees raids through **captions** (being
 raided, raiding, a haul home), a **carried-food** crumb on every laden ant, and the
-raiding / hauling counts in the ant-activity panel.
+raiding / hauling counts in the ant-activity panel. Since **#352 (simVersion V60)**
+what a raid does is its **raid type** (below); the rule above is **Loot**.
 _Avoid_: **raid** for an AI `Probe` (a probe is a small attack, below); **plunder**,
 **pillage**, **steal order**.
+
+**Raid type / raid order** (`RaidType`, simVersion V60, #352):
+What a colony's fighters do at an enemy entrance its rally is on — stored on the
+colony with its rally, chosen from the **raid menu** (right-click or long-press an
+enemy entrance); a plain tap rallies with **Loot**. One raid at a time: a new rally
+replaces the old one, and clearing it resets the type. **Loot** steals while its own
+stores have room; **Deny** steals regardless, leaving what its stores cannot hold as
+a food pile beside its own entrance; **Spoil** destroys the enemy's stored food where
+it lies; **Blockade** (below) never goes in; **Assault** ignores food and goes for
+the queen. Loot, Deny and Spoil go for the queen once there is nothing left to take.
+The AI always raids with Loot.
+_Avoid_: **raid mode**, **stance** (stance = the colony alarm), **attack type**.
+
+**Blockade** (raid type, simVersion V60, #352):
+Fighters that hold a ring of posts on the surface round an enemy entrance instead of
+going down it, and attack every enemy ant — fighters included — that comes within a
+few tiles of it; one that leaves is let go and they return to their posts.
+_Avoid_: **siege**, **camp** (camp = the spider's rampage on an entrance).
 
 **Spider behavior state** (`SpiderBehaviorState`):
 The spider's state machine: `Patrolling`, `Hunting`, `Chasing`, `Striking`,
@@ -312,7 +331,8 @@ _Avoid_: build, construct.
 
 **Rally point** (`SetRallyPoint`):
 A surface location fighters converge on. A rally on an enemy's open entrance sends
-them into that nest, where they fight and **raid** (see **Raid**). Clearing the rally
+them into that nest, where they fight and **raid** (see **Raid**); since V60 it
+carries a **raid type**. Clearing the rally
 **recalls** them; since **#346 (simVersion V55)** a recalled invader walks out of the
 enemy nest by the wall-aware route to the first open entrance it can reach, so a bend
 in the tunnel no longer pins it.
