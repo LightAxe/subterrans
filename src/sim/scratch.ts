@@ -52,7 +52,7 @@ export interface ScratchArena {
   spider: {
     huntTileCounts: Uint16Array;
     huntDirty: number[];
-    nearestEntrance: { x: number; y: number; colonyId: number };
+    nearestEntrance: { x: number; y: number; colonyId: number; entranceId: number };
   };
   /** ant-combat-targeting.ts — underground BFS buffers (touched-cell restore) for
    *  the invader step; from V44 (#325) the nest survey (surveyDefendedNests)
@@ -187,7 +187,7 @@ export function getScratch(world: WorldState): ScratchArena {
       spider: {
         huntTileCounts: new Uint16Array(SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT),
         huntDirty: [],
-        nearestEntrance: { x: -1, y: -1, colonyId: -1 },
+        nearestEntrance: { x: -1, y: -1, colonyId: -1, entranceId: -1 },
       },
       antTargeting: {
         invBfsDist: new Int32Array(0),

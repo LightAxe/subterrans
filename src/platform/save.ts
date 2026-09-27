@@ -748,6 +748,10 @@ interface SerializedSpiderState {
   feedAwayTileX: number;
   feedAwayTileY: number;
   feedArrivedTick: number;
+  // V54 (#337) — absent on a pre-V54 save; restored as -1 (none).
+  rampageEntranceId?: number;
+  rampageRotationEntranceId?: number;
+  rampageRotationTick?: number;
 }
 
 /** S2 — serialized form of AIStateRecord. operationFighterIds stored as number[]. */
@@ -1660,6 +1664,20 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
       ? 'Patrolling'
       : rawState;
   if (safeState === 'Chasing' && !chaseTargetValid) safeState = 'Patrolling';
+  const rotationValid =
+    typeof r.rampageRotationEntranceId === 'number' &&
+    Number.isInteger(r.rampageRotationEntranceId) &&
+    r.rampageRotationEntranceId >= 0 &&
+    typeof r.rampageRotationTick === 'number' &&
+    Number.isInteger(r.rampageRotationTick) &&
+    r.rampageRotationTick >= 0 &&
+    // A timeout cannot lie in the future; a later tick would stretch the
+    // single-entrance cooldown without bound.
+    (typeof s.tick !== 'number' || r.rampageRotationTick <= s.tick);
+  const rampageTargetValid =
+    safeState === 'Rampaging' &&
+    typeof r.rampageTargetColonyId === 'number' &&
+    r.rampageTargetColonyId > 0;
   return {
     state: safeState,
     posX: typeof r.posX === 'number' && Number.isInteger(r.posX) ? r.posX : 0,
@@ -1711,12 +1729,7 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
       typeof r.rampageKillsThisRampage === 'number' && Number.isInteger(r.rampageKillsThisRampage)
         ? r.rampageKillsThisRampage
         : 0,
-    rampageTargetColonyId:
-      safeState === 'Rampaging' &&
-      typeof r.rampageTargetColonyId === 'number' &&
-      r.rampageTargetColonyId > 0
-        ? r.rampageTargetColonyId
-        : -1,
+    rampageTargetColonyId: rampageTargetValid ? (r.rampageTargetColonyId as number) : -1,
     chaseTargetAntId: safeState === 'Chasing' ? rawChaseId : -1,
     chaseStartTick:
       typeof r.chaseStartTick === 'number' && Number.isInteger(r.chaseStartTick)
@@ -1743,6 +1756,27 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
       typeof r.feedArrivedTick === 'number' && Number.isInteger(r.feedArrivedTick)
         ? r.feedArrivedTick
         : -1,
+    // V54 (#337). The pinned entrance only means something mid-rampage (as
+    // rampageTargetColonyId); the rotation cursor and its timeout tick outlive the
+    // rampage (they last until the spider's next kill). A cursor without a valid tick
+    // is dropped as a pair, so the single-entrance cooldown never reads a garbage clock.
+    // The pin goes with its target colony: a pin without one would camp an entrance
+    // of a colony the step-4 re-pick did not choose.
+    // It must also be an entrance OF that target colony: campedEntrance looks the id
+    // up across every colony, so a pin naming another colony's entrance would send
+    // the gate-hold and movement to the wrong colony.
+    rampageEntranceId:
+      rampageTargetValid &&
+      typeof r.rampageEntranceId === 'number' &&
+      Number.isInteger(r.rampageEntranceId) &&
+      r.rampageEntranceId >= 0 &&
+      (s.colonies[String(r.rampageTargetColonyId)]?.entrances ?? []).some(
+        (e) => e.entranceId === r.rampageEntranceId,
+      )
+        ? r.rampageEntranceId
+        : -1,
+    rampageRotationEntranceId: rotationValid ? (r.rampageRotationEntranceId as number) : -1,
+    rampageRotationTick: rotationValid ? (r.rampageRotationTick as number) : -1,
   };
 }
 

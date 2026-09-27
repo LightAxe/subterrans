@@ -3,6 +3,7 @@
 // All decisions are deterministic from WorldState + tick; no world.rngState draws.
 
 import type { WorldState, SpiderState } from './types.js';
+import { SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES } from './types.js';
 import { emitEvent } from './telemetry.js';
 import { pheromoneKeySuffix } from './pheromone/pheromone-store.js';
 import { depositDangerCross } from './pheromone/danger.js';
@@ -16,6 +17,7 @@ import {
   SPIDER_TELEGRAPH_TICKS,
   SPIDER_STRIKE_TICKS,
   SPIDER_RAMPAGE_MAX_TICKS,
+  SPIDER_RAMPAGE_REVISIT_COOLDOWN_TICKS,
   SPIDER_HUNT_SEARCH_RADIUS_TILES,
   SPIDER_HUNT_MIN_TARGET_WORKERS,
   SPIDER_SPEED,
@@ -318,7 +320,7 @@ function findNearestEntrance(
   world: WorldState,
   spider: SpiderState,
   targetColonyId: number = -1,
-): { x: number; y: number; colonyId: number } | null {
+): { x: number; y: number; colonyId: number; entranceId: number } | null {
   const spiderTileX = spider.posX >> FP_SHIFT;
   const spiderTileY = spider.posY >> FP_SHIFT;
 
@@ -327,6 +329,7 @@ function findNearestEntrance(
   let bestX = -1;
   let bestY = -1;
   let bestColonyId = -1;
+  let bestEntranceId = -1;
 
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
@@ -347,6 +350,7 @@ function findNearestEntrance(
         bestX = entrance.surfaceTileX;
         bestY = entrance.surfaceTileY;
         bestColonyId = cid;
+        bestEntranceId = entrance.entranceId;
       }
     }
   }
@@ -355,7 +359,131 @@ function findNearestEntrance(
   ne.x = bestX;
   ne.y = bestY;
   ne.colonyId = bestColonyId;
+  ne.entranceId = bestEntranceId;
   return ne;
+}
+
+/**
+ * V54 (#337): the entrance a rampage camps. A rotated rampage pins its entrance
+ * (`rampageEntranceId`): the camp is that entrance while it is open, and null once it
+ * is not (the Rampaging case then ends the rampage as sealed, and the next one rotates
+ * on; falling back to another entrance of the colony could land on the one the spider
+ * just timed out on). Without a pin (the pre-V54 rule, and V54's first rampage of a
+ * hungry spell) it is the nearest open entrance of `rampageTargetColonyId`. Returns the
+ * shared scratch out-param (read it before the next call) or null.
+ */
+function campedEntrance(
+  world: WorldState,
+  spider: SpiderState,
+): { x: number; y: number; colonyId: number; entranceId: number } | null {
+  if (spider.rampageEntranceId >= 0) {
+    for (const key in world.colonies) {
+      if (!Object.hasOwn(world.colonies, key)) continue;
+      const colony = world.colonies[key as unknown as import('./colony/colony-store.js').ColonyId];
+      if (colony === undefined) continue;
+      for (let e = 0; e < colony.entrances.length; e++) {
+        const entrance = colony.entrances[e]!;
+        if (entrance.entranceId !== spider.rampageEntranceId) continue;
+        if (!entrance.isOpen) break;
+        const ne = getScratch(world).spider.nearestEntrance;
+        ne.x = entrance.surfaceTileX;
+        ne.y = entrance.surfaceTileY;
+        ne.colonyId = Number(key);
+        ne.entranceId = entrance.entranceId;
+        return ne;
+      }
+    }
+    return null;
+  }
+  return findNearestEntrance(world, spider, spider.rampageTargetColonyId);
+}
+
+/**
+ * V54 (#337): the entrance the next rampage camps while the spider is rotating
+ * (`rampageRotationEntranceId` >= 0, the entrance whose rampage last timed out).
+ * Candidates are the open entrances of every colony (colonyId > 0), ordered by
+ * ascending `entranceId` (globally unique: entrance ids come from the world's entity
+ * allocator). The pick is the first candidate AFTER the cursor, wrapping to the
+ * lowest, and never the cursor itself. When the cursor's entrance is the only open
+ * one, it is picked once SPIDER_RAMPAGE_REVISIT_COOLDOWN_TICKS have passed since the
+ * timeout; before that (or with no open entrance at all) the result is null and the
+ * spider does not rampage. Returns the shared scratch out-param. No allocation, no RNG.
+ */
+function pickRotationEntrance(
+  world: WorldState,
+  spider: SpiderState,
+): { x: number; y: number; colonyId: number; entranceId: number } | null {
+  const cursor = spider.rampageRotationEntranceId;
+  let nextId = -1; // lowest open id above the cursor
+  let nextX = -1;
+  let nextY = -1;
+  let nextCid = -1;
+  let wrapId = -1; // lowest open id overall (other than the cursor)
+  let wrapX = -1;
+  let wrapY = -1;
+  let wrapCid = -1;
+  let cursorOpen = false;
+  let cursorX = -1;
+  let cursorY = -1;
+  let cursorCid = -1;
+  for (const key in world.colonies) {
+    if (!Object.hasOwn(world.colonies, key)) continue;
+    const cid = Number(key);
+    if (cid <= 0) continue; // skip NEUTRAL_COLONY_ID, as pickRampageTarget does
+    const colony = world.colonies[key as unknown as import('./colony/colony-store.js').ColonyId];
+    if (colony === undefined) continue;
+    for (let e = 0; e < colony.entrances.length; e++) {
+      const entrance = colony.entrances[e]!;
+      if (!entrance.isOpen) continue;
+      const id = entrance.entranceId;
+      if (id === cursor) {
+        cursorOpen = true;
+        cursorX = entrance.surfaceTileX;
+        cursorY = entrance.surfaceTileY;
+        cursorCid = cid;
+        continue;
+      }
+      if (id > cursor && (nextId < 0 || id < nextId)) {
+        nextId = id;
+        nextX = entrance.surfaceTileX;
+        nextY = entrance.surfaceTileY;
+        nextCid = cid;
+      }
+      if (wrapId < 0 || id < wrapId) {
+        wrapId = id;
+        wrapX = entrance.surfaceTileX;
+        wrapY = entrance.surfaceTileY;
+        wrapCid = cid;
+      }
+    }
+  }
+  const ne = getScratch(world).spider.nearestEntrance;
+  if (nextId >= 0) {
+    ne.x = nextX;
+    ne.y = nextY;
+    ne.colonyId = nextCid;
+    ne.entranceId = nextId;
+    return ne;
+  }
+  if (wrapId >= 0) {
+    ne.x = wrapX;
+    ne.y = wrapY;
+    ne.colonyId = wrapCid;
+    ne.entranceId = wrapId;
+    return ne;
+  }
+  // Single-entrance rule: the cursor's entrance is the only open one in the world.
+  if (
+    cursorOpen &&
+    world.tick - spider.rampageRotationTick >= SPIDER_RAMPAGE_REVISIT_COOLDOWN_TICKS
+  ) {
+    ne.x = cursorX;
+    ne.y = cursorY;
+    ne.colonyId = cursorCid;
+    ne.entranceId = cursor;
+    return ne;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -918,6 +1046,10 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
   //    earlier this tick. Any meal — predation OR self-defense — resets hunger.
   if (spider.killedThisTick === 1) {
     spider.hungerTicks = 0;
+    // V54 (#337): it found food, so the entrance rotation ends. Never set before V54,
+    // so this is a no-op there.
+    spider.rampageRotationEntranceId = -1;
+    spider.rampageRotationTick = -1;
     if (!isFighterAdjacent(world, spider) && spider.state !== 'Feeding') {
       // Close the open encounter episode before switching to Feeding so telemetry
       // consumers that pair spider_*_start with spider_*_end don't see a dangling
@@ -943,6 +1075,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
       spider.huntTargetTileY = -1;
       spider.chaseTargetAntId = -1;
       spider.rampageTargetColonyId = -1;
+      spider.rampageEntranceId = -1;
       world.spiderPriorityColonyId = null;
       emitEvent(world, {
         tick: world.tick,
@@ -972,7 +1105,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
   if (spider.state === 'Patrolling' || spider.state === 'Hunting' || spider.state === 'Rampaging') {
     let holdGate = false;
     if (spider.state === 'Rampaging' && spider.rampageTargetColonyId >= 0) {
-      const camped = findNearestEntrance(world, spider, spider.rampageTargetColonyId);
+      const camped = campedEntrance(world, spider);
       holdGate = camped !== null && isSurfaceAntOnTile(world, camped.x, camped.y);
     }
     const attackerId = holdGate ? -1 : findNearestAttackingFighter(world, spider);
@@ -986,6 +1119,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
       } else if (spider.state === 'Rampaging') {
         emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
         spider.rampageTargetColonyId = -1;
+        spider.rampageEntranceId = -1;
         world.spiderPriorityColonyId = null;
       }
       clearSpiderPairingSentinels(world);
@@ -1028,12 +1162,25 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
               spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
             }
           }
-          if (!entered) {
+          // V54 (#337): after a timed-out rampage the spider rotates to the next
+          // entrance (pickRotationEntrance) instead of the 60/40 colony pick; with
+          // nowhere to rotate to yet (single-entrance cooldown) it does not rampage.
+          const rotating =
+            !entered &&
+            world.simVersion >= SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES &&
+            spider.rampageRotationEntranceId >= 0;
+          const rotateTo = rotating ? pickRotationEntrance(world, spider) : null;
+          if (!entered && (!rotating || rotateTo !== null)) {
             // Camp a colony entrance and eat the first ant there.
             spider.state = 'Rampaging';
             spider.rampageStartTick = world.tick;
             spider.rampageKillsThisRampage = 0;
-            spider.rampageTargetColonyId = pickRampageTarget(world, spider);
+            if (rotateTo !== null) {
+              spider.rampageTargetColonyId = rotateTo.colonyId;
+              spider.rampageEntranceId = rotateTo.entranceId;
+            } else {
+              spider.rampageTargetColonyId = pickRampageTarget(world, spider);
+            }
             emitEvent(world, {
               tick: world.tick,
               type: 'spider_rampage_start',
@@ -1116,26 +1263,39 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
       // through step 3 (→ Feeding).
       if (world.tick - spider.rampageStartTick >= SPIDER_RAMPAGE_MAX_TICKS) {
         // Leash: no ant surfaced at the entrance in time.
+        // V54 (#337): remember the entrance it timed out on, so the next rampage
+        // moves on to another one (pickRotationEntrance). Only a camp that caught
+        // nothing counts: a rampage that got a kill (one with a fighter adjacent keeps
+        // the spider Rampaging) found food, and that ends the rotation instead.
+        if (
+          world.simVersion >= SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES &&
+          spider.rampageKillsThisRampage === 0
+        ) {
+          const timedOut = campedEntrance(world, spider);
+          if (timedOut !== null) {
+            spider.rampageRotationEntranceId = timedOut.entranceId;
+            spider.rampageRotationTick = world.tick;
+          }
+        }
         emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
         clearSpiderPairingSentinels(world);
         spider.state = 'Patrolling';
         spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
         spider.rampageTargetColonyId = -1;
+        spider.rampageEntranceId = -1;
         world.spiderPriorityColonyId = null;
-      } else if (
-        spider.rampageTargetColonyId < 0 ||
-        findNearestEntrance(world, spider, spider.rampageTargetColonyId) === null
-      ) {
+      } else if (spider.rampageTargetColonyId < 0 || campedEntrance(world, spider) === null) {
         // No target yet, or the camped colony sealed its only open entrance.
         // (Re-pick first; if still no open entrance, resume patrolling.)
         if (spider.rampageTargetColonyId < 0)
           spider.rampageTargetColonyId = pickRampageTarget(world, spider);
-        if (findNearestEntrance(world, spider, spider.rampageTargetColonyId) === null) {
+        if (campedEntrance(world, spider) === null) {
           emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
           clearSpiderPairingSentinels(world);
           spider.state = 'Patrolling';
           spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
           spider.rampageTargetColonyId = -1;
+          spider.rampageEntranceId = -1;
           world.spiderPriorityColonyId = null;
         }
       } else {
@@ -1150,13 +1310,14 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
         // spider bite resolves it THIS tick. Diverting would vacate the gate and let the
         // pinned ant slip underground. Only chase once the entrance tile is clear.
         // Attacking fighters were already handled by the step-4a self-defense check.
-        const camped = findNearestEntrance(world, spider, spider.rampageTargetColonyId);
+        const camped = campedEntrance(world, spider);
         const holdGate = camped !== null && isSurfaceAntOnTile(world, camped.x, camped.y);
         const stragglerId = holdGate ? -1 : findChaseTarget(world, spider);
         if (stragglerId >= 0) {
           emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
           clearSpiderPairingSentinels(world);
           spider.rampageTargetColonyId = -1;
+          spider.rampageEntranceId = -1;
           world.spiderPriorityColonyId = null;
           enterChasing(world, spider, stragglerId);
         }
@@ -1210,10 +1371,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
   }
 
   // 6. Movement.
-  const rampageNearest =
-    spider.state === 'Rampaging'
-      ? findNearestEntrance(world, spider, spider.rampageTargetColonyId)
-      : null;
+  const rampageNearest = spider.state === 'Rampaging' ? campedEntrance(world, spider) : null;
   switch (spider.state) {
     case 'Patrolling': {
       // Slow meander across the whole map: step only every Nth tick toward a

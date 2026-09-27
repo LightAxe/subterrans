@@ -50,6 +50,7 @@ const { createScenario } = await import('../src/sim/scenario.js');
 const { tick } = await import('../src/sim/tick.js');
 const { Zone, UndergroundTileState, ugGet } = await import('../src/sim/terrain.js');
 const { FP_SHIFT } = await import('../src/sim/fixed.js');
+const { SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES } = await import('../src/sim/types.js');
 const { AntTask, ForagingSubState } = await import('../src/sim/enums.js');
 const { serializeWorldState, deserializeWorldState, MIN_ACCEPTED_SIM_VERSION, OldSimVersionError } =
   await import('../src/platform/save.js');
@@ -274,7 +275,34 @@ function stripCommandQueue(s: typeof debug.snapshot): unknown {
   const { commandQueue: _cq, ...rest } = s as unknown as Record<string, unknown>;
   return rest;
 }
+// V54 (#337) added three optional spider fields that serializeWorldState always
+// emits. A V50–V53 snapshot never has them (they load as -1), so for a pre-V54
+// snapshot drop any the captured spider lacks from the replay before comparing,
+// or every in-window pre-V54 snapshot would read as a SCEN-06 regression. A V54+
+// snapshot always carries all three, so nothing is ever stripped from one.
+const V54_OPTIONAL_SPIDER_KEYS = [
+  'rampageEntranceId',
+  'rampageRotationEntranceId',
+  'rampageRotationTick',
+] as const;
+function dropSpiderKeysAbsentFrom(
+  replayState: Record<string, unknown>,
+  captured: Record<string, unknown>,
+): void {
+  const v = captured.simVersion;
+  if (typeof v !== 'number' || v >= SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES) return;
+  const rs = replayState.spider as Record<string, unknown> | null | undefined;
+  const cs = captured.spider;
+  if (rs == null || cs == null || typeof cs !== 'object') return;
+  for (const k of V54_OPTIONAL_SPIDER_KEYS) {
+    if (!(k in cs)) delete rs[k];
+  }
+}
 const replaySerialized = serializeWorldState(replay);
+dropSpiderKeysAbsentFrom(
+  replaySerialized as unknown as Record<string, unknown>,
+  debug.snapshot as unknown as Record<string, unknown>,
+);
 const replayJson = JSON.stringify(
   stripCommandQueue(replaySerialized as unknown as typeof debug.snapshot),
 );

@@ -81,6 +81,9 @@ function makeSpider(overrides: Partial<SpiderState> = {}): SpiderState {
     feedAwayTileX: -1,
     feedAwayTileY: -1,
     feedArrivedTick: -1,
+    rampageEntranceId: -1,
+    rampageRotationEntranceId: -1,
+    rampageRotationTick: -1,
     ...overrides,
   };
 }
