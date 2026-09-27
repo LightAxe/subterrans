@@ -1,10 +1,10 @@
-// routed-doorward.test.ts — #357 + #358 (V57): surface walkers bound for one
-// particular door route round what is in the way.
+// routed-to-entrance.test.ts — #357 + #358 (V57): surface walkers bound for one
+// particular entrance route round what is in the way.
 //
 // Up to V56 a tunnel-defence fighter walking to the entrance its colony defends,
 // and a surface digger walking to its entrance target (closed or open), stepped
-// in a straight line at that door, so an obstacle between them pinned them.
-// From V57 each steps down the surface goal field seeded at its own door
+// in a straight line at that entrance, so an obstacle between them pinned them.
+// From V57 each steps down the surface goal field seeded at its own entrance
 // (stepTowardReachable). Neither can use the entrance flow field: it leads to the
 // NEAREST OPEN entrance, which a defender may not go down and which a closed
 // dig target is never on.
@@ -20,7 +20,7 @@ import { createScenario } from './scenario.js';
 import {
   allocateEntityId,
   SIM_VERSION_V56_OPPONENT_FRONTAGE,
-  SIM_VERSION_V57_ROUTED_DOORWARD,
+  SIM_VERSION_V57_ROUTED_TO_ENTRANCE,
   LATEST_SIM_VERSION,
   type WorldState,
 } from './types.js';
@@ -30,8 +30,9 @@ import { antIsAtHome, fighterIsHungry } from './hunger.js';
 import { AntTask } from './enums.js';
 import { Zone, ugSet, UndergroundTileState } from './terrain.js';
 import { FP_ONE, FP_SHIFT } from './fixed.js';
-import { canEnterSurfaceTile } from './ant/ant-motion.js';
-import { surfaceGoalDistance } from './surface-routing.js';
+import { canEnterSurfaceTile, unpackStepDx, unpackStepDy } from './ant/ant-motion.js';
+import { OFF_GOAL_FIELD, entranceRoutedStep } from './ant/entrance-routed-step.js';
+import { stepTowardReachable, surfaceGoalDistance } from './surface-routing.js';
 import { setPoolFoodForTest } from './food/food-test-utils.js';
 import {
   ENEMY_COLONY_ID,
@@ -42,11 +43,11 @@ import {
 } from './constants.js';
 
 const V56 = SIM_VERSION_V56_OPPONENT_FRONTAGE;
-const V57 = SIM_VERSION_V57_ROUTED_DOORWARD;
+const V57 = SIM_VERSION_V57_ROUTED_TO_ENTRANCE;
 const center = (t: number): number => (t << FP_SHIFT) + (FP_ONE >> 1);
 
-/** The enemy colony's starting door on every seed below. */
-const DOOR = { x: 104, y: 64 } as const;
+/** The enemy colony's starting entrance on every seed below. */
+const ENEMY_ENTRANCE = { x: 104, y: 64 } as const;
 
 /**
  * A quiet world: no spider, no AI, colony `colonyId`'s pool holding `food` fp,
@@ -92,7 +93,7 @@ function addAnt(
 }
 
 /** Rally the colony on its own open entrance at (x, y): a tunnel defence (V44). */
-function defendDoor(world: WorldState, colonyId: number, x: number, y: number): void {
+function defendEntrance(world: WorldState, colonyId: number, x: number, y: number): void {
   world.colonies[colonyId]!.rallyPoint = { tileX: x, tileY: y };
 }
 
@@ -146,7 +147,7 @@ function walkDown(world: WorldState, id: number, ticks: number, task: number): W
 }
 
 /**
- * Seed 7: an obstacle at x103–108, y58–60 between the enemy door (104,64) and
+ * Seed 7: an obstacle at x103–108, y58–60 between the enemy entrance (104,64) and
  * (104,56), 8 tiles north of it: a fighter there is AT HOME (antIsAtHome), so a
  * hungry one does not take the D11 walk home.
  */
@@ -154,7 +155,7 @@ const HOME_SEED = 7;
 const HOME_FROM = { x: 104, y: 56 } as const;
 
 /**
- * Seed 488 (#343's map): an obstacle at x103–106, y51–54 north of the enemy door.
+ * Seed 488 (#343's map): an obstacle at x103–106, y51–54 north of the enemy entrance.
  * A walker at (104,48), due north of it and out of home range, runs into it.
  */
 const FAR_SEED = 488;
@@ -163,60 +164,91 @@ const FAR_FROM = { x: 104, y: 48 } as const;
 /**
  * Seed 1: a DesignateEntrance at (108,50) is accepted (closed until dug), with an
  * obstacle at x107–110, y41–44 between it and a digger at (108,40). That digger is
- * nearer the closed entrance than the open door, so the closed one is its target.
+ * nearer the closed entrance than the open one, so the closed one is its target.
  */
 const DIG_SEED = 1;
 const DIG_FROM = { x: 108, y: 40 } as const;
-const DIG_DOOR = { x: 108, y: 50 } as const;
+const DIG_ENTRANCE = { x: 108, y: 50 } as const;
 
 describe('V57 (#357, #358)', () => {
   it('LATEST is V57 or later', () => {
-    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V57_ROUTED_DOORWARD);
+    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V57_ROUTED_TO_ENTRANCE);
   });
 });
 
 describe('fixtures', () => {
-  it('seed 7: the obstacle stands between HOME_FROM and the door, inside home range', () => {
+  it('seed 7: the obstacle stands between HOME_FROM and the entrance, inside home range', () => {
     const world = quietWorld(HOME_SEED, V57, ENEMY_COLONY_ID);
-    const door = world.colonies[ENEMY_COLONY_ID]!.entrances[0]!;
-    expect({ x: door.surfaceTileX, y: door.surfaceTileY, open: door.isOpen }).toEqual({
-      ...DOOR,
+    const ent = world.colonies[ENEMY_COLONY_ID]!.entrances[0]!;
+    expect({ x: ent.surfaceTileX, y: ent.surfaceTileY, open: ent.isOpen }).toEqual({
+      ...ENEMY_ENTRANCE,
       open: true,
     });
     expect(canEnterSurfaceTile(world, HOME_FROM.x, HOME_FROM.y)).toBe(true);
     expectBlocked(world, 103, 108, 58, 60);
-    expect(manhattan(HOME_FROM, DOOR)).toBeLessThanOrEqual(HOME_EAT_RADIUS_TILES);
+    expect(manhattan(HOME_FROM, ENEMY_ENTRANCE)).toBeLessThanOrEqual(HOME_EAT_RADIUS_TILES);
   });
 
-  it('seed 488: the obstacle stands between FAR_FROM and the door, out of home range', () => {
+  it('seed 488: the obstacle stands between FAR_FROM and the entrance, out of home range', () => {
     const world = quietWorld(FAR_SEED, V57, ENEMY_COLONY_ID);
     expect(canEnterSurfaceTile(world, FAR_FROM.x, FAR_FROM.y)).toBe(true);
     expectBlocked(world, 103, 106, 51, 54);
-    expect(manhattan(FAR_FROM, DOOR)).toBeGreaterThan(HOME_EAT_RADIUS_TILES);
+    expect(manhattan(FAR_FROM, ENEMY_ENTRANCE)).toBeGreaterThan(HOME_EAT_RADIUS_TILES);
   });
 
-  it('seed 1: the closed entrance is accepted, nearer the digger than the door, behind the obstacle', () => {
+  it('seed 1: the closed entrance is accepted, nearer the digger than the open one, behind the obstacle', () => {
     const world = digWorld(V57);
     const ents = world.colonies[ENEMY_COLONY_ID]!.entrances;
     expect(ents.map((e) => [e.surfaceTileX, e.surfaceTileY, e.isOpen])).toEqual([
-      [DOOR.x, DOOR.y, true],
-      [DIG_DOOR.x, DIG_DOOR.y, false],
+      [ENEMY_ENTRANCE.x, ENEMY_ENTRANCE.y, true],
+      [DIG_ENTRANCE.x, DIG_ENTRANCE.y, false],
     ]);
     expect(canEnterSurfaceTile(world, DIG_FROM.x, DIG_FROM.y)).toBe(true);
     expectBlocked(world, 107, 110, 41, 44);
-    expect(manhattan(DIG_FROM, DIG_DOOR)).toBeLessThan(manhattan(DIG_FROM, DOOR));
+    expect(manhattan(DIG_FROM, DIG_ENTRANCE)).toBeLessThan(manhattan(DIG_FROM, ENEMY_ENTRANCE));
   });
 });
 
-describe('#357 (V57) — a tunnel-defence fighter behind an obstacle gets to its door', () => {
+describe('entranceRoutedStep (the V57 step both walkers take)', () => {
+  const world = quietWorld(HOME_SEED, V57, ENEMY_COLONY_ID);
+  const step = (x: number, y: number): number =>
+    entranceRoutedStep(
+      world,
+      center(x),
+      center(y),
+      center(ENEMY_ENTRANCE.x),
+      center(ENEMY_ENTRANCE.y),
+    );
+
+  it('is (0, 0) on the entrance tile itself', () => {
+    const s = step(ENEMY_ENTRANCE.x, ENEMY_ENTRANCE.y);
+    expect([unpackStepDx(s), unpackStepDy(s)]).toEqual([0, 0]);
+  });
+
+  it('is the goal-field step from a tile that can reach the entrance', () => {
+    const s = step(HOME_FROM.x, HOME_FROM.y);
+    expect(s).not.toBe(OFF_GOAL_FIELD);
+    expect([unpackStepDx(s), unpackStepDy(s)]).not.toEqual([0, 0]);
+    expect(s).toBe(
+      stepTowardReachable(world, HOME_FROM.x, HOME_FROM.y, ENEMY_ENTRANCE.x, ENEMY_ENTRANCE.y),
+    );
+  });
+
+  it('is OFF_GOAL_FIELD from a tile that cannot (inside the obstacle)', () => {
+    expect(canEnterSurfaceTile(world, 105, 59)).toBe(false);
+    expect(step(105, 59)).toBe(OFF_GOAL_FIELD);
+  });
+});
+
+describe('#357 (V57) — a tunnel-defence fighter behind an obstacle gets to its entrance', () => {
   /**
    * A hungry defender at HOME_FROM, its colony's stores empty (below the queen's
    * reserve), so it stays hungry and at home: step 10c keeps it on its ordinary
-   * rally routing, to the defended door.
+   * rally routing, to the defended entrance.
    */
   function hungryAtHome(version: number): { walk: Walk; world: WorldState; id: number } {
     const world = quietWorld(HOME_SEED, version, ENEMY_COLONY_ID, 0);
-    defendDoor(world, ENEMY_COLONY_ID, DOOR.x, DOOR.y);
+    defendEntrance(world, ENEMY_COLONY_ID, ENEMY_ENTRANCE.x, ENEMY_ENTRANCE.y);
     const id = addAnt(
       world,
       ENEMY_COLONY_ID,
@@ -241,17 +273,19 @@ describe('#357 (V57) — a tunnel-defence fighter behind an obstacle gets to its
   it('V57: a hungry one at home walks round it and goes down to defend', () => {
     const { walk, world, id } = hungryAtHome(V57);
     expect(walk.downAt).toBeGreaterThanOrEqual(0);
-    expect(walk.downColumn).toBe(DOOR.x);
+    expect(walk.downColumn).toBe(ENEMY_ENTRANCE.x);
     expectNoRevisit(walk.tiles);
     tick(world, []);
     expect(fighterDefendsTunnels(world, id)).toBe(true);
   });
 
   /** A fed defender at FAR_FROM (out of home range). */
-  function fedFromFar(version: number, extraDoor?: { x: number; y: number }): Walk {
+  function fedFromFar(version: number, extraEntrance?: { x: number; y: number }): Walk {
     const world = quietWorld(FAR_SEED, version, ENEMY_COLONY_ID);
-    if (extraDoor !== undefined) addOpenEntrance(world, ENEMY_COLONY_ID, extraDoor.x, extraDoor.y);
-    defendDoor(world, ENEMY_COLONY_ID, DOOR.x, DOOR.y);
+    if (extraEntrance !== undefined) {
+      addOpenEntrance(world, ENEMY_COLONY_ID, extraEntrance.x, extraEntrance.y);
+    }
+    defendEntrance(world, ENEMY_COLONY_ID, ENEMY_ENTRANCE.x, ENEMY_ENTRANCE.y);
     const id = addAnt(world, ENEMY_COLONY_ID, FAR_FROM.x, FAR_FROM.y, AntTask.Fighting, 0);
     return walkDown(world, id, 300, AntTask.Fighting);
   }
@@ -260,21 +294,21 @@ describe('#357 (V57) — a tunnel-defence fighter behind an obstacle gets to its
     expect(fedFromFar(V56).downAt).toBe(-1);
   });
 
-  it('V57: a fed one walks round it and goes down its door, never stepping back onto a tile it left', () => {
+  it('V57: a fed one walks round it and goes down its entrance, never stepping back onto a tile it left', () => {
     const walk = fedFromFar(V57);
     expect(walk.downAt).toBeGreaterThanOrEqual(0);
-    expect(walk.downColumn).toBe(DOOR.x);
+    expect(walk.downColumn).toBe(ENEMY_ENTRANCE.x);
     expectNoRevisit(walk.tiles);
   });
 
   it('V57: with a nearer open entrance of its own, it still goes to the one it defends', () => {
-    // A second open door at (100,46), a few tiles from FAR_FROM: the entrance flow
+    // A second open entrance at (100,46), a few tiles from FAR_FROM: the entrance flow
     // field leads there, but a defender may go down only the defended shaft.
     const extra = { x: 100, y: 46 };
-    expect(manhattan(FAR_FROM, extra)).toBeLessThan(manhattan(FAR_FROM, DOOR));
+    expect(manhattan(FAR_FROM, extra)).toBeLessThan(manhattan(FAR_FROM, ENEMY_ENTRANCE));
     const walk = fedFromFar(V57, extra);
     expect(walk.downAt).toBeGreaterThanOrEqual(0);
-    expect(walk.downColumn).toBe(DOOR.x);
+    expect(walk.downColumn).toBe(ENEMY_ENTRANCE.x);
     expectNoRevisit(walk.tiles);
   });
 });
@@ -292,15 +326,15 @@ function addOpenEntrance(world: WorldState, colonyId: number, x: number, y: numb
   for (let sy = 0; sy < 4; sy++) ugSet(grid, x, sy, UndergroundTileState.Open);
 }
 
-/** Seed 1 with DIG_DOOR designated through the real command (tick 0). */
+/** Seed 1 with DIG_ENTRANCE designated through the real command (tick 0). */
 function digWorld(version: number): WorldState {
   const world = quietWorld(DIG_SEED, version, ENEMY_COLONY_ID);
   tick(world, [
     {
       type: 'DesignateEntrance',
       colonyId: ENEMY_COLONY_ID,
-      surfaceTileX: DIG_DOOR.x,
-      surfaceTileY: DIG_DOOR.y,
+      surfaceTileX: DIG_ENTRANCE.x,
+      surfaceTileY: DIG_ENTRANCE.y,
       issuedAtTick: 0,
     },
   ]);
@@ -324,14 +358,14 @@ describe('#358 (V57) — a surface digger behind an obstacle gets to its entranc
   it('V57: walks round it and goes down the closed entrance, never stepping back onto a tile it left', () => {
     const walk = digToClosed(V57);
     expect(walk.downAt).toBeGreaterThanOrEqual(0);
-    expect(walk.downColumn).toBe(DIG_DOOR.x);
+    expect(walk.downColumn).toBe(DIG_ENTRANCE.x);
     expectNoRevisit(walk.tiles);
   });
 
   /**
    * Seed 9: a DesignateEntrance at (115,75), 10 tiles due south of a digger at
-   * (115,65) by Manhattan (the open door is 12), but walled off from it: farther
-   * by path than the door. At V57 the digger picks the entrance nearest by
+   * (115,65) by Manhattan (the open entrance is 12), but walled off from it: farther
+   * by path than the open one. At V57 the digger picks the entrance nearest by
    * PATH, the one its goal-field walk actually shortens every step.
    */
   function digPathNearest(version: number): Walk {
@@ -347,13 +381,13 @@ describe('#358 (V57) — a surface digger behind an obstacle gets to its entranc
     ]);
     const ents = world.colonies[ENEMY_COLONY_ID]!.entrances;
     expect(ents.map((e) => [e.surfaceTileX, e.surfaceTileY, e.isOpen])).toEqual([
-      [DOOR.x, DOOR.y, true],
+      [ENEMY_ENTRANCE.x, ENEMY_ENTRANCE.y, true],
       [115, 75, false],
     ]);
     const from = { x: 115, y: 65 };
-    expect(manhattan(from, { x: 115, y: 75 })).toBeLessThan(manhattan(from, DOOR));
+    expect(manhattan(from, { x: 115, y: 75 })).toBeLessThan(manhattan(from, ENEMY_ENTRANCE));
     expect(surfaceGoalDistance(world, from.x, from.y, 115, 75)).toBeGreaterThan(
-      surfaceGoalDistance(world, from.x, from.y, DOOR.x, DOOR.y),
+      surfaceGoalDistance(world, from.x, from.y, ENEMY_ENTRANCE.x, ENEMY_ENTRANCE.y),
     );
     const id = addAnt(world, ENEMY_COLONY_ID, from.x, from.y, AntTask.Digging, 0);
     return walkDown(world, id, 300, AntTask.Digging);
@@ -366,8 +400,8 @@ describe('#358 (V57) — a surface digger behind an obstacle gets to its entranc
   it('V57: heads for the entrance nearest by path and goes down it, never doubling back', () => {
     const walk = digPathNearest(V57);
     expect(walk.downAt).toBeGreaterThanOrEqual(0);
-    expect(walk.downColumn).toBe(DOOR.x);
-    // Path distance to the door (12) falls every tile, so at most 12 distinct tiles.
+    expect(walk.downColumn).toBe(ENEMY_ENTRANCE.x);
+    // Path distance to the entrance (12) falls every tile, so at most 12 distinct tiles.
     expect(new Set(walk.tiles).size).toBeLessThanOrEqual(12);
     expectNoRevisit(walk.tiles);
   });
@@ -382,7 +416,7 @@ describe('#358 (V57) — a surface digger behind an obstacle gets to its entranc
     expect(digToOpen(V56).downAt).toBe(-1);
     const walk = digToOpen(V57);
     expect(walk.downAt).toBeGreaterThanOrEqual(0);
-    expect(walk.downColumn).toBe(DOOR.x);
+    expect(walk.downColumn).toBe(ENEMY_ENTRANCE.x);
     expectNoRevisit(walk.tiles);
   });
 });

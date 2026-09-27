@@ -8,7 +8,7 @@ import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import { Zone, type UndergroundGrid } from '../terrain.js';
 import {
   SIM_VERSION_V55_ROUTED_HOMING,
-  SIM_VERSION_V57_ROUTED_DOORWARD,
+  SIM_VERSION_V57_ROUTED_TO_ENTRANCE,
   type WorldState,
 } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
@@ -50,10 +50,10 @@ const SENTRY_MOVING_HOME = 2;
 const FIGHTER_MOVING_TO_EAT = 3;
 /**
  * #357 (V57) — `sentryMoving` value for a tunnel-defence fighter walking on the
- * surface to the entrance it defends (defenderWalksToDoor). Bumped like any ant;
+ * surface to the entrance it defends (defenderWalksToEntrance). Bumped like any ant;
  * steps down the surface goal field seeded at that entrance.
  */
-const DEFENDER_MOVING_TO_DOOR = 4;
+const DEFENDER_MOVING_TO_ENTRANCE = 4;
 const SENTRY_TO_POST = 1; // walking to its post
 const SENTRY_HOLD = 2; // holding its post
 const SENTRY_NO_POST = 3; // its entrance has no post
@@ -440,9 +440,9 @@ export function invaderTakesReachableExit(
  * an obstacle in the way pinned it. (Same-tick scratch, rebuilt by every 10c pass;
  * never set below V57.)
  */
-export function defenderWalksToDoor(world: WorldState, id: number): boolean {
+export function defenderWalksToEntrance(world: WorldState, id: number): boolean {
   const moving = getScratch(world).antTargeting.sentryMoving;
-  return id < moving.length && moving[id] === DEFENDER_MOVING_TO_DOOR;
+  return id < moving.length && moving[id] === DEFENDER_MOVING_TO_ENTRANCE;
 }
 
 /**
@@ -1728,13 +1728,13 @@ export function updateFightAntTargets(world: WorldState): void {
     ants.targetPosX[id] = (rp.tileX << FP_SHIFT) + (FP_ONE >> 1);
     ants.targetPosY[id] = (rp.tileY << FP_SHIFT) + (FP_ONE >> 1);
     // #357 (V57): on the surface, bound for the entrance its colony defends (the
-    // rally is on it), it routes round obstacles (defenderWalksToDoor).
+    // rally is on it), it routes round obstacles (defenderWalksToEntrance).
     if (
-      world.simVersion >= SIM_VERSION_V57_ROUTED_DOORWARD &&
+      world.simVersion >= SIM_VERSION_V57_ROUTED_TO_ENTRANCE &&
       ants.zone[id] === Zone.Surface &&
       defendedEntrance(world, colony) !== null
     ) {
-      sentryMoving[id] = DEFENDER_MOVING_TO_DOOR;
+      sentryMoving[id] = DEFENDER_MOVING_TO_ENTRANCE;
     }
   }
 }

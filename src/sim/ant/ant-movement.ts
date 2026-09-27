@@ -2,11 +2,10 @@
 // #212 Layer 2 (orchestrator): tickAntMovement — the per-ant movement tick (PRD §8a
 // step 16) — plus same-colony occupancy resolution. Sits ABOVE the behavior modules:
 // depends on Layer-0 ant-motion AND Layer-1 behaviors (foraging/queens/combat/
-// nursing/dig/raid/idle-reserve — the last for the C1 alarm's shaft hold at the
-// ascent). Nothing
-// in ant/ depends on it; tick.ts is its sole production caller. Owns SURFACE_MOVE_CACHE
-// (reset each tick); its same-colony occupancy Map now lives on the per-world scratch
-// arena (#231).
+// nursing/dig/raid/entrance-routed-step/idle-reserve — the last for the C1 alarm's
+// shaft hold at the ascent). Nothing in ant/ depends on it; tick.ts is its sole
+// production caller. Owns SURFACE_MOVE_CACHE (reset each tick); its same-colony
+// occupancy Map now lives on the per-world scratch arena (#231).
 import type { ChamberFlowFields } from '../chamber-flow.js';
 import { isFoodChamberDepositable, pileAtTile } from '../food/food-api.js';
 import { isInChamberFootprint } from '../colony/colony-store.js';
@@ -51,7 +50,7 @@ import {
   fighterWalksHomeToEat,
   invaderExitsByEntranceField,
   invaderTakesReachableExit,
-  defenderWalksToDoor,
+  defenderWalksToEntrance,
   sentryHoldsBelow,
   sentryPassesThroughFriends,
   fighterDefendsTunnels,
@@ -81,7 +80,8 @@ import {
 } from './ant-motion.js';
 import { collectAliveQueenIds, moveQueens } from './ant-queens.js';
 import { nurseRoutesHomeByEntranceField } from './ant-nursing.js';
-import { surfaceDiggerEntranceDistance, surfaceDiggerWalksDoorward } from './ant-dig.js';
+import { surfaceDiggerEntranceDistance, surfaceDiggerRoutesToEntrance } from './ant-dig.js';
+import { OFF_GOAL_FIELD, entranceRoutedStep } from './entrance-routed-step.js';
 import {
   holdAlarmedCivilianAtShaft,
   idleMusterPassesThroughFriends,
@@ -381,8 +381,8 @@ export function tickAntMovement(
           const allowClosedEntrance = zone === Zone.Surface && task === AntTask.Digging;
           // #358 (V57): a surface digger walks there down the goal field, so it
           // picks the entrance nearest by PATH (the policy lives in ant-dig:
-          // surfaceDiggerWalksDoorward, surfaceDiggerEntranceDistance).
-          const byPath = surfaceDiggerWalksDoorward(world, id);
+          // surfaceDiggerRoutesToEntrance, surfaceDiggerEntranceDistance).
+          const byPath = surfaceDiggerRoutesToEntrance(world, id);
           for (let e = 0; e < colony.entrances.length; e++) {
             const ent = colony.entrances[e]!;
             if (!ent.isOpen && !allowClosedEntrance) continue;
@@ -631,9 +631,9 @@ export function tickAntMovement(
       // entrance need not be the digger's target. Before V57 it stepped in a
       // straight line and an obstacle in the way pinned it. Off the goal field it
       // keeps the straight-line step below. (The policy lives in ant-dig:
-      // surfaceDiggerWalksDoorward.)
-      if (!stepped && surfaceDiggerWalksDoorward(world, id)) {
-        const step = doorwardStep(world, posX, posY, entranceTargetX, entranceTargetY);
+      // surfaceDiggerRoutesToEntrance; the step in entrance-routed-step.)
+      if (!stepped && surfaceDiggerRoutesToEntrance(world, id)) {
+        const step = entranceRoutedStep(world, posX, posY, entranceTargetX, entranceTargetY);
         if (step !== OFF_GOAL_FIELD) {
           dx = unpackStepDx(step);
           dy = unpackStepDy(step);
@@ -1039,9 +1039,22 @@ export function tickAntMovement(
       // defends steps down the surface goal field seeded at that entrance (its
       // target), not the entrance flow field: that leads to the nearest open
       // entrance, and a defender may go down only the defended shaft. Off the
-      // goal field it keeps the straight-line step.
-      if (haveTarget && !fieldStepped && zone === Zone.Surface && defenderWalksToDoor(world, id)) {
-        const step = doorwardStep(world, posX, posY, ants.targetPosX[id]!, ants.targetPosY[id]!);
+      // goal field it keeps the straight-line step. (The policy lives in
+      // ant-combat-targeting: defenderWalksToEntrance; the step in
+      // entrance-routed-step.)
+      if (
+        haveTarget &&
+        !fieldStepped &&
+        zone === Zone.Surface &&
+        defenderWalksToEntrance(world, id)
+      ) {
+        const step = entranceRoutedStep(
+          world,
+          posX,
+          posY,
+          ants.targetPosX[id]!,
+          ants.targetPosY[id]!,
+        );
         if (step !== OFF_GOAL_FIELD) {
           dx = unpackStepDx(step);
           dy = unpackStepDy(step);
@@ -1902,34 +1915,6 @@ function hungryExitStep(
     if (unpackStepDx(step) !== 0 || unpackStepDy(step) !== 0) return step;
   }
   return packStep(0, 0);
-}
-
-/** doorwardStep's result for a walker whose tile cannot reach its target. */
-const OFF_GOAL_FIELD = -1;
-
-/**
- * #357 / #358 (V57) — the packed step (unpackStepDx/Dy) a surface walker at fp
- * (posX, posY) takes toward the door at fp (targetX, targetY), down the surface
- * goal field seeded at that door's tile (stepTowardReachable: obstacle-aware,
- * cached per target tile on the frozen terrain). (0, 0) on the door itself.
- * OFF_GOAL_FIELD when the walker's tile cannot reach the door, so the caller keeps
- * its straight-line step (stepTowardReachable would throw there).
- */
-function doorwardStep(
-  world: WorldState,
-  posX: number,
-  posY: number,
-  targetX: number,
-  targetY: number,
-): number {
-  const tileX = posX >> FP_SHIFT;
-  const tileY = posY >> FP_SHIFT;
-  const doorX = targetX >> FP_SHIFT;
-  const doorY = targetY >> FP_SHIFT;
-  if (surfaceGoalDistance(world, tileX, tileY, doorX, doorY) === SURFACE_GOAL_UNREACHED) {
-    return OFF_GOAL_FIELD;
-  }
-  return stepTowardReachable(world, tileX, tileY, doorX, doorY);
 }
 
 /**

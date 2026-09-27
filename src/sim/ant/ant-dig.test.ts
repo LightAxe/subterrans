@@ -3,12 +3,12 @@
 
 import { describe, it, expect } from 'vitest';
 import { antPickupFood, tickDigExecution, tickSearchLeash } from './ant-system.js';
-import { surfaceDiggerWalksDoorward } from './ant-dig.js';
+import { surfaceDiggerRoutesToEntrance } from './ant-dig.js';
 import {
   createWorldState,
   allocateEntityId,
   SIM_VERSION_V56_OPPONENT_FRONTAGE,
-  SIM_VERSION_V57_ROUTED_DOORWARD,
+  SIM_VERSION_V57_ROUTED_TO_ENTRANCE,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt } from './ant-store.js';
@@ -532,10 +532,10 @@ describe('tickSearchLeash (09 digger-reassignment memo)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// #358 (V57) surfaceDiggerWalksDoorward — the digger's doorward-routing gate
+// #358 (V57) surfaceDiggerRoutesToEntrance — the digger's entrance-routing gate
 // ---------------------------------------------------------------------------
 
-describe('#358 (V57) surfaceDiggerWalksDoorward', () => {
+describe('#358 (V57) surfaceDiggerRoutesToEntrance', () => {
   it('is true for a surface digger from V57 only, and never below ground or for another task', () => {
     const world = createWorldState(42, 8);
     const id = allocateEntityId(world);
@@ -547,15 +547,15 @@ describe('#358 (V57) surfaceDiggerWalksDoorward', () => {
       subTask: DiggingSubState.MovingToTile,
       zone: Zone.Surface,
     });
-    world.simVersion = SIM_VERSION_V57_ROUTED_DOORWARD;
-    expect(surfaceDiggerWalksDoorward(world, id)).toBe(true);
+    world.simVersion = SIM_VERSION_V57_ROUTED_TO_ENTRANCE;
+    expect(surfaceDiggerRoutesToEntrance(world, id)).toBe(true);
     world.simVersion = SIM_VERSION_V56_OPPONENT_FRONTAGE;
-    expect(surfaceDiggerWalksDoorward(world, id)).toBe(false);
-    world.simVersion = SIM_VERSION_V57_ROUTED_DOORWARD;
+    expect(surfaceDiggerRoutesToEntrance(world, id)).toBe(false);
+    world.simVersion = SIM_VERSION_V57_ROUTED_TO_ENTRANCE;
     world.ants.zone[id] = Zone.Underground;
-    expect(surfaceDiggerWalksDoorward(world, id)).toBe(false);
+    expect(surfaceDiggerRoutesToEntrance(world, id)).toBe(false);
     world.ants.zone[id] = Zone.Surface;
     world.ants.task[id] = AntTask.Foraging;
-    expect(surfaceDiggerWalksDoorward(world, id)).toBe(false);
+    expect(surfaceDiggerRoutesToEntrance(world, id)).toBe(false);
   });
 });

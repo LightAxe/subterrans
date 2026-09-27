@@ -1,6 +1,6 @@
 // src/sim/ant/ant-dig.ts
 // #212 Layer 1 (behavior): search-leash dig assignment + dig execution, and the
-// surface digger's doorward-routing policy (#358, V57) that tickAntMovement reads.
+// surface digger's entrance-routing policy (#358, V57) that tickAntMovement reads.
 // Tick steps invoked by tick.ts; depend only on Layer-0 ant-motion (+ sibling sim
 // modules).
 import { colonyForageBackpressure } from '../food/food-api.js';
@@ -16,7 +16,7 @@ import { AntTask, DiggingSubState, ForagingSubState } from '../enums.js';
 import { FP_SHIFT } from '../fixed.js';
 import { SURFACE_GOAL_UNREACHED, surfaceGoalDistance } from '../surface-routing.js';
 import { UndergroundTileState, Zone, ugSet } from '../terrain.js';
-import { SIM_VERSION_V57_ROUTED_DOORWARD, type WorldState } from '../types.js';
+import { SIM_VERSION_V57_ROUTED_TO_ENTRANCE, type WorldState } from '../types.js';
 import { clearRecentTiles } from './ant-store.js';
 
 /**
@@ -30,12 +30,12 @@ import { clearRecentTiles } from './ant-store.js';
  * the way pinned it. Always false below V57 (and for any ant that is not a
  * surface digger).
  */
-export function surfaceDiggerWalksDoorward(world: WorldState, id: number): boolean {
+export function surfaceDiggerRoutesToEntrance(world: WorldState, id: number): boolean {
   const ants = world.ants;
   return (
     ants.task[id] === AntTask.Digging &&
     ants.zone[id] === Zone.Surface &&
-    world.simVersion >= SIM_VERSION_V57_ROUTED_DOORWARD
+    world.simVersion >= SIM_VERSION_V57_ROUTED_TO_ENTRANCE
   );
 }
 
@@ -45,7 +45,7 @@ export function surfaceDiggerWalksDoorward(world: WorldState, id: number): boole
  * the entrance. By Manhattan, a detour round an obstacle could make another
  * entrance the nearer one mid-walk, and back again: a flip cycle. An entrance its
  * tile cannot reach ranks after every reachable one, by Manhattan distance. Each
- * doorward step lowers the path distance to the chosen entrance by at least one
+ * entrance-routed step lowers the path distance to the chosen entrance by at least one
  * (two on a diagonal), so the least distance over all entrances only falls and the
  * choice cannot cycle. (An occupancy bump or a blocked-step detour can raise it;
  * neither depends on the choice.)

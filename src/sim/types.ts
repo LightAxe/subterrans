@@ -1221,10 +1221,10 @@ export const SIM_VERSION_V55_ROUTED_HOMING = 55 as const;
 export const SIM_VERSION_V56_OPPONENT_FRONTAGE = 56 as const;
 
 /**
- * #357 + #358 (V57) — surface walkers bound for one particular door route round
+ * #357 + #358 (V57) — surface walkers bound for one particular entrance route round
  * what is in the way.
  *
- * Up to V56 two surface walkers stepped in a straight line at their door, so an
+ * Up to V56 two surface walkers stepped in a straight line at their entrance, so an
  * obstacle between them and it pinned them. Neither can use the colony's surface
  * entrance flow field: it leads to the NEAREST OPEN entrance, and each of these is
  * bound for one entrance that may not be it. From V57 each steps down the surface
@@ -1232,10 +1232,10 @@ export const SIM_VERSION_V56_OPPONENT_FRONTAGE = 56 as const;
  * BFS field PR 5 foragers use, cached per tile on the frozen terrain):
  *   - #357: a fighter of a TUNNEL-DEFENCE colony (its rally on one of its own open
  *     entrances, V44) that step 10c's ordinary rally routing sends across the
- *     surface to that entrance (`defenderWalksToDoor`) — a fed one, or a hungry
+ *     surface to that entrance (`defenderWalksToEntrance`) — a fed one, or a hungry
  *     one the D11 walk-home does not take (at home, or in a duel). It may go down
  *     only that shaft (fighterBarredFromOwnShaft), so the nearest-entrance field
- *     could lead it to a door it may not use.
+ *     could lead it to an entrance it may not use.
  *   - #358: a surface DIGGER walking to its entrance target — the nearest of its
  *     colony's entrances, closed (designated, not yet dug through) or open, and
  *     from V57 nearest by PATH on those fields (by Manhattan a detour could flip
@@ -1246,8 +1246,8 @@ export const SIM_VERSION_V56_OPPONENT_FRONTAGE = 56 as const;
  * or tick-order change (the goal-field cache is derived, unserialized state). A
  * V56 save replays byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
  */
-export const SIM_VERSION_V57_ROUTED_DOORWARD = 57 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V57_ROUTED_DOORWARD;
+export const SIM_VERSION_V57_ROUTED_TO_ENTRANCE = 57 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V57_ROUTED_TO_ENTRANCE;
 
 /**
  * S2 — AI colony state machine states.
