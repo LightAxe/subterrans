@@ -1078,7 +1078,49 @@ export const SIM_VERSION_V50_LOCATED_FOOD = 50 as const;
  * MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V51_UNIFIED_HUNGER = 51 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V51_UNIFIED_HUNGER;
+
+/**
+ * #290 PR 5 — V52 automatic fighter raids.
+ *
+ * From V52 a fighter below ground in an ENEMY nest, sent there by a rally on that
+ * nest's open entrance, steals from the enemy's FoodStorage chambers (owner
+ * decisions D2–D5, D10, D13; policy in src/sim/ant/ant-raid.ts):
+ *   - It LOOTS (FightingSubState.Looting) when `fighterMayLoot` holds: no hostile
+ *     (an enemy worker or queen; brood does not count) within
+ *     RAID_ENGAGE_RADIUS_TILES path tiles, empty-handed, not hungry (D11 walks
+ *     it home first), not in a duel, and a FoodStorage chamber with food is
+ *     reachable. It walks the per-tick stock flow field to that chamber. Else it
+ *     fights as before: a hostile in reach, or — larder empty — the nearest
+ *     hostile anywhere, the queen included (D10: loot first, then the queen).
+ *     The entrance pool is never looted (D3).
+ *   - Standing in the chamber it takes up to RAID_CARRY_FP (step 16e) and HAULS
+ *     it (Hauling): out of the enemy nest by that nest's entrance flow field,
+ *     home by its own surface entrance flow field, down its own shaft (the V43
+ *     own-shaft rule lets a hauler in; a hauler never goes down a foreign shaft),
+ *     and deposits it as a forager would (FoodStorage chamber, else the pool).
+ *     Then it walks back to its rally. A hauler ignores the rally (a cleared rally
+ *     still gets the food home), eats from its load when a meal is due (V51
+ *     carried rations), is never stood down, and does not lay FoodTrail (only
+ *     foragers do from V52), so foragers are not lured to the enemy's door.
+ *   - A hauler that dies drops its load: on the surface as a corpse pile at its
+ *     tile (whole pickups; the remainder is lost), in the enemy nest into the
+ *     victim's pool (D13, capped; overflow is lost), in its own nest into its own
+ *     pool.
+ *   - ColonyRecord counters (declared at V50): `foodRaidedFp` / victim's
+ *     `foodLostToRaidsFp` grow by each load taken and shrink by food a dying
+ *     hauler hands back to the victim's pool; `raidTrips` counts hauls
+ *     deposited in full.
+ *   - Same-colony occupancy exempts work sites of the grid an ant stands in
+ *     (raiders stacking in an enemy FoodStorage chamber), not of its own colony.
+ * FightingSubState Looting 4 / Hauling 5 were reserved at V50; the save validator
+ * accepts them from V52 only. No new serialized field (the stock flow field is
+ * per-tick scratch), no command, no world.rngState draw, no entity-ID advance
+ * except a hauler's corpse pile (as V37 corpse food), no tick-order change beyond
+ * the two new V52-gated steps 10e (after 10d) and 16e (right after 16b). A V51 save replays byte-identically.
+ * MIN_ACCEPTED is UNCHANGED (V50).
+ */
+export const SIM_VERSION_V52_RAIDING = 52 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V52_RAIDING;
 
 /**
  * S2 — AI colony state machine states.

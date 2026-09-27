@@ -4,11 +4,10 @@
 // also calls routeForagerPriority / chooseExcursionDirection / findReachableScentPile.
 // Depends only on Layer-0 ant-motion (+ sibling sim modules). Owns FOOD_SCENT_RADIUS
 // and SIGNAL_PHEROMONE_RADIUS (their sole consumers live here).
-import type { ChamberRecord, ColonyRecord } from '../colony/colony-store.js';
+import type { ColonyRecord } from '../colony/colony-store.js';
 import {
   colonyHasNoDepositTarget,
-  depositIntoChamber,
-  depositIntoPool,
+  depositCarriedFood,
   drainPile,
   isFoodChamberDepositable,
   pileAmountFp,
@@ -145,89 +144,33 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
   const tileX = world.ants.posX[antId]! >> FP_SHIFT;
   const tileY = world.ants.posY[antId]! >> FP_SHIFT;
 
-  // Chamber path — pick the FoodStorage chamber whose footprint contains the
-  // ant's tile. Iterates colony.chambers in storage order; the first match
-  // wins (chambers don't overlap by construction). A "saturated" chamber
-  // (free space < FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP) is NOT a match — the
-  // hysteresis predicate `isFoodChamberDepositable` matches the BFS seed
-  // filter in tick.ts step 9, so an ant routing past a saturated chamber
-  // toward a truly-empty one cannot dribble its load into the saturated
-  // chamber 2 fp at a time. See FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP rationale
-  // in constants.ts (issue #15 follow-up — stuck-ant repro).
-  let chamber: ChamberRecord | null = null;
-  for (let c = 0; c < colony.chambers.length; c++) {
-    const ch = colony.chambers[c]!;
-    if (!isFoodChamberDepositable(world, ch)) continue;
-    const baseX = ch.posX >> FP_SHIFT;
-    const baseY = ch.posY >> FP_SHIFT;
-    if (tileX >= baseX && tileX < baseX + ch.width && tileY >= baseY && tileY < baseY + ch.height) {
-      chamber = ch;
-      break;
-    }
-  }
-
-  let remaining = amount;
-  if (chamber !== null) {
-    // We entered this branch via isFoodChamberDepositable, so pre-deposit
-    // the chamber was depositable. If this deposit pushes it across into
-    // saturated territory (free space < FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP),
-    // re-seed the food flow-field next tick so other carriers redirect to
-    // a remaining depositable chamber. This boundary check matches the
-    // BFS seed filter in tick.ts step 9, keeping the routing invariant.
-    remaining -= depositIntoChamber(world, colony, chamber, remaining);
-    // Issue #68 (v12+) — fall through to the entrance-pool path for any
-    // leftover food after a partial chamber deposit. Pre-v12 the chamber
-    // path silently swallowed the leftover (ant walked away with the
-    // remainder, no Idle flip, no wait-state) and relied on next-tick
-    // flow-field re-routing — which had a 1-tick stale-routing window
-    // and could cause the ant to re-step toward the same now-saturated
-    // chamber. Now: deposit chamber slice → fall through → deposit pool
-    // slice → enter wait-state if leftover persists.
-  }
-  // Issue #68 (v12+) — pre-v12 this was an `else` branch. Now runs after
-  // the chamber path too when v12+, so leftover food can flow into the
-  // entrance pool before forcing wait-state.
+  // Chamber path, then the entrance pool (depositCarriedFood — the shared rule
+  // for carried food; raiders use it too from V52). A "saturated" chamber (free
+  // space < FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP) is NOT a match — the hysteresis
+  // predicate `isFoodChamberDepositable` matches the BFS seed filter in tick.ts
+  // step 9, so an ant routing past a saturated chamber toward a truly-empty one
+  // cannot dribble its load into the saturated chamber 2 fp at a time (issue #15
+  // follow-up). Issue #68 (v12+): leftover food after a partial chamber deposit
+  // falls through to the entrance pool before forcing wait-state.
+  const remaining = depositCarriedFood(world, colony, tileX, tileY, amount);
+  // Issue #27 — carrier wait state: leftover food after the pool deposit (pool at
+  // cap, or a partial fill — issue #42) and no chamber depositable (otherwise next
+  // tick's movement re-routes to that chamber rather than parking at the entrance).
   if (remaining > 0) {
-    // Fallback — entrance-shaft / chamberless pool. Cap at BASE.
-    remaining -= depositIntoPool(world, colony, remaining);
-
-    // Issue #27 — carrier wait state. Enter wait when there is no chamber-
-    // depositable target AND the ant still has leftover food after the
-    // entrance-pool deposit attempt. Two sub-cases trigger this:
-    //   (a) zero-progress: pool already at cap → toPool === 0 (issue #27 path)
-    //   (b) partial-progress: pool had headroom but couldn't absorb the full
-    //       carry → toPool > 0 AND remaining > 0 (issue #42 fix). Pre-v6,
-    //       the partial-fill case left waitingDeposit=0 for one tick because
-    //       toPool > 0 short-circuited the gate; the carrier would re-enter
-    //       wait the NEXT tick's antDepositFood call (via the now-zero space),
-    //       producing the "5 carriers stacked at entrance, 2 not waiting"
-    //       state seen in the issue #42 snapshot. With the partial path, the
-    //       carrier enters wait on the same tick the partial deposit happens.
-    //   - Common conditions:
-    //       remaining > 0 (still carrying leftover)
-    //       no chamber depositable (otherwise next tick's movement re-routes
-    //       to the chamber rather than parking at the entrance)
-    //       simVersion >= 3 (issue #27 gate; legacy replays stay on the
-    //       always-oscillate path)
-    // The simVersion >= 6 gate on the partial-fill branch keeps pre-v6
-    // replays byte-identical to v5 (same toPool === 0 behavior only).
-    const enterWait = remaining > 0;
-    if (enterWait) {
-      let anyChamberDepositable = false;
-      for (let c = 0; c < colony.chambers.length; c++) {
-        if (isFoodChamberDepositable(world, colony.chambers[c]!)) {
-          anyChamberDepositable = true;
-          break;
-        }
+    let anyChamberDepositable = false;
+    for (let c = 0; c < colony.chambers.length; c++) {
+      if (isFoodChamberDepositable(world, colony.chambers[c]!)) {
+        anyChamberDepositable = true;
+        break;
       }
-      if (!anyChamberDepositable) {
-        world.ants.waitingDeposit[antId] = 1;
-        // Clear the outward heading so a future wake-up rebuilds routing fresh
-        // rather than continuing a stale return-to-entrance bearing.
-        world.ants.searchHeadingX[antId] = 0;
-        world.ants.searchHeadingY[antId] = 0;
-        world.ants.searchHeadingTicks[antId] = 0;
-      }
+    }
+    if (!anyChamberDepositable) {
+      world.ants.waitingDeposit[antId] = 1;
+      // Clear the outward heading so a future wake-up rebuilds routing fresh
+      // rather than continuing a stale return-to-entrance bearing.
+      world.ants.searchHeadingX[antId] = 0;
+      world.ants.searchHeadingY[antId] = 0;
+      world.ants.searchHeadingTicks[antId] = 0;
     }
   }
 

@@ -36,6 +36,10 @@ const PUBLIC_FUNCTIONS = [
   'unpackStepDx',
   'unpackStepDy',
   'updateFightAntTargets',
+  'dropHaulerLoad', // V52 (#290 PR 5) — death hook consumed by ant-death.ts
+  'fighterMayLoot', // V52 (#290 PR 5) — the raid predicate (the explicit-Raid-order extension point)
+  'updateRaiders', // V52 (#290 PR 5) — step 10e, consumed by tick.ts
+  'tickRaidActions', // V52 (#290 PR 5) — step 16e, consumed by tick.ts
 ] as const;
 
 describe('ant-system barrel public API (#212)', () => {
@@ -45,7 +49,7 @@ describe('ant-system barrel public API (#212)', () => {
     });
   }
 
-  it('exports EXACTLY the 27 public functions (no accidental widening or narrowing)', () => {
+  it('exports EXACTLY the 31 public functions (no accidental widening or narrowing)', () => {
     const exportedFns = Object.keys(barrel)
       .filter((k) => typeof (barrel as Record<string, unknown>)[k] === 'function')
       .sort();

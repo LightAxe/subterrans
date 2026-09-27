@@ -2,18 +2,13 @@
 // #212 Layer 1 (behavior): hostile/invader target selection + the inverted-BFS step
 // search. Depends only on Layer-0 ant-motion primitives (+ sibling sim modules);
 // only the orchestrator calls these. Owns the INV_BFS_* scratch arrays.
-import {
-  ENTRANCE_SHAFT_DEPTH,
-  FIGHT_AGGRO_RADIUS,
-  FIGHTER_WALK_HOME_HUNGER_TICKS,
-} from '../constants.js';
+import { ENTRANCE_SHAFT_DEPTH, FIGHT_AGGRO_RADIUS } from '../constants.js';
 import { AntTask, FightingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import { Zone, type UndergroundGrid } from '../terrain.js';
 import type { WorldState } from '../types.js';
-import { SIM_VERSION_V51_UNIFIED_HUNGER } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
-import { antIsAtHome, ticksSinceMeal } from '../hunger.js';
+import { antIsAtHome, fighterIsHungry } from '../hunger.js';
 import { isSurfaceTileInComponent } from '../surface-features.js';
 import { getScratch } from '../scratch.js';
 import { DIR_DX, DIR_DY, canEnterUndergroundTile, packStep } from './ant-motion.js';
@@ -324,20 +319,6 @@ export function fighterBarredFromForeignShaft(world: WorldState, id: number): bo
 }
 
 /**
- * V51 (#290 PR 4, owner decision D11) — fighter `id` is hungry: past
- * FIGHTER_WALK_HOME_HUNGER_TICKS since its last meal and empty-handed (an ant
- * carrying food eats from its load instead). Always false below V51.
- */
-function fighterIsHungry(world: WorldState, id: number): boolean {
-  const ants = world.ants;
-  return (
-    world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER &&
-    ants.foodCarrying[id] === 0 &&
-    ticksSinceMeal(world, id) >= FIGHTER_WALK_HOME_HUNGER_TICKS
-  );
-}
-
-/**
  * V51 (D11) — hungry fighter `id` below ground in a FOREIGN nest leaves to eat:
  * it is not fighting (no duel in progress and no hostile within
  * FIGHT_AGGRO_RADIUS of it in that grid). Combat comes first — an invader in a
@@ -458,6 +439,8 @@ function defendedEntrance(world: WorldState, colony: ColonyRecord): FighterEntra
 export function fighterDefendsTunnels(world: WorldState, id: number): boolean {
   const ants = world.ants;
   if (ants.task[id] !== AntTask.Fighting || ants.zone[id] !== Zone.Underground) return false;
+  // V52 (#290 PR 5): a raider hauling loot home goes on to deposit it.
+  if (ants.subTask[id] === FightingSubState.Hauling) return false;
   const colonyId = ants.colonyId[id]!;
   if (ants.currentGridColonyId[id] !== colonyId) return false;
   const colony = world.colonies[colonyId];
@@ -1233,6 +1216,8 @@ export function releaseSurplusFightersBelowFloor(
     if (ants.zone[id] === Zone.Underground && ants.currentGridColonyId[id] !== ants.colonyId[id]) {
       continue; // invader inside a foreign nest: walks home as a Fighter first
     }
+    // V52 (#290 PR 5): nor a raider hauling loot home — it deposits first.
+    if (ants.subTask[id] === FightingSubState.Hauling) continue;
     ants.task[id] = AntTask.Idle;
     ants.subTask[id] = 0;
     surplus -= 1;
@@ -1337,6 +1322,8 @@ export function updateFightAntTargets(world: WorldState): void {
   nextRank.clear();
   for (let wid = 0; wid < ants.alive.length; wid++) {
     if (ants.alive[wid] !== 1 || ants.task[wid] !== AntTask.Fighting) continue;
+    // V52 (#290 PR 5): a hauler takes no post (step 10e routes it home).
+    if (ants.subTask[wid] === FightingSubState.Hauling) continue;
     const cid = ants.colonyId[wid]!;
     const col = world.colonies[cid];
     if (!col || col.entrances == null) continue;
@@ -1387,6 +1374,9 @@ export function updateFightAntTargets(world: WorldState): void {
     const colonyId = ants.colonyId[id]!;
     const colony = world.colonies[colonyId as unknown as keyof typeof world.colonies];
     if (colony === undefined) continue;
+    // V52 (#290 PR 5): a raider hauling loot is routed by step 10e (ant-raid.ts)
+    // alone — it does not turn to chase, take a post or answer the rally.
+    if (ants.subTask[id] === FightingSubState.Hauling) continue;
     // V43: Holding is only ever this pass's verdict. Clear it up front, so every
     // other branch (rally, invader, closed-entrance wait, cover, chase) leaves the
     // fighter not holding, and a sentry held at a rally that is then cleared
