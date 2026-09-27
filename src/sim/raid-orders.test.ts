@@ -55,6 +55,7 @@ import {
   FOOD_PILE_INITIAL_PICKUPS_MAX,
   PLAYER_COLONY_ID,
   RAID_CARRY_FP,
+  RAID_ENGAGE_RADIUS_TILES,
   SPOIL_TICKS_PER_LOAD,
 } from './constants.js';
 import {
@@ -632,20 +633,118 @@ describe('Assault (V60)', () => {
 // Nothing left: Loot, Deny and Spoil press on to the queen.
 // ---------------------------------------------------------------------------
 
-describe('with the larder empty Loot, Deny and Spoil go for the queen (V60)', () => {
-  for (const type of [RaidType.Loot, RaidType.Deny, RaidType.Spoil]) {
-    it(`raid type ${type}`, () => {
+describe('with nothing left to take Loot, Deny and Spoil go for the queen first (V60)', () => {
+  const ALL = [RaidType.Loot, RaidType.Deny, RaidType.Spoil] as const;
+  for (const type of ALL) {
+    it(`raid type ${type}: queen-first, past a nearer enemy worker the hunt would take`, () => {
       const r = raidWorld(0);
       const w = r.world;
       order(r, type);
       const id = addFighter(w, P, 100, 6, E);
+      addEnemyWorker(w, 95, 6); // nearer, the other way: the V59 hunt goes at it
       const q = r.enemy.queenEntityId;
+      updateRaiders(w);
+      expect(w.ants.targetPosX[id]).toBe(w.ants.posX[q]);
+      expect(w.ants.targetPosY[id]).toBe(w.ants.posY[q]);
       const d0 = manhattan(tileOf(w, id), tileOf(w, q));
-      run(w, 40, undefined, () => feedEnemy(r));
+      run(w, 30, undefined, () => feedEnemy(r));
       expect(w.ants.subTask[id]).not.toBe(FightingSubState.Looting);
       expect(manhattan(tileOf(w, id), tileOf(w, q))).toBeLessThan(d0);
+      expect(tileOf(w, id).x).toBeGreaterThan(100);
     });
   }
+
+  it('below V60 the same raider is left to the hunt (no aim from step 10e)', () => {
+    const r = raidWorld(0);
+    const w = r.world;
+    w.simVersion = SIM_VERSION_V59_INVADER_RETARGET;
+    rallyOn(r.player, r.enemyDoor);
+    const id = addFighter(w, P, 100, 6, E);
+    updateRaiders(w);
+    expect(w.ants.targetPosX[id]).toBe(-1);
+  });
+
+  it('Loot with full stores: queen-first only once the larder is empty too', () => {
+    const r = raidWorld(0);
+    const w = r.world;
+    order(r, RaidType.Loot);
+    fillPlayerStores(r);
+    const id = addFighter(w, P, 100, 6, E);
+    updateRaiders(w);
+    expect(w.ants.targetPosX[id]).toBe(w.ants.posX[r.enemy.queenEntityId]);
+    // A stocked larder it has no room for: it hunts, as the V53 raid did.
+    const r2 = raidWorld(3000);
+    const w2 = r2.world;
+    order(r2, RaidType.Loot);
+    fillPlayerStores(r2);
+    const id2 = addFighter(w2, P, 100, 6, E);
+    updateRaiders(w2);
+    expect(w2.ants.targetPosX[id2]).toBe(-1);
+  });
+
+  it('a stocked larder: none of them is sent at the queen', () => {
+    for (const type of ALL) {
+      const r = raidWorld(3000);
+      const w = r.world;
+      order(r, type);
+      const id = addFighter(w, P, 100, 6, E);
+      updateRaiders(w);
+      expect(w.ants.targetPosX[id]).not.toBe(w.ants.posX[r.enemy.queenEntityId]);
+    }
+  });
+});
+
+describe('the queen held by a friend: a free enemy worker in sight first (V60)', () => {
+  /** A raid world with the player's `type` order, the larder empty (so Loot, Deny
+   *  and Spoil are queen-first), a player fighter already on the queen's tile, and
+   *  the raider under test at (110, 6). */
+  function held(type: RaidType): { r: RaidWorld; id: number; q: number } {
+    const r = raidWorld(0);
+    const w = r.world;
+    order(r, type);
+    const q = r.enemy.queenEntityId;
+    addFighter(w, P, w.ants.posX[q]! >> FP_SHIFT, w.ants.posY[q]! >> FP_SHIFT, E);
+    const id = addFighter(w, P, 110, 6, E);
+    return { r, id, q };
+  }
+
+  for (const type of [RaidType.Assault, RaidType.Loot, RaidType.Deny, RaidType.Spoil]) {
+    it(`raid type ${type}: a free worker within sight is attacked; out of sight, it queues for the queen`, () => {
+      const a = held(type);
+      const near = addEnemyWorker(a.r.world, 110 - RAID_ENGAGE_RADIUS_TILES, 6);
+      updateRaiders(a.r.world);
+      expect(a.r.world.ants.targetPosX[a.id]).toBe(a.r.world.ants.posX[near]);
+      const b = held(type);
+      addEnemyWorker(b.r.world, 110 - RAID_ENGAGE_RADIUS_TILES - 1, 6);
+      updateRaiders(b.r.world);
+      expect(b.r.world.ants.targetPosX[b.id]).toBe(b.r.world.ants.posX[b.q]);
+    });
+  }
+
+  it('an enemy fighter, or a worker on a tile a friend holds, is not a free worker', () => {
+    const a = held(RaidType.Assault);
+    const w = a.r.world;
+    const fighter = addEnemyWorker(w, 108, 6);
+    w.ants.task[fighter] = AntTask.Fighting;
+    updateRaiders(w);
+    expect(w.ants.targetPosX[a.id]).toBe(w.ants.posX[a.q]);
+    const b = held(RaidType.Assault);
+    const w2 = b.r.world;
+    addEnemyWorker(w2, 108, 6);
+    addFighter(w2, P, 108, 6, E); // a friend already on that worker
+    updateRaiders(w2);
+    expect(w2.ants.targetPosX[b.id]).toBe(w2.ants.posX[b.q]);
+  });
+
+  it('with the queen’s tile free it goes for her, past a free worker in sight', () => {
+    const r = raidWorld(0);
+    const w = r.world;
+    order(r, RaidType.Assault);
+    const id = addFighter(w, P, 110, 6, E);
+    addEnemyWorker(w, 108, 6);
+    updateRaiders(w);
+    expect(w.ants.targetPosX[id]).toBe(w.ants.posX[r.enemy.queenEntityId]);
+  });
 });
 
 // ---------------------------------------------------------------------------

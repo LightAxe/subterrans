@@ -279,8 +279,9 @@ replaces the old one, and clearing it resets the type. **Loot** steals while its
 stores have room; **Deny** steals regardless, leaving what its stores cannot hold as
 a food pile beside its own entrance; **Spoil** destroys the enemy's stored food where
 it lies; **Blockade** (below) never goes in; **Assault** ignores food and goes for
-the queen. Loot, Deny and Spoil fight on — the queen included — once there is nothing
-left to take.
+the queen. Loot, Deny and Spoil go for the queen too once there is nothing left to
+take. While a friend is already fighting the queen, raiders going for her take on a
+free enemy worker in sight first.
 The AI always raids with Loot.
 _Avoid_: **raid mode**, **stance** (stance = the colony alarm), **attack type**.
 

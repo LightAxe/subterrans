@@ -1315,8 +1315,11 @@ export const SIM_VERSION_V59_INVADER_RETARGET = 59 as const;
  *     entrance and chase any enemy ant within BLOCKADE_RADIUS_TILES of it
  *     (ant-blockade.ts, tick step 10c2).
  *   - Assault: no looting; an invader goes for the enemy queen.
- * Loot, Deny and Spoil fall back to the hunt (the queen included, D10) once there
- * is nothing left to take. New serialized field `ColonyRecord.raidType`, written
+ * Loot, Deny and Spoil go for the queen too once there is nothing left to take
+ * (no reachable stock by their own start / keep-going rule), not the hunt. While a
+ * friend already holds the queen's tile (#364's saturation), any of the four goes
+ * for a free enemy worker within RAID_ENGAGE_RADIUS_TILES path tiles (the fighters'
+ * sight) instead, and with none in sight queues for the queen (raidQueenTarget). New serialized field `ColonyRecord.raidType`, written
  * only when not Loot, so every pre-V60 save (always Loot) serializes as before;
  * the SetRallyPoint handler ignores `raidType` below V60. No world.rngState draw;
  * a new pass (step 10c2, a no-op without a blockade) and the Deny drop's entity-id
