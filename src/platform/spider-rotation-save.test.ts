@@ -37,9 +37,15 @@ describe('V54 (#337) — save/load mid-rotation', () => {
     runTicks(world, 2000);
     expect(world.spider).not.toBeNull();
     forceExpiredCamp(world, PLAYER_COLONY_ID);
-    runTicks(world, 3); // timed out; now rotating (or rampaging the rotated entrance)
+    runTicks(world, 3); // timed out; now rotating
     const s = world.spider!;
     expect(s.rampageRotationEntranceId).toBeGreaterThanOrEqual(0);
+    // Save while it camps the rotated (pinned) entrance, so the pin round-trips too.
+    for (let i = 0; i < 50 && !(s.state === 'Rampaging' && s.rampageEntranceId >= 0); i++) {
+      runTicks(world, 1);
+    }
+    expect(s.state).toBe('Rampaging');
+    expect(s.rampageEntranceId).toBeGreaterThanOrEqual(0);
     const saved = serializeWorldState(world);
     const loaded = deserializeWorldState(JSON.parse(JSON.stringify(saved)));
     expect(loaded.spider!.rampageRotationEntranceId).toBe(s.rampageRotationEntranceId);
@@ -57,7 +63,10 @@ describe('V54 (#337) — save/load mid-rotation', () => {
 describe('V54 (#337) — save validation of the new spider fields', () => {
   function roundTrip(patch: Record<string, unknown>) {
     const world = createScenario(3);
-    const saved = serializeWorldState(world) as unknown as { spider: Record<string, unknown> };
+    const saved = serializeWorldState(world) as unknown as {
+      tick: number;
+      spider: Record<string, unknown>;
+    };
     Object.assign(saved.spider, patch);
     return deserializeWorldState(saved as never).spider!;
   }
@@ -79,10 +88,10 @@ describe('V54 (#337) — save validation of the new spider fields', () => {
       state: 'Patrolling',
       rampageEntranceId: 9,
       rampageRotationEntranceId: 7,
-      rampageRotationTick: 4000,
+      rampageRotationTick: 0, // the save's own tick (a fresh scenario is at 0)
     });
     expect(a.rampageRotationEntranceId).toBe(7);
-    expect(a.rampageRotationTick).toBe(4000);
+    expect(a.rampageRotationTick).toBe(0);
     expect(a.rampageEntranceId).toBe(-1);
     const b = roundTrip({ state: 'Rampaging', rampageTargetColonyId: 1, rampageEntranceId: 9 });
     expect(b.rampageEntranceId).toBe(9);
@@ -104,5 +113,26 @@ describe('V54 (#337) — save validation of the new spider fields', () => {
     expect(b.rampageRotationTick).toBe(-1);
     const c = roundTrip({ rampageRotationEntranceId: 7, rampageRotationTick: -1 });
     expect(c.rampageRotationEntranceId).toBe(-1);
+  });
+
+  it('drops a timeout tick later than the save tick (it would stretch the cooldown)', () => {
+    const world = createScenario(3);
+    const saved = serializeWorldState(world) as unknown as {
+      tick: number;
+      spider: Record<string, unknown>;
+    };
+    Object.assign(saved.spider, {
+      rampageRotationEntranceId: 7,
+      rampageRotationTick: saved.tick + 1,
+    });
+    const sp = deserializeWorldState(saved as never).spider!;
+    expect(sp.rampageRotationEntranceId).toBe(-1);
+    expect(sp.rampageRotationTick).toBe(-1);
+  });
+
+  it('drops the pin when the rampage target colony is invalid', () => {
+    const sp = roundTrip({ state: 'Rampaging', rampageTargetColonyId: 0, rampageEntranceId: 9 });
+    expect(sp.rampageTargetColonyId).toBe(-1);
+    expect(sp.rampageEntranceId).toBe(-1);
   });
 });

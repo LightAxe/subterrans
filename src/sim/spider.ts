@@ -365,10 +365,12 @@ function findNearestEntrance(
 
 /**
  * V54 (#337): the entrance a rampage camps. A rotated rampage pins its entrance
- * (`rampageEntranceId`); while that entrance is open it is the camp. Otherwise (no
- * pin, the pre-V54 rule, or the pinned entrance has closed) it is the nearest open
- * entrance of `rampageTargetColonyId`. Returns the shared scratch out-param (read it
- * before the next call) or null when the target colony has no open entrance.
+ * (`rampageEntranceId`): the camp is that entrance while it is open, and null once it
+ * is not (the Rampaging case then ends the rampage as sealed, and the next one rotates
+ * on; falling back to another entrance of the colony could land on the one the spider
+ * just timed out on). Without a pin (the pre-V54 rule, and V54's first rampage of a
+ * hungry spell) it is the nearest open entrance of `rampageTargetColonyId`. Returns the
+ * shared scratch out-param (read it before the next call) or null.
  */
 function campedEntrance(
   world: WorldState,
@@ -391,6 +393,7 @@ function campedEntrance(
         return ne;
       }
     }
+    return null;
   }
   return findNearestEntrance(world, spider, spider.rampageTargetColonyId);
 }

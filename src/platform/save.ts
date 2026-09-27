@@ -1670,7 +1670,14 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
     r.rampageRotationEntranceId >= 0 &&
     typeof r.rampageRotationTick === 'number' &&
     Number.isInteger(r.rampageRotationTick) &&
-    r.rampageRotationTick >= 0;
+    r.rampageRotationTick >= 0 &&
+    // A timeout cannot lie in the future; a later tick would stretch the
+    // single-entrance cooldown without bound.
+    (typeof s.tick !== 'number' || r.rampageRotationTick <= s.tick);
+  const rampageTargetValid =
+    safeState === 'Rampaging' &&
+    typeof r.rampageTargetColonyId === 'number' &&
+    r.rampageTargetColonyId > 0;
   return {
     state: safeState,
     posX: typeof r.posX === 'number' && Number.isInteger(r.posX) ? r.posX : 0,
@@ -1722,12 +1729,7 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
       typeof r.rampageKillsThisRampage === 'number' && Number.isInteger(r.rampageKillsThisRampage)
         ? r.rampageKillsThisRampage
         : 0,
-    rampageTargetColonyId:
-      safeState === 'Rampaging' &&
-      typeof r.rampageTargetColonyId === 'number' &&
-      r.rampageTargetColonyId > 0
-        ? r.rampageTargetColonyId
-        : -1,
+    rampageTargetColonyId: rampageTargetValid ? (r.rampageTargetColonyId as number) : -1,
     chaseTargetAntId: safeState === 'Chasing' ? rawChaseId : -1,
     chaseStartTick:
       typeof r.chaseStartTick === 'number' && Number.isInteger(r.chaseStartTick)
@@ -1758,8 +1760,10 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
     // rampageTargetColonyId); the rotation cursor and its timeout tick outlive the
     // rampage (they last until the spider's next kill). A cursor without a valid tick
     // is dropped as a pair, so the single-entrance cooldown never reads a garbage clock.
+    // The pin goes with its target colony: a pin without one would camp an entrance
+    // of a colony the step-4 re-pick did not choose.
     rampageEntranceId:
-      safeState === 'Rampaging' &&
+      rampageTargetValid &&
       typeof r.rampageEntranceId === 'number' &&
       Number.isInteger(r.rampageEntranceId) &&
       r.rampageEntranceId >= 0

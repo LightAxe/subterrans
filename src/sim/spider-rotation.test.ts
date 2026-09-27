@@ -222,21 +222,68 @@ describe('V54 (#337) — timed-out rampage rotates entrances', () => {
     expect(world.spider.posY >> FP_SHIFT).toBe(E105.surfaceTileY);
   });
 
-  it('a closed pinned entrance falls back to the nearest open entrance of its colony', () => {
+  it('a closed pinned entrance ends the rampage (sealed); the next one rotates on, never to the cursor', () => {
     const world = makeWorld();
-    world.spider = makeSpider({ rampageRotationEntranceId: 103, rampageRotationTick: T0 - 5 });
-    world.spider.posX = 60 << FP_SHIFT;
-    world.spider.posY = 20 << FP_SHIFT;
+    // Cursor 101 (C1): the rotation goes to 103 (C2). C2's only entrance then closes.
+    world.spider = makeSpider({ rampageRotationEntranceId: 101, rampageRotationTick: T0 - 5 });
+    step(world);
+    expect(world.spider.rampageEntranceId).toBe(103);
+    entranceById(world, 103).isOpen = false;
+    world.events.length = 0;
+    step(world);
+    expect(world.events.some((e) => e.type === 'spider_rampage_end')).toBe(true);
+    expect(world.spider.rampageEntranceId).toBe(-1);
+    expect(world.spider.rampageRotationEntranceId).toBe(101); // not a timeout: cursor kept
+    expect(untilRampage(world, 3)).toBeGreaterThan(0);
+    expect(world.spider.rampageEntranceId).toBe(105);
+  });
+
+  it('a closed pin never falls back to the timed-out entrance of the same colony', () => {
+    const world = makeWorld();
+    // Cursor 101; 103 closed, so the rotation picks 105, the other C1 entrance.
+    entranceById(world, 103).isOpen = false;
+    world.spider = makeSpider({ rampageRotationEntranceId: 101, rampageRotationTick: T0 - 5 });
     step(world);
     expect(world.spider.rampageEntranceId).toBe(105);
-    entranceById(world, 105).isOpen = false;
-    for (let i = 0; i < 40; i++) step(world);
-    expect(world.spider.state).toBe('Rampaging');
-    expect(world.spider.posX >> FP_SHIFT).toBe(E101.surfaceTileX);
-    // It times out on 101, so 101 is the cursor now.
-    world.spider.rampageStartTick = world.tick - SPIDER_RAMPAGE_MAX_TICKS;
-    step(world);
-    expect(world.spider.rampageRotationEntranceId).toBe(101);
+    entranceById(world, 105).isOpen = false; // now 101 is the only open entrance
+    for (let i = 0; i < 10; i++) {
+      step(world);
+      expect(world.spider.state).not.toBe('Rampaging'); // single-entrance cooldown holds
+    }
+  });
+
+  describe('#165 hold gate reads the pinned entrance, not the nearest one of its colony', () => {
+    /** Pinned on 105 (far west) while en route past C1's 101, which a worker stands on. */
+    function enRoutePast101(): WorldState {
+      const world = makeWorld();
+      world.spider = makeSpider({
+        state: 'Rampaging',
+        rampageTargetColonyId: PLAYER_COLONY_ID,
+        rampageEntranceId: 105,
+        rampageStartTick: world.tick,
+        rampageRotationEntranceId: 103,
+        rampageRotationTick: T0 - 5,
+      });
+      world.spider.posX = (E101.surfaceTileX - 2) << FP_SHIFT;
+      world.spider.posY = E101.surfaceTileY << FP_SHIFT;
+      spawnSurfaceWorker(world, C1, E101.surfaceTileX, E101.surfaceTileY);
+      return world;
+    }
+
+    it('an ant on a non-camped entrance does not hold the gate: the spider diverts to chase it', () => {
+      const world = enRoutePast101();
+      step(world);
+      expect(world.spider!.state).toBe('Chasing');
+    });
+
+    it('nor does it suppress self-defense (step 4a): the spider engages the attacker', () => {
+      const world = enRoutePast101();
+      const f = spawnSurfaceWorker(world, C1, E101.surfaceTileX - 6, E101.surfaceTileY);
+      world.ants.task[f] = AntTask.Fighting;
+      step(world);
+      expect(world.spider!.state).toBe('Chasing');
+      expect(world.spider!.chaseTargetAntId).toBe(f);
+    });
   });
 
   it('a kill ends the rotation; the next hungry spell uses the colony picker again', () => {
