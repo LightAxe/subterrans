@@ -461,6 +461,36 @@ describe('Deny (V60)', () => {
     expect(r.player.raidTrips).toBe(1);
   });
 
+  it('in its larder with every store full it walks back up its shaft and drops by the door', () => {
+    const r = raidWorld();
+    const w = r.world;
+    order(r, RaidType.Deny);
+    const piles = pileCount(w);
+    const l = r.playerLarder;
+    const id = addHauler(
+      w,
+      P,
+      (l.posX >> FP_SHIFT) + 1,
+      (l.posY >> FP_SHIFT) + 1,
+      P,
+      RAID_CARRY_FP,
+    );
+    const done = run(
+      w,
+      600,
+      () => w.ants.foodCarrying[id] === 0,
+      () => {
+        fillPlayerStores(r);
+        w.ants.lastMealTick[id] = w.tick;
+      },
+    );
+    expect(done).toBeGreaterThan(0);
+    expect(r.player.raidTrips).toBe(1);
+    expect(pileCount(w)).toBe(piles + 1);
+    const slot = pileSlotAt(w, pileCount(w) - 1);
+    expect(manhattan({ x: pileTileX(w, slot), y: pileTileY(w, slot) }, r.playerDoor)).toBe(1);
+  });
+
   it('down its own shaft with no room after all, it leaves the load outside by the door (Loot waits)', () => {
     for (const type of [RaidType.Deny, RaidType.Loot]) {
       const r = raidWorld();
