@@ -44,7 +44,6 @@ import {
   setChamberStockForTest,
   setPoolFoodForTest,
 } from './food/food-test-utils.js';
-import type { FoodPileId } from './food.js';
 import {
   BASE_FOOD_STORAGE_CAPACITY,
   BLOCKADE_LEASH_TILES,
@@ -365,7 +364,7 @@ describe('Deny (V60)', () => {
   /** A full pile (FOOD_PILE_INITIAL_PICKUPS_MAX pickups) at (x, y). */
   function fullPile(w: WorldState, x: number, y: number): void {
     addPileForTest(w, {
-      foodPileId: allocateEntityId(w) as FoodPileId,
+      foodPileId: allocateEntityId(w),
       tileX: x,
       tileY: y,
       pickupsRemaining: FOOD_PILE_INITIAL_PICKUPS_MAX,
@@ -719,7 +718,7 @@ describe('Blockade (V60)', () => {
     tick(w, []);
     expect(w.ants.task[outside]).toBe(AntTask.Fighting);
     // (Compared by tile: the target is its position at step 10c2, before movement.)
-    expect(w.ants.targetPosX[id!]! >> FP_SHIFT).toBe(w.ants.posX[outside]! >> FP_SHIFT);
+    expect(w.ants.targetPosX[id!]! >> FP_SHIFT).toBe(w.ants.posX[outside] >> FP_SHIFT);
     expect(w.ants.targetPosY[id!]! >> FP_SHIFT).toBe(w.ants.posY[outside]! >> FP_SHIFT);
     // A forager too.
     const r2 = raidWorld(3000);
