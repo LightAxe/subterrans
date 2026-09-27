@@ -6,7 +6,7 @@ import { ENTRANCE_SHAFT_DEPTH, FIGHT_AGGRO_RADIUS } from '../constants.js';
 import { AntTask, FightingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import { Zone, type UndergroundGrid } from '../terrain.js';
-import type { WorldState } from '../types.js';
+import { SIM_VERSION_V55_ROUTED_HOMING, type WorldState } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
 import { antIsAtHome, fighterIsHungry } from '../hunger.js';
 import { isSurfaceTileInComponent } from '../surface-features.js';
@@ -355,6 +355,69 @@ function hungryInvaderLeaves(world: WorldState, id: number, gridColonyId: number
 export function fighterWalksHomeToEat(world: WorldState, id: number): boolean {
   const moving = getScratch(world).antTargeting.sentryMoving;
   return id < moving.length && moving[id] === FIGHTER_MOVING_TO_EAT;
+}
+
+/**
+ * V25 (#174) — colony `colonyId` has recalled its fighters: its rally point is
+ * cleared ("come home"). A missing colony record is NOT a recall (a defensive
+ * fallback). The one rally-cleared predicate behind every recalled-invader
+ * decision — tickAntMovement's underground recall navigation and its ascent
+ * (`isRecallingFromForeign`), and invaderIsRecalledV55 — so they stay in lockstep.
+ * Unversioned: the recall has keyed on a cleared rally alone since V25 (the
+ * pre-V25 branch was reaped, #247).
+ */
+export function colonyRecalledItsFighters(world: WorldState, colonyId: number): boolean {
+  const colony = world.colonies[colonyId];
+  return colony != null && colony.rallyPoint == null;
+}
+
+/**
+ * #346 (V55) — invader `id` (a fighter below ground in a FOREIGN nest) has been
+ * recalled: its own colony's rally point is cleared (colonyRecalledItsFighters).
+ * Always false below V55.
+ */
+export function invaderIsRecalledV55(world: WorldState, id: number): boolean {
+  if (world.simVersion < SIM_VERSION_V55_ROUTED_HOMING) return false;
+  const ants = world.ants;
+  const ownColonyId = ants.colonyId[id]!;
+  if (ants.zone[id] !== Zone.Underground || ants.currentGridColonyId[id] === ownColonyId) {
+    return false;
+  }
+  return colonyRecalledItsFighters(world, ownColonyId);
+}
+
+/**
+ * Invader `id` in a foreign nest walks out by that nest's entrance flow field
+ * this tick: a hauler (V52, #290 PR 5; `hauling` is fighterIsHauling in a foreign
+ * nest, which ant-raid.ts owns) or, from V55, a recalled invader (#346). The
+ * caller (tickAntMovement) reads the field and, off it, falls back to the recall
+ * route.
+ */
+export function invaderExitsByEntranceField(
+  world: WorldState,
+  id: number,
+  hauling: boolean,
+): boolean {
+  return hauling || invaderIsRecalledV55(world, id);
+}
+
+/**
+ * Invader `id`, on the recall route out of a foreign nest (off its entrance
+ * field), takes the reachable-exit step — the wall-aware BFS toward the first
+ * OPEN entrance of the nest it can reach (tickAntMovement's hungryExitStep) —
+ * rather than the straight-line step at the nearest entrance: a hungry one sent
+ * home to eat (V51, #290 PR 4, D11), a hauler (V52, `hauling` as above) and, from
+ * V55, every one (#346: before V55 a plain recalled invader, fed and not
+ * hauling, took the straight-line step, and a U-bend in the tunnel pinned it).
+ */
+export function invaderTakesReachableExit(
+  world: WorldState,
+  id: number,
+  hauling: boolean,
+): boolean {
+  return (
+    fighterWalksHomeToEat(world, id) || hauling || world.simVersion >= SIM_VERSION_V55_ROUTED_HOMING
+  );
 }
 
 /**

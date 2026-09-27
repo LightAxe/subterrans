@@ -40,17 +40,16 @@ import {
   surfaceGoalDistance,
 } from '../surface-routing.js';
 import { UndergroundTileState, Zone, ugGet, type UndergroundGrid } from '../terrain.js';
-import {
-  SIM_VERSION_V52_RAIDING,
-  SIM_VERSION_V55_ROUTED_HOMING,
-  type WorldState,
-} from '../types.js';
+import { SIM_VERSION_V52_RAIDING, type WorldState } from '../types.js';
 import {
   pickInvaderUndergroundStep,
   pickNearestHostileUnderground,
   fighterBarredFromForeignShaft,
   fighterBarredFromOwnShaft,
+  colonyRecalledItsFighters,
   fighterWalksHomeToEat,
+  invaderExitsByEntranceField,
+  invaderTakesReachableExit,
   sentryHoldsBelow,
   sentryPassesThroughFriends,
   fighterDefendsTunnels,
@@ -79,6 +78,7 @@ import {
   unpackStepDy,
 } from './ant-motion.js';
 import { collectAliveQueenIds, moveQueens } from './ant-queens.js';
+import { nurseRoutesHomeByEntranceField } from './ant-nursing.js';
 import {
   holdAlarmedCivilianAtShaft,
   idleMusterPassesThroughFriends,
@@ -584,13 +584,9 @@ export function tickAntMovement(
         task === AntTask.Foraging &&
         (subTaskHere === ForagingSubState.CarryingFood ||
           subTaskHere === ForagingSubState.ReturningToNest);
-      // #343 (V55): so does a surface nurse walking to its nest. The field leads
-      // to the nearest OPEN entrance by path (its target above is the nearest by
-      // Manhattan), and a nurse goes down any open entrance of its own, so either
-      // is home. Before V55 it stepped in a straight line and an obstacle in the
-      // way pinned it for good.
-      const isRoutedNurse =
-        task === AntTask.Nursing && world.simVersion >= SIM_VERSION_V55_ROUTED_HOMING;
+      // #343 (V55): so does a surface nurse walking to its nest (the policy lives
+      // in ant-nursing: nurseRoutesHomeByEntranceField).
+      const isRoutedNurse = nurseRoutesHomeByEntranceField(world, id);
       if (
         !stepped &&
         zone === Zone.Surface &&
@@ -823,12 +819,13 @@ export function tickAntMovement(
       let raidDir = -2;
       const hauling = isForeignGridUnderground && fighterIsHauling(world, id);
       // #346 (V55): a recalled invader (its colony's rally cleared) walks out the
-      // same way: by the nest's entrance field, else the reachable-exit BFS below.
-      const recalledV55 =
+      // same way: by the nest's entrance field, else the reachable-exit BFS below
+      // (the policy lives in ant-combat-targeting: invaderExitsByEntranceField).
+      if (
         isForeignGridUnderground &&
-        world.simVersion >= SIM_VERSION_V55_ROUTED_HOMING &&
-        isRecalledByOwnColony(world, ownColonyId);
-      if ((hauling || recalledV55) && entranceFlowFields !== undefined) {
+        invaderExitsByEntranceField(world, id, hauling) &&
+        entranceFlowFields !== undefined
+      ) {
         const field = entranceFlowFields.fields[gridColonyId];
         const grid = world.undergroundGrids[gridColonyId];
         if (field && grid) {
@@ -854,9 +851,8 @@ export function tickAntMovement(
       if (fieldStepped) {
         // Stepped above.
       } else if (isForeignGridUnderground) {
-        const ownColony = world.colonies[ownColonyId];
-        // null colony is treated as NOT recalled (matches isRecallingFromForeign guard
-        // in skipAscent) — missing colony record is a defensive fallback, not a recall.
+        // colonyRecalledItsFighters (shared with the isRecallingFromForeign guard in
+        // skipAscent): a null colony is NOT recalled — a defensive fallback.
         // V25 (#174): recall keys on the rally point alone — a cleared rally means
         // "come home". (#247: the pre-V25 fight===0 recall branch was reaped — MIN=V30 —
         // so this is unconditional now.) Must stay in lockstep with the ascent
@@ -865,7 +861,7 @@ export function tickAntMovement(
         // V51 (#290 PR 4, D11): a hungry invader step 10c sent home to eat leaves
         // the same way (fighterWalksHomeToEat is false below V51).
         const isRecalling =
-          (ownColony != null && ownColony.rallyPoint == null) ||
+          colonyRecalledItsFighters(world, ownColonyId) ||
           fighterWalksHomeToEat(world, id) ||
           hauling;
 
@@ -897,12 +893,8 @@ export function tickAntMovement(
             // V52 (#290 PR 5): a hauler only gets here off its nest's entrance
             // flow field (above); it takes the same reachable-exit step.
             // #346 (V55): so does a recalled invader (rally cleared) off that field.
-            if (
-              exitGrid !== undefined &&
-              (fighterWalksHomeToEat(world, id) ||
-                hauling ||
-                world.simVersion >= SIM_VERSION_V55_ROUTED_HOMING)
-            ) {
+            // Which invaders take it: invaderTakesReachableExit.
+            if (exitGrid !== undefined && invaderTakesReachableExit(world, id, hauling)) {
               // V51 (#290 PR 4, D11): a hungry invader walks out by the
               // wall-aware BFS step (hungryExitStep), toward the first OPEN
               // entrance of this nest it can actually reach, so neither a bend
@@ -1751,10 +1743,9 @@ export function tickAntMovement(
           // MIN=V30 — so this is unconditional now.) Must match the underground
           // recall-navigation `isRecalling` predicate in the recalled-invader block
           // earlier in tickAntMovement.
-          const ownColonyForAscent = world.colonies[ants.colonyId[id]!];
           const isRecallingFromForeign =
             !inOwnGrid &&
-            ((ownColonyForAscent != null && ownColonyForAscent.rallyPoint == null) ||
+            (colonyRecalledItsFighters(world, ants.colonyId[id]!) ||
               fighterWalksHomeToEat(world, id));
           // V52 (#290 PR 5): a raider hauling loot out of the enemy nest climbs out.
           const skipAscent =
@@ -1869,16 +1860,6 @@ function hungryExitStep(
     if (unpackStepDx(step) !== 0 || unpackStepDy(step) !== 0) return step;
   }
   return packStep(0, 0);
-}
-
-/**
- * #346 (V55) — colony `colonyId` has recalled its fighters: its rally point is
- * cleared. A missing colony record is NOT a recall (the recall-navigation and
- * ascent predicates treat it the same way).
- */
-function isRecalledByOwnColony(world: WorldState, colonyId: number): boolean {
-  const colony = world.colonies[colonyId];
-  return colony != null && colony.rallyPoint == null;
 }
 
 /**

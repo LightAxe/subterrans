@@ -3,12 +3,15 @@
 
 import { describe, it, expect } from 'vitest';
 import { tickAntMovement, tickNurseActions } from './ant-system.js';
+import { nurseRoutesHomeByEntranceField } from './ant-nursing.js';
 import {
   createWorldState,
   allocateEntityId,
   SIM_VERSION_V9_CANCEL_DROPS_PENDING,
   SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
   SIM_VERSION_V24_NURSERY_CAPACITY,
+  SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES,
+  SIM_VERSION_V55_ROUTED_HOMING,
 } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt } from './ant-store.js';
@@ -1542,5 +1545,26 @@ describe('Nursery brood deposit — capacity-aware spread, real pipeline (#173, 
     const inA = tx >= 10 && tx < 14 && ty >= 4 && ty < 7;
     const inB = tx >= 30 && tx < 34 && ty >= 4 && ty < 7;
     expect(inA || inB).toBe(true);
+  });
+});
+
+describe('#343 (V55) nurseRoutesHomeByEntranceField', () => {
+  it('is true for a nurse from V55 only, and never for another task', () => {
+    const world = createWorldState(42, 8);
+    const id = allocateEntityId(world);
+    initAnt(world.ants, id, {
+      colonyId: 1,
+      posX: 0,
+      posY: 0,
+      task: AntTask.Nursing,
+      subTask: NursingSubState.MovingToBrood,
+    });
+    world.simVersion = SIM_VERSION_V55_ROUTED_HOMING;
+    expect(nurseRoutesHomeByEntranceField(world, id)).toBe(true);
+    world.simVersion = SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES;
+    expect(nurseRoutesHomeByEntranceField(world, id)).toBe(false);
+    world.simVersion = SIM_VERSION_V55_ROUTED_HOMING;
+    world.ants.task[id] = AntTask.Foraging;
+    expect(nurseRoutesHomeByEntranceField(world, id)).toBe(false);
   });
 });
