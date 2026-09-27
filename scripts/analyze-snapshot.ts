@@ -274,7 +274,31 @@ function stripCommandQueue(s: typeof debug.snapshot): unknown {
   const { commandQueue: _cq, ...rest } = s as unknown as Record<string, unknown>;
   return rest;
 }
+// V54 (#337) added three optional spider fields that serializeWorldState always
+// emits. A V50–V53 snapshot never has them (they load as -1), so drop any the
+// captured spider lacks from the replay before comparing, or every in-window
+// pre-V54 snapshot would read as a SCEN-06 regression.
+const V54_OPTIONAL_SPIDER_KEYS = [
+  'rampageEntranceId',
+  'rampageRotationEntranceId',
+  'rampageRotationTick',
+] as const;
+function dropSpiderKeysAbsentFrom(
+  replayState: Record<string, unknown>,
+  captured: Record<string, unknown>,
+): void {
+  const rs = replayState.spider as Record<string, unknown> | null | undefined;
+  const cs = captured.spider as Record<string, unknown> | null | undefined;
+  if (rs == null || cs == null) return;
+  for (const k of V54_OPTIONAL_SPIDER_KEYS) {
+    if (!(k in cs)) delete rs[k];
+  }
+}
 const replaySerialized = serializeWorldState(replay);
+dropSpiderKeysAbsentFrom(
+  replaySerialized as unknown as Record<string, unknown>,
+  debug.snapshot as unknown as Record<string, unknown>,
+);
 const replayJson = JSON.stringify(
   stripCommandQueue(replaySerialized as unknown as typeof debug.snapshot),
 );
