@@ -11,13 +11,13 @@ import { tick } from './tick.js';
 import { SIM_VERSION_V51_UNIFIED_HUNGER, type WorldState } from './types.js';
 import {
   fighterMayLoot,
+  dropHaulerLoad,
   releaseSurplusFightersBelowFloor,
   tickPheromoneDeposit,
   tickRaidActions,
   updateFightAntTargets,
   updateRaiders,
 } from './ant/ant-system.js';
-import { dropHaulerLoad } from './ant/ant-raid.js';
 import { despawnAnt } from './ant-death.js';
 import { AntTask, FightingSubState, ForagingSubState, PheromoneType } from './enums.js';
 import { Zone } from './terrain.js';
