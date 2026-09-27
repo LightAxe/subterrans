@@ -98,7 +98,10 @@ entrances (unless the colony has sent its fighters at the spider). It goes down
 that entrance and defends the nest from inside: it goes after any enemy ant in
 the tunnels joined to that entrance, however deep, and otherwise waits at a post
 in the tunnels just below the entrance. Moving the rally point off the colony's
-own entrances, or clearing it, brings it back out.
+own entrances, or clearing it, brings it back out. Since **#357 (simVersion V57)**
+one walking across the surface to that entrance routes round obstacles, by a field
+leading to that entrance itself (not the nearest open one: a tunnel defender may go
+down only the entrance it defends).
 _Avoid_: **guard**, **garrison**.
 
 **Nurse**:
@@ -114,7 +117,10 @@ _Avoid_: caretaker.
 A worker on the `Digging` task: it claims a `Marked` tile (flipping it to
 `BeingDug`) and excavates it to `Open`. Auto-dig assigns at most **one active
 digger per colony**; if no worker is `Idle`, marked tiles wait rather than
-preempting foragers or fighters.
+preempting foragers or fighters. A digger on the surface walks to the nearest of
+its colony's entrances, closed (designated, not yet dug through) ones included;
+since **#358 (simVersion V57)** it routes round obstacles on the way, to the entrance
+nearest by path.
 _Avoid_: excavator, miner.
 
 **Brood**:

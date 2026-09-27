@@ -1219,7 +1219,35 @@ export const SIM_VERSION_V55_ROUTED_HOMING = 55 as const;
  * UNCHANGED (V50).
  */
 export const SIM_VERSION_V56_OPPONENT_FRONTAGE = 56 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V56_OPPONENT_FRONTAGE;
+
+/**
+ * #357 + #358 (V57) — surface walkers bound for one particular entrance route round
+ * what is in the way.
+ *
+ * Up to V56 two surface walkers stepped in a straight line at their entrance, so an
+ * obstacle between them and it pinned them. Neither can use the colony's surface
+ * entrance flow field: it leads to the NEAREST OPEN entrance, and each of these is
+ * bound for one entrance that may not be it. From V57 each steps down the surface
+ * goal field seeded at its own target tile (`stepTowardReachable`, the per-target
+ * BFS field PR 5 foragers use, cached per tile on the frozen terrain):
+ *   - #357: a fighter of a TUNNEL-DEFENCE colony (its rally on one of its own open
+ *     entrances, V44) that step 10c's ordinary rally routing sends across the
+ *     surface to that entrance (`defenderWalksToEntrance`) — a fed one, or a hungry
+ *     one the D11 walk-home does not take (at home, or in a duel). It may go down
+ *     only that shaft (fighterBarredFromOwnShaft), so the nearest-entrance field
+ *     could lead it to an entrance it may not use.
+ *   - #358: a surface DIGGER walking to its entrance target — the nearest of its
+ *     colony's entrances, closed (designated, not yet dug through) or open, and
+ *     from V57 nearest by PATH on those fields (by Manhattan a detour could flip
+ *     its target back and forth). A closed entrance is not on the entrance flow
+ *     field at all.
+ * Off the field (a tile that cannot reach the target) each keeps its straight-line
+ * step. No new serialized field, command, world.rngState draw, entity-ID advance
+ * or tick-order change (the goal-field cache is derived, unserialized state). A
+ * V56 save replays byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
+ */
+export const SIM_VERSION_V57_ROUTED_TO_ENTRANCE = 57 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V57_ROUTED_TO_ENTRANCE;
 
 /**
  * S2 — AI colony state machine states.
