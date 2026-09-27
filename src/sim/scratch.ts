@@ -9,7 +9,7 @@
  * worker (Phase 6 background/replay sim) or a rolled-back world interleaves with
  * the live one (Phase 7 rollback). This module moves them to a per-world arena
  * keyed by WorldState identity — the proven pattern already used by tick.ts's
- * flow-field `cachesByWorld` WeakMap and `surfaceGoalBfsScratch`. Pure move: sizes,
+ * flow-field caches (now FLOW_FIELD_CACHES below) and `surfaceGoalBfsScratch`. Pure move: sizes,
  * reset semantics, and iteration order are preserved verbatim, so replay stays
  * byte-identical (no simVersion bump).
  *
@@ -25,6 +25,9 @@
 import type { WorldState } from './types.js';
 import type { CardinalStep } from './ant/ant-motion.js';
 import type { PheromoneGrid } from './pheromone/pheromone-store.js';
+import type { DigFlowFields } from './dig-system.js';
+import type { EntranceFlowFields } from './entrance-flow.js';
+import type { ChamberFlowFields } from './chamber-flow.js';
 import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
@@ -164,7 +167,7 @@ export interface ScratchArena {
   };
 }
 
-// eslint-disable-next-line subterrans/sim-module-state -- sim-cache: per-world scratch arena keyed by WorldState identity; transient, never serialized, recreated per world (same pattern as tick.ts cachesByWorld)
+// eslint-disable-next-line subterrans/sim-module-state -- sim-cache: per-world scratch arena keyed by WorldState identity; transient, never serialized, recreated per world (same pattern as FLOW_FIELD_CACHES below)
 let SCRATCH = new WeakMap<WorldState, ScratchArena>();
 
 /**
@@ -241,4 +244,57 @@ export function getScratch(world: WorldState): ScratchArena {
 /** Test isolation — drop all arenas. Not required for correctness (WeakMap auto-collects). */
 export function resetScratchArenas(): void {
   SCRATCH = new WeakMap();
+}
+
+/**
+ * Issue #160 — a world's dig / entrance / chamber flow-field caches. Unlike the
+ * arena above these are NOT reset-before-use: they persist across the world's
+ * ticks and are rebuilt only when a colony's dirty flags say its topology (or
+ * food / brood inputs) changed, or on first use. tick.ts owns their contents and
+ * creation (getFlowFieldCaches); the storage lives here so copyWorldState can
+ * drop it (see invalidateWorldCaches) without types.ts importing tick.ts.
+ */
+export interface FlowFieldCaches {
+  dig: DigFlowFields;
+  entrance: EntranceFlowFields;
+  chamber: ChamberFlowFields;
+}
+
+// eslint-disable-next-line subterrans/sim-module-state -- sim-cache: per-world flow-field cache keyed by WorldState identity; derived/recomputable, never authoritative sim state
+let FLOW_FIELD_CACHES = new WeakMap<WorldState, FlowFieldCaches>();
+
+/** The world's flow-field caches, or undefined if it has none yet (tick.ts creates them). */
+export function peekFlowFieldCaches(world: WorldState): FlowFieldCaches | undefined {
+  return FLOW_FIELD_CACHES.get(world);
+}
+
+/** Attach freshly created flow-field caches to `world` (tick.ts only). */
+export function storeFlowFieldCaches(world: WorldState, caches: FlowFieldCaches): void {
+  FLOW_FIELD_CACHES.set(world, caches);
+}
+
+/** Drop every world's flow-field caches (tick.ts resetFlowFieldCaches). */
+export function resetFlowFieldCacheStore(): void {
+  FLOW_FIELD_CACHES = new WeakMap();
+}
+
+/**
+ * #340 — forget everything derived that `world` has cached off-WorldState: its
+ * scratch arena and its flow-field caches. copyWorldState calls this on its
+ * destination, whose own earlier ticks may have left caches describing a
+ * different world. The flow fields are the ones that bite: they are rebuilt only
+ * on a dirty flag or on first use, and a copy brings over the source's (usually
+ * clear) dirty flags, so a previously-ticked destination kept routing on its own
+ * stale topology and diverged from a fresh copy. The arena is dropped too (its
+ * tick-stamped entries, e.g. raid.stockFieldTick, are keyed by values a copy can
+ * make recur), so the destination starts exactly like a fresh or loaded world:
+ * nothing cached, everything built from its own state on first use.
+ *
+ * Two WeakMap deletes, no allocation. A destination that is never ticked (the
+ * render double buffer, a command projection) never rebuilds anything; one that
+ * is ticked pays the same first-tick build a fresh world pays.
+ */
+export function invalidateWorldCaches(world: WorldState): void {
+  SCRATCH.delete(world);
+  FLOW_FIELD_CACHES.delete(world);
 }

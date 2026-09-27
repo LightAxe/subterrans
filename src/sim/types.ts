@@ -23,6 +23,7 @@ import { MAX_ENTITIES, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constan
 // PR 4 — runtime import for the procedural terrain bake. surface-features.ts
 // back-imports WorldState as a TYPE only, so there is no runtime import cycle.
 import { bakeSurfaceEffectGrid } from './surface-features.js';
+import { invalidateWorldCaches } from './scratch.js';
 
 export type EntityId = number; // incrementing counter from 0, no recycling per PRD §1/§3
 
@@ -1351,7 +1352,8 @@ export interface WorldState {
    * connected walkable surface component, lazily computed from
    * `bakedSurfaceEffect` via `ensureSurfaceComponentMask`. Null until first use;
    * terrain is immutable so it never needs invalidation. `copyWorldState`
-   * recomputes lazily (set to null) rather than threading it.
+   * shares src's reference (read-only; derived from the copied
+   * `bakedSurfaceEffect`) rather than recomputing it.
    */
   surfaceComponentMask: Uint8Array | null;
 
@@ -1508,6 +1510,10 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
 /**
  * Copy src into dst in place — double-buffer swap for render interpolation (PRD §1/§3).
  *
+ * #340 — dst may be reused: whatever dst held or cached before (including caches
+ * built by its own earlier ticks), ticking dst afterwards behaves exactly like
+ * ticking a fresh copy or a load of src.
+ *
  * Steady-state: zero allocations after colonies and grids populated.
  * Allocation occurs only when the set of colony keys or grid keys grows.
  *
@@ -1519,6 +1525,15 @@ export function createWorldState(seed: number, maxEntities: number = MAX_ENTITIE
  *   5. pheromoneGrids — delete stale dst keys; upsert each src grid via Int32Array.set
  */
 export function copyWorldState(src: WorldState, dst: WorldState): void {
+  // #340 — a copy must leave dst exactly like a fresh or loaded world, so drop
+  // everything dst's OWN earlier ticks cached off-WorldState (flow fields, scratch
+  // arena). Otherwise a previously-ticked dst kept its stale flow fields (the copy
+  // brings over src's clear dirty flags, so nothing forced a rebuild) and, once
+  // ticked, diverged from a fresh copy. Two WeakMap deletes; no allocation.
+  // A self-copy is a no-op (it would otherwise wipe the world's own events).
+  if (src === dst) return;
+  invalidateWorldCaches(dst);
+
   // --- Phase 5 scalar fields ---
   dst.tick = src.tick;
   dst.rngState = src.rngState;
@@ -1532,14 +1547,24 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   // events (buildPaytraceSummary, buildPayloadWithDowngrade) read the live
   // world directly. Skipping the copy avoids a per-tick O(n) allocation that
   // could grow to ~2,000 entries.
+  // #340 — but dst's OWN earlier events are emptied (length = 0: no allocation),
+  // as a load resets them: emitEvent's cap eviction bumps the SERIALIZED dropped*
+  // counters, so a previously-ticked dst still holding its old events would, once
+  // ticked, hit the cap earlier than a fresh copy. (projectionCopy then replaces
+  // dst.events with a copy of src's.)
+  dst.events.length = 0;
   // droppedCombatKillCount / droppedStructuralCount are also telemetry-only.
   dst.droppedCombatKillCount = src.droppedCombatKillCount;
   dst.droppedStructuralCount = src.droppedStructuralCount;
   // droppedCommandOverflowCount (#230): transient session counter — intentionally
-  // NOT copied to the render double-buffer (nothing reads prevState's value), like events.
-  // pendingQueenDeathContexts: transient within-tick (cleared by checkQueenDeath every tick,
-  // always null at the tick boundary when copyWorldState runs). No render code reads it,
-  // so no copy is needed and the allocation is skipped to preserve zero-alloc steady state.
+  // NOT copied to the render double-buffer (nothing reads prevState's value), like
+  // events; reset to 0 as a load does (#340).
+  dst.droppedCommandOverflowCount = 0;
+  // pendingQueenDeathContexts: transient within-tick context, not copied (no render code
+  // reads it). #340 — emptied in place (no allocation) as a load does: checkQueenDeath
+  // clears only the entries of colonies whose queen died, so a previously-ticked dst can
+  // hold a stale entry that would leak into a later queen_death event's payload.
+  dst.pendingQueenDeathContexts.length = 0;
 
   // S2 — aiState: deep-copy the array and each record's Int32Array buffer.
   // Length-adjust: grow or shrink dst.aiState to match src.aiState.
