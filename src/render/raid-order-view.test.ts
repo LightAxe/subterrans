@@ -241,20 +241,24 @@ describe('raid news captions under an order', () => {
     expect(nextRaidCaption(s2, w2, PLAYER_COLONY_ID)).toBeNull();
   });
 
-  it('"spoiling" counts only the Spoil target’s loss, not a third colony’s', () => {
+  it('"spoiling" counts only the Spoil target’s loss, not another colony’s', () => {
     const w = world();
     const c = w.colonies[PLAYER_COLONY_ID]!;
     const d = enemyDoor(w);
-    c.rallyPoint = { tileX: d.x, tileY: d.y };
-    c.raidType = RaidType.Spoil;
-    const third = { ...w.colonies[ENEMY_COLONY_ID]!, colonyId: 7, entrances: [] };
+    const enemy = w.colonies[ENEMY_COLONY_ID]!;
+    // A third colony (after the enemy in key order) with an entrance of its own;
+    // the Spoil order is on THAT entrance, so the enemy's loss is not our news.
+    const door = { ...enemy.entrances[0]!, entranceId: 999_001, surfaceTileX: d.x + 9 };
+    const third = { ...enemy, colonyId: 7, entrances: [door] };
     (w.colonies as Record<number, typeof third>)[7] = third;
+    c.rallyPoint = { tileX: door.surfaceTileX, tileY: door.surfaceTileY };
+    c.raidType = RaidType.Spoil;
     const s = createRaidCaptionState();
     resetRaidCaptionState(s, w, PLAYER_COLONY_ID);
     expect(nextRaidCaption(s, w, PLAYER_COLONY_ID)).toBeNull();
-    third.foodLostToRaidsFp += 1024;
+    enemy.foodLostToRaidsFp += 1024;
     expect(nextRaidCaption(s, w, PLAYER_COLONY_ID)).toBeNull();
-    w.colonies[ENEMY_COLONY_ID]!.foodLostToRaidsFp += 1024;
+    third.foodLostToRaidsFp += 1024;
     expect(nextRaidCaption(s, w, PLAYER_COLONY_ID)).toBe('spoiling');
   });
 });
